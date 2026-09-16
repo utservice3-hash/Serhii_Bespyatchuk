@@ -59,6 +59,7 @@ import { STAGE_LABELS, STAGE_ORDER } from "./dashboard/constants";
 import StatisticsChartsSection from "./dashboard/sections/StatisticsChartsSection";
 import SettingsSection from "./dashboard/sections/SettingsSection";
 import { LeadgenSection } from "./dashboard/sections/LeadgenSection";
+import { MissedCallsSection } from "./dashboard/sections/MissedCallsSection";
 import BankSection from "./dashboard/sections/BankSection";
 import { emptyTaskForm } from "./dashboard/taskForm";
 import { OverviewSection, type Kpi } from "./dashboard/sections/OverviewSection";
@@ -1031,6 +1032,16 @@ export function Dashboard() {
          * місяць показувала зламане число. Тепер сім показників рахуються з подій CRM.
          */
         <LeadgenSection from={dateRange.from} to={dateRange.to} />
+      )}
+
+      {section === "missed-calls" && (
+        /**
+         * 📵 ТЗ-1. СТАТИЧНИЙ імпорт свідомо: `React.lazy` розбив би бандл на чанки, а докрут
+         * чистить старі асети — людина без перезавантаження отримала б 404 (гейт #225).
+         * Період — спільний, як у «Лідогенерації»: тімлід дивиться той самий зріз часу,
+         * що й на решті екранів.
+         */
+        <MissedCallsSection from={dateRange.from} to={dateRange.to} />
       )}
 
       {section === "receivables" && (

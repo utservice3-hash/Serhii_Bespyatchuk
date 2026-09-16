@@ -118,6 +118,7 @@ export const MANIFEST_FILES: string[] = [
   "core/loyaltyOverride.test.js",
   "core/leadgenStats.test.js",
   "core/missedCalls.test.js",
+  "core/navRender.test.js",
   "core/adTouch.test.js",
   "core/autodeal.test.js",
   "routes/clientScreens.test.js",
@@ -769,6 +770,9 @@ export const MANIFEST_TESTS: string[] = [
   "#438 МЕЖА: роут оголошений і в матриці, і в tab-гейті",
   "#439 ЖИВИЙ SQL: обидва запити виконуються на схемі з нуля, інваріанти сходяться",
   "#440 РОЛІ В МАТРИЦІ Й У СИДІ — ОДИН І ТОЙ САМИЙ СПИСОК",
+  // core/navRender.test.ts — повнота «пункт меню → блок рендера» (16.09.2026)
+  "#447 КОЖЕН ВИДИМИЙ ПУНКТ МЕНЮ МАЄ БЛОК РЕНДЕРА — інакше порожня сторінка мовчки",
+  "#447b ДЗЕРКАЛО: правило ловить відсутній рендер, пускає наявний і звільняє прихований",
   "#31c ВІДМОВА НАЗИВАЄ, ЩО САМЕ ПОЗА МЕЖЕЮ",
   // core/moneyBuckets.test.ts — жоден статус із грішми не лишається без корзини
   "#45 кожен статус FC-воронок належить якійсь корзині",

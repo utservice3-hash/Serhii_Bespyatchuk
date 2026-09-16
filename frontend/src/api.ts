@@ -180,6 +180,42 @@ export async function fetchLeadgenStats(params: { from: string; to: string }): P
   return data;
 }
 
+/**
+ * 📵 ПРОПУЩЕНІ ВХІДНІ (ТЗ-1). Типи — ДЗЕРКАЛО бекенду один-в-один
+ * (`core/missedCalls.ts` → `MissedSummary`, `core/missedCallsRules.ts` → `MissedManagerRow`).
+ * Нічого не вигадано й не перейменовано: розбіжність імен тут дала б `undefined` у
+ * клітинці, а таке читається як «нуль», а не як поломка.
+ */
+export type MissedDayBucket = "work" | "evening" | "weekend" | "night";
+export interface MissedSummary {
+  missed: number; excluded: number; ownerless: number;
+  callback: number; callbackTalked: number; callbackSelf: number; callbackColleague: number;
+  clientSelf: number;
+  /** `null` — передзвонів за період не було, тобто медіану нема з чого рахувати. */
+  medianMin: number | null;
+  buckets: Record<MissedDayBucket, number>;
+}
+export interface MissedManagerRow {
+  /** `null` — рядок «Без відповідального»: дзвінок не дійшов до людини. */
+  managerId: number | null;
+  name: string;
+  missed: number; callbackSelf: number; callbackColleague: number; clientSelf: number;
+  noCallback: number;
+  /** У підсумковому рядку ЗАВЖДИ `null`: медіани не додаються й не усереднюються. */
+  medianMin: number | null;
+}
+export interface MissedCallsResp {
+  /** Період, за який СПРАВДІ пораховано — не той, що попросили (порожній дає 30 днів). */
+  period: { from: string; to: string };
+  summary: MissedSummary;
+  managers: MissedManagerRow[];
+  total: MissedManagerRow;
+}
+export async function fetchMissedCalls(params: { from: string; to: string }): Promise<MissedCallsResp> {
+  const { data } = await api.get<MissedCallsResp>("/dashboard/missed-calls", { params });
+  return data;
+}
+
 export interface ExecutiveOverview {
   /**
    * 🔴 Чи обраний період ПОТОЧНИЙ. Знімкові показники (дебіторка, перехідні,
