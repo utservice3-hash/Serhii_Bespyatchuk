@@ -8,6 +8,7 @@ import pg from "pg";
 import { config } from "../config.js";
 import { plannedDeletions, copyWithRetry, COPY_ATTEMPTS, type BackupStatus } from "./backupRotateRule.js";
 import { applyCopyStreamPatch, assertCopyStreamPatched } from "../db/copyStreamPatch.js";
+import { copyDocuments, manifestLine } from "./backupDocuments.js";
 
 // Патч гонки в pg-copy-streams накладається на імпорті; `backupDb()` відмовляється
 // працювати без нього (див. `assertCopyStreamPatched`).
@@ -19,6 +20,8 @@ applyCopyStreamPatch();
 // server that can be restored into ANY Postgres.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BACKUP_DIR = process.env.BACKUP_DIR ?? path.resolve(__dirname, "..", "..", "..", "backups");
+/** Тека файлів документів (`routes/documents.ts` DOCS_DIR = backend/documents) — їде в копію разом із таблицями (#446). */
+const DOCS_DIR = process.env.DOCS_DIR ?? path.resolve(__dirname, "..", "..", "documents");
 
 /**
  * СТАН КОПІЇ ЧИТАЄТЬСЯ З МАНІФЕСТА, А НЕ З ЙОГО НАЯВНОСТІ.
@@ -122,6 +125,9 @@ export async function backupDb(): Promise<void> {
       }
     }
     if (ok.length === 0) throw new Error("backupDb: не збережено ЖОДНОЇ таблиці — це провал, а не порожня база");
+    // 📁 Файли документів — поруч із таблицями, інакше після відновлення кожен stored_name вказує в порожнечу.
+    let docs = { copied: 0, bytes: 0, missingDir: true };
+    try { docs = copyDocuments(DOCS_DIR, dir); } catch (e) { console.error("backupDb: тека документів не скопіювалась:", e); }
     // 🔴 МАНІФЕСТ ПИШЕТЬСЯ ОСТАННІМ і НАЗИВАЄ СТАН ПРЯМО. Копія без ЖОДНОЇ невдалої
     // таблиці — `complete`; будь-яка інша — `partial`, навіть якщо бракує однієї.
     // «Придатна» більше не означає «щось вивантажилось».
@@ -131,7 +137,8 @@ export async function backupDb(): Promise<void> {
       `UTS Dashboard backup\nstatus: ${status}\ncreated: ${new Date().toISOString()}\n`
       + `tables expected: ${expected}\ntables ok: ${ok.length}\ntables failed: ${failed.length}\n`
       + `tables retried: ${retried.length}\n`
-      + `format: gzipped CSV (COPY ... WITH CSV HEADER)\n\n`
+      + `format: gzipped CSV (COPY ... WITH CSV HEADER)\n`
+      + manifestLine(docs) + `\n`
       + `=== OK ===\n${ok.join("\n")}\n`
       + (retried.length ? `\n=== RETRIED (вдались НЕ з першої спроби) ===\n${retried.map((r) => `${r.table}: спроба ${r.attempt}`).join("\n")}\n` : "")
       + (failed.length ? `\n=== FAILED ===\n${failed.map((f) => `${f.table}: ${f.error}`).join("\n")}\n` : "")
