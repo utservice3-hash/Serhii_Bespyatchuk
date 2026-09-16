@@ -438,12 +438,20 @@ export function marginPctText(m: ReceivableMargin | null): string {
   return `${m.pct.toFixed(1)}%`;
 }
 
-/** Чому «—». Порожнє місце читається як «нічого немає», а не як «не знаємо». */
+/**
+ * Чому «—». Порожнє місце читається як «нічого немає», а не як «не знаємо».
+ *
+ * 🔴 «ЗАРОБИЛИ N ₴ ВІД СУМИ РАХУНКІВ M ₴» — ТЕ САМЕ ЧИТАННЯ, ВІД ЯКОГО ЛІКУВАЛИ ПЛИТКУ
+ * (звірка 16.09.2026). Підпис під плиткою каже «це поле „Бюджет", а не розрахунок», а ця
+ * підказка на самому числі казала «заробили ВІД суми рахунків», тобто знову «порахували з
+ * рахунків». Тепер два числа стоять поруч, і звʼязок між ними не вигадується: заробіток —
+ * поле CRM, сума рахунків — знаменник ВІДСОТКА.
+ */
 export function marginHint(m: ReceivableMargin | null): string {
   if (!m) return "рахунків у деталізації немає";
   if (m.why) return MARGIN_UNKNOWN_LABEL[m.why];
-  return `заробили ${Math.round(m.earned ?? 0).toLocaleString("uk-UA")} ₴ від суми рахунків `
-    + `${Math.round(m.base ?? 0).toLocaleString("uk-UA")} ₴`;
+  return `заробили ${Math.round(m.earned ?? 0).toLocaleString("uk-UA")} ₴ (маржа з поля «Бюджет» угод у CRM) · `
+    + `сума рахунків ${Math.round(m.base ?? 0).toLocaleString("uk-UA")} ₴`;
 }
 
 /**

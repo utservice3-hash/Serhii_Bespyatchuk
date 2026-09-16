@@ -234,7 +234,7 @@ export function ReceivablesTiles({ totals, debtTotal, clientCount, overdueCount,
               `receivable_invoices` лише з ненульовим залишком (1С) або як готівкова
               угода на `approved`/`invoiced` поза `PAID_STATUSES`. Тримають #405/#405b. */}
           <span style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginTop: 4, display: "block" }}>
-            Береться з поля «Бюджет» угоди в CRM — це готове число, а не наш розрахунок;
+            Це маржа з поля «Бюджет» угоди в CRM — готове число, а не наш розрахунок;
             показані лише угоди, по яких лишився непогашений борг.
             Знаменник — «Приход 1» із CRM, тобто ПОВНА сума угод, а не залишок боргу.
           </span>

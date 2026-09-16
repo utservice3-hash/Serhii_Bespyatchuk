@@ -1,10 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   fetchMissedCalls, fetchMissedList, fetchNoDeal, fetchNoDealList,
   type MissedCallsResp, type MissedDayBucket, type MissedManagerRow, type MissedListResp,
-  type MissedNextStep, type NoDealCounts, type NoDealState, type NoDealListRow,
+  type MissedNextStep, type NoDealCounts, type NoDealState, type NoDealListRow, type MissedTeamRow,
 } from "../../../api";
 import { InfoHint } from "../widgets";
+import { PeriodNav } from "../PeriodNav";
+import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
+import { missedDefaultPeriod, groupByTeam, clientCell } from "../missedCallsView";
+import { ClientCardPanel } from "./ClientCardPanel";
 
 /**
  * 📵 «ПРОПУЩЕНІ ДЗВІНКИ» — ТЗ-1 від 14.09.2026, блоки A (підсумок) і B (по менеджерах).
@@ -34,14 +38,20 @@ function pct(part: number, whole: number): string {
   return whole > 0 ? `${Math.round((part / whole) * 100)}%` : "—";
 }
 
-export function MissedCallsSection({ from, to }: { from: string; to: string }) {
+/**
+ * @param canOpenClient чи віддасть сервер картку клієнта (вкладка «Клієнти»). Без неї в списку
+ *   дзвінків стоїть «є в CRM», а не кнопка, що відповіла б 403.
+ */
+export function MissedCallsSection({ canOpenClient }: { canOpenClient: boolean }) {
+  // 📅 Період СВІЙ, дефолт «вчора» (ТЗ §1.4 A). Чому не спільний `dateRange` — `missedCallsView.ts`.
+  const today = todayKyiv();
+  const [nav, setNav] = useState<PeriodState>(() => missedDefaultPeriod(today));
+  const { from, to } = periodOf(nav);
   const [d, setD] = useState<MissedCallsResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [sort, setSort] = useState<SortKey>("missed");
 
   useEffect(() => {
-    // Швидкий період «Весь час» шле ПОРОЖНІ рядки; сервер підставить 30 днів, але
-    // тоді на екрані стояв би період, якого не обирали. Чекаємо справжній.
     if (!from || !to) return;
     setD(null); setErr(null);
     fetchMissedCalls({ from, to })
@@ -54,17 +64,21 @@ export function MissedCallsSection({ from, to }: { from: string; to: string }) {
    * це не людина, і поставити «нікого» на перше місце рейтингу означало б сказати
    * неправду про роботу відділу — саме так упорядковує і ядро (`foldManagerRows`).
    */
-  const rows = useMemo(() => {
-    if (!d) return [] as MissedManagerRow[];
-    const people = d.managers.filter((r) => r.managerId !== null);
-    const ownerless = d.managers.filter((r) => r.managerId === null);
-    const val = (r: MissedManagerRow) => r[sort] ?? -1;
-    people.sort((a, b) => val(b) - val(a) || a.name.localeCompare(b.name, "uk"));
-    return [...people, ...ownerless];
+  const table = useMemo(() => {
+    if (!d) return { groups: [] as { team: MissedTeamRow; people: MissedManagerRow[] }[], orphans: [] as MissedManagerRow[], ownerless: [] as MissedManagerRow[] };
+    const val = (r: { [k in SortKey]: number | null } & { name: string }) => r[sort] ?? -1;
+    const byVal = <R extends { [k in SortKey]: number | null } & { name: string }>(a: R, b: R) =>
+      val(b) - val(a) || a.name.localeCompare(b.name, "uk");
+    // Команди — за тією ж колонкою, «Поза командами» лишається останньою, як і в ядрі.
+    const teams = [...d.teams].sort((a, b) => (a.teamId === null ? 1 : 0) - (b.teamId === null ? 1 : 0) || byVal(a, b));
+    const { groups, orphans } = groupByTeam(teams, d.managers);
+    for (const g of groups) g.people.sort(byVal);
+    return { groups, orphans: orphans.sort(byVal), ownerless: d.managers.filter((r) => r.managerId === null) };
   }, [d, sort]);
 
-  if (err) return <div className="chart-card"><p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p></div>;
-  if (!d) return <div className="chart-card"><p className="loading-text" style={{ margin: 0 }}>Завантаження…</p></div>;
+  const navBar = <PeriodNav state={nav} onPatch={(patch) => setNav((st) => ({ ...st, ...patch }))} today={today} />;
+  if (err) return <div className="chart-card">{navBar}<p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p></div>;
+  if (!d) return <div className="chart-card">{navBar}<p className="loading-text" style={{ margin: 0 }}>Завантаження…</p></div>;
 
   const s = d.summary;
   const cell: React.CSSProperties = { padding: "8px 10px", textAlign: "right", whiteSpace: "nowrap" };
@@ -82,6 +96,7 @@ export function MissedCallsSection({ from, to }: { from: string; to: string }) {
   return (
     <>
       <div className="chart-card" style={{ marginBottom: 16 }}>
+        {navBar}
         <h3 style={{ margin: "0 0 4px", display: "flex", alignItems: "center", gap: 8 }}>
           📵 Пропущені дзвінки
           <InfoHint text={
@@ -102,8 +117,13 @@ export function MissedCallsSection({ from, to }: { from: string; to: string }) {
             hint="Медіана, а не середнє: розподіл хвостатий, і поодинокі «передзвонили наступного дня» тягнуть середнє вдесятеро вгору." />
           <Tile label="Клієнт передзвонив сам" value={pct(s.clientSelf, s.missed)} sub={`${num(s.clientSelf)} дзвінків`}
             hint="Клієнт сам набрав знову й дочекався відповіді. Це НЕ наш передзвін і в нього не зараховується." />
-          <Tile label="Без відповідального" value={pct(s.ownerless, s.missed)} sub={`${num(s.ownerless)} дзвінків`}
-            hint="Ringostat не віддав менеджера: дзвінок не дійшов до людини (черга, IVR). Такі дзвінки не приписуються нікому — ні командам, ні черговому." />
+          {/* 🔴 У зрізі команди чи менеджера «без відповідального» не входить за побудовою — тут
+              був би нуль, що читається «у вас таких немає». Правило 7: порожній скоуп не нуль. */}
+          {d.ownerlessInScope
+            ? <Tile label="Без відповідального" value={pct(s.ownerless, s.missed)} sub={`${num(s.ownerless)} дзвінків`}
+                hint="Ringostat не віддав менеджера: дзвінок не дійшов до людини (черга, IVR). Такі дзвінки не приписуються нікому — ні командам, ні черговому." />
+            : <Tile label="Без відповідального" value="—" sub="не входять у зріз команди"
+                hint="Дзвінки без відповідального не належать жодній команді й жодному менеджеру, тому в цьому зрізі їх немає — це не нуль. Повне число видно в зрізі всієї компанії." />}
         </div>
 
         <h4 style={{ margin: "18px 0 8px", fontSize: 14 }}>Коли пропускаємо</h4>
@@ -112,6 +132,11 @@ export function MissedCallsSection({ from, to }: { from: string; to: string }) {
             <Tile key={b.key} label={b.label} value={num(s.buckets[b.key])} sub={pct(s.buckets[b.key], s.missed)} hint={b.hint} />
           ))}
         </div>
+        {/* ТЗ §1.2: «вихідні = Сб/Нд, і це написано на екрані у виносці» — видимо, а не лише в підказці. */}
+        <p style={{ margin: "8px 0 0", fontSize: 12.5, color: "var(--text-muted)" }}>
+          Час — за Києвом. Вихідні — субота й неділя; державні свята не враховуються (календар свят порожній),
+          тож свято в будній день рахується як звичайний день.
+        </p>
       </div>
 
       <div className="chart-card">
@@ -131,21 +156,24 @@ export function MissedCallsSection({ from, to }: { from: string; to: string }) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.managerId ?? "ownerless"} style={{
-                  borderBottom: "1px solid var(--border)",
-                  color: r.managerId === null ? "var(--text-muted)" : "inherit",
-                  fontStyle: r.managerId === null ? "italic" : "normal",
-                }}>
-                  <td style={{ ...cell, textAlign: "left" }}>{r.name}</td>
-                  <td style={cell}>{num(r.missed)}</td>
-                  <td style={cell}>{num(r.callbackSelf)}</td>
-                  <td style={cell}>{num(r.callbackColleague)}</td>
-                  <td style={cell}>{num(r.noCallback)}</td>
-                  <td style={cell}>{num(r.medianMin)}</td>
-                  <td style={cell}>{num(r.clientSelf)}</td>
-                </tr>
+              {/* ТЗ §1.4 B: кожен менеджер + рядок команди + «без відповідального» + «всього».
+                  Рядок команди — з ядра (медіана по дзвінках команди), а не Σ людей на фронті. */}
+              {table.groups.map((g) => (
+                <Fragment key={`team-${String(g.team.teamId)}`}>
+                  {g.people.map((r) => <MgrRow key={r.managerId ?? "x"} r={r} cell={cell} num={num} indent />)}
+                  <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--bg)", fontWeight: 600 }}>
+                    <td style={{ ...cell, textAlign: "left" }}>Команда: {g.team.name}</td>
+                    <td style={cell}>{num(g.team.missed)}</td>
+                    <td style={cell}>{num(g.team.callbackSelf)}</td>
+                    <td style={cell}>{num(g.team.callbackColleague)}</td>
+                    <td style={cell}>{num(g.team.noCallback)}</td>
+                    <td style={cell}>{num(g.team.medianMin)}</td>
+                    <td style={cell}>{num(g.team.clientSelf)}</td>
+                  </tr>
+                </Fragment>
               ))}
+              {table.orphans.map((r) => <MgrRow key={r.managerId ?? "x"} r={r} cell={cell} num={num} />)}
+              {table.ownerless.map((r) => <MgrRow key="ownerless" r={r} cell={cell} num={num} />)}
               <tr style={{ fontWeight: 700 }}>
                 <td style={{ ...cell, textAlign: "left" }}>{d.total.name}</td>
                 <td style={cell}>{num(d.total.missed)}</td>
@@ -161,9 +189,29 @@ export function MissedCallsSection({ from, to }: { from: string; to: string }) {
         </div>
       </div>
 
-      <MissedListBlock from={d.period.from} to={d.period.to} />
+      <MissedListBlock from={d.period.from} to={d.period.to} canOpenClient={canOpenClient} />
       <NoDealBlock from={d.period.from} to={d.period.to} />
     </>
+  );
+}
+
+function MgrRow({ r, cell, num, indent = false }: {
+  r: MissedManagerRow; cell: React.CSSProperties; num: (v: number | null) => string; indent?: boolean;
+}) {
+  return (
+    <tr style={{
+      borderBottom: "1px solid var(--border)",
+      color: r.managerId === null ? "var(--text-muted)" : "inherit",
+      fontStyle: r.managerId === null ? "italic" : "normal",
+    }}>
+      <td style={{ ...cell, textAlign: "left", paddingLeft: indent ? 22 : 10 }}>{r.name}</td>
+      <td style={cell}>{num(r.missed)}</td>
+      <td style={cell}>{num(r.callbackSelf)}</td>
+      <td style={cell}>{num(r.callbackColleague)}</td>
+      <td style={cell}>{num(r.noCallback)}</td>
+      <td style={cell}>{num(r.medianMin)}</td>
+      <td style={cell}>{num(r.clientSelf)}</td>
+    </tr>
   );
 }
 
@@ -184,13 +232,14 @@ function nextLabel(kind: MissedNextStep, min: number | null): { text: string; ba
  * 📋 БЛОК C — пропущені за ОДИН день.
  * Список рахується тим самим виразом, що й «пропущено» в блоці A (гейт `#452`), тож за той
  * самий день рядків тут рівно стільки, скільки в числі.
- * ⚠️ Посилання на клієнта в дашборді НЕ робимо: адреси картки клієнта в продукті немає —
- * картки відкриваються діалогами всередині екранів. Вигадувати маршрут означало б
- * посилання в нікуди.
+ * 👤 КЛІЄНТ (ТЗ §1.4 C, хвіст звірки 16.09.2026): адреси картки клієнта в продукті немає, тож
+ * картка відкривається ТУТ ЖЕ, під рядком — той самий `ClientCardPanel`, що на екрані планів
+ * клієнтів. Хто картку не отримає від сервера, бачить «є в CRM», а не кнопку.
  */
-function MissedListBlock({ from, to }: { from: string; to: string }) {
+function MissedListBlock({ from, to, canOpenClient }: { from: string; to: string; canOpenClient: boolean }) {
   const [day, setDay] = useState(to);
   const [onlyNo, setOnlyNo] = useState(false);
+  const [openRow, setOpenRow] = useState<string | null>(null);
   const [d, setD] = useState<MissedListResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -244,25 +293,46 @@ function MissedListBlock({ from, to }: { from: string; to: string }) {
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--border)" }}>
                   <th style={head}>Час</th><th style={head}>Номер</th><th style={head}>Менеджер</th>
-                  <th style={head}>Коли</th><th style={head}>Що сталось далі</th><th style={head}>Угода</th>
+                  <th style={head}>Коли</th><th style={head}>Що сталось далі</th><th style={head}>Клієнт</th><th style={head}>Угода</th>
                 </tr>
               </thead>
               <tbody>
                 {d.rows.map((r) => {
                   const n = nextLabel(r.next, r.nextMin);
+                  const cc = clientCell(r.clientKey, canOpenClient);
+                  const isOpen = openRow === r.uniqueid;
                   return (
-                    <tr key={r.uniqueid} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <Fragment key={r.uniqueid}>
+                    <tr style={{ borderBottom: "1px solid var(--border)" }}>
                       <td style={cell}>{r.at}</td>
                       <td style={cell}>{r.phone ?? "номер не визначено"}</td>
                       <td style={{ ...cell, color: r.managerId === null ? "var(--text-muted)" : "inherit", fontStyle: r.managerId === null ? "italic" : "normal" }}>{r.managerName}</td>
                       <td style={cell}>{BUCKET_LABEL[r.bucket]}</td>
                       <td style={{ ...cell, color: n.bad ? "var(--danger, #c8102e)" : "inherit" }}>{n.text}</td>
                       <td style={cell}>
+                        {cc === "open" && (
+                          <button type="button" onClick={() => setOpenRow(isOpen ? null : r.uniqueid)}
+                            style={{ background: "none", border: "none", padding: 0, color: "var(--link, #2f5d8a)", cursor: "pointer", font: "inherit", textDecoration: "underline" }}>
+                            {isOpen ? "сховати картку" : "картка клієнта"}
+                          </button>
+                        )}
+                        {cc === "known" && <span style={{ color: "var(--text-muted)" }}>є в CRM</span>}
+                        {cc === "unknown" && <span style={{ color: "var(--text-muted)" }}>не впізнано в CRM</span>}
+                      </td>
+                      <td style={cell}>
                         {r.dealUrl
                           ? <a href={r.dealUrl} target="_blank" rel="noreferrer">угода в CRM</a>
                           : <span style={{ color: "var(--text-muted)" }}>немає</span>}
                       </td>
                     </tr>
+                    {isOpen && r.clientKey && (
+                      <tr>
+                        <td colSpan={7} style={{ padding: "12px 14px", borderBottom: "1px solid var(--border)" }}>
+                          <ClientCardPanel clientKey={r.clientKey} />
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   );
                 })}
               </tbody>

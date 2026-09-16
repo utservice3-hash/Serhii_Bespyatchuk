@@ -7,6 +7,7 @@ import {
   OWNERLESS_LABEL, MISSED_DEFAULT_DAYS, type MissedManagerRaw,
 } from "./missedCallsRules.js";
 import { dayBucketOf, dayBucketCase, DAY_BUCKETS } from "./dayBuckets.js";
+import { needsBackendEnv } from "../testMode.js";
 
 /**
  * #431…#438 — ПРОПУЩЕНІ ВХІДНІ (ТЗ-1, 14.09.2026).
@@ -94,9 +95,9 @@ test("#433 КИЇВ: межа періоду і межа доби — обидв
 
 test("#434 БЕЗ ВІДПОВІДАЛЬНОГО: окремий рядок, і Σ рядків == «всього»", () => {
   const raw: MissedManagerRaw[] = [
-    { managerId: 7, name: "Яцик", missed: 10, callbackSelf: 4, callbackColleague: 2, clientSelf: 3, medianMin: 12 },
-    { managerId: null, name: null, missed: 20, callbackSelf: 0, callbackColleague: 9, clientSelf: 5, medianMin: 40 },
-    { managerId: 9, name: "Дмитрук", missed: 5, callbackSelf: 1, callbackColleague: 1, clientSelf: 0, medianMin: 8 },
+    { managerId: 7, name: "Яцик", teamId: 1, missed: 10, callbackSelf: 4, callbackColleague: 2, clientSelf: 3, medianMin: 12 },
+    { managerId: null, name: null, teamId: null, missed: 20, callbackSelf: 0, callbackColleague: 9, clientSelf: 5, medianMin: 40 },
+    { managerId: 9, name: "Дмитрук", teamId: 1, missed: 5, callbackSelf: 1, callbackColleague: 1, clientSelf: 0, medianMin: 8 },
   ];
   const { rows, total } = foldManagerRows(raw);
 
@@ -490,4 +491,156 @@ test("#453 «СПИСОК ОБРІЗАНО» — ЛИШЕ КОЛИ ОБРІЗА�
     assert.ok(sql.includes(`LIMIT ${String(MISSED_LIST_LIMIT + 1)}`),
       "🔴 запит бере рівно стелю — обрізання неможливо відрізнити від повного списку");
   }
+});
+
+/* ═══════════════════════ ХВОСТИ ТЗ-1 (звірка 16.09.2026, прохід 17.09.2026) ═══════════════════════ */
+
+/**
+ * #459 — РЯДОК КОМАНДИ І ЧЕСНИЙ «БЕЗ ВІДПОВІДАЛЬНОГО» У ЗРІЗІ КОМАНДИ.
+ * Чисте правило: хто «Поза командами», де він стоїть, «не передзвонили» як похідне, і
+ * прапорець, що забороняє показувати тімліду нуль там, де правда — «не входить у зріз».
+ */
+test("#459 КОМАНДИ: «Поза командами» названо й останнім; «без відповідального» є лише у зрізі компанії", async () => {
+  const R = await import("./missedCallsRules.js");
+  const rows = R.foldTeamRows([
+    { teamId: null, name: null, missed: 50, callbackSelf: 10, callbackColleague: 5, clientSelf: 1, medianMin: 9 },
+    { teamId: 2, name: "РНК", missed: 7, callbackSelf: 3, callbackColleague: 1, clientSelf: 0, medianMin: 20 },
+    { teamId: 1, name: "РПК", missed: 30, callbackSelf: 12, callbackColleague: 6, clientSelf: 4, medianMin: 15 },
+    { teamId: 5, name: null, missed: 1, callbackSelf: 0, callbackColleague: 0, clientSelf: 0, medianMin: null },
+  ]);
+  assert.deepEqual(rows.map((r) => r.name), ["РПК", "РНК", "Команда #5", R.NO_TEAM_LABEL],
+    "🔴 команди не за спаданням, або «Поза командами» вліз у рейтинг, або безіменна команда лишилась порожньою");
+  assert.deepEqual(rows.map((r) => r.noCallback), [12, 3, 1, 35], "🔴 «не передзвонили» команди рахується неправильно");
+
+  assert.equal(R.ownerlessInScope({}), true, "🔴 у зрізі компанії «без відповідального» сховано — це половина предмета");
+  assert.equal(R.ownerlessInScope({ managerId: null, teamId: null }), true);
+  assert.equal(R.ownerlessInScope({ teamId: 3 }), false, "🔴 тімлід побачить «Без відповідального: 0» — такі дзвінки в зріз команди не входять");
+  assert.equal(R.ownerlessInScope({ managerId: 5 }), false, "🔴 менеджер побачить «Без відповідального: 0»");
+  assert.equal(R.ownerlessInScope({ managerId: -1 }), false, "🔴 порожній кламп менеджера читається як «уся компанія»");
+
+  const team = R.missedByTeamSql("2026-09-01", "2026-09-15", {}).sql;
+  assert.match(team, /\bJOIN managers mg ON mg\.id = w\.manager_id/, "🔴 рядки команд тягнуть «без відповідального» (LEFT JOIN)");
+  assert.match(team, /PERCENTILE_CONT\(0\.5\)/, "🔴 медіана команди перестала бути медіаною");
+});
+
+/** Три запити блоку A/B ОДНИМ оператором — одна мить, одна знімка бази (правило 18). */
+function oneShotSql(R: typeof import("./missedCallsRules.js"), from: string, to: string, s: import("./missedCallsRules.js").MissedScope) {
+  const A = R.missedSummarySql(from, to, s), B = R.missedByManagerSql(from, to, s), C = R.missedByTeamSql(from, to, s);
+  assert.deepEqual([B.params, C.params], [A.params, A.params], "🔴 будівники нумерують параметри по-різному — один оператор неможливий");
+  return {
+    sql: `SELECT (SELECT row_to_json(a) FROM (${A.sql}) a) AS s,
+                 (SELECT coalesce(json_agg(b), '[]'::json) FROM (${B.sql}) b) AS m,
+                 (SELECT coalesce(json_agg(c), '[]'::json) FROM (${C.sql}) c) AS t`,
+    params: A.params,
+  };
+}
+
+type OneShot = {
+  s: Record<string, number | string | null>;
+  m: { manager_id: number | null; team_id: number | null; missed: number; callback_self: number; callback_colleague: number; client_self: number }[];
+  t: { team_id: number | null; team_name: string | null; missed: number; callback_self: number; callback_colleague: number; client_self: number; median_min: number | null }[];
+};
+
+/** Інваріанти ТЗ §1.6 п.2 на одному знімку. Спільні для фікстури й живої бази. */
+function assertInvariants(r: OneShot, where: string): void {
+  const missed = Number(r.s.missed);
+  const buckets = ["b_work", "b_evening", "b_weekend", "b_night"].reduce((n, k) => n + Number(r.s[k]), 0);
+  assert.equal(buckets, missed, `🔴 ${where}: Σ чотирьох частин доби (${String(buckets)}) ≠ пропущені (${String(missed)})`);
+  const sumM = r.m.reduce((n, x) => n + Number(x.missed), 0);
+  assert.equal(sumM, missed, `🔴 ${where}: Σ рядків менеджерів разом із «без відповідального» (${String(sumM)}) ≠ «всього» (${String(missed)})`);
+  const ownerless = r.m.filter((x) => x.manager_id === null).reduce((n, x) => n + Number(x.missed), 0);
+  assert.equal(ownerless, Number(r.s.ownerless), `🔴 ${where}: рядок «без відповідального» ≠ плитка`);
+  const sumT = r.t.reduce((n, x) => n + Number(x.missed), 0);
+  assert.equal(sumT + ownerless, missed, `🔴 ${where}: Σ команд (${String(sumT)}) + без відповідального (${String(ownerless)}) ≠ «всього» (${String(missed)})`);
+  for (const t of r.t) {
+    const mine = r.m.filter((x) => x.manager_id !== null && x.team_id === t.team_id);
+    for (const k of ["missed", "callback_self", "callback_colleague", "client_self"] as const) {
+      const sum = mine.reduce((n, x) => n + Number(x[k]), 0);
+      assert.equal(sum, Number(t[k]), `🔴 ${where}: команда ${String(t.team_name ?? t.team_id)} · ${k}: Σ менеджерів ${String(sum)} ≠ рядок команди ${String(t[k])}`);
+    }
+  }
+}
+
+/**
+ * #460 — ЖИВИЙ SQL КОМАНД І ПРИЙМАННЯ §1.6 п.2–3 НА ФІКСТУРІ.
+ *  · один оператор: Σ відер = Σ рядків = «всього», Σ команд + без відповідального = «всього»,
+ *    Σ менеджерів команди = рядок команди по кожній адитивній колонці;
+ *  · медіана команди — медіана її дзвінків, а не середнє медіан людей;
+ *  · менеджер без команди — «Поза командами», а не зниклий;
+ *  · зріз команди: «без відповідального» 0 і прапорець каже «не входить», а не «немає»;
+ *  · межа доби за Києвом з ОБОХ боків: 31.12 23:59 лишається в 31.12, 01.01 00:30 (ще 31.12 за
+ *    UTC) — у 01.01. Сама лише 23:59 цієї межі не стереже: за UTC це той самий день.
+ */
+test("#460 ЖИВИЙ SQL КОМАНД: інваріанти одним оператором, медіана команди, межа київської доби", async (t) => {
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const R = await import("./missedCallsRules.js");
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+    await c.query("INSERT INTO teams(id,name) VALUES (1,'РПК'),(2,'РНК') ON CONFLICT DO NOTHING");
+    await c.query(`INSERT INTO managers(id,name,team_id,is_active) VALUES
+      (1,'Яцик',1,true),(2,'Дмитрук',1,true),(3,'Мокляк',2,true),(4,'Без команди',NULL,true) ON CONFLICT DO NOTHING`);
+    let seq = 0;
+    const call = (at: string, type: string, disp: string | null, sec: number, mgr: number | null, phone: string) =>
+      c.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,manager_id,client_phone)
+               VALUES ($1,$2,$3,$4,$5,$6,$7)`, [`v${String(++seq)}`, at, type, disp, sec, mgr, phone]);
+    // РПК: Яцик {10}, Дмитрук {20, 90} → медіана команди {10,20,90} = 20; середнє медіан людей (10+55)/2 = 32.5
+    await call("2026-09-10 10:00:00+03", "in", "NO ANSWER", 0, 1, "P1"); await call("2026-09-10 10:10:00+03", "out", "ANSWERED", 30, 1, "P1");
+    await call("2026-09-10 11:00:00+03", "in", "BUSY", 0, 2, "P2"); await call("2026-09-10 11:20:00+03", "out", "ANSWERED", 30, 1, "P2");
+    await call("2026-09-10 12:00:00+03", "in", "NO ANSWER", 0, 2, "P3"); await call("2026-09-10 13:30:00+03", "out", "NO ANSWER", 0, 2, "P3");
+    await call("2026-09-10 14:00:00+03", "in", "NO ANSWER", 0, 3, "P4");                                      // РНК, без передзвону
+    await call("2026-09-10 15:00:00+03", "in", "NO ANSWER", 0, 4, "P5");                                      // поза командами
+    await call("2026-09-10 16:00:00+03", "in", "NO ANSWER", 0, null, "P6");                                   // без відповідального
+    await call("2026-09-10 16:00:30+03", "transitin", "NO ANSWER", 0, null, "P6");                            // його плече
+    await call("2026-09-10 17:00:00+03", "in", "ANSWERED", 60, 3, "P7");                                      // розмова — не пропущений
+
+    const run = async (from: string, to: string, s: import("./missedCallsRules.js").MissedScope) => {
+      const q = oneShotSql(R, from, to, s);
+      return (await c.query(q.sql, q.params)).rows[0] as OneShot;
+    };
+    const all = await run("2026-09-10", "2026-09-10", {});
+    assert.equal(Number(all.s.missed), 6, "🔴 фікстура дала не 6 пропущених — гейт нічого не доводить");
+    assertInvariants(all, "фікстура");
+    const rpk = all.t.find((x) => x.team_id === 1);
+    assert.equal(Number(rpk?.missed), 3);
+    assert.equal(Math.round(Number(rpk?.median_min)), 20, "🔴 медіана команди — не медіана її дзвінків (32.5 = середнє медіан людей)");
+    assert.ok(all.t.some((x) => x.team_id === null && Number(x.missed) === 1), "🔴 менеджер без команди зник із рядків команд");
+
+    const team1 = await run("2026-09-10", "2026-09-10", { teamId: 1 });
+    assertInvariants(team1, "зріз команди");
+    assert.equal(Number(team1.s.ownerless), 0);
+    assert.equal(R.ownerlessInScope({ teamId: 1 }), false, "🔴 у зрізі команди нуль «без відповідального» покажеться як правда");
+
+    // Межа київської доби з обох боків.
+    await call("2025-12-31 23:59:00+02", "in", "NO ANSWER", 0, 1, "P8");
+    await call("2026-01-01 00:30:00+02", "in", "NO ANSWER", 0, 1, "P9");
+    const dec31 = await run("2025-12-31", "2025-12-31", {});
+    const jan1 = await run("2026-01-01", "2026-01-01", {});
+    assert.equal(Number(dec31.s.missed), 1, "🔴 31.12 23:59 за Києвом вийшов за межу свого дня");
+    assert.equal(Number(jan1.s.missed), 1, "🔴 01.01 00:30 за Києвом ліг у 31.12 — день рахується за UTC");
+    assert.equal(Number(jan1.s.b_night), 1, "🔴 00:30 не потрапило в «ніч»");
+  } finally { await c.end(); scratch.dispose(); }
+});
+
+/**
+ * #461 — ПРИЙМАННЯ §1.6 п.2 НА ЖИВІЙ БАЗІ, ОДНИМ ОПЕРАТОРОМ. Останні 7 повних днів.
+ * Фікстура (#460) доводить, що правило вміє сходитись; цей гейт — що воно сходиться на
+ * справжніх даних, де є все, чого фікстура не вигадала (менеджери, що змінили команду,
+ * плечі з трьох записів, NULL-номери).
+ */
+test("#461 ЖИВА БД: Σ відер = Σ рядків = всього, Σ команд + без відповідального = всього — одним оператором", needsBackendEnv(), async (t) => {
+  const R = await import("./missedCallsRules.js");
+  const { pool } = await import("../db/pool.js");
+  const { emptyPeriodSkip } = await import("../testMode.js");
+  const { kyivToday } = await import("./dates.js");
+  const day = (n: number): string => { const d = new Date(`${kyivToday()}T00:00:00Z`); d.setUTCDate(d.getUTCDate() - n); return d.toISOString().slice(0, 10); };
+  const q = oneShotSql(R, day(7), day(1), {});
+  const r = (await pool.query(q.sql, q.params)).rows[0] as OneShot;
+  const skip = emptyPeriodSkip("пропущених вхідних", Number(r.s.missed), `${day(7)}…${day(1)}`);
+  if (skip) return t.skip(skip);
+  assertInvariants(r, `жива БД ${day(7)}…${day(1)}`);
 });

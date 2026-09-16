@@ -125,3 +125,30 @@ test("#406c недоступна задача називає себе, а вал
   assert.match(src, /deepLink === "missing"/,
     "🔴 стан «missing» ніде не малюється — порожнеча знову не називає себе");
 });
+
+/**
+ * #465 — «СПИСОК НЕ ЗАВАНТАЖИВСЯ» — ОКРЕМИЙ СТАН, А НЕ «ЗАДАЧА НЕДОСТУПНА».
+ * `fetchTasks().catch(() => setTasks([]))` давав той самий порожній масив, що й «задачі немає»,
+ * і 500 на списку малювали «недоступна · посилання правильне» — підпис, що стверджує причину,
+ * для відмови з іншою причиною (правило 3). І текст «missing» більше не каже «посилання
+ * правильне»: задачі з таким номером може не існувати взагалі.
+ */
+test("#465 збій завантаження — свій стан; «не знайдено» не стверджує, що посилання правильне", async () => {
+  const { deepLinkState } = await loadLink() as unknown as {
+    deepLinkState: (a: { openTaskId: number | null; found: boolean; settled: boolean; failed?: boolean }) => string;
+  };
+  assert.equal(deepLinkState({ openTaskId: 3367, found: false, settled: true, failed: true }), "failed",
+    "🔴 збій завантаження знову читається як «задача недоступна»");
+  assert.equal(deepLinkState({ openTaskId: 3367, found: false, settled: false, failed: true }), "failed");
+  assert.equal(deepLinkState({ openTaskId: 3367, found: true, settled: true, failed: true }), "open",
+    "🔴 знайдена задача не відкривається лише тому, що попереднє завантаження падало");
+  assert.equal(deepLinkState({ openTaskId: 3367, found: false, settled: true, failed: false }), "missing",
+    "🔴 дзеркало: без збою порожнеча знову мовчить");
+
+  const src = stripComments(readFileSync(SECTION_TSX, "utf8"));
+  assert.match(src, /failed: tasksLoadFailed/, "🔴 секція не передає збій у правило");
+  assert.match(src, /deepLink === "failed"/, "🔴 стан «failed» ніде не малюється");
+  assert.ok(!/Посилання правильне/.test(src), "🔴 банер знову стверджує «посилання правильне» для id, якого може не існувати");
+  const dash = stripComments(readFileSync(fileURLToPath(new URL("pages/Dashboard.tsx", FE_ROOT)), "utf8"));
+  assert.match(dash, /setTasksLoadFailed\(true\)/, "🔴 збій списку ніде не фіксується — прапорець завжди false");
+});

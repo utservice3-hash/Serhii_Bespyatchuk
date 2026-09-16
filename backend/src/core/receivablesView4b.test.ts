@@ -3463,3 +3463,23 @@ test("#255b ЖОДЕН ПОКАЗНИК НЕ ЗНИК разом зі своєю
   const cols = (head.match(/<th\b/g) ?? []).length;
   assert.equal(cols, 8, `🔴 колонок ${cols}, а не 8 — макет не застосовано або застосовано частково`);
 });
+
+/**
+ * #466 — ПІДКАЗКА НА ЧИСЛІ «ЗАРОБИЛИ» НЕ КАЖЕ «ВІД СУМИ РАХУНКІВ».
+ * Підпис плитки вже пояснював «поле „Бюджет", а не розрахунок», а підказка на самому числі
+ * казала «заробили N ₴ від суми рахунків M ₴» — те саме хибне читання, від якого лікували
+ * плитку (звірка 16.09.2026). І слово «маржа», яке просила Юля, стоїть у підписі.
+ */
+test("#466 «Заробили»: підказка не робить з поля розрахунок, підпис називає маржу", async () => {
+  const ts = (await import("typescript")).default;
+  const js = ts.transpileModule(readFileSync(FE("pages/dashboard/receivablesView.ts"), "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const V = await import(`data:text/javascript,${encodeURIComponent(js)}`) as { marginHint: (m: unknown) => string };
+  const h = V.marginHint({ earned: 12000, base: 150000, pct: 8, why: null });
+  assert.ok(!/заробили[^·]*від суми рахунків/.test(h), `🔴 підказка знову читається як «порахували з рахунків»: ${h}`);
+  assert.match(h, /Бюджет/, "🔴 підказка не називає поле CRM");
+  assert.match(h, /сума рахунків 150/, "🔴 знаменник зник із підказки");
+  assert.match(strip(readFileSync(FE("pages/dashboard/sections/ReceivablesTiles.tsx"), "utf8")), /маржа з поля «Бюджет»/,
+    "🔴 підпис плитки не називає маржу — формулювання з листа Юлі");
+});

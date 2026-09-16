@@ -43,7 +43,7 @@ import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL,
   isPlannableClientKey, NOT_PLANNABLE_MSG, rosterWithPlans, splitUnattached, SAVE_SQL,
   OWNER_SQL, NO_OWNER_MSG } from "./clientPlanRules.js";
 import * as missedCalls from "../core/missedCalls.js";
-import { missedPeriod, missedScopeFor, NO_DEAL_STATES, type NoDealState } from "../core/missedCallsRules.js";
+import { missedPeriod, missedScopeFor, ownerlessInScope, NO_DEAL_STATES, type NoDealState } from "../core/missedCallsRules.js";
 import * as reactivation from "../core/reactivation.js";
 import * as reactivationRules from "../core/reactivationRules.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
@@ -9982,11 +9982,17 @@ dashboardRouter.get("/missed-calls", async (req, res) => {
   // Кламп — одне місце на всі роути екрана (`missedScopeFor`); підсумок команди
   // МЕНШИЙ за загальний, бо «без відповідального» не належить жодній команді.
   const scope = missedScopeFor(auth, req.query);
-  const [summary, byManager] = await Promise.all([
+  const [summary, byManager, teams] = await Promise.all([
     missedCalls.missedSummary(from, to, scope),
     missedCalls.missedByManager(from, to, scope),
+    missedCalls.missedByTeam(from, to, scope),
   ]);
-  res.json({ period: { from, to }, summary, managers: byManager.rows, total: byManager.total });
+  // `ownerlessInScope` — щоб фронт не малював тімліду «Без відповідального: 0»: у зріз команди
+  // такі дзвінки не входять за побудовою, і нуль там був би неправдою (звірка 16.09.2026).
+  res.json({
+    period: { from, to }, summary, managers: byManager.rows, total: byManager.total,
+    teams, ownerlessInScope: ownerlessInScope(scope),
+  });
 });
 
 /**
