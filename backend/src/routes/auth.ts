@@ -114,7 +114,8 @@ authRouter.post("/telegram-link", requireAuth, async (req, res) => {
   const username = await signBotUsername();
   if (!username) return res.status(503).json({ error: "Telegram не відповідає — спробуйте пізніше" });
   const token = generateLinkToken(randomBytes(36));
-  await pool.query(`UPDATE sign_codes SET used_at = now() WHERE user_id = $1 AND purpose = 'link' AND used_at IS NULL`, [req.auth!.userId]);
+  // Попередні посилання НЕ гасимо: людина часто тисне кнопку двічі й відкриває першу вкладку —
+  // гасіння давало «посилання вже використане» (заміряно 16.09.2026). Кожне живе свої 10 хв.
   await pool.query(`INSERT INTO sign_codes (user_id, purpose, code, expires_at) VALUES ($1, 'link', $2, now() + ($3 || ' milliseconds')::interval)`,
     [req.auth!.userId, token, String(LINK_TOKEN_TTL_MS)]);
   res.json({ url: `https://t.me/${username}?start=${token}`, expiresInSec: LINK_TOKEN_TTL_MS / 1000 });

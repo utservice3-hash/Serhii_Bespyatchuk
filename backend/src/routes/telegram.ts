@@ -23,6 +23,7 @@ telegramRouter.post("/sign-webhook", async (req, res) => {
   const chatId = msg?.chat?.id;
   const text = String(msg?.text ?? "").trim();
   if (!chatId) return;
+  console.log(`sign-webhook: chat ${chatId} · «${text.slice(0, 40)}»`);
   const m = /^\/start(?:@\w+)?\s+([A-Za-z0-9_-]{8,64})$/.exec(text);
   if (!m) { await signBotSend(chatId, HELP); return; }
   try {
