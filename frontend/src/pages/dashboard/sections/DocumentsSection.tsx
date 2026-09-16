@@ -351,8 +351,10 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
     if (mgmt) fetchDocViewers(file.id).then((v) => { if (alive) setViewers(v); }).catch(() => {});
     if (kind !== "none") fetchDocFileBlobUrl(file.id, { inline: true }).then((u) => { url = u; if (alive) setPreview(u); }).catch(() => {});
     return () => { alive = false; if (url) URL.revokeObjectURL(url); };
+    // Перечитуємо й після підпису / ознайомлення / активації — інакше таймлайн показує стан
+    // на момент відкриття картки («Відкрито: ще ні» при вже підписаному, заміряно 16.09.2026).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [file.id, file.version]);
+  }, [file.id, file.version, file.signature.kind, file.ack.mine, file.inactiveAt, file.archivedAt]);
 
   const open = async (download: boolean) => {
     // Вкладку відкриваємо СИНХРОННО в кліку: після await браузер блокує window.open як спливашку

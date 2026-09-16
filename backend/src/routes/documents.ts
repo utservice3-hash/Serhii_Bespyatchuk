@@ -222,9 +222,11 @@ documentsRouter.get("/file/:id", async (req, res) => {
                  WHERE e.file_id = $1 ORDER BY e.at`, [id]),
   ]);
   const sentAt = (events.rows.find((e) => e.kind === "sent") as { at?: string } | undefined)?.at ?? null;
-  // Відкриття картки адресатом — подія «opened» (для таймлайна офера), один раз.
+  // Відкриття картки адресатом — подія «opened» (для таймлайна офера), один раз. Пишемо і одразу
+  // додаємо у відповідь: інакше перший показ картки не бачить власного «Відкрито» (заміряно 16.09.2026).
   if (v.row.addressee_user_id === req.auth!.userId && !events.rows.some((e) => e.kind === "opened")) {
     await logEvent(id, "opened", req.auth!.userId);
+    events.rows.push({ kind: "opened", at: new Date().toISOString(), details: null, actor: null } as typeof events.rows[number]);
   }
   const acksRows = (await pool.query<{ user_id: number; version: number; sha256: string }>(`SELECT user_id, version, sha256 FROM doc_acks WHERE file_id = $1`, [id])).rows.map((a) => ({ userId: a.user_id, version: a.version, sha256: a.sha256 }));
   const mgmtNow = isManagement(req.auth!.roleKey);
