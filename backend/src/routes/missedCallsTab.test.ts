@@ -18,11 +18,16 @@ const stripComments = (src: string): string =>
 
 /* Типи модулів фронту описано тут: `typeof import("…/frontend/…")` тягне файли фронту в збірку бекенду. */
 interface PeriodStateT { mode: string; anchor: string; focusDay: string; rangeFrom: string; rangeTo: string }
+interface KnownT { status: string; closeReason: string | null }
 interface NotifyMod {
   SIGNAL_TITLE_PREFIX: string;
-  isSignalAlert: (t: { id: number; title: string; status: string; assigneeId?: number | null }, known: ReadonlyMap<number, string>, me: number | null | undefined) => boolean;
+  AUTO_CLOSE_PREFIX: string;
+  SIGNAL_CLOCK_SKEW_MS: number;
+  isSignalAlert: (t: { id: number; title: string; status: string; assigneeId?: number | null; closeReason?: string | null; createdAt?: string | null },
+    known: ReadonlyMap<number, KnownT> | null, me: number | null | undefined, mountedAtMs: number) => boolean;
   signalAlertText: (titles: string[]) => string | null;
 }
+interface ViewDayMod { clampListDay: (day: string | null, from: string, to: string, today: string) => string }
 interface ViewMod {
   missedDefaultPeriod: (today: string) => PeriodStateT;
   groupByTeam: <T extends { teamId: number | null }, P extends { managerId: number | null; teamId: number | null }>(teams: T[], people: P[]) => { groups: { team: T; people: P[] }[]; orphans: P[] };
@@ -48,20 +53,34 @@ const load = async <T>(rel: string, deps: Record<string, string> = {}): Promise<
  */
 test("#462 СИГНАЛ: нова й перевідкрита задача «📵» дзвонить виконавцю; стара, чужа й закрита — ні", async () => {
   const N = await load<NotifyMod>("pages/dashboard/signalTaskNotify.ts");
-  const { SIGNAL_TITLE_PREFIX: BACK } = await import("../core/missedCallSignal.js");
+  const { SIGNAL_TITLE_PREFIX: BACK, autoCloseReason } = await import("../core/missedCallSignal.js");
   assert.equal(N.SIGNAL_TITLE_PREFIX, BACK, "🔴 префікс фронту розійшовся з бекендом — сповіщення замовкне тихо");
+  assert.ok(autoCloseReason("16.09 10:12").startsWith(N.AUTO_CLOSE_PREFIX), "🔴 причина автозакриття бекенду не починається з префікса фронту — перевідкриття джобою мовчатиме");
 
-  const t = (id: number, over: Partial<{ title: string; status: string; assigneeId: number | null }> = {}) =>
-    ({ id, title: `${BACK}: +380671234567`, status: "not_started", assigneeId: 7, ...over });
-  const known = new Map<number, string>([[1, "not_started"], [2, "done"], [3, "in_progress"]]);
-  assert.equal(N.isSignalAlert(t(9), known, 7), true, "🔴 нова задача-сигнал прийшла мовчки");
-  assert.equal(N.isSignalAlert(t(2), known, 7), true, "🔴 перевідкрита (клієнт знову не додзвонився) — мовчки");
-  assert.equal(N.isSignalAlert(t(1), known, 7), false, "🔴 уже відома задача дзвонить на кожному опитуванні");
-  assert.equal(N.isSignalAlert(t(3), known, 7), false);
-  assert.equal(N.isSignalAlert(t(9), known, 8), false, "🔴 дзвонить чужому менеджеру");
-  assert.equal(N.isSignalAlert(t(9), known, null), false, "🔴 дзвонить акаунту без менеджера (адмін, HR)");
-  assert.equal(N.isSignalAlert(t(9, { status: "done" }), known, 7), false, "🔴 дзвонить задача, яка вже закрилась сама");
-  assert.equal(N.isSignalAlert(t(9, { title: "Звичайна задача" }), known, 7), false, "🔴 дзвонить будь-яка нова задача");
+  const MOUNT = Date.parse("2026-09-17T10:00:00Z");
+  const t = (id: number, over: Partial<{ title: string; status: string; assigneeId: number | null; closeReason: string | null; createdAt: string }> = {}) =>
+    ({ id, title: `${BACK}: +380671234567`, status: "not_started", assigneeId: 7, closeReason: null, createdAt: "2026-09-17T09:00:00Z", ...over });
+  const AUTO = autoCloseReason("17.09 10:12");
+  const known = new Map<number, KnownT>([[1, { status: "not_started", closeReason: null }], [2, { status: "done", closeReason: AUTO }],
+    [3, { status: "in_progress", closeReason: null }], [4, { status: "done", closeReason: null }]]);
+  assert.equal(N.isSignalAlert(t(9), known, 7, MOUNT), true, "🔴 нова задача-сигнал прийшла мовчки");
+  assert.equal(N.isSignalAlert(t(2), known, 7, MOUNT), true, "🔴 перевідкрита джобою (клієнт знову не додзвонився) — мовчки");
+  assert.equal(N.isSignalAlert(t(2, { closeReason: AUTO }), known, 7, MOUNT), false,
+    "🔴 менеджер сам повернув автозакриту задачу в роботу — і отримав тост «пропущений», хоча нового дзвінка не було");
+  assert.equal(N.isSignalAlert(t(4), known, 7, MOUNT), false, "🔴 закриту й повернуту менеджером задачу видано за новий пропущений");
+  assert.equal(N.isSignalAlert(t(1), known, 7, MOUNT), false, "🔴 уже відома задача дзвонить на кожному опитуванні");
+  assert.equal(N.isSignalAlert(t(3), known, 7, MOUNT), false);
+  assert.equal(N.isSignalAlert(t(9), known, 8, MOUNT), false, "🔴 дзвонить чужому менеджеру");
+  assert.equal(N.isSignalAlert(t(9), known, null, MOUNT), false, "🔴 дзвонить акаунту без менеджера (адмін, HR)");
+  assert.equal(N.isSignalAlert(t(9, { status: "done" }), known, 7, MOUNT), false, "🔴 дзвонить задача, яка вже закрилась сама");
+  assert.equal(N.isSignalAlert(t(9, { title: "Звичайна задача" }), known, 7, MOUNT), false, "🔴 дзвонить будь-яка нова задача");
+  // Першого опитування ще не було (вкладка у фоні): свіжі задачі дзвонять, старі — ні.
+  assert.equal(N.isSignalAlert(t(9, { createdAt: "2026-09-17T11:17:00Z" }), null, 7, MOUNT), true,
+    "🔴 задача, створена поки вкладка була у фоні, мовчки пішла в базову лінію");
+  assert.equal(N.isSignalAlert(t(9, { createdAt: "2026-09-17T09:00:00Z" }), null, 7, MOUNT), false,
+    "🔴 кожне відкриття сторінки дзвонить усіма старими задачами");
+  assert.equal(N.isSignalAlert(t(9, { createdAt: new Date(MOUNT - N.SIGNAL_CLOCK_SKEW_MS).toISOString() }), null, 7, MOUNT), true,
+    "🔴 розбіжність годинників браузера й сервера ковтає свіжу задачу");
 
   assert.equal(N.signalAlertText([]), null);
   assert.ok(N.signalAlertText([`${BACK}: +380671234567`])?.includes("+380671234567"), "🔴 тост не каже, кому передзвонити");
@@ -69,9 +88,8 @@ test("#462 СИГНАЛ: нова й перевідкрита задача «�
 
   // Проводка: опитування кличе правило, а базова лінія — перше опитування, не порожній стан.
   const dash = stripComments(readFileSync(FE("pages/Dashboard.tsx"), "utf8"));
-  assert.match(dash, /isSignalAlert\(t, known, auth\?\.managerId\)/, "🔴 опитування задач не кличе правило сигналу");
-  assert.match(dash, /const known = signalKnown\.current;\s*if \(known\)/, "🔴 немає базової лінії — перше опитування задзвенить усіма старими задачами");
-  assert.match(dash, /signalKnown\.current = new Map\(fresh\.map/, "🔴 базова лінія не оновлюється — кожне опитування дзвонитиме заново");
+  assert.match(dash, /isSignalAlert\(t, known, auth\?\.managerId, mountedAt\.current\)/, "🔴 опитування задач не кличе правило сигналу або без моменту відкриття");
+  assert.match(dash, /signalKnown\.current = new Map\(fresh\.map\(\(t\) => \[t\.id, knownOf\(t\)\]\)\)/, "🔴 базова лінія не оновлюється або не памʼятає причину закриття");
   assert.match(dash, /usePolling\(\(\) => \{\s*fetchTasks\(\)\s*\.then\(\(fresh\) => \{\s*notifySignalTasks\(fresh\);/,
     "🔴 фонове опитування задач не кличе сповіщення — правило є, а сигнал мовчить");
 });
@@ -99,6 +117,17 @@ test("#463 ПЕРІОД: дефолт «вчора» за Києвом, наві
   assert.match(sec, /<PeriodNav\b/, "🔴 на вкладці немає вибору періоду — його знову нема звідки змінити");
   assert.match(sec, /const \{ from, to \} = periodOf\(nav\)/, "🔴 запити йдуть не з періоду навігатора");
   const dash = stripComments(readFileSync(FE("pages/Dashboard.tsx"), "utf8"));
+  // Гонка: пізня відповідь за СТАРИЙ період не перезаписує новий — у всіх чотирьох запитах вкладки.
+  assert.equal((sec.match(/if \(alive\) set/g) ?? []).length >= 4 && (sec.match(/return \(\) => \{ alive = false; \};/g) ?? []).length, 4,
+    "🔴 запит вкладки без захисту від гонки: відповідь за старий період перезапише новий");
+  // День списку — не майбутній і не скидається на кожному запиті.
+  const VD = await load<ViewDayMod>("pages/dashboard/missedCallsView.ts", { "./periodRules": periodUrl });
+  assert.equal(VD.clampListDay("2026-09-16", "2026-09-14", "2026-09-20", "2026-09-17"), "2026-09-16", "🔴 обраний день, що входить у новий період, скинуто");
+  assert.equal(VD.clampListDay(null, "2026-09-14", "2026-09-20", "2026-09-17"), "2026-09-17", "🔴 поточний тиждень відкрив список на неділю в майбутньому");
+  assert.equal(VD.clampListDay("2026-08-03", "2026-07-01", "2026-07-31", "2026-09-17"), "2026-07-31");
+  assert.equal(VD.clampListDay(null, "2026-10-01", "2026-10-31", "2026-09-17"), "2026-10-01");
+  assert.match(sec, /<MissedListBlock from=\{d\.period\.from\} to=\{d\.period\.to\} day=\{listDay\} setDay=\{setListDay\}/,
+    "🔴 день списку знову живе в блоці, що перемонтовується на кожному запиті");
   const tag = dash.match(/<MissedCallsSection[^>]*\/>/)?.[0] ?? "";
   assert.ok(tag, "🔴 вкладку не рендерить ніхто");
   assert.ok(!/dateRange/.test(tag), "🔴 спільний dateRange знову їде у вкладку — період застигне в localStorage");

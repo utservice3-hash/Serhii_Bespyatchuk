@@ -12,19 +12,43 @@
  */
 export const SIGNAL_TITLE_PREFIX = "📵 Передзвонити клієнту";
 
-export interface TaskLike { id: number; title: string; status: string; assigneeId?: number | null }
+/** Початок причини автозакриття — мусить дорівнювати `autoCloseReason` бекенду (тримає `#462`). */
+export const AUTO_CLOSE_PREFIX = "Закрито автоматично:";
+
+export interface TaskLike {
+  id: number; title: string; status: string; assigneeId?: number | null;
+  closeReason?: string | null; createdAt?: string | null;
+}
+/** Що памʼятаємо про задачу з попереднього опитування. */
+export interface KnownTask { status: string; closeReason: string | null }
+export const knownOf = (t: TaskLike): KnownTask => ({ status: t.status, closeReason: t.closeReason ?? null });
+
+/** Допуск на розбіжність годинників браузера й сервера, коли порівнюємо час створення з моментом відкриття. */
+export const SIGNAL_CLOCK_SKEW_MS = 120_000;
 
 /**
- * Нова або ПЕРЕВІДКРИТА задача-сигнал, призначена саме мені.
- * Перевідкрита (`done` → не `done`) теж кличе: клієнт знову не додзвонився.
- * `known` — статуси з попереднього опитування; першого завантаження тут немає за побудовою
- * (його відсікає виклик), інакше кожне відкриття сторінки дзвеніло б усіма старими задачами.
+ * Нова або ПЕРЕВІДКРИТА ДЖОБОЮ задача-сигнал, призначена саме мені.
+ *
+ * · `known === null` — першого опитування ще не було (вкладка могла бути у фоні, і опитування
+ *   пропускались). Тоді дзвонимо лише задачами, СТВОРЕНИМИ після відкриття сторінки: старі
+ *   задачі на кожному відкритті — шум, а свіжі мовчки ковтати не можна (рецензія 17.09.2026).
+ * · Перевідкрита дзвонить, лише якщо її перевідкрила ДЖОБА: вона знімає причину автозакриття.
+ *   Менеджер, що сам повернув задачу в роботу, причини не знімає — і тосту «пропущений» не
+ *   отримує (рецензія 17.09.2026). Закриту менеджером задачу джоба перевідкриває без тосту —
+ *   свідома межа: відрізнити ці два випадки з видачі списку нема чим.
  */
-export function isSignalAlert(t: TaskLike, known: ReadonlyMap<number, string>, myManagerId: number | null | undefined): boolean {
+export function isSignalAlert(t: TaskLike, known: ReadonlyMap<number, KnownTask> | null, myManagerId: number | null | undefined, mountedAtMs: number): boolean {
   if (myManagerId == null || t.assigneeId !== myManagerId) return false;
   if (!t.title.startsWith(SIGNAL_TITLE_PREFIX) || t.status === "done") return false;
+  if (known === null) {
+    const created = t.createdAt ? Date.parse(t.createdAt) : NaN;
+    return Number.isFinite(created) && created >= mountedAtMs - SIGNAL_CLOCK_SKEW_MS;
+  }
   const was = known.get(t.id);
-  return was === undefined || was === "done";
+  if (was === undefined) return true;
+  return was.status === "done"
+    && (was.closeReason ?? "").startsWith(AUTO_CLOSE_PREFIX)
+    && !(t.closeReason ?? "").startsWith(AUTO_CLOSE_PREFIX);
 }
 
 /** Один тост на опитування: пачка з кількох задач — одним рядком, а не стіною звуків. */
