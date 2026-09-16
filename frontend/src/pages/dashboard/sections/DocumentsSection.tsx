@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   fetchDocTree, fetchDocCard, fetchDocViewers, fetchDocPeople, createDocFolder, renameDocFolder, deleteDocFolder,
-  uploadDocFile, uploadDocVersion, updateDocFile, archiveDocFile, restoreDocFile, activateDocFile, ackDocFile, fetchDocAcks, remindDocAcks, signDocFile,
+  uploadDocFile, uploadDocVersion, updateDocFile, archiveDocFile, restoreDocFile, activateDocFile, ackDocFile, fetchDocAcks, remindDocAcks, signDocFile, fetchSigEvidenceBlobUrl, approveDocSignature, rejectDocSignature,
   fetchDocFolderAccess, saveDocFolderAccess, fetchDocFileBlobUrl, DOC_TYPES, fetchTelegramStatus, createTelegramLink, unlinkTelegram,
   type DocTree, type DocFile, type DocFolder, type DocCard, type DocSection, type DocFolderAccess, type TelegramStatus,
 } from "../../../api";
@@ -80,10 +80,6 @@ const inp: React.CSSProperties = {};
 const label: React.CSSProperties = { fontSize: 12, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 };
 /* Рядок рейки (папки/типи): одна висота, назва в один рядок з обрізанням, лічильник у своїй колонці,
    іконки дій однакової ширини — щоб відстані навколо були рівні незалежно від довжини назви. */
-const railRow = (active: boolean): React.CSSProperties => ({ display: "flex", alignItems: "center", gap: 2, height: 32, borderRadius: "var(--r-md)", background: active ? "var(--surface-2)" : "transparent", paddingRight: 2 });
-const railMain = (active: boolean): React.CSSProperties => ({ flex: 1, minWidth: 0, height: "100%", display: "flex", alignItems: "center", gap: 8, border: "none", background: "transparent", padding: "0 8px", cursor: "pointer", textAlign: "left", fontSize: "var(--fs-13)", color: "var(--text)", fontWeight: active ? 600 : 400 });
-const railName: React.CSSProperties = { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
-const railCount: React.CSSProperties = { flex: "0 0 auto", minWidth: 22, textAlign: "right", color: "var(--text-muted)", fontSize: 12, fontVariantNumeric: "tabular-nums" };
 const railIcon: React.CSSProperties = { width: 24, height: 24, display: "grid", placeItems: "center", border: "none", background: "transparent", cursor: "pointer", color: "var(--text-muted)", borderRadius: "var(--r-sm)", fontSize: 12, padding: 0 };
 const noteBox: React.CSSProperties = { fontSize: "var(--fs-sm)", color: "var(--text-muted)", background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: "var(--sp-3) var(--sp-4)" };
 
@@ -98,6 +94,7 @@ function SigBadge({ f }: { f: DocFile }) {
   const s = f.signature;
   if (s.kind === "not_required") return null;
   if (s.kind === "signed") return <span style={pill("var(--ok-bg)", "var(--ok)")}>● Підписано</span>;
+  if (s.kind === "review") return <span style={pill("var(--info-bg)", "var(--info)")}>● Фото на підтвердженні</span>;
   if (s.kind === "outdated") return <span style={pill("var(--warn-bg)", "var(--warn)")}>● Потребує підпису · нова версія</span>;
   if (s.kind === "overdue") return <span style={pill("var(--danger-bg)", "var(--danger)")}>● Прострочено · {s.days} дн.</span>;
   return <span style={pill("var(--warn-bg)", "var(--warn)")}>● Чекає підпису{s.days != null ? ` · ${s.days} дн.` : ""}</span>;
@@ -206,53 +203,44 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
         <div className="kpi-card"><span className="kpi-label">Оновлено за 7 днів</span><span className="kpi-value">{fresh}</span></div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: selectedFile ? "260px minmax(0,1fr) 360px" : "260px minmax(0,1fr)", gap: "var(--sp-7)", alignItems: "start" }}>
-        {/* Папки і типи */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-7)" }}>
+      <div style={{ display: "grid", gridTemplateColumns: selectedFile ? "minmax(0,1fr) 360px" : "minmax(0,1fr)", gap: "var(--sp-7)", alignItems: "start" }}>
+        {/* Список */}
+        <div className="chart-card" style={{ minWidth: 0 }}>
+          {/* Навігація ЗВЕРХУ (Сергій 16.09.2026): спершу папки, потім типи — а не рейка збоку, де папки опинялись унизу. */}
           {section !== "offer" && (
-            <div className="chart-card">
-              <div style={{ ...label, display: "flex", justifyContent: "space-between" }}><span>Папки</span>{viewer.canManageAccess && section === "general" && <span style={{ color: "var(--brand)", textTransform: "none", letterSpacing: 0 }}>⚙ доступи</span>}</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+              <span className="orph-dim" style={{ marginRight: 4 }}>Папки:</span>
+              <button className="orph-chip" aria-pressed={folderFilter === "all"} onClick={() => setFolderFilter("all")} style={{ padding: "5px 12px", fontSize: 12 }}>Усі · {sectionFiles.length}</button>
               {[...tree.folders.filter((f) => f.parentId == null), null].map((f) => {
                 const id = f?.id ?? null; const n = folderCounts.get(id) ?? 0;
                 if (!f && n === 0) return null;
                 const active = folderFilter === (f ? id : "none");
-                const canManage = !!f && viewer.canManageAccess && section === "general";
                 return (
-                  <div key={f?.id ?? "none"} style={railRow(active)}>
-                    <button onClick={() => setFolderFilter(active ? "all" : (f ? id : "none"))} title={f ? f.name : "Без папки"} style={railMain(active)}>
-                      <span style={{ opacity: .6, flex: "0 0 auto" }}>📁</span>
-                      <span style={railName}>{f ? f.name : "Без папки"}</span>
-                      <span style={railCount}>{n}</span>
+                  <span key={f?.id ?? "none"} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+                    <button className="orph-chip" aria-pressed={active} onClick={() => setFolderFilter(active ? "all" : (f ? id : "none"))} style={{ padding: "5px 12px", fontSize: 12 }} title={f ? f.name : "Без папки"}>
+                      📁 {f ? f.name : "Без папки"} · {n}
                     </button>
-                    {canManage && (
-                      <span style={{ display: "flex", gap: 2, flex: "0 0 auto" }}>
-                        <button title="Доступи до папки" onClick={() => setAccessFolder(f!)} style={railIcon}>⚙</button>
-                        <button title="Перейменувати" onClick={() => { const nn = window.prompt("Нова назва папки:", f!.name)?.trim(); if (nn && nn !== f!.name) void renameDocFolder(f!.id, nn).then(load).catch((e) => setToast(errOf(e, "Не перейменовано"))); }} style={railIcon}>✎</button>
-                        <button title="Прибрати папку (файли лишаються на диску)" onClick={() => { if (window.confirm(`Прибрати папку «${f!.name}»? Її документи зникнуть з екрана; файли на диску лишаються.`)) void deleteDocFolder(f!.id).then(load).catch((e) => setToast(errOf(e, "Не вдалося"))); }} style={railIcon}>✕</button>
-                      </span>
+                    {f && active && viewer.canManageAccess && section === "general" && (
+                      <>
+                        <button title="Доступи до папки" onClick={() => setAccessFolder(f)} style={railIcon}>⚙</button>
+                        <button title="Перейменувати" onClick={() => { const nn = window.prompt("Нова назва папки:", f.name)?.trim(); if (nn && nn !== f.name) void renameDocFolder(f.id, nn).then(load).catch((e) => setToast(errOf(e, "Не перейменовано"))); }} style={railIcon}>✎</button>
+                        <button title="Прибрати папку (файли лишаються на диску)" onClick={() => { if (window.confirm(`Прибрати папку «${f.name}»? Її документи зникнуть з екрана; файли на диску лишаються.`)) void deleteDocFolder(f.id).then(load).catch((e) => setToast(errOf(e, "Не вдалося"))); }} style={railIcon}>✕</button>
+                      </>
                     )}
-                  </div>
+                  </span>
                 );
               })}
             </div>
           )}
-          <div className="chart-card">
-            <div style={label}>Типи документів</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+            <span className="orph-dim" style={{ marginRight: 4 }}>Типи:</span>
+            <button className="orph-chip" aria-pressed={typeFilter === null} onClick={() => setTypeFilter(null)} style={{ padding: "5px 12px", fontSize: 12 }}>Усі</button>
             {[...DOC_TYPES].filter((t) => typeCounts.has(t)).map((t) => (
-              <div key={t} style={railRow(typeFilter === t)}>
-                <button onClick={() => setTypeFilter(typeFilter === t ? null : t)} title={`${t} — ${TYPE_META[t].action}`} style={railMain(typeFilter === t)}>
-                  <span className="task-status-dot" style={{ background: TYPE_META[t].color }} />
-                  <span style={railName}>{t}<span className="orph-dim" style={{ marginLeft: 6 }}>{TYPE_META[t].action}</span></span>
-                  <span style={railCount}>{typeCounts.get(t)}</span>
-                </button>
-              </div>
+              <button key={t} className="orph-chip" aria-pressed={typeFilter === t} onClick={() => setTypeFilter(typeFilter === t ? null : t)} style={{ padding: "5px 12px", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }} title={TYPE_META[t].action}>
+                <span className="task-status-dot" style={{ background: TYPE_META[t].color }} />{t} · {typeCounts.get(t)}
+              </button>
             ))}
-            {typeCounts.size === 0 && <p className="loading-text" style={{ margin: 0, fontSize: "var(--fs-sm)" }}>у розділі поки нічого</p>}
           </div>
-        </div>
-
-        {/* Список */}
-        <div className="chart-card" style={{ minWidth: 0 }}>
           <h2 className="chart-title" style={{ display: "flex", alignItems: "baseline", gap: 8 }}>Документи <span className="orph-dim">{files.length} {files.length === 1 ? "файл" : files.length < 5 ? "файли" : "файлів"}</span></h2>
           {section === "offer" && <p style={{ ...noteBox, marginTop: 0 }}>🔒 <b>Закрита папка.</b> {viewer.isManagement ? "Ви бачите всі офери, бо ви керівництво. Менеджер бачить лише свій, керівник відділу — жодного." : "Вам видно тільки ваш власний офер. Чужі сюди не потрапляють навіть у пошук."}</p>}
           {section === "archive" && <p style={{ ...noteBox, marginTop: 0 }}>⏳ <b>Архів формується при звільненні.</b> Офер і особисті документи людини переїжджають сюди; видалення недоступне нікому.</p>}
@@ -439,10 +427,36 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
           <Timeline steps={[
             { label: "Надіслано", at: sentAt ?? file.createdAt, done: true, note: file.addressee ?? undefined },
             { label: "Відкрито", at: openedAt, done: !!openedAt },
-            { label: "Підписано", at: sig.kind === "signed" ? (cardData?.signatures.find((s) => s.current)?.signedAt ?? null) : null, done: sig.kind === "signed",
-              note: sig.kind === "signed" ? ({ paper_photo: "фото паперового варіанта", email_code: "код на пошту", telegram_code: "код у Telegram", diia: "Дія.Підпис" } as Record<string, string>)[cardData?.signatures.find((s) => s.current)?.method ?? ""] : undefined },
+            { label: "Підписано", at: sig.kind === "signed" ? (cardData?.signatures.find((s) => s.current && !s.rejectedAt)?.signedAt ?? null) : null, done: sig.kind === "signed",
+              note: sig.kind === "signed" ? ({ paper_photo: "фото паперового варіанта, підтверджено", email_code: "код на пошту", telegram_code: "код у Telegram", diia: "Дія.Підпис" } as Record<string, string>)[cardData?.signatures.find((s) => s.current && !s.rejectedAt)?.method ?? ""] : sig.kind === "review" ? "фото на підтвердженні" : undefined },
           ]} />
           {sig.kind === "signed" && <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>Відбиток підпису привʼязано до версії {file.version}.</div>}
+          {(() => {
+            const cur = cardData?.signatures.find((s) => s.current && !s.rejectedAt);
+            const lastRejected = cardData?.signatures.find((s) => s.version === file.version && s.rejectedAt);
+            const showEvidence = async (sid: number) => { const win = window.open("about:blank", "_blank"); try { const u = await fetchSigEvidenceBlobUrl(file.id, sid); if (win) win.location.href = u; } catch (e) { win?.close(); setErr(errOf(e, "Фото не відкрилось")); } };
+            const decide = async (approve: boolean) => {
+              if (!cur) return;
+              const reason = approve ? "" : (window.prompt("Причина відхилення (побачить підписант):") ?? "").trim();
+              if (!approve && !reason) return;
+              setBusy(true);
+              try { if (approve) await approveDocSignature(file.id, cur.id); else await rejectDocSignature(file.id, cur.id, reason); onToast(approve ? "Підпис підтверджено" : "Підпис відхилено, підписанту повідомлено"); await onChanged(); }
+              catch (e) { setErr(errOf(e, "Не вдалося")); } finally { setBusy(false); }
+            };
+            return (
+              <>
+                {cur?.hasEvidence && <button style={{ ...btn(), fontSize: 12, padding: "4px 10px", marginTop: 8 }} onClick={() => void showEvidence(cur.id)}>📷 Переглянути фото підпису</button>}
+                {sig.kind === "review" && <div style={{ fontSize: 12, color: "var(--info)", marginTop: 6 }}>Фото паперового варіанта завантажено{cur?.signer ? ` (${cur.signer})` : ""}. Підпис стане чинним після підтвердження керівництвом.</div>}
+                {sig.kind === "review" && mgmt && cur && (
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    <button style={btn("primary")} onClick={() => void decide(true)} disabled={busy}>Підтвердити підпис</button>
+                    <button style={btn("danger")} onClick={() => void decide(false)} disabled={busy}>Відхилити</button>
+                  </div>
+                )}
+                {!cur && lastRejected && <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 6 }}>Попередній підпис відхилено{lastRejected.rejectedReason ? `: ${lastRejected.rejectedReason}` : ""}. Потрібен новий.</div>}
+              </>
+            );
+          })()}
           {sig.kind === "outdated" && <div style={{ fontSize: 12, color: "var(--warn)", marginTop: 6 }}>Файл замінено новою версією — попередній підпис стосується іншої версії й лишився в історії.</div>}
           {sig.kind === "overdue" && <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 6 }}>Прострочено на {sig.days} дн. Нічого не блокується: статус і нагадування.</div>}
           {file.canSign && <button style={{ ...btn("primary"), marginTop: 10, width: "100%" }} onClick={() => setSignOpen(true)}>Підписати</button>}

@@ -99,3 +99,14 @@ test("#430f ДОКУМЕНТИ: «помилка», «порожньо» і «н
   assert.match(src, /r\?\.status === 403\) setNoAccess\(true\)/, "стан «немає доступу» не береться з 403 сервера");
   assert.doesNotMatch(src, /Порожньо\. Створіть папку/, "старий рядок «Порожньо…» повернувся");
 });
+
+/** #448 — ФОТО ПАПЕРУ ЧИННЕ ЛИШЕ ПІСЛЯ ПІДТВЕРДЖЕННЯ: до нього «review», відхилене не рахується; код у Telegram — одразу «signed». */
+test("#448 ПІДПИС ФОТО: чекає підтвердження керівництва, відхилений не чинний; код у Telegram чинний одразу", () => {
+  const now = new Date("2026-09-16T12:00:00Z"); const d = { version: 2, sha256: "bbb", section: "offer" as const };
+  const photo = { version: 2, sha256: "bbb", signedAt: "2026-09-16T10:00:00Z", method: "paper_photo", approvedAt: null, rejectedAt: null };
+  assert.equal(signatureState(d, [photo], now, "2026-09-16T09:00:00Z").kind, "review", "фото без підтвердження зараховано як підпис");
+  assert.equal(signatureState(d, [{ ...photo, approvedAt: "2026-09-16T11:00:00Z" }], now, "2026-09-16T09:00:00Z").kind, "signed");
+  assert.equal(signatureState(d, [{ ...photo, rejectedAt: "2026-09-16T11:00:00Z" }], now, "2026-09-16T09:00:00Z").kind, "pending", "відхилене фото досі чинне або «review»");
+  assert.equal(signatureState(d, [{ ...photo, method: "telegram_code", approvedAt: "2026-09-16T10:00:00Z" }], now, "2026-09-16T09:00:00Z").kind, "signed");
+  assert.equal(signatureState(d, [{ ...photo, version: 1, sha256: "aaa", approvedAt: "2026-09-16T11:00:00Z" }], now, "2026-09-16T09:00:00Z").kind, "outdated", "підтверджене фото старої версії має бути «outdated», не чинним");
+});

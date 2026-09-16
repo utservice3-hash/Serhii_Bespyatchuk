@@ -2858,7 +2858,7 @@ export async function fetchCarriers(city: string): Promise<{ carriers: CrmCarrie
 
 // ── Регламенти та документи v2 (15.09.2026): розділи, типи, версії, доступи, підпис, архів ──
 export type DocSection = "general" | "personal" | "offer";
-export type DocSigKind = "not_required" | "signed" | "pending" | "overdue" | "outdated";
+export type DocSigKind = "not_required" | "signed" | "review" | "pending" | "overdue" | "outdated";
 export const DOC_TYPES = ["Регламент", "Інструкція", "Шаблон", "Офер", "Матеріал для клієнта", "Інше"] as const;
 export interface DocFolder { id: number; parentId: number | null; name: string; createdAt: string }
 export interface DocFile {
@@ -2887,7 +2887,7 @@ export async function fetchDocTree(): Promise<DocTree> {
 export interface DocCard {
   file: DocFile;
   versions: { version: number; sha256: string; mime: string | null; size_bytes: string | null; created_at: string; author: string | null }[];
-  signatures: { version: number; sha256: string; signedAt: string; method: string; signer: string | null; hasEvidence: boolean; current: boolean }[];
+  signatures: { id: number; version: number; sha256: string; signedAt: string; method: string; signer: string | null; hasEvidence: boolean; current: boolean; approvedAt: string | null; rejectedAt: string | null; rejectedReason: string | null }[];
   events: { kind: string; at: string; details: Record<string, unknown> | null; actor: string | null }[];
 }
 export async function fetchDocCard(id: number): Promise<DocCard> {
@@ -2956,6 +2956,12 @@ export async function saveDocFolderAccess(folderId: number, body: {
   grants: { userId: number; canView: boolean; canUpload: boolean; expiresAt: string | null }[];
 }): Promise<void> { await api.put(`/documents/access/${folderId}`, body); }
 /** Файл авторизованим стрімом як blob-URL; `inline` — для прев'ю в iframe/img. */
+export async function fetchSigEvidenceBlobUrl(fileId: number, sigId: number): Promise<string> {
+  const { data } = await api.get(`/documents/file/${fileId}/signature/${sigId}/evidence`, { responseType: "blob" });
+  return URL.createObjectURL(data as Blob);
+}
+export async function approveDocSignature(fileId: number, sigId: number): Promise<void> { await api.post(`/documents/file/${fileId}/signature/${sigId}/approve`); }
+export async function rejectDocSignature(fileId: number, sigId: number, reason: string): Promise<void> { await api.post(`/documents/file/${fileId}/signature/${sigId}/reject`, { reason }); }
 export async function fetchDocFileBlobUrl(id: number, opts: { inline?: boolean; version?: number } = {}): Promise<string> {
   const { data } = await api.get(`/documents/file/${id}/download`, { responseType: "blob", params: { inline: opts.inline ? 1 : undefined, version: opts.version } });
   return URL.createObjectURL(data as Blob);
