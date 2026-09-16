@@ -355,12 +355,16 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
   }, [file.id, file.version]);
 
   const open = async (download: boolean) => {
+    // Вкладку відкриваємо СИНХРОННО в кліку: після await браузер блокує window.open як спливашку
+    // (заміряно 16.09.2026: «Відкрити» мовчала). Файл довантажується вже у відкриту вкладку.
+    const win = download ? null : window.open("about:blank", "_blank");
     try {
       const url = await fetchDocFileBlobUrl(file.id, { inline: !download });
       if (download) { const a = document.createElement("a"); a.href = url; a.download = file.name; a.click(); }
-      else window.open(url, "_blank", "noopener");
+      else if (win) { win.location.href = url; }
+      else { setErr("Браузер заблокував нову вкладку — дозвольте спливаючі вікна для дашборда або скористайтесь «Завантажити»."); }
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    } catch (e) { setErr(errOf(e, "Не вдалося відкрити файл.")); }
+    } catch (e) { win?.close(); setErr(errOf(e, "Не вдалося відкрити файл.")); }
   };
   const newVersion = (fl: FileList | null) => {
     const f = fl?.[0]; if (!f) return;
