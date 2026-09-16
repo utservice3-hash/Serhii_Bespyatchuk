@@ -473,3 +473,21 @@ test("#452 ЖИВИЙ SQL БЛОКІВ C і D: розкриття == число,
     }
   } finally { await c.end(); scratch.dispose(); }
 });
+
+test("#453 «СПИСОК ОБРІЗАНО» — ЛИШЕ КОЛИ ОБРІЗАНО: рівно стеля → ні, стеля + 1 → так", async () => {
+  const { capRows, missedListSql, noDealListSql, MISSED_LIST_LIMIT } = await import("./missedCallsRules.js");
+  const arr = (n: number) => Array.from({ length: n }, (_, i) => i);
+  // По один бік межі: рядків рівно стільки, скільки стеля — показано все, «обрізано» неправда.
+  assert.equal(capRows(arr(5), 5).truncated, false,
+    "🔴 рівно стеля рядків — а екран каже «список обрізаний», хоча показав усе");
+  assert.equal(capRows(arr(5), 5).rows.length, 5);
+  // По другий: на один більше — обрізано, і показано рівно стелю.
+  assert.equal(capRows(arr(6), 5).truncated, true, "🔴 зайвий рядок прийшов, а обрізання не визнано");
+  assert.equal(capRows(arr(6), 5).rows.length, 5, "🔴 показано більше за стелю");
+  assert.equal(capRows([], 5).truncated, false);
+  // І запит мусить брати той самий зайвий рядок — інакше доказу обрізання не буде ніколи.
+  for (const sql of [missedListSql("2026-09-15", {}).sql, noDealListSql("2026-09-01", "2026-09-15", {}, "no_deal").sql]) {
+    assert.ok(sql.includes(`LIMIT ${String(MISSED_LIST_LIMIT + 1)}`),
+      "🔴 запит бере рівно стелю — обрізання неможливо відрізнити від повного списку");
+  }
+});

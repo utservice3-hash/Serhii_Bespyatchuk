@@ -325,8 +325,21 @@ export const dealInWindowLateral = (a: string, out = "dl"): string => `
              AND d.created_at_kommo <= ${a}.calldate + interval '${DEAL_WINDOW_AFTER}'
            ORDER BY d.created_at_kommo, d.kommo_id LIMIT 1) ${out} ON TRUE`;
 
-/** Стеля списку: день — це сотні рядків, але екран не мусить падати від тисяч. */
+/**
+ * Стеля списку: день — це сотні рядків, але екран не мусить падати від тисяч.
+ * 🔴 ЗАПИТ БЕРЕ НА ОДИН РЯДОК БІЛЬШЕ. Інакше «обрізано» довелось би виводити з
+ * `рядків >= стелі`, і при рівно 1000 рядків екран сказав би «список обрізаний», хоча
+ * показав усе. Зайвий рядок доводить обрізання, а не припускає його.
+ */
 export const MISSED_LIST_LIMIT = 1000;
+
+/**
+ * Обрізати список до стелі й ЧЕСНО сказати, чи було що обрізати. Запит бере `limit + 1`
+ * рядків; обрізання доведене лише тоді, коли той зайвий рядок справді прийшов.
+ */
+export function capRows<T>(rows: T[], limit = MISSED_LIST_LIMIT): { rows: T[]; truncated: boolean } {
+  return { rows: rows.slice(0, limit), truncated: rows.length > limit };
+}
 
 /* ─────────────── Блок C · список пропущених за день ─────────────── */
 
@@ -352,7 +365,7 @@ export function missedListSql(day: string, s: MissedScope, onlyNoCallback = fals
       ${dealInWindowLateral("w")}
      WHERE ${missedDispSql("w")}${extra}
      ORDER BY w.calldate DESC, w.uniqueid
-     LIMIT ${MISSED_LIST_LIMIT}`;
+     LIMIT ${MISSED_LIST_LIMIT + 1}`;
   return { sql, params };
 }
 
@@ -461,6 +474,6 @@ export function noDealListSql(from: string, to: string, s: MissedScope, state: N
       LEFT JOIN managers mg ON mg.id = c.manager_id
      WHERE c.state = $${params.length}
      ORDER BY c.calldate DESC, c.uniqueid
-     LIMIT ${MISSED_LIST_LIMIT}`;
+     LIMIT ${MISSED_LIST_LIMIT + 1}`;
   return { sql, params };
 }

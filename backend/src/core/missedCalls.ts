@@ -2,7 +2,7 @@ import { pool } from "../db/pool.js";
 import { DAY_BUCKETS, type DayBucket } from "./dayBuckets.js";
 import {
   missedSummarySql, missedByManagerSql, foldManagerRows,
-  missedListSql, noDealCountsSql, noDealListSql, nextStep, OWNERLESS_LABEL, MISSED_LIST_LIMIT,
+  missedListSql, noDealCountsSql, noDealListSql, nextStep, OWNERLESS_LABEL, capRows,
   type MissedScope, type MissedManagerRaw, type MissedManagerRow, type NextStep, type NoDealState,
 } from "./missedCallsRules.js";
 
@@ -87,7 +87,8 @@ Promise<{ rows: MissedListRow[]; truncated: boolean }> {
     manager_id: number | null; manager_name: string | null; bucket: DayBucket;
     cb_min: string | null; cb_talked: boolean | null; cs_min: string | null; deal_id: string | null;
   }>(sql, params);
-  const rows = r.rows.map((x) => {
+  const capped = capRows(r.rows);
+  const rows = capped.rows.map((x) => {
     const n = nextStep({
       cbMin: x.cb_min == null ? null : Number(x.cb_min),
       cbTalked: x.cb_talked,
@@ -101,7 +102,7 @@ Promise<{ rows: MissedListRow[]; truncated: boolean }> {
       dealId: x.deal_id == null ? null : Number(x.deal_id),
     };
   });
-  return { rows, truncated: rows.length >= MISSED_LIST_LIMIT };
+  return { rows, truncated: capped.truncated };
 }
 
 export interface NoDealCounts { answered: number; unknown: number; hasDeal: number; noDeal: number }
@@ -129,13 +130,14 @@ Promise<{ rows: NoDealListRow[]; truncated: boolean }> {
     uniqueid: string; at: string; client_phone: string | null; client_key: string | null;
     manager_id: number | null; manager_name: string | null; billsec: number; deal_id: string | null;
   }>(sql, params);
-  const rows = r.rows.map((x) => ({
+  const capped = capRows(r.rows);
+  const rows = capped.rows.map((x) => ({
     uniqueid: x.uniqueid, at: x.at, phone: x.client_phone, clientKey: x.client_key,
     managerId: x.manager_id,
     managerName: x.manager_id == null ? OWNERLESS_LABEL : (x.manager_name ?? `#${String(x.manager_id)}`),
     talkSec: Number(x.billsec), dealId: x.deal_id == null ? null : Number(x.deal_id),
   }));
-  return { rows, truncated: rows.length >= MISSED_LIST_LIMIT };
+  return { rows, truncated: capped.truncated };
 }
 
 export { DAY_BUCKETS };

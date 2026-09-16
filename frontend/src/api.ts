@@ -216,6 +216,50 @@ export async function fetchMissedCalls(params: { from: string; to: string }): Pr
   return data;
 }
 
+/** Блок C. Типи — дзеркало `core/missedCalls.ts` (`MissedListRow`) + `dealUrl` з роуту. */
+export type MissedNextStep = "callback_talked" | "callback_no_answer" | "client_self" | "nothing";
+export interface MissedListRow {
+  uniqueid: string;
+  /** Час за Києвом, `HH:MM`. */
+  at: string;
+  phone: string | null; clientKey: string | null;
+  managerId: number | null; managerName: string; bucket: MissedDayBucket;
+  /** НАЙРАНІША подія після пропущеного — не «чи був передзвін узагалі». */
+  next: MissedNextStep; nextMin: number | null;
+  dealId: number | null; dealUrl: string | null;
+}
+export interface MissedListResp {
+  day: string; onlyNoCallback: boolean;
+  /** true — список обрізано стелею; екран мусить це сказати, а не вдавати повноту. */
+  truncated: boolean;
+  rows: MissedListRow[];
+}
+export async function fetchMissedList(params: { day: string; noCallback?: "1" }): Promise<MissedListResp> {
+  const { data } = await api.get<MissedListResp>("/dashboard/missed-calls/list", { params });
+  return data;
+}
+
+/** Блок D. Три стани — окремі числа, не одне. */
+export type NoDealState = "unknown" | "has_deal" | "no_deal";
+export interface NoDealCounts { answered: number; unknown: number; hasDeal: number; noDeal: number }
+export async function fetchNoDeal(params: { from: string; to: string }): Promise<{ period: { from: string; to: string }; counts: NoDealCounts }> {
+  const { data } = await api.get<{ period: { from: string; to: string }; counts: NoDealCounts }>("/dashboard/missed-calls/no-deal", { params });
+  return data;
+}
+export interface NoDealListRow {
+  uniqueid: string;
+  /** Дата й час за Києвом, `YYYY-MM-DD HH:MM`. */
+  at: string;
+  phone: string | null; clientKey: string | null;
+  managerId: number | null; managerName: string; talkSec: number;
+  dealId: number | null; dealUrl: string | null;
+}
+export async function fetchNoDealList(params: { from: string; to: string; state: NoDealState }):
+Promise<{ state: NoDealState; truncated: boolean; rows: NoDealListRow[] }> {
+  const { data } = await api.get<{ state: NoDealState; truncated: boolean; rows: NoDealListRow[] }>("/dashboard/missed-calls/no-deal/list", { params });
+  return data;
+}
+
 export interface ExecutiveOverview {
   /**
    * 🔴 Чи обраний період ПОТОЧНИЙ. Знімкові показники (дебіторка, перехідні,

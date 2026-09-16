@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchMissedCalls, type MissedCallsResp, type MissedDayBucket, type MissedManagerRow } from "../../../api";
+import {
+  fetchMissedCalls, fetchMissedList, fetchNoDeal, fetchNoDealList,
+  type MissedCallsResp, type MissedDayBucket, type MissedManagerRow, type MissedListResp,
+  type MissedNextStep, type NoDealCounts, type NoDealState, type NoDealListRow,
+} from "../../../api";
 import { InfoHint } from "../widgets";
 
 /**
@@ -156,7 +160,241 @@ export function MissedCallsSection({ from, to }: { from: string; to: string }) {
           </table>
         </div>
       </div>
+
+      <MissedListBlock from={d.period.from} to={d.period.to} />
+      <NoDealBlock from={d.period.from} to={d.period.to} />
     </>
+  );
+}
+
+const BUCKET_LABEL: Record<MissedDayBucket, string> = Object.fromEntries(BUCKETS.map((b) => [b.key, b.label])) as Record<MissedDayBucket, string>;
+
+/** Текст «що сталось далі». Невдалий передзвін — ОКРЕМО від вдалого: це різна робота. */
+function nextLabel(kind: MissedNextStep, min: number | null): { text: string; bad: boolean } {
+  const m = min == null ? "" : ` через ${String(min)} хв`;
+  switch (kind) {
+    case "callback_talked": return { text: `передзвонили${m}, додзвонились`, bad: false };
+    case "callback_no_answer": return { text: `передзвонили${m}, не додзвонились`, bad: false };
+    case "client_self": return { text: `клієнт передзвонив сам${m}`, bad: false };
+    case "nothing": return { text: "нічого за 24 год", bad: true };
+  }
+}
+
+/**
+ * 📋 БЛОК C — пропущені за ОДИН день.
+ * Список рахується тим самим виразом, що й «пропущено» в блоці A (гейт `#452`), тож за той
+ * самий день рядків тут рівно стільки, скільки в числі.
+ * ⚠️ Посилання на клієнта в дашборді НЕ робимо: адреси картки клієнта в продукті немає —
+ * картки відкриваються діалогами всередині екранів. Вигадувати маршрут означало б
+ * посилання в нікуди.
+ */
+function MissedListBlock({ from, to }: { from: string; to: string }) {
+  const [day, setDay] = useState(to);
+  const [onlyNo, setOnlyNo] = useState(false);
+  const [d, setD] = useState<MissedListResp | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Змінився період — день за межами нового періоду повертаємо на його кінець.
+  useEffect(() => { if (day < from || day > to) setDay(to); }, [from, to, day]);
+
+  useEffect(() => {
+    if (!day) return;
+    setD(null); setErr(null);
+    fetchMissedList({ day, ...(onlyNo ? { noCallback: "1" as const } : {}) })
+      .then(setD)
+      .catch((e) => setErr(e instanceof Error ? e.message : "Не вдалося завантажити"));
+  }, [day, onlyNo]);
+
+  const cell: React.CSSProperties = { padding: "7px 10px", textAlign: "left", whiteSpace: "nowrap" };
+  const head: React.CSSProperties = { ...cell, fontWeight: 600, fontSize: 12.5, color: "var(--text-muted)" };
+
+  return (
+    <div className="chart-card" style={{ marginTop: 16 }}>
+      <h3 style={{ margin: "0 0 12px", display: "flex", alignItems: "center", gap: 8 }}>
+        📋 Список дзвінків
+        <InfoHint text="Кожен пропущений за обраний день і що сталось одразу після нього. «Що сталось далі» — НАЙРАНІША подія: якщо клієнт передзвонив сам раніше, ніж ми, рядок покаже саме це." />
+      </h3>
+      <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap", marginBottom: 12, fontSize: 14 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          День
+          <input id="missed-list-day" type="date" value={day} min={from} max={to} onChange={(e) => setDay(e.target.value)} />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <input id="missed-list-only-no" type="checkbox" checked={onlyNo} onChange={(e) => setOnlyNo(e.target.checked)} />
+          лише без нашого передзвону
+        </label>
+      </div>
+
+      {err && <p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>}
+      {!err && !d && <p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>}
+      {d && d.rows.length === 0 && (
+        <p style={{ margin: 0, color: "var(--text-muted)" }}>
+          {onlyNo ? `За ${day} немає пропущених без нашого передзвону.` : `За ${day} пропущених немає.`}
+        </p>
+      )}
+      {d && d.rows.length > 0 && (
+        <>
+          {d.truncated && (
+            <p style={{ margin: "0 0 8px", color: "var(--danger, #c8102e)", fontSize: 13 }}>
+              Показано перші {d.rows.length.toLocaleString("uk-UA")} — список за цей день довший і обрізаний.
+            </p>
+          )}
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                  <th style={head}>Час</th><th style={head}>Номер</th><th style={head}>Менеджер</th>
+                  <th style={head}>Коли</th><th style={head}>Що сталось далі</th><th style={head}>Угода</th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.rows.map((r) => {
+                  const n = nextLabel(r.next, r.nextMin);
+                  return (
+                    <tr key={r.uniqueid} style={{ borderBottom: "1px solid var(--border)" }}>
+                      <td style={cell}>{r.at}</td>
+                      <td style={cell}>{r.phone ?? "номер не визначено"}</td>
+                      <td style={{ ...cell, color: r.managerId === null ? "var(--text-muted)" : "inherit", fontStyle: r.managerId === null ? "italic" : "normal" }}>{r.managerName}</td>
+                      <td style={cell}>{BUCKET_LABEL[r.bucket]}</td>
+                      <td style={{ ...cell, color: n.bad ? "var(--danger, #c8102e)" : "inherit" }}>{n.text}</td>
+                      <td style={cell}>
+                        {r.dealUrl
+                          ? <a href={r.dealUrl} target="_blank" rel="noreferrer">угода в CRM</a>
+                          : <span style={{ color: "var(--text-muted)" }}>немає</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Підписи трьох станів — ОДИН підпис на одне значення (правило проєкту). */
+const NO_DEAL_TILES: { state: NoDealState; key: keyof NoDealCounts; label: string; hint: string }[] = [
+  { state: "unknown", key: "unknown", label: "Номер не знайдено в CRM",
+    hint: "Номер не збігся жодним контактом у CRM. Це НЕ «заявку не завели» — це «ми не знаємо, хто дзвонив»: можливо, новий клієнт, а можливо, номер записаний у CRM інакше." },
+  { state: "has_deal", key: "hasDeal", label: "Є угода",
+    hint: "Клієнт відомий, і його угода створена в межах від доби до дзвінка до 7 днів після." },
+  { state: "no_deal", key: "noDeal", label: "Клієнт є, заявки за тиждень немає",
+    hint: "Клієнт відомий, розмова була, але жодної угоди від доби до дзвінка до 7 днів після. Найближче до «заявку не завели»." },
+];
+
+/**
+ * 🧾 БЛОК D — «дзвінок був, а угоди немає». Три числа, і кожне розкривається списком,
+ * порахованим ТИМ САМИМ запитом (гейт `#452`: рядків у розкритті рівно стільки, скільки в числі).
+ */
+function NoDealBlock({ from, to }: { from: string; to: string }) {
+  const [c, setC] = useState<NoDealCounts | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [open, setOpen] = useState<NoDealState | null>(null);
+  const [list, setList] = useState<{ truncated: boolean; rows: NoDealListRow[] } | null>(null);
+  const [listErr, setListErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!from || !to) return;
+    setC(null); setErr(null); setOpen(null); setList(null);
+    fetchNoDeal({ from, to })
+      .then((r) => setC(r.counts))
+      .catch((e) => setErr(e instanceof Error ? e.message : "Не вдалося завантажити"));
+  }, [from, to]);
+
+  useEffect(() => {
+    if (!open) return;
+    setList(null); setListErr(null);
+    fetchNoDealList({ from, to, state: open })
+      .then((r) => setList({ truncated: r.truncated, rows: r.rows }))
+      .catch((e) => setListErr(e instanceof Error ? e.message : "Не вдалося завантажити"));
+  }, [open, from, to]);
+
+  const cell: React.CSSProperties = { padding: "7px 10px", textAlign: "left", whiteSpace: "nowrap" };
+  const head: React.CSSProperties = { ...cell, fontWeight: 600, fontSize: 12.5, color: "var(--text-muted)" };
+  const talk = (sec: number) => `${String(Math.floor(sec / 60))}:${String(sec % 60).padStart(2, "0")}`;
+
+  return (
+    <div className="chart-card" style={{ marginTop: 16 }}>
+      <h3 style={{ margin: "0 0 4px", display: "flex", alignItems: "center", gap: 8 }}>
+        🧾 Дзвінок був, а угоди немає
+        <InfoHint text="Вхідні дзвінки, на які відповіли, розкладені на три стани. Натисніть на число, щоб побачити самі дзвінки." />
+      </h3>
+      {err && <p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>}
+      {!err && !c && <p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>}
+      {c && (
+        <>
+          <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text-muted)" }}>
+            Відповіданих вхідних за період: {c.answered.toLocaleString("uk-UA")}
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 12 }}>
+            {NO_DEAL_TILES.map((t) => {
+              const n = c[t.key];
+              const active = open === t.state;
+              return (
+                <button key={t.state} type="button" onClick={() => setOpen(active ? null : t.state)}
+                  style={{
+                    textAlign: "left", cursor: "pointer", font: "inherit", color: "inherit",
+                    background: active ? "var(--surface-2, rgba(0,0,0,0.04))" : "transparent",
+                    border: `1px solid ${active ? "var(--text-muted)" : "var(--border)"}`, borderRadius: 10, padding: "12px 14px",
+                  }}>
+                  <div style={{ fontSize: 12.5, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 6 }}>
+                    {t.label} <InfoHint text={t.hint} />
+                  </div>
+                  <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4 }}>{n.toLocaleString("uk-UA")}</div>
+                  <div style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 2 }}>
+                    {pct(n, c.answered)} · {active ? "сховати список" : "показати список"}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {open && (
+            <div style={{ marginTop: 14 }}>
+              {listErr && <p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{listErr}</p>}
+              {!listErr && !list && <p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>}
+              {list && list.rows.length === 0 && <p style={{ margin: 0, color: "var(--text-muted)" }}>Дзвінків у цьому стані за період немає.</p>}
+              {list && list.rows.length > 0 && (
+                <>
+                  {list.truncated && (
+                    <p style={{ margin: "0 0 8px", color: "var(--danger, #c8102e)", fontSize: 13 }}>
+                      Показано перші {list.rows.length.toLocaleString("uk-UA")} — список обрізаний.
+                    </p>
+                  )}
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                          <th style={head}>Дата й час</th><th style={head}>Номер</th><th style={head}>Менеджер</th>
+                          <th style={head}>Розмова</th><th style={head}>Угода</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {list.rows.map((r) => (
+                          <tr key={r.uniqueid} style={{ borderBottom: "1px solid var(--border)" }}>
+                            <td style={cell}>{r.at}</td>
+                            <td style={cell}>{r.phone ?? "номер не визначено"}</td>
+                            <td style={{ ...cell, color: r.managerId === null ? "var(--text-muted)" : "inherit" }}>{r.managerName}</td>
+                            <td style={cell}>{talk(r.talkSec)}</td>
+                            <td style={cell}>
+                              {r.dealUrl
+                                ? <a href={r.dealUrl} target="_blank" rel="noreferrer">угода в CRM</a>
+                                : <span style={{ color: "var(--text-muted)" }}>немає</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
