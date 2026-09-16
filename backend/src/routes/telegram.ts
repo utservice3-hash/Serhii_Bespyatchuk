@@ -13,7 +13,7 @@ import { linkTokenState } from "../core/signCode.js";
 
 export const telegramRouter = Router();
 
-const HELP = "Це бот підпису документів дашборда UTS. Щоб привʼязати акаунт, відкрийте «Регламенти та документи» в дашборді й натисніть «Привʼязати Telegram».";
+const HELP = "Це бот підпису документів дашборда UTS. Щоб привʼязати акаунт: у дашборді відкрийте «Регламенти та документи» → «Привʼязати Telegram», і надішліть сюди 6-значний код із екрана.";
 
 telegramRouter.post("/sign-webhook", async (req, res) => {
   const secret = webhookSecret();
@@ -23,18 +23,20 @@ telegramRouter.post("/sign-webhook", async (req, res) => {
   const chatId = msg?.chat?.id;
   const text = String(msg?.text ?? "").trim();
   if (!chatId) return;
-  const m = /^\/start(?:@\w+)?\s+([A-Za-z0-9_-]{8,64})$/.exec(text);
+  console.log(`sign-webhook: chat ${chatId} · «${text.slice(0, 40)}»`);
+  // Приймаємо і deep-link «/start 123456», і просто «123456» повідомленням (рішення власника 16.09).
+  const m = /^\/start(?:@\w+)?\s+(\d{6}|[A-Za-z0-9_-]{8,64})$/.exec(text) ?? /^(\d{6})$/.exec(text);
   if (!m) { await signBotSend(chatId, HELP); return; }
   try {
     const r = await pool.query<{ id: number; user_id: number; expires_at: string; used_at: string | null; name: string }>(
       `SELECT c.id, c.user_id, c.expires_at, c.used_at, COALESCE(mg.name, u.email) AS name
          FROM sign_codes c JOIN users u ON u.id = c.user_id LEFT JOIN managers mg ON mg.id = u.manager_id
-        WHERE c.purpose = 'link' AND c.code = $1
+        WHERE c.purpose = 'link' AND c.code = $1 AND c.used_at IS NULL
         ORDER BY c.created_at DESC LIMIT 1`, [m[1]]);
     const row = r.rows[0];
     const state = row ? linkTokenState({ expiresAt: row.expires_at, usedAt: row.used_at }, new Date()) : "expired";
     if (!row || state !== "ok") {
-      await signBotSend(chatId, state === "used" ? "Це посилання вже використане. Натисніть «Привʼязати Telegram» у дашборді ще раз." : "Посилання застаріло (діє 10 хвилин). Натисніть «Привʼязати Telegram» у дашборді ще раз.");
+      await signBotSend(chatId, state === "used" ? "Цей код уже використано. Натисніть «Привʼязати Telegram» у дашборді ще раз." : "Код не підійшов або застарів (діє 10 хвилин). Натисніть «Привʼязати Telegram» у дашборді й надішліть новий код.");
       return;
     }
     await pool.query(`UPDATE sign_codes SET used_at = now() WHERE id = $1`, [row.id]);
