@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   fetchDocTree, fetchDocCard, fetchDocViewers, fetchDocPeople, createDocFolder, renameDocFolder, deleteDocFolder,
   uploadDocFile, uploadDocVersion, updateDocFile, archiveDocFile, restoreDocFile, activateDocFile, ackDocFile, fetchDocAcks, remindDocAcks, signDocFile,
@@ -389,7 +390,10 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
 
   const sig = file.signature;
   const events = cardData?.events ?? [];
-  const evAt = (k: string) => events.find((e) => e.kind === k)?.at ?? null;
+  // Таймлайн — для ПОТОЧНОЇ версії: «Надіслано» = останній sent, «Відкрито» = перший opened після нього.
+  const lastSentIdx = events.map((e) => e.kind).lastIndexOf("sent");
+  const sentAt = lastSentIdx >= 0 ? events[lastSentIdx].at : null;
+  const openedAt = events.slice(lastSentIdx + 1).find((e) => e.kind === "opened")?.at ?? null;
 
   return (
     <div className="chart-card" style={{ position: "sticky", top: 12, display: "flex", flexDirection: "column", gap: 12, maxHeight: "calc(100vh - 40px)", overflowY: "auto" }}>
@@ -433,8 +437,8 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
         <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", padding: 12 }}>
           <div style={label}>Підпис</div>
           <Timeline steps={[
-            { label: "Надіслано", at: evAt("sent") ?? file.createdAt, done: true, note: file.addressee ?? undefined },
-            { label: "Відкрито", at: evAt("opened"), done: !!evAt("opened") },
+            { label: "Надіслано", at: sentAt ?? file.createdAt, done: true, note: file.addressee ?? undefined },
+            { label: "Відкрито", at: openedAt, done: !!openedAt },
             { label: "Підписано", at: sig.kind === "signed" ? (cardData?.signatures.find((s) => s.current)?.signedAt ?? null) : null, done: sig.kind === "signed",
               note: sig.kind === "signed" ? ({ paper_photo: "фото паперового варіанта", email_code: "код на пошту", telegram_code: "код у Telegram", diia: "Дія.Підпис" } as Record<string, string>)[cardData?.signatures.find((s) => s.current)?.method ?? ""] : undefined },
           ]} />
@@ -484,7 +488,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
         {mgmt && !file.archivedAt && file.inactiveAt && <button style={btn("primary")} onClick={activate}>Активувати</button>}
       </div>
 
-      {signOpen && <SignDialog file={file} onClose={() => setSignOpen(false)} onDone={async () => { setSignOpen(false); onToast("Підписано. Відбиток привʼязано до поточної версії."); await onChanged(); }} />}
+      {signOpen && <SignDialog key={`${file.id}:${file.version}`} file={file} onClose={() => setSignOpen(false)} onDone={async () => { setSignOpen(false); onToast("Підписано. Відбиток привʼязано до поточної версії."); await onChanged(); }} />}
     </div>
   );
 }
@@ -811,7 +815,9 @@ function Field({ label: l, children }: { label: string; children: React.ReactNod
 }
 /** Модалка — той самий вигляд, що вкладення в Задачнику: темна підкладка, картка з chart-title і ✕. */
 function Modal({ title, width, onClose, children }: { title: string; width: number; onClose: () => void; children: React.ReactNode }) {
-  return (
+  // Портал у body: картка документа має обмежену висоту з прокруткою, і діалог усередині неї
+  // обрізався (заміряно 16.09.2026: «потемнів екран і нічого не можу зробити»).
+  return createPortal(
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2700, padding: 20 }}>
       <div role="dialog" aria-label={title} onClick={(e) => e.stopPropagation()} style={{ background: "var(--card-bg)", color: "var(--text)", borderRadius: "var(--r-lg)", padding: "var(--sp-5)", width: "92vw", maxWidth: width, maxHeight: "90vh", overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--sp-4)", gap: 12 }}>
@@ -820,6 +826,7 @@ function Modal({ title, width, onClose, children }: { title: string; width: numb
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

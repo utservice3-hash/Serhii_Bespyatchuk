@@ -224,7 +224,10 @@ documentsRouter.get("/file/:id", async (req, res) => {
   const sentAt = (events.rows.find((e) => e.kind === "sent") as { at?: string } | undefined)?.at ?? null;
   // Відкриття картки адресатом — подія «opened» (для таймлайна офера), один раз. Пишемо і одразу
   // додаємо у відповідь: інакше перший показ картки не бачить власного «Відкрито» (заміряно 16.09.2026).
-  if (v.row.addressee_user_id === req.auth!.userId && !events.rows.some((e) => e.kind === "opened")) {
+  // «Відкрито» — окремо для КОЖНОЇ версії: рахується після останнього «sent» (нова версія = новий sent).
+  const lastSentIdx = events.rows.map((e) => e.kind).lastIndexOf("sent");
+  const openedSinceSent = events.rows.slice(lastSentIdx + 1).some((e) => e.kind === "opened");
+  if (v.row.addressee_user_id === req.auth!.userId && !openedSinceSent) {
     await logEvent(id, "opened", req.auth!.userId);
     events.rows.push({ kind: "opened", at: new Date().toISOString(), details: null, actor: null } as typeof events.rows[number]);
   }
