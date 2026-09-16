@@ -135,11 +135,27 @@ def analyze_first_touch(transcript: str, lead_name: str = "", manager: str = "")
     чи менеджер озвучив ціну (вартість перевезення) і чи відпрацював заперечення.
     Дає конкретну слабку сторону + дію на майбутнє, щоб недоліки не повторювались.
     Повертає {"about_transport": bool, "price_voiced": bool,
-    "objections_handled": bool, "weakness": str, "reco": str, "summary": str}."""
+    "objections_handled": bool, "weakness": str, "reco": str, "summary": str,
+    "status": str}.
+
+    status — ЧОМУ саме така відповідь (додано 17.09.2026):
+      "ok"            — модель відповіла й відповідь розібрано;
+      "no_transcript" — нема що аналізувати (запису немає / Groq не розшифрував);
+      "no_key"        — ANTHROPIC_API_KEY не задано;
+      "api_error"     — Anthropic повернув не-2xx (кредит, ключ, модель, білінг, ліміт);
+      "exception"     — мережа / тайм-аут / неочікуваний формат;
+      "parse_fail"    — відповідь є, але без рядка TRANSPORT.
+    ⚠️ Раніше всі не-ok випадки повертали той самий dict, що й чесне «розмова не про
+    перевезення» (about_transport=False). Обробник ставив на лід вічний маркер і мовчки
+    відкидав дзвінок — так з ~18.08.2026 бот перестав оцінювати перший дотик, і цього
+    ніхто не бачив: лист «Перший дотик» і AI-повернення угод обвалились одночасно."""
     empty = {"about_transport": False, "price_voiced": False, "objections_handled": False,
              "weakness": "", "reco": "", "summary": ""}
-    if not ANTHROPIC_API_KEY or not transcript:
-        return dict(empty)
+    if not transcript:
+        return {**empty, "status": "no_transcript"}
+    if not ANTHROPIC_API_KEY:
+        logger.error("analyze_first_touch: ANTHROPIC_API_KEY not set — перший дотик НЕ оцінюється")
+        return {**empty, "status": "no_key"}
 
     prompt = f"""КВП логістики. Це ПЕРШИЙ дзвінок з клієнтом, що прийшов з реклами.
 Угода: {lead_name or '—'} | Менеджер: {manager or '—'}.
@@ -179,13 +195,20 @@ FIX: <одна конкретна дія на майбутнє>
             },
             timeout=30,
         )
-        data = resp.json()
         if not resp.ok:
-            logger.error("Claude API analyze_first_touch error: %s", data)
-            return dict(empty)
+            try:
+                data = resp.json()
+            except ValueError:
+                data = {"body": resp.text[:300]}
+            logger.error("Claude API analyze_first_touch error: HTTP %s %s", resp.status_code, data)
+            return {**empty, "status": "api_error", "error": f"HTTP {resp.status_code}: {str(data)[:300]}"}
+        data = resp.json()
         text = data["content"][0]["text"].strip()
         up = text.upper()
         import re as _re
+        if not _re.search(r"TRANSPORT:\s*(ТАК|НІ)", up):
+            logger.error("analyze_first_touch: у відповіді немає TRANSPORT — не розібрано: %s", text[:200])
+            return {**empty, "status": "parse_fail", "error": text[:300]}
         about_transport = bool(_re.search(r"TRANSPORT:\s*ТАК", up))
         price_voiced = bool(_re.search(r"PRICE:\s*ТАК", up))
         objections_handled = bool(_re.search(r"OBJECTIONS:\s*ТАК", up))
@@ -207,10 +230,11 @@ FIX: <одна конкретна дія на майбутнє>
             "weakness": weakness,
             "reco": reco,
             "summary": summary,
+            "status": "ok",
         }
     except Exception as e:
         logger.error("analyze_first_touch: %s", e)
-        return dict(empty)
+        return {**empty, "status": "exception", "error": str(e)[:300]}
 
 
 def check_target_lead(transcripts: list[str], lead_name: str = "", manager_note: str = "") -> dict:

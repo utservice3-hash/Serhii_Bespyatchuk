@@ -2674,9 +2674,46 @@ _first_touch_contacts: set[int] = set()  # contact_id, по яких перши�
                                          # на контакті (kommo.contact_has_note_marker).
 
 
+_first_touch_ai_alert_at: float = 0.0
+# Пауза повтору по ліду після відмови AI: поки AI лежить, кожен вебхук того самого ліда
+# інакше знову платно розшифровував би дзвінок у Groq.
+_first_touch_retry_after: dict[int, float] = {}
+FIRST_TOUCH_RETRY_PAUSE_SEC = 1800
+_first_touch_ai_fail_count: int = 0
+FIRST_TOUCH_AI_ALERT_EVERY_SEC = 3600
+
+
+def _alert_first_touch_ai_failure(status: str, error: str, lead_id: int) -> None:
+    """Тривога адмінам про відмову AI у першому дотику — не частіше разу на годину, з лічильником.
+    Без ключів і токенів у тексті: лише статус і перші символи помилки від API."""
+    global _first_touch_ai_alert_at, _first_touch_ai_fail_count
+    import time as _time
+    with _state_lock:
+        _first_touch_ai_fail_count += 1
+        now = _time.time()
+        if now - _first_touch_ai_alert_at < FIRST_TOUCH_AI_ALERT_EVERY_SEC:
+            return
+        _first_touch_ai_alert_at = now
+        count = _first_touch_ai_fail_count
+        _first_touch_ai_fail_count = 0
+    try:
+        notifier.send_to_admin_stats(
+            "🚨 <b>AI не оцінює перший дотик</b>\n"
+            f"Статус: {status}\n"
+            f"Відмов за останню годину: {count} (останній лід #{lead_id})\n"
+            f"Помилка: {(error or '—')[:200]}\n"
+            "Ліди НЕ позначено як оцінені — після ремонту наступний дзвінок по них буде оцінено."
+        )
+    except Exception as e:  # тривога не має валити обробку
+        logger.error("first touch AI alert failed: %s", e)
+
+
 def _handle_first_touch(lead_id: int, responsible_id: int):
     if lead_id in _first_touch_done:
         return
+    import time as _time
+    if _first_touch_retry_after.get(lead_id, 0) > _time.time():
+        return  # недавно не вдалось оцінити через відмову AI — чекаємо паузу
     lead = kommo.get_lead(lead_id)
     if not lead:
         return
@@ -2750,6 +2787,23 @@ def _handle_first_touch(lead_id: int, responsible_id: int):
     transcript = transcriber.transcribe_call(record_url) if record_url else ""
 
     result = ai_analyzer.analyze_first_touch(transcript, lead_name, manager_name)
+    # 🔴 ВІДМОВА AI ≠ «РОЗМОВА НЕ ПРО ПЕРЕВЕЗЕННЯ» (17.09.2026). Раніше будь-яка помилка
+    # Anthropic виглядала як about_transport=False: лід отримував ВІЧНИЙ маркер і мовчки
+    # відкидався. Так з ~18.08 перший дотик перестав оцінюватись без жодного сигналу.
+    # Тепер: маркер НЕ ставимо, claim знімаємо (наступний вебхук цього ліда спробує знову),
+    # рядок у лист НЕ пишемо (інакше дашборд прочитав би його як «ціну не названо»),
+    # а адмінам іде тривога — не частіше разу на годину.
+    status = result.get("status", "ok")
+    if transcript and status != "ok":
+        with _state_lock:
+            _first_touch_done.discard(lead_id)
+            _first_touch_retry_after[lead_id] = _time.time() + FIRST_TOUCH_RETRY_PAUSE_SEC
+            if len(_first_touch_retry_after) > 5000:
+                _first_touch_retry_after.clear()
+        logger.error("First touch lead %s: AI не оцінив (%s: %s) — маркер НЕ ставимо, повторимо",
+                     lead_id, status, result.get("error", ""))
+        _alert_first_touch_ai_failure(status, result.get("error", ""), lead_id)
+        return
     if transcript and not result.get("about_transport"):
         logger.info("First touch lead %s: розмова не про перевезення — пропуск", lead_id)
         kommo.add_note(lead_id, f"{FIRST_TOUCH_MARKER}\nРозмова не про перевезення — сповіщення не надсилалось.")
