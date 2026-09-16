@@ -15,6 +15,7 @@ import { InfoHint } from "../widgets";
 import { ResponseTimeCard } from "./ResponseTimeCard";
 import { ReportTableSection } from "./ReportTableSection";
 import { mergeReportPlans } from "../reportScope";
+import { firstTouchLabel, firstTouchStale } from "../reportTableCols";
 // 🔀 Зріз за новизною — ЄДИНЕ місце рішення на фронті; звіряється з ядром у `#213`.
 import { keepByKlass, visibleSlices, narrowToSlice, SLICE_LABEL, KLASS_CHIP, type Slice } from "../klassSlice";
 
@@ -604,6 +605,20 @@ function Glance({ data, focus, focusDay, today, periodLabel }: { data: ReportPla
             «сьогодні», тут — початок місяця. Тому й підпис інший (рішення власника 07.09.2026). */}
         {g.expectPastMonths !== 0 && <div style={{ fontSize: 12, color: AMBER, marginTop: 2 }}>з минулих міс: {fmt(g.expectPastMonths)} ₴</div>}
         <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>авто · {periodLabel}: {g.dispatched} · {k(g.dispatchedRevenue)} ₴</div>
+        {/* 🎯 ТЗ-3 «перший дотик» по команді: відсоток із СУМ (Σ названих ÷ Σ оцінених), не середнє відсотків. */}
+        <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>
+          ціну названо в 1-й дотик: <b>{firstTouchLabel(g.firstTouch ? { ...g.firstTouch, state: "measured" } : undefined).main}</b>
+          {g.firstTouch && g.firstTouch.analyzed > 0 ? ` · ${g.firstTouch.voiced} з ${g.firstTouch.analyzed}` : ""}
+          {g.firstTouch && g.firstTouch.noRecord > 0 ? ` · без запису ${g.firstTouch.noRecord}` : ""}
+          {" "}<InfoHint text={"Оцінки AI-бота перших розмов із рекламними лідами; розмова зараховується тому, хто дзвонив. "
+            + `Бот оцінює команд: ${data.firstTouchMeta?.coveredTeams ?? 0}. Не прив'язано до жодного менеджера за період: `
+            + `${(data.firstTouchMeta?.unmapped.analyzed ?? 0) + (data.firstTouchMeta?.unmapped.noRecord ?? 0)}.`} />
+        </div>
+        {firstTouchStale(data.firstTouchMeta?.lastAnalyzedAt ?? null, today) && (
+          <div style={{ fontSize: 11, color: AMBER, marginTop: 2 }}>
+            ⚠ бот не присилав оцінок з {data.firstTouchMeta?.lastAnalyzedAt ? ddmm(data.firstTouchMeta.lastAnalyzedAt) : "—"} — число неповне
+          </div>
+        )}
       </div>
       <div>
         <div style={lab}>Фокус-день {ddmm(focusDay)}</div>
@@ -840,6 +855,7 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
             <Kpi lbl="чек" fact={chekFact} target={m.kpi.avgCheck.target} money altMark={chekAlt ? "*відпр." : undefined} altTitle="по відправлених авто, ще не закриті (сума÷авто)"
               hintTitle={chekAlt ? undefined : "Ср. чек = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за обраний період». Σ signed ÷ Σ угод."} />
             <Kpi lbl="конв" fact={m.kpi.conversion.fact} target={m.kpi.conversion.target} pctUnit />
+            <FirstTouchKpi c={m.firstTouch} />
           </div>
         </div>
       </div>
@@ -954,6 +970,21 @@ function Kpi({ lbl, fact, target, money, pctUnit, extra, altMark, altTitle, hint
       {/* 🔴 Ціль грішми — ТИМ САМИМ форматером, що факт: «2 500 / 13к» читалось як два різні плани. */}
       {has ? <span style={{ color: MUTED }}> / {money ? fmt(target) : pctUnit ? target + "%" : target}{ok ? " ✓" : ""}</span>
            : <span style={{ color: MUTED, fontStyle: "italic" }}> · план не задано</span>}
+    </span>
+  );
+}
+/**
+ * 🎯 ТЗ-3 «ціну названо в перший дотик» — рядок картки менеджера (рішення власника 17.09.2026).
+ * Цілі в цього показника немає, тож не `Kpi` (той малює «план не задано» і світлофор від цілі).
+ * Текст і стани — з `firstTouchLabel`, того самого правила, що в таблиці: дві верстки, одне правило.
+ */
+function FirstTouchKpi({ c }: { c: ReportPlanManager["firstTouch"] | undefined }) {
+  const l = firstTouchLabel(c);
+  return (
+    <span style={{ fontSize: 11.5, color: MUTED, cursor: "help" }}
+      title={"Ціну названо в першій розмові з рекламним лідом: названо ÷ оцінено. Оцінює AI-бот; розмова зараховується тому, хто дзвонив. "
+        + "«Не вимірюється» — команду бот не оцінює. «Без запису» — бот розмови не чув, у відсоток не входить."}>
+      ціну названо <b style={{ color: l.muted ? MUTED : "var(--text)" }}>{l.main}</b>{l.sub ? <span style={{ color: MUTED }}> · {l.sub}</span> : null}
     </span>
   );
 }

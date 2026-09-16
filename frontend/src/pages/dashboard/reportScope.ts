@@ -57,6 +57,13 @@ export function mergeReportPlans(parts: ReportPlan[]): ReportPlan {
   };
   // Частка — не сума й не середнє середніх. Знаменника в `glance` немає.
   glance.avgCheck = null;
+  // 🎯 «Перший дотик» — ВКЛАДЕНИЙ обʼєкт, тож цикл ADDITIVE його не бачить: без цього рядка при
+  // 2+ командах лишились би числа ПЕРШОЇ з них. Лічильники додаються; відсоток рахує екран із сум.
+  glance.firstTouch = {
+    analyzed: parts.reduce((s, p) => s + (p.glance.firstTouch?.analyzed ?? 0), 0),
+    voiced: parts.reduce((s, p) => s + (p.glance.firstTouch?.voiced ?? 0), 0),
+    noRecord: parts.reduce((s, p) => s + (p.glance.firstTouch?.noRecord ?? 0), 0),
+  };
 
   // `scope`/`elapsed`/`remainingWorkdays` — властивості ПЕРІОДУ й ГЛЯДАЧА, однакові
   // в усіх частинах (той самий from/to, той самий токен). Беремо з першої.

@@ -14,14 +14,14 @@
  * дивним — рівно той клас, що вже коштував нам «середнє середніх» у доборі
  * (завищення на 87 955 ₴ при кожному окремо правильному числі).
  */
-import type { ReportPlanManager } from "../../api";
+import type { ReportPlanManager, FirstTouchCell } from "../../api";
 
 export type ColKey =
   | "rank" | "name" | "status" | "created" | "ads" | "leadgen" | "conv" | "convAd" | "convLg"
   | "dispatch" | "avgCheck" | "fact" | "factNew" | "factRepeat" | "factUndef" | "plan" | "pct"
   | "projected" | "needPerDay" | "expectThisMonth" | "expectNew" | "expectRepeat" | "awaitNoDate"
   | "jamDeals" | "jam" | "dobir" | "talks" | "dispRevenue" | "responseTime"
-  | "srcAd" | "srcLeadgen" | "srcOther" | "srcNoChannel";
+  | "srcAd" | "srcLeadgen" | "srcOther" | "srcNoChannel" | "firstTouch";
 
 /**
  * Як колонка згортається в підсумковий рядок.
@@ -29,7 +29,7 @@ export type ColKey =
  * · `none` — підсумку немає (ім'я, ранг, статус);
  * · `ratio:*` — ЧАСТКА: Σ чисельника ÷ Σ знаменника, а не Σ часток.
  */
-export type FootKind = "add" | "none" | "ratio:avgCheck" | "ratio:pct" | "ratio:conv" | "ratio:convAd" | "ratio:convLg" | "share:none";
+export type FootKind = "add" | "none" | "ratio:avgCheck" | "ratio:pct" | "ratio:conv" | "ratio:convAd" | "ratio:convLg" | "ratio:firstTouch" | "share:none";
 
 /**
  * Дані, яких НЕМАЄ в рядку менеджера, але за якими треба сортувати.
@@ -68,6 +68,35 @@ export interface ColDef {
  * цього переліку має бути свідомим рішенням, а не побічним ефектом.
  */
 export const NO_HELP_COLS: ColKey[] = ["rank", "name"];
+
+/** 🎯 Відсоток «ціну названо» — від ОЦІНЕНИХ розмов (без «немає запису»). `null` = нема з чого рахувати. */
+export const firstTouchPct = (voiced: number, analyzed: number): number | null =>
+  analyzed > 0 ? Math.round((voiced / analyzed) * 1000) / 10 : null;
+
+/**
+ * 🎯 ЩО ПИСАТИ В КЛІТИНЦІ «ПЕРШОГО ДОТИКУ» — одне правило на картку й таблицю (ТЗ-3, рішення 17.09.2026).
+ * Три стани, і жоден не ховається в інший: «не вимірюється» (бот цю команду не слухає) ≠ «оцінок
+ * немає» (слухає, але за період нічого) ≠ відсоток. «Без запису» — окремо й поза відсотком.
+ */
+export function firstTouchLabel(c: FirstTouchCell | undefined): { main: string; sub: string | null; muted: boolean } {
+  if (!c || c.state === "not_covered") return { main: "не вимірюється", sub: null, muted: true };
+  const pct = firstTouchPct(c.voiced, c.analyzed);
+  const noRec = c.noRecord > 0 ? `без запису ${String(c.noRecord)}` : null;
+  if (pct == null) return { main: "—", sub: noRec ?? "оцінок немає", muted: true };
+  return { main: `${String(pct)}%`, sub: `${String(c.voiced)} з ${String(c.analyzed)}${noRec ? ` · ${noRec}` : ""}`, muted: false };
+}
+
+/**
+ * ⚠ ДЖЕРЕЛО МОВЧИТЬ. Бот пише оцінки щодня в робочі дні; три дні без жодної — це вже не вихідні,
+ * а зупинка (17.09.2026: остання оцінка 11.09, з ~20.08 бот не отримує відповіді AI). Без позначки
+ * «0 з 0» за тиждень читалось би як «менеджери не телефонували».
+ */
+export const FIRST_TOUCH_STALE_DAYS = 3;
+export function firstTouchStale(lastAnalyzedAt: string | null, today: string): boolean {
+  if (!lastAnalyzedAt) return true;
+  const days = (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${lastAnalyzedAt}T00:00:00Z`)) / 86_400_000;
+  return days > FIRST_TOUCH_STALE_DAYS;
+}
 
 /** «Немає даних» ≠ «нуль». Конверсія `null` при <10 взятих — це не 0%. */
 const numOrNull = (v: number | null | undefined): number | null =>
@@ -183,6 +212,11 @@ export const REPORT_COLS: ColDef[] = [
     help: "Скільки зі СТВОРЕНИХ угод періоду не мають ані рекламного, ані лідоген-дотику — менеджер завів угоду сам. Джерело: metrics.createdSplitByManager. Частина ПАРТИЦІЇ джерела: Σ чотирьох == «Створено». 📐 Заміряно 25.07-24.08: 1137 угод (43.2%), з них 827 — постійні клієнти, тобто це переважно робота з наявною базою, а не «загублене походження». ⚠️ Пари «Прийнято …» у цієї колонки НЕМАЄ — і це не пропуск: KPI-цілі ставляться лише по рекламі й лідогену. ⚠️ ПЛАНУ по цій колонці НЕМАЄ і не передбачено: цілі ставляться лише по рекламі й лідогену, тож порожньо в «плані» тут — це відсутність цілі, а не недопрацювання. 🔀 На цю колонку діє перемикач зрізу «усі / лише нові / лише постійні» над таблицею: у звуженому стані тут число ЗРІЗУ, і воно збігається зі складом розкриття дня." },
   { key: "srcNoChannel", title: "зі створених: канал не вказано", core: false, val: (m) => m.srcNoChannel, foot: "add",
     help: "Четвертий кошик ПАРТИЦІЇ джерела: угоди, у яких канал не заповнений узагалі (deals.lead_channel IS NULL) — тобто ми НЕ ЗНАЄМО джерела, на відміну від «без джерела», де відомо, що дотику не було. 📐 Заміряно 24.08.2026: НУЛЬ по всій базі. Колонка існує, щоб перша ж така угода стала видимою, а не осіла тихо в сусідньому кошику; поки нуль — про це кричить гейт #174e, а не підпис у кожному рядку. 🔀 На цю колонку діє перемикач зрізу «усі / лише нові / лише постійні» над таблицею: у звуженому стані тут число ЗРІЗУ, і воно збігається зі складом розкриття дня." },
+  // 🎯 ТЗ-3 «перший дотик»: відсоток — ЧАСТКА, тож у підсумку Σ названих ÷ Σ оцінених, а не Σ відсотків.
+  { key: "firstTouch", title: "Ціну названо (1-й дотик)", core: false,
+    val: (m) => (m.firstTouch?.state === "measured" ? firstTouchPct(m.firstTouch.voiced, m.firstTouch.analyzed) : null),
+    foot: "ratio:firstTouch",
+    help: "Частка перших розмов з рекламним лідом, у яких менеджер назвав ціну: названо ÷ оцінено. Оцінює AI-бот (uts-bot: розшифровка й мітка «ціну озвучено»), джерело: first_touch_analysis ← jobs/syncFirstTouch. Розмова зараховується тому, хто ДЗВОНИВ (рішення власника 17.09.2026), а не поточному відповідальному угоди. «Не вимірюється» — команду бот не оцінює взагалі (зараз лише РНК). «Без запису» — бот розмови не чув; у відсоток не входить. Рекламного фільтра дашборд не додає: фільтрує бот." },
   { key: "dispRevenue", title: "Авто-сума", core: false, val: (m) => numOrNull(m.kpi.dispatch.revenue), foot: "add",
     help: "Сума відправлених авто ₴. Джерело: kpi.dispatch.revenue." },
   // 🔴 ЧАСТКА, А НЕ МЕДІАНА (рішення власника 19.08.2026). Медіана на проді
@@ -199,6 +233,7 @@ export const DEFAULT_OPT_ON: Record<string, boolean> = {
   jamDeals: true, responseTime: true,
   jam: false, dobir: false, talks: false, dispRevenue: false,
   srcAd: false, srcLeadgen: false, srcOther: false, srcNoChannel: false,
+  firstTouch: true,
 };
 
 export const OPTIONAL_COLS = REPORT_COLS.filter((c) => !c.core);
@@ -250,6 +285,12 @@ export function footValue(key: ColKey, rows: ReportPlanManager[]): FootValue {
     const num = rows.reduce((s, m) => s + pick(m).won, 0);
     const den = rows.reduce((s, m) => s + pick(m).taken, 0);
     return { kind, value: den > 0 ? Math.round((num / den) * 1000) / 10 : null, extra: { num, den } };
+  }
+  if (kind === "ratio:firstTouch") {
+    // 🔴 Σ названих ÷ Σ оцінених: середнє відсотків дало б людині з однією оцінкою вагу тієї, у кого їх сорок.
+    const num = rows.reduce((s, m) => s + (m.firstTouch?.voiced ?? 0), 0);
+    const den = rows.reduce((s, m) => s + (m.firstTouch?.analyzed ?? 0), 0);
+    return { kind, value: firstTouchPct(num, den), extra: { num, den } };
   }
   if (kind === "ratio:conv") {
     // Когортна конверсія відділу = Σ виграних ÷ Σ узятих. Середнє відсотків дало б
