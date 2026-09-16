@@ -122,7 +122,15 @@ const MGR_LIMIT = "власник: менеджер подає заявку на
 const NO_ENPS = "власник: eNPS і бали ванʼту-ванів — не для фінансиста й тімліда. Джерело "
   + "зміни — be6d453 (27.08.2026), «біле сито прав»";
 
+const MGR_LIST = "власник 16.09.2026: «менеджери не можуть ставити себе відповідальними» — "
+  + "селект виконавця в менеджера був порожній, бо перелік менеджерів жив під вкладкою teams. "
+  + "Роут переведено під tasks, список — усім, хто ставить задачі (продовження рішення 14.09 "
+  + "«всі можуть ставити один одному задачі»)";
 export const ACCEPTED_MATRIX_SHIFTS: MatrixShift[] = [
+  { method: "GET", path: "/api/teams/managers", role: "manager", to: "allow",
+    decidedOn: "2026-09-16", decidedBy: "власник", why: MGR_LIST },
+  { method: "GET", path: "/api/teams/managers", role: "hr", to: "allow",
+    decidedOn: "2026-09-16", decidedBy: "власник", why: MGR_LIST },
   /**
    * Рішення власника 03.09.2026, дослівно: «менеджер подає, тім-лід затверджує плани
    * по клієнтах, такий задум». До цього дня менеджер не міг подати НАВІТЬ СВІЙ план —
@@ -864,8 +872,10 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: [] },
   { method: "GET", path: "/api/teams", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  // 🔓 16.09.2026, рішення власника: перелік менеджерів — усім, хто ставить задачі
+  // (роут переведено під вкладку tasks; вкладка teams менеджеру не дається).
   { method: "GET", path: "/api/teams/managers", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   // 🔴 ТРИ РОУТИ SSO ТРЕКЕРА ДОДАНО 02.09.2026 — ЇХ ТУТ НЕ БУЛО ВЗАГАЛІ.
   // Знайдено заміром під `#280`: із 217 оголошених роутів у зліпку бракувало рівно цих
   // трьох, і вони вже ЖИЛИ В ПРОДІ з першого PR трекера. `#17` їх не бачив, бо дивиться

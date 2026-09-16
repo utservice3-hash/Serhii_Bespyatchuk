@@ -126,6 +126,10 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/statistics"), tabs: ["depstats"] },
     // виділені роутери
     { test: pre("/api/plans"), tabs: ["plans"] },
+    // 👥 Список менеджерів потрібен тому, хто СТАВИТЬ задачі, а не тому, хто бачить
+    // рейтинг команд: менеджер вкладки `teams` не має і мати не мусить (TAB_MATRIX
+    // не змінюється), але виконавця обирати мусить. Стоїть ПЕРЕД префіксом `/api/teams`.
+    { test: pre("/api/teams/managers"), tabs: ["tasks", "teams"] },
     { test: pre("/api/teams"), tabs: ["teams"] },
     { test: pre("/api/tasks"), tabs: ["tasks"] },
     { test: pre("/api/goals"), tabs: ["goals"] },

@@ -296,7 +296,8 @@ export function Dashboard() {
   useEffect(() => {
     // ReportPlanSection fetches its own data; here we only keep the manager
     // dropdown populated (used by task assignment and other sections).
-    if (auth?.role === "manager") return;
+    // 🔓 Гард `role === "manager" → return` знято 16.09.2026: саме він лишав
+    // менеджера з порожнім селектом виконавця (сервер тепер віддає список усім).
     fetchManagerOptions().then(setManagerOptions).catch(() => setManagerOptions([]));
   }, [auth, refreshNonce]);
 
