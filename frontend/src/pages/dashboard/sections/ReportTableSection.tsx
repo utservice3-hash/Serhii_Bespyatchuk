@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { fetchManagerWeeks, type ManagerWeeks, type ReportPlan, type ReportPlanManager, type Team } from "../../../api";
 import {
-  REPORT_COLS, OPTIONAL_COLS, DEFAULT_OPT_ON, sortRows, footValue,
+  REPORT_COLS, OPTIONAL_COLS, DEFAULT_OPT_ON, sortRows, footValue, firstTouchLabel,
   type ColDef, type ColKey,
 } from "../reportTableCols";
 import { narrowToSlice, type Slice } from "../klassSlice";
@@ -437,6 +437,14 @@ function Cell({ col, m, idx, isOpen, responseByMgr }: {
           <span style={{ color: "var(--text-muted)" }}> / {m.attempts}</span>
         </td>
       );
+    case "firstTouch": {
+      const l = firstTouchLabel(m.firstTouch);
+      return (
+        <td style={{ ...st, color: l.muted ? "var(--text-muted)" : undefined }}>{l.main}
+          {l.sub ? <div style={{ color: "var(--text-muted)", fontSize: 11 }}>{l.sub}</div> : null}
+        </td>
+      );
+    }
     case "srcAd": return <td style={st}>{m.srcAd || none}</td>;
     case "srcLeadgen": return <td style={st}>{m.srcLeadgen || none}</td>;
     case "srcOther": return <td style={st}>{m.srcOther || none}</td>;
@@ -470,6 +478,10 @@ function FootCell({ col, rows, scopeLabel, count, group }: { col: ColDef; rows: 
   if (col.key === "rank") return <td style={st} />;
   if (col.key === "name") return <td style={st}>{scopeLabel} · {count}</td>;
   const f = footValue(col.key, rows);
+  // 🎯 Підсумок групи, де жодну людину бот не оцінює, — «не вимірюється», а не «—» (рецензія 17.09.2026).
+  if (col.key === "firstTouch" && rows.length > 0 && rows.every((m) => m.firstTouch?.state !== "measured")) {
+    return <td style={{ ...st, color: "var(--text-muted)", fontWeight: 500 }}>не вимірюється</td>;
+  }
   if (f.value == null) return <td style={{ ...st, color: "var(--text-muted)", fontWeight: 500 }}>—</td>;
   if (col.key === "pct") return <td style={st}>{f.value}%</td>;
   if (col.key === "conv" || col.key === "convAd" || col.key === "convLg") {
@@ -483,6 +495,10 @@ function FootCell({ col, rows, scopeLabel, count, group }: { col: ColDef; rows: 
   if (col.key === "created") {
     const nw = rows.reduce((s, m) => s + m.new, 0), rp = rows.reduce((s, m) => s + m.rep, 0);
     return <td style={st}>{f.value} <span style={{ color: "var(--text-muted)", fontSize: 11, fontWeight: 500 }}>{nw}/{rp}</span></td>;
+  }
+  if (col.key === "firstTouch") {
+    const e = f.extra as { num: number; den: number } | undefined;
+    return <td style={st}>{f.value}%{e ? <span style={{ color: "var(--text-muted)", fontSize: 11, fontWeight: 500 }}> {e.num} з {e.den}</span> : null}</td>;
   }
   if (col.key === "talks") {
     const at = rows.reduce((s, m) => s + m.attempts, 0);

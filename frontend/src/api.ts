@@ -852,6 +852,10 @@ export interface ReportPlanKpi { fact: number | null; target: number; taken?: nu
 export interface SrcCounts {
   created: number; adCount: number; leadgenCount: number; otherCount: number; noChannelCount: number;
 }
+/** Лічильники «першого дотику». `noRecord` — бот розмови не чув; у відсоток НЕ входить. */
+export interface FirstTouchCounts { analyzed: number; voiced: number; noRecord: number }
+/** `not_covered` — команду бот не оцінює взагалі: «не вимірюється», а не 0 з 0. */
+export interface FirstTouchCell extends FirstTouchCounts { state: "measured" | "not_covered" }
 export interface ReportPlanManager {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
   tag: "rpk" | "rnk" | "self";
@@ -861,6 +865,8 @@ export interface ReportPlanManager {
   factSuccessDeals: number; factPaidDeals: number;
   // 📞 Розмова (billsec>0) і недодзвін — ДВІ цифри; складати заборонено.
   talks: number; attempts: number;
+  /** 🎯 ТЗ-3 «ціну названо в перший дотик» — оцінки бота, звʼязані з тим, хто ДЗВОНИВ. */
+  firstTouch: FirstTouchCell;
   // ⏳ Очікування БЕЗ планової дати — в жодну суму не входить, тому й окремо.
   expectNoDate: number; expectNoDateDeals: number;
   // 🧱 Скільки з очікувань стоїть на «Виставленні рахунку» (затор).
@@ -928,6 +934,11 @@ export interface ReportPlan {
     dispatched: number; dispatchedRevenue: number; created: number; avgCheck: number | null;
     expectNoDate: number; jam: number; jamDeals: number; dobir: number; byPace: number; talks: number; attempts: number;
     /**
+     * Σ «першого дотику» по ростеру + стан покриття команди + оцінки людей ПОЗА ростером у межах
+     * скоупу (завершують, звільнені) — окремим числом, щоб не зникали. Відсоток — з сум ростеру.
+     */
+    firstTouch: FirstTouchCounts & { state: "measured" | "not_covered"; outside: FirstTouchCounts };
+    /**
      * 🔴 Скільки з факту прийшло від менеджерів БЕЗ плану (і від звільнених — у них
      * плану немає за побудовою). План команди = Σ планів її менеджерів, тож ці гроші
      * піднімають відсоток, не піднявши знаменник. Заміряно: у Яцика +8.3 п.п.
@@ -944,6 +955,8 @@ export interface ReportPlan {
    * якому стоїть половина гейтів. Порожній масив — нормальний стан.
    */
   dismissed: ReportPlanDismissed[];
+  /** Про ДЖЕРЕЛО «першого дотику»: не звʼязані з менеджером оцінки, остання оцінка бота, скільки команд він оцінює. */
+  firstTouchMeta: { unmapped: FirstTouchCounts; lastAnalyzedAt: string | null; coveredTeams: number };
 }
 export interface ReportPlanDismissed {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
