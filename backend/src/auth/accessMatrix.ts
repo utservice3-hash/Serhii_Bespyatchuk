@@ -382,12 +382,15 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // POST/DELETE на фейковому ключі відмовляють скоупом (403) або тілом (400) — deny-only.
   { method: "GET", path: "/api/dashboard/client-contacts?clientKey=zzz", cls: "GET",
     allow: [], deny: ["hr"] },
-  // Фінансист має адмін-скоуп і тут ПРОЙШОВ би (#11b) — тому в deny його немає: проба
-  // роутом, що пише, виконала б мутацію проти прода.
+  // Менеджер і тімлід ДОДАЮТЬ контакти по своїх клієнтах — це і є фіча (у Viber/Telegram
+  // пише менеджер); межу тримає `canSeeClient` по ключу. Проба з порожнім тілом дає їм
+  // 400 (тіло) або 404 (id=0), не 403 — тому в deny лише hr (вкладка `loyalty`).
+  // Фінансист має адмін-скоуп і тут ПРОЙШОВ би (#11b) — у deny його теж немає.
+  // 📐 Заміряно матрицею після викату e41aed8 (17.09.2026): manager/team_lead → 400/404.
   { method: "POST", path: "/api/dashboard/client-contacts", cls: "deny-only",
-    allow: [], deny: ["hr", "manager", "team_lead"] },
+    allow: [], deny: ["hr"] },
   { method: "DELETE", path: "/api/dashboard/client-contacts/:id", cls: "deny-only",
-    allow: [], deny: ["hr", "manager", "team_lead"] },
+    allow: [], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/client-contacts/:id/file", cls: "GET",
     allow: [], deny: ["hr"] },
   // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника), ЗАДЕКЛАРОВАНА, А НЕ ДРЕЙФ.
@@ -455,8 +458,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "manager", "team_lead", "financier"] },
   { method: "POST", path: "/api/dashboard/client-merge/revoke", cls: "deny-only",
     allow: [], deny: ["hr", "manager", "team_lead", "financier"] },
+  // 🟢 ЗМІНА ПОЛІТИКИ 14.09.2026 (рішення власника, викат 0136844): тімлід передає
+  // постійних клієнтів у межах своєї команди — межу тримає `assignAllowed`. Проба без
+  // тіла дає йому 400, не 403. 📐 Дрейф спіймано матрицею 17.09.2026 після e41aed8.
   { method: "POST", path: "/api/dashboard/client-manager", cls: "deny-only",
-    allow: [], deny: ["hr", "manager", "team_lead", "financier"] },
+    allow: [], deny: ["hr", "manager", "financier"] },
   { method: "GET", path: "/api/dashboard/client-manager/history?clientKey=zzz", cls: "GET",
     allow: [], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/loyalty", cls: "GET",
