@@ -3,8 +3,8 @@ import { createPortal } from "react-dom";
 import {
   fetchDocTree, fetchDocCard, fetchDocViewers, fetchDocPeople, createDocFolder, renameDocFolder, deleteDocFolder,
   uploadDocFile, uploadDocVersion, updateDocFile, archiveDocFile, restoreDocFile, activateDocFile, deleteDocFile, fetchDocTrash, undeleteDocFile, ackDocFile, fetchDocAcks, remindDocAcks, signDocFile, fetchSigEvidenceBlobUrl, approveDocSignature, rejectDocSignature,
-  fetchDocFolderAccess, saveDocFolderAccess, fetchDocFileAccess, saveDocFileAccess, fetchDocFileBlobUrl, DOC_TYPES, fetchTelegramStatus, createTelegramLink, unlinkTelegram,
-  type DocTree, type DocFile, type DocFolder, type DocCard, type DocSection, type DocFolderAccess, type DocFileAccess, type TelegramStatus, type DocTrashFile,
+  fetchDocFolderAccess, saveDocFolderAccess, fetchDocFileAccess, saveDocFileAccess, fetchDocRender, searchDocText, fetchDocFileBlobUrl, DOC_TYPES, fetchTelegramStatus, createTelegramLink, unlinkTelegram,
+  type DocTree, type DocFile, type DocFolder, type DocCard, type DocSection, type DocFolderAccess, type DocFileAccess, type DocRender, type DocTextSearch, type DocxRun, type TelegramStatus, type DocTrashFile,
 } from "../../../api";
 
 /**
@@ -55,11 +55,13 @@ function extOf(name: string, mime: string | null): string {
   if (mime?.startsWith("image/")) return "IMG";
   return "FILE";
 }
-function previewKind(f: DocFile): "pdf" | "image" | "html" | "none" {
+function previewKind(f: DocFile): "pdf" | "image" | "html" | "docx" | "xlsx" | "none" {
   const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
   if (ext === "pdf" || f.mime === "application/pdf") return "pdf";
   if (f.mime?.startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) return "image";
   if (["html", "htm"].includes(ext) || f.mime === "text/html") return "html";
+  if (ext === "docx") return "docx";
+  if (ext === "xlsx" || ext === "xlsm") return "xlsx";
   return "none";
 }
 const readAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
@@ -128,6 +130,19 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
   const [toast, setToast] = useState<string | null>(null);
   // Відкрите в цій сесії гасить «нове» одразу, не чекаючи перечитування дерева (сервер уже записав перегляд).
   const [seenLocal, setSeenLocal] = useState<Set<string>>(() => new Set());
+  // 🔎 Пошук по тексту: сервер шукає лише серед видимих документів; назву й опис фільтруємо тут.
+  const [textSearch, setTextSearch] = useState<{ q: string; res: DocTextSearch | null; err: boolean } | null>(null);
+  useEffect(() => {
+    const qq = q.trim();
+    if (qq.length < 2) { setTextSearch(null); return; }
+    let alive = true;
+    const t = setTimeout(() => {
+      setTextSearch((prev) => ({ q: qq, res: prev?.q === qq ? prev.res : null, err: false }));
+      searchDocText(qq).then((res) => { if (alive) setTextSearch({ q: qq, res, err: false }); })
+        .catch(() => { if (alive) setTextSearch({ q: qq, res: null, err: true }); });
+    }, 350);
+    return () => { alive = false; clearTimeout(t); };
+  }, [q]);
 
   const load = async () => {
     setLoading(true);
@@ -173,9 +188,12 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
   const shelfFiles = visibleAll.filter((f) => shelfOf(f) === shelf && (shelf !== "mine" || f.section === section || section === "general"));
   // Папка й пошук — спершу; лічильники типів рахуються саме з цього набору, інакше чип «Шаблон · 10»
   // стоїть над списком з одного документа (заміряно 17.09.2026 на папці «Люди»).
-  const folderFiles = shelfFiles
-    .filter((f) => folderFilter === "all" || (folderFilter === "none" ? f.folderId == null : f.folderId === folderFilter))
-    .filter((f) => { const qq = q.trim().toLowerCase(); return !qq || f.name.toLowerCase().includes(qq) || (f.description ?? "").toLowerCase().includes(qq) || (f.addressee ?? "").toLowerCase().includes(qq); });
+  const textHits = new Map((textSearch?.q === q.trim() ? textSearch.res?.hits ?? [] : []).map((h) => [h.id, h]));
+  const metaMatch = (f: DocFile) => { const qq = q.trim().toLowerCase(); return !qq || f.name.toLowerCase().includes(qq) || (f.description ?? "").toLowerCase().includes(qq) || (f.addressee ?? "").toLowerCase().includes(qq); };
+  const inFolder = (f: DocFile) => folderFilter === "all" || (folderFilter === "none" ? f.folderId == null : f.folderId === folderFilter);
+  const folderFiles = shelfFiles.filter(inFolder).filter((f) => metaMatch(f) || textHits.has(f.id));
+  const textHitsHere = shelfFiles.filter((f) => inFolder(f) && textHits.has(f.id)).length;
+  const textHitsElsewhere = [...textHits.keys()].filter((id) => !shelfFiles.some((f) => f.id === id && inFolder(f))).length;
   const listFiles = folderFiles.filter((f) => !typeFilter || (f.category ?? "Інше") === typeFilter);
   const shelfFolderCounts = new Map<number | null, number>(); shelfFiles.forEach((f) => shelfFolderCounts.set(f.folderId, (shelfFolderCounts.get(f.folderId) ?? 0) + 1));
   const shelfTypeCounts = new Map<string, number>(); folderFiles.forEach((f) => shelfTypeCounts.set(f.category ?? "Інше", (shelfTypeCounts.get(f.category ?? "Інше") ?? 0) + 1));
@@ -306,7 +324,18 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
                 </div>
               );
             })()}
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 Пошук за назвою, описом, адресатом" style={{ width: "100%" }} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 Пошук за назвою і текстом документа" style={{ width: "100%" }} />
+            {q.trim().length >= 2 && (
+              <div className="orph-dim" style={{ fontSize: 11.5, lineHeight: 1.4 }}>
+                {!textSearch || (textSearch.q === q.trim() && !textSearch.res && !textSearch.err) || textSearch.q !== q.trim() ? "Шукаю в тексті документів…"
+                  : textSearch.err ? <span style={{ color: "var(--danger)" }}>Пошук по тексту не відповів — показано лише збіги в назвах.</span>
+                  : <>
+                      У тексті: {textHitsHere} тут{textHitsElsewhere ? `, ще ${textHitsElsewhere} в інших розділах чи папках` : ""}.
+                      {textSearch.res!.notSearchable ? ` Без тексту (скани, фото): ${textSearch.res!.notSearchable}, у них шукається лише назва.` : ""}
+                      {textSearch.res!.pending ? ` Ще обробляються: ${textSearch.res!.pending}.` : ""}
+                    </>}
+              </div>
+            )}
             {(shelfTypeCounts.size > 1 || typeFilter) && (
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 <button className="orph-chip" aria-pressed={typeFilter === null} onClick={() => setTypeFilter(null)} style={{ padding: "4px 10px", fontSize: 12 }}>Усі</button>
@@ -328,7 +357,9 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
                     <div style={{ fontWeight: sel || isNewF(f) ? 700 : 600, fontSize: "var(--fs-base)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }} title={f.name}>{f.name.replace(/\.[a-z0-9]+$/i, "")}</div>
                     {isNewF(f) && <span style={newPill} title="Ви ще не відкривали цю версію">нове</span>}
                   </div>
-                  <div className="orph-dim" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.description || `${f.category ?? "Інше"} · ${t.action}`}</div>
+                  {textHits.has(f.id) && !metaMatch(f)
+                    ? <div className="orph-dim" style={{ fontSize: 12, lineHeight: 1.35, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }} title={`Знайдено в тексті: ${textHits.get(f.id)!.count}`}>🔎 <Highlight text={textHits.get(f.id)!.snippet} q={q} /></div>
+                    : <div className="orph-dim" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.description || `${f.category ?? "Інше"} · ${t.action}`}</div>}
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
                     <span className="orph-dim">{f.addressee ?? f.author ?? "автор не вказаний"} · {fmtDate(f.updatedAt)} · v{f.version}</span>
                     {f.archivedAt ? <span style={pill("var(--surface-2)", "var(--text-muted)")}>{f.archivedReason === "dismissed" ? "звільнено" : "в архіві"}</span> : f.inactiveAt ? <span style={pill("var(--warn-bg)", "var(--warn)")}>неактивний</span> : f.ack.required ? <AckBadge f={f} /> : <SigBadge f={f} />}
@@ -408,17 +439,20 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
   const [full, setFull] = useState(false);
   const [busy, setBusy] = useState(false);
   const [rightsOpen, setRightsOpen] = useState(false);
+  const [render, setRender] = useState<DocRender | null>(null);
+  const [renderErr, setRenderErr] = useState<string | null>(null);
   const t = TYPE_META[file.category ?? "Інше"] ?? TYPE_META["Інше"];
   const kind = previewKind(file);
   const mgmt = tree.viewer.isManagement;
 
   useEffect(() => {
     let alive = true; let url: string | null = null;
-    setCardData(null); setViewers(null); setPreview(null); setErr(null); setNoAccess(false);
+    setCardData(null); setViewers(null); setPreview(null); setErr(null); setNoAccess(false); setRender(null); setRenderErr(null);
     fetchDocCard(file.id).then((d) => { if (alive) setCardData(d); })
       .catch((e) => { const r = (e as { response?: { status?: number; data?: { reason?: string } } }).response; if (!alive) return; if (r?.status === 403) setNoAccess(true); else setErr(errOf(e, "Картку не вдалося завантажити")); });
     if (mgmt) fetchDocViewers(file.id).then((v) => { if (alive) setViewers(v); }).catch(() => {});
-    if (kind !== "none") fetchDocFileBlobUrl(file.id, { inline: true }).then((u) => { url = u; if (alive) setPreview(u); }).catch(() => {});
+    if (kind === "docx" || kind === "xlsx") fetchDocRender(file.id).then((r) => { if (alive) setRender(r); }).catch((e) => { if (alive) setRenderErr(errOf(e, "Перегляд не вдався — завантажте файл.")); });
+    else if (kind !== "none") fetchDocFileBlobUrl(file.id, { inline: true }).then((u) => { url = u; if (alive) setPreview(u); }).catch(() => {});
     return () => { alive = false; if (url) URL.revokeObjectURL(url); };
     // Перечитуємо й після підпису / ознайомлення / активації — інакше таймлайн показує стан
     // на момент відкриття картки («Відкрито: ще ні» при вже підписаному, заміряно 16.09.2026).
@@ -479,8 +513,8 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
       <h2 className="chart-title" style={{ marginBottom: 0, lineHeight: 1.3 }}>{file.name}</h2>
       {/* Дії — ЗВЕРХУ, під назвою: перегляд PDF перехоплює прокрутку, і знизу до кнопок не догорнути (власник 17.09.2026). */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {kind !== "none" && <button style={{ ...btn("primary"), fontSize: 14, padding: "9px 16px" }} onClick={() => setFull(true)} disabled={!preview}>⤢ На весь екран</button>}
-        {kind !== "none" && <button style={btn()} onClick={() => void open(false)}>У новій вкладці</button>}
+        {kind !== "none" && <button style={{ ...btn("primary"), fontSize: 14, padding: "9px 16px" }} onClick={() => setFull(true)} disabled={!preview && !render}>⤢ На весь екран</button>}
+        {kind !== "none" && kind !== "docx" && kind !== "xlsx" && <button style={btn()} onClick={() => void open(false)}>У новій вкладці</button>}
         <button style={btn()} onClick={() => void open(true)}>Завантажити</button>
         {file.canEdit && (
           <label style={{ ...btn(), cursor: busy ? "default" : "pointer", opacity: busy ? .6 : 1 }}>Нова версія<input type="file" hidden disabled={busy} onChange={(e) => { newVersion(e.target.files); e.currentTarget.value = ""; }} /></label>
@@ -505,6 +539,17 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
           <span>📄 {extOf(file.name, file.mime)} не переглядається в дашборді</span>
           <button style={{ ...btn(), fontSize: 12, padding: "4px 10px", marginLeft: "auto" }} onClick={() => void open(true)}>Завантажити</button>
         </div>
+      ) : kind === "docx" || kind === "xlsx" ? (
+        renderErr ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 13, color: "var(--text-muted)", background: "var(--surface-2)", borderRadius: "var(--r-lg)", padding: "8px 12px" }}>
+            <span>⚠ {renderErr}</span>
+            <button style={{ ...btn(), fontSize: 12, padding: "4px 10px", marginLeft: "auto" }} onClick={() => void open(true)}>Завантажити</button>
+          </div>
+        ) : (
+          <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", overflow: "hidden" }}>
+            {!render ? <div style={{ padding: 16, fontSize: 12, color: "var(--text-muted)" }}>завантаження перегляду…</div> : <OfficeView r={render} height="min(62vh, 720px)" />}
+          </div>
+        )
       ) : (
         <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", background: "var(--surface-2)", overflow: "hidden", position: "relative" }}>
           {!preview ? <div style={{ padding: 16, fontSize: 12, color: "var(--text-muted)" }}>завантаження прев'ю…</div>
@@ -512,7 +557,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
             : <iframe title={file.name} src={kind === "pdf" ? `${preview}#navpanes=0&view=FitH&zoom=page-width` : preview} style={{ width: "100%", height: "min(62vh, 720px)", minHeight: 360, border: "none", background: "#fff", display: "block" }} />}
         </div>
       )}
-      {full && preview && createPortal(
+      {full && (preview || render) && createPortal(
         <div onClick={() => setFull(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 2800, display: "flex", flexDirection: "column", padding: 16, gap: 8 }}>
           <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", alignItems: "center", gap: 10, color: "#fff" }}>
             <b style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.name}</b>
@@ -520,8 +565,9 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
             <button onClick={() => setFull(false)} style={{ ...btn(), fontSize: 12, padding: "4px 10px" }}>✕ Закрити</button>
           </div>
           <div onClick={(e) => e.stopPropagation()} style={{ flex: 1, background: "#fff", borderRadius: "var(--r-lg)", overflow: "hidden" }}>
-            {kind === "image" ? <img src={preview} alt={file.name} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
-              : <iframe title={file.name} src={kind === "pdf" ? `${preview}#view=FitH&zoom=page-width` : preview} style={{ width: "100%", height: "100%", border: "none", display: "block" }} />}
+            {render ? <OfficeView r={render} height="100%" />
+              : kind === "image" ? <img src={preview!} alt={file.name} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
+              : <iframe title={file.name} src={kind === "pdf" ? `${preview}#view=FitH&zoom=page-width` : preview!} style={{ width: "100%", height: "100%", border: "none", display: "block" }} />}
           </div>
         </div>,
         document.body,
@@ -928,6 +974,94 @@ function AccessDialog({ folder, onClose, onSaved }: { folder: DocFolder; onClose
         </>
       )}
     </Modal>
+  );
+}
+
+/* ── Перегляд Word / Excel і підсвітка пошуку ──────────────────────────── */
+/** Та сама згортка, що на сервері (`core/docSearch.ts`): регістр, латинські двійники, апострофи; довжина не змінюється. */
+const HOMO: Record<string, string> = { a: "а", c: "с", e: "е", i: "і", o: "о", p: "р", x: "х", y: "у", k: "к", "’": "'", "ʼ": "'", "`": "'", "‘": "'" };
+function foldText(s: string): string {
+  let out = "";
+  for (const ch of s) { const lc = ch.toLocaleLowerCase("uk"); const one = lc.length === ch.length ? lc : ch; out += /\s/.test(one) ? " ".repeat(one.length) : (HOMO[one] ?? one); }
+  return out;
+}
+function Highlight({ text, q }: { text: string; q: string }) {
+  const terms = [...new Set(foldText(q).split(" ").filter((t) => t.length >= 2))];
+  const folded = foldText(text);
+  const marks: [number, number][] = [];
+  for (const t of terms) for (let i = folded.indexOf(t); i >= 0; i = folded.indexOf(t, i + t.length)) marks.push([i, i + t.length]);
+  marks.sort((a, b) => a[0] - b[0]);
+  const parts: React.ReactNode[] = []; let at = 0;
+  marks.forEach(([s, e], k) => { if (s < at) return; if (s > at) parts.push(text.slice(at, s)); parts.push(<mark key={k} style={{ background: "var(--warn-bg)", color: "var(--text)", borderRadius: 3, padding: "0 1px" }}>{text.slice(s, e)}</mark>); at = e; });
+  parts.push(text.slice(at));
+  return <>{parts}</>;
+}
+
+const colName = (i: number) => { let s = ""; for (let n = i + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s; return s; };
+const Runs = ({ runs }: { runs: DocxRun[] }) => <>{runs.map((r, i) => <span key={i} style={{ fontWeight: r.b ? 700 : undefined, fontStyle: r.i ? "italic" : undefined, textDecoration: r.u ? "underline" : undefined, whiteSpace: "pre-wrap" }}>{r.text}</span>)}</>;
+
+/**
+ * Word — «аркуш» для читання: заголовки, абзаци, списки, таблиці. Excel — аркуші вкладками й сітка
+ * з літерами колонок і номерами рядків. Текст ніколи не стає розміткою: React екранує все сам.
+ */
+function OfficeView({ r, height }: { r: DocRender; height: string }) {
+  const [sheet, setSheet] = useState(0);
+  const note: React.CSSProperties = { fontSize: 11.5, color: "var(--text-muted)", padding: "6px 12px", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" };
+  if (r.kind === "docx") {
+    const groups: React.ReactNode[] = [];
+    for (let i = 0; i < r.blocks.length; i++) {
+      const b = r.blocks[i];
+      if (b.t === "li") {
+        const items = []; while (i < r.blocks.length && r.blocks[i].t === "li") { items.push(<li key={i} style={{ margin: "2px 0" }}><Runs runs={(r.blocks[i] as { runs: DocxRun[] }).runs} /></li>); i++; } i--;
+        groups.push(<ul key={`u${i}`} style={{ margin: "6px 0", paddingLeft: 22 }}>{items}</ul>);
+      } else if (b.t === "h") {
+        const size = b.level === 1 ? 20 : b.level === 2 ? 17 : 15;
+        groups.push(<div key={i} role="heading" aria-level={b.level} style={{ fontSize: size, fontWeight: 700, margin: "16px 0 6px", lineHeight: 1.3 }}><Runs runs={b.runs} /></div>);
+      } else if (b.t === "table") {
+        groups.push(<div key={i} style={{ overflowX: "auto", margin: "8px 0" }}><table style={{ borderCollapse: "collapse", fontSize: 13, minWidth: "60%" }}><tbody>
+          {b.rows.map((row, ri) => <tr key={ri}>{row.map((c, ci) => <td key={ci} style={{ border: "1px solid #c9ccd2", padding: "4px 8px", verticalAlign: "top", whiteSpace: "pre-wrap", fontWeight: ri === 0 ? 600 : undefined, background: ri === 0 ? "#f3f4f6" : undefined }}>{c}</td>)}</tr>)}
+        </tbody></table></div>);
+      } else groups.push(<p key={i} style={{ margin: "0 0 8px", minHeight: b.runs.length ? undefined : 8 }}><Runs runs={b.runs} /></p>);
+    }
+    return (
+      <div style={{ height, display: "flex", flexDirection: "column", minHeight: 360 }}>
+        <div style={note}>Перегляд для читання: поля, колонтитули й розриви сторінок можуть відрізнятись від Word.{r.hasImages ? " Зображення тут не показуються." : ""}{r.truncated ? " Документ довгий — показано початок, повністю в Word." : ""}</div>
+        <div style={{ flex: 1, overflowY: "auto", background: "#e9ebef", padding: "16px 12px" }}>
+          <div style={{ background: "#fff", color: "#1c1e21", maxWidth: 820, margin: "0 auto", padding: "28px 36px", boxShadow: "0 1px 3px rgba(0,0,0,.15)", fontSize: 14, lineHeight: 1.55, fontFamily: "Calibri, 'Segoe UI', Arial, sans-serif" }}>
+            {groups.length ? groups : <p style={{ color: "#6b7280" }}>У документі немає тексту{r.hasImages ? " — лише зображення. Завантажте файл, щоб їх побачити" : ""}.</p>}
+          </div>
+        </div>
+      </div>
+    );
+  }
+  const sh = r.sheets[Math.min(sheet, r.sheets.length - 1)];
+  const cols = sh ? Math.max(0, ...sh.rows.map((x) => x.length)) : 0;
+  const cell: React.CSSProperties = { border: "1px solid #d4d7dd", padding: "3px 8px", whiteSpace: "nowrap", maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis" };
+  const head: React.CSSProperties = { ...cell, background: "#f1f3f5", color: "#5f6670", fontWeight: 600, textAlign: "center", position: "sticky", top: 0, zIndex: 1 };
+  return (
+    <div style={{ height, display: "flex", flexDirection: "column", minHeight: 360, background: "#fff", color: "#1c1e21" }}>
+      {r.sheets.length > 1 && (
+        <div role="tablist" style={{ display: "flex", gap: 4, padding: "6px 8px", borderBottom: "1px solid #d4d7dd", overflowX: "auto", background: "#f7f8fa" }}>
+          {r.sheets.map((s, i) => <button key={i} role="tab" aria-selected={i === sheet} onClick={() => setSheet(i)} style={{ border: "1px solid " + (i === sheet ? "#1f7a45" : "#d4d7dd"), background: i === sheet ? "#e7f4ec" : "#fff", color: i === sheet ? "#1f7a45" : "#1c1e21", fontWeight: i === sheet ? 700 : 400, borderRadius: 6, padding: "3px 10px", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>{s.name}</button>)}
+        </div>
+      )}
+      {sh?.truncated && <div style={{ ...note, background: "#fff8e6", color: "#8a5a00" }}>Показано перші {sh.rows.length} рядків і до 60 колонок із {sh.totalRows} × {sh.totalCols}. Повністю — в Excel.</div>}
+      <div style={{ flex: 1, overflow: "auto" }}>
+        {!sh || !sh.rows.length ? <p style={{ padding: 16, color: "#6b7280", fontSize: 13 }}>Аркуш порожній.</p> : (
+          <table style={{ borderCollapse: "collapse", fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>
+            <thead><tr><th style={{ ...head, left: 0, zIndex: 2 }} />{Array.from({ length: cols }, (_, i) => <th key={i} style={head}>{colName(i)}</th>)}</tr></thead>
+            <tbody>
+              {sh.rows.map((row, ri) => (
+                <tr key={ri}>
+                  <td style={{ ...head, top: undefined, position: "sticky", left: 0 }}>{ri + 1}</td>
+                  {Array.from({ length: cols }, (_, ci) => { const v = row[ci] ?? ""; return <td key={ci} title={v.length > 40 ? v : undefined} style={{ ...cell, textAlign: /^-?[\d.,\s]+$/.test(v) && v.trim() ? "right" : "left" }}>{v}</td>; })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
   );
 }
 

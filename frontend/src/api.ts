@@ -3047,6 +3047,22 @@ export async function saveDocFolderAccess(folderId: number, body: {
   roles: { key: string; canView: boolean; canUpload: boolean; canEdit: boolean; canPublish: boolean }[];
   grants: { userId: number; canView: boolean; canUpload: boolean; expiresAt: string | null }[];
 }): Promise<void> { await api.put(`/documents/access/${folderId}`, body); }
+/** 📄 Перегляд Word/Excel: структура, яку фронт малює сам (не HTML). */
+export type DocxRun = { text: string; b?: boolean; i?: boolean; u?: boolean };
+export type DocxBlock = { t: "p" | "li"; runs: DocxRun[] } | { t: "h"; level: 1 | 2 | 3; runs: DocxRun[] } | { t: "table"; rows: string[][] };
+export type DocRender =
+  | { kind: "docx"; version: number; blocks: DocxBlock[]; truncated: boolean; hasImages: boolean }
+  | { kind: "xlsx"; version: number; sheets: { name: string; rows: string[][]; totalRows: number; totalCols: number; truncated: boolean }[] };
+export async function fetchDocRender(fileId: number): Promise<DocRender> {
+  const { data } = await api.get<DocRender>(`/documents/file/${fileId}/render`);
+  return data;
+}
+/** 🔎 Пошук по тексту видимих документів; «не шукались» і «обробляються» — окремими числами. */
+export interface DocTextSearch { hits: { id: number; snippet: string; count: number }[]; searched: number; notSearchable: number; pending: number }
+export async function searchDocText(q: string): Promise<DocTextSearch> {
+  const { data } = await api.get<DocTextSearch>("/documents/search", { params: { q } });
+  return data;
+}
 /** 🔐 Власні права документа: по ролі — права папки і власний рядок (null = «як у папці»). */
 export interface DocFileAccess {
   applicable: boolean;

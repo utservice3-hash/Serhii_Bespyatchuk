@@ -21,7 +21,8 @@ export async function extractOne(r: Row): Promise<string> {
   const fmt = formatOf(r.name, r.mime);
   let res;
   try {
-    const buf = fmt === "pdf" ? Buffer.alloc(0) : await readFile(file);
+    // PDF читає pdftotext сам, а формат без тексту взагалі не відкриваємо: фото на десятки МБ читати нема навіщо.
+    const buf = fmt === "pdf" || fmt === "other" ? Buffer.alloc(0) : await readFile(file);
     res = await extractText(fmt, buf, file);
   } catch (e) {
     res = { status: "failed" as const, text: null, reason: `файл не прочитано: ${(e as Error).message.slice(0, 200)}` };
