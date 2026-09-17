@@ -311,6 +311,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/missed-calls/no-deal/list", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
+  // Динаміка (17.09.2026) — ТІ САМІ межі, що в екрана: той самий tab-гейт. Звіряє #449.
+  { method: "GET", path: "/api/dashboard/missed-calls/series?granularity=day", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/lead-recommendation", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["manager", "hr"] },
   // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника), ЗАДЕКЛАРОВАНА, А НЕ ДРЕЙФ.

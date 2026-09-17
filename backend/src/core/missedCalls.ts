@@ -1,7 +1,8 @@
 import { pool } from "../db/pool.js";
 import { DAY_BUCKETS, type DayBucket } from "./dayBuckets.js";
 import {
-  missedSummarySql, missedByManagerSql, foldManagerRows, missedByTeamSql, foldTeamRows,
+  missedSummarySql, missedByManagerSql, foldManagerRows, missedByTeamSql, foldTeamRows, missedSeriesSql, foldSeries,
+  type SeriesGranularity, type MissedSeries, type MissedSeriesRaw,
   missedListSql, noDealCountsSql, noDealListSql, nextStep, OWNERLESS_LABEL, capRows,
   type MissedScope, type MissedManagerRaw, type MissedManagerRow, type MissedTeamRow, type NextStep, type NoDealState,
 } from "./missedCallsRules.js";
@@ -67,6 +68,19 @@ Promise<{ rows: MissedManagerRow[]; total: MissedManagerRow }> {
     medianMin: x.median_min == null ? null : Math.round(Number(x.median_min)),
   }));
   return foldManagerRows(raw);
+}
+
+/**
+ * 📈 Ряди для графіка динаміки. `from` не задано — від ПЕРШОГО дзвінка в базі (історія з
+ * 01.09.2025), як «Усе» на сторінках Статистик.
+ */
+export async function missedSeries(granularity: SeriesGranularity, from: string | null, to: string, s: MissedScope = {}):
+Promise<{ from: string; to: string; series: MissedSeries[] }> {
+  const start = from ?? (await pool.query<{ d: string | null }>(
+    "SELECT to_char(min(calldate) AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS d FROM ringostat_calls")).rows[0]?.d ?? to;
+  const { sql, params } = missedSeriesSql(granularity, start, to, s);
+  const r = await pool.query<MissedSeriesRaw>(sql, params);
+  return { from: start, to, series: foldSeries(r.rows) };
 }
 
 /** Рядки команд блоку B — окремим запитом, бо медіана команди не складається з медіан людей. */

@@ -645,3 +645,77 @@ test("#461 ЖИВА БД: Σ відер = Σ рядків = всього, Σ к�
   if (skip) return t.skip(skip);
   assertInvariants(r, `жива БД ${day(7)}…${day(1)}`);
 });
+
+/**
+ * #472 — ДИНАМІКА: ряди з ТІЄЇ САМОЇ основи, що й плитки. Σ точок «усього» == «Пропущено» за той самий
+ * період; у кожній точці Σ серій == «усього»; тиждень — з понеділка за Києвом; зріз команди не несе
+ * «без відповідального» й чужих команд; невідома гранулярність — помилка, а не тихо «день».
+ */
+test("#472 ДИНАМІКА · ЖИВИЙ SQL: Σ точок = плитка, Σ серій = усього, тиждень за Києвом, зріз команди", async (t) => {
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const R = await import("./missedCallsRules.js");
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+    await c.query("INSERT INTO teams(id,name) VALUES (1,'РПК'),(2,'РНК') ON CONFLICT DO NOTHING");
+    await c.query(`INSERT INTO managers(id,name,team_id,is_active) VALUES (1,'Яцик',1,true),(3,'Мокляк',2,true),(4,'Без команди',NULL,true) ON CONFLICT DO NOTHING`);
+    let seq = 0;
+    const call = (at: string, type: string, disp: string, sec: number, mgr: number | null, phone: string) =>
+      c.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,manager_id,client_phone) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [`w${String(++seq)}`, at, type, disp, sec, mgr, phone]);
+    await call("2026-09-13 23:30:00+03", "in", "NO ANSWER", 0, 1, "A1");      // неділя 23:30 за Києвом — тиждень 07.09
+    await call("2026-09-14 00:30:00+03", "in", "NO ANSWER", 0, 3, "A2");      // понеділок 00:30 (ще неділя за UTC) — тиждень 14.09
+    await call("2026-09-14 00:40:00+03", "out", "ANSWERED", 30, 3, "A2");     // передзвін
+    await call("2026-09-15 10:00:00+03", "in", "BUSY", 0, 4, "A3");           // поза командами
+    await call("2026-09-15 11:00:00+03", "in", "NO ANSWER", 0, null, "A4");   // без відповідального
+    await call("2026-09-15 11:00:30+03", "transitin", "NO ANSWER", 0, null, "A4"); // його плече
+    await call("2026-09-15 12:00:00+03", "in", "ANSWERED", 60, 1, "A5");      // розмова — не пропущений
+
+    const run = async (g: "day" | "week" | "month", s: import("./missedCallsRules.js").MissedScope) => {
+      const q = R.missedSeriesSql(g, "2026-09-10", "2026-09-16", s);
+      return R.foldSeries((await c.query(q.sql, q.params)).rows as import("./missedCallsRules.js").MissedSeriesRaw[]);
+    };
+    const summary = async (s: import("./missedCallsRules.js").MissedScope) => {
+      const q = R.missedSummarySql("2026-09-10", "2026-09-16", s); return Number((await c.query(q.sql, q.params)).rows[0].missed);
+    };
+    for (const g of ["day", "week", "month"] as const) {
+      const ser = await run(g, {});
+      const total = ser.find((x) => x.key === "total");
+      assert.ok(total, `🔴 ${g}: немає серії «усього»`);
+      assert.equal(total.points.reduce((n, p) => n + p.missed, 0), await summary({}), `🔴 ${g}: Σ точок графіка ≠ плитці «Пропущено» за той самий період`);
+      for (const p of total.points) {
+        const sum = ser.filter((x) => x.key !== "total").reduce((n, x) => n + (x.points.find((q) => q.period === p.period)?.missed ?? 0), 0);
+        assert.equal(sum, p.missed, `🔴 ${g} ${p.period}: Σ серій (${String(sum)}) ≠ «усього» (${String(p.missed)})`);
+      }
+      assert.deepEqual(ser.map((x) => x.key)[0], "total", "🔴 «усього» не першою серією");
+      assert.deepEqual(ser.slice(-2).map((x) => x.key), ["noteam", "ownerless"], "🔴 «Поза командами» і «Без відповідального» не в кінці");
+    }
+    const week = (await run("week", {})).find((x) => x.key === "total")!;
+    assert.deepEqual(week.points.map((p) => [p.period, p.missed]), [["2026-09-07", 1], ["2026-09-14", 3]],
+      "🔴 тиждень не з понеділка за Києвом: дзвінок у понеділок 00:30 (неділя за UTC) ліг у попередній тиждень");
+    const day = (await run("day", {})).find((x) => x.key === "total")!;
+    assert.deepEqual(day.points.find((p) => p.period === "2026-09-14"), { period: "2026-09-14", missed: 1, callback: 1, clientSelf: 0, medianMin: 10 },
+      "🔴 точка дня не несе передзвону або медіани");
+    const team = await run("day", { teamId: 2 });
+    assert.deepEqual(team.map((x) => x.key), ["total", "team:2"], "🔴 зріз команди несе чужі команди або «без відповідального»");
+    assert.throws(() => R.missedSeriesSql("year" as "day", "2026-09-10", "2026-09-16", {}), /гранулярність/, "🔴 невідома гранулярність тихо стала «днем»");
+  } finally { await c.end(); scratch.dispose(); }
+});
+
+test("#473 ДИНАМІКА · РОУТ: 400 на невідому гранулярність, кінець — учора, межа як у вкладки", () => {
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "routes", "dashboard.ts"), "utf8");
+  const start = src.indexOf('dashboardRouter.get("/missed-calls/series"');
+  assert.ok(start > 0, "🔴 роуту динаміки немає");
+  // Коментарі вирізаються: у них цитується саме те, чого в коді бути не має.
+  const body = src.slice(start, src.indexOf("\n});\n", start)).replace(/\/\/[^\n]*/g, "");
+  assert.match(body, /res\.status\(400\)/, "🔴 невідома гранулярність не дає 400");
+  assert.match(body, /missedScopeFor\(req\.auth!, req\.query\)/, "🔴 роут динаміки живе повз кламп скоупу — менеджер побачить компанію");
+  assert.match(body, /dateParam\(req\.query\.to\) \?\? yesterday/, "🔴 кінець ряду не «вчора» — незакінчений сьогоднішній день читався б як провал");
+  assert.doesNotMatch(body, /\.\.\.s\b|\.\.\.p\b/, "🔴 відповідь розгортає обʼєкт ядра спредом (#17e2)");
+  const matrix = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "auth", "accessMatrix.ts"), "utf8");
+  assert.match(matrix, /path: "\/api\/dashboard\/missed-calls\/series\?granularity=day", cls: "GET"/, "🔴 роуту динаміки немає в матриці доступу");
+});

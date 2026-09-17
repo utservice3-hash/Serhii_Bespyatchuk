@@ -43,7 +43,7 @@ import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL,
   isPlannableClientKey, NOT_PLANNABLE_MSG, rosterWithPlans, splitUnattached, SAVE_SQL,
   OWNER_SQL, NO_OWNER_MSG } from "./clientPlanRules.js";
 import * as missedCalls from "../core/missedCalls.js";
-import { missedPeriod, missedScopeFor, ownerlessInScope, NO_DEAL_STATES, type NoDealState } from "../core/missedCallsRules.js";
+import { missedPeriod, missedScopeFor, ownerlessInScope, NO_DEAL_STATES, SERIES_GRANULARITIES, type NoDealState, type SeriesGranularity } from "../core/missedCallsRules.js";
 import * as reactivation from "../core/reactivation.js";
 import * as reactivationRules from "../core/reactivationRules.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
@@ -10029,6 +10029,31 @@ dashboardRouter.get("/missed-calls/no-deal", async (req, res) => {
   const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
   const scope = missedScopeFor(req.auth!, req.query);
   res.json({ period: { from, to }, counts: await missedCalls.noDealCounts(from, to, scope) });
+});
+
+/**
+ * 📈 ДИНАМІКА — ряди по днях / тижнях / місяцях для графіка, як на сторінках Статистик.
+ * Межа — той самий `pre("/api/dashboard/missed-calls")`, кламп — той самий `missedScopeFor`.
+ * Кінець за замовчуванням — ВЧОРА: сьогоднішній день ще не закінчився, і точка «сьогодні» читалась
+ * би як провал. Невідома гранулярність — 400, а не тихо «день».
+ */
+dashboardRouter.get("/missed-calls/series", async (req, res) => {
+  const granularity = String(req.query.granularity ?? "day");
+  if (!(SERIES_GRANULARITIES as readonly string[]).includes(granularity)) {
+    return res.status(400).json({ error: `Невідома гранулярність: очікується одна з ${SERIES_GRANULARITIES.join(", ")}` });
+  }
+  const yesterday = (() => { const d = new Date(`${kyivToday()}T00:00:00Z`); d.setUTCDate(d.getUTCDate() - 1); return d.toISOString().slice(0, 10); })();
+  const to = dateParam(req.query.to) ?? yesterday;
+  const scope = missedScopeFor(req.auth!, req.query);
+  const r = await missedCalls.missedSeries(granularity as SeriesGranularity, dateParam(req.query.from), to, scope);
+  res.json({
+    granularity, from: r.from, to: r.to, ownerlessInScope: ownerlessInScope(scope),
+    // Явний перелік полів, а не `...s` (#17e2).
+    series: r.series.map((s) => ({
+      key: s.key, name: s.name,
+      points: s.points.map((p) => ({ period: p.period, missed: p.missed, callback: p.callback, clientSelf: p.clientSelf, medianMin: p.medianMin })),
+    })),
+  });
 });
 
 /** Розкриття одного стану блоку D. Невідомий стан — 400, а не тихий порожній список. */

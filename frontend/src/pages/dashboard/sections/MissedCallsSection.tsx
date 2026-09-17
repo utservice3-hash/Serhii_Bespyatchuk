@@ -1,13 +1,16 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Brush } from "recharts";
 import {
-  fetchMissedCalls, fetchMissedList, fetchNoDeal, fetchNoDealList,
+  fetchMissedCalls, fetchMissedList, fetchNoDeal, fetchNoDealList, fetchMissedSeries,
+  type MissedSeriesGranularity, type MissedSeriesResp,
   type MissedCallsResp, type MissedDayBucket, type MissedManagerRow, type MissedListResp,
   type MissedNextStep, type NoDealCounts, type NoDealState, type NoDealListRow, type MissedTeamRow,
 } from "../../../api";
 import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
-import { missedDefaultPeriod, groupByTeam, clientCell, clampListDay } from "../missedCallsView";
+import { missedDefaultPeriod, groupByTeam, clientCell, clampListDay, SERIES_METRICS, type SeriesMetric } from "../missedCallsView";
+import { RANGES, MIN_WIN, rangeWindow, shortDate, COLORS } from "./StatisticsChartsSection";
 import { ClientCardPanel } from "./ClientCardPanel";
 
 /**
@@ -102,7 +105,7 @@ export function MissedCallsSection({ canOpenClient }: { canOpenClient: boolean }
 
   return (
     <>
-      <div className="chart-card" style={{ marginBottom: 16 }}>
+      <div className="chart-card">
         {navBar}
         <h3 style={{ margin: "0 0 4px", display: "flex", alignItems: "center", gap: 8 }}>
           📵 Пропущені дзвінки
@@ -146,7 +149,12 @@ export function MissedCallsSection({ canOpenClient }: { canOpenClient: boolean }
         </p>
       </div>
 
-      <div className="chart-card">
+      {/* 🔝 «Дзвінок був, а угоди немає» — ОДРАЗУ ПІД ПІДСУМКОМ (прохання власника 17.09.2026): унизу
+          його не було видно за довгою таблицею й списком дзвінків. Далі — динаміка, як на Статистиках. */}
+      <NoDealBlock from={d.period.from} to={d.period.to} />
+      <MissedDynamicsBlock />
+
+      <div className="chart-card" style={{ marginTop: 16 }}>
         <h3 style={{ margin: "0 0 12px" }}>По менеджерах</h3>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
@@ -197,7 +205,6 @@ export function MissedCallsSection({ canOpenClient }: { canOpenClient: boolean }
       </div>
 
       <MissedListBlock from={d.period.from} to={d.period.to} day={listDay} setDay={setListDay} canOpenClient={canOpenClient} />
-      <NoDealBlock from={d.period.from} to={d.period.to} />
     </>
   );
 }
@@ -219,6 +226,186 @@ function MgrRow({ r, cell, num, indent = false }: {
       <td style={cell}>{num(r.medianMin)}</td>
       <td style={cell}>{num(r.clientSelf)}</td>
     </tr>
+  );
+}
+
+/**
+ * 📈 ДИНАМІКА — «статистика по днях», як на сторінках Статистик (прохання власника 17.09.2026):
+ * показник чипом, День / Тиждень / Місяць, діапазон 3м / 6м / 12м / Усе, повзунок і зум протягуванням,
+ * серії-легенда (клік — увімк/вимк, подвійний — лише ця), рядок підсумків вікна.
+ *
+ * Від навігатора періоду вгорі НЕ залежить свідомо: графік — це історія, а навігатор обирає зріз для
+ * таблиць. Завантажується вся історія один раз на гранулярність (рік по днях — ~1 с на проді), а
+ * діапазон лише зсуває вікно — рівно як на Статистиках. Числа — з того самого ядра, що й плитки
+ * (Σ точок за період == «Пропущено» за той самий період; гейт #472).
+ */
+function MissedDynamicsBlock() {
+  const [gran, setGran] = useState<MissedSeriesGranularity>("day");
+  const [metricKey, setMetricKey] = useState<SeriesMetric["key"]>("missed");
+  const [range, setRange] = useState("3м");
+  const [resp, setResp] = useState<MissedSeriesResp | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const [win, setWin] = useState<{ lo: number; hi: number; key: string } | null>(null);
+  const [drag, setDrag] = useState<{ a: string | null; b: string | null }>({ a: null, b: null });
+  const metric = SERIES_METRICS.find((x) => x.key === metricKey) ?? SERIES_METRICS[0];
+
+  useEffect(() => {
+    let alive = true;
+    setResp(null); setErr(null); setWin(null);
+    fetchMissedSeries({ granularity: gran })
+      .then((r) => { if (alive) setResp(r); })
+      .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
+    return () => { alive = false; };
+  }, [gran]);
+
+  const seriesList = resp?.series ?? [];
+  const nameOf = (s: MissedSeriesResp["series"][number]) => (s.key === "total" ? "Усього" : s.name ?? s.key);
+  const rows = useMemo(() => {
+    if (!resp) return [] as Record<string, string | number | null>[];
+    const periods = [...new Set(resp.series.flatMap((s) => s.points.map((p) => p.period)))].sort();
+    const map = new Map(periods.map((p) => [p, { period: p } as Record<string, string | number | null>]));
+    resp.series.forEach((s, i) => s.points.forEach((p) => { map.get(p.period)![`s${i}`] = metric.value(p); }));
+    return periods.map((p) => map.get(p)!);
+  }, [resp, metric]);
+
+  const winKey = `${range}:${rows.length}:${gran}`;
+  const eff = useMemo(() => {
+    if (!rows.length) return { lo: 0, hi: 0 };
+    if (win && win.key === winKey) {
+      const lo = Math.max(0, Math.min(win.lo, win.hi, rows.length - 1));
+      const hi = Math.max(0, Math.min(Math.max(win.lo, win.hi), rows.length - 1));
+      return { lo, hi };
+    }
+    return rangeWindow(rows as { period: string }[], range);
+  }, [rows, range, win, winKey]);
+
+  const visible = seriesList.map((s, i) => ({ s, i })).filter(({ s }) => !hidden.has(s.key));
+  const toggle = (k: string) => setHidden((h) => { const n = new Set(h); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const isolate = (k: string) => setHidden(new Set(seriesList.map((s) => s.key).filter((x) => x !== k)));
+
+  // Підсумки вікна — по ПЕРШІЙ видимій серії, як на Статистиках; «за вікно» — зі сум, не середнім.
+  const stat = useMemo(() => {
+    const first = visible[0]; if (!first || !rows.length) return null;
+    const lo = String(rows[eff.lo]?.period ?? ""), hi = String(rows[eff.hi]?.period ?? "");
+    const pts = first.s.points.filter((p) => p.period >= lo && p.period <= hi);
+    const vals = pts.map((p) => ({ p: p.period, v: metric.value(p) })).filter((x): x is { p: string; v: number } => x.v != null);
+    if (!vals.length) return null;
+    const now = vals[vals.length - 1], prev = vals.length > 1 ? vals[vals.length - 2] : null;
+    const min = vals.reduce((a, b) => (b.v < a.v ? b : a)), max = vals.reduce((a, b) => (b.v > a.v ? b : a));
+    return { name: nameOf(first.s), now, total: metric.total(pts), min, max,
+      delta: prev && prev.v ? ((now.v - prev.v) / Math.abs(prev.v)) * 100 : null };
+  }, [visible, rows, eff.lo, eff.hi, metric]);
+
+  const f = (v: number | null) => (v == null ? "—" : `${metric.unit === "%" ? v.toFixed(1) : Math.round(v).toLocaleString("uk-UA")}${metric.unit ? ` ${metric.unit}` : ""}`);
+  const onDragEnd = () => {
+    if (drag.a && drag.b && drag.a !== drag.b) {
+      const ia = rows.findIndex((r) => r.period === drag.a), ib = rows.findIndex((r) => r.period === drag.b);
+      const lo = Math.min(ia, ib); let hi = Math.max(ia, ib);
+      if (hi - lo < MIN_WIN) hi = Math.min(rows.length - 1, lo + MIN_WIN);
+      setWin({ lo, hi, key: winKey });
+    }
+    setDrag({ a: null, b: null });
+  };
+  const pill = (active: boolean): React.CSSProperties => ({ fontSize: 12.5, fontWeight: 700, padding: "6px 11px", borderRadius: 8, cursor: "pointer",
+    border: "1px solid " + (active ? "#2f6fdb" : "var(--border)"), background: active ? "rgba(47,111,219,0.1)" : "var(--card-bg)", color: active ? "#2f6fdb" : "var(--text)" });
+  const MUTED = "var(--text-muted)";
+
+  return (
+    <div className="chart-card" style={{ marginTop: 16 }}>
+      <h3 style={{ margin: "0 0 10px", display: "flex", alignItems: "center", gap: 8 }}>
+        📈 Динаміка
+        <InfoHint text={"Пропущені по днях, тижнях чи місяцях за всю історію дзвінків (з 01.09.2025). Остання точка — вчора: частка «не передзвонили» за останню добу ще може зменшитись, доки не мине 24 години на передзвін. "
+          + "Серії — уся компанія (або ваш зріз), кожна команда за поточним складом, «Поза командами» і «Без відповідального»; у кожній точці Σ серій = «Усього»."} />
+      </h3>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {SERIES_METRICS.map((mm) => (
+            <button key={mm.key} type="button" onClick={() => setMetricKey(mm.key)} title={mm.hint}
+              style={{ fontSize: 13, fontWeight: 650, padding: "7px 13px", borderRadius: 20, cursor: "pointer",
+                border: metricKey === mm.key ? "1px solid #2f6fdb" : "1px solid var(--border)",
+                background: metricKey === mm.key ? "rgba(47,111,219,0.1)" : "var(--card-bg)", color: metricKey === mm.key ? "#2f6fdb" : "var(--text)" }}>
+              {mm.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 9, overflow: "hidden" }}>
+            {(["day", "week", "month"] as const).map((g) => (
+              <button key={g} type="button" onClick={() => setGran(g)} style={{ fontSize: 12.5, fontWeight: 700, padding: "6px 12px", cursor: "pointer", border: "none",
+                background: gran === g ? "#1f2330" : "var(--card-bg)", color: gran === g ? "#fff" : "var(--text)" }}>
+                {g === "day" ? "День" : g === "week" ? "Тиждень" : "Місяць"}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "inline-flex", gap: 4 }}>
+            {Object.keys(RANGES).map((r) => (
+              <button key={r} type="button" onClick={() => { setRange(r); setWin(null); }} style={pill(range === r)}>{r}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {err && <p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>}
+      {!err && !resp && <p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>}
+      {resp && rows.length === 0 && <p style={{ margin: 0, color: MUTED }}>Дзвінків за історію немає.</p>}
+      {resp && rows.length > 0 && (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+              {seriesList.map((s, i) => (
+                <span key={s.key} onClick={() => toggle(s.key)} onDoubleClick={() => isolate(s.key)}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 650, cursor: "pointer", opacity: hidden.has(s.key) ? 0.4 : 1, userSelect: "none" }}>
+                  <span style={{ width: 11, height: 11, borderRadius: "50%", background: COLORS[i % COLORS.length] }} />
+                  {nameOf(s)}
+                </span>
+              ))}
+            </div>
+            <span style={{ fontSize: 11.5, color: MUTED }}>клік — увімк/вимк · подвійний — тільки ця серія · тягни по графіку — зум</span>
+          </div>
+          <div style={{ userSelect: "none" }}>
+            <ResponsiveContainer width="100%" height={320}>
+              <LineChart data={rows} margin={{ top: 12, right: 24, bottom: 4, left: 8 }}
+                onMouseDown={(e: { activeLabel?: string | number } | null) => { if (e?.activeLabel != null) setDrag({ a: String(e.activeLabel), b: String(e.activeLabel) }); }}
+                onMouseMove={(e: { activeLabel?: string | number } | null) => { if (e?.activeLabel != null && drag.a) { const l = String(e.activeLabel); setDrag((dd) => ({ ...dd, b: l })); } }}
+                onMouseUp={onDragEnd}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                <XAxis dataKey="period" tickFormatter={shortDate} tick={{ fontSize: 11, fill: MUTED }} minTickGap={40} axisLine={{ stroke: "var(--border)" }} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: MUTED }} axisLine={false} tickLine={false} width={48} />
+                <Tooltip formatter={(v: unknown) => f(v == null ? null : Number(v))} labelFormatter={(l: unknown) => shortDate(String(l))}
+                  contentStyle={{ fontSize: 12, borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)" }} />
+                {visible.map(({ s, i }) => (
+                  <Line key={s.key} type="monotone" dataKey={`s${i}`} name={nameOf(s)} stroke={COLORS[i % COLORS.length]}
+                    strokeWidth={s.key === "total" ? 2.4 : 1.6} dot={false} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
+                ))}
+                {drag.a && drag.b && <ReferenceArea x1={drag.a} x2={drag.b} fill="#2f6fdb" fillOpacity={0.08} />}
+                <Brush dataKey="period" height={26} travellerWidth={9} stroke="#94a3b8" tickFormatter={shortDate}
+                  startIndex={eff.lo} endIndex={eff.hi} gap={1}
+                  onChange={(e: { startIndex?: number; endIndex?: number }) => {
+                    if (e?.startIndex == null || e.endIndex == null) return;
+                    let lo = e.startIndex, hi = e.endIndex;
+                    if (lo === eff.lo && hi === eff.hi) return;
+                    if (hi - lo < MIN_WIN) { if (lo + MIN_WIN <= rows.length - 1) hi = lo + MIN_WIN; else lo = Math.max(0, hi - MIN_WIN); }
+                    setWin({ lo, hi, key: winKey });
+                  }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          {stat ? (
+            <div style={{ display: "flex", gap: 26, flexWrap: "wrap", alignItems: "center", paddingTop: 10, borderTop: "1px solid var(--border)", marginTop: 6, fontSize: 13 }}>
+              <span style={{ color: MUTED }}>{stat.name}:</span>
+              <span>Остання точка: <b>{f(stat.now.v)}</b> ({shortDate(stat.now.p)})</span>
+              <span style={{ color: MUTED }}>{metric.key === "missed" ? "Разом за вікно" : "За вікно"}: <b style={{ color: "var(--text)" }}>{f(stat.total)}</b></span>
+              <span style={{ color: MUTED }}>Мін: <b style={{ color: "var(--text)" }}>{f(stat.min.v)}</b> ({shortDate(stat.min.p)})</span>
+              <span style={{ color: MUTED }}>Макс: <b style={{ color: "var(--text)" }}>{f(stat.max.v)}</b> ({shortDate(stat.max.p)})</span>
+              {stat.delta != null && (
+                <span style={{ color: MUTED }}>Δ до попер.: <b style={{ color: "var(--text)" }}>{stat.delta >= 0 ? "▲" : "▼"} {Math.abs(stat.delta).toFixed(1)}%</b></span>
+              )}
+            </div>
+          ) : <div style={{ padding: "12px 0", color: MUTED, fontSize: 13 }}>У вікні немає точок для цієї серії.</div>}
+        </>
+      )}
+    </div>
   );
 }
 

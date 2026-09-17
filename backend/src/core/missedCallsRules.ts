@@ -258,6 +258,82 @@ export function missedByTeamSql(from: string, to: string, s: MissedScope): { sql
   return { sql, params };
 }
 
+/* ═══════════════════════ ДИНАМІКА (17.09.2026, прохід «статистика по днях») ═══════════════════════ */
+
+export const SERIES_GRANULARITIES = ["day", "week", "month"] as const;
+export type SeriesGranularity = (typeof SERIES_GRANULARITIES)[number];
+
+/**
+ * 📈 РЯДИ «ПРОПУЩЕНІ ПО ДНЯХ / ТИЖНЯХ / МІСЯЦЯХ» — для графіка, як на сторінках Статистик.
+ *
+ * 🔴 ТА САМА ОСНОВА, ЩО Й ПЛИТКИ (`baseCte`): склейка плечей, вердикт першого плеча, передзвін у
+ * 24 год, скоуп. Інакше сума точок графіка за місяць розійшлась би з плиткою «Пропущено» за той
+ * самий місяць — два числа одного показника на одному екрані.
+ *
+ * Серії: `total` (увесь зріз), кожна команда (`team:<id>`), «Поза командами» (`noteam`) і «Без
+ * відповідального» (`ownerless`) — ОДНИМ запитом через GROUPING SETS, тож Σ серій == `total` у кожній
+ * точці за побудовою. Команда — ПОТОЧНА, як у скоупі тімліда. Тиждень починається з понеділка,
+ * межі — за Києвом.
+ */
+export function missedSeriesSql(granularity: SeriesGranularity, from: string, to: string, s: MissedScope): { sql: string; params: unknown[] } {
+  if (!(SERIES_GRANULARITIES as readonly string[]).includes(granularity)) throw new Error(`невідома гранулярність: ${String(granularity)}`);
+  const { cte, params } = baseCte(from, to, s);
+  const m = missedDispSql();
+  const sql = `${cte},
+    r AS (
+      SELECT to_char(date_trunc('${granularity}', (w.calldate AT TIME ZONE 'Europe/Kyiv')), 'YYYY-MM-DD') AS period,
+             CASE WHEN w.manager_id IS NULL THEN 'ownerless'
+                  WHEN mg.team_id IS NULL THEN 'noteam'
+                  ELSE 'team:' || mg.team_id::text END AS skey,
+             CASE WHEN w.manager_id IS NULL THEN '${OWNERLESS_LABEL}'
+                  WHEN mg.team_id IS NULL THEN '${NO_TEAM_LABEL}'
+                  ELSE COALESCE(t.name, 'Команда #' || mg.team_id::text) END AS sname,
+             w.calldate, w.cb_at, w.cs_at
+        FROM withNext w
+        LEFT JOIN managers mg ON mg.id = w.manager_id
+        LEFT JOIN teams t ON t.id = mg.team_id
+       WHERE ${m}
+    )
+    SELECT period,
+           CASE WHEN GROUPING(skey) = 1 THEN 'total' ELSE skey END AS skey,
+           CASE WHEN GROUPING(skey) = 1 THEN NULL ELSE MAX(sname) END AS sname,
+           COUNT(*)::int AS missed,
+           COUNT(*) FILTER (WHERE cb_at IS NOT NULL)::int AS callback,
+           COUNT(*) FILTER (WHERE cs_at IS NOT NULL)::int AS client_self,
+           ${MEDIAN_MIN_SQL} AS median_min
+      FROM r
+     GROUP BY GROUPING SETS ((period), (period, skey))
+     ORDER BY period, skey`;
+  return { sql, params };
+}
+
+export interface MissedSeriesRaw {
+  period: string; skey: string; sname: string | null; missed: number; callback: number; client_self: number; median_min: string | number | null;
+}
+export interface MissedSeriesPoint { period: string; missed: number; callback: number; clientSelf: number; medianMin: number | null }
+export interface MissedSeries { key: string; name: string | null; points: MissedSeriesPoint[] }
+
+/**
+ * Рядки SQL → серії графіка. Порядок стабільний і змістовний: «усього» першою, команди за
+ * спаданням пропущених за весь ряд, «Поза командами» і «Без відповідального» — в кінці, як у
+ * таблиці B. Медіана округлюється до хвилини тут, один раз.
+ */
+export function foldSeries(raw: MissedSeriesRaw[]): MissedSeries[] {
+  const by = new Map<string, MissedSeries>();
+  for (const r of raw) {
+    const s = by.get(r.skey) ?? { key: r.skey, name: r.skey === "total" ? null : r.sname, points: [] };
+    s.points.push({
+      period: r.period, missed: Number(r.missed), callback: Number(r.callback), clientSelf: Number(r.client_self),
+      medianMin: r.median_min == null ? null : Math.round(Number(r.median_min)),
+    });
+    by.set(r.skey, s);
+  }
+  const rank = (s: MissedSeries): number => (s.key === "total" ? 0 : s.key === "noteam" ? 2 : s.key === "ownerless" ? 3 : 1);
+  const sum = (s: MissedSeries): number => s.points.reduce((n, p) => n + p.missed, 0);
+  for (const s of by.values()) s.points.sort((a, b) => a.period.localeCompare(b.period));
+  return [...by.values()].sort((a, b) => rank(a) - rank(b) || sum(b) - sum(a) || String(a.name).localeCompare(String(b.name), "uk"));
+}
+
 /** Підпис групи менеджерів без команди. Невідоме називає себе словами (правило фронту). */
 export const NO_TEAM_LABEL = "Поза командами";
 

@@ -29,6 +29,33 @@ export function clampListDay(day: string | null, from: string, to: string, today
   return today >= from ? today : from;
 }
 
+/**
+ * 📈 ПОКАЗНИКИ ГРАФІКА ДИНАМІКИ. Частки рахуються з лічильників КОЖНОЇ точки, а підсумок вікна —
+ * зі СУМ (Σ не передзвонених ÷ Σ пропущених), не середнім відсотків: день із двома дзвінками не
+ * може важити як день із сотнею. Медіана не усереднюється взагалі — у підсумку вікна її немає.
+ */
+export interface SeriesPointLike { missed: number; callback: number; clientSelf: number; medianMin: number | null }
+export interface SeriesMetric {
+  key: "missed" | "noCallbackPct" | "medianMin" | "clientSelfPct";
+  label: string; unit: "" | "%" | "хв"; hint: string;
+  value: (p: SeriesPointLike) => number | null;
+  /** Підсумок вікна; `null` — показник не агрегується (медіана). */
+  total: (ps: SeriesPointLike[]) => number | null;
+}
+const pctOf = (part: number, whole: number): number | null => (whole > 0 ? Math.round((part / whole) * 1000) / 10 : null);
+export const SERIES_METRICS: SeriesMetric[] = [
+  { key: "missed", label: "Пропущено", unit: "", hint: "Пропущені вхідні: без розмови, NO ANSWER або BUSY, плечі одного дзвінка склеєні.",
+    value: (p) => p.missed, total: (ps) => ps.reduce((n, p) => n + p.missed, 0) },
+  { key: "noCallbackPct", label: "Не передзвонили, %", unit: "%", hint: "Частка пропущених, на які за 24 год не було жодного вихідного на той самий номер. Ціль ТЗ рахується саме в цих термінах.",
+    value: (p) => pctOf(p.missed - p.callback, p.missed),
+    total: (ps) => pctOf(ps.reduce((n, p) => n + p.missed - p.callback, 0), ps.reduce((n, p) => n + p.missed, 0)) },
+  { key: "medianMin", label: "Медіана передзвону, хв", unit: "хв", hint: "Медіана часу від пропущеного до першого вихідного — окремо в кожній точці; медіани не усереднюються.",
+    value: (p) => p.medianMin, total: () => null },
+  { key: "clientSelfPct", label: "Клієнт передзвонив сам, %", unit: "%", hint: "Частка пропущених, де клієнт сам набрав знову й дочекався відповіді. Не зараховується як наш передзвін.",
+    value: (p) => pctOf(p.clientSelf, p.missed),
+    total: (ps) => pctOf(ps.reduce((n, p) => n + p.clientSelf, 0), ps.reduce((n, p) => n + p.missed, 0)) },
+];
+
 export interface TeamLike { teamId: number | null }
 export interface PersonLike { managerId: number | null; teamId: number | null }
 

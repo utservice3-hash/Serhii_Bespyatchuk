@@ -229,6 +229,18 @@ export async function fetchMissedCalls(params: { from: string; to: string }): Pr
   return data;
 }
 
+/** 📈 Динаміка: ряди по днях / тижнях / місяцях. `key`: total | team:<id> | noteam | ownerless. */
+export type MissedSeriesGranularity = "day" | "week" | "month";
+export interface MissedSeriesPoint { period: string; missed: number; callback: number; clientSelf: number; medianMin: number | null }
+export interface MissedSeriesResp {
+  granularity: MissedSeriesGranularity; from: string; to: string; ownerlessInScope: boolean;
+  series: { key: string; name: string | null; points: MissedSeriesPoint[] }[];
+}
+export async function fetchMissedSeries(params: { granularity: MissedSeriesGranularity }): Promise<MissedSeriesResp> {
+  const { data } = await api.get<MissedSeriesResp>("/dashboard/missed-calls/series", { params });
+  return data;
+}
+
 /** Блок C. Типи — дзеркало `core/missedCalls.ts` (`MissedListRow`) + `dealUrl` з роуту. */
 export type MissedNextStep = "callback_talked" | "callback_no_answer" | "client_self" | "nothing";
 export interface MissedListRow {

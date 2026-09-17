@@ -118,7 +118,10 @@ test("#463 ПЕРІОД: дефолт «вчора» за Києвом, наві
   assert.match(sec, /const \{ from, to \} = periodOf\(nav\)/, "🔴 запити йдуть не з періоду навігатора");
   const dash = stripComments(readFileSync(FE("pages/Dashboard.tsx"), "utf8"));
   // Гонка: пізня відповідь за СТАРИЙ період не перезаписує новий — у всіх чотирьох запитах вкладки.
-  assert.equal((sec.match(/if \(alive\) set/g) ?? []).length >= 4 && (sec.match(/return \(\) => \{ alive = false; \};/g) ?? []).length, 4,
+  // Від предмета, а не від числа: кожен запит вкладки має свій захист від гонки.
+  const fetches = (sec.match(/\bfetch(MissedCalls|MissedList|NoDeal|NoDealList|MissedSeries)\(/g) ?? []).length;
+  assert.ok(fetches >= 5, `🔴 знайдено лише ${String(fetches)} запитів вкладки — розбір зламався`);
+  assert.equal((sec.match(/return \(\) => \{ alive = false; \};/g) ?? []).length, fetches,
     "🔴 запит вкладки без захисту від гонки: відповідь за старий період перезапише новий");
   // День списку — не майбутній і не скидається на кожному запиті.
   const VD = await load<ViewDayMod>("pages/dashboard/missedCallsView.ts", { "./periodRules": periodUrl });
@@ -168,4 +171,35 @@ test("#464 КОМАНДИ Й КЛІЄНТ: розкладка без втрат,
   const dash = stripComments(readFileSync(FE("pages/Dashboard.tsx"), "utf8"));
   assert.match(dash, /<MissedCallsSection canOpenClient=\{!!screens\?\.includes\("loyalty"\)\} \/>/,
     "🔴 право на картку не за вкладкою «Клієнти», на якій стоїть роут картки");
+});
+
+/**
+ * #474 — ДИНАМІКА НА ФРОНТІ Й ПОРЯДОК БЛОКІВ (прохання власника 17.09.2026).
+ * Частки точки — з її лічильників; підсумок вікна — зі СУМ, не середнім відсотків; медіана не
+ * усереднюється. «Дзвінок був, а угоди немає» — одразу під підсумком, а не під довгим списком.
+ * Діапазони й вікно — ті самі функції, що на Статистиках, а не копія.
+ */
+test("#474 ДИНАМІКА: частки зі сум, медіана не усереднюється; «угоди немає» нагорі; логіка Статистик без копії", async () => {
+  const periodUrl = await transpile("pages/dashboard/periodRules.ts");
+  const V = await load<{ SERIES_METRICS: { key: string; value: (p: object) => number | null; total: (ps: object[]) => number | null }[] }>(
+    "pages/dashboard/missedCallsView.ts", { "./periodRules": periodUrl });
+  const m = (k: string) => V.SERIES_METRICS.find((x) => x.key === k)!;
+  const pts = [{ missed: 2, callback: 0, clientSelf: 0, medianMin: null }, { missed: 100, callback: 80, clientSelf: 10, medianMin: 12 }];
+  assert.equal(m("noCallbackPct").value(pts[0]), 100);
+  assert.equal(m("noCallbackPct").total(pts), 21.6, "🔴 «не передзвонили» за вікно — не Σ не передзвонених ÷ Σ пропущених (22/102); середнє відсотків дало б 60%");
+  assert.equal(m("noCallbackPct").value({ missed: 0, callback: 0, clientSelf: 0, medianMin: null }), null, "🔴 день без пропущених показано як 0%, а не «немає даних»");
+  assert.equal(m("medianMin").total(pts), null, "🔴 медіану за вікно усереднено з медіан точок");
+  assert.equal(m("missed").total(pts), 102);
+  assert.equal(m("clientSelfPct").total(pts), 9.8);
+
+  const sec = stripComments(readFileSync(FE("pages/dashboard/sections/MissedCallsSection.tsx"), "utf8"));
+  const iNoDeal = sec.indexOf("<NoDealBlock "), iDyn = sec.indexOf("<MissedDynamicsBlock"), iMgr = sec.indexOf("По менеджерах"), iList = sec.indexOf("<MissedListBlock ");
+  assert.ok(iNoDeal > 0 && iDyn > 0 && iMgr > 0 && iList > 0, "🔴 на вкладці бракує блоку");
+  assert.ok(iNoDeal < iMgr && iNoDeal < iList, "🔴 «Дзвінок був, а угоди немає» знову під таблицею чи списком — його не видно без прокрутки");
+  assert.ok(iDyn < iMgr, "🔴 динаміка опинилась під довгими таблицями");
+  assert.equal((sec.match(/<NoDealBlock /g) ?? []).length, 1, "🔴 блок «угоди немає» намальовано двічі");
+  assert.match(sec, /import \{ RANGES, MIN_WIN, rangeWindow, shortDate, COLORS \} from "\.\/StatisticsChartsSection"/,
+    "🔴 діапазони й вікно графіка не зі Статистик — друга копія логіки розійдеться з першою");
+  assert.doesNotMatch(sec, /const RANGES|function rangeWindow/, "🔴 у вкладці завелась власна копія діапазонів");
+  assert.match(sec, /fetchMissedSeries\(\{ granularity: gran \}\)/, "🔴 графік не тягне ряди з роуту динаміки");
 });
