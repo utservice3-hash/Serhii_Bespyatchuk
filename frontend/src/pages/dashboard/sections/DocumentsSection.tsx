@@ -173,6 +173,31 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
     regs: visibleAll.filter((f) => f.ack.required && f.ack.mine === "pending").length,
     review: visibleAll.filter((f) => f.signature.kind === "review").length,
   };
+  // Папки для розділу — рахуються для КОЖНОГО розділу окремо, щоб згорнутий список не змінював висоту
+  // при перемиканні (стрибки навігації, власник 17.09.2026). Дії з папкою — іконками в тому ж рядку.
+  const folderRows = (k: Shelf) => {
+    const counts = new Map<number | null, number>();
+    visibleAll.forEach((f) => { if (shelfOf(f) === k) counts.set(f.folderId, (counts.get(f.folderId) ?? 0) + 1); });
+    return [...tree.folders.filter((f) => f.parentId == null), null].map((f) => {
+      const id = f?.id ?? null; const n = counts.get(id) ?? 0; if (!n) return null;
+      const on = shelf === k && folderFilter === (f ? id : "none");
+      const icon: React.CSSProperties = { border: "none", background: "transparent", cursor: "pointer", color: "var(--text-muted)", fontSize: 12, width: 22, height: 22, padding: 0, flex: "0 0 auto" };
+      return (
+        <div key={f?.id ?? "none"} style={{ display: "flex", alignItems: "center", borderRadius: "var(--r-md)", background: on ? "var(--surface-2)" : "transparent" }}>
+          <button style={{ ...subBtn(on), background: "transparent", flex: 1, minWidth: 0 }} onClick={() => { setFolderFilter(on ? "all" : (f ? id : "none")); setInTrash(false); setNarrowPane("list"); }} title={f ? f.name : "Без папки"}>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f ? f.name.replace(/^\d+\.\s*/, "") : "Без папки"}</span>{!(on && f && viewer.canManageAccess) && <span style={cnt(n)}>{n}</span>}
+          </button>
+          {on && f && viewer.canManageAccess && (
+            <>
+              <button title="Доступи до папки" style={icon} onClick={() => setAccessFolder(f)}>⚙</button>
+              <button title="Перейменувати" style={icon} onClick={() => { const nn = window.prompt("Нова назва папки:", f.name)?.trim(); if (nn && nn !== f.name) void renameDocFolder(f.id, nn).then(load).catch((e) => setToast(errOf(e, "Не перейменовано"))); }}>✎</button>
+              <button title="Прибрати папку (файли лишаються на диску)" style={icon} onClick={() => { if (window.confirm(`Прибрати папку «${f.name}»? Її документи зникнуть з екрана; файли на диску лишаються.`)) void deleteDocFolder(f.id).then(load).catch((e) => setToast(errOf(e, "Не вдалося"))); }}>✕</button>
+            </>
+          )}
+        </div>
+      );
+    });
+  };
   const paneH = "calc(100vh - 150px)";
   const navBtn = (on: boolean): React.CSSProperties => ({ display: "flex", alignItems: "center", gap: 8, width: "100%", border: "none", textAlign: "left", padding: "8px 10px", borderRadius: "var(--r-lg)", cursor: "pointer", fontSize: "var(--fs-base)", background: on ? "var(--brand)" : "transparent", color: on ? "#fff" : "var(--text)", fontWeight: on ? 600 : 400 });
   const subBtn = (on: boolean): React.CSSProperties => ({ display: "flex", alignItems: "center", gap: 6, width: "100%", border: "none", textAlign: "left", padding: "6px 10px 6px 26px", borderRadius: "var(--r-md)", cursor: "pointer", fontSize: "var(--fs-13)", background: on ? "var(--surface-2)" : "transparent", color: "var(--text)", fontWeight: on ? 600 : 400 });
@@ -200,23 +225,17 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
           {viewer.isManagement && <button style={{ ...subBtn(false), paddingLeft: 10, color: todo.review ? "var(--info)" : "var(--text-muted)" }} onClick={() => setShelf("mine")}>📷 Фото на підтвердженні<span style={cnt(todo.review)}>{todo.review}</span></button>}
           <div style={{ ...label, marginTop: 12 }}>Розділи</div>
           <button style={navBtn(!inTrash && shelf === "reg")} onClick={() => setShelf("reg")}>📕 Регламенти<span style={cnt(shelfCount("reg"), shelf === "reg")}>{shelfCount("reg")}</span></button>
-          {shelf === "reg" && [...tree.folders.filter((f) => f.parentId == null), null].map((f) => { const id = f?.id ?? null; const n = shelfFolderCounts.get(id) ?? 0; if (!n) return null; const on = folderFilter === (f ? id : "none");
-            return <button key={f?.id ?? "none"} style={subBtn(on)} onClick={() => { setFolderFilter(on ? "all" : (f ? id : "none")); setInTrash(false); setNarrowPane("list"); }} title={f ? f.name : "Без папки"}><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f ? f.name.replace(/^\d+\.\s*/, "") : "Без папки"}</span><span style={cnt(n)}>{n}</span></button>; })}
+          <Collapse open={!inTrash && shelf === "reg"}>{folderRows("reg")}</Collapse>
           <button style={navBtn(!inTrash && shelf === "work")} onClick={() => setShelf("work")}>🗂 Робочі документи<span style={cnt(shelfCount("work"), shelf === "work")}>{shelfCount("work")}</span></button>
-          {shelf === "work" && [...tree.folders.filter((f) => f.parentId == null), null].map((f) => { const id = f?.id ?? null; const n = shelfFolderCounts.get(id) ?? 0; if (!n) return null; const on = folderFilter === (f ? id : "none");
-            return <button key={f?.id ?? "none"} style={subBtn(on)} onClick={() => { setFolderFilter(on ? "all" : (f ? id : "none")); setInTrash(false); setNarrowPane("list"); }} title={f ? f.name : "Без папки"}><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f ? f.name.replace(/^\d+\.\s*/, "") : "Без папки"}</span><span style={cnt(n)}>{n}</span></button>; })}
+          <Collapse open={!inTrash && shelf === "work"}>{folderRows("work")}</Collapse>
           <button style={navBtn(!inTrash && shelf === "mine")} onClick={() => setShelf("mine")}>🔒 {viewer.isManagement ? "Особисті та офери" : "Мої документи"}<span style={cnt(shelfCount("mine"), shelf === "mine")}>{shelfCount("mine")}</span></button>
-          {shelf === "mine" && tree.sections.offer && <button style={subBtn(section === "offer")} onClick={() => { setSection("offer"); setSelected(null); setInTrash(false); setNarrowPane("list"); }}>🔒 Офери<span style={cnt(visibleAll.filter((f) => f.section === "offer" && !f.archivedAt).length)}>{visibleAll.filter((f) => f.section === "offer" && !f.archivedAt).length}</span></button>}
-          {shelf === "mine" && <button style={subBtn(section === "personal")} onClick={() => { setSection("personal"); setSelected(null); setInTrash(false); setNarrowPane("list"); }}>Особисті<span style={cnt(visibleAll.filter((f) => f.section === "personal" && !f.archivedAt).length)}>{visibleAll.filter((f) => f.section === "personal" && !f.archivedAt).length}</span></button>}
+          <Collapse open={!inTrash && shelf === "mine"}>
+            {tree.sections.offer && <button style={subBtn(section === "offer")} onClick={() => { setSection("offer"); setSelected(null); setInTrash(false); setNarrowPane("list"); }}>🔒 Офери<span style={cnt(0)}>{visibleAll.filter((f) => f.section === "offer" && !f.archivedAt).length}</span></button>}
+            <button style={subBtn(section === "personal")} onClick={() => { setSection("personal"); setSelected(null); setInTrash(false); setNarrowPane("list"); }}>Особисті<span style={cnt(0)}>{visibleAll.filter((f) => f.section === "personal" && !f.archivedAt).length}</span></button>
+          </Collapse>
           {tree.sections.archive && <button style={navBtn(!inTrash && shelf === "archive")} onClick={() => setShelf("archive")}>🗄 Архів<span style={cnt(shelfCount("archive"), shelf === "archive")}>{shelfCount("archive")}</span></button>}
           {viewer.isManagement && <button style={navBtn(inTrash)} onClick={() => { setInTrash(true); setSelected(null); setNarrowPane("list"); void loadTrash(); }}>🗑 Кошик<span style={cnt(trash?.length ?? 0, inTrash)}>{trash?.length ?? 0}</span></button>}
-          {viewer.canManageAccess && shelf !== "mine" && shelf !== "archive" && typeof folderFilter === "number" && (() => { const f = tree.folders.find((x) => x.id === folderFilter); if (!f) return null; return (
-            <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap" }}>
-              <button style={{ ...btn(), fontSize: 12, padding: "4px 8px" }} onClick={() => setAccessFolder(f)}>⚙ Доступи</button>
-              <button style={{ ...btn(), fontSize: 12, padding: "4px 8px" }} onClick={() => { const nn = window.prompt("Нова назва папки:", f.name)?.trim(); if (nn && nn !== f.name) void renameDocFolder(f.id, nn).then(load).catch((e) => setToast(errOf(e, "Не перейменовано"))); }}>✎</button>
-              <button style={{ ...btn(), fontSize: 12, padding: "4px 8px" }} onClick={() => { if (window.confirm(`Прибрати папку «${f.name}»? Її документи зникнуть з екрана; файли на диску лишаються.`)) void deleteDocFolder(f.id).then(load).catch((e) => setToast(errOf(e, "Не вдалося"))); }}>✕</button>
-            </div>); })()}
-          <p className="loading-text" style={{ marginTop: "auto", fontSize: 11.5, lineHeight: 1.4 }}>{shelf === "reg" ? "Регламенти виконують, інструкції роблять за кроками. У кожного регламенту є «Ознайомився»." : shelf === "work" ? "Шаблони беруть і заповнюють, матеріали надсилають клієнту." : shelf === "mine" ? SECTION_HINT[section] : SECTION_HINT.archive}</p>
+          <p className="loading-text" style={{ marginTop: "auto", paddingTop: 10, fontSize: 11.5, lineHeight: 1.4, minHeight: 64 }}>{shelf === "reg" ? "Регламенти виконують, інструкції роблять за кроками. У кожного регламенту є «Ознайомився»." : shelf === "work" ? "Шаблони беруть і заповнюють, матеріали надсилають клієнту." : shelf === "mine" ? SECTION_HINT[section] : SECTION_HINT.archive}</p>
         </div>
 
         {/* Список */}
@@ -296,6 +315,16 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
       {uploadOpen && <UploadDialog tree={tree} section={section === "archive" ? "general" : section} defaultFolder={typeof folderFilter === "number" ? folderFilter : null}
         onClose={() => setUploadOpen(false)} onDone={(msg) => { setUploadOpen(false); setToast(msg); void load(); }} />}
       {accessFolder && <AccessDialog folder={accessFolder} onClose={() => setAccessFolder(null)} onSaved={() => { setAccessFolder(null); setToast("Доступи збережено, зміну записано в журнал"); void load(); }} />}
+    </div>
+  );
+}
+
+/** Плавне розгортання списку папок (grid-template-rows 0fr↔1fr); без анімації, якщо в системі вимкнено рух. */
+function Collapse({ open, children }: { open: boolean; children: React.ReactNode }) {
+  const reduce = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  return (
+    <div style={{ display: "grid", gridTemplateRows: open ? "1fr" : "0fr", opacity: open ? 1 : 0, transition: reduce ? "none" : "grid-template-rows .22s ease, opacity .18s ease" }} aria-hidden={!open}>
+      <div style={{ overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column", gap: 2, visibility: open ? "visible" : "hidden", transition: reduce ? "none" : "visibility .22s" }}>{children}</div>
     </div>
   );
 }
