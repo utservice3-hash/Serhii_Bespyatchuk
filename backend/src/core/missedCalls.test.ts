@@ -674,6 +674,10 @@ test("#472 ДИНАМІКА · ЖИВИЙ SQL: Σ точок = плитка, Σ 
     await call("2026-09-15 11:00:00+03", "in", "NO ANSWER", 0, null, "A4");   // без відповідального
     await call("2026-09-15 11:00:30+03", "transitin", "NO ANSWER", 0, null, "A4"); // його плече
     await call("2026-09-15 12:00:00+03", "in", "ANSWERED", 60, 1, "A5");      // розмова — не пропущений
+    await call("2026-09-15 13:00:00+03", "in", "VOICEMAIL", 0, 1, "A6");      // нульовий, але не пропущений — вердикт мусить відсіяти
+    // 🔴 Сесія в UTC, як на проді: кластер у поясі машини (Київ) робив би межу тижня правильною
+    // навіть без `AT TIME ZONE` — і саботаж «тиждень за UTC» лишався б зеленим. Доведено 17.09.2026.
+    await c.query("SET TIME ZONE 'UTC'");
 
     const run = async (g: "day" | "week" | "month", s: import("./missedCallsRules.js").MissedScope) => {
       const q = R.missedSeriesSql(g, "2026-09-10", "2026-09-16", s);
