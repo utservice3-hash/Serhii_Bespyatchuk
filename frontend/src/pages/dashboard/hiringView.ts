@@ -30,9 +30,14 @@ export const dm = (d: string | null | undefined) => (d ? `${d.slice(8, 10)}.${d.
 
 /** Колір статусу: сірий — ще нічого, синій — у роботі, жовтий — ризик, зелений — рух уперед, червоний — стоп. */
 export const STATUS_TONE: Record<HiringStatus, "gr" | "pl" | "wn" | "ok" | "dg"> = {
-  new: "gr", planned: "gr", done: "pl", noshow: "wn", noanswer: "wn", lead: "pl",
-  candidate: "ok", training: "wn", manager: "ok", declined: "dg", nofit: "dg", black: "dg",
+  new: "gr", contacted: "pl", planned: "gr", done: "pl", noshow: "wn", noanswer: "wn", lead: "pl",
+  candidate: "ok", training: "wn", manager: "ok", refused: "dg", black: "dg",
 };
+
+export const VACANCY_TONE: Record<string, "gr" | "pl" | "wn" | "ok" | "dg"> = {
+  open: "gr", in_work: "pl", paused: "wn", closed: "ok", cancelled: "dg",
+};
+export const isClosedVacancy = (status: string) => status === "closed" || status === "cancelled";
 
 /** Перехід у ці статуси вимагає команди — дзеркало `NEEDS_TEAM` бекенду (сервер однаково перевірить). */
 export const NEEDS_TEAM: HiringStatus[] = ["lead", "candidate"];

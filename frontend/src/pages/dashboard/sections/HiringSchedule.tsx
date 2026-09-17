@@ -3,8 +3,8 @@ import {
   fetchHiringSchedule, createHiringInterview, patchHiringInterview, deleteHiringInterview, restoreHiringInterview, hiringError,
   type HiringMeta, type HiringScheduleRow, type HiringStatus,
 } from "../../../api";
-import { todayKyiv, nowKyivHM, addDays, mondayOf, longDate, dm, dowOf, isWeekend, LS } from "../hiringView";
-import { StatusDialog, StatusPill, type Toast } from "./HiringShared";
+import { todayKyiv, nowKyivHM, addDays, mondayOf, longDate, dm, dowOf, isWeekend, LS, isClosedVacancy } from "../hiringView";
+import { StatusDialog, StatusPill, RefusalDialog, type Toast } from "./HiringShared";
 import { CandidateDrawer } from "./HiringCandidates";
 
 /**
@@ -21,6 +21,7 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
   const [err, setErr] = useState<string | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
   const [statusFor, setStatusFor] = useState<{ row: HiringScheduleRow; to: HiringStatus } | null>(null);
+  const [refuseFor, setRefuseFor] = useState<HiringScheduleRow | null>(null);
   const [focusId, setFocusId] = useState<number | null>(null);
 
   const weekFrom = mondayOf(day), weekTo = addDays(weekFrom, 6);
@@ -49,7 +50,8 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
       if ("responsible" in patch && typeof patch.responsible === "string") LS.set("responsible", patch.responsible);
       if ("interviewDate" in patch && patch.interviewDate !== day) toast(`Співбесіду перенесено на ${dm(String(patch.interviewDate))}`);
       load();
-      if ("source" in patch || "position" in patch || "responsible" in patch) onMetaStale();
+      if ("source" in patch || "responsible" in patch) onMetaStale();
+      if ("vacancyId" in patch) toast("Вакансію привʼязано");
     } catch (e) { toast(hiringError(e), { error: true }); load(); }
   };
 
@@ -143,7 +145,7 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
                 <tr>
                   <th style={{ width: 100 }}>Час</th><th style={{ width: 120 }}>Відповідальний</th><th style={{ width: 146 }}>Дата призначення</th>
                   <th style={{ width: 146 }}>Дата співбесіди</th><th style={{ width: 210 }}>Кандидат · телефон</th><th style={{ width: 130 }}>Telegram</th>
-                  <th style={{ width: 150 }}>Джерело</th><th style={{ width: 200 }}>Посада</th><th style={{ width: 132 }}>Прийшов</th>
+                  <th style={{ width: 150 }}>Джерело</th><th style={{ width: 210 }}>Вакансія</th><th style={{ width: 132 }}>Прийшов</th>
                   <th style={{ width: 200 }}>Статус</th><th style={{ width: 200 }}>Коментар</th><th style={{ width: 170 }}>Запис</th><th style={{ width: 36 }} />
                 </tr>
               </thead>
@@ -165,7 +167,18 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
                       </td>
                       <td>{cell(r, "telegram", r.telegram, { placeholder: "@нік", style: { opacity: r.candidate_id ? 1 : 0.7 } })}</td>
                       <td>{cell(r, "source", r.source, { list: "hr-src" })}</td>
-                      <td>{cell(r, "position", r.position, { list: "hr-pos" })}</td>
+                      <td>
+                        {r.candidate_id ? (
+                          <>
+                            <select className={`hr-c ${r.vacancies?.length ? "" : "novac"}`} value={r.vacancies?.[0]?.id ?? ""}
+                              onChange={(e) => { if (e.target.value) void save(r, { vacancyId: Number(e.target.value) }); }}>
+                              <option value="">— вакансія —</option>
+                              {meta.vacancies.filter((v) => !isClosedVacancy(v.status) || r.vacancies?.some((x) => x.id === v.id)).map((v) => <option key={v.id} value={v.id}>{v.title}</option>)}
+                            </select>
+                            {(r.vacancies?.length ?? 0) > 1 && <div className="hr-muted">+{r.vacancies!.length - 1} ще — у картці</div>}
+                          </>
+                        ) : <span className="hr-muted">спершу ПІБ або телефон</span>}
+                      </td>
                       <td>
                         <select className="hr-c" value={r.attended === true ? "y" : r.attended === false ? "n" : ""}
                           onChange={(e) => void save(r, { attended: e.target.value === "y" ? true : e.target.value === "n" ? false : null })}>
@@ -174,11 +187,15 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
                       </td>
                       <td>
                         {r.candidate_id && r.status ? (
-                          <select className="hr-c" value={r.status} onChange={(e) => setStatusFor({ row: r, to: e.target.value as HiringStatus })}>
+                          <select className="hr-c" value={r.status} onChange={(e) => {
+                            const to = e.target.value as HiringStatus;
+                            if (to === "refused") setRefuseFor(r); else setStatusFor({ row: r, to });
+                          }}>
                             <option value={r.status}>{meta.statuses.find((s) => s.key === r.status)?.label}</option>
-                            {next.map((s) => <option key={s} value={s}>→ {meta.statuses.find((x) => x.key === s)?.label}</option>)}
+                            {next.map((s) => <option key={s} value={s}>→ {meta.statuses.find((x) => x.key === s)?.label}{s === "refused" ? "…" : ""}</option>)}
                           </select>
                         ) : <span className="hr-muted">спершу ПІБ або телефон</span>}
+                        {r.refusal_reason && (r.status === "refused" || r.status === "black") && <div className="hr-muted">{r.refusal_reason}</div>}
                       </td>
                       <td>
                         <textarea key={`${r.id}-c-${r.comment ?? ""}`} className="hr-c" rows={1} defaultValue={r.comment ?? ""}
@@ -209,9 +226,12 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
 
       <datalist id="hr-resp">{meta.responsibles.map((x) => <option key={x} value={x} />)}</datalist>
       <datalist id="hr-src">{meta.sources.map((x) => <option key={x} value={x} />)}</datalist>
-      <datalist id="hr-pos">{meta.positions.map((x) => <option key={x} value={x} />)}</datalist>
 
-      {openId != null && <CandidateDrawer meta={meta} id={openId} toast={toast} onClose={() => setOpenId(null)} onChanged={load} />}
+      {openId != null && <CandidateDrawer meta={meta} id={openId} toast={toast} onClose={() => setOpenId(null)} onChanged={load} onMetaStale={onMetaStale} />}
+      {refuseFor && refuseFor.candidate_id && refuseFor.status && (
+        <RefusalDialog meta={meta} candidateId={refuseFor.candidate_id} candidateName={refuseFor.full_name ?? ""} from={refuseFor.status} toast={toast}
+          onClose={() => { setRefuseFor(null); load(); }} onDone={() => { setRefuseFor(null); load(); }} onReasonsChanged={onMetaStale} />
+      )}
       {statusFor && statusFor.row.candidate_id && statusFor.row.status && (
         <StatusDialog meta={meta} candidateId={statusFor.row.candidate_id} from={statusFor.row.status} to={statusFor.to}
           teamId={statusFor.row.team_id} toast={toast} onClose={() => { setStatusFor(null); load(); }}
