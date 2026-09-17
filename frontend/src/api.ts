@@ -3983,3 +3983,78 @@ export async function markNewsSeen(): Promise<number> {
   const { data } = await api.post<{ ok: true; maxId: number }>("/news/seen");
   return data.maxId;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🧑‍💼 НАЙМ, прохід 1 (17.09.2026). Типи — дзеркало `backend/src/core/hiring.ts`.
+// Доступ вирішує СЕРВЕР (`access` у /meta); фронт лише ховає те, що сервер однаково відмовить.
+export type HiringStatus =
+  | "new" | "planned" | "done" | "noshow" | "noanswer" | "lead"
+  | "candidate" | "training" | "manager" | "declined" | "nofit" | "black";
+export type HiringAccessLevel = "edit" | "lead" | "none";
+
+export interface HiringMeta {
+  access: HiringAccessLevel;
+  teamId: number | null;
+  statuses: { key: HiringStatus; label: string }[];
+  transitions: Partial<Record<HiringStatus, HiringStatus[]>>;
+  sources: string[];
+  positions: string[];
+  responsibles: string[];
+  teams: { id: number; name: string }[];
+}
+
+export interface HiringScheduleRow {
+  id: number; candidate_id: number | null; responsible: string | null;
+  assigned_on: string; interview_date: string; interview_time: string | null;
+  attended: boolean | null; record_url: string | null; comment: string | null;
+  full_name: string | null; phone: string | null; telegram: string | null; source: string | null;
+  position: string | null; status: HiringStatus | null; team_id: number | null;
+}
+
+export interface HiringCandidateRow {
+  id: number; full_name: string; phone: string | null; telegram: string | null; source: string | null;
+  position: string | null; status: HiringStatus; team_id: number | null; team_name: string | null;
+  resume_url: string | null; comment: string | null; created_on: string;
+  last_interview?: string | null; repeats?: number;
+}
+
+export interface HiringCard {
+  candidate: HiringCandidateRow;
+  interviews: { id: number; interview_date: string; interview_time: string | null; responsible: string | null; attended: boolean | null; record_url: string | null; comment: string | null }[];
+  events: { id: number; kind: string; from_status: HiringStatus | null; to_status: HiringStatus | null; comment: string | null; at: string; actor: string | null }[];
+  lastFrom: HiringStatus | null;
+}
+
+export interface HiringDailyRow {
+  day: string; planned: number; booked: number; done: number; noshow: number;
+  toLead: number; toCandidate: number; toTraining: number; toManager: number;
+  resumes: number; coldSearch: number;
+}
+
+/** Текст помилки сервера — щоб людина бачила причину, а не «нічого не сталось». */
+export function hiringError(e: unknown): string {
+  const d = (e as { response?: { data?: { error?: string } } })?.response?.data;
+  return d?.error ?? (e instanceof Error ? e.message : "Не вдалося зберегти");
+}
+
+export const fetchHiringMeta = async () => (await api.get<HiringMeta>("/hiring/meta")).data;
+export const fetchHiringSchedule = async (from: string, to: string) =>
+  (await api.get<{ rows: HiringScheduleRow[] }>("/hiring/schedule", { params: { from, to } })).data.rows;
+export const createHiringInterview = async (p: { interviewDate: string; interviewTime?: string; responsible?: string }) =>
+  (await api.post<{ id: number }>("/hiring/interviews", p)).data.id;
+export const patchHiringInterview = async (id: number, patch: Record<string, unknown>) =>
+  (await api.patch<{ candidateId: number | null; repeat?: { id: number; full_name: string; status: HiringStatus } }>(`/hiring/interviews/${id}`, patch)).data;
+export const deleteHiringInterview = async (id: number) => { await api.delete(`/hiring/interviews/${id}`); };
+export const restoreHiringInterview = async (id: number) => { await api.post(`/hiring/interviews/${id}/restore`); };
+
+export const fetchHiringCandidates = async (params: { q?: string; status?: string; source?: string; position?: string; limit?: number; offset?: number }) =>
+  (await api.get<{ total: number; rows: HiringCandidateRow[] }>("/hiring/candidates", { params })).data;
+export const createHiringCandidate = async (p: Record<string, unknown>) => (await api.post<{ id: number }>("/hiring/candidates", p)).data.id;
+export const fetchHiringCard = async (id: number) => (await api.get<HiringCard>(`/hiring/candidates/${id}`)).data;
+export const patchHiringCandidate = async (id: number, patch: Record<string, unknown>) => { await api.patch(`/hiring/candidates/${id}`, patch); };
+export const setHiringStatus = async (id: number, p: { to: HiringStatus; comment: string; teamId?: number | null }) => { await api.post(`/hiring/candidates/${id}/status`, p); };
+export const addHiringComment = async (id: number, comment: string) => { await api.post(`/hiring/candidates/${id}/comment`, { comment }); };
+
+export const fetchHiringDaily = async (from: string, to: string) =>
+  (await api.get<{ rows: HiringDailyRow[]; totals: Omit<HiringDailyRow, "day"> & { attendancePct: number | null } }>("/hiring/daily", { params: { from, to } })).data;
+export const saveHiringDaily = async (day: string, p: { resumes?: number; coldSearch?: number }) => { await api.put(`/hiring/daily/${day}`, p); };
