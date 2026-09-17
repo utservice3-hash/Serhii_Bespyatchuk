@@ -173,7 +173,32 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
     regs: visibleAll.filter((f) => f.ack.required && f.ack.mine === "pending").length,
     review: visibleAll.filter((f) => f.signature.kind === "review").length,
   };
-  const paneH = "calc(100vh - 150px)";
+  // Папки для розділу — рахуються для КОЖНОГО розділу окремо, щоб згорнутий список не змінював висоту
+  // при перемиканні (стрибки навігації, власник 17.09.2026). Дії з папкою — іконками в тому ж рядку.
+  const folderRows = (k: Shelf) => {
+    const counts = new Map<number | null, number>();
+    visibleAll.forEach((f) => { if (shelfOf(f) === k) counts.set(f.folderId, (counts.get(f.folderId) ?? 0) + 1); });
+    return [...tree.folders.filter((f) => f.parentId == null), null].map((f) => {
+      const id = f?.id ?? null; const n = counts.get(id) ?? 0; if (!n) return null;
+      const on = shelf === k && folderFilter === (f ? id : "none");
+      const icon: React.CSSProperties = { border: "none", background: "transparent", cursor: "pointer", color: "var(--text-muted)", fontSize: 12, width: 22, height: 22, padding: 0, flex: "0 0 auto" };
+      return (
+        <div key={f?.id ?? "none"} style={{ display: "flex", alignItems: "center", borderRadius: "var(--r-md)", background: on ? "var(--surface-2)" : "transparent" }}>
+          <button style={{ ...subBtn(on), background: "transparent", flex: 1, minWidth: 0 }} onClick={() => { setFolderFilter(on ? "all" : (f ? id : "none")); setInTrash(false); setNarrowPane("list"); }} title={f ? f.name : "Без папки"}>
+            <span style={{ overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", lineHeight: 1.3, textAlign: "left" }}>{f ? f.name.replace(/^\d+\.\s*/, "") : "Без папки"}</span>{!(on && f && viewer.canManageAccess) && <span style={cnt(n)}>{n}</span>}
+          </button>
+          {on && f && viewer.canManageAccess && (
+            <>
+              <button title="Доступи до папки" style={icon} onClick={() => setAccessFolder(f)}>⚙</button>
+              <button title="Перейменувати" style={icon} onClick={() => { const nn = window.prompt("Нова назва папки:", f.name)?.trim(); if (nn && nn !== f.name) void renameDocFolder(f.id, nn).then(load).catch((e) => setToast(errOf(e, "Не перейменовано"))); }}>✎</button>
+              <button title="Прибрати папку (файли лишаються на диску)" style={icon} onClick={() => { if (window.confirm(`Прибрати папку «${f.name}»? Її документи зникнуть з екрана; файли на диску лишаються.`)) void deleteDocFolder(f.id).then(load).catch((e) => setToast(errOf(e, "Не вдалося"))); }}>✕</button>
+            </>
+          )}
+        </div>
+      );
+    });
+  };
+  const paneH = "calc(100vh - 200px)";
   const navBtn = (on: boolean): React.CSSProperties => ({ display: "flex", alignItems: "center", gap: 8, width: "100%", border: "none", textAlign: "left", padding: "8px 10px", borderRadius: "var(--r-lg)", cursor: "pointer", fontSize: "var(--fs-base)", background: on ? "var(--brand)" : "transparent", color: on ? "#fff" : "var(--text)", fontWeight: on ? 600 : 400 });
   const subBtn = (on: boolean): React.CSSProperties => ({ display: "flex", alignItems: "center", gap: 6, width: "100%", border: "none", textAlign: "left", padding: "6px 10px 6px 26px", borderRadius: "var(--r-md)", cursor: "pointer", fontSize: "var(--fs-13)", background: on ? "var(--surface-2)" : "transparent", color: "var(--text)", fontWeight: on ? 600 : 400 });
   const cnt = (_n: number, on = false): React.CSSProperties => ({ marginLeft: "auto", fontSize: 12, opacity: on ? .85 : .7, fontVariantNumeric: "tabular-nums" });
@@ -191,36 +216,39 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
       </div>
 
       {/* Три панелі: навігація · список · перегляд (макет Documents Split View) */}
-      <div className="chart-card" style={{ padding: 0, display: "grid", gridTemplateColumns: narrow ? "minmax(0,1fr)" : "220px 380px minmax(0,1fr)", minHeight: 420, height: narrow ? "auto" : paneH, overflow: "hidden" }}>
+      {/* «Мої справи» — смугою над панелями, а не в лівій колонці (Сергій 17.09.2026): ліва колонка лише для розділів і папок. */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+        <span className="orph-dim" style={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em", marginRight: 4 }}>Мої справи</span>
+        {([
+          ["🔏 Офер чекає підпису", todo.offers, "var(--warn)", () => setShelf("mine"), true],
+          ["📖 Ознайомитись", todo.regs, "var(--warn)", () => setShelf("reg"), true],
+          ["📷 Фото на підтвердженні", todo.review, "var(--info)", () => setShelf("mine"), viewer.isManagement],
+        ] as [string, number, string, () => void, boolean][]).filter((x) => x[4]).map(([l, n, c, go]) => (
+          <button key={l} className="orph-chip" onClick={go} style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 12px", fontSize: 13, color: n ? c : "var(--text-muted)", borderColor: n ? c : "var(--border)" }}>
+            {l}<b style={{ fontVariantNumeric: "tabular-nums" }}>{n}</b>
+          </button>
+        ))}
+      </div>
+      <div className="chart-card" style={{ padding: 0, display: "grid", gridTemplateColumns: narrow ? "minmax(0,1fr)" : "300px 400px minmax(0,1fr)", minHeight: 420, height: narrow ? "auto" : paneH, gridTemplateRows: narrow ? "auto" : "minmax(0,1fr)", overflow: "hidden" }}>
         {/* Навігація */}
-        <div style={{ borderRight: narrow ? "none" : "1px solid var(--border)", padding: 12, overflowY: "auto", display: narrow && (narrowPane !== "nav" || selectedFile) ? "none" : "flex", flexDirection: "column", gap: 2 }}>
-          <div style={label}>Мої справи</div>
-          <button style={{ ...subBtn(false), paddingLeft: 10, color: todo.offers ? "var(--warn)" : "var(--text-muted)" }} onClick={() => setShelf("mine")}>🔏 Офер чекає підпису<span style={cnt(todo.offers)}>{todo.offers}</span></button>
-          <button style={{ ...subBtn(false), paddingLeft: 10, color: todo.regs ? "var(--warn)" : "var(--text-muted)" }} onClick={() => setShelf("reg")}>📖 Ознайомитись<span style={cnt(todo.regs)}>{todo.regs}</span></button>
-          {viewer.isManagement && <button style={{ ...subBtn(false), paddingLeft: 10, color: todo.review ? "var(--info)" : "var(--text-muted)" }} onClick={() => setShelf("mine")}>📷 Фото на підтвердженні<span style={cnt(todo.review)}>{todo.review}</span></button>}
-          <div style={{ ...label, marginTop: 12 }}>Розділи</div>
+        <div style={{ borderRight: narrow ? "none" : "1px solid var(--border)", padding: 12, overflowY: "auto", minHeight: 0, display: narrow && (narrowPane !== "nav" || selectedFile) ? "none" : "flex", flexDirection: "column", gap: 2 }}>
+          <div style={label}>Розділи</div>
           <button style={navBtn(!inTrash && shelf === "reg")} onClick={() => setShelf("reg")}>📕 Регламенти<span style={cnt(shelfCount("reg"), shelf === "reg")}>{shelfCount("reg")}</span></button>
-          {shelf === "reg" && [...tree.folders.filter((f) => f.parentId == null), null].map((f) => { const id = f?.id ?? null; const n = shelfFolderCounts.get(id) ?? 0; if (!n) return null; const on = folderFilter === (f ? id : "none");
-            return <button key={f?.id ?? "none"} style={subBtn(on)} onClick={() => { setFolderFilter(on ? "all" : (f ? id : "none")); setInTrash(false); setNarrowPane("list"); }} title={f ? f.name : "Без папки"}><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f ? f.name.replace(/^\d+\.\s*/, "") : "Без папки"}</span><span style={cnt(n)}>{n}</span></button>; })}
+          <Collapse open={!inTrash && shelf === "reg"}>{folderRows("reg")}</Collapse>
           <button style={navBtn(!inTrash && shelf === "work")} onClick={() => setShelf("work")}>🗂 Робочі документи<span style={cnt(shelfCount("work"), shelf === "work")}>{shelfCount("work")}</span></button>
-          {shelf === "work" && [...tree.folders.filter((f) => f.parentId == null), null].map((f) => { const id = f?.id ?? null; const n = shelfFolderCounts.get(id) ?? 0; if (!n) return null; const on = folderFilter === (f ? id : "none");
-            return <button key={f?.id ?? "none"} style={subBtn(on)} onClick={() => { setFolderFilter(on ? "all" : (f ? id : "none")); setInTrash(false); setNarrowPane("list"); }} title={f ? f.name : "Без папки"}><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f ? f.name.replace(/^\d+\.\s*/, "") : "Без папки"}</span><span style={cnt(n)}>{n}</span></button>; })}
+          <Collapse open={!inTrash && shelf === "work"}>{folderRows("work")}</Collapse>
           <button style={navBtn(!inTrash && shelf === "mine")} onClick={() => setShelf("mine")}>🔒 {viewer.isManagement ? "Особисті та офери" : "Мої документи"}<span style={cnt(shelfCount("mine"), shelf === "mine")}>{shelfCount("mine")}</span></button>
-          {shelf === "mine" && tree.sections.offer && <button style={subBtn(section === "offer")} onClick={() => { setSection("offer"); setSelected(null); setInTrash(false); setNarrowPane("list"); }}>🔒 Офери<span style={cnt(visibleAll.filter((f) => f.section === "offer" && !f.archivedAt).length)}>{visibleAll.filter((f) => f.section === "offer" && !f.archivedAt).length}</span></button>}
-          {shelf === "mine" && <button style={subBtn(section === "personal")} onClick={() => { setSection("personal"); setSelected(null); setInTrash(false); setNarrowPane("list"); }}>Особисті<span style={cnt(visibleAll.filter((f) => f.section === "personal" && !f.archivedAt).length)}>{visibleAll.filter((f) => f.section === "personal" && !f.archivedAt).length}</span></button>}
+          <Collapse open={!inTrash && shelf === "mine"}>
+            {tree.sections.offer && <button style={subBtn(section === "offer")} onClick={() => { setSection("offer"); setSelected(null); setInTrash(false); setNarrowPane("list"); }}>🔒 Офери<span style={cnt(0)}>{visibleAll.filter((f) => f.section === "offer" && !f.archivedAt).length}</span></button>}
+            <button style={subBtn(section === "personal")} onClick={() => { setSection("personal"); setSelected(null); setInTrash(false); setNarrowPane("list"); }}>Особисті<span style={cnt(0)}>{visibleAll.filter((f) => f.section === "personal" && !f.archivedAt).length}</span></button>
+          </Collapse>
           {tree.sections.archive && <button style={navBtn(!inTrash && shelf === "archive")} onClick={() => setShelf("archive")}>🗄 Архів<span style={cnt(shelfCount("archive"), shelf === "archive")}>{shelfCount("archive")}</span></button>}
           {viewer.isManagement && <button style={navBtn(inTrash)} onClick={() => { setInTrash(true); setSelected(null); setNarrowPane("list"); void loadTrash(); }}>🗑 Кошик<span style={cnt(trash?.length ?? 0, inTrash)}>{trash?.length ?? 0}</span></button>}
-          {viewer.canManageAccess && shelf !== "mine" && shelf !== "archive" && typeof folderFilter === "number" && (() => { const f = tree.folders.find((x) => x.id === folderFilter); if (!f) return null; return (
-            <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap" }}>
-              <button style={{ ...btn(), fontSize: 12, padding: "4px 8px" }} onClick={() => setAccessFolder(f)}>⚙ Доступи</button>
-              <button style={{ ...btn(), fontSize: 12, padding: "4px 8px" }} onClick={() => { const nn = window.prompt("Нова назва папки:", f.name)?.trim(); if (nn && nn !== f.name) void renameDocFolder(f.id, nn).then(load).catch((e) => setToast(errOf(e, "Не перейменовано"))); }}>✎</button>
-              <button style={{ ...btn(), fontSize: 12, padding: "4px 8px" }} onClick={() => { if (window.confirm(`Прибрати папку «${f.name}»? Її документи зникнуть з екрана; файли на диску лишаються.`)) void deleteDocFolder(f.id).then(load).catch((e) => setToast(errOf(e, "Не вдалося"))); }}>✕</button>
-            </div>); })()}
-          <p className="loading-text" style={{ marginTop: "auto", fontSize: 11.5, lineHeight: 1.4 }}>{shelf === "reg" ? "Регламенти виконують, інструкції роблять за кроками. У кожного регламенту є «Ознайомився»." : shelf === "work" ? "Шаблони беруть і заповнюють, матеріали надсилають клієнту." : shelf === "mine" ? SECTION_HINT[section] : SECTION_HINT.archive}</p>
+          <p className="loading-text" style={{ marginTop: "auto", paddingTop: 10, fontSize: 11.5, lineHeight: 1.4, minHeight: 64 }}>{shelf === "reg" ? "Регламенти виконують, інструкції роблять за кроками. У кожного регламенту є «Ознайомився»." : shelf === "work" ? "Шаблони беруть і заповнюють, матеріали надсилають клієнту." : shelf === "mine" ? SECTION_HINT[section] : SECTION_HINT.archive}</p>
         </div>
 
         {/* Список */}
-        <div style={{ borderRight: narrow ? "none" : "1px solid var(--border)", display: narrow && (narrowPane !== "list" || selectedFile) ? "none" : "flex", flexDirection: "column", minWidth: 0, minHeight: narrow ? 420 : undefined }}>
+        <div style={{ borderRight: narrow ? "none" : "1px solid var(--border)", display: narrow && (narrowPane !== "list" || selectedFile) ? "none" : "flex", flexDirection: "column", minWidth: 0, minHeight: narrow ? 420 : 0, overflow: "hidden" }}>
           {narrow && <button style={{ ...btn(), margin: "10px 12px 0", alignSelf: "flex-start", fontSize: 12, padding: "4px 10px" }} onClick={() => setNarrowPane("nav")}>☰ Розділи й папки</button>}
           {inTrash ? (
             <>
@@ -228,7 +256,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
                 <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}><h2 className="chart-title" style={{ margin: 0 }}>🗑 Кошик</h2><span className="orph-dim">{trash?.length ?? 0}</span></div>
                 <p className="loading-text" style={{ margin: "6px 0 0", fontSize: 12 }}>Видалені документи бачить лише керівництво. «Повернути» ставить документ туди, де він був: у той самий розділ, папку й стан підпису.</p>
               </div>
-              <div style={{ overflowY: "auto", flex: 1 }}>
+              <div style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
                 {trash == null ? <p className="loading-text" style={{ margin: 12 }}>Завантаження…</p>
                   : trash.length === 0 ? <StateBlock icon="🗑" title="Кошик порожній" text="Тут зʼявляться документи, які керівництво видалило." inline />
                   : trash.map((f) => { const t = TYPE_META[f.category ?? "Інше"] ?? TYPE_META["Інше"]; return (
@@ -254,7 +282,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
               </div>
             )}
           </div>
-          <div style={{ overflowY: "auto", flex: 1 }}>
+          <div style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
             {listFiles.length === 0 ? (
               shelfFiles.length === 0
                 ? <StateBlock icon="🗀" title={shelf === "archive" ? "В архіві ще нічого немає" : "Тут ще нічого немає"} text={canUploadHere ? "Натисніть «Завантажити»." : "Документи сюди викладає керівництво."} action={canUploadHere ? <button style={btn()} onClick={() => setUploadOpen(true)}>Завантажити файл</button> : undefined} inline />
@@ -278,7 +306,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
 
         {/* Перегляд */}
         {selectedFile && !inTrash ? (
-          <div style={{ overflowY: "auto", minWidth: 0 }}>
+          <div style={{ overflowY: "auto", minWidth: 0, minHeight: 0 }}>
             {narrow && <button style={{ ...btn(), margin: "10px 16px 0", fontSize: 12, padding: "4px 10px" }} onClick={() => setSelected(null)}>← До списку</button>}
             <DocCardPanel key={selectedFile.id} file={selectedFile} tree={tree} onChanged={async () => { await load(); if (viewer.isManagement) await loadTrash(); }} onClose={() => setSelected(null)} onToast={setToast} folderName={folderName} />
           </div>
@@ -296,6 +324,16 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
       {uploadOpen && <UploadDialog tree={tree} section={section === "archive" ? "general" : section} defaultFolder={typeof folderFilter === "number" ? folderFilter : null}
         onClose={() => setUploadOpen(false)} onDone={(msg) => { setUploadOpen(false); setToast(msg); void load(); }} />}
       {accessFolder && <AccessDialog folder={accessFolder} onClose={() => setAccessFolder(null)} onSaved={() => { setAccessFolder(null); setToast("Доступи збережено, зміну записано в журнал"); void load(); }} />}
+    </div>
+  );
+}
+
+/** Плавне розгортання списку папок (grid-template-rows 0fr↔1fr); без анімації, якщо в системі вимкнено рух. */
+function Collapse({ open, children }: { open: boolean; children: React.ReactNode }) {
+  const reduce = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  return (
+    <div style={{ display: "grid", gridTemplateRows: open ? "1fr" : "0fr", opacity: open ? 1 : 0, transition: reduce ? "none" : "grid-template-rows .22s ease, opacity .18s ease" }} aria-hidden={!open}>
+      <div style={{ overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column", gap: 2, visibility: open ? "visible" : "hidden", transition: reduce ? "none" : "visibility .22s" }}>{children}</div>
     </div>
   );
 }
@@ -323,6 +361,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
   const [err, setErr] = useState<string | null>(null);
   const [noAccess, setNoAccess] = useState(false);
   const [signOpen, setSignOpen] = useState(false);
+  const [full, setFull] = useState(false);
   const [busy, setBusy] = useState(false);
   const t = TYPE_META[file.category ?? "Інше"] ?? TYPE_META["Інше"];
   const kind = previewKind(file);
@@ -392,17 +431,53 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
         <button onClick={onClose} title="Закрити" style={{ marginLeft: "auto", border: "none", background: "transparent", cursor: "pointer", fontSize: 16, color: "var(--text-muted)" }}>✕</button>
       </div>
       <h2 className="chart-title" style={{ marginBottom: 0, lineHeight: 1.3 }}>{file.name}</h2>
+      {/* Дії — ЗВЕРХУ, під назвою: перегляд PDF перехоплює прокрутку, і знизу до кнопок не догорнути (власник 17.09.2026). */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {kind !== "none" && <button style={{ ...btn("primary"), fontSize: 14, padding: "9px 16px" }} onClick={() => setFull(true)} disabled={!preview}>⤢ На весь екран</button>}
+        {kind !== "none" && <button style={btn()} onClick={() => void open(false)}>У новій вкладці</button>}
+        <button style={btn()} onClick={() => void open(true)}>Завантажити</button>
+        {file.canEdit && (
+          <label style={{ ...btn(), cursor: busy ? "default" : "pointer", opacity: busy ? .6 : 1 }}>Нова версія<input type="file" hidden disabled={busy} onChange={(e) => { newVersion(e.target.files); e.currentTarget.value = ""; }} /></label>
+        )}
+        {file.canEdit && <button style={btn()} onClick={rename}>Перейменувати</button>}
+        {mgmt && !file.archivedAt && <button style={btn("danger")} onClick={archive}>В архів</button>}
+        {mgmt && file.archivedAt && <button style={btn()} onClick={restore}>Повернути з архіву</button>}
+        {mgmt && <button style={btn("danger")} onClick={remove} title="Зникне звідусіль; файл і підписи лишаються в системі">Видалити</button>}
+        {mgmt && !file.archivedAt && file.inactiveAt && <button style={btn("primary")} onClick={activate}>Активувати</button>}
+      </div>
+
       {err && <div style={{ fontSize: 12, color: "var(--danger)" }}>{err}</div>}
       {file.inactiveAt && !file.archivedAt && <p style={noteBox}>Документ повернувся з архіву після повернення людини в команду. Поки він неактивний: підписати чи редагувати не можна.{mgmt ? " Натисніть «Активувати», якщо він знову потрібен." : ""}</p>}
 
-      {/* Прев'ю */}
-      <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", background: "var(--surface-2)", minHeight: 120, overflow: "hidden" }}>
-        {kind === "none" ? (
-          <div style={{ padding: 16, fontSize: 12, color: "var(--text-muted)", textAlign: "center" }}>{extOf(file.name, file.mime)} у дашборді не показується — відкривається завантаженням. PDF, зображення й HTML показуються тут.</div>
-        ) : !preview ? <div style={{ padding: 16, fontSize: 12, color: "var(--text-muted)" }}>завантаження прев'ю…</div>
-          : kind === "image" ? <img src={preview} alt={file.name} style={{ width: "100%", display: "block" }} />
-          : <iframe title={file.name} src={preview} style={{ width: "100%", height: "52vh", border: "none", background: "#fff" }} />}
-      </div>
+      {/* Прев'ю. PDF — без бічних мініатюр і на ширину панелі (параметри вбудованого переглядача
+          браузера: navpanes=0, view=FitH), висота на весь екран панелі; «⤢ На весь екран» — оверлей.
+          Файл без перегляду — один рядок, а не порожній блок (власник 17.09.2026). */}
+      {kind === "none" ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 13, color: "var(--text-muted)", background: "var(--surface-2)", borderRadius: "var(--r-lg)", padding: "8px 12px" }}>
+          <span>📄 {extOf(file.name, file.mime)} не переглядається в дашборді</span>
+          <button style={{ ...btn(), fontSize: 12, padding: "4px 10px", marginLeft: "auto" }} onClick={() => void open(true)}>Завантажити</button>
+        </div>
+      ) : (
+        <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", background: "var(--surface-2)", overflow: "hidden", position: "relative" }}>
+          {!preview ? <div style={{ padding: 16, fontSize: 12, color: "var(--text-muted)" }}>завантаження прев'ю…</div>
+            : kind === "image" ? <img src={preview} alt={file.name} style={{ width: "100%", display: "block" }} />
+            : <iframe title={file.name} src={kind === "pdf" ? `${preview}#navpanes=0&view=FitH&zoom=page-width` : preview} style={{ width: "100%", height: "min(62vh, 720px)", minHeight: 360, border: "none", background: "#fff", display: "block" }} />}
+        </div>
+      )}
+      {full && preview && createPortal(
+        <div onClick={() => setFull(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 2800, display: "flex", flexDirection: "column", padding: 16, gap: 8 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", alignItems: "center", gap: 10, color: "#fff" }}>
+            <b style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.name}</b>
+            <button onClick={() => void open(true)} style={{ ...btn(), marginLeft: "auto", fontSize: 12, padding: "4px 10px" }}>Завантажити</button>
+            <button onClick={() => setFull(false)} style={{ ...btn(), fontSize: 12, padding: "4px 10px" }}>✕ Закрити</button>
+          </div>
+          <div onClick={(e) => e.stopPropagation()} style={{ flex: 1, background: "#fff", borderRadius: "var(--r-lg)", overflow: "hidden" }}>
+            {kind === "image" ? <img src={preview} alt={file.name} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
+              : <iframe title={file.name} src={kind === "pdf" ? `${preview}#view=FitH&zoom=page-width` : preview} style={{ width: "100%", height: "100%", border: "none", display: "block" }} />}
+          </div>
+        </div>,
+        document.body,
+      )}
 
       {file.description ? <div style={{ fontSize: 13 }}>{file.description}</div> : file.canEdit && <button onClick={editDescription} style={{ ...btn(), fontSize: 12, padding: "4px 10px", alignSelf: "flex-start" }}>+ опис</button>}
 
@@ -485,20 +560,6 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
           Версії: {cardData.versions.map((v) => `v${v.version} · ${fmtDate(v.created_at)}${v.author ? ` · ${v.author}` : ""}`).join(" | ")}
         </div>
       )}
-
-      {/* Дії */}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {kind !== "none" && <button style={btn("primary")} onClick={() => void open(false)}>Відкрити</button>}
-        <button style={btn()} onClick={() => void open(true)}>Завантажити</button>
-        {file.canEdit && (
-          <label style={{ ...btn(), cursor: busy ? "default" : "pointer", opacity: busy ? .6 : 1 }}>Нова версія<input type="file" hidden disabled={busy} onChange={(e) => { newVersion(e.target.files); e.currentTarget.value = ""; }} /></label>
-        )}
-        {file.canEdit && <button style={btn()} onClick={rename}>Перейменувати</button>}
-        {mgmt && !file.archivedAt && <button style={btn("danger")} onClick={archive}>В архів</button>}
-        {mgmt && file.archivedAt && <button style={btn()} onClick={restore}>Повернути з архіву</button>}
-        {mgmt && <button style={btn("danger")} onClick={remove} title="Зникне звідусіль; файл і підписи лишаються в системі">Видалити</button>}
-        {mgmt && !file.archivedAt && file.inactiveAt && <button style={btn("primary")} onClick={activate}>Активувати</button>}
-      </div>
 
       {signOpen && <SignDialog key={`${file.id}:${file.version}`} file={file} onClose={() => setSignOpen(false)} onDone={async () => { setSignOpen(false); onToast("Підписано. Відбиток привʼязано до поточної версії."); await onChanged(); }} />}
     </div>
