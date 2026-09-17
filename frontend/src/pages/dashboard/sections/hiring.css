@@ -1,0 +1,110 @@
+/* 🧑‍💼 НАЙМ — стилі розділу. Усе під `.hr-`, щоб не зачепити решту продукту.
+   Кольори й радіуси — лише токени дашборда (index.css), тож темна тема працює сама. */
+
+.hr-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 16px; }
+.hr-tabs button { padding: 6px 14px; border-radius: var(--r-lg); border: 1px solid var(--border); background: var(--card-bg); color: var(--text); font-size: 13px; cursor: pointer; }
+.hr-tabs button.on { background: var(--brand); border-color: var(--brand); color: #fff; font-weight: 600; }
+
+.hr-pills { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; }
+.hr-pills button { padding: 5px 12px; border-radius: 16px; border: 1px solid var(--border-strong); background: var(--card-bg); color: var(--text); cursor: pointer; font-size: 13px; white-space: nowrap; }
+.hr-pills button.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+
+.hr-inp { border: 1px solid var(--border-strong); border-radius: var(--r-lg); padding: 6px 10px; font-size: 13px; background: var(--card-bg); color: var(--text); font: inherit; }
+.hr-btn { padding: 7px 14px; border-radius: var(--r-lg); border: 1px solid var(--border); background: var(--card-bg); color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; }
+.hr-btn.p { background: var(--brand); border-color: var(--brand); color: #fff; }
+.hr-btn.xs { padding: 3px 8px; font-size: 12px; }
+.hr-btn:disabled { opacity: .45; cursor: not-allowed; }
+.hr-nav { border: 1px solid var(--border); background: var(--card-bg); color: var(--text); border-radius: var(--r-lg); height: 32px; min-width: 32px; padding: 0 10px; font-size: 14px; cursor: pointer; }
+.hr-seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--r-lg); overflow: hidden; }
+.hr-seg button { padding: 6px 12px; font-size: 13px; border: 0; background: var(--card-bg); color: var(--text); cursor: pointer; }
+.hr-seg button.on { background: var(--brand); color: #fff; }
+
+.hr-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--r-2xl); box-shadow: var(--shadow); overflow: hidden; margin-bottom: 16px; }
+.hr-card > .hd { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.hr-card > .hd h3 { margin: 0; font-size: 16px; }
+.hr-muted { color: var(--text-muted); font-size: 12px; }
+
+.hr-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--border); }
+.hr-tile { background: var(--card-bg); padding: 14px 16px; }
+.hr-tile .lb { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); display: flex; justify-content: space-between; gap: 6px; }
+.hr-tile .vl { font-size: 25px; font-weight: 680; margin-top: 4px; letter-spacing: -.02em; font-variant-numeric: tabular-nums; display: flex; align-items: baseline; gap: 8px; }
+.hr-tile .sb { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.hr-manual { font-size: 10px; text-transform: none; letter-spacing: 0; color: var(--warn); background: var(--warn-bg); border-radius: 4px; padding: 0 5px; }
+.hr-bar { height: 7px; border-radius: 999px; background: var(--border); overflow: hidden; margin-top: 9px; }
+.hr-bar i { display: block; height: 100%; border-radius: 999px; }
+.hr-sect { padding: 14px 16px; border-top: 1px solid var(--border); }
+.hr-sect h4 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin: 0 0 10px; font-weight: 600; }
+.hr-fun { display: grid; grid-template-columns: minmax(120px, 190px) minmax(0, 1fr) 90px; gap: 6px 10px; align-items: center; font-size: 13px; }
+.hr-fun .b { height: 18px; border-radius: 4px; background: rgba(197, 20, 28, .16); }
+.hr-fun .b i { display: block; height: 100%; border-radius: 4px; background: var(--brand); }
+.hr-trend { display: flex; align-items: flex-end; gap: 3px; height: 56px; }
+.hr-trend i { flex: 1; border-radius: 3px 3px 0 0; background: rgba(197, 20, 28, .16); min-height: 3px; }
+.hr-trend i.last { background: var(--brand); }
+
+.hr-pill { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; font-weight: 600; }
+.hr-pill.pl { background: var(--info-bg); color: var(--info); }
+.hr-pill.ok { background: var(--ok-bg); color: var(--ok); }
+.hr-pill.wn { background: var(--warn-bg); color: var(--warn); }
+.hr-pill.dg { background: var(--danger-bg); color: var(--danger); }
+.hr-pill.gr { background: var(--surface-2, var(--bg)); color: var(--text-muted); border: 1px solid var(--border); }
+
+.hr-daynav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 12px; }
+.hr-daytitle { font-size: 18px; font-weight: 800; min-width: 230px; }
+.hr-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; margin-left: 8px; vertical-align: middle; }
+.hr-badge.today { background: var(--brand); color: #fff; }
+.hr-badge.past { color: var(--text-muted); border: 1px solid var(--border); }
+.hr-badge.future { background: var(--info-bg); color: var(--info); }
+.hr-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; margin-bottom: 14px; }
+.hr-wd { border: 1px solid var(--border); background: var(--card-bg); color: var(--text); border-radius: var(--r-xl); padding: 6px 8px; cursor: pointer; text-align: center; }
+.hr-wd .n { font-size: 11px; color: var(--text-muted); } .hr-wd .d { font-size: 16px; font-weight: 800; } .hr-wd .c { font-size: 11px; color: var(--text-muted); }
+.hr-wd.sel { border: 2px solid var(--brand); } .hr-wd.tod .d { color: var(--brand); } .hr-wd.we { opacity: .6; }
+
+.hr-tw { overflow-x: auto; }
+/* table-layout: fixed — інакше поля дат забирають ширину, і «Джерело»/«Статус» стискаються до обрізків
+   (заміряно на локальному стенді 17.09). Ширше за екран — горизонтальна прокрутка, як у таблиці Івана. */
+.hr-sheet { border-collapse: separate; border-spacing: 0; table-layout: fixed; width: 1740px; font-size: 13px; }
+.hr-sheet th { font-size: 12px; color: var(--text-muted); font-weight: 500; text-align: left; line-height: 1.25; padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: bottom; }
+.hr-sheet td { padding: 3px 4px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.hr-c { border: 1px solid transparent; border-radius: var(--r-md); background: transparent; padding: 4px 6px; width: 100%; font: inherit; font-size: 13px; color: var(--text); box-sizing: border-box; }
+.hr-c:hover { border-color: var(--border-strong); }
+.hr-c:focus { border-color: var(--brand); outline: none; background: var(--card-bg); }
+.hr-c.tm { font-weight: 800; font-variant-numeric: tabular-nums; }
+textarea.hr-c { resize: vertical; min-height: 28px; }
+.hr-sheet tr.done td { background: rgba(22, 101, 52, .05); }
+.hr-sheet tr.unm td { background: var(--warn-bg); }
+.hr-sheet tr.nxt td:first-child { box-shadow: inset 3px 0 0 var(--brand); }
+.hr-link { color: var(--info); cursor: pointer; text-decoration: none; background: none; border: 0; padding: 0; font: inherit; }
+
+.hr-wkgrid { display: grid; grid-template-columns: repeat(7, minmax(130px, 1fr)); gap: 8px; overflow-x: auto; }
+.hr-wkcol { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--r-xl); padding: 8px; min-height: 160px; }
+.hr-wkcol h4 { margin: 0 0 6px; font-size: 13px; cursor: pointer; }
+.hr-wkcol.tod { border: 2px solid var(--brand); }
+.hr-wki { font-size: 12px; padding: 4px 0; border-top: 1px solid var(--border); cursor: pointer; }
+
+.hr-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.hr-table th { text-align: left; font-size: 12px; color: var(--text-muted); font-weight: 500; padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.hr-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.hr-table tr.row { cursor: pointer; } .hr-table tr.row:hover td { background: var(--surface-2, var(--bg)); }
+.hr-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.hr-table tr.tot td { font-weight: 700; background: var(--surface-2, var(--bg)); }
+.hr-table tr.we td { color: var(--text-muted); }
+
+.hr-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, .45); display: flex; justify-content: flex-end; z-index: 2600; }
+.hr-drawer { width: min(620px, 100%); background: var(--card-bg); color: var(--text); height: 100%; overflow: auto; padding: 20px 22px; border-left: 3px solid var(--brand); box-sizing: border-box; }
+.hr-modal-back { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); display: flex; align-items: center; justify-content: center; z-index: 2700; padding: 20px; }
+.hr-modal { background: var(--card-bg); color: var(--text); border-radius: var(--r-lg); padding: 18px 20px; width: 92vw; max-width: 460px; }
+.hr-kv { display: grid; grid-template-columns: 140px 1fr; gap: 6px 12px; font-size: 13px; }
+.hr-kv .k { color: var(--text-muted); padding-top: 6px; }
+.hr-hist { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; }
+.hr-hist li { margin: 0 0 6px; }
+.hr-toast { position: fixed; right: 16px; bottom: 16px; background: var(--sidebar-bg); color: #fff; padding: 10px 14px; border-radius: var(--r-xl); font-size: 13px; z-index: 2800; display: flex; gap: 12px; align-items: center; max-width: 420px; }
+.hr-toast.err { background: var(--danger); }
+.hr-toast button { background: transparent; color: #fff; border: 1px solid rgba(255, 255, 255, .5); border-radius: var(--r-md); padding: 2px 8px; cursor: pointer; }
+.hr-note { border-radius: var(--r-lg); padding: 8px 12px; font-size: 12.5px; background: var(--info-bg); color: var(--info); margin-top: 10px; }
+
+@media (max-width: 760px) {
+  .hr-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hr-fun { grid-template-columns: 100px 1fr 70px; }
+  .hr-kv { grid-template-columns: 1fr; }
+  .hr-daytitle { min-width: 0; }
+}

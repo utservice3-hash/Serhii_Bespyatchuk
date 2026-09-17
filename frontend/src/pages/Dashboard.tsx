@@ -61,6 +61,7 @@ import StatisticsChartsSection from "./dashboard/sections/StatisticsChartsSectio
 import SettingsSection from "./dashboard/sections/SettingsSection";
 import { LeadgenSection } from "./dashboard/sections/LeadgenSection";
 import { MissedCallsSection } from "./dashboard/sections/MissedCallsSection";
+import { HiringSection } from "./dashboard/sections/HiringSection";
 import BankSection from "./dashboard/sections/BankSection";
 import { emptyTaskForm } from "./dashboard/taskForm";
 import { OverviewSection, type Kpi } from "./dashboard/sections/OverviewSection";
@@ -1063,6 +1064,14 @@ export function Dashboard() {
          * місяць показувала зламане число. Тепер сім показників рахуються з подій CRM.
          */
         <LeadgenSection from={dateRange.from} to={dateRange.to} />
+      )}
+
+      {section === "hiring" && (
+        /**
+         * 🧑‍💼 Найм, прохід 1 (17.09.2026). СТАТИЧНИЙ імпорт свідомо — гейт #225 (один чанк).
+         * Доступ усередині вирішує сервер (`/api/hiring/meta` → access), тут лише рендер.
+         */
+        <HiringSection />
       )}
 
       {section === "missed-calls" && (

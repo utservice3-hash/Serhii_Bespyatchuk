@@ -60,6 +60,9 @@ export const NAV_GROUPS = [
       { key: "goals", label: "Місячні цілі", icon: "🎯", roles: ["admin", "team_lead"] },
       { key: "messenger", label: "Месенджер", icon: "💬" },
       { key: "news", label: "Новини", icon: "📰" },
+      // 🧑‍💼 Найм (17.09.2026): графік співбесід, кандидати, щоденний звіт. Видимість — `screen_access`
+      // (сид у schema.sql: admin, ceo, opdir, kvp, hr, team_lead); що саме видно всередині, вирішує сервер.
+      { key: "hiring", label: "Найм", icon: "🧑‍💼" },
       { key: "documents", label: "Регламенти та документи", icon: "📁" },
       { key: "training", label: "Навчання", icon: "📚" },
     ],
