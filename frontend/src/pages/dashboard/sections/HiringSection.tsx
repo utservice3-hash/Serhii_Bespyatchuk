@@ -7,6 +7,7 @@ import { HiringSchedule } from "./HiringSchedule";
 import { HiringCandidates } from "./HiringCandidates";
 import { HiringDaily } from "./HiringDaily";
 import { HiringVacancies } from "./HiringVacancies";
+import { HiringTraining } from "./HiringTraining";
 import { PlannedTabCard, LiveTabNote, type PlannedTab } from "./HiringRoadmap";
 import "./hiring.css";
 
@@ -17,7 +18,7 @@ import "./hiring.css";
  *  • edit — рекрутер (HR) і адмін-рівень: усі три вкладки;
  *  • lead — тімлід: лише «Кандидати» своєї команди після співбесіди з ним.
  */
-type Tab = "sched" | "base" | "vac" | "daily" | PlannedTab;
+type Tab = "sched" | "base" | "vac" | "train" | "daily" | PlannedTab;
 
 export function HiringSection() {
   const [meta, setMeta] = useState<HiringMeta | null>(null);
@@ -46,8 +47,8 @@ export function HiringSection() {
   // Усі сім вкладок затвердженого макета. Незроблені відкривають пояснення «що буде і чому ще немає»
   // (прохання Романа 17.09): людина бачить повну картину, а не гадає, чи вкладку забули.
   const tabs: [Tab, string][] = meta.access === "edit"
-    ? [["sched", "Графік"], ["base", "Кандидати"], ["vac", "Вакансії"], ["daily", "Щоденний звіт"], ["emp", "Співробітники"], ["churn", "Плинність"], ["exit", "Exit-інтервʼю"], ["sum", "Зведення"]]
-    : [["base", "Кандидати"], ["emp", "Співробітники"]];
+    ? [["sched", "Графік"], ["base", "Кандидати"], ["vac", "Вакансії"], ["train", "На навчанні"], ["daily", "Щоденний звіт"], ["emp", "Співробітники"], ["churn", "Плинність"], ["exit", "Exit-інтервʼю"], ["sum", "Зведення"]]
+    : [["base", "Кандидати"], ["train", "На навчанні"], ["emp", "Співробітники"]];
   const planned = new Set<Tab>(["emp", "churn", "exit", "sum"]);
   const active = tabs.some(([k]) => k === tab) ? tab : tabs[0][0];
   const pick = (t: Tab) => { setTab(t); LS.set("tab", t); };
@@ -67,12 +68,13 @@ export function HiringSection() {
           </button>
         ))}
       </div>
-      {(active === "sched" || active === "base" || active === "vac" || active === "daily") && <LiveTabNote tab={active} />}
+      {(active === "sched" || active === "base" || active === "vac" || active === "train" || active === "daily") && <LiveTabNote tab={active} />}
       {planned.has(active) && <PlannedTabCard tab={active as PlannedTab} />}
       {active === "sched" && <HiringSchedule meta={meta} toast={toast} onMetaStale={() => setNonce((n) => n + 1)} />}
       {active === "base" && <HiringCandidates key={vacFilter?.seq ?? 0} meta={meta} toast={toast} initialVacancyId={vacFilter?.id ?? null} onMetaStale={() => setNonce((n) => n + 1)} />}
       {active === "vac" && <HiringVacancies meta={meta} toast={toast} onChanged={() => setNonce((n) => n + 1)}
         onOpenCandidates={(id) => { setVacFilter({ id, seq: Date.now() }); pick("base"); }} />}
+      {active === "train" && <HiringTraining meta={meta} toast={toast} onChanged={() => setNonce((n) => n + 1)} />}
       {active === "daily" && <HiringDaily toast={toast} />}
       {toastState && createPortal(
         <div className={`hr-toast ${toastState.error ? "err" : ""}`} role="status">

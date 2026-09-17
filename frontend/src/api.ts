@@ -4144,3 +4144,44 @@ export async function fetchHiringFileBlobUrl(id: number, fileId: number): Promis
   const { data } = await api.get<Blob>(`/hiring/candidates/${id}/files/${fileId}`, { responseType: "blob" });
   return URL.createObjectURL(data);
 }
+
+// 🎓 НАЙМ, прохід 2a (17.09.2026): акаунт кандидата, запрошення, доступ, прогрес. Дзеркало `core/hiringTraining.ts`.
+export type HiringCloseReason = "no_login" | "expired" | "refused" | "manager";
+export type HiringTrainingHealth = "manager" | "closed" | "done" | "no_login" | "stuck" | "ok" | "no_account";
+export interface HiringTrainingRow {
+  id: number; full_name: string | null; phone: string | null; telegram: string | null; status: HiringStatus;
+  team_id: number | null; team_name: string | null; login: string | null;
+  account_created_at: string | null; first_login_at: string | null; last_activity_at: string | null;
+  access_extended_days: number; access_closed_at: string | null; access_closed_reason: HiringCloseReason | null;
+  deadline: string | null; day: number; days: number; health: HiringTrainingHealth;
+  done: number; total: number; percent: number; current_step: string | null; open_questions: number;
+  invite: { expires_at: string; used_at: string | null; revoked_at: string | null } | null;
+}
+export interface HiringTrainingRules { inviteHours: number; noLoginHours: number; trainingDays: number; stuckHours: number }
+export interface HiringTrainingDetail {
+  row: HiringTrainingRow;
+  steps: { id: number; index: number; title: string; kind: string; module: string; required: boolean;
+    state: "locked" | "available" | "opened" | "done"; opened_at: string | null; finished_at: string | null }[];
+  questions: { id: number; question: string; asked_at: string; answer: string | null; answered_at: string | null;
+    material_id: number | null; material_title: string | null; answered_by: string | null }[];
+  events: { id: number; kind: string; from_status: HiringStatus | null; to_status: HiringStatus | null; comment: string | null; at: string; actor: string | null }[];
+  canDecide: boolean; canRestore: boolean;
+}
+export const fetchHiringTraining = async () =>
+  (await api.get<{ rows: HiringTrainingRow[]; rules: HiringTrainingRules; canDecide: boolean }>("/hiring/training")).data;
+export const fetchHiringTrainingDetail = async (id: number) => (await api.get<HiringTrainingDetail>(`/hiring/training/${id}`)).data;
+export const createHiringInvite = async (id: number) =>
+  (await api.post<{ token: string; expiresAt: string; login: string }>(`/hiring/candidates/${id}/invite`)).data;
+export const extendHiringAccess = async (id: number) => { await api.post(`/hiring/candidates/${id}/access/extend`); };
+export const restoreHiringAccess = async (id: number) => { await api.post(`/hiring/candidates/${id}/access/restore`); };
+export const promoteHiringCandidate = async (id: number, comment: string) => { await api.post(`/hiring/candidates/${id}/promote`, { comment }); };
+export const answerHiringQuestion = async (id: number, questionId: number, answer: string) => {
+  await api.post(`/hiring/candidates/${id}/questions/${questionId}/answer`, { answer });
+};
+/** Адреса запрошення будується тут: сервер не знає, з якого домену відкрито дашборд. */
+export const inviteUrl = (token: string) => `${window.location.origin}/invite/${token}`;
+// Публічні — без токена (людина ще не має пароля).
+export const fetchInvite = async (token: string) =>
+  (await api.get<{ name: string | null; login: string; expiresAt: string }>(`/auth/invite/${encodeURIComponent(token)}`)).data;
+export const acceptInvite = async (token: string, password: string) =>
+  (await api.post<{ token: string; login: string }>(`/auth/invite/${encodeURIComponent(token)}`, { password })).data;

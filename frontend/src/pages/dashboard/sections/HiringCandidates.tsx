@@ -7,6 +7,7 @@ import {
 } from "../../../api";
 import { dm, isClosedVacancy } from "../hiringView";
 import { StatusDialog, StatusPill, RefusalDialog, type Toast } from "./HiringShared";
+import { TrainingAccessBlock } from "./HiringTraining";
 
 /**
  * 🗂 «КАНДИДАТИ» — база замість «Кандидати UA». Прохід 1a (за Хурмою): фільтри вакансії, резерву,
@@ -337,6 +338,8 @@ export function CandidateDrawer({ meta, id, toast, onClose, onChanged, onMetaSta
                     <button className="hr-btn" onClick={() => void run(() => setHiringReserve(id, { on: true, note: reserveNote }), "Додано в резерв").then(() => setReserveNote(""))}>Додати в резерв</button>
                   </div>)}
             </div>
+
+            <TrainingAccessBlock key={`${c.status}-${card.events.length}`} meta={meta} id={id} toast={toast} onChanged={() => { load(); onChanged(); }} />
 
             {(next.length > 0 || undo) && (
               <div className="hr-sect" style={{ padding: "14px 0 0", marginTop: 14 }}>
