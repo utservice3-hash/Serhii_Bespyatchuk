@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Cell } from "recharts";
-import { fetchClientCard, archiveClient, saveLoyaltyOverride, type ClientCard } from "../../../api";
+import { fetchClientCard, archiveClient, saveLoyaltyOverride, contactChannelLabel, fetchContactFileBlobUrl, type ClientCard } from "../../../api";
 import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
 import { formatAmountFull } from "../format";
 
@@ -274,6 +274,26 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
             {card.callsShown === card.callsLimit && `показано останні ${card.callsLimit} · `}
             {card.callsSince ? `історія дзвінків у системі — з ${card.callsSince}` : ""}
           </div>
+        </>
+      )}
+
+      {/* 📱 КОНТАКТИ ПОЗА ДЗВІНКОМ (17.09.2026): Viber/Telegram/email зі скринами. Показуємо лише
+          коли є записи — порожній заголовок на кожній картці був би шумом. */}
+      {card.contacts && card.contacts.length > 0 && (
+        <>
+          <div style={{ fontWeight: 700, fontSize: 13, margin: "12px 0 6px" }}>📱 Контакти в месенджерах</div>
+          {card.contacts.map((k) => (
+            <div key={k.id} style={{ fontSize: 12, padding: "6px 0", borderBottom: "1px dashed #e5e7eb" }}>
+              <div><b>{k.createdAt.slice(0, 10).split("-").reverse().join(".")}</b> · {contactChannelLabel(k.channel)}
+                {k.author && <span style={{ color: "#6b7280" }}> · {k.author}</span>}
+                {k.hasFile && (
+                  <button style={{ marginLeft: 8, fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}
+                    onClick={async () => { const u = await fetchContactFileBlobUrl(k.id); window.open(u, "_blank"); }}>📎 скрин</button>
+                )}
+              </div>
+              {k.note && <div style={{ color: "#374151", marginTop: 2, whiteSpace: "pre-wrap" }}>{k.note}</div>}
+            </div>
+          ))}
         </>
       )}
 

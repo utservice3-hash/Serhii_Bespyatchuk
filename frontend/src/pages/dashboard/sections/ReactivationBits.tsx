@@ -1,3 +1,4 @@
+import { CONTACT_CHANNELS } from "../../../api";
 import { useState, type ReactNode } from "react";
 
 /**
@@ -82,6 +83,52 @@ export function CloseTaskDialog({ task, reasons, busy, onCancel, onSubmit }: {
       <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
         <button style={S.btn(true)} disabled={busy || !ready} onClick={() => onSubmit(reason, note.trim())}>Закрити задачу</button>
         <button style={S.btn()} disabled={busy} onClick={onCancel}>Скасувати</button>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * 📱 ЗАПИСАТИ КОНТАКТ (17.09.2026). Клієнти часто не беруть слухавку — їм пишуть у Viber або
+ * Telegram, і Ringostat цього не бачить. Тут: канал, що домовились, скрин переписки (≤ 5 МБ,
+ * лише зображення). Порожній запис без тексту і скрина сервер відхиляє.
+ */
+export function ContactDialog({ client, busy, onCancel, onSubmit }: {
+  client: { clientKey: string; name: string }; busy: boolean;
+  onCancel: () => void; onSubmit: (channel: string, note: string, file: File | null) => void;
+}) {
+  const [channel, setChannel] = useState("viber");
+  const [note, setNote] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const pick = (f: File | null) => {
+    setErr(null);
+    if (!f) { setFile(null); return; }
+    if (!f.type.startsWith("image/")) { setErr("Приймаються лише зображення (JPG, PNG, WebP)"); return; }
+    if (f.size > 5 * 1024 * 1024) { setErr("Скрин завеликий (макс. 5 МБ)"); return; }
+    setFile(f);
+  };
+  return (
+    <Modal title={`📱 Контакт · ${client.name}`}>
+      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10, lineHeight: 1.5 }}>
+        Для контактів поза дзвінком: Viber, Telegram, email. Запис рахується як спроба
+        реактивації нарівні з дзвінком і видимий тімліду й керівництву.
+      </div>
+      <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 4 }}>Канал</div>
+      <select value={channel} onChange={(e) => setChannel(e.target.value)} style={S.input}>
+        {CONTACT_CHANNELS.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+      </select>
+      <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", margin: "10px 0 4px" }}>Про що домовились</div>
+      <textarea value={note} onChange={(e) => setNote(e.target.value.slice(0, 1000))} rows={3}
+        placeholder="написав у Viber, обіцяли замовлення після 20-го" style={{ ...S.input, resize: "vertical" }} />
+      <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", margin: "10px 0 4px" }}>Скрин переписки (до 5 МБ)</div>
+      <input type="file" accept="image/*" onChange={(e) => pick(e.target.files?.[0] ?? null)} style={{ fontSize: 12 }} />
+      {file && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>{file.name} · {Math.round(file.size / 1024)} КБ</div>}
+      {err && <div style={{ fontSize: 12, color: "#b91c1c", marginTop: 6 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 8, marginTop: 14, alignItems: "center" }}>
+        <button style={S.btn(true)} disabled={busy || (!note.trim() && !file)} onClick={() => onSubmit(channel, note.trim(), file)}>Записати</button>
+        <button style={S.btn()} disabled={busy} onClick={onCancel}>Скасувати</button>
+        {!note.trim() && !file && <span style={{ fontSize: 11, color: "#9ca3af" }}>додайте текст або скрин</span>}
       </div>
     </Modal>
   );

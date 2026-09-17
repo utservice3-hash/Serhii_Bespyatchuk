@@ -3514,6 +3514,9 @@ export interface ClientPlanRow {
   seasonalNote: string | null;
   lastTalk: string | null;
   lastTalkDays: number | null;
+  /** 📱 Останній контакт: свіжіше з розмови Ringostat і ручного запису (Viber/Telegram/…). */
+  lastContact?: { at: string; source: "talk" | "manual"; channel: string | null } | null;
+  lastContactHasFile?: boolean;
   attempts: number;
   taskId: number | null;
   taskStatus: string | null;
@@ -3604,7 +3607,43 @@ export interface ClientCall {
   /** 🎧 Пряме посилання на запис у кабінеті Ringostat. Відкривається без логіна. */
   recording: string | null;
 }
+export interface ClientContact {
+  id: number; channel: string; note: string | null; fileName: string | null; hasFile: boolean;
+  fileUrl: string | null; createdAt: string; createdById: number | null; author: string | null;
+}
+export const CONTACT_CHANNELS: { key: string; label: string }[] = [
+  { key: "viber", label: "Viber" }, { key: "telegram", label: "Telegram" }, { key: "email", label: "Email" },
+  { key: "call", label: "Дзвінок з особистого" }, { key: "other", label: "Інше" },
+];
+export function contactChannelLabel(key: string | null): string {
+  return CONTACT_CHANNELS.find((c) => c.key === key)?.label ?? (key ?? "");
+}
+export async function fetchClientContacts(clientKey: string): Promise<ClientContact[]> {
+  const { data } = await api.get<{ contacts: ClientContact[] }>("/dashboard/client-contacts", { params: { clientKey } });
+  return data.contacts;
+}
+export async function addClientContact(p: { clientKey: string; channel: string; note: string; file?: File | null }): Promise<ClientContact> {
+  let dataBase64: string | undefined;
+  if (p.file) {
+    dataBase64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(p.file!);
+    });
+  }
+  const { data } = await api.post<{ contact: ClientContact }>("/dashboard/client-contacts", {
+    clientKey: p.clientKey, channel: p.channel, note: p.note, dataBase64, filename: p.file?.name, mime: p.file?.type || null,
+  });
+  return data.contact;
+}
+export async function deleteClientContact(id: number): Promise<void> { await api.delete(`/dashboard/client-contacts/${id}`); }
+/** Скрин віддається лише з токеном, тож тягнемо через axios і показуємо як blob. */
+export async function fetchContactFileBlobUrl(id: number): Promise<string> {
+  const { data } = await api.get(`/dashboard/client-contacts/${id}/file`, { responseType: "blob" });
+  return URL.createObjectURL(data as Blob);
+}
+
 export interface ClientCard {
+  /** 📱 Контакти з клієнтом поза дзвінками (Viber/Telegram/…), зі скринами. */
+  contacts?: ClientContact[];
   /** 📞 Дзвінки по роках. `callsSince` — глибина памʼяті: порожній рік до неї означає «даних немає». */
   callsByYear?: ClientCallYear[];
   calls?: ClientCall[];

@@ -2,14 +2,14 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import type { AuthPayload } from "../../../auth";
 import {
   fetchClientPlans, saveClientPlan, submitClientPlans, approveClientPlans, returnClientPlan,
-  createClientReactivationTask, closeReactivationTask,
+  createClientReactivationTask, addClientContact, contactChannelLabel, closeReactivationTask,
   fetchClientComments, addClientComment,
   type ClientPlansResp, type ClientPlanRow, type ClientComment, type ManagerOption,
 } from "../../../api";
 import { formatAmountFull } from "../format";
 import { SegmentBadge, ForcedBadge } from "./SegmentBadge";
 import { RowComment } from "./RowComment";
-import { CreateTaskDialog, CloseTaskDialog } from "./ReactivationBits";
+import { CreateTaskDialog, CloseTaskDialog, ContactDialog } from "./ReactivationBits";
 import { ClientCardPanel } from "./ClientCardPanel";
 
 /**
@@ -223,6 +223,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
   const [stateFilter, setStateFilter] = useState<"all" | "active" | "sleeping" | "lost">("all");
   const [creating, setCreating] = useState<{ clientKey: string; name: string } | null>(null);
   const [closing, setClosing] = useState<{ taskId: number; name: string } | null>(null);
+  const [contacting, setContacting] = useState<{ clientKey: string; name: string } | null>(null);
   // 🔴 ДЕФОЛТ — «НАЙГІРШІ ЗВЕРХУ» (рішення власника 04.08.2026): екран планування
   // існує, щоб бачити проблеми, а не щоб милуватись лідерами. Другий режим —
   // «найбільші зверху» (факт ①), коли треба дивитись на обсяг.
@@ -380,6 +381,27 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         </td>
         <td style={S.td}><Spark values={c.history} months={data.historyMonths} /></td>
         <td style={S.td}><LastOrder days={c.lastOrderDays} /></td>
+        {/* 📱 КОНТАКТ — повернуто на екран (17.09.2026). При злитті вкладки «Реактивація» в
+            план колонки про дзвінки зникли, хоч бекенд їх рахував. Тепер: остання розмова
+            Ringostat АБО ручний контакт (Viber/Telegram, зі скрином), недодзвони окремо. */}
+        <td style={S.td}>
+          <div style={{ fontSize: 12, lineHeight: 1.4 }}>
+            {c.lastContact ? (
+              <div title={c.lastContact.source === "talk" ? "остання розмова по Ringostat (billsec > 0)" : `ручний контакт: ${contactChannelLabel(c.lastContact.channel)}`}>
+                {c.lastContact.source === "talk" ? "📞" : "📱"} {c.lastContact.at.slice(0, 10).split("-").reverse().slice(0, 2).join(".")}
+                {c.lastContact.source === "manual" && <span style={{ color: "#6b7280" }}> · {contactChannelLabel(c.lastContact.channel)}{c.lastContactHasFile ? " 📎" : ""}</span>}
+              </div>
+            ) : (
+              <span style={{ color: "#9ca3af" }}>контакту не було</span>
+            )}
+            {(c.attempts ?? 0) > 0 && (
+              <div style={{ color: "#b45309", fontSize: 11 }} title="дзвінки без відповіді після останньої розмови">недодзвонів {c.attempts}</div>
+            )}
+            <button disabled={busy} style={{ ...S.btn(), marginTop: 4, fontSize: 11, padding: "3px 8px" }}
+              title="Записати контакт у Viber/Telegram/email зі скрином"
+              onClick={() => setContacting({ clientKey: c.clientKey, name: c.clientName })}>＋ Контакт</button>
+          </div>
+        </td>
         <td style={S.td}>
           {/* 🔁 Перенесено з вкладки «Реактивація» дослівно. Єдина додана межа —
               активним кнопки НЕМАЄ: задача реактивації ставиться тому, хто перестав
@@ -478,7 +500,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
       </tr>
       {isOpen && (
         <tr>
-          <td colSpan={7} style={{ padding: "14px 16px", background: "#fbfdff", borderBottom: "1px solid #e5e7eb" }}>
+          <td colSpan={8} style={{ padding: "14px 16px", background: "#fbfdff", borderBottom: "1px solid #e5e7eb" }}>
             {/* КАРТКА КЛІЄНТА: спершу «як він платив» (те, заради чого
                 рядок і розгортають), під нею — коментарі й дзвінки. */}
             {/* onChanged — щоб «прибрати з постійних» одразу зникло з цього ж
@@ -663,6 +685,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
               <th style={S.th}>Клієнт</th>
               <th style={S.th}>Історія · 6 міс</th>
               <th style={S.th}>Останнє зам.</th>
+              <th style={S.th} title="Остання розмова (Ringostat) або ручний контакт у месенджері; недодзвони після останньої розмови">Контакт</th>
               <th style={S.th}>Задача</th>
               <th style={S.th}>План (міс)</th>
               <th style={S.th}>Тижні · план / факт</th>
@@ -698,7 +721,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
               );
             })}
             {rows.length === 0 && (
-              <tr><td colSpan={7} style={{ ...S.td, color: "#9ca3af", textAlign: "center", padding: 24 }}>
+              <tr><td colSpan={8} style={{ ...S.td, color: "#9ca3af", textAlign: "center", padding: 24 }}>
                 немає клієнтів під цей фільтр
               </td></tr>
             )}
@@ -707,6 +730,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
             <tfoot>
               <tr style={{ background: "#f8fafc", fontWeight: 800 }}>
                 <td style={{ ...S.td, borderBottom: "none" }}>Разом · {rows.length} клієнтів</td>
+                <td style={{ ...S.td, borderBottom: "none" }} />
                 <td style={{ ...S.td, borderBottom: "none" }} />
                 <td style={{ ...S.td, borderBottom: "none" }} />
                 <td style={{ ...S.td, borderBottom: "none" }}>{rows.reduce((s2, c) => s2 + c.plan, 0).toLocaleString("uk-UA")}</td>
@@ -771,6 +795,14 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           onSubmit={(deadline, comment) => act(async () => {
             await createClientReactivationTask({ clientKey: creating.clientKey, deadline, comment });
             setCreating(null);
+          })} />
+      )}
+      {contacting && (
+        <ContactDialog client={contacting} busy={busy}
+          onCancel={() => setContacting(null)}
+          onSubmit={(channel, note, file) => act(async () => {
+            await addClientContact({ clientKey: contacting.clientKey, channel, note, file });
+            setContacting(null);
           })} />
       )}
       {closing && data.closeReasons && (

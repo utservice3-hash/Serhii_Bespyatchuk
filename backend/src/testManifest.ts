@@ -143,6 +143,7 @@ export const MANIFEST_FILES: string[] = [
   "core/creditLimits.test.js",
   "core/receivablesView4b.test.js",
   "core/receivableNoteMerge.test.js",
+  "core/clientContacts.test.js",
   "routes/taskCommentKeep.test.js",
   "routes/taskDeepLink.test.js",
   "routes/missedCallsTab.test.js",
@@ -792,6 +793,9 @@ export const MANIFEST_TESTS: string[] = [
   "#458 ПРОВОДКА: крон частого синку → сигнал, обидва під наглядом із частотою крону",
   "#459 mergeNoteComment: порожнє лишає текст, текст замінює, clear стирає",
   "#459b РОУТ нотатки: SELECT попереднього → mergeNoteComment → upsert; clear читається з тіла",
+  "#460 lastContactOf: свіжіше з двох джерел, джерело й канал названі",
+  "#460b contactFileVerdict і canDeleteContact: межі з обох боків",
+  "#460c РОУТИ контактів за canSeeClient, рядок плану несе lastContact, матриця й схема узгоджені",
   // routes/missedCallsTab.test.ts — фронт вкладки: хвости звірки ТЗ-1 (17.09.2026)
   "#462 СИГНАЛ: нова й перевідкрита задача «📵» дзвонить виконавцю; стара, чужа й закрита — ні",
   "#463 ПЕРІОД: дефолт «вчора» за Києвом, навігатор на вкладці, спільний dateRange не їде",

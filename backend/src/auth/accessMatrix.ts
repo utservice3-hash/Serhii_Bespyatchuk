@@ -344,6 +344,16 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // тімлід дістають 403 за скоупом, і саме це фіксує рядок.
   { method: "GET", path: "/api/dashboard/client-card?clientKey=zzz", cls: "GET",
     allow: [], deny: ["hr"] },
+  // 📱 Контакти з клієнтом (17.09.2026): та сама межа, що картка — вкладка `loyalty` + `canSeeClient`.
+  // POST/DELETE на фейковому ключі відмовляють скоупом (403) або тілом (400) — deny-only.
+  { method: "GET", path: "/api/dashboard/client-contacts?clientKey=zzz", cls: "GET",
+    allow: [], deny: ["hr"] },
+  // Фінансист має адмін-скоуп і тут ПРОЙШОВ би (#11b) — тому в deny його немає: проба
+  // роутом, що пише, виконала б мутацію проти прода.
+  { method: "POST", path: "/api/dashboard/client-contacts", cls: "deny-only",
+    allow: [], deny: ["hr", "manager", "team_lead"] },
+  { method: "DELETE", path: "/api/dashboard/client-contacts/0", cls: "deny-only",
+    allow: [], deny: ["hr", "manager", "team_lead"] },
   // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника), ЗАДЕКЛАРОВАНА, А НЕ ДРЕЙФ.
   // Пошук клієнта відкрито ТІМЛІДУ — але звужено до ЙОГО команди КЛАМПОМ НА
   // СЕРВЕРІ (`mm.team_id`), не фільтром на фронті. Права `merge_clients` це не

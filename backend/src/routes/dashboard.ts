@@ -1,3 +1,8 @@
+import path from "node:path";
+import { mkdir, writeFile, unlink } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { UPLOAD_DIR } from "./uploads.js";
+import { lastContactOf, contactFileVerdict, canDeleteContact, CONTACT_CHANNEL_KEYS } from "../core/clientContacts.js";
 import { mergeNoteComment } from "../core/receivableNoteMerge.js";
 import { effectiveManagerSql, effectiveFromFor, TRANSFER_KINDS, type TransferKind } from "../core/effectiveManager.js";
 import { Router } from "express";
@@ -5684,6 +5689,12 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   );
   const clientKeys = clientsRes.rows.map((c) => c.client_key);
   const keySet = new Set(clientKeys);
+  // 📱 Останній РУЧНИЙ контакт по кожному клієнту (Viber/Telegram/…): одним запитом на список.
+  const manualRes = await pool.query<{ client_key: string; at: string; channel: string; has_file: boolean }>(
+    `SELECT DISTINCT ON (client_key) client_key, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at,
+            channel, (stored_name IS NOT NULL) AS has_file
+       FROM client_contacts WHERE client_key = ANY($1) ORDER BY client_key, created_at DESC`, [clientKeys]);
+  const manualByKey = new Map(manualRes.rows.map((r) => [r.client_key, r]));
 
   // ── ФАКТ І ТИЖНІ — ЯДРО (①). Один виклик на місяць + один на тиждень.
   const histFrom = (() => { const d = new Date(`${monthStr}-01T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - 5); return d.toISOString().slice(0, 7) + "-01"; })();
@@ -5897,6 +5908,10 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       lastTalk: reactByKey.get(c.client_key)?.lastTalk ?? null,
       lastTalkDays: reactByKey.get(c.client_key)?.lastTalkDays ?? null,
       attempts: reactByKey.get(c.client_key)?.attempts ?? 0,
+      // 📱 Останній контакт = свіжіше з розмови Ringostat і ручного запису; джерело названо.
+      lastContact: lastContactOf(reactByKey.get(c.client_key)?.lastTalk ?? null,
+        manualByKey.get(c.client_key)?.at ?? null, manualByKey.get(c.client_key)?.channel ?? null),
+      lastContactHasFile: manualByKey.get(c.client_key)?.has_file ?? false,
       taskId: reactByKey.get(c.client_key)?.taskId ?? null,
       taskStatus: reactByKey.get(c.client_key)?.taskStatus ?? null,
       taskDeadline: reactByKey.get(c.client_key)?.taskDeadline ?? null,
@@ -6419,6 +6434,95 @@ dashboardRouter.get("/client-search", async (req, res) => {
  * а для незакритих — створення). Тому Σ стовпчиків НЕ дорівнює Σ списку, і
  * зводити їх не треба: перше — метрика, друге — перелік.
  */
+// ───────────────────────── 📱 КОНТАКТИ З КЛІЄНТОМ (17.09.2026) ─────────────────────────
+// Тека ПОЗА `uploads/`: `/api/files` віддає `uploads/` без токена, а скрин переписки — не для всіх.
+const CONTACT_FILES_DIR = path.join(UPLOAD_DIR, "..", "contact-files");
+
+function shapeContact(r: { id: number; channel: string; note: string | null; file_name: string | null; mime: string | null;
+  created_at: string; created_by: number | null; author: string | null }) {
+  return { id: r.id, channel: r.channel, note: r.note, fileName: r.file_name, hasFile: !!r.file_name,
+    fileUrl: r.file_name ? `/api/dashboard/client-contacts/${r.id}/file` : null,
+    createdAt: r.created_at, createdById: r.created_by, author: r.author };
+}
+const CONTACT_SELECT = `SELECT c.id, c.channel, c.note, c.file_name, c.mime, c.stored_name, c.created_by,
+         to_char(c.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+         COALESCE(m.name, u.full_name, u.email) AS author
+    FROM client_contacts c LEFT JOIN users u ON u.id = c.created_by LEFT JOIN managers m ON m.id = u.manager_id`;
+
+/** Список контактів клієнта — тим, хто бачить клієнта. */
+dashboardRouter.get("/client-contacts", async (req, res) => {
+  const clientKey = String(req.query.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  if (!(await canSeeClient(req.auth!, clientKey))) return res.status(403).json({ error: "Forbidden" });
+  const r = await pool.query(`${CONTACT_SELECT} WHERE c.client_key = $1 ORDER BY c.created_at DESC LIMIT 100`, [clientKey]);
+  res.json({ contacts: r.rows.map(shapeContact) });
+});
+
+/** Записати контакт: канал + текст + необовʼязковий скрин (base64, лише зображення, ≤ 5 МБ). */
+dashboardRouter.post("/client-contacts", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  const channel = String(req.body?.channel ?? "").trim();
+  const note = String(req.body?.note ?? "").trim().slice(0, 1000) || null;
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  if (!CONTACT_CHANNEL_KEYS.includes(channel)) return res.status(400).json({ error: "Канал: viber, telegram, email, call або other" });
+  // 🔴 Право писати — за КЛІЄНТОМ (той самий скоуп, що бачить картку): менеджер свого, тімлід
+  // команди, КВП і вище — усіх. Ролі лише-читання (HR, бухгалтерія) сюди не доходять за вкладкою.
+  if (!(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Клієнт поза вашим скоупом" });
+  let storedName: string | null = null, fileName: string | null = null, mime: string | null = null, size: number | null = null;
+  const dataBase64 = req.body?.dataBase64;
+  if (typeof dataBase64 === "string" && dataBase64.length > 0) {
+    const raw = dataBase64.includes(",") ? dataBase64.split(",")[1] : dataBase64;
+    const buffer = Buffer.from(raw, "base64");
+    mime = req.body?.mime ? String(req.body.mime) : null;
+    const v = contactFileVerdict(mime, buffer.length);
+    if (!v.ok) return res.status(413).json({ error: v.error });
+    fileName = (String(req.body?.filename ?? "скрин").trim() || "скрин").slice(0, 120);
+    const ext = path.extname(fileName).slice(0, 8).replace(/[^.\w]/g, "") || ".jpg";
+    storedName = `${randomUUID()}${ext}`;
+    await mkdir(CONTACT_FILES_DIR, { recursive: true });
+    await writeFile(path.join(CONTACT_FILES_DIR, storedName), buffer);
+    size = buffer.length;
+  }
+  if (!note && !storedName) return res.status(400).json({ error: "Додайте текст або скрин — порожній контакт нічого не доводить" });
+  const ins = await pool.query<{ id: number }>(
+    `INSERT INTO client_contacts (client_key, channel, note, stored_name, file_name, mime, size_bytes, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`, [clientKey, channel, note, storedName, fileName, mime, size, auth.userId]);
+  const r = await pool.query(`${CONTACT_SELECT} WHERE c.id = $1`, [ins.rows[0].id]);
+  res.json({ ok: true, contact: shapeContact(r.rows[0]) });
+});
+
+/** Скрин контакту — лише тим, хто бачить клієнта. `inline`, без токена в URL не віддається. */
+dashboardRouter.get("/client-contacts/:id/file", async (req, res) => {
+  const id = Number(req.params.id);
+  const r = await pool.query<{ client_key: string; stored_name: string | null; file_name: string | null; mime: string | null }>(
+    `SELECT client_key, stored_name, file_name, mime FROM client_contacts WHERE id = $1`, [id]);
+  const row = r.rows[0];
+  if (!row?.stored_name) return res.status(404).json({ error: "Файл не знайдено" });
+  if (!(await canSeeClient(req.auth!, row.client_key))) return res.status(403).json({ error: "Forbidden" });
+  if (row.mime) res.type(row.mime);
+  res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(row.file_name ?? "contact")}`);
+  res.sendFile(path.join(CONTACT_FILES_DIR, row.stored_name), (err) => {
+    if (err && !res.headersSent) res.status(404).json({ error: "Файл відсутній на диску" });
+  });
+});
+
+/** Видалити: свій запис протягом доби, керівництво — будь-який. Файл прибирається з диска. */
+dashboardRouter.delete("/client-contacts/:id", async (req, res) => {
+  const auth = req.auth!;
+  const id = Number(req.params.id);
+  const r = await pool.query<{ client_key: string; stored_name: string | null; created_by: number | null; created_at: string }>(
+    `SELECT client_key, stored_name, created_by, created_at FROM client_contacts WHERE id = $1`, [id]);
+  const row = r.rows[0];
+  if (!row) return res.status(404).json({ error: "Запис не знайдено" });
+  if (!(await canSeeClient(auth, row.client_key))) return res.status(403).json({ error: "Forbidden" });
+  if (!canDeleteContact(isAdminScope(auth), row.created_by, auth.userId, row.created_at, new Date()))
+    return res.status(403).json({ error: "Свій запис можна прибрати протягом доби; далі — керівництво" });
+  await pool.query(`DELETE FROM client_contacts WHERE id = $1`, [id]);
+  if (row.stored_name) await unlink(path.join(CONTACT_FILES_DIR, row.stored_name)).catch(() => {});
+  res.json({ ok: true });
+});
+
 dashboardRouter.get("/client-card", async (req, res) => {
   const auth = req.auth!;
   const clientKey = String(req.query.clientKey ?? "").trim();
@@ -6577,6 +6681,7 @@ dashboardRouter.get("/client-card", async (req, res) => {
     lastPaid: h?.last_paid ?? null,
     months,
     monthsTotal: months.reduce((s2, m) => s2 + m.revenue, 0),
+    contacts: (await pool.query(`${CONTACT_SELECT} WHERE c.client_key = $1 ORDER BY c.created_at DESC LIMIT 50`, [clientKey])).rows.map(shapeContact),
     callsByYear: callsRes.rows.map((r) => ({
       year: Number(r.year), calls: Number(r.calls), talks: Number(r.talks),
       totalSec: Number(r.total_sec), lastAt: r.last_at,
