@@ -47,3 +47,17 @@ export const LEADGEN_CONVERSION_TARGETS = { oprOfLeads: 40, quotesOfOpr: 50, mac
 export function pct(part: number, whole: number): number | null {
   return whole > 0 ? Math.round((part / whole) * 1000) / 10 : null;
 }
+
+/**
+ * 🧾 ПОКРИТТЯ ПОЛЯ «ЛИДОГЕНЕРАТОР» — ЖИВЕ ЧИСЛО ЗАМІСТЬ ЗАШИТОГО «11 зі 103».
+ * Розріз доходу по особах лідгенів у ТЗ «показники, яких не вистачає» (17.09.2026)
+ * неможливий, поки поле порожнє: заміряно 17.09 — 36 497 із 38 534 лідоген-угод 2026
+ * без особи (95 %). Підпис називає ОБИДВА числа й відсоток; порожній період каже
+ * «лідів немає», а не «0 %», щоб порожнеча не читалась як нуль покриття.
+ */
+export function leadGeneratorFillNote(withPerson: number, total: number): string {
+  if (total <= 0) return "поле «Лидогенератор»: лідоген-угод у періоді немає";
+  const p = pct(withPerson, total);
+  return `поле «Лидогенератор» заповнене в ${withPerson.toLocaleString("uk-UA")} із ${total.toLocaleString("uk-UA")} `
+    + `лідоген-угод періоду (${p} %) — розріз доходу по особах зʼявиться, коли поле заповнюватимуть у CRM`;
+}
