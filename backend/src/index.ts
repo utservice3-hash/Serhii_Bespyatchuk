@@ -67,6 +67,7 @@ import { recomputeStatistics, getStatisticsStatus } from "./jobs/recomputeStatis
 import { recomputeClientKeys } from "./jobs/recomputeClientKeys.js";
 import { syncRingostatCalls, getRingostatStatus } from "./jobs/syncRingostatCalls.js";
 import { syncCalls } from "./jobs/syncCalls.js";
+import { missedCallTasks } from "./jobs/missedCallTasks.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
 import { collectLardi } from "./jobs/collectLardi.js";
 import { syncCarriers } from "./jobs/syncCarriers.js";
@@ -750,6 +751,25 @@ cron.schedule("*/10 * * * *", () => {
 // мовчання почне бити тривогу на самого поштаря. Тримає `#115b`.
 cron.schedule("*/5 * * * *", () => {
   void runJob("alertPush", () => alertPush());
+});
+
+// 📵 ПРОПУЩЕНІ → ЗАДАЧА МЕНЕДЖЕРУ ЗА 5 ХВ (ТЗ-1, прохід 3, рішення власника 16.09.2026).
+// Годинний синк лишає дзвінки в базі до години старими — для порога 5 хв це не сигнал.
+// Тому щопʼять хвилин: спершу свіже вікно дзвінків (1 год, звʼязування ЛИШЕ в ньому),
+// ПОТІМ сигнал — по тих самих щойно привезених даних.
+// ⚠️ Хвилини :02, :07 … :57 — не на :00/:30 із syncKommo і не разом із поштарем.
+// 🔴 ПЕРЕЛІКОМ, А НЕ «2-59/5»: node-cron 3.0.3 читає крок у діапазоні як «кратні 5 у межах
+// 2–59», тобто :05, :10 … — рівно разом із поштарем, а :00 пропускає. Заміряно його ж
+// матчером 16.09.2026; `#458` тому бере хвилини з бібліотеки, а не з тексту розкладу.
+// ⚠️ Стоїть ПІСЛЯ поштаря свідомо: `#115b` читає ОСТАННІЙ крон перед `alertPush`.
+// Годинний і частий синки ділять одного охоронця — одночасно по `ringostat_calls` пише
+// один прохід (`#455`). Сигнал біжить і після пропуску синку: задачі по вже наявних даних
+// коректні, лише свіжість гірша. Обидві під наглядом (`monitoredJobs.ts`), тримає `#458`.
+cron.schedule("2,7,12,17,22,27,32,37,42,47,52,57 * * * *", () => {
+  void (async () => {
+    await runJob("syncCallsFresh", () => syncCalls(1, { boundLink: true }));
+    await runJob("missedCallTasks", () => missedCallTasks());
+  })();
 });
 
 // 🔴 СТАРТ БЕЗ СПЛЕСКУ ПАМʼЯТІ (2 ГБ shared-акаунт adm.tools, crash-loop 15.07.2026).

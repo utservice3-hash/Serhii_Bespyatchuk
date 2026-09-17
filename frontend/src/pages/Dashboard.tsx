@@ -53,6 +53,7 @@ import {
 } from "../api";
 import { Layout, NAV_ITEMS, HIDDEN_NAV, type NavKey } from "../components/Layout";
 import { getDateRange } from "../components/DateRangeFilter";
+import { isSignalAlert, signalAlertText, knownOf, type KnownTask } from "./dashboard/signalTaskNotify";
 import { getAuthPayload } from "../auth";
 import { currentMonth, formatAmount, formatAmountFull, previousRange, getRank, presence } from "./dashboard/format";
 import { STAGE_LABELS, STAGE_ORDER } from "./dashboard/constants";
@@ -174,10 +175,15 @@ export function Dashboard() {
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
+  const [tasksLoadFailed, setTasksLoadFailed] = useState(false);
   // Task-status notifications (sound + toast) when MY task is taken into work /
   // completed. prevStatus tracks last-seen status; init guards the first load.
   const prevTaskStatus = useRef<Map<number, string>>(new Map());
   const notifInit = useRef(false);
+  /** Стан задач із ПОПЕРЕДНЬОГО фонового опитування; `null` — першого опитування ще не було. */
+  const signalKnown = useRef<Map<number, KnownTask> | null>(null);
+  /** Момент відкриття сторінки: до першого опитування дзвонимо лише задачами, створеними ПІСЛЯ нього. */
+  const mountedAt = useRef(Date.now());
   const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
   const [managerOptions, setManagerOptions] = useState<ManagerOption[]>([]);
   const [taskSearch, setTaskSearch] = useState("");
@@ -310,8 +316,8 @@ export function Dashboard() {
     if (section !== "tasks") return;
     setTasksLoading(true);
     fetchTasks()
-      .then(setTasks)
-      .catch(() => setTasks([]))
+      .then((t) => { setTasks(t); setTasksLoadFailed(false); })
+      .catch(() => { setTasks([]); setTasksLoadFailed(true); })
       .finally(() => setTasksLoading(false));
     fetchManagerOptions().then(setManagerOptions).catch(() => setManagerOptions([]));
   }, [section]);
@@ -325,9 +331,30 @@ export function Dashboard() {
   }, []);
   // Фоновий рефетч ЗЛИВАЄТЬСЯ з незбереженими правками, а не замінює їх:
   // `setTasks` навпростець стирав текст, який людина ще набирає.
+  //
+  // 📵 ТУТ ЖЕ — сповіщення про НОВУ задачу-сигнал «пропущений без передзвону» (ТЗ-1 §1.5, канал (a):
+  // тост + звук + браузерна нотифікація). Не в ефекті статусів нижче: той вважає «першим
+  // завантаженням» порожній початковий стан, і перший справжній список задзвенів би всіма
+  // старими задачами. Тут базова лінія — ПЕРШЕ опитування: воно лише запамʼятовує, що є.
+  const notifySignalTasks = (fresh: Task[]) => {
+    const known = signalKnown.current;
+    const text = signalAlertText(fresh.filter((t) => isSignalAlert(t, known, auth?.managerId, mountedAt.current)).map((t) => t.title));
+    if (text) {
+      setToasts((cur) => [...cur, { id: Date.now(), text }]);
+      beep(false);
+      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+        try { new Notification("UTS Dashboard", { body: text }); } catch { /* ignore */ }
+      }
+    }
+    signalKnown.current = new Map(fresh.map((t) => [t.id, knownOf(t)]));
+  };
   usePolling(() => {
     fetchTasks()
-      .then((fresh) => setTasks((prev) => mergeTasksPreservingEdits(prev, fresh, dirtyTaskFields.current)))
+      .then((fresh) => {
+        notifySignalTasks(fresh);
+        setTasks((prev) => mergeTasksPreservingEdits(prev, fresh, dirtyTaskFields.current));
+        setTasksLoadFailed(false);
+      })
       .catch(() => {});
   }, 45000);
 
@@ -1042,10 +1069,12 @@ export function Dashboard() {
         /**
          * 📵 ТЗ-1. СТАТИЧНИЙ імпорт свідомо: `React.lazy` розбив би бандл на чанки, а докрут
          * чистить старі асети — людина без перезавантаження отримала б 404 (гейт #225).
-         * Період — спільний, як у «Лідогенерації»: тімлід дивиться той самий зріз часу,
-         * що й на решті екранів.
+         * 🔴 Період — СВІЙ у вкладці (дефолт «вчора», ТЗ §1.4 A), а не спільний `dateRange`:
+         * той живе в `localStorage` і з видимих екранів не змінюється, тож вкладка показувала
+         * період першого заходу назавжди (звірка 16.09.2026). `canOpenClient` — картка клієнта
+         * стоїть за вкладкою «Клієнти», без неї кнопка дала б 403.
          */
-        <MissedCallsSection from={dateRange.from} to={dateRange.to} />
+        <MissedCallsSection canOpenClient={!!screens?.includes("loyalty")} />
       )}
 
       {section === "receivables" && (
@@ -1408,6 +1437,7 @@ export function Dashboard() {
           setTaskModalOpen={setTaskModalOpen}
           taskForm={taskForm}
           tasksLoading={tasksLoading}
+          tasksLoadFailed={tasksLoadFailed}
           tasks={tasks}
           managerOptions={managerOptions}
           patchTaskLocal={patchTaskLocal}

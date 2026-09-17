@@ -92,6 +92,33 @@ export const SELF_CALLBACK_SQL =
 export interface MissedScope { managerId?: number | null; teamId?: number | null }
 
 /**
+ * 🔒 КЛАМП СКОУПУ — ОДНЕ МІСЦЕ НА ВСІ РОУТИ ЕКРАНА. Доти він жив інлайном в одному роуті;
+ * у проході 2 роутів стає чотири, і розмножити межу доступу копіями означало б, що
+ * виправлення ляже в одну, а три тихо відстануть.
+ *
+ * Менеджер бачить лише себе, тімлід — свою команду, решта — те, що попросили в запиті.
+ * ⚠️ Тімлідів кламп СВІДОМО ховає «без відповідального»: дзвінок, що не дійшов до людини,
+ * не належить жодній команді, і приписати його команді означало б вигадати відповідального.
+ */
+export function missedScopeFor(
+  auth: { role: string; managerId: number | null; teamId: number | null },
+  query: { managerId?: unknown; teamId?: unknown },
+): MissedScope {
+  let managerId = query.managerId ? Number(query.managerId) : null;
+  let teamId = query.teamId ? Number(query.teamId) : null;
+  // 🔴 `?? -1`, а НЕ голий `auth.managerId`. Ядро фільтрує через `if (s.managerId)`, тобто
+  // null і 0 для нього — «фільтра немає», а не «нікого». Менеджер без привʼязаного
+  // manager_id бачив би дзвінки ВСІЄЇ компанії. Правило 7 з CLAUDE.md: порожній скоуп не
+  // можна виражати нулем. -1 truthy, фільтр ставиться й не збігається ні з ким.
+  // 📐 Заміряно 16.09.2026: сьогодні в цю діру не потрапляє жоден із 47 активних
+  // акаунтів — вада прихована, а не діюча. Але в тімліда фолбек `?? -1` стояв від
+  // початку, тобто асиметрія була випадковою, а не рішенням.
+  if (auth.role === "manager") { managerId = auth.managerId ?? -1; teamId = null; }
+  else if (auth.role === "team_lead") teamId = auth.teamId ?? -1;
+  return { managerId, teamId };
+}
+
+/**
  * Спільна основа обох запитів: вхідні з нульовою розмовою за період, склеєні,
  * з бакетом доби і з двома LATERAL-сусідами (наш передзвін / клієнт сам).
  *
@@ -114,7 +141,7 @@ function baseCte(from: string, to: string, s: MissedScope): { cte: string; param
   if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
   const cte = `
     WITH base AS (
-      SELECT rc.uniqueid, rc.manager_id, rc.client_phone, rc.calldate, rc.billsec, rc.disposition,
+      SELECT rc.uniqueid, rc.manager_id, rc.client_phone, rc.client_key, rc.calldate, rc.billsec, rc.disposition,
              ${dayBucketParts("rc.calldate")}
         FROM ringostat_calls rc
         LEFT JOIN managers m ON m.id = rc.manager_id
@@ -184,7 +211,7 @@ export function missedByManagerSql(from: string, to: string, s: MissedScope): { 
   const { cte, params } = baseCte(from, to, s);
   const m = missedDispSql();
   const sql = `${cte}
-    SELECT w.manager_id, MAX(mg.name) AS name,
+    SELECT w.manager_id, MAX(mg.name) AS name, MAX(mg.team_id) AS team_id,
            COUNT(*)::int AS missed,
            COUNT(*) FILTER (WHERE cb_at IS NOT NULL AND (${SELF_CALLBACK_SQL}))::int AS callback_self,
            COUNT(*) FILTER (WHERE cb_at IS NOT NULL AND NOT (${SELF_CALLBACK_SQL}))::int AS callback_colleague,
@@ -197,11 +224,153 @@ export function missedByManagerSql(from: string, to: string, s: MissedScope): { 
   return { sql, params };
 }
 
+/**
+ * 👥 РЯДОК КОМАНДИ — блок B (ТЗ §1.4 B: «кожен менеджер + без відповідального + рядок
+ * команди + всього»). Хвіст, знайдений звіркою 16.09.2026: рядків команд не було.
+ *
+ * 🔴 ОКРЕМИЙ ЗАПИТ, А НЕ Σ МЕНЕДЖЕРІВ НА ФРОНТІ — через медіану. Штуки додаються, медіани
+ * ні: медіана команди — це медіана по ВСІХ пропущених команди, і порахувати її можна лише
+ * над рядками, а не над медіанами людей. Та сама причина, чому медіана «всього» береться з
+ * підсумку, а не з таблиці.
+ *
+ * ⚠️ КОМАНДА — ПОТОЧНА (`managers.team_id`), не на момент дзвінка. Це те саме правило, за
+ * яким скоуп тімліда відбирає дзвінки в `baseCte` (`m.team_id = $N`): інакше рядок команди
+ * в адміна і вся таблиця тімліда тієї ж команди розійшлися б на людях, що змінили команду.
+ *
+ * «Без відповідального» сюди НЕ входить — він не належить жодній команді (РІШЕННЯ 3) і
+ * лишається своїм рядком. Менеджер без команди — чесне «Поза командами», а не пропуск.
+ */
+export function missedByTeamSql(from: string, to: string, s: MissedScope): { sql: string; params: unknown[] } {
+  const { cte, params } = baseCte(from, to, s);
+  const m = missedDispSql();
+  const sql = `${cte}
+    SELECT mg.team_id, MAX(t.name) AS team_name,
+           COUNT(*)::int AS missed,
+           COUNT(*) FILTER (WHERE cb_at IS NOT NULL AND (${SELF_CALLBACK_SQL}))::int AS callback_self,
+           COUNT(*) FILTER (WHERE cb_at IS NOT NULL AND NOT (${SELF_CALLBACK_SQL}))::int AS callback_colleague,
+           COUNT(*) FILTER (WHERE cs_at IS NOT NULL)::int AS client_self,
+           ${MEDIAN_MIN_SQL} AS median_min
+      FROM withNext w
+      JOIN managers mg ON mg.id = w.manager_id
+      LEFT JOIN teams t ON t.id = mg.team_id
+     WHERE ${m}
+     GROUP BY mg.team_id`;
+  return { sql, params };
+}
+
+/* ═══════════════════════ ДИНАМІКА (17.09.2026, прохід «статистика по днях») ═══════════════════════ */
+
+export const SERIES_GRANULARITIES = ["day", "week", "month"] as const;
+export type SeriesGranularity = (typeof SERIES_GRANULARITIES)[number];
+
+/**
+ * 📈 РЯДИ «ПРОПУЩЕНІ ПО ДНЯХ / ТИЖНЯХ / МІСЯЦЯХ» — для графіка, як на сторінках Статистик.
+ *
+ * 🔴 ТА САМА ОСНОВА, ЩО Й ПЛИТКИ (`baseCte`): склейка плечей, вердикт першого плеча, передзвін у
+ * 24 год, скоуп. Інакше сума точок графіка за місяць розійшлась би з плиткою «Пропущено» за той
+ * самий місяць — два числа одного показника на одному екрані.
+ *
+ * Серії: `total` (увесь зріз), кожна команда (`team:<id>`), «Поза командами» (`noteam`) і «Без
+ * відповідального» (`ownerless`) — ОДНИМ запитом через GROUPING SETS, тож Σ серій == `total` у кожній
+ * точці за побудовою. Команда — ПОТОЧНА, як у скоупі тімліда. Тиждень починається з понеділка,
+ * межі — за Києвом.
+ */
+export function missedSeriesSql(granularity: SeriesGranularity, from: string, to: string, s: MissedScope): { sql: string; params: unknown[] } {
+  if (!(SERIES_GRANULARITIES as readonly string[]).includes(granularity)) throw new Error(`невідома гранулярність: ${String(granularity)}`);
+  const { cte, params } = baseCte(from, to, s);
+  const m = missedDispSql();
+  const sql = `${cte},
+    r AS (
+      SELECT to_char(date_trunc('${granularity}', (w.calldate AT TIME ZONE 'Europe/Kyiv')), 'YYYY-MM-DD') AS period,
+             CASE WHEN w.manager_id IS NULL THEN 'ownerless'
+                  WHEN mg.team_id IS NULL THEN 'noteam'
+                  ELSE 'team:' || mg.team_id::text END AS skey,
+             CASE WHEN w.manager_id IS NULL THEN '${OWNERLESS_LABEL}'
+                  WHEN mg.team_id IS NULL THEN '${NO_TEAM_LABEL}'
+                  ELSE COALESCE(t.name, 'Команда #' || mg.team_id::text) END AS sname,
+             w.calldate, w.cb_at, w.cs_at
+        FROM withNext w
+        LEFT JOIN managers mg ON mg.id = w.manager_id
+        LEFT JOIN teams t ON t.id = mg.team_id
+       WHERE ${m}
+    )
+    SELECT period,
+           CASE WHEN GROUPING(skey) = 1 THEN 'total' ELSE skey END AS skey,
+           CASE WHEN GROUPING(skey) = 1 THEN NULL ELSE MAX(sname) END AS sname,
+           COUNT(*)::int AS missed,
+           COUNT(*) FILTER (WHERE cb_at IS NOT NULL)::int AS callback,
+           COUNT(*) FILTER (WHERE cs_at IS NOT NULL)::int AS client_self,
+           ${MEDIAN_MIN_SQL} AS median_min
+      FROM r
+     GROUP BY GROUPING SETS ((period), (period, skey))
+     ORDER BY period, skey`;
+  return { sql, params };
+}
+
+export interface MissedSeriesRaw {
+  period: string; skey: string; sname: string | null; missed: number; callback: number; client_self: number; median_min: string | number | null;
+}
+export interface MissedSeriesPoint { period: string; missed: number; callback: number; clientSelf: number; medianMin: number | null }
+export interface MissedSeries { key: string; name: string | null; points: MissedSeriesPoint[] }
+
+/**
+ * Рядки SQL → серії графіка. Порядок стабільний і змістовний: «усього» першою, команди за
+ * спаданням пропущених за весь ряд, «Поза командами» і «Без відповідального» — в кінці, як у
+ * таблиці B. Медіана округлюється до хвилини тут, один раз.
+ */
+export function foldSeries(raw: MissedSeriesRaw[]): MissedSeries[] {
+  const by = new Map<string, MissedSeries>();
+  for (const r of raw) {
+    const s = by.get(r.skey) ?? { key: r.skey, name: r.skey === "total" ? null : r.sname, points: [] };
+    s.points.push({
+      period: r.period, missed: Number(r.missed), callback: Number(r.callback), clientSelf: Number(r.client_self),
+      medianMin: r.median_min == null ? null : Math.round(Number(r.median_min)),
+    });
+    by.set(r.skey, s);
+  }
+  const rank = (s: MissedSeries): number => (s.key === "total" ? 0 : s.key === "noteam" ? 2 : s.key === "ownerless" ? 3 : 1);
+  const sum = (s: MissedSeries): number => s.points.reduce((n, p) => n + p.missed, 0);
+  for (const s of by.values()) s.points.sort((a, b) => a.period.localeCompare(b.period));
+  return [...by.values()].sort((a, b) => rank(a) - rank(b) || sum(b) - sum(a) || String(a.name).localeCompare(String(b.name), "uk"));
+}
+
+/** Підпис групи менеджерів без команди. Невідоме називає себе словами (правило фронту). */
+export const NO_TEAM_LABEL = "Поза командами";
+
+export interface MissedTeamRaw {
+  teamId: number | null; name: string | null; missed: number;
+  callbackSelf: number; callbackColleague: number; clientSelf: number; medianMin: number | null;
+}
+export interface MissedTeamRow extends MissedTeamRaw { name: string; noCallback: number }
+
+/** Команди за спаданням пропущених; «Поза командами» — останньою, як «без відповідального». */
+export function foldTeamRows(raw: MissedTeamRaw[]): MissedTeamRow[] {
+  return raw
+    .map((r) => ({
+      ...r,
+      name: r.teamId === null ? NO_TEAM_LABEL : (r.name ?? `Команда #${String(r.teamId)}`),
+      noCallback: r.missed - r.callbackSelf - r.callbackColleague,
+    }))
+    .sort((a, b) =>
+      (a.teamId === null ? 1 : 0) - (b.teamId === null ? 1 : 0)
+      || b.missed - a.missed
+      || a.name.localeCompare(b.name, "uk"));
+}
+
+/**
+ * 🔴 ЧИ Є «БЕЗ ВІДПОВІДАЛЬНОГО» У ЦЬОМУ ЗРІЗІ ВЗАГАЛІ. Скоуп команди чи менеджера такі дзвінки
+ * відсікає (`baseCte`: `m.team_id = $N` на LEFT JOIN дає NULL), тож їхній лічильник там
+ * ЗАВЖДИ 0. Показати тімліду плитку «Без відповідального: 0» означало б сказати «у вас таких
+ * немає», хоча правда — «у зріз команди вони не входять». Правило 7 з CLAUDE.md: порожній
+ * скоуп не виражається нулем. Спіймано звіркою 16.09.2026.
+ */
+export const ownerlessInScope = (s: MissedScope): boolean => !s.managerId && !s.teamId;
+
 /** Підпис рядка «нічиїх». Слово одне на продукт — див. коментар у `foldManagerRows`. */
 export const OWNERLESS_LABEL = "Без відповідального";
 
 export interface MissedManagerRaw {
-  managerId: number | null; name: string | null; missed: number;
+  managerId: number | null; name: string | null; teamId: number | null; missed: number;
   callbackSelf: number; callbackColleague: number; clientSelf: number; medianMin: number | null;
 }
 export interface MissedManagerRow extends MissedManagerRaw { name: string; noCallback: number }
@@ -236,7 +405,7 @@ export function foldManagerRows(raw: MissedManagerRaw[]): { rows: MissedManagerR
   return {
     rows,
     total: {
-      managerId: null, name: "Всього", missed: sum((r) => r.missed),
+      managerId: null, name: "Всього", teamId: null, missed: sum((r) => r.missed),
       callbackSelf: sum((r) => r.callbackSelf), callbackColleague: sum((r) => r.callbackColleague),
       clientSelf: sum((r) => r.clientSelf), noCallback: sum((r) => r.noCallback), medianMin: null,
     },
@@ -265,4 +434,188 @@ export function missedPeriod(from: string | null, to: string | null, today: stri
   const d = new Date(`${end}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() - (MISSED_DEFAULT_DAYS - 1));
   return { from: d.toISOString().slice(0, 10), to: end };
+}
+
+
+/* ═══════════════════════════ БЛОКИ C і D (прохід 2, 16.09.2026) ═══════════════════════════ */
+
+/**
+ * 🪟 ВІКНО «УГОДА ПОВʼЯЗАНА З ДЗВІНКОМ»: від доби ДО дзвінка до семи днів ПІСЛЯ.
+ * Сім днів — рішення власника 15.09.2026 («так, хай буде 7 днів»). Доба до — з означення
+ * в ТЗ (§1.4 D), на якому знято заміри 2 631 / 1 252 / 1 279: клієнт часто дзвонить по
+ * заявці, яку завели за кілька годин перед тим, і вона не є «незаведеною».
+ *
+ * 🔴 ОДНЕ ВІКНО НА ДВА БЛОКИ. «Є угода» в списку дзвінків (C) і в розкладі станів (D)
+ * мусять означати одне й те саме — тому обидва кличуть `dealInWindowLateral`, а не
+ * пишуть кожен свій `LATERAL`. Друга копія розійшлась би з першою мовчки: рівно так на
+ * екрані Звіту жили два правила «новий/постійний» (12.6% угод серпня розходились).
+ */
+export const DEAL_WINDOW_BEFORE = "1 day";
+export const DEAL_WINDOW_AFTER = "7 days";
+
+/**
+ * Перша угода клієнта у вікні. Звичайна рівність по `client_key`: дзвінок із невідомим
+ * клієнтом (NULL) угоди не має за побудовою — і це правильно, бо «не знаємо, хто
+ * дзвонив» не може мати заведеної заявки.
+ */
+export const dealInWindowLateral = (a: string, out = "dl"): string => `
+        LEFT JOIN LATERAL (
+          SELECT d.kommo_id
+            FROM deals d
+           WHERE d.client_key = ${a}.client_key
+             AND d.created_at_kommo >= ${a}.calldate - interval '${DEAL_WINDOW_BEFORE}'
+             AND d.created_at_kommo <= ${a}.calldate + interval '${DEAL_WINDOW_AFTER}'
+           ORDER BY d.created_at_kommo, d.kommo_id LIMIT 1) ${out} ON TRUE`;
+
+/**
+ * Стеля списку: день — це сотні рядків, але екран не мусить падати від тисяч.
+ * 🔴 ЗАПИТ БЕРЕ НА ОДИН РЯДОК БІЛЬШЕ. Інакше «обрізано» довелось би виводити з
+ * `рядків >= стелі`, і при рівно 1000 рядків екран сказав би «список обрізаний», хоча
+ * показав усе. Зайвий рядок доводить обрізання, а не припускає його.
+ */
+export const MISSED_LIST_LIMIT = 1000;
+
+/**
+ * Обрізати список до стелі й ЧЕСНО сказати, чи було що обрізати. Запит бере `limit + 1`
+ * рядків; обрізання доведене лише тоді, коли той зайвий рядок справді прийшов.
+ */
+export function capRows<T>(rows: T[], limit = MISSED_LIST_LIMIT): { rows: T[]; truncated: boolean } {
+  return { rows: rows.slice(0, limit), truncated: rows.length > limit };
+}
+
+/* ─────────────── Блок C · список пропущених за день ─────────────── */
+
+/**
+ * 🔴 СПИСОК РАХУЄТЬСЯ ТИМ САМИМ ВИРАЗОМ, ЩО Й ЧИСЛО. Правило екранів Звіту: розкриття
+ * пояснює число, а не сперечається з ним. Тому тут `baseCte` + `missedDispSql` — рівно
+ * те, чим `missedSummarySql` рахує «пропущено». Для одного дня кількість рядків
+ * списку дорівнює `summary.missed` за той самий день — це й стереже `#450`.
+ */
+export function missedListSql(day: string, s: MissedScope, onlyNoCallback = false): { sql: string; params: unknown[] } {
+  const { cte, params } = baseCte(day, day, s);
+  const extra = onlyNoCallback ? " AND w.cb_at IS NULL" : "";
+  const sql = `${cte}
+    SELECT w.uniqueid,
+           to_char(w.calldate AT TIME ZONE 'Europe/Kyiv', 'HH24:MI') AS at,
+           w.client_phone, w.client_key, w.manager_id, mg.name AS manager_name, w.bucket,
+           EXTRACT(EPOCH FROM (w.cb_at - w.calldate))/60.0 AS cb_min,
+           (w.cb_billsec > 0) AS cb_talked,
+           EXTRACT(EPOCH FROM (w.cs_at - w.calldate))/60.0 AS cs_min,
+           dl.kommo_id AS deal_id
+      FROM withNext w
+      LEFT JOIN managers mg ON mg.id = w.manager_id
+      ${dealInWindowLateral("w")}
+     WHERE ${missedDispSql("w")}${extra}
+     ORDER BY w.calldate DESC, w.uniqueid
+     LIMIT ${MISSED_LIST_LIMIT + 1}`;
+  return { sql, params };
+}
+
+export type NextStep = "callback_talked" | "callback_no_answer" | "client_self" | "nothing";
+
+/**
+ * «Що сталось далі» — ОДНА подія, і це НАЙРАНІША з двох.
+ *
+ * ⚠️ Підсумок (блок A) рахує передзвін і «клієнт сам» НЕЗАЛЕЖНО: один дзвінок може бути
+ * в обох числах. А рядок списку відповідає на інше питання — «що було наступним», —
+ * тому бере те, що сталось раніше. Якщо клієнт передзвонив через 3 хв, а ми через 40,
+ * то «наступним» був клієнт, і назвати це «ми передзвонили» означало б приписати
+ * відділу чужу швидкість.
+ */
+export function nextStep(r: { cbMin: number | null; cbTalked: boolean | null; csMin: number | null }):
+{ kind: NextStep; minutes: number | null } {
+  const cb = r.cbMin, cs = r.csMin;
+  if (cb != null && (cs == null || cb <= cs)) {
+    return { kind: r.cbTalked ? "callback_talked" : "callback_no_answer", minutes: Math.round(cb) };
+  }
+  if (cs != null) return { kind: "client_self", minutes: Math.round(cs) };
+  return { kind: "nothing", minutes: null };
+}
+
+/* ─────────────── Блок D · «дзвінок був, а угоди немає» ─────────────── */
+
+export type NoDealState = "unknown" | "has_deal" | "no_deal";
+export const NO_DEAL_STATES: readonly NoDealState[] = ["unknown", "has_deal", "no_deal"];
+
+/**
+ * 🔴 ТРИ СТАНИ, А НЕ ДВА, І НЕ ОДИН. Правило проєкту: стан, що стверджує причину, не може
+ * бути смітником для кількох різних відмов.
+ *  - `unknown`  — номер не впізнано серед контактів CRM. Це НЕ «заявку не завели», це
+ *                 «ми не знаємо, хто дзвонив». Заміряно 14.09: 51% відповіданих вхідних.
+ *  - `has_deal` — клієнт відомий, угода є у вікні.
+ *  - `no_deal`  — клієнт відомий, угоди у вікні немає. Найближче до того, що просить лист.
+ *
+ * ⚠️ СЕНТИНЕЛ: порожній рядок у `client_key` — не ключ. Злити його з `no_deal` означало б
+ * записати «ми не знаємо, хто це» у «клієнта знаємо, а заявки нема».
+ */
+export function noDealState(clientKey: string | null, hasDeal: boolean): NoDealState {
+  if (clientKey == null || clientKey.trim() === "") return "unknown";
+  return hasDeal ? "has_deal" : "no_deal";
+}
+
+/** Той самий вердикт у SQL — дзеркало `noDealState`, звіряється гейтом `#451`. */
+const NO_DEAL_STATE_SQL = (a: string, deal: string): string =>
+  `CASE WHEN ${a}.client_key IS NULL OR btrim(${a}.client_key) = '' THEN 'unknown'`
+  + ` WHEN ${deal}.kommo_id IS NOT NULL THEN 'has_deal' ELSE 'no_deal' END`;
+
+/**
+ * Основа блоку D: ВІДПОВІДАНІ вхідні, склеєні.
+ *
+ * 🔴 Звуження до вхідних і до `billsec > 0` — ДО склейки, з тієї самої причини, що в
+ * `baseCte`: `call_type` не входить у ключ склейки, і на незвуженому наборі вхідна
+ * розмова злилась би з вихідною на той самий номер.
+ */
+function answeredCte(from: string, to: string, s: MissedScope): { cte: string; params: unknown[] } {
+  const p: unknown[] = [from, to];
+  const conds = [
+    "(rc.calldate AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1 AND $2",
+    `rc.call_type IN (${list(INBOUND_TYPES)})`,
+    "rc.billsec > 0",
+  ];
+  if (s.managerId) { p.push(s.managerId); conds.push(`rc.manager_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  const cte = `
+    WITH base AS (
+      SELECT rc.uniqueid, rc.manager_id, rc.client_phone, rc.client_key, rc.calldate, rc.billsec
+        FROM ringostat_calls rc
+        LEFT JOIN managers m ON m.id = rc.manager_id
+       WHERE ${conds.join(" AND ")}
+    ),
+    marked AS (SELECT b.*, ${mergedLagGapExpr("b")} AS gap FROM base b),
+    legs AS (SELECT * FROM marked WHERE ${mergedLagFirst()}),
+    classed AS (
+      SELECT a.*, dl.kommo_id AS deal_id, ${NO_DEAL_STATE_SQL("a", "dl")} AS state
+        FROM legs a
+        ${dealInWindowLateral("a")}
+    )`;
+  return { cte, params: p };
+}
+
+/** Три числа й ціле — ОДНИМ запитом, щоб частини й сума бралися в одну мить живої таблиці. */
+export function noDealCountsSql(from: string, to: string, s: MissedScope): { sql: string; params: unknown[] } {
+  const { cte, params } = answeredCte(from, to, s);
+  const sql = `${cte}
+    SELECT COUNT(*)::int AS answered,
+           COUNT(*) FILTER (WHERE state = 'unknown')::int  AS unknown,
+           COUNT(*) FILTER (WHERE state = 'has_deal')::int AS has_deal,
+           COUNT(*) FILTER (WHERE state = 'no_deal')::int  AS no_deal
+      FROM classed`;
+  return { sql, params };
+}
+
+/** Розкриття одного стану — ТОЙ САМИЙ `classed`, що й числа (правило «розкриття = число»). */
+export function noDealListSql(from: string, to: string, s: MissedScope, state: NoDealState): { sql: string; params: unknown[] } {
+  const { cte, params } = answeredCte(from, to, s);
+  params.push(state);
+  const sql = `${cte}
+    SELECT c.uniqueid,
+           to_char(c.calldate AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD HH24:MI') AS at,
+           c.client_phone, c.client_key, c.manager_id, mg.name AS manager_name,
+           c.billsec, c.deal_id
+      FROM classed c
+      LEFT JOIN managers mg ON mg.id = c.manager_id
+     WHERE c.state = $${params.length}
+     ORDER BY c.calldate DESC, c.uniqueid
+     LIMIT ${MISSED_LIST_LIMIT + 1}`;
+  return { sql, params };
 }

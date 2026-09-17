@@ -15,6 +15,7 @@ import { InfoHint } from "../widgets";
 import { ResponseTimeCard } from "./ResponseTimeCard";
 import { ReportTableSection } from "./ReportTableSection";
 import { mergeReportPlans } from "../reportScope";
+import { firstTouchLabel, firstTouchStale } from "../reportTableCols";
 // 🔀 Зріз за новизною — ЄДИНЕ місце рішення на фронті; звіряється з ядром у `#213`.
 import { keepByKlass, visibleSlices, narrowToSlice, SLICE_LABEL, KLASS_CHIP, type Slice } from "../klassSlice";
 
@@ -581,6 +582,8 @@ function Glance({ data, focus, focusDay, today, periodLabel }: { data: ReportPla
   const fg = focus?.glance;
   const st = g.statusCounts;
   const futureFocus = focusDay > today;
+  const ftGlance = firstTouchLabel(g.firstTouch);
+  const ftOutside = (g.firstTouch?.outside.analyzed ?? 0) + (g.firstTouch?.outside.noRecord ?? 0);
   return (
     <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 15, padding: "16px 18px", marginBottom: 16, display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr", gap: 20, alignItems: "center" }}>
       <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
@@ -604,6 +607,21 @@ function Glance({ data, focus, focusDay, today, periodLabel }: { data: ReportPla
             «сьогодні», тут — початок місяця. Тому й підпис інший (рішення власника 07.09.2026). */}
         {g.expectPastMonths !== 0 && <div style={{ fontSize: 12, color: AMBER, marginTop: 2 }}>з минулих міс: {fmt(g.expectPastMonths)} ₴</div>}
         <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>авто · {periodLabel}: {g.dispatched} · {k(g.dispatchedRevenue)} ₴</div>
+        {/* 🎯 ТЗ-3 «перший дотик» по команді: відсоток із СУМ (Σ названих ÷ Σ оцінених), не середнє відсотків. */}
+        {/* Стан підсумку — з бекенду: «не вимірюється» (команду бот не слухає) ≠ «оцінок немає». */}
+        <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>
+          ціну названо в 1-й дотик: <b>{ftGlance.main}</b>{ftGlance.sub ? ` · ${ftGlance.sub}` : ""}
+          {ftOutside > 0 ? ` · ще ${ftOutside} оцінок у людей поза ростером (у відсоток не входять)` : ""}
+          {" "}<InfoHint text={"Оцінки AI-бота перших розмов із рекламними лідами; розмова зараховується тому, хто дзвонив. "
+            + "Відсоток — по людях ростеру; «поза ростером» — ті, хто в періоді дзвонив, а зараз завершує роботу чи звільнений. "
+            + `Бот оцінює команд: ${data.firstTouchMeta?.coveredTeams ?? 0}. Не прив'язано до жодного менеджера за період: `
+            + `${(data.firstTouchMeta?.unmapped.analyzed ?? 0) + (data.firstTouchMeta?.unmapped.noRecord ?? 0)}.`} />
+        </div>
+        {g.firstTouch?.state === "measured" && firstTouchStale(data.firstTouchMeta?.lastAnalyzedAt ?? null, today, data.scope.to) && (
+          <div style={{ fontSize: 11, color: AMBER, marginTop: 2 }}>
+            ⚠ бот не присилав оцінок з {data.firstTouchMeta?.lastAnalyzedAt ? ddmm(data.firstTouchMeta.lastAnalyzedAt) : "—"} — число неповне
+          </div>
+        )}
       </div>
       <div>
         <div style={lab}>Фокус-день {ddmm(focusDay)}</div>
@@ -840,6 +858,7 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
             <Kpi lbl="чек" fact={chekFact} target={m.kpi.avgCheck.target} money altMark={chekAlt ? "*відпр." : undefined} altTitle="по відправлених авто, ще не закриті (сума÷авто)"
               hintTitle={chekAlt ? undefined : "Ср. чек = пул «угоди ЗАРАЗ у роботі (авто працює→оплата отримана) + виграні за обраний період». Σ signed ÷ Σ угод."} />
             <Kpi lbl="конв" fact={m.kpi.conversion.fact} target={m.kpi.conversion.target} pctUnit />
+            <FirstTouchKpi c={m.firstTouch} />
           </div>
         </div>
       </div>
@@ -954,6 +973,21 @@ function Kpi({ lbl, fact, target, money, pctUnit, extra, altMark, altTitle, hint
       {/* 🔴 Ціль грішми — ТИМ САМИМ форматером, що факт: «2 500 / 13к» читалось як два різні плани. */}
       {has ? <span style={{ color: MUTED }}> / {money ? fmt(target) : pctUnit ? target + "%" : target}{ok ? " ✓" : ""}</span>
            : <span style={{ color: MUTED, fontStyle: "italic" }}> · план не задано</span>}
+    </span>
+  );
+}
+/**
+ * 🎯 ТЗ-3 «ціну названо в перший дотик» — рядок картки менеджера (рішення власника 17.09.2026).
+ * Цілі в цього показника немає, тож не `Kpi` (той малює «план не задано» і світлофор від цілі).
+ * Текст і стани — з `firstTouchLabel`, того самого правила, що в таблиці: дві верстки, одне правило.
+ */
+function FirstTouchKpi({ c }: { c: ReportPlanManager["firstTouch"] | undefined }) {
+  const l = firstTouchLabel(c);
+  return (
+    <span style={{ fontSize: 11.5, color: MUTED, cursor: "help" }}
+      title={"Ціну названо в першій розмові з рекламним лідом: названо ÷ оцінено. Оцінює AI-бот; розмова зараховується тому, хто дзвонив. "
+        + "«Не вимірюється» — команду бот не оцінює. «Без запису» — бот розмови не чув, у відсоток не входить."}>
+      ціну названо <b style={{ color: l.muted ? MUTED : "var(--text)" }}>{l.main}</b>{l.sub ? <span style={{ color: MUTED }}> · {l.sub}</span> : null}
     </span>
   );
 }

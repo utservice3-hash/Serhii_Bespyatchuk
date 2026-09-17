@@ -11,7 +11,7 @@ import { monthStart, periodOf, todayKyiv, type PeriodState } from "../periodRule
 
 const SEAM = "2026-07-01";
 // dataviz категорійна палітра (фіксований порядок; компанія завжди [0]). CVD-safe рампи.
-const COLORS = ["#2f6fdb", "#16a34a", "#d97706", "#7c3aed", "#dc2626", "#0891b2", "#db2777", "#65a30d"];
+export const COLORS = ["#2f6fdb", "#16a34a", "#d97706", "#7c3aed", "#dc2626", "#0891b2", "#db2777", "#65a30d"];
 const MUTED = "var(--text-muted)";
 
 type Metric = { key: string; block: string; label: string; unit?: string; monthOnly?: boolean; weekOnly?: boolean; manual?: boolean; hint?: string; seamHint?: string; unitScope?: string };
@@ -99,11 +99,13 @@ const fmt = (n: number, unit?: string) => {
   const r = Math.abs(n) >= 1e6 ? (n / 1e6).toFixed(2) + " млн" : Math.abs(n) >= 1e3 ? Math.round(n).toLocaleString("uk-UA").replace(/,/g, " ") : String(Math.round(n));
   return unit === "₴" ? r + " ₴" : r;
 };
-const shortDate = (p: string) => { const [y, m, d] = p.split("-"); return `${d}.${m}.${y.slice(2)}`; };
-const RANGES: Record<string, number> = { "3м": 90, "6м": 180, "12м": 365, "Усе": 9999 };
-const MIN_WIN = 3; // мінімальна ширина вікна брашу (≥4 точки) — щоб не з'їжджало в 2-точкову пряму
+// 📤 Експортуються для графіка «Пропущених дзвінків» (17.09.2026): той самий вигляд діапазонів і вікна,
+// а не друга копія логіки, що розійдеться з цією на першій правці.
+export const shortDate = (p: string) => { const [y, m, d] = p.split("-"); return `${d}.${m}.${y.slice(2)}`; };
+export const RANGES: Record<string, number> = { "3м": 90, "6м": 180, "12м": 365, "Усе": 9999 };
+export const MIN_WIN = 3; // мінімальна ширина вікна брашу (≥4 точки) — щоб не з'їжджало в 2-точкову пряму
 // Вікно [lo,hi] (індекси у ПОВНОМУ rows) для діапазону 3м/6м/12м/Усе.
-function rangeWindow(rows: { period: string }[], range: string): { lo: number; hi: number } {
+export function rangeWindow(rows: { period: string }[], range: string): { lo: number; hi: number } {
   const hi = rows.length - 1;
   if (hi < 0) return { lo: 0, hi: 0 };
   if (range === "Усе") return { lo: 0, hi };

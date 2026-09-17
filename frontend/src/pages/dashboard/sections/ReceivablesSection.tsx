@@ -23,7 +23,7 @@ import {
   isAncientDebt, isOverdue, foldEntity, foldCarrier, activeNote, NOTE_EMPTY_PLACEHOLDER,
   breakdownLine, noteOthersLabel,
   invoiceEntityShown, invoiceEntityLabel,
-  formatDateSafe, parseDateSafe, agreementLine, AGREEMENT_EMPTY_LABEL,
+  formatDateSafe, parseDateSafe, agreementLine, AGREEMENT_EMPTY_LABEL, staleNote,
   sortClients, nextSort, sortMark, ariaSort, DEFAULT_SORT, type SortState,
   limitHint, limitLabel, limitState, originBadges, ownerState, passesFilters,
   amountLimitHint, amountLimitLabel, amountLimitState, isOverAmount,
@@ -731,6 +731,8 @@ export function ReceivablesSection({
                     // запис (чи навпаки), людина бачила б торішню обіцянку й
                     // правила б цьоготижневу. Тижнева межа лишається однією.
                     const agree = agreementLine(c.dueDate ?? null, noteNow);
+                    // 🗒 Запис минулих тижнів — приглушено з датою, а не «записів немає».
+                    const stale = noteNow ? null : staleNote(c.comment, c.noteUpdatedAt ?? null, now);
                     return (
                       /* 🛡 МЕЖА НА РІВНІ РЯДКА (26.08.2026). Одна нерозбірна дата
                          вбила всю секцію — 75 справних рядків загинули з одним.
@@ -892,8 +894,13 @@ export function ReceivablesSection({
                                 disabled={!canEditReceivables}
                                 onClick={() => setAgreeFor(agreeFor === c.clientKey ? null : c.clientKey)}
                                 style={{ display: "block", width: "100%", textAlign: "left" }}>
-                                {agree.empty ? (
+                                {agree.empty && !stale ? (
                                   <span className="recv-agree-empty">{AGREEMENT_EMPTY_LABEL}</span>
+                                ) : agree.empty && stale ? (
+                                  <span className="recv-agree-stale" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", whiteSpace: "normal", fontSize: "var(--fs-sm)", lineHeight: 1.35, color: "var(--text-muted)" }}
+                                    title="Запис минулого тижня. Цього тижня ще нічого не записано — натисніть, щоб оновити.">
+                                    {stale.dateText ? `${stale.dateText}: ` : ""}{stale.text}
+                                  </span>
                                 ) : (
                                   <>
                                     <span className="recv-agree-date recv-num"
@@ -907,7 +914,9 @@ export function ReceivablesSection({
                                                WebkitBoxOrient: "vertical", overflow: "hidden",
                                                whiteSpace: "normal", marginTop: 2,
                                                fontSize: "var(--fs-sm)", lineHeight: 1.35 }}>
-                                      {agree.text || NOTE_EMPTY_PLACEHOLDER}
+                                      {agree.text || (stale
+                                        ? <span style={{ color: "var(--text-muted)" }} title="Запис минулого тижня">{stale.dateText ? `${stale.dateText}: ` : ""}{stale.text}</span>
+                                        : NOTE_EMPTY_PLACEHOLDER)}
                                     </span>
                                   </>
                                 )}
@@ -935,7 +944,7 @@ export function ReceivablesSection({
                               )}
                             </div>
                             {agreeFor === c.clientKey && (
-                              <AgreementEditor client={c} note={noteNow}
+                              <AgreementEditor client={c} note={noteNow} lastComment={c.comment ?? null} lastAt={c.noteUpdatedAt ?? null}
                                 onPatch={(patch) => patchReceivableNote(c.clientKey, patch)}
                                 onClose={() => setAgreeFor(null)}
                                 onDone={() => { setAgreeFor(null); onRefresh?.(); }} />

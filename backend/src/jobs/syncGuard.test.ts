@@ -178,3 +178,61 @@ test("#68e ЗАМОК НАЗИВАЄ ТРИМАЧА І ТРИВАЛІСТЬ", as
       "🔴 протухлий замок досі вважається живим — синк ніколи не відновиться сам");
   });
 });
+
+/**
+ * #455 — ОХОРОНЕЦЬ СИНКУ ДЗВІНКІВ. Частий синк (сигнал менеджеру за 5 хв, ТЗ-1) і
+ * годинний пишуть ту саму `ringostat_calls`; два одночасні проходи — це конкуренція за
+ * рядки, на якій уже ловили дедлок. Поведінку доводимо ВИКОНАННЯМ на керованому годиннику,
+ * а не читанням файла: без БД, без Ringostat.
+ */
+test("#455 СИНК ДЗВІНКІВ: другий одночасний прохід ПРОПУСКАЄТЬСЯ, завислий ПЕРЕХОПЛЮЄТЬСЯ", async () => {
+  const { createRunGuard } = await import("./runGuard.js");
+  let now = 1_000_000;
+  const guard = createRunGuard("t", 1000, () => now);
+  const deferred = <T>() => {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => { resolve = r; });
+    return { promise, resolve };
+  };
+  const isSkipShape = (v: unknown) =>
+    typeof v === "object" && v !== null && (v as { skipped?: unknown }).skipped === true;
+
+  // ① одночасний другий виклик — пропуск, і саме тієї форми, яку `runJob` пише пропуском
+  const d1 = deferred<string>();
+  const p1 = guard(() => d1.promise);
+  let ran2 = false;
+  const r2 = await guard(async () => { ran2 = true; return "другий"; });
+  assert.equal(ran2, false, "🔴 другий прохід ВИКОНАВСЯ, поки перший біжить — два синки пишуть таблицю разом");
+  assert.ok(isSkipShape(r2), "🔴 пропуск повернувся не формою { skipped: true } — runJob запише його УСПІХОМ");
+
+  // ② дзеркало: після завершення першого наступний пускається (інакше «захист» = мертвий синк)
+  d1.resolve("перший");
+  assert.equal(await p1, "перший");
+  assert.equal(await guard(async () => "третій"), "третій",
+    "🔴 охоронець не звільнився після успіху — частий синк більше не пройде ніколи");
+
+  // ③ помилка теж звільняє
+  await assert.rejects(guard(async () => { throw new Error("Ringostat 500"); }));
+  assert.equal(await guard(async () => "після помилки"), "після помилки",
+    "🔴 охоронець залип після помилки — один збій Ringostat зупиняє синк до рестарту");
+
+  // ④ завислий: до стелі — пропуск, на стелі — перехоплення
+  const hung = deferred<string>();
+  const pHung = guard(() => hung.promise);
+  now += 999;
+  assert.ok(isSkipShape(await guard(async () => "рано")), "🔴 за мить до стелі охоронець уже перехопив живий прохід");
+  now += 1;
+  const fresh = deferred<string>();
+  const pFresh = guard(() => fresh.promise);
+  assert.equal(isSkipShape(await Promise.race([pFresh, Promise.resolve("біжить")])), false,
+    "🔴 прохід, що висить рівно стелю, не перехоплено — аварія «синк стоїть годинами» повертається");
+
+  // ⑤ завислий, що таки завершився ПІСЛЯ перехоплення, не має права оголосити «вільно»
+  hung.resolve("пізно");
+  await pHung;
+  assert.ok(isSkipShape(await guard(async () => "вклинився")),
+    "🔴 старий прохід звільнив охоронця, поки біжить НОВИЙ — знову двоє на одній таблиці");
+  fresh.resolve("новий");
+  assert.equal(await pFresh, "новий");
+  assert.equal(await guard(async () => "далі"), "далі");
+});

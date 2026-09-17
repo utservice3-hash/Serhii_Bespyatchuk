@@ -69,6 +69,7 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // Картка клієнта і пошук клієнта — той самий екран, тож та сама вкладка.
     // Знову ОКРЕМІ записи: `pre` матчить по слешу, дефісний сусід не накривається.
     { test: pre("/api/dashboard/client-card"), tabs: ["loyalty"] },
+    { test: pre("/api/dashboard/client-contacts"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-search"), tabs: ["loyalty"] },
     // 🔴 ДОДАНО 04.08.2026, КОЛИ `requirePerm` ПІШОВ. Обʼєднання відкрилось тімліду
     // (у межах команди), тож єдиною межею роутів лишився кламп усередині — а це

@@ -1,8 +1,10 @@
 import { pool } from "../db/pool.js";
 import { DAY_BUCKETS, type DayBucket } from "./dayBuckets.js";
 import {
-  missedSummarySql, missedByManagerSql, foldManagerRows,
-  type MissedScope, type MissedManagerRaw, type MissedManagerRow,
+  missedSummarySql, missedByManagerSql, foldManagerRows, missedByTeamSql, foldTeamRows, missedSeriesSql, foldSeries,
+  type SeriesGranularity, type MissedSeries, type MissedSeriesRaw,
+  missedListSql, noDealCountsSql, noDealListSql, nextStep, OWNERLESS_LABEL, capRows,
+  type MissedScope, type MissedManagerRaw, type MissedManagerRow, type MissedTeamRow, type NextStep, type NoDealState,
 } from "./missedCallsRules.js";
 
 /**
@@ -56,11 +58,11 @@ export async function missedByManager(from: string, to: string, s: MissedScope =
 Promise<{ rows: MissedManagerRow[]; total: MissedManagerRow }> {
   const { sql, params } = missedByManagerSql(from, to, s);
   const r = await pool.query<{
-    manager_id: number | null; name: string | null; missed: number;
+    manager_id: number | null; name: string | null; team_id: number | null; missed: number;
     callback_self: number; callback_colleague: number; client_self: number; median_min: string | null;
   }>(sql, params);
   const raw: MissedManagerRaw[] = r.rows.map((x) => ({
-    managerId: x.manager_id, name: x.name, missed: Number(x.missed),
+    managerId: x.manager_id, name: x.name, teamId: x.team_id, missed: Number(x.missed),
     callbackSelf: Number(x.callback_self), callbackColleague: Number(x.callback_colleague),
     clientSelf: Number(x.client_self),
     medianMin: x.median_min == null ? null : Math.round(Number(x.median_min)),
@@ -68,5 +70,104 @@ Promise<{ rows: MissedManagerRow[]; total: MissedManagerRow }> {
   return foldManagerRows(raw);
 }
 
+/**
+ * 📈 Ряди для графіка динаміки. `from` не задано — від ПЕРШОГО дзвінка в базі (історія з
+ * 01.09.2025), як «Усе» на сторінках Статистик.
+ */
+export async function missedSeries(granularity: SeriesGranularity, from: string | null, to: string, s: MissedScope = {}):
+Promise<{ from: string; to: string; series: MissedSeries[] }> {
+  const start = from ?? (await pool.query<{ d: string | null }>(
+    "SELECT to_char(min(calldate) AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS d FROM ringostat_calls")).rows[0]?.d ?? to;
+  const { sql, params } = missedSeriesSql(granularity, start, to, s);
+  const r = await pool.query<MissedSeriesRaw>(sql, params);
+  return { from: start, to, series: foldSeries(r.rows) };
+}
+
+/** Рядки команд блоку B — окремим запитом, бо медіана команди не складається з медіан людей. */
+export async function missedByTeam(from: string, to: string, s: MissedScope = {}): Promise<MissedTeamRow[]> {
+  const { sql, params } = missedByTeamSql(from, to, s);
+  const r = await pool.query<{
+    team_id: number | null; team_name: string | null; missed: number;
+    callback_self: number; callback_colleague: number; client_self: number; median_min: string | null;
+  }>(sql, params);
+  return foldTeamRows(r.rows.map((x) => ({
+    teamId: x.team_id, name: x.team_name, missed: Number(x.missed),
+    callbackSelf: Number(x.callback_self), callbackColleague: Number(x.callback_colleague),
+    clientSelf: Number(x.client_self),
+    medianMin: x.median_min == null ? null : Math.round(Number(x.median_min)),
+  })));
+}
+
+export interface MissedListRow {
+  uniqueid: string; at: string; phone: string | null; clientKey: string | null;
+  managerId: number | null; managerName: string; bucket: DayBucket;
+  next: NextStep; nextMin: number | null; dealId: number | null;
+}
+
+/**
+ * Блок C. `truncated` — не прикраса: без нього стеля `MISSED_LIST_LIMIT` мовчки обрізала
+ * б список, і екран показав би «ось усі», хоча показав лише частину.
+ */
+export async function missedList(day: string, s: MissedScope = {}, onlyNoCallback = false):
+Promise<{ rows: MissedListRow[]; truncated: boolean }> {
+  const { sql, params } = missedListSql(day, s, onlyNoCallback);
+  const r = await pool.query<{
+    uniqueid: string; at: string; client_phone: string | null; client_key: string | null;
+    manager_id: number | null; manager_name: string | null; bucket: DayBucket;
+    cb_min: string | null; cb_talked: boolean | null; cs_min: string | null; deal_id: string | null;
+  }>(sql, params);
+  const capped = capRows(r.rows);
+  const rows = capped.rows.map((x) => {
+    const n = nextStep({
+      cbMin: x.cb_min == null ? null : Number(x.cb_min),
+      cbTalked: x.cb_talked,
+      csMin: x.cs_min == null ? null : Number(x.cs_min),
+    });
+    return {
+      uniqueid: x.uniqueid, at: x.at, phone: x.client_phone, clientKey: x.client_key,
+      managerId: x.manager_id,
+      managerName: x.manager_id == null ? OWNERLESS_LABEL : (x.manager_name ?? `#${String(x.manager_id)}`),
+      bucket: x.bucket, next: n.kind, nextMin: n.minutes,
+      dealId: x.deal_id == null ? null : Number(x.deal_id),
+    };
+  });
+  return { rows, truncated: capped.truncated };
+}
+
+export interface NoDealCounts { answered: number; unknown: number; hasDeal: number; noDeal: number }
+
+/** Блок D. Три стани й ціле одним запитом. */
+export async function noDealCounts(from: string, to: string, s: MissedScope = {}): Promise<NoDealCounts> {
+  const { sql, params } = noDealCountsSql(from, to, s);
+  const x = (await pool.query<{ answered: number; unknown: number; has_deal: number; no_deal: number }>(sql, params)).rows[0];
+  return {
+    answered: Number(x?.answered ?? 0), unknown: Number(x?.unknown ?? 0),
+    hasDeal: Number(x?.has_deal ?? 0), noDeal: Number(x?.no_deal ?? 0),
+  };
+}
+
+export interface NoDealListRow {
+  uniqueid: string; at: string; phone: string | null; clientKey: string | null;
+  managerId: number | null; managerName: string; talkSec: number; dealId: number | null;
+}
+
+/** Розкриття одного стану блоку D. */
+export async function noDealList(from: string, to: string, s: MissedScope, state: NoDealState):
+Promise<{ rows: NoDealListRow[]; truncated: boolean }> {
+  const { sql, params } = noDealListSql(from, to, s, state);
+  const r = await pool.query<{
+    uniqueid: string; at: string; client_phone: string | null; client_key: string | null;
+    manager_id: number | null; manager_name: string | null; billsec: number; deal_id: string | null;
+  }>(sql, params);
+  const capped = capRows(r.rows);
+  const rows = capped.rows.map((x) => ({
+    uniqueid: x.uniqueid, at: x.at, phone: x.client_phone, clientKey: x.client_key,
+    managerId: x.manager_id,
+    managerName: x.manager_id == null ? OWNERLESS_LABEL : (x.manager_name ?? `#${String(x.manager_id)}`),
+    talkSec: Number(x.billsec), dealId: x.deal_id == null ? null : Number(x.deal_id),
+  }));
+  return { rows, truncated: capped.truncated };
+}
+
 export { DAY_BUCKETS };
-export type { DayBucket, MissedScope, MissedManagerRow };
+export type { DayBucket, MissedScope, MissedManagerRow, NoDealState };

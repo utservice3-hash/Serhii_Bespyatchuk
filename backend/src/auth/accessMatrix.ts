@@ -301,6 +301,19 @@ export const ACCESS_MATRIX: AccessRow[] = [
      ⚠️ HR лишається закритим: це операційний показник відділу продажів, не кадровий. */
   { method: "GET", path: "/api/dashboard/missed-calls", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
+  /* Список дзвінків і «угоди немає» — ТІ САМІ межі, що в екрана, і не обираються окремо:
+     усі три роути ловить ОДИН tab-гейт `pre("/api/dashboard/missed-calls")`, тож щойно
+     вкладка відкрилась ролі, сервер пускає її в усі. Рядок, що казав би про них різне,
+     був би неправдою. Звіряє #449. */
+  { method: "GET", path: "/api/dashboard/missed-calls/list", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/dashboard/missed-calls/no-deal", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/dashboard/missed-calls/no-deal/list", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
+  // Динаміка (17.09.2026) — ТІ САМІ межі, що в екрана: той самий tab-гейт. Звіряє #449.
+  { method: "GET", path: "/api/dashboard/missed-calls/series?granularity=day", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/lead-recommendation", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["manager", "hr"] },
   // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника), ЗАДЕКЛАРОВАНА, А НЕ ДРЕЙФ.
@@ -330,6 +343,18 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // `loyalty` плюс `canSeeClient` усередині: на неіснуючому ключі менеджер і
   // тімлід дістають 403 за скоупом, і саме це фіксує рядок.
   { method: "GET", path: "/api/dashboard/client-card?clientKey=zzz", cls: "GET",
+    allow: [], deny: ["hr"] },
+  // 📱 Контакти з клієнтом (17.09.2026): та сама межа, що картка — вкладка `loyalty` + `canSeeClient`.
+  // POST/DELETE на фейковому ключі відмовляють скоупом (403) або тілом (400) — deny-only.
+  { method: "GET", path: "/api/dashboard/client-contacts?clientKey=zzz", cls: "GET",
+    allow: [], deny: ["hr"] },
+  // Фінансист має адмін-скоуп і тут ПРОЙШОВ би (#11b) — тому в deny його немає: проба
+  // роутом, що пише, виконала б мутацію проти прода.
+  { method: "POST", path: "/api/dashboard/client-contacts", cls: "deny-only",
+    allow: [], deny: ["hr", "manager", "team_lead"] },
+  { method: "DELETE", path: "/api/dashboard/client-contacts/:id", cls: "deny-only",
+    allow: [], deny: ["hr", "manager", "team_lead"] },
+  { method: "GET", path: "/api/dashboard/client-contacts/:id/file", cls: "GET",
     allow: [], deny: ["hr"] },
   // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника), ЗАДЕКЛАРОВАНА, А НЕ ДРЕЙФ.
   // Пошук клієнта відкрито ТІМЛІДУ — але звужено до ЙОГО команди КЛАМПОМ НА

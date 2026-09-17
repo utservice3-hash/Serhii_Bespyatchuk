@@ -520,6 +520,7 @@ export function TasksSection({
   setTaskModalOpen,
   taskForm,
   tasksLoading,
+  tasksLoadFailed = false,
   tasks,
   managerOptions,
   patchTaskLocal,
@@ -542,6 +543,8 @@ export function TasksSection({
   setTaskModalOpen: Dispatch<SetStateAction<boolean>>;
   taskForm: TaskForm;
   tasksLoading: boolean;
+  /** Останнє завантаження списку впало — порожній масив тоді НЕ означає «задачі немає». */
+  tasksLoadFailed?: boolean;
   tasks: Task[];
   managerOptions: ManagerOption[];
   patchTaskLocal: (id: number, patch: Partial<Task>) => void;
@@ -598,7 +601,7 @@ export function TasksSection({
     window.history.replaceState({}, "", u);
   }, [openTaskId]);
 
-  const deepLink = deepLinkState({ openTaskId, found: openTask != null, settled: tasksSettled });
+  const deepLink = deepLinkState({ openTaskId, found: openTask != null, settled: tasksSettled, failed: tasksLoadFailed });
   const [expandedKpi, setExpandedKpi] = useState<Set<string>>(new Set());
   const toggleKpi = (id: string) => setExpandedKpi((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
@@ -984,14 +987,24 @@ export function TasksSection({
           помилка лягала в стан і не малювалась. Тепер людина читає причину. */}
       {deepLink === "missing" && (
         <div className="chart-card" style={{ marginBottom: 12, borderLeft: "3px solid var(--danger, #c8102e)" }}>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>Задача №{openTaskId} недоступна</div>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Задачу №{openTaskId} не знайдено серед доступних вам</div>
           <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
-            Її або видалено, або вона особиста й належить іншій людині. Посилання правильне —
-            доступу до цієї задачі у вас немає.{" "}
+            Причин три, і звідси їх не розрізнити: задачі з таким номером не існує, її видалено,
+            або вона особиста й належить іншій людині.{" "}
             <button
               onClick={() => setOpenTaskId(null)}
               style={{ background: "none", border: "none", padding: 0, color: "var(--link, #2f5d8a)", cursor: "pointer", font: "inherit", textDecoration: "underline" }}
             >Показати список</button>
+          </div>
+        </div>
+      )}
+
+      {deepLink === "failed" && (
+        <div className="chart-card" style={{ marginBottom: 12, borderLeft: "3px solid var(--danger, #c8102e)" }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Не вдалося завантажити задачі</div>
+          <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)" }}>
+            Задачу №{openTaskId} зараз не видно не через доступ: список задач не завантажився.
+            Оновіть сторінку за хвилину.
           </div>
         </div>
       )}

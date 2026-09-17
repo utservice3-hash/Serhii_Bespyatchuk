@@ -57,6 +57,19 @@ export function mergeReportPlans(parts: ReportPlan[]): ReportPlan {
   };
   // Частка — не сума й не середнє середніх. Знаменника в `glance` немає.
   glance.avgCheck = null;
+  // 🎯 «Перший дотик» — ВКЛАДЕНИЙ обʼєкт, тож цикл ADDITIVE його не бачить: без цього рядка при
+  // 2+ командах лишились би числа ПЕРШОЇ з них. Лічильники додаються; відсоток рахує екран із сум.
+  const ftSum = (pick: (p: ReportPlan) => { analyzed: number; voiced: number; noRecord: number } | undefined) => ({
+    analyzed: parts.reduce((s, p) => s + (pick(p)?.analyzed ?? 0), 0),
+    voiced: parts.reduce((s, p) => s + (pick(p)?.voiced ?? 0), 0),
+    noRecord: parts.reduce((s, p) => s + (pick(p)?.noRecord ?? 0), 0),
+  });
+  glance.firstTouch = {
+    ...ftSum((p) => p.glance.firstTouch),
+    // Виміряно, якщо виміряна ХОЧ ОДНА з команд: РПК + РНК — це «25 % по РНК», а не «не вимірюється».
+    state: parts.some((p) => p.glance.firstTouch?.state === "measured") ? "measured" : "not_covered",
+    outside: ftSum((p) => p.glance.firstTouch?.outside),
+  };
 
   // `scope`/`elapsed`/`remainingWorkdays` — властивості ПЕРІОДУ й ГЛЯДАЧА, однакові
   // в усіх частинах (той самий from/to, той самий токен). Беремо з першої.

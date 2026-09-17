@@ -438,12 +438,20 @@ export function marginPctText(m: ReceivableMargin | null): string {
   return `${m.pct.toFixed(1)}%`;
 }
 
-/** Чому «—». Порожнє місце читається як «нічого немає», а не як «не знаємо». */
+/**
+ * Чому «—». Порожнє місце читається як «нічого немає», а не як «не знаємо».
+ *
+ * 🔴 «ЗАРОБИЛИ N ₴ ВІД СУМИ РАХУНКІВ M ₴» — ТЕ САМЕ ЧИТАННЯ, ВІД ЯКОГО ЛІКУВАЛИ ПЛИТКУ
+ * (звірка 16.09.2026). Підпис під плиткою каже «це поле „Бюджет", а не розрахунок», а ця
+ * підказка на самому числі казала «заробили ВІД суми рахунків», тобто знову «порахували з
+ * рахунків». Тепер два числа стоять поруч, і звʼязок між ними не вигадується: заробіток —
+ * поле CRM, сума рахунків — знаменник ВІДСОТКА.
+ */
 export function marginHint(m: ReceivableMargin | null): string {
   if (!m) return "рахунків у деталізації немає";
   if (m.why) return MARGIN_UNKNOWN_LABEL[m.why];
-  return `заробили ${Math.round(m.earned ?? 0).toLocaleString("uk-UA")} ₴ від суми рахунків `
-    + `${Math.round(m.base ?? 0).toLocaleString("uk-UA")} ₴`;
+  return `заробили ${Math.round(m.earned ?? 0).toLocaleString("uk-UA")} ₴ (маржа з поля «Бюджет» угод у CRM) · `
+    + `сума рахунків ${Math.round(m.base ?? 0).toLocaleString("uk-UA")} ₴`;
 }
 
 /**
@@ -765,6 +773,18 @@ export function agreementLine(dueDate: string | null, note: string): AgreementLi
 
 /** Підпис порожньої домовленості в рядку — відповідь, а не порожнє місце. */
 export const AGREEMENT_EMPTY_LABEL = "записів немає";
+
+/**
+ * 🗒 МИНУЛИЙ ЗАПИС — ВИДНО ПРИГЛУШЕНО, А НЕ ЗНИКАЄ (17.09.2026).
+ * Тижневе правило лишається: актуальним є лише запис цього тижня. Але «записів немає»
+ * над коментарем, який у базі є, читалось людьми як ВТРАТА («у нас злітають коментарі»).
+ * Повертає текст і дату старого запису, коли поточного тижня нічого не писали.
+ */
+export function staleNote(comment: string | null, updatedAt: string | null, now: Date): { text: string; dateText: string } | null {
+  const text = (comment ?? "").trim();
+  if (!text || isCurrentWeekNote(updatedAt, now)) return null;
+  return { text, dateText: updatedAt ? formatDateSafe(updatedAt.slice(0, 10), "") : "" };
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    🏢 РОЗКЛАД «ЮРОСОБА → СУМА» У ЗГОРНУТОМУ РЯДКУ

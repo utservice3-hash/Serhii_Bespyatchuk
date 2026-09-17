@@ -741,6 +741,29 @@ CREATE INDEX IF NOT EXISTS idx_rc_phone      ON ringostat_calls(client_phone, ca
 CREATE INDEX IF NOT EXISTS idx_rc_calldate   ON ringostat_calls(calldate DESC);
 CREATE INDEX IF NOT EXISTS idx_rc_manager    ON ringostat_calls(manager_id, calldate DESC) WHERE manager_id IS NOT NULL;
 
+-- 📵 ЖУРНАЛ СИГНАЛІВ ПО ПРОПУЩЕНИХ (ТЗ-1, прохід 3, 16.09.2026). Одна задача на
+-- менеджера + номер + київський день — рішення власника. Логіка — `core/missedCallSignal.ts`.
+-- 🔴 АНТИ-ДУБЛЬ ТРИМАЄ PRIMARY KEY, А НЕ ПОШУК ЗА ЗАГОЛОВКОМ. Сусідні джоби шукають
+-- `title LIKE 'префікс%'`, але заголовок людина може перейменувати — і наступний тік
+-- створив би другу задачу. Тут ключ живе окремо від того, що редагується на екрані.
+-- `ON DELETE SET NULL`: видалена руками задача не видаляє памʼять про сигнал; новий
+-- пропущений того ж дня створить нову задачу, а без нового — нічого не відродиться.
+-- `last_signal_at` — момент ОСТАННЬОГО пропущеного, по якому був сигнал: вихідний
+-- ПІСЛЯ нього закриває задачу, новий пропущений ПІСЛЯ нього — перевідкриває.
+CREATE TABLE IF NOT EXISTS missed_call_tasks (
+  manager_id     INTEGER NOT NULL REFERENCES managers(id),
+  client_phone   TEXT NOT NULL,
+  kday           DATE NOT NULL,
+  task_id        INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  missed_count   INTEGER NOT NULL,
+  last_signal_at TIMESTAMPTZ NOT NULL,
+  closed_at      TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (manager_id, client_phone, kday)
+);
+CREATE INDEX IF NOT EXISTS idx_mct_open ON missed_call_tasks(kday) WHERE closed_at IS NULL;
+
 -- Телефони контактів Kommo. 🔴 До цієї таблиці телефонів у базі НЕ БУЛО ВЗАГАЛІ:
 -- `deal_contacts` зберігає лише contact_id, а номер існував тільки як `client_key`
 -- фізособи. Без неї звʼязати дзвінок із клієнтом нічим.
@@ -2134,6 +2157,25 @@ ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_contact_note_at TIMESTAMPTZ
 -- один запис на угоду (перезапис, не стрічка): поле для робочої позначки, не чат.
 -- ⚠️ Видимість НЕ гейтиться тут: коментар їде всередині вже роль-склампленої
 -- відповіді `/stuck-deals-grouped`, тож хто не бачить угоди — не бачить і нотатки.
+-- 📱 КОНТАКТ ІЗ КЛІЄНТОМ ПОЗА ДЗВІНКОМ (17.09.2026, запит КВП: «клієнти дуже часто не спілкуються
+-- телефоном — їм пишуть у Viber і Telegram»). Ringostat бачить лише дзвінки, Kommo-чати не
+-- покривають месенджери менеджерів, тож контакт записується рукою: канал, текст, скрин (до 5 МБ,
+-- лише зображення). Файли — у `contact-files` поза публічним `/api/files`, віддача через роут зі
+-- скоупом клієнта. Ручний контакт входить у «останній контакт» нарівні з розмовою Ringostat.
+CREATE TABLE IF NOT EXISTS client_contacts (
+  id SERIAL PRIMARY KEY,
+  client_key TEXT NOT NULL,
+  channel TEXT NOT NULL CHECK (channel IN ('viber','telegram','email','call','other')),
+  note TEXT,
+  stored_name TEXT,
+  file_name TEXT,
+  mime TEXT,
+  size_bytes BIGINT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_client_contacts_client ON client_contacts(client_key, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS deal_notes (
   kommo_id   BIGINT PRIMARY KEY REFERENCES deals(kommo_id) ON DELETE CASCADE,
   comment    TEXT,

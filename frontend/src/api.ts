@@ -199,9 +199,19 @@ export interface MissedManagerRow {
   /** `null` — рядок «Без відповідального»: дзвінок не дійшов до людини. */
   managerId: number | null;
   name: string;
+  /** ПОТОЧНА команда менеджера; `null` — поза командами або рядок «Без відповідального». */
+  teamId: number | null;
   missed: number; callbackSelf: number; callbackColleague: number; clientSelf: number;
   noCallback: number;
   /** У підсумковому рядку ЗАВЖДИ `null`: медіани не додаються й не усереднюються. */
+  medianMin: number | null;
+}
+/** Рядок команди блоку B. `teamId: null` — «Поза командами». Медіана — по дзвінках команди. */
+export interface MissedTeamRow {
+  teamId: number | null;
+  name: string;
+  missed: number; callbackSelf: number; callbackColleague: number; clientSelf: number;
+  noCallback: number;
   medianMin: number | null;
 }
 export interface MissedCallsResp {
@@ -210,9 +220,68 @@ export interface MissedCallsResp {
   summary: MissedSummary;
   managers: MissedManagerRow[];
   total: MissedManagerRow;
+  teams: MissedTeamRow[];
+  /** `false` у зрізі команди чи менеджера: «без відповідального» туди не входить за побудовою. */
+  ownerlessInScope: boolean;
 }
 export async function fetchMissedCalls(params: { from: string; to: string }): Promise<MissedCallsResp> {
   const { data } = await api.get<MissedCallsResp>("/dashboard/missed-calls", { params });
+  return data;
+}
+
+/** 📈 Динаміка: ряди по днях / тижнях / місяцях. `key`: total | team:<id> | noteam | ownerless. */
+export type MissedSeriesGranularity = "day" | "week" | "month";
+export interface MissedSeriesPoint { period: string; missed: number; callback: number; clientSelf: number; medianMin: number | null }
+export interface MissedSeriesResp {
+  granularity: MissedSeriesGranularity; from: string; to: string; ownerlessInScope: boolean;
+  series: { key: string; name: string | null; points: MissedSeriesPoint[] }[];
+}
+export async function fetchMissedSeries(params: { granularity: MissedSeriesGranularity }): Promise<MissedSeriesResp> {
+  const { data } = await api.get<MissedSeriesResp>("/dashboard/missed-calls/series", { params });
+  return data;
+}
+
+/** Блок C. Типи — дзеркало `core/missedCalls.ts` (`MissedListRow`) + `dealUrl` з роуту. */
+export type MissedNextStep = "callback_talked" | "callback_no_answer" | "client_self" | "nothing";
+export interface MissedListRow {
+  uniqueid: string;
+  /** Час за Києвом, `HH:MM`. */
+  at: string;
+  phone: string | null; clientKey: string | null;
+  managerId: number | null; managerName: string; bucket: MissedDayBucket;
+  /** НАЙРАНІША подія після пропущеного — не «чи був передзвін узагалі». */
+  next: MissedNextStep; nextMin: number | null;
+  dealId: number | null; dealUrl: string | null;
+}
+export interface MissedListResp {
+  day: string; onlyNoCallback: boolean;
+  /** true — список обрізано стелею; екран мусить це сказати, а не вдавати повноту. */
+  truncated: boolean;
+  rows: MissedListRow[];
+}
+export async function fetchMissedList(params: { day: string; noCallback?: "1" }): Promise<MissedListResp> {
+  const { data } = await api.get<MissedListResp>("/dashboard/missed-calls/list", { params });
+  return data;
+}
+
+/** Блок D. Три стани — окремі числа, не одне. */
+export type NoDealState = "unknown" | "has_deal" | "no_deal";
+export interface NoDealCounts { answered: number; unknown: number; hasDeal: number; noDeal: number }
+export async function fetchNoDeal(params: { from: string; to: string }): Promise<{ period: { from: string; to: string }; counts: NoDealCounts }> {
+  const { data } = await api.get<{ period: { from: string; to: string }; counts: NoDealCounts }>("/dashboard/missed-calls/no-deal", { params });
+  return data;
+}
+export interface NoDealListRow {
+  uniqueid: string;
+  /** Дата й час за Києвом, `YYYY-MM-DD HH:MM`. */
+  at: string;
+  phone: string | null; clientKey: string | null;
+  managerId: number | null; managerName: string; talkSec: number;
+  dealId: number | null; dealUrl: string | null;
+}
+export async function fetchNoDealList(params: { from: string; to: string; state: NoDealState }):
+Promise<{ state: NoDealState; truncated: boolean; rows: NoDealListRow[] }> {
+  const { data } = await api.get<{ state: NoDealState; truncated: boolean; rows: NoDealListRow[] }>("/dashboard/missed-calls/no-deal/list", { params });
   return data;
 }
 
@@ -783,6 +852,10 @@ export interface ReportPlanKpi { fact: number | null; target: number; taken?: nu
 export interface SrcCounts {
   created: number; adCount: number; leadgenCount: number; otherCount: number; noChannelCount: number;
 }
+/** Лічильники «першого дотику». `noRecord` — бот розмови не чув; у відсоток НЕ входить. */
+export interface FirstTouchCounts { analyzed: number; voiced: number; noRecord: number }
+/** `not_covered` — команду бот не оцінює взагалі: «не вимірюється», а не 0 з 0. */
+export interface FirstTouchCell extends FirstTouchCounts { state: "measured" | "not_covered" }
 export interface ReportPlanManager {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
   tag: "rpk" | "rnk" | "self";
@@ -792,6 +865,8 @@ export interface ReportPlanManager {
   factSuccessDeals: number; factPaidDeals: number;
   // 📞 Розмова (billsec>0) і недодзвін — ДВІ цифри; складати заборонено.
   talks: number; attempts: number;
+  /** 🎯 ТЗ-3 «ціну названо в перший дотик» — оцінки бота, звʼязані з тим, хто ДЗВОНИВ. */
+  firstTouch: FirstTouchCell;
   // ⏳ Очікування БЕЗ планової дати — в жодну суму не входить, тому й окремо.
   expectNoDate: number; expectNoDateDeals: number;
   // 🧱 Скільки з очікувань стоїть на «Виставленні рахунку» (затор).
@@ -859,6 +934,11 @@ export interface ReportPlan {
     dispatched: number; dispatchedRevenue: number; created: number; avgCheck: number | null;
     expectNoDate: number; jam: number; jamDeals: number; dobir: number; byPace: number; talks: number; attempts: number;
     /**
+     * Σ «першого дотику» по ростеру + стан покриття команди + оцінки людей ПОЗА ростером у межах
+     * скоупу (завершують, звільнені) — окремим числом, щоб не зникали. Відсоток — з сум ростеру.
+     */
+    firstTouch: FirstTouchCounts & { state: "measured" | "not_covered"; outside: FirstTouchCounts };
+    /**
      * 🔴 Скільки з факту прийшло від менеджерів БЕЗ плану (і від звільнених — у них
      * плану немає за побудовою). План команди = Σ планів її менеджерів, тож ці гроші
      * піднімають відсоток, не піднявши знаменник. Заміряно: у Яцика +8.3 п.п.
@@ -875,6 +955,8 @@ export interface ReportPlan {
    * якому стоїть половина гейтів. Порожній масив — нормальний стан.
    */
   dismissed: ReportPlanDismissed[];
+  /** Про ДЖЕРЕЛО «першого дотику»: не звʼязані з менеджером оцінки, остання оцінка бота, скільки команд він оцінює. */
+  firstTouchMeta: { unmapped: FirstTouchCounts; lastAnalyzedAt: string | null; coveredTeams: number };
 }
 export interface ReportPlanDismissed {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
@@ -1707,6 +1789,8 @@ export async function saveReceivableNote(payload: {
   clientKey: string;
   comment?: string | null;
   dueDate?: string | null;
+  /** Порожній `comment` без цього прапорця НЕ стирає текст на сервері (17.09.2026). */
+  clear?: boolean;
 }): Promise<void> {
   await api.put("/dashboard/receivables/note", payload);
 }
@@ -3444,6 +3528,9 @@ export interface ClientPlanRow {
   seasonalNote: string | null;
   lastTalk: string | null;
   lastTalkDays: number | null;
+  /** 📱 Останній контакт: свіжіше з розмови Ringostat і ручного запису (Viber/Telegram/…). */
+  lastContact?: { at: string; source: "talk" | "manual"; channel: string | null } | null;
+  lastContactHasFile?: boolean;
   attempts: number;
   taskId: number | null;
   taskStatus: string | null;
@@ -3534,7 +3621,43 @@ export interface ClientCall {
   /** 🎧 Пряме посилання на запис у кабінеті Ringostat. Відкривається без логіна. */
   recording: string | null;
 }
+export interface ClientContact {
+  id: number; channel: string; note: string | null; fileName: string | null; hasFile: boolean;
+  fileUrl: string | null; createdAt: string; createdById: number | null; author: string | null;
+}
+export const CONTACT_CHANNELS: { key: string; label: string }[] = [
+  { key: "viber", label: "Viber" }, { key: "telegram", label: "Telegram" }, { key: "email", label: "Email" },
+  { key: "call", label: "Дзвінок з особистого" }, { key: "other", label: "Інше" },
+];
+export function contactChannelLabel(key: string | null): string {
+  return CONTACT_CHANNELS.find((c) => c.key === key)?.label ?? (key ?? "");
+}
+export async function fetchClientContacts(clientKey: string): Promise<ClientContact[]> {
+  const { data } = await api.get<{ contacts: ClientContact[] }>("/dashboard/client-contacts", { params: { clientKey } });
+  return data.contacts;
+}
+export async function addClientContact(p: { clientKey: string; channel: string; note: string; file?: File | null }): Promise<ClientContact> {
+  let dataBase64: string | undefined;
+  if (p.file) {
+    dataBase64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(p.file!);
+    });
+  }
+  const { data } = await api.post<{ contact: ClientContact }>("/dashboard/client-contacts", {
+    clientKey: p.clientKey, channel: p.channel, note: p.note, dataBase64, filename: p.file?.name, mime: p.file?.type || null,
+  });
+  return data.contact;
+}
+export async function deleteClientContact(id: number): Promise<void> { await api.delete(`/dashboard/client-contacts/${id}`); }
+/** Скрин віддається лише з токеном, тож тягнемо через axios і показуємо як blob. */
+export async function fetchContactFileBlobUrl(id: number): Promise<string> {
+  const { data } = await api.get(`/dashboard/client-contacts/${id}/file`, { responseType: "blob" });
+  return URL.createObjectURL(data as Blob);
+}
+
 export interface ClientCard {
+  /** 📱 Контакти з клієнтом поза дзвінками (Viber/Telegram/…), зі скринами. */
+  contacts?: ClientContact[];
   /** 📞 Дзвінки по роках. `callsSince` — глибина памʼяті: порожній рік до неї означає «даних немає». */
   callsByYear?: ClientCallYear[];
   calls?: ClientCall[];
