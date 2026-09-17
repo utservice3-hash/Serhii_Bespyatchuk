@@ -185,7 +185,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
       return (
         <div key={f?.id ?? "none"} style={{ display: "flex", alignItems: "center", borderRadius: "var(--r-md)", background: on ? "var(--surface-2)" : "transparent" }}>
           <button style={{ ...subBtn(on), background: "transparent", flex: 1, minWidth: 0 }} onClick={() => { setFolderFilter(on ? "all" : (f ? id : "none")); setInTrash(false); setNarrowPane("list"); }} title={f ? f.name : "Без папки"}>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f ? f.name.replace(/^\d+\.\s*/, "") : "Без папки"}</span>{!(on && f && viewer.canManageAccess) && <span style={cnt(n)}>{n}</span>}
+            <span style={{ overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", lineHeight: 1.3, textAlign: "left" }}>{f ? f.name.replace(/^\d+\.\s*/, "") : "Без папки"}</span>{!(on && f && viewer.canManageAccess) && <span style={cnt(n)}>{n}</span>}
           </button>
           {on && f && viewer.canManageAccess && (
             <>
@@ -198,7 +198,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
       );
     });
   };
-  const paneH = "calc(100vh - 150px)";
+  const paneH = "calc(100vh - 200px)";
   const navBtn = (on: boolean): React.CSSProperties => ({ display: "flex", alignItems: "center", gap: 8, width: "100%", border: "none", textAlign: "left", padding: "8px 10px", borderRadius: "var(--r-lg)", cursor: "pointer", fontSize: "var(--fs-base)", background: on ? "var(--brand)" : "transparent", color: on ? "#fff" : "var(--text)", fontWeight: on ? 600 : 400 });
   const subBtn = (on: boolean): React.CSSProperties => ({ display: "flex", alignItems: "center", gap: 6, width: "100%", border: "none", textAlign: "left", padding: "6px 10px 6px 26px", borderRadius: "var(--r-md)", cursor: "pointer", fontSize: "var(--fs-13)", background: on ? "var(--surface-2)" : "transparent", color: "var(--text)", fontWeight: on ? 600 : 400 });
   const cnt = (_n: number, on = false): React.CSSProperties => ({ marginLeft: "auto", fontSize: 12, opacity: on ? .85 : .7, fontVariantNumeric: "tabular-nums" });
@@ -216,14 +216,23 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
       </div>
 
       {/* Три панелі: навігація · список · перегляд (макет Documents Split View) */}
-      <div className="chart-card" style={{ padding: 0, display: "grid", gridTemplateColumns: narrow ? "minmax(0,1fr)" : "220px 380px minmax(0,1fr)", minHeight: 420, height: narrow ? "auto" : paneH, overflow: "hidden" }}>
+      {/* «Мої справи» — смугою над панелями, а не в лівій колонці (Сергій 17.09.2026): ліва колонка лише для розділів і папок. */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+        <span className="orph-dim" style={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em", marginRight: 4 }}>Мої справи</span>
+        {([
+          ["🔏 Офер чекає підпису", todo.offers, "var(--warn)", () => setShelf("mine"), true],
+          ["📖 Ознайомитись", todo.regs, "var(--warn)", () => setShelf("reg"), true],
+          ["📷 Фото на підтвердженні", todo.review, "var(--info)", () => setShelf("mine"), viewer.isManagement],
+        ] as [string, number, string, () => void, boolean][]).filter((x) => x[4]).map(([l, n, c, go]) => (
+          <button key={l} className="orph-chip" onClick={go} style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 12px", fontSize: 13, color: n ? c : "var(--text-muted)", borderColor: n ? c : "var(--border)" }}>
+            {l}<b style={{ fontVariantNumeric: "tabular-nums" }}>{n}</b>
+          </button>
+        ))}
+      </div>
+      <div className="chart-card" style={{ padding: 0, display: "grid", gridTemplateColumns: narrow ? "minmax(0,1fr)" : "300px 400px minmax(0,1fr)", minHeight: 420, height: narrow ? "auto" : paneH, gridTemplateRows: narrow ? "auto" : "minmax(0,1fr)", overflow: "hidden" }}>
         {/* Навігація */}
-        <div style={{ borderRight: narrow ? "none" : "1px solid var(--border)", padding: 12, overflowY: "auto", display: narrow && (narrowPane !== "nav" || selectedFile) ? "none" : "flex", flexDirection: "column", gap: 2 }}>
-          <div style={label}>Мої справи</div>
-          <button style={{ ...subBtn(false), paddingLeft: 10, color: todo.offers ? "var(--warn)" : "var(--text-muted)" }} onClick={() => setShelf("mine")}>🔏 Офер чекає підпису<span style={cnt(todo.offers)}>{todo.offers}</span></button>
-          <button style={{ ...subBtn(false), paddingLeft: 10, color: todo.regs ? "var(--warn)" : "var(--text-muted)" }} onClick={() => setShelf("reg")}>📖 Ознайомитись<span style={cnt(todo.regs)}>{todo.regs}</span></button>
-          {viewer.isManagement && <button style={{ ...subBtn(false), paddingLeft: 10, color: todo.review ? "var(--info)" : "var(--text-muted)" }} onClick={() => setShelf("mine")}>📷 Фото на підтвердженні<span style={cnt(todo.review)}>{todo.review}</span></button>}
-          <div style={{ ...label, marginTop: 12 }}>Розділи</div>
+        <div style={{ borderRight: narrow ? "none" : "1px solid var(--border)", padding: 12, overflowY: "auto", minHeight: 0, display: narrow && (narrowPane !== "nav" || selectedFile) ? "none" : "flex", flexDirection: "column", gap: 2 }}>
+          <div style={label}>Розділи</div>
           <button style={navBtn(!inTrash && shelf === "reg")} onClick={() => setShelf("reg")}>📕 Регламенти<span style={cnt(shelfCount("reg"), shelf === "reg")}>{shelfCount("reg")}</span></button>
           <Collapse open={!inTrash && shelf === "reg"}>{folderRows("reg")}</Collapse>
           <button style={navBtn(!inTrash && shelf === "work")} onClick={() => setShelf("work")}>🗂 Робочі документи<span style={cnt(shelfCount("work"), shelf === "work")}>{shelfCount("work")}</span></button>
@@ -239,7 +248,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
         </div>
 
         {/* Список */}
-        <div style={{ borderRight: narrow ? "none" : "1px solid var(--border)", display: narrow && (narrowPane !== "list" || selectedFile) ? "none" : "flex", flexDirection: "column", minWidth: 0, minHeight: narrow ? 420 : undefined }}>
+        <div style={{ borderRight: narrow ? "none" : "1px solid var(--border)", display: narrow && (narrowPane !== "list" || selectedFile) ? "none" : "flex", flexDirection: "column", minWidth: 0, minHeight: narrow ? 420 : 0, overflow: "hidden" }}>
           {narrow && <button style={{ ...btn(), margin: "10px 12px 0", alignSelf: "flex-start", fontSize: 12, padding: "4px 10px" }} onClick={() => setNarrowPane("nav")}>☰ Розділи й папки</button>}
           {inTrash ? (
             <>
@@ -247,7 +256,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
                 <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}><h2 className="chart-title" style={{ margin: 0 }}>🗑 Кошик</h2><span className="orph-dim">{trash?.length ?? 0}</span></div>
                 <p className="loading-text" style={{ margin: "6px 0 0", fontSize: 12 }}>Видалені документи бачить лише керівництво. «Повернути» ставить документ туди, де він був: у той самий розділ, папку й стан підпису.</p>
               </div>
-              <div style={{ overflowY: "auto", flex: 1 }}>
+              <div style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
                 {trash == null ? <p className="loading-text" style={{ margin: 12 }}>Завантаження…</p>
                   : trash.length === 0 ? <StateBlock icon="🗑" title="Кошик порожній" text="Тут зʼявляться документи, які керівництво видалило." inline />
                   : trash.map((f) => { const t = TYPE_META[f.category ?? "Інше"] ?? TYPE_META["Інше"]; return (
@@ -273,7 +282,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
               </div>
             )}
           </div>
-          <div style={{ overflowY: "auto", flex: 1 }}>
+          <div style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
             {listFiles.length === 0 ? (
               shelfFiles.length === 0
                 ? <StateBlock icon="🗀" title={shelf === "archive" ? "В архіві ще нічого немає" : "Тут ще нічого немає"} text={canUploadHere ? "Натисніть «Завантажити»." : "Документи сюди викладає керівництво."} action={canUploadHere ? <button style={btn()} onClick={() => setUploadOpen(true)}>Завантажити файл</button> : undefined} inline />
@@ -297,7 +306,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
 
         {/* Перегляд */}
         {selectedFile && !inTrash ? (
-          <div style={{ overflowY: "auto", minWidth: 0 }}>
+          <div style={{ overflowY: "auto", minWidth: 0, minHeight: 0 }}>
             {narrow && <button style={{ ...btn(), margin: "10px 16px 0", fontSize: 12, padding: "4px 10px" }} onClick={() => setSelected(null)}>← До списку</button>}
             <DocCardPanel key={selectedFile.id} file={selectedFile} tree={tree} onChanged={async () => { await load(); if (viewer.isManagement) await loadTrash(); }} onClose={() => setSelected(null)} onToast={setToast} folderName={folderName} />
           </div>
