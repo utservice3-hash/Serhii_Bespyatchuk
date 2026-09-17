@@ -13,6 +13,7 @@ import { UPLOAD_DIR } from "./uploads.js";
 import { OWNER_NAME_SQL } from "../core/absences.js";
 import {
   canSeeDocument, canSeeOffersSection, canUploadTo, canEditDocument, canManageAccess, canSignDocument,
+  roleSeesGeneral, isNewForViewer, type FileRights,
   signatureState, isManagement, MANAGEMENT_ROLES, DEFAULT_RIGHTS,
   type DocLike, type DocViewer, type AccessContext, type FolderRights, type Grant, type DocSection,
 } from "../core/docAccess.js";
@@ -48,11 +49,13 @@ const FILE_SELECT = `
   SELECT f.id, f.folder_id, f.name, f.category, f.mime, f.size_bytes, f.created_at, f.updated_at,
          f.section, f.addressee_user_id, f.description, f.version, f.sha256,
          f.archived_at, f.archived_reason, f.created_by, f.inactive_at,
+         COALESCE(cv.created_at, f.created_at) AS version_at, COALESCE(cv.created_by, f.created_by) AS version_by,
          COALESCE(am.name, au.full_name, au.email) AS author,
          COALESCE(dm.name, du.full_name, du.email) AS addressee
     FROM doc_files f
     LEFT JOIN users au ON au.id = f.created_by LEFT JOIN managers am ON am.id = au.manager_id
     LEFT JOIN users du ON du.id = f.addressee_user_id LEFT JOIN managers dm ON dm.id = du.manager_id
+    LEFT JOIN doc_file_versions cv ON cv.file_id = f.id AND cv.version = f.version
    WHERE f.deleted_at IS NULL`;
 
 interface FileRow {
@@ -60,6 +63,7 @@ interface FileRow {
   size_bytes: string | null; created_at: string; updated_at: string; section: DocSection;
   addressee_user_id: number | null; description: string | null; version: number; sha256: string | null;
   archived_at: string | null; archived_reason: string | null; created_by: number | null; inactive_at: string | null;
+  version_at: string | null; version_by: number | null;
   author: string | null; addressee: string | null;
 }
 const toDocLike = (r: FileRow): DocLike => ({ id: r.id, folderId: r.folder_id, section: r.section, addresseeUserId: r.addressee_user_id, createdBy: r.created_by, archivedAt: r.archived_at, inactiveAt: r.inactive_at });
@@ -67,16 +71,18 @@ const toDocLike = (r: FileRow): DocLike => ({ id: r.id, folderId: r.folder_id, s
 /** Контекст доступу поточного глядача: явні права його ролі по папках + його винятки. */
 async function accessContext(req: Request): Promise<AccessContext> {
   const roleKey = req.auth!.roleKey;
-  const [rights, grants] = await Promise.all([
+  const [rights, grants, own] = await Promise.all([
     pool.query<{ folder_id: number; can_view: boolean; can_upload: boolean; can_edit: boolean; can_publish: boolean }>(
       `SELECT folder_id, can_view, can_upload, can_edit, can_publish FROM doc_folder_access WHERE role_key = $1`, [roleKey]),
     pool.query<{ folder_id: number | null; file_id: number | null; user_id: number; can_view: boolean; can_upload: boolean; expires_at: string | null }>(
       `SELECT folder_id, file_id, user_id, can_view, can_upload, expires_at FROM doc_access_grants WHERE user_id = $1`, [req.auth!.userId]),
+    pool.query<{ file_id: number; can_view: boolean; can_edit: boolean }>(`SELECT file_id, can_view, can_edit FROM doc_file_access WHERE role_key = $1`, [roleKey]),
   ]);
   const folderRights = new Map<number, FolderRights>();
   for (const r of rights.rows) folderRights.set(r.folder_id, { canView: r.can_view, canUpload: r.can_upload, canEdit: r.can_edit, canPublish: r.can_publish });
   const gs: Grant[] = grants.rows.map((g) => ({ folderId: g.folder_id, fileId: g.file_id, userId: g.user_id, canView: g.can_view, canUpload: g.can_upload, expiresAt: g.expires_at }));
-  return { folderRights, grants: gs };
+  const fileRights = new Map<number, FileRights>(own.rows.map((r) => [r.file_id, { canView: r.can_view, canEdit: r.can_edit }]));
+  return { folderRights, grants: gs, fileRights };
 }
 
 async function logAccess(actorId: number, action: string, details: Record<string, unknown>, folderId: number | null = null, fileId: number | null = null) {
@@ -116,7 +122,8 @@ async function storeBuffer(display: string, buffer: Buffer): Promise<{ storedNam
 
 type AckInfo = { required: boolean; mine: "not_required" | "acked" | "pending"; done: number | null; total: number | null };
 type SigRow = { version: number; sha256: string; signed_at: string; method?: string; approved_at?: string | null; rejected_at?: string | null };
-function shape(r: FileRow, sigs: SigRow[], sentAt: string | null, viewer: DocViewer, ctx: AccessContext, ack?: AckInfo) {
+type ShapeExtra = { seenVersion?: number; ownRights?: boolean };
+function shape(r: FileRow, sigs: SigRow[], sentAt: string | null, viewer: DocViewer, ctx: AccessContext, ack?: AckInfo, extra: ShapeExtra = {}) {
   const st = signatureState({ version: r.version, sha256: r.sha256, section: r.section }, sigs.map((s) => ({ version: s.version, sha256: s.sha256, signedAt: s.signed_at, method: s.method, approvedAt: s.approved_at, rejectedAt: s.rejected_at })), new Date(), sentAt);
   return {
     id: r.id, folderId: r.folder_id, name: r.name, category: r.category, mime: r.mime, sizeBytes: r.size_bytes == null ? null : Number(r.size_bytes),
@@ -127,27 +134,35 @@ function shape(r: FileRow, sigs: SigRow[], sentAt: string | null, viewer: DocVie
     canEdit: canEditDocument(viewer, toDocLike(r), ctx),
     canSign: canSignDocument(viewer, toDocLike(r)) && st.kind !== "signed",
     ack: ack ?? { required: false, mine: "not_required" as const, done: null, total: null },
+    isNew: isNewForViewer({ version: r.version, versionAt: r.version_at, versionBy: r.version_by, archivedAt: r.archived_at }, extra.seenVersion, viewer.userId),
+    ownRights: !!extra.ownRights,
   };
 }
 
 /** Аудиторія регламенту: активні користувачі з вкладкою «Документи», чия роль бачить папку (явне can_view=false закриває). */
-async function ackAudience(): Promise<{ users: { id: number; roleKey: string }[]; closed: Map<number, Set<string>> }> {
-  const [u, rights] = await Promise.all([
+type Audience = { users: { id: number; roleKey: string }[]; folderRows: Map<number, Map<string, FolderRights>>; fileRows: Map<number, Map<string, FileRights>> };
+async function ackAudience(): Promise<Audience> {
+  const [u, rights, own] = await Promise.all([
     pool.query<{ id: number; role_key: string; is_active: boolean; override: string | null }>(
       `SELECT u.id, COALESCE(u.role_override, u.role) AS role_key, u.is_active, mws.state AS override
          FROM users u LEFT JOIN manager_work_state mws ON mws.manager_id = u.manager_id WHERE u.is_active`),
-    pool.query<{ folder_id: number; role_key: string; can_view: boolean }>(`SELECT folder_id, role_key, can_view FROM doc_folder_access WHERE can_view = false`),
+    pool.query<{ folder_id: number; role_key: string; can_view: boolean }>(`SELECT folder_id, role_key, can_view FROM doc_folder_access`),
+    pool.query<{ file_id: number; role_key: string; can_view: boolean; can_edit: boolean }>(`SELECT file_id, role_key, can_view, can_edit FROM doc_file_access`),
   ]);
-  const closed = new Map<number, Set<string>>();
-  for (const r of rights.rows) { const s = closed.get(r.folder_id) ?? new Set<string>(); s.add(r.role_key); closed.set(r.folder_id, s); }
+  const folderRows = new Map<number, Map<string, FolderRights>>();
+  for (const r of rights.rows) { const m = folderRows.get(r.folder_id) ?? new Map(); m.set(r.role_key, { canView: r.can_view, canUpload: false, canEdit: false, canPublish: false }); folderRows.set(r.folder_id, m); }
+  const fileRows = new Map<number, Map<string, FileRights>>();
+  for (const r of own.rows) { const m = fileRows.get(r.file_id) ?? new Map(); m.set(r.role_key, { canView: r.can_view, canEdit: r.can_edit }); fileRows.set(r.file_id, m); }
   const users = u.rows.filter((x) => x.override !== "dismissed" && tabsOfRole(x.role_key).includes("documents")).map((x) => ({ id: x.id, roleKey: x.role_key }));
-  return { users, closed };
+  return { users, folderRows, fileRows };
 }
-function audienceFor(r: FileRow, aud: { users: { id: number; roleKey: string }[]; closed: Map<number, Set<string>> }): number[] {
-  const c = r.folder_id == null ? undefined : aud.closed.get(r.folder_id);
-  return aud.users.filter((x) => isManagement(x.roleKey) || !c?.has(x.roleKey)).map((x) => x.id);
+/** Аудиторія документа — те саме правило ролі, що й доступ (`roleSeesGeneral`): власні права файла перемагають папку. */
+function audienceFor(r: FileRow, aud: Audience): number[] {
+  const fo = r.folder_id == null ? undefined : aud.folderRows.get(r.folder_id);
+  const fi = aud.fileRows.get(r.id);
+  return aud.users.filter((x) => roleSeesGeneral(x.roleKey, r.folder_id, fi?.get(x.roleKey), fo?.get(x.roleKey))).map((x) => x.id);
 }
-async function ackInfoFor(r: FileRow, acks: AckRow[], viewer: DocViewer, aud: { users: { id: number; roleKey: string }[]; closed: Map<number, Set<string>> } | null): Promise<AckInfo> {
+async function ackInfoFor(r: FileRow, acks: AckRow[], viewer: DocViewer, aud: Audience | null): Promise<AckInfo> {
   const d = { section: r.section, category: r.category, archivedAt: r.archived_at, version: r.version, sha256: r.sha256 };
   const required = ackRequired(d);
   const mine = ackMine(d, acks, viewer.userId);
@@ -164,14 +179,18 @@ documentsRouter.get("/tree", async (req, res) => {
   const viewer = viewerOf(req);
   const ctx = await accessContext(req);
   const mgmt0 = isManagement(viewer.roleKey);
-  const [folders, files, sigs, sent, acksQ, aud] = await Promise.all([
+  const [folders, files, sigs, sent, acksQ, aud, seenQ, ownQ] = await Promise.all([
     pool.query<{ id: number; parent_id: number | null; name: string; created_at: string }>(`SELECT id, parent_id, name, created_at FROM doc_folders ORDER BY name`),
     pool.query<FileRow>(`${FILE_SELECT} ORDER BY f.updated_at DESC`),
     pool.query<{ file_id: number; version: number; sha256: string; signed_at: string; method: string; approved_at: string | null; rejected_at: string | null }>(`SELECT file_id, version, sha256, signed_at, method, approved_at, rejected_at FROM doc_signatures`),
     pool.query<{ file_id: number; at: string }>(`SELECT file_id, min(at) AS at FROM doc_events WHERE kind = 'sent' GROUP BY file_id`),
     pool.query<{ file_id: number; user_id: number; version: number; sha256: string }>(`SELECT file_id, user_id, version, sha256 FROM doc_acks`),
     mgmt0 ? ackAudience() : Promise.resolve(null),
+    pool.query<{ file_id: number; version: number }>(`SELECT file_id, max(version) AS version FROM doc_views WHERE user_id = $1 GROUP BY file_id`, [viewer.userId]),
+    mgmt0 ? pool.query<{ file_id: number }>(`SELECT DISTINCT file_id FROM doc_file_access`) : Promise.resolve({ rows: [] as { file_id: number }[] }),
   ]);
+  const seenBy = new Map(seenQ.rows.map((r) => [r.file_id, Number(r.version)]));
+  const ownSet = new Set(ownQ.rows.map((r) => r.file_id));
   const ackBy = new Map<number, AckRow[]>();
   for (const a of acksQ.rows) { const arr = ackBy.get(a.file_id) ?? []; arr.push({ userId: a.user_id, version: a.version, sha256: a.sha256 }); ackBy.set(a.file_id, arr); }
   const sigBy = new Map<number, SigRow[]>();
@@ -188,7 +207,7 @@ documentsRouter.get("/tree", async (req, res) => {
   };
   res.json({
     folders: folders.rows.map((f) => ({ id: f.id, parentId: f.parent_id, name: f.name, createdAt: f.created_at })),
-    files: await Promise.all(visible.map(async (r) => shape(r, sigBy.get(r.id) ?? [], sentBy.get(r.id) ?? null, viewer, ctx, await ackInfoFor(r, ackBy.get(r.id) ?? [], viewer, aud)))),
+    files: await Promise.all(visible.map(async (r) => shape(r, sigBy.get(r.id) ?? [], sentBy.get(r.id) ?? null, viewer, ctx, await ackInfoFor(r, ackBy.get(r.id) ?? [], viewer, aud), { seenVersion: seenBy.get(r.id), ownRights: ownSet.has(r.id) }))),
     counts,
     sections: { general: true, personal: true, offer: canSeeOffersSection(viewer, hasOwnOffer), archive: mgmt },
     viewer: { userId: viewer.userId, roleKey: viewer.roleKey, isManagement: mgmt, canManageAccess: canManageAccess(viewer),
@@ -235,8 +254,11 @@ documentsRouter.get("/file/:id", async (req, res) => {
   }
   const acksRows = (await pool.query<{ user_id: number; version: number; sha256: string }>(`SELECT user_id, version, sha256 FROM doc_acks WHERE file_id = $1`, [id])).rows.map((a) => ({ userId: a.user_id, version: a.version, sha256: a.sha256 }));
   const mgmtNow = isManagement(req.auth!.roleKey);
+  // 🆕 Відкрив картку — поточна версія більше не «нове» для цієї людини (кожен глядач, не лише адресат).
+  await pool.query(`INSERT INTO doc_views (file_id, user_id, version) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, [id, req.auth!.userId, v.row.version]);
+  const ownRights = mgmtNow && ((await pool.query(`SELECT 1 FROM doc_file_access WHERE file_id = $1 LIMIT 1`, [id])).rowCount ?? 0) > 0;
   res.json({
-    file: shape(v.row, sigs.rows, sentAt, viewerOf(req), v.ctx, await ackInfoFor(v.row, acksRows, viewerOf(req), mgmtNow ? await ackAudience() : null)),
+    file: shape(v.row, sigs.rows, sentAt, viewerOf(req), v.ctx, await ackInfoFor(v.row, acksRows, viewerOf(req), mgmtNow ? await ackAudience() : null), { seenVersion: v.row.version, ownRights }),
     versions: versions.rows,
     signatures: sigs.rows.map((s) => ({ id: s.id, version: s.version, sha256: s.sha256, signedAt: s.signed_at, method: s.method, signer: s.signer, hasEvidence: !!s.evidence_stored_name, approvedAt: s.approved_at, rejectedAt: s.rejected_at, rejectedReason: s.rejected_reason,
       current: s.sha256 === v.row.sha256 && s.version === v.row.version })),
@@ -285,6 +307,7 @@ documentsRouter.get("/file/:id/viewers", management, async (req, res) => {
   const r = v.row;
   const roles = await pool.query<{ key: string; name: string }>(`SELECT key, name FROM roles ORDER BY name`);
   const rights = r.folder_id == null ? [] : (await pool.query<{ role_key: string; can_view: boolean }>(`SELECT role_key, can_view FROM doc_folder_access WHERE folder_id = $1`, [r.folder_id])).rows;
+  const own = (await pool.query<{ role_key: string; can_view: boolean; can_edit: boolean }>(`SELECT role_key, can_view, can_edit FROM doc_file_access WHERE file_id = $1`, [r.id])).rows;
   const grants = await pool.query<{ name: string; expires_at: string | null }>(
     `SELECT ${OWNER_NAME_SQL} AS name, g.expires_at FROM doc_access_grants g JOIN users u ON u.id = g.user_id LEFT JOIN managers m ON m.id = u.manager_id
       WHERE (g.file_id = $1 OR g.folder_id = $2) AND (g.expires_at IS NULL OR g.expires_at > now())`, [r.id, r.folder_id]);
@@ -293,11 +316,67 @@ documentsRouter.get("/file/:id/viewers", management, async (req, res) => {
   else if (r.section === "offer") who = [{ label: r.addressee ?? "адресата не вказано", note: "адресат" }, { label: "Керівництво", note: "керує доступом" }];
   else if (r.section === "personal") who = [{ label: r.addressee ?? "адресата не вказано", note: "адресат" }, { label: r.author ?? "автор невідомий", note: "виклав" }, { label: "Керівництво", note: "керує доступом" }];
   else {
-    const closed = new Set(rights.filter((x) => !x.can_view).map((x) => x.role_key));
-    const open = roles.rows.filter((x) => !closed.has(x.key) || MANAGEMENT_ROLES.includes(x.key));
-    who = open.length === roles.rows.length ? [{ label: "Уся команда", note: "усі ролі" }] : open.map((x) => ({ label: x.name, note: "за правами папки" }));
+    const folderBy = new Map(rights.map((x) => [x.role_key, { canView: x.can_view, canUpload: false, canEdit: false, canPublish: false }]));
+    const ownBy = new Map(own.map((x) => [x.role_key, { canView: x.can_view, canEdit: x.can_edit }]));
+    const open = roles.rows.filter((x) => roleSeesGeneral(x.key, r.folder_id, ownBy.get(x.key), folderBy.get(x.key)));
+    who = open.length === roles.rows.length && ownBy.size === 0 ? [{ label: "Уся команда", note: "усі ролі" }]
+      : open.map((x) => ({ label: x.name, note: ownBy.has(x.key) && !MANAGEMENT_ROLES.includes(x.key) ? "власні права документа" : "за правами папки" }));
   }
   res.json({ who, exceptions: grants.rows.map((g) => ({ name: g.name, until: g.expires_at })) });
+});
+
+/**
+ * 🔐 ВЛАСНІ ПРАВА ДОКУМЕНТА — лише керівництву, лише загальні документи.
+ * По кожній ролі: права папки, власний рядок файла (або null = «як у папці») і що діє.
+ */
+documentsRouter.get("/file/:id/access", management, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "Невірний id документа" });
+  const v = await visibleFile(req, res, id); if (!v) return;
+  const r = v.row;
+  const [roles, folder, own, log] = await Promise.all([
+    pool.query<{ key: string; name: string }>(`SELECT key, name FROM roles ORDER BY (key = ANY($1::text[])) DESC, name`, [MANAGEMENT_ROLES]),
+    r.folder_id == null ? Promise.resolve({ rows: [] as { role_key: string; can_view: boolean; can_edit: boolean }[] })
+      : pool.query<{ role_key: string; can_view: boolean; can_edit: boolean }>(`SELECT role_key, can_view, can_edit FROM doc_folder_access WHERE folder_id = $1`, [r.folder_id]),
+    pool.query<{ role_key: string; can_view: boolean; can_edit: boolean }>(`SELECT role_key, can_view, can_edit FROM doc_file_access WHERE file_id = $1`, [r.id]),
+    pool.query(`SELECT l.action, l.details, l.at, COALESCE(m.name, u.full_name, u.email) AS actor FROM doc_access_log l LEFT JOIN users u ON u.id = l.actor_id LEFT JOIN managers m ON m.id = u.manager_id WHERE l.file_id = $1 AND l.action = 'file_access_changed' ORDER BY l.at DESC LIMIT 20`, [r.id]),
+  ]);
+  const folderBy = new Map(folder.rows.map((x) => [x.role_key, x]));
+  const ownBy = new Map(own.rows.map((x) => [x.role_key, x]));
+  res.json({
+    applicable: r.section === "general" && r.archived_at == null,
+    roles: roles.rows.map((x) => {
+      const mgmt = MANAGEMENT_ROLES.includes(x.key);
+      const f = folderBy.get(x.key); const o = ownBy.get(x.key);
+      const folderView = r.folder_id == null ? true : (f?.can_view ?? DEFAULT_RIGHTS.canView);
+      const folderEdit = r.folder_id == null ? false : (f?.can_edit ?? DEFAULT_RIGHTS.canEdit);
+      return { key: x.key, name: x.name, management: mgmt,
+        folder: { canView: mgmt || folderView, canEdit: mgmt || folderEdit },
+        own: mgmt || !o ? null : { canView: o.can_view, canEdit: o.can_edit } };
+    }),
+    log: log.rows,
+  });
+});
+documentsRouter.put("/file/:id/access", management, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "Невірний id документа" });
+  const v = await visibleFile(req, res, id); if (!v) return;
+  if (v.row.section !== "general" || v.row.archived_at != null) return res.status(400).json({ error: "Власні права бувають лише в загальних документів поза архівом. Особисті й офери бачать адресат і керівництво." });
+  const roles = Array.isArray(req.body?.roles) ? req.body.roles as { key: string; own: { canView: boolean; canEdit: boolean } | null }[] : null;
+  if (!roles) return res.status(400).json({ error: "Немає списку ролей" });
+  const before = (await pool.query(`SELECT role_key, can_view, can_edit FROM doc_file_access WHERE file_id = $1`, [id])).rows;
+  for (const r of roles) {
+    const key = String(r.key ?? "");
+    if (!key || MANAGEMENT_ROLES.includes(key)) continue; // керівництво не звужується через інтерфейс
+    if (r.own == null) { await pool.query(`DELETE FROM doc_file_access WHERE file_id = $1 AND role_key = $2`, [id, key]); continue; }
+    const canView = !!r.own.canView; const canEdit = canView && !!r.own.canEdit;
+    await pool.query(
+      `INSERT INTO doc_file_access (file_id, role_key, can_view, can_edit, updated_by, updated_at) VALUES ($1, $2, $3, $4, $5, now())
+       ON CONFLICT (file_id, role_key) DO UPDATE SET can_view = EXCLUDED.can_view, can_edit = EXCLUDED.can_edit, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+      [id, key, canView, canEdit, req.auth!.userId]);
+  }
+  await logAccess(req.auth!.userId, "file_access_changed", { before, after: roles }, v.row.folder_id, id);
+  res.json({ ok: true });
 });
 
 /** Прев'ю або завантаження. `?inline=1` — віддати у вкладку/iframe (PDF, зображення, HTML). */

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { canSeeDocument, canSeeOffersSection, canEditDocument, canSignDocument, signatureState, MANAGEMENT_ROLES, type DocLike, type AccessContext } from "./docAccess.js";
+import { canSeeDocument, canSeeOffersSection, canEditDocument, canSignDocument, signatureState, MANAGEMENT_ROLES, isNewForViewer, roleSeesGeneral, type DocLike, type AccessContext } from "./docAccess.js";
 
 const ctx = (over: Partial<AccessContext> = {}): AccessContext => ({ folderRights: new Map(), grants: [], now: new Date("2026-09-15T12:00:00Z"), ...over });
 const doc = (over: Partial<DocLike> = {}): DocLike => ({ id: 1, folderId: 10, section: "general", addresseeUserId: null, createdBy: 5, archivedAt: null, ...over });
@@ -126,4 +126,66 @@ test("#490 КОШИК: видалене не видно в дереві/карт
   assert.match(src, /documentsRouter\.get\("\/trash", management,/, "🔴 кошик без middleware management — видалені офери побачить будь-хто");
   assert.match(src, /documentsRouter\.post\("\/file\/:id\/undelete", management,/, "🔴 «Повернути з кошика» без management");
   assert.match(src, /documentsRouter\.post\("\/file\/:id\/delete", management,/, "🔴 «Видалити» без management");
+});
+
+/**
+ * #507 — «НОВЕ»: позначка горить, поки глядач не відкрив ПОТОЧНУ версію, і лише 30 днів від її
+ * завантаження. Фікстури по обидва боки кожної межі: відкрив / не відкрив, нова версія після
+ * відкриття, 29 / 31 день, автор версії, архів. Червоніє, якщо «бачив будь-яку версію» гасить
+ * позначку нової (оновлений регламент тихо пройде повз), якщо зняти вікно (усе старе стане
+ * «нове» після викату) або якщо автор бачитиме своє завантаження як нове.
+ */
+test("#507 НОВЕ: поки не відкрив поточну версію і не старше 30 днів; нова версія — знову нове; автор і архів — ні", () => {
+  const now = new Date("2026-09-17T12:00:00Z");
+  const day = (n: number) => new Date(now.getTime() - n * 86_400_000).toISOString();
+  const d = (over = {}) => ({ version: 2, versionAt: day(3), versionBy: 5, archivedAt: null, ...over });
+  assert.equal(isNewForViewer(d(), undefined, 9, now), true, "не відкривав свіжу версію — мало бути «нове»");
+  assert.equal(isNewForViewer(d(), 2, 9, now), false, "відкрив поточну версію — позначка мусить згаснути");
+  assert.equal(isNewForViewer(d(), 1, 9, now), true, "бачив лише стару версію — оновлений документ мусить знову бути «нове»");
+  assert.equal(isNewForViewer(d({ versionAt: day(29) }), undefined, 9, now), true, "29 днів — ще в межах вікна");
+  assert.equal(isNewForViewer(d({ versionAt: day(31) }), undefined, 9, now), false, "31 день — поза вікном, старе не «нове»");
+  assert.equal(isNewForViewer(d(), undefined, 5, now), false, "автор версії бачив її, коли завантажував");
+  assert.equal(isNewForViewer(d({ archivedAt: day(1) }), undefined, 9, now), false, "архів не буває «нове»");
+});
+
+/**
+ * #508 — ВЛАСНІ ПРАВА ДОКУМЕНТА перемагають права папки В ОБИДВА БОКИ. Вужчі: документ у відкритій
+ * папці закрито ролі. Ширші: документ у закритій папці відкрито ролі. Керівництво не звужується.
+ * Без рядка — «як у папці». Червоніє, якщо файловий рядок лише звужує (ширші права не діятимуть),
+ * лише розширює, або якщо рядок файла закриє документ керівництву.
+ */
+test("#508 ВЛАСНІ ПРАВА: рядок файла ширший або вужчий за папку; без рядка — як у папці; керівництво не звужується", () => {
+  const m = { userId: 1, roleKey: "manager" };
+  const open = new Map([[10, { canView: true, canUpload: false, canEdit: false, canPublish: false }]]);
+  const closed = new Map([[10, { canView: false, canUpload: false, canEdit: false, canPublish: false }]]);
+  const own = (canView: boolean, canEdit = false) => new Map([[1, { canView, canEdit }]]);
+  assert.equal(canSeeDocument(m, doc(), ctx({ folderRights: open })), true, "без власних прав відкрита папка відкриває");
+  assert.equal(canSeeDocument(m, doc(), ctx({ folderRights: closed })), false, "без власних прав закрита папка закриває");
+  assert.equal(canSeeDocument(m, doc(), ctx({ folderRights: open, fileRights: own(false) })), false, "🔴 вужчі права файла не закрили документ у відкритій папці");
+  assert.equal(canSeeDocument(m, doc(), ctx({ folderRights: closed, fileRights: own(true) })), true, "🔴 ширші права файла не відкрили документ у закритій папці");
+  assert.equal(canSeeDocument(m, doc({ id: 2 }), ctx({ folderRights: closed, fileRights: own(true) })), false, "права одного файла протекли на сусідній");
+  assert.equal(canSeeDocument(m, doc({ folderId: null }), ctx({ fileRights: own(false) })), false, "корінь загальних теж звужується власними правами");
+  for (const r of MANAGEMENT_ROLES) assert.equal(canSeeDocument({ userId: 1, roleKey: r }, doc(), ctx({ fileRights: own(false) })), true, `${r} (керівництво) закрито власними правами`);
+  assert.equal(canEditDocument(m, doc(), ctx({ folderRights: open, fileRights: own(true, true) })), true, "власне право редагувати не діє");
+  assert.equal(canEditDocument(m, doc(), ctx({ folderRights: new Map([[10, { canView: true, canUpload: false, canEdit: true, canPublish: false }]]), fileRights: own(true, false) })), false, "вужче право редагувати не зняло редагування папки");
+  assert.equal(canEditDocument(m, doc(), ctx({ fileRights: own(false, true) })), false, "редагувати документ, якого не бачиш");
+  assert.equal(canSeeDocument(m, doc({ section: "offer", addresseeUserId: 77 }), ctx({ fileRights: own(true) })), false, "власні права відкрили чужий офер — вони лише для загальних");
+});
+
+/**
+ * #508b — ОДНЕ ПРАВИЛО ДЛЯ ТРЬОХ МІСЦЬ: аудиторія регламенту («прочитали N із M») і блок «хто бачить»
+ * рахують ролі тим самим `roleSeesGeneral`, що й доступ; маршрути власних прав стоять за `management`.
+ * Читає джерело роуту. Червоніє, якщо аудиторія знову рахуватиме лише папку (регламент, відкритий
+ * ролі власними правами, не покаже її в «не прочитали») або якщо PUT прав стане доступним не керівництву.
+ */
+test("#508b ВЛАСНІ ПРАВА: аудиторія регламенту і «хто бачить» рахують тим самим правилом; керують лише керівники", () => {
+  const src = readFileSync(fileURLToPath(new URL("../../src/routes/documents.ts", import.meta.url)), "utf8");
+  const fnBody = (name: string) => { const i = src.indexOf(name); return src.slice(i, src.indexOf("\n}", i)); };
+  const aud = fnBody("function audienceFor(");
+  assert.match(aud, /const fi = aud\.fileRows\.get\(r\.id\)/, "🔴 аудиторія регламенту не бере власних прав САМЕ цього документа");
+  assert.match(aud, /roleSeesGeneral\(x\.roleKey, r\.folder_id, fi\?\.get\(x\.roleKey\),/, "🔴 аудиторія регламенту не передає власних прав у правило");
+  assert.match(fnBody('documentsRouter.get("/file/:id/viewers"'), /roleSeesGeneral\(x\.key, r\.folder_id, ownBy\.get\(x\.key\),/, "🔴 «хто бачить» не враховує власних прав документа");
+  assert.match(src, /documentsRouter\.put\("\/file\/:id\/access", management,/, "🔴 зміна власних прав без management");
+  assert.match(src, /documentsRouter\.get\("\/file\/:id\/access", management,/, "🔴 перегляд власних прав без management");
+  assert.equal(roleSeesGeneral("manager", 10, { canView: true, canEdit: false }, { canView: false, canUpload: false, canEdit: false, canPublish: false }), true);
 });

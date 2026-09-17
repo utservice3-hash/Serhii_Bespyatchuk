@@ -3287,6 +3287,29 @@ UPDATE doc_signatures SET approved_at = signed_at WHERE method IN ('telegram_cod
 ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS deleted_by INTEGER REFERENCES users(id);
 
+-- 🔐 ВЛАСНІ ПРАВА ФАЙЛА (ТЗ: права на окремий документ ширші або вужчі за папку). Явний рядок
+-- ролі на файлі перемагає права папки в обидва боки; відсутність рядка — «як у папці».
+-- Керівництво сюди не пишеться і не звужується (`core/docAccess.ts`, `roleSeesGeneral`).
+CREATE TABLE IF NOT EXISTS doc_file_access (
+  file_id INTEGER NOT NULL REFERENCES doc_files(id) ON DELETE CASCADE,
+  role_key TEXT NOT NULL,
+  can_view BOOLEAN NOT NULL DEFAULT true,
+  can_edit BOOLEAN NOT NULL DEFAULT false,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (file_id, role_key)
+);
+
+-- 🆕 «НОВЕ»: хто яку версію документа вже відкривав. Рядок пишеться при відкритті картки.
+-- Документ «нове» для людини, якщо поточної версії тут немає і їй не більше 30 днів.
+CREATE TABLE IF NOT EXISTS doc_views (
+  file_id INTEGER NOT NULL REFERENCES doc_files(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (file_id, user_id, version)
+);
+
 -- ═════════════════════════════════════════════════════════════════════════════
 -- 🧑‍💼 НАЙМ, ПРОХІД 1 (17.09.2026): графік співбесід, база кандидатів, щоденний звіт.
 -- Замість вкладок «Графік Іван», «Кандидати UA», «Щоденний звіт NEW» Google-таблиці
