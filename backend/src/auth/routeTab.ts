@@ -145,6 +145,8 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/one-on-ones"), tabs: ["oneonone"] },
     { test: pre("/api/duty"), tabs: ["duty"] },
     { test: pre("/api/training"), tabs: ["training"] },
+    // 🧑‍💼 Найм (17.09.2026). Вкладка — ПЕРША межа; друга, всередині, — `hiringAccess` у роуті.
+    { test: pre("/api/hiring"), tabs: ["hiring"] },
     { test: pre("/api/bank"), tabs: ["bank"] },
   ];
 })();

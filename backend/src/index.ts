@@ -38,6 +38,7 @@ import { createOneOnOneReminders } from "./jobs/oneOnOneReminders.js";
 import { dutyRouter } from "./routes/duty.js";
 import { createDutyReminders } from "./jobs/dutyReminders.js";
 import { trainingRouter } from "./routes/training.js";
+import { hiringRouter } from "./routes/hiring.js";
 import { statisticsRouter } from "./routes/statistics.js";
 import { statsSeriesRouter } from "./routes/statisticsSeries.js";
 import { runDataReconciliation } from "./jobs/dataReconciliation.js";
@@ -144,6 +145,7 @@ app.use("/api/telegram", telegramRouter); // вебхук бота підпис�
 app.use("/api/one-on-ones", oneOnOnesRouter);
 app.use("/api/duty", dutyRouter);
 app.use("/api/training", trainingRouter);
+app.use("/api/hiring", hiringRouter); // Найм: графік, кандидати, щоденний звіт (17.09.2026)
 app.use("/api/statistics", statisticsRouter);
 app.use("/api/statistics", statsSeriesRouter); // /series, /series/manual — падають повз депстат-роут
 app.use("/api/bank", bankRouter); // Виписка — банк-API (окремо від CRM)

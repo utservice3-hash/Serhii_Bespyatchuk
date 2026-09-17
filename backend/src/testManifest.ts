@@ -118,6 +118,7 @@ export const MANIFEST_FILES: string[] = [
   "core/loyaltyOverride.test.js",
   "core/leadgenStats.test.js",
   "core/missedCalls.test.js",
+  "core/hiring.test.js",
   "core/missedCallSignal.test.js",
   "core/navRender.test.js",
   "core/adTouch.test.js",
@@ -222,6 +223,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "users", "access_audit", "bank_accounts", "one_on_ones",
   "one_on_one_forms", "tracker_devices", "tracker_intervals", "tasks",
   "task_comments", "task_files", "task_status_log", "task_views", "task_groups",
+  "hiring_candidates", "hiring_interviews", "hiring_events", "hiring_daily_manual",
 ];
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
@@ -762,6 +764,17 @@ export const MANIFEST_TESTS: string[] = [
   "#420 ЕФЕКТИВНИЙ МЕНЕДЖЕР: до pinned_from_month — основний, з нього — закріплений, без дати — одразу",
   "#420b effectiveFromFor: fix — поточний місяць, transfer — наступний, 31-ше не перескакує",
   "#420c СПИСОК і ЧИТАЧІ беруть ефективного менеджера; скоуп роуту — по ньому ж",
+  // core/hiring.test.ts — Найм, прохід 1: графік, кандидати, щоденний звіт (17.09.2026)
+  "#500 ТЕЛЕФОН: один номер у різних записах дає один ключ дублів",
+  "#500b ДЗЕРКАЛО: різні номери — різні ключі; короткий чи порожній — не ключ",
+  "#501 ДОСТУП: HR і адмін-рівень редагують, тімлід — лише свій етап, решта — нічого",
+  "#501b СКАСОВНІСТЬ: останню зміну можна повернути, але лише в попередній статус",
+  "#502 ПОСИЛАННЯ: лише http/https, javascript: відхиляється",
+  "#502b ЯВКА ПЕРІОДУ — з сум, а не середнє відсотків; нуль заплановано — «нема з чого»",
+  "#503 ЖИВИЙ SQL: графік, дублі, явка за Києвом, звіт, межа тімліда, відновлення",
+  "#504 НАЙМ: ролі в матриці й у сиді вкладки — один і той самий список",
+  "#505 НАЙМ: таблиці кандидатів відібрані в ai_readonly після GRANT і в FORBIDDEN_TABLES",
+  "#506 НАЙМ: перевірка доступу — перший оператор кожного обробника",
   // core/missedCalls.test.ts — ТЗ-1 «Пропущені дзвінки» (14.09.2026)
   // 🔢 ДЕСЯТКА #43x, А НЕ #42x — ПЕРЕНУМЕРОВАНО ПРИ МЕРЖІ 15.09.2026. Писалось як
   // #421-#430 за правилом «найвищий змерджений +1» (тоді #419). Поки прохід ішов, у
