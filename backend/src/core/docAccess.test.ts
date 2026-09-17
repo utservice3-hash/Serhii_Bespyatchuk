@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { canSeeDocument, canSeeOffersSection, canEditDocument, canSignDocument, signatureState, MANAGEMENT_ROLES, type DocLike, type AccessContext } from "./docAccess.js";
 
 const ctx = (over: Partial<AccessContext> = {}): AccessContext => ({ folderRights: new Map(), grants: [], now: new Date("2026-09-15T12:00:00Z"), ...over });
@@ -109,4 +111,19 @@ test("#448 ПІДПИС ФОТО: чекає підтвердження кері
   assert.equal(signatureState(d, [{ ...photo, rejectedAt: "2026-09-16T11:00:00Z" }], now, "2026-09-16T09:00:00Z").kind, "pending", "відхилене фото досі чинне або «review»");
   assert.equal(signatureState(d, [{ ...photo, method: "telegram_code", approvedAt: "2026-09-16T10:00:00Z" }], now, "2026-09-16T09:00:00Z").kind, "signed");
   assert.equal(signatureState(d, [{ ...photo, version: 1, sha256: "aaa", approvedAt: "2026-09-16T11:00:00Z" }], now, "2026-09-16T09:00:00Z").kind, "outdated", "підтверджене фото старої версії має бути «outdated», не чинним");
+});
+
+/**
+ * #490 — КОШИК: видалене не потрапляє в дерево й картку, а кошик і повернення — лише керівництву.
+ * Читає джерело роуту: єдиний запит для дерева/картки (`FILE_SELECT`) мусить відсікати `deleted_at`,
+ * а `/trash` і `/undelete` стоять за middleware `management`. Червоніє, якщо прибрати фільтр
+ * (видалений документ повернеться в список усім) або зняти `management` з кошика.
+ */
+test("#490 КОШИК: видалене не видно в дереві/картці; кошик і «Повернути» — лише керівництву", () => {
+  const src = readFileSync(fileURLToPath(new URL("../../src/routes/documents.ts", import.meta.url)), "utf8");
+  const select = src.slice(src.indexOf("const FILE_SELECT = `"), src.indexOf("`;", src.indexOf("const FILE_SELECT = `")));
+  assert.match(select, /WHERE f\.deleted_at IS NULL/, "🔴 FILE_SELECT не відсікає видалені — вони повернуться в дерево й картку всім");
+  assert.match(src, /documentsRouter\.get\("\/trash", management,/, "🔴 кошик без middleware management — видалені офери побачить будь-хто");
+  assert.match(src, /documentsRouter\.post\("\/file\/:id\/undelete", management,/, "🔴 «Повернути з кошика» без management");
+  assert.match(src, /documentsRouter\.post\("\/file\/:id\/delete", management,/, "🔴 «Видалити» без management");
 });

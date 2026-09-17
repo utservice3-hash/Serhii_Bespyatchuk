@@ -3009,6 +3009,9 @@ export async function archiveDocFile(id: number): Promise<void> { await api.post
 export async function restoreDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/restore`); }
 export async function activateDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/activate`); }
 export async function deleteDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/delete`); }
+export interface DocTrashFile { id: number; name: string; category: string | null; section: string; mime: string | null; sizeBytes: number | null; version: number; deletedAt: string; deletedBy: string | null; addressee: string | null; folderId: number | null }
+export async function fetchDocTrash(): Promise<DocTrashFile[]> { const { data } = await api.get<{ files: DocTrashFile[] }>("/documents/trash"); return data.files; }
+export async function undeleteDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/undelete`); }
 export async function ackDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/ack`); }
 export async function fetchDocAcks(id: number): Promise<{ people: { userId: number; name: string; ackedAt: string | null; hasTelegram: boolean }[]; done: number; total: number }> { const { data } = await api.get(`/documents/file/${id}/acks`); return data; }
 export async function remindDocAcks(id: number): Promise<{ sent: number; noTelegram: number; missing: number }> { const { data } = await api.post(`/documents/file/${id}/ack-remind`); return data; }

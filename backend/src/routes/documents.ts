@@ -480,6 +480,32 @@ documentsRouter.post("/file/:id/delete", management, async (req, res) => {
   await logEvent(v.row.id, "deleted", req.auth!.userId, { name: v.row.name, version: v.row.version });
   res.json({ ok: true });
 });
+/**
+ * 🗑 КОШИК (рішення власника 17.09.2026): видалені документи — лише керівництву, з кнопкою «Повернути».
+ * `FILE_SELECT` відсікає `deleted_at`, тому тут окремий запит; до дерева й картки видалене не потрапляє (#490).
+ */
+documentsRouter.get("/trash", management, async (_req, res) => {
+  const r = await pool.query<{ id: number; name: string; category: string | null; section: string; mime: string | null; size_bytes: string | null; version: number; deleted_at: string; deleted_by_name: string | null; addressee: string | null; folder_id: number | null }>(
+    `SELECT f.id, f.name, f.category, f.section, f.mime, f.size_bytes, f.version, f.deleted_at, f.folder_id,
+            COALESCE(dm.name, du.full_name, du.email) AS deleted_by_name,
+            COALESCE(am.name, au.full_name, au.email) AS addressee
+       FROM doc_files f
+       LEFT JOIN users du ON du.id = f.deleted_by LEFT JOIN managers dm ON dm.id = du.manager_id
+       LEFT JOIN users au ON au.id = f.addressee_user_id LEFT JOIN managers am ON am.id = au.manager_id
+      WHERE f.deleted_at IS NOT NULL
+      ORDER BY f.deleted_at DESC`);
+  res.json({ files: r.rows.map((x) => ({ id: x.id, name: x.name, category: x.category, section: x.section, mime: x.mime, sizeBytes: x.size_bytes == null ? null : Number(x.size_bytes),
+    version: x.version, deletedAt: x.deleted_at, deletedBy: x.deleted_by_name, addressee: x.addressee, folderId: x.folder_id })) });
+});
+/** ↩ Повернути з кошика — у той самий розділ і стан, у якому документ був до видалення. */
+documentsRouter.post("/file/:id/undelete", management, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "Невірний id документа" });
+  const r = await pool.query<{ id: number; name: string }>(`UPDATE doc_files SET deleted_at = NULL, deleted_by = NULL, updated_at = now() WHERE id = $1 AND deleted_at IS NOT NULL RETURNING id, name`, [id]);
+  if (!r.rowCount) return res.status(404).json({ error: "У кошику такого документа немає" });
+  await logEvent(id, "undeleted", req.auth!.userId, { name: r.rows[0].name });
+  res.json({ ok: true });
+});
 documentsRouter.delete("/file/:id", management, async (req, res) => {
   const v = await visibleFile(req, res, Number(req.params.id)); if (!v) return;
   await pool.query(`UPDATE doc_files SET archived_at = COALESCE(archived_at, now()), archived_reason = COALESCE(archived_reason, 'manual'), archived_by = $2 WHERE id = $1`, [v.row.id, req.auth!.userId]);
