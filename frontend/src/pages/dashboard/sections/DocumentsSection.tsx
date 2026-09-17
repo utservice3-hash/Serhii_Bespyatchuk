@@ -1092,6 +1092,7 @@ function OfficeView({ r, height }: { r: DocRender; height: string }) {
         </div>
       )}
       {sh?.truncated && <div style={{ ...note, background: "#fff8e6", color: "#8a5a00" }}>Показано перші {sh.rows.length} рядків і до 60 колонок із {sh.totalRows} × {sh.totalCols}. Повністю — в Excel.</div>}
+      <style>{`.docs-col-grip:hover { background: linear-gradient(to right, transparent 6px, #1f7a45 6px, #1f7a45 8px, transparent 8px); }`}</style>
       <div style={{ flex: 1, overflow: "auto" }}>
         {!sh || !sh.rows.length ? <p style={{ padding: 16, color: "#6b7280", fontSize: 13 }}>Аркуш порожній.</p> : (
           <table style={{ borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed", width: ROWNUM_W + widths.reduce((a, b) => a + b, 0), fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>
@@ -1104,7 +1105,10 @@ function OfficeView({ r, height }: { r: DocRender; height: string }) {
                   onPointerMove={(e) => { const d = drag.current; if (d && d.ci === i) setWidth(i, d.w + e.clientX - d.x); }}
                   onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}
                   onDoubleClick={() => setWidth(i, fit(i))}
-                  style={{ position: "absolute", top: 0, right: -4, width: 8, height: "100%", cursor: "col-resize", touchAction: "none", zIndex: 2 }} />
+                  className="docs-col-grip"
+                  // Ручка ВСЕРЕДИНІ заголовка: клітинка обрізає переповнення, а сусідній заголовок перекривав половину
+                  // ручки — ловилось лише 4 px (заміряно на проді 17.09.2026).
+                  style={{ position: "absolute", top: 0, right: 0, width: 10, height: "100%", cursor: "col-resize", touchAction: "none", zIndex: 2 }} />
               </th>))}</tr></thead>
             <tbody>
               {sh.rows.map((row, ri) => (
