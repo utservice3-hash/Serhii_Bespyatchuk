@@ -5,12 +5,12 @@ import path from "node:path";
 import { lastContactOf, contactFileVerdict, canDeleteContact, CONTACT_CHANNEL_KEYS } from "./clientContacts.js";
 
 /**
- * #460 — ОСТАННІЙ КОНТАКТ = свіжіше з розмови Ringostat і ручного запису, джерело названо.
+ * #467 — ОСТАННІЙ КОНТАКТ = свіжіше з розмови Ringostat і ручного запису, джерело названо.
  * Фікстури по обидва боки: розмова свіжіша → talk; ручний свіжіший → manual з каналом;
  * лише одне з двох → воно; нічого → null. Червоніє, якщо взяти лише розмову (ручний зникне)
  * або лише ручний, або загубити канал.
  */
-test("#460 lastContactOf: свіжіше з двох джерел, джерело й канал названі", () => {
+test("#467 lastContactOf: свіжіше з двох джерел, джерело й канал названі", () => {
   assert.deepEqual(lastContactOf("2026-09-15T10:00:00Z", "2026-09-10T10:00:00Z", "viber"), { at: "2026-09-15T10:00:00Z", source: "talk", channel: null });
   assert.deepEqual(lastContactOf("2026-09-10T10:00:00Z", "2026-09-15T10:00:00Z", "viber"), { at: "2026-09-15T10:00:00Z", source: "manual", channel: "viber" });
   assert.deepEqual(lastContactOf(null, "2026-09-15T10:00:00Z", "telegram"), { at: "2026-09-15T10:00:00Z", source: "manual", channel: "telegram" });
@@ -20,10 +20,10 @@ test("#460 lastContactOf: свіжіше з двох джерел, джерел�
 });
 
 /**
- * #460b — ФАЙЛ КОНТАКТУ: лише зображення, ≤ 5 МБ, не порожній; свій запис прибирається
+ * #467b — ФАЙЛ КОНТАКТУ: лише зображення, ≤ 5 МБ, не порожній; свій запис прибирається
  * протягом доби, керівництво — завжди. Дзеркала по обидва боки кожної межі.
  */
-test("#460b contactFileVerdict і canDeleteContact: межі з обох боків", () => {
+test("#467b contactFileVerdict і canDeleteContact: межі з обох боків", () => {
   assert.equal(contactFileVerdict("image/png", 1000).ok, true);
   assert.equal(contactFileVerdict("image/png", 5 * 1024 * 1024).ok, true, "рівно 5 МБ ще проходить");
   assert.equal(contactFileVerdict("image/png", 5 * 1024 * 1024 + 1).ok, false);
@@ -39,11 +39,11 @@ test("#460b contactFileVerdict і canDeleteContact: межі з обох бок�
 });
 
 /**
- * #460c — РОУТИ Й РЯДКИ: файл контакту віддається лише після `canSeeClient`; запис і видалення
+ * #467c — РОУТИ Й РЯДКИ: файл контакту віддається лише після `canSeeClient`; запис і видалення
  * теж за ним; рядок плану несе `lastContact` через `lastContactOf`; матриця знає всі три роути;
  * схема має CHECK на канал із тим самим переліком. Читає джерело, межа слова.
  */
-test("#460c РОУТИ контактів за canSeeClient, рядок плану несе lastContact, матриця й схема узгоджені", () => {
+test("#467c РОУТИ контактів за canSeeClient, рядок плану несе lastContact, матриця й схема узгоджені", () => {
   const src = path.join(import.meta.dirname, "..", "..", "src");
   const d = readFileSync(path.join(src, "routes", "dashboard.ts"), "utf8");
   for (const route of ['dashboardRouter.get("/client-contacts/:id/file"', 'dashboardRouter.post("/client-contacts"', 'dashboardRouter.delete("/client-contacts/:id"', 'dashboardRouter.get("/client-contacts"']) {
@@ -56,7 +56,8 @@ test("#460c РОУТИ контактів за canSeeClient, рядок план
   const m = readFileSync(path.join(src, "auth", "accessMatrix.ts"), "utf8");
   assert.match(m, /"\/api\/dashboard\/client-contacts\?clientKey=zzz"/);
   assert.match(m, /method: "POST", path: "\/api\/dashboard\/client-contacts"/);
-  assert.match(m, /method: "DELETE", path: "\/api\/dashboard\/client-contacts\/0"/);
+  assert.match(m, /method: "DELETE", path: "\/api\/dashboard\/client-contacts\/:id"/);
+  assert.match(m, /path: "\/api\/dashboard\/client-contacts\/:id\/file"/);
   const schema = readFileSync(path.join(src, "db", "schema.sql"), "utf8");
   const chk = schema.match(/client_contacts[\s\S]*?channel TEXT NOT NULL CHECK \(channel IN \(([^)]*)\)\)/);
   assert.ok(chk, "CHECK на канал не знайдено");

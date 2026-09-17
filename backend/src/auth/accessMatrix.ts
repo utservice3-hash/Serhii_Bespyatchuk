@@ -352,8 +352,10 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // роутом, що пише, виконала б мутацію проти прода.
   { method: "POST", path: "/api/dashboard/client-contacts", cls: "deny-only",
     allow: [], deny: ["hr", "manager", "team_lead"] },
-  { method: "DELETE", path: "/api/dashboard/client-contacts/0", cls: "deny-only",
+  { method: "DELETE", path: "/api/dashboard/client-contacts/:id", cls: "deny-only",
     allow: [], deny: ["hr", "manager", "team_lead"] },
+  { method: "GET", path: "/api/dashboard/client-contacts/:id/file", cls: "GET",
+    allow: [], deny: ["hr"] },
   // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника), ЗАДЕКЛАРОВАНА, А НЕ ДРЕЙФ.
   // Пошук клієнта відкрито ТІМЛІДУ — але звужено до ЙОГО команди КЛАМПОМ НА
   // СЕРВЕРІ (`mm.team_id`), не фільтром на фронті. Права `merge_clients` це не
