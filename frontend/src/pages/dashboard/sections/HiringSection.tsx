@@ -6,6 +6,7 @@ import type { Toast } from "./HiringShared";
 import { HiringSchedule } from "./HiringSchedule";
 import { HiringCandidates } from "./HiringCandidates";
 import { HiringDaily } from "./HiringDaily";
+import { PlannedTabCard, LiveTabNote, type PlannedTab } from "./HiringRoadmap";
 import "./hiring.css";
 
 /**
@@ -15,7 +16,7 @@ import "./hiring.css";
  *  • edit — рекрутер (HR) і адмін-рівень: усі три вкладки;
  *  • lead — тімлід: лише «Кандидати» своєї команди після співбесіди з ним.
  */
-type Tab = "sched" | "base" | "daily";
+type Tab = "sched" | "base" | "daily" | PlannedTab;
 
 export function HiringSection() {
   const [meta, setMeta] = useState<HiringMeta | null>(null);
@@ -39,9 +40,12 @@ export function HiringSection() {
   if (!meta) return <p className="loading-text">Завантаження…</p>;
   if (meta.access === "none") return <div className="chart-card"><b>Розділ «Найм» недоступний для вашої ролі.</b></div>;
 
+  // Усі сім вкладок затвердженого макета. Незроблені відкривають пояснення «що буде і чому ще немає»
+  // (прохання Романа 17.09): людина бачить повну картину, а не гадає, чи вкладку забули.
   const tabs: [Tab, string][] = meta.access === "edit"
-    ? [["sched", "Графік"], ["base", "Кандидати"], ["daily", "Щоденний звіт"]]
-    : [["base", "Кандидати"]];
+    ? [["sched", "Графік"], ["base", "Кандидати"], ["daily", "Щоденний звіт"], ["emp", "Співробітники"], ["churn", "Плинність"], ["exit", "Exit-інтервʼю"], ["sum", "Зведення"]]
+    : [["base", "Кандидати"], ["emp", "Співробітники"]];
+  const planned = new Set<Tab>(["emp", "churn", "exit", "sum"]);
   const active = tabs.some(([k]) => k === tab) ? tab : tabs[0][0];
   const pick = (t: Tab) => { setTab(t); LS.set("tab", t); };
 
@@ -54,8 +58,14 @@ export function HiringSection() {
           : "Кандидати вашої команди після співбесіди з вами: прогрес і рішення «кандидат», «на навчанні», «менеджер»."}
       </p>
       <div className="hr-tabs">
-        {tabs.map(([k, l]) => <button key={k} className={active === k ? "on" : ""} onClick={() => pick(k)}>{l}</button>)}
+        {tabs.map(([k, l]) => (
+          <button key={k} className={active === k ? "on" : ""} onClick={() => pick(k)} title={planned.has(k) ? "Ще не зроблено — усередині пояснення чому" : undefined}>
+            {l}{planned.has(k) && <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.75 }}>скоро</span>}
+          </button>
+        ))}
       </div>
+      {(active === "sched" || active === "base" || active === "daily") && <LiveTabNote tab={active} />}
+      {planned.has(active) && <PlannedTabCard tab={active as PlannedTab} />}
       {active === "sched" && <HiringSchedule meta={meta} toast={toast} onMetaStale={() => setNonce((n) => n + 1)} />}
       {active === "base" && <HiringCandidates meta={meta} toast={toast} />}
       {active === "daily" && <HiringDaily toast={toast} />}
