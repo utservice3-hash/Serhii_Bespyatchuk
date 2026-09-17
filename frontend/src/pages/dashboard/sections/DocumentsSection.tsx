@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   fetchDocTree, fetchDocCard, fetchDocViewers, fetchDocPeople, createDocFolder, renameDocFolder, deleteDocFolder,
@@ -123,6 +123,12 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
   const [narrow, setNarrow] = useState(() => window.matchMedia("(max-width: 1000px)").matches);
   useEffect(() => { const m = window.matchMedia("(max-width: 1000px)"); const on = () => setNarrow(m.matches); m.addEventListener("change", on); return () => m.removeEventListener("change", on); }, []);
   const [narrowPane, setNarrowPane] = useState<"nav" | "list">("list");
+  // ↔ Ширина панелей: тягнути роздільник, стрілки на ньому, подвійний клік — як було. Памʼятаємо в цьому браузері.
+  const [paneW, setPaneW] = useState<{ nav: number; list: number }>(() => {
+    try { const v = JSON.parse(localStorage.getItem("docs.paneW") ?? "null"); if (v && Number.isFinite(v.nav) && Number.isFinite(v.list)) return { nav: clampPane("nav", v.nav), list: clampPane("list", v.list) }; } catch { /* немає сховища — дефолт */ }
+    return { ...PANE_DEFAULT };
+  });
+  useEffect(() => { try { localStorage.setItem("docs.paneW", JSON.stringify(paneW)); } catch { /* приватне вікно */ } }, [paneW]);
   const [trash, setTrash] = useState<DocTrashFile[] | null>(null);
   const [inTrash, setInTrash] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -256,7 +262,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
           </button>
         ))}
       </div>
-      <div className="chart-card" style={{ padding: 0, display: "grid", gridTemplateColumns: narrow ? "minmax(0,1fr)" : "300px 400px minmax(0,1fr)", minHeight: 420, height: narrow ? "auto" : paneH, gridTemplateRows: narrow ? "auto" : "minmax(0,1fr)", overflow: "hidden" }}>
+      <div className="chart-card" style={{ padding: 0, display: "grid", gridTemplateColumns: narrow ? "minmax(0,1fr)" : `${paneW.nav}px 0px ${paneW.list}px 0px minmax(0,1fr)`, minHeight: 420, height: narrow ? "auto" : paneH, gridTemplateRows: narrow ? "auto" : "minmax(0,1fr)", overflow: "hidden" }}>
         {/* Навігація */}
         <div style={{ borderRight: narrow ? "none" : "1px solid var(--border)", padding: 12, overflowY: "auto", minHeight: 0, display: narrow && (narrowPane !== "nav" || selectedFile) ? "none" : "flex", flexDirection: "column", gap: 2 }}>
           <div style={label}>Розділи</div>
@@ -274,6 +280,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
           <p className="loading-text" style={{ marginTop: "auto", paddingTop: 10, fontSize: 11.5, lineHeight: 1.4, minHeight: 64 }}>{shelf === "reg" ? "Регламенти виконують, інструкції роблять за кроками. У кожного регламенту є «Ознайомився»." : shelf === "work" ? "Шаблони беруть і заповнюють, матеріали надсилають клієнту." : shelf === "mine" ? SECTION_HINT[section] : SECTION_HINT.archive}</p>
         </div>
 
+        {!narrow && <PaneDivider label="Ширина розділів" value={paneW.nav} onChange={(v) => setPaneW((w) => ({ ...w, nav: clampPane("nav", v) }))} onReset={() => setPaneW((w) => ({ ...w, nav: PANE_DEFAULT.nav }))} />}
         {/* Список */}
         <div style={{ borderRight: narrow ? "none" : "1px solid var(--border)", display: narrow && (narrowPane !== "list" || selectedFile) ? "none" : "flex", flexDirection: "column", minWidth: 0, minHeight: narrow ? 420 : 0, overflow: "hidden" }}>
           {narrow && <button style={{ ...btn(), margin: "10px 12px 0", alignSelf: "flex-start", fontSize: 12, padding: "4px 10px" }} onClick={() => setNarrowPane("nav")}>☰ Розділи й папки</button>}
@@ -371,6 +378,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
           </>)}
         </div>
 
+        {!narrow && <PaneDivider label="Ширина списку" value={paneW.list} onChange={(v) => setPaneW((w) => ({ ...w, list: clampPane("list", v) }))} onReset={() => setPaneW((w) => ({ ...w, list: PANE_DEFAULT.list }))} />}
         {/* Перегляд */}
         {selectedFile && !inTrash ? (
           <div style={{ overflowY: "auto", minWidth: 0, minHeight: 0 }}>
@@ -391,6 +399,35 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
       {uploadOpen && <UploadDialog tree={tree} section={section === "archive" ? "general" : section} defaultFolder={typeof folderFilter === "number" ? folderFilter : null}
         onClose={() => setUploadOpen(false)} onDone={(msg) => { setUploadOpen(false); setToast(msg); void load(); }} />}
       {accessFolder && <AccessDialog folder={accessFolder} onClose={() => setAccessFolder(null)} onSaved={() => { setAccessFolder(null); setToast("Доступи збережено, зміну записано в журнал"); void load(); }} />}
+    </div>
+  );
+}
+
+const PANE_DEFAULT = { nav: 300, list: 400 };
+const PANE_LIMITS = { nav: [200, 480], list: [280, 720] } as const;
+function clampPane(k: "nav" | "list", v: number): number { const [lo, hi] = PANE_LIMITS[k]; return Math.round(Math.min(hi, Math.max(lo, v))); }
+
+/**
+ * Роздільник між панелями: нульова доріжка сітки, а сама ручка 10 px поверх межі. Тягнути мишею чи
+ * пальцем, стрілки ← → з фокусу (Shift — крок 50), подвійний клік — ширина за замовчуванням.
+ */
+function PaneDivider({ label, value, onChange, onReset }: { label: string; value: number; onChange: (v: number) => void; onReset: () => void }) {
+  const [drag, setDrag] = useState(false);
+  const start = useRef<{ x: number; v: number } | null>(null);
+  return (
+    <div style={{ position: "relative", zIndex: 3 }}>
+      <div role="separator" aria-orientation="vertical" aria-label={`${label}: тягніть або стрілки, подвійний клік — як було`} aria-valuenow={value} tabIndex={0}
+        title="Тягніть, щоб змінити ширину. Подвійний клік — як було."
+        onPointerDown={(e) => { e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); start.current = { x: e.clientX, v: value }; setDrag(true); }}
+        onPointerMove={(e) => { if (start.current) onChange(start.current.v + e.clientX - start.current.x); }}
+        onPointerUp={() => { start.current = null; setDrag(false); }}
+        onPointerCancel={() => { start.current = null; setDrag(false); }}
+        onDoubleClick={onReset}
+        onKeyDown={(e) => { const step = e.shiftKey ? 50 : 10; if (e.key === "ArrowLeft") { e.preventDefault(); onChange(value - step); } else if (e.key === "ArrowRight") { e.preventDefault(); onChange(value + step); } }}
+        className="docs-pane-divider"
+        style={{ position: "absolute", top: 0, bottom: 0, left: -5, width: 10, cursor: "col-resize", touchAction: "none", outlineOffset: -2,
+          background: drag ? "linear-gradient(to right, transparent 3px, var(--brand) 3px, var(--brand) 7px, transparent 7px)" : undefined }} />
+      <style>{`.docs-pane-divider:hover, .docs-pane-divider:focus-visible { background: linear-gradient(to right, transparent 4px, var(--border-strong, var(--text-muted)) 4px, var(--border-strong, var(--text-muted)) 6px, transparent 6px); }`}</style>
     </div>
   );
 }
@@ -1006,6 +1043,9 @@ const Runs = ({ runs }: { runs: DocxRun[] }) => <>{runs.map((r, i) => <span key=
  */
 function OfficeView({ r, height }: { r: DocRender; height: string }) {
   const [sheet, setSheet] = useState(0);
+  // ↔ Ширини колонок Excel по аркушах: тягнути край заголовка, подвійний клік — під найдовше значення.
+  const [colW, setColW] = useState<Record<number, number[]>>({});
+  const drag = useRef<{ ci: number; x: number; w: number } | null>(null);
   const note: React.CSSProperties = { fontSize: 11.5, color: "var(--text-muted)", padding: "6px 12px", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" };
   if (r.kind === "docx") {
     const groups: React.ReactNode[] = [];
@@ -1034,9 +1074,15 @@ function OfficeView({ r, height }: { r: DocRender; height: string }) {
       </div>
     );
   }
-  const sh = r.sheets[Math.min(sheet, r.sheets.length - 1)];
+  const si = Math.min(sheet, r.sheets.length - 1);
+  const sh = r.sheets[si];
   const cols = sh ? Math.max(0, ...sh.rows.map((x) => x.length)) : 0;
-  const cell: React.CSSProperties = { border: "1px solid #d4d7dd", padding: "3px 8px", whiteSpace: "nowrap", maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis" };
+  const fit = (ci: number) => { let n = 0; for (const row of sh?.rows ?? []) n = Math.max(n, (row[ci] ?? "").length); return Math.round(Math.min(600, Math.max(60, n * 7.4 + 20))); };
+  const widths = colW[si] ?? Array.from({ length: cols }, (_, ci) => Math.min(240, fit(ci)));
+  const setWidth = (ci: number, w: number) => setColW((m) => { const cur = [...(m[si] ?? widths)]; cur[ci] = Math.round(Math.min(900, Math.max(40, w))); return { ...m, [si]: cur }; });
+  const ROWNUM_W = 52;
+  // border-collapse: separate — із collapse закріплена колонка номерів пропускає текст сусідніх клітинок під собою.
+  const cell: React.CSSProperties = { borderRight: "1px solid #d4d7dd", borderBottom: "1px solid #d4d7dd", padding: "3px 8px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", background: "#fff" };
   const head: React.CSSProperties = { ...cell, background: "#f1f3f5", color: "#5f6670", fontWeight: 600, textAlign: "center", position: "sticky", top: 0, zIndex: 1 };
   return (
     <div style={{ height, display: "flex", flexDirection: "column", minHeight: 360, background: "#fff", color: "#1c1e21" }}>
@@ -1048,12 +1094,22 @@ function OfficeView({ r, height }: { r: DocRender; height: string }) {
       {sh?.truncated && <div style={{ ...note, background: "#fff8e6", color: "#8a5a00" }}>Показано перші {sh.rows.length} рядків і до 60 колонок із {sh.totalRows} × {sh.totalCols}. Повністю — в Excel.</div>}
       <div style={{ flex: 1, overflow: "auto" }}>
         {!sh || !sh.rows.length ? <p style={{ padding: 16, color: "#6b7280", fontSize: 13 }}>Аркуш порожній.</p> : (
-          <table style={{ borderCollapse: "collapse", fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>
-            <thead><tr><th style={{ ...head, left: 0, zIndex: 2 }} />{Array.from({ length: cols }, (_, i) => <th key={i} style={head}>{colName(i)}</th>)}</tr></thead>
+          <table style={{ borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed", width: ROWNUM_W + widths.reduce((a, b) => a + b, 0), fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>
+            <colgroup><col style={{ width: ROWNUM_W }} />{widths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
+            <thead><tr><th style={{ ...head, left: 0, zIndex: 3 }} />{Array.from({ length: cols }, (_, i) => (
+              <th key={i} style={head}>
+                {colName(i)}
+                <span role="separator" aria-orientation="vertical" aria-label={`Ширина колонки ${colName(i)}`} title="Тягніть, щоб змінити ширину. Подвійний клік — під найдовше значення."
+                  onPointerDown={(e) => { e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); drag.current = { ci: i, x: e.clientX, w: widths[i] }; }}
+                  onPointerMove={(e) => { const d = drag.current; if (d && d.ci === i) setWidth(i, d.w + e.clientX - d.x); }}
+                  onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}
+                  onDoubleClick={() => setWidth(i, fit(i))}
+                  style={{ position: "absolute", top: 0, right: -4, width: 8, height: "100%", cursor: "col-resize", touchAction: "none", zIndex: 2 }} />
+              </th>))}</tr></thead>
             <tbody>
               {sh.rows.map((row, ri) => (
                 <tr key={ri}>
-                  <td style={{ ...head, top: undefined, position: "sticky", left: 0 }}>{ri + 1}</td>
+                  <td style={{ ...head, top: undefined, position: "sticky", left: 0, zIndex: 2 }}>{ri + 1}</td>
                   {Array.from({ length: cols }, (_, ci) => { const v = row[ci] ?? ""; return <td key={ci} title={v.length > 40 ? v : undefined} style={{ ...cell, textAlign: /^-?[\d.,\s]+$/.test(v) && v.trim() ? "right" : "left" }}>{v}</td>; })}
                 </tr>
               ))}
