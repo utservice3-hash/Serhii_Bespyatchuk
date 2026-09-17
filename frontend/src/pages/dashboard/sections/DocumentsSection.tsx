@@ -161,12 +161,14 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
   const shelf: Shelf = section === "archive" ? "archive" : section !== "general" ? "mine" : (typeFilter && !REG_TYPES.has(typeFilter)) ? "work" : (typeFilter ? "reg" : (shelfState));
   const setShelf = (k: Shelf) => { setInTrash(false); setNarrowPane("list"); setShelfState(k === "mine" ? "reg" : k === "archive" ? "reg" : k); setSection(k === "archive" ? "archive" : k === "mine" ? (tree.sections.offer && visibleAll.some((f) => f.section === "offer" && !f.archivedAt) ? "offer" : "personal") : "general"); setTypeFilter(null); setFolderFilter("all"); setSelected(null); };
   const shelfFiles = visibleAll.filter((f) => shelfOf(f) === shelf && (shelf !== "mine" || f.section === section || section === "general"));
-  const listFiles = shelfFiles
-    .filter((f) => !typeFilter || (f.category ?? "Інше") === typeFilter)
+  // Папка й пошук — спершу; лічильники типів рахуються саме з цього набору, інакше чип «Шаблон · 10»
+  // стоїть над списком з одного документа (заміряно 17.09.2026 на папці «Люди»).
+  const folderFiles = shelfFiles
     .filter((f) => folderFilter === "all" || (folderFilter === "none" ? f.folderId == null : f.folderId === folderFilter))
     .filter((f) => { const qq = q.trim().toLowerCase(); return !qq || f.name.toLowerCase().includes(qq) || (f.description ?? "").toLowerCase().includes(qq) || (f.addressee ?? "").toLowerCase().includes(qq); });
+  const listFiles = folderFiles.filter((f) => !typeFilter || (f.category ?? "Інше") === typeFilter);
   const shelfFolderCounts = new Map<number | null, number>(); shelfFiles.forEach((f) => shelfFolderCounts.set(f.folderId, (shelfFolderCounts.get(f.folderId) ?? 0) + 1));
-  const shelfTypeCounts = new Map<string, number>(); shelfFiles.forEach((f) => shelfTypeCounts.set(f.category ?? "Інше", (shelfTypeCounts.get(f.category ?? "Інше") ?? 0) + 1));
+  const shelfTypeCounts = new Map<string, number>(); folderFiles.forEach((f) => shelfTypeCounts.set(f.category ?? "Інше", (shelfTypeCounts.get(f.category ?? "Інше") ?? 0) + 1));
   const uidMine = viewer.userId;
   const todo = {
     offers: visibleAll.filter((f) => f.section === "offer" && !f.archivedAt && f.addresseeUserId === uidMine && f.signature.kind !== "signed" && f.signature.kind !== "not_required").length,
@@ -174,26 +176,18 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
     review: visibleAll.filter((f) => f.signature.kind === "review").length,
   };
   // Папки для розділу — рахуються для КОЖНОГО розділу окремо, щоб згорнутий список не змінював висоту
-  // при перемиканні (стрибки навігації, власник 17.09.2026). Дії з папкою — іконками в тому ж рядку.
+  // при перемиканні (стрибки навігації, власник 17.09.2026). Дії з папкою — у заголовку списку.
   const folderRows = (k: Shelf) => {
     const counts = new Map<number | null, number>();
     visibleAll.forEach((f) => { if (shelfOf(f) === k) counts.set(f.folderId, (counts.get(f.folderId) ?? 0) + 1); });
     return [...tree.folders.filter((f) => f.parentId == null), null].map((f) => {
       const id = f?.id ?? null; const n = counts.get(id) ?? 0; if (!n) return null;
       const on = shelf === k && folderFilter === (f ? id : "none");
-      const icon: React.CSSProperties = { border: "none", background: "transparent", cursor: "pointer", color: "var(--text-muted)", fontSize: 12, width: 22, height: 22, padding: 0, flex: "0 0 auto" };
       return (
         <div key={f?.id ?? "none"} style={{ display: "flex", alignItems: "center", borderRadius: "var(--r-md)", background: on ? "var(--surface-2)" : "transparent" }}>
-          <button style={{ ...subBtn(on), background: "transparent", flex: 1, minWidth: 0 }} onClick={() => { setFolderFilter(on ? "all" : (f ? id : "none")); setInTrash(false); setNarrowPane("list"); }} title={f ? f.name : "Без папки"}>
-            <span style={{ overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", lineHeight: 1.3, textAlign: "left" }}>{f ? f.name.replace(/^\d+\.\s*/, "") : "Без папки"}</span>{!(on && f && viewer.canManageAccess) && <span style={cnt(n)}>{n}</span>}
+          <button style={{ ...subBtn(on), background: "transparent", flex: 1, minWidth: 0 }} onClick={() => { setFolderFilter(on ? "all" : (f ? id : "none")); setTypeFilter(null); setInTrash(false); setNarrowPane("list"); }} title={f ? f.name : "Без папки"}>
+            <span style={{ overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", lineHeight: 1.3, textAlign: "left" }}>{f ? f.name.replace(/^\d+\.\s*/, "") : "Без папки"}</span><span style={cnt(n)}>{n}</span>
           </button>
-          {on && f && viewer.canManageAccess && (
-            <>
-              <button title="Доступи до папки" style={icon} onClick={() => setAccessFolder(f)}>⚙</button>
-              <button title="Перейменувати" style={icon} onClick={() => { const nn = window.prompt("Нова назва папки:", f.name)?.trim(); if (nn && nn !== f.name) void renameDocFolder(f.id, nn).then(load).catch((e) => setToast(errOf(e, "Не перейменовано"))); }}>✎</button>
-              <button title="Прибрати папку (файли лишаються на диску)" style={icon} onClick={() => { if (window.confirm(`Прибрати папку «${f.name}»? Її документи зникнуть з екрана; файли на диску лишаються.`)) void deleteDocFolder(f.id).then(load).catch((e) => setToast(errOf(e, "Не вдалося"))); }}>✕</button>
-            </>
-          )}
         </div>
       );
     });
@@ -273,9 +267,32 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
             </>
           ) : (<>
           <div style={{ padding: "12px 12px 8px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}><h2 className="chart-title" style={{ margin: 0 }}>{shelf === "reg" ? "Регламенти та інструкції" : shelf === "work" ? "Робочі документи" : shelf === "mine" ? (section === "offer" ? "🔒 Офери" : "Особисті") : "Архів"}</h2><span className="orph-dim">{listFiles.length} {listFiles.length === 1 ? "документ" : listFiles.length < 5 ? "документи" : "документів"}</span></div>
+            {(() => {
+              const shelfTitle = shelf === "reg" ? "Регламенти та інструкції" : shelf === "work" ? "Робочі документи" : shelf === "mine" ? (section === "offer" ? "🔒 Офери" : "Особисті") : "Архів";
+              const activeFolder = typeof folderFilter === "number" ? tree.folders.find((x) => x.id === folderFilter) ?? null : null;
+              const folderTitle = folderFilter === "none" ? "Без папки" : activeFolder ? activeFolder.name.replace(/^\d+\.\s*/, "") : null;
+              const small: React.CSSProperties = { ...btn(), fontSize: 12, padding: "3px 8px" };
+              return (
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  {folderTitle && (
+                    <button onClick={() => { setFolderFilter("all"); setTypeFilter(null); }} title="Показати весь розділ" style={{ alignSelf: "flex-start", border: "none", background: "transparent", padding: 0, cursor: "pointer", color: "var(--text-muted)", fontSize: 12 }}>← {shelfTitle}</button>
+                  )}
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                    <h2 className="chart-title" style={{ margin: 0, lineHeight: 1.3 }} title={activeFolder?.name}>{folderTitle ?? shelfTitle}</h2>
+                    <span className="orph-dim">{listFiles.length} {plural(listFiles.length, "документ", "документи", "документів")}</span>
+                  </div>
+                  {activeFolder && viewer.canManageAccess && shelf !== "mine" && shelf !== "archive" && (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
+                      <button style={small} onClick={() => setAccessFolder(activeFolder)}>⚙ Доступи</button>
+                      <button style={small} onClick={() => { const nn = window.prompt("Нова назва папки:", activeFolder.name)?.trim(); if (nn && nn !== activeFolder.name) void renameDocFolder(activeFolder.id, nn).then(load).catch((e) => setToast(errOf(e, "Не перейменовано"))); }}>✎ Перейменувати</button>
+                      <button style={small} onClick={() => { if (window.confirm(`Прибрати папку «${activeFolder.name}»? Її документи зникнуть з екрана; файли на диску лишаються.`)) void deleteDocFolder(activeFolder.id).then(() => { setFolderFilter("all"); return load(); }).catch((e) => setToast(errOf(e, "Не вдалося"))); }}>✕ Прибрати папку</button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 Пошук за назвою, описом, адресатом" style={{ width: "100%" }} />
-            {shelfTypeCounts.size > 1 && (
+            {(shelfTypeCounts.size > 1 || typeFilter) && (
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 <button className="orph-chip" aria-pressed={typeFilter === null} onClick={() => setTypeFilter(null)} style={{ padding: "4px 10px", fontSize: 12 }}>Усі</button>
                 {[...DOC_TYPES].filter((t) => shelfTypeCounts.has(t)).map((t) => <button key={t} className="orph-chip" aria-pressed={typeFilter === t} onClick={() => setTypeFilter(typeFilter === t ? null : t)} style={{ padding: "4px 10px", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}><span className="task-status-dot" style={{ background: TYPE_META[t].color }} />{t} · {shelfTypeCounts.get(t)}</button>)}
@@ -285,8 +302,8 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
           <div style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
             {listFiles.length === 0 ? (
               shelfFiles.length === 0
-                ? <StateBlock icon="🗀" title={shelf === "archive" ? "В архіві ще нічого немає" : "Тут ще нічого немає"} text={canUploadHere ? "Натисніть «Завантажити»." : "Документи сюди викладає керівництво."} action={canUploadHere ? <button style={btn()} onClick={() => setUploadOpen(true)}>Завантажити файл</button> : undefined} inline />
-                : <p className="loading-text" style={{ margin: 12 }}>Нічого не знайдено за фільтром.</p>
+                ? <StateBlock icon="🗀" title={shelf === "archive" ? "В архіві ще нічого немає" : "Тут ще нічого немає"} text={shelf === "archive" ? "Сюди потрапляють документи звільнених і те, що керівництво прибрало в архів." : canUploadHere ? "Натисніть «Завантажити»." : "Документи сюди викладає керівництво."} action={canUploadHere && shelf !== "archive" ? <button style={btn()} onClick={() => setUploadOpen(true)}>Завантажити файл</button> : undefined} inline />
+                : <div style={{ margin: 12 }}><p className="loading-text" style={{ margin: "0 0 8px" }}>Нічого не знайдено за фільтром.</p><button style={{ ...btn(), fontSize: 12, padding: "4px 10px" }} onClick={() => { setQ(""); setTypeFilter(null); setFolderFilter("all"); }}>Скинути фільтри</button></div>
             ) : listFiles.map((f) => { const t = TYPE_META[f.category ?? "Інше"] ?? TYPE_META["Інше"]; const sel = f.id === selected; return (
               <div key={f.id} onClick={() => setSelected(f.id)} tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter") setSelected(f.id); }}
                 style={{ display: "grid", gridTemplateColumns: "40px minmax(0,1fr)", gap: 10, padding: "10px 12px", borderBottom: "1px solid var(--border)", cursor: "pointer", background: sel ? "var(--surface-2)" : undefined, boxShadow: sel ? "inset 3px 0 0 var(--brand)" : undefined }}>
@@ -336,6 +353,14 @@ function Collapse({ open, children }: { open: boolean; children: React.ReactNode
       <div style={{ overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column", gap: 2, visibility: open ? "visible" : "hidden", transition: reduce ? "none" : "visibility .22s" }}>{children}</div>
     </div>
   );
+}
+
+/** Українська множина: 1 документ · 2–4 документи · 5–20 документів · 21 документ … */
+function plural(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
 }
 
 function Chip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
