@@ -2956,6 +2956,10 @@ export interface DocFile {
   canEdit: boolean; canSign: boolean;
   /** 📖 Ознайомлення (лише загальні регламенти): мій стан і прогрес аудиторії (done/total лише керівництву). */
   ack: { required: boolean; mine: "not_required" | "acked" | "pending"; done: number | null; total: number | null };
+  /** 🆕 Я ще не відкривав поточну версію, і їй не більше 30 днів. */
+  isNew: boolean;
+  /** 🔐 У документа є власні права ролей, відмінні від папки (приходить лише керівництву). */
+  ownRights: boolean;
 }
 export interface DocTree {
   folders: DocFolder[]; files: DocFile[];
@@ -3043,6 +3047,19 @@ export async function saveDocFolderAccess(folderId: number, body: {
   roles: { key: string; canView: boolean; canUpload: boolean; canEdit: boolean; canPublish: boolean }[];
   grants: { userId: number; canView: boolean; canUpload: boolean; expiresAt: string | null }[];
 }): Promise<void> { await api.put(`/documents/access/${folderId}`, body); }
+/** 🔐 Власні права документа: по ролі — права папки і власний рядок (null = «як у папці»). */
+export interface DocFileAccess {
+  applicable: boolean;
+  roles: { key: string; name: string; management: boolean; folder: { canView: boolean; canEdit: boolean }; own: { canView: boolean; canEdit: boolean } | null }[];
+  log: { action: string; details: Record<string, unknown> | null; at: string; actor: string | null }[];
+}
+export async function fetchDocFileAccess(fileId: number): Promise<DocFileAccess> {
+  const { data } = await api.get<DocFileAccess>(`/documents/file/${fileId}/access`);
+  return data;
+}
+export async function saveDocFileAccess(fileId: number, roles: { key: string; own: { canView: boolean; canEdit: boolean } | null }[]): Promise<void> {
+  await api.put(`/documents/file/${fileId}/access`, { roles });
+}
 /** Файл авторизованим стрімом як blob-URL; `inline` — для прев'ю в iframe/img. */
 export async function fetchSigEvidenceBlobUrl(fileId: number, sigId: number): Promise<string> {
   const { data } = await api.get(`/documents/file/${fileId}/signature/${sigId}/evidence`, { responseType: "blob" });

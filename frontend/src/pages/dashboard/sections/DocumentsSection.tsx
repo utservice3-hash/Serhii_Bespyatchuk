@@ -3,8 +3,8 @@ import { createPortal } from "react-dom";
 import {
   fetchDocTree, fetchDocCard, fetchDocViewers, fetchDocPeople, createDocFolder, renameDocFolder, deleteDocFolder,
   uploadDocFile, uploadDocVersion, updateDocFile, archiveDocFile, restoreDocFile, activateDocFile, deleteDocFile, fetchDocTrash, undeleteDocFile, ackDocFile, fetchDocAcks, remindDocAcks, signDocFile, fetchSigEvidenceBlobUrl, approveDocSignature, rejectDocSignature,
-  fetchDocFolderAccess, saveDocFolderAccess, fetchDocFileBlobUrl, DOC_TYPES, fetchTelegramStatus, createTelegramLink, unlinkTelegram,
-  type DocTree, type DocFile, type DocFolder, type DocCard, type DocSection, type DocFolderAccess, type TelegramStatus, type DocTrashFile,
+  fetchDocFolderAccess, saveDocFolderAccess, fetchDocFileAccess, saveDocFileAccess, fetchDocFileBlobUrl, DOC_TYPES, fetchTelegramStatus, createTelegramLink, unlinkTelegram,
+  type DocTree, type DocFile, type DocFolder, type DocCard, type DocSection, type DocFolderAccess, type DocFileAccess, type TelegramStatus, type DocTrashFile,
 } from "../../../api";
 
 /**
@@ -69,6 +69,8 @@ const errOf = (e: unknown, fb: string) => (e as { response?: { data?: { error?: 
 
 /* Стиль — той самий, що в Задачнику/Навчанні: chart-card, data-table, kpi-card, orph-chip,
    btn-primary; поля вводу — глобальні (index.css), без власних радіусів і тіней. */
+/** 🆕 «нове» — яскраве, щоб не губилось серед статусів підпису. */
+const newPill: React.CSSProperties = { display: "inline-block", flexShrink: 0, fontSize: 10.5, fontWeight: 800, letterSpacing: ".03em", padding: "2px 7px", borderRadius: "var(--r-pill)", background: "var(--brand)", color: "#fff", lineHeight: 1.3 };
 const pill = (bg: string, color: string): React.CSSProperties => ({ display: "inline-block", fontSize: 11.5, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "middle", fontWeight: 700, padding: "3px 10px", borderRadius: "var(--r-pill)", background: bg, color, whiteSpace: "nowrap" });
 const btn = (kind: "primary" | "ghost" | "danger" = "ghost"): React.CSSProperties => ({
   border: kind === "ghost" ? "1px solid var(--border)" : "none", borderRadius: "var(--r-lg)", padding: "var(--sp-3) var(--sp-6)", fontWeight: 600, cursor: "pointer",
@@ -124,6 +126,8 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
   const [uploadOpen, setUploadOpen] = useState(false);
   const [accessFolder, setAccessFolder] = useState<DocFolder | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // Відкрите в цій сесії гасить «нове» одразу, не чекаючи перечитування дерева (сервер уже записав перегляд).
+  const [seenLocal, setSeenLocal] = useState<Set<string>>(() => new Set());
 
   const load = async () => {
     setLoading(true);
@@ -140,6 +144,12 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
   const folderName = (id: number | null) => id == null ? "Без папки" : (tree?.folders.find((x) => x.id === id)?.name ?? `Папка #${id}`);
 
   const selectedFile = tree?.files.find((f) => f.id === selected) ?? null;
+  useEffect(() => {
+    if (!selectedFile?.isNew) return;
+    const k = `${selectedFile.id}:${selectedFile.version}`;
+    setSeenLocal((s) => s.has(k) ? s : new Set(s).add(k));
+  }, [selectedFile?.id, selectedFile?.version, selectedFile?.isNew]);
+  const isNewF = (f: DocFile) => f.isNew && !seenLocal.has(`${f.id}:${f.version}`);
 
   // ── Три стани ────────────────────────────────────────────────────────────
   if (loading && !tree) return <div className="chart-card"><p className="loading-text">Завантаження документів…</p></div>;
@@ -174,7 +184,11 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
     offers: visibleAll.filter((f) => f.section === "offer" && !f.archivedAt && f.addresseeUserId === uidMine && f.signature.kind !== "signed" && f.signature.kind !== "not_required").length,
     regs: visibleAll.filter((f) => f.ack.required && f.ack.mine === "pending").length,
     review: visibleAll.filter((f) => f.signature.kind === "review").length,
+    fresh: visibleAll.filter(isNewF).length,
   };
+  const openNextNew = () => { const f = visibleAll.find(isNewF); if (!f) return; setShelf(shelfOf(f)); if (f.section !== "general" && !f.archivedAt) setSection(f.section); setSelected(f.id); };
+  const shelfNew = (k: Shelf) => visibleAll.filter((f) => shelfOf(f) === k && isNewF(f)).length;
+  const newCnt = (k: Shelf, on: boolean) => { const n = shelfNew(k); return n ? <span title={`${n} ${plural(n, "новий документ", "нові документи", "нових документів")}, які ви ще не відкривали`} style={{ ...newPill, marginLeft: 6, ...(on ? { background: "#fff", color: "var(--brand)" } : {}) }}>{n} нов.</span> : null; };
   // Папки для розділу — рахуються для КОЖНОГО розділу окремо, щоб згорнутий список не змінював висоту
   // при перемиканні (стрибки навігації, власник 17.09.2026). Дії з папкою — у заголовку списку.
   const folderRows = (k: Shelf) => {
@@ -217,6 +231,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
           ["🔏 Офер чекає підпису", todo.offers, "var(--warn)", () => setShelf("mine"), true],
           ["📖 Ознайомитись", todo.regs, "var(--warn)", () => setShelf("reg"), true],
           ["📷 Фото на підтвердженні", todo.review, "var(--info)", () => setShelf("mine"), viewer.isManagement],
+          ["🆕 Нові документи", todo.fresh, "var(--brand)", openNextNew, true],
         ] as [string, number, string, () => void, boolean][]).filter((x) => x[4]).map(([l, n, c, go]) => (
           <button key={l} className="orph-chip" onClick={go} style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 12px", fontSize: 13, color: n ? c : "var(--text-muted)", borderColor: n ? c : "var(--border)" }}>
             {l}<b style={{ fontVariantNumeric: "tabular-nums" }}>{n}</b>
@@ -227,11 +242,11 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
         {/* Навігація */}
         <div style={{ borderRight: narrow ? "none" : "1px solid var(--border)", padding: 12, overflowY: "auto", minHeight: 0, display: narrow && (narrowPane !== "nav" || selectedFile) ? "none" : "flex", flexDirection: "column", gap: 2 }}>
           <div style={label}>Розділи</div>
-          <button style={navBtn(!inTrash && shelf === "reg")} onClick={() => setShelf("reg")}>📕 Регламенти<span style={cnt(shelfCount("reg"), shelf === "reg")}>{shelfCount("reg")}</span></button>
+          <button style={navBtn(!inTrash && shelf === "reg")} onClick={() => setShelf("reg")}>📕 Регламенти{newCnt("reg", !inTrash && shelf === "reg")}<span style={cnt(shelfCount("reg"), shelf === "reg")}>{shelfCount("reg")}</span></button>
           <Collapse open={!inTrash && shelf === "reg"}>{folderRows("reg")}</Collapse>
-          <button style={navBtn(!inTrash && shelf === "work")} onClick={() => setShelf("work")}>🗂 Робочі документи<span style={cnt(shelfCount("work"), shelf === "work")}>{shelfCount("work")}</span></button>
+          <button style={navBtn(!inTrash && shelf === "work")} onClick={() => setShelf("work")}>🗂 Робочі документи{newCnt("work", !inTrash && shelf === "work")}<span style={cnt(shelfCount("work"), shelf === "work")}>{shelfCount("work")}</span></button>
           <Collapse open={!inTrash && shelf === "work"}>{folderRows("work")}</Collapse>
-          <button style={navBtn(!inTrash && shelf === "mine")} onClick={() => setShelf("mine")}>🔒 {viewer.isManagement ? "Особисті та офери" : "Мої документи"}<span style={cnt(shelfCount("mine"), shelf === "mine")}>{shelfCount("mine")}</span></button>
+          <button style={navBtn(!inTrash && shelf === "mine")} onClick={() => setShelf("mine")}>🔒 {viewer.isManagement ? "Особисті та офери" : "Мої документи"}{newCnt("mine", !inTrash && shelf === "mine")}<span style={cnt(shelfCount("mine"), shelf === "mine")}>{shelfCount("mine")}</span></button>
           <Collapse open={!inTrash && shelf === "mine"}>
             {tree.sections.offer && <button style={subBtn(section === "offer")} onClick={() => { setSection("offer"); setSelected(null); setInTrash(false); setNarrowPane("list"); }}>🔒 Офери<span style={cnt(0)}>{visibleAll.filter((f) => f.section === "offer" && !f.archivedAt).length}</span></button>}
             <button style={subBtn(section === "personal")} onClick={() => { setSection("personal"); setSelected(null); setInTrash(false); setNarrowPane("list"); }}>Особисті<span style={cnt(0)}>{visibleAll.filter((f) => f.section === "personal" && !f.archivedAt).length}</span></button>
@@ -309,11 +324,15 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
                 style={{ display: "grid", gridTemplateColumns: "40px minmax(0,1fr)", gap: 10, padding: "10px 12px", borderBottom: "1px solid var(--border)", cursor: "pointer", background: sel ? "var(--surface-2)" : undefined, boxShadow: sel ? "inset 3px 0 0 var(--brand)" : undefined }}>
                 <span style={{ width: 40, height: 44, borderRadius: "var(--r-md)", border: `1px solid ${t.color}55`, background: t.color + "10", color: t.color, display: "grid", placeItems: "center", fontSize: 9, fontWeight: 800 }}>{extOf(f.name, f.mime)}</span>
                 <span style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: sel ? 700 : 600, fontSize: "var(--fs-base)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={f.name}>{f.name.replace(/\.[a-z0-9]+$/i, "")}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                    <div style={{ fontWeight: sel || isNewF(f) ? 700 : 600, fontSize: "var(--fs-base)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }} title={f.name}>{f.name.replace(/\.[a-z0-9]+$/i, "")}</div>
+                    {isNewF(f) && <span style={newPill} title="Ви ще не відкривали цю версію">нове</span>}
+                  </div>
                   <div className="orph-dim" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.description || `${f.category ?? "Інше"} · ${t.action}`}</div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
                     <span className="orph-dim">{f.addressee ?? f.author ?? "автор не вказаний"} · {fmtDate(f.updatedAt)} · v{f.version}</span>
                     {f.archivedAt ? <span style={pill("var(--surface-2)", "var(--text-muted)")}>{f.archivedReason === "dismissed" ? "звільнено" : "в архіві"}</span> : f.inactiveAt ? <span style={pill("var(--warn-bg)", "var(--warn)")}>неактивний</span> : f.ack.required ? <AckBadge f={f} /> : <SigBadge f={f} />}
+                    {f.ownRights && <span style={pill("var(--info-bg)", "var(--info)")} title="Права цього документа відрізняються від прав папки">власні права</span>}
                   </div>
                 </span>
               </div>); })}
@@ -388,6 +407,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
   const [signOpen, setSignOpen] = useState(false);
   const [full, setFull] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [rightsOpen, setRightsOpen] = useState(false);
   const t = TYPE_META[file.category ?? "Інше"] ?? TYPE_META["Інше"];
   const kind = previewKind(file);
   const mgmt = tree.viewer.isManagement;
@@ -403,7 +423,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
     // Перечитуємо й після підпису / ознайомлення / активації — інакше таймлайн показує стан
     // на момент відкриття картки («Відкрито: ще ні» при вже підписаному, заміряно 16.09.2026).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [file.id, file.version, file.signature.kind, file.ack.mine, file.inactiveAt, file.archivedAt]);
+  }, [file.id, file.version, file.signature.kind, file.ack.mine, file.inactiveAt, file.archivedAt, file.ownRights]);
 
   const open = async (download: boolean) => {
     // Вкладку відкриваємо СИНХРОННО в кліку: після await браузер блокує window.open як спливашку
@@ -453,6 +473,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
         {file.section === "offer" && !file.archivedAt && <span style={pill("var(--info-bg)", "var(--info)")}>🔒 закрита папка</span>}
         {file.archivedAt && <span style={pill("var(--surface-2)", "var(--text-muted)")}>архів · {file.archivedReason === "dismissed" ? "звільнено" : "прибрано"} {fmtDate(file.archivedAt)}</span>}
         {file.inactiveAt && !file.archivedAt && <span style={pill("var(--warn-bg)", "var(--warn)")}>неактивний · повернуто з архіву {fmtDate(file.inactiveAt)}</span>}
+        {file.ownRights && <span style={pill("var(--info-bg)", "var(--info)")} title="Права цього документа відрізняються від прав папки">🔐 власні права</span>}
         <button onClick={onClose} title="Закрити" style={{ marginLeft: "auto", border: "none", background: "transparent", cursor: "pointer", fontSize: 16, color: "var(--text-muted)" }}>✕</button>
       </div>
       <h2 className="chart-title" style={{ marginBottom: 0, lineHeight: 1.3 }}>{file.name}</h2>
@@ -465,6 +486,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
           <label style={{ ...btn(), cursor: busy ? "default" : "pointer", opacity: busy ? .6 : 1 }}>Нова версія<input type="file" hidden disabled={busy} onChange={(e) => { newVersion(e.target.files); e.currentTarget.value = ""; }} /></label>
         )}
         {file.canEdit && <button style={btn()} onClick={rename}>Перейменувати</button>}
+        {mgmt && file.section === "general" && !file.archivedAt && <button style={btn()} onClick={() => setRightsOpen(true)} title="Права цього документа ширші або вужчі за папку">🔐 Права документа</button>}
         {mgmt && !file.archivedAt && <button style={btn("danger")} onClick={archive}>В архів</button>}
         {mgmt && file.archivedAt && <button style={btn()} onClick={restore}>Повернути з архіву</button>}
         {mgmt && <button style={btn("danger")} onClick={remove} title="Зникне звідусіль; файл і підписи лишаються в системі">Видалити</button>}
@@ -472,6 +494,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
       </div>
 
       {err && <div style={{ fontSize: 12, color: "var(--danger)" }}>{err}</div>}
+      {rightsOpen && <FileAccessDialog file={file} folderName={folderName(file.folderId)} onClose={() => setRightsOpen(false)} onSaved={async () => { setRightsOpen(false); onToast("Права документа збережено, зміну записано в журнал"); await onChanged(); }} />}
       {file.inactiveAt && !file.archivedAt && <p style={noteBox}>Документ повернувся з архіву після повернення людини в команду. Поки він неактивний: підписати чи редагувати не можна.{mgmt ? " Натисніть «Активувати», якщо він знову потрібен." : ""}</p>}
 
       {/* Прев'ю. PDF — без бічних мініатюр і на ширину панелі (параметри вбудованого переглядача
@@ -901,6 +924,85 @@ function AccessDialog({ folder, onClose, onSaved }: { folder: DocFolder; onClose
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
             <button style={btn()} onClick={onClose} disabled={busy}>Скасувати</button>
             <button style={btn("primary")} onClick={() => void save()} disabled={busy}>{busy ? "Зберігаю…" : "Зберегти доступи"}</button>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+/* ── Власні права документа ─────────────────────────────────────────────── */
+/**
+ * По кожній ролі: «як у папці» (показуємо, що це означає) або власні «бачить / редагує».
+ * Власні права можуть бути ширші за папку (відкрити документ у закритій папці) і вужчі (закрити
+ * документ у відкритій). Керівництво бачить усе й не звужується.
+ */
+function FileAccessDialog({ file, folderName, onClose, onSaved }: { file: DocFile; folderName: string; onClose: () => void; onSaved: () => Promise<void> }) {
+  const [data, setData] = useState<DocFileAccess | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { fetchDocFileAccess(file.id).then(setData).catch((e) => setErr(errOf(e, "Права не завантажились"))); }, [file.id]);
+  const setOwn = (key: string, own: { canView: boolean; canEdit: boolean } | null) =>
+    setData((d) => d && { ...d, roles: d.roles.map((r) => r.key === key && !r.management ? { ...r, own } : r) });
+  const save = async () => {
+    if (!data) return; setBusy(true); setErr(null);
+    try { await saveDocFileAccess(file.id, data.roles.filter((r) => !r.management).map((r) => ({ key: r.key, own: r.own }))); await onSaved(); }
+    catch (e) { setErr(errOf(e, "Не збережено")); setBusy(false); }
+  };
+  const yesNo = (v: boolean) => <span style={{ color: v ? "var(--ok)" : "var(--text-muted)" }}>{v ? "так" : "ні"}</span>;
+  const changed = data?.roles.filter((r) => r.own && (r.own.canView !== r.folder.canView || r.own.canEdit !== r.folder.canEdit)).length ?? 0;
+  return (
+    <Modal title="Права документа" onClose={onClose} width={680}>
+      <div style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 12 }}>
+        «{file.name}» у папці «{folderName}». Без позначки роль має права папки. Власні права можуть відкрити документ ролі, якій папка закрита, або закрити його в відкритій папці.
+      </div>
+      {err && <div style={{ fontSize: 12, color: "var(--danger)", marginBottom: 8 }}>{err}</div>}
+      {!data ? <p className="loading-text">Завантаження…</p> : !data.applicable ? <p style={noteBox}>Власні права бувають лише в загальних документів поза архівом.</p> : (
+        <>
+          <table className="data-table" style={{ fontSize: "var(--fs-13)" }}>
+            <thead><tr>
+              <th>Роль</th>
+              <th style={{ textAlign: "center", fontSize: 11 }}>У папці: бачить · редагує</th>
+              <th style={{ textAlign: "center", fontSize: 11 }}>Власні права</th>
+              <th style={{ textAlign: "center", fontSize: 11 }}>Бачить</th>
+              <th style={{ textAlign: "center", fontSize: 11 }}>Редагує</th>
+            </tr></thead>
+            <tbody>
+              {data.roles.map((r) => {
+                const eff = r.management ? { canView: true, canEdit: true } : (r.own ?? r.folder);
+                const diff = !!r.own && (r.own.canView !== r.folder.canView || r.own.canEdit !== r.folder.canEdit);
+                return (
+                  <tr key={r.key} style={diff ? { background: "var(--info-bg)" } : undefined}>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>{r.name}{r.management && <span style={{ ...pill("var(--info-bg)", "var(--info)"), marginLeft: 8 }}>керівництво</span>}</div>
+                      {diff && <div style={{ fontSize: 11, color: "var(--info)" }}>{r.own!.canView && !r.folder.canView ? "ширше за папку: бачить" : !r.own!.canView && r.folder.canView ? "вужче за папку: не бачить" : r.own!.canEdit ? "ширше за папку: редагує" : "вужче за папку: не редагує"}</div>}
+                    </td>
+                    <td style={{ textAlign: "center" }}>{yesNo(r.folder.canView)} · {yesNo(r.folder.canEdit)}</td>
+                    <td style={{ textAlign: "center" }}>
+                      <input type="checkbox" aria-label={`Власні права для ролі ${r.name}`} checked={!!r.own} disabled={r.management}
+                        onChange={() => setOwn(r.key, r.own ? null : { ...r.folder })} />
+                    </td>
+                    <td style={{ textAlign: "center" }}>
+                      <input type="checkbox" aria-label={`${r.name} бачить`} checked={eff.canView} disabled={r.management || !r.own}
+                        onChange={() => r.own && setOwn(r.key, { canView: !r.own.canView, canEdit: !r.own.canView ? r.own.canEdit : false })} />
+                    </td>
+                    <td style={{ textAlign: "center" }}>
+                      <input type="checkbox" aria-label={`${r.name} редагує`} checked={eff.canEdit} disabled={r.management || !r.own || !r.own.canView}
+                        onChange={() => r.own && setOwn(r.key, { ...r.own, canEdit: !r.own.canEdit })} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 12 }}>
+            {changed ? `Відрізняється від папки: ${changed} ${plural(changed, "роль", "ролі", "ролей")}.` : "Зараз усі ролі мають права папки."} Персональні винятки для людей налаштовуються в «⚙ Доступи» папки. Зміни пишуться в журнал.
+            {data.log.length ? ` Останній запис: ${fmtDate(data.log[0].at)} · ${data.log[0].actor ?? "—"}.` : ""}
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+            <button style={btn()} onClick={() => data && setData({ ...data, roles: data.roles.map((r) => ({ ...r, own: null })) })} disabled={busy}>Усім як у папці</button>
+            <button style={btn()} onClick={onClose} disabled={busy}>Скасувати</button>
+            <button style={btn("primary")} onClick={() => void save()} disabled={busy}>{busy ? "Зберігаю…" : "Зберегти права"}</button>
           </div>
         </>
       )}
