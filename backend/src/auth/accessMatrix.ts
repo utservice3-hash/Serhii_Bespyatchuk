@@ -206,6 +206,18 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/auth/login", cls: "deny-only",
     allow: [], deny: [] },
+  /* Запрошення кандидата (найм 2a) — публічні, як логін; межа — одноразовий токен. Проба була б записом. */
+  { method: "GET", path: "/api/auth/invite/:token", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "POST", path: "/api/auth/invite/:token", cls: "deny-only",
+    allow: [], deny: [] },
+  /* Питання кандидата тімліду (найм 2a). Читання — свої питання, тож порожній список будь-кому з вкладкою
+     «Навчання»; запис — лише власник акаунта кандидата (ядро): решта ролей отримує 403 ДО запису, тож
+     проба безпечна. Фінансист у deny — вимога `#412` для кожного запису під `/api/training`. */
+  { method: "GET", path: "/api/training/questions", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
+  { method: "POST", path: "/api/training/questions", cls: "deny-only",
+    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/bank/accounts", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "POST", path: "/api/bank/accounts", cls: "deny-only",
@@ -373,6 +385,23 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "financier", "manager"] },
   { method: "POST", path: "/api/hiring/candidates/:id/files/:fileId/restore", cls: "deny-only",
     allow: [], deny: ["team_lead", "manager"] },
+  /* 🎓 НАЙМ, прохід 2a (17.09.2026): дошка «На навчанні», запрошення, доступ, рішення, питання.
+     Читання — як картка кандидата (тімлід бачить своїх). Запис тімліда: запрошення, продовження,
+     «менеджер», відповідь; «Відновити доступ» — лише рекрутер і адмін-рівень. */
+  { method: "GET", path: "/api/hiring/training", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead"], deny: ["financier", "manager"] },
+  { method: "GET", path: "/api/hiring/training/:id", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead"], deny: ["financier", "manager"] },
+  { method: "POST", path: "/api/hiring/candidates/:id/invite", cls: "deny-only",
+    allow: [], deny: ["manager"] },
+  { method: "POST", path: "/api/hiring/candidates/:id/access/extend", cls: "deny-only",
+    allow: [], deny: ["manager"] },
+  { method: "POST", path: "/api/hiring/candidates/:id/access/restore", cls: "deny-only",
+    allow: [], deny: ["team_lead", "manager"] },
+  { method: "POST", path: "/api/hiring/candidates/:id/promote", cls: "deny-only",
+    allow: [], deny: ["manager"] },
+  { method: "POST", path: "/api/hiring/candidates/:id/questions/:questionId/answer", cls: "deny-only",
+    allow: [], deny: ["manager"] },
   { method: "GET", path: "/api/dashboard/lead-recommendation", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["manager", "hr"] },
   // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника), ЗАДЕКЛАРОВАНА, А НЕ ДРЕЙФ.

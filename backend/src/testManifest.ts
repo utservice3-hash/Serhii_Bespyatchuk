@@ -120,6 +120,7 @@ export const MANIFEST_FILES: string[] = [
   "core/leadgenStats.test.js",
   "core/missedCalls.test.js",
   "core/hiring.test.js",
+  "core/hiringTraining.test.js",
   "core/missedCallSignal.test.js",
   "core/navRender.test.js",
   "core/adTouch.test.js",
@@ -226,6 +227,8 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "task_comments", "task_files", "task_status_log", "task_views", "task_groups",
   "hiring_candidates", "hiring_interviews", "hiring_events", "hiring_daily_manual",
   "hiring_files",
+  "hiring_invites",
+  "hiring_training_questions",
 ];
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
@@ -787,6 +790,15 @@ export const MANIFEST_TESTS: string[] = [
   "#525 МЕСЕНДЖЕРИ: один номер у різних форматах — однакові посилання; @нік і t.me/нік — один Telegram",
   "#526 НАЙМ: hiring_files відібрана в ai_readonly після GRANT і CREATE і є в FORBIDDEN_TABLES",
   "#527 ФАЙЛИ: тип за першими байтами — PNG/JPG/WEBP/PDF так, виконуваний файл і текст — ні",
+  // core/hiringTraining.test.ts — Найм, прохід 2a: акаунт кандидата, доступ, навчання (17.09.2026)
+  "#530 СТРОК: 48 год без входу, три київські дні від першого входу, продовження — рівно доба",
+  "#531 ЗАСТРЯГ І РІШЕННЯ: доба без руху, «менеджер» лише після всіх кроків, рішення — тімлід",
+  "#532 ЗАПРОШЕННЯ: 72 год, одноразове, у базі хеш; логін — вільна пошта або службова адреса",
+  "#533 ЖИВИЙ SQL: акаунт при «кандидат + команда», запрошення, перший вхід, джоба, відновлення, відмова",
+  "#534 ЖИВИЙ SQL: «менеджер» після всіх кроків міняє роль і скасовується; питання тімліду",
+  "#535 НАЙМ: hiring_invites і hiring_training_questions відібрані в ai_readonly і є в FORBIDDEN_TABLES",
+  "#536 ДОСТУП: вимкнений кандидат відсікається на живому токені; запрошення публічне й видає той самий вхід",
+  "#537 ДЖОБА: hiringAccess у кроні, під наглядом із частотою крону і в стартових прогонах",
   // core/missedCalls.test.ts — ТЗ-1 «Пропущені дзвінки» (14.09.2026)
   // 🔢 ДЕСЯТКА #43x, А НЕ #42x — ПЕРЕНУМЕРОВАНО ПРИ МЕРЖІ 15.09.2026. Писалось як
   // #421-#430 за правилом «найвищий змерджений +1» (тоді #419). Поки прохід ішов, у

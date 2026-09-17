@@ -17,6 +17,10 @@ import {
   listVacancies, createVacancy, updateVacancy, setCandidateVacancies, addRefusalReason, refuseCandidate, setReserve,
   insertFile, fileForDownload, setFileDeleted,
 } from "../core/hiring.js";
+import {
+  trainingBoard, trainingDetail, issueInvite, extendAccess, restoreAccess, promoteCandidate, answerQuestion,
+} from "../core/hiringTraining.js";
+import { CANDIDATE_ACCESS, canDecideTraining } from "../core/hiringTrainingRules.js";
 
 /** Та сама тека, що в `routes/documents.ts` (DOCS_DIR) і в нічному бекапі. */
 const DOCS_DIR = path.join(UPLOAD_DIR, "..", "documents");
@@ -342,6 +346,77 @@ hiringRouter.post("/candidates/:id/files/:fileId/restore", async (req, res) => {
     const fileId = Number(req.params.fileId);
     if (!Number.isInteger(fileId) || fileId <= 0) throw new HiringError(400, "Некоректний id файлу");
     await tx((db) => setFileDeleted(db, req.auth!.userId, id, fileId, false));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+// ── На навчанні (прохід 2a) ─────────────────────────────────────────────────
+/**
+ * Дошка й прогрес — рекрутер, адмін-рівень, тімлід своєї команди. Рішення «менеджер» і відповідь
+ * на питання — лише тімлід або адмін-рівень (`canDecideTraining`), як у затвердженому макеті.
+ */
+const decides = (req: Request) => canDecideTraining({ roleKey: req.auth!.roleKey, adminScope: isAdminScope(req.auth!) });
+
+hiringRouter.get("/training", async (req, res) => {
+  try {
+    const access = anyAccess(req);
+    const rows = await trainingBoard(pool as unknown as Db, access, req.auth!.teamId);
+    res.json({ rows, rules: CANDIDATE_ACCESS, canDecide: decides(req) });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.get("/training/:id", async (req, res) => {
+  try {
+    const access = anyAccess(req);
+    const id = idOf(req);
+    const { row, steps, questions, events } = await trainingDetail(pool as unknown as Db, id, access, req.auth!.teamId);
+    res.json({ row, steps, questions, events, canDecide: decides(req), canRestore: access === "edit" });
+  } catch (e) { fail(res, e); }
+});
+
+/** Посилання-запрошення: токен віддається ОДИН раз, у базі — лише хеш. Адресу будує фронт. */
+hiringRouter.post("/candidates/:id/invite", async (req, res) => {
+  try {
+    const access = anyAccess(req);
+    const id = idOf(req);
+    res.status(201).json(await tx((db) => issueInvite(db, req.auth!.userId, id, access, req.auth!.teamId)));
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.post("/candidates/:id/access/extend", async (req, res) => {
+  try {
+    const access = anyAccess(req);
+    const id = idOf(req);
+    await tx((db) => extendAccess(db, req.auth!.userId, id, access, req.auth!.teamId));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.post("/candidates/:id/access/restore", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const id = idOf(req);
+    await tx((db) => restoreAccess(db, req.auth!.userId, id));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.post("/candidates/:id/promote", async (req, res) => {
+  try {
+    const access = anyAccess(req);
+    const id = idOf(req);
+    await tx((db) => promoteCandidate(db, req.auth!.userId, id, req.body?.comment, decides(req), access, req.auth!.teamId));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.post("/candidates/:id/questions/:questionId/answer", async (req, res) => {
+  try {
+    const access = anyAccess(req);
+    const id = idOf(req);
+    const qid = Number(req.params.questionId);
+    if (!Number.isInteger(qid) || qid <= 0) throw new HiringError(400, "Некоректний id питання");
+    await tx((db) => answerQuestion(db, req.auth!.userId, id, qid, req.body?.answer, decides(req), access, req.auth!.teamId));
     res.json({ ok: true });
   } catch (e) { fail(res, e); }
 });

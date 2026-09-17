@@ -19,6 +19,8 @@ import {
   verifyAssertion,
 } from "../auth/trackerSso.js";
 import { rosterPerson, type RosterRow } from "../auth/trackerRoster.js";
+import { HiringError, type Db } from "../core/hiring.js";
+import { readInvite, acceptInvite, noteCandidateLogin } from "../core/hiringTraining.js";
 
 export const authRouter = Router();
 
@@ -38,17 +40,7 @@ authRouter.post("/login", async (req, res) => {
   }
   const { email, password } = parsed.data;
 
-  const result = await pool.query<{
-    id: number;
-    password_hash: string;
-    role: "admin" | "team_lead" | "manager";
-    role_override: string | null;
-    manager_id: number | null;
-    team_id: number | null;
-    is_active: boolean;
-    tracker_enabled: boolean;
-    work_state: "finishing" | "dismissed" | null;
-  }>(
+  const result = await pool.query<LoginUser>(
     LOGIN_LOOKUP_SQL,
     [email]
   );
@@ -57,7 +49,10 @@ authRouter.post("/login", async (req, res) => {
     return res.status(401).json({ error: "Invalid credentials" });
   }
   if (!user.is_active) {
-    return res.status(403).json({ error: "Обліковий запис деактивовано" });
+    // Кандидат (найм, прохід 2a): доступ закривається строком навчання, а не керівником.
+    return res.status(403).json({ error: user.role_override === "candidate"
+      ? "Доступ до навчання закрито. Зверніться до рекрутера"
+      : "Обліковий запис деактивовано" });
   }
   /* 🔐 ЗВІЛЬНЕНИЙ НЕ ЗАХОДИТЬ (рішення власника 07.09.2026: «звільнений вимикає вхід»).
      🔴 Перевірка стоїть ТУТ, а не прапорцем у `users`, і це заміряна причина, не смак:
@@ -70,6 +65,26 @@ authRouter.post("/login", async (req, res) => {
     return res.status(403).json({ error: "Доступ закрито: працівника позначено як звільненого. Зверніться до керівника" });
   }
 
+  res.json({ token: await issueLoginToken(user, email) });
+});
+
+interface LoginUser {
+  id: number;
+  password_hash: string;
+  role: "admin" | "team_lead" | "manager";
+  role_override: string | null;
+  manager_id: number | null;
+  team_id: number | null;
+  is_active: boolean;
+  tracker_enabled: boolean;
+  work_state: "finishing" | "dismissed" | null;
+}
+
+/**
+ * Токен входу для вже перевіреного користувача. Одна функція на логін і на запрошення кандидата:
+ * друга копія складу токена розійшлася б із першою мовчки (вкладки, права, трекер).
+ */
+async function issueLoginToken(user: LoginUser, email: string): Promise<string> {
   // Ефективна роль = role_override ?? синкнута роль. У токен кладемо ключ ролі (для гейтів)
   // + scope-compat роль (для наявної data-scope логіки в роутах) + перелік дозволених вкладок
   // (для косметики nav у FE — сервер усе одно гейтить незалежно).
@@ -92,7 +107,52 @@ authRouter.post("/login", async (req, res) => {
     // МЕЖУ тримає сервер (перевірка нижче) — на приховування у FE ми не покладаємось.
     trackerEnabled: user.tracker_enabled,
   });
-  res.json({ token });
+  // Перший вхід кандидата запускає строк навчання (найм, прохід 2a). Для решти — нічого.
+  if (roleKey === "candidate") {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await noteCandidateLogin(client as unknown as Db, user.id);
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw e;
+    } finally { client.release(); }
+  }
+  return token;
+}
+
+/**
+ * 🎓 ЗАПРОШЕННЯ КАНДИДАТА (найм, прохід 2a). Публічні: людина ще не має пароля.
+ * Межа — сам токен: 256 біт випадковості, у базі лише SHA-256, чинний 72 год, одноразовий.
+ * Записані в `ROUTE_BOUNDARY_EXEMPTIONS` як постійні винятки.
+ */
+function inviteFail(res: import("express").Response, e: unknown) {
+  if (e instanceof HiringError) return res.status(e.status).json({ error: e.message });
+  console.error("[invite]", e);
+  return res.status(500).json({ error: "Помилка сервера" });
+}
+
+authRouter.get("/invite/:token", async (req, res) => {
+  try {
+    res.json(await readInvite(pool as unknown as Db, req.params.token));
+  } catch (e) { inviteFail(res, e); }
+});
+
+authRouter.post("/invite/:token", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const userId = await acceptInvite(client as unknown as Db, req.params.token, req.body?.password);
+    await client.query("COMMIT");
+    const u = (await pool.query<LoginUser & { email: string }>(
+      `SELECT u.id, u.email, u.password_hash, u.role, u.role_override, u.manager_id, u.team_id, u.is_active, u.tracker_enabled,
+              NULL::text AS work_state FROM users u WHERE u.id = $1`, [userId])).rows[0];
+    res.json({ token: await issueLoginToken(u, u.email.toLowerCase()), login: u.email });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    inviteFail(res, e);
+  } finally { client.release(); }
 });
 
 /** 🤖 Привʼязка Telegram для підпису (бот «UTS Підпис»). Стан — ВЛАСНОГО токена. */

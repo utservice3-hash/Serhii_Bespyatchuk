@@ -43,6 +43,10 @@ export interface RouteExemption {
 export const ROUTE_BOUNDARY_EXEMPTIONS: RouteExemption[] = [
   { method: "POST", path: "/api/auth/login", permanent: true,
     why: "Логін — єдиний роут ДО автентифікації. Межа тут неможлива за визначенням." },
+  { method: "GET", path: "/api/auth/invite/:token", permanent: true,
+    why: "Запрошення кандидата (найм, 2a): людина ще не має пароля. Межа — сам токен: 256 біт, у базі SHA-256, 72 год, одноразовий." },
+  { method: "POST", path: "/api/auth/invite/:token", permanent: true,
+    why: "Встановлення пароля за запрошенням кандидата (найм, 2a). Межа — той самий одноразовий токен; вхід видається лише активному акаунту." },
   { method: "POST", path: "/api/auth/logout", permanent: true,
     why: "Вихід із сесії — доступний будь-кому автентифікованому, межа не потрібна." },
   { method: "GET", path: "/api/auth/me", permanent: true,

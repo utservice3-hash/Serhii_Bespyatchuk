@@ -12,6 +12,7 @@ import {
   canTransition, isHiringStatus, isIsoDate, isTime, normalizePhone, cleanUrl, NEEDS_TEAM, STATUS_LABEL,
   refusalVerdict, messengerLinks, vacancyCloseStatus, VACANCY_STATUSES, REFUSAL_SIDES, type RefusalSide, type VacancyStatus,
 } from "./hiringRules.js";
+import { ensureCandidateAccount, closeCandidateAccess, undoPromotion, hasAccount } from "./hiringTraining.js";
 
 export interface Db {
   query: <R = Record<string, unknown>>(sql: string, params?: unknown[]) => Promise<{ rows: R[]; rowCount: number | null }>;
@@ -398,6 +399,9 @@ export async function changeStatus(
     teamId = t;
   }
   if (NEEDS_TEAM.includes(p.to) && !teamId) throw new HiringError(400, "Оберіть команду, до якої йде кандидат");
+  // Акаунт кандидата (прохід 2a): «менеджер» міняє роль акаунта, тож веде туди лише дія з умовою навчання.
+  if (p.to === "manager" && await hasAccount(db, id))
+    throw new HiringError(409, "У кандидата є акаунт навчання — «Перевести в менеджери» на вкладці «На навчанні»");
   // Повернення з відмови знімає поточну відмову з картки; причина лишається в історії.
   const leavingRefusal = (c.status === "refused" || c.status === "black") && p.to !== "refused" && p.to !== "black";
   await db.query(
@@ -405,6 +409,8 @@ export async function changeStatus(
        ${leavingRefusal ? ", refusal_side = NULL, refusal_reason_id = NULL, refusal_note = NULL, refused_at = NULL" : ""}
      WHERE id = $3`, [p.to, teamId, id]);
   await logEvent(db, { candidateId: id, kind: "status", from: c.status, to: p.to, comment, actorId });
+  if (p.to === "candidate") await ensureCandidateAccount(db, actorId, id);
+  if (c.status === "manager") await undoPromotion(db, id, actorId);
 }
 
 export async function addComment(db: Db, actorId: number | null, id: number, comment: unknown, access: HiringAccess, leadTeamId: number | null) {
@@ -625,6 +631,7 @@ export async function refuseCandidate(
   await logEvent(db, { candidateId: id, kind: "status", from: c.status, to: v.status,
     comment: `${reason!.side === "company" ? "відмова компанії" : "відмова кандидата"} · ${reason!.label}${note ? ` · ${note}` : ""}${blacklist ? " · чорний список" : ""}`, actorId });
   if (reserve && !c.reserved_at) await logEvent(db, { candidateId: id, kind: "reserve", comment: "додано в резерв", actorId });
+  await closeCandidateAccess(db, id, "refused", actorId); // є акаунт навчання — доступ закривається тією самою транзакцією
 }
 
 /** Резерв: увімкнути з нотаткою або прибрати. Пара повертає рядок до байта, крім `updated_at` (#524). */

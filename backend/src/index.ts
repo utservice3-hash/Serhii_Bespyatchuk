@@ -39,6 +39,7 @@ import { createOneOnOneReminders } from "./jobs/oneOnOneReminders.js";
 import { dutyRouter } from "./routes/duty.js";
 import { createDutyReminders } from "./jobs/dutyReminders.js";
 import { trainingRouter } from "./routes/training.js";
+import { hiringQuestionsRouter } from "./routes/hiringQuestions.js";
 import { hiringRouter } from "./routes/hiring.js";
 import { statisticsRouter } from "./routes/statistics.js";
 import { statsSeriesRouter } from "./routes/statisticsSeries.js";
@@ -67,6 +68,7 @@ import { overviewCache, OVERVIEW_TTL_MS } from "./core/lazyCache.js";
 import { syncFirstTouch } from "./jobs/syncFirstTouch.js";
 import { recomputeStatistics, getStatisticsStatus } from "./jobs/recomputeStatistics.js";
 import { recomputeClientKeys } from "./jobs/recomputeClientKeys.js";
+import { closeExpiredCandidateAccess } from "./jobs/hiringAccess.js";
 import { syncRingostatCalls, getRingostatStatus } from "./jobs/syncRingostatCalls.js";
 import { syncCalls } from "./jobs/syncCalls.js";
 import { missedCallTasks } from "./jobs/missedCallTasks.js";
@@ -145,6 +147,7 @@ app.use("/api/documents", documentsRouter);
 app.use("/api/telegram", telegramRouter); // вебхук бота підпису — без requireAuth, межа секретом (routes/telegram.ts)
 app.use("/api/one-on-ones", oneOnOnesRouter);
 app.use("/api/duty", dutyRouter);
+app.use("/api/training/questions", hiringQuestionsRouter); // питання кандидата тімліду (найм 2a) — ДО trainingRouter
 app.use("/api/training", trainingRouter);
 app.use("/api/hiring", hiringRouter); // Найм: графік, кандидати, щоденний звіт (17.09.2026)
 app.use("/api/statistics", statisticsRouter);
@@ -580,6 +583,12 @@ cron.schedule("5 * * * *", () => {
   void runJob("recomputeClientKeys", () => recomputeClientKeys());
 });
 
+// 🎓 Найм (прохід 2a): закрити прострочений доступ кандидатів до навчання. Двічі на годину, осторонь
+// від :00/:30, де стоїть syncKommo. Мовчання = людина вчиться після закінчення строку.
+cron.schedule("10,40 * * * *", () => {
+  void runJob("hiringAccess", () => closeExpiredCandidateAccess());
+});
+
 // «Кількість дзвінків» із Ringostat API (відділ «Менеджери з продажу» → sales.calls).
 // Щогодини (:35) + старт. Порожній Auth-key → джоба сама себе пропускає.
 cron.schedule("35 * * * *", () => {
@@ -799,6 +808,7 @@ const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["createReceivableDeadlineTasks", () => createReceivableDeadlineTasks()],
   ["recomputeStatistics", () => recomputeStatistics()],
   ["recomputeClientKeys", () => recomputeClientKeys()],
+  ["hiringAccess", () => closeExpiredCandidateAccess()],
   ["syncReceivables", () => syncReceivables()],
   ["syncLeadgenRegistry", () => syncLeadgenRegistry()],
   ["syncFirstTouch", () => syncFirstTouch()],

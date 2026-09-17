@@ -3395,7 +3395,7 @@ CREATE TABLE IF NOT EXISTS hiring_events (
 );
 ALTER TABLE hiring_events DROP CONSTRAINT IF EXISTS hiring_events_kind_check;
 ALTER TABLE hiring_events ADD CONSTRAINT hiring_events_kind_check CHECK (kind IN
-  ('created','status','attended','comment','repeat','edit','refusal','reserve','vacancy','file'));
+  ('created','status','attended','comment','repeat','edit','refusal','reserve','vacancy','file','access','question'));
 CREATE INDEX IF NOT EXISTS idx_hiring_events_candidate ON hiring_events(candidate_id, at);
 CREATE INDEX IF NOT EXISTS idx_hiring_events_status_at ON hiring_events(to_status, at) WHERE kind = 'status';
 
@@ -3553,3 +3553,51 @@ CREATE INDEX IF NOT EXISTS idx_hiring_files_candidate ON hiring_files(candidate_
 
 -- 🔒 Скриншоти переписки — персональні дані; не для моделі. REVOKE після GRANT і CREATE. Тримає #526.
 REVOKE ALL ON hiring_files FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🎓 НАЙМ, ПРОХІД 2a (17.09.2026): акаунт кандидата, запрошення, доступ, питання тімліду
+-- ══════════════════════════════════════════════════════════════════════════
+-- Акаунт — звичайний рядок `users` з роллю «Кандидат» (`role_override = 'candidate'`, без `manager_id`,
+-- тож `provisionUsers` його не чіпає). Правила строку — `core/hiringTrainingRules.ts`.
+-- ⚠️ `revert` коду НЕ прибирає створених акаунтів: вони лишаються вимкненими/увімкненими як є.
+ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS user_id              INTEGER REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS account_created_at   TIMESTAMPTZ;
+ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS first_login_at       TIMESTAMPTZ;
+ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS access_extended_days INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS access_closed_at     TIMESTAMPTZ;
+ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS access_closed_reason TEXT;
+ALTER TABLE hiring_candidates DROP CONSTRAINT IF EXISTS hiring_candidates_access_reason_check;
+ALTER TABLE hiring_candidates ADD CONSTRAINT hiring_candidates_access_reason_check CHECK
+  (access_closed_reason IS NULL OR access_closed_reason IN ('no_login','expired','refused','manager'));
+-- Один акаунт — одна картка: інакше джоба закрила б доступ за чужим строком.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hiring_candidates_user ON hiring_candidates(user_id) WHERE user_id IS NOT NULL;
+
+-- Запрошення: у базі лише SHA-256 токена. Нове запрошення гасить попереднє невикористане.
+CREATE TABLE IF NOT EXISTS hiring_invites (
+  id            SERIAL PRIMARY KEY,
+  candidate_id  INTEGER NOT NULL REFERENCES hiring_candidates(id) ON DELETE CASCADE,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash    TEXT NOT NULL UNIQUE,
+  created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at    TIMESTAMPTZ NOT NULL,
+  used_at       TIMESTAMPTZ,
+  revoked_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_hiring_invites_candidate ON hiring_invites(candidate_id, created_at DESC);
+
+-- Питання кандидата тімліду з кроку навчання. Відповідь — у тому самому рядку.
+CREATE TABLE IF NOT EXISTS hiring_training_questions (
+  id            SERIAL PRIMARY KEY,
+  candidate_id  INTEGER NOT NULL REFERENCES hiring_candidates(id) ON DELETE CASCADE,
+  material_id   INTEGER REFERENCES training_materials(id) ON DELETE SET NULL,
+  question      TEXT NOT NULL,
+  asked_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  answer        TEXT,
+  answered_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  answered_at   TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_hiring_training_questions_candidate ON hiring_training_questions(candidate_id, asked_at);
+
+-- 🔒 Хеші запрошень і листування кандидата — не для моделі. REVOKE після GRANT і CREATE. Тримає #535.
+REVOKE ALL ON hiring_invites, hiring_training_questions FROM ai_readonly;

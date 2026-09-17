@@ -50,6 +50,20 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
     req.auth.role = scopeCompatRole(req.auth.roleKey, def);
   }
   // роль поза кешем → лишаємо як є (невідома роль уже 403 на tab-гейті вище).
+  /* 🎓 КАНДИДАТ ІЗ ЗАКРИТИМ ДОСТУПОМ (найм, прохід 2a). Токен живе 12 год, а строк навчання
+     закривається джобою посеред дня — без цієї перевірки людина вчилась би ще до пів доби після
+     «доступ закрито». Запит у БД — ЛИШЕ для ролі «Кандидат» (решта ролей не платить нічого),
+     і пул імпортується ліниво: тести, що імпортують middleware, не мають тягнути `config`. */
+  if (req.auth.roleKey === "candidate") {
+    const uid = req.auth.userId;
+    void import("../db/pool.js")
+      .then(({ pool }) => pool.query<{ is_active: boolean }>(`SELECT is_active FROM users WHERE id = $1`, [uid]))
+      .then((r) => (r.rows[0]?.is_active
+        ? next()
+        : res.status(401).json({ error: "Доступ до навчання закрито. Зверніться до рекрутера" })))
+      .catch(() => res.status(503).json({ error: "Не вдалося перевірити доступ — спробуйте ще раз" }));
+    return;
+  }
   next();
 }
 

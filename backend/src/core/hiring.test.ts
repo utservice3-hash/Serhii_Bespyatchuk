@@ -245,7 +245,9 @@ test("#506 НАЙМ: перевірка доступу — перший опер
   const handlers = [...src.matchAll(/hiringRouter\.(get|post|patch|delete|put)\("([^"]+)", async \(req, res\) => \{\s*try \{\s*([^\n;]+);/g)];
   assert.ok(handlers.length >= 14, `🔴 знайдено лише ${handlers.length} обробників — гейт нічого не перевіряє`);
   // Прохід 1a: відмова — теж запис тімліда (свої кандидати, свій етап).
-  const LEAD_WRITES = new Set(["/candidates/:id/status", "/candidates/:id/comment", "/candidates/:id/refuse"]);
+  // Прохід 2a: запрошення, продовження доступу, рішення й відповідь — теж для тімліда своєї команди.
+  const LEAD_WRITES = new Set(["/candidates/:id/status", "/candidates/:id/comment", "/candidates/:id/refuse",
+    "/candidates/:id/invite", "/candidates/:id/access/extend", "/candidates/:id/promote", "/candidates/:id/questions/:questionId/answer"]);
   for (const [, method, p, first] of handlers) {
     const isWrite = method !== "get";
     const expected = isWrite && !LEAD_WRITES.has(p) ? /^onlyEdit\(req\)$/ : /^(onlyEdit\(req\)|const access = anyAccess\(req\))$/;
