@@ -422,6 +422,21 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
         <button onClick={onClose} title="Закрити" style={{ marginLeft: "auto", border: "none", background: "transparent", cursor: "pointer", fontSize: 16, color: "var(--text-muted)" }}>✕</button>
       </div>
       <h2 className="chart-title" style={{ marginBottom: 0, lineHeight: 1.3 }}>{file.name}</h2>
+      {/* Дії — ЗВЕРХУ, під назвою: перегляд PDF перехоплює прокрутку, і знизу до кнопок не догорнути (власник 17.09.2026). */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {kind !== "none" && <button style={{ ...btn("primary"), fontSize: 14, padding: "9px 16px" }} onClick={() => setFull(true)} disabled={!preview}>⤢ На весь екран</button>}
+        {kind !== "none" && <button style={btn()} onClick={() => void open(false)}>У новій вкладці</button>}
+        <button style={btn()} onClick={() => void open(true)}>Завантажити</button>
+        {file.canEdit && (
+          <label style={{ ...btn(), cursor: busy ? "default" : "pointer", opacity: busy ? .6 : 1 }}>Нова версія<input type="file" hidden disabled={busy} onChange={(e) => { newVersion(e.target.files); e.currentTarget.value = ""; }} /></label>
+        )}
+        {file.canEdit && <button style={btn()} onClick={rename}>Перейменувати</button>}
+        {mgmt && !file.archivedAt && <button style={btn("danger")} onClick={archive}>В архів</button>}
+        {mgmt && file.archivedAt && <button style={btn()} onClick={restore}>Повернути з архіву</button>}
+        {mgmt && <button style={btn("danger")} onClick={remove} title="Зникне звідусіль; файл і підписи лишаються в системі">Видалити</button>}
+        {mgmt && !file.archivedAt && file.inactiveAt && <button style={btn("primary")} onClick={activate}>Активувати</button>}
+      </div>
+
       {err && <div style={{ fontSize: 12, color: "var(--danger)" }}>{err}</div>}
       {file.inactiveAt && !file.archivedAt && <p style={noteBox}>Документ повернувся з архіву після повернення людини в команду. Поки він неактивний: підписати чи редагувати не можна.{mgmt ? " Натисніть «Активувати», якщо він знову потрібен." : ""}</p>}
 
@@ -437,8 +452,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
         <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", background: "var(--surface-2)", overflow: "hidden", position: "relative" }}>
           {!preview ? <div style={{ padding: 16, fontSize: 12, color: "var(--text-muted)" }}>завантаження прев'ю…</div>
             : kind === "image" ? <img src={preview} alt={file.name} style={{ width: "100%", display: "block" }} />
-            : <iframe title={file.name} src={kind === "pdf" ? `${preview}#navpanes=0&view=FitH&zoom=page-width` : preview} style={{ width: "100%", height: "calc(100vh - 230px)", minHeight: 480, border: "none", background: "#fff", display: "block" }} />}
-          {preview && <button onClick={() => setFull(true)} title="Відкрити перегляд на весь екран" style={{ ...btn(), position: "absolute", right: 10, bottom: 10, fontSize: 12, padding: "4px 10px", boxShadow: "var(--shadow)" }}>⤢ На весь екран</button>}
+            : <iframe title={file.name} src={kind === "pdf" ? `${preview}#navpanes=0&view=FitH&zoom=page-width` : preview} style={{ width: "100%", height: "min(62vh, 720px)", minHeight: 360, border: "none", background: "#fff", display: "block" }} />}
         </div>
       )}
       {full && preview && createPortal(
@@ -537,20 +551,6 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
           Версії: {cardData.versions.map((v) => `v${v.version} · ${fmtDate(v.created_at)}${v.author ? ` · ${v.author}` : ""}`).join(" | ")}
         </div>
       )}
-
-      {/* Дії */}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {kind !== "none" && <button style={btn("primary")} onClick={() => void open(false)}>Відкрити</button>}
-        <button style={btn()} onClick={() => void open(true)}>Завантажити</button>
-        {file.canEdit && (
-          <label style={{ ...btn(), cursor: busy ? "default" : "pointer", opacity: busy ? .6 : 1 }}>Нова версія<input type="file" hidden disabled={busy} onChange={(e) => { newVersion(e.target.files); e.currentTarget.value = ""; }} /></label>
-        )}
-        {file.canEdit && <button style={btn()} onClick={rename}>Перейменувати</button>}
-        {mgmt && !file.archivedAt && <button style={btn("danger")} onClick={archive}>В архів</button>}
-        {mgmt && file.archivedAt && <button style={btn()} onClick={restore}>Повернути з архіву</button>}
-        {mgmt && <button style={btn("danger")} onClick={remove} title="Зникне звідусіль; файл і підписи лишаються в системі">Видалити</button>}
-        {mgmt && !file.archivedAt && file.inactiveAt && <button style={btn("primary")} onClick={activate}>Активувати</button>}
-      </div>
 
       {signOpen && <SignDialog key={`${file.id}:${file.version}`} file={file} onClose={() => setSignOpen(false)} onDone={async () => { setSignOpen(false); onToast("Підписано. Відбиток привʼязано до поточної версії."); await onChanged(); }} />}
     </div>
