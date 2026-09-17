@@ -854,6 +854,10 @@ export interface ReportPlanKpi { fact: number | null; target: number; taken?: nu
 export interface SrcCounts {
   created: number; adCount: number; leadgenCount: number; otherCount: number; noChannelCount: number;
 }
+/** Лічильники «першого дотику». `noRecord` — бот розмови не чув; у відсоток НЕ входить. */
+export interface FirstTouchCounts { analyzed: number; voiced: number; noRecord: number }
+/** `not_covered` — команду бот не оцінює взагалі: «не вимірюється», а не 0 з 0. */
+export interface FirstTouchCell extends FirstTouchCounts { state: "measured" | "not_covered" }
 export interface ReportPlanManager {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
   tag: "rpk" | "rnk" | "self";
@@ -863,6 +867,8 @@ export interface ReportPlanManager {
   factSuccessDeals: number; factPaidDeals: number;
   // 📞 Розмова (billsec>0) і недодзвін — ДВІ цифри; складати заборонено.
   talks: number; attempts: number;
+  /** 🎯 ТЗ-3 «ціну названо в перший дотик» — оцінки бота, звʼязані з тим, хто ДЗВОНИВ. */
+  firstTouch: FirstTouchCell;
   // ⏳ Очікування БЕЗ планової дати — в жодну суму не входить, тому й окремо.
   expectNoDate: number; expectNoDateDeals: number;
   // 🧱 Скільки з очікувань стоїть на «Виставленні рахунку» (затор).
@@ -930,6 +936,11 @@ export interface ReportPlan {
     dispatched: number; dispatchedRevenue: number; created: number; avgCheck: number | null;
     expectNoDate: number; jam: number; jamDeals: number; dobir: number; byPace: number; talks: number; attempts: number;
     /**
+     * Σ «першого дотику» по ростеру + стан покриття команди + оцінки людей ПОЗА ростером у межах
+     * скоупу (завершують, звільнені) — окремим числом, щоб не зникали. Відсоток — з сум ростеру.
+     */
+    firstTouch: FirstTouchCounts & { state: "measured" | "not_covered"; outside: FirstTouchCounts };
+    /**
      * 🔴 Скільки з факту прийшло від менеджерів БЕЗ плану (і від звільнених — у них
      * плану немає за побудовою). План команди = Σ планів її менеджерів, тож ці гроші
      * піднімають відсоток, не піднявши знаменник. Заміряно: у Яцика +8.3 п.п.
@@ -946,6 +957,8 @@ export interface ReportPlan {
    * якому стоїть половина гейтів. Порожній масив — нормальний стан.
    */
   dismissed: ReportPlanDismissed[];
+  /** Про ДЖЕРЕЛО «першого дотику»: не звʼязані з менеджером оцінки, остання оцінка бота, скільки команд він оцінює. */
+  firstTouchMeta: { unmapped: FirstTouchCounts; lastAnalyzedAt: string | null; coveredTeams: number };
 }
 export interface ReportPlanDismissed {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
@@ -2945,6 +2958,10 @@ export interface DocFile {
   canEdit: boolean; canSign: boolean;
   /** 📖 Ознайомлення (лише загальні регламенти): мій стан і прогрес аудиторії (done/total лише керівництву). */
   ack: { required: boolean; mine: "not_required" | "acked" | "pending"; done: number | null; total: number | null };
+  /** 🆕 Я ще не відкривав поточну версію, і їй не більше 30 днів. */
+  isNew: boolean;
+  /** 🔐 У документа є власні права ролей, відмінні від папки (приходить лише керівництву). */
+  ownRights: boolean;
 }
 export interface DocTree {
   folders: DocFolder[]; files: DocFile[];
@@ -2997,6 +3014,10 @@ export async function updateDocFile(id: number, patch: { name?: string; category
 export async function archiveDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/archive`); }
 export async function restoreDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/restore`); }
 export async function activateDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/activate`); }
+export async function deleteDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/delete`); }
+export interface DocTrashFile { id: number; name: string; category: string | null; section: string; mime: string | null; sizeBytes: number | null; version: number; deletedAt: string; deletedBy: string | null; addressee: string | null; folderId: number | null }
+export async function fetchDocTrash(): Promise<DocTrashFile[]> { const { data } = await api.get<{ files: DocTrashFile[] }>("/documents/trash"); return data.files; }
+export async function undeleteDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/undelete`); }
 export async function ackDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/ack`); }
 export async function fetchDocAcks(id: number): Promise<{ people: { userId: number; name: string; ackedAt: string | null; hasTelegram: boolean }[]; done: number; total: number }> { const { data } = await api.get(`/documents/file/${id}/acks`); return data; }
 export async function remindDocAcks(id: number): Promise<{ sent: number; noTelegram: number; missing: number }> { const { data } = await api.post(`/documents/file/${id}/ack-remind`); return data; }
@@ -3028,6 +3049,35 @@ export async function saveDocFolderAccess(folderId: number, body: {
   roles: { key: string; canView: boolean; canUpload: boolean; canEdit: boolean; canPublish: boolean }[];
   grants: { userId: number; canView: boolean; canUpload: boolean; expiresAt: string | null }[];
 }): Promise<void> { await api.put(`/documents/access/${folderId}`, body); }
+/** 📄 Перегляд Word/Excel: структура, яку фронт малює сам (не HTML). */
+export type DocxRun = { text: string; b?: boolean; i?: boolean; u?: boolean };
+export type DocxBlock = { t: "p" | "li"; runs: DocxRun[] } | { t: "h"; level: 1 | 2 | 3; runs: DocxRun[] } | { t: "table"; rows: string[][] };
+export type DocRender =
+  | { kind: "docx"; version: number; blocks: DocxBlock[]; truncated: boolean; hasImages: boolean }
+  | { kind: "xlsx"; version: number; sheets: { name: string; rows: string[][]; totalRows: number; totalCols: number; truncated: boolean }[] };
+export async function fetchDocRender(fileId: number): Promise<DocRender> {
+  const { data } = await api.get<DocRender>(`/documents/file/${fileId}/render`);
+  return data;
+}
+/** 🔎 Пошук по тексту видимих документів; «не шукались» і «обробляються» — окремими числами. */
+export interface DocTextSearch { hits: { id: number; snippet: string; count: number }[]; searched: number; notSearchable: number; pending: number }
+export async function searchDocText(q: string): Promise<DocTextSearch> {
+  const { data } = await api.get<DocTextSearch>("/documents/search", { params: { q } });
+  return data;
+}
+/** 🔐 Власні права документа: по ролі — права папки і власний рядок (null = «як у папці»). */
+export interface DocFileAccess {
+  applicable: boolean;
+  roles: { key: string; name: string; management: boolean; folder: { canView: boolean; canEdit: boolean }; own: { canView: boolean; canEdit: boolean } | null }[];
+  log: { action: string; details: Record<string, unknown> | null; at: string; actor: string | null }[];
+}
+export async function fetchDocFileAccess(fileId: number): Promise<DocFileAccess> {
+  const { data } = await api.get<DocFileAccess>(`/documents/file/${fileId}/access`);
+  return data;
+}
+export async function saveDocFileAccess(fileId: number, roles: { key: string; own: { canView: boolean; canEdit: boolean } | null }[]): Promise<void> {
+  await api.put(`/documents/file/${fileId}/access`, { roles });
+}
 /** Файл авторизованим стрімом як blob-URL; `inline` — для прев'ю в iframe/img. */
 export async function fetchSigEvidenceBlobUrl(fileId: number, sigId: number): Promise<string> {
   const { data } = await api.get(`/documents/file/${fileId}/signature/${sigId}/evidence`, { responseType: "blob" });
@@ -3968,3 +4018,78 @@ export async function markNewsSeen(): Promise<number> {
   const { data } = await api.post<{ ok: true; maxId: number }>("/news/seen");
   return data.maxId;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🧑‍💼 НАЙМ, прохід 1 (17.09.2026). Типи — дзеркало `backend/src/core/hiring.ts`.
+// Доступ вирішує СЕРВЕР (`access` у /meta); фронт лише ховає те, що сервер однаково відмовить.
+export type HiringStatus =
+  | "new" | "planned" | "done" | "noshow" | "noanswer" | "lead"
+  | "candidate" | "training" | "manager" | "declined" | "nofit" | "black";
+export type HiringAccessLevel = "edit" | "lead" | "none";
+
+export interface HiringMeta {
+  access: HiringAccessLevel;
+  teamId: number | null;
+  statuses: { key: HiringStatus; label: string }[];
+  transitions: Partial<Record<HiringStatus, HiringStatus[]>>;
+  sources: string[];
+  positions: string[];
+  responsibles: string[];
+  teams: { id: number; name: string }[];
+}
+
+export interface HiringScheduleRow {
+  id: number; candidate_id: number | null; responsible: string | null;
+  assigned_on: string; interview_date: string; interview_time: string | null;
+  attended: boolean | null; record_url: string | null; comment: string | null;
+  full_name: string | null; phone: string | null; telegram: string | null; source: string | null;
+  position: string | null; status: HiringStatus | null; team_id: number | null;
+}
+
+export interface HiringCandidateRow {
+  id: number; full_name: string; phone: string | null; telegram: string | null; source: string | null;
+  position: string | null; status: HiringStatus; team_id: number | null; team_name: string | null;
+  resume_url: string | null; comment: string | null; created_on: string;
+  last_interview?: string | null; repeats?: number;
+}
+
+export interface HiringCard {
+  candidate: HiringCandidateRow;
+  interviews: { id: number; interview_date: string; interview_time: string | null; responsible: string | null; attended: boolean | null; record_url: string | null; comment: string | null }[];
+  events: { id: number; kind: string; from_status: HiringStatus | null; to_status: HiringStatus | null; comment: string | null; at: string; actor: string | null }[];
+  lastFrom: HiringStatus | null;
+}
+
+export interface HiringDailyRow {
+  day: string; planned: number; booked: number; done: number; noshow: number;
+  toLead: number; toCandidate: number; toTraining: number; toManager: number;
+  resumes: number; coldSearch: number;
+}
+
+/** Текст помилки сервера — щоб людина бачила причину, а не «нічого не сталось». */
+export function hiringError(e: unknown): string {
+  const d = (e as { response?: { data?: { error?: string } } })?.response?.data;
+  return d?.error ?? (e instanceof Error ? e.message : "Не вдалося зберегти");
+}
+
+export const fetchHiringMeta = async () => (await api.get<HiringMeta>("/hiring/meta")).data;
+export const fetchHiringSchedule = async (from: string, to: string) =>
+  (await api.get<{ rows: HiringScheduleRow[] }>("/hiring/schedule", { params: { from, to } })).data.rows;
+export const createHiringInterview = async (p: { interviewDate: string; interviewTime?: string; responsible?: string }) =>
+  (await api.post<{ id: number }>("/hiring/interviews", p)).data.id;
+export const patchHiringInterview = async (id: number, patch: Record<string, unknown>) =>
+  (await api.patch<{ candidateId: number | null; repeat?: { id: number; full_name: string; status: HiringStatus } }>(`/hiring/interviews/${id}`, patch)).data;
+export const deleteHiringInterview = async (id: number) => { await api.delete(`/hiring/interviews/${id}`); };
+export const restoreHiringInterview = async (id: number) => { await api.post(`/hiring/interviews/${id}/restore`); };
+
+export const fetchHiringCandidates = async (params: { q?: string; status?: string; source?: string; position?: string; limit?: number; offset?: number }) =>
+  (await api.get<{ total: number; rows: HiringCandidateRow[] }>("/hiring/candidates", { params })).data;
+export const createHiringCandidate = async (p: Record<string, unknown>) => (await api.post<{ id: number }>("/hiring/candidates", p)).data.id;
+export const fetchHiringCard = async (id: number) => (await api.get<HiringCard>(`/hiring/candidates/${id}`)).data;
+export const patchHiringCandidate = async (id: number, patch: Record<string, unknown>) => { await api.patch(`/hiring/candidates/${id}`, patch); };
+export const setHiringStatus = async (id: number, p: { to: HiringStatus; comment: string; teamId?: number | null }) => { await api.post(`/hiring/candidates/${id}/status`, p); };
+export const addHiringComment = async (id: number, comment: string) => { await api.post(`/hiring/candidates/${id}/comment`, { comment }); };
+
+export const fetchHiringDaily = async (from: string, to: string) =>
+  (await api.get<{ rows: HiringDailyRow[]; totals: Omit<HiringDailyRow, "day"> & { attendancePct: number | null } }>("/hiring/daily", { params: { from, to } })).data;
+export const saveHiringDaily = async (day: string, p: { resumes?: number; coldSearch?: number }) => { await api.put(`/hiring/daily/${day}`, p); };

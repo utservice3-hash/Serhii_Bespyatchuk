@@ -46,6 +46,9 @@ export const FORBIDDEN_TABLES = [
   // задачі й віддавати розмову. Дзеркало цього — REVOKE у `schema.sql`; тут
   // рубіж застосунку, там рубіж БД.
   "task_comments", "task_files", "task_status_log", "task_views", "task_groups",
+  // 🧑‍💼 НАЙМ (17.09.2026): ПІБ, телефони й коментарі кандидатів — персональні дані людей,
+  // які з нами ще навіть не працюють. Дзеркало — REVOKE у кінці `schema.sql`. Тримає #505.
+  "hiring_candidates", "hiring_interviews", "hiring_events", "hiring_daily_manual",
 ];
 
 /**

@@ -16,7 +16,7 @@ export async function runDocLifecycle(): Promise<{ archived: number; returned: n
     `SELECT f.id AS file_id, f.section, f.archived_at, f.archived_reason, u.is_active, mws.state AS override
        FROM doc_files f JOIN users u ON u.id = f.addressee_user_id
        LEFT JOIN manager_work_state mws ON mws.manager_id = u.manager_id
-      WHERE f.section IN ('personal','offer')`);
+      WHERE f.section IN ('personal','offer') AND f.deleted_at IS NULL`);
   let archived = 0, returned = 0;
   for (const x of r.rows) {
     const state = stateOf({ crmActive: x.is_active, override: x.override });

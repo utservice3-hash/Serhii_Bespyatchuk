@@ -32,12 +32,14 @@ import { documentsRouter } from "./routes/documents.js";
 import { telegramRouter } from "./routes/telegram.js";
 import { sendOfferReminders } from "./jobs/offerReminders.js";
 import { runDocLifecycle } from "./jobs/docLifecycle.js";
+import { runDocText } from "./jobs/docText.js";
 import { signBotEnsureWebhook } from "./bot/signBot.js";
 import { oneOnOnesRouter } from "./routes/oneOnOnes.js";
 import { createOneOnOneReminders } from "./jobs/oneOnOneReminders.js";
 import { dutyRouter } from "./routes/duty.js";
 import { createDutyReminders } from "./jobs/dutyReminders.js";
 import { trainingRouter } from "./routes/training.js";
+import { hiringRouter } from "./routes/hiring.js";
 import { statisticsRouter } from "./routes/statistics.js";
 import { statsSeriesRouter } from "./routes/statisticsSeries.js";
 import { runDataReconciliation } from "./jobs/dataReconciliation.js";
@@ -144,6 +146,7 @@ app.use("/api/telegram", telegramRouter); // вебхук бота підпис�
 app.use("/api/one-on-ones", oneOnOnesRouter);
 app.use("/api/duty", dutyRouter);
 app.use("/api/training", trainingRouter);
+app.use("/api/hiring", hiringRouter); // Найм: графік, кандидати, щоденний звіт (17.09.2026)
 app.use("/api/statistics", statisticsRouter);
 app.use("/api/statistics", statsSeriesRouter); // /series, /series/manual — падають повз депстат-роут
 app.use("/api/bank", bankRouter); // Виписка — банк-API (окремо від CRM)
@@ -507,6 +510,11 @@ cron.schedule("5,35 * * * *", () => {
   void runJob("docLifecycle", () => runDocLifecycle());
 });
 
+// 🔎 Текст документів для пошуку: нові файли й нові версії, які не встигло обробити завантаження.
+cron.schedule("20,50 * * * *", () => {
+  void runJob("docText", () => runDocText());
+});
+
 // 🔏 Нагадування про непідписані офери — щодня 09:00 Києва (розділ 9.4 ТЗ документів).
 cron.schedule("0 9 * * *", () => {
   void runJob("sendOfferReminders", () => sendOfferReminders());
@@ -785,6 +793,7 @@ const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["catchUpAiChat", () => catchUpAiChat()],
   ["signBotEnsureWebhook", () => signBotEnsureWebhook()],
   ["docLifecycle", () => runDocLifecycle()],
+  ["docText", () => runDocText()],
   ["createOneOnOneReminders", () => createOneOnOneReminders()],
   ["createDutyReminders", () => createDutyReminders()],
   ["createReceivableDeadlineTasks", () => createReceivableDeadlineTasks()],

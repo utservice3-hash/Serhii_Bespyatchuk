@@ -74,6 +74,8 @@ import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL } from "../core/orphanClient
 import * as plans from "../core/plans.js";
 import * as forecast from "../core/forecast.js";
 import * as reportCuts from "../core/reportCuts.js";
+import { firstTouchReport } from "../core/firstTouch.js";
+import { firstTouchCell, glanceFirstTouch, firstTouchOutsideRoster } from "../core/firstTouchRules.js";
 import * as receivablesFacts from "../core/receivablesFacts.js";
 import * as receivablesCounterparty from "../core/receivablesCounterparty.js";
 import * as receivableNotePick from "../core/receivableNotePick.js";
@@ -8408,10 +8410,12 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // 📊 Розрізи макета 06.08.2026: дзвінки (розмови/спроби), затор на «Виставленні
   // рахунку», очікування БЕЗ планової дати. Усі — лічильні або знімок однієї стадії;
   // грошей періоду тут не рахує ніхто, це й далі робота `core/money.ts`.
-  const [callsRows, jamRows, noDateRows] = await Promise.all([
+  const [callsRows, jamRows, noDateRows, ft] = await Promise.all([
     reportCuts.callsByManager(from, to, { managerId, teamId }),
     reportCuts.invoicingJamByManager({ managerId, teamId }),
     reportCuts.expectedNoDateByManager(metrics.EXPECT_ZONE, { managerId, teamId }),
+    // 🎯 ТЗ-3 «перший дотик»: оцінки бота за період, звʼязані з тим, хто ДЗВОНИВ (рішення 17.09.2026).
+    firstTouchReport(from, to),
   ]);
   const callsM = new Map(callsRows.map((r) => [r.managerId, r]));
   const jamM = new Map(jamRows.map((r) => [r.managerId, r]));
@@ -8707,6 +8711,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       })(),
       // 📞 Розмови й спроби — ДВІ цифри, складати заборонено (рішення власника 04.08).
       talks: callsM.get(m.id)?.talks ?? 0, attempts: callsM.get(m.id)?.attempts ?? 0,
+      // 🎯 «Ціну названо в перший дотик»: стан + лічильники; відсоток рахує фронт із лічильників.
+      firstTouch: firstTouchCell(ft.byManager.get(m.id), m.team_id, ft.coveredTeamIds),
       // ⏳ Очікування БЕЗ планової дати — в жодну суму не входить, тому окремо.
       expectNoDate: Math.round(noDateM.get(m.id)?.sum ?? 0), expectNoDateDeals: noDateM.get(m.id)?.deals ?? 0,
       // 🧱 Затор на «Виставленні рахунку»: скільки з очікувань стоїть саме тут.
@@ -8847,6 +8853,10 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     dobir: managers.reduce((s2, m) => s2 + m.dobir, 0),
     byPace: managers.reduce((s2, m) => s2 + m.byPace, 0),
     talks: managers.reduce((s2, m) => s2 + m.talks, 0),
+    // Σ по ростеру, як дзвінки, + стан покриття + «поза ростером» у межах скоупу (завершують,
+    // звільнені). «Не прив'язано до менеджера» — окремо в `firstTouchMeta`.
+    firstTouch: glanceFirstTouch(managers.map((m) => m.firstTouch),
+      firstTouchOutsideRoster(ft.rows, new Set(managers.map((m) => m.managerId)), { managerId, teamId })),
     attempts: managers.reduce((s2, m) => s2 + m.attempts, 0),
     /**
      * 🟢 ТРИ СТАНИ, І ВОНИ ПОКРИВАЮТЬ УСІХ ЛЮДЕЙ ДО ОДНОГО (рішення власника 07.08.2026).
@@ -8882,6 +8892,9 @@ dashboardRouter.get("/report-plan", async (req, res) => {
     // Окремим масивом, а не серед `managers`: у них немає плану, %, світлофора й темпу,
     // тож змішувати їх у той самий список означало б рахувати статуси по людях, яких немає.
     dismissed,
+    // 🎯 Про ДЖЕРЕЛО «першого дотику», а не про скоуп: скільки оцінок не звʼязалось з менеджером,
+    // коли бот присилав останню, скільки команд він оцінює взагалі. Від ролі не залежить.
+    firstTouchMeta: { unmapped: ft.unmapped, lastAnalyzedAt: ft.lastAnalyzedAt, coveredTeams: ft.coveredTeamIds.size },
   });
 });
 

@@ -63,9 +63,29 @@ function grantActive(g: Grant, now: Date): boolean {
   return g.expiresAt == null || new Date(g.expiresAt).getTime() > now.getTime();
 }
 
+/**
+ * «ВЛАСНІ ПРАВА» ФАЙЛА (рішення ТЗ: права на окремий документ ширші або вужчі за папку).
+ * Явний рядок ролі на файлі ПЕРЕМАГАЄ права папки в обидва боки: може закрити документ у
+ * відкритій папці й відкрити документ у закритій. Керівництво не звужується ніколи.
+ */
+export interface FileRights { canView: boolean; canEdit: boolean; }
+
+/**
+ * Чи бачить РОЛЬ загальний документ без персональних винятків. Одне правило на три місця:
+ * перевірку доступу, аудиторію регламенту і блок «хто бачить» — інакше вони розійдуться.
+ */
+export function roleSeesGeneral(roleKey: string, folderId: number | null, file: FileRights | undefined, folder: FolderRights | undefined): boolean {
+  if (isManagement(roleKey)) return true;
+  if (file) return file.canView;
+  if (folderId == null) return true; // корінь загальних — усім
+  return folder ? folder.canView : DEFAULT_RIGHTS.canView;
+}
+
 export interface AccessContext {
   /** Права поточної ролі на папках: folderId → rights (лише явні рядки). */
   folderRights: ReadonlyMap<number, FolderRights>;
+  /** Власні права поточної ролі на окремих файлах: fileId → rights (лише явні рядки). */
+  fileRights?: ReadonlyMap<number, FileRights>;
   /** Персональні винятки поточного користувача. */
   grants: readonly Grant[];
   now?: Date;
@@ -89,9 +109,7 @@ export function canSeeDocument(viewer: DocViewer, doc: DocLike, ctx: AccessConte
   const grant = ctx.grants.find((g) => grantActive(g, now) && g.canView
     && ((g.fileId != null && g.fileId === doc.id) || (g.folderId != null && g.folderId === doc.folderId)));
   if (grant) return true;
-  if (doc.folderId == null) return true; // корінь загальних — усім
-  const rights = ctx.folderRights.get(doc.folderId);
-  return rights ? rights.canView : DEFAULT_RIGHTS.canView;
+  return roleSeesGeneral(viewer.roleKey, doc.folderId, ctx.fileRights?.get(doc.id), doc.folderId == null ? undefined : ctx.folderRights.get(doc.folderId));
 }
 
 /** Чи бачить viewer сам розділ «Офери» (папку) — тімлід не бачить її взагалі (рішення ⑥). */
@@ -112,8 +130,25 @@ export function canUploadTo(viewer: DocViewer, folderId: number | null, ctx: Acc
 export function canEditDocument(viewer: DocViewer, doc: DocLike, ctx: AccessContext): boolean {
   if (doc.archivedAt != null || doc.inactiveAt != null) return false;
   if (isManagement(viewer.roleKey)) return true;
-  if (doc.section !== "general" || doc.folderId == null) return false;
+  if (doc.section !== "general") return false;
+  const own = ctx.fileRights?.get(doc.id);
+  if (own) return own.canView && own.canEdit; // редагувати невидиме не можна
+  if (doc.folderId == null) return false;
   return ctx.folderRights.get(doc.folderId)?.canEdit ?? DEFAULT_RIGHTS.canEdit;
+}
+
+/**
+ * «НОВЕ» (ТЗ: позначка на свіжих документах). Припущення, озвучене власнику 17.09.2026:
+ * глядач ще не відкривав ПОТОЧНУ версію, і її завантажено не раніше ніж 30 днів тому.
+ * Свою ж версію людина вже бачила — для автора версії не «нове». Архів — ніколи.
+ */
+export const NEW_WINDOW_DAYS = 30;
+export interface NewnessInput { version: number; versionAt: string | null; versionBy: number | null; archivedAt: string | null; }
+export function isNewForViewer(d: NewnessInput, seenVersion: number | undefined, viewerId: number, now: Date = new Date(), windowDays = NEW_WINDOW_DAYS): boolean {
+  if (d.archivedAt != null || d.versionAt == null) return false;
+  if (d.versionBy != null && d.versionBy === viewerId) return false;
+  if ((seenVersion ?? 0) >= d.version) return false;
+  return now.getTime() - new Date(d.versionAt).getTime() <= windowDays * 86_400_000;
 }
 
 /** Керувати доступом (матриця, винятки) — лише керівництво, і це не знімається. */

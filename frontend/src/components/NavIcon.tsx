@@ -38,6 +38,8 @@ const P: Record<string, React.ReactNode> = {
   goals: <><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4" /><path d="M12 3v4M12 17v4M3 12h4M17 12h4" /></>,
   messenger: <><path d="M4 5h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H9l-5 4V6a1 1 0 0 1 1-1z" /></>,
   news: <><rect x="3" y="5" width="14" height="15" rx="1.5" /><path d="M17 9h3a1 1 0 0 1 1 1v8a2 2 0 0 1-4 0z" /><path d="M6 9h8M6 13h8M6 17h5" /></>,
+  // Найм: людина з плюсом — «додаємо людей у команду».
+  hiring: <><circle cx="10" cy="8" r="3.5" /><path d="M3 20a7 7 0 0 1 14 0" /><path d="M19 8v6M16 11h6" /></>,
   documents: <><path d="M7 3h7l4 4v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" /><path d="M14 3v4h4M9 13h6M9 17h6" /></>,
   training: <><path d="M4 5a2 2 0 0 1 2-2h5v18H6a2 2 0 0 0-2 2z" /><path d="M20 5a2 2 0 0 0-2-2h-5v18h5a2 2 0 0 1 2 2z" /></>,
   // Система

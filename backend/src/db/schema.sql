@@ -3280,3 +3280,142 @@ ALTER TABLE doc_signatures ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ;
 ALTER TABLE doc_signatures ADD COLUMN IF NOT EXISTS rejected_by INTEGER REFERENCES users(id);
 ALTER TABLE doc_signatures ADD COLUMN IF NOT EXISTS rejected_reason TEXT;
 UPDATE doc_signatures SET approved_at = signed_at WHERE method IN ('telegram_code','email_code','diia') AND approved_at IS NULL AND rejected_at IS NULL;
+
+-- 🗑 ВИДАЛЕННЯ (рішення власника 16.09.2026: «додай можливість видаляти»). Мʼяке: документ зникає з усіх
+-- екранів, включно з архівом; файл на диску, версії, підписи й журнал лишаються (розділ 12.4 ТЗ —
+-- фізично не видаляємо). Лише керівництво.
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS deleted_by INTEGER REFERENCES users(id);
+
+-- 🔐 ВЛАСНІ ПРАВА ФАЙЛА (ТЗ: права на окремий документ ширші або вужчі за папку). Явний рядок
+-- ролі на файлі перемагає права папки в обидва боки; відсутність рядка — «як у папці».
+-- Керівництво сюди не пишеться і не звужується (`core/docAccess.ts`, `roleSeesGeneral`).
+CREATE TABLE IF NOT EXISTS doc_file_access (
+  file_id INTEGER NOT NULL REFERENCES doc_files(id) ON DELETE CASCADE,
+  role_key TEXT NOT NULL,
+  can_view BOOLEAN NOT NULL DEFAULT true,
+  can_edit BOOLEAN NOT NULL DEFAULT false,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (file_id, role_key)
+);
+
+-- 🆕 «НОВЕ»: хто яку версію документа вже відкривав. Рядок пишеться при відкритті картки.
+-- Документ «нове» для людини, якщо поточної версії тут немає і їй не більше 30 днів.
+CREATE TABLE IF NOT EXISTS doc_views (
+  file_id INTEGER NOT NULL REFERENCES doc_files(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (file_id, user_id, version)
+);
+
+-- 🔎 ТЕКСТ ДОКУМЕНТА ДЛЯ ПОШУКУ (витягує джоба `docText` і завантаження). Належить ВЕРСІЇ
+-- `content_version`: після нової версії текст старий, і пошук вважає документ «ще обробляється».
+-- `content_status`: ok / empty (скан) / unsupported (фото) / failed (причина в content_reason).
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS content_text TEXT;
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS content_status TEXT;
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS content_reason TEXT;
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS content_version INTEGER;
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS content_at TIMESTAMPTZ;
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- 🧑‍💼 НАЙМ, ПРОХІД 1 (17.09.2026): графік співбесід, база кандидатів, щоденний звіт.
+-- Замість вкладок «Графік Іван», «Кандидати UA», «Щоденний звіт NEW» Google-таблиці
+-- «UTS Співробітники УКР». Макет затвердив Іван (рекрутер), рішення власника 17.09:
+-- Іван працює з роллю HR; історію кандидатів НЕ імпортуємо; резюме — посиланням.
+-- ═════════════════════════════════════════════════════════════════════════════
+
+-- Кандидат. Ключ дублів — нормалізований телефон (як у Хурмі, з якою працював Іван):
+-- повторний відгук того самого номера привʼязується до наявної картки, а не плодить нову.
+CREATE TABLE IF NOT EXISTS hiring_candidates (
+  id          SERIAL PRIMARY KEY,
+  full_name   TEXT NOT NULL,
+  phone       TEXT,
+  phone_norm  TEXT,
+  telegram    TEXT,
+  source      TEXT,
+  position    TEXT,
+  status      TEXT NOT NULL DEFAULT 'new',
+  team_id     INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+  resume_url  TEXT,
+  comment     TEXT,
+  created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE hiring_candidates DROP CONSTRAINT IF EXISTS hiring_candidates_status_check;
+ALTER TABLE hiring_candidates ADD CONSTRAINT hiring_candidates_status_check CHECK (status IN
+  ('new','planned','done','noshow','noanswer','lead','candidate','training','manager','declined','nofit','black'));
+-- Один номер — одна картка. Порожній номер не є ключем (кандидат без телефону допустимий).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hiring_candidates_phone
+  ON hiring_candidates(phone_norm) WHERE phone_norm IS NOT NULL AND phone_norm <> '';
+CREATE INDEX IF NOT EXISTS idx_hiring_candidates_status ON hiring_candidates(status);
+
+-- Рядок графіка — одна співбесіда. Кандидат може бути ще не обраний (порожній рядок, як у таблиці).
+-- `attended`: NULL — не відмічено, true — прийшов, false — не прийшов.
+-- `attended_at` — коли ПОСТАВИЛИ позначку: за нею рахується «проведено» у звіті (рішення 17.09:
+-- «явка — це зміна статусу, не обовʼязково в день співбесіди»).
+-- Видалення мʼяке: рядок повертається «Відновити» (правило: дія в інтерфейсі скасовна інтерфейсом).
+CREATE TABLE IF NOT EXISTS hiring_interviews (
+  id              SERIAL PRIMARY KEY,
+  candidate_id    INTEGER REFERENCES hiring_candidates(id) ON DELETE SET NULL,
+  responsible     TEXT,
+  assigned_on     DATE NOT NULL DEFAULT (now() AT TIME ZONE 'Europe/Kyiv')::date,
+  interview_date  DATE NOT NULL,
+  interview_time  TIME,
+  attended        BOOLEAN,
+  attended_at     TIMESTAMPTZ,
+  record_url      TEXT,
+  comment         TEXT,
+  created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at      TIMESTAMPTZ,
+  deleted_by      INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hiring_interviews_date ON hiring_interviews(interview_date) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_hiring_interviews_candidate ON hiring_interviews(candidate_id);
+
+-- Історія: зміна статусу (з обовʼязковим коментарем), позначка явки, коментар, повторний відгук.
+-- Звіт рахує переходи статусу за датою події, тож рядки тут не редагуються й не видаляються.
+CREATE TABLE IF NOT EXISTS hiring_events (
+  id            SERIAL PRIMARY KEY,
+  candidate_id  INTEGER NOT NULL REFERENCES hiring_candidates(id) ON DELETE CASCADE,
+  interview_id  INTEGER REFERENCES hiring_interviews(id) ON DELETE SET NULL,
+  kind          TEXT NOT NULL,
+  from_status   TEXT,
+  to_status     TEXT,
+  comment       TEXT,
+  actor_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE hiring_events DROP CONSTRAINT IF EXISTS hiring_events_kind_check;
+ALTER TABLE hiring_events ADD CONSTRAINT hiring_events_kind_check CHECK (kind IN
+  ('created','status','attended','comment','repeat','edit'));
+CREATE INDEX IF NOT EXISTS idx_hiring_events_candidate ON hiring_events(candidate_id, at);
+CREATE INDEX IF NOT EXISTS idx_hiring_events_status_at ON hiring_events(to_status, at) WHERE kind = 'status';
+
+-- Ручні числа щоденного звіту: яких немає ні в графіку, ні в базі.
+CREATE TABLE IF NOT EXISTS hiring_daily_manual (
+  day         DATE PRIMARY KEY,
+  resumes     INTEGER NOT NULL DEFAULT 0 CHECK (resumes >= 0),
+  cold_search INTEGER NOT NULL DEFAULT 0 CHECK (cold_search >= 0),
+  updated_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Екран «Найм». Без цього рядка вкладку не побачив би НІХТО, включно з адміном (видимість
+-- меню визначає `screen_access`). Склад: адмін-рівень (admin, ceo, opdir, kvp), HR (Іван) і
+-- тімлід (бачить кандидатів своєї команди від етапу «з тімлідом»). Кандидата й менеджера
+-- немає СВІДОМО (#443: у кандидата рівно два екрани). Звіряє #504 зі списком у матриці.
+-- ⚠️ Ідемпотентно й НЕ перетирає рішень адміна: чіпаємо лише ролі, де ключа ще немає.
+UPDATE roles SET screen_access = screen_access || '{"hiring":true}'::jsonb
+  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'hr', 'team_lead')
+    AND NOT (screen_access ? 'hiring');
+
+-- 🔒 ПЕРСОНАЛЬНІ ДАНІ КАНДИДАТІВ (ПІБ, телефон, Telegram, коментарі) — не для моделі.
+-- `GRANT SELECT ON ALL TABLES` у блоці привілеїв вище накриває кожну нову таблицю при
+-- наступній міграції, тож REVOKE мусить стояти ПІСЛЯ нього й після CREATE — тобто тут.
+-- Дзеркало — `FORBIDDEN_TABLES` у `ai/metricTools.ts`. Тримає #505.
+REVOKE ALL ON hiring_candidates, hiring_interviews, hiring_events, hiring_daily_manual FROM ai_readonly;
