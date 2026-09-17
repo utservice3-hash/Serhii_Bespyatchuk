@@ -60,7 +60,9 @@
 .hr-wd.sel { border: 2px solid var(--brand); } .hr-wd.tod .d { color: var(--brand); } .hr-wd.we { opacity: .6; }
 
 .hr-tw { overflow-x: auto; }
-.hr-sheet { border-collapse: separate; border-spacing: 0; min-width: 1260px; width: 100%; font-size: 13px; }
+/* table-layout: fixed — інакше поля дат забирають ширину, і «Джерело»/«Статус» стискаються до обрізків
+   (заміряно на локальному стенді 17.09). Ширше за екран — горизонтальна прокрутка, як у таблиці Івана. */
+.hr-sheet { border-collapse: separate; border-spacing: 0; table-layout: fixed; width: 1740px; font-size: 13px; }
 .hr-sheet th { font-size: 12px; color: var(--text-muted); font-weight: 500; text-align: left; line-height: 1.25; padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: bottom; }
 .hr-sheet td { padding: 3px 4px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .hr-c { border: 1px solid transparent; border-radius: var(--r-md); background: transparent; padding: 4px 6px; width: 100%; font: inherit; font-size: 13px; color: var(--text); box-sizing: border-box; }

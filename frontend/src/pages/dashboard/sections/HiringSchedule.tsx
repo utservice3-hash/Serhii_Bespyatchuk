@@ -141,10 +141,10 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
             <table className="hr-sheet">
               <thead>
                 <tr>
-                  <th style={{ width: 84 }}>Час</th><th style={{ width: 120 }}>Відповідальний</th><th style={{ width: 128 }}>Дата призначення</th>
-                  <th style={{ width: 128 }}>Дата співбесіди</th><th style={{ minWidth: 190 }}>Кандидат · телефон</th><th style={{ width: 130 }}>Telegram</th>
-                  <th style={{ width: 130 }}>Джерело</th><th style={{ width: 150 }}>Посада</th><th style={{ width: 118 }}>Прийшов</th>
-                  <th style={{ width: 170 }}>Статус</th><th style={{ minWidth: 170 }}>Коментар</th><th style={{ width: 150 }}>Запис</th><th style={{ width: 30 }} />
+                  <th style={{ width: 100 }}>Час</th><th style={{ width: 120 }}>Відповідальний</th><th style={{ width: 146 }}>Дата призначення</th>
+                  <th style={{ width: 146 }}>Дата співбесіди</th><th style={{ width: 210 }}>Кандидат · телефон</th><th style={{ width: 130 }}>Telegram</th>
+                  <th style={{ width: 150 }}>Джерело</th><th style={{ width: 200 }}>Посада</th><th style={{ width: 132 }}>Прийшов</th>
+                  <th style={{ width: 200 }}>Статус</th><th style={{ width: 200 }}>Коментар</th><th style={{ width: 170 }}>Запис</th><th style={{ width: 36 }} />
                 </tr>
               </thead>
               <tbody>
