@@ -10,6 +10,7 @@
 import {
   type HiringAccess, type HiringStatus, type DailyRow,
   canTransition, isHiringStatus, isIsoDate, isTime, normalizePhone, cleanUrl, NEEDS_TEAM, STATUS_LABEL,
+  refusalVerdict, messengerLinks, vacancyCloseStatus, VACANCY_STATUSES, REFUSAL_SIDES, type RefusalSide, type VacancyStatus,
 } from "./hiringRules.js";
 
 export interface Db {
@@ -22,9 +23,19 @@ export class HiringError extends Error {
 
 const KYIV_DAY = (col: string) => `(${col} AT TIME ZONE 'Europe/Kyiv')::date`;
 
-const CANDIDATE_COLS = `c.id, c.full_name, c.phone, c.telegram, c.source, c.position, c.status, c.team_id,
+/** Вакансії кандидата одним JSON-масивом — список і картка беруть той самий вираз. */
+const VACANCIES_JSON = `(SELECT COALESCE(json_agg(json_build_object('id', v.id, 'title', v.title, 'status', v.status) ORDER BY cv.created_at, v.id), '[]'::json)
+     FROM hiring_candidate_vacancies cv JOIN hiring_vacancies v ON v.id = cv.vacancy_id WHERE cv.candidate_id = c.id)`;
+
+const CANDIDATE_COLS = `c.id, c.full_name, c.phone, c.telegram, c.email, c.source, c.position, c.status, c.team_id,
   t.name AS team_name, c.resume_url, c.comment,
-  to_char(c.created_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS created_on`;
+  to_char(c.created_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS created_on,
+  c.refusal_side, c.refusal_reason_id,
+  (SELECT rr.label FROM hiring_refusal_reasons rr WHERE rr.id = c.refusal_reason_id) AS refusal_reason,
+  c.refusal_note, to_char(c.refused_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS refused_on,
+  to_char(c.reserved_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS reserved_on, c.reserve_note,
+  ${VACANCIES_JSON} AS vacancies,
+  (SELECT count(*)::int FROM hiring_files hf WHERE hf.candidate_id = c.id AND hf.deleted_at IS NULL) AS files_count`;
 
 export interface ScheduleRow {
   id: number; candidate_id: number | null; responsible: string | null;
@@ -32,6 +43,7 @@ export interface ScheduleRow {
   attended: boolean | null; record_url: string | null; comment: string | null;
   full_name: string | null; phone: string | null; telegram: string | null; source: string | null;
   position: string | null; status: HiringStatus | null; team_id: number | null;
+  vacancies: { id: number; title: string; status: VacancyStatus }[] | null; refusal_reason: string | null;
 }
 
 /** Графік за період (включно). Видалені рядки не показуються; `?deleted` — лише для «Відновити». */
@@ -42,7 +54,9 @@ export async function scheduleRows(db: Db, from: string, to: string): Promise<Sc
             to_char(i.interview_date, 'YYYY-MM-DD') AS interview_date,
             to_char(i.interview_time, 'HH24:MI') AS interview_time,
             i.attended, i.record_url, i.comment,
-            c.full_name, c.phone, c.telegram, c.source, c.position, c.status, c.team_id
+            c.full_name, c.phone, c.telegram, c.source, c.position, c.status, c.team_id,
+            CASE WHEN c.id IS NULL THEN NULL ELSE ${VACANCIES_JSON} END AS vacancies,
+            (SELECT rr.label FROM hiring_refusal_reasons rr WHERE rr.id = c.refusal_reason_id) AS refusal_reason
        FROM hiring_interviews i
        LEFT JOIN hiring_candidates c ON c.id = i.candidate_id
       WHERE i.deleted_at IS NULL AND i.interview_date BETWEEN $1::date AND $2::date
@@ -89,7 +103,7 @@ async function byPhone(db: Db, norm: string, exceptId?: number) {
 }
 
 const CAND_FIELDS: Record<string, string> = {
-  fullName: "full_name", phone: "phone", telegram: "telegram", source: "source", position: "position",
+  fullName: "full_name", phone: "phone", telegram: "telegram", email: "email", source: "source", position: "position",
   resumeUrl: "resume_url", comment: "comment",
 };
 
@@ -110,6 +124,9 @@ export async function updateCandidateFields(
       if (v === undefined) throw new HiringError(400, "Посилання на резюме має починатися з http:// або https://");
     } else if (k === "fullName") {
       v = typeof patch[k] === "string" ? (patch[k] as string).trim() : "";
+    } else if (k === "email") {
+      v = str(patch[k]);
+      if (v !== null && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v as string)) throw new HiringError(400, "Пошта у форматі name@gmail.com");
     } else v = str(patch[k]);
     params.push(v); sets.push(`${col} = $${params.length}`);
     if (k === "phone") {
@@ -148,7 +165,7 @@ export async function updateInterview(
   let candidateId = cur.candidate_id;
   const out: InterviewPatchResult = { candidateId };
 
-  const candPatch = Object.fromEntries(Object.entries(patch).filter(([k]) => k in CAND_FIELDS && k !== "comment" && k !== "resumeUrl"));
+  const candPatch = Object.fromEntries(Object.entries(patch).filter(([k]) => k in CAND_FIELDS && k !== "comment" && k !== "resumeUrl" && k !== "email"));
   if (Object.keys(candPatch).length) {
     if (candidateId) {
       await updateCandidateFields(db, actorId, candidateId, candPatch);
@@ -171,6 +188,11 @@ export async function updateInterview(
       await db.query(`UPDATE hiring_interviews SET candidate_id = $1 WHERE id = $2`, [candidateId, id]);
       out.candidateId = candidateId;
     }
+  }
+
+  if ("vacancyId" in patch && patch.vacancyId != null && patch.vacancyId !== "") {
+    if (!candidateId) throw new HiringError(400, "Спершу введіть ПІБ або телефон кандидата");
+    await linkVacancy(db, actorId, candidateId, patch.vacancyId);
   }
 
   const sets: string[] = []; const params: unknown[] = [];
@@ -205,9 +227,9 @@ export async function updateInterview(
         await logEvent(db, { candidateId, interviewId: id, kind: "attended",
           comment: a === true ? "прийшов на співбесіду" : a === false ? "не прийшов на співбесіду" : "позначку явки знято", actorId });
         const st = (await db.query<{ status: HiringStatus }>(`SELECT status FROM hiring_candidates WHERE id = $1 FOR UPDATE`, [candidateId])).rows[0]?.status;
-        if (a === true && st && ["new", "planned", "noshow", "noanswer"].includes(st))
+        if (a === true && st && ["new", "contacted", "planned", "noshow", "noanswer"].includes(st))
           await setStatus(db, actorId, candidateId, st, "done", "позначка «прийшов» у графіку", id);
-        if (a === false && st && ["new", "planned"].includes(st))
+        if (a === false && st && ["new", "contacted", "planned"].includes(st))
           await setStatus(db, actorId, candidateId, st, "noshow", "позначка «не прийшов» у графіку", id);
       }
     }
@@ -243,7 +265,10 @@ export const LEAD_VISIBLE_SQL = (teamParam: string) =>
   `(c.team_id = ${teamParam} AND EXISTS (SELECT 1 FROM hiring_events e
       WHERE e.candidate_id = c.id AND e.kind = 'status' AND e.to_status = 'lead'))`;
 
-export interface CandidateFilters { q?: string; status?: string; source?: string; position?: string; teamId?: number | null; limit?: number; offset?: number }
+export interface CandidateFilters {
+  q?: string; status?: string; source?: string; position?: string; teamId?: number | null; limit?: number; offset?: number;
+  vacancyId?: number | null; reserve?: "yes" | "no" | null; refusalSide?: string | null; noVacancy?: boolean;
+}
 
 export async function listCandidates(db: Db, f: CandidateFilters, access: HiringAccess, leadTeamId: number | null) {
   const where: string[] = []; const params: unknown[] = [];
@@ -252,7 +277,7 @@ export async function listCandidates(db: Db, f: CandidateFilters, access: Hiring
   if (f.q) {
     params.push(`%${f.q.toLowerCase()}%`);
     const digits = f.q.replace(/\D/g, "");
-    let cond = `(lower(c.full_name) LIKE $${params.length} OR lower(COALESCE(c.telegram,'')) LIKE $${params.length}`;
+    let cond = `(lower(c.full_name) LIKE $${params.length} OR lower(COALESCE(c.telegram,'')) LIKE $${params.length} OR lower(COALESCE(c.email,'')) LIKE $${params.length}`;
     if (digits.length >= 4) { params.push(`%${digits}%`); cond += ` OR c.phone_norm LIKE $${params.length}`; }
     where.push(cond + ")");
   }
@@ -260,6 +285,20 @@ export async function listCandidates(db: Db, f: CandidateFilters, access: Hiring
   if (f.source) { params.push(f.source); where.push(`c.source = $${params.length}`); }
   if (f.position) { params.push(f.position); where.push(`c.position = $${params.length}`); }
   if (f.teamId) { params.push(f.teamId); where.push(`c.team_id = $${params.length}`); }
+  // Лічильники шапки — над ВИДИМИМ набором без фільтрів користувача (межа тімліда та сама).
+  const visWhere = where.length ? where[0] : "true";
+  const visParams = access === "lead" ? [params[0]] : [];
+  const heads = (await db.query<{ no_vacancy: number; in_reserve: number }>(
+    `SELECT count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM hiring_candidate_vacancies cv WHERE cv.candidate_id = c.id))::int AS no_vacancy,
+            count(*) FILTER (WHERE c.reserved_at IS NOT NULL)::int AS in_reserve
+       FROM hiring_candidates c WHERE ${access === "lead" || access !== "edit" ? visWhere : "true"}`, visParams)).rows[0];
+  if (f.vacancyId) { params.push(f.vacancyId); where.push(`EXISTS (SELECT 1 FROM hiring_candidate_vacancies cv WHERE cv.candidate_id = c.id AND cv.vacancy_id = $${params.length})`); }
+  if (f.noVacancy) where.push(`NOT EXISTS (SELECT 1 FROM hiring_candidate_vacancies cv WHERE cv.candidate_id = c.id)`);
+  if (f.reserve === "yes") where.push(`c.reserved_at IS NOT NULL`);
+  if (f.reserve === "no") where.push(`c.reserved_at IS NULL`);
+  if (f.refusalSide && (REFUSAL_SIDES as readonly string[]).includes(f.refusalSide)) {
+    params.push(f.refusalSide); where.push(`c.status IN ('refused','black') AND c.refusal_side = $${params.length}`);
+  }
   const w = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const total = (await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM hiring_candidates c ${w}`, params)).rows[0].n;
   const limit = Math.min(Math.max(f.limit ?? 100, 1), 500), offset = Math.max(f.offset ?? 0, 0);
@@ -272,7 +311,7 @@ export async function listCandidates(db: Db, f: CandidateFilters, access: Hiring
        ${w}
       ORDER BY c.updated_at DESC, c.id DESC
       LIMIT ${limit} OFFSET ${offset}`, params)).rows;
-  return { total, rows };
+  return { total, rows, noVacancy: heads.no_vacancy, inReserve: heads.in_reserve };
 }
 
 export async function candidateCard(db: Db, id: number, access: HiringAccess, leadTeamId: number | null) {
@@ -296,7 +335,13 @@ export async function candidateCard(db: Db, id: number, access: HiringAccess, le
       WHERE e.candidate_id = $1 ORDER BY e.at DESC, e.id DESC`, [id])).rows;
   const lastFrom = (await db.query<{ from_status: HiringStatus | null }>(
     `SELECT from_status FROM hiring_events WHERE candidate_id = $1 AND kind = 'status' ORDER BY at DESC, id DESC LIMIT 1`, [id])).rows[0]?.from_status ?? null;
-  return { candidate: c, interviews, events, lastFrom };
+  const files = (await db.query(
+    `SELECT f.id, f.name, f.mime, f.size_bytes, to_char(f.created_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD HH24:MI') AS created,
+            COALESCE(u.full_name, m.name, u.email) AS author
+       FROM hiring_files f LEFT JOIN users u ON u.id = f.created_by LEFT JOIN managers m ON m.id = u.manager_id
+      WHERE f.candidate_id = $1 AND f.deleted_at IS NULL ORDER BY f.created_at DESC, f.id DESC`, [id])).rows;
+  const cc = c as { phone: string | null; telegram: string | null };
+  return { candidate: c, interviews, events, lastFrom, files, messengers: messengerLinks(cc.phone, cc.telegram) };
 }
 
 export async function createCandidate(db: Db, actorId: number | null, p: Record<string, unknown>): Promise<number> {
@@ -309,12 +354,18 @@ export async function createCandidate(db: Db, actorId: number | null, p: Record<
   }
   const resume = cleanUrl(p.resumeUrl);
   if (resume === undefined) throw new HiringError(400, "Посилання на резюме має починатися з http:// або https://");
+  const vacancyIds = Array.isArray(p.vacancyIds) ? p.vacancyIds : p.vacancyId != null && p.vacancyId !== "" ? [p.vacancyId] : [];
+  if (!vacancyIds.length) throw new HiringError(400, "Оберіть вакансію — без неї кандидат не потрапить у лічильник вакансії");
+  const status = p.status === "contacted" ? "contacted" : "new";
+  const email = str(p.email);
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HiringError(400, "Пошта у форматі name@gmail.com");
   const r = await db.query<{ id: number }>(
-    `INSERT INTO hiring_candidates (full_name, phone, phone_norm, telegram, source, position, resume_url, comment, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-    [name, str(p.phone), norm, str(p.telegram), str(p.source), str(p.position), resume, str(p.comment), actorId],
+    `INSERT INTO hiring_candidates (full_name, phone, phone_norm, telegram, email, source, position, resume_url, comment, status, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+    [name, str(p.phone), norm, str(p.telegram), email, str(p.source), str(p.position), resume, str(p.comment), status, actorId],
   );
-  await logEvent(db, { candidateId: r.rows[0].id, kind: "created", to: "new", comment: "додано в базу", actorId });
+  await logEvent(db, { candidateId: r.rows[0].id, kind: "created", to: status, comment: "додано в базу", actorId });
+  for (const v of vacancyIds) await linkVacancy(db, actorId, r.rows[0].id, v);
   return r.rows[0].id;
 }
 
@@ -347,7 +398,12 @@ export async function changeStatus(
     teamId = t;
   }
   if (NEEDS_TEAM.includes(p.to) && !teamId) throw new HiringError(400, "Оберіть команду, до якої йде кандидат");
-  await db.query(`UPDATE hiring_candidates SET status = $1, team_id = $2, updated_at = now() WHERE id = $3`, [p.to, teamId, id]);
+  // Повернення з відмови знімає поточну відмову з картки; причина лишається в історії.
+  const leavingRefusal = (c.status === "refused" || c.status === "black") && p.to !== "refused" && p.to !== "black";
+  await db.query(
+    `UPDATE hiring_candidates SET status = $1, team_id = $2, updated_at = now()
+       ${leavingRefusal ? ", refusal_side = NULL, refusal_reason_id = NULL, refusal_note = NULL, refused_at = NULL" : ""}
+     WHERE id = $3`, [p.to, teamId, id]);
   await logEvent(db, { candidateId: id, kind: "status", from: c.status, to: p.to, comment, actorId });
 }
 
@@ -418,5 +474,201 @@ export async function hiringMeta(db: Db) {
     positions: merge(["Менеджер з продажу (РНК)", "Менеджер з продажу (РПК)", "Бухгалтер", "Менеджер по тендерах", "Юрист", "Брокер", "Менеджер з організації вантажоперевезень"], await distinct("position", "hiring_candidates")),
     responsibles: await distinct("responsible", "hiring_interviews"),
     teams,
+    vacancies: (await db.query(`SELECT id, title, status FROM hiring_vacancies ORDER BY status IN ('closed','cancelled'), title`)).rows,
+    refusalReasons: (await db.query(`SELECT id, side, label FROM hiring_refusal_reasons WHERE is_active ORDER BY side, sort, label`)).rows,
   };
+}
+
+/* ═════════ ПРОХІД 1a: вакансії, відмова з причиною, резерв, файли ═════════ */
+
+/** Видимість картки для запису: та сама межа, що й для читання (тімлід — свої після етапу «з тімлідом»). */
+async function lockCandidate(db: Db, id: number, access: HiringAccess, leadTeamId: number | null) {
+  const params: unknown[] = [id];
+  let vis = "";
+  if (access === "lead") { params.push(leadTeamId ?? -1); vis = ` AND ${LEAD_VISIBLE_SQL("$2")}`; }
+  else if (access !== "edit") vis = " AND false";
+  const c = (await db.query<{ id: number; status: HiringStatus; team_id: number | null; reserved_at: string | null }>(
+    `SELECT c.id, c.status, c.team_id, c.reserved_at FROM hiring_candidates c WHERE c.id = $1${vis} FOR UPDATE`, params)).rows[0];
+  if (!c) throw new HiringError(404, "Кандидата не знайдено");
+  return c;
+}
+
+const posInt = (v: unknown, what: string) => {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n <= 0) throw new HiringError(400, `Некоректний ${what}`);
+  return n;
+};
+
+/** Список вакансій з кількістю РІЗНИХ кандидатів у повʼязках (#523). */
+export async function listVacancies(db: Db, scope: "active" | "closed" | "all") {
+  const w = scope === "active" ? "WHERE v.status NOT IN ('closed','cancelled')" : scope === "closed" ? "WHERE v.status IN ('closed','cancelled')" : "";
+  return (await db.query(
+    `SELECT v.id, v.title, v.position, v.opened_by, v.responsible, v.need, v.status, v.close_result, v.comment,
+            to_char(v.opened_on, 'YYYY-MM-DD') AS opened_on, to_char(v.closed_on, 'YYYY-MM-DD') AS closed_on,
+            (SELECT count(DISTINCT cv.candidate_id)::int FROM hiring_candidate_vacancies cv WHERE cv.vacancy_id = v.id) AS candidates,
+            ((COALESCE(v.closed_on, (now() AT TIME ZONE 'Europe/Kyiv')::date) - v.opened_on))::int AS days_open
+       FROM hiring_vacancies v ${w}
+      ORDER BY v.status IN ('closed','cancelled'), v.opened_on, v.id`)).rows;
+}
+
+export async function createVacancy(db: Db, actorId: number | null, p: Record<string, unknown>): Promise<number> {
+  const title = str(p.title);
+  if (!title) throw new HiringError(400, "Потрібна назва вакансії");
+  const need = p.need == null || p.need === "" ? 1 : Number(p.need);
+  if (!Number.isInteger(need) || need < 0 || need > 1000) throw new HiringError(400, "Скільки людей — ціле число від 0");
+  const status = p.status == null || p.status === "" ? "open" : p.status;
+  if (!["open", "in_work", "paused"].includes(status as string)) throw new HiringError(400, "Нова вакансія — відкрита, в роботі або на паузі");
+  const r = await db.query<{ id: number }>(
+    `INSERT INTO hiring_vacancies (title, position, opened_by, responsible, need, status, comment, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+    [title, str(p.position), str(p.openedBy), str(p.responsible), need, status, str(p.comment), actorId]);
+  return r.rows[0].id;
+}
+
+/**
+ * Зміна вакансії. Закриття (`closed` / `cancelled`) — лише з результатом, і статус визначає
+ * результат, а не клієнт (#523). Повернення в роботу знімає результат і дату закриття.
+ */
+export async function updateVacancy(db: Db, id: number, p: Record<string, unknown>): Promise<void> {
+  const cur = (await db.query<{ status: VacancyStatus }>(`SELECT status FROM hiring_vacancies WHERE id = $1 FOR UPDATE`, [id])).rows[0];
+  if (!cur) throw new HiringError(404, "Вакансію не знайдено");
+  const sets: string[] = []; const params: unknown[] = [];
+  const put = (col: string, v: unknown) => { params.push(v); sets.push(`${col} = $${params.length}`); };
+  if ("title" in p) { const t = str(p.title); if (!t) throw new HiringError(400, "Потрібна назва вакансії"); put("title", t); }
+  if ("responsible" in p) put("responsible", str(p.responsible));
+  if ("comment" in p) put("comment", str(p.comment));
+  if ("need" in p) {
+    const n = Number(p.need);
+    if (!Number.isInteger(n) || n < 0 || n > 1000) throw new HiringError(400, "Скільки людей — ціле число від 0");
+    put("need", n);
+  }
+  if ("closeResult" in p) {
+    const st = vacancyCloseStatus(p.closeResult);
+    if (!st) throw new HiringError(400, "Оберіть результат закриття");
+    const day = p.closedOn == null || p.closedOn === "" ? null : p.closedOn;
+    if (day != null && !isIsoDate(day)) throw new HiringError(400, "Некоректна дата закриття");
+    put("status", st); put("close_result", p.closeResult);
+    params.push(day); sets.push(`closed_on = COALESCE($${params.length}::date, (now() AT TIME ZONE 'Europe/Kyiv')::date)`);
+  } else if ("status" in p) {
+    if (!(VACANCY_STATUSES as readonly string[]).includes(p.status as string)) throw new HiringError(400, "Невідомий статус вакансії");
+    if (p.status === "closed" || p.status === "cancelled") throw new HiringError(400, "Закриття — з результатом, через «Закрити»");
+    put("status", p.status);
+    if (cur.status === "closed" || cur.status === "cancelled") sets.push("close_result = NULL", "closed_on = NULL");
+  }
+  if (!sets.length) return;
+  params.push(id);
+  await db.query(`UPDATE hiring_vacancies SET ${sets.join(", ")}, updated_at = now() WHERE id = $${params.length}`, params);
+}
+
+async function linkVacancy(db: Db, actorId: number | null, candidateId: number, vacancyId: unknown) {
+  const vid = posInt(vacancyId, "id вакансії");
+  const v = (await db.query<{ title: string; status: VacancyStatus }>(`SELECT title, status FROM hiring_vacancies WHERE id = $1`, [vid])).rows[0];
+  if (!v) throw new HiringError(404, "Вакансію не знайдено");
+  const r = await db.query(
+    `INSERT INTO hiring_candidate_vacancies (candidate_id, vacancy_id, created_by) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+    [candidateId, vid, actorId]);
+  if (r.rowCount) await logEvent(db, { candidateId, kind: "vacancy", comment: `додано вакансію «${v.title}»`, actorId });
+}
+
+/** Повний набір вакансій кандидата: додає відсутні, прибирає зайві, кожну зміну пише в історію. */
+export async function setCandidateVacancies(db: Db, actorId: number | null, id: number, vacancyIds: unknown): Promise<void> {
+  if (!Array.isArray(vacancyIds)) throw new HiringError(400, "Очікується список вакансій");
+  await lockCandidate(db, id, "edit", null);
+  const want = [...new Set(vacancyIds.map((v) => posInt(v, "id вакансії")))];
+  const have = (await db.query<{ vacancy_id: number; title: string }>(
+    `SELECT cv.vacancy_id, v.title FROM hiring_candidate_vacancies cv JOIN hiring_vacancies v ON v.id = cv.vacancy_id WHERE cv.candidate_id = $1`, [id])).rows;
+  for (const h of have) if (!want.includes(h.vacancy_id)) {
+    await db.query(`DELETE FROM hiring_candidate_vacancies WHERE candidate_id = $1 AND vacancy_id = $2`, [id, h.vacancy_id]);
+    await logEvent(db, { candidateId: id, kind: "vacancy", comment: `прибрано вакансію «${h.title}»`, actorId });
+  }
+  for (const v of want) if (!have.some((h) => h.vacancy_id === v)) await linkVacancy(db, actorId, id, v);
+}
+
+export async function addRefusalReason(db: Db, actorId: number | null, p: Record<string, unknown>): Promise<number> {
+  if (!(REFUSAL_SIDES as readonly string[]).includes(p.side as string)) throw new HiringError(400, "Сторона відмови — кандидат або компанія");
+  const label = str(p.label);
+  if (!label) throw new HiringError(400, "Потрібна назва причини");
+  const r = await db.query<{ id: number }>(
+    `INSERT INTO hiring_refusal_reasons (side, label, created_by) VALUES ($1,$2,$3) ON CONFLICT (side, lower(label)) DO NOTHING RETURNING id`,
+    [p.side, label, actorId]);
+  if (!r.rows[0]) throw new HiringError(409, "Така причина вже є");
+  return r.rows[0].id;
+}
+
+/**
+ * Відмова як дія (#520). Причина обовʼязкова й задає сторону; «чорний список» — лише відмова компанії;
+ * «Додати в резерв» ставиться тією самою транзакцією.
+ */
+export async function refuseCandidate(
+  db: Db, actorId: number | null, id: number,
+  p: { reasonId?: unknown; note?: unknown; reserve?: unknown; blacklist?: unknown },
+  access: HiringAccess, leadTeamId: number | null,
+): Promise<void> {
+  const c = await lockCandidate(db, id, access, leadTeamId);
+  let reason: { id: number; side: RefusalSide; label: string } | undefined;
+  if (p.reasonId != null && p.reasonId !== "") {
+    reason = (await db.query<{ id: number; side: RefusalSide; label: string }>(
+      `SELECT id, side, label FROM hiring_refusal_reasons WHERE id = $1 AND is_active`, [posInt(p.reasonId, "id причини")])).rows[0];
+    if (!reason) throw new HiringError(400, "Такої причини немає в довіднику");
+  }
+  const blacklist = p.blacklist === true;
+  const v = refusalVerdict({ from: c.status, access, reasonSide: reason?.side ?? null, blacklist });
+  if (!v.ok) throw new HiringError(reason ? 403 : 400, v.reason);
+  const note = str(p.note);
+  const reserve = p.reserve === true;
+  if (reserve && access !== "edit") throw new HiringError(403, "Резерв веде рекрутер");
+  await db.query(
+    `UPDATE hiring_candidates SET status = $1, refusal_side = $2, refusal_reason_id = $3, refusal_note = $4, refused_at = now(),
+            ${reserve ? "reserved_at = COALESCE(reserved_at, now()), reserve_note = COALESCE($5, reserve_note)," : ""} updated_at = now()
+      WHERE id = $${reserve ? 6 : 5}`,
+    reserve ? [v.status, reason!.side, reason!.id, note, note, id] : [v.status, reason!.side, reason!.id, note, id]);
+  await logEvent(db, { candidateId: id, kind: "status", from: c.status, to: v.status,
+    comment: `${reason!.side === "company" ? "відмова компанії" : "відмова кандидата"} · ${reason!.label}${note ? ` · ${note}` : ""}${blacklist ? " · чорний список" : ""}`, actorId });
+  if (reserve && !c.reserved_at) await logEvent(db, { candidateId: id, kind: "reserve", comment: "додано в резерв", actorId });
+}
+
+/** Резерв: увімкнути з нотаткою або прибрати. Пара повертає рядок до байта, крім `updated_at` (#524). */
+export async function setReserve(db: Db, actorId: number | null, id: number, p: { on?: unknown; note?: unknown }): Promise<void> {
+  const c = await lockCandidate(db, id, "edit", null);
+  if (p.on === true) {
+    if (c.reserved_at) throw new HiringError(409, "Кандидат уже в резерві");
+    await db.query(`UPDATE hiring_candidates SET reserved_at = now(), reserve_note = $1 WHERE id = $2`, [str(p.note), id]);
+    await logEvent(db, { candidateId: id, kind: "reserve", comment: `додано в резерв${str(p.note) ? ` · ${str(p.note)}` : ""}`, actorId });
+  } else if (p.on === false) {
+    if (!c.reserved_at) throw new HiringError(409, "Кандидата немає в резерві");
+    await db.query(`UPDATE hiring_candidates SET reserved_at = NULL, reserve_note = NULL WHERE id = $1`, [id]);
+    await logEvent(db, { candidateId: id, kind: "reserve", comment: "прибрано з резерву", actorId });
+  } else throw new HiringError(400, "Очікується on: true або false");
+}
+
+/** Метадані файлу (байти пише роут у теку під бекапом). Ліміти перевіряє роут до запису на диск. */
+export async function insertFile(db: Db, actorId: number | null, candidateId: number, f: { name: string; storedName: string; mime: string; size: number }) {
+  await lockCandidate(db, candidateId, "edit", null);
+  const n = (await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM hiring_files WHERE candidate_id = $1 AND deleted_at IS NULL`, [candidateId])).rows[0].n;
+  if (n >= 20) throw new HiringError(409, "У картці вже 20 файлів — видаліть зайві");
+  const r = await db.query<{ id: number }>(
+    `INSERT INTO hiring_files (candidate_id, name, stored_name, mime, size_bytes, created_by) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+    [candidateId, f.name, f.storedName, f.mime, f.size, actorId]);
+  await logEvent(db, { candidateId, kind: "file", comment: `додано файл «${f.name}»`, actorId });
+  return r.rows[0].id;
+}
+
+/** Файл для видачі: лише невидалений і лише з видимої картки. */
+export async function fileForDownload(db: Db, candidateId: number, fileId: number, access: HiringAccess, leadTeamId: number | null) {
+  await candidateCard(db, candidateId, access, leadTeamId);
+  const f = (await db.query<{ name: string; stored_name: string; mime: string }>(
+    `SELECT name, stored_name, mime FROM hiring_files WHERE id = $1 AND candidate_id = $2 AND deleted_at IS NULL`, [fileId, candidateId])).rows[0];
+  if (!f) throw new HiringError(404, "Файл не знайдено");
+  return f;
+}
+
+export async function setFileDeleted(db: Db, actorId: number | null, candidateId: number, fileId: number, deleted: boolean) {
+  await lockCandidate(db, candidateId, "edit", null);
+  const r = await db.query<{ name: string }>(
+    deleted
+      ? `UPDATE hiring_files SET deleted_at = now(), deleted_by = $3 WHERE id = $1 AND candidate_id = $2 AND deleted_at IS NULL RETURNING name`
+      : `UPDATE hiring_files SET deleted_at = NULL, deleted_by = NULL WHERE id = $1 AND candidate_id = $2 AND deleted_at IS NOT NULL RETURNING name`,
+    deleted ? [fileId, candidateId, actorId] : [fileId, candidateId]);
+  if (!r.rows[0]) throw new HiringError(404, deleted ? "Файл не знайдено або вже видалено" : "Видаленого файлу не знайдено");
+  await logEvent(db, { candidateId, kind: "file", comment: `${deleted ? "видалено" : "відновлено"} файл «${r.rows[0].name}»`, actorId });
 }

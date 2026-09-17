@@ -49,6 +49,8 @@ export const FORBIDDEN_TABLES = [
   // 🧑‍💼 НАЙМ (17.09.2026): ПІБ, телефони й коментарі кандидатів — персональні дані людей,
   // які з нами ще навіть не працюють. Дзеркало — REVOKE у кінці `schema.sql`. Тримає #505.
   "hiring_candidates", "hiring_interviews", "hiring_events", "hiring_daily_manual",
+  // 🧑‍💼 Прохід 1a: скриншоти переписки з кандидатами. Дзеркало — REVOKE у схемі. Тримає #526.
+  "hiring_files",
 ];
 
 /**

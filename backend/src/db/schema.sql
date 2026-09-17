@@ -3345,8 +3345,11 @@ CREATE TABLE IF NOT EXISTS hiring_candidates (
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE hiring_candidates DROP CONSTRAINT IF EXISTS hiring_candidates_status_check;
+-- ⚠️ ОБʼЄДНАНИЙ список (старі + прохід 1a): цей рядок виконується на КОЖНІЙ міграції ДО переносу
+-- статусів нижче, тож мусить пропускати і ще не перенесені `declined/nofit`, і вже перенесені
+-- `refused`. Строгий список ставить блок «ПРОХІД 1a» після переносу даних.
 ALTER TABLE hiring_candidates ADD CONSTRAINT hiring_candidates_status_check CHECK (status IN
-  ('new','planned','done','noshow','noanswer','lead','candidate','training','manager','declined','nofit','black'));
+  ('new','contacted','planned','done','noshow','noanswer','lead','candidate','training','manager','refused','declined','nofit','black'));
 -- Один номер — одна картка. Порожній номер не є ключем (кандидат без телефону допустимий).
 CREATE UNIQUE INDEX IF NOT EXISTS uq_hiring_candidates_phone
   ON hiring_candidates(phone_norm) WHERE phone_norm IS NOT NULL AND phone_norm <> '';
@@ -3392,7 +3395,7 @@ CREATE TABLE IF NOT EXISTS hiring_events (
 );
 ALTER TABLE hiring_events DROP CONSTRAINT IF EXISTS hiring_events_kind_check;
 ALTER TABLE hiring_events ADD CONSTRAINT hiring_events_kind_check CHECK (kind IN
-  ('created','status','attended','comment','repeat','edit'));
+  ('created','status','attended','comment','repeat','edit','refusal','reserve','vacancy','file'));
 CREATE INDEX IF NOT EXISTS idx_hiring_events_candidate ON hiring_events(candidate_id, at);
 CREATE INDEX IF NOT EXISTS idx_hiring_events_status_at ON hiring_events(to_status, at) WHERE kind = 'status';
 
@@ -3419,3 +3422,134 @@ UPDATE roles SET screen_access = screen_access || '{"hiring":true}'::jsonb
 -- наступній міграції, тож REVOKE мусить стояти ПІСЛЯ нього й після CREATE — тобто тут.
 -- Дзеркало — `FORBIDDEN_TABLES` у `ai/metricTools.ts`. Тримає #505.
 REVOKE ALL ON hiring_candidates, hiring_interviews, hiring_events, hiring_daily_manual FROM ai_readonly;
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- 🧑‍💼 НАЙМ, ПРОХІД 1a (17.09.2026): вакансії, відмова з причиною, резерв, пошта, файли-докази.
+-- За записом Хурми Івана (15.09) і макетом, який затвердив Роман 17.09.
+-- ═════════════════════════════════════════════════════════════════════════════
+
+-- Одноразові кроки міграції позначаються тут, щоб повторний прогін схеми їх не повторював.
+CREATE TABLE IF NOT EXISTS hiring_migrations (
+  key     TEXT PRIMARY KEY,
+  done_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS hiring_vacancies (
+  id            SERIAL PRIMARY KEY,
+  title         TEXT NOT NULL,
+  position      TEXT,
+  opened_by     TEXT,
+  responsible   TEXT,
+  need          INTEGER NOT NULL DEFAULT 1 CHECK (need >= 0),
+  status        TEXT NOT NULL DEFAULT 'open',
+  opened_on     DATE NOT NULL DEFAULT (now() AT TIME ZONE 'Europe/Kyiv')::date,
+  closed_on     DATE,
+  close_result  TEXT,
+  comment       TEXT,
+  created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE hiring_vacancies DROP CONSTRAINT IF EXISTS hiring_vacancies_status_check;
+ALTER TABLE hiring_vacancies ADD CONSTRAINT hiring_vacancies_status_check CHECK
+  (status IN ('open','in_work','paused','closed','cancelled'));
+-- Закрита чи скасована вакансія без результату — неправда в звіті «закриті по місяцях».
+ALTER TABLE hiring_vacancies DROP CONSTRAINT IF EXISTS hiring_vacancies_close_check;
+ALTER TABLE hiring_vacancies ADD CONSTRAINT hiring_vacancies_close_check CHECK
+  (status NOT IN ('closed','cancelled') OR (close_result IS NOT NULL AND closed_on IS NOT NULL));
+
+-- Кандидат може бути на кількох вакансіях; картка лишається одна (ключ дублів — телефон).
+CREATE TABLE IF NOT EXISTS hiring_candidate_vacancies (
+  candidate_id INTEGER NOT NULL REFERENCES hiring_candidates(id) ON DELETE CASCADE,
+  vacancy_id   INTEGER NOT NULL REFERENCES hiring_vacancies(id) ON DELETE CASCADE,
+  created_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (candidate_id, vacancy_id)
+);
+CREATE INDEX IF NOT EXISTS idx_hiring_cand_vac_vacancy ON hiring_candidate_vacancies(vacancy_id);
+
+-- Довідник причин відмови у двох групах, як у Хурмі. Рекрутер може додати свою.
+CREATE TABLE IF NOT EXISTS hiring_refusal_reasons (
+  id          SERIAL PRIMARY KEY,
+  side        TEXT NOT NULL CHECK (side IN ('candidate','company')),
+  label       TEXT NOT NULL,
+  is_active   BOOLEAN NOT NULL DEFAULT true,
+  sort        INTEGER NOT NULL DEFAULT 100,
+  created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hiring_refusal_reasons ON hiring_refusal_reasons(side, lower(label));
+INSERT INTO hiring_refusal_reasons (side, label, sort) VALUES
+  ('candidate','Відхилив офер',10), ('candidate','Графік',20), ('candidate','Ставка',30), ('candidate','Інше',90),
+  ('company','За нашою ініціативою',10), ('company','Акцент',20), ('company','Невідповідність портрету',30),
+  ('company','Нема техніки',40), ('company','Немає відповіді',50), ('company','Тестове',60)
+ON CONFLICT (side, lower(label)) DO NOTHING;
+
+ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS email             TEXT;
+ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS refusal_side      TEXT;
+ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS refusal_reason_id INTEGER REFERENCES hiring_refusal_reasons(id);
+ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS refusal_note      TEXT;
+ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS refused_at        TIMESTAMPTZ;
+ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS reserved_at       TIMESTAMPTZ;
+ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS reserve_note      TEXT;
+ALTER TABLE hiring_candidates DROP CONSTRAINT IF EXISTS hiring_candidates_refusal_side_check;
+ALTER TABLE hiring_candidates ADD CONSTRAINT hiring_candidates_refusal_side_check CHECK
+  (refusal_side IS NULL OR refusal_side IN ('candidate','company'));
+
+-- 🔁 ПЕРЕНОС СТАРИХ СТАТУСІВ «відмова» і «не підходить» → «відмова» з причиною.
+-- Причину вгадувати не можна: її не записували. Тому причина NULL, сторона — лише там, де
+-- статус її називав («не підходить» — рішення компанії); подія зберігає старе значення в
+-- `from_status`, щоб перенос можна було прочитати й повернути. Ідемпотентно: друга міграція
+-- рядків зі старими статусами вже не знаходить. Тримає #522.
+WITH moved AS (
+  UPDATE hiring_candidates
+     SET status = 'refused',
+         refusal_side = CASE WHEN status = 'nofit' THEN 'company' ELSE refusal_side END,
+         refused_at = COALESCE(refused_at, updated_at),
+         updated_at = now()
+   WHERE status IN ('declined','nofit')
+  RETURNING id, CASE WHEN refusal_side = 'company' THEN 'nofit' ELSE 'declined' END AS old_status
+)
+INSERT INTO hiring_events (candidate_id, kind, from_status, to_status, comment)
+SELECT id, 'status', old_status, 'refused',
+       'перенесено: статус «' || CASE old_status WHEN 'nofit' THEN 'не підходить' ELSE 'відмова' END
+       || '» став «відмова» з причиною (прохід 1a); причину на той момент не записували'
+  FROM moved;
+ALTER TABLE hiring_candidates DROP CONSTRAINT IF EXISTS hiring_candidates_status_check;
+ALTER TABLE hiring_candidates ADD CONSTRAINT hiring_candidates_status_check CHECK (status IN
+  ('new','contacted','planned','done','noshow','noanswer','lead','candidate','training','manager','refused','black'));
+
+-- 🔁 ОДНОРАЗОВО: кожна непорожня «посада» без вакансії стає вакансією «відкрита», кандидати з цією
+-- посадою привʼязуються до неї. Маркер у `hiring_migrations` не дає повторити це на новій посаді,
+-- яку хтось введе пізніше: відтоді вакансії заводяться руками.
+INSERT INTO hiring_vacancies (title, position, opened_by, status, comment)
+SELECT DISTINCT c.position, c.position, 'перенесено з поля «посада»', 'open', 'створено автоматично при переході на вакансії'
+  FROM hiring_candidates c
+ WHERE c.position IS NOT NULL AND c.position <> ''
+   AND NOT EXISTS (SELECT 1 FROM hiring_vacancies v WHERE v.position = c.position)
+   AND NOT EXISTS (SELECT 1 FROM hiring_migrations m WHERE m.key = '1a_positions');
+INSERT INTO hiring_candidate_vacancies (candidate_id, vacancy_id)
+SELECT c.id, v.id FROM hiring_candidates c JOIN hiring_vacancies v ON v.position = c.position
+ WHERE c.position IS NOT NULL AND c.position <> ''
+   AND NOT EXISTS (SELECT 1 FROM hiring_migrations m WHERE m.key = '1a_positions')
+ON CONFLICT DO NOTHING;
+INSERT INTO hiring_migrations (key) VALUES ('1a_positions') ON CONFLICT DO NOTHING;
+
+-- Файли-докази (скриншот переписки, фото). Байти — у `documents/hiring-files/` (під нічним бекапом
+-- теки документів). Видалення мʼяке: «Відновити» повертає файл (#524).
+CREATE TABLE IF NOT EXISTS hiring_files (
+  id            SERIAL PRIMARY KEY,
+  candidate_id  INTEGER NOT NULL REFERENCES hiring_candidates(id) ON DELETE CASCADE,
+  name          TEXT NOT NULL,
+  stored_name   TEXT NOT NULL,
+  mime          TEXT NOT NULL,
+  size_bytes    INTEGER NOT NULL,
+  created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at    TIMESTAMPTZ,
+  deleted_by    INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hiring_files_candidate ON hiring_files(candidate_id) WHERE deleted_at IS NULL;
+
+-- 🔒 Скриншоти переписки — персональні дані; не для моделі. REVOKE після GRANT і CREATE. Тримає #526.
+REVOKE ALL ON hiring_files FROM ai_readonly;
