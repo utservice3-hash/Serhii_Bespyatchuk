@@ -323,6 +323,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
   const [err, setErr] = useState<string | null>(null);
   const [noAccess, setNoAccess] = useState(false);
   const [signOpen, setSignOpen] = useState(false);
+  const [full, setFull] = useState(false);
   const [busy, setBusy] = useState(false);
   const t = TYPE_META[file.category ?? "Інше"] ?? TYPE_META["Інше"];
   const kind = previewKind(file);
@@ -395,14 +396,36 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
       {err && <div style={{ fontSize: 12, color: "var(--danger)" }}>{err}</div>}
       {file.inactiveAt && !file.archivedAt && <p style={noteBox}>Документ повернувся з архіву після повернення людини в команду. Поки він неактивний: підписати чи редагувати не можна.{mgmt ? " Натисніть «Активувати», якщо він знову потрібен." : ""}</p>}
 
-      {/* Прев'ю */}
-      <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", background: "var(--surface-2)", minHeight: 120, overflow: "hidden" }}>
-        {kind === "none" ? (
-          <div style={{ padding: 16, fontSize: 12, color: "var(--text-muted)", textAlign: "center" }}>{extOf(file.name, file.mime)} у дашборді не показується — відкривається завантаженням. PDF, зображення й HTML показуються тут.</div>
-        ) : !preview ? <div style={{ padding: 16, fontSize: 12, color: "var(--text-muted)" }}>завантаження прев'ю…</div>
-          : kind === "image" ? <img src={preview} alt={file.name} style={{ width: "100%", display: "block" }} />
-          : <iframe title={file.name} src={preview} style={{ width: "100%", height: "52vh", border: "none", background: "#fff" }} />}
-      </div>
+      {/* Прев'ю. PDF — без бічних мініатюр і на ширину панелі (параметри вбудованого переглядача
+          браузера: navpanes=0, view=FitH), висота на весь екран панелі; «⤢ На весь екран» — оверлей.
+          Файл без перегляду — один рядок, а не порожній блок (власник 17.09.2026). */}
+      {kind === "none" ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 13, color: "var(--text-muted)", background: "var(--surface-2)", borderRadius: "var(--r-lg)", padding: "8px 12px" }}>
+          <span>📄 {extOf(file.name, file.mime)} не переглядається в дашборді</span>
+          <button style={{ ...btn(), fontSize: 12, padding: "4px 10px", marginLeft: "auto" }} onClick={() => void open(true)}>Завантажити</button>
+        </div>
+      ) : (
+        <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", background: "var(--surface-2)", overflow: "hidden", position: "relative" }}>
+          {!preview ? <div style={{ padding: 16, fontSize: 12, color: "var(--text-muted)" }}>завантаження прев'ю…</div>
+            : kind === "image" ? <img src={preview} alt={file.name} style={{ width: "100%", display: "block" }} />
+            : <iframe title={file.name} src={kind === "pdf" ? `${preview}#navpanes=0&view=FitH&zoom=page-width` : preview} style={{ width: "100%", height: "calc(100vh - 230px)", minHeight: 480, border: "none", background: "#fff", display: "block" }} />}
+          {preview && <button onClick={() => setFull(true)} title="Відкрити перегляд на весь екран" style={{ ...btn(), position: "absolute", right: 10, bottom: 10, fontSize: 12, padding: "4px 10px", boxShadow: "var(--shadow)" }}>⤢ На весь екран</button>}
+        </div>
+      )}
+      {full && preview && createPortal(
+        <div onClick={() => setFull(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 2800, display: "flex", flexDirection: "column", padding: 16, gap: 8 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", alignItems: "center", gap: 10, color: "#fff" }}>
+            <b style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.name}</b>
+            <button onClick={() => void open(true)} style={{ ...btn(), marginLeft: "auto", fontSize: 12, padding: "4px 10px" }}>Завантажити</button>
+            <button onClick={() => setFull(false)} style={{ ...btn(), fontSize: 12, padding: "4px 10px" }}>✕ Закрити</button>
+          </div>
+          <div onClick={(e) => e.stopPropagation()} style={{ flex: 1, background: "#fff", borderRadius: "var(--r-lg)", overflow: "hidden" }}>
+            {kind === "image" ? <img src={preview} alt={file.name} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
+              : <iframe title={file.name} src={kind === "pdf" ? `${preview}#view=FitH&zoom=page-width` : preview} style={{ width: "100%", height: "100%", border: "none", display: "block" }} />}
+          </div>
+        </div>,
+        document.body,
+      )}
 
       {file.description ? <div style={{ fontSize: 13 }}>{file.description}</div> : file.canEdit && <button onClick={editDescription} style={{ ...btn(), fontSize: 12, padding: "4px 10px", alignSelf: "flex-start" }}>+ опис</button>}
 
