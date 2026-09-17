@@ -766,6 +766,18 @@ export function agreementLine(dueDate: string | null, note: string): AgreementLi
 /** Підпис порожньої домовленості в рядку — відповідь, а не порожнє місце. */
 export const AGREEMENT_EMPTY_LABEL = "записів немає";
 
+/**
+ * 🗒 МИНУЛИЙ ЗАПИС — ВИДНО ПРИГЛУШЕНО, А НЕ ЗНИКАЄ (17.09.2026).
+ * Тижневе правило лишається: актуальним є лише запис цього тижня. Але «записів немає»
+ * над коментарем, який у базі є, читалось людьми як ВТРАТА («у нас злітають коментарі»).
+ * Повертає текст і дату старого запису, коли поточного тижня нічого не писали.
+ */
+export function staleNote(comment: string | null, updatedAt: string | null, now: Date): { text: string; dateText: string } | null {
+  const text = (comment ?? "").trim();
+  if (!text || isCurrentWeekNote(updatedAt, now)) return null;
+  return { text, dateText: updatedAt ? formatDateSafe(updatedAt.slice(0, 10), "") : "" };
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    🏢 РОЗКЛАД «ЮРОСОБА → СУМА» У ЗГОРНУТОМУ РЯДКУ
 

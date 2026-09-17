@@ -1,3 +1,4 @@
+import { mergeNoteComment } from "../core/receivableNoteMerge.js";
 import { effectiveManagerSql, effectiveFromFor, TRANSFER_KINDS, type TransferKind } from "../core/effectiveManager.js";
 import { Router } from "express";
 import { pool } from "../db/pool.js";
@@ -3755,8 +3756,13 @@ dashboardRouter.put("/receivables/note", async (req, res) => {
   }
   const clientKey = String(req.body?.clientKey ?? "").trim();
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
-  const comment = req.body?.comment != null ? String(req.body.comment) : null;
+  const incoming = req.body?.comment != null ? String(req.body.comment) : null;
+  const clear = req.body?.clear === true;
   const dueDate = req.body?.dueDate ? String(req.body.dueDate) : null;
+  // 🗒 Порожній коментар не затирає текст — див. `core/receivableNoteMerge.ts` (#459).
+  const prev = await pool.query<{ comment: string | null }>(`SELECT comment FROM receivable_notes WHERE client_key = $1`, [clientKey]);
+  const comment = mergeNoteComment(prev.rows[0]?.comment ?? null, incoming, clear);
+  const commentChanged = (comment ?? "") !== ((prev.rows[0]?.comment ?? "").trim());
   await pool.query(
     `INSERT INTO receivable_notes (client_key, comment, due_date, updated_by, updated_at)
      VALUES ($1, $2, $3, $4, now())
@@ -3771,8 +3777,9 @@ dashboardRouter.put("/receivables/note", async (req, res) => {
   // 🗓 ІСТОРІЯ ДОПИСУЄТЬСЯ, А НЕ ЗАМІНЮЄТЬСЯ. Поле щотижня «порожніє» правилом
   // (`isCurrentWeekNote`), і без цього рядка минулі домовленості справді б
   // зникали — тобто «очищення» стало б тим, чого власник прямо не хоче.
-  // Порожній коментар у журнал не пишемо: «стер текст» не є домовленістю.
-  if (comment && comment.trim()) {
+  // Порожній коментар у журнал не пишемо: «стер текст» не є домовленістю. Незмінений
+  // (збережений злиттям при зміні дати) — теж: інакше журнал повторював би той самий рядок.
+  if (comment && comment.trim() && commentChanged) {
     await pool.query(
       `INSERT INTO receivable_note_history (client_key, comment, written_by) VALUES ($1, $2, $3)`,
       [clientKey, comment.trim(), auth.userId]

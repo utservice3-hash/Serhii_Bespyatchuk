@@ -1751,6 +1751,8 @@ export async function saveReceivableNote(payload: {
   clientKey: string;
   comment?: string | null;
   dueDate?: string | null;
+  /** Порожній `comment` без цього прапорця НЕ стирає текст на сервері (17.09.2026). */
+  clear?: boolean;
 }): Promise<void> {
   await api.put("/dashboard/receivables/note", payload);
 }

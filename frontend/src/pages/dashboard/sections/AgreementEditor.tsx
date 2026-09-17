@@ -29,10 +29,14 @@ import { NOTE_MAX, agreementLine, formatDateSafe } from "../receivablesView";
  * наступний `Tab` починає обхід таблиці спочатку. Це той самий дефект, що
  * `#193` упіймав у діалозі обʼєднання, лише в інший бік.
  */
-export function AgreementEditor({ client, note, onPatch, onDone, onClose }: {
+export function AgreementEditor({ client, note, lastComment, lastAt, onPatch, onDone, onClose }: {
   client: ReceivableClient;
   /** Запис ПОТОЧНОГО тижня — уже звужений `activeNote`, не `client.comment`. */
   note: string;
+  /** Останній записаний коментар (будь-якого тижня) і його дата — щоб поле не відкривалось
+   *  порожнім над текстом, який у базі є. Заміряно 17.09: саме так 10 нотаток спорожніли. */
+  lastComment?: string | null;
+  lastAt?: string | null;
   /** Оптимістичний патч рядка — та сама сигнатура, що в секції: порожній
    *  `comment` означає «запис цього тижня прибрати». */
   onPatch: (patch: { comment?: string; dueDate?: string | null }) => void;
@@ -40,7 +44,9 @@ export function AgreementEditor({ client, note, onPatch, onDone, onClose }: {
   onClose: () => void;
 }) {
   const [dueDate, setDueDate] = useState(client.dueDate ?? "");
-  const [comment, setComment] = useState(note);
+  const stalePrefill = !note && !!(lastComment ?? "").trim();
+  const [comment, setComment] = useState(note || (lastComment ?? "").trim());
+  const [clear, setClear] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -78,11 +84,13 @@ export function AgreementEditor({ client, note, onPatch, onDone, onClose }: {
     setBusy(true); setErr(null);
     const next = comment.trim();
     const nextDate = dueDate || null;
+    // 🗒 Порожнє поле без «очистити» = лишити текст як є (сервер робить те саме, #459).
+    const effective = next || (clear ? "" : (lastComment ?? "").trim());
     try {
       // Оптимістичне оновлення — те саме, що робив рядок: сервер відповідає
       // порожнім тілом, тож без нього значення повернулось би лише на рефреші.
-      onPatch({ comment: next, dueDate: nextDate });
-      await saveReceivableNote({ clientKey: client.clientKey, comment: next, dueDate: nextDate });
+      onPatch({ comment: effective, dueDate: nextDate });
+      await saveReceivableNote({ clientKey: client.clientKey, comment: next, dueDate: nextDate, clear });
       onDone();
     } catch (e) {
       const r = e as { response?: { data?: { error?: string } } };
@@ -149,9 +157,13 @@ export function AgreementEditor({ client, note, onPatch, onDone, onClose }: {
         {/* Той самий слот із підлогою висоти, що в редакторі ліміту: лічильник
             зʼявляється й зникає, а кнопки під ним не сміють їхати. */}
         <div className="recv-hintslot" style={{ color: "var(--text-muted)", marginBottom: 8 }}>
-          {comment.trim() ? `${comment.trim().length}/${NOTE_MAX}`
-                          : "Порожнє поле = запис цього тижня прибрати"}
+          {comment.trim() ? `${comment.trim().length}/${NOTE_MAX}${stalePrefill && comment.trim() === (lastComment ?? "").trim() ? ` · запис від ${lastAt ? formatDateSafe(lastAt.slice(0, 10), "") : "минулого тижня"}` : ""}`
+                          : "Порожнє поле лишає попередній коментар"}
         </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginBottom: 8, cursor: "pointer" }}>
+          <input type="checkbox" checked={clear} disabled={busy} onChange={(e) => { setClear(e.target.checked); if (e.target.checked) setComment(""); }} />
+          Очистити коментар зовсім
+        </label>
 
         {err && <div style={{ fontSize: "var(--fs-xs)", color: "var(--danger)", marginBottom: 6 }}>{err}</div>}
 

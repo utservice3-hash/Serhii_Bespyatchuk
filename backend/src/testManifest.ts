@@ -142,6 +142,7 @@ export const MANIFEST_FILES: string[] = [
   "core/paymentMatch.test.js",
   "core/creditLimits.test.js",
   "core/receivablesView4b.test.js",
+  "core/receivableNoteMerge.test.js",
   "routes/taskCommentKeep.test.js",
   "routes/taskDeepLink.test.js",
   "routes/leadgenChannelFact.test.js",
@@ -783,6 +784,8 @@ export const MANIFEST_TESTS: string[] = [
   "#456 ТЕКСТ СИГНАЛУ: повний номер, «раз/рази/разів» на межах, час і відро доби",
   "#457 ЖИВА ДЖОБА СИГНАЛУ: поріг, межі, одна задача на номер за день, закриття й перевідкриття",
   "#458 ПРОВОДКА: крон частого синку → сигнал, обидва під наглядом із частотою крону",
+  "#459 mergeNoteComment: порожнє лишає текст, текст замінює, clear стирає",
+  "#459b РОУТ нотатки: SELECT попереднього → mergeNoteComment → upsert; clear читається з тіла",
   // core/navRender.test.ts — повнота «пункт меню → блок рендера» (16.09.2026)
   "#447 КОЖЕН ВИДИМИЙ ПУНКТ МЕНЮ МАЄ БЛОК РЕНДЕРА — інакше порожня сторінка мовчки",
   "#447b ДЗЕРКАЛО: правило ловить відсутній рендер, пускає наявний і звільняє прихований",
