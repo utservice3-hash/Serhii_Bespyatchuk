@@ -166,6 +166,8 @@ export interface LeadgenStatsResp {
   department: {
     machines: number; machinesRevenue: number; receivedRevenue: number; receivedDeals: number;
     note: string; anchors: string;
+    /** Покриття поля «Лидогенератор» у періоді — межа розрізу по особах. */
+    leadGeneratorFill: { withPerson: number; total: number };
   };
   weeks: { week: string; leads: number; opr: number; quotes: number }[];
   closures: { reason: string; deals: number }[];

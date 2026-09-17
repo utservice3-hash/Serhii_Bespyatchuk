@@ -66,8 +66,8 @@ import { ga4Configured } from "../ga4/client.js";
 import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
 import { adPlanForPeriod } from "../core/adBudget.js";
-import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, leadgenWeekly,
-  pct, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS } from "../core/leadgenStats.js";
+import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, leadgenWeekly, leadGeneratorFill,
+  pct, leadGeneratorFillNote, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS } from "../core/leadgenStats.js";
 import * as expectSplit from "../core/expectSplit.js";
 import { FUNNEL_STAGE_LABELS, stageName } from "../core/stageNames.js";
 import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL } from "../core/orphanClients.js";
@@ -342,7 +342,7 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
   const teamId = auth.role === "team_lead" ? (auth.teamId ?? -1) : null;
 
   const { adSources } = await overviewCache.call("getSettings", getSettings);
-  const [stats, dispatched, byChannel, closures, handoffs, warmingNow, weeks] = await Promise.all([
+  const [stats, dispatched, byChannel, closures, handoffs, warmingNow, weeks, lgFill] = await Promise.all([
     leadgenStats(from, to),
     metrics.dispatchedByLoadBucket({ from, to }, "month", "leadgen"),
     money.receivedByChannel({ from, to }, adSources),
@@ -350,6 +350,7 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
     leadgenHandoffs(from, to),
     leadgenWarmingBacklog(),
     leadgenWeekly(from, to),
+    leadGeneratorFill(from, to),
   ]);
 
   const rows = teamId == null ? stats.rows : stats.rows.filter((r) => r.teamId === teamId);
@@ -373,8 +374,9 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
       machinesRevenue: dispatched.reduce((s, b) => s + b.revenue, 0),
       receivedRevenue: byChannel.leadgen.revenue,
       receivedDeals: byChannel.leadgen.deals,
-      note: "тільки рівень відділу: поле «Лидогенератор» заповнене в 11 зі 103 машин серпня, "
-        + "тож поіменно машину віднести нема чим",
+      // Рівень відділу; причина названа ЖИВИМ числом за період, а не зашитим заміром серпня.
+      note: "тільки рівень відділу: " + leadGeneratorFillNote(lgFill.withPerson, lgFill.total),
+      leadGeneratorFill: lgFill,
       anchors: "машини — за датою відправлення (load_at); отримані кошти — датований анкер ядра",
     },
     weeks,

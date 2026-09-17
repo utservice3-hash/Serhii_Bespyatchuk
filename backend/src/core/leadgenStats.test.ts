@@ -109,3 +109,24 @@ test("#407 чисті модулі правил лідогену не тягну
     assert.ok(SRC(rel).length > 200, `🔴 ${rel} зник або порожній — гейт утратив предмет`);
   }
 });
+
+/**
+ * #479 — ПОКРИТТЯ ПОЛЯ «ЛИДОГЕНЕРАТОР» ЖИВЕ, А НЕ ЗАШИТЕ: підпис несе обидва числа й
+ * відсоток; порожній період каже «немає», не «0 %»; роут кличе лічильник за період і
+ * більше не тримає «11 зі 103». Червоніє, якщо загубити одне з чисел, повернути зашитий
+ * текст або прибрати виклик лічильника з роуту.
+ */
+test("#479 підпис покриття «Лидогенератор»: обидва числа, відсоток, порожньо ≠ 0 %; роут рахує живцем", async () => {
+  const { leadGeneratorFillNote } = await import("./leadgenRules.js");
+  const n = leadGeneratorFillNote(2037, 38534);
+  assert.match(n, /2\s?037/); assert.match(n, /38\s?534/); assert.match(n, /\(5\.3 %\)/);
+  assert.match(leadGeneratorFillNote(0, 0), /немає/);
+  assert.doesNotMatch(leadGeneratorFillNote(0, 0), /0 %/);
+  assert.match(leadGeneratorFillNote(0, 10), /0 із 10 .*\(0 %\)/, "нуль при наявних лідах — чесний 0 %");
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "routes", "dashboard.ts"), "utf8");
+  const i = src.indexOf('dashboardRouter.get("/leadgen-stats"'); assert.ok(i > 0);
+  const body = src.slice(i, src.indexOf("\n});", i));
+  assert.match(body, /\bleadGeneratorFill\(from, to\)/, "роут не рахує покриття за період");
+  assert.match(body, /\bleadGeneratorFillNote\(/, "підпис не з чистої функції");
+  assert.doesNotMatch(body, /11 зі 103/, "зашите число серпня повернулось");
+});

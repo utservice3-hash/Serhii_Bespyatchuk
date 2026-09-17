@@ -5,7 +5,7 @@ import { LEADGEN_CALL_MIN_SEC } from "./leadgenRules.js";
 // 📐 Правила лідогену живуть у ЧИСТОМУ `leadgenRules.ts` (нуль імпортів) — звідси
 // лише реекспорт, щоб зовнішній читач не помітив різниці, а гейти могли дістати
 // їх без `config`. Див. доккоментар того файла: там записано, ЧОМУ так.
-export { LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS, pct } from "./leadgenRules.js";
+export { LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS, pct, leadGeneratorFillNote } from "./leadgenRules.js";
 
 /**
  * 📞 ЛІДОГЕНЕРАЦІЯ — сім показників таблиці лідгенів із подій CRM.
@@ -234,4 +234,20 @@ export async function leadgenWeekly(from: string, to: string): Promise<LeadgenWe
     [from, to, PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR]
   );
   return r.rows.map((x) => ({ week: x.week, leads: Number(x.leads), opr: Number(x.opr), quotes: Number(x.quotes) }));
+}
+
+/**
+ * Скільки лідоген-угод періоду (за датою створення, Київ) мають особу в полі
+ * «Лидогенератор». Лічильник для `leadGeneratorFillNote` — див. там, навіщо.
+ */
+export async function leadGeneratorFill(from: string, to: string): Promise<{ withPerson: number; total: number }> {
+  const r = await pool.query<{ total: string; with_person: string }>(
+    `SELECT COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE NULLIF(btrim(lead_generator), '') IS NOT NULL) AS with_person
+       FROM deals d
+      WHERE d.lead_channel = 'leadgen'
+        AND (d.created_at_kommo ${K})::date BETWEEN $1 AND $2`,
+    [from, to]
+  );
+  return { total: Number(r.rows[0]?.total ?? 0), withPerson: Number(r.rows[0]?.with_person ?? 0) };
 }
