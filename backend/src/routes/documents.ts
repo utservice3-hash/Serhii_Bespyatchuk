@@ -1,6 +1,6 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { randomUUID, createHash } from "crypto";
-import { writeFile, mkdir } from "fs/promises";
+import { writeFile, mkdir, readFile, stat } from "fs/promises";
 import path from "path";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
@@ -11,6 +11,11 @@ import { tabsOfRole } from "../auth/rbac.js";
 import { generateSignCode, verifySignCode, signCodeMessage, SIGN_CODE_TTL_MS } from "../core/signCode.js";
 import { UPLOAD_DIR } from "./uploads.js";
 import { OWNER_NAME_SQL } from "../core/absences.js";
+
+import { parseDocx, parseXlsx, OfficeParseError } from "../core/officeParse.js";
+import { formatOf, type TextStatus } from "../core/docText.js";
+import { searchDocs } from "../core/docSearch.js";
+import { extractSoon } from "../jobs/docText.js";
 import {
   canSeeDocument, canSeeOffersSection, canUploadTo, canEditDocument, canManageAccess, canSignDocument,
   roleSeesGeneral, isNewForViewer, type FileRights,
@@ -379,6 +384,46 @@ documentsRouter.put("/file/:id/access", management, async (req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * 🔎 ПОШУК ПО ТЕКСТУ. Спершу видимість (той самий `canSeeDocument`, що й дерево), потім пошук лише
+ * серед видимих — уривок тексту чужого документа не має шансу потрапити у відповідь (#510b).
+ */
+documentsRouter.get("/search", async (req, res) => {
+  const q = String(req.query.q ?? "").trim().slice(0, 200);
+  if (q.length < 2) return res.json({ hits: [], searched: 0, notSearchable: 0, pending: 0 });
+  const viewer = viewerOf(req);
+  const [ctx, files] = await Promise.all([accessContext(req), pool.query<FileRow>(FILE_SELECT)]);
+  const visibleIds = files.rows.filter((r) => canSeeDocument(viewer, toDocLike(r), ctx)).map((r) => r.id);
+  if (!visibleIds.length) return res.json({ hits: [], searched: 0, notSearchable: 0, pending: 0 });
+  const content = await pool.query<{ id: number; version: number; content_version: number | null; content_status: TextStatus | null; content_text: string | null }>(
+    `SELECT id, version, content_version, content_status, content_text FROM doc_files WHERE id = ANY($1::int[])`, [visibleIds]);
+  res.json(searchDocs(content.rows.map((r) => ({ id: r.id, version: r.version, contentVersion: r.content_version, status: r.content_status, text: r.content_text })), q));
+});
+
+/**
+ * 📄 ПЕРЕГЛЯД WORD І EXCEL: структура (абзаци / клітинки), яку фронт малює сам. Не HTML — текст
+ * із чужого файла не стає розміткою. Старі .doc/.xls і все інше — 415, картка пропонує завантажити.
+ */
+export const MAX_RENDER_BYTES = 30 * 1024 * 1024;
+documentsRouter.get("/file/:id/render", async (req, res) => {
+  const v = await visibleFile(req, res, Number(req.params.id)); if (!v) return;
+  const fmt = formatOf(v.row.name, v.row.mime);
+  if (fmt !== "docx" && fmt !== "xlsx") return res.status(415).json({ error: "Цей формат у дашборді не переглядається — завантажте файл." });
+  const stored = (await pool.query<{ stored_name: string }>(`SELECT stored_name FROM doc_files WHERE id = $1`, [v.row.id])).rows[0];
+  const file = path.join(DOCS_DIR, path.basename(stored.stored_name));
+  try {
+    const st = await stat(file);
+    if (st.size > MAX_RENDER_BYTES) return res.status(413).json({ error: "Файл завеликий для перегляду в дашборді — завантажте його." });
+    const buf = await readFile(file);
+    if (fmt === "docx") { const d = parseDocx(buf); return res.json({ kind: "docx", version: v.row.version, ...d }); }
+    return res.json({ kind: "xlsx", version: v.row.version, sheets: parseXlsx(buf) });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return res.status(404).json({ error: "Файл на диску не знайдено" });
+    const why = e instanceof OfficeParseError ? e.message : "невідомий формат усередині";
+    return res.status(422).json({ error: `Перегляд не вдався (${why}). Файл цілий на сервері — завантажте й відкрийте в Office.` });
+  }
+});
+
 /** Прев'ю або завантаження. `?inline=1` — віддати у вкладку/iframe (PDF, зображення, HTML). */
 documentsRouter.get("/file/:id/download", async (req, res) => {
   const v = await visibleFile(req, res, Number(req.params.id)); if (!v) return;
@@ -485,6 +530,7 @@ documentsRouter.post("/file", async (req, res) => {
     [id, storedName, sha256, req.body?.mime ?? null, buffer.length, viewer.userId]);
   await logEvent(id, section === "offer" ? "sent" : "uploaded", viewer.userId, { version: 1 });
   if (section === "offer") void notifyOfferOnce(id);
+  extractSoon(id);
   const row = await loadFile(id);
   res.json(shape(row!, [], section === "offer" ? new Date().toISOString() : null, viewer, ctx));
 });
@@ -508,6 +554,7 @@ documentsRouter.post("/file/:id/version", async (req, res) => {
     [v.row.id, storedName, sha256, next, req.body?.mime ?? null, buffer.length, display]);
   await logEvent(v.row.id, "version", req.auth!.userId, { version: next, sha256 });
   if (v.row.section === "offer") { await logEvent(v.row.id, "sent", req.auth!.userId, { version: next }); await pool.query(`UPDATE doc_files SET reminded_at = NULL WHERE id = $1`, [v.row.id]); void notifyOfferOnce(v.row.id); }
+  extractSoon(v.row.id);
   res.json({ ok: true, version: next, sha256 });
 });
 

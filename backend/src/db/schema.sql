@@ -3310,6 +3310,15 @@ CREATE TABLE IF NOT EXISTS doc_views (
   PRIMARY KEY (file_id, user_id, version)
 );
 
+-- 🔎 ТЕКСТ ДОКУМЕНТА ДЛЯ ПОШУКУ (витягує джоба `docText` і завантаження). Належить ВЕРСІЇ
+-- `content_version`: після нової версії текст старий, і пошук вважає документ «ще обробляється».
+-- `content_status`: ok / empty (скан) / unsupported (фото) / failed (причина в content_reason).
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS content_text TEXT;
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS content_status TEXT;
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS content_reason TEXT;
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS content_version INTEGER;
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS content_at TIMESTAMPTZ;
+
 -- ═════════════════════════════════════════════════════════════════════════════
 -- 🧑‍💼 НАЙМ, ПРОХІД 1 (17.09.2026): графік співбесід, база кандидатів, щоденний звіт.
 -- Замість вкладок «Графік Іван», «Кандидати UA», «Щоденний звіт NEW» Google-таблиці

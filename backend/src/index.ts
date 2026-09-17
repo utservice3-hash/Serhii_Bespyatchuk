@@ -32,6 +32,7 @@ import { documentsRouter } from "./routes/documents.js";
 import { telegramRouter } from "./routes/telegram.js";
 import { sendOfferReminders } from "./jobs/offerReminders.js";
 import { runDocLifecycle } from "./jobs/docLifecycle.js";
+import { runDocText } from "./jobs/docText.js";
 import { signBotEnsureWebhook } from "./bot/signBot.js";
 import { oneOnOnesRouter } from "./routes/oneOnOnes.js";
 import { createOneOnOneReminders } from "./jobs/oneOnOneReminders.js";
@@ -509,6 +510,11 @@ cron.schedule("5,35 * * * *", () => {
   void runJob("docLifecycle", () => runDocLifecycle());
 });
 
+// 🔎 Текст документів для пошуку: нові файли й нові версії, які не встигло обробити завантаження.
+cron.schedule("20,50 * * * *", () => {
+  void runJob("docText", () => runDocText());
+});
+
 // 🔏 Нагадування про непідписані офери — щодня 09:00 Києва (розділ 9.4 ТЗ документів).
 cron.schedule("0 9 * * *", () => {
   void runJob("sendOfferReminders", () => sendOfferReminders());
@@ -787,6 +793,7 @@ const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["catchUpAiChat", () => catchUpAiChat()],
   ["signBotEnsureWebhook", () => signBotEnsureWebhook()],
   ["docLifecycle", () => runDocLifecycle()],
+  ["docText", () => runDocText()],
   ["createOneOnOneReminders", () => createOneOnOneReminders()],
   ["createDutyReminders", () => createDutyReminders()],
   ["createReceivableDeadlineTasks", () => createReceivableDeadlineTasks()],
