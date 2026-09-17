@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import {
   fetchTrainingTree, createTrainingFolder, updateTrainingFolder, deleteTrainingFolder,
   createTrainingMaterial, updateTrainingMaterial, deleteTrainingMaterial, fetchTrainingFileBlobUrl,
-  type TrainingFolder, type TrainingMaterial, type TrainingKind, publishTrainingMaterial } from "../../../api";
+  type TrainingFolder, type TrainingMaterial, type TrainingKind, publishTrainingMaterial,
+  fetchTrainingCourses, createTrainingCourse, patchTrainingCourse,
+  type TrainingCourse, type TrainingModule, type TrainingAudience } from "../../../api";
 
 const MAX_MB = 45;
 const ACC = "#c5141c";
@@ -198,6 +200,159 @@ function AddMaterialModal({ folderId, onClose, onAdded }: { folderId: number | n
   );
 }
 
+
+const AUDIENCE: { key: TrainingAudience; label: string; hint: string }[] = [
+  { key: "candidate", label: "Кандидати", hint: "проходять під час навчання перед виходом" },
+  { key: "manager", label: "Менеджери", hint: "чинні співробітники" },
+  { key: "all", label: "Усі", hint: "і кандидати, і менеджери" },
+];
+
+/**
+ * 🎓 КУРСИ — редактор для того, хто має право «manage_training».
+ *
+ * Курс вирішує, КОМУ призначене навчання і що саме рахується його кроками, тож без цього
+ * екрана курс можна було завести лише запитом до бази — і кандидат бачив усе підряд.
+ * Модуль курсу — папка верхнього рівня; вкладені лишаються групами всередині модуля
+ * (правило одне, серверне: `core/trainingEditor.ts`).
+ */
+function CoursesEditor({ onFoldersChanged }: { onFoldersChanged: () => void }) {
+  const [courses, setCourses] = useState<TrainingCourse[]>([]);
+  const [free, setFree] = useState<TrainingModule[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [title, setTitle] = useState("");
+  const [audience, setAudience] = useState<TrainingAudience>("candidate");
+
+  const load = async () => {
+    try { const d = await fetchTrainingCourses(); setCourses(d.courses); setFree(d.freeModules ?? []); setErr(null); }
+    catch { setErr("Не вдалося завантажити курси."); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { void load(); }, []);
+
+  const guard = async (fn: () => Promise<unknown>, onConflict?: () => Promise<unknown>) => {
+    setBusy(true); setErr(null);
+    try { await fn(); }
+    catch (e) {
+      const r = (e as { response?: { status?: number; data?: { error?: string } } }).response;
+      const msg = r?.data?.error ?? "Дію не вдалося виконати.";
+      if (r?.status === 409 && onConflict && window.confirm(`${msg}\n\nПеренести модуль?`)) {
+        try { await onConflict(); } catch { setErr(msg); }
+      } else setErr(msg);
+    }
+    finally { await load(); onFoldersChanged(); setBusy(false); }
+  };
+
+  const attach = (folderId: number, courseId: number | null) =>
+    guard(() => updateTrainingFolder(folderId, { courseId }), () => updateTrainingFolder(folderId, { courseId, force: true }));
+
+  const onCreate = () => {
+    const t = title.trim();
+    if (!t) return;
+    void guard(() => createTrainingCourse({ title: t, audience })).then(() => { setTitle(""); setAdding(false); });
+  };
+  const onNewModule = (courseId: number) => {
+    const name = window.prompt("Назва модуля (це папка верхнього рівня):")?.trim();
+    if (!name) return;
+    void guard(async () => { const f = await createTrainingFolder(name, null); await updateTrainingFolder(f.id, { courseId }); });
+  };
+
+  if (loading) return <p className="loading-text">Завантаження…</p>;
+
+  return (
+    <div>
+      <div className="chart-card" style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
+          Курс визначає, кому призначене навчання і які кроки рахуються. Кандидат бачить курси «Кандидати» й «Усі»,
+          менеджер — «Менеджери» й «Усі». Неопублікований курс не бачить ніхто, крім керівництва.
+        </div>
+        <button className="btn-secondary" disabled={busy} onClick={() => setAdding((x) => !x)} style={{ background: ACC, color: "#fff", border: "none" }}>➕ Курс</button>
+      </div>
+
+      {adding && (
+        <div className="chart-card" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Назва курсу, напр. «Старт кандидата»"
+            style={{ flex: "1 1 240px", padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
+          <select value={audience} onChange={(e) => setAudience(e.target.value as TrainingAudience)}
+            style={{ padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}>
+            {AUDIENCE.map((a) => <option key={a.key} value={a.key}>{a.label}</option>)}
+          </select>
+          <button className="btn-secondary" disabled={busy || !title.trim()} onClick={onCreate}>Створити</button>
+          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Курс створюється прихованим — опублікуєте, коли наповните.</span>
+        </div>
+      )}
+
+      {err && <p style={{ color: ACC, fontSize: 13 }}>{err}</p>}
+
+      {courses.length === 0 ? (
+        <div className="chart-card"><p className="loading-text" style={{ margin: 0 }}>Курсів ще немає. Створіть перший — наприклад, «Старт кандидата».</p></div>
+      ) : courses.map((c) => {
+        const mods = c.modules ?? [];
+        const perDay = Math.ceil(c.requiredCount / 3);
+        return (
+          <div key={c.id} className="chart-card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <b style={{ fontSize: 16 }}>{c.title}</b>
+              <button title="Перейменувати" disabled={busy} style={{ background: "none", border: "none", cursor: "pointer" }}
+                onClick={() => { const t = window.prompt("Нова назва курсу:", c.title)?.trim(); if (t && t !== c.title) void guard(() => patchTrainingCourse(c.id, { title: t })); }}>✏️</button>
+              <select value={c.audience} disabled={busy} onChange={(e) => void guard(() => patchTrainingCourse(c.id, { audience: e.target.value as TrainingAudience }))}
+                style={{ padding: "4px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontSize: 13 }}>
+                {AUDIENCE.map((a) => <option key={a.key} value={a.key}>Для кого: {a.label}</option>)}
+              </select>
+              <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, cursor: "pointer" }}>
+                <input type="checkbox" checked={c.published} disabled={busy} onChange={(e) => void guard(() => patchTrainingCourse(c.id, { published: e.target.checked }))} />
+                {c.published ? "Опубліковано" : "Приховано"}
+              </label>
+              <span style={{ fontSize: 12, color: "var(--text-muted)", marginLeft: "auto" }}>
+                {c.materialCount} кроків · {c.requiredCount} обовʼязкових · модулів {mods.length}
+              </span>
+            </div>
+
+            {mods.length === 0
+              ? <div style={{ fontSize: 13, color: "#b45309" }}>Порожній курс: у ньому немає жодного модуля, тож людина побачить 0 кроків.</div>
+              : (
+                <div style={{ display: "grid", gap: 6 }}>
+                  {mods.map((m, i) => (
+                    <div key={m.id} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 14, border: "1px solid var(--border)", borderRadius: 8, padding: "6px 10px" }}>
+                      <span style={{ color: "var(--text-muted)", fontSize: 12, minWidth: 18 }}>{i + 1}.</span>
+                      <span style={{ flex: 1 }}>📁 {m.name}</span>
+                      <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{m.steps} кроків{m.steps !== m.required ? ` · ${m.required} обовʼязкових` : ""}</span>
+                      <button className="btn-secondary" disabled={busy} onClick={() => void attach(m.id, null)}>Прибрати з курсу</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+            {c.audience !== "manager" && c.requiredCount > 20 && (
+              <div style={{ fontSize: 13, color: "#b45309" }}>
+                {c.requiredCount} обовʼязкових кроків за три дні навчання — це {perDay} на день. Можливо, частину кроків варто зробити необовʼязковими.
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <select value="" disabled={busy || free.length === 0}
+                onChange={(e) => { const id = Number(e.target.value); if (id) void attach(id, c.id); }}
+                style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontSize: 13 }}>
+                <option value="">{free.length ? "+ Додати наявну папку модулем" : "Вільних папок верхнього рівня немає"}</option>
+                {free.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.steps} кроків)</option>)}
+              </select>
+              <button className="btn-secondary" disabled={busy} onClick={() => onNewModule(c.id)}>➕ Новий модуль</button>
+            </div>
+          </div>
+        );
+      })}
+
+      <div className="chart-card" style={{ fontSize: 12.5, color: "var(--text-muted)" }}>
+        Модулем курсу може бути лише папка верхнього рівня; папки всередині неї лишаються групами матеріалів.
+        «Прибрати з курсу» не видаляє ні папку, ні матеріали — вони просто перестають бути частиною курсу.
+        Обовʼязковість кожного кроку перемикається на вкладці «Матеріали».
+      </div>
+    </div>
+  );
+}
+
 /**
  * Навчання — навчальна база. Адмін (КВП) будує структуру папок і розміщує
  * матеріали (відео/файли/посилання/текст). Решта — переглядають.
@@ -211,6 +366,15 @@ export function TrainingSection({ isAdmin }: { isAdmin: boolean }) {
   const [err, setErr] = useState<string | null>(null);
   const [viewing, setViewing] = useState<TrainingMaterial | null>(null);
   const [adding, setAdding] = useState(false);
+  // Право редагувати навчання питаємо в сервера (`manage_training`), а не виводимо з ролі:
+  // адмінський обсяг мають і ті, кому власник редагування свідомо не давав.
+  const [canEdit, setCanEdit] = useState(false);
+  const [view, setView] = useState<"files" | "courses">("files");
+  /* 🔴 РЕДАГУВАННЯ — ПРАВО, А НЕ РОЛЬ. `isAdmin` тут — це `auth.role === "admin"`, тобто
+     scope-compat роль: КВП, СЕО й опердиректор отримують "company" і кнопок НЕ бачили,
+     хоча право `manage_training` власник дав саме їм (рішення 14.09.2026). Заміряно на
+     локальному стенді: під роллю КВП «➕ Папка» і «➕ Матеріал» не було взагалі. */
+  const edit = canEdit || isAdmin;
 
   const load = async () => {
     setLoading(true);
@@ -219,6 +383,7 @@ export function TrainingSection({ isAdmin }: { isAdmin: boolean }) {
     finally { setLoading(false); }
   };
   useEffect(() => { void load(); }, []);
+  useEffect(() => { fetchTrainingCourses().then((d) => setCanEdit(d.canEdit)).catch(() => setCanEdit(false)); }, []);
 
   const byId = useMemo(() => new Map(folders.map((f) => [f.id, f])), [folders]);
   const breadcrumb = useMemo(() => {
@@ -248,15 +413,26 @@ export function TrainingSection({ isAdmin }: { isAdmin: boolean }) {
     <div>
       <div className="page-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <h1 className="page-title">📚 Навчання</h1>
-        {isAdmin && (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {edit && (
+            <div style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+              {([["files", "Матеріали"], ["courses", "Курси"]] as const).map(([k, l]) => (
+                <button key={k} onClick={() => setView(k)} style={{ padding: "6px 12px", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600,
+                  background: view === k ? ACC : "var(--card-bg)", color: view === k ? "#fff" : "var(--text)" }}>{l}</button>
+              ))}
+            </div>
+          )}
+          {edit && view === "files" && (<>
             <button className="btn-secondary" onClick={onNewFolder} disabled={busy}>➕ Папка</button>
             <button className="btn-secondary" onClick={() => setAdding(true)} disabled={busy} style={{ background: ACC, color: "#fff", border: "none" }}>➕ Матеріал</button>
-          </div>
-        )}
+          </>)}
+        </div>
       </div>
 
-      {!isAdmin && <p className="loading-text" style={{ marginTop: -4 }}>Навчальні відео та матеріали. Керування — у керівника відділу продажу.</p>}
+      {!edit && <p className="loading-text" style={{ marginTop: -4 }}>Навчальні відео та матеріали. Керування — у керівника відділу продажу.</p>}
+
+      {view === "courses" && <CoursesEditor onFoldersChanged={load} />}
+      {view === "files" && (<>
 
       {/* Хлібні крихти */}
       <div className="chart-card" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", fontSize: 14 }}>
@@ -279,7 +455,7 @@ export function TrainingSection({ isAdmin }: { isAdmin: boolean }) {
               {subFolders.map((f) => (
                 <div key={f.id} className="chart-card" style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 14px", margin: 0 }}>
                   <button onClick={() => setCwd(f.id)} style={{ flex: 1, textAlign: "left", background: "none", border: "none", cursor: "pointer", fontSize: 15, fontWeight: 600, color: "var(--text)", display: "flex", gap: 8, alignItems: "center", padding: 0 }}>📁 {f.name}</button>
-                  {isAdmin && (<>
+                  {edit && (<>
                     <button title="Перейменувати" onClick={() => onRenameFolder(f)} disabled={busy} style={{ background: "none", border: "none", cursor: "pointer" }}>✏️</button>
                     <button title="Видалити" onClick={() => onDeleteFolder(f)} disabled={busy} style={{ background: "none", border: "none", cursor: "pointer" }}>🗑️</button>
                   </>)}
@@ -301,8 +477,15 @@ export function TrainingSection({ isAdmin }: { isAdmin: boolean }) {
                     </div>
                     {m.content && m.kind !== "text" && <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{m.content}</div>}
                   </button>
-                  {isAdmin && (
-                    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+                  {edit && (
+                    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center", borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+                      {edit && (
+                        <label title="Необовʼязковий крок не тримає замок наступного і не входить у відсоток" style={{ marginRight: "auto", display: "flex", gap: 5, alignItems: "center", fontSize: 12, color: "var(--text-muted)", cursor: "pointer" }}>
+                          <input type="checkbox" checked={m.required !== false} disabled={busy}
+                            onChange={(e) => void guard(() => updateTrainingMaterial(m.id, { required: e.target.checked }))} />
+                          обовʼязковий
+                        </label>
+                      )}
                       <button title="Перейменувати" onClick={() => onRenameMaterial(m)} disabled={busy} style={{ background: "none", border: "none", cursor: "pointer" }}>✏️</button>
                       <button title="Видалити" onClick={() => onDeleteMaterial(m)} disabled={busy} style={{ background: "none", border: "none", cursor: "pointer" }}>🗑️</button>
                     </div>
@@ -311,12 +494,14 @@ export function TrainingSection({ isAdmin }: { isAdmin: boolean }) {
               ))}
             </div>
           ) : subFolders.length === 0 && (
-            <div className="chart-card"><p className="loading-text" style={{ margin: 0 }}>{isAdmin ? "Порожньо. Створіть папку або додайте матеріал." : "Тут поки немає матеріалів."}</p></div>
+            <div className="chart-card"><p className="loading-text" style={{ margin: 0 }}>{edit ? "Порожньо. Створіть папку або додайте матеріал." : "Тут поки немає матеріалів."}</p></div>
           )}
         </>
       )}
 
-      {viewing && <MaterialViewer material={viewing} onClose={() => setViewing(null)} isAdmin={isAdmin} onChanged={load} />}
+      </>)}
+
+      {viewing && <MaterialViewer material={viewing} onClose={() => setViewing(null)} isAdmin={edit} onChanged={load} />}
       {adding && <AddMaterialModal folderId={cwd} onClose={() => setAdding(false)} onAdded={() => { setAdding(false); void load(); }} />}
     </div>
   );

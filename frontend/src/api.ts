@@ -3092,14 +3092,14 @@ export async function fetchDocFileBlobUrl(id: number, opts: { inline?: boolean; 
 
 // ── Навчання (training) ──
 export interface TrainingFolder {
-  id: number; parent_id: number | null; name: string; position: number; created_at: string;
+  id: number; parent_id: number | null; name: string; position: number; created_at: string; course_id?: number | null;
 }
 export type TrainingKind = "video_embed" | "file" | "link" | "text";
 export interface TrainingMaterial {
   id: number; folder_id: number | null; title: string; kind: TrainingKind;
   url: string | null; mime: string | null; size_bytes: string | number | null;
   content: string | null; position: number; created_at: string; author?: string | null;
-  status?: "draft" | "published"; created_by_ai?: boolean;
+  status?: "draft" | "published"; created_by_ai?: boolean; required?: boolean;
 }
 /** Опублікувати чернетку (в т.ч. згенеровану АІ) — лише admin. */
 export async function publishTrainingMaterial(id: number): Promise<void> {
@@ -3113,7 +3113,7 @@ export async function createTrainingFolder(name: string, parentId: number | null
   const { data } = await api.post<TrainingFolder>("/training/folder", { name, parentId });
   return data;
 }
-export async function updateTrainingFolder(id: number, patch: { name?: string; parentId?: number | null; position?: number }): Promise<void> {
+export async function updateTrainingFolder(id: number, patch: { name?: string; parentId?: number | null; position?: number; courseId?: number | null; force?: boolean }): Promise<void> {
   await api.patch(`/training/folder/${id}`, patch);
 }
 export async function deleteTrainingFolder(id: number): Promise<void> {
@@ -3129,7 +3129,7 @@ export async function createTrainingMaterial(body: {
   });
   return data;
 }
-export async function updateTrainingMaterial(id: number, patch: { title?: string; content?: string | null; url?: string | null; folderId?: number | null; position?: number }): Promise<void> {
+export async function updateTrainingMaterial(id: number, patch: { title?: string; content?: string | null; url?: string | null; folderId?: number | null; position?: number; required?: boolean }): Promise<void> {
   await api.patch(`/training/material/${id}`, patch);
 }
 export async function deleteTrainingMaterial(id: number): Promise<void> {
@@ -4093,3 +4093,19 @@ export const addHiringComment = async (id: number, comment: string) => { await a
 export const fetchHiringDaily = async (from: string, to: string) =>
   (await api.get<{ rows: HiringDailyRow[]; totals: Omit<HiringDailyRow, "day"> & { attendancePct: number | null } }>("/hiring/daily", { params: { from, to } })).data;
 export const saveHiringDaily = async (day: string, p: { resumes?: number; coldSearch?: number }) => { await api.put(`/hiring/daily/${day}`, p); };
+
+// 🎓 КУРСИ НАВЧАННЯ (редактор, 17.09.2026). Дзеркало `routes/training.ts` → GET /training/courses.
+export type TrainingAudience = "candidate" | "manager" | "all";
+export interface TrainingModule { id: number; name: string; position: number; steps: number; required: number }
+export interface TrainingCourse {
+  id: number; title: string; description: string | null; audience: TrainingAudience;
+  position: number; published: boolean; percent: number; materialCount: number; requiredCount: number;
+  modules?: TrainingModule[];
+}
+export const fetchTrainingCourses = async () =>
+  (await api.get<{ courses: TrainingCourse[]; canEdit: boolean; freeModules?: TrainingModule[] }>("/training/courses")).data;
+export const createTrainingCourse = async (b: { title: string; description?: string | null; audience: TrainingAudience }) =>
+  (await api.post<{ id: number }>("/training/courses", b)).data.id;
+export const patchTrainingCourse = async (id: number, patch: { title?: string; description?: string | null; audience?: TrainingAudience; published?: boolean }) => {
+  await api.patch(`/training/courses/${id}`, patch);
+};
