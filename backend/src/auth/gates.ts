@@ -59,6 +59,9 @@ export const ROUTE_BOUNDARY_EXEMPTIONS: RouteExemption[] = [
     why: "Одноразовий токен привʼязки для ВЛАСНОГО акаунта (10 хв, #442b). Скоуп — сам токен." },
   { method: "POST", path: "/api/auth/telegram-unlink", permanent: true,
     why: "Відвʼязати ВЛАСНИЙ Telegram. Скоуп — сам токен." },
+  { method: "POST", path: "/api/vault-bot/webhook", permanent: true,
+    why: "Стукає сервер Telegram (бот «UTS Сейф»), не браузер: межа — секрет у заголовку X-Telegram-Bot-Api-Secret-Token "
+       + "(виводиться з токена бота, bot/vaultBot.ts). Не збігся → 401 без жодної дії. Робить лише привʼязку чату за одноразовим кодом." },
   { method: "POST", path: "/api/telegram/sign-webhook", permanent: true,
     why: "Стукає сервер Telegram, не браузер: межа — секрет у заголовку X-Telegram-Bot-Api-Secret-Token "
        + "(виводиться з токена бота, bot/signBot.ts). Не збігся → 401 без жодної дії. Вкладки бути не може." },

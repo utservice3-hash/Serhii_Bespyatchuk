@@ -404,6 +404,22 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["manager"] },
   { method: "POST", path: "/api/hiring/candidates/:id/questions/:questionId/answer", cls: "deny-only",
     allow: [], deny: ["manager"] },
+  /* 🔐 СЕЙФ ДОСТУПІВ (18.09.2026). Вкладка `hiring` + право `view_employee_secrets` на рівні роутера:
+     рівно admin, ceo, opdir, kvp, hr. Фінансист адмін-рівня, але права не має → 403 (на проді вкладку
+     «Найм» йому ввімкнено поза сидом — див. ADMIN_DENIED_BY_PERM). Запис і показ — `deny-only`:
+     проба дозволеної ролі надіслала б код у Telegram чи записала б дані. */
+  { method: "GET", path: "/api/secrets/status", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+  { method: "GET", path: "/api/secrets/people", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+  { method: "GET", path: "/api/secrets/people/:userId", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/secrets/link", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/secrets/unlink", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/secrets/people/:userId", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "PATCH", path: "/api/secrets/:id", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "DELETE", path: "/api/secrets/:id", cls: "DELETE-ghost", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/secrets/:id/restore", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/secrets/:id/code", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/secrets/:id/reveal", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/vault-bot/webhook", cls: "deny-only", allow: [], deny: [] },
   { method: "GET", path: "/api/dashboard/lead-recommendation", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["manager", "hr"] },
   // 🟢 ЗМІНА ПОЛІТИКИ 04.08.2026 (рішення власника), ЗАДЕКЛАРОВАНА, А НЕ ДРЕЙФ.

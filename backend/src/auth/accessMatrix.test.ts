@@ -74,6 +74,15 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/training/materials/:id/publish": "manage_training — те саме",
   "POST /api/training/courses": "manage_training — те саме (крок 2, 15.09.2026)",
   "PATCH /api/training/courses/:id": "manage_training — те саме",
+  // 🔐 Сейф доступів (18.09.2026): право `view_employee_secrets` на рівні роутера.
+  "POST /api/secrets/link": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
+  "POST /api/secrets/unlink": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
+  "POST /api/secrets/people/:userId": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
+  "PATCH /api/secrets/:id": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
+  "DELETE /api/secrets/:id": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
+  "POST /api/secrets/:id/restore": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
+  "POST /api/secrets/:id/code": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
+  "POST /api/secrets/:id/reveal": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   // 🎓 Найм 2a (17.09.2026): питання тімліду ставить ЛИШЕ власник акаунта кандидата — будь-яка інша роль,
   // фінансист теж, отримує 403 у ядрі ДО запису. Відмова не по рівню, а по звʼязку акаунта з карткою.
   "POST /api/training/questions": "лише акаунт кандидата з картки найму — інші ролі 403 до запису",

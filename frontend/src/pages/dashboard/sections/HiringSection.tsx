@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { fetchHiringMeta, hiringError, type HiringMeta } from "../../../api";
+import { fetchHiringMeta, fetchSecretsStatus, hiringError, type HiringMeta } from "../../../api";
 import { LS } from "../hiringView";
 import type { Toast } from "./HiringShared";
 import { HiringSchedule } from "./HiringSchedule";
@@ -8,6 +8,7 @@ import { HiringCandidates } from "./HiringCandidates";
 import { HiringDaily } from "./HiringDaily";
 import { HiringVacancies } from "./HiringVacancies";
 import { HiringTraining } from "./HiringTraining";
+import { HiringSecrets } from "./HiringSecrets";
 import { PlannedTabCard, LiveTabNote, type PlannedTab } from "./HiringRoadmap";
 import "./hiring.css";
 
@@ -18,7 +19,7 @@ import "./hiring.css";
  *  • edit — рекрутер (HR) і адмін-рівень: усі три вкладки;
  *  • lead — тімлід: лише «Кандидати» своєї команди після співбесіди з ним.
  */
-type Tab = "sched" | "base" | "vac" | "train" | "daily" | PlannedTab;
+type Tab = "sched" | "base" | "vac" | "train" | "daily" | "acc" | PlannedTab;
 
 export function HiringSection() {
   const [meta, setMeta] = useState<HiringMeta | null>(null);
@@ -33,6 +34,10 @@ export function HiringSection() {
     fetchHiringMeta().then(setMeta).catch((e) => setErr(hiringError(e)));
   }, []);
   useEffect(reloadMeta, [reloadMeta, nonce]);
+  // 🔐 «Доступи» бачить лише той, кому сервер відповідає (право `view_employee_secrets`). Не з токена:
+  // право могли видати після входу, а сервер однаково гейтить кожен запит.
+  const [canSecrets, setCanSecrets] = useState(false);
+  useEffect(() => { fetchSecretsStatus().then(() => setCanSecrets(true)).catch(() => setCanSecrets(false)); }, []);
 
   const toast: Toast = useCallback((text, opts) => {
     const key = Date.now();
@@ -49,6 +54,7 @@ export function HiringSection() {
   const tabs: [Tab, string][] = meta.access === "edit"
     ? [["sched", "Графік"], ["base", "Кандидати"], ["vac", "Вакансії"], ["train", "На навчанні"], ["daily", "Щоденний звіт"], ["emp", "Співробітники"], ["churn", "Плинність"], ["exit", "Exit-інтервʼю"], ["sum", "Зведення"]]
     : [["base", "Кандидати"], ["train", "На навчанні"], ["emp", "Співробітники"]];
+  if (canSecrets) tabs.splice(tabs.findIndex(([k]) => k === "emp"), 0, ["acc", "Доступи"]);
   const planned = new Set<Tab>(["emp", "churn", "exit", "sum"]);
   const active = tabs.some(([k]) => k === tab) ? tab : tabs[0][0];
   const pick = (t: Tab) => { setTab(t); LS.set("tab", t); };
@@ -74,6 +80,7 @@ export function HiringSection() {
       {active === "base" && <HiringCandidates key={vacFilter?.seq ?? 0} meta={meta} toast={toast} initialVacancyId={vacFilter?.id ?? null} onMetaStale={() => setNonce((n) => n + 1)} />}
       {active === "vac" && <HiringVacancies meta={meta} toast={toast} onChanged={() => setNonce((n) => n + 1)}
         onOpenCandidates={(id) => { setVacFilter({ id, seq: Date.now() }); pick("base"); }} />}
+      {active === "acc" && <HiringSecrets toast={toast} />}
       {active === "train" && <HiringTraining meta={meta} toast={toast} onChanged={() => setNonce((n) => n + 1)} />}
       {active === "daily" && <HiringDaily toast={toast} />}
       {toastState && createPortal(

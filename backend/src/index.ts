@@ -34,6 +34,9 @@ import { sendOfferReminders } from "./jobs/offerReminders.js";
 import { runDocLifecycle } from "./jobs/docLifecycle.js";
 import { runDocText } from "./jobs/docText.js";
 import { signBotEnsureWebhook } from "./bot/signBot.js";
+import { vaultBotEnsureWebhook } from "./bot/vaultBot.js";
+import { secretsRouter } from "./routes/secrets.js";
+import { vaultBotRouter } from "./routes/vaultBot.js";
 import { oneOnOnesRouter } from "./routes/oneOnOnes.js";
 import { createOneOnOneReminders } from "./jobs/oneOnOneReminders.js";
 import { dutyRouter } from "./routes/duty.js";
@@ -149,7 +152,9 @@ app.use("/api/one-on-ones", oneOnOnesRouter);
 app.use("/api/duty", dutyRouter);
 app.use("/api/training/questions", hiringQuestionsRouter); // питання кандидата тімліду (найм 2a) — ДО trainingRouter
 app.use("/api/training", trainingRouter);
-app.use("/api/hiring", hiringRouter); // Найм: графік, кандидати, щоденний звіт (17.09.2026)
+app.use("/api/hiring", hiringRouter);
+app.use("/api/secrets", secretsRouter); // 🔐 сейф доступів співробітників (18.09.2026)
+app.use("/api/vault-bot", vaultBotRouter); // 🤖 вебхук бота «UTS Сейф» (без requireAuth, межа — секрет) // Найм: графік, кандидати, щоденний звіт (17.09.2026)
 app.use("/api/statistics", statisticsRouter);
 app.use("/api/statistics", statsSeriesRouter); // /series, /series/manual — падають повз депстат-роут
 app.use("/api/bank", bankRouter); // Виписка — банк-API (окремо від CRM)
@@ -801,6 +806,7 @@ const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["freshnessWatch", () => freshnessWatch()],
   ["catchUpAiChat", () => catchUpAiChat()],
   ["signBotEnsureWebhook", () => signBotEnsureWebhook()],
+  ["vaultBotEnsureWebhook", () => vaultBotEnsureWebhook()],
   ["docLifecycle", () => runDocLifecycle()],
   ["docText", () => runDocText()],
   ["createOneOnOneReminders", () => createOneOnOneReminders()],

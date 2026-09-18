@@ -4205,3 +4205,29 @@ export const fetchInvite = async (token: string) =>
   (await api.get<{ name: string | null; login: string; expiresAt: string }>(`/auth/invite/${encodeURIComponent(token)}`)).data;
 export const acceptInvite = async (token: string, password: string) =>
   (await api.post<{ token: string; login: string }>(`/auth/invite/${encodeURIComponent(token)}`, { password })).data;
+
+// 🔐 СЕЙФ ДОСТУПІВ (18.09.2026). Значення (пароль, номер картки) приходить ЛИШЕ з reveal.
+export interface SecretsStatus { keyConfigured: boolean; botConfigured: boolean; botUsername: string | null; linked: boolean; linkedAt: string | null }
+export interface SecretPerson { id: number; name: string; email: string; team_name: string | null; role: string; passwords: number; cards: number; updated_at: string | null }
+export interface SecretItem {
+  id: number; kind: "password" | "card"; service: string; label: string | null; login: string | null; last4: string | null;
+  updated_at: string; updated_by: string | null; deleted_at: string | null; versions: number;
+}
+export interface SecretJournalRow { id: number; at: string; action: string; actor: string | null; service: string | null; reason: string | null }
+export interface SecretPersonVault {
+  person: { id: number; name: string; email: string; team_name: string | null; role: string };
+  items: SecretItem[]; journal: SecretJournalRow[];
+}
+export const fetchSecretsStatus = async () => (await api.get<SecretsStatus>("/secrets/status")).data;
+export const createSecretsLink = async () => (await api.post<{ code: string; expiresInSec: number; botUsername: string | null; url: string | null }>("/secrets/link")).data;
+export const unlinkSecretsBot = async () => { await api.post("/secrets/unlink"); };
+export const fetchSecretPeople = async () => (await api.get<{ rows: SecretPerson[] }>("/secrets/people")).data.rows;
+export const fetchSecretPerson = async (userId: number) => (await api.get<SecretPersonVault>(`/secrets/people/${userId}`)).data;
+export const createSecret = async (userId: number, b: { kind: "password" | "card"; service?: string; label?: string; login?: string; value: string }) =>
+  (await api.post<{ id: number }>(`/secrets/people/${userId}`, b)).data.id;
+export const updateSecret = async (id: number, b: { login?: string; value?: string }) => (await api.patch<{ id: number }>(`/secrets/${id}`, b)).data.id;
+export const deleteSecret = async (id: number) => { await api.delete(`/secrets/${id}`); };
+export const restoreSecret = async (id: number) => { await api.post(`/secrets/${id}/restore`); };
+export const sendSecretCode = async (id: number) => (await api.post<{ expiresInSec: number }>(`/secrets/${id}/code`)).data;
+export const revealSecret = async (id: number, code: string, reason: string) =>
+  (await api.post<{ value: string; login: string | null; seconds: number }>(`/secrets/${id}/reveal`, { code, reason })).data;

@@ -121,6 +121,7 @@ export const MANIFEST_FILES: string[] = [
   "core/missedCalls.test.js",
   "core/hiring.test.js",
   "core/hiringTraining.test.js",
+  "core/secrets.test.js",
 
   "core/trainingEditor.test.js",
   "core/missedCallSignal.test.js",
@@ -229,6 +230,9 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "task_comments", "task_files", "task_status_log", "task_views", "task_groups",
   "hiring_candidates", "hiring_interviews", "hiring_events", "hiring_daily_manual",
   "hiring_files",
+  "employee_secrets",
+  "secret_reveal_codes",
+  "vault_link_codes",
   "hiring_invites",
   "hiring_training_questions",
 ];
@@ -807,6 +811,14 @@ export const MANIFEST_TESTS: string[] = [
   "#536 ДОСТУП: вимкнений кандидат відсікається на живому токені; запрошення публічне й видає той самий вхід",
   "#538 ВХІД: пароль один раз, у базі хеш, в історії його немає; друга видача — новий",
   "#537 ДЖОБА: hiringAccess у кроні, під наглядом із частотою крону і в стартових прогонах",
+  // core/secrets.test.ts — сейф доступів співробітників (18.09.2026)
+  "#550 ШИФР: AES-GCM з привʼязкою до людини й сервісу, підміна — помилка",
+  "#551 ЖИВИЙ SQL: пароль і номер картки не з'являються ні в списку, ні в картці, ні в аудиті, ні в базі",
+  "#552 ЖИВИЙ SQL: «Показати» — код у Telegram, три спроби, один раз, запис в аудиті",
+  "#553 ПРАВО: сейф за view_employee_secrets на роутері; видано рівно admin, ceo, opdir, kvp, hr",
+  "#554 СЕЙФ: employee_secrets, secret_reveal_codes, vault_link_codes відібрані в ai_readonly і є в FORBIDDEN_TABLES",
+  "#555 КЛЮЧ: без ключа — 503 на запис і показ, сервер при цьому стартує",
+  "#556 БОТ СЕЙФУ: свій секрет вебхука, код привʼязки одноразовий",
   // core/missedCalls.test.ts — ТЗ-1 «Пропущені дзвінки» (14.09.2026)
   // 🔢 ДЕСЯТКА #43x, А НЕ #42x — ПЕРЕНУМЕРОВАНО ПРИ МЕРЖІ 15.09.2026. Писалось як
   // #421-#430 за правилом «найвищий змерджений +1» (тоді #419). Поки прохід ішов, у
