@@ -40,6 +40,7 @@ import { dutyRouter } from "./routes/duty.js";
 import { createDutyReminders } from "./jobs/dutyReminders.js";
 import { trainingRouter } from "./routes/training.js";
 import { hiringQuestionsRouter } from "./routes/hiringQuestions.js";
+import { candidateTrainingRouter } from "./routes/candidateTraining.js";
 import { hiringRouter } from "./routes/hiring.js";
 import { statisticsRouter } from "./routes/statistics.js";
 import { statsSeriesRouter } from "./routes/statisticsSeries.js";
@@ -147,6 +148,7 @@ app.use("/api/documents", documentsRouter);
 app.use("/api/telegram", telegramRouter); // вебхук бота підпису — без requireAuth, межа секретом (routes/telegram.ts)
 app.use("/api/one-on-ones", oneOnOnesRouter);
 app.use("/api/duty", dutyRouter);
+app.use("/api/training/candidate", candidateTrainingRouter); // «моє навчання» кандидата (найм 2b) — ДО trainingRouter
 app.use("/api/training/questions", hiringQuestionsRouter); // питання кандидата тімліду (найм 2a) — ДО trainingRouter
 app.use("/api/training", trainingRouter);
 app.use("/api/hiring", hiringRouter); // Найм: графік, кандидати, щоденний звіт (17.09.2026)

@@ -214,6 +214,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
   /* Питання кандидата тімліду (найм 2a). Читання — свої питання, тож порожній список будь-кому з вкладкою
      «Навчання»; запис — лише власник акаунта кандидата (ядро): решта ролей отримує 403 ДО запису, тож
      проба безпечна. Фінансист у deny — вимога `#412` для кожного запису під `/api/training`. */
+  /* 🎓 Екран навчання кандидата (найм 2b). Обидва — лише про власника токена, тож відкриті всім,
+     хто має вкладку «Навчання»: не-кандидат отримує `{ candidate: false }`, а матеріал `0` — 404. */
+  { method: "GET", path: "/api/training/candidate/me", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
+  { method: "GET", path: "/api/training/material/:id", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
   { method: "GET", path: "/api/training/questions", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
   { method: "POST", path: "/api/training/questions", cls: "deny-only",

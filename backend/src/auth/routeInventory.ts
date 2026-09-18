@@ -54,6 +54,7 @@ export const MOUNTS: { mount: string; module: string; export: string }[] = [
   { mount: "/api/telegram", module: "../routes/telegram.js", export: "telegramRouter" },
   { mount: "/api/one-on-ones", module: "../routes/oneOnOnes.js", export: "oneOnOnesRouter" },
   { mount: "/api/duty", module: "../routes/duty.js", export: "dutyRouter" },
+  { mount: "/api/training/candidate", module: "../routes/candidateTraining.js", export: "candidateTrainingRouter" },
   { mount: "/api/training/questions", module: "../routes/hiringQuestions.js", export: "hiringQuestionsRouter" },
   { mount: "/api/training", module: "../routes/training.js", export: "trainingRouter" },
   { mount: "/api/hiring", module: "../routes/hiring.js", export: "hiringRouter" },

@@ -7,6 +7,7 @@ import { pool } from "../db/pool.js";
 import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { UPLOAD_DIR } from "./uploads.js";
 import { orderedMaterials, materialStates, coursePercent } from "../core/trainingProgress.js";
+import { stepLockedBy, type LockDb } from "../core/trainingLock.js";
 import { attachVerdict, requiredValue, moduleStats, courseModules, freeModules, type EditorFolder } from "../core/trainingEditor.js";
 import { roleHasPerm } from "../auth/rbac.js";
 
@@ -382,29 +383,42 @@ trainingRouter.get("/courses/:id", async (req, res) => {
   });
 });
 
-/** Спільна перевірка: чи можна ЗАРАЗ чіпати цей матеріал. `null` = можна. */
-async function lockedReason(uid: number, materialId: number): Promise<{ materialId: number; title: string } | null> {
-  const [folders, materials, progress] = await Promise.all([
-    pool.query(`SELECT id, parent_id, position, course_id FROM training_folders`),
-    pool.query(`SELECT id, folder_id, title, position, required FROM training_materials WHERE status = 'published'`),
-    pool.query(`SELECT material_id, status FROM training_progress WHERE user_id = $1`, [uid]),
-  ]);
-  const me = materials.rows.find((m) => m.id === materialId);
-  if (!me) return null;                       // немає матеріалу — про замок не йдеться
-  const fRows = folders.rows.map((f) => ({ id: f.id, parentId: f.parent_id, position: f.position }));
-  const mRows = materials.rows.map((m) => ({ id: m.id, folderId: m.folder_id, position: m.position, required: m.required }));
-  const done = new Map(progress.rows.map((p) => [p.material_id, p.status as "opened" | "done"]));
+/**
+ * Спільна перевірка: чи можна ЗАРАЗ чіпати цей матеріал. `null` = можна.
+ * Тіло переїхало в `core/trainingLock.ts` (прохід 2b, 18.09.2026) без зміни поведінки — щоб гейт
+ * `#545` ганяв саме її на живій схемі, а не свою копію.
+ */
+const lockedReason = (uid: number, materialId: number) => stepLockedBy(pool as unknown as LockDb, uid, materialId);
 
-  // Модуль матеріалу: його папка, якщо коренева, інакше її батько.
-  const own = folders.rows.find((f) => f.id === me.folder_id);
-  const moduleId = own?.parent_id ?? own?.id;
-  if (moduleId == null) return null;
-
-  const st = materialStates(orderedMaterials(moduleId, fRows, mRows), done).find((s) => s.id === materialId);
-  if (!st || st.state !== "locked" || !st.blockedBy) return null;
-  const title = materials.rows.find((m) => m.id === st.blockedBy!.materialId)?.title ?? "";
-  return { materialId: st.blockedBy.materialId, title };
-}
+/**
+ * 📖 ВМІСТ ОДНОГО КРОКУ — для екрана навчання кандидата (прохід 2b, 18.09.2026).
+ *
+ * 🔴 ЗАМКНЕНИЙ КРОК ВМІСТУ НЕ ВІДДАЄ: 423 з назвою кроку, що тримає замок, — та сама
+ * функція `lockedReason`, що й у «відкрив»/«опрацював». Інакше замок був би лише написом:
+ * текст наступного кроку приходив би разом зі списком, і «по черзі» трималось би на чесності.
+ * Поля явно, без спреду (`#17e2`): нова колонка матеріалу сама назовні не поїде.
+ */
+trainingRouter.get("/material/:id", async (req, res) => {
+  const uid = req.auth!.userId;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Некоректний id" });
+  const r = await pool.query<{ id: number; folder_id: number | null; title: string; kind: string; url: string | null;
+    mime: string | null; size_bytes: string | null; content: string | null; required: boolean; stored_name: string | null }>(
+    `SELECT id, folder_id, title, kind, url, mime, size_bytes, content, required, stored_name
+       FROM training_materials WHERE id = $1 AND (status = 'published' OR $2::boolean)`,
+    [id, isAdminScope(req.auth!)]);
+  const m = r.rows[0];
+  if (!m) return res.status(404).json({ error: "Матеріал не знайдено" });
+  const blocked = await lockedReason(uid, id);
+  if (blocked) return res.status(423).json({ error: "Крок ще закритий", blockedBy: blocked });
+  const p = await pool.query<{ status: string; finished_at: string | null }>(
+    `SELECT status, finished_at FROM training_progress WHERE user_id = $1 AND material_id = $2`, [uid, id]);
+  res.json({
+    id: m.id, folderId: m.folder_id, title: m.title, kind: m.kind, url: m.url, mime: m.mime,
+    sizeBytes: m.size_bytes, content: m.content, required: m.required, hasFile: m.stored_name != null,
+    status: p.rows[0]?.status ?? null, finishedAt: p.rows[0]?.finished_at ?? null,
+  });
+});
 
 /** Відкриття матеріалу. 423 — якщо замкнено, із назвою того, хто тримає замок. */
 trainingRouter.post("/progress/:materialId/open", async (req, res) => {

@@ -4205,3 +4205,32 @@ export const fetchInvite = async (token: string) =>
   (await api.get<{ name: string | null; login: string; expiresAt: string }>(`/auth/invite/${encodeURIComponent(token)}`)).data;
 export const acceptInvite = async (token: string, password: string) =>
   (await api.post<{ token: string; login: string }>(`/auth/invite/${encodeURIComponent(token)}`, { password })).data;
+
+// 🎓 ЕКРАН НАВЧАННЯ КАНДИДАТА (найм 2b, 18.09.2026). Дзеркало `routes/training.ts` і `routes/candidateTraining.ts`.
+export type TrainingStepState = "locked" | "available" | "opened" | "done";
+export interface TrainingCourseDetail {
+  course: { id: number; title: string; description: string | null; audience: TrainingAudience; published: boolean };
+  percent: number;
+  modules: { id: number; name: string; index: number; percent: number;
+    materials: { id: number; title: string; kind: TrainingKind; required: boolean; state: TrainingStepState;
+      blockedBy: { materialId: number; title: string } | null }[] }[];
+}
+export interface TrainingMaterialContent {
+  id: number; folderId: number | null; title: string; kind: TrainingKind; url: string | null; mime: string | null;
+  sizeBytes: string | null; content: string | null; required: boolean; hasFile: boolean;
+  status: "opened" | "done" | null; finishedAt: string | null;
+}
+export type CandidateMe = { candidate: false } | {
+  candidate: true; fullName: string | null; teamName: string | null; leadName: string | null;
+  day: number; days: number; deadline: string | null; firstLoginAt: string | null;
+  closedReason: string | null; done: number; total: number; percent: number;
+};
+export interface MyTrainingQuestion { id: number; material_id: number | null; question: string; asked_at: string; answer: string | null; answered_at: string | null }
+export const fetchTrainingCourse = async (id: number) => (await api.get<TrainingCourseDetail>(`/training/courses/${id}`)).data;
+export const fetchTrainingMaterial = async (id: number) => (await api.get<TrainingMaterialContent>(`/training/material/${id}`)).data;
+export const openTrainingMaterial = async (id: number) => { await api.post(`/training/progress/${id}/open`); };
+export const doneTrainingMaterial = async (id: number) => { await api.post(`/training/progress/${id}/done`); };
+export const fetchCandidateMe = async () => (await api.get<CandidateMe>("/training/candidate/me")).data;
+export const fetchMyTrainingQuestions = async () => (await api.get<{ rows: MyTrainingQuestion[] }>("/training/questions")).data.rows;
+export const askTrainingQuestion = async (question: string, materialId: number | null) =>
+  (await api.post<{ id: number }>("/training/questions", { question, materialId })).data.id;

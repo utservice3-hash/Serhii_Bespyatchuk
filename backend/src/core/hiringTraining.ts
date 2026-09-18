@@ -364,6 +364,32 @@ export async function promoteCandidate(db: Db, actorId: number | null, id: numbe
   await closeCandidateAccess(db, id, "manager", actorId);
 }
 
+// ── Екран кандидата (прохід 2b) ──────────────────────────────────────────
+
+/**
+ * «Моє навчання» для самого кандидата: день, строк доступу, команда, тімлід, прогрес.
+ *
+ * 🔴 РАХУЄ `trainingBoard` — ТОЙ САМИЙ РЯДОК, ЩО БАЧИТЬ РЕКРУТЕР НА ДОШЦІ. Друга копія формули
+ * строку розійшлась би з першою мовчки, і кандидат бачив би «ще 30 год», а тімлід — «закрито».
+ * Ключ — `userId` із токена; параметра «чий» немає, тож чужого не віддати навіть помилкою.
+ * Користувач без картки в «Наймі» — `null`: екран курсу працює, смуги строку просто немає.
+ */
+export async function candidateSelf(db: Db, userId: number, now = new Date()) {
+  const c = (await db.query<{ id: number }>(`SELECT id FROM hiring_candidates WHERE user_id = $1`, [userId])).rows[0];
+  if (!c) return null;
+  const row = (await trainingBoard(db, "edit", null, now, c.id))[0];
+  if (!row) return null;
+  const lead = (await db.query<{ name: string | null }>(
+    `SELECT COALESCE(u.full_name, m.name, u.email) AS name FROM users u LEFT JOIN managers m ON m.id = u.manager_id
+      WHERE u.team_id = $1 AND COALESCE(u.role_override, u.role) = 'team_lead' AND u.is_active ORDER BY u.id LIMIT 1`,
+    [row.team_id ?? -1])).rows[0];
+  return {
+    fullName: row.full_name, teamName: row.team_name, leadName: lead?.name ?? null,
+    day: row.day, days: row.days, deadline: row.deadline, firstLoginAt: row.first_login_at,
+    closedReason: row.access_closed_reason, done: row.done, total: row.total, percent: row.percent,
+  };
+}
+
 // ── Питання тімліду ────────────────────────────────────────────────────────
 
 /** Кандидат питає тімліда з кроку. Лише власник акаунта кандидата з відкритим доступом. */

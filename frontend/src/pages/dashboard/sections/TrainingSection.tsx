@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { embedUrl, trainingViewFor } from "../trainingView";
+import { CandidateTraining } from "./CandidateTraining";
 import {
   fetchTrainingTree, createTrainingFolder, updateTrainingFolder, deleteTrainingFolder,
   createTrainingMaterial, updateTrainingMaterial, deleteTrainingMaterial, fetchTrainingFileBlobUrl,
@@ -23,16 +25,6 @@ function fmtBytes(n: string | number | null): string {
   return `${(b / 1024 / 1024).toFixed(1)} МБ`;
 }
 
-/** YouTube/Vimeo/пряме відео → URL для <iframe>, або null якщо це пряме відео-файлове посилання. */
-function embedUrl(raw: string): { iframe?: string; direct?: string } {
-  const url = raw.trim();
-  const yt = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/)([\w-]{11})/);
-  if (yt) return { iframe: `https://www.youtube.com/embed/${yt[1]}` };
-  const vimeo = url.match(/vimeo\.com\/(?:video\/)?(\d+)/);
-  if (vimeo) return { iframe: `https://player.vimeo.com/video/${vimeo[1]}` };
-  if (/\.(mp4|webm|ogg|mov|m4v)(\?.*)?$/i.test(url)) return { direct: url };
-  return { iframe: url }; // інший embed — пробуємо як iframe
-}
 
 function MaterialViewer({ material, onClose, isAdmin, onChanged }: { material: TrainingMaterial; onClose: () => void; isAdmin?: boolean; onChanged?: () => void }) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
@@ -357,7 +349,13 @@ function CoursesEditor({ onFoldersChanged }: { onFoldersChanged: () => void }) {
  * Навчання — навчальна база. Адмін (КВП) будує структуру папок і розміщує
  * матеріали (відео/файли/посилання/текст). Решта — переглядають.
  */
-export function TrainingSection({ isAdmin }: { isAdmin: boolean }) {
+export function TrainingSection({ isAdmin, roleKey }: { isAdmin: boolean; roleKey?: string }) {
+  // Кандидат проходить курс по кроках (найм 2b); решта ролей — бібліотека деревом, як і досі.
+  if (trainingViewFor(roleKey) === "candidate") return <CandidateTraining />;
+  return <TrainingLibrary isAdmin={isAdmin} />;
+}
+
+function TrainingLibrary({ isAdmin }: { isAdmin: boolean }) {
   const [folders, setFolders] = useState<TrainingFolder[]>([]);
   const [materials, setMaterials] = useState<TrainingMaterial[]>([]);
   const [cwd, setCwd] = useState<number | null>(null);

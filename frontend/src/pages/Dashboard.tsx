@@ -1434,7 +1434,7 @@ export function Dashboard() {
         </>
       )}
 
-      {section === "training" && <TrainingSection isAdmin={auth?.role === "admin"} />}
+      {section === "training" && <TrainingSection isAdmin={auth?.role === "admin"} roleKey={auth?.roleKey} />}
 
       {section === "tasks" && (
         <TasksSection
