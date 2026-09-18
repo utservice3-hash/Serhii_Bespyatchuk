@@ -21,6 +21,7 @@ import {
   trainingBoard, trainingDetail, issueInvite, issueCandidatePassword, linkCandidateAccount, freeCandidateAccounts, extendAccess, restoreAccess, promoteCandidate, answerQuestion,
 } from "../core/hiringTraining.js";
 import { CANDIDATE_ACCESS, canDecideTraining } from "../core/hiringTrainingRules.js";
+import { hiringSummary } from "../core/hiringFunnel.js";
 
 /** Та сама тека, що в `routes/documents.ts` (DOCS_DIR) і в нічному бекапі. */
 const DOCS_DIR = path.join(UPLOAD_DIR, "..", "documents");
@@ -77,6 +78,14 @@ const anyAccess = (req: Request) => {
   if (a === "none") throw new HiringError(403, "Немає доступу до найму");
   return a;
 };
+
+/** 📊 Зведення: воронка, відмови, розрізи (етап 2, 18.09.2026). Лише «редагування» — тімлід бачить свою команду в «Кандидатах». */
+hiringRouter.get("/summary", async (req, res) => {
+  try {
+    if (anyAccess(req) !== "edit") return res.status(403).json({ error: "Зведення — для HR і керівництва" });
+    res.json(await hiringSummary(pool as unknown as Db, { from: req.query.from, to: req.query.to, vacancyId: req.query.vacancyId, source: req.query.source }));
+  } catch (e) { fail(res, e); }
+});
 
 hiringRouter.get("/meta", async (req, res) => {
   try {
