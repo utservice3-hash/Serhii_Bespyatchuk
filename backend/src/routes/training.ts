@@ -7,6 +7,8 @@ import { pool } from "../db/pool.js";
 import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { UPLOAD_DIR } from "./uploads.js";
 import { orderedMaterials, materialStates, coursePercent } from "../core/trainingProgress.js";
+import { attachVerdict, requiredValue, moduleStats, courseModules, freeModules, type EditorFolder } from "../core/trainingEditor.js";
+import { roleHasPerm } from "../auth/rbac.js";
 
 /**
  * Навчання — навчальна база відділу продажу. Адмін (КВП) будує структуру папок
@@ -42,12 +44,12 @@ const KINDS = new Set(["video_embed", "file", "link", "text"]);
 /** Уся структура: пласкі списки папок і матеріалів (дерево будує фронт). */
 trainingRouter.get("/tree", async (req, res) => {
   const [folders, materials] = await Promise.all([
-    pool.query(`SELECT id, parent_id, name, position, created_at FROM training_folders ORDER BY position, name`),
+    pool.query(`SELECT id, parent_id, name, position, created_at, course_id FROM training_folders ORDER BY position, name`),
     pool.query(
       // 🔴 ЧЕРНЕТКИ (в т.ч. згенеровані АІ) бачить ЛИШЕ admin — решта отримує тільки
       // опубліковане. Публікація — окрема людська дія (POST /materials/:id/publish).
       `SELECT m.id, m.folder_id, m.title, m.kind, m.url, m.mime, m.size_bytes, m.content, m.position, m.created_at,
-              m.status, m.created_by_ai,
+              m.status, m.created_by_ai, m.required,
               COALESCE(mm.name, u.email) AS author
          FROM training_materials m
          LEFT JOIN users u ON u.id = m.created_by
@@ -104,6 +106,25 @@ trainingRouter.patch("/folder/:id", canEditTraining, async (req, res) => {
     params.push(parentId); sets.push(`parent_id = $${params.length}`);
   }
   if (req.body?.position !== undefined) { params.push(Number(req.body.position)); sets.push(`position = $${params.length}`); }
+  /* 🧩 Модуль курсу (редактор навчання, 17.09.2026). `courseId: null` — прибрати з курсу
+     (матеріали лишаються в папці); число — зробити модулем. Правило — `core/trainingEditor.ts`. */
+  if (req.body?.courseId !== undefined) {
+    const courseId = req.body.courseId != null ? Number(req.body.courseId) : null;
+    if (courseId !== null && !Number.isInteger(courseId)) return res.status(400).json({ error: "Некоректний курс" });
+    const cur = await pool.query<{ id: number; parent_id: number | null; course_id: number | null; name: string; position: number; cur_name: string | null }>(
+      `SELECT f.id, f.parent_id, f.course_id, f.name, f.position, c.title AS cur_name
+         FROM training_folders f LEFT JOIN training_courses c ON c.id = f.course_id WHERE f.id = $1`,
+      [Number(req.params.id)]);
+    const row = cur.rows[0];
+    const exists = courseId === null ? true
+      : ((await pool.query(`SELECT 1 FROM training_courses WHERE id = $1`, [courseId])).rowCount ?? 0) > 0;
+    const v = attachVerdict({
+      folder: row ? { id: row.id, parentId: row.parent_id, courseId: row.course_id, name: row.name, position: row.position } : null,
+      courseId, courseExists: exists, force: req.body?.force === true, currentCourseName: row?.cur_name ?? null,
+    });
+    if (!v.ok) return res.status(v.status).json({ error: v.reason });
+    params.push(courseId); sets.push(`course_id = $${params.length}`);
+  }
   if (!sets.length) return res.status(400).json({ error: "Нема що оновлювати" });
   params.push(Number(req.params.id));
   const r = await pool.query(`UPDATE training_folders SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING id`, params);
@@ -195,6 +216,13 @@ trainingRouter.patch("/material/:id", canEditTraining, async (req, res) => {
   if (b.url !== undefined) { params.push(b.url ? String(b.url) : null); sets.push(`url = $${params.length}`); }
   if (b.folderId !== undefined) { params.push(b.folderId != null ? Number(b.folderId) : null); sets.push(`folder_id = $${params.length}`); }
   if (b.position !== undefined) { params.push(Number(b.position)); sets.push(`position = $${params.length}`); }
+  /* 🧩 «Обовʼязковий крок» (редактор навчання). Необовʼязковий не тримає замок і не входить
+     у знаменник відсотка — правило одне, у `core/trainingProgress.ts`. */
+  if (b.required !== undefined) {
+    const req_ = requiredValue(b.required);
+    if (req_ === null) return res.status(400).json({ error: "required: true або false" });
+    params.push(req_); sets.push(`required = $${params.length}`);
+  }
   if (!sets.length) return res.status(400).json({ error: "Нема що оновлювати" });
   params.push(Number(req.params.id));
   const r = await pool.query(`UPDATE training_materials SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING id`, params);
@@ -256,15 +284,18 @@ const audienceFor = (roleKey: string): string[] =>
 /** Курси за аудиторією + мій відсоток по кожному. */
 trainingRouter.get("/courses", async (req, res) => {
   const uid = req.auth!.userId;
+  /* 🧩 Редактор бачить курси ВСІХ аудиторій — інакше той, хто щойно створив курс для
+     кандидатів, не знайшов би його у своєму ж списку (у нього аудиторія `manager`). */
+  const canEdit = roleHasPerm(req.auth!.roleKey, "manage_training");
   const [courses, folders, materials, progress] = await Promise.all([
     pool.query(
       `SELECT id, title, description, audience, position, published
          FROM training_courses
         WHERE audience = ANY($1) AND (published OR $2::boolean)
         ORDER BY position, id`,
-      [audienceFor(req.auth!.roleKey), isAdminScope(req.auth!)]
+      [canEdit ? ["candidate", "manager", "all"] : audienceFor(req.auth!.roleKey), isAdminScope(req.auth!)]
     ),
-    pool.query(`SELECT id, parent_id, position, course_id FROM training_folders`),
+    pool.query(`SELECT id, parent_id, name, position, course_id FROM training_folders`),
     pool.query(`SELECT id, folder_id, position, required FROM training_materials WHERE status = 'published'`),
     pool.query(`SELECT material_id, status FROM training_progress WHERE user_id = $1`, [uid]),
   ]);
@@ -273,7 +304,15 @@ trainingRouter.get("/courses", async (req, res) => {
   const fRows = folders.rows.map((f) => ({ id: f.id, parentId: f.parent_id, position: f.position }));
   const mRows = materials.rows.map((m) => ({ id: m.id, folderId: m.folder_id, position: m.position, required: m.required }));
 
+  /* 🧩 Редактору (право `manage_training`) віддаємо ще й склад курсу: модулі, скільки в них
+     кроків і які папки ще без курсу. Читачеві цього не показуємо — йому потрібен лише відсоток. */
+  const eFolders: EditorFolder[] = folders.rows.map((f) => ({ id: f.id, parentId: f.parent_id, courseId: f.course_id, name: f.name, position: f.position }));
+  const modulesOf = (courseId: number) => courseModules(eFolders, courseId).map((m) => ({
+    id: m.id, name: m.name, position: m.position, ...moduleStats(m.id, eFolders, mRows),
+  }));
   res.json({
+    canEdit,
+    freeModules: canEdit ? freeModules(eFolders).map((m) => ({ id: m.id, name: m.name, position: m.position, ...moduleStats(m.id, eFolders, mRows) })) : undefined,
     courses: courses.rows.map((c) => {
       // Модуль = КОРЕНЕВА папка курсу (рішення власника 15.09.2026).
       const modules = folders.rows.filter((f) => f.course_id === c.id && f.parent_id === null);
@@ -282,7 +321,9 @@ trainingRouter.get("/courses", async (req, res) => {
       // не має поїхати назовні сама лише тому, що її додали в таблицю.
       return { id: c.id, title: c.title, description: c.description, audience: c.audience,
                position: c.position, published: c.published,
-               percent: coursePercent(all, done), materialCount: all.length };
+               percent: coursePercent(all, done), materialCount: all.length,
+               requiredCount: all.filter((m) => m.required).length,
+               modules: canEdit ? modulesOf(c.id) : undefined };
     }),
   });
 });

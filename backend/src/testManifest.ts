@@ -121,6 +121,8 @@ export const MANIFEST_FILES: string[] = [
   "core/missedCalls.test.js",
   "core/hiring.test.js",
   "core/hiringTraining.test.js",
+
+  "core/trainingEditor.test.js",
   "core/missedCallSignal.test.js",
   "core/navRender.test.js",
   "core/adTouch.test.js",
@@ -233,6 +235,11 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
 export const MANIFEST_TESTS: string[] = [
+  // core/trainingEditor.test.ts — редактор навчання: курси, модулі, обовʼязковість (17.09.2026)
+  "#540 МОДУЛЬ: лише коренева папка, чужий курс — з підтвердженням, відчепити можна завжди",
+  "#541 ОБОВʼЯЗКОВІСТЬ: необовʼязковий не замикає й не рахується; перемикач лише булевий",
+  "#542 ЖИВИЙ SQL: курс для кандидата з модулем і необовʼязковим кроком доїжджає до кандидата",
+  "#543 ПРАВО: курс, модуль і обовʼязковість змінює лише manage_training",
   // ai/metricTools.test.ts (динамічний цикл по таблицях — окремо вище)
   "#6 КОНФІГ: app_settings читає лише диспетчер, не ядро",
   "#6 ПОКРИТТЯ: протрасовано ВСІ метрики білого списку",
