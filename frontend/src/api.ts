@@ -4208,22 +4208,23 @@ export const acceptInvite = async (token: string, password: string) =>
 
 // 🔐 СЕЙФ ДОСТУПІВ (18.09.2026). Значення (пароль, номер картки) приходить ЛИШЕ з reveal.
 export interface SecretsStatus { keyConfigured: boolean; botConfigured: boolean; botUsername: string | null; linked: boolean; linkedAt: string | null }
-export interface SecretPerson { id: number; name: string; email: string; team_name: string | null; role: string; passwords: number; cards: number; updated_at: string | null }
+/** `ref` — «12» (акаунт) або «e34» (людина реєстру без акаунта). */
+export interface SecretPerson { ref: string; id: number | null; name: string; email: string | null; team_name: string | null; role: string | null; status: "active" | "dismissed"; has_account: boolean; passwords: number; cards: number; updated_at: string | null }
 export interface SecretItem {
   id: number; kind: "password" | "card"; service: string; label: string | null; login: string | null; last4: string | null;
   updated_at: string; updated_by: string | null; deleted_at: string | null; versions: number;
 }
 export interface SecretJournalRow { id: number; at: string; action: string; actor: string | null; service: string | null; reason: string | null }
 export interface SecretPersonVault {
-  person: { id: number; name: string; email: string; team_name: string | null; role: string };
+  person: { id: number | null; ref: string; name: string; email: string | null; team_name: string | null; role: string | null; hasAccount: boolean };
   items: SecretItem[]; journal: SecretJournalRow[];
 }
 export const fetchSecretsStatus = async () => (await api.get<SecretsStatus>("/secrets/status")).data;
 export const createSecretsLink = async () => (await api.post<{ code: string; expiresInSec: number; botUsername: string | null; url: string | null }>("/secrets/link")).data;
 export const unlinkSecretsBot = async () => { await api.post("/secrets/unlink"); };
 export const fetchSecretPeople = async () => (await api.get<{ rows: SecretPerson[] }>("/secrets/people")).data.rows;
-export const fetchSecretPerson = async (userId: number) => (await api.get<SecretPersonVault>(`/secrets/people/${userId}`)).data;
-export const createSecret = async (userId: number, b: { kind: "password" | "card"; service?: string; label?: string; login?: string; value: string }) =>
+export const fetchSecretPerson = async (ref: string) => (await api.get<SecretPersonVault>(`/secrets/people/${ref}`)).data;
+export const createSecret = async (userId: string, b: { kind: "password" | "card"; service?: string; label?: string; login?: string; value: string }) =>
   (await api.post<{ id: number }>(`/secrets/people/${userId}`, b)).data.id;
 export const updateSecret = async (id: number, b: { login?: string; value?: string }) => (await api.patch<{ id: number }>(`/secrets/${id}`, b)).data.id;
 export const deleteSecret = async (id: number) => { await api.delete(`/secrets/${id}`); };
@@ -4243,12 +4244,12 @@ export interface EmployeeRow {
 export interface ImportColumn { index: number; header: string; target: string; secretish: boolean; filled: number }
 export interface ImportPreviewRow {
   line: number; name: string; position: string | null; team: string | null; state: "new" | "update" | "duplicate";
-  account: string | null; match: string; matchNote: string; secrets: number; secretsLost: number; problems: string[];
+  account: string | null; match: string; matchNote: string; secrets: number; secretsLost: number; secretsNoAccount: number; problems: string[];
 }
 export interface ImportPreview {
   columns: ImportColumn[]; mappingError: string | null; rows: ImportPreviewRow[];
   headerRow: number; headerCandidates: { row: number; fields: string[] }[];
-  totals?: { rows: number; new: number; update: number; duplicate: number; withAccount: number; noAccount: number; secrets: number; secretsLost: number; problems: number; skipped: number };
+  totals?: { rows: number; new: number; update: number; duplicate: number; withAccount: number; noAccount: number; secrets: number; secretsLost: number; secretsNoAccount: number; problems: number; skipped: number };
 }
 export interface ImportCounts { rows: number; created: number; updated: number; duplicate: number; linked: number; secretsCreated: number; secretsExisting: number; secretsNoAccount: number; secretsInvalid: number }
 export const fetchEmployees = async () => (await api.get<{ rows: EmployeeRow[] }>("/secrets/employees")).data.rows;

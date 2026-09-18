@@ -76,13 +76,14 @@ secretsRouter.get("/people", async (_req, res) => {
   try { res.json({ rows: await listPeople(pool as unknown as Db) }); } catch (e) { fail(res, e); }
 });
 
+// `:userId` — id акаунта («12») або людини реєстру без акаунта («e34»); розбирає `parseRef`.
 secretsRouter.get("/people/:userId", async (req, res) => {
-  try { res.json(await personVault(pool as unknown as Db, num(req.params.userId, "id співробітника"))); } catch (e) { fail(res, e); }
+  try { res.json(await personVault(pool as unknown as Db, req.params.userId)); } catch (e) { fail(res, e); }
 });
 
 secretsRouter.post("/people/:userId", async (req, res) => {
   try {
-    const id = await tx((db) => createSecret(db, key(), me(req), num(req.params.userId, "id співробітника"), req.body ?? {}));
+    const id = await tx((db) => createSecret(db, key(), me(req), req.params.userId, req.body ?? {}));
     res.status(201).json({ id });
   } catch (e) { fail(res, e); }
 });

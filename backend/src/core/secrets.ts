@@ -27,7 +27,7 @@ const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? 
 const NAME = `COALESCE(NULLIF(u.full_name, ''), m.name, u.email)`;
 
 /** Запис в аудит доступів (та сама таблиця, що `db/audit.ts`), але через передане зʼєднання. */
-async function audit(db: Db, actorId: number, action: string, target: { id: number; label: string | null }, details: Record<string, unknown>) {
+async function audit(db: Db, actorId: number, action: string, target: { id: number | string; label: string | null }, details: Record<string, unknown>) {
   await db.query(
     `INSERT INTO access_audit (actor_user_id, actor_email, action, target_type, target_id, target_label, details)
      VALUES ($1, (SELECT email FROM users WHERE id = $1), $2, 'user', $3, $4, $5)`,
@@ -42,43 +42,92 @@ async function person(db: Db, userId: number) {
   return p;
 }
 
+/**
+ * ВЛАСНИК ЗАПИСУ (18.09.2026): акаунт дашборда (`user_id`) АБО людина реєстру без акаунта (`employee_id`).
+ * Посилання — `"12"` / `"u12"` (акаунт) або `"e34"` (людина реєстру). Людина реєстру З акаунтом
+ * тримає записи на акаунті — як і до реєстру; `employee_id` лише для тих, у кого акаунта немає.
+ * AAD різниться (`…:12:…` проти `…:e34:…`), тож шифр однієї не розшифрується як шифр іншої.
+ */
+export interface Owner { userId: number | null; employeeId: number | null; name: string; ref: string }
+
+export function parseRef(ref: unknown): { user: number } | { employee: number } {
+  const m = /^(u|e)?(\d+)$/.exec(String(ref ?? "").trim());
+  if (!m || Number(m[2]) <= 0) throw new SecretError(400, "Некоректний id співробітника");
+  return m[1] === "e" ? { employee: Number(m[2]) } : { user: Number(m[2]) };
+}
+
+export async function ownerOf(db: Db, ref: unknown): Promise<Owner> {
+  const r = parseRef(typeof ref === "number" ? String(ref) : ref);
+  if ("user" in r) {
+    const p = await person(db, r.user);
+    const e = (await db.query<{ id: number }>(`SELECT id FROM employees WHERE user_id = $1`, [p.id])).rows[0];
+    return { userId: p.id, employeeId: e?.id ?? null, name: p.name, ref: String(p.id) };
+  }
+  const e = (await db.query<{ id: number; full_name: string; user_id: number | null }>(
+    `SELECT id, full_name, user_id FROM employees WHERE id = $1`, [r.employee])).rows[0];
+  if (!e) throw new SecretError(404, "Співробітника не знайдено");
+  if (e.user_id != null) return ownerOf(db, e.user_id);
+  return { userId: null, employeeId: e.id, name: e.full_name, ref: `e${e.id}` };
+}
+
+/** Власник рядка сейфу — для аудиту й повідомлення в Telegram. */
+async function ownerOfRow(db: Db, s: { user_id: number | null; employee_id: number | null }): Promise<Owner> {
+  return s.user_id != null ? ownerOf(db, s.user_id) : ownerOf(db, `e${s.employee_id}`);
+}
+
+/** AAD рядка: для акаунта — як і було, для людини реєстру — з префіксом `e`. */
+export const aadOfRow = (s: { user_id: number | null; employee_id: number | null; kind: string; service: string }) =>
+  s.user_id != null ? aadFor(s.user_id, s.kind, s.service) : `uts-secret:v1:e${s.employee_id}:${s.kind}:${s.service}`;
+
 /** Список людей: хто, команда, скільки записів. Без жодного значення. */
 export async function listPeople(db: Db) {
   return (await db.query(
-    `SELECT u.id, ${NAME} AS name, u.email, t.name AS team_name, COALESCE(u.role_override, u.role) AS role,
+    `SELECT 'e' || e.id AS ref, COALESCE(u.id, NULL) AS id, e.full_name AS name, COALESCE(e.email, u.email) AS email,
+            COALESCE(t.name, e.team_label) AS team_name, COALESCE(u.role_override, u.role) AS role, e.status, (u.id IS NOT NULL) AS has_account,
             count(s.id) FILTER (WHERE s.kind = 'password')::int AS passwords,
-            count(s.id) FILTER (WHERE s.kind = 'card')::int AS cards,
-            max(s.created_at) AS updated_at
+            count(s.id) FILTER (WHERE s.kind = 'card')::int AS cards, max(s.created_at) AS updated_at
+       FROM employees e LEFT JOIN users u ON u.id = e.user_id LEFT JOIN teams t ON t.id = u.team_id
+       LEFT JOIN employee_secrets s ON (s.user_id = e.user_id OR s.employee_id = e.id) AND s.superseded_at IS NULL AND s.deleted_at IS NULL
+      GROUP BY e.id, u.id, t.name
+     UNION ALL
+     SELECT u.id::text AS ref, u.id, ${NAME} AS name, u.email, t.name AS team_name, COALESCE(u.role_override, u.role) AS role,
+            'active' AS status, true AS has_account,
+            count(s.id) FILTER (WHERE s.kind = 'password')::int AS passwords,
+            count(s.id) FILTER (WHERE s.kind = 'card')::int AS cards, max(s.created_at) AS updated_at
        FROM users u LEFT JOIN managers m ON m.id = u.manager_id LEFT JOIN teams t ON t.id = u.team_id
        LEFT JOIN employee_secrets s ON s.user_id = u.id AND s.superseded_at IS NULL AND s.deleted_at IS NULL
       WHERE u.is_active AND COALESCE(u.role_override, u.role) <> 'candidate'
-      GROUP BY u.id, m.name, t.name ORDER BY ${NAME}`)).rows;
+        AND NOT EXISTS (SELECT 1 FROM employees e2 WHERE e2.user_id = u.id)
+      GROUP BY u.id, m.name, t.name
+      ORDER BY name`)).rows;
 }
 
 /** Картка людини: записи (без значень), видалені (для «Відновити») і журнал показів. */
-export async function personVault(db: Db, userId: number) {
-  const p = await person(db, userId);
+export async function personVault(db: Db, ref: number | string) {
+  const o = await ownerOf(db, ref);
   const items = (await db.query(
     `SELECT s.id, s.kind, s.service, s.label, s.login, s.last4, s.created_at AS updated_at, s.deleted_at,
             COALESCE(NULLIF(cu.full_name, ''), cm.name, cu.email) AS updated_by,
-            (SELECT count(*)::int FROM employee_secrets h WHERE h.user_id = s.user_id AND h.kind = s.kind
+            (SELECT count(*)::int FROM employee_secrets h WHERE (h.user_id = s.user_id OR h.employee_id = s.employee_id) AND h.kind = s.kind
                AND h.service = s.service AND COALESCE(h.label, '') = COALESCE(s.label, '')) AS versions
        FROM employee_secrets s LEFT JOIN users cu ON cu.id = s.created_by LEFT JOIN managers cm ON cm.id = cu.manager_id
-      WHERE s.user_id = $1 AND s.superseded_at IS NULL
-      ORDER BY s.deleted_at NULLS FIRST, s.kind DESC, s.service, s.id`, [userId])).rows;
+      WHERE (s.user_id = $1 OR s.employee_id = $2) AND s.superseded_at IS NULL
+      ORDER BY s.deleted_at NULLS FIRST, s.kind DESC, s.service, s.id`, [o.userId, o.employeeId])).rows;
   const journal = (await db.query(
     `SELECT a.id, a.at, a.action, COALESCE(NULLIF(u.full_name, ''), m.name, a.actor_email) AS actor,
             a.details->>'service' AS service, a.details->>'reason' AS reason
        FROM access_audit a LEFT JOIN users u ON u.id = a.actor_user_id LEFT JOIN managers m ON m.id = u.manager_id
-      WHERE a.target_type = 'user' AND a.target_id = $1 AND a.action LIKE 'secret.%'
-      ORDER BY a.at DESC, a.id DESC LIMIT 100`, [String(userId)])).rows;
-  return { person: { id: p.id, name: p.name, email: p.email, team_name: p.team_name, role: p.role }, items, journal };
+      WHERE a.target_type = 'user' AND a.target_id = ANY($1::text[]) AND a.action LIKE 'secret.%'
+      ORDER BY a.at DESC, a.id DESC LIMIT 100`, [[o.userId != null ? String(o.userId) : "-", o.employeeId != null ? `e${o.employeeId}` : "-"]])).rows;
+  const p = o.userId != null ? await person(db, o.userId) : null;
+  return { person: { id: o.userId, ref: o.ref, name: o.name, email: p?.email ?? null, team_name: p?.team_name ?? null, role: p?.role ?? null, hasAccount: o.userId != null }, items, journal };
 }
 
 /** Додати запис. Пароль/номер шифрується тут-таки; у відповіді й аудиті його немає. */
-export async function createSecret(db: Db, key: Buffer | null, actorId: number, userId: number, b: Record<string, unknown>): Promise<number> {
+export async function createSecret(db: Db, key: Buffer | null, actorId: number, ref: number | string, b: Record<string, unknown>): Promise<number> {
   if (!key) throw new SecretKeyMissing();
-  const p = await person(db, userId);
+  const o = await ownerOf(db, ref);
+  const row = { user_id: o.userId, employee_id: o.userId == null ? o.employeeId : null };
   const kind = b.kind === "card" ? "card" : b.kind === "password" ? "password" : null;
   if (!kind) throw new SecretError(400, "Тип: пароль або картка");
   let service: string, value: string, last4: string | null = null;
@@ -97,19 +146,19 @@ export async function createSecret(db: Db, key: Buffer | null, actorId: number, 
   const label = str(b.label);
   if (service === "other" && !label) throw new SecretError(400, "Для «Інше» вкажіть назву сервісу");
   const login = str(b.login);
-  const box = seal(key, value, aadFor(userId, kind, service));
+  const box = seal(key, value, aadOfRow({ ...row, kind, service }));
   const r = await db.query<{ id: number }>(
-    `INSERT INTO employee_secrets (user_id, kind, service, label, login, last4, cipher, iv, tag, key_version, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
-    [userId, kind, service, label, login, last4, box.cipher, box.iv, box.tag, KEY_VERSION, actorId]);
-  await audit(db, actorId, "secret.create", { id: userId, label: p.name }, { secretId: r.rows[0].id, kind, service, label });
+    `INSERT INTO employee_secrets (user_id, employee_id, kind, service, label, login, last4, cipher, iv, tag, key_version, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+    [row.user_id, row.employee_id, kind, service, label, login, last4, box.cipher, box.iv, box.tag, KEY_VERSION, actorId]);
+  await audit(db, actorId, "secret.create", { id: o.ref, label: o.name }, { secretId: r.rows[0].id, kind, service, label });
   return r.rows[0].id;
 }
 
 async function lockSecret(db: Db, id: number) {
-  const s = (await db.query<{ id: number; user_id: number; kind: string; service: string; label: string | null; login: string | null;
+  const s = (await db.query<{ id: number; user_id: number | null; employee_id: number | null; kind: string; service: string; label: string | null; login: string | null;
     last4: string | null; cipher: string; iv: string; tag: string; superseded_at: string | null; deleted_at: string | null }>(
-    `SELECT id, user_id, kind, service, label, login, last4, cipher, iv, tag, superseded_at, deleted_at
+    `SELECT id, user_id, employee_id, kind, service, label, login, last4, cipher, iv, tag, superseded_at, deleted_at
        FROM employee_secrets WHERE id = $1 FOR UPDATE`, [id])).rows[0];
   if (!s) throw new SecretError(404, "Запис не знайдено");
   return s;
@@ -123,7 +172,7 @@ export async function updateSecret(db: Db, key: Buffer | null, actorId: number, 
   if (!key) throw new SecretKeyMissing();
   const s = await lockSecret(db, id);
   if (s.superseded_at || s.deleted_at) throw new SecretError(409, "Це вже не поточна версія запису");
-  const p = await person(db, s.user_id);
+  const p = await ownerOfRow(db, s);
   const login = b.login !== undefined ? str(b.login) : s.login;
   let box = { cipher: s.cipher, iv: s.iv, tag: s.tag }, last4 = s.last4, changedValue = false;
   if (b.value !== undefined && b.value !== "") {
@@ -136,16 +185,16 @@ export async function updateSecret(db: Db, key: Buffer | null, actorId: number, 
       if (typeof b.value !== "string" || b.value.length > 500) throw new SecretError(400, "Некоректний пароль");
       value = b.value;
     }
-    box = seal(key, value, aadFor(s.user_id, s.kind, s.service));
+    box = seal(key, value, aadOfRow(s));
     changedValue = true;
   }
   if (!changedValue && login === s.login) throw new SecretError(400, "Нічого не змінилось");
   await db.query(`UPDATE employee_secrets SET superseded_at = now() WHERE id = $1`, [id]);
   const r = await db.query<{ id: number }>(
-    `INSERT INTO employee_secrets (user_id, kind, service, label, login, last4, cipher, iv, tag, key_version, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
-    [s.user_id, s.kind, s.service, s.label, login, last4, box.cipher, box.iv, box.tag, KEY_VERSION, actorId]);
-  await audit(db, actorId, "secret.update", { id: s.user_id, label: p.name },
+    `INSERT INTO employee_secrets (user_id, employee_id, kind, service, label, login, last4, cipher, iv, tag, key_version, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+    [s.user_id, s.employee_id, s.kind, s.service, s.label, login, last4, box.cipher, box.iv, box.tag, KEY_VERSION, actorId]);
+  await audit(db, actorId, "secret.update", { id: p.ref, label: p.name },
     { secretId: r.rows[0].id, previousId: id, kind: s.kind, service: s.service, valueChanged: changedValue });
   return r.rows[0].id;
 }
@@ -157,8 +206,8 @@ export async function setSecretDeleted(db: Db, actorId: number, id: number, dele
   if (deleted === (s.deleted_at != null)) throw new SecretError(409, deleted ? "Запис уже видалено" : "Запис не видалено");
   await db.query(`UPDATE employee_secrets SET deleted_at = ${deleted ? "now()" : "NULL"}, deleted_by = ${deleted ? "$2" : "NULL"} WHERE id = $1`,
     deleted ? [id, actorId] : [id]);
-  const p = await person(db, s.user_id);
-  await audit(db, actorId, deleted ? "secret.delete" : "secret.restore", { id: s.user_id, label: p.name }, { secretId: id, kind: s.kind, service: s.service });
+  const p = await ownerOfRow(db, s);
+  await audit(db, actorId, deleted ? "secret.delete" : "secret.restore", { id: p.ref, label: p.name }, { secretId: id, kind: s.kind, service: s.service });
 }
 
 const whatOf = (s: { kind: string; service: string; label: string | null; last4: string | null }) =>
@@ -171,7 +220,7 @@ export async function sendRevealCode(db: Db, actorId: number, id: number, send: 
   if (!chat) throw new SecretError(409, "Спершу привʼяжіть Telegram до бота «UTS Сейф» — кнопка у вкладці «Доступи»", { needLink: true });
   const s = await lockSecret(db, id);
   if (s.superseded_at || s.deleted_at) throw new SecretError(409, "Це вже не поточна версія запису");
-  const p = await person(db, s.user_id);
+  const p = await ownerOfRow(db, s);
   await db.query(`UPDATE secret_reveal_codes SET used_at = now() WHERE actor_id = $1 AND secret_id = $2 AND used_at IS NULL`, [actorId, id]);
   const code = newRevealCode(), salt = newSalt();
   await db.query(
@@ -197,10 +246,10 @@ export async function revealSecret(db: Db, key: Buffer | null, actorId: number, 
     throw new SecretError(v.status, v.reason, { attemptsLeft: v.attemptsLeft });
   }
   await db.query(`UPDATE secret_reveal_codes SET used_at = now() WHERE id = $1`, [c.id]);
-  const value = unseal(key, s, aadFor(s.user_id, s.kind, s.service));
-  const p = await person(db, s.user_id);
+  const value = unseal(key, s, aadOfRow(s));
+  const p = await ownerOfRow(db, s);
   const reason = str(b.reason)?.slice(0, 300) ?? null;
-  await audit(db, actorId, "secret.reveal", { id: s.user_id, label: p.name }, { secretId: id, kind: s.kind, service: whatOf(s), reason });
+  await audit(db, actorId, "secret.reveal", { id: p.ref, label: p.name }, { secretId: id, kind: s.kind, service: whatOf(s), reason });
   return { value, login: s.login, seconds: REVEAL_SECONDS };
 }
 

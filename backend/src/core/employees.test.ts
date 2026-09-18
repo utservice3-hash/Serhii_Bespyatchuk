@@ -100,7 +100,7 @@ test("#562 ЖИВИЙ SQL: імпорт — пароль і картка лиш�
     assert.equal(pv.mappingError, null);
     const c = await emp.commitImport(s.db, KEY, s.ivan, CSV, MAP, "active");
     assert.deepEqual([c.rows, c.created, c.duplicate, c.linked, c.secretsCreated, c.secretsNoAccount],
-      [3, 3, 1, 1, 3, 2], "🔴 лічильники імпорту не ті");
+      [3, 3, 1, 1, 5, 2], "🔴 лічильники імпорту не ті");
     const everything = JSON.stringify([pv, c,
       (await s.c.query(`SELECT * FROM employees`)).rows, (await s.c.query(`SELECT * FROM access_audit`)).rows,
       (await s.c.query(`SELECT id, user_id, kind, service, label, login, last4 FROM employee_secrets`)).rows]);
@@ -129,7 +129,7 @@ test("#563 ЖИВИЙ SQL: повторний імпорт — без дублі
     await emp.commitImport(s.db, KEY, s.ivan, CSV, MAP, "active");
     const n0 = (await s.c.query(`SELECT count(*)::int n FROM employee_secrets`)).rows[0].n;
     const again = await emp.commitImport(s.db, KEY, s.ivan, CSV, MAP, "active");
-    assert.deepEqual([again.created, again.updated, again.secretsCreated, again.secretsExisting], [0, 3, 0, 3]);
+    assert.deepEqual([again.created, again.updated, again.secretsCreated, again.secretsExisting], [0, 3, 0, 5]);
     assert.equal((await s.c.query(`SELECT count(*)::int n FROM employees`)).rows[0].n, 3, "🔴 повторний імпорт задублював людей");
     assert.equal((await s.c.query(`SELECT count(*)::int n FROM employee_secrets`)).rows[0].n, n0, "🔴 повторний імпорт задублював паролі");
     const thin = [HEAD, "Коваленко Олена Петрівна,,,,,,,,,"].join("\n");
@@ -219,5 +219,39 @@ test("#566 ЖИВИЙ SQL: аркуш «як у житті» — прев'ю й 
     const cards = (await s.c.query(`SELECT last4, label FROM employee_secrets WHERE user_id=$1 AND kind='card' ORDER BY id`, [s.olena])).rows;
     assert.deepEqual(cards.map((r) => [r.last4, r.label]), [["4521", null], ["5678", "картка 2"]], "🔴 друга картка не лягла в сейф");
     assert.ok(!JSON.stringify([pv, (await s.c.query(`SELECT * FROM employees`)).rows]).includes("Kx-Fixture-1"), "🔴 пароль видно поза сейфом");
+  } finally { await s.done(); }
+});
+
+/**
+ * #567 — СЕЙФ ДЛЯ ЛЮДИНИ БЕЗ АКАУНТА (рішення Романа 18.09.2026: «додати усіх з таблиці»): пароль лягає
+ * на людину реєстру, видно її в «Доступах», відкривається лише кодом; шифр не підставити іншій людині.
+ * 🧨 Червоніє, якщо імпорт пропускає паролі людей без акаунта, AAD не різнить `e<id>` чи показ обходить код.
+ */
+test("#567 ЖИВИЙ SQL: людина без акаунта — пароль у сейфі на ній, показ лише з кодом, чужим AAD не відкривається", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const emp = await import("./employees.js");
+  const sec = await import("./secrets.js");
+  const { unseal, aadFor } = await import("./secretBox.js");
+  try {
+    await emp.commitImport(s.db, KEY, s.ivan, CSV, MAP, "active");
+    const maria = (await s.c.query(`SELECT id FROM employees WHERE import_key = 'сидоренко марія'`)).rows[0].id as number;
+    const row = (await s.c.query(`SELECT id, user_id, employee_id, kind, service, cipher, iv, tag FROM employee_secrets WHERE employee_id = $1`, [maria])).rows;
+    assert.equal(row.length, 1, "🔴 пароль людини без акаунта не ліг у сейф");
+    assert.equal(row[0].user_id, null);
+    const people = await sec.listPeople(s.db);
+    const m = people.find((p) => p.ref === `e${maria}`) as { has_account: boolean; passwords: number } | undefined;
+    assert.ok(m && m.has_account === false && m.passwords === 1, "🔴 людини без акаунта немає в «Доступах»");
+    assert.equal((await sec.personVault(s.db, `e${maria}`)).items.length, 1);
+    assert.throws(() => unseal(KEY, row[0], aadFor(s.olena, "password", "mail")), "🔴 шифр людини реєстру відкрився як шифр акаунта");
+    assert.throws(() => unseal(KEY, row[0], `uts-secret:v1:e${maria + 1}:password:mail`), "🔴 шифр відкрився для іншої людини реєстру");
+    await s.c.query(`UPDATE users SET vault_chat_id = 555 WHERE id = $1`, [s.ivan]);
+    const sent: string[] = [];
+    await sec.sendRevealCode(s.db, s.ivan, row[0].id, async (_c, text) => { sent.push(text); return true; });
+    await assert.rejects(sec.revealSecret(s.db, KEY, s.ivan, row[0].id, { code: "000000" }), "🔴 показ без правильного коду");
+    const code = /(\d{6})/.exec(sent[0])![1];
+    const shown = await sec.revealSecret(s.db, KEY, s.ivan, row[0].id, { code, reason: "перевірка" });
+    assert.equal(shown.value, "SomeMail-1!", "🔴 показано не той пароль");
+    assert.match(sent[0], /Сидоренко Марія/, "🔴 у коді не названо, чий це доступ");
+    assert.ok((await s.c.query(`SELECT 1 FROM access_audit WHERE action = 'secret.reveal' AND target_id = $1`, [`e${maria}`])).rowCount, "🔴 показ не записано в журнал людини");
   } finally { await s.done(); }
 });

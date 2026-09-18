@@ -98,7 +98,7 @@ export async function previewImport(db: Db, csv: unknown, mapping: unknown, head
     line: r.line, name: r.full_name, position: r.fields.position ?? null, team: r.fields.team_label ?? null,
     state: duplicate ? "duplicate" : isNew ? "new" : "update",
     account: m.account, match: m.how, matchNote: duplicate ? "повтор цієї ж людини у файлі — пропущено" : MATCH_NOTE[m.how],
-    secrets: r.secrets.length, secretsLost: m.userId == null && !duplicate ? r.secrets.length : 0, problems: r.problems,
+    secrets: r.secrets.length, secretsLost: 0, secretsNoAccount: m.userId == null && !duplicate ? r.secrets.length : 0, problems: r.problems,
   }));
   const t = (f: (x: (typeof rows)[number]) => boolean) => rows.filter(f).length;
   return {
@@ -108,7 +108,8 @@ export async function previewImport(db: Db, csv: unknown, mapping: unknown, head
       withAccount: t((x) => x.state !== "duplicate" && x.account != null && x.match !== "taken"),
       noAccount: t((x) => x.state !== "duplicate" && (x.match === "none" || x.match === "ambiguous" || x.match === "taken")),
       secrets: rows.reduce((s, x) => s + (x.state === "duplicate" ? 0 : x.secrets), 0),
-      secretsLost: rows.reduce((s, x) => s + x.secretsLost, 0),
+      secretsLost: 0,
+      secretsNoAccount: rows.reduce((s, x) => s + x.secretsNoAccount, 0),
       problems: t((x) => x.problems.length > 0),
       skipped: p.skipped,
     },
@@ -125,7 +126,7 @@ export async function commitImport(db: Db, key: Buffer | null, actorId: number, 
   if (!status) throw new ImportError(400, "Вкажіть, це аркуш працюючих чи звільнених");
   const p = await plan(db, csv, mapping, headerRow);
   if (p.mappingError) throw new ImportError(400, p.mappingError);
-  if (!key && p.rows.some((x) => x.r.secrets.length > 0 && x.m.userId != null)) throw new SecretKeyMissing();
+  if (!key && p.rows.some((x) => x.r.secrets.length > 0 && !x.duplicate)) throw new SecretKeyMissing();
   const c = { rows: 0, created: 0, updated: 0, duplicate: 0, linked: 0, secretsCreated: 0, secretsExisting: 0, secretsNoAccount: 0, secretsInvalid: 0 };
   for (const { r, m, duplicate } of p.rows) {
     if (duplicate) { c.duplicate++; continue; }
@@ -149,15 +150,17 @@ export async function commitImport(db: Db, key: Buffer | null, actorId: number, 
         f.birth_date ?? null, f.hired_at ?? null, f.dismissed_at ?? null, f.dismiss_reason ?? null, f.note ?? null, r.extra, actorId])).rows[0];
     if (up.inserted) c.created++; else c.updated++;
     if (up.user_id != null) c.linked++;
-    const userId = up.user_id;
+    // Людина з акаунтом — записи на акаунті; без акаунта — на людині реєстру (рішення Романа 18.09.2026).
+    const owner = up.user_id != null ? up.user_id : `e${up.id}`;
     for (const s of r.secrets) {
-      if (userId == null) { c.secretsNoAccount++; continue; }
+      if (up.user_id == null) c.secretsNoAccount++;
       const has = (await db.query(
-        `SELECT 1 FROM employee_secrets WHERE user_id = $1 AND kind = $2 AND service = $3 AND COALESCE(label, '') = COALESCE($4, '')
-            AND superseded_at IS NULL AND deleted_at IS NULL LIMIT 1`, [userId, s.kind, s.service, s.label])).rowCount;
+        `SELECT 1 FROM employee_secrets WHERE ${up.user_id != null ? "user_id" : "employee_id"} = $1 AND kind = $2 AND service = $3
+            AND COALESCE(label, '') = COALESCE($4, '') AND superseded_at IS NULL AND deleted_at IS NULL LIMIT 1`,
+        [up.user_id ?? up.id, s.kind, s.service, s.label])).rowCount;
       if (has) { c.secretsExisting++; continue; }
       try {
-        await createSecret(db, key, actorId, userId, {
+        await createSecret(db, key, actorId, owner, {
           kind: s.kind, service: s.service, label: s.label, value: s.value,
           login: s.login ?? (s.service === "mail" ? f.email ?? null : null),
         });
@@ -184,7 +187,7 @@ export async function listEmployees(db: Db) {
     `SELECT e.id, e.full_name, e.status, e.position, e.team_label, e.phone, e.email, e.telegram,
             e.birth_date::text AS birth_date, e.hired_at::text AS hired_at, e.dismissed_at::text AS dismissed_at,
             e.dismiss_reason, e.note, e.extra, e.user_id, ${NAME} AS account_name, u.is_active AS account_active,
-            (SELECT count(*)::int FROM employee_secrets s WHERE s.user_id = e.user_id AND s.superseded_at IS NULL AND s.deleted_at IS NULL) AS secrets,
+            (SELECT count(*)::int FROM employee_secrets s WHERE (s.user_id = e.user_id OR s.employee_id = e.id) AND s.superseded_at IS NULL AND s.deleted_at IS NULL) AS secrets,
             e.updated_at
        FROM employees e LEFT JOIN users u ON u.id = e.user_id LEFT JOIN managers m ON m.id = u.manager_id
       ORDER BY (e.status = 'dismissed'), e.full_name`)).rows;

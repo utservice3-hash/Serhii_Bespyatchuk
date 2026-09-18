@@ -61,7 +61,7 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
         <div className="hr-tiles" style={{ gridTemplateColumns: "repeat(3, minmax(0,1fr))" }}>
           <div className="hr-tile"><div className="lb">Працюють</div><div className="vl">{active.length}</div><div className="sb">без акаунта в дашборді: {noAccount}</div></div>
           <div className="hr-tile"><div className="lb">Звільнені</div><div className="vl">{rows.length - active.length}</div><div className="sb">з таблиці «Звільнені»</div></div>
-          <div className="hr-tile"><div className="lb">Записів у сейфі</div><div className="vl">{rows.reduce((a, r) => a + r.secrets, 0)}</div><div className="sb">у людей з акаунтом</div></div>
+          <div className="hr-tile"><div className="lb">Записів у сейфі</div><div className="vl">{rows.reduce((a, r) => a + r.secrets, 0)}</div><div className="sb">паролі й картки в «Доступах»</div></div>
         </div>
         <div className="hr-seg2" style={{ margin: "0 16px 10px" }}>
           {([["active", "Працюють"], ["dismissed", "Звільнені"], ["all", "Усі"]] as const).map(([k, l]) =>
@@ -85,7 +85,7 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
                     <td>{(r.status === "dismissed" ? d(r.dismissed_at) : d(r.hired_at)) ?? <span className="hr-muted">не вказано</span>}
                       {r.status === "dismissed" && r.dismiss_reason && <div className="hr-muted">{r.dismiss_reason}</div>}</td>
                     <td>{r.user_id != null ? <>{r.account_name}{r.account_active === false && <span className="hr-muted"> · вимкнено</span>}</> : <span className="hr-muted">немає</span>}</td>
-                    <td className="num">{r.user_id == null ? <span className="hr-muted">—</span> : r.secrets || <span className="hr-muted">0</span>}</td>
+                    <td className="num">{r.secrets || <span className="hr-muted">0</span>}</td>
                   </tr>
                 ))}
               </tbody>
@@ -135,7 +135,7 @@ function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: (msg: 
       const parts = [`людей: нових ${c.created}, оновлено ${c.updated}`, `привʼязано до акаунтів: ${c.linked}`,
         `у сейф: ${c.secretsCreated}`];
       if (c.secretsExisting) parts.push(`уже були в сейфі: ${c.secretsExisting}`);
-      if (c.secretsNoAccount) parts.push(`без акаунта, не перенесено: ${c.secretsNoAccount}`);
+      if (c.secretsNoAccount) parts.push(`з них у людей без акаунта: ${c.secretsNoAccount}`);
       if (c.secretsInvalid) parts.push(`не схожі на картку/пароль: ${c.secretsInvalid}`);
       onDone(`Імпортовано — ${parts.join(" · ")}`);
     } catch (e) { setMsg(hiringError(e)); setBusy(false); }
@@ -203,7 +203,7 @@ function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: (msg: 
                 <div className="hr-tiles" style={{ gridTemplateColumns: "repeat(4, minmax(0,1fr))", margin: "12px 0" }}>
                   <div className="hr-tile"><div className="lb">Людей у файлі</div><div className="vl">{t.rows - t.duplicate}</div><div className="sb">нових {t.new} · оновиться {t.update}{t.duplicate ? ` · повторів ${t.duplicate}` : ""}</div></div>
                   <div className="hr-tile"><div className="lb">З акаунтом</div><div className="vl">{t.withAccount}</div><div className="sb">без акаунта: {t.noAccount}</div></div>
-                  <div className="hr-tile"><div className="lb">Паролів і карток</div><div className="vl">{t.secrets - t.secretsLost}</div><div className="sb">{t.secretsLost ? `не перенесуться (немає акаунта): ${t.secretsLost}` : "усі мають куди лягти"}</div></div>
+                  <div className="hr-tile"><div className="lb">Паролів і карток</div><div className="vl">{t.secrets}</div><div className="sb">{t.secretsNoAccount ? `з них у людей без акаунта: ${t.secretsNoAccount} — ляжуть на людину реєстру` : "усі — у людей з акаунтом"}</div></div>
                   <div className="hr-tile"><div className="lb">Проблеми</div><div className="vl">{t.problems}</div><div className="sb">з нерозпізнаною датою чи поштою{t.skipped ? ` · пропущено службових рядків: ${t.skipped}` : ""}</div></div>
                 </div>
                 <div className="hr-tw" style={{ maxHeight: 320, overflow: "auto" }}>
@@ -216,7 +216,7 @@ function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: (msg: 
                           <td><b>{r.name}</b>{r.state === "update" && <span className="hr-muted"> · уже в реєстрі</span>}</td>
                           <td>{r.position ?? <span className="hr-muted">—</span>}</td>
                           <td>{r.account && r.match !== "taken" && <div>{r.account}</div>}<div className="hr-muted">{r.matchNote}</div></td>
-                          <td className="num">{r.secrets}{r.secretsLost > 0 && <div className="hr-muted">не перенесуться</div>}</td>
+                          <td className="num">{r.secrets}</td>
                           <td>{r.problems.length ? r.problems.join("; ") : <span className="hr-muted">—</span>}</td>
                         </tr>
                       ))}

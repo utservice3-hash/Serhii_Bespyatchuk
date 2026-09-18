@@ -31,7 +31,8 @@ export function HiringSecrets({ toast }: { toast: Toast }) {
   const [status, setStatus] = useState<SecretsStatus | null>(null);
   const [people, setPeople] = useState<SecretPerson[] | null>(null);
   const [q, setQ] = useState("");
-  const [openId, setOpenId] = useState<number | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [view, setView] = useState<"active" | "dismissed" | "all">("active");
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -40,10 +41,12 @@ export function HiringSecrets({ toast }: { toast: Toast }) {
   }, []);
   useEffect(load, [load]);
 
-  const rows = useMemo(() => (people ?? []).filter((p) => !q.trim() || `${p.name} ${p.email} ${p.team_name ?? ""}`.toLowerCase().includes(q.trim().toLowerCase())), [people, q]);
+  const rows = useMemo(() => (people ?? []).filter((p) => (view === "all" || p.status === view)
+    && (!q.trim() || `${p.name} ${p.email ?? ""} ${p.team_name ?? ""}`.toLowerCase().includes(q.trim().toLowerCase()))), [people, q, view]);
   if (err) return <div className="hr-card"><div className="hr-sect" style={{ border: 0 }}><b>Сейф недоступний.</b> <span className="hr-muted">{err}</span></div></div>;
   if (!people || !status) return <p className="loading-text">Завантаження…</p>;
-  const withData = people.filter((p) => p.passwords + p.cards > 0).length;
+  const scope = people.filter((p) => view === "all" || p.status === view);
+  const withData = scope.filter((p) => p.passwords + p.cards > 0).length;
 
   return (
     <>
@@ -54,17 +57,21 @@ export function HiringSecrets({ toast }: { toast: Toast }) {
           <input className="hr-inp" placeholder="Пошук: ПІБ, пошта, команда" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Пошук співробітника" style={{ minWidth: 240 }} />
         </div>
         <div className="hr-tiles" style={{ gridTemplateColumns: "repeat(3, minmax(0,1fr))" }}>
-          <div className="hr-tile"><div className="lb">Співробітників</div><div className="vl">{people.length}</div><div className="sb">активні акаунти дашборда</div></div>
-          <div className="hr-tile"><div className="lb">З доступами в сейфі</div><div className="vl">{withData}</div><div className="sb">без жодного запису: {people.length - withData}</div></div>
-          <div className="hr-tile"><div className="lb">Записів</div><div className="vl">{people.reduce((a, p) => a + p.passwords + p.cards, 0)}</div><div className="sb">паролів {people.reduce((a, p) => a + p.passwords, 0)} · карток {people.reduce((a, p) => a + p.cards, 0)}</div></div>
+          <div className="hr-tile"><div className="lb">Людей</div><div className="vl">{scope.length}</div><div className="sb">без акаунта в дашборді: {scope.filter((p) => !p.has_account).length}</div></div>
+          <div className="hr-tile"><div className="lb">З доступами в сейфі</div><div className="vl">{withData}</div><div className="sb">без жодного запису: {scope.length - withData}</div></div>
+          <div className="hr-tile"><div className="lb">Записів</div><div className="vl">{scope.reduce((a, p) => a + p.passwords + p.cards, 0)}</div><div className="sb">паролів {scope.reduce((a, p) => a + p.passwords, 0)} · карток {scope.reduce((a, p) => a + p.cards, 0)}</div></div>
+        </div>
+        <div className="hr-seg2" style={{ margin: "0 16px 10px" }}>
+          {([["active", "Працюють"], ["dismissed", "Звільнені"], ["all", "Усі"]] as const).map(([k, l]) =>
+            <button key={k} className={view === k ? "on" : ""} onClick={() => setView(k)}>{l}</button>)}
         </div>
         <div className="hr-tw">
           <table className="hr-table">
             <thead><tr><th>Співробітник</th><th>Команда</th><th className="num">Паролів</th><th className="num">Карток</th><th>Остання зміна</th></tr></thead>
             <tbody>
               {rows.map((p) => (
-                <tr key={p.id} className="row" onClick={() => setOpenId(p.id)}>
-                  <td><b>{p.name}</b><div className="hr-muted">{p.email}</div></td>
+                <tr key={p.ref} className="row" onClick={() => setOpenId(p.ref)}>
+                  <td><b>{p.name}</b><div className="hr-muted">{p.email ?? ""}{!p.has_account && <>{p.email ? " · " : ""}без акаунта в дашборді</>}</div></td>
                   <td>{p.team_name ?? <span className="hr-muted">—</span>}</td>
                   <td className="num">{p.passwords || <span className="hr-muted">0</span>}</td>
                   <td className="num">{p.cards || <span className="hr-muted">0</span>}</td>
@@ -119,7 +126,7 @@ function StatusBar({ status, onChanged, toast }: { status: SecretsStatus; onChan
   );
 }
 
-function PersonDrawer({ id, status, toast, onClose, onStatus }: { id: number; status: SecretsStatus; toast: Toast; onClose: () => void; onStatus: () => void }) {
+function PersonDrawer({ id, status, toast, onClose, onStatus }: { id: string; status: SecretsStatus; toast: Toast; onClose: () => void; onStatus: () => void }) {
   const [v, setV] = useState<SecretPersonVault | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [reveal, setReveal] = useState<{ item: SecretItem; value: string; left: number } | null>(null);
@@ -149,7 +156,7 @@ function PersonDrawer({ id, status, toast, onClose, onStatus }: { id: number; st
     <div className="hr-overlay" onClick={onClose}>
       <div className="hr-drawer" role="dialog" aria-label="Доступи співробітника" onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
-          <div><b style={{ fontSize: 17 }}>{v?.person.name ?? "…"}</b>{v && <div className="hr-muted">{v.person.email}{v.person.team_name ? ` · ${v.person.team_name}` : ""}</div>}</div>
+          <div><b style={{ fontSize: 17 }}>{v?.person.name ?? "…"}</b>{v && <div className="hr-muted">{v.person.email ?? ""}{v.person.team_name ? ` · ${v.person.team_name}` : ""}{!v.person.hasAccount ? " · без акаунта в дашборді" : ""}</div>}</div>
           <button className="hr-btn" onClick={onClose}>Закрити</button>
         </div>
         {err && <p style={{ color: "var(--danger)" }}>{err}</p>}
@@ -266,7 +273,7 @@ function RevealDialog({ item, whose, onClose, onShown, onNeedLink }: { item: Sec
   );
 }
 
-function EditDialog({ item, userId, onClose, onSaved }: { item: SecretItem | null; userId: number; onClose: () => void; onSaved: (msg: string) => void }) {
+function EditDialog({ item, userId, onClose, onSaved }: { item: SecretItem | null; userId: string; onClose: () => void; onSaved: (msg: string) => void }) {
   const [kind, setKind] = useState<"password" | "card">(item?.kind ?? "password");
   const [service, setService] = useState(item?.service ?? "kommo");
   const [label, setLabel] = useState(item?.label ?? "");

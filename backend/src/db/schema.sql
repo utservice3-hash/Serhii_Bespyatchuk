@@ -3702,3 +3702,13 @@ CREATE TABLE IF NOT EXISTS employees (
 
 -- 🔒 Персональні дані (телефон, дата народження) — не для моделі. REVOKE після GRANT і CREATE. Тримає #564.
 REVOKE ALL ON employees FROM ai_readonly;
+
+-- 🔐 СЕЙФ ДЛЯ ЛЮДЕЙ БЕЗ АКАУНТА (18.09.2026, рішення Романа: «додати усіх з таблиці, не тільки тих, хто є
+-- в дашборді»). Власник запису — акаунт (`user_id`) АБО людина реєстру (`employee_id`), хоча б один.
+-- Наявні записи не переписуються (AAD привʼязаний до `user_id`); `employee_id` отримують лише ті, хто
+-- без акаунта. ⚠️ revert коду колонки не прибирає; записи без акаунта без неї не прочитати. Тримає #567.
+ALTER TABLE employee_secrets ADD COLUMN IF NOT EXISTS employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE;
+ALTER TABLE employee_secrets ALTER COLUMN user_id DROP NOT NULL;
+ALTER TABLE employee_secrets DROP CONSTRAINT IF EXISTS employee_secrets_owner_check;
+ALTER TABLE employee_secrets ADD CONSTRAINT employee_secrets_owner_check CHECK (user_id IS NOT NULL OR employee_id IS NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_employee_secrets_employee ON employee_secrets(employee_id) WHERE superseded_at IS NULL;
