@@ -65,6 +65,54 @@ export function guessTarget(header: string): string {
   return "skip";
 }
 
+/** Заголовок як людина його бачить: переноси всередині клітинки й подвійні пробіли — один пробіл. */
+/** Назва юрособи замість людини: організаційна форма або 8-значний код ЄДРПОУ. */
+const COMPANY = /(^|[\s«"])(ТОВ|ТзОВ|ФОП|ПП|ПрАТ|ПАТ|АТ|LLC|Ltd)([\s»".,]|$)|(?<!\d)\d{8}(?!\d)/i;
+
+export const normHeader = (h: string): string => (h ?? "").replace(/\s+/g, " ").trim();
+
+/**
+ * Заголовки з рядка `row` (0-based). Над ним може стояти «поверх» з обʼєднаними клітинками
+ * («Kommo» над «Логін | Пароль»): CSV кладе значення лише в першу клітинку, тож тягнемо його
+ * вправо. Склеюємо лише там, де власна назва сама по собі не каже, що це (сервіс не впізнано) —
+ * «ПІБ» під «ЮТ-СЕРВІС 40389341» лишається «ПІБ».
+ */
+export function headersAt(table: string[][], row: number): string[] {
+  const width = Math.max(0, ...table.map((r) => r.length));
+  const own = Array.from({ length: width }, (_, i) => normHeader((table[row] ?? [])[i] ?? ""));
+  const up = row > 0 ? (table[row - 1] ?? []).map(normHeader) : [];
+  let carry = "";
+  const group = own.map((_, i) => (up[i] ? (carry = up[i]) : carry));
+  return own.map((h, i) => {
+    if (!h || !group[i]) return h;
+    const g = guessTarget(h);
+    const vague = g === "skip" || g.endsWith(":other");
+    const both = `${group[i]} ${h}`;
+    return vague && guessTarget(both) !== g ? both : h;
+  });
+}
+
+/**
+ * Рядок заголовків — серед перших 15 той, де найбільше впізнаних назв (нічия — вищий).
+ * 🔴 Назовні йдуть лише НАЗВИ ПОЛІВ, які впізнано, а не текст клітинок: якщо рядком-кандидатом
+ * виявиться рядок даних, його вміст (раптом пароль) у прев'ю не потрапить.
+ */
+export function detectHeaderRow(table: string[][]): { row: number; score: number; fields: string[] }[] {
+  const label = Object.fromEntries(PLAIN_TARGETS) as Record<string, string>;
+  const out: { row: number; score: number; fields: string[] }[] = [];
+  for (let r = 0; r < Math.min(15, table.length); r++) {
+    const ts = headersAt(table, r).map(guessTarget).filter((t) => t !== "skip");
+    if (!ts.length) continue;
+    out.push({ row: r, score: ts.length, fields: [...new Set(ts.map((t) => (t.startsWith("secret:") ? "сейф" : label[t] ?? t)))] });
+  }
+  return out.sort((a, b) => b.score - a.score || a.row - b.row);
+}
+
+/** Усі номери карток у клітинці («Приват 5168 7420 …, моно 4441 …»): 12–19 цифр, пробіли й дефіси всередині. */
+export function cardsIn(v: string): string[] {
+  return [...v.matchAll(/(?<!\d)\d(?:[ -]?\d){11,18}(?!\d)/g)].map((m) => m[0].replace(/[ -]/g, ""));
+}
+
 export class ImportError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
@@ -83,6 +131,7 @@ export function validateMapping(headers: string[], mapping: string[]): void {
       if (!/^secret:(card|password:[a-z_]+|login:[a-z_]+)$/.test(t)) throw new ImportError(400, `Невідома ціль «${t}»`);
     } else {
       if (!plain.has(t)) throw new ImportError(400, `Невідома ціль «${t}»`);
+      if ((t === "extra" || t === "note") && !h) throw new ImportError(400, `Колонку без назви (№${i + 1}) не можна «зберегти як є» чи в примітку — під нею може бути пароль. Вкажіть поле або «пропустити»`);
       if (t !== "skip" && SECRETISH.test(h)) throw new ImportError(400, `Колонка «${h}» схожа на пароль або картку — її можна лише в сейф або пропустити`);
       if (t !== "skip" && t !== "extra") {
         if (seen.has(t)) throw new ImportError(400, `«${h}» і «${headers[seen.get(t)!]}» обидві вказані як одне поле`);
@@ -113,7 +162,9 @@ export function parseCsv(text: string): string[][] {
     } else cell += ch;
   }
   if (cell !== "" || row.length) { row.push(cell); rows.push(row); }
-  return rows.filter((r) => r.some((c) => c.trim() !== ""));
+  // Порожні рядки ВСЕРЕДИНІ лишаються: номер рядка має збігатися з тим, що людина бачить у Google.
+  while (rows.length && !rows[rows.length - 1].some((c) => c.trim() !== "")) rows.pop();
+  return rows;
 }
 
 /** Нормалізоване ПІБ — ключ реєстру: регістр, апострофи, пробіли, «ё/ї» як є. */
@@ -148,10 +199,13 @@ export interface PlainRow {
  * Рядки таблиці → людина реєстру + її секрети. Значення секретів лишаються ТУТ, у памʼяті запиту:
  * у прев'ю їх не віддає ніхто (`previewRow` бере лише прапорці).
  */
-export function buildRows(table: string[][], mapping: string[]): PlainRow[] {
-  const [headers, ...body] = table;
+export function buildRows(table: string[][], mapping: string[], headerRow = 0): PlainRow[] {
+  const headers = headersAt(table, headerRow);
   validateMapping(headers, mapping);
-  return body.map((cells, n) => {
+  const headKey = (table[headerRow] ?? []).map(normHeader).join("|");
+  return table.slice(headerRow + 1).map((cells, n) => {
+    // Повтор шапки посеред аркуша (наступний блок компанії) — не людина.
+    if (cells.map(normHeader).join("|") === headKey) return null;
     const get = (i: number) => (cells[i] ?? "").trim();
     const f: Record<string, string | null> = {}, extra: Record<string, string> = {}, problems: string[] = [];
     const logins = new Map<string, string>();
@@ -161,7 +215,13 @@ export function buildRows(table: string[][], mapping: string[]): PlainRow[] {
       if (!v || t === "skip") return;
       if (t === "extra") { extra[headers[i]] = v; return; }
       if (t.startsWith("secret:login:")) { logins.set(t.slice(13), v); return; }
-      if (t === "secret:card") { secrets.push({ kind: "card", service: "card", label: null, login: null, value: v }); return; }
+      if (t === "secret:card") {
+        const found = cardsIn(v);
+        // Нічого схожого на номер — віддаємо як є: сейф відмовить, і це порахується як «не схоже на картку».
+        (found.length ? found : [v]).forEach((num, k) =>
+          secrets.push({ kind: "card", service: "card", label: k === 0 ? null : `картка ${k + 1}`, login: null, value: num }));
+        return;
+      }
       if (t.startsWith("secret:password:")) {
         const service = t.slice(16);
         secrets.push({ kind: "password", service, label: service === "other" ? headers[i].slice(0, 80) : null, login: null, value: v });
@@ -171,11 +231,13 @@ export function buildRows(table: string[][], mapping: string[]): PlainRow[] {
     });
     for (const s of secrets) if (s.kind === "password") s.login = logins.get(s.service) ?? null;
     const name = f.full_name ?? [f.last_name, f.first_name, f.middle_name].filter(Boolean).join(" ");
+    // Розділювач компанії в колонці ПІБ («ТОВ …», «ФОП …», код ЄДРПОУ) — не людина.
+    if (COMPANY.test(name)) return null;
     for (const d of ["birth_date", "hired_at", "dismissed_at"]) {
       if (f[d] != null) { const p = parseDate(f[d]!); if (!p) problems.push(`дата «${f[d]}» не розпізнана`); f[d] = p; }
     }
     if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) { problems.push("пошта не схожа на адресу"); f.email = null; }
     delete f.full_name; delete f.last_name; delete f.first_name; delete f.middle_name;
-    return { line: n + 2, full_name: name.replace(/\s+/g, " ").trim(), key: nameKey(name), short: shortKey(name), fields: f, extra, secrets, problems };
-  }).filter((r) => r.key !== "");
+    return { line: headerRow + n + 2, full_name: name.replace(/\s+/g, " ").trim(), key: nameKey(name), short: shortKey(name), fields: f, extra, secrets, problems };
+  }).filter((r): r is PlainRow => r != null && r.key !== "");
 }

@@ -4247,11 +4247,12 @@ export interface ImportPreviewRow {
 }
 export interface ImportPreview {
   columns: ImportColumn[]; mappingError: string | null; rows: ImportPreviewRow[];
-  totals?: { rows: number; new: number; update: number; duplicate: number; withAccount: number; noAccount: number; secrets: number; secretsLost: number; problems: number };
+  headerRow: number; headerCandidates: { row: number; fields: string[] }[];
+  totals?: { rows: number; new: number; update: number; duplicate: number; withAccount: number; noAccount: number; secrets: number; secretsLost: number; problems: number; skipped: number };
 }
 export interface ImportCounts { rows: number; created: number; updated: number; duplicate: number; linked: number; secretsCreated: number; secretsExisting: number; secretsNoAccount: number; secretsInvalid: number }
 export const fetchEmployees = async () => (await api.get<{ rows: EmployeeRow[] }>("/secrets/employees")).data.rows;
-export const previewEmployeeImport = async (csv: string, mapping?: string[]) =>
-  (await api.post<ImportPreview>("/secrets/import/preview", { csv, mapping })).data;
-export const commitEmployeeImport = async (csv: string, mapping: string[], sheet: "active" | "dismissed") =>
-  (await api.post<{ ok: true; counts: ImportCounts }>("/secrets/import/commit", { csv, mapping, sheet })).data.counts;
+export const previewEmployeeImport = async (csv: string, mapping?: string[], headerRow?: number) =>
+  (await api.post<ImportPreview>("/secrets/import/preview", { csv, mapping, headerRow })).data;
+export const commitEmployeeImport = async (csv: string, mapping: string[], sheet: "active" | "dismissed", headerRow: number) =>
+  (await api.post<{ ok: true; counts: ImportCounts }>("/secrets/import/commit", { csv, mapping, sheet, headerRow })).data.counts;

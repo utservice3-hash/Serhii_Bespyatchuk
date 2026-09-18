@@ -5,7 +5,7 @@
  * Прев'ю й імпорт рахуються ОДНІЄЮ функцією (`plan`), тож «що показали» і «що записали» не
  * розходяться. 🔴 Прев'ю не віддає жодного значення секрету — лише скільки їх і куди підуть.
  */
-import { parseCsv, buildRows, guessTarget, validateMapping, shortKey, ImportError, SECRETISH, type PlainRow } from "./employeeImport.js";
+import { parseCsv, buildRows, guessTarget, validateMapping, shortKey, ImportError, SECRETISH, headersAt, detectHeaderRow, type PlainRow } from "./employeeImport.js";
 import { createSecret, SecretError, type Db } from "./secrets.js";
 import { SecretKeyMissing } from "./secretBox.js";
 
@@ -56,24 +56,30 @@ const MATCH_NOTE: Record<Match["how"], string> = {
 };
 
 /** Спільний розрахунок для прев'ю й імпорту. */
-async function plan(db: Db, csv: unknown, mapping: unknown) {
+async function plan(db: Db, csv: unknown, mapping: unknown, headerRowIn?: unknown) {
   if (typeof csv !== "string" || !csv.trim()) throw new ImportError(400, "Файл порожній");
   const table = parseCsv(csv);
   if (table.length < 2) throw new ImportError(400, "У файлі немає рядків під заголовком");
   if (table.length - 1 > MAX_ROWS) throw new ImportError(400, `Забагато рядків: ${table.length - 1} (межа ${MAX_ROWS})`);
-  const headers = table[0].map((h) => h.trim());
+  // Рядок заголовків: названий людиною (1-based, як у Google) або знайдений сам.
+  const candidates = detectHeaderRow(table);
+  const asked = Number(headerRowIn);
+  const headerRow = Number.isInteger(asked) && asked >= 1 && asked <= Math.min(15, table.length - 1) ? asked - 1 : (candidates[0]?.row ?? 0);
+  const headers = headersAt(table, headerRow);
   if (headers.length > MAX_COLS) throw new ImportError(400, `Забагато колонок: ${headers.length}`);
-  table[0] = headers;
-  const chosen = Array.isArray(mapping) ? mapping.map(String) : headers.map(guessTarget);
+  const chosen = Array.isArray(mapping) && mapping.length === headers.length ? mapping.map(String) : headers.map(guessTarget);
+  const body = table.slice(headerRow + 1);
   const columns = headers.map((header, index) => ({
     index, header, target: chosen[index] ?? "skip", secretish: SECRETISH.test(header),
-    filled: table.slice(1).filter((r) => (r[index] ?? "").trim() !== "").length,
+    filled: body.filter((r) => (r[index] ?? "").trim() !== "").length,
   }));
+  const headerInfo = { headerRow: headerRow + 1, headerCandidates: candidates.map((c) => ({ row: c.row + 1, fields: c.fields })) };
   let mappingError: string | null = null;
   try { validateMapping(headers, chosen); } catch (e) { if (e instanceof ImportError) mappingError = e.message; else throw e; }
-  if (mappingError) return { columns, mappingError, rows: [] as Annotated[] };
+  if (mappingError) return { columns, mappingError, rows: [] as Annotated[], skipped: 0, ...headerInfo };
   const match = matcher(await loadContext(db));
-  const built = buildRows(table, chosen);
+  const built = buildRows(table, chosen, headerRow);
+  const skipped = body.filter((r) => r.some((c) => c.trim() !== "")).length - built.length;
   const seenKeys = new Set<string>(), claimed = new Map<number, string>();
   const existingKeys = new Set((await db.query<{ import_key: string }>(`SELECT import_key FROM employees`)).rows.map((r) => r.import_key));
   function annotate(r: PlainRow): Annotated {
@@ -82,12 +88,12 @@ async function plan(db: Db, csv: unknown, mapping: unknown) {
     if (m.userId != null && !duplicate) claimed.set(m.userId, r.key);
     return { r, m, duplicate, isNew: !existingKeys.has(r.key) };
   }
-  return { columns, mappingError, rows: built.map(annotate) };
+  return { columns, mappingError, rows: built.map(annotate), skipped, ...headerInfo };
 }
 
 /** Прев'ю: колонки зі здогадом, люди із зіставленням. Значень секретів тут немає. */
-export async function previewImport(db: Db, csv: unknown, mapping: unknown) {
-  const p = await plan(db, csv, mapping);
+export async function previewImport(db: Db, csv: unknown, mapping: unknown, headerRow?: unknown) {
+  const p = await plan(db, csv, mapping, headerRow);
   const rows = p.rows.map(({ r, m, duplicate, isNew }) => ({
     line: r.line, name: r.full_name, position: r.fields.position ?? null, team: r.fields.team_label ?? null,
     state: duplicate ? "duplicate" : isNew ? "new" : "update",
@@ -96,7 +102,7 @@ export async function previewImport(db: Db, csv: unknown, mapping: unknown) {
   }));
   const t = (f: (x: (typeof rows)[number]) => boolean) => rows.filter(f).length;
   return {
-    columns: p.columns, mappingError: p.mappingError, rows,
+    columns: p.columns, mappingError: p.mappingError, rows, headerRow: p.headerRow, headerCandidates: p.headerCandidates,
     totals: {
       rows: rows.length, new: t((x) => x.state === "new"), update: t((x) => x.state === "update"), duplicate: t((x) => x.state === "duplicate"),
       withAccount: t((x) => x.state !== "duplicate" && x.account != null && x.match !== "taken"),
@@ -104,6 +110,7 @@ export async function previewImport(db: Db, csv: unknown, mapping: unknown) {
       secrets: rows.reduce((s, x) => s + (x.state === "duplicate" ? 0 : x.secrets), 0),
       secretsLost: rows.reduce((s, x) => s + x.secretsLost, 0),
       problems: t((x) => x.problems.length > 0),
+      skipped: p.skipped,
     },
   };
 }
@@ -113,10 +120,10 @@ export async function previewImport(db: Db, csv: unknown, mapping: unknown) {
  * заповнене в реєстрі. Секрет пишеться, лише якщо в людини є акаунт і такого запису в сейфі ще немає:
  * те, що хтось уже змінив у дашборді, імпорт не перезаписує.
  */
-export async function commitImport(db: Db, key: Buffer | null, actorId: number, csv: unknown, mapping: unknown, sheet: unknown) {
+export async function commitImport(db: Db, key: Buffer | null, actorId: number, csv: unknown, mapping: unknown, sheet: unknown, headerRow?: unknown) {
   const status = sheet === "dismissed" ? "dismissed" : sheet === "active" ? "active" : null;
   if (!status) throw new ImportError(400, "Вкажіть, це аркуш працюючих чи звільнених");
-  const p = await plan(db, csv, mapping);
+  const p = await plan(db, csv, mapping, headerRow);
   if (p.mappingError) throw new ImportError(400, p.mappingError);
   if (!key && p.rows.some((x) => x.r.secrets.length > 0 && x.m.userId != null)) throw new SecretKeyMissing();
   const c = { rows: 0, created: 0, updated: 0, duplicate: 0, linked: 0, secretsCreated: 0, secretsExisting: 0, secretsNoAccount: 0, secretsInvalid: 0 };
@@ -167,7 +174,7 @@ export async function commitImport(db: Db, key: Buffer | null, actorId: number, 
     `INSERT INTO access_audit (actor_user_id, actor_email, action, target_type, target_id, target_label, details)
      VALUES ($1, (SELECT email FROM users WHERE id = $1), 'employees.import', 'user', $1::text, $2, $3)`,
     [actorId, `імпорт таблиці: ${status === "active" ? "працюючі" : "звільнені"}`,
-      { counts: c, columns: p.columns.map((x) => ({ header: x.header, target: x.target })) }]);
+      { counts: c, headerRow: p.headerRow, columns: p.columns.map((x) => ({ header: x.header, target: x.target })) }]);
   return c;
 }
 

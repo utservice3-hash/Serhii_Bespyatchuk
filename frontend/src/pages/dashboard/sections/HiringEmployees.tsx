@@ -107,10 +107,10 @@ function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: (msg: 
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const preview = async (text: string, m?: string[]) => {
+  const preview = async (text: string, m?: string[], row?: number) => {
     setBusy(true); setMsg(null);
     try {
-      const r = await previewEmployeeImport(text, m);
+      const r = await previewEmployeeImport(text, m, row ?? pv?.headerRow);
       setPv(r); setMapping(r.columns.map((c) => c.target));
     } catch (e) { setMsg(hiringError(e)); }
     setBusy(false);
@@ -120,7 +120,8 @@ function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: (msg: 
     if (!/\.csv$/i.test(f.name)) { setMsg("Потрібен CSV: у Google Таблиці — Файл → Завантажити → CSV (поточний аркуш)"); return; }
     const text = await f.text();
     setFileName(f.name); setCsv(text); setSheet(/звільн/i.test(f.name) ? "dismissed" : "active");
-    void preview(text);
+    setPv(null); setMapping(null);
+    try { const r = await previewEmployeeImport(text); setPv(r); setMapping(r.columns.map((c) => c.target)); } catch (e) { setMsg(hiringError(e)); }
   };
   const setCol = (i: number, t: string) => {
     if (!mapping || !csv) return;
@@ -130,7 +131,7 @@ function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: (msg: 
     if (!csv || !mapping) return;
     setBusy(true); setMsg(null);
     try {
-      const c = await commitEmployeeImport(csv, mapping, sheet);
+      const c = await commitEmployeeImport(csv, mapping, sheet, pv!.headerRow);
       const parts = [`людей: нових ${c.created}, оновлено ${c.updated}`, `привʼязано до акаунтів: ${c.linked}`,
         `у сейф: ${c.secretsCreated}`];
       if (c.secretsExisting) parts.push(`уже були в сейфі: ${c.secretsExisting}`);
@@ -164,6 +165,17 @@ function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: (msg: 
 
         {pv && mapping && (
           <>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", margin: "12px 0 6px" }}>
+              <b>Заголовки колонок у рядку</b>
+              <select className="hr-inp" value={pv.headerRow} aria-label="Рядок із заголовками"
+                onChange={(e) => { if (csv) void preview(csv, undefined, Number(e.target.value)); }}>
+                {Array.from({ length: 15 }, (_, i) => i + 1).map((n) => {
+                  const c = pv.headerCandidates.find((x) => x.row === n);
+                  return <option key={n} value={n}>{n}{c ? ` — впізнано: ${c.fields.join(", ")}` : ""}</option>;
+                })}
+              </select>
+              <span className="hr-muted">рядки вище пропускаються; знайдено автоматично — міняйте, лише якщо не той</span>
+            </div>
             <h4 style={{ margin: "12px 0 6px" }}>Колонки — що куди</h4>
             <div className="hr-tw">
               <table className="hr-table">
@@ -192,7 +204,7 @@ function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: (msg: 
                   <div className="hr-tile"><div className="lb">Людей у файлі</div><div className="vl">{t.rows - t.duplicate}</div><div className="sb">нових {t.new} · оновиться {t.update}{t.duplicate ? ` · повторів ${t.duplicate}` : ""}</div></div>
                   <div className="hr-tile"><div className="lb">З акаунтом</div><div className="vl">{t.withAccount}</div><div className="sb">без акаунта: {t.noAccount}</div></div>
                   <div className="hr-tile"><div className="lb">Паролів і карток</div><div className="vl">{t.secrets - t.secretsLost}</div><div className="sb">{t.secretsLost ? `не перенесуться (немає акаунта): ${t.secretsLost}` : "усі мають куди лягти"}</div></div>
-                  <div className="hr-tile"><div className="lb">Проблеми</div><div className="vl">{t.problems}</div><div className="sb">рядків із нерозпізнаною датою чи поштою</div></div>
+                  <div className="hr-tile"><div className="lb">Проблеми</div><div className="vl">{t.problems}</div><div className="sb">з нерозпізнаною датою чи поштою{t.skipped ? ` · пропущено службових рядків: ${t.skipped}` : ""}</div></div>
                 </div>
                 <div className="hr-tw" style={{ maxHeight: 320, overflow: "auto" }}>
                   <table className="hr-table">

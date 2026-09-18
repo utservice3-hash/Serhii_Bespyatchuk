@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import { parseCsv, parseDate, guessTarget, validateMapping, ImportError } from "./employeeImport.js";
+import { parseCsv, parseDate, guessTarget, validateMapping, ImportError, detectHeaderRow, headersAt, buildRows, cardsIn } from "./employeeImport.js";
 
 /**
  * 🗂 РЕЄСТР СПІВРОБІТНИКІВ + ІМПОРТ «UTS Співробітники УКР» (18.09.2026, задача №3898) — гейти `#560`–`#564`.
@@ -151,4 +151,68 @@ test("#564 РЕЄСТР: employees відібрана в ai_readonly і є в FO
   assert.ok(grant > 0 && create > 0, "🔴 немає GRANT або CREATE employees");
   assert.ok(revoke > create && revoke > grant, "🔴 REVOKE немає або він вище за CREATE/GRANT");
   assert.match(SRC("ai/metricTools.ts"), /"employees",/, "🔴 employees немає у FORBIDDEN_TABLES");
+});
+
+/**
+ * Фікстура — БУДОВА аркуша «Укр NEW» (дані вигадані): рядок фільтра «ч=», порожній, обʼєднана
+ * клітинка компанії й «Kommo» над логіном/паролем, заголовки з переносами в 4-му рядку, колонка №
+ * без назви, порожній 5-й, далі люди; посеред — рядок іншої компанії й повтор шапки.
+ */
+const SHEET = [
+  '"ч=",,,,,,,,,,,',
+  ",,,,,,,,,,,",
+  ',,"ЮТ-СЕРВІС\n40389341",,,,,,,,Kommo,',
+  ',ПІБ,Посада,№ команди,"Дата\nнародження",Телефон,"Дата\nприйому","Дата\nзвільнення","Документи (паспорт,код, договори), посилання на гугл диск",банківські картки,Логін,Пароль',
+  ",,,,,,,,,,,",
+  '1,Коваленко Олена Петрівна,віддалений менеджер,3,26.02.2003,0661112233,02.09.2026,,,"Приват 4149 4990 1234 4521; моно 5375414112345678",o.kovalenko,Kx-Fixture-1',
+  ',ТОВ ІНША КОМПАНІЯ 12345678,,,,,,,,,,',
+  ',ПІБ,Посада,№ команди,"Дата\nнародження",Телефон,"Дата\nприйому","Дата\nзвільнення","Документи (паспорт,код, договори), посилання на гугл диск",банківські картки,Логін,Пароль',
+  "2,Сидоренко Марія,бухгалтер,,01.01.1990,0671112233,,,,,,",
+].join("\n");
+
+/**
+ * #565 — АРКУШ ЯК У ЖИТТІ: заголовки не в першому рядку, двоповерхова шапка, кілька карток в одній
+ * клітинці, службові рядки й повтор шапки посеред аркуша не стають людьми; колонку без назви не
+ * можна «зберегти як є». 🧨 Червоніє, якщо брати заголовки з 1-го рядка, не склеювати «Kommo»,
+ * брати лише першу картку або пропустити службовий рядок у реєстр.
+ */
+test("#565 АРКУШ: рядок заголовків знаходиться сам, «Kommo» над паролем, кілька карток, службові рядки — не люди", () => {
+  const t = parseCsv(SHEET);
+  const best = detectHeaderRow(t)[0];
+  assert.equal(best.row, 3, "🔴 рядок заголовків не знайдено (очікували 4-й)");
+  assert.ok(!JSON.stringify(detectHeaderRow(t)).includes("Kx-Fixture"), "🔴 кандидати рядка заголовків несуть вміст клітинок");
+  const h = headersAt(t, 3);
+  assert.deepEqual(h.map(guessTarget), ["skip", "full_name", "position", "team_label", "birth_date", "phone", "hired_at", "dismissed_at", "skip",
+    "secret:card", "secret:login:kommo", "secret:password:kommo"], "🔴 колонки впізнано не так: " + h.join(" | "));
+  assert.equal(h[1], "ПІБ", "🔴 назву компанії приклеєно до ПІБ");
+  assert.deepEqual(cardsIn("Приват 4149 4990 1234 4521; моно 5375414112345678"), ["4149499012344521", "5375414112345678"]);
+  assert.deepEqual(cardsIn("тел 0661112233"), [], "🔴 телефон прийнято за картку");
+  const rows = buildRows(t, h.map(guessTarget), 3);
+  assert.deepEqual(rows.map((r) => r.full_name), ["Коваленко Олена Петрівна", "Сидоренко Марія"], "🔴 службовий рядок чи повтор шапки став людиною");
+  const o = rows[0];
+  assert.deepEqual([o.line, o.fields.birth_date, o.fields.hired_at, o.fields.team_label], [6, "2003-02-26", "2026-09-02", "3"]);
+  assert.deepEqual(o.secrets.map((x) => [x.kind, x.service, x.label, x.login]),
+    [["card", "card", null, null], ["card", "card", "картка 2", null], ["password", "kommo", null, "o.kovalenko"]], "🔴 друга картка загубилась або пароль без логіна");
+  assert.throws(() => validateMapping(h, h.map((x, i) => (i === 0 ? "extra" : guessTarget(x)))), /без назви/, "🔴 колонку без назви пустили в «як є»");
+});
+
+/**
+ * #566 — ЖИВИЙ SQL: той самий аркуш через прев'ю й імпорт — рядок заголовків 4 сам, два люди,
+ * два службові рядки пропущено й пораховано, обидві картки в сейфі.
+ * 🧨 Червоніє, якщо імпорт візьме інший рядок заголовків, ніж прев'ю, або загубить картку.
+ */
+test("#566 ЖИВИЙ SQL: аркуш «як у житті» — прев'ю й імпорт беруть той самий рядок заголовків", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const emp = await import("./employees.js");
+  try {
+    const pv = await emp.previewImport(s.db, SHEET, undefined);
+    assert.equal(pv.headerRow, 4);
+    assert.equal(pv.mappingError, null);
+    assert.deepEqual([pv.totals?.rows, pv.totals?.skipped, pv.totals?.withAccount], [2, 2, 1], "🔴 прев'ю порахувало не тих людей");
+    const c = await emp.commitImport(s.db, KEY, s.ivan, SHEET, pv.columns.map((x) => x.target), "active", pv.headerRow);
+    assert.deepEqual([c.created, c.secretsCreated, c.secretsNoAccount], [2, 3, 0]);
+    const cards = (await s.c.query(`SELECT last4, label FROM employee_secrets WHERE user_id=$1 AND kind='card' ORDER BY id`, [s.olena])).rows;
+    assert.deepEqual(cards.map((r) => [r.last4, r.label]), [["4521", null], ["5678", "картка 2"]], "🔴 друга картка не лягла в сейф");
+    assert.ok(!JSON.stringify([pv, (await s.c.query(`SELECT * FROM employees`)).rows]).includes("Kx-Fixture-1"), "🔴 пароль видно поза сейфом");
+  } finally { await s.done(); }
 });

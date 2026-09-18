@@ -125,12 +125,12 @@ secretsRouter.get("/employees", async (_req, res) => {
 });
 
 secretsRouter.post("/import/preview", async (req, res) => {
-  try { res.json(await previewImport(pool as unknown as Db, req.body?.csv, req.body?.mapping)); } catch (e) { fail(res, e); }
+  try { res.json(await previewImport(pool as unknown as Db, req.body?.csv, req.body?.mapping, req.body?.headerRow)); } catch (e) { fail(res, e); }
 });
 
 secretsRouter.post("/import/commit", async (req, res) => {
   try {
-    const counts = await tx((db) => commitImport(db, key(), me(req), req.body?.csv, req.body?.mapping, req.body?.sheet));
+    const counts = await tx((db) => commitImport(db, key(), me(req), req.body?.csv, req.body?.mapping, req.body?.sheet, req.body?.headerRow));
     res.json({ ok: true, counts });
   } catch (e) { fail(res, e); }
 });
