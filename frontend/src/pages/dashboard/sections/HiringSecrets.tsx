@@ -189,7 +189,7 @@ function PersonDrawer({ id, status, toast, onClose, onStatus }: { id: number; st
                   })}
                 </ul>
               )}
-              {!canShow && showWhy && <div className="hr-muted" style={{ marginTop: 6 }}>«Показати» недоступне: {showWhy.toLowerCase()}.</div>}
+              {!canShow && showWhy && <div className="hr-muted" style={{ marginTop: 6 }}>«Показати» недоступне — {showWhy}.</div>}
             </div>
 
             {removed.length > 0 && (
@@ -203,7 +203,7 @@ function PersonDrawer({ id, status, toast, onClose, onStatus }: { id: number; st
               <h4>Журнал</h4>
               {v.journal.length === 0 ? <div className="hr-muted">Подій ще немає.</div> : (
                 <ul className="hr-hist">
-                  {v.journal.map((j) => <li key={j.id} style={j.action === "secret.reveal" ? { color: "var(--text)" } : undefined}><b>{kyiv(j.at)}</b> · {j.actor ?? "—"} {ACTION[j.action] ?? j.action}{j.service ? ` · ${j.service}` : ""}{j.reason ? <span className="hr-muted"> · {j.reason}</span> : null}</li>)}
+                  {v.journal.map((j) => <li key={j.id} style={j.action === "secret.reveal" ? { color: "var(--text)" } : undefined}><b>{kyiv(j.at)}</b> · {j.actor ?? "—"} {ACTION[j.action] ?? j.action}{j.service ? ` · ${j.service === "card" ? "картка" : SERVICE_LABEL[j.service] ?? j.service}` : ""}{j.reason ? <span className="hr-muted"> · {j.reason}</span> : null}</li>)}
                 </ul>
               )}
             </div>
