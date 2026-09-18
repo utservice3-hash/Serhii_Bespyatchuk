@@ -4172,6 +4172,7 @@ export interface HiringTrainingRow {
   deadline: string | null; day: number; days: number; health: HiringTrainingHealth;
   done: number; total: number; percent: number; current_step: string | null; open_questions: number;
   invite: { expires_at: string; used_at: string | null; revoked_at: string | null } | null;
+  password_issued_at: string | null;
 }
 export interface HiringTrainingRules { inviteHours: number; noLoginHours: number; trainingDays: number; stuckHours: number }
 export interface HiringTrainingDetail {
@@ -4188,6 +4189,9 @@ export const fetchHiringTraining = async () =>
 export const fetchHiringTrainingDetail = async (id: number) => (await api.get<HiringTrainingDetail>(`/hiring/training/${id}`)).data;
 export const createHiringInvite = async (id: number) =>
   (await api.post<{ token: string; expiresAt: string; login: string }>(`/hiring/candidates/${id}/invite`)).data;
+/** Логін і пароль кандидата. Пароль приходить ОДИН раз — у базі лише хеш. */
+export const issueHiringPassword = async (id: number) =>
+  (await api.post<{ login: string; password: string }>(`/hiring/candidates/${id}/password`)).data;
 export const extendHiringAccess = async (id: number) => { await api.post(`/hiring/candidates/${id}/access/extend`); };
 export const restoreHiringAccess = async (id: number) => { await api.post(`/hiring/candidates/${id}/access/restore`); };
 export const promoteHiringCandidate = async (id: number, comment: string) => { await api.post(`/hiring/candidates/${id}/promote`, { comment }); };

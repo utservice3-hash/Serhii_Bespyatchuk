@@ -18,7 +18,7 @@ import {
   insertFile, fileForDownload, setFileDeleted,
 } from "../core/hiring.js";
 import {
-  trainingBoard, trainingDetail, issueInvite, extendAccess, restoreAccess, promoteCandidate, answerQuestion,
+  trainingBoard, trainingDetail, issueInvite, issueCandidatePassword, extendAccess, restoreAccess, promoteCandidate, answerQuestion,
 } from "../core/hiringTraining.js";
 import { CANDIDATE_ACCESS, canDecideTraining } from "../core/hiringTrainingRules.js";
 
@@ -380,6 +380,15 @@ hiringRouter.post("/candidates/:id/invite", async (req, res) => {
     const access = anyAccess(req);
     const id = idOf(req);
     res.status(201).json(await tx((db) => issueInvite(db, req.auth!.userId, id, access, req.auth!.teamId)));
+  } catch (e) { fail(res, e); }
+});
+
+/** Логін і пароль кандидата — показуються ОДИН раз у відповіді; у базі лише хеш. */
+hiringRouter.post("/candidates/:id/password", async (req, res) => {
+  try {
+    const access = anyAccess(req);
+    const id = idOf(req);
+    res.status(201).json(await tx((db) => issueCandidatePassword(db, req.auth!.userId, id, access, req.auth!.teamId)));
   } catch (e) { fail(res, e); }
 });
 

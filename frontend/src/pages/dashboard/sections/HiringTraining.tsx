@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   fetchHiringTraining, fetchHiringTrainingDetail, createHiringInvite, extendHiringAccess, restoreHiringAccess,
-  promoteHiringCandidate, answerHiringQuestion, inviteUrl, hiringError,
+  promoteHiringCandidate, answerHiringQuestion, inviteUrl, hiringError, issueHiringPassword,
   type HiringMeta, type HiringTrainingRow, type HiringTrainingRules, type HiringTrainingDetail, type HiringTrainingHealth, type HiringCloseReason,
 } from "../../../api";
 import { RefusalDialog, StatusPill, type Toast } from "./HiringShared";
@@ -155,7 +155,7 @@ export function HiringTraining({ meta, toast, onChanged }: { meta: HiringMeta; t
         <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 600 }}>Як це працює · правила на затвердження Сергієм</summary>
         <ul style={{ margin: "8px 0 4px", paddingLeft: 18, lineHeight: 1.6, fontSize: 13 }}>
           <li><b>Акаунт</b> створюється сам, коли тімлід переводить кандидата в «кандидат + команда». Роль — «Кандидат»: лише «Навчання» і «Документи».</li>
-          <li><b>Вхід</b> — посилання-запрошення: рекрутер копіює його в картці й надсилає сам. Посилання чинне {data.rules.inviteHours} год і спрацьовує один раз; нове гасить попереднє.</li>
+          <li><b>Вхід</b> — «Показати логін і пароль»: пароль видно один раз, рекрутер копіює й надсилає сам; новий пароль гасить старий. Запасний спосіб — посилання-запрошення (чинне {data.rules.inviteHours} год, спрацьовує один раз).</li>
           <li><b>Строк:</b> без жодного входу за {data.rules.noLoginHours} год — доступ закривається. Після першого входу — {data.rules.trainingDays} дні за Києвом, рахуючи день входу. «Продовжити доступ на 1 день» — рекрутер або тімлід.</li>
           <li><b>Перший вхід</b> переводить «кандидат + команда» → «на навчанні»: так щоденний звіт бачить старт навчання того дня, коли людина зайшла.</li>
           <li><b>Рішення:</b> «Перевести в менеджери» — тімлід або керівник, коли пройдено всі кроки (після проходу 2c — після екзамену); роль акаунта стає «Менеджер». «Відмовити» закриває доступ.</li>
@@ -167,14 +167,32 @@ export function HiringTraining({ meta, toast, onChanged }: { meta: HiringMeta; t
   );
 }
 
-/** Посилання-запрошення: токен приходить один раз — показуємо й даємо скопіювати. */
+/**
+ * Видача входу кандидату. Основний спосіб — логін і пароль, показані Івану ОДИН раз (рішення
+ * власника 18.09.2026, як казав Сергій на зустрічі 15.09). Посилання-запрошення лишається
+ * запасним: кандидат сам ставить пароль. Нова видача будь-яким способом гасить попередню.
+ */
 function InviteBox({ id, toast, onChanged, disabled }: { id: number; toast: Toast; onChanged: () => void; disabled: string | null }) {
   const [link, setLink] = useState<{ url: string; expiresAt: string; login: string } | null>(null);
+  const [cred, setCred] = useState<{ login: string; password: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const makePassword = async () => {
+    if (cred && !window.confirm("Видати новий пароль? Попередній перестане працювати.")) return;
+    setBusy(true);
+    try { setCred(await issueHiringPassword(id)); setLink(null); onChanged(); }
+    catch (e) { toast(hiringError(e), { error: true }); }
+    setBusy(false);
+  };
+  const copyCred = async () => {
+    if (!cred) return;
+    try { await navigator.clipboard.writeText(`Логін: ${cred.login}\nПароль: ${cred.password}\nВхід: ${window.location.origin}/login`); toast("Логін і пароль скопійовано — надішліть кандидату"); }
+    catch { toast("Не вдалося скопіювати — виділіть вручну", { error: true }); }
+  };
   const make = async () => {
     setBusy(true);
     try {
       const r = await createHiringInvite(id);
+      setCred(null);
       setLink({ url: inviteUrl(r.token), expiresAt: r.expiresAt, login: r.login });
       onChanged();
     } catch (e) { toast(hiringError(e), { error: true }); }
@@ -186,25 +204,44 @@ function InviteBox({ id, toast, onChanged, disabled }: { id: number; toast: Toas
     catch { toast("Не вдалося скопіювати — виділіть посилання вручну", { error: true }); }
   };
   return (
-    <div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {cred && (
+        <div className="hr-invite">
+          <div className="hr-cred">
+            <div><span className="hr-muted">Логін</span> <b>{cred.login}</b></div>
+            <div><span className="hr-muted">Пароль</span> <b className="mono">{cred.password}</b></div>
+          </div>
+          <button className="hr-btn p" onClick={() => void copyCred()}>Копіювати</button>
+          <div className="hr-muted" style={{ flexBasis: "100%" }}>Пароль показано один раз і більше ніде не зберігається. Загубили — натисніть «Новий пароль».</div>
+        </div>
+      )}
       {link ? (
         <div className="hr-invite">
           <input className="hr-inp" readOnly value={link.url} onFocus={(e) => e.target.select()} aria-label="Посилання-запрошення" />
           <button className="hr-btn p" onClick={() => void copy()}>Копіювати</button>
           <div className="hr-muted" style={{ flexBasis: "100%" }}>Логін: <b>{link.login}</b> · чинне до {kyiv(link.expiresAt)} · спрацює один раз. Посилання більше ніде не показується — скопіюйте зараз.</div>
         </div>
-      ) : (
-        <button className="hr-btn" disabled={busy || !!disabled} title={disabled ?? undefined} onClick={() => void make()}>
-          {busy ? "Створюємо…" : "Створити посилання-запрошення"}
+      ) : null}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <button className="hr-btn p" disabled={busy || !!disabled} title={disabled ?? undefined} onClick={() => void makePassword()}>
+          {busy ? "…" : cred ? "Новий пароль" : "Показати логін і пароль"}
         </button>
-      )}
+        {!link && (
+          <button className="hr-btn" disabled={busy || !!disabled} title={disabled ?? "Кандидат сам встановить пароль за посиланням"} onClick={() => void make()}>
+            Посилання-запрошення
+          </button>
+        )}
+      </div>
     </div>
   );
 }
 
 function inviteLine(r: HiringTrainingRow): string {
   const i = r.invite;
-  if (!i) return "запрошення ще не створювали";
+  // Пароль, виданий пізніше за останнє запрошення, — головний спосіб входу.
+  if (r.password_issued_at && (!i || r.password_issued_at > (i.used_at ?? i.revoked_at ?? i.expires_at)))
+    return `логін і пароль видано ${kyiv(r.password_issued_at)}`;
+  if (!i) return "вхід ще не видавали";
   if (i.used_at) return `пароль встановлено ${kyiv(i.used_at)}`;
   if (i.revoked_at) return "останнє запрошення погашено";
   if (new Date(i.expires_at).getTime() <= Date.now()) return `запрошення прострочене (${kyiv(i.expires_at)})`;

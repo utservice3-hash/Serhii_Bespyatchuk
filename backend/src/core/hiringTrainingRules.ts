@@ -143,6 +143,13 @@ export function candidateLogin(p: { email: string | null; candidateId: number; e
   return e && !p.emailTaken ? e : `candidate-${p.candidateId}@hiring.uts.local`;
 }
 
+/**
+ * Пароль кандидата, що показується Івану один раз. 12 символів base64url (72 біти) — та сама
+ * форма, що в `db/userProvisioning.generatePassword`. Звідти не імпортуємо навмисно: той модуль
+ * тягне `db/pool`, а ядро найму мусить жити без БД (гейти ганяють його на власному клієнті).
+ */
+export const newCandidatePassword = (): string => randomBytes(9).toString("base64url");
+
 export const MIN_PASSWORD = 8;
 export function passwordProblem(pw: unknown): string | null {
   if (typeof pw !== "string" || pw.length < MIN_PASSWORD) return `Пароль — щонайменше ${MIN_PASSWORD} символів`;

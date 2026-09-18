@@ -394,6 +394,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead"], deny: ["financier", "manager"] },
   { method: "POST", path: "/api/hiring/candidates/:id/invite", cls: "deny-only",
     allow: [], deny: ["manager"] },
+  { method: "POST", path: "/api/hiring/candidates/:id/password", cls: "deny-only",
+    allow: [], deny: ["manager"] },
   { method: "POST", path: "/api/hiring/candidates/:id/access/extend", cls: "deny-only",
     allow: [], deny: ["manager"] },
   { method: "POST", path: "/api/hiring/candidates/:id/access/restore", cls: "deny-only",

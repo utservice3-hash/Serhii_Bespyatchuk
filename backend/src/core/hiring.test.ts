@@ -247,7 +247,7 @@ test("#506 НАЙМ: перевірка доступу — перший опер
   // Прохід 1a: відмова — теж запис тімліда (свої кандидати, свій етап).
   // Прохід 2a: запрошення, продовження доступу, рішення й відповідь — теж для тімліда своєї команди.
   const LEAD_WRITES = new Set(["/candidates/:id/status", "/candidates/:id/comment", "/candidates/:id/refuse",
-    "/candidates/:id/invite", "/candidates/:id/access/extend", "/candidates/:id/promote", "/candidates/:id/questions/:questionId/answer"]);
+    "/candidates/:id/invite", "/candidates/:id/password", "/candidates/:id/access/extend", "/candidates/:id/promote", "/candidates/:id/questions/:questionId/answer"]);
   for (const [, method, p, first] of handlers) {
     const isWrite = method !== "get";
     const expected = isWrite && !LEAD_WRITES.has(p) ? /^onlyEdit\(req\)$/ : /^(onlyEdit\(req\)|const access = anyAccess\(req\))$/;

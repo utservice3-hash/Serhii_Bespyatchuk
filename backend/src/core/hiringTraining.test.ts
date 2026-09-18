@@ -249,6 +249,50 @@ test("#534 ЖИВИЙ SQL: «менеджер» після всіх кроків
   } finally { await s.done(); }
 });
 
+/**
+ * #538 — ЛОГІН І ПАРОЛЬ ВИДАЮТЬСЯ ОДИН РАЗ І НІДЕ НЕ ЛИШАЮТЬСЯ (рішення власника 18.09.2026).
+ * Пароль приходить у відповіді, у базі — лише bcrypt-хеш; в історії кандидата його немає ні
+ * в якому вигляді. Друга видача дає ІНШИЙ пароль (старий перестає працювати) і гасить
+ * невикористане запрошення — двох живих шляхів входу не буває. Закритий доступ входу не видає.
+ * 🧨 Червоніє, якщо покласти пароль у подію, лишити старий пароль робочим, лишити запрошення
+ * чинним поруч із паролем або видати вхід при закритому доступі.
+ */
+test("#538 ВХІД: пароль один раз, у базі хеш, в історії його немає; друга видача — новий", async (t) => {
+  const s = await scratchDb(t); if (!s) return;
+  const tr = await import("./hiringTraining.js");
+  const h = await import("./hiring.js");
+  const bcrypt = (await import("bcryptjs")).default;
+  try {
+    const id = await toCandidate(s.db, "Мазур Іванна", "0500000204", "ivanna.mazur@gmail.com");
+    const inv = await tr.issueInvite(s.db, null, id, "edit", null);
+    const first = await tr.issueCandidatePassword(s.db, null, id, "edit", null);
+    assert.equal(first.login, "ivanna.mazur@gmail.com");
+    assert.ok(first.password.length >= 8, "🔴 пароль закороткий");
+    const row = (await s.c.query(`SELECT u.password_hash, u.is_active FROM hiring_candidates c JOIN users u ON u.id = c.user_id WHERE c.id = $1`, [id])).rows[0];
+    assert.notEqual(row.password_hash, first.password, "🔴 пароль лежить у базі як є");
+    assert.ok(await bcrypt.compare(first.password, row.password_hash), "🔴 виданим паролем не увійти");
+
+    const hist = (await s.c.query(`SELECT comment FROM hiring_events WHERE candidate_id = $1`, [id])).rows.map((r) => String(r.comment));
+    assert.ok(hist.some((x) => x.includes("видано логін і пароль")), "🔴 видачі немає в історії");
+    assert.ok(!hist.some((x) => x.includes(first.password)), "🔴 пароль потрапив в історію кандидата");
+
+    await assert.rejects(tr.readInvite(s.db, inv.token), code(410), "🔴 запрошення лишилось чинним поруч із паролем");
+
+    const second = await tr.issueCandidatePassword(s.db, null, id, "edit", null);
+    assert.notEqual(second.password, first.password, "🔴 друга видача повернула той самий пароль");
+    const row2 = (await s.c.query(`SELECT u.password_hash FROM hiring_candidates c JOIN users u ON u.id = c.user_id WHERE c.id = $1`, [id])).rows[0];
+    assert.equal(await bcrypt.compare(first.password, row2.password_hash), false, "🔴 старий пароль лишився робочим");
+
+    // 🔴 Доступ закриваємо СТРОКОМ, а статус лишається «кандидат + команда». Спершу тут стояла
+    // відмова — і гейт був зеленим навіть без перевірки доступу, бо вхід відсікала перевірка
+    // статусу. Спіймано саботажем.
+    assert.deepEqual(await tr.closeExpiredAccess(s.db, new Date(Date.now() + 5 * 24 * H)), { checked: 1, closed: 1 });
+    assert.equal((await s.c.query("SELECT status FROM hiring_candidates WHERE id=$1", [id])).rows[0].status, "candidate");
+    await assert.rejects(tr.issueCandidatePassword(s.db, null, id, "edit", null), code(409), "🔴 вхід видано при закритому доступі");
+    void h;
+  } finally { await s.done(); }
+});
+
 /** #535 — ХЕШІ ЗАПРОШЕНЬ І ПИТАННЯ КАНДИДАТА ЗАКРИТІ ВІД МОДЕЛІ: REVOKE після GRANT і CREATE + FORBIDDEN_TABLES. */
 test("#535 НАЙМ: hiring_invites і hiring_training_questions відібрані в ai_readonly і є в FORBIDDEN_TABLES", () => {
   const sql = SRC("db/schema.sql");

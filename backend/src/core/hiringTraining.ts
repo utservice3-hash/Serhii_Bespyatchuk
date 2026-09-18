@@ -11,7 +11,7 @@ import { HiringError, LEAD_VISIBLE_SQL, type Db } from "./hiring.js";
 import type { HiringAccess, HiringStatus } from "./hiringRules.js";
 import {
   CANDIDATE_ACCESS, CLOSE_REASON_LABEL, accessDeadline, accessToClose, trainingDay, trainingHealth, promoteVerdict,
-  inviteState, INVITE_STATE_TEXT, newInviteToken, hashInviteToken, looksLikeInviteToken, candidateLogin, passwordProblem,
+  inviteState, INVITE_STATE_TEXT, newInviteToken, hashInviteToken, looksLikeInviteToken, candidateLogin, passwordProblem, newCandidatePassword,
   type CloseReason, type TrainingHealth,
 } from "./hiringTrainingRules.js";
 import { orderedMaterials, materialStates, coursePercent, type ProgressMap } from "./trainingProgress.js";
@@ -115,6 +115,30 @@ export async function issueInvite(db: Db, actorId: number | null, candidateId: n
   const login = (await db.query<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [userId])).rows[0].email;
   await event(db, candidateId, "access", `створено посилання-запрошення (чинне ${CANDIDATE_ACCESS.inviteHours} год)`, actorId);
   return { token, expiresAt: r.rows[0].expires_at, login };
+}
+
+/**
+ * 🔑 ЛОГІН І ПАРОЛЬ, ПОКАЗАНІ ОДИН РАЗ (рішення власника 18.09.2026; на зустрічі 15.09 Сергій
+ * казав «у цієї людини кандидата є логін-пароль до дашборду»).
+ *
+ * 🔴 ПАРОЛЬ НЕ ПОТРАПЛЯЄ НІКУДИ, КРІМ ВІДПОВІДІ: ні в подію історії, ні в лог, ні в `users`
+ * (там лише bcrypt-хеш). Той, хто відкрив картку пізніше, побачить лише «видано логін і пароль»
+ * із датою — а щоб дати вхід ще раз, натисне кнопку знову й отримає НОВИЙ пароль.
+ * ⚠️ Видача пароля гасить невикористані запрошення: два живі шляхи входу означали б, що
+ * «посилання вже не працює» стало б несподіванкою рівно тоді, коли людина ним користується.
+ */
+export async function issueCandidatePassword(db: Db, actorId: number | null, candidateId: number, access: HiringAccess, leadTeamId: number | null) {
+  const c = await lockAccount(db, candidateId, access, leadTeamId);
+  if (c.status !== "candidate" && c.status !== "training")
+    throw new HiringError(409, "Вхід — для статусів «кандидат + команда» і «на навчанні»");
+  if (c.access_closed_at) throw new HiringError(409, `Доступ закрито (${CLOSE_REASON_LABEL[c.access_closed_reason!]}) — спершу «Відновити доступ»`);
+  const userId = c.user_id ?? await ensureCandidateAccount(db, actorId, candidateId);
+  const password = newCandidatePassword();
+  await db.query(`UPDATE users SET password_hash = $1, is_active = true WHERE id = $2`, [await bcrypt.hash(password, 10), userId]);
+  await db.query(`UPDATE hiring_invites SET revoked_at = now() WHERE candidate_id = $1 AND used_at IS NULL AND revoked_at IS NULL`, [candidateId]);
+  const login = (await db.query<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [userId])).rows[0].email;
+  await event(db, candidateId, "access", "видано логін і пароль (пароль показано один раз)", actorId);
+  return { login, password };
 }
 
 async function inviteByToken(db: Db, token: unknown, lock: boolean) {
@@ -245,6 +269,8 @@ export interface TrainingRow {
   deadline: string | null; day: number; days: number; health: TrainingHealth | "no_account";
   done: number; total: number; percent: number; current_step: string | null; open_questions: number;
   invite: { expires_at: string; used_at: string | null; revoked_at: string | null } | null;
+  /** Коли Іван востаннє бачив логін і пароль (сам пароль не зберігається ніде). */
+  password_issued_at: string | null;
 }
 
 /** Дошка «На навчанні»: картки з акаунтом або в статусах «кандидат + команда» / «на навчанні». */
@@ -259,6 +285,8 @@ export async function trainingBoard(db: Db, access: HiringAccess, leadTeamId: nu
             c.account_created_at, c.first_login_at, c.access_extended_days, c.access_closed_at, c.access_closed_reason,
             (SELECT max(e.at) FROM training_events e WHERE e.user_id = c.user_id) AS last_activity_at,
             (SELECT count(*)::int FROM hiring_training_questions q WHERE q.candidate_id = c.id AND q.answer IS NULL) AS open_questions,
+            (SELECT max(e.at) FROM hiring_events e WHERE e.candidate_id = c.id AND e.kind = 'access'
+                AND e.comment LIKE 'видано логін і пароль%') AS password_issued_at,
             (SELECT json_build_object('expires_at', i.expires_at, 'used_at', i.used_at, 'revoked_at', i.revoked_at)
                FROM hiring_invites i WHERE i.candidate_id = c.id ORDER BY i.created_at DESC, i.id DESC LIMIT 1) AS invite
        FROM hiring_candidates c LEFT JOIN teams t ON t.id = c.team_id LEFT JOIN users u ON u.id = c.user_id
