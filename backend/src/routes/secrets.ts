@@ -6,7 +6,7 @@ import {
   SecretError, type Db, listPeople, personVault, createSecret, updateSecret, setSecretDeleted,
   sendRevealCode, revealSecret, vaultLinkState, createVaultLink, unlinkVault,
 } from "../core/secrets.js";
-import { previewImport, commitImport, listEmployees, ImportError } from "../core/employees.js";
+import { previewImport, commitImport, listEmployees, updateEmployee, ImportError } from "../core/employees.js";
 import { vaultBotConfigured, vaultBotSend, vaultBotUsername } from "../bot/vaultBot.js";
 
 /**
@@ -122,7 +122,21 @@ secretsRouter.post("/:id/reveal", async (req, res) => {
  * Прев'ю НІЧОГО не пише і не віддає значень секретів; імпорт — одна транзакція.
  */
 secretsRouter.get("/employees", async (_req, res) => {
-  try { res.json({ rows: await listEmployees(pool as unknown as Db) }); } catch (e) { fail(res, e); }
+  try {
+    const db = pool as unknown as Db;
+    // Команди для фільтра й зміни: що є в реєстрі + команди дашборда.
+    const teams = (await db.query<{ name: string }>(
+      `SELECT DISTINCT name FROM (SELECT team_label AS name FROM employees WHERE team_label IS NOT NULL
+         UNION SELECT name FROM teams WHERE name IS NOT NULL) t ORDER BY name`)).rows.map((r) => r.name);
+    res.json({ rows: await listEmployees(db), teams });
+  } catch (e) { fail(res, e); }
+});
+
+secretsRouter.patch("/employees/:id", async (req, res) => {
+  try {
+    const r = await tx((db) => updateEmployee(db, me(req), num(req.params.id, "id співробітника"), req.body ?? {}));
+    res.json({ ok: true, changed: r.changed });
+  } catch (e) { fail(res, e); }
 });
 
 secretsRouter.post("/import/preview", async (req, res) => {

@@ -421,6 +421,7 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "POST", path: "/api/secrets/:id/reveal", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   // 🗂 Реєстр співробітників + імпорт таблиці (18.09.2026) — у тому ж роутері й за тим самим правом.
   { method: "GET", path: "/api/secrets/employees", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+  { method: "PATCH", path: "/api/secrets/employees/:id", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "POST", path: "/api/secrets/import/preview", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "POST", path: "/api/secrets/import/commit", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "POST", path: "/api/vault-bot/webhook", cls: "deny-only", allow: [], deny: [] },

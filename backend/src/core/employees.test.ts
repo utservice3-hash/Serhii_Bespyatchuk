@@ -291,3 +291,31 @@ test("#568 ЖИВИЙ SQL: повтор людини — обʼєднання з
     assert.deepEqual(labels, ["kommo:", "mail:", "mail:рядок 3"], "🔴 пароль того самого сервісу з другого рядка не ліг окремо");
   } finally { await s.done(); }
 });
+
+/**
+ * #569 — РЕДАГУВАННЯ ЛЮДИНИ: поля міняються, «працює» стирає дату звільнення, нова дата звільнення ставить
+ * «звільнений»; погана дата й порожнє ПІБ — 400; після перейменування повторний імпорт НЕ дублює людину.
+ * 🧨 Червоніє, якщо дозволити порожнє ПІБ, не узгодити статус із датою або переписувати `import_key`.
+ */
+test("#569 ЖИВИЙ SQL: редагування — статус узгоджено з датою звільнення, імпорт після перейменування без дубля", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const emp = await import("./employees.js");
+  try {
+    await emp.commitImport(s.db, KEY, s.ivan, CSV, MAP, "active");
+    const id = (await s.c.query(`SELECT id FROM employees WHERE import_key = 'сидоренко марія'`)).rows[0].id as number;
+    const bad = (e: unknown) => (e as { status?: number }).status === 400;
+    await assert.rejects(emp.updateEmployee(s.db, s.ivan, id, { full_name: "  " }), bad, "🔴 порожнє ПІБ прийнято");
+    await assert.rejects(emp.updateEmployee(s.db, s.ivan, id, { hired_at: "31.02.2024" }), bad, "🔴 неіснуючу дату прийнято");
+    const r1 = await emp.updateEmployee(s.db, s.ivan, id, { team_label: "РПК · Дмитрук", dismissed_at: "01.09.2026", full_name: "Сидоренко Марія Іванівна" });
+    assert.deepEqual(r1.changed.sort(), ["dismissed_at", "full_name", "status", "team_label"]);
+    let row = (await s.c.query(`SELECT status, dismissed_at::text AS d, team_label FROM employees WHERE id = $1`, [id])).rows[0];
+    assert.deepEqual(row, { status: "dismissed", d: "2026-09-01", team_label: "РПК · Дмитрук" }, "🔴 дата звільнення не поставила статус");
+    await emp.updateEmployee(s.db, s.ivan, id, { status: "active" });
+    row = (await s.c.query(`SELECT status, dismissed_at FROM employees WHERE id = $1`, [id])).rows[0];
+    assert.deepEqual(row, { status: "active", dismissed_at: null }, "🔴 «працює» лишило дату звільнення");
+    assert.deepEqual((await emp.updateEmployee(s.db, s.ivan, id, { status: "active" })).changed, [], "🔴 зміна без змін записана");
+    await emp.commitImport(s.db, KEY, s.ivan, CSV, MAP, "active");
+    assert.equal((await s.c.query(`SELECT count(*)::int n FROM employees`)).rows[0].n, 3, "🔴 після перейменування імпорт задублював людину");
+    assert.ok((await s.c.query(`SELECT 1 FROM access_audit WHERE action = 'employees.update' AND target_id = $1`, [`e${id}`])).rowCount, "🔴 зміну не записано в журнал");
+  } finally { await s.done(); }
+});

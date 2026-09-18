@@ -5,7 +5,7 @@
  * Прев'ю й імпорт рахуються ОДНІЄЮ функцією (`plan`), тож «що показали» і «що записали» не
  * розходяться. 🔴 Прев'ю не віддає жодного значення секрету — лише скільки їх і куди підуть.
  */
-import { parseCsv, buildRows, guessTarget, validateMapping, shortKey, ImportError, SECRETISH, headersAt, detectHeaderRow, type PlainRow } from "./employeeImport.js";
+import { parseCsv, buildRows, guessTarget, validateMapping, shortKey, ImportError, SECRETISH, headersAt, detectHeaderRow, parseDate, type PlainRow } from "./employeeImport.js";
 import { createSecret, SecretError, type Db } from "./secrets.js";
 import { SecretKeyMissing } from "./secretBox.js";
 
@@ -200,10 +200,49 @@ export async function commitImport(db: Db, key: Buffer | null, actorId: number, 
   return c;
 }
 
+const EDITABLE = ["full_name", "position", "team_label", "phone", "email", "telegram", "birth_date", "hired_at", "dismissed_at", "dismiss_reason", "note", "status"] as const;
+const DATES = new Set(["birth_date", "hired_at", "dismissed_at"]);
+
+/**
+ * Редагування людини реєстру (18.09.2026). Лише названі поля; дата — «РРРР-ММ-ДД» чи «ДД.ММ.РРРР», порожнє → null.
+ * Статус і дата звільнення узгоджуються: «працює» стирає дату звільнення, нова дата звільнення ставить
+ * «звільнений» (якщо статус не названо явно). `import_key` НЕ змінюється — повторний імпорт знайде ту саму людину.
+ * В аудит — назви змінених полів, без значень. Тримає #569.
+ */
+export async function updateEmployee(db: Db, actorId: number, id: number, body: Record<string, unknown>) {
+  const cur = (await db.query<Record<string, unknown>>(
+    `SELECT id, full_name, position, team_label, phone, email, telegram, birth_date::text AS birth_date, hired_at::text AS hired_at,
+            dismissed_at::text AS dismissed_at, dismiss_reason, note, status FROM employees WHERE id = $1 FOR UPDATE`, [id])).rows[0];
+  if (!cur) throw new ImportError(404, "Співробітника не знайдено");
+  const next: Record<string, unknown> = {};
+  for (const k of EDITABLE) {
+    if (!(k in body)) continue;
+    const raw = body[k];
+    let v: string | null = raw == null ? null : String(raw).trim() || null;
+    if (k === "full_name" && !v) throw new ImportError(400, "ПІБ не може бути порожнім");
+    if (k === "status" && v !== "active" && v !== "dismissed") throw new ImportError(400, "Статус: працює або звільнений");
+    if (DATES.has(k) && v) { const d = parseDate(v); if (!d) throw new ImportError(400, `Дата «${v}» не розпізнана`); v = d; }
+    if (k === "email" && v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw new ImportError(400, "Пошта не схожа на адресу");
+    if (v != null && v.length > 300) throw new ImportError(400, "Задовге значення");
+    next[k] = v;
+  }
+  if ("status" in next && next.status === "active") next.dismissed_at = null;
+  else if (!("status" in next) && next.dismissed_at) next.status = "dismissed";
+  const changed = Object.keys(next).filter((k) => String(next[k] ?? "") !== String(cur[k] ?? ""));
+  if (!changed.length) return { changed: [] as string[] };
+  const sets = changed.map((k, i) => `${k} = $${i + 2}`).join(", ");
+  await db.query(`UPDATE employees SET ${sets}, updated_at = now() WHERE id = $1`, [id, ...changed.map((k) => next[k])]);
+  await db.query(
+    `INSERT INTO access_audit (actor_user_id, actor_email, action, target_type, target_id, target_label, details)
+     VALUES ($1, (SELECT email FROM users WHERE id = $1), 'employees.update', 'user', $2, $3, $4)`,
+    [actorId, `e${id}`, cur.full_name, { changed }]);
+  return { changed };
+}
+
 /** Реєстр: люди, акаунт, скільки записів у сейфі. */
 export async function listEmployees(db: Db) {
   return (await db.query(
-    `SELECT e.id, e.full_name, e.status, e.position, e.team_label, e.phone, e.email, e.telegram,
+    `SELECT e.id, CASE WHEN e.user_id IS NOT NULL THEN e.user_id::text ELSE 'e' || e.id END AS ref, e.full_name, e.status, e.position, e.team_label, e.phone, e.email, e.telegram,
             e.birth_date::text AS birth_date, e.hired_at::text AS hired_at, e.dismissed_at::text AS dismissed_at,
             e.dismiss_reason, e.note, e.extra, e.user_id, ${NAME} AS account_name, u.is_active AS account_active,
             (SELECT count(*)::int FROM employee_secrets s WHERE (s.user_id = e.user_id OR s.employee_id = e.id) AND s.superseded_at IS NULL AND s.deleted_at IS NULL) AS secrets,
