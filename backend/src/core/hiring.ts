@@ -67,18 +67,76 @@ export async function scheduleRows(db: Db, from: string, to: string): Promise<Sc
   return r.rows;
 }
 
-export async function createInterview(
-  db: Db, actorId: number | null, p: { interviewDate: unknown; interviewTime?: unknown; responsible?: unknown },
-): Promise<number> {
+/** Статуси, з яких призначена співбесіда переводить кандидата в «заплановано» (за ланцюжком `TRANSITIONS`). */
+const TO_PLANNED: readonly HiringStatus[] = ["new", "contacted", "noanswer", "noshow", "refused"];
+
+export interface CreatedInterview { id: number; candidateId: number | null; moved: boolean; repeat: boolean; status: HiringStatus | null }
+
+/**
+ * Нова співбесіда (рядок графіка). Три шляхи (18.09.2026, «Графік — розклад і + Співбесіда»):
+ *  • порожній рядок — як і раніше, кандидата створить перше введене ПІБ чи телефон (`updateInterview`);
+ *  • `candidateId` — наявний кандидат із бази: рядок привʼязується до нього, а статус зсувається в
+ *    «заплановано» ЛИШЕ з ранніх етапів і повернення з відмови. Кандидат далі по ланцюжку (напр. на
+ *    навчанні) лишається, де був: співбесіда фіксується, статус — ні;
+ *  • `newCandidate` — ПІБ, телефон і вакансія обовʼязкові; якщо номер уже в базі — береться ІСНУЮЧИЙ
+ *    (подія «повторний відгук»), дубля немає. Тримає #580/#581.
+ */
+export async function createInterviewFor(
+  db: Db, actorId: number | null,
+  p: { interviewDate: unknown; interviewTime?: unknown; responsible?: unknown; candidateId?: unknown; newCandidate?: unknown },
+): Promise<CreatedInterview> {
   if (!isIsoDate(p.interviewDate)) throw new HiringError(400, "Потрібна дата співбесіди");
   const time = p.interviewTime == null || p.interviewTime === "" ? null : p.interviewTime;
   if (time != null && !isTime(time)) throw new HiringError(400, "Час у форматі ГГ:ХХ");
+  const out: CreatedInterview = { id: 0, candidateId: null, moved: false, repeat: false, status: null };
+  let cand: { id: number; full_name: string; status: HiringStatus } | null = null;
+  if (p.candidateId != null && p.candidateId !== "") {
+    const cid = posInt(p.candidateId, "id кандидата");
+    cand = (await db.query<{ id: number; full_name: string; status: HiringStatus }>(
+      `SELECT id, full_name, status FROM hiring_candidates WHERE id = $1 FOR UPDATE`, [cid])).rows[0] ?? null;
+    if (!cand) throw new HiringError(404, "Кандидата не знайдено");
+  } else if (p.newCandidate && typeof p.newCandidate === "object") {
+    const n = p.newCandidate as Record<string, unknown>;
+    const fullName = str(n.fullName), norm = normalizePhone(n.phone);
+    if (!fullName) throw new HiringError(400, "Вкажіть ПІБ кандидата");
+    if (!norm) throw new HiringError(400, "Вкажіть телефон кандидата");
+    if (n.vacancyId == null || n.vacancyId === "") throw new HiringError(400, "Оберіть вакансію");
+    const existing = await byPhone(db, norm);
+    if (existing) { cand = existing; out.repeat = true; }
+    else {
+      const ins = await db.query<{ id: number }>(
+        `INSERT INTO hiring_candidates (full_name, phone, phone_norm, telegram, source, status, created_by)
+         VALUES ($1, $2, $3, $4, $5, 'planned', $6) RETURNING id`,
+        [fullName, str(n.phone), norm, str(n.telegram), str(n.source), actorId]);
+      cand = { id: ins.rows[0].id, full_name: fullName, status: "planned" };
+      await logEvent(db, { candidateId: cand.id, kind: "created", to: "planned", comment: "створено з графіка («+ Співбесіда»)", actorId });
+    }
+    await linkVacancy(db, actorId, cand.id, n.vacancyId);
+  }
   const r = await db.query<{ id: number }>(
-    `INSERT INTO hiring_interviews (interview_date, interview_time, responsible, created_by)
-     VALUES ($1::date, $2::time, $3, $4) RETURNING id`,
-    [p.interviewDate, time, typeof p.responsible === "string" && p.responsible.trim() ? p.responsible.trim() : null, actorId],
+    `INSERT INTO hiring_interviews (interview_date, interview_time, responsible, candidate_id, created_by)
+     VALUES ($1::date, $2::time, $3, $4, $5) RETURNING id`,
+    [p.interviewDate, time, typeof p.responsible === "string" && p.responsible.trim() ? p.responsible.trim() : null, cand?.id ?? null, actorId],
   );
-  return r.rows[0].id;
+  out.id = r.rows[0].id;
+  if (cand) {
+    out.candidateId = cand.id;
+    const when = `${String(p.interviewDate).slice(8, 10)}.${String(p.interviewDate).slice(5, 7)}${time ? ` ${time}` : ""}`;
+    if (out.repeat) await logEvent(db, { candidateId: cand.id, interviewId: out.id, kind: "repeat", comment: `повторний запис у графік за тим самим номером · ${when}`, actorId });
+    if (TO_PLANNED.includes(cand.status) && cand.status !== "planned") {
+      await setStatus(db, actorId, cand.id, cand.status, "planned", `призначено співбесіду ${when}`, out.id);
+      out.moved = true; out.status = "planned";
+    } else {
+      out.status = cand.status;
+      if (!out.repeat) await logEvent(db, { candidateId: cand.id, interviewId: out.id, kind: "edit", comment: `призначено співбесіду ${when}`, actorId });
+    }
+  }
+  return out;
+}
+
+/** Порожній рядок графіка (як до 18.09.2026) — номер рядка. */
+export async function createInterview(db: Db, actorId: number | null, p: { interviewDate: unknown; interviewTime?: unknown; responsible?: unknown }): Promise<number> {
+  return (await createInterviewFor(db, actorId, { interviewDate: p.interviewDate, interviewTime: p.interviewTime, responsible: p.responsible })).id;
 }
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);

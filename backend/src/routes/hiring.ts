@@ -11,7 +11,7 @@ import {
   VACANCY_STATUSES, VACANCY_STATUS_LABEL, VACANCY_RESULTS, HIRING_FILE_MAX_BYTES, sniffFileMime, hiringStoredName,
 } from "../core/hiringRules.js";
 import {
-  HiringError, type Db, scheduleRows, createInterview, updateInterview, setInterviewDeleted,
+  HiringError, type Db, scheduleRows, createInterview, createInterviewFor, updateInterview, setInterviewDeleted,
   listCandidates, candidateCard, createCandidate, updateCandidateFields, changeStatus, addComment,
   dailyReport, setDailyManual, hiringMeta,
   listVacancies, createVacancy, updateVacancy, setCandidateVacancies, addRefusalReason, refuseCandidate, setReserve,
@@ -181,8 +181,7 @@ hiringRouter.get("/schedule", async (req, res) => {
 hiringRouter.post("/interviews", async (req, res) => {
   try {
     onlyEdit(req);
-    const id = await tx((db) => createInterview(db, req.auth!.userId, req.body ?? {}));
-    res.status(201).json({ id });
+    res.status(201).json(await tx((db) => createInterviewFor(db, req.auth!.userId, req.body ?? {})));
   } catch (e) { fail(res, e); }
 });
 
