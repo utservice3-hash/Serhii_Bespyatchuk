@@ -147,6 +147,8 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/training"), tabs: ["training"] },
     // 🧑‍💼 Найм (17.09.2026). Вкладка — ПЕРША межа; друга, всередині, — `hiringAccess` у роуті.
     { test: pre("/api/hiring"), tabs: ["hiring"] },
+    // 🔐 Сейф доступів живе в «Наймі» → «Доступи». Друга межа — право `view_employee_secrets` на роутері.
+    { test: pre("/api/secrets"), tabs: ["hiring"] },
     { test: pre("/api/bank"), tabs: ["bank"] },
   ];
 })();

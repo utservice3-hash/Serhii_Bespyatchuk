@@ -4234,3 +4234,56 @@ export const fetchCandidateMe = async () => (await api.get<CandidateMe>("/traini
 export const fetchMyTrainingQuestions = async () => (await api.get<{ rows: MyTrainingQuestion[] }>("/training/questions")).data.rows;
 export const askTrainingQuestion = async (question: string, materialId: number | null) =>
   (await api.post<{ id: number }>("/training/questions", { question, materialId })).data.id;
+// 🔐 СЕЙФ ДОСТУПІВ (18.09.2026). Значення (пароль, номер картки) приходить ЛИШЕ з reveal.
+export interface SecretsStatus { keyConfigured: boolean; botConfigured: boolean; botUsername: string | null; linked: boolean; linkedAt: string | null }
+/** `ref` — «12» (акаунт) або «e34» (людина реєстру без акаунта). */
+export interface SecretPerson { ref: string; id: number | null; name: string; email: string | null; team_name: string | null; role: string | null; status: "active" | "dismissed"; has_account: boolean; passwords: number; cards: number; updated_at: string | null }
+export interface SecretItem {
+  id: number; kind: "password" | "card"; service: string; label: string | null; login: string | null; last4: string | null;
+  updated_at: string; updated_by: string | null; deleted_at: string | null; versions: number;
+}
+export interface SecretJournalRow { id: number; at: string; action: string; actor: string | null; service: string | null; reason: string | null }
+export interface SecretPersonVault {
+  person: { id: number | null; ref: string; name: string; email: string | null; team_name: string | null; role: string | null; hasAccount: boolean };
+  items: SecretItem[]; journal: SecretJournalRow[];
+}
+export const fetchSecretsStatus = async () => (await api.get<SecretsStatus>("/secrets/status")).data;
+export const createSecretsLink = async () => (await api.post<{ code: string; expiresInSec: number; botUsername: string | null; url: string | null }>("/secrets/link")).data;
+export const unlinkSecretsBot = async () => { await api.post("/secrets/unlink"); };
+export const fetchSecretPeople = async () => (await api.get<{ rows: SecretPerson[] }>("/secrets/people")).data.rows;
+export const fetchSecretPerson = async (ref: string) => (await api.get<SecretPersonVault>(`/secrets/people/${ref}`)).data;
+export const createSecret = async (userId: string, b: { kind: "password" | "card"; service?: string; label?: string; login?: string; value: string }) =>
+  (await api.post<{ id: number }>(`/secrets/people/${userId}`, b)).data.id;
+export const updateSecret = async (id: number, b: { login?: string; value?: string }) => (await api.patch<{ id: number }>(`/secrets/${id}`, b)).data.id;
+export const deleteSecret = async (id: number) => { await api.delete(`/secrets/${id}`); };
+export const restoreSecret = async (id: number) => { await api.post(`/secrets/${id}/restore`); };
+export const sendSecretCode = async (id: number) => (await api.post<{ expiresInSec: number }>(`/secrets/${id}/code`)).data;
+export const revealSecret = async (id: number, code: string, reason: string) =>
+  (await api.post<{ value: string; login: string | null; seconds: number }>(`/secrets/${id}/reveal`, { code, reason })).data;
+
+
+// 🗂 Реєстр співробітників + імпорт «UTS Співробітники УКР» (18.09.2026, задача №3898).
+export interface EmployeeRow {
+  id: number; ref: string; full_name: string; status: "active" | "dismissed"; position: string | null; team_label: string | null;
+  phone: string | null; email: string | null; telegram: string | null; birth_date: string | null; hired_at: string | null;
+  dismissed_at: string | null; dismiss_reason: string | null; note: string | null; extra: Record<string, string>;
+  user_id: number | null; account_name: string | null; account_active: boolean | null; secrets: number; updated_at: string;
+}
+export interface ImportColumn { index: number; header: string; target: string; secretish: boolean; filled: number }
+export interface ImportPreviewRow {
+  line: number; name: string; position: string | null; team: string | null; state: "new" | "update" | "duplicate";
+  account: string | null; match: string; matchNote: string; secrets: number; secretsLost: number; secretsNoAccount: number; problems: string[];
+}
+export interface ImportPreview {
+  columns: ImportColumn[]; mappingError: string | null; rows: ImportPreviewRow[];
+  headerRow: number; headerCandidates: { row: number; fields: string[] }[];
+  totals?: { rows: number; new: number; update: number; duplicate: number; withAccount: number; noAccount: number; secrets: number; secretsLost: number; secretsNoAccount: number; problems: number; skipped: number };
+}
+export interface ImportCounts { rows: number; created: number; updated: number; duplicate: number; linked: number; secretsCreated: number; secretsExisting: number; secretsNoAccount: number; secretsInvalid: number }
+export const fetchEmployees = async () => (await api.get<{ rows: EmployeeRow[]; teams: string[] }>("/secrets/employees")).data;
+export type EmployeePatch = Partial<Pick<EmployeeRow, "full_name" | "position" | "team_label" | "phone" | "email" | "telegram" | "birth_date" | "hired_at" | "dismissed_at" | "dismiss_reason" | "note" | "status">>;
+export const updateEmployee = async (id: number, b: EmployeePatch) => (await api.patch<{ ok: true; changed: string[] }>(`/secrets/employees/${id}`, b)).data.changed;
+export const previewEmployeeImport = async (csv: string, mapping?: string[], headerRow?: number) =>
+  (await api.post<ImportPreview>("/secrets/import/preview", { csv, mapping, headerRow })).data;
+export const commitEmployeeImport = async (csv: string, mapping: string[], sheet: "active" | "dismissed", headerRow: number) =>
+  (await api.post<{ ok: true; counts: ImportCounts }>("/secrets/import/commit", { csv, mapping, sheet, headerRow })).data.counts;

@@ -431,8 +431,10 @@ test("#5.13 🔴 HR НЕ успадкував нічого з того, що о�
   assert.notEqual(hrCompat, "admin",
     "🔴 HR піднявся до admin — company-scope НЕ дає цього без права admin_scope");
   const perms = Object.entries(hr.permissions).filter(([, v]) => v === true).map(([k]) => k).sort();
-  assert.deepEqual(perms, ["edit_1x1_forms", "view_all_1x1"],
-    `🔴 набір прав HR змінився: ${perms.join(", ")} — очікували рівно два 1×1-права`);
+  // 18.09.2026: + `view_employee_secrets` — сейф доступів (рішення Романа: «Показати» — адміни, Юля, Іван).
+  // Фінансист цього права НЕ має, тож твердження «HR не поїхав за фінансистом» тримається.
+  assert.deepEqual(perms, ["edit_1x1_forms", "view_all_1x1", "view_employee_secrets"],
+    `🔴 набір прав HR змінився: ${perms.join(", ")} — очікували два 1×1-права і право сейфу`);
   // Жодного з прав, які фінансист дістав при підйомі до адміна.
   const gained = ["admin_scope", "approve_plans", "enter_manual_stats", "export",
     "manage_bank_accounts", "manage_bank_hidden", "manage_goals", "submit_plans",

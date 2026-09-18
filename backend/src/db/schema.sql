@@ -3601,3 +3601,114 @@ CREATE INDEX IF NOT EXISTS idx_hiring_training_questions_candidate ON hiring_tra
 
 -- 🔒 Хеші запрошень і листування кандидата — не для моделі. REVOKE після GRANT і CREATE. Тримає #535.
 REVOKE ALL ON hiring_invites, hiring_training_questions FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🔐 СЕЙФ ДОСТУПІВ СПІВРОБІТНИКІВ (18.09.2026; рішення Романа: «Показати» — адміни, Юля, Іван)
+-- ══════════════════════════════════════════════════════════════════════════
+-- Паролі до сервісів і картки для виплат — ЛИШЕ шифром (AES-256-GCM, `core/secretBox.ts`). Ключ —
+-- у `.env` (`EMPLOYEE_SECRETS_KEY`), НЕ в базі й не в бекапі: злитий дамп чи бекап паролів не дає.
+-- Зміна значення — НОВИЙ рядок, старий отримує `superseded_at` (історія лишається, як у документів).
+-- ⚠️ `revert` коду таблиць і рядків не прибирає; без ключа їх не прочитати.
+CREATE TABLE IF NOT EXISTS employee_secrets (
+  id             SERIAL PRIMARY KEY,
+  user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind           TEXT NOT NULL CHECK (kind IN ('password','card')),
+  service        TEXT NOT NULL,
+  label          TEXT,
+  login          TEXT,
+  last4          TEXT,
+  cipher         TEXT NOT NULL,
+  iv             TEXT NOT NULL,
+  tag            TEXT NOT NULL,
+  key_version    INTEGER NOT NULL DEFAULT 1,
+  created_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  superseded_at  TIMESTAMPTZ,
+  deleted_at     TIMESTAMPTZ,
+  deleted_by     INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_employee_secrets_user ON employee_secrets(user_id) WHERE superseded_at IS NULL;
+
+-- Код показу: у базі лише хеш із сіллю; 5 хв, 3 спроби, одноразовий. Привʼязаний до ТОГО, хто
+-- дивиться, і до КОНКРЕТНОГО запису — код на Kommo не відкриє пошту.
+CREATE TABLE IF NOT EXISTS secret_reveal_codes (
+  id          SERIAL PRIMARY KEY,
+  actor_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  secret_id   INTEGER NOT NULL REFERENCES employee_secrets(id) ON DELETE CASCADE,
+  code_hash   TEXT NOT NULL,
+  salt        TEXT NOT NULL,
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  used_at     TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_secret_reveal_codes_actor ON secret_reveal_codes(actor_id, secret_id, created_at DESC);
+
+-- Окремий бот «UTS Сейф» (рішення Романа 18.09.2026) — окрема привʼязка: чат бота підпису
+-- сюди НЕ рахується. Код привʼязки — 6 цифр, 10 хв, одноразовий.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS vault_chat_id   BIGINT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS vault_linked_at TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS vault_link_codes (
+  id          SERIAL PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code        TEXT NOT NULL,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  used_at     TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_vault_link_codes_code ON vault_link_codes(code) WHERE used_at IS NULL;
+
+-- 🔑 Право «Показати» — рівно пʼять ролей (рішення Романа 18.09.2026: адміни, Юля — КВП, Іван — HR).
+-- Явними рядками, як `manage_training`: видача й зняття, щоб склад не залежав від місця вставки.
+UPDATE roles SET permissions = permissions || '{"view_employee_secrets": true}'::jsonb
+ WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'hr');
+UPDATE roles SET permissions = permissions - 'view_employee_secrets'
+ WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp', 'hr');
+
+-- 🔒 Шифр, коди й чати — не для моделі. REVOKE після GRANT і CREATE. Тримає #554.
+REVOKE ALL ON employee_secrets, secret_reveal_codes, vault_link_codes FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🗂 РЕЄСТР СПІВРОБІТНИКІВ + ІМПОРТ «UTS Співробітники УКР» (18.09.2026, задача №3898)
+-- ══════════════════════════════════════════════════════════════════════════
+-- Людина компанії — з акаунтом дашборда чи без (бухгалтерія, звільнені). `user_id` — необовʼязковий
+-- і унікальний: одна людина реєстру ↔ щонайбільше один акаунт. Паролі й картки СЮДИ НЕ ЙДУТЬ —
+-- лише в `employee_secrets` шифром; `extra` бере тільки колонки, які людина ЯВНО позначила
+-- «зберегти як є» (сервер відмовляє, якщо заголовок схожий на пароль чи картку). Тримає #562.
+-- `import_key` — нормалізоване ПІБ: повторний імпорт оновлює рядок, а не дублює (#563).
+-- ⚠️ Перенос одноразовий; revert коду рядків не прибирає.
+CREATE TABLE IF NOT EXISTS employees (
+  id              SERIAL PRIMARY KEY,
+  full_name       TEXT NOT NULL,
+  import_key      TEXT NOT NULL UNIQUE,
+  user_id         INTEGER UNIQUE REFERENCES users(id) ON DELETE SET NULL,
+  status          TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','dismissed')),
+  position        TEXT,
+  team_label      TEXT,
+  phone           TEXT,
+  email           TEXT,
+  telegram        TEXT,
+  birth_date      DATE,
+  hired_at        DATE,
+  dismissed_at    DATE,
+  dismiss_reason  TEXT,
+  note            TEXT,
+  extra           JSONB NOT NULL DEFAULT '{}'::jsonb,
+  source          TEXT NOT NULL DEFAULT 'import',
+  created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 🔒 Персональні дані (телефон, дата народження) — не для моделі. REVOKE після GRANT і CREATE. Тримає #564.
+REVOKE ALL ON employees FROM ai_readonly;
+
+-- 🔐 СЕЙФ ДЛЯ ЛЮДЕЙ БЕЗ АКАУНТА (18.09.2026, рішення Романа: «додати усіх з таблиці, не тільки тих, хто є
+-- в дашборді»). Власник запису — акаунт (`user_id`) АБО людина реєстру (`employee_id`), хоча б один.
+-- Наявні записи не переписуються (AAD привʼязаний до `user_id`); `employee_id` отримують лише ті, хто
+-- без акаунта. ⚠️ revert коду колонки не прибирає; записи без акаунта без неї не прочитати. Тримає #567.
+ALTER TABLE employee_secrets ADD COLUMN IF NOT EXISTS employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE;
+ALTER TABLE employee_secrets ALTER COLUMN user_id DROP NOT NULL;
+ALTER TABLE employee_secrets DROP CONSTRAINT IF EXISTS employee_secrets_owner_check;
+ALTER TABLE employee_secrets ADD CONSTRAINT employee_secrets_owner_check CHECK (user_id IS NOT NULL OR employee_id IS NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_employee_secrets_employee ON employee_secrets(employee_id) WHERE superseded_at IS NULL;
