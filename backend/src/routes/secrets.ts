@@ -6,6 +6,7 @@ import {
   SecretError, type Db, listPeople, personVault, createSecret, updateSecret, setSecretDeleted,
   sendRevealCode, revealSecret, vaultLinkState, createVaultLink, unlinkVault,
 } from "../core/secrets.js";
+import { previewImport, commitImport, listEmployees, ImportError } from "../core/employees.js";
 import { vaultBotConfigured, vaultBotSend, vaultBotUsername } from "../bot/vaultBot.js";
 
 /**
@@ -25,6 +26,7 @@ const sender = () => (vaultBotConfigured() ? vaultBotSend : null);
 
 function fail(res: Response, e: unknown) {
   if (e instanceof SecretKeyMissing) return res.status(503).json({ error: e.message });
+  if (e instanceof ImportError) return res.status(e.status).json({ error: e.message });
   if (e instanceof SecretError) return res.status(e.status).json({ error: e.message, ...(e.extra ?? {}) });
   // 🔴 Тіло помилки НЕ логуємо: у запиті може бути пароль.
   console.error("[secrets]", (e as Error)?.message ?? "error");
@@ -110,5 +112,25 @@ secretsRouter.post("/:id/reveal", async (req, res) => {
     const out = await tx((db) => revealSecret(db, key(), me(req), num(req.params.id, "id запису"), req.body ?? {}));
     res.setHeader("Cache-Control", "no-store");
     res.json(out);
+  } catch (e) { fail(res, e); }
+});
+
+/*
+ * 🗂 РЕЄСТР СПІВРОБІТНИКІВ + ІМПОРТ ТАБЛИЦІ (18.09.2026, задача №3898). Тут, а не окремим роутером:
+ * імпорт кладе паролі в сейф, тож межа та сама — `view_employee_secrets` на роутері вище.
+ * Прев'ю НІЧОГО не пише і не віддає значень секретів; імпорт — одна транзакція.
+ */
+secretsRouter.get("/employees", async (_req, res) => {
+  try { res.json({ rows: await listEmployees(pool as unknown as Db) }); } catch (e) { fail(res, e); }
+});
+
+secretsRouter.post("/import/preview", async (req, res) => {
+  try { res.json(await previewImport(pool as unknown as Db, req.body?.csv, req.body?.mapping)); } catch (e) { fail(res, e); }
+});
+
+secretsRouter.post("/import/commit", async (req, res) => {
+  try {
+    const counts = await tx((db) => commitImport(db, key(), me(req), req.body?.csv, req.body?.mapping, req.body?.sheet));
+    res.json({ ok: true, counts });
   } catch (e) { fail(res, e); }
 });

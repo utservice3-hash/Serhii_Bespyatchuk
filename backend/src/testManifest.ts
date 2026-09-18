@@ -122,6 +122,7 @@ export const MANIFEST_FILES: string[] = [
   "core/hiring.test.js",
   "core/hiringTraining.test.js",
   "core/secrets.test.js",
+  "core/employees.test.js",
 
   "core/trainingEditor.test.js",
   "core/missedCallSignal.test.js",
@@ -233,6 +234,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "employee_secrets",
   "secret_reveal_codes",
   "vault_link_codes",
+  "employees",
   "hiring_invites",
   "hiring_training_questions",
 ];
@@ -819,6 +821,12 @@ export const MANIFEST_TESTS: string[] = [
   "#554 СЕЙФ: employee_secrets, secret_reveal_codes, vault_link_codes відібрані в ai_readonly і є в FORBIDDEN_TABLES",
   "#555 КЛЮЧ: без ключа — 503 на запис і показ, сервер при цьому стартує",
   "#556 БОТ СЕЙФУ: свій секрет вебхука, код привʼязки одноразовий",
+  // core/employees.test.ts — реєстр співробітників + імпорт таблиці (18.09.2026, задача №3898)
+  "#560 CSV: лапки, переноси й BOM як у Google; дати лише справжні",
+  "#561 МЕЖА: пароль і картка — лише в сейф або «пропустити», сервер відмовляє інакше",
+  "#562 ЖИВИЙ SQL: імпорт — пароль і картка лише шифром у сейфі, в реєстрі й аудиті їх немає",
+  "#563 ЖИВИЙ SQL: повторний імпорт — без дублів, без затирання, сейф не перезаписує",
+  "#564 РЕЄСТР: employees відібрана в ai_readonly і є в FORBIDDEN_TABLES",
   // core/missedCalls.test.ts — ТЗ-1 «Пропущені дзвінки» (14.09.2026)
   // 🔢 ДЕСЯТКА #43x, А НЕ #42x — ПЕРЕНУМЕРОВАНО ПРИ МЕРЖІ 15.09.2026. Писалось як
   // #421-#430 за правилом «найвищий змерджений +1» (тоді #419). Поки прохід ішов, у

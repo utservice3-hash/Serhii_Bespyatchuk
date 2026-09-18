@@ -3667,3 +3667,38 @@ UPDATE roles SET permissions = permissions - 'view_employee_secrets'
 
 -- 🔒 Шифр, коди й чати — не для моделі. REVOKE після GRANT і CREATE. Тримає #554.
 REVOKE ALL ON employee_secrets, secret_reveal_codes, vault_link_codes FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🗂 РЕЄСТР СПІВРОБІТНИКІВ + ІМПОРТ «UTS Співробітники УКР» (18.09.2026, задача №3898)
+-- ══════════════════════════════════════════════════════════════════════════
+-- Людина компанії — з акаунтом дашборда чи без (бухгалтерія, звільнені). `user_id` — необовʼязковий
+-- і унікальний: одна людина реєстру ↔ щонайбільше один акаунт. Паролі й картки СЮДИ НЕ ЙДУТЬ —
+-- лише в `employee_secrets` шифром; `extra` бере тільки колонки, які людина ЯВНО позначила
+-- «зберегти як є» (сервер відмовляє, якщо заголовок схожий на пароль чи картку). Тримає #562.
+-- `import_key` — нормалізоване ПІБ: повторний імпорт оновлює рядок, а не дублює (#563).
+-- ⚠️ Перенос одноразовий; revert коду рядків не прибирає.
+CREATE TABLE IF NOT EXISTS employees (
+  id              SERIAL PRIMARY KEY,
+  full_name       TEXT NOT NULL,
+  import_key      TEXT NOT NULL UNIQUE,
+  user_id         INTEGER UNIQUE REFERENCES users(id) ON DELETE SET NULL,
+  status          TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','dismissed')),
+  position        TEXT,
+  team_label      TEXT,
+  phone           TEXT,
+  email           TEXT,
+  telegram        TEXT,
+  birth_date      DATE,
+  hired_at        DATE,
+  dismissed_at    DATE,
+  dismiss_reason  TEXT,
+  note            TEXT,
+  extra           JSONB NOT NULL DEFAULT '{}'::jsonb,
+  source          TEXT NOT NULL DEFAULT 'import',
+  created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 🔒 Персональні дані (телефон, дата народження) — не для моделі. REVOKE після GRANT і CREATE. Тримає #564.
+REVOKE ALL ON employees FROM ai_readonly;

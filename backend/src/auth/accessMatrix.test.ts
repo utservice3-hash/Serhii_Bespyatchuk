@@ -83,6 +83,8 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/secrets/:id/restore": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "POST /api/secrets/:id/code": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "POST /api/secrets/:id/reveal": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
+  "POST /api/secrets/import/preview": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
+  "POST /api/secrets/import/commit": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   // 🎓 Найм 2a (17.09.2026): питання тімліду ставить ЛИШЕ власник акаунта кандидата — будь-яка інша роль,
   // фінансист теж, отримує 403 у ядрі ДО запису. Відмова не по рівню, а по звʼязку акаунта з карткою.
   "POST /api/training/questions": "лише акаунт кандидата з картки найму — інші ролі 403 до запису",
