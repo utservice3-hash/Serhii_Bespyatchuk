@@ -123,11 +123,8 @@ export async function personVault(db: Db, ref: number | string) {
   return { person: { id: o.userId, ref: o.ref, name: o.name, email: p?.email ?? null, team_name: p?.team_name ?? null, role: p?.role ?? null, hasAccount: o.userId != null }, items, journal };
 }
 
-/** Додати запис. Пароль/номер шифрується тут-таки; у відповіді й аудиті його немає. */
-export async function createSecret(db: Db, key: Buffer | null, actorId: number, ref: number | string, b: Record<string, unknown>): Promise<number> {
-  if (!key) throw new SecretKeyMissing();
-  const o = await ownerOf(db, ref);
-  const row = { user_id: o.userId, employee_id: o.userId == null ? o.employeeId : null };
+/** Правила одного запису — спільні для «+ Додати» і імпорту. Кидає `SecretError(400)`; значення не логується. */
+export function prepareSecret(b: Record<string, unknown>) {
   const kind = b.kind === "card" ? "card" : b.kind === "password" ? "password" : null;
   if (!kind) throw new SecretError(400, "Тип: пароль або картка");
   let service: string, value: string, last4: string | null = null;
@@ -145,14 +142,38 @@ export async function createSecret(db: Db, key: Buffer | null, actorId: number, 
   }
   const label = str(b.label);
   if (service === "other" && !label) throw new SecretError(400, "Для «Інше» вкажіть назву сервісу");
-  const login = str(b.login);
-  const box = seal(key, value, aadOfRow({ ...row, kind, service }));
-  const r = await db.query<{ id: number }>(
+  return { kind, service, value, last4, label, login: str(b.login) };
+}
+
+/**
+ * Кілька записів ОДНОГО власника — одним вставленням і одним записом аудиту на кожен (імпорт, 18.09.2026:
+ * 1554 записи по одному йшли 3 хв і браузер не дочікувався відповіді). Ті самі правила й AAD, що в `createSecret`.
+ */
+export async function insertSecrets(db: Db, key: Buffer | null, actorId: number, o: Owner, items: ReturnType<typeof prepareSecret>[]): Promise<number[]> {
+  if (!key) throw new SecretKeyMissing();
+  if (!items.length) return [];
+  const row = { user_id: o.userId, employee_id: o.userId == null ? o.employeeId : null };
+  const vals: unknown[] = [], tuples: string[] = [];
+  for (const it of items) {
+    const box = seal(key, it.value, aadOfRow({ ...row, kind: it.kind, service: it.service }));
+    const b = vals.length;
+    vals.push(row.user_id, row.employee_id, it.kind, it.service, it.label, it.login, it.last4, box.cipher, box.iv, box.tag, KEY_VERSION, actorId);
+    tuples.push(`(${Array.from({ length: 12 }, (_, k) => `$${b + k + 1}`).join(",")})`);
+  }
+  const ids = (await db.query<{ id: number }>(
     `INSERT INTO employee_secrets (user_id, employee_id, kind, service, label, login, last4, cipher, iv, tag, key_version, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
-    [row.user_id, row.employee_id, kind, service, label, login, last4, box.cipher, box.iv, box.tag, KEY_VERSION, actorId]);
-  await audit(db, actorId, "secret.create", { id: o.ref, label: o.name }, { secretId: r.rows[0].id, kind, service, label });
-  return r.rows[0].id;
+     VALUES ${tuples.join(",")} RETURNING id`, vals)).rows.map((r) => r.id);
+  const av: unknown[] = [actorId, o.ref, o.name], at: string[] = [];
+  items.forEach((it, k) => { av.push({ secretId: ids[k], kind: it.kind, service: it.service, label: it.label }); at.push(`($1, (SELECT email FROM users WHERE id = $1), 'secret.create', 'user', $2, $3, $${av.length})`); });
+  await db.query(`INSERT INTO access_audit (actor_user_id, actor_email, action, target_type, target_id, target_label, details) VALUES ${at.join(",")}`, av);
+  return ids;
+}
+
+/** Додати запис. Пароль/номер шифрується тут-таки; у відповіді й аудиті його немає. */
+export async function createSecret(db: Db, key: Buffer | null, actorId: number, ref: number | string, b: Record<string, unknown>): Promise<number> {
+  if (!key) throw new SecretKeyMissing();
+  const o = await ownerOf(db, ref);
+  return (await insertSecrets(db, key, actorId, o, [prepareSecret(b)]))[0];
 }
 
 async function lockSecret(db: Db, id: number) {

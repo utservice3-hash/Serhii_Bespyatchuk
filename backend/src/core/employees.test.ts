@@ -73,7 +73,7 @@ async function scratch(t: { skip: (m: string) => void }) {
   const olena = await ins("olena@uts.ua", "manager", "Коваленко Олена");
   const andrii = await ins("andrii@uts.ua", "manager", "Бондар Андрій");
   await ins("bondar2@uts.ua", "manager", "Андрій Бондар");
-  return { c, db: c as unknown as import("./secrets.js").Db, ivan, olena, andrii, done: async () => { await c.end(); s.dispose(); } };
+  return { c, url: s.url, db: c as unknown as import("./secrets.js").Db, ivan, olena, andrii, done: async () => { await c.end(); s.dispose(); } };
 }
 
 const PASS = "Qz8!mK2-Uniq", MAILPASS = "Mail-9x!Pw", CARD = "5168742012345678";
@@ -318,4 +318,52 @@ test("#569 ЖИВИЙ SQL: редагування — статус узгодж�
     assert.equal((await s.c.query(`SELECT count(*)::int n FROM employees`)).rows[0].n, 3, "🔴 після перейменування імпорт задублював людину");
     assert.ok((await s.c.query(`SELECT 1 FROM access_audit WHERE action = 'employees.update' AND target_id = $1`, [`e${id}`])).rowCount, "🔴 зміну не записано в журнал");
   } finally { await s.done(); }
+});
+
+/**
+ * #570 — ІМПОРТ ПАКЕТАМИ: 1554 паролі поштучно йшли 3 хв, і браузер не дочікувався відповіді (18.09.2026).
+ * Тепер на людину — upsert + одне вставлення записів + одне аудиту; наявні записи — одним запитом на весь імпорт.
+ * Результат той самий: лічильники, шифр розшифровується, повтор нічого не додає.
+ * 🧨 Червоніє, якщо повернути перевірку й запис по одному паролю (запитів стане ~5 на пароль).
+ */
+test("#570 ЖИВИЙ SQL: імпорт пакетами — запитів ≈ 3 на людину, а не 5 на пароль; результат той самий", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const emp = await import("./employees.js");
+  const { unseal, aadFor } = await import("./secretBox.js");
+  try {
+    const people = Array.from({ length: 30 }, (_, i) => `Тестовий${String.fromCharCode(1040 + i)} Іван,Менеджер,,+38050111${String(1000 + i)},,log${i},Pk-${i},Pm-${i},41494990123${String(10000 + i)},`);
+    const csv = [HEAD, `Коваленко Олена Петрівна,Менеджер,olena@uts.ua,,,o.k,${PASS},${MAILPASS},${CARD},`, ...people].join("\n");
+    let n = 0;
+    const counted = { query: (sql: string, params?: unknown[]) => { n++; return s.db.query(sql, params); } } as typeof s.db;
+    const c = await emp.commitImport(counted, KEY, s.ivan, csv, MAP, "active");
+    assert.deepEqual([c.rows, c.secretsCreated, c.secretsInvalid], [31, 93, 0]);
+    const perPerson = n / 31;
+    assert.ok(perPerson <= 4, `🔴 запитів ${n} на 31 людину й 93 паролі (${perPerson.toFixed(1)} на людину) — запис знову поштучний`);
+    const k = (await s.c.query(`SELECT cipher, iv, tag FROM employee_secrets WHERE user_id = $1 AND service = 'kommo'`, [s.olena])).rows[0];
+    assert.equal(unseal(KEY, k, aadFor(s.olena, "password", "kommo")), PASS, "🔴 пакетний шифр не розшифровується");
+    assert.equal((await s.c.query(`SELECT count(*)::int n FROM access_audit WHERE action = 'secret.create'`)).rows[0].n, 93, "🔴 не кожен запис має рядок аудиту");
+    const again = await emp.commitImport(s.db, KEY, s.ivan, csv, MAP, "active");
+    assert.deepEqual([again.secretsCreated, again.secretsExisting], [0, 93]);
+  } finally { await s.done(); }
+});
+
+/**
+ * #571 — ОДИН ІМПОРТ ЗА РАЗ: другий, поки перший не завершив транзакцію, отримує 409 і нічого не пише.
+ * 🧨 Червоніє, якщо прибрати `pg_try_advisory_xact_lock`.
+ */
+test("#571 ЖИВИЙ SQL: другий імпорт під час першого — 409, нічого не записано", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const emp = await import("./employees.js");
+  const { default: pg } = await import("pg");
+  const other = new pg.Client({ connectionString: s.url });
+  await other.connect();
+  try {
+    await other.query("BEGIN");
+    await other.query(`SELECT pg_advisory_xact_lock(hashtext('employees.import'))`);
+    await assert.rejects(emp.commitImport(s.db, KEY, s.ivan, CSV, MAP, "active"), (e: unknown) => (e as { status?: number }).status === 409, "🔴 другий імпорт пішов паралельно");
+    assert.equal((await s.c.query(`SELECT count(*)::int n FROM employees`)).rows[0].n, 0, "🔴 другий імпорт щось записав");
+    await other.query("ROLLBACK");
+    const c = await emp.commitImport(s.db, KEY, s.ivan, CSV, MAP, "active");
+    assert.equal(c.rows, 3, "дзеркало: після завершення першого імпорт іде");
+  } finally { await other.end(); await s.done(); }
 });

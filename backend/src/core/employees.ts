@@ -6,7 +6,7 @@
  * розходяться. 🔴 Прев'ю не віддає жодного значення секрету — лише скільки їх і куди підуть.
  */
 import { parseCsv, buildRows, guessTarget, validateMapping, shortKey, ImportError, SECRETISH, headersAt, detectHeaderRow, parseDate, type PlainRow } from "./employeeImport.js";
-import { createSecret, SecretError, type Db } from "./secrets.js";
+import { prepareSecret, insertSecrets, SecretError, type Db } from "./secrets.js";
 import { SecretKeyMissing } from "./secretBox.js";
 
 const MAX_ROWS = 3000, MAX_COLS = 120;
@@ -146,6 +146,14 @@ export async function commitImport(db: Db, key: Buffer | null, actorId: number, 
   const p = await plan(db, csv, mapping, headerRow);
   if (p.mappingError) throw new ImportError(400, p.mappingError);
   if (!key && p.rows.some((x) => x.r.secrets.length > 0 && !x.duplicate)) throw new SecretKeyMissing();
+  // Один імпорт за раз: другий клік, поки йде перший, отримує 409, а не паралельний прохід (18.09.2026 кнопку
+  // натиснули двічі, бо екран мовчав). Блокування живе до кінця транзакції. Тримає #571.
+  const locked = (await db.query<{ ok: boolean }>(`SELECT pg_try_advisory_xact_lock(hashtext('employees.import')) AS ok`)).rows[0]?.ok;
+  if (!locked) throw new ImportError(409, "Імпорт уже триває — дочекайтесь його завершення");
+  // Наявні записи сейфу — один запит на весь імпорт, а не по одному на кожен пароль. Тримає #570.
+  const have = new Set((await db.query<{ k: string }>(
+    `SELECT CASE WHEN user_id IS NOT NULL THEN 'u' || user_id ELSE 'e' || employee_id END || '|' || kind || '|' || service || '|' || COALESCE(label, '') AS k
+       FROM employee_secrets WHERE superseded_at IS NULL AND deleted_at IS NULL`)).rows.map((r) => r.k));
   const c = { rows: 0, created: 0, updated: 0, duplicate: 0, linked: 0, secretsCreated: 0, secretsExisting: 0, secretsNoAccount: 0, secretsInvalid: 0 };
   for (const { r, m, duplicate } of p.rows) {
     if (duplicate) { c.duplicate++; continue; }
@@ -170,24 +178,24 @@ export async function commitImport(db: Db, key: Buffer | null, actorId: number, 
     if (up.inserted) c.created++; else c.updated++;
     if (up.user_id != null) c.linked++;
     // Людина з акаунтом — записи на акаунті; без акаунта — на людині реєстру (рішення Романа 18.09.2026).
-    const owner = up.user_id != null ? up.user_id : `e${up.id}`;
+    const ownerKey = up.user_id != null ? `u${up.user_id}` : `e${up.id}`;
+    const batch: ReturnType<typeof prepareSecret>[] = [];
     for (const s of r.secrets) {
       if (up.user_id == null) c.secretsNoAccount++;
-      const has = (await db.query(
-        `SELECT 1 FROM employee_secrets WHERE ${up.user_id != null ? "user_id" : "employee_id"} = $1 AND kind = $2 AND service = $3
-            AND COALESCE(label, '') = COALESCE($4, '') AND superseded_at IS NULL AND deleted_at IS NULL LIMIT 1`,
-        [up.user_id ?? up.id, s.kind, s.service, s.label])).rowCount;
-      if (has) { c.secretsExisting++; continue; }
+      const k = `${ownerKey}|${s.kind}|${s.kind === "card" ? "card" : s.service}|${s.label ?? ""}`;
+      if (have.has(k)) { c.secretsExisting++; continue; }
       try {
-        await createSecret(db, key, actorId, owner, {
-          kind: s.kind, service: s.service, label: s.label, value: s.value,
-          login: s.login ?? (s.service === "mail" ? f.email ?? null : null),
-        });
-        c.secretsCreated++;
+        batch.push(prepareSecret({ kind: s.kind, service: s.service, label: s.label, value: s.value,
+          login: s.login ?? (s.service === "mail" ? f.email ?? null : null) }));
+        have.add(k);
       } catch (e) {
         if (e instanceof SecretError && e.status === 400) { c.secretsInvalid++; continue; }
         throw e;
       }
+    }
+    if (batch.length) {
+      const owner = { userId: up.user_id, employeeId: up.user_id == null ? up.id : null, name: m.account ?? r.full_name, ref: up.user_id != null ? String(up.user_id) : `e${up.id}` };
+      c.secretsCreated += (await insertSecrets(db, key, actorId, owner, batch)).length;
     }
   }
   // 🔴 В аудит — лише лічильники й назви колонок, жодного значення. `target_type` — 'user' (той, хто
