@@ -203,3 +203,19 @@ select.hr-c.novac { color: var(--warn); }
 .emp-extra dt { font-size: 11.5px; color: var(--text-muted); }
 .emp-extra dd { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
 @media (max-width: 640px) { .emp-form, .emp-extra { grid-template-columns: 1fr; } }
+
+/* 📊 «Зведення» найму — воронка (18.09.2026). */
+.fn-list { display: grid; gap: 6px; }
+.fn-row { display: grid; grid-template-columns: minmax(150px, 210px) minmax(0, 1fr) 64px 64px; gap: 10px; align-items: center; font-size: 13.5px; }
+.fn-label { color: var(--text); }
+.fn-track { position: relative; height: 26px; background: var(--bg); border-radius: var(--r-md); overflow: hidden; }
+.fn-bar { height: 100%; background: color-mix(in srgb, var(--brand) 78%, transparent); border-radius: var(--r-md); transition: width .3s; }
+.fn-n { position: absolute; left: 8px; top: 0; line-height: 26px; font-weight: 700; color: #fff; text-shadow: 0 0 3px rgba(0,0,0,.35); font-variant-numeric: tabular-nums; }
+.fn-pct { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.fn-pct.muted { color: var(--text-muted); font-weight: 500; }
+.fn-warn { color: var(--danger); }
+.fn-split { display: flex; border-radius: var(--r-md); overflow: hidden; font-size: 12.5px; font-weight: 600; min-height: 30px; }
+.fn-split > div { display: flex; align-items: center; padding: 0 10px; white-space: nowrap; overflow: hidden; }
+.fn-split .c { background: var(--info-bg); color: var(--info); }
+.fn-split .k { background: var(--warn-bg); color: var(--warn); }
+@media (max-width: 640px) { .fn-row { grid-template-columns: 1fr 56px 56px; } .fn-row .fn-label { grid-column: 1 / -1; } }

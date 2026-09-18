@@ -82,7 +82,7 @@ const anyAccess = (req: Request) => {
 /** 📊 Зведення: воронка, відмови, розрізи (етап 2, 18.09.2026). Лише «редагування» — тімлід бачить свою команду в «Кандидатах». */
 hiringRouter.get("/summary", async (req, res) => {
   try {
-    if (anyAccess(req) !== "edit") return res.status(403).json({ error: "Зведення — для HR і керівництва" });
+    onlyEdit(req);
     res.json(await hiringSummary(pool as unknown as Db, { from: req.query.from, to: req.query.to, vacancyId: req.query.vacancyId, source: req.query.source }));
   } catch (e) { fail(res, e); }
 });
@@ -404,16 +404,16 @@ hiringRouter.post("/candidates/:id/password", async (req, res) => {
 /** Вільні акаунти кандидатів — для «Привʼязати наявний акаунт». Лише «редагування». */
 hiringRouter.get("/candidate-accounts/free", async (req, res) => {
   try {
-    if (anyAccess(req) !== "edit") return res.status(403).json({ error: "Лише HR або керівництво" });
+    onlyEdit(req);
     res.json({ rows: await freeCandidateAccounts(pool as unknown as Db) });
   } catch (e) { fail(res, e); }
 });
 
 hiringRouter.post("/candidates/:id/account/link", async (req, res) => {
   try {
-    const access = anyAccess(req);
+    onlyEdit(req);
     const id = idOf(req);
-    res.json(await tx((db) => linkCandidateAccount(db, req.auth!.userId, id, req.body?.userId, access)));
+    res.json(await tx((db) => linkCandidateAccount(db, req.auth!.userId, id, req.body?.userId, "edit")));
   } catch (e) { fail(res, e); }
 });
 

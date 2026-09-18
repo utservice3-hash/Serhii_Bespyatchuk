@@ -4119,6 +4119,20 @@ export const fetchHiringDaily = async (from: string, to: string) =>
   (await api.get<{ rows: HiringDailyRow[]; totals: Omit<HiringDailyRow, "day"> & { attendancePct: number | null } }>("/hiring/daily", { params: { from, to } })).data;
 export const saveHiringDaily = async (day: string, p: { resumes?: number; coldSearch?: number }) => { await api.put(`/hiring/daily/${day}`, p); };
 
+// ── Найм, етап 2: зведення — воронка рекрутингу (18.09.2026) ──
+export interface HiringFunnelStage { key: string; label: string; count: number; fromPrev: number | null; fromFirst: number | null; lost: number }
+export interface HiringCutRow { key: string; label: string; added: number; interviews: number; candidates: number; managers: number; refused: number }
+export interface HiringSummary {
+  period: { from: string; to: string }; total: number; funnel: HiringFunnelStage[];
+  refusals: { total: number; share: number | null; candidate: number; company: number; unknown: number; candidateShare: number | null; companyShare: number | null; reasons: { side: string; label: string; n: number }[] };
+  side: { noshow: number; noanswer: number; reserved: number };
+  bySource: HiringCutRow[]; byVacancy: HiringCutRow[];
+  vacancies: { open: number; need: number; closed: { month: string; result: string | null; n: number }[] };
+  staff: { hired: number; dismissed: number; active: number; dismissReasons: { reason: string; n: number }[]; byPosition: { position: string; n: number }[] };
+}
+export const fetchHiringSummary = async (p: { from: string; to: string; vacancyId?: string; source?: string }) =>
+  (await api.get<HiringSummary>("/hiring/summary", { params: p })).data;
+
 // ── Найм, прохід 1a: вакансії, відмова, резерв, файли-докази ──
 export const fetchHiringVacancies = async (scope: "active" | "closed" | "all") =>
   (await api.get<{ rows: HiringVacancyRow[] }>("/hiring/vacancies", { params: { scope } })).data.rows;
