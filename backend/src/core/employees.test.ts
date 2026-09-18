@@ -243,7 +243,11 @@ test("#567 ЖИВИЙ SQL: людина без акаунта — пароль �
     assert.ok(m && m.has_account === false && m.passwords === 1, "🔴 людини без акаунта немає в «Доступах»");
     assert.equal((await sec.personVault(s.db, `e${maria}`)).items.length, 1);
     assert.throws(() => unseal(KEY, row[0], aadFor(s.olena, "password", "mail")), "🔴 шифр людини реєстру відкрився як шифр акаунта");
-    assert.throws(() => unseal(KEY, row[0], `uts-secret:v1:e${maria + 1}:password:mail`), "🔴 шифр відкрився для іншої людини реєстру");
+    // Підміна в базі: шифр Бондаря (теж без акаунта — однофамільці) переписано на Марію. Не має відкритись.
+    const bondar = (await s.c.query(`SELECT s.user_id, s.employee_id, s.kind, s.service, s.cipher, s.iv, s.tag FROM employee_secrets s
+      JOIN employees e ON e.id = s.employee_id WHERE e.import_key = 'бондар андрій'`)).rows[0];
+    assert.equal(unseal(KEY, bondar, sec.aadOfRow(bondar)), "Pw-Bondar-1", "дзеркало: свій шифр відкривається");
+    assert.throws(() => unseal(KEY, bondar, sec.aadOfRow({ ...bondar, employee_id: maria })), "🔴 шифр однієї людини реєстру відкрився як шифр іншої");
     await s.c.query(`UPDATE users SET vault_chat_id = 555 WHERE id = $1`, [s.ivan]);
     const sent: string[] = [];
     await sec.sendRevealCode(s.db, s.ivan, row[0].id, async (_c, text) => { sent.push(text); return true; });
