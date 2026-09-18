@@ -12,6 +12,7 @@
  */
 import type { Db } from "./secrets.js";
 import { HiringError } from "./hiring.js";
+import { offerState } from "./offers.js";
 
 export const FUNNEL_STAGES = [
   ["new", "Нові"], ["contacted", "Перше повідомлення"], ["planned", "Призначено співбесіду"], ["done", "Співбесіда відбулась"],
@@ -107,6 +108,14 @@ export async function hiringSummary(db: Db, q: { from?: unknown; to?: unknown; v
     noanswer: cs.filter((c) => c.status === "noanswer" || c.visited.includes("noanswer")).length,
     reserved: cs.filter((c) => c.reserved).length,
   };
+  // Офери когорти — стан із документа й підпису (`offerState`), як у картці й на дошці навчання.
+  const withOffer = (await db.query<{ id: number }>(
+    `SELECT id FROM hiring_candidates WHERE offer_doc_id IS NOT NULL AND id = ANY($1::int[])`, [cs.map((c) => c.id)])).rows;
+  const offers = { sent: withOffer.length, signed: 0, pending: 0, outdated: 0 };
+  for (const { id } of withOffer) {
+    const st = (await offerState(db, id)).state;
+    if (st === "signed") offers.signed++; else if (st === "outdated") offers.outdated++; else offers.pending++;
+  }
   const vacClosed = (await db.query<{ month: string; result: string | null; n: number }>(
     `SELECT to_char(closed_on, 'YYYY-MM') AS month, close_result AS result, count(*)::int AS n FROM hiring_vacancies
       WHERE closed_on BETWEEN $1 AND $2 GROUP BY 1, 2 ORDER BY 1, 2`, [q.from, q.to])).rows;
@@ -128,6 +137,7 @@ export async function hiringSummary(db: Db, q: { from?: unknown; to?: unknown; v
     bySource: buildCut(cs, (c) => [{ key: c.source ?? "—", label: c.source ?? "джерело не вказано" }]),
     byVacancy: buildCut(cs, (c) => (c.vacancies.length ? c.vacancies.map((v) => ({ key: String(v.id), label: v.title })) : [{ key: "—", label: "без вакансії" }])),
     vacancies: { open: vacOpen.n, need: vacOpen.need, closed: vacClosed },
+    offers,
     staff: { ...staff, dismissReasons, byPosition },
   };
 }

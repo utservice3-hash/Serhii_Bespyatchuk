@@ -7,6 +7,7 @@ import {
   sendRevealCode, revealSecret, vaultLinkState, createVaultLink, unlinkVault,
 } from "../core/secrets.js";
 import { previewImport, commitImport, listEmployees, updateEmployee, ImportError } from "../core/employees.js";
+import { churnReport, linkKommo, listExits, createExit, updateExit, setExitDeleted, ChurnError } from "../core/churn.js";
 import { vaultBotConfigured, vaultBotSend, vaultBotUsername } from "../bot/vaultBot.js";
 
 /**
@@ -27,6 +28,7 @@ const sender = () => (vaultBotConfigured() ? vaultBotSend : null);
 function fail(res: Response, e: unknown) {
   if (e instanceof SecretKeyMissing) return res.status(503).json({ error: e.message });
   if (e instanceof ImportError) return res.status(e.status).json({ error: e.message });
+  if (e instanceof ChurnError) return res.status(e.status).json({ error: e.message });
   if (e instanceof SecretError) return res.status(e.status).json({ error: e.message, ...(e.extra ?? {}) });
   // 🔴 Тіло помилки НЕ логуємо: у запиті може бути пароль.
   console.error("[secrets]", (e as Error)?.message ?? "error");
@@ -148,4 +150,36 @@ secretsRouter.post("/import/commit", async (req, res) => {
     const counts = await tx((db) => commitImport(db, key(), me(req), req.body?.csv, req.body?.mapping, req.body?.sheet, req.body?.headerRow));
     res.json({ ok: true, counts });
   } catch (e) { fail(res, e); }
+});
+
+/*
+ * 📉 ПЛИННІСТЬ, EXIT-ІНТЕРВʼЮ, ПРИВʼЯЗКА ДО KOMMO (етапи 4–5, 18.09.2026). Та сама межа, що й реєстр:
+ * звільнення й відповіді звільнених — персональні дані.
+ */
+secretsRouter.get("/churn", async (req, res) => {
+  try { res.json(await churnReport(pool as unknown as Db, req.query.from, req.query.to)); } catch (e) { fail(res, e); }
+});
+
+secretsRouter.post("/employees/kommo-link", async (_req, res) => {
+  try { res.json(await tx((db) => linkKommo(db))); } catch (e) { fail(res, e); }
+});
+
+secretsRouter.get("/exit", async (_req, res) => {
+  try { res.json(await listExits(pool as unknown as Db)); } catch (e) { fail(res, e); }
+});
+
+secretsRouter.post("/exit", async (req, res) => {
+  try { res.status(201).json({ id: await tx((db) => createExit(db, me(req), req.body ?? {})) }); } catch (e) { fail(res, e); }
+});
+
+secretsRouter.patch("/exit/:id", async (req, res) => {
+  try { await tx((db) => updateExit(db, num(req.params.id, "id інтервʼю"), req.body ?? {})); res.json({ ok: true }); } catch (e) { fail(res, e); }
+});
+
+secretsRouter.delete("/exit/:id", async (req, res) => {
+  try { await tx((db) => setExitDeleted(db, num(req.params.id, "id інтервʼю"), true)); res.json({ ok: true }); } catch (e) { fail(res, e); }
+});
+
+secretsRouter.post("/exit/:id/restore", async (req, res) => {
+  try { await tx((db) => setExitDeleted(db, num(req.params.id, "id інтервʼю"), false)); res.json({ ok: true }); } catch (e) { fail(res, e); }
 });

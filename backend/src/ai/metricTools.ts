@@ -56,6 +56,7 @@ export const FORBIDDEN_TABLES = [
   "vault_link_codes",
   // 🗂 Реєстр співробітників (18.09.2026): телефони, дати народження. REVOKE у схемі. Тримає #564.
   "employees",
+  "exit_interviews",
   "hiring_invites",
   "hiring_training_questions",
 ];

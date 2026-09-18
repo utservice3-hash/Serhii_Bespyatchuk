@@ -446,6 +446,14 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // 🗂 Реєстр співробітників + імпорт таблиці (18.09.2026) — у тому ж роутері й за тим самим правом.
   { method: "GET", path: "/api/secrets/employees", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
   { method: "PATCH", path: "/api/secrets/employees/:id", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  // 📉 Плинність, Exit-інтервʼю, привʼязка до Kommo (18.09.2026) — та сама межа, що й реєстр.
+  { method: "GET", path: "/api/secrets/churn?from=2026-01&to=2026-09", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/secrets/employees/kommo-link", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "GET", path: "/api/secrets/exit", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/secrets/exit", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "PATCH", path: "/api/secrets/exit/:id", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "DELETE", path: "/api/secrets/exit/:id", cls: "DELETE-ghost", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/secrets/exit/:id/restore", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "POST", path: "/api/secrets/import/preview", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "POST", path: "/api/secrets/import/commit", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "POST", path: "/api/vault-bot/webhook", cls: "deny-only", allow: [], deny: [] },

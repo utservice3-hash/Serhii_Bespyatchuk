@@ -127,6 +127,7 @@ export const MANIFEST_FILES: string[] = [
   "core/hiringFunnel.test.js",
   "core/offers.test.js",
   "core/hiringInterview.test.js",
+  "core/churn.test.js",
 
   "core/trainingEditor.test.js",
   "core/missedCallSignal.test.js",
@@ -239,6 +240,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "secret_reveal_codes",
   "vault_link_codes",
   "employees",
+  "exit_interviews",
   "hiring_invites",
   "hiring_training_questions",
 ];
@@ -856,6 +858,11 @@ export const MANIFEST_TESTS: string[] = [
   "#580 ЖИВИЙ SQL: + Співбесіда з новим кандидатом — один кандидат із вакансією, повтор номера — без дубля",
   "#581 ЖИВИЙ SQL: + Співбесіда з наявним — ранні етапи → «заплановано», пізні не зсуваються",
   "#582 ЖИВИЙ SQL: щоденний звіт — діалог і рядок графіка рахуються однаково",
+  // core/churn.test.ts — плинність, Exit-інтервʼю, привʼязка до Kommo (18.09.2026, етапи 4–5)
+  "#583 ПЛИННІСТЬ: звільнені ÷ усі, хто працював у місяці; межі включно; без дати прийому — видно",
+  "#584 ЖИВИЙ SQL: привʼязка до Kommo — за ID, за єдиним ПІБ, однофамільців не вгадує, повтор без змін",
+  "#585 ЖИВИЙ SQL: Exit-інтервʼю — валідація, зведення, скасовне видалення, закрито для AI",
+  "#586 ЖИВИЙ SQL: зведення — офери когорти «надіслано / підписано» з документа й підпису",
   // core/missedCalls.test.ts — ТЗ-1 «Пропущені дзвінки» (14.09.2026)
   // 🔢 ДЕСЯТКА #43x, А НЕ #42x — ПЕРЕНУМЕРОВАНО ПРИ МЕРЖІ 15.09.2026. Писалось як
   // #421-#430 за правилом «найвищий змерджений +1» (тоді #419). Поки прохід ішов, у

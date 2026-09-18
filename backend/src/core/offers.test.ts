@@ -146,3 +146,25 @@ test("#579 ЖИВИЙ SQL: стан оферу — з документа й пі
     assert.ok((await s.c.query(`SELECT 1 FROM hiring_events WHERE candidate_id = $1 AND kind = 'offer'`, [s.id])).rowCount, "🔴 офер не записано в історію кандидата");
   } finally { await s.done(); }
 });
+
+/**
+ * #586 — «ЗВЕДЕННЯ» РАХУЄ ОФЕРИ з того самого стану, що картка: надіслано 1 → підписано 1 після підпису.
+ * 🧨 Червоніє, якщо лічити офери окремим прапорцем або не за когортою періоду.
+ */
+test("#586 ЖИВИЙ SQL: зведення — офери когорти «надіслано / підписано» з документа й підпису", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const of = await import("./offers.js");
+  const { hiringSummary } = await import("./hiringFunnel.js");
+  try {
+    const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+    const sum = () => hiringSummary(s.db as never, { from: today, to: today });
+    assert.deepEqual((await sum()).offers, { sent: 0, signed: 0, pending: 0, outdated: 0 });
+    const { id: tpl } = await of.createTemplate(s.db, s.hr, "Офер РПК", TEMPLATE, s.store);
+    const r = await of.generateOffer(s.db, s.hr, s.id, tpl, { Ставка: "20 000" }, s.store, s.load);
+    assert.deepEqual((await sum()).offers, { sent: 1, signed: 0, pending: 1, outdated: 0 }, "🔴 надісланий офер не пораховано");
+    const user = (await s.c.query(`SELECT user_id FROM hiring_candidates WHERE id = $1`, [s.id])).rows[0].user_id;
+    await s.c.query(`INSERT INTO doc_signatures (file_id, version, sha256, signed_by, method, approved_at) SELECT id, version, sha256, $2, 'telegram_code', now() FROM doc_files WHERE id = $1`, [r.docId, user]);
+    assert.deepEqual((await sum()).offers, { sent: 1, signed: 1, pending: 0, outdated: 0 }, "🔴 підписаний офер не пораховано");
+    assert.equal((await hiringSummary(s.db as never, { from: "2020-01-01", to: "2020-01-31" })).offers.sent, 0, "🔴 офер поза когортою періоду");
+  } finally { await s.done(); }
+});

@@ -3730,3 +3730,34 @@ CREATE TABLE IF NOT EXISTS offer_templates (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS offer_doc_id INTEGER REFERENCES doc_files(id) ON DELETE SET NULL;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🗂 СПІВРОБІТНИКИ, ч. 2 + ПЛИННІСТЬ І EXIT (18.09.2026, етапи 4–5 плану за зустріччю 15.09)
+-- ══════════════════════════════════════════════════════════════════════════
+-- Менеджер Kommo людини реєстру: за «ID Kommo» з таблиці або за єдиним збігом ПІБ (#584). Один менеджер —
+-- щонайбільше одна людина. ⚠️ revert коду колонки не прибирає.
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS manager_id INTEGER REFERENCES managers(id) ON DELETE SET NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_employees_manager ON employees(manager_id) WHERE manager_id IS NOT NULL;
+
+-- Exit-інтервʼю: питання — ті самі, що в Google-формі «Exit interview» (18.09.2026). Людина реєстру —
+-- необовʼязкова (інтервʼю буває з тим, кого ще не внесли). Мʼяке видалення — скасовне (#585).
+CREATE TABLE IF NOT EXISTS exit_interviews (
+  id              SERIAL PRIMARY KEY,
+  employee_id     INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+  full_name       TEXT NOT NULL,
+  interview_date  DATE NOT NULL,
+  position        TEXT,
+  tenure          TEXT,
+  reason          TEXT,
+  reason_detail   TEXT,
+  rating          INTEGER CHECK (rating IS NULL OR rating BETWEEN 1 AND 10),
+  missing         TEXT,
+  recommend       TEXT,
+  team_lead       TEXT,
+  note            TEXT,
+  created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at      TIMESTAMPTZ
+);
+-- 🔒 Відповіді звільнених — персональні дані, не для моделі. REVOKE після GRANT і CREATE. Тримає #585.
+REVOKE ALL ON exit_interviews FROM ai_readonly;
