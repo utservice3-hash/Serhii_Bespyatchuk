@@ -4231,3 +4231,27 @@ export const restoreSecret = async (id: number) => { await api.post(`/secrets/${
 export const sendSecretCode = async (id: number) => (await api.post<{ expiresInSec: number }>(`/secrets/${id}/code`)).data;
 export const revealSecret = async (id: number, code: string, reason: string) =>
   (await api.post<{ value: string; login: string | null; seconds: number }>(`/secrets/${id}/reveal`, { code, reason })).data;
+
+
+// 🗂 Реєстр співробітників + імпорт «UTS Співробітники УКР» (18.09.2026, задача №3898).
+export interface EmployeeRow {
+  id: number; full_name: string; status: "active" | "dismissed"; position: string | null; team_label: string | null;
+  phone: string | null; email: string | null; telegram: string | null; birth_date: string | null; hired_at: string | null;
+  dismissed_at: string | null; dismiss_reason: string | null; note: string | null; extra: Record<string, string>;
+  user_id: number | null; account_name: string | null; account_active: boolean | null; secrets: number; updated_at: string;
+}
+export interface ImportColumn { index: number; header: string; target: string; secretish: boolean; filled: number }
+export interface ImportPreviewRow {
+  line: number; name: string; position: string | null; team: string | null; state: "new" | "update" | "duplicate";
+  account: string | null; match: string; matchNote: string; secrets: number; secretsLost: number; problems: string[];
+}
+export interface ImportPreview {
+  columns: ImportColumn[]; mappingError: string | null; rows: ImportPreviewRow[];
+  totals?: { rows: number; new: number; update: number; duplicate: number; withAccount: number; noAccount: number; secrets: number; secretsLost: number; problems: number };
+}
+export interface ImportCounts { rows: number; created: number; updated: number; duplicate: number; linked: number; secretsCreated: number; secretsExisting: number; secretsNoAccount: number; secretsInvalid: number }
+export const fetchEmployees = async () => (await api.get<{ rows: EmployeeRow[] }>("/secrets/employees")).data.rows;
+export const previewEmployeeImport = async (csv: string, mapping?: string[]) =>
+  (await api.post<ImportPreview>("/secrets/import/preview", { csv, mapping })).data;
+export const commitEmployeeImport = async (csv: string, mapping: string[], sheet: "active" | "dismissed") =>
+  (await api.post<{ ok: true; counts: ImportCounts }>("/secrets/import/commit", { csv, mapping, sheet })).data.counts;

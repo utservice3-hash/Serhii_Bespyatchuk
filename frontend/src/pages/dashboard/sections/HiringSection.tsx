@@ -9,6 +9,7 @@ import { HiringDaily } from "./HiringDaily";
 import { HiringVacancies } from "./HiringVacancies";
 import { HiringTraining } from "./HiringTraining";
 import { HiringSecrets } from "./HiringSecrets";
+import { HiringEmployees } from "./HiringEmployees";
 import { PlannedTabCard, LiveTabNote, type PlannedTab } from "./HiringRoadmap";
 import "./hiring.css";
 
@@ -55,7 +56,8 @@ export function HiringSection() {
     ? [["sched", "Графік"], ["base", "Кандидати"], ["vac", "Вакансії"], ["train", "На навчанні"], ["daily", "Щоденний звіт"], ["emp", "Співробітники"], ["churn", "Плинність"], ["exit", "Exit-інтервʼю"], ["sum", "Зведення"]]
     : [["base", "Кандидати"], ["train", "На навчанні"], ["emp", "Співробітники"]];
   if (canSecrets) tabs.splice(tabs.findIndex(([k]) => k === "emp"), 0, ["acc", "Доступи"]);
-  const planned = new Set<Tab>(["emp", "churn", "exit", "sum"]);
+  // «Співробітники» живі для тих, хто має право сейфу (імпорт кладе паролі туди); решті — пояснення.
+  const planned = new Set<Tab>(canSecrets ? ["churn", "exit", "sum"] : ["emp", "churn", "exit", "sum"]);
   const active = tabs.some(([k]) => k === tab) ? tab : tabs[0][0];
   const pick = (t: Tab) => { setTab(t); LS.set("tab", t); };
 
@@ -81,6 +83,7 @@ export function HiringSection() {
       {active === "vac" && <HiringVacancies meta={meta} toast={toast} onChanged={() => setNonce((n) => n + 1)}
         onOpenCandidates={(id) => { setVacFilter({ id, seq: Date.now() }); pick("base"); }} />}
       {active === "acc" && <HiringSecrets toast={toast} />}
+      {active === "emp" && canSecrets && <HiringEmployees toast={toast} />}
       {active === "train" && <HiringTraining meta={meta} toast={toast} onChanged={() => setNonce((n) => n + 1)} />}
       {active === "daily" && <HiringDaily toast={toast} />}
       {toastState && createPortal(
