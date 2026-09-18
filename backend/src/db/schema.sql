@@ -3395,7 +3395,7 @@ CREATE TABLE IF NOT EXISTS hiring_events (
 );
 ALTER TABLE hiring_events DROP CONSTRAINT IF EXISTS hiring_events_kind_check;
 ALTER TABLE hiring_events ADD CONSTRAINT hiring_events_kind_check CHECK (kind IN
-  ('created','status','attended','comment','repeat','edit','refusal','reserve','vacancy','file','access','question'));
+  ('created','status','attended','comment','repeat','edit','refusal','reserve','vacancy','file','access','question','offer'));
 CREATE INDEX IF NOT EXISTS idx_hiring_events_candidate ON hiring_events(candidate_id, at);
 CREATE INDEX IF NOT EXISTS idx_hiring_events_status_at ON hiring_events(to_status, at) WHERE kind = 'status';
 
@@ -3712,3 +3712,21 @@ ALTER TABLE employee_secrets ALTER COLUMN user_id DROP NOT NULL;
 ALTER TABLE employee_secrets DROP CONSTRAINT IF EXISTS employee_secrets_owner_check;
 ALTER TABLE employee_secrets ADD CONSTRAINT employee_secrets_owner_check CHECK (user_id IS NOT NULL OR employee_id IS NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_employee_secrets_employee ON employee_secrets(employee_id) WHERE superseded_at IS NULL;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 📄 ОФЕР ІЗ ШАБЛОНУ (18.09.2026, етап 3 плану за зустріччю 15.09)
+-- ══════════════════════════════════════════════════════════════════════════
+-- Шаблон — .docx з мітками {{…}} (файл — у теці документів, під нічним бекапом). Згенерований офер —
+-- звичайний документ розділу «Офери» (`doc_files`); кандидат посилається на нього `offer_doc_id`.
+-- Стану «надіслано/підписано» тут НЕМАЄ — він виводиться з документа й підписів (#579).
+-- ⚠️ revert коду таблиці й файлів не прибирає; згенеровані офери лишаються в «Документах».
+CREATE TABLE IF NOT EXISTS offer_templates (
+  id           SERIAL PRIMARY KEY,
+  title        TEXT NOT NULL,
+  stored_name  TEXT NOT NULL,
+  markers      JSONB NOT NULL DEFAULT '[]'::jsonb,
+  is_active    BOOLEAN NOT NULL DEFAULT true,
+  created_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS offer_doc_id INTEGER REFERENCES doc_files(id) ON DELETE SET NULL;

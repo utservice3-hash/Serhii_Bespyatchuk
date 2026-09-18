@@ -402,6 +402,16 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["manager"] },
   { method: "POST", path: "/api/hiring/candidates/:id/password", cls: "deny-only",
     allow: [], deny: ["manager"] },
+  // 📄 Офер із шаблону (18.09.2026) — лише «редагування» Найму (HR, керівництво).
+  { method: "GET", path: "/api/hiring/offer-templates", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/hiring/offer-templates", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
+  { method: "PATCH", path: "/api/hiring/offer-templates/:id", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
+  { method: "GET", path: "/api/hiring/candidates/:id/offer", cls: "GET",
+    allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/hiring/candidates/:id/offer", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
+  { method: "GET", path: "/api/hiring/offers/states", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
   // 📊 Зведення найму (18.09.2026) — лише «редагування» Найму.
   { method: "GET", path: "/api/hiring/summary?from=2026-09-01&to=2026-09-30", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },

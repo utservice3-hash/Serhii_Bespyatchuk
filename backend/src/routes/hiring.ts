@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
-import { randomUUID } from "node:crypto";
-import { mkdir, writeFile, unlink } from "node:fs/promises";
+import { randomUUID, createHash } from "node:crypto";
+import { mkdir, writeFile, unlink, readFile } from "node:fs/promises";
 import path from "node:path";
 import { UPLOAD_DIR } from "./uploads.js";
 import { pool } from "../db/pool.js";
@@ -22,6 +22,8 @@ import {
 } from "../core/hiringTraining.js";
 import { CANDIDATE_ACCESS, canDecideTraining } from "../core/hiringTrainingRules.js";
 import { hiringSummary } from "../core/hiringFunnel.js";
+import { listTemplates, createTemplate, setTemplateActive, offerForm, offerState, generateOffer, offerStates, type Store, type Load } from "../core/offers.js";
+import { notifyOfferOnce } from "../jobs/offerReminders.js";
 
 /** Та сама тека, що в `routes/documents.ts` (DOCS_DIR) і в нічному бекапі. */
 const DOCS_DIR = path.join(UPLOAD_DIR, "..", "documents");
@@ -78,6 +80,71 @@ const anyAccess = (req: Request) => {
   if (a === "none") throw new HiringError(403, "Немає доступу до найму");
   return a;
 };
+
+/*
+ * 📄 ОФЕР ІЗ ШАБЛОНУ (етап 3, 18.09.2026). Файли — у теці «Документів» (та сама, що `routes/documents.ts`,
+ * під нічним бекапом). Офер — документ розділу «Офери»; підпис і нагадування — там само.
+ */
+const offerStore: Store = async (display, buf) => {
+  const ext = path.extname(display).slice(0, 12).replace(/[^.\w]/g, "");
+  const storedName = `${randomUUID()}${ext}`;
+  await mkdir(DOCS_DIR, { recursive: true });
+  await writeFile(path.join(DOCS_DIR, storedName), buf);
+  return { storedName, sha256: createHash("sha256").update(buf).digest("hex") };
+};
+const offerLoad: Load = (storedName) => readFile(path.join(DOCS_DIR, path.basename(storedName)));
+const b64 = (v: unknown): Buffer | null => (typeof v === "string" && v ? Buffer.from(v.includes(",") ? v.split(",")[1] : v, "base64") : null);
+
+hiringRouter.get("/offer-templates", async (req, res) => {
+  try {
+    onlyEdit(req);
+    res.json({ rows: await listTemplates(pool as unknown as Db) });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.post("/offer-templates", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const buf = b64(req.body?.dataBase64);
+    if (buf && buf.length > 20 * 1024 * 1024) return res.status(413).json({ error: "Шаблон завеликий (макс. 20 МБ)" });
+    res.status(201).json(await tx((db) => createTemplate(db, req.auth!.userId, req.body?.title, buf, offerStore)));
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.patch("/offer-templates/:id", async (req, res) => {
+  try {
+    onlyEdit(req);
+    await tx((db) => setTemplateActive(db, idOf(req), req.body?.isActive !== false));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.get("/candidates/:id/offer", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const db = pool as unknown as Db, id = idOf(req);
+    const state = await offerState(db, id);
+    const form = req.query.templateId ? await offerForm(db, id, req.query.templateId) : null;
+    res.json({ state, form });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.post("/candidates/:id/offer", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const id = idOf(req);
+    const r = await tx((db) => generateOffer(db, req.auth!.userId, id, req.body?.templateId, req.body?.values, offerStore, offerLoad));
+    void notifyOfferOnce(r.docId);
+    res.status(201).json(r);
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.get("/offers/states", async (req, res) => {
+  try {
+    onlyEdit(req);
+    res.json({ states: await offerStates(pool as unknown as Db) });
+  } catch (e) { fail(res, e); }
+});
 
 /** 📊 Зведення: воронка, відмови, розрізи (етап 2, 18.09.2026). Лише «редагування» — тімлід бачить свою команду в «Кандидатах». */
 hiringRouter.get("/summary", async (req, res) => {
