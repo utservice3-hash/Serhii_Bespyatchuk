@@ -10,6 +10,7 @@ import { HiringVacancies } from "./HiringVacancies";
 import { HiringTraining } from "./HiringTraining";
 import { HiringEmployees } from "./HiringEmployees";
 import { HiringSummary } from "./HiringSummary";
+import { OfferTemplatesTab } from "./HiringOffer";
 import { PlannedTabCard, LiveTabNote, type PlannedTab } from "./HiringRoadmap";
 import "./hiring.css";
 
@@ -20,7 +21,7 @@ import "./hiring.css";
  *  • edit — рекрутер (HR) і адмін-рівень: усі три вкладки;
  *  • lead — тімлід: лише «Кандидати» своєї команди після співбесіди з ним.
  */
-type Tab = "sched" | "base" | "vac" | "train" | "daily" | "acc" | PlannedTab;
+type Tab = "sched" | "base" | "vac" | "train" | "daily" | "acc" | "tpl" | PlannedTab;
 
 export function HiringSection() {
   const [meta, setMeta] = useState<HiringMeta | null>(null);
@@ -53,7 +54,7 @@ export function HiringSection() {
   // Усі сім вкладок затвердженого макета. Незроблені відкривають пояснення «що буде і чому ще немає»
   // (прохання Романа 17.09): людина бачить повну картину, а не гадає, чи вкладку забули.
   const tabs: [Tab, string][] = meta.access === "edit"
-    ? [["sched", "Графік"], ["base", "Кандидати"], ["vac", "Вакансії"], ["train", "На навчанні"], ["daily", "Щоденний звіт"], ["emp", "Співробітники"], ["churn", "Плинність"], ["exit", "Exit-інтервʼю"], ["sum", "Зведення"]]
+    ? [["sched", "Графік"], ["base", "Кандидати"], ["vac", "Вакансії"], ["train", "На навчанні"], ["daily", "Щоденний звіт"], ["tpl", "Шаблони"], ["emp", "Співробітники"], ["churn", "Плинність"], ["exit", "Exit-інтервʼю"], ["sum", "Зведення"]]
     : [["base", "Кандидати"], ["train", "На навчанні"], ["emp", "Співробітники"]];
   // «Співробітники» живі для тих, хто має право сейфу (імпорт кладе паролі туди); решті — пояснення.
   // «Зведення» живе (етап 2, 18.09.2026) для тих, хто редагує «Найм»; «Співробітники» — з правом сейфу.
@@ -86,6 +87,7 @@ export function HiringSection() {
         onOpenCandidates={(id) => { setVacFilter({ id, seq: Date.now() }); pick("base"); }} />}
       {active === "emp" && canSecrets && <HiringEmployees toast={toast} />}
       {active === "sum" && meta.access === "edit" && <HiringSummary />}
+      {active === "tpl" && meta.access === "edit" && <OfferTemplatesTab toast={toast} />}
       {active === "train" && <HiringTraining meta={meta} toast={toast} onChanged={() => setNonce((n) => n + 1)} />}
       {active === "daily" && <HiringDaily toast={toast} />}
       {toastState && createPortal(

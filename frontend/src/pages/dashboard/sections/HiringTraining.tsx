@@ -2,10 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   fetchHiringTraining, fetchHiringTrainingDetail, createHiringInvite, extendHiringAccess, restoreHiringAccess,
-  promoteHiringCandidate, answerHiringQuestion, inviteUrl, hiringError, issueHiringPassword, fetchFreeCandidateAccounts, linkCandidateAccount,
+  promoteHiringCandidate, answerHiringQuestion, inviteUrl, hiringError, issueHiringPassword, fetchFreeCandidateAccounts, linkCandidateAccount, fetchOfferStates, type OfferStateKind,
   type HiringMeta, type HiringTrainingRow, type HiringTrainingRules, type HiringTrainingDetail, type HiringTrainingHealth, type HiringCloseReason,
 } from "../../../api";
 import { RefusalDialog, StatusPill, type Toast } from "./HiringShared";
+import { OfferBox, OFFER_STATE } from "./HiringOffer";
 
 /**
  * 🎓 «НАЙМ · НА НАВЧАННІ», прохід 2a (17.09.2026) — за макетом v12, який прийняв Роман.
@@ -72,9 +73,12 @@ export function HiringTraining({ meta, toast, onChanged }: { meta: HiringMeta; t
   const [err, setErr] = useState<string | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
   const [showClosed, setShowClosed] = useState(false);
+  const [offers, setOffers] = useState<Record<number, OfferStateKind> | null>(null);
 
   const load = useCallback(() => {
     fetchHiringTraining().then((d) => { setData(d); setErr(null); }).catch((e) => setErr(hiringError(e)));
+    // Стан оферу — лише HR/керівництву (тімліду 403): тоді колонки просто немає.
+    fetchOfferStates().then(setOffers).catch(() => setOffers(null));
   }, []);
   useEffect(load, [load]);
 
@@ -125,7 +129,7 @@ export function HiringTraining({ meta, toast, onChanged }: { meta: HiringMeta; t
         ) : (
           <div className="hr-tw">
             <table className="hr-table">
-              <thead><tr><th>Кандидат</th><th>Команда</th><th>День</th><th>Прогрес</th><th>Зараз на кроці</th><th>Остання активність</th><th>Стан</th><th>Доступ</th></tr></thead>
+              <thead><tr><th>Кандидат</th><th>Команда</th><th>День</th><th>Прогрес</th><th>Зараз на кроці</th><th>Остання активність</th><th>Стан</th><th>Доступ</th>{offers && <th>Офер</th>}</tr></thead>
               <tbody>
                 {rows.map((r) => {
                   const h = healthText(r), a = accessText(r), seen = lastSeen(r);
@@ -139,6 +143,7 @@ export function HiringTraining({ meta, toast, onChanged }: { meta: HiringMeta; t
                       <td>{seen ? <>{kyiv(seen)} <span className="hr-muted">· {hoursAgo(seen)} год тому</span></> : <span className="hr-muted">не заходив(ла)</span>}</td>
                       <td><span className={`hr-pill ${h[1]}`}>{h[0]}</span></td>
                       <td><span className={`hr-pill ${a[1]}`}>{a[0]}</span></td>
+                      {offers && <td>{(() => { const o = OFFER_STATE[offers[r.id] ?? "none"]; return <span className={`emp-pill ${o[1]}`}>{o[0]}</span>; })()}</td>}
                     </tr>
                   );
                 })}
@@ -298,6 +303,7 @@ export function TrainingAccessBlock({ meta, id, toast, onChanged }: { meta: Hiri
         {r.health === "no_account" && !inviteBlock && <LinkAccountBox id={id} toast={toast} onChanged={() => { load(); onChanged(); }} />}
       </div>
       {open && <TrainingDrawer meta={meta} id={id} toast={toast} onClose={() => setOpen(false)} onChanged={() => { load(); onChanged(); }} />}
+      <OfferBox candidateId={id} status={r.status} toast={toast} onChanged={onChanged} />
     </div>
   );
 }

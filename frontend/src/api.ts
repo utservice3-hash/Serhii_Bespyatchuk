@@ -4119,6 +4119,23 @@ export const fetchHiringDaily = async (from: string, to: string) =>
   (await api.get<{ rows: HiringDailyRow[]; totals: Omit<HiringDailyRow, "day"> & { attendancePct: number | null } }>("/hiring/daily", { params: { from, to } })).data;
 export const saveHiringDaily = async (day: string, p: { resumes?: number; coldSearch?: number }) => { await api.put(`/hiring/daily/${day}`, p); };
 
+// ── Найм, етап 3: офер із шаблону (18.09.2026) ──
+export interface OfferTemplate { id: number; title: string; markers: string[]; is_active: boolean; created_at: string; author: string | null; fields: { marker: string; auto: string | null }[] }
+export type OfferStateKind = "none" | "pending" | "overdue" | "review" | "signed" | "outdated" | "not_required";
+export interface OfferInfo {
+  state: { state: OfferStateKind; days?: number | null; docId: number | null; version: number | null; name: string | null; sentAt: string | null };
+  form: { template: { id: number; title: string }; fields: { marker: string; auto: string | null; value: string | null }[] } | null;
+}
+export const fetchOfferTemplates = async () => (await api.get<{ rows: OfferTemplate[] }>("/hiring/offer-templates")).data.rows;
+export const uploadOfferTemplate = async (title: string, dataBase64: string) =>
+  (await api.post<{ id: number; markers: string[] }>("/hiring/offer-templates", { title, dataBase64 })).data;
+export const setOfferTemplateActive = async (id: number, isActive: boolean) => { await api.patch(`/hiring/offer-templates/${id}`, { isActive }); };
+export const fetchCandidateOffer = async (id: number, templateId?: number) =>
+  (await api.get<OfferInfo>(`/hiring/candidates/${id}/offer`, { params: templateId ? { templateId } : {} })).data;
+export const generateCandidateOffer = async (id: number, templateId: number, values: Record<string, string>) =>
+  (await api.post<{ docId: number; version: number; name: string }>(`/hiring/candidates/${id}/offer`, { templateId, values })).data;
+export const fetchOfferStates = async () => (await api.get<{ states: Record<number, OfferStateKind> }>("/hiring/offers/states")).data.states;
+
 // ── Найм, етап 2: зведення — воронка рекрутингу (18.09.2026) ──
 export interface HiringFunnelStage { key: string; label: string; count: number; fromPrev: number | null; fromFirst: number | null; lost: number }
 export interface HiringCutRow { key: string; label: string; added: number; interviews: number; candidates: number; managers: number; refused: number }
