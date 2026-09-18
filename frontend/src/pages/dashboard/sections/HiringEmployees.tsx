@@ -153,7 +153,11 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
       </div>
       {openRow && <EmployeeDrawer row={openRow} tab={open!.tab} teams={teams} status={status} toast={toast}
         onTab={(t) => setOpen({ id: openRow.id, tab: t })} onClose={() => setOpen(null)} onSaved={load} />}
-      {importing && <ImportDialog onClose={() => setImporting(false)} onDone={(msg) => { setImporting(false); toast(msg); load(); }} />}
+      {importing && <ImportDialog onClose={() => setImporting(false)} onDone={(msg, pending) => {
+        setImporting(false); toast(msg); load();
+        // Імпорт довершується на сервері — кілька разів перечитуємо реєстр, щоб результат зʼявився без перезавантаження.
+        if (pending) for (let k = 1; k <= 12; k++) window.setTimeout(load, k * 15_000);
+      }} />}
     </>
   );
 }
@@ -240,7 +244,7 @@ function EmployeeDrawer({ row, tab, teams, status, toast, onTab, onClose, onSave
     </div>, document.body);
 }
 
-function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: (msg: string) => void }) {
+function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: (msg: string, pending?: boolean) => void }) {
   const [sheet, setSheet] = useState<"active" | "dismissed">("active");
   const [csv, setCsv] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -269,9 +273,10 @@ function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: (msg: 
     if (!mapping || !csv) return;
     const m = mapping.slice(); m[i] = t; setMapping(m); void preview(csv, m);
   };
+  const [writing, setWriting] = useState(false);
   const commit = async () => {
-    if (!csv || !mapping) return;
-    setBusy(true); setMsg(null);
+    if (!csv || !mapping || writing) return;
+    setBusy(true); setWriting(true); setMsg(null);
     try {
       const c = await commitEmployeeImport(csv, mapping, sheet, pv!.headerRow);
       const parts = [`людей: нових ${c.created}, оновлено ${c.updated}`, `привʼязано до акаунтів: ${c.linked}`,
@@ -280,7 +285,13 @@ function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: (msg: 
       if (c.secretsNoAccount) parts.push(`з них у людей без акаунта: ${c.secretsNoAccount}`);
       if (c.secretsInvalid) parts.push(`не схожі на картку/пароль: ${c.secretsInvalid}`);
       onDone(`Імпортовано — ${parts.join(" · ")}`);
-    } catch (e) { setMsg(hiringError(e)); setBusy(false); }
+    } catch (e) {
+      const st = (e as { response?: { status?: number } }).response?.status;
+      // Браузер або проксі не дочекались відповіді — сервер при цьому довершує імпорт (18.09.2026 так і було).
+      if (st == null || st >= 502) { onDone("Звʼязок перервався, але імпорт триває на сервері — реєстр оновиться сам за хвилину-дві", true); return; }
+      setMsg(st === 409 ? "Імпорт уже триває (його запустили раніше) — дочекайтесь, реєстр оновиться сам" : hiringError(e));
+      setBusy(false); setWriting(false);
+    }
   };
   const t = pv?.totals;
 
@@ -301,7 +312,7 @@ function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: (msg: 
             <button className={sheet === "active" ? "on" : ""} onClick={() => setSheet("active")}>Аркуш працюючих</button>
             <button className={sheet === "dismissed" ? "on" : ""} onClick={() => setSheet("dismissed")}>Аркуш звільнених</button>
           </div>
-          {busy && <span className="hr-muted">Рахую…</span>}
+          {busy && <span className="hr-muted">{writing ? "Імпорт триває — не закривайте вікно й не натискайте вдруге…" : "Рахую…"}</span>}
         </div>
         {msg && <div className="hr-note" style={{ background: "var(--warn-bg)", color: "var(--warn)" }}>{msg}</div>}
 

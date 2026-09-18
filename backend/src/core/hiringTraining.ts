@@ -95,6 +95,39 @@ export async function undoPromotion(db: Db, candidateId: number, actorId: number
 }
 
 /** Чи має картка акаунт (для заборони загального переходу в «менеджер»). */
+/**
+ * Привʼязати НАЯВНИЙ акаунт з роллю «Кандидат» до картки (18.09.2026: `test-candidate@uts.ua` створили в
+ * «Налаштуваннях» до того, як зʼявилась картка, і на «На навчанні» його не було видно). Лише «редагування»
+ * (Іван, керівництво). Акаунт — роль кандидата, без іншої картки; картка — без акаунта, у статусі
+ * «кандидат + команда» або «на навчанні». Тримає #572.
+ */
+export async function linkCandidateAccount(db: Db, actorId: number | null, candidateId: number, userId: unknown, access: HiringAccess) {
+  if (access !== "edit") throw new HiringError(403, "Привʼязувати акаунти може лише HR або керівництво");
+  const uid = Number(userId);
+  if (!Number.isInteger(uid) || uid <= 0) throw new HiringError(400, "Оберіть акаунт");
+  const c = await lockAccount(db, candidateId, access, null);
+  if (c.user_id) throw new HiringError(409, "У кандидата вже є акаунт");
+  if (c.status !== "candidate" && c.status !== "training") throw new HiringError(409, "Акаунт привʼязується на статусі «кандидат + команда» або «на навчанні»");
+  const u = (await db.query<{ id: number; email: string; role: string }>(
+    `SELECT id, email, COALESCE(role_override, role) AS role FROM users WHERE id = $1 FOR UPDATE`, [uid])).rows[0];
+  if (!u) throw new HiringError(404, "Акаунт не знайдено");
+  if (u.role !== "candidate") throw new HiringError(409, "Це не акаунт кандидата — привʼязати можна лише акаунт із роллю «Кандидат»");
+  if ((await db.query(`SELECT 1 FROM hiring_candidates WHERE user_id = $1`, [uid])).rowCount) throw new HiringError(409, "Цей акаунт уже привʼязаний до іншої картки");
+  await db.query(`UPDATE hiring_candidates SET user_id = $1, account_created_at = now(), access_extended_days = 0,
+                    access_closed_at = NULL, access_closed_reason = NULL WHERE id = $2`, [uid, candidateId]);
+  await db.query(`UPDATE users SET team_id = COALESCE($2, team_id), is_active = true WHERE id = $1`, [uid, c.team_id]);
+  await event(db, candidateId, "access", `привʼязано наявний акаунт · логін ${u.email}`, actorId);
+  return { login: u.email };
+}
+
+/** Вільні акаунти з роллю «Кандидат» — ще не привʼязані до жодної картки. */
+export async function freeCandidateAccounts(db: Db) {
+  return (await db.query<{ id: number; email: string; full_name: string | null; is_active: boolean }>(
+    `SELECT u.id, u.email, u.full_name, u.is_active FROM users u
+      WHERE COALESCE(u.role_override, u.role) = 'candidate' AND NOT EXISTS (SELECT 1 FROM hiring_candidates c WHERE c.user_id = u.id)
+      ORDER BY u.created_at DESC`)).rows;
+}
+
 export async function hasAccount(db: Db, candidateId: number): Promise<boolean> {
   return ((await db.query(`SELECT 1 FROM hiring_candidates WHERE id = $1 AND user_id IS NOT NULL`, [candidateId])).rowCount ?? 0) > 0;
 }

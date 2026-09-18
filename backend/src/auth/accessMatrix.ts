@@ -402,6 +402,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["manager"] },
   { method: "POST", path: "/api/hiring/candidates/:id/password", cls: "deny-only",
     allow: [], deny: ["manager"] },
+  // Привʼязка наявного акаунта кандидата (18.09.2026) — лише «редагування» Найму, тімлід не може.
+  { method: "GET", path: "/api/hiring/candidate-accounts/free", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/hiring/candidates/:id/account/link", cls: "deny-only",
+    allow: [], deny: ["team_lead", "manager"] },
   { method: "POST", path: "/api/hiring/candidates/:id/access/extend", cls: "deny-only",
     allow: [], deny: ["manager"] },
   { method: "POST", path: "/api/hiring/candidates/:id/access/restore", cls: "deny-only",

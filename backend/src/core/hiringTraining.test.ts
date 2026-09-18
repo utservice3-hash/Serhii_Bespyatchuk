@@ -362,3 +362,32 @@ test("#537 ДЖОБА: hiringAccess у кроні, під наглядом із 
   assert.equal(row.everyMin, gaps[0], `🔴 нагляд чекає раз на ${row.everyMin} хв, а крон стріляє раз на ${gaps[0]}`);
   assert.match(src, /\["hiringAccess", \(\) => closeExpiredCandidateAccess\(\)\]/, "🔴 немає стартового прогону — після рестарту вікно мовчання до пів години");
 });
+
+/**
+ * #572 — ПРИВʼЯЗАТИ НАЯВНИЙ АКАУНТ (18.09.2026: `test-candidate@uts.ua` зробили в «Налаштуваннях» і на
+ * «На навчанні» його не було). Лише «редагування»; лише акаунт із роллю «Кандидат», не привʼязаний до
+ * іншої картки; картка — без акаунта. Після привʼязки людина видна на дошці навчання.
+ * 🧨 Червоніє, якщо дозволити тімліду, чужу роль, акаунт з іншої картки або перезаписати наявний акаунт.
+ */
+test("#572 ЖИВИЙ SQL: привʼязка наявного акаунта — лише HR, лише вільний кандидатський, після — на дошці навчання", async (t) => {
+  const s = await scratchDb(t); if (!s) return;
+  const tr = await import("./hiringTraining.js");
+  try {
+    const a = await toCandidate(s.db, "Тестова Анна", "0970000301");
+    const b = await toCandidate(s.db, "Тестова Богдана", "0970000302");
+    await s.c.query(`UPDATE hiring_candidates SET user_id = NULL WHERE id IN ($1, $2)`, [a, b]);
+    const manual = (await s.c.query(`INSERT INTO users (email, password_hash, role, role_override, full_name) VALUES ('test-candidate@uts.ua','x','manager','candidate','Тест') RETURNING id`)).rows[0].id as number;
+    const manager = (await s.c.query(`INSERT INTO users (email, password_hash, role, full_name) VALUES ('m@uts.ua','x','manager','Менеджер') RETURNING id`)).rows[0].id as number;
+    assert.ok((await tr.freeCandidateAccounts(s.db)).some((u) => u.id === manual), "🔴 ручного акаунта немає серед вільних");
+    await assert.rejects(tr.linkCandidateAccount(s.db, null, a, manual, "lead"), code(403), "🔴 тімлід привʼязав акаунт");
+    await assert.rejects(tr.linkCandidateAccount(s.db, null, a, manager, "edit"), code(409), "🔴 привʼязано акаунт менеджера");
+    const r = await tr.linkCandidateAccount(s.db, null, a, manual, "edit");
+    assert.equal(r.login, "test-candidate@uts.ua");
+    assert.equal((await s.c.query(`SELECT user_id FROM hiring_candidates WHERE id = $1`, [a])).rows[0].user_id, manual);
+    await assert.rejects(tr.linkCandidateAccount(s.db, null, b, manual, "edit"), code(409), "🔴 один акаунт на двох картках");
+    await assert.rejects(tr.linkCandidateAccount(s.db, null, a, manual, "edit"), code(409), "🔴 перезаписано наявний акаунт картки");
+    assert.ok(!(await tr.freeCandidateAccounts(s.db)).some((u) => u.id === manual), "🔴 привʼязаний акаунт досі «вільний»");
+    const board = await tr.trainingBoard(s.db, "edit", null);
+    assert.ok(board.some((row) => (row as { id: number }).id === a), "🔴 після привʼязки кандидата немає на дошці навчання");
+  } finally { await s.done(); }
+});

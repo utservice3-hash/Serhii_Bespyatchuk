@@ -18,7 +18,7 @@ import {
   insertFile, fileForDownload, setFileDeleted,
 } from "../core/hiring.js";
 import {
-  trainingBoard, trainingDetail, issueInvite, issueCandidatePassword, extendAccess, restoreAccess, promoteCandidate, answerQuestion,
+  trainingBoard, trainingDetail, issueInvite, issueCandidatePassword, linkCandidateAccount, freeCandidateAccounts, extendAccess, restoreAccess, promoteCandidate, answerQuestion,
 } from "../core/hiringTraining.js";
 import { CANDIDATE_ACCESS, canDecideTraining } from "../core/hiringTrainingRules.js";
 
@@ -389,6 +389,22 @@ hiringRouter.post("/candidates/:id/password", async (req, res) => {
     const access = anyAccess(req);
     const id = idOf(req);
     res.status(201).json(await tx((db) => issueCandidatePassword(db, req.auth!.userId, id, access, req.auth!.teamId)));
+  } catch (e) { fail(res, e); }
+});
+
+/** Вільні акаунти кандидатів — для «Привʼязати наявний акаунт». Лише «редагування». */
+hiringRouter.get("/candidate-accounts/free", async (req, res) => {
+  try {
+    if (anyAccess(req) !== "edit") return res.status(403).json({ error: "Лише HR або керівництво" });
+    res.json({ rows: await freeCandidateAccounts(pool as unknown as Db) });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.post("/candidates/:id/account/link", async (req, res) => {
+  try {
+    const access = anyAccess(req);
+    const id = idOf(req);
+    res.json(await tx((db) => linkCandidateAccount(db, req.auth!.userId, id, req.body?.userId, access)));
   } catch (e) { fail(res, e); }
 });
 

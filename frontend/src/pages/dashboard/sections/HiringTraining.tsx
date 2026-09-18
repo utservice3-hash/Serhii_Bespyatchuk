@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   fetchHiringTraining, fetchHiringTrainingDetail, createHiringInvite, extendHiringAccess, restoreHiringAccess,
-  promoteHiringCandidate, answerHiringQuestion, inviteUrl, hiringError, issueHiringPassword,
+  promoteHiringCandidate, answerHiringQuestion, inviteUrl, hiringError, issueHiringPassword, fetchFreeCandidateAccounts, linkCandidateAccount,
   type HiringMeta, type HiringTrainingRow, type HiringTrainingRules, type HiringTrainingDetail, type HiringTrainingHealth, type HiringCloseReason,
 } from "../../../api";
 import { RefusalDialog, StatusPill, type Toast } from "./HiringShared";
@@ -236,6 +236,32 @@ function InviteBox({ id, toast, onChanged, disabled }: { id: number; toast: Toas
   );
 }
 
+/** Картка без акаунта: привʼязати вже створений акаунт кандидата (замість нового). Тімліду сервер відмовляє — блок ховається. */
+function LinkAccountBox({ id, toast, onChanged }: { id: number; toast: Toast; onChanged: () => void }) {
+  const [rows, setRows] = useState<{ id: number; email: string; full_name: string | null }[] | null>(null);
+  const [pick, setPick] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { fetchFreeCandidateAccounts().then(setRows).catch(() => setRows(null)); }, []);
+  if (!rows || rows.length === 0) return null;
+  const link = async () => {
+    if (!pick) return;
+    setBusy(true);
+    try { const r = await linkCandidateAccount(id, Number(pick)); toast(`Привʼязано акаунт ${r.login}`); onChanged(); }
+    catch (e) { toast(hiringError(e), { error: true }); }
+    setBusy(false);
+  };
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", flexBasis: "100%" }}>
+      <span className="hr-muted">або привʼязати наявний акаунт:</span>
+      <select className="hr-inp" value={pick} onChange={(e) => setPick(e.target.value)} aria-label="Наявний акаунт кандидата">
+        <option value="">оберіть акаунт…</option>
+        {rows.map((u) => <option key={u.id} value={u.id}>{u.email}{u.full_name ? ` · ${u.full_name}` : ""}</option>)}
+      </select>
+      <button className="hr-btn" disabled={!pick || busy} onClick={() => void link()}>Привʼязати</button>
+    </div>
+  );
+}
+
 function inviteLine(r: HiringTrainingRow): string {
   const i = r.invite;
   // Пароль, виданий пізніше за останнє запрошення, — головний спосіб входу.
@@ -269,6 +295,7 @@ export function TrainingAccessBlock({ meta, id, toast, onChanged }: { meta: Hiri
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-start" }}>
         <InviteBox id={id} toast={toast} onChanged={() => { load(); onChanged(); }} disabled={inviteBlock} />
         <button className="hr-btn" onClick={() => setOpen(true)}>Відкрити прогрес ›</button>
+        {r.health === "no_account" && !inviteBlock && <LinkAccountBox id={id} toast={toast} onChanged={() => { load(); onChanged(); }} />}
       </div>
       {open && <TrainingDrawer meta={meta} id={id} toast={toast} onClose={() => setOpen(false)} onChanged={() => { load(); onChanged(); }} />}
     </div>

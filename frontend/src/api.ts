@@ -4193,6 +4193,11 @@ export const createHiringInvite = async (id: number) =>
 export const issueHiringPassword = async (id: number) =>
   (await api.post<{ login: string; password: string }>(`/hiring/candidates/${id}/password`)).data;
 export const extendHiringAccess = async (id: number) => { await api.post(`/hiring/candidates/${id}/access/extend`); };
+/** Привʼязати наявний акаунт із роллю «Кандидат» (створений, напр., у «Налаштуваннях») до картки. Лише HR/керівництво. */
+export const fetchFreeCandidateAccounts = async () =>
+  (await api.get<{ rows: { id: number; email: string; full_name: string | null; is_active: boolean }[] }>("/hiring/candidate-accounts/free")).data.rows;
+export const linkCandidateAccount = async (id: number, userId: number) =>
+  (await api.post<{ login: string }>(`/hiring/candidates/${id}/account/link`, { userId })).data;
 export const restoreHiringAccess = async (id: number) => { await api.post(`/hiring/candidates/${id}/access/restore`); };
 export const promoteHiringCandidate = async (id: number, comment: string) => { await api.post(`/hiring/candidates/${id}/promote`, { comment }); };
 export const answerHiringQuestion = async (id: number, questionId: number, answer: string) => {

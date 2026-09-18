@@ -76,7 +76,11 @@ test("#211c чужий теплий кеш не міняє відповіді ж
   const { overviewCache } = await import("./lazyCache.js");
   const call = await overviewHandler();
   const FROM = "2026-08-01", TO = "2026-08-25";
-  const J = (x: Res) => JSON.stringify(x);
+  // ⏱ ЖИВИЙ ПРОГНОЗ НЕ ПОРІВНЮЄМО (18.09.2026): `projection.projected`/`projectedPct` рахуються з відкритих угод
+  // і зсуваються синком за ~40 с прогону. Три викати поспіль (a7dfb61, f30e6f5, 3df2efc) гейт червонів саме на
+  // них: 3 262 484 → 3 277 004 при однакових fact/plan, окремо — 3/3 зелено. Решта тіла (fact, plan, розрізи)
+  // лишається в порівнянні: зламаний ключ кешу дає інші fact/plan, тож саботаж нижче червоніє, як і раніше.
+  const J = (x: Res) => JSON.stringify(x, (k, v) => (k === "projected" || k === "projectedPct" ? undefined : v));
 
   const clean = async (auth: Record<string, unknown>) => { overviewCache.clear(); return J(await call(auth, FROM, TO)); };
   /** Відповідь для `auth` на кеші, прогрітому ЧУЖИМ скоупом `warmer`. */
