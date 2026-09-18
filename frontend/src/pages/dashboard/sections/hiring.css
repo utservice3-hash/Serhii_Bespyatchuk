@@ -258,3 +258,11 @@ select.hr-c.novac { color: var(--warn); }
 .iv-it:hover, .iv-it.sel { background: var(--info-bg); }
 @media (max-width: 640px) { .ag { grid-template-columns: 54px minmax(0, 1fr); gap: 0 8px; } .ag-c { grid-template-columns: 34px minmax(0, 1fr); } .ag-av { width: 34px; height: 34px; } .ag-r { grid-column: 1 / -1; grid-row: auto; align-items: stretch; } .ag-acts { justify-content: flex-start; } }
 .emp-form .wide { grid-column: 1 / -1; }
+
+/* 📉 Плинність і 🎂 дні народження (18.09.2026, етапи 4–5). */
+.ch-bar { position: relative; height: 20px; background: var(--bg); border-radius: var(--r-md); overflow: hidden; }
+.ch-bar i { position: absolute; inset: 0 auto 0 0; border-radius: var(--r-md); opacity: .85; }
+.ch-bar span { position: relative; padding-left: 8px; line-height: 20px; font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.bd-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--warn-bg); font-size: 13px; color: var(--warn); }
+.bd-chip { border: 1px solid transparent; background: var(--card-bg); color: var(--text); border-radius: var(--r-pill); padding: 2px 10px; font: 600 12.5px var(--sans); cursor: pointer; }
+.bd-chip.today { background: var(--brand); color: #fff; }

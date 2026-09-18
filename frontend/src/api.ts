@@ -4151,6 +4151,7 @@ export interface HiringSummary {
   side: { noshow: number; noanswer: number; reserved: number };
   bySource: HiringCutRow[]; byVacancy: HiringCutRow[];
   vacancies: { open: number; need: number; closed: { month: string; result: string | null; n: number }[] };
+  offers: { sent: number; signed: number; pending: number; outdated: number };
   staff: { hired: number; dismissed: number; active: number; dismissReasons: { reason: string; n: number }[]; byPosition: { position: string; n: number }[] };
 }
 export const fetchHiringSummary = async (p: { from: string; to: string; vacancyId?: string; source?: string }) =>
@@ -4310,6 +4311,7 @@ export interface EmployeeRow {
   phone: string | null; email: string | null; telegram: string | null; birth_date: string | null; hired_at: string | null;
   dismissed_at: string | null; dismiss_reason: string | null; note: string | null; extra: Record<string, string>;
   user_id: number | null; account_name: string | null; account_active: boolean | null; secrets: number; updated_at: string;
+  manager_id: number | null; kommo_name: string | null;
 }
 export interface ImportColumn { index: number; header: string; target: string; secretish: boolean; filled: number }
 export interface ImportPreviewRow {
@@ -4322,6 +4324,25 @@ export interface ImportPreview {
   totals?: { rows: number; new: number; update: number; duplicate: number; withAccount: number; noAccount: number; secrets: number; secretsLost: number; secretsNoAccount: number; problems: number; skipped: number };
 }
 export interface ImportCounts { rows: number; created: number; updated: number; duplicate: number; linked: number; secretsCreated: number; secretsExisting: number; secretsNoAccount: number; secretsInvalid: number }
+// ── Етапи 4–5: плинність, Exit-інтервʼю, привʼязка до Kommo (18.09.2026) ──
+export interface ChurnMonthRow { month: string; headcount: number; hired: number; dismissed: number; turnover: number | null; early: number; noHireDate: number }
+export interface ChurnReport {
+  months: ChurnMonthRow[]; total: { dismissed: number; hired: number; early: number; avgTurnover: number; active: number };
+  reasons: { label: string; n: number }[]; positions: { label: string; n: number }[];
+}
+export const fetchChurn = async (from: string, to: string) => (await api.get<ChurnReport>("/secrets/churn", { params: { from, to } })).data;
+export const linkEmployeesKommo = async () => (await api.post<{ linked: number; byId: number; byName: number; ambiguous: number; none: number }>("/secrets/employees/kommo-link")).data;
+export interface ExitInterview {
+  id: number; employee_id: number | null; full_name: string; interview_date: string; position: string | null; tenure: string | null;
+  reason: string | null; reason_detail: string | null; rating: number | null; missing: string | null; recommend: string | null;
+  team_lead: string | null; note: string | null; author: string | null;
+}
+export const fetchExits = async () =>
+  (await api.get<{ rows: ExitInterview[]; stats: { total: number; avgRating: number | null; recommendPct: number | null; reasons: { label: string; n: number }[] } }>("/secrets/exit")).data;
+export const createExit = async (b: Partial<ExitInterview>) => (await api.post<{ id: number }>("/secrets/exit", b)).data.id;
+export const updateExit = async (id: number, b: Partial<ExitInterview>) => { await api.patch(`/secrets/exit/${id}`, b); };
+export const deleteExit = async (id: number) => { await api.delete(`/secrets/exit/${id}`); };
+export const restoreExit = async (id: number) => { await api.post(`/secrets/exit/${id}/restore`); };
 export const fetchEmployees = async () => (await api.get<{ rows: EmployeeRow[]; teams: string[] }>("/secrets/employees")).data;
 export type EmployeePatch = Partial<Pick<EmployeeRow, "full_name" | "position" | "team_label" | "phone" | "email" | "telegram" | "birth_date" | "hired_at" | "dismissed_at" | "dismiss_reason" | "note" | "status">>;
 export const updateEmployee = async (id: number, b: EmployeePatch) => (await api.patch<{ ok: true; changed: string[] }>(`/secrets/employees/${id}`, b)).data.changed;

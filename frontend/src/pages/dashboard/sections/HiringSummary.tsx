@@ -86,6 +86,10 @@ export function HiringSummary() {
               {worst && worst.lost > 0 && <> Найбільше втрачаємо між «{d.funnel[worst.i].label}» і «{d.funnel[worst.i + 1].label}»: <b className="fn-warn">−{worst.lost}</b>.</>}
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+              <span className="emp-pill info">офер надіслано: {d.offers.sent}</span>
+              <span className="emp-pill ok">офер підписано: {d.offers.signed}</span>
+              {d.offers.pending > 0 && <span className="emp-pill warn">чекає підпису: {d.offers.pending}</span>}
+              {d.offers.outdated > 0 && <span className="emp-pill warn">змінено, потрібен новий підпис: {d.offers.outdated}</span>}
               <span className="emp-pill warn">не прийшли на співбесіду: {d.side.noshow}</span>
               <span className="emp-pill warn">недозвон: {d.side.noanswer}</span>
               <span className="emp-pill info">у резерві: {d.side.reserved}</span>

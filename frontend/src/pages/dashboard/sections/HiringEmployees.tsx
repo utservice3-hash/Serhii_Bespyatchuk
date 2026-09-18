@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  fetchEmployees, previewEmployeeImport, commitEmployeeImport, updateEmployee, fetchSecretsStatus, hiringError,
+  fetchEmployees, previewEmployeeImport, commitEmployeeImport, updateEmployee, fetchSecretsStatus, linkEmployeesKommo, hiringError,
   type EmployeeRow, type ImportPreview, type SecretsStatus, type EmployeePatch,
 } from "../../../api";
 import type { Toast } from "./HiringShared";
@@ -112,8 +112,11 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
             <option value="nosec">Без доступів у сейфі</option>
           </select>
           <input className="hr-inp" placeholder="Пошук: ПІБ, посада, телефон" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Пошук у реєстрі" style={{ flex: "1 1 200px" }} />
+          <button className="hr-btn" title="Привʼязати людей до менеджерів Kommo: за ID Kommo з таблиці або за єдиним збігом ПІБ"
+            onClick={() => void linkEmployeesKommo().then((r) => { toast(`Kommo: привʼязано ${r.linked} (за ID ${r.byId}, за ПІБ ${r.byName})${r.ambiguous ? ` · однофамільців ${r.ambiguous} — вручну` : ""}`); load(); }).catch((e) => toast(hiringError(e), { error: true }))}>Зіставити з Kommo</button>
           <button className="hr-btn" onClick={() => setImporting(true)}>Імпорт з таблиці</button>
         </div>
+        <Birthdays rows={rows} onOpen={(id) => setOpen({ id, tab: "profile" })} />
         {rows.length === 0 ? (
           <div style={{ padding: 16 }}><b>Реєстр порожній.</b> <span className="hr-muted">Натисніть «Імпорт з таблиці» і покладіть CSV з аркуша «Укр NEW».</span></div>
         ) : (
@@ -199,6 +202,7 @@ function EmployeeDrawer({ row, tab, teams, status, toast, onTab, onClose, onSave
               <span className={`emp-pill ${row.status === "active" ? "ok" : "mute"}`}>{row.status === "active" ? "працює" : "звільнений"}</span>
               {row.team_label && <span className="emp-team" style={{ ["--t" as string]: teamTone(row.team_label) }}>{teamName(row.team_label)}</span>}
               {row.user_id != null ? <span className="emp-pill ok">акаунт: {row.account_name}</span> : <span className="emp-pill warn">без акаунта в дашборді</span>}
+              {row.kommo_name ? <span className="emp-pill info">Kommo: {row.kommo_name}</span> : <span className="emp-pill mute">не привʼязано до Kommo</span>}
             </div>
           </div>
           <button className="hr-btn" onClick={onClose}>Закрити</button>
@@ -227,6 +231,10 @@ function EmployeeDrawer({ row, tab, teams, status, toast, onTab, onClose, onSave
             </div>
             {msg && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 8 }}>{msg}</div>}
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+              {row.status === "active" && form.status === "active" && (
+                <button className="hr-btn" style={{ marginRight: "auto", color: "var(--danger)" }} title="Заповнить статус і дату звільнення — вкажіть причину й збережіть"
+                  onClick={() => setForm({ ...form, status: "dismissed", dismissed_at: new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" }) })}>Звільнити…</button>
+              )}
               <button className="hr-btn" disabled={!dirty.length || busy} onClick={() => setForm(init)}>Скасувати зміни</button>
               <button className="hr-btn p" disabled={!dirty.length || busy} onClick={() => void save()}>{busy ? "Зберігаю…" : dirty.length ? `Зберегти (${dirty.length})` : "Зберегти"}</button>
             </div>
@@ -388,4 +396,26 @@ function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: (msg: 
         </div>
       </div>
     </div>, document.body);
+}
+
+/** 🎂 Дні народження на найближчі 14 днів — серед тих, хто працює. */
+function Birthdays({ rows, onOpen }: { rows: EmployeeRow[]; onOpen: (id: number) => void }) {
+  const now = new Date(), t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const soon = rows.filter((r) => r.status === "active" && r.birth_date).map((r) => {
+    const [, m, d] = r.birth_date!.split("-").map(Number);
+    let next = new Date(now.getFullYear(), m - 1, d).getTime();
+    if (next < t0) next = new Date(now.getFullYear() + 1, m - 1, d).getTime();
+    return { r, days: Math.round((next - t0) / 86_400_000), age: new Date(next).getFullYear() - Number(r.birth_date!.slice(0, 4)) };
+  }).filter((x) => x.days <= 14).sort((a, b) => a.days - b.days);
+  if (!soon.length) return null;
+  return (
+    <div className="bd-row">
+      <b>🎂 Найближчі дні народження:</b>
+      {soon.map(({ r, days, age }) => (
+        <button key={r.id} className={`bd-chip ${days === 0 ? "today" : ""}`} onClick={() => onOpen(r.id)}>
+          {r.full_name.split(" ").slice(0, 2).join(" ")} · {days === 0 ? "сьогодні" : days === 1 ? "завтра" : `${r.birth_date!.slice(8, 10)}.${r.birth_date!.slice(5, 7)}`} · {age}
+        </button>
+      ))}
+    </div>
+  );
 }
