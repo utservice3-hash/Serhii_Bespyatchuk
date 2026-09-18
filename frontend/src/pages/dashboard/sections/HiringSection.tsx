@@ -6,6 +6,7 @@ import type { Toast } from "./HiringShared";
 import { HiringSchedule } from "./HiringSchedule";
 import { HiringCandidates } from "./HiringCandidates";
 import { HiringDaily } from "./HiringDaily";
+import { HiringVacancies } from "./HiringVacancies";
 import { PlannedTabCard, LiveTabNote, type PlannedTab } from "./HiringRoadmap";
 import "./hiring.css";
 
@@ -16,7 +17,7 @@ import "./hiring.css";
  *  • edit — рекрутер (HR) і адмін-рівень: усі три вкладки;
  *  • lead — тімлід: лише «Кандидати» своєї команди після співбесіди з ним.
  */
-type Tab = "sched" | "base" | "daily" | PlannedTab;
+type Tab = "sched" | "base" | "vac" | "daily" | PlannedTab;
 
 export function HiringSection() {
   const [meta, setMeta] = useState<HiringMeta | null>(null);
@@ -24,6 +25,8 @@ export function HiringSection() {
   const [tab, setTab] = useState<Tab>(() => (LS.get("tab") as Tab) || "sched");
   const [toastState, setToastState] = useState<{ text: string; error?: boolean; action?: { label: string; run: () => void }; key: number } | null>(null);
   const [nonce, setNonce] = useState(0);
+  // Клік по числу кандидатів вакансії відкриває «Кандидатів» із фільтром (прохід 1a).
+  const [vacFilter, setVacFilter] = useState<{ id: number; seq: number } | null>(null);
 
   const reloadMeta = useCallback(() => {
     fetchHiringMeta().then(setMeta).catch((e) => setErr(hiringError(e)));
@@ -43,7 +46,7 @@ export function HiringSection() {
   // Усі сім вкладок затвердженого макета. Незроблені відкривають пояснення «що буде і чому ще немає»
   // (прохання Романа 17.09): людина бачить повну картину, а не гадає, чи вкладку забули.
   const tabs: [Tab, string][] = meta.access === "edit"
-    ? [["sched", "Графік"], ["base", "Кандидати"], ["daily", "Щоденний звіт"], ["emp", "Співробітники"], ["churn", "Плинність"], ["exit", "Exit-інтервʼю"], ["sum", "Зведення"]]
+    ? [["sched", "Графік"], ["base", "Кандидати"], ["vac", "Вакансії"], ["daily", "Щоденний звіт"], ["emp", "Співробітники"], ["churn", "Плинність"], ["exit", "Exit-інтервʼю"], ["sum", "Зведення"]]
     : [["base", "Кандидати"], ["emp", "Співробітники"]];
   const planned = new Set<Tab>(["emp", "churn", "exit", "sum"]);
   const active = tabs.some(([k]) => k === tab) ? tab : tabs[0][0];
@@ -64,10 +67,12 @@ export function HiringSection() {
           </button>
         ))}
       </div>
-      {(active === "sched" || active === "base" || active === "daily") && <LiveTabNote tab={active} />}
+      {(active === "sched" || active === "base" || active === "vac" || active === "daily") && <LiveTabNote tab={active} />}
       {planned.has(active) && <PlannedTabCard tab={active as PlannedTab} />}
       {active === "sched" && <HiringSchedule meta={meta} toast={toast} onMetaStale={() => setNonce((n) => n + 1)} />}
-      {active === "base" && <HiringCandidates meta={meta} toast={toast} />}
+      {active === "base" && <HiringCandidates key={vacFilter?.seq ?? 0} meta={meta} toast={toast} initialVacancyId={vacFilter?.id ?? null} onMetaStale={() => setNonce((n) => n + 1)} />}
+      {active === "vac" && <HiringVacancies meta={meta} toast={toast} onChanged={() => setNonce((n) => n + 1)}
+        onOpenCandidates={(id) => { setVacFilter({ id, seq: Date.now() }); pick("base"); }} />}
       {active === "daily" && <HiringDaily toast={toast} />}
       {toastState && createPortal(
         <div className={`hr-toast ${toastState.error ? "err" : ""}`} role="status">

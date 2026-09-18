@@ -10,13 +10,14 @@
  */
 
 export const HIRING_STATUSES = [
-  "new", "planned", "done", "noshow", "noanswer", "lead",
-  "candidate", "training", "manager", "declined", "nofit", "black",
+  "new", "contacted", "planned", "done", "noshow", "noanswer", "lead",
+  "candidate", "training", "manager", "refused", "black",
 ] as const;
 export type HiringStatus = (typeof HIRING_STATUSES)[number];
 
 export const STATUS_LABEL: Record<HiringStatus, string> = {
   new: "новий",
+  contacted: "перше повідомлення",
   planned: "заплановано",
   done: "проведено",
   noshow: "не прийшов",
@@ -25,36 +26,126 @@ export const STATUS_LABEL: Record<HiringStatus, string> = {
   candidate: "кандидат + команда",
   training: "на навчанні",
   manager: "менеджер",
-  declined: "відмова",
-  nofit: "не підходить",
+  refused: "відмова",
   black: "чорний список",
 };
 
 export const isHiringStatus = (s: unknown): s is HiringStatus =>
   typeof s === "string" && (HIRING_STATUSES as readonly string[]).includes(s);
 
-/** Наступні статуси — рівно ті, що в затвердженому макеті. */
+/**
+ * Наступні статуси (прохід 1a, 17.09.2026: макет затвердив Роман, шлях — за записом Хурми Івана).
+ * «Відмова» й «чорний список» у цій мапі — лише як ЦІЛЬ дії з причиною (`REFUSAL_TARGETS`):
+ * загальна зміна статусу в них не веде, інакше відмова лишилась би без причини (#520).
+ * Старі `declined` і `nofit` злиті в «відмову» з причиною — одноразовою міграцією в схемі (#522).
+ */
 export const TRANSITIONS: Record<HiringStatus, HiringStatus[]> = {
-  new: ["planned", "noanswer", "declined", "nofit", "black"],
-  planned: ["done", "noshow", "noanswer", "declined"],
-  done: ["lead", "nofit", "declined"],
-  noshow: ["planned", "declined"],
-  noanswer: ["planned", "declined"],
-  lead: ["candidate", "nofit"],
-  candidate: ["training", "declined"],
-  training: ["manager", "declined"],
-  declined: ["planned"],
-  nofit: ["planned", "black"],
+  new: ["contacted", "planned", "noanswer", "refused", "black"],
+  contacted: ["planned", "noanswer", "refused"],
+  planned: ["done", "noshow", "noanswer", "refused"],
+  done: ["lead", "refused"],
+  noshow: ["planned", "refused"],
+  noanswer: ["contacted", "planned", "refused"],
+  lead: ["candidate", "refused"],
+  candidate: ["training", "refused"],
+  training: ["manager", "refused"],
+  refused: ["contacted", "planned"],
   manager: [],
   black: [],
 };
 
-/** Тімлід працює лише з кандидатами після співбесіди з ним. */
+/** Тімлід працює лише з кандидатами після співбесіди з ним — свої етапи й відмова. */
 export const LEAD_TRANSITIONS: Partial<Record<HiringStatus, HiringStatus[]>> = {
-  lead: ["candidate", "nofit"],
-  candidate: ["training", "declined"],
-  training: ["manager", "declined"],
+  lead: ["candidate", "refused"],
+  candidate: ["training", "refused"],
+  training: ["manager", "refused"],
 };
+
+/** Статуси, у які веде ЛИШЕ дія «відмовити» з причиною. */
+export const REFUSAL_TARGETS: readonly HiringStatus[] = ["refused", "black"];
+
+export const REFUSAL_SIDES = ["candidate", "company"] as const;
+export type RefusalSide = (typeof REFUSAL_SIDES)[number];
+export const REFUSAL_SIDE_LABEL: Record<RefusalSide, string> = { candidate: "відмова кандидата", company: "відмова компанії" };
+
+export type RefusalVerdict = { ok: true; status: "refused" | "black" } | { ok: false; reason: string };
+
+/**
+ * Відмова як дія: причина обовʼязкова й мусить належати тій самій стороні; «чорний список» —
+ * лише відмова компанії (кандидат сам себе в чорний список не вносить).
+ */
+export function refusalVerdict(p: {
+  from: HiringStatus; access: HiringAccess; reasonSide: RefusalSide | null; blacklist: boolean;
+}): RefusalVerdict {
+  if (p.access === "none") return { ok: false, reason: "Немає доступу до найму" };
+  if (!p.reasonSide) return { ok: false, reason: "Оберіть причину відмови — без неї відмова не зберігається" };
+  const map = p.access === "lead" ? LEAD_TRANSITIONS : TRANSITIONS;
+  if (!(map[p.from] ?? []).includes("refused"))
+    return { ok: false, reason: `Зі статусу «${STATUS_LABEL[p.from]}» відмовити не можна` };
+  if (p.blacklist && p.reasonSide !== "company")
+    return { ok: false, reason: "У чорний список — лише при відмові компанії" };
+  if (p.blacklist && p.access !== "edit") return { ok: false, reason: "Чорний список веде рекрутер" };
+  return { ok: true, status: p.blacklist ? "black" : "refused" };
+}
+
+export const VACANCY_STATUSES = ["open", "in_work", "paused", "closed", "cancelled"] as const;
+export type VacancyStatus = (typeof VACANCY_STATUSES)[number];
+export const VACANCY_STATUS_LABEL: Record<VacancyStatus, string> = {
+  open: "відкрита", in_work: "в роботі", paused: "на паузі", closed: "закрита", cancelled: "скасована",
+};
+export const VACANCY_RESULTS = ["Успішно закрита", "Скасував замовник", "Скасована"] as const;
+/** Закриття вакансії: результат обовʼязковий і вирішує, «закрита» це чи «скасована». */
+export function vacancyCloseStatus(result: unknown): VacancyStatus | null {
+  if (result === "Успішно закрита") return "closed";
+  if (result === "Скасував замовник" || result === "Скасована") return "cancelled";
+  return null;
+}
+
+/** Файли-докази: скриншоти й PDF, до 5 МБ, до 20 на кандидата. */
+export const HIRING_FILE_MAX_BYTES = 5 * 1024 * 1024;
+export const HIRING_FILES_PER_CANDIDATE = 20;
+export const HIRING_FILE_MIMES = ["image/png", "image/jpeg", "image/webp", "application/pdf"] as const;
+
+/**
+ * Тип файлу — за ПЕРШИМИ БАЙТАМИ, а не за словом клієнта: підписати `.exe` як `image/png`
+ * нічого не коштує. Повертає справжній mime з білого списку або null.
+ */
+export function sniffFileMime(buf: Uint8Array): (typeof HIRING_FILE_MIMES)[number] | null {
+  const at = (i: number, bytes: number[]) => bytes.every((b, k) => buf[i + k] === b);
+  if (buf.length >= 8 && at(0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "image/png";
+  if (buf.length >= 3 && at(0, [0xff, 0xd8, 0xff])) return "image/jpeg";
+  if (buf.length >= 12 && at(0, [0x52, 0x49, 0x46, 0x46]) && at(8, [0x57, 0x45, 0x42, 0x50])) return "image/webp";
+  if (buf.length >= 5 && at(0, [0x25, 0x50, 0x44, 0x46, 0x2d])) return "application/pdf";
+  return null;
+}
+
+/**
+ * Імʼя файлу на диску. Файли-докази лежать у КОРЕНІ теки документів із префіксом `hiring-`:
+ * нічний бекап (`jobs/backupDocuments.ts`) копіює лише файли кореня, без підтек (#524).
+ */
+export const hiringStoredName = (uuid: string, mime: (typeof HIRING_FILE_MIMES)[number]): string =>
+  `hiring-${uuid}${{ "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "application/pdf": ".pdf" }[mime]}`;
+
+/**
+ * Посилання «написати» з картки. Telegram — за ніком, якщо він є (`@нік` чи `t.me/нік`), інакше за
+ * номером; Viber і WhatsApp — лише за номером. Номер — через ту саму `normalizePhone`, що й ключ
+ * дублів, тож «066 …» і «+380…» дають однакові посилання (#525).
+ */
+export function messengerLinks(phone: unknown, telegram: unknown): { telegram: string | null; viber: string | null; whatsapp: string | null } {
+  const n = normalizePhone(phone);
+  const intl = n && n.length >= 11 ? n : null;
+  let tgUser: string | null = null;
+  if (typeof telegram === "string") {
+    const t = telegram.trim();
+    const m = /^@([A-Za-z0-9_]{4,32})$/.exec(t) ?? /t\.me\/([A-Za-z0-9_]{4,32})\/?$/.exec(t) ?? /^([A-Za-z0-9_]{5,32})$/.exec(t);
+    if (m) tgUser = m[1];
+  }
+  return {
+    telegram: tgUser ? `https://t.me/${tgUser}` : intl ? `https://t.me/+${intl}` : null,
+    viber: intl ? `viber://chat?number=%2B${intl}` : null,
+    whatsapp: intl ? `https://wa.me/${intl}` : null,
+  };
+}
 
 /** Перехід у ці статуси вимагає команди: до кого йде кандидат. */
 export const NEEDS_TEAM: readonly HiringStatus[] = ["lead", "candidate"];
@@ -90,9 +181,11 @@ export function canTransition(
   if (access === "none") return { ok: false, reason: "Немає доступу до найму" };
   if (from === to) return { ok: false, reason: "Статус не змінився" };
   const map = access === "lead" ? LEAD_TRANSITIONS : TRANSITIONS;
-  const leadScope = (s: HiringStatus) => ["lead", "candidate", "training", "manager", "nofit", "declined"].includes(s);
+  const leadScope = (s: HiringStatus) => ["lead", "candidate", "training", "manager", "refused"].includes(s);
   if (lastFrom === to && (access === "edit" || (leadScope(from) && leadScope(to))))
     return { ok: true };
+  if (REFUSAL_TARGETS.includes(to) && lastFrom !== to)
+    return { ok: false, reason: "Відмова — через дію «Відмовити» з причиною" };
   if ((map[from] ?? []).includes(to)) return { ok: true };
   return {
     ok: false,

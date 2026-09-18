@@ -1,13 +1,25 @@
 import { Router, type Request, type Response } from "express";
+import { randomUUID } from "node:crypto";
+import { mkdir, writeFile, unlink } from "node:fs/promises";
+import path from "node:path";
+import { UPLOAD_DIR } from "./uploads.js";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { isAdminScope } from "../auth/rbac.js";
-import { hiringAccess, validRange, dailyTotals, STATUS_LABEL, TRANSITIONS, LEAD_TRANSITIONS, HIRING_STATUSES, type HiringAccess } from "../core/hiringRules.js";
+import {
+  hiringAccess, validRange, dailyTotals, STATUS_LABEL, TRANSITIONS, LEAD_TRANSITIONS, HIRING_STATUSES, type HiringAccess,
+  VACANCY_STATUSES, VACANCY_STATUS_LABEL, VACANCY_RESULTS, HIRING_FILE_MAX_BYTES, sniffFileMime, hiringStoredName,
+} from "../core/hiringRules.js";
 import {
   HiringError, type Db, scheduleRows, createInterview, updateInterview, setInterviewDeleted,
   listCandidates, candidateCard, createCandidate, updateCandidateFields, changeStatus, addComment,
   dailyReport, setDailyManual, hiringMeta,
+  listVacancies, createVacancy, updateVacancy, setCandidateVacancies, addRefusalReason, refuseCandidate, setReserve,
+  insertFile, fileForDownload, setFileDeleted,
 } from "../core/hiring.js";
+
+/** Та сама тека, що в `routes/documents.ts` (DOCS_DIR) і в нічному бекапі. */
+const DOCS_DIR = path.join(UPLOAD_DIR, "..", "documents");
 
 /**
  * 🧑‍💼 НАЙМ, прохід 1 (17.09.2026): графік співбесід, база кандидатів, щоденний звіт.
@@ -70,6 +82,8 @@ hiringRouter.get("/meta", async (req, res) => {
       access, teamId: req.auth!.teamId, ...meta,
       statuses: HIRING_STATUSES.map((k) => ({ key: k, label: STATUS_LABEL[k] })),
       transitions: access === "lead" ? LEAD_TRANSITIONS : TRANSITIONS,
+      vacancyStatuses: VACANCY_STATUSES.map((k) => ({ key: k, label: VACANCY_STATUS_LABEL[k] })),
+      vacancyResults: VACANCY_RESULTS,
     });
   } catch (e) { fail(res, e); }
 });
@@ -129,6 +143,10 @@ hiringRouter.get("/candidates", async (req, res) => {
       source: typeof q.source === "string" ? q.source : undefined,
       position: typeof q.position === "string" ? q.position : undefined,
       teamId: q.teamId ? Number(q.teamId) || null : null,
+      vacancyId: q.vacancyId ? Number(q.vacancyId) || null : null,
+      reserve: q.reserve === "yes" || q.reserve === "no" ? q.reserve : null,
+      refusalSide: typeof q.refusalSide === "string" ? q.refusalSide : null,
+      noVacancy: q.noVacancy === "1",
       limit: q.limit ? Number(q.limit) : undefined,
       offset: q.offset ? Number(q.offset) : undefined,
     }, access, req.auth!.teamId));
@@ -195,6 +213,135 @@ hiringRouter.put("/daily/:day", async (req, res) => {
   try {
     onlyEdit(req);
     await tx((db) => setDailyManual(db, req.auth!.userId, req.params.day, req.body ?? {}));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+// ── Вакансії (прохід 1a) ────────────────────────────────────────────────────
+hiringRouter.get("/vacancies", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const scope = req.query.scope === "closed" || req.query.scope === "all" ? req.query.scope : "active";
+    res.json({ rows: await listVacancies(pool as unknown as Db, scope) });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.post("/vacancies", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const id = await tx((db) => createVacancy(db, req.auth!.userId, req.body ?? {}));
+    res.status(201).json({ id });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.patch("/vacancies/:id", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const id = idOf(req);
+    await tx((db) => updateVacancy(db, id, req.body ?? {}));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.put("/candidates/:id/vacancies", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const id = idOf(req);
+    await tx((db) => setCandidateVacancies(db, req.auth!.userId, id, req.body?.vacancyIds));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+// ── Відмова з причиною, резерв ──────────────────────────────────────────────
+hiringRouter.post("/refusal-reasons", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const id = await tx((db) => addRefusalReason(db, req.auth!.userId, req.body ?? {}));
+    res.status(201).json({ id });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.post("/candidates/:id/refuse", async (req, res) => {
+  try {
+    const access = anyAccess(req);
+    const id = idOf(req);
+    await tx((db) => refuseCandidate(db, req.auth!.userId, id, req.body ?? {}, access, req.auth!.teamId));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.post("/candidates/:id/reserve", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const id = idOf(req);
+    await tx((db) => setReserve(db, req.auth!.userId, id, req.body ?? {}));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+// ── Файли-докази ────────────────────────────────────────────────────────────
+/**
+ * base64 у JSON, як у задачника й документів (multipart у проєкті немає). Тип — за першими
+ * байтами, не за словом клієнта; розмір — до 5 МБ. Байти пишуться ДО рядка в базі, а якщо
+ * рядок не вставився (ліміт, чужа картка) — файл із диска прибирається.
+ */
+hiringRouter.post("/candidates/:id/files", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const id = idOf(req);
+    const { filename, dataBase64 } = req.body ?? {};
+    if (typeof dataBase64 !== "string" || !dataBase64) throw new HiringError(400, "Файл відсутній");
+    const buffer = Buffer.from(dataBase64.includes(",") ? dataBase64.split(",")[1] : dataBase64, "base64");
+    if (!buffer.length) throw new HiringError(400, "Файл порожній");
+    if (buffer.length > HIRING_FILE_MAX_BYTES) throw new HiringError(413, "Файл більший за 5 МБ");
+    const mime = sniffFileMime(buffer);
+    if (!mime) throw new HiringError(400, "Приймаються лише PNG, JPG, WEBP або PDF");
+    const name = (String(filename ?? "файл").trim() || "файл").slice(0, 200);
+    const storedName = hiringStoredName(randomUUID(), mime);
+    await mkdir(DOCS_DIR, { recursive: true });
+    const full = path.join(DOCS_DIR, storedName);
+    await writeFile(full, buffer);
+    try {
+      const fileId = await tx((db) => insertFile(db, req.auth!.userId, id, { name, storedName, mime, size: buffer.length }));
+      res.status(201).json({ id: fileId });
+    } catch (e) { await unlink(full).catch(() => undefined); throw e; }
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.get("/candidates/:id/files/:fileId", async (req, res) => {
+  try {
+    const access = anyAccess(req);
+    const id = idOf(req);
+    const fileId = Number(req.params.fileId);
+    if (!Number.isInteger(fileId) || fileId <= 0) throw new HiringError(400, "Некоректний id файлу");
+    const f = await fileForDownload(pool as unknown as Db, id, fileId, access, req.auth!.teamId);
+    res.type(f.mime);
+    res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(f.name)}`);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.sendFile(path.join(DOCS_DIR, f.stored_name), (err) => {
+      if (err && !res.headersSent) res.status(404).json({ error: "Файл відсутній на диску" });
+    });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.delete("/candidates/:id/files/:fileId", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const id = idOf(req);
+    const fileId = Number(req.params.fileId);
+    if (!Number.isInteger(fileId) || fileId <= 0) throw new HiringError(400, "Некоректний id файлу");
+    await tx((db) => setFileDeleted(db, req.auth!.userId, id, fileId, true));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.post("/candidates/:id/files/:fileId/restore", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const id = idOf(req);
+    const fileId = Number(req.params.fileId);
+    if (!Number.isInteger(fileId) || fileId <= 0) throw new HiringError(400, "Некоректний id файлу");
+    await tx((db) => setFileDeleted(db, req.auth!.userId, id, fileId, false));
     res.json({ ok: true });
   } catch (e) { fail(res, e); }
 });

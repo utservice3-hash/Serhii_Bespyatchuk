@@ -4023,8 +4023,11 @@ export async function markNewsSeen(): Promise<number> {
 // 🧑‍💼 НАЙМ, прохід 1 (17.09.2026). Типи — дзеркало `backend/src/core/hiring.ts`.
 // Доступ вирішує СЕРВЕР (`access` у /meta); фронт лише ховає те, що сервер однаково відмовить.
 export type HiringStatus =
-  | "new" | "planned" | "done" | "noshow" | "noanswer" | "lead"
-  | "candidate" | "training" | "manager" | "declined" | "nofit" | "black";
+  | "new" | "contacted" | "planned" | "done" | "noshow" | "noanswer" | "lead"
+  | "candidate" | "training" | "manager" | "refused" | "black";
+export type HiringVacancyStatus = "open" | "in_work" | "paused" | "closed" | "cancelled";
+export type HiringRefusalSide = "candidate" | "company";
+export interface HiringVacancyRef { id: number; title: string; status: HiringVacancyStatus }
 export type HiringAccessLevel = "edit" | "lead" | "none";
 
 export interface HiringMeta {
@@ -4036,6 +4039,10 @@ export interface HiringMeta {
   positions: string[];
   responsibles: string[];
   teams: { id: number; name: string }[];
+  vacancies: HiringVacancyRef[];
+  refusalReasons: { id: number; side: HiringRefusalSide; label: string }[];
+  vacancyStatuses: { key: HiringVacancyStatus; label: string }[];
+  vacancyResults: string[];
 }
 
 export interface HiringScheduleRow {
@@ -4044,6 +4051,7 @@ export interface HiringScheduleRow {
   attended: boolean | null; record_url: string | null; comment: string | null;
   full_name: string | null; phone: string | null; telegram: string | null; source: string | null;
   position: string | null; status: HiringStatus | null; team_id: number | null;
+  vacancies: HiringVacancyRef[] | null; refusal_reason: string | null;
 }
 
 export interface HiringCandidateRow {
@@ -4051,13 +4059,27 @@ export interface HiringCandidateRow {
   position: string | null; status: HiringStatus; team_id: number | null; team_name: string | null;
   resume_url: string | null; comment: string | null; created_on: string;
   last_interview?: string | null; repeats?: number;
+  email: string | null; vacancies: HiringVacancyRef[];
+  refusal_side: HiringRefusalSide | null; refusal_reason_id: number | null; refusal_reason: string | null;
+  refusal_note: string | null; refused_on: string | null; reserved_on: string | null; reserve_note: string | null;
+  files_count: number;
 }
+
+export interface HiringVacancyRow {
+  id: number; title: string; position: string | null; opened_by: string | null; responsible: string | null;
+  need: number; status: HiringVacancyStatus; close_result: string | null; comment: string | null;
+  opened_on: string; closed_on: string | null; candidates: number; days_open: number;
+}
+
+export interface HiringFile { id: number; name: string; mime: string; size_bytes: number; created: string; author: string | null }
 
 export interface HiringCard {
   candidate: HiringCandidateRow;
   interviews: { id: number; interview_date: string; interview_time: string | null; responsible: string | null; attended: boolean | null; record_url: string | null; comment: string | null }[];
   events: { id: number; kind: string; from_status: HiringStatus | null; to_status: HiringStatus | null; comment: string | null; at: string; actor: string | null }[];
   lastFrom: HiringStatus | null;
+  files: HiringFile[];
+  messengers: { telegram: string | null; viber: string | null; whatsapp: string | null };
 }
 
 export interface HiringDailyRow {
@@ -4082,8 +4104,11 @@ export const patchHiringInterview = async (id: number, patch: Record<string, unk
 export const deleteHiringInterview = async (id: number) => { await api.delete(`/hiring/interviews/${id}`); };
 export const restoreHiringInterview = async (id: number) => { await api.post(`/hiring/interviews/${id}/restore`); };
 
-export const fetchHiringCandidates = async (params: { q?: string; status?: string; source?: string; position?: string; limit?: number; offset?: number }) =>
-  (await api.get<{ total: number; rows: HiringCandidateRow[] }>("/hiring/candidates", { params })).data;
+export const fetchHiringCandidates = async (params: {
+  q?: string; status?: string; source?: string; position?: string; limit?: number; offset?: number;
+  vacancyId?: number | string; reserve?: "yes" | "no" | ""; refusalSide?: string; noVacancy?: "1" | "";
+}) =>
+  (await api.get<{ total: number; rows: HiringCandidateRow[]; noVacancy: number; inReserve: number }>("/hiring/candidates", { params })).data;
 export const createHiringCandidate = async (p: Record<string, unknown>) => (await api.post<{ id: number }>("/hiring/candidates", p)).data.id;
 export const fetchHiringCard = async (id: number) => (await api.get<HiringCard>(`/hiring/candidates/${id}`)).data;
 export const patchHiringCandidate = async (id: number, patch: Record<string, unknown>) => { await api.patch(`/hiring/candidates/${id}`, patch); };
@@ -4093,6 +4118,32 @@ export const addHiringComment = async (id: number, comment: string) => { await a
 export const fetchHiringDaily = async (from: string, to: string) =>
   (await api.get<{ rows: HiringDailyRow[]; totals: Omit<HiringDailyRow, "day"> & { attendancePct: number | null } }>("/hiring/daily", { params: { from, to } })).data;
 export const saveHiringDaily = async (day: string, p: { resumes?: number; coldSearch?: number }) => { await api.put(`/hiring/daily/${day}`, p); };
+
+// ── Найм, прохід 1a: вакансії, відмова, резерв, файли-докази ──
+export const fetchHiringVacancies = async (scope: "active" | "closed" | "all") =>
+  (await api.get<{ rows: HiringVacancyRow[] }>("/hiring/vacancies", { params: { scope } })).data.rows;
+export const createHiringVacancy = async (p: Record<string, unknown>) => (await api.post<{ id: number }>("/hiring/vacancies", p)).data.id;
+export const patchHiringVacancy = async (id: number, p: Record<string, unknown>) => { await api.patch(`/hiring/vacancies/${id}`, p); };
+export const setHiringCandidateVacancies = async (id: number, vacancyIds: number[]) => { await api.put(`/hiring/candidates/${id}/vacancies`, { vacancyIds }); };
+export const addHiringRefusalReason = async (p: { side: HiringRefusalSide; label: string }) => (await api.post<{ id: number }>("/hiring/refusal-reasons", p)).data.id;
+export const refuseHiringCandidate = async (id: number, p: { reasonId: number | null; note: string; reserve: boolean; blacklist: boolean }) => { await api.post(`/hiring/candidates/${id}/refuse`, p); };
+export const setHiringReserve = async (id: number, p: { on: boolean; note?: string }) => { await api.post(`/hiring/candidates/${id}/reserve`, p); };
+export async function uploadHiringFile(id: number, file: File): Promise<number> {
+  const dataBase64 = await new Promise<string>((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(new Error("Не вдалося прочитати файл"));
+    r.readAsDataURL(file);
+  });
+  return (await api.post<{ id: number }>(`/hiring/candidates/${id}/files`, { filename: file.name, dataBase64 })).data.id;
+}
+export const deleteHiringFile = async (id: number, fileId: number) => { await api.delete(`/hiring/candidates/${id}/files/${fileId}`); };
+export const restoreHiringFile = async (id: number, fileId: number) => { await api.post(`/hiring/candidates/${id}/files/${fileId}/restore`); };
+/** Файл тягнеться з токеном (звичайне посилання його не несе) і відкривається як blob. */
+export async function fetchHiringFileBlobUrl(id: number, fileId: number): Promise<string> {
+  const { data } = await api.get<Blob>(`/hiring/candidates/${id}/files/${fileId}`, { responseType: "blob" });
+  return URL.createObjectURL(data);
+}
 
 // 🎓 КУРСИ НАВЧАННЯ (редактор, 17.09.2026). Дзеркало `routes/training.ts` → GET /training/courses.
 export type TrainingAudience = "candidate" | "manager" | "all";

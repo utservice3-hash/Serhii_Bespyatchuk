@@ -108,3 +108,28 @@ textarea.hr-c { resize: vertical; min-height: 28px; }
   .hr-kv { grid-template-columns: 1fr; }
   .hr-daytitle { min-width: 0; }
 }
+
+/* ── прохід 1a ── */
+.hr-btn.dg { background: var(--danger); border-color: var(--danger); color: #fff; }
+.hr-rtabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 6px; }
+.hr-rtabs button { font-size: 12px; padding: 4px 10px; border-radius: var(--r-lg); border: 1px solid var(--border); background: var(--card-bg); color: var(--text); cursor: pointer; }
+.hr-rtabs button.on { background: var(--info-bg); color: var(--info); border-color: var(--info); }
+.hr-rlist { border: 1px solid var(--border); border-radius: var(--r-lg); max-height: 240px; overflow: auto; padding: 4px; }
+.hr-rgrp { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); padding: 6px 8px 2px; }
+.hr-ropt { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: var(--r-md); cursor: pointer; font-size: 13px; }
+.hr-ropt:hover { background: var(--surface-2, var(--bg)); } .hr-ropt.on { background: var(--info-bg); }
+.hr-chk2 { display: flex; gap: 8px; align-items: baseline; margin-top: 8px; font-size: 13px; } .hr-chk2.dim { opacity: .55; }
+.hr-chip { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; padding: 1px 8px; border-radius: var(--r-md); border: 1px solid var(--border-strong); margin: 0 4px 4px 0; white-space: nowrap; background: var(--card-bg); }
+.hr-chip.warn { border-color: var(--warn); background: var(--warn-bg); color: var(--warn); }
+.hr-chip .x { cursor: pointer; color: var(--text-muted); border: 0; background: none; padding: 0; font: inherit; } .hr-chip .x:hover { color: var(--danger); }
+.hr-msgs { display: flex; gap: 6px; flex-wrap: wrap; padding-top: 4px; }
+.hr-msg { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; text-decoration: none; border: 1px solid var(--border-strong); color: var(--text); }
+.hr-refbox { border-radius: var(--r-lg); padding: 8px 12px; border: 1px solid var(--border); }
+.hr-refbox.candidate { background: var(--warn-bg); } .hr-refbox.company { background: var(--danger-bg); }
+.hr-files { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.hr-file { border: 1px solid var(--border); border-radius: var(--r-lg); padding: 8px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.hr-file .fn { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.hr-seg2 { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--r-lg); overflow: hidden; }
+.hr-seg2 button { padding: 5px 10px; font-size: 12px; border: 0; background: var(--card-bg); color: var(--text); cursor: pointer; }
+.hr-seg2 button.on { background: var(--brand); color: #fff; }
+select.hr-c.novac { color: var(--warn); }
