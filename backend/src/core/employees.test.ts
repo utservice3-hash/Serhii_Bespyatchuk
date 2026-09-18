@@ -259,3 +259,31 @@ test("#567 ЖИВИЙ SQL: людина без акаунта — пароль �
     assert.ok((await s.c.query(`SELECT 1 FROM access_audit WHERE action = 'secret.reveal' AND target_id = $1`, [`e${maria}`])).rowCount, "🔴 показ не записано в журнал людини");
   } finally { await s.done(); }
 });
+
+/**
+ * #568 — ПОВТОРНИЙ ПРИЙОМ: людина двічі в аркуші (у «Укр NEW» таких 9) — один рядок у реєстрі, паролі з ОБОХ
+ * рядків у сейфі, «працює» бере гору над давнім звільненням. Дати «4/15/2024» і числом Excel читаються.
+ * 🧨 Червоніє, якщо другий рядок відкидати (паролі губляться) або старе звільнення перетирає поточний статус.
+ */
+test("#568 ЖИВИЙ SQL: повтор людини — обʼєднання з паролями обох рядків; дати US і Excel", async (t) => {
+  assert.equal(parseDate("4/15/2024"), "2024-04-15");
+  assert.equal(parseDate("45292"), "2024-01-01", "🔴 число Sheets читається не від 30.12.1899");
+  assert.equal(parseDate("38130"), "2004-05-23");
+  assert.equal(parseDate("5/3/24"), "2024-03-05", "🔴 день/місяць переплутано там, де обидва ≤ 12");
+  const s = await scratch(t); if (!s) return;
+  const emp = await import("./employees.js");
+  try {
+    const csv = [HEAD,
+      "Коваленко Олена Петрівна,Менеджер,,,,,,Mail-Now-1,,",
+      `Коваленко Олена Петрівна,Стажер,,+380501112233,,o.old,Kommo-Old-1,Mail-Old-1,,`,
+    ].join("\n");
+    const map = ["full_name", "position", "email", "phone", "dismissed_at", "secret:login:kommo", "secret:password:kommo", "secret:password:mail", "secret:card", "extra"];
+    const csv2 = csv.replace("o.old,Kommo-Old-1", "o.old,Kommo-Old-1").replace(",+380501112233,,", ",+380501112233,03.01.2023,");
+    const c = await emp.commitImport(s.db, KEY, s.ivan, csv2, map, "active");
+    assert.deepEqual([c.rows, c.duplicate, c.secretsCreated], [1, 1, 3], "🔴 другий рядок відкинуто разом із паролями");
+    const o = (await s.c.query(`SELECT status, position, phone FROM employees`)).rows;
+    assert.deepEqual(o, [{ status: "active", position: "Менеджер", phone: "+380501112233" }], "🔴 давнє звільнення перетерло поточний статус");
+    const labels = (await s.c.query(`SELECT service, label FROM employee_secrets ORDER BY service, id`)).rows.map((r) => `${r.service}:${r.label ?? ""}`);
+    assert.deepEqual(labels, ["kommo:", "mail:", "mail:рядок 3"], "🔴 пароль того самого сервісу з другого рядка не ліг окремо");
+  } finally { await s.done(); }
+});

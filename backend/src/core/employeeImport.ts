@@ -199,6 +199,12 @@ export function parseDate(v: string): string | null {
   if (m) { y = +m[1]; mo = +m[2]; d = +m[3]; }
   else if ((m = /^(\d{1,2})[./](\d{1,2})[./](\d{2}|\d{4})$/.exec(s))) {
     d = +m[1]; mo = +m[2]; y = +m[3]; if (y < 100) y += y > 40 ? 1900 : 2000;
+    // Google з англійською локаллю пише «4/15/2024» (місяць/день): якщо «місяць» > 12 — це американський порядок.
+    if (s.includes("/") && mo > 12 && d <= 12) [d, mo] = [mo, d];
+  } else if (/^\d{5}$/.test(s)) {
+    // Число Excel/Sheets: днів від 30.12.1899 (так експортуються клітинки з числовим форматом замість дати).
+    const dt = new Date(Date.UTC(1899, 11, 30) + Number(s) * 86_400_000);
+    y = dt.getUTCFullYear(); mo = dt.getUTCMonth() + 1; d = dt.getUTCDate();
   } else return null;
   const dt = new Date(Date.UTC(y, mo - 1, d));
   if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d || y < 1930 || y > 2100) return null;

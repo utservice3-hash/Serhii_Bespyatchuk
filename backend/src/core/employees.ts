@@ -82,8 +82,27 @@ async function plan(db: Db, csv: unknown, mapping: unknown, headerRowIn?: unknow
   const skipped = body.filter((r) => r.some((c) => c.trim() !== "")).length - built.length;
   const seenKeys = new Set<string>(), claimed = new Map<number, string>();
   const existingKeys = new Set((await db.query<{ import_key: string }>(`SELECT import_key FROM employees`)).rows.map((r) => r.import_key));
+  // Та сама людина двічі (повторний прийом, дубль рядка) — ОБʼЄДНУЄМО в перший рядок, а не відкидаємо:
+  // інакше паролі з другого рядка губляться. Якщо одна з появ без дати звільнення — людина працює зараз,
+  // і її поля (дати, посада) беруть гору; решта полів доповнює порожні. Секрети — усі; повтор сервісу
+  // отримує мітку «рядок N», щоб у сейфі лягли обидва.
+  const firstOf = new Map<string, PlainRow>();
+  function mergeInto(a: PlainRow, b: PlainRow) {
+    const bCurrent = !b.fields.dismissed_at && a.fields.dismissed_at;
+    for (const [k, v] of Object.entries(b.fields)) if (k !== "dismissed_at" && v != null && (bCurrent || a.fields[k] == null)) a.fields[k] = v;
+    // Звільнення: хоч одна поява без дати — людина працює; обидві з датою — пізніша.
+    const da = a.fields.dismissed_at, db = b.fields.dismissed_at;
+    a.fields.dismissed_at = !da || !db ? null : da > db ? da : db;
+    a.extra = { ...b.extra, ...a.extra };
+    for (const sec of b.secrets) {
+      const clash = a.secrets.some((x) => x.kind === sec.kind && x.service === sec.service && (x.label ?? "") === (sec.label ?? ""));
+      a.secrets.push(clash ? { ...sec, label: `${sec.label ? sec.label + " · " : ""}рядок ${b.line}` } : sec);
+    }
+    a.problems.push(...b.problems);
+  }
   function annotate(r: PlainRow): Annotated {
     const duplicate = seenKeys.has(r.key); seenKeys.add(r.key);
+    if (duplicate) mergeInto(firstOf.get(r.key)!, r); else firstOf.set(r.key, r);
     const m = duplicate ? { userId: null, account: null, how: "none" as const } : match(r, claimed);
     if (m.userId != null && !duplicate) claimed.set(m.userId, r.key);
     return { r, m, duplicate, isNew: !existingKeys.has(r.key) };
@@ -97,7 +116,7 @@ export async function previewImport(db: Db, csv: unknown, mapping: unknown, head
   const rows = p.rows.map(({ r, m, duplicate, isNew }) => ({
     line: r.line, name: r.full_name, position: r.fields.position ?? null, team: r.fields.team_label ?? null,
     state: duplicate ? "duplicate" : isNew ? "new" : "update",
-    account: m.account, match: m.how, matchNote: duplicate ? "повтор цієї ж людини у файлі — пропущено" : MATCH_NOTE[m.how],
+    account: m.account, match: m.how, matchNote: duplicate ? "повтор цієї ж людини — обʼєднано з першим рядком (паролі теж)" : MATCH_NOTE[m.how],
     secrets: r.secrets.length, secretsLost: 0, secretsNoAccount: m.userId == null && !duplicate ? r.secrets.length : 0, problems: r.problems,
   }));
   const t = (f: (x: (typeof rows)[number]) => boolean) => rows.filter(f).length;
