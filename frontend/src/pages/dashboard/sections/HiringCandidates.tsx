@@ -5,9 +5,10 @@ import {
   setHiringCandidateVacancies, setHiringReserve, uploadHiringFile, deleteHiringFile, restoreHiringFile, fetchHiringFileBlobUrl,
   type HiringMeta, type HiringCandidateRow, type HiringCard, type HiringStatus,
 } from "../../../api";
-import { dm, isClosedVacancy } from "../hiringView";
+import { dm, isClosedVacancy, todayKyiv } from "../hiringView";
 import { StatusDialog, StatusPill, RefusalDialog, type Toast } from "./HiringShared";
 import { TrainingAccessBlock } from "./HiringTraining";
+import { InterviewDialog } from "./HiringInterviewDialog";
 
 /**
  * 🗂 «КАНДИДАТИ» — база замість «Кандидати UA». Прохід 1a (за Хурмою): фільтри вакансії, резерву,
@@ -193,6 +194,7 @@ export function CandidateDrawer({ meta, id, toast, onClose, onChanged, onMetaSta
   const [err, setErr] = useState<string | null>(null);
   const [to, setTo] = useState<HiringStatus | null>(null);
   const [refusing, setRefusing] = useState(false);
+  const [booking, setBooking] = useState(false);
   const [note, setNote] = useState("");
   const [reserveNote, setReserveNote] = useState("");
   const [fileErr, setFileErr] = useState<string | null>(null);
@@ -352,6 +354,13 @@ export function CandidateDrawer({ meta, id, toast, onClose, onChanged, onMetaSta
                 </div>
               </div>
             )}
+            {edit && (
+              <div style={{ marginTop: 10 }}>
+                <button className="hr-btn" onClick={() => setBooking(true)}>📅 Призначити співбесіду</button>
+              </div>
+            )}
+            {booking && <InterviewDialog meta={meta} day={todayKyiv()} fixed={{ id, name: c.full_name || "кандидат" }} onClose={() => setBooking(false)}
+              onDone={(msg) => { setBooking(false); toast(msg); load(); onChanged(); }} />}
 
             <div className="hr-sect" style={{ padding: "14px 0 0", marginTop: 14 }}>
               <h4>Файли-докази</h4>

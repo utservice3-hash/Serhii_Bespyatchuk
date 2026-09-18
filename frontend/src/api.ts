@@ -4099,6 +4099,12 @@ export const fetchHiringSchedule = async (from: string, to: string) =>
   (await api.get<{ rows: HiringScheduleRow[] }>("/hiring/schedule", { params: { from, to } })).data.rows;
 export const createHiringInterview = async (p: { interviewDate: string; interviewTime?: string; responsible?: string }) =>
   (await api.post<{ id: number }>("/hiring/interviews", p)).data.id;
+/** «+ Співбесіда» з наявним (`candidateId`) або новим (`newCandidate`) кандидатом (18.09.2026). */
+export interface HiringCreatedInterview { id: number; candidateId: number | null; moved: boolean; repeat: boolean; status: HiringStatus | null }
+export const createHiringInterviewFor = async (p: {
+  interviewDate: string; interviewTime?: string; responsible?: string; candidateId?: number;
+  newCandidate?: { fullName: string; phone: string; vacancyId: number; source?: string; telegram?: string };
+}) => (await api.post<HiringCreatedInterview>("/hiring/interviews", p)).data;
 export const patchHiringInterview = async (id: number, patch: Record<string, unknown>) =>
   (await api.patch<{ candidateId: number | null; repeat?: { id: number; full_name: string; status: HiringStatus } }>(`/hiring/interviews/${id}`, patch)).data;
 export const deleteHiringInterview = async (id: number) => { await api.delete(`/hiring/interviews/${id}`); };

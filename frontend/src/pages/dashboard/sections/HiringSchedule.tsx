@@ -6,6 +6,7 @@ import {
 import { todayKyiv, nowKyivHM, addDays, mondayOf, longDate, dm, dowOf, isWeekend, LS, isClosedVacancy } from "../hiringView";
 import { StatusDialog, StatusPill, RefusalDialog, type Toast } from "./HiringShared";
 import { CandidateDrawer } from "./HiringCandidates";
+import { InterviewDialog, avatarTone, initials } from "./HiringInterviewDialog";
 
 /**
  * 📅 «ГРАФІК» — замість «Графік Іван». Пріоритет — зручність: людина заходить подивитись, що
@@ -23,6 +24,9 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
   const [statusFor, setStatusFor] = useState<{ row: HiringScheduleRow; to: HiringStatus } | null>(null);
   const [refuseFor, setRefuseFor] = useState<HiringScheduleRow | null>(null);
   const [focusId, setFocusId] = useState<number | null>(null);
+  // «Розклад» (картки на шкалі часу, макет v14) — типово; «Таблиця» — для масового внесення, як затверджував Іван 16.09.
+  const [view, setView] = useState<"agenda" | "sheet">(() => (LS.get("sview") === "sheet" ? "sheet" : "agenda"));
+  const [ivAt, setIvAt] = useState<string | null>(null);
 
   const weekFrom = mondayOf(day), weekTo = addDays(weekFrom, 6);
   const load = useCallback(() => {
@@ -55,14 +59,15 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
     } catch (e) { toast(hiringError(e), { error: true }); load(); }
   };
 
-  const add = async () => {
+  const nextTime = () => {
     const times = dayRows.map((r) => r.interview_time).filter(Boolean).sort() as string[];
-    let time = "10:00";
-    if (times.length) {
-      const [h, m] = times[times.length - 1].split(":").map(Number);
-      const t = Math.min(h * 60 + m + 30, 23 * 60 + 30);
-      time = `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
-    }
+    if (!times.length) return "10:00";
+    const [h, m] = times[times.length - 1].split(":").map(Number);
+    const t = Math.min(h * 60 + m + 30, 23 * 60 + 30);
+    return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+  };
+  const add = async () => {
+    const time = nextTime();
     try {
       const id = await createHiringInterview({ interviewDate: day, interviewTime: time, responsible: LS.get("responsible") ?? "" });
       setFocusId(id); load();
@@ -99,7 +104,13 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
         <button className="hr-nav" onClick={() => setDay(addDays(day, mode === "week" ? 7 : 1))} title="Вперед">›</button>
         <button className="hr-btn" onClick={() => setDay(today)} disabled={day === today}>Сьогодні</button>
         <input className="hr-inp" type="date" value={day} onChange={(e) => e.target.value && setDay(e.target.value)} />
-        <div className="hr-seg" style={{ marginLeft: "auto" }}>
+        {mode === "day" && (
+          <div className="hr-seg" style={{ marginLeft: "auto" }}>
+            <button className={view === "agenda" ? "on" : ""} onClick={() => { setView("agenda"); LS.set("sview", "agenda"); }}>Розклад</button>
+            <button className={view === "sheet" ? "on" : ""} onClick={() => { setView("sheet"); LS.set("sview", "sheet"); }}>Таблиця</button>
+          </div>
+        )}
+        <div className="hr-seg" style={mode === "day" ? undefined : { marginLeft: "auto" }}>
           <button className={mode === "day" ? "on" : ""} onClick={() => setMode("day")}>День</button>
           <button className={mode === "week" ? "on" : ""} onClick={() => setMode("week")}>Тиждень</button>
         </div>
@@ -131,6 +142,11 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
             </div>
           ))}
         </div>
+      ) : view === "agenda" ? (
+        <Agenda meta={meta} day={day} today={today} now={now} rows={dayRows} nextId={nextId} unmarked={unmarked}
+          tiles={{ total: dayRows.length, came, missed, open: dayRows.length - came - missed }}
+          onAttend={(r, v) => void save(r, { attended: v })} onStatus={(r, to) => (to === "refused" ? setRefuseFor(r) : setStatusFor({ row: r, to }))}
+          onOpen={(id) => setOpenId(id)} onAdd={(t) => setIvAt(t ?? nextTime())} />
       ) : (
         <div className="hr-card">
           <div className="hr-tiles">
@@ -218,7 +234,8 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
             </table>
           </div>
           <div style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid var(--border)", flexWrap: "wrap", alignItems: "center" }}>
-            <button className="hr-btn p" onClick={() => void add()}>+ Додати співбесіду</button>
+            <button className="hr-btn p" onClick={() => setIvAt(nextTime())}>+ Співбесіда з кандидатом</button>
+            <button className="hr-btn" onClick={() => void add()}>+ Порожній рядок</button>
             <span className="hr-muted">Новий рядок стає через 30 хв після останнього; час змінюється в клітинці. Зміна дати переносить рядок на інший день.</span>
           </div>
         </div>
@@ -227,6 +244,8 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
       <datalist id="hr-resp">{meta.responsibles.map((x) => <option key={x} value={x} />)}</datalist>
       <datalist id="hr-src">{meta.sources.map((x) => <option key={x} value={x} />)}</datalist>
 
+      {ivAt != null && <InterviewDialog meta={meta} day={day} time={ivAt} onClose={() => setIvAt(null)}
+        onDone={(msg) => { setIvAt(null); toast(msg); load(); onMetaStale(); }} />}
       {openId != null && <CandidateDrawer meta={meta} id={openId} toast={toast} onClose={() => setOpenId(null)} onChanged={load} onMetaStale={onMetaStale} />}
       {refuseFor && refuseFor.candidate_id && refuseFor.status && (
         <RefusalDialog meta={meta} candidateId={refuseFor.candidate_id} candidateName={refuseFor.full_name ?? ""} from={refuseFor.status} toast={toast}
@@ -237,6 +256,102 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
           teamId={statusFor.row.team_id} toast={toast} onClose={() => { setStatusFor(null); load(); }}
           onDone={() => { setStatusFor(null); load(); }} />
       )}
+    </div>
+  );
+}
+
+/** Посилання на месенджери з номера (і Telegram-ніка, якщо є) — як у картці кандидата. */
+function msgLinks(phone: string | null, telegram: string | null): [string, string][] {
+  const d = (phone ?? "").replace(/\D/g, ""), n = d.length === 10 && d[0] === "0" ? `38${d}` : d;
+  const tg = (telegram ?? "").trim(), user = tg.startsWith("@") ? tg.slice(1) : (tg.match(/t\.me\/([\w_]+)/) ?? [])[1];
+  const out: [string, string][] = [];
+  if (user) out.push(["Telegram", `https://t.me/${user}`]); else if (n.length >= 11) out.push(["Telegram", `https://t.me/+${n}`]);
+  if (n.length >= 11) { out.push(["Viber", `viber://chat?number=%2B${n}`]); out.push(["WhatsApp", `https://wa.me/${n}`]); }
+  return out;
+}
+const ST_COLOR: Partial<Record<HiringStatus, string>> = {
+  planned: "var(--info)", done: "var(--ok)", noshow: "var(--danger)", noanswer: "var(--warn)", lead: "#7c3aed",
+  candidate: "var(--ok)", training: "var(--ok)", manager: "var(--ok)", refused: "var(--text-muted)", black: "var(--text-muted)",
+};
+const toMin = (t: string) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+const fromMin = (x: number) => `${String(Math.floor(x / 60)).padStart(2, "0")}:${String(x % 60).padStart(2, "0")}`;
+
+/**
+ * 📅 «РОЗКЛАД» (макет v14, за мотивами Cal.com Bookings / Google Calendar): час ліворуч, картка праворуч,
+ * «✓ Прийшов / ✕ Не прийшов» однією кнопкою, лінія «зараз», вільні вікна з кнопкою призначення.
+ * Дані й дії — ті самі, що в таблиці (той самий `save` рядка графіка), тож звіт рахує однаково.
+ */
+function Agenda({ meta, day, today, now, rows, nextId, unmarked, tiles, onAttend, onStatus, onOpen, onAdd }: {
+  meta: HiringMeta; day: string; today: string; now: string; rows: HiringScheduleRow[]; nextId?: number;
+  unmarked: (r: HiringScheduleRow) => boolean; tiles: { total: number; came: number; missed: number; open: number };
+  onAttend: (r: HiringScheduleRow, v: boolean) => void; onStatus: (r: HiringScheduleRow, to: HiringStatus) => void;
+  onOpen: (id: number) => void; onAdd: (time?: string) => void;
+}) {
+  const out: React.ReactNode[] = [];
+  let nowShown = day !== today;
+  rows.forEach((r, i) => {
+    if (!nowShown && (r.interview_time ?? "99:99") > now) { out.push(<div key="now" className="ag-now">зараз {now}</div>); nowShown = true; }
+    const prev = rows[i - 1];
+    if (prev?.interview_time && r.interview_time && toMin(r.interview_time) - toMin(prev.interview_time) >= 60) {
+      const ft = fromMin(toMin(prev.interview_time) + 30);
+      out.push(<div key={`gap${r.id}`} />, <button key={`free${r.id}`} className="ag-free" onClick={() => onAdd(ft)}>+ вільне вікно з {ft} — призначити співбесіду</button>);
+    }
+    const unm = unmarked(r), vac = r.vacancies?.[0];
+    const next = r.status ? meta.transitions[r.status] ?? [] : [];
+    out.push(
+      <div key={`t${r.id}`} className="ag-t">{prev?.interview_time === r.interview_time ? null : <><b>{r.interview_time ?? "—"}</b><span>{r.responsible ?? ""}</span></>}</div>,
+      <div key={`c${r.id}`} className={`ag-c ${r.id === nextId ? "next" : ""}`} style={{ ["--st" as string]: r.attended === true ? "var(--ok)" : r.attended === false ? "var(--danger)" : unm ? "var(--warn)" : (r.status && ST_COLOR[r.status]) || "var(--border-strong)" }}>
+        <div className="ag-av" style={{ ["--av" as string]: avatarTone(r.full_name) }}>{initials(r.full_name)}</div>
+        <div className="ag-h">
+          {r.candidate_id ? <button className="nm" onClick={() => onOpen(r.candidate_id!)}>{r.full_name || "без імені"}</button> : <span className="nm hr-muted">кандидата не вказано</span>}
+          {r.id === nextId && <span className="hr-badge today">далі</span>}
+          {r.candidate_id && (vac ? <span className="chip vac">{vac.title}</span> : <span className="chip novac">без вакансії</span>)}
+          {r.source && <span className="chip">{r.source}</span>}
+        </div>
+        <div className="ag-r">
+          {r.attended === true ? <span className="emp-pill ok">✓ прийшов</span> : r.attended === false ? <span className="emp-pill" style={{ background: "var(--danger-bg)", color: "var(--danger)" }}>✕ не прийшов</span>
+            : unm ? <span className="emp-pill warn">не відмічено</span> : r.status ? <StatusPill meta={meta} status={r.status} /> : null}
+          {r.candidate_id && (
+            <div className="ag-acts">
+              {r.attended == null && <>
+                <button className="hr-btn xs came" onClick={() => onAttend(r, true)}>✓ Прийшов</button>
+                <button className="hr-btn xs miss" onClick={() => onAttend(r, false)}>✕ Не прийшов</button>
+              </>}
+              {r.attended != null && r.status && next.filter((s) => s !== "refused" && s !== "black").slice(0, 1).map((s) =>
+                <button key={s} className="hr-btn xs p" onClick={() => onStatus(r, s)}>→ {meta.statuses.find((x) => x.key === s)?.label ?? s}</button>)}
+              {r.status && next.includes("refused") && <button className="hr-btn xs" onClick={() => onStatus(r, "refused")}>Відмова…</button>}
+              <button className="hr-btn xs" title="Картка кандидата" onClick={() => onOpen(r.candidate_id!)}>⋯</button>
+            </div>
+          )}
+        </div>
+        <div className="ag-sub">
+          <span>{r.phone ? `📞 ${r.phone}` : "телефон не вказано"}</span>
+          {msgLinks(r.phone, r.telegram).map(([l, u]) => <a key={l} href={u} target="_blank" rel="noopener noreferrer">{l}</a>)}
+          {r.record_url && <a href={r.record_url} target="_blank" rel="noopener noreferrer">▶ запис</a>}
+          <span>призначено {r.assigned_on.slice(8, 10)}.{r.assigned_on.slice(5, 7)}</span>
+        </div>
+        {r.comment && <div className="ag-note">💬 {r.comment}</div>}
+      </div>,
+    );
+  });
+  if (!nowShown && rows.length) out.push(<div key="now-end" className="ag-now">зараз {now}</div>);
+  return (
+    <div className="hr-card">
+      <div className="hr-tiles">
+        <div className="hr-tile"><div className="lb"><span>Усього</span></div><div className="vl">{tiles.total}</div><div className="sb">співбесід на день</div></div>
+        <div className="hr-tile"><div className="lb"><span>Прийшли</span></div><div className="vl">{tiles.came}</div><div className="sb">позначка «прийшов»</div></div>
+        <div className="hr-tile"><div className="lb"><span>Не прийшли</span></div><div className="vl">{tiles.missed}</div><div className="sb">позначка «не прийшов»</div></div>
+        <div className="hr-tile"><div className="lb"><span>Не відмічено</span></div><div className="vl" style={{ color: rows.some(unmarked) ? "var(--warn)" : undefined }}>{tiles.open}</div><div className="sb">без позначки</div></div>
+      </div>
+      <div style={{ padding: "4px 16px 12px" }}>
+        {rows.length === 0 ? (
+          <div className="ag-empty">На {longDate(day)} співбесід немає. <button className="hr-btn p xs" onClick={() => onAdd("10:00")}>+ Співбесіда</button></div>
+        ) : <div className="ag">{out}</div>}
+      </div>
+      <div style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid var(--border)", flexWrap: "wrap", alignItems: "center" }}>
+        <button className="hr-btn p" onClick={() => onAdd()}>+ Співбесіда</button>
+        <span className="hr-muted">Кандидата можна обрати з бази або створити тут же. Позначка «прийшов» — однією кнопкою в картці. Для масового внесення — вигляд «Таблиця».</span>
+      </div>
     </div>
   );
 }
