@@ -48,12 +48,14 @@ export function guessTarget(header: string): string {
   if (CARDISH.test(h)) return "secret:card";
   // Друга пошта («gmail корпоративна») — окремий акаунт: пароль іде в «Інше» з назвою, адреса — «як є».
   if (/gmail/i.test(h) && /корпорат/i.test(h)) return PASSWORDISH.test(h) ? "secret:password:other" : "extra";
+  // «ПД - ИНН» в «Укр NEW»: значення виду «1234abcd» — схоже на пароль, не на ІПН. Лише в сейф.
+  if (/^пд(\s|-|$)/i.test(h)) return "secret:password:other";
   if (PASSWORDISH.test(h)) return `secret:password:${serviceOf(h)}`;
   if (LOGINISH.test(h) && serviceOf(h) !== "other") return `secret:login:${serviceOf(h)}`;
   const l = h.toLowerCase();
   // Службові поля Kommo й телефонії, логіни до сервісів поза списком — не секрет, зберігаємо як є.
   // Стоїть ДО телефону й дат: «Лінія в телефонії» — внутрішній номер, «Початок роботи» — година.
-  if (/id kommo|ответственный|відповідальний в kommo|тег акаунт|лінія|початок роботи|перша \d+|в якій команді був/.test(l)) return "extra";
+  if (/id kommo|ответственный|відповідальний в kommo|тег акаунт|лінія|початок роботи|перша \d+|в якій команді був|yaware|^пі$|кількість днів|^#ref!$/.test(l)) return "extra";
   if (LOGINISH.test(h)) return "extra";
   if (/^піб$|^фіо$|^п\.?і\.?б|прізвище.*ім|^співробітник$/.test(l)) return "full_name";
   if (/^прізвище$/.test(l)) return "last_name";
@@ -105,7 +107,8 @@ export function headersAt(table: string[][], row: number): string[] {
     const g = guessTarget(h);
     const vague = g === "skip" || g.endsWith(":other") || bareLogin(h);
     const both = `${group[i]} ${h}`;
-    return vague && guessTarget(both) !== g ? both : h;
+    const gb = guessTarget(both);
+    return vague && gb !== g && gb !== "skip" ? both : h;
   });
 }
 
@@ -236,7 +239,8 @@ export function buildRows(table: string[][], mapping: string[], headerRow = 0): 
     mapping.forEach((t, i) => {
       const v = get(i);
       if (!v || t === "skip") return;
-      if (t === "extra") { extra[headers[i]] = v; return; }
+      // Дві колонки з однаковою назвою (два «#REF!») не перетирають одна одну.
+      if (t === "extra") { extra[headers.indexOf(headers[i]) === i ? headers[i] : `${headers[i]} (колонка ${i + 1})`] = v; return; }
       if (t.startsWith("secret:login:")) { logins.set(t.slice(13), v); return; }
       if (t === "secret:card") {
         const found = cardsIn(v);

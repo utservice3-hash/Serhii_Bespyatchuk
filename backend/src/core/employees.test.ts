@@ -197,8 +197,12 @@ test("#565 АРКУШ: рядок заголовків знаходиться с
   // Пари «сервіс → Пароль» (так побудовано «Укр NEW»): логін у колонці сервісу, пароль праворуч.
   const pairs = headersAt([["ПІБ", "Пошта", "Пароль", "Kommo СРМ", "Пароль", "UTS", "Пароль", "Лінія в телефонії", "Замітки", "ПІ"]], 0);
   assert.deepEqual(pairs.map(guessTarget), ["full_name", "email", "secret:password:mail", "secret:login:kommo", "secret:password:kommo",
-    "extra", "secret:password:other", "extra", "secret:password:other", "skip"], "🔴 пари «сервіс → Пароль» розпізнано не так: " + pairs.join(" | "));
+    "extra", "secret:password:other", "extra", "secret:password:other", "extra"], "🔴 пари «сервіс → Пароль» розпізнано не так: " + pairs.join(" | "));
   assert.throws(() => validateMapping(pairs, pairs.map((x) => (x === "Замітки" ? "note" : guessTarget(x)))), /схожа на пароль/, "🔴 замітки (з паролями всередині) пустили в реєстр текстом");
+  // Решта колонок «Укр NEW» (прохання Романа «перероби»): нічого не губиться, «ПД - ИНН» — лише в сейф.
+  assert.deepEqual(["Yaware", "Кількість днів працює", "#REF!", "ПД - ИНН"].map(guessTarget), ["extra", "extra", "extra", "secret:password:other"]);
+  const twoRef = buildRows([["ПІБ", "#REF!", "#REF!"], ["Коваленко Олена", "1", "2"]], ["full_name", "extra", "extra"]);
+  assert.deepEqual(twoRef[0].extra, { "#REF!": "1", "#REF! (колонка 3)": "2" }, "🔴 дві колонки з однаковою назвою перетерли одна одну");
 });
 
 /**
