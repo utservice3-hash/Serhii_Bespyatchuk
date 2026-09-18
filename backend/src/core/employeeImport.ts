@@ -29,8 +29,9 @@ const SERVICE_WORDS: [string, RegExp][] = [
   ["mail", /пошт|mail|gmail|e-?mail|ukr\.net/i],
 ];
 
-export const SECRETISH = /парол|pass|pwd|пін\b|pin\b|cvv|cvc|карт|card|iban|рахун|secret|токен|token/i;
-const PASSWORDISH = /парол|pass|pwd|пін\b|pin\b|secret|токен|token/i;
+// «Замітки» — у таблиці «UTS Співробітники УКР» 8 з 11 заміток містять логін із паролем (заміряно 18.09.2026).
+export const SECRETISH = /парол|pass|pwd|пін\b|pin\b|cvv|cvc|карт|card|iban|рахун|secret|токен|token|замітк/i;
+const PASSWORDISH = /парол|pass|pwd|пін\b|pin\b|secret|токен|token|замітк/i;
 const CARDISH = /карт|card|iban|рахун/i;
 const LOGINISH = /логін|login|user|юзер|акаунт|account/i;
 
@@ -45,10 +46,16 @@ export function guessTarget(header: string): string {
   const h = header.trim();
   if (!h) return "skip";
   if (CARDISH.test(h)) return "secret:card";
+  // Друга пошта («gmail корпоративна») — окремий акаунт: пароль іде в «Інше» з назвою, адреса — «як є».
+  if (/gmail/i.test(h) && /корпорат/i.test(h)) return PASSWORDISH.test(h) ? "secret:password:other" : "extra";
   if (PASSWORDISH.test(h)) return `secret:password:${serviceOf(h)}`;
   if (LOGINISH.test(h) && serviceOf(h) !== "other") return `secret:login:${serviceOf(h)}`;
   const l = h.toLowerCase();
-  if (/^піб$|^фіо$|^п\.?і\.?б|прізвище.*ім|^співробітник$|^пі$/.test(l)) return "full_name";
+  // Службові поля Kommo й телефонії, логіни до сервісів поза списком — не секрет, зберігаємо як є.
+  // Стоїть ДО телефону й дат: «Лінія в телефонії» — внутрішній номер, «Початок роботи» — година.
+  if (/id kommo|ответственный|відповідальний в kommo|тег акаунт|лінія|початок роботи|перша \d+|в якій команді був/.test(l)) return "extra";
+  if (LOGINISH.test(h)) return "extra";
+  if (/^піб$|^фіо$|^п\.?і\.?б|прізвище.*ім|^співробітник$/.test(l)) return "full_name";
   if (/^прізвище$/.test(l)) return "last_name";
   if (/^ім[ʼ'’`]?я$|^имя$/.test(l)) return "first_name";
   if (/по.?батькові/.test(l)) return "middle_name";
@@ -83,10 +90,20 @@ export function headersAt(table: string[][], row: number): string[] {
   const up = row > 0 ? (table[row - 1] ?? []).map(normHeader) : [];
   let carry = "";
   const group = own.map((_, i) => (up[i] ? (carry = up[i]) : carry));
-  return own.map((h, i) => {
-    if (!h || !group[i]) return h;
+  // Пари «сервіс → Пароль»: у колонці «Kommo СРМ» лежить логін, праворуч «Пароль» — пароль до нього.
+  // «Логін | Пароль» без назви сервісу — сервіс дасть поверх вище, тут не склеюємо.
+  const bare = (x: string) => /^пароль$/i.test(x);
+  const bareLogin = (x: string) => /^(логін|login)$/i.test(x);
+  const paired = own.map((h, i) => {
+    if (bareLogin(h) || (bare(h) && bareLogin(own[i - 1] ?? ""))) return h;
+    if (bare(h) && i > 0 && own[i - 1] && !bare(own[i - 1])) return `${own[i - 1]} Пароль`;
+    if (h && bare(own[i + 1] ?? "") && !PASSWORDISH.test(h) && serviceOf(h) !== "mail") return `${h} логін`;
+    return h;
+  });
+  return paired.map((h, i) => {
+    if (!h || !group[i] || h !== own[i]) return h;
     const g = guessTarget(h);
-    const vague = g === "skip" || g.endsWith(":other");
+    const vague = g === "skip" || g.endsWith(":other") || bareLogin(h);
     const both = `${group[i]} ${h}`;
     return vague && guessTarget(both) !== g ? both : h;
   });
@@ -224,7 +241,8 @@ export function buildRows(table: string[][], mapping: string[], headerRow = 0): 
       }
       if (t.startsWith("secret:password:")) {
         const service = t.slice(16);
-        secrets.push({ kind: "password", service, label: service === "other" ? headers[i].slice(0, 80) : null, login: null, value: v });
+        const label = headers[i].replace(/\s*пароль\s*/gi, " ").replace(/\s+/g, " ").trim() || headers[i];
+        secrets.push({ kind: "password", service, label: service === "other" ? label.slice(0, 80) : null, login: null, value: v });
         return;
       }
       f[t] = v;

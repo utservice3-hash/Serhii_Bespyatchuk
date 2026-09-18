@@ -194,6 +194,11 @@ test("#565 АРКУШ: рядок заголовків знаходиться с
   assert.deepEqual(o.secrets.map((x) => [x.kind, x.service, x.label, x.login]),
     [["card", "card", null, null], ["card", "card", "картка 2", null], ["password", "kommo", null, "o.kovalenko"]], "🔴 друга картка загубилась або пароль без логіна");
   assert.throws(() => validateMapping(h, h.map((x, i) => (i === 0 ? "extra" : guessTarget(x)))), /без назви/, "🔴 колонку без назви пустили в «як є»");
+  // Пари «сервіс → Пароль» (так побудовано «Укр NEW»): логін у колонці сервісу, пароль праворуч.
+  const pairs = headersAt([["ПІБ", "Пошта", "Пароль", "Kommo СРМ", "Пароль", "UTS", "Пароль", "Лінія в телефонії", "Замітки", "ПІ"]], 0);
+  assert.deepEqual(pairs.map(guessTarget), ["full_name", "email", "secret:password:mail", "secret:login:kommo", "secret:password:kommo",
+    "extra", "secret:password:other", "extra", "secret:password:other", "skip"], "🔴 пари «сервіс → Пароль» розпізнано не так: " + pairs.join(" | "));
+  assert.throws(() => validateMapping(pairs, pairs.map((x) => (x === "Замітки" ? "note" : guessTarget(x)))), /схожа на пароль/, "🔴 замітки (з паролями всередині) пустили в реєстр текстом");
 });
 
 /**
