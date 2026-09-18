@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  fetchEmployees, previewEmployeeImport, commitEmployeeImport, hiringError,
-  type EmployeeRow, type ImportPreview,
+  fetchEmployees, previewEmployeeImport, commitEmployeeImport, updateEmployee, fetchSecretsStatus, hiringError,
+  type EmployeeRow, type ImportPreview, type SecretsStatus, type EmployeePatch,
 } from "../../../api";
 import type { Toast } from "./HiringShared";
+import { StatusBar, VaultPanel } from "./HiringSecrets";
 
 /**
- * 🗂 «НАЙМ → СПІВРОБІТНИКИ» — реєстр і імпорт «UTS Співробітники УКР» (18.09.2026, задача №3898).
+ * 🗂 «НАЙМ → СПІВРОБІТНИКИ» — реєстр, доступи й імпорт «UTS Співробітники УКР» (18.09.2026, задача №3898).
+ * «Доступи» злиті сюди: картка людини має розділи «Профіль» (редагування, зміна команди) і «Доступи» (сейф).
  *
  * Вкладку видно тим самим пʼятьом, що й «Доступи» (право `view_employee_secrets`): імпорт кладе
  * паролі в сейф. Таблицю читає СЕРВЕР: сюди приходять заголовки, лічильники й імена, але жодного
@@ -32,70 +34,210 @@ const SECRET: [string, string][] = [
 ];
 const d = (iso: string | null) => (iso ? iso.split("-").reverse().join(".") : null);
 
+const TEAM_TONES = ["#1d4ed8", "#047857", "#b45309", "#7c3aed", "#be185d", "#0e7490", "#4d7c0f", "#9f1239"];
+const teamTone = (t: string) => TEAM_TONES[[...t].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) >>> 0, 7) % TEAM_TONES.length];
+const teamName = (t: string | null) => (t == null ? null : /^\d+$/.test(t) ? `Команда ${t}` : t);
+const daysSince = (iso: string | null) => (iso ? Math.floor((Date.now() - new Date(`${iso}T00:00:00`).getTime()) / 86_400_000) : null);
+const tenure = (from: string | null, to: string | null) => {
+  if (!from) return null;
+  const days = Math.max(0, Math.floor(((to ? new Date(`${to}T00:00:00`) : new Date()).getTime() - new Date(`${from}T00:00:00`).getTime()) / 86_400_000));
+  return days < 60 ? `${days} дн.` : days < 730 ? `${Math.round(days / 30.4)} міс.` : `${(days / 365).toFixed(1).replace(".", ",")} р.`;
+};
+const bdaySoon = (iso: string | null) => {
+  if (!iso) return false;
+  const [, m, d] = iso.split("-").map(Number), now = new Date();
+  let next = new Date(now.getFullYear(), m - 1, d);
+  if (next.getTime() < new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()) next = new Date(now.getFullYear() + 1, m - 1, d);
+  return (next.getTime() - now.getTime()) / 86_400_000 <= 7;
+};
+type Extra = "all" | "new" | "noacc" | "nosec" | "bday";
+
 export function HiringEmployees({ toast }: { toast: Toast }) {
   const [rows, setRows] = useState<EmployeeRow[] | null>(null);
+  const [teams, setTeams] = useState<string[]>([]);
+  const [status, setStatus] = useState<SecretsStatus | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [view, setView] = useState<"active" | "dismissed" | "all">("active");
+  const [team, setTeam] = useState<string>("");
+  const [extra, setExtra] = useState<Extra>("all");
   const [importing, setImporting] = useState(false);
-  const load = useCallback(() => { fetchEmployees().then(setRows).catch((e) => setErr(hiringError(e))); }, []);
+  const [open, setOpen] = useState<{ id: number; tab: "profile" | "access" } | null>(null);
+  const load = useCallback(() => {
+    fetchEmployees().then((r) => { setRows(r.rows); setTeams(r.teams); }).catch((e) => setErr(hiringError(e)));
+    fetchSecretsStatus().then(setStatus).catch(() => setStatus(null));
+  }, []);
   useEffect(load, [load]);
 
-  const shown = useMemo(() => (rows ?? []).filter((r) => (view === "all" || r.status === view)
-    && (!q.trim() || `${r.full_name} ${r.position ?? ""} ${r.team_label ?? ""} ${r.phone ?? ""} ${r.email ?? ""}`.toLowerCase().includes(q.trim().toLowerCase()))), [rows, q, view]);
-  if (err) return <div className="hr-card"><div className="hr-sect" style={{ border: 0 }}><b>Реєстр недоступний.</b> <span className="hr-muted">{err}</span></div></div>;
+  const inView = useMemo(() => (rows ?? []).filter((r) => view === "all" || r.status === view), [rows, view]);
+  const shown = useMemo(() => inView.filter((r) => (!team || (team === "—" ? !r.team_label : r.team_label === team))
+    && (extra === "all" || (extra === "new" && (daysSince(r.hired_at) ?? 999) <= 30) || (extra === "noacc" && r.user_id == null)
+      || (extra === "nosec" && r.secrets === 0) || (extra === "bday" && bdaySoon(r.birth_date)))
+    && (!q.trim() || `${r.full_name} ${r.position ?? ""} ${r.team_label ?? ""} ${r.phone ?? ""} ${r.email ?? ""}`.toLowerCase().includes(q.trim().toLowerCase()))),
+  [inView, team, extra, q]);
+  const teamOptions = useMemo(() => [...new Set(inView.map((r) => r.team_label).filter((t): t is string => !!t))].sort((a, b) => a.localeCompare(b, "uk", { numeric: true })), [inView]);
+  if (err) return <div className="chart-card"><b>Реєстр недоступний.</b> <span className="hr-muted">{err}</span></div>;
   if (!rows) return <p className="loading-text">Завантаження…</p>;
   const active = rows.filter((r) => r.status === "active");
-  const noAccount = active.filter((r) => r.user_id == null).length;
+  const newbies = active.filter((r) => (daysSince(r.hired_at) ?? 999) <= 30).length;
+  const yearAgo = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10);
+  const leftYear = rows.filter((r) => r.status === "dismissed" && (r.dismissed_at ?? "") >= yearAgo).length;
+  const openRow = open ? rows.find((r) => r.id === open.id) ?? null : null;
 
   return (
     <>
-      <div className="hr-card">
-        <div className="hd">
-          <div><h3>Співробітники</h3><div className="hr-muted">Реєстр людей компанії — з акаунтом дашборда чи без. Паролі й картки — у «Доступах», тут лише скільки їх.</div></div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <input className="hr-inp" placeholder="Пошук: ПІБ, посада, телефон" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Пошук у реєстрі" style={{ minWidth: 220 }} />
-            <button className="hr-btn solid" onClick={() => setImporting(true)}>Імпорт з таблиці</button>
+      {status && <StatusBar status={status} onChanged={load} toast={toast} />}
+      <div className="kpi-grid">
+        <div className="kpi-card"><div className="kpi-label">Працюють</div><div className="kpi-value">{active.length}</div><div className="hr-muted">нових за 30 днів: {newbies}</div></div>
+        <div className="kpi-card"><div className="kpi-label">Звільнено за рік</div><div className="kpi-value">{leftYear}</div><div className="hr-muted">усього в архіві: {rows.length - active.length}</div></div>
+        <div className="kpi-card"><div className="kpi-label">Без акаунта в дашборді</div><div className="kpi-value" style={{ color: active.some((r) => r.user_id == null) ? "var(--warn)" : undefined }}>{active.filter((r) => r.user_id == null).length}</div><div className="hr-muted">серед тих, хто працює</div></div>
+        <div className="kpi-card"><div className="kpi-label">Доступів у сейфі</div><div className="kpi-value">{rows.reduce((a, r) => a + r.secrets, 0)}</div><div className="hr-muted">працюють без жодного: {active.filter((r) => r.secrets === 0).length}</div></div>
+      </div>
+      <div className="chart-card" style={{ padding: 0, overflow: "hidden" }}>
+        <div className="emp-bar">
+          <div className="hr-seg2">
+            {([["active", `Працюють · ${active.length}`], ["dismissed", `Звільнені · ${rows.length - active.length}`], ["all", "Усі"]] as const).map(([k, l]) =>
+              <button key={k} className={view === k ? "on" : ""} onClick={() => { setView(k); setTeam(""); }}>{l}</button>)}
           </div>
-        </div>
-        <div className="hr-tiles" style={{ gridTemplateColumns: "repeat(3, minmax(0,1fr))" }}>
-          <div className="hr-tile"><div className="lb">Працюють</div><div className="vl">{active.length}</div><div className="sb">без акаунта в дашборді: {noAccount}</div></div>
-          <div className="hr-tile"><div className="lb">Звільнені</div><div className="vl">{rows.length - active.length}</div><div className="sb">з таблиці «Звільнені»</div></div>
-          <div className="hr-tile"><div className="lb">Записів у сейфі</div><div className="vl">{rows.reduce((a, r) => a + r.secrets, 0)}</div><div className="sb">паролі й картки в «Доступах»</div></div>
-        </div>
-        <div className="hr-seg2" style={{ margin: "0 16px 10px" }}>
-          {([["active", "Працюють"], ["dismissed", "Звільнені"], ["all", "Усі"]] as const).map(([k, l]) =>
-            <button key={k} className={view === k ? "on" : ""} onClick={() => setView(k)}>{l}</button>)}
+          <select className="hr-inp" value={team} onChange={(e) => setTeam(e.target.value)} aria-label="Команда">
+            <option value="">Усі команди</option>
+            {teamOptions.map((t) => <option key={t} value={t}>{teamName(t)}</option>)}
+            <option value="—">Без команди</option>
+          </select>
+          <select className="hr-inp" value={extra} onChange={(e) => setExtra(e.target.value as Extra)} aria-label="Відбір">
+            <option value="all">Усі люди</option>
+            <option value="new">Нові (до 30 днів)</option>
+            <option value="bday">День народження за тиждень</option>
+            <option value="noacc">Без акаунта в дашборді</option>
+            <option value="nosec">Без доступів у сейфі</option>
+          </select>
+          <input className="hr-inp" placeholder="Пошук: ПІБ, посада, телефон" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Пошук у реєстрі" style={{ flex: "1 1 200px" }} />
+          <button className="hr-btn" onClick={() => setImporting(true)}>Імпорт з таблиці</button>
         </div>
         {rows.length === 0 ? (
-          <div className="hr-sect" style={{ border: 0 }}>
-            <b>Реєстр порожній.</b> <span className="hr-muted">Натисніть «Імпорт з таблиці» і покладіть CSV з аркуша «Укр NEW», потім — з «Звільнені 25».</span>
-          </div>
+          <div style={{ padding: 16 }}><b>Реєстр порожній.</b> <span className="hr-muted">Натисніть «Імпорт з таблиці» і покладіть CSV з аркуша «Укр NEW».</span></div>
         ) : (
           <div className="hr-tw">
-            <table className="hr-table">
-              <thead><tr><th>ПІБ</th><th>Посада</th><th>Команда</th><th>Телефон</th><th>{view === "dismissed" ? "Звільнено" : "Прийнято"}</th><th>Акаунт</th><th className="num">У сейфі</th></tr></thead>
+            <table className="data-table emp-table">
+              <thead><tr><th>Співробітник</th><th>Команда</th><th>Телефон</th><th>{view === "dismissed" ? "Звільнено" : "Прийнято"}</th><th>Стаж</th><th>Акаунт</th><th className="num">Доступи</th></tr></thead>
               <tbody>
-                {shown.map((r) => (
-                  <tr key={r.id}>
-                    <td><b>{r.full_name}</b>{r.email && <div className="hr-muted">{r.email}</div>}</td>
-                    <td>{r.position ?? <span className="hr-muted">—</span>}</td>
-                    <td>{r.team_label ?? <span className="hr-muted">—</span>}</td>
-                    <td>{r.phone ?? <span className="hr-muted">—</span>}</td>
-                    <td>{(r.status === "dismissed" ? d(r.dismissed_at) : d(r.hired_at)) ?? <span className="hr-muted">не вказано</span>}
-                      {r.status === "dismissed" && r.dismiss_reason && <div className="hr-muted">{r.dismiss_reason}</div>}</td>
-                    <td>{r.user_id != null ? <>{r.account_name}{r.account_active === false && <span className="hr-muted"> · вимкнено</span>}</> : <span className="hr-muted">немає</span>}</td>
-                    <td className="num">{r.secrets || <span className="hr-muted">0</span>}</td>
-                  </tr>
-                ))}
+                {shown.map((r) => {
+                  const fresh = r.status === "active" && (daysSince(r.hired_at) ?? 999) <= 30;
+                  return (
+                    <tr key={r.id} className={r.status === "dismissed" ? "off" : ""} onClick={() => setOpen({ id: r.id, tab: "profile" })}>
+                      <td>
+                        <b>{r.full_name}</b>
+                        {fresh && <span className="emp-pill info">новий</span>}
+                        {bdaySoon(r.birth_date) && <span className="emp-pill warn" title={`День народження ${r.birth_date?.slice(5).split("-").reverse().join(".")}`}>🎂</span>}
+                        <div className="hr-muted">{r.position ?? "посада не вказана"}</div>
+                      </td>
+                      <td>{r.team_label ? <span className="emp-team" style={{ ["--t" as string]: teamTone(r.team_label) }}>{teamName(r.team_label)}</span> : <span className="hr-muted">—</span>}</td>
+                      <td>{r.phone ?? <span className={r.status === "active" ? "emp-miss" : "hr-muted"}>немає</span>}</td>
+                      <td>{(r.status === "dismissed" ? d(r.dismissed_at) : d(r.hired_at)) ?? <span className="hr-muted">—</span>}
+                        {r.status === "dismissed" && r.dismiss_reason && <div className="hr-muted">{r.dismiss_reason}</div>}</td>
+                      <td>{tenure(r.hired_at, r.status === "dismissed" ? r.dismissed_at : null) ?? <span className="hr-muted">—</span>}</td>
+                      <td>{r.user_id != null ? <span className="emp-pill ok">✓ {r.account_active === false ? "вимкнено" : "є"}</span>
+                        : r.status === "active" ? <span className="emp-pill warn">немає</span> : <span className="hr-muted">—</span>}</td>
+                      <td className="num">
+                        <button className={`emp-vault ${r.secrets === 0 && r.status === "active" ? "empty" : ""}`} title="Відкрити доступи"
+                          onClick={(e) => { e.stopPropagation(); setOpen({ id: r.id, tab: "access" }); }}>🔐 {r.secrets}</button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
+            {shown.length === 0 && <div className="hr-muted" style={{ padding: 16 }}>Нікого не знайдено — змініть фільтри.</div>}
           </div>
         )}
       </div>
+      {openRow && <EmployeeDrawer row={openRow} tab={open!.tab} teams={teams} status={status} toast={toast}
+        onTab={(t) => setOpen({ id: openRow.id, tab: t })} onClose={() => setOpen(null)} onSaved={load} />}
       {importing && <ImportDialog onClose={() => setImporting(false)} onDone={(msg) => { setImporting(false); toast(msg); load(); }} />}
     </>
   );
+}
+
+const FIELDS: [keyof EmployeePatch, string, "text" | "date" | "team" | "status"][] = [
+  ["full_name", "ПІБ", "text"], ["position", "Посада", "text"], ["team_label", "Команда", "team"], ["status", "Статус", "status"],
+  ["phone", "Телефон", "text"], ["email", "Пошта", "text"], ["telegram", "Telegram", "text"], ["birth_date", "Дата народження", "date"],
+  ["hired_at", "Дата прийому", "date"], ["dismissed_at", "Дата звільнення", "date"], ["dismiss_reason", "Причина звільнення", "text"], ["note", "Примітка", "text"],
+];
+
+function EmployeeDrawer({ row, tab, teams, status, toast, onTab, onClose, onSaved }: {
+  row: EmployeeRow; tab: "profile" | "access"; teams: string[]; status: SecretsStatus | null; toast: Toast;
+  onTab: (t: "profile" | "access") => void; onClose: () => void; onSaved: () => void;
+}) {
+  const init = useMemo(() => Object.fromEntries(FIELDS.map(([k]) => [k, (row[k] as string | null) ?? ""])) as Record<string, string>, [row]);
+  const [form, setForm] = useState(init);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  useEffect(() => { setForm(init); setMsg(null); }, [init]);
+  const dirty = FIELDS.filter(([k]) => form[k] !== init[k]).map(([k]) => k);
+  const save = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const patch = Object.fromEntries(dirty.map((k) => [k, form[k] === "" ? null : form[k]])) as EmployeePatch;
+      const changed = await updateEmployee(row.id, patch);
+      toast(changed.length ? `Збережено: ${row.full_name}` : "Нічого не змінилось");
+      onSaved();
+    } catch (e) { setMsg(hiringError(e)); }
+    setBusy(false);
+  };
+  const extras = Object.entries(row.extra ?? {});
+  return createPortal(
+    <div className="hr-overlay" onClick={onClose}>
+      <div className="hr-drawer emp-drawer" role="dialog" aria-label={`Співробітник: ${row.full_name}`} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>{row.full_name}</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
+              <span className={`emp-pill ${row.status === "active" ? "ok" : "mute"}`}>{row.status === "active" ? "працює" : "звільнений"}</span>
+              {row.team_label && <span className="emp-team" style={{ ["--t" as string]: teamTone(row.team_label) }}>{teamName(row.team_label)}</span>}
+              {row.user_id != null ? <span className="emp-pill ok">акаунт: {row.account_name}</span> : <span className="emp-pill warn">без акаунта в дашборді</span>}
+            </div>
+          </div>
+          <button className="hr-btn" onClick={onClose}>Закрити</button>
+        </div>
+        <div className="hr-seg2" style={{ margin: "14px 0 4px" }}>
+          <button className={tab === "profile" ? "on" : ""} onClick={() => onTab("profile")}>Профіль</button>
+          <button className={tab === "access" ? "on" : ""} onClick={() => onTab("access")}>🔐 Доступи · {row.secrets}</button>
+        </div>
+        {tab === "profile" ? (
+          <>
+            <div className="emp-form">
+              {FIELDS.map(([k, label, kind]) => (
+                <label key={k} className={k === "note" || k === "dismiss_reason" ? "wide" : ""}>
+                  <span>{label}</span>
+                  {kind === "status" ? (
+                    <select className="hr-inp" value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value, ...(e.target.value === "active" ? { dismissed_at: "" } : {}) })}>
+                      <option value="active">працює</option><option value="dismissed">звільнений</option>
+                    </select>
+                  ) : (
+                    <input className="hr-inp" type={kind === "date" ? "date" : "text"} value={form[k]} list={kind === "team" ? "emp-teams" : undefined}
+                      onChange={(e) => setForm({ ...form, [k]: e.target.value, ...(k === "dismissed_at" && e.target.value ? { status: "dismissed" } : {}) })} />
+                  )}
+                </label>
+              ))}
+              <datalist id="emp-teams">{teams.map((t) => <option key={t} value={t}>{teamName(t)}</option>)}</datalist>
+            </div>
+            {msg && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 8 }}>{msg}</div>}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+              <button className="hr-btn" disabled={!dirty.length || busy} onClick={() => setForm(init)}>Скасувати зміни</button>
+              <button className="hr-btn p" disabled={!dirty.length || busy} onClick={() => void save()}>{busy ? "Зберігаю…" : dirty.length ? `Зберегти (${dirty.length})` : "Зберегти"}</button>
+            </div>
+            {extras.length > 0 && (
+              <div className="hr-sect" style={{ padding: "14px 0 0", marginTop: 14 }}>
+                <h4>З таблиці «UTS Співробітники УКР»</h4>
+                <dl className="emp-extra">{extras.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>
+              </div>
+            )}
+          </>
+        ) : status ? (
+          <VaultPanel id={row.ref} status={status} toast={toast} onStatus={onSaved} />
+        ) : <p className="hr-muted">Сейф недоступний.</p>}
+      </div>
+    </div>, document.body);
 }
 
 function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: (msg: string) => void }) {

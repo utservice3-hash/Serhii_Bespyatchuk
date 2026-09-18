@@ -167,3 +167,36 @@ select.hr-c.novac { color: var(--warn); }
 .sv-count { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--warn); }
 .sv-code { width: 100%; box-sizing: border-box; font: 600 22px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .3em; text-align: center; margin-top: 10px; }
 @media (max-width: 560px) { .sv-list li { grid-template-columns: 30px minmax(0, 1fr); } .sv-acts { grid-column: 2; justify-content: flex-start; max-width: none; } }
+
+/* 🗂 «Співробітники» (реєстр + доступи в одній вкладці, 18.09.2026) — на токенах дашборду. */
+.emp-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.emp-table { font-size: 13.5px; }
+.emp-table th { padding: 10px 12px; white-space: nowrap; }
+.emp-table td { padding: 10px 12px; vertical-align: top; }
+.emp-table tbody tr { cursor: pointer; transition: background .12s; }
+.emp-table tbody tr:hover { background: var(--info-bg); }
+.emp-table tbody tr.off { color: var(--text-muted); }
+.emp-table tbody tr.off b { font-weight: 600; }
+.emp-table .num { text-align: right; }
+.emp-pill { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: var(--r-pill); font-size: 11.5px; font-weight: 600; line-height: 18px; white-space: nowrap; vertical-align: 1px; }
+.emp-pill:first-child { margin-left: 0; }
+.emp-pill.ok { background: var(--ok-bg); color: var(--ok); }
+.emp-pill.warn { background: var(--warn-bg); color: var(--warn); }
+.emp-pill.info { background: var(--info-bg); color: var(--info); }
+.emp-pill.mute { background: var(--bg); color: var(--text-muted); border: 1px solid var(--border); }
+.emp-team { display: inline-block; padding: 1px 8px; border-radius: var(--r-pill); font-size: 12px; font-weight: 600; white-space: nowrap;
+  color: var(--t); background: color-mix(in srgb, var(--t) 12%, transparent); border: 1px solid color-mix(in srgb, var(--t) 28%, transparent); }
+.emp-miss { color: var(--danger); font-size: 12.5px; }
+.emp-vault { border: 1px solid var(--border); background: var(--card-bg); color: var(--text); border-radius: var(--r-md); padding: 2px 9px; font: 600 12.5px var(--sans); font-variant-numeric: tabular-nums; cursor: pointer; }
+.emp-vault:hover { border-color: var(--brand); color: var(--brand); }
+.emp-vault.empty { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+.emp-drawer { width: min(720px, 100%); }
+.emp-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; margin-top: 12px; }
+.emp-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-muted); min-width: 0; }
+.emp-form label.wide { grid-column: 1 / -1; }
+.emp-form .hr-inp { width: 100%; box-sizing: border-box; font-size: 14px; color: var(--text); }
+.emp-extra { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 14px; margin: 0; }
+.emp-extra div { min-width: 0; }
+.emp-extra dt { font-size: 11.5px; color: var(--text-muted); }
+.emp-extra dd { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+@media (max-width: 640px) { .emp-form, .emp-extra { grid-template-columns: 1fr; } }

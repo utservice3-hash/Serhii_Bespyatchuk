@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  fetchSecretsStatus, createSecretsLink, unlinkSecretsBot, fetchSecretPeople, fetchSecretPerson, createSecret, updateSecret,
+  createSecretsLink, unlinkSecretsBot, fetchSecretPerson, createSecret, updateSecret,
   deleteSecret, restoreSecret, sendSecretCode, revealSecret, hiringError,
-  type SecretsStatus, type SecretPerson, type SecretPersonVault, type SecretItem,
+  type SecretsStatus, type SecretPersonVault, type SecretItem,
 } from "../../../api";
 import type { Toast } from "./HiringShared";
 
@@ -27,68 +27,8 @@ const ACTION: Record<string, string> = {
 const kyiv = (iso: string | null) => (iso ? new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
 const titleOf = (i: SecretItem) => i.kind === "card" ? `Картка •••• ${i.last4 ?? "????"}` : i.service === "other" ? (i.label ?? "Інше") : SERVICE_LABEL[i.service] ?? i.service;
 
-export function HiringSecrets({ toast }: { toast: Toast }) {
-  const [status, setStatus] = useState<SecretsStatus | null>(null);
-  const [people, setPeople] = useState<SecretPerson[] | null>(null);
-  const [q, setQ] = useState("");
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [view, setView] = useState<"active" | "dismissed" | "all">("active");
-  const [err, setErr] = useState<string | null>(null);
-
-  const load = useCallback(() => {
-    fetchSecretsStatus().then(setStatus).catch((e) => setErr(hiringError(e)));
-    fetchSecretPeople().then(setPeople).catch((e) => setErr(hiringError(e)));
-  }, []);
-  useEffect(load, [load]);
-
-  const rows = useMemo(() => (people ?? []).filter((p) => (view === "all" || p.status === view)
-    && (!q.trim() || `${p.name} ${p.email ?? ""} ${p.team_name ?? ""}`.toLowerCase().includes(q.trim().toLowerCase()))), [people, q, view]);
-  if (err) return <div className="hr-card"><div className="hr-sect" style={{ border: 0 }}><b>Сейф недоступний.</b> <span className="hr-muted">{err}</span></div></div>;
-  if (!people || !status) return <p className="loading-text">Завантаження…</p>;
-  const scope = people.filter((p) => view === "all" || p.status === view);
-  const withData = scope.filter((p) => p.passwords + p.cards > 0).length;
-
-  return (
-    <>
-      <StatusBar status={status} onChanged={load} toast={toast} />
-      <div className="hr-card">
-        <div className="hd">
-          <div><h3>Доступи співробітників</h3><div className="hr-muted">Логіни видно тут; пароль і повний номер картки — лише кнопкою «Показати» з кодом у Telegram «UTS Сейф». Кожен показ записується в журнал.</div></div>
-          <input className="hr-inp" placeholder="Пошук: ПІБ, пошта, команда" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Пошук співробітника" style={{ minWidth: 240 }} />
-        </div>
-        <div className="hr-tiles" style={{ gridTemplateColumns: "repeat(3, minmax(0,1fr))" }}>
-          <div className="hr-tile"><div className="lb">Людей</div><div className="vl">{scope.length}</div><div className="sb">без акаунта в дашборді: {scope.filter((p) => !p.has_account).length}</div></div>
-          <div className="hr-tile"><div className="lb">З доступами в сейфі</div><div className="vl">{withData}</div><div className="sb">без жодного запису: {scope.length - withData}</div></div>
-          <div className="hr-tile"><div className="lb">Записів</div><div className="vl">{scope.reduce((a, p) => a + p.passwords + p.cards, 0)}</div><div className="sb">паролів {scope.reduce((a, p) => a + p.passwords, 0)} · карток {scope.reduce((a, p) => a + p.cards, 0)}</div></div>
-        </div>
-        <div className="hr-seg2" style={{ margin: "0 16px 10px" }}>
-          {([["active", "Працюють"], ["dismissed", "Звільнені"], ["all", "Усі"]] as const).map(([k, l]) =>
-            <button key={k} className={view === k ? "on" : ""} onClick={() => setView(k)}>{l}</button>)}
-        </div>
-        <div className="hr-tw">
-          <table className="hr-table">
-            <thead><tr><th>Співробітник</th><th>Команда</th><th className="num">Паролів</th><th className="num">Карток</th><th>Остання зміна</th></tr></thead>
-            <tbody>
-              {rows.map((p) => (
-                <tr key={p.ref} className="row" onClick={() => setOpenId(p.ref)}>
-                  <td><b>{p.name}</b><div className="hr-muted">{p.email ?? ""}{!p.has_account && <>{p.email ? " · " : ""}без акаунта в дашборді</>}</div></td>
-                  <td>{p.team_name ?? <span className="hr-muted">—</span>}</td>
-                  <td className="num">{p.passwords || <span className="hr-muted">0</span>}</td>
-                  <td className="num">{p.cards || <span className="hr-muted">0</span>}</td>
-                  <td>{p.updated_at ? kyiv(p.updated_at) : <span className="hr-muted">записів немає</span>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      {openId != null && <PersonDrawer id={openId} status={status} toast={toast} onClose={() => { setOpenId(null); load(); }} onStatus={load} />}
-    </>
-  );
-}
-
 /** Ключ, бот і МОЯ привʼязка Telegram «UTS Сейф» — без неї «Показати» не спрацює. */
-function StatusBar({ status, onChanged, toast }: { status: SecretsStatus; onChanged: () => void; toast: Toast }) {
+export function StatusBar({ status, onChanged, toast }: { status: SecretsStatus; onChanged: () => void; toast: Toast }) {
   const [link, setLink] = useState<{ code: string; url: string | null; bot: string | null } | null>(null);
   const poll = useRef<number | null>(null);
   useEffect(() => () => { if (poll.current) window.clearInterval(poll.current); }, []);
@@ -126,14 +66,15 @@ function StatusBar({ status, onChanged, toast }: { status: SecretsStatus; onChan
   );
 }
 
-function PersonDrawer({ id, status, toast, onClose, onStatus }: { id: string; status: SecretsStatus; toast: Toast; onClose: () => void; onStatus: () => void }) {
+/** Доступи людини — вбудовується в картку співробітника (вкладка «Співробітники», 18.09.2026). `id` — «12» або «e34». */
+export function VaultPanel({ id, status, toast, onStatus, onChanged }: { id: string; status: SecretsStatus; toast: Toast; onStatus: () => void; onChanged?: () => void }) {
   const [v, setV] = useState<SecretPersonVault | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [reveal, setReveal] = useState<{ item: SecretItem; value: string; left: number } | null>(null);
   const [asking, setAsking] = useState<SecretItem | null>(null);
   const [editing, setEditing] = useState<SecretItem | "new" | null>(null);
 
-  const load = useCallback(() => { fetchSecretPerson(id).then((x) => { setV(x); setErr(null); }).catch((e) => setErr(hiringError(e))); }, [id]);
+  const load = useCallback(() => { fetchSecretPerson(id).then((x) => { setV(x); setErr(null); onChanged?.(); }).catch((e) => setErr(hiringError(e))); }, [id, onChanged]);
   useEffect(load, [load]);
   // Показане значення живе 30 с і зникає саме; закриття картки теж його стирає.
   useEffect(() => {
@@ -152,13 +93,8 @@ function PersonDrawer({ id, status, toast, onClose, onStatus }: { id: string; st
     try { await navigator.clipboard.writeText(text); toast("Скопійовано"); } catch { toast("Не вдалося скопіювати — виділіть вручну", { error: true }); }
   };
 
-  return createPortal(
-    <div className="hr-overlay" onClick={onClose}>
-      <div className="hr-drawer" role="dialog" aria-label="Доступи співробітника" onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
-          <div><b style={{ fontSize: 17 }}>{v?.person.name ?? "…"}</b>{v && <div className="hr-muted">{v.person.email ?? ""}{v.person.team_name ? ` · ${v.person.team_name}` : ""}{!v.person.hasAccount ? " · без акаунта в дашборді" : ""}</div>}</div>
-          <button className="hr-btn" onClick={onClose}>Закрити</button>
-        </div>
+  return (
+    <div>
         {err && <p style={{ color: "var(--danger)" }}>{err}</p>}
         {v && (
           <>
@@ -220,9 +156,7 @@ function PersonDrawer({ id, status, toast, onClose, onStatus }: { id: string; st
           onShown={(value) => { setReveal({ item: asking, value, left: 30 }); setAsking(null); load(); }} />}
         {editing && <EditDialog item={editing === "new" ? null : editing} userId={id} onClose={() => setEditing(null)}
           onSaved={(msg) => { setEditing(null); load(); toast(msg); }} />}
-      </div>
-    </div>,
-    document.body,
+    </div>
   );
 }
 

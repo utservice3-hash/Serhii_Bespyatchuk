@@ -8,7 +8,6 @@ import { HiringCandidates } from "./HiringCandidates";
 import { HiringDaily } from "./HiringDaily";
 import { HiringVacancies } from "./HiringVacancies";
 import { HiringTraining } from "./HiringTraining";
-import { HiringSecrets } from "./HiringSecrets";
 import { HiringEmployees } from "./HiringEmployees";
 import { PlannedTabCard, LiveTabNote, type PlannedTab } from "./HiringRoadmap";
 import "./hiring.css";
@@ -55,10 +54,11 @@ export function HiringSection() {
   const tabs: [Tab, string][] = meta.access === "edit"
     ? [["sched", "Графік"], ["base", "Кандидати"], ["vac", "Вакансії"], ["train", "На навчанні"], ["daily", "Щоденний звіт"], ["emp", "Співробітники"], ["churn", "Плинність"], ["exit", "Exit-інтервʼю"], ["sum", "Зведення"]]
     : [["base", "Кандидати"], ["train", "На навчанні"], ["emp", "Співробітники"]];
-  if (canSecrets) tabs.splice(tabs.findIndex(([k]) => k === "emp"), 0, ["acc", "Доступи"]);
   // «Співробітники» живі для тих, хто має право сейфу (імпорт кладе паролі туди); решті — пояснення.
   const planned = new Set<Tab>(canSecrets ? ["churn", "exit", "sum"] : ["emp", "churn", "exit", "sum"]);
-  const active = tabs.some(([k]) => k === tab) ? tab : tabs[0][0];
+  // «Доступи» злиті в «Співробітники» (18.09.2026): збережена стара вкладка веде туди.
+  const want: Tab = tab === "acc" ? "emp" : tab;
+  const active = tabs.some(([k]) => k === want) ? want : tabs[0][0];
   const pick = (t: Tab) => { setTab(t); LS.set("tab", t); };
 
   return (
@@ -82,7 +82,6 @@ export function HiringSection() {
       {active === "base" && <HiringCandidates key={vacFilter?.seq ?? 0} meta={meta} toast={toast} initialVacancyId={vacFilter?.id ?? null} onMetaStale={() => setNonce((n) => n + 1)} />}
       {active === "vac" && <HiringVacancies meta={meta} toast={toast} onChanged={() => setNonce((n) => n + 1)}
         onOpenCandidates={(id) => { setVacFilter({ id, seq: Date.now() }); pick("base"); }} />}
-      {active === "acc" && <HiringSecrets toast={toast} />}
       {active === "emp" && canSecrets && <HiringEmployees toast={toast} />}
       {active === "train" && <HiringTraining meta={meta} toast={toast} onChanged={() => setNonce((n) => n + 1)} />}
       {active === "daily" && <HiringDaily toast={toast} />}

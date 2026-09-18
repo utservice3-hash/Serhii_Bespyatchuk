@@ -4236,7 +4236,7 @@ export const revealSecret = async (id: number, code: string, reason: string) =>
 
 // 🗂 Реєстр співробітників + імпорт «UTS Співробітники УКР» (18.09.2026, задача №3898).
 export interface EmployeeRow {
-  id: number; full_name: string; status: "active" | "dismissed"; position: string | null; team_label: string | null;
+  id: number; ref: string; full_name: string; status: "active" | "dismissed"; position: string | null; team_label: string | null;
   phone: string | null; email: string | null; telegram: string | null; birth_date: string | null; hired_at: string | null;
   dismissed_at: string | null; dismiss_reason: string | null; note: string | null; extra: Record<string, string>;
   user_id: number | null; account_name: string | null; account_active: boolean | null; secrets: number; updated_at: string;
@@ -4252,7 +4252,9 @@ export interface ImportPreview {
   totals?: { rows: number; new: number; update: number; duplicate: number; withAccount: number; noAccount: number; secrets: number; secretsLost: number; secretsNoAccount: number; problems: number; skipped: number };
 }
 export interface ImportCounts { rows: number; created: number; updated: number; duplicate: number; linked: number; secretsCreated: number; secretsExisting: number; secretsNoAccount: number; secretsInvalid: number }
-export const fetchEmployees = async () => (await api.get<{ rows: EmployeeRow[] }>("/secrets/employees")).data.rows;
+export const fetchEmployees = async () => (await api.get<{ rows: EmployeeRow[]; teams: string[] }>("/secrets/employees")).data;
+export type EmployeePatch = Partial<Pick<EmployeeRow, "full_name" | "position" | "team_label" | "phone" | "email" | "telegram" | "birth_date" | "hired_at" | "dismissed_at" | "dismiss_reason" | "note" | "status">>;
+export const updateEmployee = async (id: number, b: EmployeePatch) => (await api.patch<{ ok: true; changed: string[] }>(`/secrets/employees/${id}`, b)).data.changed;
 export const previewEmployeeImport = async (csv: string, mapping?: string[], headerRow?: number) =>
   (await api.post<ImportPreview>("/secrets/import/preview", { csv, mapping, headerRow })).data;
 export const commitEmployeeImport = async (csv: string, mapping: string[], sheet: "active" | "dismissed", headerRow: number) =>
