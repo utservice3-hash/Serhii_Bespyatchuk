@@ -97,15 +97,24 @@ test("#211c чужий теплий кеш не міняє відповіді ж
   assert.notEqual(cleanA, cleanB, `🔴 команди ${TEAM_A} і ${TEAM_B} дають ОДНАКОВЕ тіло — гейт не має що розрізняти`);
   assert.notEqual(cleanA, cleanAdm, "🔴 тімлід і адмін дають однакове тіло — скоуп ніде не проявляється");
 
+  // ⏱ ЖИВИЙ ДРЕЙФ (18.09.2026, 4-й викат поспіль): поля «зараз» (очікувані оплати, прогноз) зсуваються синком
+  // за ~40 с прогону — 265 → 266 угод по ТІЙ САМІЙ команді. Тому «прогріте чужим» звіряємо з чистим замером,
+  // а якщо не збіглось — ще раз зі СВІЖИМ чистим, знятим одразу після: дрейф його зрівняє (обидва бачать нові
+  // дані), а недостатній ключ — ні (там чужі числа, і свіжий чистий їх не дасть). Саботаж ключа нижче червоніє.
+  const settle = async (warmed: string, first: string, auth: Record<string, unknown>) => (warmed === first ? first : clean(auth));
+  const warmedB = await afterWarm(asLead(TEAM_A), asLead(TEAM_B));
+  const warmedA = await afterWarm(asLead(TEAM_B), asLead(TEAM_A));
+  const warmedA2 = await afterWarm(ADMIN, asLead(TEAM_A));
+  const warmedAdm = await afterWarm(asLead(TEAM_A), ADMIN);
   // 🔑 Саме тут падає недостатній ключ: B бачить те, що поклав у кеш A.
-  assert.equal(await afterWarm(asLead(TEAM_A), asLead(TEAM_B)), cleanB,
+  assert.equal(warmedB, await settle(warmedB, cleanB, asLead(TEAM_B)),
     `🔴 команда ${TEAM_B} на кеші, прогрітому командою ${TEAM_A}, отримала ІНШУ відповідь, ніж на чистому. `
     + "Ключ кешу не розрізняє тімлідів — один бачить числа іншого");
-  assert.equal(await afterWarm(asLead(TEAM_B), asLead(TEAM_A)), cleanA,
+  assert.equal(warmedA, await settle(warmedA, cleanA, asLead(TEAM_A)),
     `🔴 дзеркально: команда ${TEAM_A} після прогріву командою ${TEAM_B} зіпсувалась`);
-  assert.equal(await afterWarm(ADMIN, asLead(TEAM_A)), cleanA,
+  assert.equal(warmedA2, await settle(warmedA2, cleanA, asLead(TEAM_A)),
     `🔴 команда ${TEAM_A} на кеші, прогрітому АДМІНОМ, побачила загальнокомпанійні числа`);
-  assert.equal(await afterWarm(asLead(TEAM_A), ADMIN), cleanAdm,
+  assert.equal(warmedAdm, await settle(warmedAdm, cleanAdm, ADMIN),
     `🔴 адмін на кеші, прогрітому командою ${TEAM_A}, побачив числа однієї команди замість компанії`);
 });
 
