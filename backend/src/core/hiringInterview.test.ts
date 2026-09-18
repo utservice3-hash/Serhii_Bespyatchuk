@@ -89,5 +89,11 @@ test("#582 ЖИВИЙ SQL: щоденний звіт — діалог і ряд�
     const viaDialog = await s.h.dailyReport(s.db, "2026-09-18", "2026-09-18");
     assert.deepEqual(viaDialog, viaRow, "🔴 звіт рахує діалог інакше, ніж рядок графіка");
     assert.ok(viaRow.length === 1, "дзеркало: у звіті є цей день");
+    // Абсолютно, а не лише «однаково»: обидва шляхи йдуть через ту саму вставку, тож рівність сама по собі
+    // не ловила б зсув дати в обох (виявлено саботажем 18.09.2026).
+    assert.equal(viaDialog[0].planned, 1, "🔴 співбесіда з діалогу не на тому дні");
+    const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+    const booked = await s.h.dailyReport(s.db, today, today);
+    assert.equal(booked[0].booked, 1, "🔴 діалог не записав дату призначення (сьогодні)");
   } finally { await s.done(); }
 });
