@@ -1,0 +1,80 @@
+/* 🎞 ПРЕЗЕНТАЦІЯ ЗУСТРІЧІ — стилі слайдів. Усе під `.ps-`. Оформлення взято з шаблону Даші
+   (UTS_weekly_meeting_template.pptx): світло-сірий фон, темна бічна панель, червоний акцент,
+   рожеві смужки номінацій. Слайд — СВІДОМО однотемний (зустріч показують на проєкторі), тож
+   кольори тут фіксовані, а не токени теми дашборда. */
+
+.ps-overlay { position: fixed; inset: 0; z-index: 1000; background: #0d0e10; display: flex; flex-direction: column; }
+.ps-bar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; color: #c9ccd2; font-size: 13px; flex-wrap: wrap; }
+.ps-bar .sp { flex: 1; }
+.ps-bar button { border: 1px solid #3a3d44; background: #1c1e23; color: #e7e8ea; border-radius: 8px; padding: 5px 12px; font: inherit; cursor: pointer; }
+.ps-bar button:focus-visible { outline: 2px solid #C8102E; outline-offset: 2px; }
+.ps-draft { background: #fef3c7; color: #8a5a00; border-radius: 999px; padding: 2px 10px; font-weight: 700; }
+.ps-viewport { flex: 1; position: relative; overflow: hidden; }
+.ps-stage { position: absolute; left: 50%; top: 50%; width: 1280px; height: 720px; transform-origin: center center; }
+.ps-overlay:fullscreen .ps-bar { display: none; }
+
+.ps-slide { width: 1280px; height: 720px; display: flex; background: #F2F2F3; color: #1F2124;
+  font-family: Calibri, "Segoe UI", system-ui, sans-serif; position: relative; overflow: hidden; }
+.ps-side { width: 245px; background: #1A1A1A; padding: 34px 26px; display: flex; flex-direction: column; gap: 6px; position: relative; }
+.ps-logo { width: 80px; height: 66px; background: #fff; border-radius: 10px; display: grid; place-items: center; margin-bottom: 60px; }
+.ps-nav { color: #AEB0B4; font-size: 17px; padding: 12px 16px; border-radius: 12px; }
+.ps-nav.on { background: #C8102E; color: #fff; font-weight: 700; }
+.ps-date { position: absolute; left: 34px; bottom: 34px; background: #262626; color: #D1D5DB; border-radius: 10px; padding: 12px 22px; font-size: 15px; }
+.ps-main { flex: 1; padding: 40px 46px 36px; display: flex; flex-direction: column; min-width: 0; }
+.ps-kick { color: #C8102E; font-size: 14px; font-weight: 700; letter-spacing: .08em; }
+.ps-h { margin: 4px 0 22px; font-size: 40px; font-weight: 700; }
+.ps-watermark { position: absolute; right: 22px; top: 18px; background: #fef3c7; color: #8a5a00; border-radius: 999px; padding: 4px 14px; font-size: 14px; font-weight: 700; }
+
+.ps-two { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; flex: 1; min-height: 0; }
+.ps-card { background: #fff; border-radius: 16px; padding: 18px 20px; display: flex; flex-direction: column; gap: 5px; min-height: 0; }
+.ps-head { background: #C8102E; color: #fff; border-radius: 12px; padding: 13px 18px; font-size: 17px; font-weight: 700; margin-bottom: 6px; }
+.ps-lab { background: #FBE3E7; color: #970B22; border-radius: 8px; padding: 5px 12px; font-size: 11.5px; font-weight: 700; letter-spacing: .05em; }
+.ps-val { font-size: 18px; padding: 2px 12px 6px; }
+.ps-val b { font-weight: 800; }
+.ps-tm { font-size: 12px; color: #6B7280; }
+.ps-flag { font-size: 11px; background: #fff1c2; color: #8a5a00; border-radius: 999px; padding: 1px 8px; margin-left: 6px; vertical-align: middle; }
+.ps-muted { color: #6B7280; }
+.ps-manual-mark { font-size: 12px; color: #1d4ed8; margin-left: 6px; }
+
+.ps-plan { flex: 1; background: #fff; border-radius: 16px; display: flex; overflow: hidden; min-height: 0; }
+.ps-red { width: 34%; background: #C8102E; color: #fff; padding: 36px 30px; display: flex; flex-direction: column; gap: 12px; }
+.ps-tlab { font-size: 18px; opacity: .85; }
+.ps-tname { font-size: 30px; font-weight: 800; line-height: 1.15; }
+.ps-pink { color: #FFE3E7; font-size: 21px; font-weight: 700; margin-top: 18px; }
+.ps-cong { color: #FFF0F1; font-size: 16px; line-height: 1.45; }
+.ps-grid { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); align-content: center; gap: 26px 18px; padding: 26px; }
+.ps-grid.many { grid-template-columns: repeat(4, 1fr); gap: 18px 12px; }
+.ps-pp { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
+.ps-ava { width: 92px; height: 92px; border-radius: 50%; background: #FBE3E7; color: #970B22; border: 4px solid #C8102E; display: grid; place-items: center; font-size: 30px; font-weight: 800; }
+.ps-grid.many .ps-ava { width: 74px; height: 74px; font-size: 24px; }
+.ps-ava.big { width: 170px; height: 170px; font-size: 54px; flex: none; }
+.ps-pn { font-size: 16px; font-weight: 600; }
+.ps-pc { font-size: 20px; font-weight: 800; color: #C8102E; }
+
+.ps-subt { color: #6B7280; font-size: 19px; margin: -14px 0 26px; }
+.ps-sum { background: #fff; border-radius: 16px; padding: 24px 30px; display: flex; flex-direction: column; gap: 18px; }
+.ps-slab { color: #6B7280; font-size: 13px; font-weight: 700; letter-spacing: .08em; }
+.ps-row { display: flex; gap: 16px; align-items: center; }
+.ps-row i { width: 44px; height: 44px; border-radius: 50%; background: #FBE3E7; flex: none; }
+.ps-rl { font-size: 12.5px; color: #6B7280; font-weight: 700; letter-spacing: .06em; }
+.ps-rv { font-size: 24px; font-weight: 800; color: #1F2330; }
+.ps-bye { margin-top: auto; font-size: 26px; font-weight: 800; }
+
+.ps-manual { background: #fff; border-radius: 16px; flex: 1; display: flex; gap: 44px; align-items: center; padding: 44px; min-height: 0; }
+.ps-mname { font-size: 34px; font-weight: 800; }
+.ps-mtext { font-size: 21px; line-height: 1.45; margin-top: 14px; white-space: pre-wrap; }
+
+.ps-title { width: 1280px; height: 720px; background: #fff; position: relative; overflow: hidden;
+  font-family: Calibri, "Segoe UI", system-ui, sans-serif; color: #1F2124; }
+.ps-truck { position: absolute; right: 0; top: 0; height: 720px; }
+.ps-tlogo { position: absolute; left: 40px; top: 36px; }
+.ps-title h1 { position: absolute; left: 30px; top: 150px; margin: 0; font-size: 72px; line-height: 1.02; font-weight: 800; }
+.ps-tpill { position: absolute; left: 30px; top: 390px; background: #C8102E; color: #fff; border-radius: 14px; padding: 22px 34px; font-size: 22px; font-weight: 700; }
+.ps-tsub { position: absolute; left: 34px; top: 490px; color: #6B7280; font-size: 20px; }
+.ps-tfoot { position: absolute; left: 44px; bottom: 36px; color: #CC0000; font-size: 16px; font-weight: 700; letter-spacing: .06em; }
+
+/* редактор ручних слайдів у вкладці */
+.nm-slides-list { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; }
+.nm-slide-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.nm-slide-row .t { font-weight: 600; }
+.nm-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; padding: 10px 14px 14px; align-items: end; }

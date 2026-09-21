@@ -3,7 +3,7 @@ import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { isAdminScope } from "../auth/rbac.js";
 import { nominationWeek, frozenWeek, draftWeek, cellFingerprint, type WeekView } from "../core/nominations.js";
-import { lastWeek, weekOf, canReview, validateReview, NOMINATIONS, MARGIN_FLAG_PCT } from "../core/nominationRules.js";
+import { lastWeek, weekOf, canReview, validateReview, validateManualSlide, NOMINATIONS, MARGIN_FLAG_PCT, MANUAL_KINDS } from "../core/nominationRules.js";
 
 /**
  * 🏆 НОМІНАЦІЇ ТИЖНЯ (21.09.2026). Дві межі, як у найму:
@@ -80,4 +80,73 @@ nominationsRouter.post("/review", safe(async (req: Request, res: Response) => {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
     [b.weekFrom, b.teamId, b.nomination, b.action, cellFingerprint(cell), b.overrideManagerIds, b.overrideValue, b.reason, req.auth!.userId]);
   res.json(withRights(await draftWeek(b.weekFrom, v.teamId), v));
+}));
+
+/**
+ * 🎞 РУЧНІ СЛАЙДИ ПРЕЗЕНТАЦІЇ (прохід 2): новачки, дні народження, новини, довільні. Лише
+ * керівництво — і читання, і запис: це підготовка зустрічі, а не частина екрана тімліда.
+ * Видалення мʼяке (скасовне). SQL тут — лише про ці слайди, чисел із CRM у них немає.
+ */
+const leadOnly = (req: Request, res: Response): boolean => {
+  if (isAdminScope(req.auth!)) return true;
+  res.status(403).json({ error: "Слайди презентації готує керівництво" });
+  return false;
+};
+type SlideRow = { id: number; kind: string; title: string; person: string | null; body: string | null; position: number };
+const listSlides = async (weekFrom: string) => (await pool.query<SlideRow>(
+  `SELECT id, kind, title, person, body, position FROM nomination_manual_slides
+    WHERE week_from = $1 AND deleted_at IS NULL ORDER BY position, id`, [weekFrom])).rows;
+
+nominationsRouter.get("/manual-slides", safe(async (req: Request, res: Response) => {
+  if (!leadOnly(req, res)) return;
+  const q = typeof req.query.weekFrom === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.weekFrom) ? weekOf(req.query.weekFrom).from : lastWeek(new Date()).from;
+  res.json({ weekFrom: q, kinds: MANUAL_KINDS, slides: await listSlides(q) });
+}));
+
+nominationsRouter.post("/manual-slides", safe(async (req: Request, res: Response) => {
+  if (!leadOnly(req, res)) return;
+  const v = validateManualSlide(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const x = v.value;
+  await pool.query(
+    `INSERT INTO nomination_manual_slides (week_from, kind, title, person, body, position, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [x.weekFrom, x.kind, x.title, x.person, x.body, x.position, req.auth!.userId]);
+  res.status(201).json({ weekFrom: x.weekFrom, kinds: MANUAL_KINDS, slides: await listSlides(x.weekFrom) });
+}));
+
+nominationsRouter.patch("/manual-slides/:id", safe(async (req: Request, res: Response) => {
+  if (!leadOnly(req, res)) return;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "невірний id" });
+  const v = validateManualSlide(req.body);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const x = v.value;
+  const r = await pool.query(
+    `UPDATE nomination_manual_slides SET kind=$2, title=$3, person=$4, body=$5, position=$6, updated_at=now()
+      WHERE id=$1 AND week_from=$7 AND deleted_at IS NULL`, [id, x.kind, x.title, x.person, x.body, x.position, x.weekFrom]);
+  if (r.rowCount === 0) return res.status(404).json({ error: "Слайд не знайдено" });
+  res.json({ weekFrom: x.weekFrom, kinds: MANUAL_KINDS, slides: await listSlides(x.weekFrom) });
+}));
+
+nominationsRouter.delete("/manual-slides/:id", safe(async (req: Request, res: Response) => {
+  if (!leadOnly(req, res)) return;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "невірний id" });
+  const r = await pool.query<{ week_from: string }>(
+    `UPDATE nomination_manual_slides SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL
+     RETURNING to_char(week_from,'YYYY-MM-DD') AS week_from`, [id]);
+  if (r.rowCount === 0) return res.status(404).json({ error: "Слайд не знайдено" });
+  res.json({ weekFrom: r.rows[0].week_from, kinds: MANUAL_KINDS, slides: await listSlides(r.rows[0].week_from) });
+}));
+
+/** Скасування видалення — та сама кнопка в тому самому екрані (правило «незворотна кнопка — пастка»). */
+nominationsRouter.post("/manual-slides/:id/restore", safe(async (req: Request, res: Response) => {
+  if (!leadOnly(req, res)) return;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "невірний id" });
+  const r = await pool.query<{ week_from: string }>(
+    `UPDATE nomination_manual_slides SET deleted_at = NULL, updated_at = now() WHERE id = $1 AND deleted_at IS NOT NULL
+     RETURNING to_char(week_from,'YYYY-MM-DD') AS week_from`, [id]);
+  if (r.rowCount === 0) return res.status(404).json({ error: "Слайд не знайдено серед видалених" });
+  res.json({ weekFrom: r.rows[0].week_from, kinds: MANUAL_KINDS, slides: await listSlides(r.rows[0].week_from) });
 }));

@@ -3858,3 +3858,20 @@ CREATE TRIGGER trg_nomination_reviews_immutable BEFORE UPDATE OR DELETE ON nomin
 UPDATE roles SET screen_access = screen_access || '{"nominations":true}'::jsonb
   WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'team_lead')
     AND NOT (screen_access ? 'nominations');
+
+-- 🏆 РУЧНІ СЛАЙДИ ПРЕЗЕНТАЦІЇ ТИЖНЯ (21.09.2026, прохід 2) — вітання новачків, дні народження,
+-- новини, довільні. Не частина знімка номінацій: їх можна правити й після фіксації. Мʼяке
+-- видалення — скасовне. ⚠️ revert коду таблиці не прибирає.
+CREATE TABLE IF NOT EXISTS nomination_manual_slides (
+  id          SERIAL PRIMARY KEY,
+  week_from   DATE NOT NULL,
+  position    INTEGER NOT NULL DEFAULT 0,
+  kind        TEXT NOT NULL CHECK (kind IN ('newcomer','birthday','news','custom')),
+  title       TEXT NOT NULL CHECK (length(btrim(title)) > 0),
+  person      TEXT,
+  body        TEXT,
+  created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS ix_nomination_manual_slides_week ON nomination_manual_slides(week_from) WHERE deleted_at IS NULL;

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  fetchNominationWeek, reviewNomination,
-  type NominationWeek, type NominationTeam, type NominationCell, type NominationKey,
+  fetchNominationWeek, reviewNomination, fetchManualSlides, createManualSlide, updateManualSlide, deleteManualSlide, restoreManualSlide,
+  type NominationWeek, type NominationTeam, type NominationCell, type NominationKey, type ManualSlidesResp, type ManualSlide, type ManualSlideKind,
 } from "../../../api";
+import { NominationsPresentation } from "./NominationsPresentation";
 import { formatAmountFull } from "../format";
 import "./nominations.css";
 
@@ -45,6 +46,7 @@ export function NominationsSection() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [edit, setEdit] = useState<Target | null>(null);
+  const [show, setShow] = useState(false);
 
   const load = useCallback((w?: string) => {
     setErr(null);
@@ -126,6 +128,7 @@ export function NominationsSection() {
         <span className="nm-week">{dm(data.weekFrom)}–{dm(data.weekTo)}.{data.weekTo.slice(0, 4)}</span>
         <button className="nm-nav" aria-label="наступний тиждень" onClick={() => week && load(addDays(week, 7))}>›</button>
         {statePill}
+        {data.viewer.role === "admin" ? <button className="nm-btn p" onClick={() => setShow(true)}>Відкрити презентацію</button> : null}
       </div>
     </div>
   );
@@ -200,6 +203,10 @@ export function NominationsSection() {
 
       {noCost > 0 ? <p className="nm-muted">⚠ «% маржі» не рахується для угод без «Расходу 1» (виплати водію): {noCost} угод{isLead ? " команди" : ""} цього тижня без нього.</p> : null}
 
+      {data.viewer.role === "admin" ? <ManualSlidesCard weekFrom={data.weekFrom} /> : null}
+
+      {show ? <NominationsPresentation week={data} onClose={() => setShow(false)} /> : null}
+
       {edit ? <OverrideDialog data={data} target={edit} onClose={() => setEdit(null)} onSaved={(d) => { setData(d); setEdit(null); }} /> : null}
     </div>
   );
@@ -246,6 +253,70 @@ function OverrideDialog({ data, target, onClose, onSaved }: { data: NominationWe
         <div className="nm-btns" style={{ justifyContent: "flex-end" }}>
           <button className="nm-btn" onClick={onClose}>Скасувати</button>
           <button className="nm-btn p" disabled={busy || ids.length === 0 || !value} onClick={save}>Зберегти виправлення</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 🎞 Ручні слайди презентації (новачки, дні народження, новини) — готує керівництво/Даша.
+ * Видалення скасовне тут же кнопкою «Відновити» (правило: незворотна кнопка — пастка).
+ */
+function ManualSlidesCard({ weekFrom }: { weekFrom: string }) {
+  const [d, setD] = useState<ManualSlidesResp | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [editing, setEditing] = useState<ManualSlide | null>(null);
+  const [kind, setKind] = useState<ManualSlideKind>("newcomer");
+  const [title, setTitle] = useState("");
+  const [person, setPerson] = useState("");
+  const [body, setBody] = useState("");
+  const [removed, setRemoved] = useState<ManualSlide | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => { setErr(null); setRemoved(null); fetchManualSlides(weekFrom).then(setD).catch((e) => setErr(errorOf(e))); }, [weekFrom]);
+  const reset = () => { setEditing(null); setKind("newcomer"); setTitle(""); setPerson(""); setBody(""); };
+  const startEdit = (s: ManualSlide) => { setEditing(s); setKind(s.kind); setTitle(s.title); setPerson(s.person ?? ""); setBody(s.body ?? ""); };
+  const run = async (fn: () => Promise<ManualSlidesResp>) => {
+    setBusy(true); setErr(null);
+    try { setD(await fn()); } catch (e) { setErr(errorOf(e)); } finally { setBusy(false); }
+  };
+  const save = () => {
+    const p = { weekFrom, kind, title, person, body, position: editing?.position ?? (d?.slides.length ?? 0) };
+    void run(() => (editing ? updateManualSlide(editing.id, p) : createManualSlide(p))).then(reset);
+  };
+  const label = (k: ManualSlideKind) => d?.kinds.find((x) => x.key === k)?.label ?? k;
+
+  return (
+    <div className="nm-card">
+      <div className="nm-banner"><b>Ручні слайди презентації</b>
+        <span className="nm-muted">Новачки, дні народження, новини — показуються після титулу. Числа з CRM сюди не пишуться.</span>
+        {err ? <span className="nm-err">{err}</span> : null}</div>
+      <div className="nm-slides-list">
+        {d && d.slides.length === 0 ? <span className="nm-muted">Цього тижня ручних слайдів немає.</span> : null}
+        {d?.slides.map((s) => (
+          <div className="nm-slide-row" key={s.id}>
+            <span className="nm-pill wait">{label(s.kind)}</span><span className="t">{s.title}</span>
+            {s.person ? <span className="nm-muted">{s.person}</span> : null}
+            <button className="nm-btn" disabled={busy} onClick={() => startEdit(s)}>Змінити</button>
+            <button className="nm-btn" disabled={busy} onClick={() => { setRemoved(s); void run(() => deleteManualSlide(s.id)); }}>Видалити</button>
+          </div>
+        ))}
+        {removed ? <div className="nm-slide-row"><span className="nm-muted">Видалено «{removed.title}».</span>
+          <button className="nm-btn" disabled={busy} onClick={() => { const id = removed.id; setRemoved(null); void run(() => restoreManualSlide(id)); }}>Відновити</button></div> : null}
+      </div>
+      <div className="nm-form">
+        <label className="nm-field"><span>Тип</span>
+          <select className="nm-inp" id="nm-ms-kind" value={kind} onChange={(e) => setKind(e.target.value as ManualSlideKind)}>
+            {(d?.kinds ?? []).map((k) => <option key={k.key} value={k.key}>{k.label}</option>)}
+          </select></label>
+        <label className="nm-field"><span>Заголовок *</span><input className="nm-inp" id="nm-ms-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Напр.: Вітаємо в команді!" /></label>
+        <label className="nm-field"><span>Людина</span><input className="nm-inp" id="nm-ms-person" value={person} onChange={(e) => setPerson(e.target.value)} placeholder="Прізвище Імʼя" /></label>
+        <label className="nm-field" style={{ gridColumn: "1 / -1" }}><span>Текст</span>
+          <textarea className="nm-inp" id="nm-ms-body" value={body} onChange={(e) => setBody(e.target.value)} placeholder="Побажання, новина, деталі" /></label>
+        <div className="nm-btns">
+          <button className="nm-btn p" disabled={busy || !title.trim()} onClick={save}>{editing ? "Зберегти слайд" : "Додати слайд"}</button>
+          {editing ? <button className="nm-btn" onClick={reset}>Скасувати</button> : null}
         </div>
       </div>
     </div>

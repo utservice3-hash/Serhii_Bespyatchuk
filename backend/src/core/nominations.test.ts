@@ -185,3 +185,31 @@ test("#606 рядок знімка тримає фінальне число І �
   assert.deepEqual([rows[1].managerId, rows[1].value, rows[1].status], [null, null, "empty"]);
   assert.equal(NOMINATIONS.length, 5);
 });
+
+/* ─────────────────────────── прохід 2: презентація ─────────────────────────── */
+
+test("#607 ручний слайд: без заголовка й з чужим типом — відмова; довгий текст обрізається до слайда", async () => {
+  const { validateManualSlide } = await import("./nominationRules.js");
+  const base = { weekFrom: "2026-09-14", kind: "newcomer" };
+  assert.equal(validateManualSlide({ ...base, title: "   " }).ok, false, "🔴 слайд без заголовка пройшов");
+  assert.equal(validateManualSlide({ ...base, kind: "meme", title: "x" }).ok, false, "🔴 невідомий тип пройшов");
+  assert.equal(validateManualSlide({ ...base, weekFrom: "2026-09-16", title: "x" }).ok, false, "🔴 тиждень не з понеділка");
+  // 🪞 Дзеркало: нормальний слайд проходить, порожні необовʼязкові поля стають null, текст — у межах слайда.
+  const ok = validateManualSlide({ ...base, title: " Вітаємо в команді! ", person: "  ", body: "а".repeat(900), position: "2" });
+  assert.ok(ok.ok);
+  if (ok.ok) assert.deepEqual([ok.value.title, ok.value.person, ok.value.body?.length, ok.value.position], ["Вітаємо в команді!", null, 600, 2]);
+});
+
+/**
+ * #609 — ПРЕЗЕНТАЦІЯ НЕ РАХУЄ СВОЇХ ЧИСЕЛ. «План виконали» — колонка `pct` Звіту за період з 1-го,
+ * «Підсумки» — `glance` Звіту за місяць, рейтинг — знімок/чернетка номінацій. Червоніє, якщо слайди
+ * почнуть брати гроші з іншого ендпоінта або виводити відсоток виконання самостійно.
+ */
+test("#609 слайди беруть числа лише зі Звіту й номінацій — без власного розрахунку виконання", () => {
+  const src = readFileSync(fileURLToPath(new URL("../../../frontend/src/pages/dashboard/sections/NominationsPresentation.tsx", import.meta.url).href.replace("/backend/dist/", "/backend/src/").replace("/backend/src/../../../", "/")), "utf8");
+  assert.match(src, /fetchReportPlan\(\{ from: mStart, to: today \}\)/, "🔴 «План виконали» більше не з колонки Звіту за період з 1-го");
+  assert.match(src, /m\.pct < 100/, "🔴 поріг «виконав план» більше не читає `pct` Звіту");
+  assert.match(src, /month\.glance/, "🔴 «Підсумки» більше не з верху Звіту");
+  assert.doesNotMatch(src, /m\.fact\s*\/\s*m\.plan/, "🔴 слайд сам рахує виконання менеджера — має брати `pct` Звіту");
+  assert.doesNotMatch(src, /\/api\/dashboard\/(?!report-plan)|api\.get\(/, "🔴 презентація ходить у сторонній ендпоінт");
+});

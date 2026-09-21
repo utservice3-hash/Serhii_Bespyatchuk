@@ -209,3 +209,32 @@ export function snapshotRows(view: WeekView): SnapshotRow[] {
   return out;
 }
 
+
+// ───────────────────────── ручні слайди презентації (прохід 2) ─────────────────────────
+
+export type ManualKind = "newcomer" | "birthday" | "news" | "custom";
+export const MANUAL_KINDS: readonly { key: ManualKind; label: string }[] = [
+  { key: "newcomer", label: "Вітаємо в команді!" },
+  { key: "birthday", label: "З Днем народження!" },
+  { key: "news", label: "Новини" },
+  { key: "custom", label: "Довільний слайд" },
+];
+export interface ManualSlideInput { weekFrom: string; kind: ManualKind; title: string; person: string | null; body: string | null; position: number }
+
+/**
+ * Тіло ручного слайда (#607). Заголовок обовʼязковий (порожній слайд на зустрічі — це дірка в
+ * показі, а не «нема що сказати»); довжини обмежені, щоб текст влазив у слайд 16:9.
+ */
+export function validateManualSlide(body: unknown): { ok: true; value: ManualSlideInput } | { ok: false; error: string } {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const weekFrom = typeof b.weekFrom === "string" && /^\d{4}-\d{2}-\d{2}$/.test(b.weekFrom) ? b.weekFrom : null;
+  if (!weekFrom || weekOf(weekFrom).from !== weekFrom) return { ok: false, error: "weekFrom — понеділок тижня у форматі YYYY-MM-DD" };
+  if (!MANUAL_KINDS.some((k) => k.key === b.kind)) return { ok: false, error: "невідомий тип слайда" };
+  const s = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+  const title = s(b.title, 80);
+  if (!title) return { ok: false, error: "вкажіть заголовок слайда" };
+  const person = s(b.person, 80) || null;
+  const text = s(b.body, 600) || null;
+  const position = Number.isInteger(Number(b.position)) ? Number(b.position) : 0;
+  return { ok: true, value: { weekFrom, kind: b.kind as ManualKind, title, person, body: text, position } };
+}

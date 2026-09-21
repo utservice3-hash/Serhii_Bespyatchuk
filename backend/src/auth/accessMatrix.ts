@@ -352,6 +352,18 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["financier", "hr", "manager"] },
   { method: "POST", path: "/api/nominations/review", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
+  /* Ручні слайди презентації (прохід 2) — лише керівництво: `leadOnly` першим оператором, тож
+     тімлід отримує 403 ще до валідації тіла. Запис — deny-only: проба дозволеної ролі писала б у прод. */
+  { method: "GET", path: "/api/nominations/manual-slides", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["team_lead", "financier", "hr", "manager"] },
+  { method: "POST", path: "/api/nominations/manual-slides", cls: "deny-only",
+    allow: [], deny: ["team_lead", "hr", "manager"] },
+  { method: "PATCH", path: "/api/nominations/manual-slides/:id", cls: "deny-only",
+    allow: [], deny: ["team_lead", "hr", "manager"] },
+  { method: "DELETE", path: "/api/nominations/manual-slides/:id", cls: "deny-only",
+    allow: [], deny: ["team_lead", "hr", "manager"] },
+  { method: "POST", path: "/api/nominations/manual-slides/:id/restore", cls: "deny-only",
+    allow: [], deny: ["team_lead", "hr", "manager"] },
   { method: "GET", path: "/api/hiring/meta", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead"], deny: ["financier", "manager"] },
   { method: "GET", path: "/api/hiring/candidates", cls: "GET",
