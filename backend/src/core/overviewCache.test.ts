@@ -101,20 +101,35 @@ test("#211c чужий теплий кеш не міняє відповіді ж
   // за ~40 с прогону — 265 → 266 угод по ТІЙ САМІЙ команді. Тому «прогріте чужим» звіряємо з чистим замером,
   // а якщо не збіглось — ще раз зі СВІЖИМ чистим, знятим одразу після: дрейф його зрівняє (обидва бачать нові
   // дані), а недостатній ключ — ні (там чужі числа, і свіжий чистий їх не дасть). Саботаж ключа нижче червоніє.
-  const settle = async (warmed: string, first: string, auth: Record<string, unknown>) => (warmed === first ? first : clean(auth));
-  const warmedB = await afterWarm(asLead(TEAM_A), asLead(TEAM_B));
-  const warmedA = await afterWarm(asLead(TEAM_B), asLead(TEAM_A));
-  const warmedA2 = await afterWarm(ADMIN, asLead(TEAM_A));
-  const warmedAdm = await afterWarm(asLead(TEAM_A), ADMIN);
+  // ⏱ 21.09.2026, 5-й випадок: між «прогрітим» і свіжим чистим замером синк додав 2 угоди в очікувані оплати
+  // (411 → 413 у `pendingPayments`), і одна повторна звірка не встигла. Тому пара «прогрів → замір → чистий
+  // замір» повторюється до ТРЬОХ разів. Дрейф даних не влучає тричі поспіль у вікно в кілька секунд, а
+  // недостатній ключ кешу дає чужі числа в КОЖНІЙ спробі — тож саботаж ключа червоніє, як і раніше.
+  // Поле з кешу (`pendingPayments.byTeam`) лишається в порівнянні: виключити його означало б сховати витік.
+  const settle = async (warmer: Record<string, unknown>, auth: Record<string, unknown>, first: string): Promise<[string, string]> => {
+    let warmed = await afterWarm(warmer, auth);
+    if (warmed === first) return [warmed, first];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const fresh = await clean(auth);
+      if (warmed === fresh) return [warmed, fresh];
+      warmed = await afterWarm(warmer, auth);
+      if (warmed === fresh) return [warmed, fresh];
+    }
+    return [warmed, await clean(auth)];
+  };
+  const [warmedB, refB] = await settle(asLead(TEAM_A), asLead(TEAM_B), cleanB);
+  const [warmedA, refA] = await settle(asLead(TEAM_B), asLead(TEAM_A), cleanA);
+  const [warmedA2, refA2] = await settle(ADMIN, asLead(TEAM_A), cleanA);
+  const [warmedAdm, refAdm] = await settle(asLead(TEAM_A), ADMIN, cleanAdm);
   // 🔑 Саме тут падає недостатній ключ: B бачить те, що поклав у кеш A.
-  assert.equal(warmedB, await settle(warmedB, cleanB, asLead(TEAM_B)),
+  assert.equal(warmedB, refB,
     `🔴 команда ${TEAM_B} на кеші, прогрітому командою ${TEAM_A}, отримала ІНШУ відповідь, ніж на чистому. `
     + "Ключ кешу не розрізняє тімлідів — один бачить числа іншого");
-  assert.equal(warmedA, await settle(warmedA, cleanA, asLead(TEAM_A)),
+  assert.equal(warmedA, refA,
     `🔴 дзеркально: команда ${TEAM_A} після прогріву командою ${TEAM_B} зіпсувалась`);
-  assert.equal(warmedA2, await settle(warmedA2, cleanA, asLead(TEAM_A)),
+  assert.equal(warmedA2, refA2,
     `🔴 команда ${TEAM_A} на кеші, прогрітому АДМІНОМ, побачила загальнокомпанійні числа`);
-  assert.equal(warmedAdm, await settle(warmedAdm, cleanAdm, ADMIN),
+  assert.equal(warmedAdm, refAdm,
     `🔴 адмін на кеші, прогрітому командою ${TEAM_A}, побачив числа однієї команди замість компанії`);
 });
 
