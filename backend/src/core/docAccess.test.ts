@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { canSeeDocument, canSeeOffersSection, canEditDocument, canSignDocument, signatureState, MANAGEMENT_ROLES, isNewForViewer, roleSeesGeneral, type DocLike, type AccessContext } from "./docAccess.js";
+import { canSeeDocument, canSeeOffersSection, canEditDocument, canSignDocument, signatureState, MANAGEMENT_ROLES, isNewForViewer, roleSeesGeneral, presignRefusal, SIGNED_EARLIER, folderChain, inheritedRights, moveFolderRefusal, canUploadTo, type DocLike, type AccessContext } from "./docAccess.js";
 
 const ctx = (over: Partial<AccessContext> = {}): AccessContext => ({ folderRights: new Map(), grants: [], now: new Date("2026-09-15T12:00:00Z"), ...over });
 const doc = (over: Partial<DocLike> = {}): DocLike => ({ id: 1, folderId: 10, section: "general", addresseeUserId: null, createdBy: 5, archivedAt: null, ...over });
@@ -188,4 +188,112 @@ test("#508b ВЛАСНІ ПРАВА: аудиторія регламенту і 
   assert.match(src, /documentsRouter\.put\("\/file\/:id\/access", management,/, "🔴 зміна власних прав без management");
   assert.match(src, /documentsRouter\.get\("\/file\/:id\/access", management,/, "🔴 перегляд власних прав без management");
   assert.equal(roleSeesGeneral("manager", 10, { canView: true, canEdit: false }, { canView: false, canUpload: false, canEdit: false, canPublish: false }), true);
+});
+
+/**
+ * #595 — «ПІДПИСАНО РАНІШЕ»: позначка керівництва — звичайний запис підпису на ПОТОЧНУ версію, тож стан
+ * один на «Документи», «Найм» і нагадування. Нова версія знову чекає підпису; знята позначка (rejected)
+ * не чинна. Правило відмови: лише офер, не архів, з адресатом і хешем, ще не підписаний, дата не в
+ * майбутньому. Червоніє, якщо позначка переживе нову версію (людина «підписала» текст, якого не бачила)
+ * або якщо її можна поставити на вже підписаний чи чужого розділу документ.
+ */
+test("#595 ПІДПИСАНО РАНІШЕ: чинна лише для поточної версії, знята — не чинна; ставиться лише на непідписаний офер", () => {
+  const now = new Date("2026-09-21T10:00:00Z");
+  const offer = { version: 1, sha256: "h1", section: "offer" as const };
+  const mark = { version: 1, sha256: "h1", signedAt: "2026-03-01T10:00:00Z", method: SIGNED_EARLIER, approvedAt: "2026-09-21T09:00:00Z", rejectedAt: null };
+  assert.equal(signatureState(offer, [], now, "2026-09-18T08:00:00Z").kind, "pending", "без позначки офер чекає підпису");
+  assert.equal(signatureState(offer, [mark], now, "2026-09-18T08:00:00Z").kind, "signed", "🔴 позначка не зняла очікування підпису");
+  assert.equal(signatureState({ ...offer, version: 2, sha256: "h2" }, [mark], now, "2026-09-18T08:00:00Z").kind, "outdated", "🔴 позначка пережила нову версію");
+  assert.equal(signatureState(offer, [{ ...mark, rejectedAt: "2026-09-21T09:30:00Z" }], now, "2026-09-18T08:00:00Z").kind, "pending", "знята позначка лишилась чинною");
+  const d = { section: "offer" as const, archivedAt: null, inactiveAt: null, sha256: "h1", addresseeUserId: 7 };
+  assert.equal(presignRefusal(d, "pending", null, "2026-09-21"), null);
+  assert.equal(presignRefusal(d, "overdue", "2026-03-01", "2026-09-21"), null);
+  assert.equal(presignRefusal(d, "outdated", null, "2026-09-21"), null, "нова версія вже підписаного на папері — теж можна відмітити");
+  assert.match(presignRefusal(d, "signed", null, "2026-09-21") ?? "", /вже підписана/);
+  assert.match(presignRefusal(d, "review", null, "2026-09-21") ?? "", /Фото/);
+  assert.match(presignRefusal({ ...d, section: "general" }, "not_required", null, "2026-09-21") ?? "", /лише в оферів/);
+  assert.match(presignRefusal({ ...d, archivedAt: "2026-09-01" }, "pending", null, "2026-09-21") ?? "", /архів/);
+  assert.match(presignRefusal({ ...d, sha256: null }, "pending", null, "2026-09-21") ?? "", /контрольної суми/);
+  assert.match(presignRefusal(d, "pending", "2026-09-22", "2026-09-21") ?? "", /не в майбутньому/);
+  assert.match(presignRefusal(d, "pending", "21.09.2026", "2026-09-21") ?? "", /форматі/);
+});
+
+/**
+ * #595b — маршрути «підписано раніше» стоять за `management`, а нагадування не рахують ЗНЯТУ позначку
+ * підписом. Читає джерело. Червоніє, якщо позначку зможе поставити сам адресат (підписав би за себе без
+ * коду) або якщо після зняття позначки нагадування так і не відновляться.
+ */
+test("#595b ПІДПИСАНО РАНІШЕ: ставить і знімає лише керівництво; знята позначка не глушить нагадування", () => {
+  const src = readFileSync(fileURLToPath(new URL("../../src/routes/documents.ts", import.meta.url)), "utf8");
+  assert.match(src, /documentsRouter\.post\("\/file\/:id\/presigned", management,/, "🔴 «підписано раніше» без management");
+  assert.match(src, /documentsRouter\.post\("\/file\/:id\/presigned\/undo", management,/, "🔴 зняття позначки без management");
+  const job = readFileSync(fileURLToPath(new URL("../../src/jobs/offerReminders.ts", import.meta.url)), "utf8");
+  assert.match(job, /s\.sha256 = f\.sha256 AND s\.rejected_at IS NULL\) AS signed_current/, "🔴 відхилений підпис глушить нагадування");
+});
+
+/**
+ * #596 — КАНДИДАТ (рішення власника 21.09.2026): бачить регламенти й робочі документи за правами папок
+ * і ЛИШЕ СВІЙ офер. Фікстури по обидва боки: свій офер видно — чужий ні; відкрита папка видно — закрита
+ * ні; архів, чужий особистий і редагування — ні. Червоніє, якщо кандидата додадуть у керівництво чи
+ * офер почне відкриватись за роллю, а не за адресатом.
+ */
+test("#596 КАНДИДАТ: загальні за правами папок, лише свій офер; чужий офер, чужий особистий, архів і редагування — ні", () => {
+  const c = { userId: 50, roleKey: "candidate" };
+  assert.equal(canSeeDocument(c, doc(), ctx()), true, "кандидат не бачить загальний документ у відкритій папці");
+  assert.equal(canSeeDocument(c, doc({ folderId: null }), ctx()), true);
+  const closed = new Map([[10, { canView: false, canUpload: false, canEdit: false, canPublish: false }]]);
+  assert.equal(canSeeDocument(c, doc(), ctx({ folderRights: closed })), false, "закрита для ролі папка відкрилась кандидату");
+  assert.equal(canSeeDocument(c, doc({ section: "offer", addresseeUserId: 50 }), ctx()), true, "🔴 кандидат не бачить СВІЙ офер");
+  assert.equal(canSeeDocument(c, doc({ section: "offer", addresseeUserId: 51 }), ctx()), false, "🔴 кандидат бачить ЧУЖИЙ офер");
+  assert.equal(canSeeDocument(c, doc({ section: "personal", addresseeUserId: 51, createdBy: 3 }), ctx()), false, "кандидат бачить чужий особистий");
+  assert.equal(canSeeDocument(c, doc({ section: "offer", addresseeUserId: 50, archivedAt: "2026-09-01" }), ctx()), false, "архів відкрився кандидату");
+  assert.equal(canEditDocument(c, doc(), ctx()), false);
+  assert.equal(canSignDocument(c, doc({ section: "offer", addresseeUserId: 50 })), true, "кандидат не може підписати свій офер");
+  assert.equal(canSignDocument(c, doc({ section: "offer", addresseeUserId: 51 })), false);
+  assert.equal(MANAGEMENT_ROLES.includes("candidate"), false);
+});
+
+/**
+ * #597 — ПАПКА В ПАПЦІ: підпапка без власного рядка прав бере права НАЙБЛИЖЧОЇ батьківської, що його має;
+ * власний рядок перемагає в обидва боки; персональний виняток на батьківську діє й на підпапки. Папку не
+ * перенести в себе чи у власну підпапку; цикл у даних не вішає розрахунок. Червоніє, якщо успадкування
+ * прибрати (перенесення папки в закриту відкриє її вміст усім) або якщо дозволити цикл.
+ */
+test("#597 ПАПКА В ПАПЦІ: права успадковуються від найближчої батьківської, власні перемагають; у себе й у підпапку не перенести", () => {
+  const m = { userId: 1, roleKey: "manager" };
+  const parents = new Map<number, number | null>([[10, 20], [20, 30], [30, null], [40, null]]);
+  const R = (canView: boolean, canEdit = false, canUpload = false) => ({ canView, canUpload, canEdit, canPublish: false });
+  assert.deepEqual(folderChain(10, parents), [10, 20, 30]);
+  assert.equal(canSeeDocument(m, doc(), ctx({ folderParents: parents, folderRights: new Map([[30, R(false)]]) })), false, "🔴 закрита батьківська не закрила підпапку");
+  assert.equal(canSeeDocument(m, doc(), ctx({ folderRights: new Map([[30, R(false)]]) })), true, "без звʼязку батьків чужа папка не мусить впливати");
+  assert.equal(canSeeDocument(m, doc(), ctx({ folderParents: parents, folderRights: new Map([[30, R(false)], [20, R(true)]]) })), true, "ближча батьківська мусить перемагати дальню");
+  assert.equal(canSeeDocument(m, doc(), ctx({ folderParents: parents, folderRights: new Map([[30, R(true)], [10, R(false)]]) })), false, "власний рядок підпапки мусить перемагати батьківський");
+  assert.equal(canEditDocument(m, doc(), ctx({ folderParents: parents, folderRights: new Map([[20, R(true, true)]]) })), true, "право редагувати не успадкувалось");
+  assert.equal(canUploadTo(m, 10, ctx({ folderParents: parents, folderRights: new Map([[30, R(true, false, true)]]) })), true, "право завантажувати не успадкувалось");
+  const grant = { folderId: 30, fileId: null, userId: 1, canView: true, canUpload: false, expiresAt: null };
+  assert.equal(canSeeDocument(m, doc(), ctx({ folderParents: parents, folderRights: new Map([[30, R(false)]]), grants: [grant] })), true, "виняток на батьківську не діє на підпапку");
+  assert.equal(inheritedRights(40, parents, new Map([[30, 1]])), undefined, "сусідня гілка не успадковує");
+  assert.equal(moveFolderRefusal(30, null, parents), null);
+  assert.equal(moveFolderRefusal(10, 40, parents), null);
+  assert.match(moveFolderRefusal(30, 30, parents) ?? "", /саму в себе/);
+  assert.match(moveFolderRefusal(30, 10, parents) ?? "", /власну підпапку/, "🔴 папку перенесено у власну підпапку — цикл");
+  assert.match(moveFolderRefusal(30, 99, parents) ?? "", /не існує/);
+  const loop = new Map<number, number | null>([[1, 2], [2, 1]]);
+  assert.deepEqual(folderChain(1, loop), [1, 2], "цикл у даних мусить обірватись");
+});
+
+/**
+ * #597b — КЕРУВАННЯ ПАПКАМИ В РОУТІ: непорожню папку не видалити (каскад стер би документи в обхід кошика),
+ * перенесення документа між папками — лише керівництву, порядок і перенесення папок — за `management`.
+ * Читає джерело. Червоніє, якщо повернути безумовний DELETE або дати переносити документ будь-кому з правом редагувати.
+ */
+test("#597b ПАПКИ: непорожня не видаляється; документ між папками переносить лише керівництво", () => {
+  const src = readFileSync(fileURLToPath(new URL("../../src/routes/documents.ts", import.meta.url)), "utf8");
+  const body = (head: string) => { const i = src.indexOf(head); assert.ok(i >= 0, head); return src.slice(i, src.indexOf("\n});", i)); };
+  const del = body('documentsRouter.delete("/folder/:id"');
+  assert.ok(del.indexOf("Папка не порожня") >= 0 && del.indexOf("Папка не порожня") < del.indexOf("DELETE FROM doc_folders"), "🔴 папка видаляється без перевірки вмісту");
+  const patch = body('documentsRouter.patch("/file/:id"');
+  assert.ok(patch.indexOf("isManagement(req.auth!.roleKey)") >= 0 && patch.indexOf("isManagement(req.auth!.roleKey)") < patch.indexOf('push("folder_id"'), "🔴 документ між папками переносить не лише керівництво");
+  assert.match(src, /documentsRouter\.put\("\/folders\/order", management,/);
+  assert.match(body('documentsRouter.patch("/folder/:id"'), /moveFolderRefusal\(id, to, parents\)/, "🔴 перенесення папки без перевірки на цикл");
 });

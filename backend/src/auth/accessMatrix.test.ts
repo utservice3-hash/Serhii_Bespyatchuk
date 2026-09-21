@@ -48,11 +48,14 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   // 403 по СПИСКУ, і проба ним безпечна — middleware `management` відмовляє до будь-якого запису.
   "POST /api/documents/folder": "MANAGEMENT_ROLES (core/docAccess) — financier поза керівництвом документів",
   "PATCH /api/documents/folder/:id": "MANAGEMENT_ROLES — те саме",
+  "PUT /api/documents/folders/order": "MANAGEMENT_ROLES — те саме",
   "POST /api/documents/file/:id/archive": "MANAGEMENT_ROLES — те саме",
   "POST /api/documents/file/:id/activate": "MANAGEMENT_ROLES — те саме",
   "POST /api/documents/file/:id/restore": "MANAGEMENT_ROLES — те саме",
   "PUT /api/documents/access/:folderId": "MANAGEMENT_ROLES — те саме",
   "PUT /api/documents/file/:id/access": "MANAGEMENT_ROLES — те саме",
+  "POST /api/documents/file/:id/presigned": "MANAGEMENT_ROLES — те саме",
+  "POST /api/documents/file/:id/presigned/undo": "MANAGEMENT_ROLES — те саме",
   "POST /api/documents/file/:id/delete": "MANAGEMENT_ROLES — те саме",
   "POST /api/documents/file/:id/undelete": "MANAGEMENT_ROLES — те саме",
   // 💰 План витрат на рекламу — той самий guard `requireManageUsers`. Дивитись на план

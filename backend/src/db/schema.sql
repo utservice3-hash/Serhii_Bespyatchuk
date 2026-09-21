@@ -3761,3 +3761,13 @@ CREATE TABLE IF NOT EXISTS exit_interviews (
 );
 -- 🔒 Відповіді звільнених — персональні дані, не для моделі. REVOKE після GRANT і CREATE. Тримає #585.
 REVOKE ALL ON exit_interviews FROM ai_readonly;
+
+-- ✍️ «ПІДПИСАНО РАНІШЕ» (рішення власника 21.09.2026): офери, підписані на папері до появи розділу,
+-- керівництво відмічає без повторного підпису. Це звичайний запис підпису з новим методом, тож стан,
+-- нагадування й «нова версія → підписати знову» працюють без окремого прапорця.
+ALTER TABLE doc_signatures DROP CONSTRAINT IF EXISTS doc_signatures_method_check;
+ALTER TABLE doc_signatures ADD CONSTRAINT doc_signatures_method_check
+  CHECK (method IN ('email_code','telegram_code','paper_photo','diia','signed_earlier'));
+
+-- 📂 ПОРЯДОК ПАПОК (21.09.2026): керівництво рухає папки «вище / нижче»; рівні значення — за назвою.
+ALTER TABLE doc_folders ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0;
