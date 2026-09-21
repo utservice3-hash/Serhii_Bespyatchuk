@@ -4394,10 +4394,12 @@ export const fetchNominationWeek = async (weekFrom?: string) =>
 export const reviewNomination = async (p: { weekFrom: string; teamId: number; nomination: NominationKey; action: "confirm" | "override"; overrideManagerIds?: number[]; overrideValue?: number; reason?: string }) =>
   (await api.post<NominationWeek>("/nominations/review", p)).data;
 // 🎞 Ручні слайди презентації тижня (прохід 2) — лише керівництво.
-export type ManualSlideKind = "newcomer" | "birthday" | "news" | "custom";
-export interface ManualSlide { id: number; kind: ManualSlideKind; title: string; person: string | null; body: string | null; position: number }
-export interface ManualSlidesResp { weekFrom: string; kinds: { key: ManualSlideKind; label: string }[]; slides: ManualSlide[] }
-export type ManualSlideInput = { weekFrom: string; kind: ManualSlideKind; title: string; person?: string; body?: string; position?: number };
+export type ManualSlideKind = "newcomer" | "birthday" | "news" | "contest" | "webinar" | "custom";
+export interface SlideTemplateField { key: string; label: string; required: boolean; max: number; multiline?: boolean; placeholder?: string; default?: string }
+export interface SlideTemplate { key: ManualSlideKind; label: string; fields: SlideTemplateField[] }
+export interface ManualSlide { id: number; kind: ManualSlideKind; title: string; person: string | null; fields: Record<string, string>; position: number }
+export interface ManualSlidesResp { weekFrom: string; kinds: { key: ManualSlideKind; label: string }[]; templates: SlideTemplate[]; slides: ManualSlide[] }
+export type ManualSlideInput = { weekFrom: string; kind: ManualSlideKind; fields: Record<string, string>; position?: number };
 export const fetchManualSlides = async (weekFrom: string) =>
   (await api.get<ManualSlidesResp>("/nominations/manual-slides", { params: { weekFrom } })).data;
 export const createManualSlide = async (p: ManualSlideInput) => (await api.post<ManualSlidesResp>("/nominations/manual-slides", p)).data;

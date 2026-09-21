@@ -3875,3 +3875,10 @@ CREATE TABLE IF NOT EXISTS nomination_manual_slides (
   deleted_at  TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS ix_nomination_manual_slides_week ON nomination_manual_slides(week_from) WHERE deleted_at IS NULL;
+
+-- 🎞 ШАБЛОНИ РУЧНИХ СЛАЙДІВ (21.09.2026): поля шаблону — у `fields` (JSON), перелік шаблонів —
+-- `SLIDE_TEMPLATES` у `core/nominationRules.ts`. `title`/`person` лишаються похідними для переліку.
+ALTER TABLE nomination_manual_slides ADD COLUMN IF NOT EXISTS fields JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE nomination_manual_slides DROP CONSTRAINT IF EXISTS nomination_manual_slides_kind_check;
+ALTER TABLE nomination_manual_slides ADD CONSTRAINT nomination_manual_slides_kind_check
+  CHECK (kind IN ('newcomer','birthday','news','contest','webinar','custom'));

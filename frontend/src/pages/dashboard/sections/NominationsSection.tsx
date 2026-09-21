@@ -260,44 +260,50 @@ function OverrideDialog({ data, target, onClose, onSaved }: { data: NominationWe
 }
 
 /**
- * 🎞 Ручні слайди презентації (новачки, дні народження, новини) — готує керівництво/Даша.
- * Видалення скасовне тут же кнопкою «Відновити» (правило: незворотна кнопка — пастка).
+ * 🎞 Ручні слайди презентації — ШАБЛОНИ зі слайдів Даші (новий працівник, день народження, новини,
+ * конкурс тижня, анонс, довільний). Поля й тексти за замовчуванням приходять із сервера
+ * (`SLIDE_TEMPLATES`), тож форма й перевірка не розходяться. Видалення скасовне кнопкою «Відновити».
  */
 function ManualSlidesCard({ weekFrom }: { weekFrom: string }) {
   const [d, setD] = useState<ManualSlidesResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState<ManualSlide | null>(null);
-  const [kind, setKind] = useState<ManualSlideKind>("newcomer");
-  const [title, setTitle] = useState("");
-  const [person, setPerson] = useState("");
-  const [body, setBody] = useState("");
+  const [kind, setKind] = useState<ManualSlideKind | null>(null);
+  const [vals, setVals] = useState<Record<string, string>>({});
   const [removed, setRemoved] = useState<ManualSlide | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => { setErr(null); setRemoved(null); fetchManualSlides(weekFrom).then(setD).catch((e) => setErr(errorOf(e))); }, [weekFrom]);
-  const reset = () => { setEditing(null); setKind("newcomer"); setTitle(""); setPerson(""); setBody(""); };
-  const startEdit = (s: ManualSlide) => { setEditing(s); setKind(s.kind); setTitle(s.title); setPerson(s.person ?? ""); setBody(s.body ?? ""); };
+  const tpl = d?.templates.find((t) => t.key === kind) ?? null;
+  const reset = () => { setEditing(null); setKind(null); setVals({}); };
+  const pick = (k: ManualSlideKind) => {
+    const t = d?.templates.find((x) => x.key === k);
+    setEditing(null); setKind(k);
+    setVals(Object.fromEntries((t?.fields ?? []).map((f) => [f.key, f.default ?? ""])));
+  };
+  const startEdit = (s: ManualSlide) => { setEditing(s); setKind(s.kind); setVals({ ...(s.fields ?? {}) }); };
   const run = async (fn: () => Promise<ManualSlidesResp>) => {
     setBusy(true); setErr(null);
-    try { setD(await fn()); } catch (e) { setErr(errorOf(e)); } finally { setBusy(false); }
+    try { setD(await fn()); return true; } catch (e) { setErr(errorOf(e)); return false; } finally { setBusy(false); }
   };
-  const save = () => {
-    const p = { weekFrom, kind, title, person, body, position: editing?.position ?? (d?.slides.length ?? 0) };
-    void run(() => (editing ? updateManualSlide(editing.id, p) : createManualSlide(p))).then(reset);
+  const missing = tpl ? tpl.fields.filter((f) => f.required && !(vals[f.key] ?? "").trim()).map((f) => f.label) : [];
+  const save = async () => {
+    if (!kind) return;
+    const p = { weekFrom, kind, fields: vals, position: editing?.position ?? (d?.slides.length ?? 0) };
+    if (await run(() => (editing ? updateManualSlide(editing.id, p) : createManualSlide(p)))) reset();
   };
-  const label = (k: ManualSlideKind) => d?.kinds.find((x) => x.key === k)?.label ?? k;
+  const label = (k: ManualSlideKind) => d?.templates.find((x) => x.key === k)?.label ?? k;
 
   return (
     <div className="nm-card">
       <div className="nm-banner"><b>Ручні слайди презентації</b>
-        <span className="nm-muted">Новачки, дні народження, новини — показуються після титулу. Числа з CRM сюди не пишуться.</span>
+        <span className="nm-muted">Шаблони — як у презентації зустрічі: оберіть шаблон, заповніть поля, слайд зʼявиться після титулу. Числа з CRM сюди не пишуться.</span>
         {err ? <span className="nm-err">{err}</span> : null}</div>
       <div className="nm-slides-list">
         {d && d.slides.length === 0 ? <span className="nm-muted">Цього тижня ручних слайдів немає.</span> : null}
         {d?.slides.map((s) => (
           <div className="nm-slide-row" key={s.id}>
             <span className="nm-pill wait">{label(s.kind)}</span><span className="t">{s.title}</span>
-            {s.person ? <span className="nm-muted">{s.person}</span> : null}
             <button className="nm-btn" disabled={busy} onClick={() => startEdit(s)}>Змінити</button>
             <button className="nm-btn" disabled={busy} onClick={() => { setRemoved(s); void run(() => deleteManualSlide(s.id)); }}>Видалити</button>
           </div>
@@ -305,20 +311,34 @@ function ManualSlidesCard({ weekFrom }: { weekFrom: string }) {
         {removed ? <div className="nm-slide-row"><span className="nm-muted">Видалено «{removed.title}».</span>
           <button className="nm-btn" disabled={busy} onClick={() => { const id = removed.id; setRemoved(null); void run(() => restoreManualSlide(id)); }}>Відновити</button></div> : null}
       </div>
-      <div className="nm-form">
-        <label className="nm-field"><span>Тип</span>
-          <select className="nm-inp" id="nm-ms-kind" value={kind} onChange={(e) => setKind(e.target.value as ManualSlideKind)}>
-            {(d?.kinds ?? []).map((k) => <option key={k.key} value={k.key}>{k.label}</option>)}
-          </select></label>
-        <label className="nm-field"><span>Заголовок *</span><input className="nm-inp" id="nm-ms-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Напр.: Вітаємо в команді!" /></label>
-        <label className="nm-field"><span>Людина</span><input className="nm-inp" id="nm-ms-person" value={person} onChange={(e) => setPerson(e.target.value)} placeholder="Прізвище Імʼя" /></label>
-        <label className="nm-field" style={{ gridColumn: "1 / -1" }}><span>Текст</span>
-          <textarea className="nm-inp" id="nm-ms-body" value={body} onChange={(e) => setBody(e.target.value)} placeholder="Побажання, новина, деталі" /></label>
-        <div className="nm-btns">
-          <button className="nm-btn p" disabled={busy || !title.trim()} onClick={save}>{editing ? "Зберегти слайд" : "Додати слайд"}</button>
-          {editing ? <button className="nm-btn" onClick={reset}>Скасувати</button> : null}
-        </div>
+      <div className="nm-slides-list">
+        <span className="nm-muted">{editing ? `Змінюєте: ${editing.title}` : "Додати слайд за шаблоном:"}</span>
+        {!editing ? <div className="nm-btns">
+          {(d?.templates ?? []).map((t) => (
+            <button key={t.key} className={`nm-btn${kind === t.key ? " p" : ""}`} onClick={() => pick(t.key)}>{t.label}</button>
+          ))}
+        </div> : null}
       </div>
+      {tpl ? (
+        <div className="nm-form">
+          {tpl.fields.map((f) => (
+            <label className="nm-field" key={f.key} style={f.multiline ? { gridColumn: "1 / -1" } : undefined}>
+              <span>{f.label}{f.required ? " *" : ""}</span>
+              {f.multiline
+                ? <textarea className="nm-inp" id={`nm-ms-${f.key}`} value={vals[f.key] ?? ""} maxLength={f.max} placeholder={f.placeholder}
+                    onChange={(e) => setVals((v) => ({ ...v, [f.key]: e.target.value }))} />
+                : <input className="nm-inp" id={`nm-ms-${f.key}`} value={vals[f.key] ?? ""} maxLength={f.max} placeholder={f.placeholder}
+                    onChange={(e) => setVals((v) => ({ ...v, [f.key]: e.target.value }))} />}
+            </label>
+          ))}
+          <div className="nm-btns" style={{ gridColumn: "1 / -1" }}>
+            <button className="nm-btn p" disabled={busy || missing.length > 0} onClick={() => void save()}
+              title={missing.length ? `Заповніть: ${missing.join(", ")}` : undefined}>{editing ? "Зберегти слайд" : "Додати слайд"}</button>
+            <button className="nm-btn" onClick={reset}>Скасувати</button>
+            {missing.length ? <span className="nm-muted">Заповніть: {missing.join(", ")}</span> : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
