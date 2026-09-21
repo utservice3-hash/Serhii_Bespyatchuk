@@ -185,7 +185,7 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
     const nav = [...new Set(manual.map(manualSection)), ...SECTIONS];
     const frame = (active: string, body: ReactElement) => (
       <div className="ps-slide">
-        <aside className="ps-side">
+        <aside className={`ps-side${nav.length > 5 ? " dense" : ""}`}>
           <div className="ps-logo"><Logo variant="red" size={44} /></div>
           {nav.map((s) => <div key={s} className={`ps-nav${s === active ? " on" : ""}`}>{s}</div>)}
           <div className="ps-date">{dmy(meeting)}</div>

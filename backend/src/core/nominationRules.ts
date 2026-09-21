@@ -292,7 +292,7 @@ export interface ManualSlideInput {
 /** Підпис рядка в переліку ручних слайдів — щоб у редакторі було видно, що це за слайд. */
 export function slideListTitle(kind: ManualKind, f: Record<string, string>): string {
   const lbl = SLIDE_TEMPLATES.find((t) => t.key === kind)?.label ?? kind;
-  const who = f.person || f.title || f.topic || (f.text ? f.text.slice(0, 50) : "");
+  const who = f.person || f.topic || (f.text ? f.text.slice(0, 50) : "") || f.title || "";
   return (kind === "custom" ? f.title : who ? `${lbl} · ${who}` : lbl).slice(0, 80);
 }
 
