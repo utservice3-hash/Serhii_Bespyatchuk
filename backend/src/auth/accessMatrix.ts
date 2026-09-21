@@ -338,6 +338,15 @@ export const ACCESS_MATRIX: AccessRow[] = [
      рекрутер (HR) і адмін-рівень; тімлід — лише кандидати своєї команди (читання, статус,
      коментар). Фінансист адмін-рівня, але вкладки не має → 403 на tab-гейті; у deny-only
      рядки його не пишемо, щоб не заводити запис у ADMIN_DENIED_BY_PERM без потреби. */
+  /* 🏆 НОМІНАЦІЇ ТИЖНЯ (21.09.2026). Вкладку `nominations` сид дає admin, ceo, opdir, kvp, team_lead.
+     Друга межа — `viewerOf`/`canReview` в обробнику: керівництво — усі команди, тімлід — своя й не
+     рядок про себе. Фінансист адмін-рівня, але вкладки не має → 403 на tab-гейті; у deny-only рядок
+     його не пишемо (та сама причина, що в найму). Проба POST з порожнім тілом дає 400 дозволеним
+     ролям, тому тімлід і керівництво в deny НЕ стоять. */
+  { method: "GET", path: "/api/nominations/week", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["financier", "hr", "manager"] },
+  { method: "POST", path: "/api/nominations/review", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/hiring/meta", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "hr", "team_lead"], deny: ["financier", "manager"] },
   { method: "GET", path: "/api/hiring/candidates", cls: "GET",

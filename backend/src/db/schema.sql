@@ -3771,3 +3771,80 @@ ALTER TABLE doc_signatures ADD CONSTRAINT doc_signatures_method_check
 
 -- 📂 ПОРЯДОК ПАПОК (21.09.2026): керівництво рухає папки «вище / нижче»; рівні значення — за назвою.
 ALTER TABLE doc_folders ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🏆 НОМІНАЦІЇ ТИЖНЯ (21.09.2026) — `core/nominations.ts`, `jobs/freezeNominations.ts`
+-- ══════════════════════════════════════════════════════════════════════════
+-- Гібрид: система рахує переможців кожної команди з ядра («як на Звіті»), тімлід підтверджує або
+-- виправляє з причиною, у вівторок 08:00 за Києвом тиждень ФІКСУЄТЬСЯ і більше не змінюється.
+-- ⚠️ revert коду таблиць не прибирає і знімків не відкочує — лише окремий DROP.
+CREATE TABLE IF NOT EXISTS nomination_weeks (
+  week_from    DATE PRIMARY KEY,
+  week_to      DATE NOT NULL,
+  frozen_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  frozen_by    TEXT NOT NULL,             -- 'job' — плановий тік/догін; інше не пишемо
+  rule_version TEXT NOT NULL,             -- `NOMINATION_RULE_VERSION`: з якою редакцією правила зафіксовано
+  CHECK (week_to = week_from + 6)
+);
+
+-- Підтвердження й виправлення тімлідів — ЛИШЕ ДОПИСУВАННЯ: діє останній запис по (тиждень, команда,
+-- номінація), попередні лишаються історією. Виправлення без причини неможливе на рівні БД.
+CREATE TABLE IF NOT EXISTS nomination_reviews (
+  id                  BIGSERIAL PRIMARY KEY,
+  week_from           DATE NOT NULL,
+  team_id             INTEGER NOT NULL,
+  nomination          TEXT NOT NULL,
+  action              TEXT NOT NULL CHECK (action IN ('confirm','override')),
+  crm_fingerprint     TEXT NOT NULL,      -- що саме бачив тімлід у CRM у мить дії (переможці + число)
+  override_manager_ids INTEGER[],
+  override_value      NUMERIC,
+  reason              TEXT,
+  user_id             INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (action = 'confirm' OR (cardinality(override_manager_ids) > 0 AND override_value IS NOT NULL
+                                 AND length(btrim(COALESCE(reason, ''))) >= 3))
+);
+CREATE INDEX IF NOT EXISTS ix_nomination_reviews_week ON nomination_reviews(week_from, team_id, nomination, id);
+
+-- Зафіксований результат: рядок на (команда, номінація, переможець); порожня номінація — один рядок
+-- без переможця. Поруч ЗАВЖДИ лежать число й переможці CRM, навіть коли фінальне виправлено руками.
+CREATE TABLE IF NOT EXISTS nomination_snapshot (
+  id              BIGSERIAL PRIMARY KEY,
+  week_from       DATE NOT NULL REFERENCES nomination_weeks(week_from),
+  team_id         INTEGER NOT NULL,
+  team_name       TEXT NOT NULL,
+  dept            TEXT NOT NULL CHECK (dept IN ('rpk','rnk')),
+  nomination      TEXT NOT NULL,
+  status          TEXT NOT NULL CHECK (status IN ('confirmed','unconfirmed','overridden','empty')),
+  manager_id      INTEGER,
+  manager_name    TEXT,
+  value           NUMERIC,
+  crm_manager_ids INTEGER[] NOT NULL DEFAULT '{}',
+  crm_value       NUMERIC,
+  reason          TEXT,
+  extra           JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS ix_nomination_snapshot_week ON nomination_snapshot(week_from);
+
+-- 🔒 ЗНІМОК НЕЗМІННИЙ (#602): UPDATE і DELETE фіксації та знімка — виняток на рівні БД, а не
+-- домовленість у коді. Журнал рішень тімлідів теж лише дописується. Виправити зафіксоване можна
+-- тільки свідомою міграцією, яка спершу знімає тригер, — і це має бути видно в історії.
+CREATE OR REPLACE FUNCTION nominations_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'nominations: % у % заборонено — зафіксоване не змінюється', TG_OP, TG_TABLE_NAME;
+END $$;
+DROP TRIGGER IF EXISTS trg_nomination_weeks_immutable ON nomination_weeks;
+CREATE TRIGGER trg_nomination_weeks_immutable BEFORE UPDATE OR DELETE ON nomination_weeks
+  FOR EACH ROW EXECUTE FUNCTION nominations_immutable();
+DROP TRIGGER IF EXISTS trg_nomination_snapshot_immutable ON nomination_snapshot;
+CREATE TRIGGER trg_nomination_snapshot_immutable BEFORE UPDATE OR DELETE ON nomination_snapshot
+  FOR EACH ROW EXECUTE FUNCTION nominations_immutable();
+DROP TRIGGER IF EXISTS trg_nomination_reviews_immutable ON nomination_reviews;
+CREATE TRIGGER trg_nomination_reviews_immutable BEFORE UPDATE OR DELETE ON nomination_reviews
+  FOR EACH ROW EXECUTE FUNCTION nominations_immutable();
+
+-- Вкладка «Номінації тижня»: керівництво (admin, ceo, opdir, kvp) і тімліди. Менеджерам — дошка в
+-- проході 3. ⚠️ Ідемпотентно й НЕ перетирає рішень адміна: чіпаємо лише ролі, де ключа ще немає.
+UPDATE roles SET screen_access = screen_access || '{"nominations":true}'::jsonb
+  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'team_lead')
+    AND NOT (screen_access ? 'nominations');

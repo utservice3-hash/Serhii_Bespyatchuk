@@ -32,6 +32,7 @@ import { documentsRouter } from "./routes/documents.js";
 import { telegramRouter } from "./routes/telegram.js";
 import { sendOfferReminders } from "./jobs/offerReminders.js";
 import { runDocLifecycle } from "./jobs/docLifecycle.js";
+import { runFreezeNominations } from "./jobs/freezeNominations.js";
 import { runDocText } from "./jobs/docText.js";
 import { signBotEnsureWebhook } from "./bot/signBot.js";
 import { vaultBotEnsureWebhook } from "./bot/vaultBot.js";
@@ -45,6 +46,7 @@ import { trainingRouter } from "./routes/training.js";
 import { hiringQuestionsRouter } from "./routes/hiringQuestions.js";
 import { candidateTrainingRouter } from "./routes/candidateTraining.js";
 import { hiringRouter } from "./routes/hiring.js";
+import { nominationsRouter } from "./routes/nominations.js";
 import { statisticsRouter } from "./routes/statistics.js";
 import { statsSeriesRouter } from "./routes/statisticsSeries.js";
 import { runDataReconciliation } from "./jobs/dataReconciliation.js";
@@ -155,6 +157,7 @@ app.use("/api/training/candidate", candidateTrainingRouter); // «моє нав�
 app.use("/api/training/questions", hiringQuestionsRouter); // питання кандидата тімліду (найм 2a) — ДО trainingRouter
 app.use("/api/training", trainingRouter);
 app.use("/api/hiring", hiringRouter);
+app.use("/api/nominations", nominationsRouter); // 🏆 Номінації тижня (21.09.2026)
 app.use("/api/secrets", secretsRouter); // 🔐 сейф доступів співробітників (18.09.2026)
 app.use("/api/vault-bot", vaultBotRouter); // 🤖 вебхук бота «UTS Сейф» (без requireAuth, межа — секрет) // Найм: графік, кандидати, щоденний звіт (17.09.2026)
 app.use("/api/statistics", statisticsRouter);
@@ -520,6 +523,11 @@ cron.schedule("5,35 * * * *", () => {
   void runJob("docLifecycle", () => runDocLifecycle());
 });
 
+// 🏆 Номінації тижня: фіксація минулого тижня — вівторок 08:00 Києва (рішення 21.09.2026) + догін на старті.
+cron.schedule("0 8 * * 2", () => {
+  void runJob("freezeNominations", () => runFreezeNominations());
+}, { timezone: "Europe/Kyiv" });
+
 // 🔎 Текст документів для пошуку: нові файли й нові версії, які не встигло обробити завантаження.
 cron.schedule("20,50 * * * *", () => {
   void runJob("docText", () => runDocText());
@@ -810,6 +818,7 @@ const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["signBotEnsureWebhook", () => signBotEnsureWebhook()],
   ["vaultBotEnsureWebhook", () => vaultBotEnsureWebhook()],
   ["docLifecycle", () => runDocLifecycle()],
+  ["freezeNominations", () => runFreezeNominations()],
   ["docText", () => runDocText()],
   ["createOneOnOneReminders", () => createOneOnOneReminders()],
   ["createDutyReminders", () => createDutyReminders()],

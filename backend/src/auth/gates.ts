@@ -440,6 +440,14 @@ export interface SpreadExemption { file: string; frag: string; why: string }
  * акумулятори.
  */
 export const ROW_SPREAD_EXEMPTIONS: SpreadExemption[] = [
+  // 🏆 Номінації тижня (21.09.2026): усі три — ОБЧИСЛЕНІ обʼєкти ядра (`WeekView` з `core/nominations.ts`),
+  // а не рядки БД; до них лише дописуються права глядача. Склад полів задає тип `WeekView`.
+  { file: "routes/nominations.ts", frag: "return { ...view, viewer",
+    why: "`view` — WeekView, зібраний ядром номінацій із функцій money/metrics і ростера; не рядок БД." },
+  { file: "routes/nominations.ts", frag: "({ ...t, cells",
+    why: "`t` — TeamWeek того самого обчисленого WeekView (команда, учасники, клітинки)." },
+  { file: "routes/nominations.ts", frag: "return { ...c, canReview",
+    why: "`c` — NominationCell обчисленого WeekView (CRM-переможці, фінал, угода-доказ)." },
   { file: "routes/bank.ts", frag: "return { ...b, balance_",
     why: "SELECT вище називає РІВНО 6 колонок (id, label, company, balance_amount, "
        + "balance_currency, balance_updated_at) — спред несе тільки їх. Нова колонка в "
