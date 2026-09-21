@@ -157,6 +157,7 @@ export const MANIFEST_FILES: string[] = [
   "core/receivableNoteMerge.test.js",
   "core/clientContacts.test.js",
   "core/bankStatementCsv.test.js",
+  "core/provisionRules.test.js",
   "routes/taskCommentKeep.test.js",
   "routes/taskDeepLink.test.js",
   "routes/missedCallsTab.test.js",
@@ -904,6 +905,8 @@ export const MANIFEST_TESTS: string[] = [
   "#598b ВИПИСКА ПРИВАТ: байти Windows-1251 з LF; символ поза кодуванням названо числом",
   "#598c ВИПИСКА МОНО: заголовок і рядки як у зразку — лапки лише де пробіл, `—`, `2000.0`, київський час",
   "#598d ВИПИСКА: приховані виключено й пораховано, з правом — усе; роут за правом export_bank_statement",
+  "#599 provisionUsers: активність штабу з ручною роллю синк не чіпає; продажні ролі й кандидат — під синком",
+  "#599b provisionUsers пише is_active ЧЕРЕЗ правило, голого присвоєння з CRM немає",
   // routes/missedCallsTab.test.ts — фронт вкладки: хвости звірки ТЗ-1 (17.09.2026)
   "#462 СИГНАЛ: нова й перевідкрита задача «📵» дзвонить виконавцю; стара, чужа й закрита — ні",
   "#463 ПЕРІОД: дефолт «вчора» за Києвом, навігатор на вкладці, спільний dateRange не їде",
