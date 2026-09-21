@@ -159,7 +159,7 @@ function shape(r: FileRow, sigs: SigRow[], sentAt: string | null, viewer: DocVie
     createdAt: r.created_at, updatedAt: r.updated_at, section: r.section, addresseeUserId: r.addressee_user_id, addressee: r.addressee,
     description: r.description, version: r.version, sha256: r.sha256, archivedAt: r.archived_at, archivedReason: r.archived_reason, inactiveAt: r.inactive_at,
     author: r.author, createdBy: r.created_by,
-    signature: st,
+    signature: { kind: st.kind, days: st.days, earlier: st.kind === "signed" && sigs.some((x) => x.method === SIGNED_EARLIER && !x.rejected_at && x.version === r.version && x.sha256 === r.sha256) },
     canEdit: canEditDocument(viewer, toDocLike(r), ctx),
     canSign: canSignDocument(viewer, toDocLike(r)) && st.kind !== "signed",
     ack: ack ?? { required: false, mine: "not_required" as const, done: null, total: null },

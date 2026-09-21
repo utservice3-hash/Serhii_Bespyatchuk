@@ -2946,7 +2946,7 @@ export async function fetchCarriers(city: string): Promise<{ carriers: CrmCarrie
 export type DocSection = "general" | "personal" | "offer";
 export type DocSigKind = "not_required" | "signed" | "review" | "pending" | "overdue" | "outdated";
 export const DOC_TYPES = ["Регламент", "Інструкція", "Шаблон", "Офер", "Матеріал для клієнта", "Інше"] as const;
-export interface DocFolder { id: number; parentId: number | null; name: string; createdAt: string }
+export interface DocFolder { id: number; parentId: number | null; name: string; createdAt: string; sortOrder: number }
 export interface DocFile {
   id: number; folderId: number | null; name: string; category: string | null; mime: string | null; sizeBytes: number | null;
   createdAt: string; updatedAt: string; section: DocSection; addresseeUserId: number | null; addressee: string | null;
@@ -2954,7 +2954,8 @@ export interface DocFile {
   /** «Неактивний»: повернутий з архіву після повернення людини; активує керівництво. */
   inactiveAt: string | null;
   author: string | null; createdBy: number | null;
-  signature: { kind: DocSigKind; days: number | null };
+  /** `earlier` — керівництво відмітило «підписано раніше на папері». */
+  signature: { kind: DocSigKind; days: number | null; earlier?: boolean };
   canEdit: boolean; canSign: boolean;
   /** 📖 Ознайомлення (лише загальні регламенти): мій стан і прогрес аудиторії (done/total лише керівництву). */
   ack: { required: boolean; mine: "not_required" | "acked" | "pending"; done: number | null; total: number | null };
@@ -2994,6 +2995,13 @@ export async function fetchDocPeople(): Promise<{ userId: number; name: string; 
 }
 export async function createDocFolder(name: string, parentId: number | null): Promise<void> { await api.post("/documents/folder", { name, parentId }); }
 export async function renameDocFolder(id: number, name: string): Promise<void> { await api.patch(`/documents/folder/${id}`, { name }); }
+/** Перенести папку в іншу (`null` — у корінь). */
+export async function moveDocFolder(id: number, parentId: number | null): Promise<void> { await api.patch(`/documents/folder/${id}`, { parentId }); }
+/** Порядок папок усередині одного батька: повний список сусідів у бажаному порядку. */
+export async function orderDocFolders(parentId: number | null, ids: number[]): Promise<void> { await api.put(`/documents/folders/order`, { parentId, ids }); }
+/** ✍️ «Підписано раніше на папері» — без повторного підпису; `signedOn` РРРР-ММ-ДД необовʼязкова. */
+export async function presignDocFile(id: number, signedOn?: string | null): Promise<void> { await api.post(`/documents/file/${id}/presigned`, { signedOn: signedOn || null }); }
+export async function undoPresignDocFile(id: number): Promise<void> { await api.post(`/documents/file/${id}/presigned/undo`); }
 export async function deleteDocFolder(id: number): Promise<void> { await api.delete(`/documents/folder/${id}`); }
 export async function uploadDocFile(body: {
   folderId: number | null; filename: string; mime: string | null; category?: string | null; dataBase64: string;
@@ -3037,7 +3045,7 @@ export async function fetchTelegramStatus(): Promise<TelegramStatus> { const { d
 export async function createTelegramLink(): Promise<{ url: string; code: string; botUsername: string; expiresInSec: number }> { const { data } = await api.post<{ url: string; code: string; botUsername: string; expiresInSec: number }>("/auth/telegram-link"); return data; }
 export async function unlinkTelegram(): Promise<void> { await api.post("/auth/telegram-unlink"); }
 export interface DocFolderAccess {
-  roles: { key: string; name: string; management: boolean; canView: boolean; canUpload: boolean; canEdit: boolean; canPublish: boolean; canManage: boolean }[];
+  roles: { key: string; name: string; management: boolean; canView: boolean; canUpload: boolean; canEdit: boolean; canPublish: boolean; canManage: boolean; inheritedFrom?: number | null }[];
   grants: { id: number; userId: number; name: string; canView: boolean; canUpload: boolean; expiresAt: string | null }[];
   log: { action: string; details: Record<string, unknown> | null; at: string; actor: string | null }[];
 }
