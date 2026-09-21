@@ -126,7 +126,31 @@ const MGR_LIST = "власник 16.09.2026: «менеджери не можу�
   + "селект виконавця в менеджера був порожній, бо перелік менеджерів жив під вкладкою teams. "
   + "Роут переведено під tasks, список — усім, хто ставить задачі (продовження рішення 14.09 "
   + "«всі можуть ставити один одному задачі»)";
+const CANDIDATE_401 = "Роман 21.09.2026 («так»): кандидат на роутах РЕДАГУВАННЯ навчання отримує 401 «доступ "
+  + "до навчання закрито» замість 403 — перевірка активності акаунта кандидата (`auth/middleware.ts`, найм 2a/2b, "
+  + "17–18.09) стоїть ПЕРЕД tab-гейтом, а проба матриці ходить від кандидата без активного акаунта. Відмова "
+  + "лишилась, змінився лише код; матриця ж рахує «дозволеним» усе, що не 403. Тому роль знято з deny цих "
+  + "рядків (у allow deny-only рядків її вписати не можна — проба виконала б запис). Що кандидату закрито все, "
+  + "крім його двох вкладок, стереже #443 через ROUTE_TAB";
 export const ACCEPTED_MATRIX_SHIFTS: MatrixShift[] = [
+  { method: "POST", path: "/api/training/folder", role: "candidate", to: "dropped",
+    decidedOn: "2026-09-21", decidedBy: "Роман", why: CANDIDATE_401 },
+  { method: "DELETE", path: "/api/training/folder/:id", role: "candidate", to: "allow",
+    decidedOn: "2026-09-21", decidedBy: "Роман", why: CANDIDATE_401 },
+  { method: "PATCH", path: "/api/training/folder/:id", role: "candidate", to: "dropped",
+    decidedOn: "2026-09-21", decidedBy: "Роман", why: CANDIDATE_401 },
+  { method: "POST", path: "/api/training/material", role: "candidate", to: "dropped",
+    decidedOn: "2026-09-21", decidedBy: "Роман", why: CANDIDATE_401 },
+  { method: "DELETE", path: "/api/training/material/:id", role: "candidate", to: "allow",
+    decidedOn: "2026-09-21", decidedBy: "Роман", why: CANDIDATE_401 },
+  { method: "PATCH", path: "/api/training/material/:id", role: "candidate", to: "dropped",
+    decidedOn: "2026-09-21", decidedBy: "Роман", why: CANDIDATE_401 },
+  { method: "POST", path: "/api/training/materials/:id/publish", role: "candidate", to: "dropped",
+    decidedOn: "2026-09-21", decidedBy: "Роман", why: CANDIDATE_401 },
+  { method: "POST", path: "/api/training/courses", role: "candidate", to: "dropped",
+    decidedOn: "2026-09-21", decidedBy: "Роман", why: CANDIDATE_401 },
+  { method: "PATCH", path: "/api/training/courses/:id", role: "candidate", to: "dropped",
+    decidedOn: "2026-09-21", decidedBy: "Роман", why: CANDIDATE_401 },
   { method: "GET", path: "/api/teams/managers", role: "manager", to: "allow",
     decidedOn: "2026-09-16", decidedBy: "власник", why: MGR_LIST },
   { method: "GET", path: "/api/teams/managers", role: "hr", to: "allow",
@@ -1144,21 +1168,21 @@ export const ACCESS_MATRIX: AccessRow[] = [
      з `allow` на `deny-only` рядках ніхто б не побачив — там дозволених не пробують.
      `candidate` у `deny` з народження: його єдиний екран — навчання, але лише читати. */
   { method: "POST", path: "/api/training/folder", cls: "deny-only",
-    allow: [], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "DELETE", path: "/api/training/folder/:id", cls: "DELETE-ghost",
-    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "candidate"], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "PATCH", path: "/api/training/folder/:id", cls: "deny-only",
-    allow: [], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/training/material", cls: "deny-only",
-    allow: [], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "DELETE", path: "/api/training/material/:id", cls: "DELETE-ghost",
-    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "candidate"], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "PATCH", path: "/api/training/material/:id", cls: "deny-only",
-    allow: [], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/training/material/:id/file", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
   { method: "POST", path: "/api/training/materials/:id/publish", cls: "deny-only",
-    allow: [], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
   /* 🎓 КУРСИ Й ПРОГРЕС (крок 2, 15.09.2026). Читання відкрите всім, хто має вкладку
      `training`, — включно з кандидатом: це його єдиний екран. */
   { method: "GET", path: "/api/training/courses", cls: "GET",
@@ -1178,9 +1202,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: [] },
   /* Створення й правка курсу — те саме право, що решта редагування навчання. */
   { method: "POST", path: "/api/training/courses", cls: "deny-only",
-    allow: [], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "PATCH", path: "/api/training/courses/:id", cls: "deny-only",
-    allow: [], deny: ["financier", "candidate", "hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/training/tree", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
   { method: "POST", path: "/api/uploads", cls: "deny-only",
