@@ -38,6 +38,21 @@ function code(body: string): string {
   return body.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
+/**
+ * Тіло кроку РАЗОМ із вироком, який він кличе. Вирок приймання живе в чистій функції
+ * `judgeAccept` (щоб судити кожне коло окремо), тож твердження «крок уміє провалитись /
+ * судить реєстром» мусить іти за викликом, а не вимагати, щоб логіка лежала в тілі.
+ * Виклик є, а функції немає — ПРОВАЛ: інакше гейт мовчки міряв би порожнечу.
+ */
+function withJudge(src: string, body: string): string {
+  if (!code(body).includes("judgeAccept(")) return body;
+  const i = src.indexOf("export function judgeAccept(");
+  assert.ok(i >= 0, "🔴 крок кличе judgeAccept, а функції в deploy.ts немає — гейт міряв би порожнечу");
+  const end = src.indexOf("\n}\n", i);
+  assert.ok(end > i, "🔴 не знайшов кінця judgeAccept");
+  return body + "\n" + src.slice(i, end + 2);
+}
+
 /** Ідентифікатори всіх обробників кроків — щоб питати «а ХТО це робить», не перелічуючи руками. */
 function HANDLER_IDS(src: string): Record<string, true> {
   const from = src.indexOf("const handlers");
@@ -458,7 +473,7 @@ test("#250m lockRelease стоїть РІВНО за accept — між ними 
 
   // 🪞 ДЗЕРКАЛО: приймання СПРАВДІ ганяє test:prod і СПРАВДІ вміє сказати «ні».
   // Без нього гейт зеленів би на кроці-заглушці, що завжди ok.
-  const b = code(stepBody(DEPLOY(), "accept"));
+  const b = code(withJudge(DEPLOY(), stepBody(DEPLOY(), "accept")));
   assert.match(b, /test:prod/, "🔴 крок приймання не кличе test:prod — тоді замок тримає порожнеча");
   assert.match(b, /ok: false/, "🔴 приймання не вміє провалитись — тоді воно не гейт, а пауза");
   assert.match(b, /ВИКОНАЛОСЬ/, "🔴 приймання не читає підсумку прогону");
@@ -534,7 +549,7 @@ test("#250z кожен крок, що читає підсумок прогону
   // Порожній скоуп = ПРОВАЛ: без цього рівність «0 == 0» зійшлася б на зламаному розборі.
   assert.ok(reads.length >= 2,
     `🔴 знайдено ${reads.length} кроків, що читають підсумок — розбір зламався, гейт нічого не стереже`);
-  const judgeless = reads.filter((id) => !code(stepBody(src, id)).includes("acceptExpectedReds"));
+  const judgeless = reads.filter((id) => !code(withJudge(src, stepBody(src, id))).includes("acceptExpectedReds"));
   assert.deepEqual(judgeless, [],
     `🔴 крок(и) читають підсумок прогону, але судять САМІ: ${judgeless.join(", ")}.\n`
     + "   Власне правило замість спільного означає, що вже погоджені червоні\n"
