@@ -33,6 +33,8 @@ export const PERMISSION_CATALOG = [
   "edit_1x1_forms",
   "enter_manual_stats",
   "export",
+  /** 🏦 Вивантаження виписки у форматі банку (CSV) — рішення Романа 21.09.2026: бухгалтерія, фінансисти, керівництво. */
+  "export_bank_statement",
   "manage_bank_accounts",
   "manage_bank_hidden",
   "manage_credit_limits",
