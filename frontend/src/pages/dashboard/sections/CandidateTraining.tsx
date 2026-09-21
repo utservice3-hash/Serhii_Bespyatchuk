@@ -5,6 +5,8 @@ import {
   type TrainingCourse, type TrainingCourseDetail, type TrainingMaterialContent, type CandidateMe, type MyTrainingQuestion,
 } from "../../../api";
 import { embedUrl } from "../trainingView";
+import { useNavigate } from "react-router-dom";
+import { fetchDocTree, type DocFile } from "../../../api";
 import "./hiring.css";
 
 /**
@@ -78,6 +80,41 @@ function deadlineText(me: Extract<CandidateMe, { candidate: true }>): [string, s
   return [`доступ ще ${left} год`, left <= 12 ? "dg" : left <= 30 ? "wn" : "pl"];
 }
 
+/**
+ * 📄 ОФЕР У ВКЛАДЦІ КАНДИДАТА (пункт 7 власника, 21.09.2026): рекрутер формує офер із шаблону в «Наймі»,
+ * він лягає в «Документи → Офери» на акаунт кандидата — а тут кандидат бачить його одразу, зі станом підпису,
+ * і переходить підписати. Джерело — те саме дерево документів (сервер віддає лише СВІЙ офер), окремої логіки немає.
+ */
+function OfferCard() {
+  const [offers, setOffers] = useState<DocFile[] | null>(null);
+  const navigate = useNavigate();
+  useEffect(() => {
+    let alive = true;
+    fetchDocTree().then((t) => { if (alive) setOffers(t.files.filter((f) => f.section === "offer" && !f.archivedAt && f.addresseeUserId === t.viewer.userId)); })
+      .catch(() => { if (alive) setOffers([]); });
+    return () => { alive = false; };
+  }, []);
+  if (!offers || !offers.length) return null;
+  const STATE: Record<string, [string, string]> = {
+    signed: ["підписано", "ok"], review: ["фото підпису на перевірці", "wn"], pending: ["чекає вашого підпису", "wn"],
+    overdue: ["чекає вашого підпису", "dg"], outdated: ["нова версія — підпишіть ще раз", "wn"], not_required: ["", "gr"],
+  };
+  return (
+    <div className="hr-card" style={{ marginBottom: 14 }}>
+      {offers.map((f) => { const [txt, cls] = STATE[f.signature.kind] ?? ["", "gr"]; const toSign = f.signature.kind !== "signed" && f.signature.kind !== "review" && f.canSign; return (
+        <div key={f.id} className="hr-sect" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", border: 0 }}>
+          <span style={{ fontSize: 26 }}>📄</span>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ fontWeight: 700 }}>Ваш офер</div>
+            <div className="hr-muted" style={{ fontSize: 13 }}>{f.name.replace(/\.[a-z0-9]+$/i, "")}</div>
+          </div>
+          {txt && <span className={`hr-pill ${cls}`}>{f.signature.earlier ? "підписано раніше" : txt}</span>}
+          <button className={toSign ? "hr-btn p" : "hr-btn"} onClick={() => navigate(`/documents?doc=${f.id}`)}>{toSign ? "Відкрити й підписати" : "Відкрити"}</button>
+        </div>); })}
+    </div>
+  );
+}
+
 function Home({ me, courses, steps, questions, onOpen }: {
   me: CandidateMe; courses: TrainingCourse[]; steps: Step[]; questions: MyTrainingQuestion[]; onOpen: (id: number) => void;
 }) {
@@ -97,6 +134,7 @@ function Home({ me, courses, steps, questions, onOpen }: {
         Проходьте кроки по черзі: наступний відкривається, коли попередній позначено «Опрацював(ла)».
         {me.candidate && me.leadName ? ` Питання — тімліду ${me.leadName}.` : ""}
       </p>
+      <OfferCard />
 
       {steps.length === 0 ? (
         <div className="hr-card"><div className="hr-sect" style={{ border: 0 }}>Курс для вас ще готується. Зазирніть трохи пізніше або напишіть рекрутеру.</div></div>
