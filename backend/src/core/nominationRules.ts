@@ -215,7 +215,7 @@ export function snapshotRows(view: WeekView): SnapshotRow[] {
 // Шаблони — зі слайдів самої Даші (`UTS_weekly_meeting_template.pptx`): поля й тексти за
 // замовчуванням перенесено звідти дослівно, щоб слайд виходив таким, яким його вже знають на
 // зустрічі. Реєстр ОДИН: сервер перевіряє за ним тіло, фронт будує з нього форму, а презентація
-// мусить мати верстку для КОЖНОГО шаблону (#611) — «додав шаблон і забув верстку» не пройде тихо.
+// мусить мати верстку для КОЖНОГО шаблону (#614) — «додав шаблон і забув верстку» не пройде тихо.
 
 export type ManualKind = "newcomer" | "birthday" | "news" | "contest" | "webinar" | "custom";
 export interface TemplateField { key: string; label: string; required: boolean; max: number; multiline?: boolean; placeholder?: string; default?: string }
@@ -297,7 +297,7 @@ export function slideListTitle(kind: ManualKind, f: Record<string, string>): str
 }
 
 /**
- * Тіло ручного слайда за шаблоном (#607, #610). Обовʼязкові поля шаблону — непорожні; зайві ключі
+ * Тіло ручного слайда за шаблоном (#607, #613). Обовʼязкові поля шаблону — непорожні; зайві ключі
  * відкидаються; кожне поле обрізається до своєї довжини, щоб текст влазив у слайд 16:9.
  * Старий формат (`title`/`person`/`body` без `fields`) приймається як «довільний» слайд.
  */

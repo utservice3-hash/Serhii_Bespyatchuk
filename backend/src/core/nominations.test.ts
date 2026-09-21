@@ -216,11 +216,11 @@ test("#609 слайди беруть числа лише зі Звіту й но
 });
 
 /**
- * #610 — ШАБЛОНИ РУЧНИХ СЛАЙДІВ: для КОЖНОГО шаблону порожнє обовʼязкове поле — відмова, а
+ * #613 — ШАБЛОНИ РУЧНИХ СЛАЙДІВ: для КОЖНОГО шаблону порожнє обовʼязкове поле — відмова, а
  * заповнені лише обовʼязкові — слайд. Червоніє, якщо шаблон перестане вимагати своє або почне
  * вимагати зайве; і якщо реєстр втратить хоч один із шести Дашиних шаблонів.
  */
-test("#610 шаблони слайдів: кожен вимагає рівно свої обовʼязкові поля, і їх шість — як у Даші", async () => {
+test("#613 шаблони слайдів: кожен вимагає рівно свої обовʼязкові поля, і їх шість — як у Даші", async () => {
   const { SLIDE_TEMPLATES, validateManualSlide } = await import("./nominationRules.js");
   assert.deepEqual(SLIDE_TEMPLATES.map((t) => t.key), ["newcomer", "birthday", "news", "contest", "webinar", "custom"]);
   for (const t of SLIDE_TEMPLATES) {
@@ -240,11 +240,11 @@ test("#610 шаблони слайдів: кожен вимагає рівно �
 });
 
 /**
- * #611 — У ПРЕЗЕНТАЦІЇ Є ВЕРСТКА ДЛЯ КОЖНОГО ШАБЛОНУ, І НЕМАЄ ДЛЯ НЕІСНУЮЧИХ. Читає джерело
+ * #614 — У ПРЕЗЕНТАЦІЇ Є ВЕРСТКА ДЛЯ КОЖНОГО ШАБЛОНУ, І НЕМАЄ ДЛЯ НЕІСНУЮЧИХ. Читає джерело
  * `NominationsPresentation.tsx`: кожен ключ реєстру має свою гілку `case "<ключ>"`, а кожна гілка —
  * ключ у реєстрі. «Додав шаблон і забув верстку» (слайд вийшов би порожнім) червоніє тут.
  */
-test("#611 кожен шаблон слайда має верстку в презентації, і навпаки", async () => {
+test("#614 кожен шаблон слайда має верстку в презентації, і навпаки", async () => {
   const { SLIDE_TEMPLATES } = await import("./nominationRules.js");
   const src = readFileSync(fileURLToPath(new URL("../../../frontend/src/pages/dashboard/sections/NominationsPresentation.tsx", import.meta.url).href.replace("/backend/dist/", "/backend/src/").replace("/backend/src/../../../", "/")), "utf8");
   const block = src.slice(src.indexOf("function templateSlide("));
