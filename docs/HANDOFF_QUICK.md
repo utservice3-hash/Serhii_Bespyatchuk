@@ -55,8 +55,8 @@
 його немає; повертати лише за словом. Макети: https://claude.ai/artifact/DLgZDyTV6emztc1B2SR8KL (повний),
 https://claude.ai/artifact/SsDMZCbEaPdqYyA7m5KnD3 (Finder).
 **Чекає інших:** шаблони оферів РНК/РПК (Сергій → Іван вантажить у «Найм»); підпис через Дію відкладено
-(https://claude.ai/artifact/QVfYPpnsMpCC9mWrM2V8nS); роль Тетяни Шнайдер: зараз `role_override=admin`, тому вона
-бачить Виписку й CSV. Чи так має лишитись, вирішує власник.
+(https://claude.ai/artifact/QVfYPpnsMpCC9mWrM2V8nS); роль Тетяни Шнайдер: `role_override=admin` лишається — **рішення
+Романа 21.09.2026** («так»): бачить Виписку й CSV.
 **Власнику (не моє, не правив):** (1) `acceptMatrix` `#11` червоний через чужий дрейф: `hiring` у фінансиста,
 `client-contacts`/`client-manager`. (2) Червоне приймання зупиняє ланцюг ДО `lockRelease`, тож замок лишається
 висіти. За день так було двічі (hiring-sess, rates-sess), і обидва рази знімали `--steal` руками. Потрібне
