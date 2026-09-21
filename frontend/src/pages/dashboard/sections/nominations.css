@@ -1,0 +1,49 @@
+/* 🏆 НОМІНАЦІЇ ТИЖНЯ — стилі розділу. Усе під `.nm-`, щоб не зачепити решту продукту.
+   Кольори й радіуси — лише токени дашборда (index.css), тож темна тема працює сама. */
+
+.nm-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin-bottom: 14px; }
+.nm-head h2 { margin: 0; font-size: var(--fs-xl); }
+.nm-period { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.nm-nav { border: 1px solid var(--border); background: var(--card-bg); color: var(--text); border-radius: var(--r-lg); height: 32px; min-width: 32px; padding: 0 10px; font-size: 14px; cursor: pointer; }
+.nm-nav:disabled { opacity: .4; cursor: not-allowed; }
+.nm-week { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.nm-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 2px 9px; border-radius: 999px; white-space: nowrap; font-weight: 600; }
+.nm-pill.draft { background: var(--warn-bg); color: var(--warn); }
+.nm-pill.ok { background: var(--ok-bg); color: var(--ok); }
+.nm-pill.fix { background: var(--info-bg); color: var(--info); }
+.nm-pill.wait { background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
+.nm-pill.flag { background: var(--warn-bg); color: var(--warn); }
+
+.nm-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--r-2xl); box-shadow: var(--shadow); margin-bottom: 14px; }
+.nm-banner { padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; font-size: 13px; }
+.nm-muted { color: var(--text-muted); font-size: 12px; }
+.nm-err { color: var(--danger); font-size: 13px; }
+
+.nm-scroll { overflow-x: auto; }
+.nm-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.nm-table th, .nm-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.nm-table th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); font-weight: 600; background: var(--surface-2); white-space: nowrap; }
+.nm-table tr:last-child td { border-bottom: 0; }
+.nm-table .dept td { background: var(--surface-2); font-weight: 700; }
+.nm-table .win td { background: var(--warn-bg); }
+.nm-num { font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; }
+.nm-who { font-weight: 600; }
+.nm-strike { text-decoration: line-through; color: var(--text-muted); font-size: 12px; }
+.nm-cell { display: flex; flex-direction: column; gap: 3px; min-width: 130px; }
+.nm-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+
+.nm-btn { padding: 5px 10px; border-radius: var(--r-lg); border: 1px solid var(--border-strong); background: var(--card-bg); color: var(--text); font-size: 12px; font-weight: 600; cursor: pointer; }
+.nm-btn.p { background: var(--brand); border-color: var(--brand); color: #fff; }
+.nm-btn:disabled { opacity: .45; cursor: not-allowed; }
+.nm-btn:focus-visible, .nm-nav:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+.nm-modal-back { position: fixed; inset: 0; background: rgba(15, 17, 21, .45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 50; }
+.nm-modal { background: var(--card-bg); color: var(--text); border-radius: var(--r-2xl); box-shadow: var(--shadow-lg); width: 100%; max-width: 480px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+.nm-modal h3 { margin: 0; font-size: 16px; }
+.nm-crm { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-xl); padding: 10px 12px; font-size: 13px; }
+.nm-field { display: flex; flex-direction: column; gap: 4px; }
+.nm-field > span { font-size: 12px; color: var(--text-muted); font-weight: 600; }
+.nm-inp { border: 1px solid var(--border-strong); border-radius: var(--r-lg); padding: 7px 10px; background: var(--card-bg); color: var(--text); font: inherit; font-size: 13px; width: 100%; box-sizing: border-box; }
+textarea.nm-inp { min-height: 64px; resize: vertical; }
+.nm-checks { display: flex; flex-direction: column; gap: 4px; max-height: 180px; overflow-y: auto; font-size: 13px; }

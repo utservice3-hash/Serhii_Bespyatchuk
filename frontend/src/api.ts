@@ -4358,3 +4358,27 @@ export const previewEmployeeImport = async (csv: string, mapping?: string[], hea
   (await api.post<ImportPreview>("/secrets/import/preview", { csv, mapping, headerRow })).data;
 export const commitEmployeeImport = async (csv: string, mapping: string[], sheet: "active" | "dismissed", headerRow: number) =>
   (await api.post<{ ok: true; counts: ImportCounts }>("/secrets/import/commit", { csv, mapping, sheet, headerRow })).data.counts;
+
+// ───────────────────────── 🏆 НОМІНАЦІЇ ТИЖНЯ (21.09.2026) ─────────────────────────
+// Дзеркало `backend/src/core/nominationRules.ts` (WeekView) + права глядача з роуту.
+export type NominationKey = "maxDeal" | "cars" | "revenue" | "marginPct" | "intl";
+export type NominationRanked = { state: "ok"; value: number; winners: number[] } | { state: "empty" };
+export interface NominationFinal { status: "confirmed" | "unconfirmed" | "overridden" | "empty"; winners: number[]; value: number | null; reason: string | null; stale: boolean }
+export interface NominationCell {
+  nomination: NominationKey; crm: NominationRanked; final: NominationFinal;
+  deal: { id: number; price?: number; cost?: number } | null;
+  canReview: boolean; whyNot: string | null;
+}
+export interface NominationTeam { teamId: number; teamName: string; dept: "rpk" | "rnk"; members: { id: number; name: string }[]; noCostDeals: number; cells: NominationCell[] }
+export interface NominationDept { dept: "rpk" | "rnk"; nomination: NominationKey; state: "ok" | "empty"; value: number | null; winners: number[]; teams: number[] }
+export interface NominationWeek {
+  weekFrom: string; weekTo: string; state: "draft" | "frozen"; frozenAt: string | null; ruleVersion: string; freezeDueAt: string;
+  teams: NominationTeam[]; depts: NominationDept[]; names: Record<string, string>;
+  viewer: { role: "admin" | "team_lead"; teamId: number | null };
+  defs: { key: NominationKey; label: string; hint: string; unit: "uah" | "count" | "pct" }[];
+  marginFlagPct: number;
+}
+export const fetchNominationWeek = async (weekFrom?: string) =>
+  (await api.get<NominationWeek>("/nominations/week", { params: weekFrom ? { weekFrom } : {} })).data;
+export const reviewNomination = async (p: { weekFrom: string; teamId: number; nomination: NominationKey; action: "confirm" | "override"; overrideManagerIds?: number[]; overrideValue?: number; reason?: string }) =>
+  (await api.post<NominationWeek>("/nominations/review", p)).data;

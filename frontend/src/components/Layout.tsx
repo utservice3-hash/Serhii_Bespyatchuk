@@ -17,6 +17,8 @@ export const NAV_GROUPS = [
       { key: "report", label: "Звіт", icon: "🧾" },
       { key: "manager-report", label: "Звіт 2.0", icon: "🧭" },
       { key: "kvp", label: "Звіт КВП", icon: "🏆", roles: ["admin"] },
+      // 🏆 Номінації тижня (21.09.2026): тімлід підтверджує переможців своєї команди, керівництво бачить усіх.
+      { key: "nominations", label: "Номінації тижня", icon: "🥇", roles: ["admin", "team_lead"] },
       { key: "plans", label: "Плани", icon: "💵", roles: ["admin", "team_lead"] },
       { key: "statistics", label: "Статистики", icon: "📊" },
       { key: "depstats", label: "Статистики (відділи)", icon: "🗂️" },
