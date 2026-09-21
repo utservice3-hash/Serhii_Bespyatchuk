@@ -17,8 +17,6 @@ export const NAV_GROUPS = [
       { key: "report", label: "Звіт", icon: "🧾" },
       { key: "manager-report", label: "Звіт 2.0", icon: "🧭" },
       { key: "kvp", label: "Звіт КВП", icon: "🏆", roles: ["admin"] },
-      // 🏆 Номінації тижня (21.09.2026): тімлід підтверджує переможців своєї команди, керівництво бачить усіх.
-      { key: "nominations", label: "Номінації тижня", icon: "🥇", roles: ["admin", "team_lead"] },
       { key: "plans", label: "Плани", icon: "💵", roles: ["admin", "team_lead"] },
       { key: "statistics", label: "Статистики", icon: "📊" },
       { key: "depstats", label: "Статистики (відділи)", icon: "🗂️" },
@@ -55,6 +53,8 @@ export const NAV_GROUPS = [
     label: "Робота",
     items: [
       { key: "tasks", label: "Задачник", icon: "📝" },
+      // 🏆 Номінації тижня (21.09.2026; у групі «Робота» — рішення Романа 21.09): тімлід підтверджує переможців своєї команди, керівництво бачить усіх.
+      { key: "nominations", label: "Номінації тижня", icon: "🥇", roles: ["admin", "team_lead"] },
       { key: "duty", label: "Календар команди", icon: "🗓" },
       { key: "bank", label: "Виписка", icon: "💳" },
       { key: "oneonone", label: "Ван-ту-ван", icon: "🤝", roles: ["admin", "team_lead"] },
