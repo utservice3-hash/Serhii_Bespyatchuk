@@ -19,6 +19,8 @@ import {
   standToRefusal,
   MARK_REPORT, MARK_STOP,
   holdsLockAfter,
+  shouldRerunAccept, acceptAfterRerun, shouldAlertOnStop, stopAlertText, alertDelivery,
+  type AcceptRound,
   type Mode, type Phase, type Step, type Artifact,
 } from "./deployPlan.js";
 import { cli as lockCli, CANON_LOCK_DIR, heldByMe, readClaim, actorRefusal } from "./checkoutLock.js";
@@ -61,9 +63,81 @@ const API_BASE = HEALTH.replace(/\/api\/health$/, "");
  * замком, тобто черга для двох інших чатів.
  */
 const WARM_MS = 16 * 60 * 1000;
+/** Пауза перед повторним колом приймання: шум Neon і синку живе хвилинами, а не секундами. */
+const RERUN_PAUSE_MS = 2 * 60 * 1000;
 
 const sh = (cmd: string, args: string[], cwd?: string): string =>
   execFileSync(cmd, args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).trim();
+
+/**
+ * ⚖️ ВИРОК ПРИЙМАННЯ ЗА ВИВОДОМ `test:prod` — чиста функція: вхід це вже зібраний вивід
+ * (підсумок гейта прогону + рядки маркерів), вихід — зелено/червоно з поясненням.
+ * Винесено з кроку `accept` без зміни логіки, щоб одне коло можна було судити
+ * окремо від того, скільки кіл пробігло.
+ */
+export function judgeAccept(out: string, log: string): AcceptRound {
+  const named = failureNames(out);
+  const passedFromRegistry = expectedPassNames(out);
+  const m = out.match(/ВИКОНАЛОСЬ\s+(\d+)\s+із\s+(\d+).*?падінь\s+(\d+)/);
+  /**
+   * 🔴 Немає підсумкового рядка — це ПРОВАЛ, а не «нічого не знайшлось». Прогін,
+   * що не дійшов до власного гейта, не є прийманням (той самий клас, що «успіх за 0 мс»).
+   */
+  if (!m) return { ok: false, kind: "stop",
+    detail: `🔴 гейт прогону не надрукував підсумку — приймання не дійшло до кінця. Лог: ${log}` };
+  const [, doneN, needN, fails] = m;
+  // Недобір і падіння — РІЗНІ вироки: перший каже «ми не дивились», другий «зламано».
+  if (doneN !== needN) return { ok: false, kind: "stop",
+    detail: `🔴 НЕДОБІР: виконалось ${doneN} із ${needN} обовʼязкових — це СТОП, а не рядок статистики. Лог: ${log}` };
+  if (fails !== "0") {
+    /**
+     * 🔴 ЧИСЛО Й ПЕРЕЛІК МУСЯТЬ ЗІЙТИСЬ. Розбіжність означає, що імена читаються не
+     * звідти — саме той стан, коли список порожній, а падіння є. Тоді кажемо про це
+     * прямо, а не мовчки друкуємо коротший перелік.
+     *
+     * 🔴 І ЦЕ ПЕРЕВІРЯЄТЬСЯ ДО РЕЄСТРУ, А НЕ ПІСЛЯ. Порожній перелік при `падінь > 0`
+     * означав би «жодного імені не покрито» — і реєстр видав би зелене на прогоні,
+     * про який ми не знаємо нічого. Той самий «порожній результат = провал».
+     */
+    if (named.length !== Number(fails)) {
+      return { ok: false, kind: "stop",
+        detail: `🔴 падінь ${fails}, а перелік дав ${named.length} імен — розбір бачить не те, що рахує гейт. `
+          + `Вирок за реєстром НЕ виноситься: судити нема за чим. Лог: ${log}` };
+    }
+    /**
+     * ⚖️ МАШИННИЙ ВИРОК: зелено ⇔ кожне падіння названо в `EXPECTED_REDS` І реєстр
+     * без дефектів. Доти «очікувані червоні» жили в чаті, тобто для ланцюга не
+     * існували: він чесно червонів, замок лишався взятим, і людину доводилось
+     * будити заради висновку, який уже був відомий.
+     */
+    const v = acceptExpectedReds(named, passedFromRegistry);
+    if (v.ok) {
+      return { ok: true, kind: "ok",
+        detail: `${doneN} із ${needN}, падінь ${fails} — УСІ очікувані поіменно\n${v.lines.join("\n")}` };
+    }
+    // Повтор лікує лише нові імена; дефект реєстру повтором не зникне — це СТОП.
+    return { ok: false, kind: v.registryProblems.length ? "stop" : "names",
+      detail: `🔴 падінь ${fails} при ${doneN} із ${needN}. Лог: ${log}\n${v.lines.join("\n")}` };
+  }
+  return { ok: true, kind: "ok", detail: `${doneN} із ${needN}, падінь 0` };
+}
+
+/**
+ * 📣 Сповіщення адміну — тим самим нотифікатором, що й застосунок, і з ПРОД-`.env`
+ * (на стенді Telegram-ключів немає і не має бути). Текст іде позиційним аргументом,
+ * а не вклеюється в рядок команди: у ньому імена тестів, лапки й `$`.
+ */
+function sendStopAlert(c: Ctx, text: string): string {
+  try {
+    const out = sh("bash", ["-lc",
+      `cd ${c.prodBe} && set -a && . ./.env && set +a && `
+      + `node --input-type=module -e 'const m = await import("./dist/bot/notify.js"); await m.sendAdminAlert(process.argv[1]);' "$1" 2>&1`,
+      "_", text]);
+    return alertDelivery(out);
+  } catch (e) {
+    return alertDelivery(null, e instanceof Error ? e.message.split("\n")[0] : String(e));
+  }
+}
 
 /** Результат кроку. `skipped` НЕ є успіхом: він друкується окремо з причиною. */
 export interface StepResult { id: string; ok: boolean; skipped?: string; detail: string }
@@ -477,7 +551,6 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
       try { await fetch(HEALTH); } catch { /* прогрів, а не перевірка */ }
       await new Promise((r) => setTimeout(r, 20_000));
     }
-    const log = "/tmp/deploy-accept.log";
     // `|| true`: ненульовий код тут — НОРМА (падіння тесту), а вирок вимовляє гейт прогону.
     /**
      * 🏷 ПЕРЕЛІК ІМЕН БЕРЕТЬСЯ З НАШОГО МАРКЕРА, А НЕ З СИМВОЛА РЕПОРТЕРА (#270).
@@ -487,54 +560,17 @@ export const handlers: Record<string, (ctx: Ctx) => Promise<StepResult> | StepRe
      * порожній список читався б як «нічого не впало». Того ж дня це коштувало
      * іншому чату одинадцяти «зелених» саботажів.
      */
-    const out = sh("bash", ["-lc",
+    const round = (log: string): AcceptRound => judgeAccept(sh("bash", ["-lc",
       `cd ${c.prodBe} && set -a && . ./.env && set +a && `
       + `API_BASE=${API_BASE} npm run test:prod > ${log} 2>&1 || true; `
       + `grep "ВИКОНАЛОСЬ" ${log} | tail -1; grep "^${FAIL_MARK}" ${log} || true; `
-      + `grep "^${EXPECTED_PASS_MARK}" ${log} || true`]);
-    const named = failureNames(out);
-    const passedFromRegistry = expectedPassNames(out);
-    const m = out.match(/ВИКОНАЛОСЬ\s+(\d+)\s+із\s+(\d+).*?падінь\s+(\d+)/);
-    /**
-     * 🔴 Немає підсумкового рядка — це ПРОВАЛ, а не «нічого не знайшлось». Прогін,
-     * що не дійшов до власного гейта, не є прийманням (той самий клас, що «успіх за 0 мс»).
-     */
-    if (!m) return { id: "accept", ok: false,
-      detail: `🔴 гейт прогону не надрукував підсумку — приймання не дійшло до кінця. Лог: ${log}` };
-    const [, doneN, needN, fails] = m;
-    // Недобір і падіння — РІЗНІ вироки: перший каже «ми не дивились», другий «зламано».
-    if (doneN !== needN) return { id: "accept", ok: false,
-      detail: `🔴 НЕДОБІР: виконалось ${doneN} із ${needN} обовʼязкових — це СТОП, а не рядок статистики. Лог: ${log}` };
-    if (fails !== "0") {
-      /**
-       * 🔴 ЧИСЛО Й ПЕРЕЛІК МУСЯТЬ ЗІЙТИСЬ. Розбіжність означає, що імена читаються не
-       * звідти — саме той стан, коли список порожній, а падіння є. Тоді кажемо про це
-       * прямо, а не мовчки друкуємо коротший перелік.
-       *
-       * 🔴 І ЦЕ ПЕРЕВІРЯЄТЬСЯ ДО РЕЄСТРУ, А НЕ ПІСЛЯ. Порожній перелік при `падінь > 0`
-       * означав би «жодного імені не покрито» — і реєстр видав би зелене на прогоні,
-       * про який ми не знаємо нічого. Той самий «порожній результат = провал».
-       */
-      if (named.length !== Number(fails)) {
-        return { id: "accept", ok: false,
-          detail: `🔴 падінь ${fails}, а перелік дав ${named.length} імен — розбір бачить не те, що рахує гейт. `
-            + `Вирок за реєстром НЕ виноситься: судити нема за чим. Лог: ${log}` };
-      }
-      /**
-       * ⚖️ МАШИННИЙ ВИРОК: зелено ⇔ кожне падіння названо в `EXPECTED_REDS` І реєстр
-       * без дефектів. Доти «очікувані червоні» жили в чаті, тобто для ланцюга не
-       * існували: він чесно червонів, замок лишався взятим, і людину доводилось
-       * будити заради висновку, який уже був відомий.
-       */
-      const v = acceptExpectedReds(named, passedFromRegistry);
-      if (v.ok) {
-        return { id: "accept", ok: true,
-          detail: `${doneN} із ${needN}, падінь ${fails} — УСІ очікувані поіменно\n${v.lines.join("\n")}` };
-      }
-      return { id: "accept", ok: false,
-        detail: `🔴 падінь ${fails} при ${doneN} із ${needN}. Лог: ${log}\n${v.lines.join("\n")}` };
-    }
-    return { id: "accept", ok: true, detail: `${doneN} із ${needN}, падінь 0` };
+      + `grep "^${EXPECTED_PASS_MARK}" ${log} || true`]), log);
+    const first = round("/tmp/deploy-accept.log");
+    // 🔁 Одне повне повторне коло — лише на нових іменах (правило й привід — `shouldRerunAccept`).
+    if (!shouldRerunAccept(first)) return { id: "accept", ...acceptAfterRerun(first, null) };
+    console.log(`… accept: перше коло червоне на нових іменах — пауза ${RERUN_PAUSE_MS / 60_000} хв і повне повторне коло`);
+    await new Promise((r) => setTimeout(r, RERUN_PAUSE_MS));
+    return { id: "accept", ...acceptAfterRerun(first, round("/tmp/deploy-accept-rerun.log")) };
   },
   /**
    * 📰 НОВИНА ПРО ВИКАТ — із ПРОД-чекауту, як `migrate` і `markDeploy`.
@@ -983,6 +1019,9 @@ export async function main(argv: string[]): Promise<number> {
         { prodSha: ctx.prod || "(невідомо)", targetSha: ctx.target, branch: ctx.branch });
       console.error(`\n📍 СТАН ПРОДА: ${ab.state}`);
       for (const l of ab.lines) console.error(`   ${l}`);
+      if (shouldAlertOnStop(phase, lockOurs)) {
+        console.error(`   ${sendStopAlert(ctx, stopAlertText({ step: step.id, target: ctx.target, state: ab.state, actor: ACTOR, detail: r.detail }))}`);
+      }
       return ab.exitCode;
     }
   }
