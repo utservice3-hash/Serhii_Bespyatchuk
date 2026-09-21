@@ -32,6 +32,7 @@
 .nm-strike { text-decoration: line-through; color: var(--text-muted); font-size: 12px; }
 .nm-cell { display: flex; flex-direction: column; gap: 3px; min-width: 130px; }
 .nm-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.nm-table td .nm-btn { padding: 3px 8px; font-size: 11px; }
 
 .nm-btn { padding: 5px 10px; border-radius: var(--r-lg); border: 1px solid var(--border-strong); background: var(--card-bg); color: var(--text); font-size: 12px; font-weight: 600; cursor: pointer; }
 .nm-btn.p { background: var(--brand); border-color: var(--brand); color: #fff; }

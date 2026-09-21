@@ -76,7 +76,7 @@ export function NominationsSection() {
   const statusPill = (c: NominationCell) => {
     if (c.final.status === "confirmed") return <span className="nm-pill ok">✓ підтверджено</span>;
     if (c.final.status === "overridden") return <span className="nm-pill fix">виправлено</span>;
-    if (c.final.status === "empty") return <span className="nm-pill wait">ніхто не набрав</span>;
+    if (c.final.status === "empty") return null; // «ніхто не набрав» уже сказано у значенні — вдруге не повторюємо
     return <span className="nm-pill wait">{c.final.stale ? "CRM змінився — підтвердьте знову" : "очікує"}</span>;
   };
 
@@ -110,7 +110,9 @@ export function NominationsSection() {
     return (
       <div className="nm-btns">
         {c.final.status !== "confirmed" && c.crm.state === "ok"
-          ? <button className="nm-btn p" disabled={busy} onClick={() => act({ team, cell: c }, "confirm")}>Підтвердити</button> : null}
+          ? <button className="nm-btn p" disabled={busy} onClick={() => act({ team, cell: c }, "confirm")}
+              title={c.final.status === "overridden" ? "Скасувати виправлення й підтвердити число з CRM" : undefined}>
+              {c.final.status === "overridden" ? "Повернути число CRM" : "Підтвердити"}</button> : null}
         <button className="nm-btn" disabled={busy} onClick={() => setEdit({ team, cell: c })}>{c.final.status === "overridden" ? "Змінити" : "Виправити"}</button>
       </div>
     );
@@ -181,7 +183,12 @@ export function NominationsSection() {
                     <td><b>🏆 Переможець {dept === "rnk" ? "ВРНК" : "ВРПК"}</b></td>
                     {data.defs.map((d) => {
                       const w = data.depts.find((x) => x.dept === dept && x.nomination === d.key);
-                      return <td key={d.key}>{w && w.state === "ok" ? <b>{names(w.winners)} · {fmt(d.unit, w.value)}</b> : <span className="nm-muted">ніхто не набрав</span>}</td>;
+                      // Переможець відділу з ВИПРАВЛЕНОЇ клітинки команди — видно, що число ручне.
+                      const manual = w?.state === "ok" && teams.some((t) => w.teams.includes(t.teamId)
+                        && t.cells.some((c) => c.nomination === d.key && c.final.status === "overridden"));
+                      return <td key={d.key}>{w && w.state === "ok"
+                        ? <><b>{names(w.winners)} · {fmt(d.unit, w.value)}</b>{manual ? <span className="nm-muted"> (виправлено вручну)</span> : null}</>
+                        : <span className="nm-muted">ніхто не набрав</span>}</td>;
                     })}
                   </tr>,
                 ];
