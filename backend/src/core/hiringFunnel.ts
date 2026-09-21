@@ -124,13 +124,13 @@ export async function hiringSummary(db: Db, q: { from?: unknown; to?: unknown; v
   const staff = (await db.query<{ hired: number; dismissed: number; active: number }>(
     `SELECT count(*) FILTER (WHERE hired_at BETWEEN $1 AND $2)::int AS hired,
             count(*) FILTER (WHERE dismissed_at BETWEEN $1 AND $2)::int AS dismissed,
-            count(*) FILTER (WHERE status = 'active')::int AS active FROM employees`, [q.from, q.to])).rows[0];
+            count(*) FILTER (WHERE status <> 'dismissed')::int AS active FROM employees`, [q.from, q.to])).rows[0];
   const dismissReasons = (await db.query<{ reason: string; n: number }>(
     `SELECT COALESCE(NULLIF(btrim(dismiss_reason), ''), 'причину не вказано') AS reason, count(*)::int AS n FROM employees
       WHERE dismissed_at BETWEEN $1 AND $2 GROUP BY 1 ORDER BY 2 DESC LIMIT 12`, [q.from, q.to])).rows;
   const byPosition = (await db.query<{ position: string; n: number }>(
     `SELECT COALESCE(NULLIF(btrim(position), ''), 'посада не вказана') AS position, count(*)::int AS n FROM employees
-      WHERE status = 'active' GROUP BY 1 ORDER BY 2 DESC LIMIT 12`)).rows;
+      WHERE status <> 'dismissed' GROUP BY 1 ORDER BY 2 DESC LIMIT 12`)).rows;
   return {
     period: { from: q.from, to: q.to }, total: cs.length,
     funnel: buildFunnel(cs), refusals: buildRefusals(cs), side,

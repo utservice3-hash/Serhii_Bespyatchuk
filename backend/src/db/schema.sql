@@ -3875,3 +3875,29 @@ CREATE TABLE IF NOT EXISTS nomination_manual_slides (
   deleted_at  TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS ix_nomination_manual_slides_week ON nomination_manual_slides(week_from) WHERE deleted_at IS NULL;
+
+-- 🚪 ЗВІЛЬНЕННЯ У ДВА КРОКИ (21.09.2026, рішення Романа): «Звільнити…» → «завершує» (вхід працює, плану
+-- немає, результат рахується) → «Завершити звільнення» кнопкою вручну → «звільнений», вхід закрито.
+-- Жодних видалень: сейф, документи, угоди, історія лишаються. Стан менеджера — у `manager_work_state`
+-- (той самий механізм, що в Налаштуваннях); тут — що було ДО, щоб «Повернути» відкотило до байта.
+-- ⚠️ revert коду таблицю й розширений CHECK не прибирає; людей у «завершує» старий код не покаже.
+ALTER TABLE employees DROP CONSTRAINT IF EXISTS employees_status_check;
+ALTER TABLE employees ADD CONSTRAINT employees_status_check CHECK (status IN ('active','finishing','dismissed'));
+CREATE TABLE IF NOT EXISTS employee_offboarding (
+  employee_id  INTEGER PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+  stage        TEXT NOT NULL CHECK (stage IN ('finishing','dismissed')),
+  last_day     DATE NOT NULL,
+  reason       TEXT NOT NULL,
+  prev         JSONB NOT NULL,
+  started_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  started_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  finished_at  TIMESTAMPTZ
+);
+REVOKE ALL ON employee_offboarding FROM ai_readonly;
+
+-- 📎 ДОКУМЕНТИ ЛЮДИНИ В HR (21.09.2026, прохання Івана: «завантажувати NDA, офер і т.д.» у картці реєстру).
+-- Документ людини без акаунта не має адресата-користувача, тому належить людині реєстру. Доступ до таких
+-- документів не змінюється: розділ `personal` без адресата бачить лише керівництво (`canSeeDocument`).
+ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_doc_files_employee ON doc_files(employee_id) WHERE employee_id IS NOT NULL;

@@ -56,10 +56,11 @@ const FILE_SELECT = `
          f.archived_at, f.archived_reason, f.created_by, f.inactive_at,
          COALESCE(cv.created_at, f.created_at) AS version_at, COALESCE(cv.created_by, f.created_by) AS version_by,
          COALESCE(am.name, au.full_name, au.email) AS author,
-         COALESCE(dm.name, du.full_name, du.email) AS addressee
+         COALESCE(dm.name, du.full_name, du.email, de.full_name) AS addressee
     FROM doc_files f
     LEFT JOIN users au ON au.id = f.created_by LEFT JOIN managers am ON am.id = au.manager_id
     LEFT JOIN users du ON du.id = f.addressee_user_id LEFT JOIN managers dm ON dm.id = du.manager_id
+    LEFT JOIN employees de ON de.id = f.employee_id -- 📎 документ людини без акаунта (HR, 21.09.2026): адресат — з реєстру
     LEFT JOIN doc_file_versions cv ON cv.file_id = f.id AND cv.version = f.version
    WHERE f.deleted_at IS NULL`;
 

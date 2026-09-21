@@ -496,6 +496,15 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // 🗂 Реєстр співробітників + імпорт таблиці (18.09.2026) — у тому ж роутері й за тим самим правом.
   { method: "GET", path: "/api/secrets/employees", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
   { method: "PATCH", path: "/api/secrets/employees/:id", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  // 🚪 Звільнення у два кроки й 📎 документи людини (21.09.2026) — межа роутера `view_employee_secrets`.
+  { method: "POST", path: "/api/secrets/employees/:id/dismiss", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/secrets/employees/:id/dismiss/finish", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/secrets/employees/:id/dismiss/revert", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "GET", path: "/api/secrets/employees/:id/documents", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/secrets/employees/:id/documents", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "GET", path: "/api/secrets/employees/:id/documents/:fileId", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+  { method: "DELETE", path: "/api/secrets/employees/:id/documents/:fileId", cls: "DELETE-ghost", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/secrets/employees/:id/documents/:fileId/restore", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   // 📉 Плинність, Exit-інтервʼю, привʼязка до Kommo (18.09.2026) — та сама межа, що й реєстр.
   { method: "GET", path: "/api/secrets/churn?from=2026-01&to=2026-09", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
   { method: "POST", path: "/api/secrets/employees/kommo-link", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },

@@ -128,6 +128,7 @@ export const MANIFEST_FILES: string[] = [
   "core/offers.test.js",
   "core/hiringInterview.test.js",
   "core/churn.test.js",
+  "core/offboarding.test.js",
 
   "core/trainingEditor.test.js",
   "core/missedCallSignal.test.js",
@@ -249,6 +250,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "exit_interviews",
   "hiring_invites",
   "hiring_training_questions",
+  "employee_offboarding",
 ];
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
@@ -883,6 +885,12 @@ export const MANIFEST_TESTS: string[] = [
   "#584 ЖИВИЙ SQL: привʼязка до Kommo — за ID, за єдиним ПІБ, однофамільців не вгадує, повтор без змін",
   "#585 ЖИВИЙ SQL: Exit-інтервʼю — валідація, зведення, скасовне видалення, закрито для AI",
   "#586 ЖИВИЙ SQL: зведення — офери когорти «надіслано / підписано» з документа й підпису",
+  // core/offboarding.test.ts — звільнення у два кроки + документи людини в HR (21.09.2026)
+  "#610 ЖИВИЙ SQL: звільнення у два кроки — «завершує» лишає вхід, «завершити» закриває",
+  "#611 ЖИВИЙ SQL: «Повернути» — реєстр, стан менеджера й акаунт до байта; сейф і документи не чіпаються",
+  "#612 ЖИВИЙ SQL: під час звільнення форма й повторний імпорт не міняють статус; себе не звільнити",
+  "#613 ЖИВИЙ SQL: документи людини — власник, розділ, чужий 404, прибрати й повернути",
+  "#614 ЗВІЛЬНЕННЯ: employee_offboarding відібрана в ai_readonly і є в FORBIDDEN_TABLES",
   // core/missedCalls.test.ts — ТЗ-1 «Пропущені дзвінки» (14.09.2026)
   // 🔢 ДЕСЯТКА #43x, А НЕ #42x — ПЕРЕНУМЕРОВАНО ПРИ МЕРЖІ 15.09.2026. Писалось як
   // #421-#430 за правилом «найвищий змерджений +1» (тоді #419). Поки прохід ішов, у
