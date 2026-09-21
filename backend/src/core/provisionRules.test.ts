@@ -29,3 +29,12 @@ test("#599b provisionUsers пише is_active ЧЕРЕЗ правило, гол�
   assert.match(src, /\$\{isActiveAssignSql\("\$4"\)\} WHERE id = \$5/);
   assert.doesNotMatch(src, /manager_id = \$3, is_active = \$4/);
 });
+
+/**
+ * #599c — ФОРМА ВХОДУ НАЗИВАЄ ПРИЧИНУ ВІДМОВИ 403 текстом сервера, а 401 лишає загальним (не
+ * підказує, чи існує email). Читає джерело. Червоніє, якщо знову затерти 403 фразою про пароль.
+ */
+test("#599c форма входу: 403 показує причину сервера, 401 — загальна фраза", () => {
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "Login.tsx"), "utf8");
+  assert.match(src, /r\?\.status === 403 && r\.data\?\.error \? r\.data\.error : "Невірний email або пароль"/);
+});
