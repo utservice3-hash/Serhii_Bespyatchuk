@@ -264,6 +264,64 @@ export const receivedMoney = (s: MoneyScope) => agg("received", s);
 export const receivedByTeam = (s: MoneyScope) => aggByTeam("received", s);
 export const receivedByMgr = (s: MoneyScope) => aggByMgr("received", s);
 
+/**
+ * 🏆 «Факт» Звіту (②) ПО МЕНЕДЖЕРУ — розгорнутий для номінацій тижня (`core/nominations.ts`).
+ *
+ * Рішення 21.09.2026 (Роман, варіант «А»): номінації рахуються «як на Звіті» — гроші = «Факт»
+ * (оплата отримана ⊎ успішно реалізовано, дедуп), тобто РІВНО множина `receivedByMgr`. Тут не нова
+ * метрика, а та сама множина угод з кількома агрегатами над нею:
+ *   revenue/deals   — ті самі, що `receivedByMgr` (тримає `#598`);
+ *   maxDeal         — «разовий зазор»: найбільша маржа (`price`) ОДНІЄЇ угоди множини;
+ *   maxMarginPct    — «% маржі»: max(price ÷ «Расход 1» `carrier_obligation`) × 100 серед угод,
+ *                     де «Расход 1» > 0 і маржа > 0 (порогу мінімальної маржі немає — рішення 21.09);
+ *   noCostDeals     — скільки угод множини БЕЗ «Расходу 1»: вони в % маржі не беруть участі, і це
+ *                     число мусить бути видно поруч (правило 4: разом із предикатом — скільки він НЕ впізнав).
+ * `price` у цьому продукті — вже маржа (`schema.sql`, 25.08.2026).
+ */
+export interface MgrDealStats {
+  managerId: number; revenue: number; deals: number;
+  maxDeal: number | null; maxDealId: number | null;
+  maxMarginPct: number | null; marginDealId: number | null; marginDealPrice: number | null; marginDealCost: number | null;
+  noCostDeals: number;
+}
+export async function receivedDealStatsByMgr(s: MoneyScope): Promise<MgrDealStats[]> {
+  const K = "AT TIME ZONE 'Europe/Kyiv'";
+  const p: unknown[] = [];
+  const src = sourceSql("received", p);
+  const conds: string[] = [];
+  if (s.from) { p.push(s.from); conds.push(`(src.anchor_at ${K})::date >= $${p.length}`); }
+  if (s.to) { p.push(s.to); conds.push(`(src.anchor_at ${K})::date <= $${p.length}`); }
+  if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  const ratio = "CASE WHEN dd.carrier_obligation > 0 AND src.price > 0 THEN src.price / dd.carrier_obligation * 100 END";
+  const rows = (await pool.query<{ manager_id: number; revenue: string; deals: string; max_deal: string | null; max_deal_id: string | null;
+    max_pct: string | null; pct_id: string | null; pct_price: string | null; pct_cost: string | null; no_cost: string }>(
+    `SELECT src.manager_id, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals,
+            MAX(src.price) AS max_deal,
+            (ARRAY_AGG(src.kommo_id ORDER BY src.price DESC, src.kommo_id))[1] AS max_deal_id,
+            MAX(${ratio}) AS max_pct,
+            (ARRAY_AGG(src.kommo_id ORDER BY ${ratio} DESC NULLS LAST, src.kommo_id))[1] AS pct_id,
+            (ARRAY_AGG(src.price ORDER BY ${ratio} DESC NULLS LAST, src.kommo_id))[1] AS pct_price,
+            (ARRAY_AGG(dd.carrier_obligation ORDER BY ${ratio} DESC NULLS LAST, src.kommo_id))[1] AS pct_cost,
+            COUNT(*) FILTER (WHERE dd.carrier_obligation IS NULL OR dd.carrier_obligation <= 0) AS no_cost
+       FROM (${src}) src
+       JOIN managers m ON m.id = src.manager_id
+       JOIN deals dd ON dd.kommo_id = src.kommo_id
+      ${conds.length ? "WHERE " + conds.join(" AND ") : ""}
+      GROUP BY src.manager_id`, p)).rows;
+  const num = (v: string | null) => (v == null ? null : Number(v));
+  return rows.map((x) => {
+    const pct = num(x.max_pct);
+    return {
+      managerId: x.manager_id, revenue: Number(x.revenue), deals: Number(x.deals),
+      maxDeal: num(x.max_deal), maxDealId: num(x.max_deal_id),
+      maxMarginPct: pct, marginDealId: pct == null ? null : num(x.pct_id),
+      marginDealPrice: pct == null ? null : num(x.pct_price), marginDealCost: pct == null ? null : num(x.pct_cost),
+      noCostDeals: Number(x.no_cost),
+    };
+  });
+}
+
 // Блок B — «отримані кошти» РОЗКЛАДЕНІ по атрибуту угоди (напрямок / канал продажу /
 // клієнт). ТА САМА каса, що receivedMoney (received src = success ⊎ paidOnly, анкер+дедуп),
 // лише GROUP BY атрибут. Σ рядків == receivedMoney (COALESCE «—» ловить NULL → повний

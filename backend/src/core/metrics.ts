@@ -734,12 +734,15 @@ const SOURCE_KLASS_CASE = `
 function classifyCte(
   s: MetricScope,
   params: unknown[],
-  opts: { windowCol?: string; klassCase: string; bucketExpr?: string; carryPrice?: boolean; carryVkey?: boolean; channel?: "leadgen" | "ad" | null }
+  opts: { windowCol?: string; klassCase: string; bucketExpr?: string; carryPrice?: boolean; carryVkey?: boolean; channel?: "leadgen" | "ad" | null; requestType?: string | null }
 ): string {
   const windowCol = opts.windowCol ?? "d.created_at_kommo";
   params.push(FC_PIPELINES, GENERIC_CLIENT_KEYS);
   const conds = ["d.pipeline_id = ANY($1)", `${windowCol} IS NOT NULL`];
   if (opts.channel) { params.push(opts.channel); conds.push(`d.lead_channel = $${params.length}`); }
+  // «Тип запиту» (поле Kommo 2097965) — ЗВУЖЕННЯ тієї самої множини, а не інше правило:
+  // «міжнародні авто» номінацій тижня = «Авто» Звіту ∩ request_type. Без опції — як було.
+  if (opts.requestType) { params.push(opts.requestType); conds.push(`d.request_type = $${params.length}`); }
   if (s.from) { params.push(s.from); conds.push(`(${windowCol} ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(${windowCol} ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
@@ -1476,12 +1479,13 @@ export interface MgrBucketLeads { managerId: number; bucket: string; ad: number;
 
 /** «Поїхали» (авто) ПО МЕНЕДЖЕРУ, period-total за `load_at`. Той самий предикат, що
  *  `dispatchedByManagerDay`/`dispatchedByLoadBucket`, лише згрупований по менеджеру. */
-export async function dispatchedByManager(s: MetricScope): Promise<(MgrN & { revenue: number } & DispatchSplit)[]> {
+export async function dispatchedByManager(s: MetricScope, opts: { requestType?: string | null } = {}): Promise<(MgrN & { revenue: number } & DispatchSplit)[]> {
   // Класифікація за ДЖЕРЕЛОМ через спільний `classifyCte` (анкер вікна = load_at,
   // has_prior проти created_at_kommo). Active-only через зовнішній INNER JOIN на managers
   // (m.is_active) — консистентно з money-core і зі старою поведінкою. Сума ₴ — signed price.
+  // `requestType` — лише звуження (номінація «міжнародні», `core/nominations.ts`); Звіт кличе без нього.
   const params: unknown[] = [];
-  const cte = classifyCte(s, params, { windowCol: "d.load_at", klassCase: SOURCE_KLASS_CASE, carryPrice: true });
+  const cte = classifyCte(s, params, { windowCol: "d.load_at", klassCase: SOURCE_KLASS_CASE, carryPrice: true, requestType: opts.requestType ?? null });
   const r = await pool.query<{ manager_id: number; deals: string; revenue: string; repeat_c: string; leadgen_c: string; ad_c: string; undef_c: string }>(
     `WITH ${cte}
      SELECT f.manager_id, COUNT(*) deals, COALESCE(SUM(f.price),0) revenue,${DISPATCH_SPLIT_SELECT}
