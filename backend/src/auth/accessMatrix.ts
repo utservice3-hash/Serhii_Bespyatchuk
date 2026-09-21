@@ -236,6 +236,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/bank/cashflow", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+  // 🏦 Виписка у форматі банку (21.09.2026): право `export_bank_statement` — бухгалтерія,
+  // фінансист, керівництво. КВП свідомо в deny: файл несе реквізити всіх контрагентів, а КВП
+  // це продажі. Проба бере один день, щоб дозволені ролі не тягнули місяць операцій.
+  { method: "GET", path: "/api/bank/statement.csv?account=1&from=2026-09-01&to=2026-09-01", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "financier"], deny: ["kvp", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/bank/hidden-payees", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/bank/hidden-payees", cls: "deny-only",

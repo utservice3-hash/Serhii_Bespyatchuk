@@ -156,6 +156,7 @@ export const MANIFEST_FILES: string[] = [
   "core/receivablesView4b.test.js",
   "core/receivableNoteMerge.test.js",
   "core/clientContacts.test.js",
+  "core/bankStatementCsv.test.js",
   "routes/taskCommentKeep.test.js",
   "routes/taskDeepLink.test.js",
   "routes/missedCallsTab.test.js",
@@ -899,6 +900,10 @@ export const MANIFEST_TESTS: string[] = [
   "#467 lastContactOf: свіжіше з двох джерел, джерело й канал названі",
   "#467b contactFileVerdict і canDeleteContact: межі з обох боків",
   "#467c РОУТИ контактів за canSeeClient, рядок плану несе lastContact, матриця й схема узгоджені",
+  "#598 ВИПИСКА ПРИВАТ: рядок байт-у-байт як у банку — колонки, `;` в кінці, мінус, тисячі, латинська i, порядок",
+  "#598b ВИПИСКА ПРИВАТ: байти Windows-1251 з LF; символ поза кодуванням названо числом",
+  "#598c ВИПИСКА МОНО: заголовок і рядки як у зразку — лапки лише де пробіл, `—`, `2000.0`, київський час",
+  "#598d ВИПИСКА: приховані виключено й пораховано, з правом — усе; роут за правом export_bank_statement",
   // routes/missedCallsTab.test.ts — фронт вкладки: хвости звірки ТЗ-1 (17.09.2026)
   "#462 СИГНАЛ: нова й перевідкрита задача «📵» дзвонить виконавцю; стара, чужа й закрита — ні",
   "#463 ПЕРІОД: дефолт «вчора» за Києвом, навігатор на вкладці, спільний dateRange не їде",

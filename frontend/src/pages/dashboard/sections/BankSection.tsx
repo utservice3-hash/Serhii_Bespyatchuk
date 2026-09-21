@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  fetchBankAccounts, fetchBankIncoming, fetchBankOutgoing, saveBankAccount, fetchBankBalances, fetchBankRequisites, fetchBankCashflow,
+  fetchBankAccounts, downloadBankStatement, fetchBankIncoming, fetchBankOutgoing, saveBankAccount, fetchBankBalances, fetchBankRequisites, fetchBankCashflow,
   fetchBankHiddenPayees, addBankHiddenPayee, deleteBankHiddenPayee,
   type BankAccount, type BankSummary, type BankTx, type BankHiddenPayee, type BankBalance, type BankRequisite, type CashflowMonth,
 } from "../../../api";
@@ -86,6 +86,8 @@ export default function BankSection() {
   const canViewBalances = perms.includes("view_balances");
   const canViewTotals = perms.includes("view_bank_totals"); // косметика; сервер гейтить summary
   const canViewCashflow = perms.includes("view_cashflow");
+  const canExportStatement = perms.includes("export_bank_statement"); // косметика; сервер гейтить роут
+  const [exportOpen, setExportOpen] = useState(false);
   const [balancesOpen, setBalancesOpen] = useState(false);
   const [cashflowOpen, setCashflowOpen] = useState(false);
   const [periodOpen, setPeriodOpen] = useState(false); // поповер календаря
@@ -210,6 +212,9 @@ export default function BankSection() {
         <div style={{ marginLeft: "auto", display: "inline-flex", gap: 8, alignItems: "center" }}>
           {/* «Реквізити» — доступні УСІМ ролям (без гейта прав) */}
           <button onClick={() => setRequisitesOpen(true)} style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>📄 Реквізити</button>
+          {canExportStatement && (
+            <button onClick={() => setExportOpen(true)} style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>⬇️ Виписка CSV</button>
+          )}
           {canViewCashflow && (
             <button onClick={() => setCashflowOpen(true)} style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid #2f6fdb", background: "rgba(47,111,219,0.08)", color: "#2f6fdb", fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>📊 Кешфлоу</button>
           )}
@@ -223,6 +228,7 @@ export default function BankSection() {
         </div>
       </div>
       {balancesOpen && canViewBalances && <BalancesModal onClose={() => setBalancesOpen(false)} from={range.from} to={range.to} />}
+      {exportOpen && canExportStatement && <StatementExportModal onClose={() => setExportOpen(false)} accounts={accounts} from={range.from} to={range.to} canSeeHidden={canSeeHidden} />}
       {cashflowOpen && canViewCashflow && <CashflowModal onClose={() => setCashflowOpen(false)} onPickMonth={(ym) => { setRangeMonth(ym); setCashflowOpen(false); }} />}
       {requisitesOpen && <RequisitesModal onClose={() => setRequisitesOpen(false)} />}
 
@@ -363,6 +369,64 @@ function HiddenBlock() {
 }
 
 // ─────────────────────────── Баланси рахунків (лише view_balances) ───────────────────────────
+// ─────────────────────────── Виписка у форматі банку (export_bank_statement) ───────────────────────────
+function StatementExportModal({ onClose, accounts, from, to, canSeeHidden }: { onClose: () => void; accounts: BankAccount[]; from: string; to: string; canSeeHidden: boolean }) {
+  const list = accounts.filter((a) => a.is_active);
+  const [account, setAccount] = useState<number | "">(list[0]?.id ?? "");
+  const [f, setF] = useState(from);
+  const [t, setT] = useState(to);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState<{ rows: number; hiddenExcluded: number; charsLost: number } | null>(null);
+  const cur = list.find((a) => a.id === account);
+  const inpS: React.CSSProperties = { padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontSize: 13.5 };
+  async function run() {
+    if (account === "") return;
+    setBusy(true); setError(""); setDone(null);
+    try {
+      const r = await downloadBankStatement({ account, from: f, to: t });
+      const url = URL.createObjectURL(r.blob);
+      const a = document.createElement("a"); a.href = url; a.download = r.filename; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      setDone({ rows: r.rows, hiddenExcluded: r.hiddenExcluded, charsLost: r.charsLost });
+    } catch (e) { setError(err(e)); } finally { setBusy(false); }
+  }
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} className="chart-card" style={{ maxWidth: 520, width: "100%", margin: 0 }}>
+        <h2 className="chart-title">⬇️ Виписка у форматі банку (CSV)</h2>
+        <p style={{ margin: "0 0 12px", fontSize: 13, color: MUTED }}>
+          Файл тієї самої форми, що вивантаження з клієнт-банку: його можна вантажити туди ж. Це реєстр із бази дашборду, не офіційний документ банку; історія є з моменту підключення рахунку.
+        </p>
+        <div style={{ display: "grid", gap: 10 }}>
+          <select value={account} onChange={(e) => setAccount(e.target.value ? Number(e.target.value) : "")} style={inpS}>
+            {list.map((a) => <option key={a.id} value={a.id}>{a.label} · {a.bank === "mono" ? "Монобанк" : "ПриватБанк"} · {a.currency}</option>)}
+          </select>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <input type="date" value={f} max={t} onChange={(e) => setF(e.target.value)} style={inpS} />
+            <span style={{ color: MUTED }}>—</span>
+            <input type="date" value={t} min={f} onChange={(e) => setT(e.target.value)} style={inpS} />
+          </div>
+          {cur?.bank === "mono" && <p style={{ margin: 0, fontSize: 12.5, color: "#b45309" }}>Формат Моно зібрано за зразком виписки з картки; з випискою рахунку ФОП побайтно не звірявся.</p>}
+          {!canSeeHidden && <p style={{ margin: 0, fontSize: 12.5, color: MUTED }}>Платежі прихованим отримувачам у файл не потрапляють; після вивантаження буде видно, скільки їх відкинуто.</p>}
+        </div>
+        {error && <p style={{ color: RED, fontSize: 13, margin: "10px 0 0" }}>{error}</p>}
+        {done && (
+          <p style={{ fontSize: 13, margin: "10px 0 0", color: done.hiddenExcluded || done.charsLost ? "#b45309" : "#15803d" }}>
+            {done.rows === 0 ? "За цей період операцій немає — файл містить лише заголовок." : `Вивантажено операцій: ${done.rows}.`}
+            {done.hiddenExcluded > 0 && ` Відкинуто прихованих: ${done.hiddenExcluded} — файл коротший за банківський.`}
+            {done.charsLost > 0 && ` Символів поза кодуванням банку замінено на «?»: ${done.charsLost}.`}
+          </p>
+        )}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+          <button onClick={onClose} style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", fontWeight: 600 }}>Закрити</button>
+          <button onClick={run} disabled={busy || account === "" || !f || !t} style={{ padding: "8px 16px", borderRadius: 10, border: "none", background: RED, color: "#fff", cursor: busy ? "default" : "pointer", fontWeight: 700, opacity: busy ? 0.6 : 1 }}>{busy ? "Формую…" : "Вивантажити"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BalancesModal({ onClose, from, to }: { onClose: () => void; from: string; to: string }) {
   const [balances, setBalances] = useState<BankBalance[] | null>(null);
   const [period, setPeriod] = useState<{ from: string; to: string } | null>(null);
