@@ -1,7 +1,7 @@
 /**
  * 🏆 НОМІНАЦІЇ ТИЖНЯ — ДАНІ. Правила — `core/nominationRules.ts` (чисті), тут лише звідки числа.
  *
- * 🔴 ЖОДНОГО SQL ПО УГОДАХ І ГРОШАХ У ЦЬОМУ ФАЙЛІ (#599). Числа — ЛИШЕ з ядра, тими самими
+ * 🔴 ЖОДНОГО SQL ПО УГОДАХ І ГРОШАХ У ЦЬОМУ ФАЙЛІ (#601). Числа — ЛИШЕ з ядра, тими самими
  * функціями, що й Звіт (`/report-plan`), тож слайд і Звіт за той самий тиждень збігаються:
  *   гроші («Факт»), зазор, % маржі → `money.receivedDealStatsByMgr` (множина `receivedByMgr`);
  *   авто                           → `metrics.dispatchedByManager` (колонка «Авто»);
@@ -161,9 +161,9 @@ export async function nominationWeek(weekFrom: string, teamId: number | null = n
 }
 
 /**
- * Фіксація тижня (#602): ЛИШЕ ДОПИСУВАННЯ. Рядок тижня вставляється `ON CONFLICT DO NOTHING`
+ * Фіксація тижня (#604): ЛИШЕ ДОПИСУВАННЯ. Рядок тижня вставляється `ON CONFLICT DO NOTHING`
  * в одній транзакції зі знімком: хто перший — той і зафіксував, повторний виклик нічого не
- * змінює (а UPDATE/DELETE і так заборонені тригером — #602). До вівторка 08:00 не фіксує.
+ * змінює (а UPDATE/DELETE і так заборонені тригером — #604). До вівторка 08:00 не фіксує.
  */
 export async function freezeWeek(weekFrom: string, at: Date = new Date()): Promise<"frozen" | "already" | "not-due"> {
   if (!isFreezeDue(weekFrom, at)) return "not-due";

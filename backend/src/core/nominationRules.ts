@@ -75,7 +75,7 @@ export type Ranked = { state: "ok"; value: number; winners: number[] } | { state
 const norm = (v: number): number => Math.round(v * 100) / 100;
 
 /**
- * Переможець номінації серед кандидатів (#600).
+ * Переможець номінації серед кандидатів (#602).
  * · бере участь лише значення > 0: нуль — це «не набрав», від'ємна маржа (сторно) — не перемога;
  * · нічия — УСІ, у кого максимум (рішення 21.09.2026), у стабільному порядку id;
  * · ніхто не набрав — чесний стан `empty`, а не «0» і не вигаданий переможець.
@@ -116,7 +116,7 @@ export function applyReview(crm: Ranked, review: Review | null): Final {
 }
 
 /**
- * Хто може підтвердити/виправити рядок (#603).
+ * Хто може підтвердити/виправити рядок (#605).
  * · керівництво (`role === "admin"` — сюди підіймаються ceo/opdir/kvp правом `admin_scope`) — будь-яку команду;
  * · тімлід — лише свою команду, і НЕ рядок, де переможець (за CRM або у виправленні) — він сам (рішення 21.09.2026);
  * · решта — ніхто.
@@ -135,7 +135,7 @@ export function canReview(
   return { ok: true };
 }
 
-/** Перевірка тіла запиту рішення (#603b): виправлення без переможця, числа або причини — відмова. */
+/** Перевірка тіла запиту рішення (#605b): виправлення без переможця, числа або причини — відмова. */
 export function validateReview(body: unknown):
   { ok: true; value: { weekFrom: string; teamId: number; nomination: NominationKey; action: "confirm" | "override"; overrideManagerIds: number[] | null; overrideValue: number | null; reason: string | null } }
   | { ok: false; error: string } {
@@ -194,7 +194,7 @@ export interface WeekView {
 }
 
 
-/** Рядки знімка з чернетки — чиста частина фіксації, винесена для гейта `#604`. */
+/** Рядки знімка з чернетки — чиста частина фіксації, винесена для гейта `#606`. */
 export interface SnapshotRow { teamId: number; teamName: string; dept: "rpk" | "rnk"; nomination: NominationKey; status: Final["status"]; managerId: number | null; managerName: string | null; value: number | null; crmManagerIds: number[]; crmValue: number | null; reason: string | null; extra: Record<string, unknown> }
 export function snapshotRows(view: WeekView): SnapshotRow[] {
   const out: SnapshotRow[] = [];

@@ -5,6 +5,8 @@ import { roleHasPerm } from "../auth/rbac.js";
 import { writeAudit } from "../db/audit.js";
 import { feedPage, periodSummary, getHiddenPayees, type BankFilter } from "../core/bankReport.js";
 import { toUah, getRate } from "../bankSources/fx.js";
+import { statementData } from "../core/bankStatement.js";
+import { statementFile } from "../core/bankStatementCsv.js";
 
 export const bankRouter = Router();
 bankRouter.use(requireAuth); // tab-гейт «bank» — усі ролі (screen_access); + auto-asyncH через lib/asyncRoutes
@@ -41,6 +43,35 @@ bankRouter.get("/outgoing", async (req, res) => {
   const body: Record<string, unknown> = { rows: page.rows, nextCursor: page.nextCursor, canSeeHidden };
   if (!f.cursor && roleHasPerm(req.auth!.roleKey, "view_bank_totals")) body.summary = await periodSummary("out", f, payees, canSeeHidden);
   res.json(body);
+});
+
+/**
+ * 🏦 ВИПИСКА У ФОРМАТІ БАНКУ (CSV) — рахунок + період → файл, який вантажиться туди ж, куди
+ * файл із клієнт-банку. Право `export_bank_statement` (рішення Романа 21.09.2026: бухгалтерія,
+ * фінансисти, керівництво) — ПЕРШИМ оператором, щоб 403 означав гейт, а не валідацію.
+ * Приховані отримувачі — та сама межа, що у `/outgoing`; скільки рядків вона відкинула,
+ * їде заголовком `X-Hidden-Excluded`, щоб неповний файл не виглядав повним.
+ */
+bankRouter.get("/statement.csv", requirePerm("export_bank_statement"), async (req, res) => {
+  const account = Number(req.query.account);
+  const from = String(req.query.from ?? ""), to = String(req.query.to ?? "");
+  const isDay = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d);
+  if (!Number.isInteger(account) || account <= 0) return res.status(400).json({ error: "account: id рахунку" });
+  if (!isDay(from) || !isDay(to) || from > to) return res.status(400).json({ error: "from і to: YYYY-MM-DD, from ≤ to" });
+  const canSeeHidden = roleHasPerm(req.auth!.roleKey, "view_hidden_payments");
+  const data = await statementData(account, from, to, await getHiddenPayees(), canSeeHidden);
+  if (!data) return res.status(404).json({ error: "Рахунок не знайдено або банк без формату виписки" });
+  const file = statementFile(data.bank, data.rows);
+  await writeAudit({ ...audit(req), action: "bank.statement.export", targetType: "bank_account", targetId: String(account),
+    targetLabel: data.label, details: { from, to, rows: data.rows.length, hiddenExcluded: data.hiddenExcluded } });
+  const name = `statement_${data.bank}_${(data.iban ?? String(account)).replace(/\W/g, "")}_${from}_${to}.csv`;
+  res.setHeader("Content-Type", `text/csv; charset=${file.charset}`);
+  res.setHeader("Content-Disposition", `attachment; filename="${name}"`);
+  res.setHeader("X-Rows", String(data.rows.length));
+  res.setHeader("X-Hidden-Excluded", String(data.hiddenExcluded));
+  res.setHeader("X-Chars-Lost", String(file.lost));
+  res.setHeader("Access-Control-Expose-Headers", "Content-Disposition, X-Rows, X-Hidden-Excluded, X-Chars-Lost");
+  res.send(Buffer.from(file.body));
 });
 
 // Баланси рахунків — ЛИШЕ право view_balances (admin). Серверний гейт (не лише прихована кнопка).

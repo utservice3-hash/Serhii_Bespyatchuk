@@ -49,8 +49,8 @@
 Код: `core/nominationRules.ts` (чисте), `core/nominations.ts`, `money.receivedDealStatsByMgr`,
 `metrics.dispatchedByManager(…,{requestType})`, `jobs/freezeNominations.ts`, `routes/nominations.ts`,
 таблиці `nomination_weeks/_reviews/_snapshot` з тригером незмінності, вкладка `nominations`
-(admin, ceo, opdir, kvp, team_lead), `NominationsSection.tsx`. Гейти `#598`–`#604`: `#599`–`#604` доведені
-саботажем локально; **`#598` (звірка зі Звітом по HTTP) доводиться лише після викату**.
+(admin, ceo, opdir, kvp, team_lead), `NominationsSection.tsx`. Гейти `#600`–`#606`: `#601`–`#606` доведені
+саботажем локально; **`#600` (звірка зі Звітом по HTTP) доводиться лише після викату**.
 `npm test` локально: 1270 / 0 падінь. **Далі:** пуш гілки → `deploy:check` → слово Романа → викат;
 прохід 2 — екран презентації (слайди) + ручні слайди; прохід 3 — місяць, фото, дошка на стартовій, лідогени.
 Макет: https://claude.ai/artifact/CTaJhsTPBYwAgkxswQkjvU

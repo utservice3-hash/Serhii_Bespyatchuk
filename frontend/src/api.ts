@@ -3427,6 +3427,17 @@ export async function fetchBankAccounts(): Promise<BankAccount[]> {
   const { data } = await api.get<{ accounts: BankAccount[] }>("/bank/accounts");
   return data.accounts;
 }
+/**
+ * 🏦 Виписка у форматі банку (CSV). Файл іде blob-ом; три лічильники — заголовками, щоб екран
+ * сказав, скільки рядків у файлі, скільки відкинула межа прихованих і чи губились символи.
+ */
+export async function downloadBankStatement(p: { account: number; from: string; to: string }): Promise<{ blob: Blob; filename: string; rows: number; hiddenExcluded: number; charsLost: number }> {
+  const res = await api.get("/bank/statement.csv", { params: p, responseType: "blob" });
+  const h = res.headers as Record<string, string | undefined>;
+  const m = /filename="([^"]+)"/.exec(h["content-disposition"] ?? "");
+  return { blob: res.data as Blob, filename: m?.[1] ?? `statement_${p.account}_${p.from}_${p.to}.csv`,
+    rows: Number(h["x-rows"] ?? 0), hiddenExcluded: Number(h["x-hidden-excluded"] ?? 0), charsLost: Number(h["x-chars-lost"] ?? 0) };
+}
 export async function fetchBankIncoming(p: BankQuery): Promise<BankFeed> {
   const { data } = await api.get<BankFeed>("/bank/incoming", { params: bankParams(p) });
   return data;

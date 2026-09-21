@@ -3772,6 +3772,16 @@ ALTER TABLE doc_signatures ADD CONSTRAINT doc_signatures_method_check
 -- 📂 ПОРЯДОК ПАПОК (21.09.2026): керівництво рухає папки «вище / нижче»; рівні значення — за назвою.
 ALTER TABLE doc_folders ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0;
 
+-- 🏦 Право «вивантажити виписку у форматі банку» (рішення Романа 21.09.2026: бухгалтерія,
+-- фінансисти, керівництво). Явними рядками, як `view_employee_secrets`: видача й зняття, щоб
+-- склад не залежав від місця вставки. Ключ ролі «Бухгалтерія» — дванадцять підкреслень
+-- (заведена через інтерфейс 03.09.2026, див. `roleDeclarations.ts`). КВП свідомо НЕ входить:
+-- це продажі, а файл несе реквізити всіх контрагентів.
+UPDATE roles SET permissions = permissions || '{"export_bank_statement": true}'::jsonb
+ WHERE key IN ('admin', 'ceo', 'opdir', 'financier', '____________');
+UPDATE roles SET permissions = permissions - 'export_bank_statement'
+ WHERE key NOT IN ('admin', 'ceo', 'opdir', 'financier', '____________');
+
 -- ══════════════════════════════════════════════════════════════════════════
 -- 🏆 НОМІНАЦІЇ ТИЖНЯ (21.09.2026) — `core/nominations.ts`, `jobs/freezeNominations.ts`
 -- ══════════════════════════════════════════════════════════════════════════
@@ -3826,7 +3836,7 @@ CREATE TABLE IF NOT EXISTS nomination_snapshot (
 );
 CREATE INDEX IF NOT EXISTS ix_nomination_snapshot_week ON nomination_snapshot(week_from);
 
--- 🔒 ЗНІМОК НЕЗМІННИЙ (#602): UPDATE і DELETE фіксації та знімка — виняток на рівні БД, а не
+-- 🔒 ЗНІМОК НЕЗМІННИЙ (#604): UPDATE і DELETE фіксації та знімка — виняток на рівні БД, а не
 -- домовленість у коді. Журнал рішень тімлідів теж лише дописується. Виправити зафіксоване можна
 -- тільки свідомою міграцією, яка спершу знімає тригер, — і це має бути видно в історії.
 CREATE OR REPLACE FUNCTION nominations_immutable() RETURNS trigger LANGUAGE plpgsql AS $$

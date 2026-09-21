@@ -1,6 +1,7 @@
 import { randomBytes } from "crypto";
 import bcrypt from "bcryptjs";
 import { pool } from "./pool.js";
+import { isActiveAssignSql } from "../core/provisionRules.js";
 
 export function generatePassword(): string {
   return randomBytes(9).toString("base64url");
@@ -40,9 +41,10 @@ export async function provisionUsers(): Promise<{ email: string; password: strin
       // — панель-owned, синк його НІКОЛИ не чіпає → ефективна роль (напр. admin/kvp/custom,
       // виставлена адміном) переживає синк. Адмінство більше не «захищене» гілкою if — воно
       // живе в role_override, куди синк не пише.
+      // 🔐 `is_active` синк веде ЛИШЕ продажним ролям — правило й випадок у `core/provisionRules.ts`.
       const u = existing.rows[0];
       await pool.query(
-        `UPDATE users SET role = $1, team_id = $2, manager_id = $3, is_active = $4 WHERE id = $5`,
+        `UPDATE users SET role = $1, team_id = $2, manager_id = $3, ${isActiveAssignSql("$4")} WHERE id = $5`,
         [role, m.team_id, m.id, m.is_active, u.id]
       );
       continue;

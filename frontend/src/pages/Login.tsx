@@ -20,8 +20,13 @@ export function Login() {
       const back = sessionStorage.getItem("afterLogin");
       sessionStorage.removeItem("afterLogin");
       navigate(back ?? "/", { replace: true });
-    } catch {
-      setError("Невірний email або пароль");
+    } catch (e) {
+      // 🔴 403 — НЕ «невірний пароль». Сервер відмовляє трьома різними причинами (деактивовано,
+      // звільнений, закрите навчання) і називає кожну; досі форма затирала їх однією фразою, і
+      // 21.09.2026 адмін із правильним паролем шукав помилку в паролі, хоча акаунт вимкнув синк.
+      // 401 лишається загальним навмисно: він не підказує, чи існує такий email.
+      const r = (e as { response?: { status?: number; data?: { error?: string } } }).response;
+      setError(r?.status === 403 && r.data?.error ? r.data.error : "Невірний email або пароль");
     }
   }
 
