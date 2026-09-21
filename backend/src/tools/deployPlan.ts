@@ -495,3 +495,70 @@ export function holdsLockAfter(stepId: string, held: boolean, ok: boolean): bool
   if (stepId === "lockRelease") return false;
   return held;
 }
+
+/**
+ * 🔁 ОДНЕ ПОВТОРНЕ КОЛО ПРИЙМАННЯ — рішення Романа 21.09.2026 («7 роби A і B»).
+ *
+ * 📐 ПРИВІД, ЗАМІРЯНИЙ У ЖУРНАЛІ ЗАМКА: з 08.09 по 21.09 — 109 звільнень, і в 38 (35%)
+ * причиною ручного звільнення названо шум, а не код: `#36` (час Neon), `#46b` (разовий
+ * 503), `#94b` (живі дані під синком), `#211c`. Людина щоразу робила одне й те саме —
+ * переганяла й бачила зелене. Одного разу (викат 18.09) замок так провисів три доби.
+ *
+ * ⚖️ ПРАВИЛО ПОВТОРУ, НАВМИСНО ВУЗЬКЕ:
+ *   · повторюємо ЛИШЕ коло, червоне через НОВІ ІМЕНА (`kind: "names"`). Недобір, відсутній
+ *     підсумок, розбіжність числа з переліком і дефект реєстру — це «ми не дивились» або
+ *     «реєстр бреше», і повтор їх не лікує, а лише ховає;
+ *   · коло одне, і воно ПОВНЕ: гейт прогону рахує «виконано N із N обовʼязкових», тож
+ *     відфільтрований прогін він сам визнав би недобором — і правильно;
+ *   · зелене друге коло зараховується, але ЗВІТ НАЗИВАЄ перше: що саме впало. Повтор не
+ *     глушник — `#36` лишається поза реєстром, він мусить ПРОЙТИ, а не бути прощеним.
+ */
+export interface AcceptRound { ok: boolean; kind: "ok" | "names" | "stop"; detail: string }
+
+export function shouldRerunAccept(first: AcceptRound): boolean {
+  return !first.ok && first.kind === "names";
+}
+
+export function acceptAfterRerun(first: AcceptRound, second: AcceptRound | null): { ok: boolean; detail: string } {
+  if (!second) return { ok: first.ok, detail: first.detail };
+  if (second.ok) {
+    return { ok: true, detail: `перепрогін ЗЕЛЕНИЙ — перше коло впало, друге ні (шум, а не код):\n`
+      + `перше коло: ${first.detail}\nдруге коло: ${second.detail}` };
+  }
+  return { ok: false, detail: `🔴 ЧЕРВОНЕ ДВА КОЛА ПОСПІЛЬ — це вже не шум:\n`
+    + `перше коло: ${first.detail}\nдруге коло: ${second.detail}` };
+}
+
+/**
+ * 📣 ЗУПИНКА З ВЗЯТИМ ЗАМКОМ МУСИТЬ БУТИ ПОЧУТА — рішення Романа 21.09.2026.
+ *
+ * Замок після червоного кроку лишається взятим НАВМИСНО (див. `abortState`): це сигнал
+ * «тут недороблено». Але сигнал, якого ніхто не чує, не є сигналом — замок 18.09 висів
+ * три доби, бо сесія, що його тримала, закінчилась. Тому зупинка фази `run` з нашим
+ * замком шле адміну повідомлення. Фаза `check` прод не чіпає — там тиша законна.
+ */
+export function shouldAlertOnStop(phase: string, lockHeld: boolean): boolean {
+  return phase === "run" && lockHeld;
+}
+
+const escHtml = (t: string): string => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** Текст для Telegram (parse_mode HTML): екранований і обрізаний під ліміт 4096. */
+export function stopAlertText(a: { step: string; target: string; state: string; actor: string; detail: string }): string {
+  const detail = a.detail.split("\n").slice(0, 14).join("\n").slice(0, 2500);
+  return `🔴 <b>Викат ${escHtml(a.target)} зупинився на кроці «${escHtml(a.step)}»</b>\n`
+    + `Стан прода: ${escHtml(a.state)}. Замок стенда тримає <b>${escHtml(a.actor)}</b> — і триматиме, доки хтось не розбереться.\n\n`
+    + `<pre>${escHtml(detail)}</pre>\n`
+    + `Розібрався → звільнити: npm run lock -- --release --who=${escHtml(a.actor)} --reason="…"`;
+}
+
+/**
+ * Чи дійшло повідомлення. `sendAdminAlert` помилок не кидає, а друкує їх — тож вирок
+ * читається з виводу. Порожній вивід = надіслано (так поводиться сам нотифікатор).
+ */
+export function alertDelivery(out: string | null, err?: string): string {
+  if (out === null) return `📣 сповіщення НЕ надіслано: ${err ?? "виклик не відбувся"}`;
+  if (/не налаштовані/.test(out)) return "📣 сповіщення НЕ надіслано: у .env прода немає TELEGRAM_BOT_TOKEN / TELEGRAM_ADMIN_IDS";
+  if (/sendAdminAlert(: TG| failed)/.test(out)) return `📣 сповіщення НЕ дійшло: ${out.split("\n")[0]}`;
+  return "📣 сповіщення адміну надіслано в Telegram";
+}

@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { REQUIRED_STEPS, planSteps, verifyArtifact, LIGHT_OMITS, standToRefusal, holdsLockAfter,
-         type Artifact } from "./deployPlan.js";
-import { executablePlan, missingHandlers, handlers } from "./deploy.js";
+         shouldRerunAccept, acceptAfterRerun, shouldAlertOnStop, stopAlertText, alertDelivery,
+         type Artifact, type AcceptRound } from "./deployPlan.js";
+import { executablePlan, missingHandlers, handlers, judgeAccept } from "./deploy.js";
+import { EXPECTED_REDS } from "../expectedReds.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -389,4 +391,65 @@ test("#352 стан замка: взяли → тримаємо, звільни�
     + "перестав його торкатись — той самий обрив, тільки з іншого боку");
   assert.equal(holdsLockAfter("lockTake", false, false), false,
     "🔴 провалене взяття зараховане як успішне — ланцюг торкатиметься чужого замка");
+});
+
+/**
+ * 🔁 #610–#611b — ОДНЕ ПОВТОРНЕ КОЛО ПРИЙМАННЯ І СПОВІЩЕННЯ ПРО ЗАВИСЛИЙ ЗАМОК
+ * (рішення Романа 21.09.2026). Привід і межі — у доккоментарі `shouldRerunAccept`.
+ * Кожна фікстура — по обидва боки межі: що повторюємо / що ні, кому кричимо / кому ні.
+ */
+const SUMMARY = (done: number, need: number, fails: number) =>
+  `🔒 РЕЖИМ prod: ВИКОНАЛОСЬ ${done} із ${need} обовʼязкових (оголошено в маніфесті ${need}, дозволених скіпів 0, несподіваних 0, падінь ${fails})`;
+
+test("#610 вирок кола: нові імена → повторюваний; недобір, без підсумку, дефект реєстру → СТОП", () => {
+  const fresh = judgeAccept(`${SUMMARY(10, 10, 1)}\nFAIL-GATE: #36 overview ×4`, "/tmp/x.log");
+  assert.equal(fresh.kind, "names", "🔴 падіння з новим іменем не визнано повторюваним — повтор не спрацює ніколи");
+  assert.equal(shouldRerunAccept(fresh), true);
+
+  const short = judgeAccept(`${SUMMARY(9, 10, 1)}\nFAIL-GATE: #36 overview ×4`, "/tmp/x.log");
+  assert.equal(short.kind, "stop", "🔴 НЕДОБІР пішов на повтор — «ми не дивились» перетворюється на «перевірили вдруге»");
+  assert.equal(shouldRerunAccept(short), false);
+
+  assert.equal(judgeAccept("нічого", "/tmp/x.log").kind, "stop", "🔴 прогін без підсумку пішов на повтор");
+
+  const silencer = judgeAccept(`${SUMMARY(10, 10, 1)}\nFAIL-GATE: #36 overview ×4\nEXPECTED-PASS: ${EXPECTED_REDS[0].name}`, "/tmp/x.log");
+  assert.equal(silencer.kind, "stop", "🔴 дефект реєстру пішов на повтор — повтор його не лікує, лише відкладає");
+
+  const green = judgeAccept(SUMMARY(10, 10, 0), "/tmp/x.log");
+  assert.equal(green.ok, true);
+  assert.equal(shouldRerunAccept(green), false, "🔴 зелене коло повторюється — зайві 5 хв на кожному викаті");
+});
+
+test("#610b після повтору: зелене друге коло приймає І називає перше; червоне двічі — СТОП", () => {
+  const first: AcceptRound = { ok: false, kind: "names", detail: "🔴 падінь 1: #36 overview ×4" };
+  const passed = acceptAfterRerun(first, { ok: true, kind: "ok", detail: "10 із 10, падінь 0" });
+  assert.equal(passed.ok, true, "🔴 зелене друге коло не зараховано — повтор нічого не дає");
+  assert.match(passed.detail, /#36 overview/, "🔴 зелений повтор СХОВАВ, що впало першого разу — повтор став глушником");
+
+  const twice = acceptAfterRerun(first, { ok: false, kind: "names", detail: "🔴 падінь 1: #36 overview ×4" });
+  assert.equal(twice.ok, false, "🔴 червоне двічі поспіль зараховано — повтор пропускає справжню регресію");
+
+  assert.deepEqual(acceptAfterRerun(first, null), { ok: false, detail: first.detail },
+    "🔴 без другого кола вирок змінився — повтор протік туди, де його не було");
+});
+
+test("#611 сповіщення: зупинка run із нашим замком — так; check чи без замка — ні", () => {
+  assert.equal(shouldAlertOnStop("run", true), true, "🔴 викат завис із замком і мовчить — рівно 18.09, три доби");
+  assert.equal(shouldAlertOnStop("check", true), false, "🔴 кричимо на check — він прод не чіпає, і шум навчить не читати");
+  assert.equal(shouldAlertOnStop("run", false), false, "🔴 кричимо, коли замка в нас немає — звільняти нема чого");
+});
+
+test("#611b текст сповіщення екранований і називає, хто тримає й як звільнити; доставка читається з виводу", () => {
+  const t = stopAlertText({ step: "accept", target: "abc1234", state: "server-ahead", actor: "docs-v2",
+    detail: "🔴 падінь 1: GET /x <script> & y" });
+  assert.ok(!t.includes("<script>"), "🔴 сирий < у parse_mode HTML — Telegram відхилить повідомлення, і тиша повернеться");
+  assert.match(t, /&lt;script&gt; &amp; y/);
+  assert.match(t, /docs-v2/);
+  assert.match(t, /--release --who=docs-v2/);
+
+  assert.match(alertDelivery(""), /надіслано/);
+  assert.match(alertDelivery("sendAdminAlert: TELEGRAM_BOT_TOKEN / TELEGRAM_ADMIN_IDS не налаштовані — пропускаю алерт."), /НЕ надіслано/,
+    "🔴 ненастроєний Telegram звітує «надіслано» — той самий 15-годинний мовчазний гудок");
+  assert.match(alertDelivery("sendAdminAlert: TG 400 для 1"), /НЕ дійшло/);
+  assert.match(alertDelivery(null, "exit 1"), /НЕ надіслано/);
 });
