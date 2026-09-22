@@ -135,12 +135,16 @@ const OUT = inList(OUTBOUND_TYPES);
  * 🔴 ДВА ШЛЯХИ ЗВʼЯЗКИ — `UNION`, а не `OR` у `JOIN`: кожен шлях іде своїм індексом
  * (`client_phone` / `client_key`), і `UNION` сам прибирає дзвінок, знайдений обома.
  */
-export function adCallFactsSql(p: AdCallFactsParams): { sql: string; params: unknown[] } {
-  const { talkMinSec, windowBefore } = assertFactsParams(p);
+/**
+ * CTE `d0 … lf`: рекламні угоди періоду, їхні дзвінки двома шляхами звʼязки, склейка плечей.
+ * Спільні для фактів і для вибірки пілота — друга копія звʼязки розійшлася б із першою мовчки.
+ * Параметри: $1 from · $2 to · $3 вікно до створення · $4 «зараз» · $6 adSources.
+ */
+function linkedCallsCtes(p: AdCallFactsParams): string {
   const win = (alias: string) => `${alias}.calldate >= d0.created_at - $3::interval
              AND ${alias}.calldate <= COALESCE(d0.closed_at, $4::timestamptz)`;
-  const sql = `
-    WITH d0 AS (
+  return `
+    d0 AS (
       SELECT d.kommo_id, d.manager_id, d.pipeline_id, d.status_id,
              d.created_at_kommo AS created_at, d.closed_at_kommo AS closed_at, d.client_key,
              COALESCE(d.lead_channel = 'ad', false) AS is_lead_channel_ad,
@@ -161,7 +165,13 @@ export function adCallFactsSql(p: AdCallFactsParams): { sql: string; params: unk
     ),
     cu AS (SELECT DISTINCT uniqueid, calldate, call_type, billsec, manager_id, client_phone FROM lc),
     cm AS (SELECT cu.uniqueid, ${mergedLagGapExpr("cu")} AS gap FROM cu),
-    lf AS (SELECT lc.* FROM lc JOIN cm USING (uniqueid) WHERE ${mergedLagFirst("cm.gap")}),
+    lf AS (SELECT lc.* FROM lc JOIN cm USING (uniqueid) WHERE ${mergedLagFirst("cm.gap")})`;
+}
+
+export function adCallFactsSql(p: AdCallFactsParams): { sql: string; params: unknown[] } {
+  const { talkMinSec, windowBefore } = assertFactsParams(p);
+  const sql = `
+    WITH ${linkedCallsCtes(p)},
     agg AS (
       SELECT d0.kommo_id, d0.manager_id, d0.pipeline_id, d0.status_id, d0.created_at, d0.closed_at,
              d0.client_key, d0.is_lead_channel_ad, d0.is_ad_deal_sql, d0.phone_state,
