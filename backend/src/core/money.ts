@@ -3,13 +3,13 @@ import { pool } from "../db/pool.js";
 // циклічну залежність money↔metrics, але вона РАНТАЙМ-безпечна: обидва модулі викликають
 // одне одного лише всередині функцій (не на рівні модуля), тож ESM-live-binding резолвиться
 // до першого виклику (request-time), коли обидва модулі вже ініціалізовані.
-import { adDealSql, EXPECT_ZONE } from "./metrics.js";
+import { adDealSql } from "./metrics.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
 import { managerDealClass, type DealState } from "./leadgenHandoffRules.js";
-// 🔚 «Закрито і не реалізовано» (143) — ОДНА константа на продукт, з реєстру корзин. У грошових
-// сумах ядра її немає; вона потрібна лише класу угоди менеджера з передачі (у Кваліфікації той
-// самий 143 зветься «Не цільові» / «Сміття»). Друга копія тут розійшлась би мовчки.
-import { STATUS_LOST } from "./moneyBuckets.js";
+// 💰 Правила класу угоди менеджера з передачі — ОДИН обʼєкт у реєстрі корзин (там і 143
+// «Закрито і не реалізовано», у Кваліфікації — «Не цільові» / «Сміття»). `#683` звіряє його
+// поля з константами цього ядра; друга копія тут розійшлась би мовчки (ревʼю F3/F5).
+import { HANDOFF_CLASS_RULES } from "./moneyBuckets.js";
 
 /**
  * ЄДИНЕ джерело грошових метрик (MASTER_PLAN КРОК 2, виправлено КРОКОМ 4 — опція Б).
@@ -1149,10 +1149,11 @@ export async function receivedUndefDeals(s: MoneyScope): Promise<UndefDealRow[]>
  * 💰 СТАН І БЮДЖЕТ УГОД МЕНЕДЖЕРА, ЩО ВИРОСЛИ З ПЕРЕДАЧ ЛІДГЕНА — ЗАРАЗ (правило 4 власника).
  *
  * Гроші живуть лише тут (правило `money-core`), тож ядро лідогену знаходить угоду, а її клас
- * і суму питає в цієї функції. Клас вирішує ЧИСТА `managerDealClass` над константами
- * ЦЬОГО модуля — ті самі `FC_PIPELINES`/`STAGE_SUCCESS`/`STAGE_PAID`, що рахують дохід,
- * і та сама `EXPECT_ZONE` зони «Очікуємо», а списаний борг — тим самим `DEAL_NOT_WRITTEN_OFF`,
- * що й у всіх «очікуваних» з 26.08.2026. Друга копія будь-якого з них розійшлась би мовчки.
+ * і суму питає в цієї функції. Клас вирішує ЧИСТА `managerDealClass` над `HANDOFF_CLASS_RULES`
+ * (реєстр корзин), поля якого `#683` звіряє з `FC_PIPELINES`/`STAGE_SUCCESS`/`STAGE_PAID` цього
+ * модуля й `EXPECT_ZONE` зони «Очікуємо»; списаний борг — тим самим `DEAL_NOT_WRITTEN_OFF`, що й
+ * у всіх «очікуваних» з 26.08.2026. Друга копія будь-якого з них розійшлась би мовчки.
+ * Увесь ланцюг (SQL → `closed`/`written_off` → клас) проганяє на тимчасовій базі `#683b`.
  *
  * ⚓ Це НЕ дохід періоду: анкер — дата передачі, стан — поточний. Сума — `price` угоди
  * (уже зі знаком для мінусових), округлена до гривні так само, як її показує список.
@@ -1173,15 +1174,11 @@ export async function handoffDealStates(dealIds: readonly number[]): Promise<Map
       WHERE d.kommo_id = ANY($1::bigint[])`,
     [ids]
   );
-  const rules = {
-    fcPipelines: FC_PIPELINES, success: STAGE_SUCCESS, paid: STAGE_PAID,
-    expectZone: EXPECT_ZONE, lostStatus: STATUS_LOST,
-  };
   for (const x of r.rows) {
     const pipelineId = Number(x.pipeline_id), statusId = Number(x.status_id);
     out.set(Number(x.kommo_id), {
       pipelineId, statusId,
-      cls: managerDealClass({ pipelineId, statusId, closed: x.closed, writtenOff: x.written_off }, rules),
+      cls: managerDealClass({ pipelineId, statusId, closed: x.closed, writtenOff: x.written_off }, HANDOFF_CLASS_RULES),
       price: Math.round(Number(x.price ?? 0)),
     });
   }

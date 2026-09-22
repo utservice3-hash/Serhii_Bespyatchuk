@@ -6,9 +6,9 @@ import {
   pickHandoffs, classifyHandoffs, aggregateHandoffMoney, handoffView, managerDealClass,
   handoffDealsScope, leadgenAuthScope, trendWindow, parseTrendMonths, parseLeadgenGrain, parseManagerIdParam,
   personMoneyWire, emptyHandoffMoney,
-  type HandoffEntry, type DealState, type ClassRules, type LeadgenHandoffMoney,
+  type HandoffEntry, type DealState, type LeadgenHandoffMoney,
 } from "./leadgenHandoffRules.js";
-import { CLOSED_STATUSES, RECEIVED_STATUSES, AWAITING_STATUSES, STATUS_LOST } from "./moneyBuckets.js";
+import { HANDOFF_CLASS_RULES } from "./moneyBuckets.js";
 
 /**
  * #670…#674, #680 — ГРОШІ З ПЕРЕДАНИХ ЛІДІВ: чисті правила (рішення власника 22.09.2026).
@@ -88,17 +88,14 @@ test("#670b «ТА САМА УГОДА» І «БЕЗ УГОДИ»: гроші н
 /**
  * #671 — КЛАС УГОДИ МЕНЕДЖЕРА ЗАРАЗ (правило 4): межі з обох боків.
  *
- * Правила беруться з реєстру корзин (`moneyBuckets`), який `#45c` звіряє з константами
- * `money.ts`/`metrics.ts`, — а не з копії, написаної тут.
+ * Правила — ТОЙ САМИЙ обʼєкт `HANDOFF_CLASS_RULES`, що `money.handoffDealStates` передає в
+ * `managerDealClass` (ревʼю F3: раніше тест складав свій, а ядро — свій). Його поля з
+ * константами ядра звіряє `#683`; увесь ланцюг на тимчасовій базі — `#683b`.
  * 🧨 САБОТАЖ: прибрати `&& d.closed` у гілці `success` → 142 без `closed_at` стає «успіхом», червоніє.
  */
 test("#671 КЛАС УГОДИ МЕНЕДЖЕРА: успіх лише з closed_at, списане → програно, Кваліфікація 142 → в роботі", () => {
-  const R: ClassRules = {
-    fcPipelines: [8921932, 155304], success: CLOSED_STATUSES, paid: RECEIVED_STATUSES,
-    expectZone: AWAITING_STATUSES, lostStatus: STATUS_LOST,
-  };
   const c = (pipelineId: number, statusId: number, closed = false, writtenOff = false) =>
-    managerDealClass({ pipelineId, statusId, closed, writtenOff }, R);
+    managerDealClass({ pipelineId, statusId, closed, writtenOff }, HANDOFF_CLASS_RULES);
   // success: 142 повного циклу — ЛИШЕ з closed_at (як success у moneySourceSql)
   assert.equal(c(8921932, 142, true), "success");
   assert.equal(c(8921932, 142, false), "work", "🔴 142 без closed_at порахований успіхом — ядро його не рахує");
@@ -119,6 +116,37 @@ test("#671 КЛАС УГОДИ МЕНЕДЖЕРА: успіх лише з closed
   assert.equal(c(8921928, 69716164), "work");
   // Списаний прапорець поза зоною нічого не міняє — він лише про «очікуване».
   assert.equal(c(8921932, 142, true, true), "success");
+});
+
+/**
+ * #683 — ПРАВИЛА КЛАСУ == КОНСТАНТАМ ГРОШОВОГО ЯДРА (ревʼю F3).
+ *
+ * `HANDOFF_CLASS_RULES` живе в чистому реєстрі корзин, а дохід рахують константи `money.ts`/
+ * `metrics.ts`. Розійдуться — «успіх», «оплачено» й «очікуємо» в рядку лідгена означатимуть
+ * інше, ніж на решті екранів. Звірка — з РЕАЛЬНИМИ константами ядра (лінивий імпорт із
+ * заглушками оточення, як `#342`: `config` кидає без змінних ще на імпорті, а БД тут не
+ * потрібна — жодного запиту), тож біжить у кожному оточенні, а не лише з `DATABASE_URL`.
+ * 🧨 САБОТАЖ: у реєстрі `expectZone: AWAITING_STATUSES` → вузький етап 8 → червоніє.
+ */
+test("#683 ПРАВИЛА КЛАСУ УГОДИ МЕНЕДЖЕРА == КОНСТАНТАМ ГРОШОВОГО ЯДРА (FC, 142, етап 9, зона «Очікуємо», 143)", async () => {
+  process.env.DATABASE_URL ??= "postgresql://stub@localhost/stub";
+  process.env.JWT_SECRET ??= "test";
+  process.env.KOMMO_BASE_URL ??= "https://x.invalid";
+  process.env.KOMMO_API_TOKEN ??= "x";
+  const money = await import("./money.js");
+  const metrics = await import("./metrics.js");
+  const sorted = (a: readonly number[]) => [...a].sort((x, y) => x - y);
+  const R = HANDOFF_CLASS_RULES;
+  assert.deepEqual(sorted(R.fcPipelines), sorted(money.FC_PIPELINES), "🔴 воронки повного циклу розійшлись із FC_PIPELINES");
+  assert.deepEqual(sorted(R.success), sorted(money.STAGE_SUCCESS), "🔴 «успіх» розійшовся з STAGE_SUCCESS");
+  assert.deepEqual(sorted(R.paid), sorted(money.STAGE_PAID), "🔴 «оплачено» розійшлось із STAGE_PAID");
+  assert.deepEqual(sorted(R.expectZone), sorted(metrics.EXPECT_ZONE),
+    "🔴 «очікуємо» розійшлось із EXPECT_ZONE — рядок лідгена рахує іншу зону, ніж решта екранів");
+  assert.equal(R.lostStatus, 143, "🔴 «програно» — не системний 143 Kommo");
+  // 🪞 Дзеркало: звірка розрізняє саме ту підміну, яку знайшло ревʼю, — вузький етап 8 ≠ зона.
+  assert.notDeepEqual(sorted(money.STAGE_EXPECTED), sorted(metrics.EXPECT_ZONE),
+    "фікстура вироджена: етап 8 і зона однакові — підміну не було б видно");
+  assert.ok(R.expectZone.length > 0 && R.fcPipelines.length > 0, "порожні правила — звіряти нема чого");
 });
 
 /**

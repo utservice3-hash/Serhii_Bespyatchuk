@@ -21,6 +21,13 @@ import { pickHandoffs, LINK_BEFORE_SEC, LINK_AFTER_SEC, type HandoffEntry } from
  * ⚠️ Один кластер на файл (`before`/`after`), а не на тест: кластерів на машині обмаль
  * (SysV shared memory), і паралельні прогони інших чатів уже клали їх провізію.
  * На прод-сервері бінарів PostgreSQL немає — скіп законний і названий у `ALLOWED_PROD_SKIPS`.
+ *
+ * 🧩 `#682b`…`#684b` — ЯДРО ЦІЛКОМ, А НЕ ЛИШЕ ТЕКСТ ЗАПИТУ (ревʼю F2–F4). Там кличуться
+ * СПРАВЖНІ `money.handoffDealStates`, `leadgenTrend`, `leadgenStats`, `leadgenHandoffMoney` —
+ * через пул ядра, спрямований на цей самий кластер (прийом `#25`/`#37` у `reactivation.test.ts`:
+ * `DATABASE_URL` ставиться ДО першого імпорту `db/pool.js`, решта змінних — заглушки). Пул
+ * модульний, але процес у файла свій, тож чужих тестів він не зачіпає; закривається в `after`.
+ * Часовий пояс бази — UTC (`ALTER DATABASE`), щоб і зʼєднання пулу жили в поясі Neon.
  */
 
 const SCHEMA = path.join(import.meta.dirname, "..", "db", "schema.sql");
@@ -32,6 +39,13 @@ type C = import("pg").Client;
 let client: C | null = null;
 let skip: string | null = null;
 let dispose: (() => void) | null = null;
+let poolUsed = false;
+/** Ядро через пул, спрямований на тимчасовий кластер. Лише після `before` з живим кластером. */
+async function core() {
+  poolUsed = true;
+  const [money, stats] = await Promise.all([import("./money.js"), import("./leadgenStats.js")]);
+  return { money, stats };
+}
 
 const utc = (s: string) => new Date(s + "Z");
 const sec = (d: Date, s: number) => new Date(d.getTime() + s * 1000);
@@ -72,6 +86,12 @@ before(async () => {
   await client.connect();
   await client.query(readFileSync(SCHEMA, "utf8"));
   await client.query("SET TIME ZONE 'UTC'");
+  // Пояс Neon — і для зʼєднань пулу ядра, які відкриються пізніше (`#682b`…`#684b`).
+  await client.query(`DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET timezone = %L', current_database(), 'UTC'); END $$`);
+  process.env.DATABASE_URL = s.url;
+  process.env.JWT_SECRET ??= "test";
+  process.env.KOMMO_BASE_URL ??= "https://x.invalid";
+  process.env.KOMMO_API_TOKEN ??= "x";
   await client.query(`INSERT INTO teams (id, name) VALUES (1, 'Лідоген-1'), (2, 'Лідоген-2')`);
   await client.query(`INSERT INTO managers (id, name, team_id) VALUES (1,'Лідген А',1),(2,'Лідген Б',2),(3,'Продажі В',1)`);
 
@@ -134,6 +154,8 @@ before(async () => {
 
 after(async () => {
   if (client) await client.end();
+  // Пул ядра — лише якщо його підняв котрийсь із гейтів (інакше імпорт створив би його тут).
+  if (poolUsed) await (await import("../db/pool.js")).pool.end();
   dispose?.();
 });
 
@@ -232,4 +254,75 @@ test("#676b ЖИВИЙ SQL: місячний кошик тренду == рядк
     compared += a.length;
   }
   assert.ok(compared >= 3, "фікстура вироджена — порівнювати нема чого");
+});
+
+/**
+ * #683b — СТАН УГОДИ МЕНЕДЖЕРА ЗАРАЗ: СПРАВЖНІЙ `money.handoffDealStates` НА ТИМЧАСОВІЙ БАЗІ (ревʼю F3).
+ *
+ * Чиста `managerDealClass` уже під `#671`, а звірку правил із константами тримає `#683`. Тут —
+ * решта ланцюга, якої не бачить жоден із них: SQL (`closed_at IS NOT NULL`, предикат списання),
+ * відображення рядка в `{ closed, writtenOff }`, які правила передано, округлення й знак ціни.
+ * Кожна межа — з обох боків: 142 з `closed_at` і без; етап 8 списаний цілком, частково й зі
+ * скасованим списанням; «Виставлення рахунку» (зона, але не етап 8); 143 трьох воронок; 142
+ * Кваліфікації; 142 чужої воронки.
+ * 🧨 САБОТАЖ (money.ts): `closed: x.closed` → `closed: true` → червоніє; у виклику
+ * `managerDealClass` підмінити зону на `STAGE_EXPECTED` → червоніє; `NOT (${DEAL_NOT_WRITTEN_OFF})
+ * AS written_off` → `FALSE AS written_off` → червоніє.
+ */
+test("#683b ЖИВИЙ SQL: стан угоди менеджера — успіх лише з closed_at, списане → програно, зона «Очікуємо» ціла", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { money } = await core();
+  const FC_NEW = FC[0], FC_OLD = FC[1], QUAL_OLD = QUALIFICATION_PIPELINES[1];
+  const at = utc("2026-03-02T10:00:00");
+  const mk = async (want: string, pipeline: number, status: number, o: { closed?: boolean; price?: number } = {}) => {
+    const id = nextId++;
+    await client!.query(
+      `INSERT INTO deals (kommo_id, name, manager_id, pipeline_id, status_id, price, created_at_kommo, closed_at_kommo, client_key, client_name)
+       VALUES ($1, $2, 3, $3, $4, $5, $6, $7, NULL, NULL)`,
+      [id, want, pipeline, status, o.price ?? 1000, at, o.closed ? at : null]);
+    return { id, want, price: Math.round(o.price ?? 1000) };
+  };
+  const writeOff = async (dealId: number, inv: string, o: { revoked?: boolean; writtenOff?: boolean } = {}) => {
+    const ck = `wo-${dealId}`;
+    await client!.query(
+      `INSERT INTO receivable_invoices (client_key, client_name, client_key_raw, invoice_no, amount, service_url)
+       VALUES ($1, 'ТОВ Списання', $1, $2, 100, $3)`, [ck, inv, `https://x.invalid/leads/detail/${dealId}`]);
+    if (o.writtenOff === false) return;
+    await client!.query(
+      `INSERT INTO receivable_writeoffs (client_key_raw, invoice_no, amount, note, revoked_at)
+       VALUES ($1, $2, 100, 'гейт #683b', $3)`, [ck, inv, o.revoked ? at : null]);
+  };
+  const cases = [
+    await mk("success", FC_NEW, 142, { closed: true, price: 12_345.6 }),
+    await mk("work", FC_NEW, 142, { closed: false }),                 // 142 без closed_at — ядро його не рахує
+    await mk("paid", FC_OLD, 60412544),
+    await mk("paid", FC_NEW, 69716460, { price: -500 }),              // мінусова — зі знаком
+    await mk("expect", FC_NEW, 100274340),                            // «Виставлення рахунку»: зона, не етап 8
+    await mk("lost", FC_NEW, 69716312),                               // етап 8, списано ВСЕ
+    await mk("expect", FC_NEW, 69716312),                             // етап 8, списано ОДИН із двох рахунків
+    await mk("expect", FC_NEW, 69716312),                             // етап 8, списання скасоване
+    await mk("lost", FC_NEW, 143),
+    await mk("lost", QUAL, 143),                                      // «Не цільові»
+    await mk("lost", QUAL_OLD, 143),                                  // «Сміття»
+    await mk("work", QUAL, 142, { closed: true }),                    // Кваліфіковано — ще не повний цикл
+    await mk("work", FC_NEW, 69693668),
+    await mk("work", OTHER, 142, { closed: true }),                   // 142 чужої воронки — не успіх
+  ];
+  await writeOff(cases[5].id, "A1");
+  await writeOff(cases[6].id, "B1");
+  await writeOff(cases[6].id, "B2", { writtenOff: false });
+  await writeOff(cases[7].id, "C1", { revoked: true });
+
+  const got = await money.handoffDealStates([...cases.map((c) => c.id), cases[0].id, 999_999_999]);
+  assert.equal(got.size, cases.length, "🔴 дубль або неіснуюча угода змінили кількість станів");
+  for (const c of cases) {
+    const st = got.get(c.id);
+    assert.ok(st, `🔴 угода ${c.id} (${c.want}) без стану`);
+    assert.equal(st.cls, c.want, `🔴 угода ${c.id}: ${st.pipelineId}:${st.statusId} → «${st.cls}» замість «${c.want}»`);
+    assert.equal(st.price, c.price, `🔴 угода ${c.id}: бюджет ${st.price} замість ${c.price}`);
+  }
+  assert.equal(got.get(cases[0].id)!.price, 12_346, "🔴 бюджет не округлено до гривні");
+  assert.equal(got.get(cases[3].id)!.price, -500, "🔴 мінусова угода втратила знак");
+  const kinds = new Set(cases.map((c) => c.want));
+  assert.deepEqual([...kinds].sort(), ["expect", "lost", "paid", "success", "work"], "фікстура не покриває всіх класів");
 });
