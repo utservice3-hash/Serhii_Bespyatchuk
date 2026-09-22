@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
- * 📞 #685–#687 — ЕКРАН «ЛІДОГЕНЕРАЦІЯ» ПЕРЕНЕСЕНО З МАКЕТА (22.09.2026), І ЛИШЕ ЙОГО.
+ * 📞 #685–#688 — ЕКРАН «ЛІДОГЕНЕРАЦІЯ» ПЕРЕНЕСЕНО З МАКЕТА (22.09.2026), І ЛИШЕ ЙОГО.
  *
  * Макет жив на тій самій кодовій базі, але з макетними хуками: адаптер, що підкладав
  * відповіді API (`window.__MAKET_ADAPTER__`), `HashRouter` для відкриття з файла, вхід без
@@ -45,11 +45,19 @@ const MOCK_MARKERS: { name: string; re: RegExp }[] = [
 ];
 const mockHits = (text: string): string[] => MOCK_MARKERS.filter((m) => m.re.test(text)).map((m) => m.name);
 
+/**
+ * `public` vite копіює в докрут ЯК Є, тож його ВМІСТ — такий самий продукт, як `src`. Читаємо всі
+ * текстові типи (svg теж: `<script>` усередині svg виконується); png/ico — байти, маркерів там не буває.
+ */
+const PUBLIC_TEXT = /\.(js|mjs|cjs|html?|svg|json|css|txt|xml|webmanifest)$/i;
+
 test("#685 МАКЕТ НЕ ПОТРАПИВ У ПРОДУКТ: у frontend/src, index.html і public немає __MAKET, HashRouter, maket*.js", () => {
-  const files = walk(path.join(FE, "src"), /\.(ts|tsx|js|jsx|mjs|css|html|json|svg)$/).concat(path.join(FE, "index.html"));
+  const files = walk(path.join(FE, "src"), /\.(ts|tsx|js|jsx|mjs|css|html|json|svg)$/)
+    .concat(path.join(FE, "index.html"))
+    .concat(walk(path.join(FE, "public"), PUBLIC_TEXT));
   // Порожній простір — провал, а не «чисто»: спершу доводимо, що перевірці БУЛО що читати.
   assert.ok(files.length > 100, `🔴 обхід знайшов лише ${files.length} файлів фронта — шукали не там`);
-  for (const must of ["src/main.tsx", "src/api.ts", "src/pages/Dashboard.tsx", "src/pages/dashboard/sections/LeadgenSection.tsx", "index.html"])
+  for (const must of ["src/main.tsx", "src/api.ts", "src/pages/Dashboard.tsx", "src/pages/dashboard/sections/LeadgenSection.tsx", "index.html", "public/favicon.svg"])
     assert.ok(files.includes(path.join(FE, must)), `🔴 у простір пошуку не потрапив frontend/${must} — саме там жили хуки макета`);
 
   const hits: string[] = [];
@@ -87,25 +95,81 @@ test("#686 Dashboard рендерить <LeadgenSection /> БЕЗ пропсів
   assert.doesNotMatch(dash, /\bLeadgenSectionLegacy\b/, "🔴 у Dashboard повернулась порівняльна «стара» вкладка макета");
 });
 
+/** Аргументи КОЖНОГО виклику `name(…)` — з урахуванням вкладених дужок (а не «до першої `)`»). */
+function callArgs(src: string, name: string): string[] {
+  const out: string[] = [];
+  const re = new RegExp(`\\b${name}\\s*\\(`, "g");
+  for (let m = re.exec(src); m; m = re.exec(src)) {
+    let depth = 1, i = m.index + m[0].length;
+    const start = i;
+    for (; i < src.length && depth > 0; i++) {
+      if (src[i] === "(") depth++;
+      else if (src[i] === ")") depth--;
+    }
+    out.push(src.slice(start, i - 1));
+  }
+  return out;
+}
+const ID = "[A-Za-z_$][\\w$]*";
+
+/**
+ * Твердження — про ПОТІК ДАНИХ, а не про текст рядка: змінна навігатора (та, що в `<PeriodNav state=…>`)
+ * → `periodOf(неї)` → межі `from`/`to` → аргумент запиту. Імена змінних беруться з самого коду, порядок
+ * деструктуризації й обгортка `useMemo` — байдужі: рефакторинг, що не міняє потоку, гейт не червонить.
+ */
 test("#686b 🪞 ДЗЕРКАЛО: період у екрана СВІЙ — навігатор на екрані, запит іде з його періоду", () => {
   const sec = stripComments(readFileSync(path.join(FE, "src", "pages", "dashboard", "sections", "LeadgenSection.tsx"), "utf8"));
-  assert.match(sec, /export function LeadgenSection\(\s*\)/, "🔴 екран знову приймає пропси — період прийде ззовні");
+  assert.match(sec, new RegExp(`export\\s+(?:function\\s+LeadgenSection\\s*\\(\\s*\\)|const\\s+LeadgenSection\\s*=\\s*\\(\\s*\\)\\s*=>)`),
+    "🔴 екран знову приймає пропси — період прийде ззовні");
   assert.doesNotMatch(sec, /\bdateRange\b/, "🔴 екран читає спільний dateRange");
-  assert.match(sec, /<PeriodNav\b/, "🔴 на екрані немає навігатора — період нема звідки змінити");
-  assert.match(sec, /const period = useMemo\(\(\) => periodOf\(nav\)/, "🔴 період екрана береться не з навігатора");
-  assert.match(sec, /const \{ from, to \} = period;/, "🔴 межі запиту — не з періоду навігатора");
-  assert.match(sec, /fetchLeadgenStats\(grain \? \{ from, to, grain \} : \{ from, to \}\)/, "🔴 основний запит екрана іде не з періоду навігатора");
+
+  const nav = sec.match(new RegExp(`<PeriodNav\\b[^>]*?\\bstate=\\{\\s*(${ID})\\s*\\}`))?.[1];
+  assert.ok(nav, "🔴 на екрані немає навігатора <PeriodNav state={…}> — період нема звідки змінити");
+  const esc = (s: string): string => s.replace(/\$/g, "\\$");
+  // Усі змінні, що тримають periodOf(навігатора): таких буває кілька (у comparisonOf — своя `cur`).
+  const periods = [...sec.matchAll(new RegExp(`\\bconst\\s+(${ID})\\s*=\\s*(?:useMemo\\(\\s*\\(\\)\\s*=>\\s*)?periodOf\\(\\s*${esc(nav)}\\s*\\)`, "g"))]
+    .map((m) => m[1]);
+  assert.ok(periods.length > 0, `🔴 період екрана береться не з навігатора: немає \`const … = periodOf(${nav})\``);
+  const bound = periods.flatMap((p) => [...sec.matchAll(new RegExp(`\\bconst\\s*\\{([^}]*)\\}\\s*=\\s*${esc(p)}\\b(?!\\s*\\.)`, "g"))]
+    .flatMap((m) => m[1].split(",").map((s) => s.trim())));
+  assert.ok(bound.includes("from") && bound.includes("to"),
+    `🔴 межі запиту — не з періоду навігатора: \`from\` і \`to\` не деструктуровано з ${periods.map((p) => `\`${p}\``).join(" / ")} (знайдено: ${bound.join(", ") || "нічого"})`);
+
+  const calls = callArgs(sec, "fetchLeadgenStats");
+  assert.ok(calls.length > 0, "🔴 екран не кличе fetchLeadgenStats — перевіряти нема що");
+  for (const a of calls)
+    assert.doesNotMatch(a, /["'`]|\b\d/, `🔴 у запиті екрана зашитий літерал (дата чи число): fetchLeadgenStats(${a.trim()})`);
+  assert.ok(calls.some((a) => /\bfrom\b/.test(a) && /\bto\b/.test(a)),
+    `🔴 основний запит екрана іде не з меж навігатора: жоден із ${calls.length} викликів fetchLeadgenStats не бере from і to`);
 });
 
 /**
  * 🗓 #687 — ДОПОВНЕННЯ ДО `#239` ДЛЯ ІНШОЇ ФОРМИ ТОГО САМОГО ДЕФЕКТУ.
  * `#239` ловить день у шаблоні (`${ym}-31`), але не конкатенацію: у макеті екрана стояло
  * `r.ym + "-31"`, і `#239` його не бачив. Ознака та сама — день 29/30/31, дописаний до
- * змінного місяця, — тут через `+` (TS) або `||` (SQL). Обхід — усе дерево, як у `#239`.
+ * змінного місяця. Обхід — усе дерево, як у `#239`.
+ *
+ * ЩО ЛОВИТЬСЯ (кожна форма — у дзеркалі `#687b`):
+ *   • `+ "-31"`, `|| '-31'` (SQL), `.concat("-31")` — і з хвостом після дня (`"-31T23:59:59"`);
+ *   • `"-" + "31"` / `'-' || '31'` — день окремим доданком;
+ *   • перенос рядка між `+` і літералом: текст читається ЦІЛИМ, а не рядок за рядком.
+ * ЧОГО НЕ ЛОВИТЬСЯ (свідомо, назване тут, щоб «зелено» не читалось ширше): `[ym, "31"].join("-")`,
+ * день змінною (`ym + "-" + last`) і день у шаблоні — останнє стереже `#239`.
  */
-const CONCAT_DAY = /(\+|\|\|)\s*(["'`])-(29|30|31)\2/;
+const CONCAT_DAY: RegExp[] = [
+  /(?:\+|\|\||\.concat\()\s*(["'`])-(29|30|31)(?!\d)/g,
+  /(["'`])-\1\s*(?:\+|\|\|)\s*(["'`]?)(29|30|31)(?!\d)/g,
+];
 /** Коментар — не код (межа та сама, що в `#239`, і так само груба). */
 const isComment = (line: string): boolean => /^\s*(\*|\/\/|--|\/\*)/.test(line);
+/** Номери рядків (з 1), де стоїть ознака. Рядки-коментарі гасяться, але лишаються — нумерація не зсувається. */
+function concatDayLines(text: string): number[] {
+  const code = text.split("\n").map((l) => (isComment(l) ? "" : l)).join("\n");
+  const lines = new Set<number>();
+  for (const re of CONCAT_DAY)
+    for (const m of code.matchAll(re)) lines.add(code.slice(0, m.index).split("\n").length);
+  return [...lines].sort((a, b) => a - b);
+}
 
 test("#687 день місяця не дописується рядком до місяця (ym + «-31») — ні на екрані лідогену, ні деінде в дереві", () => {
   const exts = /\.(ts|tsx|js|mjs|sql)$/;
@@ -117,9 +181,9 @@ test("#687 день місяця не дописується рядком до �
   const hits: string[] = [];
   for (const f of files) {
     if (f.endsWith("leadgenScreen.test.ts")) continue; // сам гейт містить зразки
-    readFileSync(f, "utf8").split("\n").forEach((line, i) => {
-      if (!isComment(line) && CONCAT_DAY.test(line)) hits.push(`${rel(f)}:${i + 1}: ${line.trim().slice(0, 100)}`);
-    });
+    const text = readFileSync(f, "utf8");
+    const lines = text.split("\n");
+    for (const ln of concatDayLines(text)) hits.push(`${rel(f)}:${ln}: ${lines[ln - 1].trim().slice(0, 100)}`);
   }
   assert.deepEqual(hits, [],
     `🔴 КІНЕЦЬ МІСЯЦЯ ДОПИСАНО РЯДКОМ (перевірено ${files.length} файлів). У вересні 30 днів, у лютому 28 — `
@@ -127,15 +191,63 @@ test("#687 день місяця не дописується рядком до �
 });
 
 test("#687b 🪞 ДЗЕРКАЛО: ознака ловить рядок макета дослівно — і пропускає законне", () => {
-  assert.ok(CONCAT_DAY.test('const sel = rows.filter((r) => r.ym + "-01" <= period.to && period.from <= r.ym + "-31").map((r) => r.label);'),
+  const caught = (s: string): boolean => concatDayLines(s).length > 0;
+  assert.ok(caught('const sel = rows.filter((r) => r.ym + "-01" <= period.to && period.from <= r.ym + "-31").map((r) => r.label);'),
     "🔴 не спіймано рядок макета `r.ym + \"-31\"`");
-  assert.ok(CONCAT_DAY.test("const to = ym+'-30';"), "🔴 не спіймано `-30` в одинарних лапках без пробілів");
-  assert.ok(CONCAT_DAY.test("const to = m + `-29`;"), "🔴 не спіймано `-29` у зворотних лапках");
-  assert.ok(CONCAT_DAY.test("WHERE d <= (ym || '-31')::date"), "🔴 не спіймано SQL-конкатенацію `|| '-31'`");
-  // 🪞 Законне: перше число є в кожному місяці; грудень має 31 день; коментар — не код.
-  assert.equal(CONCAT_DAY.test('months.filter((ym) => ym + "-01" <= today)'), false, "🔴 `-01` оголошено дефектом");
-  assert.equal(CONCAT_DAY.test('const dec = y + "-12-31";'), false, "🔴 фіксований грудень оголошено дефектом");
-  assert.equal(CONCAT_DAY.test('const d = monthEnd(ym + "-01");'), false, "🔴 виправлений рядок оголошено дефектом");
-  assert.equal(isComment('  // було r.ym + "-31"'), true, "🔴 коментар прийнято за код");
+  assert.ok(caught("const to = ym+'-30';"), "🔴 не спіймано `-30` в одинарних лапках без пробілів");
+  assert.ok(caught("const to = m + `-29`;"), "🔴 не спіймано `-29` у зворотних лапках");
+  assert.ok(caught("WHERE d <= (ym || '-31')::date"), "🔴 не спіймано SQL-конкатенацію `|| '-31'`");
+  assert.ok(caught('period.from <= r.ym + "-31T23:59:59"'), "🔴 не спіймано день із хвостом часу `\"-31T23:59:59\"`");
+  assert.ok(caught('const to = ym.concat("-31");'), "🔴 не спіймано `.concat(\"-31\")`");
+  assert.ok(caught('const to = ym + "-" + "30";'), "🔴 не спіймано день окремим доданком `\"-\" + \"30\"`");
+  assert.deepEqual(concatDayLines('const x = 1;\nconst to = r.ym +\n  "-31";'), [2], "🔴 не спіймано перенос рядка між `+` і `\"-31\"` (або не той номер рядка)");
+  // 🪞 Законне: перше число є в кожному місяці; грудень має 31 день; не день (`-310`); коментар — не код.
+  assert.equal(caught('months.filter((ym) => ym + "-01" <= today)'), false, "🔴 `-01` оголошено дефектом");
+  assert.equal(caught('const dec = y + "-12-31";'), false, "🔴 фіксований грудень оголошено дефектом");
+  assert.equal(caught('const d = monthEnd(ym + "-01");'), false, "🔴 виправлений рядок оголошено дефектом");
+  assert.equal(caught('const code = prefix + "-310";'), false, "🔴 `-310` (не день) оголошено дефектом");
+  assert.equal(caught('  // було r.ym + "-31"'), false, "🔴 коментар прийнято за код");
   assert.equal(isComment('  const x = r.ym + "-31";'), false, "🔴 живий рядок оголошено коментарем");
+});
+
+/**
+ * 📜 #688 — `#685` шукає ОЗНАКИ макета, і перейменований підкладений скрипт (`lg-data.js` замість
+ * `maket-data.js`) не несе жодної з них. Тому окреме твердження — про СТРУКТУРУ, а не про слова:
+ * `index.html` вантажить РІВНО ОДИН скрипт — вхід застосунку `/src/main.tsx` (`type="module"`),
+ * а `public`, який vite копіює в докрут як є, скриптів не несе. Порядок атрибутів — байдужий.
+ */
+const PUBLIC_SCRIPTS_ALLOWED: string[] = []; // свідомий скрипт у public — лише записом сюди, як у lock-файлі
+function scriptProblems(html: string): string[] {
+  const tags = [...html.replace(/<!--[\s\S]*?-->/g, " ").matchAll(/<script\b([^>]*)>/gi)];
+  if (tags.length !== 1) return [`скриптів ${tags.length}, а має бути рівно один: ${tags.map((t) => t[0]).join(" ") || "жодного"}`];
+  const attrs = Object.fromEntries([...tags[0][1].matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)]
+    .map((a) => [a[1].toLowerCase(), a[2] ?? a[3] ?? a[4]]));
+  return attrs.src === "/src/main.tsx" && attrs.type === "module" ? [] : [`єдиний скрипт — не вхід застосунку: ${tags[0][0]}`];
+}
+
+test("#688 index.html вантажить рівно один скрипт — вхід застосунку /src/main.tsx, а public не несе скриптів", () => {
+  const html = readFileSync(path.join(FE, "index.html"), "utf8");
+  assert.match(html, /<div id="root">/, "🔴 frontend/index.html не схожий на сторінку застосунку — читаємо не той файл");
+  assert.deepEqual(scriptProblems(html), [],
+    "🔴 index.html вантажить щось, крім застосунку — так у макеті їхали maket-data.js і maket.js ДО main.tsx");
+  const pub = walk(path.join(FE, "public"), /./);
+  assert.ok(pub.includes(path.join(FE, "public", "favicon.svg")), `🔴 обхід public не знайшов favicon.svg (усього ${pub.length}) — шукали не там`);
+  const scripts = pub.map((f) => path.relative(path.join(FE, "public"), f)).filter((f) => /\.(m?js|cjs)$/i.test(f) && !PUBLIC_SCRIPTS_ALLOWED.includes(f));
+  assert.deepEqual(scripts, [], `🔴 у frontend/public є скрипти (перевірено ${pub.length} файлів): vite покладе їх у докрут як є. `
+    + "Свідомий — внесіть у PUBLIC_SCRIPTS_ALLOWED цього гейта.");
+});
+
+test("#688b 🪞 ДЗЕРКАЛО: index.html макета й перейменований підкладений скрипт — спіймано; вхід із переставленими атрибутами — ні", () => {
+  const entry = '<script type="module" src="/src/main.tsx"></script>';
+  // index.html макета — дослівно три скрипти.
+  assert.equal(scriptProblems(`<div id="root"></div>\n<script src="./maket-data.js"></script>\n<script src="./maket.js"></script>\n${entry}`).length, 1,
+    "🔴 index.html макета не спійманий");
+  assert.equal(scriptProblems(`<script src="./lg-data.js"></script>\n${entry}`).length, 1, "🔴 перейменований підкладений скрипт не спійманий");
+  assert.equal(scriptProblems(`<script>window.__X = 1</script>\n${entry}`).length, 1, "🔴 вбудований скрипт не спійманий");
+  assert.equal(scriptProblems('<script type="module" src="/src/other.tsx"></script>').length, 1, "🔴 чужий єдиний вхід не спійманий");
+  assert.equal(scriptProblems("<div></div>").length, 1, "🔴 сторінка без входу застосунку оголошена чистою");
+  // 🪞 Законне: той самий вхід з іншим порядком атрибутів; закоментований скрипт — не скрипт.
+  assert.deepEqual(scriptProblems(entry), [], "🔴 вхід застосунку оголошено сторонньою вставкою");
+  assert.deepEqual(scriptProblems("<script src='/src/main.tsx' type=\"module\"></script>"), [], "🔴 переставлені атрибути оголошено дефектом");
+  assert.deepEqual(scriptProblems(`<!-- <script src="./maket.js"></script> -->\n${entry}`), [], "🔴 закоментований скрипт прийнято за живий");
 });
