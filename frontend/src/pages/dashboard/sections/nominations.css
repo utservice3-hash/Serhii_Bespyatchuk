@@ -49,7 +49,118 @@
 textarea.nm-inp { min-height: 64px; resize: vertical; }
 .nm-checks { display: flex; flex-direction: column; gap: 4px; max-height: 180px; overflow-y: auto; font-size: 13px; }
 
-/* 📷 Поле «Фото — людина з реєстру» у редакторі ручних слайдів (22.09.2026). */
-.nm-who { display: flex; gap: 8px; align-items: center; }
-.nm-who > select { flex: 1 1 auto; min-width: 0; }
-.nm-who > .ep-av { border: 2px solid #C8102E; }
+/* 📷 Поле «Фото — людина з реєстру» у редакторі ручних слайдів (22.09.2026). Окремий клас: `.nm-who` — імʼя переможця. */
+.nm-pick { display: flex; gap: 8px; align-items: center; }
+.nm-pick > select { flex: 1 1 auto; min-width: 0; }
+.nm-pick > .ep-av { border: 2px solid #C8102E; }
+
+/* ─────────── Зручна вкладка (22.09.2026): картки на телефоні, рядки на компʼютері ─────────── */
+.nm-sub { margin-top: 2px; font-size: 13px; }
+.nm-head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.nm-btn.lg { min-height: 44px; padding: 0 16px; font-size: 14px; border-radius: var(--r-xl); }
+.nm-pill.danger { background: var(--danger-bg); color: var(--danger); }
+.nm-pill.me { background: var(--info-bg); color: var(--info); margin-left: 6px; font-size: 11px; padding: 1px 7px; }
+.nm-link { background: none; border: 0; padding: 0; color: var(--info); font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
+.nm-link:disabled { opacity: .5; cursor: not-allowed; }
+.nm-link:focus-visible, .nm-chip:focus-visible, .nm-prog-row:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.nm-name { font-weight: 600; }
+.nm-warn-t { color: var(--warn); }
+.nm-ok-t { color: var(--ok); font-weight: 600; }
+.nm-bar { display: block; height: 8px; background: var(--border); border-radius: 999px; overflow: hidden; }
+.nm-bar > span { display: block; height: 8px; background: var(--ok); }
+
+.nm-card-h { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; padding: 14px 16px 8px; }
+.nm-progress-list { display: flex; flex-direction: column; }
+.nm-prog-row { display: grid; grid-template-columns: minmax(180px, 260px) 140px 70px minmax(0, 1fr) 170px; gap: 14px; align-items: center;
+  padding: 12px 16px; border: 0; border-top: 1px solid var(--border); background: none; color: var(--text); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
+.nm-prog-row:hover { background: var(--surface-2); }
+.nm-prog-team { display: flex; flex-direction: column; gap: 2px; }
+.nm-prog-at { text-align: right; }
+
+.nm-board { display: flex; flex-direction: column; gap: 12px; margin-bottom: 14px; }
+.nm-board > .nm-card { margin-bottom: 0; }
+.nm-intro { display: flex; gap: 20px; align-items: center; padding: 14px 16px; font-size: 14px; line-height: 1.5; flex-wrap: wrap; }
+.nm-intro > span { flex: 1 1 320px; }
+.nm-intro-prog { flex: 0 1 260px; display: flex; flex-direction: column; gap: 6px; }
+.nm-prog-line { display: flex; justify-content: space-between; gap: 8px; font-size: 13.5px; }
+.nm-sec { font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); margin-top: 6px; }
+
+.nm-ncard { display: flex; flex-direction: column; gap: 10px; padding: 14px; }
+.nm-ncard.about { background: var(--surface-2); }
+.nm-nc-lab { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+.nm-rule { font-size: 12.5px; line-height: 1.45; color: var(--text-muted); background: var(--surface-2); border-radius: var(--r-lg); padding: 8px 10px; }
+.nm-rule b { color: var(--text); }
+.nm-nc-prop { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.nm-sys { font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+.nm-sys.own { color: var(--info); }
+.nm-win { display: flex; align-items: center; gap: 12px; }
+.nm-avs { display: flex; flex: none; }
+.nm-avs .nm-av { border: 2px solid #C8102E; }
+.nm-avs .nm-av + .nm-av { margin-left: -12px; }
+.nm-win .nm-name { font-size: 15px; min-width: 0; }
+.nm-big { margin-left: auto; font-size: 20px; font-weight: 800; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.nm-quote { font-size: 13px; line-height: 1.45; background: var(--info-bg); border-radius: var(--r-lg); padding: 8px 10px; }
+.nm-run { font-size: 13px; color: var(--text-muted); }
+.nm-rank { display: flex; flex-direction: column; }
+.nm-rank-row { display: flex; justify-content: space-between; gap: 10px; font-size: 13.5px; padding: 5px 4px; border-bottom: 1px solid var(--border); }
+.nm-rank-row:last-child { border-bottom: 0; }
+.nm-rank-row.me { background: var(--info-bg); }
+.nm-links { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.nm-nc-act { display: flex; flex-direction: column; gap: 8px; }
+.nm-dec { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.nm-dec .nm-btn.lg { flex: 1 1 120px; }
+.nm-done { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex: 1 1 100%; background: var(--ok-bg); color: var(--ok); border-radius: var(--r-xl); padding: 10px 12px; font-size: 13.5px; font-weight: 600; }
+.nm-done .nm-link { color: var(--ok); font-weight: 600; }
+
+.nm-own { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--border); padding-top: 12px; }
+.nm-own-h { display: flex; flex-direction: column; gap: 2px; }
+.nm-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.nm-chip { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--card-bg); color: var(--text); font: inherit; font-size: 13.5px; cursor: pointer; }
+.nm-chip b { color: var(--text-muted); font-weight: 600; }
+.nm-chip.on { border-color: var(--brand); background: var(--danger-bg); font-weight: 700; }
+.nm-chip:disabled { opacity: .5; cursor: not-allowed; }
+.nm-own-f { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 12px; }
+.nm-own-f .nm-inp { min-height: 42px; font-size: 16px; }
+.nm-hint { background: var(--warn-bg); color: var(--warn); border-radius: var(--r-xl); padding: 10px 12px; font-size: 13.5px; line-height: 1.45; }
+.nm-own-btns { display: flex; gap: 8px; justify-content: flex-end; }
+
+.nm-bulk { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+
+.nm-aside { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+.nm-aside-h { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.nm-deals { display: flex; flex-direction: column; }
+.nm-deal { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+.nm-sum { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; background: var(--ok-bg); color: var(--ok); border-radius: var(--r-xl); padding: 10px 12px; font-size: 14px; font-weight: 700; }
+.nm-sum.off { background: var(--warn-bg); color: var(--warn); }
+.nm-aside-back { display: none; }
+
+/* Компʼютер: картка стає рядком — правило · пропозиція · рішення; «звідки число» — панель праворуч. */
+@media (min-width: 1024px) {
+  .nm-ncard { display: grid; grid-template-columns: 260px minmax(0, 1fr) 210px; gap: 20px; padding: 16px 18px; align-items: start; }
+  .nm-ncard .nm-own { grid-column: 1 / -1; }
+  .nm-dec { flex-direction: column; align-items: stretch; }
+  .nm-dec .nm-btn.lg { flex: none; }
+}
+@media (min-width: 1100px) {
+  .nm-layout.with-aside { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 16px; align-items: start; }
+  .nm-layout.with-aside .nm-aside { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; margin-bottom: 0; }
+}
+/* Телефон і вузьке вікно: «звідки число» — шторка знизу; «свої дані» теж шторкою, кнопки внизу завжди видно. */
+@media (max-width: 1099px) {
+  .nm-aside { position: fixed; left: 0; right: 0; bottom: 0; max-height: 85vh; overflow-y: auto; z-index: 61; margin: 0; border-radius: 16px 16px 0 0; }
+  .nm-aside-back { display: block; position: fixed; inset: 0; background: rgba(15, 17, 21, .45); z-index: 60; }
+}
+@media (max-width: 720px) {
+  .nm-head { align-items: stretch; }
+  .nm-head-actions .nm-btn.lg { flex: 1 1 100%; }
+  .nm-own { position: fixed; left: 0; right: 0; bottom: 0; max-height: 88vh; overflow-y: auto; z-index: 61; background: var(--card-bg);
+    border-radius: 16px 16px 0 0; padding: 14px 16px 16px; border-top: 0; box-shadow: 0 0 0 100vmax rgba(15, 17, 21, .45); }
+  .nm-own-f { grid-template-columns: 1fr; }
+  .nm-own-btns { position: sticky; bottom: -16px; background: var(--card-bg); padding: 10px 0 6px; }
+  .nm-own-btns .nm-btn.lg { flex: 1; }
+  .nm-bulk { position: sticky; bottom: 0; z-index: 5; background: var(--card-bg); border-top: 1px solid var(--border); padding: 10px 12px 12px; margin: 0 -12px; align-items: stretch; }
+  .nm-bulk .nm-btn.lg { width: 100%; }
+  .nm-prog-row { grid-template-columns: 1fr auto; }
+  .nm-prog-row .nm-bar, .nm-prog-row .nm-prog-at { display: none; }
+  .nm-prog-row .nm-prog-wait { grid-column: 1 / -1; }
+}

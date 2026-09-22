@@ -3815,6 +3815,16 @@ CREATE TABLE IF NOT EXISTS nomination_reviews (
                                  AND length(btrim(COALESCE(reason, ''))) >= 3))
 );
 CREATE INDEX IF NOT EXISTS ix_nomination_reviews_week ON nomination_reviews(week_from, team_id, nomination, id);
+-- «Скасувати» (22.09.2026): рядок знову чекає. Нова дія, а не видалення — історія лише дописується,
+-- тригер незмінності не чіпаємо. ⚠️ Змінюємо ОБИДВА CHECK: другий (поля виправлення) інакше відкидав би
+-- `retract` так само, як перший. Імена — автоматичні імена Postgres для цих CHECK; DROP IF EXISTS ідемпотентний.
+ALTER TABLE nomination_reviews DROP CONSTRAINT IF EXISTS nomination_reviews_action_check;
+ALTER TABLE nomination_reviews DROP CONSTRAINT IF EXISTS nomination_reviews_check;
+ALTER TABLE nomination_reviews DROP CONSTRAINT IF EXISTS nomination_reviews_action_kind;
+ALTER TABLE nomination_reviews ADD CONSTRAINT nomination_reviews_action_kind CHECK (
+  action IN ('confirm','retract')
+  OR (action = 'override' AND cardinality(override_manager_ids) > 0 AND override_value IS NOT NULL
+      AND length(btrim(COALESCE(reason, ''))) >= 3));
 
 -- Зафіксований результат: рядок на (команда, номінація, переможець); порожня номінація — один рядок
 -- без переможця. Поруч ЗАВЖДИ лежать число й переможці CRM, навіть коли фінальне виправлено руками.
