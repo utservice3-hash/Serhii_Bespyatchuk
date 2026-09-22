@@ -166,6 +166,8 @@ export const MANIFEST_FILES: string[] = [
   "routes/firstTouchReportFront.test.js",
   "core/firstTouch.test.js",
   "routes/leadgenChannelFact.test.js",
+  // 📞 Лідогенерація: порт екрана з макета — межа «екран, а не макет» (22.09.2026)
+  "routes/leadgenScreen.test.js",
   "core/leadgenChannelOnly.test.js",
   "core/channelPartition.test.js",
   "core/klassSliceGate.test.js",
@@ -1777,6 +1779,13 @@ export const MANIFEST_TESTS: string[] = [
   "#390i порожньо ≠ відмова: чотири двері 1×1 відповідають словами",
   "#390j ВИГЛЯД: вкладка аналітики бере кольори лише з токенів теми",
   "#390k КАЛЕНДАР: зсув тримає поповер у межах екрана з обох боків",
+  // routes/leadgenScreen.test.ts — екран «Лідогенерація» перенесено з макета, і лише його (22.09.2026). Резерв #685-#689.
+  "#685 МАКЕТ НЕ ПОТРАПИВ У ПРОДУКТ: у frontend/src, index.html і public немає __MAKET, HashRouter, maket*.js",
+  "#685b 🪞 ДЗЕРКАЛО: ознаки ловлять рядки макета дослівно — і не чіпають продукту",
+  "#686 Dashboard рендерить <LeadgenSection /> БЕЗ пропсів — спільний dateRange у вкладку не їде",
+  "#686b 🪞 ДЗЕРКАЛО: період у екрана СВІЙ — навігатор на екрані, запит іде з його періоду",
+  "#687 день місяця не дописується рядком до місяця (ym + «-31») — ні на екрані лідогену, ні деінде в дереві",
+  "#687b 🪞 ДЗЕРКАЛО: ознака ловить рядок макета дослівно — і пропускає законне",
 ];
 
 /**
