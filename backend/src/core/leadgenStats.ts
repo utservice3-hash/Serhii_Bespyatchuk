@@ -1,5 +1,7 @@
 import { pool } from "../db/pool.js";
 import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING } from "./metrics.js";
+import { LEADGEN_STAGE_IDS } from "./leadgenStages.js";
+import { stageCountsQuery, type SqlQuery } from "./leadgenSql.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
 import { LEADGEN_CALL_MIN_SEC } from "./leadgenRules.js";
 // 📐 Правила лідогену живуть у ЧИСТОМУ `leadgenRules.ts` (нуль імпортів) — звідси
@@ -59,44 +61,41 @@ export interface LeadgenStats {
 const K = "AT TIME ZONE 'Europe/Kyiv'";
 
 /**
- * Ростер визначається ПОДІЯМИ, а не списком команди. Причина заміряна: у серпні
- * лідгенівські дії робила ще й Ковтонюк Тетяна, яка числиться в команді РНК, а
- * Єресько зі списку ТЗ деактивований. Список protікає, події — ні.
+ * 📞 ЗАПИТ ДЗВІНКІВ — ОДНИМ ВИРАЗОМ. Правило «успішного дзвінка» (вихідний,
+ * `billsec >= LEADGEN_CALL_MIN_SEC`) і ростер (лише люди, передані в `ids`) живуть в
+ * одному тексті, щоб наступна форма запиту брала їх звідси, а не писала другу копію.
  */
-export async function leadgenStats(from: string, to: string): Promise<LeadgenStats> {
-  const stages = await pool.query<{
-    manager_id: number; name: string; team_id: number | null; team_name: string | null;
-    is_active: boolean; leads: string; opr: string; quotes: string; warming: string;
-  }>(
-    `SELECT m.id AS manager_id, m.name, m.team_id, t.name AS team_name, m.is_active,
-            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = $4) AS leads,
-            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = $5) AS opr,
-            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = 142) AS quotes,
-            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($6) AND e.status_id = $7) AS warming
-       FROM deal_stage_events e
-       JOIN deals d ON d.kommo_id = e.kommo_id
-       JOIN managers m ON m.id = d.manager_id
-       LEFT JOIN teams t ON t.id = m.team_id
-      WHERE (e.changed_at ${K})::date BETWEEN $1 AND $2
-        AND ((e.pipeline_id = ANY($3) AND e.status_id IN ($4, $5, 142))
-          OR (e.pipeline_id = ANY($6) AND e.status_id = $7))
-      GROUP BY 1, 2, 3, 4, 5
-      ORDER BY leads DESC, opr DESC, m.name`,
-    [from, to, PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING]
-  );
-
-  const ids = stages.rows.map((r) => r.manager_id);
-  const callsByMgr = new Map<number, number>();
-  if (ids.length) {
-    const calls = await pool.query<{ manager_id: number; n: string }>(
-      `SELECT c.manager_id, COUNT(*) AS n
+function callsQuery(ids: number[], from: string, to: string): SqlQuery {
+  return {
+    text: `SELECT c.manager_id, COUNT(*) AS n
          FROM ringostat_calls c
         WHERE c.manager_id = ANY($1)
           AND (c.calldate ${K})::date BETWEEN $2 AND $3
           AND c.call_type = 'out' AND c.billsec >= $4
         GROUP BY 1`,
-      [ids, from, to, LEADGEN_CALL_MIN_SEC]
-    );
+    values: [ids, from, to, LEADGEN_CALL_MIN_SEC],
+  };
+}
+
+/**
+ * Ростер визначається ПОДІЯМИ, а не списком команди. Причина заміряна: у серпні
+ * лідгенівські дії робила ще й Ковтонюк Тетяна, яка числиться в команді РНК, а
+ * Єресько зі списку ТЗ деактивований. Список protікає, події — ні.
+ */
+export async function leadgenStats(from: string, to: string): Promise<LeadgenStats> {
+  // 🧾 Текст запиту — у чистому `leadgenSql.ts`: той самий рядок женуть і пул тут, і гейт
+  // на тимчасовій базі. Id стадій — ОДНИМ обʼєктом (`LEADGEN_STAGE_IDS`), не поштучно.
+  const sq = stageCountsQuery(from, to, LEADGEN_STAGE_IDS);
+  const stages = await pool.query<{
+    manager_id: number; name: string; team_id: number | null; team_name: string | null;
+    is_active: boolean; leads: string; opr: string; quotes: string; warming: string;
+  }>(sq.text, sq.values);
+
+  const ids = stages.rows.map((r) => r.manager_id);
+  const callsByMgr = new Map<number, number>();
+  if (ids.length) {
+    const cq = callsQuery(ids, from, to);
+    const calls = await pool.query<{ manager_id: number; n: string }>(cq.text, cq.values);
     for (const c of calls.rows) callsByMgr.set(c.manager_id, Number(c.n));
   }
 
