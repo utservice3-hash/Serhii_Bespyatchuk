@@ -21,7 +21,8 @@ const CLS: { k: LeadgenDealClass; tab: string; color: string; hint: string }[] =
       + "Це знімок стану ЗАРАЗ; «Очікування оплат» грошового ядра — вужче (лише етап «Очікуємо оплату»)" },
   { k: "work", tab: "В роботі", color: MUTED,
     hint: "Відкрита угода менеджера поза зоною «Очікуємо»: у Кваліфікації або в повному циклі до «Контроль перед завантаженням». Більшість тут — «Відкладений запит»; бюджет здебільшого ще не проставлений" },
-  { k: "lost", tab: "Програно", color: "var(--danger)", hint: "Угода менеджера закрита без реалізації (143)" },
+  { k: "lost", tab: "Програно", color: "var(--danger)",
+    hint: "Угода менеджера закрита без реалізації (143, у Кваліфікації — «Не цільові»/«Сміття») або борг по ній списано" },
   { k: "none", tab: "Без угоди менеджера", color: MUTED, hint: "Угоди менеджера (той самий клієнт, до 2 хв після передачі) не знайшлося — гроші не прив'язати" },
   { k: "same", tab: "Та сама угода", color: MUTED, hint: "Ця передача привела в угоду, вже пораховану іншою передачею: гроші не двоїмо" },
 ];
@@ -46,6 +47,11 @@ function dayLbl(s: string, period: { from: string; to: string }) {
   const y = s.slice(0, 4);
   return y === period.from.slice(0, 4) && y === period.to.slice(0, 4) ? ddmm(s) : `${ddmm(s)}.${s.slice(2, 4)}`;
 }
+/**
+ * Назви етапів (і Кваліфікації теж) дає бекенд (`core/stageNames.ts`); статус, якому там ще не дали
+ * назви, приходить як «—» — зокрема з префіксом воронки («Кваліфікація · —»). Такий показуємо словами.
+ */
+const unnamedStage = (s: string | null) => !s || s === "—" || s.endsWith("· —");
 /** «Михальчевська Дарина Олександрівна» → «Михальчевська Д.»: повне ім'я — у підказці. */
 const shortName = (full: string) => { const p = full.trim().split(/\s+/); return p.length >= 2 ? `${p[0]} ${p[1][0]}.` : full; };
 
@@ -258,7 +264,7 @@ function DealRow({ d, period }: { d: LeadgenHandoffDeal; period: { from: string;
       <td style={{ ...td, textAlign: "left", whiteSpace: "normal", minWidth: 120, maxWidth: 190 }} title={m.hint}>
         <span aria-hidden="true" style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: m.color, marginRight: 6 }} />
         {d.cls === "none" || d.cls === "same" ? m.tab
-          : !d.stage || d.stage === "—" ? <span style={{ color: MUTED }} title="Статус угоди є в Kommo, але в дашборді йому ще не дали назви">етап без назви в дашборді</span>
+          : unnamedStage(d.stage) ? <span style={{ color: MUTED }} title="Статус угоди є в Kommo, але в дашборді йому ще не дали назви">етап без назви в дашборді</span>
           : d.stage}
       </td>
       <td style={{ ...td, fontWeight: hasMoney && d.price ? 700 : 400, color: hasMoney && d.price ? undefined : MUTED }}>
