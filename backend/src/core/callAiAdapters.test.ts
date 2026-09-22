@@ -181,15 +181,16 @@ test("#657 ELEVENLABS: запит по каналах із ключем у за�
 
   const multi = parseSttResponse({
     audio_duration_secs: 20,
+    // Канал 1 ПЕРШИМ у масиві: інакше «канал = позиція» збігався б із правдою і гейт мовчав би.
     transcripts: [
+      { language_code: "ru", words: [
+        { text: "Здравствуйте", type: "word", start: 1.0, end: 1.6, channel_index: 1 },
+        { text: "(сміх)", type: "audio_event", start: 1.7, end: 1.9, channel_index: 1 }] },
       { language_code: "uk", words: [
         { text: "Добрий", type: "word", start: 0.1, end: 0.4, channel_index: 0 },
         { text: " ", type: "spacing", start: 0.4, end: 0.5, channel_index: 0 },
         { text: "день", type: "word", start: 0.5, end: 0.8, channel_index: 0 },
         { text: "Скільки", type: "word", start: 3.0, end: 3.3, channel_index: 0 }] },
-      { language_code: "ru", words: [
-        { text: "Здравствуйте", type: "word", start: 1.0, end: 1.6, channel_index: 1 },
-        { text: "(сміх)", type: "audio_event", start: 1.7, end: 1.9, channel_index: 1 }] },
     ],
   });
   assert.deepEqual(multi.channels.map((c) => [c.index, c.language, c.words.map((x) => x.text)]),
