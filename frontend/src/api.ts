@@ -4333,6 +4333,8 @@ export interface EmployeeRow {
   manager_id: number | null; kommo_name: string | null;
   /** 🚪 Звільнення кнопками: крок і останній робочий день (null — звільнення через реєстр не було). */
   offboarding: "finishing" | "dismissed" | null; last_day: string | null;
+  /** 📎 Документи людини (без прибраних) і чи є серед них NDA / офер — за типом документа. */
+  docs: number; has_nda: boolean; has_offer: boolean;
 }
 export interface ImportColumn { index: number; header: string; target: string; secretish: boolean; filled: number }
 export interface ImportPreviewRow {

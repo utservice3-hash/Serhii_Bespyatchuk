@@ -19,8 +19,20 @@ import { ImportError } from "./employeeImport.js";
 export const HR_DOC_KINDS = ["Офер", "NDA", "Договір", "Заява", "Наказ", "Інше"] as const;
 export const MAX_DOC_BYTES = 100 * 1024 * 1024;
 
-/** Документ людини? Той самий предикат для списку, відкриття й видалення. */
-const OWNS = `(f.employee_id = e.id OR (e.user_id IS NOT NULL AND f.addressee_user_id = e.user_id AND f.section IN ('personal','offer')))`;
+/** Документ людини? Той самий предикат для списку, відкриття, видалення й лічильника в таблиці реєстру. */
+export const OWNS = `(f.employee_id = e.id OR (e.user_id IS NOT NULL AND f.addressee_user_id = e.user_id AND f.section IN ('personal','offer')))`;
+/**
+ * Тип документа для колонки й фільтрів таблиці. Офер — тип «Офер» або розділ «Офери» (сформований із шаблону).
+ * NDA — лише тип, обраний при завантаженні: назву файла НЕ розбираємо, бо «nda» трапляється всередині слів,
+ * а правило 4 кореня вимагає доводити предикат по чужому тексту покриттям, а не правдоподібністю.
+ */
+export const IS_OFFER = `(f.category = 'Офер' OR f.section = 'offer')`;
+export const IS_NDA = `(f.description = 'NDA')`;
+/** Колонки для `listEmployees`: скільки документів, чи є NDA, чи є офер (прибрані не рахуються). */
+export const DOC_COUNTS_SQL = `
+  (SELECT count(*)::int FROM doc_files f WHERE f.deleted_at IS NULL AND ${OWNS}) AS docs,
+  EXISTS (SELECT 1 FROM doc_files f WHERE f.deleted_at IS NULL AND ${OWNS} AND ${IS_NDA}) AS has_nda,
+  EXISTS (SELECT 1 FROM doc_files f WHERE f.deleted_at IS NULL AND ${OWNS} AND ${IS_OFFER}) AS has_offer`;
 
 export async function listEmployeeDocs(db: Db, employeeId: number) {
   const e = (await db.query(`SELECT id FROM employees WHERE id = $1`, [employeeId])).rows[0];

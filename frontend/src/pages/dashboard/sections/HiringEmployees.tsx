@@ -55,7 +55,7 @@ const bdaySoon = (iso: string | null) => {
   if (next.getTime() < new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()) next = new Date(now.getFullYear() + 1, m - 1, d);
   return (next.getTime() - now.getTime()) / 86_400_000 <= 7;
 };
-type Extra = "all" | "new" | "noacc" | "nosec" | "bday";
+type Extra = "all" | "new" | "noacc" | "nosec" | "bday" | "nonda" | "nooffer" | "nodocs";
 
 export function HiringEmployees({ toast }: { toast: Toast }) {
   const [rows, setRows] = useState<EmployeeRow[] | null>(null);
@@ -77,7 +77,8 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
   const inView = useMemo(() => (rows ?? []).filter((r) => view === "all" || (view === "dismissed" ? r.status === "dismissed" : r.status !== "dismissed")), [rows, view]);
   const shown = useMemo(() => inView.filter((r) => (!team || (team === "—" ? !r.team_label : r.team_label === team))
     && (extra === "all" || (extra === "new" && (daysSince(r.hired_at) ?? 999) <= 30) || (extra === "noacc" && r.user_id == null)
-      || (extra === "nosec" && r.secrets === 0) || (extra === "bday" && bdaySoon(r.birth_date)))
+      || (extra === "nosec" && r.secrets === 0) || (extra === "bday" && bdaySoon(r.birth_date))
+      || (extra === "nonda" && !r.has_nda) || (extra === "nooffer" && !r.has_offer) || (extra === "nodocs" && r.docs === 0))
     && (!q.trim() || `${r.full_name} ${r.position ?? ""} ${r.team_label ?? ""} ${r.phone ?? ""} ${r.email ?? ""}`.toLowerCase().includes(q.trim().toLowerCase()))),
   [inView, team, extra, q]);
   const teamOptions = useMemo(() => [...new Set(inView.map((r) => r.team_label).filter((t): t is string => !!t))].sort((a, b) => a.localeCompare(b, "uk", { numeric: true })), [inView]);
@@ -115,6 +116,9 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
             <option value="bday">День народження за тиждень</option>
             <option value="noacc">Без акаунта в дашборді</option>
             <option value="nosec">Без доступів у сейфі</option>
+            <option value="nodocs">Без жодного документа</option>
+            <option value="nonda">Без NDA</option>
+            <option value="nooffer">Без офера</option>
           </select>
           <input className="hr-inp" placeholder="Пошук: ПІБ, посада, телефон" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Пошук у реєстрі" style={{ flex: "1 1 200px" }} />
           <button className="hr-btn" title="Привʼязати людей до менеджерів Kommo: за ID Kommo з таблиці або за єдиним збігом ПІБ"
@@ -127,7 +131,7 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
         ) : (
           <div className="hr-tw">
             <table className="data-table emp-table">
-              <thead><tr><th>Співробітник</th><th>Команда</th><th>Телефон</th><th>{view === "dismissed" ? "Звільнено" : "Прийнято"}</th><th>Стаж</th><th>Акаунт</th><th className="num">Доступи</th></tr></thead>
+              <thead><tr><th>Співробітник</th><th>Команда</th><th>Телефон</th><th>{view === "dismissed" ? "Звільнено" : "Прийнято"}</th><th>Стаж</th><th>Акаунт</th><th>Документи</th><th className="num">Доступи</th></tr></thead>
               <tbody>
                 {shown.map((r) => {
                   const fresh = r.status === "active" && (daysSince(r.hired_at) ?? 999) <= 30;
@@ -147,6 +151,14 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
                       <td>{tenure(r.hired_at, r.status === "dismissed" ? r.dismissed_at : null) ?? <span className="hr-muted">—</span>}</td>
                       <td>{r.user_id != null ? <span className="emp-pill ok">✓ {r.account_active === false ? "вимкнено" : "є"}</span>
                         : r.status === "active" ? <span className="emp-pill warn">немає</span> : <span className="hr-muted">—</span>}</td>
+                      <td>
+                        <button className={`emp-vault ${r.docs === 0 && r.status !== "dismissed" ? "empty" : ""}`} title="Відкрити документи людини"
+                          onClick={(e) => { e.stopPropagation(); setOpen({ id: r.id, tab: "docs" }); }}>📎 {r.docs}</button>
+                        {r.docs > 0 && <>
+                          <span className={`emp-pill ${r.has_nda ? "ok" : "mute"}`} title={r.has_nda ? "NDA є" : "NDA немає"}>NDA</span>
+                          <span className={`emp-pill ${r.has_offer ? "ok" : "mute"}`} title={r.has_offer ? "Офер є" : "Офера немає"}>офер</span>
+                        </>}
+                      </td>
                       <td className="num">
                         <button className={`emp-vault ${r.secrets === 0 && r.status === "active" ? "empty" : ""}`} title="Відкрити доступи"
                           onClick={(e) => { e.stopPropagation(); setOpen({ id: r.id, tab: "access" }); }}>🔐 {r.secrets}</button>

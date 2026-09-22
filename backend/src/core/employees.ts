@@ -8,6 +8,7 @@
 import { parseCsv, buildRows, guessTarget, validateMapping, shortKey, ImportError, SECRETISH, headersAt, detectHeaderRow, parseDate, type PlainRow } from "./employeeImport.js";
 import { prepareSecret, insertSecrets, SecretError, type Db } from "./secrets.js";
 import { SecretKeyMissing } from "./secretBox.js";
+import { DOC_COUNTS_SQL } from "./employeeDocs.js";
 
 const MAX_ROWS = 3000, MAX_COLS = 120;
 const NAME = `COALESCE(NULLIF(u.full_name, ''), m.name, u.email)`;
@@ -261,7 +262,7 @@ export async function listEmployees(db: Db) {
     `SELECT e.id, CASE WHEN e.user_id IS NOT NULL THEN e.user_id::text ELSE 'e' || e.id END AS ref, e.full_name, e.status, e.position, e.team_label, e.phone, e.email, e.telegram,
             e.birth_date::text AS birth_date, e.hired_at::text AS hired_at, e.dismissed_at::text AS dismissed_at,
             e.dismiss_reason, e.note, e.extra, e.user_id, ${NAME} AS account_name, u.is_active AS account_active,
-            e.manager_id, km.name AS kommo_name, o.stage AS offboarding, o.last_day::text AS last_day,
+            e.manager_id, km.name AS kommo_name, o.stage AS offboarding, o.last_day::text AS last_day, ${DOC_COUNTS_SQL},
             (SELECT count(*)::int FROM employee_secrets s WHERE (s.user_id = e.user_id OR s.employee_id = e.id) AND s.superseded_at IS NULL AND s.deleted_at IS NULL) AS secrets,
             e.updated_at
        FROM employees e LEFT JOIN users u ON u.id = e.user_id LEFT JOIN managers m ON m.id = u.manager_id

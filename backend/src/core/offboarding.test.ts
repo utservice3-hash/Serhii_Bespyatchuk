@@ -174,6 +174,41 @@ test("#613 ЖИВИЙ SQL: документи людини — власник, �
 });
 
 /**
+ * #615 — ДОКУМЕНТИ В ТАБЛИЦІ РЕЄСТРУ: лічильник == довжині списку картки без прибраних; «NDA» і «офер» —
+ * за типом (офер і з розділу «Офери»); файл із «nda» в назві, але іншого типу, NDA не вважається; прибраний
+ * документ зникає з лічильника й прапорців. 🧨 Червоніє, якщо лічильник рахує інакше, ніж картка, або чужі.
+ */
+test("#615 ЖИВИЙ SQL: таблиця реєстру — лічильник документів і «є NDA / є офер» збігаються з карткою", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const d = await import("./employeeDocs.js");
+  const e = await import("./employees.js");
+  const dir = mkdtempSync(path.join(tmpdir(), "uts-empdoc-"));
+  const store = async (display: string, buf: Buffer) => {
+    const storedName = `${createHash("sha1").update(buf).update(display).digest("hex")}.pdf`;
+    writeFileSync(path.join(dir, storedName), buf);
+    return { storedName, sha256: createHash("sha256").update(buf).digest("hex") };
+  };
+  try {
+    const nda = await d.attachEmployeeDoc(s.db, s.hr, s.eAcc, { filename: "NDA.pdf", kind: "NDA", buffer: Buffer.from("1") }, store);
+    await d.attachEmployeeDoc(s.db, s.hr, s.eAcc, { filename: "Agenda-заява.pdf", kind: "Заява", buffer: Buffer.from("2") }, store);
+    // Офер, сформований із шаблону, — розділ «Офери» на акаунт людини.
+    await s.c.query(`INSERT INTO doc_files (name, stored_name, section, category, addressee_user_id, created_by) VALUES ('Офер.docx','o.docx','offer','Офер',$1,$2)`, [s.accUser, s.hr]);
+    await d.attachEmployeeDoc(s.db, s.hr, s.eNo, { filename: "Договір.pdf", kind: "Договір", buffer: Buffer.from("3") }, store);
+    const row = async (id: number) => (await e.listEmployees(s.db)).find((r) => r.id === id) as { docs: number; has_nda: boolean; has_offer: boolean };
+    const live = async (id: number) => (await d.listEmployeeDocs(s.db, id)).filter((f) => !f.deleted_at).length;
+    let a = await row(s.eAcc);
+    assert.deepEqual([a.docs, a.has_nda, a.has_offer], [await live(s.eAcc), true, true], "🔴 таблиця розходиться з карткою");
+    assert.equal(a.docs, 3);
+    const n = await row(s.eNo);
+    assert.deepEqual([n.docs, n.has_nda, n.has_offer], [1, false, false], "🔴 «nda» в назві чи чужий документ зарахувались");
+    assert.deepEqual([(await row(s.eMgr)).docs, (await row(s.eMgr)).has_nda], [0, false], "дзеркало: у людини без документів — нуль");
+    await d.setEmployeeDocDeleted(s.db, s.hr, s.eAcc, nda.id, true);
+    a = await row(s.eAcc);
+    assert.deepEqual([a.docs, a.has_nda], [2, false], "🔴 прибраний документ досі рахується");
+  } finally { await s.done(); }
+});
+
+/**
  * #614 — `employee_offboarding` (причини звільнення, хто звільняв) відібрана в ai_readonly ПІСЛЯ створення
  * і є у FORBIDDEN_TABLES. 🧨 Червоніє, якщо прибрати REVOKE чи поставити його вище CREATE.
  */
