@@ -440,6 +440,10 @@ export interface SpreadExemption { file: string; frag: string; why: string }
  * акумулятори.
  */
 export const ROW_SPREAD_EXEMPTIONS: SpreadExemption[] = [
+  // 💼 Вакансії (22.09.2026): рядок `listVacancies` — ЯВНИЙ SELECT (id, назва, статус, need, дати, candidates,
+  // days_open; жодних персональних полів), до нього дописується обчислена воронка `vacancyFunnels`.
+  { file: "routes/hiring.ts", frag: "({ ...v, funnel",
+    why: "`v` — рядок `listVacancies` з явним переліком колонок (`core/hiring.ts`); `funnel` — обчислена воронка ядра." },
   // 🏆 Номінації тижня (21.09.2026): усі три — ОБЧИСЛЕНІ обʼєкти ядра (`WeekView` з `core/nominations.ts`),
   // а не рядки БД; до них лише дописуються права глядача. Склад полів задає тип `WeekView`.
   { file: "routes/nominations.ts", frag: "return { ...view, viewer",
