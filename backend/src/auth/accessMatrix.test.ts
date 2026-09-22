@@ -91,6 +91,10 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/secrets/employees/:id/dismiss/finish": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "POST /api/secrets/employees/:id/dismiss/revert": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "POST /api/secrets/employees/:id/documents": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
+  // 📷 Фото співробітників (22.09.2026): запис — те саме право сейфу, що й «Найм → Співробітники».
+  "POST /api/people/photo/:employeeId": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 22.09.2026); фінансист його не має",
+  "DELETE /api/people/photo/:employeeId": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 22.09.2026); фінансист його не має",
+  "POST /api/people/photo/:employeeId/restore": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 22.09.2026); фінансист його не має",
   "DELETE /api/secrets/employees/:id/documents/:fileId": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "POST /api/secrets/employees/:id/documents/:fileId/restore": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "POST /api/secrets/employees/kommo-link": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",

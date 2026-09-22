@@ -240,6 +240,27 @@ test("#613 шаблони слайдів: кожен вимагає рівно �
 });
 
 /**
+ * #629 — ФОТО НА ВІТАЛЬНИХ СЛАЙДАХ: «Новий працівник» і «День народження» мають поле людини з реєстру
+ * (`type: "employee"`), необовʼязкове; id зберігається як є, а не-id — відмова, щоб у `fields` не
+ * потрапило те, за чим фото не знайти. Решта шаблонів такого поля не має (там нема кого показувати).
+ */
+test("#629 шаблони: вітальні слайди мають поле фото з реєстру, і воно приймає лише id", async () => {
+  const { SLIDE_TEMPLATES, validateManualSlide } = await import("./nominationRules.js");
+  const withPhoto = SLIDE_TEMPLATES.filter((t) => t.fields.some((f) => f.type === "employee")).map((t) => t.key);
+  assert.deepEqual(withPhoto, ["newcomer", "birthday"], "🔴 поле фото не на тих шаблонах");
+  const base = { newcomer: { headline: "Вітаємо", person: "Тест Марія" }, birthday: { person: "Тест Івана", date: "27.08" } } as const;
+  for (const k of ["newcomer", "birthday"] as const) {
+    const ok = validateManualSlide({ weekFrom: "2026-09-14", kind: k, fields: { ...base[k], employeeId: "42" } });
+    assert.ok(ok.ok && ok.value.fields.employeeId === "42", `🔴 «${k}»: id людини загубився`);
+    const none = validateManualSlide({ weekFrom: "2026-09-14", kind: k, fields: base[k] });
+    assert.ok(none.ok && !("employeeId" in none.value.fields), `🔴 «${k}»: без людини слайд не зберігся`);
+    for (const bad of ["abc", "0", "-3", "4.5", "1 OR 1=1"]) {
+      assert.equal(validateManualSlide({ weekFrom: "2026-09-14", kind: k, fields: { ...base[k], employeeId: bad } }).ok, false, `🔴 «${k}»: прийнято «${bad}» як людину`);
+    }
+  }
+});
+
+/**
  * #614 — У ПРЕЗЕНТАЦІЇ Є ВЕРСТКА ДЛЯ КОЖНОГО ШАБЛОНУ, І НЕМАЄ ДЛЯ НЕІСНУЮЧИХ. Читає джерело
  * `NominationsPresentation.tsx`: кожен ключ реєстру має свою гілку `case "<ключ>"`, а кожна гілка —
  * ключ у реєстрі. «Додав шаблон і забув верстку» (слайд вийшов би порожнім) червоніє тут.

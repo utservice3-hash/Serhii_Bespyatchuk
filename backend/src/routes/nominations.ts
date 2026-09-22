@@ -3,6 +3,7 @@ import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { isAdminScope } from "../auth/rbac.js";
 import { nominationWeek, frozenWeek, draftWeek, cellFingerprint, type WeekView } from "../core/nominations.js";
+import { managerPhotos, employeePhotos } from "../core/people.js";
 import { lastWeek, weekOf, canReview, validateReview, validateManualSlide, NOMINATIONS, MARGIN_FLAG_PCT, MANUAL_KINDS, SLIDE_TEMPLATES } from "../core/nominationRules.js";
 
 /**
@@ -24,10 +25,14 @@ function viewerOf(req: Request): Viewer | null {
   return null;
 }
 
-/** Відповідь екрану: тиждень + для кожного рядка, чи може ЦЕЙ глядач його підтвердити. */
-function withRights(view: WeekView, v: Viewer) {
+/**
+ * Відповідь екрану: тиждень + для кожного рядка, чи може ЦЕЙ глядач його підтвердити, + фото людей
+ * тижня з реєстру «Співробітників» (менеджер → співробітник через `employees.manager_id`).
+ */
+async function withRights(view: WeekView, v: Viewer) {
   return {
     ...view,
+    photos: await managerPhotos(),
     viewer: { role: v.role, teamId: v.teamId },
     // Підписи й одиниці — з одного місця (`NOMINATIONS`), щоб на фронті не жила друга копія.
     defs: NOMINATIONS, marginFlagPct: MARGIN_FLAG_PCT,
@@ -55,7 +60,7 @@ nominationsRouter.get("/week", safe(async (req: Request, res: Response) => {
   if (!v) return res.status(403).json({ error: "Номінації тижня — для тімлідів і керівництва" });
   const q = typeof req.query.weekFrom === "string" ? req.query.weekFrom : "";
   const weekFrom = /^\d{4}-\d{2}-\d{2}$/.test(q) ? weekOf(q).from : lastWeek(new Date()).from;
-  res.json(withRights(await nominationWeek(weekFrom, v.teamId), v));
+  res.json(await withRights(await nominationWeek(weekFrom, v.teamId), v));
 }));
 
 nominationsRouter.post("/review", safe(async (req: Request, res: Response) => {
@@ -79,7 +84,7 @@ nominationsRouter.post("/review", safe(async (req: Request, res: Response) => {
     `INSERT INTO nomination_reviews (week_from, team_id, nomination, action, crm_fingerprint, override_manager_ids, override_value, reason, user_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
     [b.weekFrom, b.teamId, b.nomination, b.action, cellFingerprint(cell), b.overrideManagerIds, b.overrideValue, b.reason, req.auth!.userId]);
-  res.json(withRights(await draftWeek(b.weekFrom, v.teamId), v));
+  res.json(await withRights(await draftWeek(b.weekFrom, v.teamId), v));
 }));
 
 /**
@@ -96,11 +101,17 @@ type SlideRow = { id: number; kind: string; title: string; person: string | null
 const listSlides = async (weekFrom: string) => (await pool.query<SlideRow>(
   `SELECT id, kind, title, person, fields, position FROM nomination_manual_slides
     WHERE week_from = $1 AND deleted_at IS NULL ORDER BY position, id`, [weekFrom])).rows;
+/** Відповідь редактора: шаблони + слайди тижня + фото людей, обраних на слайдах. */
+async function slidesPayload(weekFrom: string) {
+  const slides = await listSlides(weekFrom);
+  const ids = slides.map((x) => Number(x.fields?.employeeId)).filter((x) => Number.isInteger(x) && x > 0);
+  return { weekFrom, kinds: MANUAL_KINDS, templates: SLIDE_TEMPLATES, slides, photos: await employeePhotos([...new Set(ids)]) };
+}
 
 nominationsRouter.get("/manual-slides", safe(async (req: Request, res: Response) => {
   if (!leadOnly(req, res)) return;
   const q = typeof req.query.weekFrom === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.weekFrom) ? weekOf(req.query.weekFrom).from : lastWeek(new Date()).from;
-  res.json({ weekFrom: q, kinds: MANUAL_KINDS, templates: SLIDE_TEMPLATES, slides: await listSlides(q) });
+  res.json(await slidesPayload(q));
 }));
 
 nominationsRouter.post("/manual-slides", safe(async (req: Request, res: Response) => {
@@ -111,7 +122,7 @@ nominationsRouter.post("/manual-slides", safe(async (req: Request, res: Response
   await pool.query(
     `INSERT INTO nomination_manual_slides (week_from, kind, title, person, fields, position, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
     [x.weekFrom, x.kind, x.title, x.person, JSON.stringify(x.fields), x.position, req.auth!.userId]);
-  res.status(201).json({ weekFrom: x.weekFrom, kinds: MANUAL_KINDS, templates: SLIDE_TEMPLATES, slides: await listSlides(x.weekFrom) });
+  res.status(201).json(await slidesPayload(x.weekFrom));
 }));
 
 nominationsRouter.patch("/manual-slides/:id", safe(async (req: Request, res: Response) => {
@@ -125,7 +136,7 @@ nominationsRouter.patch("/manual-slides/:id", safe(async (req: Request, res: Res
     `UPDATE nomination_manual_slides SET kind=$2, title=$3, person=$4, fields=$5, position=$6, updated_at=now()
       WHERE id=$1 AND week_from=$7 AND deleted_at IS NULL`, [id, x.kind, x.title, x.person, JSON.stringify(x.fields), x.position, x.weekFrom]);
   if (r.rowCount === 0) return res.status(404).json({ error: "Слайд не знайдено" });
-  res.json({ weekFrom: x.weekFrom, kinds: MANUAL_KINDS, templates: SLIDE_TEMPLATES, slides: await listSlides(x.weekFrom) });
+  res.json(await slidesPayload(x.weekFrom));
 }));
 
 nominationsRouter.delete("/manual-slides/:id", safe(async (req: Request, res: Response) => {
@@ -136,7 +147,7 @@ nominationsRouter.delete("/manual-slides/:id", safe(async (req: Request, res: Re
     `UPDATE nomination_manual_slides SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL
      RETURNING to_char(week_from,'YYYY-MM-DD') AS week_from`, [id]);
   if (r.rowCount === 0) return res.status(404).json({ error: "Слайд не знайдено" });
-  res.json({ weekFrom: r.rows[0].week_from, kinds: MANUAL_KINDS, templates: SLIDE_TEMPLATES, slides: await listSlides(r.rows[0].week_from) });
+  res.json(await slidesPayload(r.rows[0].week_from));
 }));
 
 /** Скасування видалення — та сама кнопка в тому самому екрані (правило «незворотна кнопка — пастка»). */
@@ -148,5 +159,5 @@ nominationsRouter.post("/manual-slides/:id/restore", safe(async (req: Request, r
     `UPDATE nomination_manual_slides SET deleted_at = NULL, updated_at = now() WHERE id = $1 AND deleted_at IS NOT NULL
      RETURNING to_char(week_from,'YYYY-MM-DD') AS week_from`, [id]);
   if (r.rowCount === 0) return res.status(404).json({ error: "Слайд не знайдено серед видалених" });
-  res.json({ weekFrom: r.rows[0].week_from, kinds: MANUAL_KINDS, templates: SLIDE_TEMPLATES, slides: await listSlides(r.rows[0].week_from) });
+  res.json(await slidesPayload(r.rows[0].week_from));
 }));

@@ -38,7 +38,7 @@ test("#615 ДИМ: слайд кожного шаблону зберігаєть
     });
     let pos = 0;
     for (const tpl of SLIDE_TEMPLATES) {
-      const fields = Object.fromEntries(tpl.fields.map((f) => [f.key, f.default ?? `${f.label} · тест`]));
+      const fields = Object.fromEntries(tpl.fields.map((f) => [f.key, f.default ?? (f.type === "employee" ? "7" : `${f.label} · тест`)]));
       const r = await post({ weekFrom: "2026-09-14", kind: tpl.key, fields, position: pos++ });
       assert.equal(r.status, 201, `🔴 шаблон «${tpl.label}» не зберігся: ${JSON.stringify(r.body)}`);
       const got = r.body.slides.find((s: any) => s.kind === tpl.key);

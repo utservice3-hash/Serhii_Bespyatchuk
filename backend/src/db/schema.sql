@@ -3908,3 +3908,13 @@ ALTER TABLE nomination_manual_slides ADD COLUMN IF NOT EXISTS fields JSONB NOT N
 ALTER TABLE nomination_manual_slides DROP CONSTRAINT IF EXISTS nomination_manual_slides_kind_check;
 ALTER TABLE nomination_manual_slides ADD CONSTRAINT nomination_manual_slides_kind_check
   CHECK (kind IN ('newcomer','birthday','news','contest','webinar','custom'));
+
+-- 📷 ФІРМОВЕ ФОТО СПІВРОБІТНИКА (22.09.2026, номінації тижня прохід 3) — `core/people.ts`, `routes/people.ts`.
+-- Файл лежить у КОРЕНІ теки документів з префіксом `photo-` (як `hiring-`): нічний бекап копіює саме
+-- корінь, тож фото їде в копію без окремого кроку. `photo_prev` — попереднє фото: «Прибрати» і
+-- «Замінити» скасовні кнопкою «Повернути попереднє». Файли з диска не видаляються ніколи.
+-- ⚠️ revert коду колонок не прибирає.
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_file TEXT;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_prev TEXT;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_updated_at TIMESTAMPTZ;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL;

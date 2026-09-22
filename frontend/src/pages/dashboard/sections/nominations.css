@@ -48,3 +48,8 @@
 .nm-inp { border: 1px solid var(--border-strong); border-radius: var(--r-lg); padding: 7px 10px; background: var(--card-bg); color: var(--text); font: inherit; font-size: 13px; width: 100%; box-sizing: border-box; }
 textarea.nm-inp { min-height: 64px; resize: vertical; }
 .nm-checks { display: flex; flex-direction: column; gap: 4px; max-height: 180px; overflow-y: auto; font-size: 13px; }
+
+/* 📷 Поле «Фото — людина з реєстру» у редакторі ручних слайдів (22.09.2026). */
+.nm-who { display: flex; gap: 8px; align-items: center; }
+.nm-who > select { flex: 1 1 auto; min-width: 0; }
+.nm-who > .ep-av { border: 2px solid #C8102E; }

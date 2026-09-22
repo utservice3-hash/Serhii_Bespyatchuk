@@ -122,3 +122,13 @@
 .ps-cols .c i { display: block; width: 36px; height: 36px; border-radius: 50%; background: #FBE3E7; margin-bottom: 8px; }
 .ps-cols .cl { font-size: 12.5px; font-weight: 800; color: #6B7280; letter-spacing: .06em; }
 .ps-cols .cv { font-size: 18px; font-weight: 800; }
+
+/* 📷 Фото з реєстру «Співробітників» (22.09.2026): переможці рейтингу, «План виконали», вітальні слайди. */
+.ps-val { display: flex; gap: 10px; align-items: center; }
+.ps-avs { display: flex; flex: none; }
+.ps-avs:empty { display: none; }
+.ps-av-sm { width: 46px; height: 46px; border-radius: 50%; object-fit: cover; border: 3px solid #C8102E; font-size: 16px; }
+.ps-avs .ps-av-sm + .ps-av-sm { margin-left: -14px; }
+.ps-vtext { min-width: 0; }
+img.ps-ava { object-fit: cover; }
+.ps-photo .ps-photo-img { width: 100%; height: 100%; border-radius: 14px; object-fit: cover; }

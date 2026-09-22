@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import {
   fetchReportPlan, fetchManualSlides,
-  type NominationWeek, type NominationKey, type ReportPlan, type ManualSlide,
+  type NominationWeek, type NominationKey, type ReportPlan, type ManualSlide, type PhotoRef,
 } from "../../../api";
+import { EmployeePhoto } from "./EmployeePhotos";
 import { Logo } from "../../../components/Logo";
 import { formatAmountFull } from "../format";
 import truck from "../../../assets/presentation-truck.jpg";
@@ -18,6 +19,8 @@ import "./presentation.css";
  *    (рішення 21.09.2026: від плану на сьогодні, як на Звіті);
  *  · «Підсумки» — верх Звіту за весь поточний місяць (`glance`: факт, план, очікуємо за датою);
  *  · ручні слайди — `/nominations/manual-slides` (новачки, дні народження, новини).
+ * 📷 Фото (22.09.2026) — з реєстру «Співробітників»: людей тижня й плану — за менеджером Kommo
+ * (`week.photos`), новачка й іменинника — за обраною на слайді людиною (`manual.photos`). Немає — ініціали.
  */
 
 const MONTHS_GEN = ["січня", "лютого", "березня", "квітня", "травня", "червня", "липня", "серпня", "вересня", "жовтня", "листопада", "грудня"];
@@ -41,13 +44,13 @@ function fmt(unit: "uah" | "count" | "pct", v: number | null): string {
 const SECTIONS = ["Рейтинг менеджерів", "Виконання плану", "Підсумки"] as const;
 
 /** Хто виконав план з 1-го числа — за колонкою «Виконано» Звіту, по командах. */
-export function planDoneTeams(r: ReportPlan | null): { team: string; people: { name: string; pct: number }[] }[] {
+export function planDoneTeams(r: ReportPlan | null): { team: string; people: { id: number; name: string; pct: number }[] }[] {
   if (!r) return [];
-  const by = new Map<string, { name: string; pct: number }[]>();
+  const by = new Map<string, { id: number; name: string; pct: number }[]>();
   for (const m of r.managers) {
     if (!(m.plan > 0) || m.pct == null || m.pct < 100) continue;
     const t = m.teamName ?? "Без команди";
-    by.set(t, [...(by.get(t) ?? []), { name: m.name, pct: m.pct }]);
+    by.set(t, [...(by.get(t) ?? []), { id: m.managerId, name: m.name, pct: m.pct }]);
   }
   return [...by.entries()].sort((a, b) => a[0].localeCompare(b[0], "uk"))
     .map(([team, people]) => ({ team, people: people.sort((a, b) => b.pct - a.pct) }));
@@ -66,22 +69,24 @@ export function manualSection(s: ManualSlide): string {
   }
 }
 const lines = (v?: string) => (v ?? "").split("\n").map((x) => x.trim()).filter(Boolean);
-const Photo = ({ who }: { who?: string }) => (
-  <div className="ps-photo"><div className="ps-ava big">{initials(who || "?")}</div></div>
+/** Велике фото слайда-вітання: фото людини з реєстру або ініціали в колі, як раніше. */
+const Photo = ({ who, photo }: { who?: string; photo?: PhotoRef | null }) => (
+  <div className="ps-photo">{photo ? <EmployeePhoto photo={photo} name={who || "?"} className="ps-photo-img" /> : <div className="ps-ava big">{initials(who || "?")}</div>}</div>
 );
 
 /**
  * Верстка ручного слайда за його шаблоном. Компонування кожної гілки — з відповідного слайда Даші
  * (`UTS_weekly_meeting_template.pptx`). Набір гілок звіряє #611 з реєстром шаблонів сервера.
  */
-function templateSlide(s: ManualSlide): ReactElement {
+function templateSlide(s: ManualSlide, photos: Record<string, PhotoRef>): ReactElement {
   const f = s.fields ?? {};
+  const photo = f.employeeId ? photos[f.employeeId] ?? null : null;
   switch (s.kind) {
     case "newcomer":
       return (<>
         <div className="ps-h ps-h-bar">{[f.headline, f.person].filter(Boolean).join(" - ")}</div>
         <div className="ps-tcard">
-          <Photo who={f.person} />
+          <Photo who={f.person} photo={photo} />
           <div className="ps-tbody">
             <div className="ps-tname2">{f.person}</div>
             {f.achievement ? <div className="ps-tach">{f.achievement}</div> : null}
@@ -94,7 +99,7 @@ function templateSlide(s: ManualSlide): ReactElement {
       return (<>
         <div className="ps-h">З Днем народження!</div>
         <div className="ps-tcard">
-          <Photo who={f.person} />
+          <Photo who={f.person} photo={photo} />
           <div className="ps-tbody">
             <div className="ps-tcong">ВІТАЄМО</div>
             <div className="ps-tname2">{f.person}</div>
@@ -157,6 +162,7 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
   const [toDate, setToDate] = useState<ReportPlan | null>(null);
   const [month, setMonth] = useState<ReportPlan | null>(null);
   const [manual, setManual] = useState<ManualSlide[]>([]);
+  const [manualPhotos, setManualPhotos] = useState<Record<string, PhotoRef>>({});
   const [err, setErr] = useState<string | null>(null);
   const [i, setI] = useState(0);
   const [scale, setScale] = useState(1);
@@ -170,7 +176,7 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
       fetchReportPlan({ from: mStart, to: today }),
       fetchReportPlan({ from: mStart, to: monthEnd(today) }),
       fetchManualSlides(week.weekFrom),
-    ]).then(([a, b, c]) => { setToDate(a); setMonth(b); setManual(c.slides); })
+    ]).then(([a, b, c]) => { setToDate(a); setMonth(b); setManual(c.slides); setManualPhotos(c.photos ?? {}); })
       .catch(() => setErr("Не вдалося завантажити дані для слайдів — спробуйте ще раз"));
   }, [week.weekFrom, mStart, today]);
 
@@ -207,7 +213,8 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
       </div>
     ) });
 
-    for (const s of manual) out.push({ key: `m${s.id}`, node: frame(manualSection(s), templateSlide(s)) });
+    for (const s of manual) out.push({ key: `m${s.id}`, node: frame(manualSection(s), templateSlide(s, manualPhotos)) });
+    const ava = (id: number, cls: string) => <EmployeePhoto key={id} photo={week.photos?.[String(id)]} name={name(id)} className={cls} />;
 
     const unit = (k: NominationKey) => week.defs.find((d) => d.key === k)?.unit ?? "count";
     const card = (dept: "rpk" | "rnk", title: string) => (
@@ -223,10 +230,11 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
               <div className="ps-lab">{def.label.toUpperCase()}</div>
               <div className="ps-val">
                 {w && w.state === "ok"
-                  ? <>{w.winners.map((id) => short(name(id))).join(", ")} — <b>{fmt(unit(k), w.value)}</b>
+                  ? <><span className="ps-avs">{w.winners.slice(0, 3).map((id) => ava(id, "ps-av-sm"))}</span>
+                      <span className="ps-vtext">{w.winners.map((id) => short(name(id))).join(", ")} — <b>{fmt(unit(k), w.value)}</b>
                       {k === "marginPct" && (w.value ?? 0) > week.marginFlagPct ? <span className="ps-flag">⚑ понад {week.marginFlagPct}% від виплати водію</span> : null}
                       {manualWin ? <span className="ps-manual-mark">✎ за даними тімліда</span> : null}
-                      <div className="ps-tm">{teams.map((t) => teamShort(t.teamName)).join(", ")}</div></>
+                      <div className="ps-tm">{teams.map((t) => teamShort(t.teamName)).join(", ")}</div></span></>
                   : <span className="ps-muted">ніхто не набрав</span>}
               </div>
             </div>
@@ -262,7 +270,7 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
           </div>
           <div className={`ps-grid${g.people.length > 6 ? " many" : ""}`}>
             {g.people.map((p) => (
-              <div className="ps-pp" key={p.name}><div className="ps-ava">{initials(p.name)}</div><div className="ps-pn">{short(p.name)}</div><div className="ps-pc">{p.pct}%</div></div>
+              <div className="ps-pp" key={p.id}>{ava(p.id, "ps-ava")}<div className="ps-pn">{short(p.name)}</div><div className="ps-pc">{p.pct}%</div></div>
             ))}
           </div>
         </div>
@@ -288,7 +296,7 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
       )) });
     }
     return out;
-  }, [week, manual, toDate, month, draft, meeting, name, today]);
+  }, [week, manual, manualPhotos, toDate, month, draft, meeting, name, today]);
 
   const n = slides.length;
   const go = (k: number) => setI(Math.max(0, Math.min(n - 1, k)));

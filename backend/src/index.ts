@@ -47,6 +47,7 @@ import { hiringQuestionsRouter } from "./routes/hiringQuestions.js";
 import { candidateTrainingRouter } from "./routes/candidateTraining.js";
 import { hiringRouter } from "./routes/hiring.js";
 import { nominationsRouter } from "./routes/nominations.js";
+import { peopleRouter } from "./routes/people.js";
 import { statisticsRouter } from "./routes/statistics.js";
 import { statsSeriesRouter } from "./routes/statisticsSeries.js";
 import { runDataReconciliation } from "./jobs/dataReconciliation.js";
@@ -158,6 +159,7 @@ app.use("/api/training/questions", hiringQuestionsRouter); // питання к�
 app.use("/api/training", trainingRouter);
 app.use("/api/hiring", hiringRouter);
 app.use("/api/nominations", nominationsRouter); // 🏆 Номінації тижня (21.09.2026)
+app.use("/api/people", peopleRouter); // 📷 Фото співробітників (22.09.2026)
 app.use("/api/secrets", secretsRouter); // 🔐 сейф доступів співробітників (18.09.2026)
 app.use("/api/vault-bot", vaultBotRouter); // 🤖 вебхук бота «UTS Сейф» (без requireAuth, межа — секрет) // Найм: графік, кандидати, щоденний звіт (17.09.2026)
 app.use("/api/statistics", statisticsRouter);

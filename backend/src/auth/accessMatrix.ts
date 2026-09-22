@@ -376,6 +376,18 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["financier", "hr", "manager"] },
   { method: "POST", path: "/api/nominations/review", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
+  /* 📷 Фото співробітників (22.09.2026). Саме фото — будь-кому залогіненому (0 → 400/404, але не 403);
+     список і запис — право сейфу `view_employee_secrets`: admin, ceo, opdir, kvp, hr. Запис — deny-only. */
+  { method: "GET", path: "/api/people/photo/:employeeId", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+  { method: "GET", path: "/api/people/photos", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
+  { method: "POST", path: "/api/people/photo/:employeeId", cls: "deny-only",
+    allow: [], deny: ["financier", "team_lead", "manager"] },
+  { method: "DELETE", path: "/api/people/photo/:employeeId", cls: "deny-only",
+    allow: [], deny: ["financier", "team_lead", "manager"] },
+  { method: "POST", path: "/api/people/photo/:employeeId/restore", cls: "deny-only",
+    allow: [], deny: ["financier", "team_lead", "manager"] },
   /* Ручні слайди презентації (прохід 2) — лише керівництво: `leadOnly` першим оператором, тож
      тімлід отримує 403 ще до валідації тіла. Запис — deny-only: проба дозволеної ролі писала б у прод. */
   { method: "GET", path: "/api/nominations/manual-slides", cls: "GET",

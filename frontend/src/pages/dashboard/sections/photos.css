@@ -1,0 +1,22 @@
+/* 📷 Фото співробітників (22.09.2026) — коло з фото/ініціалами, блок у картці, діалог завантаження. */
+.ep-av { display: inline-grid; place-items: center; flex: none; border-radius: 50%; object-fit: cover; background: var(--surface-2, #f1f5f9); }
+.ep-ini { background: #FBE3E7; color: #970B22; font-weight: 800; letter-spacing: .02em; line-height: 1; }
+.ep-ring { border: 3px solid #C8102E; }
+.emp-who { display: flex; gap: 10px; align-items: flex-start; }
+.emp-who > .ep-av { border: 2px solid #C8102E; margin-top: 1px; }
+
+.ep-panel { display: flex; gap: 16px; align-items: center; padding: 12px 14px; margin: 10px 0 4px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2, transparent); flex-wrap: wrap; }
+.ep-panel-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1 1 260px; font-size: 13px; }
+.ep-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.ep-note { font-size: 12px; }
+
+.ep-dlg { width: min(620px, 96vw); display: flex; flex-direction: column; gap: 14px; }
+.ep-up { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.ep-drop { border: 2px dashed var(--border-strong, var(--border)); border-radius: 12px; padding: 26px 14px; text-align: center; display: flex; flex-direction: column; gap: 8px; align-items: center; justify-content: center; }
+.ep-drop.over { border-color: #C8102E; background: #FBE3E7; }
+.ep-prev { display: flex; flex-direction: column; gap: 10px; }
+.ep-pv-row { display: flex; gap: 18px; align-items: flex-end; }
+.ep-pv { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; color: var(--text-muted); }
+.ep-pv-big { width: 120px; height: 120px; border-radius: 50%; border: 4px solid #C8102E; object-fit: cover; display: grid; place-items: center; font-size: 36px; }
+.ep-pv-small { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; display: grid; place-items: center; font-size: 14px; }
+@media (max-width: 640px) { .ep-up { grid-template-columns: 1fr; } }

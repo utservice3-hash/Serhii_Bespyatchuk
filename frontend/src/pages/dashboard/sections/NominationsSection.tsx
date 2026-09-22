@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  fetchNominationWeek, reviewNomination, fetchManualSlides, createManualSlide, updateManualSlide, deleteManualSlide, restoreManualSlide,
-  type NominationWeek, type NominationTeam, type NominationCell, type NominationKey, type ManualSlidesResp, type ManualSlide, type ManualSlideKind,
+  fetchNominationWeek, reviewNomination, fetchManualSlides, createManualSlide, updateManualSlide, deleteManualSlide, restoreManualSlide, fetchPeoplePhotos,
+  type NominationWeek, type NominationTeam, type NominationCell, type NominationKey, type ManualSlidesResp, type ManualSlide, type ManualSlideKind, type PersonPhoto,
 } from "../../../api";
+import { EmployeePhoto } from "./EmployeePhotos";
 import { NominationsPresentation } from "./NominationsPresentation";
 import { formatAmountFull } from "../format";
 import "./nominations.css";
@@ -272,6 +273,12 @@ function ManualSlidesCard({ weekFrom }: { weekFrom: string }) {
   const [vals, setVals] = useState<Record<string, string>>({});
   const [removed, setRemoved] = useState<ManualSlide | null>(null);
   const [busy, setBusy] = useState(false);
+  // 📷 Люди реєстру для поля «Фото» (право сейфу). Немає права — поле показує, що список недоступний.
+  const [people, setPeople] = useState<PersonPhoto[] | null>(null);
+  const [peopleErr, setPeopleErr] = useState(false);
+  useEffect(() => {
+    fetchPeoplePhotos().then((p) => setPeople(p.filter((x) => x.status !== "dismissed"))).catch(() => setPeopleErr(true));
+  }, []);
 
   useEffect(() => { setErr(null); setRemoved(null); fetchManualSlides(weekFrom).then(setD).catch((e) => setErr(errorOf(e))); }, [weekFrom]);
   const tpl = d?.templates.find((t) => t.key === kind) ?? null;
@@ -321,7 +328,30 @@ function ManualSlidesCard({ weekFrom }: { weekFrom: string }) {
       </div>
       {tpl ? (
         <div className="nm-form">
-          {tpl.fields.map((f) => (
+          {tpl.fields.map((f) => f.type === "employee" ? (
+            <label className="nm-field" key={f.key}>
+              <span>{f.label}</span>
+              <span className="nm-who">
+                {(() => {
+                  const p = people?.find((x) => String(x.employeeId) === vals[f.key]);
+                  return <EmployeePhoto photo={p?.hasPhoto ? { id: p.employeeId, v: p.v } : null} name={p?.name ?? vals.person ?? "?"} size={34} />;
+                })()}
+                {peopleErr ? <span className="nm-muted">Список людей недоступний — потрібне право сейфу. Слайд буде з ініціалами.</span> : (
+                  <select className="nm-inp" id={`nm-ms-${f.key}`} value={vals[f.key] ?? ""} disabled={!people}
+                    onChange={(e) => {
+                      const id = e.target.value, p = people?.find((x) => String(x.employeeId) === id);
+                      // Новачку підставляємо ПІБ, якщо поле ще порожнє; іменинника пишуть у родовому відмінку — його не чіпаємо.
+                      setVals((v) => ({ ...v, [f.key]: id, ...(kind === "newcomer" && p && !(v.person ?? "").trim() ? { person: p.name } : {}) }));
+                    }}>
+                    <option value="">— без фото (ініціали) —</option>
+                    {vals[f.key] && people && !people.some((x) => String(x.employeeId) === vals[f.key])
+                      ? <option value={vals[f.key]}>людина #{vals[f.key]} (звільнена або прибрана з реєстру)</option> : null}
+                    {(people ?? []).map((p) => <option key={p.employeeId} value={String(p.employeeId)}>{p.name}{p.hasPhoto ? "" : " · фото ще немає"}</option>)}
+                  </select>
+                )}
+              </span>
+            </label>
+          ) : (
             <label className="nm-field" key={f.key} style={f.multiline ? { gridColumn: "1 / -1" } : undefined}>
               <span>{f.label}{f.required ? " *" : ""}</span>
               {f.multiline

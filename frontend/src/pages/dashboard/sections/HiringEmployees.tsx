@@ -3,8 +3,10 @@ import { createPortal } from "react-dom";
 import {
   fetchEmployees, previewEmployeeImport, commitEmployeeImport, updateEmployee, fetchSecretsStatus, linkEmployeesKommo, hiringError,
   startDismissal, finishDismissal, revertDismissal, fetchEmployeeDocs, uploadEmployeeDoc, employeeDocBlobUrl, deleteEmployeeDoc, restoreEmployeeDoc, HR_DOC_KINDS,
-  type EmployeeDoc, type EmployeeRow, type ImportPreview, type SecretsStatus, type EmployeePatch,
+  fetchPeoplePhotos,
+  type EmployeeDoc, type EmployeeRow, type ImportPreview, type SecretsStatus, type EmployeePatch, type PersonPhoto,
 } from "../../../api";
+import { EmployeePhoto, PhotoPanel } from "./EmployeePhotos";
 import type { Toast } from "./HiringShared";
 import { StatusBar, VaultPanel } from "./HiringSecrets";
 
@@ -20,6 +22,7 @@ import { StatusBar, VaultPanel } from "./HiringSecrets";
  * 🚪 Звільнення — у два кроки кнопками (21.09.2026): «Звільнити…» → «завершує» (вхід працює, плану немає) →
  * «Завершити звільнення» → вхід закрито. «Повернути» відкочує обидва. Нічого не видаляється.
  * 📎 «Документи» — NDA, офер, договір людини: той самий модуль «Документи», розділ «Особисті».
+ * 📷 Фото (22.09.2026) — коло біля ПІБ, відбір «Без фото», блок у «Профілі»; логіка — `EmployeePhotos.tsx`.
  */
 
 const PLAIN: [string, string][] = [
@@ -55,7 +58,7 @@ const bdaySoon = (iso: string | null) => {
   if (next.getTime() < new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()) next = new Date(now.getFullYear() + 1, m - 1, d);
   return (next.getTime() - now.getTime()) / 86_400_000 <= 7;
 };
-type Extra = "all" | "new" | "noacc" | "nosec" | "bday" | "nonda" | "nooffer" | "nodocs";
+type Extra = "all" | "new" | "noacc" | "nosec" | "bday" | "nonda" | "nooffer" | "nodocs" | "nophoto";
 
 export function HiringEmployees({ toast }: { toast: Toast }) {
   const [rows, setRows] = useState<EmployeeRow[] | null>(null);
@@ -68,19 +71,25 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
   const [extra, setExtra] = useState<Extra>("all");
   const [importing, setImporting] = useState(false);
   const [open, setOpen] = useState<{ id: number; tab: DrawerTab } | null>(null);
+  const [photos, setPhotos] = useState<Map<number, PersonPhoto>>(new Map());
+  const loadPhotos = useCallback(() => {
+    fetchPeoplePhotos().then((p) => setPhotos(new Map(p.map((x) => [x.employeeId, x])))).catch(() => setPhotos(new Map()));
+  }, []);
   const load = useCallback(() => {
     fetchEmployees().then((r) => { setRows(r.rows); setTeams(r.teams); }).catch((e) => setErr(hiringError(e)));
     fetchSecretsStatus().then(setStatus).catch(() => setStatus(null));
-  }, []);
+    loadPhotos();
+  }, [loadPhotos]);
   useEffect(load, [load]);
 
   const inView = useMemo(() => (rows ?? []).filter((r) => view === "all" || (view === "dismissed" ? r.status === "dismissed" : r.status !== "dismissed")), [rows, view]);
   const shown = useMemo(() => inView.filter((r) => (!team || (team === "—" ? !r.team_label : r.team_label === team))
     && (extra === "all" || (extra === "new" && (daysSince(r.hired_at) ?? 999) <= 30) || (extra === "noacc" && r.user_id == null)
       || (extra === "nosec" && r.secrets === 0) || (extra === "bday" && bdaySoon(r.birth_date))
-      || (extra === "nonda" && !r.has_nda) || (extra === "nooffer" && !r.has_offer) || (extra === "nodocs" && r.docs === 0))
+      || (extra === "nonda" && !r.has_nda) || (extra === "nooffer" && !r.has_offer) || (extra === "nodocs" && r.docs === 0)
+      || (extra === "nophoto" && !photos.get(r.id)?.hasPhoto))
     && (!q.trim() || `${r.full_name} ${r.position ?? ""} ${r.team_label ?? ""} ${r.phone ?? ""} ${r.email ?? ""}`.toLowerCase().includes(q.trim().toLowerCase()))),
-  [inView, team, extra, q]);
+  [inView, team, extra, q, photos]);
   const teamOptions = useMemo(() => [...new Set(inView.map((r) => r.team_label).filter((t): t is string => !!t))].sort((a, b) => a.localeCompare(b, "uk", { numeric: true })), [inView]);
   if (err) return <div className="chart-card"><b>Реєстр недоступний.</b> <span className="hr-muted">{err}</span></div>;
   if (!rows) return <p className="loading-text">Завантаження…</p>;
@@ -119,6 +128,7 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
             <option value="nodocs">Без жодного документа</option>
             <option value="nonda">Без NDA</option>
             <option value="nooffer">Без офера</option>
+            <option value="nophoto">Без фото</option>
           </select>
           <input className="hr-inp" placeholder="Пошук: ПІБ, посада, телефон" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Пошук у реєстрі" style={{ flex: "1 1 200px" }} />
           <button className="hr-btn" title="Привʼязати людей до менеджерів Kommo: за ID Kommo з таблиці або за єдиним збігом ПІБ"
@@ -137,13 +147,16 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
                   const fresh = r.status === "active" && (daysSince(r.hired_at) ?? 999) <= 30;
                   return (
                     <tr key={r.id} className={r.status === "dismissed" ? "off" : ""} onClick={() => setOpen({ id: r.id, tab: "profile" })}>
-                      <td>
+                      <td><div className="emp-who">
+                        <EmployeePhoto photo={photos.get(r.id)?.hasPhoto ? { id: r.id, v: photos.get(r.id)!.v } : null} name={r.full_name} size={36} />
+                        <div>
                         <b>{r.full_name}</b>
                         {fresh && <span className="emp-pill info">новий</span>}
                         {r.status === "finishing" && <span className="emp-pill warn" title={`Останній робочий день ${d(r.last_day)}`}>завершує · до {d(r.last_day)}</span>}
                         {bdaySoon(r.birth_date) && <span className="emp-pill warn" title={`День народження ${r.birth_date?.slice(5).split("-").reverse().join(".")}`}>🎂</span>}
                         <div className="hr-muted">{r.position ?? "посада не вказана"}</div>
-                      </td>
+                        </div>
+                      </div></td>
                       <td>{r.team_label ? <span className="emp-team" style={{ ["--t" as string]: teamTone(r.team_label) }}>{teamName(r.team_label)}</span> : <span className="hr-muted">—</span>}</td>
                       <td>{r.phone ?? <span className={r.status === "active" ? "emp-miss" : "hr-muted"}>немає</span>}</td>
                       <td>{(r.status === "dismissed" ? d(r.dismissed_at) : d(r.hired_at)) ?? <span className="hr-muted">—</span>}
@@ -172,8 +185,8 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
           </div>
         )}
       </div>
-      {openRow && <EmployeeDrawer row={openRow} tab={open!.tab} teams={teams} status={status} toast={toast}
-        onTab={(t) => setOpen({ id: openRow.id, tab: t })} onClose={() => setOpen(null)} onSaved={load} />}
+      {openRow && <EmployeeDrawer row={openRow} tab={open!.tab} teams={teams} status={status} toast={toast} photo={photos.get(openRow.id)}
+        onTab={(t) => setOpen({ id: openRow.id, tab: t })} onClose={() => setOpen(null)} onSaved={load} onPhoto={loadPhotos} />}
       {importing && <ImportDialog onClose={() => setImporting(false)} onDone={(msg, pending) => {
         setImporting(false); toast(msg); load();
         // Імпорт довершується на сервері — кілька разів перечитуємо реєстр, щоб результат зʼявився без перезавантаження.
@@ -191,9 +204,9 @@ const FIELDS: [keyof EmployeePatch, string, "text" | "date" | "team" | "status"]
 
 type DrawerTab = "profile" | "access" | "docs";
 
-function EmployeeDrawer({ row, tab, teams, status, toast, onTab, onClose, onSaved }: {
-  row: EmployeeRow; tab: DrawerTab; teams: string[]; status: SecretsStatus | null; toast: Toast;
-  onTab: (t: DrawerTab) => void; onClose: () => void; onSaved: () => void;
+function EmployeeDrawer({ row, tab, teams, status, toast, photo, onTab, onClose, onSaved, onPhoto }: {
+  row: EmployeeRow; tab: DrawerTab; teams: string[]; status: SecretsStatus | null; toast: Toast; photo: PersonPhoto | undefined;
+  onTab: (t: DrawerTab) => void; onClose: () => void; onSaved: () => void; onPhoto: () => void;
 }) {
   const [dismissing, setDismissing] = useState(false);
   const init = useMemo(() => Object.fromEntries(FIELDS.map(([k]) => [k, (row[k] as string | null) ?? ""])) as Record<string, string>, [row]);
@@ -217,6 +230,8 @@ function EmployeeDrawer({ row, tab, teams, status, toast, onTab, onClose, onSave
     <div className="hr-overlay" onClick={onClose}>
       <div className="hr-drawer emp-drawer" role="dialog" aria-label={`Співробітник: ${row.full_name}`} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
+          <div className="emp-who">
+            <EmployeePhoto photo={photo?.hasPhoto ? { id: row.id, v: photo.v } : null} name={row.full_name} size={56} />
           <div>
             <div style={{ fontSize: 18, fontWeight: 700 }}>{row.full_name}</div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
@@ -226,6 +241,7 @@ function EmployeeDrawer({ row, tab, teams, status, toast, onTab, onClose, onSave
               {row.user_id != null ? <span className="emp-pill ok">акаунт: {row.account_name}</span> : <span className="emp-pill warn">без акаунта в дашборді</span>}
               {row.kommo_name ? <span className="emp-pill info">Kommo: {row.kommo_name}</span> : <span className="emp-pill mute">не привʼязано до Kommo</span>}
             </div>
+          </div>
           </div>
           <button className="hr-btn" onClick={onClose}>Закрити</button>
         </div>
@@ -237,6 +253,7 @@ function EmployeeDrawer({ row, tab, teams, status, toast, onTab, onClose, onSave
         {row.offboarding && <OffboardingBar row={row} toast={toast} onDone={onSaved} />}
         {tab === "docs" ? <EmployeeDocs row={row} toast={toast} /> : tab === "profile" ? (
           <>
+            <PhotoPanel employeeId={row.id} name={row.full_name} dismissed={row.status === "dismissed"} info={photo} toast={toast} onChanged={onPhoto} />
             <div className="emp-form">
               {FIELDS.map(([k, label, kind]) => (
                 <label key={k} className={k === "note" || k === "dismiss_reason" ? "wide" : ""}>

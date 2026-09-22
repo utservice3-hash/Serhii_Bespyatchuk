@@ -4418,6 +4418,8 @@ export interface NominationWeek {
   viewer: { role: "admin" | "team_lead"; teamId: number | null };
   defs: { key: NominationKey; label: string; hint: string; unit: "uah" | "count" | "pct" }[];
   marginFlagPct: number;
+  /** 📷 Фото людей тижня: id менеджера Kommo → фото співробітника (немає в мапі — ініціали). */
+  photos: Record<string, PhotoRef>;
 }
 export const fetchNominationWeek = async (weekFrom?: string) =>
   (await api.get<NominationWeek>("/nominations/week", { params: weekFrom ? { weekFrom } : {} })).data;
@@ -4425,10 +4427,10 @@ export const reviewNomination = async (p: { weekFrom: string; teamId: number; no
   (await api.post<NominationWeek>("/nominations/review", p)).data;
 // 🎞 Ручні слайди презентації тижня (прохід 2) — лише керівництво.
 export type ManualSlideKind = "newcomer" | "birthday" | "news" | "contest" | "webinar" | "custom";
-export interface SlideTemplateField { key: string; label: string; required: boolean; max: number; multiline?: boolean; placeholder?: string; default?: string }
+export interface SlideTemplateField { key: string; label: string; required: boolean; max: number; multiline?: boolean; placeholder?: string; default?: string; type?: "employee" }
 export interface SlideTemplate { key: ManualSlideKind; label: string; fields: SlideTemplateField[] }
 export interface ManualSlide { id: number; kind: ManualSlideKind; title: string; person: string | null; fields: Record<string, string>; position: number }
-export interface ManualSlidesResp { weekFrom: string; kinds: { key: ManualSlideKind; label: string }[]; templates: SlideTemplate[]; slides: ManualSlide[] }
+export interface ManualSlidesResp { weekFrom: string; kinds: { key: ManualSlideKind; label: string }[]; templates: SlideTemplate[]; slides: ManualSlide[]; photos: Record<string, PhotoRef> }
 export type ManualSlideInput = { weekFrom: string; kind: ManualSlideKind; fields: Record<string, string>; position?: number };
 export const fetchManualSlides = async (weekFrom: string) =>
   (await api.get<ManualSlidesResp>("/nominations/manual-slides", { params: { weekFrom } })).data;
@@ -4436,3 +4438,31 @@ export const createManualSlide = async (p: ManualSlideInput) => (await api.post<
 export const updateManualSlide = async (id: number, p: ManualSlideInput) => (await api.patch<ManualSlidesResp>(`/nominations/manual-slides/${id}`, p)).data;
 export const deleteManualSlide = async (id: number) => (await api.delete<ManualSlidesResp>(`/nominations/manual-slides/${id}`)).data;
 export const restoreManualSlide = async (id: number) => (await api.post<ManualSlidesResp>(`/nominations/manual-slides/${id}/restore`)).data;
+
+// 📷 Фото співробітників (22.09.2026) — `routes/people.ts`. Саме фото бачить будь-хто залогінений;
+// список і завантаження — право сейфу (керівництво + HR).
+export type PhotoRef = { id: number; v: number };
+export interface PersonPhoto {
+  employeeId: number; name: string; managerId: number | null; status: string; hasPhoto: boolean; hasPrev: boolean; v: number;
+  updatedAt: string | null; updatedBy: string | null;
+}
+export const fetchPeoplePhotos = async () => (await api.get<{ people: PersonPhoto[] }>("/people/photos")).data.people;
+export const uploadEmployeePhoto = async (id: number, dataBase64: string) => (await api.post<{ file: string | null; prev: string | null; v: number }>(`/people/photo/${id}`, { dataBase64 })).data;
+export const removeEmployeePhoto = async (id: number) => (await api.delete<{ file: string | null; prev: string | null; v: number }>(`/people/photo/${id}`)).data;
+export const restoreEmployeePhoto = async (id: number) => (await api.post<{ file: string | null; prev: string | null; v: number }>(`/people/photo/${id}/restore`)).data;
+/**
+ * Фото як blob-URL (через токен, тож `<img src>` напряму не годиться). Кеш за `id:v`: нова версія
+ * фото — новий ключ, стара не показується; помилка з кешу випадає, щоб наступний показ спробував знову.
+ */
+const photoUrls = new Map<string, Promise<string | null>>();
+export function employeePhotoUrl(p: PhotoRef): Promise<string | null> {
+  const k = `${p.id}:${p.v}`;
+  let u = photoUrls.get(k);
+  if (!u) {
+    u = api.get(`/people/photo/${p.id}`, { responseType: "blob", params: { v: p.v } })
+      .then((r) => URL.createObjectURL(r.data as Blob))
+      .catch(() => { photoUrls.delete(k); return null; });
+    photoUrls.set(k, u);
+  }
+  return u;
+}

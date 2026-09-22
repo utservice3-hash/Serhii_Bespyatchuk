@@ -218,7 +218,13 @@ export function snapshotRows(view: WeekView): SnapshotRow[] {
 // мусить мати верстку для КОЖНОГО шаблону (#614) — «додав шаблон і забув верстку» не пройде тихо.
 
 export type ManualKind = "newcomer" | "birthday" | "news" | "contest" | "webinar" | "custom";
-export interface TemplateField { key: string; label: string; required: boolean; max: number; multiline?: boolean; placeholder?: string; default?: string }
+export interface TemplateField {
+  key: string; label: string; required: boolean; max: number; multiline?: boolean; placeholder?: string; default?: string;
+  /** `employee` — вибір людини з реєстру «Співробітників» (id); на слайді дає її фото. */
+  type?: "employee";
+}
+/** Поле «фото з реєстру» — id співробітника; на слайді замість порожнього кола стає його фото (22.09.2026). */
+const PHOTO_FIELD: TemplateField = { key: "employeeId", label: "Фото — людина з реєстру «Співробітники» (необовʼязково)", required: false, max: 12, type: "employee" };
 export interface SlideTemplate { key: ManualKind; label: string; fields: readonly TemplateField[] }
 
 const CONTEST_RULES = [
@@ -241,12 +247,14 @@ export const SLIDE_TEMPLATES: readonly SlideTemplate[] = [
     { key: "achievement", label: "Досягнення (необовʼязково)", required: false, max: 120, placeholder: "Вітаємо з 8ми поставленими машинами!" },
     { key: "wish", label: "Побажання", required: false, max: 160, default: "Легкого старту та сильних результатів!" },
     { key: "date", label: "Дата", required: false, max: 20, placeholder: "22.09.2026" },
+    PHOTO_FIELD,
   ] },
   { key: "birthday", label: "День народження", fields: [
     { key: "person", label: "Кого вітаємо (у формі «Сердюка Ярослава»)", required: true, max: 80 },
     { key: "date", label: "Дата народження", required: true, max: 20, placeholder: "27.08" },
     { key: "wish", label: "Побажання", required: false, max: 300, multiline: true,
       default: "Бажаємо міцного здоровʼя, натхнення, професійних перемог і якнайбільше приємних моментів разом із командою UTS!" },
+    PHOTO_FIELD,
   ] },
   { key: "news", label: "Новини", fields: [
     { key: "title", label: "Заголовок", required: false, max: 60, default: "Новини!" },
@@ -312,6 +320,7 @@ export function validateManualSlide(body: unknown): { ok: true; value: ManualSli
   for (const f of tpl.fields) {
     const v = typeof raw[f.key] === "string" ? (raw[f.key] as string).trim().slice(0, f.max) : "";
     if (f.required && !v) return { ok: false, error: `заповніть поле «${f.label}»` };
+    if (f.type === "employee" && v && !/^[1-9]\d{0,8}$/.test(v)) return { ok: false, error: `поле «${f.label}»: оберіть людину зі списку` };
     if (v) fields[f.key] = v;
   }
   const position = Number.isInteger(Number(b.position)) ? Number(b.position) : 0;
