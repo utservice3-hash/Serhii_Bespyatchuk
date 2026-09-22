@@ -19,7 +19,10 @@
 .ps-logo { width: 80px; height: 66px; background: #fff; border-radius: 10px; display: grid; place-items: center; margin-bottom: 60px; }
 .ps-nav { color: #AEB0B4; font-size: 17px; padding: 12px 16px; border-radius: 12px; }
 .ps-nav.on { background: #C8102E; color: #fff; font-weight: 700; }
-.ps-date { position: absolute; left: 34px; bottom: 34px; background: #262626; color: #D1D5DB; border-radius: 10px; padding: 12px 22px; font-size: 15px; }
+.ps-date { margin-top: auto; align-self: flex-start; background: #262626; color: #D1D5DB; border-radius: 10px; padding: 12px 22px; font-size: 15px; }
+/* Багато ручних розділів — меню щільніше, щоб «Підсумки» не зникали за датою. */
+.ps-side.dense .ps-logo { margin-bottom: 26px; }
+.ps-side.dense .ps-nav { font-size: 14.5px; padding: 8px 14px; border-radius: 10px; }
 .ps-main { flex: 1; padding: 40px 46px 36px; display: flex; flex-direction: column; min-width: 0; }
 .ps-kick { color: #C8102E; font-size: 14px; font-weight: 700; letter-spacing: .08em; }
 .ps-h { margin: 4px 0 22px; font-size: 40px; font-weight: 700; }
@@ -78,3 +81,44 @@
 .nm-slide-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; }
 .nm-slide-row .t { font-weight: 600; }
 .nm-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; padding: 10px 14px 14px; align-items: end; }
+
+/* ── шаблони ручних слайдів (зі слайдів Даші) ── */
+.ps-h-bar { font-size: 27px; line-height: 1.2; margin-bottom: 18px; }
+.ps-h-big { font-size: 52px; }
+.ps-h.tight { margin: 2px 0 6px; font-size: 36px; }
+.ps-tcard { flex: 1; background: #fff; border: 1px solid #9AA0A6; border-radius: 16px; display: flex; gap: 40px; align-items: center; padding: 34px 44px; position: relative; min-height: 0; }
+.ps-tcard.col { flex-direction: column; align-items: flex-start; justify-content: center; gap: 22px; }
+.ps-photo { width: 300px; height: 400px; background: #E5E7EB; border-radius: 14px; display: grid; place-items: center; flex: none; }
+.ps-tbody { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.ps-tname2 { font-size: 40px; font-weight: 800; line-height: 1.1; }
+.ps-tach { font-size: 22px; font-weight: 700; color: #6B7280; }
+.ps-twish { font-size: 28px; font-weight: 700; color: #6B7280; line-height: 1.3; }
+.ps-twish.small { font-size: 17px; font-weight: 400; line-height: 1.45; }
+.ps-tcong { font-size: 14px; font-weight: 800; color: #C8102E; letter-spacing: .1em; }
+.ps-tbday { font-size: 28px; font-weight: 800; color: #970B22; }
+.ps-tdate { position: absolute; right: 26px; bottom: 22px; background: #FBE3E7; color: #970B22; border-radius: 12px; padding: 12px 24px; font-size: 20px; font-weight: 800; }
+.ps-tdate.inline { position: static; align-self: flex-start; margin-top: 8px; }
+.ps-news { font-size: 30px; font-weight: 800; line-height: 1.3; white-space: pre-wrap; }
+.ps-newswish { font-size: 26px; color: #1F2124; }
+.ps-desc { color: #6B7280; font-size: 16px; line-height: 1.4; margin-bottom: 14px; }
+.ps-podium { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 22px; align-items: end; margin-bottom: 16px; }
+.ps-place { background: #fff; border: 1px solid #9AA0A6; border-radius: 14px; height: 124px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
+.ps-place.first { background: #FBE3E7; height: 140px; }
+.ps-place .pl { font-size: 14px; font-weight: 700; color: #6B7280; letter-spacing: .06em; }
+.ps-place .pv { font-size: 25px; font-weight: 800; }
+.ps-place.first .pv { font-size: 31px; color: #970B22; }
+.ps-list { background: #fff; border: 1px solid #9AA0A6; border-radius: 14px; padding: 16px 26px; display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+.ps-list .lt { font-size: 13.5px; font-weight: 800; color: #C8102E; letter-spacing: .06em; margin-bottom: 4px; }
+.ps-list .li { font-size: 15.5px; font-weight: 700; display: flex; gap: 10px; }
+.ps-list .li i { color: #C8102E; font-style: normal; }
+.ps-stake { margin-top: auto; background: #C8102E; border-radius: 14px; padding: 16px 28px; display: flex; justify-content: space-between; align-items: center; }
+.ps-stake span { color: #FFE3E7; font-size: 15px; font-weight: 800; letter-spacing: .06em; }
+.ps-stake b { color: #fff; font-size: 28px; font-weight: 800; }
+.ps-banner { background: #C8102E; border-radius: 14px; display: flex; align-items: center; gap: 30px; padding: 22px 34px; margin-bottom: 16px; min-height: 120px; }
+.ps-banner .when { color: #fff; font-size: 29px; font-weight: 800; min-width: 260px; }
+.ps-banner .tl { color: #FFD9DF; font-size: 13px; font-weight: 800; letter-spacing: .08em; }
+.ps-banner .tv { color: #fff; font-size: 23px; font-weight: 800; line-height: 1.25; }
+.ps-cols { background: #fff; border: 1px solid #9AA0A6; border-radius: 14px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; padding: 18px 26px; margin-bottom: 14px; }
+.ps-cols .c i { display: block; width: 36px; height: 36px; border-radius: 50%; background: #FBE3E7; margin-bottom: 8px; }
+.ps-cols .cl { font-size: 12.5px; font-weight: 800; color: #6B7280; letter-spacing: .06em; }
+.ps-cols .cv { font-size: 18px; font-weight: 800; }

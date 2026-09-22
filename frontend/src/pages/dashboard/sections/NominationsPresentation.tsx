@@ -53,6 +53,106 @@ export function planDoneTeams(r: ReportPlan | null): { team: string; people: { n
     .map(([team, people]) => ({ team, people: people.sort((a, b) => b.pct - a.pct) }));
 }
 
+/** Підпис розділу в бічній панелі для ручного слайда — як у Дашиній презентації. */
+export function manualSection(s: ManualSlide): string {
+  const f = s.fields ?? {};
+  switch (s.kind) {
+    case "newcomer": return "Вітаємо в команді!";
+    case "birthday": return "День народження";
+    case "news": return "Новини";
+    case "contest": return "Конкурс тижня";
+    case "webinar": return f.title || "Анонс";
+    default: return f.title || s.title;
+  }
+}
+const lines = (v?: string) => (v ?? "").split("\n").map((x) => x.trim()).filter(Boolean);
+const Photo = ({ who }: { who?: string }) => (
+  <div className="ps-photo"><div className="ps-ava big">{initials(who || "?")}</div></div>
+);
+
+/**
+ * Верстка ручного слайда за його шаблоном. Компонування кожної гілки — з відповідного слайда Даші
+ * (`UTS_weekly_meeting_template.pptx`). Набір гілок звіряє #611 з реєстром шаблонів сервера.
+ */
+function templateSlide(s: ManualSlide): ReactElement {
+  const f = s.fields ?? {};
+  switch (s.kind) {
+    case "newcomer":
+      return (<>
+        <div className="ps-h ps-h-bar">{[f.headline, f.person].filter(Boolean).join(" - ")}</div>
+        <div className="ps-tcard">
+          <Photo who={f.person} />
+          <div className="ps-tbody">
+            <div className="ps-tname2">{f.person}</div>
+            {f.achievement ? <div className="ps-tach">{f.achievement}</div> : null}
+            {f.wish ? <div className="ps-twish">{f.wish}</div> : null}
+          </div>
+          {f.date ? <div className="ps-tdate">{f.date}</div> : null}
+        </div>
+      </>);
+    case "birthday":
+      return (<>
+        <div className="ps-h">З Днем народження!</div>
+        <div className="ps-tcard">
+          <Photo who={f.person} />
+          <div className="ps-tbody">
+            <div className="ps-tcong">ВІТАЄМО</div>
+            <div className="ps-tname2">{f.person}</div>
+            <div className="ps-tbday">з Днем народження!</div>
+            {f.wish ? <div className="ps-twish small">{f.wish}</div> : null}
+            {f.date ? <div className="ps-tdate inline">{f.date}</div> : null}
+          </div>
+        </div>
+      </>);
+    case "news":
+      return (<>
+        <div className="ps-h ps-h-big">{f.title || "Новини!"}</div>
+        <div className="ps-tcard col">
+          <div className="ps-news">{f.text}</div>
+          {f.wish ? <div className="ps-newswish">{f.wish}</div> : null}
+        </div>
+      </>);
+    case "contest":
+      return (<>
+        <div className="ps-kick">КОНКУРС ТИЖНЯ</div>
+        <div className="ps-h tight">{f.title || "Три місця на пʼєдесталі"}</div>
+        {f.description ? <div className="ps-desc">{f.description}</div> : null}
+        <div className="ps-podium">
+          <div className="ps-place"><div className="pl">2 МІСЦЕ</div><div className="pv">{f.prize2}</div></div>
+          <div className="ps-place first"><div className="pl">1 МІСЦЕ</div><div className="pv">{f.prize1}</div></div>
+          <div className="ps-place"><div className="pl">3 МІСЦЕ</div><div className="pv">{f.prize3}</div></div>
+        </div>
+        {lines(f.rules).length ? <div className="ps-list"><div className="lt">ПРАВИЛА ЧЕСНОЇ ГРИ</div>
+          {lines(f.rules).map((r) => <div className="li" key={r}><i>→</i>{r}</div>)}</div> : null}
+        {f.total ? <div className="ps-stake"><span>НА КОНУ ЦЬОГО ТИЖНЯ</span><b>{f.total}</b></div> : null}
+      </>);
+    case "webinar":
+      return (<>
+        <div className="ps-kick">АНОНС</div>
+        <div className="ps-h tight">{f.title || "Навчальний вебінар"}</div>
+        {f.description ? <div className="ps-desc">{f.description}</div> : null}
+        <div className="ps-banner"><div className="when">{f.when}</div>
+          <div className="topic"><div className="tl">ТЕМА</div><div className="tv">{f.topic}</div></div></div>
+        <div className="ps-cols">
+          {[["СПІКЕР", f.speaker], ["ФОРМАТ", f.format], ["ДЛЯ КОГО", f.audience]].map(([l, v]) => (
+            <div className="c" key={l}><i /><div className="cl">{l}</div><div className="cv">{v || "—"}</div></div>
+          ))}
+        </div>
+        {lines(f.points).length ? <div className="ps-list"><div className="lt">ЩО РОЗГЛЯНЕМО</div>
+          {lines(f.points).map((r) => <div className="li" key={r}><i>→</i>{r}</div>)}</div> : null}
+      </>);
+    case "custom":
+    default:
+      return (<>
+        <div className="ps-h">{f.title || s.title}</div>
+        <div className="ps-manual">
+          {f.person ? <div className="ps-ava big">{initials(f.person)}</div> : null}
+          <div>{f.person ? <div className="ps-mname">{f.person}</div> : null}{f.body ? <div className="ps-mtext">{f.body}</div> : null}</div>
+        </div>
+      </>);
+  }
+}
+
 export function NominationsPresentation({ week, onClose }: { week: NominationWeek; onClose: () => void }) {
   const [toDate, setToDate] = useState<ReportPlan | null>(null);
   const [month, setMonth] = useState<ReportPlan | null>(null);
@@ -81,11 +181,13 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
   const slides = useMemo(() => {
     const out: { key: string; node: ReactElement }[] = [];
     const mark = draft ? <div className="ps-watermark">ЧЕРНЕТКА · тиждень ще не зафіксовано</div> : null;
-    const frame = (active: number, body: ReactElement) => (
+    // Розділи бічної панелі — як у Даші: спершу розділи наявних ручних слайдів, потім сталі.
+    const nav = [...new Set(manual.map(manualSection)), ...SECTIONS];
+    const frame = (active: string, body: ReactElement) => (
       <div className="ps-slide">
-        <aside className="ps-side">
+        <aside className={`ps-side${nav.length > 5 ? " dense" : ""}`}>
           <div className="ps-logo"><Logo variant="red" size={44} /></div>
-          {SECTIONS.map((s, k) => <div key={s} className={`ps-nav${k === active ? " on" : ""}`}>{s}</div>)}
+          {nav.map((s) => <div key={s} className={`ps-nav${s === active ? " on" : ""}`}>{s}</div>)}
           <div className="ps-date">{dmy(meeting)}</div>
         </aside>
         <div className="ps-main">{body}</div>
@@ -105,16 +207,7 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
       </div>
     ) });
 
-    for (const s of manual) out.push({ key: `m${s.id}`, node: frame(-1, (
-      <>
-        <div className="ps-kick">{s.kind === "birthday" ? "З ДНЕМ НАРОДЖЕННЯ" : s.kind === "newcomer" ? "ВІТАЄМО В КОМАНДІ" : s.kind === "news" ? "НОВИНИ" : ""}</div>
-        <div className="ps-h">{s.title}</div>
-        <div className="ps-manual">
-          {s.person ? <div className="ps-ava big">{initials(s.person)}</div> : null}
-          <div>{s.person ? <div className="ps-mname">{s.person}</div> : null}{s.body ? <div className="ps-mtext">{s.body}</div> : null}</div>
-        </div>
-      </>
-    )) });
+    for (const s of manual) out.push({ key: `m${s.id}`, node: frame(manualSection(s), templateSlide(s)) });
 
     const unit = (k: NominationKey) => week.defs.find((d) => d.key === k)?.unit ?? "count";
     const card = (dept: "rpk" | "rnk", title: string) => (
@@ -141,7 +234,7 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
         })}
       </div>
     );
-    out.push({ key: "rating", node: frame(0, (
+    out.push({ key: "rating", node: frame(SECTIONS[0], (
       <>
         <div className="ps-kick">ТИЖДЕНЬ {dm(week.weekFrom)}–{dmy(week.weekTo)}</div>
         <div className="ps-h">Рейтинг менеджерів</div>
@@ -151,12 +244,12 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
 
     const monthWord = MONTHS_GEN[Number(today.slice(5, 7)) - 1];
     const done = planDoneTeams(toDate);
-    if (toDate && done.length === 0) out.push({ key: "plan-none", node: frame(1, (
+    if (toDate && done.length === 0) out.push({ key: "plan-none", node: frame(SECTIONS[1], (
       <><div className="ps-kick">ВИКОНАННЯ ПЛАНУ · З 1 {monthWord.toUpperCase()} · СТАНОМ НА {dm(today)}</div>
         <div className="ps-h">План виконали</div>
         <div className="ps-manual"><div className="ps-mtext">Станом на {dm(today)} план від 1 {monthWord} ще ніхто не виконав на 100%.</div></div></>
     )) });
-    for (const g of done) out.push({ key: `plan-${g.team}`, node: frame(1, (
+    for (const g of done) out.push({ key: `plan-${g.team}`, node: frame(SECTIONS[1], (
       <>
         <div className="ps-kick">ВИКОНАННЯ ПЛАНУ · З 1 {monthWord.toUpperCase()} · СТАНОМ НА {dm(today)}</div>
         <div className="ps-h">План виконали</div>
@@ -178,7 +271,7 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
 
     if (month) {
       const g = month.glance;
-      out.push({ key: "summary", node: frame(2, (
+      out.push({ key: "summary", node: frame(SECTIONS[2], (
         <>
           <div className="ps-kick">НА ЗАВЕРШЕННЯ</div>
           <div className="ps-h">Дякуємо за увагу!</div>

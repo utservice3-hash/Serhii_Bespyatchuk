@@ -210,31 +210,111 @@ export function snapshotRows(view: WeekView): SnapshotRow[] {
 }
 
 
-// ───────────────────────── ручні слайди презентації (прохід 2) ─────────────────────────
+// ───────────────────────── ручні слайди презентації: ШАБЛОНИ (21.09.2026) ─────────────────────────
+//
+// Шаблони — зі слайдів самої Даші (`UTS_weekly_meeting_template.pptx`): поля й тексти за
+// замовчуванням перенесено звідти дослівно, щоб слайд виходив таким, яким його вже знають на
+// зустрічі. Реєстр ОДИН: сервер перевіряє за ним тіло, фронт будує з нього форму, а презентація
+// мусить мати верстку для КОЖНОГО шаблону (#614) — «додав шаблон і забув верстку» не пройде тихо.
 
-export type ManualKind = "newcomer" | "birthday" | "news" | "custom";
-export const MANUAL_KINDS: readonly { key: ManualKind; label: string }[] = [
-  { key: "newcomer", label: "Вітаємо в команді!" },
-  { key: "birthday", label: "З Днем народження!" },
-  { key: "news", label: "Новини" },
-  { key: "custom", label: "Довільний слайд" },
+export type ManualKind = "newcomer" | "birthday" | "news" | "contest" | "webinar" | "custom";
+export interface TemplateField { key: string; label: string; required: boolean; max: number; multiline?: boolean; placeholder?: string; default?: string }
+export interface SlideTemplate { key: ManualKind; label: string; fields: readonly TemplateField[] }
+
+const CONTEST_RULES = [
+  "Тривалість конкурсу — один тиждень.",
+  "Вхідний квиток — мінімум 20 лідів за тиждень.",
+  "У залік ідуть тільки угоди, створені по рекламі.",
+  "Перемагає найбільша сума відправлених авто, а не їх кількість.",
+  "Підсумки підбивають [дата] — строго те, що є в CRM.",
+].join("\n");
+const WEBINAR_POINTS = [
+  "Прорахунок — як швидко та точно рахувати рейс, щоб не втрачати маржу",
+  "Торг — техніки домовленості про кращу ставку з клієнтом",
+  "Угода — як закривати рейс на максимальній сумі",
+].join("\n");
+
+export const SLIDE_TEMPLATES: readonly SlideTemplate[] = [
+  { key: "newcomer", label: "Новий працівник", fields: [
+    { key: "headline", label: "Кого вітаємо (посада, команда)", required: true, max: 140, placeholder: "Вітаємо нового менеджера РНК в команді Андрія Безпамʼятного (період адаптації)" },
+    { key: "person", label: "Прізвище Імʼя", required: true, max: 80 },
+    { key: "achievement", label: "Досягнення (необовʼязково)", required: false, max: 120, placeholder: "Вітаємо з 8ми поставленими машинами!" },
+    { key: "wish", label: "Побажання", required: false, max: 160, default: "Легкого старту та сильних результатів!" },
+    { key: "date", label: "Дата", required: false, max: 20, placeholder: "22.09.2026" },
+  ] },
+  { key: "birthday", label: "День народження", fields: [
+    { key: "person", label: "Кого вітаємо (у формі «Сердюка Ярослава»)", required: true, max: 80 },
+    { key: "date", label: "Дата народження", required: true, max: 20, placeholder: "27.08" },
+    { key: "wish", label: "Побажання", required: false, max: 300, multiline: true,
+      default: "Бажаємо міцного здоровʼя, натхнення, професійних перемог і якнайбільше приємних моментів разом із командою UTS!" },
+  ] },
+  { key: "news", label: "Новини", fields: [
+    { key: "title", label: "Заголовок", required: false, max: 60, default: "Новини!" },
+    { key: "text", label: "Новина", required: true, max: 400, multiline: true, placeholder: "Ковтонюк Тетяна переходить до команди РНК Андрія Безпамʼятного." },
+    { key: "wish", label: "Побажання", required: false, max: 160, default: "Бажаємо успіхів у нових ролях та команді! 🚀" },
+  ] },
+  { key: "contest", label: "Конкурс тижня", fields: [
+    { key: "title", label: "Заголовок", required: false, max: 60, default: "Три місця на пʼєдесталі" },
+    { key: "description", label: "Умова", required: true, max: 240, multiline: true,
+      default: "Перемагає той, хто відправить авто по угодах із реклами на найбільшу суму за тиждень. Прозорий залік, реальні призові." },
+    { key: "prize1", label: "1 місце", required: true, max: 30, default: "1 200 грн" },
+    { key: "prize2", label: "2 місце", required: true, max: 30, default: "800 грн" },
+    { key: "prize3", label: "3 місце", required: true, max: 30, default: "400 грн" },
+    { key: "rules", label: "Правила (кожне з нового рядка)", required: false, max: 600, multiline: true, default: CONTEST_RULES },
+    { key: "total", label: "На кону цього тижня", required: false, max: 30, default: "2 400 грн" },
+  ] },
+  { key: "webinar", label: "Анонс / вебінар", fields: [
+    { key: "title", label: "Заголовок", required: false, max: 60, default: "Навчальний вебінар" },
+    { key: "description", label: "Опис", required: false, max: 200, multiline: true,
+      default: "Плануємо навчальний вебінар для команди — деталі нижче. Приєднуйтесь, буде корисно." },
+    { key: "when", label: "Коли", required: true, max: 40, placeholder: "ПʼЯТНИЦЯ · 16:00" },
+    { key: "topic", label: "Тема", required: true, max: 120, placeholder: "Прорахунок → Торг → Угода: як заробляти на кожному перевезенні" },
+    { key: "speaker", label: "Спікер", required: false, max: 60, default: "Операційний директор" },
+    { key: "format", label: "Формат", required: false, max: 40, default: "Онлайн" },
+    { key: "audience", label: "Для кого", required: false, max: 60, default: "Уся команда" },
+    { key: "points", label: "Що розглянемо (кожен пункт з нового рядка)", required: false, max: 600, multiline: true, default: WEBINAR_POINTS },
+  ] },
+  { key: "custom", label: "Довільний слайд", fields: [
+    { key: "title", label: "Заголовок", required: true, max: 80 },
+    { key: "person", label: "Людина (необовʼязково)", required: false, max: 80 },
+    { key: "body", label: "Текст", required: false, max: 600, multiline: true },
+  ] },
 ];
-export interface ManualSlideInput { weekFrom: string; kind: ManualKind; title: string; person: string | null; body: string | null; position: number }
+/** Сумісність зі старими викликами: перелік шаблонів як «типів». */
+export const MANUAL_KINDS: readonly { key: ManualKind; label: string }[] = SLIDE_TEMPLATES.map((t) => ({ key: t.key, label: t.label }));
+
+export interface ManualSlideInput {
+  weekFrom: string; kind: ManualKind; fields: Record<string, string>; position: number;
+  /** Похідні для переліку в редакторі й для старих колонок: назва рядка й людина. */
+  title: string; person: string | null;
+}
+
+/** Підпис рядка в переліку ручних слайдів — щоб у редакторі було видно, що це за слайд. */
+export function slideListTitle(kind: ManualKind, f: Record<string, string>): string {
+  const lbl = SLIDE_TEMPLATES.find((t) => t.key === kind)?.label ?? kind;
+  const who = f.person || f.topic || (f.text ? f.text.slice(0, 50) : "") || f.title || "";
+  return (kind === "custom" ? f.title : who ? `${lbl} · ${who}` : lbl).slice(0, 80);
+}
 
 /**
- * Тіло ручного слайда (#607). Заголовок обовʼязковий (порожній слайд на зустрічі — це дірка в
- * показі, а не «нема що сказати»); довжини обмежені, щоб текст влазив у слайд 16:9.
+ * Тіло ручного слайда за шаблоном (#607, #613). Обовʼязкові поля шаблону — непорожні; зайві ключі
+ * відкидаються; кожне поле обрізається до своєї довжини, щоб текст влазив у слайд 16:9.
+ * Старий формат (`title`/`person`/`body` без `fields`) приймається як «довільний» слайд.
  */
 export function validateManualSlide(body: unknown): { ok: true; value: ManualSlideInput } | { ok: false; error: string } {
   const b = (body ?? {}) as Record<string, unknown>;
   const weekFrom = typeof b.weekFrom === "string" && /^\d{4}-\d{2}-\d{2}$/.test(b.weekFrom) ? b.weekFrom : null;
   if (!weekFrom || weekOf(weekFrom).from !== weekFrom) return { ok: false, error: "weekFrom — понеділок тижня у форматі YYYY-MM-DD" };
-  if (!MANUAL_KINDS.some((k) => k.key === b.kind)) return { ok: false, error: "невідомий тип слайда" };
-  const s = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
-  const title = s(b.title, 80);
-  if (!title) return { ok: false, error: "вкажіть заголовок слайда" };
-  const person = s(b.person, 80) || null;
-  const text = s(b.body, 600) || null;
+  const tpl = SLIDE_TEMPLATES.find((t) => t.key === b.kind);
+  if (!tpl) return { ok: false, error: "невідомий шаблон слайда" };
+  const raw = (b.fields && typeof b.fields === "object" ? b.fields : { title: b.title, person: b.person, body: b.body }) as Record<string, unknown>;
+  const fields: Record<string, string> = {};
+  for (const f of tpl.fields) {
+    const v = typeof raw[f.key] === "string" ? (raw[f.key] as string).trim().slice(0, f.max) : "";
+    if (f.required && !v) return { ok: false, error: `заповніть поле «${f.label}»` };
+    if (v) fields[f.key] = v;
+  }
   const position = Number.isInteger(Number(b.position)) ? Number(b.position) : 0;
-  return { ok: true, value: { weekFrom, kind: b.kind as ManualKind, title, person, body: text, position } };
+  const title = slideListTitle(tpl.key, fields) || tpl.label;
+  return { ok: true, value: { weekFrom, kind: tpl.key, fields, position, title, person: fields.person ?? null } };
 }

@@ -3901,3 +3901,10 @@ REVOKE ALL ON employee_offboarding FROM ai_readonly;
 -- документів не змінюється: розділ `personal` без адресата бачить лише керівництво (`canSeeDocument`).
 ALTER TABLE doc_files ADD COLUMN IF NOT EXISTS employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_doc_files_employee ON doc_files(employee_id) WHERE employee_id IS NOT NULL;
+
+-- 🎞 ШАБЛОНИ РУЧНИХ СЛАЙДІВ (21.09.2026): поля шаблону — у `fields` (JSON), перелік шаблонів —
+-- `SLIDE_TEMPLATES` у `core/nominationRules.ts`. `title`/`person` лишаються похідними для переліку.
+ALTER TABLE nomination_manual_slides ADD COLUMN IF NOT EXISTS fields JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE nomination_manual_slides DROP CONSTRAINT IF EXISTS nomination_manual_slides_kind_check;
+ALTER TABLE nomination_manual_slides ADD CONSTRAINT nomination_manual_slides_kind_check
+  CHECK (kind IN ('newcomer','birthday','news','contest','webinar','custom'));

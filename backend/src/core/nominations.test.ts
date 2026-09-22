@@ -190,14 +190,15 @@ test("#606 рядок знімка тримає фінальне число І �
 
 test("#607 ручний слайд: без заголовка й з чужим типом — відмова; довгий текст обрізається до слайда", async () => {
   const { validateManualSlide } = await import("./nominationRules.js");
-  const base = { weekFrom: "2026-09-14", kind: "newcomer" };
+  // «Довільний» шаблон — прямий спадкоємець старого формату (title/person/body без `fields`).
+  const base = { weekFrom: "2026-09-14", kind: "custom" };
   assert.equal(validateManualSlide({ ...base, title: "   " }).ok, false, "🔴 слайд без заголовка пройшов");
   assert.equal(validateManualSlide({ ...base, kind: "meme", title: "x" }).ok, false, "🔴 невідомий тип пройшов");
   assert.equal(validateManualSlide({ ...base, weekFrom: "2026-09-16", title: "x" }).ok, false, "🔴 тиждень не з понеділка");
-  // 🪞 Дзеркало: нормальний слайд проходить, порожні необовʼязкові поля стають null, текст — у межах слайда.
+  // 🪞 Дзеркало: нормальний слайд проходить, порожні необовʼязкові поля відпадають, текст — у межах слайда.
   const ok = validateManualSlide({ ...base, title: " Вітаємо в команді! ", person: "  ", body: "а".repeat(900), position: "2" });
   assert.ok(ok.ok);
-  if (ok.ok) assert.deepEqual([ok.value.title, ok.value.person, ok.value.body?.length, ok.value.position], ["Вітаємо в команді!", null, 600, 2]);
+  if (ok.ok) assert.deepEqual([ok.value.title, ok.value.person, ok.value.fields.body?.length, ok.value.position], ["Вітаємо в команді!", null, 600, 2]);
 });
 
 /**
@@ -212,4 +213,42 @@ test("#609 слайди беруть числа лише зі Звіту й но
   assert.match(src, /month\.glance/, "🔴 «Підсумки» більше не з верху Звіту");
   assert.doesNotMatch(src, /m\.fact\s*\/\s*m\.plan/, "🔴 слайд сам рахує виконання менеджера — має брати `pct` Звіту");
   assert.doesNotMatch(src, /\/api\/dashboard\/(?!report-plan)|api\.get\(/, "🔴 презентація ходить у сторонній ендпоінт");
+});
+
+/**
+ * #613 — ШАБЛОНИ РУЧНИХ СЛАЙДІВ: для КОЖНОГО шаблону порожнє обовʼязкове поле — відмова, а
+ * заповнені лише обовʼязкові — слайд. Червоніє, якщо шаблон перестане вимагати своє або почне
+ * вимагати зайве; і якщо реєстр втратить хоч один із шести Дашиних шаблонів.
+ */
+test("#613 шаблони слайдів: кожен вимагає рівно свої обовʼязкові поля, і їх шість — як у Даші", async () => {
+  const { SLIDE_TEMPLATES, validateManualSlide } = await import("./nominationRules.js");
+  assert.deepEqual(SLIDE_TEMPLATES.map((t) => t.key), ["newcomer", "birthday", "news", "contest", "webinar", "custom"]);
+  for (const t of SLIDE_TEMPLATES) {
+    const req = t.fields.filter((f) => f.required);
+    assert.ok(req.length > 0, `🔴 шаблон «${t.label}» не має жодного обовʼязкового поля — слайд вийде порожнім`);
+    const full = Object.fromEntries(req.map((f) => [f.key, "x"]));
+    const ok = validateManualSlide({ weekFrom: "2026-09-14", kind: t.key, fields: full });
+    assert.ok(ok.ok, `🔴 «${t.label}» з усіма обовʼязковими полями не пройшов: ${ok.ok ? "" : ok.error}`);
+    for (const f of req) {
+      const miss = validateManualSlide({ weekFrom: "2026-09-14", kind: t.key, fields: { ...full, [f.key]: "  " } });
+      assert.equal(miss.ok, false, `🔴 «${t.label}» пройшов без поля «${f.label}»`);
+    }
+    // Зайвий ключ не потрапляє в збережене.
+    const extra = validateManualSlide({ weekFrom: "2026-09-14", kind: t.key, fields: { ...full, hack: "x" } });
+    assert.ok(extra.ok && !("hack" in extra.value.fields), `🔴 «${t.label}» зберіг чужий ключ`);
+  }
+});
+
+/**
+ * #614 — У ПРЕЗЕНТАЦІЇ Є ВЕРСТКА ДЛЯ КОЖНОГО ШАБЛОНУ, І НЕМАЄ ДЛЯ НЕІСНУЮЧИХ. Читає джерело
+ * `NominationsPresentation.tsx`: кожен ключ реєстру має свою гілку `case "<ключ>"`, а кожна гілка —
+ * ключ у реєстрі. «Додав шаблон і забув верстку» (слайд вийшов би порожнім) червоніє тут.
+ */
+test("#614 кожен шаблон слайда має верстку в презентації, і навпаки", async () => {
+  const { SLIDE_TEMPLATES } = await import("./nominationRules.js");
+  const src = readFileSync(fileURLToPath(new URL("../../../frontend/src/pages/dashboard/sections/NominationsPresentation.tsx", import.meta.url).href.replace("/backend/dist/", "/backend/src/").replace("/backend/src/../../../", "/")), "utf8");
+  const block = src.slice(src.indexOf("function templateSlide("));
+  assert.ok(block.length > 100, "🔴 у презентації немає функції templateSlide — гейт втратив предмет");
+  const cases = [...block.matchAll(/case "([a-z]+)"/g)].map((m) => m[1]).sort();
+  assert.deepEqual(cases, SLIDE_TEMPLATES.map((t) => t.key).sort(), "🔴 набір верстки слайдів ≠ набір шаблонів");
 });
