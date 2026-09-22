@@ -21,7 +21,7 @@ import {
   trainingBoard, trainingDetail, issueInvite, issueCandidatePassword, linkCandidateAccount, freeCandidateAccounts, extendAccess, restoreAccess, promoteCandidate, answerQuestion,
 } from "../core/hiringTraining.js";
 import { CANDIDATE_ACCESS, canDecideTraining } from "../core/hiringTrainingRules.js";
-import { hiringSummary } from "../core/hiringFunnel.js";
+import { hiringSummary, vacancyFunnels } from "../core/hiringFunnel.js";
 import { listTemplates, createTemplate, setTemplateActive, offerForm, offerState, generateOffer, offerStates, type Store, type Load } from "../core/offers.js";
 import { notifyOfferOnce } from "../jobs/offerReminders.js";
 
@@ -301,7 +301,9 @@ hiringRouter.get("/vacancies", async (req, res) => {
   try {
     onlyEdit(req);
     const scope = req.query.scope === "closed" || req.query.scope === "all" ? req.query.scope : "active";
-    res.json({ rows: await listVacancies(pool as unknown as Db, scope) });
+    // 💼 Воронка кожної вакансії — з того самого розрахунку, що й «Зведення» (#626/#627).
+    const [rows, funnels] = await Promise.all([listVacancies(pool as unknown as Db, scope), vacancyFunnels(pool as unknown as Db)]);
+    res.json({ rows: rows.map((v) => ({ ...v, funnel: funnels[v.id as number] ?? null })) });
   } catch (e) { fail(res, e); }
 });
 

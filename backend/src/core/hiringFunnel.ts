@@ -79,6 +79,53 @@ export function buildCut(cs: FunnelCandidate[], keyOf: (c: FunnelCandidate) => {
   return [...rows.values()].sort((a, b) => b.added - a.added);
 }
 
+/**
+ * 💼 ВОРОНКА ВАКАНСІЇ (22.09.2026, нова вкладка «Вакансії»). Та сама «дійшов за найдальшим етапом», що й у
+ * «Зведенні» (`reachedRank`), але для КОЖНОЇ вакансії окремо і без періоду: кандидатів · співбесід (відбулась і
+ * далі) · навчання (на навчанні і далі) · менеджер (= «прийнято» на картці вакансії). Кандидат на двох вакансіях
+ * рахується в обох, як і в розрізі `buildCut`. «Нових без контакту» — статус «новий» ЗАРАЗ (факт, без порогу).
+ * `lastAddedDays` — скільки днів тому додано останнього кандидата; порогу «давно» тут немає свідомо — його не
+ * назвали (ВІДКРИТЕ ПИТАННЯ до Івана), тож екран показує число, а не тривогу. Тримає #626/#627.
+ */
+export interface VacancyFunnel {
+  candidates: number; interviews: number; training: number; managers: number; fresh: number;
+  lastAddedDays: number | null; sources: { label: string; n: number }[];
+}
+export function buildVacancyFunnels(cs: (FunnelCandidate & { added_days: number })[]): Record<number, VacancyFunnel> {
+  const out: Record<number, VacancyFunnel> = {};
+  for (const c of cs) for (const v of c.vacancies) {
+    const f = out[v.id] ??= { candidates: 0, interviews: 0, training: 0, managers: 0, fresh: 0, lastAddedDays: null, sources: [] };
+    const rr = reachedRank(c);
+    f.candidates++;
+    if (rr >= RANK.done) f.interviews++;
+    if (rr >= RANK.training) f.training++;
+    if (rr >= RANK.manager) f.managers++;
+    if (c.status === "new") f.fresh++;
+    f.lastAddedDays = f.lastAddedDays == null ? c.added_days : Math.min(f.lastAddedDays, c.added_days);
+    const label = c.source ?? "джерело не вказано";
+    const s = f.sources.find((x) => x.label === label);
+    if (s) s.n++; else f.sources.push({ label, n: 1 });
+  }
+  for (const f of Object.values(out)) f.sources.sort((a, b) => b.n - a.n);
+  return out;
+}
+
+/** Кандидати з історією статусів і вакансіями — один SELECT на зведення й на вакансії, щоб «дійшов» не розійшлось. */
+const CANDIDATES_SQL = (where: string) =>
+  `SELECT c.id, NULLIF(btrim(c.source), '') AS source, c.status, c.refusal_side, rr.label AS refusal_reason, (c.reserved_at IS NOT NULL) AS reserved,
+          COALESCE((SELECT array_agg(DISTINCT e.to_status) FROM hiring_events e WHERE e.candidate_id = c.id AND e.to_status IS NOT NULL), '{}') AS visited,
+          COALESCE((SELECT json_agg(json_build_object('id', v.id, 'title', v.title)) FROM hiring_candidate_vacancies cv
+                      JOIN hiring_vacancies v ON v.id = cv.vacancy_id WHERE cv.candidate_id = c.id), '[]') AS vacancies,
+          ((now() AT TIME ZONE 'Europe/Kyiv')::date - (c.created_at AT TIME ZONE 'Europe/Kyiv')::date)::int AS added_days
+     FROM hiring_candidates c LEFT JOIN hiring_refusal_reasons rr ON rr.id = c.refusal_reason_id
+    WHERE ${where}`;
+
+export async function vacancyFunnels(db: Db): Promise<Record<number, VacancyFunnel>> {
+  const cs = (await db.query<FunnelCandidate & { added_days: number }>(
+    CANDIDATES_SQL(`EXISTS (SELECT 1 FROM hiring_candidate_vacancies cv WHERE cv.candidate_id = c.id)`))).rows;
+  return buildVacancyFunnels(cs);
+}
+
 const KYIV = (col: string) => `(${col} AT TIME ZONE 'Europe/Kyiv')::date`;
 const isDate = (s: unknown): s is string => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
 
@@ -96,13 +143,7 @@ export async function hiringSummary(db: Db, q: { from?: unknown; to?: unknown; v
     if (q.source === "—") where += ` AND NULLIF(btrim(c.source), '') IS NULL`;
     else { params.push(q.source); where += ` AND c.source = $${params.length}`; }
   }
-  const cs = (await db.query<FunnelCandidate>(
-    `SELECT c.id, NULLIF(btrim(c.source), '') AS source, c.status, c.refusal_side, rr.label AS refusal_reason, (c.reserved_at IS NOT NULL) AS reserved,
-            COALESCE((SELECT array_agg(DISTINCT e.to_status) FROM hiring_events e WHERE e.candidate_id = c.id AND e.to_status IS NOT NULL), '{}') AS visited,
-            COALESCE((SELECT json_agg(json_build_object('id', v.id, 'title', v.title)) FROM hiring_candidate_vacancies cv
-                        JOIN hiring_vacancies v ON v.id = cv.vacancy_id WHERE cv.candidate_id = c.id), '[]') AS vacancies
-       FROM hiring_candidates c LEFT JOIN hiring_refusal_reasons rr ON rr.id = c.refusal_reason_id
-      WHERE ${where}`, params)).rows;
+  const cs = (await db.query<FunnelCandidate>(CANDIDATES_SQL(where), params)).rows;
   const side = {
     noshow: cs.filter((c) => c.status === "noshow" || c.visited.includes("noshow")).length,
     noanswer: cs.filter((c) => c.status === "noanswer" || c.visited.includes("noanswer")).length,
