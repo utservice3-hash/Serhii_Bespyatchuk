@@ -1,4 +1,4 @@
-import { STAGE_NAMES } from "./stageNames.js";
+import { STAGE_NAMES, FC_LOST_STAGE_NAME } from "./stageNames.js";
 
 /**
  * 🧺 КОРЗИНИ ГРОШЕЙ — ЯВНИЙ РЕЄСТР УСІХ СТАДІЙ ОБОХ FC-ВОРОНОК.
@@ -43,7 +43,10 @@ export const RECEIVED_STATUSES = [69716460, 60412544];
  */
 export const AWAITING_STATUSES = [100274340, 69716300, 98470988, 69716304, 69716312, 10937178, 42639144, 42639147, 25044997, 62940068];
 
-/** ❌ Провал — «Закрито і не реалізовано». У `STAGE_NAMES` його немає, тож названий тут. */
+/**
+ * ❌ Провал — «Закрито і не реалізовано». У `STAGE_NAMES` його немає (там лише реєстр FC для `#45`);
+ * назва — ОДНИМ літералом `FC_LOST_STAGE_NAME` у `stageNames.ts`, число — тут, і `money.ts` бере його звідси.
+ */
 export const STATUS_LOST = 143;
 export const LOST_STATUSES = [STATUS_LOST];
 
@@ -104,7 +107,7 @@ export function allFcStatuses(): FcStatus[] {
     const [p, s] = k.split(":");
     return { pipelineId: Number(p), statusId: Number(s), name: STAGE_NAMES[k] };
   });
-  for (const p of [8921932, 155304]) out.push({ pipelineId: p, statusId: STATUS_LOST, name: "Закрито і не реалізовано" });
+  for (const p of [8921932, 155304]) out.push({ pipelineId: p, statusId: STATUS_LOST, name: FC_LOST_STAGE_NAME });
   return out;
 }
 

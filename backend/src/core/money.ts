@@ -6,6 +6,10 @@ import { pool } from "../db/pool.js";
 import { adDealSql, EXPECT_ZONE } from "./metrics.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
 import { managerDealClass, type DealState } from "./leadgenHandoffRules.js";
+// 🔚 «Закрито і не реалізовано» (143) — ОДНА константа на продукт, з реєстру корзин. У грошових
+// сумах ядра її немає; вона потрібна лише класу угоди менеджера з передачі (у Кваліфікації той
+// самий 143 зветься «Не цільові» / «Сміття»). Друга копія тут розійшлась би мовчки.
+import { STATUS_LOST } from "./moneyBuckets.js";
 
 /**
  * ЄДИНЕ джерело грошових метрик (MASTER_PLAN КРОК 2, виправлено КРОКОМ 4 — опція Б).
@@ -1142,13 +1146,6 @@ export async function receivedUndefDeals(s: MoneyScope): Promise<UndefDealRow[]>
 }
 
 /**
- * 🔚 «ЗАКРИТО І НЕ РЕАЛІЗОВАНО» — системний статус Kommo, однаковий у КОЖНІЙ воронці
- * (у Кваліфікації він зветься «Не цільові» / «Сміття»). У грошових сумах ядра його немає —
- * він потрібен лише класу угоди менеджера з передачі.
- */
-export const STATUS_CLOSED_LOST = 143;
-
-/**
  * 💰 СТАН І БЮДЖЕТ УГОД МЕНЕДЖЕРА, ЩО ВИРОСЛИ З ПЕРЕДАЧ ЛІДГЕНА — ЗАРАЗ (правило 4 власника).
  *
  * Гроші живуть лише тут (правило `money-core`), тож ядро лідогену знаходить угоду, а її клас
@@ -1178,7 +1175,7 @@ export async function handoffDealStates(dealIds: readonly number[]): Promise<Map
   );
   const rules = {
     fcPipelines: FC_PIPELINES, success: STAGE_SUCCESS, paid: STAGE_PAID,
-    expectZone: EXPECT_ZONE, lostStatus: STATUS_CLOSED_LOST,
+    expectZone: EXPECT_ZONE, lostStatus: STATUS_LOST,
   };
   for (const x of r.rows) {
     const pipelineId = Number(x.pipeline_id), statusId = Number(x.status_id);
