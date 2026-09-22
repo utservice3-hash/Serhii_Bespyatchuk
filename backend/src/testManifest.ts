@@ -235,6 +235,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/peoplePhotos.test.js",
   "routes/nominationPhotos.test.js",
   "core/adCallFacts.test.js",
+  "core/callAiSchema.test.js",
 ];
 
 /**
@@ -257,6 +258,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "hiring_invites",
   "hiring_training_questions",
   "employee_offboarding",
+  "call_transcripts", "call_analyses", "ai_spend_ledger",
 ];
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
@@ -920,6 +922,9 @@ export const MANIFEST_TESTS: string[] = [
   "#651b ТИША ПЕРЕД ЗАКРИТТЯМ: межа порогу, лише програні, спроба гасить, поріг без значення за замовчуванням",
   "#652 НОМЕР УГОДИ: чотири причини окремо, «номер не визначено» лише без дзвінків",
   "#652b ПАРАМЕТРИ БЕЗ ЗНАЧЕНЬ ЗА ЗАМОВЧУВАННЯМ: не задано → «не налаштовано» (вид config)",
+  // core/callAiSchema.test.ts — таблиці AI-аналізу, прохід A, коміт ② (22.09.2026)
+  "#653 AI-АНАЛІЗ: кожна таблиця блоку відібрана в ai_readonly після CREATE і є у FORBIDDEN_TABLES",
+  "#653b AI-АНАЛІЗ · ЖИВА СХЕМА: двічі накочується, закрито для AI, стан обовʼязковий, дубль неможливий",
   // core/missedCalls.test.ts — ТЗ-1 «Пропущені дзвінки» (14.09.2026)
   // 🔢 ДЕСЯТКА #43x, А НЕ #42x — ПЕРЕНУМЕРОВАНО ПРИ МЕРЖІ 15.09.2026. Писалось як
   // #421-#430 за правилом «найвищий змерджений +1» (тоді #419). Поки прохід ішов, у

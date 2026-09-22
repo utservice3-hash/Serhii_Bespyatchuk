@@ -3918,3 +3918,69 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_file TEXT;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_prev TEXT;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_updated_at TIMESTAMPTZ;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+
+-- ▼ AI-АНАЛІЗ ДЗВІНКІВ ПО РЕКЛАМНИХ ЛІДАХ (ТЗ 22.09.2026, прохід A, коміт ②) ▼
+-- Три таблиці з ІСТОРІЄЮ: жодного TRUNCATE, жодного перезапису. Старий шлях (uts-bot → Google-лист →
+-- `first_touch_analysis` через TRUNCATE+insert) історії не мав — тут вона обовʼязкова.
+-- 🔒 Тексти розмов — персональні дані клієнтів: усі таблиці блоку відібрані в `ai_readonly` одразу після
+-- створення і є у `FORBIDDEN_TABLES`. Гейт `#653` бере перелік таблиць САМЕ З ЦЬОГО БЛОКУ (між маркерами),
+-- тож нова таблиця без REVOKE червоніє, навіть якщо її забули вписати в перелік.
+-- 🔴 Стан рядка ОБОВʼЯЗКОВИЙ і з переліку: «нуля» чи NULL замість «не ввімкнено / збій / стеля» не буває.
+-- ⚠️ revert коду таблиць не прибирає; нічні бекапи копіюють їх разом із рештою (рішення власника — відкрите).
+CREATE TABLE IF NOT EXISTS call_transcripts (
+  id           BIGSERIAL PRIMARY KEY,
+  uniqueid     TEXT NOT NULL,              -- ringostat_calls.uniqueid; без FK — історія переживає перезапис CDR
+  provider     TEXT NOT NULL,
+  model        TEXT NOT NULL,
+  status       TEXT NOT NULL CHECK (status IN
+                 ('queued','working','done','failed','not_enabled','capped','recording_unavailable')),
+  attempts     INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  claimed_at   TIMESTAMPTZ,                -- коли взято в роботу: завислий «working» повертається в чергу
+  failure      TEXT,                       -- очищена причина — без URL запису й без ключів
+  channels     INTEGER,
+  duration_sec NUMERIC,                    -- тривалість аудіо — одиниця оплати розпізнавання
+  segments     JSONB,                      -- [{speaker:'manager'|'client', channel, start, end, text}]
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (uniqueid, provider, model)
+);
+CREATE INDEX IF NOT EXISTS idx_call_transcripts_status ON call_transcripts(status, updated_at);
+REVOKE ALL ON call_transcripts FROM ai_readonly;
+
+CREATE TABLE IF NOT EXISTS call_analyses (
+  id             BIGSERIAL PRIMARY KEY,
+  transcript_id  BIGINT NOT NULL REFERENCES call_transcripts(id) ON DELETE CASCADE,
+  provider       TEXT NOT NULL,
+  model          TEXT NOT NULL,
+  rubric_version TEXT NOT NULL,            -- нова рубрика = новий рядок, старий лишається
+  status         TEXT NOT NULL CHECK (status IN ('queued','working','done','failed','not_enabled','capped')),
+  attempts       INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  claimed_at     TIMESTAMPTZ,
+  failure        TEXT,
+  result         JSONB,                    -- ціна / заперечення / обіцянки з цитатами; цитати звірені кодом
+  input_tokens   INTEGER,
+  output_tokens  INTEGER,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (transcript_id, model, rubric_version)
+);
+CREATE INDEX IF NOT EXISTS idx_call_analyses_status ON call_analyses(status, updated_at);
+REVOKE ALL ON call_analyses FROM ai_readonly;
+
+-- Журнал витрат: ЛИШЕ ДОПИСУЄТЬСЯ. Денна й місячна суми рахуються звідси (стеля перевіряється ДО виклику).
+-- `unit_price_usd` — ціна за одиницю НА МОМЕНТ виклику; NULL = ціну не задано, і тоді стеля «закрита»
+-- (виклик не відбувається), а не «безкоштовно».
+CREATE TABLE IF NOT EXISTS ai_spend_ledger (
+  id             BIGSERIAL PRIMARY KEY,
+  at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  provider       TEXT NOT NULL,
+  operation      TEXT NOT NULL,            -- stt | analysis | pilot_stt | pilot_analysis
+  uniqueid       TEXT,
+  units          NUMERIC NOT NULL CHECK (units >= 0),
+  unit           TEXT NOT NULL,            -- audio_sec | input_tokens | output_tokens
+  unit_price_usd NUMERIC CHECK (unit_price_usd IS NULL OR unit_price_usd >= 0),
+  usd            NUMERIC GENERATED ALWAYS AS (units * unit_price_usd) STORED
+);
+CREATE INDEX IF NOT EXISTS idx_ai_spend_ledger_at ON ai_spend_ledger(at);
+REVOKE ALL ON ai_spend_ledger FROM ai_readonly;
+-- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
