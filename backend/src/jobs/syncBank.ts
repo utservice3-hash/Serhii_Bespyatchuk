@@ -86,7 +86,7 @@ export async function syncBank(): Promise<{ synced: number; inserted: number; sk
       failed.push({ label: acc.label, error: (e as Error).message });
     }
   }
-  // ...але після циклу збій стає помилкою ДЖОБИ, інакше `runJob` запише успіх (#647).
+  // ...але після циклу збій стає помилкою ДЖОБИ, інакше `runJob` запише успіх (#660).
   const outcome = syncBankOutcome({ failed, noToken: skipped });
   if (!outcome.ok) throw new Error(outcome.error);
   return { synced, inserted, skipped };
