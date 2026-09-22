@@ -67,7 +67,11 @@ import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
 import { adPlanForPeriod } from "../core/adBudget.js";
 import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, leadgenWeekly, leadGeneratorFill,
-  pct, leadGeneratorFillNote, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS } from "../core/leadgenStats.js";
+  pct, leadGeneratorFillNote, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS,
+  leadgenBuckets, sumBuckets, personBucketWire, leadgenHandoffMoney, leadgenTrend, leadgenManagerTeam,
+} from "../core/leadgenStats.js";
+import { handoffMoneyWire, personMoneyWire, bucketMoneyWire, bucketPersonMoneyWire, handoffDealsScope,
+  leadgenAuthScope, parseLeadgenGrain, parseTrendMonths, parseManagerIdParam } from "../core/leadgenHandoffRules.js";
 import * as expectSplit from "../core/expectSplit.js";
 import { FUNNEL_STAGE_LABELS, stageName } from "../core/stageNames.js";
 import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL } from "../core/orphanClients.js";
@@ -95,7 +99,7 @@ import {
 import { canRequestLimitFor, canAssignTaskToOthers } from "../auth/taskAssignScope.js";
 import { activeManagerSql } from "../core/activeManager.js";
 import * as managerState from "../core/managerState.js";
-import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf, kyivToday } from "../core/dates.js";
+import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf, kyivToday, isRealDate } from "../core/dates.js";
 import { weekPlansForMonth } from "../core/weekPlan.js";
 import { sumDaysIntoBlocks } from "../core/weekFacts.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
@@ -335,14 +339,20 @@ dashboardRouter.get("/leadgen", async (req, res) => {
 dashboardRouter.get("/leadgen-stats", async (req, res) => {
   const auth = req.auth!;
   if (auth.role === "manager") return res.status(403).json({ error: "Forbidden" });
-  const from = (req.query.from as string) ?? null;
-  const to = (req.query.to as string) ?? null;
+  // Порожнє = «не задано» (`dateParam`), а неіснуюча дата — 400, а не 500 з глибини запиту.
+  const from = dateParam(req.query.from);
+  const to = dateParam(req.query.to);
   if (!from || !to) return res.status(400).json({ error: "Потрібні from і to" });
-  // Тімлід — тільки своя команда, кламп на СЕРВЕРІ.
-  const teamId = auth.role === "team_lead" ? (auth.teamId ?? -1) : null;
+  if (!isRealDate(from) || !isRealDate(to)) return res.status(400).json({ error: "from і to — дати YYYY-MM-DD" });
+  const grain = parseLeadgenGrain(req.query.grain);
+  if (grain === "bad") return res.status(400).json({ error: "grain — day або week" });
+  // Тімлід — тільки своя команда, кламп на СЕРВЕРІ — ОДНИМ помічником на три роути екрана:
+  // той самий скоуп ріже рядки, розбивку й гроші з передач (`#681b` стереже, що в ядро йде він).
+  const scope = leadgenAuthScope(auth);
+  const teamId = scope.teamId;
 
   const { adSources } = await overviewCache.call("getSettings", getSettings);
-  const [stats, dispatched, byChannel, closures, handoffs, warmingNow, weeks, lgFill] = await Promise.all([
+  const [stats, dispatched, byChannel, closures, handoffs, warmingNow, weeks, lgFill, bucketRows, hm] = await Promise.all([
     leadgenStats(from, to),
     metrics.dispatchedByLoadBucket({ from, to }, "month", "leadgen"),
     money.receivedByChannel({ from, to }, adSources),
@@ -351,6 +361,11 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
     leadgenWarmingBacklog(),
     leadgenWeekly(from, to),
     leadGeneratorFill(from, to),
+    grain ? leadgenBuckets(from, to, grain, false) : Promise.resolve(null),
+    // 💰 Гроші з передач: домен — УВЕСЬ період, скоуп лише звужує відповідь (правило 3).
+    // Та сама функція ядра, що й у `/leadgen-handoff-deals`, — тож список і число рядка
+    // не можуть розійтись (`#677`).
+    leadgenHandoffMoney(from, to, scope),
   ]);
 
   const rows = teamId == null ? stats.rows : stats.rows.filter((r) => r.teamId === teamId);
@@ -361,7 +376,7 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
         warming: a.warming + r.warming, calls: a.calls + r.calls,
       }), { leads: 0, opr: 0, quotes: 0, warming: 0, calls: 0 });
 
-  res.json({
+  const body: Record<string, unknown> = {
     from, to,
     rows, bySource: stats.bySource, totals,
     conversions: {
@@ -390,7 +405,86 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
     callRule: `успішний дзвінок = вихідний від ${LEADGEN_CALL_MIN_SEC} с `
       + "(поріг виведено із заміру: 3 604 проти 3 627 у таблиці лідгенів за серпень)",
     scopedTo: teamId,
+    /**
+     * 💰 Гроші з переданих лідів: анкер — дата ПЕРЕДАЧІ, стан угоди менеджера — ЗАРАЗ.
+     * Це свідомо не дохід ядра (там — дата входу в етап), і екран так і підписує.
+     */
+    handoffMoney: {
+      totals: handoffMoneyWire(hm.totals),
+      byPerson: hm.byPerson.map((p) => personMoneyWire(p.managerId, p.money)),
+    },
+  };
+  /**
+   * 📅 Розбивка за `grain` — лише коли її просили. Люди — ті самі, що в `rows` (той самий
+   * кламп тімліда); відділ = сума людей, як `totals`.
+   */
+  if (grain && bucketRows) {
+    const scoped = bucketRows.filter((b) => teamId == null || b.teamId === teamId);
+    body.grain = grain;
+    body.buckets = sumBuckets(scoped);
+    body.bucketsByPerson = scoped.map(personBucketWire);
+  }
+  res.json(body);
+});
+
+/**
+ * 📈 ТРЕНД ЛІДОГЕНУ ПО МІСЯЦЯХ — `months` (типово 12, межі 1…24) календарних місяців, що
+ * закінчуються місяцем `to`. Кожен місяць — ТОЙ САМИЙ розрахунок, що `/leadgen-stats` цього
+ * місяця: лічильники тим самим запитом, гроші з передач — тією самою функцією над передачами
+ * лише цього місяця. Тімлід — лише своя команда (той самий кламп, що в рядках).
+ *
+ * ⚠️ Місяць, якого журнал подій ще не памʼятає, у відповіді ВІДСУТНІЙ, а не нульовий.
+ * 🔒 Межа — як у `/leadgen-stats`: вкладка `leadgen`, менеджер — 403 першим оператором.
+ */
+dashboardRouter.get("/leadgen-trend", async (req, res) => {
+  if (req.auth!.role === "manager") return res.status(403).json({ error: "Forbidden" });
+  const auth = req.auth!;
+  const to = dateParam(req.query.to);
+  if (!to || !isRealDate(to)) return res.status(400).json({ error: "Потрібен to — дата YYYY-MM-DD" });
+  const months = parseTrendMonths(req.query.months);
+  if (months == null) return res.status(400).json({ error: "months — ціле число" });
+  const scope = leadgenAuthScope(auth);
+
+  const t = await leadgenTrend(to, months, scope);
+  res.json({
+    months: t.months, to: t.to,
+    buckets: sumBuckets(t.byPerson, t.monthStarts),
+    bucketsByPerson: t.byPerson.map(personBucketWire),
+    handoffMoney: t.money.map((m) => bucketMoneyWire(m.bucket, m.totals)),
+    handoffMoneyByPerson: t.money.flatMap((m) =>
+      m.byPerson.map((p) => bucketPersonMoneyWire(m.bucket, p.managerId, p.money))),
   });
+});
+
+/**
+ * 💰 СПИСОК ПЕРЕДАЧ ЛІДГЕНА Й ГРОШІ З НИХ — розкривний список у рядку лідгена.
+ *
+ * Кожна передача періоду → угода менеджера, що з неї виросла, і її стан ЗАРАЗ: бюджет,
+ * менеджер продажу, етап, дата закриття / план оплати / причина відмови, посилання в Kommo.
+ * `totals` — з ТІЄЇ САМОЇ функції ядра, що `handoffMoney` у `/leadgen-stats`, тож за той
+ * самий період і скоуп вони рівні (`#677`).
+ *
+ * 🔒 Менеджер — 403 ПЕРШИМ оператором (раніше за будь-який 400). Тімлід — лише своя
+ * команда; `managerId` людини з чужої команди — 403, а не порожній список.
+ */
+dashboardRouter.get("/leadgen-handoff-deals", async (req, res) => {
+  if (req.auth!.role === "manager") return res.status(403).json({ error: "Forbidden" });
+  const auth = req.auth!;
+  const from = dateParam(req.query.from);
+  const to = dateParam(req.query.to);
+  if (!from || !to || !isRealDate(from) || !isRealDate(to)) {
+    return res.status(400).json({ error: "Потрібні from і to — дати YYYY-MM-DD" });
+  }
+  const managerId = parseManagerIdParam(req.query.managerId);
+  if (managerId === "bad") return res.status(400).json({ error: "managerId — додатне ціле" });
+  // Команду людини питаємо завжди, коли її названо: рішення «своя / чужа» — лише в `handoffDealsScope`,
+  // а не в другій умові по ролі тут (`#681b`). Запит — один рядок за ключем.
+  const managerTeam = managerId != null ? await leadgenManagerTeam(managerId) : null;
+  const clamp = handoffDealsScope({ role: auth.role, teamId: auth.teamId }, managerId, managerTeam);
+  if (!clamp.ok) return res.status(clamp.status).json({ error: "Forbidden" });
+
+  const hm = await leadgenHandoffMoney(from, to, clamp.scope);
+  res.json({ from, to, managerId, deals: hm.deals, totals: handoffMoneyWire(hm.totals) });
 });
 
 /**

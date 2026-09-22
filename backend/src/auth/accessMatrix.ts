@@ -551,6 +551,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // доступу — рішення власника. Поки його немає, тримаємо fail-closed.
   { method: "GET", path: "/api/dashboard/leadgen-stats", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  // 💰 Тренд і список передач того самого екрана (рішення власника 22.09.2026: доступ — РІВНО
+  // як у `/leadgen-stats`). Дзеркальність рядків тримає `#678`: розійдуться — червоне.
+  { method: "GET", path: "/api/dashboard/leadgen-trend", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  { method: "GET", path: "/api/dashboard/leadgen-handoff-deals", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/leadgen-regulars", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   // ФАЗА A · «Постійні клієнти · план місяця». Межа — вкладка `loyalty`, якої в

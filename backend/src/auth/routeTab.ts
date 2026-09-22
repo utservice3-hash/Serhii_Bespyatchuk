@@ -97,6 +97,10 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // ⚠️ ОКРЕМИЙ РЯДОК, А НЕ ПРЕФІКС ВИЩЕ: `pre()` не накриває дефіс — той самий урок,
     // що з `reactivation-candidates`. Без цього новий екран лишився б без вкладкової межі.
     { test: pre("/api/dashboard/leadgen-stats"), tabs: ["leadgen"] },
+    // 💰 Тренд і список передач екрана «Лідогенерація» (22.09.2026) — ЯВНО, бо `pre()` дефісних
+    // сусідів `/leadgen` не накриває. Без цих рядків обидва роути лишились би без вкладкової межі.
+    { test: pre("/api/dashboard/leadgen-trend"), tabs: ["leadgen"] },
+    { test: pre("/api/dashboard/leadgen-handoff-deals"), tabs: ["leadgen"] },
     { test: pre("/api/dashboard/leadgen"), tabs: ["leadgen"] },
     { test: pre("/api/dashboard/stuck-deals"), tabs: ["dataquality"] },
     { test: pre("/api/dashboard/data-quality"), tabs: ["dataquality"] },

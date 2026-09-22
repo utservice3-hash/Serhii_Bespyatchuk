@@ -2497,7 +2497,7 @@ export async function conversionAdsByTeam(s: MetricScope, adSources: string[]): 
 export { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING } from "./leadgenStages.js";
 // ⚠️ Реекспорт НЕ заводить імена у власний скоуп модуля — а `metrics.ts` вживає
 // частину з них у своїх запитах. Тому поруч звичайний імпорт для себе.
-import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING } from "./leadgenStages.js";
+import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING, QUALIFICATION_PIPELINES } from "./leadgenStages.js";
 export const STATUS_142 = 142;                        // handoff (Продзвін/Реактивація) + won (FC) «Успішна»
 
 export interface LeadgenConversionRow {
@@ -3097,7 +3097,7 @@ export async function stuckDealsGrouped(s: SnapshotScope, minDays = STUCK_MIN_DA
 
 // ───────────────────────── ЧАС ОПРАЦЮВАННЯ (період по created_at) ─────────────────────────
 
-const QUALIFICATION_PIPELINES = [8921928, 7336928];
+// `QUALIFICATION_PIPELINES` — з чистого `leadgenStages.ts` (імпорт вище, біля лідогену): одна копія на ядро.
 
 export interface ResponseBucket {
   key: string;
