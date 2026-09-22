@@ -5,8 +5,8 @@ import path from "node:path";
 import {
   pickHandoffs, classifyHandoffs, aggregateHandoffMoney, handoffView, managerDealClass,
   handoffDealsScope, leadgenAuthScope, trendWindow, parseTrendMonths, parseLeadgenGrain, parseManagerIdParam,
-  personMoneyWire, emptyHandoffMoney, mergeBucketRows, assembleTrend, sumBuckets,
-  type StageBucketRow, type CallBucketRow, type HandoffEntry, type DealState, type LeadgenHandoffMoney,
+  personMoneyWire, emptyHandoffMoney, mergeBucketRows, assembleTrend, sumBuckets, handoffDealRow,
+  type StageBucketRow, type CallBucketRow, type HandoffLinkInfo, type HandoffRowDeps, type LeadgenDealClass, type HandoffEntry, type DealState, type LeadgenHandoffMoney,
 } from "./leadgenHandoffRules.js";
 import { HANDOFF_CLASS_RULES } from "./moneyBuckets.js";
 
@@ -366,6 +366,54 @@ test("#682 МІСЯЦЬ ТРЕНДУ == ЗБІРКА НАД ОДНИМ ЦИМ М
   assert.equal(inPeriod.find((r) => r.bucket === MAY && r.managerId === 4)?.calls, 5,
     "🔴 у розбивці одного періоду загубився дзвінок дня без стадій — рядок його рахує");
   assert.ok(!inPeriod.some((r) => r.managerId === 9), "🔴 людина поза ростером періоду отримала рядок");
+});
+
+/**
+ * #684 — РЯДОК СПИСКУ ПЕРЕДАЧ: КОЖНЕ ПОЛЕ З ОБОХ БОКІВ СВОЄЇ МЕЖІ (ревʼю F4, правило 8).
+ *
+ * Жоден тест не виконував збирання рядка — префікс Кваліфікації, «причина лише для програних»,
+ * посилання на Продзвін для `none`, фолбек назви на угоду Продзвону могли змінитись мовчки.
+ * Залежності тут — тестові (видно, що саме підставлено); що ядро передає СПРАВЖНІ, тримає `#684b`.
+ * 🧨 САБОТАЖ: прибрати префікс «Кваліфікація · » → червоніє; `reason` для будь-якого класу →
+ * червоніє; `url` завжди з угоди Продзвону → червоніє.
+ */
+test("#684 РЯДОК СПИСКУ ПЕРЕДАЧ: префікс Кваліфікації, причина лише для програних, посилання й назва з Продзвону для «без угоди»", () => {
+  const deps: HandoffRowDeps = { stageName: (p, s) => `S${p}:${s}`, qualificationPipelines: [111], leadUrl: (id) => `u/${id}` };
+  const base = (pzId: number, dealId: number | null, cls: LeadgenDealClass, o: Partial<HandoffLinkInfo> = {}) =>
+    Object.assign({
+      pzId, lgId: 7, lgTeamId: 1, at: at(pzId), day: "2026-09-01", dealId,
+      pzName: "Продзвін-назва", pzClient: "Продзвін-клієнт", dealName: "Київ — Львів", dealClient: "ТОВ Угода",
+      salesManager: "Продажі В", dealReason: "Дорого", closedDay: "2026-09-05", planPayDay: "2026-09-10",
+    }, o, { cls, price: 1000 });
+  // ── без угоди менеджера: усе з Продзвону, решта — null, навіть якщо рядок запиту щось приніс
+  const none = handoffDealRow(base(1, null, "none"), undefined, deps);
+  assert.equal(none.url, "u/1", "🔴 «без угоди» веде не на угоду Продзвону");
+  assert.equal(none.route, "Продзвін-назва", "🔴 «без угоди» без назви Продзвону");
+  assert.equal(none.client, "Продзвін-клієнт");
+  assert.deepEqual([none.stage, none.salesManager, none.closedDay, none.planPayDay, none.reason], [null, null, null, null, null],
+    "🔴 «без угоди» отримала поля угоди менеджера, якої немає");
+  // ── програна угода повного циклу: причина є, префікса немає, посилання — на угоду менеджера
+  const lost = handoffDealRow(base(2, 9002, "lost", { dealReason: "  Дорого  " }), { pipelineId: 222, statusId: 143 }, deps);
+  assert.equal(lost.reason, "Дорого", "🔴 програна угода без причини відмови");
+  assert.equal(lost.stage, "S222:143", "🔴 повний цикл отримав префікс Кваліфікації");
+  assert.equal(lost.url, "u/9002", "🔴 посилання не на угоду менеджера");
+  assert.deepEqual([lost.route, lost.client, lost.salesManager], ["Київ — Львів", "ТОВ Угода", "Продажі В"]);
+  // ── угода в роботі з давньою причиною: причину НЕ показуємо (дзеркало до lost)
+  const work = handoffDealRow(base(3, 9003, "work"), { pipelineId: 222, statusId: 5 }, deps);
+  assert.equal(work.reason, null, "🔴 причина відмови в угоди, що ще в роботі — читалась би як провал");
+  const same = handoffDealRow(base(4, 9002, "same"), { pipelineId: 222, statusId: 143 }, deps);
+  assert.equal(same.reason, null, "🔴 «та сама угода» отримала причину — провал уже показано в першої передачі");
+  // ── Кваліфікація — з префіксом (дзеркало до повного циклу)
+  const qual = handoffDealRow(base(5, 9005, "work"), { pipelineId: 111, statusId: 142 }, deps);
+  assert.equal(qual.stage, "Кваліфікація · S111:142", "🔴 стадія Кваліфікації без префікса — читається як повний цикл");
+  // ── порожня назва угоди менеджера → назва Продзвону; клієнт так само
+  const blank = handoffDealRow(base(6, 9006, "success", { dealName: "   ", dealClient: null }), { pipelineId: 222, statusId: 142 }, deps);
+  assert.equal(blank.route, "Продзвін-назва", "🔴 порожня назва угоди менеджера не впала на назву Продзвону");
+  assert.equal(blank.client, "Продзвін-клієнт");
+  assert.equal(blank.closedDay, "2026-09-05");
+  // Форма — явними полями, рівно ті, що читає екран.
+  assert.deepEqual(Object.keys(lost).sort(), ["client", "closedDay", "cls", "day", "dealId", "lgId", "planPayDay", "price",
+    "pzId", "reason", "route", "salesManager", "stage", "url"]);
 });
 
 /**

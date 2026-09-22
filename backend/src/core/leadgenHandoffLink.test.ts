@@ -401,3 +401,50 @@ test("#682b ЖИВИЙ SQL: місяць тренду == /leadgen-stats і гр�
   assert.equal(jun.unlinked, 1, "фікстура: червнева передача без ключа — без угоди");
   assert.equal(jun.work.n, 1, "фікстура: червнева передача в Кваліфікацію — «в роботі»");
 });
+
+/**
+ * #684b — СПИСОК ПЕРЕДАЧ ІЗ СПРАВЖНЬОГО ЯДРА: назви стадій, префікс Кваліфікації, посилання (ревʼю F4).
+ *
+ * `#684` доводить правила рядка на тестових залежностях. Тут — що `leadgenHandoffMoney` передає
+ * СПРАВЖНІ: реєстр назв (`stageNames`), воронки Кваліфікації (префікс) і `kommoLeadUrl`; і що
+ * поля доїжджають із запиту звʼязку (менеджер продажу, причина, фолбек назви на Продзвін).
+ * Лютий — власний місяць фікстури, щоб не зачіпати інших гейтів файла.
+ * 🧨 САБОТАЖ: у `HANDOFF_ROW_DEPS` `qualificationPipelines: []` → червоніє (а `#684` лишається
+ * зеленим — саме тому цей гейт і потрібен).
+ */
+test("#684b ЖИВИЙ SQL: список передач — справжні назви стадій, префікс Кваліфікації, причина й посилання", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { stats } = await core();
+  const pq = await deal({ manager: 1, pipeline: PZ, ck: "rw-q", name: "Продзвін Кваліф" });
+  await ev(pq, PZ, Q, utc("2026-02-10T07:00:00"));
+  const q = await deal({ manager: 3, pipeline: QUAL, status: 69716164, ck: "rw-q", created: utc("2026-02-10T07:00:02"),
+    name: "Київ — Львів" });
+  const pn = await deal({ manager: 1, pipeline: PZ, ck: null, name: "Продзвін без угоди" });
+  await ev(pn, PZ, Q, utc("2026-02-11T07:00:00"));
+  const pl = await deal({ manager: 1, pipeline: PZ, ck: "rw-l", name: "Продзвін програний" });
+  await ev(pl, PZ, Q, utc("2026-02-12T07:00:00"));
+  const l = await deal({ manager: 3, pipeline: FC[0], status: 143, ck: "rw-l", created: utc("2026-02-12T07:00:05"), name: " " });
+  await client!.query(`UPDATE deals SET reject_reason = 'Дорого' WHERE kommo_id = $1`, [l]);
+
+  const hm = await stats.leadgenHandoffMoney("2026-02-01", "2026-02-28", { teamId: null, managerId: null });
+  const by = new Map(hm.deals.map((d) => [d.pzId, d]));
+  assert.equal(hm.deals.length, 3, "🔴 у лютому три передачі — список їх не всі");
+  const rq = by.get(pq)!, rn = by.get(pn)!, rl = by.get(pl)!;
+  assert.equal(rq.dealId, q);
+  assert.equal(rq.stage, "Кваліфікація · Нова заявка від лідогенератора",
+    "🔴 стадія Кваліфікації без префікса або не з реєстру назв");
+  assert.equal(rq.cls, "work");
+  assert.equal(rq.salesManager, "Продажі В", "🔴 менеджер продажу не доїхав із запиту звʼязку");
+  assert.equal(rq.route, "Київ — Львів");
+  assert.ok(rq.url?.endsWith(`/leads/detail/${q}`), `🔴 посилання «${rq.url}» не на угоду менеджера`);
+  assert.equal(rn.cls, "none");
+  assert.equal(rn.stage, null);
+  assert.equal(rn.route, "Продзвін без угоди", "🔴 «без угоди» без назви Продзвону");
+  assert.ok(rn.url?.endsWith(`/leads/detail/${pn}`), `🔴 «без угоди» веде не на угоду Продзвону: ${rn.url}`);
+  assert.equal(rl.cls, "lost");
+  assert.equal(rl.reason, "Дорого", "🔴 програна угода без причини відмови");
+  assert.equal(rl.stage, "Закрито і не реалізовано", "🔴 143 повного циклу — з префіксом або без назви");
+  assert.equal(rl.route, "Продзвін програний", "🔴 порожня назва угоди менеджера не впала на назву Продзвону");
+  // Підсумок списку — з того самого виклику (дзеркало `#677` на живих даних).
+  assert.equal(hm.totals.handoffs, hm.deals.length);
+});

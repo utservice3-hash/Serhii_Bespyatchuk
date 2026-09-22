@@ -6,8 +6,8 @@ import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery,
 import { FC_PIPELINES, handoffDealStates } from "./money.js";
 import { stageName } from "./stageNames.js";
 import {
-  handoffView, trendWindow, mergeBucketRows, assembleTrend, LINK_BEFORE_SEC, LINK_AFTER_SEC,
-  type HandoffEntry, type HandoffScope, type LeadgenDealClass, type LeadgenHandoffMoney,
+  handoffView, trendWindow, mergeBucketRows, assembleTrend, handoffDealRow, LINK_BEFORE_SEC, LINK_AFTER_SEC,
+  type HandoffScope, type LeadgenHandoffMoney, type HandoffLinkInfo, type LeadgenHandoffDeal, type HandoffRowDeps,
   type LeadgenPersonBucketRow, type StageBucketRow, type CallBucketRow, type TrendMoneyBucket,
 } from "./leadgenHandoffRules.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
@@ -18,7 +18,7 @@ import { LEADGEN_CALL_MIN_SEC } from "./leadgenRules.js";
 export { LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS, pct, leadGeneratorFillNote } from "./leadgenRules.js";
 // Збірка розбивки й тренду — у чистому `leadgenHandoffRules.ts` (`#682`); тут лише реекспорт для роутів.
 export { sumBuckets, personBucketWire } from "./leadgenHandoffRules.js";
-export type { LeadgenPersonBucketRow } from "./leadgenHandoffRules.js";
+export type { LeadgenPersonBucketRow, LeadgenHandoffDeal } from "./leadgenHandoffRules.js";
 
 /**
  * 📞 ЛІДОГЕНЕРАЦІЯ — сім показників таблиці лідгенів із подій CRM.
@@ -301,14 +301,8 @@ export async function leadgenBuckets(
   return mergeBucketRows(q.stages, q.calls, rosterPerBucket);
 }
 
-/** Вхід у 142 з угодою менеджера й описом обох угод — усе, крім грошей (їх дає `money.ts`). */
-interface HandoffLinkRow extends HandoffEntry {
-  pzName: string | null; pzClient: string | null;
-  dealName: string | null; dealClient: string | null; salesManager: string | null;
-  dealReason: string | null; closedDay: string | null; planPayDay: string | null;
-}
-
-async function handoffLinks(from: string, to: string): Promise<HandoffLinkRow[]> {
+/** Входи в 142 періоду з угодою менеджера й описом обох угод — усе, крім грошей (їх дає `money.ts`). */
+async function handoffLinks(from: string, to: string): Promise<HandoffLinkInfo[]> {
   const q = handoffLinkQuery(from, to,
     { pz: LEADGEN_STAGE_IDS.pz, qualified: LEADGEN_STAGE_IDS.qualified,
       managerPipelines: [...QUALIFICATION_PIPELINES, ...FC_PIPELINES] },
@@ -325,21 +319,16 @@ async function handoffLinks(from: string, to: string): Promise<HandoffLinkRow[]>
   }));
 }
 
-/** Одна передача в списку «Гроші з передач» — форма, яку читає екран. */
-export interface LeadgenHandoffDeal {
-  day: string; lgId: number; pzId: number; dealId: number | null;
-  route: string | null; client: string | null; salesManager: string | null; stage: string | null;
-  cls: LeadgenDealClass; price: number; closedDay: string | null; planPayDay: string | null;
-  reason: string | null; url: string | null;
-}
-
-const blankToNull = (v: string | null | undefined): string | null => (v && v.trim() ? v.trim() : null);
-
-/** Підпис стадії: Кваліфікацію видно одразу, бо це ще НЕ повний цикл. */
-function handoffStage(pipelineId: number, statusId: number): string {
-  const name = stageName(pipelineId, statusId);
-  return QUALIFICATION_PIPELINES.includes(pipelineId) ? `Кваліфікація · ${name}` : name;
-}
+/**
+ * Залежності рядка списку — САМЕ ці: реєстр назв стадій, воронки Кваліфікації (префікс) і
+ * посилання CRM. Правила рядка — чиста `handoffDealRow` (`#684`); що передаються ці, а не інші, —
+ * `#684b` на живій базі.
+ */
+const HANDOFF_ROW_DEPS: HandoffRowDeps = {
+  stageName: (pipelineId, statusId) => stageName(pipelineId, statusId),
+  qualificationPipelines: QUALIFICATION_PIPELINES,
+  leadUrl: kommoLeadUrl,
+};
 
 export interface LeadgenHandoffMoneyResult {
   totals: LeadgenHandoffMoney;
@@ -359,22 +348,8 @@ export async function leadgenHandoffMoney(from: string, to: string, scope: Hando
   const links = await handoffLinks(from, to);
   const states = await handoffDealStates(links.flatMap((l) => (l.dealId == null ? [] : [l.dealId])));
   const view = handoffView(links, states, scope);
-  const deals = view.rows.map((h): LeadgenHandoffDeal => {
-    const st = h.dealId == null ? undefined : states.get(h.dealId);
-    const linked = h.dealId != null;
-    return {
-      day: h.day, lgId: h.lgId, pzId: h.pzId, dealId: h.dealId,
-      route: blankToNull(linked ? h.dealName : null) ?? blankToNull(h.pzName),
-      client: blankToNull(linked ? h.dealClient : null) ?? blankToNull(h.pzClient),
-      salesManager: linked ? h.salesManager : null,
-      stage: st ? handoffStage(st.pipelineId, st.statusId) : null,
-      cls: h.cls, price: h.price,
-      closedDay: linked ? h.closedDay : null,
-      planPayDay: linked ? h.planPayDay : null,
-      reason: h.cls === "lost" ? blankToNull(h.dealReason) : null,
-      url: kommoLeadUrl(h.dealId ?? h.pzId),
-    };
-  });
+  const deals = view.rows.map((h) =>
+    handoffDealRow(h, h.dealId == null ? undefined : states.get(h.dealId), HANDOFF_ROW_DEPS));
   return { totals: view.totals, byPerson: view.byPerson, deals };
 }
 

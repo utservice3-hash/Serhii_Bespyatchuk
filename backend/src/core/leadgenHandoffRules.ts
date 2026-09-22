@@ -217,6 +217,70 @@ export function bucketPersonMoneyWire(bucket: string, managerId: number, m: Lead
   };
 }
 
+// ─────────────────────── РЯДОК СПИСКУ «ГРОШІ З ПЕРЕДАЧ» ───────────────────────
+
+/** Вхід у 142 з описом обох угод — усе, що дає запит звʼязку, крім грошей (їх дає `money.ts`). */
+export interface HandoffLinkInfo extends HandoffEntry {
+  pzName: string | null; pzClient: string | null;
+  dealName: string | null; dealClient: string | null; salesManager: string | null;
+  dealReason: string | null; closedDay: string | null; planPayDay: string | null;
+}
+
+/** Одна передача в списку «Гроші з передач» — форма, яку читає екран. */
+export interface LeadgenHandoffDeal {
+  day: string; lgId: number; pzId: number; dealId: number | null;
+  route: string | null; client: string | null; salesManager: string | null; stage: string | null;
+  cls: LeadgenDealClass; price: number; closedDay: string | null; planPayDay: string | null;
+  reason: string | null; url: string | null;
+}
+
+/** Порожній або з самих пробілів текст CRM — «не заповнено», а не порожній підпис. */
+export const blankToNull = (v: string | null | undefined): string | null => (v && v.trim() ? v.trim() : null);
+
+/**
+ * Залежності рядка, що живуть поза чистим модулем: назви стадій (`stageNames.stageName`), воронки
+ * Кваліфікації (`leadgenStages.QUALIFICATION_PIPELINES`) і посилання в CRM (`kommoLeadUrl`).
+ * Передає їх ядро; `#684b` на живій базі доводить, що передає саме ці.
+ */
+export interface HandoffRowDeps {
+  stageName: (pipelineId: number, statusId: number) => string;
+  qualificationPipelines: readonly number[];
+  leadUrl: (kommoId: number) => string;
+}
+
+/**
+ * 📋 РЯДОК СПИСКУ ПЕРЕДАЧ (правило 8 і макет, ревʼю F4). Кожне поле — рішення, тож тут, а не в `map`:
+ *  • `route`/`client` — з угоди МЕНЕДЖЕРА; немає угоди або поле порожнє — з угоди Продзвону;
+ *  • `salesManager`, `closedDay`, `planPayDay` — лише коли угода менеджера є (`none` — `null`);
+ *  • `stage` — поточна стадія угоди менеджера; Кваліфікацію видно одразу префіксом
+ *    «Кваліфікація · », бо це ще НЕ повний цикл; без угоди — `null`;
+ *  • `reason` — ЛИШЕ для `lost`: причина відмови в угоді, що ще в роботі чи вже «та сама», —
+ *    стара й читалась би як причина провалу;
+ *  • `url` — угода менеджера, а без неї — угода Продзвону (посилання є завжди).
+ */
+export function handoffDealRow(
+  h: ClassifiedHandoff<HandoffLinkInfo>, st: { pipelineId: number; statusId: number } | undefined, deps: HandoffRowDeps,
+): LeadgenHandoffDeal {
+  const linked = h.dealId != null;
+  let stage: string | null = null;
+  if (linked && st) {
+    const name = deps.stageName(st.pipelineId, st.statusId);
+    stage = deps.qualificationPipelines.includes(st.pipelineId) ? `Кваліфікація · ${name}` : name;
+  }
+  return {
+    day: h.day, lgId: h.lgId, pzId: h.pzId, dealId: h.dealId,
+    route: blankToNull(linked ? h.dealName : null) ?? blankToNull(h.pzName),
+    client: blankToNull(linked ? h.dealClient : null) ?? blankToNull(h.pzClient),
+    salesManager: linked ? h.salesManager : null,
+    stage,
+    cls: h.cls, price: h.price,
+    closedDay: linked ? h.closedDay : null,
+    planPayDay: linked ? h.planPayDay : null,
+    reason: h.cls === "lost" ? blankToNull(h.dealReason) : null,
+    url: deps.leadUrl(h.dealId ?? h.pzId),
+  };
+}
+
 // ─────────────────────── МЕЖА ТІМЛІДА — ОДИН ПОМІЧНИК НА ТРИ РОУТИ ЕКРАНА ───────────────────────
 
 /**
