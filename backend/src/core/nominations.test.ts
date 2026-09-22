@@ -12,6 +12,21 @@ import {
   NOMINATIONS, type Ranked,
 } from "./nominationRules.js";
 
+/**
+ * Тиждень для ЖИВОЇ звірки (#600, #658): лише чернетка. Зафіксований тиждень тримає числа вівторка 08:00,
+ * а Звіт і розкриття рахують CRM зараз — порівнювати їх означало б червоніти без дефекту з вт по нд
+ * (ревʼю 22.09.2026). Тож: минулий тиждень, поки він чернетка (пн — вт 08:00), інакше поточний.
+ */
+async function draftWeekForLiveCheck(H: { headers: Record<string, string> }): Promise<{ from: string; to: string; body: unknown }> {
+  for (const w of [lastWeek(new Date()), weekOf(kyivDate(new Date()))]) {
+    const r = await fetch(`${API_BASE}/api/nominations/week?weekFrom=${w.from}`, H);
+    assert.equal(r.status, 200, `🔴 /nominations/week віддав ${r.status}`);
+    const body = await r.json() as { state: string };
+    if (body.state === "draft") return { ...w, body };
+  }
+  throw new Error("🔴 і минулий, і поточний тиждень зафіксовані — так не буває: поточний ще триває");
+}
+
 const SRC = (p: string) => fileURLToPath(new URL(`../${p}`, import.meta.url).href.replace("/dist/", "/src/"));
 
 /* ─────────────────────────── #600 джерело чисел ─────────────────────────── */
@@ -25,16 +40,12 @@ const SRC = (p: string) => fileURLToPath(new URL(`../${p}`, import.meta.url).hre
 test("#600 результат і авто номінацій == «Факт» і «Авто» Звіту за той самий тиждень", needsApi(), async () => {
   const { signToken } = await import("../auth/auth.js");
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
-  const { from, to } = lastWeek(new Date());
   const H = { headers: { Authorization: `Bearer ${token}` } };
-  const [nr, rr] = await Promise.all([
-    fetch(`${API_BASE}/api/nominations/week?weekFrom=${from}`, H),
-    fetch(`${API_BASE}/api/dashboard/report-plan?from=${from}&to=${to}`, H),
-  ]);
-  assert.equal(nr.status, 200, `🔴 /nominations/week віддав ${nr.status}`);
+  const { from, to, body } = await draftWeekForLiveCheck(H);
+  const rr = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${from}&to=${to}`, H);
   assert.equal(rr.status, 200, `🔴 /report-plan віддав ${rr.status}`);
   type Cell = { nomination: string; crm: Ranked };
-  const nom = await nr.json() as { teams: { teamId: number; members: { id: number }[]; cells: Cell[] }[] };
+  const nom = body as { teams: { teamId: number; members: { id: number }[]; cells: Cell[] }[] };
   const rep = await rr.json() as { managers: { managerId: number; fact: number; kpi: { dispatch: { fact: number } } }[] };
   const byId = new Map(rep.managers.map((m) => [m.managerId, m]));
   assert.ok(nom.teams.length >= 2, "🔴 у заліку менше двох команд — звіряти нічого");
@@ -295,6 +306,8 @@ test("#652 рейтинг команди: усі учасники, найкра�
   const top = r.filter((x) => x.value != null && Math.round(x.value * 100) / 100 === win.value).map((x) => x.managerId).sort((a, b) => a - b);
   assert.deepEqual(top, win.winners, "🔴 перше місце рейтингу ≠ переможці номінації");
   assert.deepEqual(teamRanking([{ managerId: 1, value: null }, { managerId: 2, value: 0 }]).map((x) => x.managerId), [2, 1], "🔴 ненабрані зникли або перемішались");
+  // Другий бік нічиєї: більше «сире» значення — у більшого id; після округлення до копійки це нічия → за id.
+  assert.deepEqual(teamRanking([{ managerId: 5, value: 9.004 }, { managerId: 3, value: 9 }]).map((x) => x.managerId), [3, 5], "🔴 нічия розвʼязана шумом float, а не за id");
 });
 
 /**
@@ -377,19 +390,17 @@ test("#656 у кожної номінації є «рахуємо / не рах�
 });
 
 /**
- * #658 — «ПОКАЗАТИ УГОДИ» ДАЄ РІВНО ЧИСЛО НОМІНАЦІЇ (жива звірка, минулий тиждень). Для переможця кожної команди:
- * розкриття «Факту» (`/report-plan/day-items`, kind=received) — Σ == «результат» і max == «зазор»; розкриття «Авто»
- * (kind=dispatched) — кількість == «авто». Той самий вид розкриття бере екран (`DRILL_KIND`), тож збіг тут = збіг
- * на екрані. 🧨 Червоніє, якщо номінацію або розкриття перевести на інше джерело.
+ * #658 — «ПОКАЗАТИ УГОДИ» ДАЄ РІВНО ЧИСЛО НОМІНАЦІЇ (жива звірка на ЧЕРНЕТЦІ — див. `draftWeekForLiveCheck`).
+ * Для переможця кожної команди: розкриття «Факту» (`/report-plan/day-items`, kind=received) — Σ == «результат» і
+ * max == «зазор»; розкриття «Авто» (kind=dispatched) — кількість == «авто». Ті самі види, що в `DRILL_KIND` екрана
+ * (його збіг з цими — #650 читає мапу). 🧨 Червоніє, якщо номінацію або розкриття перевести на інше джерело.
  */
 test("#658 розкриття угод дає рівно число номінації — результат, зазор, авто", needsApi(), async () => {
   const { signToken } = await import("../auth/auth.js");
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
   const H = { headers: { Authorization: `Bearer ${token}` } };
-  const { from, to } = lastWeek(new Date());
-  const nr = await fetch(`${API_BASE}/api/nominations/week?weekFrom=${from}`, H);
-  assert.equal(nr.status, 200, `🔴 /nominations/week віддав ${nr.status}`);
-  const nom = await nr.json() as { teams: { teamId: number; cells: { nomination: string; crm: Ranked }[] }[] };
+  const { from, to, body } = await draftWeekForLiveCheck(H);
+  const nom = body as { teams: { teamId: number; cells: { nomination: string; crm: Ranked }[] }[] };
   const off: string[] = [];
   let compared = 0;
   const items = async (managerId: number, kind: string) => {

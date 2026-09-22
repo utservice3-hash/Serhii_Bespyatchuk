@@ -40,7 +40,7 @@ async function withRights(view: WeekView, v: Viewer) {
       ...t,
       cells: t.cells.map((c) => {
         const r = view.state === "frozen" ? { ok: false as const, why: "тиждень зафіксовано" }
-          : canReview(v, { teamId: t.teamId, crmWinners: c.crm.state === "ok" ? c.crm.winners : [] });
+          : canReview(v, { teamId: t.teamId, crmWinners: c.crm.state === "ok" ? c.crm.winners : [], overrideManagerIds: c.final.status === "overridden" ? c.final.winners : null });
         return { ...c, canReview: r.ok, whyNot: r.ok ? null : r.why };
       }),
     })),
@@ -81,7 +81,9 @@ nominationsRouter.post("/review", safe(async (req: Request, res: Response) => {
   const team = draft.teams.find((t) => t.teamId === b.teamId);
   if (!team) return res.status(404).json({ error: "Команди немає в заліку" });
   const cell = team.cells.find((c) => c.nomination === b.nomination)!;
-  const right = canReview(v, { teamId: b.teamId, crmWinners: cell.crm.state === "ok" ? cell.crm.winners : [], overrideManagerIds: b.overrideManagerIds });
+  // Переможці «своїх даних», що вже стоять, теж рахуються: тімлід не скасує й не «поверне» рішення керівництва про себе.
+  const right = canReview(v, { teamId: b.teamId, crmWinners: cell.crm.state === "ok" ? cell.crm.winners : [],
+    overrideManagerIds: [...(b.overrideManagerIds ?? []), ...(cell.final.status === "overridden" ? cell.final.winners : [])] });
   if (!right.ok) return res.status(403).json({ error: right.why });
   if (b.overrideManagerIds && !b.overrideManagerIds.every((id) => team.members.some((m) => m.id === id))) {
     return res.status(400).json({ error: "переможець мусить бути менеджером цієї команди в заліку" });

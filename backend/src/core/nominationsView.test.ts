@@ -46,6 +46,9 @@ test("#650 екран: «про вас» окремо, порожнє не в з
   assert.match(msg, /РНК - Тест \(2 з 4\)/, "🔴 команда, що не перевірила, не згадана");
   assert.doesNotMatch(msg, /РПК - Готова/, "🔴 готова команда потрапила в «ще чекаємо»");
   assert.deepEqual(frozenSummary([team]), { confirmed: 1, own: 1, noDecision: 2 });
+  // Вид розкриття на екрані — той самий, що звіряє живий #658 (результат і зазор — «Факт», авто — завантажені).
+  const { DRILL_KIND } = await loadView();
+  assert.deepEqual(DRILL_KIND, { maxDeal: "received", revenue: "received", cars: "dispatched", marginPct: null, intl: null }, "🔴 екран розкриває число не тим видом, що звіряє #658");
 });
 
 /**

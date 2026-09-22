@@ -87,6 +87,9 @@ export function NominationsSection() {
   const leadTeam = isLead ? data.teams[0] ?? null : null;
   const shownTeam = isLead ? leadTeam : data.teams.find((t) => t.teamId === openTeam) ?? null;
 
+  // Відповідь на рішення застосовуємо, лише якщо людина досі на тому самому тижні (не перетираємо новий старим).
+  const applyData = (d: NominationWeek) => setData((cur) => (cur && cur.weekFrom !== d.weekFrom ? cur : d));
+
   const copyMessage = async () => {
     const text = leadsMessage(data, window.location.origin);
     try { await navigator.clipboard.writeText(text); setCopied("ok"); }
@@ -142,12 +145,12 @@ export function NominationsSection() {
         <div className="nm-main">
           {isLead ? (
             leadTeam
-              ? <TeamBoard week={data} team={leadTeam} mode="lead" onData={setData} onDrill={setDrill} />
+              ? <TeamBoard key={`${data.weekFrom}:${leadTeam.teamId}`} week={data} team={leadTeam} mode="lead" onData={applyData} onDrill={setDrill} />
               : <div className="nm-card nm-banner nm-muted">Вашої команди в номінаціях цього тижня немає — у залік потрапляють команди з планом, як на Звіті.</div>
           ) : shownTeam ? (
             <>
               <button className="nm-btn" style={{ marginBottom: 10 }} onClick={() => { setOpenTeam(null); setDrill(null); }}>← Усі команди</button>
-              <TeamBoard week={data} team={shownTeam} mode="admin" onData={setData} onDrill={setDrill} />
+              <TeamBoard key={`${data.weekFrom}:${shownTeam.teamId}`} week={data} team={shownTeam} mode="admin" onData={applyData} onDrill={setDrill} />
             </>
           ) : (
             <AdminOverview week={data} onOpen={(id) => { setOpenTeam(id); setDrill(null); }} />
@@ -171,7 +174,7 @@ function AdminOverview({ week, onOpen }: { week: NominationWeek; onOpen: (teamId
   const name = (id: number) => week.names[String(id)] ?? `Менеджер #${id}`;
   const short = (id: number) => name(id).split(/\s+/)[0];
   const rows = week.teams.map((t) => ({ t, p: teamProgress(t) }))
-    .sort((a, b) => a.p.done / Math.max(1, a.p.total) - b.p.done / Math.max(1, b.p.total) || a.t.teamName.localeCompare(b.t.teamName, "uk"));
+    .sort((a, b) => (a.p.total ? a.p.done / a.p.total : 1) - (b.p.total ? b.p.done / b.p.total : 1) || a.t.teamName.localeCompare(b.t.teamName, "uk"));
   const done = rows.reduce((a, r) => a + r.p.done, 0), total = rows.reduce((a, r) => a + r.p.total, 0);
   const lbl = (k: NominationKey) => (week.defs.find((d) => d.key === k)?.label ?? k).replace(/^Найбільш(ий|а) (к-сть )?/, "");
   const frozen = week.state === "frozen";
@@ -257,9 +260,17 @@ function TeamBoard({ week, team, mode, onData, onDrill }: {
   const g = groupCells(team.cells, aboutIds);
   const bulkable = g.pending.filter((c) => c.canReview && c.crm.state === "ok");
 
-  const run = async (key: string, fn: () => Promise<NominationWeek>, ok?: string) => {
+  const run = async (key: string, fn: () => Promise<NominationWeek>, ok?: (d: NominationWeek) => string) => {
+    if (busy) return; // одне рішення за раз: друга відповідь не має перетерти першу
     setBusy(key); setErrs((e) => ({ ...e, [key]: "" }));
-    try { const d = await fn(); onData(d); setEditing(null); if (ok) { setNote(ok); window.setTimeout(() => setNote(null), 4000); } }
+    try {
+      const d = await fn();
+      onData(d);
+      // Закриваємо лише ту форму, до якої стосується дія (масове — ті, що справді погоджено).
+      const closed = key === "bulk" ? (d.bulk?.confirmed ?? []) as string[] : [key];
+      setEditing((cur) => (cur && closed.includes(cur) ? null : cur));
+      if (ok) { setNote(ok(d)); window.setTimeout(() => setNote(null), 5000); }
+    }
     catch (e) { setErrs((x) => ({ ...x, [key]: errorOf(e) })); }
     finally { setBusy(null); }
   };
@@ -268,11 +279,14 @@ function TeamBoard({ week, team, mode, onData, onDrill }: {
   const saveOwn = (c: NominationCell, ids: number[], value: number, reason: string) =>
     run(c.nomination, () => reviewNomination({ weekFrom: week.weekFrom, teamId: team.teamId, nomination: c.nomination, action: "override", overrideManagerIds: ids, overrideValue: value, reason }));
   const bulk = () => run("bulk", () => confirmNominationsBulk({ weekFrom: week.weekFrom, teamId: team.teamId, nominations: bulkable.map((c) => c.nomination) }),
-    `Погоджено: ${bulkable.length}. Кожне можна скасувати до фіксації.`);
+    (d) => {
+      const n = d.bulk?.confirmed.length ?? 0;
+      return `Погоджено: ${n}.${n < bulkable.length ? ` Ще ${bulkable.length - n} — CRM або рішення змінились, перевірте їх окремо.` : ""} Кожне рішення можна скасувати до фіксації.`;
+    });
 
   const card = (c: NominationCell, about: boolean) => (
     <NomCard key={c.nomination} week={week} team={team} cell={c} mode={mode} about={about}
-      busy={busy === c.nomination || busy === "bulk"} err={errs[c.nomination] || null}
+      busy={busy != null} saving={busy === c.nomination} err={errs[c.nomination] || null}
       editing={editing === c.nomination} onEdit={(on) => setEditing(on ? c.nomination : null)}
       onConfirm={() => void act(c, "confirm")} onRetract={() => void act(c, "retract")}
       onSaveOwn={(ids, v, r) => void saveOwn(c, ids, v, r)} onDrill={onDrill} />
@@ -310,9 +324,9 @@ function TeamBoard({ week, team, mode, onData, onDrill }: {
   );
 }
 
-function NomCard({ week, team, cell, mode, about, busy, err, editing, onEdit, onConfirm, onRetract, onSaveOwn, onDrill }: {
+function NomCard({ week, team, cell, mode, about, busy, saving, err, editing, onEdit, onConfirm, onRetract, onSaveOwn, onDrill }: {
   week: NominationWeek; team: NominationTeam; cell: NominationCell; mode: "lead" | "admin"; about: boolean;
-  busy: boolean; err: string | null; editing: boolean; onEdit: (on: boolean) => void;
+  busy: boolean; saving: boolean; err: string | null; editing: boolean; onEdit: (on: boolean) => void;
   onConfirm: () => void; onRetract: () => void; onSaveOwn: (ids: number[], value: number, reason: string) => void; onDrill: (d: Drill) => void;
 }) {
   const [all, setAll] = useState(false);
@@ -376,19 +390,23 @@ function NomCard({ week, team, cell, mode, about, busy, err, editing, onEdit, on
       </div>
 
       <div className="nm-nc-act">
-        <Decision week={week} cell={cell} mode={mode} about={about} busy={busy} err={err} frozen={frozen}
+        <Decision week={week} cell={cell} mode={mode} about={about} busy={busy} saving={saving} err={err} frozen={frozen}
           onConfirm={onConfirm} onRetract={onRetract} onOwn={() => onEdit(true)} />
       </div>
 
       {editing ? (
-        <OwnData week={week} team={team} cell={cell} busy={busy} err={err} onCancel={() => onEdit(false)} onSave={onSaveOwn} />
+        <>
+          {/* Справжнє затемнення під шторкою на телефоні: тап повз форму не натисне кнопку іншої картки. */}
+          <div className="nm-own-back" aria-hidden="true" />
+          <OwnData week={week} team={team} cell={cell} busy={busy} saving={saving} err={err} onCancel={() => onEdit(false)} onSave={onSaveOwn} />
+        </>
       ) : null}
     </div>
   );
 }
 
-function Decision({ week, cell, mode, about, busy, err, frozen, onConfirm, onRetract, onOwn }: {
-  week: NominationWeek; cell: NominationCell; mode: "lead" | "admin"; about: boolean; busy: boolean; err: string | null; frozen: boolean;
+function Decision({ week, cell, mode, about, busy, saving, err, frozen, onConfirm, onRetract, onOwn }: {
+  week: NominationWeek; cell: NominationCell; mode: "lead" | "admin"; about: boolean; busy: boolean; saving: boolean; err: string | null; frozen: boolean;
   onConfirm: () => void; onRetract: () => void; onOwn: () => void;
 }) {
   const st = cell.final.status;
@@ -401,17 +419,17 @@ function Decision({ week, cell, mode, about, busy, err, frozen, onConfirm, onRet
   return (
     <div className="nm-dec">
       {st === "confirmed" ? (
-        <div className="nm-done"><span>Погоджено{by}{at}</span><button className="nm-link" disabled={busy} onClick={onRetract}>Скасувати</button></div>
+        <div className="nm-done"><span>Погоджено{by}{at}</span><button className="nm-btn nm-undo" disabled={busy} onClick={onRetract}>{saving ? "…" : "Скасувати"}</button></div>
       ) : st === "overridden" ? (
         <>
-          <button className="nm-link" disabled={busy} onClick={onOwn}>Змінити дані</button>
+          <button className="nm-btn lg" disabled={busy} onClick={onOwn}>Змінити дані</button>
           {cell.crm.state === "ok"
-            ? <button className="nm-link" disabled={busy} onClick={onConfirm}>Повернути пропозицію системи</button>
-            : <button className="nm-link" disabled={busy} onClick={onRetract}>Прибрати свої дані</button>}
+            ? <button className="nm-btn lg" disabled={busy} onClick={onConfirm}>{saving ? "Зберігаю…" : "Повернути пропозицію системи"}</button>
+            : <button className="nm-btn lg" disabled={busy} onClick={onRetract}>{saving ? "Зберігаю…" : "Прибрати свої дані"}</button>}
         </>
       ) : (
         <>
-          {cell.crm.state === "ok" ? <button className="nm-btn lg p" disabled={busy} onClick={onConfirm}>{busy ? "Зберігаю…" : "Погоджуюсь"}</button> : null}
+          {cell.crm.state === "ok" ? <button className="nm-btn lg p" disabled={busy} onClick={onConfirm}>{saving ? "Зберігаю…" : "Погоджуюсь"}</button> : null}
           <button className="nm-btn lg" disabled={busy} onClick={onOwn}>Свої дані</button>
         </>
       )}
@@ -423,8 +441,10 @@ function Decision({ week, cell, mode, about, busy, err, frozen, onConfirm, onRet
 }
 
 /** «Свої дані»: хто переміг (з рейтингу, число підставляється з CRM), своє число і звідки воно. */
-function OwnData({ week, team, cell, busy, err, onCancel, onSave }: {
-  week: NominationWeek; team: NominationTeam; cell: NominationCell; busy: boolean; err: string | null;
+/** Як `norm` сервера: два знаки. Округлення до цілого давало «ваше число відрізняється» на незмінених даних. */
+const r2 = (v: number) => Math.round(v * 100) / 100;
+function OwnData({ week, team, cell, busy, saving, err, onCancel, onSave }: {
+  week: NominationWeek; team: NominationTeam; cell: NominationCell; busy: boolean; saving: boolean; err: string | null;
   onCancel: () => void; onSave: (ids: number[], value: number, reason: string) => void;
 }) {
   const d = week.defs.find((x) => x.key === cell.nomination)!;
@@ -433,7 +453,7 @@ function OwnData({ week, team, cell, busy, err, onCancel, onSave }: {
   const init = cell.final.status === "overridden" ? cell.final.winners : cell.crm.state === "ok" ? cell.crm.winners.filter((id) => id !== me) : [];
   const [ids, setIds] = useState<number[]>(init);
   const [num, setNum] = useState<string>(cell.final.status === "overridden" && cell.final.value != null ? String(cell.final.value)
-    : cell.crm.state === "ok" ? String(d.unit === "pct" ? Math.round(cell.crm.value) : cell.crm.value) : "");
+    : cell.crm.state === "ok" ? String(r2(cell.crm.value)) : "");
   const [why, setWhy] = useState<string>(cell.final.status === "overridden" ? cell.final.reason ?? "" : "");
   const name = (id: number) => week.names[String(id)] ?? team.members.find((m) => m.id === id)?.name ?? `Менеджер #${id}`;
   const value = parseAmount(num);
@@ -442,7 +462,7 @@ function OwnData({ week, team, cell, busy, err, onCancel, onSave }: {
     const next = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id];
     setIds(next);
     // Перша обрана людина — підставляємо її число з CRM; далі людина правит сама.
-    if (!ids.includes(id) && next.length === 1 && v != null && v > 0) setNum(String(d.unit === "pct" ? Math.round(v) : v));
+    if (!ids.includes(id) && next.length === 1 && v != null && v > 0) setNum(String(r2(v)));
   };
   const unitLbl = d.unit === "uah" ? "₴" : d.unit === "pct" ? "%" : cell.nomination === "cars" ? "авто" : "шт";
   return (
@@ -477,7 +497,7 @@ function OwnData({ week, team, cell, busy, err, onCancel, onSave }: {
         <button className="nm-btn lg" onClick={onCancel}>Скасувати</button>
         <button className="nm-btn lg p" disabled={busy || ids.length === 0 || value == null || why.trim().length < 3}
           title={ids.length === 0 ? "Оберіть переможця" : value == null ? "Вкажіть число" : why.trim().length < 3 ? "Напишіть, звідки число" : undefined}
-          onClick={() => value != null && onSave(ids, value, why.trim())}>{busy ? "Зберігаю…" : "Зберегти мої дані"}</button>
+          onClick={() => value != null && onSave(ids, value, why.trim())}>{saving ? "Зберігаю…" : "Зберегти мої дані"}</button>
       </div>
     </div>
   );
@@ -493,7 +513,7 @@ function DealsPanel({ drill, week, onClose }: { drill: Drill; week: NominationWe
     setRes(null); setErr(null); setAll(false);
     fetchDayItems({ managerId: drill.managerId, date: week.weekFrom, to: week.weekTo, kind: drill.kind })
       .then((r) => { if (alive) setRes(r); })
-      .catch((e) => { if (!alive) return; const st = (e as { response?: { status?: number } })?.response?.status; setErr(st === 403 ? "Розкриття угод потребує доступу до вкладки «Звіт»." : errorOf(e)); });
+      .catch((e) => { if (!alive) return; const st = (e as { response?: { status?: number } })?.response?.status; setErr(st === 403 ? "Немає доступу до угод цієї людини: потрібна вкладка «Звіт», або людина вже не у вашій команді." : errorOf(e)); });
     return () => { alive = false; };
   }, [drill.managerId, drill.kind, week.weekFrom, week.weekTo]);
   const items = res ? [...res.items].sort((a, b) => b.price - a.price) : [];
@@ -522,7 +542,8 @@ function DealsPanel({ drill, week, onClose }: { drill: Drill; week: NominationWe
             {items.length === 0 ? <div className="nm-muted">Угод немає.</div> : null}
           </div>
           <div className={`nm-sum${match ? "" : " off"}`}>
-            <span>Разом {res.total.count} угод{drill.kind === "received" ? ` · ${formatAmountFull(res.total.sum)}` : ""}</span>
+            <span>{drill.nomination === "maxDeal" ? `Найбільша з ${res.total.count} угод · ${formatAmountFull(got ?? 0)}`
+              : `Разом ${res.total.count} угод${drill.kind === "received" ? ` · ${formatAmountFull(res.total.sum)}` : ""}`}</span>
             <span>{match ? "= число в номінації" : `не зійшлося з числом у номінації (${fmtValue(drill.unit, drill.value)})`}</span>
           </div>
           {drill.kind === "received" ? <div className="nm-muted">Угоди, завантажені раніше, тут є, бо в «Факт» вони зайшли цього тижня. «Авто» рахує інакше — за датою завантаження.</div> : null}

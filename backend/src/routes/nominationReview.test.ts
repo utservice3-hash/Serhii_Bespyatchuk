@@ -83,10 +83,14 @@ test("#657 ДИМ: погодитись з рештою, скасувати, х�
     await assert.rejects(() => c.query(`INSERT INTO nomination_reviews (week_from,team_id,nomination,action,crm_fingerprint) VALUES ('2026-09-07',13,'cars','undo','x')`), /check/i, "🔴 БД прийняла невідому дію");
     await assert.rejects(() => c.query(`INSERT INTO nomination_reviews (week_from,team_id,nomination,action,crm_fingerprint,override_manager_ids,override_value) VALUES ('2026-09-07',13,'cars','override','x','{101}',3)`), /check/i, "🔴 БД прийняла свої дані без причини");
 
+    // ── Керівництво вже ввело свої дані на «міжнародних» — масове погодження тімліда їх НЕ перетирає.
+    const pre = await call("POST", "/review", { body: { weekFrom: WEEK, teamId: 13, nomination: "intl", action: "override", overrideManagerIds: [102], overrideValue: 2, reason: "два рейси без типу запиту" } });
+    assert.equal(pre.status, 200, JSON.stringify(pre.body));
     // ── «Погодитись з рештою» від тімліда: лише те, що чекає і що йому можна (не «результат» і «зазор» про нього).
     const b = await call("POST", "/review", { who: "lead", body: { weekFrom: WEEK, teamId: 13, action: "confirm", nominations: ["maxDeal", "cars", "revenue", "marginPct", "intl"] } });
     assert.equal(b.status, 200, JSON.stringify(b.body));
-    assert.deepEqual([...b.body.bulk.confirmed].sort(), ["cars", "intl", "marginPct"], "🔴 масове погодження зачепило рядок про тімліда або пропустило свій");
+    assert.deepEqual([...b.body.bulk.confirmed].sort(), ["cars", "marginPct"], "🔴 масове погодження зачепило рядок про тімліда, вирішений іншим, або пропустило свій");
+    assert.equal(cell(b.body, 13, "intl").final.status, "overridden", "🔴 масове погодження перетерло чужі «свої дані»");
     assert.equal(cell(b.body, 13, "revenue").final.status, "unconfirmed", "🔴 рядок про тімліда погоджено ним самим");
     assert.equal(cell(b.body, 13, "cars").final.status, "confirmed");
     assert.equal(cell(b.body, 13, "cars").review.by, "Тімлід РНК", "🔴 не видно, хто погодив");

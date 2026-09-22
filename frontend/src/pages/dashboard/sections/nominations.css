@@ -71,7 +71,7 @@ textarea.nm-inp { min-height: 64px; resize: vertical; }
 
 .nm-card-h { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; padding: 14px 16px 8px; }
 .nm-progress-list { display: flex; flex-direction: column; }
-.nm-prog-row { display: grid; grid-template-columns: minmax(180px, 260px) 140px 70px minmax(0, 1fr) 170px; gap: 14px; align-items: center;
+.nm-prog-row { display: grid; grid-template-columns: minmax(140px, 1fr) 120px 60px minmax(160px, 2fr) auto; gap: 14px; align-items: center;
   padding: 12px 16px; border: 0; border-top: 1px solid var(--border); background: none; color: var(--text); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
 .nm-prog-row:hover { background: var(--surface-2); }
 .nm-prog-team { display: flex; flex-direction: column; gap: 2px; }
@@ -97,7 +97,7 @@ textarea.nm-inp { min-height: 64px; resize: vertical; }
 .nm-avs { display: flex; flex: none; }
 .nm-avs .nm-av { border: 2px solid #C8102E; }
 .nm-avs .nm-av + .nm-av { margin-left: -12px; }
-.nm-win .nm-name { font-size: 15px; min-width: 0; }
+.nm-win .nm-name { font-size: 15px; min-width: 0; overflow-wrap: anywhere; }
 .nm-big { margin-left: auto; font-size: 20px; font-weight: 800; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .nm-quote { font-size: 13px; line-height: 1.45; background: var(--info-bg); border-radius: var(--r-lg); padding: 8px 10px; }
 .nm-run { font-size: 13px; color: var(--text-muted); }
@@ -110,7 +110,8 @@ textarea.nm-inp { min-height: 64px; resize: vertical; }
 .nm-dec { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .nm-dec .nm-btn.lg { flex: 1 1 120px; }
 .nm-done { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex: 1 1 100%; background: var(--ok-bg); color: var(--ok); border-radius: var(--r-xl); padding: 10px 12px; font-size: 13.5px; font-weight: 600; }
-.nm-done .nm-link { color: var(--ok); font-weight: 600; }
+.nm-undo { min-height: 36px; background: transparent; border-color: currentColor; color: var(--ok); }
+.nm-own-back { display: none; }
 
 .nm-own { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--border); padding-top: 12px; }
 .nm-own-h { display: flex; flex-direction: column; gap: 2px; }
@@ -141,12 +142,15 @@ textarea.nm-inp { min-height: 64px; resize: vertical; }
   .nm-dec { flex-direction: column; align-items: stretch; }
   .nm-dec .nm-btn.lg { flex: none; }
 }
-@media (min-width: 1100px) {
+@media (min-width: 1280px) {
   .nm-layout.with-aside { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 16px; align-items: start; }
   .nm-layout.with-aside .nm-aside { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; margin-bottom: 0; }
+  /* Панель праворуч забирає 400 px — рядок картки стискається до двох колонок, щоб пропозиція не зникла. */
+  .nm-layout.with-aside .nm-ncard { grid-template-columns: minmax(0, 1fr) 200px; }
+  .nm-layout.with-aside .nm-nc-rule { grid-column: 1 / -1; }
 }
 /* Телефон і вузьке вікно: «звідки число» — шторка знизу; «свої дані» теж шторкою, кнопки внизу завжди видно. */
-@media (max-width: 1099px) {
+@media (max-width: 1279px) {
   .nm-aside { position: fixed; left: 0; right: 0; bottom: 0; max-height: 85vh; overflow-y: auto; z-index: 61; margin: 0; border-radius: 16px 16px 0 0; }
   .nm-aside-back { display: block; position: fixed; inset: 0; background: rgba(15, 17, 21, .45); z-index: 60; }
 }
@@ -154,12 +158,15 @@ textarea.nm-inp { min-height: 64px; resize: vertical; }
   .nm-head { align-items: stretch; }
   .nm-head-actions .nm-btn.lg { flex: 1 1 100%; }
   .nm-own { position: fixed; left: 0; right: 0; bottom: 0; max-height: 88vh; overflow-y: auto; z-index: 61; background: var(--card-bg);
-    border-radius: 16px 16px 0 0; padding: 14px 16px 16px; border-top: 0; box-shadow: 0 0 0 100vmax rgba(15, 17, 21, .45); }
+    border-radius: 16px 16px 0 0; padding: 14px 16px 16px; border-top: 0; box-shadow: var(--shadow-lg); }
+  .nm-own-back { display: block; position: fixed; inset: 0; background: rgba(15, 17, 21, .45); z-index: 60; }
   .nm-own-f { grid-template-columns: 1fr; }
   .nm-own-btns { position: sticky; bottom: -16px; background: var(--card-bg); padding: 10px 0 6px; }
   .nm-own-btns .nm-btn.lg { flex: 1; }
   .nm-bulk { position: sticky; bottom: 0; z-index: 5; background: var(--card-bg); border-top: 1px solid var(--border); padding: 10px 12px 12px; margin: 0 -12px; align-items: stretch; }
   .nm-bulk .nm-btn.lg { width: 100%; }
+}
+@media (max-width: 1099px) {
   .nm-prog-row { grid-template-columns: 1fr auto; }
   .nm-prog-row .nm-bar, .nm-prog-row .nm-prog-at { display: none; }
   .nm-prog-row .nm-prog-wait { grid-column: 1 / -1; }
