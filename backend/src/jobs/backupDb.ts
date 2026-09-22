@@ -22,7 +22,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BACKUP_DIR = process.env.BACKUP_DIR ?? path.resolve(__dirname, "..", "..", "..", "backups");
 /**
  * Тека файлів документів (`routes/documents.ts` DOCS_DIR = backend/documents) — їде в копію разом із таблицями (#446).
- * Експортована, щоб `#627` звіряв із нею теку фото напряму, а не з переписаною в тест формулою.
+ * Експортована, щоб `#641` звіряв із нею теку фото напряму, а не з переписаною в тест формулою.
  */
 export const DOCS_DIR = process.env.DOCS_DIR ?? path.resolve(__dirname, "..", "..", "documents");
 

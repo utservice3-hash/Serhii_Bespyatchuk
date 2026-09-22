@@ -18,7 +18,7 @@ import { checkPhoto, photoStoredName, photoDir } from "../core/peopleRules.js";
 export const peopleRouter = Router();
 peopleRouter.use(requireAuth);
 
-/** Корінь теки документів — під нічним бекапом (`photoDir`, #627). */
+/** Корінь теки документів — під нічним бекапом (`photoDir`, #641). */
 const DOCS_DIR = photoDir();
 /** id співробітника — додатне ціле в межах `integer` Postgres; інакше 400 ще до БД і до запису файла. */
 const idOf = (v: unknown): number => {
@@ -37,7 +37,7 @@ const b64 = (v: unknown) => (typeof v === "string" && v ? Buffer.from(v.includes
 
 peopleRouter.get("/photo/:employeeId", safe(async (req, res) => {
   // 🎓 Кандидат (зовнішній стажист) бачить лише «Навчання» й «Документи» — фото персоналу йому не належать,
-  // і жодного екрана з фото в нього немає. Роут без вкладки, тож межу ставимо тут (#630).
+  // і жодного екрана з фото в нього немає. Роут без вкладки, тож межу ставимо тут (#644).
   res.setHeader("Cache-Control", "no-store"); // відмови й 404 не кешуються; успіх перепише заголовок нижче
   if (req.auth!.roleKey === "candidate") return res.status(403).json({ error: "Фото співробітників — для команди" });
   const file = await photoFileOf(idOf(req.params.employeeId));

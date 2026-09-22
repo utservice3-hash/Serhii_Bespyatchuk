@@ -15,7 +15,7 @@ export const PHOTO_MIMES = ["image/jpeg", "image/png", "image/webp"] as const;
 export type PhotoMime = (typeof PHOTO_MIMES)[number];
 
 /**
- * Перевірка файла фото (#626). Тип визначаємо за БАЙТАМИ, а не за назвою чи заявленим mime: PDF,
+ * Перевірка файла фото (#640). Тип визначаємо за БАЙТАМИ, а не за назвою чи заявленим mime: PDF,
  * порожній файл і будь-що не-картинка — відмова; понад 5 МБ — відмова.
  */
 export function checkPhoto(buf: Uint8Array | null): { ok: true; mime: PhotoMime } | { ok: false; error: string } {
@@ -28,14 +28,14 @@ export function checkPhoto(buf: Uint8Array | null): { ok: true; mime: PhotoMime 
 
 /**
  * Імʼя файлу на диску: КОРІНЬ теки документів, префікс `photo-`. Корінь — бо нічний бекап
- * (`jobs/backupDocuments.ts`) копіює лише файли кореня, без підтек (#627).
+ * (`jobs/backupDocuments.ts`) копіює лише файли кореня, без підтек (#641).
  */
 export const photoStoredName = (uuid: string, mime: PhotoMime): string =>
   `photo-${uuid}${{ "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" }[mime]}`;
 
 /**
  * Тека фото = КОРІНЬ теки документів, яку копіює нічний бекап (`jobs/backupDb.ts`: `DOCS_DIR` з
- * оточення, інакше `backend/documents`). Той самий перемикач і та сама тека за замовчуванням (#627):
+ * оточення, інакше `backend/documents`). Той самий перемикач і та сама тека за замовчуванням (#641):
  * куди дивиться копія, туди й лягає фото. Це також тека «Документів» і «Найму».
  */
 export const photoDir = (env: NodeJS.ProcessEnv = process.env): string =>
@@ -45,7 +45,7 @@ export interface PhotoState { file: string | null; prev: string | null }
 export type PhotoAction = { kind: "upload"; file: string } | { kind: "remove" } | { kind: "restore" };
 
 /**
- * Перехід стану фото (#628). Кожна дія скасовна тим самим інтерфейсом:
+ * Перехід стану фото (#642). Кожна дія скасовна тим самим інтерфейсом:
  *  · «Завантажити/Замінити» — нове фото, попереднім стає поточне (якщо поточного немає — лишається старе попереднє);
  *  · «Прибрати» — фото зникає, але стає попереднім → «Повернути попереднє» його вертає;
  *  · «Повернути попереднє» — поточне й попереднє міняються місцями (повторне натискання — назад).
