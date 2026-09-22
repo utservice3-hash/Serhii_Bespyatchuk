@@ -4,8 +4,20 @@ import { Dashboard } from "./pages/Dashboard";
 import { TrackerAuth } from "./pages/TrackerAuth";
 import { Invite } from "./pages/Invite";
 
+/**
+ * Куди повернути після входу. Лише власний шлях застосунку («/…», не «//…» — інакше це вже інший сайт).
+ * Навіщо (22.09.2026): Даша шле тімлідам посилання на тиждень номінацій; без цього після входу людина
+ * опинялась на Звіті, а не там, куди її кликали.
+ */
+function rememberAfterLogin(): void {
+  const here = window.location.pathname + window.location.search;
+  if (!here.startsWith("/") || here.startsWith("//") || here === "/" || here.startsWith("/login")) return;
+  try { sessionStorage.setItem("afterLogin", here); } catch { /* приватний режим — просто без повернення */ }
+}
+
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = localStorage.getItem("token");
+  if (!token) rememberAfterLogin();
   return token ? <>{children}</> : <Navigate to="/login" replace />;
 }
 

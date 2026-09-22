@@ -35,6 +35,11 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && localStorage.getItem("token")) {
       localStorage.removeItem("token");
       if (window.location.pathname !== "/login") {
+        // Той самий запис «куди повернути», що в RequireAuth (App.tsx): лише власний шлях застосунку.
+        const here = window.location.pathname + window.location.search;
+        if (here.startsWith("/") && !here.startsWith("//") && here !== "/") {
+          try { sessionStorage.setItem("afterLogin", here); } catch { /* без повернення */ }
+        }
         window.location.href = "/login";
       }
     }
