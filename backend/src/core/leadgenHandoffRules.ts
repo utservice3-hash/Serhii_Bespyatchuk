@@ -218,12 +218,33 @@ export function bucketPersonMoneyWire(bucket: string, managerId: number, m: Lead
   };
 }
 
-// ─────────────────────── МЕЖА ТІМЛІДА ДЛЯ СПИСКУ ПЕРЕДАЧ ───────────────────────
+// ─────────────────────── МЕЖА ТІМЛІДА — ОДИН ПОМІЧНИК НА ТРИ РОУТИ ЕКРАНА ───────────────────────
+
+/**
+ * 🔒 СКОУП ВІДПОВІДІ З РОЛІ — ЄДИНЕ МІСЦЕ, ДЕ ВІН ОБЧИСЛЮЄТЬСЯ для `/leadgen-stats`,
+ * `/leadgen-trend` і `/leadgen-handoff-deals` (рішення власника 22.09.2026, правило 7).
+ *  • тімлід — лише своя команда; без команди — `-1` (жодної), а НЕ `null` (весь відділ):
+ *    порожній скоуп не можна виражати значенням, що означає «без обмеження» (♾ правило 7);
+ *  • менеджер — ніщо (`-1`/`-1`). Роут відмовляє йому першим оператором; тут — друга лінія,
+ *    щоб помилковий виклик дав порожнечу, а не чужі гроші;
+ *  • решта (адмін-рівень, фінансист, КВП…) — весь відділ.
+ *
+ * 🔴 НАВІЩО ОКРЕМОЮ ФУНКЦІЄЮ (ревʼю F1). Скоуп писався в кожному обробнику літералом, і жоден
+ * гейт не дивився, ЩО саме передано в ядро: `{ teamId: null, … }` у роуті давав тімліду гроші
+ * всього відділу при повністю зеленому наборі. Тепер роут не складає скоуп сам — `#681b`
+ * вимагає, щоб у ядро йшов саме результат цієї функції (або `clamp.scope`, що з неї ж).
+ */
+export function leadgenAuthScope(auth: { role: string; teamId: number | null | undefined }): HandoffScope {
+  if (auth.role === "manager") return { teamId: -1, managerId: -1 };
+  if (auth.role === "team_lead") return { teamId: auth.teamId ?? -1, managerId: null };
+  return { teamId: null, managerId: null };
+}
 
 export type HandoffDealsScope = { ok: true; scope: HandoffScope } | { ok: false; status: 403 };
 
 /**
- * 🔒 ХТО ЯКИЙ СПИСОК ПЕРЕДАЧ БАЧИТЬ — та сама межа, що в рядків `/leadgen-stats`.
+ * 🔒 ХТО ЯКИЙ СПИСОК ПЕРЕДАЧ БАЧИТЬ — та сама межа, що в рядків `/leadgen-stats`
+ * (`leadgenAuthScope`), плюс одна людина:
  *  • менеджер — 403 (роут перевіряє це першим оператором; тут — друга лінія);
  *  • тімлід — лише своя команда; `managerId` людини з ЧУЖОЇ команди (або невідомої) — 403,
  *    а не порожній список: порожнеча читалась би як «у неї нуль передач»;
@@ -235,12 +256,9 @@ export function handoffDealsScope(
   managerId: number | null, managerTeamId: number | null | undefined,
 ): HandoffDealsScope {
   if (auth.role === "manager") return { ok: false, status: 403 };
-  if (auth.role === "team_lead") {
-    const teamId = auth.teamId ?? -1;
-    if (managerId != null && managerTeamId !== teamId) return { ok: false, status: 403 };
-    return { ok: true, scope: { teamId, managerId } };
-  }
-  return { ok: true, scope: { teamId: null, managerId } };
+  const base = leadgenAuthScope(auth);
+  if (base.teamId != null && managerId != null && managerTeamId !== base.teamId) return { ok: false, status: 403 };
+  return { ok: true, scope: { teamId: base.teamId, managerId } };
 }
 
 // ─────────────────────── ВІКНО ТРЕНДУ ───────────────────────

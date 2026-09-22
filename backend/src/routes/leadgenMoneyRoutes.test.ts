@@ -99,3 +99,63 @@ test("#678b ПЕРШИЙ ОПЕРАТОР нового обробника — в
     + '  if (req.auth!.role === "manager") return res.status(403).json({});\n});';
   assert.doesNotMatch(firstStatement(bad), MANAGER_FIRST, "🔴 детектор першого оператора не бачить порядку");
 });
+
+/** Код без коментарів — щоб згадка виклику в коментарі не рахувалась ні «за», ні «проти». */
+const codeOf = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+
+/**
+ * Порушення межі скоупу в тілі обробника: що саме йде в ядро третім аргументом.
+ * Дозволено рівно два джерела — `scope` із `const scope = leadgenAuthScope(auth);` і
+ * `clamp.scope` із `const clamp = handoffDealsScope(`. Будь-який літерал (`{ teamId: null, … }`),
+ * інша змінна чи власний кламп `auth.role === "team_lead"` в обробнику — порушення.
+ */
+function scopeViolations(body: string): string[] {
+  const code = codeOf(body);
+  const calls = [...code.matchAll(/\b(leadgenHandoffMoney|leadgenTrend)\(([^()]*)\)/g)];
+  const out: string[] = [];
+  if (!calls.length) out.push("жодного виклику ядра з грошима/трендом");
+  for (const c of calls) {
+    if (!/^\s*[\w.]+\s*,\s*[\w.]+\s*,\s*(scope|clamp\.scope)\s*$/.test(c[2])) out.push(`${c[1]}(${c[2].trim()})`);
+  }
+  if (calls.some((c) => /,\s*scope\s*$/.test(c[2])) && !/\bconst scope = leadgenAuthScope\(auth\);/.test(code)) {
+    out.push("`scope` не з leadgenAuthScope(auth)");
+  }
+  if (calls.some((c) => /,\s*clamp\.scope\s*$/.test(c[2])) && !/\bconst clamp = handoffDealsScope\(/.test(code)) {
+    out.push("`clamp` не з handoffDealsScope(");
+  }
+  if (/auth\.role === "team_lead"/.test(code)) out.push("власний кламп тімліда в обробнику");
+  return out;
+}
+
+/**
+ * #681b — У ЯДРО ЙДЕ СКОУП З ПОМІЧНИКА, А НЕ ЛІТЕРАЛ (ревʼю F1, правило 7).
+ *
+ * Привід заміряний ревʼюером: `{ teamId: null, managerId: null }` у `/leadgen-stats` і
+ * `{ teamId: null, managerId }` у `/leadgen-handoff-deals` — тімлід отримує гроші й угоди
+ * ВСІХ команд, а набір (1331 тест) лишався зеленим: `#677` дивився лише на ІМʼЯ функції.
+ * Тут — на АРГУМЕНТ: у всіх трьох обробниках скоуп мусить бути результатом `leadgenAuthScope`
+ * (або `clamp.scope` з `handoffDealsScope`, що будується на ньому), а рядки `/leadgen-stats`
+ * ріжуться тим самим `scope.teamId`. Чистий бік (що помічник звужує правильно) — `#681`.
+ * 🧨 САБОТАЖ: у `/leadgen-stats` передати `{ teamId: null, managerId: null }` → червоніє;
+ * у `/leadgen-handoff-deals` — `{ teamId: null, managerId }` замість `clamp.scope` → червоніє.
+ */
+test("#681b ДЖЕРЕЛО: у ядро йде скоуп із leadgenAuthScope/clamp.scope, а не літерал — в усіх трьох роутах", () => {
+  for (const route of ["/leadgen-stats", "/leadgen-trend", "/leadgen-handoff-deals"]) {
+    assert.deepEqual(scopeViolations(handlerBody(DASH, route)), [], `🔴 ${route}: скоуп у ядро не з помічника`);
+  }
+  assert.match(codeOf(handlerBody(DASH, "/leadgen-stats")), /\bconst teamId = scope\.teamId;/,
+    "🔴 /leadgen-stats ріже рядки не тим скоупом, що гроші");
+  // 🪞 Дзеркало: детектор ловить саме ті поломки, які відтворив ревʼюер, і не зеленіє на все.
+  const planted = (arg: string, pre = "  const scope = leadgenAuthScope(auth);\n") =>
+    `dashboardRouter.get("/x", async (req, res) => {\n${pre}  const hm = await leadgenHandoffMoney(from, to, ${arg});\n`;
+  assert.notDeepEqual(scopeViolations(planted("{ teamId: null, managerId: null }")), [],
+    "🔴 детектор не бачить літерала, що віддає тімліду весь відділ");
+  assert.notDeepEqual(scopeViolations(planted("{ teamId: null, managerId }")), []);
+  assert.notDeepEqual(scopeViolations(planted("scope", "  const scope = { teamId: null, managerId: null };\n")), [],
+    "🔴 детектор не бачить `scope`, складеного не помічником");
+  assert.notDeepEqual(scopeViolations(planted("scope") + '  const teamId = auth.role === "team_lead" ? 1 : null;\n'), [],
+    "🔴 детектор не бачить власного клампу тімліда");
+  assert.deepEqual(scopeViolations(planted("scope")), [], "🔴 детектор червоніє і на правильному виклику — беззубий навпаки");
+  assert.deepEqual(scopeViolations("  // було: leadgenHandoffMoney(from, to, { teamId: null })\n" + planted("scope")), [],
+    "🔴 згадка в коментарі читається як виклик");
+});

@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   pickHandoffs, classifyHandoffs, aggregateHandoffMoney, handoffView, managerDealClass,
-  handoffDealsScope, trendWindow, parseTrendMonths, parseLeadgenGrain, parseManagerIdParam,
+  handoffDealsScope, leadgenAuthScope, trendWindow, parseTrendMonths, parseLeadgenGrain, parseManagerIdParam,
   personMoneyWire, emptyHandoffMoney,
   type HandoffEntry, type DealState, type ClassRules, type LeadgenHandoffMoney,
 } from "./leadgenHandoffRules.js";
@@ -184,6 +184,44 @@ test("#673 ТІМЛІД І ЧУЖИЙ managerId → 403; свій — пропу
   assert.deepEqual(handoffDealsScope({ role: "manager", teamId: 5 }, null, null), { ok: false, status: 403 });
   assert.deepEqual(handoffDealsScope({ role: "admin", teamId: null }, 44, 6), { ok: true, scope: { teamId: null, managerId: 44 } },
     "🔴 адмін не бачить людини з будь-якої команди");
+});
+
+/**
+ * #681 — СКОУП З РОЛІ ОБЧИСЛЮЄ ОДИН ПОМІЧНИК, І ВІН ЗВУЖУЄ (ревʼю F1, правило 7).
+ *
+ * `leadgenAuthScope` — єдине джерело скоупу для трьох роутів екрана. Обидва боки межі:
+ * тімлід → лише своя команда (і без команди — НІЧИЯ, `-1`, а не весь відділ); адмін-рівень і
+ * `company` → відділ; менеджер → ніщо. І те саме дає список передач без `managerId` — інакше
+ * число в рядку і розкривний список тімліда рахувались би над різними скоупами.
+ * Поведінково: через цей скоуп тімлід команди 2 НЕ бачить грошей команди 1, а адмін бачить обидві.
+ * 🧨 САБОТАЖ: у гілці тімліда повертати `teamId: null` → червоніє.
+ */
+test("#681 СКОУП З РОЛІ — ОДИН ПОМІЧНИК: тімлід → своя команда, без команди → нічия, адмін → відділ", () => {
+  assert.deepEqual(leadgenAuthScope({ role: "team_lead", teamId: 5 }), { teamId: 5, managerId: null },
+    "🔴 тімлід отримав не свою команду — гроші інших команд поїдуть йому");
+  assert.deepEqual(leadgenAuthScope({ role: "team_lead", teamId: null }), { teamId: -1, managerId: null },
+    "🔴 тімлід БЕЗ команди отримав весь відділ — порожній скоуп виражено «без обмеження»");
+  assert.deepEqual(leadgenAuthScope({ role: "team_lead", teamId: undefined }), { teamId: -1, managerId: null });
+  assert.deepEqual(leadgenAuthScope({ role: "manager", teamId: 5 }), { teamId: -1, managerId: -1 },
+    "🔴 менеджер (друга лінія після 403) отримав непорожній скоуп");
+  // 🪞 Дзеркало: ті, кому відділ належить, його отримують — інакше «звузити всім» теж пройшло б.
+  assert.deepEqual(leadgenAuthScope({ role: "admin", teamId: 5 }), { teamId: null, managerId: null },
+    "🔴 адмін із прописаною командою звужений до неї — відділ зник");
+  assert.deepEqual(leadgenAuthScope({ role: "company", teamId: null }), { teamId: null, managerId: null });
+  // Список передач без `managerId` — рівно той самий скоуп, що число в рядку.
+  for (const a of [{ role: "team_lead", teamId: 5 }, { role: "team_lead", teamId: null }, { role: "admin", teamId: null },
+    { role: "company", teamId: 3 }]) {
+    assert.deepEqual(handoffDealsScope(a, null, null), { ok: true, scope: leadgenAuthScope(a) },
+      `🔴 ${a.role}/${a.teamId}: список передач і число рядка рахуються над різними скоупами`);
+  }
+  // Поведінково, через `handoffView`: тімлід 2 не бачить грошей команди 1; адмін бачить обидві.
+  const states = new Map<number, DealState>([[9001, st("success", 30_000)], [9002, st("paid", 4_000)]]);
+  const domain = [e(401, 7, 0, 9001, 1), e(402, 8, 5, 9002, 2)];
+  const lead2 = handoffView(domain, states, leadgenAuthScope({ role: "team_lead", teamId: 2 }));
+  assert.equal(lead2.totals.success.sum, 0, "🔴 тімлід команди 2 бачить успіх команди 1");
+  assert.equal(lead2.totals.paid.sum, 4_000, "фікстура: своя команда мусить бути видна");
+  const adm = handoffView(domain, states, leadgenAuthScope({ role: "admin", teamId: null }));
+  assert.equal(adm.totals.success.sum + adm.totals.paid.sum, 34_000, "🔴 адмін не бачить відділу");
 });
 
 /**
