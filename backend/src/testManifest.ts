@@ -219,6 +219,7 @@ export const MANIFEST_FILES: string[] = [
   "health/alerts.test.js",
   "jobs/clientKeyAlias.test.js",
   "jobs/jobs.test.js",
+  "jobs/syncBankOutcome.test.js",
   "manifest.test.js",
   "routes/plans.test.js",
   "testReadOnly.test.js",
@@ -1126,6 +1127,8 @@ export const MANIFEST_TESTS: string[] = [
   // jobs/syncGuard.test.ts — захист після аварії 10.08.2026 (синк стояв 14 год 52 хв)
   "#68 ОХОРОНЕЦЬ НЕ МОЖЕ ЗАЛИПНУТИ НАЗАВЖДИ",
   "#68b ПРОПУСК пишеться пропуском, а не успіхом",
+  "#647 SYNCBANK: збій одного рахунку з токеном — помилка з його назвою; усі в порядку — успіх; без токена — не помилка",
+  "#647b 🪞 ДЖЕРЕЛО: syncBank кличе syncBankOutcome і кидає його помилку, а не ковтає в catch",
   "#68c УСПІХ НЕ ЗАТИРАЄ last_error",
   "#68d РОЗБІЖНІСТЬ job_runs↔sync_state видно запитом",
   "#68e ЗАМОК НАЗИВАЄ ТРИМАЧА І ТРИВАЛІСТЬ",

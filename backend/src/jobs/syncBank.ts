@@ -6,6 +6,7 @@ import { toUah } from "../bankSources/fx.js";
 import * as mono from "../bankSources/mono.js";
 import * as privat from "../bankSources/privat.js";
 import type { BankAccountRow, NormalizedTx, BankAdapter } from "../bankSources/types.js";
+import { syncBankOutcome } from "./syncBankOutcome.js";
 
 const ADAPTERS: Record<BankAccountRow["bank"], BankAdapter> = { mono, privat };
 // Історія ≥60 днів. mono statement обмежений 31 добою/запит → адаптер сам чанкує (2 вікна на 60д);
@@ -41,6 +42,9 @@ export async function syncBank(): Promise<{ synced: number; inserted: number; sk
   );
   let inserted = 0, synced = 0;
   const skipped: string[] = [];
+  // Збої рахунків збираються ОКРЕМО від свідомих пропусків і після циклу стають помилкою
+  // джоби — див. `syncBankOutcome.ts`, чому «рядок у лозі» тут не рахується за сигнал.
+  const failed: { label: string; error: string }[] = [];
   for (const acc of accounts.rows) {
     const token = acc.env_key_name ? process.env[acc.env_key_name] : undefined;
     if (!token) { skipped.push(acc.label); console.warn(`syncBank: рахунок «${acc.label}» пропущено — немає env ${acc.env_key_name}`); continue; }
@@ -77,10 +81,13 @@ export async function syncBank(): Promise<{ synced: number; inserted: number; sk
       for (const tx of txs) { if (await upsertTx(acc.id, tx)) inserted++; }
       synced++;
     } catch (e) {
-      // помилка банку (таймаут/ліміт) не валить синк інших рахунків
+      // помилка банку (таймаут/ліміт) не валить синк ІНШИХ рахунків — цикл іде далі...
       console.error(`syncBank: «${acc.label}» помилка:`, (e as Error).message);
-      skipped.push(acc.label);
+      failed.push({ label: acc.label, error: (e as Error).message });
     }
   }
+  // ...але після циклу збій стає помилкою ДЖОБИ, інакше `runJob` запише успіх (#647).
+  const outcome = syncBankOutcome({ failed, noToken: skipped });
+  if (!outcome.ok) throw new Error(outcome.error);
   return { synced, inserted, skipped };
 }
