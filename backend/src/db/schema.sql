@@ -3863,19 +3863,13 @@ DROP TRIGGER IF EXISTS trg_nomination_reviews_immutable ON nomination_reviews;
 CREATE TRIGGER trg_nomination_reviews_immutable BEFORE UPDATE OR DELETE ON nomination_reviews
   FOR EACH ROW EXECUTE FUNCTION nominations_immutable();
 
--- 📣 Рейтинг лідогенераторів фіксується разом із тижнем (22.09.2026): dept 'lg'. Тригер незмінності не чіпаємо —
--- змінюється лише перелік дозволених значень. Імʼя старого CHECK — автоматичне Postgres (заміряно на проді).
-ALTER TABLE nomination_snapshot DROP CONSTRAINT IF EXISTS nomination_snapshot_dept_check;
-ALTER TABLE nomination_snapshot DROP CONSTRAINT IF EXISTS nomination_snapshot_dept_kind;
-ALTER TABLE nomination_snapshot ADD CONSTRAINT nomination_snapshot_dept_kind CHECK (dept IN ('rpk','rnk','lg'));
-
 -- 📊 Статистика відділу РНК · конверсія: правки Даші й тімлідів РНК (22.09.2026). Лише дописування: остання
--- правка по людині перемагає, «reset» повертає число системи, «comment» — коментар до слайда.
+-- правка чисел перемагає («reset» повертає число системи), «slide» — окремо лише вибір «на слайд», «comment» — коментар.
 CREATE TABLE IF NOT EXISTS nomination_conv_edits (
   id          BIGSERIAL PRIMARY KEY,
   week_from   DATE NOT NULL,
   manager_id  INTEGER,
-  action      TEXT NOT NULL CHECK (action IN ('set','reset','comment')),
+  action      TEXT NOT NULL CHECK (action IN ('set','reset','slide','comment')),
   taken       INTEGER CHECK (taken >= 0),
   won         INTEGER CHECK (won >= 0),
   on_slide    BOOLEAN,
@@ -3883,7 +3877,8 @@ CREATE TABLE IF NOT EXISTS nomination_conv_edits (
   user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK ((action = 'comment' AND manager_id IS NULL AND comment IS NOT NULL)
-      OR (action = 'set' AND manager_id IS NOT NULL AND taken IS NOT NULL AND won IS NOT NULL AND won <= taken AND on_slide IS NOT NULL)
+      OR (action = 'set' AND manager_id IS NOT NULL AND taken IS NOT NULL AND won IS NOT NULL AND won <= taken)
+      OR (action = 'slide' AND manager_id IS NOT NULL AND on_slide IS NOT NULL)
       OR (action = 'reset' AND manager_id IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS ix_nomination_conv_edits_week ON nomination_conv_edits(week_from, id);

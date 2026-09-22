@@ -456,7 +456,7 @@ export const ROW_SPREAD_EXEMPTIONS: SpreadExemption[] = [
     why: "`t` — TeamWeek того самого обчисленого WeekView (команда, учасники, клітинки)." },
   { file: "routes/nominations.ts", frag: "return { ...c, canReview",
     why: "`c` — NominationCell обчисленого WeekView (CRM-переможці, фінал, угода-доказ)." },
-  { file: "routes/nominations.ts", frag: ".map((r) => ({ ...r, canEdit",
+  { file: "routes/nominations.ts", frag: "({ ...row, canEditRow",
     why: "рядок таблиці конверсії РНК — обчислений обʼєкт `buildRnkConv` (core/nominationRules.ts): поля з ядра й правок, рядка БД тут немає" },
   { file: "routes/bank.ts", frag: "return { ...b, balance_",
     why: "SELECT вище називає РІВНО 6 колонок (id, label, company, balance_amount, "

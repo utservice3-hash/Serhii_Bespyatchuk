@@ -131,10 +131,15 @@ export function leadsMessage(week: NominationWeek, origin: string): string {
   const due = week.freezeDueAt.slice(0, 10);
   const waiting = week.teams.map((t) => ({ t, p: teamProgress(t) })).filter((x) => x.p.waitLead.length > 0)
     .map((x) => `${x.t.teamName} (${x.p.done} з ${x.p.total})`);
+  // Лідогенерація: номінації, яких система не рахує й де даних ще немає (їх вносить тімлід лідогену).
+  const noCrm = new Set((week.leadgenDefs ?? []).filter((d) => d.noCrm).map((d) => d.key));
+  const lgMissing = (week.leadgen?.cells ?? []).filter((c) => noCrm.has(c.nomination) && c.final.status !== "overridden")
+    .map((c) => (week.leadgenDefs.find((d) => d.key === c.nomination)?.label ?? c.nomination).replace(/^Найбільш(ий|а) (кількість )?/, "").toLowerCase());
   return [
     `Система вже запропонувала переможців тижня ${DM(week.weekFrom)}–${DM(week.weekTo)} з CRM — рахувати руками не треба.`,
     `Відкрийте свою команду, перевірте й натисніть «Погоджуюсь» або «Свої дані» до вт ${DM(due)}, 08:00:`,
     `${origin}/nominations?week=${week.weekFrom}`,
     waiting.length ? `Ще чекаємо: ${waiting.join(", ")}.` : "Усі команди вже перевірили — дякуємо!",
+    ...(lgMissing.length ? [`Лідогенерація: ще не внесено — ${lgMissing.join(", ")}.`] : []),
   ].join("\n");
 }

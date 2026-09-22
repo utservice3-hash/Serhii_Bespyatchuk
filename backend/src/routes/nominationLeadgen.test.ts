@@ -5,13 +5,14 @@ import path from "node:path";
 import { skipReason } from "../db/scratchDb.js";
 
 /**
- * #662 — ЛІДОГЕНЕРАТОРИ Й КОНВЕРСІЯ РНК ПРОТИ БАЗИ З НУЛЯ (22.09.2026, слайди 4–5 Даші).
- * Лідогенератори: «прорахунки» — з CRM (Продзвін → «Кваліфіковано»); зазор — лише свої дані: тімлід лідогену
- * вносить про іншого, про себе — ні, тімлід РНК — ні; знімок фіксує 'lg'. Конверсія РНК: керівництво правит будь-
- * який рядок і пише коментар; тімлід РНК — лише свою команду; тімлід РПК таблиці не бачить і не правит; «Як у CRM»
- * повертає число; CHECK не пускає успіх > ліди; правки лише дописуються.
+ * #666 — ЛІДОГЕНЕРАТОРИ Й КОНВЕРСІЯ РНК ПРОТИ БАЗИ З НУЛЯ (22.09.2026, слайди 4–5 Даші).
+ * Лідогенератори: «прорахунки» — з CRM (Продзвін → «Кваліфіковано»), лише активні; зазор — лише свої дані: тімлід
+ * лідогену вносить про іншого, про себе — ні, тімлід РНК — ні; ЖИВІ — правляться й після фіксації тижня.
+ * Конверсія РНК: число CRM = «Конв. реклама» (лише рекламні угоди, створені в тижні); керівництво правит будь-який
+ * рядок і пише коментар; тімлід РНК бачить і правит лише свою команду (друга команда РНК — поза його відповіддю);
+ * тімлід РПК таблиці не бачить; «Як у CRM» повертає справжнє (ненульове) число; вибір «на слайд» — окремо від чисел.
  */
-test("#662 ДИМ: лідогенератори (прорахунки з CRM, зазор — свої дані) і конверсія РНК (правки, межі) — проти бази з нуля", async (t) => {
+test("#666 ДИМ: лідогенератори (живі, дані тімліда) і конверсія РНК (CRM, правки, межі команд) — проти бази з нуля", async (t) => {
   const { provisionScratch } = await import("../db/scratchDb.js");
   const scratch = provisionScratch();
   if ("unavailable" in scratch) return t.skip(skipReason(scratch));
@@ -30,7 +31,8 @@ test("#662 ДИМ: лідогенератори (прорахунки з CRM, з
     await c.query(`INSERT INTO managers (id,name,team_id,is_active) VALUES
         (101,'Андрусенко',13,true),(102,'Цалко',13,true),(103,'Тімлід РНК',13,true),
         (201,'Семенюк',5,true),(202,'Хомік',5,true),(301,'Лідогенератор',11,true),(104,'Звільнена',13,false)`);
-    await c.query(`INSERT INTO managers (id,name,team_id,is_active) VALUES (302,'Тімлід лідогену',11,true)`);
+    await c.query(`INSERT INTO teams (id,name) VALUES (15,'РНК - Друга')`);
+    await c.query(`INSERT INTO managers (id,name,team_id,is_active) VALUES (302,'Тімлід лідогену',11,true),(303,'Звільнений лідген',11,false),(150,'Друга РНК',15,true)`);
     await c.query(`INSERT INTO users (id,email,password_hash,role,manager_id,team_id,full_name) VALUES
         (1,'admin@uts.ua','x','admin',NULL,NULL,'Адмін'),
         (3,'lead@uts.ua','x','team_lead',103,13,'Тімлід РНК'),
@@ -38,9 +40,17 @@ test("#662 ДИМ: лідогенератори (прорахунки з CRM, з
         (5,'rpk@uts.ua','x','team_lead',201,5,'Тімлід РПК')`);
     // Лідогенерація: входи в «Кваліфіковано» (142) воронки Продзвону 8921936 — прорахунки тижня (301 → 2, 302 → 1).
     await c.query(`INSERT INTO deals (kommo_id,manager_id,pipeline_id,status_id,price,created_at_kommo) VALUES
-        (901,301,8921936,142,0,'2026-09-10'),(902,301,8921936,142,0,'2026-09-10'),(903,302,8921936,142,0,'2026-09-10')`);
+        (901,301,8921936,142,0,'2026-09-10'),(902,301,8921936,142,0,'2026-09-10'),(903,302,8921936,142,0,'2026-09-10'),(904,303,8921936,142,0,'2026-09-10')`);
     await c.query(`INSERT INTO deal_stage_events (kommo_id,status_id,pipeline_id,changed_at) VALUES
-        (901,142,8921936,'2026-09-15T10:00Z'),(902,142,8921936,'2026-09-16T10:00Z'),(903,142,8921936,'2026-09-17T10:00Z')`);
+        (901,142,8921936,'2026-09-15T10:00Z'),(902,142,8921936,'2026-09-16T10:00Z'),(903,142,8921936,'2026-09-17T10:00Z'),
+        (904,142,8921936,'2026-09-17T11:00Z'),(905,142,8921936,'2026-09-17T12:00Z')`);
+    await c.query(`INSERT INTO deals (kommo_id,manager_id,pipeline_id,status_id,price,created_at_kommo) VALUES (905,303,8921936,142,0,'2026-09-10')`);
+    // Конверсія РНК: рекламні угоди (lead_channel='ad'), створені в тижні. 101: 2 ліди, 1 успіх; 102: 1 лід, 0.
+    // Контроль: лідгенівська угода 101 у тижні і рекламна поза тижнем — у «Конв. реклама» не входять.
+    await c.query(`INSERT INTO deals (kommo_id,manager_id,pipeline_id,status_id,price,created_at_kommo,lead_channel) VALUES
+        (801,101,8921932,142,1000,'2026-09-15T09:00Z','ad'),(802,101,8921932,69693668,0,'2026-09-16T09:00Z','ad'),
+        (803,102,8921932,69693668,0,'2026-09-16T09:00Z','ad'),(804,101,8921932,142,500,'2026-09-15T09:00Z','leadgen'),
+        (805,101,8921932,142,700,'2026-09-10T09:00Z','ad'),(806,150,8921932,142,900,'2026-09-17T09:00Z','ad')`);
     // Угоди тижня 14–20.09.2026 (FC 8921932). 142 = «успішно реалізовано», 69716460 = «оплата отримана».
     await c.query(`INSERT INTO deals (kommo_id,manager_id,pipeline_id,status_id,price,created_at_kommo,closed_at_kommo,load_at,request_type,carrier_obligation) VALUES
         (1,101,8921932,142,24580,'2026-09-10','2026-09-15T10:00Z','2026-09-14T08:00Z',NULL,5000),
@@ -98,6 +108,7 @@ test("#662 ДИМ: лідогенератори (прорахунки з CRM, з
     assert.deepEqual(lgCell(a.body, "lgMaxDeal").crm, { state: "empty" }, "🔴 система вдає зазор лідогенератора, якого в CRM немає");
     assert.ok(a.body.leadgenDefs.find((d: any) => d.key === "lgMaxDeal").noCrm);
     assert.equal(a.body.teams.some((x: any) => x.teamId === 11), false, "🔴 лідоген потрапив у звичайні команди (і в переможців відділу)");
+    assert.equal(lg.members.some((m: any) => m.id === 303), false, "🔴 неактивний лідген у заліку");
 
     // Тімлід лідогену: бачить лише лідогенераторів; вносить про іншого — так, про себе — ні. Тімлід РНК — ні.
     const g = await call("GET", "/week", { who: "lg", query: q });
@@ -110,31 +121,47 @@ test("#662 ДИМ: лідогенератори (прорахунки з CRM, з
     assert.deepEqual([lgCell(ok.body, "lgMaxDeal").final.status, lgCell(ok.body, "lgMaxDeal").final.value], ["overridden", 15000]);
     assert.equal((await call("POST", "/review", { who: "lg", body: { weekFrom: WEEK, teamId: 11, nomination: "cars", action: "confirm" } })).status, 400, "🔴 у лідогену номінація менеджерів");
 
-    // ── Конверсія РНК: межі й правки.
+    // ── Конверсія РНК: число CRM, межі команд і правки.
     assert.equal(a.body.rnkConv.canComment, true);
+    const adm = (id: number) => a.body.rnkConv.rows.find((r: any) => r.managerId === id);
+    assert.deepEqual([adm(101).crm, adm(101).pct, adm(102).crm], [{ taken: 2, won: 1 }, 50, { taken: 1, won: 0 }],
+      "🔴 число CRM конверсії не «Конв. реклама» тижня (зайшла лідгенівська угода чи угода поза тижнем?)");
+    assert.ok(adm(150), "🔴 керівництво не бачить другу команду РНК");
     const rows13 = (await call("GET", "/week", { who: "lead", query: q })).body.rnkConv.rows;
-    assert.ok(rows13.length > 0 && rows13.every((r: any) => r.teamId === 13), "🔴 тімлід РНК бачить чужі рядки конверсії");
+    assert.ok(rows13.length > 0 && rows13.every((r: any) => r.teamId === 13 && r.canEditRow === true), "🔴 тімлід РНК бачить чужі рядки конверсії");
+    assert.equal(rows13.some((r: any) => r.managerId === 150), false, "🔴 тімлід РНК бачить рядок другої команди РНК");
+    assert.equal((await call("POST", "/rnk-conv", { who: "lead", body: { weekFrom: WEEK, action: "set", managerId: 150, taken: 5, won: 1 } })).status, 403, "🔴 тімлід РНК правит чужу команду РНК");
     assert.equal((await call("GET", "/week", { who: "rpk", query: q })).body.rnkConv, null, "🔴 тімлід РПК бачить конверсію РНК");
     const conv = (who: string, body: object) => call("POST", "/rnk-conv", { who, body: { weekFrom: WEEK, ...body } });
     assert.equal((await conv("rpk", { action: "set", managerId: 101, taken: 24, won: 4, onSlide: true })).status, 403, "🔴 тімлід РПК правит конверсію РНК");
     assert.equal((await conv("lead", { action: "comment", comment: "x" })).status, 403, "🔴 коментар пише не керівництво");
-    const s1 = await conv("lead", { action: "set", managerId: 101, taken: 24, won: 4, onSlide: true });
+    const s1 = await conv("lead", { action: "set", managerId: 101, taken: 24, won: 4 });
     assert.equal(s1.status, 200, JSON.stringify(s1.body));
     const r101 = s1.body.rnkConv.rows.find((r: any) => r.managerId === 101);
-    assert.deepEqual([r101.taken, r101.won, r101.pct, r101.onSlide, r101.own.by], [24, 4, 16.67, true, "Тімлід РНК"], "🔴 правка тімліда не лягла");
+    assert.deepEqual([r101.taken, r101.won, r101.pct, r101.own.by], [24, 4, 16.67, "Тімлід РНК"], "🔴 правка тімліда не лягла");
+    // Галочка «на слайд» — окремо: не робить рядок «своїм» і не чіпає інших.
+    const sl = await conv("admin", { action: "slide", managerId: 102, onSlide: false });
+    const r102 = sl.body.rnkConv.rows.find((r: any) => r.managerId === 102);
+    assert.deepEqual([r102.onSlide, r102.own, r102.taken], [false, null, 1], "🔴 галочка заморозила числа рядка");
     const cm = await conv("admin", { action: "comment", comment: "реклама зросла" });
     assert.equal(cm.body.rnkConv.comment.text, "реклама зросла");
     const rs = await conv("admin", { action: "reset", managerId: 101 });
     const b101 = rs.body.rnkConv.rows.find((r: any) => r.managerId === 101);
-    assert.deepEqual([b101.taken, b101.won, b101.own], [b101.crm.taken, b101.crm.won, null], "🔴 «Як у CRM» не повернуло число");
-    await assert.rejects(() => c.query(`INSERT INTO nomination_conv_edits (week_from,manager_id,action,taken,won,on_slide) VALUES ('2026-09-14',101,'set',3,4,true)`), /check/i, "🔴 БД прийняла успіх > ліди");
+    assert.deepEqual([b101.taken, b101.won, b101.own], [2, 1, null], "🔴 «Як у CRM» не повернуло справжнє число CRM");
+    await assert.rejects(() => c.query(`INSERT INTO nomination_conv_edits (week_from,manager_id,action,taken,won) VALUES ('2026-09-14',101,'set',3,4)`), /check/i, "🔴 БД прийняла успіх > ліди");
+    await assert.rejects(() => c.query(`INSERT INTO nomination_conv_edits (week_from,manager_id,action) VALUES ('2026-09-14',101,'slide')`), /check/i, "🔴 БД прийняла вибір слайда без так/ні");
     await assert.rejects(() => c.query(`UPDATE nomination_conv_edits SET taken = 1`), /заборонено/, "🔴 правки конверсії переписуються");
 
-    // ── Фіксація: лідогенератори в знімку (dept 'lg'), зі своїми даними.
+    // ── Фіксація: лідогенератори НЕ в знімку, живі — видно й можна правити після вівторка; команди — заморожені.
     assert.equal(await freezeWeek(WEEK, new Date("2026-09-22T06:00:00Z")), "frozen");
+    const lgRows = await c.query(`SELECT COUNT(*)::int AS n FROM nomination_snapshot WHERE week_from = '2026-09-14' AND team_id = 11`);
+    assert.equal(lgRows.rows[0].n, 0, "🔴 лідогенератори потрапили у знімок");
     const fz = await frozenWeek(WEEK);
     const fzMax = fz!.leadgen!.cells.find((x) => x.nomination === "lgMaxDeal")!;
-    assert.deepEqual([fzMax.final.status, fzMax.final.value, fzMax.final.winners], ["overridden", 15000, [301]], "🔴 знімок загубив дані лідогенераторів");
+    assert.deepEqual([fzMax.final.status, fzMax.final.value, fzMax.final.winners], ["overridden", 15000, [301]], "🔴 зафіксований тиждень загубив дані лідогенераторів");
+    const after = await call("POST", "/review", { who: "lg", body: { weekFrom: WEEK, teamId: 11, nomination: "lgIntl", action: "override", overrideManagerIds: [301], overrideValue: 1, reason: "один рейс у Польщу" } });
+    assert.equal(after.status, 200, "🔴 лідогенераторів не можна внести після фіксації");
+    assert.equal((await call("POST", "/review", { who: "lead", body: { weekFrom: WEEK, teamId: 13, nomination: "cars", action: "confirm" } })).status, 409, "🔴 команду можна правити після фіксації");
   } finally {
     await c.end();
     const { pool } = await import("../db/pool.js");

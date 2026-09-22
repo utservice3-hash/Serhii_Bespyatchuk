@@ -274,7 +274,7 @@ function TeamBoard({ week, team, mode, onData, onDrill }: {
   const [errs, setErrs] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<NominationKey | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const frozen = week.state === "frozen";
+  const frozen = week.state === "frozen" && team.dept !== "lg"; // лідогенератори живі — правляться й після фіксації
   const aboutIds = mode === "lead" ? [week.viewer.managerId] : team.leads.map((l) => l.managerId);
   const g = groupCells(team.cells, aboutIds, week.leadgenDefs.filter((d) => d.noCrm).map((d) => d.key));
   const bulkable = g.pending.filter((c) => c.canReview && c.crm.state === "ok");
@@ -350,7 +350,7 @@ function NomCard({ week, team, cell, mode, about, busy, saving, err, editing, on
 }) {
   const [all, setAll] = useState(false);
   const d = defOf(week, cell.nomination);
-  const frozen = week.state === "frozen";
+  const frozen = week.state === "frozen" && team.dept !== "lg";
   const name = (id: number) => week.names[String(id)] ?? team.members.find((m) => m.id === id)?.name ?? `Менеджер #${id}`;
   const me = week.viewer.managerId;
   const crm = cell.crm;
@@ -389,7 +389,7 @@ function NomCard({ week, team, cell, mode, about, busy, saving, err, editing, on
         {cell.nomination === "marginPct" && cell.deal?.price != null && cell.deal.cost != null && !own ? (
           <div className="nm-muted">угода-доказ: {cell.deal.url ? <a href={cell.deal.url} target="_blank" rel="noreferrer">{cell.deal.id}</a> : cell.deal.id} · маржа {formatAmountFull(cell.deal.price)} / водію {formatAmountFull(cell.deal.cost)}</div>
         ) : null}
-        {ranking == null ? <div className="nm-muted">Рейтинг цього тижня не зберігався (тиждень зафіксовано до 22.09).</div>
+        {d.noCrm ? null : ranking == null ? <div className="nm-muted">Рейтинг цього тижня не зберігався (тиждень зафіксовано до 22.09).</div>
           : runners.length && !all ? <div className="nm-run">{runners.map((r, i) => <span key={r.managerId}>{i ? " · " : ""}{i + 2}-е: {name(r.managerId).split(/\s+/)[0]} · {fmtValue(d.unit, r.value)}</span>)}</div> : null}
         {all && ranking ? (
           <div className="nm-rank">
@@ -583,13 +583,19 @@ function DealsPanel({ drill, week, onClose }: { drill: Drill; week: NominationWe
 function ConvCard({ week, conv, onData }: { week: NominationWeek; conv: RnkConvView; onData: (d: NominationWeek) => void }) {
   const [busy, setBusy] = useState<number | "c" | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [draft, setDraft] = useState<Record<number, { taken: string; won: string; onSlide: boolean }>>({});
+  const [draft, setDraft] = useState<Record<number, { taken: string; won: string }>>({});
   const [comment, setComment] = useState<string>(conv.comment?.text ?? "");
-  useEffect(() => { setDraft({}); setComment(conv.comment?.text ?? ""); }, [week.weekFrom, conv.comment?.text]);
+  // Чернетки чисел скидаємо лише зі зміною тижня: збереження коментаря не має губити незбережені числа.
+  useEffect(() => { setDraft({}); }, [week.weekFrom]);
+  useEffect(() => { setComment(conv.comment?.text ?? ""); }, [week.weekFrom, conv.comment?.text]);
   const run = async (key: number | "c", p: Parameters<typeof saveRnkConv>[0]) => {
     if (busy != null) return;
     setBusy(key); setErr(null);
-    try { onData(await saveRnkConv(p)); if (typeof key === "number") setDraft((d) => { const n = { ...d }; delete n[key]; return n; }); }
+    try {
+      onData(await saveRnkConv(p));
+      // Чернетку чисел рядка знімаємо лише після збереження ЧИСЕЛ; галочка «на слайд» її не чіпає.
+      if (typeof key === "number" && (p.action === "set" || p.action === "reset")) setDraft((d) => { const n = { ...d }; delete n[key]; return n; });
+    }
     catch (e) { setErr(errorOf(e)); }
     finally { setBusy(null); }
   };
@@ -605,23 +611,25 @@ function ConvCard({ week, conv, onData }: { week: NominationWeek; conv: RnkConvV
           <tbody>
             {conv.rows.map((r) => {
               const dr = draft[r.managerId];
-              const taken = dr ? dr.taken : String(r.taken), won = dr ? dr.won : String(r.won), onSlide = dr ? dr.onSlide : r.onSlide;
+              const taken = dr ? dr.taken : String(r.taken), won = dr ? dr.won : String(r.won);
               const t = Number(taken), w = Number(won);
               const valid = /^\d+$/.test(taken) && /^\d+$/.test(won) && w <= t;
-              const set = (patch: Partial<{ taken: string; won: string; onSlide: boolean }>) =>
-                setDraft((d) => ({ ...d, [r.managerId]: { taken, won, onSlide, ...patch } }));
-              const dis = !r.canEdit || busy != null;
+              const set = (patch: Partial<{ taken: string; won: string }>) =>
+                setDraft((d) => ({ ...d, [r.managerId]: { taken, won, ...patch } }));
+              const dis = !r.canEditRow || busy != null;
               return (
                 <tr key={r.managerId} className={r.own ? "own" : ""}>
                   <td><span className="nm-name">{r.name}</span>{r.own ? <div className="nm-muted">свої дані{r.own.by ? ` · ${r.own.by}` : ""} · CRM: {r.crm.taken} / {r.crm.won}</div> : null}</td>
                   <td><input className="nm-inp nm-num-inp" inputMode="numeric" aria-label={`Цільові ліди: ${r.name}`} value={taken} disabled={dis} onChange={(e) => set({ taken: e.target.value.replace(/\D/g, "") })} /></td>
                   <td><input className="nm-inp nm-num-inp" inputMode="numeric" aria-label={`Успіх: ${r.name}`} value={won} disabled={dis} onChange={(e) => set({ won: e.target.value.replace(/\D/g, "") })} /></td>
                   <td className="nm-num">{valid ? convPct(w, t) : <span className="nm-err">успіх &gt; ліди</span>}</td>
-                  <td><input type="checkbox" aria-label={`На слайд: ${r.name}`} checked={onSlide} disabled={dis} onChange={(e) => set({ onSlide: e.target.checked })} /></td>
+                  {/* Вибір «на слайд» — окрема дія, зберігається одразу й не заморожує числа рядка. */}
+                  <td><input type="checkbox" aria-label={`На слайд: ${r.name}`} checked={r.onSlide} disabled={dis}
+                    onChange={(e) => void run(r.managerId, { weekFrom: week.weekFrom, action: "slide", managerId: r.managerId, onSlide: e.target.checked })} /></td>
                   <td className="nm-conv-act">
-                    {dr ? <button className="nm-btn p" disabled={dis || !valid} onClick={() => void run(r.managerId, { weekFrom: week.weekFrom, action: "set", managerId: r.managerId, taken: t, won: w, onSlide })}>{busy === r.managerId ? "…" : "Зберегти"}</button> : null}
+                    {dr ? <button className="nm-btn p" disabled={dis || !valid} onClick={() => void run(r.managerId, { weekFrom: week.weekFrom, action: "set", managerId: r.managerId, taken: t, won: w })}>{busy === r.managerId ? "…" : "Зберегти"}</button> : null}
                     {dr ? <button className="nm-btn" disabled={busy != null} onClick={() => setDraft((d) => { const n = { ...d }; delete n[r.managerId]; return n; })}>Скасувати</button> : null}
-                    {!dr && r.own && r.canEdit ? <button className="nm-btn" disabled={busy != null} onClick={() => void run(r.managerId, { weekFrom: week.weekFrom, action: "reset", managerId: r.managerId })}>Як у CRM</button> : null}
+                    {!dr && r.own && r.canEditRow ? <button className="nm-btn" disabled={busy != null} onClick={() => void run(r.managerId, { weekFrom: week.weekFrom, action: "reset", managerId: r.managerId })}>Як у CRM</button> : null}
                   </td>
                 </tr>
               );

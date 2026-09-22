@@ -298,7 +298,10 @@ export interface WeekView {
   teams: TeamWeek[];
   depts: DeptWinner[];
   names: Record<number, string>;
-  /** Рейтинг лідогенераторів — окремо від `teams`, щоб не потрапити в переможців відділів і в звірку зі Звітом. */
+  /**
+   * Рейтинг лідогенераторів — окремо від `teams` (не в переможцях відділів і не в звірці зі Звітом). У знімок не йде:
+   * живе й правиться після фіксації (рішення ревʼю 22.09.2026).
+   */
   leadgen: TeamWeek | null;
   /** Статистика відділу РНК · конверсія (живе CRM + правки Даші й тімлідів; у знімок не йде). */
   rnkConv: RnkConv | null;
@@ -319,8 +322,13 @@ export interface ConvRow {
   onSlide: boolean;
 }
 export interface RnkConv { rows: ConvRow[]; comment: { text: string; by: string | null; at: string } | null }
+/**
+ * Правка таблиці: `set` — свої числа (ліди, успіх); `reset` — повернути числа CRM; `slide` — лише чи йде рядок
+ * на слайд; `comment` — коментар. Числа й вибір слайда живуть НЕЗАЛЕЖНО (ревʼю 22.09): поставити галочку не
+ * заморожує числа, а виправити число не перебудовує вибір інших рядків.
+ */
 export interface ConvEdit {
-  managerId: number | null; action: "set" | "reset" | "comment";
+  managerId: number | null; action: "set" | "reset" | "slide" | "comment";
   taken: number | null; won: number | null; onSlide: boolean | null; comment: string | null; by: string | null; at: string;
 }
 /** Скільки рядків іде на слайд, поки ніхто не вибрав руками (у Даші — 2–4). Лише типовий вибір, Даша його змінює. */
@@ -333,31 +341,34 @@ const pct2 = (won: number, taken: number): number | null => (taken > 0 ? Math.ro
  * при рівності — з більшою кількістю лідів. Відсоток — до сотих (4/24 = 16,67%, а не «17,00%»).
  */
 export function buildRnkConv(system: readonly { managerId: number; name: string; teamId: number; taken: number; won: number }[], edits: readonly ConvEdit[]): RnkConv {
-  const last = new Map<number, ConvEdit>();
+  const nums = new Map<number, ConvEdit>(); // остання правка ЧИСЕЛ (set / reset)
+  const slide = new Map<number, boolean>();  // останній ЯВНИЙ вибір «на слайд»
   let comment: RnkConv["comment"] = null;
   for (const e of edits) {
     if (e.action === "comment") comment = e.comment ? { text: e.comment, by: e.by, at: e.at } : null;
-    else if (e.managerId != null) last.set(e.managerId, e);
+    else if (e.managerId == null) continue;
+    else if (e.action === "slide") { if (e.onSlide != null) slide.set(e.managerId, e.onSlide); }
+    else nums.set(e.managerId, e);
   }
-  const rows = system.map((s): ConvRow & { explicit: boolean } => {
-    const e = last.get(s.managerId);
-    const own = e?.action === "set";
-    const taken = own && e!.taken != null ? e!.taken : s.taken;
-    const won = own && e!.won != null ? e!.won : s.won;
+  const rows = system.map((s): ConvRow => {
+    const e = nums.get(s.managerId);
+    const own = e?.action === "set" && e.taken != null && e.won != null;
+    const taken = own ? e!.taken! : s.taken;
+    const won = own ? e!.won! : s.won;
     return { managerId: s.managerId, name: s.name, teamId: s.teamId, taken, won, pct: pct2(won, taken), crm: { taken: s.taken, won: s.won },
-      own: own ? { by: e!.by, at: e!.at } : null, onSlide: own && e!.onSlide != null ? e!.onSlide : false, explicit: own && e!.onSlide != null };
+      own: own ? { by: e!.by, at: e!.at } : null, onSlide: false };
   });
+  // Типовий вибір — 4 найкращі за %; явний вибір рядка перемагає лише ДЛЯ ЦЬОГО рядка.
   const byPct = [...rows].filter((r) => r.pct != null).sort((a, b) => b.pct! - a.pct! || b.taken - a.taken || a.managerId - b.managerId);
   const top = new Set(byPct.slice(0, CONV_DEFAULT_ON_SLIDE).map((r) => r.managerId));
-  const anyExplicit = rows.some((r) => r.explicit);
-  const out = rows.map(({ explicit, ...r }) => ({ ...r, onSlide: anyExplicit ? (explicit ? r.onSlide : false) : top.has(r.managerId) }));
+  const out = rows.map((r) => ({ ...r, onSlide: slide.has(r.managerId) ? slide.get(r.managerId)! : top.has(r.managerId) }));
   out.sort((a, b) => (b.pct ?? -1) - (a.pct ?? -1) || b.taken - a.taken || a.managerId - b.managerId);
   return { rows: out, comment };
 }
 
 /** Тіло правки таблиці конверсії (#661). Успіх не більший за ліди; усе — цілі невідʼємні. */
 export function validateConvEdit(body: unknown):
-  { ok: true; value: { weekFrom: string; action: "set" | "reset" | "comment"; managerId: number | null; taken: number | null; won: number | null; onSlide: boolean | null; comment: string | null } }
+  { ok: true; value: { weekFrom: string; action: ConvEdit["action"]; managerId: number | null; taken: number | null; won: number | null; onSlide: boolean | null; comment: string | null } }
   | { ok: false; error: string } {
   const b = (body ?? {}) as Record<string, unknown>;
   const weekFrom = typeof b.weekFrom === "string" && /^\d{4}-\d{2}-\d{2}$/.test(b.weekFrom) ? b.weekFrom : null;
@@ -369,12 +380,15 @@ export function validateConvEdit(body: unknown):
   const managerId = Number(b.managerId);
   if (!Number.isInteger(managerId) || managerId <= 0) return { ok: false, error: "managerId обовʼязковий" };
   if (b.action === "reset") return { ok: true, value: { weekFrom, action: "reset", managerId, taken: null, won: null, onSlide: null, comment: null } };
-  if (b.action !== "set") return { ok: false, error: "action — set, reset або comment" };
+  if (b.action === "slide") {
+    if (typeof b.onSlide !== "boolean") return { ok: false, error: "onSlide — так або ні" };
+    return { ok: true, value: { weekFrom, action: "slide", managerId, taken: null, won: null, onSlide: b.onSlide, comment: null } };
+  }
+  if (b.action !== "set") return { ok: false, error: "action — set, reset, slide або comment" };
   const taken = Number(b.taken), won = Number(b.won);
   if (!Number.isInteger(taken) || taken < 0 || !Number.isInteger(won) || won < 0) return { ok: false, error: "ліди й успіх — цілі числа від нуля" };
   if (won > taken) return { ok: false, error: "успіхів не може бути більше, ніж лідів" };
-  if (typeof b.onSlide !== "boolean") return { ok: false, error: "onSlide — так або ні" };
-  return { ok: true, value: { weekFrom, action: "set", managerId, taken, won, onSlide: b.onSlide, comment: null } };
+  return { ok: true, value: { weekFrom, action: "set", managerId, taken, won, onSlide: null, comment: null } };
 }
 
 
@@ -393,8 +407,10 @@ export function rankingFromExtra(extra: unknown): RankRow[] | null {
 export interface SnapshotRow { teamId: number; teamName: string; dept: "rpk" | "rnk" | "lg"; nomination: NominationKey; status: Final["status"]; managerId: number | null; managerName: string | null; value: number | null; crmManagerIds: number[]; crmValue: number | null; reason: string | null; extra: Record<string, unknown> }
 export function snapshotRows(view: WeekView): SnapshotRow[] {
   const out: SnapshotRow[] = [];
-  // Лідогенератори фіксуються разом із тижнем (dept 'lg'): і прорахунки з CRM, і внесені дані.
-  for (const t of [...view.teams, ...(view.leadgen ? [view.leadgen] : [])]) for (const c of t.cells) {
+  // Лідогенератори в знімок НЕ йдуть (ревʼю 22.09): живуть, як таблиця конверсії, — прорахунки з CRM + дані
+  // тімліда/Даші, які можна внести й після вівторка. Так старі тижні не лишаються «без лідогену», а відкат коду
+  // не ламає читання знімка рядками, яких старий код не знає.
+  for (const t of view.teams) for (const c of t.cells) {
     const crmIds = c.crm.state === "ok" ? c.crm.winners : [];
     const crmValue = c.crm.state === "ok" ? c.crm.value : null;
     const extra = { stale: c.final.stale, deal: c.deal, noCostDeals: t.noCostDeals, members: t.members, ranking: c.ranking };

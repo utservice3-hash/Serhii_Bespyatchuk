@@ -4457,10 +4457,10 @@ export interface NominationWeek {
 export interface NominationDef { key: NominationKey; label: string; hint: string; unit: "uah" | "count" | "pct"; rule: string; notCounted: string; noCrm?: boolean }
 export interface RnkConvRow {
   managerId: number; name: string; teamId: number; taken: number; won: number; pct: number | null;
-  crm: { taken: number; won: number }; own: { by: string | null; at: string } | null; onSlide: boolean; canEdit: boolean;
+  crm: { taken: number; won: number }; own: { by: string | null; at: string } | null; onSlide: boolean; canEditRow: boolean;
 }
 export interface RnkConvView { rows: RnkConvRow[]; comment: { text: string; by: string | null; at: string } | null; canComment: boolean }
-export const saveRnkConv = async (p: { weekFrom: string; action: "set" | "reset" | "comment"; managerId?: number; taken?: number; won?: number; onSlide?: boolean; comment?: string }) =>
+export const saveRnkConv = async (p: { weekFrom: string; action: "set" | "reset" | "slide" | "comment"; managerId?: number; taken?: number; won?: number; onSlide?: boolean; comment?: string }) =>
   (await api.post<NominationWeek>("/nominations/rnk-conv", p)).data;
 export const fetchNominationWeek = async (weekFrom?: string) =>
   (await api.get<NominationWeek>("/nominations/week", { params: weekFrom ? { weekFrom } : {} })).data;

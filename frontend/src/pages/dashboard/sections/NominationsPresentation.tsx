@@ -195,7 +195,9 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
     const out: { key: string; node: ReactElement }[] = [];
     const mark = draft ? <div className="ps-watermark">ЧЕРНЕТКА · тиждень ще не зафіксовано</div> : null;
     // Розділи бічної панелі — як у Даші: спершу розділи наявних ручних слайдів, потім сталі.
-    const convRows = (week.rnkConv?.rows ?? []).filter((r) => r.onSlide);
+    // На слайд влазить ~8 рядків (1280×720): більше — не ріжемо мовчки, а кажемо, скільки лишилось поза слайдом.
+    const convAll = (week.rnkConv?.rows ?? []).filter((r) => r.onSlide);
+    const convRows = convAll.slice(0, 8);
     const hasConv = convRows.length > 0 || !!week.rnkConv?.comment;
     const nav = [...new Set(manual.map(manualSection)), ...SECTIONS.filter((x) => (x !== "Лідогенерація" || !!week.leadgen) && (x !== "Статистика відділу" || hasConv))];
     const frame = (active: string, body: ReactElement) => (
@@ -244,7 +246,7 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
                   const list = week.teams.filter((t) => t.dept === dept).map((t) => ({ t, c: t.cells.find((c) => c.nomination === "intl")! }))
                     .filter((x) => x.c.final.status !== "empty" && x.c.final.value != null).sort((a, b) => (b.c.final.value ?? 0) - (a.c.final.value ?? 0));
                   return <><span className="ps-avs">{w.winners.slice(0, 3).map((id) => ava(id, "ps-av-sm"))}</span>
-                    <span className="ps-vtext ps-list">{list.map((x, i) => <span key={x.t.teamId}>{i ? " · " : ""}{x.c.final.winners.map((id) => short(name(id))).join(", ")} — <b>{fmt("count", x.c.final.value)}</b>
+                    <span className="ps-vtext ps-intl">{list.map((x, i) => <span key={x.t.teamId}>{i ? " · " : ""}{x.c.final.winners.map((id) => short(name(id))).join(", ")} — <b>{fmt("count", x.c.final.value)}</b>
                       {x.c.final.status === "overridden" ? <span className="ps-manual-mark">✎</span> : null}</span>)}</span></>;
                 })() : w && w.state === "ok"
                   ? <><span className="ps-avs">{w.winners.slice(0, 3).map((id) => ava(id, "ps-av-sm"))}</span>
@@ -310,6 +312,7 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
                 <thead><tr><th>Менеджер</th><th>Цільові ліди</th><th>Успіх</th><th>Конверсія</th></tr></thead>
                 <tbody>{convRows.map((r) => <tr key={r.managerId}><td>{r.name}</td><td>{r.taken}</td><td>{r.won}</td><td><b>{convPctText(r.won, r.taken)}</b></td></tr>)}</tbody>
               </table>
+              {convAll.length > convRows.length ? <div className="ps-muted">ще {convAll.length - convRows.length} — поза слайдом</div> : null}
             </div>
             {week.rnkConv?.comment ? <div className="ps-conv-c">{week.rnkConv.comment.text}</div> : null}
           </div>

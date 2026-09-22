@@ -426,17 +426,18 @@ test("#658 розкриття угод дає рівно число номіна
 /* ─────────────────────────── лідогенератори й конверсія РНК (22.09.2026, слайди 4–5 Даші) ─────────────────────────── */
 
 /**
- * #660 — РЕЙТИНГ ЛІДОГЕНЕРАТОРІВ: чотири номінації Даші; «прорахунки» — з CRM, решта позначені «система не рахує»
- * (звʼязку угоди з лідогенератором у CRM немає — число вносить тімлід або керівництво). Ключі приймає тіло рішення;
- * знімок фіксує лідогенераторів із dept 'lg'; команда рішень — та сама, що в NON_COMMERCIAL_TEAM_IDS.
- * 🧨 Червоніє, якщо «прорахунки» стануть «без CRM» (або навпаки зазор почне вдавати число CRM), або лідогенератори
- * випадуть зі знімка.
+ * #664 — РЕЙТИНГ ЛІДОГЕНЕРАТОРІВ: чотири номінації Даші; «прорахунки» — з CRM, решта позначені «система не рахує»
+ * (звʼязку угоди з лідогенератором у CRM немає — число вносить тімлід або керівництво). У кожної — «рахуємо / не
+ * рахуємо». У ЗНІМОК НЕ ЙДУТЬ (живуть, правляться й після фіксації — ревʼю 22.09). Команда рішень — некомерційна.
+ * 🧨 Червоніє, якщо «прорахунки» стануть «без CRM» (або навпаки), лідогенератори просочаться у знімок, або в
+ * номінації лідогенератора спорожніє пояснення.
  */
-test("#660 лідогенератори: прорахунки з CRM, решта — дані тімліда; у знімку dept 'lg'", async () => {
+test("#664 лідогенератори: прорахунки з CRM, решта — дані тімліда; у знімок не йдуть", async () => {
   for (const k of ["DATABASE_URL", "JWT_SECRET", "KOMMO_BASE_URL", "KOMMO_API_TOKEN"]) process.env[k] ??= "test";
   const { LEADGEN_NOMINATIONS, isNominationKey, snapshotRows } = await import("./nominationRules.js");
   assert.deepEqual(LEADGEN_NOMINATIONS.map((n) => [n.key, !!n.noCrm]),
     [["lgMaxDeal", true], ["lgCars", true], ["lgQuotes", false], ["lgIntl", true]], "🔴 набір номінацій лідогенераторів або ознака «з CRM» не ті");
+  for (const n of LEADGEN_NOMINATIONS) assert.ok(n.rule.trim().length > 10 && n.notCounted.trim().length > 5, `🔴 «${n.label}» без «рахуємо / не рахуємо»`);
   assert.match(LEADGEN_NOMINATIONS.find((n) => n.key === "lgQuotes")!.rule, /Кваліфіковано/, "🔴 «прорахунки» більше не про «Кваліфіковано» Продзвону");
   assert.ok(isNominationKey("lgQuotes") && isNominationKey("maxDeal") && !isNominationKey("lgHack"));
   assert.ok(validateReview({ weekFrom: "2026-09-14", teamId: 11, nomination: "lgMaxDeal", action: "override", overrideManagerIds: [301], overrideValue: 15000, reason: "з таблиці лідгену" }).ok);
@@ -446,20 +447,19 @@ test("#660 лідогенератори: прорахунки з CRM, решта
   ] };
   const view = { weekFrom: "2026-09-14", weekTo: "2026-09-20", state: "draft" as const, frozenAt: null, ruleVersion: "x", freezeDueAt: "", freezeInstant: "",
     depts: [], names: { 301: "Л" }, teams: [], leadgen: lg, rnkConv: null };
-  const rows = snapshotRows(view);
-  assert.deepEqual(rows.map((r) => [r.dept, r.teamId, r.nomination, r.value]), [["lg", 11, "lgQuotes", 36]], "🔴 лідогенератори не потрапили в знімок");
+  assert.deepEqual(snapshotRows(view), [], "🔴 лідогенератори просочились у знімок тижня");
   const { LEADGEN_TEAM_ID } = await import("./nominations.js");
   const { NON_COMMERCIAL_TEAM_IDS } = await import("./metrics.js");
   assert.ok((NON_COMMERCIAL_TEAM_IDS as readonly number[]).includes(LEADGEN_TEAM_ID), "🔴 команда рішень лідогенераторів — не некомерційна команда лідогену");
 });
 
 /**
- * #661 — ТАБЛИЦЯ КОНВЕРСІЇ РНК: система + правки. Остання правка перемагає, «reset» повертає число CRM; відсоток до
- * сотих (4/24 = 16,67); без явного вибору на слайд ідуть 4 найкращі, з явним — рівно обрані; коментар — останній.
- * Тіло: успіх не більший за ліди; «set» без «на слайд» — відмова. 🧨 Червоніє, якщо reset не поверне CRM,
- * округлення стане до цілого, або типовий вибір не 4 найкращі.
+ * #665 — ТАБЛИЦЯ КОНВЕРСІЇ РНК: система + правки. Числа й вибір «на слайд» — НЕЗАЛЕЖНІ (ревʼю 22.09): правка числа не
+ * перебудовує вибір інших рядків і не ставить свій; галочка не заморожує числа; «reset» повертає числа CRM, не чіпаючи
+ * вибору. Типово на слайді 4 найкращі (при рівності % — більше лідів), явний вибір діє лише для свого рядка. % до сотих.
+ * 🧨 Червоніє, якщо правка числа знову змінить вибір слайда, галочка зробить рядок «своїм», або reset забуде CRM.
  */
-test("#661 конверсія РНК: правка перемагає, reset повертає CRM, на слайд — 4 найкращі або обрані", async () => {
+test("#665 конверсія РНК: числа й вибір «на слайд» незалежні; reset повертає CRM; типово — 4 найкращі", async () => {
   const { buildRnkConv, validateConvEdit } = await import("./nominationRules.js");
   const sys = [
     { managerId: 1, name: "А", teamId: 13, taken: 20, won: 2 }, { managerId: 2, name: "Б", teamId: 13, taken: 10, won: 3 },
@@ -467,21 +467,29 @@ test("#661 конверсія РНК: правка перемагає, reset п�
     { managerId: 5, name: "Ґ", teamId: 15, taken: 0, won: 0 }, { managerId: 6, name: "Д", teamId: 13, taken: 12, won: 5 },
   ];
   const at = "2026-09-21T10:00:00.000Z";
-  const base = buildRnkConv(sys, []);
-  assert.deepEqual(base.rows.filter((r) => r.onSlide).map((r) => r.managerId), [6, 3, 2, 4], "🔴 типовий вибір — не 4 найкращі за % (при рівності — більше лідів)");
-  const e = (x: Partial<{ managerId: number | null; action: "set" | "reset" | "comment"; taken: number | null; won: number | null; onSlide: boolean | null; comment: string | null }>) =>
+  const onSlide = (c: { rows: { managerId: number; onSlide: boolean }[] }) => c.rows.filter((r) => r.onSlide).map((r) => r.managerId).sort((a, b) => a - b);
+  assert.deepEqual(onSlide(buildRnkConv(sys, [])), [2, 3, 4, 6], "🔴 типовий вибір — не 4 найкращі за % (при рівності — більше лідів)");
+  const e = (x: Partial<{ managerId: number | null; action: "set" | "reset" | "slide" | "comment"; taken: number | null; won: number | null; onSlide: boolean | null; comment: string | null }>) =>
     ({ managerId: null, action: "set" as const, taken: null, won: null, onSlide: null, comment: null, by: "Даша", at, ...x });
-  const own = buildRnkConv(sys, [e({ managerId: 1, taken: 24, won: 4, onSlide: true }), e({ action: "comment", comment: "реклама зросла" })]);
+  // Правка ЧИСЛА (1 → 24/4 = 16,67%) не міняє вибору інших рядків і сама не ставить рядок на слайд явно.
+  const own = buildRnkConv(sys, [e({ managerId: 1, taken: 24, won: 4 }), e({ action: "comment", comment: "реклама зросла" })]);
   const r1 = own.rows.find((r) => r.managerId === 1)!;
   assert.deepEqual([r1.taken, r1.won, r1.pct, r1.crm, r1.own?.by], [24, 4, 16.67, { taken: 20, won: 2 }, "Даша"], "🔴 правка не перемогла або % не до сотих");
-  assert.deepEqual(own.rows.filter((r) => r.onSlide).map((r) => r.managerId), [1], "🔴 при явному виборі на слайді не рівно обрані");
+  assert.deepEqual(onSlide(own), [1, 2, 3, 6], "🔴 правка одного числа перебудувала вибір слайда для всіх");
   assert.equal(own.comment?.text, "реклама зросла");
-  const back = buildRnkConv(sys, [e({ managerId: 1, taken: 24, won: 4, onSlide: true }), e({ managerId: 1, action: "reset" })]);
-  const b1 = back.rows.find((r) => r.managerId === 1)!;
-  assert.deepEqual([b1.taken, b1.won, b1.own], [20, 2, null], "🔴 «Як у CRM» не повернуло число системи");
-  assert.equal(validateConvEdit({ weekFrom: "2026-09-14", action: "set", managerId: 1, taken: 3, won: 4, onSlide: true }).ok, false, "🔴 успіх більший за ліди пройшов");
-  assert.equal(validateConvEdit({ weekFrom: "2026-09-14", action: "set", managerId: 1, taken: 5, won: 4 }).ok, false, "🔴 правка без «на слайд» пройшла");
-  assert.ok(validateConvEdit({ weekFrom: "2026-09-14", action: "set", managerId: 1, taken: 24, won: 4, onSlide: false }).ok);
+  // Галочка — лише вибір: число лишається CRM, рядок не «свій»; явний вибір — лише для свого рядка.
+  const tick = buildRnkConv(sys, [e({ managerId: 5, action: "slide", onSlide: true }), e({ managerId: 6, action: "slide", onSlide: false })]);
+  const t5 = tick.rows.find((r) => r.managerId === 5)!;
+  assert.deepEqual([t5.onSlide, t5.own, t5.taken], [true, null, 0], "🔴 галочка заморозила числа або зробила рядок «своїм»");
+  assert.deepEqual(onSlide(tick), [2, 3, 4, 5], "🔴 явний вибір одного рядка зачепив інші");
+  // «Як у CRM» повертає числа, але не забуває вибору слайда.
+  const back = buildRnkConv(sys, [e({ managerId: 5, action: "slide", onSlide: true }), e({ managerId: 5, taken: 3, won: 1 }), e({ managerId: 5, action: "reset" })]);
+  const b5 = back.rows.find((r) => r.managerId === 5)!;
+  assert.deepEqual([b5.taken, b5.won, b5.own, b5.onSlide], [0, 0, null, true], "🔴 «Як у CRM» не повернуло числа або скинуло вибір слайда");
+  assert.equal(validateConvEdit({ weekFrom: "2026-09-14", action: "set", managerId: 1, taken: 3, won: 4 }).ok, false, "🔴 успіх більший за ліди пройшов");
+  assert.equal(validateConvEdit({ weekFrom: "2026-09-14", action: "slide", managerId: 1 }).ok, false, "🔴 вибір слайда без так/ні пройшов");
+  const okSet = validateConvEdit({ weekFrom: "2026-09-14", action: "set", managerId: 1, taken: 24, won: 4, onSlide: true });
+  assert.ok(okSet.ok && okSet.value.onSlide === null, "🔴 правка чисел несе вибір слайда");
   assert.ok(validateConvEdit({ weekFrom: "2026-09-14", action: "comment", comment: "  " }).ok);
   assert.equal(validateConvEdit({ weekFrom: "2026-09-15", action: "reset", managerId: 1 }).ok, false, "🔴 тиждень не з понеділка пройшов");
 });

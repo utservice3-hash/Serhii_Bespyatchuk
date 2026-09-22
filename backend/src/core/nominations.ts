@@ -112,8 +112,7 @@ async function teamLeads(): Promise<Map<number, { managerId: number | null; name
  * (ростер за ПОДІЯМИ, лише активні): туди потрапляє й лідген з іншої команди, якщо він робив лідгенівські дії.
  * «Прорахунки» — з CRM; решта номінацій — лише «свої дані» тімліда або керівництва.
  */
-async function leadgenWeek(from: string, to: string, reviews: Map<string, ReviewRow>, leads: Map<number, { managerId: number | null; name: string }[]>): Promise<TeamWeek | null> {
-  const stats = await leadgenStats(from, to);
+function leadgenWeek(stats: Awaited<ReturnType<typeof leadgenStats>>, reviews: Map<string, ReviewRow>, leads: Map<number, { managerId: number | null; name: string }[]>): TeamWeek | null {
   const members = stats.rows.filter((r) => r.isActive).map((r) => ({ id: r.managerId, name: r.name, quotes: r.quotes }))
     .sort((a, b) => a.name.localeCompare(b.name, "uk"));
   const decided = [...reviews.keys()].some((k) => k.startsWith(`${LEADGEN_TEAM_ID}:`));
@@ -122,7 +121,8 @@ async function leadgenWeek(from: string, to: string, reviews: Map<string, Review
     const cands = members.map((m) => ({ managerId: m.id, value: n.key === "lgQuotes" ? m.quotes : null }));
     const crm = n.noCrm ? ({ state: "empty" } as Ranked) : rankNominees(cands);
     const rv = reviews.get(`${LEADGEN_TEAM_ID}:${n.key}`) ?? null;
-    return { nomination: n.key, crm, final: applyReview(crm, rv), deal: null, ranking: teamRanking(cands),
+    // Для номінацій без CRM рейтингу немає: нулі там були б вигадкою, а не виміром.
+    return { nomination: n.key, crm, final: applyReview(crm, rv), deal: null, ranking: n.noCrm ? null : teamRanking(cands),
       review: rv ? { action: rv.action, by: rv.by, at: rv.at } : null };
   });
   return { teamId: LEADGEN_TEAM_ID, teamName: "Лідогенерація", dept: "lg", members: members.map((m) => ({ id: m.id, name: m.name })),
@@ -134,9 +134,9 @@ async function leadgenWeek(from: string, to: string, reviews: Map<string, Review
  * тижня + правки Даші й тімлідів (`nomination_conv_edits`, лише дописування). У знімок не йде — живе.
  * Лише про людей і правки: самі числа — з ядра (`metrics.conversionByManager`), свого SQL по угодах немає.
  */
-async function rnkConvWeek(from: string, to: string): Promise<RnkConv> {
+export async function rnkConvWeek(from: string, to: string, rosterIn?: RosterRow[]): Promise<RnkConv> {
   const [roster, conv, edits] = await Promise.all([
-    nominationRoster(), metrics.conversionByManager({ from, to }, "ad"),
+    rosterIn ?? nominationRoster(), metrics.conversionByManager({ from, to }, "ad"),
     pool.query<{ manager_id: number | null; action: ConvEdit["action"]; taken: number | null; won: number | null; on_slide: boolean | null; comment: string | null; by_name: string | null; created_at: Date }>(
       `SELECT e.manager_id, e.action, e.taken, e.won, e.on_slide, e.comment, COALESCE(u.full_name, m.name, u.email) AS by_name, e.created_at
          FROM nomination_conv_edits e LEFT JOIN users u ON u.id = e.user_id LEFT JOIN managers m ON m.id = u.manager_id
@@ -145,6 +145,12 @@ async function rnkConvWeek(from: string, to: string): Promise<RnkConv> {
   const byMgr = new Map(conv.map((c) => [c.managerId, c]));
   const system = roster.filter((r) => r.dept === "rnk").map((r) => ({ managerId: r.id, name: r.name, teamId: r.teamId, taken: byMgr.get(r.id)?.taken ?? 0, won: byMgr.get(r.id)?.won ?? 0 }));
   return buildRnkConv(system, edits.rows.map((e) => ({ managerId: e.manager_id, action: e.action, taken: e.taken, won: e.won, onSlide: e.on_slide, comment: e.comment, by: e.by_name, at: e.created_at.toISOString() })));
+}
+
+/** Живі блоки зафіксованого тижня: лідогенератори (CRM + рішення) і конверсія РНК — не зі знімка. */
+async function liveBlocks(from: string, to: string): Promise<Pick<WeekView, "leadgen" | "rnkConv">> {
+  const [reviews, leads, lgStats, rnkConv] = await Promise.all([latestReviews(from), teamLeads(), leadgenStats(from, to), rnkConvWeek(from, to)]);
+  return { leadgen: leadgenWeek(lgStats, reviews, leads), rnkConv };
 }
 
 const depts = (teams: TeamWeek[]): DeptWinner[] => {
@@ -163,7 +169,10 @@ const depts = (teams: TeamWeek[]): DeptWinner[] => {
 export async function draftWeek(weekFrom: string, teamId: number | null = null): Promise<WeekView> {
   const { from, to } = weekOf(weekFrom);
   // Скоуп звужує відповідь, а не розрахунок (правило 1): переможців відділу рахуємо по ВСІХ командах.
-  const [roster, values, reviews, leads] = await Promise.all([nominationRoster(), nominationValues(from, to), latestReviews(from), teamLeads()]);
+  const roster = await nominationRoster();
+  // Лідогенератори й конверсія РНК — у тій самій паралелі, що й числа номінацій (ревʼю 22.09: не послідовно).
+  const [values, reviews, leads, lgStats, rnkConv] = await Promise.all([
+    nominationValues(from, to), latestReviews(from), teamLeads(), leadgenStats(from, to), rnkConvWeek(from, to, roster)]);
   const byTeam = new Map<number, RosterRow[]>();
   for (const r of roster) { const l = byTeam.get(r.teamId) ?? []; l.push(r); byTeam.set(r.teamId, l); }
   const names: Record<number, string> = {};
@@ -188,7 +197,7 @@ export async function draftWeek(weekFrom: string, teamId: number | null = null):
   const view: WeekView = {
     weekFrom: from, weekTo: to, state: "draft", frozenAt: null, ruleVersion: NOMINATION_RULE_VERSION,
     freezeDueAt: `${addDaysIso(fz.from, 8)} 08:00`, freezeInstant: freezeInstant(fz.from), teams, depts: depts(teams), names,
-    leadgen: await leadgenWeek(from, to, reviews, leads), rnkConv: await rnkConvWeek(from, to),
+    leadgen: leadgenWeek(lgStats, reviews, leads), rnkConv,
   };
   if (view.leadgen) for (const m of view.leadgen.members) view.names[m.id] ??= m.name;
   return teamId == null ? view : { ...view, teams: view.teams.filter((t) => t.teamId === teamId) };
@@ -206,15 +215,12 @@ export async function frozenWeek(weekFrom: string, teamId: number | null = null)
        FROM nomination_snapshot WHERE week_from = $1 ORDER BY id`, [weekFrom])).rows;
   const names: Record<number, string> = {};
   const teams = new Map<number, TeamWeek>();
-  let leadgen: TeamWeek | null = null;
   for (const r of rows) {
     if (r.manager_id != null && r.manager_name) names[r.manager_id] = r.manager_name;
     for (const m of r.extra.members ?? []) names[m.id] = m.name;
-    let t: TeamWeek | undefined = r.dept === "lg" ? leadgen ?? undefined : teams.get(r.team_id);
-    if (!t) {
-      t = { teamId: r.team_id, teamName: r.team_name, dept: r.dept, members: r.extra.members ?? [], noCostDeals: r.extra.noCostDeals ?? 0, cells: [], leads: [] };
-      if (r.dept === "lg") leadgen = t; else teams.set(r.team_id, t);
-    }
+    if (r.dept === "lg") continue; // рядків 'lg' знімок не пише; якщо колись зʼявляться — не змішуємо з командами
+    let t = teams.get(r.team_id);
+    if (!t) { t = { teamId: r.team_id, teamName: r.team_name, dept: r.dept, members: r.extra.members ?? [], noCostDeals: r.extra.noCostDeals ?? 0, cells: [], leads: [] }; teams.set(r.team_id, t); }
     let c = t.cells.find((x) => x.nomination === r.nomination);
     if (!c) {
       const crmValue = r.crm_value == null ? null : Number(r.crm_value);
@@ -232,7 +238,7 @@ export async function frozenWeek(weekFrom: string, teamId: number | null = null)
   const view: WeekView = {
     weekFrom: w.week_from, weekTo: w.week_to, state: "frozen", frozenAt: w.frozen_at.toISOString(), ruleVersion: w.rule_version,
     freezeDueAt: `${addDaysIso(w.week_from, 8)} 08:00`, freezeInstant: freezeInstant(w.week_from), teams: list, depts: depts(list), names,
-    leadgen, rnkConv: await rnkConvWeek(w.week_from, w.week_to),
+    ...(await liveBlocks(w.week_from, w.week_to)),
   };
   return teamId == null ? view : { ...view, teams: view.teams.filter((t) => t.teamId === teamId) };
 }
