@@ -1,7 +1,15 @@
 import { pool } from "../db/pool.js";
 import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING } from "./metrics.js";
-import { LEADGEN_STAGE_IDS } from "./leadgenStages.js";
-import { stageCountsQuery, type SqlQuery } from "./leadgenSql.js";
+import { LEADGEN_STAGE_IDS, QUALIFICATION_PIPELINES } from "./leadgenStages.js";
+import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery,
+  type SqlQuery, type LeadgenBucketGrain } from "./leadgenSql.js";
+import { FC_PIPELINES, handoffDealStates } from "./money.js";
+import { stageName } from "./stageNames.js";
+import { monthEndOf } from "./dates.js";
+import {
+  handoffView, trendWindow, LINK_BEFORE_SEC, LINK_AFTER_SEC,
+  type HandoffEntry, type HandoffScope, type LeadgenDealClass, type LeadgenHandoffMoney,
+} from "./leadgenHandoffRules.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
 import { LEADGEN_CALL_MIN_SEC } from "./leadgenRules.js";
 // 📐 Правила лідогену живуть у ЧИСТОМУ `leadgenRules.ts` (нуль імпортів) — звідси
@@ -61,18 +69,20 @@ export interface LeadgenStats {
 const K = "AT TIME ZONE 'Europe/Kyiv'";
 
 /**
- * 📞 ЗАПИТ ДЗВІНКІВ — ОДНИМ ВИРАЗОМ. Правило «успішного дзвінка» (вихідний,
- * `billsec >= LEADGEN_CALL_MIN_SEC`) і ростер (лише люди, передані в `ids`) живуть в
- * одному тексті, щоб наступна форма запиту брала їх звідси, а не писала другу копію.
+ * 📞 ЗАПИТ ДЗВІНКІВ — ОДИН НА РЯДКИ ЛЮДЕЙ І НА РОЗБИВКУ. Правило «успішного дзвінка»
+ * (вихідний, `billsec >= LEADGEN_CALL_MIN_SEC`) і ростер (лише люди, передані в `ids`)
+ * живуть в одному тексті: друга копія для розбивки розійшлась би з рядком мовчки.
+ * `bucket` — одиниця розбивки (ключ `bucketKeySql`), `null` — підсумок за період.
  */
-function callsQuery(ids: number[], from: string, to: string): SqlQuery {
+function callsQuery(ids: number[], from: string, to: string, bucket: LeadgenBucketGrain | null = null): SqlQuery {
+  const key = bucket ? `${bucketKeySql(bucket, "c.calldate")} AS bucket, ` : "";
   return {
-    text: `SELECT c.manager_id, COUNT(*) AS n
+    text: `SELECT ${key}c.manager_id, COUNT(*) AS n
          FROM ringostat_calls c
         WHERE c.manager_id = ANY($1)
           AND (c.calldate ${K})::date BETWEEN $2 AND $3
           AND c.call_type = 'out' AND c.billsec >= $4
-        GROUP BY 1`,
+        GROUP BY ${bucket ? "1, 2" : "1"}`,
     values: [ids, from, to, LEADGEN_CALL_MIN_SEC],
   };
 }
@@ -250,3 +260,205 @@ export async function leadGeneratorFill(from: string, to: string): Promise<{ wit
   );
   return { total: Number(r.rows[0]?.total ?? 0), withPerson: Number(r.rows[0]?.with_person ?? 0) };
 }
+
+// ═══════════════════════ РОЗБИВКА, ТРЕНД І ГРОШІ З ПЕРЕДАЧ (22.09.2026) ═══════════════════════
+
+/** Одна людина в одній одиниці: ті самі пʼять показників, що в рядку, і команда — для межі тімліда. */
+export interface LeadgenPersonBucketRow {
+  bucket: string; managerId: number; teamId: number | null;
+  calls: number; leads: number; opr: number; quotes: number; warming: number;
+}
+
+/**
+ * 📅 РОЗБИВКА ПОКАЗНИКІВ ПО ОДИНИЦЯХ — для кожної людини, ТИМИ САМИМИ запитами, що рядки.
+ *
+ * Стадії — `stageCountsQuery` у формі з одиницею (предикат і `JOIN managers` ті самі), дзвінки
+ * — `callsQuery` з тим самим правилом і ростером. Відділ НЕ рахується окремим запитом: він —
+ * сума людей (роут або тренд), тож «Σ людей == відділ» тримається побудовою, а не надією.
+ *
+ * `rosterPerBucket`:
+ *  • `false` (день/тиждень усередині одного періоду) — ростер дзвінків = люди періоду, як у
+ *    рядках: дзвінок у вівторок рахується й тоді, коли стадій того дня не було;
+ *  • `true` (місяці тренду) — кожен місяць є ОКРЕМИМ періодом `/leadgen-stats`, тож і ростер
+ *    свій: людина без подій у місяці не отримує в ньому дзвінків, рівно як у `/leadgen-stats`.
+ */
+export async function leadgenBuckets(
+  from: string, to: string, grain: LeadgenBucketGrain, rosterPerBucket: boolean,
+): Promise<LeadgenPersonBucketRow[]> {
+  const sq = stageCountsQuery(from, to, LEADGEN_STAGE_IDS, grain);
+  const st = await pool.query<{ bucket: string; manager_id: number; team_id: number | null;
+    leads: string; opr: string; quotes: string; warming: string }>(sq.text, sq.values);
+  const key = (b: string, m: number) => `${b}|${m}`;
+  const rows = new Map<string, LeadgenPersonBucketRow>();
+  const teamOf = new Map<number, number | null>();
+  for (const r of st.rows) {
+    teamOf.set(r.manager_id, r.team_id);
+    rows.set(key(r.bucket, r.manager_id), {
+      bucket: r.bucket, managerId: r.manager_id, teamId: r.team_id, calls: 0,
+      leads: Number(r.leads), opr: Number(r.opr), quotes: Number(r.quotes), warming: Number(r.warming),
+    });
+  }
+  const ids = [...teamOf.keys()];
+  if (ids.length) {
+    const cq = callsQuery(ids, from, to, grain);
+    const calls = await pool.query<{ bucket: string; manager_id: number; n: string }>(cq.text, cq.values);
+    for (const c of calls.rows) {
+      const k = key(c.bucket, c.manager_id);
+      const row = rows.get(k);
+      if (row) { row.calls = Number(c.n); continue; }
+      if (rosterPerBucket) continue;       // у цьому місяці людина не в ростері — як у /leadgen-stats
+      rows.set(k, { bucket: c.bucket, managerId: c.manager_id, teamId: teamOf.get(c.manager_id) ?? null,
+        calls: Number(c.n), leads: 0, opr: 0, quotes: 0, warming: 0 });
+    }
+  }
+  return [...rows.values()].sort((a, b) => a.bucket.localeCompare(b.bucket) || a.managerId - b.managerId);
+}
+
+/** Відділ (або команда) по одиницях = сума людей. Порожньої одиниці тут немає — її заповнює екран. */
+export function sumBuckets(rows: readonly LeadgenPersonBucketRow[], only?: readonly string[]):
+  { bucket: string; calls: number; leads: number; opr: number; quotes: number; warming: number }[] {
+  const by = new Map<string, { bucket: string; calls: number; leads: number; opr: number; quotes: number; warming: number }>();
+  for (const b of only ?? []) by.set(b, { bucket: b, calls: 0, leads: 0, opr: 0, quotes: 0, warming: 0 });
+  for (const r of rows) {
+    if (only && !by.has(r.bucket)) continue;
+    const x = by.get(r.bucket) ?? { bucket: r.bucket, calls: 0, leads: 0, opr: 0, quotes: 0, warming: 0 };
+    x.calls += r.calls; x.leads += r.leads; x.opr += r.opr; x.quotes += r.quotes; x.warming += r.warming;
+    by.set(r.bucket, x);
+  }
+  return [...by.values()].sort((a, b) => a.bucket.localeCompare(b.bucket));
+}
+
+/** Рядок людини в одиниці — у формі відповіді, явними полями (без команди). */
+export function personBucketWire(r: LeadgenPersonBucketRow):
+  { bucket: string; managerId: number; calls: number; leads: number; opr: number; quotes: number; warming: number } {
+  return { bucket: r.bucket, managerId: r.managerId, calls: r.calls, leads: r.leads, opr: r.opr, quotes: r.quotes, warming: r.warming };
+}
+
+/** Вхід у 142 з угодою менеджера й описом обох угод — усе, крім грошей (їх дає `money.ts`). */
+interface HandoffLinkRow extends HandoffEntry {
+  pzName: string | null; pzClient: string | null;
+  dealName: string | null; dealClient: string | null; salesManager: string | null;
+  dealReason: string | null; closedDay: string | null; planPayDay: string | null;
+}
+
+async function handoffLinks(from: string, to: string): Promise<HandoffLinkRow[]> {
+  const q = handoffLinkQuery(from, to,
+    { pz: LEADGEN_STAGE_IDS.pz, qualified: LEADGEN_STAGE_IDS.qualified,
+      managerPipelines: [...QUALIFICATION_PIPELINES, ...FC_PIPELINES] },
+    { beforeSec: LINK_BEFORE_SEC, afterSec: LINK_AFTER_SEC });
+  const r = await pool.query<{ pz_id: string; lg_id: number; lg_team_id: number | null; at: Date; day: string;
+    pz_name: string | null; pz_client: string | null; deal_id: string | null; deal_name: string | null;
+    deal_client: string | null; sales_manager: string | null; deal_reason: string | null;
+    closed_day: string | null; plan_pay_day: string | null }>(q.text, q.values);
+  return r.rows.map((x) => ({
+    pzId: Number(x.pz_id), lgId: x.lg_id, lgTeamId: x.lg_team_id, at: new Date(x.at).getTime(), day: x.day,
+    dealId: x.deal_id == null ? null : Number(x.deal_id),
+    pzName: x.pz_name, pzClient: x.pz_client, dealName: x.deal_name, dealClient: x.deal_client,
+    salesManager: x.sales_manager, dealReason: x.deal_reason, closedDay: x.closed_day, planPayDay: x.plan_pay_day,
+  }));
+}
+
+/** Одна передача в списку «Гроші з передач» — форма, яку читає екран. */
+export interface LeadgenHandoffDeal {
+  day: string; lgId: number; pzId: number; dealId: number | null;
+  route: string | null; client: string | null; salesManager: string | null; stage: string | null;
+  cls: LeadgenDealClass; price: number; closedDay: string | null; planPayDay: string | null;
+  reason: string | null; url: string | null;
+}
+
+const blankToNull = (v: string | null | undefined): string | null => (v && v.trim() ? v.trim() : null);
+
+/** Підпис стадії: Кваліфікацію видно одразу, бо це ще НЕ повний цикл. */
+function handoffStage(pipelineId: number, statusId: number): string {
+  const name = stageName(pipelineId, statusId);
+  return QUALIFICATION_PIPELINES.includes(pipelineId) ? `Кваліфікація · ${name}` : name;
+}
+
+export interface LeadgenHandoffMoneyResult {
+  totals: LeadgenHandoffMoney;
+  byPerson: { managerId: number; money: LeadgenHandoffMoney }[];
+  deals: LeadgenHandoffDeal[];
+}
+
+/**
+ * 💰 ГРОШІ З ПЕРЕДАЧ ЗА ПЕРІОД — ЄДИНА ФУНКЦІЯ для числа в рядку лідгена (`/leadgen-stats`
+ * → `handoffMoney`) і для розкривного списку (`/leadgen-handoff-deals`). Список і підсумок
+ * беруться з ОДНОГО виклику, тож `totals` списку дорівнюють числу рядка за побудовою (`#677`).
+ *
+ * Порядок — рішення (правило 3): домен = УСІ передачі періоду; вибір передачі й «та сама
+ * угода» — над усім доменом; скоуп (`teamId`/`managerId`) лише звужує ВІДПОВІДЬ.
+ */
+export async function leadgenHandoffMoney(from: string, to: string, scope: HandoffScope): Promise<LeadgenHandoffMoneyResult> {
+  const links = await handoffLinks(from, to);
+  const states = await handoffDealStates(links.flatMap((l) => (l.dealId == null ? [] : [l.dealId])));
+  const view = handoffView(links, states, scope);
+  const deals = view.rows.map((h): LeadgenHandoffDeal => {
+    const st = h.dealId == null ? undefined : states.get(h.dealId);
+    const linked = h.dealId != null;
+    return {
+      day: h.day, lgId: h.lgId, pzId: h.pzId, dealId: h.dealId,
+      route: blankToNull(linked ? h.dealName : null) ?? blankToNull(h.pzName),
+      client: blankToNull(linked ? h.dealClient : null) ?? blankToNull(h.pzClient),
+      salesManager: linked ? h.salesManager : null,
+      stage: st ? handoffStage(st.pipelineId, st.statusId) : null,
+      cls: h.cls, price: h.price,
+      closedDay: linked ? h.closedDay : null,
+      planPayDay: linked ? h.planPayDay : null,
+      reason: h.cls === "lost" ? blankToNull(h.dealReason) : null,
+      url: kommoLeadUrl(h.dealId ?? h.pzId),
+    };
+  });
+  return { totals: view.totals, byPerson: view.byPerson, deals };
+}
+
+/** Найраніша київська дата подій чотирьох стадій — глибина памʼяті журналу (`null` — подій немає). */
+async function firstStageEventDay(): Promise<string | null> {
+  const q = firstStageEventQuery(LEADGEN_STAGE_IDS);
+  const r = await pool.query<{ day: string | null }>(q.text, q.values);
+  return r.rows[0]?.day ?? null;
+}
+
+export interface LeadgenTrendResult {
+  months: number; to: string;
+  /** Місяці, які журнал подій ПАМʼЯТАЄ (кінець місяця не раніше за першу подію). */
+  monthStarts: string[];
+  byPerson: LeadgenPersonBucketRow[];
+  money: { bucket: string; totals: LeadgenHandoffMoney; byPerson: { managerId: number; money: LeadgenHandoffMoney }[] }[];
+}
+
+/**
+ * 📈 ТРЕНД ПО МІСЯЦЯХ: `months` календарних місяців, що закінчуються місяцем `to`.
+ *
+ * Кожен місяць — ОКРЕМИЙ період `/leadgen-stats`: лічильники — той самий запит у формі з
+ * місяцем (`#676b`), ростер дзвінків — свій на місяць, гроші з передач — `handoffView` над
+ * передачами ЛИШЕ цього місяця (вибір і «та сама угода» — в межах місяця, як у `/leadgen-stats`
+ * того місяця). Запитів — по одному на родину: стадії, дзвінки, передачі, стан угод, глибина.
+ *
+ * ⚠️ Місяць, що цілком лежить до першої події журналу, НЕ звітується нулем: база його не
+ * памʼятає, і «0» там був би вигадкою (♾ правило 17). Місяці після — звітуються, і нуль у них
+ * означає нуль.
+ */
+export async function leadgenTrend(to: string, months: number, scope: HandoffScope): Promise<LeadgenTrendResult> {
+  const w = trendWindow(to, months);
+  const [byPersonAll, links, firstDay] = await Promise.all([
+    leadgenBuckets(w.from, to, "month", true),
+    handoffLinks(w.from, to),
+    firstStageEventDay(),
+  ]);
+  const states = await handoffDealStates(links.flatMap((l) => (l.dealId == null ? [] : [l.dealId])));
+  const monthStarts = firstDay == null ? [] : w.monthStarts.filter((m) => monthEndOf(m) >= firstDay);
+  const byPerson = byPersonAll.filter((r) => scope.teamId == null || r.teamId === scope.teamId);
+  const money = monthStarts.map((ms) => {
+    const ym = ms.slice(0, 7);
+    const v = handoffView(links.filter((l) => l.day.slice(0, 7) === ym), states, scope);
+    return { bucket: ms, totals: v.totals, byPerson: v.byPerson };
+  });
+  return { months: w.months, to, monthStarts, byPerson, money };
+}
+
+/** Команда людини для межі тімліда: `undefined` — такої людини немає. */
+export async function leadgenManagerTeam(managerId: number): Promise<number | null | undefined> {
+  const r = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
+  return r.rows.length ? r.rows[0].team_id : undefined;
+}
+

@@ -95,7 +95,7 @@ test("#365b 🪞 ДЗЕРКАЛО: «успішний дзвінок» трим�
  * 🧨 САБОТАЖ: дописати в `core/leadgenRules.ts` будь-який `import` → червоніє.
  */
 test("#407 чисті модулі правил лідогену не тягнуть нічого", () => {
-  const PURE = ["core/leadgenRules.ts", "core/leadgenStages.ts", "core/leadgenSql.ts"] as const;
+  const PURE = ["core/leadgenRules.ts", "core/leadgenStages.ts", "core/leadgenSql.ts", "core/leadgenHandoffRules.ts"] as const;
   for (const rel of PURE) {
     const src = SRC(rel);
     const imports = src.split("\n").filter((l) => /^\s*import\s/.test(l));

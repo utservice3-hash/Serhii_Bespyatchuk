@@ -3,8 +3,9 @@ import { pool } from "../db/pool.js";
 // циклічну залежність money↔metrics, але вона РАНТАЙМ-безпечна: обидва модулі викликають
 // одне одного лише всередині функцій (не на рівні модуля), тож ESM-live-binding резолвиться
 // до першого виклику (request-time), коли обидва модулі вже ініціалізовані.
-import { adDealSql } from "./metrics.js";
+import { adDealSql, EXPECT_ZONE } from "./metrics.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
+import { managerDealClass, type DealState } from "./leadgenHandoffRules.js";
 
 /**
  * ЄДИНЕ джерело грошових метрик (MASTER_PLAN КРОК 2, виправлено КРОКОМ 4 — опція Б).
@@ -1140,3 +1141,52 @@ export async function receivedUndefDeals(s: MoneyScope): Promise<UndefDealRow[]>
   }));
 }
 
+/**
+ * 🔚 «ЗАКРИТО І НЕ РЕАЛІЗОВАНО» — системний статус Kommo, однаковий у КОЖНІЙ воронці
+ * (у Кваліфікації він зветься «Не цільові» / «Сміття»). У грошових сумах ядра його немає —
+ * він потрібен лише класу угоди менеджера з передачі.
+ */
+export const STATUS_CLOSED_LOST = 143;
+
+/**
+ * 💰 СТАН І БЮДЖЕТ УГОД МЕНЕДЖЕРА, ЩО ВИРОСЛИ З ПЕРЕДАЧ ЛІДГЕНА — ЗАРАЗ (правило 4 власника).
+ *
+ * Гроші живуть лише тут (правило `money-core`), тож ядро лідогену знаходить угоду, а її клас
+ * і суму питає в цієї функції. Клас вирішує ЧИСТА `managerDealClass` над константами
+ * ЦЬОГО модуля — ті самі `FC_PIPELINES`/`STAGE_SUCCESS`/`STAGE_PAID`, що рахують дохід,
+ * і та сама `EXPECT_ZONE` зони «Очікуємо», а списаний борг — тим самим `DEAL_NOT_WRITTEN_OFF`,
+ * що й у всіх «очікуваних» з 26.08.2026. Друга копія будь-якого з них розійшлась би мовчки.
+ *
+ * ⚓ Це НЕ дохід періоду: анкер — дата передачі, стан — поточний. Сума — `price` угоди
+ * (уже зі знаком для мінусових), округлена до гривні так само, як її показує список.
+ * Автоугоди не ховаються (правило 5).
+ */
+export interface HandoffDealState extends DealState { pipelineId: number; statusId: number }
+
+export async function handoffDealStates(dealIds: readonly number[]): Promise<Map<number, HandoffDealState>> {
+  const out = new Map<number, HandoffDealState>();
+  const ids = [...new Set(dealIds)];
+  if (!ids.length) return out;
+  const r = await pool.query<{ kommo_id: string; pipeline_id: string; status_id: string; price: string | null;
+    closed: boolean; written_off: boolean }>(
+    `SELECT d.kommo_id, d.pipeline_id, d.status_id, d.price,
+            (d.closed_at_kommo IS NOT NULL) AS closed,
+            NOT (${DEAL_NOT_WRITTEN_OFF}) AS written_off
+       FROM deals d
+      WHERE d.kommo_id = ANY($1::bigint[])`,
+    [ids]
+  );
+  const rules = {
+    fcPipelines: FC_PIPELINES, success: STAGE_SUCCESS, paid: STAGE_PAID,
+    expectZone: EXPECT_ZONE, lostStatus: STATUS_CLOSED_LOST,
+  };
+  for (const x of r.rows) {
+    const pipelineId = Number(x.pipeline_id), statusId = Number(x.status_id);
+    out.set(Number(x.kommo_id), {
+      pipelineId, statusId,
+      cls: managerDealClass({ pipelineId, statusId, closed: x.closed, writtenOff: x.written_off }, rules),
+      price: Math.round(Number(x.price ?? 0)),
+    });
+  }
+  return out;
+}
