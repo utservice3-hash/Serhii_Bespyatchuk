@@ -3918,3 +3918,9 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_file TEXT;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_prev TEXT;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_updated_at TIMESTAMPTZ;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+
+-- 👤 «+ СПІВРОБІТНИК» І ЗАПИС ІЗ НАЙМУ (22.09.2026, питання Івана «як додати нового співробітника»). Кандидат,
+-- що став «Менеджер», зʼявляється в реєстрі сам; `candidate_id` — звідки прийшов (одна людина реєстру на
+-- кандидата). ⚠️ revert коду колонку не прибирає; дані без неї не губляться.
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS candidate_id INTEGER REFERENCES hiring_candidates(id) ON DELETE SET NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_employees_candidate ON employees(candidate_id) WHERE candidate_id IS NOT NULL;
