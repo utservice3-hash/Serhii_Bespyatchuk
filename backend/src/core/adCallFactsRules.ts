@@ -195,6 +195,46 @@ export function adCallFactsSql(p: AdCallFactsParams): { sql: string; params: unk
   return { sql, params: [p.from, p.to, windowBefore, p.now.toISOString(), talkMinSec, p.adSources] };
 }
 
+/**
+ * Який із двох рекламних прапорців відбирає угоди. ВІДКРИТЕ ПИТАННЯ П2 — тому вибір явний
+ * і без значення за замовчуванням: пілот і джоба мусять назвати його самі.
+ */
+export type AdFlag = "lead_channel" | "ad_deal_sql" | "either";
+export const AD_FLAGS: readonly AdFlag[] = ["lead_channel", "ad_deal_sql", "either"];
+
+/**
+ * ПЕРША РОЗМОВА кожної рекламної угоди періоду — вибірка для пілота AI-аналізу. Та сама звʼязка
+ * й склейка, що у фактах (`linkedCallsCtes`), той самий поріг розмови. Свіжі угоди першими.
+ * Номера клієнта й URL запису у вибірці НЕМАЄ: план пілота пишеться у файл, а файл — не місце
+ * для доступу до розмови. Є лише ознака, що запис існує.
+ */
+export function adDealFirstTalksSql(p: AdCallFactsParams, flag: AdFlag, limit: number): { sql: string; params: unknown[] } {
+  const { talkMinSec, windowBefore } = assertFactsParams(p);
+  if (!AD_FLAGS.includes(flag)) throw new ParamNotSetError("рекламний прапорець (lead_channel / ad_deal_sql / either)");
+  if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error(`limit поза 1..500: ${String(limit)}`);
+  const cond = flag === "lead_channel" ? "d0.is_lead_channel_ad" : flag === "ad_deal_sql" ? "d0.is_ad_deal_sql" : "true";
+  const sql = `
+    WITH ${linkedCallsCtes(p)},
+    ft AS (
+      SELECT DISTINCT ON (lf.kommo_id) lf.kommo_id, lf.uniqueid, lf.calldate, lf.call_type, lf.billsec, lf.manager_id,
+             d0.created_at, d0.is_lead_channel_ad, d0.is_ad_deal_sql
+        FROM lf JOIN d0 ON d0.kommo_id = lf.kommo_id
+       WHERE lf.billsec >= $5 AND ${cond}
+       ORDER BY lf.kommo_id, lf.calldate, lf.uniqueid
+    )
+    SELECT ft.*, rc.duration, (rc.recording IS NOT NULL AND btrim(rc.recording) <> '') AS has_recording
+      FROM ft JOIN ringostat_calls rc ON rc.uniqueid = ft.uniqueid
+     ORDER BY ft.created_at DESC, ft.kommo_id DESC
+     LIMIT $7`;
+  return { sql, params: [p.from, p.to, windowBefore, p.now.toISOString(), talkMinSec, p.adSources, limit] };
+}
+
+export interface FirstTalkRow {
+  kommo_id: string | number; uniqueid: string; calldate: Date; call_type: string; billsec: number;
+  manager_id: number | null; created_at: Date; is_lead_channel_ad: boolean; is_ad_deal_sql: boolean;
+  duration: number; has_recording: boolean;
+}
+
 export type CallDir = "in" | "out";
 const dirOf = (callType: string | null): CallDir | null =>
   callType == null ? null : (OUTBOUND_TYPES as readonly string[]).includes(callType) ? "out" : "in";

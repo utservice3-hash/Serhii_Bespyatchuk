@@ -3939,7 +3939,7 @@ CREATE TABLE IF NOT EXISTS call_transcripts (
   failure      TEXT,                       -- очищена причина — без URL запису й без ключів
   channels     INTEGER,
   duration_sec NUMERIC,                    -- тривалість аудіо — одиниця оплати розпізнавання
-  segments     JSONB,                      -- [{speaker:'manager'|'client', channel, start, end, text}]
+  segments     JSONB,                      -- репліки [{channel, start, end, text, lang}]; хто з каналів менеджер — заміряє пілот
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (uniqueid, provider, model)

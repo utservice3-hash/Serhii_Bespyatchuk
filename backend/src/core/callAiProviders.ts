@@ -1,0 +1,328 @@
+import { fetchWithRetry, VendorError, type HttpDeps, type RetryPolicy } from "./callAiHttp.js";
+
+/**
+ * 🤖 АДАПТЕРИ ПОСТАЧАЛЬНИКІВ: розпізнавання (ElevenLabs Scribe v2, по каналах) і аналіз
+ * (Google Gemini 3.8 Flash). Рішення власника 22.09.2026, бюджет ~$50/міс.
+ *
+ * ТЗ «AI-аналіз дзвінків по рекламних лідах», прохід A, коміт ③.
+ *
+ * 📐 КОНТРАКТИ ЗВІРЕНО З ОФІЦІЙНОЮ ДОКУМЕНТАЦІЄЮ 22.09.2026 (читання сторінок, жодного виклику).
+ * Те, що документація лишила суперечливим, тут обробляється в ОБИДВА боки, а не вгадується:
+ *   • ElevenLabs: канал слова береться з `words[].channel_index` — у прикладі відповіді верхнього
+ *     `channel_index` у транскрипті немає; верхній — лише запасний шлях, далі позиція в масиві;
+ *   • ElevenLabs: моно-файл при `use_multi_channel=true` приходить ОДНОКАНАЛЬНОЮ формою;
+ *   • Gemini: `responseFormat.text.{mimeType, schema}` — чинний шлях (старі `responseSchema` /
+ *     `_responseJsonSchema` позначені deprecated); `thinkingLevel` рядком `low`, як у REST-прикладі
+ *     (`minimal` на 3.8 Flash — помилка); `temperature` НЕ шлемо (для Gemini 3.x — «remove»).
+ * ⚠️ Що з цього прийме живий API, покаже перший виклик пілота — до нього це контракт із тексту.
+ * ⚠️ Чи бере Scribe телефонне аудіо 8 кГц без перетворення — документація НЕ каже; це теж пілот.
+ *
+ * 🔒 Ключ приходить ПАРАМЕТРОМ і їде ЛИШЕ заголовком (`xi-api-key` / `x-goog-api-key`), не в URL.
+ */
+
+// ─── ElevenLabs Speech to Text ──────────────────────────────────────────────
+
+export const ELEVENLABS_STT_URL = "https://api.elevenlabs.io/v1/speech-to-text";
+export const ELEVENLABS_STT_MODEL = "scribe_v2";
+
+/**
+ * Поля форми. `use_multi_channel` — кожен канал стерео окремо (менеджер і клієнт не змішуються);
+ * `diarize=false` — обовʼязково для multichannel. Мова — автовизначення: розмови бувають і
+ * українською, і російською, а примусова мова зіпсувала б другу.
+ */
+export const STT_FORM_FIELDS: Readonly<Record<string, string>> = {
+  model_id: ELEVENLABS_STT_MODEL,
+  use_multi_channel: "true",
+  diarize: "false",
+  timestamps_granularity: "word",
+  tag_audio_events: "false",
+};
+
+export interface SttWord { start: number | null; end: number | null; text: string; channel: number }
+export interface SttChannel { index: number; language: string | null; words: SttWord[] }
+export interface SttResult {
+  channels: SttChannel[];
+  /** Як назвав постачальник; для multichannel — «across all channels», тобто НЕ обовʼязково оплачене. */
+  audioDurationSec: number | null;
+  transcriptionId: string | null;
+}
+
+const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
+
+/** Розбір відповіді: і `transcripts[]` (multichannel), і плоска форма (моно / одноканальна). */
+export function parseSttResponse(json: unknown): SttResult {
+  if (!json || typeof json !== "object") throw new VendorError("ElevenLabs", "bad_response", null, "тіло не є обʼєктом");
+  const o = json as Record<string, unknown>;
+  const parts: { t: Record<string, unknown>; pos: number }[] = Array.isArray(o.transcripts)
+    ? (o.transcripts as unknown[]).map((t, pos) => ({ t: (t ?? {}) as Record<string, unknown>, pos }))
+    : Array.isArray(o.words) ? [{ t: o, pos: 0 }] : [];
+  if (!parts.length) {
+    const asyncShape = typeof o.request_id === "string" && typeof o.message === "string";
+    throw new VendorError("ElevenLabs", "bad_response", null,
+      asyncShape ? "прийшла асинхронна відповідь без розшифровки" : "немає ні transcripts, ні words");
+  }
+  const byChannel = new Map<number, SttChannel>();
+  for (const { t, pos } of parts) {
+    const fallback = num(t.channel_index) ?? pos;
+    const lang = str(t.language_code);
+    const words = Array.isArray(t.words) ? (t.words as Record<string, unknown>[]) : [];
+    for (const w of words) {
+      const type = str(w?.type);
+      if (type && type !== "word") continue; // spacing / audio_event — не слова
+      const text = str(w?.text)?.trim();
+      if (!text) continue;
+      const channel = num(w.channel_index) ?? fallback;
+      let ch = byChannel.get(channel);
+      if (!ch) { ch = { index: channel, language: lang, words: [] }; byChannel.set(channel, ch); }
+      ch.words.push({ start: num(w.start), end: num(w.end), text, channel });
+    }
+    if (!words.length && !byChannel.has(fallback)) byChannel.set(fallback, { index: fallback, language: lang, words: [] });
+  }
+  return {
+    channels: [...byChannel.values()].sort((a, b) => a.index - b.index),
+    audioDurationSec: num(o.audio_duration_secs),
+    transcriptionId: str(o.transcription_id),
+  };
+}
+
+export interface Turn { channel: number; start: number | null; end: number | null; text: string; lang: string | null }
+
+/**
+ * Слова обох каналів → репліки в порядку часу. Сусідні слова одного каналу — одна репліка.
+ * Порогу паузи тут немає свідомо: репліка закінчується, коли заговорив ІНШИЙ канал, — це факт
+ * запису, а не налаштування. Слово без часу стає за попереднім словом свого каналу.
+ */
+export function toTurns(r: SttResult): Turn[] {
+  const flat: { t: number; order: number; w: SttWord; lang: string | null }[] = [];
+  let order = 0;
+  for (const ch of r.channels) {
+    let prev = 0;
+    for (const w of ch.words) {
+      const t = w.start ?? prev;
+      prev = t;
+      flat.push({ t, order: order++, w, lang: ch.language });
+    }
+  }
+  flat.sort((a, b) => a.t - b.t || a.w.channel - b.w.channel || a.order - b.order);
+  const turns: Turn[] = [];
+  for (const { w, lang } of flat) {
+    const last = turns[turns.length - 1];
+    if (last && last.channel === w.channel) {
+      last.text += ` ${w.text}`;
+      if (w.end != null) last.end = w.end;
+    } else {
+      turns.push({ channel: w.channel, start: w.start, end: w.end, text: w.text, lang });
+    }
+  }
+  return turns;
+}
+
+export interface SttAudio { bytes: Uint8Array; contentType: string }
+
+export async function elevenLabsTranscribe(deps: HttpDeps, apiKey: string, audio: SttAudio, policy: RetryPolicy): Promise<SttResult> {
+  const init = (): RequestInit => {
+    const fd = new FormData();
+    for (const [k, v] of Object.entries(STT_FORM_FIELDS)) fd.set(k, v);
+    fd.set("file", new Blob([audio.bytes.slice()], { type: audio.contentType }), "call.wav");
+    return { method: "POST", headers: { "xi-api-key": apiKey }, body: fd };
+  };
+  const res = await fetchWithRetry(deps, { vendor: "ElevenLabs", url: ELEVENLABS_STT_URL, init, secrets: [apiKey] }, policy);
+  let json: unknown;
+  try { json = await res.json(); } catch { throw new VendorError("ElevenLabs", "bad_response", res.status, "тіло не JSON"); }
+  return parseSttResponse(json);
+}
+
+// ─── Gemini: аналіз розшифровки ─────────────────────────────────────────────
+
+export const GEMINI_MODEL = "gemini-3.8-flash";
+export const geminiGenerateUrl = (model: string): string =>
+  `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+
+/**
+ * Рубрика ПІЛОТА: лише ВИТЯГ фактів із розмови з дослівними цитатами — ціна, заперечення,
+ * обіцянки, наступний крок. Оцінки немає: критеріїв і калібрування власник ще не затвердив
+ * (ТЗ: «не вводимо оцінку 1–10 без критеріїв»). Нова рубрика = нова версія = новий рядок.
+ * Хто з каналів менеджер — модель визначає зі змісту, а пілот звіряє на слух: у CRM і в
+ * Ringostat цього факту немає (ВІДКРИТЕ ПИТАННЯ, заміряється пілотом).
+ */
+export const RUBRIC_PILOT_V0 = "pilot-v0";
+
+export const ANALYSIS_SCHEMA = {
+  type: "object",
+  properties: {
+    summary: { type: "string", description: "2–3 речення: про що розмова" },
+    manager_channel: { type: "string", enum: ["0", "1", "unknown"], description: "номер каналу менеджера UTS, визначений зі змісту" },
+    client_request: { type: "string", description: "що клієнт хоче перевезти або замовити; порожньо, якщо не прозвучало" },
+    price: {
+      type: "object",
+      properties: { discussed: { type: "boolean" }, quote: { type: "string" } },
+      required: ["discussed", "quote"],
+    },
+    objections: {
+      type: "array",
+      items: { type: "object", properties: { what: { type: "string" }, quote: { type: "string" } }, required: ["what", "quote"] },
+    },
+    promises: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          who: { type: "string", enum: ["manager", "client"] },
+          what: { type: "string" },
+          deadline_text: { type: "string", description: "строк дослівно, як прозвучав; порожньо, якщо строку не було" },
+          quote: { type: "string" },
+        },
+        required: ["who", "what", "deadline_text", "quote"],
+      },
+    },
+    next_step: { type: "string" },
+  },
+  required: ["summary", "manager_channel", "client_request", "price", "objections", "promises", "next_step"],
+} as const;
+
+export const ANALYSIS_SYSTEM_PROMPT = [
+  "Ти отримуєш автоматичну розшифровку телефонної розмови менеджера з продажу логістичної компанії UTS із клієнтом.",
+  "Розшифровку зроблено по двох каналах запису; кожен рядок — час від початку розмови, номер каналу і текст.",
+  "Хто з каналів менеджер — визнач зі змісту розмови.",
+  "Правила:",
+  "1. Витягуй лише те, що прямо сказано в розмові. Нічого не домислюй.",
+  "2. Не оцінюй менеджера і не давай порад.",
+  "3. Поле quote — дослівний уривок із розшифровки (без часу й номера каналу), не переказ. Немає дослівного уривка — не додавай пункт.",
+  "4. Чого в розмові немає — порожній рядок або порожній масив.",
+  "5. Пиши українською.",
+].join("\n");
+
+const mmss = (sec: number | null): string => {
+  if (sec == null) return "--:--";
+  const s = Math.max(0, Math.floor(sec));
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+};
+
+export function dialogText(turns: readonly Turn[]): string {
+  return turns.map((t) => `[${mmss(t.start)}] Канал ${String(t.channel)}: ${t.text}`).join("\n");
+}
+
+export function buildAnalysisRequest(turns: readonly Turn[], maxOutputTokens: number): Record<string, unknown> {
+  return {
+    system_instruction: { parts: [{ text: ANALYSIS_SYSTEM_PROMPT }] },
+    contents: [{ role: "user", parts: [{ text: dialogText(turns) }] }],
+    generationConfig: {
+      responseFormat: { text: { mimeType: "application/json", schema: ANALYSIS_SCHEMA } },
+      thinkingConfig: { thinkingLevel: "low" },
+      maxOutputTokens,
+    },
+  };
+}
+
+/**
+ * ВЕРХНЯ межа вхідних токенів ДО виклику: байти UTF-8 усього тіла. Токен покриває щонайменше
+ * один байт, тож справжнє число не більше — і стеля витрат перевіряється по межі, а не по
+ * здогаду «≈3 символи на токен».
+ */
+export function inputTokenUpperBound(body: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(body)).length;
+}
+
+export interface GeminiUsage { input: number; output: number; thoughts: number }
+export interface GeminiOutcome {
+  text: string | null;
+  finishReason: string | null;
+  blockReason: string | null;
+  /** Оплачений вихід = відповідь + думки (прайс: «Output price (including thinking tokens)»). */
+  usage: GeminiUsage | null;
+}
+
+export function parseGeminiResponse(json: unknown): GeminiOutcome {
+  if (!json || typeof json !== "object") throw new VendorError("Gemini", "bad_response", null, "тіло не є обʼєктом");
+  const o = json as Record<string, unknown>;
+  const um = (o.usageMetadata ?? null) as Record<string, unknown> | null;
+  const usage = um ? {
+    input: num(um.promptTokenCount) ?? 0,
+    output: (num(um.candidatesTokenCount) ?? 0) + (num(um.thoughtsTokenCount) ?? 0),
+    thoughts: num(um.thoughtsTokenCount) ?? 0,
+  } : null;
+  const pf = (o.promptFeedback ?? null) as Record<string, unknown> | null;
+  const cand = (Array.isArray(o.candidates) ? o.candidates[0] : null) as Record<string, unknown> | null;
+  const parts = ((cand?.content as Record<string, unknown> | undefined)?.parts ?? []) as Record<string, unknown>[];
+  const text = parts.filter((p) => p && p.thought !== true && typeof p.text === "string").map((p) => p.text as string).join("");
+  return { text: text || null, finishReason: str(cand?.finishReason), blockReason: str(pf?.blockReason), usage };
+}
+
+export async function geminiGenerate(deps: HttpDeps, apiKey: string, model: string, body: unknown, policy: RetryPolicy): Promise<GeminiOutcome> {
+  const init = (): RequestInit => ({
+    method: "POST",
+    headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const res = await fetchWithRetry(deps, { vendor: "Gemini", url: geminiGenerateUrl(model), init, secrets: [apiKey] }, policy);
+  let json: unknown;
+  try { json = await res.json(); } catch { throw new VendorError("Gemini", "bad_response", res.status, "тіло не JSON"); }
+  return parseGeminiResponse(json);
+}
+
+// ─── Результат аналізу: перевірка форми і цитат ─────────────────────────────
+
+export interface AnalysisResult {
+  summary: string;
+  manager_channel: "0" | "1" | "unknown";
+  client_request: string;
+  price: { discussed: boolean; quote: string; quote_found?: boolean | null };
+  objections: { what: string; quote: string; quote_found?: boolean | null }[];
+  promises: { who: "manager" | "client"; what: string; deadline_text: string; quote: string; quote_found?: boolean | null }[];
+  next_step: string;
+}
+
+const isStr = (v: unknown): v is string => typeof v === "string";
+
+/** Модель зобовʼязалась схемою — але довіряємо не обіцянці, а перевірці. */
+export function validateAnalysis(x: unknown): { ok: true; value: AnalysisResult } | { ok: false; why: string } {
+  if (!x || typeof x !== "object") return { ok: false, why: "не обʼєкт" };
+  const o = x as Record<string, unknown>;
+  for (const k of ["summary", "client_request", "next_step"]) if (!isStr(o[k])) return { ok: false, why: `поле ${k} не рядок` };
+  if (!["0", "1", "unknown"].includes(o.manager_channel as string)) return { ok: false, why: "manager_channel поза переліком" };
+  const p = o.price as Record<string, unknown> | undefined;
+  if (!p || typeof p.discussed !== "boolean" || !isStr(p.quote)) return { ok: false, why: "price не тієї форми" };
+  if (!Array.isArray(o.objections) || !o.objections.every((i) => i && isStr(i.what) && isStr(i.quote)))
+    return { ok: false, why: "objections не тієї форми" };
+  if (!Array.isArray(o.promises) || !o.promises.every((i) => i && ["manager", "client"].includes(i.who) && isStr(i.what)
+    && isStr(i.deadline_text) && isStr(i.quote))) return { ok: false, why: "promises не тієї форми" };
+  return { ok: true, value: o as unknown as AnalysisResult };
+}
+
+/** Нормалізація для пошуку цитати: регістр, апострофи, розділові знаки, пробіли. */
+export function normForQuote(s: string): string {
+  return s.toLowerCase().replace(/[’'`ʼ]/g, "'").replace(/[^\p{L}\p{N}']+/gu, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Кожну цитату шукаємо в самій розшифровці. `quote_found=false` — модель процитувала те, чого
+ * в розмові немає; екран не покаже такий пункт як факт. Порожня цитата → `null` (нема що звіряти).
+ */
+export function verifyQuotes(r: AnalysisResult, turns: readonly Turn[]): AnalysisResult {
+  const hay = ` ${normForQuote(turns.map((t) => t.text).join(" "))} `;
+  const found = (q: string): boolean | null => {
+    const n = normForQuote(q);
+    return n ? hay.includes(` ${n} `) : null;
+  };
+  return {
+    ...r,
+    price: { ...r.price, quote_found: found(r.price.quote) },
+    objections: r.objections.map((i) => ({ ...i, quote_found: found(i.quote) })),
+    promises: r.promises.map((i) => ({ ...i, quote_found: found(i.quote) })),
+  };
+}
+
+export type AnalysisVerdict = { ok: true; result: AnalysisResult } | { ok: false; why: string };
+
+/** Відповідь моделі → готовий результат або чесна причина відмови. */
+export function interpretAnalysis(out: GeminiOutcome, turns: readonly Turn[]): AnalysisVerdict {
+  if (out.blockReason) return { ok: false, why: `запит заблоковано постачальником: ${out.blockReason}` };
+  if (out.finishReason && out.finishReason !== "STOP") return { ok: false, why: `модель не завершила відповідь: ${out.finishReason}` };
+  if (!out.text) return { ok: false, why: "модель повернула порожню відповідь" };
+  let parsed: unknown;
+  try { parsed = JSON.parse(out.text); } catch { return { ok: false, why: "відповідь моделі не JSON" }; }
+  const v = validateAnalysis(parsed);
+  if (!v.ok) return { ok: false, why: `відповідь моделі не за схемою: ${v.why}` };
+  return { ok: true, result: verifyQuotes(v.value, turns) };
+}
