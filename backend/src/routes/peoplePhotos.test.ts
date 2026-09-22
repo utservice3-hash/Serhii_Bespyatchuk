@@ -9,14 +9,15 @@ import { skipReason } from "../db/scratchDb.js";
  * #630 — ФОТО СПІВРОБІТНИКА ПРОТИ БАЗИ З НУЛЯ, ЧЕРЕЗ СПРАВЖНІЙ HTTP (22.09.2026). Роутер разом із
  * `requireAuth` і `requirePerm` — не лише останній обробник, бо межа запису стоїть саме в мідлварі.
  * Перевіряє по обидва боки кожної межі:
- *  · HR завантажує → будь-хто залогінений (менеджер) отримує ТІ САМІ байти; без токена — 401;
+ *  · HR завантажує → будь-хто з команди (менеджер) отримує ТІ САМІ байти; без токена — 401; кандидат — 403;
+ *  · кеш на добу — лише на успішній віддачі; 404 не кешується;
  *  · тімлід і менеджер НЕ пишуть і НЕ бачать списку (403), HR і адмін — пишуть і бачать;
  *  · «Замінити» → «Повернути попереднє» віддає старі байти; «Прибрати» → 404 → «Повернути» — знову ті самі;
- *  · не-фото (PDF) — 400, звільненому — 400 на завантаження;
+ *  · не-фото (PDF) — 400, звільненому — 400 на завантаження, але прибрати й повернути його фото можна;
  *  · файл лежить у КОРЕНІ теки документів (під нічним бекапом), з префіксом `photo-`, і жоден не видаляється;
  *  · `managerPhotos`: привʼязаний із фото — у мапі, без фото чи без звʼязку — ні.
  */
-test("#630 ДИМ: фото — HR завантажує, усі бачать, тімлід не пише; кожна дія скасовна", async (t) => {
+test("#630 ДИМ: фото — HR завантажує, команда бачить (кандидат — ні), тімлід не пише; кожна дія скасовна", async (t) => {
   const { provisionScratch } = await import("../db/scratchDb.js");
   const scratch = provisionScratch();
   if ("unavailable" in scratch) return t.skip(skipReason(scratch));
@@ -35,7 +36,7 @@ test("#630 ДИМ: фото — HR завантажує, усі бачать, т
     await c.query(`INSERT INTO teams (id, name) VALUES (13, 'РНК - Тест') ON CONFLICT DO NOTHING`);
     await c.query(`INSERT INTO managers (id, name, team_id) VALUES (101, 'Фото Менеджер', 13), (102, 'Без Фото', 13), (103, 'Без Звʼязку', 13)`);
     await c.query(`INSERT INTO users (id, email, password_hash, role, full_name) VALUES
-      (1, 'admin@uts.ua', 'x', 'admin', 'Адмін'), (5, 'hr@uts.ua', 'x', 'manager', 'Даша')`);
+      (1, 'admin@uts.ua', 'x', 'admin', 'Адмін'), (5, 'hr@uts.ua', 'x', 'manager', 'Даша'), (6, 'cand@uts.ua', 'x', 'manager', 'Кандидат')`);
     await c.query(`INSERT INTO employees (id, full_name, import_key, manager_id, status) VALUES
       (11, 'Фото Менеджер', 'k11', 101, 'active'), (12, 'Без Фото', 'k12', 102, 'active'), (13, 'Звільнений Тест', 'k13', NULL, 'dismissed')`);
 
@@ -54,11 +55,12 @@ test("#630 ДИМ: фото — HR завантажує, усі бачать, т
       hr: signToken({ userId: 5, role: "manager", roleKey: "hr", managerId: null, teamId: null } as never),
       lead: signToken({ userId: 3, role: "team_lead", roleKey: "team_lead", managerId: 103, teamId: 13 } as never),
       manager: signToken({ userId: 4, role: "manager", roleKey: "manager", managerId: 102, teamId: 13 } as never),
+      candidate: signToken({ userId: 6, role: "manager", roleKey: "candidate", managerId: null, teamId: null } as never),
     };
     const req = async (method: string, p: string, who: string | null, body?: unknown) => {
       const r = await fetch(base + p, { method, headers: { ...(who ? { authorization: `Bearer ${TOK[who]}` } : {}), ...(body ? { "content-type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
       const buf = Buffer.from(await r.arrayBuffer());
-      return { status: r.status, buf, json: () => JSON.parse(buf.toString("utf8")) };
+      return { status: r.status, buf, cache: r.headers.get("cache-control"), json: () => JSON.parse(buf.toString("utf8")) };
     };
     const jpeg = (tag: string) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from(tag)]);
     const A = jpeg("фото-A"), B = jpeg("фото-B");
@@ -72,13 +74,20 @@ test("#630 ДИМ: фото — HR завантажує, усі бачать, т
       assert.equal((await req("GET", "/photos", who)).status, 403, `🔴 ${who} бачить список реєстру`);
     }
     assert.equal((await req("GET", "/photo/11", null)).status, 401, "🔴 фото віддається без входу");
-    assert.equal((await req("GET", "/photo/11", "manager")).status, 404, "до завантаження фото немає — 404, а не порожні 200");
+    const none = await req("GET", "/photo/11", "manager");
+    assert.equal(none.status, 404, "до завантаження фото немає — 404, а не порожні 200");
+    assert.equal(none.cache, "no-store", "🔴 відповідь «фото немає» кешується — нове фото не зʼявиться добу");
 
     assert.equal((await up("hr", 11, A)).status, 201, "🔴 HR не може завантажити фото");
     const gotA = await req("GET", "/photo/11", "manager");
     assert.equal(gotA.status, 200, "🔴 менеджер не бачить фото");
     assert.deepEqual(gotA.buf, A, "🔴 віддано не ті байти, що завантажено");
+    assert.equal(gotA.cache, "private, max-age=86400", "🔴 успішна віддача без кешу на добу");
     assert.equal((await req("GET", "/photo/11", "lead")).status, 200, "🔴 тімлід не бачить фото");
+    // Кандидат (зовнішній стажист) — ні; дзеркало вище: менеджер і тімлід — так.
+    const cand = await req("GET", "/photo/11", "candidate");
+    assert.equal(cand.status, 403, "🔴 кандидат бачить фото персоналу");
+    assert.equal(cand.cache, "no-store");
 
     // Заміна → повернення попереднього → ті самі байти A; ще раз — знову B.
     assert.equal((await up("admin", 11, B)).status, 201, "🔴 адмін не може замінити фото");
@@ -99,6 +108,11 @@ test("#630 ДИМ: фото — HR завантажує, усі бачать, т
     const pdf = await req("POST", "/photo/12", "hr", { dataBase64: Buffer.from("%PDF-1.4 x").toString("base64") });
     assert.equal(pdf.status, 400, "🔴 PDF прийнято як фото");
     assert.equal((await up("hr", 13, A)).status, 400, "🔴 звільненому завантажено фото");
+    // Друга половина рішення: фото звільненого (поставлене раніше) прибрати й повернути МОЖНА — це скасування.
+    await c.query(`UPDATE employees SET photo_file = 'photo-00000000-0000-0000-0000-000000000013.jpg' WHERE id = 13`);
+    assert.equal((await req("DELETE", "/photo/13", "hr")).status, 200, "🔴 фото звільненого не прибрати");
+    assert.equal((await req("POST", "/photo/13/restore", "hr")).status, 200, "🔴 фото звільненого не повернути");
+    assert.equal((await req("DELETE", "/photo/2147483648", "hr")).status, 400, "🔴 id поза межами integer — не 400");
     assert.equal((await up("hr", 999, A)).status, 404, "🔴 фото для неіснуючої людини");
     assert.equal((await req("GET", "/photo/abc", "manager")).status, 400);
 

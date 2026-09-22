@@ -42,8 +42,9 @@ export interface RouteExemption {
  */
 export const ROUTE_BOUNDARY_EXEMPTIONS: RouteExemption[] = [
   { method: "GET", path: "/api/people/photo/:employeeId", permanent: true,
-    why: "Фото співробітника — на слайдах зустрічі, у номінаціях і на дошці пошани, яку бачать УСІ ролі. Лише "
-       + "залогіненим (requireAuth), файл береться за імʼям із бази, не з запиту. Список і запис — під правом сейфу." },
+    why: "Фото співробітника — на слайдах зустрічі, у номінаціях і (далі) на дошці пошани для всієї команди. Лише "
+       + "залогіненим (requireAuth), крім ролі «Кандидат» — їй 403 в самому обробнику; файл береться за імʼям із "
+       + "бази, не з запиту. Список і запис — під правом сейфу." },
   { method: "POST", path: "/api/auth/login", permanent: true,
     why: "Логін — єдиний роут ДО автентифікації. Межа тут неможлива за визначенням." },
   { method: "GET", path: "/api/auth/invite/:token", permanent: true,

@@ -71,9 +71,12 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
   const [extra, setExtra] = useState<Extra>("all");
   const [importing, setImporting] = useState(false);
   const [open, setOpen] = useState<{ id: number; tab: DrawerTab } | null>(null);
-  const [photos, setPhotos] = useState<Map<number, PersonPhoto>>(new Map());
+  // Стан фото: збій завантаження НЕ читається як «фото немає ні в кого» — попереднє лишається, помилка видима.
+  const [photos, setPhotos] = useState<Map<number, PersonPhoto> | null>(null);
+  const [photosErr, setPhotosErr] = useState<string | null>(null);
   const loadPhotos = useCallback(() => {
-    fetchPeoplePhotos().then((p) => setPhotos(new Map(p.map((x) => [x.employeeId, x])))).catch(() => setPhotos(new Map()));
+    fetchPeoplePhotos().then((p) => { setPhotos(new Map(p.map((x) => [x.employeeId, x]))); setPhotosErr(null); })
+      .catch((e) => setPhotosErr(hiringError(e)));
   }, []);
   const load = useCallback(() => {
     fetchEmployees().then((r) => { setRows(r.rows); setTeams(r.teams); }).catch((e) => setErr(hiringError(e)));
@@ -87,7 +90,7 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
     && (extra === "all" || (extra === "new" && (daysSince(r.hired_at) ?? 999) <= 30) || (extra === "noacc" && r.user_id == null)
       || (extra === "nosec" && r.secrets === 0) || (extra === "bday" && bdaySoon(r.birth_date))
       || (extra === "nonda" && !r.has_nda) || (extra === "nooffer" && !r.has_offer) || (extra === "nodocs" && r.docs === 0)
-      || (extra === "nophoto" && !photos.get(r.id)?.hasPhoto))
+      || (extra === "nophoto" && !!photos && !photos.get(r.id)?.hasPhoto))
     && (!q.trim() || `${r.full_name} ${r.position ?? ""} ${r.team_label ?? ""} ${r.phone ?? ""} ${r.email ?? ""}`.toLowerCase().includes(q.trim().toLowerCase()))),
   [inView, team, extra, q, photos]);
   const teamOptions = useMemo(() => [...new Set(inView.map((r) => r.team_label).filter((t): t is string => !!t))].sort((a, b) => a.localeCompare(b, "uk", { numeric: true })), [inView]);
@@ -148,7 +151,7 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
                   return (
                     <tr key={r.id} className={r.status === "dismissed" ? "off" : ""} onClick={() => setOpen({ id: r.id, tab: "profile" })}>
                       <td><div className="emp-who">
-                        <EmployeePhoto photo={photos.get(r.id)?.hasPhoto ? { id: r.id, v: photos.get(r.id)!.v } : null} name={r.full_name} size={36} />
+                        <EmployeePhoto photo={photos?.get(r.id)?.hasPhoto ? { id: r.id, v: photos.get(r.id)!.v } : null} name={r.full_name} size={36} />
                         <div>
                         <b>{r.full_name}</b>
                         {fresh && <span className="emp-pill info">новий</span>}
@@ -181,11 +184,13 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
                 })}
               </tbody>
             </table>
-            {shown.length === 0 && <div className="hr-muted" style={{ padding: 16 }}>Нікого не знайдено — змініть фільтри.</div>}
+            {extra === "nophoto" && !photos
+              ? <div className="hr-muted" style={{ padding: 16 }}>Стан фото не завантажився{photosErr ? `: ${photosErr}` : ""} — відбір «Без фото» зараз недоступний.</div>
+              : shown.length === 0 && <div className="hr-muted" style={{ padding: 16 }}>Нікого не знайдено — змініть фільтри.</div>}
           </div>
         )}
       </div>
-      {openRow && <EmployeeDrawer row={openRow} tab={open!.tab} teams={teams} status={status} toast={toast} photo={photos.get(openRow.id)}
+      {openRow && <EmployeeDrawer row={openRow} tab={open!.tab} teams={teams} status={status} toast={toast} photo={photos?.get(openRow.id)} photoErr={photos ? null : photosErr}
         onTab={(t) => setOpen({ id: openRow.id, tab: t })} onClose={() => setOpen(null)} onSaved={load} onPhoto={loadPhotos} />}
       {importing && <ImportDialog onClose={() => setImporting(false)} onDone={(msg, pending) => {
         setImporting(false); toast(msg); load();
@@ -204,8 +209,8 @@ const FIELDS: [keyof EmployeePatch, string, "text" | "date" | "team" | "status"]
 
 type DrawerTab = "profile" | "access" | "docs";
 
-function EmployeeDrawer({ row, tab, teams, status, toast, photo, onTab, onClose, onSaved, onPhoto }: {
-  row: EmployeeRow; tab: DrawerTab; teams: string[]; status: SecretsStatus | null; toast: Toast; photo: PersonPhoto | undefined;
+function EmployeeDrawer({ row, tab, teams, status, toast, photo, photoErr, onTab, onClose, onSaved, onPhoto }: {
+  row: EmployeeRow; tab: DrawerTab; teams: string[]; status: SecretsStatus | null; toast: Toast; photo: PersonPhoto | undefined; photoErr: string | null;
   onTab: (t: DrawerTab) => void; onClose: () => void; onSaved: () => void; onPhoto: () => void;
 }) {
   const [dismissing, setDismissing] = useState(false);
@@ -253,7 +258,7 @@ function EmployeeDrawer({ row, tab, teams, status, toast, photo, onTab, onClose,
         {row.offboarding && <OffboardingBar row={row} toast={toast} onDone={onSaved} />}
         {tab === "docs" ? <EmployeeDocs row={row} toast={toast} /> : tab === "profile" ? (
           <>
-            <PhotoPanel employeeId={row.id} name={row.full_name} dismissed={row.status === "dismissed"} info={photo} toast={toast} onChanged={onPhoto} />
+            <PhotoPanel employeeId={row.id} name={row.full_name} dismissed={row.status === "dismissed"} info={photo} unknown={photoErr} toast={toast} onChanged={onPhoto} />
             <div className="emp-form">
               {FIELDS.map(([k, label, kind]) => (
                 <label key={k} className={k === "note" || k === "dismiss_reason" ? "wide" : ""}>

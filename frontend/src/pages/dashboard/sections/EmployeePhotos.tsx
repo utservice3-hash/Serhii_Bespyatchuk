@@ -20,7 +20,11 @@ export const initialsOf = (name: string) =>
  * Коло з фото або ініціалами. `photo` нема — одразу ініціали, без запиту. `size` не задано — розмір
  * бере CSS класу (так роблять слайди, де коло міняється від кількості людей).
  */
-export function EmployeePhoto({ photo, name, size, className = "" }: { photo: PhotoRef | null | undefined; name: string; size?: number; className?: string }) {
+export function EmployeePhoto({ photo, name, size, className = "", fallbackClassName }: {
+  photo: PhotoRef | null | undefined; name: string; size?: number; className?: string;
+  /** Клас кола з ініціалами, коли фото немає або воно ще вантажиться (якщо відрізняється від `className`). */
+  fallbackClassName?: string;
+}) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
@@ -31,12 +35,15 @@ export function EmployeePhoto({ photo, name, size, className = "" }: { photo: Ph
   const style = size ? { width: size, height: size, fontSize: Math.max(10, Math.round(size * 0.34)) } : undefined;
   return url
     ? <img className={`ep-av ${className}`} style={style} src={url} alt={name} />
-    : <span className={`ep-av ep-ini ${className}`} style={style} aria-label={name}>{initialsOf(name)}</span>;
+    : <span className={`ep-av ep-ini ${fallbackClassName ?? className}`} style={style} aria-label={name}>{initialsOf(name)}</span>;
 }
 
 /** Блок «Фірмове фото» у картці людини (вкладка «Профіль»). */
-export function PhotoPanel({ employeeId, name, dismissed, info, toast, onChanged }: {
-  employeeId: number; name: string; dismissed: boolean; info: PersonPhoto | undefined; toast: Toast; onChanged: () => void;
+export function PhotoPanel({ employeeId, name, dismissed, info, unknown, toast, onChanged }: {
+  employeeId: number; name: string; dismissed: boolean; info: PersonPhoto | undefined;
+  /** Стан фото не завантажився: не вдаємо, що фото немає. */
+  unknown?: string | null;
+  toast: Toast; onChanged: () => void;
 }) {
   const [uploading, setUploading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -52,6 +59,7 @@ export function PhotoPanel({ employeeId, name, dismissed, info, toast, onChanged
       <EmployeePhoto photo={photo} name={name} size={96} className="ep-ring" />
       <div className="ep-panel-body">
         <b>Фірмове фото</b>
+        {unknown ? <span style={{ color: "var(--danger)" }}>Не вдалося дізнатись, чи є фото: {unknown}. Оновіть сторінку.</span> : null}
         <span className="hr-muted">
           Зʼявляється в презентації зустрічі, у номінаціях тижня і на дошці пошани.
           {info?.updatedAt && <> {info.hasPhoto ? "Завантажено" : "Змінено"} {info.updatedAt}{info.updatedBy ? ` · ${info.updatedBy}` : ""}.</>}

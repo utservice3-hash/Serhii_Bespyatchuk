@@ -37,9 +37,9 @@ test("#626 фото: приймаються лише JPEG/PNG/WebP за байт
  * #627 — ФОТО ЛЯГАЄ ТУДИ, ЩО ЇДЕ В НІЧНИЙ БЕКАП. Бекап (`copyDocuments`) копіює лише ФАЙЛИ КОРЕНЯ
  * теки документів. Тому: (1) імʼя файлу — без жодного розділювача шляху, з префіксом `photo-`;
  * (2) файл із таким імʼям у корені справді потрапляє в копію, а в підтеці — ні (другий бік межі);
- * (3) тека фото за замовчуванням — той самий `backend/documents`, що бере бекап.
+ * (3) тека фото — та сама, яку бере САМА джоба бекапу (`backupDb.DOCS_DIR`), а не переписана в тест формула.
  */
-test("#627 фото: файл у корені теки документів — і нічний бекап його копіює", () => {
+test("#627 фото: файл у корені теки документів — і нічний бекап його копіює", async () => {
   const name = photoStoredName("0f8b1c2d-aaaa-bbbb-cccc-1234567890ab", "image/jpeg");
   assert.match(name, /^photo-[0-9a-f-]{36}\.jpg$/, "🔴 імʼя файлу фото не того виду");
   assert.equal(path.basename(name), name, "🔴 імʼя фото містить шлях — файл ляже в підтеку, поза бекап");
@@ -54,9 +54,11 @@ test("#627 фото: файл у корені теки документів — 
   copyDocuments(src, dst);
   assert.deepEqual(readdirSync(path.join(dst, "documents")), [name], "🔴 фото з кореня не потрапило в копію (або підтека потрапила — тоді межа гейта зсунулась)");
 
-  // Формула бекапу (`jobs/backupDb.ts`): `path.resolve(<jobs>, "..", "..", "documents")` = `backend/documents`.
-  const backupDefault = path.resolve(import.meta.dirname, "..", "jobs", "..", "..", "documents");
-  assert.equal(photoDir({}), backupDefault, "🔴 тека фото ≠ тека, яку копіює нічний бекап");
+  // Звіряємо з ТІЄЮ текою, яку бере сама джоба бекапу (`jobs/backupDb.ts` → `DOCS_DIR`), а не з копією формули:
+  // зміна будь-якого боку — фото чи бекапу — червоніє тут. `config` бекапу вимагає змінних — даємо заглушки.
+  for (const k of ["DATABASE_URL", "JWT_SECRET", "KOMMO_BASE_URL", "KOMMO_API_TOKEN"]) process.env[k] ??= "test";
+  const { DOCS_DIR: backupDir } = await import("../jobs/backupDb.js");
+  assert.equal(path.resolve(photoDir()), path.resolve(backupDir), "🔴 тека фото ≠ тека, яку копіює нічний бекап");
   assert.equal(photoDir({ DOCS_DIR: "/srv/docs" }), "/srv/docs", "🔴 перемикач бекапу DOCS_DIR не веде за собою фото");
 });
 

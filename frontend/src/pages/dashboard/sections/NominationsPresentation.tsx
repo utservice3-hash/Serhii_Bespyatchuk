@@ -71,7 +71,7 @@ export function manualSection(s: ManualSlide): string {
 const lines = (v?: string) => (v ?? "").split("\n").map((x) => x.trim()).filter(Boolean);
 /** Велике фото слайда-вітання: фото людини з реєстру або ініціали в колі, як раніше. */
 const Photo = ({ who, photo }: { who?: string; photo?: PhotoRef | null }) => (
-  <div className="ps-photo">{photo ? <EmployeePhoto photo={photo} name={who || "?"} className="ps-photo-img" /> : <div className="ps-ava big">{initials(who || "?")}</div>}</div>
+  <div className="ps-photo">{photo ? <EmployeePhoto photo={photo} name={who || "?"} className="ps-photo-img" fallbackClassName="ps-ava big" /> : <div className="ps-ava big">{initials(who || "?")}</div>}</div>
 );
 
 /**
@@ -214,7 +214,8 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
     ) });
 
     for (const s of manual) out.push({ key: `m${s.id}`, node: frame(manualSection(s), templateSlide(s, manualPhotos)) });
-    const ava = (id: number, cls: string) => <EmployeePhoto key={id} photo={week.photos?.[String(id)]} name={name(id)} className={cls} />;
+    // Імʼя для ініціалів — з того рядка, що малюється (у «План виконали» — зі Звіту: там бувають люди поза ростером тижня).
+    const ava = (id: number, cls: string, who?: string) => <EmployeePhoto key={id} photo={week.photos?.[String(id)]} name={who ?? name(id)} className={cls} />;
 
     const unit = (k: NominationKey) => week.defs.find((d) => d.key === k)?.unit ?? "count";
     const card = (dept: "rpk" | "rnk", title: string) => (
@@ -270,7 +271,7 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
           </div>
           <div className={`ps-grid${g.people.length > 6 ? " many" : ""}`}>
             {g.people.map((p) => (
-              <div className="ps-pp" key={p.id}>{ava(p.id, "ps-ava")}<div className="ps-pn">{short(p.name)}</div><div className="ps-pc">{p.pct}%</div></div>
+              <div className="ps-pp" key={p.id}>{ava(p.id, "ps-ava", p.name)}<div className="ps-pn">{short(p.name)}</div><div className="ps-pc">{p.pct}%</div></div>
             ))}
           </div>
         </div>

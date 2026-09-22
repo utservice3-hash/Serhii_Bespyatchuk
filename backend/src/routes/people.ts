@@ -20,9 +20,10 @@ peopleRouter.use(requireAuth);
 
 /** Корінь теки документів — під нічним бекапом (`photoDir`, #627). */
 const DOCS_DIR = photoDir();
+/** id співробітника — додатне ціле в межах `integer` Postgres; інакше 400 ще до БД і до запису файла. */
 const idOf = (v: unknown): number => {
   const n = Number(v);
-  if (!Number.isInteger(n) || n <= 0) throw new PeopleError(400, "невірний id співробітника");
+  if (!Number.isInteger(n) || n <= 0 || n > 2_147_483_647) throw new PeopleError(400, "невірний id співробітника");
   return n;
 };
 const safe = (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response) => {
@@ -35,11 +36,17 @@ const safe = (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Re
 const b64 = (v: unknown) => (typeof v === "string" && v ? Buffer.from(v.includes(",") ? v.split(",")[1] : v, "base64") : null);
 
 peopleRouter.get("/photo/:employeeId", safe(async (req, res) => {
+  // 🎓 Кандидат (зовнішній стажист) бачить лише «Навчання» й «Документи» — фото персоналу йому не належать,
+  // і жодного екрана з фото в нього немає. Роут без вкладки, тож межу ставимо тут (#630).
+  res.setHeader("Cache-Control", "no-store"); // відмови й 404 не кешуються; успіх перепише заголовок нижче
+  if (req.auth!.roleKey === "candidate") return res.status(403).json({ error: "Фото співробітників — для команди" });
   const file = await photoFileOf(idOf(req.params.employeeId));
   if (!file) return res.status(404).json({ error: "Фото немає" });
   // Імʼя файлу — лише з бази (`photo-<uuid>.ext`), ніколи з запиту; basename — друга лінія проти `..`.
-  res.setHeader("Cache-Control", "private, max-age=86400");
-  res.sendFile(path.join(DOCS_DIR, path.basename(file)), (err) => { if (err && !res.headersSent) res.status(404).json({ error: "Файл фото на диску не знайдено" }); });
+  // Кеш на добу — лише разом з успішною віддачею файла (`headers` send ставить на самій віддачі).
+  res.sendFile(path.join(DOCS_DIR, path.basename(file)), { headers: { "Cache-Control": "private, max-age=86400" } }, (err) => {
+    if (err && !res.headersSent) res.status(404).json({ error: "Файл фото на диску не знайдено" });
+  });
 }));
 
 peopleRouter.get("/photos", requirePerm("view_employee_secrets"), safe(async (_req, res) => {

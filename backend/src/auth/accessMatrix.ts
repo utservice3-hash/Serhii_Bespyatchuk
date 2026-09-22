@@ -379,7 +379,7 @@ export const ACCESS_MATRIX: AccessRow[] = [
   /* 📷 Фото співробітників (22.09.2026). Саме фото — будь-кому залогіненому (0 → 400/404, але не 403);
      список і запис — право сейфу `view_employee_secrets`: admin, ceo, opdir, kvp, hr. Запис — deny-only. */
   { method: "GET", path: "/api/people/photo/:employeeId", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: ["candidate"] },
   { method: "GET", path: "/api/people/photos", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
   { method: "POST", path: "/api/people/photo/:employeeId", cls: "deny-only",
