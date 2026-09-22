@@ -640,7 +640,7 @@ const val: React.CSSProperties = { fontSize: 19, fontWeight: 750, letterSpacing:
 function Pill({ c, children }: { c: string; children: React.ReactNode }) {
   return <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 20, background: c + "22", color: c }}>{children}</span>;
 }
-function Donut({ pct, title }: { pct: number; title?: string }) {
+export function Donut({ pct, title }: { pct: number; title?: string }) {
   const col = pct >= 100 ? GREEN : pct >= 70 ? AMBER : RED;
   const ring = Math.min(100, Math.max(0, pct)); // кільце ≤100% візуально, число повне
   return (

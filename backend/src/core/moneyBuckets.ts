@@ -1,4 +1,6 @@
-import { STAGE_NAMES } from "./stageNames.js";
+import { STAGE_NAMES, FC_LOST_STAGE_NAME } from "./stageNames.js";
+// Лише ТИП (стирається при компіляції): форма правил класу живе в чистому модулі лідогену.
+import type { ClassRules } from "./leadgenHandoffRules.js";
 
 /**
  * 🧺 КОРЗИНИ ГРОШЕЙ — ЯВНИЙ РЕЄСТР УСІХ СТАДІЙ ОБОХ FC-ВОРОНОК.
@@ -43,7 +45,10 @@ export const RECEIVED_STATUSES = [69716460, 60412544];
  */
 export const AWAITING_STATUSES = [100274340, 69716300, 98470988, 69716304, 69716312, 10937178, 42639144, 42639147, 25044997, 62940068];
 
-/** ❌ Провал — «Закрито і не реалізовано». У `STAGE_NAMES` його немає, тож названий тут. */
+/**
+ * ❌ Провал — «Закрито і не реалізовано». У `STAGE_NAMES` його немає (там лише реєстр FC для `#45`);
+ * назва — ОДНИМ літералом `FC_LOST_STAGE_NAME` у `stageNames.ts`, число — тут, і `money.ts` бере його звідси.
+ */
 export const STATUS_LOST = 143;
 export const LOST_STATUSES = [STATUS_LOST];
 
@@ -71,6 +76,22 @@ export const OPERATIONAL_STATUSES = [
   10883250,  // Документи підписані
   62940064,  // Контроль перед завантаженням
 ];
+
+/** Воронки повного циклу — ті самі, що `money.FC_PIPELINES` (звіряє `#683`). */
+export const FC_PIPELINE_IDS = [8921932, 155304];
+
+/**
+ * 💰 ПРАВИЛА КЛАСУ УГОДИ МЕНЕДЖЕРА З ПЕРЕДАЧІ ЛІДГЕНА (правило 4 власника, 22.09.2026) —
+ * ОДИН обʼєкт на продукт: його передає `money.handoffDealStates` у чисту `managerDealClass`,
+ * і його ж бере `#671`. Раніше `money.ts` складав власний обʼєкт у тілі функції, а `#671` —
+ * свій у тесті; підмінити в першому зону «Очікуємо» на вузький етап 8 можна було при
+ * зеленому наборі (ревʼю F3). Звірку полів із константами ядра (`FC_PIPELINES`,
+ * `STAGE_SUCCESS`, `STAGE_PAID`, `EXPECT_ZONE`) тримає `#683` — без БД, у кожному оточенні.
+ */
+export const HANDOFF_CLASS_RULES: ClassRules = {
+  fcPipelines: FC_PIPELINE_IDS, success: CLOSED_STATUSES, paid: RECEIVED_STATUSES,
+  expectZone: AWAITING_STATUSES, lostStatus: STATUS_LOST,
+};
 
 /** Порядок перевірки — від «гроші вже наші» до «ще ні». Корзини диз'юнктні (гейт #45b). */
 const BUCKETS: [MoneyBucket, readonly number[]][] = [
@@ -104,7 +125,7 @@ export function allFcStatuses(): FcStatus[] {
     const [p, s] = k.split(":");
     return { pipelineId: Number(p), statusId: Number(s), name: STAGE_NAMES[k] };
   });
-  for (const p of [8921932, 155304]) out.push({ pipelineId: p, statusId: STATUS_LOST, name: "Закрито і не реалізовано" });
+  for (const p of FC_PIPELINE_IDS) out.push({ pipelineId: p, statusId: STATUS_LOST, name: FC_LOST_STAGE_NAME });
   return out;
 }
 

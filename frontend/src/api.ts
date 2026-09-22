@@ -159,6 +159,41 @@ export interface LeadgenPersonRow {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
   isActive: boolean; leads: number; opr: number; quotes: number; warming: number; calls: number;
 }
+/** Одиниця розбивки: «день» у режимі Тиждень, «тиждень» у режимах Місяць і Період. */
+export type LeadgenGrain = "day" | "week";
+export interface LeadgenBucket { bucket: string; calls: number; leads: number; opr: number; quotes: number; warming: number }
+export interface LeadgenPersonBucket extends LeadgenBucket { managerId: number }
+/**
+ * 💰 Гроші з переданих лідів: передача (вхід у 142 у Продзвоні) → угода менеджера, створена
+ * з неї (той самий клієнт, створена від −10 с до +120 с від входу в 142) → її стан ЗАРАЗ. Класи — з грошового ядра: успішна (142),
+ * оплата отримана (етап 9), очікуємо оплату (зона «Очікуємо» Звіту), ще в роботі, програна.
+ * Сума — `price` угоди, як у ядрі. Передачі без угоди менеджера — окремим числом (`unlinked`).
+ */
+/** `priced` — скільки з `n` угод мають бюджет: у «в роботі» його здебільшого ще не проставили (заміряно: 86 %), тож сума там — лише про меншість. */
+export interface LeadgenMoneyCell { n: number; sum: number; priced: number }
+export interface LeadgenHandoffMoney {
+  handoffs: number; unlinked: number; lost: number;
+  /** Передачі, що вели в угоду, вже пораховану іншою передачею (гроші не двоїмо). */
+  sameDeal: number;
+  success: LeadgenMoneyCell; paid: LeadgenMoneyCell; expect: LeadgenMoneyCell; work: LeadgenMoneyCell;
+}
+/** Стан угоди менеджера з передачі — ЗАРАЗ. `none` — угоди менеджера не знайшлося; `same` — ця передача
+ *  привела в угоду, вже пораховану іншою передачею (гроші не двоїмо). */
+export type LeadgenDealClass = "success" | "paid" | "expect" | "work" | "lost" | "none" | "same";
+/** Одна передача лідгена й угода менеджера, що з неї виросла. Для `none` поля угоди — з угоди Продзвону. */
+export interface LeadgenHandoffDeal {
+  day: string; lgId: number; pzId: number; dealId: number | null;
+  route: string | null; client: string | null; salesManager: string | null; stage: string | null;
+  cls: LeadgenDealClass; price: number; closedDay: string | null; planPayDay: string | null;
+  /** Причина відмови — лише для програних (у решті поле буває заповнене залишком з угоди Продзвону). */
+  reason: string | null; url: string | null;
+}
+/** Розкривний список «Гроші з передач»: ті самі правила, що `handoffMoney` у /leadgen-stats; `totals` мусять із ним збігатися. */
+export interface LeadgenHandoffDealsResp { from: string; to: string; managerId: number | null; deals: LeadgenHandoffDeal[]; totals: LeadgenHandoffMoney }
+export async function fetchLeadgenHandoffDeals(params: { from: string; to: string; managerId?: number }): Promise<LeadgenHandoffDealsResp> {
+  const { data } = await api.get<LeadgenHandoffDealsResp>("/dashboard/leadgen-handoff-deals", { params });
+  return data;
+}
 export interface LeadgenStatsResp {
   from: string; to: string;
   rows: LeadgenPersonRow[];
@@ -175,6 +210,12 @@ export interface LeadgenStatsResp {
     leadGeneratorFill: { withPerson: number; total: number };
   };
   weeks: { week: string; leads: number; opr: number; quotes: number }[];
+  /** Розбивка за `grain` (якщо його передали): відділ і кожна людина — ті самі предикати й атрибуція, що в `rows`;
+   *  тімлід отримує лише свою команду. Відділ = сума людей (як `totals`). */
+  grain?: LeadgenGrain;
+  buckets?: LeadgenBucket[];
+  bucketsByPerson?: LeadgenPersonBucket[];
+  handoffMoney?: { totals: LeadgenHandoffMoney; byPerson: (LeadgenHandoffMoney & { managerId: number })[] };
   closures: { reason: string; deals: number }[];
   handoffs: { kommoId: number; day: string; name: string | null; manager: string | null; url: string }[];
   handoffsLimit: number;
@@ -182,7 +223,17 @@ export interface LeadgenStatsResp {
   callRule: string;
   scopedTo: number | null;
 }
-export async function fetchLeadgenStats(params: { from: string; to: string }): Promise<LeadgenStatsResp> {
+/**
+ * Тренд по місяцях для графіка «Загальна статистика»: `months` календарних місяців, що
+ * закінчуються місяцем `to`. Ті самі предикати й атрибуція, що в `/leadgen-stats` (рядок
+ * місяця = той самий місяць у `/leadgen-stats`); тімлід отримує лише свою команду.
+ */
+export interface LeadgenTrendResp { months: number; to: string; buckets: LeadgenBucket[]; bucketsByPerson: LeadgenPersonBucket[]; handoffMoney?: (LeadgenHandoffMoney & { bucket: string })[]; handoffMoneyByPerson?: (LeadgenHandoffMoney & { bucket: string; managerId: number })[] }
+export async function fetchLeadgenTrend(params: { to: string; months: number }): Promise<LeadgenTrendResp> {
+  const { data } = await api.get<LeadgenTrendResp>("/dashboard/leadgen-trend", { params });
+  return data;
+}
+export async function fetchLeadgenStats(params: { from: string; to: string; grain?: LeadgenGrain }): Promise<LeadgenStatsResp> {
   const { data } = await api.get<LeadgenStatsResp>("/dashboard/leadgen-stats", { params });
   return data;
 }
