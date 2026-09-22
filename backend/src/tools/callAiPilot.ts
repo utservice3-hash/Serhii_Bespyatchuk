@@ -34,10 +34,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       (from, to) => path.join(tmpdir(), "ai-pilot", `plan-${from}_${to}.jsonl`));
     const role = (await pool.query<{ u: string }>("SELECT current_user AS u")).rows[0]?.u;
     if (!a.go && role !== "test_readonly")
-      throw new Error(`callAiPilot: сухий прогін у ролі «${String(role)}», а не test_readonly. `
+      throw new Error(`сухий прогін у ролі «${String(role)}», а не test_readonly. `
         + "Запускати через `TEST_SCOPE=prod node --import ./dist/testReadOnly.js`.");
     if (a.go && role === "test_readonly")
-      throw new Error("callAiPilot --go: роль test_readonly не може писати чергу — запуск без preload.");
+      throw new Error("--go: роль test_readonly не може писати чергу — запуск без preload.");
 
     const { adSources } = await getSettings();
     const now = new Date();
