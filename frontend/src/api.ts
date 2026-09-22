@@ -4326,11 +4326,15 @@ export const revealSecret = async (id: number, code: string, reason: string) =>
 
 // 🗂 Реєстр співробітників + імпорт «UTS Співробітники УКР» (18.09.2026, задача №3898).
 export interface EmployeeRow {
-  id: number; ref: string; full_name: string; status: "active" | "dismissed"; position: string | null; team_label: string | null;
+  id: number; ref: string; full_name: string; status: "active" | "finishing" | "dismissed"; position: string | null; team_label: string | null;
   phone: string | null; email: string | null; telegram: string | null; birth_date: string | null; hired_at: string | null;
   dismissed_at: string | null; dismiss_reason: string | null; note: string | null; extra: Record<string, string>;
   user_id: number | null; account_name: string | null; account_active: boolean | null; secrets: number; updated_at: string;
   manager_id: number | null; kommo_name: string | null;
+  /** 🚪 Звільнення кнопками: крок і останній робочий день (null — звільнення через реєстр не було). */
+  offboarding: "finishing" | "dismissed" | null; last_day: string | null;
+  /** 📎 Документи людини (без прибраних) і чи є серед них NDA / офер — за типом документа. */
+  docs: number; has_nda: boolean; has_offer: boolean;
 }
 export interface ImportColumn { index: number; header: string; target: string; secretish: boolean; filled: number }
 export interface ImportPreviewRow {
@@ -4365,6 +4369,32 @@ export const restoreExit = async (id: number) => { await api.post(`/secrets/exit
 export const fetchEmployees = async () => (await api.get<{ rows: EmployeeRow[]; teams: string[] }>("/secrets/employees")).data;
 export type EmployeePatch = Partial<Pick<EmployeeRow, "full_name" | "position" | "team_label" | "phone" | "email" | "telegram" | "birth_date" | "hired_at" | "dismissed_at" | "dismiss_reason" | "note" | "status">>;
 export const updateEmployee = async (id: number, b: EmployeePatch) => (await api.patch<{ ok: true; changed: string[] }>(`/secrets/employees/${id}`, b)).data.changed;
+// 🚪 Звільнення у два кроки (21.09.2026) — `backend/src/core/offboarding.ts`.
+export const startDismissal = async (id: number, lastDay: string, reason: string) =>
+  (await api.post<{ status: "finishing"; managers: number }>(`/secrets/employees/${id}/dismiss`, { lastDay, reason })).data;
+export const finishDismissal = async (id: number) =>
+  (await api.post<{ status: "dismissed"; accountOff: boolean }>(`/secrets/employees/${id}/dismiss/finish`)).data;
+export const revertDismissal = async (id: number) =>
+  (await api.post<{ status: string }>(`/secrets/employees/${id}/dismiss/revert`)).data;
+// 📎 Документи людини (21.09.2026) — `backend/src/core/employeeDocs.ts`.
+export const HR_DOC_KINDS = ["Офер", "NDA", "Договір", "Заява", "Наказ", "Інше"] as const;
+export interface EmployeeDoc {
+  id: number; name: string; category: string | null; description: string | null; section: string; mime: string | null;
+  size_bytes: number | null; version: number; created_at: string; archived_at: string | null; deleted_at: string | null; author: string | null; signed: boolean;
+}
+export const fetchEmployeeDocs = async (id: number) => (await api.get<{ files: EmployeeDoc[] }>(`/secrets/employees/${id}/documents`)).data.files;
+export async function uploadEmployeeDoc(id: number, file: File, kind: string): Promise<void> {
+  const dataBase64 = await new Promise<string>((resolve, reject) => {
+    const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = () => reject(r.error); r.readAsDataURL(file);
+  });
+  await api.post(`/secrets/employees/${id}/documents`, { filename: file.name, mime: file.type || null, kind, dataBase64 });
+}
+export async function employeeDocBlobUrl(id: number, fileId: number): Promise<string> {
+  const { data } = await api.get(`/secrets/employees/${id}/documents/${fileId}`, { responseType: "blob", params: { inline: 1 } });
+  return URL.createObjectURL(data as Blob);
+}
+export const deleteEmployeeDoc = async (id: number, fileId: number) => { await api.delete(`/secrets/employees/${id}/documents/${fileId}`); };
+export const restoreEmployeeDoc = async (id: number, fileId: number) => { await api.post(`/secrets/employees/${id}/documents/${fileId}/restore`); };
 export const previewEmployeeImport = async (csv: string, mapping?: string[], headerRow?: number) =>
   (await api.post<ImportPreview>("/secrets/import/preview", { csv, mapping, headerRow })).data;
 export const commitEmployeeImport = async (csv: string, mapping: string[], sheet: "active" | "dismissed", headerRow: number) =>

@@ -8,6 +8,7 @@
 import { parseCsv, buildRows, guessTarget, validateMapping, shortKey, ImportError, SECRETISH, headersAt, detectHeaderRow, parseDate, type PlainRow } from "./employeeImport.js";
 import { prepareSecret, insertSecrets, SecretError, type Db } from "./secrets.js";
 import { SecretKeyMissing } from "./secretBox.js";
+import { DOC_COUNTS_SQL } from "./employeeDocs.js";
 
 const MAX_ROWS = 3000, MAX_COLS = 120;
 const NAME = `COALESCE(NULLIF(u.full_name, ''), m.name, u.email)`;
@@ -165,11 +166,14 @@ export async function commitImport(db: Db, key: Buffer | null, actorId: number, 
                               birth_date, hired_at, dismissed_at, dismiss_reason, note, extra, created_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        ON CONFLICT (import_key) DO UPDATE SET
-         full_name = EXCLUDED.full_name, user_id = COALESCE(employees.user_id, EXCLUDED.user_id), status = EXCLUDED.status,
+         full_name = EXCLUDED.full_name, user_id = COALESCE(employees.user_id, EXCLUDED.user_id),
+         -- 🚪 Людину, яку звільняють кнопками (employee_offboarding), таблиця не перемикає: стан і дату веде звільнення.
+         status = CASE WHEN EXISTS (SELECT 1 FROM employee_offboarding o WHERE o.employee_id = employees.id) THEN employees.status ELSE EXCLUDED.status END,
          position = COALESCE(EXCLUDED.position, employees.position), team_label = COALESCE(EXCLUDED.team_label, employees.team_label),
          phone = COALESCE(EXCLUDED.phone, employees.phone), email = COALESCE(EXCLUDED.email, employees.email),
          telegram = COALESCE(EXCLUDED.telegram, employees.telegram), birth_date = COALESCE(EXCLUDED.birth_date, employees.birth_date),
-         hired_at = COALESCE(EXCLUDED.hired_at, employees.hired_at), dismissed_at = COALESCE(EXCLUDED.dismissed_at, employees.dismissed_at),
+         hired_at = COALESCE(EXCLUDED.hired_at, employees.hired_at), dismissed_at = CASE WHEN EXISTS (SELECT 1 FROM employee_offboarding o WHERE o.employee_id = employees.id) THEN employees.dismissed_at
+                             ELSE COALESCE(EXCLUDED.dismissed_at, employees.dismissed_at) END,
          dismiss_reason = COALESCE(EXCLUDED.dismiss_reason, employees.dismiss_reason), note = COALESCE(EXCLUDED.note, employees.note),
          extra = employees.extra || EXCLUDED.extra, updated_at = now()
        RETURNING id, (xmax = 0) AS inserted, user_id`,
@@ -222,6 +226,9 @@ export async function updateEmployee(db: Db, actorId: number, id: number, body: 
     `SELECT id, full_name, position, team_label, phone, email, telegram, birth_date::text AS birth_date, hired_at::text AS hired_at,
             dismissed_at::text AS dismissed_at, dismiss_reason, note, status FROM employees WHERE id = $1 FOR UPDATE`, [id])).rows[0];
   if (!cur) throw new ImportError(404, "Співробітника не знайдено");
+  // 🚪 Звільнення кнопками (`core/offboarding.ts`) веде статус і дату саме: правка форми обійшла б
+  // стан менеджера й акаунт. Тримає #622.
+  const offboarding = !!(await db.query(`SELECT 1 FROM employee_offboarding WHERE employee_id = $1`, [id])).rowCount;
   const next: Record<string, unknown> = {};
   for (const k of EDITABLE) {
     if (!(k in body)) continue;
@@ -234,6 +241,8 @@ export async function updateEmployee(db: Db, actorId: number, id: number, body: 
     if (v != null && v.length > 300) throw new ImportError(400, "Задовге значення");
     next[k] = v;
   }
+  if (offboarding && (("status" in next && next.status !== cur.status) || ("dismissed_at" in next && next.dismissed_at !== cur.dismissed_at)))
+    throw new ImportError(409, "Людину звільняють кнопками — статус і дату змінюйте через «Завершити звільнення» або «Повернути»");
   if ("status" in next && next.status === "active") next.dismissed_at = null;
   else if (!("status" in next) && next.dismissed_at) next.status = "dismissed";
   const changed = Object.keys(next).filter((k) => String(next[k] ?? "") !== String(cur[k] ?? ""));
@@ -253,11 +262,11 @@ export async function listEmployees(db: Db) {
     `SELECT e.id, CASE WHEN e.user_id IS NOT NULL THEN e.user_id::text ELSE 'e' || e.id END AS ref, e.full_name, e.status, e.position, e.team_label, e.phone, e.email, e.telegram,
             e.birth_date::text AS birth_date, e.hired_at::text AS hired_at, e.dismissed_at::text AS dismissed_at,
             e.dismiss_reason, e.note, e.extra, e.user_id, ${NAME} AS account_name, u.is_active AS account_active,
-            e.manager_id, km.name AS kommo_name,
+            e.manager_id, km.name AS kommo_name, o.stage AS offboarding, o.last_day::text AS last_day, ${DOC_COUNTS_SQL},
             (SELECT count(*)::int FROM employee_secrets s WHERE (s.user_id = e.user_id OR s.employee_id = e.id) AND s.superseded_at IS NULL AND s.deleted_at IS NULL) AS secrets,
             e.updated_at
        FROM employees e LEFT JOIN users u ON u.id = e.user_id LEFT JOIN managers m ON m.id = u.manager_id
-       LEFT JOIN managers km ON km.id = e.manager_id
+       LEFT JOIN managers km ON km.id = e.manager_id LEFT JOIN employee_offboarding o ON o.employee_id = e.id
       ORDER BY (e.status = 'dismissed'), e.full_name`)).rows;
 }
 

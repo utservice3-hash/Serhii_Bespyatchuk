@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   fetchEmployees, previewEmployeeImport, commitEmployeeImport, updateEmployee, fetchSecretsStatus, linkEmployeesKommo, hiringError,
-  type EmployeeRow, type ImportPreview, type SecretsStatus, type EmployeePatch,
+  startDismissal, finishDismissal, revertDismissal, fetchEmployeeDocs, uploadEmployeeDoc, employeeDocBlobUrl, deleteEmployeeDoc, restoreEmployeeDoc, HR_DOC_KINDS,
+  type EmployeeDoc, type EmployeeRow, type ImportPreview, type SecretsStatus, type EmployeePatch,
 } from "../../../api";
 import type { Toast } from "./HiringShared";
 import { StatusBar, VaultPanel } from "./HiringSecrets";
@@ -15,6 +16,10 @@ import { StatusBar, VaultPanel } from "./HiringSecrets";
  * паролі в сейф. Таблицю читає СЕРВЕР: сюди приходять заголовки, лічильники й імена, але жодного
  * пароля чи номера картки — навіть у прев'ю. Колонку, схожу на пароль, сервер не пустить нікуди,
  * крім сейфу або «пропустити».
+ *
+ * 🚪 Звільнення — у два кроки кнопками (21.09.2026): «Звільнити…» → «завершує» (вхід працює, плану немає) →
+ * «Завершити звільнення» → вхід закрито. «Повернути» відкочує обидва. Нічого не видаляється.
+ * 📎 «Документи» — NDA, офер, договір людини: той самий модуль «Документи», розділ «Особисті».
  */
 
 const PLAIN: [string, string][] = [
@@ -50,7 +55,7 @@ const bdaySoon = (iso: string | null) => {
   if (next.getTime() < new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()) next = new Date(now.getFullYear() + 1, m - 1, d);
   return (next.getTime() - now.getTime()) / 86_400_000 <= 7;
 };
-type Extra = "all" | "new" | "noacc" | "nosec" | "bday";
+type Extra = "all" | "new" | "noacc" | "nosec" | "bday" | "nonda" | "nooffer" | "nodocs";
 
 export function HiringEmployees({ toast }: { toast: Toast }) {
   const [rows, setRows] = useState<EmployeeRow[] | null>(null);
@@ -62,23 +67,24 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
   const [team, setTeam] = useState<string>("");
   const [extra, setExtra] = useState<Extra>("all");
   const [importing, setImporting] = useState(false);
-  const [open, setOpen] = useState<{ id: number; tab: "profile" | "access" } | null>(null);
+  const [open, setOpen] = useState<{ id: number; tab: DrawerTab } | null>(null);
   const load = useCallback(() => {
     fetchEmployees().then((r) => { setRows(r.rows); setTeams(r.teams); }).catch((e) => setErr(hiringError(e)));
     fetchSecretsStatus().then(setStatus).catch(() => setStatus(null));
   }, []);
   useEffect(load, [load]);
 
-  const inView = useMemo(() => (rows ?? []).filter((r) => view === "all" || r.status === view), [rows, view]);
+  const inView = useMemo(() => (rows ?? []).filter((r) => view === "all" || (view === "dismissed" ? r.status === "dismissed" : r.status !== "dismissed")), [rows, view]);
   const shown = useMemo(() => inView.filter((r) => (!team || (team === "—" ? !r.team_label : r.team_label === team))
     && (extra === "all" || (extra === "new" && (daysSince(r.hired_at) ?? 999) <= 30) || (extra === "noacc" && r.user_id == null)
-      || (extra === "nosec" && r.secrets === 0) || (extra === "bday" && bdaySoon(r.birth_date)))
+      || (extra === "nosec" && r.secrets === 0) || (extra === "bday" && bdaySoon(r.birth_date))
+      || (extra === "nonda" && !r.has_nda) || (extra === "nooffer" && !r.has_offer) || (extra === "nodocs" && r.docs === 0))
     && (!q.trim() || `${r.full_name} ${r.position ?? ""} ${r.team_label ?? ""} ${r.phone ?? ""} ${r.email ?? ""}`.toLowerCase().includes(q.trim().toLowerCase()))),
   [inView, team, extra, q]);
   const teamOptions = useMemo(() => [...new Set(inView.map((r) => r.team_label).filter((t): t is string => !!t))].sort((a, b) => a.localeCompare(b, "uk", { numeric: true })), [inView]);
   if (err) return <div className="chart-card"><b>Реєстр недоступний.</b> <span className="hr-muted">{err}</span></div>;
   if (!rows) return <p className="loading-text">Завантаження…</p>;
-  const active = rows.filter((r) => r.status === "active");
+  const active = rows.filter((r) => r.status !== "dismissed"); // «завершує» ще працює
   const newbies = active.filter((r) => (daysSince(r.hired_at) ?? 999) <= 30).length;
   const yearAgo = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10);
   const leftYear = rows.filter((r) => r.status === "dismissed" && (r.dismissed_at ?? "") >= yearAgo).length;
@@ -110,6 +116,9 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
             <option value="bday">День народження за тиждень</option>
             <option value="noacc">Без акаунта в дашборді</option>
             <option value="nosec">Без доступів у сейфі</option>
+            <option value="nodocs">Без жодного документа</option>
+            <option value="nonda">Без NDA</option>
+            <option value="nooffer">Без офера</option>
           </select>
           <input className="hr-inp" placeholder="Пошук: ПІБ, посада, телефон" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Пошук у реєстрі" style={{ flex: "1 1 200px" }} />
           <button className="hr-btn" title="Привʼязати людей до менеджерів Kommo: за ID Kommo з таблиці або за єдиним збігом ПІБ"
@@ -122,7 +131,7 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
         ) : (
           <div className="hr-tw">
             <table className="data-table emp-table">
-              <thead><tr><th>Співробітник</th><th>Команда</th><th>Телефон</th><th>{view === "dismissed" ? "Звільнено" : "Прийнято"}</th><th>Стаж</th><th>Акаунт</th><th className="num">Доступи</th></tr></thead>
+              <thead><tr><th>Співробітник</th><th>Команда</th><th>Телефон</th><th>{view === "dismissed" ? "Звільнено" : "Прийнято"}</th><th>Стаж</th><th>Акаунт</th><th>Документи</th><th className="num">Доступи</th></tr></thead>
               <tbody>
                 {shown.map((r) => {
                   const fresh = r.status === "active" && (daysSince(r.hired_at) ?? 999) <= 30;
@@ -131,6 +140,7 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
                       <td>
                         <b>{r.full_name}</b>
                         {fresh && <span className="emp-pill info">новий</span>}
+                        {r.status === "finishing" && <span className="emp-pill warn" title={`Останній робочий день ${d(r.last_day)}`}>завершує · до {d(r.last_day)}</span>}
                         {bdaySoon(r.birth_date) && <span className="emp-pill warn" title={`День народження ${r.birth_date?.slice(5).split("-").reverse().join(".")}`}>🎂</span>}
                         <div className="hr-muted">{r.position ?? "посада не вказана"}</div>
                       </td>
@@ -141,6 +151,14 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
                       <td>{tenure(r.hired_at, r.status === "dismissed" ? r.dismissed_at : null) ?? <span className="hr-muted">—</span>}</td>
                       <td>{r.user_id != null ? <span className="emp-pill ok">✓ {r.account_active === false ? "вимкнено" : "є"}</span>
                         : r.status === "active" ? <span className="emp-pill warn">немає</span> : <span className="hr-muted">—</span>}</td>
+                      <td>
+                        <button className={`emp-vault ${r.docs === 0 && r.status !== "dismissed" ? "empty" : ""}`} title="Відкрити документи людини"
+                          onClick={(e) => { e.stopPropagation(); setOpen({ id: r.id, tab: "docs" }); }}>📎 {r.docs}</button>
+                        {r.docs > 0 && <>
+                          <span className={`emp-pill ${r.has_nda ? "ok" : "mute"}`} title={r.has_nda ? "NDA є" : "NDA немає"}>NDA</span>
+                          <span className={`emp-pill ${r.has_offer ? "ok" : "mute"}`} title={r.has_offer ? "Офер є" : "Офера немає"}>офер</span>
+                        </>}
+                      </td>
                       <td className="num">
                         <button className={`emp-vault ${r.secrets === 0 && r.status === "active" ? "empty" : ""}`} title="Відкрити доступи"
                           onClick={(e) => { e.stopPropagation(); setOpen({ id: r.id, tab: "access" }); }}>🔐 {r.secrets}</button>
@@ -171,10 +189,13 @@ const FIELDS: [keyof EmployeePatch, string, "text" | "date" | "team" | "status"]
   ["hired_at", "Дата прийому", "date"], ["dismissed_at", "Дата звільнення", "date"], ["dismiss_reason", "Причина звільнення", "text"], ["note", "Примітка", "text"],
 ];
 
+type DrawerTab = "profile" | "access" | "docs";
+
 function EmployeeDrawer({ row, tab, teams, status, toast, onTab, onClose, onSaved }: {
-  row: EmployeeRow; tab: "profile" | "access"; teams: string[]; status: SecretsStatus | null; toast: Toast;
-  onTab: (t: "profile" | "access") => void; onClose: () => void; onSaved: () => void;
+  row: EmployeeRow; tab: DrawerTab; teams: string[]; status: SecretsStatus | null; toast: Toast;
+  onTab: (t: DrawerTab) => void; onClose: () => void; onSaved: () => void;
 }) {
+  const [dismissing, setDismissing] = useState(false);
   const init = useMemo(() => Object.fromEntries(FIELDS.map(([k]) => [k, (row[k] as string | null) ?? ""])) as Record<string, string>, [row]);
   const [form, setForm] = useState(init);
   const [busy, setBusy] = useState(false);
@@ -199,7 +220,8 @@ function EmployeeDrawer({ row, tab, teams, status, toast, onTab, onClose, onSave
           <div>
             <div style={{ fontSize: 18, fontWeight: 700 }}>{row.full_name}</div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
-              <span className={`emp-pill ${row.status === "active" ? "ok" : "mute"}`}>{row.status === "active" ? "працює" : "звільнений"}</span>
+              <span className={`emp-pill ${row.status === "active" ? "ok" : row.status === "finishing" ? "warn" : "mute"}`}>
+                {row.status === "active" ? "працює" : row.status === "finishing" ? `завершує · останній день ${d(row.last_day)}` : "звільнений"}</span>
               {row.team_label && <span className="emp-team" style={{ ["--t" as string]: teamTone(row.team_label) }}>{teamName(row.team_label)}</span>}
               {row.user_id != null ? <span className="emp-pill ok">акаунт: {row.account_name}</span> : <span className="emp-pill warn">без акаунта в дашборді</span>}
               {row.kommo_name ? <span className="emp-pill info">Kommo: {row.kommo_name}</span> : <span className="emp-pill mute">не привʼязано до Kommo</span>}
@@ -210,19 +232,22 @@ function EmployeeDrawer({ row, tab, teams, status, toast, onTab, onClose, onSave
         <div className="hr-seg2" style={{ margin: "14px 0 4px" }}>
           <button className={tab === "profile" ? "on" : ""} onClick={() => onTab("profile")}>Профіль</button>
           <button className={tab === "access" ? "on" : ""} onClick={() => onTab("access")}>🔐 Доступи · {row.secrets}</button>
+          <button className={tab === "docs" ? "on" : ""} onClick={() => onTab("docs")}>📎 Документи</button>
         </div>
-        {tab === "profile" ? (
+        {row.offboarding && <OffboardingBar row={row} toast={toast} onDone={onSaved} />}
+        {tab === "docs" ? <EmployeeDocs row={row} toast={toast} /> : tab === "profile" ? (
           <>
             <div className="emp-form">
               {FIELDS.map(([k, label, kind]) => (
                 <label key={k} className={k === "note" || k === "dismiss_reason" ? "wide" : ""}>
                   <span>{label}</span>
                   {kind === "status" ? (
-                    <select className="hr-inp" value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value, ...(e.target.value === "active" ? { dismissed_at: "" } : {}) })}>
+                    <select className="hr-inp" value={form[k]} disabled={!!row.offboarding} title={row.offboarding ? "Статус веде звільнення — кнопки вгорі" : undefined} onChange={(e) => setForm({ ...form, [k]: e.target.value, ...(e.target.value === "active" ? { dismissed_at: "" } : {}) })}>
+                      {form[k] === "finishing" && <option value="finishing">завершує</option>}
                       <option value="active">працює</option><option value="dismissed">звільнений</option>
                     </select>
                   ) : (
-                    <input className="hr-inp" type={kind === "date" ? "date" : "text"} value={form[k]} list={kind === "team" ? "emp-teams" : undefined}
+                    <input className="hr-inp" type={kind === "date" ? "date" : "text"} value={form[k]} disabled={k === "dismissed_at" && !!row.offboarding} list={kind === "team" ? "emp-teams" : undefined}
                       onChange={(e) => setForm({ ...form, [k]: e.target.value, ...(k === "dismissed_at" && e.target.value ? { status: "dismissed" } : {}) })} />
                   )}
                 </label>
@@ -231,9 +256,9 @@ function EmployeeDrawer({ row, tab, teams, status, toast, onTab, onClose, onSave
             </div>
             {msg && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 8 }}>{msg}</div>}
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
-              {row.status === "active" && form.status === "active" && (
-                <button className="hr-btn" style={{ marginRight: "auto", color: "var(--danger)" }} title="Заповнить статус і дату звільнення — вкажіть причину й збережіть"
-                  onClick={() => setForm({ ...form, status: "dismissed", dismissed_at: new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" }) })}>Звільнити…</button>
+              {row.status === "active" && !row.offboarding && (
+                <button className="hr-btn" style={{ marginRight: "auto", color: "var(--danger)" }} title="Крок 1 із 2: людина стає «завершує» — вхід працює, плану немає"
+                  onClick={() => setDismissing(true)}>Звільнити…</button>
               )}
               <button className="hr-btn" disabled={!dirty.length || busy} onClick={() => setForm(init)}>Скасувати зміни</button>
               <button className="hr-btn p" disabled={!dirty.length || busy} onClick={() => void save()}>{busy ? "Зберігаю…" : dirty.length ? `Зберегти (${dirty.length})` : "Зберегти"}</button>
@@ -249,7 +274,142 @@ function EmployeeDrawer({ row, tab, teams, status, toast, onTab, onClose, onSave
           <VaultPanel id={row.ref} status={status} toast={toast} onStatus={onSaved} />
         ) : <p className="hr-muted">Сейф недоступний.</p>}
       </div>
+      {dismissing && <DismissDialog row={row} onClose={() => setDismissing(false)} onDone={(m) => { setDismissing(false); toast(m); onSaved(); }} />}
     </div>, document.body);
+}
+
+const today = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+
+/** Крок 1: останній робочий день і причина. Пояснює, що станеться з входом і Звітом, — до кліку, а не після. */
+function DismissDialog({ row, onClose, onDone }: { row: EmployeeRow; onClose: () => void; onDone: (msg: string) => void }) {
+  const [lastDay, setLastDay] = useState(today());
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const submit = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await startDismissal(row.id, lastDay, reason);
+      onDone(`${row.full_name}: «завершує» до ${d(lastDay)}${r.managers ? " · у Звіті позначено «завершує», плану немає" : ""}`);
+    } catch (e) { setErr(hiringError(e)); setBusy(false); }
+  };
+  return (
+    <div className="hr-modal-back" onClick={(e) => { e.stopPropagation(); onClose(); }}>
+      <div className="hr-modal" role="dialog" aria-label="Звільнити" onClick={(e) => e.stopPropagation()} style={{ width: "min(520px, 96vw)" }}>
+        <h3 style={{ margin: "0 0 4px" }}>Звільнити: {row.full_name}</h3>
+        <p className="hr-muted" style={{ margin: "0 0 12px", fontSize: 13 }}>
+          Крок 1 із 2. Людина стане <b>«завершує»</b>: вхід у дашборд працює, щоб довести свої угоди; план не ставиться, результат рахується.
+          Вхід закриє другий крок — «Завершити звільнення». Нічого не видаляється: доступи в сейфі, документи й угоди лишаються.
+        </p>
+        <div className="emp-form" style={{ marginTop: 0 }}>
+          <label><span>Останній робочий день *</span><input className="hr-inp" type="date" value={lastDay} onChange={(e) => setLastDay(e.target.value)} /></label>
+          <label className="wide"><span>Причина *</span><input className="hr-inp" autoFocus value={reason} onChange={(e) => setReason(e.target.value)} placeholder="власне бажання, скорочення, не пройшов випробувальний…" /></label>
+        </div>
+        {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 8 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+          <button className="hr-btn" onClick={onClose}>Скасувати</button>
+          <button className="hr-btn p" disabled={busy || !lastDay || !reason.trim()} onClick={() => void submit()}>{busy ? "Зберігаю…" : "Звільнити — «завершує»"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Смуга стану звільнення в картці: крок 2 і «Повернути». Обидві дії — з підтвердженням, бо чіпають вхід. */
+function OffboardingBar({ row, toast, onDone }: { row: EmployeeRow; toast: Toast; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const act = async (fn: () => Promise<unknown>, ok: string) => {
+    setBusy(true);
+    try { await fn(); toast(ok); onDone(); } catch (e) { toast(hiringError(e), { error: true }); }
+    setBusy(false);
+  };
+  const finishing = row.offboarding === "finishing";
+  const hasLogin = row.user_id != null;
+  return (
+    <div className="hr-note" style={{ margin: "10px 0 0", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+      <span style={{ flex: "1 1 240px" }}>
+        {finishing
+          ? <>🚪 <b>Завершує</b> — останній день {d(row.last_day)}. {hasLogin ? "Вхід у дашборд поки працює." : "Акаунта в дашборді немає."}</>
+          : <>🚪 <b>Звільнено</b> кнопками{hasLogin ? " — вхід у дашборд закрито" : ""}. Дані не видалено.</>}
+        {row.secrets > 0 && !finishing && <> <span style={{ color: "var(--warn)" }}>Змініть паролі сервісів ({row.secrets} у сейфі).</span></>}
+      </span>
+      {finishing && (
+        <button className="hr-btn p" disabled={busy} title="Крок 2 із 2"
+          onClick={() => { if (window.confirm(`Завершити звільнення: ${row.full_name}?${hasLogin ? " Вхід у дашборд буде закрито." : ""}`)) void act(() => finishDismissal(row.id), `${row.full_name}: звільнено${hasLogin ? ", вхід закрито" : ""}`); }}>
+          Завершити звільнення</button>
+      )}
+      <button className="hr-btn" disabled={busy}
+        onClick={() => { if (window.confirm(`Повернути ${row.full_name} у «працює»? Стан у Звіті й вхід повернуться як були до звільнення.`)) void act(() => revertDismissal(row.id), `${row.full_name}: повернуто`); }}>
+        Повернути</button>
+    </div>
+  );
+}
+
+const size = (b: number | null) => (b == null ? "" : b < 1024 * 1024 ? `${Math.max(1, Math.round(b / 1024))} КБ` : `${(b / 1024 / 1024).toFixed(1)} МБ`);
+
+/** 📎 Документи людини: завантажити (тип + файл), відкрити, прибрати / повернути. */
+function EmployeeDocs({ row, toast }: { row: EmployeeRow; toast: Toast }) {
+  const [files, setFiles] = useState<EmployeeDoc[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [kind, setKind] = useState<string>("NDA");
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => { fetchEmployeeDocs(row.id).then(setFiles).catch((e) => setErr(hiringError(e))); }, [row.id]);
+  useEffect(load, [load]);
+  const upload = async (list: FileList | null) => {
+    if (!list?.length) return;
+    setBusy(true);
+    try { for (const f of Array.from(list)) await uploadEmployeeDoc(row.id, f, kind); toast(`Завантажено: ${list.length}`); load(); }
+    catch (e) { toast(hiringError(e), { error: true }); }
+    setBusy(false);
+  };
+  const open = async (f: EmployeeDoc) => {
+    try { const url = await employeeDocBlobUrl(row.id, f.id); window.open(url, "_blank", "noopener"); window.setTimeout(() => URL.revokeObjectURL(url), 60_000); }
+    catch (e) { toast(hiringError(e), { error: true }); }
+  };
+  const toggle = async (f: EmployeeDoc) => {
+    try { if (f.deleted_at) await restoreEmployeeDoc(row.id, f.id); else await deleteEmployeeDoc(row.id, f.id); load(); }
+    catch (e) { toast(hiringError(e), { error: true }); }
+  };
+  if (err) return <p className="hr-muted">Документи недоступні: {err}</p>;
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <select className="hr-inp" value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Тип документа">
+          {HR_DOC_KINDS.map((k) => <option key={k}>{k}</option>)}
+        </select>
+        <label className={`hr-btn p ${busy ? "off" : ""}`} style={{ cursor: "pointer" }}>
+          {busy ? "Завантажую…" : "+ Завантажити файл"}
+          <input type="file" multiple hidden disabled={busy} onChange={(e) => { void upload(e.target.files); e.target.value = ""; }} />
+        </label>
+        <span className="hr-muted" style={{ fontSize: 12 }}>
+          {row.user_id != null ? "Людина побачить документ у «Документах → Особисті»." : "Акаунта немає — документ бачить лише керівництво."}
+        </span>
+      </div>
+      {files == null ? <p className="loading-text">Завантаження…</p> : files.length === 0 ? (
+        <p className="hr-muted" style={{ marginTop: 12 }}>Документів ще немає. Оберіть тип і завантажте файл — NDA, офер, договір.</p>
+      ) : (
+        <table className="data-table" style={{ marginTop: 12 }}>
+          <thead><tr><th>Документ</th><th>Тип</th><th>Додано</th><th></th></tr></thead>
+          <tbody>
+            {files.map((f) => (
+              <tr key={f.id} className={f.deleted_at ? "off" : ""}>
+                <td><b>{f.name}</b>{f.version > 1 && <span className="hr-muted"> · версія {f.version}</span>}
+                  {f.signed && <span className="emp-pill ok" style={{ marginLeft: 6 }}>підписано</span>}
+                  {f.deleted_at && <span className="emp-pill mute" style={{ marginLeft: 6 }}>прибрано</span>}
+                  <div className="hr-muted">{size(f.size_bytes)}{f.author ? ` · ${f.author}` : ""}</div></td>
+                <td>{f.description ?? f.category ?? "—"}</td>
+                <td>{d(f.created_at.slice(0, 10))}</td>
+                <td className="num" style={{ whiteSpace: "nowrap" }}>
+                  {!f.deleted_at && <button className="hr-btn xs" onClick={() => void open(f)}>Відкрити</button>}{" "}
+                  <button className="hr-btn xs" onClick={() => void toggle(f)}>{f.deleted_at ? "Повернути" : "Прибрати"}</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
 }
 
 function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: (msg: string, pending?: boolean) => void }) {
@@ -401,7 +561,7 @@ function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: (msg: 
 /** 🎂 Дні народження на найближчі 14 днів — серед тих, хто працює. */
 function Birthdays({ rows, onOpen }: { rows: EmployeeRow[]; onOpen: (id: number) => void }) {
   const now = new Date(), t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const soon = rows.filter((r) => r.status === "active" && r.birth_date).map((r) => {
+  const soon = rows.filter((r) => r.status !== "dismissed" && r.birth_date).map((r) => {
     const [, m, d] = r.birth_date!.split("-").map(Number);
     let next = new Date(now.getFullYear(), m - 1, d).getTime();
     if (next < t0) next = new Date(now.getFullYear() + 1, m - 1, d).getTime();
