@@ -15,7 +15,8 @@
 /** Редакція правила — пишеться в кожен зафіксований тиждень. Змінив означення → нова редакція. */
 export const NOMINATION_RULE_VERSION = "2026-09-21·report-A";
 
-export type NominationKey = "maxDeal" | "cars" | "revenue" | "marginPct" | "intl";
+/** Номінації менеджерів + (22.09.2026) номінації лідогенераторів із префіксом `lg`. */
+export type NominationKey = "maxDeal" | "cars" | "revenue" | "marginPct" | "intl" | "lgMaxDeal" | "lgCars" | "lgQuotes" | "lgIntl";
 export type Unit = "uah" | "count" | "pct";
 export interface NominationDef {
   key: NominationKey; label: string; hint: string; unit: Unit;
@@ -24,6 +25,12 @@ export interface NominationDef {
    * ЧИННИЙ код, а не бажання: зміниш означення — перепиши й ці рядки (#656). `hint` лишається для слайдів.
    */
   rule: string; notCounted: string;
+  /**
+   * У CRM цього числа немає (22.09.2026, лідогенератори): звʼязку «угода → лідогенератор» у Kommo немає, тож
+   * система нічого не пропонує, а число вводить тімлід лідогенерації або керівництво («Свої дані»).
+   * Порожнеча тоді — не «ніхто не набрав», а «даних ще немає».
+   */
+  noCrm?: boolean;
 }
 
 /** Порядок = порядок на екрані й на слайді. Підпис каже, ЯКУ колонку Звіту взято. */
@@ -44,8 +51,30 @@ export const NOMINATIONS: readonly NominationDef[] = [
     rule: "«Авто» з «Типом запиту = Міжнародні».",
     notCounted: "угоди з порожнім «Типом запиту»." },
 ];
+/**
+ * 📣 РЕЙТИНГ ЛІДОГЕНЕРАТОРІВ (22.09.2026, слайд 4 Даші). «Прорахунки» — з CRM, як у вкладці «Лідогенерація»
+ * (`leadgenStats().quotes`: входи в «Кваліфіковано» воронок Продзвону; за 14–20.09 — Демчук 36, як у Даші).
+ * Зазор, авто й міжнародні лідогенератора в CRM не повʼязані з людиною — їх вводять тімлід лідогенерації
+ * або керівництво з причиною (рішення Романа 22.09: «залишай можливість тімлідам і Даші змінювати числа»).
+ */
+export const LEADGEN_NOMINATIONS: readonly NominationDef[] = [
+  { key: "lgMaxDeal", label: "Найбільший разовий зазор", hint: "дані тімліда лідогенерації", unit: "uah", noCrm: true,
+    rule: "найбільша маржа однієї угоди, яку привів лідогенератор, — вносить тімлід або керівництво.",
+    notCounted: "у CRM звʼязку угоди з лідогенератором немає, тож система числа не пропонує." },
+  { key: "lgCars", label: "Найбільша кількість поставлених авто", hint: "дані тімліда лідогенерації", unit: "count", noCrm: true,
+    rule: "поставлені авто за угодами, які привів лідогенератор, — вносить тімлід або керівництво.",
+    notCounted: "у CRM звʼязку угоди з лідогенератором немає, тож система числа не пропонує." },
+  { key: "lgQuotes", label: "Найбільша кількість прорахунків", hint: "«Прорахунки» вкладки «Лідогенерація»", unit: "count",
+    rule: "входи угод у «Кваліфіковано» воронок Продзвону за тиждень — як «Прорахунки» у вкладці «Лідогенерація».",
+    notCounted: "реєстр бота й угоди, що не дійшли до «Кваліфіковано»." },
+  { key: "lgIntl", label: "Найбільша кількість міжнародних перевезень", hint: "дані тімліда лідогенерації", unit: "count", noCrm: true,
+    rule: "міжнародні перевезення за угодами, які привів лідогенератор, — вносить тімлід або керівництво.",
+    notCounted: "у CRM звʼязку угоди з лідогенератором немає, тож система числа не пропонує." },
+];
 export const NOMINATION_KEYS: readonly NominationKey[] = NOMINATIONS.map((n) => n.key);
-export const isNominationKey = (k: unknown): k is NominationKey => typeof k === "string" && (NOMINATION_KEYS as readonly string[]).includes(k);
+export const LEADGEN_KEYS: readonly NominationKey[] = LEADGEN_NOMINATIONS.map((n) => n.key);
+export const isNominationKey = (k: unknown): k is NominationKey =>
+  typeof k === "string" && ((NOMINATION_KEYS as readonly string[]).includes(k) || (LEADGEN_KEYS as readonly string[]).includes(k));
 
 /** Позначка на слайді: маржа понад 250% від виплати водію (з повідомлення Даші тімлідам). Це НЕ поріг участі. */
 export const MARGIN_FLAG_PCT = 250;
@@ -227,7 +256,7 @@ export function validateBulkConfirm(body: unknown): { ok: true; value: { weekFro
 
 // ───────────────────────── переможець відділу ─────────────────────────
 
-export interface TeamWinner { teamId: number; dept: "rpk" | "rnk"; winners: readonly number[]; value: number | null }
+export interface TeamWinner { teamId: number; dept: "rpk" | "rnk" | "lg"; winners: readonly number[]; value: number | null }
 /**
  * Переможець відділу (ВРПК / ВРНК) = найкращий серед ФІНАЛЬНИХ переможців команд (з урахуванням
  * виправлень). Нічия між командами — усі. Порожньо в усіх командах — `empty`.
@@ -255,7 +284,7 @@ export interface NominationCell {
   review: { action: ReviewAction; by: string | null; at: string } | null;
 }
 export interface TeamWeek {
-  teamId: number; teamName: string; dept: "rpk" | "rnk"; members: { id: number; name: string }[]; noCostDeals: number; cells: NominationCell[];
+  teamId: number; teamName: string; dept: "rpk" | "rnk" | "lg"; members: { id: number; name: string }[]; noCostDeals: number; cells: NominationCell[];
   /** Тімліди команди зараз (для «про тімліда — за вами» в Даші). У знімку — порожньо: ростер людей поточний, не історичний. */
   leads: { managerId: number | null; name: string }[];
 }
@@ -269,6 +298,83 @@ export interface WeekView {
   teams: TeamWeek[];
   depts: DeptWinner[];
   names: Record<number, string>;
+  /** Рейтинг лідогенераторів — окремо від `teams`, щоб не потрапити в переможців відділів і в звірку зі Звітом. */
+  leadgen: TeamWeek | null;
+  /** Статистика відділу РНК · конверсія (живе CRM + правки Даші й тімлідів; у знімок не йде). */
+  rnkConv: RnkConv | null;
+}
+
+/* ───────────────────────── статистика відділу РНК · конверсія (22.09.2026) ───────────────────────── */
+
+/**
+ * Рядок таблиці «Найкраща конверсія» (слайд 5 Даші). Система пропонує «Конв. реклама» Звіту
+ * (`metrics.conversionByManager(…, "ad")`: створені рекламні угоди тижня → скільки дійшли до грошової зони),
+ * а Даша або тімлід команди можуть поставити свої «цільові ліди / успіх» і вибрати, хто йде на слайд.
+ */
+export interface ConvRow {
+  managerId: number; name: string; teamId: number;
+  taken: number; won: number; pct: number | null;
+  crm: { taken: number; won: number };
+  own: { by: string | null; at: string } | null;
+  onSlide: boolean;
+}
+export interface RnkConv { rows: ConvRow[]; comment: { text: string; by: string | null; at: string } | null }
+export interface ConvEdit {
+  managerId: number | null; action: "set" | "reset" | "comment";
+  taken: number | null; won: number | null; onSlide: boolean | null; comment: string | null; by: string | null; at: string;
+}
+/** Скільки рядків іде на слайд, поки ніхто не вибрав руками (у Даші — 2–4). Лише типовий вибір, Даша його змінює. */
+export const CONV_DEFAULT_ON_SLIDE = 4;
+const pct2 = (won: number, taken: number): number | null => (taken > 0 ? Math.round((won / taken) * 10000) / 100 : null);
+
+/**
+ * Таблиця конверсії (#661): система + правки. Остання правка по людині перемагає; «reset» повертає число
+ * системи; коментар — остання правка без людини. Хто на слайді: явний вибір, інакше — 4 найкращі за %,
+ * при рівності — з більшою кількістю лідів. Відсоток — до сотих (4/24 = 16,67%, а не «17,00%»).
+ */
+export function buildRnkConv(system: readonly { managerId: number; name: string; teamId: number; taken: number; won: number }[], edits: readonly ConvEdit[]): RnkConv {
+  const last = new Map<number, ConvEdit>();
+  let comment: RnkConv["comment"] = null;
+  for (const e of edits) {
+    if (e.action === "comment") comment = e.comment ? { text: e.comment, by: e.by, at: e.at } : null;
+    else if (e.managerId != null) last.set(e.managerId, e);
+  }
+  const rows = system.map((s): ConvRow & { explicit: boolean } => {
+    const e = last.get(s.managerId);
+    const own = e?.action === "set";
+    const taken = own && e!.taken != null ? e!.taken : s.taken;
+    const won = own && e!.won != null ? e!.won : s.won;
+    return { managerId: s.managerId, name: s.name, teamId: s.teamId, taken, won, pct: pct2(won, taken), crm: { taken: s.taken, won: s.won },
+      own: own ? { by: e!.by, at: e!.at } : null, onSlide: own && e!.onSlide != null ? e!.onSlide : false, explicit: own && e!.onSlide != null };
+  });
+  const byPct = [...rows].filter((r) => r.pct != null).sort((a, b) => b.pct! - a.pct! || b.taken - a.taken || a.managerId - b.managerId);
+  const top = new Set(byPct.slice(0, CONV_DEFAULT_ON_SLIDE).map((r) => r.managerId));
+  const anyExplicit = rows.some((r) => r.explicit);
+  const out = rows.map(({ explicit, ...r }) => ({ ...r, onSlide: anyExplicit ? (explicit ? r.onSlide : false) : top.has(r.managerId) }));
+  out.sort((a, b) => (b.pct ?? -1) - (a.pct ?? -1) || b.taken - a.taken || a.managerId - b.managerId);
+  return { rows: out, comment };
+}
+
+/** Тіло правки таблиці конверсії (#661). Успіх не більший за ліди; усе — цілі невідʼємні. */
+export function validateConvEdit(body: unknown):
+  { ok: true; value: { weekFrom: string; action: "set" | "reset" | "comment"; managerId: number | null; taken: number | null; won: number | null; onSlide: boolean | null; comment: string | null } }
+  | { ok: false; error: string } {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const weekFrom = typeof b.weekFrom === "string" && /^\d{4}-\d{2}-\d{2}$/.test(b.weekFrom) ? b.weekFrom : null;
+  if (!weekFrom || weekOf(weekFrom).from !== weekFrom) return { ok: false, error: "weekFrom — понеділок тижня у форматі YYYY-MM-DD" };
+  if (b.action === "comment") {
+    const c = typeof b.comment === "string" ? b.comment.trim().slice(0, 600) : "";
+    return { ok: true, value: { weekFrom, action: "comment", managerId: null, taken: null, won: null, onSlide: null, comment: c } };
+  }
+  const managerId = Number(b.managerId);
+  if (!Number.isInteger(managerId) || managerId <= 0) return { ok: false, error: "managerId обовʼязковий" };
+  if (b.action === "reset") return { ok: true, value: { weekFrom, action: "reset", managerId, taken: null, won: null, onSlide: null, comment: null } };
+  if (b.action !== "set") return { ok: false, error: "action — set, reset або comment" };
+  const taken = Number(b.taken), won = Number(b.won);
+  if (!Number.isInteger(taken) || taken < 0 || !Number.isInteger(won) || won < 0) return { ok: false, error: "ліди й успіх — цілі числа від нуля" };
+  if (won > taken) return { ok: false, error: "успіхів не може бути більше, ніж лідів" };
+  if (typeof b.onSlide !== "boolean") return { ok: false, error: "onSlide — так або ні" };
+  return { ok: true, value: { weekFrom, action: "set", managerId, taken, won, onSlide: b.onSlide, comment: null } };
 }
 
 
@@ -284,10 +390,11 @@ export function rankingFromExtra(extra: unknown): RankRow[] | null {
 }
 
 /** Рядки знімка з чернетки — чиста частина фіксації, винесена для гейта `#606`. */
-export interface SnapshotRow { teamId: number; teamName: string; dept: "rpk" | "rnk"; nomination: NominationKey; status: Final["status"]; managerId: number | null; managerName: string | null; value: number | null; crmManagerIds: number[]; crmValue: number | null; reason: string | null; extra: Record<string, unknown> }
+export interface SnapshotRow { teamId: number; teamName: string; dept: "rpk" | "rnk" | "lg"; nomination: NominationKey; status: Final["status"]; managerId: number | null; managerName: string | null; value: number | null; crmManagerIds: number[]; crmValue: number | null; reason: string | null; extra: Record<string, unknown> }
 export function snapshotRows(view: WeekView): SnapshotRow[] {
   const out: SnapshotRow[] = [];
-  for (const t of view.teams) for (const c of t.cells) {
+  // Лідогенератори фіксуються разом із тижнем (dept 'lg'): і прорахунки з CRM, і внесені дані.
+  for (const t of [...view.teams, ...(view.leadgen ? [view.leadgen] : [])]) for (const c of t.cells) {
     const crmIds = c.crm.state === "ok" ? c.crm.winners : [];
     const crmValue = c.crm.state === "ok" ? c.crm.value : null;
     const extra = { stale: c.final.stale, deal: c.deal, noCostDeals: t.noCostDeals, members: t.members, ranking: c.ranking };

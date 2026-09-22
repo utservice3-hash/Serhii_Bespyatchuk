@@ -17,14 +17,21 @@ import * as metrics from "./metrics.js";
 import { activeManagerSql } from "./activeManager.js";
 import * as managerState from "./managerState.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
+import { leadgenStats } from "./leadgenStats.js";
 import {
   NOMINATIONS, NOMINATION_RULE_VERSION, rankNominees, applyReview, fingerprint, deptWinners, weekOf, isFreezeDue, snapshotRows,
-  teamRanking, rankingFromExtra, freezeInstant,
+  teamRanking, rankingFromExtra, freezeInstant, LEADGEN_NOMINATIONS, buildRnkConv,
   type NominationKey, type Ranked, type Review, type Final, type NominationCell, type TeamWeek, type DeptWinner, type WeekView,
+  type RnkConv, type ConvEdit,
 } from "./nominationRules.js";
 export type { NominationCell, TeamWeek, DeptWinner, WeekView } from "./nominationRules.js";
 
 export const INTL_REQUEST_TYPE = "Міжнародні";
+/**
+ * Команда лідогенерації (22.09.2026): під цим id живуть рішення по рейтингу лідогенераторів, і її тімлід
+ * вносить «свої дані». Та сама команда, що перша в `metrics.NON_COMMERCIAL_TEAM_IDS` (гейт #660).
+ */
+export const LEADGEN_TEAM_ID = 11;
 
 export interface RosterRow { id: number; name: string; teamId: number; teamName: string; dept: "rpk" | "rnk" }
 
@@ -42,7 +49,8 @@ export async function nominationRoster(teamId: number | null = null): Promise<Ro
 }
 
 /** Значення кожної номінації по менеджеру — лише з ядра. */
-export interface MgrValues { values: Record<NominationKey, number | null>; noCostDeals: number; maxDealId: number | null; marginDeal: { id: number; price: number; cost: number } | null }
+type MgrKey = "maxDeal" | "cars" | "revenue" | "marginPct" | "intl";
+export interface MgrValues { values: Record<MgrKey, number | null>; noCostDeals: number; maxDealId: number | null; marginDeal: { id: number; price: number; cost: number } | null }
 export async function nominationValues(from: string, to: string): Promise<Map<number, MgrValues>> {
   const scope = { from, to };
   const [stats, cars, intl] = await Promise.all([
@@ -99,6 +107,46 @@ async function teamLeads(): Promise<Map<number, { managerId: number | null; name
   return out;
 }
 
+/**
+ * Рейтинг лідогенераторів тижня (#660). Хто в заліку — ті самі люди, що у вкладці «Лідогенерація»
+ * (ростер за ПОДІЯМИ, лише активні): туди потрапляє й лідген з іншої команди, якщо він робив лідгенівські дії.
+ * «Прорахунки» — з CRM; решта номінацій — лише «свої дані» тімліда або керівництва.
+ */
+async function leadgenWeek(from: string, to: string, reviews: Map<string, ReviewRow>, leads: Map<number, { managerId: number | null; name: string }[]>): Promise<TeamWeek | null> {
+  const stats = await leadgenStats(from, to);
+  const members = stats.rows.filter((r) => r.isActive).map((r) => ({ id: r.managerId, name: r.name, quotes: r.quotes }))
+    .sort((a, b) => a.name.localeCompare(b.name, "uk"));
+  const decided = [...reviews.keys()].some((k) => k.startsWith(`${LEADGEN_TEAM_ID}:`));
+  if (members.length === 0 && !decided) return null;
+  const cells: NominationCell[] = LEADGEN_NOMINATIONS.map((n) => {
+    const cands = members.map((m) => ({ managerId: m.id, value: n.key === "lgQuotes" ? m.quotes : null }));
+    const crm = n.noCrm ? ({ state: "empty" } as Ranked) : rankNominees(cands);
+    const rv = reviews.get(`${LEADGEN_TEAM_ID}:${n.key}`) ?? null;
+    return { nomination: n.key, crm, final: applyReview(crm, rv), deal: null, ranking: teamRanking(cands),
+      review: rv ? { action: rv.action, by: rv.by, at: rv.at } : null };
+  });
+  return { teamId: LEADGEN_TEAM_ID, teamName: "Лідогенерація", dept: "lg", members: members.map((m) => ({ id: m.id, name: m.name })),
+    noCostDeals: 0, cells, leads: leads.get(LEADGEN_TEAM_ID) ?? [] };
+}
+
+/**
+ * Статистика відділу РНК · конверсія (#661): «Конв. реклама» Звіту по кожному менеджеру РНК з ростеру
+ * тижня + правки Даші й тімлідів (`nomination_conv_edits`, лише дописування). У знімок не йде — живе.
+ * Лише про людей і правки: самі числа — з ядра (`metrics.conversionByManager`), свого SQL по угодах немає.
+ */
+async function rnkConvWeek(from: string, to: string): Promise<RnkConv> {
+  const [roster, conv, edits] = await Promise.all([
+    nominationRoster(), metrics.conversionByManager({ from, to }, "ad"),
+    pool.query<{ manager_id: number | null; action: ConvEdit["action"]; taken: number | null; won: number | null; on_slide: boolean | null; comment: string | null; by_name: string | null; created_at: Date }>(
+      `SELECT e.manager_id, e.action, e.taken, e.won, e.on_slide, e.comment, COALESCE(u.full_name, m.name, u.email) AS by_name, e.created_at
+         FROM nomination_conv_edits e LEFT JOIN users u ON u.id = e.user_id LEFT JOIN managers m ON m.id = u.manager_id
+        WHERE e.week_from = $1 ORDER BY e.id`, [from]),
+  ]);
+  const byMgr = new Map(conv.map((c) => [c.managerId, c]));
+  const system = roster.filter((r) => r.dept === "rnk").map((r) => ({ managerId: r.id, name: r.name, teamId: r.teamId, taken: byMgr.get(r.id)?.taken ?? 0, won: byMgr.get(r.id)?.won ?? 0 }));
+  return buildRnkConv(system, edits.rows.map((e) => ({ managerId: e.manager_id, action: e.action, taken: e.taken, won: e.won, onSlide: e.on_slide, comment: e.comment, by: e.by_name, at: e.created_at.toISOString() })));
+}
+
 const depts = (teams: TeamWeek[]): DeptWinner[] => {
   const out: DeptWinner[] = [];
   for (const dept of ["rnk", "rpk"] as const) for (const n of NOMINATIONS) {
@@ -123,7 +171,7 @@ export async function draftWeek(weekFrom: string, teamId: number | null = null):
   const teams: TeamWeek[] = [...byTeam.entries()].map(([tid, members]) => {
     const cells: NominationCell[] = NOMINATIONS.map((n) => {
       // Рейтинг — з тієї самої мапи `values`, що й переможець: без другого запиту й другого означення (#652).
-      const cands = members.map((m) => ({ managerId: m.id, value: values.get(m.id)?.values[n.key] ?? null }));
+      const cands = members.map((m) => ({ managerId: m.id, value: values.get(m.id)?.values[n.key as MgrKey] ?? null }));
       const crm = rankNominees(cands);
       const rv = reviews.get(`${tid}:${n.key}`) ?? null;
       const final = applyReview(crm, rv);
@@ -140,7 +188,9 @@ export async function draftWeek(weekFrom: string, teamId: number | null = null):
   const view: WeekView = {
     weekFrom: from, weekTo: to, state: "draft", frozenAt: null, ruleVersion: NOMINATION_RULE_VERSION,
     freezeDueAt: `${addDaysIso(fz.from, 8)} 08:00`, freezeInstant: freezeInstant(fz.from), teams, depts: depts(teams), names,
+    leadgen: await leadgenWeek(from, to, reviews, leads), rnkConv: await rnkConvWeek(from, to),
   };
+  if (view.leadgen) for (const m of view.leadgen.members) view.names[m.id] ??= m.name;
   return teamId == null ? view : { ...view, teams: view.teams.filter((t) => t.teamId === teamId) };
 }
 const addDaysIso = (ymd: string, n: number): string => { const d = new Date(`${ymd}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
@@ -151,16 +201,20 @@ export async function frozenWeek(weekFrom: string, teamId: number | null = null)
     `SELECT to_char(week_from,'YYYY-MM-DD') AS week_from, to_char(week_to,'YYYY-MM-DD') AS week_to, frozen_at, rule_version
        FROM nomination_weeks WHERE week_from = $1`, [weekFrom])).rows[0];
   if (!w) return null;
-  const rows = (await pool.query<{ team_id: number; team_name: string; dept: "rpk" | "rnk"; nomination: NominationKey; status: Final["status"]; manager_id: number | null; manager_name: string | null; value: string | null; crm_manager_ids: number[]; crm_value: string | null; reason: string | null; extra: { stale?: boolean; deal?: NominationCell["deal"]; noCostDeals?: number; members?: { id: number; name: string }[]; ranking?: unknown } }>(
+  const rows = (await pool.query<{ team_id: number; team_name: string; dept: "rpk" | "rnk" | "lg"; nomination: NominationKey; status: Final["status"]; manager_id: number | null; manager_name: string | null; value: string | null; crm_manager_ids: number[]; crm_value: string | null; reason: string | null; extra: { stale?: boolean; deal?: NominationCell["deal"]; noCostDeals?: number; members?: { id: number; name: string }[]; ranking?: unknown } }>(
     `SELECT team_id, team_name, dept, nomination, status, manager_id, manager_name, value, crm_manager_ids, crm_value, reason, extra
        FROM nomination_snapshot WHERE week_from = $1 ORDER BY id`, [weekFrom])).rows;
   const names: Record<number, string> = {};
   const teams = new Map<number, TeamWeek>();
+  let leadgen: TeamWeek | null = null;
   for (const r of rows) {
     if (r.manager_id != null && r.manager_name) names[r.manager_id] = r.manager_name;
     for (const m of r.extra.members ?? []) names[m.id] = m.name;
-    let t = teams.get(r.team_id);
-    if (!t) { t = { teamId: r.team_id, teamName: r.team_name, dept: r.dept, members: r.extra.members ?? [], noCostDeals: r.extra.noCostDeals ?? 0, cells: [], leads: [] }; teams.set(r.team_id, t); }
+    let t: TeamWeek | undefined = r.dept === "lg" ? leadgen ?? undefined : teams.get(r.team_id);
+    if (!t) {
+      t = { teamId: r.team_id, teamName: r.team_name, dept: r.dept, members: r.extra.members ?? [], noCostDeals: r.extra.noCostDeals ?? 0, cells: [], leads: [] };
+      if (r.dept === "lg") leadgen = t; else teams.set(r.team_id, t);
+    }
     let c = t.cells.find((x) => x.nomination === r.nomination);
     if (!c) {
       const crmValue = r.crm_value == null ? null : Number(r.crm_value);
@@ -178,6 +232,7 @@ export async function frozenWeek(weekFrom: string, teamId: number | null = null)
   const view: WeekView = {
     weekFrom: w.week_from, weekTo: w.week_to, state: "frozen", frozenAt: w.frozen_at.toISOString(), ruleVersion: w.rule_version,
     freezeDueAt: `${addDaysIso(w.week_from, 8)} 08:00`, freezeInstant: freezeInstant(w.week_from), teams: list, depts: depts(list), names,
+    leadgen, rnkConv: await rnkConvWeek(w.week_from, w.week_to),
   };
   return teamId == null ? view : { ...view, teams: view.teams.filter((t) => t.teamId === teamId) };
 }

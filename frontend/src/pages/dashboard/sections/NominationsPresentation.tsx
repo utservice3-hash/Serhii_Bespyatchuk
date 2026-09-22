@@ -41,7 +41,9 @@ function fmt(unit: "uah" | "count" | "pct", v: number | null): string {
   if (unit === "pct") return `${Math.round(v)}%`;
   return String(v);
 }
-const SECTIONS = ["Рейтинг менеджерів", "Виконання плану", "Підсумки"] as const;
+/** Бічна панель — як у Даші (слайди 22.09.2026): рейтинг → лідогенерація → статистика відділу; далі наші «План» і «Підсумки». */
+const SECTIONS = ["Рейтинг менеджерів", "Лідогенерація", "Статистика відділу", "Виконання плану", "Підсумки"] as const;
+const convPctText = (won: number, taken: number) => (taken > 0 ? `${(Math.round((won / taken) * 10000) / 100).toFixed(2).replace(".", ",")}%` : "—");
 
 /** Хто виконав план з 1-го числа — за колонкою «Виконано» Звіту, по командах. */
 export function planDoneTeams(r: ReportPlan | null): { team: string; people: { id: number; name: string; pct: number }[] }[] {
@@ -163,6 +165,8 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
   const [month, setMonth] = useState<ReportPlan | null>(null);
   const [manual, setManual] = useState<ManualSlide[]>([]);
   const [manualPhotos, setManualPhotos] = useState<Record<string, PhotoRef>>({});
+  // Година зняття чисел «Підсумків»: факт за день зсувається на сотні тисяч — без години число не відтворити.
+  const [loadedAt, setLoadedAt] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [i, setI] = useState(0);
   const [scale, setScale] = useState(1);
@@ -176,7 +180,10 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
       fetchReportPlan({ from: mStart, to: today }),
       fetchReportPlan({ from: mStart, to: monthEnd(today) }),
       fetchManualSlides(week.weekFrom),
-    ]).then(([a, b, c]) => { setToDate(a); setMonth(b); setManual(c.slides); setManualPhotos(c.photos ?? {}); })
+    ]).then(([a, b, c]) => {
+      setToDate(a); setMonth(b); setManual(c.slides); setManualPhotos(c.photos ?? {});
+      setLoadedAt(new Date().toLocaleTimeString("uk-UA", { timeZone: "Europe/Kyiv", hour: "2-digit", minute: "2-digit" }));
+    })
       .catch(() => setErr("Не вдалося завантажити дані для слайдів — спробуйте ще раз"));
   }, [week.weekFrom, mStart, today]);
 
@@ -188,7 +195,9 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
     const out: { key: string; node: ReactElement }[] = [];
     const mark = draft ? <div className="ps-watermark">ЧЕРНЕТКА · тиждень ще не зафіксовано</div> : null;
     // Розділи бічної панелі — як у Даші: спершу розділи наявних ручних слайдів, потім сталі.
-    const nav = [...new Set(manual.map(manualSection)), ...SECTIONS];
+    const convRows = (week.rnkConv?.rows ?? []).filter((r) => r.onSlide);
+    const hasConv = convRows.length > 0 || !!week.rnkConv?.comment;
+    const nav = [...new Set(manual.map(manualSection)), ...SECTIONS.filter((x) => (x !== "Лідогенерація" || !!week.leadgen) && (x !== "Статистика відділу" || hasConv))];
     const frame = (active: string, body: ReactElement) => (
       <div className="ps-slide">
         <aside className={`ps-side${nav.length > 5 ? " dense" : ""}`}>
@@ -230,7 +239,14 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
             <div key={k}>
               <div className="ps-lab">{def.label.toUpperCase()}</div>
               <div className="ps-val">
-                {w && w.state === "ok"
+                {k === "intl" && w && w.state === "ok" ? (() => {
+                  // Міжнародні — як у Даші: переможець КОЖНОЇ команди відділу з числом, найбільші зверху.
+                  const list = week.teams.filter((t) => t.dept === dept).map((t) => ({ t, c: t.cells.find((c) => c.nomination === "intl")! }))
+                    .filter((x) => x.c.final.status !== "empty" && x.c.final.value != null).sort((a, b) => (b.c.final.value ?? 0) - (a.c.final.value ?? 0));
+                  return <><span className="ps-avs">{w.winners.slice(0, 3).map((id) => ava(id, "ps-av-sm"))}</span>
+                    <span className="ps-vtext ps-list">{list.map((x, i) => <span key={x.t.teamId}>{i ? " · " : ""}{x.c.final.winners.map((id) => short(name(id))).join(", ")} — <b>{fmt("count", x.c.final.value)}</b>
+                      {x.c.final.status === "overridden" ? <span className="ps-manual-mark">✎</span> : null}</span>)}</span></>;
+                })() : w && w.state === "ok"
                   ? <><span className="ps-avs">{w.winners.slice(0, 3).map((id) => ava(id, "ps-av-sm"))}</span>
                       <span className="ps-vtext">{w.winners.map((id) => short(name(id))).join(", ")} — <b>{fmt(unit(k), w.value)}</b>
                       {k === "marginPct" && (w.value ?? 0) > week.marginFlagPct ? <span className="ps-flag">⚑ понад {week.marginFlagPct}% від виплати водію</span> : null}
@@ -251,14 +267,64 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
       </>
     )) });
 
+    // 📣 Рейтинг лідогенераторів (слайд 4 Даші): 4 номінації; «прорахунки» — з CRM, решта — дані тімліда/керівництва.
+    if (week.leadgen) {
+      const lg = week.leadgen;
+      out.push({ key: "leadgen", node: frame(SECTIONS[1], (
+        <>
+          <div className="ps-kick">ТИЖДЕНЬ {dm(week.weekFrom)}–{dmy(week.weekTo)}</div>
+          <div className="ps-h">Рейтинг лідогенераторів</div>
+          <div className="ps-lg">
+            {week.leadgenDefs.map((def, i) => {
+              const c = lg.cells.find((x) => x.nomination === def.key);
+              const f = c?.final;
+              const ok = !!f && f.status !== "empty" && f.winners.length > 0;
+              return (
+                <div className="ps-lg-item" key={def.key}>
+                  <div className="ps-lg-n">{i + 1}</div>
+                  <div className="ps-lg-body">
+                    <div className="ps-lab">{def.label.toUpperCase()}</div>
+                    {ok ? <>
+                      <div className="ps-lg-who"><span className="ps-avs">{f!.winners.slice(0, 3).map((id) => ava(id, "ps-av-sm", lg.members.find((m) => m.id === id)?.name))}</span>
+                        {f!.winners.map((id) => lg.members.find((m) => m.id === id)?.name ?? name(id)).join(", ")}</div>
+                      <div className="ps-lg-v">{fmt(def.unit, f!.value)}{f!.status === "overridden" ? <span className="ps-manual-mark">✎ за даними тімліда</span> : null}</div>
+                    </> : <div className="ps-muted">{def.noCrm ? "дані не внесено" : "ніхто не набрав"}</div>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )) });
+    }
+    // 📊 Статистика відділу РНК · найкраща конверсія (слайд 5 Даші): рядки, які Даша/тімлід позначили «на слайд».
+    if (hasConv) {
+      out.push({ key: "rnk-conv", node: frame(SECTIONS[2], (
+        <>
+          <div className="ps-kick">ТИЖДЕНЬ {dm(week.weekFrom)}–{dmy(week.weekTo)}</div>
+          <div className="ps-h">Статистика відділу РНК</div>
+          <div className="ps-conv">
+            <div className="ps-conv-t">
+              <div className="ps-head">Найкраща конверсія</div>
+              <table>
+                <thead><tr><th>Менеджер</th><th>Цільові ліди</th><th>Успіх</th><th>Конверсія</th></tr></thead>
+                <tbody>{convRows.map((r) => <tr key={r.managerId}><td>{r.name}</td><td>{r.taken}</td><td>{r.won}</td><td><b>{convPctText(r.won, r.taken)}</b></td></tr>)}</tbody>
+              </table>
+            </div>
+            {week.rnkConv?.comment ? <div className="ps-conv-c">{week.rnkConv.comment.text}</div> : null}
+          </div>
+        </>
+      )) });
+    }
+
     const monthWord = MONTHS_GEN[Number(today.slice(5, 7)) - 1];
     const done = planDoneTeams(toDate);
-    if (toDate && done.length === 0) out.push({ key: "plan-none", node: frame(SECTIONS[1], (
+    if (toDate && done.length === 0) out.push({ key: "plan-none", node: frame(SECTIONS[3], (
       <><div className="ps-kick">ВИКОНАННЯ ПЛАНУ · З 1 {monthWord.toUpperCase()} · СТАНОМ НА {dm(today)}</div>
         <div className="ps-h">План виконали</div>
         <div className="ps-manual"><div className="ps-mtext">Станом на {dm(today)} план від 1 {monthWord} ще ніхто не виконав на 100%.</div></div></>
     )) });
-    for (const g of done) out.push({ key: `plan-${g.team}`, node: frame(SECTIONS[1], (
+    for (const g of done) out.push({ key: `plan-${g.team}`, node: frame(SECTIONS[3], (
       <>
         <div className="ps-kick">ВИКОНАННЯ ПЛАНУ · З 1 {monthWord.toUpperCase()} · СТАНОМ НА {dm(today)}</div>
         <div className="ps-h">План виконали</div>
@@ -280,13 +346,13 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
 
     if (month) {
       const g = month.glance;
-      out.push({ key: "summary", node: frame(SECTIONS[2], (
+      out.push({ key: "summary", node: frame(SECTIONS[4], (
         <>
           <div className="ps-kick">НА ЗАВЕРШЕННЯ</div>
           <div className="ps-h">Дякуємо за увагу!</div>
           <div className="ps-subt">Найкраща команда — далі тільки більше!</div>
           <div className="ps-sum">
-            <div className="ps-slab">ПІДСУМКИ · СТАНОМ НА {dm(today)}</div>
+            <div className="ps-slab">ПІДСУМКИ · СТАНОМ НА {dm(today)}{loadedAt ? ` ${loadedAt}` : ""}</div>
             <div className="ps-row"><i /><div><div className="ps-rl">КОМАНДА ЗА МІСЯЦЬ</div>
               <div className="ps-rv">{Math.round(g.fact).toLocaleString("uk-UA")} / {formatAmountFull(g.plan)}{g.plan > 0 ? ` · ${Math.round((g.fact / g.plan) * 100)}%` : ""}</div></div></div>
             <div className="ps-row"><i /><div><div className="ps-rl">ОЧІКУЄМО ЗА ПЛАН. ДАТОЮ</div>
@@ -297,7 +363,7 @@ export function NominationsPresentation({ week, onClose }: { week: NominationWee
       )) });
     }
     return out;
-  }, [week, manual, manualPhotos, toDate, month, draft, meeting, name, today]);
+  }, [week, manual, manualPhotos, toDate, month, draft, meeting, name, today, loadedAt]);
 
   const n = slides.length;
   const go = (k: number) => setI(Math.max(0, Math.min(n - 1, k)));

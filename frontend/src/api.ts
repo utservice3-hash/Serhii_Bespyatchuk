@@ -4418,7 +4418,7 @@ export const commitEmployeeImport = async (csv: string, mapping: string[], sheet
 
 // ───────────────────────── 🏆 НОМІНАЦІЇ ТИЖНЯ (21.09.2026) ─────────────────────────
 // Дзеркало `backend/src/core/nominationRules.ts` (WeekView) + права глядача з роуту.
-export type NominationKey = "maxDeal" | "cars" | "revenue" | "marginPct" | "intl";
+export type NominationKey = "maxDeal" | "cars" | "revenue" | "marginPct" | "intl" | "lgMaxDeal" | "lgCars" | "lgQuotes" | "lgIntl";
 export type NominationRanked = { state: "ok"; value: number; winners: number[] } | { state: "empty" };
 export interface NominationFinal { status: "confirmed" | "unconfirmed" | "overridden" | "empty"; winners: number[]; value: number | null; reason: string | null; stale: boolean }
 export type NominationAction = "confirm" | "override" | "retract";
@@ -4432,7 +4432,7 @@ export interface NominationCell {
   canReview: boolean; whyNot: string | null;
 }
 export interface NominationTeam {
-  teamId: number; teamName: string; dept: "rpk" | "rnk"; members: { id: number; name: string }[]; noCostDeals: number; cells: NominationCell[];
+  teamId: number; teamName: string; dept: "rpk" | "rnk" | "lg"; members: { id: number; name: string }[]; noCostDeals: number; cells: NominationCell[];
   leads: { managerId: number | null; name: string }[];
 }
 export interface NominationDept { dept: "rpk" | "rnk"; nomination: NominationKey; state: "ok" | "empty"; value: number | null; winners: number[]; teams: number[] }
@@ -4442,13 +4442,26 @@ export interface NominationWeek {
   freezeInstant: string;
   teams: NominationTeam[]; depts: NominationDept[]; names: Record<string, string>;
   viewer: { role: "admin" | "team_lead"; teamId: number | null; managerId: number | null };
-  defs: { key: NominationKey; label: string; hint: string; unit: "uah" | "count" | "pct"; rule: string; notCounted: string }[];
+  defs: NominationDef[];
+  /** Рейтинг лідогенераторів (22.09.2026): свої 4 номінації; `noCrm` — система числа не пропонує. */
+  leadgenDefs: NominationDef[];
+  leadgen: NominationTeam | null;
+  /** Статистика відділу РНК · конверсія: керівництву — уся, тімліду РНК — його команда, решті — `null`. */
+  rnkConv: RnkConvView | null;
   /** Після «Погодитись з рештою» — які саме номінації погоджено. */
   bulk?: { confirmed: NominationKey[] };
   marginFlagPct: number;
   /** 📷 Фото людей тижня: id менеджера Kommo → фото співробітника (немає в мапі — ініціали). */
   photos: Record<string, PhotoRef>;
 }
+export interface NominationDef { key: NominationKey; label: string; hint: string; unit: "uah" | "count" | "pct"; rule: string; notCounted: string; noCrm?: boolean }
+export interface RnkConvRow {
+  managerId: number; name: string; teamId: number; taken: number; won: number; pct: number | null;
+  crm: { taken: number; won: number }; own: { by: string | null; at: string } | null; onSlide: boolean; canEdit: boolean;
+}
+export interface RnkConvView { rows: RnkConvRow[]; comment: { text: string; by: string | null; at: string } | null; canComment: boolean }
+export const saveRnkConv = async (p: { weekFrom: string; action: "set" | "reset" | "comment"; managerId?: number; taken?: number; won?: number; onSlide?: boolean; comment?: string }) =>
+  (await api.post<NominationWeek>("/nominations/rnk-conv", p)).data;
 export const fetchNominationWeek = async (weekFrom?: string) =>
   (await api.get<NominationWeek>("/nominations/week", { params: weekFrom ? { weekFrom } : {} })).data;
 export const reviewNomination = async (p: { weekFrom: string; teamId: number; nomination: NominationKey; action: NominationAction; overrideManagerIds?: number[]; overrideValue?: number; reason?: string }) =>

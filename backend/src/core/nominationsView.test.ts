@@ -48,7 +48,8 @@ test("#650 екран: «про вас» окремо, порожнє не в з
   assert.deepEqual(frozenSummary([team]), { confirmed: 1, own: 1, noDecision: 2 });
   // Вид розкриття на екрані — той самий, що звіряє живий #658 (результат і зазор — «Факт», авто — завантажені).
   const { DRILL_KIND } = await loadView();
-  assert.deepEqual(DRILL_KIND, { maxDeal: "received", revenue: "received", cars: "dispatched", marginPct: null, intl: null }, "🔴 екран розкриває число не тим видом, що звіряє #658");
+  assert.deepEqual(DRILL_KIND, { maxDeal: "received", revenue: "received", cars: "dispatched", marginPct: null, intl: null,
+    lgMaxDeal: null, lgCars: null, lgQuotes: null, lgIntl: null }, "🔴 екран розкриває число не тим видом, що звіряє #658");
 });
 
 /**
@@ -75,4 +76,19 @@ test("#651 введення: числа з пробілами й ₴ прийм�
   assert.equal(countdown(due, at - 14 * 3_600_000).level, "warn");
   assert.equal(countdown(due, at - 2 * 3_600_000).level, "danger");
   assert.equal(countdown(due, at + 1).level, "past");
+});
+
+/**
+ * #663 — ЕКРАН ЛІДОГЕНЕРАТОРІВ: номінація, якої в CRM немає, порожня = «чекає ваших даних» (група pending), а не
+ * «ніхто не набрав»; менеджерська порожня — лишається «ніхто не набрав». Відсоток конверсії на екрані — до сотих.
+ */
+test("#663 екран: номінація без CRM чекає даних, а не «ніхто не набрав»; конверсія до сотих", async () => {
+  const { groupCells, convPct } = await loadView();
+  const empty = { state: "empty" };
+  const cells = [cell("lgMaxDeal", empty, "empty", [], null), cell("intl", empty, "empty", [], null)];
+  const g = groupCells(cells, [], ["lgMaxDeal", "lgCars", "lgIntl"]);
+  assert.deepEqual([g.pending.map((c: { nomination: string }) => c.nomination), g.empty.map((c: { nomination: string }) => c.nomination)], [["lgMaxDeal"], ["intl"]],
+    "🔴 номінація без CRM сховалась у «ніхто не набрав»");
+  assert.equal(convPct(4, 24), "16,67%", "🔴 4/24 показано не як 16,67%");
+  assert.equal(convPct(0, 0), "—");
 });

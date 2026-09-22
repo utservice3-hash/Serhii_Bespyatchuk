@@ -49,12 +49,13 @@ export interface CellGroups { pending: NominationCell[]; done: NominationCell[];
  * Групи карток (#650). `about` — рядки про тімліда (для самого тімліда — «про вас»); `empty` — ніхто не
  * набрав і рішення немає; `done` — погоджено або введено свої дані; `pending` — решта, те, що чекає.
  */
-export function groupCells(cells: readonly NominationCell[], aboutIds: readonly (number | null)[]): CellGroups {
+export function groupCells(cells: readonly NominationCell[], aboutIds: readonly (number | null)[], noCrmKeys: readonly string[] = []): CellGroups {
   const g: CellGroups = { pending: [], done: [], about: [], empty: [] };
   for (const c of cells) {
     if (isAbout(c, aboutIds)) g.about.push(c);
     else if (c.final.status === "confirmed" || c.final.status === "overridden") g.done.push(c);
-    else if (c.final.status === "empty") g.empty.push(c);
+    // Номінація, якої в CRM немає (лідогенератори): порожньо = «чекає ваших даних», а не «ніхто не набрав».
+    else if (c.final.status === "empty" && !noCrmKeys.includes(c.nomination)) g.empty.push(c);
     else g.pending.push(c);
   }
   return g;
@@ -107,7 +108,12 @@ export function ownDataHint(ranking: readonly { managerId: number; value: number
 /** З чого складається число: вид розкриття Звіту (`/report-plan/day-items`). Для % маржі — угода-доказ, для міжнародних — поки ні. */
 export const DRILL_KIND: Record<NominationKey, "received" | "dispatched" | null> = {
   maxDeal: "received", revenue: "received", cars: "dispatched", marginPct: null, intl: null,
+  lgMaxDeal: null, lgCars: null, lgQuotes: null, lgIntl: null,
 };
+
+/** Відсоток конверсії до сотих (4/24 = 16,67%) — як на слайді, без «17,00%». */
+export const convPct = (won: number, taken: number): string =>
+  taken > 0 ? `${(Math.round((won / taken) * 10000) / 100).toFixed(2).replace(".", ",")}%` : "—";
 
 export function fmtValue(unit: Unit, v: number | null): string {
   if (v == null) return "—";

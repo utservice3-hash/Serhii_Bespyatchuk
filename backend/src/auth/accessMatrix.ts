@@ -376,6 +376,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["financier", "hr", "manager"] },
   { method: "POST", path: "/api/nominations/review", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
+  { method: "POST", path: "/api/nominations/rnk-conv", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
   /* 📷 Фото співробітників (22.09.2026). Саме фото — будь-кому залогіненому (0 → 400/404, але не 403);
      список і запис — право сейфу `view_employee_secrets`: admin, ceo, opdir, kvp, hr. Запис — deny-only. */
   /* Кандидату — 403 в самому обробнику, але проба матриці ходить від НЕАКТИВНОГО кандидата, і її раніше відсікає

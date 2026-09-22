@@ -2,9 +2,11 @@ import { Router, type Request, type Response } from "express";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { isAdminScope } from "../auth/rbac.js";
-import { nominationWeek, frozenWeek, draftWeek, cellFingerprint, type WeekView } from "../core/nominations.js";
+import { nominationWeek, frozenWeek, draftWeek, cellFingerprint, LEADGEN_TEAM_ID, type WeekView } from "../core/nominations.js";
+import type { TeamWeek } from "../core/nominationRules.js";
 import { managerPhotos, employeePhotos } from "../core/people.js";
-import { lastWeek, weekOf, canReview, validateReview, validateBulkConfirm, validateManualSlide, NOMINATIONS, MARGIN_FLAG_PCT, MANUAL_KINDS, SLIDE_TEMPLATES } from "../core/nominationRules.js";
+import { lastWeek, weekOf, canReview, validateReview, validateBulkConfirm, validateConvEdit, validateManualSlide, NOMINATIONS, LEADGEN_NOMINATIONS, MARGIN_FLAG_PCT, MANUAL_KINDS, SLIDE_TEMPLATES } from "../core/nominationRules.js";
+import { RNK_TEAM_IDS } from "../core/metrics.js";
 
 /**
  * 🏆 НОМІНАЦІЇ ТИЖНЯ (21.09.2026). Дві межі, як у найму:
@@ -30,22 +32,37 @@ function viewerOf(req: Request): Viewer | null {
  * тижня з реєстру «Співробітників» (менеджер → співробітник через `employees.manager_id`).
  */
 async function withRights(view: WeekView, v: Viewer) {
+  const withCells = (t: TeamWeek) => ({
+    ...t,
+    cells: t.cells.map((c) => {
+      const r = view.state === "frozen" ? { ok: false as const, why: "тиждень зафіксовано" }
+        : canReview(v, { teamId: t.teamId, crmWinners: c.crm.state === "ok" ? c.crm.winners : [], overrideManagerIds: c.final.status === "overridden" ? c.final.winners : null });
+      return { ...c, canReview: r.ok, whyNot: r.ok ? null : r.why };
+    }),
+  });
+  // Скоуп звужує ВІДПОВІДЬ: лідогенераторів бачать керівництво і тімлід лідогенерації; таблицю конверсії РНК —
+  // керівництво (усю) і тімлід команди РНК (лише свою команду). Решті — `null`, а не порожньо.
+  const admin = v.role === "admin";
+  const leadgen = view.leadgen && (admin || v.teamId === LEADGEN_TEAM_ID) ? withCells(view.leadgen) : null;
+  const rnkLead = v.teamId != null && (RNK_TEAM_IDS as readonly number[]).includes(v.teamId);
+  const rnkConv = view.rnkConv && (admin || rnkLead) ? {
+    comment: view.rnkConv.comment,
+    canComment: admin,
+    rows: view.rnkConv.rows.filter((r) => admin || r.teamId === v.teamId).map((r) => ({ ...r, canEdit: admin || r.teamId === v.teamId })),
+  } : null;
   return {
     ...view,
     photos: await managerPhotos(),
     viewer: { role: v.role, teamId: v.teamId, managerId: v.managerId },
     // Підписи й одиниці — з одного місця (`NOMINATIONS`), щоб на фронті не жила друга копія.
-    defs: NOMINATIONS, marginFlagPct: MARGIN_FLAG_PCT,
-    teams: view.teams.map((t) => ({
-      ...t,
-      cells: t.cells.map((c) => {
-        const r = view.state === "frozen" ? { ok: false as const, why: "тиждень зафіксовано" }
-          : canReview(v, { teamId: t.teamId, crmWinners: c.crm.state === "ok" ? c.crm.winners : [], overrideManagerIds: c.final.status === "overridden" ? c.final.winners : null });
-        return { ...c, canReview: r.ok, whyNot: r.ok ? null : r.why };
-      }),
-    })),
+    defs: NOMINATIONS, leadgenDefs: LEADGEN_NOMINATIONS, marginFlagPct: MARGIN_FLAG_PCT,
+    teams: view.teams.map(withCells),
+    leadgen, rnkConv,
   };
 }
+/** Команда рядка рішення: звичайна команда заліку або рейтинг лідогенераторів. */
+const teamOf = (draft: WeekView, teamId: number): TeamWeek | undefined =>
+  teamId === LEADGEN_TEAM_ID ? draft.leadgen ?? undefined : draft.teams.find((t) => t.teamId === teamId);
 
 /** Express 4 не ловить кинуті проміси async-обробників — без цього запит висів би до 503 таймауту. */
 const safe = (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response) => {
@@ -78,9 +95,10 @@ nominationsRouter.post("/review", safe(async (req: Request, res: Response) => {
   const b = parsed.value;
   if (await frozenWeek(b.weekFrom)) return res.status(409).json({ error: "Тиждень уже зафіксовано — змінити неможливо" });
   const draft = await draftWeek(b.weekFrom);
-  const team = draft.teams.find((t) => t.teamId === b.teamId);
+  const team = teamOf(draft, b.teamId);
   if (!team) return res.status(404).json({ error: "Команди немає в заліку" });
-  const cell = team.cells.find((c) => c.nomination === b.nomination)!;
+  const cell = team.cells.find((c) => c.nomination === b.nomination);
+  if (!cell) return res.status(400).json({ error: "у цієї команди такої номінації немає" });
   // Переможці «своїх даних», що вже стоять, теж рахуються: тімлід не скасує й не «поверне» рішення керівництва про себе.
   const right = canReview(v, { teamId: b.teamId, crmWinners: cell.crm.state === "ok" ? cell.crm.winners : [],
     overrideManagerIds: [...(b.overrideManagerIds ?? []), ...(cell.final.status === "overridden" ? cell.final.winners : [])] });
@@ -105,7 +123,7 @@ async function bulkConfirm(req: Request, res: Response, v: Viewer) {
   const b = parsed.value;
   if (await frozenWeek(b.weekFrom)) return res.status(409).json({ error: "Тиждень уже зафіксовано — змінити неможливо" });
   const draft = await draftWeek(b.weekFrom);
-  const team = draft.teams.find((t) => t.teamId === b.teamId);
+  const team = teamOf(draft, b.teamId);
   if (!team) return res.status(404).json({ error: "Команди немає в заліку" });
   const todo = team.cells.filter((c) => b.nominations.includes(c.nomination) && c.crm.state === "ok"
     && c.final.status === "unconfirmed" && canReview(v, { teamId: b.teamId, crmWinners: c.crm.state === "ok" ? c.crm.winners : [] }).ok);
@@ -126,6 +144,31 @@ async function bulkConfirm(req: Request, res: Response, v: Viewer) {
   }
   res.json({ ...(await withRights(await draftWeek(b.weekFrom, v.teamId), v)), bulk: { confirmed: todo.map((c) => c.nomination) } });
 }
+
+/**
+ * 📊 СТАТИСТИКА ВІДДІЛУ РНК · КОНВЕРСІЯ (22.09.2026): правка рядка («свої» цільові ліди / успіх і чи йде на
+ * слайд), повернення числа системи й коментар Даші. Керівництво — будь-який рядок і коментар; тімлід команди
+ * РНК — лише рядки своєї команди. Лише дописування (`nomination_conv_edits`), остання правка перемагає.
+ */
+nominationsRouter.post("/rnk-conv", safe(async (req: Request, res: Response) => {
+  const v = viewerOf(req);
+  if (!v) return res.status(403).json({ error: "Статистику відділу правлять тімліди й керівництво" });
+  const p = validateConvEdit(req.body);
+  if (!p.ok) return res.status(400).json({ error: p.error });
+  const b = p.value;
+  if (b.action === "comment") {
+    if (v.role !== "admin") return res.status(403).json({ error: "Коментар до статистики відділу пише керівництво" });
+  } else {
+    const view = await draftWeek(b.weekFrom);
+    const row = view.rnkConv?.rows.find((r) => r.managerId === b.managerId);
+    if (!row) return res.status(404).json({ error: "Цього менеджера немає в статистиці відділу РНК за тиждень" });
+    if (v.role !== "admin" && row.teamId !== v.teamId) return res.status(403).json({ error: "тімлід править лише свою команду" });
+  }
+  await pool.query(
+    `INSERT INTO nomination_conv_edits (week_from, manager_id, action, taken, won, on_slide, comment, user_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [b.weekFrom, b.managerId, b.action, b.taken, b.won, b.onSlide, b.comment, req.auth!.userId]);
+  res.json(await withRights(await nominationWeek(b.weekFrom, v.teamId), v));
+}));
 
 /**
  * 🎞 РУЧНІ СЛАЙДИ ПРЕЗЕНТАЦІЇ (прохід 2): новачки, дні народження, новини, довільні. Лише

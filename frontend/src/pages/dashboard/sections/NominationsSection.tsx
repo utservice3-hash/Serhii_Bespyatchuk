@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  fetchNominationWeek, reviewNomination, confirmNominationsBulk, fetchDayItems,
+  fetchNominationWeek, reviewNomination, confirmNominationsBulk, fetchDayItems, saveRnkConv,
   fetchManualSlides, createManualSlide, updateManualSlide, deleteManualSlide, restoreManualSlide, fetchPeoplePhotos,
   type NominationWeek, type NominationTeam, type NominationCell, type NominationKey, type ManualSlidesResp, type ManualSlide, type ManualSlideKind, type PersonPhoto,
-  type DayItems,
+  type DayItems, type NominationDef, type RnkConvView,
 } from "../../../api";
 import { EmployeePhoto } from "./EmployeePhotos";
 import { NominationsPresentation } from "./NominationsPresentation";
 import { formatAmountFull } from "../format";
 import {
-  parseWeekParam, parseAmount, countdown, groupCells, teamProgress, frozenSummary, ownDataHint, DRILL_KIND, fmtValue, leadsMessage, isAbout,
+  parseWeekParam, parseAmount, countdown, groupCells, teamProgress, frozenSummary, ownDataHint, DRILL_KIND, fmtValue, leadsMessage, isAbout, convPct,
 } from "../nominationsView";
 import "./nominations.css";
 
@@ -34,6 +34,10 @@ const kyivDateOf = (ms: number) => new Date(ms).toLocaleDateString("en-CA", { ti
 const mondayOf = (ymd: string) => { const dow = new Date(`${ymd}T12:00:00Z`).getUTCDay(); return addDays(ymd, -((dow + 6) % 7)); };
 const whenText = (iso: string) => new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const DEPT_LABEL = { rnk: "ВРНК — нові клієнти", rpk: "ВРПК — постійні клієнти" } as const;
+
+/** Означення номінації — менеджерської чи лідогенераторської (одне місце пошуку, щоб не розійтись). */
+const defOf = (week: NominationWeek, key: NominationKey): NominationDef =>
+  (week.defs.find((d) => d.key === key) ?? week.leadgenDefs.find((d) => d.key === key))!;
 
 function errorOf(e: unknown): string {
   const r = (e as { response?: { data?: { error?: string }; status?: number } })?.response;
@@ -85,7 +89,8 @@ export function NominationsSection() {
   const ongoing = data.weekFrom >= currentMonday; // тиждень ще триває — числа зміняться
   const cd = countdown(data.freezeInstant, now);
   const leadTeam = isLead ? data.teams[0] ?? null : null;
-  const shownTeam = isLead ? leadTeam : data.teams.find((t) => t.teamId === openTeam) ?? null;
+  const shownTeam = isLead ? leadTeam
+    : data.leadgen && openTeam === data.leadgen.teamId ? data.leadgen : data.teams.find((t) => t.teamId === openTeam) ?? null;
 
   // Відповідь на рішення застосовуємо, лише якщо людина досі на тому самому тижні (не перетираємо новий старим).
   const applyData = (d: NominationWeek) => setData((cur) => (cur && cur.weekFrom !== d.weekFrom ? cur : d));
@@ -146,7 +151,9 @@ export function NominationsSection() {
           {isLead ? (
             leadTeam
               ? <TeamBoard key={`${data.weekFrom}:${leadTeam.teamId}`} week={data} team={leadTeam} mode="lead" onData={applyData} onDrill={setDrill} />
-              : <div className="nm-card nm-banner nm-muted">Вашої команди в номінаціях цього тижня немає — у залік потрапляють команди з планом, як на Звіті.</div>
+              : data.leadgen && data.viewer.teamId === data.leadgen.teamId
+                ? <TeamBoard key={`${data.weekFrom}:lg`} week={data} team={data.leadgen} mode="lead" onData={applyData} onDrill={setDrill} />
+                : <div className="nm-card nm-banner nm-muted">Вашої команди в номінаціях цього тижня немає — у залік потрапляють команди з планом, як на Звіті.</div>
           ) : shownTeam ? (
             <>
               <button className="nm-btn" style={{ marginBottom: 10 }} onClick={() => { setOpenTeam(null); setDrill(null); }}>← Усі команди</button>
@@ -158,6 +165,7 @@ export function NominationsSection() {
           {data.teams.some((t) => t.noCostDeals > 0) ? (
             <p className="nm-muted">⚠ «% маржі» не рахується для угод без «Расходу 1» (виплати водію): {data.teams.reduce((a, t) => a + t.noCostDeals, 0)} угод{isLead ? " команди" : ""} цього тижня без нього.</p>
           ) : null}
+          {data.rnkConv && (!shownTeam || isLead) ? <ConvCard week={data} conv={data.rnkConv} onData={applyData} /> : null}
           {!isLead && !shownTeam ? <ManualSlidesCard weekFrom={data.weekFrom} /> : null}
         </div>
         {drillPanel ? <><div className="nm-aside-back" onClick={() => setDrill(null)} />{drillPanel}</> : null}
@@ -201,6 +209,17 @@ function AdminOverview({ week, onOpen }: { week: NominationWeek; onOpen: (teamId
           </div>
         </div>
       ) : null}
+      {week.leadgen ? (() => {
+        const lg = week.leadgen, p = teamProgress(lg);
+        const need = lg.cells.filter((c) => c.final.status !== "confirmed" && c.final.status !== "overridden" && (c.crm.state === "ok" || defOf(week, c.nomination).noCrm)).length;
+        return (
+          <button className="nm-card nm-lg-row" onClick={() => onOpen(lg.teamId)}>
+            <b>Рейтинг лідогенераторів</b>
+            <span className="nm-muted">{lg.leads.length ? `тімлід: ${lg.leads.map((l) => l.name).join(", ")}` : "тімліда в дашборді немає"} · прорахунки — з CRM, зазор, авто й міжнародні вносить тімлід або ви</span>
+            <span className={need ? "nm-warn-t" : "nm-ok-t"}>{need ? `чекає даних: ${need}` : `готово · ${p.done} рішень`}</span>
+          </button>
+        );
+      })() : null}
       <div className="nm-card nm-scroll">
         <table className="nm-table">
           <thead><tr><th>Команда</th>{week.defs.map((d) => <th key={d.key} title={d.hint}>{lbl(d.key)}</th>)}</tr></thead>
@@ -214,7 +233,7 @@ function AdminOverview({ week, onOpen }: { week: NominationWeek; onOpen: (teamId
                   <tr key={t.teamId}>
                     <td><button className="nm-link" onClick={() => onOpen(t.teamId)}>{t.teamName}</button></td>
                     {t.cells.map((c) => {
-                      const d = week.defs.find((x) => x.key === c.nomination)!;
+                      const d = defOf(week, c.nomination);
                       const about = isAbout(c, t.leads.map((l) => l.managerId));
                       return (
                         <td key={c.nomination}>
@@ -257,7 +276,7 @@ function TeamBoard({ week, team, mode, onData, onDrill }: {
   const [note, setNote] = useState<string | null>(null);
   const frozen = week.state === "frozen";
   const aboutIds = mode === "lead" ? [week.viewer.managerId] : team.leads.map((l) => l.managerId);
-  const g = groupCells(team.cells, aboutIds);
+  const g = groupCells(team.cells, aboutIds, week.leadgenDefs.filter((d) => d.noCrm).map((d) => d.key));
   const bulkable = g.pending.filter((c) => c.canReview && c.crm.state === "ok");
 
   const run = async (key: string, fn: () => Promise<NominationWeek>, ok?: (d: NominationWeek) => string) => {
@@ -330,7 +349,7 @@ function NomCard({ week, team, cell, mode, about, busy, saving, err, editing, on
   onConfirm: () => void; onRetract: () => void; onSaveOwn: (ids: number[], value: number, reason: string) => void; onDrill: (d: Drill) => void;
 }) {
   const [all, setAll] = useState(false);
-  const d = week.defs.find((x) => x.key === cell.nomination)!;
+  const d = defOf(week, cell.nomination);
   const frozen = week.state === "frozen";
   const name = (id: number) => week.names[String(id)] ?? team.members.find((m) => m.id === id)?.name ?? `Менеджер #${id}`;
   const me = week.viewer.managerId;
@@ -352,14 +371,16 @@ function NomCard({ week, team, cell, mode, about, busy, saving, err, editing, on
       </div>
 
       <div className="nm-nc-prop">
-        <div className={`nm-sys${own ? " own" : ""}`}>{own ? `Свої дані${cell.review?.by ? ` · ${cell.review.by}` : ""}` : "Пропозиція системи · з CRM"}</div>
+        <div className={`nm-sys${own ? " own" : ""}`}>{own ? `Свої дані${cell.review?.by ? ` · ${cell.review.by}` : ""}` : d.noCrm ? "Система не рахує" : "Пропозиція системи · з CRM"}</div>
         {winners.length ? (
           <div className="nm-win">
             <span className="nm-avs">{winners.slice(0, 3).map((id) => <EmployeePhoto key={id} photo={week.photos?.[String(id)]} name={name(id)} size={40} className="nm-av" />)}</span>
             <span className="nm-name">{winners.map((id, i) => <span key={id}>{i ? ", " : ""}{who(id)}</span>)}{winners.length > 1 ? <span className="nm-muted"> · нічия</span> : null}</span>
             <span className="nm-big">{fmtValue(d.unit, value)}{d.unit === "count" && cell.nomination === "cars" ? " авто" : ""}</span>
           </div>
-        ) : <div className="nm-muted">Ніхто не набрав — погоджувати нічого{frozen ? "" : ", але можна ввести свої дані"}.</div>}
+        ) : d.noCrm
+          ? <div className="nm-muted">{frozen ? "Даних не внесли." : "Даних ще немає: у CRM звʼязку угоди з лідогенератором немає — введіть свої дані."}</div>
+          : <div className="nm-muted">Ніхто не набрав — погоджувати нічого{frozen ? "" : ", але можна ввести свої дані"}.</div>}
         {own ? <>
           <div className="nm-quote">«{cell.final.reason}»</div>
           <div className="nm-strike">Пропозиція системи: {crm.state === "ok" ? `${crm.winners.map(name).join(", ")} · ${fmtValue(d.unit, crm.value)}` : "ніхто не набрав"}</div>
@@ -447,7 +468,7 @@ function OwnData({ week, team, cell, busy, saving, err, onCancel, onSave }: {
   week: NominationWeek; team: NominationTeam; cell: NominationCell; busy: boolean; saving: boolean; err: string | null;
   onCancel: () => void; onSave: (ids: number[], value: number, reason: string) => void;
 }) {
-  const d = week.defs.find((x) => x.key === cell.nomination)!;
+  const d = defOf(week, cell.nomination);
   const me = week.viewer.role === "team_lead" ? week.viewer.managerId : null;
   const list = cell.ranking ?? team.members.map((m) => ({ managerId: m.id, value: null as number | null }));
   const init = cell.final.status === "overridden" ? cell.final.winners : cell.crm.state === "ok" ? cell.crm.winners.filter((id) => id !== me) : [];
@@ -457,7 +478,7 @@ function OwnData({ week, team, cell, busy, saving, err, onCancel, onSave }: {
   const [why, setWhy] = useState<string>(cell.final.status === "overridden" ? cell.final.reason ?? "" : "");
   const name = (id: number) => week.names[String(id)] ?? team.members.find((m) => m.id === id)?.name ?? `Менеджер #${id}`;
   const value = parseAmount(num);
-  const hint = ownDataHint(list, ids, value);
+  const hint = d.noCrm ? { crmOfChosen: null, differs: false, higher: [] as { managerId: number; value: number }[] } : ownDataHint(list, ids, value);
   const toggle = (id: number, v: number | null) => {
     const next = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id];
     setIds(next);
@@ -474,7 +495,7 @@ function OwnData({ week, team, cell, busy, saving, err, onCancel, onSave }: {
         {list.map((r) => (
           <button key={r.managerId} type="button" className={`nm-chip${ids.includes(r.managerId) ? " on" : ""}`} disabled={r.managerId === me}
             title={r.managerId === me ? "Рядок про себе вирішує керівництво" : undefined} onClick={() => toggle(r.managerId, r.value)}>
-            {name(r.managerId)}{r.managerId === me ? " (ви)" : ""} <b>{r.value != null && r.value > 0 ? fmtValue(d.unit, r.value) : "0"}</b>
+            {name(r.managerId)}{r.managerId === me ? " (ви)" : ""}{d.noCrm ? null : <b>{r.value != null && r.value > 0 ? fmtValue(d.unit, r.value) : "0"}</b>}
           </button>
         ))}
       </div>
@@ -524,7 +545,7 @@ function DealsPanel({ drill, week, onClose }: { drill: Drill; week: NominationWe
   return (
     <aside className="nm-aside nm-card" aria-label="Звідки число">
       <div className="nm-aside-h">
-        <div><b>{title}</b><div className="nm-muted">{drill.name} · {week.defs.find((d) => d.key === drill.nomination)?.label.toLowerCase()} · {dm(week.weekFrom)}–{dm(week.weekTo)}</div></div>
+        <div><b>{title}</b><div className="nm-muted">{drill.name} · {defOf(week, drill.nomination).label.toLowerCase()} · {dm(week.weekFrom)}–{dm(week.weekTo)}</div></div>
         <button className="nm-nav" aria-label="Закрити" onClick={onClose}>×</button>
       </div>
       <div className="nm-rule">{drill.kind === "dispatched" ? "Угоди з датою завантаження в цьому тижні — як «Авто» на Звіті." : "Угоди «Факту»: оплата отримана або успішно реалізовано за тиждень."} Номер відкриває угоду в Kommo.</div>
@@ -553,6 +574,74 @@ function DealsPanel({ drill, week, onClose }: { drill: Drill; week: NominationWe
   );
 }
 
+
+/**
+ * 📊 Статистика відділу РНК · найкраща конверсія (слайд 5 Даші). Система пропонує «Конв. реклама» Звіту:
+ * створені за тиждень рекламні угоди → скільки дійшли до оплати/успіху. Даша й тімлід команди РНК можуть
+ * поставити свої «цільові ліди / успіх» (рішення Романа 22.09) і вибрати, хто йде на слайд. Коментар — Даша.
+ */
+function ConvCard({ week, conv, onData }: { week: NominationWeek; conv: RnkConvView; onData: (d: NominationWeek) => void }) {
+  const [busy, setBusy] = useState<number | "c" | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Record<number, { taken: string; won: string; onSlide: boolean }>>({});
+  const [comment, setComment] = useState<string>(conv.comment?.text ?? "");
+  useEffect(() => { setDraft({}); setComment(conv.comment?.text ?? ""); }, [week.weekFrom, conv.comment?.text]);
+  const run = async (key: number | "c", p: Parameters<typeof saveRnkConv>[0]) => {
+    if (busy != null) return;
+    setBusy(key); setErr(null);
+    try { onData(await saveRnkConv(p)); if (typeof key === "number") setDraft((d) => { const n = { ...d }; delete n[key]; return n; }); }
+    catch (e) { setErr(errorOf(e)); }
+    finally { setBusy(null); }
+  };
+  const onSlideN = conv.rows.filter((r) => r.onSlide).length;
+  return (
+    <div className="nm-card">
+      <div className="nm-card-h"><b>Статистика відділу РНК · найкраща конверсія</b>
+        <span className="nm-muted">Система пропонує «Конв. реклама» Звіту: створені за тиждень рекламні угоди → скільки дійшли до оплати чи успіху. Змініть числа, якщо рахуєте інакше, і позначте, хто йде на слайд (зараз {onSlideN}).</span></div>
+      {err ? <div className="nm-banner"><span className="nm-err">{err}</span></div> : null}
+      <div className="nm-scroll">
+        <table className="nm-table nm-conv">
+          <thead><tr><th>Менеджер</th><th>Цільові ліди</th><th>Успіх</th><th>Конверсія</th><th>На слайд</th><th /></tr></thead>
+          <tbody>
+            {conv.rows.map((r) => {
+              const dr = draft[r.managerId];
+              const taken = dr ? dr.taken : String(r.taken), won = dr ? dr.won : String(r.won), onSlide = dr ? dr.onSlide : r.onSlide;
+              const t = Number(taken), w = Number(won);
+              const valid = /^\d+$/.test(taken) && /^\d+$/.test(won) && w <= t;
+              const set = (patch: Partial<{ taken: string; won: string; onSlide: boolean }>) =>
+                setDraft((d) => ({ ...d, [r.managerId]: { taken, won, onSlide, ...patch } }));
+              const dis = !r.canEdit || busy != null;
+              return (
+                <tr key={r.managerId} className={r.own ? "own" : ""}>
+                  <td><span className="nm-name">{r.name}</span>{r.own ? <div className="nm-muted">свої дані{r.own.by ? ` · ${r.own.by}` : ""} · CRM: {r.crm.taken} / {r.crm.won}</div> : null}</td>
+                  <td><input className="nm-inp nm-num-inp" inputMode="numeric" aria-label={`Цільові ліди: ${r.name}`} value={taken} disabled={dis} onChange={(e) => set({ taken: e.target.value.replace(/\D/g, "") })} /></td>
+                  <td><input className="nm-inp nm-num-inp" inputMode="numeric" aria-label={`Успіх: ${r.name}`} value={won} disabled={dis} onChange={(e) => set({ won: e.target.value.replace(/\D/g, "") })} /></td>
+                  <td className="nm-num">{valid ? convPct(w, t) : <span className="nm-err">успіх &gt; ліди</span>}</td>
+                  <td><input type="checkbox" aria-label={`На слайд: ${r.name}`} checked={onSlide} disabled={dis} onChange={(e) => set({ onSlide: e.target.checked })} /></td>
+                  <td className="nm-conv-act">
+                    {dr ? <button className="nm-btn p" disabled={dis || !valid} onClick={() => void run(r.managerId, { weekFrom: week.weekFrom, action: "set", managerId: r.managerId, taken: t, won: w, onSlide })}>{busy === r.managerId ? "…" : "Зберегти"}</button> : null}
+                    {dr ? <button className="nm-btn" disabled={busy != null} onClick={() => setDraft((d) => { const n = { ...d }; delete n[r.managerId]; return n; })}>Скасувати</button> : null}
+                    {!dr && r.own && r.canEdit ? <button className="nm-btn" disabled={busy != null} onClick={() => void run(r.managerId, { weekFrom: week.weekFrom, action: "reset", managerId: r.managerId })}>Як у CRM</button> : null}
+                  </td>
+                </tr>
+              );
+            })}
+            {conv.rows.length === 0 ? <tr><td colSpan={6} className="nm-muted">Менеджерів РНК у заліку цього тижня немає.</td></tr> : null}
+          </tbody>
+        </table>
+      </div>
+      <div className="nm-conv-comment">
+        <label className="nm-field"><span>Коментар щодо динаміки відділу за тиждень (іде на слайд)</span>
+          <textarea className="nm-inp" value={comment} disabled={!conv.canComment || busy != null} onChange={(e) => setComment(e.target.value)} maxLength={600}
+            placeholder={conv.canComment ? "Напр.: конверсія реклами зросла, найкраще — у команди Михальчевської" : "Коментар пише керівництво"} /></label>
+        {conv.canComment ? <div className="nm-btns">
+          <button className="nm-btn p" disabled={busy != null || comment.trim() === (conv.comment?.text ?? "")} onClick={() => void run("c", { weekFrom: week.weekFrom, action: "comment", comment: comment.trim() })}>{busy === "c" ? "Зберігаю…" : "Зберегти коментар"}</button>
+          {conv.comment ? <span className="nm-muted">{conv.comment.by ? `${conv.comment.by} · ` : ""}{whenText(conv.comment.at)}</span> : null}
+        </div> : null}
+      </div>
+    </div>
+  );
+}
 
 /**
  * 🎞 Ручні слайди презентації — ШАБЛОНИ зі слайдів Даші (новий працівник, день народження, новини,
