@@ -37,6 +37,9 @@ test("#650 ФАКТИ ДЗВІНКІВ · ЖИВА СХЕМА: лише рекл
   await c.connect();
   try {
     await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+    // 🔴 Сесія в UTC: у київській сесії помилка «дата створення без AT TIME ZONE» лишалась би зеленою
+    // (урок динаміки пропущених, 17.09.2026). Угода 111 створена о 00:30 за Києвом = 15.09 за UTC.
+    await c.query("SET TIME ZONE 'UTC'");
     await c.query("INSERT INTO teams(id,name) VALUES (1,'РНК') ON CONFLICT DO NOTHING");
     await c.query("INSERT INTO managers(id,name,team_id,is_active) VALUES (1,'А',1,true),(2,'Б',1,true) ON CONFLICT DO NOTHING");
     const deal = (id: number, ch: string | null, src: string | null, key: string | null, created: string,
