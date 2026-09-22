@@ -511,6 +511,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // 🗂 Реєстр співробітників + імпорт таблиці (18.09.2026) — у тому ж роутері й за тим самим правом.
   { method: "GET", path: "/api/secrets/employees", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
   { method: "PATCH", path: "/api/secrets/employees/:id", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  // 👤 «+ Співробітник» і розкладання файлів пакета (22.09.2026) — межа роутера `view_employee_secrets`.
+  { method: "POST", path: "/api/secrets/employees", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/secrets/employees/documents/match", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   // 🚪 Звільнення у два кроки й 📎 документи людини (21.09.2026) — межа роутера `view_employee_secrets`.
   { method: "POST", path: "/api/secrets/employees/:id/dismiss", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "POST", path: "/api/secrets/employees/:id/dismiss/finish", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },

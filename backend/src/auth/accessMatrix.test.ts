@@ -87,6 +87,8 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/secrets/:id/code": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "POST /api/secrets/:id/reveal": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "PATCH /api/secrets/employees/:id": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
+  "POST /api/secrets/employees": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
+  "POST /api/secrets/employees/documents/match": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "POST /api/secrets/employees/:id/dismiss": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "POST /api/secrets/employees/:id/dismiss/finish": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "POST /api/secrets/employees/:id/dismiss/revert": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",

@@ -4394,6 +4394,11 @@ export interface EmployeeDoc {
   size_bytes: number | null; version: number; created_at: string; archived_at: string | null; deleted_at: string | null; author: string | null; signed: boolean;
 }
 export const fetchEmployeeDocs = async (id: number) => (await api.get<{ files: EmployeeDoc[] }>(`/secrets/employees/${id}/documents`)).data.files;
+// 👤 «+ Співробітник» і 📎 розкладання файлів пакета по людях (22.09.2026) — `backend/src/core/employeeAdd.ts`.
+export interface NewEmployee { full_name: string; position?: string; team_label?: string; phone?: string; email?: string; telegram?: string; hired_at?: string; birth_date?: string }
+export const createEmployee = async (b: NewEmployee) => (await api.post<{ id: number }>("/secrets/employees", b)).data.id;
+export interface EmployeeFileMatch { file: string; employeeId: number | null; how: "name" | "none" | "ambiguous"; candidates: number[] }
+export const matchEmployeeFiles = async (files: string[]) => (await api.post<{ rows: EmployeeFileMatch[] }>("/secrets/employees/documents/match", { files })).data.rows;
 export async function uploadEmployeeDoc(id: number, file: File, kind: string): Promise<void> {
   const dataBase64 = await new Promise<string>((resolve, reject) => {
     const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = () => reject(r.error); r.readAsDataURL(file);
