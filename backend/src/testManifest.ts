@@ -120,6 +120,7 @@ export const MANIFEST_FILES: string[] = [
   "core/leadgenStats.test.js",
   "core/leadgenHandoffRules.test.js",
   "core/leadgenHandoffLink.test.js",
+  "routes/leadgenMoneyRoutes.test.js",
   "core/missedCalls.test.js",
   "core/hiring.test.js",
   "core/hiringTraining.test.js",
@@ -1614,7 +1615,7 @@ export const MANIFEST_TESTS: string[] = [
   "#365 ЯДРО ЛІДОГЕНУ НЕ РАХУЄ ПО funnel_stage — там ОПР і прорахунки склеєні",
   "#365b 🪞 ДЗЕРКАЛО: «успішний дзвінок» тримається на ОБОХ умовах — напрямок і поріг",
   "#407 чисті модулі правил лідогену не тягнуть нічого",
-  // core/leadgenHandoffRules.test.ts · core/leadgenHandoffLink.test.ts —
+  // core/leadgenHandoffRules.test.ts · leadgenHandoffLink.test.ts · routes/leadgenMoneyRoutes.test.ts —
   // гроші з переданих лідів (рішення власника 22.09.2026)
   "#670 ОДНА ПЕРЕДАЧА НА УГОДУ ПРОДЗВОНУ: угода менеджера — з першого ЗВʼЯЗАНОГО входу",
   "#670b «ТА САМА УГОДА» І «БЕЗ УГОДИ»: гроші не двояться, підсумок сходиться до передач",
@@ -1628,6 +1629,9 @@ export const MANIFEST_TESTS: string[] = [
   "#675b ЖИВИЙ SQL: передачі людини == її «Прорахунки»; два входи однієї угоди — одна передача",
   "#676 ЖИВИЙ SQL: ключ тижня — понеділок за Києвом, дня — київська дата; межа місяця за Києвом",
   "#676b ЖИВИЙ SQL: місячний кошик тренду == рядкам того місяця, по кожній людині",
+  "#677 ДЖЕРЕЛО: /leadgen-stats і /leadgen-handoff-deals беруть гроші з ОДНІЄЇ функції ядра",
+  "#678 ДОСТУП: нові роути — рядки матриці й вкладка як у /leadgen-stats",
+  "#678b ПЕРШИЙ ОПЕРАТОР нового обробника — відмова менеджеру (403 раніше за 400)",
   "#367 ПЛАТІЖ І КОМІСІЯ З ОДНИМ REF — два різні ключі, платіж не затирається",
   "#367b 🪞 ДЗЕРКАЛО: без ID ключ береться з REF, і два різних REF — два ключі",
   "#367c ЖИВИЙ: рядків Привату з ключем за REF при наявному ID — нуль",
