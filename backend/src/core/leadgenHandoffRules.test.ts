@@ -5,8 +5,8 @@ import path from "node:path";
 import {
   pickHandoffs, classifyHandoffs, aggregateHandoffMoney, handoffView, managerDealClass,
   handoffDealsScope, leadgenAuthScope, trendWindow, parseTrendMonths, parseLeadgenGrain, parseManagerIdParam,
-  personMoneyWire, emptyHandoffMoney,
-  type HandoffEntry, type DealState, type LeadgenHandoffMoney,
+  personMoneyWire, emptyHandoffMoney, mergeBucketRows, assembleTrend, sumBuckets,
+  type StageBucketRow, type CallBucketRow, type HandoffEntry, type DealState, type LeadgenHandoffMoney,
 } from "./leadgenHandoffRules.js";
 import { HANDOFF_CLASS_RULES } from "./moneyBuckets.js";
 
@@ -288,6 +288,84 @@ test("#674 ВІКНО ТРЕНДУ: місяці від 1-го, 31-ше не п�
   assert.equal(parseManagerIdParam("0"), "bad");
   assert.equal(parseManagerIdParam("-3"), "bad");
   assert.equal(parseManagerIdParam("4x"), "bad");
+});
+
+/**
+ * #682 — МІСЯЦЬ ТРЕНДУ == ТА САМА ЗБІРКА НАД ОДНИМ ЦИМ МІСЯЦЕМ (ревʼю F2).
+ *
+ * Вимога власника: місяць тренду дорівнює `/leadgen-stats` того місяця — і в лічильниках, і в
+ * ДЗВІНКАХ, і в ГРОШАХ. Ревʼю показало, що дві підміни проходили зеленими: ростер дзвінків на
+ * все вікно замість місяця і дедуп грошей над усім вікном. Фікстура саме на них:
+ *  • людина 4 має дзвінки в травні, але жодної події стадій у травні — `/leadgen-stats` травня
+ *    її не показує, тож тренд теж не має (а квітневі дзвінки — має: дзеркало);
+ *  • угоду менеджера 9101 привели передачі ДВОХ місяців (30.04 23:59 і 01.05 00:00 за Києвом) —
+ *    у кожному місяці це окремий період, тож вона рахується і в квітні, і в травні.
+ * Порівняння — у двох скоупах (відділ і команда), по кожному місяцю вікна.
+ * 🧨 САБОТАЖ: в `assembleTrend` `mergeBucketRows(…, true)` → `false` → червоніє; `handoffView`
+ * над усіма передачами вікна замість передач місяця → червоніє.
+ */
+test("#682 МІСЯЦЬ ТРЕНДУ == ЗБІРКА НАД ОДНИМ ЦИМ МІСЯЦЕМ: дзвінки й гроші теж, не лише стадії", () => {
+  const W = trendWindow("2026-06-30", 3).monthStarts;             // квітень, травень, червень
+  const APR = W[0], MAY = W[1], JUN = W[2];
+  const sr = (bucket: string, managerId: number, teamId: number, leads: number, quotes = 0): StageBucketRow =>
+    ({ bucket, managerId, teamId, leads, opr: 0, quotes, warming: 0 });
+  const stages = [sr(APR, 4, 3, 2, 1), sr(JUN, 4, 3, 1), sr(MAY, 5, 3, 1, 1), sr(APR, 6, 4, 1, 1)];
+  const calls: CallBucketRow[] = [
+    { bucket: APR, managerId: 4, calls: 7 },
+    { bucket: MAY, managerId: 4, calls: 5 },   // у травні людина 4 подій не має
+    { bucket: MAY, managerId: 5, calls: 3 },
+    { bucket: JUN, managerId: 9, calls: 4 },   // людини 9 немає в ростері жодного місяця
+  ];
+  const T = Date.UTC(2026, 3, 30, 20, 59, 30);                    // 30.04 23:59:30 за Києвом
+  const links: HandoffEntry[] = [
+    { pzId: 501, lgId: 4, lgTeamId: 3, at: T, day: "2026-04-30", dealId: 9101 },
+    { pzId: 502, lgId: 5, lgTeamId: 3, at: T + 60_000, day: "2026-05-01", dealId: 9101 },
+    { pzId: 503, lgId: 6, lgTeamId: 4, at: T - 86_400_000 * 20, day: "2026-04-10", dealId: null },
+  ];
+  const states = new Map<number, DealState>([[9101, st("success", 10_000)]]);
+  const inMonth = (m: string, d: string) => d.slice(0, 7) === m.slice(0, 7);
+  let compared = 0;
+  for (const scope of [{ teamId: null, managerId: null }, { teamId: 3, managerId: null }]) {
+    const whole = assembleTrend({ monthStarts: W, stages, calls, links, states, firstDay: "2026-04-03", scope });
+    assert.deepEqual(whole.monthStarts, W, "усі три місяці памʼятає журнал — порівнювати є що");
+    for (const m of W) {
+      const alone = assembleTrend({
+        monthStarts: [m], stages: stages.filter((r) => r.bucket === m), calls: calls.filter((c) => c.bucket === m),
+        links: links.filter((l) => inMonth(m, l.day)), states, firstDay: "2026-04-03", scope,
+      });
+      assert.deepEqual(whole.byPerson.filter((r) => r.bucket === m), alone.byPerson,
+        `🔴 ${m} (команда ${scope.teamId}): рядки людей у тренді ≠ тому самому місяцю окремо — дзвінки чи ростер розійшлись`);
+      assert.deepEqual(whole.money.find((x) => x.bucket === m), alone.money[0],
+        `🔴 ${m} (команда ${scope.teamId}): гроші з передач у тренді ≠ тому самому місяцю окремо — дедуп не в межах місяця`);
+      assert.deepEqual(sumBuckets(whole.byPerson, W).find((x) => x.bucket === m), sumBuckets(alone.byPerson, [m])[0],
+        `🔴 ${m}: підсумок відділу в тренді ≠ місяцю окремо`);
+      compared++;
+    }
+    const row = (b: string, id: number) => whole.byPerson.find((r) => r.bucket === b && r.managerId === id);
+    assert.equal(row(MAY, 4), undefined, "🔴 дзвінки людини в місяці без її подій — /leadgen-stats того місяця їх не показує");
+    assert.equal(row(APR, 4)?.calls, 7, "🔴 дзвінки людини в місяці з її подіями зникли (дзеркало)");
+    assert.ok(!whole.byPerson.some((r) => r.managerId === 9), "🔴 дзвінки людини поза ростером потрапили в тренд");
+    const money = (b: string) => whole.money.find((x) => x.bucket === b)!.totals;
+    assert.equal(money(APR).success.n, 1, "🔴 квітнева передача не отримала угоди менеджера");
+    assert.equal(money(MAY).success.n, 1,
+      "🔴 травнева передача в ту саму угоду стала «тією самою» — дедуп тренду вийшов за межі місяця");
+    assert.equal(money(MAY).sameDeal, 0);
+  }
+  assert.equal(compared, 6);
+  // Відділ бачить команду 4, команда 3 — ні (скоуп і в рядках, і в грошах).
+  const t3 = assembleTrend({ monthStarts: W, stages, calls, links, states, firstDay: "2026-04-03", scope: { teamId: 3, managerId: null } });
+  assert.ok(!t3.byPerson.some((r) => r.managerId === 6) && t3.money[0].totals.unlinked === 0, "🔴 тімлід 3 бачить команду 4");
+  // Глибина журналу: місяць до першої події не звітується; подій немає — немає й місяців.
+  assert.deepEqual(assembleTrend({ monthStarts: W, stages, calls, links, states, firstDay: "2026-05-10",
+    scope: { teamId: null, managerId: null } }).monthStarts, [MAY, JUN], "🔴 місяць до першої події звітується нулем");
+  assert.deepEqual(assembleTrend({ monthStarts: W, stages: [], calls: [], links: [], states, firstDay: null,
+    scope: { teamId: null, managerId: null } }).monthStarts, []);
+  // 🪞 Дзеркало ростеру: усередині ОДНОГО періоду (день/тиждень) ростер — люди періоду, дзвінок
+  // у день без стадій рахується. Та сама функція, інший прапорець — інша, теж правильна відповідь.
+  const inPeriod = mergeBucketRows(stages, calls, false);
+  assert.equal(inPeriod.find((r) => r.bucket === MAY && r.managerId === 4)?.calls, 5,
+    "🔴 у розбивці одного періоду загубився дзвінок дня без стадій — рядок його рахує");
+  assert.ok(!inPeriod.some((r) => r.managerId === 9), "🔴 людина поза ростером періоду отримала рядок");
 });
 
 /**

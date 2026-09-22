@@ -141,8 +141,7 @@ export function handoffView<T extends HandoffEntry>(
   domain: readonly T[], states: ReadonlyMap<number, DealState>, scope: HandoffScope,
 ): HandoffView<T> {
   const all = classifyHandoffs(pickHandoffs(domain), states);
-  const rows = all.filter((h) =>
-    (scope.teamId == null || h.lgTeamId === scope.teamId) && (scope.managerId == null || h.lgId === scope.managerId));
+  const rows = all.filter((h) => inScope(scope, h.lgTeamId, h.lgId));
   const per = new Map<number, ClassifiedHandoff<T>[]>();
   for (const h of rows) { const xs = per.get(h.lgId) ?? []; xs.push(h); per.set(h.lgId, xs); }
   const byPerson = [...per.entries()].sort((a, b) => a[0] - b[0])
@@ -151,9 +150,9 @@ export function handoffView<T extends HandoffEntry>(
 }
 
 /**
- * Воронки й статуси, з яких складено клас. Передає грошове ядро СВОЇМИ константами
- * (`FC_PIPELINES`, `STAGE_SUCCESS`, `STAGE_PAID`, `EXPECT_ZONE`, 143) — тут їх немає, щоб
- * правило лишалось чистим, а константи — одними на весь продукт.
+ * Воронки й статуси, з яких складено клас. Єдиний екземпляр — `HANDOFF_CLASS_RULES` у реєстрі
+ * корзин (`moneyBuckets.ts`); `#683` звіряє його з `FC_PIPELINES`, `STAGE_SUCCESS`, `STAGE_PAID`,
+ * `EXPECT_ZONE` ядра й 143. Тут їх немає, щоб правило лишалось чистим.
  */
 export interface ClassRules {
   fcPipelines: readonly number[]; success: readonly number[]; paid: readonly number[];
@@ -280,6 +279,110 @@ export function trendWindow(to: string, months: number): { from: string; months:
     monthStarts.push(`${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}-01`);
   }
   return { from: monthStarts[0], months: n, monthStarts };
+}
+
+// ─────────────────────── РОЗБИВКА І ТРЕНД — ЧИСТА ЗБІРКА З РЯДКІВ ЗАПИТІВ ───────────────────────
+// Ядро (`leadgenStats.ts`) лише виконує запити й кличе ці функції. Збірка тут, щоб її можна було
+// перевірити викликом без бази (`#682`): ревʼю F2 показало, що підміна ростеру дзвінків чи
+// дедупу грошей у тренді проходила при зеленому наборі — жоден тест збірки не виконував.
+
+/** Одна людина в одній одиниці: ті самі пʼять показників, що в рядку, і команда — для межі тімліда. */
+export interface LeadgenPersonBucketRow {
+  bucket: string; managerId: number; teamId: number | null;
+  calls: number; leads: number; opr: number; quotes: number; warming: number;
+}
+/** Рядок запиту стадій у формі з одиницею (`stageCountsQuery(…, grain)`), уже числами. */
+export interface StageBucketRow {
+  bucket: string; managerId: number; teamId: number | null;
+  leads: number; opr: number; quotes: number; warming: number;
+}
+/** Рядок запиту дзвінків у формі з одиницею: успішні дзвінки людини в одиниці. */
+export interface CallBucketRow { bucket: string; managerId: number; calls: number }
+
+/**
+ * 📅 ЗЛИТТЯ СТАДІЙ І ДЗВІНКІВ ПО ОДИНИЦЯХ. Ростер — люди з подіями стадій (як у рядках):
+ *  • `rosterPerBucket = false` (день/тиждень усередині ОДНОГО періоду) — ростер = люди періоду:
+ *    дзвінок у вівторок рахується й тоді, коли стадій того дня не було, рівно як у рядку;
+ *  • `true` (місяці тренду) — кожен місяць є ОКРЕМИМ періодом `/leadgen-stats`, тож і ростер
+ *    свій: людина без подій у місяці не отримує в ньому дзвінків, як у `/leadgen-stats` того місяця.
+ * Дзвінки людини, якої немає в ростері періоду, не потрапляють нікуди — як у запиті рядків.
+ */
+export function mergeBucketRows(
+  stages: readonly StageBucketRow[], calls: readonly CallBucketRow[], rosterPerBucket: boolean,
+): LeadgenPersonBucketRow[] {
+  const key = (b: string, m: number) => `${b}|${m}`;
+  const rows = new Map<string, LeadgenPersonBucketRow>();
+  const teamOf = new Map<number, number | null>();
+  for (const r of stages) {
+    teamOf.set(r.managerId, r.teamId);
+    rows.set(key(r.bucket, r.managerId), {
+      bucket: r.bucket, managerId: r.managerId, teamId: r.teamId, calls: 0,
+      leads: r.leads, opr: r.opr, quotes: r.quotes, warming: r.warming,
+    });
+  }
+  for (const c of calls) {
+    const row = rows.get(key(c.bucket, c.managerId));
+    if (row) { row.calls += c.calls; continue; }
+    if (rosterPerBucket || !teamOf.has(c.managerId)) continue;
+    rows.set(key(c.bucket, c.managerId), { bucket: c.bucket, managerId: c.managerId, teamId: teamOf.get(c.managerId) ?? null,
+      calls: c.calls, leads: 0, opr: 0, quotes: 0, warming: 0 });
+  }
+  return [...rows.values()].sort((a, b) => a.bucket.localeCompare(b.bucket) || a.managerId - b.managerId);
+}
+
+/** Людина в скоупі відповіді — та сама межа, що в `handoffView`. */
+const inScope = (s: HandoffScope, teamId: number | null, managerId: number): boolean =>
+  (s.teamId == null || teamId === s.teamId) && (s.managerId == null || managerId === s.managerId);
+
+/** Відділ (або команда) по одиницях = сума людей. `only` — одиниці, що мусять бути у відповіді навіть нулем. */
+export function sumBuckets(rows: readonly LeadgenPersonBucketRow[], only?: readonly string[]):
+  { bucket: string; calls: number; leads: number; opr: number; quotes: number; warming: number }[] {
+  const by = new Map<string, { bucket: string; calls: number; leads: number; opr: number; quotes: number; warming: number }>();
+  for (const b of only ?? []) by.set(b, { bucket: b, calls: 0, leads: 0, opr: 0, quotes: 0, warming: 0 });
+  for (const r of rows) {
+    if (only && !by.has(r.bucket)) continue;
+    const x = by.get(r.bucket) ?? { bucket: r.bucket, calls: 0, leads: 0, opr: 0, quotes: 0, warming: 0 };
+    x.calls += r.calls; x.leads += r.leads; x.opr += r.opr; x.quotes += r.quotes; x.warming += r.warming;
+    by.set(r.bucket, x);
+  }
+  return [...by.values()].sort((a, b) => a.bucket.localeCompare(b.bucket));
+}
+
+/** Рядок людини в одиниці — у формі відповіді, явними полями (без команди). */
+export function personBucketWire(r: LeadgenPersonBucketRow):
+  { bucket: string; managerId: number; calls: number; leads: number; opr: number; quotes: number; warming: number } {
+  return { bucket: r.bucket, managerId: r.managerId, calls: r.calls, leads: r.leads, opr: r.opr, quotes: r.quotes, warming: r.warming };
+}
+
+export interface TrendMoneyBucket {
+  bucket: string; totals: LeadgenHandoffMoney; byPerson: { managerId: number; money: LeadgenHandoffMoney }[];
+}
+export interface TrendAssembly { monthStarts: string[]; byPerson: LeadgenPersonBucketRow[]; money: TrendMoneyBucket[] }
+
+/**
+ * 📈 ЗБІРКА ТРЕНДУ: кожен місяць — ОКРЕМИЙ період `/leadgen-stats`.
+ *  • лічильники й дзвінки — `mergeBucketRows(…, true)`: ростер свій на місяць;
+ *  • гроші з передач — `handoffView` над передачами ЛИШЕ цього місяця: вибір передачі й «та сама
+ *    угода» в межах місяця, як у `/leadgen-stats` того місяця (угода менеджера, до якої привели
+ *    передачі двох різних місяців, рахується в кожному з них — бо кожен місяць свій період);
+ *  • місяць, що цілком лежить до першої події журналу (`firstDay`), не звітується: база його не
+ *    памʼятає, «0» там був би вигадкою (♾ правило 17). `firstDay = null` — подій немає зовсім.
+ * Вхід — рядки запитів за ВСЕ вікно у формі з місяцем; `#682` вимагає, щоб кожен місяць збігався
+ * з тією самою збіркою над одним цим місяцем.
+ */
+export function assembleTrend<T extends HandoffEntry>(input: {
+  monthStarts: readonly string[]; stages: readonly StageBucketRow[]; calls: readonly CallBucketRow[];
+  links: readonly T[]; states: ReadonlyMap<number, DealState>; firstDay: string | null; scope: HandoffScope;
+}): TrendAssembly {
+  const { firstDay, scope } = input;
+  const monthStarts = firstDay == null ? [] : input.monthStarts.filter((m) => m.slice(0, 7) >= firstDay.slice(0, 7));
+  const byPerson = mergeBucketRows(input.stages, input.calls, true).filter((r) => inScope(scope, r.teamId, r.managerId));
+  const money = monthStarts.map((ms): TrendMoneyBucket => {
+    const ym = ms.slice(0, 7);
+    const v = handoffView(input.links.filter((l) => l.day.slice(0, 7) === ym), input.states, scope);
+    return { bucket: ms, totals: v.totals, byPerson: v.byPerson };
+  });
+  return { monthStarts, byPerson, money };
 }
 
 // ─────────────────────── ПАРАМЕТРИ ЗАПИТІВ ЕКРАНА ЛІДОГЕНУ ───────────────────────

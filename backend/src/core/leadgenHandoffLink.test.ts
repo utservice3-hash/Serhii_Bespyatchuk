@@ -326,3 +326,78 @@ test("#683b ЖИВИЙ SQL: стан угоди менеджера — успі�
   const kinds = new Set(cases.map((c) => c.want));
   assert.deepEqual([...kinds].sort(), ["expect", "lost", "paid", "success", "work"], "фікстура не покриває всіх класів");
 });
+
+/**
+ * #682b — МІСЯЦЬ ТРЕНДУ == `/leadgen-stats` + ГРОШІ ТОГО МІСЯЦЯ, НА ЖИВОМУ SQL (ревʼю F2).
+ *
+ * `#676b` звіряв лише чотири лічильники стадій двома формами одного запиту. Тут — СПРАВЖНІ
+ * `leadgenTrend`, `leadgenStats` і `leadgenHandoffMoney` через пул ядра: для кожного місяця вікна
+ * рядки людей тренду (з ДЗВІНКАМИ) == рядкам `leadgenStats` того місяця, а гроші тренду ==
+ * `leadgenHandoffMoney` того місяця, у відділі й у команді. Фікстура тримає обидві пастки ревʼю:
+ * людина 4 дзвонить у травні без жодної події стадій у травні; угоду менеджера привели передачі
+ * 30.04 23:59:30 і 01.05 00:00:30 за Києвом (різні місяці, одне вікно звʼязку).
+ * 🧨 САБОТАЖ: в `assembleTrend` ростер на все вікно (`true` → `false`) → червоніє; дедуп над
+ * передачами всього вікна → червоніє; у `leadgenTrend` передачі лише за місяць `to` → червоніє.
+ */
+test("#682b ЖИВИЙ SQL: місяць тренду == /leadgen-stats і гроші з передач того місяця — з дзвінками, у відділі й команді", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { stats } = await core();
+  await client!.query(`INSERT INTO teams (id, name) VALUES (3, 'Лідоген-3'), (4, 'Лідоген-4')`);
+  await client!.query(`INSERT INTO managers (id, name, team_id) VALUES (4,'Лідген Г',3),(5,'Лідген Д',3),(6,'Лідген Е',4)`);
+  const T = utc("2026-04-30T20:59:30");                                  // 30.04 23:59:30 за Києвом
+  const p1 = await deal({ manager: 4, pipeline: PZ, ck: "tr-a" });
+  await ev(p1, PZ, LEADGEN_STAGE_IDS.taken, utc("2026-04-10T07:00:00"));
+  await ev(p1, PZ, Q, T);                                                // передача квітня
+  const p2 = await deal({ manager: 5, pipeline: PZ, ck: "tr-a" });
+  await ev(p2, PZ, LEADGEN_STAGE_IDS.taken, utc("2026-05-02T07:00:00"));
+  await ev(p2, PZ, Q, sec(T, 60));                                       // 01.05 00:00:30 — передача травня
+  const x = await deal({ manager: 3, pipeline: FC[0], status: 142, ck: "tr-a", created: sec(T, 55) });
+  await client!.query(`UPDATE deals SET price = 10000, closed_at_kommo = $2 WHERE kommo_id = $1`, [x, utc("2026-05-20T10:00:00")]);
+  const p3 = await deal({ manager: 4, pipeline: PZ, ck: null });
+  await ev(p3, PZ, LEADGEN_STAGE_IDS.taken, utc("2026-06-05T07:00:00"));
+  const p4 = await deal({ manager: 6, pipeline: PZ, ck: null });
+  await ev(p4, PZ, LEADGEN_STAGE_IDS.taken, utc("2026-06-09T07:00:00"));
+  await ev(p4, PZ, Q, utc("2026-06-10T07:00:00"));                       // без ключа — без угоди
+  const p5 = await deal({ manager: 6, pipeline: PZ, ck: "tr-b" });
+  await ev(p5, PZ, Q, utc("2026-06-15T07:00:00"));
+  await deal({ manager: 3, pipeline: QUAL, status: 69716164, ck: "tr-b", created: utc("2026-06-15T07:00:03") });
+  let n = 0;
+  for (const [m, when, type, billsec] of [
+    [4, "2026-04-11T08:00:00", "out", 30], [4, "2026-05-15T08:00:00", "out", 60],   // травень: подій у 4 немає
+    [5, "2026-05-03T08:00:00", "out", 25], [5, "2026-05-03T09:00:00", "out", 5],    // 5 с — не успішний
+    [6, "2026-06-09T10:00:00", "in", 100], [6, "2026-06-10T10:00:00", "out", 40],   // вхідний — не рахується
+  ] as [number, string, string, number][]) {
+    await client!.query(`INSERT INTO ringostat_calls (uniqueid, calldate, call_type, billsec, manager_id) VALUES ($1,$2,$3,$4,$5)`,
+      [`tr-${n++}`, utc(when), type, billsec, m]);
+  }
+
+  const MONTHS: [string, string][] = [["2026-04-01", "2026-04-30"], ["2026-05-01", "2026-05-31"], ["2026-06-01", "2026-06-30"]];
+  const shape = (r: { managerId: number; calls: number; leads: number; opr: number; quotes: number; warming: number }) =>
+    [r.managerId, r.calls, r.leads, r.opr, r.quotes, r.warming];
+  let compared = 0;
+  for (const scope of [{ teamId: null, managerId: null }, { teamId: 3, managerId: null }]) {
+    const trend = await stats.leadgenTrend("2026-06-30", 3, scope);
+    assert.deepEqual(trend.monthStarts, MONTHS.map((m) => m[0]), "журнал памʼятає всі три місяці — порівнювати є що");
+    for (const [ms, me] of MONTHS) {
+      const s = await stats.leadgenStats(ms, me);
+      const want = s.rows.filter((r) => scope.teamId == null || r.teamId === scope.teamId).map(shape).sort();
+      const got = trend.byPerson.filter((r) => r.bucket === ms).map(shape).sort();
+      assert.deepEqual(got, want, `🔴 ${ms} (команда ${scope.teamId}): рядки тренду ≠ /leadgen-stats того місяця`);
+      const hm = await stats.leadgenHandoffMoney(ms, me, scope);
+      const tm = trend.money.find((b) => b.bucket === ms);
+      assert.deepEqual(tm?.totals, hm.totals, `🔴 ${ms} (команда ${scope.teamId}): гроші тренду ≠ /leadgen-stats того місяця`);
+      assert.deepEqual(tm?.byPerson, hm.byPerson, `🔴 ${ms} (команда ${scope.teamId}): гроші людей тренду ≠ того місяця`);
+      compared += want.length;
+    }
+    // Фікстура не вироджена: обидві пастки ревʼю справді присутні в даних.
+    const may = await stats.leadgenStats("2026-05-01", "2026-05-31");
+    assert.ok(!may.rows.some((r) => r.managerId === 4), "фікстура: у травні людина 4 без подій");
+    const money = (ms: string) => trend.money.find((b) => b.bucket === ms)!.totals;
+    assert.equal(money("2026-04-01").success.n, 1, "фікстура: квітнева передача веде в успішну угоду");
+    assert.equal(money("2026-05-01").success.n, 1, "🔴 травнева передача в ту саму угоду стала «тією самою» — дедуп вийшов за місяць");
+  }
+  assert.ok(compared >= 5, "фікстура вироджена — порівнювати нема чого");
+  const jun = (await stats.leadgenTrend("2026-06-30", 3, { teamId: null, managerId: null })).money[2].totals;
+  assert.equal(jun.unlinked, 1, "фікстура: червнева передача без ключа — без угоди");
+  assert.equal(jun.work.n, 1, "фікстура: червнева передача в Кваліфікацію — «в роботі»");
+});
