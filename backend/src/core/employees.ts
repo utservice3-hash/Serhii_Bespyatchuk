@@ -227,7 +227,7 @@ export async function updateEmployee(db: Db, actorId: number, id: number, body: 
             dismissed_at::text AS dismissed_at, dismiss_reason, note, status FROM employees WHERE id = $1 FOR UPDATE`, [id])).rows[0];
   if (!cur) throw new ImportError(404, "Співробітника не знайдено");
   // 🚪 Звільнення кнопками (`core/offboarding.ts`) веде статус і дату саме: правка форми обійшла б
-  // стан менеджера й акаунт. Тримає #612.
+  // стан менеджера й акаунт. Тримає #622.
   const offboarding = !!(await db.query(`SELECT 1 FROM employee_offboarding WHERE employee_id = $1`, [id])).rowCount;
   const next: Record<string, unknown> = {};
   for (const k of EDITABLE) {

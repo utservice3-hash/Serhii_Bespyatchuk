@@ -15,7 +15,7 @@
  * що й після зміни в Налаштуваннях. Людина без картки менеджера синком не зачіпається — їй `users.is_active`.
  *
  * ⚠️ Уже відкрита сесія живе до кінця токена (до 12 год) — межа `loginEnabledFor`, не наша.
- * Тримають #610–#612.
+ * Тримають #620–#622.
  */
 import { parseDate, ImportError } from "./employeeImport.js";
 import type { Db } from "./secrets.js";
