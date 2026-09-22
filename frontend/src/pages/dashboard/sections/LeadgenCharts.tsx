@@ -5,6 +5,7 @@ import type { LeadgenStatsResp, LeadgenTrendResp, LeadgenGrain, LeadgenBucket, L
 import { formatAmountFull } from "../format";
 import { COLORS } from "./StatisticsChartsSection";
 import { unitsOf, fillBuckets, bucketLabel } from "./LeadgenPersonRow";
+import { monthEnd } from "../periodRules";
 
 const MUTED = "var(--text-muted)";
 /** Кольори показників — з палітри «Статистик», однакові на всіх трьох графіках. */
@@ -40,6 +41,11 @@ const seriesMax = (rows: { success: number; pipe: number }[]) => Math.max(0, ...
 const moneyTip = (v: unknown, name: unknown) => [formatAmountFull(Number(v)), String(name)] as [string, string];
 const MON = ["січ", "лют", "бер", "кві", "тра", "чер", "лип", "сер", "вер", "жов", "лис", "гру"];
 const n = (v: number) => v.toLocaleString("uk-UA");
+/**
+ * Місяць `ym` («2026-09») перетинає період. Кінець місяця — з КАЛЕНДАРЯ (`monthEnd`), а не
+ * рядком «-31»: день місяця, зашитий літералом, — клас дефекту `#239` (у вересні 30 днів).
+ */
+const monthTouches = (ym: string, p: { from: string; to: string }) => ym + "-01" <= p.to && p.from <= monthEnd(ym + "-01");
 
 /**
  * 📊 ЗАГАЛЬНА СТАТИСТИКА (прохання 22.09.2026) — три графіки над рядками людей:
@@ -165,7 +171,7 @@ function Trend({ trend, trendErr, who, scopeName, period, today }: {
   });
   const overMonths = rows.filter((r) => r.over).map((r) => r.label);
   // Підсвітка місяців, що перетинають обраний період.
-  const sel = rows.filter((r) => r.ym + "-01" <= period.to && period.from <= r.ym + "-31").map((r) => r.label);
+  const sel = rows.filter((r) => monthTouches(r.ym, period)).map((r) => r.label);
   return (
     <div className="chart-card">
       <h2 className="chart-title" style={{ marginBottom: 2 }}>Тренд за 12 місяців</h2>
@@ -263,7 +269,7 @@ function MoneyTrend({ trend, trendErr, who, scopeName, period, today }: {
     const m = by.get(ym);
     return { ym, label: `${MON[Number(ym.slice(5, 7)) - 1]} ${ym.slice(2, 4)}`, m, ...moneyRow(m) };
   });
-  const sel = rows.filter((r) => r.ym + "-01" <= period.to && period.from <= r.ym + "-31").map((r) => r.label);
+  const sel = rows.filter((r) => monthTouches(r.ym, period)).map((r) => r.label);
   const ticks = moneyTicks(seriesMax(rows));
   // Місяці, де понад п'яту частину передач не знайшли угоди менеджера: гроші там занижені, і це треба сказати.
   const blind = rows.filter((r) => r.m && r.m.handoffs > 0 && r.m.unlinked / r.m.handoffs > 0.2)
