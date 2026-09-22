@@ -4088,6 +4088,12 @@ export interface HiringVacancyRow {
   id: number; title: string; position: string | null; opened_by: string | null; responsible: string | null;
   need: number; status: HiringVacancyStatus; close_result: string | null; comment: string | null;
   opened_on: string; closed_on: string | null; candidates: number; days_open: number;
+  /** 💼 Воронка вакансії (22.09.2026) — `backend/src/core/hiringFunnel.ts` `buildVacancyFunnels`; null — кандидатів немає. */
+  funnel: HiringVacancyFunnel | null;
+}
+export interface HiringVacancyFunnel {
+  candidates: number; interviews: number; training: number; managers: number; fresh: number;
+  lastAddedDays: number | null; sources: { label: string; n: number }[];
 }
 
 export interface HiringFile { id: number; name: string; mime: string; size_bytes: number; created: string; author: string | null }

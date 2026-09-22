@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { buildFunnel, buildRefusals, buildCut, reachedRank, type FunnelCandidate } from "./hiringFunnel.js";
+import { buildFunnel, buildRefusals, buildCut, reachedRank, buildVacancyFunnels, type FunnelCandidate } from "./hiringFunnel.js";
 
 /**
  * 📊 ЗВЕДЕННЯ НАЙМУ — воронка (18.09.2026, етап 2) — гейти `#573`–`#575`.
@@ -93,5 +93,58 @@ test("#575 ЖИВИЙ SQL: зведення — київські межі пер
     assert.equal((await hiringSummary(db, { from: "2026-08-01", to: "2026-09-30", source: "work.ua" })).total, 1, "🔴 фільтр джерела");
     await assert.rejects(hiringSummary(db, { from: "2026-09-30", to: "2026-09-01" }), (e: unknown) => (e as { status?: number }).status === 400);
     void late;
+  } finally { await c.end(); s.dispose(); }
+});
+
+/**
+ * #626 — ВОРОНКА ВАКАНСІЇ (22.09.2026, нова вкладка «Вакансії»): «дійшов» за найдальшим етапом, як у «Зведенні»;
+ * кандидат на двох вакансіях — у кожній; не зростає вниз; «нових без контакту» — лише статус «новий» зараз;
+ * Σ джерел == кандидатам; останній доданий — найменше число днів. Вакансія без кандидатів — відсутня (екран пише «—»).
+ * 🧨 Червоніє, якщо рахувати за поточним статусом, а не за найдальшим етапом, або звести кандидата до однієї вакансії.
+ */
+test("#626 ВОРОНКА ВАКАНСІЇ: дійшов за найдальшим етапом, кандидат на двох — у кожній, нові без контакту — лише «новий»", () => {
+  const A = { id: 1, title: "A" }, B = { id: 2, title: "B" };
+  const cs = [
+    { ...C(1, "manager", ["new", "planned", "done", "lead", "candidate", "training", "manager"], { vacancies: [A] }), added_days: 30 },
+    { ...C(2, "refused", ["new", "contacted", "planned", "done", "lead", "candidate", "training"], { vacancies: [A, B] }), added_days: 12 },
+    { ...C(3, "noshow", ["new", "planned", "noshow"], { vacancies: [A], source: null }), added_days: 5 },
+    { ...C(4, "new", [], { vacancies: [A, B] }), added_days: 2 },
+  ];
+  const f = buildVacancyFunnels(cs);
+  assert.deepEqual([f[1].candidates, f[1].interviews, f[1].training, f[1].managers], [4, 2, 2, 1], "🔴 воронка вакансії A: " + JSON.stringify(f[1]));
+  assert.deepEqual([f[2].candidates, f[2].interviews, f[2].training, f[2].managers], [2, 1, 1, 0], "🔴 кандидат на двох вакансіях не в кожній");
+  assert.equal(f[1].fresh, 1, "🔴 «нових без контакту» — не лише статус «новий»");
+  assert.equal(f[1].lastAddedDays, 2, "🔴 останній доданий — не найсвіжіший");
+  assert.equal(f[1].sources.reduce((a, x) => a + x.n, 0), f[1].candidates, "🔴 Σ джерел ≠ кандидатам");
+  assert.ok(f[1].sources.some((x) => x.label === "джерело не вказано"), "невідоме джерело видно словами");
+  assert.equal(f[3], undefined, "дзеркало: вакансії без кандидатів у мапі немає");
+});
+
+/**
+ * #627 — ЖИВИЙ SQL: кандидатів у воронці вакансії рівно стільки, скільки в колонці «Кандидатів» списку вакансій
+ * (`listVacancies`, повʼязки кандидат × вакансія) — для кожної вакансії, одним прогоном по тих самих даних.
+ * 🧨 Червоніє, якщо воронка бере інший всесвіт кандидатів (період, статус), ніж список.
+ */
+test("#627 ЖИВИЙ SQL: воронка вакансії == колонці «Кандидатів» списку вакансій", async (t) => {
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const s = provisionScratch();
+  if ("unavailable" in s) { t.skip(skipReason(s)); return; }
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: s.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+    const db = c as unknown as import("./secrets.js").Db;
+    const h = await import("./hiring.js");
+    const { vacancyFunnels } = await import("./hiringFunnel.js");
+    const v1 = await h.createVacancy(db as unknown as import("./hiring.js").Db, null, { title: "Менеджер з продажу" });
+    const v2 = await h.createVacancy(db as unknown as import("./hiring.js").Db, null, { title: "Логіст" });
+    const a = await h.createCandidate(db as unknown as import("./hiring.js").Db, null, { fullName: "Перша", phone: "0501110001", vacancyId: v1 });
+    await h.createCandidate(db as unknown as import("./hiring.js").Db, null, { fullName: "Друга", phone: "0501110002", vacancyId: v1 });
+    await c.query(`INSERT INTO hiring_candidate_vacancies (candidate_id, vacancy_id) VALUES ($1, $2)`, [a, v2]);
+    await c.query(`UPDATE hiring_candidates SET created_at = now() - interval '400 days' WHERE id = $1`, [a]); // давній кандидат — теж у всесвіті
+    const [list, f] = [await h.listVacancies(db as unknown as import("./hiring.js").Db, "all"), await vacancyFunnels(db)];
+    for (const v of list as { id: number; candidates: number }[]) assert.equal(f[v.id]?.candidates ?? 0, v.candidates, `🔴 вакансія ${v.id}: воронка ≠ списку`);
+    assert.deepEqual([f[v1].candidates, f[v2].candidates, f[v1].fresh], [2, 1, 2], "дзеркало: є що порівнювати");
   } finally { await c.end(); s.dispose(); }
 });
