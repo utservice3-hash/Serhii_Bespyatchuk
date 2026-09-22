@@ -117,6 +117,9 @@ export function LeadgenMoneyDetails({ period, managerId, summary }: {
   if (t.handoffs === 0) return <Box><span style={{ color: MUTED }}>💰 За цей період передач немає — і грошей з них теж.</span></Box>;
 
   const diff = summary ? FIELDS.find(([, f]) => f(summary) !== f(t)) : undefined;
+  // Рядок без грошей («—») при непорожньому списку — теж розбіжність, а не «звіряти нема з чим»: передачі
+  // людини == її прорахунки (правило 1), тож людина з передачами мусить мати гроші в рядку. Причини не вигадуємо.
+  const noSummary = !summary;
   // Кнопки станів рахують те, що зараз у списку: з фільтром менеджера — лише його угоди.
   const scoped = sales == null ? data.deals : data.deals.filter((d) => (d.salesManager ?? NO_SALES) === sales);
   const of = (k: LeadgenDealClass) => scoped.filter((d) => d.cls === k);
@@ -144,6 +147,11 @@ export function LeadgenMoneyDetails({ period, managerId, summary }: {
       {diff && (
         <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "var(--warn)" }}>
           ⚠ Список не збігся з числом у рядку ({diff[0]} — {n(diff[1](t))} у списку проти {n(diff[1](summary!))} у рядку): угоди в CRM змінились між двома запитами. Оновіть сторінку.
+        </p>
+      )}
+      {noSummary && (
+        <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "var(--warn)" }}>
+          ⚠ Список не збігся з рядком: у рядку грошей з передач немає, а в списку — {n(t.handoffs)} {plural(t.handoffs, "передача", "передачі", "передач")}. Оновіть сторінку; якщо не зникне — це розбіжність дашборду.
         </p>
       )}
 
