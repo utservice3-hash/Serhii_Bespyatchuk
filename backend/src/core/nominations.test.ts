@@ -12,6 +12,21 @@ import {
   NOMINATIONS, type Ranked,
 } from "./nominationRules.js";
 
+/**
+ * Тиждень для ЖИВОЇ звірки (#600, #658): лише чернетка. Зафіксований тиждень тримає числа вівторка 08:00,
+ * а Звіт і розкриття рахують CRM зараз — порівнювати їх означало б червоніти без дефекту з вт по нд
+ * (ревʼю 22.09.2026). Тож: минулий тиждень, поки він чернетка (пн — вт 08:00), інакше поточний.
+ */
+async function draftWeekForLiveCheck(H: { headers: Record<string, string> }): Promise<{ from: string; to: string; body: unknown }> {
+  for (const w of [lastWeek(new Date()), weekOf(kyivDate(new Date()))]) {
+    const r = await fetch(`${API_BASE}/api/nominations/week?weekFrom=${w.from}`, H);
+    assert.equal(r.status, 200, `🔴 /nominations/week віддав ${r.status}`);
+    const body = await r.json() as { state: string };
+    if (body.state === "draft") return { ...w, body };
+  }
+  throw new Error("🔴 і минулий, і поточний тиждень зафіксовані — так не буває: поточний ще триває");
+}
+
 const SRC = (p: string) => fileURLToPath(new URL(`../${p}`, import.meta.url).href.replace("/dist/", "/src/"));
 
 /* ─────────────────────────── #600 джерело чисел ─────────────────────────── */
@@ -25,16 +40,12 @@ const SRC = (p: string) => fileURLToPath(new URL(`../${p}`, import.meta.url).hre
 test("#600 результат і авто номінацій == «Факт» і «Авто» Звіту за той самий тиждень", needsApi(), async () => {
   const { signToken } = await import("../auth/auth.js");
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
-  const { from, to } = lastWeek(new Date());
   const H = { headers: { Authorization: `Bearer ${token}` } };
-  const [nr, rr] = await Promise.all([
-    fetch(`${API_BASE}/api/nominations/week?weekFrom=${from}`, H),
-    fetch(`${API_BASE}/api/dashboard/report-plan?from=${from}&to=${to}`, H),
-  ]);
-  assert.equal(nr.status, 200, `🔴 /nominations/week віддав ${nr.status}`);
+  const { from, to, body } = await draftWeekForLiveCheck(H);
+  const rr = await fetch(`${API_BASE}/api/dashboard/report-plan?from=${from}&to=${to}`, H);
   assert.equal(rr.status, 200, `🔴 /report-plan віддав ${rr.status}`);
   type Cell = { nomination: string; crm: Ranked };
-  const nom = await nr.json() as { teams: { teamId: number; members: { id: number }[]; cells: Cell[] }[] };
+  const nom = body as { teams: { teamId: number; members: { id: number }[]; cells: Cell[] }[] };
   const rep = await rr.json() as { managers: { managerId: number; fact: number; kpi: { dispatch: { fact: number } } }[] };
   const byId = new Map(rep.managers.map((m) => [m.managerId, m]));
   assert.ok(nom.teams.length >= 2, "🔴 у заліку менше двох команд — звіряти нічого");
@@ -169,12 +180,12 @@ test("#605b виправлення без причини, переможця а�
 test("#606 рядок знімка тримає фінальне число І число CRM поруч; порожня номінація — рядок без переможця", async () => {
   const { snapshotRows } = await import("./nominationRules.js");
   const view = {
-    weekFrom: "2026-09-14", weekTo: "2026-09-20", state: "draft" as const, frozenAt: null, ruleVersion: "x", freezeDueAt: "",
+    weekFrom: "2026-09-14", weekTo: "2026-09-20", state: "draft" as const, frozenAt: null, ruleVersion: "x", freezeDueAt: "", freezeInstant: "",
     depts: [], names: { 101: "Андрусенко", 102: "Цалко" },
-    teams: [{ teamId: 13, teamName: "РНК", dept: "rnk" as const, members: [], noCostDeals: 2, cells: [
-      { nomination: "cars" as const, crm: { state: "ok" as const, value: 31, winners: [101] }, deal: null,
+    teams: [{ teamId: 13, teamName: "РНК", dept: "rnk" as const, members: [], noCostDeals: 2, leads: [], cells: [
+      { nomination: "cars" as const, crm: { state: "ok" as const, value: 31, winners: [101] }, deal: null, ranking: null, review: null,
         final: { status: "overridden" as const, winners: [102], value: 37, reason: "неділя", stale: false } },
-      { nomination: "intl" as const, crm: { state: "empty" as const }, deal: null,
+      { nomination: "intl" as const, crm: { state: "empty" as const }, deal: null, ranking: null, review: null,
         final: { status: "empty" as const, winners: [] as [], value: null, reason: null, stale: false } },
     ] }],
   };
@@ -272,4 +283,142 @@ test("#614 кожен шаблон слайда має верстку в пре�
   assert.ok(block.length > 100, "🔴 у презентації немає функції templateSlide — гейт втратив предмет");
   const cases = [...block.matchAll(/case "([a-z]+)"/g)].map((m) => m[1]).sort();
   assert.deepEqual(cases, SLIDE_TEMPLATES.map((t) => t.key).sort(), "🔴 набір верстки слайдів ≠ набір шаблонів");
+});
+
+/* ─────────────────────────── зручна вкладка (22.09.2026) ─────────────────────────── */
+
+/**
+ * #652 — РЕЙТИНГ КОМАНДИ: усі учасники; ті, хто набрав, — за спаданням, нічия за id; нуль, сторно й «немає»
+ * — у кінці, але не зникають. Перше місце рейтингу == переможці `rankNominees` (одне означення, не два).
+ * 🧨 Червоніє, якщо сортувати за зростанням, викинути нулі або розвести рейтинг із переможцем.
+ */
+test("#652 рейтинг команди: усі учасники, найкращі зверху, перше місце == переможці", async () => {
+  const { teamRanking } = await import("./nominationRules.js");
+  const cands = [
+    { managerId: 7, value: 5 }, { managerId: 3, value: 9.004 }, { managerId: 5, value: 9 }, { managerId: 9, value: 0 },
+    { managerId: 2, value: -300 }, { managerId: 4, value: null }, { managerId: 8, value: 1 },
+  ];
+  const r = teamRanking(cands);
+  assert.equal(r.length, cands.length, "🔴 рейтинг загубив учасника");
+  assert.deepEqual(r.map((x) => x.managerId), [3, 5, 7, 8, 9, 2, 4], "🔴 порядок рейтингу не той (нічия за id, ненабрані в кінці)");
+  const win = rankNominees(cands);
+  assert.ok(win.state === "ok");
+  const top = r.filter((x) => x.value != null && Math.round(x.value * 100) / 100 === win.value).map((x) => x.managerId).sort((a, b) => a - b);
+  assert.deepEqual(top, win.winners, "🔴 перше місце рейтингу ≠ переможці номінації");
+  assert.deepEqual(teamRanking([{ managerId: 1, value: null }, { managerId: 2, value: 0 }]).map((x) => x.managerId), [2, 1], "🔴 ненабрані зникли або перемішались");
+  // Другий бік нічиєї: більше «сире» значення — у більшого id; після округлення до копійки це нічия → за id.
+  assert.deepEqual(teamRanking([{ managerId: 5, value: 9.004 }, { managerId: 3, value: 9 }]).map((x) => x.managerId), [3, 5], "🔴 нічия розвʼязана шумом float, а не за id");
+});
+
+/**
+ * #653 — РЕЙТИНГ ЇДЕ У ЗНІМОК, А СТАРИЙ ЗНІМОК ЧЕСНО КАЖЕ «НЕ ЗБЕРІГАВСЯ». Рядок знімка несе `extra.ranking`
+ * рівно з клітинки; розбір знімка без рейтингу дає `null`, а не порожній масив і не поточний CRM.
+ */
+test("#653 знімок несе рейтинг; тиждень без рейтингу — null, а не підставлений CRM", async () => {
+  const { snapshotRows, rankingFromExtra } = await import("./nominationRules.js");
+  const ranking = [{ managerId: 101, value: 31 }, { managerId: 102, value: null }];
+  const view = {
+    weekFrom: "2026-09-21", weekTo: "2026-09-27", state: "draft" as const, frozenAt: null, ruleVersion: "x", freezeDueAt: "", freezeInstant: "",
+    depts: [], names: { 101: "А", 102: "Б" },
+    teams: [{ teamId: 13, teamName: "РНК", dept: "rnk" as const, members: [], noCostDeals: 0, leads: [], cells: [
+      { nomination: "cars" as const, crm: { state: "ok" as const, value: 31, winners: [101] }, deal: null, ranking, review: null,
+        final: { status: "unconfirmed" as const, winners: [101], value: 31, reason: null, stale: false } },
+    ] }],
+  };
+  const rows = snapshotRows(view);
+  assert.deepEqual((rows[0].extra as { ranking: unknown }).ranking, ranking, "🔴 рейтинг не потрапив у знімок");
+  assert.deepEqual(rankingFromExtra(rows[0].extra), ranking);
+  assert.equal(rankingFromExtra({ stale: false }), null, "🔴 знімок без рейтингу видав щось замість «не зберігався»");
+  assert.equal(rankingFromExtra(null), null);
+});
+
+/**
+ * #654 — «СКАСУВАТИ» І «ПОГОДИТИСЬ З РЕШТОЮ». Скасування повертає рядок у «чекає» з пропозицією CRM (після
+ * погодження й після своїх даних); на порожньому рядку лишає «порожньо». Тіло: `retract` без полів приймається,
+ * невідома дія — ні; масове — лише непорожній перелік відомих номінацій.
+ * 🧨 Червоніє, якщо `retract` трактувати як `confirm` або якщо «свої дані» переживуть скасування.
+ */
+test("#654 скасування повертає рядок у «чекає»; масове погодження приймає лише відомі номінації", async () => {
+  const { validateBulkConfirm } = await import("./nominationRules.js");
+  const crm: Ranked = { state: "ok", value: 31, winners: [101] };
+  const fp = fingerprint(crm);
+  const retract = { action: "retract" as const, crmFingerprint: fp, overrideManagerIds: null, overrideValue: null, reason: null };
+  assert.equal(applyReview(crm, { action: "confirm", crmFingerprint: fp, overrideManagerIds: null, overrideValue: null, reason: null }).status, "confirmed");
+  const back = applyReview(crm, retract);
+  assert.deepEqual([back.status, back.winners, back.value], ["unconfirmed", [101], 31], "🔴 «Скасувати» не повернуло пропозицію системи");
+  assert.equal(applyReview({ state: "empty" }, retract).status, "empty");
+  const v = validateReview({ weekFrom: "2026-09-14", teamId: 13, nomination: "cars", action: "retract" });
+  assert.ok(v.ok && v.value.action === "retract" && v.value.overrideManagerIds === null);
+  assert.equal(validateReview({ weekFrom: "2026-09-14", teamId: 13, nomination: "cars", action: "undo" }).ok, false, "🔴 невідома дія пройшла");
+  const b = validateBulkConfirm({ weekFrom: "2026-09-14", teamId: 13, nominations: ["cars", "intl", "cars"] });
+  assert.ok(b.ok && b.value.nominations.join() === "cars,intl", "🔴 масове погодження не прибрало дубль");
+  assert.equal(validateBulkConfirm({ weekFrom: "2026-09-14", teamId: 13, nominations: [] }).ok, false, "🔴 порожній перелік пройшов");
+  assert.equal(validateBulkConfirm({ weekFrom: "2026-09-14", teamId: 13, nominations: ["cars", "hack"] }).ok, false, "🔴 невідома номінація пройшла");
+  assert.equal(validateBulkConfirm({ weekFrom: "2026-09-15", teamId: 13, nominations: ["cars"] }).ok, false, "🔴 тиждень не з понеділка пройшов");
+});
+
+/**
+ * #655 — МИТЬ ФІКСАЦІЇ ЯК UTC по обидва боки переходу на зимовий час: вт 20.10.2026 08:00 Києва = 05:00Z
+ * (літній, +03), вт 27.10.2026 08:00 = 06:00Z (зимовий, +02). І ця мить та сама, що в `isFreezeDue`:
+ * у неї — «пора», на мілісекунду раніше — ні. 🧨 «Завжди +3» червоніє на 27.10.
+ */
+test("#655 мить фіксації: вт 08:00 за Києвом влітку й узимку, та сама, що в isFreezeDue", async () => {
+  const { freezeInstant } = await import("./nominationRules.js");
+  assert.equal(freezeInstant("2026-10-12"), "2026-10-20T05:00:00.000Z", "🔴 літній час: вт 08:00 Києва ≠ 05:00Z");
+  assert.equal(freezeInstant("2026-10-19"), "2026-10-27T06:00:00.000Z", "🔴 зимовий час: вт 08:00 Києва ≠ 06:00Z");
+  for (const w of ["2026-09-14", "2026-10-19", "2027-03-22", "2027-03-29"]) {
+    const at = Date.parse(freezeInstant(w));
+    assert.equal(isFreezeDue(w, new Date(at)), true, `🔴 ${w}: у мить фіксації isFreezeDue каже «ще ні»`);
+    assert.equal(isFreezeDue(w, new Date(at - 1)), false, `🔴 ${w}: за мілісекунду до фіксації isFreezeDue каже «пора»`);
+  }
+});
+
+/**
+ * #656 — «РАХУЄМО / НЕ РАХУЄМО» Є В КОЖНОЇ НОМІНАЦІЇ І ЗБІГАЄТЬСЯ З ЧИННИМ ПРАВИЛОМ. Саме розбіжність «авто =
+ * завантажені» проти «авто = угоди в оплаті» дала «21 Цалко» замість 5 (22.09.2026) — тож для «авто» тексти
+ * мусять це називати. 🧨 Червоніє, якщо поле спорожніє або текст «авто» перестане згадувати завантаження/оплату.
+ */
+test("#656 у кожної номінації є «рахуємо / не рахуємо», і для авто вони про завантаження проти оплати", () => {
+  for (const n of NOMINATIONS) {
+    assert.ok(n.rule.trim().length > 10, `🔴 «${n.label}»: порожнє «рахуємо»`);
+    assert.ok(n.notCounted.trim().length > 5, `🔴 «${n.label}»: порожнє «не рахуємо»`);
+  }
+  const cars = NOMINATIONS.find((n) => n.key === "cars")!;
+  assert.match(cars.rule, /завантаж/, "🔴 «авто» більше не каже, що рахуємо за датою завантаження");
+  assert.match(cars.notCounted, /оплат/, "🔴 «авто» більше не каже, що угоди в оплаті не рахуються");
+  assert.match(NOMINATIONS.find((n) => n.key === "marginPct")!.notCounted, /Расход/, "🔴 «% маржі» не каже про угоди без «Расходу 1»");
+});
+
+/**
+ * #658 — «ПОКАЗАТИ УГОДИ» ДАЄ РІВНО ЧИСЛО НОМІНАЦІЇ (жива звірка на ЧЕРНЕТЦІ — див. `draftWeekForLiveCheck`).
+ * Для переможця кожної команди: розкриття «Факту» (`/report-plan/day-items`, kind=received) — Σ == «результат» і
+ * max == «зазор»; розкриття «Авто» (kind=dispatched) — кількість == «авто». Ті самі види, що в `DRILL_KIND` екрана
+ * (його збіг з цими — #650 читає мапу). 🧨 Червоніє, якщо номінацію або розкриття перевести на інше джерело.
+ */
+test("#658 розкриття угод дає рівно число номінації — результат, зазор, авто", needsApi(), async () => {
+  const { signToken } = await import("../auth/auth.js");
+  const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
+  const H = { headers: { Authorization: `Bearer ${token}` } };
+  const { from, to, body } = await draftWeekForLiveCheck(H);
+  const nom = body as { teams: { teamId: number; cells: { nomination: string; crm: Ranked }[] }[] };
+  const off: string[] = [];
+  let compared = 0;
+  const items = async (managerId: number, kind: string) => {
+    const r = await fetch(`${API_BASE}/api/dashboard/report-plan/day-items?managerId=${managerId}&date=${from}&to=${to}&kind=${kind}`, H);
+    assert.equal(r.status, 200, `🔴 day-items ${kind} для ${managerId} віддав ${r.status}`);
+    return await r.json() as { items: { price: number }[]; total: { count: number; sum: number } };
+  };
+  for (const t of nom.teams) {
+    for (const key of ["revenue", "maxDeal", "cars"]) {
+      const c = t.cells.find((x) => x.nomination === key)!;
+      if (c.crm.state !== "ok") continue;
+      const w = c.crm.winners[0];
+      const got = await items(w, key === "cars" ? "dispatched" : "received");
+      const val = key === "revenue" ? got.total.sum : key === "maxDeal" ? Math.max(0, ...got.items.map((i) => i.price)) : got.total.count;
+      compared++;
+      if (Math.abs(val - c.crm.value) >= 1) off.push(`${t.teamId}/${key}/${w}: розкриття ${val} ≠ номінація ${c.crm.value}`);
+    }
+  }
+  assert.ok(compared > 0, "🔴 жодної номінації з переможцем — звіряти нічого, перевірка вироджена");
+  assert.deepEqual(off, [], "🔴 «Показати угоди» не дає числа номінації");
 });

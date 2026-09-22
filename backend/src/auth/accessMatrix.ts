@@ -378,8 +378,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "manager"] },
   /* 📷 Фото співробітників (22.09.2026). Саме фото — будь-кому залогіненому (0 → 400/404, але не 403);
      список і запис — право сейфу `view_employee_secrets`: admin, ceo, opdir, kvp, hr. Запис — deny-only. */
+  /* Кандидату — 403 в самому обробнику, але проба матриці ходить від НЕАКТИВНОГО кандидата, і її раніше відсікає
+     перевірка активності в `requireAuth` (401) — той самий випадок, що `CANDIDATE_401` вище. Тому кандидата тут
+     не пробуємо; відмову активному кандидату доводить `#644` на справжньому HTTP. */
   { method: "GET", path: "/api/people/photo/:employeeId", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: ["candidate"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "GET", path: "/api/people/photos", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
   { method: "POST", path: "/api/people/photo/:employeeId", cls: "deny-only",
@@ -508,6 +511,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // 🗂 Реєстр співробітників + імпорт таблиці (18.09.2026) — у тому ж роутері й за тим самим правом.
   { method: "GET", path: "/api/secrets/employees", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
   { method: "PATCH", path: "/api/secrets/employees/:id", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  // 👤 «+ Співробітник» і розкладання файлів пакета (22.09.2026) — межа роутера `view_employee_secrets`.
+  { method: "POST", path: "/api/secrets/employees", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/secrets/employees/documents/match", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   // 🚪 Звільнення у два кроки й 📎 документи людини (21.09.2026) — межа роутера `view_employee_secrets`.
   { method: "POST", path: "/api/secrets/employees/:id/dismiss", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "POST", path: "/api/secrets/employees/:id/dismiss/finish", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },

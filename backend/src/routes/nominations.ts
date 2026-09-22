@@ -4,7 +4,7 @@ import { requireAuth } from "../auth/middleware.js";
 import { isAdminScope } from "../auth/rbac.js";
 import { nominationWeek, frozenWeek, draftWeek, cellFingerprint, type WeekView } from "../core/nominations.js";
 import { managerPhotos, employeePhotos } from "../core/people.js";
-import { lastWeek, weekOf, canReview, validateReview, validateManualSlide, NOMINATIONS, MARGIN_FLAG_PCT, MANUAL_KINDS, SLIDE_TEMPLATES } from "../core/nominationRules.js";
+import { lastWeek, weekOf, canReview, validateReview, validateBulkConfirm, validateManualSlide, NOMINATIONS, MARGIN_FLAG_PCT, MANUAL_KINDS, SLIDE_TEMPLATES } from "../core/nominationRules.js";
 
 /**
  * 🏆 НОМІНАЦІЇ ТИЖНЯ (21.09.2026). Дві межі, як у найму:
@@ -33,14 +33,14 @@ async function withRights(view: WeekView, v: Viewer) {
   return {
     ...view,
     photos: await managerPhotos(),
-    viewer: { role: v.role, teamId: v.teamId },
+    viewer: { role: v.role, teamId: v.teamId, managerId: v.managerId },
     // Підписи й одиниці — з одного місця (`NOMINATIONS`), щоб на фронті не жила друга копія.
     defs: NOMINATIONS, marginFlagPct: MARGIN_FLAG_PCT,
     teams: view.teams.map((t) => ({
       ...t,
       cells: t.cells.map((c) => {
         const r = view.state === "frozen" ? { ok: false as const, why: "тиждень зафіксовано" }
-          : canReview(v, { teamId: t.teamId, crmWinners: c.crm.state === "ok" ? c.crm.winners : [] });
+          : canReview(v, { teamId: t.teamId, crmWinners: c.crm.state === "ok" ? c.crm.winners : [], overrideManagerIds: c.final.status === "overridden" ? c.final.winners : null });
         return { ...c, canReview: r.ok, whyNot: r.ok ? null : r.why };
       }),
     })),
@@ -63,9 +63,16 @@ nominationsRouter.get("/week", safe(async (req: Request, res: Response) => {
   res.json(await withRights(await nominationWeek(weekFrom, v.teamId), v));
 }));
 
+/**
+ * Рішення по рядку: `confirm` («Погоджуюсь»), `override` («Свої дані»: переможець, число, звідки воно),
+ * `retract` («Скасувати» — рядок знову чекає; історія лише дописується). З `nominations: [...]` замість
+ * `nomination` — «Погодитись з рештою»: сервер сам бере лише ті рядки, де є пропозиція системи, рішення
+ * ще немає й дозволено `canReview`, і пише їх ОДНІЄЮ транзакцією.
+ */
 nominationsRouter.post("/review", safe(async (req: Request, res: Response) => {
   const v = viewerOf(req);
   if (!v) return res.status(403).json({ error: "Номінації тижня — для тімлідів і керівництва" });
+  if (Array.isArray((req.body as { nominations?: unknown } | undefined)?.nominations)) return bulkConfirm(req, res, v);
   const parsed = validateReview(req.body);
   if (!parsed.ok) return res.status(400).json({ error: parsed.error });
   const b = parsed.value;
@@ -74,10 +81,15 @@ nominationsRouter.post("/review", safe(async (req: Request, res: Response) => {
   const team = draft.teams.find((t) => t.teamId === b.teamId);
   if (!team) return res.status(404).json({ error: "Команди немає в заліку" });
   const cell = team.cells.find((c) => c.nomination === b.nomination)!;
-  const right = canReview(v, { teamId: b.teamId, crmWinners: cell.crm.state === "ok" ? cell.crm.winners : [], overrideManagerIds: b.overrideManagerIds });
+  // Переможці «своїх даних», що вже стоять, теж рахуються: тімлід не скасує й не «поверне» рішення керівництва про себе.
+  const right = canReview(v, { teamId: b.teamId, crmWinners: cell.crm.state === "ok" ? cell.crm.winners : [],
+    overrideManagerIds: [...(b.overrideManagerIds ?? []), ...(cell.final.status === "overridden" ? cell.final.winners : [])] });
   if (!right.ok) return res.status(403).json({ error: right.why });
   if (b.overrideManagerIds && !b.overrideManagerIds.every((id) => team.members.some((m) => m.id === id))) {
     return res.status(400).json({ error: "переможець мусить бути менеджером цієї команди в заліку" });
+  }
+  if (b.action === "retract" && (!cell.review || cell.review.action === "retract")) {
+    return res.status(409).json({ error: "Скасовувати нічого: рішення по цьому рядку ще немає" });
   }
   // Відбиток CRM пише СЕРВЕР, з власного розрахунку в цю мить, а не з тіла запиту.
   await pool.query(
@@ -86,6 +98,34 @@ nominationsRouter.post("/review", safe(async (req: Request, res: Response) => {
     [b.weekFrom, b.teamId, b.nomination, b.action, cellFingerprint(cell), b.overrideManagerIds, b.overrideValue, b.reason, req.auth!.userId]);
   res.json(await withRights(await draftWeek(b.weekFrom, v.teamId), v));
 }));
+
+async function bulkConfirm(req: Request, res: Response, v: Viewer) {
+  const parsed = validateBulkConfirm(req.body);
+  if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+  const b = parsed.value;
+  if (await frozenWeek(b.weekFrom)) return res.status(409).json({ error: "Тиждень уже зафіксовано — змінити неможливо" });
+  const draft = await draftWeek(b.weekFrom);
+  const team = draft.teams.find((t) => t.teamId === b.teamId);
+  if (!team) return res.status(404).json({ error: "Команди немає в заліку" });
+  const todo = team.cells.filter((c) => b.nominations.includes(c.nomination) && c.crm.state === "ok"
+    && c.final.status === "unconfirmed" && canReview(v, { teamId: b.teamId, crmWinners: c.crm.state === "ok" ? c.crm.winners : [] }).ok);
+  const conn = await pool.connect();
+  try {
+    await conn.query("BEGIN");
+    for (const c of todo) {
+      await conn.query(
+        `INSERT INTO nomination_reviews (week_from, team_id, nomination, action, crm_fingerprint, user_id) VALUES ($1,$2,$3,'confirm',$4,$5)`,
+        [b.weekFrom, b.teamId, c.nomination, cellFingerprint(c), req.auth!.userId]);
+    }
+    await conn.query("COMMIT");
+  } catch (e) {
+    await conn.query("ROLLBACK").catch(() => undefined);
+    throw e;
+  } finally {
+    conn.release();
+  }
+  res.json({ ...(await withRights(await draftWeek(b.weekFrom, v.teamId), v)), bulk: { confirmed: todo.map((c) => c.nomination) } });
+}
 
 /**
  * 🎞 РУЧНІ СЛАЙДИ ПРЕЗЕНТАЦІЇ (прохід 2): новачки, дні народження, новини, довільні. Лише

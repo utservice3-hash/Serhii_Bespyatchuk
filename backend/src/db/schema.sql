@@ -3815,6 +3815,16 @@ CREATE TABLE IF NOT EXISTS nomination_reviews (
                                  AND length(btrim(COALESCE(reason, ''))) >= 3))
 );
 CREATE INDEX IF NOT EXISTS ix_nomination_reviews_week ON nomination_reviews(week_from, team_id, nomination, id);
+-- «Скасувати» (22.09.2026): рядок знову чекає. Нова дія, а не видалення — історія лише дописується,
+-- тригер незмінності не чіпаємо. ⚠️ Змінюємо ОБИДВА CHECK: другий (поля виправлення) інакше відкидав би
+-- `retract` так само, як перший. Імена — автоматичні імена Postgres для цих CHECK; DROP IF EXISTS ідемпотентний.
+ALTER TABLE nomination_reviews DROP CONSTRAINT IF EXISTS nomination_reviews_action_check;
+ALTER TABLE nomination_reviews DROP CONSTRAINT IF EXISTS nomination_reviews_check;
+ALTER TABLE nomination_reviews DROP CONSTRAINT IF EXISTS nomination_reviews_action_kind;
+ALTER TABLE nomination_reviews ADD CONSTRAINT nomination_reviews_action_kind CHECK (
+  action IN ('confirm','retract')
+  OR (action = 'override' AND cardinality(override_manager_ids) > 0 AND override_value IS NOT NULL
+      AND length(btrim(COALESCE(reason, ''))) >= 3));
 
 -- Зафіксований результат: рядок на (команда, номінація, переможець); порожня номінація — один рядок
 -- без переможця. Поруч ЗАВЖДИ лежать число й переможці CRM, навіть коли фінальне виправлено руками.
@@ -3918,3 +3928,9 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_file TEXT;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_prev TEXT;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_updated_at TIMESTAMPTZ;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+
+-- 👤 «+ СПІВРОБІТНИК» І ЗАПИС ІЗ НАЙМУ (22.09.2026, питання Івана «як додати нового співробітника»). Кандидат,
+-- що став «Менеджер», зʼявляється в реєстрі сам; `candidate_id` — звідки прийшов (одна людина реєстру на
+-- кандидата). ⚠️ revert коду колонку не прибирає; дані без неї не губляться.
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS candidate_id INTEGER REFERENCES hiring_candidates(id) ON DELETE SET NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_employees_candidate ON employees(candidate_id) WHERE candidate_id IS NOT NULL;

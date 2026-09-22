@@ -35,6 +35,11 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && localStorage.getItem("token")) {
       localStorage.removeItem("token");
       if (window.location.pathname !== "/login") {
+        // Той самий запис «куди повернути», що в RequireAuth (App.tsx): лише власний шлях застосунку.
+        const here = window.location.pathname + window.location.search;
+        if (here.startsWith("/") && !here.startsWith("//") && here !== "/") {
+          try { sessionStorage.setItem("afterLogin", here); } catch { /* без повернення */ }
+        }
         window.location.href = "/login";
       }
     }
@@ -4389,6 +4394,11 @@ export interface EmployeeDoc {
   size_bytes: number | null; version: number; created_at: string; archived_at: string | null; deleted_at: string | null; author: string | null; signed: boolean;
 }
 export const fetchEmployeeDocs = async (id: number) => (await api.get<{ files: EmployeeDoc[] }>(`/secrets/employees/${id}/documents`)).data.files;
+// 👤 «+ Співробітник» і 📎 розкладання файлів пакета по людях (22.09.2026) — `backend/src/core/employeeAdd.ts`.
+export interface NewEmployee { full_name: string; position?: string; team_label?: string; phone?: string; email?: string; telegram?: string; hired_at?: string; birth_date?: string }
+export const createEmployee = async (b: NewEmployee) => (await api.post<{ id: number }>("/secrets/employees", b)).data.id;
+export interface EmployeeFileMatch { file: string; employeeId: number | null; how: "name" | "none" | "ambiguous"; candidates: number[] }
+export const matchEmployeeFiles = async (files: string[]) => (await api.post<{ rows: EmployeeFileMatch[] }>("/secrets/employees/documents/match", { files })).data.rows;
 export async function uploadEmployeeDoc(id: number, file: File, kind: string): Promise<void> {
   const dataBase64 = await new Promise<string>((resolve, reject) => {
     const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = () => reject(r.error); r.readAsDataURL(file);
@@ -4411,26 +4421,41 @@ export const commitEmployeeImport = async (csv: string, mapping: string[], sheet
 export type NominationKey = "maxDeal" | "cars" | "revenue" | "marginPct" | "intl";
 export type NominationRanked = { state: "ok"; value: number; winners: number[] } | { state: "empty" };
 export interface NominationFinal { status: "confirmed" | "unconfirmed" | "overridden" | "empty"; winners: number[]; value: number | null; reason: string | null; stale: boolean }
+export type NominationAction = "confirm" | "override" | "retract";
 export interface NominationCell {
   nomination: NominationKey; crm: NominationRanked; final: NominationFinal;
-  deal: { id: number; price?: number; cost?: number } | null;
+  deal: { id: number; price?: number; cost?: number; url?: string } | null;
+  /** Рейтинг команди з CRM; `null` — тиждень зафіксовано до 22.09.2026, рейтинг тоді не зберігався. */
+  ranking: { managerId: number; value: number | null }[] | null;
+  /** Останнє рішення: хто й коли (лише чернетка). */
+  review: { action: NominationAction; by: string | null; at: string } | null;
   canReview: boolean; whyNot: string | null;
 }
-export interface NominationTeam { teamId: number; teamName: string; dept: "rpk" | "rnk"; members: { id: number; name: string }[]; noCostDeals: number; cells: NominationCell[] }
+export interface NominationTeam {
+  teamId: number; teamName: string; dept: "rpk" | "rnk"; members: { id: number; name: string }[]; noCostDeals: number; cells: NominationCell[];
+  leads: { managerId: number | null; name: string }[];
+}
 export interface NominationDept { dept: "rpk" | "rnk"; nomination: NominationKey; state: "ok" | "empty"; value: number | null; winners: number[]; teams: number[] }
 export interface NominationWeek {
   weekFrom: string; weekTo: string; state: "draft" | "frozen"; frozenAt: string | null; ruleVersion: string; freezeDueAt: string;
+  /** Мить фіксації як UTC — для зворотного відліку. */
+  freezeInstant: string;
   teams: NominationTeam[]; depts: NominationDept[]; names: Record<string, string>;
-  viewer: { role: "admin" | "team_lead"; teamId: number | null };
-  defs: { key: NominationKey; label: string; hint: string; unit: "uah" | "count" | "pct" }[];
+  viewer: { role: "admin" | "team_lead"; teamId: number | null; managerId: number | null };
+  defs: { key: NominationKey; label: string; hint: string; unit: "uah" | "count" | "pct"; rule: string; notCounted: string }[];
+  /** Після «Погодитись з рештою» — які саме номінації погоджено. */
+  bulk?: { confirmed: NominationKey[] };
   marginFlagPct: number;
   /** 📷 Фото людей тижня: id менеджера Kommo → фото співробітника (немає в мапі — ініціали). */
   photos: Record<string, PhotoRef>;
 }
 export const fetchNominationWeek = async (weekFrom?: string) =>
   (await api.get<NominationWeek>("/nominations/week", { params: weekFrom ? { weekFrom } : {} })).data;
-export const reviewNomination = async (p: { weekFrom: string; teamId: number; nomination: NominationKey; action: "confirm" | "override"; overrideManagerIds?: number[]; overrideValue?: number; reason?: string }) =>
+export const reviewNomination = async (p: { weekFrom: string; teamId: number; nomination: NominationKey; action: NominationAction; overrideManagerIds?: number[]; overrideValue?: number; reason?: string }) =>
   (await api.post<NominationWeek>("/nominations/review", p)).data;
+/** «Погодитись з рештою»: сервер сам бере лише рядки, що чекають і які цей глядач може погодити. */
+export const confirmNominationsBulk = async (p: { weekFrom: string; teamId: number; nominations: NominationKey[] }) =>
+  (await api.post<NominationWeek>("/nominations/review", { ...p, action: "confirm" })).data;
 // 🎞 Ручні слайди презентації тижня (прохід 2) — лише керівництво.
 export type ManualSlideKind = "newcomer" | "birthday" | "news" | "contest" | "webinar" | "custom";
 export interface SlideTemplateField { key: string; label: string; required: boolean; max: number; multiline?: boolean; placeholder?: string; default?: string; type?: "employee" }

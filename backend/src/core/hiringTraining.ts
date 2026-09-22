@@ -8,6 +8,7 @@
 import bcrypt from "bcryptjs";
 import { randomBytes } from "node:crypto";
 import { HiringError, LEAD_VISIBLE_SQL, type Db } from "./hiring.js";
+import { ensureEmployeeFromCandidate } from "./employeeAdd.js";
 import type { HiringAccess, HiringStatus } from "./hiringRules.js";
 import {
   CANDIDATE_ACCESS, CLOSE_REASON_LABEL, accessDeadline, accessToClose, trainingDay, trainingHealth, promoteVerdict,
@@ -395,6 +396,7 @@ export async function promoteCandidate(db: Db, actorId: number | null, id: numbe
   await db.query(`UPDATE hiring_candidates SET status = 'manager', updated_at = now() WHERE id = $1`, [id]);
   await event(db, id, "status", `після навчання (${row.done} із ${row.total} кроків) · ${text}`, actorId, c.status, "manager");
   await closeCandidateAccess(db, id, "manager", actorId);
+  await ensureEmployeeFromCandidate(db, actorId, id); // 👤 після навчання — теж у реєстр (#647)
 }
 
 // ── Екран кандидата (прохід 2b) ──────────────────────────────────────────
