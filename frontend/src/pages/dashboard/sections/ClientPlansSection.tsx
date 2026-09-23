@@ -600,7 +600,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         </div>
       )}
 
-      {/* 🔢 ТРИ ЦИФРИ РЕАКТИВАЦІЇ (ТЗ 3989, п.5) — ЗВЕРХУ, одразу під показниками плану. */
+      {/* 🔢 ТРИ ЦИФРИ РЕАКТИВАЦІЇ (ТЗ 3989, п.5) — ЗВЕРХУ, одразу під показниками плану. */}
       {t.react && (
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "0 0 10px" }}>
           {[
