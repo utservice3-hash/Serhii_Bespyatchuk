@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { UPLOAD_DIR } from "./uploads.js";
 import { lastContactOf, contactFileVerdict, canDeleteContact, CONTACT_CHANNEL_KEYS } from "../core/clientContacts.js";
 import { stepState, stepVerdict, phoneState } from "../core/clientNextStep.js";
+import { isReturned, RETURN_GAP_DAYS } from "../core/reactivationFilters.js";
 import { mergeNoteComment } from "../core/receivableNoteMerge.js";
 import { effectiveManagerSql, effectiveFromFor, TRANSFER_KINDS, type TransferKind } from "../core/effectiveManager.js";
 import { Router } from "express";
@@ -5810,6 +5811,20 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   const stepByKey = new Map(stepRes.rows.map((r) => [r.client_key, r]));
   const phonesByKey = new Map(phoneRes.rows.map((r) => [r.client_key, Number(r.n)]));
   const todayKyiv = (await pool.query<{ d: string }>(`SELECT to_char(now() AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS d`)).rows[0].d;
+  // 💰 МАРЖА ЗА 6 МІС (price = маржа в цьому продукті) і 🛑 СТОП ЧЕРЕЗ ДЕБІТОРКУ — по тих самих
+  // ключах (ТЗ 3989, п.3 і п.6). Маржа — ті самі гроші, що на Звіті: paid за анкером ядра.
+  const [marginRes, debtRes] = await Promise.all([
+    pool.query<{ client_key: string; margin: string }>(
+      `SELECT d.client_key, SUM(d.price) AS margin FROM deals d
+         JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage = 'paid' AND d.client_key = ANY($1)
+          AND d.closed_at_kommo >= (now() AT TIME ZONE 'Europe/Kyiv')::date - INTERVAL '6 months'
+        GROUP BY d.client_key`, [clientKeys]),
+    pool.query<{ client_key: string }>(
+      `SELECT DISTINCT client_key FROM receivables WHERE overdue_days > 0 AND client_key = ANY($1)`, [clientKeys]),
+  ]);
+  const marginByKey = new Map(marginRes.rows.map((r) => [r.client_key, Math.round(Number(r.margin))]));
+  const debtKeys = new Set(debtRes.rows.map((r) => r.client_key));
 
   // ── ФАКТ І ТИЖНІ — ЯДРО (①). Один виклик на місяць + один на тиждень.
   const histFrom = (() => { const d = new Date(`${monthStr}-01T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - 5); return d.toISOString().slice(0, 7) + "-01"; })();
@@ -6032,6 +6047,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
             state: stepState(stepByKey.get(c.client_key)!.due_date, null, todayKyiv) }
         : null,
       phone: phoneState(phonesByKey.get(c.client_key) ?? 0),
+      margin6m: marginByKey.get(c.client_key) ?? null,
+      debtHold: debtKeys.has(c.client_key),
       taskId: reactByKey.get(c.client_key)?.taskId ?? null,
       taskStatus: reactByKey.get(c.client_key)?.taskStatus ?? null,
       taskDeadline: reactByKey.get(c.client_key)?.taskDeadline ?? null,
@@ -6115,6 +6132,19 @@ dashboardRouter.get("/client-plans", async (req, res) => {
    */
   const atRisk = clients.filter((c) => c.inRoster === "active" && c.lastOrderDays != null && c.lastOrderDays > 30);
 
+  // «ПОВЕРНУТО ЗА МІСЯЦЬ» — по ключах скоупу; правило isReturned із чистого модуля.
+  const retRes = await pool.query<{ client_key: string; first_m: string; last_before: string | null; margin: string }>(
+    `WITH paid AS (
+       SELECT d.client_key, (d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date AS dt, d.price
+         FROM deals d JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage = 'paid' AND d.client_key = ANY($1)),
+     m AS (SELECT client_key, to_char(MIN(dt), 'YYYY-MM-DD') AS first_m, SUM(price) AS margin
+             FROM paid WHERE dt >= date_trunc('month', $2::date)::date AND dt < (date_trunc('month', $2::date) + INTERVAL '1 month')::date GROUP BY 1)
+     SELECT m.client_key, m.first_m, m.margin,
+            to_char((SELECT MAX(p.dt) FROM paid p WHERE p.client_key = m.client_key AND p.dt < date_trunc('month', $2::date)::date), 'YYYY-MM-DD') AS last_before
+       FROM m`, [clientKeys, monthStart]);
+  const returned = retRes.rows.reduce((a, r) => isReturned(r.first_m, r.last_before) ? { count: a.count + 1, margin: a.margin + Math.round(Number(r.margin)) } : a, { count: 0, margin: 0 });
+
   res.json({
     month: monthStr,
     historyMonths: histMonths,
@@ -6159,6 +6189,11 @@ dashboardRouter.get("/client-plans", async (req, res) => {
        * принесуть» він НЕ входить, бо це не план.
        */
       inReactivation: bridge.sleeping + bridge.lost,
+      // 🔢 ТРИ ЦИФРИ ЗВЕРХУ (ТЗ 3989, п.5): у роботі = клієнти зі станом «сплячі»/«втрачені» у скоупі,
+      // повернуто за місяць = перша оплата місяця після паузи ≥ RETURN_GAP_DAYS (поріг — відкрите
+      // питання власнику), сума повернутої маржі = Σ price їхніх оплат цього місяця.
+      react: { inWork: clients.filter((c) => c.state === "sleeping" || c.state === "lost").length,
+               returnedMonth: returned.count, returnedMargin: returned.margin, gapDays: RETURN_GAP_DAYS },
       inReactivationSleeping: bridge.sleeping,
       inReactivationLost: bridge.lost,
       /**

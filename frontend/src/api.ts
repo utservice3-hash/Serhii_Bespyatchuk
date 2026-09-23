@@ -3647,6 +3647,9 @@ export interface ClientPlanRow {
   /** 📌 Наступний крок з датою і станом; `phone: "none"` — у клієнта немає жодного номера. */
   nextStep?: { text: string; due: string | null; state: "none" | "planned" | "today" | "overdue" | "done" } | null;
   phone?: "has" | "none";
+  /** 💰 Σ price (= маржа) оплат за 6 міс; null — оплат не було. 🛑 debtHold — є прострочена дебіторка. */
+  margin6m?: number | null;
+  debtHold?: boolean;
   attempts: number;
   taskId: number | null;
   taskStatus: string | null;
@@ -3675,6 +3678,8 @@ export interface ClientPlansResp {
     byStatus: Record<string, number>; canSubmit: boolean; canApprove: boolean;
     /** Скільки рядків у списку — ЛИШЕ через план (клієнт уже не активний). */
     planOnlyClients: number;
+    /** 🔢 Три цифри реактивації (ТЗ 3989): у роботі · повернуто за місяць · Σ повернутої маржі; gapDays — поріг «повернуто». */
+    react?: { inWork: number; returnedMonth: number; returnedMargin: number; gapDays: number };
     rosterClients: number;
     byState: { active: number; reactivation: number; planOnly: number };
     /** 🕳 Плани без клієнтського рядка. `canSee` вирішує СЕРВЕР (isAdminScope). */
