@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  fetchHiringSchedule, createHiringInterview, patchHiringInterview, deleteHiringInterview, restoreHiringInterview, hiringError,
+  fetchHiringSchedule, createHiringInterview, patchHiringInterview, deleteHiringInterview, restoreHiringInterview, fetchHiringCard, setHiringStatus, hiringError,
   type HiringMeta, type HiringScheduleRow, type HiringStatus,
 } from "../../../api";
 import { todayKyiv, nowKyivHM, addDays, mondayOf, longDate, dm, dowOf, isWeekend, LS, isClosedVacancy } from "../hiringView";
@@ -87,6 +87,39 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
     toast(`${r.full_name || "Рядок"}: перенесено на ${to}`, { action: { label: "Відкрити той день", run: () => setDay(date) } });
   };
 
+  /**
+   * ⟲ СКАСУВАТИ ПОЗНАЧКУ ЯВКИ (23.09.2026, Іван: «якщо помилково поставив, що прийшов, можна відмінити»).
+   * Знімає «прийшов / не прийшов» і одразу пропонує повернути статус, який ця позначка зрушила. Який саме
+   * статус був — питаємо СЕРВЕР (`lastFrom` картки), а не вгадуємо з поточного: повернення дозволяє те саме
+   * правило «повернути останню зміну», що й кнопка в картці кандидата. Тримає #691.
+   */
+  const clearMark = async (r: HiringScheduleRow) => {
+    await save(r, { attended: null });
+    if (!r.candidate_id) return;
+    try {
+      const card = await fetchHiringCard(r.candidate_id);
+      const back = card.lastFrom;
+      if (!back) { toast("Позначку знято"); return; }
+      const label = meta.statuses.find((x) => x.key === back)?.label ?? back;
+      toast(`Позначку знято. Статус зараз «${meta.statuses.find((x) => x.key === card.candidate.status)?.label ?? card.candidate.status}»`, {
+        action: { label: `Повернути «${label}»`, run: () => void setHiringStatus(r.candidate_id!, { to: back, comment: "скасовано позначку явки в графіку" })
+          .then(() => { toast(`Статус повернуто: «${label}»`); load(); }).catch((e) => toast(hiringError(e), { error: true })) },
+      });
+    } catch (e) { toast(hiringError(e), { error: true }); }
+  };
+
+  /** ↩ Повернути останню зміну статусу просто з графіка — те саме, що кнопка «↩ Повернути» в картці. */
+  const undoStatus = async (r: HiringScheduleRow) => {
+    if (!r.candidate_id) return;
+    try {
+      const card = await fetchHiringCard(r.candidate_id);
+      if (!card.lastFrom) { toast("Немає що повертати: статус ще не міняли", { error: true }); return; }
+      const label = meta.statuses.find((x) => x.key === card.lastFrom)?.label ?? card.lastFrom;
+      await setHiringStatus(r.candidate_id, { to: card.lastFrom, comment: "повернуто останню зміну з графіка" });
+      toast(`Статус повернуто: «${label}»`); load();
+    } catch (e) { toast(hiringError(e), { error: true }); }
+  };
+
   const remove = async (r: HiringScheduleRow) => {
     try {
       await deleteHiringInterview(r.id); load();
@@ -158,6 +191,8 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
       ) : view === "agenda" ? (
         <Agenda meta={meta} day={day} today={today} now={now} rows={dayRows} nextId={nextId} unmarked={unmarked}
           onMove={(r, d, t) => void move(r, d, t)} onRemove={(r) => void remove(r)}
+          onClearMark={(r) => void clearMark(r)} onUndoStatus={(r) => void undoStatus(r)}
+          onEdit={(r, patch) => void save(r, patch)}
           tiles={{ total: dayRows.length, came, missed, open: dayRows.length - came - missed }}
           onAttend={(r, v) => void save(r, { attended: v })} onStatus={(r, to) => (to === "refused" ? setRefuseFor(r) : setStatusFor({ row: r, to }))}
           onOpen={(id) => setOpenId(id)} onAdd={(t) => setIvAt(t ?? nextTime())} />
@@ -295,14 +330,17 @@ const fromMin = (x: number) => `${String(Math.floor(x / 60)).padStart(2, "0")}:$
  * «✓ Прийшов / ✕ Не прийшов» однією кнопкою, лінія «зараз», вільні вікна з кнопкою призначення.
  * Дані й дії — ті самі, що в таблиці (той самий `save` рядка графіка), тож звіт рахує однаково.
  */
-function Agenda({ meta, day, today, now, rows, nextId, unmarked, tiles, onAttend, onStatus, onOpen, onAdd, onMove, onRemove }: {
+function Agenda({ meta, day, today, now, rows, nextId, unmarked, tiles, onAttend, onStatus, onOpen, onAdd, onMove, onRemove, onClearMark, onUndoStatus, onEdit }: {
   meta: HiringMeta; day: string; today: string; now: string; rows: HiringScheduleRow[]; nextId?: number;
   unmarked: (r: HiringScheduleRow) => boolean; tiles: { total: number; came: number; missed: number; open: number };
   onAttend: (r: HiringScheduleRow, v: boolean) => void; onStatus: (r: HiringScheduleRow, to: HiringStatus) => void;
   onOpen: (id: number) => void; onAdd: (time?: string) => void;
   onMove: (r: HiringScheduleRow, date: string, time: string) => void; onRemove: (r: HiringScheduleRow) => void;
+  onClearMark: (r: HiringScheduleRow) => void; onUndoStatus: (r: HiringScheduleRow) => void;
+  onEdit: (r: HiringScheduleRow, patch: Record<string, unknown>) => void;
 }) {
   const [moving, setMoving] = useState<HiringScheduleRow | null>(null);
+  const [editing, setEditing] = useState<HiringScheduleRow | null>(null);
   const [menu, setMenu] = useState<{ r: HiringScheduleRow; x: number; y: number } | null>(null);
   useEffect(() => {
     if (!menu) return;
@@ -340,6 +378,7 @@ function Agenda({ meta, day, today, now, rows, nextId, unmarked, tiles, onAttend
                 <button className="hr-btn xs came" onClick={() => onAttend(r, true)}>✓ Прийшов</button>
                 <button className="hr-btn xs miss" onClick={() => onAttend(r, false)}>✕ Не прийшов</button>
               </>}
+              {r.attended != null && <button className="hr-btn xs" title="Помилкова позначка — зняти й, за потреби, повернути статус" onClick={() => onClearMark(r)}>⟲ Скасувати позначку</button>}
               {r.attended != null && r.status && next.filter((s) => s !== "refused" && s !== "black").slice(0, 1).map((s) =>
                 <button key={s} className="hr-btn xs p" onClick={() => onStatus(r, s)}>→ {meta.statuses.find((x) => x.key === s)?.label ?? s}</button>)}
               {r.status && next.includes("refused") && <button className="hr-btn xs" onClick={() => onStatus(r, "refused")}>Відмова…</button>}
@@ -362,9 +401,13 @@ function Agenda({ meta, day, today, now, rows, nextId, unmarked, tiles, onAttend
   const menuNode = menu && createPortal(
     <div className="vc-menu" style={{ top: menu.y + 4, left: Math.max(8, menu.x - 210) }} onClick={(e) => e.stopPropagation()}>
       {menu.r.candidate_id && <button onClick={() => { const id = menu.r.candidate_id!; setMenu(null); onOpen(id); }}>Картка кандидата</button>}
+      <button onClick={() => { setEditing(menu.r); setMenu(null); }}>Змінити рядок…</button>
       <button onClick={() => { setMoving(menu.r); setMenu(null); }}>Перенести на іншу дату…</button>
+      {menu.r.candidate_id && <button onClick={() => { const r = menu.r; setMenu(null); onUndoStatus(r); }}>↩ Повернути останню зміну статусу</button>}
       <button className="dg" onClick={() => { const r = menu.r; setMenu(null); onRemove(r); }}>Видалити з графіка</button>
     </div>, document.body);
+  const editNode = editing && <EditRowDialog meta={meta} r={editing} onClose={() => setEditing(null)}
+    onDone={(patch) => { const r = editing; setEditing(null); onEdit(r, patch); }} />;
   const moveNode = moving && <MoveDialog r={moving} day={day} onClose={() => setMoving(null)}
     onDone={(d, t) => { const r = moving; setMoving(null); onMove(r, d, t); }} />;
   return (
@@ -383,12 +426,41 @@ function Agenda({ meta, day, today, now, rows, nextId, unmarked, tiles, onAttend
       <div style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid var(--border)", flexWrap: "wrap", alignItems: "center" }}>
         <button className="hr-btn p" onClick={() => onAdd()}>+ Співбесіда</button>
         <span className="hr-muted">Кандидата можна обрати з бази або створити тут же. Позначка «прийшов» — однією кнопкою в картці.
-          Помилковий рядок переносять або видаляють через «⋯»; видалене можна відновити одразу після видалення. Для масового внесення — вигляд «Таблиця».</span>
+          Помилкову дію видно скасувати: «⟲ Скасувати позначку» знімає явку, «⋯» дає змінити рядок, перенести, повернути останню зміну статусу
+          або видалити (з кнопкою «Відновити»). Для масового внесення — вигляд «Таблиця».</span>
       </div>
       {menuNode}
+      {editNode}
       {moveNode}
     </div>
   );
+}
+
+/** Змінити рядок графіка з «Розкладу»: час, хто проводить, коментар, посилання на запис. Поля — ті самі, що в «Таблиці». */
+function EditRowDialog({ meta, r, onClose, onDone }: { meta: HiringMeta; r: HiringScheduleRow; onClose: () => void; onDone: (patch: Record<string, unknown>) => void }) {
+  const [p, setP] = useState({
+    interviewTime: r.interview_time ?? "", responsible: r.responsible ?? "",
+    comment: r.comment ?? "", recordUrl: r.record_url ?? "",
+  });
+  const dirty = Object.fromEntries(Object.entries(p).filter(([k, v]) => v !== ({ interviewTime: r.interview_time ?? "", responsible: r.responsible ?? "", comment: r.comment ?? "", recordUrl: r.record_url ?? "" } as Record<string, string>)[k]));
+  return createPortal(
+    <div className="hr-modal-back" onClick={onClose}>
+      <div className="hr-modal" role="dialog" aria-label="Змінити рядок графіка" onClick={(e) => e.stopPropagation()} style={{ width: "min(520px, 96vw)" }}>
+        <h3 style={{ margin: "0 0 4px", fontSize: 16 }}>Змінити рядок</h3>
+        <div className="hr-muted" style={{ marginBottom: 12, fontSize: 13 }}>{r.full_name || "рядок без кандидата"} · {dm(r.interview_date)}</div>
+        <div className="emp-form" style={{ marginTop: 0 }}>
+          <label><span>Час</span><input className="hr-inp" type="time" value={p.interviewTime} onChange={(e) => setP({ ...p, interviewTime: e.target.value })} /></label>
+          <label><span>Хто проводить</span><input className="hr-inp" list="hr-sched-resp" value={p.responsible} onChange={(e) => setP({ ...p, responsible: e.target.value })} /></label>
+          <label className="wide"><span>Посилання на запис</span><input className="hr-inp" value={p.recordUrl} placeholder="https://…" onChange={(e) => setP({ ...p, recordUrl: e.target.value })} /></label>
+          <label className="wide"><span>Коментар</span><input className="hr-inp" value={p.comment} onChange={(e) => setP({ ...p, comment: e.target.value })} /></label>
+          <datalist id="hr-sched-resp">{meta.responsibles.map((x) => <option key={x} value={x} />)}</datalist>
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+          <button className="hr-btn" onClick={onClose}>Скасувати</button>
+          <button className="hr-btn p" disabled={!Object.keys(dirty).length} onClick={() => onDone(dirty)}>Зберегти</button>
+        </div>
+      </div>
+    </div>, document.body);
 }
 
 /** Перенести рядок графіка: нова дата й час. Дата обовʼязкова; час можна лишити порожнім («—» у розкладі). */
