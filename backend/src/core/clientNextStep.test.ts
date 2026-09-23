@@ -5,12 +5,12 @@ import path from "node:path";
 import { stepState, phoneState, stepVerdict, STEP_TEXT_MAX } from "./clientNextStep.js";
 
 /**
- * #691 — СТАН КРОКУ ВІД КИЇВСЬКОГО «СЬОГОДНІ», по обидва боки кожної межі: вчора → прострочено,
+ * #693 — СТАН КРОКУ ВІД КИЇВСЬКОГО «СЬОГОДНІ», по обидва боки кожної межі: вчора → прострочено,
  * сьогодні → сьогодні, завтра → план; без дати — `none`, не прострочено; виконаний — `done`
  * незалежно від дати. «Нема номера» — стан при нулі номерів, і 🪞 `has` при одному.
  * Червоніє, якщо порівняння дат зрушити (≤ замість <) або зробити крок без дати простроченим.
  */
-test("#691 stepState/phoneState: межі вчора/сьогодні/завтра, без дати ≠ прострочено, done понад усе", () => {
+test("#693 stepState/phoneState: межі вчора/сьогодні/завтра, без дати ≠ прострочено, done понад усе", () => {
   const T = "2026-09-24";
   assert.equal(stepState("2026-09-23", null, T), "overdue");
   assert.equal(stepState("2026-09-24", null, T), "today");
@@ -26,11 +26,11 @@ test("#691 stepState/phoneState: межі вчора/сьогодні/завтр
 });
 
 /**
- * #691b — ПРОВОДКА: обидва роути кроку стоять за `canSeeClient` ПЕРШИМ оператором, новий крок
+ * #693b — ПРОВОДКА: обидва роути кроку стоять за `canSeeClient` ПЕРШИМ оператором, новий крок
  * закриває попередній у транзакції; рядок плану і картка несуть `nextStep` через `stepState` і
  * `phone` через `phoneState`; матриця знає обидва роути. Читає джерело, межа слова.
  */
-test("#691b РОУТИ кроку за canSeeClient, новий крок закриває старий, рядок і картка несуть крок і стан номера", () => {
+test("#693b РОУТИ кроку за canSeeClient, новий крок закриває старий, рядок і картка несуть крок і стан номера", () => {
   const src = path.join(import.meta.dirname, "..", "..", "src");
   const d = readFileSync(path.join(src, "routes", "dashboard.ts"), "utf8");
   for (const route of ['dashboardRouter.post("/client-next-step"', 'dashboardRouter.post("/client-next-step/done"']) {

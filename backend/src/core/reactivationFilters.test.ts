@@ -42,10 +42,11 @@ test("#692b РОУТ /client-plans: margin6m, debtHold, три цифри чер
   const src = path.join(import.meta.dirname, "..", "..", "src");
   const d = readFileSync(path.join(src, "routes", "dashboard.ts"), "utf8");
   const i = d.indexOf('dashboardRouter.get("/client-plans"'); const body = d.slice(i, d.indexOf("\n});", i));
-  assert.match(body, /SUM\(d\.price\) AS margin FROM deals d[\s\S]*psm\.funnel_stage = 'paid'[\s\S]*INTERVAL '6 months'/, "маржа не з price paid за 6 міс");
+  assert.match(body, /margin6m: \(\(\) => \{ const a = histByKey\.get\(c\.client_key\)/, "маржа не з помісячних бакетів ядра (hist)");
+  assert.match(body, /a\.slice\(-6\)/, "маржа має бути за останні 6 місяців");
+  assert.doesNotMatch(body, /SUM\(d\.price\) AS margin/, "власний SQL по грошах — повз ядро (#17c)");
   assert.doesNotMatch(body, /carrier_obligation/, "маржа тут — price, «Расход 1» не потрібен");
   assert.match(body, /FROM receivables WHERE overdue_days > 0/, "стоп через дебіторку не з прострочення");
-  assert.match(body, /margin6m: marginByKey\.get\(c\.client_key\) \?\? null/);
   assert.match(body, /debtHold: debtKeys\.has\(c\.client_key\)/);
   assert.match(body, /\bisReturned\(r\.first_m, r\.last_before\)/, "«повернуто» не через чисте правило");
   assert.match(body, /react: \{ inWork:[\s\S]*returnedMonth: returned\.count, returnedMargin: returned\.margin, gapDays: RETURN_GAP_DAYS \}/);
