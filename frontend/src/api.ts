@@ -923,6 +923,8 @@ export interface ReportPlanManager {
   factSuccessDeals: number; factPaidDeals: number;
   // 📞 Розмова (billsec>0) і недодзвін — ДВІ цифри; складати заборонено.
   talks: number; attempts: number;
+  /** 📞 Днів з нормою дзвінків / робочих днів (ТЗ 23.09.2026, п.2). `daysWithNorm: null` = норму не задано. */
+  callNorm: { norm: number | null; daysWithNorm: number | null; workDays: number };
   /** 🎯 ТЗ-3 «ціну названо в перший дотик» — оцінки бота, звʼязані з тим, хто ДЗВОНИВ. */
   firstTouch: FirstTouchCell;
   // ⏳ Очікування БЕЗ планової дати — в жодну суму не входить, тому й окремо.
@@ -1372,6 +1374,8 @@ export interface AppSettings {
   ratesFallbackPartPerKm: number;
   /** Мʼяка нижня межа плану, ₴. 0 = межу свідомо знято. `null` = повернути дефолт. */
   planMinPerManager: number | null;
+  /** 📞 Норма дзвінків на день (розмови+спроби). `null` = не задана — колонка Звіту каже «норму не задано». */
+  callsDailyNorm: number | null;
   tracker: TrackerConfig;
   adSources: string[];
 }

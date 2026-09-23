@@ -20,7 +20,7 @@ export type ColKey =
   | "rank" | "name" | "status" | "created" | "ads" | "leadgen" | "conv" | "convAd" | "convLg"
   | "dispatch" | "avgCheck" | "fact" | "factNew" | "factRepeat" | "factUndef" | "plan" | "pct"
   | "projected" | "needPerDay" | "expectThisMonth" | "expectNew" | "expectRepeat" | "awaitNoDate"
-  | "jamDeals" | "jam" | "dobir" | "talks" | "dispRevenue" | "responseTime"
+  | "jamDeals" | "jam" | "dobir" | "talks" | "normDays" | "dispRevenue" | "responseTime"
   | "srcAd" | "srcLeadgen" | "srcOther" | "srcNoChannel" | "firstTouch";
 
 /**
@@ -189,6 +189,9 @@ export const REPORT_COLS: ColDef[] = [
     help: "Середній добір за 3 міс; у прогноз НЕ входить. Джерело: money.dobirByManager." },
   { key: "talks", title: "Дзвінки", core: false, val: (m) => m.talks, foot: "add",
     help: "Розмов / спроб (дві цифри). Джерело: reportCuts.callsByManager." },
+  // 📞 ТЗ 23.09.2026 п.2: «дні з нормою» для ЗП. `null` = норму не задано в Налаштуваннях — їде донизу.
+  { key: "normDays", title: "Днів з нормою", core: false, val: (m) => m.callNorm?.daysWithNorm ?? null, foot: "add",
+    help: "Днів, коли розмови+спроби ≥ норми з Налаштувань, / робочих днів Пн–Пт до сьогодні. Норму не задано — колонка так і каже. Джерело: core/callNorm.callNormCell над reportCuts.callsByManagerDay." },
   // 🧺 РОЗКЛАД СТВОРЕНИХ ЗА ДЖЕРЕЛОМ — ТЕПЕР ПОВНИЙ, тобто ПАРТИЦІЯ
   // (рішення власника 24.08.2026; заведено 20.08 як накладка з двох колонок).
   //
