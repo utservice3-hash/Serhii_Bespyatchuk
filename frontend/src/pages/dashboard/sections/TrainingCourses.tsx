@@ -26,7 +26,7 @@ import "./training.css";
  *
  * 🔴 ПОРЯДОК КРОКІВ І ЗАМКИ рахує СЕРВЕР (`GET /training/courses/:id` → `state`, `blockedBy`), а не
  * екран: інакше «наступний відкривається після попереднього» існувало б у двох місцях і розійшлось би.
- * Тримають #703–#705.
+ * Тримають #706–#708.
  */
 
 const KIND: Record<TrainingKind, { icon: string; label: string }> = {
