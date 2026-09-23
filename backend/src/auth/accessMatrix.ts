@@ -1116,6 +1116,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/statistics/series", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  // 📉 «купував минулого, не купив у цьому» (23.09.2026) — та сама межа, що серії статистик.
+  { method: "GET", path: "/api/statistics/lapsed-clients?month=2026-09", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "POST", path: "/api/statistics/series/manual", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/tasks", cls: "GET",

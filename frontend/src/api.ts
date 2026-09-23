@@ -2462,6 +2462,17 @@ export async function fetchStatsSeries(params: { block: string; metric: string; 
   const { data } = await api.get<StatsSeriesResp>("/statistics/series", { params });
   return data;
 }
+/** 📉 «Купував минулого місяця, не купив у цьому» по командах (Статистики → Клієнти). */
+export interface LapsedClientsResp {
+  month: string; prevMonth: string; monthComplete: boolean;
+  total: { clients: number; prevRevenue: number };
+  teams: { teamId: number | null; teamName: string; clients: number; prevRevenue: number;
+    rows: { clientKey: string; clientName: string; manager: string | null; prevRevenue: number }[] }[];
+}
+export async function fetchLapsedClients(month?: string): Promise<LapsedClientsResp> {
+  const { data } = await api.get<LapsedClientsResp>("/statistics/lapsed-clients", { params: month ? { month } : undefined });
+  return data;
+}
 export async function saveStatsManual(body: { block: string; metric: string; scopeType: string; scopeKey: string; scopeName?: string; granularity: string; period: string; value: number }): Promise<{ ok: boolean }> {
   const { data } = await api.post<{ ok: boolean }>("/statistics/series/manual", body);
   return data;
