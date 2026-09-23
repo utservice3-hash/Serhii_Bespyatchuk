@@ -10,13 +10,20 @@ import { orderedMaterials, materialStates, coursePercent } from "../core/trainin
 import { stepLockedBy, type LockDb } from "../core/trainingLock.js";
 import { attachVerdict, requiredValue, moduleStats, courseModules, freeModules, type EditorFolder } from "../core/trainingEditor.js";
 import { roleHasPerm } from "../auth/rbac.js";
+import { effectiveMime, mimeFromName } from "../core/trainingMime.js";
 
 /**
  * Навчання — навчальна база відділу продажу. Адмін (КВП) будує структуру папок
  * (навігація/розташування) і розміщує матеріали: відео (embed-URL YouTube/Vimeo/
  * пряме), завантажені файли, посилання, текст. Читають усі автентифіковані;
- * керує лише admin. Файли — у `uploads/../training` (персистить між деплоями,
- * потрапляє в нічний бекап), віддаються авторизованим стрімом.
+ * керує лише admin. Файли — у `uploads/../training` (персистить між деплоями),
+ * віддаються авторизованим стрімом.
+ *
+ * ⚠️ ТУТ СТОЯЛО «потрапляє в нічний бекап» — ЗАМІРЯНО 23.09.2026, ЦЕ НЕПРАВДА.
+ * `jobs/backupDb.ts` копіює лише `DOCS_DIR` (backend/documents, 34 МБ). Тека
+ * `backend/training` — **817 МБ, 143 файли** — у копію НЕ їде, як і `task-files/`,
+ * `contact-files/`, `uploads/`. Рядок пережив свою причину; борг названо власнику
+ * 23.09.2026 окремим рішенням. Не спирайся на нього при відновленні.
  */
 export const trainingRouter = Router();
 trainingRouter.use(requireAuth);
@@ -49,7 +56,7 @@ trainingRouter.get("/tree", async (req, res) => {
     pool.query(
       // 🔴 ЧЕРНЕТКИ (в т.ч. згенеровані АІ) бачить ЛИШЕ admin — решта отримує тільки
       // опубліковане. Публікація — окрема людська дія (POST /materials/:id/publish).
-      `SELECT m.id, m.folder_id, m.title, m.kind, m.url, m.mime, m.size_bytes, m.content, m.position, m.created_at,
+      `SELECT m.id, m.folder_id, m.title, m.kind, m.url, m.mime, m.stored_name, m.size_bytes, m.content, m.position, m.created_at,
               m.status, m.created_by_ai, m.required,
               COALESCE(mm.name, u.email) AS author
          FROM training_materials m
@@ -60,7 +67,9 @@ trainingRouter.get("/tree", async (req, res) => {
       [isAdminScope(req.auth!)]
     ),
   ]);
-  res.json({ folders: folders.rows, materials: materials.rows });
+  // 📄 Тип файла — через ядро: у 84 перенесених документів колонка порожня (див. core/trainingMime.ts).
+  const withMime = materials.rows.map((m) => ({ ...m, mime: effectiveMime(m.mime, m.stored_name, m.title) }));
+  res.json({ folders: folders.rows, materials: withMime });
 });
 
 /**
@@ -185,7 +194,7 @@ trainingRouter.post("/material", canEditTraining, async (req, res) => {
     storedName = `${randomUUID()}${ext}`;
     await mkdir(TRAIN_DIR, { recursive: true });
     await writeFile(path.join(TRAIN_DIR, storedName), buffer);
-    mime = b.mime ? String(b.mime) : null;
+    mime = b.mime ? String(b.mime) : mimeFromName(display);
     sizeBytes = buffer.length;
   }
   content = content ?? (b.content ? String(b.content).trim() : null); // опис для не-текстових
@@ -250,7 +259,8 @@ trainingRouter.get("/material/:id/file", async (req, res) => {
   );
   if (!r.rowCount || !r.rows[0].stored_name) return res.status(404).json({ error: "Файл не знайдено" });
   const m = r.rows[0];
-  if (m.mime) res.type(m.mime);
+  const type = effectiveMime(m.mime, m.stored_name, m.title);
+  if (type) res.type(type);
   res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(m.title)}`);
   res.sendFile(path.join(TRAIN_DIR, m.stored_name!), (err) => {
     if (err && !res.headersSent) res.status(404).json({ error: "Файл відсутній на диску" });
@@ -414,7 +424,8 @@ trainingRouter.get("/material/:id", async (req, res) => {
   const p = await pool.query<{ status: string; finished_at: string | null }>(
     `SELECT status, finished_at FROM training_progress WHERE user_id = $1 AND material_id = $2`, [uid, id]);
   res.json({
-    id: m.id, folderId: m.folder_id, title: m.title, kind: m.kind, url: m.url, mime: m.mime,
+    id: m.id, folderId: m.folder_id, title: m.title, kind: m.kind, url: m.url,
+    mime: effectiveMime(m.mime, m.stored_name, m.title),
     sizeBytes: m.size_bytes, content: m.content, required: m.required, hasFile: m.stored_name != null,
     status: p.rows[0]?.status ?? null, finishedAt: p.rows[0]?.finished_at ?? null,
   });
