@@ -391,8 +391,16 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
                 {c.lastContact.source === "talk" ? "📞" : "📱"} {c.lastContact.at.slice(0, 10).split("-").reverse().slice(0, 2).join(".")}
                 {c.lastContact.source === "manual" && <span style={{ color: "#6b7280" }}> · {contactChannelLabel(c.lastContact.channel)}{c.lastContactHasFile ? " 📎" : ""}</span>}
               </div>
+            ) : c.phone === "none" ? (
+              <span style={{ color: "#b45309" }} title="у контактах клієнта немає жодного номера — дзвінки не привʼязуються">📵 нема номера</span>
             ) : (
               <span style={{ color: "#9ca3af" }}>контакту не було</span>
+            )}
+            {c.nextStep && (
+              <div style={{ fontSize: 11, color: c.nextStep.state === "overdue" ? "#b91c1c" : c.nextStep.state === "today" ? "#b45309" : "#374151" }}
+                title={`наступний крок: ${c.nextStep.text}`}>
+                📌 {c.nextStep.state === "overdue" ? "прострочено " : ""}{c.nextStep.due ? c.nextStep.due.slice(5).split("-").reverse().join(".") : "без дати"} · {c.nextStep.text.length > 28 ? c.nextStep.text.slice(0, 28) + "…" : c.nextStep.text}
+              </div>
             )}
             {(c.attempts ?? 0) > 0 && (
               <div style={{ color: "#b45309", fontSize: 11 }} title="дзвінки без відповіді після останньої розмови">недодзвонів {c.attempts}</div>

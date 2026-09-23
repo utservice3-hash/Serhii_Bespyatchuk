@@ -3644,6 +3644,9 @@ export interface ClientPlanRow {
   /** 📱 Останній контакт: свіжіше з розмови Ringostat і ручного запису (Viber/Telegram/…). */
   lastContact?: { at: string; source: "talk" | "manual"; channel: string | null } | null;
   lastContactHasFile?: boolean;
+  /** 📌 Наступний крок з датою і станом; `phone: "none"` — у клієнта немає жодного номера. */
+  nextStep?: { text: string; due: string | null; state: "none" | "planned" | "today" | "overdue" | "done" } | null;
+  phone?: "has" | "none";
   attempts: number;
   taskId: number | null;
   taskStatus: string | null;
@@ -3749,6 +3752,12 @@ export async function fetchClientContacts(clientKey: string): Promise<ClientCont
   const { data } = await api.get<{ contacts: ClientContact[] }>("/dashboard/client-contacts", { params: { clientKey } });
   return data.contacts;
 }
+export async function saveClientNextStep(p: { clientKey: string; text: string; due: string | null }): Promise<void> {
+  await api.post("/dashboard/client-next-step", p);
+}
+export async function doneClientNextStep(clientKey: string): Promise<void> {
+  await api.post("/dashboard/client-next-step/done", { clientKey });
+}
 export async function addClientContact(p: { clientKey: string; channel: string; note: string; file?: File | null }): Promise<ClientContact> {
   let dataBase64: string | undefined;
   if (p.file) {
@@ -3771,6 +3780,11 @@ export async function fetchContactFileBlobUrl(id: number): Promise<string> {
 export interface ClientCard {
   /** 📱 Контакти з клієнтом поза дзвінками (Viber/Telegram/…), зі скринами. */
   contacts?: ClientContact[];
+  /** 📌 ТЗ реактивації: крок з датою, стан номера, останній дзвінок (дата, хто, скільки). */
+  nextStep?: { id: number; text: string; due: string | null; author: string | null; state: "none" | "planned" | "today" | "overdue" | "done" } | null;
+  phone?: "has" | "none";
+  phonesCount?: number;
+  lastCall?: { at: string; manager: string | null; billsec: number; direction: "in" | "out" } | null;
   /** 📞 Дзвінки по роках. `callsSince` — глибина памʼяті: порожній рік до неї означає «даних немає». */
   callsByYear?: ClientCallYear[];
   calls?: ClientCall[];

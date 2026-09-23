@@ -3957,3 +3957,17 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_updated_by INTEGER REFERENC
 -- кандидата). ⚠️ revert коду колонку не прибирає; дані без неї не губляться.
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS candidate_id INTEGER REFERENCES hiring_candidates(id) ON DELETE SET NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_employees_candidate ON employees(candidate_id) WHERE candidate_id IS NOT NULL;
+
+-- 📌 НАСТУПНИЙ КРОК ПО КЛІЄНТУ (ТЗ реактивації 23.09.2026, п.1): один живий крок на клієнта,
+-- виконані лишаються як історія. Правила стану (прострочений/сьогодні/план) — `core/clientNextStep.ts`.
+CREATE TABLE IF NOT EXISTS client_next_steps (
+  id SERIAL PRIMARY KEY,
+  client_key TEXT NOT NULL,
+  text TEXT NOT NULL,
+  due_date DATE,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  done_at TIMESTAMPTZ,
+  done_by INTEGER REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_client_next_steps_open ON client_next_steps(client_key) WHERE done_at IS NULL;

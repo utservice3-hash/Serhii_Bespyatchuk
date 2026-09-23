@@ -574,6 +574,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr"] },
   // 📱 Контакти з клієнтом (17.09.2026): та сама межа, що картка — вкладка `loyalty` + `canSeeClient`.
   // POST/DELETE на фейковому ключі відмовляють скоупом (403) або тілом (400) — deny-only.
+  // 📌 Наступний крок по клієнту (23.09.2026): та сама межа, що контакти — `canSeeClient`
+  // першим оператором; менеджер і тімлід ДОЗВОЛЕНІ (свої клієнти), у deny лише hr.
+  { method: "POST", path: "/api/dashboard/client-next-step", cls: "deny-only",
+    allow: [], deny: ["hr"] },
+  { method: "POST", path: "/api/dashboard/client-next-step/done", cls: "deny-only",
+    allow: [], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/client-contacts?clientKey=zzz", cls: "GET",
     allow: [], deny: ["hr"] },
   // Менеджер і тімлід ДОДАЮТЬ контакти по своїх клієнтах — це і є фіча (у Viber/Telegram
