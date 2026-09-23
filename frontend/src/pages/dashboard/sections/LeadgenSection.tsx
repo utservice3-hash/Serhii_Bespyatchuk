@@ -91,7 +91,7 @@ function comparisonOf(nav: PeriodState, today: string): Cmp {
   return { kind: "cmp", cur: c, prev, text };
 }
 
-interface Unit { key: string; top: string; main: string; active: boolean; future: boolean; dim?: boolean; patch: Partial<PeriodState> }
+interface Unit { key: string; top: string; main: string; active: boolean; future: boolean; dim?: boolean; now?: boolean; patch: Partial<PeriodState> }
 
 /** Одиниці смуги для режиму. Майбутні — сірі й не клікаються (як дні у Звіті). */
 function stripUnits(nav: PeriodState, today: string): Unit[] {
@@ -119,7 +119,9 @@ function stripUnits(nav: PeriodState, today: string): Unit[] {
     const y = nav.anchor.slice(0, 4), sel = nav.anchor.slice(0, 7);
     return MON.map((lbl, i) => {
       const m = `${y}-${String(i + 1).padStart(2, "0")}`;
-      return { key: m, top: (i === 0 ? y : " ") + (today.slice(0, 7) === m ? " •" : ""), main: lbl, active: m === sel,
+      // Рік НЕ пишеться над «Січ», а поточний місяць не несе самотньої крапки у верхньому рядку:
+      // порожній «поверх» над десятьма з дванадцяти чипів робив рядок нерівним (зауваження власника 23.09).
+      return { key: m, top: "", main: lbl, active: m === sel, now: today.slice(0, 7) === m,
         future: m + "-01" > today, patch: { anchor: m + "-01" } };
     });
   }
@@ -267,15 +269,26 @@ export function LeadgenSection() {
 
       {/* Смуга одиниць обраного режиму — розмітка дня-strip зі Звіту, одиниці — від режиму */}
       {units.length > 0 && (
-        <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 16 }}>
-          {units.map((u) => (
-            <div key={u.key} onClick={() => !u.future && patchNav(u.patch)} style={{
-              minWidth: 60, textAlign: "center", padding: "7px 10px", borderRadius: 10, cursor: u.future ? "default" : "pointer",
+        <div style={{ display: "flex", gap: 7, flexWrap: "wrap", alignItems: "stretch", marginBottom: 16 }}>
+          {nav.mode === "month" && (
+            <div style={{ display: "flex", alignItems: "center", padding: "0 10px 0 2px", fontSize: 13, fontWeight: 700, color: MUTED, letterSpacing: ".5px" }}>
+              {nav.anchor.slice(0, 4)}
+            </div>
+          )}
+          {units.map((u, i) => (
+            <div key={u.key} onClick={() => !u.future && patchNav(u.patch)} title={u.now ? "поточний місяць" : undefined} style={{
+              minWidth: nav.mode === "month" ? 64 : 60, textAlign: "center", borderRadius: 10, cursor: u.future ? "default" : "pointer",
+              padding: nav.mode === "month" ? "9px 12px" : "7px 10px",
+              // Квартали — ледь помітною прогалиною: дванадцять однакових чипів підряд читаються як суцільна стрічка.
+              marginRight: nav.mode === "month" && i % 3 === 2 && i < units.length - 1 ? 9 : 0,
               border: `1px solid ${u.active ? "var(--text)" : "var(--border)"}`, background: u.active ? "var(--text)" : "var(--card-bg)",
               color: u.active ? "var(--card-bg)" : "var(--text)", opacity: u.future ? 0.4 : 1,
+              display: "flex", flexDirection: "column", justifyContent: "center", gap: 1,
             }}>
-              <small style={{ display: "block", fontSize: 11, textTransform: "uppercase", letterSpacing: ".4px", color: u.active ? "var(--card-bg)" : MUTED }}>{u.top}</small>
+              {u.top !== "" && <small style={{ display: "block", fontSize: 11, textTransform: "uppercase", letterSpacing: ".4px", color: u.active ? "var(--card-bg)" : MUTED }}>{u.top}</small>}
               <b style={{ fontSize: 15, color: u.dim && !u.active ? MUTED : undefined }}>{u.main}</b>
+              {/* Поточний місяць — тонка позначка ПІД назвою, а не крапка в порожньому рядку над нею. */}
+              {u.now && <span aria-hidden="true" style={{ display: "block", width: 16, height: 2, borderRadius: 2, margin: "1px auto 0", background: u.active ? "var(--card-bg)" : "var(--lg-link)" }} />}
             </div>
           ))}
         </div>
