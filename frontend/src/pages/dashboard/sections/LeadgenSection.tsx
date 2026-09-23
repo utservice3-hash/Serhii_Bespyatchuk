@@ -287,8 +287,13 @@ export function LeadgenSection() {
             }}>
               {u.top !== "" && <small style={{ display: "block", fontSize: 11, textTransform: "uppercase", letterSpacing: ".4px", color: u.active ? "var(--card-bg)" : MUTED }}>{u.top}</small>}
               <b style={{ fontSize: 15, color: u.dim && !u.active ? MUTED : undefined }}>{u.main}</b>
-              {/* Поточний місяць — тонка позначка ПІД назвою, а не крапка в порожньому рядку над нею. */}
-              {u.now && <span aria-hidden="true" style={{ display: "block", width: 16, height: 2, borderRadius: 2, margin: "1px auto 0", background: u.active ? "var(--card-bg)" : "var(--lg-link)" }} />}
+              {/* Поточний місяць — тонка позначка ПІД назвою, а не крапка в порожньому рядку над нею.
+                  Місце під неї тримають УСІ чипи: інакше рядок, у якому поточного місяця немає (смуга
+                  переноситься на вузькому екрані), виходив на 4 px нижчим — та сама нерівність, менша. */}
+              {nav.mode === "month" && (
+                <span aria-hidden="true" style={{ display: "block", width: 16, height: 2, borderRadius: 2, margin: "1px auto 0",
+                  background: !u.now ? "transparent" : u.active ? "var(--card-bg)" : "var(--lg-link)" }} />
+              )}
             </div>
           ))}
         </div>
