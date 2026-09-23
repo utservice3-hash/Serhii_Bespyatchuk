@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Cell } from "recharts";
-import { fetchClientCard, archiveClient, saveLoyaltyOverride, contactChannelLabel, fetchContactFileBlobUrl, type ClientCard } from "../../../api";
+import { fetchClientCard, archiveClient, saveLoyaltyOverride, contactChannelLabel, fetchContactFileBlobUrl, saveClientNextStep, doneClientNextStep, type ClientCard } from "../../../api";
 import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
 import { formatAmountFull } from "../format";
 
@@ -36,6 +36,9 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
   const [busy, setBusy] = useState(false);
   const [reason, setReason] = useState("");
   const [forceNote, setForceNote] = useState("");
+  const [stepText, setStepText] = useState("");
+  const [stepDue, setStepDue] = useState("");
+  const [stepEdit, setStepEdit] = useState(false);
   const load = useCallback(() => {
     setCard(null); setErr(null);
     fetchClientCard(clientKey).then(setCard)
@@ -204,6 +207,43 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
           </ResponsiveContainer>
         </div>
       )}
+
+      {/* 📌 ТЗ РЕАКТИВАЦІЇ (23.09.2026, п.1–2): наступний крок з датою, «нема номера» станом,
+          останній дзвінок — дата, хто, скільки. Крок один живий; «виконано» закриває його. */}
+      <div style={{ marginTop: 10, border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 12px", background: "#fff" }}>
+        <div style={{ fontSize: 11, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 6 }}>Останній дзвінок · наступний крок</div>
+        <div style={{ fontSize: 12.5, marginBottom: 6 }}>
+          {card.phone === "none" ? (
+            <span style={{ color: "#b45309" }} title="у контактах клієнта немає жодного номера — дзвінки не привʼязуються">📵 нема номера</span>
+          ) : card.lastCall ? (
+            <span>📞 {card.lastCall.at.slice(0, 10).split("-").reverse().join(".")} · {card.lastCall.direction === "out" ? "вихідний" : "вхідний"} · {card.lastCall.manager ?? "менеджер невідомий"} · {Math.round(card.lastCall.billsec / 60)} хв {card.lastCall.billsec % 60} с</span>
+          ) : (
+            <span style={{ color: "#9ca3af" }}>розмов не було{card.phonesCount ? ` · номерів: ${card.phonesCount}` : ""}</span>
+          )}
+        </div>
+        {card.nextStep && !stepEdit ? (
+          <div style={{ fontSize: 12.5, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 600, color: card.nextStep.state === "overdue" ? "#b91c1c" : card.nextStep.state === "today" ? "#b45309" : "#111827" }}>
+              {card.nextStep.state === "overdue" ? "⚠️ прострочено" : card.nextStep.state === "today" ? "сьогодні" : card.nextStep.due ? card.nextStep.due.split("-").reverse().join(".") : "без дати"}
+            </span>
+            <span>{card.nextStep.text}</span>
+            {card.nextStep.author && <span style={{ color: "#6b7280" }}>· {card.nextStep.author}</span>}
+            <button disabled={busy} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}
+              onClick={async () => { setBusy(true); try { await doneClientNextStep(clientKey); load(); onChanged?.(); } finally { setBusy(false); } }}>✓ виконано</button>
+            <button disabled={busy} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}
+              onClick={() => { setStepText(card.nextStep!.text); setStepDue(card.nextStep!.due ?? ""); setStepEdit(true); }}>змінити</button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <input value={stepText} onChange={(e) => setStepText(e.target.value)} placeholder="наступний крок: що зробити" maxLength={300}
+              style={{ flex: 1, minWidth: 180, fontSize: 12.5, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} />
+            <input type="date" value={stepDue} onChange={(e) => setStepDue(e.target.value)} style={{ fontSize: 12.5, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} />
+            <button disabled={busy || !stepText.trim()} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, border: "none", background: "#c5141c", color: "#fff", cursor: "pointer" }}
+              onClick={async () => { setBusy(true); try { await saveClientNextStep({ clientKey, text: stepText.trim(), due: stepDue || null }); setStepText(""); setStepDue(""); setStepEdit(false); load(); onChanged?.(); } finally { setBusy(false); } }}>зберегти</button>
+            {stepEdit && <button style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }} onClick={() => setStepEdit(false)}>скасувати</button>}
+          </div>
+        )}
+      </div>
 
       {card.callsByYear && card.callsByYear.length > 0 && (
         <>

@@ -169,6 +169,7 @@ function levelTotals(rows: ClientPlanRow[]) {
     clients: rows.length,
     plan: rows.reduce((s, c) => s + c.plan, 0),
     fact: rows.reduce((s, c) => s + c.fact, 0),
+    margin6m: rows.some((c) => c.margin6m != null) ? rows.reduce((s, c) => s + (c.margin6m ?? 0), 0) : null as number | null,
   };
 }
 
@@ -227,7 +228,10 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
   // 🔴 ДЕФОЛТ — «НАЙГІРШІ ЗВЕРХУ» (рішення власника 04.08.2026): екран планування
   // існує, щоб бачити проблеми, а не щоб милуватись лідерами. Другий режим —
   // «найбільші зверху» (факт ①), коли треба дивитись на обсяг.
-  const [sortMode, setSortMode] = useState<"worst" | "biggest">("worst");
+  const [sortMode, setSortMode] = useState<"worst" | "biggest" | "margin">("worst");
+  // 🧭 Фільтри ТЗ 3989 п.3 — окрема вісь від стану: «без розмови», «прострочений крок», «VIP спить 14+», «стоп через дебіторку».
+  const [reactFilter, setReactFilter] = useState<"all" | "no_talk" | "step_overdue" | "vip_sleeping" | "debt_hold">("all");
+  const [mgrFilter, setMgrFilter] = useState<number | "">("");
   const [openTeams, setOpenTeams] = useState<Set<string>>(new Set());
   const [openMgrs, setOpenMgrs] = useState<Set<number>>(new Set());
 
@@ -291,8 +295,14 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
     if (view === "in-plan" && c.plan <= 0) return false;
     if (view === "stale" && !(c.lastOrderDays != null && c.lastOrderDays >= 30)) return false;
     if (stateFilter !== "all" && c.state !== stateFilter) return false;
+    if (mgrFilter !== "" && c.managerId !== mgrFilter) return false;
+    if (reactFilter === "no_talk" && c.lastTalk != null) return false;
+    if (reactFilter === "step_overdue" && c.nextStep?.state !== "overdue") return false;
+    if (reactFilter === "vip_sleeping" && !(c.segment === "vip" && (c.daysSince ?? 0) >= 14)) return false;
+    if (reactFilter === "debt_hold" && !c.debtHold) return false;
     return true;
   });
+  const mgrOptions = [...new Map(data.clients.map((c) => [c.managerId, c.managerName])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
   /** Лічильники беруться з ТИХ САМИХ рядків, що й список, — інакше підпис розійдеться з ним. */
   const byState = data.clients.reduce((a, c) => { a[c.state] = (a[c.state] ?? 0) + 1; return a; },
     {} as Record<string, number>);
@@ -305,6 +315,8 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
    * додала б два кліки.
    */
   const grouped = auth.role !== "manager";
+  /** За маржею 6 міс (price = маржа): більша зверху; без оплат — унизу, а не «0 зверху». */
+  const byMargin = (a: ClientPlanRow, b: ClientPlanRow) => { const A = a.margin6m ?? null, B = b.margin6m ?? null; if (A == null && B == null) return 0; if (A == null) return 1; if (B == null) return -1; return B - A; };
   const teams = (() => {
     if (!grouped) return [];
     const byTeam = new Map<string, { teamName: string; mgrs: Map<number, { name: string; rows: ClientPlanRow[] }> }>();
@@ -321,6 +333,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
     // Інакше «найгірші зверху» очолили б ті, кому плану просто не поставили.
     const cmp = <T extends { rows: ClientPlanRow[] }>(a: T, b: T) => {
       const A = levelTotals(a.rows), B = levelTotals(b.rows);
+      if (sortMode === "margin") { const a = A.margin6m ?? null, b = B.margin6m ?? null; if (a == null && b == null) return 0; if (a == null) return 1; if (b == null) return -1; return b - a; }
       if (sortMode === "biggest") return B.fact - A.fact;
       const pa = A.plan > 0 ? A.fact / A.plan : null;
       const pb = B.plan > 0 ? B.fact / B.plan : null;
@@ -334,7 +347,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         teamName: tt.teamName,
         rows: [...tt.mgrs.values()].flatMap((m) => m.rows),
         mgrs: [...tt.mgrs.entries()]
-          .map(([id, m]) => ({ id, name: m.name, rows: [...m.rows].sort((a, b) => b.fact - a.fact || b.plan - a.plan) }))  // клієнти всередині менеджера — завжди за фактом
+          .map(([id, m]) => ({ id, name: m.name, rows: [...m.rows].sort(sortMode === "margin" ? byMargin : (a, b) => b.fact - a.fact || b.plan - a.plan) }))  // клієнти всередині менеджера — завжди за фактом
           .sort(cmp),
       }))
       .sort(cmp);
@@ -391,8 +404,19 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
                 {c.lastContact.source === "talk" ? "📞" : "📱"} {c.lastContact.at.slice(0, 10).split("-").reverse().slice(0, 2).join(".")}
                 {c.lastContact.source === "manual" && <span style={{ color: "#6b7280" }}> · {contactChannelLabel(c.lastContact.channel)}{c.lastContactHasFile ? " 📎" : ""}</span>}
               </div>
+            ) : c.phone === "none" ? (
+              <span style={{ color: "#b45309" }} title="у контактах клієнта немає жодного номера — дзвінки не привʼязуються">📵 нема номера</span>
             ) : (
               <span style={{ color: "#9ca3af" }}>контакту не було</span>
+            )}
+            {c.debtHold && (
+              <div style={{ fontSize: 11, color: "#b91c1c", fontWeight: 600 }} title="є прострочена дебіторка — новий план не ставимо, доки не закриють">🛑 стоп: дебіторка</div>
+            )}
+            {c.nextStep && (
+              <div style={{ fontSize: 11, color: c.nextStep.state === "overdue" ? "#b91c1c" : c.nextStep.state === "today" ? "#b45309" : "#374151" }}
+                title={`наступний крок: ${c.nextStep.text}`}>
+                📌 {c.nextStep.state === "overdue" ? "прострочено " : ""}{c.nextStep.due ? c.nextStep.due.slice(5).split("-").reverse().join(".") : "без дати"} · {c.nextStep.text.length > 28 ? c.nextStep.text.slice(0, 28) + "…" : c.nextStep.text}
+              </div>
             )}
             {(c.attempts ?? 0) > 0 && (
               <div style={{ color: "#b45309", fontSize: 11 }} title="дзвінки без відповіді після останньої розмови">недодзвонів {c.attempts}</div>
@@ -635,15 +659,31 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
             {label}{k !== "all" && byState[k] ? ` · ${byState[k]}` : ""}
           </button>
         ))}
+        <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}>Фільтр:</span>
+        {([["all", "усі"], ["no_talk", "без розмови"], ["step_overdue", "прострочений крок"], ["vip_sleeping", "VIP спить 14+"], ["debt_hold", "стоп: дебіторка"]] as const).map(([k, label]) => (
+          <button key={k} onClick={() => setReactFilter(k)}
+            title={k === "no_talk" ? "жодної розмови по Ringostat" : k === "step_overdue" ? "дата наступного кроку минула" : k === "vip_sleeping" ? "сегмент VIP і 14+ днів без замовлення" : k === "debt_hold" ? "є прострочена дебіторка — новий план не ставимо" : undefined}
+            style={{ fontSize: 12, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
+                     border: `1px solid ${reactFilter === k ? (k === "debt_hold" ? "#b91c1c" : "#2563eb") : "#d1d5db"}`,
+                     background: reactFilter === k ? (k === "debt_hold" ? "#fef2f2" : "#eff6ff") : "#fff",
+                     color: reactFilter === k ? (k === "debt_hold" ? "#b91c1c" : "#1d4ed8") : "#374151" }}>{label}</button>
+        ))}
+        {grouped && mgrOptions.length > 1 && (
+          <select value={mgrFilter} onChange={(e) => setMgrFilter(e.target.value ? Number(e.target.value) : "")}
+            style={{ fontSize: 12, padding: "4px 8px", borderRadius: 8, border: "1px solid #d1d5db", marginLeft: 6 }}>
+            <option value="">менеджер: усі</option>
+            {mgrOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+          </select>
+        )}
         <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}>
           показано {rows.length} із {data.clients.length}
         </span>
         {grouped && (
           <>
             <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}>Сортувати:</span>
-            {([["worst", "найгірші зверху"], ["biggest", "найбільші зверху"]] as const).map(([k, label]) => (
+            {([["worst", "найгірші зверху"], ["biggest", "найбільші зверху"], ["margin", "за маржею 6 міс"]] as const).map(([k, label]) => (
               <button key={k} onClick={() => setSortMode(k)}
-                title={k === "worst" ? "за % виконання плану (без плану — внизу)" : "за фактом ① (успішно реалізовано)"}
+                title={k === "worst" ? "за % виконання плану (без плану — внизу)" : k === "margin" ? "Σ маржі (price) за 6 місяців; без оплат — унизу" : "за фактом ① (успішно реалізовано)"}
                 style={{ fontSize: 12, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
                          border: `1px solid ${sortMode === k ? "#2563eb" : "#d1d5db"}`,
                          background: sortMode === k ? "#eff6ff" : "#fff",
@@ -694,7 +734,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
             </tr>
           </thead>
           <tbody>
-            {!grouped && rows.map(renderRow)}
+            {!grouped && (sortMode === "margin" ? [...rows].sort(byMargin) : rows).map(renderRow)}
             {grouped && teams.map((tm) => {
               const tOpen = openTeams.has(tm.teamName);
               return (
@@ -748,6 +788,20 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
       {/* 🌉 МІСТОК. Сплячі й втрачені з екрана ЗНИКЛИ (жорсткий поділ) — без цього
           рядка вони зникли б МОВЧКИ, і це читалось би як «клієнти загубились».
           У Σ «постійні принесуть» місток НЕ входить: це не план, а вказівник. */}
+      {t.react && (
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "0 0 10px" }}>
+          {[
+            ["в роботі (реактивація)", t.react.inWork, "сплячі + втрачені у вашому скоупі"],
+            ["повернуто за місяць", t.react.returnedMonth, `перша оплата місяця після паузи ≥ ${t.react.gapDays} дн.`],
+            ["повернутої маржі", formatAmountFull(t.react.returnedMargin), "Σ оплат цих клієнтів цього місяця (price = маржа)"],
+          ].map(([label, val, hint]) => (
+            <div key={String(label)} title={String(hint)} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: "8px 14px", background: "#fff", minWidth: 150 }}>
+              <div style={{ fontSize: 20, fontWeight: 700 }}>{val}</div>
+              <div style={{ fontSize: 11, color: "#6b7280" }}>{label}</div>
+            </div>
+          ))}
+        </div>
+      )}
       {t.inReactivation > 0 && (
         <div style={{ ...S.card, borderLeft: "3px solid #b45309", display: "flex",
                       alignItems: "center", gap: 10, flexWrap: "wrap" }}>

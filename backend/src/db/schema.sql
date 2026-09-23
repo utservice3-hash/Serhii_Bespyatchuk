@@ -1758,7 +1758,7 @@ CREATE INDEX IF NOT EXISTS idx_plan_formation_month ON plan_formation (month, st
 -- Фіксується саме на подачі: поріг може змінитись, а факт «тоді було нижче» — ні.
 ALTER TABLE plan_formation ADD COLUMN IF NOT EXISTS below_min BOOLEAN NOT NULL DEFAULT false;
 
--- ============================================================================
+-- =====================================================================
 -- RBAC (Phase 1). Additive, idempotent. Вбудовані ролі = ТОЧНА поточна поведінка.
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS roles (
@@ -3957,6 +3957,20 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_updated_by INTEGER REFERENC
 -- кандидата). ⚠️ revert коду колонку не прибирає; дані без неї не губляться.
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS candidate_id INTEGER REFERENCES hiring_candidates(id) ON DELETE SET NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_employees_candidate ON employees(candidate_id) WHERE candidate_id IS NOT NULL;
+
+-- 📌 НАСТУПНИЙ КРОК ПО КЛІЄНТУ (ТЗ реактивації 23.09.2026, п.1): один живий крок на клієнта,
+-- виконані лишаються як історія. Правила стану (прострочений/сьогодні/план) — `core/clientNextStep.ts`.
+CREATE TABLE IF NOT EXISTS client_next_steps (
+  id SERIAL PRIMARY KEY,
+  client_key TEXT NOT NULL,
+  text TEXT NOT NULL,
+  due_date DATE,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  done_at TIMESTAMPTZ,
+  done_by INTEGER REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_client_next_steps_open ON client_next_steps(client_key) WHERE done_at IS NULL;
 
 -- 🎓 ОДНОРАЗОВИЙ ПЕРЕНОС АКАДЕМІЇ SEREDA (23.09.2026, рішення Романа: «переносимо все, далі навчання живе
 -- на нашому сервері»). `external_id` — ключ ідемпотентності імпорту: повторний прогін ОНОВЛЮЄ той самий

@@ -3,6 +3,8 @@ import { mkdir, writeFile, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { UPLOAD_DIR } from "./uploads.js";
 import { lastContactOf, contactFileVerdict, canDeleteContact, CONTACT_CHANNEL_KEYS } from "../core/clientContacts.js";
+import { stepState, stepVerdict, phoneState } from "../core/clientNextStep.js";
+import { isReturned, RETURN_GAP_DAYS } from "../core/reactivationFilters.js";
 import { mergeNoteComment } from "../core/receivableNoteMerge.js";
 import { effectiveManagerSql, effectiveFromFor, TRANSFER_KINDS, type TransferKind } from "../core/effectiveManager.js";
 import { Router } from "express";
@@ -5793,6 +5795,26 @@ dashboardRouter.get("/client-plans", async (req, res) => {
             channel, (stored_name IS NOT NULL) AS has_file
        FROM client_contacts WHERE client_key = ANY($1) ORDER BY client_key, created_at DESC`, [clientKeys]);
   const manualByKey = new Map(manualRes.rows.map((r) => [r.client_key, r]));
+  // 📌 НАСТУПНИЙ КРОК і «нема номера» (ТЗ реактивації 23.09.2026, п.1–2) — окремим запитом по
+  // тих самих ключах, щоб не чіпати ядро реактивації. Стан кроку рахується від київського
+  // «сьогодні» (`stepState`), номер — станом, а не нулем (`phoneState`).
+  const stepKeys = clientKeys;
+  const [stepRes, phoneRes] = await Promise.all([
+    pool.query<{ client_key: string; text: string; due_date: string | null }>(
+      `SELECT DISTINCT ON (client_key) client_key, text, to_char(due_date, 'YYYY-MM-DD') AS due_date
+         FROM client_next_steps WHERE done_at IS NULL AND client_key = ANY($1) ORDER BY client_key, created_at DESC`, [stepKeys]),
+    pool.query<{ client_key: string; n: string }>(
+      `SELECT d.client_key, COUNT(DISTINCT cp.phone) AS n FROM deals d
+         JOIN deal_contacts dc ON dc.deal_kommo_id = d.kommo_id JOIN contact_phones cp ON cp.contact_id = dc.contact_id
+        WHERE d.client_key = ANY($1) GROUP BY d.client_key`, [stepKeys]),
+  ]);
+  const stepByKey = new Map(stepRes.rows.map((r) => [r.client_key, r]));
+  const phonesByKey = new Map(phoneRes.rows.map((r) => [r.client_key, Number(r.n)]));
+  const todayKyiv = (await pool.query<{ d: string }>(`SELECT to_char(now() AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS d`)).rows[0].d;
+  // 🛑 СТОП ЧЕРЕЗ ДЕБІТОРКУ (ТЗ 3989, п.6) — по тих самих ключах: є прострочений рядок дебіторки.
+  const debtRes = await pool.query<{ client_key: string }>(
+    `SELECT DISTINCT client_key FROM receivables WHERE overdue_days > 0 AND client_key = ANY($1)`, [clientKeys]);
+  const debtKeys = new Set(debtRes.rows.map((r) => r.client_key));
 
   // ── ФАКТ І ТИЖНІ — ЯДРО (①). Один виклик на місяць + один на тиждень.
   const histFrom = (() => { const d = new Date(`${monthStr}-01T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - 5); return d.toISOString().slice(0, 7) + "-01"; })();
@@ -6010,6 +6032,15 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       lastContact: lastContactOf(reactByKey.get(c.client_key)?.lastTalk ?? null,
         manualByKey.get(c.client_key)?.at ?? null, manualByKey.get(c.client_key)?.channel ?? null),
       lastContactHasFile: manualByKey.get(c.client_key)?.has_file ?? false,
+      nextStep: stepByKey.has(c.client_key)
+        ? { text: stepByKey.get(c.client_key)!.text, due: stepByKey.get(c.client_key)!.due_date,
+            state: stepState(stepByKey.get(c.client_key)!.due_date, null, todayKyiv) }
+        : null,
+      phone: phoneState(phonesByKey.get(c.client_key) ?? 0),
+      // 💰 МАРЖА ЗА 6 МІС = Σ останніх 6 помісячних бакетів ЯДРА (price = маржа в цьому продукті;
+      // ті самі гроші, що на Звіті, без власного SQL — ворота #17c). null, якщо оплат не було.
+      margin6m: (() => { const a = histByKey.get(c.client_key); if (!a) return null; const last6 = a.slice(-6); return last6.some((v) => v > 0) ? Math.round(last6.reduce((x, y) => x + y, 0)) : null; })(),
+      debtHold: debtKeys.has(c.client_key),
       taskId: reactByKey.get(c.client_key)?.taskId ?? null,
       taskStatus: reactByKey.get(c.client_key)?.taskStatus ?? null,
       taskDeadline: reactByKey.get(c.client_key)?.taskDeadline ?? null,
@@ -6093,6 +6124,19 @@ dashboardRouter.get("/client-plans", async (req, res) => {
    */
   const atRisk = clients.filter((c) => c.inRoster === "active" && c.lastOrderDays != null && c.lastOrderDays > 30);
 
+  // «ПОВЕРНУТО ЗА МІСЯЦЬ» — по ключах скоупу; правило isReturned із чистого модуля.
+  const retRes = await pool.query<{ client_key: string; first_m: string; last_before: string | null; margin: string }>(
+    `WITH paid AS (
+       SELECT d.client_key, (d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date AS dt, d.price
+         FROM deals d JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage = 'paid' AND d.client_key = ANY($1)),
+     m AS (SELECT client_key, to_char(MIN(dt), 'YYYY-MM-DD') AS first_m, SUM(price) AS margin
+             FROM paid WHERE dt >= date_trunc('month', $2::date)::date AND dt < (date_trunc('month', $2::date) + INTERVAL '1 month')::date GROUP BY 1)
+     SELECT m.client_key, m.first_m, m.margin,
+            to_char((SELECT MAX(p.dt) FROM paid p WHERE p.client_key = m.client_key AND p.dt < date_trunc('month', $2::date)::date), 'YYYY-MM-DD') AS last_before
+       FROM m`, [clientKeys, monthStart]);
+  const returned = retRes.rows.reduce((a, r) => isReturned(r.first_m, r.last_before) ? { count: a.count + 1, margin: a.margin + Math.round(Number(r.margin)) } : a, { count: 0, margin: 0 });
+
   res.json({
     month: monthStr,
     historyMonths: histMonths,
@@ -6137,6 +6181,11 @@ dashboardRouter.get("/client-plans", async (req, res) => {
        * принесуть» він НЕ входить, бо це не план.
        */
       inReactivation: bridge.sleeping + bridge.lost,
+      // 🔢 ТРИ ЦИФРИ ЗВЕРХУ (ТЗ 3989, п.5): у роботі = клієнти зі станом «сплячі»/«втрачені» у скоупі,
+      // повернуто за місяць = перша оплата місяця після паузи ≥ RETURN_GAP_DAYS (поріг — відкрите
+      // питання власнику), сума повернутої маржі = Σ price їхніх оплат цього місяця.
+      react: { inWork: clients.filter((c) => c.state === "sleeping" || c.state === "lost").length,
+               returnedMonth: returned.count, returnedMargin: returned.margin, gapDays: RETURN_GAP_DAYS },
       inReactivationSleeping: bridge.sleeping,
       inReactivationLost: bridge.lost,
       /**
@@ -6547,6 +6596,40 @@ const CONTACT_SELECT = `SELECT c.id, c.channel, c.note, c.file_name, c.mime, c.s
          COALESCE(m.name, u.full_name, u.email) AS author
     FROM client_contacts c LEFT JOIN users u ON u.id = c.created_by LEFT JOIN managers m ON m.id = u.manager_id`;
 
+/**
+ * 📌 НАСТУПНИЙ КРОК ПО КЛІЄНТУ (ТЗ реактивації 23.09.2026, п.1). Один живий крок: новий
+ * запис закриває попередній (done_at) — історія лишається. Межа — та сама, що картка:
+ * `canSeeClient` ПЕРШИМ значущим оператором (403 = гейт, не валідація).
+ */
+dashboardRouter.post("/client-next-step", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Клієнт поза вашим скоупом" });
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  const v = stepVerdict(req.body?.text, req.body?.due);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`UPDATE client_next_steps SET done_at = now(), done_by = $2 WHERE client_key = $1 AND done_at IS NULL`, [clientKey, auth.userId]);
+    const ins = await client.query<{ id: number }>(
+      `INSERT INTO client_next_steps (client_key, text, due_date, created_by) VALUES ($1, $2, $3, $4) RETURNING id`,
+      [clientKey, v.text, v.due, auth.userId]);
+    await client.query("COMMIT");
+    res.status(201).json({ ok: true, id: ins.rows[0].id });
+  } catch (e) { await client.query("ROLLBACK"); throw e; } finally { client.release(); }
+});
+
+/** Крок виконано: закриває живий крок клієнта. Той самий скоуп. */
+dashboardRouter.post("/client-next-step/done", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Клієнт поза вашим скоупом" });
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  const r = await pool.query(`UPDATE client_next_steps SET done_at = now(), done_by = $2 WHERE client_key = $1 AND done_at IS NULL`, [clientKey, auth.userId]);
+  res.json({ ok: true, closed: r.rowCount ?? 0 });
+});
+
 /** Список контактів клієнта — тим, хто бачить клієнта. */
 dashboardRouter.get("/client-contacts", async (req, res) => {
   const clientKey = String(req.query.clientKey ?? "").trim();
@@ -6720,6 +6803,22 @@ dashboardRouter.get("/client-card", async (req, res) => {
     months.push({ month: ym, revenue: Math.round(b?.revenue ?? 0), deals: b?.deals ?? 0 });
   }
   const h = head.rows[0];
+  const [cardStep, cardPhones, cardLastCall, cardTodayRes] = await Promise.all([
+    pool.query<{ id: number; text: string; due_date: string | null; author: string | null }>(
+      `SELECT s.id, s.text, to_char(s.due_date, 'YYYY-MM-DD') AS due_date, COALESCE(m.name, u.full_name, u.email) AS author
+         FROM client_next_steps s LEFT JOIN users u ON u.id = s.created_by LEFT JOIN managers m ON m.id = u.manager_id
+        WHERE s.client_key = $1 AND s.done_at IS NULL ORDER BY s.created_at DESC LIMIT 1`, [clientKey]),
+    pool.query<{ n: string }>(
+      `SELECT COUNT(DISTINCT cp.phone) AS n FROM deals d
+         JOIN deal_contacts dc ON dc.deal_kommo_id = d.kommo_id JOIN contact_phones cp ON cp.contact_id = dc.contact_id
+        WHERE d.client_key = $1`, [clientKey]),
+    pool.query<{ at: string; manager: string | null; billsec: string; call_type: string }>(
+      `SELECT rc.calldate AS at, m.name AS manager, rc.billsec, rc.call_type
+         FROM ringostat_calls rc LEFT JOIN managers m ON m.id = rc.manager_id
+        WHERE rc.client_key = $1 AND rc.billsec > 0 ORDER BY rc.calldate DESC LIMIT 1`, [clientKey]),
+    pool.query<{ d: string }>(`SELECT to_char(now() AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS d`),
+  ]);
+  const cardToday = cardTodayRes.rows[0].d;
   /**
    * 📞 ДЗВІНКИ ПО РОКАХ (запит власника 04.09.2026). Беруться по канонічному
    * `client_key` — тобто по номерах, закріплених за компанією; звʼязок робить
@@ -6809,6 +6908,18 @@ dashboardRouter.get("/client-card", async (req, res) => {
       won: String(d.status_id) === "142",
       manager: d.manager,
     })),
+    // 📌 ТЗ реактивації 23.09.2026, п.1–2: наступний крок зі станом, «нема номера» станом,
+    // останній дзвінок (дата, хто, скільки) — окремими запитами нижче.
+    nextStep: cardStep.rows[0]
+      ? { id: cardStep.rows[0].id, text: cardStep.rows[0].text, due: cardStep.rows[0].due_date,
+          author: cardStep.rows[0].author, state: stepState(cardStep.rows[0].due_date, null, cardToday) }
+      : null,
+    phone: phoneState(Number(cardPhones.rows[0]?.n ?? 0)),
+    phonesCount: Number(cardPhones.rows[0]?.n ?? 0),
+    lastCall: cardLastCall.rows[0]
+      ? { at: cardLastCall.rows[0].at, manager: cardLastCall.rows[0].manager, billsec: Number(cardLastCall.rows[0].billsec),
+          direction: String(cardLastCall.rows[0].call_type).includes("out") ? "out" : "in" }
+      : null,
     anchorNote: "Стовпчики — гроші ① (успішно реалізовано, анкер = дата входу в етап). "
       + "Список — журнал угод (дата закриття; для незакритих — створення). Суми не зводяться між собою.",
     /**

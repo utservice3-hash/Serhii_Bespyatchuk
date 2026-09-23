@@ -37,7 +37,7 @@ test("#703b declineSpamForms: лише forms, через shouldDeclineUnsorted, 
   const idx = readFileSync(path.join(src, "index.ts"), "utf8");
   const i = idx.indexOf('runJob("declineSpamForms"'); assert.ok(i > 0, "джоба не в розкладі");
   const block = idx.slice(idx.lastIndexOf("cron.schedule(", i), i);
-  assert.match(block, /cron\.schedule\("\*\/10 \* \* \* \*"/, "не раз на 10 хв");
+  assert.match(block, /cron\.schedule\("4,14,24,34,44,54 \* \* \* \*"/, "не раз на 10 хв, або знову на :00/:30");
   assert.match(block, /isKommoPaused\(\)/, "пише в Kommo повз паузу кола");
   assert.match(readFileSync(path.join(src, "jobs", "monitoredJobs.ts"), "utf8"), /name: "declineSpamForms", everyMin: 10/);
 });
