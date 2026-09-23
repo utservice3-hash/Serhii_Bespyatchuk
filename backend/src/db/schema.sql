@@ -2060,7 +2060,9 @@ UPDATE bank_transactions SET is_bank_fee = true
 -- і гейт на чисту функцію (#274*) другої не бачить. Тому #279e бʼє РОУТ проти живої БД.
 ALTER TABLE access_audit DROP CONSTRAINT IF EXISTS access_audit_target_type_check;
 ALTER TABLE access_audit ADD CONSTRAINT access_audit_target_type_check
-  CHECK (target_type IN ('user','role','bank_account','bank_payee','manager'));
+  -- 'team' — команда лише в дашборді (Налаштування → «Команди», 23.09.2026). Спіймав #279e
+  -- на прийманні: тип оголосили в коді, а живий CHECK його не знав.
+  CHECK (target_type IN ('user','role','bank_account','bank_payee','manager','team'));
 
 -- Сид 4 відомих рахунків (лише структурні поля + env_key_name; реквізити адмін заповнює в
 -- панелі). Bootstrap: сидимо ЛИШЕ коли таблиця порожня → ідемпотентно, не дублює на ре-міграції
