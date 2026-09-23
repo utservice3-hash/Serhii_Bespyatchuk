@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   fetchHiringSchedule, createHiringInterview, patchHiringInterview, deleteHiringInterview, restoreHiringInterview, hiringError,
   type HiringMeta, type HiringScheduleRow, type HiringStatus,
@@ -74,6 +75,18 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
     } catch (e) { toast(hiringError(e), { error: true }); }
   };
 
+  /**
+   * 📅 ПЕРЕНЕСТИ РЯДОК ГРАФІКА (23.09.2026, Іван: «випадково поставив співбесіди на сьогодні — як перенести
+   * на завтра або видалити, щоб не тягнулось у звітність»). Дата й час — той самий `save`, що й решта полів,
+   * тож щоденний звіт рахує день співбесіди по НОВІЙ даті. ⚠️ «Призначено» (дата, коли рядок завели) НЕ
+   * рухається: це факт дня, а не план. Помилковий рядок прибирається «Видалити» — воно скасовне.
+   */
+  const move = async (r: HiringScheduleRow, date: string, time: string) => {
+    await save(r, { interviewDate: date, interviewTime: time });
+    const to = `${date.slice(8, 10)}.${date.slice(5, 7)}${time ? ` ${time}` : ""}`;
+    toast(`${r.full_name || "Рядок"}: перенесено на ${to}`, { action: { label: "Відкрити той день", run: () => setDay(date) } });
+  };
+
   const remove = async (r: HiringScheduleRow) => {
     try {
       await deleteHiringInterview(r.id); load();
@@ -144,6 +157,7 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
         </div>
       ) : view === "agenda" ? (
         <Agenda meta={meta} day={day} today={today} now={now} rows={dayRows} nextId={nextId} unmarked={unmarked}
+          onMove={(r, d, t) => void move(r, d, t)} onRemove={(r) => void remove(r)}
           tiles={{ total: dayRows.length, came, missed, open: dayRows.length - came - missed }}
           onAttend={(r, v) => void save(r, { attended: v })} onStatus={(r, to) => (to === "refused" ? setRefuseFor(r) : setStatusFor({ row: r, to }))}
           onOpen={(id) => setOpenId(id)} onAdd={(t) => setIvAt(t ?? nextTime())} />
@@ -281,12 +295,21 @@ const fromMin = (x: number) => `${String(Math.floor(x / 60)).padStart(2, "0")}:$
  * «✓ Прийшов / ✕ Не прийшов» однією кнопкою, лінія «зараз», вільні вікна з кнопкою призначення.
  * Дані й дії — ті самі, що в таблиці (той самий `save` рядка графіка), тож звіт рахує однаково.
  */
-function Agenda({ meta, day, today, now, rows, nextId, unmarked, tiles, onAttend, onStatus, onOpen, onAdd }: {
+function Agenda({ meta, day, today, now, rows, nextId, unmarked, tiles, onAttend, onStatus, onOpen, onAdd, onMove, onRemove }: {
   meta: HiringMeta; day: string; today: string; now: string; rows: HiringScheduleRow[]; nextId?: number;
   unmarked: (r: HiringScheduleRow) => boolean; tiles: { total: number; came: number; missed: number; open: number };
   onAttend: (r: HiringScheduleRow, v: boolean) => void; onStatus: (r: HiringScheduleRow, to: HiringStatus) => void;
   onOpen: (id: number) => void; onAdd: (time?: string) => void;
+  onMove: (r: HiringScheduleRow, date: string, time: string) => void; onRemove: (r: HiringScheduleRow) => void;
 }) {
+  const [moving, setMoving] = useState<HiringScheduleRow | null>(null);
+  const [menu, setMenu] = useState<{ r: HiringScheduleRow; x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    window.addEventListener("click", close); window.addEventListener("scroll", close, true);
+    return () => { window.removeEventListener("click", close); window.removeEventListener("scroll", close, true); };
+  }, [menu]);
   const out: React.ReactNode[] = [];
   let nowShown = day !== today;
   rows.forEach((r, i) => {
@@ -311,8 +334,8 @@ function Agenda({ meta, day, today, now, rows, nextId, unmarked, tiles, onAttend
         <div className="ag-r">
           {r.attended === true ? <span className="emp-pill ok">✓ прийшов</span> : r.attended === false ? <span className="emp-pill" style={{ background: "var(--danger-bg)", color: "var(--danger)" }}>✕ не прийшов</span>
             : unm ? <span className="emp-pill warn">не відмічено</span> : r.status ? <StatusPill meta={meta} status={r.status} /> : null}
-          {r.candidate_id && (
-            <div className="ag-acts">
+          <div className="ag-acts">
+            {r.candidate_id && (<>
               {r.attended == null && <>
                 <button className="hr-btn xs came" onClick={() => onAttend(r, true)}>✓ Прийшов</button>
                 <button className="hr-btn xs miss" onClick={() => onAttend(r, false)}>✕ Не прийшов</button>
@@ -320,9 +343,10 @@ function Agenda({ meta, day, today, now, rows, nextId, unmarked, tiles, onAttend
               {r.attended != null && r.status && next.filter((s) => s !== "refused" && s !== "black").slice(0, 1).map((s) =>
                 <button key={s} className="hr-btn xs p" onClick={() => onStatus(r, s)}>→ {meta.statuses.find((x) => x.key === s)?.label ?? s}</button>)}
               {r.status && next.includes("refused") && <button className="hr-btn xs" onClick={() => onStatus(r, "refused")}>Відмова…</button>}
-              <button className="hr-btn xs" title="Картка кандидата" onClick={() => onOpen(r.candidate_id!)}>⋯</button>
-            </div>
-          )}
+            </>)}
+            <button className="hr-btn xs" aria-label="Ще дії" title="Перенести, видалити, картка кандидата"
+              onClick={(e) => { e.stopPropagation(); const b = (e.currentTarget as HTMLElement).getBoundingClientRect(); setMenu({ r, x: b.right, y: b.bottom }); }}>⋯</button>
+          </div>
         </div>
         <div className="ag-sub">
           <span>{r.phone ? `📞 ${r.phone}` : "телефон не вказано"}</span>
@@ -335,6 +359,14 @@ function Agenda({ meta, day, today, now, rows, nextId, unmarked, tiles, onAttend
     );
   });
   if (!nowShown && rows.length) out.push(<div key="now-end" className="ag-now">зараз {now}</div>);
+  const menuNode = menu && createPortal(
+    <div className="vc-menu" style={{ top: menu.y + 4, left: Math.max(8, menu.x - 210) }} onClick={(e) => e.stopPropagation()}>
+      {menu.r.candidate_id && <button onClick={() => { const id = menu.r.candidate_id!; setMenu(null); onOpen(id); }}>Картка кандидата</button>}
+      <button onClick={() => { setMoving(menu.r); setMenu(null); }}>Перенести на іншу дату…</button>
+      <button className="dg" onClick={() => { const r = menu.r; setMenu(null); onRemove(r); }}>Видалити з графіка</button>
+    </div>, document.body);
+  const moveNode = moving && <MoveDialog r={moving} day={day} onClose={() => setMoving(null)}
+    onDone={(d, t) => { const r = moving; setMoving(null); onMove(r, d, t); }} />;
   return (
     <div className="hr-card">
       <div className="hr-tiles">
@@ -350,8 +382,37 @@ function Agenda({ meta, day, today, now, rows, nextId, unmarked, tiles, onAttend
       </div>
       <div style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid var(--border)", flexWrap: "wrap", alignItems: "center" }}>
         <button className="hr-btn p" onClick={() => onAdd()}>+ Співбесіда</button>
-        <span className="hr-muted">Кандидата можна обрати з бази або створити тут же. Позначка «прийшов» — однією кнопкою в картці. Для масового внесення — вигляд «Таблиця».</span>
+        <span className="hr-muted">Кандидата можна обрати з бази або створити тут же. Позначка «прийшов» — однією кнопкою в картці.
+          Помилковий рядок переносять або видаляють через «⋯»; видалене можна відновити одразу після видалення. Для масового внесення — вигляд «Таблиця».</span>
       </div>
+      {menuNode}
+      {moveNode}
     </div>
   );
+}
+
+/** Перенести рядок графіка: нова дата й час. Дата обовʼязкова; час можна лишити порожнім («—» у розкладі). */
+function MoveDialog({ r, day, onClose, onDone }: { r: HiringScheduleRow; day: string; onClose: () => void; onDone: (date: string, time: string) => void }) {
+  const [date, setDate] = useState(r.interview_date || day);
+  const [time, setTime] = useState(r.interview_time ?? "");
+  const [err, setErr] = useState<string | null>(null);
+  return createPortal(
+    <div className="hr-modal-back" onClick={onClose}>
+      <div className="hr-modal" role="dialog" aria-label="Перенести співбесіду" onClick={(e) => e.stopPropagation()} style={{ width: "min(460px, 96vw)" }}>
+        <h3 style={{ margin: "0 0 4px", fontSize: 16 }}>Перенести співбесіду</h3>
+        <div className="hr-muted" style={{ marginBottom: 12, fontSize: 13 }}>
+          {r.full_name || "рядок без кандидата"} · зараз {dm(r.interview_date)}{r.interview_time ? ` ${r.interview_time}` : ""}.
+          Дата призначення не змінюється — у звіті за сьогодні рядок лишиться «призначено».
+        </div>
+        <div className="emp-form" style={{ marginTop: 0 }}>
+          <label><span>Дата *</span><input className="hr-inp" type="date" value={date} onChange={(e) => { setDate(e.target.value); setErr(null); }} /></label>
+          <label><span>Час</span><input className="hr-inp" type="time" value={time} onChange={(e) => setTime(e.target.value)} /></label>
+        </div>
+        {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 8 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+          <button className="hr-btn" onClick={onClose}>Скасувати</button>
+          <button className="hr-btn p" onClick={() => (date ? onDone(date, time) : setErr("Оберіть дату"))}>Перенести</button>
+        </div>
+      </div>
+    </div>, document.body);
 }
