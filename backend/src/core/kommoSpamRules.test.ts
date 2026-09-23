@@ -24,7 +24,7 @@ test("#703 спам-заявки: лише форми без справжньо�
 
 /**
  * #703b — ПРОВОДКА: джоба читає ЛИШЕ category=forms, відхиляє через чисте правило, має стелю на тік
- * і повертає числа; крон кожні 10 хв під паузою Kommo; джоба в MONITORED_JOBS з everyMin 10.
+ * і повертає числа; крон кожні 3 хв (1-59/3) під паузою Kommo; джоба в MONITORED_JOBS з everyMin 3.
  * Червоніє, якщо прибрати фільтр форм із запиту, обійти правило або зняти з монітора.
  */
 test("#703b declineSpamForms: лише forms, через shouldDeclineUnsorted, стеля, крон під паузою, у моніторі", () => {
@@ -37,7 +37,7 @@ test("#703b declineSpamForms: лише forms, через shouldDeclineUnsorted, 
   const idx = readFileSync(path.join(src, "index.ts"), "utf8");
   const i = idx.indexOf('runJob("declineSpamForms"'); assert.ok(i > 0, "джоба не в розкладі");
   const block = idx.slice(idx.lastIndexOf("cron.schedule(", i), i);
-  assert.match(block, /cron\.schedule\("4,14,24,34,44,54 \* \* \* \*"/, "не раз на 10 хв, або знову на :00/:30");
+  assert.match(block, /cron\.schedule\("1-59\/3 \* \* \* \*"/, "не кожні 3 хв, або знову на :00/:30");
   assert.match(block, /isKommoPaused\(\)/, "пише в Kommo повз паузу кола");
-  assert.match(readFileSync(path.join(src, "jobs", "monitoredJobs.ts"), "utf8"), /name: "declineSpamForms", everyMin: 10/);
+  assert.match(readFileSync(path.join(src, "jobs", "monitoredJobs.ts"), "utf8"), /name: "declineSpamForms", everyMin: 3/);
 });
