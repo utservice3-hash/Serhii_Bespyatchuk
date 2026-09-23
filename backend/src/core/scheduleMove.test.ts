@@ -39,8 +39,13 @@ test("#690 РОЗКЛАД: рядок можна перенести й вида�
  */
 test("#691 РОЗКЛАД: позначку явки можна зняти, рядок змінити, статус повернути — попередній статус бере сервер", () => {
   const src = readFileSync(FE, "utf8");
-  for (const need of ["⟲ Скасувати позначку", "Змінити рядок…", "↩ Повернути останню зміну статусу", "onClearMark", "onUndoStatus"])
-    assert.ok(src.includes(need), `🔴 у «Розкладі» немає «${need}»`);
+  // 🔴 Шукаємо саме КНОПКУ, а не фразу: той самий текст є в підписі внизу, і перевірка «є рядок» лишалась
+  // зеленою, коли кнопку перейменували (спіймано саботажем 23.09.2026 — правило 7).
+  for (const need of [
+    "onClearMark(r)}>⟲ Скасувати позначку</button>",
+    ">Змінити рядок…</button>", ">↩ Повернути останню зміну статусу</button>",
+    "onClearMark={", "onUndoStatus={",
+  ]) assert.ok(src.includes(need), `🔴 у «Розкладі» немає «${need}»`);
   const clear = src.slice(src.indexOf("const clearMark = async"), src.indexOf("const undoStatus = async"));
   assert.ok(clear.includes("save(r, { attended: null })"), "🔴 позначка знімається не тим самим записом рядка");
   assert.ok(clear.includes("fetchHiringCard(") && clear.includes("card.lastFrom"), "🔴 попередній статус не питають у сервера");
