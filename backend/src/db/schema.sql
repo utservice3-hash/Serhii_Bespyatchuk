@@ -1758,7 +1758,7 @@ CREATE INDEX IF NOT EXISTS idx_plan_formation_month ON plan_formation (month, st
 -- Фіксується саме на подачі: поріг може змінитись, а факт «тоді було нижче» — ні.
 ALTER TABLE plan_formation ADD COLUMN IF NOT EXISTS below_min BOOLEAN NOT NULL DEFAULT false;
 
--- ============================================================================
+-- =====================================================================
 -- RBAC (Phase 1). Additive, idempotent. Вбудовані ролі = ТОЧНА поточна поведінка.
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS roles (
@@ -3971,3 +3971,15 @@ CREATE TABLE IF NOT EXISTS client_next_steps (
   done_by INTEGER REFERENCES users(id)
 );
 CREATE INDEX IF NOT EXISTS idx_client_next_steps_open ON client_next_steps(client_key) WHERE done_at IS NULL;
+=======
+-- 🎓 ОДНОРАЗОВИЙ ПЕРЕНОС АКАДЕМІЇ SEREDA (23.09.2026, рішення Романа: «переносимо все, далі навчання живе
+-- на нашому сервері»). `external_id` — ключ ідемпотентності імпорту: повторний прогін ОНОВЛЮЄ той самий
+-- рядок, а не створює другий. Після переносу Sereda не потрібна; колонки лишаються слідом походження.
+-- ⚠️ revert коду колонки й перенесені рядки не прибирає.
+ALTER TABLE training_courses   ADD COLUMN IF NOT EXISTS source      TEXT NOT NULL DEFAULT 'manual';
+ALTER TABLE training_courses   ADD COLUMN IF NOT EXISTS external_id TEXT;
+ALTER TABLE training_folders   ADD COLUMN IF NOT EXISTS external_id TEXT;
+ALTER TABLE training_materials ADD COLUMN IF NOT EXISTS external_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_training_courses_ext   ON training_courses(external_id)   WHERE external_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_training_folders_ext   ON training_folders(external_id)   WHERE external_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_training_materials_ext ON training_materials(external_id) WHERE external_id IS NOT NULL;
