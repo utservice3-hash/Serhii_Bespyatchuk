@@ -5,7 +5,7 @@ import { requireAuth, requireRole } from "../auth/middleware.js";
 import { successByBucket, receivedByBucket, type MoneyScope } from "../core/money.js";
 import * as money from "../core/money.js";
 import { lapsedFrom, prevMonthOf } from "../core/lapsedClients.js";
-import { effectiveManagerSql, monthLiteralSql } from "../core/effectiveManager.js";
+import { clientOwnersFor } from "../core/clientOwner.js";
 import { kyivToday } from "../core/dates.js";
 import { dispatchedByLoadBucket, leadsTakenByBucket, repeatClientsByBucket, type MetricScope } from "../core/metrics.js";
 import { SALES_TEAM_LEAD } from "../statistics/catalog.js";
@@ -275,24 +275,13 @@ statsSeriesRouter.get("/lapsed-clients", async (req, res) => {
   const buckets = await money.successByClientBucket({ from: `${prevYm}-01`, to: thisEnd }, "month");
   const lapsed = lapsedFrom(buckets.map((b) => ({ clientKey: b.clientKey, bucket: b.bucket, revenue: b.revenue })), prevYm, thisYm);
   const keys = lapsed.map((l) => l.clientKey);
-  // Ефективний менеджер: основний = менеджер більшості угод клієнта (без фільтра по стадії й
-  // анкеру — гроші тут НЕ рахуються, лише привʼязка людини; ворота #17c), поверх — закріплення.
-  const own = await pool.query<{ client_key: string; client_name: string | null; manager_id: number | null; manager_name: string | null; team_id: number | null; team_name: string | null }>(
-    `WITH per AS (SELECT client_key, manager_id, COUNT(*) AS n, MAX(kommo_id) AS mx FROM deals WHERE client_key = ANY($1) GROUP BY 1, 2),
-     pm AS (SELECT DISTINCT ON (client_key) client_key, manager_id FROM per ORDER BY client_key, n DESC, mx DESC),
-     nm AS (SELECT DISTINCT ON (client_key) client_key, client_name FROM deals WHERE client_key = ANY($1) ORDER BY client_key, kommo_id DESC)
-     SELECT pm.client_key, nm.client_name, ${effectiveManagerSql("lo", "pm", monthLiteralSql(thisYm))} AS manager_id,
-            mm.name AS manager_name, mm.team_id, tm.name AS team_name
-       FROM pm LEFT JOIN nm ON nm.client_key = pm.client_key
-       LEFT JOIN loyalty_overrides lo ON lo.client_key = pm.client_key
-       LEFT JOIN managers mm ON mm.id = ${effectiveManagerSql("lo", "pm", monthLiteralSql(thisYm))}
-       LEFT JOIN teams tm ON tm.id = mm.team_id`, [keys]);
-  const byKey = new Map(own.rows.map((r) => [r.client_key, r]));
+  // Ефективний менеджер і команда — з ядра (`clientOwnersFor`: оплачені угоди + закріплення).
+  const byKey = await clientOwnersFor(keys, thisYm);
   const canAll = isAdminScope(auth);
   type Row = { clientKey: string; clientName: string; manager: string | null; managerId: number | null; teamId: number | null; teamName: string; prevRevenue: number };
   const rows: Row[] = lapsed.map((l) => { const o = byKey.get(l.clientKey); return {
-    clientKey: l.clientKey, clientName: o?.client_name ?? l.clientKey, manager: o?.manager_name ?? null, managerId: o?.manager_id ?? null,
-    teamId: o?.team_id ?? null, teamName: o?.team_name ?? "Без команди", prevRevenue: l.prevRevenue }; })
+    clientKey: l.clientKey, clientName: o?.clientName ?? l.clientKey, manager: o?.managerName ?? null, managerId: o?.managerId ?? null,
+    teamId: o?.teamId ?? null, teamName: o?.teamName ?? "Без команди", prevRevenue: l.prevRevenue }; })
     .filter((r) => canAll || (auth.role === "team_lead" ? r.teamId === auth.teamId : r.managerId === auth.managerId));
   const teams = new Map<string, { teamId: number | null; teamName: string; clients: number; prevRevenue: number; rows: Row[] }>();
   for (const r of rows) {

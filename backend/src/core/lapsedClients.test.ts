@@ -34,8 +34,11 @@ test("#694b /statistics/lapsed-clients: гроші з ядра, команда �
   const body = r.slice(i, r.indexOf("\n});", i));
   assert.match(body, /money\.successByClientBucket\(/, "гроші не з ядра");
   assert.match(body, /\blapsedFrom\(/);
-  assert.match(body, /LEFT JOIN managers mm ON mm\.id = \$\{effectiveManagerSql\("lo", "pm"/, "команда не за ефективним менеджером: JOIN менеджера мусить іти через закріплення, а не pm.manager_id");
-  assert.doesNotMatch(body, /SUM\(d?\.?price\)/, "власний SQL по грошах");
+  assert.match(body, /\bclientOwnersFor\(keys, thisYm\)/, "команда не з ядра clientOwnersFor");
+  assert.doesNotMatch(body, /SUM\(d?\.?price\)|FROM deals/, "власний SQL у роуті");
+  const owner = readFileSync(path.join(src, "core", "clientOwner.ts"), "utf8");
+  assert.match(owner, /psm\.funnel_stage = 'paid'/, "привʼязка мусить іти по ОПЛАЧЕНИХ угодах (інакше 114 клієнтів лягають на бухгалтерію)");
+  assert.match(owner, /LEFT JOIN managers mm ON mm\.id = \$\{effectiveManagerSql\("lo", "pm", month\)\}/, "JOIN менеджера мусить іти через закріплення, а не pm.manager_id");
   assert.match(readFileSync(path.join(src, "auth", "routeTab.ts"), "utf8"), /pre\("\/api\/statistics\/lapsed-clients"\), tabs: \["statistics"\]/);
   assert.match(readFileSync(path.join(src, "auth", "accessMatrix.ts"), "utf8"), /path: "\/api\/statistics\/lapsed-clients\?month=2026-09"/);
   const f = readFileSync(path.join(src, "..", "..", "frontend", "src", "pages", "dashboard", "sections", "StatisticsChartsSection.tsx"), "utf8");
