@@ -12,7 +12,7 @@ export async function writeAudit(a: {
   action: string; // user.* | role.* | bank.account.* | bank.hidden.*
   // 👤 `manager` — стан менеджера (активний / завершує / звільнений). Не «user»:
   // рішення стосується людини в CRM, а логіна в неї може не бути взагалі.
-  targetType: "user" | "role" | "bank_account" | "bank_payee" | "manager";
+  targetType: "user" | "role" | "bank_account" | "bank_payee" | "manager" | "team";
   targetId: string;
   targetLabel?: string | null;
   details?: Record<string, unknown>;

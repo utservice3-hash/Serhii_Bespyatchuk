@@ -4591,3 +4591,25 @@ export function employeePhotoUrl(p: PhotoRef): Promise<string | null> {
   }
   return u;
 }
+
+/* 🧭 Команди дашборда й перевизначення команди менеджера (ТЗ 23.09.2026, п.1). */
+export interface TeamOverrideRow {
+  managerId: number; name: string; kommoUserId: string; teamId: number | null;
+  override: { teamId: number | null; note: string | null } | null;
+}
+export interface TeamOverridesPayload {
+  teams: { id: number; name: string; dashboardOnly: boolean; active: number }[];
+  managers: TeamOverrideRow[];
+}
+export async function fetchTeamOverrides(): Promise<TeamOverridesPayload> {
+  const { data } = await api.get<TeamOverridesPayload>("/settings/team-overrides");
+  return data;
+}
+export async function setTeamOverride(kommoUserId: string, body: { mode: "crm" | "team" | "none"; teamId?: number; note?: string }) {
+  const { data } = await api.put<{ ok: true; appliedNow: boolean }>(`/settings/team-overrides/${kommoUserId}`, body);
+  return data;
+}
+export async function createDashboardTeam(name: string): Promise<{ id: number; name: string }> {
+  const { data } = await api.post<{ id: number; name: string }>("/settings/teams", { name });
+  return data;
+}

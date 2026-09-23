@@ -1100,6 +1100,14 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
   // 💰 План реклами: ЧИТАТИ можуть усі, хто бачить екран «Реклама»; МІНЯТИ — лише ті,
   // хто керує користувачами. Дивитись на план і ставити план — різні дії.
+  // 🧭 Команди дашборда й перевизначення команди менеджера (ТЗ 23.09.2026, п.1):
+  //    та сама межа, що керування людьми — manage_users.
+  { method: "GET", path: "/api/settings/team-overrides", cls: "GET",
+    allow: ["admin", "ceo", "opdir"], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "PUT", path: "/api/settings/team-overrides/:kommoUserId", cls: "deny-only",
+    allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/settings/teams", cls: "deny-only",
+    allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "PUT", path: "/api/settings/ad-plan", cls: "deny-only",
     allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/settings/users/:id/reactivate", cls: "deny-only",
