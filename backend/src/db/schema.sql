@@ -3957,3 +3957,15 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_updated_by INTEGER REFERENC
 -- кандидата). ⚠️ revert коду колонку не прибирає; дані без неї не губляться.
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS candidate_id INTEGER REFERENCES hiring_candidates(id) ON DELETE SET NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_employees_candidate ON employees(candidate_id) WHERE candidate_id IS NOT NULL;
+
+-- 🎓 ОДНОРАЗОВИЙ ПЕРЕНОС АКАДЕМІЇ SEREDA (23.09.2026, рішення Романа: «переносимо все, далі навчання живе
+-- на нашому сервері»). `external_id` — ключ ідемпотентності імпорту: повторний прогін ОНОВЛЮЄ той самий
+-- рядок, а не створює другий. Після переносу Sereda не потрібна; колонки лишаються слідом походження.
+-- ⚠️ revert коду колонки й перенесені рядки не прибирає.
+ALTER TABLE training_courses   ADD COLUMN IF NOT EXISTS source      TEXT NOT NULL DEFAULT 'manual';
+ALTER TABLE training_courses   ADD COLUMN IF NOT EXISTS external_id TEXT;
+ALTER TABLE training_folders   ADD COLUMN IF NOT EXISTS external_id TEXT;
+ALTER TABLE training_materials ADD COLUMN IF NOT EXISTS external_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_training_courses_ext   ON training_courses(external_id)   WHERE external_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_training_folders_ext   ON training_folders(external_id)   WHERE external_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_training_materials_ext ON training_materials(external_id) WHERE external_id IS NOT NULL;

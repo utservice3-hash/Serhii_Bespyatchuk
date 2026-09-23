@@ -690,6 +690,8 @@ export const EMPTY_PERIOD_SKIPS: { name: string; why: string }[] = [
     why: "каса порожня; «є, але доданок вироджений» лишається падінням" },
   { name: "#102b БУДИЛЬНИК: кожна undef-угода має ВІДОМУ НАЗВАНУ ПРИЧИНУ (жива БД)",
     why: "каса місяця порожня" },
+  { name: "#702 ЖИВИЙ SQL: імпорт ідемпотентний, курс — чернетка для менеджерів, наявні файли не перекачуються",
+    why: "порожній кластер (`provisionScratch`) — на прод-сервері бінарів PostgreSQL немає за побудовою; у `npm test` обовʼязковий" },
 ];
 
 export interface SkipInfo { name: string; reason: string }
