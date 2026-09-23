@@ -67,8 +67,16 @@ trainingRouter.get("/tree", async (req, res) => {
       [isAdminScope(req.auth!)]
     ),
   ]);
-  // 📄 Тип файла — через ядро: у 84 перенесених документів колонка порожня (див. core/trainingMime.ts).
-  const withMime = materials.rows.map((m) => ({ ...m, mime: effectiveMime(m.mime, m.stored_name, m.title) }));
+  /* 📄 Тип файла — через ядро: у 84 перенесених документів колонка порожня (core/trainingMime.ts).
+     🔴 ПОЛЯ ПЕРЕЛІЧЕНО ЯВНО, а не спредом рядка. Спред спіймав `#17e2`, і спіймав по ділу:
+     `stored_name` довелось додати в SELECT заради виведення типу, і разом зі спредом він поїхав
+     би клієнту — тобто внутрішнє імʼя файла на диску стало б видимим у відповіді. */
+  const withMime = materials.rows.map((m) => ({
+    id: m.id, folder_id: m.folder_id, title: m.title, kind: m.kind, url: m.url,
+    mime: effectiveMime(m.mime, m.stored_name, m.title),
+    size_bytes: m.size_bytes, content: m.content, position: m.position, created_at: m.created_at,
+    status: m.status, created_by_ai: m.created_by_ai, required: m.required, author: m.author,
+  }));
   res.json({ folders: folders.rows, materials: withMime });
 });
 
