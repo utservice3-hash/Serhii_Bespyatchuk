@@ -51,3 +51,14 @@
 .tr-erow label, .tr-edithead label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--text-muted); }
 .tr-edithead { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; padding: 14px 16px; }
 .tr-edithead .wide { grid-column: 1 / -1; }
+
+/* ➕ Діалог «Новий крок»: дропзона з прев'ю. Ширший за типову модалку — у ній показуємо
+   саме те, що людина щойно обрала (кадр відео, картинку), а не лише назву файла. */
+.tr-add { max-width: 620px; max-height: 88vh; overflow-y: auto; }
+.tr-drop { border: 2px dashed var(--border-strong); border-radius: var(--r-lg); padding: 18px; text-align: center; transition: border-color .15s, background .15s; }
+.tr-drop.over { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 6%, transparent); }
+.tr-dropin { display: flex; flex-direction: column; gap: 4px; cursor: pointer; }
+.tr-dropped { display: flex; gap: 14px; align-items: flex-start; text-align: left; flex-wrap: wrap; }
+.tr-dropped img, .tr-dropped video { max-width: 240px; max-height: 160px; border-radius: 8px; background: #000; }
+.tr-dropmeta { display: flex; flex-direction: column; gap: 2px; min-width: 160px; flex: 1 1 160px; word-break: break-word; }
+.tr-dropmeta .hr-btn { align-self: flex-start; cursor: pointer; }

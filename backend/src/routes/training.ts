@@ -11,6 +11,7 @@ import { stepLockedBy, type LockDb } from "../core/trainingLock.js";
 import { attachVerdict, requiredValue, moduleStats, courseModules, freeModules, type EditorFolder } from "../core/trainingEditor.js";
 import { roleHasPerm } from "../auth/rbac.js";
 import { effectiveMime, mimeFromName } from "../core/trainingMime.js";
+import { checkUpload, MAX_UPLOAD_BYTES, ACCEPT_ATTR } from "../core/trainingUpload.js";
 
 /**
  * Навчання — навчальна база відділу продажу. Адмін (КВП) будує структуру папок
@@ -29,7 +30,7 @@ export const trainingRouter = Router();
 trainingRouter.use(requireAuth);
 
 const TRAIN_DIR = path.join(UPLOAD_DIR, "..", "training");
-const MAX_BYTES = 45 * 1024 * 1024; // 45 МБ на файл (великі відео — через embed)
+// 📎 Стеля й білий список — у `core/trainingUpload.ts`, одним числом на сервер і фронт (#712).
 /**
  * ✍️ ХТО РЕДАГУЄ НАВЧАННЯ — ПРАВО, А НЕ РОЛЬ (ТЗ 14.09.2026).
  *
@@ -77,7 +78,11 @@ trainingRouter.get("/tree", async (req, res) => {
     size_bytes: m.size_bytes, content: m.content, position: m.position, created_at: m.created_at,
     status: m.status, created_by_ai: m.created_by_ai, required: m.required, author: m.author,
   }));
-  res.json({ folders: folders.rows, materials: withMime });
+  /* 📎 Межа й перелік типів їдуть із сервера, щоб у фронта НЕ БУЛО власної копії числа:
+     розійшлися б вони мовчки, і людина дізнавалась би про межу з 413 після хвилини
+     завантаження. Одне джерело — `core/trainingUpload.ts`, тримає `#712`. */
+  const upload = { maxBytes: MAX_UPLOAD_BYTES, accept: ACCEPT_ATTR };
+  res.json({ folders: folders.rows, materials: withMime, upload });
 });
 
 /**
@@ -196,13 +201,16 @@ trainingRouter.post("/material", canEditTraining, async (req, res) => {
     if (!dataBase64 || typeof dataBase64 !== "string") return res.status(400).json({ error: "Файл відсутній" });
     const base64 = dataBase64.includes(",") ? dataBase64.split(",")[1] : dataBase64;
     const buffer = Buffer.from(base64, "base64");
-    if (buffer.length > MAX_BYTES) return res.status(413).json({ error: "Файл завеликий (макс. 45 МБ; для великих відео — embed-посилання)" });
     const display = String(b.filename ?? title).trim() || "файл";
+    /* 📎 Тип і розмір — ОДНІЄЮ перевіркою ядра, ДО запису на диск. Тип виводимо з імені, коли
+       браузер промовчав: інакше «невідомий» і «заборонений» злились би в одну відмову. */
+    const verdict = checkUpload(b.mime ? String(b.mime) : mimeFromName(display), buffer.length);
+    if (!verdict.ok) return res.status(verdict.status).json({ error: verdict.reason });
     const ext = path.extname(display).slice(0, 12).replace(/[^.\w]/g, "");
     storedName = `${randomUUID()}${ext}`;
     await mkdir(TRAIN_DIR, { recursive: true });
     await writeFile(path.join(TRAIN_DIR, storedName), buffer);
-    mime = b.mime ? String(b.mime) : mimeFromName(display);
+    mime = verdict.mime;
     sizeBytes = buffer.length;
   }
   content = content ?? (b.content ? String(b.content).trim() : null); // опис для не-текстових
@@ -329,8 +337,12 @@ trainingRouter.get("/courses", async (req, res) => {
   const modulesOf = (courseId: number) => courseModules(eFolders, courseId).map((m) => ({
     id: m.id, name: m.name, position: m.position, ...moduleStats(m.id, eFolders, mRows),
   }));
+  /* 📎 Межа й перелік типів їдуть із сервера, щоб у фронта НЕ БУЛО власної копії числа:
+     розійшлися б вони мовчки, і людина дізнавалась би про межу з 413 після хвилини
+     завантаження. Одне джерело — `core/trainingUpload.ts`, тримає `#712`. */
+  const upload = { maxBytes: MAX_UPLOAD_BYTES, accept: ACCEPT_ATTR };
   res.json({
-    canEdit,
+    canEdit, upload,
     freeModules: canEdit ? freeModules(eFolders).map((m) => ({ id: m.id, name: m.name, position: m.position, ...moduleStats(m.id, eFolders, mRows) })) : undefined,
     courses: courses.rows.map((c) => {
       // Модуль = КОРЕНЕВА папка курсу (рішення власника 15.09.2026).
