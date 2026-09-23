@@ -33,7 +33,8 @@ test("#694b /statistics/lapsed-clients: гроші з ядра, команда �
   const i = r.indexOf('statsSeriesRouter.get("/lapsed-clients"'); assert.ok(i > 0, "роут не знайдено");
   const body = r.slice(i, r.indexOf("\n});", i));
   assert.match(body, /money\.successByClientBucket\(/, "гроші не з ядра");
-  assert.match(body, /\blapsedFrom\(/); assert.match(body, /effectiveManagerSql\("lo", "pm"/, "команда не за ефективним менеджером");
+  assert.match(body, /\blapsedFrom\(/);
+  assert.match(body, /LEFT JOIN managers mm ON mm\.id = \$\{effectiveManagerSql\("lo", "pm"/, "команда не за ефективним менеджером: JOIN менеджера мусить іти через закріплення, а не pm.manager_id");
   assert.doesNotMatch(body, /SUM\(d?\.?price\)/, "власний SQL по грошах");
   assert.match(readFileSync(path.join(src, "auth", "routeTab.ts"), "utf8"), /pre\("\/api\/statistics\/lapsed-clients"\), tabs: \["statistics"\]/);
   assert.match(readFileSync(path.join(src, "auth", "accessMatrix.ts"), "utf8"), /path: "\/api\/statistics\/lapsed-clients\?month=2026-09"/);
