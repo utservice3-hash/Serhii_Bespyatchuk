@@ -3999,8 +3999,11 @@ CREATE TABLE IF NOT EXISTS manager_team_overrides (
 );
 
 -- Сид 2 (спершу): команда лише в дашборді — у Kommo такої групи немає (ТЗ 23.09.2026).
-INSERT INTO teams (name, kommo_group_id)
-SELECT 'Комерційний відділ', NULL
+-- ⚠️ id ЯВНИЙ і далекий від serial (MAX+1000): фікстури гейтів сіють команди з id 1..15 через
+-- ON CONFLICT DO NOTHING, і serial-рядок з id 1 мовчки підмінив би їм назву (спіймано #25d,
+-- #675: «Комерційний відділ» замість «РПК»). На проді це 37283 — послідовність не зачіпає.
+INSERT INTO teams (id, name, kommo_group_id)
+SELECT COALESCE((SELECT MAX(id) FROM teams), 0) + 1000, 'Комерційний відділ', NULL
  WHERE NOT EXISTS (SELECT 1 FROM teams WHERE name = 'Комерційний відділ');
 
 -- 🔴 BASELINE ОДНИМ ЗАПИТОМ, НЕ СИНК (урок #15 і #709d): сиди лягають лише в ПОРОЖНЮ
