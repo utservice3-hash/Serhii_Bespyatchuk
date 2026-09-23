@@ -77,6 +77,7 @@ import { recomputeStatistics, getStatisticsStatus } from "./jobs/recomputeStatis
 import { recomputeClientKeys } from "./jobs/recomputeClientKeys.js";
 import { closeExpiredCandidateAccess } from "./jobs/hiringAccess.js";
 import { syncRingostatCalls, getRingostatStatus } from "./jobs/syncRingostatCalls.js";
+import { syncTldv } from "./jobs/syncTldv.js";
 import { syncCalls } from "./jobs/syncCalls.js";
 import { missedCallTasks } from "./jobs/missedCallTasks.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
@@ -568,6 +569,10 @@ cron.schedule("20 8 * * *", () => {
 // "🔄 Оновити з файлу" button in the UI forces it instantly).
 cron.schedule("*/15 * * * *", () => {
   void runJob("syncReceivables", () => syncReceivables());
+});
+// 🎥 Записи співбесід tl;dv — що 15 хв. Без ключа джоба чесно пропускається (лічильник пропусків).
+cron.schedule("*/15 * * * *", () => {
+  void runJob("syncTldv", () => syncTldv());
 });
 // Банк-виписки — що 15 хв (окремо від CRM). Upsert по external_tx_id.
 cron.schedule("*/15 * * * *", () => {

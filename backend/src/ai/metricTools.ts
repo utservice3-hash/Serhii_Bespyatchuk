@@ -61,6 +61,8 @@ export const FORBIDDEN_TABLES = [
   "hiring_training_questions",
   // 🚪 Звільнення (21.09.2026): причини й хто звільняв. REVOKE у схемі. Тримає #624.
   "employee_offboarding",
+  // 🎥 Зустрічі tl;dv (23.09.2026): пошта й імена учасників. REVOKE у схемі. Тримає #703.
+  "tldv_meetings",
 ];
 
 /**

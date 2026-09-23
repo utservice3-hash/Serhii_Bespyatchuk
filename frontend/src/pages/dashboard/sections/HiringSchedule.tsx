@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   fetchHiringSchedule, createHiringInterview, patchHiringInterview, deleteHiringInterview, restoreHiringInterview, fetchHiringCard, setHiringStatus, hiringError,
+  fetchTldv, syncTldvNow, linkTldv, ignoreTldv, type TldvState,
   type HiringMeta, type HiringScheduleRow, type HiringStatus,
 } from "../../../api";
 import { todayKyiv, nowKyivHM, addDays, mondayOf, longDate, dm, dowOf, isWeekend, LS, isClosedVacancy } from "../hiringView";
@@ -293,6 +294,7 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
       <datalist id="hr-resp">{meta.responsibles.map((x) => <option key={x} value={x} />)}</datalist>
       <datalist id="hr-src">{meta.sources.map((x) => <option key={x} value={x} />)}</datalist>
 
+      <TldvBlock toast={toast} onLinked={load} />
       {ivAt != null && <InterviewDialog meta={meta} day={day} time={ivAt} onClose={() => setIvAt(null)}
         onDone={(msg) => { setIvAt(null); toast(msg); load(); onMetaStale(); }} />}
       {openId != null && <CandidateDrawer meta={meta} id={openId} toast={toast} onClose={() => setOpenId(null)} onChanged={load} onMetaStale={onMetaStale} />}
@@ -487,4 +489,72 @@ function MoveDialog({ r, day, onClose, onDone }: { r: HiringScheduleRow; day: st
         </div>
       </div>
     </div>, document.body);
+}
+
+
+/**
+ * 🎥 «ЗАПИСИ БЕЗ РЯДКА» (23.09.2026, прохід 7). Певні збіги (за поштою учасника) джоба привʼязала сама —
+ * сюди потрапляє лише те, де вона НЕ впевнена. Людину обирає рекрутер; «не співбесіда» ховає запис.
+ * Ключа немає — блок каже «не підключено», а не показує порожній список (різні стани — різні підписи).
+ */
+function TldvBlock({ toast, onLinked }: { toast: Toast; onLinked: () => void }) {
+  const [st, setSt] = useState<TldvState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [pick, setPick] = useState<Record<string, string>>({});
+  const load = useCallback(() => { fetchTldv().then(setSt).catch(() => setSt(null)); }, []);
+  useEffect(load, [load]);
+  if (!st) return null;
+  const { status, pending } = st;
+  const act = async (fn: () => Promise<unknown>, ok: string) => {
+    setBusy(true);
+    try { await fn(); toast(ok); load(); onLinked(); } catch (e) { toast(hiringError(e), { error: true }); }
+    setBusy(false);
+  };
+  const when = (iso: string | null) => (iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)} ${new Date(iso).toLocaleTimeString("uk-UA", { timeZone: "Europe/Kyiv", hour: "2-digit", minute: "2-digit" })}` : "час невідомий");
+  return (
+    <div className="hr-card" style={{ marginTop: 14 }}>
+      <div className="hd">
+        <div><h3>🎥 Записи співбесід{pending.length ? ` · без рядка ${pending.length}` : ""}</h3>
+          <div className="hr-muted">
+            {!status.configured ? "tl;dv не підключено: ключ не вказано, записи не забираємо."
+              : `Підключено${status.lastRunAt ? ` · остання перевірка ${when(status.lastRunAt)}` : ""} · знайдено ${status.seen}, привʼязано ${status.linked}${status.lastError ? ` · помилка: ${status.lastError}` : ""}`}
+          </div></div>
+        {status.configured && <button className="hr-btn" style={{ marginLeft: "auto" }} disabled={busy}
+          onClick={() => void act(() => syncTldvNow(), "Перевірено")}>Перевірити зараз</button>}
+      </div>
+      {status.configured && (pending.length === 0
+        ? <div className="hr-sect hr-muted">Усі записи привʼязані до рядків графіка.</div>
+        : (
+          <table className="hr-table">
+            <thead><tr><th>Зустріч</th><th>Кому належить</th><th /></tr></thead>
+            <tbody>
+              {pending.map((m) => (
+                <tr key={m.id}>
+                  <td><b>{m.name || "без назви"}</b>
+                    <div className="hr-muted">{when(m.happenedAt)}{m.durationMin != null ? ` · ${m.durationMin} хв` : ""}
+                      {m.organizer ? ` · ${m.organizer}` : ""} · учасників {m.invitees}
+                      {m.url && <> · <a href={m.url} target="_blank" rel="noopener noreferrer">▶ відкрити в tl;dv</a></>}</div>
+                    <div className="hr-muted">{m.how === "many" ? "кілька рядків у тому самому вікні — оберіть потрібний"
+                      : m.how === "time" ? "збіг за часом, пошта учасника не збіглася — підтвердіть"
+                      : "рядка графіка на цей час немає; можливо, це не співбесіда"}</div></td>
+                  <td>
+                    <select className="hr-inp" style={{ maxWidth: 260 }} value={pick[m.id] ?? (m.suggestions[0]?.interviewId ?? "")}
+                      onChange={(e) => setPick({ ...pick, [m.id]: e.target.value })}>
+                      <option value="">— оберіть рядок —</option>
+                      {m.suggestions.map((sg) => <option key={sg.interviewId} value={sg.interviewId}>{sg.label}</option>)}
+                    </select>
+                  </td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <button className="hr-btn xs p" disabled={busy || !(pick[m.id] ?? m.suggestions[0]?.interviewId)}
+                      onClick={() => void act(() => linkTldv(m.id, Number(pick[m.id] ?? m.suggestions[0]!.interviewId)), "Запис привʼязано")}>Привʼязати</button>{" "}
+                    <button className="hr-btn xs" disabled={busy}
+                      onClick={() => void act(() => ignoreTldv(m.id), "Сховано: не співбесіда")}>Не співбесіда</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ))}
+    </div>
+  );
 }

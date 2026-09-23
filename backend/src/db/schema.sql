@@ -3395,7 +3395,7 @@ CREATE TABLE IF NOT EXISTS hiring_events (
 );
 ALTER TABLE hiring_events DROP CONSTRAINT IF EXISTS hiring_events_kind_check;
 ALTER TABLE hiring_events ADD CONSTRAINT hiring_events_kind_check CHECK (kind IN
-  ('created','status','attended','comment','repeat','edit','refusal','reserve','vacancy','file','access','question','offer'));
+  ('created','status','attended','comment','repeat','edit','refusal','reserve','vacancy','file','access','question','offer','record'));
 CREATE INDEX IF NOT EXISTS idx_hiring_events_candidate ON hiring_events(candidate_id, at);
 CREATE INDEX IF NOT EXISTS idx_hiring_events_status_at ON hiring_events(to_status, at) WHERE kind = 'status';
 
@@ -3983,3 +3983,32 @@ ALTER TABLE training_materials ADD COLUMN IF NOT EXISTS external_id TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_training_courses_ext   ON training_courses(external_id)   WHERE external_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_training_folders_ext   ON training_folders(external_id)   WHERE external_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_training_materials_ext ON training_materials(external_id) WHERE external_id IS NOT NULL;
+
+-- 🎥 ЗАПИСИ СПІВБЕСІД tl;dv (23.09.2026, прохід 7 плану найму). Дашборд ходить у їхній API нашим ключем
+-- (`TLDV_API_KEY`) — вебхуків НЕ беремо: у документації tl;dv немає ні підпису, ні секрету для вхідних
+-- запитів, тож будь-хто міг би слати нам «зустріч готова».
+--
+-- 🔴 ЗУСТРІЧ НЕ ПРИВʼЯЗУЄТЬСЯ НАВМАННЯ. Певний збіг — лише за поштою учасника; збіг за часом лишається
+-- «на підтвердження» людині. Тому таблиця памʼятає стан кожної зустрічі: `linked` (привʼязана до рядка
+-- графіка), `pending` (чекає рішення), `ignored` (не співбесіда — більше не показувати).
+-- Транскриптів НЕ зберігаємо: лише те, що показуємо в списку.
+-- ⚠️ revert коду таблицю й колонку не прибирає.
+CREATE TABLE IF NOT EXISTS tldv_meetings (
+  id           TEXT PRIMARY KEY,
+  name         TEXT,
+  happened_at  TIMESTAMPTZ,
+  duration_min INTEGER,
+  url          TEXT,
+  organizer    TEXT,
+  invitees     JSONB NOT NULL DEFAULT '[]'::jsonb,
+  state        TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('linked','pending','ignored')),
+  interview_id INTEGER REFERENCES hiring_interviews(id) ON DELETE SET NULL,
+  how          TEXT,
+  decided_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  decided_at   TIMESTAMPTZ,
+  seen_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_tldv_meetings_state ON tldv_meetings(state, happened_at DESC);
+ALTER TABLE hiring_interviews ADD COLUMN IF NOT EXISTS tldv_meeting_id TEXT;
+-- 🔒 Пошта й імена учасників зустрічей — персональні дані. REVOKE після CREATE.
+REVOKE ALL ON tldv_meetings FROM ai_readonly;

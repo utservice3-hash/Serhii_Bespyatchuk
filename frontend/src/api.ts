@@ -4205,6 +4205,20 @@ export const createHiringInterviewFor = async (p: {
   interviewDate: string; interviewTime?: string; responsible?: string; candidateId?: number;
   newCandidate?: { fullName: string; phone: string; vacancyId: number; source?: string; telegram?: string };
 }) => (await api.post<HiringCreatedInterview>("/hiring/interviews", p)).data;
+// 🎥 Записи співбесід tl;dv (23.09.2026) — `backend/src/core/tldvStore.ts`.
+export interface TldvPending {
+  id: string; name: string | null; happenedAt: string | null; durationMin: number | null; url: string | null;
+  organizer: string | null; invitees: number; how: "email" | "time" | "none" | "many";
+  suggestions: { interviewId: number; label: string }[];
+}
+export interface TldvState {
+  status: { configured: boolean; lastRunAt: string | null; lastError: string | null; seen: number; linked: number; pending: number };
+  pending: TldvPending[];
+}
+export const fetchTldv = async () => (await api.get<TldvState>("/hiring/tldv")).data;
+export const syncTldvNow = async () => (await api.post<{ seen?: number; linked?: number; pending?: number; reason?: string }>("/hiring/tldv/sync")).data;
+export const linkTldv = async (meetingId: string, interviewId: number) => { await api.post(`/hiring/tldv/${meetingId}/link`, { interviewId }); };
+export const ignoreTldv = async (meetingId: string, ignored = true) => { await api.post(`/hiring/tldv/${meetingId}/ignore`, { ignored }); };
 export const patchHiringInterview = async (id: number, patch: Record<string, unknown>) =>
   (await api.patch<{ candidateId: number | null; repeat?: { id: number; full_name: string; status: HiringStatus } }>(`/hiring/interviews/${id}`, patch)).data;
 export const deleteHiringInterview = async (id: number) => { await api.delete(`/hiring/interviews/${id}`); };
