@@ -390,9 +390,19 @@ export interface ClientBucketRow { clientKey: string; bucket: string; revenue: n
 export async function successByClientBucket(
   s: MoneyScope, granularity: "day" | "week" | "month", onlyClientKey?: string,
 ): Promise<ClientBucketRow[]> {
+  return byClientBucket("success", s, granularity, onlyClientKey);
+}
+
+/**
+ * Гроші клієнта по бакетах для БУДЬ-ЯКОГО виду ядра — один запит на всі види, щоб
+ * новий вид не заводив другу копію розрізу «клієнт × період».
+ */
+async function byClientBucket(
+  kind: Kind, s: MoneyScope, granularity: "day" | "week" | "month", onlyClientKey?: string,
+): Promise<ClientBucketRow[]> {
   const K = "AT TIME ZONE 'Europe/Kyiv'";
   const p: unknown[] = [];
-  const src = sourceSql("success", p);
+  const src = sourceSql(kind, p);
   const conds: string[] = [];
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at ${K})::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at ${K})::date <= $${p.length}`); }
@@ -418,6 +428,10 @@ export interface ClientWeekRow { clientKey: string; weekIndex: number; revenue: 
  * `s.from` має бути 1-м числом місяця.
  */
 export async function successByClientWeek(s: MoneyScope): Promise<ClientWeekRow[]> {
+  return byClientWeek("success", s);
+}
+
+async function byClientWeek(kind: Kind, s: MoneyScope): Promise<ClientWeekRow[]> {
   const monthStr = (s.from ?? new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" })).slice(0, 7);
   const weeks = monthWeeks(monthStr);
   // 🔴 ОДИН запит по днях, а не пʼять по тижнях. Перша версія робила
@@ -425,7 +439,7 @@ export async function successByClientWeek(s: MoneyScope): Promise<ClientWeekRow[
   // розрізу, який дає один GROUP BY. У пісочниці це коштувало 8.5 с на запит; на
   // проді (146 тис. угод) було б помітно гірше, і виглядало б як «екран гальмує»,
   // а не як «ми пʼять разів спитали те саме».
-  const days = await successByClientBucket(s, "day");
+  const days = await byClientBucket(kind, s, "day");
   const idxOf = (ymd: string): number => {
     const d = Number(ymd.slice(8, 10));
     for (const w of weeks) if (d >= w.fromDay && d <= w.toDay) return w.index;
