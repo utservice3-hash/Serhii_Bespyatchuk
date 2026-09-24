@@ -24,7 +24,7 @@ export const LOOKBACK_DAYS = 3;
 export async function syncTldv(days = LOOKBACK_DAYS) {
   const key = process.env.TLDV_API_KEY;
   // ⚠️ `jobSkip` — ЛИШЕ тип: `jobRuns.js` тягне `db/pool.js`, який кидає на відсутньому `DATABASE_URL` ще на
-  // імпорті. Форма пропуску та сама, яку читає `runJob` (`{ skipped, reason }`), і саме її звіряє #707.
+  // імпорті. Форма пропуску та сама, яку читає `runJob` (`{ skipped, reason }`), і саме її звіряє #733.
   if (!key) return { skipped: true, reason: "немає TLDV_API_KEY — записи співбесід не забираємо" } satisfies JobSkip;
   const from = kyivDay(-days), to = kyivDay(1);
   const url = `${TLDV_BASE}/v1alpha1/meetings?from=${from}&to=${to}&limit=100`;
