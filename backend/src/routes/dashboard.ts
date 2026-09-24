@@ -8380,7 +8380,7 @@ dashboardRouter.post("/kvp-plan", async (req, res) => {
 // Михальчевська; лідоген = назва містить «лідоген» АБО teamId 11 (відділ лідогенерації);
 // решта = РПК (повний цикл). Крок Д owner-review: фінвідділ (teamId 12) — НЕ sales, прибрати.
 const KVP_FINANCE_TEAM_IDS = new Set([12]);   // «Финансовый отдел» — не sales-юніт → зі звіту геть
-const KVP_LEADGEN_TEAM_IDS = new Set([11]);   // «Таня Ковтонюк (лідогенерація)» — лишити, логіка окремо
+const KVP_LEADGEN_TEAM_IDS = new Set([11, metrics.LEADGEN_DASH_TEAM_ID]);   // стара «Таня Ковтонюк (лідогенерація)» і нова «Лідогенерація» (24.09)
 const RNK_TEAM_IDS = new Set(metrics.RNK_TEAM_IDS); // джерело правди — core/metrics (без дублю числа)
 const kvpTeamKind = (teamId: number, name: string): "rpk" | "rnk" | "leadgen" =>
   (KVP_LEADGEN_TEAM_IDS.has(teamId) || /лідоген|лидоген/i.test(name)) ? "leadgen" : RNK_TEAM_IDS.has(teamId) ? "rnk" : "rpk";

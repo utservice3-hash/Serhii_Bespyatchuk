@@ -50,9 +50,13 @@ export interface SnapshotScope {
   to?: never;
 }
 
-// Не-комерційні команди: 11 = лідогенерація (Ковтонюк), 12 = фінанси. Джерело правди
-// (== KVP_LEADGEN_TEAM_IDS ∪ KVP_FINANCE_TEAM_IDS у routes/dashboard.ts).
-export const NON_COMMERCIAL_TEAM_IDS = [11, 12];
+// Не-комерційні команди: 11 = стара лідогенерація (Ковтонюк, архівована 23.09), 12 = фінанси,
+// LEADGEN_DASH_TEAM_ID = нова «Лідогенерація» (24.09, лише в дашборді). Джерело правди
+// (== KVP_LEADGEN_TEAM_IDS ∪ KVP_FINANCE_TEAM_IDS у routes/dashboard.ts; фронт — pages/dashboard/teamSets.ts).
+// ⚠️ 11 лишається ПЕРШОЮ: під нею номінації тримають рішення рейтингу лідогенераторів (#660-е у nominations.test).
+/** Команда «Лідогенерація», заведена лише в дашборді (сид у schema.sql, id фіксований). Тримає #740. */
+export const LEADGEN_DASH_TEAM_ID = 50011;
+export const NON_COMMERCIAL_TEAM_IDS = [11, 12, LEADGEN_DASH_TEAM_ID];
 /**
  * SQL-предикат «КОМЕРЦІЙНИЙ менеджер» (рішення власника 24.07, Опція 2 — строго):
  * має команду І команда не лідген/фінанси. Ловить усі три класи не-комерц: team NULL

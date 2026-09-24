@@ -17,6 +17,7 @@ import { ReportTableSection } from "./ReportTableSection";
 import { mergeReportPlans } from "../reportScope";
 import { firstTouchLabel, firstTouchStale } from "../reportTableCols";
 // 🔀 Зріз за новизною — ЄДИНЕ місце рішення на фронті; звіряється з ядром у `#213`.
+import { NON_COMMERCIAL_TEAM_IDS } from "../teamSets";
 import { keepByKlass, visibleSlices, narrowToSlice, SLICE_LABEL, KLASS_CHIP, type Slice } from "../klassSlice";
 
 /**
@@ -115,9 +116,9 @@ function DealName({ name, url }: { name: string; url: string | null }) {
 const SICON: Record<string, string> = { g: "🟢", a: "🟠", r: "🔴" };
 const TAGCOL: Record<string, string> = { rpk: BAR, rnk: "#7a52c7", self: GREEN };
 
-// Комерційний скоуп (A1): у перемикачі команд не показуємо Финансовый(12) і
-// лідоген-генератор Ковтонюк(11) — вони не в продажному звіті (= бекенд KVP_FINANCE/LEADGEN).
-const HIDE_TEAMS = new Set([11, 12]);
+// Комерційний скоуп (A1): у перемикачі команд не показуємо некомерційні команди — фінанси й лідогенерацію
+// (= бекенд KVP_FINANCE/LEADGEN). Список один на фронт — pages/dashboard/teamSets.ts.
+const HIDE_TEAMS = NON_COMMERCIAL_TEAM_IDS;
 const fmt = (n: number) => (n === 0 ? "0" : Math.round(n).toLocaleString("uk-UA").replace(/,/g, " "));
 const k = (n: number) => Math.round(n / 1000) + "к";
 const WD = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"];

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { NON_COMMERCIAL_TEAM_IDS } from "../teamSets";
 import {
   fetchPlanFormation, fetchFormationRepeatClients, submitFormationPlan, approveFormationPlan, returnFormationPlan,
   type PlanFormation, type PFManager, type PFTeam, type PFStatus, type PFRepeatBreakdown, type Team,
@@ -73,7 +74,7 @@ export function PlanFormationSection({ auth, teams, previewData }: {
   useEffect(() => { setDrafts({}); }, [month, teamFilter]);
 
   const refresh = () => setReload((n) => n + 1);
-  const teamOpts = useMemo(() => teams.filter((t) => !new Set([11, 12]).has(t.id)), [teams]);
+  const teamOpts = useMemo(() => teams.filter((t) => !NON_COMMERCIAL_TEAM_IDS.has(t.id)), [teams]);
 
   return (
     <div style={{ maxWidth: 1180, margin: "0 auto" }}>
