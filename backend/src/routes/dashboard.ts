@@ -102,6 +102,7 @@ import {
 import { canRequestLimitFor, canAssignTaskToOthers } from "../auth/taskAssignScope.js";
 import { activeManagerSql } from "../core/activeManager.js";
 import * as managerState from "../core/managerState.js";
+import * as clientCallsYear from "../core/clientCallsYear.js";
 import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf, kyivToday, isRealDate } from "../core/dates.js";
 import { weekPlansForMonth } from "../core/weekPlan.js";
 import { sumDaysIntoBlocks } from "../core/weekFacts.js";
@@ -5812,6 +5813,10 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   const stepByKey = new Map(stepRes.rows.map((r) => [r.client_key, r]));
   const phonesByKey = new Map(phoneRes.rows.map((r) => [r.client_key, Number(r.n)]));
   const todayKyiv = (await pool.query<{ d: string }>(`SELECT to_char(now() AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS d`)).rows[0].d;
+  // 📞 Дзвінки за поточний рік — ТЕ САМЕ ядро, що рядок «розмов N із M» у картці (задача 4310,
+  // п.1.4). До 24.09.2026 тут не рахувалось нічого, а рядок показував «📞 0» текстом.
+  const callsYearByKey = await clientCallsYear.callsByYear(clientKeys);
+  const callsYearNow = Number(todayKyiv.slice(0, 4));
   // 🛑 СТОП ЧЕРЕЗ ДЕБІТОРКУ (ТЗ 3989, п.6) — по тих самих ключах: є прострочений рядок дебіторки.
   const debtRes = await pool.query<{ client_key: string }>(
     `SELECT DISTINCT client_key FROM receivables WHERE overdue_days > 0 AND client_key = ANY($1)`, [clientKeys]);
@@ -6081,11 +6086,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       teamName: c.team_name ?? "Без команди",
       pinned: c.pinned_manager_id != null,
       comments: commentsByKey.get(c.client_key) ?? 0,
-      // 🔴 Дзвінків тут НЕМАЄ і бути поки не може: Ringostat-синк зберігає лише
-      // АГРЕГАТ по тімлідах у statistics_values, окремих дзвінків із номером
-      // абонента ми не зберігаємо взагалі. Порожній масив із названою причиною —
-      // чесніше за приховану колонку: видно, що місце є, а даних немає.
-      calls: [] as never[],
+      // 📞 Розмов і всіх дзвінків за поточний рік — рівно рядок картки за цей рік.
+      callsYear: clientCallsYear.yearCell(callsYearByKey.get(c.client_key), callsYearNow),
     };
   });
 
@@ -6254,16 +6256,6 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       canSubmit: byStatus.draft > 0,
       canApprove: byStatus.pending > 0,
     },
-    // 🔴 ТЕКСТ ВИПРАВЛЕНО 04.08.2026: попередній казав, що «окремих дзвінків із
-    // номером абонента в базі НЕМАЄ». Це перестало бути правдою — `syncCalls`
-    // пише саме окремі дзвінки в `ringostat_calls` разом із `client_key`, і
-    // сусідній екран реактивації вже показує з них «останній дзвінок». Лишити
-    // старе формулювання означало б, що екран стверджує неправду про власну
-    // базу — гірше за порожню панель. Сама панель тут поки не побудована, і про
-    // це сказано прямо.
-    callsUnavailable: "Окремі дзвінки в базі Є (ringostat_calls, звʼязка по client_key) — "
-      + "їх уже видно як «останній дзвінок» у «Реактивації». Перелік дзвінків у цій "
-      + "картці ще не побудований",
   });
 });
 
@@ -6832,16 +6824,9 @@ dashboardRouter.get("/client-card", async (req, res) => {
    * 🟢 РОЗМОВА vs СПРОБА: `billsec > 0` — розмова, решта — недодзвін. Це два різні
    * факти (рішення власника 04.08.2026), і зливати їх в одне число не можна.
    */
-  const callsRes = await pool.query<{
-    year: string; calls: string; talks: string; total_sec: string; last_at: string | null;
-  }>(
-    `SELECT date_part('year', calldate AT TIME ZONE 'Europe/Kyiv')::int::text AS year,
-            COUNT(*)::text AS calls,
-            COUNT(*) FILTER (WHERE billsec > 0)::text AS talks,
-            COALESCE(SUM(billsec), 0)::text AS total_sec,
-            MAX(calldate)::text AS last_at
-       FROM ringostat_calls WHERE client_key = $1
-      GROUP BY 1 ORDER BY 1 DESC`, [clientKey]);
+  // 📞 Той самий підрахунок, що число «📞» у рядку списку (задача 4310, п.1.4) —
+  // спільне ядро `core/clientCallsYear.ts`, а не власний SQL картки.
+  const cardCallsByYear = (await clientCallsYear.callsByYear([clientKey])).get(clientKey) ?? [];
   const sinceRes = await pool.query<{ since: string | null }>(
     "SELECT MIN(calldate)::date::text AS since FROM ringostat_calls");
   const CALLS_LIMIT = 300;
@@ -6880,10 +6865,7 @@ dashboardRouter.get("/client-card", async (req, res) => {
     months,
     monthsTotal: months.reduce((s2, m) => s2 + m.revenue, 0),
     contacts: (await pool.query(`${CONTACT_SELECT} WHERE c.client_key = $1 ORDER BY c.created_at DESC LIMIT 50`, [clientKey])).rows.map(shapeContact),
-    callsByYear: callsRes.rows.map((r) => ({
-      year: Number(r.year), calls: Number(r.calls), talks: Number(r.talks),
-      totalSec: Number(r.total_sec), lastAt: r.last_at,
-    })),
+    callsByYear: cardCallsByYear,
     calls: callListRes.rows.map((r) => ({
       at: r.calldate, direction: r.call_type.includes("out") ? "out" : "in",
       billsec: r.billsec, answered: r.billsec > 0, disposition: r.disposition, manager: r.manager,

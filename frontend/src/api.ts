@@ -3628,7 +3628,9 @@ export interface ClientPlanRow {
   orders: number; lifetimeRevenue: number; since: string | null; lastOrderDays: number | null;
   history: number[]; plan: number; planStatus: "draft" | "pending" | "approved" | "none";
   reviewNote: string | null; weeks: ClientPlanWeek[]; fact: number; pct: number | null;
-  managerId: number; managerName: string; pinned: boolean; comments: number; calls: never[];
+  managerId: number; managerName: string; pinned: boolean; comments: number;
+  /** 📞 Дзвінки за поточний рік — рівно рядок «розмов N із M» картки (ядро `core/clientCallsYear.ts`). */
+  callsYear: { year: number; calls: number; talks: number };
   /** Команда менеджера — для ієрархії «команда → менеджер → клієнти» (подача, не скоуп). */
   teamId: number | null; teamName: string;
   /** Сегмент за частотою замовлень — бейдж біля клієнта. */
@@ -3713,7 +3715,6 @@ export interface ClientPlansResp {
     /** Розбивка ЖИВИХ по сегментах — цифра над таблицею. */
     activeBySegment: Record<ClientSegment, number>;
   };
-  callsUnavailable: string;
 }
 export async function fetchClientPlans(params: { month: string; managerId?: number; teamId?: number }): Promise<ClientPlansResp> {
   const { data } = await api.get<ClientPlansResp>("/dashboard/client-plans", { params });

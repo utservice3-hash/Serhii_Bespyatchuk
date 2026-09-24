@@ -11,6 +11,7 @@ import { SegmentBadge, ForcedBadge } from "./SegmentBadge";
 import { RowComment } from "./RowComment";
 import { CreateTaskDialog, CloseTaskDialog, ContactDialog } from "./ReactivationBits";
 import { ClientCardPanel } from "./ClientCardPanel";
+import { ClientContactFileViewer } from "./ClientContactFileViewer";
 
 /**
  * ФАЗА A · «ПОСТІЙНІ КЛІЄНТИ · ПЛАН МІСЯЦЯ» (макет 1).
@@ -140,25 +141,6 @@ function CommentsPanel({ clientKey, canWrite }: { clientKey: string; canWrite: b
 }
 
 /**
- * Панель дзвінків. Причину порожнечі КАЖЕ СЕРВЕР (`callsUnavailable`) — щоб
- * підпис не розійшовся зі станом бази, як це вже сталось: текст стверджував, що
- * окремих дзвінків у базі немає, хоча `syncCalls` їх пише, і сусідній екран
- * реактивації вже показує з них «останній дзвінок». Порожня панель із чесною
- * причиною краща за приховану колонку; неправдива причина — гірша за обидві.
- */
-function CallsPanel({ reason }: { reason: string }) {
-  return (
-    <div>
-      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>📞 Дзвінки · Ringostat</div>
-      <div style={{ background: "#f8fafc", border: "1px dashed #cbd5e1", borderRadius: 8, padding: "12px 14px",
-                    fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>
-        {reason}.
-      </div>
-    </div>
-  );
-}
-
-/**
  * Підсумок рівня ієрархії. Рахується З ТИХ САМИХ рядків, що показані нижче —
  * тому «згорнути» не змінює жодної цифри, а лише ховає рядки. Якби рівень
  * рахувався окремим запитом, згорнутий і розгорнутий вигляд могли б розійтись, і
@@ -225,6 +207,8 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
   const [creating, setCreating] = useState<{ clientKey: string; name: string } | null>(null);
   const [closing, setClosing] = useState<{ taskId: number; name: string } | null>(null);
   const [contacting, setContacting] = useState<{ clientKey: string; name: string } | null>(null);
+  /** 📎 Скрини клієнта, відкриті з рядка (задача 4310, п.1.3): перегляд на місці, не вкладка. */
+  const [viewingFiles, setViewingFiles] = useState<{ clientKey: string; name: string } | null>(null);
   // 🔴 ДЕФОЛТ — «НАЙГІРШІ ЗВЕРХУ» (рішення власника 04.08.2026): екран планування
   // існує, щоб бачити проблеми, а не щоб милуватись лідерами. Другий режим —
   // «найбільші зверху» (факт ①), коли треба дивитись на обсяг.
@@ -402,7 +386,14 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
             {c.lastContact ? (
               <div title={c.lastContact.source === "talk" ? "остання розмова по Ringostat (billsec > 0)" : `ручний контакт: ${contactChannelLabel(c.lastContact.channel)}`}>
                 {c.lastContact.source === "talk" ? "📞" : "📱"} {c.lastContact.at.slice(0, 10).split("-").reverse().slice(0, 2).join(".")}
-                {c.lastContact.source === "manual" && <span style={{ color: "#6b7280" }}> · {contactChannelLabel(c.lastContact.channel)}{c.lastContactHasFile ? " 📎" : ""}</span>}
+                {c.lastContact.source === "manual" && <span style={{ color: "#6b7280" }}> · {contactChannelLabel(c.lastContact.channel)}</span>}
+                {/* 📎 КНОПКА, А НЕ ПОЗНАЧКА (задача 4310, п.1.3): доти значок лише казав «скрин є»,
+                    а відкрити його з рядка було нічим. */}
+                {c.lastContact.source === "manual" && c.lastContactHasFile && (
+                  <button type="button" title="Переглянути скрин"
+                    onClick={() => setViewingFiles({ clientKey: c.clientKey, name: c.clientName ?? c.clientKey })}
+                    style={{ marginLeft: 4, border: "none", background: "transparent", cursor: "pointer", fontSize: 12, padding: 0 }}>📎</button>
+                )}
               </div>
             ) : c.phone === "none" ? (
               <span style={{ color: "#b45309" }} title="у контактах клієнта немає жодного номера — дзвінки не привʼязуються">📵 нема номера</span>
@@ -512,7 +503,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         <td style={S.td}>
           <button onClick={() => setOpen(isOpen ? null : c.clientKey)}
             style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 13 }}>
-            💬 {c.comments} · 📞 0 · {isOpen ? "▲" : "▼"}
+            💬 {c.comments} · <span title={`розмов ${c.callsYear.talks} із ${c.callsYear.calls} дзвінків за ${c.callsYear.year} — те саме число, що рядок ${c.callsYear.year} у картці`}>📞 {c.callsYear.talks}/{c.callsYear.calls}</span> · {isOpen ? "▲" : "▼"}
           </button>
           {isLead && c.planStatus !== "draft" && c.planStatus !== "none" && (
             <button disabled={busy}
@@ -530,10 +521,10 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
             {/* onChanged — щоб «прибрати з постійних» одразу зникло з цього ж
                 списку, а не лишалось рядком, який уже не існує за правилом. */}
             <ClientCardPanel clientKey={c.clientKey} onChanged={load} />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 22, marginTop: 16,
-                          borderTop: "1px solid #e5e7eb", paddingTop: 14 }}>
+            {/* 📞 Панель «перелік дзвінків ще не побудований» прибрано (задача 4310): картка вище
+                вже показує дзвінки по роках із записами, і та панель стверджувала неправду. */}
+            <div style={{ marginTop: 16, borderTop: "1px solid #e5e7eb", paddingTop: 14 }}>
               <CommentsPanel clientKey={c.clientKey} canWrite />
-              <CallsPanel reason={data.callsUnavailable} />
             </div>
           </td>
         </tr>
@@ -851,6 +842,10 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
             await createClientReactivationTask({ clientKey: creating.clientKey, deadline, comment });
             setCreating(null);
           })} />
+      )}
+      {viewingFiles && (
+        <ClientContactFileViewer clientKey={viewingFiles.clientKey} clientName={viewingFiles.name}
+          onClose={() => setViewingFiles(null)} />
       )}
       {contacting && (
         <ContactDialog client={contacting} busy={busy}

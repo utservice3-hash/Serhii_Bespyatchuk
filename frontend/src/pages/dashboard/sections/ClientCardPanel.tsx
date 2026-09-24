@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Cell } from "recharts";
-import { fetchClientCard, archiveClient, saveLoyaltyOverride, contactChannelLabel, fetchContactFileBlobUrl, saveClientNextStep, doneClientNextStep, type ClientCard } from "../../../api";
+import { fetchClientCard, archiveClient, saveLoyaltyOverride, contactChannelLabel, saveClientNextStep, doneClientNextStep, type ClientCard } from "../../../api";
+import { ClientContactFileViewer } from "./ClientContactFileViewer";
 import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
 import { formatAmountFull } from "../format";
 
@@ -39,6 +40,8 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
   const [stepText, setStepText] = useState("");
   const [stepDue, setStepDue] = useState("");
   const [stepEdit, setStepEdit] = useState(false);
+  /** 📎 Відкритий скрин контакту (id) — перегляд на місці, не нова вкладка (задача 4310). */
+  const [fileId, setFileId] = useState<number | null>(null);
   const load = useCallback(() => {
     setCard(null); setErr(null);
     fetchClientCard(clientKey).then(setCard)
@@ -328,13 +331,18 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
                 {k.author && <span style={{ color: "#6b7280" }}> · {k.author}</span>}
                 {k.hasFile && (
                   <button style={{ marginLeft: 8, fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}
-                    onClick={async () => { const u = await fetchContactFileBlobUrl(k.id); window.open(u, "_blank"); }}>📎 скрин</button>
+                    onClick={() => setFileId(k.id)}>📎 скрин</button>
                 )}
               </div>
               {k.note && <div style={{ color: "#374151", marginTop: 2, whiteSpace: "pre-wrap" }}>{k.note}</div>}
             </div>
           ))}
         </>
+      )}
+
+      {fileId != null && (
+        <ClientContactFileViewer clientKey={clientKey} clientName={card.clientName} initialId={fileId}
+          contacts={card.contacts} onClose={() => setFileId(null)} />
       )}
 
       {/* 🗒 ЖУРНАЛ КЕРІВНИЦЬКИХ ДІЙ. Показуємо лише коли він НЕ порожній: постійний
