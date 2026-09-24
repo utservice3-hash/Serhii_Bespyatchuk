@@ -6,9 +6,8 @@ import {
   fetchTrainingTree, createTrainingFolder, updateTrainingFolder, deleteTrainingFolder,
   createTrainingMaterial, updateTrainingMaterial, deleteTrainingMaterial, fetchTrainingFileBlobUrl,
   type TrainingFolder, type TrainingMaterial, type TrainingKind, publishTrainingMaterial,
-  fetchTrainingCourses } from "../../../api";
+  fetchTrainingCourses, type TrainingUploadRules } from "../../../api";
 
-const MAX_MB = 45;
 const ACC = "#c5141c";
 
 const KIND_META: Record<TrainingKind, { icon: string; label: string }> = {
@@ -106,7 +105,11 @@ function MaterialViewer({ material, onClose, isAdmin, onChanged }: { material: T
   );
 }
 
-function AddMaterialModal({ folderId, onClose, onAdded }: { folderId: number | null; onClose: () => void; onAdded: () => void }) {
+/* 📎 Межа й типи — З СЕРВЕРА (`upload` у відповіді `/training/tree`). Тут раніше жило власне
+   число, тобто ТРЕТЯ копія однієї межі поряд із роутом і формою курсу; розійшлися б вони мовчки,
+   і людина дізнавалась би про межу з 413 після хвилини завантаження. Тримає `#716`. */
+function AddMaterialModal({ folderId, upload, onClose, onAdded }: { folderId: number | null; upload: TrainingUploadRules; onClose: () => void; onAdded: () => void }) {
+  const maxMb = Math.round(upload.maxBytes / (1024 * 1024));
   const [kind, setKind] = useState<TrainingKind>("video_embed");
   const [title, setTitle] = useState("");
   const [url, setUrl] = useState("");
@@ -121,7 +124,7 @@ function AddMaterialModal({ folderId, onClose, onAdded }: { folderId: number | n
     try {
       if (kind === "file") {
         if (!file) { setErr("Оберіть файл"); setBusy(false); return; }
-        if (file.size > MAX_MB * 1024 * 1024) { setErr(`Файл більше ${MAX_MB} МБ — для великих відео вставте посилання (YouTube/Vimeo)`); setBusy(false); return; }
+        if (file.size > upload.maxBytes) { setErr(`Файл більше ${maxMb} МБ — для великих відео вставте посилання (YouTube/Vimeo)`); setBusy(false); return; }
         const dataBase64 = await new Promise<string>((resolve, reject) => {
           const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = () => reject(r.error); r.readAsDataURL(file);
         });
@@ -172,8 +175,8 @@ function AddMaterialModal({ folderId, onClose, onAdded }: { folderId: number | n
             </label>
           )}
           {kind === "file" && (
-            <label style={{ fontSize: 13, display: "flex", flexDirection: "column", gap: 4 }}>Файл (до {MAX_MB} МБ; великі відео — через посилання)
-              <input type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} style={inp} />
+            <label style={{ fontSize: 13, display: "flex", flexDirection: "column", gap: 4 }}>Файл — фото, відео, документ (до {maxMb} МБ; великі відео — через посилання)
+              <input type="file" accept={upload.accept} onChange={(e) => setFile(e.target.files?.[0] ?? null)} style={inp} />
             </label>
           )}
           <label style={{ fontSize: 13, display: "flex", flexDirection: "column", gap: 4 }}>
@@ -207,6 +210,7 @@ export function TrainingSection({ isAdmin, roleKey }: { isAdmin: boolean; roleKe
 function TrainingLibrary({ isAdmin }: { isAdmin: boolean }) {
   const [folders, setFolders] = useState<TrainingFolder[]>([]);
   const [materials, setMaterials] = useState<TrainingMaterial[]>([]);
+  const [upload, setUpload] = useState<TrainingUploadRules | null>(null);
   const [cwd, setCwd] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -228,7 +232,7 @@ function TrainingLibrary({ isAdmin }: { isAdmin: boolean }) {
 
   const load = async () => {
     setLoading(true);
-    try { const t = await fetchTrainingTree(); setFolders(t.folders); setMaterials(t.materials); setErr(null); }
+    try { const t = await fetchTrainingTree(); setFolders(t.folders); setMaterials(t.materials); setUpload(t.upload); setErr(null); }
     catch { setErr("Не вдалося завантажити навчання."); }
     finally { setLoading(false); }
   };
@@ -352,7 +356,7 @@ function TrainingLibrary({ isAdmin }: { isAdmin: boolean }) {
       </>)}
 
       {viewing && <MaterialViewer material={viewing} onClose={() => setViewing(null)} isAdmin={edit} onChanged={load} />}
-      {adding && <AddMaterialModal folderId={cwd} onClose={() => setAdding(false)} onAdded={() => { setAdding(false); void load(); }} />}
+      {adding && upload && <AddMaterialModal folderId={cwd} upload={upload} onClose={() => setAdding(false)} onAdded={() => { setAdding(false); void load(); }} />}
     </div>
   );
 }

@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   fetchTrainingCourses, fetchTrainingCourse, fetchTrainingMaterial, openTrainingMaterial, doneTrainingMaterial,
   createTrainingCourse, patchTrainingCourse, createTrainingFolder, updateTrainingFolder, deleteTrainingFolder,
-  updateTrainingMaterial, deleteTrainingMaterial, fetchTrainingFileBlobUrl,
+  updateTrainingMaterial, deleteTrainingMaterial, fetchTrainingFileBlobUrl, createTrainingMaterial,
   type TrainingCourse, type TrainingCourseDetail, type TrainingMaterialContent, type TrainingAudience, type TrainingKind,
-  type TrainingModule,
+  type TrainingModule, type TrainingUploadRules,
 } from "../../../api";
 import { embedUrl } from "../trainingView";
 import "./hiring.css";
@@ -166,10 +166,14 @@ function CourseView({ id, canEdit, onBack }: { id: number; canEdit: boolean; onB
   const [busy, setBusy] = useState(false);
   /** Теми бібліотеки, які ще не належать жодному курсу: їх можна забрати сюди, не створюючи нову. */
   const [free, setFree] = useState<TrainingModule[]>([]);
+  /** Тема, у яку зараз додаємо крок (`null` — діалог закритий). */
+  const [addTo, setAddTo] = useState<{ id: number; name: string } | null>(null);
+  /** 📎 Межа й перелік типів — З СЕРВЕРА, власного числа фронт не має (`#716`). */
+  const [upload, setUpload] = useState<TrainingUploadRules | null>(null);
 
   const load = useCallback(() => {
     fetchTrainingCourse(id).then((x) => { setD(x); setErr(null); }).catch((e) => setErr(errText(e)));
-    fetchTrainingCourses().then((x) => setFree(x.freeModules ?? [])).catch(() => setFree([]));
+    fetchTrainingCourses().then((x) => { setFree(x.freeModules ?? []); setUpload(x.upload); }).catch(() => setFree([]));
   }, [id]);
   useEffect(load, [load]);
 
@@ -241,6 +245,11 @@ function CourseView({ id, canEdit, onBack }: { id: number; canEdit: boolean; onB
                       onClick={() => { const n = window.prompt("Назва теми:", m.name)?.trim(); if (n && n !== m.name) void act(() => updateTrainingFolder(m.id, { name: n })); }}>✏️</button>
                     <button className="hr-btn xs" title="Прибрати тему з курсу (матеріали лишаються)" disabled={busy}
                       onClick={() => { if (window.confirm(`Прибрати тему «${m.name}» з курсу? Матеріали лишаться в бібліотеці.`)) void act(() => updateTrainingFolder(m.id, { courseId: null })); }}>↩</button>
+                    {/* 📎 Крок додається ТУТ, у своїй темі: доти шлях був кружний — піти в «Бібліотеку»,
+                        створити там матеріал, повернутись і причепити тему. Саме тому з екрана й читалось,
+                        що фото чи відео додати не можна. */}
+                    <button className="hr-btn xs" title="Додати крок у цю тему — фото, відео, документ або текст"
+                      disabled={busy} onClick={() => setAddTo({ id: m.id, name: m.name })}>+ Крок</button>
                   </>
                 ) : <span className="hr-muted">{m.percent}%</span>}
               </div>
@@ -271,7 +280,7 @@ function CourseView({ id, canEdit, onBack }: { id: number; canEdit: boolean; onB
                   )}
                 </div>
               ))}
-              {m.materials.length === 0 && <div className="hr-muted" style={{ padding: "4px 8px" }}>Кроків немає.</div>}
+              {m.materials.length === 0 && <div className="hr-muted" style={{ padding: "4px 8px" }}>Кроків немає.{canEdit && edit ? " Додайте перший кнопкою «+ Крок» вище." : ""}</div>}
             </div>
           ))}
           {canEdit && edit && (
@@ -299,7 +308,168 @@ function CourseView({ id, canEdit, onBack }: { id: number; canEdit: boolean; onB
         {cur ? <StepPane key={cur.id} step={cur} edit={canEdit && edit} busy={busy} onChanged={load}
           nextTitle={steps[steps.findIndex((s) => s.id === cur.id) + 1]?.title ?? null}
           onNext={() => { const i = steps.findIndex((s) => s.id === cur.id); const n = steps[i + 1]; if (n) setCurId(n.id); }} />
-          : <div className="hr-card" style={{ padding: 18 }}><span className="hr-muted">У курсі ще немає кроків.{canEdit ? " Додайте тему, а в ній — матеріали в «Бібліотеці»." : ""}</span></div>}
+          : <div className="hr-card" style={{ padding: 18 }}><span className="hr-muted">У курсі ще немає кроків.{canEdit ? " Увімкніть «Редагування», додайте тему і крок у ній." : ""}</span></div>}
+      </div>
+
+      {addTo && upload && (
+        <AddStep folder={addTo} upload={upload} onClose={() => setAddTo(null)}
+          onAdded={() => { setAddTo(null); load(); }} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * ➕ ДОДАТИ КРОК У ТЕМУ — фото, відео, документ, посилання або текст (23.09.2026).
+ *
+ * 🔴 ЧОМУ ЦЕ ТУТ, А НЕ ЛИШЕ В «БІБЛІОТЕЦІ». Сервер приймав файл із самого початку, і крок уже
+ * вмів малювати `image/*` картинкою, а `video/*` — програвачем. Не було рівно одного: місця,
+ * де людина може це зробити, дивлячись на курс. Шлях був кружний (бібліотека → створити →
+ * повернутись → причепити тему), тож з екрана читалось «фото й відео додати не можна».
+ *
+ * 🔴 ТИП І МЕЖУ ВИРІШУЄ СЕРВЕР, а форма лише показує його ж правила (`upload` із відповіді):
+ * власне число тут розійшлося б із серверним мовчки, і межу людина дізнавала б із 413 ПІСЛЯ
+ * хвилини завантаження. Перевірка на боці форми — ввічливість, не межа; справжню тримає
+ * `core/trainingUpload.ts`.
+ *
+ * ⚠️ Прев'ю показуємо ДО збереження: інакше «я завантажив не те» зʼясовується вже кроком у курсі.
+ */
+function AddStep({ folder, upload, onClose, onAdded }: {
+  folder: { id: number; name: string }; upload: TrainingUploadRules; onClose: () => void; onAdded: () => void;
+}) {
+  type Mode = "file" | "video_embed" | "link" | "text";
+  const [mode, setMode] = useState<Mode>("file");
+  const [title, setTitle] = useState("");
+  const [url, setUrl] = useState("");
+  const [content, setContent] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [over, setOver] = useState(false);
+  const [pct, setPct] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const maxMb = Math.round(upload.maxBytes / (1024 * 1024));
+
+  // Прев'ю живе рівно поки живе вибраний файл — інакше blob-адреси течуть при кожній заміні.
+  useEffect(() => {
+    if (!file) { setPreview(null); return; }
+    const u = URL.createObjectURL(file);
+    setPreview(u);
+    return () => URL.revokeObjectURL(u);
+  }, [file]);
+
+  const take = (f: File | null | undefined) => {
+    if (!f) return;
+    setErr(null);
+    if (f.size > upload.maxBytes) {
+      setErr(`Файл ${Math.ceil(f.size / (1024 * 1024))} МБ — більше за межу ${maxMb} МБ. Велике відео додайте посиланням.`);
+      return;
+    }
+    setFile(f);
+    if (!title.trim()) setTitle(f.name.replace(/\.[^.]+$/, ""));
+  };
+
+  const save = async () => {
+    const t = title.trim();
+    if (!t) { setErr("Вкажіть назву кроку"); return; }
+    setBusy(true); setErr(null);
+    try {
+      if (mode === "file") {
+        if (!file) { setErr("Оберіть файл"); setBusy(false); return; }
+        const dataBase64 = await new Promise<string>((res, rej) => {
+          const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = () => rej(r.error); r.readAsDataURL(file);
+        });
+        setPct(0);
+        await createTrainingMaterial({ folderId: folder.id, title: t, kind: "file", filename: file.name,
+          mime: file.type || null, dataBase64, content: content.trim() || null }, setPct);
+      } else if (mode === "text") {
+        if (!content.trim()) { setErr("Текст кроку порожній"); setBusy(false); return; }
+        await createTrainingMaterial({ folderId: folder.id, title: t, kind: "text", content: content.trim() });
+      } else {
+        if (!/^https?:\/\//i.test(url.trim())) { setErr("Вкажіть посилання, що починається з http:// або https://"); setBusy(false); return; }
+        await createTrainingMaterial({ folderId: folder.id, title: t, kind: mode, url: url.trim(), content: content.trim() || null });
+      }
+      onAdded();
+    } catch (e) {
+      setErr(errText(e));
+    } finally { setBusy(false); setPct(null); }
+  };
+
+  const MODES: { key: Mode; label: string; hint: string }[] = [
+    { key: "file", label: "📎 Файл", hint: `Фото, відео, документ — до ${maxMb} МБ` },
+    { key: "video_embed", label: "🎬 Відео посиланням", hint: "YouTube, Vimeo або пряме посилання на відео" },
+    { key: "link", label: "🔗 Посилання", hint: "Зовнішня сторінка" },
+    { key: "text", label: "📝 Текст", hint: "Написати прямо тут" },
+  ];
+  const hint = MODES.find((x) => x.key === mode)!.hint;
+
+  return (
+    <div className="hr-modal-back" onClick={onClose}>
+      <div className="hr-modal tr-add" onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: "0 0 2px", fontSize: 16 }}>Новий крок</h3>
+        <div className="hr-muted" style={{ marginBottom: 12 }}>у тему «{folder.name}»</div>
+
+        <div className="hr-pills" style={{ marginBottom: 4 }}>
+          {MODES.map((x) => (
+            <button key={x.key} className={`hr-pill ${mode === x.key ? "pl" : "gr"}`} disabled={busy}
+              onClick={() => { setMode(x.key); setErr(null); }}>{x.label}</button>
+          ))}
+        </div>
+        <div className="hr-muted" style={{ marginBottom: 12 }}>{hint}</div>
+
+        {mode === "file" && (
+          <div className={`tr-drop ${over ? "over" : ""}`}
+            onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+            onDragLeave={() => setOver(false)}
+            onDrop={(e) => { e.preventDefault(); setOver(false); take(e.dataTransfer.files?.[0]); }}>
+            <input id="tr-file" type="file" accept={upload.accept} style={{ display: "none" }}
+              onChange={(e) => take(e.target.files?.[0])} />
+            {!file ? (
+              <label htmlFor="tr-file" className="tr-dropin">
+                <b>Перетягніть файл сюди</b>
+                <span className="hr-muted">або натисніть, щоб обрати — фото, відео, документ (до {maxMb} МБ)</span>
+              </label>
+            ) : (
+              <div className="tr-dropped">
+                {file.type.startsWith("image/") && preview && <img src={preview} alt={file.name} />}
+                {file.type.startsWith("video/") && preview && <video src={preview} controls />}
+                <div className="tr-dropmeta">
+                  <b>{file.name}</b>
+                  <span className="hr-muted">{(file.size / (1024 * 1024)).toFixed(1)} МБ{file.type ? ` · ${file.type}` : ""}</span>
+                  <label htmlFor="tr-file" className="hr-btn xs" style={{ marginTop: 6 }}>Обрати інший</label>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {(mode === "video_embed" || mode === "link") && (
+          <input className="hr-inp" value={url} placeholder="https://…" disabled={busy}
+            onChange={(e) => setUrl(e.target.value)} style={{ width: "100%" }} />
+        )}
+
+        <label style={{ display: "block", marginTop: 12 }}>
+          <span className="hr-muted">Назва кроку</span>
+          <input className="hr-inp" value={title} disabled={busy} placeholder="Як крок буде названо в курсі"
+            onChange={(e) => setTitle(e.target.value)} style={{ width: "100%" }} />
+        </label>
+
+        <label style={{ display: "block", marginTop: 10 }}>
+          <span className="hr-muted">{mode === "text" ? "Текст кроку" : "Опис (не обовʼязково)"}</span>
+          <textarea className="hr-inp" rows={mode === "text" ? 8 : 2} value={content} disabled={busy}
+            onChange={(e) => setContent(e.target.value)} style={{ width: "100%", resize: "vertical" }} />
+        </label>
+
+        {pct != null && <div className="tr-track" style={{ marginTop: 12 }}><i style={{ width: `${pct}%`, background: "var(--info)" }} /></div>}
+        {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>{err}</div>}
+
+        <div className="hr-pills" style={{ marginTop: 16, justifyContent: "flex-end" }}>
+          <button className="hr-btn" onClick={onClose} disabled={busy}>Скасувати</button>
+          <button className="hr-btn p" onClick={() => void save()} disabled={busy}>
+            {busy ? (pct != null ? `Завантажую ${pct}%` : "Зберігаю…") : "Додати крок"}
+          </button>
+        </div>
       </div>
     </div>
   );

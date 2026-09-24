@@ -3184,8 +3184,14 @@ export interface TrainingMaterial {
 export async function publishTrainingMaterial(id: number): Promise<void> {
   await api.post(`/training/materials/${id}/publish`);
 }
-export async function fetchTrainingTree(): Promise<{ folders: TrainingFolder[]; materials: TrainingMaterial[] }> {
-  const { data } = await api.get<{ folders: TrainingFolder[]; materials: TrainingMaterial[] }>("/training/tree");
+/**
+ * 📎 Правила завантаження ПРИХОДЯТЬ ІЗ СЕРВЕРА (`core/trainingUpload.ts`), а не живуть тут копією:
+ * межа, відома фронту своїм числом, розходиться з серверною мовчки, і людина дізнається про неї
+ * з 413 після хвилини завантаження. Тримає `#716`.
+ */
+export interface TrainingUploadRules { maxBytes: number; accept: string }
+export async function fetchTrainingTree(): Promise<{ folders: TrainingFolder[]; materials: TrainingMaterial[]; upload: TrainingUploadRules }> {
+  const { data } = await api.get<{ folders: TrainingFolder[]; materials: TrainingMaterial[]; upload: TrainingUploadRules }>("/training/tree");
   return data;
 }
 export async function createTrainingFolder(name: string, parentId: number | null): Promise<TrainingFolder> {
@@ -4308,7 +4314,7 @@ export interface TrainingCourse {
   modules?: TrainingModule[];
 }
 export const fetchTrainingCourses = async () =>
-  (await api.get<{ courses: TrainingCourse[]; canEdit: boolean; freeModules?: TrainingModule[] }>("/training/courses")).data;
+  (await api.get<{ courses: TrainingCourse[]; canEdit: boolean; freeModules?: TrainingModule[]; upload: TrainingUploadRules }>("/training/courses")).data;
 export const createTrainingCourse = async (b: { title: string; description?: string | null; audience: TrainingAudience }) =>
   (await api.post<{ id: number }>("/training/courses", b)).data.id;
 export const patchTrainingCourse = async (id: number, patch: { title?: string; description?: string | null; audience?: TrainingAudience; published?: boolean }) => {

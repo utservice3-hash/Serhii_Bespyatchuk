@@ -10,19 +10,27 @@ import { orderedMaterials, materialStates, coursePercent } from "../core/trainin
 import { stepLockedBy, type LockDb } from "../core/trainingLock.js";
 import { attachVerdict, requiredValue, moduleStats, courseModules, freeModules, type EditorFolder } from "../core/trainingEditor.js";
 import { roleHasPerm } from "../auth/rbac.js";
+import { effectiveMime, mimeFromName } from "../core/trainingMime.js";
+import { checkUpload, MAX_UPLOAD_BYTES, ACCEPT_ATTR } from "../core/trainingUpload.js";
 
 /**
  * Навчання — навчальна база відділу продажу. Адмін (КВП) будує структуру папок
  * (навігація/розташування) і розміщує матеріали: відео (embed-URL YouTube/Vimeo/
  * пряме), завантажені файли, посилання, текст. Читають усі автентифіковані;
- * керує лише admin. Файли — у `uploads/../training` (персистить між деплоями,
- * потрапляє в нічний бекап), віддаються авторизованим стрімом.
+ * керує лише admin. Файли — у `uploads/../training` (персистить між деплоями),
+ * віддаються авторизованим стрімом.
+ *
+ * ⚠️ ТУТ СТОЯЛО «потрапляє в нічний бекап» — ЗАМІРЯНО 23.09.2026, ЦЕ НЕПРАВДА.
+ * `jobs/backupDb.ts` копіює лише `DOCS_DIR` (backend/documents, 34 МБ). Тека
+ * `backend/training` — **817 МБ, 143 файли** — у копію НЕ їде, як і `task-files/`,
+ * `contact-files/`, `uploads/`. Рядок пережив свою причину; борг названо власнику
+ * 23.09.2026 окремим рішенням. Не спирайся на нього при відновленні.
  */
 export const trainingRouter = Router();
 trainingRouter.use(requireAuth);
 
 const TRAIN_DIR = path.join(UPLOAD_DIR, "..", "training");
-const MAX_BYTES = 45 * 1024 * 1024; // 45 МБ на файл (великі відео — через embed)
+// 📎 Стеля й білий список — у `core/trainingUpload.ts`, одним числом на сервер і фронт (#716).
 /**
  * ✍️ ХТО РЕДАГУЄ НАВЧАННЯ — ПРАВО, А НЕ РОЛЬ (ТЗ 14.09.2026).
  *
@@ -49,7 +57,7 @@ trainingRouter.get("/tree", async (req, res) => {
     pool.query(
       // 🔴 ЧЕРНЕТКИ (в т.ч. згенеровані АІ) бачить ЛИШЕ admin — решта отримує тільки
       // опубліковане. Публікація — окрема людська дія (POST /materials/:id/publish).
-      `SELECT m.id, m.folder_id, m.title, m.kind, m.url, m.mime, m.size_bytes, m.content, m.position, m.created_at,
+      `SELECT m.id, m.folder_id, m.title, m.kind, m.url, m.mime, m.stored_name, m.size_bytes, m.content, m.position, m.created_at,
               m.status, m.created_by_ai, m.required,
               COALESCE(mm.name, u.email) AS author
          FROM training_materials m
@@ -60,7 +68,21 @@ trainingRouter.get("/tree", async (req, res) => {
       [isAdminScope(req.auth!)]
     ),
   ]);
-  res.json({ folders: folders.rows, materials: materials.rows });
+  /* 📄 Тип файла — через ядро: у 84 перенесених документів колонка порожня (core/trainingMime.ts).
+     🔴 ПОЛЯ ПЕРЕЛІЧЕНО ЯВНО, а не спредом рядка. Спред спіймав `#17e2`, і спіймав по ділу:
+     `stored_name` довелось додати в SELECT заради виведення типу, і разом зі спредом він поїхав
+     би клієнту — тобто внутрішнє імʼя файла на диску стало б видимим у відповіді. */
+  const withMime = materials.rows.map((m) => ({
+    id: m.id, folder_id: m.folder_id, title: m.title, kind: m.kind, url: m.url,
+    mime: effectiveMime(m.mime, m.stored_name, m.title),
+    size_bytes: m.size_bytes, content: m.content, position: m.position, created_at: m.created_at,
+    status: m.status, created_by_ai: m.created_by_ai, required: m.required, author: m.author,
+  }));
+  /* 📎 Межа й перелік типів їдуть із сервера, щоб у фронта НЕ БУЛО власної копії числа:
+     розійшлися б вони мовчки, і людина дізнавалась би про межу з 413 після хвилини
+     завантаження. Одне джерело — `core/trainingUpload.ts`, тримає `#716`. */
+  const upload = { maxBytes: MAX_UPLOAD_BYTES, accept: ACCEPT_ATTR };
+  res.json({ folders: folders.rows, materials: withMime, upload });
 });
 
 /**
@@ -179,13 +201,16 @@ trainingRouter.post("/material", canEditTraining, async (req, res) => {
     if (!dataBase64 || typeof dataBase64 !== "string") return res.status(400).json({ error: "Файл відсутній" });
     const base64 = dataBase64.includes(",") ? dataBase64.split(",")[1] : dataBase64;
     const buffer = Buffer.from(base64, "base64");
-    if (buffer.length > MAX_BYTES) return res.status(413).json({ error: "Файл завеликий (макс. 45 МБ; для великих відео — embed-посилання)" });
     const display = String(b.filename ?? title).trim() || "файл";
+    /* 📎 Тип і розмір — ОДНІЄЮ перевіркою ядра, ДО запису на диск. Тип виводимо з імені, коли
+       браузер промовчав: інакше «невідомий» і «заборонений» злились би в одну відмову. */
+    const verdict = checkUpload(b.mime ? String(b.mime) : mimeFromName(display), buffer.length);
+    if (!verdict.ok) return res.status(verdict.status).json({ error: verdict.reason });
     const ext = path.extname(display).slice(0, 12).replace(/[^.\w]/g, "");
     storedName = `${randomUUID()}${ext}`;
     await mkdir(TRAIN_DIR, { recursive: true });
     await writeFile(path.join(TRAIN_DIR, storedName), buffer);
-    mime = b.mime ? String(b.mime) : null;
+    mime = verdict.mime;
     sizeBytes = buffer.length;
   }
   content = content ?? (b.content ? String(b.content).trim() : null); // опис для не-текстових
@@ -250,7 +275,8 @@ trainingRouter.get("/material/:id/file", async (req, res) => {
   );
   if (!r.rowCount || !r.rows[0].stored_name) return res.status(404).json({ error: "Файл не знайдено" });
   const m = r.rows[0];
-  if (m.mime) res.type(m.mime);
+  const type = effectiveMime(m.mime, m.stored_name, m.title);
+  if (type) res.type(type);
   res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(m.title)}`);
   res.sendFile(path.join(TRAIN_DIR, m.stored_name!), (err) => {
     if (err && !res.headersSent) res.status(404).json({ error: "Файл відсутній на диску" });
@@ -311,8 +337,12 @@ trainingRouter.get("/courses", async (req, res) => {
   const modulesOf = (courseId: number) => courseModules(eFolders, courseId).map((m) => ({
     id: m.id, name: m.name, position: m.position, ...moduleStats(m.id, eFolders, mRows),
   }));
+  /* 📎 Межа й перелік типів їдуть із сервера, щоб у фронта НЕ БУЛО власної копії числа:
+     розійшлися б вони мовчки, і людина дізнавалась би про межу з 413 після хвилини
+     завантаження. Одне джерело — `core/trainingUpload.ts`, тримає `#716`. */
+  const upload = { maxBytes: MAX_UPLOAD_BYTES, accept: ACCEPT_ATTR };
   res.json({
-    canEdit,
+    canEdit, upload,
     freeModules: canEdit ? freeModules(eFolders).map((m) => ({ id: m.id, name: m.name, position: m.position, ...moduleStats(m.id, eFolders, mRows) })) : undefined,
     courses: courses.rows.map((c) => {
       // Модуль = КОРЕНЕВА папка курсу (рішення власника 15.09.2026).
@@ -414,7 +444,8 @@ trainingRouter.get("/material/:id", async (req, res) => {
   const p = await pool.query<{ status: string; finished_at: string | null }>(
     `SELECT status, finished_at FROM training_progress WHERE user_id = $1 AND material_id = $2`, [uid, id]);
   res.json({
-    id: m.id, folderId: m.folder_id, title: m.title, kind: m.kind, url: m.url, mime: m.mime,
+    id: m.id, folderId: m.folder_id, title: m.title, kind: m.kind, url: m.url,
+    mime: effectiveMime(m.mime, m.stored_name, m.title),
     sizeBytes: m.size_bytes, content: m.content, required: m.required, hasFile: m.stored_name != null,
     status: p.rows[0]?.status ?? null, finishedAt: p.rows[0]?.finished_at ?? null,
   });
