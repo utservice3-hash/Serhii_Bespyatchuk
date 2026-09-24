@@ -3,6 +3,10 @@ import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { pool } from "../db/pool.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { successByBucket, receivedByBucket, type MoneyScope } from "../core/money.js";
+import * as money from "../core/money.js";
+import { lapsedFrom, prevMonthOf } from "../core/lapsedClients.js";
+import { clientOwnersFor } from "../core/clientOwner.js";
+import { kyivToday } from "../core/dates.js";
 import { dispatchedByLoadBucket, leadsTakenByBucket, repeatClientsByBucket, type MetricScope } from "../core/metrics.js";
 import { SALES_TEAM_LEAD } from "../statistics/catalog.js";
 import {
@@ -253,6 +257,46 @@ statsSeriesRouter.get("/series", async (req, res) => {
   const set = await seriesSet({ role: auth.role, roleKey: auth.roleKey, teamId: auth.teamId ?? null, managerId: auth.managerId ?? null }, unit);
   const series = await Promise.all(set.map((s) => stitch(block, metric, g, from, to, s)));
   res.json({ block, metric, granularity: g, seam: STATS_SEAM, crmAble: isCrmAble(block, metric), live: hasLive(block, metric), series });
+});
+
+/**
+ * 📉 «КУПУВАВ МИНУЛОГО МІСЯЦЯ, НЕ КУПИВ У ЦЬОМУ» по командах (задача 3990, п.3; вкладка
+ * «Статистики → Клієнти»). Гроші — ЛИШЕ з ядра (`successByClientBucket`, ті самі бакети, що
+ * на Звіті), правило «випав» — чисте (`core/lapsedClients.ts`), команда — за ЕФЕКТИВНИМ
+ * менеджером клієнта на поточний місяць (закріплення й передачі), не за менеджером угоди.
+ * Скоуп: адмін-скоуп бачить усі команди, тімлід — свою, менеджер — своїх клієнтів.
+ */
+statsSeriesRouter.get("/lapsed-clients", async (req, res) => {
+  const auth = req.auth!;
+  const thisYm = /^\d{4}-\d{2}$/.test(String(req.query.month ?? "")) ? String(req.query.month) : kyivToday().slice(0, 7);
+  const prevYm = prevMonthOf(thisYm);
+  const [y, m] = thisYm.split("-").map(Number);
+  const thisEnd = `${thisYm}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, "0")}`;
+  const buckets = await money.successByClientBucket({ from: `${prevYm}-01`, to: thisEnd }, "month");
+  const lapsed = lapsedFrom(buckets.map((b) => ({ clientKey: b.clientKey, bucket: b.bucket, revenue: b.revenue })), prevYm, thisYm);
+  const keys = lapsed.map((l) => l.clientKey);
+  // Ефективний менеджер і команда — з ядра (`clientOwnersFor`: оплачені угоди + закріплення).
+  const byKey = await clientOwnersFor(keys, thisYm);
+  const canAll = isAdminScope(auth);
+  type Row = { clientKey: string; clientName: string; manager: string | null; managerId: number | null; teamId: number | null; teamName: string; prevRevenue: number };
+  const rows: Row[] = lapsed.map((l) => { const o = byKey.get(l.clientKey); return {
+    clientKey: l.clientKey, clientName: o?.clientName ?? l.clientKey, manager: o?.managerName ?? null, managerId: o?.managerId ?? null,
+    teamId: o?.teamId ?? null, teamName: o?.teamName ?? "Без команди", prevRevenue: l.prevRevenue }; })
+    .filter((r) => canAll || (auth.role === "team_lead" ? r.teamId === auth.teamId : r.managerId === auth.managerId));
+  const teams = new Map<string, { teamId: number | null; teamName: string; clients: number; prevRevenue: number; rows: Row[] }>();
+  for (const r of rows) {
+    const k = String(r.teamId ?? "none");
+    const t = teams.get(k) ?? { teamId: r.teamId, teamName: r.teamName, clients: 0, prevRevenue: 0, rows: [] };
+    t.clients++; t.prevRevenue += r.prevRevenue; t.rows.push(r); teams.set(k, t);
+  }
+  res.json({
+    month: thisYm, prevMonth: prevYm, monthComplete: thisYm < kyivToday().slice(0, 7),
+    total: { clients: rows.length, prevRevenue: rows.reduce((a, r) => a + r.prevRevenue, 0) },
+    teams: [...teams.values()].sort((a, b) => b.prevRevenue - a.prevRevenue).map((t) => ({
+      teamId: t.teamId, teamName: t.teamName, clients: t.clients, prevRevenue: t.prevRevenue,
+      rows: t.rows.map((r) => ({ clientKey: r.clientKey, clientName: r.clientName, manager: r.manager, prevRevenue: r.prevRevenue })),
+    })),
+  });
 });
 
 // POST /api/statistics/series/manual — ручні точки (не CRM-able). admin-only.

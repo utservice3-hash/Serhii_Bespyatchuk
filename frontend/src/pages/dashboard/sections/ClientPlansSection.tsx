@@ -600,6 +600,21 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         </div>
       )}
 
+      {/* 🔢 ТРИ ЦИФРИ РЕАКТИВАЦІЇ (ТЗ 3989, п.5) — ЗВЕРХУ, одразу під показниками плану. */}
+      {t.react && (
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "0 0 10px" }}>
+          {[
+            ["в роботі (реактивація)", t.react.inWork, "сплячі + втрачені у вашому скоупі"],
+            ["повернуто за місяць", t.react.returnedMonth, `перша оплата місяця після паузи ≥ ${t.react.gapDays} дн.`],
+            ["повернутої маржі", formatAmountFull(t.react.returnedMargin), "Σ оплат цих клієнтів цього місяця (price = маржа)"],
+          ].map(([label, val, hint]) => (
+            <div key={String(label)} title={String(hint)} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: "8px 14px", background: "#fff", minWidth: 150 }}>
+              <div style={{ fontSize: 20, fontWeight: 700 }}>{val}</div>
+              <div style={{ fontSize: 11, color: "#6b7280" }}>{label}</div>
+            </div>
+          ))}
+        </div>
+      )}
       {/* 🕳 «НЕ ПРИВʼЯЗАНО» — план без клієнтського рядка. Право показу віддає
           СЕРВЕР (`unattached.canSee` = isAdminScope), фронт його не вгадує. */}
       {t.unattached.canSee && t.unattached.count > 0 && (
@@ -788,20 +803,6 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
       {/* 🌉 МІСТОК. Сплячі й втрачені з екрана ЗНИКЛИ (жорсткий поділ) — без цього
           рядка вони зникли б МОВЧКИ, і це читалось би як «клієнти загубились».
           У Σ «постійні принесуть» місток НЕ входить: це не план, а вказівник. */}
-      {t.react && (
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "0 0 10px" }}>
-          {[
-            ["в роботі (реактивація)", t.react.inWork, "сплячі + втрачені у вашому скоупі"],
-            ["повернуто за місяць", t.react.returnedMonth, `перша оплата місяця після паузи ≥ ${t.react.gapDays} дн.`],
-            ["повернутої маржі", formatAmountFull(t.react.returnedMargin), "Σ оплат цих клієнтів цього місяця (price = маржа)"],
-          ].map(([label, val, hint]) => (
-            <div key={String(label)} title={String(hint)} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: "8px 14px", background: "#fff", minWidth: 150 }}>
-              <div style={{ fontSize: 20, fontWeight: 700 }}>{val}</div>
-              <div style={{ fontSize: 11, color: "#6b7280" }}>{label}</div>
-            </div>
-          ))}
-        </div>
-      )}
       {t.inReactivation > 0 && (
         <div style={{ ...S.card, borderLeft: "3px solid #b45309", display: "flex",
                       alignItems: "center", gap: 10, flexWrap: "wrap" }}>

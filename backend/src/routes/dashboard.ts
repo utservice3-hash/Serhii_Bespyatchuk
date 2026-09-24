@@ -79,6 +79,7 @@ import { FUNNEL_STAGE_LABELS, stageName } from "../core/stageNames.js";
 import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL } from "../core/orphanClients.js";
 import * as plans from "../core/plans.js";
 import * as forecast from "../core/forecast.js";
+import * as callNorm from "../core/callNorm.js";
 import * as reportCuts from "../core/reportCuts.js";
 import { firstTouchReport } from "../core/firstTouch.js";
 import { firstTouchCell, glanceFirstTouch, firstTouchOutsideRoster } from "../core/firstTouchRules.js";
@@ -8615,14 +8616,19 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // 📊 Розрізи макета 06.08.2026: дзвінки (розмови/спроби), затор на «Виставленні
   // рахунку», очікування БЕЗ планової дати. Усі — лічильні або знімок однієї стадії;
   // грошей періоду тут не рахує ніхто, це й далі робота `core/money.ts`.
-  const [callsRows, jamRows, noDateRows, ft] = await Promise.all([
+  const [callsRows, callDays, appSettings, jamRows, noDateRows, ft] = await Promise.all([
     reportCuts.callsByManager(from, to, { managerId, teamId }),
+    // 📞 Дні з нормою (ТЗ 23.09.2026, п.2): ті самі денні комірки, що в розгортці рядка.
+    reportCuts.callsByManagerDay(from, to, { managerId, teamId }),
+    getSettings(),
     reportCuts.invoicingJamByManager({ managerId, teamId }),
     reportCuts.expectedNoDateByManager(metrics.EXPECT_ZONE, { managerId, teamId }),
     // 🎯 ТЗ-3 «перший дотик»: оцінки бота за період, звʼязані з тим, хто ДЗВОНИВ (рішення 17.09.2026).
     firstTouchReport(from, to),
   ]);
   const callsM = new Map(callsRows.map((r) => [r.managerId, r]));
+  const callDaysM = new Map<number, callNorm.CallDay[]>();
+  for (const r of callDays) { const a = callDaysM.get(r.managerId) ?? []; a.push(r); callDaysM.set(r.managerId, a); }
   const jamM = new Map(jamRows.map((r) => [r.managerId, r]));
   const noDateM = new Map(noDateRows.map((r) => [r.managerId, r]));
   const splitM = new Map(split.map((s) => [s.managerId, s]));
@@ -8916,6 +8922,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       })(),
       // 📞 Розмови й спроби — ДВІ цифри, складати заборонено (рішення власника 04.08).
       talks: callsM.get(m.id)?.talks ?? 0, attempts: callsM.get(m.id)?.attempts ?? 0,
+      // 📞 Днів з нормою дзвінків / робочих днів; норма — з Налаштувань, `null` = не задано.
+      callNorm: callNorm.callNormCell(callDaysM.get(m.id) ?? [], appSettings.callsDailyNorm, from, to, kyivToday),
       // 🎯 «Ціну названо в перший дотик»: стан + лічильники; відсоток рахує фронт із лічильників.
       firstTouch: firstTouchCell(ft.byManager.get(m.id), m.team_id, ft.coveredTeamIds),
       // ⏳ Очікування БЕЗ планової дати — в жодну суму не входить, тому окремо.

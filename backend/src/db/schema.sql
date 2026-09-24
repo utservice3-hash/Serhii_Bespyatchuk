@@ -2060,7 +2060,9 @@ UPDATE bank_transactions SET is_bank_fee = true
 -- і гейт на чисту функцію (#274*) другої не бачить. Тому #279e бʼє РОУТ проти живої БД.
 ALTER TABLE access_audit DROP CONSTRAINT IF EXISTS access_audit_target_type_check;
 ALTER TABLE access_audit ADD CONSTRAINT access_audit_target_type_check
-  CHECK (target_type IN ('user','role','bank_account','bank_payee','manager'));
+  -- 'team' — команда лише в дашборді (Налаштування → «Команди», 23.09.2026). Спіймав #279e
+  -- на прийманні: тип оголосили в коді, а живий CHECK його не знав.
+  CHECK (target_type IN ('user','role','bank_account','bank_payee','manager','team'));
 
 -- Сид 4 відомих рахунків (лише структурні поля + env_key_name; реквізити адмін заповнює в
 -- панелі). Bootstrap: сидимо ЛИШЕ коли таблиця порожня → ідемпотентно, не дублює на ре-міграції
@@ -3983,3 +3985,52 @@ ALTER TABLE training_materials ADD COLUMN IF NOT EXISTS external_id TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_training_courses_ext   ON training_courses(external_id)   WHERE external_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_training_folders_ext   ON training_folders(external_id)   WHERE external_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_training_materials_ext ON training_materials(external_id) WHERE external_id IS NOT NULL;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 🧭 ПЕРЕВИЗНАЧЕННЯ КОМАНДИ МЕНЕДЖЕРА (ТЗ 23.09.2026, п.1) — див. core/teamOverride.ts.
+-- Рядок = «у дашборді ця людина в team_id, що б не стояло в Kommo»; team_id NULL =
+-- примусово без команди. Синк читає таблицю на кожному тіку; адмін править у
+-- Налаштуваннях → «Команди». Хардкод TEAM_OVERRIDES із syncKommo переїхав у сид нижче.
+-- ═══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS manager_team_overrides (
+  kommo_user_id BIGINT PRIMARY KEY,
+  team_id       INTEGER REFERENCES teams(id),   -- NULL = без команди примусово
+  note          TEXT,
+  set_by        INTEGER REFERENCES users(id),
+  set_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Сид 2 (спершу): команда лише в дашборді — у Kommo такої групи немає (ТЗ 23.09.2026).
+-- ⚠️ id ЯВНИЙ і далекий від serial (MAX+1000): фікстури гейтів сіють команди з id 1..15 через
+-- ON CONFLICT DO NOTHING, і serial-рядок з id 1 мовчки підмінив би їм назву (спіймано #25d,
+-- #675: «Комерційний відділ» замість «РПК»). На проді це 37283 — послідовність не зачіпає.
+INSERT INTO teams (id, name, kommo_group_id)
+SELECT COALESCE((SELECT MAX(id) FROM teams), 0) + 1000, 'Комерційний відділ', NULL
+ WHERE NOT EXISTS (SELECT 1 FROM teams WHERE name = 'Комерційний відділ');
+
+-- 🔴 BASELINE ОДНИМ ЗАПИТОМ, НЕ СИНК (урок #15 і #709d): сиди лягають лише в ПОРОЖНЮ
+-- таблицю — інакше рядок, який адмін ЗНЯВ («з CRM»), воскресав би на кожному старті
+-- сервера; гейт #709d це спіймав на першому ж прогоні. Один INSERT, щоб «порожня»
+-- означало одне й те саме для всіх рядків.
+--   • 7181916 Шевчук Назар → команда Яцика (рішення власника 05.08.2026, було хардкодом);
+--   • 3549691 Левентова Юлія → «Комерційний відділ» (ТЗ 23.09.2026);
+--   • 12812476 Сердюк, 13369800 Демчук, 13656180 Крупник, 14731552 Шевчук М. — активні
+--     учасники групи «Таня Ковтонюк (лідогенератори)» на 23.09.2026 → без команди
+--     (архів групи за ТЗ 23.09.2026).
+INSERT INTO manager_team_overrides (kommo_user_id, team_id, note)
+SELECT v.k, v.t, v.n
+  FROM (
+    SELECT 7181916 AS k, (SELECT id FROM teams WHERE kommo_group_id = 335511) AS t,
+           'рішення власника 05.08.2026: «Самостійні» розформовано, повністю під Яцика' AS n
+    UNION ALL
+    SELECT 3549691, (SELECT id FROM teams WHERE name = 'Комерційний відділ'),
+           'ТЗ 23.09.2026: перенести в «Комерційний відділ»'
+    UNION ALL
+    SELECT k, NULL, 'ТЗ 23.09.2026: група «Таня Ковтонюк (лідогенератори)» архівована'
+      FROM (VALUES (12812476), (13369800), (13656180), (14731552)) AS a(k)
+  ) v
+ WHERE NOT EXISTS (SELECT 1 FROM manager_team_overrides)
+   -- Шевчук і Левентова без команди-цілі — це НЕ «без команди», а «цілі ще немає»:
+   -- тоді не сіємо нікого, щоб не покласти неправду; наступний старт спробує знову.
+   AND (SELECT id FROM teams WHERE kommo_group_id = 335511) IS NOT NULL
+   AND (SELECT id FROM teams WHERE name = 'Комерційний відділ') IS NOT NULL;

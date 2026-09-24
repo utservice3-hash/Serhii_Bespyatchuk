@@ -923,6 +923,8 @@ export interface ReportPlanManager {
   factSuccessDeals: number; factPaidDeals: number;
   // 📞 Розмова (billsec>0) і недодзвін — ДВІ цифри; складати заборонено.
   talks: number; attempts: number;
+  /** 📞 Днів з нормою дзвінків / робочих днів (ТЗ 23.09.2026, п.2). `daysWithNorm: null` = норму не задано. */
+  callNorm: { norm: number | null; daysWithNorm: number | null; workDays: number };
   /** 🎯 ТЗ-3 «ціну названо в перший дотик» — оцінки бота, звʼязані з тим, хто ДЗВОНИВ. */
   firstTouch: FirstTouchCell;
   // ⏳ Очікування БЕЗ планової дати — в жодну суму не входить, тому й окремо.
@@ -1372,6 +1374,8 @@ export interface AppSettings {
   ratesFallbackPartPerKm: number;
   /** Мʼяка нижня межа плану, ₴. 0 = межу свідомо знято. `null` = повернути дефолт. */
   planMinPerManager: number | null;
+  /** 📞 Норма дзвінків на день (розмови+спроби). `null` = не задана — колонка Звіту каже «норму не задано». */
+  callsDailyNorm: number | null;
   tracker: TrackerConfig;
   adSources: string[];
 }
@@ -2460,6 +2464,17 @@ export interface StatsSeries { scopeType: string; scopeKey: string; scopeName: s
 export interface StatsSeriesResp { block: string; metric: string; granularity: "day" | "week" | "month"; seam: string; crmAble: boolean; live: boolean; series: StatsSeries[] }
 export async function fetchStatsSeries(params: { block: string; metric: string; granularity: string; from?: string; to?: string; unit?: string }): Promise<StatsSeriesResp> {
   const { data } = await api.get<StatsSeriesResp>("/statistics/series", { params });
+  return data;
+}
+/** 📉 «Купував минулого місяця, не купив у цьому» по командах (Статистики → Клієнти). */
+export interface LapsedClientsResp {
+  month: string; prevMonth: string; monthComplete: boolean;
+  total: { clients: number; prevRevenue: number };
+  teams: { teamId: number | null; teamName: string; clients: number; prevRevenue: number;
+    rows: { clientKey: string; clientName: string; manager: string | null; prevRevenue: number }[] }[];
+}
+export async function fetchLapsedClients(month?: string): Promise<LapsedClientsResp> {
+  const { data } = await api.get<LapsedClientsResp>("/statistics/lapsed-clients", { params: month ? { month } : undefined });
   return data;
 }
 export async function saveStatsManual(body: { block: string; metric: string; scopeType: string; scopeKey: string; scopeName?: string; granularity: string; period: string; value: number }): Promise<{ ok: boolean }> {
@@ -4585,4 +4600,26 @@ export function employeePhotoUrl(p: PhotoRef): Promise<string | null> {
     photoUrls.set(k, u);
   }
   return u;
+}
+
+/* 🧭 Команди дашборда й перевизначення команди менеджера (ТЗ 23.09.2026, п.1). */
+export interface TeamOverrideRow {
+  managerId: number; name: string; kommoUserId: string; teamId: number | null;
+  override: { teamId: number | null; note: string | null } | null;
+}
+export interface TeamOverridesPayload {
+  teams: { id: number; name: string; dashboardOnly: boolean; active: number }[];
+  managers: TeamOverrideRow[];
+}
+export async function fetchTeamOverrides(): Promise<TeamOverridesPayload> {
+  const { data } = await api.get<TeamOverridesPayload>("/settings/team-overrides");
+  return data;
+}
+export async function setTeamOverride(kommoUserId: string, body: { mode: "crm" | "team" | "none"; teamId?: number; note?: string }) {
+  const { data } = await api.put<{ ok: true; appliedNow: boolean }>(`/settings/team-overrides/${kommoUserId}`, body);
+  return data;
+}
+export async function createDashboardTeam(name: string): Promise<{ id: number; name: string }> {
+  const { data } = await api.post<{ id: number; name: string }>("/settings/teams", { name });
+  return data;
 }
