@@ -103,6 +103,8 @@ import { canRequestLimitFor, canAssignTaskToOthers } from "../auth/taskAssignSco
 import { activeManagerSql } from "../core/activeManager.js";
 import * as managerState from "../core/managerState.js";
 import * as clientCallsYear from "../core/clientCallsYear.js";
+import * as clientAliasNames from "../core/clientAliasNames.js";
+import * as categoryRules from "../core/categoryRules.js";
 import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf, kyivToday, isRealDate } from "../core/dates.js";
 import { weekPlansForMonth } from "../core/weekPlan.js";
 import { sumDaysIntoBlocks } from "../core/weekFacts.js";
@@ -5817,6 +5819,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   // п.1.4). До 24.09.2026 тут не рахувалось нічого, а рядок показував «📞 0» текстом.
   const callsYearByKey = await clientCallsYear.callsByYear(clientKeys);
   const callsYearNow = Number(todayKyiv.slice(0, 4));
+  // 🔗 Хто приєднаний до кожного рядка (ТЗ 22.09, п.2.3) — лише назви, у гроші не входить.
+  const aliasByKey = await clientAliasNames.aliasNamesFor(clientKeys);
   // 🛑 СТОП ЧЕРЕЗ ДЕБІТОРКУ (ТЗ 3989, п.6) — по тих самих ключах: є прострочений рядок дебіторки.
   const debtRes = await pool.query<{ client_key: string }>(
     `SELECT DISTINCT client_key FROM receivables WHERE overdue_days > 0 AND client_key = ANY($1)`, [clientKeys]);
@@ -6088,6 +6092,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       comments: commentsByKey.get(c.client_key) ?? 0,
       // 📞 Розмов і всіх дзвінків за поточний рік — рівно рядок картки за цей рік.
       callsYear: clientCallsYear.yearCell(callsYearByKey.get(c.client_key), callsYearNow),
+      // 🔗 Приєднані записи CRM (активні обʼєднання) — показуються під назвою «обʼєднано: …».
+      merged: aliasByKey.get(c.client_key) ?? [],
     };
   });
 
@@ -6149,6 +6155,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
      * редакцією правила — саме через це пороги вже одного разу розійшлись.
      */
     closeReasons: reactivationRules.CLOSE_REASONS,
+    // ⓘ Правила категорій готовим текстом із констант ядра (ТЗ 22.09, п.2.4) — фронт їх не складає.
+    categoryRules: categoryRules.categoryRulesPayload(),
     thresholds: {
       sleepingDays: reactivationRules.SEGMENT_SLEEPING_DAYS,
       lostDays: reactivationRules.LOST_DAYS,
@@ -6866,6 +6874,8 @@ dashboardRouter.get("/client-card", async (req, res) => {
     monthsTotal: months.reduce((s2, m) => s2 + m.revenue, 0),
     contacts: (await pool.query(`${CONTACT_SELECT} WHERE c.client_key = $1 ORDER BY c.created_at DESC LIMIT 50`, [clientKey])).rows.map(shapeContact),
     callsByYear: cardCallsByYear,
+    // 🔗 Хто приєднаний до цього клієнта (ТЗ 22.09, п.2.3).
+    merged: (await clientAliasNames.aliasNamesFor([clientKey])).get(clientKey) ?? [],
     calls: callListRes.rows.map((r) => ({
       at: r.calldate, direction: r.call_type.includes("out") ? "out" : "in",
       billsec: r.billsec, answered: r.billsec > 0, disposition: r.disposition, manager: r.manager,

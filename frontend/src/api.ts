@@ -3629,6 +3629,14 @@ export async function fetchClientStale(): Promise<{ stale: boolean | null; serve
 
 // ── ФАЗА A · «Постійні клієнти · план місяця» ────────────────────────────────
 export interface ClientPlanWeek { label: string; from: string; to: string; status: "past" | "current" | "future"; plan: number; fact: number }
+/** 🔗 Приєднаний запис CRM (активне обʼєднання) — ТЗ 22.09, п.2.3. */
+export interface AliasName { key: string; name: string; paid: number }
+/** ⓘ Правила категорій готовим текстом із ядра (`core/categoryRules.ts`) — ТЗ 22.09, п.2.4. */
+export interface CategoryRules {
+  segmentTips: Record<ClientSegment, string>;
+  stateTips: { sleeping: string; lost: string };
+  text: string[];
+}
 export interface ClientPlanRow {
   clientKey: string; clientName: string; paymentType: string | null;
   orders: number; lifetimeRevenue: number; since: string | null; lastOrderDays: number | null;
@@ -3637,6 +3645,8 @@ export interface ClientPlanRow {
   managerId: number; managerName: string; pinned: boolean; comments: number;
   /** 📞 Дзвінки за поточний рік — рівно рядок «розмов N із M» картки (ядро `core/clientCallsYear.ts`). */
   callsYear: { year: number; calls: number; talks: number };
+  /** 🔗 Хто приєднаний до цього рядка (обʼєднання в CRM-ключах). Порожньо — ні з ким. */
+  merged?: AliasName[];
   /** Команда менеджера — для ієрархії «команда → менеджер → клієнти» (подача, не скоуп). */
   teamId: number | null; teamName: string;
   /** Сегмент за частотою замовлень — бейдж біля клієнта. */
@@ -3692,6 +3702,7 @@ export interface ClientPlansResp {
   /** Довідники дій, що переїхали з вкладки «Реактивація». Приходять із ядра. */
   closeReasons?: { key: string; label: string }[];
   thresholds?: { sleepingDays: Record<string, number>; lostDays: number; longLapsedDays: number };
+  categoryRules?: CategoryRules;
   clients: ClientPlanRow[];
   totals: {
     planTotal: number; planApproved: number; factTotal: number; pct: number | null;
@@ -3805,6 +3816,8 @@ export async function fetchContactFileBlobUrl(id: number): Promise<string> {
 }
 
 export interface ClientCard {
+  /** 🔗 Приєднані записи CRM — ТЗ 22.09, п.2.3. */
+  merged?: AliasName[];
   /** 📱 Контакти з клієнтом поза дзвінками (Viber/Telegram/…), зі скринами. */
   contacts?: ClientContact[];
   /** 📌 ТЗ реактивації: крок з датою, стан номера, останній дзвінок (дата, хто, скільки). */

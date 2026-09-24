@@ -7,7 +7,7 @@ import {
   type ClientPlansResp, type ClientPlanRow, type ClientComment, type ManagerOption,
 } from "../../../api";
 import { formatAmountFull } from "../format";
-import { SegmentBadge, ForcedBadge } from "./SegmentBadge";
+import { SegmentBadge, ForcedBadge, MergedLine } from "./SegmentBadge";
 import { RowComment } from "./RowComment";
 import { CreateTaskDialog, CloseTaskDialog, ContactDialog } from "./ReactivationBits";
 import { ClientCardPanel } from "./ClientCardPanel";
@@ -62,10 +62,11 @@ const STATE_CHIP: Record<string, { label: string; bg: string; fg: string; title:
     title: "Не проходить кваліфікацію постійного — рядок показано, бо за ним лишився план цього місяця." },
 };
 
-function StateChip({ state }: { state: string }) {
+/** `rule` — правило стану з ядра (`categoryRules.stateTips`), додається до пояснення чипа. */
+function StateChip({ state, rule }: { state: string; rule?: string }) {
   const m = STATE_CHIP[state];
   if (!m) return null;
-  return <span title={m.title} style={S.chip(m.bg, m.fg)}>{m.label}</span>;
+  return <span title={rule ? `${rule}\n${m.title}` : m.title} style={S.chip(m.bg, m.fg)}>{m.label}</span>;
 }
 
 function Tile({ title, value, sub, tone }: { title: string; value: string; sub?: string; tone?: "warn" | "bad" }) {
@@ -204,6 +205,8 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
    * Дефолт «усі» — рішення власника 04.09.2026 («все в одному місці»).
    */
   const [stateFilter, setStateFilter] = useState<"all" | "active" | "sleeping" | "lost">("all");
+  /** ⓘ Довідка «Як рахуються категорії» розгорнута (ТЗ 22.09, п.2.4). */
+  const [showRules, setShowRules] = useState(false);
   const [creating, setCreating] = useState<{ clientKey: string; name: string } | null>(null);
   const [closing, setClosing] = useState<{ taskId: number; name: string } | null>(null);
   const [contacting, setContacting] = useState<{ clientKey: string; name: string } | null>(null);
@@ -348,12 +351,13 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
       <tr style={{ background: risk ? "#fffbeb" : undefined }}>
         <td style={S.td}>
           <div style={{ fontWeight: 700 }}>{c.clientName}</div>
+          <MergedLine merged={c.merged} />
           <div style={{ marginTop: 3, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-            <SegmentBadge segment={c.segment} />
+            <SegmentBadge segment={c.segment} tip={data?.categoryRules?.segmentTips[c.segment]} />
             {/* 🔴 БЕЗУМОВНО. До обʼєднання вкладок чип малювався лише в рядках, доданих
                 через план, — бо решта за побудовою була активною. Тепер у списку живуть
                 сплячі й втрачені, і рядок без підпису читався б як «активний» (`#330`). */}
-            <StateChip state={c.state} />
+            <StateChip state={c.state} rule={c.state === "sleeping" ? data?.categoryRules?.stateTips.sleeping : c.state === "lost" ? data?.categoryRules?.stateTips.lost : undefined} />
             {c.forcedRegular && <ForcedBadge note={c.forceNote} />}
             {/* 💬 Коментар прямо тут: клієнт може мовчати 55 днів і формально
                 лишатись «активним» — причину треба записати, не розгортаючи рядок. */}
@@ -657,7 +661,9 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}>Стан:</span>
         {([["all", "усі"], ["active", "замовляють"], ["sleeping", "сплячі"], ["lost", "втрачені"]] as const).map(([k, label]) => (
           <button key={k} onClick={() => setStateFilter(k)}
-            title={k === "all" ? "показати всіх, включно з тими, хто не замовляє" : undefined}
+            title={k === "all" ? "показати всіх, включно з тими, хто не замовляє"
+              : k === "sleeping" ? data?.categoryRules?.stateTips.sleeping
+              : k === "lost" ? data?.categoryRules?.stateTips.lost : undefined}
             style={{ fontSize: 12, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
                      border: `1px solid ${stateFilter === k ? "#2563eb" : "#d1d5db"}`,
                      background: stateFilter === k ? "#eff6ff" : "#fff",
@@ -684,6 +690,15 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}>
           показано {rows.length} із {data.clients.length}
         </span>
+        {/* ⓘ ДОВІДКА ПРАВИЛ (ТЗ 22.09, п.2.4). Текст складає ядро (`core/categoryRules.ts`) з тих
+            самих констант, що рахують категорію; тут лише показ. */}
+        {data.categoryRules && (
+          <button type="button" onClick={() => setShowRules((v) => !v)} aria-expanded={showRules}
+            style={{ fontSize: 12, padding: "5px 11px", borderRadius: 999, cursor: "pointer", marginLeft: 6,
+                     border: "1px solid #d1d5db", background: showRules ? "#eff6ff" : "#fff", color: "#1d4ed8" }}>
+            ⓘ Як рахуються категорії
+          </button>
+        )}
         {grouped && (
           <>
             <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}>Сортувати:</span>
@@ -714,6 +729,16 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           </button>
         )}
       </div>
+
+      {showRules && data.categoryRules && (
+        <div style={{ ...S.card, marginBottom: 10, fontSize: 12.5, lineHeight: 1.55 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>ⓘ Як рахуються категорії клієнтів</div>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {data.categoryRules.text.map((line, i) => <li key={i}>{line}</li>)}
+          </ul>
+          <div style={{ fontSize: 11, color: "#6b7280", marginTop: 6 }}>Пороги беруться з тих самих правил, що рахують категорію, тож тут завжди актуальні числа.</div>
+        </div>
+      )}
 
       {/* ── ТАБЛИЦЯ */}
       {actErr && (

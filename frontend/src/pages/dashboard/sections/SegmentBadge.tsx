@@ -1,4 +1,4 @@
-import type { ClientSegment } from "../../../api";
+import type { ClientSegment, AliasName } from "../../../api";
 
 /**
  * 🧭 БЕЙДЖ СЕГМЕНТА — один компонент на всі три екрани (планування, реактивація,
@@ -20,10 +20,17 @@ const MAP: Record<ClientSegment, { label: string; bg: string; fg: string; title:
               title: "менше 3 оплат — частоту рахувати нема з чого, сегмент не вгадуємо" },
 };
 
-export function SegmentBadge({ segment, gap }: { segment: ClientSegment; gap?: number | null }) {
+/**
+ * `tip` — правило категорії з сервера (`categoryRules.segmentTips`, ТЗ 22.09, п.2.4): частота
+ * разом із порогами «сплячий» і «втрачений». Пороги в підказці пише ЯДРО, а не цей файл, —
+ * тож змінений поріг не залишить на екрані старе число. Локальний `m.title` — лише фолбек,
+ * поки відповідь без правил (старий сервер).
+ */
+export function SegmentBadge({ segment, gap, tip }: { segment: ClientSegment; gap?: number | null; tip?: string }) {
   const m = MAP[segment] ?? MAP.unknown;
+  const base = tip ?? m.title;
   return (
-    <span title={gap != null ? `${m.title} · медіана ${gap} дн.` : m.title}
+    <span title={gap != null ? `${base} · медіана ${gap} дн.` : base}
       style={{ display: "inline-block", padding: "1px 7px", borderRadius: 999, fontSize: 10,
                fontWeight: 700, background: m.bg, color: m.fg, whiteSpace: "nowrap" }}>
       {m.label}
@@ -47,5 +54,23 @@ export function ForcedBadge({ note }: { note: string | null }) {
                border: "1px solid #fde68a", cursor: "help", whiteSpace: "nowrap" }}>
       ⭐ вручну
     </span>
+  );
+}
+
+/**
+ * 🔗 «ОБʼЄДНАНО: …» ПІД НАЗВОЮ КЛІЄНТА (ТЗ 22.09, п.2.3). План, задача й факт уже зведені
+ * в цьому рядку — рядок лише показує, ХТО в ньому. Три назви видно одразу, решта — числом,
+ * повний список у підказці: рядок списку не має розростатись на пів екрана.
+ */
+export function MergedLine({ merged }: { merged?: AliasName[] }) {
+  if (!merged || merged.length === 0) return null;
+  const shown = merged.slice(0, 3);
+  const rest = merged.length - shown.length;
+  return (
+    <div title={`Обʼєднано в цього клієнта: ${merged.map((m) => m.name).join(", ")}`}
+      style={{ fontSize: 11.5, color: "#1d4ed8", marginTop: 2 }}>
+      🔗 обʼєднано: {shown.map((m, i) => <span key={m.key}>{i > 0 ? " · " : ""}<b style={{ fontWeight: 600 }}>{m.name}</b></span>)}
+      {rest > 0 && ` +${rest}`}
+    </div>
   );
 }

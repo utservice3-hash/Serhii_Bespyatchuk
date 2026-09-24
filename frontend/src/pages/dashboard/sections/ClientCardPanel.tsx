@@ -70,6 +70,21 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
         </div>
       </div>
 
+      {/* 🔗 ХТО ОБʼЄДНАНИЙ У ЦЬОГО КЛІЄНТА (ТЗ 22.09, п.2.3). План, задача й факт уже одні на
+          весь рядок; тут видно, з яких записів CRM він складається і скільки в кожного оплат. */}
+      {card.merged && card.merged.length > 0 && (
+        <div style={{ marginTop: 10, border: "1px dashed #d1d5db", borderRadius: 10, padding: "8px 12px", background: "#f8fafc" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#1d4ed8", marginBottom: 4 }}>
+            🔗 В одного клієнта обʼєднано записів CRM: {card.merged.length + 1}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 16px", fontSize: 12 }}>
+            {card.merged.map((m) => (
+              <span key={m.key}>{m.name}<span style={{ color: "#6b7280" }}> · {m.paid} опл</span></span>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* 🛠 ДІЇ КЕРУВАННЯ КЛІЄНТОМ — САМЕ ТУТ, поруч із гістограмою й угодами,
           бо це і є підстава для рішення (рішення власника 04.08.2026, підтверджене
           05.08.2026 після того, як дії з екрана зникли, а в картці не зʼявились).
