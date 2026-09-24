@@ -107,7 +107,7 @@ function MaterialViewer({ material, onClose, isAdmin, onChanged }: { material: T
 
 /* 📎 Межа й типи — З СЕРВЕРА (`upload` у відповіді `/training/tree`). Тут раніше жило власне
    число, тобто ТРЕТЯ копія однієї межі поряд із роутом і формою курсу; розійшлися б вони мовчки,
-   і людина дізнавалась би про межу з 413 після хвилини завантаження. Тримає `#712`. */
+   і людина дізнавалась би про межу з 413 після хвилини завантаження. Тримає `#716`. */
 function AddMaterialModal({ folderId, upload, onClose, onAdded }: { folderId: number | null; upload: TrainingUploadRules; onClose: () => void; onAdded: () => void }) {
   const maxMb = Math.round(upload.maxBytes / (1024 * 1024));
   const [kind, setKind] = useState<TrainingKind>("video_embed");

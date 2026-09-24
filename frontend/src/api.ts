@@ -3187,7 +3187,7 @@ export async function publishTrainingMaterial(id: number): Promise<void> {
 /**
  * 📎 Правила завантаження ПРИХОДЯТЬ ІЗ СЕРВЕРА (`core/trainingUpload.ts`), а не живуть тут копією:
  * межа, відома фронту своїм числом, розходиться з серверною мовчки, і людина дізнається про неї
- * з 413 після хвилини завантаження. Тримає `#712`.
+ * з 413 після хвилини завантаження. Тримає `#716`.
  */
 export interface TrainingUploadRules { maxBytes: number; accept: string }
 export async function fetchTrainingTree(): Promise<{ folders: TrainingFolder[]; materials: TrainingMaterial[]; upload: TrainingUploadRules }> {

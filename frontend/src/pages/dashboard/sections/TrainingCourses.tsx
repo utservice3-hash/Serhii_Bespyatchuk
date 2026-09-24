@@ -168,7 +168,7 @@ function CourseView({ id, canEdit, onBack }: { id: number; canEdit: boolean; onB
   const [free, setFree] = useState<TrainingModule[]>([]);
   /** Тема, у яку зараз додаємо крок (`null` — діалог закритий). */
   const [addTo, setAddTo] = useState<{ id: number; name: string } | null>(null);
-  /** 📎 Межа й перелік типів — З СЕРВЕРА, власного числа фронт не має (`#712`). */
+  /** 📎 Межа й перелік типів — З СЕРВЕРА, власного числа фронт не має (`#716`). */
   const [upload, setUpload] = useState<TrainingUploadRules | null>(null);
 
   const load = useCallback(() => {

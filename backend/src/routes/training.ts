@@ -30,7 +30,7 @@ export const trainingRouter = Router();
 trainingRouter.use(requireAuth);
 
 const TRAIN_DIR = path.join(UPLOAD_DIR, "..", "training");
-// 📎 Стеля й білий список — у `core/trainingUpload.ts`, одним числом на сервер і фронт (#712).
+// 📎 Стеля й білий список — у `core/trainingUpload.ts`, одним числом на сервер і фронт (#716).
 /**
  * ✍️ ХТО РЕДАГУЄ НАВЧАННЯ — ПРАВО, А НЕ РОЛЬ (ТЗ 14.09.2026).
  *
@@ -80,7 +80,7 @@ trainingRouter.get("/tree", async (req, res) => {
   }));
   /* 📎 Межа й перелік типів їдуть із сервера, щоб у фронта НЕ БУЛО власної копії числа:
      розійшлися б вони мовчки, і людина дізнавалась би про межу з 413 після хвилини
-     завантаження. Одне джерело — `core/trainingUpload.ts`, тримає `#712`. */
+     завантаження. Одне джерело — `core/trainingUpload.ts`, тримає `#716`. */
   const upload = { maxBytes: MAX_UPLOAD_BYTES, accept: ACCEPT_ATTR };
   res.json({ folders: folders.rows, materials: withMime, upload });
 });
@@ -339,7 +339,7 @@ trainingRouter.get("/courses", async (req, res) => {
   }));
   /* 📎 Межа й перелік типів їдуть із сервера, щоб у фронта НЕ БУЛО власної копії числа:
      розійшлися б вони мовчки, і людина дізнавалась би про межу з 413 після хвилини
-     завантаження. Одне джерело — `core/trainingUpload.ts`, тримає `#712`. */
+     завантаження. Одне джерело — `core/trainingUpload.ts`, тримає `#716`. */
   const upload = { maxBytes: MAX_UPLOAD_BYTES, accept: ACCEPT_ATTR };
   res.json({
     canEdit, upload,
