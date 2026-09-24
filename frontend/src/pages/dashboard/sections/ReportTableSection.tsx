@@ -437,6 +437,15 @@ function Cell({ col, m, idx, isOpen, responseByMgr }: {
           <span style={{ color: "var(--text-muted)" }}> / {m.attempts}</span>
         </td>
       );
+    case "normDays": {
+      const c = m.callNorm;
+      if (!c || c.daysWithNorm == null) return <td style={{ ...st, color: "var(--text-muted)", fontSize: 11 }}>норму не задано</td>;
+      return (
+        <td style={st}>{c.daysWithNorm}
+          <span style={{ color: "var(--text-muted)" }}> / {c.workDays}</span>
+        </td>
+      );
+    }
     case "firstTouch": {
       const l = firstTouchLabel(m.firstTouch);
       return (

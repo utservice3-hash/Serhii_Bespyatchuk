@@ -38,6 +38,7 @@ import { heavyJobHolder } from "./jobLock.js";
 import { jobSkip, type JobSkip } from "./jobRuns.js";
 import { guardDecision, MAX_RUN_MS } from "./syncGuardRule.js";
 import { getSettings } from "../routes/settings.js";
+import { effectiveTeamId, type TeamOverride } from "../core/teamOverride.js";
 
 function toTimestamp(unixSeconds: number | null): Date | null {
   return unixSeconds ? new Date(unixSeconds * 1000) : null;
@@ -99,28 +100,19 @@ export async function syncManagers(): Promise<number> {
   const TEAM_LEAD_OVERRIDES = new Set<string>(["3379102"]);
 
   /**
-   * 🟢 ПЕРЕВИЗНАЧЕННЯ КОМАНДИ — свідоме рішення власника 05.08.2026.
-   *
-   * «Самостійний» відділ розформовано: Шевчук Назар (kommo_user_id 7181916)
-   * переходить під команду Яцика ПОВНІСТЮ і заднім числом. У CRM його ПОКИ НЕ
-   * рухаємо, тож:
-   *
-   *   ⚠️ CRM показує стару групу (332088 «Самостійні»), дашборд — нову
-   *      (335511 «РПК - Яцика Дмитра»). ЦЕ НЕ БАГ І НЕ РОЗСИНХРОН СИНКУ.
-   *      Щойно людину переведуть у CRM — цей оверрайд ЗНЯТИ (він стане зайвим
-   *      і почне мовчки дублювати те, що вже робить сама група).
-   *
-   * Механізм навмисно той самий, що в `NAME_OVERRIDES` і `TEAM_LEAD_OVERRIDES`
-   * поруч: ключ — `kommo_user_id`, застосовується ПІСЛЯ читання групи з Kommo,
-   * тому переживає кожен синк. Без нього `team_id = EXCLUDED.team_id` відкотив
-   * би ручну правку в БД максимум за 30 хвилин.
-   *
-   * 🔒 Історію переносити НЕ треба: командний розріз рахується за ПОТОЧНОЮ
-   * прив'язкою (варіант A), тож минулі місяці перерахуються самі.
+   * 🧭 ПЕРЕВИЗНАЧЕННЯ КОМАНДИ — з таблиці `manager_team_overrides`, не з коду.
+   * До 23.09.2026 тут стояв хардкод `TEAM_OVERRIDES` (Шевчук Назар → Яцик, рішення
+   * власника 05.08.2026); він переїхав у сид схеми, бо ТЗ 23.09 додало ще пʼятьох
+   * і команду без Kommo-групи. Семантика — у `core/teamOverride.ts`: рядок бʼє групу
+   * з CRM, `team_id NULL` = примусово без команди, відсутність рядка = група з CRM.
+   * Читається на КОЖНОМУ тіку, тому правка адміна в Налаштуваннях переживає синк.
    */
-  const TEAM_OVERRIDES: Record<string, number> = {
-    "7181916": 335511,   // Шевчук Назар: «Самостійні» → «РПК - Яцика Дмитра» (kommo_group_id)
-  };
+  const overrideRows = await pool.query<{ kommo_user_id: string; team_id: number | null; note: string | null }>(
+    `SELECT kommo_user_id, team_id, note FROM manager_team_overrides`
+  );
+  const overrides = new Map<string, TeamOverride>(
+    overrideRows.rows.map((r) => [String(r.kommo_user_id), { teamId: r.team_id, note: r.note }])
+  );
 
   // Попередня прив'язка (до апдейту) — щоб зафіксувати ЗМІНУ команди в
   // manager_team_history (варіант A: історію переходів пишемо самі, бо Kommo її не
@@ -134,10 +126,9 @@ export async function syncManagers(): Promise<number> {
 
   for (const user of users) {
     const group = user._embedded?.groups?.[0];
-    // Оверрайд б'є групу з CRM — див. коментар до TEAM_OVERRIDES вище.
-    const overrideGroup = TEAM_OVERRIDES[String(user.id)];
-    const effectiveGroupId = overrideGroup ?? group?.id;
-    const teamId = effectiveGroupId != null ? teamIdByGroupId.get(effectiveGroupId) ?? null : null;
+    // Перевизначення бʼє групу з CRM — core/teamOverride.effectiveTeamId.
+    const crmTeamId = group?.id != null ? teamIdByGroupId.get(group.id) ?? null : null;
+    const teamId = effectiveTeamId(crmTeamId, overrides.get(String(user.id)));
     const role = user._embedded?.roles?.[0]?.name ?? "";
     const isTeamLead = role.toLowerCase().includes("тимл") || TEAM_LEAD_OVERRIDES.has(String(user.id));
     const displayName = NAME_OVERRIDES[String(user.id)] ?? user.name;

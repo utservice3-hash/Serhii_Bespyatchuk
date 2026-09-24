@@ -86,6 +86,7 @@ import { syncCarriers } from "./jobs/syncCarriers.js";
 import { syncNews } from "./jobs/syncNews.js";
 import { evaluateKpiTasks } from "./jobs/evaluateKpiTasks.js";
 import { backupDb } from "./jobs/backupDb.js";
+import { declineSpamForms } from "./jobs/declineSpamForms.js";
 import { catchUpAiChat } from "./ai/respond.js";
 import { pool } from "./db/pool.js";
 
@@ -385,6 +386,15 @@ cron.schedule("*/30 * * * *", () => {
   void runJob("syncKommo", () => syncKommo());
 });
 // (startup-виклик syncKommo → відкладено, див. блок «СТАРТ БЕЗ СПЛЕСКУ» наприкінці)
+
+// 🛡 Спам-заявки з форми сайту без телефону — відхиляти кожні 3 хв (слово Романа 23.09.2026).
+// Пише в Kommo, тож підкоряється паузі кола так само, як синк. Хвилини 1,4,7,… — жодна не
+// збігається з :00/:30, де сходяться 13 розкладів і синк (правило зони jobs-sync). Один тік —
+// 1–2 читання + N відхилень під тротлінгом 800 мс, тобто ~20 запитів/год у тиші.
+cron.schedule("1-59/3 * * * *", () => {
+  if (isKommoPaused()) return;
+  void runJob("declineSpamForms", () => declineSpamForms());
+});
 
 // Nightly reconciliation: вікно 45→10 днів (кратно менше сторінок пагінації —
 // це був найбільший разовий сплеск). Лікує гепи інкременту.

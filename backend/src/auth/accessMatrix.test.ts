@@ -43,6 +43,8 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   // 👤 Стан менеджера (активний / завершує / звільнений) — той самий guard
   // `requireManageUsers`, що й решта керування людьми, отже та сама відмова по праву.
   "PATCH /api/settings/managers/:id/work-state": "manage_users — те саме",
+  "PUT /api/settings/team-overrides/:kommoUserId": "manage_users — те саме (команда менеджера в дашборді)",
+  "POST /api/settings/teams": "manage_users — те саме (команда лише в дашборді)",
   // 📁 Документи: «керівництво» — поіменний список MANAGEMENT_ROLES (admin, opdir, ceo, kvp, hr;
   // рішення власника 15.09.2026), а не рівень ролі. Фінансист — company-scope, але не керівництво:
   // 403 по СПИСКУ, і проба ним безпечна — middleware `management` відмовляє до будь-якого запису.
