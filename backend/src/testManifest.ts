@@ -185,6 +185,7 @@ export const MANIFEST_FILES: string[] = [
   "routes/leadgenChannelFact.test.js",
   // 📞 Лідогенерація: порт екрана з макета — межа «екран, а не макет» (22.09.2026)
   "routes/leadgenScreen.test.js",
+  "core/leadgenTeam.test.js",
   "core/leadgenChannelOnly.test.js",
   "core/channelPartition.test.js",
   "core/klassSliceGate.test.js",
@@ -1895,6 +1896,9 @@ export const MANIFEST_TESTS: string[] = [
   "#687b 🪞 ДЗЕРКАЛО: ознака ловить рядок макета дослівно — і пропускає законне",
   "#688 index.html вантажить рівно один скрипт — вхід застосунку /src/main.tsx, а public не несе скриптів",
   "#688b 🪞 ДЗЕРКАЛО: index.html макета й перейменований підкладений скрипт — спіймано; вхід із переставленими атрибутами — ні",
+  // core/leadgenTeam.test.ts — нова команда «Лідогенерація» (24.09.2026) некомерційна скрізь, де її впізнають.
+  "#740 команда «Лідогенерація» некомерційна скрізь: схема, Звіт/плани, КВП і фронт кажуть одне",
+  "#740b 🪞 ДЗЕРКАЛО: кожен спосіб розійтись ловиться — і цілі джерела мовчать",
 ];
 
 /**
