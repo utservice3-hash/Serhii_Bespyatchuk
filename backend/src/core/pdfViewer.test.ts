@@ -128,10 +128,17 @@ test("#724 ЗБІРКА: окрім одного бандлу — лише од�
   assert.deepEqual(strayScripts(["index-A.js", "index-F.js"]), ["index-F.js"], "🔴 другий бандл пройшов");
   assert.deepEqual(strayScripts(["index-A.js", "pdf.worker.min-C.mjs", "pdf.worker.min-G.mjs"]), ["pdf.worker.min-G.mjs"], "🔴 другий воркер пройшов");
 
-  // Реальна збірка, якщо вона є. Її відсутність не робить тест порожнім: предикат вище виконався.
-  const dir = `${FE}dist/assets`;
-  if (!existsSync(dir)) return;
+  /* Реальна збірка — ТА, ЩО ВІДДАЄТЬСЯ ЛЮДЯМ. Спершу докрут (корінь чекауту, `assets/`), потім
+     `frontend/dist/assets` (стенд або свіжий клон, куди ще не копіювали) — порядок як у `#225c`.
+     🔴 Перша редакція дивилась лише в `frontend/dist/assets` і почервоніла в прийманні `fcb3ebf`: на
+     проді там лежить збірка від 27.08 (збирають тепер у стенді, у докрут копіюють готове), а людям
+     воркер віддавався справно. Гейт перевіряв не той артефакт — і `#225` досі дивиться туди ж,
+     зеленіючи на тій старій збірці випадково.
+     Відсутність обох не робить тест порожнім: предикат вище виконався на власних входах. */
+  const dir = [fileURLToPath(new URL("../../../assets", import.meta.url)), `${FE}dist/assets`]
+    .find((d) => existsSync(d) && readdirSync(d).some((f) => /^index-[^.]+\.js$/.test(f)));
+  if (!dir) return;
   const files = readdirSync(dir);
-  assert.deepEqual(strayScripts(files), [], `🔴 у збірці зайві сценарії: ${strayScripts(files).join(", ")}`);
-  assert.ok(files.some((f) => /^pdf\.worker\.min-[^.]+\.mjs$/.test(f)), "🔴 у збірці немає воркера pdf — переглядач не відкриє жодного документа");
+  assert.deepEqual(strayScripts(files), [], `🔴 у збірці ${dir} зайві сценарії: ${strayScripts(files).join(", ")}`);
+  assert.ok(files.some((f) => /^pdf\.worker\.min-[^.]+\.mjs$/.test(f)), `🔴 у збірці ${dir} немає воркера pdf — переглядач не відкриє жодного документа`);
 });
