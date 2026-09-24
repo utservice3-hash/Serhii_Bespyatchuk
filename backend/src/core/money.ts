@@ -57,6 +57,26 @@ export const STAGE_RECEIVED = [...STAGE_PAID, ...STAGE_SUCCESS];
  */
 export const CHAIN_INFLIGHT = [69716300, 98470988, 69716304, 69716312, 69716460, 10937178, 42639144, 42639147, 25044997, 62940068, 60412544];
 
+/**
+ * 🧾 «З РАХУНКУ І ДАЛІ» — факт ЕКРАНА КЛІЄНТІВ (ТЗ Юлі 22.09.2026, блок 2, п.2.1; задача 4311).
+ *
+ * ТЗ: «факт і план — з етапу „Виставлення рахунку“, не з „Успіх“». Буквально лише етап 4
+ * брати НЕ МОЖНА — заміряно 24.09.2026 на успішних угодах серпня: з 951 через етап 4
+ * пройшли 511 (54%), жодного етапу рахунку не мали 289, з них 273 готівкові (рахунку в
+ * готівки не буває взагалі). Тож угода йде у факт, коли ВПЕРШЕ дійшла до «Виставлення
+ * рахунку» АБО будь-якого етапу після нього — включно з «Авто працює» і самою 142.
+ * Закритий місяць майже не зрушує (серпень: 968 угод / 2 546 812 ₴ проти 951 / 2 550 073 ₴
+ * успіхом), поточний зростає на угоди з рахунком, але ще без успіху.
+ *
+ * 🔴 ЦЕ ТРЕТІЙ ГРОШОВИЙ ВИД, І ЖИВЕ ВІН РІВНО НА ОДНОМУ ЕКРАНІ — «Клієнти та реактивація»
+ * (факт місяця, тижні, % плану). Звіт, КВП, Огляд і картка «як платив» лишаються на ①/②.
+ * Екран мусить підписувати «з рахунку» — дві правильні метрики без підпису читаються як
+ * поломка (правило власника 02.08.2026).
+ *
+ * New(8921932): 100274340 Виставлення рахунку. Old(155304): 62940064 — його аналог.
+ */
+export const STAGE_FROM_INVOICE = [100274340, 62940064, ...CHAIN_INFLIGHT, 142];
+
 export interface MoneyScope {
   from?: string | null;
   to?: string | null;
@@ -73,7 +93,7 @@ export interface MgrRow { managerId: number; name: string; teamId: number | null
 export interface BucketRow { bucket: string; revenue: number; deals: number }
 export interface MgrWeekRow { managerId: number; weekStart: string; revenue: number; deals: number }
 
-type Kind = "received" | "success" | "paidOnly" | "expected";
+type Kind = "received" | "success" | "paidOnly" | "expected" | "fromInvoice";
 
 /**
  * Джерело угод для метрики — по одному рядку на угоду з ЄДИНИМ анкером:
@@ -123,6 +143,21 @@ function sourceSql(kind: Kind, p: unknown[]): string {
                      GROUP BY kommo_id) a ON a.kommo_id = d.kommo_id
              WHERE d.status_id = ANY(${st}) AND d.pipeline_id = ANY(${fc})`;
   };
+  if (kind === "fromInvoice") {
+    // Анкер — ПЕРШИЙ вхід у «Виставлення рахунку» або будь-який етап після нього. Угода 142 без
+    // жодної події (1 на серпень 2026) анкериться закриттям, щоб успіх не губився з факту.
+    // Програні (143) не рахуються: рахунок був, грошей не буде.
+    p.push(STAGE_FROM_INVOICE);
+    const st = `$${p.length}`;
+    const anchor = "COALESCE(f.first_at, CASE WHEN d.status_id = 142 THEN d.closed_at_kommo END)";
+    return `SELECT d.kommo_id, ${anchor} AS anchor_at, d.manager_id, d.price
+              FROM deals d
+              LEFT JOIN (SELECT kommo_id, MIN(changed_at) AS first_at
+                           FROM deal_stage_events
+                          WHERE pipeline_id = ANY(${fc}) AND status_id = ANY(${st})
+                          GROUP BY kommo_id) f ON f.kommo_id = d.kommo_id
+             WHERE d.pipeline_id = ANY(${fc}) AND d.status_id <> 143 AND ${anchor} IS NOT NULL`;
+  }
   if (kind === "success") return successSrc;
   if (kind === "paidOnly") return currentStageSrc(STAGE_PAID);
   if (kind === "expected") return currentStageSrc(STAGE_EXPECTED);
@@ -375,6 +410,13 @@ export const receivedByClientKey = (s: MoneyScope) => receivedByDealAttr(s, "COA
  * — похідна від `client_key_raw` через реєстр псевдонімів).
  */
 export const successByClientKey = (s: MoneyScope) => byDealAttr("success", s, "COALESCE(dd.client_key, '—')");
+/** 🧾 Факт екрана клієнтів «з рахунку і далі» — див. `STAGE_FROM_INVOICE`. */
+export const fromInvoiceByClientKey = (s: MoneyScope) => byDealAttr("fromInvoice", s, "COALESCE(dd.client_key, '—')");
+/** Сума «з рахунку і далі» за скоупом — для гейта «Σ по клієнтах == ядру». */
+export const fromInvoiceTotal = async (s: MoneyScope): Promise<MoneyAgg> => {
+  const rows = await byDealAttr("fromInvoice", s, "'all'");
+  return { revenue: rows.reduce((a, r) => a + r.revenue, 0), deals: rows.reduce((a, r) => a + r.deals, 0) };
+};
 
 export interface ClientBucketRow { clientKey: string; bucket: string; revenue: number; deals: number }
 /**
@@ -429,6 +471,10 @@ export interface ClientWeekRow { clientKey: string; weekIndex: number; revenue: 
  */
 export async function successByClientWeek(s: MoneyScope): Promise<ClientWeekRow[]> {
   return byClientWeek("success", s);
+}
+/** 🧾 Тижні екрана клієнтів «з рахунку і далі» — ті самі межі `monthWeeks`, що й у Звіті. */
+export async function fromInvoiceByClientWeek(s: MoneyScope): Promise<ClientWeekRow[]> {
+  return byClientWeek("fromInvoice", s);
 }
 
 async function byClientWeek(kind: Kind, s: MoneyScope): Promise<ClientWeekRow[]> {

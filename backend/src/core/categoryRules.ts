@@ -12,14 +12,13 @@
  * Модуль чистий: жодного пулу, тож гейт перевіряє його без бази.
  */
 import {
-  QUALIFY_LIFETIME_MIN, QUALIFY_RHYTHM_DAYS, SEGMENT_MIN_PAYMENTS, VIP_MAX_GAP_DAYS,
+  QUALIFY_MIN_PAYMENTS, SEGMENT_MIN_PAYMENTS, VIP_MAX_GAP_DAYS,
   REGULAR_MAX_GAP_DAYS, SEGMENT_SLEEPING_DAYS, LOST_DAYS, LONG_LAPSED_DAYS,
   type ClientSegment,
 } from "./reactivationRules.js";
 
 export interface CategoryRuleNumbers {
-  qualifyLifetimeMin: number;
-  qualifyRhythmDays: number;
+  qualifyMinPayments: number;
   segmentMinPayments: number;
   vipMaxGapDays: number;
   regularMaxGapDays: number;
@@ -31,8 +30,7 @@ export interface CategoryRuleNumbers {
 /** Числа правил — рівно ті константи, що рахують категорію. */
 export function ruleNumbers(): CategoryRuleNumbers {
   return {
-    qualifyLifetimeMin: QUALIFY_LIFETIME_MIN,
-    qualifyRhythmDays: QUALIFY_RHYTHM_DAYS,
+    qualifyMinPayments: QUALIFY_MIN_PAYMENTS,
     segmentMinPayments: SEGMENT_MIN_PAYMENTS,
     vipMaxGapDays: VIP_MAX_GAP_DAYS,
     regularMaxGapDays: REGULAR_MAX_GAP_DAYS,
@@ -73,8 +71,7 @@ export function stateTips(n: CategoryRuleNumbers): { sleeping: string; lost: str
 
 /** Постійний клієнт — дзеркало `qualifiesAsRepeat`. */
 export function qualifyText(n: CategoryRuleNumbers): string {
-  return `Постійний: безнал або змішані — 2+ оплати з проміжком до ${n.qualifyRhythmDays} днів між ними `
-    + `або ${n.qualifyLifetimeMin}+ оплат за всю історію; готівка — ${n.qualifyLifetimeMin}+ оплат за всю історію; `
+  return `Постійний: ${n.qualifyMinPayments}+ успішні угоди за всю історію — одне правило для безналу й готівки; `
     + `КВП може позначити постійним вручну з приміткою. Хто не проходить — «разовий».`;
 }
 

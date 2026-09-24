@@ -5850,9 +5850,11 @@ dashboardRouter.get("/client-plans", async (req, res) => {
         WHERE rp.month = $1 ${cond}`, pp);
   };
 
-  const [monthFact, weekFact, hist, plansRes, commentsRes, prevPlans, reactRows] = await Promise.all([
-    money.successByClientKey(scope),
-    money.successByClientWeek(scope),
+  const [monthFact, weekFact, hist, plansRes, commentsRes, prevPlans, reactRows, monthSuccess] = await Promise.all([
+    // 🧾 ФАКТ ЕКРАНА — «з рахунку і далі» (ТЗ Юлі 22.09, п.2.1): угода йде у факт, коли вперше
+    // дійшла до «Виставлення рахунку» або далі. Лише ТУТ; Звіт і КВП лишаються на ①/②.
+    money.fromInvoiceByClientKey(scope),
+    money.fromInvoiceByClientWeek(scope),
     money.successByClientBucket(histScope, "month"),
     // 🔴 ПЛАНИ ЧИТАЮТЬСЯ ПО МІСЯЦЮ, А НЕ ПО СПИСКУ АКТИВНИХ (виправлено 21.08.2026).
     //
@@ -5892,8 +5894,11 @@ dashboardRouter.get("/client-plans", async (req, res) => {
      */
     reactivation.clientStates({ managerId: managerId ?? undefined, teamId: teamId ?? undefined },
       { includeActive: true }),
+    // «З них уже успішні» — ① того ж місяця, щоб видно було, яка частина факту вже гроші.
+    money.successByClientKey(scope),
   ]);
   const reactByKey = new Map(reactRows.map((r) => [r.clientKey, r]));
+  const successByKey = new Map(monthSuccess.filter((r) => keySet.has(r.key)).map((r) => [r.key, r.revenue]));
   const factByKey = new Map(monthFact.filter((r) => keySet.has(r.key)).map((r) => [r.key, r.revenue]));
   const weekByKey = new Map<string, number[]>();
   for (const w of weekFact) {
@@ -6080,6 +6085,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
         fact: Math.round(wf[i] ?? 0),
       })),
       fact: Math.round(fact),
+      // ① за той самий місяць: скільки з факту «з рахунку» вже «успішно реалізовано».
+      factSuccess: Math.round(successByKey.get(c.client_key) ?? 0),
       pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
       managerId: c.manager_id,
       managerName: c.manager_name,
@@ -6166,6 +6173,9 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     clients,
     totals: {
       planTotal, factTotal,
+      /** 🧾 Основа факту екрана — щоб підпис на фронті не міг розійтись із розрахунком. */
+      factBasis: "fromInvoice" as const,
+      factSuccessTotal: clients.reduce((s2, c) => s2 + c.factSuccess, 0),
       pct: planTotal > 0 ? Math.round((factTotal / planTotal) * 100) : null,
       filledClients: clients.filter((c) => c.plan > 0).length
         + (canSeeUnattached ? unattachedRows.filter((p) => Number(p.plan) > 0).length : 0),

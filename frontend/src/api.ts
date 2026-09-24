@@ -3641,7 +3641,11 @@ export interface ClientPlanRow {
   clientKey: string; clientName: string; paymentType: string | null;
   orders: number; lifetimeRevenue: number; since: string | null; lastOrderDays: number | null;
   history: number[]; plan: number; planStatus: "draft" | "pending" | "approved" | "none";
-  reviewNote: string | null; weeks: ClientPlanWeek[]; fact: number; pct: number | null;
+  reviewNote: string | null; weeks: ClientPlanWeek[];
+  /** 🧾 Факт «з рахунку і далі» (ТЗ 22.09, п.2.1) — не «успішно реалізовано». */
+  fact: number; pct: number | null;
+  /** ① за той самий місяць: скільки з факту вже «успішно реалізовано». */
+  factSuccess?: number;
   managerId: number; managerName: string; pinned: boolean; comments: number;
   /** 📞 Дзвінки за поточний рік — рівно рядок «розмов N із M» картки (ядро `core/clientCallsYear.ts`). */
   callsYear: { year: number; calls: number; talks: number };
@@ -3706,6 +3710,9 @@ export interface ClientPlansResp {
   clients: ClientPlanRow[];
   totals: {
     planTotal: number; planApproved: number; factTotal: number; pct: number | null;
+    /** 🧾 Основа факту екрана: «fromInvoice» = з «Виставлення рахунку» і далі. */
+    factBasis?: "fromInvoice";
+    factSuccessTotal?: number;
     filledClients: number; totalClients: number;
     currentWeekIndex: number | null; currentWeekFact: number | null; currentWeekPlan: number | null;
     atRiskCount: number; atRiskNames: string[]; goesToManagerPlan: number;

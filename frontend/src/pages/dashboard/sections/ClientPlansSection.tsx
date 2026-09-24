@@ -214,7 +214,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
   const [viewingFiles, setViewingFiles] = useState<{ clientKey: string; name: string } | null>(null);
   // 🔴 ДЕФОЛТ — «НАЙГІРШІ ЗВЕРХУ» (рішення власника 04.08.2026): екран планування
   // існує, щоб бачити проблеми, а не щоб милуватись лідерами. Другий режим —
-  // «найбільші зверху» (факт ①), коли треба дивитись на обсяг.
+  // «найбільші зверху» (факт з рахунку), коли треба дивитись на обсяг.
   const [sortMode, setSortMode] = useState<"worst" | "biggest" | "margin">("worst");
   // 🧭 Фільтри ТЗ 3989 п.3 — окрема вісь від стану: «без розмови», «прострочений крок», «VIP спить 14+», «стоп через дебіторку».
   const [reactFilter, setReactFilter] = useState<"all" | "no_talk" | "step_overdue" | "vip_sleeping" | "debt_hold">("all");
@@ -499,6 +499,11 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         <td style={{ ...S.td, textAlign: "right" }}>
           <div style={{ fontWeight: 800, color: c.fact > 0 ? "#166534" : "#9ca3af" }}>
             {c.fact.toLocaleString("uk-UA")}{c.pct != null && <span style={{ color: "#6b7280", fontWeight: 500 }}> · {c.pct}%</span>}
+            {c.factSuccess != null && c.fact > 0 && c.factSuccess !== c.fact && (
+              <div style={{ fontSize: 11, fontWeight: 500, color: "#6b7280" }} title="«успішно реалізовано» за цей місяць — частина факту, що вже закрита">
+                успішно {c.factSuccess.toLocaleString("uk-UA")}
+              </div>
+            )}
           </div>
           <div style={{ height: 5, background: "#f1f5f9", borderRadius: 3, marginTop: 5, overflow: "hidden" }}>
             <div style={{ width: `${Math.min(100, c.pct ?? 0)}%`, height: "100%", background: "#2563eb" }} />
@@ -564,8 +569,12 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         <Tile title="План по постійних" value={formatAmountFull(t.planTotal)}
           sub={`${t.filledClients} планів · активних клієнтів ${t.totalClients}`
             + (t.planOnlyClients ? ` · з них ${t.planOnlyClients} уже не активні` : "")} />
-        <Tile title="Факт · успішно реалізовано" value={formatAmountFull(t.factTotal)}
-          sub={t.pct != null ? `${t.pct}% плану` : "плану ще немає"} />
+        {/* 🧾 ФАКТ ЕКРАНА — «З РАХУНКУ І ДАЛІ» (ТЗ Юлі 22.09, п.2.1). Підпис бере основу з сервера
+            (`factBasis`), щоб не розійтись із розрахунком; поруч — яка частина вже «успішно». */}
+        <Tile title={t.factBasis === "fromInvoice" ? "Факт · з виставлення рахунку" : "Факт · успішно реалізовано"}
+          value={formatAmountFull(t.factTotal)}
+          sub={(t.pct != null ? `${t.pct}% плану` : "плану ще немає")
+            + (t.factBasis === "fromInvoice" && t.factSuccessTotal != null ? ` · з них успішно ${formatAmountFull(t.factSuccessTotal)}` : "")} />
         <Tile title={t.currentWeekIndex != null ? `Тиждень ${t.currentWeekIndex + 1} з ${data.weeks.length}` : "Тиждень"}
           value={t.currentWeekFact != null ? `${Math.round(t.currentWeekFact).toLocaleString("uk-UA")}` : "—"}
           sub={t.currentWeekPlan != null ? `/ ${Math.round(t.currentWeekPlan).toLocaleString("uk-UA")} · ті самі тижні, що у Звіті` : "місяць не поточний"} />
@@ -759,8 +768,8 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
               <th style={S.th} title="Остання розмова (Ringostat) або ручний контакт у месенджері; недодзвони після останньої розмови">Контакт</th>
               <th style={S.th}>Задача</th>
               <th style={S.th}>План (міс)</th>
-              <th style={S.th}>Тижні · план / факт</th>
-              <th style={{ ...S.th, textAlign: "right" }}>Факт</th>
+              <th style={S.th}>Тижні · план / факт з рахунку</th>
+              <th style={{ ...S.th, textAlign: "right" }} title="угоди, що в цьому місяці вперше дійшли до «Виставлення рахунку» або далі; програні не рахуються">Факт з рахунку</th>
               <th style={S.th}>Дії</th>
             </tr>
           </thead>
@@ -853,8 +862,10 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
       )}
 
       <div style={{ ...S.card, fontSize: 12, color: "#4b5563", lineHeight: 1.6 }}>
-        <b>Як це рахується.</b> Факт — «успішно реалізовано» (①), той самий, що у Звіті: рахує ядро,
-        не цей екран. Тижні збігаються з тижнями Звіту (спільна функція меж — розходження ловить гейт).
+        <b>Як це рахується.</b> Факт — угоди, що в місяці вперше дійшли до «Виставлення рахунку»
+        або будь-якого етапу далі (готівка без рахунку — з наступного етапу); програні не рахуються.
+        Це факт саме цього екрана (ТЗ 22.09): Звіт і КВП рахують «успішно реалізовано», тож суми
+        розходяться свідомо. Рахує ядро, не цей екран. Тижні збігаються з тижнями Звіту (спільна функція меж — розходження ловить гейт).
         План вводить менеджер, тижнева розбивка — автоматично за робочими днями. У «постійні принесуть»
         іде Σ <b>лише затверджених</b> планів. Клієнт = канонічний ключ: злиті телефони й назви
         рахуються разом.

@@ -88,7 +88,7 @@ test("#720 ПРАВИЛА КАТЕГОРІЙ: текст складається 
   assert.ok(stateTips(n).lost.includes(`${n.longLapsedDays} днів`), "🔴 «давно втрачений» без порогу ядра");
   const text = rulesText(n);
   assert.equal(text.length, 4, "🔴 довідка втратила частину правил (постійний · сегмент · сплячий · втрачений)");
-  assert.ok(text[0].includes(`${n.qualifyLifetimeMin}+ оплат`) && text[0].includes(`${n.qualifyRhythmDays} днів`), "🔴 правило «постійного» не з констант qualifiesAsRepeat");
+  assert.ok(text[0].includes(`${n.qualifyMinPayments}+ успішні угоди`), "🔴 правило «постійного» не з константи qualifiesAsRepeat");
   const p = categoryRulesPayload();
   assert.deepEqual(Object.keys(p.segmentTips).sort(), ["episodic", "regular", "unknown", "vip"], "🔴 не для кожного сегмента є підказка");
 });
@@ -108,4 +108,87 @@ test("#720b ФРОНТ ПОКАЗУЄ ТЕКСТ СЕРВЕРА: бейдж, ч�
   for (const [f, src] of [["ClientPlansSection", list], ["SegmentBadge", badge]] as const) {
     assert.doesNotMatch(src, /після 1[48]0? днів|сплячий після \d/, `🔴 ${f}: поріг стану зашито текстом у фронт`);
   }
+});
+
+/**
+ * #717 — ФАКТ «З РАХУНКУ І ДАЛІ» (ТЗ 22.09, п.2.1) на справжніх функціях ядра проти порожнього
+ * кластера. Фікстура по ОБИДВА боки кожної межі, бо на живих даних вони не трапляються разом:
+ *  A безнал: етап 4 05.09 → далі            → рахується 05.09 (перший вхід)
+ *  B готівка: БЕЗ етапу 4, «Авто працює» 10.09 → рахується 10.09 (буквальне ТЗ дало б 0)
+ *  C програна після рахунку                  → НЕ рахується
+ *  D 142 без жодної події, закрита 15.09     → рахується 15.09 (успіх не губиться)
+ *  E лише ранні етапи                        → НЕ рахується
+ *  F етап 4 28.08, успіх 12.09               → серпень, НЕ вересень (перший вхід)
+ *  G етап 4 двічі (02.09 і 09.09)            → один раз, 02.09
+ *
+ * ⚠️ `DATABASE_URL` ставиться ДО імпорту ядра: пул — модульний синглтон. У цьому файлі пул
+ * бере лише цей тест (#719b ходить власним клієнтом), тож чужої бази він не забере.
+ */
+test("#717 ФАКТ З РАХУНКУ: готівка з наступного етапу, програні — ні, перший вхід один раз, 142 без подій — за закриттям", async (t) => {
+  const { provisionScratch } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  process.env.DATABASE_URL = scratch.url;
+  // Решта обовʼязкових змінних — заглушки, той самий прийом, що в #25: `config.js` вимагає їх на імпорті.
+  process.env.JWT_SECRET ??= "test";
+  process.env.KOMMO_BASE_URL ??= "https://x.invalid";
+  process.env.KOMMO_API_TOKEN ??= "x";
+  try {
+    await c.query(readFileSync(path.join(ROOT, "backend/src/db/schema.sql"), "utf8"));
+    await c.query(`INSERT INTO teams (id,name) VALUES (1,'РПК') ON CONFLICT DO NOTHING`);
+    await c.query(`INSERT INTO managers (id,name,team_id,is_active) VALUES (10,'М',1,true) ON CONFLICT DO NOTHING`);
+    const deal = (id: number, ck: string, status: number, price: number, closed: string | null) => c.query(
+      `INSERT INTO deals (kommo_id,name,manager_id,pipeline_id,status_id,price,client_key,client_key_raw,client_name,closed_at_kommo,created_at_kommo)
+       VALUES ($1,'d',10,8921932,$2,$3,$4,$4,$4,$5,'2026-08-01')`, [id, status, price, ck, closed]);
+    const ev = (id: number, status: number, at: string) => c.query(
+      `INSERT INTO deal_stage_events (kommo_id,status_id,pipeline_id,changed_at) VALUES ($1,$2,8921932,$3)`, [id, status, at]);
+    await deal(1, "ka", 69716312, 1000, null); await ev(1, 100274340, "2026-09-05T09:00:00Z"); await ev(1, 69716300, "2026-09-08T09:00:00Z");
+    await deal(2, "kb", 142, 2000, "2026-09-20T09:00:00Z"); await ev(2, 69716300, "2026-09-10T09:00:00Z"); await ev(2, 142, "2026-09-20T09:00:00Z");
+    await deal(3, "kc", 143, 3000, "2026-09-07T09:00:00Z"); await ev(3, 100274340, "2026-09-06T09:00:00Z");
+    await deal(4, "kd", 142, 4000, "2026-09-15T09:00:00Z");
+    await deal(5, "ke", 69716252, 5000, null); await ev(5, 69693668, "2026-09-03T09:00:00Z");
+    await deal(6, "kf", 142, 6000, "2026-09-12T09:00:00Z"); await ev(6, 100274340, "2026-08-28T09:00:00Z"); await ev(6, 142, "2026-09-12T09:00:00Z");
+    await deal(7, "kg", 69716300, 7000, null); await ev(7, 100274340, "2026-09-02T09:00:00Z"); await ev(7, 100274340, "2026-09-09T09:00:00Z");
+
+    const M = await import("./money.js");
+    const sep = { from: "2026-09-01", to: "2026-09-30" };
+    const byClient = new Map((await M.fromInvoiceByClientKey(sep)).map((r) => [r.key, r.revenue]));
+    assert.deepEqual([...byClient.entries()].sort(), [["ka", 1000], ["kb", 2000], ["kd", 4000], ["kg", 7000]],
+      "🔴 склад вересневого факту неправильний: готівка без рахунку, програна, ранній етап, перший вхід або 142 без подій");
+    const aug = new Map((await M.fromInvoiceByClientKey({ from: "2026-08-01", to: "2026-08-31" })).map((r) => [r.key, r.revenue]));
+    assert.equal(aug.get("kf"), 6000, "🔴 угода з рахунком у серпні не віднесена до серпня — анкер не за першим входом");
+    const tot = await M.fromInvoiceTotal(sep);
+    assert.equal(tot.revenue, 14000, "🔴 Σ ядра ≠ Σ по клієнтах");
+    // Дзеркало: «успішно реалізовано» за той самий вересень — ІНША множина (саме тому підпис).
+    const succ = new Map((await M.successByClientKey(sep)).map((r) => [r.key, r.revenue]));
+    assert.deepEqual([...succ.keys()].sort(), ["kb", "kd", "kf"], "контроль: ① рахує інакше — інакше порівнювати нема з чим");
+    // Тижні сходяться з місяцем по кожному клієнту.
+    const wk = new Map<string, number>();
+    for (const w of await M.fromInvoiceByClientWeek(sep)) wk.set(w.clientKey, (wk.get(w.clientKey) ?? 0) + w.revenue);
+    for (const [k, v] of byClient) assert.equal(wk.get(k) ?? 0, v, `🔴 тижні ${k} не сходяться з місяцем`);
+  } finally {
+    const { pool } = await import("../db/pool.js").catch(() => ({ pool: null as null | { end: () => Promise<void> } }));
+    await pool?.end().catch(() => {});
+    await c.end();
+    scratch.dispose();
+  }
+});
+
+test("#717b ФАКТ З РАХУНКУ ЖИВЕ РІВНО НА ЕКРАНІ КЛІЄНТІВ і підписаний; Звіт і КВП його не беруть", () => {
+  const dash = read("backend/src/routes/dashboard.ts");
+  const start = dash.indexOf('dashboardRouter.get("/client-plans"');
+  assert.ok(start > 0, "🔴 обробник /client-plans не впізнано");
+  const body = dash.slice(start, dash.indexOf("\ndashboardRouter.", start + 10));
+  assert.match(body, /money\.fromInvoiceByClientKey\(scope\),\s*money\.fromInvoiceByClientWeek\(scope\),/,
+    "🔴 факт і тижні списку клієнтів не з «рахунку і далі»");
+  assert.match(body, /factBasis: "fromInvoice" as const,/, "🔴 відповідь не каже, з чого факт — підпис на фронті вгадуватиме");
+  // Третій вид НЕ розповзається: у роутах він трапляється лише в цьому обробнику.
+  const outside = dash.slice(0, start) + dash.slice(start + body.length);
+  assert.doesNotMatch(outside, /fromInvoiceBy|fromInvoiceTotal/, "🔴 факт «з рахунку» потрапив на інший екран без рішення");
+  const list = read(`${SECTIONS}/ClientPlansSection.tsx`);
+  assert.match(list, /t\.factBasis === "fromInvoice" \? "Факт · з виставлення рахунку"/, "🔴 плитка факту не підписана «з виставлення рахунку»");
+  assert.match(list, />Факт з рахунку<\/th>/, "🔴 колонка факту не підписана «з рахунку»");
 });
