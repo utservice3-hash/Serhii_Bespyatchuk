@@ -5,6 +5,7 @@ import {
   type TrainingCourse, type TrainingCourseDetail, type TrainingMaterialContent, type CandidateMe, type MyTrainingQuestion,
 } from "../../../api";
 import { embedUrl } from "../trainingView";
+import { PdfViewer } from "./PdfViewer";
 import { useNavigate } from "react-router-dom";
 import { fetchDocTree, type DocFile } from "../../../api";
 import "./hiring.css";
@@ -274,7 +275,7 @@ function StepView({ step, next, questions, canAsk, onBack, onGo, onAsked }: {
             {m.kind === "link" && m.url && <a className="hr-link" href={m.url} target="_blank" rel="noreferrer">🔗 Відкрити матеріал ↗</a>}
             {m.kind === "file" && (fileUrl
               ? (m.mime?.startsWith("image/") ? <img src={fileUrl} alt={m.title} style={{ maxWidth: "100%", borderRadius: 8 }} />
-                : m.mime === "application/pdf" ? <iframe src={fileUrl} title={m.title} style={{ width: "100%", height: "70vh", border: 0, borderRadius: 8 }} />
+                : m.mime === "application/pdf" ? <PdfViewer src={fileUrl} title={m.title} />
                 : m.mime?.startsWith("video/") ? <video src={fileUrl} controls style={{ width: "100%", maxWidth: 900, borderRadius: 8 }} />
                 : <a className="hr-link" href={fileUrl} download={m.title}>⬇️ Завантажити «{m.title}»</a>)
               : <span className="hr-muted">Файл завантажується…</span>)}

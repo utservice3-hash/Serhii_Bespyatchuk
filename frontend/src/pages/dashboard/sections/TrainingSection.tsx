@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { embedUrl, trainingViewFor } from "../trainingView";
 import { CandidateTraining } from "./CandidateTraining";
 import { TrainingCourses } from "./TrainingCourses";
+import { PdfViewer } from "./PdfViewer";
 import {
   fetchTrainingTree, createTrainingFolder, updateTrainingFolder, deleteTrainingFolder,
   createTrainingMaterial, updateTrainingMaterial, deleteTrainingMaterial, fetchTrainingFileBlobUrl,
@@ -59,7 +60,7 @@ function MaterialViewer({ material, onClose, isAdmin, onChanged }: { material: T
 
         {isVideoFile && blobUrl && <video src={blobUrl} controls style={{ width: "100%", borderRadius: 8, background: "#000" }} />}
         {isImageFile && blobUrl && <img src={blobUrl} alt={material.title} style={{ maxWidth: "100%", borderRadius: 8 }} />}
-        {isPdf && blobUrl && <iframe src={blobUrl} title={material.title} style={{ width: "100%", height: "70vh", border: 0, borderRadius: 8 }} />}
+        {isPdf && blobUrl && <PdfViewer src={blobUrl} title={material.title} />}
         {material.kind === "file" && !isVideoFile && !isImageFile && !isPdf && (
           <div style={{ padding: 20, textAlign: "center" }}>
             {blobUrl ? (

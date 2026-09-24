@@ -7,6 +7,7 @@ import {
   type TrainingModule, type TrainingUploadRules,
 } from "../../../api";
 import { embedUrl } from "../trainingView";
+import { PdfViewer } from "./PdfViewer";
 import "./hiring.css";
 import "./training.css";
 
@@ -541,7 +542,7 @@ function StepPane({ step, edit, busy, onChanged, onNext, nextTitle }: {
           })()}
           {m.kind === "link" && m.url && <a className="hr-btn" href={m.url} target="_blank" rel="noopener noreferrer">Відкрити посилання ↗</a>}
           {m.kind === "file" && (m.mime === "application/pdf" && blob
-            ? <iframe src={blob} title={m.title} className="tr-pdf" />
+            ? <PdfViewer src={blob} title={m.title} />
             : m.mime?.startsWith("image/") && blob ? <img src={blob} alt={m.title} style={{ maxWidth: "100%", borderRadius: 8 }} />
             : m.mime?.startsWith("video/") && blob ? <video src={blob} controls style={{ width: "100%", borderRadius: 8, background: "#000" }} />
             : <div className="tr-file">📄 {m.title}{blob && <> · <a href={blob} download={m.title}>завантажити</a></>}</div>)}
