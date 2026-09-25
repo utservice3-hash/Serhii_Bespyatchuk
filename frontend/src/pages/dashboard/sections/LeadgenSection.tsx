@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchLeadgenStats, fetchLeadgenTrend, type LeadgenStatsResp, type LeadgenTrendResp, type LeadgenGrain, type LeadgenPersonRow as PersonRow, type LeadgenHandoffMoney } from "../../../api";
+import { fetchLeadgenStats, fetchLeadgenTrend, type LeadgenStatsResp, type LeadgenTrendResp, type LeadgenGrain, type LeadgenPersonRow as PersonRow, type LeadgenHandoffMoney,
+  type LeadgenTeamPlan, type LeadgenPersonPlan, type LeadgenPlanExec } from "../../../api";
 import { formatAmount } from "../format";
 import { InfoHint } from "../widgets";
 import { PeriodNav, navBtn } from "../PeriodNav";
@@ -8,7 +9,9 @@ import {
 } from "../periodRules";
 import {
   LeadgenPersonRow, pct1, bucketLabel, convStatus, StatusRing, unitsOf, fillBuckets, BucketNote, dateLbl,
+  PlanRing, planLevelColor, factOfPlan, fmtPlan,
 } from "./LeadgenPersonRow";
+import { LeadgenPlanFormation } from "./LeadgenPlanFormation";
 import { LeadgenCharts } from "./LeadgenCharts";
 import { plural } from "../receivablesView";
 
@@ -133,8 +136,10 @@ function stripUnits(nav: PeriodState, today: string): Unit[] {
  * Той самий навігатор (`PeriodNav`), смуга одиниць під ним, верхня картка у три колонки,
  * розкривний рядок на кожного лідгена.
  *
- * ⚠️ ПЛАНІВ У ЛІДГЕНІВ ЩЕ НЕМАЄ (крок 3). Кільце — конверсія «ліди → ОПР» до цілі 40 %.
- * 🔴 ЧИСЛА НЕ ЗМІНЮЮТЬСЯ — лише вигляд. Той самий `/leadgen-stats` + розбивка за `grain`.
+ * 📋 ПЛАНИ Й РОСТЕР (рішення власника 25.09.2026): рядки людей — лише учасники команди
+ * «Лідогенерація»; решта людей із подіями — окремим блоком «Інші, не з команди» (підсумки
+ * відділу рахують усіх). Кільце рядка — прорахунки ÷ затверджений план; плану немає — як було
+ * (конверсія «ліди → ОПР» до цілі 40 %) з підписом «плану немає». Формування плану — блок унизу.
  */
 export function LeadgenSection() {
   const today = todayKyiv();
@@ -230,16 +235,19 @@ export function LeadgenSection() {
     return n;
   });
 
+  /** Усі люди відповіді: рядки команди + «Інші». Пошук людини — тут, щоб вибір «іншого» не читався як «без дій». */
+  const everyone = useMemo(() => (d ? [...d.rows, ...(d.others ?? [])] : []), [d]);
   const pickWho = (v: string) => {
     if (v === "all") { setWho("all"); return; }
     const id = Number(v);
     setWho(id);
-    setWhoName(d?.rows.find((r) => r.managerId === id)?.name ?? whoName);
+    setWhoName(everyone.find((r) => r.managerId === id)?.name ?? whoName);
     setOpen(new Set([id]));
   };
   const toggle = (id: number) => setOpen((s) => { const x = new Set(s); if (x.has(id)) x.delete(id); else x.add(id); return x; });
   const units = useMemo(() => stripUnits(nav, today), [nav, today]);
-  const whoAbsent = who !== "all" && !!d && !d.rows.some((r) => r.managerId === who);
+  const whoAbsent = who !== "all" && !!d && !everyone.some((r) => r.managerId === who);
+  const others = d?.others ?? [];
 
   return (
     <div style={{ maxWidth: 1120, margin: "0 auto" }}>
@@ -261,8 +269,15 @@ export function LeadgenSection() {
 
       <PeriodNav state={nav} onPatch={patchNav} today={today}>
         <select value={who} onChange={(e) => pickWho(e.target.value)} style={{ ...navBtn, cursor: "pointer" }} aria-label="Лідген">
-          <option value="all">Усі лідгени{d ? ` (${d.rows.length})` : ""}</option>
-          {(d?.rows ?? []).map((r) => <option key={r.managerId} value={r.managerId}>{r.name}</option>)}
+          <option value="all">Усі лідгени{d ? ` (${d.rows.length}${others.length ? ` + ${others.length} не з команди` : ""})` : ""}</option>
+          <optgroup label="Команда «Лідогенерація»">
+            {(d?.rows ?? []).map((r) => <option key={r.managerId} value={r.managerId}>{r.name}</option>)}
+          </optgroup>
+          {others.length > 0 && (
+            <optgroup label="Інші, не з команди">
+              {others.map((r) => <option key={r.managerId} value={r.managerId}>{r.name}</option>)}
+            </optgroup>
+          )}
           {whoAbsent && <option value={who}>{whoName} — без дій у періоді</option>}
         </select>
       </PeriodNav>
@@ -316,14 +331,17 @@ export function LeadgenSection() {
           <Glance d={d} cmp={cmp} cmpData={cmpData} cmpErr={cmpErr} who={who} whoName={whoName} whoAbsent={whoAbsent}
             periodLabel={periodLabel} statusful={statusful} />
           <h3 style={{ margin: "4px 0 10px" }}>📊 Загальна статистика</h3>
-          <LeadgenCharts d={d} trend={trend} trendErr={trendErr} who={who} whoName={whoName} grain={grain}
+          {/* Графіки «по людях» — усі люди відповіді (команда + «Інші»): склад графіків не змінився. */}
+          <LeadgenCharts d={{ ...d, rows: everyone }} trend={trend} trendErr={trendErr} who={who} whoName={whoName} grain={grain}
             period={period} today={today} periodLabel={periodLabel} />
           <h3 style={{ margin: "4px 0 10px" }}>👥 Лідгени · {periodLabel} <span style={{ fontSize: 12, fontWeight: 400, color: MUTED }}>· гроші — з лідів, переданих у періоді, стан угод — зараз</span></h3>
           <People d={d} who={who} whoName={whoName} whoAbsent={whoAbsent} grain={grain} period={period} today={today}
             statusful={statusful} open={open} onToggle={toggle} />
+          <Others d={d} who={who} />
           <Details d={d} grain={grain} period={period} today={today} open={detailsOpen} onToggle={setDetailsOpen} />
         </div>
       )}
+      <LeadgenPlanFormation initialMonth={period.from.slice(0, 7)} />
     </div>
   );
 }
@@ -336,11 +354,16 @@ function People({ d, who, whoName, whoAbsent, grain, period, today, statusful, o
   const units = unitsOf(grain, period, today);
   const byPerson = d.bucketsByPerson ?? [];
   if (whoAbsent) return <div style={{ padding: "8px 2px 16px", color: MUTED }}>У {whoName} у цьому періоді немає дій у CRM (жодного входу угоди в етапи лідогенерації).</div>;
-  if (rows.length === 0) return <div style={{ padding: "8px 2px 16px", color: MUTED }}>За цей період лідгенівських дій у CRM немає.</div>;
+  // Обрано людину з «Інших» — її рядок нижче, у своєму блоці; тут не пишемо «дій немає».
+  if (rows.length === 0 && who !== "all") return null;
+  if (rows.length === 0) return <div style={{ padding: "8px 2px 16px", color: MUTED }}>{d.scopedTo == null && (d.others ?? []).length
+    ? "У команді «Лідогенерація» немає активних учасників — усі дії періоду в блоці «Інші, не з команди» нижче."
+    : "За цей період лідгенівських дій у CRM немає."}</div>;
   return (
     <>
       {rows.map((r) => (
         <LeadgenPersonRow key={r.managerId} row={r} units={units}
+          plan={d.plans?.byPerson.find((x) => x.managerId === r.managerId)}
           money={d.handoffMoney?.byPerson.find((x) => x.managerId === r.managerId)}
           dataPeriod={{ from: d.from, to: d.to }}
           buckets={byPerson.filter((w) => w.managerId === r.managerId)} grain={grain}
@@ -485,12 +508,25 @@ function Glance({ d, cmp, cmpData, cmpErr, who, whoName, whoAbsent, periodLabel,
 }) {
   const conv = d.conversions;
   const zero: Totals = { calls: 0, leads: 0, opr: 0, quotes: 0, warming: 0 };
-  const person = who === "all" ? null : d.rows.find((r) => r.managerId === who) ?? null;
+  const everyone = [...d.rows, ...(d.others ?? [])];
+  const person = who === "all" ? null : everyone.find((r) => r.managerId === who) ?? null;
+  /** План: команди (для «усіх») або людини. Немає — кільце конверсії, як було, з підписом «плану немає». */
+  const tp = d.plans?.team;
+  const pp = who === "all" ? null : d.plans?.byPerson.find((x) => x.managerId === who) ?? null;
+  const pe = who === "all" ? (tp?.exec.kind === "plan" ? tp.exec : null) : (pp?.exec.kind === "plan" ? pp.exec : null);
+  const anyPlan = (d.plans?.byPerson ?? []).some((x) => x.exec.kind === "plan");
   const t: Totals = who === "all" ? d.totals : person ?? zero;
   const title = who === "all" ? (d.scopedTo != null ? "Команда" : "Відділ") : person?.name ?? whoName;
   const st = convStatus(t.opr, t.leads, conv.targets.oprOfLeads, statusful);
+  // Пілюлі — по рядках КОМАНДИ. Є хоч один план → статуси за планом (без плану — окремою пілюлею),
+  // інакше — як було, за конверсією: два змісти в одних пілюлях не змішуємо.
   const pills = { g: 0, a: 0, r: 0, n: 0 };
   for (const r of d.rows) {
+    if (anyPlan) {
+      const x = d.plans?.byPerson.find((p) => p.managerId === r.managerId)?.exec;
+      if (x?.kind === "plan") pills[x.level]++; else pills.n++;
+      continue;
+    }
     const s = convStatus(r.opr, r.leads, conv.targets.oprOfLeads, statusful);
     if (s.level) pills[s.level]++; else pills.n++;
   }
@@ -498,15 +534,16 @@ function Glance({ d, cmp, cmpData, cmpErr, who, whoName, whoAbsent, periodLabel,
   /** Числа сторони порівняння: для людини без рядка в тому періоді дзвінки невідомі (ростер — з подій), тож «—», а не 0. */
   const sideOf = (r: LeadgenStatsResp) => {
     if (who === "all") return { ...r.totals, known: true };
-    const row = r.rows.find((x: PersonRow) => x.managerId === who);
+    const row = [...r.rows, ...(r.others ?? [])].find((x: PersonRow) => x.managerId === who);
     return row ? { ...row, known: true } : { ...zero, known: false };
   };
   return (
     <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 15, padding: "16px 18px", marginBottom: 16, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(260px, 100%), 1fr))", gap: 20, alignItems: "center" }}>
       <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-        <StatusRing st={st} target={conv.targets.oprOfLeads}
+        {pe ? <PlanRing exec={pe} title={`${who === "all" ? "Команда" : "Людина"}: прорахунки ${pe.fact.toLocaleString("uk-UA")} з плану ${fmtPlan(pe.plan)} — ${pe.pct} %. Колір — за темпом робочих днів, як у Звіті.`} />
+        : <StatusRing st={st} target={conv.targets.oprOfLeads}
           title={st.overfull ? `ОПР (${t.opr}) більше, ніж лідів (${t.leads}) — конверсія цього періоду нічого не каже`
-            : st.conv == null ? "Лідів у періоді немає" : !statusful ? "Статус — лише за місяць і довше." : undefined} />
+            : st.conv == null ? "Лідів у періоді немає" : !statusful ? "Статус — лише за місяць і довше." : undefined} />}
         <div>
           <div style={lab}>{title} · {periodLabel} <InfoHint text={d.callRule + " Ліди — входи в «Взято в роботу», ОПР — «Отримано контакти ОПР», прорахунки — «Кваліфіковано», підігрів — воронка Реактивації."} /></div>
           <div style={val}>{t.leads.toLocaleString("uk-UA")} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>{plural(t.leads, "лід", "ліди", "лідів")} · {t.quotes.toLocaleString("uk-UA")} {plural(t.quotes, "прорахунок", "прорахунки", "прорахунків")}</small></div>
@@ -515,12 +552,13 @@ function Glance({ d, cmp, cmpData, cmpErr, who, whoName, whoAbsent, periodLabel,
             {" · "}ліди → ОПР {st.conv == null ? "—" : pct1(st.conv)}{st.overfull ? " ⚠" : ""} (ціль {conv.targets.oprOfLeads} %)
             {who === "all" && <> · ОПР → прорахунок {qConv == null ? "—" : pct1(qConv)}{qConv != null && qConv > 100 ? " ⚠" : ""} (ціль {conv.targets.quotesOfOpr} %)</>}
           </div>
-          {who === "all" && (statusful ? (
+          <PlanLine who={who} tp={tp} pe={pe} pp={pp} person={person} />
+          {who === "all" && (statusful || anyPlan ? (
             <div style={{ display: "flex", gap: 6, marginTop: 5, flexWrap: "wrap" }}>
-              <Pill c={RED}>{pills.r} нижче цілі</Pill>
+              <Pill c={RED}>{pills.r} нижче {anyPlan ? "плану" : "цілі"}</Pill>
               <Pill c={AMBER}>{pills.a} близько</Pill>
-              <Pill c={GREEN}>{pills.g} у цілі</Pill>
-              {pills.n > 0 && <Pill c="#6b7280">{pills.n} без оцінки</Pill>}
+              <Pill c={GREEN}>{pills.g} {anyPlan ? "у плані" : "у цілі"}</Pill>
+              {pills.n > 0 && <Pill c="#6b7280">{pills.n} {anyPlan ? "без плану" : "без оцінки"}</Pill>}
             </div>
           ) : (
             <div style={{ fontSize: 11, color: MUTED, marginTop: 5 }}>статуси людей — за місяць і довше</div>
@@ -588,6 +626,91 @@ function HandoffMoneyCol({ m }: { m: LeadgenHandoffMoney | undefined }) {
         {m.unlinked > 0 && <> · без угоди менеджера {m.unlinked.toLocaleString("uk-UA")}</>}{m.sameDeal > 0 && <> · у ту саму угоду {m.sameDeal}</>}
       </div>
     </div>
+  );
+}
+
+/**
+ * 📋 Рядок плану під головними числами: команда — «прорахунки X / план Y · план є у N з M»; людина —
+ * три «факт / план». Плану немає — прямо «плану немає» (кільце тоді — конверсія, як було).
+ */
+function PlanLine({ who, tp, pe, pp, person }: {
+  who: number | "all"; tp: LeadgenTeamPlan | undefined; pe: Extract<LeadgenPlanExec, { kind: "plan" }> | null;
+  pp: LeadgenPersonPlan | null; person: PersonRow | null;
+}) {
+  const box: React.CSSProperties = { fontSize: 11.5, marginTop: 4 };
+  if (who === "all") {
+    if (!tp || tp.total === 0) return null;
+    if (!pe) return <div style={{ ...box, color: MUTED }}>📋 плану немає{tp.planned === 0 ? " — кільце: конверсія ліди → ОПР" : ""}</div>;
+    return (
+      <div style={box}>
+        📋 команда: прорахунки <b>{factOfPlan(tp.fact, tp.plan)}</b> план
+        {tp.planned < tp.total && <span style={{ color: "var(--warn)" }}> · план є у {tp.planned} з {tp.total} — у факт входять і безпланові</span>}
+      </div>
+    );
+  }
+  if (!person) return null;
+  if (!pp) return <div style={{ ...box, color: MUTED }}>не з команди «Лідогенерація» — план не ставиться</div>;
+  if (!pe) return <div style={{ ...box, color: MUTED }}>📋 {pp.exec.kind === "zero" ? "план прорахунків 0 — не оцінюємо" : "плану немає — кільце: конверсія ліди → ОПР"}</div>;
+  return (
+    <div style={box}>
+      📋 прорахунки <b style={{ color: planLevelColor(pe.level) }}>{factOfPlan(person.quotes, pp.plan.quotes)}</b> · ліди {factOfPlan(person.leads, pp.plan.leads)} · ОПР {factOfPlan(person.opr, pp.plan.opr)}
+    </div>
+  );
+}
+
+/**
+ * 👥 «ІНШІ, НЕ З КОМАНДИ» (рішення власника 25.09.2026): люди з подіями лідоген-етапів у періоді, які
+ * не є активними учасниками команди «Лідогенерація». Не ховаються — окремий згорнутий блок зі своїми
+ * лічильниками й грошима з передач; їхні числа входять у підсумок відділу вгорі, і блок це каже.
+ * Лише рівню компанії: тімліду сервер віддає порожньо.
+ */
+function Others({ d, who }: { d: LeadgenStatsResp; who: number | "all" }) {
+  const all = d.others ?? [];
+  const rows = who === "all" ? all : all.filter((r) => r.managerId === who);
+  const [open, setOpen] = useState(false);
+  if (!all.length || (who !== "all" && !rows.length)) return null;
+  const t = d.othersTotals ?? { leads: 0, opr: 0, quotes: 0, warming: 0, calls: 0 };
+  const cell: React.CSSProperties = { padding: "7px 10px", textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" };
+  const head: React.CSSProperties = { ...cell, fontWeight: 600, fontSize: 12.5, color: MUTED };
+  const nf = (v: number) => v.toLocaleString("uk-UA");
+  return (
+    <details className="chart-card" style={{ margin: "4px 0 14px" }} open={open || who !== "all"}
+      onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+      <summary style={{ cursor: "pointer", fontWeight: 650 }}>
+        👤 Інші, не з команди · {all.length} {plural(all.length, "людина", "людини", "людей")}
+        <span style={{ fontWeight: 400, color: MUTED, fontSize: 13 }}> · ліди {nf(t.leads)} · ОПР {nf(t.opr)} · прорахунки {nf(t.quotes)} — входять у підсумок відділу вгорі</span>
+      </summary>
+      <p style={{ margin: "10px 0 8px", fontSize: 12.5, color: MUTED }}>
+        Мали входи угод у етапи лідогенерації в періоді, але зараз не є активними учасниками команди «Лідогенерація»
+        (інша команда, без команди або деактивовані). Плани їм не ставляться.
+      </p>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+          <thead>
+            <tr>
+              <th style={{ ...head, textAlign: "left" }}>Людина</th>
+              <th style={{ ...head, textAlign: "left" }}>Команда</th>
+              <th style={head}>Дзвінки</th><th style={head}>Ліди</th><th style={head}>ОПР</th>
+              <th style={head}>Прорахунки</th><th style={head}>Підігрів</th><th style={head}>Успішні з передач</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const m = d.handoffMoney?.byPerson.find((x) => x.managerId === r.managerId);
+              return (
+                <tr key={r.managerId} style={{ borderTop: "1px solid var(--border)" }}>
+                  <td style={{ padding: "7px 10px" }}>{r.name}{!r.isActive && <span style={{ color: MUTED, fontSize: 12 }}> · деактивований</span>}</td>
+                  <td style={{ padding: "7px 10px", color: MUTED }}>{r.teamName ?? "поза командою"}</td>
+                  <td style={cell}>{nf(r.calls)}</td><td style={cell}>{nf(r.leads)}</td><td style={cell}>{nf(r.opr)}</td>
+                  <td style={cell}>{nf(r.quotes)}</td><td style={cell}>{nf(r.warming)}</td>
+                  <td style={cell} title={m ? `передано ${m.handoffs} · успішних ${m.success.n}` : undefined}>{m ? formatAmount(m.success.sum) : "—"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </details>
   );
 }
 

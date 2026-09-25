@@ -10,7 +10,7 @@ import { effectiveManagerSql, effectiveFromFor, TRANSFER_KINDS, type TransferKin
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
-import { requireAuth, requirePerm } from "../auth/middleware.js";
+import { requireAuth, requirePerm, requireRole } from "../auth/middleware.js";
 import { roleHasTab, isAdminScope, isAdminOrLead, roleHasPerm } from "../auth/rbac.js";
 import { assignAllowed, assignDenyReason, mergePairAllowed, mergeDenyReason, mergeSourceOf, revokeAllowed, revokeDenyReason,
          type MergePairScope } from "../auth/mergeScope.js";
@@ -74,6 +74,10 @@ import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, 
 } from "../core/leadgenStats.js";
 import { handoffMoneyWire, personMoneyWire, bucketMoneyWire, bucketPersonMoneyWire, handoffDealsScope,
   leadgenAuthScope, parseLeadgenGrain, parseTrendMonths, parseManagerIdParam } from "../core/leadgenHandoffRules.js";
+import { leadgenRosterView, planView, planMonthOf, parseLeadgenSubmit, leadgenSubmitRefusal, mayEverSubmitLeadgenPlan,
+  mayApproveLeadgenPlan, LEADGEN_PLAN_METRICS, type RosterRow, type TeamMember } from "../core/leadgenPlanRules.js";
+import { leadgenTeamMembers, leadgenPlanTarget, approvedLeadgenPlans, leadgenFormation, submitLeadgenPlan,
+  approveLeadgenPlans, returnLeadgenPlan } from "../core/leadgenPlans.js";
 import * as expectSplit from "../core/expectSplit.js";
 import { FUNNEL_STAGE_LABELS, stageName } from "../core/stageNames.js";
 import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL } from "../core/orphanClients.js";
@@ -325,6 +329,12 @@ dashboardRouter.get("/leadgen", async (req, res) => {
   });
 });
 
+/** Нульовий рядок учасника команди без подій у періоді: план у нього може бути, і рядок мусить існувати. */
+const zeroLeadgenRow = (m: TeamMember): RosterRow => ({
+  managerId: m.managerId, name: m.name, teamId: m.teamId, teamName: m.teamName, isActive: true,
+  leads: 0, opr: 0, quotes: 0, warming: 0, calls: 0,
+});
+
 /**
  * 📞 «ЛІДОГЕНЕРАЦІЯ» — сім показників таблиці лідгенів із подій CRM (ТЗ v2 від 07.09.2026).
  *
@@ -358,7 +368,7 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
   const teamId = scope.teamId;
 
   const { adSources } = await overviewCache.call("getSettings", getSettings);
-  const [stats, dispatched, byChannel, closures, handoffs, warmingNow, weeks, lgFill, bucketRows, hm] = await Promise.all([
+  const [stats, dispatched, byChannel, closures, handoffs, warmingNow, weeks, lgFill, bucketRows, hm, members] = await Promise.all([
     leadgenStats(from, to),
     metrics.dispatchedByLoadBucket({ from, to }, "month", "leadgen"),
     money.receivedByChannel({ from, to }, adSources),
@@ -372,19 +382,29 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
     // Та сама функція ядра, що й у `/leadgen-handoff-deals`, — тож список і число рядка
     // не можуть розійтись (`#677`).
     leadgenHandoffMoney(from, to, scope),
+    leadgenTeamMembers(),
   ]);
 
-  const rows = teamId == null ? stats.rows : stats.rows.filter((r) => r.teamId === teamId);
-  const totals = teamId == null
-    ? stats.totals
-    : rows.reduce((a, r) => ({
-        leads: a.leads + r.leads, opr: a.opr + r.opr, quotes: a.quotes + r.quotes,
-        warming: a.warming + r.warming, calls: a.calls + r.calls,
-      }), { leads: 0, opr: 0, quotes: 0, warming: 0, calls: 0 });
+  /**
+   * 👥 РОСТЕР (рішення власника 25.09.2026): рядки людей — лише активні учасники команди
+   * «Лідогенерація»; решта людей із подіями — окремо, `others` (лише рівню компанії). Підсумки
+   * відділу рахують УСІХ — те саме число, що й до розділу. Правило — чиста `leadgenRosterView`
+   * (`#743`); тімлід — своя команда тим самим `teamId` зі скоупу, що ріже гроші й розбивку.
+   */
+  const view = leadgenRosterView(stats.rows, members, teamId, zeroLeadgenRow);
+  const rows = view.rows;
+  const totals = view.totals;
+  // 📋 План і виконання — лише рядкам команди: плани ставляться учасникам (рішення 3–4).
+  const approved = await approvedLeadgenPlans(rows.map((r) => r.managerId), from, to);
+  const pv = planView(rows, approved, from, to, kyivToday());
 
   const body: Record<string, unknown> = {
     from, to,
     rows, bySource: stats.bySource, totals,
+    others: view.others, othersTotals: view.othersTotals,
+    /** Склад команди «Лідогенерація» — для вибору людини навіть без дій у періоді. */
+    teamMembers: members.filter((m) => teamId == null || m.teamId === teamId).map((m) => ({ managerId: m.managerId, name: m.name })),
+    plans: { elapsed: pv.elapsed, byPerson: pv.byPerson, team: pv.team },
     conversions: {
       oprOfLeads: pct(totals.opr, totals.leads),
       quotesOfOpr: pct(totals.quotes, totals.opr),
@@ -492,6 +512,102 @@ dashboardRouter.get("/leadgen-handoff-deals", async (req, res) => {
   const hm = await leadgenHandoffMoney(from, to, clamp.scope);
   res.json({ from, to, managerId, deals: hm.deals, totals: handoffMoneyWire(hm.totals) });
 });
+
+// ═══════════════════════ 📋 ПЛАНИ ЛІДГЕНІВ (рішення власника 25.09.2026) ═══════════════════════
+/**
+ * Формування місячного плану лідгена на ліди · ОПР · прорахунки — ДЗЕРКАЛО формування плану
+ * продажів (`routes/plans.ts` → `/plans/formation*`): ті самі стани (чернетка → на затвердженні →
+ * затверджено / повернуто), подає тімлід (своя команда) або адмін-рівень, затверджує й повертає
+ * ЛИШЕ адмін-рівень (`requireRole("admin")`, як у продажах). Відмінність одна й свідома:
+ * менеджер тут — 403 першим оператором, як на всіх роутах лідогену.
+ *
+ * 🔒 Межа — вкладка `leadgen` (`routeTab.ts`, окремий рядок: `pre()` дефісних сусідів не
+ * накриває) + рядки `accessMatrix.ts`. SQL — лише в `core/leadgenPlans.ts` (`#17c`, `#750`).
+ */
+dashboardRouter.get("/leadgen-plans", async (req, res) => {
+  if (req.auth!.role === "manager") return res.status(403).json({ error: "Forbidden" });
+  const auth = req.auth!;
+  const month = planMonthOf(req.query.month);
+  if (!month) return res.status(400).json({ error: "month — YYYY-MM" });
+  const scope = leadgenAuthScope(auth);
+  const all = await leadgenTeamMembers();
+  // Тімлід — лише своя команда (межа та сама, що в рядків екрана); компанія — усі учасники.
+  const members = all.filter((m) => scope.teamId == null || m.teamId === scope.teamId);
+  const ids = members.map((m) => m.managerId);
+  // Довідка для тімліда — факт трьох попередніх місяців і цього, ТИМИ САМИМИ лічильниками, що екран.
+  const histFrom = shiftMonthStart(month, -3), monthTo = monthEndOf(month);
+  const [form, buckets] = await Promise.all([
+    leadgenFormation(month, ids),
+    ids.length ? leadgenBuckets(histFrom, monthTo, "month", false) : Promise.resolve([]),
+  ]);
+  const histMonths = [-3, -2, -1, 0].map((k) => shiftMonthStart(month, k));
+  const out = members.map((m) => {
+    const f = form.get(m.managerId);
+    const refusal = leadgenSubmitRefusal({ role: auth.role, teamId: auth.teamId }, { managerId: m.managerId, teamId: m.teamId, isMember: true });
+    return {
+      managerId: m.managerId, name: m.name,
+      canSubmit: refusal == null,
+      status: f?.status ?? "draft",
+      proposed: f?.proposed ?? { leads: null, opr: null, quotes: null },
+      approved: f?.approved ?? { leads: null, opr: null, quotes: null },
+      comment: f?.comment ?? null, returnComment: f?.returnComment ?? null,
+      submittedBy: f?.submittedBy ?? null, submittedAt: f?.submittedAt ?? null,
+      decidedBy: f?.decidedBy ?? null, decidedAt: f?.decidedAt ?? null,
+      history: histMonths.map((mo) => {
+        const b = buckets.find((x) => x.managerId === m.managerId && x.bucket === mo);
+        return { month: mo, leads: b?.leads ?? 0, opr: b?.opr ?? 0, quotes: b?.quotes ?? 0 };
+      }),
+    };
+  });
+  res.json({
+    month, role: auth.role, canApprove: mayApproveLeadgenPlan(auth.role), metrics: LEADGEN_PLAN_METRICS,
+    scopedTo: scope.teamId, members: out,
+    submitted: out.filter((m) => m.status === "submitted").length,
+    approvedCount: out.filter((m) => m.status === "approved").length,
+  });
+});
+
+dashboardRouter.post("/leadgen-plans/submit", async (req, res) => {
+  if (req.auth!.role === "manager") return res.status(403).json({ error: "Forbidden" });
+  const auth = req.auth!;
+  // Ролі, що не подають нікому й ніколи, — ДО розбору тіла (прийом `mayEverSubmit` продажів).
+  if (!mayEverSubmitLeadgenPlan(auth.role)) return res.status(403).json({ error: "Подання плану лідгена недоступне для цієї ролі" });
+  const p = parseLeadgenSubmit(req.body);
+  if (!p.ok) return res.status(400).json({ error: p.error });
+  const target = await leadgenPlanTarget(p.managerId);
+  if (!target) return res.status(404).json({ error: "Людину не знайдено" });
+  const refusal = leadgenSubmitRefusal({ role: auth.role, teamId: auth.teamId }, { managerId: p.managerId, ...target });
+  if (refusal) return res.status(403).json({ error: refusal });
+  await submitLeadgenPlan(p.managerId, p.month, p.values, p.comment, auth.userId);
+  res.json({ ok: true, status: "submitted" });
+});
+
+dashboardRouter.post("/leadgen-plans/approve", requireRole("admin"), async (req, res) => {
+  const auth = req.auth!;
+  const month = planMonthOf(req.body?.month);
+  if (!month) return res.status(400).json({ error: "month — YYYY-MM" });
+  const managerId = req.body?.managerId == null ? null : Number(req.body.managerId);
+  if (managerId != null && !(Number.isInteger(managerId) && managerId > 0)) return res.status(400).json({ error: "managerId — додатне ціле" });
+  const approved = await approveLeadgenPlans(month, managerId, auth.userId);
+  res.json({ ok: true, approved });
+});
+
+dashboardRouter.post("/leadgen-plans/return", requireRole("admin"), async (req, res) => {
+  const auth = req.auth!;
+  const month = planMonthOf(req.body?.month);
+  const managerId = Number(req.body?.managerId);
+  if (!month || !(Number.isInteger(managerId) && managerId > 0)) return res.status(400).json({ error: "managerId і month обовʼязкові" });
+  const rc = typeof req.body?.returnComment === "string" && req.body.returnComment.trim() ? String(req.body.returnComment).trim().slice(0, 2000) : null;
+  const n = await returnLeadgenPlan(month, managerId, rc, auth.userId);
+  if (n === 0) return res.status(409).json({ error: "Немає поданого плану для повернення" });
+  res.json({ ok: true, status: "returned" });
+});
+
+/** Перше число місяця, зсунутого на `k` (цілими місяцями, без `setUTCMonth` від 31-го). */
+function shiftMonthStart(month: string, k: number): string {
+  const t = Number(month.slice(0, 4)) * 12 + Number(month.slice(5, 7)) - 1 + k;
+  return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}-01`;
+}
 
 /**
  * Executive summary for the head of sales: revenue by team, the top managers

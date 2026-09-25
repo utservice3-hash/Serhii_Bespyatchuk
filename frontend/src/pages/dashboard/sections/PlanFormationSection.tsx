@@ -33,7 +33,7 @@ function issuedOf(m: PFManager, drafts: Record<number, number>): number {
 }
 
 // Стани картки: колір + іконка + підпис.
-const ST: Record<PFStatus, { c: string; icon: string; label: string }> = {
+export const ST: Record<PFStatus, { c: string; icon: string; label: string }> = {
   draft: { c: MUTED, icon: "●", label: "Чернетка" },
   submitted: { c: AMBER, icon: "⏳", label: "На затвердженні" },
   approved: { c: GREEN, icon: "✓", label: "Затверджено" },
@@ -157,7 +157,7 @@ export function PlanFormationSection({ auth, teams, previewData }: {
 const navBtn: React.CSSProperties = { padding: "6px 11px", borderRadius: 7, border: "none", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer", fontWeight: 700 };
 const roleTag = (r: string) => r === "admin" ? "КВП / адмін · затверджуєш або повертаєш" : r === "team_lead" ? "тімлід · формуєш і подаєш" : "менеджер · лише перегляд";
 
-function ProcessLegend() {
+export function ProcessLegend() {
   const chip = (c: string, icon: string, label: string, sub: string) => (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
       <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 700, fontSize: 12.5, padding: "3px 10px", borderRadius: 20, background: c + "22", color: c }}>

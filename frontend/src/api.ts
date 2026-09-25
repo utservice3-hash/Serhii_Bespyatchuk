@@ -222,6 +222,49 @@ export interface LeadgenStatsResp {
   warmingNow: number;
   callRule: string;
   scopedTo: number | null;
+  /** Люди з подіями поза командою «Лідогенерація» — лише рівню компанії (тімліду порожньо). */
+  others?: LeadgenPersonRow[];
+  othersTotals?: { leads: number; opr: number; quotes: number; warming: number; calls: number };
+  /** Активні учасники команди — для вибору людини навіть без дій у періоді. */
+  teamMembers?: { managerId: number; name: string }[];
+  plans?: { elapsed: number; byPerson: LeadgenPersonPlan[]; team: LeadgenTeamPlan };
+}
+/** План на обраний період (місячний, поділений за робочими днями, як у Звіті); `null` — затвердженого плану немає. */
+export interface LeadgenPeriodPlan { leads: number | null; opr: number | null; quotes: number | null }
+export type LeadgenPlanExec =
+  | { kind: "none" } | { kind: "zero" }
+  | { kind: "plan"; fact: number; plan: number; pct: number; level: "g" | "a" | "r" };
+export interface LeadgenPersonPlan { managerId: number; plan: LeadgenPeriodPlan; exec: LeadgenPlanExec }
+export interface LeadgenTeamPlan { total: number; planned: number; fact: number; plan: number | null; exec: LeadgenPlanExec }
+
+/** 📋 Формування плану лідгенів (дзеркало формування плану продажів). */
+export type LgPlanMetric = "leads" | "opr" | "quotes";
+export type LgPlanValues = Record<LgPlanMetric, number | null>;
+export interface LgPlanMember {
+  managerId: number; name: string; canSubmit: boolean;
+  status: PFStatus;
+  proposed: LgPlanValues; approved: LgPlanValues;
+  comment: string | null; returnComment: string | null;
+  submittedBy: string | null; submittedAt: string | null; decidedBy: string | null; decidedAt: string | null;
+  history: { month: string; leads: number; opr: number; quotes: number }[];
+}
+export interface LgPlanFormation {
+  month: string; role: string; canApprove: boolean; scopedTo: number | null;
+  members: LgPlanMember[]; submitted: number; approvedCount: number;
+}
+export async function fetchLeadgenPlans(month: string): Promise<LgPlanFormation> {
+  const { data } = await api.get<LgPlanFormation>("/dashboard/leadgen-plans", { params: { month } });
+  return data;
+}
+export async function submitLeadgenPlan(body: { managerId: number; month: string; leads: number; opr: number; quotes: number; comment?: string }): Promise<void> {
+  await api.post("/dashboard/leadgen-plans/submit", body);
+}
+export async function approveLeadgenPlan(body: { managerId?: number; month: string }): Promise<{ approved: number }> {
+  const { data } = await api.post<{ ok: boolean; approved: number }>("/dashboard/leadgen-plans/approve", body);
+  return data;
+}
+export async function returnLeadgenPlan(managerId: number, month: string, returnComment?: string): Promise<void> {
+  await api.post("/dashboard/leadgen-plans/return", { managerId, month, returnComment });
 }
 /**
  * Тренд по місяцях для графіка «Загальна статистика»: `months` календарних місяців, що

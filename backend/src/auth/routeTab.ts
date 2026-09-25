@@ -102,6 +102,8 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // сусідів `/leadgen` не накриває. Без цих рядків обидва роути лишились би без вкладкової межі.
     { test: pre("/api/dashboard/leadgen-trend"), tabs: ["leadgen"] },
     { test: pre("/api/dashboard/leadgen-handoff-deals"), tabs: ["leadgen"] },
+    // 📋 Плани лідгенів (25.09.2026): список + подання/затвердження/повернення — ЯВНО, та сама причина.
+    { test: pre("/api/dashboard/leadgen-plans"), tabs: ["leadgen"] },
     { test: pre("/api/dashboard/leadgen"), tabs: ["leadgen"] },
     { test: pre("/api/dashboard/stuck-deals"), tabs: ["dataquality"] },
     { test: pre("/api/dashboard/data-quality"), tabs: ["dataquality"] },
