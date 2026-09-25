@@ -1,4 +1,4 @@
-import type { LeadgenPersonRow as Row, LeadgenBucket, LeadgenGrain, LeadgenHandoffMoney } from "../../../api";
+import type { LeadgenPersonRow as Row, LeadgenBucket, LeadgenGrain, LeadgenHandoffMoney, LeadgenPersonPlan, LeadgenPlanExec } from "../../../api";
 import { formatAmount } from "../format";
 import { Donut } from "./ReportPlanSection";
 import { ddmm, addDays, dow, mondayOf } from "../periodRules";
@@ -43,6 +43,29 @@ export function StatusRing({ st, target, title }: { st: ReturnType<typeof convSt
   );
 }
 
+/** Колір рівня виконання плану — ті самі три, що в кільця Звіту. */
+export const planLevelColor = (l: "g" | "a" | "r") => (l === "g" ? GREEN : l === "a" ? AMBER : RED);
+
+/**
+ * 🎯 КІЛЬЦЕ ВИКОНАННЯ ПЛАНУ (рішення власника 25.09.2026): прорахунки факт ÷ план періоду; колір — за
+ * темпом, як у Звіті продажів (сервер уже порахував `level`). Кільце ≤ 100 % візуально, число — повне.
+ */
+export function PlanRing({ exec, title }: { exec: Extract<LeadgenPlanExec, { kind: "plan" }>; title?: string }) {
+  const col = planLevelColor(exec.level);
+  const ring = Math.min(100, Math.max(0, exec.pct));
+  return (
+    <div title={title} style={{ width: 58, height: 58, borderRadius: "50%", flex: "none", display: "grid", placeItems: "center", position: "relative",
+      cursor: title ? "help" : undefined, background: `conic-gradient(${col} ${ring}%, var(--border) 0)` }}>
+      <div style={{ width: 42, height: 42, background: "var(--card-bg)", borderRadius: "50%", position: "absolute" }} />
+      <span style={{ position: "relative", fontWeight: 750, fontSize: 13 }}>{exec.pct}%</span>
+    </div>
+  );
+}
+
+/** «12 / 40» — факт і план; план дробовий лише в неповному місяці (частка за робочими днями). */
+export const fmtPlan = (plan: number) => plan.toLocaleString("uk-UA", { maximumFractionDigits: 1 });
+export const factOfPlan = (fact: number, plan: number | null) => `${n(fact)} / ${plan == null ? "—" : fmtPlan(plan)}`;
+
 /**
  * 📅 ОДИНИЦІ РОЗБИВКИ — З КАЛЕНДАРЯ, А НЕ З ДАНИХ. Бекенд віддає лише бакети, де були
  * дії; день чи тиждень без жодної дії інакше просто зник би з таблиці, і «у вівторок
@@ -80,8 +103,10 @@ export function bucketLabel(b: string, grain: LeadgenGrain, period: { from: stri
  * кільце, головні числа; клік розгортає розбивку на одиницю нижче обраного періоду
  * (місяць/довгий період — тижні, тиждень/короткий період — дні, день — без розбивки).
  */
-export function LeadgenPersonRow({ row, money, dataPeriod, buckets, grain, units, targets, period, statusful, open, onToggle }: {
+export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, grain, units, targets, period, statusful, open, onToggle }: {
   row: Row;
+  /** План і виконання на період (лише учасникам команди). Немає або `none` — «плану немає», кільце — конверсія, як було. */
+  plan?: LeadgenPersonPlan;
   /** Гроші з переданих цією людиною лідів (див. `LeadgenHandoffMoney`); немає — «—». */
   money?: LeadgenHandoffMoney;
   /** Період, за який УЖЕ завантажені числа рядка (`money` з нього). Список грошей бере саме його, а не щойно
@@ -99,9 +124,11 @@ export function LeadgenPersonRow({ row, money, dataPeriod, buckets, grain, units
   const st = convStatus(row.opr, row.leads, targets.oprOfLeads, statusful);
   const overfullWhy = `ОПР (${n(row.opr)}) більше, ніж лідів (${n(row.leads)}): частина ОПР — із лідів, узятих раніше цього періоду, або змінився процес. Така «конверсія» нічого не каже, тому без статусу.`;
   const quotesConv = ratio(row.quotes, row.opr);
+  const pe = plan?.exec.kind === "plan" ? plan.exec : null;
+  const edge = pe ? planLevelColor(pe.level) : st.color;
 
   return (
-    <div className="lg-card" style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderLeft: `4px solid ${st.color}`, borderRadius: 14, marginBottom: 11, overflow: "hidden" }}>
+    <div className="lg-card" style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderLeft: `4px solid ${edge}`, borderRadius: 14, marginBottom: 11, overflow: "hidden" }}>
       <button type="button" onClick={onToggle} aria-expanded={open} className="lg-row-head"
         style={{ border: 0, background: "transparent", color: "inherit", font: "inherit", textAlign: "left", margin: 0,
           boxSizing: "border-box", width: "100%", cursor: "pointer", display: "grid", gap: 14, alignItems: "center", padding: "14px 17px" }}>
@@ -110,8 +137,19 @@ export function LeadgenPersonRow({ row, money, dataPeriod, buckets, grain, units
           <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <Chip>{row.teamName ?? "поза командою"}</Chip>
             {!row.isActive && <Chip>деактивований</Chip>}
+            {plan && plan.exec.kind === "none" && <Chip>плану немає</Chip>}
+            {plan && plan.exec.kind === "zero" && <Chip>план прорахунків 0</Chip>}
           </span>
         </span>
+        {pe && plan ? (
+          <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <PlanRing exec={pe} title={`Прорахунки ${n(pe.fact)} з плану ${fmtPlan(pe.plan)} на період — ${pe.pct} %. Колір — за темпом робочих днів, як у Звіті.`} />
+            <span style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 13 }}>
+              <span><b style={{ fontSize: 16 }}>{factOfPlan(pe.fact, pe.plan)}</b> прорахунки · план</span>
+              <span style={{ color: MUTED }}>ліди {factOfPlan(row.leads, plan.plan.leads)} · ОПР {factOfPlan(row.opr, plan.plan.opr)}</span>
+            </span>
+          </span>
+        ) : (
         <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <StatusRing st={st} target={targets.oprOfLeads}
             title={st.overfull ? overfullWhy : st.conv == null ? "Лідів у періоді немає — конверсію рахувати нема з чого"
@@ -123,6 +161,7 @@ export function LeadgenPersonRow({ row, money, dataPeriod, buckets, grain, units
               {st.overfull && <> · ⚠ понад 100 %</>}</span>
           </span>
         </span>
+        )}
         <span style={{ display: "flex", gap: 14, flexWrap: "wrap", justifyContent: "space-between" }}>
           <Stat v={row.calls} l="Дзвінки" />
           <Stat v={row.leads} l="Ліди" />
