@@ -43,8 +43,8 @@ let poolUsed = false;
 /** Ядро через пул, спрямований на тимчасовий кластер. Лише після `before` з живим кластером. */
 async function core() {
   poolUsed = true;
-  const [money, stats] = await Promise.all([import("./money.js"), import("./leadgenStats.js")]);
-  return { money, stats };
+  const [money, stats, lgPlans] = await Promise.all([import("./money.js"), import("./leadgenStats.js"), import("./leadgenPlans.js")]);
+  return { money, stats, lgPlans };
 }
 
 const utc = (s: string) => new Date(s + "Z");
@@ -150,6 +150,21 @@ before(async () => {
   await edge(2, "2026-09-13T21:30:00");   // Пн 14.09 00:30 Київ → тиждень 14.09
   await edge(2, "2026-08-31T20:30:00");   // Пн 31.08 23:30 Київ → серпень
   await edge(2, "2026-08-31T21:30:00", Q);// Вт 01.09 00:30 Київ → вересень (і передача вересня)
+
+  // ── #748/#749 (плани лідгенів, 25.09.2026): БЕРЕЗЕНЬ 2025 — поза будь-яким вікном гейтів вище
+  // (тренд найдовше тягнеться з 2025-10), тож їхніх чисел ці рядки не рушать. Команда 50011 —
+  // із сиду схеми. 60, 61 — учасники; 64 — учасник без жодної події; 62 — лідген поза командою;
+  // 63 — у команді, але логін вимкнено в Налаштуваннях (не активний за `activeManagerSql`).
+  await client.query(`INSERT INTO managers (id, name, team_id) VALUES
+    (60,'Учасник А',50011),(61,'Учасник Б',50011),(62,'Поза командою',1),(63,'Вимкнений',50011),(64,'Без подій',50011)`);
+  await client.query(`INSERT INTO users (id,email,password_hash,role,manager_id,team_id,is_active) VALUES
+    (900,'off@x','x','manager',63,50011,false),(901,'lead@x','x','team_lead',60,50011,true),(902,'adm@x','x','admin',NULL,NULL,true)`);
+  for (const [m, st, when] of [[60, LEADGEN_STAGE_IDS.taken, "2025-03-03T08:00:00"], [60, LEADGEN_STAGE_IDS.opr, "2025-03-04T08:00:00"],
+    [60, Q, "2025-03-05T08:00:00"], [61, LEADGEN_STAGE_IDS.taken, "2025-03-10T08:00:00"], [62, LEADGEN_STAGE_IDS.taken, "2025-03-11T08:00:00"],
+    [62, Q, "2025-03-12T08:00:00"], [63, LEADGEN_STAGE_IDS.taken, "2025-03-13T08:00:00"]] as [number, number, string][]) {
+    const d = await deal({ manager: m, pipeline: PZ, ck: null });
+    await ev(d, PZ, st, utc(when));
+  }
 });
 
 after(async () => {
@@ -447,4 +462,68 @@ test("#684b ЖИВИЙ SQL: список передач — справжні н�
   assert.equal(rl.route, "Продзвін програний", "🔴 порожня назва угоди менеджера не впала на назву Продзвону");
   // Підсумок списку — з того самого виклику (дзеркало `#677` на живих даних).
   assert.equal(hm.totals.handoffs, hm.deals.length);
+});
+
+/**
+ * #748 — РОСТЕР НА ЖИВОМУ SQL: справжні `leadgenStats` + `leadgenTeamMembers` (пул ядра на тимчасовій
+ * базі) → рядки = активні учасники 50011 (з нульовим рядком того, хто без подій), «інші» = решта;
+ * Σ рядків + Σ інших == підсумок відділу == `leadgenStats().totals`. Вимкнений у Налаштуваннях — не учасник.
+ * 🧨 САБОТАЖ: у `leadgenTeamMembers` прибрати `AND ${activeManagerSql("m")}` → «Вимкнений» стає рядком → червоніє.
+ */
+test("#748 ЖИВИЙ SQL: ростер — активні учасники 50011, інші окремо, Σ рядків + Σ інших == відділ", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { stats, lgPlans } = await core();
+  const { leadgenRosterView, rosterInvariantBreaks } = await import("./leadgenPlanRules.js");
+  const st = await stats.leadgenStats("2025-03-01", "2025-03-31");
+  const members = await lgPlans.leadgenTeamMembers();
+  assert.deepEqual(members.map((m) => m.managerId).sort(), [60, 61, 64], "🔴 склад команди не той (вимкнений у Налаштуваннях чи чужі)");
+  const zero = (m: { managerId: number; name: string; teamId: number | null; teamName: string | null }) =>
+    ({ ...m, isActive: true, leads: 0, opr: 0, quotes: 0, warming: 0, calls: 0 });
+  const v = leadgenRosterView(st.rows, members, null, zero);
+  assert.deepEqual(v.rows.map((r) => r.managerId).sort(), [60, 61, 64]);
+  assert.deepEqual(v.others.map((r) => r.managerId).sort(), [62, 63], "🔴 «інші» — не всі, хто з подіями поза командою");
+  assert.deepEqual(v.totals, st.totals, "🔴 підсумок відділу змінився");
+  assert.deepEqual(rosterInvariantBreaks(v), []);
+  assert.equal(st.totals.leads, 4, "фікстура: 4 ліди в березні 2025 — інакше перевіряти нічого");
+  const lead = leadgenRosterView(st.rows, members, 50011, zero);
+  assert.deepEqual(lead.rows.map((r) => r.managerId).sort(), [60, 61, 63, 64], "🔴 тімлід 50011 бачить не свою команду");
+  assert.deepEqual(lead.others, []);
+});
+
+/**
+ * #749 — ЦИКЛ ПЛАНУ НА ЖИВІЙ БАЗІ: подано → затверджено (живий план) → подано знову (живий лишився) →
+ * повернуто (живий лишився) — і продажні `plans`/`plan_formation` НЕ ЗМІНИЛИСЬ ані рядком (рішення 6).
+ * CHECK таблиці відхиляє чужу метрику й відʼємне значення (перевірка НА ВІДХИЛЕННЯ, не очима).
+ * 🧨 САБОТАЖ: у `returnLeadgenPlan` дописати `approved_value = NULL,` → червоніє (повернення стерло живий план).
+ */
+test("#749 ЖИВИЙ SQL: подання → затвердження → повторне подання → повернення; продажні plans незаймані", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { lgPlans } = await core();
+  const count = async () => (await client!.query(`SELECT (SELECT COUNT(*) FROM plans) + (SELECT COUNT(*) FROM plan_formation) AS n`)).rows[0].n;
+  const sales0 = await count();
+  const M = "2025-04-01";
+  await lgPlans.submitLeadgenPlan(60, M, { leads: 200, opr: 80, quotes: 40 }, "перший", 901);
+  let f = (await lgPlans.leadgenFormation(M, [60])).get(60)!;
+  assert.equal(f.status, "submitted");
+  assert.deepEqual(f.approved, { leads: null, opr: null, quotes: null }, "🔴 план став живим до затвердження");
+  assert.equal(await lgPlans.approveLeadgenPlans(M, null, 902), 1);
+  const ap1 = await lgPlans.approvedLeadgenPlans([60], "2025-04-01", "2025-04-30");
+  assert.deepEqual(ap1.get(60)?.get(M), { leads: 200, opr: 80, quotes: 40 });
+  await lgPlans.submitLeadgenPlan(60, M, { leads: 250, opr: 90, quotes: 50 }, "другий", 901);
+  assert.equal(await lgPlans.returnLeadgenPlan(M, 60, "замало", 902), 3, "🔴 повернуто не всі три метрики");
+  f = (await lgPlans.leadgenFormation(M, [60])).get(60)!;
+  assert.equal(f.status, "returned");
+  assert.deepEqual(f.proposed, { leads: 250, opr: 90, quotes: 50 });
+  assert.equal(f.returnComment, "замало");
+  const ap2 = await lgPlans.approvedLeadgenPlans([60], "2025-04-01", "2025-04-30");
+  assert.deepEqual(ap2.get(60)?.get(M), { leads: 200, opr: 80, quotes: 40 }, "🔴 повернення стерло попередній затверджений план");
+  assert.equal(await lgPlans.returnLeadgenPlan(M, 60, null, 902), 0, "🔴 повернули те, що вже не на розгляді");
+  assert.equal(await count(), sales0, "🔴 цикл лідоген-плану записав у продажні plans/plan_formation");
+  await assert.rejects(client!.query(`INSERT INTO leadgen_plans (manager_id, month, metric, proposed_value) VALUES (61, '2025-04-01', 'payment_amount', 1)`),
+    /check/i, "🔴 CHECK пропустив продажну метрику");
+  await assert.rejects(client!.query(`INSERT INTO leadgen_plans (manager_id, month, metric, proposed_value) VALUES (61, '2025-04-01', 'quotes', -1)`), /check/i);
+  await assert.rejects(client!.query(`INSERT INTO leadgen_plans (manager_id, month, metric, proposed_value) VALUES (61, '2025-04-15', 'quotes', 1)`), /check/i,
+    "🔴 місяць не з першого числа прийнято");
+  await assert.rejects(client!.query(`INSERT INTO plans (manager_id, plan_date, metric, planned_value) VALUES (61, '2025-04-01', 'quotes', 1)`), /check/i,
+    "🔴 продажний plans приймає лідоген-метрику");
 });
