@@ -189,6 +189,7 @@ export const MANIFEST_FILES: string[] = [
   // 📞 Лідогенерація: порт екрана з макета — межа «екран, а не макет» (22.09.2026)
   "routes/leadgenScreen.test.js",
   "core/leadgenTeam.test.js",
+  "routes/plansGridScope.test.js",
   "core/leadgenChannelOnly.test.js",
   "core/channelPartition.test.js",
   "core/klassSliceGate.test.js",
@@ -1924,6 +1925,9 @@ export const MANIFEST_TESTS: string[] = [
   "#752 /leadgen-stats: ростер — з leadgenRosterView, «Інші» у відповіді, план — лише рядкам команди",
   "#748 ЖИВИЙ SQL: ростер — активні учасники 50011, інші окремо, Σ рядків + Σ інших == відділ",
   "#749 ЖИВИЙ SQL: подання → затвердження → повторне подання → повернення; продажні plans незаймані",
+  // routes/plansGridScope.test.ts — «Сітка планів» лише для продажних менеджерів (25.09.2026).
+  "#742 «Сітка планів» лише для продажних менеджерів: роут фільтрує commercialManagerSql, випадайка ховає некомерційні команди",
+  "#742b 🪞 ДЗЕРКАЛО: зняти фільтр у роуті чи у випадайці — спіймано",
 ];
 
 /**
