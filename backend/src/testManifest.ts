@@ -187,6 +187,7 @@ export const MANIFEST_FILES: string[] = [
   // 📞 Лідогенерація: порт екрана з макета — межа «екран, а не макет» (22.09.2026)
   "routes/leadgenScreen.test.js",
   "core/leadgenTeam.test.js",
+  "routes/plansGridScope.test.js",
   "core/leadgenChannelOnly.test.js",
   "core/channelPartition.test.js",
   "core/klassSliceGate.test.js",
@@ -1906,6 +1907,9 @@ export const MANIFEST_TESTS: string[] = [
   // core/leadgenTeam.test.ts — нова команда «Лідогенерація» (24.09.2026) некомерційна скрізь, де її впізнають.
   "#740 команда «Лідогенерація» некомерційна скрізь: схема, Звіт/плани, КВП і фронт кажуть одне",
   "#740b 🪞 ДЗЕРКАЛО: кожен спосіб розійтись ловиться — і цілі джерела мовчать",
+  // routes/plansGridScope.test.ts — «Сітка планів» лише для продажних менеджерів (25.09.2026).
+  "#742 «Сітка планів» лише для продажних менеджерів: роут фільтрує commercialManagerSql, випадайка ховає некомерційні команди",
+  "#742b 🪞 ДЗЕРКАЛО: зняти фільтр у роуті чи у випадайці — спіймано",
 ];
 
 /**

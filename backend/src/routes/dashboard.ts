@@ -5584,7 +5584,7 @@ dashboardRouter.get("/plans-grid", async (req, res) => {
        FROM managers m
        LEFT JOIN teams t ON t.id = m.team_id
        LEFT JOIN plans p ON p.manager_id = m.id AND p.metric = 'payment_amount' AND p.plan_date = $1
-      WHERE m.is_active ${teamCond}
+      WHERE m.is_active AND ${metrics.commercialManagerSql("m")} ${teamCond}
       ORDER BY t.name NULLS LAST, m.name`,
     params
   );
