@@ -557,6 +557,19 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/leadgen-handoff-deals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  // 📋 ПЛАНИ ЛІДГЕНІВ (рішення власника 25.09.2026) — дзеркало формування плану продажів:
+  // перегляд — як `/leadgen-stats`; подає тімлід (своя команда) і адмін-рівень, менеджер — 403
+  // першим оператором; затверджує й повертає ЛИШЕ адмін-рівень (`requireRole("admin")`, як
+  // `/plans/formation/approve|return`). Записні роути — `deny-only`: дозволені ролі не пробуємо,
+  // бо вони б записали. Дзеркальність тримає `#751`.
+  { method: "GET", path: "/api/dashboard/leadgen-plans", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  { method: "POST", path: "/api/dashboard/leadgen-plans/submit", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
+  { method: "POST", path: "/api/dashboard/leadgen-plans/approve", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/dashboard/leadgen-plans/return", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/dashboard/leadgen-regulars", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   // ФАЗА A · «Постійні клієнти · план місяця». Межа — вкладка `loyalty`, якої в

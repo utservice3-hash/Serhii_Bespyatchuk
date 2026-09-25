@@ -4044,3 +4044,42 @@ SELECT v.k, v.t, v.n
    -- тоді не сіємо нікого, щоб не покласти неправду; наступний старт спробує знову.
    AND (SELECT id FROM teams WHERE kommo_group_id = 335511) IS NOT NULL
    AND (SELECT id FROM teams WHERE name = 'Комерційний відділ') IS NOT NULL;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 📋 ПЛАНИ ЛІДГЕНІВ (рішення власника 25.09.2026) — core/leadgenPlans.ts, правила — core/leadgenPlanRules.ts.
+-- План на людину × місяць × метрику: ліди · ОПР · прорахунки — ті самі лічильники, що на екрані
+-- «Лідогенерація». Процес — дзеркало формування плану продажів: тімлід подає (submitted),
+-- адмін-рівень затверджує (approved) або повертає (returned) з коментарем.
+--
+-- 🔴 ОКРЕМА ТАБЛИЦЯ, А НЕ `plans`/`plan_formation`, — і причина заміряна читанням їхніх читачів:
+--   • `plans` читають без фільтра метрики `/managers` (тижні), `/personal` (місяць і 12 міс) і
+--     `GET /api/plans` — нова метрика в `plans` вилізла б рядками на продажних екранах;
+--   • `plan_formation` має метрико-сліпу міграцію `below_min` вище (поріг `planMinPerManager` у
+--     ГРИВНЯХ) — при заданому порозі вона мітила б «нижче мінімуму» кожен план лідгена (40
+--     прорахунків < поріг у ₴) на кожному старті, а подання/затвердження продажів фільтрує лише
+--     `metric = 'payment_amount'`, тож рядки лідгенів лежали б там непоміченими чужими.
+-- Тож лідоген-метрики туди не пишуться ЗОВСІМ, і CHECK `plans.metric` не чіпається.
+--
+-- Живий план = `approved_value`: його ставить лише затвердження; повторне подання й повернення
+-- його НЕ стирають (у продажах так само: `plans` тримає попередній затверджений, поки новий
+-- на розгляді). Пишеться ЗАВЖДИ трійкою рядків — одне подання = три метрики.
+-- ⚠️ Revert коду не відкочує рядки цієї таблиці: вони лишаються, і їх ніхто не читає.
+-- ═══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS leadgen_plans (
+  id             SERIAL PRIMARY KEY,
+  manager_id     INTEGER NOT NULL REFERENCES managers(id),
+  month          DATE NOT NULL CHECK (month = date_trunc('month', month)::date),
+  metric         TEXT NOT NULL CHECK (metric IN ('leads', 'opr', 'quotes')),
+  proposed_value INTEGER NOT NULL CHECK (proposed_value >= 0),
+  approved_value INTEGER CHECK (approved_value IS NULL OR approved_value >= 0),
+  status         TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'submitted', 'approved', 'returned')),
+  comment        TEXT,
+  return_comment TEXT,
+  submitted_by   INTEGER REFERENCES users(id),
+  submitted_at   TIMESTAMPTZ,
+  decided_by     INTEGER REFERENCES users(id),
+  decided_at     TIMESTAMPTZ,
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (manager_id, month, metric)
+);
+CREATE INDEX IF NOT EXISTS idx_leadgen_plans_month ON leadgen_plans (month, status);
