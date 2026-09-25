@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ACCESS_MATRIX } from "../auth/accessMatrix.js";
 import { tabsForPath } from "../auth/routeTab.js";
+import { lexTemplates } from "../auth/sqlLex.js";
 
 /**
  * #750…#752 — ПЛАНИ ЛІДГЕНІВ: ізоляція від продажних планів, межі роутів, ростер у `/leadgen-stats`.
@@ -24,16 +25,22 @@ function walk(dir: string, acc: string[] = []): string[] {
   return acc;
 }
 
-/** Файли коду, що згадують таблицю лідоген-планів; і чи ядро планів торкається продажних таблиць. */
+/**
+ * SQL файла — ШАБЛОННІ ЛІТЕРАЛИ, розібрані сканером `#17c` (`sqlLex.ts`): запит живе в бектиках, а назва
+ * гейта в маніфесті чи коментар — ні. Предмет перевірки — «хто ЗАПИТУЄ таблицю», а не «де трапилось слово».
+ */
+const sqlOf = (rel: string, text: string) => (rel.endsWith(".sql") ? text : lexTemplates(text).blocks.map((b) => b.q).join("\n"));
+
+/** Файли, чий SQL згадує таблицю лідоген-планів; і чи ядро планів торкається продажних таблиць. */
 export function planIsolationBreaks(files: Record<string, string>): string[] {
   const allowed = new Set(["core/leadgenPlans.ts", "db/schema.sql"]);
   const out: string[] = [];
   for (const [rel, text] of Object.entries(files)) {
-    const code = rel.endsWith(".sql") ? text : codeOf(text);
+    const code = sqlOf(rel, text);
     if (/\bleadgen_plans\b/.test(code) && !allowed.has(rel)) out.push(`${rel}: читає/пише leadgen_plans — лідоген-план тече в чужий екран`);
   }
-  const core = codeOf(files["core/leadgenPlans.ts"] ?? "");
-  if (!core) out.push("core/leadgenPlans.ts: файла немає — перевіряти нічого");
+  const core = sqlOf("core/leadgenPlans.ts", files["core/leadgenPlans.ts"] ?? "");
+  if (!/\bleadgen_plans\b/.test(core)) out.push("core/leadgenPlans.ts: SQL із leadgen_plans не знайдено — сканер осліп або файл не той");
   if (/\b(FROM|JOIN|INTO|UPDATE)\s+(plans|plan_formation)\b/i.test(core)) out.push("core/leadgenPlans.ts: торкається продажних plans/plan_formation");
   return out;
 }
@@ -66,6 +73,8 @@ test("#750b 🪞 ДЗЕРКАЛО: підкладений продажний ч�
   assert.notDeepEqual(planIsolationBreaks({ "core/leadgenPlans.ts": core + "\nq(`INSERT INTO plans (x) VALUES (1)`)" }), []);
   assert.notDeepEqual(planIsolationBreaks({ "core/leadgenPlans.ts": core + "\nq(`UPDATE plan_formation SET x=1`)" }), []);
   assert.deepEqual(planIsolationBreaks({ "core/leadgenPlans.ts": core, "routes/plans.ts": "// колись: leadgen_plans" }), []);
+  assert.deepEqual(planIsolationBreaks({ "core/leadgenPlans.ts": core, "testManifest.ts": '"#750 leadgen_plans знає лише ядро"' }), [],
+    "🔴 назва гейта в маніфесті читається як запит");
   assert.deepEqual(planIsolationBreaks({ "core/leadgenPlans.ts": core, "core/x.ts": "q(`FROM leadgen_plans_archive`)" }), [],
     "🔴 межа слова: сусідня таблиця зарахувалась би");
 });
