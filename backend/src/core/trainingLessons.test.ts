@@ -98,6 +98,33 @@ test("#727 ЖИВИЙ SQL: міграція групує уроки Sereda, на
 });
 
 /**
+ * #731 — УРОКИ-ЧЕРНЕТКИ SEREDA ЛИШАЮТЬСЯ ЧЕРНЕТКАМИ, РАЗОМ ІЗ ЧАСТИНАМИ. Заміряно через API Sereda 27.09: 5 уроків
+ * зі 157 — «draft», учням їх не видно, тож там «20 уроків», а в нас було 25. Опубліковане й наше не чіпається;
+ * повторний прогін нічого не змінює.
+ * 🧨 Червоніє, якщо чернетка лишиться опублікованою, її частина — ні, або зачепить опублікований урок.
+ */
+test("#731 ЖИВИЙ SQL: чернетки Sereda стають чернетками разом із частинами, решта — як була", async (t) => {
+  const s = await cluster(t); if (!s) return;
+  try {
+    const DRAFT = "a864ad29-e881-43c5-8930-47bb3bd00edc", PUB = "33333333-3333-4333-8333-333333333333";
+    const f = (await s.c.query(`INSERT INTO training_folders (name, position) VALUES ('Логістика', 1) RETURNING id`)).rows[0].id;
+    const ins = async (pos: number, ext: string | null) =>
+      (await s.c.query(`INSERT INTO training_materials (folder_id, title, kind, position, external_id, content) VALUES ($1,'x','text',$2,$3,'x') RETURNING id`,
+        [f, pos, ext])).rows[0].id as number;
+    const dHead = await ins(1, `${DRAFT}:text`), dAtt = await ins(2, `${DRAFT}:att:cccccccc-0000-4000-8000-000000000001`);
+    const pHead = await ins(3, `${PUB}:text`), ours = await ins(4, null);
+    const st = async () => Object.fromEntries((await s.c.query(`SELECT id, status FROM training_materials`)).rows.map((r) => [r.id, r.status]));
+
+    await s.c.query(readFileSync(SCHEMA, "utf8"));
+    const a = await st();
+    assert.deepEqual([a[dHead], a[dAtt]], ["draft", "draft"], "🔴 чернетка Sereda або її частина лишилась опублікованою");
+    assert.deepEqual([a[pHead], a[ours]], ["published", "published"], "🔴 правка зачепила опублікований урок або наш матеріал");
+    await s.c.query(readFileSync(SCHEMA, "utf8"));
+    assert.deepEqual(await st(), a, "🔴 повторний прогін змінив статуси");
+  } finally { await s.done(); }
+});
+
+/**
  * #728 — ЗАМОК, СКЛАД КУРСУ Й ПРОГРЕС РАХУЮТЬ УРОКИ; ЧАСТИНА ЗАМКНЕНОГО УРОКУ ЗАМКНЕНА. Справжні обробники на
  * тимчасовій базі, а не читання тексту. Частини за замовчуванням «обовʼязкові» — отже, якби їх рахували
  * кроками, наступний урок тримала б презентація попереднього, а не сам урок.
