@@ -3995,6 +3995,42 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_training_courses_ext   ON training_courses(
 CREATE UNIQUE INDEX IF NOT EXISTS uq_training_folders_ext   ON training_folders(external_id)   WHERE external_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_training_materials_ext ON training_materials(external_id) WHERE external_id IS NOT NULL;
 
+-- 📘 УРОК ІЗ ЧАСТИНАМИ (27.09.2026, рішення Романа: «роби Б, щоб було гарно і все як в середі»).
+-- Рядок може бути ЧАСТИНОЮ уроку: `lesson_id` — головний рядок уроку, `part_role` — де частина стоїть
+-- («main» — pdf/відео в тілі уроку, «attachment» — файл у блоці «Вкладення»). КРОКОМ курсу є лише урок
+-- (`lesson_id IS NULL`); правило — `core/trainingLesson.ts`. Видалення уроку забирає його частини.
+-- ⚠️ `lesson_id` і `part_role` ставляться лише ПАРОЮ: частина без ролі не знала б, де стояти, а роль без
+-- уроку перетворила б звичайний крок на «частину нічого». Тому CHECK на пару, і пишуться вони одним запитом.
+ALTER TABLE training_materials ADD COLUMN IF NOT EXISTS lesson_id INTEGER REFERENCES training_materials(id) ON DELETE CASCADE;
+ALTER TABLE training_materials ADD COLUMN IF NOT EXISTS part_role TEXT CHECK (part_role IN ('main', 'attachment'));
+DO $$ BEGIN
+  ALTER TABLE training_materials ADD CONSTRAINT training_materials_part_pair CHECK ((lesson_id IS NULL) = (part_role IS NULL));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS idx_training_materials_lesson ON training_materials(lesson_id) WHERE lesson_id IS NOT NULL;
+
+-- 🔁 Разове групування перенесеного з Sereda. `external_id` = «<урок Sereda>:<частина>» (text, empty, pres,
+-- video, att:<id>). Заміряно на проді 27.09: 157 уроків → 289 рядків, частини кожного уроку в ОДНІЙ темі й
+-- ПІДРЯД — винятків 0. Головний рядок уроку — текст («text»/«empty»), а де тексту немає (14 уроків) —
+-- перший за порядком. Вкладення → «attachment», решта (презентація, відео) → «main».
+-- ✅ Ідемпотентно: чіпає лише рядки, що ще не згруповані; головний рядок обирається тим самим правилом,
+-- тож повторний прогін нічого не змінює (тримає `#727`).
+-- ⚠️ revert коду групування НЕ знімає, але й не ламає: старий код колонок не читає й покаже знову окремі
+-- кроки. Повне зняття — `UPDATE training_materials SET lesson_id = NULL, part_role = NULL`.
+WITH g AS (
+  SELECT id, split_part(external_id, ':', 1) AS lk, split_part(external_id, ':', 2) AS part, position
+    FROM training_materials
+   WHERE external_id ~ '^[0-9a-f-]{36}:'
+), head AS (
+  SELECT DISTINCT ON (lk) lk, id AS head_id
+    FROM g
+   ORDER BY lk, (part IN ('text', 'empty')) DESC, position, id
+)
+UPDATE training_materials m
+   SET lesson_id = h.head_id,
+       part_role = CASE WHEN g.part = 'att' THEN 'attachment' ELSE 'main' END
+  FROM g JOIN head h ON h.lk = g.lk
+ WHERE m.id = g.id AND g.id <> h.head_id AND m.lesson_id IS NULL;
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- 🧭 ПЕРЕВИЗНАЧЕННЯ КОМАНДИ МЕНЕДЖЕРА (ТЗ 23.09.2026, п.1) — див. core/teamOverride.ts.
 -- Рядок = «у дашборді ця людина в team_id, що б не стояло в Kommo»; team_id NULL =

@@ -4443,10 +4443,17 @@ export interface TrainingCourseDetail {
     materials: { id: number; title: string; kind: TrainingKind; required: boolean; state: TrainingStepState;
       blockedBy: { materialId: number; title: string } | null }[] }[];
 }
+/** 📘 Частина уроку: «main» показується в тілі уроку (pdf, відео), «attachment» — у блоці «Вкладення». */
+export interface TrainingLessonPart {
+  id: number; title: string; kind: TrainingKind; url: string | null; role: "main" | "attachment";
+  mime: string | null; sizeBytes: string | null; hasFile: boolean; content: string | null;
+}
 export interface TrainingMaterialContent {
   id: number; folderId: number | null; title: string; kind: TrainingKind; url: string | null; mime: string | null;
   sizeBytes: string | null; content: string | null; required: boolean; hasFile: boolean;
   status: "opened" | "done" | null; finishedAt: string | null;
+  /** Частини уроку — разом з ним (сервер віддає завжди; порожньо — урок з одного матеріалу). */
+  parts?: TrainingLessonPart[];
 }
 export type CandidateMe = { candidate: false } | {
   candidate: true; fullName: string | null; teamName: string | null; leadName: string | null;

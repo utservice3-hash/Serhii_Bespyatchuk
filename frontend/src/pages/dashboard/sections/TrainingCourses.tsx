@@ -2,12 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   fetchTrainingCourses, fetchTrainingCourse, fetchTrainingMaterial, openTrainingMaterial, doneTrainingMaterial,
   createTrainingCourse, patchTrainingCourse, createTrainingFolder, updateTrainingFolder, deleteTrainingFolder,
-  updateTrainingMaterial, deleteTrainingMaterial, fetchTrainingFileBlobUrl, createTrainingMaterial,
+  updateTrainingMaterial, deleteTrainingMaterial, createTrainingMaterial,
   type TrainingCourse, type TrainingCourseDetail, type TrainingMaterialContent, type TrainingAudience, type TrainingKind,
   type TrainingModule, type TrainingUploadRules,
 } from "../../../api";
-import { embedUrl } from "../trainingView";
-import { PdfViewer } from "./PdfViewer";
+import { LessonBody } from "./LessonBody";
 import "./hiring.css";
 import "./training.css";
 
@@ -482,20 +481,18 @@ function StepPane({ step, edit, busy, onChanged, onNext, nextTitle }: {
   edit: boolean; busy: boolean; onChanged: () => void; onNext: () => void; nextTitle: string | null;
 }) {
   const [m, setM] = useState<TrainingMaterialContent | null>(null);
-  const [blob, setBlob] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    let alive = true, url: string | null = null;
-    setM(null); setBlob(null);
+    let alive = true;
+    setM(null);
     fetchTrainingMaterial(step.id).then((x) => {
       if (!alive) return;
       setM(x);
-      if (x.kind === "file" && x.hasFile) fetchTrainingFileBlobUrl(step.id).then((u) => { if (alive) { url = u; setBlob(u); } }).catch(() => undefined);
       if (x.status == null) void openTrainingMaterial(step.id).then(onChanged).catch(() => undefined);
     }).catch((e) => setErr(errText(e)));
-    return () => { alive = false; if (url) URL.revokeObjectURL(url); };
+    return () => { alive = false; };
   }, [step.id, onChanged]);
 
   const markDone = async () => {
@@ -533,20 +530,8 @@ function StepPane({ step, edit, busy, onChanged, onNext, nextTitle }: {
       {err && <div style={{ color: "var(--danger)", fontSize: 13, marginBottom: 8 }}>{err}</div>}
       {!m ? <p className="loading-text">Завантаження…</p> : (
         <>
-          {m.kind === "text" && <div className="tr-body">{m.content || "Текст кроку порожній."}</div>}
-          {m.kind === "video_embed" && m.url && (() => {
-            const e = embedUrl(m.url);
-            return e.direct
-              ? <video src={e.direct} controls style={{ width: "100%", borderRadius: 8, background: "#000" }} />
-              : <div className="tr-embed"><iframe src={e.iframe} title={m.title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowFullScreen /></div>;
-          })()}
-          {m.kind === "link" && m.url && <a className="hr-btn" href={m.url} target="_blank" rel="noopener noreferrer">Відкрити посилання ↗</a>}
-          {m.kind === "file" && (m.mime === "application/pdf" && blob
-            ? <PdfViewer src={blob} title={m.title} />
-            : m.mime?.startsWith("image/") && blob ? <img src={blob} alt={m.title} style={{ maxWidth: "100%", borderRadius: 8 }} />
-            : m.mime?.startsWith("video/") && blob ? <video src={blob} controls style={{ width: "100%", borderRadius: 8, background: "#000" }} />
-            : <div className="tr-file">📄 {m.title}{blob && <> · <a href={blob} download={m.title}>завантажити</a></>}</div>)}
-          {m.content && m.kind !== "text" && <p className="hr-muted" style={{ marginTop: 12, whiteSpace: "pre-wrap" }}>{m.content}</p>}
+          {/* 📘 Урок цілим — pdf/відео, текст, «Вкладення» — як у Sereda; один компонент на обидва екрани (`#729`). */}
+          <LessonBody m={m} />
 
           {!edit && (
             <div className="tr-actions">

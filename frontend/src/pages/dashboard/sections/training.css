@@ -86,3 +86,22 @@
 .pdfv-page-spin { position: absolute; left: 50%; top: 50%; margin: -11px 0 0 -11px; }
 @keyframes pdfv-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .pdfv-spinner { animation-duration: 2.4s; } }
+
+/* 📘 Тіло уроку як у Sereda: зверху те, що дивляться, під ним текст, нижче «Вкладення». Проміжки між блоками
+   однакові (gap), щоб урок читався як одна сторінка, а не як набір карток. */
+.tr-lsn { display: flex; flex-direction: column; gap: 20px; }
+.tr-lsn-text { font-size: 15px; line-height: 1.7; max-width: 72ch; }
+.tr-lsn-media { width: 100%; max-width: 100%; border-radius: var(--r-lg); background: #000; }
+img.tr-lsn-media { background: transparent; }
+.tr-lsn-wait { min-height: 220px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: var(--r-lg); }
+.tr-att { border: 1px solid var(--border); border-radius: var(--r-lg); padding: 16px 18px; display: grid; gap: 10px; background: var(--card-bg); }
+.tr-att-h { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
+.tr-att-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: transparent; color: var(--text); font: inherit; font-size: 14px; cursor: pointer; }
+.tr-att-row:hover:not(:disabled) { background: var(--hover, rgba(0, 0, 0, .04)); }
+.tr-att-row:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.tr-att-row:disabled { cursor: default; opacity: .6; }
+.tr-att-row svg { color: var(--text-muted); flex: none; }
+.tr-att-name { min-width: 0; overflow-wrap: anywhere; }
+.tr-att-size { color: var(--text-muted); flex: none; }
+.tr-att-dl { margin-left: auto; display: inline-flex; flex: none; }
+.tr-att-err { color: var(--danger); font-size: 13px; }
