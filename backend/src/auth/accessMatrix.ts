@@ -442,6 +442,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "POST", path: "/api/hiring/tldv/sync", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
   { method: "POST", path: "/api/hiring/tldv/:meetingId/link", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
   { method: "POST", path: "/api/hiring/tldv/:meetingId/ignore", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
+  // 💼 Відгуки з work.ua (28.09.2026) — та сама межа, що й решта дій рекрутера (`onlyEdit`).
+  { method: "GET", path: "/api/hiring/workua", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "financier", "manager"] },
+  { method: "POST", path: "/api/hiring/workua/sync", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
+  { method: "PUT", path: "/api/hiring/vacancies/:id/workua", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
   { method: "GET", path: "/api/hiring/vacancies?scope=active", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "financier", "manager"] },
   { method: "POST", path: "/api/hiring/vacancies", cls: "deny-only",

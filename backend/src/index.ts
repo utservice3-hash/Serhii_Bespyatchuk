@@ -80,6 +80,7 @@ import { recomputeClientKeys } from "./jobs/recomputeClientKeys.js";
 import { closeExpiredCandidateAccess } from "./jobs/hiringAccess.js";
 import { syncRingostatCalls, getRingostatStatus } from "./jobs/syncRingostatCalls.js";
 import { syncTldv } from "./jobs/syncTldv.js";
+import { syncWorkua } from "./jobs/syncWorkua.js";
 import { syncCalls } from "./jobs/syncCalls.js";
 import { missedCallTasks } from "./jobs/missedCallTasks.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
@@ -587,6 +588,10 @@ cron.schedule("*/15 * * * *", () => {
 // 🎥 Записи співбесід tl;dv — що 15 хв. Без ключа джоба чесно пропускається (лічильник пропусків).
 cron.schedule("*/15 * * * *", () => {
   void runJob("syncTldv", () => syncTldv());
+});
+// 💼 Відгуки з work.ua — що 15 хв. Без логіна джоба чесно пропускається (лічильник пропусків).
+cron.schedule("*/15 * * * *", () => {
+  void runJob("syncWorkua", () => syncWorkua());
 });
 // Банк-виписки — що 15 хв (окремо від CRM). Upsert по external_tx_id.
 cron.schedule("*/15 * * * *", () => {

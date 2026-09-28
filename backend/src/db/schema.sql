@@ -4338,3 +4338,22 @@ CREATE TABLE IF NOT EXISTS ai_spend_ledger (
 CREATE INDEX IF NOT EXISTS idx_ai_spend_ledger_at ON ai_spend_ledger(at);
 REVOKE ALL ON ai_spend_ledger FROM ai_readonly;
 -- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
+-- 💼 ВІДГУКИ З WORK.UA → «КАНДИДАТИ» (28.09.2026, прохід 7). Памʼять оброблених відгуків: той самий відгук
+-- удруге нічого не робить, а найбільший id — звідки продовжувати. Кандидат — `hiring_candidates` (той самий
+-- телефон → наявна картка, подія «повторний відгук»). Вакансію work.ua привʼязує людина у «Вакансіях».
+-- ⚠️ revert коду таблицю й колонку не прибирає; кандидати, створені з відгуків, лишаються звичайними кандидатами.
+CREATE TABLE IF NOT EXISTS workua_responses (
+  id           BIGINT PRIMARY KEY,
+  job_id       BIGINT,
+  candidate_id INTEGER REFERENCES hiring_candidates(id) ON DELETE SET NULL,
+  vacancy_id   INTEGER REFERENCES hiring_vacancies(id) ON DELETE SET NULL,
+  responded_at TIMESTAMPTZ,
+  how          TEXT NOT NULL CHECK (how IN ('created','repeat')),
+  file_note    TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_workua_responses_job ON workua_responses(job_id);
+ALTER TABLE hiring_vacancies ADD COLUMN IF NOT EXISTS workua_job_id BIGINT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hiring_vacancies_workua ON hiring_vacancies(workua_job_id) WHERE workua_job_id IS NOT NULL;
+-- 🔒 Телефони й пошти кандидатів — персональні дані. REVOKE після CREATE.
+REVOKE ALL ON workua_responses FROM ai_readonly;
