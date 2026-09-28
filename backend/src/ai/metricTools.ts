@@ -63,6 +63,8 @@ export const FORBIDDEN_TABLES = [
   "employee_offboarding",
   // 🎙 AI-аналіз дзвінків (22.09.2026): тексти розмов клієнтів, аналізи й витрати. REVOKE у схемі. Тримає #653.
   "call_transcripts", "call_analyses", "ai_spend_ledger",
+  // 🎥 Зустрічі tl;dv (23.09.2026): пошта й імена учасників. REVOKE у схемі. Тримає #733.
+  "tldv_meetings",
 ];
 
 /**
