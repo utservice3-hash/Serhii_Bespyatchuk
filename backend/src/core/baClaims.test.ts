@@ -210,7 +210,7 @@ test("#772 ДОСТУП БА: вкладка ba і право create_claim — �
   assert.ok(seed, "🔴 сид вкладки `ba` для керівництва не знайдено");
   const inSeed = [...seed[1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort();
   assert.deepEqual(inMatrix, inSeed, `🔴 матриця: ${inMatrix.join(",")} · сид: ${inSeed.join(",")}`);
-  assert.deepEqual(inSeed, ["admin", "ceo", "hr", "kvp", "opdir"], "🔴 склад керівництва розійшовся з рішенням");
+  assert.deepEqual(inSeed, ["admin", "ceo", "kvp", "opdir"], "🔴 склад керівництва розійшовся з рішенням (HR — ні, 28.09.2026)");
 
   assert.match(sql, /VALUES \('business_assistant', 'Бізнес-асистент', false, 'own', '\{"ba":true\}'::jsonb/, "🔴 роль «Бізнес-асистент» не сидиться з вкладкою ba");
   assert.match(SRC("db/roleDeclarations.ts"), /key: "business_assistant"/, "🔴 роль не оголошена (#15 почервоніє на прийманні)");
@@ -220,7 +220,7 @@ test("#772 ДОСТУП БА: вкладка ba і право create_claim — �
   assert.ok(grant && strip, "🔴 видача або зняття create_claim не знайдені");
   const g = [...grant[1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort();
   const st = [...strip[1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort();
-  assert.deepEqual(g, ["admin", "ceo", "financier", "hr", "kvp", "opdir"], "🔴 кнопку отримав не той склад");
+  assert.deepEqual(g, ["admin", "ceo", "financier", "kvp", "opdir"], "🔴 кнопку отримав не той склад (HR — ні, 28.09.2026)");
   assert.deepEqual(st, g, "🔴 видача й зняття права розійшлись");
   assert.match(SRC("auth/permGrant.ts"), /"create_claim"/, "🔴 право не в каталозі — адмін не зможе ним керувати");
 });
@@ -249,6 +249,37 @@ test("#772b ДОСТУП БА: onlyBa — перший оператор кожн
   const rt = SRC("auth/routeTab.ts");
   assert.match(rt, /pre\("\/api\/ba"\), tabs: \["ba"\]/, "🔴 /api/ba не під вкладкою ba");
   assert.match(rt, /pre\("\/api\/receivables-claims"\), tabs: \["receivables"\]/, "🔴 кнопка дебіторки не під вкладкою receivables");
+});
+
+/**
+ * #772c — ЖИВИЙ SQL: HR НЕ БАЧИТЬ РОЗДІЛУ (рішення Романа 28.09.2026), і корекція проду — РАЗОВА.
+ * Перший викат (`f76963e`) дав HR вкладку `ba`; схема прибирає її один раз під позначкою в `ba_migrations`.
+ * Три стани: схема з нуля — HR без `ba`; прод до корекції (ba=true, позначки немає) — прибрано;
+ * адмін згодом свідомо ввімкнув HR тумблером — повторний прогін схеми це НЕ відкочує.
+ * 🧨 Червоніє, якщо повернути `hr` у сид, прибрати позначку (корекція стане щодеплойною) або саму корекцію.
+ */
+test("#772c ЖИВИЙ SQL: HR без вкладки ba і права кнопки; корекція разова, тумблер адміна не відкочується", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  const schema = readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8");
+  const hr = async () => (await c.query(`SELECT screen_access ? 'ba' AS has, screen_access->>'ba' AS ba, permissions ? 'create_claim' AS claim FROM roles WHERE key = 'hr'`)).rows[0];
+  try {
+    assert.deepEqual(await hr(), { has: false, ba: null, claim: false }, "🔴 HR отримав вкладку ba чи право кнопки на схемі з нуля");
+    const lead = (await c.query(`SELECT key FROM roles WHERE (screen_access->>'ba')::boolean ORDER BY key`)).rows.map((r) => r.key);
+    assert.deepEqual(lead, ["admin", "business_assistant", "ceo", "kvp", "opdir"], "🔴 вкладку ba має не той склад");
+
+    // стан проду до корекції: HR має ba=true, позначки ще немає
+    await c.query(`UPDATE roles SET screen_access = screen_access || '{"ba":true}'::jsonb WHERE key = 'hr'`);
+    await c.query(`DELETE FROM ba_migrations`);
+    await c.query(schema);
+    assert.equal((await hr()).has, false, "🔴 корекція не прибрала вкладку ba в HR");
+
+    // адмін свідомо ввімкнув HR тумблером — наступний викат цього не чіпає
+    await c.query(`UPDATE roles SET screen_access = screen_access || '{"ba":true}'::jsonb WHERE key = 'hr'`);
+    await c.query(schema);
+    assert.equal((await hr()).ba, "true", "🔴 корекція щодеплойна: відкотила свідомий тумблер адміна");
+  } finally { await s.dispose(); }
 });
 
 /**
