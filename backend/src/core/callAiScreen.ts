@@ -27,6 +27,16 @@ import { monthSpend } from "./callAiPipeline.js";
 export const TRANSCRIPT_ROLES: ReadonlySet<string> = new Set(["admin", "kvp"]);
 
 /**
+ * Чи можна цьому акаунту повний текст розмови — ЗА КЛЮЧЕМ РОЛІ (`roleKey`), а не за сумісною
+ * роллю (`role`). 🔴 Приймання 28.09.2026: у токені CEO, опдира й КВП `role === "admin"` (право
+ * `admin_scope`), тож перевірка за `role` віддала б повний текст CEO й опдиру, хоча рішення
+ * власника — лише адмін і КВП. Гейти ядра цього не бачили: вони кликали ядро з ключем напряму.
+ */
+export function transcriptAllowed(auth: { role?: string; roleKey?: string | null }): boolean {
+  return auth.roleKey != null && TRANSCRIPT_ROLES.has(auth.roleKey);
+}
+
+/**
  * Стан рядка — ЧЕСНИЙ і РІЗНИЙ для кожної причини «ще не готово». Жоден не показується нулем.
  *   not_queued            — джоба ще не дійшла до дзвінка (новий, або ключів ще не було);
  *   not_enabled           — ключа постачальника немає;
@@ -158,7 +168,7 @@ export interface AiCallCard {
  * повертає `null` (роут віддасть 404), а не порожню картку — інакше існування чужої розмови
  * просочувалось би відповіддю.
  */
-export async function aiCallCard(db: Db, uniqueid: string, role: string, scope: MissedScope): Promise<AiCallCard | null> {
+export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boolean, scope: MissedScope): Promise<AiCallCard | null> {
   const r = await db.query<RawRow & { segments: Turn[] | null; duration_sec: string | null; client_phone: string | null }>(`
     SELECT rc.uniqueid, rc.calldate, rc.call_type, rc.billsec, rc.calldate AS created_at, 0 AS kommo_id,
            rc.manager_id, m.name AS manager_name, m.team_id, tm.name AS team_name, rc.client_phone,
@@ -187,7 +197,7 @@ export async function aiCallCard(db: Db, uniqueid: string, role: string, scope: 
       `SELECT min(calldate) AS at FROM ringostat_calls WHERE client_phone = $1 AND call_type = ANY($2::text[]) AND calldate > $3`,
       [raw.client_phone, [...OUTBOUND_TYPES], raw.calldate])).rows[0]?.at ?? null
     : null;
-  const allowed = TRANSCRIPT_ROLES.has(role);
+  const allowed = canSeeTranscript;
   const done = row.state === "done";
   const { kommoId: _k, dealCreatedAt: _d, ...rest } = row;
   const mc = done && raw.result ? raw.result.manager_channel : null;

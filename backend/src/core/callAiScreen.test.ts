@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Db } from "./adCallFacts.js";
-import { aiCallState, AI_CALL_STATES, TRANSCRIPT_ROLES } from "./callAiScreen.js";
+import { aiCallState, AI_CALL_STATES, TRANSCRIPT_ROLES, transcriptAllowed } from "./callAiScreen.js";
 import { ACCESS_MATRIX } from "../auth/accessMatrix.js";
 
 /**
@@ -111,19 +111,19 @@ test("#830 ЕКРАН AI · ЖИВА СХЕМА: список = вибірка �
  */
 test("#832 ЕКРАН AI · ЖИВА СХЕМА: картка — текст лише адміну й КВП, чужий дзвінок 404, наступний вихідний", async (t) => {
   const c = await ctx(t); if (!c) return;
-  const { aiCallCard } = await import("./callAiScreen.js");
-  const kvp = await aiCallCard(c.db, "x1", "kvp", {});
+  const { aiCallCard, transcriptAllowed } = await import("./callAiScreen.js");
+  const kvp = await aiCallCard(c.db, "x1", transcriptAllowed({ roleKey: "kvp" }), {});
   assert.ok(kvp && kvp.turns && kvp.turns.length === 1 && !kvp.transcriptHidden, "дзеркало: КВП мусить бачити текст");
-  const admin = await aiCallCard(c.db, "x1", "admin", {});
+  const admin = await aiCallCard(c.db, "x1", transcriptAllowed({ roleKey: "admin" }), {});
   assert.ok(admin?.turns, "дзеркало: адмін мусить бачити текст");
-  const lead = await aiCallCard(c.db, "x1", "team_lead", { teamId: 901 });
+  const lead = await aiCallCard(c.db, "x1", transcriptAllowed({ roleKey: "team_lead" }), { teamId: 901 });
   assert.ok(lead, "🔴 тімлід не відкрив картку своєї команди");
   assert.equal(lead.turns, null, "🔴 тімлід отримав повний текст розмови");
   assert.equal(lead.transcriptHidden, true);
   assert.equal(lead.result?.promises.length, 2, "🔴 тімлід не бачить витягу з цитатами");
-  for (const role of ["ceo", "opdir"]) assert.equal((await aiCallCard(c.db, "x1", role, {}))?.turns, null, `🔴 ${role} отримав повний текст`);
-  assert.equal(await aiCallCard(c.db, "x2", "team_lead", { teamId: 901 }), null, "🔴 тімлід відкрив картку чужої команди");
-  assert.equal(await aiCallCard(c.db, "x3", "team_lead", { teamId: 901 }), null, "🔴 тімлід відкрив дзвінок без відомого менеджера");
+  for (const role of ["ceo", "opdir"]) assert.equal((await aiCallCard(c.db, "x1", transcriptAllowed({ role: "admin", roleKey: role }), {}))?.turns, null, `🔴 ${role} отримав повний текст`);
+  assert.equal(await aiCallCard(c.db, "x2", false, { teamId: 901 }), null, "🔴 тімлід відкрив картку чужої команди");
+  assert.equal(await aiCallCard(c.db, "x3", false, { teamId: 901 }), null, "🔴 тімлід відкрив дзвінок без відомого менеджера");
   assert.equal(kvp.nextOutboundAt, new Date("2026-09-20T11:00:00Z").toISOString(), "🔴 наступний вихідний — не перший після розмови");
   assert.deepEqual(kvp.row.kommoIds, [8801]);
   assert.equal(kvp.managerChannel, 1);
@@ -222,4 +222,23 @@ test("#834 ПРОВОДКА ФРОНТУ: меню → секція → три �
   assert.equal(V.matchesFilter({ ...r, promisesWithDeadline: 2 }, "noDeadline"), false, "дзеркало: усі зі строком — не під фільтром");
   assert.match(V.afterLabel("2026-09-20T07:30:00Z", null), /не було/);
   assert.match(V.afterLabel("2026-09-20T07:30:00Z", "2026-09-20T11:00:00Z"), /3 год 30 хв/);
+});
+
+/**
+ * #835 — ПРАВО НА ПОВНИЙ ТЕКСТ — ЗА КЛЮЧЕМ РОЛІ, А НЕ ЗА СУМІСНОЮ РОЛЛЮ. Приймання 28.09.2026: у
+ * токені CEO й опдира `role === "admin"`, і роут, що перевіряв `auth.role`, віддав би їм повний
+ * текст розмов. Тепер роут кличе `transcriptAllowed(auth)`, а та дивиться лише на `roleKey`.
+ * 🧨 Червоніє, якщо роут знову передасть `auth.role` або функція гляне на `role`.
+ */
+test("#835 ПОВНИЙ ТЕКСТ ЗА КЛЮЧЕМ РОЛІ: CEO й опдир із сумісною роллю admin тексту не бачать", () => {
+  for (const key of ["ceo", "opdir", "team_lead", "financier", "hr", "manager"])
+    assert.equal(transcriptAllowed({ role: "admin", roleKey: key }), false, `🔴 ${key} із сумісною роллю admin бачить повний текст`);
+  assert.equal(transcriptAllowed({ role: "admin", roleKey: "kvp" }), true, "дзеркало: КВП мусить бачити текст");
+  assert.equal(transcriptAllowed({ role: "admin", roleKey: "admin" }), true, "дзеркало: адмін мусить бачити текст");
+  assert.equal(transcriptAllowed({ role: "admin" }), false, "🔴 токен без roleKey отримав текст за сумісною роллю");
+  const route = SRC("routes/dashboard.ts");
+  const at = route.indexOf('dashboardRouter.get("/ai-calls/:uniqueid"');
+  assert.ok(at > 0, "🔴 роут картки не знайдено");
+  const body = route.slice(at, route.indexOf("});", at));
+  assert.match(body, /aiCallCard\(pool, [^,]+, transcriptAllowed\(auth\),/, "🔴 роут картки вирішує право на текст не через transcriptAllowed(auth)");
 });
