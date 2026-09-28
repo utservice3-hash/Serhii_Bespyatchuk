@@ -205,7 +205,7 @@ export function AiCallsSection() {
               </thead>
               <tbody>
                 {shown.map((r) => (
-                  <Fragment key={`${String(r.kommoId)}-${r.uniqueid}`}>
+                  <Fragment key={r.uniqueid}>
                     <tr onClick={() => setOpen(open === r.uniqueid ? null : r.uniqueid)} style={{ borderTop: "1px solid var(--border)", cursor: "pointer" }}>
                       <td style={{ ...cell, whiteSpace: "nowrap" }}>
                         {fmtTime(r.calledAt)}<div style={{ fontSize: 12, color: "var(--text-muted)" }}>{r.direction === "in" ? "вхідний" : "вихідний"} · {mmss(r.billsec)}</div>
@@ -219,7 +219,6 @@ export function AiCallsSection() {
                     </tr>
                     {open === r.uniqueid && (
                       <tr><td colSpan={7} style={{ padding: "0 10px 10px", background: "var(--card-bg-alt, transparent)" }}>
-                        <a href={r.dealUrl} target="_blank" rel="noreferrer" style={{ fontSize: 13 }}>Угода {r.kommoId} в Kommo ↗</a>
                         <CallCard uniqueid={r.uniqueid} />
                       </td></tr>
                     )}

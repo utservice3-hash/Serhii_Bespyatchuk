@@ -120,6 +120,30 @@ export function foldRow(r: RawRow): AiCallRow {
   };
 }
 
+/** Рядок списку — ОДИН ДЗВІНОК: розмова, перша для кількох угод одного клієнта, несе всі ці угоди. */
+export type AiCallListRow = Omit<AiCallRow, "kommoId"> & { kommoIds: number[] };
+
+/**
+ * Згорнути рядки «угода → перша розмова» в рядки за дзвінком. Одна розмова буває першою відразу для
+ * двох угод одного клієнта (заміряно 28.09.2026: 19 дзвінків із 1 100), і тоді список показував її
+ * двічі, а шапка рахувала 1 119 «перших розмов» замість 1 100. Порядок — за першою появою дзвінка;
+ * угоди — за зростанням, дата створення угоди — найраніша з них.
+ */
+export function collapseByCall(rows: readonly AiCallRow[]): AiCallListRow[] {
+  const byCall = new Map<string, AiCallListRow>();
+  for (const r of rows) {
+    const seen = byCall.get(r.uniqueid);
+    if (seen) {
+      if (!seen.kommoIds.includes(r.kommoId)) seen.kommoIds = [...seen.kommoIds, r.kommoId].sort((a, b) => a - b);
+      if (r.dealCreatedAt < seen.dealCreatedAt) seen.dealCreatedAt = r.dealCreatedAt;
+      continue;
+    }
+    const { kommoId, ...rest } = r;
+    byCall.set(r.uniqueid, { ...rest, kommoIds: [kommoId] });
+  }
+  return [...byCall.values()];
+}
+
 /** Межа вибірки екрана. Більший період обрізається й це видно (`truncated`), а не мовчить. */
 export const SCREEN_LIMIT = 5000;
 
@@ -129,7 +153,7 @@ export const SCREEN_LIMIT = 5000;
  * дзвінок без відомого менеджера бачить лише компанійна роль.
  */
 export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: string, now: Date, scope: MissedScope):
-  Promise<{ rows: AiCallRow[]; truncated: boolean }> {
+  Promise<{ rows: AiCallListRow[]; truncated: boolean }> {
   const q = adDealFirstTalksSql({ from, to, now, talkMinSec: FIRST_TOUCH_RULE.talkMinSec, windowBefore: FIRST_TOUCH_RULE.windowBefore,
     adDealPredicate: ad.predicate, adSources: ad.adSources }, FIRST_TOUCH_RULE.flag, SCREEN_LIMIT);
   const sql = `
@@ -148,7 +172,7 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
   const params = [...q.params, STT_PROVIDER, ELEVENLABS_STT_MODEL, LLM_PROVIDER, GEMINI_MODEL, RUBRIC_PILOT_V0,
     scope.managerId ?? null, scope.teamId ?? null];
   const raw = (await db.query<RawRow>(sql, params)).rows;
-  return { rows: raw.map(foldRow), truncated: raw.length >= SCREEN_LIMIT };
+  return { rows: collapseByCall(raw.map(foldRow)), truncated: raw.length >= SCREEN_LIMIT };
 }
 
 export interface AiCallCard {

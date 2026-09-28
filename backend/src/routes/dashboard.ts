@@ -10498,7 +10498,7 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
     period: { from, to }, truncated,
     // Явний перелік полів, а не спред (#17e2).
     rows: rows.map((r) => ({
-      kommoId: r.kommoId, dealUrl: kommoLeadUrl(r.kommoId), uniqueid: r.uniqueid, calledAt: r.calledAt,
+      kommoIds: r.kommoIds, uniqueid: r.uniqueid, calledAt: r.calledAt,
       direction: r.direction, billsec: r.billsec, dealCreatedAt: r.dealCreatedAt,
       managerId: r.managerId, managerName: r.managerName, teamId: r.teamId, teamName: r.teamName,
       state: r.state, failure: r.failure, summary: r.summary, priceDiscussed: r.priceDiscussed,

@@ -242,3 +242,41 @@ test("#835 ПОВНИЙ ТЕКСТ ЗА КЛЮЧЕМ РОЛІ: CEO й опдир
   const body = route.slice(at, route.indexOf("});", at));
   assert.match(body, /aiCallCard\(pool, [^,]+, transcriptAllowed\(auth\),/, "🔴 роут картки вирішує право на текст не через transcriptAllowed(auth)");
 });
+
+/**
+ * #836 — ОДИН ДЗВІНОК = ОДИН РЯДОК. Розмова буває першою відразу для двох угод одного клієнта
+ * (заміряно 28.09.2026: 19 із 1 100), і список показував її двічі, а шапка рахувала 1 119 замість
+ * 1 100. Тепер рядок — дзвінок, і в ньому всі його угоди. Живий шматок спершу доводить, що вибірка
+ * справді дає ДВІ пари (інакше гейт нічого б не перевіряв), потім — що на екрані рядок один.
+ * 🧨 Червоніє, якщо прибрати згортання в `aiCallsList` або губити другу угоду.
+ */
+test("#836 ОДИН ДЗВІНОК = ОДИН РЯДОК: розмова, перша для двох угод, у списку раз і з обома угодами", async (t) => {
+  const { collapseByCall } = await import("./callAiScreen.js");
+  const base = { uniqueid: "u", calledAt: "2026-09-23T07:30:00.000Z", direction: "out" as const, billsec: 40,
+    managerId: 1, managerName: "М", teamId: 1, teamName: "Т", state: "not_queued" as const, failure: null, summary: null,
+    priceDiscussed: null, objections: 0, promises: 0, promisesWithDeadline: 0, unverifiedQuotes: 0 };
+  const got = collapseByCall([
+    { ...base, kommoId: 9, dealCreatedAt: "2026-09-23T07:00:00.000Z" },
+    { ...base, kommoId: 5, dealCreatedAt: "2026-09-22T07:00:00.000Z" },
+    { ...base, uniqueid: "v", kommoId: 7, dealCreatedAt: "2026-09-23T07:00:00.000Z" },
+  ]);
+  assert.deepEqual(got.map((r) => [r.uniqueid, r.kommoIds, r.dealCreatedAt]),
+    [["u", [5, 9], "2026-09-22T07:00:00.000Z"], ["v", [7], "2026-09-23T07:00:00.000Z"]],
+    "🔴 дзвінок двох угод не згорнуто в один рядок або загублено угоду");
+
+  const c = await ctx(t); if (!c) return;
+  const { aiCallsList } = await import("./callAiScreen.js");
+  for (const id of [8804, 8805])
+    await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel)
+      VALUES ($1,$2,8921932,1,'2026-09-23 09:00:00+03','0508800004','ad')`, [id, `D${String(id)}`]);
+  await c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
+    VALUES ('x4','2026-09-23 10:30:00+03','out','ANSWERED',40,45,9011,'380508800004','https://rec/x')`);
+  const { adDealFirstTalksSql } = await import("./adCallFactsRules.js");
+  const { FIRST_TOUCH_RULE } = await import("./callAiTick.js");
+  const q = adDealFirstTalksSql({ from: "2026-09-23", to: "2026-09-23", now: NOW, talkMinSec: FIRST_TOUCH_RULE.talkMinSec,
+    windowBefore: FIRST_TOUCH_RULE.windowBefore, adDealPredicate: FAKE_AD.predicate, adSources: FAKE_AD.adSources }, FIRST_TOUCH_RULE.flag, 100);
+  const pairs = (await c.raw.query<{ uniqueid: string }>(q.sql, q.params)).rows.filter((r) => r.uniqueid === "x4").length;
+  assert.equal(pairs, 2, "фікстура: вибірка мусить дати ДВІ пари угода→розмова, інакше гейт нічого не перевіряє");
+  const list = await aiCallsList(c.db, FAKE_AD, "2026-09-23", "2026-09-23", NOW, {});
+  assert.deepEqual(list.rows.map((r) => [r.uniqueid, r.kommoIds]), [["x4", [8804, 8805]]], "🔴 дзвінок двох угод у списку двічі");
+});

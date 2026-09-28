@@ -333,7 +333,8 @@ export async function fetchMissedCalls(params: { from: string; to: string }): Pr
 
 /** 🎧 «Перший дотик · AI» (28.09.2026). Стани — `pages/dashboard/aiCallsView.ts`. */
 export interface AiCallRowT {
-  kommoId: number; dealUrl: string; uniqueid: string; calledAt: string; direction: "in" | "out"; billsec: number;
+  /** Усі угоди, для яких ця розмова — перша (зазвичай одна). */
+  kommoIds: number[]; uniqueid: string; calledAt: string; direction: "in" | "out"; billsec: number;
   dealCreatedAt: string; managerId: number | null; managerName: string | null; teamId: number | null; teamName: string | null;
   state: AiCallState; failure: string | null; summary: string | null;
   priceDiscussed: boolean | null; objections: number; promises: number; promisesWithDeadline: number; unverifiedQuotes: number;
@@ -353,7 +354,7 @@ export interface AiAnalysis {
 }
 export interface AiTurn { channel: number; start: number | null; end: number | null; text: string; lang: string | null }
 export interface AiCallCardResp {
-  row: Omit<AiCallRowT, "kommoId" | "dealUrl" | "dealCreatedAt">;
+  row: Omit<AiCallRowT, "dealCreatedAt">;
   dealUrls: { kommoId: number; url: string }[];
   result: AiAnalysis | null; turns: AiTurn[] | null; transcriptHidden: boolean;
   managerChannel: number | null; durationSec: number | null; nextOutboundAt: string | null;
