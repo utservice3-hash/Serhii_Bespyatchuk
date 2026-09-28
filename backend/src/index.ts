@@ -83,6 +83,7 @@ import { syncTldv } from "./jobs/syncTldv.js";
 import { syncWorkua } from "./jobs/syncWorkua.js";
 import { syncCalls } from "./jobs/syncCalls.js";
 import { missedCallTasks } from "./jobs/missedCallTasks.js";
+import { callAiJob } from "./jobs/callAiJob.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
 import { collectLardi } from "./jobs/collectLardi.js";
 import { syncCarriers } from "./jobs/syncCarriers.js";
@@ -638,6 +639,14 @@ cron.schedule("35 * * * *", () => {
   // домішати сюди запис 580 тис. рядків означало б, що падіння дзвінків валить і
   // цифру статистик. Вікно 3 год із запасом перекриває годинний тік.
   void runJob("syncCalls", () => syncCalls(3));
+});
+
+// 🤖 AI-АНАЛІЗ ДЗВІНКІВ ПЕРШОГО ДОТИКУ (ТЗ «AI-аналіз», коміт ④, рішення Романа 28.09.2026).
+// Щогодини о :45 — за 10 хв після годинного `syncCalls` (:35), не на :00/:30 із syncKommo.
+// Тік обмежений часом (8 + 4 хв), тож не наздоганяє наступний. Без ключів — «не ввімкнено»,
+// назовні нуль запитів. Під наглядом (`monitoredJobs.ts`), everyMin == крону — тримає гейт.
+cron.schedule("45 * * * *", () => {
+  void runJob("callAiJob", () => callAiJob());
 });
 
 // Готівка = приход (не бюджет). Легкий фетч приходу по готівкових 142-угодах

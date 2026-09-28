@@ -211,7 +211,9 @@ export const AD_FLAGS: readonly AdFlag[] = ["lead_channel", "ad_deal_sql", "eith
 export function adDealFirstTalksSql(p: AdCallFactsParams, flag: AdFlag, limit: number): { sql: string; params: unknown[] } {
   const { talkMinSec, windowBefore } = assertFactsParams(p);
   if (!AD_FLAGS.includes(flag)) throw new ParamNotSetError("рекламний прапорець (lead_channel / ad_deal_sql / either)");
-  if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error(`limit поза 1..500: ${String(limit)}`);
+  // 5 000, а не 500: джоба бере 30 днів, а це вже 1 107 розмов (замір 28.09.2026) — межа 500
+  // мовчки обрізала б хвіст. Вибірка пілота обмежена окремо, у `parsePilotArgs` (1..100).
+  if (!Number.isInteger(limit) || limit < 1 || limit > 5000) throw new Error(`limit поза 1..5000: ${String(limit)}`);
   const cond = flag === "lead_channel" ? "d0.is_lead_channel_ad" : flag === "ad_deal_sql" ? "d0.is_ad_deal_sql" : "true";
   const sql = `
     WITH ${linkedCallsCtes(p)},

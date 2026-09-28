@@ -25,6 +25,7 @@ export type JobErrorKind =
   | "cancelled"  // запит перервано: deadlock, termination, statement timeout
   | "sheet"      // зовнішня таблиця (Google Sheets) не віддала дані
   | "config"     // інтеграцію не налаштовано: бракує env-змінної або файла ключа
+  | "ai"         // постачальник AI-аналізу (ElevenLabs / Gemini) відмовив — не Kommo
   | "data"       // дані не проходять типи/обмеження БД
   | "unknown";   // текст є, вид не розпізнано
 
@@ -56,6 +57,9 @@ export function classifyJobError(err: string | null | undefined): JobErrorKind {
   if (s.includes("missing required env var") || s.includes("не налаштовано")
       || s.includes("not_configured")) return "config";
 
+  // AI-конвеєр пише помилку порції СВОЇМ словником, без HTTP-кодів (`callAiPipeline.ts`, інваріант 6):
+  // інакше 403/429 постачальника читалися б як «Kommo відмовляє», і тривога радила б крутити темп CRM.
+  if (s.includes("ai-конвеєр")) return "ai";
   if (/\b(403|429)\b/.test(s) || (s.includes("kommo") && /\b5\d\d\b/.test(s))) return "kommo_http";
   if (s.includes("deadlock") || s.includes("terminated") || s.includes("canceling statement")) return "cancelled";
   if (s.includes("out of range") || s.includes("invalid input syntax") || s.includes("violates")) return "data";
@@ -81,6 +85,9 @@ export function adviceForError(kind: JobErrorKind): string {
         + "шукати, хто пише в ту саму таблицю одночасно.";
     case "sheet":
       return "Зовнішня таблиця (Google Sheets) не віддала дані — перевірити доступ до аркуша і код відповіді.";
+    case "ai":
+      return "Відмовив постачальник AI-аналізу (ElevenLabs чи Gemini), а не Kommo: перевірити баланс і квоту "
+        + "ключа в кабінеті постачальника та сам ключ. Дзвінки лишаються в черзі й доберуться наступним тіком.";
     case "config":
       return "Інтеграцію НЕ НАЛАШТОВАНО: бракує env-змінної або файла ключа — це не поломка даних "
         + "і не відмова зовнішнього сервісу. Дивитись `.env` на проді, а не логи запитів.";
