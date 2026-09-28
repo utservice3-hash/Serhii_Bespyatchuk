@@ -7023,7 +7023,9 @@ dashboardRouter.get("/client-card", async (req, res) => {
        («розмов N із M»), тож зникнення недодзвонів із переліку не читається як втрата.
        📐 І друге заміряне число, заради якого це безпечно: відповіданих БЕЗ запису — НУЛЬ.
        Отже кожен рядок переліку має що прослухати, а не кнопку в нікуди. */
-    `SELECT rc.uniqueid, rc.calldate::text, rc.call_type, rc.billsec, rc.disposition, rc.recording,
+    /* 🕐 ЧАС — ЗА КИЄВОМ (28.09.2026): доти тут стояв `calldate::text` у UTC, і розмова 15:17 у переліку
+       показувалась як 12:17 поруч із закріпленим обґрунтуванням, де той самий дзвінок — 15:17. Гейт #816. */
+    `SELECT rc.uniqueid, to_char(rc.calldate AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD HH24:MI') AS calldate, rc.call_type, rc.billsec, rc.disposition, rc.recording,
             COALESCE(m.name, rc.employee_fio) AS manager
        FROM ringostat_calls rc LEFT JOIN managers m ON m.id = rc.manager_id
       WHERE rc.client_key = $1 AND rc.billsec > 0

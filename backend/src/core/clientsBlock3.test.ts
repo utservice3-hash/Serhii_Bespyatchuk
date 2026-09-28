@@ -263,3 +263,18 @@ test("#815c РОУТИ ОБҐРУНТУВАННЯ: межа першою, нал
   assert.match(list, /clearPlanBasis\(\{ clientKey: c\.clientKey, month \}\)/, "🔴 у рядку немає «зняти»");
   assert.match(list, /<ClientCardPanel clientKey=\{c\.clientKey\} onChanged=\{load\} month=\{month\} \/>/, "🔴 картка з екрана планів відкривається без місяця");
 });
+
+/**
+ * #816 — ЧАС РОЗМОВ У КАРТЦІ ЗА КИЄВОМ. Спіймано оком на прийманні 28.09.2026: закріплене
+ * обґрунтування показувало 15:17 (Київ), а той самий дзвінок у переліку картки — 12:17 (UTC).
+ */
+test("#816 ПЕРЕЛІК РОЗМОВ У КАРТЦІ — ЧАС ЗА КИЄВОМ, як обґрунтування і решта дашборда", () => {
+  const dash = read("backend/src/routes/dashboard.ts");
+  const card = dash.slice(dash.indexOf('dashboardRouter.get("/client-card"'));
+  const body = card.slice(0, card.indexOf("\ndashboardRouter.", 10));
+  assert.match(body, /SELECT rc\.uniqueid, to_char\(rc\.calldate AT TIME ZONE 'Europe\/Kyiv', 'YYYY-MM-DD HH24:MI'\) AS calldate/,
+    "🔴 перелік розмов у картці знову бере час не за Києвом — розійдеться з обґрунтуванням на тому ж екрані");
+  assert.doesNotMatch(body, /rc\.calldate::text/, "🔴 повернувся сирий UTC-час розмови");
+  assert.match(read("backend/src/core/planBasis.ts"), /COALESCE\(rc\.calldate, cc\.created_at\) AT TIME ZONE 'Europe\/Kyiv'/,
+    "🔴 обґрунтування показує час не за Києвом");
+});
