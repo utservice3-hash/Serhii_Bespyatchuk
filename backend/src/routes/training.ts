@@ -8,7 +8,7 @@ import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { UPLOAD_DIR } from "./uploads.js";
 import { orderedMaterials, materialStates, coursePercent } from "../core/trainingProgress.js";
 import { stepLockedBy, type LockDb } from "../core/trainingLock.js";
-import { attachVerdict, requiredValue, moduleStats, courseModules, freeModules, reorderVerdict, type EditorFolder } from "../core/trainingEditor.js";
+import { attachVerdict, requiredValue, moduleStats, courseModules, freeModules, reorderVerdict, moveInOrder, type EditorFolder } from "../core/trainingEditor.js";
 import { roleHasPerm } from "../auth/rbac.js";
 import { effectiveMime, mimeFromName } from "../core/trainingMime.js";
 import { checkUpload, MAX_UPLOAD_BYTES, ACCEPT_ATTR } from "../core/trainingUpload.js";
@@ -336,24 +336,32 @@ trainingRouter.put("/material/:id/file", canEditTraining, async (req, res) => {
 
 /**
  * ↕️ ПОРЯДОК (повний редактор, 28.09.2026). `table: "materials"` — уроки однієї теми або частини одного уроку;
- * `"folders"` — теми одного курсу (або підтеми однієї теми). Сусідів визначає ПЕРШИЙ id, а перелік мусить
- * збігтися з ними повністю (`reorderVerdict`). Номери — 1..n одним запитом, щоб рівних не лишилось.
+ * `"folders"` — теми одного курсу (або підтеми однієї теми). Два способи:
+ *   • `{ id, dir: -1 | 1 }` — ↑/↓ на одне місце; порядок будує сервер зі свіжих сусідів (`moveInOrder`);
+ *   • `{ ids }` — повний перелік сусідів, і він мусить збігтися з ними повністю (`reorderVerdict`).
+ * Номери — 1..n одним запитом, щоб рівних не лишилось.
  */
 trainingRouter.post("/reorder", canEditTraining, async (req, res) => {
   const table = req.body?.table;
-  const ids = req.body?.ids;
+  const move = req.body?.id != null;
+  const ids = move ? null : req.body?.ids;
   if (table !== "materials" && table !== "folders") return res.status(400).json({ error: "table: materials або folders" });
-  if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: "ids: непорожній масив" });
-  const first = Number(ids[0]);
+  if (!move && (!Array.isArray(ids) || ids.length === 0)) return res.status(400).json({ error: "ids: непорожній масив або id + dir" });
+  const first = Number(move ? req.body.id : ids![0]);
   const sib = table === "materials"
     ? await pool.query<{ id: number }>(
       `SELECT s.id FROM training_materials s JOIN training_materials f ON f.id = $1
-        WHERE s.folder_id IS NOT DISTINCT FROM f.folder_id AND s.lesson_id IS NOT DISTINCT FROM f.lesson_id`, [first])
+        WHERE s.folder_id IS NOT DISTINCT FROM f.folder_id AND s.lesson_id IS NOT DISTINCT FROM f.lesson_id
+        ORDER BY s.position, s.id`, [first])
     : await pool.query<{ id: number }>(
       `SELECT s.id FROM training_folders s JOIN training_folders f ON f.id = $1
-        WHERE s.parent_id IS NOT DISTINCT FROM f.parent_id AND s.course_id IS NOT DISTINCT FROM f.course_id`, [first]);
+        WHERE s.parent_id IS NOT DISTINCT FROM f.parent_id AND s.course_id IS NOT DISTINCT FROM f.course_id
+        ORDER BY s.position, s.id`, [first]);
   if (!sib.rows.length) return res.status(404).json({ error: "Не знайдено" });
-  const v = reorderVerdict(sib.rows.map((r) => r.id), ids);
+  const sorted = sib.rows.map((r) => r.id);
+  const moved = move ? moveInOrder(sorted, first, req.body?.dir) : null;
+  if (move && !moved) return res.status(400).json({ error: "Далі рухати нікуди — це вже край списку" });
+  const v = reorderVerdict(sorted, moved ?? ids);
   if (!v.ok) return res.status(v.status).json({ error: v.reason });
   const tbl = table === "materials" ? "training_materials" : "training_folders";
   await pool.query(

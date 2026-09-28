@@ -43,6 +43,20 @@ test("#739 ПОРЯДОК: лише повний перелік сусідів, 
   assert.equal(reorderVerdict([1, 2, 3], "3,1,2").ok, false, "🔴 прийнято не масив");
 });
 
+/**
+ * #739b — ↑/↓ МІНЯЄ МІСЦЯМИ РІВНО ДВОХ СУСІДІВ; за край не виходить; чужий id — відмова.
+ * 🧨 Червоніє, якщо рух переставить не того, вийде за край чи прийме довільний крок.
+ */
+test("#739b ПОРЯДОК: ↑/↓ міняє рівно двох сусідів і не виходить за край", async () => {
+  const { moveInOrder } = await import("./trainingEditor.js");
+  assert.deepEqual(moveInOrder([1, 2, 3], 2, -1), [2, 1, 3], "🔴 ↑ переставив не тих");
+  assert.deepEqual(moveInOrder([1, 2, 3], 2, 1), [1, 3, 2], "🔴 ↓ переставив не тих");
+  assert.equal(moveInOrder([1, 2, 3], 1, -1), null, "🔴 перший пішов вище за край");
+  assert.equal(moveInOrder([1, 2, 3], 3, 1), null, "🔴 останній пішов нижче за край");
+  assert.equal(moveInOrder([1, 2, 3], 9, 1), null, "🔴 рух чужого id");
+  assert.equal(moveInOrder([1, 2, 3], 2, 2), null, "🔴 прийнято крок не на одне місце");
+});
+
 /** Схема з нуля в тимчасовому кластері. `null` — кластер недоступний (пропуск із причиною). */
 async function cluster(t: { skip: (m: string) => void }) {
   const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
@@ -149,6 +163,13 @@ test("#738 ЖИВИЙ SQL: заміна файлу, частини уроку, �
       const partial = await call("editor", "post", "/reorder", {}, { table: "materials", ids: [l2] });
       assert.equal(partial.code, 400, "🔴 прийнято неповний порядок");
       assert.deepEqual([(await row(l3)).position, (await row(l2)).position], [1, 2], "🔴 відмовлений порядок зачепив номери");
+      // ↑ з чернеткою серед сусідів: чернетка лишається на своєму місці, міняються рівно двоє.
+      const draft = await add("Чернетка", 9);
+      await s.c.query(`UPDATE training_materials SET status = 'draft' WHERE id = $1`, [draft]);
+      assert.equal((await call("editor", "post", "/reorder", {}, { table: "materials", id: l2, dir: -1 })).code, 200);
+      const order = (await s.c.query(`SELECT id FROM training_materials WHERE folder_id = $1 AND lesson_id IS NULL ORDER BY position, id`, [modA])).rows.map((x) => x.id);
+      assert.deepEqual(order, [l2, l3, draft], "🔴 ↑ переставив не тих або загубив чернетку");
+      assert.equal((await call("editor", "post", "/reorder", {}, { table: "materials", id: l2, dir: -1 })).code, 400, "🔴 перший пішов вище за край");
       const fo = await call("editor", "post", "/reorder", {}, { table: "folders", ids: [modB, modA] });
       assert.equal(fo.code, 200, `🔴 порядок тем не прийнято: ${JSON.stringify(fo.body)}`);
       const fp = (await s.c.query(`SELECT id, position FROM training_folders WHERE id = ANY($1) ORDER BY position`, [[modA, modB]])).rows.map((x) => x.id);

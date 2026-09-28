@@ -92,3 +92,17 @@ export function reorderVerdict(siblings: readonly number[], ids: unknown): Reord
   }
   return { ok: true, ids: list };
 }
+
+/**
+ * ↕️ ↑/↓ НА ОДНЕ МІСЦЕ — порядок будує СЕРВЕР зі свіжих сусідів (`sorted` — за `position`, `id`, як читає курс).
+ * Кнопці не треба знати всіх сусідів (чернетки, які курс не показує, теж сусіди), тож застарілий екран не може
+ * переставити не те. `null` — рух неможливий (уже на краю або id не серед сусідів). Тримає `#739b`.
+ */
+export function moveInOrder(sorted: readonly number[], id: number, dir: unknown): number[] | null {
+  if (dir !== -1 && dir !== 1) return null;
+  const i = sorted.indexOf(id), j = i + dir;
+  if (i < 0 || j < 0 || j >= sorted.length) return null;
+  const out = [...sorted];
+  [out[i], out[j]] = [out[j], out[i]];
+  return out;
+}
