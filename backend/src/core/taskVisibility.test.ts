@@ -36,6 +36,9 @@ const TASKS: { name: string; t: TaskOwnerRow }[] = [
   { name: "МЕНЕДЖЕР СТВОРИВ КОЛЕЗІ", t: row({ assigneeId: 50, assigneeTeamId: 9, createdBy: MGR.userId }) },
   { name: "акаунту-бухгалтеру, автор — тімлід", t: row({ assigneeUserId: 2, createdBy: LEAD.userId }) },
   { name: "акаунту-менеджеру без картки, автор — адмін", t: row({ assigneeUserId: 4, createdBy: ADMIN.userId }) },
+  // 28.09.2026 (#400t): «сам собі» — особиста. Менеджер у команді 7 — щоб тімлід команди теж був перевірений.
+  { name: "САМ СОБІ — менеджер-акаунт", t: row({ assigneeUserId: MGR.userId, assigneeTeamId: 7, createdBy: MGR.userId }) },
+  { name: "САМ СОБІ — HR", t: row({ assigneeUserId: HR.userId, createdBy: HR.userId }) },
 ];
 
 /**
@@ -138,6 +141,40 @@ test("#400e ВЬЮ ai_tasks == визначенню «не особиста» з
     assert.match(ASSIGNED_TASK_SQL, new RegExp(`\\b${c.column}\\b`));
     assert.match(PERSONAL_TASK_SQL, new RegExp(`\\b${c.column}\\b`));
   }
+  // 28.09.2026: визначення перестало бути «будь-яка колонка заповнена» («сам собі» теж особиста),
+  // тож перелік колонок уже не описує вью повністю. Звіряємо умову ДОСЛІВНО з виразом ядра.
+  const norm = (x: string) => x.replace(/\s+/g, " ").trim();
+  assert.equal(norm(where), norm(ASSIGNED_TASK_SQL),
+    "🔴 умова вью ai_tasks не збігається з ASSIGNED_TASK_SQL ядра — ШІ бачить інші задачі, ніж екран");
+});
+
+/**
+ * #400t — «САМ СОБІ» — ОСОБИСТА (рішення Романа 28.09.2026: «цього не має бути»).
+ *
+ * Задачу, де виконавець-акаунт і є автором, бачить лише сам автор — ні HR, ні наскрізний, ні
+ * тімлід його команди. Задача ІНШОМУ акаунту лишається призначеною: її бачить керівництво.
+ * Обидва боки межі в одному гейті, плюс SQL-вирази ядра на тих самих рядках.
+ * 🧨 Червоніє, якщо прибрати умову «виконавець == автор» (у JS чи SQL) або відкрити тімліду
+ * особисті задачі підлеглого.
+ */
+test("#400t «САМ СОБІ» — ОСОБИСТА: бачить лише автор; задача іншому акаунту — як і була", () => {
+  const selfTask = row({ assigneeUserId: MGR.userId, createdBy: MGR.userId, assigneeTeamId: MGR.teamId });
+  assert.ok(isPersonalTask(selfTask), "🔴 задача «сам собі» не вважається особистою");
+  assert.ok(canSeeTask(MGR, selfTask), "🔴 автор не бачить власну задачу «сам собі»");
+  assert.ok(canTouchTask(MGR, selfTask), "автор не може змінити власну задачу «сам собі»");
+  for (const v of [ADMIN, HR, LEAD, OTHER_MGR]) {
+    assert.equal(canSeeTask(v, selfTask), false, `🔴 ${v.role} бачить чужу задачу «сам собі»`);
+    assert.equal(canTouchTask(v, selfTask), false, `🔴 ${v.role} може змінити чужу задачу «сам собі»`);
+  }
+  // Дзеркало: задача ІНШОМУ акаунту — призначена, керівництво й тімлід команди її бачать.
+  const toOther = row({ assigneeUserId: MGR.userId, createdBy: ADMIN.userId, assigneeTeamId: MGR.teamId });
+  assert.equal(isPersonalTask(toOther), false, "🔴 задача іншому акаунту стала особистою");
+  for (const v of [ADMIN, HR, LEAD, MGR]) assert.ok(canSeeTask(v, toOther), `🔴 ${v.role} не бачить задачу, призначену іншому акаунту`);
+  // Авто-задача без автора з виконавцем-акаунтом — призначена (NULL ≠ id).
+  assert.equal(isPersonalTask(row({ assigneeUserId: MGR.userId })), false, "🔴 задача без автора стала особистою");
+  // SQL ядра каже те саме: «сам собі» — у PERSONAL, «іншому» — в ASSIGNED.
+  assert.match(PERSONAL_TASK_SQL, /t\.assignee_user_id = t\.created_by/, "🔴 SQL «особиста» не знає «сам собі»");
+  assert.match(ASSIGNED_TASK_SQL, /t\.assignee_user_id IS DISTINCT FROM t\.created_by/, "🔴 SQL «призначена» не виключає «сам собі»");
 });
 
 /**

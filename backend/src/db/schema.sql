@@ -3040,10 +3040,11 @@ CREATE TABLE IF NOT EXISTS task_views (
 -- особистою НЕ є. Лишивши стару умову, ми отримали б ДВА визначення приватності
 -- в одній системі — рівно той клас, що дав «чипи новий/постійний» і вічний
 -- банер джоби. Гейт `#400e` звіряє цей рядок із функцією `isPersonalTask`.
+-- 28.09.2026: задача «сам собі» (виконавець-акаунт == автор) теж особиста — рішення Романа.
 CREATE OR REPLACE VIEW ai_tasks AS
   SELECT id, title, task_type, status, department, assignee_id, deadline,
          metric, target_value, actual_value, created_at
-    FROM tasks WHERE assignee_id IS NOT NULL OR assignee_user_id IS NOT NULL;
+    FROM tasks t WHERE (t.assignee_id IS NOT NULL OR (t.assignee_user_id IS NOT NULL AND t.assignee_user_id IS DISTINCT FROM t.created_by));
 
 -- Спершу знімаємо все, потім видаємо на дозволене (ідемпотентно, щоразу на міграції).
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ai_readonly;
