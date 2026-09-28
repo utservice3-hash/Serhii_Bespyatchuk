@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  fetchHiringVacancies, createHiringVacancy, patchHiringVacancy, hiringError,
+  fetchHiringVacancies, createHiringVacancy, patchHiringVacancy, hiringError, fetchWorkua, syncWorkuaNow, setVacancyWorkua, type WorkuaState,
   type HiringMeta, type HiringVacancyRow, type HiringVacancyStatus,
 } from "../../../api";
 import { dm, todayKyiv, VACANCY_TONE, isClosedVacancy } from "../hiringView";
@@ -34,6 +34,10 @@ export function HiringVacancies({ meta, toast, onOpenCandidates, onChanged }: {
   const [adding, setAdding] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
   const [menu, setMenu] = useState<{ v: HiringVacancyRow; x: number; y: number } | null>(null);
+  const [wu, setWu] = useState<WorkuaState | null>(null);
+  const [linking, setLinking] = useState<HiringVacancyRow | null>(null);
+  const loadWu = useCallback(() => { fetchWorkua().then(setWu).catch(() => setWu(null)); }, []);
+  useEffect(loadWu, [loadWu]);
   const edit = meta.access === "edit";
 
   const load = useCallback(() => {
@@ -88,6 +92,7 @@ export function HiringVacancies({ meta, toast, onOpenCandidates, onChanged }: {
         <div className="vc-kpi"><span className="k">Днів до закриття</span><span className="v">{avgClose ?? "—"}</span><span className="s">{avgClose == null ? "закритих вакансій ще немає" : `у середньому по ${closed.length} закритих`}</span></div>
         <div className={`vc-kpi ${hotN ? "hot" : ""}`}><span className="k">Понад {LATE_DAYS} днів</span><span className="v">{hotN}</span><span className="s">{hotN ? "вакансії, що горять" : "усе в межах"}</span></div>
       </div>
+      {wu && <WorkuaStrip wu={wu} toast={toast} onSynced={() => { loadWu(); load(); onChanged(); }} />}
       <div className="hr-pills">
         {([["active", `Активні · ${active.length}`], ["closed", `Закриті · ${closed.length}`]] as const).map(([k, l]) => (
           <button key={k} className={scope === k ? "on" : ""} onClick={() => setScope(k)}>{l}</button>
@@ -113,7 +118,8 @@ export function HiringVacancies({ meta, toast, onOpenCandidates, onChanged }: {
                       <div className="hr-muted">{v.opened_by ? `відкрив ${v.opened_by} ` : "відкрито "}{dm(v.opened_on)}
                         {isClosed ? ` · закрито ${dm(v.closed_on)}` : ""}{v.funnel?.sources.length ? ` · ${v.funnel.sources.slice(0, 3).map((x) => `${x.label} ${x.n}`).join(" · ")}` : ""}</div></td>
                     <td><span className={`hr-pill ${VACANCY_TONE[v.status]}`}>{statusLabel(v.status)}</span></td>
-                    <td>{v.responsible || <span className="hr-muted">—</span>}</td>
+                    <td>{v.responsible || <span className="hr-muted">—</span>}
+                      {wu?.summary.links.some((l) => l.vacancyId === v.id) && <div><span className="hr-pill pl" title="Відгуки з цієї вакансії work.ua потрапляють сюди самі">work.ua</span></div>}</td>
                     <td><div className="hr-muted" style={{ marginBottom: 4 }}><b style={{ color: "var(--text)" }}>{hired}</b> із {v.need}{!isClosed && ` · лишилось ${Math.max(0, v.need - hired)}`}</div>
                       <div className="vc-track" title="зелене — прийнято, синє — на навчанні"><i style={{ width: `${p}%`, background: "var(--ok)" }} /><i style={{ width: `${tr}%`, background: "var(--info)", opacity: .55 }} /></div></td>
                     {STAGES.map(([k], i) => {
@@ -154,6 +160,7 @@ export function HiringVacancies({ meta, toast, onOpenCandidates, onChanged }: {
       {menu && createPortal(
         <div className="vc-menu" style={{ top: menu.y + 4, left: Math.max(8, menu.x - 190) }} onClick={(e) => e.stopPropagation()}>
           <button onClick={() => { setEditing(menu.v); setMenu(null); }}>Змінити</button>
+          {wu?.status.configured && <button onClick={() => { setLinking(menu.v); setMenu(null); }}>Привʼязати до work.ua…</button>}
           {menu.v.status === "paused" && <button onClick={() => { void patch(menu.v, { status: "in_work" }, `«${menu.v.title}» знову в роботі`); setMenu(null); }}>Відновити</button>}
           {(menu.v.status === "open" || menu.v.status === "in_work") && <button onClick={() => { void patch(menu.v, { status: "paused" }, `«${menu.v.title}» на паузі`); setMenu(null); }}>Поставити на паузу</button>}
           {menu.v.status === "open" && <button onClick={() => { void patch(menu.v, { status: "in_work" }, `«${menu.v.title}» в роботі`); setMenu(null); }}>Позначити «в роботі»</button>}
@@ -163,6 +170,8 @@ export function HiringVacancies({ meta, toast, onOpenCandidates, onChanged }: {
         </div>, document.body)}
       {open && <VacancyDrawer v={open} statusLabel={statusLabel} onClose={() => setOpenId(null)} onCandidates={() => onOpenCandidates(open.id)} />}
       <datalist id="hr-vac-resp">{meta.responsibles.map((x) => <option key={x} value={x} />)}</datalist>
+      {linking && wu && <WorkuaLinkDialog v={linking} wu={wu} onClose={() => setLinking(null)}
+        onDone={(msg) => { setLinking(null); toast(msg); loadWu(); }} />}
       {editing && <EditVacancy v={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); toast("Вакансію змінено"); load(); onChanged(); }} />}
       {closing && <CloseVacancy meta={meta} v={closing} onClose={() => setClosing(null)} onDone={() => { setClosing(null); toast(`«${closing.title}» закрито`); load(); onChanged(); }} />}
       {adding && <AddVacancy meta={meta} onClose={() => setAdding(false)} onDone={() => { setAdding(false); toast("Вакансію відкрито"); load(); onChanged(); }} />}
@@ -295,6 +304,71 @@ function AddVacancy({ meta, onClose, onDone }: { meta: HiringMeta; onClose: () =
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
           <button className="hr-btn" onClick={onClose}>Скасувати</button>
           <button className="hr-btn p" onClick={() => void save()}>Відкрити вакансію</button>
+        </div>
+      </div>
+    </div>, document.body);
+}
+
+
+/**
+ * 💼 СМУГА WORK.UA над списком вакансій: підключено чи ні, скільки відгуків забрано (нових / повторних), скільки
+ * лягло без вакансії, і «Перевірити зараз». Без логіна — «не підключено», а не порожнеча (різні стани).
+ */
+function WorkuaStrip({ wu, toast, onSynced }: { wu: WorkuaState; toast: Toast; onSynced: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const { status: st, summary: sm } = wu;
+  const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
+  return (
+    <div className="hr-note" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", margin: "0 0 12px" }}>
+      <span style={{ flex: "1 1 320px" }}>
+        <b>work.ua</b>{" · "}
+        {!st.configured ? "не підключено: немає логіна інтеграції"
+          : <>відгуків забрано {sm.total} (нових кандидатів {sm.created}, повторних {sm.repeat})
+            {sm.novac ? <> · <span style={{ color: "var(--warn)" }}>без вакансії {sm.novac}</span></> : null}
+            {" · "}останній відгук {when(sm.last)}{st.lastRunAt ? ` · перевірено ${when(st.lastRunAt)}` : ""}
+            {st.lastError || wu.jobsError ? <> · <span style={{ color: "var(--danger)" }}>{st.lastError ?? wu.jobsError}</span></> : null}</>}
+      </span>
+      {st.configured && <button className="hr-btn xs" disabled={busy} onClick={() => {
+        setBusy(true);
+        void syncWorkuaNow().then((r) => { toast(r.reason ? r.reason : `work.ua: нових ${r.created ?? 0}, повторних ${r.repeat ?? 0}`); onSynced(); })
+          .catch((e) => toast(hiringError(e), { error: true })).finally(() => setBusy(false));
+      }}>{busy ? "Перевіряю…" : "Перевірити зараз"}</button>}
+    </div>
+  );
+}
+
+/** Привʼязати нашу вакансію до вакансії work.ua: активні зверху; «не привʼязано» — відвʼязати. */
+function WorkuaLinkDialog({ v, wu, onClose, onDone }: { v: HiringVacancyRow; wu: WorkuaState; onClose: () => void; onDone: (msg: string) => void }) {
+  const cur = wu.summary.links.find((l) => l.vacancyId === v.id)?.jobId ?? null;
+  const [job, setJob] = useState<string>(cur ? String(cur) : "");
+  const [err, setErr] = useState<string | null>(null);
+  const jobs = [...(wu.jobs ?? [])].sort((a, b) => Number(b.active) - Number(a.active) || (b.date ?? "").localeCompare(a.date ?? ""));
+  const taken = new Map(wu.summary.links.filter((l) => l.vacancyId !== v.id).map((l) => [l.jobId, l.vacancyId]));
+  const save = async () => {
+    try {
+      await setVacancyWorkua(v.id, job ? Number(job) : null);
+      onDone(job ? `«${v.title}» привʼязано до work.ua` : `«${v.title}» відвʼязано від work.ua`);
+    } catch (e) { setErr(hiringError(e)); }
+  };
+  return createPortal(
+    <div className="hr-modal-back" onClick={onClose}>
+      <div className="hr-modal" role="dialog" aria-label="Привʼязати до work.ua" onClick={(e) => e.stopPropagation()} style={{ width: "min(520px, 96vw)" }}>
+        <h3 style={{ margin: "0 0 4px", fontSize: 16 }}>Привʼязати до work.ua</h3>
+        <p className="hr-muted" style={{ margin: "0 0 12px", fontSize: 13 }}>
+          «{v.title}». Відгуки з обраної вакансії work.ua самі потраплятимуть сюди. Кандидати з тим самим телефоном не дублюються.
+        </p>
+        {wu.jobs == null ? <p style={{ color: "var(--danger)" }}>Список вакансій work.ua недоступний{wu.jobsError ? `: ${wu.jobsError}` : ""}.</p> : (
+          <select className="hr-inp" style={{ width: "100%" }} value={job} onChange={(e) => { setJob(e.target.value); setErr(null); }}>
+            <option value="">— не привʼязано —</option>
+            {jobs.map((j) => <option key={j.id} value={j.id} disabled={taken.has(j.id)}>
+              {j.active ? "● " : ""}{j.name}{j.date ? ` · ${j.date.slice(8, 10)}.${j.date.slice(5, 7)}.${j.date.slice(0, 4)}` : ""}{taken.has(j.id) ? " (привʼязано до іншої)" : ""}
+            </option>)}
+          </select>
+        )}
+        {err && <div style={{ color: "var(--danger)", fontSize: 12, marginTop: 8 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+          <button className="hr-btn" onClick={onClose}>Скасувати</button>
+          <button className="hr-btn p" disabled={wu.jobs == null} onClick={() => void save()}>Зберегти</button>
         </div>
       </div>
     </div>, document.body);

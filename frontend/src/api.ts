@@ -4290,6 +4290,20 @@ export const createHiringInterviewFor = async (p: {
   interviewDate: string; interviewTime?: string; responsible?: string; candidateId?: number;
   newCandidate?: { fullName: string; phone: string; vacancyId: number; source?: string; telegram?: string };
 }) => (await api.post<HiringCreatedInterview>("/hiring/interviews", p)).data;
+// 🎥 Записи співбесід tl;dv (23.09.2026) — `backend/src/core/tldvStore.ts`.
+export interface TldvPending {
+  id: string; name: string | null; happenedAt: string | null; durationMin: number | null; url: string | null;
+  organizer: string | null; invitees: number; how: "email" | "time" | "none" | "many";
+  suggestions: { interviewId: number; label: string }[];
+}
+export interface TldvState {
+  status: { configured: boolean; lastRunAt: string | null; lastError: string | null; seen: number; linked: number; pending: number };
+  pending: TldvPending[];
+}
+export const fetchTldv = async () => (await api.get<TldvState>("/hiring/tldv")).data;
+export const syncTldvNow = async () => (await api.post<{ seen?: number; linked?: number; pending?: number; reason?: string }>("/hiring/tldv/sync")).data;
+export const linkTldv = async (meetingId: string, interviewId: number) => { await api.post(`/hiring/tldv/${meetingId}/link`, { interviewId }); };
+export const ignoreTldv = async (meetingId: string, ignored = true) => { await api.post(`/hiring/tldv/${meetingId}/ignore`, { ignored }); };
 export const patchHiringInterview = async (id: number, patch: Record<string, unknown>) =>
   (await api.patch<{ candidateId: number | null; repeat?: { id: number; full_name: string; status: HiringStatus } }>(`/hiring/interviews/${id}`, patch)).data;
 export const deleteHiringInterview = async (id: number) => { await api.delete(`/hiring/interviews/${id}`); };
@@ -4345,6 +4359,16 @@ export const fetchHiringSummary = async (p: { from: string; to: string; vacancyI
 // ── Найм, прохід 1a: вакансії, відмова, резерв, файли-докази ──
 export const fetchHiringVacancies = async (scope: "active" | "closed" | "all") =>
   (await api.get<{ rows: HiringVacancyRow[] }>("/hiring/vacancies", { params: { scope } })).data.rows;
+// 💼 Відгуки з work.ua (28.09.2026) — `backend/src/core/workuaStore.ts`, `jobs/syncWorkua.ts`.
+export interface WorkuaJob { id: number; name: string; active: boolean; date: string | null }
+export interface WorkuaState {
+  status: { configured: boolean; lastRunAt: string | null; lastError: string | null; lastBatch: { created: number; repeat: number; files: number } | null };
+  summary: { total: number; created: number; repeat: number; novac: number; last: string | null; links: { vacancyId: number; jobId: number }[] };
+  jobs: WorkuaJob[] | null; jobsError: string | null;
+}
+export const fetchWorkua = async () => (await api.get<WorkuaState>("/hiring/workua")).data;
+export const syncWorkuaNow = async () => (await api.post<{ created?: number; repeat?: number; skipped?: number | boolean; reason?: string }>("/hiring/workua/sync")).data;
+export const setVacancyWorkua = async (vacancyId: number, jobId: number | null) => { await api.put(`/hiring/vacancies/${vacancyId}/workua`, { jobId }); };
 export const createHiringVacancy = async (p: Record<string, unknown>) => (await api.post<{ id: number }>("/hiring/vacancies", p)).data.id;
 export const patchHiringVacancy = async (id: number, p: Record<string, unknown>) => { await api.patch(`/hiring/vacancies/${id}`, p); };
 export const setHiringCandidateVacancies = async (id: number, vacancyIds: number[]) => { await api.put(`/hiring/candidates/${id}/vacancies`, { vacancyIds }); };
