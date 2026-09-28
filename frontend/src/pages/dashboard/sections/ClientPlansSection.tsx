@@ -3,7 +3,7 @@ import type { AuthPayload } from "../../../auth";
 import {
   fetchClientPlans, saveClientPlan, submitClientPlans, approveClientPlans, returnClientPlan,
   createClientReactivationTask, addClientContact, contactChannelLabel, closeReactivationTask,
-  fetchClientComments, addClientComment,
+  fetchClientComments, addClientComment, clearPlanBasis,
   type ClientPlansResp, type ClientPlanRow, type ClientComment, type ManagerOption,
 } from "../../../api";
 import { formatAmountFull } from "../format";
@@ -78,6 +78,12 @@ function Tile({ title, value, sub, tone }: { title: string; value: string; sub?:
       {sub && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>{sub}</div>}
     </div>
   );
+}
+
+/** Тривалість розмови `m:ss` — так її читають у Ringostat. */
+function fmtSec(sec: number | null | undefined): string {
+  if (sec == null) return "";
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
 }
 
 function LastOrder({ days }: { days: number | null }) {
@@ -212,7 +218,9 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
   const [closing, setClosing] = useState<{ taskId: number; name: string } | null>(null);
   const [contacting, setContacting] = useState<{ clientKey: string; name: string } | null>(null);
   /** 📎 Скрини клієнта, відкриті з рядка (задача 4310, п.1.3): перегляд на місці, не вкладка. */
-  const [viewingFiles, setViewingFiles] = useState<{ clientKey: string; name: string } | null>(null);
+  const [viewingFiles, setViewingFiles] = useState<{ clientKey: string; name: string; initialId?: number | null } | null>(null);
+  /** 🎧 Який запис грає просто в рядку (п.3.3): один ключ — одне аудіо, як у картці. */
+  const [playing, setPlaying] = useState<string | null>(null);
   // 🔴 ДЕФОЛТ — «НАЙГІРШІ ЗВЕРХУ» (рішення власника 04.08.2026): екран планування
   // існує, щоб бачити проблеми, а не щоб милуватись лідерами. Другий режим —
   // «найбільші зверху» (факт з рахунку), коли треба дивитись на обсяг.
@@ -273,6 +281,8 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
   if (!data) return <div style={{ ...S.card, color: "#6b7280" }}>завантаження…</div>;
 
   const t = data.totals;
+  /** «вересень» для підпису «📞 за вересень» — місяць екрана, а не поточний. */
+  const monthName = new Date(`${data.month}-01T00:00:00Z`).toLocaleDateString("uk-UA", { month: "long", timeZone: "UTC" });
   const shift = (d: number) => {
     const dt = new Date(`${month}-01T00:00:00Z`); dt.setUTCMonth(dt.getUTCMonth() + d);
     setMonth(dt.toISOString().slice(0, 7));
@@ -401,18 +411,40 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
             Ringostat АБО ручний контакт (Viber/Telegram, зі скрином), недодзвони окремо. */}
         <td style={S.td}>
           <div style={{ fontSize: 12, lineHeight: 1.4 }}>
-            {c.lastContact ? (
-              <div title={c.lastContact.source === "talk" ? "остання розмова по Ringostat (billsec > 0)" : `ручний контакт: ${contactChannelLabel(c.lastContact.channel)}`}>
-                {c.lastContact.source === "talk" ? "📞" : "📱"} {c.lastContact.at.slice(0, 10).split("-").reverse().slice(0, 2).join(".")}
-                {c.lastContact.source === "manual" && <span style={{ color: "#6b7280" }}> · {contactChannelLabel(c.lastContact.channel)}</span>}
-                {/* 📎 КНОПКА, А НЕ ПОЗНАЧКА (задача 4310, п.1.3): доти значок лише казав «скрин є»,
-                    а відкрити його з рядка було нічим. */}
-                {c.lastContact.source === "manual" && c.lastContactHasFile && (
-                  <button type="button" title="Переглянути скрин"
-                    onClick={() => setViewingFiles({ clientKey: c.clientKey, name: c.clientName ?? c.clientKey })}
-                    style={{ marginLeft: 4, border: "none", background: "transparent", cursor: "pointer", fontSize: 12, padding: 0 }}>📎</button>
-                )}
+            {/* 🎧 ОСТАННЯ РОЗМОВА — ОДРАЗУ ПОСЛУХАТИ (ТЗ 22.09, п.3.3). Запис — з того самого рядка ядра,
+                що й дата розмови, тож ▶ грає саме цей дзвінок. */}
+            {c.lastTalk && c.lastTalkRecording && (
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <button type="button" onClick={() => setPlaying(playing === `talk:${c.clientKey}` ? null : `talk:${c.clientKey}`)}
+                  title={playing === `talk:${c.clientKey}` ? "Згорнути плеєр" : "Послухати останню розмову"}
+                  style={{ border: "1px solid #2563eb", color: "#2563eb", background: "#fff", borderRadius: 999, width: 22, height: 22, cursor: "pointer", fontSize: 10, padding: 0 }}>
+                  {playing === `talk:${c.clientKey}` ? "⏹" : "▶"}
+                </button>
+                <span>розмова {c.lastTalk.slice(5).split("-").reverse().join(".")} · {fmtSec(c.lastTalkSec)}{c.lastTalkBy ? ` · ${c.lastTalkBy}` : ""}</span>
               </div>
+            )}
+            {playing === `talk:${c.clientKey}` && c.lastTalkRecording && (
+              <audio src={c.lastTalkRecording} controls autoPlay preload="none" style={{ height: 28, width: 230, margin: "3px 0" }} />
+            )}
+            {/* 📞 Дзвінків за ОБРАНИЙ місяць (п.3.3): розмови й усі дзвінки — два числа, не сума. */}
+            <div style={{ color: "#374151" }} title="розмови (з відповіддю) / усі дзвінки за місяць екрана; ядро core/clientCalls.ts">
+              📞 за {monthName}: {c.callsMonth.talks}/{c.callsMonth.calls}
+            </div>
+            {c.lastContact ? (
+              /* Остання розмова вже показана рядком із ▶ — не дублюємо її ще раз. */
+              c.lastContact.source === "talk" && c.lastTalkRecording ? null : (
+                <div title={c.lastContact.source === "talk" ? "остання розмова по Ringostat (billsec > 0)" : `ручний контакт: ${contactChannelLabel(c.lastContact.channel)}`}>
+                  {c.lastContact.source === "talk" ? "📞" : "📱"} {c.lastContact.at.slice(0, 10).split("-").reverse().slice(0, 2).join(".")}
+                  {c.lastContact.source === "manual" && <span style={{ color: "#6b7280" }}> · {contactChannelLabel(c.lastContact.channel)}</span>}
+                  {/* 📎 КНОПКА, А НЕ ПОЗНАЧКА (задача 4310, п.1.3): доти значок лише казав «скрин є»,
+                      а відкрити його з рядка було нічим. */}
+                  {c.lastContact.source === "manual" && c.lastContactHasFile && (
+                    <button type="button" title="Переглянути скрин"
+                      onClick={() => setViewingFiles({ clientKey: c.clientKey, name: c.clientName ?? c.clientKey })}
+                      style={{ marginLeft: 4, border: "none", background: "transparent", cursor: "pointer", fontSize: 12, padding: 0 }}>📎</button>
+                  )}
+                </div>
+              )
             ) : c.phone === "none" ? (
               <span style={{ color: "#b45309" }} title="у контактах клієнта немає жодного номера — дзвінки не привʼязуються">📵 нема номера</span>
             ) : (
@@ -494,6 +526,31 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           </div>
           <div style={{ marginTop: 4 }}><span style={S.chip(st.bg, st.fg)}>{st.label}</span></div>
           {c.reviewNote && <div style={{ fontSize: 11, color: "#b45309", marginTop: 3 }} title="коментар тімліда">↩ {c.reviewNote}</div>}
+          {/* 📌 ОБҐРУНТУВАННЯ ПЛАНУ (ТЗ 22.09, п.3.3): закріплюють у картці, тут — видно й можна зняти. */}
+          {c.planBasis ? (
+            <div style={{ fontSize: 11, color: "#1e3a8a", marginTop: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <span>📌 {c.planBasis.kind === "call"
+                ? `розмова ${(c.planBasis.at ?? "").slice(5, 10).split("-").reverse().join(".")} · ${fmtSec(c.planBasis.sec)}`
+                : `скрин ${(c.planBasis.at ?? "").slice(5, 10).split("-").reverse().join(".")}`}</span>
+              {c.planBasis.kind === "call" && c.planBasis.recording && (
+                <button type="button" onClick={() => setPlaying(playing === `basis:${c.clientKey}` ? null : `basis:${c.clientKey}`)}
+                  style={{ border: "none", background: "transparent", color: "#2563eb", cursor: "pointer", fontSize: 11, padding: 0 }}>
+                  {playing === `basis:${c.clientKey}` ? "⏹" : "▶ послухати"}
+                </button>
+              )}
+              {c.planBasis.kind === "contact" && (
+                <button type="button" onClick={() => setViewingFiles({ clientKey: c.clientKey, name: c.clientName, initialId: c.planBasis?.contactId })}
+                  style={{ border: "none", background: "transparent", color: "#2563eb", cursor: "pointer", fontSize: 11, padding: 0 }}>переглянути</button>
+              )}
+              <button type="button" disabled={busy} onClick={() => act(() => clearPlanBasis({ clientKey: c.clientKey, month }))}
+                title="Зняти обґрунтування" style={{ border: "none", background: "transparent", color: "#6b7280", cursor: "pointer", fontSize: 11, padding: 0, textDecoration: "underline" }}>зняти</button>
+            </div>
+          ) : c.plan > 0 ? (
+            <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }} title="Закріпити розмову або скрин можна в картці клієнта (▼)">📌 обґрунтування не закріплене</div>
+          ) : null}
+          {playing === `basis:${c.clientKey}` && c.planBasis?.recording && (
+            <audio src={c.planBasis.recording} controls autoPlay preload="none" style={{ height: 28, width: 200, marginTop: 3 }} />
+          )}
         </td>
         {weeksOpen && (
           <td style={S.td}>
@@ -528,7 +585,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         <td style={S.td}>
           <button onClick={() => setOpen(isOpen ? null : c.clientKey)}
             style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 13 }}>
-            💬 {c.comments} · <span title={`розмов ${c.callsYear.talks} із ${c.callsYear.calls} дзвінків за ${c.callsYear.year} — те саме число, що рядок ${c.callsYear.year} у картці`}>📞 {c.callsYear.talks}/{c.callsYear.calls}</span> · {isOpen ? "▲" : "▼"}
+            💬 {c.comments} · {isOpen ? "▲" : "▼"}
           </button>
           {isLead && c.planStatus !== "draft" && c.planStatus !== "none" && (
             <button disabled={busy}
@@ -545,7 +602,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
                 рядок і розгортають), під нею — коментарі й дзвінки. */}
             {/* onChanged — щоб «прибрати з постійних» одразу зникло з цього ж
                 списку, а не лишалось рядком, який уже не існує за правилом. */}
-            <ClientCardPanel clientKey={c.clientKey} onChanged={load} />
+            <ClientCardPanel clientKey={c.clientKey} onChanged={load} month={month} />
             {/* 📞 Панель «перелік дзвінків ще не побудований» прибрано (задача 4310): картка вище
                 вже показує дзвінки по роках із записами, і та панель стверджувала неправду. */}
             <div style={{ marginTop: 16, borderTop: "1px solid #e5e7eb", paddingTop: 14 }}>
@@ -911,7 +968,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
       )}
       {viewingFiles && (
         <ClientContactFileViewer clientKey={viewingFiles.clientKey} clientName={viewingFiles.name}
-          onClose={() => setViewingFiles(null)} />
+          initialId={viewingFiles.initialId ?? null} onClose={() => setViewingFiles(null)} />
       )}
       {contacting && (
         <ContactDialog client={contacting} busy={busy}

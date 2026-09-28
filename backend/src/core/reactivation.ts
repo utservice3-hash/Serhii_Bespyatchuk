@@ -120,6 +120,14 @@ export interface ReactivationClient {
   /** `in` — клієнт дзвонив нам, `out` — ми йому. */
   lastTalkDirection: "in" | "out" | null;
   /**
+   * 🎧 ТА САМА розмова, що `lastTalk` (ТЗ Юлі 22.09, п.3.3): запис, тривалість, хто говорив —
+   * з того самого рядка того самого запиту, щоб «послухати» грало саме той дзвінок, дата якого
+   * показана. Запис — прямий лінк Ringostat (рішення власника 05.08.2026: без проксі).
+   */
+  lastTalkRecording: string | null;
+  lastTalkSec: number | null;
+  lastTalkBy: string | null;
+  /**
    * СПРОБИ — окремо від контакту: дзвінки без відповіді ПІСЛЯ останньої розмови
    * (а якщо розмови не було жодної — усі). Саме цим видно, що менеджер працює,
    * хоча контакту ще немає. Складати зі `lastTalk` в одну цифру ЗАБОРОНЕНО —
@@ -194,6 +202,7 @@ export async function clientStates(
     pinned_manager_id: number | null; seasonal: boolean | null; seasonal_note: string | null;
     revenue_after_task: string | null;
     last_talk: string | null; last_talk_days: string | null; last_talk_type: string | null;
+    last_talk_recording: string | null; last_talk_sec: number | null; last_talk_by: string | null;
     attempts: string | null; last_attempt: string | null; last_attempt_days: string | null;
   }>(
     `WITH ${LAST_PAID_CTE},
@@ -222,6 +231,9 @@ export async function clientStates(
             to_char(lt.calldate ${KYIV}, 'YYYY-MM-DD') AS last_talk,
             (CURRENT_DATE - (lt.calldate ${KYIV})::date)::int AS last_talk_days,
             lt.call_type AS last_talk_type,
+            lt.recording AS last_talk_recording,
+            lt.billsec AS last_talk_sec,
+            lt.talk_by AS last_talk_by,
             at.n AS attempts,
             to_char(at.last_at ${KYIV}, 'YYYY-MM-DD') AS last_attempt,
             (CURRENT_DATE - (at.last_at ${KYIV})::date)::int AS last_attempt_days
@@ -248,7 +260,9 @@ export async function clientStates(
        -- читанням на клієнта. LEFT JOIN — бо «розмов немає» це РЕЗУЛЬТАТ, а не
        -- привід викинути клієнта зі списку реактивації.
        LEFT JOIN LATERAL (
-         SELECT rc.calldate, rc.call_type FROM ringostat_calls rc
+         SELECT rc.calldate, rc.call_type, rc.recording, rc.billsec,
+                COALESCE(mt.name, rc.employee_fio) AS talk_by
+           FROM ringostat_calls rc LEFT JOIN managers mt ON mt.id = rc.manager_id
           WHERE rc.client_key = a.client_key AND rc.billsec > 0
           ORDER BY rc.calldate DESC LIMIT 1
        ) lt ON true
@@ -300,6 +314,9 @@ export async function clientStates(
       lastTalkDays: r.last_talk_days == null ? null : Number(r.last_talk_days),
       lastTalkDirection: r.last_talk_type == null ? null
         : (r.last_talk_type === "out" || r.last_talk_type === "transitout" ? "out" : "in"),
+      lastTalkRecording: r.last_talk_recording ?? null,
+      lastTalkSec: r.last_talk_sec == null ? null : Number(r.last_talk_sec),
+      lastTalkBy: r.last_talk_by ?? null,
       attempts: Number(r.attempts ?? 0),
       lastAttempt: r.last_attempt,
       lastAttemptDays: r.last_attempt_days == null ? null : Number(r.last_attempt_days),

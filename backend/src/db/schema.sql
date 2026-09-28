@@ -3983,6 +3983,21 @@ CREATE TABLE IF NOT EXISTS client_next_steps (
 );
 CREATE INDEX IF NOT EXISTS idx_client_next_steps_open ON client_next_steps(client_key) WHERE done_at IS NULL;
 
+-- 📌 ОБҐРУНТУВАННЯ ПЛАНУ (ТЗ Юлі 22.09.2026, п.3.3; задача 4312) — див. core/planBasis.ts.
+-- Одне на клієнта й місяць; АБО дзвінок Ringostat, АБО скрин контакту — CHECK тримає «рівно одне».
+-- Контакт видалили → обґрунтування зникає разом із ним (CASCADE); дзвінки з ringostat_calls не
+-- видаляються, тож для них каскад не потрібен. ⚠️ revert коду таблицю не прибирає (вона порожня й нешкідлива).
+CREATE TABLE IF NOT EXISTS client_plan_basis (
+  client_key    TEXT NOT NULL,
+  month         DATE NOT NULL,
+  call_uniqueid TEXT REFERENCES ringostat_calls(uniqueid),
+  contact_id    INTEGER REFERENCES client_contacts(id) ON DELETE CASCADE,
+  set_by        INTEGER REFERENCES users(id),
+  set_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (client_key, month),
+  CONSTRAINT client_plan_basis_one CHECK ((call_uniqueid IS NULL) <> (contact_id IS NULL))
+);
+
 -- 🎓 ОДНОРАЗОВИЙ ПЕРЕНОС АКАДЕМІЇ SEREDA (23.09.2026, рішення Романа: «переносимо все, далі навчання живе
 -- на нашому сервері»). `external_id` — ключ ідемпотентності імпорту: повторний прогін ОНОВЛЮЄ той самий
 -- рядок, а не створює другий. Після переносу Sereda не потрібна; колонки лишаються слідом походження.

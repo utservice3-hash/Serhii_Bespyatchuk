@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Cell } from "recharts";
-import { fetchClientCard, archiveClient, saveLoyaltyOverride, contactChannelLabel, saveClientNextStep, doneClientNextStep, type ClientCard } from "../../../api";
+import { fetchClientCard, archiveClient, saveLoyaltyOverride, contactChannelLabel, saveClientNextStep, doneClientNextStep, pinPlanBasis, clearPlanBasis, type ClientCard } from "../../../api";
 import { ClientContactFileViewer } from "./ClientContactFileViewer";
 import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
 import { formatAmountFull } from "../format";
@@ -24,8 +24,13 @@ const ADMIN_ACTION_LABEL: Record<string, string> = {
   manager_change: "👤 зміна відповідального",
 };
 
-export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; onChanged?: () => void }) {
-  const [openYear, setOpenYear] = useState<number | null>(null);
+/**
+ * `month` — місяць екрана, з якого відкрили картку (`YYYY-MM`): до нього кріпиться обґрунтування
+ * плану (ТЗ 22.09, п.3.3). Без нього (екран пропущених дзвінків) сервер бере поточний місяць.
+ */
+export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: string; onChanged?: () => void; month?: string }) {
+  /** 📞 Показати всі розмови, а не лише останні 10 (п.3.4: статистику по роках прибрано, список лишився). */
+  const [allCalls, setAllCalls] = useState(false);
   /* 🎧 ПЛЕЄР У КАРТЦІ, А НЕ В НОВІЙ ВКЛАДЦІ (рішення власника 08.09.2026: «зроби
      програвач в системі»). Відкритий рівно ОДИН запис: місця в картці мало, і два
      аудіо одночасно — це не прослуховування, а шум. Ключ — момент дзвінка + індекс,
@@ -46,13 +51,28 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
   const [assigning, setAssigning] = useState(false);
   const load = useCallback(() => {
     setCard(null); setErr(null);
-    fetchClientCard(clientKey).then(setCard)
+    fetchClientCard(clientKey, month).then(setCard)
       .catch((e) => setErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "не вдалося завантажити картку"));
-  }, [clientKey]);
+  }, [clientKey, month]);
   useEffect(load, [load]);
 
   if (err) return <div style={{ fontSize: 12, color: "#b91c1c" }}>{err}</div>;
   if (!card) return <div style={{ fontSize: 12, color: "#9ca3af" }}>завантаження картки…</div>;
+
+  /** 📌 Закріпити / зняти обґрунтування (п.3.3). Відмову сервера показуємо, а не ковтаємо. */
+  const basisMonth = card.basisMonth ?? month ?? "";
+  const pin = async (target: { callId?: string; contactId?: number }) => {
+    setBusy(true);
+    try { await pinPlanBasis({ clientKey, month: basisMonth, ...target }); load(); onChanged?.(); }
+    catch (e) { alert((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "не вдалося закріпити"); }
+    finally { setBusy(false); }
+  };
+  const unpin = async () => {
+    setBusy(true);
+    try { await clearPlanBasis({ clientKey, month: basisMonth }); load(); onChanged?.(); }
+    catch (e) { alert((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "не вдалося зняти"); }
+    finally { setBusy(false); }
+  };
 
   const data = card.months.map((m) => ({
     label: m.month.slice(2).split("-").reverse().join("."),   // 07.26
@@ -284,23 +304,24 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
         )}
       </div>
 
-      {card.callsByYear && card.callsByYear.length > 0 && (
+      {/* 📌 Поточне обґрунтування плану на місяць екрана — одним рядком, зі «зняти» (парна дія). */}
+      {card.planBasis && (
+        <div style={{ fontSize: 12, margin: "12px 0 4px", color: "#1e3a8a" }}>
+          📌 Обґрунтування плану на {card.basisMonth}: {card.planBasis.kind === "call"
+            ? `розмова ${card.planBasis.at ?? ""}${card.planBasis.sec != null ? ` · ${Math.floor(card.planBasis.sec / 60)}:${String(card.planBasis.sec % 60).padStart(2, "0")}` : ""}${card.planBasis.by ? ` · ${card.planBasis.by}` : ""}`
+            : `скрин ${card.planBasis.at ?? ""}${card.planBasis.fileName ? ` · ${card.planBasis.fileName}` : ""}`}
+          <button type="button" disabled={busy} onClick={unpin}
+            style={{ marginLeft: 8, fontSize: 11, border: "none", background: "transparent", color: "#6b7280", cursor: "pointer", textDecoration: "underline" }}>зняти</button>
+        </div>
+      )}
+
+      {/* 📞 ОСТАННІ РОЗМОВИ (ТЗ 22.09, п.3.4): статистику «Дзвінки по роках» прибрано, а список із записами
+          лишився — інакше нема де слухати й нема що закріпити як обґрунтування (п.3.3). */}
+      {card.calls && card.calls.length > 0 && (
         <>
-          <div style={{ fontWeight: 700, fontSize: 13, margin: "12px 0 6px" }}>📞 Дзвінки по роках</div>
-          {card.callsByYear.map((y) => (
-            <div key={y.year} style={{ borderBottom: "1px solid #f1f5f9" }}>
-              <button onClick={() => setOpenYear(openYear === y.year ? null : y.year)}
-                style={{ display: "flex", gap: 10, alignItems: "center", width: "100%", textAlign: "left",
-                         background: "none", border: "none", cursor: "pointer", padding: "7px 2px", fontSize: 12 }}>
-                <span style={{ color: "#6b7280" }}>{openYear === y.year ? "▾" : "▸"}</span>
-                <b style={{ minWidth: 42 }}>{y.year}</b>
-                <span>розмов <b>{y.talks}</b> із {y.calls}</span>
-                <span style={{ color: "#6b7280" }}>· {Math.round(y.totalSec / 60)} хв</span>
-                {y.lastAt && <span style={{ color: "#6b7280" }}>· останній {y.lastAt.slice(0, 10)}</span>}
-              </button>
-              {openYear === y.year && card.calls && (
-                <div style={{ maxHeight: 190, overflowY: "auto", margin: "0 0 8px 22px" }}>
-                  {card.calls.filter((c) => new Date(c.at).getFullYear() === y.year).map((c, i) => {
+          <div style={{ fontWeight: 700, fontSize: 13, margin: "12px 0 6px" }}>📞 Останні розмови</div>
+          <div style={{ maxHeight: allCalls ? 320 : undefined, overflowY: allCalls ? "auto" : undefined }}>
+            {(allCalls ? card.calls : card.calls.slice(0, 10)).map((c, i) => {
                     const key = `${c.at}#${i}`;
                     const open = openCall === key;
                     return (
@@ -324,6 +345,12 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
                             {open ? "⏹" : "▶"}
                           </button>
                         )}
+                        {/* 📌 ОБҐРУНТУВАННЯ ПЛАНУ (ТЗ 22.09, п.3.3): рівно одне на місяць; повторне — замінює. */}
+                        {card.planBasis?.callId === c.id
+                          ? <span style={{ fontSize: 11, fontWeight: 700, color: "#1e3a8a" }}>📌 обґрунтування</span>
+                          : <button type="button" disabled={busy} onClick={() => pin({ callId: c.id })}
+                              title="Закріпити цю розмову як обґрунтування плану"
+                              style={{ fontSize: 11, padding: "1px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>📌</button>}
                       </div>
                       {open && c.recording && (
                         <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "4px 0 2px" }}>
@@ -342,16 +369,20 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
                       )}
                     </div>
                     );
-                  })}
-                </div>
-              )}
-            </div>
-          ))}
-          {/* 🔴 Обрізання й глибина памʼяті НАЗВАНІ. Порожній рік без цього підпису
-              читався б як «клієнт не дзвонив», хоча даних просто не існує. */}
-          <div style={{ fontSize: 11, color: "#9ca3af", margin: "6px 0 2px" }}>
-            {card.callsShown === card.callsLimit && `показано останні ${card.callsLimit} · `}
-            {card.callsSince ? `історія дзвінків у системі — з ${card.callsSince}` : ""}
+            })}
+          </div>
+          {/* 🔴 Обрізання й глибина памʼяті НАЗВАНІ: мовчазне обрізання читалось би як «більше не було». */}
+          <div style={{ fontSize: 11, color: "#9ca3af", margin: "6px 0 2px", display: "flex", gap: 8, alignItems: "center" }}>
+            {card.calls.length > 10 && (
+              <button type="button" onClick={() => setAllCalls((v) => !v)}
+                style={{ fontSize: 11, border: "none", background: "transparent", color: "#2563eb", cursor: "pointer", padding: 0 }}>
+                {allCalls ? "згорнути" : `показати всі (${card.calls.length})`}
+              </button>
+            )}
+            <span>
+              {card.callsShown === card.callsLimit && `показано останні ${card.callsLimit} · `}
+              {card.callsSince ? `історія дзвінків у системі — з ${card.callsSince}` : ""}
+            </span>
           </div>
         </>
       )}
@@ -369,6 +400,10 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
                   <button style={{ marginLeft: 8, fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}
                     onClick={() => setFileId(k.id)}>📎 скрин</button>
                 )}
+                {k.hasFile && (card.planBasis?.contactId === k.id
+                  ? <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: "#1e3a8a" }}>📌 обґрунтування</span>
+                  : <button type="button" disabled={busy} onClick={() => pin({ contactId: k.id })} title="Закріпити цей скрин як обґрунтування плану"
+                      style={{ marginLeft: 6, fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>📌</button>)}
               </div>
               {k.note && <div style={{ color: "#374151", marginTop: 2, whiteSpace: "pre-wrap" }}>{k.note}</div>}
             </div>
