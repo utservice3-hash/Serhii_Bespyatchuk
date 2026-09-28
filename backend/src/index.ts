@@ -46,6 +46,8 @@ import { trainingRouter } from "./routes/training.js";
 import { hiringQuestionsRouter } from "./routes/hiringQuestions.js";
 import { candidateTrainingRouter } from "./routes/candidateTraining.js";
 import { hiringRouter } from "./routes/hiring.js";
+import { baRouter } from "./routes/businessAssistant.js";
+import { receivablesClaimRouter } from "./routes/receivablesClaims.js";
 import { nominationsRouter } from "./routes/nominations.js";
 import { peopleRouter } from "./routes/people.js";
 import { statisticsRouter } from "./routes/statistics.js";
@@ -77,6 +79,8 @@ import { recomputeStatistics, getStatisticsStatus } from "./jobs/recomputeStatis
 import { recomputeClientKeys } from "./jobs/recomputeClientKeys.js";
 import { closeExpiredCandidateAccess } from "./jobs/hiringAccess.js";
 import { syncRingostatCalls, getRingostatStatus } from "./jobs/syncRingostatCalls.js";
+import { syncTldv } from "./jobs/syncTldv.js";
+import { syncWorkua } from "./jobs/syncWorkua.js";
 import { syncCalls } from "./jobs/syncCalls.js";
 import { missedCallTasks } from "./jobs/missedCallTasks.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
@@ -159,6 +163,8 @@ app.use("/api/training/candidate", candidateTrainingRouter); // «моє нав�
 app.use("/api/training/questions", hiringQuestionsRouter); // питання кандидата тімліду (найм 2a) — ДО trainingRouter
 app.use("/api/training", trainingRouter);
 app.use("/api/hiring", hiringRouter);
+app.use("/api/ba", baRouter); // 🗂 Бізнес-асистент: претензії й судовий реєстр (задача 4314)
+app.use("/api/receivables-claims", receivablesClaimRouter); // кнопка «Проблемний клієнт» у дебіторці
 app.use("/api/nominations", nominationsRouter); // 🏆 Номінації тижня (21.09.2026)
 app.use("/api/people", peopleRouter); // 📷 Фото співробітників (22.09.2026)
 app.use("/api/secrets", secretsRouter); // 🔐 сейф доступів співробітників (18.09.2026)
@@ -578,6 +584,14 @@ cron.schedule("20 8 * * *", () => {
 // "🔄 Оновити з файлу" button in the UI forces it instantly).
 cron.schedule("*/15 * * * *", () => {
   void runJob("syncReceivables", () => syncReceivables());
+});
+// 🎥 Записи співбесід tl;dv — що 15 хв. Без ключа джоба чесно пропускається (лічильник пропусків).
+cron.schedule("*/15 * * * *", () => {
+  void runJob("syncTldv", () => syncTldv());
+});
+// 💼 Відгуки з work.ua — що 15 хв. Без логіна джоба чесно пропускається (лічильник пропусків).
+cron.schedule("*/15 * * * *", () => {
+  void runJob("syncWorkua", () => syncWorkua());
 });
 // Банк-виписки — що 15 хв (окремо від CRM). Upsert по external_tx_id.
 cron.schedule("*/15 * * * *", () => {

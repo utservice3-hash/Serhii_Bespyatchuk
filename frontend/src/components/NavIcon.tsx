@@ -42,6 +42,8 @@ const P: Record<string, React.ReactNode> = {
   news: <><rect x="3" y="5" width="14" height="15" rx="1.5" /><path d="M17 9h3a1 1 0 0 1 1 1v8a2 2 0 0 1-4 0z" /><path d="M6 9h8M6 13h8M6 17h5" /></>,
   // Найм: людина з плюсом — «додаємо людей у команду».
   hiring: <><circle cx="10" cy="8" r="3.5" /><path d="M3 20a7 7 0 0 1 14 0" /><path d="M19 8v6M16 11h6" /></>,
+  // Бізнес-асистент: тека з документом — претензії, справи, договори.
+  ba: <><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><path d="M8 13h8M8 16h5" /></>,
   documents: <><path d="M7 3h7l4 4v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" /><path d="M14 3v4h4M9 13h6M9 17h6" /></>,
   training: <><path d="M4 5a2 2 0 0 1 2-2h5v18H6a2 2 0 0 0-2 2z" /><path d="M20 5a2 2 0 0 0-2-2h-5v18h5a2 2 0 0 1 2 2z" /></>,
   // Система
