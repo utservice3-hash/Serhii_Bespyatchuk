@@ -574,6 +574,26 @@ export function TasksSection({
   const [assigneeFilter, setAssigneeFilter] = useState<number | "">("");
   const [sortBy, setSortBy] = useState<"created" | "deadline" | "priority" | "status" | "assignee" | "title">("created");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  /**
+   * ⇅ КЛІК ПО ЗАГОЛОВКУ КОЛОНКИ — СОРТУВАННЯ (рішення власника 28.09.2026).
+   * Доти сортування жило лише в попапі «⇅ Сортування»; поле й напрямок ті самі, тож
+   * заголовок і попап завжди показують один стан. Перший клік по НОВІЙ колонці — ↑
+   * (для дедлайну це «найближчий зверху»), повторний — перевертає. Тримає `#492`.
+   */
+  const sortHead = (label: string, key: typeof sortBy) => (
+    <th aria-sort={sortBy === key ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+      <button
+        type="button"
+        onClick={() => {
+          if (sortBy === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+          else { setSortBy(key); setSortDir("asc"); }
+        }}
+        title={`Сортувати: ${label.toLowerCase()}`}
+        style={{ background: "none", border: "none", padding: 0, font: "inherit", color: "inherit",
+          fontWeight: "inherit", cursor: "pointer", whiteSpace: "nowrap" }}
+      >{label}<span style={{ opacity: sortBy === key ? 1 : 0.25 }}>{sortBy === key && sortDir === "desc" ? " ↓" : " ↑"}</span></button>
+    </th>
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   // 🔗 Глибоке посилання: картка відкривається ОДРАЗУ, якщо в URL є `?id=`.
   const [openTaskId, setOpenTaskId] = useState<number | null>(() => parseTaskIdParam(window.location.search));
@@ -1048,11 +1068,11 @@ export function TasksSection({
             </colgroup>
             <thead>
               <tr>
-                <th>Задача</th>
-                <th>Статус</th>
-                <th>Дедлайн</th>
-                <th>Виконавець</th>
-                <th>Пріоритет</th>
+                {sortHead("Задача", "title")}
+                {sortHead("Статус", "status")}
+                {sortHead("Дедлайн", "deadline")}
+                {sortHead("Виконавець", "assignee")}
+                {sortHead("Пріоритет", "priority")}
                 <th>Коментар</th>
                 {/* 👁 ПЕРЕГЛЯД ВКЛАДЕНЬ — САМЕ ПРАВОРУЧ ВІД КОМЕНТАРЯ (вимога
                     власника 14.09.2026, дослівно: «немає перегляду файлів, він має
@@ -1123,6 +1143,13 @@ export function TasksSection({
                   if (ap !== bp) return ap - bp;
                   const ad = gStatus(a) === "done" ? 1 : 0, bd = gStatus(b) === "done" ? 1 : 0;
                   if (ad !== bd) return ad - bd;
+                  // 🔴 БЕЗ ДЕДЛАЙНУ — ЗАВЖДИ В КІНЦІ, І ДО МНОЖЕННЯ НА НАПРЯМОК. Доти їм
+                  // підставлявся «9999-99-99», і «↓» виводив нагору ВСІ задачі без дати
+                  // (48 відкритих на проді 28.09) — сортування виглядало б зламаним.
+                  if (sortBy === "deadline") {
+                    const na = a.kind === "task" && !a.task.deadline, nb = b.kind === "task" && !b.task.deadline;
+                    if (na !== nb) return na ? 1 : -1;
+                  }
                   let cmp: number;
                   switch (sortBy) {
                     case "deadline": cmp = gDeadline(a).localeCompare(gDeadline(b)); break;
