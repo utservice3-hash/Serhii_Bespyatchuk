@@ -185,8 +185,8 @@ export async function openClaimsByClient(db: Db): Promise<{ clientKey: string; c
 
 /**
  * Кнопка «Проблемний клієнт». Сума й дні — ЗНІМОК із рядків ядра `receivablesByClient`, які
- * роут передає сюди (гейт #754b). Відкрита претензія вже є — повертаємо її, а не створюємо другу
- * (#754c); гонку двох кліків ловить унікальний індекс.
+ * роут передає сюди (гейт #771b). Відкрита претензія вже є — повертаємо її, а не створюємо другу
+ * (#771c); гонку двох кліків ловить унікальний індекс.
  */
 export async function claimFromReceivables(db: Db, actor: number, clientKey: string, rows: readonly ReceivableRowLike[]):
   Promise<{ id: number; created: boolean }> {

@@ -52,7 +52,7 @@ export const isDocType = (v: unknown): v is DocType => typeof v === "string" && 
 
 /**
  * Чи створювати справу ПРИ ЦЬОМУ збереженні. Лише перехід у «Передано в суд» і лише коли справи
- * ще немає: повторне збереження того самого статусу справу не дублює (гейт `#753`).
+ * ще немає: повторне збереження того самого статусу справу не дублює (гейт `#770`).
  */
 export function needsCourtCase(nextStatus: ClaimStatus, hasCase: boolean): boolean {
   return nextStatus === "court" && !hasCase;
@@ -66,7 +66,7 @@ export function caseTitleFor(company: string): string {
 
 /**
  * Знімок боргу з рядків ядра `receivablesByClient` для ОДНОГО клієнта. Сума — сума рядків цього
- * ключа, дні — найбільші, назва — перша непорожня. Інші клієнти не підмішуються (гейт `#754b`).
+ * ключа, дні — найбільші, назва — перша непорожня. Інші клієнти не підмішуються (гейт `#771b`).
  * `null`, якщо клієнта в дебіторці немає: претензію «з дебіторки» тоді не створюємо.
  */
 export interface ReceivableRowLike { clientKey: string | null; clientName: string | null; amount: number; overdueDays: number | null }

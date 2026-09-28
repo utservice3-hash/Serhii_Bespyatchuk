@@ -1277,7 +1277,7 @@ export const ACCESS_MATRIX: AccessRow[] = [
      Вкладку `ba` сид дає ролі «бізнес-асистент» і керівництву (admin, ceo, opdir, kvp, hr) — рішення
      Романа 24.09.2026. Друга межа — `onlyBa` першим оператором обробника. Фінансист адмін-рівня, але
      вкладки не має → 403 на tab-гейті; у deny-only рядки його не пишемо (та сама причина, що в найму).
-     Роль `business_assistant` у пробі відсутня (її немає в ACCESS_ROLES) — доступ їй доводить `#755`. */
+     Роль `business_assistant` у пробі відсутня (її немає в ACCESS_ROLES) — доступ їй доводить `#772`. */
   { method: "GET", path: "/api/ba/meta", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
   { method: "GET", path: "/api/ba/claims", cls: "GET",

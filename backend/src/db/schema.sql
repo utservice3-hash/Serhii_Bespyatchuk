@@ -4161,7 +4161,7 @@ CREATE TABLE IF NOT EXISTS ba_claims (
   -- Ключ клієнта з дебіторки; NULL — претензію заведено вручну.
   client_key    TEXT,
   -- ЗНІМОК на момент створення: `receivables` перебудовується кожним синком, тож живе
-  -- посилання на рядок дебіторки з часом показувало б інше число (гейт #754b).
+  -- посилання на рядок дебіторки з часом показувало б інше число (гейт #771b).
   debt_amount   NUMERIC(14,2),
   overdue_days  INTEGER,
   sent_on       DATE,
@@ -4176,7 +4176,7 @@ CREATE TABLE IF NOT EXISTS ba_claims (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
--- Одна ВІДКРИТА претензія на клієнта з дебіторки: друга кнопка повертає наявну (гейт #754c).
+-- Одна ВІДКРИТА претензія на клієнта з дебіторки: друга кнопка повертає наявну (гейт #771c).
 -- Межу тримає база, а не лише роут: два одночасні кліки не створять двох.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_ba_claims_open_client ON ba_claims (client_key)
   WHERE client_key IS NOT NULL AND archived_at IS NULL AND status NOT IN ('paid','closed');
@@ -4190,7 +4190,7 @@ CREATE TABLE IF NOT EXISTS ba_court_cases (
   filed_on         DATE,
   next_hearing_on  DATE,
   status           TEXT NOT NULL DEFAULT 'prep' CHECK (status IN ('prep','filed','going','done')),
-  -- Справа з претензії: рівно одна на претензію (гейт #753).
+  -- Справа з претензії: рівно одна на претензію (гейт #770).
   claim_id         INTEGER UNIQUE REFERENCES ba_claims(id),
   archived_at      TIMESTAMPTZ,
   archived_by      INTEGER REFERENCES users(id),
@@ -4239,8 +4239,74 @@ UPDATE roles SET screen_access = screen_access || '{"ba":true}'::jsonb
     AND NOT (screen_access ? 'ba');
 
 -- Право «Проблемний клієнт» у дебіторці (рішення Романа 24.09.2026): керівництво і фінансист.
--- Явними рядками видача й зняття, як `export_bank_statement`: склад фіксований кодом (#754).
+-- Явними рядками видача й зняття, як `export_bank_statement`: склад фіксований кодом (#771).
 UPDATE roles SET permissions = permissions || '{"create_claim": true}'::jsonb
  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'hr', 'financier');
 UPDATE roles SET permissions = permissions - 'create_claim'
  WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp', 'hr', 'financier');
+
+-- ▼ AI-АНАЛІЗ ДЗВІНКІВ ПО РЕКЛАМНИХ ЛІДАХ (ТЗ 22.09.2026, прохід A, коміт ②) ▼
+-- Три таблиці з ІСТОРІЄЮ: жодного TRUNCATE, жодного перезапису. Старий шлях (uts-bot → Google-лист →
+-- `first_touch_analysis` через TRUNCATE+insert) історії не мав — тут вона обовʼязкова.
+-- 🔒 Тексти розмов — персональні дані клієнтів: усі таблиці блоку відібрані в `ai_readonly` одразу після
+-- створення і є у `FORBIDDEN_TABLES`. Гейт `#759` бере перелік таблиць САМЕ З ЦЬОГО БЛОКУ (між маркерами),
+-- тож нова таблиця без REVOKE червоніє, навіть якщо її забули вписати в перелік.
+-- 🔴 Стан рядка ОБОВʼЯЗКОВИЙ і з переліку: «нуля» чи NULL замість «не ввімкнено / збій / стеля» не буває.
+-- ⚠️ revert коду таблиць не прибирає; нічні бекапи копіюють їх разом із рештою (рішення власника — відкрите).
+CREATE TABLE IF NOT EXISTS call_transcripts (
+  id           BIGSERIAL PRIMARY KEY,
+  uniqueid     TEXT NOT NULL,              -- ringostat_calls.uniqueid; без FK — історія переживає перезапис CDR
+  provider     TEXT NOT NULL,
+  model        TEXT NOT NULL,
+  status       TEXT NOT NULL CHECK (status IN
+                 ('queued','working','done','failed','not_enabled','capped','recording_unavailable')),
+  attempts     INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  claimed_at   TIMESTAMPTZ,                -- коли взято в роботу: завислий «working» повертається в чергу
+  failure      TEXT,                       -- очищена причина — без URL запису й без ключів
+  channels     INTEGER,
+  duration_sec NUMERIC,                    -- тривалість аудіо — одиниця оплати розпізнавання
+  segments     JSONB,                      -- репліки [{channel, start, end, text, lang}]; хто з каналів менеджер — заміряє пілот
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (uniqueid, provider, model)
+);
+CREATE INDEX IF NOT EXISTS idx_call_transcripts_status ON call_transcripts(status, updated_at);
+REVOKE ALL ON call_transcripts FROM ai_readonly;
+
+CREATE TABLE IF NOT EXISTS call_analyses (
+  id             BIGSERIAL PRIMARY KEY,
+  transcript_id  BIGINT NOT NULL REFERENCES call_transcripts(id) ON DELETE CASCADE,
+  provider       TEXT NOT NULL,
+  model          TEXT NOT NULL,
+  rubric_version TEXT NOT NULL,            -- нова рубрика = новий рядок, старий лишається
+  status         TEXT NOT NULL CHECK (status IN ('queued','working','done','failed','not_enabled','capped')),
+  attempts       INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  claimed_at     TIMESTAMPTZ,
+  failure        TEXT,
+  result         JSONB,                    -- ціна / заперечення / обіцянки з цитатами; цитати звірені кодом
+  input_tokens   INTEGER,
+  output_tokens  INTEGER,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (transcript_id, model, rubric_version)
+);
+CREATE INDEX IF NOT EXISTS idx_call_analyses_status ON call_analyses(status, updated_at);
+REVOKE ALL ON call_analyses FROM ai_readonly;
+
+-- Журнал витрат: ЛИШЕ ДОПИСУЄТЬСЯ. Денна й місячна суми рахуються звідси (стеля перевіряється ДО виклику).
+-- `unit_price_usd` — ціна за одиницю НА МОМЕНТ виклику; NULL = ціну не задано, і тоді стеля «закрита»
+-- (виклик не відбувається), а не «безкоштовно».
+CREATE TABLE IF NOT EXISTS ai_spend_ledger (
+  id             BIGSERIAL PRIMARY KEY,
+  at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  provider       TEXT NOT NULL,
+  operation      TEXT NOT NULL,            -- stt | analysis | pilot_stt | pilot_analysis
+  uniqueid       TEXT,
+  units          NUMERIC NOT NULL CHECK (units >= 0),
+  unit           TEXT NOT NULL,            -- audio_sec | input_tokens | output_tokens
+  unit_price_usd NUMERIC CHECK (unit_price_usd IS NULL OR unit_price_usd >= 0),
+  usd            NUMERIC GENERATED ALWAYS AS (units * unit_price_usd) STORED
+);
+CREATE INDEX IF NOT EXISTS idx_ai_spend_ledger_at ON ai_spend_ledger(at);
+REVOKE ALL ON ai_spend_ledger FROM ai_readonly;
+-- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
