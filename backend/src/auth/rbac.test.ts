@@ -356,13 +356,16 @@ test("#5.9 HR НЕ бачить ЧУЖІ особисті задачі (прив
     roleKey: "hr", managerId: null, teamId: null });
   const r = await fetch(`${API_BASE}/api/tasks`, { headers: { Authorization: `Bearer ${t}` } });
   assert.equal(r.status, 200, `HR: /tasks віддав ${r.status}`);
-  const j = (await r.json()) as { tasks?: { id: number; assigneeId: number | null }[] };
+  const j = (await r.json()) as { tasks?: { id: number; assigneeId: number | null; assigneeUserId: number | null; createdById: number | null }[] };
   assert.ok(j.tasks && j.tasks.length > 0,
     "HR не отримав ЖОДНОЇ задачі — тест нічого не доводить (порожній результат = провал)");
-  // Особиста задача = БЕЗ виконавця. Приватність тримається на `assignee_id IS NULL`
-  // у SQL-гілці, а НЕ на scope — саме тому company-scope її не відкриває. Токен має
-  // userId=0, тож жодна чужа особиста сюди потрапити не може.
-  const foreignPersonal = j.tasks.filter((x) => x.assigneeId == null);
+  // Особиста задача — за ЄДИНИМ визначенням ядра (`isPersonalTask`): без виконавця або «сам собі».
+  // Приватність тримається на SQL-гілці, а НЕ на scope — саме тому company-scope її не відкриває.
+  // Токен має userId=0, тож жодна чужа особиста сюди потрапити не може.
+  // ⚠️ До 28.09.2026 тут стояло `assigneeId == null` — визначення до 14.09, яке задачу ІНШОМУ
+  // акаунту теж рахувало особистою. Гейт почервонів на перших таких задачах (4601, 4603–4606).
+  const { isPersonalTask } = await import("../core/taskVisibility.js");
+  const foreignPersonal = j.tasks.filter((x) => isPersonalTask({ assigneeId: x.assigneeId, assigneeUserId: x.assigneeUserId ?? null, createdBy: x.createdById ?? null, assigneeTeamId: null }));
   assert.deepEqual(foreignPersonal.map((x) => x.id), [],
     "🔴 HR отримав особисті задачі інших акаунтів — приватність протекла");
 });

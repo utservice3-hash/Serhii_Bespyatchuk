@@ -64,9 +64,16 @@ export interface TaskOwnerRow {
  * зробила старе визначення хибним: задача бухгалтеру має `assignee_id IS NULL`
  * і особистою НЕ є. Тому визначення переїхало сюди, а всі читачі — на нього.
  * Гейт `#400e` звіряє, що вью в схемі каже те саме, що ця функція.
+ *
+ * 🔒 28.09.2026, рішення Романа («цього не має бути»): задача, яку людина поставила САМА СОБІ
+ * (виконавець-акаунт == автор, менеджера немає), теж особиста. До того вона вважалась
+ * призначеною, і її бачили HR, бухгалтерія й усі наскрізні ролі: перші такі задачі (4601,
+ * 4603–4606) з'явились 28.09 і одразу потрапили в чужі списки. Задача ІНШІЙ людині
+ * лишається призначеною, як і була. Тримає `#400t`.
  */
 export function isPersonalTask(t: TaskOwnerRow): boolean {
-  return PERSONAL_COLUMNS.every((c) => t[c.field] === null);
+  if (t.assigneeId !== null) return false;
+  return t.assigneeUserId === null || t.assigneeUserId === t.createdBy;
 }
 
 /**
@@ -82,12 +89,16 @@ export const PERSONAL_COLUMNS: readonly { column: string; field: "assigneeId" | 
   { column: "assignee_user_id", field: "assigneeUserId" },
 ];
 
-/** Те саме визначення для SQL. Псевдонім таблиці задач — `t`. */
+/**
+ * Те саме визначення для SQL. Псевдонім таблиці задач — `t`.
+ * «Сам собі» — `assignee_user_id = created_by`; `IS DISTINCT FROM`, щоб задача без автора
+ * (`created_by` NULL, авто-задачі) з виконавцем-акаунтом лишалась призначеною, як і в `isPersonalTask`.
+ */
 export const PERSONAL_TASK_SQL =
-  `(${PERSONAL_COLUMNS.map((c) => `t.${c.column} IS NULL`).join(" AND ")})`;
-/** Дзеркало: задача з виконавцем будь-якого виду. */
+  "(t.assignee_id IS NULL AND (t.assignee_user_id IS NULL OR t.assignee_user_id = t.created_by))";
+/** Дзеркало: задача з виконавцем — менеджером або ІНШИМ акаунтом. */
 export const ASSIGNED_TASK_SQL =
-  `(${PERSONAL_COLUMNS.map((c) => `t.${c.column} IS NOT NULL`).join(" OR ")})`;
+  "(t.assignee_id IS NOT NULL OR (t.assignee_user_id IS NOT NULL AND t.assignee_user_id IS DISTINCT FROM t.created_by))";
 
 /**
  * Джойни, потрібні умові видимості, і вираз «команда виконавця».
@@ -117,7 +128,8 @@ export function canSeeTask(v: TaskViewer, t: TaskOwnerRow): boolean {
     return !isPersonalTask(t) || mine;
   }
   if (v.role === "team_lead") {
-    return (t.assigneeTeamId != null && t.assigneeTeamId === v.teamId) || mine || toMyAccount;
+    // Особиста задача підлеглого («сам собі») має команду виконавця, але тімліду не відкривається.
+    return (!isPersonalTask(t) && t.assigneeTeamId != null && t.assigneeTeamId === v.teamId) || mine || toMyAccount;
   }
   return (t.assigneeId != null && t.assigneeId === v.managerId) || mine || toMyAccount;
 }
@@ -137,7 +149,8 @@ export function canTouchTask(v: TaskViewer, t: TaskOwnerRow): boolean {
     return !isPersonalTask(t) || mine;
   }
   if (v.role === "team_lead") {
-    return (t.assigneeTeamId != null && t.assigneeTeamId === v.teamId) || mine || toMyAccount;
+    // Особиста задача підлеглого («сам собі») має команду виконавця, але тімліду не відкривається.
+    return (!isPersonalTask(t) && t.assigneeTeamId != null && t.assigneeTeamId === v.teamId) || mine || toMyAccount;
   }
   return (t.assigneeId != null && t.assigneeId === v.managerId) || mine || toMyAccount;
 }
@@ -157,7 +170,7 @@ export function visibilityCondSql(v: TaskViewer, push: (value: unknown) => numbe
   if (v.role === "team_lead") {
     const team = push(v.teamId);
     const me = push(v.userId);
-    return `(${ASSIGNEE_TEAM_SQL} = $${team} OR t.created_by = $${me} OR t.assignee_user_id = $${me})`;
+    return `((${ASSIGNED_TASK_SQL} AND ${ASSIGNEE_TEAM_SQL} = $${team}) OR t.created_by = $${me} OR t.assignee_user_id = $${me})`;
   }
   const mgr = push(v.managerId);
   const me = push(v.userId);
