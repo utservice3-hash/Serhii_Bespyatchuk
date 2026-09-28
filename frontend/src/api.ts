@@ -4397,7 +4397,8 @@ export interface WorkuaState {
 }
 export const fetchWorkua = async () => (await api.get<WorkuaState>("/hiring/workua")).data;
 export const syncWorkuaNow = async () => (await api.post<{ created?: number; repeat?: number; skipped?: number | boolean; reason?: string }>("/hiring/workua/sync")).data;
-export const setVacancyWorkua = async (vacancyId: number, jobId: number | null) => { await api.put(`/hiring/vacancies/${vacancyId}/workua`, { jobId }); };
+export const setVacancyWorkua = async (vacancyId: number, jobId: number | null) =>
+  (await api.put<{ ok: true; attached: number; kept: number }>(`/hiring/vacancies/${vacancyId}/workua`, { jobId })).data;
 export const createHiringVacancy = async (p: Record<string, unknown>) => (await api.post<{ id: number }>("/hiring/vacancies", p)).data.id;
 export const patchHiringVacancy = async (id: number, p: Record<string, unknown>) => { await api.patch(`/hiring/vacancies/${id}`, p); };
 export const setHiringCandidateVacancies = async (id: number, vacancyIds: number[]) => { await api.put(`/hiring/candidates/${id}/vacancies`, { vacancyIds }); };
