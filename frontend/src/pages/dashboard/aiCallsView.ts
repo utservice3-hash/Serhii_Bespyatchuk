@@ -15,7 +15,7 @@ export const STATE_UI: Readonly<Record<AiCallState, { label: string; tone: Tone;
   done: { label: "Проаналізовано", tone: "ok", hint: "Є розшифровка й витяг моделі." },
   llm_pending: { label: "Аналіз у черзі", tone: "wait", hint: "Розшифровка готова, витяг моделі — наступним тіком (щогодини о :45)." },
   queued: { label: "У черзі", tone: "wait", hint: "Дзвінок узято в роботу; розпізнається найближчим тіком." },
-  not_queued: { label: "Ще не в черзі", tone: "muted", hint: "Джоба ще не дійшла до цього дзвінка — вона бере угоди за останні 30 днів щогодини о :45." },
+  not_queued: { label: "Ще не в черзі", tone: "muted", hint: "Джоба бере угоди, створені з 20.09.2026 і не старші за 30 днів, щогодини о :45; найновіші — першими. Раніші угоди не аналізуються." },
   not_enabled: { label: "Не ввімкнено", tone: "muted", hint: "Ключа постачальника на сервері немає — назовні нічого не надсилається." },
   capped: { label: "Стеля місяця", tone: "warn", hint: "Бюджет місяця вичерпано; дзвінок розбереться, щойно з’явиться бюджет (з 1-го числа або після підняття стелі)." },
   recording_unavailable: { label: "Запису немає", tone: "muted", hint: "Ringostat не віддав запис розмови — аналізувати нічого." },
@@ -31,9 +31,10 @@ export const TONE_COLOR: Readonly<Record<Tone, { bg: string; fg: string }>> = {
   muted: { bg: "var(--muted-bg, #f0f1f3)", fg: "var(--text-muted, #5a6676)" },
 };
 
-export type AiFilter = "all" | "price" | "objection" | "noDeadline" | "notDone";
+export type AiFilter = "all" | "done" | "price" | "objection" | "noDeadline" | "notDone";
 export const FILTERS: readonly { key: AiFilter; label: string }[] = [
   { key: "all", label: "Усі" },
+  { key: "done", label: "Проаналізовано" },
   { key: "price", label: "Обговорили ціну" },
   { key: "objection", label: "Є заперечення" },
   { key: "noDeadline", label: "Обіцянка без строку" },
@@ -49,6 +50,7 @@ export interface FilterableRow {
 }
 
 export function matchesFilter(r: FilterableRow, f: AiFilter): boolean {
+  if (f === "done") return r.state === "done";
   if (f === "price") return r.priceDiscussed === true;
   if (f === "objection") return r.objections > 0;
   if (f === "noDeadline") return r.promises > r.promisesWithDeadline;
@@ -77,8 +79,15 @@ export function afterLabel(fromIso: string, toIso: string | null): string {
   return `наш наступний вихідний — через ${span}`;
 }
 
-/** Типовий період — останні 30 днів: рівно вікно, яке бере джоба. */
+/**
+ * Дата старту аналізу — дзеркало `FIRST_TOUCH_RULE.startDate` у ядрі (рішення власника 28.09.2026).
+ * Що вони збігаються, стереже гейт `#786`.
+ */
+export const AI_START_DATE = "2026-09-20";
+
+/** Типовий період — вікно, яке бере джоба: від пізнішого з дати старту й «сьогодні − 29 днів». */
 export function aiDefaultPeriod(today: string): PeriodState {
-  const from = addDays(today, -29);
+  const rolling = addDays(today, -29);
+  const from = rolling > AI_START_DATE ? rolling : AI_START_DATE;
   return { mode: "range", anchor: today, focusDay: today, rangeFrom: from, rangeTo: today };
 }

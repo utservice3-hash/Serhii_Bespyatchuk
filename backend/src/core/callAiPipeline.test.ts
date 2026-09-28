@@ -377,3 +377,55 @@ test("#769 ПІЛОТ · ЖИВА СХЕМА: перша розмова рекл
   assert.ok(talked.length > 0, "🔴 фактам не було що знаходити — звірка нижче порожня");
   assert.deepEqual(either.rows.map((r) => r.kommoId).sort(), talked, "🔴 вибірка пілота розійшлась із фактами на тих самих даних");
 });
+
+/**
+ * #787 — ПРИБРАТИ З ЧЕРГИ ЛИШЕ НЕОПЛАЧЕНЕ Й НЕЧІПАНЕ (рішення власника 28.09.2026: стару чергу до 20.09
+ * зупинити). Прибирається рядок, якого немає у вибірці, у стані очікування й без жодної спроби. Лишаються:
+ * рядок із вибірки; рядок зі спробою; розібраний; той, що має запис у журналі витрат. Порожня вибірка
+ * не прибирає НІЧОГО — порожнеча не означає «усе зайве».
+ * 🧨 Червоніє, якщо зняти `attempts = 0`, перевірку журналу чи запобіжник порожньої вибірки.
+ */
+test("#787 ЧЕРГА: прибирається лише неоплачене й нечіпане поза вибіркою, порожня вибірка не чистить", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const P = "el-787", M = "scribe_v2";
+  const ids = ["q-keep", "q-out", "q-nen", "q-tried", "q-done", "q-paid"];
+  await seedCalls(c, ids.map((u) => [u, `https://rec/${u}`]));
+  await c.pl.enqueueTranscripts(c.db, ids, P, M, NOW);
+  await c.raw.query("UPDATE call_transcripts SET status='not_enabled' WHERE provider=$1 AND uniqueid='q-nen'", [P]);
+  await c.raw.query("UPDATE call_transcripts SET attempts=1 WHERE provider=$1 AND uniqueid='q-tried'", [P]);
+  await c.raw.query("UPDATE call_transcripts SET status='done' WHERE provider=$1 AND uniqueid='q-done'", [P]);
+  await c.raw.query(`INSERT INTO ai_spend_ledger (provider, operation, uniqueid, units, unit, unit_price_usd)
+    VALUES ($1, 'stt', 'q-paid', 60, 'audio_sec', 0.0001)`, [P]);
+
+  assert.equal(await c.pl.dequeueOutside(c.db, [], P, M), 0, "🔴 порожня вибірка зачистила чергу");
+  assert.equal(Object.keys(await statuses(c, P)).length, 6);
+
+  const n = await c.pl.dequeueOutside(c.db, ["q-keep"], P, M);
+  const left = Object.keys(await statuses(c, P)).sort();
+  assert.deepEqual(left, ["q-done", "q-keep", "q-paid", "q-tried"], `🔴 прибрано не те: лишилось ${JSON.stringify(left)}`);
+  assert.equal(n, 2, "прибрано рівно два: у черзі та «не ввімкнено»");
+  assert.equal(await c.pl.dequeueOutside(c.db, ["q-keep"], "el-other", M), 0, "🔴 прибирання зачепило чужого постачальника");
+});
+
+/**
+ * #788 — НОВІ ПЕРШИМИ (рішення власника 28.09.2026). Три дзвінки стали в чергу від старого до нового
+ * (id зростає разом зі старістю навпаки), порція на ОДИН рядок бере найновіший дзвінок, наступна —
+ * середній. Черга за `id` взяла б найстаріший.
+ * ⚠️ Той самий `callTimeOf` упорядковує й чергу аналізу; гейт стоїть на розпізнаванні, бо воно платне
+ * першим і саме його черга стоїть на квоті.
+ * 🧨 Червоніє, якщо повернути `ORDER BY id` у `claim`.
+ */
+test("#788 ЧЕРГА: нові дзвінки першими, а не в порядку постановки", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const P = "el-788";
+  const at = (u: string, iso: string) => c.raw.query(`INSERT INTO ringostat_calls (uniqueid, calldate, call_type, billsec, duration, recording)
+    VALUES ($1, $2, 'in', 60, 70, $3)`, [u, iso, `https://rec/${u}`]);
+  await at("o-old", "2026-09-20T08:00:00Z");
+  await at("o-mid", "2026-09-21T08:00:00Z");
+  await at("o-new", "2026-09-22T08:00:00Z");
+  for (const u of ["o-old", "o-mid", "o-new"]) await c.pl.enqueueTranscripts(c.db, [u], P, "scribe_v2", NOW);
+  const f = fakeStt();
+  await c.pl.runSttPortion(c.db, { apiKey: "k", ...f.w }, sttParams(P, { limit: 1 }));
+  await c.pl.runSttPortion(c.db, { apiKey: "k", ...f.w }, sttParams(P, { limit: 1 }));
+  assert.deepEqual(f.downloads, ["https://rec/o-new", "https://rec/o-mid"], `🔴 черга взяла не найновіші: ${JSON.stringify(f.downloads)}`);
+});

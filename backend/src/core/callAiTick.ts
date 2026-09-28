@@ -3,7 +3,7 @@ import { adDealFirstTalksSql, type AdFlag, type FirstTalkRow } from "./adCallFac
 import { createMinInterval, type HttpDeps } from "./callAiHttp.js";
 import { downloadRecording } from "./ringostatRecording.js";
 import { ELEVENLABS_STT_MODEL, elevenLabsTranscribe, GEMINI_MODEL, geminiGenerate, RUBRIC_PILOT_V0 } from "./callAiProviders.js";
-import { enqueueAnalyses, enqueueTranscripts, runAnalysisPortion, runSttPortion, type PortionReport } from "./callAiPipeline.js";
+import { dequeueOutside, enqueueAnalyses, enqueueTranscripts, runAnalysisPortion, runSttPortion, type PortionReport } from "./callAiPipeline.js";
 import { LLM_POLICY, LLM_PROVIDER, RECORDING_MAX_BYTES, RINGOSTAT_MIN_INTERVAL_MS, RINGOSTAT_POLICY, STT_POLICY,
   STT_PROVIDER, STUCK_AFTER_MIN, type AdPredicate } from "./callAiPilot.js";
 
@@ -28,12 +28,20 @@ import { LLM_POLICY, LLM_PROVIDER, RECORDING_MAX_BYTES, RINGOSTAT_MIN_INTERVAL_M
  * порція довша за `STUCK_AFTER_MIN`, його забрали б як завислий і заплатили б удруге. Тому
  * порція — 10 дзвінків (≤10 хв навіть по 60 с), а тік крутить порції, доки не вийде час.
  */
-export const FIRST_TOUCH_RULE: Readonly<{ talkMinSec: number; windowBefore: string; flag: AdFlag; lookbackDays: number }> = {
+export const FIRST_TOUCH_RULE: Readonly<{ talkMinSec: number; windowBefore: string; flag: AdFlag; lookbackDays: number; startDate: string }> = {
   talkMinSec: 20,
   windowBefore: "1 days",
   flag: "either",
   lookbackDays: 30,
+  /** Рішення власника 28.09.2026: аналізуємо угоди, створені З 20.09.2026 (Київ). Раніші не беруться. */
+  startDate: "2026-09-20",
 };
+
+/** Перший день вибірки: пізніший із дати старту й «сьогодні − lookbackDays» (Київ, YYYY-MM-DD). */
+export function selectionFrom(now: Date): string {
+  const rolling = kyivDateOf(new Date(now.getTime() - FIRST_TOUCH_RULE.lookbackDays * 86_400_000));
+  return rolling > FIRST_TOUCH_RULE.startDate ? rolling : FIRST_TOUCH_RULE.startDate;
+}
 
 export const TICK_PORTION = 10;
 export const TICK_MAX_ATTEMPTS = 3;
@@ -45,9 +53,9 @@ export const MAX_OUTPUT_TOKENS = 2048;
 /** Київська дата моменту — `sv-SE` дає рівно YYYY-MM-DD (як `kyivToday`, але для заданого «зараз»). */
 export const kyivDateOf = (d: Date): string => d.toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
 
-/** Дзвінки першого дотику за вікно `lookbackDays` (дата створення угоди, за Києвом, обидва кінці). */
+/** Дзвінки першого дотику від `selectionFrom` до сьогодні (дата створення угоди, за Києвом, обидва кінці). */
 export async function selectFirstTouchCalls(db: Db, ad: AdPredicate, now: Date): Promise<string[]> {
-  const from = kyivDateOf(new Date(now.getTime() - FIRST_TOUCH_RULE.lookbackDays * 86_400_000));
+  const from = selectionFrom(now);
   const q = adDealFirstTalksSql({ from, to: kyivDateOf(now), now, talkMinSec: FIRST_TOUCH_RULE.talkMinSec,
     windowBefore: FIRST_TOUCH_RULE.windowBefore, adDealPredicate: ad.predicate, adSources: ad.adSources },
   FIRST_TOUCH_RULE.flag, 5000);
@@ -91,6 +99,8 @@ export interface TickEnv {
 export interface TickReport {
   selected: number;
   enqueued: number;
+  /** Прибрано з черги: дзвінки, що випали з вибірки (раніше дати старту або старші за вікно), без жодної спроби. */
+  dequeued: number;
   stt: PortionReport[];
   llm: PortionReport[];
   sttStoppedBy: string | null;
@@ -107,7 +117,8 @@ export async function runCallAiTick(env: TickEnv): Promise<TickReport> {
   const t0 = env.now();
   const ids = await selectFirstTouchCalls(env.db, env.ad, t0);
   const enqueued = await enqueueTranscripts(env.db, ids, STT_PROVIDER, ELEVENLABS_STT_MODEL, t0);
-  const out: TickReport = { selected: ids.length, enqueued, stt: [], llm: [], sttStoppedBy: null, llmStoppedBy: null };
+  const dequeued = await dequeueOutside(env.db, ids, STT_PROVIDER, ELEVENLABS_STT_MODEL);
+  const out: TickReport = { selected: ids.length, enqueued, dequeued, stt: [], llm: [], sttStoppedBy: null, llmStoppedBy: null };
   const throttle = createMinInterval(RINGOSTAT_MIN_INTERVAL_MS, env.http);
   const common = { limit: TICK_PORTION, maxAttempts: TICK_MAX_ATTEMPTS, stuckAfterMin: STUCK_AFTER_MIN };
 

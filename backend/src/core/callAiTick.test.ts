@@ -239,3 +239,34 @@ test("#785 ВИД ПОМИЛКИ: AI-конвеєр — свій вид із п�
   assert.equal(classifyJobError("Kommo 429 Too Many Requests"), "kommo_http", "дзеркало: відмова Kommo лишається своїм видом");
   assert.equal(classifyJobError("не налаштовано: ціна: розпізнавання"), "config", "дзеркало: не налаштовано — config");
 });
+
+/**
+ * #786 — ДАТА СТАРТУ 20.09.2026 (рішення власника 28.09.2026). Угода, створена за Києвом 19.09 о 23:30,
+ * не береться; створена 20.09 о 00:10 — береться. Межа — київська доба, а не UTC: обидві угоди
+ * лежать по різні боки київської півночі, але в ОДНІЙ UTC-добі (19.09). Далі вікно ковзне:
+ * через 30 днів після старту вибірка починається з «сьогодні − 30».
+ * 🧨 Червоніє, якщо прибрати дату старту з `selectionFrom` або рахувати межу в UTC.
+ */
+test("#786 ДАТА СТАРТУ: угоди раніше 20.09.2026 (Київ) не беруться, з 20.09 — беруться, далі вікно ковзне", async (t) => {
+  const { selectionFrom, FIRST_TOUCH_RULE } = await import("./callAiTick.js");
+  assert.equal(FIRST_TOUCH_RULE.startDate, "2026-09-20");
+  assert.equal(selectionFrom(NOW), "2026-09-20", "🔴 28.09 вибірка починається не з дати старту");
+  assert.equal(selectionFrom(new Date("2026-11-15T09:00:00Z")), "2026-10-16", "🔴 через 30 днів вікно не ковзнуло");
+  const view = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "aiCallsView.ts"), "utf8");
+  assert.match(view, new RegExp(`export const AI_START_DATE = "${FIRST_TOUCH_RULE.startDate}";`), "🔴 дата старту на екрані розійшлась із ядром");
+  const c = await ctx(t); if (!c) return;
+  const { selectFirstTouchCalls } = await import("./callAiTick.js");
+  const deal = (id: number, key: string, created: string) =>
+    c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel)
+      VALUES ($1,$2,8921932,1,$3,$4,'ad')`, [id, `D${String(id)}`, created, key]);
+  const call = (u: string, at: string, phone: string) =>
+    c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,client_phone,recording)
+      VALUES ($1,$2,'out','ANSWERED',60,65,$3,$4)`, [u, at, phone, `https://rec/${u}`]);
+  await deal(7601, "0500007601", "2026-09-19 23:30:00+03");
+  await deal(7602, "0500007602", "2026-09-20 00:10:00+03");
+  await call("7600-before", "2026-09-19 23:40:00+03", "380500007601");
+  await call("7600-after", "2026-09-20 00:20:00+03", "380500007602");
+  const ids = await selectFirstTouchCalls(c.db, FAKE_AD, NOW);
+  assert.ok(!ids.includes("7600-before"), "🔴 угоду з 19.09 (Київ) узято, хоча старт — 20.09");
+  assert.ok(ids.includes("7600-after"), "дзеркало: угоду з 20.09 00:10 (Київ) мусить бути взято");
+});

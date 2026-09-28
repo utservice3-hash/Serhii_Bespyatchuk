@@ -28,7 +28,7 @@ export async function callAiJob(): Promise<TickReport | GuardSkip> {
       now: () => new Date(),
     });
     const sum = (xs: TickReport["stt"], k: "done" | "failed" | "unavailable") => xs.reduce((s, x) => s + x[k], 0);
-    console.log(`callAiJob: відібрано ${String(r.selected)}, нових у черзі ${String(r.enqueued)} · `
+    console.log(`callAiJob: відібрано ${String(r.selected)}, нових у черзі ${String(r.enqueued)}, прибрано з черги ${String(r.dequeued)} · `
       + `розпізнано ${String(sum(r.stt, "done"))} (без запису ${String(sum(r.stt, "unavailable"))}) · `
       + `проаналізовано ${String(sum(r.llm, "done"))}`
       + (r.sttStoppedBy ? ` · розпізнавання: ${r.sttStoppedBy}` : "")

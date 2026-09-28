@@ -152,13 +152,24 @@ async function moveStatus(db: Db, s: Scope, now: Date, from: string, to: string)
   return r.rowCount ?? 0;
 }
 
+/**
+ * Час дзвінка рядка черги — для порядку «НОВІ ПЕРШИМИ» (рішення власника 28.09.2026). Раніше черга йшла
+ * за `id`, тобто в порядку постановки: перший тік поставив 1100 дзвінків за 30 днів, і свіжі чекали б
+ * у хвості ~85 годин. Дзвінок без запису в `ringostat_calls` — у кінці (`NULLS LAST`), а не загублений.
+ */
+function callTimeOf(table: Table, alias: string): string {
+  return table === "call_transcripts"
+    ? `(SELECT rc.calldate FROM ringostat_calls rc WHERE rc.uniqueid = ${alias}.uniqueid)`
+    : `(SELECT rc.calldate FROM call_transcripts ct JOIN ringostat_calls rc ON rc.uniqueid = ct.uniqueid WHERE ct.id = ${alias}.transcript_id)`;
+}
+
 async function claim(db: Db, s: Scope, now: Date, limit: number): Promise<{ id: string; ref: string; attempts: number }[]> {
   const w = scopeWhere(s, 3);
   const refCol = s.table === "call_transcripts" ? "uniqueid" : "transcript_id::text";
   const r = await db.query<{ id: string; ref: string; attempts: number }>(
     `UPDATE ${s.table} q SET status = 'working', claimed_at = $1, attempts = q.attempts + 1, updated_at = $1
-      WHERE q.id IN (SELECT id FROM ${s.table} WHERE ${w.sql} AND status = 'queued'
-                      ORDER BY id LIMIT $2 FOR UPDATE SKIP LOCKED)
+      WHERE q.id IN (SELECT o.id FROM ${s.table} o WHERE ${w.sql} AND o.status = 'queued'
+                      ORDER BY ${callTimeOf(s.table, "o")} DESC NULLS LAST, o.id LIMIT $2 FOR UPDATE SKIP LOCKED)
       RETURNING q.id::text AS id, q.${refCol} AS ref, q.attempts`,
     [now.toISOString(), limit, ...w.params]);
   return r.rows.map((x) => ({ id: String(x.id), ref: String(x.ref), attempts: Number(x.attempts) }));
@@ -260,6 +271,25 @@ export async function enqueueTranscripts(db: Db, uniqueids: readonly string[], p
      SELECT DISTINCT u, $2, $3, 'queued', $4::timestamptz, $4::timestamptz FROM unnest($1::text[]) AS u
      ON CONFLICT (uniqueid, provider, model) DO NOTHING`,
     [[...uniqueids], provider, model, now.toISOString()]);
+  return r.rowCount ?? 0;
+}
+
+/**
+ * Прибрати з черги розпізнавання дзвінки, яких немає в поточній вибірці (раніше дати старту або
+ * випали з вікна). Прибирається ЛИШЕ те, за що не заплачено й не пробували: стан очікування,
+ * `attempts = 0`, жодного рядка в журналі витрат і жодного аналізу. Порожня вибірка не прибирає
+ * НІЧОГО: порожнеча — привід зупинитись, а не зачистити чергу (правило 15 кореня).
+ */
+export async function dequeueOutside(db: Db, keep: readonly string[], provider: string, model: string): Promise<number> {
+  if (!keep.length) return 0;
+  const r = await db.query(
+    `DELETE FROM call_transcripts t
+      WHERE t.provider = $2 AND t.model = $3
+        AND t.status IN ('queued', 'not_enabled', 'capped') AND t.attempts = 0
+        AND NOT (t.uniqueid = ANY($1::text[]))
+        AND NOT EXISTS (SELECT 1 FROM ai_spend_ledger l WHERE l.uniqueid = t.uniqueid)
+        AND NOT EXISTS (SELECT 1 FROM call_analyses a WHERE a.transcript_id = t.id)`,
+    [[...keep], provider, model]);
   return r.rowCount ?? 0;
 }
 

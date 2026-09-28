@@ -162,7 +162,7 @@ export function AiCallsSection() {
         </h3>
         {meta && (
           <p style={{ margin: "0 0 10px", fontSize: 12.5, color: "var(--text-muted)" }}>
-            Конвеєр: останній успіх {meta.job?.lastSuccessAt ? fmtTime(meta.job.lastSuccessAt) : "ще не було"}
+            Конвеєр: {meta.job?.lastSuccessAt ? `останній успішний запуск ${fmtTime(meta.job.lastSuccessAt)}` : "успішних запусків ще не було"}
             {meta.job?.lastError && <span style={{ color: "var(--danger, #b3261e)" }}> · остання помилка {meta.job.lastErrorAt ? fmtTime(meta.job.lastErrorAt) : ""}: {meta.job.lastError}</span>}
             {" · "}витрати місяця: розпізнавання {usd(meta.spend.stt)}{meta.caps.stt != null ? ` з ${usd(meta.caps.stt)}` : " (стелю не задано)"},
             {" "}аналіз {usd(meta.spend.analysis)}{meta.caps.analysis != null ? ` з ${usd(meta.caps.analysis)}` : " (стелю не задано)"}
