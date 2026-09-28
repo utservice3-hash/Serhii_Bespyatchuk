@@ -54,7 +54,7 @@ export function classifyClientKey(key: string | null | undefined): PhoneState {
   return "not_phone";
 }
 
-/** Та сама класифікація в SQL — один вираз на обидва боки, парність тримає `#653`. */
+/** Та сама класифікація в SQL — один вираз на обидва боки, парність тримає `#759`. */
 export const phoneStateSql = (a: string): string => `(CASE
   WHEN ${a} IS NULL OR btrim(${a}) = '' THEN 'no_key'
   WHEN ${a} ~ '^0[0-9]{9}$' THEN 'ok'
@@ -62,7 +62,7 @@ export const phoneStateSql = (a: string): string => `(CASE
   ELSE 'not_phone' END)`;
 
 /**
- * Стан угоди за дзвінками. Сума станів == кількість відібраних угод (інваріант `#653`):
+ * Стан угоди за дзвінками. Сума станів == кількість відібраних угод (інваріант `#759`):
  *   no_phone  — номер не визначено І дзвінків за наявним `client_key` теж немає;
  *   no_calls  — номер є, дзвінків у вікні угоди немає;
  *   no_talks  — дзвінки є, але жодного не довше за поріг розмови;

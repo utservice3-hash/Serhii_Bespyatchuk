@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 /**
- * 🎯 #653 / #653b — ТАБЛИЦІ AI-АНАЛІЗУ ДЗВІНКІВ (ТЗ 22.09.2026, прохід A, коміт ②).
+ * 🎯 #759 / #759b — ТАБЛИЦІ AI-АНАЛІЗУ ДЗВІНКІВ (ТЗ 22.09.2026, прохід A, коміт ②).
  *
  * 🔴 ПЕРЕЛІК ТАБЛИЦЬ — З САМОГО БЛОКУ СХЕМИ, а не рукописним списком (правило 12 кореневого
  * CLAUDE.md: перелічувач пишеться від предмета). Нова таблиця в блоці без REVOKE чи без запису
@@ -22,7 +22,7 @@ function blockTables(): { block: string; tables: string[]; blockStart: number } 
   return { block, tables, blockStart: a };
 }
 
-test("#653 AI-АНАЛІЗ: кожна таблиця блоку відібрана в ai_readonly після CREATE і є у FORBIDDEN_TABLES", () => {
+test("#759 AI-АНАЛІЗ: кожна таблиця блоку відібрана в ai_readonly після CREATE і є у FORBIDDEN_TABLES", () => {
   const { block, tables, blockStart } = blockTables();
   assert.ok(tables.length >= 3, `🔴 у блоці ${String(tables.length)} таблиць — очікувано щонайменше три`);
   const grantAt = SCHEMA.indexOf("GRANT SELECT ON ALL TABLES IN SCHEMA public TO ai_readonly;");
@@ -37,13 +37,13 @@ test("#653 AI-АНАЛІЗ: кожна таблиця блоку відібра�
 });
 
 /**
- * #653b — ЖИВА СХЕМА (scratch): схема накочується двічі (ідемпотентність міграції); для КОЖНОЇ
+ * #759b — ЖИВА СХЕМА (scratch): схема накочується двічі (ідемпотентність міграції); для КОЖНОЇ
  * таблиці блоку `ai_readonly` не має SELECT, а на звичайну (`deals`) має — дзеркало, інакше гейт
  * зеленів би й тоді, коли роль мертва; стан рядка не буває NULL чи довільним; дубль
  * «дзвінок + постачальник + модель» неможливий; вартість у журналі рахується з одиниць і ціни,
  * а без ціни — NULL, а не нуль.
  */
-test("#653b AI-АНАЛІЗ · ЖИВА СХЕМА: двічі накочується, закрито для AI, стан обовʼязковий, дубль неможливий", async (t) => {
+test("#759b AI-АНАЛІЗ · ЖИВА СХЕМА: двічі накочується, закрито для AI, стан обовʼязковий, дубль неможливий", async (t) => {
   const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
   const scratch = provisionScratch();
   if ("unavailable" in scratch) return t.skip(skipReason(scratch));
