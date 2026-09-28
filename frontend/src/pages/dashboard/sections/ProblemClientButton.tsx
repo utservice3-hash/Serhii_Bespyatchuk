@@ -36,7 +36,7 @@ export function ProblemClientButton({ clientKey, clientName, state, onOpened }: 
     return state.canOpen
       ? <button style={{ ...linkStyle, color: "var(--danger)", textDecoration: "underline dotted" }}
           aria-label={`Відкрити претензію: ${clientName}`}
-          onClick={() => navigate(`/ba?claim=${open.claimId}`)}>претензія · відкрити</button>
+          onClick={() => navigate(`/ba?claim=${open.claimId}`)}>претензія →</button>
       : <span style={{ ...linkStyle, cursor: "default", color: "var(--danger)" }}>претензія є</span>;
   }
   if (!state.canCreate) return null;

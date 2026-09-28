@@ -116,7 +116,7 @@ test("#753b ЖИВИЙ SQL: «Передано в суд» — одна спра
     assert.deepEqual(card.fileList.map((f) => f.name).sort(), ["Квитанція.png", "Претензія.pdf"], "🔴 документи претензії не перенесено");
     assert.ok(card.fileList.every((f) => f.fromClaim), "🔴 копія не знає, звідки прийшла");
     assert.equal(await n("SELECT count(*) n FROM ba_files WHERE owner_kind = 'claim'"), 2, "🔴 перенос забрав файли з претензії");
-    assert.ok(card.events.some((e) => /перенесено документів: 2/.test(e.what)), "🔴 у справі немає події переносу");
+    assert.ok(card.events.some((e) => /Перенесено документів: 2/.test(e.what)), "🔴 у справі немає події переносу");
     assert.ok((await ba.claimCard(db, id)).events.some((e) => /Судовому реєстрі/.test(e.what)), "🔴 у претензії немає події переносу");
 
     const r2 = await ba.updateClaim(db, 901, id, { status: "court", result: "чекаємо засідання" });

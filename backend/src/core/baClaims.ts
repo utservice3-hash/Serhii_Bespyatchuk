@@ -136,7 +136,7 @@ async function transferToCourt(db: Db, actor: number, claimId: number): Promise<
      SELECT 'case', $1, doc_type, name, stored_name, mime, size_bytes, id, $3, created_at
        FROM ba_files WHERE owner_kind = 'claim' AND owner_id = $2`, [caseId, claimId, actor]);
   const n = copied.rowCount ?? 0;
-  await logEvent(db, "case", caseId, actor, `Створено з претензії «${c.company}», перенесено документів: ${n}`);
+  await logEvent(db, "case", caseId, actor, `Створено з претензії: ${c.company}. Перенесено документів: ${n}`);
   await logEvent(db, "claim", claimId, actor, `Справу створено в Судовому реєстрі, перенесено документів: ${n}`);
   return caseId;
 }
