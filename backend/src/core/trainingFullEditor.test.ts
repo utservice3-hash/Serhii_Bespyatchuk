@@ -72,6 +72,7 @@ test("#737c РЕДАКТОР: порядок рухом, заміна файлу
   assert.match(src, /replaceTrainingFile\(/, "🔴 заміна файлу не кличе сервер");
   assert.match(src, /lesson:\s*\{\s*id:\s*step\.id/, "🔴 «+ Частина» не передає урок");
   assert.match(src, /if \(!edit && x\.status == null\) void openTrainingMaterial/, "🔴 редагування уроку ставить йому «відкрито»");
+  assert.match(src, /<LessonBody key=\{ver\} m=\{m\} \/>/, "🔴 після заміни файлу перегляд під редактором лишає стару презентацію (id той самий)");
 });
 
 /** Схема з нуля в тимчасовому кластері. `null` — кластер недоступний (пропуск із причиною). */
@@ -110,6 +111,8 @@ test("#738 ЖИВИЙ SQL: заміна файлу, частини уроку, �
     const l1 = await add("Урок 1", 1);
     const l2 = await add("Урок 2", 2, "file", "old.pdf");
     const l3 = await add("Урок 3", 3);
+    // Урок у темі Б з номером 1 — той самий, що в «Урок 1»: без «у кінець» перенесений став би ПЕРЕД ним (id менший).
+    await s.c.query(`INSERT INTO training_materials (folder_id, title, kind, position, content) VALUES ($1,'Урок Б',  'text', 1, 'б')`, [modB]);
     const cand = (await s.c.query(`INSERT INTO users (email, password_hash, role, role_override) VALUES ('c@x.ua','x','manager','candidate') RETURNING id`)).rows[0].id as number;
     const editor = (await s.c.query(`INSERT INTO users (email, password_hash, role) VALUES ('kvp@x.ua','x','admin') RETURNING id`)).rows[0].id as number;
     await s.c.query(`INSERT INTO training_progress (user_id, material_id, status, finished_at) VALUES ($1,$2,'done',now())`, [cand, l2]);
@@ -172,6 +175,8 @@ test("#738 ЖИВИЙ SQL: заміна файлу, частини уроку, �
       assert.equal((await row(partId)).part_role, "main", "🔴 роль частини не змінилась");
       assert.equal((await call("editor", "patch", "/material/:id", { id: String(l1) }, { folderId: modB })).code, 200);
       assert.deepEqual([(await row(l1)).folder_id, (await row(partId)).folder_id], [modB, modB], "🔴 урок переїхав без своїх частин");
+      const inB = (await s.c.query(`SELECT id FROM training_materials WHERE folder_id = $1 AND lesson_id IS NULL ORDER BY position, id`, [modB])).rows.map((x) => x.id);
+      assert.equal(inB.at(-1), l1, "🔴 перенесений урок упав у середину нової теми, а не в кінець");
 
       // Порядок: повний перелік — 1..n; неповний — 400 і номери як були.
       const ro = await call("editor", "post", "/reorder", {}, { table: "materials", ids: [l3, l2] });

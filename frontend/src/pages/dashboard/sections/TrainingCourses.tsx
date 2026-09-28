@@ -185,6 +185,10 @@ function CourseView({ id, canEdit, onBack }: { id: number; canEdit: boolean; onB
   const cur = curId != null ? steps.find((s) => s.id === curId) ?? null : steps.find((s) => s.state === "available" || s.state === "opened") ?? steps[0] ?? null;
   /** 🎓 Перегляд — будова Sereda: без вибраного уроку показуємо СТОРІНКУ КУРСУ, а не перший крок. */
   const reading = curId != null ? steps.find((s) => s.id === curId) ?? null : null;
+  /* ✏️ У редагуванні показаний урок фіксується: інакше «перший у списку» після ↑/↓ ставав іншим уроком,
+     і панель праворуч перескакувала з того, що людина саме правила (спіймано на стенді 28.09.2026). */
+  const curShown = cur?.id ?? null;
+  useEffect(() => { if (edit && curId == null && curShown != null) setCurId(curShown); }, [edit, curId, curShown]);
 
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true); setErr(null);
@@ -716,8 +720,10 @@ function StepPane({ step, edit, busy, onChanged, onNext, nextTitle, upload, modu
       {err && <div style={{ color: "var(--danger)", fontSize: 13, marginBottom: 8 }}>{err}</div>}
       {!m ? <p className="loading-text">Завантаження…</p> : (
         <>
-          {/* 📘 Урок цілим — pdf/відео, текст, «Вкладення» — як у Sereda; один компонент на обидва екрани (`#729`). */}
-          <LessonBody m={m} />
+          {/* 📘 Урок цілим — pdf/відео, текст, «Вкладення» — як у Sereda; один компонент на обидва екрани (`#729`).
+              🔴 `key={ver}`: після «Замінити файл» id частини ТОЙ САМИЙ, а вікно pdf тримає вже завантажений файл за id —
+              без нового ключа редактор бачив би стару презентацію і вирішив би, що заміна не спрацювала (спіймано на стенді). */}
+          <LessonBody key={ver} m={m} />
 
           {!edit && (
             <div className="tr-actions">

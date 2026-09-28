@@ -274,6 +274,13 @@ trainingRouter.patch("/material/:id", canEditTraining, async (req, res) => {
     /* 📘 Частина живе в темі свого уроку; окремо її не переносять — лише разом з уроком (нижче). */
     if (isPart) return res.status(400).json({ error: "Частину переносять разом з уроком — перенесіть сам урок" });
     params.push(newFolder); sets.push(`folder_id = $${params.length}`);
+    /* ↕️ Перенесений урок стає ОСТАННІМ у новій темі: зі старим номером він падав у середину, між чужими уроками
+       з тим самим номером (спіймано на стенді 28.09.2026). Явний `position` у тому ж запиті має перевагу. */
+    if (b.position === undefined) {
+      const last = await pool.query<{ n: number }>(
+        `SELECT COALESCE(MAX(position), 0) + 1 AS n FROM training_materials WHERE folder_id IS NOT DISTINCT FROM $1 AND ${LESSON_ONLY}`, [newFolder]);
+      params.push(last.rows[0].n); sets.push(`position = $${params.length}`);
+    }
   }
   if (b.position !== undefined) { params.push(Number(b.position)); sets.push(`position = $${params.length}`); }
   if (b.role !== undefined) {
