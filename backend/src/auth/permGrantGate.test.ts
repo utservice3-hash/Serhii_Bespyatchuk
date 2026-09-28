@@ -149,6 +149,36 @@ test("#741 МІГРАЦІЯ ДВІЧІ: адмін бачить «Найм» і 
 });
 
 /**
+ * #741b — «БІЗНЕС-АСИСТЕНТ» ФІНАНСИСТУ НЕ ПОВЕРТАЄТЬСЯ ДРУГОЮ МІГРАЦІЄЮ. Окремий номер, бо твердження інше (правило 13):
+ * `#741` про «Найм»/«Номінації», тут — про `ba`, який синк «financier = екрани адміна» протягнув на проді 28.09.2026.
+ * Дзеркала: адмін і керівництво `ba` мають (інакше «фінансист не бачить» — порожня правда), HR — ні (рішення 28.09).
+ * 🧨 Червоніє, якщо прибрати зняття `ba` після синку або переставити його ВИЩЕ за синк.
+ */
+test("#741b МІГРАЦІЯ ДВІЧІ: «Бізнес-асистента» бачать адмін і керівництво, фінансист і HR — НІ", async (t) => {
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const schema = readFileSync(fileURLToPath(new URL("../../src/db/schema.sql", import.meta.url)), "utf8");
+  const client = new pg.Client({ connectionString: scratch.url });
+  try {
+    await client.connect();
+    await client.query(schema);
+    await client.query(schema);   // 🔴 саме ДРУГИЙ прогін копіює фінансисту `ba`, що адмін дістав у першому
+    const rows = (await client.query<{ key: string; screen_access: Record<string, unknown> }>(
+      "SELECT key, screen_access FROM roles")).rows;
+    const sees = (k: string) => rows.find((r) => r.key === k)?.screen_access?.ba === true;
+    assert.ok(rows.some((r) => r.key === "financier"), "🔴 у scratch-базі немає ролі фінансиста — перевіряти нема чого");
+    for (const k of ["admin", "ceo", "opdir", "kvp"]) assert.ok(sees(k), `🔴 «${k}» не бачить «Бізнес-асистента» — зняття забрало більше, ніж вирішено`);
+    assert.ok(!sees("financier"), "🔴 фінансист бачить «Бізнес-асистента» після ДРУГОЇ міграції — синк з адміна повернув екран");
+    assert.ok(!sees("hr"), "🔴 HR бачить «Бізнес-асистента» — рішення 28.09.2026 порушено");
+  } finally {
+    await client.end().catch(() => {});
+    scratch.dispose();
+  }
+});
+
+/**
  * 🔁 #390i — ЗАМІНА `#231g`, і причина заміни в самому імені.
  *
  * `#231g` стверджував «ТРИ двері», і 09.09.2026 їх стало ЧОТИРИ: додано `/analytics`

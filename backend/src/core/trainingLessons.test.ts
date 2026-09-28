@@ -350,3 +350,21 @@ test("#735 УРОК: pdf-вкладення у вікні, коли дивити
   const d = L.lessonLayout(text, [{ ...f(8, "file", PDF, 1000, { hasFile: false }), role: "attachment" }]);
   assert.deepEqual(ids(d.main), [], "🔴 у вікно пішов pdf без файла");
 });
+
+/**
+ * #736 — ТЕКСТ УРОКУ НАД ПРЕЗЕНТАЦІЄЮ, «ВКЛАДЕННЯ» — ВНИЗУ. Роман, 28.09: «у нас презентація зверху, а текст
+ * знизу — мало б бути навпаки». Свідоме відхилення від Sereda (там переглядач над текстом). Порядок — це порядок
+ * дітей ОДНОГО контейнера `.tr-lsn` у розмітці, тож межі — сам контейнер, а не «N символів поруч» (правило 9).
+ * 🧨 Червоніє, якщо презентацію знову поставити над текстом або вкладення — вище за презентацію.
+ */
+test("#736 УРОК: спершу текст, потім презентація, внизу «Вкладення»", () => {
+  const src = FE("pages/dashboard/sections/LessonBody.tsx");
+  const from = src.indexOf('<div className="tr-lsn">');
+  const to = src.indexOf("</div>\n  );", from);
+  assert.ok(from >= 0 && to > from, "🔴 контейнера уроку не знайдено — перевірці нема що перевіряти");
+  const body = src.slice(from, to).replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+  const at = (needle: string) => { const i = body.indexOf(needle); assert.ok(i >= 0, `🔴 у тілі уроку немає «${needle}»`); return i; };
+  const text = at("{layout.text &&"), main = at("{layout.main.map("), att = at("{layout.attachments.length > 0");
+  assert.ok(text < main, "🔴 презентація знову над текстом");
+  assert.ok(main < att, "🔴 «Вкладення» вище за презентацію");
+});

@@ -3293,14 +3293,27 @@ export async function createTrainingMaterial(body: {
   folderId: number | null; title: string; kind: TrainingKind;
   url?: string | null; content?: string | null;
   filename?: string; mime?: string | null; dataBase64?: string;
+  /** ✏️ Частина уроку: `lessonId` + `role`; тему сервер бере в уроку (`#738`). */
+  lessonId?: number; role?: "main" | "attachment";
 }, onProgress?: (pct: number) => void): Promise<TrainingMaterial> {
   const { data } = await api.post<TrainingMaterial>("/training/material", body, {
     onUploadProgress: (e) => { if (onProgress && e.total) onProgress(Math.round((e.loaded / e.total) * 100)); },
   });
   return data;
 }
-export async function updateTrainingMaterial(id: number, patch: { title?: string; content?: string | null; url?: string | null; folderId?: number | null; position?: number; required?: boolean }): Promise<void> {
+export async function updateTrainingMaterial(id: number, patch: { title?: string; content?: string | null; url?: string | null; folderId?: number | null; position?: number; required?: boolean; role?: "main" | "attachment" }): Promise<void> {
   await api.patch(`/training/material/${id}`, patch);
+}
+/** 📎 Замінити файл матеріалу: id, прогрес і місце в курсі лишаються, міняються байти (`#738`). */
+export async function replaceTrainingFile(id: number, body: { filename: string; mime: string | null; dataBase64: string },
+  onProgress?: (pct: number) => void): Promise<void> {
+  await api.put(`/training/material/${id}/file`, body, {
+    onUploadProgress: (e) => { if (onProgress && e.total) onProgress(Math.round((e.loaded / e.total) * 100)); },
+  });
+}
+/** ↕️ ↑/↓ на одне місце серед сусідів — уроків теми, частин уроку або тем курсу (`#739b`). */
+export async function moveTraining(table: "materials" | "folders", id: number, dir: -1 | 1): Promise<void> {
+  await api.post("/training/reorder", { table, id, dir });
 }
 export async function deleteTrainingMaterial(id: number): Promise<void> {
   await api.delete(`/training/material/${id}`);
