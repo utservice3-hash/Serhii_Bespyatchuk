@@ -50,6 +50,17 @@
 .tr-erow label, .tr-edithead label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--text-muted); }
 .tr-edithead { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; padding: 14px 16px; }
 .tr-edithead .wide { grid-column: 1 / -1; }
+/* ✏️ Повний редактор уроку (28.09.2026): заміна файлу, прапорець, частини уроку. */
+.tr-edit label.hr-btn { flex-direction: row; align-items: center; color: var(--text); font-size: 12px; cursor: pointer; }
+.tr-edit .hr-btn.off { opacity: .55; pointer-events: none; }
+.tr-erow label.tr-echeck { flex-direction: row; align-items: center; gap: 6px; font-size: 13px; color: var(--text); padding-bottom: 8px; }
+.tr-edit > label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.tr-parts { border-top: 1px solid var(--border); padding-top: 10px; display: grid; gap: 6px; }
+.tr-parts-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tr-part { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--r-md, 8px); background: var(--surface-2, var(--bg)); }
+.tr-part .ic { width: 20px; text-align: center; }
+.tr-part-t { flex: 1 1 200px; min-width: 0; }
+.tr-part-sz { font-size: 12px; font-variant-numeric: tabular-nums; }
 
 /* ➕ Діалог «Новий крок»: дропзона з прев'ю. Ширший за типову модалку — у ній показуємо
    саме те, що людина щойно обрала (кадр відео, картинку), а не лише назву файла. */

@@ -57,6 +57,23 @@ test("#739b ПОРЯДОК: ↑/↓ міняє рівно двох сусіді�
   assert.equal(moveInOrder([1, 2, 3], 2, 2), null, "🔴 прийнято крок не на одне місце");
 });
 
+/**
+ * #737c — ЕКРАН РЕДАКТОРА КЛИЧЕ САМЕ ЦІ МОЖЛИВОСТІ: порядок — рухом на сервері (а не номером з екрана), файл —
+ * заміною в уроці Й у частині, частина — через «+ Частина», а редагування уроку не ставить йому «відкрито».
+ * 🧨 Червоніє, якщо повернути `position` з екрана, прибрати заміну файлу з частин чи «відкривати» урок у редагуванні.
+ */
+test("#737c РЕДАКТОР: порядок рухом, заміна файлу в уроці й частинах, редагування не «відкриває» урок", () => {
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "TrainingCourses.tsx"), "utf8");
+  assert.doesNotMatch(src, /updateTrainingMaterial\([^)]*\{\s*position\s*:/, "🔴 порядок знову ставиться номером з екрана");
+  for (const t of ["materials", "folders"])
+    assert.match(src, new RegExp(`moveTraining\\("${t}"`), `🔴 немає ↑/↓ для ${t}`);
+  const uses = src.match(/<ReplaceFile\b/g)?.length ?? 0;
+  assert.ok(uses >= 2, `🔴 «Замінити файл» є в ${uses} місцях — треба і в уроці, і в частині`);
+  assert.match(src, /replaceTrainingFile\(/, "🔴 заміна файлу не кличе сервер");
+  assert.match(src, /lesson:\s*\{\s*id:\s*step\.id/, "🔴 «+ Частина» не передає урок");
+  assert.match(src, /if \(!edit && x\.status == null\) void openTrainingMaterial/, "🔴 редагування уроку ставить йому «відкрито»");
+});
+
 /** Схема з нуля в тимчасовому кластері. `null` — кластер недоступний (пропуск із причиною). */
 async function cluster(t: { skip: (m: string) => void }) {
   const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
