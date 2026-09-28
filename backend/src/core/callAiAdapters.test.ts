@@ -223,7 +223,9 @@ const TURNS: Turn[] = [
 test("#658 GEMINI: контракт запиту, вихід із думками, MAX_TOKENS і блок — не успіх, цитати звірено", async () => {
   const body = buildAnalysisRequest(TURNS, 2048);
   const gc = body.generationConfig as Record<string, any>;
-  assert.equal(gc.responseFormat.text.mimeType, "application/json");
+  // Перелік, а не MIME-рядок: живий API відхилив "application/json" кодом 400 (пілот 28.09.2026).
+  // Попередня редакція гейта стверджувала саме хибне значення — тобто стерегла припущення, а не контракт.
+  assert.equal(gc.responseFormat.text.mimeType, "APPLICATION_JSON", "🔴 MIME-рядок — живий Gemini відповідає на нього 400");
   assert.equal(gc.responseFormat.text.schema, ANALYSIS_SCHEMA);
   assert.equal(gc.thinkingConfig.thinkingLevel, "low", "🔴 minimal на 3.8 Flash — помилка; дефолт medium — дорожче");
   const flat = JSON.stringify(body);

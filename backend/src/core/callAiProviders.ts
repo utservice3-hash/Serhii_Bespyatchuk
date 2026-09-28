@@ -11,11 +11,11 @@ import { fetchWithRetry, VendorError, type HttpDeps, type RetryPolicy } from "./
  *   • ElevenLabs: канал слова береться з `words[].channel_index` — у прикладі відповіді верхнього
  *     `channel_index` у транскрипті немає; верхній — лише запасний шлях, далі позиція в масиві;
  *   • ElevenLabs: моно-файл при `use_multi_channel=true` приходить ОДНОКАНАЛЬНОЮ формою;
- *   • Gemini: `responseFormat.text.{mimeType, schema}` — чинний шлях (старі `responseSchema` /
+ *   • Gemini: `responseFormat.text.{mimeType: "APPLICATION_JSON", schema}` — чинний шлях (старі `responseSchema` /
  *     `_responseJsonSchema` позначені deprecated); `thinkingLevel` рядком `low`, як у REST-прикладі
  *     (`minimal` на 3.8 Flash — помилка); `temperature` НЕ шлемо (для Gemini 3.x — «remove»).
- * ⚠️ Що з цього прийме живий API, покаже перший виклик пілота — до нього це контракт із тексту.
- * ⚠️ Чи бере Scribe телефонне аудіо 8 кГц без перетворення — документація НЕ каже; це теж пілот.
+ * ✅ ПЕРЕВІРЕНО ЖИВИМ API 28.09.2026: `mimeType` приймається лише переліком `APPLICATION_JSON` (рядок
+ *   `application/json` — 400); `thinkingLevel` приймається і `low`, і `LOW`; Scribe v2 бере WAV 8 кГц стерео.
  *
  * 🔒 Ключ приходить ПАРАМЕТРОМ і їде ЛИШЕ заголовком (`xi-api-key` / `x-goog-api-key`), не в URL.
  */
@@ -208,7 +208,9 @@ export function buildAnalysisRequest(turns: readonly Turn[], maxOutputTokens: nu
     system_instruction: { parts: [{ text: ANALYSIS_SYSTEM_PROMPT }] },
     contents: [{ role: "user", parts: [{ text: dialogText(turns) }] }],
     generationConfig: {
-      responseFormat: { text: { mimeType: "application/json", schema: ANALYSIS_SCHEMA } },
+      // Перелік, а не рядок MIME: живий API 28.09.2026 на "application/json" відповів 400
+      // «Invalid value at generation_config.response_format.text.mime_type». Правий був довідник, не приклад гайду.
+      responseFormat: { text: { mimeType: "APPLICATION_JSON", schema: ANALYSIS_SCHEMA } },
       thinkingConfig: { thinkingLevel: "low" },
       maxOutputTokens,
     },
