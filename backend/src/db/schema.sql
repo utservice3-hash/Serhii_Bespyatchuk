@@ -4092,3 +4092,98 @@ CREATE TABLE IF NOT EXISTS leadgen_plans (
   UNIQUE (manager_id, month, metric)
 );
 CREATE INDEX IF NOT EXISTS idx_leadgen_plans_month ON leadgen_plans (month, status);
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🗂 БІЗНЕС-АСИСТЕНТ, прохід 1 (ТЗ «Блок Бізнес-асистент», задача 4314, 28.09.2026):
+-- Претензії й Судовий реєстр. Правила — `core/baRules.ts`, операції — `core/baClaims.ts`.
+-- ⚠️ Revert коду не відкочує таблиць і рядків: вони лишаються, і їх ніхто не читає.
+-- ══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS ba_claims (
+  id            SERIAL PRIMARY KEY,
+  company       TEXT NOT NULL,
+  -- Ключ клієнта з дебіторки; NULL — претензію заведено вручну.
+  client_key    TEXT,
+  -- ЗНІМОК на момент створення: `receivables` перебудовується кожним синком, тож живе
+  -- посилання на рядок дебіторки з часом показувало б інше число (гейт #754b).
+  debt_amount   NUMERIC(14,2),
+  overdue_days  INTEGER,
+  sent_on       DATE,
+  essence       TEXT NOT NULL DEFAULT '',
+  status        TEXT NOT NULL DEFAULT 'problem'
+                CHECK (status IN ('problem','sent','answered','noreply','court','paid','closed')),
+  result        TEXT,
+  source        TEXT NOT NULL CHECK (source IN ('receivables','manual')),
+  archived_at   TIMESTAMPTZ,
+  archived_by   INTEGER REFERENCES users(id),
+  created_by    INTEGER REFERENCES users(id),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Одна ВІДКРИТА претензія на клієнта з дебіторки: друга кнопка повертає наявну (гейт #754c).
+-- Межу тримає база, а не лише роут: два одночасні кліки не створять двох.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ba_claims_open_client ON ba_claims (client_key)
+  WHERE client_key IS NOT NULL AND archived_at IS NULL AND status NOT IN ('paid','closed');
+
+CREATE TABLE IF NOT EXISTS ba_court_cases (
+  id               SERIAL PRIMARY KEY,
+  title            TEXT NOT NULL,
+  plaintiff        TEXT NOT NULL DEFAULT '',
+  defendant        TEXT NOT NULL DEFAULT '',
+  case_number      TEXT NOT NULL DEFAULT '',
+  filed_on         DATE,
+  next_hearing_on  DATE,
+  status           TEXT NOT NULL DEFAULT 'prep' CHECK (status IN ('prep','filed','going','done')),
+  -- Справа з претензії: рівно одна на претензію (гейт #753).
+  claim_id         INTEGER UNIQUE REFERENCES ba_claims(id),
+  archived_at      TIMESTAMPTZ,
+  archived_by      INTEGER REFERENCES users(id),
+  created_by       INTEGER REFERENCES users(id),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Файли претензій і справ. Перенесення в суд копіює РЯДКИ, а не байти: копія посилається на той
+-- самий файл на диску і знає, з якого рядка претензії прийшла.
+CREATE TABLE IF NOT EXISTS ba_files (
+  id                  SERIAL PRIMARY KEY,
+  owner_kind          TEXT NOT NULL CHECK (owner_kind IN ('claim','case')),
+  owner_id            INTEGER NOT NULL,
+  doc_type            TEXT NOT NULL CHECK (doc_type IN ('claim','lawsuit','receipt','company_docs','other')),
+  name                TEXT NOT NULL,
+  stored_name         TEXT NOT NULL,
+  mime                TEXT NOT NULL,
+  size_bytes          INTEGER NOT NULL,
+  from_claim_file_id  INTEGER REFERENCES ba_files(id),
+  created_by          INTEGER REFERENCES users(id),
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ba_files_owner ON ba_files (owner_kind, owner_id);
+
+CREATE TABLE IF NOT EXISTS ba_events (
+  id          BIGSERIAL PRIMARY KEY,
+  owner_kind  TEXT NOT NULL CHECK (owner_kind IN ('claim','case')),
+  owner_id    INTEGER NOT NULL,
+  at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actor_id    INTEGER REFERENCES users(id),
+  what        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ba_events_owner ON ba_events (owner_kind, owner_id, at DESC);
+
+-- Роль «Бізнес-асистент». Оголошення-близнюк — у `db/roleDeclarations.ts` (#15). Єдиний екран —
+-- розділ; решту адмін вмикає тумблерами. `DO NOTHING`: сід не відкочує правок адміна щодеплою.
+INSERT INTO roles (key, name, built_in, data_scope, screen_access, permissions)
+VALUES ('business_assistant', 'Бізнес-асистент', false, 'own', '{"ba":true}'::jsonb, '{}'::jsonb)
+ON CONFLICT (key) DO NOTHING;
+
+-- Екран «Бізнес-асистент» для керівництва (той самий перелік, що MANAGEMENT_ROLES у `core/docAccess.ts`).
+-- Ідемпотентно й НЕ перетирає рішень адміна: лише де ключа ще немає.
+UPDATE roles SET screen_access = screen_access || '{"ba":true}'::jsonb
+  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'hr')
+    AND NOT (screen_access ? 'ba');
+
+-- Право «Проблемний клієнт» у дебіторці (рішення Романа 24.09.2026): керівництво і фінансист.
+-- Явними рядками видача й зняття, як `export_bank_statement`: склад фіксований кодом (#754).
+UPDATE roles SET permissions = permissions || '{"create_claim": true}'::jsonb
+ WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'hr', 'financier');
+UPDATE roles SET permissions = permissions - 'create_claim'
+ WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp', 'hr', 'financier');

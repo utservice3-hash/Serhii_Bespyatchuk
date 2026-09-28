@@ -35,6 +35,8 @@ export const PERMISSION_CATALOG = [
   "export",
   /** 🏦 Вивантаження виписки у форматі банку (CSV) — рішення Романа 21.09.2026: бухгалтерія, фінансисти, керівництво. */
   "export_bank_statement",
+  /** 🗂 Кнопка «Проблемний клієнт» у дебіторці (задача 4314, рішення Романа 24.09.2026): керівництво і фінансист. */
+  "create_claim",
   "manage_bank_accounts",
   "manage_bank_hidden",
   "manage_credit_limits",

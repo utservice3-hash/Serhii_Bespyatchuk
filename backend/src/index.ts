@@ -46,6 +46,8 @@ import { trainingRouter } from "./routes/training.js";
 import { hiringQuestionsRouter } from "./routes/hiringQuestions.js";
 import { candidateTrainingRouter } from "./routes/candidateTraining.js";
 import { hiringRouter } from "./routes/hiring.js";
+import { baRouter } from "./routes/businessAssistant.js";
+import { receivablesClaimRouter } from "./routes/receivablesClaims.js";
 import { nominationsRouter } from "./routes/nominations.js";
 import { peopleRouter } from "./routes/people.js";
 import { statisticsRouter } from "./routes/statistics.js";
@@ -159,6 +161,8 @@ app.use("/api/training/candidate", candidateTrainingRouter); // «моє нав�
 app.use("/api/training/questions", hiringQuestionsRouter); // питання кандидата тімліду (найм 2a) — ДО trainingRouter
 app.use("/api/training", trainingRouter);
 app.use("/api/hiring", hiringRouter);
+app.use("/api/ba", baRouter); // 🗂 Бізнес-асистент: претензії й судовий реєстр (задача 4314)
+app.use("/api/receivables-claims", receivablesClaimRouter); // кнопка «Проблемний клієнт» у дебіторці
 app.use("/api/nominations", nominationsRouter); // 🏆 Номінації тижня (21.09.2026)
 app.use("/api/people", peopleRouter); // 📷 Фото співробітників (22.09.2026)
 app.use("/api/secrets", secretsRouter); // 🔐 сейф доступів співробітників (18.09.2026)
