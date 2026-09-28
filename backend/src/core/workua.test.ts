@@ -110,6 +110,42 @@ test("#805 ЖИВИЙ SQL: відгуки → кандидати без дубл
 });
 
 /**
+ * #808 — ЖИВИЙ SQL: ПРИВʼЯЗКА ДОЗАПОВНЮЄ ВІДГУКИ, ЩО ПРИЙШЛИ РАНІШЕ. Перший забір на проді ліг цілком «без вакансії»
+ * (91 відгук, привʼязок нуль). Привʼязка ставить вакансію кандидатам ЦІЄЇ вакансії work.ua, у яких вакансії немає
+ * жодної; картку з вакансією, поставленою руками, не чіпає; чужа вакансія work.ua не зачеплена; повтор — нулі;
+ * відвʼязка поставлене не знімає.
+ * 🧨 Червоніє, якщо дозаповнення прибрати (кандидати лишаються «без вакансії») або якщо воно чіпає ручну картку.
+ */
+test("#808 ЖИВИЙ SQL: привʼязка вакансії work.ua ставить вакансію відгукам, що прийшли раніше; ручну не чіпає", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  try {
+    const own = await s.h.createVacancy(s.db as never, null, { title: "Логіст" });
+    const manual = await s.h.createCandidate(s.db as never, null, { fullName: "Бойко Кирило", phone: "0501110001", vacancyId: own, source: "work.ua" });
+    const resp = parseResponses({ items: [
+      { id: 201, job_id: 7542760, fio: "Олефіренко Катерина", phone: "0502223344", type: "resume" },
+      { id: 202, job_id: 7542760, fio: "Гузь Павло", phone: "0502223355", type: "resume" },
+      { id: 203, job_id: 7542760, fio: "Бойко Кирило", phone: "0501110001", type: "resume" },
+      { id: 204, job_id: 999, fio: "Інша Вакансія", phone: "0503334455", type: "resume" },
+    ] });
+    await s.store.absorbResponses(s.db, resp);
+    assert.equal((await s.store.workuaSummary(s.db)).novac, 4, "🔴 до привʼязки відгуки мали лягти без вакансії");
+    const r = await s.store.setVacancyWorkuaJob(s.db, s.vac, 7542760);
+    assert.deepEqual(r, { attached: 2, kept: 1 }, "🔴 не той підсумок дозаповнення: " + JSON.stringify(r));
+    const vacsOf = async (name: string) => (await s.c.query(
+      `SELECT array_agg(cv.vacancy_id ORDER BY cv.vacancy_id) AS v FROM hiring_candidates c LEFT JOIN hiring_candidate_vacancies cv ON cv.candidate_id = c.id WHERE c.full_name = $1`, [name])).rows[0].v;
+    assert.deepEqual(await vacsOf("Олефіренко Катерина"), [s.vac], "🔴 відгук до привʼязки лишився без вакансії");
+    assert.deepEqual(await vacsOf("Гузь Павло"), [s.vac]);
+    assert.deepEqual(await vacsOf("Бойко Кирило"), [own], "🔴 ручну вакансію Івана зачеплено");
+    assert.deepEqual(await vacsOf("Інша Вакансія"), [null], "🔴 чужа вакансія work.ua отримала нашу вакансію");
+    assert.equal((await s.store.workuaSummary(s.db)).novac, 1, "🔴 лічильник «без вакансії» не зрушив");
+    assert.ok((await s.c.query(`SELECT 1 FROM hiring_events e JOIN hiring_candidates c ON c.id = e.candidate_id WHERE c.full_name = 'Гузь Павло' AND e.kind = 'vacancy' AND e.comment LIKE '%до привʼязки%'`)).rowCount, "🔴 дозаповнення не лишило сліду в історії");
+    assert.deepEqual(await s.store.setVacancyWorkuaJob(s.db, s.vac, 7542760), { attached: 0, kept: 0 }, "🔴 повторна привʼязка дублює");
+    await s.store.setVacancyWorkuaJob(s.db, s.vac, null);
+    assert.deepEqual(await vacsOf("Гузь Павло"), [s.vac], "🔴 відвʼязка зняла вже поставлену вакансію");
+  } finally { await s.done(); }
+});
+
+/**
  * #807 — БЕЗ ЛОГІНА — ЧЕСНИЙ ПРОПУСК, А НЕ «НУЛЬ ВІДГУКІВ»; перший запуск бере рівно 14 днів, далі — лише нове
  * (зупинка на обробленому id); `workua_responses` закрита для AI.
  * 🧨 Червоніє, якщо без логіна джоба «успішно» нічого не робить або перший запуск тягне всю історію.
