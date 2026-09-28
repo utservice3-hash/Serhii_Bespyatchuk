@@ -3697,14 +3697,22 @@ export interface ClientPlanRow {
   clientKey: string; clientName: string; paymentType: string | null;
   orders: number; lifetimeRevenue: number; since: string | null; lastOrderDays: number | null;
   history: number[]; plan: number; planStatus: "draft" | "pending" | "approved" | "none";
+  /** 🗂 Вкладка й порядок «Всі» (ТЗ 22.09, п.3.1) — з сервера (`core/clientTabs.ts`), фронт не рахує. */
+  tabGroup: "regular" | "yellow" | "react";
   reviewNote: string | null; weeks: ClientPlanWeek[];
   /** 🧾 Факт «з рахунку і далі» (ТЗ 22.09, п.2.1) — не «успішно реалізовано». */
   fact: number; pct: number | null;
   /** ① за той самий місяць: скільки з факту вже «успішно реалізовано». */
   factSuccess?: number;
   managerId: number; managerName: string; pinned: boolean; comments: number;
-  /** 📞 Дзвінки за поточний рік — рівно рядок «розмов N із M» картки (ядро `core/clientCallsYear.ts`). */
-  callsYear: { year: number; calls: number; talks: number };
+  /** 📞 Розмов і всіх дзвінків за обраний місяць (ТЗ 22.09, п.3.3) — ядро `core/clientCalls.ts`. */
+  callsMonth: { month: string; calls: number; talks: number };
+  /** 📌 Закріплене обґрунтування плану цього місяця (п.3.3); `null` — не закріплене. */
+  planBasis: PlanBasis | null;
+  /** 🎧 ТА САМА розмова, що `lastTalk`: запис, тривалість, хто говорив (п.3.3 «послухати з рядка»). */
+  lastTalkRecording?: string | null;
+  lastTalkSec?: number | null;
+  lastTalkBy?: string | null;
   /** 🔗 Хто приєднаний до цього рядка (обʼєднання в CRM-ключах). Порожньо — ні з ким. */
   merged?: AliasName[];
   /** Команда менеджера — для ієрархії «команда → менеджер → клієнти» (подача, не скоуп). */
@@ -3758,6 +3766,8 @@ export interface UnattachedPlan {
 }
 export interface ClientPlansResp {
   month: string; historyMonths: string[];
+  /** Порядок груп у вкладці «Всі» — з сервера, щоб фронт не тримав копії. */
+  tabGroupRank: Record<"regular" | "yellow" | "react", number>;
   weeks: { label: string; from: string; to: string; status: "past" | "current" | "future"; workingDays: number }[];
   /** Довідники дій, що переїхали з вкладки «Реактивація». Приходять із ядра. */
   closeReasons?: { key: string; label: string }[];
@@ -3831,8 +3841,15 @@ export interface ClientCardDeal {
   kommoId: number; crmUrl: string; name: string | null; date: string | null;
   dateKind: "closed" | "created"; price: number; stage: string; won: boolean; manager: string | null;
 }
-export interface ClientCallYear { year: number; calls: number; talks: number; totalSec: number; lastAt: string | null }
+/** 📌 Обґрунтування плану (ТЗ 22.09, п.3.3): АБО дзвінок, АБО скрин контакту. */
+export interface PlanBasis {
+  kind: "call" | "contact"; callId: string | null; contactId: number | null;
+  at: string | null; sec: number | null; recording: string | null; by: string | null;
+  channel: string | null; fileName: string | null;
+}
 export interface ClientCall {
+  /** `ringostat_calls.uniqueid` — щоб закріпити саме цю розмову як обґрунтування. */
+  id: string;
   at: string; direction: "in" | "out"; billsec: number; answered: boolean;
   disposition: string | null; manager: string | null;
   /** 🎧 Пряме посилання на запис у кабінеті Ringostat. Відкривається без логіна. */
@@ -3888,8 +3905,9 @@ export interface ClientCard {
   phone?: "has" | "none";
   phonesCount?: number;
   lastCall?: { at: string; manager: string | null; billsec: number; direction: "in" | "out" } | null;
-  /** 📞 Дзвінки по роках. `callsSince` — глибина памʼяті: порожній рік до неї означає «даних немає». */
-  callsByYear?: ClientCallYear[];
+  /** 📌 Місяць обґрунтування (екрана, з якого відкрили картку) і поточне закріплення. */
+  basisMonth?: string;
+  planBasis?: PlanBasis | null;
   calls?: ClientCall[];
   callsShown?: number;
   callsLimit?: number;
@@ -3903,6 +3921,8 @@ export interface ClientCard {
   monthsTotal: number; deals: ClientCardDeal[]; anchorNote: string;
   /** Права на дії керування — рахує СЕРВЕР тими самими гейтами, що й самі роути. */
   canArchive: boolean; canMerge: boolean; canAssign: boolean; mergeScope: "all" | "team";
+  /** 👤 Кого показати у формі передачі: `null` — усіх (КВП/ОД/адмін), число — лише цю команду (тімлід). */
+  assignTeamId?: number | null;
   /** ⭐ «Вважати постійним попри правило» — право, стан і примітка «чому». */
   canForceRegular: boolean; forcedRegular: boolean; forceNote: string | null;
   /** Клієнт ЗАРАЗ в архіві (з автоповерненням) — тоді дія зворотна. */
@@ -3910,9 +3930,18 @@ export interface ClientCard {
   archiveReason: string | null;
   archiveReasons: { key: string; label: string }[];
 }
-export async function fetchClientCard(clientKey: string): Promise<ClientCard> {
-  const { data } = await api.get<ClientCard>("/dashboard/client-card", { params: { clientKey } });
+export async function fetchClientCard(clientKey: string, month?: string): Promise<ClientCard> {
+  const { data } = await api.get<ClientCard>("/dashboard/client-card", { params: month ? { clientKey, month } : { clientKey } });
   return data;
+}
+/** 📌 Закріпити обґрунтування плану: рівно одне — `callId` АБО `contactId` (сервер перевіряє, що вони цього клієнта). */
+export async function pinPlanBasis(p: { clientKey: string; month: string; callId?: string; contactId?: number }): Promise<PlanBasis | null> {
+  const { data } = await api.post<{ planBasis: PlanBasis | null }>("/dashboard/client-plan-basis", p);
+  return data.planBasis;
+}
+/** Зняти обґрунтування — парна дія до закріплення. */
+export async function clearPlanBasis(p: { clientKey: string; month: string }): Promise<void> {
+  await api.post("/dashboard/client-plan-basis/clear", p);
 }
 
 /** 💬 Останній коментар клієнта — те саме поле `client_comments`, що в картці. */

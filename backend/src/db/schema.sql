@@ -3983,6 +3983,21 @@ CREATE TABLE IF NOT EXISTS client_next_steps (
 );
 CREATE INDEX IF NOT EXISTS idx_client_next_steps_open ON client_next_steps(client_key) WHERE done_at IS NULL;
 
+-- 📌 ОБҐРУНТУВАННЯ ПЛАНУ (ТЗ Юлі 22.09.2026, п.3.3; задача 4312) — див. core/planBasis.ts.
+-- Одне на клієнта й місяць; АБО дзвінок Ringostat, АБО скрин контакту — CHECK тримає «рівно одне».
+-- Контакт видалили → обґрунтування зникає разом із ним (CASCADE); дзвінки з ringostat_calls не
+-- видаляються, тож для них каскад не потрібен. ⚠️ revert коду таблицю не прибирає (вона порожня й нешкідлива).
+CREATE TABLE IF NOT EXISTS client_plan_basis (
+  client_key    TEXT NOT NULL,
+  month         DATE NOT NULL,
+  call_uniqueid TEXT REFERENCES ringostat_calls(uniqueid),
+  contact_id    INTEGER REFERENCES client_contacts(id) ON DELETE CASCADE,
+  set_by        INTEGER REFERENCES users(id),
+  set_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (client_key, month),
+  CONSTRAINT client_plan_basis_one CHECK ((call_uniqueid IS NULL) <> (contact_id IS NULL))
+);
+
 -- 🎓 ОДНОРАЗОВИЙ ПЕРЕНОС АКАДЕМІЇ SEREDA (23.09.2026, рішення Романа: «переносимо все, далі навчання живе
 -- на нашому сервері»). `external_id` — ключ ідемпотентності імпорту: повторний прогін ОНОВЛЮЄ той самий
 -- рядок, а не створює другий. Після переносу Sereda не потрібна; колонки лишаються слідом походження.
@@ -4260,18 +4275,29 @@ INSERT INTO roles (key, name, built_in, data_scope, screen_access, permissions)
 VALUES ('business_assistant', 'Бізнес-асистент', false, 'own', '{"ba":true}'::jsonb, '{}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
--- Екран «Бізнес-асистент» для керівництва (той самий перелік, що MANAGEMENT_ROLES у `core/docAccess.ts`).
--- Ідемпотентно й НЕ перетирає рішень адміна: лише де ключа ще немає.
+-- Екран «Бізнес-асистент» для керівництва: admin, СЕО, ОД, КВП. HR — НІ (рішення Романа 28.09.2026:
+-- «HR не бачить взагалі»). Ідемпотентно й НЕ перетирає рішень адміна: лише де ключа ще немає.
 UPDATE roles SET screen_access = screen_access || '{"ba":true}'::jsonb
-  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'hr')
+  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp')
     AND NOT (screen_access ? 'ba');
 
--- Право «Проблемний клієнт» у дебіторці (рішення Романа 24.09.2026): керівництво і фінансист.
+-- Разові кроки блоку, щоб повторний прогін схеми їх не повторював (той самий прийом, що `hiring_migrations`).
+CREATE TABLE IF NOT EXISTS ba_migrations (
+  key     TEXT PRIMARY KEY,
+  done_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Разово: перший викат (f76963e, 28.09.2026) дав HR вкладку `ba`. Прибираємо ОДИН раз — позначка в
+-- `ba_migrations`, тож якщо адмін згодом свідомо ввімкне HR тумблером, наступний викат цього не відкотить (#772c).
+WITH step AS (INSERT INTO ba_migrations (key) VALUES ('hr-no-ba-2026-09-28') ON CONFLICT DO NOTHING RETURNING key)
+UPDATE roles SET screen_access = screen_access - 'ba'
+ WHERE key = 'hr' AND EXISTS (SELECT 1 FROM step);
+
+-- Право «Проблемний клієнт» у дебіторці (рішення Романа 24.09.2026): керівництво і фінансист; HR — ні (28.09.2026).
 -- Явними рядками видача й зняття, як `export_bank_statement`: склад фіксований кодом (#771).
 UPDATE roles SET permissions = permissions || '{"create_claim": true}'::jsonb
- WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'hr', 'financier');
+ WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'financier');
 UPDATE roles SET permissions = permissions - 'create_claim'
- WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp', 'hr', 'financier');
+ WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp', 'financier');
 
 -- ▼ AI-АНАЛІЗ ДЗВІНКІВ ПО РЕКЛАМНИХ ЛІДАХ (ТЗ 22.09.2026, прохід A, коміт ②) ▼
 -- Три таблиці з ІСТОРІЄЮ: жодного TRUNCATE, жодного перезапису. Старий шлях (uts-bot → Google-лист →

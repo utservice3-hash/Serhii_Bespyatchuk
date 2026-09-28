@@ -190,10 +190,16 @@ function MergePanel({ onDone, teamOnly }: { onDone: () => void; teamOnly?: boole
 }
 
 export /** 👤 Відповідальний менеджер — межа місяця, історія, розбіжність із CRM. */
-function ManagerPanel({ clients, onDone }: { clients: ReactivationRow[]; onDone: () => void }) {
+function ManagerPanel({ clients, onDone, preset, teamId }: {
+  clients: ReactivationRow[]; onDone: () => void;
+  /** 👤 Клієнт уже відомий (відкрито з його картки, ТЗ 22.09 п.3.2): пошук не потрібен. */
+  preset?: ClientPickerValue;
+  /** Кого показувати: `undefined`/`null` — усіх; число — лише цю команду (тімлід); `-1` — нікого. */
+  teamId?: number | null;
+}) {
   // Був `<select>` із перших 300 клієнтів — тобто решта була недосяжна, і хто
   // саме випав, з екрана не читалось. Тепер той самий пошук, що в обʼєднанні.
-  const [sel, setSel] = useState<ClientPickerValue | null>(null);
+  const [sel, setSel] = useState<ClientPickerValue | null>(preset ?? null);
   const clientKey = sel?.clientKey ?? "";
   const [managerId, setManagerId] = useState<number | "">("");
   const [reason, setReason] = useState("");
@@ -201,7 +207,12 @@ function ManagerPanel({ clients, onDone }: { clients: ReactivationRow[]; onDone:
   const [history, setHistory] = useState<ManagerHistoryRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-  useEffect(() => { fetchManagerOptions().then(setManagers).catch(() => setManagers([])); }, []);
+  /* Тімліду — лише його команда: сервер однаково відхилить чужого менеджера (403), а список
+     на всю компанію робив цю відмову несподіванкою — «доступ забрали» (ТЗ 22.09, п.3.2). */
+  useEffect(() => {
+    if (teamId === -1) { setManagers([]); return; }
+    fetchManagerOptions(teamId ?? undefined).then(setManagers).catch(() => setManagers([]));
+  }, [teamId]);
   useEffect(() => { if (clientKey) fetchClientManagerHistory(clientKey).then(setHistory).catch(() => setHistory([])); }, [clientKey]);
   // «Зараз веде» беремо з рядка списку, а якщо клієнта в поточному зрізі немає —
   // з самого пошуку: обидва джерела — COALESCE(закріплений, основний за оплатами).
@@ -224,11 +235,16 @@ function ManagerPanel({ clients, onDone }: { clients: ReactivationRow[]; onDone:
       </div>
 
       <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 4 }}>Клієнт</div>
-      <ClientPicker value={sel} onPick={setSel} placeholder="назва або номер клієнта…" disabled={busy} />
+      {preset
+        ? <div style={{ fontSize: 14, fontWeight: 700 }}>{preset.clientName}</div>
+        : <ClientPicker value={sel} onPick={setSel} placeholder="назва або номер клієнта…" disabled={busy} />}
       {curManager && <div style={{ fontSize: 12, color: "#6b7280", marginTop: 5 }}>Зараз веде: <b>{curManager}</b>{cur?.pinned ? " 📌" : ""}</div>}
 
       <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 12, margin: "8px 0" }}>▼ передати</div>
-      <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 4 }}>Новий відповідальний</div>
+      <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 4 }}>
+        Новий відповідальний{teamId != null && teamId !== -1 ? " · лише ваша команда" : ""}
+      </div>
+      {teamId === -1 && <div style={{ fontSize: 12, color: "#b45309", marginBottom: 4 }}>Ви не привʼязані до команди — передавати немає кому. Зверніться до КВП.</div>}
       <select value={managerId} onChange={(e) => setManagerId(e.target.value ? Number(e.target.value) : "")} style={{ ...S.input, cursor: "pointer" }}>
         <option value="">— оберіть менеджера —</option>
         {managers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
@@ -277,7 +293,7 @@ function ManagerPanel({ clients, onDone }: { clients: ReactivationRow[]; onDone:
               const err = e as { response?: { data?: { error?: string } }; message?: string };
               setMsg(`Не передано: ${err.response?.data?.error ?? err.message ?? "помилка"}`); }
             finally { setBusy(false); } }}>Передати</button>
-        <button style={S.btn()} disabled={busy} onClick={() => { setSel(null); setManagerId(""); setReason(""); setMsg(null); }}>Скасувати</button>
+        <button style={S.btn()} disabled={busy} onClick={() => { setSel(preset ?? null); setManagerId(""); setReason(""); setMsg(null); }}>Скасувати</button>
         {(!clientKey || !managerId || !reason.trim()) && !busy && (
           <span style={{ fontSize: 11, color: "#9ca3af" }}>{!clientKey ? "оберіть клієнта" : !managerId ? "оберіть менеджера" : "введіть причину"}</span>)}
       </div>
