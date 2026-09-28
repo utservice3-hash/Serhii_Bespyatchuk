@@ -7,6 +7,7 @@ import {
   type TrainingModule, type TrainingUploadRules,
 } from "../../../api";
 import { LessonBody } from "./LessonBody";
+import { CourseHeader, LessonPage, ProgramAccordion } from "./LearnLayout";
 import "./hiring.css";
 import "./training.css";
 
@@ -179,6 +180,8 @@ function CourseView({ id, canEdit, onBack }: { id: number; canEdit: boolean; onB
 
   const steps = useMemo(() => (d?.modules ?? []).flatMap((m) => m.materials.map((s) => ({ ...s, moduleName: m.name }))), [d]);
   const cur = curId != null ? steps.find((s) => s.id === curId) ?? null : steps.find((s) => s.state === "available" || s.state === "opened") ?? steps[0] ?? null;
+  /** 🎓 Перегляд — будова Sereda: без вибраного уроку показуємо СТОРІНКУ КУРСУ, а не перший крок. */
+  const reading = curId != null ? steps.find((s) => s.id === curId) ?? null : null;
 
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true); setErr(null);
@@ -190,26 +193,57 @@ function CourseView({ id, canEdit, onBack }: { id: number; canEdit: boolean; onB
   if (!d) return <p className="loading-text">Завантаження…</p>;
   const done = steps.filter((s) => s.state === "done").length, req = steps.filter((s) => s.required).length;
 
+  /* 🧩 Кнопки редактора — ОДНІ на обидва режими: у «Перегляді» вони в тонкій смузі над сторінкою Sereda,
+     у «Редагуванні» — у звичному рядку. Текст кнопок тримає `#707`. */
+  const editorControls = canEdit && (
+    <>
+      <span className={`hr-pill ${d.course.published ? "ok" : "wn"}`}>{d.course.published ? "опубліковано" : "чернетка"}</span>
+      <div className="hr-seg">
+        <button className={edit ? "" : "on"} onClick={() => setEdit(false)}>Перегляд</button>
+        <button className={edit ? "on" : ""} onClick={() => setEdit(true)}>Редагування</button>
+      </div>
+      <button className="hr-btn xs" disabled={busy || steps.length === 0} title={steps.length ? "" : "Порожній курс публікувати нема сенсу"}
+        onClick={() => void act(() => patchTrainingCourse(id, { published: !d.course.published }))}>
+        {d.course.published ? "Приховати" : "Опублікувати"}
+      </button>
+    </>
+  );
+
+  /* 🎓 ПЕРЕГЛЯД — ЯК У SEREDA: сторінка курсу (шапка + «Програма курсу») або сторінка уроку з бічною панеллю. */
+  if (!edit) {
+    return (
+      <div>
+        <div className="lr-topbar">
+          <button type="button" className="lr-backlink" onClick={reading ? () => { setCurId(null); load(); } : onBack}>
+            ← {reading ? d.course.title : "Усі курси"}
+          </button>
+          {canEdit && <div className="lr-topbar-ed">{editorControls}</div>}
+        </div>
+        {err && <div className="hr-card" style={{ padding: 10, color: "var(--danger)" }}>{err}</div>}
+        {reading ? (
+          <ReadLesson key={reading.id} step={reading} modules={d.modules} percent={d.percent}
+            onBack={() => { setCurId(null); load(); }} onOpen={setCurId} onChanged={load} />
+        ) : (
+          <>
+            <CourseHeader title={d.course.title} percent={d.percent} modules={d.modules} onContinue={setCurId} />
+            <div className="lr-sect">Програма курсу</div>
+            {d.modules.length === 0
+              ? <div className="hr-card" style={{ padding: 18 }}><span className="hr-muted">У курсі ще немає тем.{canEdit ? " Увімкніть «Редагування», додайте тему і крок у ній." : ""}</span></div>
+              : <ProgramAccordion modules={d.modules} currentId={null} onOpen={setCurId} />}
+          </>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="hr-pills" style={{ alignItems: "center" }}>
         <button className="hr-btn" onClick={onBack}>← Усі курси</button>
         <b style={{ fontSize: 16 }}>{d.course.title}</b>
-        {canEdit && <span className={`hr-pill ${d.course.published ? "ok" : "wn"}`}>{d.course.published ? "опубліковано" : "чернетка"}</span>}
         <span className="hr-muted" style={{ marginLeft: "auto" }}>{done} із {req} обовʼязкових</span>
         <span className="tr-track" style={{ width: 120 }}><i style={{ width: `${d.percent}%`, background: d.percent === 100 ? "var(--ok)" : "var(--info)" }} /></span>
-        {canEdit && (
-          <>
-            <div className="hr-seg">
-              <button className={edit ? "" : "on"} onClick={() => setEdit(false)}>Перегляд</button>
-              <button className={edit ? "on" : ""} onClick={() => setEdit(true)}>Редагування</button>
-            </div>
-            <button className="hr-btn xs" disabled={busy || steps.length === 0} title={steps.length ? "" : "Порожній курс публікувати нема сенсу"}
-              onClick={() => void act(() => patchTrainingCourse(id, { published: !d.course.published }))}>
-              {d.course.published ? "Приховати" : "Опублікувати"}
-            </button>
-          </>
-        )}
+        {editorControls}
       </div>
 
       {err && <div className="hr-card" style={{ padding: 10, color: "var(--danger)" }}>{err}</div>}
@@ -472,6 +506,52 @@ function AddStep({ folder, upload, onClose, onAdded }: {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * 🎓 УРОК У ПЕРЕГЛЯДІ — як у Sereda: окрема сторінка з бічною панеллю (`LearnLayout.tsx`). Вміст і стан — з сервера:
+ * «відкрито» ставиться при першому погляді, «опрацював» — кнопкою внизу; той самий «Наступний», що й у Sereda.
+ */
+function ReadLesson({ step, modules, percent, onBack, onOpen, onChanged }: {
+  step: TrainingCourseDetail["modules"][number]["materials"][number];
+  modules: TrainingCourseDetail["modules"]; percent: number;
+  onBack: () => void; onOpen: (id: number) => void; onChanged: () => void;
+}) {
+  const [m, setM] = useState<TrainingMaterialContent | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setM(null); setErr(null);
+    fetchTrainingMaterial(step.id).then((x) => {
+      if (!alive) return;
+      setM(x);
+      if (x.status == null) void openTrainingMaterial(step.id).then(onChanged).catch(() => undefined);
+    }).catch((e) => { if (alive) setErr(errText(e)); });
+    return () => { alive = false; };
+  }, [step.id, onChanged]);
+
+  const all = modules.flatMap((x) => x.materials);
+  const next = all[all.findIndex((x) => x.id === step.id) + 1] ?? null;
+  const done = step.state === "done" || m?.status === "done";
+
+  const markDone = async () => {
+    setSaving(true);
+    try { await doneTrainingMaterial(step.id); onChanged(); if (next) onOpen(next.id); } catch (e) { setErr(errText(e)); }
+    setSaving(false);
+  };
+
+  return (
+    <LessonPage title={step.title} done={done} modules={modules} currentId={step.id} percent={percent} onBack={onBack} onOpen={onOpen}
+      footer={m && (done
+        ? (next && <button className="hr-btn p" onClick={() => onOpen(next.id)}>Наступний урок: {next.title} →</button>)
+        : <button className="hr-btn p" disabled={saving} onClick={() => void markDone()}>{saving ? "Зберігаю…" : next ? "Опрацював(ла) — далі" : "Опрацював(ла)"}</button>)}>
+      {err && <div className="hr-card" style={{ padding: 10, color: "var(--danger)" }}>{err}</div>}
+      {!m && !err && <p className="loading-text">Завантаження…</p>}
+      {m && <LessonBody m={m} />}
+    </LessonPage>
   );
 }
 
