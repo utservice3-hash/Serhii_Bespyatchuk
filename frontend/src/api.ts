@@ -3684,6 +3684,8 @@ export interface ClientPlanRow {
   clientKey: string; clientName: string; paymentType: string | null;
   orders: number; lifetimeRevenue: number; since: string | null; lastOrderDays: number | null;
   history: number[]; plan: number; planStatus: "draft" | "pending" | "approved" | "none";
+  /** 🗂 Вкладка й порядок «Всі» (ТЗ 22.09, п.3.1) — з сервера (`core/clientTabs.ts`), фронт не рахує. */
+  tabGroup: "regular" | "yellow" | "react";
   reviewNote: string | null; weeks: ClientPlanWeek[];
   /** 🧾 Факт «з рахунку і далі» (ТЗ 22.09, п.2.1) — не «успішно реалізовано». */
   fact: number; pct: number | null;
@@ -3745,6 +3747,8 @@ export interface UnattachedPlan {
 }
 export interface ClientPlansResp {
   month: string; historyMonths: string[];
+  /** Порядок груп у вкладці «Всі» — з сервера, щоб фронт не тримав копії. */
+  tabGroupRank: Record<"regular" | "yellow" | "react", number>;
   weeks: { label: string; from: string; to: string; status: "past" | "current" | "future"; workingDays: number }[];
   /** Довідники дій, що переїхали з вкладки «Реактивація». Приходять із ядра. */
   closeReasons?: { key: string; label: string }[];
@@ -3890,6 +3894,8 @@ export interface ClientCard {
   monthsTotal: number; deals: ClientCardDeal[]; anchorNote: string;
   /** Права на дії керування — рахує СЕРВЕР тими самими гейтами, що й самі роути. */
   canArchive: boolean; canMerge: boolean; canAssign: boolean; mergeScope: "all" | "team";
+  /** 👤 Кого показати у формі передачі: `null` — усіх (КВП/ОД/адмін), число — лише цю команду (тімлід). */
+  assignTeamId?: number | null;
   /** ⭐ «Вважати постійним попри правило» — право, стан і примітка «чому». */
   canForceRegular: boolean; forcedRegular: boolean; forceNote: string | null;
   /** Клієнт ЗАРАЗ в архіві (з автоповерненням) — тоді дія зворотна. */

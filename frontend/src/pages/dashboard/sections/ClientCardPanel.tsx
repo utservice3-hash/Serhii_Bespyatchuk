@@ -42,6 +42,8 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
   const [stepEdit, setStepEdit] = useState(false);
   /** 📎 Відкритий скрин контакту (id) — перегляд на місці, не нова вкладка (задача 4310). */
   const [fileId, setFileId] = useState<number | null>(null);
+  /** 👤 Форма передачі відкрита прямо з картки (ТЗ 22.09, п.3.2) — клієнт уже підставлений. */
+  const [assigning, setAssigning] = useState(false);
   const load = useCallback(() => {
     setCard(null); setErr(null);
     fetchClientCard(clientKey).then(setCard)
@@ -185,14 +187,33 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
             </div>
           )}
 
-          {(card.canMerge || card.canAssign) && (
+          {/* 👤 ПЕРЕДАЧА — ОКРЕМОЮ КНОПКОЮ, А НЕ В ЗГОРНУТОМУ БЛОЦІ (ТЗ 22.09, п.3.2). Доти вона ховалась
+              у «Обʼєднання · роз'єднання · передача» і вимагала заново шукати клієнта, чия картка вже
+              відкрита, а список менеджерів показував усю компанію — вибір чужого давав 403. Для Юлі це
+              виглядало як «доступ забрали», хоча сервер пускав тімліда з 14.09.2026. */}
+          {card.canAssign && (
+            <div style={{ marginTop: 10 }}>
+              <button type="button" onClick={() => setAssigning((v) => !v)} aria-expanded={assigning}
+                style={{ fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, cursor: "pointer",
+                         border: "1px solid #1d4ed8", background: assigning ? "#eff6ff" : "#1d4ed8", color: assigning ? "#1d4ed8" : "#fff" }}>
+                👤 {assigning ? "Сховати передачу" : "Передати клієнта"}
+              </button>
+              {assigning && (
+                <div style={{ marginTop: 10 }}>
+                  <ManagerPanel clients={[]} teamId={card.assignTeamId ?? null}
+                    preset={{ clientKey: card.clientKey, clientName: card.clientName, managerName: card.managerName }}
+                    onDone={() => { load(); onChanged?.(); }} />
+                </div>
+              )}
+            </div>
+          )}
+          {card.canMerge && (
             <details style={{ marginTop: 10 }}>
               <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#374151" }}>
-                🔗 Обʼєднання · роз'єднання · передача відповідального
+                🔗 Обʼєднання · роз'єднання
               </summary>
               <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 10 }}>
-                {card.canMerge && <MergePanel onDone={() => { load(); onChanged?.(); }} teamOnly={card.mergeScope === "team"} />}
-                {card.canAssign && <ManagerPanel clients={[]} onDone={() => { load(); onChanged?.(); }} />}
+                <MergePanel onDone={() => { load(); onChanged?.(); }} teamOnly={card.mergeScope === "team"} />
               </div>
             </details>
           )}

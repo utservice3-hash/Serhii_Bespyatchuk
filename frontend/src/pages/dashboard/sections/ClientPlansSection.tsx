@@ -80,20 +80,6 @@ function Tile({ title, value, sub, tone }: { title: string; value: string; sub?:
   );
 }
 
-/** Міні-бари історії 6 міс. Висота відносна до максимуму рядка — це форма, не шкала. */
-function Spark({ values, months }: { values: number[]; months: string[] }) {
-  const max = Math.max(1, ...values);
-  return (
-    <span style={{ display: "inline-flex", alignItems: "flex-end", gap: 3, height: 26 }}>
-      {values.map((v, i) => (
-        <span key={i} title={`${months[i]}: ${formatAmountFull(v)}`}
-          style={{ width: 7, height: Math.max(2, Math.round((v / max) * 26)), borderRadius: 2,
-                   background: i === values.length - 1 ? "#2563eb" : "#bfdbfe" }} />
-      ))}
-    </span>
-  );
-}
-
 function LastOrder({ days }: { days: number | null }) {
   if (days == null) return <span style={{ color: "#9ca3af" }}>—</span>;
   const bad = days >= 45, warn = days >= 30;
@@ -156,10 +142,17 @@ function levelTotals(rows: ClientPlanRow[]) {
   };
 }
 
+/**
+ * Скільки перших колонок займає назва рівня: Клієнт · Останнє зам. · Контакт · Задача.
+ * Далі підсумки стають РІВНО під «План» і «Факт». До блоку 3 тут стояло 3, і план команди
+ * опинявся під колонкою «Контакт» (гейт #771 тепер рахує й цей рядок).
+ */
+const GROUP_LEAD_COLS = 4;
+
 /** Рядок-шапка рівня (команда / менеджер) з підсумками й «розгорнути». */
-function GroupRow({ level, title, sub, open, onToggle, totals }: {
+function GroupRow({ level, title, sub, open, onToggle, totals, weeksOpen }: {
   level: "team" | "manager"; title: string; sub?: string; open: boolean;
-  onToggle: () => void; totals: { clients: number; plan: number; fact: number };
+  onToggle: () => void; totals: { clients: number; plan: number; fact: number }; weeksOpen: boolean;
 }) {
   const isTeam = level === "team";
   const pct = totals.plan > 0 ? Math.round((totals.fact / totals.plan) * 100) : null;
@@ -168,7 +161,7 @@ function GroupRow({ level, title, sub, open, onToggle, totals }: {
       style={{ background: isTeam ? "#f1f5f9" : "#fafcff", cursor: "pointer",
                borderTop: isTeam ? "2px solid #e2e8f0" : "1px solid #eef2f7" }}>
       <td style={{ ...S.td, paddingLeft: isTeam ? 10 : 28, fontWeight: isTeam ? 800 : 700,
-                   fontSize: isTeam ? 14 : 13, borderBottom: "none" }} colSpan={3}>
+                   fontSize: isTeam ? 14 : 13, borderBottom: "none" }} colSpan={GROUP_LEAD_COLS}>
         <span style={{ color: "#64748b", marginRight: 6 }}>{open ? "▾" : "▸"}</span>
         {isTeam ? "🏢 " : "👤 "}{title}
         <span style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>
@@ -176,7 +169,7 @@ function GroupRow({ level, title, sub, open, onToggle, totals }: {
         </span>
       </td>
       <td style={{ ...S.td, borderBottom: "none", fontWeight: 700 }}>{totals.plan.toLocaleString("uk-UA")}</td>
-      <td style={{ ...S.td, borderBottom: "none" }} />
+      {weeksOpen && <td style={{ ...S.td, borderBottom: "none" }} />}
       <td style={{ ...S.td, borderBottom: "none", textAlign: "right", fontWeight: 800,
                    color: totals.fact > 0 ? "#166534" : "#9ca3af" }}>
         {totals.fact.toLocaleString("uk-UA")}
@@ -197,14 +190,22 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
   const [payFilter, setPayFilter] = useState<Set<string>>(new Set());
   const [view, setView] = useState<"in-plan" | "all" | "stale">("all");
   /**
-   * 🧭 ВІСЬ СТАНУ — окрема від осі `view`, і це не примха. `view` відповідає на
-   * «що я хочу побачити зі своєї роботи» (у плані / без замовлень 30+), а стан —
-   * «хто ця людина для нас» (замовляє / спить / втрачений). Змішати їх в одну
-   * вісь означало б, що «сплячі» й «у плані» стають взаємовиключними, хоча саме
-   * сплячий із планом — найцікавіший рядок екрана.
-   * Дефолт «усі» — рішення власника 04.09.2026 («все в одному місці»).
+   * 🗂 ВКЛАДКИ «ВСІ / ПОСТІЙНІ / РЕАКТИВАЦІЯ» (ТЗ Юлі 22.09, п.3.1). Замінили ряд «Стан:».
+   * Вкладка — ФІЛЬТР того самого ростеру (рішення власника 04.09.2026 «усе в одному місці» лишається):
+   * клієнт не додається й не зникає, група рядка приходить із сервера (`tabGroup`, `core/clientTabs.ts`).
+   * Усередині «Реактивації» — підфільтр сплячі / втрачені, бо це різні пороги й різна робота.
    */
-  const [stateFilter, setStateFilter] = useState<"all" | "active" | "sleeping" | "lost">("all");
+  const [tab, setTab] = useState<"all" | "regular" | "react">(fromReact ? "react" : "all");
+  const [reactSub, setReactSub] = useState<"all" | "sleeping" | "lost">("all");
+  /** 📅 Тижні згорнуті за замовчуванням (п.3.5): у 663 з 873 рядків вони порожні. Вибір памʼятає браузер. */
+  const [weeksOpen, setWeeksOpen] = useState<boolean>(() => {
+    try { return window.localStorage.getItem("clientPlans.weeksOpen") === "1"; } catch { return false; }
+  });
+  const toggleWeeks = () => setWeeksOpen((v) => {
+    const n = !v;
+    try { window.localStorage.setItem("clientPlans.weeksOpen", n ? "1" : "0"); } catch { /* приватне вікно — не памʼятаємо */ }
+    return n;
+  });
   /** ⓘ Довідка «Як рахуються категорії» розгорнута (ТЗ 22.09, п.2.4). */
   const [showRules, setShowRules] = useState(false);
   const [creating, setCreating] = useState<{ clientKey: string; name: string } | null>(null);
@@ -281,7 +282,9 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
     if (payFilter.size && !payFilter.has(c.paymentType ?? "")) return false;
     if (view === "in-plan" && c.plan <= 0) return false;
     if (view === "stale" && !(c.lastOrderDays != null && c.lastOrderDays >= 30)) return false;
-    if (stateFilter !== "all" && c.state !== stateFilter) return false;
+    if (tab === "regular" && c.tabGroup === "react") return false;
+    if (tab === "react" && c.tabGroup !== "react") return false;
+    if (tab === "react" && reactSub !== "all" && c.state !== reactSub) return false;
     if (mgrFilter !== "" && c.managerId !== mgrFilter) return false;
     if (reactFilter === "no_talk" && c.lastTalk != null) return false;
     if (reactFilter === "step_overdue" && c.nextStep?.state !== "overdue") return false;
@@ -293,6 +296,17 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
   /** Лічильники беруться з ТИХ САМИХ рядків, що й список, — інакше підпис розійдеться з ним. */
   const byState = data.clients.reduce((a, c) => { a[c.state] = (a[c.state] ?? 0) + 1; return a; },
     {} as Record<string, number>);
+  /** Лічильники вкладок — з усього ростеру: «Постійні» + «Реактивація» == «Всі» (гейт #770b). */
+  const tabCounts = {
+    all: data.clients.length,
+    regular: data.clients.filter((c) => c.tabGroup !== "react").length,
+    react: data.clients.filter((c) => c.tabGroup === "react").length,
+  };
+  /** Порядок у «Всі»: постійні → жовті → реактивація; ранги дає сервер. В інших вкладках — не втручається. */
+  const byGroup = (a: ClientPlanRow, b: ClientPlanRow) =>
+    tab === "all" ? data.tabGroupRank[a.tabGroup] - data.tabGroupRank[b.tabGroup] : 0;
+  /** 7 колонок без тижнів, 8 із тижнями — одне число на заголовок, картку, порожній стан і підсумок. */
+  const colCount = weeksOpen ? 8 : 7;
 
   /**
    * 🔴 ІЄРАРХІЯ — ЦЕ ПОДАЧА, А НЕ СКОУП. Групуємо ТІ САМІ рядки, що прийшли з
@@ -334,7 +348,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         teamName: tt.teamName,
         rows: [...tt.mgrs.values()].flatMap((m) => m.rows),
         mgrs: [...tt.mgrs.entries()]
-          .map(([id, m]) => ({ id, name: m.name, rows: [...m.rows].sort(sortMode === "margin" ? byMargin : (a, b) => b.fact - a.fact || b.plan - a.plan) }))  // клієнти всередині менеджера — завжди за фактом
+          .map(([id, m]) => ({ id, name: m.name, rows: [...m.rows].sort((a, b) => byGroup(a, b) || (sortMode === "margin" ? byMargin(a, b) : b.fact - a.fact || b.plan - a.plan)) }))  // клієнти всередині менеджера: група «Всі», далі за фактом
           .sort(cmp),
       }))
       .sort(cmp);
@@ -345,7 +359,8 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
   const locked = c.planStatus === "approved" && !isLead;
   const val = edits[c.clientKey] ?? String(c.plan || "");
   const isOpen = open === c.clientKey;
-  const risk = c.lastOrderDays != null && c.lastOrderDays >= 30;
+  /** Жовтий фон — рівно група «жовті» з сервера (активні, 30+ днів без замовлення); реактивацію підписує чип стану. */
+  const risk = c.tabGroup === "yellow";
   return (
     <Fragment key={c.clientKey}>
       <tr style={{ background: risk ? "#fffbeb" : undefined }}>
@@ -380,7 +395,6 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
             )}
           </div>
         </td>
-        <td style={S.td}><Spark values={c.history} months={data.historyMonths} /></td>
         <td style={S.td}><LastOrder days={c.lastOrderDays} /></td>
         {/* 📱 КОНТАКТ — повернуто на екран (17.09.2026). При злитті вкладки «Реактивація» в
             план колонки про дзвінки зникли, хоч бекенд їх рахував. Тепер: остання розмова
@@ -481,21 +495,23 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           <div style={{ marginTop: 4 }}><span style={S.chip(st.bg, st.fg)}>{st.label}</span></div>
           {c.reviewNote && <div style={{ fontSize: 11, color: "#b45309", marginTop: 3 }} title="коментар тімліда">↩ {c.reviewNote}</div>}
         </td>
-        <td style={S.td}>
-          <div style={{ display: "flex", gap: 3 }}>
-            {c.weeks.map((w, i) => (
-              <div key={i} title={`${w.from} — ${w.to}`}
-                style={{ minWidth: 58, padding: "4px 4px", borderRadius: 8, textAlign: "center",
-                         border: `1px solid ${w.status === "current" ? "#93c5fd" : "#e5e7eb"}`,
-                         background: w.status === "current" ? "#eff6ff" : "#fff" }}>
-                <div style={{ fontSize: 10, color: "#6b7280" }}>Т{i + 1} · {w.plan.toLocaleString("uk-UA")}</div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: w.fact > 0 ? "#166534" : w.status === "future" ? "#d1d5db" : "#dc2626" }}>
-                  {w.status === "future" && w.fact === 0 ? "—" : w.fact.toLocaleString("uk-UA")}
+        {weeksOpen && (
+          <td style={S.td}>
+            <div style={{ display: "flex", gap: 3 }}>
+              {c.weeks.map((w, i) => (
+                <div key={i} title={`${w.from} — ${w.to}`}
+                  style={{ minWidth: 58, padding: "4px 4px", borderRadius: 8, textAlign: "center",
+                           border: `1px solid ${w.status === "current" ? "#93c5fd" : "#e5e7eb"}`,
+                           background: w.status === "current" ? "#eff6ff" : "#fff" }}>
+                  <div style={{ fontSize: 10, color: "#6b7280" }}>Т{i + 1} · {w.plan.toLocaleString("uk-UA")}</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: w.fact > 0 ? "#166534" : w.status === "future" ? "#d1d5db" : "#dc2626" }}>
+                    {w.status === "future" && w.fact === 0 ? "—" : w.fact.toLocaleString("uk-UA")}
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        </td>
+              ))}
+            </div>
+          </td>
+        )}
         <td style={{ ...S.td, textAlign: "right" }}>
           <div style={{ fontWeight: 800, color: c.fact > 0 ? "#166534" : "#9ca3af" }}>
             {c.fact.toLocaleString("uk-UA")}{c.pct != null && <span style={{ color: "#6b7280", fontWeight: 500 }}> · {c.pct}%</span>}
@@ -524,7 +540,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
       </tr>
       {isOpen && (
         <tr>
-          <td colSpan={8} style={{ padding: "14px 16px", background: "#fbfdff", borderBottom: "1px solid #e5e7eb" }}>
+          <td colSpan={colCount} style={{ padding: "14px 16px", background: "#fbfdff", borderBottom: "1px solid #e5e7eb" }}>
             {/* КАРТКА КЛІЄНТА: спершу «як він платив» (те, заради чого
                 рядок і розгортають), під нею — коментарі й дзвінки. */}
             {/* onChanged — щоб «прибрати з постійних» одразу зникло з цього ж
@@ -643,6 +659,18 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         </div>
       )}
 
+      {/* ── ВКЛАДКИ (ТЗ 22.09, п.3.1): фільтр одного списку; лічильники з усього ростеру */}
+      <div role="tablist" style={{ display: "flex", gap: 0, borderBottom: "1px solid #e5e7eb" }}>
+        {([["all", "Всі"], ["regular", "Постійні"], ["react", "Реактивація"]] as const).map(([k, label]) => (
+          <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+            style={{ padding: "9px 16px", border: "none", borderBottom: `3px solid ${tab === k ? "#2563eb" : "transparent"}`,
+                     marginBottom: -1, background: "transparent", cursor: "pointer", fontSize: 14,
+                     fontWeight: tab === k ? 700 : 500, color: tab === k ? "#111827" : "#6b7280" }}>
+            {label} <span style={{ fontSize: 12, padding: "1px 7px", borderRadius: 999, background: "#f3f4f6", color: "#374151" }}>{tabCounts[k]}</span>
+          </button>
+        ))}
+      </div>
+
       {/* ── ФІЛЬТРИ + ДІЇ ЦИКЛУ */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {payTypes.map((p) => {
@@ -655,31 +683,27 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           );
         })}
         <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}>Показати:</span>
-        {([["in-plan", "у плані"], ["all", "усі постійні"], ["stale", "без замовлень 30+ дн."]] as const).map(([k, label]) => (
+        {([["in-plan", "у плані"], ["all", "усі"], ["stale", "без замовлень 30+ дн."]] as const).map(([k, label]) => (
           <button key={k} onClick={() => setView(k)}
             style={{ fontSize: 12, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
                      border: `1px solid ${view === k ? "#2563eb" : "#d1d5db"}`, background: view === k ? "#eff6ff" : "#fff",
                      color: view === k ? "#1d4ed8" : "#374151" }}>{label}</button>
         ))}
-        {fromReact && (
-          <span style={{ fontSize: 12, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a",
-                         borderRadius: 8, padding: "4px 9px", marginRight: 6 }}>
-            Вкладку «Реактивація» обʼєднано з планом місяця — стан тепер фільтр нижче
-          </span>
+        {tab === "react" && (
+          <>
+            <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}>Реактивація:</span>
+            {([["all", "усі"], ["sleeping", "сплячі"], ["lost", "втрачені"]] as const).map(([k, label]) => (
+              <button key={k} onClick={() => setReactSub(k)}
+                title={k === "sleeping" ? data?.categoryRules?.stateTips.sleeping : k === "lost" ? data?.categoryRules?.stateTips.lost : undefined}
+                style={{ fontSize: 12, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
+                         border: `1px solid ${reactSub === k ? "#2563eb" : "#d1d5db"}`,
+                         background: reactSub === k ? "#eff6ff" : "#fff",
+                         color: reactSub === k ? "#1d4ed8" : "#374151" }}>
+                {label}{k !== "all" && byState[k] ? ` · ${byState[k]}` : ""}
+              </button>
+            ))}
+          </>
         )}
-        <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}>Стан:</span>
-        {([["all", "усі"], ["active", "замовляють"], ["sleeping", "сплячі"], ["lost", "втрачені"]] as const).map(([k, label]) => (
-          <button key={k} onClick={() => setStateFilter(k)}
-            title={k === "all" ? "показати всіх, включно з тими, хто не замовляє"
-              : k === "sleeping" ? data?.categoryRules?.stateTips.sleeping
-              : k === "lost" ? data?.categoryRules?.stateTips.lost : undefined}
-            style={{ fontSize: 12, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
-                     border: `1px solid ${stateFilter === k ? "#2563eb" : "#d1d5db"}`,
-                     background: stateFilter === k ? "#eff6ff" : "#fff",
-                     color: stateFilter === k ? "#1d4ed8" : "#374151" }}>
-            {label}{k !== "all" && byState[k] ? ` · ${byState[k]}` : ""}
-          </button>
-        ))}
         <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}>Фільтр:</span>
         {([["all", "усі"], ["no_talk", "без розмови"], ["step_overdue", "прострочений крок"], ["vip_sleeping", "VIP спить 14+"], ["debt_hold", "стоп: дебіторка"]] as const).map(([k, label]) => (
           <button key={k} onClick={() => setReactFilter(k)}
@@ -722,6 +746,12 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           </>
         )}
         <span style={{ flex: 1 }} />
+        {/* 📅 Тижні згорнуті за замовчуванням (ТЗ 22.09, п.3.5); розгортаються для всієї таблиці. */}
+        <button type="button" onClick={toggleWeeks} aria-expanded={weeksOpen}
+          style={{ fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 8, cursor: "pointer",
+                   border: "1px solid #d1d5db", background: weeksOpen ? "#eff6ff" : "#fff", color: "#1f2937" }}>
+          📅 Тижні {weeksOpen ? "▴" : "▾"}
+        </button>
         {auth.role === "manager" && (
           <button disabled={busy || !t.canSubmit} onClick={() => act(() => submitClientPlans({ month }))}
             title={t.canSubmit ? "Подати всі чернетки на затвердження" : "Немає чернеток до подання"}
@@ -763,23 +793,22 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           <thead>
             <tr>
               <th style={S.th}>Клієнт</th>
-              <th style={S.th}>Історія · 6 міс</th>
               <th style={S.th}>Останнє зам.</th>
               <th style={S.th} title="Остання розмова (Ringostat) або ручний контакт у месенджері; недодзвони після останньої розмови">Контакт</th>
               <th style={S.th}>Задача</th>
               <th style={S.th}>План (міс)</th>
-              <th style={S.th}>Тижні · план / факт з рахунку</th>
+              {weeksOpen && <th style={S.th}>Тижні · план / факт з рахунку</th>}
               <th style={{ ...S.th, textAlign: "right" }} title="угоди, що в цьому місяці вперше дійшли до «Виставлення рахунку» або далі; програні не рахуються">Факт з рахунку</th>
               <th style={S.th}>Дії</th>
             </tr>
           </thead>
           <tbody>
-            {!grouped && (sortMode === "margin" ? [...rows].sort(byMargin) : rows).map(renderRow)}
+            {!grouped && [...rows].sort((a, b) => byGroup(a, b) || (sortMode === "margin" ? byMargin(a, b) : 0)).map(renderRow)}
             {grouped && teams.map((tm) => {
               const tOpen = openTeams.has(tm.teamName);
               return (
                 <Fragment key={tm.teamName}>
-                  <GroupRow level="team" title={tm.teamName} open={tOpen}
+                  <GroupRow level="team" title={tm.teamName} open={tOpen} weeksOpen={weeksOpen}
                     sub={`${tm.mgrs.length} ${tm.mgrs.length === 1 ? "менеджер" : "менеджерів"}`}
                     totals={levelTotals(tm.rows)}
                     onToggle={() => setOpenTeams((prev) => {
@@ -789,7 +818,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
                     const mOpen = openMgrs.has(mg.id);
                     return (
                       <Fragment key={mg.id}>
-                        <GroupRow level="manager" title={mg.name} open={mOpen} totals={levelTotals(mg.rows)}
+                        <GroupRow level="manager" title={mg.name} open={mOpen} weeksOpen={weeksOpen} totals={levelTotals(mg.rows)}
                           onToggle={() => setOpenMgrs((prev) => {
                             const n = new Set(prev); n.has(mg.id) ? n.delete(mg.id) : n.add(mg.id); return n;
                           })} />
@@ -801,7 +830,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
               );
             })}
             {rows.length === 0 && (
-              <tr><td colSpan={8} style={{ ...S.td, color: "#9ca3af", textAlign: "center", padding: 24 }}>
+              <tr><td colSpan={colCount} style={{ ...S.td, color: "#9ca3af", textAlign: "center", padding: 24 }}>
                 немає клієнтів під цей фільтр
               </td></tr>
             )}
@@ -814,7 +843,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
                 <td style={{ ...S.td, borderBottom: "none" }} />
                 <td style={{ ...S.td, borderBottom: "none" }} />
                 <td style={{ ...S.td, borderBottom: "none" }}>{rows.reduce((s2, c) => s2 + c.plan, 0).toLocaleString("uk-UA")}</td>
-                <td style={{ ...S.td, borderBottom: "none" }} />
+                {weeksOpen && <td style={{ ...S.td, borderBottom: "none" }} />}
                 <td style={{ ...S.td, borderBottom: "none", textAlign: "right" }}>
                   {rows.reduce((s2, c) => s2 + c.fact, 0).toLocaleString("uk-UA")}
                 </td>
@@ -838,9 +867,10 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
             </span>
             <span style={{ color: "#6b7280" }}> — вони не в плані й у суму не входять.</span>
           </span>
-          <span style={{ fontSize: 12, color: "#b45309" }}>
+          <button type="button" onClick={() => setTab("react")}
+            style={{ fontSize: 12, color: "#b45309", border: "none", background: "transparent", cursor: "pointer", padding: 0, textDecoration: "underline" }}>
             → вкладка «Реактивація»
-          </span>
+          </button>
         </div>
       )}
 

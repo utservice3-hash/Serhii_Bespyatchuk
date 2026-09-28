@@ -12,7 +12,7 @@ import { pool } from "../db/pool.js";
 import { config } from "../config.js";
 import { requireAuth, requirePerm, requireRole } from "../auth/middleware.js";
 import { roleHasTab, isAdminScope, isAdminOrLead, roleHasPerm } from "../auth/rbac.js";
-import { assignAllowed, assignDenyReason, mergePairAllowed, mergeDenyReason, mergeSourceOf, revokeAllowed, revokeDenyReason,
+import { assignAllowed, assignDenyReason, assignTeamIdFor, mergePairAllowed, mergeDenyReason, mergeSourceOf, revokeAllowed, revokeDenyReason,
          type MergePairScope } from "../auth/mergeScope.js";
 import type { AuthPayload } from "../auth/auth.js";
 import { dayItems, isDayItemKind, DAY_ITEM_KINDS } from "../core/dayItems.js";
@@ -107,6 +107,7 @@ import { canRequestLimitFor, canAssignTaskToOthers } from "../auth/taskAssignSco
 import { activeManagerSql } from "../core/activeManager.js";
 import * as managerState from "../core/managerState.js";
 import * as clientCallsYear from "../core/clientCallsYear.js";
+import * as clientTabs from "../core/clientTabs.js";
 import * as clientAliasNames from "../core/clientAliasNames.js";
 import * as categoryRules from "../core/categoryRules.js";
 import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf, kyivToday, isRealDate } from "../core/dates.js";
@@ -6191,6 +6192,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       lifetimeRevenue: Number(c.revenue),
       since: c.first_paid ? c.first_paid.slice(0, 7) : null,   // YYYY-MM
       lastOrderDays: dayOf(c.last_paid),
+      // 🗂 Вкладка й порядок «Всі» (ТЗ 22.09, п.3.1): одне правило на сервері — `core/clientTabs.ts`.
+      tabGroup: clientTabs.clientTabGroup(stateOf(c.client_key), dayOf(c.last_paid)),
       history: histByKey.get(c.client_key) ?? histMonths.map(() => 0),
       plan,
       planStatus: p?.status ?? "none",
@@ -6280,6 +6283,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     closeReasons: reactivationRules.CLOSE_REASONS,
     // ⓘ Правила категорій готовим текстом із констант ядра (ТЗ 22.09, п.2.4) — фронт їх не складає.
     categoryRules: categoryRules.categoryRulesPayload(),
+    // 🗂 Порядок груп у «Всі» (ТЗ 22.09, п.3.1) — одна копія, у ядрі.
+    tabGroupRank: clientTabs.TAB_GROUP_RANK,
     thresholds: {
       sleepingDays: reactivationRules.SEGMENT_SLEEPING_DAYS,
       lostDays: reactivationRules.LOST_DAYS,
@@ -7067,6 +7072,8 @@ dashboardRouter.get("/client-card", async (req, res) => {
     archiveReasons: ARCHIVE_REASONS,
     // 👤 Передача: `merge_clients` між командами; тімлід — у своїй (14.09.2026, кламп на сервері).
     canAssign: roleHasPerm(auth.roleKey, "merge_clients") || auth.role === "team_lead",
+    // 👤 Кого показати у формі передачі (ТЗ 22.09, п.3.2): тімліду — лише свою команду.
+    assignTeamId: assignTeamIdFor({ canAll: roleHasPerm(auth.roleKey, "merge_clients"), role: auth.role, teamId: auth.teamId ?? null }),
     canMerge: roleHasPerm(auth.roleKey, "merge_clients") || auth.role === "team_lead",
     mergeScope: roleHasPerm(auth.roleKey, "merge_clients") ? "all" : "team",
   });
