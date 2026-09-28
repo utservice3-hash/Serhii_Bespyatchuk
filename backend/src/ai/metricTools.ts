@@ -61,6 +61,8 @@ export const FORBIDDEN_TABLES = [
   "hiring_training_questions",
   // 🚪 Звільнення (21.09.2026): причини й хто звільняв. REVOKE у схемі. Тримає #624.
   "employee_offboarding",
+  // 💼 Відгуки work.ua (28.09.2026): памʼять відгуків кандидатів. REVOKE у схемі. Тримає #773.
+  "workua_responses",
 ];
 
 /**

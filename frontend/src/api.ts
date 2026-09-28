@@ -4345,6 +4345,16 @@ export const fetchHiringSummary = async (p: { from: string; to: string; vacancyI
 // ── Найм, прохід 1a: вакансії, відмова, резерв, файли-докази ──
 export const fetchHiringVacancies = async (scope: "active" | "closed" | "all") =>
   (await api.get<{ rows: HiringVacancyRow[] }>("/hiring/vacancies", { params: { scope } })).data.rows;
+// 💼 Відгуки з work.ua (28.09.2026) — `backend/src/core/workuaStore.ts`, `jobs/syncWorkua.ts`.
+export interface WorkuaJob { id: number; name: string; active: boolean; date: string | null }
+export interface WorkuaState {
+  status: { configured: boolean; lastRunAt: string | null; lastError: string | null; lastBatch: { created: number; repeat: number; files: number } | null };
+  summary: { total: number; created: number; repeat: number; novac: number; last: string | null; links: { vacancyId: number; jobId: number }[] };
+  jobs: WorkuaJob[] | null; jobsError: string | null;
+}
+export const fetchWorkua = async () => (await api.get<WorkuaState>("/hiring/workua")).data;
+export const syncWorkuaNow = async () => (await api.post<{ created?: number; repeat?: number; skipped?: number | boolean; reason?: string }>("/hiring/workua/sync")).data;
+export const setVacancyWorkua = async (vacancyId: number, jobId: number | null) => { await api.put(`/hiring/vacancies/${vacancyId}/workua`, { jobId }); };
 export const createHiringVacancy = async (p: Record<string, unknown>) => (await api.post<{ id: number }>("/hiring/vacancies", p)).data.id;
 export const patchHiringVacancy = async (id: number, p: Record<string, unknown>) => { await api.patch(`/hiring/vacancies/${id}`, p); };
 export const setHiringCandidateVacancies = async (id: number, vacancyIds: number[]) => { await api.put(`/hiring/candidates/${id}/vacancies`, { vacancyIds }); };

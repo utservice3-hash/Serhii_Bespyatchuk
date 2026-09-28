@@ -436,6 +436,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
   /* 🧑‍💼 НАЙМ, прохід 1a (17.09.2026): вакансії, відмова з причиною, резерв, файли-докази.
      Та сама друга межа першим оператором (#506). Тімлід пише лише відмову своїм кандидатам і
      читає їхні файли; вакансії, резерв, завантаження — рекрутер і адмін-рівень. */
+  // 💼 Відгуки з work.ua (28.09.2026) — та сама межа, що й решта дій рекрутера (`onlyEdit`).
+  { method: "GET", path: "/api/hiring/workua", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "financier", "manager"] },
+  { method: "POST", path: "/api/hiring/workua/sync", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
+  { method: "PUT", path: "/api/hiring/vacancies/:id/workua", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
   { method: "GET", path: "/api/hiring/vacancies?scope=active", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "financier", "manager"] },
   { method: "POST", path: "/api/hiring/vacancies", cls: "deny-only",

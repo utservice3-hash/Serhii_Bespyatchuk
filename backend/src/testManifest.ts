@@ -140,6 +140,7 @@ export const MANIFEST_FILES: string[] = [
   "core/offers.test.js",
   "core/hiringInterview.test.js",
   "core/churn.test.js",
+  "core/workua.test.js",
   "core/employeeAdd.test.js",
   "core/scheduleMove.test.js",
   "core/offboarding.test.js",
@@ -287,6 +288,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "hiring_invites",
   "hiring_training_questions",
   "employee_offboarding",
+  "workua_responses",
 ];
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
@@ -1934,6 +1936,11 @@ export const MANIFEST_TESTS: string[] = [
   "#751 МАТРИЦЯ Й ВКЛАДКА: плани лідгенів — рядки як у формуванні продажів, вкладка leadgen",
   "#751b ПЕРШИЙ ОПЕРАТОР і засув адміна на затвердженні/поверненні",
   "#752 /leadgen-stats: ростер — з leadgenRosterView, «Інші» у відповіді, план — лише рядкам команди",
+  // core/workua.test.ts — відгуки з work.ua → «Кандидати» (28.09.2026, прохід 7)
+  "#770 work.ua: розбір відгуку — усі три типи, коментар без HTML і обрізаний",
+  "#771 ЖИВИЙ SQL: відгуки → кандидати без дублів за телефоном; ручна картка Івана не зачеплена",
+  "#772 work.ua: /resumes і /resume заборонені — платні відкриття контактів не витрачаються",
+  "#773 work.ua: без логіна — пропуск; 14 днів при першому запуску, далі лише нове; таблиця закрита для AI",
   "#748 ЖИВИЙ SQL: ростер — активні учасники 50011, інші окремо, Σ рядків + Σ інших == відділ",
   "#749 ЖИВИЙ SQL: подання → затвердження → повторне подання → повернення; продажні plans незаймані",
   // routes/plansGridScope.test.ts — «Сітка планів» лише для продажних менеджерів (25.09.2026).
