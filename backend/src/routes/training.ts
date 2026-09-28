@@ -12,6 +12,7 @@ import { attachVerdict, requiredValue, moduleStats, courseModules, freeModules, 
 import { roleHasPerm } from "../auth/rbac.js";
 import { effectiveMime, mimeFromName } from "../core/trainingMime.js";
 import { checkUpload, MAX_UPLOAD_BYTES, ACCEPT_ATTR } from "../core/trainingUpload.js";
+import { LESSON_ONLY } from "../core/trainingLesson.js";
 
 /**
  * Навчання — навчальна база відділу продажу. Адмін (КВП) будує структуру папок
@@ -57,7 +58,7 @@ trainingRouter.get("/tree", async (req, res) => {
     pool.query(
       // 🔴 ЧЕРНЕТКИ (в т.ч. згенеровані АІ) бачить ЛИШЕ admin — решта отримує тільки
       // опубліковане. Публікація — окрема людська дія (POST /materials/:id/publish).
-      `SELECT m.id, m.folder_id, m.title, m.kind, m.url, m.mime, m.stored_name, m.size_bytes, m.content, m.position, m.created_at,
+      `SELECT m.id, m.folder_id, m.title, m.kind, m.url, m.mime, m.stored_name, m.size_bytes, m.content, m.position, m.created_at, m.lesson_id, m.part_role,
               m.status, m.created_by_ai, m.required,
               COALESCE(mm.name, u.email) AS author
          FROM training_materials m
@@ -77,6 +78,7 @@ trainingRouter.get("/tree", async (req, res) => {
     mime: effectiveMime(m.mime, m.stored_name, m.title),
     size_bytes: m.size_bytes, content: m.content, position: m.position, created_at: m.created_at,
     status: m.status, created_by_ai: m.created_by_ai, required: m.required, author: m.author,
+    lesson_id: m.lesson_id, part_role: m.part_role,
   }));
   /* 📎 Межа й перелік типів їдуть із сервера, щоб у фронта НЕ БУЛО власної копії числа:
      розійшлися б вони мовчки, і людина дізнавалась би про межу з 413 після хвилини
@@ -258,12 +260,18 @@ trainingRouter.patch("/material/:id", canEditTraining, async (req, res) => {
 
 /** Видалити матеріал (+ файл з диска, якщо був). */
 trainingRouter.delete("/material/:id", canEditTraining, async (req, res) => {
+  const id = Number(req.params.id);
+  /* 📘 Урок забирає свої частини (`ON DELETE CASCADE`) — отже й їхні файли на диску. Імена беремо ДО видалення:
+     після нього рядків частин уже не буде, і файли лишились би сиротами на диску, який і так закінчувався. */
+  const partFiles = await pool.query<{ stored_name: string }>(
+    `SELECT stored_name FROM training_materials WHERE lesson_id = $1 AND stored_name IS NOT NULL`, [id]);
   const r = await pool.query<{ stored_name: string | null }>(
     `DELETE FROM training_materials WHERE id = $1 RETURNING stored_name`,
-    [Number(req.params.id)]
+    [id]
   );
   if (!r.rowCount) return res.status(404).json({ error: "Матеріал не знайдено" });
   if (r.rows[0].stored_name) await unlink(path.join(TRAIN_DIR, r.rows[0].stored_name)).catch(() => {});
+  await Promise.all(partFiles.rows.map((f) => unlink(path.join(TRAIN_DIR, f.stored_name)).catch(() => {})));
   res.json({ ok: true });
 });
 
@@ -323,7 +331,8 @@ trainingRouter.get("/courses", async (req, res) => {
       [canEdit ? ["candidate", "manager", "all"] : audienceFor(req.auth!.roleKey), isAdminScope(req.auth!)]
     ),
     pool.query(`SELECT id, parent_id, name, position, course_id FROM training_folders`),
-    pool.query(`SELECT id, folder_id, position, required FROM training_materials WHERE status = 'published'`),
+    // 📘 Кроки — ЛИШЕ уроки (`core/trainingLesson.ts`): частина не додає кроку ні у відсоток, ні в лічильник.
+    pool.query(`SELECT id, folder_id, position, required FROM training_materials WHERE status = 'published' AND ${LESSON_ONLY}`),
     pool.query(`SELECT material_id, status FROM training_progress WHERE user_id = $1`, [uid]),
   ]);
 
@@ -372,9 +381,10 @@ trainingRouter.get("/courses/:id", async (req, res) => {
 
   const [folders, materials, progress] = await Promise.all([
     pool.query(`SELECT id, parent_id, name, position, course_id FROM training_folders`),
+    // 📘 Кроки — ЛИШЕ уроки; частини уроку приходять разом із ним у `GET /material/:id`.
     pool.query(
       `SELECT id, folder_id, title, kind, position, required FROM training_materials
-        WHERE status = 'published'`),
+        WHERE status = 'published' AND ${LESSON_ONLY}`),
     pool.query(`SELECT material_id, status FROM training_progress WHERE user_id = $1`, [uid]),
   ]);
   const done = new Map(progress.rows.map((p) => [p.material_id, p.status as "opened" | "done"]));
@@ -443,11 +453,24 @@ trainingRouter.get("/material/:id", async (req, res) => {
   if (blocked) return res.status(423).json({ error: "Крок ще закритий", blockedBy: blocked });
   const p = await pool.query<{ status: string; finished_at: string | null }>(
     `SELECT status, finished_at FROM training_progress WHERE user_id = $1 AND material_id = $2`, [uid, id]);
+  /* 📘 Частини уроку — разом із ним, одним запитом: урок показується ЦІЛИМ (pdf/відео, текст, вкладення),
+     як у Sereda. Замок уже перевірено для уроку вище, а частина власного замка не має. Поля — явно (`#17e2`). */
+  const parts = await pool.query<{ id: number; title: string; kind: string; url: string | null; mime: string | null;
+    size_bytes: string | null; stored_name: string | null; part_role: string; content: string | null }>(
+    `SELECT id, title, kind, url, mime, size_bytes, stored_name, part_role, content
+       FROM training_materials WHERE lesson_id = $1 AND (status = 'published' OR $2::boolean)
+      ORDER BY position, id`,
+    [id, isAdminScope(req.auth!)]);
   res.json({
     id: m.id, folderId: m.folder_id, title: m.title, kind: m.kind, url: m.url,
     mime: effectiveMime(m.mime, m.stored_name, m.title),
     sizeBytes: m.size_bytes, content: m.content, required: m.required, hasFile: m.stored_name != null,
     status: p.rows[0]?.status ?? null, finishedAt: p.rows[0]?.finished_at ?? null,
+    parts: parts.rows.map((x) => ({
+      id: x.id, title: x.title, kind: x.kind, url: x.url, role: x.part_role,
+      mime: effectiveMime(x.mime, x.stored_name, x.title),
+      sizeBytes: x.size_bytes, hasFile: x.stored_name != null, content: x.content,
+    })),
   });
 });
 
@@ -455,6 +478,10 @@ trainingRouter.get("/material/:id", async (req, res) => {
 trainingRouter.post("/progress/:materialId/open", async (req, res) => {
   const uid = req.auth!.userId;
   const id = Number(req.params.materialId);
+  /* 📘 Прогрес ставиться УРОКУ, а не частині: позначка на частині не рахувалась би ніде, а людина думала б,
+     що крок зараховано. */
+  const partOf = await pool.query<{ lesson_id: number | null }>(`SELECT lesson_id FROM training_materials WHERE id = $1`, [id]);
+  if (partOf.rows[0]?.lesson_id != null) return res.status(400).json({ error: "Це частина уроку — позначається сам урок", lessonId: partOf.rows[0].lesson_id });
   const blocked = await lockedReason(uid, id);
   if (blocked) return res.status(423).json({ error: "Матеріал ще закритий", blockedBy: blocked });
   await pool.query(
@@ -478,6 +505,10 @@ trainingRouter.post("/progress/:materialId/done", async (req, res) => {
   if (kind.rows[0].kind === "quiz") {
     return res.status(400).json({ error: "Тест зараховується перевіркою відповідей, а не кнопкою" });
   }
+  /* 📘 Прогрес ставиться УРОКУ, а не частині: позначка на частині не рахувалась би ніде, а людина думала б,
+     що крок зараховано. */
+  const partOf = await pool.query<{ lesson_id: number | null }>(`SELECT lesson_id FROM training_materials WHERE id = $1`, [id]);
+  if (partOf.rows[0]?.lesson_id != null) return res.status(400).json({ error: "Це частина уроку — позначається сам урок", lessonId: partOf.rows[0].lesson_id });
   const blocked = await lockedReason(uid, id);
   if (blocked) return res.status(423).json({ error: "Матеріал ще закритий", blockedBy: blocked });
 

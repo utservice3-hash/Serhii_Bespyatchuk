@@ -81,14 +81,22 @@ test("#723 ПЕРЕГЛЯДАЧ PDF: кожен екран навчання з p
     }
   };
   walk(`${FE}src`);
-  assert.ok(screens.length >= 3, `🔴 екранів із файлами навчання знайдено ${screens.length} — перевірці нема що перевіряти`);
+  /* Простір — ≥2: бібліотека (`TrainingSection`) і тіло уроку (`LessonBody`), яким з 27.09 малюють і крок курсу,
+     і екран кандидата. Перша редакція вимагала ≥3 (три екрани тягнули файли самі) і почервоніла, щойно два з
+     них передали це `LessonBody`, — простір звузився законно, а число лишилось старе. */
+  assert.ok(screens.length >= 2, `🔴 екранів із файлами навчання знайдено ${screens.length} — перевірці нема що перевіряти`);
+  let showsPdf = 0;
   for (const p of screens) {
     const src = readFileSync(p, "utf8");
     const name = p.slice(FE.length);
-    if (!/application\/pdf/.test(src)) continue;
+    /* 🔴 pdf розпізнається ДВОМА способами: за mime (`application/pdf`) або за розкладкою уроку (`show === "pdf"`).
+       Лише перший пропустив би `LessonBody` мовчки — рівно той файл, що тепер показує pdf найчастіше. */
+    if (!/application\/pdf|show === "pdf"/.test(src)) continue;
+    showsPdf++;
     assert.match(src, /<PdfViewer src=\{/, `🔴 ${name} показує pdf не через PdfViewer`);
-    assert.ok(!/<iframe src=\{(blob|blobUrl|fileUrl)\}/.test(src), `🔴 ${name} знову відкриває файл навчання вікном браузера`);
+    assert.ok(!/<iframe src=\{(blob|blobUrl|fileUrl|src)\}/.test(src), `🔴 ${name} знову відкриває файл навчання вікном браузера`);
   }
+  assert.ok(showsPdf >= 2, `🔴 pdf показують лише ${showsPdf} з ${screens.length} екранів — перевірка сліпа до одного з них`);
 });
 
 /**
