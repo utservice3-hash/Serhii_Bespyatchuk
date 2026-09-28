@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { parseDataScope, SCOPE_REQUIRED_CREATE, SCOPE_REQUIRED_UPDATE } from "../auth/roleScopeInput.js";
-import { wireValue, DEFAULT_PLAN_MIN, PLAN_MIN_BOUNDS } from "../core/settingWire.js";
+import { wireValue, wireState, DEFAULT_PLAN_MIN, PLAN_MIN_BOUNDS } from "../core/settingWire.js";
+import { CALLS_NORM_BOUNDS } from "../core/callNorm.js";
 import bcrypt from "bcryptjs";
 import { pool } from "../db/pool.js";
 import { setAdPlan } from "../core/adBudget.js";
@@ -34,6 +35,12 @@ export interface AppSettings {
   // тоді картка йде до затверджувача з бейджем. У налаштуваннях, а не в коді, —
   // щоб КВП міняв поріг без деплою.
   planMinPerManager: number;
+  /**
+   * 📞 НОРМА ДЗВІНКІВ НА ДЕНЬ (ТЗ 23.09.2026, п.2). `null` = не задана — і це СТАН, а не
+   * нуль: колонка «днів з нормою» у Звіті тоді каже «норму не задано». Число — рішення
+   * власника, у коді дефолту немає свідомо (core/callNorm.ts).
+   */
+  callsDailyNorm: number | null;
   /**
    * ⏱ КОНФІГ АГЕНТА ТРЕКЕРА. Живе тут, а не в коді роута, з тієї самої причини,
    * що й класифікація на сервері: правило міняється частіше, ніж виходить версія
@@ -81,6 +88,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // (сид у schema.sql). Відсутність = помилка конфігурації, видима як [].
   adSources: [] as string[],
   planMinPerManager: DEFAULT_PLAN_MIN,
+  callsDailyNorm: null,
   tracker: {
     idleThresholdSec: 300,
     heartbeatIntervalSec: 60,
@@ -148,6 +156,10 @@ settingsRouter.put("/", async (req, res) => {
      */
     planMinPerManager: wireValue(body.planMinPerManager, PLAN_MIN_BOUNDS,
       current.planMinPerManager, DEFAULT_PLAN_MIN),
+    // 📞 Ті самі три стани: немає поля → лишити current; `null`/"" → «не задано»; число → 1..500.
+    callsDailyNorm: wireState(body.callsDailyNorm) === "absent" ? current.callsDailyNorm
+      : wireState(body.callsDailyNorm) === "reset" ? null
+      : Math.min(CALLS_NORM_BOUNDS.max, Math.max(CALLS_NORM_BOUNDS.min, Math.round(Number(body.callsDailyNorm)))),
     // ⏱ Трекер: кожне поле клампиться окремо, а не приймається як є — конфіг їде на
     // 38 машин і поганим значенням (heartbeat раз на секунду) можна покласти сервер.
     // Відсутнє поле = лишається поточне, тому часткове збереження безпечне.
@@ -593,6 +605,109 @@ settingsRouter.delete("/roles/:key", async (req, res) => {
 });
 
 // Журнал змін.
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 🧭 КОМАНДИ ДАШБОРДА Й ПЕРЕВИЗНАЧЕННЯ (ТЗ 23.09.2026, п.1) — core/teamOverride.ts.
+ * Межа та сама, що в решти керування людьми: `manage_users`.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/** Активні менеджери: команда з CRM, перевизначення (якщо є) і ефективна команда. */
+settingsRouter.get("/team-overrides", async (req, res) => {
+  if (!requireManageUsers(req, res)) return;
+  const [teams, rows] = await Promise.all([
+    pool.query<{ id: number; name: string; kommo_group_id: string | null; active: string }>(
+      `SELECT t.id, t.name, t.kommo_group_id,
+              (SELECT COUNT(*) FROM managers m WHERE m.team_id = t.id AND m.is_active) AS active
+         FROM teams t ORDER BY t.name`),
+    pool.query<{ id: number; name: string; kommo_user_id: string; team_id: number | null;
+                 ov_team_id: number | null; ov_note: string | null; has_ov: boolean }>(
+      `SELECT m.id, m.name, m.kommo_user_id, m.team_id,
+              o.team_id AS ov_team_id, o.note AS ov_note, (o.kommo_user_id IS NOT NULL) AS has_ov
+         FROM managers m LEFT JOIN manager_team_overrides o ON o.kommo_user_id = m.kommo_user_id
+        WHERE m.is_active AND m.kommo_user_id IS NOT NULL
+        ORDER BY m.name`),
+  ]);
+  res.json({
+    teams: teams.rows.map((t) => ({ id: t.id, name: t.name, dashboardOnly: t.kommo_group_id == null, active: Number(t.active) })),
+    managers: rows.rows.map((m) => ({
+      managerId: m.id, name: m.name, kommoUserId: String(m.kommo_user_id),
+      teamId: m.team_id,
+      override: m.has_ov ? { teamId: m.ov_team_id, note: m.ov_note } : null,
+    })),
+  });
+});
+
+/**
+ * Поставити / зняти перевизначення. Тіло: `{ mode: "crm" }` — зняти (команда з Kommo
+ * повернеться); `{ mode: "team", teamId }` — ця команда; `{ mode: "none" }` — примусово
+ * без команди. Застосовується ОДРАЗУ (managers.team_id + історія), не чекаючи тіка синку.
+ * ⚠️ При `crm` негайно повернути групу ми не можемо (її знає лише Kommo) — команда
+ * повернеться наступним тіком; відповідь це називає.
+ */
+settingsRouter.put("/team-overrides/:kommoUserId", async (req, res) => {
+  if (!requireManageUsers(req, res)) return;
+  const kommoUserId = String(req.params.kommoUserId);
+  if (!/^\d+$/.test(kommoUserId)) return res.status(400).json({ error: "kommoUserId: число" });
+  const mode = req.body?.mode;
+  if (mode !== "crm" && mode !== "team" && mode !== "none") {
+    return res.status(400).json({ error: "mode: 'crm' | 'team' | 'none'" });
+  }
+  const mgr = (await pool.query<{ id: number; name: string; team_id: number | null }>(
+    `SELECT id, name, team_id FROM managers WHERE kommo_user_id = $1`, [kommoUserId])).rows[0];
+  if (!mgr) return res.status(404).json({ error: "Менеджера з таким kommo_user_id немає" });
+  const note = typeof req.body?.note === "string" && req.body.note.trim() ? req.body.note.trim() : null;
+
+  let teamId: number | null = null;
+  let label = "з CRM (повернеться наступним тіком синку)";
+  if (mode === "team") {
+    teamId = Number(req.body?.teamId);
+    const t = (await pool.query<{ name: string }>(`SELECT name FROM teams WHERE id = $1`, [teamId])).rows[0];
+    if (!Number.isInteger(teamId) || !t) return res.status(400).json({ error: "teamId: наявна команда" });
+    label = t.name;
+  } else if (mode === "none") {
+    label = "без команди (примусово)";
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    if (mode === "crm") {
+      await client.query(`DELETE FROM manager_team_overrides WHERE kommo_user_id = $1`, [kommoUserId]);
+    } else {
+      await client.query(
+        `INSERT INTO manager_team_overrides (kommo_user_id, team_id, note, set_by, set_at)
+         VALUES ($1, $2, $3, $4, now())
+         ON CONFLICT (kommo_user_id) DO UPDATE SET
+           team_id = EXCLUDED.team_id, note = EXCLUDED.note, set_by = EXCLUDED.set_by, set_at = now()`,
+        [kommoUserId, teamId, note, req.auth?.userId ?? null]);
+      if (mgr.team_id !== teamId) {
+        await client.query(`UPDATE managers SET team_id = $2 WHERE id = $1`, [mgr.id, teamId]);
+        await client.query(`INSERT INTO manager_team_history (manager_id, team_id) VALUES ($1, $2)`, [mgr.id, teamId]);
+      }
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+  await writeAudit({ ...audit(req), action: "manager.team_override", targetType: "manager",
+    targetId: String(mgr.id), targetLabel: `${mgr.name} → ${label}` });
+  res.json({ ok: true, mode, teamId, appliedNow: mode !== "crm" });
+});
+
+/** Команда лише в дашборді (без Kommo-групи). Існує через перевизначення; синк її не чіпає. */
+settingsRouter.post("/teams", async (req, res) => {
+  if (!requireManageUsers(req, res)) return;
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (name.length < 2 || name.length > 80) return res.status(400).json({ error: "name: 2–80 символів" });
+  const dup = await pool.query(`SELECT 1 FROM teams WHERE lower(name) = lower($1)`, [name]);
+  if (dup.rows.length) return res.status(409).json({ error: "Команда з такою назвою вже є" });
+  const r = await pool.query<{ id: number }>(`INSERT INTO teams (name, kommo_group_id) VALUES ($1, NULL) RETURNING id`, [name]);
+  await writeAudit({ ...audit(req), action: "team.create", targetType: "team", targetId: String(r.rows[0].id), targetLabel: name });
+  res.status(201).json({ id: r.rows[0].id, name });
+});
+
 settingsRouter.get("/audit", async (req, res) => {
   if (!requireManageUsers(req, res)) return;
   const r = await pool.query(

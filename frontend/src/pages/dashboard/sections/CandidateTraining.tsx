@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   fetchTrainingCourses, fetchTrainingCourse, fetchTrainingMaterial, openTrainingMaterial, doneTrainingMaterial,
-  fetchCandidateMe, fetchMyTrainingQuestions, askTrainingQuestion, fetchTrainingFileBlobUrl, hiringError,
+  fetchCandidateMe, fetchMyTrainingQuestions, askTrainingQuestion, hiringError,
   type TrainingCourse, type TrainingCourseDetail, type TrainingMaterialContent, type CandidateMe, type MyTrainingQuestion,
 } from "../../../api";
-import { embedUrl } from "../trainingView";
+import { LessonBody } from "./LessonBody";
 import { useNavigate } from "react-router-dom";
 import { fetchDocTree, type DocFile } from "../../../api";
 import "./hiring.css";
@@ -220,26 +220,23 @@ function StepView({ step, next, questions, canAsk, onBack, onGo, onAsked }: {
   const [busy, setBusy] = useState(false);
   const [q, setQ] = useState("");
   const [qMsg, setQMsg] = useState<string | null>(null);
-  const [fileUrl, setFileUrl] = useState<string | null>(null);
   const id = step?.id;
 
   useEffect(() => {
     if (id == null) return;
     let alive = true;
-    setM(null); setErr(null); setFileUrl(null); setQ(""); setQMsg(null); // новий крок — чисте поле питання
+    setM(null); setErr(null); setQ(""); setQMsg(null); // новий крок — чисте поле питання
     fetchTrainingMaterial(id)
       .then(async (x) => {
         if (!alive) return;
         setM(x);
         // Відкриття — це й «остання активність» на дошці тімліда. Повтор нічого не додає.
         if (x.status == null) await openTrainingMaterial(id).catch(() => undefined);
-        if (x.hasFile) setFileUrl(await fetchTrainingFileBlobUrl(id).catch(() => null));
       })
       .catch((e) => { if (alive) setErr((e as { response?: { status?: number } }).response?.status === 423
         ? "Цей крок ще закритий: спершу пройдіть попередній." : hiringError(e)); });
     return () => { alive = false; };
   }, [id]);
-  useEffect(() => () => { if (fileUrl) URL.revokeObjectURL(fileUrl); }, [fileUrl]);
 
   if (!step) return null;
   const done = m?.status === "done" || step.state === "done";
@@ -256,7 +253,6 @@ function StepView({ step, next, questions, canAsk, onBack, onGo, onAsked }: {
     try { await askTrainingQuestion(text, step.id); setQ(""); setQMsg("Питання надіслано тімліду — відповідь зʼявиться тут і на головній «Навчання»."); onAsked(); }
     catch (e) { setQMsg(hiringError(e)); }
   };
-  const e = m?.kind === "video_embed" && m.url ? embedUrl(m.url) : null;
 
   return (
     <div>
@@ -268,17 +264,8 @@ function StepView({ step, next, questions, canAsk, onBack, onGo, onAsked }: {
       {m && (
         <div className="hr-card">
           <div className="hr-sect" style={{ borderTop: 0 }}>
-            {m.kind === "text" && <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.65, fontSize: 14.5, maxWidth: 760 }}>{m.content || "Текст кроку порожній."}</div>}
-            {e?.iframe && <div style={{ position: "relative", paddingTop: "56.25%", maxWidth: 900 }}><iframe src={e.iframe} title={m.title} allowFullScreen allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: 0, borderRadius: 8 }} /></div>}
-            {e?.direct && <video src={e.direct} controls style={{ width: "100%", maxWidth: 900, borderRadius: 8 }} />}
-            {m.kind === "link" && m.url && <a className="hr-link" href={m.url} target="_blank" rel="noreferrer">🔗 Відкрити матеріал ↗</a>}
-            {m.kind === "file" && (fileUrl
-              ? (m.mime?.startsWith("image/") ? <img src={fileUrl} alt={m.title} style={{ maxWidth: "100%", borderRadius: 8 }} />
-                : m.mime === "application/pdf" ? <iframe src={fileUrl} title={m.title} style={{ width: "100%", height: "70vh", border: 0, borderRadius: 8 }} />
-                : m.mime?.startsWith("video/") ? <video src={fileUrl} controls style={{ width: "100%", maxWidth: 900, borderRadius: 8 }} />
-                : <a className="hr-link" href={fileUrl} download={m.title}>⬇️ Завантажити «{m.title}»</a>)
-              : <span className="hr-muted">Файл завантажується…</span>)}
-            {m.content && m.kind !== "text" && <p className="hr-muted" style={{ whiteSpace: "pre-wrap", marginTop: 12 }}>{m.content}</p>}
+            {/* 📘 Урок цілим — той самий компонент, що й у кроці курсу (`#729`): кандидат бачить урок так само. */}
+            <LessonBody m={m} />
           </div>
           <div className="hr-sect" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             {(m.kind as string) === "quiz"

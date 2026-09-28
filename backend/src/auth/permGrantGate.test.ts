@@ -120,6 +120,34 @@ test("#231f МІГРАЦІЯ ДВІЧІ: КВП і адмін дістають 1
   }
 });
 
+test("#741 МІГРАЦІЯ ДВІЧІ: адмін бачить «Найм» і «Номінації», фінансист — НІ (і «Навчання» лишається)", async (t) => {
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const schema = readFileSync(fileURLToPath(new URL("../../src/db/schema.sql", import.meta.url)), "utf8");
+  const client = new pg.Client({ connectionString: scratch.url });
+  try {
+    await client.connect();
+    // 🔴 ДВІЧІ, як у #231f: синк «financier = екрани адміна» повертає екрани саме на повторному прогоні —
+    // так 24.09.2026 і сталося на проді: міграція тихо відкрила фінансисту те, що власник закрив напередодні.
+    await client.query(schema);
+    await client.query(schema);
+    const rows = (await client.query<{ key: string; screen_access: Record<string, unknown> }>(
+      "SELECT key, screen_access FROM roles")).rows;
+    const sees = (k: string, s: string) => rows.find((r) => r.key === k)?.screen_access?.[s] === true;
+    assert.ok(rows.some((r) => r.key === "financier"), "🔴 у scratch-базі немає ролі фінансиста — перевіряти нема чого");
+    // дзеркало: екрани існують і в адміна є — інакше «фінансист не бачить» було б порожньою правдою
+    assert.ok(sees("admin", "hiring") && sees("admin", "nominations"), "🔴 адмін не бачить «Найм»/«Номінації» — перевірка втратила сенс");
+    assert.ok(!sees("financier", "hiring"), "🔴 фінансист бачить «Найм» після ДРУГОЇ міграції — синк з адміна повернув екран");
+    assert.ok(!sees("financier", "nominations"), "🔴 фінансист бачить «Номінації» після ДРУГОЇ міграції");
+    assert.ok(sees("financier", "training"), "🔴 фінансист утратив «Навчання» — зняття забрало більше, ніж вирішено");
+  } finally {
+    await client.end().catch(() => {});
+    scratch.dispose();
+  }
+});
+
 /**
  * 🔁 #390i — ЗАМІНА `#231g`, і причина заміни в самому імені.
  *

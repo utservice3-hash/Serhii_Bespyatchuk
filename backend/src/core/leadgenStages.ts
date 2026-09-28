@@ -20,3 +20,25 @@ export const PZ_TAKEN = 69693696;                     // Продзвін «ВЗ
 export const PZ_OPR = 69716492;                       // Продзвін «ОТРИМАНО КОНТАКТИ ОПР»
 export const REACTIVATION_PIPELINES = [8921948];      // реактивація існуючих клієнтів
 export const REACT_WARMING = 69693740;                // Реактивація «Клієнт підігрівається» — entry-анкер
+export const PZ_QUALIFIED = 142;                      // Продзвін «Кваліфіковано» — передано на прорахунок (= передача)
+
+/**
+ * Усі id, з яких складено запити лідогену, — ОДНИМ обʼєктом. Його передають у чисті
+ * збирачі SQL (`leadgenSql.ts`) і ядро, і гейт на тимчасовій базі: так обидва женуть той
+ * самий текст із тими самими значеннями, а не кожен свою копію.
+ */
+export const LEADGEN_STAGE_IDS = {
+  pz: PRODZVIN_PIPELINES, taken: PZ_TAKEN, opr: PZ_OPR, qualified: PZ_QUALIFIED,
+  react: REACTIVATION_PIPELINES, warming: REACT_WARMING,
+} as const;
+
+/**
+ * 🧲 ВОРОНКИ «КВАЛІФІКАЦІЇ» (NEW / old) — куди CRM кладе угоду менеджера в момент передачі
+ * від лідгена, поруч із воронками повного циклу. Живе тут, а не в `metrics.ts`, з тієї самої
+ * причини, що решта: читач, якому не можна тягнути `pool` → `config`, мусить дістати id.
+ *
+ * ⚠️ КОПІЇ ЛИШИЛИСЬ, І ЦЕ НАЗВАНО, А НЕ ЗАБУТО: `jobs/syncKommo.ts` і `jobs/syncTransfers.ts`
+ * тримають власний літерал `[8921928, 7336928]`. Переводити джоби — окрема правка в зоні
+ * синку; тут прибрано лише копію в `metrics.ts`, бо це той самий модуль ядра.
+ */
+export const QUALIFICATION_PIPELINES = [8921928, 7336928];

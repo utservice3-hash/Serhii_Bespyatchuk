@@ -1758,7 +1758,7 @@ CREATE INDEX IF NOT EXISTS idx_plan_formation_month ON plan_formation (month, st
 -- Фіксується саме на подачі: поріг може змінитись, а факт «тоді було нижче» — ні.
 ALTER TABLE plan_formation ADD COLUMN IF NOT EXISTS below_min BOOLEAN NOT NULL DEFAULT false;
 
--- ============================================================================
+-- =====================================================================
 -- RBAC (Phase 1). Additive, idempotent. Вбудовані ролі = ТОЧНА поточна поведінка.
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS roles (
@@ -2060,7 +2060,9 @@ UPDATE bank_transactions SET is_bank_fee = true
 -- і гейт на чисту функцію (#274*) другої не бачить. Тому #279e бʼє РОУТ проти живої БД.
 ALTER TABLE access_audit DROP CONSTRAINT IF EXISTS access_audit_target_type_check;
 ALTER TABLE access_audit ADD CONSTRAINT access_audit_target_type_check
-  CHECK (target_type IN ('user','role','bank_account','bank_payee','manager'));
+  -- 'team' — команда лише в дашборді (Налаштування → «Команди», 23.09.2026). Спіймав #279e
+  -- на прийманні: тип оголосили в коді, а живий CHECK його не знав.
+  CHECK (target_type IN ('user','role','bank_account','bank_payee','manager','team'));
 
 -- Сид 4 відомих рахунків (лише структурні поля + env_key_name; реквізити адмін заповнює в
 -- панелі). Bootstrap: сидимо ЛИШЕ коли таблиця порожня → ідемпотентно, не дублює на ре-міграції
@@ -2754,6 +2756,15 @@ UPDATE roles SET permissions = permissions || '{"edit_1x1_forms":true}'::jsonb
 -- Той самий механізм, що вже описаний біля `merge_receivables`.
 UPDATE roles SET permissions = permissions - 'view_all_1x1' - 'edit_1x1_forms'
  WHERE key IN ('financier', 'team_lead', 'manager');
+
+-- 🙅 «Найм» і «Номінації» — НЕ для фінансиста (рішення власника 23.09.2026, підтверджено 24.09).
+-- Власник вимкнув їх фінансисту в Налаштуваннях 23.09, а синк вище («financier = екрани адміна»)
+-- на першій же міграції 24.09 увімкнув їх назад — МОВЧКИ, без запису в журналі аудиту. Галочка в
+-- Налаштуваннях тут не лікує: наступна міграція знову скопіює набір адміна. Тому зняття — у схемі,
+-- ПІСЛЯ синку, як і зняття прав вище. «Навчання» фінансисту лишається (рішення 23.09). Тримає #741;
+-- зліпок доступу (#11) уже каже фінансисту 403 на цих роутах.
+UPDATE roles SET screen_access = screen_access - 'hiring' - 'nominations'
+ WHERE key = 'financier';
 
 -- 🗑 МЕРТВІ ПРАВА: жоден роут їх не перевіряє (заміряно 27.08.2026, поіменно).
 -- Право, що нічого не стереже, гірше за відсутнє: воно є в списку, його видають
@@ -3815,6 +3826,16 @@ CREATE TABLE IF NOT EXISTS nomination_reviews (
                                  AND length(btrim(COALESCE(reason, ''))) >= 3))
 );
 CREATE INDEX IF NOT EXISTS ix_nomination_reviews_week ON nomination_reviews(week_from, team_id, nomination, id);
+-- «Скасувати» (22.09.2026): рядок знову чекає. Нова дія, а не видалення — історія лише дописується,
+-- тригер незмінності не чіпаємо. ⚠️ Змінюємо ОБИДВА CHECK: другий (поля виправлення) інакше відкидав би
+-- `retract` так само, як перший. Імена — автоматичні імена Postgres для цих CHECK; DROP IF EXISTS ідемпотентний.
+ALTER TABLE nomination_reviews DROP CONSTRAINT IF EXISTS nomination_reviews_action_check;
+ALTER TABLE nomination_reviews DROP CONSTRAINT IF EXISTS nomination_reviews_check;
+ALTER TABLE nomination_reviews DROP CONSTRAINT IF EXISTS nomination_reviews_action_kind;
+ALTER TABLE nomination_reviews ADD CONSTRAINT nomination_reviews_action_kind CHECK (
+  action IN ('confirm','retract')
+  OR (action = 'override' AND cardinality(override_manager_ids) > 0 AND override_value IS NOT NULL
+      AND length(btrim(COALESCE(reason, ''))) >= 3));
 
 -- Зафіксований результат: рядок на (команда, номінація, переможець); порожня номінація — один рядок
 -- без переможця. Поруч ЗАВЖДИ лежать число й переможці CRM, навіть коли фінальне виправлено руками.
@@ -3851,6 +3872,29 @@ CREATE TRIGGER trg_nomination_snapshot_immutable BEFORE UPDATE OR DELETE ON nomi
   FOR EACH ROW EXECUTE FUNCTION nominations_immutable();
 DROP TRIGGER IF EXISTS trg_nomination_reviews_immutable ON nomination_reviews;
 CREATE TRIGGER trg_nomination_reviews_immutable BEFORE UPDATE OR DELETE ON nomination_reviews
+  FOR EACH ROW EXECUTE FUNCTION nominations_immutable();
+
+-- 📊 Статистика відділу РНК · конверсія: правки Даші й тімлідів РНК (22.09.2026). Лише дописування: остання
+-- правка чисел перемагає («reset» повертає число системи), «slide» — окремо лише вибір «на слайд», «comment» — коментар.
+CREATE TABLE IF NOT EXISTS nomination_conv_edits (
+  id          BIGSERIAL PRIMARY KEY,
+  week_from   DATE NOT NULL,
+  manager_id  INTEGER,
+  action      TEXT NOT NULL CHECK (action IN ('set','reset','slide','comment')),
+  taken       INTEGER CHECK (taken >= 0),
+  won         INTEGER CHECK (won >= 0),
+  on_slide    BOOLEAN,
+  comment     TEXT,
+  user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((action = 'comment' AND manager_id IS NULL AND comment IS NOT NULL)
+      OR (action = 'set' AND manager_id IS NOT NULL AND taken IS NOT NULL AND won IS NOT NULL AND won <= taken)
+      OR (action = 'slide' AND manager_id IS NOT NULL AND on_slide IS NOT NULL)
+      OR (action = 'reset' AND manager_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS ix_nomination_conv_edits_week ON nomination_conv_edits(week_from, id);
+DROP TRIGGER IF EXISTS trg_nomination_conv_edits_immutable ON nomination_conv_edits;
+CREATE TRIGGER trg_nomination_conv_edits_immutable BEFORE UPDATE OR DELETE ON nomination_conv_edits
   FOR EACH ROW EXECUTE FUNCTION nominations_immutable();
 
 -- Вкладка «Номінації тижня»: керівництво (admin, ceo, opdir, kvp) і тімліди. Менеджерам — дошка в
@@ -3918,6 +3962,185 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_file TEXT;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_prev TEXT;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_updated_at TIMESTAMPTZ;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+
+-- 👤 «+ СПІВРОБІТНИК» І ЗАПИС ІЗ НАЙМУ (22.09.2026, питання Івана «як додати нового співробітника»). Кандидат,
+-- що став «Менеджер», зʼявляється в реєстрі сам; `candidate_id` — звідки прийшов (одна людина реєстру на
+-- кандидата). ⚠️ revert коду колонку не прибирає; дані без неї не губляться.
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS candidate_id INTEGER REFERENCES hiring_candidates(id) ON DELETE SET NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_employees_candidate ON employees(candidate_id) WHERE candidate_id IS NOT NULL;
+
+-- 📌 НАСТУПНИЙ КРОК ПО КЛІЄНТУ (ТЗ реактивації 23.09.2026, п.1): один живий крок на клієнта,
+-- виконані лишаються як історія. Правила стану (прострочений/сьогодні/план) — `core/clientNextStep.ts`.
+CREATE TABLE IF NOT EXISTS client_next_steps (
+  id SERIAL PRIMARY KEY,
+  client_key TEXT NOT NULL,
+  text TEXT NOT NULL,
+  due_date DATE,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  done_at TIMESTAMPTZ,
+  done_by INTEGER REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_client_next_steps_open ON client_next_steps(client_key) WHERE done_at IS NULL;
+
+-- 🎓 ОДНОРАЗОВИЙ ПЕРЕНОС АКАДЕМІЇ SEREDA (23.09.2026, рішення Романа: «переносимо все, далі навчання живе
+-- на нашому сервері»). `external_id` — ключ ідемпотентності імпорту: повторний прогін ОНОВЛЮЄ той самий
+-- рядок, а не створює другий. Після переносу Sereda не потрібна; колонки лишаються слідом походження.
+-- ⚠️ revert коду колонки й перенесені рядки не прибирає.
+ALTER TABLE training_courses   ADD COLUMN IF NOT EXISTS source      TEXT NOT NULL DEFAULT 'manual';
+ALTER TABLE training_courses   ADD COLUMN IF NOT EXISTS external_id TEXT;
+ALTER TABLE training_folders   ADD COLUMN IF NOT EXISTS external_id TEXT;
+ALTER TABLE training_materials ADD COLUMN IF NOT EXISTS external_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_training_courses_ext   ON training_courses(external_id)   WHERE external_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_training_folders_ext   ON training_folders(external_id)   WHERE external_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_training_materials_ext ON training_materials(external_id) WHERE external_id IS NOT NULL;
+
+-- 📘 УРОК ІЗ ЧАСТИНАМИ (27.09.2026, рішення Романа: «роби Б, щоб було гарно і все як в середі»).
+-- Рядок може бути ЧАСТИНОЮ уроку: `lesson_id` — головний рядок уроку, `part_role` — де частина стоїть
+-- («main» — pdf/відео в тілі уроку, «attachment» — файл у блоці «Вкладення»). КРОКОМ курсу є лише урок
+-- (`lesson_id IS NULL`); правило — `core/trainingLesson.ts`. Видалення уроку забирає його частини.
+-- ⚠️ `lesson_id` і `part_role` ставляться лише ПАРОЮ: частина без ролі не знала б, де стояти, а роль без
+-- уроку перетворила б звичайний крок на «частину нічого». Тому CHECK на пару, і пишуться вони одним запитом.
+ALTER TABLE training_materials ADD COLUMN IF NOT EXISTS lesson_id INTEGER REFERENCES training_materials(id) ON DELETE CASCADE;
+ALTER TABLE training_materials ADD COLUMN IF NOT EXISTS part_role TEXT CHECK (part_role IN ('main', 'attachment'));
+DO $$ BEGIN
+  ALTER TABLE training_materials ADD CONSTRAINT training_materials_part_pair CHECK ((lesson_id IS NULL) = (part_role IS NULL));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS idx_training_materials_lesson ON training_materials(lesson_id) WHERE lesson_id IS NOT NULL;
+
+-- 🔁 Разове групування перенесеного з Sereda. `external_id` = «<урок Sereda>:<частина>» (text, empty, pres,
+-- video, att:<id>). Заміряно на проді 27.09: 157 уроків → 289 рядків, частини кожного уроку в ОДНІЙ темі й
+-- ПІДРЯД — винятків 0. Головний рядок уроку — текст («text»/«empty»), а де тексту немає (14 уроків) —
+-- перший за порядком. Вкладення → «attachment», решта (презентація, відео) → «main».
+-- ✅ Ідемпотентно: чіпає лише рядки, що ще не згруповані; головний рядок обирається тим самим правилом,
+-- тож повторний прогін нічого не змінює (тримає `#727`).
+-- ⚠️ revert коду групування НЕ знімає, але й не ламає: старий код колонок не читає й покаже знову окремі
+-- кроки. Повне зняття — `UPDATE training_materials SET lesson_id = NULL, part_role = NULL`.
+WITH g AS (
+  SELECT id, split_part(external_id, ':', 1) AS lk, split_part(external_id, ':', 2) AS part, position
+    FROM training_materials
+   WHERE external_id ~ '^[0-9a-f-]{36}:'
+), head AS (
+  SELECT DISTINCT ON (lk) lk, id AS head_id
+    FROM g
+   ORDER BY lk, (part IN ('text', 'empty')) DESC, position, id
+)
+UPDATE training_materials m
+   SET lesson_id = h.head_id,
+       part_role = CASE WHEN g.part = 'att' THEN 'attachment' ELSE 'main' END
+  FROM g JOIN head h ON h.lk = g.lk
+ WHERE m.id = g.id AND g.id <> h.head_id AND m.lesson_id IS NULL;
+
+-- 🙈 Уроки-ЧЕРНЕТКИ Sereda лишаються чернетками. Заміряно 27.09.2026 через API Sereda: зі 157 уроків 5 мають
+-- статус «draft», і учням Sereda їх не показує — тому там «20 уроків», а в нас після переносу було 25. Це старі
+-- дублікати («Митниця», «Пакування та його типи», «Автомобільна логістика», «Безпека…», «Ознайомлення з
+-- програмами»). Перенос статус уроку ігнорував і зробив їх опублікованими. Список ЗАМІРЯНИЙ і закритий: Sereda
+-- вимикається, нових чернеток звідти не буде. Разом з уроком ховаються й його частини.
+-- ✅ Ідемпотентно (лише ті, що досі опубліковані). Повернути — той самий WHERE з `status = 'published'`.
+UPDATE training_materials SET status = 'draft'
+ WHERE status = 'published'
+   AND split_part(external_id, ':', 1) IN (
+     'a864ad29-e881-43c5-8930-47bb3bd00edc', '8949fc60-5603-4512-b095-8e1b8882001f',
+     '12f7554e-7943-48c2-bc4f-340ac2f67f69', '3fae28d3-a570-4c81-a253-d558c848ad02',
+     '19026513-a3af-486c-98d3-7afe8e1ce432');
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 🧭 ПЕРЕВИЗНАЧЕННЯ КОМАНДИ МЕНЕДЖЕРА (ТЗ 23.09.2026, п.1) — див. core/teamOverride.ts.
+-- Рядок = «у дашборді ця людина в team_id, що б не стояло в Kommo»; team_id NULL =
+-- примусово без команди. Синк читає таблицю на кожному тіку; адмін править у
+-- Налаштуваннях → «Команди». Хардкод TEAM_OVERRIDES із syncKommo переїхав у сид нижче.
+-- ═══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS manager_team_overrides (
+  kommo_user_id BIGINT PRIMARY KEY,
+  team_id       INTEGER REFERENCES teams(id),   -- NULL = без команди примусово
+  note          TEXT,
+  set_by        INTEGER REFERENCES users(id),
+  set_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Сид 2 (спершу): команда лише в дашборді — у Kommo такої групи немає (ТЗ 23.09.2026).
+-- ⚠️ id ЯВНИЙ і далекий від serial (MAX+1000): фікстури гейтів сіють команди з id 1..15 через
+-- ON CONFLICT DO NOTHING, і serial-рядок з id 1 мовчки підмінив би їм назву (спіймано #25d,
+-- #675: «Комерційний відділ» замість «РПК»). На проді це 37283 — послідовність не зачіпає.
+INSERT INTO teams (id, name, kommo_group_id)
+SELECT COALESCE((SELECT MAX(id) FROM teams), 0) + 1000, 'Комерційний відділ', NULL
+ WHERE NOT EXISTS (SELECT 1 FROM teams WHERE name = 'Комерційний відділ');
+
+-- Сид 3 (24.09.2026): команда «Лідогенерація» — лише в дашборді, тімлід Сердюк Ярослав (рішення власника).
+-- Стару групу «Таня Ковтонюк (лідогенератори)» 23.09 архівували, а лідгенів лишили «без команди» — і тімлід
+-- лідогенерації бачив на своєму екрані нулі. Людей сюди переводить адмін у Налаштуваннях → «Команди».
+-- ⚠️ id ФІКСОВАНИЙ (50011), бо його читає код: `metrics.NON_COMMERCIAL_TEAM_IDS` (Звіт/КВП/плани не
+-- показують команду як продажну), `KVP_LEADGEN_TEAM_IDS` і фронтові `NON_COMMERCIAL_TEAM_IDS`. Тримає #740.
+-- Назва мусить містити «лідоген»: за нею команду впізнають reactivateLeads, КВП і дві продажні вибірки.
+INSERT INTO teams (id, name, kommo_group_id)
+SELECT 50011, 'Лідогенерація', NULL
+ WHERE NOT EXISTS (SELECT 1 FROM teams WHERE name = 'Лідогенерація' OR id = 50011);
+
+-- 🔴 BASELINE ОДНИМ ЗАПИТОМ, НЕ СИНК (урок #15 і #709d): сиди лягають лише в ПОРОЖНЮ
+-- таблицю — інакше рядок, який адмін ЗНЯВ («з CRM»), воскресав би на кожному старті
+-- сервера; гейт #709d це спіймав на першому ж прогоні. Один INSERT, щоб «порожня»
+-- означало одне й те саме для всіх рядків.
+--   • 7181916 Шевчук Назар → команда Яцика (рішення власника 05.08.2026, було хардкодом);
+--   • 3549691 Левентова Юлія → «Комерційний відділ» (ТЗ 23.09.2026);
+--   • 12812476 Сердюк, 13369800 Демчук, 13656180 Крупник, 14731552 Шевчук М. — активні
+--     учасники групи «Таня Ковтонюк (лідогенератори)» на 23.09.2026 → без команди
+--     (архів групи за ТЗ 23.09.2026).
+INSERT INTO manager_team_overrides (kommo_user_id, team_id, note)
+SELECT v.k, v.t, v.n
+  FROM (
+    SELECT 7181916 AS k, (SELECT id FROM teams WHERE kommo_group_id = 335511) AS t,
+           'рішення власника 05.08.2026: «Самостійні» розформовано, повністю під Яцика' AS n
+    UNION ALL
+    SELECT 3549691, (SELECT id FROM teams WHERE name = 'Комерційний відділ'),
+           'ТЗ 23.09.2026: перенести в «Комерційний відділ»'
+    UNION ALL
+    SELECT k, NULL, 'ТЗ 23.09.2026: група «Таня Ковтонюк (лідогенератори)» архівована'
+      FROM (VALUES (12812476), (13369800), (13656180), (14731552)) AS a(k)
+  ) v
+ WHERE NOT EXISTS (SELECT 1 FROM manager_team_overrides)
+   -- Шевчук і Левентова без команди-цілі — це НЕ «без команди», а «цілі ще немає»:
+   -- тоді не сіємо нікого, щоб не покласти неправду; наступний старт спробує знову.
+   AND (SELECT id FROM teams WHERE kommo_group_id = 335511) IS NOT NULL
+   AND (SELECT id FROM teams WHERE name = 'Комерційний відділ') IS NOT NULL;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 📋 ПЛАНИ ЛІДГЕНІВ (рішення власника 25.09.2026) — core/leadgenPlans.ts, правила — core/leadgenPlanRules.ts.
+-- План на людину × місяць × метрику: ліди · ОПР · прорахунки — ті самі лічильники, що на екрані
+-- «Лідогенерація». Процес — дзеркало формування плану продажів: тімлід подає (submitted),
+-- адмін-рівень затверджує (approved) або повертає (returned) з коментарем.
+--
+-- 🔴 ОКРЕМА ТАБЛИЦЯ, А НЕ `plans`/`plan_formation`, — і причина заміряна читанням їхніх читачів:
+--   • `plans` читають без фільтра метрики `/managers` (тижні), `/personal` (місяць і 12 міс) і
+--     `GET /api/plans` — нова метрика в `plans` вилізла б рядками на продажних екранах;
+--   • `plan_formation` має метрико-сліпу міграцію `below_min` вище (поріг `planMinPerManager` у
+--     ГРИВНЯХ) — при заданому порозі вона мітила б «нижче мінімуму» кожен план лідгена (40
+--     прорахунків < поріг у ₴) на кожному старті, а подання/затвердження продажів фільтрує лише
+--     `metric = 'payment_amount'`, тож рядки лідгенів лежали б там непоміченими чужими.
+-- Тож лідоген-метрики туди не пишуться ЗОВСІМ, і CHECK `plans.metric` не чіпається.
+--
+-- Живий план = `approved_value`: його ставить лише затвердження; повторне подання й повернення
+-- його НЕ стирають (у продажах так само: `plans` тримає попередній затверджений, поки новий
+-- на розгляді). Пишеться ЗАВЖДИ трійкою рядків — одне подання = три метрики.
+-- ⚠️ Revert коду не відкочує рядки цієї таблиці: вони лишаються, і їх ніхто не читає.
+-- ═══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS leadgen_plans (
+  id             SERIAL PRIMARY KEY,
+  manager_id     INTEGER NOT NULL REFERENCES managers(id),
+  month          DATE NOT NULL CHECK (month = date_trunc('month', month)::date),
+  metric         TEXT NOT NULL CHECK (metric IN ('leads', 'opr', 'quotes')),
+  proposed_value INTEGER NOT NULL CHECK (proposed_value >= 0),
+  approved_value INTEGER CHECK (approved_value IS NULL OR approved_value >= 0),
+  status         TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'submitted', 'approved', 'returned')),
+  comment        TEXT,
+  return_comment TEXT,
+  submitted_by   INTEGER REFERENCES users(id),
+  submitted_at   TIMESTAMPTZ,
+  decided_by     INTEGER REFERENCES users(id),
+  decided_at     TIMESTAMPTZ,
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (manager_id, month, metric)
+);
+CREATE INDEX IF NOT EXISTS idx_leadgen_plans_month ON leadgen_plans (month, status);
 
 -- ▼ AI-АНАЛІЗ ДЗВІНКІВ ПО РЕКЛАМНИХ ЛІДАХ (ТЗ 22.09.2026, прохід A, коміт ②) ▼
 -- Три таблиці з ІСТОРІЄЮ: жодного TRUNCATE, жодного перезапису. Старий шлях (uts-bot → Google-лист →

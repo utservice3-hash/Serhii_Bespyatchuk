@@ -5,18 +5,25 @@
  * Зʼєднання — параметром, `db/pool` не імпортуємо (гейт має свій клієнт).
  */
 import { orderedMaterials, materialStates } from "./trainingProgress.js";
+import { LESSON_ONLY, lessonOf } from "./trainingLesson.js";
 
 export interface LockDb {
   query: <R = Record<string, unknown>>(sql: string, params?: unknown[]) => Promise<{ rows: R[] }>;
 }
 
 export async function stepLockedBy(db: LockDb, uid: number, materialId: number): Promise<{ materialId: number; title: string } | null> {
+  /* 📘 Частина уроку замкнена рівно тоді, коли замкнений її урок: питаємо про УРОК. Інакше вміст
+     третього уроку діставався б запитом на id його презентації (`core/trainingLesson.ts`). */
+  const self = await db.query<{ id: number; lesson_id: number | null }>(`SELECT id, lesson_id FROM training_materials WHERE id = $1`, [materialId]);
+  if (!self.rows[0]) return null;             // немає матеріалу — про замок не йдеться
+  const lessonId = lessonOf({ id: self.rows[0].id, lessonId: self.rows[0].lesson_id });
   // Послідовно, не Promise.all: на клієнті транзакції паралельні запити — черга pg із попередженням.
   const folders = await db.query<{ id: number; parent_id: number | null; position: number }>(`SELECT id, parent_id, position, course_id FROM training_folders`);
+  // 🔴 Кроки — ЛИШЕ уроки: частина не тримає замок і не входить у порядок.
   const materials = await db.query<{ id: number; folder_id: number; title: string; position: number; required: boolean }>(
-    `SELECT id, folder_id, title, position, required FROM training_materials WHERE status = 'published'`);
+    `SELECT id, folder_id, title, position, required FROM training_materials WHERE status = 'published' AND ${LESSON_ONLY}`);
   const progress = await db.query<{ material_id: number; status: string }>(`SELECT material_id, status FROM training_progress WHERE user_id = $1`, [uid]);
-  const me = materials.rows.find((m) => m.id === materialId);
+  const me = materials.rows.find((m) => m.id === lessonId);
   if (!me) return null;                       // немає матеріалу — про замок не йдеться
   const fRows = folders.rows.map((f) => ({ id: f.id, parentId: f.parent_id, position: f.position }));
   const mRows = materials.rows.map((m) => ({ id: m.id, folderId: m.folder_id, position: m.position, required: m.required }));
@@ -27,7 +34,7 @@ export async function stepLockedBy(db: LockDb, uid: number, materialId: number):
   const moduleId = own?.parent_id ?? own?.id;
   if (moduleId == null) return null;
 
-  const st = materialStates(orderedMaterials(moduleId, fRows, mRows), done).find((s) => s.id === materialId);
+  const st = materialStates(orderedMaterials(moduleId, fRows, mRows), done).find((s) => s.id === lessonId);
   if (!st || st.state !== "locked" || !st.blockedBy) return null;
   const title = materials.rows.find((m) => m.id === st.blockedBy!.materialId)?.title ?? "";
   return { materialId: st.blockedBy.materialId, title };

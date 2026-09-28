@@ -13,6 +13,7 @@ import {
   refusalVerdict, messengerLinks, vacancyCloseStatus, VACANCY_STATUSES, REFUSAL_SIDES, type RefusalSide, type VacancyStatus,
 } from "./hiringRules.js";
 import { ensureCandidateAccount, closeCandidateAccess, undoPromotion, hasAccount } from "./hiringTraining.js";
+import { ensureEmployeeFromCandidate, undoEmployeeFromCandidate } from "./employeeAdd.js";
 
 export interface Db {
   query: <R = Record<string, unknown>>(sql: string, params?: unknown[]) => Promise<{ rows: R[]; rowCount: number | null }>;
@@ -469,6 +470,9 @@ export async function changeStatus(
   await logEvent(db, { candidateId: id, kind: "status", from: c.status, to: p.to, comment, actorId });
   if (p.to === "candidate") await ensureCandidateAccount(db, actorId, id);
   if (c.status === "manager") await undoPromotion(db, id, actorId);
+  // 👤 «Менеджер» = людина в реєстрі співробітників (22.09.2026); повернення прибирає лише щойно створений запис (#647).
+  if (p.to === "manager") await ensureEmployeeFromCandidate(db, actorId, id);
+  if (c.status === "manager") await undoEmployeeFromCandidate(db, actorId, id);
 }
 
 export async function addComment(db: Db, actorId: number | null, id: number, comment: unknown, access: HiringAccess, leadTeamId: number | null) {

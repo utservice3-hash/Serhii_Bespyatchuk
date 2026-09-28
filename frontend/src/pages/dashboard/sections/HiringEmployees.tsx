@@ -7,6 +7,7 @@ import {
   type EmployeeDoc, type EmployeeRow, type ImportPreview, type SecretsStatus, type EmployeePatch, type PersonPhoto,
 } from "../../../api";
 import { EmployeePhoto, PhotoPanel } from "./EmployeePhotos";
+import { AddEmployeeDialog, BulkDocsDialog } from "./HiringEmployeeAdd";
 import type { Toast } from "./HiringShared";
 import { StatusBar, VaultPanel } from "./HiringSecrets";
 
@@ -70,6 +71,8 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
   const [team, setTeam] = useState<string>("");
   const [extra, setExtra] = useState<Extra>("all");
   const [importing, setImporting] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [bulk, setBulk] = useState(false);
   const [open, setOpen] = useState<{ id: number; tab: DrawerTab } | null>(null);
   // Стан фото: збій завантаження НЕ читається як «фото немає ні в кого» — попереднє лишається, помилка видима.
   const [photos, setPhotos] = useState<Map<number, PersonPhoto> | null>(null);
@@ -136,7 +139,9 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
           <input className="hr-inp" placeholder="Пошук: ПІБ, посада, телефон" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Пошук у реєстрі" style={{ flex: "1 1 200px" }} />
           <button className="hr-btn" title="Привʼязати людей до менеджерів Kommo: за ID Kommo з таблиці або за єдиним збігом ПІБ"
             onClick={() => void linkEmployeesKommo().then((r) => { toast(`Kommo: привʼязано ${r.linked} (за ID ${r.byId}, за ПІБ ${r.byName})${r.ambiguous ? ` · однофамільців ${r.ambiguous} — вручну` : ""}`); load(); }).catch((e) => toast(hiringError(e), { error: true }))}>Зіставити з Kommo</button>
+          <button className="hr-btn" onClick={() => setBulk(true)} title="Кілька файлів одразу — людину знаходить за ПІБ у назві">📎 Документи пакетом</button>
           <button className="hr-btn" onClick={() => setImporting(true)}>Імпорт з таблиці</button>
+          <button className="hr-btn p" onClick={() => setAdding(true)}>+ Співробітник</button>
         </div>
         <Birthdays rows={rows} onOpen={(id) => setOpen({ id, tab: "profile" })} />
         {rows.length === 0 ? (
@@ -192,6 +197,10 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
       </div>
       {openRow && <EmployeeDrawer row={openRow} tab={open!.tab} teams={teams} status={status} toast={toast} photo={photos?.get(openRow.id)} photoErr={photos ? null : photosErr}
         onTab={(t) => setOpen({ id: openRow.id, tab: t })} onClose={() => setOpen(null)} onSaved={load} onPhoto={loadPhotos} />}
+      {adding && <AddEmployeeDialog teams={teams} onClose={() => setAdding(false)}
+        onOpenExisting={(id) => { setAdding(false); setOpen({ id, tab: "profile" }); }}
+        onDone={(id, name) => { setAdding(false); toast(`${name}: додано в реєстр`); load(); setView("active"); setOpen({ id, tab: "profile" }); }} />}
+      {bulk && <BulkDocsDialog people={rows} onClose={() => { setBulk(false); load(); }} onDone={(n) => { setBulk(false); toast(`Завантажено документів: ${n}`); load(); }} />}
       {importing && <ImportDialog onClose={() => setImporting(false)} onDone={(msg, pending) => {
         setImporting(false); toast(msg); load();
         // Імпорт довершується на сервері — кілька разів перечитуємо реєстр, щоб результат зʼявився без перезавантаження.

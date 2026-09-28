@@ -5,6 +5,11 @@ import { pool } from "../db/pool.js";
 // до першого виклику (request-time), коли обидва модулі вже ініціалізовані.
 import { adDealSql } from "./metrics.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
+import { managerDealClass, type DealState } from "./leadgenHandoffRules.js";
+// 💰 Правила класу угоди менеджера з передачі — ОДИН обʼєкт у реєстрі корзин (там і 143
+// «Закрито і не реалізовано», у Кваліфікації — «Не цільові» / «Сміття»). `#683` звіряє його
+// поля з константами цього ядра; друга копія тут розійшлась би мовчки (ревʼю F3/F5).
+import { HANDOFF_CLASS_RULES } from "./moneyBuckets.js";
 
 /**
  * ЄДИНЕ джерело грошових метрик (MASTER_PLAN КРОК 2, виправлено КРОКОМ 4 — опція Б).
@@ -52,6 +57,26 @@ export const STAGE_RECEIVED = [...STAGE_PAID, ...STAGE_SUCCESS];
  */
 export const CHAIN_INFLIGHT = [69716300, 98470988, 69716304, 69716312, 69716460, 10937178, 42639144, 42639147, 25044997, 62940068, 60412544];
 
+/**
+ * 🧾 «З РАХУНКУ І ДАЛІ» — факт ЕКРАНА КЛІЄНТІВ (ТЗ Юлі 22.09.2026, блок 2, п.2.1; задача 4311).
+ *
+ * ТЗ: «факт і план — з етапу „Виставлення рахунку“, не з „Успіх“». Буквально лише етап 4
+ * брати НЕ МОЖНА — заміряно 24.09.2026 на успішних угодах серпня: з 951 через етап 4
+ * пройшли 511 (54%), жодного етапу рахунку не мали 289, з них 273 готівкові (рахунку в
+ * готівки не буває взагалі). Тож угода йде у факт, коли ВПЕРШЕ дійшла до «Виставлення
+ * рахунку» АБО будь-якого етапу після нього — включно з «Авто працює» і самою 142.
+ * Закритий місяць майже не зрушує (серпень: 968 угод / 2 546 812 ₴ проти 951 / 2 550 073 ₴
+ * успіхом), поточний зростає на угоди з рахунком, але ще без успіху.
+ *
+ * 🔴 ЦЕ ТРЕТІЙ ГРОШОВИЙ ВИД, І ЖИВЕ ВІН РІВНО НА ОДНОМУ ЕКРАНІ — «Клієнти та реактивація»
+ * (факт місяця, тижні, % плану). Звіт, КВП, Огляд і картка «як платив» лишаються на ①/②.
+ * Екран мусить підписувати «з рахунку» — дві правильні метрики без підпису читаються як
+ * поломка (правило власника 02.08.2026).
+ *
+ * New(8921932): 100274340 Виставлення рахунку. Old(155304): 62940064 — його аналог.
+ */
+export const STAGE_FROM_INVOICE = [100274340, 62940064, ...CHAIN_INFLIGHT, 142];
+
 export interface MoneyScope {
   from?: string | null;
   to?: string | null;
@@ -68,7 +93,7 @@ export interface MgrRow { managerId: number; name: string; teamId: number | null
 export interface BucketRow { bucket: string; revenue: number; deals: number }
 export interface MgrWeekRow { managerId: number; weekStart: string; revenue: number; deals: number }
 
-type Kind = "received" | "success" | "paidOnly" | "expected";
+type Kind = "received" | "success" | "paidOnly" | "expected" | "fromInvoice";
 
 /**
  * Джерело угод для метрики — по одному рядку на угоду з ЄДИНИМ анкером:
@@ -118,6 +143,21 @@ function sourceSql(kind: Kind, p: unknown[]): string {
                      GROUP BY kommo_id) a ON a.kommo_id = d.kommo_id
              WHERE d.status_id = ANY(${st}) AND d.pipeline_id = ANY(${fc})`;
   };
+  if (kind === "fromInvoice") {
+    // Анкер — ПЕРШИЙ вхід у «Виставлення рахунку» або будь-який етап після нього. Угода 142 без
+    // жодної події (1 на серпень 2026) анкериться закриттям, щоб успіх не губився з факту.
+    // Програні (143) не рахуються: рахунок був, грошей не буде.
+    p.push(STAGE_FROM_INVOICE);
+    const st = `$${p.length}`;
+    const anchor = "COALESCE(f.first_at, CASE WHEN d.status_id = 142 THEN d.closed_at_kommo END)";
+    return `SELECT d.kommo_id, ${anchor} AS anchor_at, d.manager_id, d.price
+              FROM deals d
+              LEFT JOIN (SELECT kommo_id, MIN(changed_at) AS first_at
+                           FROM deal_stage_events
+                          WHERE pipeline_id = ANY(${fc}) AND status_id = ANY(${st})
+                          GROUP BY kommo_id) f ON f.kommo_id = d.kommo_id
+             WHERE d.pipeline_id = ANY(${fc}) AND d.status_id <> 143 AND ${anchor} IS NOT NULL`;
+  }
   if (kind === "success") return successSrc;
   if (kind === "paidOnly") return currentStageSrc(STAGE_PAID);
   if (kind === "expected") return currentStageSrc(STAGE_EXPECTED);
@@ -370,6 +410,13 @@ export const receivedByClientKey = (s: MoneyScope) => receivedByDealAttr(s, "COA
  * — похідна від `client_key_raw` через реєстр псевдонімів).
  */
 export const successByClientKey = (s: MoneyScope) => byDealAttr("success", s, "COALESCE(dd.client_key, '—')");
+/** 🧾 Факт екрана клієнтів «з рахунку і далі» — див. `STAGE_FROM_INVOICE`. */
+export const fromInvoiceByClientKey = (s: MoneyScope) => byDealAttr("fromInvoice", s, "COALESCE(dd.client_key, '—')");
+/** Сума «з рахунку і далі» за скоупом — для гейта «Σ по клієнтах == ядру». */
+export const fromInvoiceTotal = async (s: MoneyScope): Promise<MoneyAgg> => {
+  const rows = await byDealAttr("fromInvoice", s, "'all'");
+  return { revenue: rows.reduce((a, r) => a + r.revenue, 0), deals: rows.reduce((a, r) => a + r.deals, 0) };
+};
 
 export interface ClientBucketRow { clientKey: string; bucket: string; revenue: number; deals: number }
 /**
@@ -385,9 +432,19 @@ export interface ClientBucketRow { clientKey: string; bucket: string; revenue: n
 export async function successByClientBucket(
   s: MoneyScope, granularity: "day" | "week" | "month", onlyClientKey?: string,
 ): Promise<ClientBucketRow[]> {
+  return byClientBucket("success", s, granularity, onlyClientKey);
+}
+
+/**
+ * Гроші клієнта по бакетах для БУДЬ-ЯКОГО виду ядра — один запит на всі види, щоб
+ * новий вид не заводив другу копію розрізу «клієнт × період».
+ */
+async function byClientBucket(
+  kind: Kind, s: MoneyScope, granularity: "day" | "week" | "month", onlyClientKey?: string,
+): Promise<ClientBucketRow[]> {
   const K = "AT TIME ZONE 'Europe/Kyiv'";
   const p: unknown[] = [];
-  const src = sourceSql("success", p);
+  const src = sourceSql(kind, p);
   const conds: string[] = [];
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at ${K})::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at ${K})::date <= $${p.length}`); }
@@ -413,6 +470,14 @@ export interface ClientWeekRow { clientKey: string; weekIndex: number; revenue: 
  * `s.from` має бути 1-м числом місяця.
  */
 export async function successByClientWeek(s: MoneyScope): Promise<ClientWeekRow[]> {
+  return byClientWeek("success", s);
+}
+/** 🧾 Тижні екрана клієнтів «з рахунку і далі» — ті самі межі `monthWeeks`, що й у Звіті. */
+export async function fromInvoiceByClientWeek(s: MoneyScope): Promise<ClientWeekRow[]> {
+  return byClientWeek("fromInvoice", s);
+}
+
+async function byClientWeek(kind: Kind, s: MoneyScope): Promise<ClientWeekRow[]> {
   const monthStr = (s.from ?? new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" })).slice(0, 7);
   const weeks = monthWeeks(monthStr);
   // 🔴 ОДИН запит по днях, а не пʼять по тижнях. Перша версія робила
@@ -420,7 +485,7 @@ export async function successByClientWeek(s: MoneyScope): Promise<ClientWeekRow[
   // розрізу, який дає один GROUP BY. У пісочниці це коштувало 8.5 с на запит; на
   // проді (146 тис. угод) було б помітно гірше, і виглядало б як «екран гальмує»,
   // а не як «ми пʼять разів спитали те саме».
-  const days = await successByClientBucket(s, "day");
+  const days = await byClientBucket(kind, s, "day");
   const idxOf = (ymd: string): number => {
     const d = Number(ymd.slice(8, 10));
     for (const w of weeks) if (d >= w.fromDay && d <= w.toDay) return w.index;
@@ -1140,3 +1205,42 @@ export async function receivedUndefDeals(s: MoneyScope): Promise<UndefDealRow[]>
   }));
 }
 
+/**
+ * 💰 СТАН І БЮДЖЕТ УГОД МЕНЕДЖЕРА, ЩО ВИРОСЛИ З ПЕРЕДАЧ ЛІДГЕНА — ЗАРАЗ (правило 4 власника).
+ *
+ * Гроші живуть лише тут (правило `money-core`), тож ядро лідогену знаходить угоду, а її клас
+ * і суму питає в цієї функції. Клас вирішує ЧИСТА `managerDealClass` над `HANDOFF_CLASS_RULES`
+ * (реєстр корзин), поля якого `#683` звіряє з `FC_PIPELINES`/`STAGE_SUCCESS`/`STAGE_PAID` цього
+ * модуля й `EXPECT_ZONE` зони «Очікуємо»; списаний борг — тим самим `DEAL_NOT_WRITTEN_OFF`, що й
+ * у всіх «очікуваних» з 26.08.2026. Друга копія будь-якого з них розійшлась би мовчки.
+ * Увесь ланцюг (SQL → `closed`/`written_off` → клас) проганяє на тимчасовій базі `#683b`.
+ *
+ * ⚓ Це НЕ дохід періоду: анкер — дата передачі, стан — поточний. Сума — `price` угоди
+ * (уже зі знаком для мінусових), округлена до гривні так само, як її показує список.
+ * Автоугоди не ховаються (правило 5).
+ */
+export interface HandoffDealState extends DealState { pipelineId: number; statusId: number }
+
+export async function handoffDealStates(dealIds: readonly number[]): Promise<Map<number, HandoffDealState>> {
+  const out = new Map<number, HandoffDealState>();
+  const ids = [...new Set(dealIds)];
+  if (!ids.length) return out;
+  const r = await pool.query<{ kommo_id: string; pipeline_id: string; status_id: string; price: string | null;
+    closed: boolean; written_off: boolean }>(
+    `SELECT d.kommo_id, d.pipeline_id, d.status_id, d.price,
+            (d.closed_at_kommo IS NOT NULL) AS closed,
+            NOT (${DEAL_NOT_WRITTEN_OFF}) AS written_off
+       FROM deals d
+      WHERE d.kommo_id = ANY($1::bigint[])`,
+    [ids]
+  );
+  for (const x of r.rows) {
+    const pipelineId = Number(x.pipeline_id), statusId = Number(x.status_id);
+    out.set(Number(x.kommo_id), {
+      pipelineId, statusId,
+      cls: managerDealClass({ pipelineId, statusId, closed: x.closed, writtenOff: x.written_off }, HANDOFF_CLASS_RULES),
+      price: Math.round(Number(x.price ?? 0)),
+    });
+  }
+  return out;
+}

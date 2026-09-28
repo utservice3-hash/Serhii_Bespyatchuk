@@ -8,6 +8,7 @@
 import bcrypt from "bcryptjs";
 import { randomBytes } from "node:crypto";
 import { HiringError, LEAD_VISIBLE_SQL, type Db } from "./hiring.js";
+import { ensureEmployeeFromCandidate } from "./employeeAdd.js";
 import type { HiringAccess, HiringStatus } from "./hiringRules.js";
 import {
   CANDIDATE_ACCESS, CLOSE_REASON_LABEL, accessDeadline, accessToClose, trainingDay, trainingHealth, promoteVerdict,
@@ -15,6 +16,7 @@ import {
   type CloseReason, type TrainingHealth,
 } from "./hiringTrainingRules.js";
 import { orderedMaterials, materialStates, coursePercent, type ProgressMap } from "./trainingProgress.js";
+import { LESSON_ONLY } from "./trainingLesson.js";
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
 const d = (v: unknown): Date | null => (v == null ? null : new Date(v as string));
@@ -275,7 +277,9 @@ async function candidateCourse(db: Db): Promise<Course> {
   // Послідовно, не Promise.all: на клієнті транзакції паралельні запити — черга pg із попередженням.
   const courses = await db.query<{ id: number }>(`SELECT id FROM training_courses WHERE audience IN ('candidate','all') AND published ORDER BY position, id`);
   const folders = await db.query<Course["folders"][number]>(`SELECT id, parent_id, position, course_id, name FROM training_folders`);
-  const materials = await db.query<Course["materials"][number]>(`SELECT id, folder_id, title, kind, position, required FROM training_materials WHERE status = 'published'`);
+  /* 📘 «Зроблено N із M» рахує УРОКИ, а не частини (`core/trainingLesson.ts`): інакше презентація й
+     вкладення одного уроку йшли б окремими кроками, і кандидат «не встигав» за курсом, якого не бачить. */
+  const materials = await db.query<Course["materials"][number]>(`SELECT id, folder_id, title, kind, position, required FROM training_materials WHERE status = 'published' AND ${LESSON_ONLY}`);
   const fRows = folders.rows.map((f) => ({ id: f.id, parentId: f.parent_id, position: f.position }));
   const mRows = materials.rows.map((m) => ({ id: m.id, folderId: m.folder_id, position: m.position, required: m.required }));
   const ordered = courses.rows.flatMap((c) => folders.rows
@@ -395,6 +399,7 @@ export async function promoteCandidate(db: Db, actorId: number | null, id: numbe
   await db.query(`UPDATE hiring_candidates SET status = 'manager', updated_at = now() WHERE id = $1`, [id]);
   await event(db, id, "status", `після навчання (${row.done} із ${row.total} кроків) · ${text}`, actorId, c.status, "manager");
   await closeCandidateAccess(db, id, "manager", actorId);
+  await ensureEmployeeFromCandidate(db, actorId, id); // 👤 після навчання — теж у реєстр (#647)
 }
 
 // ── Екран кандидата (прохід 2b) ──────────────────────────────────────────

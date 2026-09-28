@@ -19,7 +19,8 @@ export function Login() {
       // which loses its query otherwise and leaves the agent waiting on a port for nothing.
       const back = sessionStorage.getItem("afterLogin");
       sessionStorage.removeItem("afterLogin");
-      navigate(back ?? "/", { replace: true });
+      // Лише власний шлях застосунку: «//інший-сайт» чи повна адреса сюди не потрапляють.
+      navigate(back && back.startsWith("/") && !back.startsWith("//") ? back : "/", { replace: true });
     } catch (e) {
       // 🔴 403 — НЕ «невірний пароль». Сервер відмовляє трьома різними причинами (деактивовано,
       // звільнений, закрите навчання) і називає кожну; досі форма затирала їх однією фразою, і

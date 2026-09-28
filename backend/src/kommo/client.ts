@@ -159,6 +159,20 @@ export async function kommoWrite<T>(
   return res.json() as Promise<T>;
 }
 
+/**
+ * DELETE до Kommo — для відхилення заявок «Нерозібраного» (`/leads/unsorted/{uid}/decline`).
+ * Той самий тротлінг і заголовки, що в `kommoWrite`; тіла немає. Kommo відповідає 200 без тіла
+ * або з JSON — тому не парсимо, лише перевіряємо статус.
+ */
+export async function kommoDelete(path: string): Promise<void> {
+  await throttle();
+  const res = await fetch(`${config.kommo.baseUrl}${path}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${config.kommo.token}`, ...KOMMO_HEADERS },
+  });
+  if (!res.ok) throw new Error(`Kommo DELETE ${path} failed ${res.status}: ${(await res.text()).slice(0, 200)}`);
+}
+
 export interface KommoFieldValue {
   field_id?: number;
   field_code?: string | null;

@@ -70,6 +70,7 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // Знову ОКРЕМІ записи: `pre` матчить по слешу, дефісний сусід не накривається.
     { test: pre("/api/dashboard/client-card"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-contacts"), tabs: ["loyalty"] },
+    { test: pre("/api/dashboard/client-next-step"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-search"), tabs: ["loyalty"] },
     // 🔴 ДОДАНО 04.08.2026, КОЛИ `requirePerm` ПІШОВ. Обʼєднання відкрилось тімліду
     // (у межах команди), тож єдиною межею роутів лишився кламп усередині — а це
@@ -97,6 +98,12 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // ⚠️ ОКРЕМИЙ РЯДОК, А НЕ ПРЕФІКС ВИЩЕ: `pre()` не накриває дефіс — той самий урок,
     // що з `reactivation-candidates`. Без цього новий екран лишився б без вкладкової межі.
     { test: pre("/api/dashboard/leadgen-stats"), tabs: ["leadgen"] },
+    // 💰 Тренд і список передач екрана «Лідогенерація» (22.09.2026) — ЯВНО, бо `pre()` дефісних
+    // сусідів `/leadgen` не накриває. Без цих рядків обидва роути лишились би без вкладкової межі.
+    { test: pre("/api/dashboard/leadgen-trend"), tabs: ["leadgen"] },
+    { test: pre("/api/dashboard/leadgen-handoff-deals"), tabs: ["leadgen"] },
+    // 📋 Плани лідгенів (25.09.2026): список + подання/затвердження/повернення — ЯВНО, та сама причина.
+    { test: pre("/api/dashboard/leadgen-plans"), tabs: ["leadgen"] },
     { test: pre("/api/dashboard/leadgen"), tabs: ["leadgen"] },
     { test: pre("/api/dashboard/stuck-deals"), tabs: ["dataquality"] },
     { test: pre("/api/dashboard/data-quality"), tabs: ["dataquality"] },
@@ -124,6 +131,7 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // `ROUTE_BOUNDARY_EXEMPTIONS` (`gates.ts`) з причиною — мовчазних більше немає.
     // /api/statistics — series* → statistics; інше → depstats
     { test: pre("/api/statistics/series"), tabs: ["statistics"] },
+    { test: pre("/api/statistics/lapsed-clients"), tabs: ["statistics"] },
     { test: pre("/api/statistics"), tabs: ["depstats"] },
     // виділені роутери
     { test: pre("/api/plans"), tabs: ["plans"] },

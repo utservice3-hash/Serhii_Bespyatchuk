@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { AdsSection } from "./AdsSection";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea, Brush,
 } from "recharts";
 import { effGranOf } from "../statsGran";
-import { fetchStatsSeries, saveStatsManual, type StatsSeriesResp, type StatsSeries } from "../../../api";
+import { fetchStatsSeries, saveStatsManual, fetchLapsedClients, type StatsSeriesResp, type StatsSeries, type LapsedClientsResp } from "../../../api";
 import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
 import { monthStart, periodOf, todayKyiv, type PeriodState } from "../periodRules";
@@ -392,6 +392,7 @@ export default function StatisticsChartsSection(
       {cat.manualForm && <ManualForm onClose={() => { setCatKey("money"); setMetricKey("avg_check"); }} isAdmin={role === "admin"} />}
 
       {/* Міні-плитки */}
+      {catKey === "clients" && <LapsedClientsBlock />}
       {!cat.manualForm && !cat.custom && <MiniTiles onPick={(c, m) => { setCatKey(c); setMetricKey(m); }} />}
 
       {/* Пояснення */}
@@ -473,6 +474,69 @@ function ManualForm({ onClose, isAdmin }: { onClose: () => void; isAdmin: boolea
           {msg && <div style={{ fontSize: 13, color: msg.startsWith("✓") ? "#16a34a" : "#dc2626" }}>{msg}</div>}
           <div style={{ fontSize: 12, color: MUTED }}>Finance/HR вносяться в наявному розділі «Статистики (відділи)» (депстат) — тут не дублюємо.</div>
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 📉 «КУПУВАВ МИНУЛОГО МІСЯЦЯ, НЕ КУПИВ У ЦЬОМУ» по командах (задача 3990, п.3). Гроші й
+ * правило — з бекенда (ядро), тут лише подача. Поточний місяць не завершений — підпис каже це
+ * прямо, інакше список у середині місяця читався б як «втратили половину клієнтів».
+ */
+function LapsedClientsBlock() {
+  const [data, setData] = useState<LapsedClientsResp | null>(null);
+  const [err, setErr] = useState("");
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [month, setMonth] = useState<string>("");
+  useEffect(() => { let alive = true; fetchLapsedClients(month || undefined).then((d) => { if (alive) setData(d); }).catch((e) => setErr(String(e?.message ?? e))); return () => { alive = false; }; }, [month]);
+  const fmt = (n: number) => Math.round(n).toLocaleString("uk-UA").replace(/,/g, " ");
+  const label = (ym: string) => { const [y, m] = ym.split("-"); return `${["січ", "лют", "бер", "кві", "тра", "чер", "лип", "сер", "вер", "жов", "лис", "гру"][Number(m) - 1]} ${y}`; };
+  const shift = (d: number) => { const base = (data?.month ?? new Date().toISOString().slice(0, 7)); const [y, m] = base.split("-").map(Number); const dt = new Date(Date.UTC(y, m - 1 + d, 1)); setMonth(dt.toISOString().slice(0, 7)); };
+  return (
+    <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 16, padding: "18px 20px", marginTop: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
+        <div>
+          <div style={{ fontWeight: 800, fontSize: 15 }}>📉 Купували {data ? label(data.prevMonth) : "минулого місяця"}, не купили {data ? label(data.month) : "у цьому"}</div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+            гроші ① за анкером ядра, як на Звіті · команда — за ефективним менеджером клієнта
+            {data && !data.monthComplete && <b style={{ color: "#b45309" }}> · поточний місяць не завершений — список зменшуватиметься до кінця місяця</b>}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <button onClick={() => shift(-1)} style={{ padding: "5px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", cursor: "pointer" }}>‹</button>
+          <span style={{ fontWeight: 700, fontSize: 13, minWidth: 90, textAlign: "center" }}>{data ? label(data.month) : "…"}</span>
+          <button onClick={() => shift(1)} style={{ padding: "5px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", cursor: "pointer" }}>›</button>
+        </div>
+      </div>
+      {err && <div style={{ color: "#b91c1c", fontSize: 13 }}>{err}</div>}
+      {!data && !err && <div className="loading-text">Завантаження…</div>}
+      {data && (
+        <>
+          <div style={{ fontSize: 13, marginBottom: 10 }}>Разом: <b>{data.total.clients}</b> клієнтів · минулого місяця принесли <b>{fmt(data.total.prevRevenue)} ₴</b></div>
+          {data.teams.length === 0 && <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Жоден клієнт минулого місяця не випав — або у вашому скоупі немає оплат за минулий місяць.</div>}
+          <table className="data-table" style={{ width: "100%", fontSize: 13 }}>
+            <thead><tr><th style={{ textAlign: "left" }}>Команда</th><th style={{ textAlign: "right" }}>Клієнтів</th><th style={{ textAlign: "right" }}>Принесли минулого місяця</th></tr></thead>
+            <tbody>
+              {data.teams.map((t) => { const k = String(t.teamId ?? "none"); const isOpen = open.has(k); return (
+                <Fragment key={k}>
+                  <tr onClick={() => setOpen((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; })} style={{ cursor: "pointer" }}>
+                    <td style={{ fontWeight: 700 }}>{isOpen ? "▾" : "▸"} {t.teamName}</td>
+                    <td style={{ textAlign: "right" }}>{t.clients}</td>
+                    <td style={{ textAlign: "right" }}>{fmt(t.prevRevenue)} ₴</td>
+                  </tr>
+                  {isOpen && t.rows.map((r) => (
+                    <tr key={r.clientKey} style={{ background: "rgba(0,0,0,0.02)" }}>
+                      <td style={{ paddingLeft: 26 }}>{r.clientName}<span style={{ color: "var(--text-muted)" }}> · {r.manager ?? "без менеджера"}</span></td>
+                      <td></td>
+                      <td style={{ textAlign: "right" }}>{fmt(r.prevRevenue)} ₴</td>
+                    </tr>
+                  ))}
+                </Fragment>
+              ); })}
+            </tbody>
+          </table>
+        </>
       )}
     </div>
   );

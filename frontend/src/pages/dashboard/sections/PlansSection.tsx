@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { fetchPlansGrid, savePlan, fetchLeadRecommendation, type PlansGrid, type Team, type LeadRecRow } from "../../../api";
+import { NON_COMMERCIAL_TEAM_IDS } from "../teamSets";
 import { formatAmount } from "../format";
 import { DatePicker } from "../../../components/DatePicker";
 import { teamOptions } from "../teamColors";
@@ -118,7 +119,7 @@ export function PlansSection({ canPickTeam, teams, canEdit = true }: { canPickTe
           {canPickTeam && (
             <select value={teamId} onChange={(e) => { const v = e.target.value ? Number(e.target.value) : ""; setTeamId(v); localStorage.setItem("plansTeam", v ? String(v) : ""); }}>
               <option value="">Усі команди</option>
-              {teamOptions(teams)}
+              {teamOptions(teams.filter((t) => !NON_COMMERCIAL_TEAM_IDS.has(t.id)))}
             </select>
           )}
           <button onClick={() => shiftMonth(-1)} title="Попередній місяць"

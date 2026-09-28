@@ -4,7 +4,8 @@ import {
   fetchUsers, createUser, provisionUsers, resetUserPassword, updateUser, reactivateUser, type DashboardUser,
   fetchRoles, createRole, updateRole, deleteRole, type RoleDef,
   fetchAudit, type AuditEntry,
-  type Team, type SyncStatus, setWorkState } from "../../../api";
+  type Team, type SyncStatus, setWorkState,
+  fetchTeamOverrides, setTeamOverride, createDashboardTeam, type TeamOverridesPayload } from "../../../api";
 import { NAV_GROUPS } from "../../../components/Layout";
 
 // Усі вкладки (ключ+назва) — беремо з реальної навігації, щоб screen_access-редактор
@@ -64,7 +65,7 @@ const SCOPES: { key: "own" | "team" | "company"; label: string; sub: string }[] 
   { key: "team", label: "Команда", sub: "своя команда" },
   { key: "company", label: "Компанія", sub: "усі відділи" },
 ];
-const SUBTABS = ["Загальні", "Користувачі", "Ролі та доступи", "Архів", "Журнал змін"] as const;
+const SUBTABS = ["Загальні", "Користувачі", "Команди", "Ролі та доступи", "Архів", "Журнал змін"] as const;
 type Sub = (typeof SUBTABS)[number];
 
 const RED = "#c8102e";
@@ -106,16 +107,107 @@ export default function SettingsSection({ role, teams, syncStatus, syncing, onMa
             style={{ fontSize: 14, fontWeight: 700, padding: "9px 15px", borderRadius: 11, cursor: "pointer",
               border: sub === s ? "1px solid #1f2330" : "1px solid var(--border)",
               background: sub === s ? "#1f2330" : "var(--card-bg)", color: sub === s ? "#fff" : "var(--text)" }}>
-            {s === "Загальні" ? "⚙️ " : s === "Користувачі" ? "👥 " : s === "Ролі та доступи" ? "🛡 " : s === "Архів" ? "🗄 " : "📜 "}{s}
+            {s === "Загальні" ? "⚙️ " : s === "Користувачі" ? "👥 " : s === "Ролі та доступи" ? "🛡 " : s === "Команди" ? "🧭 " : s === "Архів" ? "🗄 " : "📜 "}{s}
           </button>
         ))}
       </div>
 
       {sub === "Загальні" && <GeneralTab syncStatus={syncStatus} syncing={syncing} onManualSync={onManualSync} canSync={role === "admin" || role === "team_lead"} />}
       {sub === "Користувачі" && <UsersTab teams={teams} isAdminUx={isAdminUx} />}
+      {sub === "Команди" && <TeamsTab isAdminUx={isAdminUx} />}
       {sub === "Ролі та доступи" && <RolesTab />}
       {sub === "Архів" && <ArchiveTab />}
       {sub === "Журнал змін" && <AuditTab />}
+    </div>
+  );
+}
+
+// ─────────────────────────── Команди ────────────────
+/**
+ * 🧭 Команда менеджера в дашборді = Kommo-група, і синк переписує її кожні 30 хв.
+ * Тут — перевизначення, яке синк читає (core/teamOverride.ts): «з CRM» / конкретна
+ * команда / примусово без команди. Так «архівується» група: її люди виходять із неї,
+ * порожня команда зникає зі списків сама. Скасовується тим самим перемикачем.
+ */
+function TeamsTab({ isAdminUx }: { isAdminUx: boolean }) {
+  const [data, setData] = useState<TeamOverridesPayload | null>(null);
+  const [newTeam, setNewTeam] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const reload = () => fetchTeamOverrides().then(setData).catch((e) => { setData(null); setMsg(err(e)); });
+  useEffect(() => { reload(); }, []);
+  if (!data) return <p className="loading-text">{msg ?? "Завантаження…"}</p>;
+  const teamName = (id: number | null) => id == null ? "без команди" : (data.teams.find((t) => t.id === id)?.name ?? `Команда #${id}`);
+  const valueOf = (r: TeamOverridesPayload["managers"][number]) =>
+    r.override == null ? "crm" : r.override.teamId == null ? "none" : `team:${r.override.teamId}`;
+  const change = async (r: TeamOverridesPayload["managers"][number], v: string) => {
+    setBusy(r.kommoUserId); setMsg(null);
+    try {
+      const body = v === "crm" ? { mode: "crm" as const } : v === "none" ? { mode: "none" as const } : { mode: "team" as const, teamId: Number(v.slice(5)) };
+      const res = await setTeamOverride(r.kommoUserId, body);
+      setMsg(res.appliedNow ? `${r.name}: застосовано одразу` : `${r.name}: група з CRM повернеться наступним тіком синку (до 30 хв)`);
+      await reload();
+    } catch (e) { setMsg(err(e)); } finally { setBusy(null); }
+  };
+  const addTeam = async () => {
+    const name = newTeam.trim(); if (!name) return;
+    setBusy("new"); setMsg(null);
+    try { await createDashboardTeam(name); setNewTeam(""); await reload(); } catch (e) { setMsg(err(e)); } finally { setBusy(null); }
+  };
+  const overridden = data.managers.filter((m) => m.override);
+  return (
+    <div>
+      <div className="chart-card" style={{ marginBottom: 14 }}>
+        <h2 className="chart-title">Команди</h2>
+        <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 0 }}>
+          Команди з CRM створює синк. Команду <b>лише в дашборді</b> (без Kommo-групи) можна завести тут — вона існує через перевизначення нижче.
+          Команда без активних менеджерів <b>не показується</b> у фільтрах, звіті КВП, планах і статистиках, дані її не видаляються.
+        </p>
+        <table className="data-table">
+          <thead><tr><th>КОМАНДА</th><th>ДЖЕРЕЛО</th><th>АКТИВНИХ</th></tr></thead>
+          <tbody>
+            {data.teams.map((t) => (
+              <tr key={t.id} style={t.active === 0 ? { color: "var(--text-muted)" } : undefined}>
+                <td>{t.name}{t.active === 0 && <span style={{ fontSize: 11, marginLeft: 8 }}>· прихована (0 активних)</span>}</td>
+                <td>{t.dashboardOnly ? "лише дашборд" : <CrmBadge />}</td>
+                <td>{t.active}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {isAdminUx && (
+          <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "flex-end" }}>
+            <L label="НОВА КОМАНДА (ЛИШЕ ДАШБОРД)"><input value={newTeam} onChange={(e) => setNewTeam(e.target.value)} placeholder="напр. Комерційний відділ" /></L>
+            <button className="btn" onClick={addTeam} disabled={busy === "new" || !newTeam.trim()}>＋ Команда</button>
+          </div>
+        )}
+      </div>
+      <div className="chart-card">
+        <h2 className="chart-title">Команда менеджера в дашборді</h2>
+        <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 0 }}>
+          «з CRM» — як у Kommo-групі. Інше значення <b>бʼє</b> групу з CRM і переживає синк. Перевизначено зараз: <b>{overridden.length}</b>.
+        </p>
+        {msg && <p style={{ fontSize: 12.5, color: "#2f6fdb" }}>{msg}</p>}
+        <table className="data-table">
+          <thead><tr><th>ПІБ</th><th>КОМАНДА ЗАРАЗ</th><th>У ДАШБОРДІ</th><th>ПРИМІТКА</th></tr></thead>
+          <tbody>
+            {data.managers.map((r) => (
+              <tr key={r.kommoUserId} style={r.override ? { background: "rgba(47,111,219,0.06)" } : undefined}>
+                <td>{r.name}</td>
+                <td>{teamName(r.teamId)}</td>
+                <td>
+                  <select value={valueOf(r)} disabled={!isAdminUx || busy === r.kommoUserId} onChange={(e) => change(r, e.target.value)}>
+                    <option value="crm">з CRM</option>
+                    <option value="none">без команди (примусово)</option>
+                    {data.teams.map((t) => <option key={t.id} value={`team:${t.id}`}>{t.name}</option>)}
+                  </select>
+                </td>
+                <td style={{ fontSize: 12, color: "var(--text-muted)" }}>{r.override?.note ?? ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -161,6 +253,14 @@ function GeneralTab({ syncStatus, syncing, onManualSync, canSync }: { syncStatus
                   style={{ display: "block", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", width: 140, background: "var(--card-bg)", color: "var(--text)" }} />
               </label>
             ))}
+            {/* 📞 НОРМА ДЗВІНКІВ НА ДЕНЬ (ТЗ 23.09.2026, п.2). Ті самі три стани, що в межі плану:
+                порожнє поле = «не задано» (колонка Звіту так і каже), а не нуль. */}
+            <label style={{ fontSize: 13, fontWeight: 600 }}>Норма дзвінків на день (розмови + спроби)
+              <input type="number" value={form.callsDailyNorm ?? ""} placeholder="не задано" min={1} max={500}
+                onChange={(e) => setForm({ ...form, callsDailyNorm: e.target.value.trim() === "" ? null : Number(e.target.value) })}
+                style={{ display: "block", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", width: 140, background: "var(--card-bg)", color: "var(--text)" }} />
+              <div style={{ fontSize: 11, fontWeight: 400, color: "var(--text-muted)", marginTop: 3 }}>Звіт → таблиця → колонка «Днів з нормою». Порожньо = норми немає.</div>
+            </label>
             {/* 🔌 МЕЖА ПЛАНУ — ОКРЕМО ВІД `NUMS`, І ЦЕ НЕ ПРИКРАСА.
                 Загальний рендер робить `Number(e.target.value)`, а `Number("")` це **0**.
                 Для решти полів нуль безглуздий і шкоди не робить; тут він ЗАКОННЕ значення

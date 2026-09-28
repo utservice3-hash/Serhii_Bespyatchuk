@@ -50,9 +50,13 @@ export interface SnapshotScope {
   to?: never;
 }
 
-// Не-комерційні команди: 11 = лідогенерація (Ковтонюк), 12 = фінанси. Джерело правди
-// (== KVP_LEADGEN_TEAM_IDS ∪ KVP_FINANCE_TEAM_IDS у routes/dashboard.ts).
-export const NON_COMMERCIAL_TEAM_IDS = [11, 12];
+// Не-комерційні команди: 11 = стара лідогенерація (Ковтонюк, архівована 23.09), 12 = фінанси,
+// LEADGEN_DASH_TEAM_ID = нова «Лідогенерація» (24.09, лише в дашборді). Джерело правди
+// (== KVP_LEADGEN_TEAM_IDS ∪ KVP_FINANCE_TEAM_IDS у routes/dashboard.ts; фронт — pages/dashboard/teamSets.ts).
+// ⚠️ 11 лишається ПЕРШОЮ: під нею номінації тримають рішення рейтингу лідогенераторів (#660-е у nominations.test).
+/** Команда «Лідогенерація», заведена лише в дашборді (сид у schema.sql, id фіксований). Тримає #740. */
+export const LEADGEN_DASH_TEAM_ID = 50011;
+export const NON_COMMERCIAL_TEAM_IDS = [11, 12, LEADGEN_DASH_TEAM_ID];
 /**
  * SQL-предикат «КОМЕРЦІЙНИЙ менеджер» (рішення власника 24.07, Опція 2 — строго):
  * має команду І команда не лідген/фінанси. Ловить усі три класи не-комерц: team NULL
@@ -2497,7 +2501,7 @@ export async function conversionAdsByTeam(s: MetricScope, adSources: string[]): 
 export { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING } from "./leadgenStages.js";
 // ⚠️ Реекспорт НЕ заводить імена у власний скоуп модуля — а `metrics.ts` вживає
 // частину з них у своїх запитах. Тому поруч звичайний імпорт для себе.
-import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING } from "./leadgenStages.js";
+import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING, QUALIFICATION_PIPELINES } from "./leadgenStages.js";
 export const STATUS_142 = 142;                        // handoff (Продзвін/Реактивація) + won (FC) «Успішна»
 
 export interface LeadgenConversionRow {
@@ -3097,7 +3101,7 @@ export async function stuckDealsGrouped(s: SnapshotScope, minDays = STUCK_MIN_DA
 
 // ───────────────────────── ЧАС ОПРАЦЮВАННЯ (період по created_at) ─────────────────────────
 
-const QUALIFICATION_PIPELINES = [8921928, 7336928];
+// `QUALIFICATION_PIPELINES` — з чистого `leadgenStages.ts` (імпорт вище, біля лідогену): одна копія на ядро.
 
 export interface ResponseBucket {
   key: string;

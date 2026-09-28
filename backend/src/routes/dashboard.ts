@@ -3,12 +3,14 @@ import { mkdir, writeFile, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { UPLOAD_DIR } from "./uploads.js";
 import { lastContactOf, contactFileVerdict, canDeleteContact, CONTACT_CHANNEL_KEYS } from "../core/clientContacts.js";
+import { stepState, stepVerdict, phoneState } from "../core/clientNextStep.js";
+import { isReturned, RETURN_GAP_DAYS } from "../core/reactivationFilters.js";
 import { mergeNoteComment } from "../core/receivableNoteMerge.js";
 import { effectiveManagerSql, effectiveFromFor, TRANSFER_KINDS, type TransferKind } from "../core/effectiveManager.js";
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
-import { requireAuth, requirePerm } from "../auth/middleware.js";
+import { requireAuth, requirePerm, requireRole } from "../auth/middleware.js";
 import { roleHasTab, isAdminScope, isAdminOrLead, roleHasPerm } from "../auth/rbac.js";
 import { assignAllowed, assignDenyReason, mergePairAllowed, mergeDenyReason, mergeSourceOf, revokeAllowed, revokeDenyReason,
          type MergePairScope } from "../auth/mergeScope.js";
@@ -67,12 +69,21 @@ import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
 import { adPlanForPeriod } from "../core/adBudget.js";
 import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, leadgenWeekly, leadGeneratorFill,
-  pct, leadGeneratorFillNote, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS } from "../core/leadgenStats.js";
+  pct, leadGeneratorFillNote, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS,
+  leadgenBuckets, sumBuckets, personBucketWire, leadgenHandoffMoney, leadgenTrend, leadgenManagerTeam,
+} from "../core/leadgenStats.js";
+import { handoffMoneyWire, personMoneyWire, bucketMoneyWire, bucketPersonMoneyWire, handoffDealsScope,
+  leadgenAuthScope, parseLeadgenGrain, parseTrendMonths, parseManagerIdParam } from "../core/leadgenHandoffRules.js";
+import { leadgenRosterView, planView, planMonthOf, parseLeadgenSubmit, leadgenSubmitRefusal, mayEverSubmitLeadgenPlan,
+  mayApproveLeadgenPlan, LEADGEN_PLAN_METRICS, type RosterRow, type TeamMember } from "../core/leadgenPlanRules.js";
+import { leadgenTeamMembers, leadgenPlanTarget, approvedLeadgenPlans, leadgenFormation, submitLeadgenPlan,
+  approveLeadgenPlans, returnLeadgenPlan } from "../core/leadgenPlans.js";
 import * as expectSplit from "../core/expectSplit.js";
 import { FUNNEL_STAGE_LABELS, stageName } from "../core/stageNames.js";
 import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL } from "../core/orphanClients.js";
 import * as plans from "../core/plans.js";
 import * as forecast from "../core/forecast.js";
+import * as callNorm from "../core/callNorm.js";
 import * as reportCuts from "../core/reportCuts.js";
 import { firstTouchReport } from "../core/firstTouch.js";
 import { firstTouchCell, glanceFirstTouch, firstTouchOutsideRoster } from "../core/firstTouchRules.js";
@@ -95,7 +106,10 @@ import {
 import { canRequestLimitFor, canAssignTaskToOthers } from "../auth/taskAssignScope.js";
 import { activeManagerSql } from "../core/activeManager.js";
 import * as managerState from "../core/managerState.js";
-import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf, kyivToday } from "../core/dates.js";
+import * as clientCallsYear from "../core/clientCallsYear.js";
+import * as clientAliasNames from "../core/clientAliasNames.js";
+import * as categoryRules from "../core/categoryRules.js";
+import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf, kyivToday, isRealDate } from "../core/dates.js";
 import { weekPlansForMonth } from "../core/weekPlan.js";
 import { sumDaysIntoBlocks } from "../core/weekFacts.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
@@ -315,6 +329,12 @@ dashboardRouter.get("/leadgen", async (req, res) => {
   });
 });
 
+/** Нульовий рядок учасника команди без подій у періоді: план у нього може бути, і рядок мусить існувати. */
+const zeroLeadgenRow = (m: TeamMember): RosterRow => ({
+  managerId: m.managerId, name: m.name, teamId: m.teamId, teamName: m.teamName, isActive: true,
+  leads: 0, opr: 0, quotes: 0, warming: 0, calls: 0,
+});
+
 /**
  * 📞 «ЛІДОГЕНЕРАЦІЯ» — сім показників таблиці лідгенів із подій CRM (ТЗ v2 від 07.09.2026).
  *
@@ -335,14 +355,20 @@ dashboardRouter.get("/leadgen", async (req, res) => {
 dashboardRouter.get("/leadgen-stats", async (req, res) => {
   const auth = req.auth!;
   if (auth.role === "manager") return res.status(403).json({ error: "Forbidden" });
-  const from = (req.query.from as string) ?? null;
-  const to = (req.query.to as string) ?? null;
+  // Порожнє = «не задано» (`dateParam`), а неіснуюча дата — 400, а не 500 з глибини запиту.
+  const from = dateParam(req.query.from);
+  const to = dateParam(req.query.to);
   if (!from || !to) return res.status(400).json({ error: "Потрібні from і to" });
-  // Тімлід — тільки своя команда, кламп на СЕРВЕРІ.
-  const teamId = auth.role === "team_lead" ? (auth.teamId ?? -1) : null;
+  if (!isRealDate(from) || !isRealDate(to)) return res.status(400).json({ error: "from і to — дати YYYY-MM-DD" });
+  const grain = parseLeadgenGrain(req.query.grain);
+  if (grain === "bad") return res.status(400).json({ error: "grain — day або week" });
+  // Тімлід — тільки своя команда, кламп на СЕРВЕРІ — ОДНИМ помічником на три роути екрана:
+  // той самий скоуп ріже рядки, розбивку й гроші з передач (`#681b` стереже, що в ядро йде він).
+  const scope = leadgenAuthScope(auth);
+  const teamId = scope.teamId;
 
   const { adSources } = await overviewCache.call("getSettings", getSettings);
-  const [stats, dispatched, byChannel, closures, handoffs, warmingNow, weeks, lgFill] = await Promise.all([
+  const [stats, dispatched, byChannel, closures, handoffs, warmingNow, weeks, lgFill, bucketRows, hm, members] = await Promise.all([
     leadgenStats(from, to),
     metrics.dispatchedByLoadBucket({ from, to }, "month", "leadgen"),
     money.receivedByChannel({ from, to }, adSources),
@@ -351,19 +377,34 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
     leadgenWarmingBacklog(),
     leadgenWeekly(from, to),
     leadGeneratorFill(from, to),
+    grain ? leadgenBuckets(from, to, grain, false) : Promise.resolve(null),
+    // 💰 Гроші з передач: домен — УВЕСЬ період, скоуп лише звужує відповідь (правило 3).
+    // Та сама функція ядра, що й у `/leadgen-handoff-deals`, — тож список і число рядка
+    // не можуть розійтись (`#677`).
+    leadgenHandoffMoney(from, to, scope),
+    leadgenTeamMembers(),
   ]);
 
-  const rows = teamId == null ? stats.rows : stats.rows.filter((r) => r.teamId === teamId);
-  const totals = teamId == null
-    ? stats.totals
-    : rows.reduce((a, r) => ({
-        leads: a.leads + r.leads, opr: a.opr + r.opr, quotes: a.quotes + r.quotes,
-        warming: a.warming + r.warming, calls: a.calls + r.calls,
-      }), { leads: 0, opr: 0, quotes: 0, warming: 0, calls: 0 });
+  /**
+   * 👥 РОСТЕР (рішення власника 25.09.2026): рядки людей — лише активні учасники команди
+   * «Лідогенерація»; решта людей із подіями — окремо, `others` (лише рівню компанії). Підсумки
+   * відділу рахують УСІХ — те саме число, що й до розділу. Правило — чиста `leadgenRosterView`
+   * (`#743`); тімлід — своя команда тим самим `teamId` зі скоупу, що ріже гроші й розбивку.
+   */
+  const view = leadgenRosterView(stats.rows, members, teamId, zeroLeadgenRow);
+  const rows = view.rows;
+  const totals = view.totals;
+  // 📋 План і виконання — лише рядкам команди: плани ставляться учасникам (рішення 3–4).
+  const approved = await approvedLeadgenPlans(rows.map((r) => r.managerId), from, to);
+  const pv = planView(rows, approved, from, to, kyivToday());
 
-  res.json({
+  const body: Record<string, unknown> = {
     from, to,
     rows, bySource: stats.bySource, totals,
+    others: view.others, othersTotals: view.othersTotals,
+    /** Склад команди «Лідогенерація» — для вибору людини навіть без дій у періоді. */
+    teamMembers: members.filter((m) => teamId == null || m.teamId === teamId).map((m) => ({ managerId: m.managerId, name: m.name })),
+    plans: { elapsed: pv.elapsed, byPerson: pv.byPerson, team: pv.team },
     conversions: {
       oprOfLeads: pct(totals.opr, totals.leads),
       quotesOfOpr: pct(totals.quotes, totals.opr),
@@ -390,8 +431,183 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
     callRule: `успішний дзвінок = вихідний від ${LEADGEN_CALL_MIN_SEC} с `
       + "(поріг виведено із заміру: 3 604 проти 3 627 у таблиці лідгенів за серпень)",
     scopedTo: teamId,
+    /**
+     * 💰 Гроші з переданих лідів: анкер — дата ПЕРЕДАЧІ, стан угоди менеджера — ЗАРАЗ.
+     * Це свідомо не дохід ядра (там — дата входу в етап), і екран так і підписує.
+     */
+    handoffMoney: {
+      totals: handoffMoneyWire(hm.totals),
+      byPerson: hm.byPerson.map((p) => personMoneyWire(p.managerId, p.money)),
+    },
+  };
+  /**
+   * 📅 Розбивка за `grain` — лише коли її просили. Люди — ті самі, що в `rows` (той самий
+   * кламп тімліда); відділ = сума людей, як `totals`.
+   */
+  if (grain && bucketRows) {
+    const scoped = bucketRows.filter((b) => teamId == null || b.teamId === teamId);
+    body.grain = grain;
+    body.buckets = sumBuckets(scoped);
+    body.bucketsByPerson = scoped.map(personBucketWire);
+  }
+  res.json(body);
+});
+
+/**
+ * 📈 ТРЕНД ЛІДОГЕНУ ПО МІСЯЦЯХ — `months` (типово 12, межі 1…24) календарних місяців, що
+ * закінчуються місяцем `to`. Кожен місяць — ТОЙ САМИЙ розрахунок, що `/leadgen-stats` цього
+ * місяця: лічильники тим самим запитом, гроші з передач — тією самою функцією над передачами
+ * лише цього місяця. Тімлід — лише своя команда (той самий кламп, що в рядках).
+ *
+ * ⚠️ Місяць, якого журнал подій ще не памʼятає, у відповіді ВІДСУТНІЙ, а не нульовий.
+ * 🔒 Межа — як у `/leadgen-stats`: вкладка `leadgen`, менеджер — 403 першим оператором.
+ */
+dashboardRouter.get("/leadgen-trend", async (req, res) => {
+  if (req.auth!.role === "manager") return res.status(403).json({ error: "Forbidden" });
+  const auth = req.auth!;
+  const to = dateParam(req.query.to);
+  if (!to || !isRealDate(to)) return res.status(400).json({ error: "Потрібен to — дата YYYY-MM-DD" });
+  const months = parseTrendMonths(req.query.months);
+  if (months == null) return res.status(400).json({ error: "months — ціле число" });
+  const scope = leadgenAuthScope(auth);
+
+  const t = await leadgenTrend(to, months, scope);
+  res.json({
+    months: t.months, to: t.to,
+    buckets: sumBuckets(t.byPerson, t.monthStarts),
+    bucketsByPerson: t.byPerson.map(personBucketWire),
+    handoffMoney: t.money.map((m) => bucketMoneyWire(m.bucket, m.totals)),
+    handoffMoneyByPerson: t.money.flatMap((m) =>
+      m.byPerson.map((p) => bucketPersonMoneyWire(m.bucket, p.managerId, p.money))),
   });
 });
+
+/**
+ * 💰 СПИСОК ПЕРЕДАЧ ЛІДГЕНА Й ГРОШІ З НИХ — розкривний список у рядку лідгена.
+ *
+ * Кожна передача періоду → угода менеджера, що з неї виросла, і її стан ЗАРАЗ: бюджет,
+ * менеджер продажу, етап, дата закриття / план оплати / причина відмови, посилання в Kommo.
+ * `totals` — з ТІЄЇ САМОЇ функції ядра, що `handoffMoney` у `/leadgen-stats`, тож за той
+ * самий період і скоуп вони рівні (`#677`).
+ *
+ * 🔒 Менеджер — 403 ПЕРШИМ оператором (раніше за будь-який 400). Тімлід — лише своя
+ * команда; `managerId` людини з чужої команди — 403, а не порожній список.
+ */
+dashboardRouter.get("/leadgen-handoff-deals", async (req, res) => {
+  if (req.auth!.role === "manager") return res.status(403).json({ error: "Forbidden" });
+  const auth = req.auth!;
+  const from = dateParam(req.query.from);
+  const to = dateParam(req.query.to);
+  if (!from || !to || !isRealDate(from) || !isRealDate(to)) {
+    return res.status(400).json({ error: "Потрібні from і to — дати YYYY-MM-DD" });
+  }
+  const managerId = parseManagerIdParam(req.query.managerId);
+  if (managerId === "bad") return res.status(400).json({ error: "managerId — додатне ціле" });
+  // Команду людини питаємо завжди, коли її названо: рішення «своя / чужа» — лише в `handoffDealsScope`,
+  // а не в другій умові по ролі тут (`#681b`). Запит — один рядок за ключем.
+  const managerTeam = managerId != null ? await leadgenManagerTeam(managerId) : null;
+  const clamp = handoffDealsScope({ role: auth.role, teamId: auth.teamId }, managerId, managerTeam);
+  if (!clamp.ok) return res.status(clamp.status).json({ error: "Forbidden" });
+
+  const hm = await leadgenHandoffMoney(from, to, clamp.scope);
+  res.json({ from, to, managerId, deals: hm.deals, totals: handoffMoneyWire(hm.totals) });
+});
+
+// ═══════════════════════ 📋 ПЛАНИ ЛІДГЕНІВ (рішення власника 25.09.2026) ═══════════════════════
+/**
+ * Формування місячного плану лідгена на ліди · ОПР · прорахунки — ДЗЕРКАЛО формування плану
+ * продажів (`routes/plans.ts` → `/plans/formation*`): ті самі стани (чернетка → на затвердженні →
+ * затверджено / повернуто), подає тімлід (своя команда) або адмін-рівень, затверджує й повертає
+ * ЛИШЕ адмін-рівень (`requireRole("admin")`, як у продажах). Відмінність одна й свідома:
+ * менеджер тут — 403 першим оператором, як на всіх роутах лідогену.
+ *
+ * 🔒 Межа — вкладка `leadgen` (`routeTab.ts`, окремий рядок: `pre()` дефісних сусідів не
+ * накриває) + рядки `accessMatrix.ts`. SQL — лише в `core/leadgenPlans.ts` (`#17c`, `#750`).
+ */
+dashboardRouter.get("/leadgen-plans", async (req, res) => {
+  if (req.auth!.role === "manager") return res.status(403).json({ error: "Forbidden" });
+  const auth = req.auth!;
+  const month = planMonthOf(req.query.month);
+  if (!month) return res.status(400).json({ error: "month — YYYY-MM" });
+  const scope = leadgenAuthScope(auth);
+  const all = await leadgenTeamMembers();
+  // Тімлід — лише своя команда (межа та сама, що в рядків екрана); компанія — усі учасники.
+  const members = all.filter((m) => scope.teamId == null || m.teamId === scope.teamId);
+  const ids = members.map((m) => m.managerId);
+  // Довідка для тімліда — факт трьох попередніх місяців і цього, ТИМИ САМИМИ лічильниками, що екран.
+  const histFrom = shiftMonthStart(month, -3), monthTo = monthEndOf(month);
+  const [form, buckets] = await Promise.all([
+    leadgenFormation(month, ids),
+    ids.length ? leadgenBuckets(histFrom, monthTo, "month", false) : Promise.resolve([]),
+  ]);
+  const histMonths = [-3, -2, -1, 0].map((k) => shiftMonthStart(month, k));
+  const out = members.map((m) => {
+    const f = form.get(m.managerId);
+    const refusal = leadgenSubmitRefusal({ role: auth.role, teamId: auth.teamId }, { managerId: m.managerId, teamId: m.teamId, isMember: true });
+    return {
+      managerId: m.managerId, name: m.name,
+      canSubmit: refusal == null,
+      status: f?.status ?? "draft",
+      proposed: f?.proposed ?? { leads: null, opr: null, quotes: null },
+      approved: f?.approved ?? { leads: null, opr: null, quotes: null },
+      comment: f?.comment ?? null, returnComment: f?.returnComment ?? null,
+      submittedBy: f?.submittedBy ?? null, submittedAt: f?.submittedAt ?? null,
+      decidedBy: f?.decidedBy ?? null, decidedAt: f?.decidedAt ?? null,
+      history: histMonths.map((mo) => {
+        const b = buckets.find((x) => x.managerId === m.managerId && x.bucket === mo);
+        return { month: mo, leads: b?.leads ?? 0, opr: b?.opr ?? 0, quotes: b?.quotes ?? 0 };
+      }),
+    };
+  });
+  res.json({
+    month, role: auth.role, canApprove: mayApproveLeadgenPlan(auth.role), metrics: LEADGEN_PLAN_METRICS,
+    scopedTo: scope.teamId, members: out,
+    submitted: out.filter((m) => m.status === "submitted").length,
+    approvedCount: out.filter((m) => m.status === "approved").length,
+  });
+});
+
+dashboardRouter.post("/leadgen-plans/submit", async (req, res) => {
+  if (req.auth!.role === "manager") return res.status(403).json({ error: "Forbidden" });
+  const auth = req.auth!;
+  // Ролі, що не подають нікому й ніколи, — ДО розбору тіла (прийом `mayEverSubmit` продажів).
+  if (!mayEverSubmitLeadgenPlan(auth.role)) return res.status(403).json({ error: "Подання плану лідгена недоступне для цієї ролі" });
+  const p = parseLeadgenSubmit(req.body);
+  if (!p.ok) return res.status(400).json({ error: p.error });
+  const target = await leadgenPlanTarget(p.managerId);
+  if (!target) return res.status(404).json({ error: "Людину не знайдено" });
+  const refusal = leadgenSubmitRefusal({ role: auth.role, teamId: auth.teamId }, { managerId: p.managerId, ...target });
+  if (refusal) return res.status(403).json({ error: refusal });
+  await submitLeadgenPlan(p.managerId, p.month, p.values, p.comment, auth.userId);
+  res.json({ ok: true, status: "submitted" });
+});
+
+dashboardRouter.post("/leadgen-plans/approve", requireRole("admin"), async (req, res) => {
+  const auth = req.auth!;
+  const month = planMonthOf(req.body?.month);
+  if (!month) return res.status(400).json({ error: "month — YYYY-MM" });
+  const managerId = req.body?.managerId == null ? null : Number(req.body.managerId);
+  if (managerId != null && !(Number.isInteger(managerId) && managerId > 0)) return res.status(400).json({ error: "managerId — додатне ціле" });
+  const approved = await approveLeadgenPlans(month, managerId, auth.userId);
+  res.json({ ok: true, approved });
+});
+
+dashboardRouter.post("/leadgen-plans/return", requireRole("admin"), async (req, res) => {
+  const auth = req.auth!;
+  const month = planMonthOf(req.body?.month);
+  const managerId = Number(req.body?.managerId);
+  if (!month || !(Number.isInteger(managerId) && managerId > 0)) return res.status(400).json({ error: "managerId і month обовʼязкові" });
+  const rc = typeof req.body?.returnComment === "string" && req.body.returnComment.trim() ? String(req.body.returnComment).trim().slice(0, 2000) : null;
+  const n = await returnLeadgenPlan(month, managerId, rc, auth.userId);
+  if (n === 0) return res.status(409).json({ error: "Немає поданого плану для повернення" });
+  res.json({ ok: true, status: "returned" });
+});
+
+/** Перше число місяця, зсунутого на `k` (цілими місяцями, без `setUTCMonth` від 31-го). */
+function shiftMonthStart(month: string, k: number): string {
+  const t = Number(month.slice(0, 4)) * 12 + Number(month.slice(5, 7)) - 1 + k;
+  return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}-01`;
+}
 
 /**
  * Executive summary for the head of sales: revenue by team, the top managers
@@ -5484,7 +5700,7 @@ dashboardRouter.get("/plans-grid", async (req, res) => {
        FROM managers m
        LEFT JOIN teams t ON t.id = m.team_id
        LEFT JOIN plans p ON p.manager_id = m.id AND p.metric = 'payment_amount' AND p.plan_date = $1
-      WHERE m.is_active ${teamCond}
+      WHERE m.is_active AND ${metrics.commercialManagerSql("m")} ${teamCond}
       ORDER BY t.name NULLS LAST, m.name`,
     params
   );
@@ -5699,6 +5915,32 @@ dashboardRouter.get("/client-plans", async (req, res) => {
             channel, (stored_name IS NOT NULL) AS has_file
        FROM client_contacts WHERE client_key = ANY($1) ORDER BY client_key, created_at DESC`, [clientKeys]);
   const manualByKey = new Map(manualRes.rows.map((r) => [r.client_key, r]));
+  // 📌 НАСТУПНИЙ КРОК і «нема номера» (ТЗ реактивації 23.09.2026, п.1–2) — окремим запитом по
+  // тих самих ключах, щоб не чіпати ядро реактивації. Стан кроку рахується від київського
+  // «сьогодні» (`stepState`), номер — станом, а не нулем (`phoneState`).
+  const stepKeys = clientKeys;
+  const [stepRes, phoneRes] = await Promise.all([
+    pool.query<{ client_key: string; text: string; due_date: string | null }>(
+      `SELECT DISTINCT ON (client_key) client_key, text, to_char(due_date, 'YYYY-MM-DD') AS due_date
+         FROM client_next_steps WHERE done_at IS NULL AND client_key = ANY($1) ORDER BY client_key, created_at DESC`, [stepKeys]),
+    pool.query<{ client_key: string; n: string }>(
+      `SELECT d.client_key, COUNT(DISTINCT cp.phone) AS n FROM deals d
+         JOIN deal_contacts dc ON dc.deal_kommo_id = d.kommo_id JOIN contact_phones cp ON cp.contact_id = dc.contact_id
+        WHERE d.client_key = ANY($1) GROUP BY d.client_key`, [stepKeys]),
+  ]);
+  const stepByKey = new Map(stepRes.rows.map((r) => [r.client_key, r]));
+  const phonesByKey = new Map(phoneRes.rows.map((r) => [r.client_key, Number(r.n)]));
+  const todayKyiv = (await pool.query<{ d: string }>(`SELECT to_char(now() AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS d`)).rows[0].d;
+  // 📞 Дзвінки за поточний рік — ТЕ САМЕ ядро, що рядок «розмов N із M» у картці (задача 4310,
+  // п.1.4). До 24.09.2026 тут не рахувалось нічого, а рядок показував «📞 0» текстом.
+  const callsYearByKey = await clientCallsYear.callsByYear(clientKeys);
+  const callsYearNow = Number(todayKyiv.slice(0, 4));
+  // 🔗 Хто приєднаний до кожного рядка (ТЗ 22.09, п.2.3) — лише назви, у гроші не входить.
+  const aliasByKey = await clientAliasNames.aliasNamesFor(clientKeys);
+  // 🛑 СТОП ЧЕРЕЗ ДЕБІТОРКУ (ТЗ 3989, п.6) — по тих самих ключах: є прострочений рядок дебіторки.
+  const debtRes = await pool.query<{ client_key: string }>(
+    `SELECT DISTINCT client_key FROM receivables WHERE overdue_days > 0 AND client_key = ANY($1)`, [clientKeys]);
+  const debtKeys = new Set(debtRes.rows.map((r) => r.client_key));
 
   // ── ФАКТ І ТИЖНІ — ЯДРО (①). Один виклик на місяць + один на тиждень.
   const histFrom = (() => { const d = new Date(`${monthStr}-01T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - 5); return d.toISOString().slice(0, 7) + "-01"; })();
@@ -5724,9 +5966,11 @@ dashboardRouter.get("/client-plans", async (req, res) => {
         WHERE rp.month = $1 ${cond}`, pp);
   };
 
-  const [monthFact, weekFact, hist, plansRes, commentsRes, prevPlans, reactRows] = await Promise.all([
-    money.successByClientKey(scope),
-    money.successByClientWeek(scope),
+  const [monthFact, weekFact, hist, plansRes, commentsRes, prevPlans, reactRows, monthSuccess] = await Promise.all([
+    // 🧾 ФАКТ ЕКРАНА — «з рахунку і далі» (ТЗ Юлі 22.09, п.2.1): угода йде у факт, коли вперше
+    // дійшла до «Виставлення рахунку» або далі. Лише ТУТ; Звіт і КВП лишаються на ①/②.
+    money.fromInvoiceByClientKey(scope),
+    money.fromInvoiceByClientWeek(scope),
     money.successByClientBucket(histScope, "month"),
     // 🔴 ПЛАНИ ЧИТАЮТЬСЯ ПО МІСЯЦЮ, А НЕ ПО СПИСКУ АКТИВНИХ (виправлено 21.08.2026).
     //
@@ -5766,8 +6010,11 @@ dashboardRouter.get("/client-plans", async (req, res) => {
      */
     reactivation.clientStates({ managerId: managerId ?? undefined, teamId: teamId ?? undefined },
       { includeActive: true }),
+    // «З них уже успішні» — ① того ж місяця, щоб видно було, яка частина факту вже гроші.
+    money.successByClientKey(scope),
   ]);
   const reactByKey = new Map(reactRows.map((r) => [r.clientKey, r]));
+  const successByKey = new Map(monthSuccess.filter((r) => keySet.has(r.key)).map((r) => [r.key, r.revenue]));
   const factByKey = new Map(monthFact.filter((r) => keySet.has(r.key)).map((r) => [r.key, r.revenue]));
   const weekByKey = new Map<string, number[]>();
   for (const w of weekFact) {
@@ -5916,6 +6163,15 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       lastContact: lastContactOf(reactByKey.get(c.client_key)?.lastTalk ?? null,
         manualByKey.get(c.client_key)?.at ?? null, manualByKey.get(c.client_key)?.channel ?? null),
       lastContactHasFile: manualByKey.get(c.client_key)?.has_file ?? false,
+      nextStep: stepByKey.has(c.client_key)
+        ? { text: stepByKey.get(c.client_key)!.text, due: stepByKey.get(c.client_key)!.due_date,
+            state: stepState(stepByKey.get(c.client_key)!.due_date, null, todayKyiv) }
+        : null,
+      phone: phoneState(phonesByKey.get(c.client_key) ?? 0),
+      // 💰 МАРЖА ЗА 6 МІС = Σ останніх 6 помісячних бакетів ЯДРА (price = маржа в цьому продукті;
+      // ті самі гроші, що на Звіті, без власного SQL — ворота #17c). null, якщо оплат не було.
+      margin6m: (() => { const a = histByKey.get(c.client_key); if (!a) return null; const last6 = a.slice(-6); return last6.some((v) => v > 0) ? Math.round(last6.reduce((x, y) => x + y, 0)) : null; })(),
+      debtHold: debtKeys.has(c.client_key),
       taskId: reactByKey.get(c.client_key)?.taskId ?? null,
       taskStatus: reactByKey.get(c.client_key)?.taskStatus ?? null,
       taskDeadline: reactByKey.get(c.client_key)?.taskDeadline ?? null,
@@ -5945,6 +6201,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
         fact: Math.round(wf[i] ?? 0),
       })),
       fact: Math.round(fact),
+      // ① за той самий місяць: скільки з факту «з рахунку» вже «успішно реалізовано».
+      factSuccess: Math.round(successByKey.get(c.client_key) ?? 0),
       pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
       managerId: c.manager_id,
       managerName: c.manager_name,
@@ -5955,11 +6213,10 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       teamName: c.team_name ?? "Без команди",
       pinned: c.pinned_manager_id != null,
       comments: commentsByKey.get(c.client_key) ?? 0,
-      // 🔴 Дзвінків тут НЕМАЄ і бути поки не може: Ringostat-синк зберігає лише
-      // АГРЕГАТ по тімлідах у statistics_values, окремих дзвінків із номером
-      // абонента ми не зберігаємо взагалі. Порожній масив із названою причиною —
-      // чесніше за приховану колонку: видно, що місце є, а даних немає.
-      calls: [] as never[],
+      // 📞 Розмов і всіх дзвінків за поточний рік — рівно рядок картки за цей рік.
+      callsYear: clientCallsYear.yearCell(callsYearByKey.get(c.client_key), callsYearNow),
+      // 🔗 Приєднані записи CRM (активні обʼєднання) — показуються під назвою «обʼєднано: …».
+      merged: aliasByKey.get(c.client_key) ?? [],
     };
   });
 
@@ -5999,6 +6256,19 @@ dashboardRouter.get("/client-plans", async (req, res) => {
    */
   const atRisk = clients.filter((c) => c.inRoster === "active" && c.lastOrderDays != null && c.lastOrderDays > 30);
 
+  // «ПОВЕРНУТО ЗА МІСЯЦЬ» — по ключах скоупу; правило isReturned із чистого модуля.
+  const retRes = await pool.query<{ client_key: string; first_m: string; last_before: string | null; margin: string }>(
+    `WITH paid AS (
+       SELECT d.client_key, (d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date AS dt, d.price
+         FROM deals d JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
+        WHERE psm.funnel_stage = 'paid' AND d.client_key = ANY($1)),
+     m AS (SELECT client_key, to_char(MIN(dt), 'YYYY-MM-DD') AS first_m, SUM(price) AS margin
+             FROM paid WHERE dt >= date_trunc('month', $2::date)::date AND dt < (date_trunc('month', $2::date) + INTERVAL '1 month')::date GROUP BY 1)
+     SELECT m.client_key, m.first_m, m.margin,
+            to_char((SELECT MAX(p.dt) FROM paid p WHERE p.client_key = m.client_key AND p.dt < date_trunc('month', $2::date)::date), 'YYYY-MM-DD') AS last_before
+       FROM m`, [clientKeys, monthStart]);
+  const returned = retRes.rows.reduce((a, r) => isReturned(r.first_m, r.last_before) ? { count: a.count + 1, margin: a.margin + Math.round(Number(r.margin)) } : a, { count: 0, margin: 0 });
+
   res.json({
     month: monthStr,
     historyMonths: histMonths,
@@ -6008,6 +6278,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
      * редакцією правила — саме через це пороги вже одного разу розійшлись.
      */
     closeReasons: reactivationRules.CLOSE_REASONS,
+    // ⓘ Правила категорій готовим текстом із констант ядра (ТЗ 22.09, п.2.4) — фронт їх не складає.
+    categoryRules: categoryRules.categoryRulesPayload(),
     thresholds: {
       sleepingDays: reactivationRules.SEGMENT_SLEEPING_DAYS,
       lostDays: reactivationRules.LOST_DAYS,
@@ -6017,6 +6289,9 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     clients,
     totals: {
       planTotal, factTotal,
+      /** 🧾 Основа факту екрана — щоб підпис на фронті не міг розійтись із розрахунком. */
+      factBasis: "fromInvoice" as const,
+      factSuccessTotal: clients.reduce((s2, c) => s2 + c.factSuccess, 0),
       pct: planTotal > 0 ? Math.round((factTotal / planTotal) * 100) : null,
       filledClients: clients.filter((c) => c.plan > 0).length
         + (canSeeUnattached ? unattachedRows.filter((p) => Number(p.plan) > 0).length : 0),
@@ -6043,6 +6318,11 @@ dashboardRouter.get("/client-plans", async (req, res) => {
        * принесуть» він НЕ входить, бо це не план.
        */
       inReactivation: bridge.sleeping + bridge.lost,
+      // 🔢 ТРИ ЦИФРИ ЗВЕРХУ (ТЗ 3989, п.5): у роботі = клієнти зі станом «сплячі»/«втрачені» у скоупі,
+      // повернуто за місяць = перша оплата місяця після паузи ≥ RETURN_GAP_DAYS (поріг — відкрите
+      // питання власнику), сума повернутої маржі = Σ price їхніх оплат цього місяця.
+      react: { inWork: clients.filter((c) => c.state === "sleeping" || c.state === "lost").length,
+               returnedMonth: returned.count, returnedMargin: returned.margin, gapDays: RETURN_GAP_DAYS },
       inReactivationSleeping: bridge.sleeping,
       inReactivationLost: bridge.lost,
       /**
@@ -6110,16 +6390,6 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       canSubmit: byStatus.draft > 0,
       canApprove: byStatus.pending > 0,
     },
-    // 🔴 ТЕКСТ ВИПРАВЛЕНО 04.08.2026: попередній казав, що «окремих дзвінків із
-    // номером абонента в базі НЕМАЄ». Це перестало бути правдою — `syncCalls`
-    // пише саме окремі дзвінки в `ringostat_calls` разом із `client_key`, і
-    // сусідній екран реактивації вже показує з них «останній дзвінок». Лишити
-    // старе формулювання означало б, що екран стверджує неправду про власну
-    // базу — гірше за порожню панель. Сама панель тут поки не побудована, і про
-    // це сказано прямо.
-    callsUnavailable: "Окремі дзвінки в базі Є (ringostat_calls, звʼязка по client_key) — "
-      + "їх уже видно як «останній дзвінок» у «Реактивації». Перелік дзвінків у цій "
-      + "картці ще не побудований",
   });
 });
 
@@ -6453,6 +6723,40 @@ const CONTACT_SELECT = `SELECT c.id, c.channel, c.note, c.file_name, c.mime, c.s
          COALESCE(m.name, u.full_name, u.email) AS author
     FROM client_contacts c LEFT JOIN users u ON u.id = c.created_by LEFT JOIN managers m ON m.id = u.manager_id`;
 
+/**
+ * 📌 НАСТУПНИЙ КРОК ПО КЛІЄНТУ (ТЗ реактивації 23.09.2026, п.1). Один живий крок: новий
+ * запис закриває попередній (done_at) — історія лишається. Межа — та сама, що картка:
+ * `canSeeClient` ПЕРШИМ значущим оператором (403 = гейт, не валідація).
+ */
+dashboardRouter.post("/client-next-step", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Клієнт поза вашим скоупом" });
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  const v = stepVerdict(req.body?.text, req.body?.due);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`UPDATE client_next_steps SET done_at = now(), done_by = $2 WHERE client_key = $1 AND done_at IS NULL`, [clientKey, auth.userId]);
+    const ins = await client.query<{ id: number }>(
+      `INSERT INTO client_next_steps (client_key, text, due_date, created_by) VALUES ($1, $2, $3, $4) RETURNING id`,
+      [clientKey, v.text, v.due, auth.userId]);
+    await client.query("COMMIT");
+    res.status(201).json({ ok: true, id: ins.rows[0].id });
+  } catch (e) { await client.query("ROLLBACK"); throw e; } finally { client.release(); }
+});
+
+/** Крок виконано: закриває живий крок клієнта. Той самий скоуп. */
+dashboardRouter.post("/client-next-step/done", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Клієнт поза вашим скоупом" });
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  const r = await pool.query(`UPDATE client_next_steps SET done_at = now(), done_by = $2 WHERE client_key = $1 AND done_at IS NULL`, [clientKey, auth.userId]);
+  res.json({ ok: true, closed: r.rowCount ?? 0 });
+});
+
 /** Список контактів клієнта — тим, хто бачить клієнта. */
 dashboardRouter.get("/client-contacts", async (req, res) => {
   const clientKey = String(req.query.clientKey ?? "").trim();
@@ -6626,6 +6930,22 @@ dashboardRouter.get("/client-card", async (req, res) => {
     months.push({ month: ym, revenue: Math.round(b?.revenue ?? 0), deals: b?.deals ?? 0 });
   }
   const h = head.rows[0];
+  const [cardStep, cardPhones, cardLastCall, cardTodayRes] = await Promise.all([
+    pool.query<{ id: number; text: string; due_date: string | null; author: string | null }>(
+      `SELECT s.id, s.text, to_char(s.due_date, 'YYYY-MM-DD') AS due_date, COALESCE(m.name, u.full_name, u.email) AS author
+         FROM client_next_steps s LEFT JOIN users u ON u.id = s.created_by LEFT JOIN managers m ON m.id = u.manager_id
+        WHERE s.client_key = $1 AND s.done_at IS NULL ORDER BY s.created_at DESC LIMIT 1`, [clientKey]),
+    pool.query<{ n: string }>(
+      `SELECT COUNT(DISTINCT cp.phone) AS n FROM deals d
+         JOIN deal_contacts dc ON dc.deal_kommo_id = d.kommo_id JOIN contact_phones cp ON cp.contact_id = dc.contact_id
+        WHERE d.client_key = $1`, [clientKey]),
+    pool.query<{ at: string; manager: string | null; billsec: string; call_type: string }>(
+      `SELECT rc.calldate AS at, m.name AS manager, rc.billsec, rc.call_type
+         FROM ringostat_calls rc LEFT JOIN managers m ON m.id = rc.manager_id
+        WHERE rc.client_key = $1 AND rc.billsec > 0 ORDER BY rc.calldate DESC LIMIT 1`, [clientKey]),
+    pool.query<{ d: string }>(`SELECT to_char(now() AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS d`),
+  ]);
+  const cardToday = cardTodayRes.rows[0].d;
   /**
    * 📞 ДЗВІНКИ ПО РОКАХ (запит власника 04.09.2026). Беруться по канонічному
    * `client_key` — тобто по номерах, закріплених за компанією; звʼязок робить
@@ -6638,16 +6958,9 @@ dashboardRouter.get("/client-card", async (req, res) => {
    * 🟢 РОЗМОВА vs СПРОБА: `billsec > 0` — розмова, решта — недодзвін. Це два різні
    * факти (рішення власника 04.08.2026), і зливати їх в одне число не можна.
    */
-  const callsRes = await pool.query<{
-    year: string; calls: string; talks: string; total_sec: string; last_at: string | null;
-  }>(
-    `SELECT date_part('year', calldate AT TIME ZONE 'Europe/Kyiv')::int::text AS year,
-            COUNT(*)::text AS calls,
-            COUNT(*) FILTER (WHERE billsec > 0)::text AS talks,
-            COALESCE(SUM(billsec), 0)::text AS total_sec,
-            MAX(calldate)::text AS last_at
-       FROM ringostat_calls WHERE client_key = $1
-      GROUP BY 1 ORDER BY 1 DESC`, [clientKey]);
+  // 📞 Той самий підрахунок, що число «📞» у рядку списку (задача 4310, п.1.4) —
+  // спільне ядро `core/clientCallsYear.ts`, а не власний SQL картки.
+  const cardCallsByYear = (await clientCallsYear.callsByYear([clientKey])).get(clientKey) ?? [];
   const sinceRes = await pool.query<{ since: string | null }>(
     "SELECT MIN(calldate)::date::text AS since FROM ringostat_calls");
   const CALLS_LIMIT = 300;
@@ -6686,10 +6999,9 @@ dashboardRouter.get("/client-card", async (req, res) => {
     months,
     monthsTotal: months.reduce((s2, m) => s2 + m.revenue, 0),
     contacts: (await pool.query(`${CONTACT_SELECT} WHERE c.client_key = $1 ORDER BY c.created_at DESC LIMIT 50`, [clientKey])).rows.map(shapeContact),
-    callsByYear: callsRes.rows.map((r) => ({
-      year: Number(r.year), calls: Number(r.calls), talks: Number(r.talks),
-      totalSec: Number(r.total_sec), lastAt: r.last_at,
-    })),
+    callsByYear: cardCallsByYear,
+    // 🔗 Хто приєднаний до цього клієнта (ТЗ 22.09, п.2.3).
+    merged: (await clientAliasNames.aliasNamesFor([clientKey])).get(clientKey) ?? [],
     calls: callListRes.rows.map((r) => ({
       at: r.calldate, direction: r.call_type.includes("out") ? "out" : "in",
       billsec: r.billsec, answered: r.billsec > 0, disposition: r.disposition, manager: r.manager,
@@ -6715,6 +7027,18 @@ dashboardRouter.get("/client-card", async (req, res) => {
       won: String(d.status_id) === "142",
       manager: d.manager,
     })),
+    // 📌 ТЗ реактивації 23.09.2026, п.1–2: наступний крок зі станом, «нема номера» станом,
+    // останній дзвінок (дата, хто, скільки) — окремими запитами нижче.
+    nextStep: cardStep.rows[0]
+      ? { id: cardStep.rows[0].id, text: cardStep.rows[0].text, due: cardStep.rows[0].due_date,
+          author: cardStep.rows[0].author, state: stepState(cardStep.rows[0].due_date, null, cardToday) }
+      : null,
+    phone: phoneState(Number(cardPhones.rows[0]?.n ?? 0)),
+    phonesCount: Number(cardPhones.rows[0]?.n ?? 0),
+    lastCall: cardLastCall.rows[0]
+      ? { at: cardLastCall.rows[0].at, manager: cardLastCall.rows[0].manager, billsec: Number(cardLastCall.rows[0].billsec),
+          direction: String(cardLastCall.rows[0].call_type).includes("out") ? "out" : "in" }
+      : null,
     anchorNote: "Стовпчики — гроші ① (успішно реалізовано, анкер = дата входу в етап). "
       + "Список — журнал угод (дата закриття; для незакритих — створення). Суми не зводяться між собою.",
     /**
@@ -8172,7 +8496,7 @@ dashboardRouter.post("/kvp-plan", async (req, res) => {
 // Михальчевська; лідоген = назва містить «лідоген» АБО teamId 11 (відділ лідогенерації);
 // решта = РПК (повний цикл). Крок Д owner-review: фінвідділ (teamId 12) — НЕ sales, прибрати.
 const KVP_FINANCE_TEAM_IDS = new Set([12]);   // «Финансовый отдел» — не sales-юніт → зі звіту геть
-const KVP_LEADGEN_TEAM_IDS = new Set([11]);   // «Таня Ковтонюк (лідогенерація)» — лишити, логіка окремо
+const KVP_LEADGEN_TEAM_IDS = new Set([11, metrics.LEADGEN_DASH_TEAM_ID]);   // стара «Таня Ковтонюк (лідогенерація)» і нова «Лідогенерація» (24.09)
 const RNK_TEAM_IDS = new Set(metrics.RNK_TEAM_IDS); // джерело правди — core/metrics (без дублю числа)
 const kvpTeamKind = (teamId: number, name: string): "rpk" | "rnk" | "leadgen" =>
   (KVP_LEADGEN_TEAM_IDS.has(teamId) || /лідоген|лидоген/i.test(name)) ? "leadgen" : RNK_TEAM_IDS.has(teamId) ? "rnk" : "rpk";
@@ -8410,14 +8734,19 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // 📊 Розрізи макета 06.08.2026: дзвінки (розмови/спроби), затор на «Виставленні
   // рахунку», очікування БЕЗ планової дати. Усі — лічильні або знімок однієї стадії;
   // грошей періоду тут не рахує ніхто, це й далі робота `core/money.ts`.
-  const [callsRows, jamRows, noDateRows, ft] = await Promise.all([
+  const [callsRows, callDays, appSettings, jamRows, noDateRows, ft] = await Promise.all([
     reportCuts.callsByManager(from, to, { managerId, teamId }),
+    // 📞 Дні з нормою (ТЗ 23.09.2026, п.2): ті самі денні комірки, що в розгортці рядка.
+    reportCuts.callsByManagerDay(from, to, { managerId, teamId }),
+    getSettings(),
     reportCuts.invoicingJamByManager({ managerId, teamId }),
     reportCuts.expectedNoDateByManager(metrics.EXPECT_ZONE, { managerId, teamId }),
     // 🎯 ТЗ-3 «перший дотик»: оцінки бота за період, звʼязані з тим, хто ДЗВОНИВ (рішення 17.09.2026).
     firstTouchReport(from, to),
   ]);
   const callsM = new Map(callsRows.map((r) => [r.managerId, r]));
+  const callDaysM = new Map<number, callNorm.CallDay[]>();
+  for (const r of callDays) { const a = callDaysM.get(r.managerId) ?? []; a.push(r); callDaysM.set(r.managerId, a); }
   const jamM = new Map(jamRows.map((r) => [r.managerId, r]));
   const noDateM = new Map(noDateRows.map((r) => [r.managerId, r]));
   const splitM = new Map(split.map((s) => [s.managerId, s]));
@@ -8711,6 +9040,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       })(),
       // 📞 Розмови й спроби — ДВІ цифри, складати заборонено (рішення власника 04.08).
       talks: callsM.get(m.id)?.talks ?? 0, attempts: callsM.get(m.id)?.attempts ?? 0,
+      // 📞 Днів з нормою дзвінків / робочих днів; норма — з Налаштувань, `null` = не задано.
+      callNorm: callNorm.callNormCell(callDaysM.get(m.id) ?? [], appSettings.callsDailyNorm, from, to, kyivToday),
       // 🎯 «Ціну названо в перший дотик»: стан + лічильники; відсоток рахує фронт із лічильників.
       firstTouch: firstTouchCell(ft.byManager.get(m.id), m.team_id, ft.coveredTeamIds),
       // ⏳ Очікування БЕЗ планової дати — в жодну суму не входить, тому окремо.

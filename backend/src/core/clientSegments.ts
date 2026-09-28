@@ -170,7 +170,7 @@ export async function loadClientSegments(): Promise<Map<string, ClientSegmentRow
       paymentType: r.payment_type, payMode, phoneKey: r.phone_key,
       segment, state: stateOf(daysSince, segment), longLapsed: daysSince >= LONG_LAPSED_DAYS,
       forcedRegular: r.forced_regular, forceNote: r.force_note,
-      qualified: qualifiesAsRepeat({ payments, minGapDays, payMode, forcedRegular: r.forced_regular }),
+      qualified: qualifiesAsRepeat({ payments, forcedRegular: r.forced_regular }),
     });
   }
   return map;

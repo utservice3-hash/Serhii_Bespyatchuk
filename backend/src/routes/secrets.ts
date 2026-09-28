@@ -7,6 +7,7 @@ import {
   sendRevealCode, revealSecret, vaultLinkState, createVaultLink, unlinkVault,
 } from "../core/secrets.js";
 import { previewImport, commitImport, listEmployees, updateEmployee, ImportError } from "../core/employees.js";
+import { createEmployee, matchFiles } from "../core/employeeAdd.js";
 import { startDismissal, finishDismissal, revertDismissal } from "../core/offboarding.js";
 import { listEmployeeDocs, employeeDoc, attachEmployeeDoc, setEmployeeDocDeleted } from "../core/employeeDocs.js";
 import { isManagement } from "../core/docAccess.js";
@@ -34,7 +35,7 @@ const sender = () => (vaultBotConfigured() ? vaultBotSend : null);
 
 function fail(res: Response, e: unknown) {
   if (e instanceof SecretKeyMissing) return res.status(503).json({ error: e.message });
-  if (e instanceof ImportError) return res.status(e.status).json({ error: e.message });
+  if (e instanceof ImportError) return res.status(e.status).json({ error: e.message, ...("existingId" in e ? { existingId: (e as { existingId?: number }).existingId } : {}) });
   if (e instanceof ChurnError) return res.status(e.status).json({ error: e.message });
   if (e instanceof SecretError) return res.status(e.status).json({ error: e.message, ...(e.extra ?? {}) });
   // 🔴 Тіло помилки НЕ логуємо: у запиті може бути пароль.
@@ -139,6 +140,14 @@ secretsRouter.get("/employees", async (_req, res) => {
          UNION SELECT name FROM teams WHERE name IS NOT NULL) t ORDER BY name`)).rows.map((r) => r.name);
     res.json({ rows: await listEmployees(db), teams });
   } catch (e) { fail(res, e); }
+});
+
+/* 👤 «+ Співробітник» і 📎 розкладання файлів пакета по людях (22.09.2026) — `core/employeeAdd.ts`. */
+secretsRouter.post("/employees", async (req, res) => {
+  try { res.status(201).json(await tx((db) => createEmployee(db, me(req), req.body ?? {}))); } catch (e) { fail(res, e); }
+});
+secretsRouter.post("/employees/documents/match", async (req, res) => {
+  try { res.json({ rows: await matchFiles(pool as unknown as Db, req.body?.files) }); } catch (e) { fail(res, e); }
 });
 
 secretsRouter.patch("/employees/:id", async (req, res) => {

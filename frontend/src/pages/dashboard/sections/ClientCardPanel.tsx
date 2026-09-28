@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Cell } from "recharts";
-import { fetchClientCard, archiveClient, saveLoyaltyOverride, contactChannelLabel, fetchContactFileBlobUrl, type ClientCard } from "../../../api";
+import { fetchClientCard, archiveClient, saveLoyaltyOverride, contactChannelLabel, saveClientNextStep, doneClientNextStep, type ClientCard } from "../../../api";
+import { ClientContactFileViewer } from "./ClientContactFileViewer";
 import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
 import { formatAmountFull } from "../format";
 
@@ -36,6 +37,11 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
   const [busy, setBusy] = useState(false);
   const [reason, setReason] = useState("");
   const [forceNote, setForceNote] = useState("");
+  const [stepText, setStepText] = useState("");
+  const [stepDue, setStepDue] = useState("");
+  const [stepEdit, setStepEdit] = useState(false);
+  /** 📎 Відкритий скрин контакту (id) — перегляд на місці, не нова вкладка (задача 4310). */
+  const [fileId, setFileId] = useState<number | null>(null);
   const load = useCallback(() => {
     setCard(null); setErr(null);
     fetchClientCard(clientKey).then(setCard)
@@ -63,6 +69,21 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
           {card.firstPaid ? ` · з ${card.firstPaid.slice(0, 7)}` : ""}
         </div>
       </div>
+
+      {/* 🔗 ХТО ОБʼЄДНАНИЙ У ЦЬОГО КЛІЄНТА (ТЗ 22.09, п.2.3). План, задача й факт уже одні на
+          весь рядок; тут видно, з яких записів CRM він складається і скільки в кожного оплат. */}
+      {card.merged && card.merged.length > 0 && (
+        <div style={{ marginTop: 10, border: "1px dashed #d1d5db", borderRadius: 10, padding: "8px 12px", background: "#f8fafc" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#1d4ed8", marginBottom: 4 }}>
+            🔗 В одного клієнта обʼєднано записів CRM: {card.merged.length + 1}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 16px", fontSize: 12 }}>
+            {card.merged.map((m) => (
+              <span key={m.key}>{m.name}<span style={{ color: "#6b7280" }}> · {m.paid} опл</span></span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 🛠 ДІЇ КЕРУВАННЯ КЛІЄНТОМ — САМЕ ТУТ, поруч із гістограмою й угодами,
           бо це і є підстава для рішення (рішення власника 04.08.2026, підтверджене
@@ -205,6 +226,43 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
         </div>
       )}
 
+      {/* 📌 ТЗ РЕАКТИВАЦІЇ (23.09.2026, п.1–2): наступний крок з датою, «нема номера» станом,
+          останній дзвінок — дата, хто, скільки. Крок один живий; «виконано» закриває його. */}
+      <div style={{ marginTop: 10, border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 12px", background: "#fff" }}>
+        <div style={{ fontSize: 11, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 6 }}>Останній дзвінок · наступний крок</div>
+        <div style={{ fontSize: 12.5, marginBottom: 6 }}>
+          {card.phone === "none" ? (
+            <span style={{ color: "#b45309" }} title="у контактах клієнта немає жодного номера — дзвінки не привʼязуються">📵 нема номера</span>
+          ) : card.lastCall ? (
+            <span>📞 {card.lastCall.at.slice(0, 10).split("-").reverse().join(".")} · {card.lastCall.direction === "out" ? "вихідний" : "вхідний"} · {card.lastCall.manager ?? "менеджер невідомий"} · {Math.round(card.lastCall.billsec / 60)} хв {card.lastCall.billsec % 60} с</span>
+          ) : (
+            <span style={{ color: "#9ca3af" }}>розмов не було{card.phonesCount ? ` · номерів: ${card.phonesCount}` : ""}</span>
+          )}
+        </div>
+        {card.nextStep && !stepEdit ? (
+          <div style={{ fontSize: 12.5, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 600, color: card.nextStep.state === "overdue" ? "#b91c1c" : card.nextStep.state === "today" ? "#b45309" : "#111827" }}>
+              {card.nextStep.state === "overdue" ? "⚠️ прострочено" : card.nextStep.state === "today" ? "сьогодні" : card.nextStep.due ? card.nextStep.due.split("-").reverse().join(".") : "без дати"}
+            </span>
+            <span>{card.nextStep.text}</span>
+            {card.nextStep.author && <span style={{ color: "#6b7280" }}>· {card.nextStep.author}</span>}
+            <button disabled={busy} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}
+              onClick={async () => { setBusy(true); try { await doneClientNextStep(clientKey); load(); onChanged?.(); } finally { setBusy(false); } }}>✓ виконано</button>
+            <button disabled={busy} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}
+              onClick={() => { setStepText(card.nextStep!.text); setStepDue(card.nextStep!.due ?? ""); setStepEdit(true); }}>змінити</button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <input value={stepText} onChange={(e) => setStepText(e.target.value)} placeholder="наступний крок: що зробити" maxLength={300}
+              style={{ flex: 1, minWidth: 180, fontSize: 12.5, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} />
+            <input type="date" value={stepDue} onChange={(e) => setStepDue(e.target.value)} style={{ fontSize: 12.5, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} />
+            <button disabled={busy || !stepText.trim()} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, border: "none", background: "#c5141c", color: "#fff", cursor: "pointer" }}
+              onClick={async () => { setBusy(true); try { await saveClientNextStep({ clientKey, text: stepText.trim(), due: stepDue || null }); setStepText(""); setStepDue(""); setStepEdit(false); load(); onChanged?.(); } finally { setBusy(false); } }}>зберегти</button>
+            {stepEdit && <button style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }} onClick={() => setStepEdit(false)}>скасувати</button>}
+          </div>
+        )}
+      </div>
+
       {card.callsByYear && card.callsByYear.length > 0 && (
         <>
           <div style={{ fontWeight: 700, fontSize: 13, margin: "12px 0 6px" }}>📞 Дзвінки по роках</div>
@@ -288,13 +346,18 @@ export function ClientCardPanel({ clientKey, onChanged }: { clientKey: string; o
                 {k.author && <span style={{ color: "#6b7280" }}> · {k.author}</span>}
                 {k.hasFile && (
                   <button style={{ marginLeft: 8, fontSize: 11, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}
-                    onClick={async () => { const u = await fetchContactFileBlobUrl(k.id); window.open(u, "_blank"); }}>📎 скрин</button>
+                    onClick={() => setFileId(k.id)}>📎 скрин</button>
                 )}
               </div>
               {k.note && <div style={{ color: "#374151", marginTop: 2, whiteSpace: "pre-wrap" }}>{k.note}</div>}
             </div>
           ))}
         </>
+      )}
+
+      {fileId != null && (
+        <ClientContactFileViewer clientKey={clientKey} clientName={card.clientName} initialId={fileId}
+          contacts={card.contacts} onClose={() => setFileId(null)} />
       )}
 
       {/* 🗒 ЖУРНАЛ КЕРІВНИЦЬКИХ ДІЙ. Показуємо лише коли він НЕ порожній: постійний

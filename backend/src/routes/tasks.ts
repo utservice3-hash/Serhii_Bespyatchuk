@@ -737,14 +737,23 @@ tasksRouter.delete("/:id", async (req, res) => {
  * ⚠️ Імʼя без прізвища не вигадуємо: якщо `full_name` порожнє, показуємо
  * ЛОКАЛЬНУ частину email (до «@») і підписуємо це на екрані як «логін», а не
  * підсовуємо порожнє місце, яке читалось би як «немає людини».
+ *
+ * 🔴 АЛЕ СПЕРШУ — ПІБ ПРИВʼЯЗАНОГО МЕНЕДЖЕРА (22.09.2026). У CRM-акаунтів `full_name`
+ * порожнє СВІДОМО: ПІБ веде синк у `managers`, а `PATCH /users/:id` таке імʼя редагувати
+ * забороняє. Тож без цього JOIN список показував логін `drv` замість «Денисюк Роман» —
+ * і Юля не знайшла Романа, бо шукала прізвище. Заміряно на проді: 46 із 51 рядків
+ * списку були логінами. Менеджер тут береться БЕЗ умови активності в CRM: список і так
+ * фільтрується активністю АКАУНТА, а вимкнений у Kommo штаб (той самий випадок) інакше
+ * знову перетворився б на логін.
  */
 tasksRouter.get("/assignees", async (_req, res) => {
   const r = await pool.query(
     `SELECT u.id,
-            COALESCE(NULLIF(btrim(u.full_name), ''), split_part(u.email, '@', 1)) AS name,
-            (u.full_name IS NULL OR btrim(u.full_name) = '') AS "nameIsLogin",
+            COALESCE(NULLIF(btrim(u.full_name), ''), NULLIF(btrim(m.name), ''), split_part(u.email, '@', 1)) AS name,
+            ((u.full_name IS NULL OR btrim(u.full_name) = '') AND (m.name IS NULL OR btrim(m.name) = '')) AS "nameIsLogin",
             u.manager_id AS "managerId"
        FROM users u
+       LEFT JOIN managers m ON m.id = u.manager_id
       WHERE u.is_active
       ORDER BY 2`
   );

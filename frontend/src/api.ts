@@ -35,6 +35,11 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && localStorage.getItem("token")) {
       localStorage.removeItem("token");
       if (window.location.pathname !== "/login") {
+        // Той самий запис «куди повернути», що в RequireAuth (App.tsx): лише власний шлях застосунку.
+        const here = window.location.pathname + window.location.search;
+        if (here.startsWith("/") && !here.startsWith("//") && here !== "/") {
+          try { sessionStorage.setItem("afterLogin", here); } catch { /* без повернення */ }
+        }
         window.location.href = "/login";
       }
     }
@@ -154,6 +159,41 @@ export interface LeadgenPersonRow {
   managerId: number; name: string; teamId: number | null; teamName: string | null;
   isActive: boolean; leads: number; opr: number; quotes: number; warming: number; calls: number;
 }
+/** Одиниця розбивки: «день» у режимі Тиждень, «тиждень» у режимах Місяць і Період. */
+export type LeadgenGrain = "day" | "week";
+export interface LeadgenBucket { bucket: string; calls: number; leads: number; opr: number; quotes: number; warming: number }
+export interface LeadgenPersonBucket extends LeadgenBucket { managerId: number }
+/**
+ * 💰 Гроші з переданих лідів: передача (вхід у 142 у Продзвоні) → угода менеджера, створена
+ * з неї (той самий клієнт, створена від −10 с до +120 с від входу в 142) → її стан ЗАРАЗ. Класи — з грошового ядра: успішна (142),
+ * оплата отримана (етап 9), очікуємо оплату (зона «Очікуємо» Звіту), ще в роботі, програна.
+ * Сума — `price` угоди, як у ядрі. Передачі без угоди менеджера — окремим числом (`unlinked`).
+ */
+/** `priced` — скільки з `n` угод мають бюджет: у «в роботі» його здебільшого ще не проставили (заміряно: 86 %), тож сума там — лише про меншість. */
+export interface LeadgenMoneyCell { n: number; sum: number; priced: number }
+export interface LeadgenHandoffMoney {
+  handoffs: number; unlinked: number; lost: number;
+  /** Передачі, що вели в угоду, вже пораховану іншою передачею (гроші не двоїмо). */
+  sameDeal: number;
+  success: LeadgenMoneyCell; paid: LeadgenMoneyCell; expect: LeadgenMoneyCell; work: LeadgenMoneyCell;
+}
+/** Стан угоди менеджера з передачі — ЗАРАЗ. `none` — угоди менеджера не знайшлося; `same` — ця передача
+ *  привела в угоду, вже пораховану іншою передачею (гроші не двоїмо). */
+export type LeadgenDealClass = "success" | "paid" | "expect" | "work" | "lost" | "none" | "same";
+/** Одна передача лідгена й угода менеджера, що з неї виросла. Для `none` поля угоди — з угоди Продзвону. */
+export interface LeadgenHandoffDeal {
+  day: string; lgId: number; pzId: number; dealId: number | null;
+  route: string | null; client: string | null; salesManager: string | null; stage: string | null;
+  cls: LeadgenDealClass; price: number; closedDay: string | null; planPayDay: string | null;
+  /** Причина відмови — лише для програних (у решті поле буває заповнене залишком з угоди Продзвону). */
+  reason: string | null; url: string | null;
+}
+/** Розкривний список «Гроші з передач»: ті самі правила, що `handoffMoney` у /leadgen-stats; `totals` мусять із ним збігатися. */
+export interface LeadgenHandoffDealsResp { from: string; to: string; managerId: number | null; deals: LeadgenHandoffDeal[]; totals: LeadgenHandoffMoney }
+export async function fetchLeadgenHandoffDeals(params: { from: string; to: string; managerId?: number }): Promise<LeadgenHandoffDealsResp> {
+  const { data } = await api.get<LeadgenHandoffDealsResp>("/dashboard/leadgen-handoff-deals", { params });
+  return data;
+}
 export interface LeadgenStatsResp {
   from: string; to: string;
   rows: LeadgenPersonRow[];
@@ -170,14 +210,73 @@ export interface LeadgenStatsResp {
     leadGeneratorFill: { withPerson: number; total: number };
   };
   weeks: { week: string; leads: number; opr: number; quotes: number }[];
+  /** Розбивка за `grain` (якщо його передали): відділ і кожна людина — ті самі предикати й атрибуція, що в `rows`;
+   *  тімлід отримує лише свою команду. Відділ = сума людей (як `totals`). */
+  grain?: LeadgenGrain;
+  buckets?: LeadgenBucket[];
+  bucketsByPerson?: LeadgenPersonBucket[];
+  handoffMoney?: { totals: LeadgenHandoffMoney; byPerson: (LeadgenHandoffMoney & { managerId: number })[] };
   closures: { reason: string; deals: number }[];
   handoffs: { kommoId: number; day: string; name: string | null; manager: string | null; url: string }[];
   handoffsLimit: number;
   warmingNow: number;
   callRule: string;
   scopedTo: number | null;
+  /** Люди з подіями поза командою «Лідогенерація» — лише рівню компанії (тімліду порожньо). */
+  others?: LeadgenPersonRow[];
+  othersTotals?: { leads: number; opr: number; quotes: number; warming: number; calls: number };
+  /** Активні учасники команди — для вибору людини навіть без дій у періоді. */
+  teamMembers?: { managerId: number; name: string }[];
+  plans?: { elapsed: number; byPerson: LeadgenPersonPlan[]; team: LeadgenTeamPlan };
 }
-export async function fetchLeadgenStats(params: { from: string; to: string }): Promise<LeadgenStatsResp> {
+/** План на обраний період (місячний, поділений за робочими днями, як у Звіті); `null` — затвердженого плану немає. */
+export interface LeadgenPeriodPlan { leads: number | null; opr: number | null; quotes: number | null }
+export type LeadgenPlanExec =
+  | { kind: "none" } | { kind: "zero" }
+  | { kind: "plan"; fact: number; plan: number; pct: number; level: "g" | "a" | "r" };
+export interface LeadgenPersonPlan { managerId: number; plan: LeadgenPeriodPlan; exec: LeadgenPlanExec }
+export interface LeadgenTeamPlan { total: number; planned: number; fact: number; plan: number | null; exec: LeadgenPlanExec }
+
+/** 📋 Формування плану лідгенів (дзеркало формування плану продажів). */
+export type LgPlanMetric = "leads" | "opr" | "quotes";
+export type LgPlanValues = Record<LgPlanMetric, number | null>;
+export interface LgPlanMember {
+  managerId: number; name: string; canSubmit: boolean;
+  status: PFStatus;
+  proposed: LgPlanValues; approved: LgPlanValues;
+  comment: string | null; returnComment: string | null;
+  submittedBy: string | null; submittedAt: string | null; decidedBy: string | null; decidedAt: string | null;
+  history: { month: string; leads: number; opr: number; quotes: number }[];
+}
+export interface LgPlanFormation {
+  month: string; role: string; canApprove: boolean; scopedTo: number | null;
+  members: LgPlanMember[]; submitted: number; approvedCount: number;
+}
+export async function fetchLeadgenPlans(month: string): Promise<LgPlanFormation> {
+  const { data } = await api.get<LgPlanFormation>("/dashboard/leadgen-plans", { params: { month } });
+  return data;
+}
+export async function submitLeadgenPlan(body: { managerId: number; month: string; leads: number; opr: number; quotes: number; comment?: string }): Promise<void> {
+  await api.post("/dashboard/leadgen-plans/submit", body);
+}
+export async function approveLeadgenPlan(body: { managerId?: number; month: string }): Promise<{ approved: number }> {
+  const { data } = await api.post<{ ok: boolean; approved: number }>("/dashboard/leadgen-plans/approve", body);
+  return data;
+}
+export async function returnLeadgenPlan(managerId: number, month: string, returnComment?: string): Promise<void> {
+  await api.post("/dashboard/leadgen-plans/return", { managerId, month, returnComment });
+}
+/**
+ * Тренд по місяцях для графіка «Загальна статистика»: `months` календарних місяців, що
+ * закінчуються місяцем `to`. Ті самі предикати й атрибуція, що в `/leadgen-stats` (рядок
+ * місяця = той самий місяць у `/leadgen-stats`); тімлід отримує лише свою команду.
+ */
+export interface LeadgenTrendResp { months: number; to: string; buckets: LeadgenBucket[]; bucketsByPerson: LeadgenPersonBucket[]; handoffMoney?: (LeadgenHandoffMoney & { bucket: string })[]; handoffMoneyByPerson?: (LeadgenHandoffMoney & { bucket: string; managerId: number })[] }
+export async function fetchLeadgenTrend(params: { to: string; months: number }): Promise<LeadgenTrendResp> {
+  const { data } = await api.get<LeadgenTrendResp>("/dashboard/leadgen-trend", { params });
+  return data;
+}
+export async function fetchLeadgenStats(params: { from: string; to: string; grain?: LeadgenGrain }): Promise<LeadgenStatsResp> {
   const { data } = await api.get<LeadgenStatsResp>("/dashboard/leadgen-stats", { params });
   return data;
 }
@@ -867,6 +966,8 @@ export interface ReportPlanManager {
   factSuccessDeals: number; factPaidDeals: number;
   // 📞 Розмова (billsec>0) і недодзвін — ДВІ цифри; складати заборонено.
   talks: number; attempts: number;
+  /** 📞 Днів з нормою дзвінків / робочих днів (ТЗ 23.09.2026, п.2). `daysWithNorm: null` = норму не задано. */
+  callNorm: { norm: number | null; daysWithNorm: number | null; workDays: number };
   /** 🎯 ТЗ-3 «ціну названо в перший дотик» — оцінки бота, звʼязані з тим, хто ДЗВОНИВ. */
   firstTouch: FirstTouchCell;
   // ⏳ Очікування БЕЗ планової дати — в жодну суму не входить, тому й окремо.
@@ -1316,6 +1417,8 @@ export interface AppSettings {
   ratesFallbackPartPerKm: number;
   /** Мʼяка нижня межа плану, ₴. 0 = межу свідомо знято. `null` = повернути дефолт. */
   planMinPerManager: number | null;
+  /** 📞 Норма дзвінків на день (розмови+спроби). `null` = не задана — колонка Звіту каже «норму не задано». */
+  callsDailyNorm: number | null;
   tracker: TrackerConfig;
   adSources: string[];
 }
@@ -2406,6 +2509,17 @@ export async function fetchStatsSeries(params: { block: string; metric: string; 
   const { data } = await api.get<StatsSeriesResp>("/statistics/series", { params });
   return data;
 }
+/** 📉 «Купував минулого місяця, не купив у цьому» по командах (Статистики → Клієнти). */
+export interface LapsedClientsResp {
+  month: string; prevMonth: string; monthComplete: boolean;
+  total: { clients: number; prevRevenue: number };
+  teams: { teamId: number | null; teamName: string; clients: number; prevRevenue: number;
+    rows: { clientKey: string; clientName: string; manager: string | null; prevRevenue: number }[] }[];
+}
+export async function fetchLapsedClients(month?: string): Promise<LapsedClientsResp> {
+  const { data } = await api.get<LapsedClientsResp>("/statistics/lapsed-clients", { params: month ? { month } : undefined });
+  return data;
+}
 export async function saveStatsManual(body: { block: string; metric: string; scopeType: string; scopeKey: string; scopeName?: string; granularity: string; period: string; value: number }): Promise<{ ok: boolean }> {
   const { data } = await api.post<{ ok: boolean }>("/statistics/series/manual", body);
   return data;
@@ -3113,8 +3227,14 @@ export interface TrainingMaterial {
 export async function publishTrainingMaterial(id: number): Promise<void> {
   await api.post(`/training/materials/${id}/publish`);
 }
-export async function fetchTrainingTree(): Promise<{ folders: TrainingFolder[]; materials: TrainingMaterial[] }> {
-  const { data } = await api.get<{ folders: TrainingFolder[]; materials: TrainingMaterial[] }>("/training/tree");
+/**
+ * 📎 Правила завантаження ПРИХОДЯТЬ ІЗ СЕРВЕРА (`core/trainingUpload.ts`), а не живуть тут копією:
+ * межа, відома фронту своїм числом, розходиться з серверною мовчки, і людина дізнається про неї
+ * з 413 після хвилини завантаження. Тримає `#716`.
+ */
+export interface TrainingUploadRules { maxBytes: number; accept: string }
+export async function fetchTrainingTree(): Promise<{ folders: TrainingFolder[]; materials: TrainingMaterial[]; upload: TrainingUploadRules }> {
+  const { data } = await api.get<{ folders: TrainingFolder[]; materials: TrainingMaterial[]; upload: TrainingUploadRules }>("/training/tree");
   return data;
 }
 export async function createTrainingFolder(name: string, parentId: number | null): Promise<TrainingFolder> {
@@ -3552,12 +3672,28 @@ export async function fetchClientStale(): Promise<{ stale: boolean | null; serve
 
 // ── ФАЗА A · «Постійні клієнти · план місяця» ────────────────────────────────
 export interface ClientPlanWeek { label: string; from: string; to: string; status: "past" | "current" | "future"; plan: number; fact: number }
+/** 🔗 Приєднаний запис CRM (активне обʼєднання) — ТЗ 22.09, п.2.3. */
+export interface AliasName { key: string; name: string; paid: number }
+/** ⓘ Правила категорій готовим текстом із ядра (`core/categoryRules.ts`) — ТЗ 22.09, п.2.4. */
+export interface CategoryRules {
+  segmentTips: Record<ClientSegment, string>;
+  stateTips: { sleeping: string; lost: string };
+  text: string[];
+}
 export interface ClientPlanRow {
   clientKey: string; clientName: string; paymentType: string | null;
   orders: number; lifetimeRevenue: number; since: string | null; lastOrderDays: number | null;
   history: number[]; plan: number; planStatus: "draft" | "pending" | "approved" | "none";
-  reviewNote: string | null; weeks: ClientPlanWeek[]; fact: number; pct: number | null;
-  managerId: number; managerName: string; pinned: boolean; comments: number; calls: never[];
+  reviewNote: string | null; weeks: ClientPlanWeek[];
+  /** 🧾 Факт «з рахунку і далі» (ТЗ 22.09, п.2.1) — не «успішно реалізовано». */
+  fact: number; pct: number | null;
+  /** ① за той самий місяць: скільки з факту вже «успішно реалізовано». */
+  factSuccess?: number;
+  managerId: number; managerName: string; pinned: boolean; comments: number;
+  /** 📞 Дзвінки за поточний рік — рівно рядок «розмов N із M» картки (ядро `core/clientCallsYear.ts`). */
+  callsYear: { year: number; calls: number; talks: number };
+  /** 🔗 Хто приєднаний до цього рядка (обʼєднання в CRM-ключах). Порожньо — ні з ким. */
+  merged?: AliasName[];
   /** Команда менеджера — для ієрархії «команда → менеджер → клієнти» (подача, не скоуп). */
   teamId: number | null; teamName: string;
   /** Сегмент за частотою замовлень — бейдж біля клієнта. */
@@ -3588,6 +3724,12 @@ export interface ClientPlanRow {
   /** 📱 Останній контакт: свіжіше з розмови Ringostat і ручного запису (Viber/Telegram/…). */
   lastContact?: { at: string; source: "talk" | "manual"; channel: string | null } | null;
   lastContactHasFile?: boolean;
+  /** 📌 Наступний крок з датою і станом; `phone: "none"` — у клієнта немає жодного номера. */
+  nextStep?: { text: string; due: string | null; state: "none" | "planned" | "today" | "overdue" | "done" } | null;
+  phone?: "has" | "none";
+  /** 💰 Σ price (= маржа) оплат за 6 міс; null — оплат не було. 🛑 debtHold — є прострочена дебіторка. */
+  margin6m?: number | null;
+  debtHold?: boolean;
   attempts: number;
   taskId: number | null;
   taskStatus: string | null;
@@ -3607,15 +3749,21 @@ export interface ClientPlansResp {
   /** Довідники дій, що переїхали з вкладки «Реактивація». Приходять із ядра. */
   closeReasons?: { key: string; label: string }[];
   thresholds?: { sleepingDays: Record<string, number>; lostDays: number; longLapsedDays: number };
+  categoryRules?: CategoryRules;
   clients: ClientPlanRow[];
   totals: {
     planTotal: number; planApproved: number; factTotal: number; pct: number | null;
+    /** 🧾 Основа факту екрана: «fromInvoice» = з «Виставлення рахунку» і далі. */
+    factBasis?: "fromInvoice";
+    factSuccessTotal?: number;
     filledClients: number; totalClients: number;
     currentWeekIndex: number | null; currentWeekFact: number | null; currentWeekPlan: number | null;
     atRiskCount: number; atRiskNames: string[]; goesToManagerPlan: number;
     byStatus: Record<string, number>; canSubmit: boolean; canApprove: boolean;
     /** Скільки рядків у списку — ЛИШЕ через план (клієнт уже не активний). */
     planOnlyClients: number;
+    /** 🔢 Три цифри реактивації (ТЗ 3989): у роботі · повернуто за місяць · Σ повернутої маржі; gapDays — поріг «повернуто». */
+    react?: { inWork: number; returnedMonth: number; returnedMargin: number; gapDays: number };
     rosterClients: number;
     byState: { active: number; reactivation: number; planOnly: number };
     /** 🕳 Плани без клієнтського рядка. `canSee` вирішує СЕРВЕР (isAdminScope). */
@@ -3634,7 +3782,6 @@ export interface ClientPlansResp {
     /** Розбивка ЖИВИХ по сегментах — цифра над таблицею. */
     activeBySegment: Record<ClientSegment, number>;
   };
-  callsUnavailable: string;
 }
 export async function fetchClientPlans(params: { month: string; managerId?: number; teamId?: number }): Promise<ClientPlansResp> {
   const { data } = await api.get<ClientPlansResp>("/dashboard/client-plans", { params });
@@ -3693,6 +3840,12 @@ export async function fetchClientContacts(clientKey: string): Promise<ClientCont
   const { data } = await api.get<{ contacts: ClientContact[] }>("/dashboard/client-contacts", { params: { clientKey } });
   return data.contacts;
 }
+export async function saveClientNextStep(p: { clientKey: string; text: string; due: string | null }): Promise<void> {
+  await api.post("/dashboard/client-next-step", p);
+}
+export async function doneClientNextStep(clientKey: string): Promise<void> {
+  await api.post("/dashboard/client-next-step/done", { clientKey });
+}
 export async function addClientContact(p: { clientKey: string; channel: string; note: string; file?: File | null }): Promise<ClientContact> {
   let dataBase64: string | undefined;
   if (p.file) {
@@ -3713,8 +3866,15 @@ export async function fetchContactFileBlobUrl(id: number): Promise<string> {
 }
 
 export interface ClientCard {
+  /** 🔗 Приєднані записи CRM — ТЗ 22.09, п.2.3. */
+  merged?: AliasName[];
   /** 📱 Контакти з клієнтом поза дзвінками (Viber/Telegram/…), зі скринами. */
   contacts?: ClientContact[];
+  /** 📌 ТЗ реактивації: крок з датою, стан номера, останній дзвінок (дата, хто, скільки). */
+  nextStep?: { id: number; text: string; due: string | null; author: string | null; state: "none" | "planned" | "today" | "overdue" | "done" } | null;
+  phone?: "has" | "none";
+  phonesCount?: number;
+  lastCall?: { at: string; manager: string | null; billsec: number; direction: "in" | "out" } | null;
   /** 📞 Дзвінки по роках. `callsSince` — глибина памʼяті: порожній рік до неї означає «даних немає». */
   callsByYear?: ClientCallYear[];
   calls?: ClientCall[];
@@ -4217,7 +4377,7 @@ export interface TrainingCourse {
   modules?: TrainingModule[];
 }
 export const fetchTrainingCourses = async () =>
-  (await api.get<{ courses: TrainingCourse[]; canEdit: boolean; freeModules?: TrainingModule[] }>("/training/courses")).data;
+  (await api.get<{ courses: TrainingCourse[]; canEdit: boolean; freeModules?: TrainingModule[]; upload: TrainingUploadRules }>("/training/courses")).data;
 export const createTrainingCourse = async (b: { title: string; description?: string | null; audience: TrainingAudience }) =>
   (await api.post<{ id: number }>("/training/courses", b)).data.id;
 export const patchTrainingCourse = async (id: number, patch: { title?: string; description?: string | null; audience?: TrainingAudience; published?: boolean }) => {
@@ -4283,10 +4443,17 @@ export interface TrainingCourseDetail {
     materials: { id: number; title: string; kind: TrainingKind; required: boolean; state: TrainingStepState;
       blockedBy: { materialId: number; title: string } | null }[] }[];
 }
+/** 📘 Частина уроку: «main» показується в тілі уроку (pdf, відео), «attachment» — у блоці «Вкладення». */
+export interface TrainingLessonPart {
+  id: number; title: string; kind: TrainingKind; url: string | null; role: "main" | "attachment";
+  mime: string | null; sizeBytes: string | null; hasFile: boolean; content: string | null;
+}
 export interface TrainingMaterialContent {
   id: number; folderId: number | null; title: string; kind: TrainingKind; url: string | null; mime: string | null;
   sizeBytes: string | null; content: string | null; required: boolean; hasFile: boolean;
   status: "opened" | "done" | null; finishedAt: string | null;
+  /** Частини уроку — разом з ним (сервер віддає завжди; порожньо — урок з одного матеріалу). */
+  parts?: TrainingLessonPart[];
 }
 export type CandidateMe = { candidate: false } | {
   candidate: true; fullName: string | null; teamName: string | null; leadName: string | null;
@@ -4389,6 +4556,11 @@ export interface EmployeeDoc {
   size_bytes: number | null; version: number; created_at: string; archived_at: string | null; deleted_at: string | null; author: string | null; signed: boolean;
 }
 export const fetchEmployeeDocs = async (id: number) => (await api.get<{ files: EmployeeDoc[] }>(`/secrets/employees/${id}/documents`)).data.files;
+// 👤 «+ Співробітник» і 📎 розкладання файлів пакета по людях (22.09.2026) — `backend/src/core/employeeAdd.ts`.
+export interface NewEmployee { full_name: string; position?: string; team_label?: string; phone?: string; email?: string; telegram?: string; hired_at?: string; birth_date?: string }
+export const createEmployee = async (b: NewEmployee) => (await api.post<{ id: number }>("/secrets/employees", b)).data.id;
+export interface EmployeeFileMatch { file: string; employeeId: number | null; how: "name" | "none" | "ambiguous"; candidates: number[] }
+export const matchEmployeeFiles = async (files: string[]) => (await api.post<{ rows: EmployeeFileMatch[] }>("/secrets/employees/documents/match", { files })).data.rows;
 export async function uploadEmployeeDoc(id: number, file: File, kind: string): Promise<void> {
   const dataBase64 = await new Promise<string>((resolve, reject) => {
     const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = () => reject(r.error); r.readAsDataURL(file);
@@ -4408,29 +4580,57 @@ export const commitEmployeeImport = async (csv: string, mapping: string[], sheet
 
 // ───────────────────────── 🏆 НОМІНАЦІЇ ТИЖНЯ (21.09.2026) ─────────────────────────
 // Дзеркало `backend/src/core/nominationRules.ts` (WeekView) + права глядача з роуту.
-export type NominationKey = "maxDeal" | "cars" | "revenue" | "marginPct" | "intl";
+export type NominationKey = "maxDeal" | "cars" | "revenue" | "marginPct" | "intl" | "lgMaxDeal" | "lgCars" | "lgQuotes" | "lgIntl";
 export type NominationRanked = { state: "ok"; value: number; winners: number[] } | { state: "empty" };
 export interface NominationFinal { status: "confirmed" | "unconfirmed" | "overridden" | "empty"; winners: number[]; value: number | null; reason: string | null; stale: boolean }
+export type NominationAction = "confirm" | "override" | "retract";
 export interface NominationCell {
   nomination: NominationKey; crm: NominationRanked; final: NominationFinal;
-  deal: { id: number; price?: number; cost?: number } | null;
+  deal: { id: number; price?: number; cost?: number; url?: string } | null;
+  /** Рейтинг команди з CRM; `null` — тиждень зафіксовано до 22.09.2026, рейтинг тоді не зберігався. */
+  ranking: { managerId: number; value: number | null }[] | null;
+  /** Останнє рішення: хто й коли (лише чернетка). */
+  review: { action: NominationAction; by: string | null; at: string } | null;
   canReview: boolean; whyNot: string | null;
 }
-export interface NominationTeam { teamId: number; teamName: string; dept: "rpk" | "rnk"; members: { id: number; name: string }[]; noCostDeals: number; cells: NominationCell[] }
+export interface NominationTeam {
+  teamId: number; teamName: string; dept: "rpk" | "rnk" | "lg"; members: { id: number; name: string }[]; noCostDeals: number; cells: NominationCell[];
+  leads: { managerId: number | null; name: string }[];
+}
 export interface NominationDept { dept: "rpk" | "rnk"; nomination: NominationKey; state: "ok" | "empty"; value: number | null; winners: number[]; teams: number[] }
 export interface NominationWeek {
   weekFrom: string; weekTo: string; state: "draft" | "frozen"; frozenAt: string | null; ruleVersion: string; freezeDueAt: string;
+  /** Мить фіксації як UTC — для зворотного відліку. */
+  freezeInstant: string;
   teams: NominationTeam[]; depts: NominationDept[]; names: Record<string, string>;
-  viewer: { role: "admin" | "team_lead"; teamId: number | null };
-  defs: { key: NominationKey; label: string; hint: string; unit: "uah" | "count" | "pct" }[];
+  viewer: { role: "admin" | "team_lead"; teamId: number | null; managerId: number | null };
+  defs: NominationDef[];
+  /** Рейтинг лідогенераторів (22.09.2026): свої 4 номінації; `noCrm` — система числа не пропонує. */
+  leadgenDefs: NominationDef[];
+  leadgen: NominationTeam | null;
+  /** Статистика відділу РНК · конверсія: керівництву — уся, тімліду РНК — його команда, решті — `null`. */
+  rnkConv: RnkConvView | null;
+  /** Після «Погодитись з рештою» — які саме номінації погоджено. */
+  bulk?: { confirmed: NominationKey[] };
   marginFlagPct: number;
   /** 📷 Фото людей тижня: id менеджера Kommo → фото співробітника (немає в мапі — ініціали). */
   photos: Record<string, PhotoRef>;
 }
+export interface NominationDef { key: NominationKey; label: string; hint: string; unit: "uah" | "count" | "pct"; rule: string; notCounted: string; noCrm?: boolean }
+export interface RnkConvRow {
+  managerId: number; name: string; teamId: number; taken: number; won: number; pct: number | null;
+  crm: { taken: number; won: number }; own: { by: string | null; at: string } | null; onSlide: boolean; canEditRow: boolean;
+}
+export interface RnkConvView { rows: RnkConvRow[]; comment: { text: string; by: string | null; at: string } | null; canComment: boolean }
+export const saveRnkConv = async (p: { weekFrom: string; action: "set" | "reset" | "slide" | "comment"; managerId?: number; taken?: number; won?: number; onSlide?: boolean; comment?: string }) =>
+  (await api.post<NominationWeek>("/nominations/rnk-conv", p)).data;
 export const fetchNominationWeek = async (weekFrom?: string) =>
   (await api.get<NominationWeek>("/nominations/week", { params: weekFrom ? { weekFrom } : {} })).data;
-export const reviewNomination = async (p: { weekFrom: string; teamId: number; nomination: NominationKey; action: "confirm" | "override"; overrideManagerIds?: number[]; overrideValue?: number; reason?: string }) =>
+export const reviewNomination = async (p: { weekFrom: string; teamId: number; nomination: NominationKey; action: NominationAction; overrideManagerIds?: number[]; overrideValue?: number; reason?: string }) =>
   (await api.post<NominationWeek>("/nominations/review", p)).data;
+/** «Погодитись з рештою»: сервер сам бере лише рядки, що чекають і які цей глядач може погодити. */
+export const confirmNominationsBulk = async (p: { weekFrom: string; teamId: number; nominations: NominationKey[] }) =>
+  (await api.post<NominationWeek>("/nominations/review", { ...p, action: "confirm" })).data;
 // 🎞 Ручні слайди презентації тижня (прохід 2) — лише керівництво.
 export type ManualSlideKind = "newcomer" | "birthday" | "news" | "contest" | "webinar" | "custom";
 export interface SlideTemplateField { key: string; label: string; required: boolean; max: number; multiline?: boolean; placeholder?: string; default?: string; type?: "employee" }
@@ -4471,4 +4671,26 @@ export function employeePhotoUrl(p: PhotoRef): Promise<string | null> {
     photoUrls.set(k, u);
   }
   return u;
+}
+
+/* 🧭 Команди дашборда й перевизначення команди менеджера (ТЗ 23.09.2026, п.1). */
+export interface TeamOverrideRow {
+  managerId: number; name: string; kommoUserId: string; teamId: number | null;
+  override: { teamId: number | null; note: string | null } | null;
+}
+export interface TeamOverridesPayload {
+  teams: { id: number; name: string; dashboardOnly: boolean; active: number }[];
+  managers: TeamOverrideRow[];
+}
+export async function fetchTeamOverrides(): Promise<TeamOverridesPayload> {
+  const { data } = await api.get<TeamOverridesPayload>("/settings/team-overrides");
+  return data;
+}
+export async function setTeamOverride(kommoUserId: string, body: { mode: "crm" | "team" | "none"; teamId?: number; note?: string }) {
+  const { data } = await api.put<{ ok: true; appliedNow: boolean }>(`/settings/team-overrides/${kommoUserId}`, body);
+  return data;
+}
+export async function createDashboardTeam(name: string): Promise<{ id: number; name: string }> {
+  const { data } = await api.post<{ id: number; name: string }>("/settings/teams", { name });
+  return data;
 }
