@@ -181,13 +181,18 @@ export interface PilotRunSummary {
   spendUsd: { stt: number; analysis: number };
 }
 
-async function loop(run: () => Promise<PortionReport>, into: PortionReport[]): Promise<string | null> {
+/**
+ * Порції до спорожнення черги. Повертає причину зупинки або `null`, якщо черга просто скінчилась.
+ * 📐 Порожня черга (`idle`) — це нормальний кінець, а не зупинка: пілот 24.09.2026 друкував
+ * «розпізнавання зупинилось: idle», ніби стався збій.
+ */
+export async function runUntilDrained(run: () => Promise<PortionReport>, into: PortionReport[]): Promise<string | null> {
   for (let i = 0; i < MAX_LOOPS; i++) {
     let r: PortionReport;
     try { r = await run(); } catch (e) { return (e as Error).message; }
     into.push(r);
+    if (r.state === "idle" || (r.state === "ok" && r.claimed === 0)) return null;
     if (r.state !== "ok") return r.stoppedBy ?? r.state;
-    if (r.claimed === 0) return null;
   }
   return `межа ${String(MAX_LOOPS)} проходів — черга не спорожніла`;
 }
@@ -200,7 +205,7 @@ export async function runPilot(env: PilotEnv, plan: PilotPlan, a: PilotArgs): Pr
   const out: PilotRunSummary = { stt: [], analysis: [], stoppedBy: null, transcripts: {}, analyses: {}, spendUsd: { stt: 0, analysis: 0 } };
 
   await enqueueTranscripts(env.db, ids, STT_PROVIDER, ELEVENLABS_STT_MODEL, env.now());
-  const sttStop = await loop(() => runSttPortion(env.db, {
+  const sttStop = await runUntilDrained(() => runSttPortion(env.db, {
     apiKey: env.keys.elevenlabs,
     download: async (url) => { await throttle(); return downloadRecording(env.http, url, { ...RINGOSTAT_POLICY, maxBytes: RECORDING_MAX_BYTES }); },
     transcribe: (key, audio) => elevenLabsTranscribe(env.http, key, audio, STT_POLICY),
@@ -215,7 +220,7 @@ export async function runPilot(env: PilotEnv, plan: PilotPlan, a: PilotArgs): Pr
     sttProvider: STT_PROVIDER, sttModel: ELEVENLABS_STT_MODEL,
   };
   await enqueueAnalyses(env.db, { ...ap, now: env.now() }, ids);
-  const llmStop = await loop(() => runAnalysisPortion(env.db, {
+  const llmStop = await runUntilDrained(() => runAnalysisPortion(env.db, {
     apiKey: env.keys.gemini,
     generate: (key, model, body) => geminiGenerate(env.http, key, model, body, LLM_POLICY),
   }, {

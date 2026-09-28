@@ -34,7 +34,7 @@ export type VendorFailureKind =
 export const VENDOR_FAILURE_UA: Record<VendorFailureKind, string> = {
   rate_limit: "постачальник обмежив частоту запитів",
   auth: "ключ відхилено або в нього немає дозволу",
-  payment: "на рахунку постачальника скінчились кошти",
+  payment: "скінчились кошти на рахунку або квота ключа",
   bad_input: "постачальник не прийняв запит або файл",
   not_found: "не знайдено",
   server: "збій на боці постачальника",
@@ -95,6 +95,32 @@ export function kindForStatus(status: number): VendorFailureKind {
   return "bad_input";
 }
 
+/**
+ * Код постачальника в тілі відповіді уточнює вид відмови, бо HTTP-код один на кілька причин.
+ * 📐 Спіймано пілотом 24.09.2026: ElevenLabs віддав **401** на вичерпану квоту ключа
+ * (`quota_exceeded`), і ми показали «ключ відхилено» — хоча ключ був правильний, а лікування
+ * інше (підняти квоту / поповнити, а не міняти ключ). Невідомий код → вид за HTTP-кодом, як було.
+ */
+const BODY_CODE_KIND: Readonly<Record<string, VendorFailureKind>> = {
+  quota_exceeded: "payment",
+  insufficient_credits: "payment",
+  rate_limit_exceeded: "rate_limit",
+  concurrent_limit_exceeded: "rate_limit",
+  system_busy: "rate_limit",
+};
+
+export function kindFromBody(body: string): VendorFailureKind | null {
+  let o: unknown;
+  try { o = JSON.parse(body); } catch { return null; }
+  const d = (o as { detail?: unknown } | null)?.detail;
+  if (!d || typeof d !== "object" || Array.isArray(d)) return null;
+  for (const f of ["code", "status"] as const) {
+    const v = (d as Record<string, unknown>)[f];
+    if (typeof v === "string" && Object.hasOwn(BODY_CODE_KIND, v)) return BODY_CODE_KIND[v];
+  }
+  return null;
+}
+
 /** `Retry-After`: секунди або HTTP-дата. Невідоме / відʼємне → null. */
 export function parseRetryAfter(v: string | null, nowMs: number): number | null {
   if (!v) return null;
@@ -152,9 +178,10 @@ export async function fetchWithRetry(deps: HttpDeps, req: VendorRequest, policy:
     }
     clearTimeout(timer);
     if (res.ok) return res;
-    const kind = kindForStatus(res.status);
-    let detail = "";
-    try { detail = scrubText(await res.text(), req.secrets ?? []); } catch { /* тіло не прочиталось — лишаємо код */ }
+    let body = "";
+    try { body = await res.text(); } catch { /* тіло не прочиталось — лишаємо код */ }
+    const kind = kindFromBody(body) ?? kindForStatus(res.status);
+    const detail = body ? scrubText(body, req.secrets ?? []) : "";
     last = new VendorError(req.vendor, kind, res.status, detail || undefined,
       parseRetryAfter(res.headers.get("retry-after"), deps.nowMs()));
     if (!RETRYABLE.has(kind)) throw last;

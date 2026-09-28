@@ -1,14 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { inspect } from "node:util";
-import { createMinInterval, fetchWithRetry, redactUrl, scrubText, VendorError, type HttpDeps, type RetryPolicy } from "./callAiHttp.js";
+import { createMinInterval, fetchWithRetry, kindFromBody, redactUrl, scrubText, VendorError, type HttpDeps, type RetryPolicy } from "./callAiHttp.js";
 import { downloadRecording, wavInfo } from "./ringostatRecording.js";
 import {
   ANALYSIS_SCHEMA, buildAnalysisRequest, ELEVENLABS_STT_URL, elevenLabsTranscribe, geminiGenerate, inputTokenUpperBound,
   interpretAnalysis, parseGeminiResponse, parseSttResponse, toTurns, type Turn,
 } from "./callAiProviders.js";
 import { ParamNotSetError } from "./adCallFactsRules.js";
-import { parsePilotArgs, planPilot, planToJsonl } from "./callAiPilot.js";
+import { parsePilotArgs, planPilot, planToJsonl, runUntilDrained } from "./callAiPilot.js";
+import type { PortionReport } from "./callAiPipeline.js";
 
 /**
  * 🎯 #654–#658, #662 — AI-АНАЛІЗ ДЗВІНКІВ, коміт ③: HTTP, запис Ringostat, адаптери, пілот.
@@ -312,4 +313,56 @@ test("#662 ПІЛОТ: відкриті питання обовʼязкові, -
   const jsonl = planToJsonl(plan);
   assert.equal(jsonl.trim().split("\n").length, 2);
   assert.ok(!/https?:|380\d{9}|0\d{9}/.test(jsonl), `🔴 у плані URL або номер: ${jsonl}`);
+});
+
+/**
+ * #753 — ВИД ВІДМОВИ ЗА КОДОМ ПОСТАЧАЛЬНИКА, А НЕ ЛИШЕ ЗА HTTP. Пілот 24.09.2026: ElevenLabs віддав
+ * 401 з `quota_exceeded` на вичерпану квоту ключа, і ми показали «ключ відхилено». Тепер 401 +
+ * `quota_exceeded` → «кошти або квота», без повтору; дзеркало: 401 без коду лишається «ключ».
+ * 🧨 Червоніє, якщо прибрати `kindFromBody` або зіставлення `quota_exceeded`.
+ */
+test("#753 ВІДМОВА ЗА КОДОМ: 401 quota_exceeded — квота, а не «ключ відхилено»; 401 без коду — ключ", async () => {
+  const quota = { detail: { type: "invalid_request", code: "quota_exceeded",
+    message: "This request exceeds your API key (uts-dashboard-stt) quota of 40. You have 15 credits remaining" } };
+  const h = fakeHttp([json(quota, 401), json({ ok: 1 })]);
+  const e = await fetchWithRetry(h.deps, { vendor: "ElevenLabs", url: ELEVENLABS_STT_URL, init: () => ({}) }, FAST)
+    .then(() => null, (x: unknown) => x);
+  assert.ok(e instanceof VendorError);
+  assert.equal(e.kind, "payment", "🔴 вичерпана квота знову читається як відхилений ключ");
+  assert.equal(h.calls.length, 1, "🔴 квоту повторено — повтор не лікує порожній рахунок");
+  assert.doesNotMatch(e.message, /ключ відхилено/);
+  assert.match(e.message, /квота ключа/);
+
+  const bad = fakeHttp([json({ detail: { type: "authentication_error", code: "invalid_api_key", message: "Invalid API key" } }, 401)]);
+  const e2 = await fetchWithRetry(bad.deps, { vendor: "ElevenLabs", url: ELEVENLABS_STT_URL, init: () => ({}) }, FAST)
+    .then(() => null, (x: unknown) => x);
+  assert.ok(e2 instanceof VendorError && e2.kind === "auth", "дзеркало: справжній невірний ключ мусить лишитись «ключ відхилено»");
+
+  assert.equal(kindFromBody(JSON.stringify({ detail: { code: "concurrent_limit_exceeded" } })), "rate_limit");
+  assert.equal(kindFromBody(JSON.stringify({ detail: { code: "insufficient_credits" } })), "payment");
+  assert.equal(kindFromBody(JSON.stringify({ detail: [{ loc: ["file"], msg: "x" }] })), null, "🔴 форма 422 (масив) дала вигаданий вид");
+  assert.equal(kindFromBody("не json"), null);
+  assert.equal(kindFromBody(JSON.stringify({ detail: { code: "toString" } })), null, "🔴 успадковане імʼя прочитано як код");
+});
+
+const rep = (state: PortionReport["state"], claimed: number, stoppedBy: string | null = null): PortionReport => ({
+  state, claimed, done: claimed, retry: 0, failed: 0, unavailable: 0, capped: 0, lostRace: 0,
+  requeuedStuck: 0, failedStuck: 0, spentUsd: 0, capUsd: 40, stoppedBy,
+});
+
+/**
+ * #754 — ПОРОЖНЯ ЧЕРГА — ЦЕ КІНЕЦЬ, А НЕ ЗУПИНКА. Пілот 24.09.2026 друкував «розпізнавання
+ * зупинилось: idle». Дзеркало: справжня зупинка (стеля, помилка порції) і далі повертає причину.
+ * 🧨 Червоніє, якщо стан `idle` знову пройде гілкою «не ok → причина».
+ */
+test("#754 ЧЕРГА СКІНЧИЛАСЬ: idle — нормальний кінець; стеля й помилка — названа зупинка", async () => {
+  const seq = (xs: (PortionReport | Error)[]) => { let i = 0; return async () => { const x = xs[i++]; if (x instanceof Error) throw x; return x; }; };
+  const into: PortionReport[] = [];
+  assert.equal(await runUntilDrained(seq([rep("ok", 5), rep("ok", 5), rep("idle", 0)]), into), null, "🔴 порожня черга названа зупинкою");
+  assert.equal(into.length, 3);
+  assert.equal(await runUntilDrained(seq([rep("ok", 5), rep("ok", 0)]), []), null);
+  assert.equal(await runUntilDrained(seq([rep("ok", 5), rep("capped", 2, "стеля місяця вичерпана")]), []), "стеля місяця вичерпана",
+    "дзеркало: стеля мусить лишитись названою зупинкою");
+  assert.equal(await runUntilDrained(seq([rep("not_enabled", 0, "ключ не задано")]), []), "ключ не задано");
+  assert.equal(await runUntilDrained(seq([new Error("AI-конвеєр: порцію зупинено")]), []), "AI-конвеєр: порцію зупинено");
 });
