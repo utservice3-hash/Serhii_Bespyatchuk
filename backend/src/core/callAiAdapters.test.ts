@@ -5,7 +5,7 @@ import { createMinInterval, fetchWithRetry, kindFromBody, redactUrl, scrubText, 
 import { downloadRecording, wavInfo } from "./ringostatRecording.js";
 import {
   ANALYSIS_SCHEMA, buildAnalysisRequest, ELEVENLABS_STT_URL, elevenLabsTranscribe, geminiGenerate, inputTokenUpperBound,
-  interpretAnalysis, parseGeminiResponse, parseSttResponse, toTurns, type Turn,
+  interpretAnalysis, parseGeminiResponse, parseSttResponse, toTurns, verifyQuotes, type Turn,
 } from "./callAiProviders.js";
 import { ParamNotSetError } from "./adCallFactsRules.js";
 import { parsePilotArgs, planPilot, planToJsonl, runUntilDrained } from "./callAiPilot.js";
@@ -367,4 +367,27 @@ test("#754 ЧЕРГА СКІНЧИЛАСЬ: idle — нормальний кін
     "дзеркало: стеля мусить лишитись названою зупинкою");
   assert.equal(await runUntilDrained(seq([rep("not_enabled", 0, "ключ не задано")]), []), "ключ не задано");
   assert.equal(await runUntilDrained(seq([new Error("AI-конвеєр: порцію зупинено")]), []), "AI-конвеєр: порцію зупинено");
+});
+
+/**
+ * #755 — ЦИТАТА ЗВІРЯЄТЬСЯ З ТЕКСТОМ СВОГО КАНАЛУ. Пілот 28.09.2026: «угу» клієнта посеред речення
+ * менеджера робило 18 із 54 справжніх цитат «не знайденими». Дзеркало: фраза, склеєна зі слів ОБОХ
+ * каналів, і вигадана фраза — не знайдені.
+ * 🧨 Червоніє, якщо знову шукати в спільному тексті розмови.
+ */
+test("#755 ЦИТАТА ПО КАНАЛУ: «угу» співрозмовника не ламає цитату; склейка каналів і вигадка — не знайдені", () => {
+  const turns: Turn[] = [
+    { channel: 1, start: 0, end: 3, text: "Дайте мені, будь ласка, 10 хв., зараз рахую", lang: "ukr" },
+    { channel: 0, start: 3, end: 3.4, text: "угу", lang: "ukr" },
+    { channel: 1, start: 3.5, end: 6, text: "по вартості і одразу вам повідомляю.", lang: "ukr" },
+  ];
+  const base = { summary: "", manager_channel: "1" as const, client_request: "", next_step: "",
+    price: { discussed: false, quote: "" }, objections: [] };
+  const v = verifyQuotes({ ...base, promises: [
+    { who: "manager" as const, what: "порахувати", deadline_text: "10 хв", quote: "зараз рахую по вартості і одразу вам повідомляю" },
+    { who: "manager" as const, what: "x", deadline_text: "", quote: "рахую угу по вартості" },
+    { who: "manager" as const, what: "x", deadline_text: "", quote: "завтра надішлю договір" },
+  ] }, turns);
+  assert.deepEqual(v.promises.map((p) => p.quote_found), [true, false, false],
+    "🔴 справжня цитата не знайдена через «угу» іншого каналу, або склейка каналів чи вигадка пройшли");
 });

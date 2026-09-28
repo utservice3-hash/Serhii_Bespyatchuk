@@ -302,10 +302,19 @@ export function normForQuote(s: string): string {
  * в розмові немає; екран не покаже такий пункт як факт. Порожня цитата → `null` (нема що звіряти).
  */
 export function verifyQuotes(r: AnalysisResult, turns: readonly Turn[]): AnalysisResult {
-  const hay = ` ${normForQuote(turns.map((t) => t.text).join(" "))} `;
+  // 🔴 ПО КАНАЛУ, А НЕ ВСІЄЮ РОЗМОВОЮ. Пілот 28.09.2026: у спільному тексті «угу» клієнта стає посеред
+  // речення менеджера («рахую по угу вартості»), і 18 із 54 справжніх цитат виглядали вигаданими.
+  // Цитату каже один із двох — отже її шукаємо в тексті її каналу; склейка з двох каналів не пройде.
+  const byChannel = new Map<number, string[]>();
+  for (const t of turns) {
+    const list = byChannel.get(t.channel) ?? [];
+    list.push(t.text);
+    byChannel.set(t.channel, list);
+  }
+  const hays = [...byChannel.values()].map((xs) => ` ${normForQuote(xs.join(" "))} `);
   const found = (q: string): boolean | null => {
     const n = normForQuote(q);
-    return n ? hay.includes(` ${n} `) : null;
+    return n ? hays.some((h) => h.includes(` ${n} `)) : null;
   };
   return {
     ...r,
