@@ -52,7 +52,8 @@ test("#801 tl;dv: розбір відповіді — секунди в хвил
   const body = { results: [
     { id: "m1", name: "Співбесіда", happenedAt: "2026-09-22T11:30:00Z", duration: 2460,
       organizer: { email: "ivan@uts.ua" }, invitees: [{ email: "a@b.com" }, "c@d.com", { name: "без пошти" }] },
-    { id: "m2", url: "https://app.tldv.io/meetings/m2", invitees: [], extra: { чуже: true } },
+    { id: "m2", url: "https://app.tldv.io/meetings/m2", invitees: [], extra: { чуже: true },
+      happenedAt: "Mon Sep 28 2026 12:00:00 GMT+0000 (Coordinated Universal Time)" }, // справжній формат tl;dv (прод, 28.09)
     { name: "без id" },
   ] };
   const r = parseMeetings(body);
@@ -60,6 +61,9 @@ test("#801 tl;dv: розбір відповіді — секунди в хвил
   assert.deepEqual([r[0].duration, r[0].organizer, r[0].invitees], [41, "ivan@uts.ua", ["a@b.com", "c@d.com"]]);
   assert.equal(r[0].url, "https://app.tldv.io/meetings/m1", "🔴 посилання не зібрано з id");
   assert.equal(r[1].url, "https://app.tldv.io/meetings/m2");
+  assert.equal(r[1].happenedAt, "2026-09-28T12:00:00.000Z", "🔴 JS-рядок часу tl;dv не став ISO — база його не прийме");
+  assert.equal(r[0].happenedAt, "2026-09-22T11:30:00.000Z", "дзеркало: ISO лишається тим самим моментом");
+  assert.equal(parseMeetings({ results: [{ id: "x", happenedAt: "не дата" }] })[0].happenedAt, null, "🔴 нерозбірний час став датою");
   assert.deepEqual(parseMeetings({}), [], "дзеркало: порожня відповідь — порожній список, не падіння");
 });
 
