@@ -676,3 +676,28 @@ test("#359d 🪞 наявний власник виграє, менеджер л
     "🔴 зʼявився ПЕРЕЛІК ролей: він розійдеться зі `ScopeRole` на першій новій ролі, і мовчки "
     + "(заміряно: сироту записав користувач із role_override='kvp', списком його не спіймати)");
 });
+
+/**
+ * #810c — ЖИВИЙ: група вкладки кожного рядка рахується тим самим правилом, що в ядрі, від тих
+ * самих полів, що бачить екран (`state`, `lastOrderDays`), а три групи разом дають увесь ростер.
+ * Рівність, а не «≥N»: істинна й тоді, коли жовтих сьогодні нуль (правило про календарні гейти).
+ */
+test("#810c ЖИВИЙ: tabGroup кожного рядка == clientTabGroup(state, lastOrderDays); Постійні + Реактивація == Всі", needsApi(), async () => {
+  const { clientTabGroup, tabOf } = await import("../core/clientTabs.js");
+  const m = await monthWithPlans();
+  assert.ok(m, "🔴 планів немає взагалі");
+  const token = await adminToken();
+  const b = await (await get(`/api/dashboard/client-plans?month=${m.month}`, token)).json() as {
+    clients: { clientKey: string; state: string; lastOrderDays: number | null; tabGroup?: string }[];
+    tabGroupRank?: Record<string, number>;
+  };
+  assert.ok(b.clients.length > 0, "🔴 ростер порожній — гейт нічого не перевіряє");
+  const wrong = b.clients.filter((c) => c.tabGroup !== clientTabGroup(c.state, c.lastOrderDays));
+  assert.deepEqual(wrong.slice(0, 5).map((c) => `${c.clientKey}: ${c.tabGroup} при ${c.state}/${c.lastOrderDays}`), [],
+    `🔴 ${wrong.length} рядків мають групу вкладки не за правилом ядра`);
+  const regular = b.clients.filter((c) => tabOf(c.tabGroup as "regular" | "yellow" | "react") === "regular").length;
+  const react = b.clients.filter((c) => c.tabGroup === "react").length;
+  assert.equal(regular + react, b.clients.length, "🔴 клієнт випав з обох вкладок або потрапив в обидві");
+  assert.ok(b.tabGroupRank && b.tabGroupRank.regular < b.tabGroupRank.yellow && b.tabGroupRank.yellow < b.tabGroupRank.react,
+    "🔴 ранги «Всі» не приходять або не в порядку постійні → жовті → реактивація");
+});

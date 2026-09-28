@@ -119,6 +119,19 @@ export interface AssignScope {
   targetTeamId: number | null;
 }
 
+/**
+ * 👤 КОГО ПОКАЗУВАТИ У ФОРМІ ПЕРЕДАЧІ (ТЗ Юлі 22.09.2026, п.3.2; задача 4312).
+ * Та сама межа, що `assignAllowed`, тільки наперед: тімліду без `merge_clients` — лише його
+ * команда (інакше список показує всю компанію, а вибір чужого менеджера сервер відхиляє з 403 —
+ * саме так «доступ забрали» виглядав для Юлі). `null` = без обмеження (КВП/ОД/адмін).
+ * Тімлід без команди не може передати нікому, і це `-1`, а не `null`: `null` відкрив би всіх.
+ */
+export function assignTeamIdFor(a: { canAll: boolean; role: string; teamId: number | null }): number | null {
+  if (a.canAll) return null;
+  if (a.role !== "team_lead") return -1;
+  return a.teamId ?? -1;
+}
+
 export function assignAllowed(s: AssignScope): boolean {
   if (s.canAll) return true;
   if (s.leadTeamId == null) return false;

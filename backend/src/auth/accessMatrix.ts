@@ -604,6 +604,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/dashboard/client-next-step/done", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  // 📌 Обґрунтування плану (ТЗ 22.09, п.3.3; 28.09.2026): та сама межа — `canSeeClient` першим
+  // оператором, менеджер і тімлід ДОЗВОЛЕНІ для своїх клієнтів, у deny лише hr (вкладки немає).
+  { method: "POST", path: "/api/dashboard/client-plan-basis", cls: "deny-only",
+    allow: [], deny: ["hr"] },
+  { method: "POST", path: "/api/dashboard/client-plan-basis/clear", cls: "deny-only",
+    allow: [], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/client-contacts?clientKey=zzz", cls: "GET",
     allow: [], deny: ["hr"] },
   // Менеджер і тімлід ДОДАЮТЬ контакти по своїх клієнтах — це і є фіча (у Viber/Telegram
@@ -1285,42 +1291,42 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
   { method: "POST", path: "/api/uploads", cls: "deny-only",
     allow: [], deny: [] },  /* 🗂 БІЗНЕС-АСИСТЕНТ, прохід 1 (задача 4314, 28.09.2026): Претензії й Судовий реєстр.
-     Вкладку `ba` сид дає ролі «бізнес-асистент» і керівництву (admin, ceo, opdir, kvp, hr) — рішення
-     Романа 24.09.2026. Друга межа — `onlyBa` першим оператором обробника. Фінансист адмін-рівня, але
+     Вкладку `ba` сид дає ролі «бізнес-асистент» і керівництву (admin, ceo, opdir, kvp) — рішення
+     Романа 24.09.2026; HR — ні (28.09.2026: «HR не бачить взагалі»). Друга межа — `onlyBa` першим оператором обробника. Фінансист адмін-рівня, але
      вкладки не має → 403 на tab-гейті; у deny-only рядки його не пишемо (та сама причина, що в найму).
      Роль `business_assistant` у пробі відсутня (її немає в ACCESS_ROLES) — доступ їй доводить `#772`. */
   { method: "GET", path: "/api/ba/meta", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/ba/claims", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/ba/claims/:id", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/ba/cases", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/ba/cases/:id", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/ba/claims/:id/files/:fileId", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/ba/cases/:id/files/:fileId", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/ba/claims", cls: "deny-only",
-    allow: [], deny: ["team_lead", "manager"] },
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "PATCH", path: "/api/ba/claims/:id", cls: "deny-only",
-    allow: [], deny: ["team_lead", "manager"] },
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/ba/claims/:id/archive", cls: "deny-only",
-    allow: [], deny: ["team_lead", "manager"] },
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/ba/claims/:id/files", cls: "deny-only",
-    allow: [], deny: ["team_lead", "manager"] },
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/ba/cases", cls: "deny-only",
-    allow: [], deny: ["team_lead", "manager"] },
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "PATCH", path: "/api/ba/cases/:id", cls: "deny-only",
-    allow: [], deny: ["team_lead", "manager"] },
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/ba/cases/:id/archive", cls: "deny-only",
-    allow: [], deny: ["team_lead", "manager"] },
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/ba/cases/:id/files", cls: "deny-only",
-    allow: [], deny: ["team_lead", "manager"] },
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   /* 🧾 Кнопка «Проблемний клієнт» у дебіторці — вкладка `receivables` + право `create_claim`
-     (керівництво й фінансист). Тімлід і менеджер вкладку мають, права — ні: GET дає їм 200 з
+     (керівництво без HR і фінансист). Тімлід і менеджер вкладку мають, права — ні: GET дає їм 200 з
      порожнім списком, POST — 403 по праву. HR вкладки дебіторки не має → 403 на tab-гейті. */
   { method: "GET", path: "/api/receivables-claims/open", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
