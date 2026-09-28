@@ -577,6 +577,16 @@ export function TasksSection({
   const [settingsOpen, setSettingsOpen] = useState(false);
   // 🔗 Глибоке посилання: картка відкривається ОДРАЗУ, якщо в URL є `?id=`.
   const [openTaskId, setOpenTaskId] = useState<number | null>(() => parseTaskIdParam(window.location.search));
+  /**
+   * 💬 «Відкрий картку ОДРАЗУ на стрічці» — намір кліку по `💬 N` у рядку списку.
+   * Відгук власника 28.09.2026: «у задачнику є коментарі, але як з ними працювати не
+   * маю ідей, воно їх не відкриває». Доти `💬 N` був простим текстом без кліку, а
+   * стрічка жила в картці НИЖЧЕ вкладень — її треба було знайти самому. Тримає `#491`.
+   */
+  const [focusFeed, setFocusFeed] = useState(false);
+  const feedRef = useRef<HTMLDivElement | null>(null);
+  const feedDraftRef = useRef<HTMLTextAreaElement | null>(null);
+  const openFeed = (taskId: number) => { setFocusFeed(true); setOpenTaskId(taskId); };
   const openTask = openTaskId != null ? tasks.find((t) => t.id === openTaskId) ?? null : null;
 
   // 🔴 «ОДНЕ ЗАВАНТАЖЕННЯ ВЖЕ ЗАВЕРШИЛОСЬ» — не те саме, що «зараз не вантажимо».
@@ -717,6 +727,15 @@ export function TasksSection({
     void markTaskSeen(id).then(() => refreshTasks?.()).catch(() => {});
     return () => { alive = false; };
   }, [openTaskId]);
+
+  // 💬 Прокрутка до стрічки — ПІСЛЯ того, як доповнення завантажились: до цього блок
+  // короткий («Завантаження…»), і прокрутка зупинилась би не там, куди людина чекає.
+  useEffect(() => {
+    if (!focusFeed || openTaskId == null || comments == null) return;
+    feedRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    feedDraftRef.current?.focus({ preventScroll: true });
+    setFocusFeed(false);
+  }, [focusFeed, openTaskId, comments]);
 
   const groupName = (id: number | null | undefined) => groups.find((g) => g.id === id)?.name ?? null;
 
@@ -1163,7 +1182,14 @@ export function TasksSection({
                               pill, 10.5px, приглушений фон. Новий вигляд поруч зі
                               старим читався б як інша сутність. */}
                           {(task.commentCount ?? 0) > 0 && (
-                            <span title="доповнень у стрічці" style={{ fontSize: 10.5, color: "var(--text-muted)" }}>💬 {task.commentCount}</span>
+                            <button
+                              type="button"
+                              onClick={() => openFeed(task.id)}
+                              title="Відкрити стрічку доповнень"
+                              style={{ fontSize: 10.5, color: "var(--text)", background: "var(--card-bg)",
+                                border: "1px solid var(--border)", borderRadius: "var(--r-pill)",
+                                padding: "0 var(--sp-3)", cursor: "pointer" }}
+                            >💬 {task.commentCount}</button>
                           )}
 
                         </div>
@@ -1663,7 +1689,7 @@ export function TasksSection({
             </div>
 
             {/* ── 💬 СТРІЧКА ДОПОВНЕНЬ ── */}
-            <div style={{ marginTop: 18 }}>
+            <div ref={feedRef} style={{ marginTop: 18, scrollMarginTop: 12 }}>
               <h3 style={{ fontSize: 13, color: "var(--text-muted)", margin: "0 0 8px" }}>
                 💬 Стрічка доповнень{comments ? ` · ${comments.length}` : ""}
               </h3>
@@ -1685,6 +1711,7 @@ export function TasksSection({
               )}
               <div style={{ display: "flex", gap: 6, alignItems: "flex-end" }}>
                 <textarea
+                  ref={feedDraftRef}
                   value={commentDraft}
                   onChange={(e) => setCommentDraft(e.target.value)}
                   placeholder="Дописати в стрічку…"
