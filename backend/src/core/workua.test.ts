@@ -17,13 +17,14 @@ const SRC = (...p: string[]) => path.join(import.meta.dirname, "..", "..", "..",
  */
 test("#770 work.ua: розбір відгуку — усі три типи, коментар без HTML і обрізаний", () => {
   const r = parseResponses({ status: "ok", items: [
-    { id: 11, job_id: 7542760, date: "2026-09-28T10:10:49+03:00", fio: "Олефіренко Катерина", email: "k@x.ua", phone: "050 111-22-33", type: "resume", with_file: 0, text: "Досвід<br />логістика", cover: "Хочу працювати" },
+    { id: 11, job_id: 7542760, date: "2026-09-28T10:10:49+03:00", fio: "Олефіренко Катерина", email: "k@x.ua", phone: "050 111-22-33", type: "resume", with_file: 0, text: "<p>Досвід</p><br /><b>логістика</b>", cover: "Хочу працювати" },
     { id: 12, job_id: "7542760", fio: "", phone: "+380671112233", type: "file", with_file: "1", text: null },
     { id: 13, type: "easy", cover: "Без резюме" },
     { fio: "без id" },
   ] });
   assert.deepEqual(r.map((x) => [x.id, x.jobId, x.type, x.withFile]), [[11, 7542760, "resume", false], [12, 7542760, "file", true], [13, null, "easy", false]]);
   assert.equal(r[1].fio, null, "🔴 порожнє ПІБ (конфіденційне резюме) не стало null");
+  // Фікстура несе і `<br>`, і справжні теги (`<p>`, `<b>`): лише `<br>` лишав гейт зеленим на зламаному вирізанні тегів (саботаж 28.09).
   assert.equal(responseComment(r[0]), "Супровідний лист: Хочу працювати\n\nРезюме: Досвід\nлогістика", "🔴 HTML потрапив у коментар");
   assert.equal(responseComment({ ...r[0], cover: null, text: "а".repeat(5000) })!.length, 3001, "🔴 резюме не обрізано");
   assert.equal(responseComment({ ...r[0], cover: null, text: null }), null, "дзеркало: порожнє — не коментар");
