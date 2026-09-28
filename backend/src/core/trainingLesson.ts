@@ -26,3 +26,17 @@ export const PART_ROLES: readonly PartRole[] = ["main", "attachment"];
 
 /** Урок, до якого належить рядок: сам рядок, якщо він урок, інакше той, на кого він вказує. */
 export const lessonOf = (row: { id: number; lessonId: number | null }): number => row.lessonId ?? row.id;
+
+export type PartVerdict = { ok: true; folderId: number | null; role: PartRole } | { ok: false; status: 400 | 404; reason: string };
+
+/**
+ * ✏️ ЧИ МОЖНА ДОДАТИ ЧАСТИНУ ДО ЦЬОГО УРОКУ (редактор, 28.09.2026, Роман: «повний редактор»).
+ * Частина живе в ТІЙ САМІЙ темі, що й урок (інакше замок і порядок дивились би на одне, а людина бачила б
+ * інше); частина частини неможлива (урок має один рівень); роль — лише з переліку. Тримає `#737`.
+ */
+export function partVerdict(lesson: { id: number; folderId: number | null; lessonId: number | null } | null, role: unknown): PartVerdict {
+  if (!lesson) return { ok: false, status: 404, reason: "Урок не знайдено" };
+  if (lesson.lessonId != null) return { ok: false, status: 400, reason: "Це вже частина уроку — додайте частину до самого уроку" };
+  if (!PART_ROLES.includes(role as PartRole)) return { ok: false, status: 400, reason: "Роль частини: «main» (показати в уроці) або «attachment» (вкладення)" };
+  return { ok: true, folderId: lesson.folderId, role: role as PartRole };
+}

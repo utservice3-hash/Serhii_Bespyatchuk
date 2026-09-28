@@ -73,3 +73,22 @@ export function freeModules(folders: readonly EditorFolder[]): EditorFolder[] {
   return folders.filter((f) => f.parentId === null && f.courseId == null)
     .sort((a, b) => a.position - b.position || a.id - b.id);
 }
+
+export type ReorderVerdict = { ok: true; ids: number[] } | { ok: false; status: 400; reason: string };
+
+/**
+ * ↕️ НОВИЙ ПОРЯДОК СУСІДІВ (повний редактор, 28.09.2026). Приймаємо лише ПОВНИЙ перелік сусідів — ні більше, ні
+ * менше, без повторів. Частковий перелік переставив би названих і лишив би решту з тими самими номерами, що й
+ * у переставлених, — а при рівних `position` порядок вирішує вже `id` (`trainingProgress.ts`), тобто людина
+ * бачила б не той порядок, який щойно виставила. Тримає `#739`.
+ */
+export function reorderVerdict(siblings: readonly number[], ids: unknown): ReorderVerdict {
+  if (!Array.isArray(ids) || !ids.every((x) => Number.isInteger(x))) return { ok: false, status: 400, reason: "ids: масив чисел" };
+  const list = ids as number[];
+  if (new Set(list).size !== list.length) return { ok: false, status: 400, reason: "У порядку є повтори" };
+  const own = new Set(siblings);
+  if (list.length !== own.size || !list.every((x) => own.has(x))) {
+    return { ok: false, status: 400, reason: "Порядок має містити рівно всіх сусідів — список застарів, оновіть сторінку" };
+  }
+  return { ok: true, ids: list };
+}

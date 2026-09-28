@@ -1255,6 +1255,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "candidate"], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "PATCH", path: "/api/training/material/:id", cls: "deny-only",
     allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
+  /* ✏️ Повний редактор (28.09.2026): заміна файлу й порядок — та сама межа `manage_training`, що й решта запису.
+     Кандидата в deny немає свідомо — його проба дає 401 «до навчання закрито» ДО tab-гейта (див. CANDIDATE_401). */
+  { method: "PUT", path: "/api/training/material/:id/file", cls: "deny-only",
+    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/training/reorder", cls: "deny-only",
+    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/training/material/:id/file", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
   { method: "POST", path: "/api/training/materials/:id/publish", cls: "deny-only",

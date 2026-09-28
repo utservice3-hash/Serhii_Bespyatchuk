@@ -8,11 +8,11 @@ import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { UPLOAD_DIR } from "./uploads.js";
 import { orderedMaterials, materialStates, coursePercent } from "../core/trainingProgress.js";
 import { stepLockedBy, type LockDb } from "../core/trainingLock.js";
-import { attachVerdict, requiredValue, moduleStats, courseModules, freeModules, type EditorFolder } from "../core/trainingEditor.js";
+import { attachVerdict, requiredValue, moduleStats, courseModules, freeModules, reorderVerdict, type EditorFolder } from "../core/trainingEditor.js";
 import { roleHasPerm } from "../auth/rbac.js";
 import { effectiveMime, mimeFromName } from "../core/trainingMime.js";
 import { checkUpload, MAX_UPLOAD_BYTES, ACCEPT_ATTR } from "../core/trainingUpload.js";
-import { LESSON_ONLY } from "../core/trainingLesson.js";
+import { LESSON_ONLY, PART_ROLES, partVerdict, type PartRole } from "../core/trainingLesson.js";
 
 /**
  * Навчання — навчальна база відділу продажу. Адмін (КВП) будує структуру папок
@@ -30,7 +30,29 @@ import { LESSON_ONLY } from "../core/trainingLesson.js";
 export const trainingRouter = Router();
 trainingRouter.use(requireAuth);
 
-const TRAIN_DIR = path.join(UPLOAD_DIR, "..", "training");
+/* ⚙️ Тека файлів навчання. `TRAINING_DIR` — лише для гейтів на тимчасовій базі (`#738`), щоб заміна файлу в тесті
+   не писала в справжню теку стенда; бойовий процес цієї змінної не має. */
+const TRAIN_DIR = process.env.TRAINING_DIR ?? path.join(UPLOAD_DIR, "..", "training");
+
+/**
+ * 📎 ЗБЕРЕГТИ ФАЙЛ З ФОРМИ — ОДНЕ МІСЦЕ для «додати» й «замінити» (28.09.2026): тип і розмір перевіряє ядро
+ * (`core/trainingUpload.ts`) ДО запису на диск, тож заміна не може прийняти те, що не прийняло б створення.
+ */
+async function storeUpload(b: Record<string, unknown>, fallbackName: string):
+  Promise<{ ok: true; storedName: string; mime: string; sizeBytes: number } | { ok: false; status: number; error: string }> {
+  const dataBase64 = b.dataBase64;
+  if (!dataBase64 || typeof dataBase64 !== "string") return { ok: false, status: 400, error: "Файл відсутній" };
+  const base64 = dataBase64.includes(",") ? dataBase64.split(",")[1] : dataBase64;
+  const buffer = Buffer.from(base64, "base64");
+  const display = String(b.filename ?? fallbackName).trim() || "файл";
+  const verdict = checkUpload(b.mime ? String(b.mime) : mimeFromName(display), buffer.length);
+  if (!verdict.ok) return { ok: false, status: verdict.status, error: verdict.reason };
+  const ext = path.extname(display).slice(0, 12).replace(/[^.\w]/g, "");
+  const storedName = `${randomUUID()}${ext}`;
+  await mkdir(TRAIN_DIR, { recursive: true });
+  await writeFile(path.join(TRAIN_DIR, storedName), buffer);
+  return { ok: true, storedName, mime: verdict.mime, sizeBytes: buffer.length };
+}
 // 📎 Стеля й білий список — у `core/trainingUpload.ts`, одним числом на сервер і фронт (#716).
 /**
  * ✍️ ХТО РЕДАГУЄ НАВЧАННЯ — ПРАВО, А НЕ РОЛЬ (ТЗ 14.09.2026).
@@ -189,6 +211,18 @@ trainingRouter.post("/material", canEditTraining, async (req, res) => {
   if (!title) return res.status(400).json({ error: "Назва матеріалу обовʼязкова" });
   if (!KINDS.has(kind)) return res.status(400).json({ error: "Невідомий тип матеріалу" });
 
+  /* ✏️ ЧАСТИНА УРОКУ (редактор, 28.09.2026): `lessonId` + `role`. Тема частини — завжди тема уроку, а не та,
+     що прийшла з форми; правило — `partVerdict` у ядрі (`#737`). Перевірка ДО запису файлу на диск. */
+  let lessonId: number | null = null, partRole: string | null = null, targetFolder = folderId;
+  if (b.lessonId != null) {
+    const lr = await pool.query<{ id: number; folder_id: number | null; lesson_id: number | null }>(
+      `SELECT id, folder_id, lesson_id FROM training_materials WHERE id = $1`, [Number(b.lessonId)]);
+    const l = lr.rows[0];
+    const v = partVerdict(l ? { id: l.id, folderId: l.folder_id, lessonId: l.lesson_id } : null, b.role);
+    if (!v.ok) return res.status(v.status).json({ error: v.reason });
+    lessonId = l!.id; partRole = v.role; targetFolder = v.folderId;
+  }
+
   let url: string | null = null, storedName: string | null = null, mime: string | null = null;
   let sizeBytes: number | null = null, content: string | null = null;
 
@@ -199,33 +233,22 @@ trainingRouter.post("/material", canEditTraining, async (req, res) => {
     content = String(b.content ?? "").trim();
     if (!content) return res.status(400).json({ error: "Текст матеріалу обовʼязковий" });
   } else if (kind === "file") {
-    const dataBase64 = b.dataBase64;
-    if (!dataBase64 || typeof dataBase64 !== "string") return res.status(400).json({ error: "Файл відсутній" });
-    const base64 = dataBase64.includes(",") ? dataBase64.split(",")[1] : dataBase64;
-    const buffer = Buffer.from(base64, "base64");
-    const display = String(b.filename ?? title).trim() || "файл";
-    /* 📎 Тип і розмір — ОДНІЄЮ перевіркою ядра, ДО запису на диск. Тип виводимо з імені, коли
-       браузер промовчав: інакше «невідомий» і «заборонений» злились би в одну відмову. */
-    const verdict = checkUpload(b.mime ? String(b.mime) : mimeFromName(display), buffer.length);
-    if (!verdict.ok) return res.status(verdict.status).json({ error: verdict.reason });
-    const ext = path.extname(display).slice(0, 12).replace(/[^.\w]/g, "");
-    storedName = `${randomUUID()}${ext}`;
-    await mkdir(TRAIN_DIR, { recursive: true });
-    await writeFile(path.join(TRAIN_DIR, storedName), buffer);
-    mime = verdict.mime;
-    sizeBytes = buffer.length;
+    /* 📎 Тип і розмір — ОДНІЄЮ перевіркою ядра, ДО запису на диск (`storeUpload`, спільне з заміною файлу). */
+    const up = await storeUpload(b, title);
+    if (!up.ok) return res.status(up.status).json({ error: up.error });
+    storedName = up.storedName; mime = up.mime; sizeBytes = up.sizeBytes;
   }
   content = content ?? (b.content ? String(b.content).trim() : null); // опис для не-текстових
 
   const pos = await pool.query<{ n: number }>(
     `SELECT COALESCE(MAX(position), 0) + 1 AS n FROM training_materials WHERE folder_id IS NOT DISTINCT FROM $1`,
-    [folderId]
+    [targetFolder]
   );
   const r = await pool.query(
-    `INSERT INTO training_materials (folder_id, title, kind, url, stored_name, mime, size_bytes, content, position, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-     RETURNING id, folder_id, title, kind, url, mime, size_bytes, content, position, created_at`,
-    [folderId, title, kind, url, storedName, mime, sizeBytes, content, pos.rows[0].n, req.auth!.userId]
+    `INSERT INTO training_materials (folder_id, title, kind, url, stored_name, mime, size_bytes, content, position, created_by, lesson_id, part_role)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     RETURNING id, folder_id, title, kind, url, mime, size_bytes, content, position, created_at, lesson_id, part_role`,
+    [targetFolder, title, kind, url, storedName, mime, sizeBytes, content, pos.rows[0].n, req.auth!.userId, lessonId, partRole]
   );
   res.json(r.rows[0]);
 });
@@ -242,8 +265,22 @@ trainingRouter.patch("/material/:id", canEditTraining, async (req, res) => {
   }
   if (b.content !== undefined) { params.push(b.content ? String(b.content) : null); sets.push(`content = $${params.length}`); }
   if (b.url !== undefined) { params.push(b.url ? String(b.url) : null); sets.push(`url = $${params.length}`); }
-  if (b.folderId !== undefined) { params.push(b.folderId != null ? Number(b.folderId) : null); sets.push(`folder_id = $${params.length}`); }
+  /* ✏️ Урок чи частина — від цього залежить, що можна міняти (повний редактор, 28.09.2026). */
+  const self = await pool.query<{ lesson_id: number | null }>(`SELECT lesson_id FROM training_materials WHERE id = $1`, [Number(req.params.id)]);
+  if (!self.rows[0]) return res.status(404).json({ error: "Матеріал не знайдено" });
+  const isPart = self.rows[0].lesson_id != null;
+  const newFolder = b.folderId !== undefined ? (b.folderId != null ? Number(b.folderId) : null) : undefined;
+  if (newFolder !== undefined) {
+    /* 📘 Частина живе в темі свого уроку; окремо її не переносять — лише разом з уроком (нижче). */
+    if (isPart) return res.status(400).json({ error: "Частину переносять разом з уроком — перенесіть сам урок" });
+    params.push(newFolder); sets.push(`folder_id = $${params.length}`);
+  }
   if (b.position !== undefined) { params.push(Number(b.position)); sets.push(`position = $${params.length}`); }
+  if (b.role !== undefined) {
+    if (!isPart) return res.status(400).json({ error: "Роль є лише в частини уроку" });
+    if (!PART_ROLES.includes(b.role as PartRole)) return res.status(400).json({ error: "Роль частини: main або attachment" });
+    params.push(b.role); sets.push(`part_role = $${params.length}`);
+  }
   /* 🧩 «Обовʼязковий крок» (редактор навчання). Необовʼязковий не тримає замок і не входить
      у знаменник відсотка — правило одне, у `core/trainingProgress.ts`. */
   if (b.required !== undefined) {
@@ -253,8 +290,74 @@ trainingRouter.patch("/material/:id", canEditTraining, async (req, res) => {
   }
   if (!sets.length) return res.status(400).json({ error: "Нема що оновлювати" });
   params.push(Number(req.params.id));
-  const r = await pool.query(`UPDATE training_materials SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING id`, params);
-  if (!r.rowCount) return res.status(404).json({ error: "Матеріал не знайдено" });
+  /* 📘 Урок і його частини переїжджають ОДНІЄЮ транзакцією: інакше між двома запитами частини жили б у старій
+     темі, а урок — у новій, і обрив посередині лишив би їх там назавжди (`#738`). */
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    const r = await c.query(`UPDATE training_materials SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING id`, params);
+    if (newFolder !== undefined) await c.query(`UPDATE training_materials SET folder_id = $1 WHERE lesson_id = $2`, [newFolder, Number(req.params.id)]);
+    await c.query("COMMIT");
+    if (!r.rowCount) return res.status(404).json({ error: "Матеріал не знайдено" });
+  } catch (e) {
+    await c.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    c.release();
+  }
+  res.json({ ok: true });
+});
+
+/**
+ * 📎 ЗАМІНИТИ ФАЙЛ (повний редактор, 28.09.2026, Роман: «зміна пдф, та зміна інших файлів»). Рядок, його id,
+ * прогрес людей і місце в курсі лишаються — міняються лише байти, тип і розмір. Перевірка та сама, що при
+ * додаванні (`storeUpload`). Старий файл стирається ПІСЛЯ запису нового рядка: впаде запис — лишиться старий.
+ */
+trainingRouter.put("/material/:id/file", canEditTraining, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Некоректний id" });
+  const cur = await pool.query<{ kind: string; stored_name: string | null; title: string }>(
+    `SELECT kind, stored_name, title FROM training_materials WHERE id = $1`, [id]);
+  const m = cur.rows[0];
+  if (!m) return res.status(404).json({ error: "Матеріал не знайдено" });
+  if (m.kind !== "file") return res.status(400).json({ error: "Замінити файл можна лише у файлового матеріалу" });
+  const up = await storeUpload(req.body ?? {}, m.title);
+  if (!up.ok) return res.status(up.status).json({ error: up.error });
+  try {
+    await pool.query(`UPDATE training_materials SET stored_name = $1, mime = $2, size_bytes = $3 WHERE id = $4`,
+      [up.storedName, up.mime, up.sizeBytes, id]);
+  } catch (e) {
+    await unlink(path.join(TRAIN_DIR, up.storedName)).catch(() => {});
+    throw e;
+  }
+  if (m.stored_name) await unlink(path.join(TRAIN_DIR, m.stored_name)).catch(() => {});
+  res.json({ ok: true, mime: up.mime, sizeBytes: up.sizeBytes });
+});
+
+/**
+ * ↕️ ПОРЯДОК (повний редактор, 28.09.2026). `table: "materials"` — уроки однієї теми або частини одного уроку;
+ * `"folders"` — теми одного курсу (або підтеми однієї теми). Сусідів визначає ПЕРШИЙ id, а перелік мусить
+ * збігтися з ними повністю (`reorderVerdict`). Номери — 1..n одним запитом, щоб рівних не лишилось.
+ */
+trainingRouter.post("/reorder", canEditTraining, async (req, res) => {
+  const table = req.body?.table;
+  const ids = req.body?.ids;
+  if (table !== "materials" && table !== "folders") return res.status(400).json({ error: "table: materials або folders" });
+  if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: "ids: непорожній масив" });
+  const first = Number(ids[0]);
+  const sib = table === "materials"
+    ? await pool.query<{ id: number }>(
+      `SELECT s.id FROM training_materials s JOIN training_materials f ON f.id = $1
+        WHERE s.folder_id IS NOT DISTINCT FROM f.folder_id AND s.lesson_id IS NOT DISTINCT FROM f.lesson_id`, [first])
+    : await pool.query<{ id: number }>(
+      `SELECT s.id FROM training_folders s JOIN training_folders f ON f.id = $1
+        WHERE s.parent_id IS NOT DISTINCT FROM f.parent_id AND s.course_id IS NOT DISTINCT FROM f.course_id`, [first]);
+  if (!sib.rows.length) return res.status(404).json({ error: "Не знайдено" });
+  const v = reorderVerdict(sib.rows.map((r) => r.id), ids);
+  if (!v.ok) return res.status(v.status).json({ error: v.reason });
+  const tbl = table === "materials" ? "training_materials" : "training_folders";
+  await pool.query(
+    `UPDATE ${tbl} t SET position = o.pos FROM unnest($1::int[]) WITH ORDINALITY AS o(id, pos) WHERE t.id = o.id`, [v.ids]);
   res.json({ ok: true });
 });
 
@@ -449,7 +552,9 @@ trainingRouter.get("/material/:id", async (req, res) => {
     [id, isAdminScope(req.auth!)]);
   const m = r.rows[0];
   if (!m) return res.status(404).json({ error: "Матеріал не знайдено" });
-  const blocked = await lockedReason(uid, id);
+  /* ✏️ Редактор відкриває будь-який урок (рішення Романа: «знімати замок для редакторів»): інакше він не міг би
+     виправити третій урок, не пройшовши перших двох. Кандидату й менеджеру замок лишається (`#737b`). */
+  const blocked = roleHasPerm(req.auth!.roleKey, "manage_training") ? null : await lockedReason(uid, id);
   if (blocked) return res.status(423).json({ error: "Крок ще закритий", blockedBy: blocked });
   const p = await pool.query<{ status: string; finished_at: string | null }>(
     `SELECT status, finished_at FROM training_progress WHERE user_id = $1 AND material_id = $2`, [uid, id]);
