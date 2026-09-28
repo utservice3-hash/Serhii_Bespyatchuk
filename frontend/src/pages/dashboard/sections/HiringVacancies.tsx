@@ -171,7 +171,7 @@ export function HiringVacancies({ meta, toast, onOpenCandidates, onChanged }: {
       {open && <VacancyDrawer v={open} statusLabel={statusLabel} onClose={() => setOpenId(null)} onCandidates={() => onOpenCandidates(open.id)} />}
       <datalist id="hr-vac-resp">{meta.responsibles.map((x) => <option key={x} value={x} />)}</datalist>
       {linking && wu && <WorkuaLinkDialog v={linking} wu={wu} onClose={() => setLinking(null)}
-        onDone={(msg) => { setLinking(null); toast(msg); loadWu(); }} />}
+        onDone={(msg) => { setLinking(null); toast(msg); loadWu(); load(); onChanged(); }} />}
       {editing && <EditVacancy v={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); toast("Вакансію змінено"); load(); onChanged(); }} />}
       {closing && <CloseVacancy meta={meta} v={closing} onClose={() => setClosing(null)} onDone={() => { setClosing(null); toast(`«${closing.title}» закрито`); load(); onChanged(); }} />}
       {adding && <AddVacancy meta={meta} onClose={() => setAdding(false)} onDone={() => { setAdding(false); toast("Вакансію відкрито"); load(); onChanged(); }} />}
@@ -346,8 +346,11 @@ function WorkuaLinkDialog({ v, wu, onClose, onDone }: { v: HiringVacancyRow; wu:
   const taken = new Map(wu.summary.links.filter((l) => l.vacancyId !== v.id).map((l) => [l.jobId, l.vacancyId]));
   const save = async () => {
     try {
-      await setVacancyWorkua(v.id, job ? Number(job) : null);
-      onDone(job ? `«${v.title}» привʼязано до work.ua` : `«${v.title}» відвʼязано від work.ua`);
+      const r = await setVacancyWorkua(v.id, job ? Number(job) : null);
+      // Відгуки, що прийшли до привʼязки, отримують вакансію тут же (#808) — кажемо, скільким.
+      const more = [r.attached ? `вакансію поставлено ${r.attached} кандидатам, що відгукнулись раніше` : "",
+        r.kept ? `${r.kept} вже мали свою вакансію — не чіпали` : ""].filter(Boolean).join("; ");
+      onDone(job ? `«${v.title}» привʼязано до work.ua${more ? ` · ${more}` : ""}` : `«${v.title}» відвʼязано від work.ua`);
     } catch (e) { setErr(hiringError(e)); }
   };
   return createPortal(

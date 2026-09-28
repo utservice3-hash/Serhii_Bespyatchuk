@@ -356,8 +356,7 @@ hiringRouter.put("/vacancies/:id/workua", async (req, res) => {
     onlyEdit(req);
     const jobId = req.body?.jobId == null || req.body.jobId === "" ? null : Number(req.body.jobId);
     if (jobId != null && (!Number.isInteger(jobId) || jobId <= 0)) throw new WorkuaError(400, "Оберіть вакансію work.ua");
-    await tx((db) => setVacancyWorkuaJob(db, idOf(req), jobId));
-    res.json({ ok: true });
+    res.json({ ok: true, ...(await tx((db) => setVacancyWorkuaJob(db, idOf(req), jobId))) });
   } catch (e) { fail(res, e); }
 });
 
