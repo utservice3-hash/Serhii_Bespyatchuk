@@ -604,6 +604,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/dashboard/client-next-step/done", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  // 📌 Обґрунтування плану (ТЗ 22.09, п.3.3; 28.09.2026): та сама межа — `canSeeClient` першим
+  // оператором, менеджер і тімлід ДОЗВОЛЕНІ для своїх клієнтів, у deny лише hr (вкладки немає).
+  { method: "POST", path: "/api/dashboard/client-plan-basis", cls: "deny-only",
+    allow: [], deny: ["hr"] },
+  { method: "POST", path: "/api/dashboard/client-plan-basis/clear", cls: "deny-only",
+    allow: [], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/client-contacts?clientKey=zzz", cls: "GET",
     allow: [], deny: ["hr"] },
   // Менеджер і тімлід ДОДАЮТЬ контакти по своїх клієнтах — це і є фіча (у Viber/Telegram

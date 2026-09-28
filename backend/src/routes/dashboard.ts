@@ -12,7 +12,7 @@ import { pool } from "../db/pool.js";
 import { config } from "../config.js";
 import { requireAuth, requirePerm, requireRole } from "../auth/middleware.js";
 import { roleHasTab, isAdminScope, isAdminOrLead, roleHasPerm } from "../auth/rbac.js";
-import { assignAllowed, assignDenyReason, mergePairAllowed, mergeDenyReason, mergeSourceOf, revokeAllowed, revokeDenyReason,
+import { assignAllowed, assignDenyReason, assignTeamIdFor, mergePairAllowed, mergeDenyReason, mergeSourceOf, revokeAllowed, revokeDenyReason,
          type MergePairScope } from "../auth/mergeScope.js";
 import type { AuthPayload } from "../auth/auth.js";
 import { dayItems, isDayItemKind, DAY_ITEM_KINDS } from "../core/dayItems.js";
@@ -106,7 +106,9 @@ import {
 import { canRequestLimitFor, canAssignTaskToOthers } from "../auth/taskAssignScope.js";
 import { activeManagerSql } from "../core/activeManager.js";
 import * as managerState from "../core/managerState.js";
-import * as clientCallsYear from "../core/clientCallsYear.js";
+import * as clientCalls from "../core/clientCalls.js";
+import * as planBasis from "../core/planBasis.js";
+import * as clientTabs from "../core/clientTabs.js";
 import * as clientAliasNames from "../core/clientAliasNames.js";
 import * as categoryRules from "../core/categoryRules.js";
 import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf, kyivToday, isRealDate } from "../core/dates.js";
@@ -5931,10 +5933,12 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   const stepByKey = new Map(stepRes.rows.map((r) => [r.client_key, r]));
   const phonesByKey = new Map(phoneRes.rows.map((r) => [r.client_key, Number(r.n)]));
   const todayKyiv = (await pool.query<{ d: string }>(`SELECT to_char(now() AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS d`)).rows[0].d;
-  // 📞 Дзвінки за поточний рік — ТЕ САМЕ ядро, що рядок «розмов N із M» у картці (задача 4310,
-  // п.1.4). До 24.09.2026 тут не рахувалось нічого, а рядок показував «📞 0» текстом.
-  const callsYearByKey = await clientCallsYear.callsByYear(clientKeys);
-  const callsYearNow = Number(todayKyiv.slice(0, 4));
+  // 📞 Дзвінки за ОБРАНИЙ місяць (ТЗ 22.09, п.3.3) і 📌 обґрунтування плану цього місяця (там само) —
+  // обидва ядром, по тих самих ключах.
+  const [callsMonthByKey, basisByKey] = await Promise.all([
+    clientCalls.callsByMonth(clientKeys, monthStr),
+    planBasis.basisForMonth(clientKeys, `${monthStr}-01`),
+  ]);
   // 🔗 Хто приєднаний до кожного рядка (ТЗ 22.09, п.2.3) — лише назви, у гроші не входить.
   const aliasByKey = await clientAliasNames.aliasNamesFor(clientKeys);
   // 🛑 СТОП ЧЕРЕЗ ДЕБІТОРКУ (ТЗ 3989, п.6) — по тих самих ключах: є прострочений рядок дебіторки.
@@ -6158,6 +6162,10 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       seasonalNote: reactByKey.get(c.client_key)?.seasonalNote ?? null,
       lastTalk: reactByKey.get(c.client_key)?.lastTalk ?? null,
       lastTalkDays: reactByKey.get(c.client_key)?.lastTalkDays ?? null,
+      // 🎧 ТА САМА розмова, що `lastTalk` — з одного рядка ядра (п.3.3: «клікабельний, щоб одразу послухати»).
+      lastTalkRecording: reactByKey.get(c.client_key)?.lastTalkRecording ?? null,
+      lastTalkSec: reactByKey.get(c.client_key)?.lastTalkSec ?? null,
+      lastTalkBy: reactByKey.get(c.client_key)?.lastTalkBy ?? null,
       attempts: reactByKey.get(c.client_key)?.attempts ?? 0,
       // 📱 Останній контакт = свіжіше з розмови Ringostat і ручного запису; джерело названо.
       lastContact: lastContactOf(reactByKey.get(c.client_key)?.lastTalk ?? null,
@@ -6191,6 +6199,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       lifetimeRevenue: Number(c.revenue),
       since: c.first_paid ? c.first_paid.slice(0, 7) : null,   // YYYY-MM
       lastOrderDays: dayOf(c.last_paid),
+      // 🗂 Вкладка й порядок «Всі» (ТЗ 22.09, п.3.1): одне правило на сервері — `core/clientTabs.ts`.
+      tabGroup: clientTabs.clientTabGroup(stateOf(c.client_key), dayOf(c.last_paid)),
       history: histByKey.get(c.client_key) ?? histMonths.map(() => 0),
       plan,
       planStatus: p?.status ?? "none",
@@ -6214,7 +6224,9 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       pinned: c.pinned_manager_id != null,
       comments: commentsByKey.get(c.client_key) ?? 0,
       // 📞 Розмов і всіх дзвінків за поточний рік — рівно рядок картки за цей рік.
-      callsYear: clientCallsYear.yearCell(callsYearByKey.get(c.client_key), callsYearNow),
+      // 📞 Розмов і всіх дзвінків за обраний місяць (п.3.3); 📌 закріплене обґрунтування плану.
+      callsMonth: clientCalls.monthCell(callsMonthByKey.get(c.client_key), monthStr),
+      planBasis: basisByKey.get(c.client_key) ?? null,
       // 🔗 Приєднані записи CRM (активні обʼєднання) — показуються під назвою «обʼєднано: …».
       merged: aliasByKey.get(c.client_key) ?? [],
     };
@@ -6280,6 +6292,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     closeReasons: reactivationRules.CLOSE_REASONS,
     // ⓘ Правила категорій готовим текстом із констант ядра (ТЗ 22.09, п.2.4) — фронт їх не складає.
     categoryRules: categoryRules.categoryRulesPayload(),
+    // 🗂 Порядок груп у «Всі» (ТЗ 22.09, п.3.1) — одна копія, у ядрі.
+    tabGroupRank: clientTabs.TAB_GROUP_RANK,
     thresholds: {
       sleepingDays: reactivationRules.SEGMENT_SLEEPING_DAYS,
       lostDays: reactivationRules.LOST_DAYS,
@@ -6757,6 +6771,39 @@ dashboardRouter.post("/client-next-step/done", async (req, res) => {
   res.json({ ok: true, closed: r.rowCount ?? 0 });
 });
 
+/**
+ * 📌 ОБҐРУНТУВАННЯ ПЛАНУ (ТЗ Юлі 22.09, п.3.3; задача 4312) — закріпити дзвінок АБО скрин.
+ * Межа — `canSeeClient` ПЕРШИМ оператором (403 = спрацював гейт, як у сусідніх роутах клієнта);
+ * далі тіло, далі перевірка, що дзвінок/скрин належить саме цьому клієнту.
+ */
+dashboardRouter.post("/client-plan-basis", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey || !(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
+  const month = planBasis.basisMonth(req.body?.month);
+  if (!month) return res.status(400).json({ error: "month: YYYY-MM" });
+  const t = planBasis.basisTarget(req.body ?? {});
+  if ("error" in t) return res.status(400).json({ error: t.error });
+  const callId = t.kind === "call" ? t.callId : null;
+  const contactId = t.kind === "contact" ? t.contactId : null;
+  const own = await pool.query<{ ok: boolean }>(planBasis.BASIS_BELONGS_SQL, [clientKey, callId, contactId]);
+  if (!own.rows[0]?.ok) return res.status(400).json({ error: t.kind === "call" ? "Цей дзвінок не цього клієнта" : "Це не скрин цього клієнта" });
+  await pool.query(planBasis.BASIS_UPSERT_SQL, [clientKey, month, callId, contactId, auth.userId]);
+  const b = (await planBasis.basisForMonth([clientKey], month)).get(clientKey) ?? null;
+  res.json({ ok: true, planBasis: b });
+});
+
+/** Зняти обґрунтування — парна дія до закріплення (дія з інтерфейсу скасовна тим самим інтерфейсом). */
+dashboardRouter.post("/client-plan-basis/clear", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey || !(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
+  const month = planBasis.basisMonth(req.body?.month);
+  if (!month) return res.status(400).json({ error: "month: YYYY-MM" });
+  await pool.query(planBasis.BASIS_CLEAR_SQL, [clientKey, month]);
+  res.json({ ok: true, planBasis: null });
+});
+
 /** Список контактів клієнта — тим, хто бачить клієнта. */
 dashboardRouter.get("/client-contacts", async (req, res) => {
   const clientKey = String(req.query.clientKey ?? "").trim();
@@ -6958,14 +7005,15 @@ dashboardRouter.get("/client-card", async (req, res) => {
    * 🟢 РОЗМОВА vs СПРОБА: `billsec > 0` — розмова, решта — недодзвін. Це два різні
    * факти (рішення власника 04.08.2026), і зливати їх в одне число не можна.
    */
-  // 📞 Той самий підрахунок, що число «📞» у рядку списку (задача 4310, п.1.4) —
-  // спільне ядро `core/clientCallsYear.ts`, а не власний SQL картки.
-  const cardCallsByYear = (await clientCallsYear.callsByYear([clientKey])).get(clientKey) ?? [];
+  // 📌 Обґрунтування плану за місяць екрана (п.3.3). Картку відкривають і з інших екранів
+  // (пропущені дзвінки) — тоді місяць поточний.
+  const cardMonth = planBasis.basisMonth(req.query.month) ?? `${today.slice(0, 7)}-01`;
+  const cardBasis = (await planBasis.basisForMonth([clientKey], cardMonth)).get(clientKey) ?? null;
   const sinceRes = await pool.query<{ since: string | null }>(
     "SELECT MIN(calldate)::date::text AS since FROM ringostat_calls");
   const CALLS_LIMIT = 300;
   const callListRes = await pool.query<{
-    calldate: string; call_type: string; billsec: number; disposition: string | null; manager: string | null;
+    uniqueid: string; calldate: string; call_type: string; billsec: number; disposition: string | null; manager: string | null;
     recording: string | null;
   }>(
     /* 🎧 ЛИШЕ ВІДПОВІДАНІ, І ЦЕ РІШЕННЯ ВЛАСНИКА 07.09.2026 («показуй лише дзвінки, на
@@ -6975,7 +7023,9 @@ dashboardRouter.get("/client-card", async (req, res) => {
        («розмов N із M»), тож зникнення недодзвонів із переліку не читається як втрата.
        📐 І друге заміряне число, заради якого це безпечно: відповіданих БЕЗ запису — НУЛЬ.
        Отже кожен рядок переліку має що прослухати, а не кнопку в нікуди. */
-    `SELECT rc.calldate::text, rc.call_type, rc.billsec, rc.disposition, rc.recording,
+    /* 🕐 ЧАС — ЗА КИЄВОМ (28.09.2026): доти тут стояв `calldate::text` у UTC, і розмова 15:17 у переліку
+       показувалась як 12:17 поруч із закріпленим обґрунтуванням, де той самий дзвінок — 15:17. Гейт #816. */
+    `SELECT rc.uniqueid, to_char(rc.calldate AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD HH24:MI') AS calldate, rc.call_type, rc.billsec, rc.disposition, rc.recording,
             COALESCE(m.name, rc.employee_fio) AS manager
        FROM ringostat_calls rc LEFT JOIN managers m ON m.id = rc.manager_id
       WHERE rc.client_key = $1 AND rc.billsec > 0
@@ -6999,10 +7049,14 @@ dashboardRouter.get("/client-card", async (req, res) => {
     months,
     monthsTotal: months.reduce((s2, m) => s2 + m.revenue, 0),
     contacts: (await pool.query(`${CONTACT_SELECT} WHERE c.client_key = $1 ORDER BY c.created_at DESC LIMIT 50`, [clientKey])).rows.map(shapeContact),
-    callsByYear: cardCallsByYear,
+    // 📌 Обґрунтування плану (п.3.3): місяць, поточне закріплення і право закріпити — те саме,
+    // що перегляд картки (`canSeeClient` уже пройдено вище).
+    basisMonth: cardMonth.slice(0, 7),
+    planBasis: cardBasis,
     // 🔗 Хто приєднаний до цього клієнта (ТЗ 22.09, п.2.3).
     merged: (await clientAliasNames.aliasNamesFor([clientKey])).get(clientKey) ?? [],
     calls: callListRes.rows.map((r) => ({
+      id: r.uniqueid,
       at: r.calldate, direction: r.call_type.includes("out") ? "out" : "in",
       billsec: r.billsec, answered: r.billsec > 0, disposition: r.disposition, manager: r.manager,
       recording: r.recording,
@@ -7067,6 +7121,8 @@ dashboardRouter.get("/client-card", async (req, res) => {
     archiveReasons: ARCHIVE_REASONS,
     // 👤 Передача: `merge_clients` між командами; тімлід — у своїй (14.09.2026, кламп на сервері).
     canAssign: roleHasPerm(auth.roleKey, "merge_clients") || auth.role === "team_lead",
+    // 👤 Кого показати у формі передачі (ТЗ 22.09, п.3.2): тімліду — лише свою команду.
+    assignTeamId: assignTeamIdFor({ canAll: roleHasPerm(auth.roleKey, "merge_clients"), role: auth.role, teamId: auth.teamId ?? null }),
     canMerge: roleHasPerm(auth.roleKey, "merge_clients") || auth.role === "team_lead",
     mergeScope: roleHasPerm(auth.roleKey, "merge_clients") ? "all" : "team",
   });

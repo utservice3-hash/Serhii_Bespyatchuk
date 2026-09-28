@@ -71,6 +71,8 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/dashboard/client-card"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-contacts"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-next-step"), tabs: ["loyalty"] },
+    // 📌 Обґрунтування плану (ТЗ 22.09, п.3.3) — окремий роут: `pre("…/client-plan")` сусіда через дефіс НЕ накриває.
+    { test: pre("/api/dashboard/client-plan-basis"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-search"), tabs: ["loyalty"] },
     // 🔴 ДОДАНО 04.08.2026, КОЛИ `requirePerm` ПІШОВ. Обʼєднання відкрилось тімліду
     // (у межах команди), тож єдиною межею роутів лишився кламп усередині — а це
