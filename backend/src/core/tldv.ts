@@ -62,6 +62,13 @@ export function matchMeetings(meetings: TldvMeeting[], rows: SlotRow[]): Meeting
   });
 }
 
+/** Будь-який розбірний час → ISO; нерозбірний — null (невідоме лишається невідомим, а не «зараз»). */
+export function isoOf(v: unknown): string | null {
+  if (typeof v !== "string" && typeof v !== "number") return null;
+  const t = new Date(v).getTime();
+  return Number.isNaN(t) ? null : new Date(t).toISOString();
+}
+
 /** Відповідь tl;dv → наші поля. Чужий формат розбираємо в ОДНОМУ місці, щоб зміна поля не розповзлась. */
 export function parseMeetings(body: unknown): TldvMeeting[] {
   const list = (body as { results?: unknown[]; data?: unknown[] })?.results ?? (body as { data?: unknown[] })?.data ?? [];
@@ -73,7 +80,9 @@ export function parseMeetings(body: unknown): TldvMeeting[] {
     return {
       id: String(m.id ?? ""),
       name: typeof m.name === "string" ? m.name : null,
-      happenedAt: typeof m.happenedAt === "string" ? m.happenedAt : null,
+      // ⚠️ tl;dv віддає НЕ ISO, а JS-рядок «Mon Sep 28 2026 12:00:00 GMT+0000 (Coordinated Universal Time)»
+      // (заміряно на проді 28.09.2026: перший прогін упав на вставці в TIMESTAMPTZ). Нормалізуємо тут, один раз.
+      happenedAt: isoOf(m.happenedAt),
       duration: typeof m.duration === "number" ? Math.round(m.duration / 60) : null,
       url: typeof m.url === "string" ? m.url : m.id ? `https://app.tldv.io/meetings/${String(m.id)}` : null,
       organizer: typeof org === "string" ? org : (org?.email ?? org?.name ?? null),
