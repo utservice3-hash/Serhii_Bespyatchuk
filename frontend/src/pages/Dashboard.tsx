@@ -62,6 +62,7 @@ import SettingsSection from "./dashboard/sections/SettingsSection";
 import { LeadgenSection } from "./dashboard/sections/LeadgenSection";
 import { MissedCallsSection } from "./dashboard/sections/MissedCallsSection";
 import { HiringSection } from "./dashboard/sections/HiringSection";
+import { BusinessAssistantSection } from "./dashboard/sections/BusinessAssistantSection";
 import { NominationsSection } from "./dashboard/sections/NominationsSection";
 import BankSection from "./dashboard/sections/BankSection";
 import { emptyTaskForm } from "./dashboard/taskForm";
@@ -1083,6 +1084,14 @@ export function Dashboard() {
          * Доступ усередині вирішує сервер (`/api/hiring/meta` → access), тут лише рендер.
          */
         <HiringSection />
+      )}
+
+      {section === "ba" && (
+        /**
+         * 🗂 Бізнес-асистент, прохід 1 (задача 4314, 28.09.2026): Претензії й Судовий реєстр.
+         * СТАТИЧНИЙ імпорт свідомо — гейт #225 (один чанк). Доступ вирішує сервер (вкладка `ba`).
+         */
+        <BusinessAssistantSection />
       )}
 
       {section === "missed-calls" && (

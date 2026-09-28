@@ -155,6 +155,11 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/training"), tabs: ["training"] },
     // 🧑‍💼 Найм (17.09.2026). Вкладка — ПЕРША межа; друга, всередині, — `hiringAccess` у роуті.
     { test: pre("/api/hiring"), tabs: ["hiring"] },
+    // 🗂 Бізнес-асистент (задача 4314). Вкладка — перша межа; друга — `onlyBa` у кожному обробнику.
+    { test: pre("/api/ba"), tabs: ["ba"] },
+    // Кнопка «Проблемний клієнт» живе в ДЕБІТОРЦІ: вкладка `receivables`, а дію гейтить право
+    // `create_claim` — фінансист розділу не бачить, але кнопку натискає.
+    { test: pre("/api/receivables-claims"), tabs: ["receivables"] },
     { test: pre("/api/nominations"), tabs: ["nominations"] },
     // 🔐 Сейф доступів живе в «Наймі» → «Доступи». Друга межа — право `view_employee_secrets` на роутері.
     { test: pre("/api/secrets"), tabs: ["hiring"] },
