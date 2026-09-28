@@ -151,7 +151,7 @@ function levelTotals(rows: ClientPlanRow[]) {
 /**
  * Скільки перших колонок займає назва рівня: Клієнт · Останнє зам. · Контакт · Задача.
  * Далі підсумки стають РІВНО під «План» і «Факт». До блоку 3 тут стояло 3, і план команди
- * опинявся під колонкою «Контакт» (гейт #771 тепер рахує й цей рядок).
+ * опинявся під колонкою «Контакт» (гейт #811 тепер рахує й цей рядок).
  */
 const GROUP_LEAD_COLS = 4;
 
@@ -306,7 +306,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
   /** Лічильники беруться з ТИХ САМИХ рядків, що й список, — інакше підпис розійдеться з ним. */
   const byState = data.clients.reduce((a, c) => { a[c.state] = (a[c.state] ?? 0) + 1; return a; },
     {} as Record<string, number>);
-  /** Лічильники вкладок — з усього ростеру: «Постійні» + «Реактивація» == «Всі» (гейт #770b). */
+  /** Лічильники вкладок — з усього ростеру: «Постійні» + «Реактивація» == «Всі» (гейт #810b). */
   const tabCounts = {
     all: data.clients.length,
     regular: data.clients.filter((c) => c.tabGroup !== "react").length,
