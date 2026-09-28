@@ -105,3 +105,81 @@ img.tr-lsn-media { background: transparent; }
 .tr-att-size { color: var(--text-muted); flex: none; }
 .tr-att-dl { margin-left: auto; display: inline-flex; flex: none; }
 .tr-att-err { color: var(--danger); font-size: 13px; }
+
+/* 🎓 Будова Sereda (заміряно 28.09): курс і урок — дві сторінки; тема 72 px, назва теми 14/600, кільце 40 px,
+   бічна панель уроку 320 px. Кольори — токени дашборда: червоний бренду замість синього Sereda. */
+.lr-head { border: 1px solid var(--border); border-radius: 16px; background: var(--card-bg); padding: 26px 28px 18px; display: grid; gap: 16px; margin-bottom: 22px; }
+.lr-head-badge { display: flex; gap: 6px; flex-wrap: wrap; }
+.lr-title { margin: 0; font-size: 28px; line-height: 1.2; font-weight: 800; letter-spacing: -.01em; text-wrap: balance; }
+.lr-banner { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 16px 18px; border-radius: 14px; border: 1px solid var(--border); background: color-mix(in srgb, var(--brand) 4%, var(--card-bg)); }
+.lr-banner b { display: block; font-size: 16px; }
+.lr-banner > div > span { color: var(--text-muted); font-size: 13px; }
+.lr-banner.ok { background: color-mix(in srgb, var(--ok) 10%, var(--card-bg)); border-color: color-mix(in srgb, var(--ok) 30%, var(--border)); }
+.lr-banner.ok b, .lr-banner.ok > div > span { color: var(--ok); }
+.lr-banner-ic { width: 52px; height: 52px; border-radius: 12px; display: grid; place-items: center; background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); flex: none; }
+.lr-banner-grow { flex: 1 1 260px; display: grid; gap: 8px; }
+.lr-bar { display: block; height: 6px; border-radius: 99px; background: var(--border); overflow: hidden; }
+.lr-bar i { display: block; height: 100%; border-radius: 99px; background: var(--brand); }
+.lr-meta { display: flex; gap: 22px; flex-wrap: wrap; padding-top: 14px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 13px; }
+.lr-meta span { display: inline-flex; align-items: center; gap: 6px; }
+.lr-sect { font-size: 14px; font-weight: 600; color: var(--text-muted); margin: 0 2px 10px; }
+
+.lr-prog { display: grid; gap: 10px; }
+.lr-mod { border: 1px solid var(--border); border-radius: 14px; background: var(--card-bg); overflow: hidden; }
+.lr-mod-h { width: 100%; display: flex; align-items: center; gap: 14px; padding: 16px; min-height: 72px; background: transparent; border: 0; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.lr-mod-h:hover { background: var(--hover, rgba(0, 0, 0, .03)); }
+.lr-mod-h:focus-visible, .lr-les:focus-visible, .lr-next:focus-visible, .lr-backlink:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.lr-mod-ic { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; flex: none; background: color-mix(in srgb, var(--brand) 9%, transparent); color: var(--brand); }
+.lr-mod-ic.ok { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+.lr-mod-t { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.lr-mod-t b { font-size: 14px; font-weight: 600; }
+.lr-mod-t span { font-size: 12px; color: var(--text-muted); }
+.lr-ring { flex: none; }
+.lr-chev { flex: none; color: var(--text-muted); transition: transform .15s; }
+.lr-mod.open .lr-chev { transform: rotate(180deg); }
+.lr-lessons { border-top: 1px solid var(--border); padding: 6px 8px 8px; display: grid; gap: 2px; }
+.lr-empty { padding: 10px; color: var(--text-muted); font-size: 13px; }
+.lr-les { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 10px; border: 0; border-radius: 10px; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.lr-les:hover:not(:disabled) { background: var(--hover, rgba(0, 0, 0, .04)); }
+.lr-les.on { background: color-mix(in srgb, var(--brand) 9%, transparent); }
+.lr-les.on .lr-les-name { color: var(--brand); font-weight: 600; }
+.lr-les.lock { cursor: default; opacity: .55; }
+.lr-les-st { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; flex: none; color: var(--text-muted); }
+.lr-les-st.ok { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+.lr-les-kind { color: var(--text-muted); display: inline-flex; flex: none; }
+.lr-les-t { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.lr-les-name { font-size: 14px; overflow-wrap: anywhere; }
+.lr-les.done .lr-les-name { text-decoration: line-through; color: var(--text-muted); }
+.lr-les-sub { font-size: 12px; color: var(--text-muted); }
+.lr-les-req { flex: none; font-size: 12px; padding: 3px 10px; border-radius: 99px; border: 1px solid var(--border); color: var(--text-muted); }
+.lr-les-req.opt { border-style: dashed; }
+.lr-prog.side .lr-mod-h { min-height: 56px; padding: 12px; gap: 10px; }
+.lr-prog.side .lr-mod-ic { width: 34px; height: 34px; border-radius: 10px; }
+.lr-prog.side .lr-les { padding: 8px; gap: 8px; }
+.lr-prog.side .lr-les-name { font-size: 13px; }
+.lr-prog.side .lr-les-st { width: 22px; height: 22px; }
+
+.lr-page { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 32px; align-items: start; }
+.lr-main { min-width: 0; display: grid; gap: 18px; align-content: start; }
+.lr-crumbs { display: flex; align-items: center; gap: 12px; }
+.lr-backlink { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--text-muted); font: inherit; font-size: 14px; cursor: pointer; padding: 4px 0; }
+.lr-backlink:hover { color: var(--text); }
+.lr-chip { font-size: 12px; padding: 3px 10px; border-radius: 99px; background: var(--hover, rgba(0, 0, 0, .05)); color: var(--text-muted); }
+.lr-h1 { margin: 0; font-size: 28px; line-height: 1.2; font-weight: 800; letter-spacing: -.01em; text-wrap: balance; }
+.lr-done { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 16px; border-radius: 14px; border: 1px solid color-mix(in srgb, var(--ok) 30%, var(--border)); background: color-mix(in srgb, var(--ok) 8%, var(--card-bg)); }
+.lr-done-ic { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--ok); color: #fff; flex: none; }
+.lr-done b { display: block; color: var(--ok); }
+/* Лише текст плашки: значок — теж span, і спільне правило зафарбовувало галочку в колір кружка (спіймано на стенді 28.09). */
+.lr-done > div > span { font-size: 13px; color: var(--ok); opacity: .85; }
+.lr-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 6px; }
+.lr-side { position: sticky; top: 16px; display: grid; gap: 12px; }
+.lr-next { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 11px 14px; border-radius: 99px; border: 1px solid color-mix(in srgb, var(--brand) 25%, var(--border)); background: color-mix(in srgb, var(--brand) 8%, var(--card-bg)); color: var(--brand); font: inherit; font-weight: 600; cursor: pointer; }
+.lr-next:hover:not(:disabled) { background: color-mix(in srgb, var(--brand) 14%, var(--card-bg)); }
+.lr-next:disabled { opacity: .5; cursor: default; }
+.lr-sprog { border: 1px solid var(--border); border-radius: 14px; background: var(--card-bg); padding: 14px 16px; display: grid; gap: 10px; }
+.lr-sprog-row { display: flex; justify-content: space-between; font-size: 13px; }
+.lr-sprog-row span { color: var(--text-muted); }
+@media (max-width: 1000px) { .lr-page { grid-template-columns: minmax(0, 1fr); } .lr-side { position: static; } }
+@media (max-width: 560px) { .lr-title, .lr-h1 { font-size: 22px; } .lr-head { padding: 18px 16px 14px; } .lr-les-req { display: none; } }
+.lr-topbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.lr-topbar-ed { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

@@ -231,3 +231,82 @@ test("#730 УРОК: розкладка як у Sereda — дивитись, т�
   assert.equal(L.sizeLabel(5.2 * 1024 * 1024), "5.2 МБ");
   assert.equal(L.sizeLabel(null), "");
 });
+
+/**
+ * #732 — «ПЕРЕГЛЯД» ОБОХ ЕКРАНІВ У БУДОВІ SEREDA. Роман, 28.09: «воно не як sereda ai». Заміряно: у Sereda курс і
+ * урок — дві сторінки (шапка + «Програма курсу»; урок + бічна панель). Обидва екрани — викладача в «Перегляді» й
+ * кандидата — будуються з тих самих компонентів `LearnLayout`, а стан уроку НЕ рахують самі: він із сервера (`#708`).
+ * 🧨 Червоніє, якщо екран поверне стару склеєну сторінку або компоненти почнуть самі вирішувати, що замкнено.
+ */
+test("#732 УРОК: «Перегляд» викладача й екран кандидата — будова Sereda зі спільних компонентів", () => {
+  for (const f of ["pages/dashboard/sections/TrainingCourses.tsx", "pages/dashboard/sections/CandidateTraining.tsx"]) {
+    const src = FE(f);
+    for (const c of ["<CourseHeader ", "<ProgramAccordion ", "<LessonPage "])
+      assert.ok(src.includes(c), `🔴 ${f} не показує ${c.trim()} — сторінка знову не в будові Sereda`);
+  }
+  // Викладач: без вибраного уроку в «Перегляді» — сторінка курсу, а не перший крок.
+  const tc = FE("pages/dashboard/sections/TrainingCourses.tsx");
+  assert.match(tc, /if \(!edit\) \{[\s\S]*?\{reading \? \(\s*<ReadLesson /, "🔴 «Перегляд» не розводить сторінку курсу й сторінку уроку");
+  // Компоненти лише показують стан із сервера — власної арифметики замка немає.
+  const lay = FE("pages/dashboard/sections/LearnLayout.tsx").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  assert.ok(!/state\s*=\s*["']locked["']|blockedBy\s*=|findIndex\([^)]*done[^)]*\)\s*[<>]/.test(lay), "🔴 компонент сам вирішує, що замкнено");
+  assert.match(lay, /l\.state === "locked"/, "🔴 замок уроку більше не читається зі стану сервера");
+});
+
+/**
+ * #733 — ЛІЧИЛЬНИКИ ПРОГРАМИ, ВИКОНАНІ. Підписи як у Sereda: «1 з 1 уроку», «4 з 6 уроків», «20 з 20 уроків»;
+ * у шапці — «1 урок / 2 уроки / 5 уроків». Наступний урок — перший доступний, а не перший незавершений (замкнений
+ * відкрити не можна). Тема «завершена» за обовʼязковими — як і відсоток курсу.
+ * 🧨 Червоніє на неправильній формі слова, «наступному» замкненому уроці чи незавершеній темі через необовʼязковий урок.
+ */
+test("#733 УРОК: лічильники програми — форми слова, наступний урок, завершена тема", async () => {
+  const ts = (await import("typescript")).default;
+  const js = ts.transpileModule(FE("pages/dashboard/learnProgram.ts"), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const P = await import(`data:text/javascript,${encodeURIComponent(js)}`);
+  assert.deepEqual([1, 2, 5, 11, 20, 21].map(P.lessonsWord), ["уроку", "уроків", "уроків", "уроків", "уроків", "уроку"], "🔴 «з N уроку/уроків» не за правилом");
+  assert.deepEqual([1, 2, 5, 12, 22].map(P.lessonsCount), ["1 урок", "2 уроки", "5 уроків", "12 уроків", "22 уроки"], "🔴 «N урок/уроки/уроків» не за правилом");
+
+  const L = (id: number, state: string, required = true) => ({ id, title: `u${id}`, kind: "text", required, state, blockedBy: null });
+  const mods = [
+    { id: 1, name: "A", materials: [L(1, "done"), L(2, "done", false), L(3, "done")] },
+    { id: 2, name: "B", materials: [L(4, "done"), L(5, "available"), L(6, "locked")] },
+    { id: 3, name: "C", materials: [L(7, "locked"), L(8, "opened", false)] },
+  ];
+  const st = P.programStat(mods);
+  assert.deepEqual([st.lessons, st.done, st.modules, st.next?.id], [8, 4, 3, 5], "🔴 лічильники курсу або наступний урок");
+  assert.equal(P.moduleStat({ id: 9, name: "X", materials: [L(1, "done"), L(2, "available", false)] }).complete, true,
+    "🔴 тема не завершена через НЕобовʼязковий урок");
+  assert.equal(P.moduleStat(mods[1]).complete, false);
+  assert.equal(P.lessonAfter(mods, 3)?.id, 4, "🔴 «Наступний» не переходить у наступну тему");
+  assert.equal(P.lessonAfter(mods, 8), null, "🔴 після останнього уроку є «наступний»");
+  assert.deepEqual([P.openModuleId(mods, 7), P.openModuleId(mods, null)], [3, 2], "🔴 розгорнуто не ту тему");
+});
+
+/**
+ * #734 — НАЗВА УРОКУ БЕЗ ТЕХНІЧНОГО ХВОСТА. Уроки без тексту взяли назву своєї презентації «X — презентація», а в
+ * Sereda той самий урок — «X» (заміряно 28.09: 8 уроків). Хвіст знімається лише в головних рядках уроків Sereda;
+ * частини й наші матеріали — як були; повторний прогін нічого не змінює.
+ * 🧨 Червоніє, якщо зачепить частину, наш матеріал або повторний прогін щось змінить.
+ */
+test("#734 ЖИВИЙ SQL: назва уроку Sereda без «— презентація», частини й наше — як були", async (t) => {
+  const s = await cluster(t); if (!s) return;
+  try {
+    const K = "44444444-4444-4444-8444-444444444444", T = "55555555-5555-4555-8555-555555555555";
+    const f = (await s.c.query(`INSERT INTO training_folders (name, position) VALUES ('Тема', 1) RETURNING id`)).rows[0].id;
+    const ins = async (title: string, pos: number, ext: string | null, kind = "file") =>
+      (await s.c.query(`INSERT INTO training_materials (folder_id, title, kind, position, external_id) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+        [f, title, kind, pos, ext])).rows[0].id as number;
+    const head = await ins("Внутрішні перевезення — презентація", 1, `${K}:pres`);             // урок без тексту
+    const textHead = await ins("Митниця", 2, `${T}:text`, "text");
+    const part = await ins("Митниця — презентація", 3, `${T}:pres`);                           // частина уроку з текстом
+    const ours = await ins("Наша — презентація", 4, null);
+    const titles = async () => Object.fromEntries((await s.c.query(`SELECT id, title FROM training_materials`)).rows.map((r) => [r.id, r.title]));
+
+    await s.c.query(readFileSync(SCHEMA, "utf8"));
+    const a = await titles();
+    assert.equal(a[head], "Внутрішні перевезення", "🔴 назва уроку лишилась із «— презентація»");
+    assert.deepEqual([a[textHead], a[part], a[ours]], ["Митниця", "Митниця — презентація", "Наша — презентація"], "🔴 правка зачепила частину або наш матеріал");
+    await s.c.query(readFileSync(SCHEMA, "utf8"));
+    assert.deepEqual(await titles(), a, "🔴 повторний прогін змінив назви");
+  } finally { await s.done(); }
+});

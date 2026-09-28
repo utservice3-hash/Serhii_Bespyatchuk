@@ -5,6 +5,8 @@ import {
   type TrainingCourse, type TrainingCourseDetail, type TrainingMaterialContent, type CandidateMe, type MyTrainingQuestion,
 } from "../../../api";
 import { LessonBody } from "./LessonBody";
+import { CourseHeader, LessonPage, ProgramAccordion } from "./LearnLayout";
+import "./training.css";
 import { useNavigate } from "react-router-dom";
 import { fetchDocTree, type DocFile } from "../../../api";
 import "./hiring.css";
@@ -18,7 +20,6 @@ import "./hiring.css";
  */
 
 const HOUR = 3_600_000;
-const KIND_ICON: Record<string, string> = { text: "📝", video_embed: "🎬", link: "🔗", file: "📄", quiz: "❓" };
 const kyiv = (iso: string | null) => (iso
   ? new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
   : "—");
@@ -46,6 +47,10 @@ export function CandidateTraining() {
   // Усі кроки всіх курсів кандидата — у порядку сервера.
   const steps: Step[] = useMemo(() => details.flatMap((d) => d.modules.flatMap((m) =>
     m.materials.map((x) => ({ ...x, module: m.name, courseId: d.course.id })))), [details]);
+  /** 🎓 Теми всіх курсів кандидата — для «Програми курсу» і бічної панелі уроку, як у Sereda. */
+  const modules = useMemo(() => details.flatMap((d) => d.modules), [details]);
+  const required = steps.filter((s) => s.required);
+  const pct = required.length ? Math.round((required.filter((s) => s.state === "done").length / required.length) * 100) : 0;
 
   if (err) return <div className="hr-card"><div className="hr-sect" style={{ border: 0 }}><b>Не вдалося завантажити навчання.</b> <span className="hr-muted">{err}</span></div></div>;
   if (!courses || !me) return <p className="loading-text">Завантаження…</p>;
@@ -53,24 +58,13 @@ export function CandidateTraining() {
   if (stepId != null) {
     const idx = steps.findIndex((s) => s.id === stepId);
     return <StepView step={steps[idx]} next={steps.slice(idx + 1).find((s) => s.state !== "done") ?? null}
+      modules={modules} percent={pct}
       questions={questions.filter((q) => q.material_id === stepId)} canAsk={me.candidate}
       onBack={() => { setStepId(null); void load(); }}
       onGo={(id) => { setStepId(id); void load(); }}
       onAsked={() => void load()} />;
   }
-  return <Home me={me} courses={courses} steps={steps} questions={questions} onOpen={setStepId} />;
-}
-
-function Ring({ pct }: { pct: number }) {
-  const R = 52, C = 2 * Math.PI * R;
-  return (
-    <svg width="128" height="128" viewBox="0 0 128 128" role="img" aria-label={`Пройдено ${pct}%`}>
-      <circle cx="64" cy="64" r={R} fill="none" stroke="var(--border)" strokeWidth="12" />
-      <circle cx="64" cy="64" r={R} fill="none" stroke="var(--brand)" strokeWidth="12" strokeLinecap="round"
-        strokeDasharray={`${(C * pct) / 100} ${C}`} transform="rotate(-90 64 64)" />
-      <text x="64" y="70" textAnchor="middle" fontSize="24" fontWeight="700" fill="var(--text)">{pct}%</text>
-    </svg>
-  );
+  return <Home me={me} courses={courses} steps={steps} modules={modules} questions={questions} onOpen={setStepId} />;
 }
 
 function deadlineText(me: Extract<CandidateMe, { candidate: true }>): [string, string] {
@@ -115,15 +109,14 @@ function OfferCard() {
   );
 }
 
-function Home({ me, courses, steps, questions, onOpen }: {
-  me: CandidateMe; courses: TrainingCourse[]; steps: Step[]; questions: MyTrainingQuestion[]; onOpen: (id: number) => void;
+function Home({ me, courses, steps, modules, questions, onOpen }: {
+  me: CandidateMe; courses: TrainingCourse[]; steps: Step[]; modules: TrainingCourseDetail["modules"]; questions: MyTrainingQuestion[]; onOpen: (id: number) => void;
 }) {
   const required = steps.filter((s) => s.required);
   const done = required.filter((s) => s.state === "done").length;
   const pct = required.length ? Math.round((done / required.length) * 100) : 0;
   const next = steps.find((s) => s.state === "available" || s.state === "opened") ?? null;
   const titleOf = new Map(steps.map((s) => [s.id, s.title]));
-  const modules = [...new Set(steps.map((s) => s.module))];
   const dl = me.candidate ? deadlineText(me) : null;
 
   return (
@@ -139,59 +132,17 @@ function Home({ me, courses, steps, questions, onOpen }: {
       {steps.length === 0 ? (
         <div className="hr-card"><div className="hr-sect" style={{ border: 0 }}>Курс для вас ще готується. Зазирніть трохи пізніше або напишіть рекрутеру.</div></div>
       ) : (
-        <div className="hr-card">
-          <div className="ct-hero">
-            <div>
-              <div className="hr-muted">{courses.length > 1 ? "Курси" : "Курс"}</div>
-              <h2 style={{ margin: "2px 0 8px", fontSize: 20 }}>{courses.map((c) => c.title).join(" · ")}</h2>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-                {me.candidate && me.firstLoginAt && <span className={`hr-pill ${dl?.[1] ?? "pl"}`}>День {Math.max(me.day, 1)} із {me.days}{dl?.[0] ? ` · ${dl[0]}` : ""}</span>}
-                <span className="hr-pill gr">{done} із {required.length} обовʼязкових кроків</span>
-              </div>
-              {next
-                ? <button className="hr-btn p" onClick={() => onOpen(next.id)}>Продовжити: {next.title}</button>
-                : <div className="hr-note" style={{ marginTop: 0, background: "var(--ok-bg)", color: "var(--ok)" }}>Усі кроки пройдено. Тімлід отримає це на своїй дошці й вирішить про старт роботи.</div>}
-            </div>
-            <Ring pct={pct} />
-          </div>
-        </div>
-      )}
-
-      {steps.length > 0 && (
-        <div className="hr-card">
-          <div className="hd"><h3>Кроки курсу</h3><span className="hr-muted">{steps.length} кроків{steps.length !== required.length ? `, з них ${required.length} обовʼязкових` : ""}</span></div>
-          <div className="hr-sect" style={{ borderTop: 0, paddingTop: 0 }}>
-            {modules.map((m) => {
-              const own = steps.filter((s) => s.module === m);
-              const req = own.filter((s) => s.required);
-              return (
-                <div key={m} style={{ marginBottom: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 600, margin: "8px 0 4px" }}>
-                    <span>{m}</span><span className="hr-muted">{req.filter((s) => s.state === "done").length} із {req.length}</span>
-                  </div>
-                  <ul className="hr-steps">
-                    {own.map((s) => {
-                      const cur = next?.id === s.id;
-                      return (
-                        <li key={s.id} className={s.state === "done" ? "done" : cur ? "available" : s.state === "locked" ? "locked" : "opened"}>
-                          <span className="ic">{s.state === "done" ? "✓" : s.state === "locked" ? "🔒" : steps.indexOf(s) + 1}</span>
-                          {s.state === "locked"
-                            ? <span>{s.title}</span>
-                            : <button className="hr-link" style={{ textAlign: "left" }} onClick={() => onOpen(s.id)}>{KIND_ICON[s.kind] ?? "•"} {s.title}</button>}
-                          <span className="hr-muted">
-                            {s.state === "done" ? "опрацьовано" : cur ? "зараз тут"
-                              : s.state === "locked" ? `після «${s.blockedBy ? titleOf.get(s.blockedBy.materialId) ?? s.blockedBy.title : "попереднього кроку"}»`
-                              : !s.required ? "необовʼязковий" : ""}
-                          </span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        <>
+          {/* 🎓 Як у Sereda: шапка курсу зі станом і лічильниками, нижче «Програма курсу» темами-акордеонами. */}
+          <CourseHeader title={courses.map((c) => c.title).join(" · ")} percent={pct} modules={modules} onContinue={onOpen}
+            badge={<>
+              {me.candidate && me.firstLoginAt && <span className={`hr-pill ${dl?.[1] ?? "pl"}`}>День {Math.max(me.day, 1)} із {me.days}{dl?.[0] ? ` · ${dl[0]}` : ""}</span>}
+              <span className="hr-pill gr">{done} із {required.length} обовʼязкових</span>
+            </>} />
+          <div className="lr-sect">Програма курсу</div>
+          <ProgramAccordion modules={modules} currentId={next?.id ?? null} onOpen={onOpen} />
+          <div style={{ height: 18 }} />
+        </>
       )}
 
       {me.candidate && (
@@ -211,8 +162,8 @@ function Home({ me, courses, steps, questions, onOpen }: {
   );
 }
 
-function StepView({ step, next, questions, canAsk, onBack, onGo, onAsked }: {
-  step: Step | undefined; next: Step | null; questions: MyTrainingQuestion[]; canAsk: boolean;
+function StepView({ step, next, modules, percent, questions, canAsk, onBack, onGo, onAsked }: {
+  step: Step | undefined; next: Step | null; modules: TrainingCourseDetail["modules"]; percent: number; questions: MyTrainingQuestion[]; canAsk: boolean;
   onBack: () => void; onGo: (id: number) => void; onAsked: () => void;
 }) {
   const [m, setM] = useState<TrainingMaterialContent | null>(null);
@@ -255,32 +206,23 @@ function StepView({ step, next, questions, canAsk, onBack, onGo, onAsked }: {
   };
 
   return (
-    <div>
-      <div style={{ marginBottom: 10 }}><button className="hr-btn xs" onClick={onBack}>← До курсу</button></div>
-      <div className="hr-muted">{step.module}</div>
-      <h1 className="page-title" style={{ margin: "2px 0 12px" }}>{KIND_ICON[step.kind] ?? ""} {step.title}</h1>
+    <LessonPage title={step.title} done={done} modules={modules} currentId={step.id} percent={percent} onBack={onBack} onOpen={onGo}
+      footer={m && <>
+        {(m.kind as string) === "quiz"
+          ? <span className="hr-muted">Тест зараховується перевіркою відповідей — зʼявиться разом з екзаменом.</span>
+          : done
+            ? <>{next && <button className="hr-btn p" onClick={() => onGo(next.id)}>Наступний урок: {next.title} →</button>}</>
+            : <button className="hr-btn p" disabled={busy} onClick={() => void markDone()}>{busy ? "Зберігаємо…" : next ? "Опрацював(ла) — далі" : "Опрацював(ла)"}</button>}
+        {!step.required && <span className="hr-muted">необовʼязковий урок</span>}
+      </>}>
       {err && <div className="hr-note" style={{ background: "var(--danger-bg)", color: "var(--danger)" }}>{err}</div>}
       {!m && !err && <p className="loading-text">Завантаження…</p>}
-      {m && (
-        <div className="hr-card">
-          <div className="hr-sect" style={{ borderTop: 0 }}>
-            {/* 📘 Урок цілим — той самий компонент, що й у кроці курсу (`#729`): кандидат бачить урок так само. */}
-            <LessonBody m={m} />
-          </div>
-          <div className="hr-sect" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            {(m.kind as string) === "quiz"
-              ? <span className="hr-muted">Тест зараховується перевіркою відповідей — зʼявиться разом з екзаменом.</span>
-              : done
-                ? <><span className="hr-pill ok">опрацьовано</span>{next && <button className="hr-btn p" onClick={() => onGo(next.id)}>Далі: {next.title}</button>}</>
-                : <button className="hr-btn p" disabled={busy} onClick={() => void markDone()}>{busy ? "Зберігаємо…" : next ? "Опрацював(ла) — далі" : "Опрацював(ла)"}</button>}
-            {!step.required && <span className="hr-muted">необовʼязковий крок</span>}
-          </div>
-        </div>
-      )}
+      {/* 📘 Урок цілим — той самий компонент, що й у кроці курсу (`#729`): кандидат бачить урок так само. */}
+      {m && <LessonBody m={m} />}
 
-      {canAsk && (
-        <div className="hr-card">
-          <div className="hd"><h3>Питання тімліду</h3><span className="hr-muted">до цього кроку</span></div>
+      {canAsk && m && (
+        <div className="hr-card" style={{ marginTop: 8 }}>
+          <div className="hd"><h3>Питання тімліду</h3><span className="hr-muted">до цього уроку</span></div>
           <div className="hr-sect" style={{ borderTop: 0, paddingTop: 0 }}>
             {questions.map((x) => (
               <div key={x.id} className="hr-qa">
@@ -288,7 +230,7 @@ function StepView({ step, next, questions, canAsk, onBack, onGo, onAsked }: {
                 {x.answer ? <div className="a">{x.answer}</div> : <div className="hr-muted" style={{ marginTop: 4 }}>чекає відповіді тімліда</div>}
               </div>
             ))}
-            <textarea className="hr-inp" rows={2} style={{ width: "100%", boxSizing: "border-box" }} placeholder="Що незрозуміло в цьому кроці?"
+            <textarea className="hr-inp" rows={2} style={{ width: "100%", boxSizing: "border-box" }} placeholder="Що незрозуміло в цьому уроці?"
               aria-label="Питання тімліду" value={q} onChange={(ev) => { setQ(ev.target.value); setQMsg(null); }} />
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
               <button className="hr-btn" onClick={() => void ask()}>Надіслати тімліду</button>
@@ -297,6 +239,6 @@ function StepView({ step, next, questions, canAsk, onBack, onGo, onAsked }: {
           </div>
         </div>
       )}
-    </div>
+    </LessonPage>
   );
 }
