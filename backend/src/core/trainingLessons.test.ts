@@ -213,10 +213,12 @@ test("#730 УРОК: розкладка як у Sereda — дивитись, т�
   const f = (id: number, kind: string, mime: string | null, extra: Record<string, unknown> = {}) =>
     ({ id, title: `m${id}`, kind, url: null, mime, sizeBytes: 1000, hasFile: kind === "file", content: null, ...extra });
 
+  /* Розміри РІЗНІ, як у різних файлів: з 28.09 вкладення того самого розміру й типу, що й файл у вікні, вважається
+     його дублем і ховається (`#735`), тож фікстура з однаковими розмірами перевіряла б уже інше правило. */
   const a = L.lessonLayout({ ...f(1, "text", null), content: "Текст уроку" }, [
-    { ...f(2, "file", "application/pdf"), role: "main" },
-    { ...f(3, "file", "application/pdf"), role: "attachment" },
-    { ...f(4, "file", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"), role: "main" },
+    { ...f(2, "file", "application/pdf"), sizeBytes: 8_000_000, role: "main" },
+    { ...f(3, "file", "application/pdf"), sizeBytes: 5_200_000, role: "attachment" },
+    { ...f(4, "file", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"), sizeBytes: 90_000, role: "main" },
   ]);
   assert.deepEqual(a.main.map((x: { id: number; show: string }) => [x.id, x.show]), [[2, "pdf"]], "🔴 у тілі уроку не рівно презентація");
   assert.equal(a.text, "Текст уроку", "🔴 текст уроку загубився");
@@ -309,4 +311,42 @@ test("#734 ЖИВИЙ SQL: назва уроку Sereda без «— презе�
     await s.c.query(readFileSync(SCHEMA, "utf8"));
     assert.deepEqual(await titles(), a, "🔴 повторний прогін змінив назви");
   } finally { await s.done(); }
+});
+
+/**
+ * #735 — УРОК БЕЗ ТОГО, ЩО ДИВИТИСЬ, ПОКАЗУЄ PDF-ВКЛАДЕННЯ У ВІКНІ; ДУБЛЬ ПРЕЗЕНТАЦІЇ У «ВКЛАДЕННЯХ» НЕ ПОКАЗУЄТЬСЯ.
+ * Роман, 28.09: «відкрив сторінку, а пдфа немає». Заміряно: 79 уроків — текст + pdf-вкладення без презентації;
+ * в усіх 11 уроках із презентацією та сама презентація лежить ще й вкладенням (Sereda її зі списку ховає).
+ * Обидва боки: де є що дивитись — вкладення НЕ лізе у вікно; де нема — лізе, але лишається й на завантаження.
+ * 🧨 Червоніє, якщо pdf знову лише «на завантаження», якщо вкладення витіснить презентацію або дубль повернеться.
+ */
+test("#735 УРОК: pdf-вкладення у вікні, коли дивитись нічого; дубль презентації прибрано з «Вкладень»", async () => {
+  const ts = (await import("typescript")).default;
+  const js = ts.transpileModule(FE("pages/dashboard/lessonLayout.ts"), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const L = await import(`data:text/javascript,${encodeURIComponent(js)}`);
+  const PDF = "application/pdf";
+  const f = (id: number, kind: string, mime: string | null, size: number, extra: Record<string, unknown> = {}) =>
+    ({ id, title: `m${id}`, kind, url: null, mime, sizeBytes: size, hasFile: kind === "file", content: null, ...extra });
+  const text = { ...f(1, "text", null, 0), content: "Текст" };
+  const ids = (xs: { id: number }[]) => xs.map((x) => x.id);
+
+  // Урок зі скріншота: текст + pdf-вкладення, презентації немає → pdf у вікні І у «Вкладеннях».
+  const a = L.lessonLayout(text, [{ ...f(2, "file", PDF, 4_500_000), role: "attachment" }]);
+  assert.deepEqual([ids(a.main), ids(a.attachments)], [[2], [2]], "🔴 урок без презентації не показує pdf у вікні або прибрав його з завантаження");
+
+  // Урок із презентацією: вкладення-дубль (той самий розмір і тип) зникає зі списку, інше вкладення лишається.
+  const b = L.lessonLayout(text, [
+    { ...f(3, "file", PDF, 8_000_000), role: "main" },
+    { ...f(4, "file", PDF, 8_000_000), role: "attachment" },
+    { ...f(5, "file", PDF, 5_200_000), role: "attachment" },
+  ]);
+  assert.deepEqual([ids(b.main), ids(b.attachments)], [[3], [5]], "🔴 дубль презентації у «Вкладеннях» або вкладення витіснило презентацію");
+
+  // Є відео — вкладення-pdf у вікно НЕ лізе.
+  const c = L.lessonLayout(text, [{ ...f(6, "video_embed", null, 0, { url: "https://youtu.be/x" }), role: "main" }, { ...f(7, "file", PDF, 1000), role: "attachment" }]);
+  assert.deepEqual([ids(c.main), ids(c.attachments)], [[6], [7]], "🔴 pdf-вкладення витіснило відео");
+
+  // Файлу немає — у вікно не лізе (показувати нічого).
+  const d = L.lessonLayout(text, [{ ...f(8, "file", PDF, 1000, { hasFile: false }), role: "attachment" }]);
+  assert.deepEqual(ids(d.main), [], "🔴 у вікно пішов pdf без файла");
 });
