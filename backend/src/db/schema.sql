@@ -3406,7 +3406,7 @@ CREATE TABLE IF NOT EXISTS hiring_events (
 );
 ALTER TABLE hiring_events DROP CONSTRAINT IF EXISTS hiring_events_kind_check;
 ALTER TABLE hiring_events ADD CONSTRAINT hiring_events_kind_check CHECK (kind IN
-  ('created','status','attended','comment','repeat','edit','refusal','reserve','vacancy','file','access','question','offer'));
+  ('created','status','attended','comment','repeat','edit','refusal','reserve','vacancy','file','access','question','offer','record'));
 CREATE INDEX IF NOT EXISTS idx_hiring_events_candidate ON hiring_events(candidate_id, at);
 CREATE INDEX IF NOT EXISTS idx_hiring_events_status_at ON hiring_events(to_status, at) WHERE kind = 'status';
 
@@ -4052,6 +4052,34 @@ UPDATE training_materials SET status = 'draft'
 UPDATE training_materials SET title = regexp_replace(title, ' — презентація$', '')
  WHERE lesson_id IS NULL AND external_id ~ '^[0-9a-f-]{36}:pres$' AND title LIKE '% — презентація';
 
+-- 🎥 ЗАПИСИ СПІВБЕСІД tl;dv (23.09.2026, прохід 7 плану найму). Дашборд ходить у їхній API нашим ключем
+-- (`TLDV_API_KEY`) — вебхуків НЕ беремо: у документації tl;dv немає ні підпису, ні секрету для вхідних
+-- запитів, тож будь-хто міг би слати нам «зустріч готова».
+--
+-- 🔴 ЗУСТРІЧ НЕ ПРИВʼЯЗУЄТЬСЯ НАВМАННЯ. Певний збіг — лише за поштою учасника; збіг за часом лишається
+-- «на підтвердження» людині. Тому таблиця памʼятає стан кожної зустрічі: `linked` (привʼязана до рядка
+-- графіка), `pending` (чекає рішення), `ignored` (не співбесіда — більше не показувати).
+-- Транскриптів НЕ зберігаємо: лише те, що показуємо в списку.
+-- ⚠️ revert коду таблицю й колонку не прибирає.
+CREATE TABLE IF NOT EXISTS tldv_meetings (
+  id           TEXT PRIMARY KEY,
+  name         TEXT,
+  happened_at  TIMESTAMPTZ,
+  duration_min INTEGER,
+  url          TEXT,
+  organizer    TEXT,
+  invitees     JSONB NOT NULL DEFAULT '[]'::jsonb,
+  state        TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('linked','pending','ignored')),
+  interview_id INTEGER REFERENCES hiring_interviews(id) ON DELETE SET NULL,
+  how          TEXT,
+  decided_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  decided_at   TIMESTAMPTZ,
+  seen_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_tldv_meetings_state ON tldv_meetings(state, happened_at DESC);
+ALTER TABLE hiring_interviews ADD COLUMN IF NOT EXISTS tldv_meeting_id TEXT;
+-- 🔒 Пошта й імена учасників зустрічей — персональні дані. REVOKE після CREATE.
+REVOKE ALL ON tldv_meetings FROM ai_readonly;
 -- ═══════════════════════════════════════════════════════════════════════════
 -- 🧭 ПЕРЕВИЗНАЧЕННЯ КОМАНДИ МЕНЕДЖЕРА (ТЗ 23.09.2026, п.1) — див. core/teamOverride.ts.
 -- Рядок = «у дашборді ця людина в team_id, що б не стояло в Kommo»; team_id NULL =
@@ -4321,3 +4349,22 @@ CREATE TABLE IF NOT EXISTS ai_spend_ledger (
 CREATE INDEX IF NOT EXISTS idx_ai_spend_ledger_at ON ai_spend_ledger(at);
 REVOKE ALL ON ai_spend_ledger FROM ai_readonly;
 -- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
+-- 💼 ВІДГУКИ З WORK.UA → «КАНДИДАТИ» (28.09.2026, прохід 7). Памʼять оброблених відгуків: той самий відгук
+-- удруге нічого не робить, а найбільший id — звідки продовжувати. Кандидат — `hiring_candidates` (той самий
+-- телефон → наявна картка, подія «повторний відгук»). Вакансію work.ua привʼязує людина у «Вакансіях».
+-- ⚠️ revert коду таблицю й колонку не прибирає; кандидати, створені з відгуків, лишаються звичайними кандидатами.
+CREATE TABLE IF NOT EXISTS workua_responses (
+  id           BIGINT PRIMARY KEY,
+  job_id       BIGINT,
+  candidate_id INTEGER REFERENCES hiring_candidates(id) ON DELETE SET NULL,
+  vacancy_id   INTEGER REFERENCES hiring_vacancies(id) ON DELETE SET NULL,
+  responded_at TIMESTAMPTZ,
+  how          TEXT NOT NULL CHECK (how IN ('created','repeat')),
+  file_note    TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_workua_responses_job ON workua_responses(job_id);
+ALTER TABLE hiring_vacancies ADD COLUMN IF NOT EXISTS workua_job_id BIGINT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hiring_vacancies_workua ON hiring_vacancies(workua_job_id) WHERE workua_job_id IS NOT NULL;
+-- 🔒 Телефони й пошти кандидатів — персональні дані. REVOKE після CREATE.
+REVOKE ALL ON workua_responses FROM ai_readonly;

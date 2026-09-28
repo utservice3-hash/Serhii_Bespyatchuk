@@ -22,6 +22,10 @@ import {
 } from "../core/hiringTraining.js";
 import { CANDIDATE_ACCESS, canDecideTraining } from "../core/hiringTrainingRules.js";
 import { hiringSummary, vacancyFunnels } from "../core/hiringFunnel.js";
+import { pendingList, linkMeeting, setIgnored, TldvError } from "../core/tldvStore.js";
+import { syncTldv, getTldvStatus } from "../jobs/syncTldv.js";
+import { workuaSummary, setVacancyWorkuaJob, WorkuaError } from "../core/workuaStore.js";
+import { syncWorkua, getWorkuaStatus, fetchWorkuaJobs } from "../jobs/syncWorkua.js";
 import { listTemplates, createTemplate, setTemplateActive, offerForm, offerState, generateOffer, offerStates, type Store, type Load } from "../core/offers.js";
 import { notifyOfferOnce } from "../jobs/offerReminders.js";
 
@@ -48,6 +52,8 @@ function accessOf(req: Request): HiringAccess {
 
 function fail(res: Response, e: unknown) {
   if (e instanceof HiringError) return res.status(e.status).json({ error: e.message, ...(e.extra ?? {}) });
+  if (e instanceof TldvError) return res.status(e.status).json({ error: e.message });
+  if (e instanceof WorkuaError) return res.status(e.status).json({ error: e.message });
   console.error("[hiring]", e);
   return res.status(500).json({ error: "Помилка сервера" });
 }
@@ -292,6 +298,65 @@ hiringRouter.put("/daily/:day", async (req, res) => {
   try {
     onlyEdit(req);
     await tx((db) => setDailyManual(db, req.auth!.userId, req.params.day, req.body ?? {}));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+// ── 🎥 Записи співбесід tl;dv (прохід 7) ───────────────────────────────────
+// Стан інтеграції + зустрічі, що чекають рішення людини. Певні збіги джоба привʼязала сама.
+hiringRouter.get("/tldv", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const st = getTldvStatus();
+    const day = (n: number) => new Date(Date.now() + n * 86_400_000).toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+    res.json({ status: st, pending: st.configured ? await pendingList(pool as unknown as Db, day(-14), day(1)) : [] });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.post("/tldv/sync", async (req, res) => {
+  try { onlyEdit(req); res.json(await syncTldv()); } catch (e) { fail(res, e); }
+});
+
+hiringRouter.post("/tldv/:meetingId/link", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const iv = Number(req.body?.interviewId);
+    if (!Number.isInteger(iv) || iv <= 0) throw new TldvError(400, "Оберіть рядок графіка");
+    res.json(await tx((db) => linkMeeting(db, req.auth!.userId, String(req.params.meetingId), iv, "manual")));
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.post("/tldv/:meetingId/ignore", async (req, res) => {
+  try {
+    onlyEdit(req);
+    await tx((db) => setIgnored(db, req.auth!.userId, String(req.params.meetingId), req.body?.ignored !== false));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+// ── 💼 Відгуки з work.ua (прохід 7) ────────────────────────────────────────
+// Стан інтеграції, лічильники й вакансії work.ua для привʼязки. Вакансії беремо живим запитом: список
+// короткий, а збережена копія протухала б мовчки. Помилку work.ua показуємо словами, а не порожнім списком.
+hiringRouter.get("/workua", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const st = getWorkuaStatus();
+    let jobs = null, jobsError: string | null = null;
+    if (st.configured) { try { jobs = await fetchWorkuaJobs(); } catch (e) { jobsError = (e as Error).message; } }
+    res.json({ status: st, summary: await workuaSummary(pool as unknown as Db), jobs, jobsError });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.post("/workua/sync", async (req, res) => {
+  try { onlyEdit(req); res.json(await syncWorkua()); } catch (e) { fail(res, e); }
+});
+
+hiringRouter.put("/vacancies/:id/workua", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const jobId = req.body?.jobId == null || req.body.jobId === "" ? null : Number(req.body.jobId);
+    if (jobId != null && (!Number.isInteger(jobId) || jobId <= 0)) throw new WorkuaError(400, "Оберіть вакансію work.ua");
+    await tx((db) => setVacancyWorkuaJob(db, idOf(req), jobId));
     res.json({ ok: true });
   } catch (e) { fail(res, e); }
 });
