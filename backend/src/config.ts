@@ -11,6 +11,14 @@ function required(name: string): string {
   return value;
 }
 
+/** Необовʼязкове число з env: порожньо або не число → null (а не 0 — нуль тут означав би «безкоштовно»). */
+function envNum(name: string): number | null {
+  const v = (process.env[name] ?? "").trim();
+  if (!v) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 export const config = {
   // Node.js-режим adm.tools інжектить PORT (3000 у IP-режимі) і HOST (127.X.X.X).
   // Fallback 4000 + host=undefined → у СТАРОМУ режимі (Supervisor+Apache proxy) слухаємо
@@ -75,6 +83,16 @@ export const config = {
   callAi: {
     elevenlabsApiKey: process.env.ELEVENLABS_API_KEY ?? "",
     geminiApiKey: process.env.GEMINI_API_KEY ?? "",
+    // Ціни й стелі — БЕЗ значень за замовчуванням: не задано → «не налаштовано», жодної витрати
+    // (невідома ціна — це закрита стеля, а не «безкоштовно»). Стелі $40 / $10 — рішення Сергія
+    // 22.09.2026; ціни — з прайсів постачальників на 28.09.2026 (Gemini дорожчає з 01.01.2027).
+    prices: {
+      sttUsdPerHour: envNum("CALL_AI_STT_USD_PER_HOUR"),
+      sttMonthCapUsd: envNum("CALL_AI_STT_MONTH_CAP_USD"),
+      llmUsdPerMtokIn: envNum("CALL_AI_LLM_USD_PER_MTOK_IN"),
+      llmUsdPerMtokOut: envNum("CALL_AI_LLM_USD_PER_MTOK_OUT"),
+      llmMonthCapUsd: envNum("CALL_AI_LLM_MONTH_CAP_USD"),
+    },
   },
   // 🔴 РАХУНКИ ДЕБІТОРКИ — ПРЯМО З 1С, без гугл-таблиці-посередника.
   // Таблиця була МІРОРОМ цього ж ендпоінта (її колонка «Сервис» містила цей URL),
