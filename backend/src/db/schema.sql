@@ -3406,7 +3406,7 @@ CREATE TABLE IF NOT EXISTS hiring_events (
 );
 ALTER TABLE hiring_events DROP CONSTRAINT IF EXISTS hiring_events_kind_check;
 ALTER TABLE hiring_events ADD CONSTRAINT hiring_events_kind_check CHECK (kind IN
-  ('created','status','attended','comment','repeat','edit','refusal','reserve','vacancy','file','access','question','offer'));
+  ('created','status','attended','comment','repeat','edit','refusal','reserve','vacancy','file','access','question','offer','record'));
 CREATE INDEX IF NOT EXISTS idx_hiring_events_candidate ON hiring_events(candidate_id, at);
 CREATE INDEX IF NOT EXISTS idx_hiring_events_status_at ON hiring_events(to_status, at) WHERE kind = 'status';
 
@@ -4067,6 +4067,34 @@ UPDATE training_materials SET status = 'draft'
 UPDATE training_materials SET title = regexp_replace(title, ' — презентація$', '')
  WHERE lesson_id IS NULL AND external_id ~ '^[0-9a-f-]{36}:pres$' AND title LIKE '% — презентація';
 
+-- 🎥 ЗАПИСИ СПІВБЕСІД tl;dv (23.09.2026, прохід 7 плану найму). Дашборд ходить у їхній API нашим ключем
+-- (`TLDV_API_KEY`) — вебхуків НЕ беремо: у документації tl;dv немає ні підпису, ні секрету для вхідних
+-- запитів, тож будь-хто міг би слати нам «зустріч готова».
+--
+-- 🔴 ЗУСТРІЧ НЕ ПРИВʼЯЗУЄТЬСЯ НАВМАННЯ. Певний збіг — лише за поштою учасника; збіг за часом лишається
+-- «на підтвердження» людині. Тому таблиця памʼятає стан кожної зустрічі: `linked` (привʼязана до рядка
+-- графіка), `pending` (чекає рішення), `ignored` (не співбесіда — більше не показувати).
+-- Транскриптів НЕ зберігаємо: лише те, що показуємо в списку.
+-- ⚠️ revert коду таблицю й колонку не прибирає.
+CREATE TABLE IF NOT EXISTS tldv_meetings (
+  id           TEXT PRIMARY KEY,
+  name         TEXT,
+  happened_at  TIMESTAMPTZ,
+  duration_min INTEGER,
+  url          TEXT,
+  organizer    TEXT,
+  invitees     JSONB NOT NULL DEFAULT '[]'::jsonb,
+  state        TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('linked','pending','ignored')),
+  interview_id INTEGER REFERENCES hiring_interviews(id) ON DELETE SET NULL,
+  how          TEXT,
+  decided_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  decided_at   TIMESTAMPTZ,
+  seen_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_tldv_meetings_state ON tldv_meetings(state, happened_at DESC);
+ALTER TABLE hiring_interviews ADD COLUMN IF NOT EXISTS tldv_meeting_id TEXT;
+-- 🔒 Пошта й імена учасників зустрічей — персональні дані. REVOKE після CREATE.
+REVOKE ALL ON tldv_meetings FROM ai_readonly;
 -- ═══════════════════════════════════════════════════════════════════════════
 -- 🧭 ПЕРЕВИЗНАЧЕННЯ КОМАНДИ МЕНЕДЖЕРА (ТЗ 23.09.2026, п.1) — див. core/teamOverride.ts.
 -- Рядок = «у дашборді ця людина в team_id, що б не стояло в Kommo»; team_id NULL =
@@ -4165,6 +4193,101 @@ CREATE TABLE IF NOT EXISTS leadgen_plans (
 );
 CREATE INDEX IF NOT EXISTS idx_leadgen_plans_month ON leadgen_plans (month, status);
 
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🗂 БІЗНЕС-АСИСТЕНТ, прохід 1 (ТЗ «Блок Бізнес-асистент», задача 4314, 28.09.2026):
+-- Претензії й Судовий реєстр. Правила — `core/baRules.ts`, операції — `core/baClaims.ts`.
+-- ⚠️ Revert коду не відкочує таблиць і рядків: вони лишаються, і їх ніхто не читає.
+-- ══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS ba_claims (
+  id            SERIAL PRIMARY KEY,
+  company       TEXT NOT NULL,
+  -- Ключ клієнта з дебіторки; NULL — претензію заведено вручну.
+  client_key    TEXT,
+  -- ЗНІМОК на момент створення: `receivables` перебудовується кожним синком, тож живе
+  -- посилання на рядок дебіторки з часом показувало б інше число (гейт #771b).
+  debt_amount   NUMERIC(14,2),
+  overdue_days  INTEGER,
+  sent_on       DATE,
+  essence       TEXT NOT NULL DEFAULT '',
+  status        TEXT NOT NULL DEFAULT 'problem'
+                CHECK (status IN ('problem','sent','answered','noreply','court','paid','closed')),
+  result        TEXT,
+  source        TEXT NOT NULL CHECK (source IN ('receivables','manual')),
+  archived_at   TIMESTAMPTZ,
+  archived_by   INTEGER REFERENCES users(id),
+  created_by    INTEGER REFERENCES users(id),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Одна ВІДКРИТА претензія на клієнта з дебіторки: друга кнопка повертає наявну (гейт #771c).
+-- Межу тримає база, а не лише роут: два одночасні кліки не створять двох.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ba_claims_open_client ON ba_claims (client_key)
+  WHERE client_key IS NOT NULL AND archived_at IS NULL AND status NOT IN ('paid','closed');
+
+CREATE TABLE IF NOT EXISTS ba_court_cases (
+  id               SERIAL PRIMARY KEY,
+  title            TEXT NOT NULL,
+  plaintiff        TEXT NOT NULL DEFAULT '',
+  defendant        TEXT NOT NULL DEFAULT '',
+  case_number      TEXT NOT NULL DEFAULT '',
+  filed_on         DATE,
+  next_hearing_on  DATE,
+  status           TEXT NOT NULL DEFAULT 'prep' CHECK (status IN ('prep','filed','going','done')),
+  -- Справа з претензії: рівно одна на претензію (гейт #770).
+  claim_id         INTEGER UNIQUE REFERENCES ba_claims(id),
+  archived_at      TIMESTAMPTZ,
+  archived_by      INTEGER REFERENCES users(id),
+  created_by       INTEGER REFERENCES users(id),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Файли претензій і справ. Перенесення в суд копіює РЯДКИ, а не байти: копія посилається на той
+-- самий файл на диску і знає, з якого рядка претензії прийшла.
+CREATE TABLE IF NOT EXISTS ba_files (
+  id                  SERIAL PRIMARY KEY,
+  owner_kind          TEXT NOT NULL CHECK (owner_kind IN ('claim','case')),
+  owner_id            INTEGER NOT NULL,
+  doc_type            TEXT NOT NULL CHECK (doc_type IN ('claim','lawsuit','receipt','company_docs','other')),
+  name                TEXT NOT NULL,
+  stored_name         TEXT NOT NULL,
+  mime                TEXT NOT NULL,
+  size_bytes          INTEGER NOT NULL,
+  from_claim_file_id  INTEGER REFERENCES ba_files(id),
+  created_by          INTEGER REFERENCES users(id),
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ba_files_owner ON ba_files (owner_kind, owner_id);
+
+CREATE TABLE IF NOT EXISTS ba_events (
+  id          BIGSERIAL PRIMARY KEY,
+  owner_kind  TEXT NOT NULL CHECK (owner_kind IN ('claim','case')),
+  owner_id    INTEGER NOT NULL,
+  at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actor_id    INTEGER REFERENCES users(id),
+  what        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ba_events_owner ON ba_events (owner_kind, owner_id, at DESC);
+
+-- Роль «Бізнес-асистент». Оголошення-близнюк — у `db/roleDeclarations.ts` (#15). Єдиний екран —
+-- розділ; решту адмін вмикає тумблерами. `DO NOTHING`: сід не відкочує правок адміна щодеплою.
+INSERT INTO roles (key, name, built_in, data_scope, screen_access, permissions)
+VALUES ('business_assistant', 'Бізнес-асистент', false, 'own', '{"ba":true}'::jsonb, '{}'::jsonb)
+ON CONFLICT (key) DO NOTHING;
+
+-- Екран «Бізнес-асистент» для керівництва (той самий перелік, що MANAGEMENT_ROLES у `core/docAccess.ts`).
+-- Ідемпотентно й НЕ перетирає рішень адміна: лише де ключа ще немає.
+UPDATE roles SET screen_access = screen_access || '{"ba":true}'::jsonb
+  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'hr')
+    AND NOT (screen_access ? 'ba');
+
+-- Право «Проблемний клієнт» у дебіторці (рішення Романа 24.09.2026): керівництво і фінансист.
+-- Явними рядками видача й зняття, як `export_bank_statement`: склад фіксований кодом (#771).
+UPDATE roles SET permissions = permissions || '{"create_claim": true}'::jsonb
+ WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'hr', 'financier');
+UPDATE roles SET permissions = permissions - 'create_claim'
+ WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp', 'hr', 'financier');
+
 -- ▼ AI-АНАЛІЗ ДЗВІНКІВ ПО РЕКЛАМНИХ ЛІДАХ (ТЗ 22.09.2026, прохід A, коміт ②) ▼
 -- Три таблиці з ІСТОРІЄЮ: жодного TRUNCATE, жодного перезапису. Старий шлях (uts-bot → Google-лист →
 -- `first_touch_analysis` через TRUNCATE+insert) історії не мав — тут вона обовʼязкова.
@@ -4230,3 +4353,22 @@ CREATE TABLE IF NOT EXISTS ai_spend_ledger (
 CREATE INDEX IF NOT EXISTS idx_ai_spend_ledger_at ON ai_spend_ledger(at);
 REVOKE ALL ON ai_spend_ledger FROM ai_readonly;
 -- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
+-- 💼 ВІДГУКИ З WORK.UA → «КАНДИДАТИ» (28.09.2026, прохід 7). Памʼять оброблених відгуків: той самий відгук
+-- удруге нічого не робить, а найбільший id — звідки продовжувати. Кандидат — `hiring_candidates` (той самий
+-- телефон → наявна картка, подія «повторний відгук»). Вакансію work.ua привʼязує людина у «Вакансіях».
+-- ⚠️ revert коду таблицю й колонку не прибирає; кандидати, створені з відгуків, лишаються звичайними кандидатами.
+CREATE TABLE IF NOT EXISTS workua_responses (
+  id           BIGINT PRIMARY KEY,
+  job_id       BIGINT,
+  candidate_id INTEGER REFERENCES hiring_candidates(id) ON DELETE SET NULL,
+  vacancy_id   INTEGER REFERENCES hiring_vacancies(id) ON DELETE SET NULL,
+  responded_at TIMESTAMPTZ,
+  how          TEXT NOT NULL CHECK (how IN ('created','repeat')),
+  file_note    TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_workua_responses_job ON workua_responses(job_id);
+ALTER TABLE hiring_vacancies ADD COLUMN IF NOT EXISTS workua_job_id BIGINT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hiring_vacancies_workua ON hiring_vacancies(workua_job_id) WHERE workua_job_id IS NOT NULL;
+-- 🔒 Телефони й пошти кандидатів — персональні дані. REVOKE після CREATE.
+REVOKE ALL ON workua_responses FROM ai_readonly;

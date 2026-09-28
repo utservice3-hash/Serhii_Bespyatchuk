@@ -96,6 +96,12 @@ export const ROLE_DECLARATIONS: RoleDeclaration[] = [
    * а той, хто її створює, про це не знає). Пара «сід + оголошення» їде одним комітом.
    */
   { key: "candidate", builtIn: false, dataScope: "own", name: "Кандидат" },
+  /**
+   * 🗂 БІЗНЕС-АСИСТЕНТ (задача 4314, 28.09.2026). Єдиний екран — розділ «Бізнес-асистент»;
+   * решту адмін вмикає тумблерами. `own` — найвужчий обсяг: роль не має ні `manager_id`, ні
+   * команди, і дані продажів їй не потрібні. Сидиться схемою тим самим комітом (#15).
+   */
+  { key: "business_assistant", builtIn: false, dataScope: "own", name: "Бізнес-асистент" },
 ];
 
 export interface AcceptedDivergence {

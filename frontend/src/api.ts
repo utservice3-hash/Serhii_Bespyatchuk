@@ -4319,6 +4319,20 @@ export const createHiringInterviewFor = async (p: {
   interviewDate: string; interviewTime?: string; responsible?: string; candidateId?: number;
   newCandidate?: { fullName: string; phone: string; vacancyId: number; source?: string; telegram?: string };
 }) => (await api.post<HiringCreatedInterview>("/hiring/interviews", p)).data;
+// 🎥 Записи співбесід tl;dv (23.09.2026) — `backend/src/core/tldvStore.ts`.
+export interface TldvPending {
+  id: string; name: string | null; happenedAt: string | null; durationMin: number | null; url: string | null;
+  organizer: string | null; invitees: number; how: "email" | "time" | "none" | "many";
+  suggestions: { interviewId: number; label: string }[];
+}
+export interface TldvState {
+  status: { configured: boolean; lastRunAt: string | null; lastError: string | null; seen: number; linked: number; pending: number };
+  pending: TldvPending[];
+}
+export const fetchTldv = async () => (await api.get<TldvState>("/hiring/tldv")).data;
+export const syncTldvNow = async () => (await api.post<{ seen?: number; linked?: number; pending?: number; reason?: string }>("/hiring/tldv/sync")).data;
+export const linkTldv = async (meetingId: string, interviewId: number) => { await api.post(`/hiring/tldv/${meetingId}/link`, { interviewId }); };
+export const ignoreTldv = async (meetingId: string, ignored = true) => { await api.post(`/hiring/tldv/${meetingId}/ignore`, { ignored }); };
 export const patchHiringInterview = async (id: number, patch: Record<string, unknown>) =>
   (await api.patch<{ candidateId: number | null; repeat?: { id: number; full_name: string; status: HiringStatus } }>(`/hiring/interviews/${id}`, patch)).data;
 export const deleteHiringInterview = async (id: number) => { await api.delete(`/hiring/interviews/${id}`); };
@@ -4374,6 +4388,16 @@ export const fetchHiringSummary = async (p: { from: string; to: string; vacancyI
 // ── Найм, прохід 1a: вакансії, відмова, резерв, файли-докази ──
 export const fetchHiringVacancies = async (scope: "active" | "closed" | "all") =>
   (await api.get<{ rows: HiringVacancyRow[] }>("/hiring/vacancies", { params: { scope } })).data.rows;
+// 💼 Відгуки з work.ua (28.09.2026) — `backend/src/core/workuaStore.ts`, `jobs/syncWorkua.ts`.
+export interface WorkuaJob { id: number; name: string; active: boolean; date: string | null }
+export interface WorkuaState {
+  status: { configured: boolean; lastRunAt: string | null; lastError: string | null; lastBatch: { created: number; repeat: number; files: number } | null };
+  summary: { total: number; created: number; repeat: number; novac: number; last: string | null; links: { vacancyId: number; jobId: number }[] };
+  jobs: WorkuaJob[] | null; jobsError: string | null;
+}
+export const fetchWorkua = async () => (await api.get<WorkuaState>("/hiring/workua")).data;
+export const syncWorkuaNow = async () => (await api.post<{ created?: number; repeat?: number; skipped?: number | boolean; reason?: string }>("/hiring/workua/sync")).data;
+export const setVacancyWorkua = async (vacancyId: number, jobId: number | null) => { await api.put(`/hiring/vacancies/${vacancyId}/workua`, { jobId }); };
 export const createHiringVacancy = async (p: Record<string, unknown>) => (await api.post<{ id: number }>("/hiring/vacancies", p)).data.id;
 export const patchHiringVacancy = async (id: number, p: Record<string, unknown>) => { await api.patch(`/hiring/vacancies/${id}`, p); };
 export const setHiringCandidateVacancies = async (id: number, vacancyIds: number[]) => { await api.put(`/hiring/candidates/${id}/vacancies`, { vacancyIds }); };
@@ -4723,3 +4747,61 @@ export async function createDashboardTeam(name: string): Promise<{ id: number; n
   const { data } = await api.post<{ id: number; name: string }>("/settings/teams", { name });
   return data;
 }
+
+// 🗂 БІЗНЕС-АСИСТЕНТ, прохід 1 (задача 4314, 28.09.2026): Претензії й Судовий реєстр.
+// Дзеркало `routes/businessAssistant.ts`. Доступ — вкладка `ba`; кнопка в дебіторці — право `create_claim`.
+export type BaClaimStatus = "problem" | "sent" | "answered" | "noreply" | "court" | "paid" | "closed";
+export type BaCaseStatus = "prep" | "filed" | "going" | "done";
+export type BaDocType = "claim" | "lawsuit" | "receipt" | "company_docs" | "other";
+export interface BaOption<K extends string> { key: K; label: string }
+export interface BaMeta {
+  claimStatuses: BaOption<BaClaimStatus>[]; caseStatuses: BaOption<BaCaseStatus>[];
+  claimDocTypes: BaOption<BaDocType>[]; caseDocTypes: BaOption<BaDocType>[]; fileMaxBytes: number;
+}
+export interface BaFile { id: number; docType: BaDocType; docTypeLabel: string; name: string; mime: string; size: number; fromClaim: boolean; createdAt: string }
+export interface BaEvent { at: string; what: string; actor: string | null }
+export interface BaClaim {
+  id: number; company: string; clientKey: string | null; debtAmount: number | null; overdueDays: number | null;
+  sentOn: string | null; essence: string; status: BaClaimStatus; statusLabel: string; result: string;
+  source: "receivables" | "manual"; archived: boolean; archivedAt: string | null; createdAt: string; caseId: number | null; files: number;
+}
+export interface BaClaimCard extends BaClaim { fileList: BaFile[]; events: BaEvent[] }
+export interface BaCase {
+  id: number; title: string; plaintiff: string; defendant: string; caseNumber: string; filedOn: string | null;
+  nextHearingOn: string | null; status: BaCaseStatus; statusLabel: string; claimId: number | null;
+  archived: boolean; archivedAt: string | null; files: number;
+}
+export interface BaCaseCard extends BaCase { fileList: BaFile[]; events: BaEvent[] }
+export interface BaClaimInput { company?: string; debtAmount?: string | number | null; overdueDays?: string | number | null; sentOn?: string | null; essence?: string; status?: BaClaimStatus; result?: string }
+export interface BaCaseInput { title?: string; plaintiff?: string; defendant?: string; caseNumber?: string; filedOn?: string | null; nextHearingOn?: string | null; status?: BaCaseStatus }
+
+export const fetchBaMeta = async () => (await api.get<BaMeta>("/ba/meta")).data;
+export const fetchBaClaims = async () => (await api.get<{ claims: BaClaim[] }>("/ba/claims")).data.claims;
+export const fetchBaClaim = async (id: number) => (await api.get<BaClaimCard>(`/ba/claims/${id}`)).data;
+export const createBaClaim = async (p: BaClaimInput) => (await api.post<{ id: number }>("/ba/claims", p)).data.id;
+export const updateBaClaim = async (id: number, p: BaClaimInput) => (await api.patch<{ ok: true; caseCreated: number | null }>(`/ba/claims/${id}`, p)).data;
+export const archiveBaClaim = async (id: number, archived: boolean) => { await api.post(`/ba/claims/${id}/archive`, { archived }); };
+export const fetchBaCases = async () => (await api.get<{ cases: BaCase[] }>("/ba/cases")).data.cases;
+export const fetchBaCase = async (id: number) => (await api.get<BaCaseCard>(`/ba/cases/${id}`)).data;
+export const createBaCase = async (p: BaCaseInput) => (await api.post<{ id: number }>("/ba/cases", p)).data.id;
+export const updateBaCase = async (id: number, p: BaCaseInput) => { await api.patch(`/ba/cases/${id}`, p); };
+export const archiveBaCase = async (id: number, archived: boolean) => { await api.post(`/ba/cases/${id}/archive`, { archived }); };
+export async function uploadBaFile(kind: "claims" | "cases", id: number, file: File, docType: BaDocType): Promise<number> {
+  const dataBase64 = await new Promise<string>((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(new Error("Не вдалося прочитати файл"));
+    r.readAsDataURL(file);
+  });
+  return (await api.post<{ id: number }>(`/ba/${kind}/${id}/files`, { filename: file.name, dataBase64, docType })).data.id;
+}
+/** Файл тягнеться з токеном (звичайне посилання його не несе) і відкривається як blob. */
+export async function fetchBaFileBlobUrl(kind: "claims" | "cases", id: number, fileId: number): Promise<string> {
+  const { data } = await api.get<Blob>(`/ba/${kind}/${id}/files/${fileId}`, { responseType: "blob" });
+  return URL.createObjectURL(data);
+}
+/** Кнопка «Проблемний клієнт»: хто може створити / відкрити і де претензія вже є. */
+export interface ReceivableClaimsState { canCreate: boolean; canOpen: boolean; open: { clientKey: string; claimId: number }[] }
+export const fetchReceivableClaims = async () => (await api.get<ReceivableClaimsState>("/receivables-claims/open")).data;
+export const createReceivableClaim = async (clientKey: string) =>
+  (await api.post<{ id: number; created: boolean }>("/receivables-claims", { clientKey })).data;

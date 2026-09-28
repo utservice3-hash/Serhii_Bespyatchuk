@@ -7,6 +7,7 @@ import {
 } from "../../../api";
 import { WriteoffDialog } from "./WriteoffDialog";
 import { WriteoffButton } from "./WriteoffButton";
+import { ProblemClientButton, useReceivableClaims } from "./ProblemClientButton";
 import { RowBoundary } from "./RowBoundary";
 import { ReceivablesArchive } from "./ReceivablesArchive";
 import { NoteHistoryDialog } from "./NoteHistoryDialog";
@@ -189,6 +190,8 @@ export function ReceivablesSection({
   // рівні: два незалежні стани розійшлися б, і поповер зміг би відкритись двічі.
   const [writeoffFor, setWriteoffFor] = useState<{ clientKey: string; invoiceNo: string | null } | null>(null);
   const [historyFor, setHistoryFor] = useState<string | null>(null);
+  // 🗂 «Проблемний клієнт» (задача 4314): хто натискає і де претензія вже є — з сервера.
+  const claims = useReceivableClaims();
   // 🗄 Вкладка. Архів — окремий екран, а не фільтр: списаний борг зникає з
   // активного списку ПОВНІСТЮ, тож змішувати їх в одній таблиці означало б
   // повернути те, що власник щойно скасував.
@@ -1119,6 +1122,8 @@ export function ReceivablesSection({
                                 історія · {c.noteHistoryCount}
                               </button>
                             )}
+                            <ProblemClientButton clientKey={c.clientKey} clientName={c.clientName}
+                              state={claims.state} onOpened={claims.opened} />
                             {canWriteOff && (
                               <WriteoffButton onClick={() => setWriteoffFor(
                                 writeoffFor?.clientKey === c.clientKey && writeoffFor.invoiceNo === null

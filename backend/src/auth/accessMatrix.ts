@@ -436,6 +436,17 @@ export const ACCESS_MATRIX: AccessRow[] = [
   /* 🧑‍💼 НАЙМ, прохід 1a (17.09.2026): вакансії, відмова з причиною, резерв, файли-докази.
      Та сама друга межа першим оператором (#506). Тімлід пише лише відмову своїм кандидатам і
      читає їхні файли; вакансії, резерв, завантаження — рекрутер і адмін-рівень. */
+  // 🎥 Записи співбесід tl;dv (23.09.2026) — та сама межа, що й решта дій рекрутера (`onlyEdit`).
+  { method: "GET", path: "/api/hiring/tldv", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "financier", "manager"] },
+  { method: "POST", path: "/api/hiring/tldv/sync", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
+  { method: "POST", path: "/api/hiring/tldv/:meetingId/link", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
+  { method: "POST", path: "/api/hiring/tldv/:meetingId/ignore", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
+  // 💼 Відгуки з work.ua (28.09.2026) — та сама межа, що й решта дій рекрутера (`onlyEdit`).
+  { method: "GET", path: "/api/hiring/workua", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "financier", "manager"] },
+  { method: "POST", path: "/api/hiring/workua/sync", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
+  { method: "PUT", path: "/api/hiring/vacancies/:id/workua", cls: "deny-only", allow: [], deny: ["team_lead", "manager"] },
   { method: "GET", path: "/api/hiring/vacancies?scope=active", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "financier", "manager"] },
   { method: "POST", path: "/api/hiring/vacancies", cls: "deny-only",
@@ -1279,5 +1290,46 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "GET", path: "/api/training/tree", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
   { method: "POST", path: "/api/uploads", cls: "deny-only",
-    allow: [], deny: [] },
+    allow: [], deny: [] },  /* 🗂 БІЗНЕС-АСИСТЕНТ, прохід 1 (задача 4314, 28.09.2026): Претензії й Судовий реєстр.
+     Вкладку `ba` сид дає ролі «бізнес-асистент» і керівництву (admin, ceo, opdir, kvp, hr) — рішення
+     Романа 24.09.2026. Друга межа — `onlyBa` першим оператором обробника. Фінансист адмін-рівня, але
+     вкладки не має → 403 на tab-гейті; у deny-only рядки його не пишемо (та сама причина, що в найму).
+     Роль `business_assistant` у пробі відсутня (її немає в ACCESS_ROLES) — доступ їй доводить `#772`. */
+  { method: "GET", path: "/api/ba/meta", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
+  { method: "GET", path: "/api/ba/claims", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
+  { method: "GET", path: "/api/ba/claims/:id", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
+  { method: "GET", path: "/api/ba/cases", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
+  { method: "GET", path: "/api/ba/cases/:id", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
+  { method: "GET", path: "/api/ba/claims/:id/files/:fileId", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
+  { method: "GET", path: "/api/ba/cases/:id/files/:fileId", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
+  { method: "POST", path: "/api/ba/claims", cls: "deny-only",
+    allow: [], deny: ["team_lead", "manager"] },
+  { method: "PATCH", path: "/api/ba/claims/:id", cls: "deny-only",
+    allow: [], deny: ["team_lead", "manager"] },
+  { method: "POST", path: "/api/ba/claims/:id/archive", cls: "deny-only",
+    allow: [], deny: ["team_lead", "manager"] },
+  { method: "POST", path: "/api/ba/claims/:id/files", cls: "deny-only",
+    allow: [], deny: ["team_lead", "manager"] },
+  { method: "POST", path: "/api/ba/cases", cls: "deny-only",
+    allow: [], deny: ["team_lead", "manager"] },
+  { method: "PATCH", path: "/api/ba/cases/:id", cls: "deny-only",
+    allow: [], deny: ["team_lead", "manager"] },
+  { method: "POST", path: "/api/ba/cases/:id/archive", cls: "deny-only",
+    allow: [], deny: ["team_lead", "manager"] },
+  { method: "POST", path: "/api/ba/cases/:id/files", cls: "deny-only",
+    allow: [], deny: ["team_lead", "manager"] },
+  /* 🧾 Кнопка «Проблемний клієнт» у дебіторці — вкладка `receivables` + право `create_claim`
+     (керівництво й фінансист). Тімлід і менеджер вкладку мають, права — ні: GET дає їм 200 з
+     порожнім списком, POST — 403 по праву. HR вкладки дебіторки не має → 403 на tab-гейті. */
+  { method: "GET", path: "/api/receivables-claims/open", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  { method: "POST", path: "/api/receivables-claims", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
 ];
