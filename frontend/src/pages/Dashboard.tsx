@@ -61,6 +61,7 @@ import StatisticsChartsSection from "./dashboard/sections/StatisticsChartsSectio
 import SettingsSection from "./dashboard/sections/SettingsSection";
 import { LeadgenSection } from "./dashboard/sections/LeadgenSection";
 import { MissedCallsSection } from "./dashboard/sections/MissedCallsSection";
+import { AiCallsSection } from "./dashboard/sections/AiCallsSection";
 import { HiringSection } from "./dashboard/sections/HiringSection";
 import { BusinessAssistantSection } from "./dashboard/sections/BusinessAssistantSection";
 import { NominationsSection } from "./dashboard/sections/NominationsSection";
@@ -1104,6 +1105,10 @@ export function Dashboard() {
          * стоїть за вкладкою «Клієнти», без неї кнопка дала б 403.
          */
         <MissedCallsSection canOpenClient={!!screens?.includes("loyalty")} />
+      )}
+      {section === "ai-calls" && (
+        /* 🎧 «Перший дотик · AI». СТАТИЧНИЙ імпорт свідомо (гейт #225): lazy розбив би бандл на чанки. */
+        <AiCallsSection />
       )}
 
       {section === "receivables" && (

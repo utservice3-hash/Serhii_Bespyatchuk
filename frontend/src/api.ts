@@ -1,4 +1,5 @@
 import axios from "axios";
+import type { AiCallState } from "./pages/dashboard/aiCallsView";
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL ?? "http://localhost:4000/api",
@@ -327,6 +328,47 @@ export interface MissedCallsResp {
 }
 export async function fetchMissedCalls(params: { from: string; to: string }): Promise<MissedCallsResp> {
   const { data } = await api.get<MissedCallsResp>("/dashboard/missed-calls", { params });
+  return data;
+}
+
+/** 🎧 «Перший дотик · AI» (28.09.2026). Стани — `pages/dashboard/aiCallsView.ts`. */
+export interface AiCallRowT {
+  kommoId: number; dealUrl: string; uniqueid: string; calledAt: string; direction: "in" | "out"; billsec: number;
+  dealCreatedAt: string; managerId: number | null; managerName: string | null; teamId: number | null; teamName: string | null;
+  state: AiCallState; failure: string | null; summary: string | null;
+  priceDiscussed: boolean | null; objections: number; promises: number; promisesWithDeadline: number; unverifiedQuotes: number;
+}
+export interface AiCallsResp { period: { from: string; to: string }; truncated: boolean; rows: AiCallRowT[] }
+export async function fetchAiCalls(params: { from: string; to: string }): Promise<AiCallsResp> {
+  const { data } = await api.get<AiCallsResp>("/dashboard/ai-calls", { params });
+  return data;
+}
+export interface AiQuoted { quote: string; quote_found?: boolean | null }
+export interface AiAnalysis {
+  summary: string; manager_channel: "0" | "1" | "unknown"; client_request: string;
+  price: { discussed: boolean } & AiQuoted;
+  objections: ({ what: string } & AiQuoted)[];
+  promises: ({ who: "manager" | "client"; what: string; deadline_text: string } & AiQuoted)[];
+  next_step: string;
+}
+export interface AiTurn { channel: number; start: number | null; end: number | null; text: string; lang: string | null }
+export interface AiCallCardResp {
+  row: Omit<AiCallRowT, "kommoId" | "dealUrl" | "dealCreatedAt">;
+  dealUrls: { kommoId: number; url: string }[];
+  result: AiAnalysis | null; turns: AiTurn[] | null; transcriptHidden: boolean;
+  managerChannel: number | null; durationSec: number | null; nextOutboundAt: string | null;
+}
+export async function fetchAiCallCard(uniqueid: string): Promise<AiCallCardResp> {
+  const { data } = await api.get<AiCallCardResp>(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}`);
+  return data;
+}
+export interface AiCallsMetaResp {
+  job: { lastSuccessAt: string | null; lastError: string | null; lastErrorAt: string | null } | null;
+  transcripts: Record<string, number>; analyses: Record<string, number>;
+  spend: { stt: number; analysis: number }; caps: { stt: number | null; analysis: number | null };
+}
+export async function fetchAiCallsMeta(): Promise<AiCallsMetaResp> {
+  const { data } = await api.get<AiCallsMetaResp>("/dashboard/ai-calls/meta");
   return data;
 }
 

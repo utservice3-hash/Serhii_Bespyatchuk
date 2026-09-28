@@ -67,6 +67,7 @@ import * as metrics from "../core/metrics.js";
 import { ga4Configured } from "../ga4/client.js";
 import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
+import { aiCallsList, aiCallCard, aiCallsMeta } from "../core/callAiScreen.js";
 import { adPlanForPeriod } from "../core/adBudget.js";
 import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, leadgenWeekly, leadGeneratorFill,
   pct, leadGeneratorFillNote, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS,
@@ -10482,6 +10483,49 @@ dashboardRouter.get("/manager-report", async (req, res) => {
  * Без неї роут потрапив би у «відому діру» (решта `/api/dashboard/*` без tab-гейта),
  * а DoD п.2 вимагає МЕЖУ, а не лише запис у матриці.
  */
+/**
+ * 🎧 «ПЕРШИЙ ДОТИК · AI» (прохід 1, рішення Романа 28.09.2026) — лише перегляд. Логіка й правила
+ * доступу — `core/callAiScreen.ts`; межа — `pre("/api/dashboard/ai-calls")` → вкладка `ai-calls`
+ * (routeTab), кламп скоупу — той самий `missedScopeFor`: тімлід бачить лише свою команду.
+ * Повний текст розмови — лише admin і kvp (`TRANSCRIPT_ROLES`), решта — витяг із цитатами.
+ */
+dashboardRouter.get("/ai-calls", async (req, res) => {
+  const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
+  const scope = missedScopeFor(req.auth!, {});
+  const { adSources } = await getSettings();
+  const { rows, truncated } = await aiCallsList(pool, { predicate: metrics.adDealSql, adSources }, from, to, new Date(), scope);
+  res.json({
+    period: { from, to }, truncated,
+    // Явний перелік полів, а не спред (#17e2).
+    rows: rows.map((r) => ({
+      kommoId: r.kommoId, dealUrl: kommoLeadUrl(r.kommoId), uniqueid: r.uniqueid, calledAt: r.calledAt,
+      direction: r.direction, billsec: r.billsec, dealCreatedAt: r.dealCreatedAt,
+      managerId: r.managerId, managerName: r.managerName, teamId: r.teamId, teamName: r.teamName,
+      state: r.state, failure: r.failure, summary: r.summary, priceDiscussed: r.priceDiscussed,
+      objections: r.objections, promises: r.promises, promisesWithDeadline: r.promisesWithDeadline,
+      unverifiedQuotes: r.unverifiedQuotes,
+    })),
+  });
+});
+
+dashboardRouter.get("/ai-calls/meta", async (_req, res) => {
+  const m = await aiCallsMeta(pool, new Date(), {
+    stt: config.callAi.prices.sttMonthCapUsd, analysis: config.callAi.prices.llmMonthCapUsd,
+  });
+  res.json({ job: m.job, transcripts: m.transcripts, analyses: m.analyses, spend: m.spend, caps: m.caps });
+});
+
+dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
+  const auth = req.auth!;
+  const card = await aiCallCard(pool, String(req.params.uniqueid), auth.role, missedScopeFor(auth, {}));
+  if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
+  res.json({
+    row: card.row, dealUrls: card.row.kommoIds.map((id) => ({ kommoId: id, url: kommoLeadUrl(id) })),
+    result: card.result, turns: card.turns, transcriptHidden: card.transcriptHidden,
+    managerChannel: card.managerChannel, durationSec: card.durationSec, nextOutboundAt: card.nextOutboundAt,
+  });
+});
+
 dashboardRouter.get("/missed-calls", async (req, res) => {
   const auth = req.auth!;
   const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());

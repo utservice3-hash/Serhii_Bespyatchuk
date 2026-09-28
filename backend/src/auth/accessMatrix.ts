@@ -361,6 +361,17 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // Динаміка (17.09.2026) — ТІ САМІ межі, що в екрана: той самий tab-гейт. Звіряє #449.
   { method: "GET", path: "/api/dashboard/missed-calls/series?granularity=day", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
+  /* 🎧 «ПЕРШИЙ ДОТИК · AI» (рішення Романа 28.09.2026). Вкладку сид дає admin, ceo, opdir, kvp, team_lead;
+     менеджер, фінансист і HR — ні (П18: розмови колег менеджеру не показуємо на старті). Тімлід
+     бачить лише свою команду — кламп у роуті. Усі підроути ловить ОДИН tab-гейт, тож межі однакові;
+     звіряє з сидом #831. Повний текст розмови всередині картки — ще вужче (admin, kvp), це вже
+     правило відповіді, а не межа роута. */
+  { method: "GET", path: "/api/dashboard/ai-calls", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["hr", "manager", "financier"] },
+  { method: "GET", path: "/api/dashboard/ai-calls/meta", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["hr", "manager", "financier"] },
+  { method: "GET", path: "/api/dashboard/ai-calls/:uniqueid", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["hr", "manager", "financier"] },
   /* 🧑‍💼 НАЙМ, прохід 1 (17.09.2026). Вкладку `hiring` сид дає admin, ceo, opdir, kvp, hr,
      team_lead — рядок `/api/hiring/candidates` звіряється з ним гейтом #504.
      Друга межа — `hiringAccess` першим оператором обробника: графік, звіт і запис веде

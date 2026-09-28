@@ -38,6 +38,14 @@ export const NAV_GROUPS = [
     ],
   },
   {
+    // 🎧 «Продаж» — нова група за макетом «Перший дотик» (рішення Романа 28.09.2026). Без поля `roles`:
+    // видимість вирішує `screen_access` із токена (сид — schema.sql: admin, kvp, ceo, opdir, team_lead).
+    label: "Продаж",
+    items: [
+      { key: "ai-calls", label: "Перший дотик · AI", icon: "🎧" },
+    ],
+  },
+  {
     label: "Клієнти",
     items: [
       { key: "loyalty", label: "Клієнти та реактивація", icon: "🔁" },

@@ -4365,6 +4365,14 @@ CREATE TABLE IF NOT EXISTS ai_spend_ledger (
 CREATE INDEX IF NOT EXISTS idx_ai_spend_ledger_at ON ai_spend_ledger(at);
 REVOKE ALL ON ai_spend_ledger FROM ai_readonly;
 -- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
+
+-- 🎧 ВКЛАДКА «ПЕРШИЙ ДОТИК · AI» (рішення Романа 28.09.2026). Без цього рядка вкладку не побачив би
+-- НІХТО, включно з адміном: пункт меню видно з `screen_access` у токені. Менеджер, фінансист і HR —
+-- ні (П18). Ідемпотентно й НЕ перетирає рішень адміна: чіпаємо лише ролі, де ключа ще немає.
+-- ⚠️ revert коду ключ із ролей не прибирає — знімати тумблером у Налаштуваннях.
+UPDATE roles SET screen_access = screen_access || '{"ai-calls":true}'::jsonb
+  WHERE key IN ('admin', 'kvp', 'ceo', 'opdir', 'team_lead')
+    AND NOT (screen_access ? 'ai-calls');
 -- 💼 ВІДГУКИ З WORK.UA → «КАНДИДАТИ» (28.09.2026, прохід 7). Памʼять оброблених відгуків: той самий відгук
 -- удруге нічого не робить, а найбільший id — звідки продовжувати. Кандидат — `hiring_candidates` (той самий
 -- телефон → наявна картка, подія «повторний відгук»). Вакансію work.ua привʼязує людина у «Вакансіях».
