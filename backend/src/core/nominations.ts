@@ -130,21 +130,25 @@ function leadgenWeek(stats: Awaited<ReturnType<typeof leadgenStats>>, reviews: M
 }
 
 /**
- * Статистика відділу РНК · конверсія (#661): «Конв. реклама» Звіту по кожному менеджеру РНК з ростеру
- * тижня + правки Даші й тімлідів (`nomination_conv_edits`, лише дописування). У знімок не йде — живе.
- * Лише про людей і правки: самі числа — з ядра (`metrics.conversionByManager`), свого SQL по угодах немає.
+ * Статистика відділу РНК · конверсія (#661; з 29.09.2026 — «як у Kommo», #919): цільові ліди, успіх і «всього» за
+ * трьома фільтрами власника по кожному менеджеру РНК з ростеру тижня + правки Даші й тімлідів
+ * (`nomination_conv_edits`, лише дописування). У знімок не йде — живе. Самі числа — з ядра
+ * (`metrics.rnkConvAsKommo`), свого SQL по угодах немає.
  */
 export async function rnkConvWeek(from: string, to: string, rosterIn?: RosterRow[]): Promise<RnkConv> {
-  const [roster, conv, edits] = await Promise.all([
-    rosterIn ?? nominationRoster(), metrics.conversionByManager({ from, to }, "ad"),
+  const roster = (rosterIn ?? await nominationRoster()).filter((r) => r.dept === "rnk");
+  const [conv, edits] = await Promise.all([
+    metrics.rnkConvAsKommo({ from, to }, roster.map((r) => r.id)),
     pool.query<{ manager_id: number | null; action: ConvEdit["action"]; taken: number | null; won: number | null; on_slide: boolean | null; comment: string | null; by_name: string | null; created_at: Date }>(
       `SELECT e.manager_id, e.action, e.taken, e.won, e.on_slide, e.comment, COALESCE(u.full_name, m.name, u.email) AS by_name, e.created_at
          FROM nomination_conv_edits e LEFT JOIN users u ON u.id = e.user_id LEFT JOIN managers m ON m.id = u.manager_id
         WHERE e.week_from = $1 ORDER BY e.id`, [from]),
   ]);
-  const byMgr = new Map(conv.map((c) => [c.managerId, c]));
-  const system = roster.filter((r) => r.dept === "rnk").map((r) => ({ managerId: r.id, name: r.name, teamId: r.teamId, taken: byMgr.get(r.id)?.taken ?? 0, won: byMgr.get(r.id)?.won ?? 0 }));
-  return buildRnkConv(system, edits.rows.map((e) => ({ managerId: e.manager_id, action: e.action, taken: e.taken, won: e.won, onSlide: e.on_slide, comment: e.comment, by: e.by_name, at: e.created_at.toISOString() })));
+  const byMgr = new Map(conv.rows.map((c) => [c.managerId, c]));
+  const system = roster.map((r) => ({ managerId: r.id, name: r.name, teamId: r.teamId,
+    taken: byMgr.get(r.id)?.target ?? 0, won: byMgr.get(r.id)?.won ?? 0, total: byMgr.get(r.id)?.total ?? 0 }));
+  const out = buildRnkConv(system, edits.rows.map((e) => ({ managerId: e.manager_id, action: e.action, taken: e.taken, won: e.won, onSlide: e.on_slide, comment: e.comment, by: e.by_name, at: e.created_at.toISOString() })));
+  return { ...out, outside: conv.outside };
 }
 
 /** Живі блоки зафіксованого тижня: лідогенератори (CRM + рішення) і конверсія РНК — не зі знімка. */

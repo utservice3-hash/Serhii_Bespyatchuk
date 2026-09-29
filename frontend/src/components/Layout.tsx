@@ -20,6 +20,9 @@ export const NAV_GROUPS = [
       { key: "plans", label: "Плани", icon: "💵", roles: ["admin", "team_lead"] },
       { key: "statistics", label: "Статистики", icon: "📊" },
       { key: "depstats", label: "Статистики (відділи)", icon: "🗂️" },
+      // 💰 Фінанси (29.09.2026): план/факт витрат і статті замість Excel. Без поля `roles`: видимість вирішує
+      // `screen_access` із токена (сид — schema.sql: admin, ceo, opdir, kvp, financier).
+      { key: "finance", label: "Фінанси", icon: "💰" },
       // 📵 ТЗ-1 «Пропущені дзвінки». Ключ `missed-calls`, а НЕ `calls`: останнє вже
       // означає категорію графіків «☎️ Дзвінки» всередині «Статистик» — інший простір
       // імен, але те саме слово на сусідньому екрані. Без поля `roles`: видимість
