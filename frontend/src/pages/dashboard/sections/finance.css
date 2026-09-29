@@ -1,0 +1,35 @@
+/* 💰 «Фінанси» (29.09.2026). Картки, таблиці, шухляди й діалоги — з `hiring.css` (`.hr-*`); тут лише своє. */
+.fin-table tr.resp td { background: var(--surface-2, var(--bg)); font-weight: 700; cursor: pointer; }
+.fin-table tr.grp td { font-weight: 600; color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; padding-top: 12px; }
+.fin-table tr.it { cursor: pointer; }
+.fin-table tr.it:hover td { background: var(--surface-2, var(--bg)); }
+.fin-table tr.it.over td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
+.fin-table tr.it.sel td { background: var(--info-bg); }
+.fin-table tr.off td { color: var(--text-muted); }
+.fin-table td.ind1 { padding-left: 20px; }
+.fin-table td.ind2 { padding-left: 36px; }
+.fin-table .acts { display: inline-flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap; }
+.fin-table .add td { padding-top: 2px; padding-bottom: 10px; border-bottom: 0; }
+.fin-link { background: none; border: 0; padding: 0; color: var(--brand); cursor: pointer; font-size: 12.5px; }
+.fin-cell { width: 110px; text-align: right; border: 1px solid var(--border-strong); border-radius: var(--r-md); padding: 4px 6px; background: var(--card-bg); color: var(--text); font: inherit; font-variant-numeric: tabular-nums; }
+.fin-cell.ch { border-color: var(--brand); background: var(--info-bg); }
+.fin-cell.bad { border-color: var(--danger); background: var(--danger-bg); }
+.fin-bar { display: inline-block; width: 70px; height: 6px; border-radius: 3px; background: var(--border); vertical-align: middle; margin-right: 6px; overflow: hidden; }
+.fin-bar > i { display: block; height: 100%; background: var(--ok); }
+.fin-bar.x > i { background: var(--danger); }
+.fin-bad { color: var(--danger); font-weight: 600; }
+.fin-good { color: var(--ok); }
+.fin-editbar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 10px 16px; background: var(--info-bg); color: var(--info); border-bottom: 1px solid var(--border); font-size: 13px; }
+.fin-spark { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; height: 64px; align-items: end; }
+.fin-spark > div { background: var(--border); border-radius: 3px 3px 0 0; height: 100%; display: flex; align-items: end; }
+.fin-spark > div > i { display: block; width: 100%; background: var(--brand); border-radius: 3px 3px 0 0; }
+.fin-spark > div.x > i { background: var(--danger); }
+.fin-spark-l { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; font-size: 10px; color: var(--text-muted); text-align: center; margin-top: 3px; }
+.fin-mm { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0; }
+.fin-mm > div { border: 1px solid var(--border); border-radius: var(--r-lg); padding: 8px 10px; }
+.fin-mm span { display: block; font-size: 11px; color: var(--text-muted); }
+.fin-mm b { font-variant-numeric: tabular-nums; }
+@media (max-width: 760px) {
+  .fin-cell { width: 84px; }
+  .fin-table td.ind2 { padding-left: 20px; }
+}

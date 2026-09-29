@@ -24,6 +24,8 @@ const P: Record<string, React.ReactNode> = {
   plans: <><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4" /></>,
   statistics: <><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></>,
   depstats: <><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></>,
+  // 💰 Фінанси: гаманець (29.09.2026).
+  finance: <><rect x="3" y="6" width="18" height="13" rx="2" /><path d="M3 10h18M16 15h2" /></>,
   teams: <><circle cx="9" cy="8" r="3" /><path d="M3 20a6 6 0 0 1 12 0" /><path d="M16 6a3 3 0 0 1 0 6M17 20a6 6 0 0 0-2-4" /></>,
   managers: <><circle cx="12" cy="8" r="3.5" /><path d="M5 20a7 7 0 0 1 14 0" /></>,
   reports: <><path d="M6 3h12v18l-6-4-6 4z" /></>,

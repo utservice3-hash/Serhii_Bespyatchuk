@@ -59,6 +59,7 @@ export const MOUNTS: { mount: string; module: string; export: string }[] = [
   { mount: "/api/training", module: "../routes/training.js", export: "trainingRouter" },
   { mount: "/api/hiring", module: "../routes/hiring.js", export: "hiringRouter" },
   { mount: "/api/ba", module: "../routes/businessAssistant.js", export: "baRouter" },
+  { mount: "/api/finance", module: "../routes/finance.js", export: "financeRouter" },
   { mount: "/api/receivables-claims", module: "../routes/receivablesClaims.js", export: "receivablesClaimRouter" },
   { mount: "/api/nominations", module: "../routes/nominations.js", export: "nominationsRouter" },
   { mount: "/api/people", module: "../routes/people.js", export: "peopleRouter" },

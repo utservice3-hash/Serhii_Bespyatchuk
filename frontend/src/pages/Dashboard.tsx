@@ -64,6 +64,7 @@ import { MissedCallsSection } from "./dashboard/sections/MissedCallsSection";
 import { AiCallsSection } from "./dashboard/sections/AiCallsSection";
 import { HiringSection } from "./dashboard/sections/HiringSection";
 import { BusinessAssistantSection } from "./dashboard/sections/BusinessAssistantSection";
+import { FinanceSection } from "./dashboard/sections/FinanceSection";
 import { NominationsSection } from "./dashboard/sections/NominationsSection";
 import BankSection from "./dashboard/sections/BankSection";
 import { emptyTaskForm } from "./dashboard/taskForm";
@@ -1085,6 +1086,14 @@ export function Dashboard() {
          * Доступ усередині вирішує сервер (`/api/hiring/meta` → access), тут лише рендер.
          */
         <HiringSection />
+      )}
+
+      {section === "finance" && (
+        /**
+         * 💰 Фінанси, прохід 1 (29.09.2026): план/факт витрат і статті замість Excel.
+         * СТАТИЧНИЙ імпорт свідомо — гейт #225 (один чанк). Доступ і права вирішує сервер (вкладка `finance`).
+         */
+        <FinanceSection />
       )}
 
       {section === "ba" && (

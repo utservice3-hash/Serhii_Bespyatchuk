@@ -34,6 +34,7 @@ const ADMIN_LEVEL_ROLES = new Set(["admin", "ceo", "opdir", "kvp", "financier"])
  * інакше це знову «непробована роль у deny», з якої й почався інцидент.
  */
 const ADMIN_DENIED_BY_PERM: Record<string, string> = {
+  "POST /api/finance/approval": "approve_finance_plan — лише admin, СЕО, ОД (Фінанси, 29.09.2026); kvp і фінансист розділ бачать, а погодити план не можуть",
   "PUT /api/one-on-ones/forms/:type": "edit_1x1_forms — СЕО/ОД, HR і КВП (рішення власника 27.08.2026); admin його не має",
   "POST /api/settings/roles": "manage_users — kvp/financier його не мають (рішення власника)",
   "PUT /api/settings/roles/:key": "manage_users — те саме",

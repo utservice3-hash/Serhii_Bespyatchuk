@@ -4882,3 +4882,43 @@ export interface ReceivableClaimsState { canCreate: boolean; canOpen: boolean; o
 export const fetchReceivableClaims = async () => (await api.get<ReceivableClaimsState>("/receivables-claims/open")).data;
 export const createReceivableClaim = async (clientKey: string) =>
   (await api.post<{ id: number; created: boolean }>("/receivables-claims", { clientKey })).data;
+
+// ── 💰 Фінанси, прохід 1 (29.09.2026): план/факт витрат і статті ─────────────────
+// Дзеркало `routes/finance.ts`. Доступ — вкладка `finance`; запис — право `edit_finance`,
+// погодження плану — `approve_finance_plan`. Що дозволено, каже сервер (`canEdit`/`canApprove`).
+export type FinRowState = "empty" | "noplan" | "nofact" | "over" | "ok";
+export interface FinItem {
+  id: number; name: string; offFrom: string | null; active: boolean;
+  plan: number | null; fact: number | null; note: string | null; state: FinRowState; dataMonths: number;
+}
+export interface FinGroup { id: number; name: string; items: FinItem[] }
+export interface FinResp { id: number; name: string; groups: FinGroup[] }
+export interface FinMonth {
+  month: string; currentMonth: string; tree: FinResp[];
+  totals: { plan: number; fact: number; items: number; over: number; noplan: number; overSum: number };
+  approval: { at: string; by: string | null; note: string | null; changedAfter: number } | null;
+  imported: { source: string; filePlan: number | null; fileFact: number | null; rowsPlan: number; rowsFact: number } | null;
+  canEdit: boolean; canApprove: boolean;
+}
+export interface FinItemCard {
+  id: number; name: string; offFrom: string | null; deleted: boolean;
+  group: { id: number; name: string }; resp: { id: number; name: string };
+  months: { month: string; plan: number | null; fact: number | null; note: string | null; active: boolean }[];
+  log: { at: string; month: string | null; field: "plan" | "fact" | "note" | null; old: number | null; new: number | null; what: string; actor: string | null }[];
+}
+export type FinKind = "resp" | "group" | "item";
+export interface FinCell { itemId: number; field: "plan" | "fact"; value: string }
+
+export const fetchFinMonth = async (m: string) => (await api.get<FinMonth>("/finance/month", { params: { m } })).data;
+export const fetchFinItem = async (id: number, year: number) => (await api.get<FinItemCard>(`/finance/items/${id}`, { params: { year } })).data;
+export const createFin = async (kind: FinKind, body: Record<string, unknown>) =>
+  (await api.post<{ id: number }>(`/finance/${kind}s`, body)).data.id;
+export const updateFin = async (kind: FinKind, id: number, body: Record<string, unknown>) => { await api.patch(`/finance/${kind}s/${id}`, body); };
+export const deleteFin = async (kind: FinKind, id: number, confirm = false) => { await api.delete(`/finance/${kind}s/${id}`, { params: confirm ? { confirm: 1 } : {} }); };
+export const restoreFin = async (kind: FinKind, id: number) => { await api.post("/finance/restore", { kind, id }); };
+export const setFinItemOff = async (id: number, off: boolean) => (await api.post<{ offFrom: string | null }>(`/finance/items/${id}/off`, { off })).data;
+export const saveFinValues = async (month: string, cells: FinCell[]) => (await api.put<{ changed: number }>("/finance/values", { month, cells })).data;
+export const saveFinNote = async (itemId: number, month: string, text: string) => { await api.put("/finance/notes", { itemId, month, text }); };
+export const setFinApproval = async (month: string, approved: boolean) => { await api.post("/finance/approval", { month, approved }); };
+/** Тіло відповіді з помилкою (409 з кількістю місяців, 400 зі списком поганих клітинок). */
+export const finErrorData = (e: unknown) => (e as { response?: { status?: number; data?: Record<string, unknown> } })?.response;

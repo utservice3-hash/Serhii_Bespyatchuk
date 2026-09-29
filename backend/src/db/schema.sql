@@ -4411,3 +4411,118 @@ ALTER TABLE hiring_vacancies ADD COLUMN IF NOT EXISTS workua_job_id BIGINT;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_hiring_vacancies_workua ON hiring_vacancies(workua_job_id) WHERE workua_job_id IS NOT NULL;
 -- 🔒 Телефони й пошти кандидатів — персональні дані. REVOKE після CREATE.
 REVOKE ALL ON workua_responses FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💰 ФІНАНСИ, прохід 1 (29.09.2026): «План/факт витрат» і «Статті».
+-- Те, що фінансист (Тетяна) вела в Excel-таблиці «Витрати План/Факт», вноситься тут.
+-- Правила — `core/finance.ts`. ⚠️ Revert коду не відкочує таблиць і рядків: вони лишаються,
+-- і їх ніхто не читає. Видалення в інтерфейсі МʼЯКЕ (`deleted_at`) — його скасовує та сама
+-- кнопка «Повернути», тож рядки тут не зникають ніколи (правило «дія скасовна тим самим інтерфейсом»).
+-- ══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS fin_resps (
+  id          SERIAL PRIMARY KEY,
+  name        TEXT NOT NULL CHECK (btrim(name) <> ''),
+  sort        INTEGER NOT NULL DEFAULT 0,
+  deleted_at  TIMESTAMPTZ,
+  deleted_by  INTEGER REFERENCES users(id),
+  created_by  INTEGER REFERENCES users(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fin_resps_name ON fin_resps (lower(btrim(name))) WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS fin_groups (
+  id          SERIAL PRIMARY KEY,
+  resp_id     INTEGER NOT NULL REFERENCES fin_resps(id),
+  name        TEXT NOT NULL CHECK (btrim(name) <> ''),
+  sort        INTEGER NOT NULL DEFAULT 0,
+  deleted_at  TIMESTAMPTZ,
+  deleted_by  INTEGER REFERENCES users(id),
+  created_by  INTEGER REFERENCES users(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fin_groups_name ON fin_groups (resp_id, lower(btrim(name))) WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS fin_items (
+  id          SERIAL PRIMARY KEY,
+  group_id    INTEGER NOT NULL REFERENCES fin_groups(id),
+  name        TEXT NOT NULL CHECK (btrim(name) <> ''),
+  sort        INTEGER NOT NULL DEFAULT 0,
+  -- «Вимкнено з місяця»: стаття діє в місяцях ДО цього. Минулі підсумки від вимкнення не рухаються (#932).
+  off_from    DATE CHECK (off_from IS NULL OR off_from = date_trunc('month', off_from)::date),
+  deleted_at  TIMESTAMPTZ,
+  deleted_by  INTEGER REFERENCES users(id),
+  created_by  INTEGER REFERENCES users(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fin_items_name ON fin_items (group_id, lower(btrim(name))) WHERE deleted_at IS NULL;
+
+-- Стаття × місяць: план, факт і коментар «чому». NULL — «не внесено», і це НЕ нуль (#930).
+CREATE TABLE IF NOT EXISTS fin_values (
+  item_id     INTEGER NOT NULL REFERENCES fin_items(id),
+  month       DATE NOT NULL CHECK (month = date_trunc('month', month)::date),
+  plan        NUMERIC(14,2),
+  fact        NUMERIC(14,2),
+  note        TEXT,
+  updated_by  INTEGER REFERENCES users(id),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (item_id, month)
+);
+CREATE INDEX IF NOT EXISTS idx_fin_values_month ON fin_values (month);
+
+-- Історія: кожна зміна цифри (було → стало), коментаря й структури — з автором, тим самим викликом.
+CREATE TABLE IF NOT EXISTS fin_log (
+  id          BIGSERIAL PRIMARY KEY,
+  at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actor_id    INTEGER REFERENCES users(id),
+  kind        TEXT NOT NULL CHECK (kind IN ('resp','group','item','month')),
+  target_id   INTEGER,
+  month       DATE,
+  field       TEXT CHECK (field IS NULL OR field IN ('plan','fact','note')),
+  old_value   NUMERIC(14,2),
+  new_value   NUMERIC(14,2),
+  what        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fin_log_target ON fin_log (kind, target_id, at DESC);
+CREATE INDEX IF NOT EXISTS idx_fin_log_month ON fin_log (month, at DESC);
+
+-- Погодження плану місяця (право `approve_finance_plan`). Знімається тією ж кнопкою.
+CREATE TABLE IF NOT EXISTS fin_plan_approvals (
+  month        DATE PRIMARY KEY CHECK (month = date_trunc('month', month)::date),
+  approved_by  INTEGER REFERENCES users(id),
+  approved_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  note         TEXT
+);
+
+-- Разове перенесення з Excel (`tools/importFinanceHistory.ts`). Підсумок файлу зберігається поруч
+-- із сумою рядків: де вони розійшлись (лютий, вересень), екран показує обидва числа, а не одне (#935).
+CREATE TABLE IF NOT EXISTS fin_import_months (
+  month        DATE PRIMARY KEY CHECK (month = date_trunc('month', month)::date),
+  source       TEXT NOT NULL,
+  file_plan    NUMERIC(14,2),
+  file_fact    NUMERIC(14,2),
+  rows_plan    NUMERIC(14,2) NOT NULL,
+  rows_fact    NUMERIC(14,2) NOT NULL,
+  imported_by  INTEGER REFERENCES users(id),
+  imported_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 🔒 Витрати компанії (зокрема фонд оплати праці по статтях) — не для AI-запитів: розділ бачить лише
+-- керівництво. Дзеркало — `FORBIDDEN_TABLES`. Тримає #934.
+REVOKE ALL ON fin_resps, fin_groups, fin_items, fin_values, fin_log, fin_plan_approvals, fin_import_months FROM ai_readonly;
+
+-- Екран «Фінанси»: адмін, СЕО, ОД, КВП, фінансист (рішення 28.09.2026: «вона і все керівництво»).
+-- Бухгалтерія й HR — ні. Ідемпотентно й НЕ перетирає рішень адміна: лише де ключа ще немає.
+UPDATE roles SET screen_access = screen_access || '{"finance":true}'::jsonb
+  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'financier')
+    AND NOT (screen_access ? 'finance');
+
+-- Права розділу — явними парами «видати / зняти», ПІСЛЯ синку фінансиста (той копіює права адміна
+-- цілком, і без зняття `approve_finance_plan` розтеклось би на фінансиста). Склад фіксований кодом (#933).
+UPDATE roles SET permissions = permissions || '{"edit_finance": true}'::jsonb
+ WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'financier');
+UPDATE roles SET permissions = permissions - 'edit_finance'
+ WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp', 'financier');
+UPDATE roles SET permissions = permissions || '{"approve_finance_plan": true}'::jsonb
+ WHERE key IN ('admin', 'ceo', 'opdir');
+UPDATE roles SET permissions = permissions - 'approve_finance_plan'
+ WHERE key NOT IN ('admin', 'ceo', 'opdir');
