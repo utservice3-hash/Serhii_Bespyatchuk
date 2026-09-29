@@ -586,6 +586,7 @@ interface CarrierView {
   matchesCarrierFilter: (r: { bucket: string | null }, f: string) => boolean;
   dealStatusLabel: (s: number | null, r: string | null) => string;
   carrierSpeaker: (ch: number, mgr: number | null) => string;
+  dealsWord: (n: number) => string;
 }
 async function loadCarrierView(): Promise<CarrierView> {
   const ts = (await import("typescript")).default;
@@ -621,6 +622,7 @@ test("#963 ПРОВОДКА ФРОНТУ: меню → секція → три �
   assert.equal(V.dealStatusLabel(143, "Перевізник"), "закрито: Перевізник");
   assert.equal(V.dealStatusLabel(null, null), "угоди ще немає в дашборді", "🔴 невідомий стан угоди показано порожнім");
   assert.equal(V.carrierSpeaker(0, null), "Канал 0", "🔴 невідомий канал менеджера видано за відомий");
+  assert.deepEqual([1, 2, 5, 11, 12, 21, 22].map(V.dealsWord), ["угода", "угоди", "угод", "угод", "угод", "угода", "угоди"]);
 });
 
 /**

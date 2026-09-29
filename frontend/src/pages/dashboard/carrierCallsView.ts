@@ -56,3 +56,11 @@ export function carrierSpeaker(channel: number, managerChannel: number | null): 
   if (managerChannel == null) return `Канал ${String(channel)}`;
   return channel === managerChannel ? "Менеджер" : "Співрозмовник";
 }
+
+/** «1 угода · 2 угоди · 5 угод» — українська множина. */
+export function dealsWord(n: number): string {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return "угода";
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return "угоди";
+  return "угод";
+}

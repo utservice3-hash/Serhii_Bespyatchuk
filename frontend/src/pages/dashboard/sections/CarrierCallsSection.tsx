@@ -5,7 +5,7 @@ import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
 import { STATE_UI, TONE_COLOR, mmss, jobErrorIsCurrent } from "../aiCallsView";
-import { BUCKET_UI, CARRIER_FILTERS, TONE, carrierSpeaker, confLabel, dealStatusLabel, matchesCarrierFilter,
+import { BUCKET_UI, CARRIER_FILTERS, TONE, carrierSpeaker, confLabel, dealStatusLabel, dealsWord, matchesCarrierFilter,
   type CarrierFilter } from "../carrierCallsView";
 
 /**
@@ -204,8 +204,8 @@ export function CarrierCallsSection() {
                           <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{r.direction === "in" ? "вхідний" : "вихідний"} · {mmss(r.billsec)}{r.talkNo === 2 ? " · друга розмова" : ""}</div>
                         </td>
                         <td style={cell}>
-                          {main ? <a href={main.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>№ {main.kommoId}</a> : "—"}
-                          {r.deals.length > 1 && <div style={{ fontSize: 12, color: "var(--text-muted)" }}>+ ще {r.deals.length - 1} угод цього номера</div>}
+                          {main ? <a href={main.url} target="_blank" rel="noreferrer" style={{ whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>№ {main.kommoId}</a> : "—"}
+                          {r.deals.length > 1 && <div style={{ fontSize: 12, color: "var(--text-muted)" }}>+ ще {r.deals.length - 1} {dealsWord(r.deals.length - 1)} цього номера</div>}
                         </td>
                         <td style={cell}>{r.managerName ?? <span style={{ color: "var(--text-muted)" }}>невідомий</span>}</td>
                         <td style={{ ...cell, whiteSpace: "nowrap" }}>
