@@ -3,6 +3,8 @@ import { adDealFirstTalksSql, type AdFlag, type FirstTalkRow } from "./adCallFac
 import { createMinInterval, type HttpDeps } from "./callAiHttp.js";
 import { downloadRecording } from "./ringostatRecording.js";
 import { ELEVENLABS_STT_MODEL, elevenLabsTranscribe, GEMINI_MODEL, geminiGenerate, RUBRIC_CURRENT } from "./callAiProviders.js";
+import { carrierActiveIds } from "./carrierCallQueue.js";
+import { notifyCapOnce } from "./aiCapAlert.js";
 import { dequeueOutside, enqueueAnalyses, enqueueTranscripts, runAnalysisPortion, runSttPortion, type PortionReport } from "./callAiPipeline.js";
 import { LLM_POLICY, LLM_PROVIDER, RECORDING_MAX_BYTES, RINGOSTAT_MIN_INTERVAL_MS, RINGOSTAT_POLICY, STT_POLICY,
   STT_PROVIDER, STUCK_AFTER_MIN, type AdPredicate } from "./callAiPilot.js";
@@ -94,6 +96,8 @@ export interface TickEnv {
   ad: AdPredicate;
   prices: TickPrices;
   now: () => Date;
+  /** Куди сказати про вичерпану стелю (один раз на місяць). Не задано — мовчки, як було. */
+  alert?: (text: string) => Promise<void>;
 }
 
 export interface TickReport {
@@ -117,10 +121,17 @@ export async function runCallAiTick(env: TickEnv): Promise<TickReport> {
   const t0 = env.now();
   const ids = await selectFirstTouchCalls(env.db, env.ad, t0);
   const enqueued = await enqueueTranscripts(env.db, ids, STT_PROVIDER, ELEVENLABS_STT_MODEL, t0);
-  const dequeued = await dequeueOutside(env.db, ids, STT_PROVIDER, ELEVENLABS_STT_MODEL);
+  // 🚚 Та сама черга годує «Перевізників за розмовою» (щоп'ять хвилин, своя стеля). Їхні дзвінки тут
+  // не прибираємо з черги, не оплачуємо під рекламною стелею й не ставимо на рекламну рубрику.
+  // Порожня рекламна вибірка й далі не прибирає нічого (правило 15): об'єднання цього не скасовує.
+  const carrier = await carrierActiveIds(env.db, t0);
+  const adSet = new Set(ids);
+  const carrierOnly = carrier.filter((u) => !adSet.has(u));
+  const dequeued = ids.length ? await dequeueOutside(env.db, [...ids, ...carrierOnly], STT_PROVIDER, ELEVENLABS_STT_MODEL) : 0;
   const out: TickReport = { selected: ids.length, enqueued, dequeued, stt: [], llm: [], sttStoppedBy: null, llmStoppedBy: null };
   const throttle = createMinInterval(RINGOSTAT_MIN_INTERVAL_MS, env.http);
-  const common = { limit: TICK_PORTION, maxAttempts: TICK_MAX_ATTEMPTS, stuckAfterMin: STUCK_AFTER_MIN };
+  const common = { limit: TICK_PORTION, maxAttempts: TICK_MAX_ATTEMPTS, stuckAfterMin: STUCK_AFTER_MIN,
+    calls: { except: carrierOnly } };
 
   const stt = await drainWithBudget(() => runSttPortion(env.db, {
     apiKey: env.keys.elevenlabs,
@@ -135,7 +146,7 @@ export async function runCallAiTick(env: TickEnv): Promise<TickReport> {
 
   const ap = { provider: LLM_PROVIDER, model: GEMINI_MODEL, rubricVersion: RUBRIC_CURRENT,
     sttProvider: STT_PROVIDER, sttModel: ELEVENLABS_STT_MODEL };
-  await enqueueAnalyses(env.db, { ...ap, now: env.now() }, null);
+  await enqueueAnalyses(env.db, { ...ap, now: env.now() }, null, carrierOnly);
   const llm = await drainWithBudget(() => runAnalysisPortion(env.db, {
     apiKey: env.keys.gemini,
     generate: (key, model, body) => geminiGenerate(env.http, key, model, body, LLM_POLICY),
@@ -146,6 +157,9 @@ export async function runCallAiTick(env: TickEnv): Promise<TickReport> {
     usdPerOutputToken: env.prices.llmUsdPerMtokOut == null ? null : env.prices.llmUsdPerMtokOut / 1e6,
   }), LLM_BUDGET_MS, env.http.nowMs, out.llm);
   out.llmStoppedBy = llm.stoppedBy;
+
+  const capped = [...out.stt, ...out.llm].find((x) => x.state === "capped");
+  if (capped && env.alert) await notifyCapOnce(env.db, "first_touch", capped.stoppedBy ?? "стеля вичерпана", env.now(), env.alert);
 
   const errs = [stt.error, llm.error].filter((e): e is Error => e != null);
   if (errs.length) throw new Error(errs.map((e) => e.message).join(" · "));

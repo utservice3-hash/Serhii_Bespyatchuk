@@ -68,6 +68,7 @@ import { ga4Configured } from "../ga4/client.js";
 import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
 import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE } from "../core/callAiScreen.js";
+import { carrierCallCard, carrierCallsList, carrierCallsMeta } from "../core/carrierCallScreen.js";
 import { adPlanForPeriod } from "../core/adBudget.js";
 import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, leadgenWeekly, leadGeneratorFill,
   pct, leadGeneratorFillNote, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS,
@@ -10529,6 +10530,47 @@ dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
     result: card.result, turns: card.turns, transcriptHidden: card.transcriptHidden,
     managerChannel: card.managerChannel, durationSec: card.durationSec, nextOutboundAt: card.nextOutboundAt,
     promiseChecks: card.promiseChecks, callsAfter: card.callsAfter,
+  });
+});
+
+/**
+ * 🚚 «ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ» (ТЗ 29.09.2026, прохід 2) — лише перегляд, лише керівництво. Логіка —
+ * `core/carrierCallScreen.ts`; межа — `pre("/api/dashboard/carrier-calls")` → вкладка `carrier-calls` (routeTab);
+ * ролі — сид у схемі (admin, ceo, opdir, kvp). Скоупу немає: вкладку мають лише ролі всієї компанії.
+ * Повний текст розмови — як у «Першому дотику»: лише admin і kvp (`transcriptAllowed`, за ключем ролі).
+ */
+dashboardRouter.get("/carrier-calls", async (req, res) => {
+  const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
+  const { rows, kpis, truncated } = await carrierCallsList(pool, from, to);
+  res.json({
+    period: { from, to }, truncated, kpis,
+    // Явний перелік полів, а не спред (#17e2).
+    rows: rows.map((r) => ({
+      uniqueid: r.uniqueid, calledAt: r.calledAt, direction: r.direction, billsec: r.billsec, managerName: r.managerName,
+      deals: r.deals.map((d) => ({ kommoId: d.kommoId, url: kommoLeadUrl(d.kommoId), statusId: d.statusId, rejectReason: d.rejectReason, reused: d.reused })),
+      talkNo: r.talkNo, state: r.state, failure: r.failure, bucket: r.bucket, role: r.role, confidence: r.confidence,
+      quote: r.quote, quoteCheck: r.quoteCheck, summary: r.summary,
+    })),
+  });
+});
+
+dashboardRouter.get("/carrier-calls/meta", async (_req, res) => {
+  const m = await carrierCallsMeta(pool, new Date(), {
+    stt: config.callAi.prices.sttMonthCapUsd, analysis: config.callAi.prices.llmMonthCapUsd,
+  });
+  res.json({ job: m.job, transcripts: m.transcripts, analyses: m.analyses, spend: m.spend, caps: m.caps });
+});
+
+dashboardRouter.get("/carrier-calls/:uniqueid", async (req, res) => {
+  const auth = req.auth!;
+  const card = await carrierCallCard(pool, String(req.params.uniqueid), transcriptAllowed(auth));
+  if (!card) { res.status(404).json({ error: "Дзвінок не знайдено серед дзвінків на мобільні" }); return; }
+  res.json({
+    uniqueid: card.uniqueid, calledAt: card.calledAt, billsec: card.billsec, managerName: card.managerName,
+    deals: card.deals.map((d) => ({ kommoId: d.kommoId, url: kommoLeadUrl(d.kommoId), reused: d.reused })),
+    talkNo: card.talkNo, firstTry: card.firstTry, state: card.state, failure: card.failure,
+    result: card.result, bucket: card.bucket, turns: card.turns, transcriptHidden: card.transcriptHidden,
+    textPurged: card.textPurged, managerChannel: card.managerChannel,
   });
 });
 
