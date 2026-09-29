@@ -61,8 +61,12 @@ const confirmed = (req: Request) => req.query.confirm === "1";
 financeRouter.get("/month", async (req, res) => {
   try {
     onlyFinance(req);
-    const out = await loadMonth(pool as unknown as Db, req.query.m);
-    res.json({ ...out, canEdit: roleHasPerm(req.auth!.roleKey, "edit_finance"), canApprove: roleHasPerm(req.auth!.roleKey, "approve_finance_plan") });
+    const m = await loadMonth(pool as unknown as Db, req.query.m);
+    // Поля — явним переліком (#17e2): нове поле ядра не поїде назовні саме.
+    res.json({
+      month: m.month, currentMonth: m.currentMonth, tree: m.tree, totals: m.totals, approval: m.approval, imported: m.imported,
+      canEdit: roleHasPerm(req.auth!.roleKey, "edit_finance"), canApprove: roleHasPerm(req.auth!.roleKey, "approve_finance_plan"),
+    });
   } catch (e) { fail(res, e); }
 });
 financeRouter.get("/items/:id", async (req, res) => {
