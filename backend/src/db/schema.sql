@@ -4436,6 +4436,17 @@ UPDATE roles SET screen_access = screen_access || '{"ai-calls":true}'::jsonb
 -- механізм, що з «Бізнес-асистентом» (#741b). Зняття стоїть ПІСЛЯ синку й після сиду; тримає #794.
 UPDATE roles SET screen_access = screen_access - 'ai-calls'
  WHERE key IN ('financier', 'hr', 'manager');
+
+-- 🚚 ВКЛАДКА «ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ» (рішення Романа 29.09.2026): лише керівництво — admin, ceo, opdir, kvp.
+-- Ідемпотентно й не перетирає рішень адміна: чіпаємо лише ролі, де ключа ще немає.
+-- Зняття — ПІСЛЯ синку «фінансист = екрани адміна» (той самий механізм, що протік `ai-calls`, #794):
+-- інакше на другому прогоні схеми фінансист отримав би вкладку від адміна. Тімлід, HR і менеджер — теж ні.
+-- ⚠️ revert коду ключ із ролей не прибирає — знімати тумблером у Налаштуваннях.
+UPDATE roles SET screen_access = screen_access || '{"carrier-calls":true}'::jsonb
+  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp')
+    AND NOT (screen_access ? 'carrier-calls');
+UPDATE roles SET screen_access = screen_access - 'carrier-calls'
+ WHERE key IN ('financier', 'hr', 'manager', 'team_lead');
 -- 💼 ВІДГУКИ З WORK.UA → «КАНДИДАТИ» (28.09.2026, прохід 7). Памʼять оброблених відгуків: той самий відгук
 -- удруге нічого не робить, а найбільший id — звідки продовжувати. Кандидат — `hiring_candidates` (той самий
 -- телефон → наявна картка, подія «повторний відгук»). Вакансію work.ua привʼязує людина у «Вакансіях».

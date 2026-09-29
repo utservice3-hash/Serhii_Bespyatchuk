@@ -127,6 +127,7 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/dashboard/missed-calls"), tabs: ["missed-calls"] },
     // 🎧 «Перший дотик · AI» (28.09.2026). Один гейт на всі підроути: список, стан конвеєра, картка.
     { test: pre("/api/dashboard/ai-calls"), tabs: ["ai-calls"] },
+    { test: pre("/api/dashboard/carrier-calls"), tabs: ["carrier-calls"] },
     { test: pre("/api/dashboard/regular-clients"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/manager-report"), tabs: ["manager-report"] },
     // ⚠️ РЕШТА /api/dashboard/* ЛИШАЄТЬСЯ БЕЗ TAB-ГЕЙТА — і це ВІДОМА ДІРА, а не задум.

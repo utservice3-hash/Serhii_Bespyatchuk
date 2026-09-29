@@ -2,6 +2,8 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { ACCESS_MATRIX } from "../auth/accessMatrix.js";
 import type { Db } from "./adCallFacts.js";
 import type { HttpDeps } from "./callAiHttp.js";
 import type { TickPrices } from "./callAiTick.js";
@@ -456,4 +458,188 @@ test("#959 ПРОВОДКА: крон щоп'ять хвилин на :04…:59,
   }
   const mt = readFileSync(path.join(root, "ai", "metricTools.ts"), "utf8");
   assert.match(mt, /"carrier_call_deals"/, "🔴 carrier_call_deals не в FORBIDDEN_TABLES");
+});
+
+// ─── Прохід 2: вкладка ──────────────────────────────────────────────────────
+
+const SRC = (rel: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "src", rel), "utf8");
+const FE = (rel: string): string => fileURLToPath(new URL(`../../../frontend/src/${rel}`, import.meta.url));
+
+async function carrierAnalysed(c: Raw, u: string, role: string, conf: number, quoteCheck: string, quote = "своя фура") {
+  const t = await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
+    VALUES ($1,'elevenlabs','scribe_v2','done','[{"channel":1,"start":0,"end":1,"text":"Добрий день","lang":"ukr"},{"channel":0,"start":1,"end":3,"text":"у мене своя фура","lang":"ukr"}]'::jsonb) RETURNING id`, [u]);
+  await c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result)
+    VALUES ($1,'google','gemini-3.8-flash','carrier-v1','done',$2::jsonb)`,
+  [t.rows[0].id, JSON.stringify({ summary: "перевізник", manager_channel: "1", caller_role: role, caller_role_confidence: conf, caller_role_quote: quote, quote_check: quoteCheck })]);
+  return t.rows[0].id;
+}
+
+/**
+ * #960 — СПИСОК І ПЛИТКИ: рядок — дзвінок, угода з повтором вердикту номера стоїть у рядку свого джерела;
+ * угоди без розмови в список не йдуть, але їх число — у плитках; «прибрав фільтр» — лише угоди етапу (назва-номер)
+ * з причиною «Перевізник» у періоді; «лишилось після фільтра» — усі наші записи періоду.
+ * 🧨 Червоніє, якщо рядок стане угодою, загубиться повтор, прибрати назву-номер чи розвести період.
+ */
+test("#960 СПИСОК · ЖИВА СХЕМА: рядок — дзвінок з усіма угодами номера; без розмови — лише числом; плитки з обох джерел", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await reset(c);
+  const { carrierCallsList } = await import("./carrierCallScreen.js");
+  const P = phone(96000, 1), Q = phone(96000, 2);
+  const at = new Date("2026-09-24T08:00:00Z");
+  await call(c, "960-a", at, 40, P); await call(c, "960-c", at, 25, Q);
+  await carrierDeal(c, 96001, P, at, "own", "960-a", 1);
+  await c.raw.query(`INSERT INTO carrier_call_deals(kommo_id,phone,deal_created_at,seen_at,state,reused_from)
+    VALUES (96002,$1,$2,$3,'reused',96001)`, [P, new Date("2026-09-25T08:00:00Z").toISOString(), NOW.toISOString()]);
+  await carrierDeal(c, 96003, Q, at, "own", "960-c", 1);
+  await carrierDeal(c, 96004, phone(96000, 4), at);
+  await carrierDeal(c, 96005, phone(96000, 5), at, "no_talk");
+  await carrierDeal(c, 96006, phone(96000, 6), new Date("2026-09-10T08:00:00Z"));
+  await carrierAnalysed(c, "960-a", "carrier", 0.95, "counterpart");
+  await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,reject_reason,created_at_kommo) VALUES
+    (96101,'380500960101',8921928,143,'Перевізник','2026-09-24 10:00:00+03'),
+    (96102,'ТОВ Вантаж',8921928,143,'Перевізник','2026-09-24 10:00:00+03'),
+    (96103,'380500960103',8921928,143,'Дубль','2026-09-24 10:00:00+03'),
+    (96104,'380500960104',8921928,143,'Перевізник','2026-09-10 10:00:00+03')`);
+  const { rows, kpis } = await carrierCallsList(c.db, "2026-09-22", "2026-09-28");
+  assert.equal(rows.length, 2, "🔴 у списку не рівно два дзвінки (угоди без розмови чи поза періодом просочились, або рядок став угодою)");
+  const a = rows.find((r) => r.uniqueid === "960-a")!;
+  assert.deepEqual(a.deals.map((d) => [d.kommoId, d.reused]).sort(), [[96001, false], [96002, true]], "🔴 угода з повтором вердикту загубилась");
+  assert.equal(a.bucket, "carrier");
+  assert.equal(rows.find((r) => r.uniqueid === "960-c")!.bucket, null, "🔴 вердикт без аналізу");
+  assert.deepEqual({ removed: kpis.removedByFilter, left: kpis.leftAfterFilter, waiting: kpis.waitingTalk, noTalk: kpis.noTalk, listened: kpis.listenedPhones },
+    { removed: 1, left: 5, waiting: 1, noTalk: 1, listened: 1 });
+  assert.ok(kpis.recordingSince, "🔴 не видно, з якого моменту ведеться облік — старі дні читались би як нуль");
+});
+
+/**
+ * #961 — КАРТКА: лише дзвінок мобільних (чужий → null → 404); повний текст — лише кому дозволено. І з другого
+ * боку: картка «Першого дотику» не відкриває дзвінок мобільних за прямою адресою, а дзвінок, що є і там, і там, — відкриває.
+ * 🧨 Червоніє, якщо картка віддасть чужий дзвінок, текст — без права, або зняти захист у картці «Першого дотику».
+ */
+test("#961 КАРТКА · ЖИВА СХЕМА: лише дзвінки мобільних, текст — за правом; «Перший дотик» мобільний не відкриває", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await reset(c);
+  const { carrierCallCard } = await import("./carrierCallScreen.js");
+  const { aiCallCard } = await import("./callAiScreen.js");
+  const P = phone(96100, 1), S = phone(96100, 2);
+  await call(c, "961-mob", min(100), 40, P); await call(c, "961-ad", min(100), 40, "380999961000"); await call(c, "961-both", min(90), 40, S);
+  await carrierDeal(c, 96111, P, min(101), "own", "961-mob", 1);
+  await carrierDeal(c, 96112, S, min(91), "own", "961-both", 1);
+  await carrierAnalysed(c, "961-mob", "carrier", 0.95, "counterpart");
+  const both = await carrierAnalysed(c, "961-both", "client", 0.9, "counterpart");
+  await c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status) VALUES ($1,'google','gemini-3.8-flash','first-touch-v1','queued')`, [both]);
+  const hidden = await carrierCallCard(c.db, "961-mob", false);
+  assert.ok(hidden?.result, "дзеркало: вердикт видно всім ролям вкладки");
+  assert.equal(hidden?.turns, null, "🔴 повний текст віддано без права");
+  assert.equal((await carrierCallCard(c.db, "961-mob", true))?.turns?.length, 2, "дзеркало: з правом — текст є");
+  assert.equal(await carrierCallCard(c.db, "961-ad", true), null, "🔴 вкладка мобільних відкрила чужий дзвінок");
+  assert.equal(await aiCallCard(c.db, "961-mob", true, {}), null, "🔴 картка «Першого дотику» відкрила дзвінок мобільних");
+  assert.ok(await aiCallCard(c.db, "961-both", true, {}), "дзеркало: дзвінок, що є і в «Першому дотику», відкривається");
+  assert.ok(await aiCallCard(c.db, "961-ad", true, {}), "дзеркало: звичайний дзвінок картка «Першого дотику» відкриває");
+});
+
+/**
+ * #962 — ДОСТУП: три роути в матриці = сид вкладки (admin, ceo, opdir, kvp), тімлід, менеджер, фінансист і HR — у deny;
+ * межа роутів — вкладка `carrier-calls`, і вона не накриває сусіда `ai-calls`; текст — через `transcriptAllowed(auth)`.
+ * 🧨 Червоніє, якщо розвести сид і матрицю, прибрати межу або вирішувати право на текст за `auth.role`.
+ */
+test("#962 ДОСТУП: матриця = сид (admin, ceo, opdir, kvp), межа — carrier-calls, текст — за ключем ролі", async () => {
+  const schema = SRC("db/schema.sql");
+  const m = /UPDATE roles SET screen_access = screen_access \|\| '\{"carrier-calls":true\}'::jsonb\s+WHERE key IN \(([^)]+)\)/.exec(schema);
+  assert.ok(m, "🔴 сиду вкладки carrier-calls у схемі немає");
+  const seeded = m[1].split(",").map((x) => x.trim().replace(/'/g, "")).sort();
+  assert.deepEqual(seeded, ["admin", "ceo", "kvp", "opdir"]);
+  const rows = ACCESS_MATRIX.filter((r) => r.path.startsWith("/api/dashboard/carrier-calls"));
+  assert.equal(rows.length, 3, "🔴 не всі роути вкладки в матриці");
+  for (const r of rows) {
+    assert.deepEqual([...r.allow].sort(), seeded, `🔴 ${r.path}: матриця ≠ сид`);
+    for (const d of ["team_lead", "manager", "financier", "hr"]) assert.ok(r.deny.includes(d as never), `🔴 ${r.path}: ${d} не в deny`);
+  }
+  const { tabsForPath } = await import("../auth/routeTab.js");
+  for (const p of ["/api/dashboard/carrier-calls", "/api/dashboard/carrier-calls/meta", "/api/dashboard/carrier-calls/123.45"])
+    assert.deepEqual(tabsForPath(p), ["carrier-calls"], `🔴 ${p} без межі вкладки`);
+  assert.deepEqual(tabsForPath("/api/dashboard/ai-calls"), ["ai-calls"], "🔴 межа мобільних накрила сусідню вкладку");
+  const route = SRC("routes/dashboard.ts");
+  const at = route.indexOf('dashboardRouter.get("/carrier-calls/:uniqueid"');
+  assert.ok(at > 0, "🔴 роут картки не знайдено");
+  assert.match(route.slice(at, route.indexOf("});", at)), /carrierCallCard\(pool, [^,]+, transcriptAllowed\(auth\)\)/,
+    "🔴 право на текст вирішується не через transcriptAllowed(auth)");
+});
+
+/**
+ * #962b — МІГРАЦІЯ ДВІЧІ: вкладку мають admin, ceo, opdir, kvp; фінансист (синк «= екрани адміна»), тімлід, HR і
+ * менеджер — ні, і ДРУГИЙ прогін схеми цього не змінює (той механізм, що протік `ai-calls`, #794).
+ * 🧨 Червоніє, якщо прибрати зняття після синку або поставити його вище за синк.
+ */
+test("#962b МІГРАЦІЯ ДВІЧІ · ЖИВА СХЕМА: «Перевізники» — у керівництва; фінансист, тімлід, HR і менеджер — НІ", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await c.raw.query(readFileSync(path.join(import.meta.dirname, "..", "..", "src", "db", "schema.sql"), "utf8"));
+  const rows = (await c.raw.query<{ key: string; screen_access: Record<string, unknown> }>("SELECT key, screen_access FROM roles")).rows;
+  const sees = (k: string) => rows.find((r) => r.key === k)?.screen_access?.["carrier-calls"] === true;
+  assert.ok(rows.some((r) => r.key === "financier"), "🔴 у scratch-базі немає ролі фінансиста — перевіряти нема чого");
+  for (const k of ["admin", "ceo", "opdir", "kvp"]) assert.ok(sees(k), `🔴 «${k}» не бачить вкладки — зняття забрало більше, ніж вирішено`);
+  for (const k of ["financier", "team_lead", "hr", "manager"]) assert.ok(!sees(k), `🔴 «${k}» бачить вкладку після ДРУГОЇ міграції`);
+});
+
+interface CarrierView {
+  BUCKET_UI: Record<string, { label: string }>;
+  matchesCarrierFilter: (r: { bucket: string | null }, f: string) => boolean;
+  dealStatusLabel: (s: number | null, r: string | null) => string;
+  carrierSpeaker: (ch: number, mgr: number | null) => string;
+}
+async function loadCarrierView(): Promise<CarrierView> {
+  const ts = (await import("typescript")).default;
+  const js = ts.transpileModule(readFileSync(FE("pages/dashboard/carrierCallsView.ts"), "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  return await import(`data:text/javascript,${encodeURIComponent(js)}`) as CarrierView;
+}
+
+/**
+ * #963 — ПРОВОДКА ФРОНТУ: пункт меню в «Продажі», секція — статичним імпортом (#225), кличе три роути; правила
+ * вигляду: кошики фронту = кошики бекенду з різними підписами, «ще слухаємо» = без вердикту, стан угоди словами.
+ * 🧨 Червоніє, якщо відʼєднати секцію від меню чи роутів, завести lazy або злити підписи кошиків.
+ */
+test("#963 ПРОВОДКА ФРОНТУ: меню → секція → три роути; кошики, фільтри й стан угоди словами", async () => {
+  const layout = readFileSync(FE("components/Layout.tsx"), "utf8");
+  assert.match(layout, /label: "Продаж",[\s\S]{0,400}\{ key: "carrier-calls"/, "🔴 пункту «Перевізники за розмовою» у групі «Продаж» немає");
+  const dash = readFileSync(FE("pages/Dashboard.tsx"), "utf8");
+  assert.match(dash, /import \{ CarrierCallsSection \} from "\.\/dashboard\/sections\/CarrierCallsSection";/, "🔴 секція не імпортована статично");
+  assert.match(dash, /section === "carrier-calls" && \([\s\S]{0,200}<CarrierCallsSection \/>/, "🔴 секція не рендериться на своєму ключі");
+  assert.doesNotMatch(dash, /lazy\([^)]*CarrierCallsSection/, "🔴 lazy-імпорт розбив би бандл (#225)");
+  const sec = readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8");
+  for (const fn of ["fetchCarrierCalls(", "fetchCarrierCallCard(", "fetchCarrierCallsMeta("]) assert.ok(sec.includes(fn), `🔴 секція не кличе ${fn}`);
+  const api = readFileSync(FE("api.ts"), "utf8");
+  for (const p of ['"/dashboard/carrier-calls"', '"/dashboard/carrier-calls/meta"', "`/dashboard/carrier-calls/${"]) assert.ok(api.includes(p), `🔴 api не ходить на ${p}`);
+  const V = await loadCarrierView();
+  assert.deepEqual(Object.keys(V.BUCKET_UI).sort(), ["carrier", "client", "low", "other", "unclear"], "🔴 фронт і бекенд знають різні кошики");
+  const labels = Object.values(V.BUCKET_UI).map((x) => x.label);
+  assert.equal(new Set(labels).size, labels.length, "🔴 два кошики з однаковим підписом");
+  assert.equal(V.matchesCarrierFilter({ bucket: null }, "pending"), true);
+  assert.equal(V.matchesCarrierFilter({ bucket: "carrier" }, "pending"), false, "🔴 розмова з вердиктом — у «ще слухаємо»");
+  assert.equal(V.matchesCarrierFilter({ bucket: "low" }, "carrier"), false, "🔴 невпевнений вердикт показано як перевізника");
+  assert.equal(V.dealStatusLabel(70419108, null), "висить на етапі");
+  assert.equal(V.dealStatusLabel(143, "Перевізник"), "закрито: Перевізник");
+  assert.equal(V.dealStatusLabel(null, null), "угоди ще немає в дашборді", "🔴 невідомий стан угоди показано порожнім");
+  assert.equal(V.carrierSpeaker(0, null), "Канал 0", "🔴 невідомий канал менеджера видано за відомий");
+});
+
+/**
+ * #964 — СТАН КОНВЕЄРА МОБІЛЬНИХ: черга рахує лише дзвінки мобільних (рекламний рядок не домішується), витрати —
+ * лише операції `carrier_*`, стеля — $15.
+ * 🧨 Червоніє, якщо рахувати всю чергу чи всі витрати під підписом мобільних.
+ */
+test("#964 СТАН МОБІЛЬНИХ · ЖИВА СХЕМА: черга й витрати — лише мобільних, стеля $15", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await reset(c);
+  const { carrierCallsMeta } = await import("./carrierCallScreen.js");
+  await carrierDeal(c, 96401, phone(96400, 1), min(60), "own", "964-mob", 1);
+  await c.raw.query(`INSERT INTO call_transcripts(uniqueid,provider,model,status) VALUES
+    ('964-mob','elevenlabs','scribe_v2','queued'), ('964-ad','elevenlabs','scribe_v2','queued')`);
+  await c.raw.query(`INSERT INTO ai_spend_ledger(at,provider,operation,units,unit,unit_price_usd) VALUES
+    ($1,'elevenlabs','carrier_stt',2,'audio_sec',1), ($1,'elevenlabs','stt',5,'audio_sec',1)`, [NOW.toISOString()]);
+  const m = await carrierCallsMeta(c.db, NOW, { stt: 40, analysis: 10 });
+  assert.equal(m.transcripts.queued, 1, "🔴 у черзі мобільних рахується чужий дзвінок");
+  assert.equal(m.spend.carrier, 2, "🔴 витрати мобільних змішано з рекламними");
+  assert.equal(m.spend.stt, 7, "дзеркало: загальні витрати розпізнавання — усі");
+  assert.equal(m.caps.carrier, 15);
 });

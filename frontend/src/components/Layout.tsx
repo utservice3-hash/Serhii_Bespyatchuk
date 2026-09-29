@@ -43,6 +43,8 @@ export const NAV_GROUPS = [
     label: "Продаж",
     items: [
       { key: "ai-calls", label: "Перший дотик · AI", icon: "🎧" },
+      // 🚚 Лише керівництво (сид: admin, ceo, opdir, kvp); видимість — зі `screen_access`, як і сусіда.
+      { key: "carrier-calls", label: "Перевізники за розмовою", icon: "🚚" },
     ],
   },
   {
