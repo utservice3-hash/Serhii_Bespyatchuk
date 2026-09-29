@@ -1602,6 +1602,56 @@ export async function conversionByManager(s: MetricScope, channel?: "ad" | "lead
   });
 }
 
+/**
+ * 📊 КОНВЕРСІЯ РНК «ЯК У KOMMO» (29.09.2026, рішення Романа: «рахуй як я надіслав» — три фільтри Kommo).
+ * Лише для таблиці й слайда «Статистика відділу РНК» у номінаціях; «Конв. реклама» Звіту й `conversion_ads` — інше
+ * визначення, їх це не чіпає. GLOSSARY: `rnk_conv_kommo`.
+ *   всього  — угоди Кваліфікації 8921928 і Повного циклу 8921932, СТВОРЕНІ в періоді, «Источник клиента» ∈ KOMMO_CONV_SOURCES;
+ *   цільові — всього мінус Кваліфікація з етапом 143 «Не цільові»;
+ *   успіх   — Повний цикл, ПОТОЧНИЙ етап ∈ KOMMO_CONV_WON_STAGES, «Дата загрузки» в періоді,
+ *             джерело ∈ KOMMO_CONV_SOURCES + KOMMO_CONV_WON_EXTRA_SOURCES (так у фільтрі власника).
+ * ⚠️ Успіх і цільові — РІЗНІ когорти (дата створення проти дати завантаження), тож відсоток може бути > 100%.
+ * `outside` — друге число до предиката (правило 4): угоди тих самих менеджерів і воронок, створені в періоді, чиє
+ * джерело порожнє або поза списком. Перейменують значення в Kommo — воно тут і зросте.
+ */
+export const KOMMO_CONV_SOURCES = [
+  "Холодная база", "Реактивация звонком", "uts.ua", "yalogist.com.ua",
+  "Дзвінок з yalogist.com.ua", "Дзвінок з uts.ua", "Callback з yalogist.com.ua", "Callback з uts.ua",
+] as const;
+export const KOMMO_CONV_WON_EXTRA_SOURCES = ["Реактивація наша база", "Реактивація закриті"] as const;
+/** Контроль перед завантаженням · Авто працює · Виставлено рахунок · Очікуємо оплату · Оплата отримана · Успішна. */
+export const KOMMO_CONV_WON_STAGES = [69716260, 69716300, 69716304, 69716312, 69716460, 142] as const;
+const KOMMO_CONV_QUAL = 8921928, KOMMO_CONV_FC = 8921932, KOMMO_CONV_NOT_TARGET = 143;
+export interface KommoConvRow { managerId: number; total: number; target: number; won: number }
+export async function rnkConvAsKommo(s: { from: string; to: string }, managerIds: readonly number[]): Promise<{ rows: KommoConvRow[]; outside: number }> {
+  if (managerIds.length === 0) return { rows: [], outside: 0 };
+  const created = `(d.created_at_kommo ${KYIV})::date BETWEEN $2 AND $3`;
+  const [base, won] = await Promise.all([
+    pool.query<{ manager_id: number; total: string; target: string; outside: string }>(
+      `SELECT d.manager_id,
+              COUNT(*) FILTER (WHERE d.client_source = ANY($4)) AS total,
+              COUNT(*) FILTER (WHERE d.client_source = ANY($4) AND NOT (d.pipeline_id = $5 AND d.status_id = $7)) AS target,
+              COUNT(*) FILTER (WHERE d.client_source IS NULL OR NOT (d.client_source = ANY($4))) AS outside
+         FROM deals d
+        WHERE d.manager_id = ANY($1) AND d.pipeline_id IN ($5, $6) AND ${created}
+        GROUP BY d.manager_id`,
+      [managerIds, s.from, s.to, KOMMO_CONV_SOURCES, KOMMO_CONV_QUAL, KOMMO_CONV_FC, KOMMO_CONV_NOT_TARGET]),
+    pool.query<{ manager_id: number; won: string }>(
+      `SELECT d.manager_id, COUNT(*) AS won
+         FROM deals d
+        WHERE d.manager_id = ANY($1) AND d.pipeline_id = $4 AND d.status_id = ANY($5) AND d.client_source = ANY($6)
+          AND d.load_at IS NOT NULL AND (d.load_at ${KYIV})::date BETWEEN $2 AND $3
+        GROUP BY d.manager_id`,
+      [managerIds, s.from, s.to, KOMMO_CONV_FC, KOMMO_CONV_WON_STAGES, [...KOMMO_CONV_SOURCES, ...KOMMO_CONV_WON_EXTRA_SOURCES]]),
+  ]);
+  const b = new Map(base.rows.map((r) => [r.manager_id, r]));
+  const w = new Map(won.rows.map((r) => [r.manager_id, Number(r.won)]));
+  return {
+    rows: managerIds.map((id) => ({ managerId: id, total: Number(b.get(id)?.total ?? 0), target: Number(b.get(id)?.target ?? 0), won: w.get(id) ?? 0 })),
+    outside: base.rows.reduce((acc, r) => acc + Number(r.outside), 0),
+  };
+}
+
 // ── Блок A (КВП повна таблиця) — нові метрики ──
 // Прострочена оплата = ЗНІМОК «зараз»: планова дата оплати минула, а угода ще НЕ оплачена
 // (не 142/143 і не в етапі 9 «оплата отримана»). Не залежить від періоду. sum = Σ price.

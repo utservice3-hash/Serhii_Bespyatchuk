@@ -37,6 +37,10 @@ export const PERMISSION_CATALOG = [
   "export_bank_statement",
   /** 🗂 Кнопка «Проблемний клієнт» у дебіторці (задача 4314, рішення Романа 24.09.2026): керівництво і фінансист. */
   "create_claim",
+  /** 💰 «Фінанси» (29.09.2026): вносити план/факт і правити статті — керівництво і фінансист. */
+  "edit_finance",
+  /** 💰 «Фінанси»: погодити план місяця — admin, СЕО, ОД. */
+  "approve_finance_plan",
   "manage_bank_accounts",
   "manage_bank_hidden",
   "manage_credit_limits",

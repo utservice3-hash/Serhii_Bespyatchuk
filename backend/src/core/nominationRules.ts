@@ -341,18 +341,24 @@ export interface WeekView {
 /* ───────────────────────── статистика відділу РНК · конверсія (22.09.2026) ───────────────────────── */
 
 /**
- * Рядок таблиці «Найкраща конверсія» (слайд 5 Даші). Система пропонує «Конв. реклама» Звіту
- * (`metrics.conversionByManager(…, "ad")`: створені рекламні угоди тижня → скільки дійшли до грошової зони),
- * а Даша або тімлід команди можуть поставити свої «цільові ліди / успіх» і вибрати, хто йде на слайд.
+ * Рядок таблиці «Найкраща конверсія» (слайд 5 Даші). Система рахує «як у Kommo» (`metrics.rnkConvAsKommo`,
+ * три фільтри власника 29.09.2026: всього / цільові / успіх), а Даша або тімлід команди можуть поставити свої
+ * «цільові ліди / успіх» і вибрати, хто йде на слайд.
  */
 export interface ConvRow {
   managerId: number; name: string; teamId: number;
   taken: number; won: number; pct: number | null;
+  /** «Всього» за фільтром Kommo (разом із «Не цільовими») — лише число системи, не правиться. */
+  total: number;
   crm: { taken: number; won: number };
   own: { by: string | null; at: string } | null;
   onSlide: boolean;
 }
-export interface RnkConv { rows: ConvRow[]; comment: { text: string; by: string | null; at: string } | null }
+export interface RnkConv {
+  rows: ConvRow[]; comment: { text: string; by: string | null; at: string } | null;
+  /** Угоди РНК за тиждень, чиє «Источник клиента» порожнє або поза списком фільтра — друге число до предиката. */
+  outside?: number;
+}
 /**
  * Правка таблиці: `set` — свої числа (ліди, успіх); `reset` — повернути числа CRM; `slide` — лише чи йде рядок
  * на слайд; `comment` — коментар. Числа й вибір слайда живуть НЕЗАЛЕЖНО (ревʼю 22.09): поставити галочку не
@@ -371,7 +377,7 @@ const pct2 = (won: number, taken: number): number | null => (taken > 0 ? Math.ro
  * системи; коментар — остання правка без людини. Хто на слайді: явний вибір, інакше — 4 найкращі за %,
  * при рівності — з більшою кількістю лідів. Відсоток — до сотих (4/24 = 16,67%, а не «17,00%»).
  */
-export function buildRnkConv(system: readonly { managerId: number; name: string; teamId: number; taken: number; won: number }[], edits: readonly ConvEdit[]): RnkConv {
+export function buildRnkConv(system: readonly { managerId: number; name: string; teamId: number; taken: number; won: number; total?: number }[], edits: readonly ConvEdit[]): RnkConv {
   const nums = new Map<number, ConvEdit>(); // остання правка ЧИСЕЛ (set / reset)
   const slide = new Map<number, boolean>();  // останній ЯВНИЙ вибір «на слайд»
   let comment: RnkConv["comment"] = null;
@@ -386,7 +392,7 @@ export function buildRnkConv(system: readonly { managerId: number; name: string;
     const own = e?.action === "set" && e.taken != null && e.won != null;
     const taken = own ? e!.taken! : s.taken;
     const won = own ? e!.won! : s.won;
-    return { managerId: s.managerId, name: s.name, teamId: s.teamId, taken, won, pct: pct2(won, taken), crm: { taken: s.taken, won: s.won },
+    return { managerId: s.managerId, name: s.name, teamId: s.teamId, taken, won, pct: pct2(won, taken), total: s.total ?? s.taken, crm: { taken: s.taken, won: s.won },
       own: own ? { by: e!.by, at: e!.at } : null, onSlide: false };
   });
   // Типовий вибір — 4 найкращі за %; явний вибір рядка перемагає лише ДЛЯ ЦЬОГО рядка.

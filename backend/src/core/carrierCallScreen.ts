@@ -8,7 +8,7 @@ import { CARRIER_BUDGET, CARRIER_STAGE, carrierBucket, RUBRIC_CARRIER_V1, type C
 
 /**
  * 🚚 ЕКРАН «ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ» (прохід 2, макет — https://claude.ai/artifact/6nbQB8nHDP2WTaZLUWf6p3).
- * Лише перегляд; у Kommo нічого не пишемо. Правила — `carrierCallRules.ts`, METRICS_GLOSSARY §16.
+ * Лише перегляд; у Kommo нічого не пишемо. Правила — `carrierCallRules.ts`, METRICS_GLOSSARY §17.
  *
  * Рядок — ДЗВІНОК, а не угода: номер, що дзвонив кілька разів, слухаємо один раз (вердикт на номер 30 днів),
  * тож усі його угоди з'являються в одному рядку. Угоди без розмови (чекають або пропущені) у списку не

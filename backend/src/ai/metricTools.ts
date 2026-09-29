@@ -67,6 +67,8 @@ export const FORBIDDEN_TABLES = [
   "tldv_meetings",
   // 💼 Відгуки work.ua (28.09.2026): памʼять відгуків кандидатів. REVOKE у схемі. Тримає #807.
   "workua_responses",
+  // 💰 Фінанси (29.09.2026): витрати компанії по статтях, зокрема фонд оплати праці. REVOKE у схемі. Тримає #934.
+  "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_import_months",
 ];
 
 /**

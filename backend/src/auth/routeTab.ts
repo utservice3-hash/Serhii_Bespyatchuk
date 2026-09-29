@@ -162,6 +162,8 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/hiring"), tabs: ["hiring"] },
     // 🗂 Бізнес-асистент (задача 4314). Вкладка — перша межа; друга — `onlyBa` у кожному обробнику.
     { test: pre("/api/ba"), tabs: ["ba"] },
+    // 💰 Фінанси (29.09.2026). Вкладка — перша межа; друга — `onlyFinance`/`canEdit`/`canApprove` першим оператором.
+    { test: pre("/api/finance"), tabs: ["finance"] },
     // Кнопка «Проблемний клієнт» живе в ДЕБІТОРЦІ: вкладка `receivables`, а дію гейтить право
     // `create_claim` — фінансист розділу не бачить, але кнопку натискає.
     { test: pre("/api/receivables-claims"), tabs: ["receivables"] },

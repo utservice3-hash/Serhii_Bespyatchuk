@@ -1,6 +1,6 @@
 /**
  * 🚚 Правила вигляду вкладки «Перевізники за розмовою» — чисті функції, їх ганяє гейт без браузера.
- * Кошики й поріг — з бекенду (`carrierCallRules.ts`, METRICS_GLOSSARY §16); тут лише підписи й фільтри.
+ * Кошики й поріг — з бекенду (`carrierCallRules.ts`, METRICS_GLOSSARY §17); тут лише підписи й фільтри.
  */
 
 export type CarrierBucketT = "carrier" | "client" | "other" | "unclear" | "low";
