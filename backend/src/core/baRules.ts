@@ -34,17 +34,20 @@ export const CASE_STATUS_LABEL: Record<CaseStatus, string> = {
 };
 
 /** Типи документів. Претензія й справа мають свої переліки з ТЗ; спільний тип «Інше». */
-export const DOC_TYPES = ["claim", "lawsuit", "receipt", "company_docs", "other"] as const;
+export const DOC_TYPES = ["claim", "lawsuit", "receipt", "company_docs", "contract", "other"] as const;
 export type DocType = (typeof DOC_TYPES)[number];
 export const DOC_TYPE_LABEL: Record<DocType, string> = {
   claim: "Претензія",
   lawsuit: "Позовна заява",
   receipt: "Квитанція про оплату",
   company_docs: "Документи компанії",
+  contract: "Договір про матеріальну відповідальність",
   other: "Інше",
 };
 export const CLAIM_DOC_TYPES: readonly DocType[] = ["claim", "lawsuit", "receipt", "other"];
 export const CASE_DOC_TYPES: readonly DocType[] = ["lawsuit", "company_docs", "other"];
+/** Видача техніки (прохід 2): договір про матеріальну відповідальність + «Інше». */
+export const ISSUE_DOC_TYPES: readonly DocType[] = ["contract", "other"];
 
 export const isClaimStatus = (v: unknown): v is ClaimStatus => typeof v === "string" && (CLAIM_STATUSES as readonly string[]).includes(v);
 export const isCaseStatus = (v: unknown): v is CaseStatus => typeof v === "string" && (CASE_STATUSES as readonly string[]).includes(v);
@@ -116,4 +119,68 @@ export function parseDateOrNull(v: unknown): string | null | undefined {
   if (v === null || v === "") return null;
   if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(Date.parse(v + "T00:00:00Z"))) return undefined;
   return v;
+}
+
+// ── ТТН-моніторинг (прохід 2, 29.09.2026) ────────────────────────────────────
+/**
+ * Угоди, де потрібна ТТН, — рівно фільтр Даші в Kommo (29.09.2026): воронка 8921932, статус
+ * «Успішна угода» (142), «Приход 1 Тип оплаты» (поле 2097629) = «Безнал с НДС» (6342295) або
+ * «Безнал без НДС» (6342297), дата ЗАКРИТТЯ в межах місяця, відповідальний = менеджер.
+ * У дзеркалі поле лежить ТЕКСТОМ (`deals.payment_type`), у посиланні на Kommo — id значень.
+ */
+export const TTN_PIPELINE_ID = 8921932;
+export const TTN_STATUS_ID = 142;
+export const TTN_PAYMENT_FIELD_ID = 2097629;
+export const TTN_PAYMENT_TYPES = ["Безнал с НДС", "Безнал без НДС"] as const;
+export const TTN_PAYMENT_ENUM_IDS = [6342295, 6342297] as const;
+/** Норма відповідності (рішення Романа 29.09.2026 за відповіддю Даші: «мінімум 70%»). */
+export const TTN_NORM_PCT = 70;
+
+export const isYm = (v: unknown): v is string => typeof v === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(v);
+
+/** Зсув місяця на n (від'ємне — назад). Рахуємо числами, а не `Date`: без 31-го числа й часових поясів. */
+export function shiftYm(ym: string, n: number): string {
+  const [y, m] = ym.split("-").map(Number);
+  const idx = y * 12 + (m - 1) + n;
+  return `${Math.floor(idx / 12)}-${String((idx % 12) + 1).padStart(2, "0")}`;
+}
+
+/** Межі місяця включно з обома кінцями — під `(col AT TIME ZONE 'Europe/Kyiv')::date BETWEEN`. */
+export function monthBounds(ym: string): { from: string; to: string } {
+  const [y, m] = ym.split("-").map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return { from: `${ym}-01`, to: `${ym}-${String(last).padStart(2, "0")}` };
+}
+
+/**
+ * Місяць за замовчуванням — «два тому» від сьогодні за Києвом: 1 жовтня Даша перевіряє СЕРПЕНЬ
+ * (рішення Романа 29.09.2026). `todayKyiv` — `YYYY-MM-DD`.
+ */
+export function defaultTtnMonth(todayKyiv: string): string {
+  return shiftYm(todayKyiv.slice(0, 7), -2);
+}
+
+/** % відповідності. Угод немає — `null` («—»), а не 0%: нуль читався б як провал менеджера. */
+export function ttnPct(present: number, needed: number): number | null {
+  if (!(needed > 0)) return null;
+  return Math.round((present / needed) * 100);
+}
+
+/**
+ * Посилання на той самий фільтр у Kommo, яким користується Даша, — щоб звірити число з CRM
+ * одним кліком. `base` — `KOMMO_BASE_URL` (без `/api`), `kommoUserId` — відповідальний.
+ */
+export function kommoTtnFilterUrl(base: string, kommoUserId: number, ym: string): string {
+  const { from, to } = monthBounds(ym);
+  const dmy = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}`;
+  const q = [
+    "filter_date_switch=closed",
+    ...TTN_PAYMENT_ENUM_IDS.map((e) => `filter%5Bcf%5D%5B${TTN_PAYMENT_FIELD_ID}%5D%5B%5D=${e}`),
+    `filter_date_from=${dmy(from)}`,
+    `filter_date_to=${dmy(to)}`,
+    `filter%5Bpipe%5D%5B${TTN_PIPELINE_ID}%5D%5B%5D=${TTN_STATUS_ID}`,
+    `filter%5Bmain_user%5D%5B%5D=${kommoUserId}`,
+    "useFilter=y",
+  ].join("&");
+  return `${base.replace(/\/+$/, "").replace(/\/api(\/v4)?$/, "")}/leads/list/pipeline/${TTN_PIPELINE_ID}/?${q}`;
 }
