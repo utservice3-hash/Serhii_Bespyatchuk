@@ -321,7 +321,12 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
       LEFT JOIN call_analyses a ON a.transcript_id = t.id AND a.provider = $4 AND a.model = $5 AND a.rubric_version = $6
      WHERE rc.uniqueid = $1
        AND ($7::int IS NULL OR rc.manager_id = $7)
-       AND ($8::int IS NULL OR m.team_id = $8)`,
+       AND ($8::int IS NULL OR m.team_id = $8)
+       -- 🚚 Дзвінок на мобільні («Перевізники за розмовою») цією карткою не відкривається: там інші ролі, а
+       -- тімлід за прямою адресою прочитав би розмову, якої його вкладка не показує. Виняток — дзвінок, що є
+       -- і першою розмовою рекламної угоди (має рекламний аналіз).
+       AND (NOT EXISTS (SELECT 1 FROM carrier_call_deals cd WHERE cd.uniqueid = rc.uniqueid OR cd.first_uniqueid = rc.uniqueid)
+            OR a.id IS NOT NULL)`,
   [uniqueid, STT_PROVIDER, ELEVENLABS_STT_MODEL, LLM_PROVIDER, GEMINI_MODEL, RUBRIC_CURRENT,
     scope.managerId ?? null, scope.teamId ?? null]);
   const raw = r.rows[0];

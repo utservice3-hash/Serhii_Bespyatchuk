@@ -372,6 +372,14 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["hr", "manager", "financier"] },
   { method: "GET", path: "/api/dashboard/ai-calls/:uniqueid", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["hr", "manager", "financier"] },
+  /* 🚚 ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ (29.09.2026) — лише керівництво (рішення Романа): admin, ceo, opdir, kvp.
+     Тімлід теж у deny — на відміну від «Першого дотику». Межа — вкладка `carrier-calls` (routeTab). */
+  { method: "GET", path: "/api/dashboard/carrier-calls", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["team_lead", "hr", "manager", "financier"] },
+  { method: "GET", path: "/api/dashboard/carrier-calls/meta", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["team_lead", "hr", "manager", "financier"] },
+  { method: "GET", path: "/api/dashboard/carrier-calls/:uniqueid", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["team_lead", "hr", "manager", "financier"] },
   /* 🧑‍💼 НАЙМ, прохід 1 (17.09.2026). Вкладку `hiring` сид дає admin, ceo, opdir, kvp, hr,
      team_lead — рядок `/api/hiring/candidates` звіряється з ним гейтом #504.
      Друга межа — `hiringAccess` першим оператором обробника: графік, звіт і запис веде

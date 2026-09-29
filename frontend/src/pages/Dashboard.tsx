@@ -62,6 +62,7 @@ import SettingsSection from "./dashboard/sections/SettingsSection";
 import { LeadgenSection } from "./dashboard/sections/LeadgenSection";
 import { MissedCallsSection } from "./dashboard/sections/MissedCallsSection";
 import { AiCallsSection } from "./dashboard/sections/AiCallsSection";
+import { CarrierCallsSection } from "./dashboard/sections/CarrierCallsSection";
 import { HiringSection } from "./dashboard/sections/HiringSection";
 import { BusinessAssistantSection } from "./dashboard/sections/BusinessAssistantSection";
 import { FinanceSection } from "./dashboard/sections/FinanceSection";
@@ -1118,6 +1119,10 @@ export function Dashboard() {
       {section === "ai-calls" && (
         /* 🎧 «Перший дотик · AI». СТАТИЧНИЙ імпорт свідомо (гейт #225): lazy розбив би бандл на чанки. */
         <AiCallsSection />
+      )}
+      {section === "carrier-calls" && (
+        /* 🚚 «Перевізники за розмовою». СТАТИЧНИЙ імпорт свідомо (гейт #225): lazy розбив би бандл на чанки. */
+        <CarrierCallsSection />
       )}
 
       {section === "receivables" && (

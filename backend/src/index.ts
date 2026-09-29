@@ -85,6 +85,7 @@ import { syncWorkua } from "./jobs/syncWorkua.js";
 import { syncCalls } from "./jobs/syncCalls.js";
 import { missedCallTasks } from "./jobs/missedCallTasks.js";
 import { callAiJob } from "./jobs/callAiJob.js";
+import { carrierCallJob } from "./jobs/carrierCallJob.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
 import { collectLardi } from "./jobs/collectLardi.js";
 import { syncCarriers } from "./jobs/syncCarriers.js";
@@ -650,6 +651,15 @@ cron.schedule("35 * * * *", () => {
 // назовні нуль запитів. Під наглядом (`monitoredJobs.ts`), everyMin == крону — тримає гейт.
 cron.schedule("45 * * * *", () => {
   void runJob("callAiJob", () => callAiJob());
+});
+
+// 🚚 ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ (ТЗ 29.09.2026, рішення Романа: «зразу після фільтра», не щогодини).
+// Раз на 5 хв, за 2 хв після свіжого вікна дзвінків (`syncCallsFresh` :02, :07 …) — розмова вже в базі.
+// Хвилини :04, :09 … не збігаються з :00/:30 `syncKommo`. Kommo — один запит лише на читання. Тік обмежений
+// часом (150 + 60 с), охоронець не дає накластись. Під наглядом (`monitoredJobs.ts`), everyMin == крону.
+// ⚠️ ПЕРЕЛІКОМ, а не «4-59/5» — той самий node-cron, що читає крок у діапазоні інакше (див. syncCallsFresh).
+cron.schedule("4,9,14,19,24,29,34,39,44,49,54,59 * * * *", () => {
+  void runJob("carrierCallJob", () => carrierCallJob());
 });
 
 // Готівка = приход (не бюджет). Легкий фетч приходу по готівкових 142-угодах

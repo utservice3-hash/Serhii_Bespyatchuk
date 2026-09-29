@@ -6,6 +6,16 @@ import { buildAnalysisRequest, inputTokenUpperBound, interpretAnalysis, toTurns,
   type GeminiOutcome, type SttAudio, type SttResult, type Turn } from "./callAiProviders.js";
 
 /**
+ * 🧰 РУБРИКА ЯК ПАРАМЕТР: як зібрати запит до моделі й як прочитати відповідь. Конвеєр однаковий для
+ * будь-якої рубрики — черга, стеля, журнал; різниться лише це. Без параметра — «Перший дотик».
+ */
+export interface AnalysisKit {
+  build: (turns: readonly Turn[], maxOutputTokens: number, callAt: Date | null) => Record<string, unknown>;
+  interpret: (out: GeminiOutcome, turns: readonly Turn[]) => { ok: true; result: unknown } | { ok: false; why: string };
+}
+export const FIRST_TOUCH_KIT: AnalysisKit = { build: buildAnalysisRequest, interpret: interpretAnalysis };
+
+/**
  * 🧵 КОНВЕЄР AI-АНАЛІЗУ: черга → узяти в роботу → стеля → платний виклик → журнал витрат.
  *
  * ТЗ «AI-аналіз дзвінків по рекламних лідах», прохід A, коміт ③. Порціями в ТОМУ Ж процесі:
@@ -34,7 +44,18 @@ import { buildAnalysisRequest, inputTokenUpperBound, interpretAnalysis, toTurns,
 
 type Table = "call_transcripts" | "call_analyses";
 
-interface Scope {
+/**
+ * Межа черги за дзвінками. Два споживачі ділять одну чергу (реклама щогодини, мобільні щоп'ять хвилин),
+ * і кожен мусить брати в роботу, ставити на стелю й будити ЛИШЕ свої рядки: інакше стеля мобільних
+ * заморозила б рекламні дзвінки, а годинна джоба оплатила б мобільні під рекламною стелею.
+ * Не задано — уся черга, як було.
+ */
+export interface CallFilter {
+  only?: readonly string[];
+  except?: readonly string[];
+}
+
+interface Scope extends CallFilter {
   table: Table;
   provider: string;
   model: string;
@@ -48,6 +69,11 @@ function scopeWhere(s: Scope, first: number): { sql: string; params: unknown[] }
     parts.push(`rubric_version = $${String(first + 2)}`);
     params.push(s.rubric);
   }
+  const callIn = (n: number): string => s.table === "call_transcripts"
+    ? `uniqueid = ANY($${String(n)}::text[])`
+    : `transcript_id IN (SELECT ct.id FROM call_transcripts ct WHERE ct.uniqueid = ANY($${String(n)}::text[]))`;
+  if (s.only) { params.push([...s.only]); parts.push(callIn(first + params.length - 1)); }
+  if (s.except?.length) { params.push([...s.except]); parts.push(`NOT (${callIn(first + params.length - 1)})`); }
   return { sql: parts.join(" AND "), params };
 }
 
@@ -62,6 +88,13 @@ export interface QueueParams {
   monthCapUsd: number | null | undefined;
   /** Мітка в журналі витрат: `stt` / `analysis` / `pilot_stt` / `pilot_analysis`. */
   operation: string;
+  /** Межа черги за дзвінками (див. `CallFilter`). */
+  calls?: CallFilter;
+  /**
+   * Додаткова стеля на місяць для ЧАСТИНИ витрат — тих, чия мітка операції починається з `opPrefix`,
+   * по ВСІХ постачальниках разом. Діє поверх стелі постачальника, а не замість неї.
+   */
+  subCap?: { usd: number; opPrefix: string; label: string } | null;
 }
 
 function assertQueueParams(p: QueueParams): number {
@@ -133,6 +166,18 @@ async function reclaimStuck(db: Db, s: Scope, p: QueueParams): Promise<{ requeue
   };
 }
 
+/** Витрачено за київський місяць по операціях із префіксом — усі постачальники разом. */
+export async function monthSpendByOp(db: Db, opPrefix: string, now: Date): Promise<{ usd: number; unpriced: number }> {
+  const r = await db.query<{ usd: number; unpriced: number }>(
+    `SELECT COALESCE(SUM(usd), 0)::float8 AS usd, COUNT(*) FILTER (WHERE usd IS NULL)::int AS unpriced
+       FROM ai_spend_ledger
+      WHERE left(operation, length($1)) = $1
+        AND (at AT TIME ZONE 'Europe/Kyiv') >= date_trunc('month', $2::timestamptz AT TIME ZONE 'Europe/Kyiv')
+        AND (at AT TIME ZONE 'Europe/Kyiv') <  date_trunc('month', $2::timestamptz AT TIME ZONE 'Europe/Kyiv') + interval '1 month'`,
+    [opPrefix, now.toISOString()]);
+  return { usd: Number(r.rows[0]?.usd ?? 0), unpriced: Number(r.rows[0]?.unpriced ?? 0) };
+}
+
 /** Витрачено за календарний місяць (Київ), у якому лежить `now`. Рядки без ціни — окремо. */
 export async function monthSpend(db: Db, provider: string, now: Date): Promise<{ usd: number; unpriced: number }> {
   const r = await db.query<{ usd: number; unpriced: number }>(
@@ -190,8 +235,18 @@ interface Pre {
   scope: Scope;
   capUsd: number;
   spentUsd: number;
+  /** Додаткова стеля й витрачене під нею; null — її немає. */
+  sub: { capUsd: number; spentUsd: number; label: string } | null;
   report: PortionReport;
   rows: { id: string; ref: string; attempts: number }[];
+}
+
+/** Чи вміщається оцінка під обидві стелі. Повертає причину зупинки або null. */
+function overCap(pre: Pick<Pre, "capUsd" | "sub">, spent: number, est: number, spentDigits: number, what: string): string | null {
+  if (spent + est > pre.capUsd) return `стеля місяця: ${spent.toFixed(spentDigits)} + ${what} ${est.toFixed(4)} > ${pre.capUsd.toFixed(2)} USD`;
+  if (pre.sub && pre.sub.spentUsd + est > pre.sub.capUsd)
+    return `стеля «${pre.sub.label}»: ${pre.sub.spentUsd.toFixed(spentDigits)} + ${what} ${est.toFixed(4)} > ${pre.sub.capUsd.toFixed(2)} USD`;
+  return null;
 }
 
 /** Усе до першого платного виклику: ключ, параметри, завислі, стеля, узяття в роботу. */
@@ -210,20 +265,27 @@ async function prepare(db: Db, scope: Scope, p: QueueParams, apiKey: string, ass
   report.failedStuck = st.failed;
   const spend = await monthSpend(db, scope.provider, p.now);
   report.spentUsd = spend.usd;
-  if (spend.unpriced > 0 || spend.usd >= capUsd) {
+  if (p.subCap != null && (!Number.isFinite(p.subCap.usd) || p.subCap.usd <= 0 || !p.subCap.opPrefix))
+    throw new ParamNotSetError(`додаткова стеля «${p.subCap.label}» (USD і префікс операції)`);
+  const subSpend = p.subCap ? await monthSpendByOp(db, p.subCap.opPrefix, p.now) : null;
+  const subHit = p.subCap && subSpend && subSpend.usd >= p.subCap.usd;
+  if (spend.unpriced > 0 || spend.usd >= capUsd || subHit) {
     report.capped = await moveStatus(db, scope, p.now, "queued", "capped");
     return {
       ...report, state: "capped",
       stoppedBy: spend.unpriced > 0
         ? `у журналі ${String(spend.unpriced)} витрат без ціни — скільки витрачено, невідомо; стеля закрита`
-        : `стеля місяця вичерпана: ${spend.usd.toFixed(2)} із ${capUsd.toFixed(2)} USD`,
+        : spend.usd >= capUsd
+          ? `стеля місяця вичерпана: ${spend.usd.toFixed(2)} із ${capUsd.toFixed(2)} USD`
+          : `стеля «${p.subCap!.label}» вичерпана: ${subSpend!.usd.toFixed(2)} із ${p.subCap!.usd.toFixed(2)} USD`,
     };
   }
   await moveStatus(db, scope, p.now, "capped", "queued");
   const rows = await claim(db, scope, p.now, p.limit);
   report.claimed = rows.length;
   if (!rows.length) return report;
-  return { scope, capUsd, spentUsd: spend.usd, report, rows };
+  const sub = p.subCap && subSpend ? { capUsd: p.subCap.usd, spentUsd: subSpend.usd, label: p.subCap.label } : null;
+  return { scope, capUsd, spentUsd: spend.usd, sub, report, rows };
 }
 
 /** Зупинити решту взятих рядків: стеля → `capped`; збій рахунку → назад у чергу. Спроба повертається. */
@@ -294,11 +356,11 @@ export async function dequeueOutside(db: Db, keep: readonly string[], provider: 
 }
 
 export async function runSttPortion(db: Db, w: SttWorker, p: SttParams): Promise<PortionReport> {
-  const scope: Scope = { table: "call_transcripts", provider: p.provider, model: p.model };
+  const scope: Scope = { table: "call_transcripts", provider: p.provider, model: p.model, ...p.calls };
   let price = 0;
   const pre = await prepare(db, scope, p, w.apiKey, () => { price = assertPrice(p.usdPerAudioSec, "розпізнавання, USD за секунду аудіо"); });
   if (!("rows" in pre)) return pre;
-  const { report: r, rows, capUsd } = pre;
+  const { report: r, rows } = pre;
   let spent = pre.spentUsd;
   r.state = "ok";
 
@@ -320,8 +382,8 @@ export async function runSttPortion(db: Db, w: SttWorker, p: SttParams): Promise
       }
       const billedSec = got.info.durationSec * got.info.channels;
       const est = billedSec * price;
-      if (spent + est > capUsd) {
-        const why = `стеля місяця: ${spent.toFixed(2)} + оцінка ${est.toFixed(4)} > ${capUsd.toFixed(2)} USD`;
+      const why = overCap(pre, spent, est, 2, "оцінка");
+      if (why) {
         await stopRest(db, scope.table, rows.slice(i), p.now, "capped", why, r);
         r.state = "capped";
         r.stoppedBy = why;
@@ -342,6 +404,7 @@ export async function runSttPortion(db: Db, w: SttWorker, p: SttParams): Promise
         [row.id, p.now.toISOString(), p.provider, p.operation, row.ref, Math.round(billedSec * 1000) / 1000, price,
           got.info.channels, Math.round(got.info.durationSec * 1000) / 1000, JSON.stringify(turns)]);
       spent += est;
+      if (pre.sub) pre.sub.spentUsd += est;
       if (Number(done.rows[0]?.updated) === 1) r.done++; else r.lostRace++;
     } catch (e) {
       if (!(e instanceof VendorError)) throw e;
@@ -380,24 +443,28 @@ export interface AnalysisParams extends QueueParams {
 export interface AnalysisWorker {
   apiKey: string;
   generate: (apiKey: string, model: string, body: unknown) => Promise<GeminiOutcome>;
+  /** Рубрика: як будувати запит і читати відповідь. Не задано — «Перший дотик». */
+  kit?: AnalysisKit;
 }
 
 /** Черга аналізу: готові НЕПОРОЖНІ розшифровки без аналізу цією моделлю й рубрикою. */
 export async function enqueueAnalyses(db: Db, p: Pick<AnalysisParams, "provider" | "model" | "rubricVersion" | "sttProvider" | "sttModel" | "now">,
-  uniqueids: readonly string[] | null): Promise<number> {
+  uniqueids: readonly string[] | null, except: readonly string[] = []): Promise<number> {
   const r = await db.query(
     `INSERT INTO call_analyses (transcript_id, provider, model, rubric_version, status, created_at, updated_at)
      SELECT t.id, $1, $2, $3, 'queued', $4::timestamptz, $4::timestamptz FROM call_transcripts t
       WHERE t.status = 'done' AND t.provider = $5 AND t.model = $6
         AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) > 0
         AND ($7::text[] IS NULL OR t.uniqueid = ANY($7::text[]))
+        AND NOT (t.uniqueid = ANY($8::text[]))
      ON CONFLICT (transcript_id, model, rubric_version) DO NOTHING`,
-    [p.provider, p.model, p.rubricVersion, p.now.toISOString(), p.sttProvider, p.sttModel, uniqueids ? [...uniqueids] : null]);
+    [p.provider, p.model, p.rubricVersion, p.now.toISOString(), p.sttProvider, p.sttModel, uniqueids ? [...uniqueids] : null, [...except]]);
   return r.rowCount ?? 0;
 }
 
 export async function runAnalysisPortion(db: Db, w: AnalysisWorker, p: AnalysisParams): Promise<PortionReport> {
-  const scope: Scope = { table: "call_analyses", provider: p.provider, model: p.model, rubric: p.rubricVersion };
+  const scope: Scope = { table: "call_analyses", provider: p.provider, model: p.model, rubric: p.rubricVersion, ...p.calls };
+  const kit = w.kit ?? FIRST_TOUCH_KIT;
   let inPrice = 0, outPrice = 0;
   const pre = await prepare(db, scope, p, w.apiKey, () => {
     inPrice = assertPrice(p.usdPerInputToken, "аналіз, USD за вхідний токен");
@@ -405,7 +472,7 @@ export async function runAnalysisPortion(db: Db, w: AnalysisWorker, p: AnalysisP
     if (!Number.isInteger(p.maxOutputTokens) || p.maxOutputTokens < 1) throw new ParamNotSetError("стеля вихідних токенів аналізу");
   });
   if (!("rows" in pre)) return pre;
-  const { report: r, rows, capUsd } = pre;
+  const { report: r, rows } = pre;
   let spent = pre.spentUsd;
   r.state = "ok";
 
@@ -427,11 +494,11 @@ export async function runAnalysisPortion(db: Db, w: AnalysisWorker, p: AnalysisP
       r.failed++;
       continue;
     }
-    const body = buildAnalysisRequest(src.turns, p.maxOutputTokens, src.callAt);
+    const body = kit.build(src.turns, p.maxOutputTokens, src.callAt);
     const inBound = inputTokenUpperBound(body);
     const est = inBound * inPrice + p.maxOutputTokens * outPrice;
-    if (spent + est > capUsd) {
-      const why = `стеля місяця: ${spent.toFixed(4)} + верхня оцінка ${est.toFixed(4)} > ${capUsd.toFixed(2)} USD`;
+    const why = overCap(pre, spent, est, 4, "верхня оцінка");
+    if (why) {
       await stopRest(db, scope.table, rows.slice(i), p.now, "capped", why, r);
       r.state = "capped";
       r.stoppedBy = why;
@@ -460,7 +527,7 @@ export async function runAnalysisPortion(db: Db, w: AnalysisWorker, p: AnalysisP
     const inUnits = out.usage ? out.usage.input : inBound;
     const outUnits = out.usage ? out.usage.output : p.maxOutputTokens;
     const unitSuffix = out.usage ? "" : "_bound";
-    const v = interpretAnalysis(out, src.turns);
+    const v = kit.interpret(out, src.turns);
     const upd = await db.query<{ updated: number }>(
       `WITH l AS (
          INSERT INTO ai_spend_ledger (at, provider, operation, uniqueid, units, unit, unit_price_usd)
@@ -476,6 +543,7 @@ export async function runAnalysisPortion(db: Db, w: AnalysisWorker, p: AnalysisP
         v.ok ? "done" : "failed", v.ok ? JSON.stringify(v.result) : null, v.ok ? null : v.why,
         out.usage?.input ?? null, out.usage?.output ?? null]);
     spent += inUnits * inPrice + outUnits * outPrice;
+    if (pre.sub) pre.sub.spentUsd += inUnits * inPrice + outUnits * outPrice;
     if (Number(upd.rows[0]?.updated) !== 1) r.lostRace++;
     else if (v.ok) r.done++;
     else r.failed++;
