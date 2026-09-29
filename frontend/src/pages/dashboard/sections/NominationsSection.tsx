@@ -636,23 +636,26 @@ function ConvCard({ week, conv, onData }: { week: NominationWeek; conv: RnkConvV
   return (
     <div className="nm-card">
       <div className="nm-card-h"><b>Статистика відділу РНК · найкраща конверсія</b>
-        <span className="nm-muted">Система пропонує «Конв. реклама» Звіту: створені за тиждень рекламні угоди → скільки дійшли до оплати чи успіху. Змініть числа, якщо рахуєте інакше, і позначте, хто йде на слайд (зараз {onSlideN}).</span></div>
+        <span className="nm-muted">Система рахує як фільтри Kommo: <b>цільові</b> — створені за тиждень угоди з рекламних джерел («Источник клиента») без «Не цільових»; <b>успіх</b> — угоди, що зараз від «Контролю перед завантаженням» до «Успішної», з «Датою загрузки» в тижні. Успіх і цільові — різні угоди, тож відсоток буває понад 100%. Змініть числа, якщо рахуєте інакше, і позначте, хто йде на слайд (зараз {onSlideN}).</span>
+        {conv.outside != null ? <span className="nm-muted">Поза фільтром (джерело порожнє чи інше): {conv.outside} угод відділу за тиждень.</span> : null}</div>
       {err ? <div className="nm-banner"><span className="nm-err">{err}</span></div> : null}
       <div className="nm-scroll">
         <table className="nm-table nm-conv">
-          <thead><tr><th>Менеджер</th><th>Цільові ліди</th><th>Успіх</th><th>Конверсія</th><th>На слайд</th><th /></tr></thead>
+          <thead><tr><th>Менеджер</th><th>Всього</th><th>Цільові ліди</th><th>Успіх</th><th>Конверсія</th><th>На слайд</th><th /></tr></thead>
           <tbody>
             {conv.rows.map((r) => {
               const dr = draft[r.managerId];
               const taken = dr ? dr.taken : String(r.taken), won = dr ? dr.won : String(r.won);
               const t = Number(taken), w = Number(won);
-              const valid = /^\d+$/.test(taken) && /^\d+$/.test(won) && w <= t;
+              // Число системи показуємо як є (успіх — інша когорта, може перевищити цільові); перевірка — лише для своїх чисел.
+              const valid = !dr || (/^\d+$/.test(taken) && /^\d+$/.test(won) && w <= t);
               const set = (patch: Partial<{ taken: string; won: string }>) =>
                 setDraft((d) => ({ ...d, [r.managerId]: { taken, won, ...patch } }));
               const dis = !r.canEditRow || busy != null;
               return (
                 <tr key={r.managerId} className={r.own ? "own" : ""}>
                   <td><span className="nm-name">{r.name}</span>{r.own ? <div className="nm-muted">свої дані{r.own.by ? ` · ${r.own.by}` : ""} · CRM: {r.crm.taken} / {r.crm.won}</div> : null}</td>
+                  <td className="nm-num">{r.total}</td>
                   <td><input className="nm-inp nm-num-inp" inputMode="numeric" aria-label={`Цільові ліди: ${r.name}`} value={taken} disabled={dis} onChange={(e) => set({ taken: e.target.value.replace(/\D/g, "") })} /></td>
                   <td><input className="nm-inp nm-num-inp" inputMode="numeric" aria-label={`Успіх: ${r.name}`} value={won} disabled={dis} onChange={(e) => set({ won: e.target.value.replace(/\D/g, "") })} /></td>
                   <td className="nm-num">{valid ? convPct(w, t) : <span className="nm-err">успіх &gt; ліди</span>}</td>
@@ -667,7 +670,7 @@ function ConvCard({ week, conv, onData }: { week: NominationWeek; conv: RnkConvV
                 </tr>
               );
             })}
-            {conv.rows.length === 0 ? <tr><td colSpan={6} className="nm-muted">Менеджерів РНК у заліку цього тижня немає.</td></tr> : null}
+            {conv.rows.length === 0 ? <tr><td colSpan={7} className="nm-muted">Менеджерів РНК у заліку цього тижня немає.</td></tr> : null}
           </tbody>
         </table>
       </div>

@@ -55,6 +55,8 @@ async function withRights(view: WeekView, v: Viewer) {
   const rnkLead = v.teamId != null && (RNK_TEAM_IDS as readonly number[]).includes(v.teamId);
   const rnkConv = view.rnkConv && (admin || rnkLead) ? {
     comment: view.rnkConv.comment,
+    // «Поза списком джерел» — число по ВСЬОМУ відділу, тож тімліду його не віддаємо (скоуп звужує відповідь).
+    outside: admin ? view.rnkConv.outside ?? 0 : null,
     canComment: admin && !closed,
     rows: view.rnkConv.rows.filter((row) => admin || row.teamId === v.teamId).map((row) => ({ ...row, canEditRow: !closed && (admin || row.teamId === v.teamId) })),
   } : null;
