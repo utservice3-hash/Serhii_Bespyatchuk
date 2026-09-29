@@ -4499,6 +4499,21 @@ CREATE TABLE IF NOT EXISTS carrier_close_log (
 );
 REVOKE ALL ON carrier_close_log FROM ai_readonly;
 
+-- 🙋 РІШЕННЯ ЛЮДИНИ ПО НЕВПЕВНЕНИХ (рішення Романа 29.09.2026; `core/carrierDecisions.ts`). Лише дописується:
+-- чинне — останнє по угоді. Сильніше за AI в обидва боки: «carrier» — закриваємо, «client»/«other» — не закриваємо ніколи.
+CREATE TABLE IF NOT EXISTS carrier_decisions (
+  id            BIGSERIAL PRIMARY KEY,
+  kommo_id      BIGINT NOT NULL,
+  decision      TEXT NOT NULL CHECK (decision IN ('carrier','client','other')),
+  note          TEXT,
+  decided_by    INTEGER NOT NULL,
+  decided_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ai_role       TEXT,                      -- що казав AI у момент рішення
+  ai_confidence NUMERIC
+);
+CREATE INDEX IF NOT EXISTS idx_carrier_decisions_deal ON carrier_decisions(kommo_id, id DESC);
+REVOKE ALL ON carrier_decisions FROM ai_readonly;
+
 -- 📣 «Стелю досягнуто» — один раз на місяць на межу бюджету (рішення Романа 29.09.2026). Рядок ставиться ДО
 -- відправки в Telegram, тож повтор щоп'ять хвилин неможливий за побудовою.
 CREATE TABLE IF NOT EXISTS ai_cap_alerts (

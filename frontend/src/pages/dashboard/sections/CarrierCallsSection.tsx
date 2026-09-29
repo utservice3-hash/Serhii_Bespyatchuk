@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { fetchCarrierCallCard, fetchCarrierCalls, fetchCarrierCallsMeta, revertCarrierClose,
   type CarrierCallCardResp, type CarrierCallsMetaResp, type CarrierCallsResp } from "../../../api";
 import { InfoHint } from "../widgets";
+import { CarrierDecisionQueue } from "./CarrierDecisionQueue";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
 import { STATE_UI, TONE_COLOR, mmss, jobErrorIsCurrent } from "../aiCallsView";
@@ -185,6 +186,8 @@ export function CarrierCallsSection() {
         </div>
       </div>
 
+      {/* 🙋 Невпевнені вердикти — одразу під шапкою, над списком (макет погоджено 29.09.2026). */}
+      <div style={{ marginTop: 16 }}><CarrierDecisionQueue onChanged={() => setRefresh((n) => n + 1)} /></div>
       <div className="chart-card" style={{ overflowX: "auto" }}>
         {shown.length === 0
           ? <p style={{ margin: 0, color: "var(--text-muted)" }}>{rows.length === 0 ? "У періоді немає прослуханих розмов після фільтра." : "Під цей фільтр розмов немає."}</p>

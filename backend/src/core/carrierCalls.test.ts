@@ -549,8 +549,9 @@ test("#962 ДОСТУП: матриця = сид (admin, ceo, opdir, kvp), ме�
   assert.ok(m, "🔴 сиду вкладки carrier-calls у схемі немає");
   const seeded = m[1].split(",").map((x) => x.trim().replace(/'/g, "")).sort();
   assert.deepEqual(seeded, ["admin", "ceo", "kvp", "opdir"]);
-  const rows = ACCESS_MATRIX.filter((r) => r.path.startsWith("/api/dashboard/carrier-calls") && r.method === "GET");
-  assert.equal(rows.length, 3, "🔴 не всі роути читання вкладки в матриці");
+  const MAIN = ["/api/dashboard/carrier-calls", "/api/dashboard/carrier-calls/meta", "/api/dashboard/carrier-calls/:uniqueid"];
+  const rows = ACCESS_MATRIX.filter((r) => r.method === "GET" && MAIN.includes(r.path));
+  assert.equal(rows.length, 3, "🔴 не всі основні роути читання вкладки в матриці");
   for (const r of rows) {
     assert.deepEqual([...r.allow].sort(), seeded, `🔴 ${r.path}: матриця ≠ сид`);
     for (const d of ["team_lead", "manager", "financier", "hr"]) assert.ok(r.deny.includes(d as never), `🔴 ${r.path}: ${d} не в deny`);
@@ -827,4 +828,172 @@ test("#976 ПРОХІД · ЖИВА СХЕМА: закривається лиш�
     stageLeads: async () => [lead(B + 1)], alert: async () => {}, close: { mode: "live", kommo: k.kommo } });
   assert.equal(r.closed?.closed, 1);
   assert.deepEqual((k.calls.patch[0] as { id: number }[]).map((x) => x.id), [B + 1], "🔴 закрито угоду, якої Kommo цього проходу на етапі не віддав");
+});
+
+// ─── Рішення людини по невпевнених ──────────────────────────────────────────
+
+async function seedDecide(c: Raw, base: number) {
+  const mk = async (n: number, role: string, conf: number, qc: string, status = 70419108) => {
+    const P = phone(base, n), u = `${String(base)}-${String(n)}`;
+    await call(c, u, min(300 - n), 40, P);
+    await carrierDeal(c, base + n, P, min(301 - n), "own", u, 1);
+    await carrierAnalysed(c, u, role, conf, qc);
+    await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo) VALUES ($1,$2,8921928,$3,$4)
+      ON CONFLICT (kommo_id) DO UPDATE SET status_id = EXCLUDED.status_id`, [base + n, P, status, min(301 - n).toISOString()]);
+  };
+  await mk(1, "carrier", 0.78, "counterpart");        // невпевнено → у черзі
+  await mk(2, "carrier", 0.95, "manager");            // цитата менеджера → у черзі
+  await mk(3, "unclear", 0.3, "empty");               // не чути → у черзі
+  await mk(4, "carrier", 0.95, "counterpart");        // упевнений → не в черзі (закриває автоматика)
+  await mk(5, "client", 0.95, "counterpart");         // упевнений клієнт → не в черзі
+  await mk(6, "carrier", 0.7, "counterpart", 143);    // уже не на етапі → не в черзі
+  return new Set([base + 1, base + 2, base + 3, base + 4, base + 5]);
+}
+
+/**
+ * #1040 — ЧЕРГА: лише невпевнені (нижче порогу, цитата менеджера, «не чути»), що стоять на етапі й без рішення людини.
+ * Упевнений перевізник (його закриває автоматика), упевнений клієнт, угода не на етапі, вирішена — ні.
+ * 🧨 Червоніє, якщо в черзі опиниться впевнений, вирішений або вже зрушений.
+ */
+test("#1040 ЧЕРГА · ЖИВА СХЕМА: лише невпевнені на етапі без рішення; упевнені, вирішені, не на етапі — ні", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await reset(c); await c.raw.query("TRUNCATE carrier_close_log, carrier_decisions");
+  const { decisionQueue, recordDecision } = await import("./carrierDecisions.js");
+  const B = 98000; await seedDecide(c, B);
+  const q1 = await decisionQueue(c.db, NOW);
+  assert.deepEqual(q1.pending.map((x) => x.kommoId).sort(), [B + 1, B + 2, B + 3], "🔴 черга — не рівно невпевнені на етапі");
+  assert.deepEqual(q1.pending.map((x) => x.why).sort(), ["невпевнено", "не чути", "цитата менеджера"].sort());
+  assert.equal((await recordDecision(c.db, B + 1, "client", "", 7, NOW)).ok, true);
+  const q2 = await decisionQueue(c.db, NOW);
+  assert.ok(!q2.pending.some((x) => x.kommoId === B + 1), "🔴 вирішена угода лишилась у черзі");
+  assert.deepEqual(q2.decided.map((x) => [x.kommoId, x.decision]), [[B + 1, "client"]], "дзеркало: вирішена — у «Вирішених»");
+});
+
+/**
+ * #1041 — ЛЮДИНА СИЛЬНІША ЗА AI в обидва боки: «Перевізник» людини → закриваємо навіть невпевнений вердикт (з приміткою
+ * «рішення людини»); «Клієнт» людини → упевненого перевізника НЕ закриваємо.
+ * 🧨 Червоніє, якщо автоматика ігнорує рішення людини в будь-який бік.
+ */
+test("#1041 ЛЮДИНА СИЛЬНІША · ЖИВА СХЕМА: «Перевізник» — закриваємо невпевненого; «Клієнт» — не закриваємо впевненого", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await reset(c); await c.raw.query("TRUNCATE carrier_close_log, carrier_decisions");
+  const { recordDecision } = await import("./carrierDecisions.js");
+  const { closeCandidates, closeNoteText } = await import("./carrierClose.js");
+  const B = 98100; const onStage = await seedDecide(c, B);
+  const before = (await closeCandidates(c.db, onStage, NOW)).map((x) => x.kommoId);
+  assert.deepEqual(before, [B + 4], "дзеркало: без рішень закривається лише впевнений перевізник");
+  await recordDecision(c.db, B + 1, "carrier", "свій бус", 7, NOW);
+  await recordDecision(c.db, B + 4, "client", "він просив машину", 7, NOW);
+  const after = await closeCandidates(c.db, onStage, NOW);
+  assert.deepEqual(after.map((x) => x.kommoId), [B + 1], "🔴 рішення людини не переважило AI");
+  assert.equal(after[0].byHuman, true);
+  assert.match(closeNoteText(after[0].confidence, after[0].quote, true), /рішення людини/);
+});
+
+/**
+ * #1042 — ЗАПИС РІШЕННЯ: невідоме — 400, чужа угода — 404, угода вже закрита в CRM — 409 (повертати треба кнопкою);
+ * історія лише дописується, чинне — останнє, поруч — що казав AI у момент рішення.
+ * 🧨 Червоніє, якщо дозволити змінити закриту, губити історію або приймати сміття.
+ */
+test("#1042 РІШЕННЯ · ЖИВА СХЕМА: 400/404/409, історія дописується, чинне — останнє, вердикт AI збережено", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await reset(c); await c.raw.query("TRUNCATE carrier_close_log, carrier_decisions");
+  const { recordDecision, decisionQueue } = await import("./carrierDecisions.js");
+  const B = 98200; await seedDecide(c, B);
+  assert.equal((await recordDecision(c.db, B + 1, "maybe", "", 7, NOW) as { code?: number }).code, 400);
+  assert.equal((await recordDecision(c.db, 98299, "client", "", 7, NOW) as { code?: number }).code, 404);
+  await recordDecision(c.db, B + 1, "carrier", "", 7, NOW);
+  await recordDecision(c.db, B + 1, "other", "реклама", 8, new Date(NOW.getTime() + 1000));
+  const h = (await c.raw.query<{ decision: string; ai_role: string | null; ai_confidence: string | null }>(
+    "SELECT decision, ai_role, ai_confidence FROM carrier_decisions WHERE kommo_id=$1 ORDER BY id", [B + 1])).rows;
+  assert.deepEqual(h.map((x) => x.decision), ["carrier", "other"], "🔴 історію рішень переписано");
+  assert.deepEqual([h[0].ai_role, Number(h[0].ai_confidence)], ["carrier", 0.78], "🔴 не видно, що казав AI у момент рішення");
+  assert.equal((await decisionQueue(c.db, NOW)).decided.find((x) => x.kommoId === B + 1)?.decision, "other", "🔴 чинне — не останнє");
+  await c.raw.query(`INSERT INTO carrier_close_log(kommo_id,uniqueid,confidence,decided_at,mode,closed_at) VALUES ($1,'x',0.9,$2,'live',$2)`, [B + 2, NOW.toISOString()]);
+  assert.equal((await recordDecision(c.db, B + 2, "client", "", 7, NOW) as { code?: number }).code, 409, "🔴 змінили рішення по вже закритій угоді");
+});
+
+/**
+ * #1043 — ЧОМУ НЕ ВПЕВНЕНИЙ: «невпевнено» (нижче 0,85), «цитата менеджера», «цитата не знайдена», «не чути»; упевнений — null.
+ * 🧨 Червоніє, якщо причина злиється або впевнений потрапить у чергу.
+ */
+test("#1043 ЧОМУ НЕ ВПЕВНЕНИЙ: чотири різні причини, упевнений — без причини", async () => {
+  const { whyUncertain } = await import("./carrierDecisions.js");
+  const w = (role: CarrierResult["caller_role"], conf: number, qc: CarrierResult["quote_check"]) =>
+    whyUncertain({ caller_role: role, caller_role_confidence: conf, quote_check: qc });
+  assert.equal(w("carrier", 0.8, "counterpart"), "невпевнено");
+  assert.equal(w("carrier", 0.95, "manager"), "цитата менеджера");
+  assert.equal(w("client", 0.95, "absent"), "цитата не знайдена");
+  assert.equal(w("unclear", 0.3, "empty"), "не чути");
+  assert.equal(w("carrier", 0.95, "counterpart"), null, "🔴 упевнений вердикт отримав причину — потрапить у чергу");
+  assert.equal(w("other", 0.9, "empty"), null);
+});
+
+/**
+ * #1044 — ЗАПИС РОЗМОВИ: лише дзвінки цієї вкладки (чужий — 404 без жодного запиту до Ringostat), байти — з нашого
+ * сервера; роут пускає лише адміна й КВП і не віддає посилання Ringostat.
+ * 🧨 Червоніє, якщо віддати чужий запис, піти по мережі за чужим дзвінком або «засвітити» посилання.
+ */
+test("#1044 ЗАПИС · ЖИВА СХЕМА: лише дзвінки вкладки, байти з нашого сервера, роут — адмін і КВП, без посилання", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await reset(c);
+  const { carrierRecording } = await import("./carrierAudio.js");
+  const P = phone(98400, 1);
+  await call(c, "984-mob", min(100), 40, P); await call(c, "984-ad", min(100), 40, "380999984000");
+  await carrierDeal(c, 98401, P, min(101), "own", "984-mob", 1);
+  const net = fakeNet();
+  const other = await carrierRecording(c.db, "984-ad", net.http);
+  assert.deepEqual([other.ok, (other as { code?: number }).code, net.hits.ringostat], [false, 404, 0], "🔴 віддали чужий запис або ходили по нього");
+  const mine = await carrierRecording(c.db, "984-mob", net.http);
+  assert.equal(mine.ok, true); assert.ok(mine.ok && mine.bytes.length > 44, "дзеркало: свій запис віддається байтами");
+  const route = SRC("routes/dashboard.ts");
+  const at = route.indexOf('dashboardRouter.get("/carrier-calls/:uniqueid/audio"');
+  assert.ok(at > 0, "🔴 роут запису не знайдено");
+  const body = route.slice(at, route.indexOf("dashboardRouter.", at + 10));
+  assert.ok(body.indexOf("transcriptAllowed(req.auth!)") >= 0 && body.indexOf("transcriptAllowed(req.auth!)") < body.indexOf("carrierRecording("),
+    "🔴 перевірка права стоїть не ДО завантаження запису");
+  assert.doesNotMatch(body, /recording|json\(\{[^}]*url/, "🔴 роут віддає посилання на запис");
+});
+
+/**
+ * #1045 — ДОСТУП: черга — ролям вкладки; запис — лише адмін і КВП (CEO й опдир — 403, варіант А); рішення — запис,
+ * закритий для тімліда, HR і менеджера; черга зареєстрована ДО `/:uniqueid` (інакше «pending» пішов би як дзвінок).
+ * 🧨 Червоніє, якщо розширити запис, відкрити рішення іншим ролям або переставити роути.
+ */
+test("#1045 ДОСТУП: черга — ролі вкладки, запис — лише адмін і КВП, рішення — не тімлід/HR/менеджер, черга до /:uniqueid", async () => {
+  const get = (p: string, m = "GET") => ACCESS_MATRIX.find((r) => r.method === m && r.path === p);
+  const q = get("/api/dashboard/carrier-calls/pending");
+  assert.ok(q); assert.deepEqual([...q.allow].sort(), ["admin", "ceo", "kvp", "opdir"]);
+  const a = get("/api/dashboard/carrier-calls/:uniqueid/audio");
+  assert.ok(a); assert.deepEqual([...a.allow].sort(), ["admin", "kvp"], "🔴 запис розмови слухає ширше коло, ніж вирішено (А)");
+  for (const d of ["ceo", "opdir", "team_lead"]) assert.ok(a.deny.includes(d as never), `🔴 ${d} слухає запис`);
+  const w = get("/api/dashboard/carrier-calls/deals/:kommoId/decision", "POST");
+  assert.ok(w); for (const d of ["team_lead", "hr", "manager"]) assert.ok(w.deny.includes(d as never), `🔴 ${d} вирішує`);
+  const { tabsForPath } = await import("../auth/routeTab.js");
+  for (const p of ["/api/dashboard/carrier-calls/pending", "/api/dashboard/carrier-calls/x/audio", "/api/dashboard/carrier-calls/deals/1/decision"])
+    assert.deepEqual(tabsForPath(p), ["carrier-calls"], `🔴 ${p} без межі вкладки`);
+  const route = SRC("routes/dashboard.ts");
+  const iq = route.indexOf('dashboardRouter.get("/carrier-calls/pending"'), iu = route.indexOf('dashboardRouter.get("/carrier-calls/:uniqueid"');
+  assert.ok(iq > 0 && iu > 0 && iq < iu, "🔴 черга зареєстрована ПІСЛЯ /:uniqueid — «pending» піде як номер дзвінка");
+});
+
+/**
+ * #1046 — ПРОВОДКА ФРОНТУ: черга в секції, кличе чергу, рішення, запис (байтами — `blob`), картку; кнопки = рішення бекенду;
+ * анімації вимикаються для «зменшити рух».
+ * 🧨 Червоніє, якщо від'єднати чергу, розвести кнопки з бекендом або прибрати вимкнення анімацій.
+ */
+test("#1046 ПРОВОДКА ФРОНТУ: черга → чотири виклики, запис байтами, кнопки = рішення бекенду, «зменшити рух»", async () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8");
+  assert.match(sec, /<CarrierDecisionQueue /, "🔴 черга рішень не на вкладці");
+  const q = readFileSync(FE("pages/dashboard/sections/CarrierDecisionQueue.tsx"), "utf8");
+  for (const fn of ["fetchCarrierPending(", "postCarrierDecision(", "fetchCarrierAudio(", "fetchCarrierCallCard("]) assert.ok(q.includes(fn), `🔴 черга не кличе ${fn}`);
+  const api = readFileSync(FE("api.ts"), "utf8");
+  assert.match(api, /\/audio`, \{ responseType: "blob" \}/, "🔴 запис не йде байтами з нашого сервера");
+  const { HUMAN_DECISIONS } = await import("./carrierDecisions.js");
+  const view = readFileSync(FE("pages/dashboard/carrierCallsView.ts"), "utf8");
+  const ui = /export const DECISION_UI[\s\S]*?= \{([\s\S]*?)\n\};/.exec(view)?.[1] ?? "";
+  assert.deepEqual([...ui.matchAll(/^\s+(\w+): \{/gm)].map((m) => m[1]).sort(), [...HUMAN_DECISIONS].sort(), "🔴 кнопки фронту ≠ рішення бекенду");
+  const css = readFileSync(FE("index.css"), "utf8");
+  const rm = /@media \(prefers-reduced-motion: reduce\) \{\s*\.cq-panel[^}]*\}[^}]*\}/.exec(css)?.[0] ?? "";
+  assert.ok(rm.includes("animation: none") && rm.includes("transition: none"), "🔴 анімації не вимикаються для «зменшити рух»");
 });

@@ -71,6 +71,8 @@ import { dateParam } from "../core/queryParams.js";
 import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE } from "../core/callAiScreen.js";
 import { carrierCallCard, carrierCallsList, carrierCallsMeta } from "../core/carrierCallScreen.js";
 import { closeModeOf, revertCarrierClose } from "../core/carrierClose.js";
+import { decisionQueue, recordDecision } from "../core/carrierDecisions.js";
+import { carrierRecording } from "../core/carrierAudio.js";
 import { adPlanForPeriod } from "../core/adBudget.js";
 import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, leadgenWeekly, leadGeneratorFill,
   pct, leadGeneratorFillNote, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS,
@@ -10564,6 +10566,31 @@ dashboardRouter.get("/carrier-calls/meta", async (_req, res) => {
   res.json({ job: m.job, transcripts: m.transcripts, analyses: m.analyses, spend: m.spend, caps: m.caps, close: m.close });
 });
 
+/**
+ * 🙋 Черга «Потрібне ваше рішення» (невпевнені вердикти) і вирішені за 30 днів. ⚠️ Стоїть ДО `/:uniqueid`:
+ * Express зіставляє за порядком, і «pending» інакше пішов би як номер дзвінка.
+ */
+dashboardRouter.get("/carrier-calls/pending", async (_req, res) => {
+  const { pending, decided } = await decisionQueue(pool, new Date());
+  const row = (r: (typeof pending)[number]) => ({ kommoId: r.kommoId, url: kommoLeadUrl(r.kommoId), uniqueid: r.uniqueid,
+    calledAt: r.calledAt, billsec: r.billsec, managerName: r.managerName, role: r.role, confidence: r.confidence, why: r.why });
+  res.json({
+    pending: pending.map(row),
+    decided: decided.map((r) => ({ ...row(r), decision: r.decision, note: r.note, by: r.by, at: r.at })),
+  });
+});
+
+/** 🎧 Запис розмови — лише адмін і КВП (як повний текст; `transcriptAllowed`), лише дзвінки цієї вкладки. */
+dashboardRouter.get("/carrier-calls/:uniqueid/audio", async (req, res) => {
+  if (!transcriptAllowed(req.auth!)) { res.status(403).json({ error: "Запис розмови слухають адмін і КВП" }); return; }
+  const r = await carrierRecording(pool, String(req.params.uniqueid), {
+    fetch, sleep: (ms) => new Promise((ok) => setTimeout(ok, ms)), nowMs: () => Date.now() });
+  if (!r.ok) { res.status(r.code).json({ error: r.why }); return; }
+  res.setHeader("Content-Type", "audio/wav");
+  res.setHeader("Cache-Control", "private, no-store");
+  res.end(Buffer.from(r.bytes));
+});
+
 dashboardRouter.get("/carrier-calls/:uniqueid", async (req, res) => {
   const auth = req.auth!;
   const card = await carrierCallCard(pool, String(req.params.uniqueid), transcriptAllowed(auth));
@@ -10581,6 +10608,16 @@ dashboardRouter.get("/carrier-calls/:uniqueid", async (req, res) => {
  * ↩️ Повернути угоду, яку дашборд закрив як перевізника, назад на етап (дія людини; `core/carrierClose.ts`).
  * Межа — та сама вкладка `carrier-calls` (routeTab); повернуту угоду автоматика більше не закриває.
  */
+/** 🙋 Рішення людини по угоді: «carrier» / «client» / «other» + коментар. Сильніше за AI (`carrierDecisions.ts`). */
+dashboardRouter.post("/carrier-calls/deals/:kommoId/decision", async (req, res) => {
+  const id = Number(req.params.kommoId);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Невірний номер угоди" }); return; }
+  const body = (req.body ?? {}) as { decision?: unknown; note?: unknown };
+  const r = await recordDecision(pool, id, String(body.decision ?? ""), body.note, req.auth!.userId, new Date());
+  if (!r.ok) { res.status(r.code).json({ error: r.why }); return; }
+  res.json({ ok: true });
+});
+
 dashboardRouter.post("/carrier-calls/deals/:kommoId/revert", async (req, res) => {
   const auth = req.auth!;
   const id = Number(req.params.kommoId);

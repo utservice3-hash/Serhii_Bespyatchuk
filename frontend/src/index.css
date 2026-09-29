@@ -1252,3 +1252,25 @@ tr.recv-row:focus-visible { outline: 2px solid var(--accent, #c5141c); outline-o
   .lg-deals td:nth-child(6) { grid-column: 1 / -1; grid-row: 4; }
   .lg-opt { display: none; }
 }
+
+/* 🙋 «Потрібне ваше рішення» (вкладка «Перевізники за розмовою»): плавні переходи; «зменшити рух» — без них. */
+@keyframes cq-open { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@keyframes cq-pop { 0% { opacity: 0; transform: scale(.85); } 70% { transform: scale(1.06); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes cq-fade { from { opacity: 0; } to { opacity: 1; } }
+.cq-panel { animation: cq-open .26s cubic-bezier(.2,.7,.2,1); }
+.cq-row { transition: background-color .2s ease, opacity .28s ease, transform .28s ease; }
+.cq-row:hover { background: var(--surface-2); }
+.cq-row.leave { opacity: 0; transform: translateX(14px); }
+.cq-line { transition: background-color .25s ease, color .25s ease; }
+.cq-bar { transition: width .25s linear; }
+.cq-btn { transition: background-color .15s ease, transform .1s ease, box-shadow .15s ease; }
+.cq-btn:hover { box-shadow: 0 2px 8px rgba(15,23,42,.08); }
+.cq-btn:active { transform: scale(.97); }
+.cq-pop { display: inline-block; animation: cq-pop .32s cubic-bezier(.2,.7,.2,1); }
+.cq-fade { animation: cq-fade .22s ease; }
+.cq-play { transition: transform .12s ease, background-color .2s ease; }
+.cq-play:active { transform: scale(.92); }
+@media (prefers-reduced-motion: reduce) {
+  .cq-panel, .cq-pop, .cq-fade { animation: none; }
+  .cq-row, .cq-line, .cq-bar, .cq-btn, .cq-play { transition: none; }
+}

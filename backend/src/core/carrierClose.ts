@@ -45,9 +45,10 @@ export function revertPayload(id: number): unknown[] {
     custom_fields_values: [{ field_id: REJECT_FIELD, values: null }] }];
 }
 
-export function closeNoteText(confidence: number, quote: string | null): string {
+export function closeNoteText(confidence: number, quote: string | null, byHuman = false): string {
   const c = confidence.toFixed(2).replace(".", ",");
-  return `Закрито дашбордом: перевізник за розмовою (впевненість ${c})${quote ? `. Співрозмовник: «${quote}»` : ""}. `
+  const who = byHuman ? "перевізник — рішення людини після прослуховування" : `перевізник за розмовою (впевненість ${c})`;
+  return `Закрито дашбордом: ${who}${quote && !byHuman ? `. Співрозмовник: «${quote}»` : ""}. `
     + "Помилка — поверніть угоду на етап у вкладці «Перевізники за розмовою».";
 }
 
@@ -62,15 +63,17 @@ export interface KommoCloser {
   addNotes: (body: unknown[]) => Promise<unknown>;
 }
 
-export interface CloseCandidate { kommoId: number; uniqueid: string; confidence: number; quote: string | null; logged: boolean }
+export interface CloseCandidate { kommoId: number; uniqueid: string; confidence: number; quote: string | null; logged: boolean; byHuman: boolean }
 
 /**
  * Хто зараз підлягає закриттю. `onStage` — id угод із ВІДПОВІДІ Kommo цього проходу: угоду, яку фільтр чи
  * менеджер уже зрушили, не чіпаємо навіть за впевненого вердикту.
  */
 export async function closeCandidates(db: Db, onStage: ReadonlySet<number>, now: Date): Promise<CloseCandidate[]> {
-  const r = await db.query<{ kommo_id: string; u: string; result: CarrierResult; logged: boolean; closed: boolean; reverted: boolean; recent_fail: boolean }>(`
+  const r = await db.query<{ kommo_id: string; u: string; result: CarrierResult; logged: boolean; closed: boolean; reverted: boolean;
+    recent_fail: boolean; dec: string | null }>(`
     SELECT d.kommo_id::text, t.uniqueid AS u, a.result,
+           (SELECT x.decision FROM carrier_decisions x WHERE x.kommo_id = d.kommo_id ORDER BY x.id DESC LIMIT 1) AS dec,
            l.kommo_id IS NOT NULL AS logged, l.closed_at IS NOT NULL AS closed, l.reverted_at IS NOT NULL AS reverted,
            (l.last_try_at IS NOT NULL AND l.close_error IS NOT NULL AND l.last_try_at > $1::timestamptz - make_interval(mins => $2)) AS recent_fail
       FROM carrier_call_deals d
@@ -80,10 +83,14 @@ export async function closeCandidates(db: Db, onStage: ReadonlySet<number>, now:
       LEFT JOIN carrier_close_log l ON l.kommo_id = d.kommo_id
      WHERE d.state IN ('own', 'reused')
      ORDER BY d.deal_created_at, d.kommo_id`, [now.toISOString(), RETRY_AFTER_MIN, RUBRIC_CARRIER_V1]);
+  // 🙋 Рішення людини сильніше за AI в обидва боки: «Перевізник» закриваємо й без упевненого AI,
+  // «Клієнт»/«Інше» не закриваємо ніколи (`carrierDecisions.ts`).
+  const wanted = (x: { dec: string | null; result: CarrierResult }) =>
+    x.dec != null ? x.dec === "carrier" : carrierBucket(x.result) === "carrier";
   return r.rows
-    .filter((x) => onStage.has(Number(x.kommo_id)) && !x.closed && !x.reverted && !x.recent_fail && carrierBucket(x.result) === "carrier")
+    .filter((x) => onStage.has(Number(x.kommo_id)) && !x.closed && !x.reverted && !x.recent_fail && wanted(x))
     .map((x) => ({ kommoId: Number(x.kommo_id), uniqueid: x.u, confidence: Number(x.result.caller_role_confidence),
-      quote: x.result.caller_role_quote || null, logged: x.logged }));
+      quote: x.result.caller_role_quote || null, logged: x.logged, byHuman: x.dec === "carrier" }));
 }
 
 export interface CloseReport { mode: CloseMode; candidates: number; logged: number; closed: number; failed: number; error: string | null }
@@ -121,7 +128,7 @@ export async function runCarrierClose(db: Db, now: Date, mode: CloseMode, onStag
       [ids, now.toISOString()]);
     rep.closed += ids.length;
     // Примітка — пояснення для менеджера. Її збій закриття не скасовує: угода вже закрита, а причина стоїть у полі.
-    await kommo.addNotes(batch.map((c) => ({ entity_id: c.kommoId, note_type: "common", params: { text: closeNoteText(c.confidence, c.quote) } })))
+    await kommo.addNotes(batch.map((c) => ({ entity_id: c.kommoId, note_type: "common", params: { text: closeNoteText(c.confidence, c.quote, c.byHuman) } })))
       .catch((e: unknown) => db.query(`UPDATE carrier_close_log SET close_error = $2 WHERE kommo_id = ANY($1::bigint[])`,
         [ids, `закрито, але примітку не додано: ${(e instanceof Error ? e.message : String(e)).slice(0, 300)}`]));
   }

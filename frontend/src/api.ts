@@ -424,6 +424,22 @@ export interface CarrierCallsMetaResp {
   caps: { carrier: number; stt: number | null; analysis: number | null };
   close: { mode: string; wouldClose: number; closed: number; reverted: number; failed: number };
 }
+/** 🙋 Черга невпевнених вердиктів і вирішені за 30 днів. */
+export interface CarrierPendingT { kommoId: number; url: string; uniqueid: string; calledAt: string; billsec: number;
+  managerName: string | null; role: string; confidence: number; why: string }
+export interface CarrierDecidedT extends CarrierPendingT { decision: "carrier" | "client" | "other"; note: string | null; by: string; at: string }
+export async function fetchCarrierPending(): Promise<{ pending: CarrierPendingT[]; decided: CarrierDecidedT[] }> {
+  const { data } = await api.get<{ pending: CarrierPendingT[]; decided: CarrierDecidedT[] }>("/dashboard/carrier-calls/pending");
+  return data;
+}
+export async function postCarrierDecision(kommoId: number, decision: "carrier" | "client" | "other", note: string): Promise<void> {
+  await api.post(`/dashboard/carrier-calls/deals/${String(kommoId)}/decision`, { decision, note });
+}
+/** Запис розмови — байтами з нашого сервера (посилання Ringostat назовні не йде); лише адмін і КВП. */
+export async function fetchCarrierAudio(uniqueid: string): Promise<Blob> {
+  const { data } = await api.get<Blob>(`/dashboard/carrier-calls/${encodeURIComponent(uniqueid)}/audio`, { responseType: "blob" });
+  return data;
+}
 export async function revertCarrierClose(kommoId: number): Promise<void> {
   await api.post(`/dashboard/carrier-calls/deals/${String(kommoId)}/revert`);
 }

@@ -80,3 +80,23 @@ export function closeModeLabel(mode: string): string {
   if (mode === "off") return "закриття в CRM вимкнено";
   return "закриття в CRM — лише журнал, у CRM нічого не пишемо";
 }
+
+/** 🙋 Рішення людини по невпевнених — підписи й кольори кнопок. */
+export type HumanDecisionT = "carrier" | "client" | "other";
+export const DECISION_UI: Readonly<Record<HumanDecisionT, { label: string; icon: string; hint: string; bg: string; fg: string }>> = {
+  carrier: { label: "Перевізник", icon: "🚚", hint: "Закриємо в CRM як «Не цільові · Перевізник»", bg: TONE.warn.bg, fg: TONE.warn.fg },
+  client: { label: "Клієнт", icon: "👤", hint: "Лишиться на етапі, AI більше не чіпає", bg: TONE.ok.bg, fg: TONE.ok.fg },
+  other: { label: "Інше", icon: "💬", hint: "Лишиться на етапі", bg: TONE.info.bg, fg: TONE.info.fg },
+};
+/** Що сказав AI — підпис і колір (сирі ролі моделі, не кошики). */
+export const ROLE_UI: Readonly<Record<string, { label: string; bg: string; fg: string }>> = {
+  carrier: { label: "перевізник", bg: TONE.warn.bg, fg: TONE.warn.fg },
+  client: { label: "клієнт", bg: TONE.ok.bg, fg: TONE.ok.fg },
+  other: { label: "інше", bg: TONE.info.bg, fg: TONE.info.fg },
+  unclear: { label: "не розібрати", bg: TONE.muted.bg, fg: TONE.muted.fg },
+};
+/** Коротко, для черги: «Він» — співрозмовник, «Менеджер»; канал невідомий — чесно «Канал N». */
+export function speakerShort(channel: number, managerChannel: number | null): string {
+  if (managerChannel == null) return `Канал ${String(channel)}`;
+  return channel === managerChannel ? "Менеджер" : "Він";
+}
