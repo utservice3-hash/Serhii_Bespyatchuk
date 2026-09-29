@@ -793,7 +793,8 @@ test("#974 ПОМИЛКА KOMMO · ЖИВА СХЕМА: не закрито, п�
 test("#975 ДОСТУП І ПРОВОДКА: повернення — лише ролі вкладки, роут → ядро, кнопка → роут, режим — з closeModeOf", async () => {
   const w = ACCESS_MATRIX.find((r) => r.method === "POST" && r.path === "/api/dashboard/carrier-calls/deals/:kommoId/revert");
   assert.ok(w, "🔴 роут повернення не в матриці");
-  for (const d of ["team_lead", "manager", "financier", "hr"]) assert.ok(w.deny.includes(d as never), `🔴 ${d} може повертати угоди`);
+  for (const d of ["team_lead", "manager", "hr"]) assert.ok(w.deny.includes(d as never), `🔴 ${d} може повертати угоди`);
+  // Фінансиста тримає межа вкладки (у нього її немає — #962b), а не рядок запису: проба адмін-рівня писала б у CRM (#11b).
   const { tabsForPath } = await import("../auth/routeTab.js");
   assert.deepEqual(tabsForPath("/api/dashboard/carrier-calls/deals/123/revert"), ["carrier-calls"], "🔴 запис без межі вкладки");
   const route = SRC("routes/dashboard.ts");
