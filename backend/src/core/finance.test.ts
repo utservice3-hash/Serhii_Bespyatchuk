@@ -358,7 +358,11 @@ test("#935 ЖИВИЙ SQL: перенесення — підсумок = сум�
     assert.deepEqual(jan.tree.map((r) => r.name), ["Офіс-менеджер", "Операційний директор"], "🔴 порядок відповідальних не як у файлі");
     assert.deepEqual(jan.tree[0].groups[0].items.map((i) => [i.name, i.plan]), [["Team Building", 0], ["Приведи друга", null]],
       "🔴 нуль і «не внесено» злились або порядок статей не як у файлі");
-    await assert.rejects(fin.importHistory(db, null, file, 2026, "повтор"), (e: unknown) => status(e) === 409, "🔴 повторне перенесення дозволено");
+    // 409 має дати САМЕ охорона повтору, а не унікальність назв: після перейменування статей
+    // унікальність уже не спрацює, і повтор задублював би цифри (саботаж 29.09 це показав).
+    await fin.renameResp(db, 901, jan.tree[0].id, { name: "Офіс-менеджер (перейменовано)" });
+    await assert.rejects(fin.importHistory(db, null, file, 2026, "повтор"),
+      (e: unknown) => status(e) === 409 && /повторне перенесення/.test((e as Error).message), "🔴 повторне перенесення дозволено");
   } finally { await s.dispose(); }
 });
 
