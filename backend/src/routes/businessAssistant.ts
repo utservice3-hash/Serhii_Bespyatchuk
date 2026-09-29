@@ -198,7 +198,7 @@ baRouter.post("/issues/:id/files", uploadHandler("issue"));
 baRouter.get("/issues/:id/files/:fileId", downloadHandler("issue"));
 
 // ── Облік техніки (прохід 2, 29.09.2026) ─────────────────────────────────────
-/** Кому видати: лише id, ПІБ і стан із реєстру — телефонів, дат народження тощо розділ не отримує (#964). */
+/** Кому видати: лише id, ПІБ і стан із реєстру — телефонів, дат народження тощо розділ не отримує (#984). */
 baRouter.get("/employees", async (req, res) => {
   try { onlyBa(req); res.json({ employees: await employeesForIssue(pool as unknown as Db) }); } catch (e) { fail(res, e); }
 });

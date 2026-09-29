@@ -3,7 +3,7 @@
  *
  * Одиниця техніки — рядок реєстру (як у таблиці Даші «Облік техніки 2026»), видача — окремий рядок
  * із кому/коли/повернення. «На руках» = є видача без дати повернення; одна одиниця не може бути
- * на руках у двох людей — межу тримає частковий унікальний індекс, а не лише цей код (#963).
+ * на руках у двох людей — межу тримає частковий унікальний індекс, а не лише цей код (#983).
  * Видають БУДЬ-ЯКОМУ співробітнику з реєстру `employees` (відповідь Даші 29.09.2026).
  *
  * `Db` і `BaError` — ті самі, що в претензіях: роут відкриває транзакцію, тож видача й подія в
@@ -39,7 +39,7 @@ function url(v: unknown): string | null {
   return s;
 }
 
-/** Співробітники для вибору «кому видати»: лише id, ПІБ і стан — жодних телефонів, дат, ІПН (#964). */
+/** Співробітники для вибору «кому видати»: лише id, ПІБ і стан — жодних телефонів, дат, ІПН (#984). */
 export async function employeesForIssue(db: Db) {
   const r = await db.query<{ id: number; full_name: string; status: string }>(
     `SELECT id, full_name, status FROM employees WHERE COALESCE(btrim(full_name), '') <> '' ORDER BY (status = 'active') DESC, full_name`);
@@ -59,7 +59,7 @@ const ITEM_FROM = `FROM ba_equipment q
 function shapeItem(r: any) {
   const holder = r.issue_id == null ? null : {
     issueId: r.issue_id, name: r.holder_name, employeeId: r.employee_id, issuedOn: r.issued_on,
-    // «Звільнений, не повернено» — людина звільнена за реєстром, а видача відкрита (#963).
+    // «Звільнений, не повернено» — людина звільнена за реєстром, а видача відкрита (#983).
     dismissed: r.employee_status === "dismissed", dismissedOn: r.employee_dismissed_on ?? null,
     contractFiles: Number(r.contract_files ?? 0),
   };
@@ -153,7 +153,7 @@ export async function setEquipmentArchived(db: Db, actor: number, id: number, ar
   await logEvent(db, id, actor, archived ? "Перенесено в архів (списано)" : "Повернуто з архіву");
 }
 
-/** Видача: співробітник із реєстру, дата. Одиниця вже на руках — 409, а не друга видача (#963). */
+/** Видача: співробітник із реєстру, дата. Одиниця вже на руках — 409, а не друга видача (#983). */
 export async function issueEquipment(db: Db, actor: number, equipmentId: number, body: any): Promise<number> {
   const item = (await db.query<{ archived: boolean }>(`SELECT archived_at IS NOT NULL AS archived FROM ba_equipment WHERE id = $1 FOR UPDATE`, [equipmentId])).rows[0];
   if (!item) throw new BaError(404, "Техніку не знайдено");

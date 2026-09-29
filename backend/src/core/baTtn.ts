@@ -19,7 +19,7 @@ import {
 
 /**
  * Угоди, де потрібна ТТН, по менеджерах за місяць — ОДИН SQL, яким користуються і екран, і
- * збереження. Відповідальний = `deals.manager_id`. Звіряє з фільтром Даші гейт #962.
+ * збереження. Відповідальний = `deals.manager_id`. Звіряє з фільтром Даші гейт #982.
  */
 export async function ttnDealsByManager(db: Db, ym: string): Promise<Map<number, number>> {
   const { from, to } = monthBounds(ym);

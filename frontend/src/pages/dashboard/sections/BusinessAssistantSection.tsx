@@ -121,7 +121,7 @@ function ClaimsTab({ meta, nonce, onOpen }: { meta: BaMeta; nonce: number; onOpe
   }).sort((a, b) => {
     if (sort === "sum") return (b.debtAmount ?? -1) - (a.debtAmount ?? -1);
     if (sort === "days") return (b.overdueDays ?? -1) - (a.overdueDays ?? -1);
-    // ТЗ: «за датою відправки, нові зверху»; невідправлені — внизу (рішення Романа 29.09.2026, #965).
+    // ТЗ: «за датою відправки, нові зверху»; невідправлені — внизу (рішення Романа 29.09.2026, #985).
     if (!a.sentOn !== !b.sentOn) return a.sentOn ? -1 : 1;
     return (b.sentOn ?? "").localeCompare(a.sentOn ?? "") || b.id - a.id;
   }), [rows, status, q, sort, period]);
