@@ -9,7 +9,7 @@ import { EmployeePhoto } from "./EmployeePhotos";
 import { NominationsPresentation } from "./NominationsPresentation";
 import { formatAmountFull } from "../format";
 import {
-  parseWeekParam, parseAmount, countdown, groupCells, teamProgress, frozenSummary, ownDataHint, DRILL_KIND, fmtValue, leadsMessage, isAbout, convPct,
+  parseWeekParam, parseAmount, countdown, groupCells, teamProgress, frozenSummary, ownDataHint, DRILL_KIND, fmtValue, leadsMessage, isAbout, convPct, editOpen,
 } from "../nominationsView";
 import "./nominations.css";
 
@@ -102,8 +102,11 @@ export function NominationsSection() {
     window.setTimeout(() => setCopied((c) => (c === "ok" ? null : c)), 4000);
   };
 
+  const open = editOpen(data, now);
   const statePill = frozen
-    ? <span className="nm-pill ok">Зафіксовано {data.frozenAt ? whenText(data.frozenAt) : ""}</span>
+    ? open
+      ? <span className="nm-pill draft">Зафіксовано {data.frozenAt ? whenText(data.frozenAt) : ""} · свої дані — до вт 14:00 · лишилось {countdown(data.editUntil!, now).text}</span>
+      : <span className="nm-pill ok">Зафіксовано {data.frozenAt ? whenText(data.frozenAt) : ""}</span>
     : ongoing
       ? <span className="nm-pill wait">Тиждень ще триває — числа зміняться до неділі</span>
       : <span className={`nm-pill ${cd.level === "danger" || cd.level === "past" ? "danger" : "draft"}`}>
@@ -144,7 +147,7 @@ export function NominationsSection() {
           <textarea className="nm-inp" readOnly value={copied} rows={5} onFocus={(e) => e.currentTarget.select()} />
           <button className="nm-btn" onClick={() => setCopied(null)}>Закрити</button></div>
       ) : null}
-      {fs ? <div className="nm-card nm-banner">Тиждень зафіксовано{data.frozenAt ? ` ${whenText(data.frozenAt)}` : ""}: погоджено <b>{fs.confirmed}</b>, свої дані — <b>{fs.own}</b>, без рішення — <b>{fs.noDecision}</b> (пішла пропозиція системи). Змінити вже не можна.</div> : null}
+      {fs ? <div className="nm-card nm-banner">Тиждень зафіксовано{data.frozenAt ? ` ${whenText(data.frozenAt)}` : ""}: погоджено <b>{fs.confirmed}</b>, свої дані — <b>{fs.own}</b>, без рішення — <b>{fs.noDecision}</b> (пішла пропозиція системи). {open ? "До вт 14:00 ще можна внести свої дані — вони підуть на слайд із ✎." : "Змінити вже не можна."}</div> : null}
 
       <div className={`nm-layout${drill ? " with-aside" : ""}`}>
         <div className="nm-main">
@@ -274,7 +277,8 @@ function TeamBoard({ week, team, mode, onData, onDrill }: {
   const [errs, setErrs] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<NominationKey | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const frozen = week.state === "frozen" && team.dept !== "lg"; // лідогенератори живі — правляться й після фіксації
+  // лідогенератори живі — правляться й після фіксації; решта — лише «свої дані» до вт 14:00
+  const frozen = week.state === "frozen" && team.dept !== "lg";
   const aboutIds = mode === "lead" ? [week.viewer.managerId] : team.leads.map((l) => l.managerId);
   const g = groupCells(team.cells, aboutIds, week.leadgenDefs.filter((d) => d.noCrm).map((d) => d.key));
   const bulkable = g.pending.filter((c) => c.canReview && c.crm.state === "ok");
@@ -351,6 +355,7 @@ function NomCard({ week, team, cell, mode, about, busy, saving, err, editing, on
   const [all, setAll] = useState(false);
   const d = defOf(week, cell.nomination);
   const frozen = week.state === "frozen" && team.dept !== "lg";
+  const locked = frozen && !editOpen(week, Date.now());
   const name = (id: number) => week.names[String(id)] ?? team.members.find((m) => m.id === id)?.name ?? `Менеджер #${id}`;
   const me = week.viewer.managerId;
   const crm = cell.crm;
@@ -380,7 +385,7 @@ function NomCard({ week, team, cell, mode, about, busy, saving, err, editing, on
           </div>
         ) : d.noCrm
           ? <div className="nm-muted">{frozen ? "Даних не внесли." : "Даних ще немає: у CRM звʼязку угоди з лідогенератором немає — введіть свої дані."}</div>
-          : <div className="nm-muted">Ніхто не набрав — погоджувати нічого{frozen ? "" : ", але можна ввести свої дані"}.</div>}
+          : <div className="nm-muted">Ніхто не набрав — погоджувати нічого{locked ? "" : ", але можна ввести свої дані"}.</div>}
         {own ? <>
           <div className="nm-quote">«{cell.final.reason}»</div>
           <div className="nm-strike">Пропозиція системи: {crm.state === "ok" ? `${crm.winners.map(name).join(", ")} · ${fmtValue(d.unit, crm.value)}` : "ніхто не набрав"}</div>
@@ -411,7 +416,7 @@ function NomCard({ week, team, cell, mode, about, busy, saving, err, editing, on
       </div>
 
       <div className="nm-nc-act">
-        <Decision week={week} cell={cell} mode={mode} about={about} busy={busy} saving={saving} err={err} frozen={frozen}
+        <Decision week={week} cell={cell} mode={mode} about={about} busy={busy} saving={saving} err={err} frozen={locked} afterFreeze={frozen}
           onConfirm={onConfirm} onRetract={onRetract} onOwn={() => onEdit(true)} />
       </div>
 
@@ -426,8 +431,8 @@ function NomCard({ week, team, cell, mode, about, busy, saving, err, editing, on
   );
 }
 
-function Decision({ week, cell, mode, about, busy, saving, err, frozen, onConfirm, onRetract, onOwn }: {
-  week: NominationWeek; cell: NominationCell; mode: "lead" | "admin"; about: boolean; busy: boolean; saving: boolean; err: string | null; frozen: boolean;
+function Decision({ week, cell, mode, about, busy, saving, err, frozen, afterFreeze, onConfirm, onRetract, onOwn }: {
+  week: NominationWeek; cell: NominationCell; mode: "lead" | "admin"; about: boolean; busy: boolean; saving: boolean; err: string | null; frozen: boolean; afterFreeze: boolean;
   onConfirm: () => void; onRetract: () => void; onOwn: () => void;
 }) {
   const st = cell.final.status;
@@ -437,6 +442,18 @@ function Decision({ week, cell, mode, about, busy, saving, err, frozen, onConfir
     return <span className="nm-muted">{st === "confirmed" ? "Погоджено" : st === "overridden" ? "Свої дані" : st === "empty" ? "Ніхто не набрав" : "Без рішення — пішла пропозиція системи"}</span>;
   }
   if (!cell.canReview) return <span className="nm-muted">{about && mode === "lead" ? "Вирішує керівництво" : cell.whyNot ?? ""}</span>;
+  if (afterFreeze) {
+    // ✎ Після фіксації (до вт 14:00): лише «свої дані» поверх знімка; скасувати можна лише поправку, внесену після фіксації.
+    const mine = st === "overridden" && cell.review?.action === "override";
+    return (
+      <div className="nm-dec">
+        <span className="nm-muted">{mine ? `Поправка після фіксації${by}${at}` : st === "confirmed" ? "Погоджено" : st === "overridden" ? "Свої дані" : st === "empty" ? "Ніхто не набрав" : "Зафіксовано пропозицію системи"}</span>
+        <button className="nm-btn lg" disabled={busy} onClick={onOwn}>{st === "overridden" ? "Змінити дані" : "Свої дані"}</button>
+        {mine ? <button className="nm-btn lg" disabled={busy} onClick={onRetract}>{saving ? "Зберігаю…" : "Прибрати поправку"}</button> : null}
+        {err ? <span className="nm-err">{err}</span> : null}
+      </div>
+    );
+  }
   return (
     <div className="nm-dec">
       {st === "confirmed" ? (

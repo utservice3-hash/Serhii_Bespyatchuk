@@ -4712,6 +4712,8 @@ export interface NominationWeek {
   weekFrom: string; weekTo: string; state: "draft" | "frozen"; frozenAt: string | null; ruleVersion: string; freezeDueAt: string;
   /** Мить фіксації як UTC — для зворотного відліку. */
   freezeInstant: string;
+  /** ✎ До якої миті (UTC) після фіксації ще приймаються «свої дані» — вт 14:00 за Києвом. */
+  editUntil?: string;
   teams: NominationTeam[]; depts: NominationDept[]; names: Record<string, string>;
   viewer: { role: "admin" | "team_lead"; teamId: number | null; managerId: number | null };
   defs: NominationDef[];

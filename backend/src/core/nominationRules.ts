@@ -110,6 +110,17 @@ export const freezeAt = (weekFrom: string): { date: string; hour: number } => ({
  */
 export function freezeInstant(weekFrom: string): string {
   const { date, hour } = freezeAt(weekFrom);
+  return kyivInstant(date, hour);
+}
+/**
+ * ✎ ВІКНО ПРАВОК ПІСЛЯ ФІКСАЦІЇ (29.09.2026, рішення Романа — терміново): презентацію готують у вівторок
+ * з 08:00, і числа мусять правитись до 14:00. Знімок о 08:00 лишається незмінним; «свої дані», внесені
+ * між фіксацією і цією миттю, лягають ПОВЕРХ знімка (`overlayAfterFreeze`) і йдуть на слайд із ✎.
+ */
+export const EDIT_UNTIL_HOUR = 14;
+export const editUntilInstant = (weekFrom: string): string => kyivInstant(addDays(weekFrom, 8), EDIT_UNTIL_HOUR);
+export const isEditOpen = (weekFrom: string, at: Date): boolean => at.getTime() < Date.parse(editUntilInstant(weekFrom));
+function kyivInstant(date: string, hour: number): string {
   const [y, m, d] = date.split("-").map(Number);
   for (const off of [3, 2]) {
     const t = new Date(Date.UTC(y, m - 1, d, hour - off));
@@ -195,6 +206,18 @@ export function applyReview(crm: Ranked, reviewIn: Review | null): Final {
   if (crm.state === "empty") return { status: "empty", winners: [], value: null, reason: null, stale };
   const confirmed = review?.action === "confirm" && !stale;
   return { status: confirmed ? "confirmed" : "unconfirmed", winners: crm.winners, value: crm.value, reason: null, stale };
+}
+
+/**
+ * Поправка після фіксації: рішення, ухвалене ПІСЛЯ `frozenAt`, лягає поверх знімка. Лише «свої дані» змінюють
+ * число; «скасувати» таку поправку повертає зафіксоване. Рішення ДО фіксації вже є у знімку — їх не чіпаємо.
+ */
+export function overlayAfterFreeze(frozenFinal: Final, rv: (Review & { at: string }) | null, frozenAt: string): { final: Final; after: boolean } {
+  if (!rv || Date.parse(rv.at) <= Date.parse(frozenAt)) return { final: frozenFinal, after: false };
+  if (rv.action === "override" && rv.overrideManagerIds?.length && rv.overrideValue != null && rv.reason) {
+    return { final: { status: "overridden", winners: [...rv.overrideManagerIds].sort((a, b) => a - b), value: rv.overrideValue, reason: rv.reason, stale: false }, after: true };
+  }
+  return { final: frozenFinal, after: true };
 }
 
 /**
@@ -295,6 +318,7 @@ export interface WeekView {
   frozenAt: string | null; ruleVersion: string;
   freezeDueAt: string; // київська дата + година фіксації, для підпису «фіксація вт … о 08:00»
   freezeInstant: string; // та сама мить як UTC — для зворотного відліку
+  editUntil?: string; // до якої миті (UTC) після фіксації ще приймаються «свої дані» — `editUntilInstant`
   teams: TeamWeek[];
   depts: DeptWinner[];
   names: Record<number, string>;

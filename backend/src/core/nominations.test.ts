@@ -493,3 +493,22 @@ test("#665 конверсія РНК: числа й вибір «на слайд
   assert.ok(validateConvEdit({ weekFrom: "2026-09-14", action: "comment", comment: "  " }).ok);
   assert.equal(validateConvEdit({ weekFrom: "2026-09-15", action: "reset", managerId: 1 }).ok, false, "🔴 тиждень не з понеділка пройшов");
 });
+
+test("#915 вікно правок після фіксації: до вт 14:00 «свої дані» лягають поверх знімка, після — ні", async () => {
+  const { editUntilInstant, isEditOpen, overlayAfterFreeze } = await import("./nominationRules.js");
+  // Межа — вт 14:00 за Києвом, у літній і зимовий час.
+  assert.equal(editUntilInstant("2026-09-21"), "2026-09-29T11:00:00.000Z", "🔴 вт 14:00 Києва (літо) ≠ 11:00Z");
+  assert.equal(editUntilInstant("2026-10-19"), "2026-10-27T12:00:00.000Z", "🔴 вт 14:00 Києва (зима) ≠ 12:00Z");
+  assert.equal(isEditOpen("2026-09-21", new Date("2026-09-29T10:59:59Z")), true, "🔴 о 13:59 правки мають прийматись");
+  assert.equal(isEditOpen("2026-09-21", new Date("2026-09-29T11:00:00Z")), false, "🔴 о 14:00 вікно мусить закритись");
+  const frozenAt = "2026-09-29T05:00:01.000Z";
+  const snap = { status: "unconfirmed" as const, winners: [7], value: 447, reason: null, stale: false };
+  const ov = (at: string, action: "override" | "retract" | "confirm" = "override") =>
+    ({ action, crmFingerprint: "x", overrideManagerIds: action === "override" ? [9, 3] : null, overrideValue: action === "override" ? 120 : null, reason: action === "override" ? "неповний Расход 1" : null, at });
+  const after = overlayAfterFreeze(snap, ov("2026-09-29T07:00:00.000Z"), frozenAt);
+  assert.deepEqual([after.final.status, after.final.winners, after.final.value, after.after], ["overridden", [3, 9], 120, true], "🔴 поправка після фіксації не лягла поверх знімка");
+  const before = overlayAfterFreeze(snap, ov("2026-09-29T04:59:00.000Z"), frozenAt);
+  assert.equal(before.final, snap, "🔴 рішення ДО фіксації вже у знімку — повторно накладати не можна");
+  assert.equal(overlayAfterFreeze(snap, ov("2026-09-29T08:00:00.000Z", "retract"), frozenAt).final, snap, "🔴 скасована поправка мусить повертати зафіксоване");
+  assert.equal(overlayAfterFreeze(snap, null, frozenAt).final, snap);
+});

@@ -39,6 +39,10 @@ export function countdown(freezeInstant: string, nowMs: number): { text: string;
   return { text, level: ms < 3 * 3_600_000 ? "danger" : ms < 24 * 3_600_000 ? "warn" : "calm" };
 }
 
+/** ✎ Зафіксований тиждень ще приймає «свої дані» (до вт 14:00): поправки лягають поверх знімка. */
+export const editOpen = (week: Pick<NominationWeek, "state" | "editUntil">, nowMs: number): boolean =>
+  week.state === "frozen" && !!week.editUntil && Date.parse(week.editUntil) > nowMs;
+
 /** Рядок «про» когось із `ids` (тімліда): переможець за CRM — він. Такий рядок вирішує керівництво. */
 export const isAbout = (c: NominationCell, ids: readonly (number | null)[]): boolean =>
   c.crm.state === "ok" && c.crm.winners.some((w) => ids.includes(w));

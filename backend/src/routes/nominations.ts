@@ -5,7 +5,7 @@ import { isAdminScope } from "../auth/rbac.js";
 import { nominationWeek, frozenWeek, draftWeek, cellFingerprint, rnkConvWeek, LEADGEN_TEAM_ID, type WeekView } from "../core/nominations.js";
 import type { TeamWeek } from "../core/nominationRules.js";
 import { managerPhotos, employeePhotos } from "../core/people.js";
-import { lastWeek, weekOf, canReview, validateReview, validateBulkConfirm, validateConvEdit, validateManualSlide, NOMINATIONS, LEADGEN_NOMINATIONS, MARGIN_FLAG_PCT, MANUAL_KINDS, SLIDE_TEMPLATES } from "../core/nominationRules.js";
+import { lastWeek, weekOf, canReview, validateReview, validateBulkConfirm, validateConvEdit, validateManualSlide, isEditOpen, NOMINATIONS, LEADGEN_NOMINATIONS, MARGIN_FLAG_PCT, MANUAL_KINDS, SLIDE_TEMPLATES } from "../core/nominationRules.js";
 import { RNK_TEAM_IDS } from "../core/metrics.js";
 
 /**
@@ -36,7 +36,7 @@ async function withRights(view: WeekView, v: Viewer) {
   const withCells = (t: TeamWeek) => ({
     ...t,
     cells: t.cells.map((c) => {
-      const r = view.state === "frozen" && t.teamId !== LEADGEN_TEAM_ID ? { ok: false as const, why: "тиждень зафіксовано" }
+      const r = view.state === "frozen" && t.teamId !== LEADGEN_TEAM_ID && !isEditOpen(view.weekFrom, new Date()) ? { ok: false as const, why: "тиждень зафіксовано" }
         : canReview(v, { teamId: t.teamId, crmWinners: c.crm.state === "ok" ? c.crm.winners : [], overrideManagerIds: c.final.status === "overridden" ? c.final.winners : null });
       return { ...c, canReview: r.ok, whyNot: r.ok ? null : r.why };
     }),
@@ -94,8 +94,11 @@ nominationsRouter.post("/review", safe(async (req: Request, res: Response) => {
   const parsed = validateReview(req.body);
   if (!parsed.ok) return res.status(400).json({ error: parsed.error });
   const b = parsed.value;
-  if (b.teamId !== LEADGEN_TEAM_ID && await frozenWeek(b.weekFrom)) return res.status(409).json({ error: "Тиждень уже зафіксовано — змінити неможливо" });
-  const draft = await draftWeek(b.weekFrom);
+  // ✎ Зафіксований тиждень до вт 14:00 приймає лише «свої дані» (і їх скасування) — поверх знімка, не в нього.
+  const frozen = b.teamId !== LEADGEN_TEAM_ID ? await frozenWeek(b.weekFrom) : null;
+  if (frozen && !isEditOpen(b.weekFrom, new Date())) return res.status(409).json({ error: "Тиждень уже зафіксовано, час правок (вт 14:00) вийшов — змінити неможливо" });
+  if (frozen && b.action === "confirm") return res.status(409).json({ error: "Після фіксації можна лише внести свої дані" });
+  const draft = frozen ?? await draftWeek(b.weekFrom);
   const team = teamOf(draft, b.teamId);
   if (!team) return res.status(404).json({ error: "Команди немає в заліку" });
   const cell = team.cells.find((c) => c.nomination === b.nomination);

@@ -20,7 +20,7 @@ import { kommoLeadUrl } from "./kommoLinks.js";
 import { leadgenStats } from "./leadgenStats.js";
 import {
   NOMINATIONS, NOMINATION_RULE_VERSION, rankNominees, applyReview, fingerprint, deptWinners, weekOf, isFreezeDue, snapshotRows,
-  teamRanking, rankingFromExtra, freezeInstant, LEADGEN_NOMINATIONS, buildRnkConv,
+  teamRanking, rankingFromExtra, freezeInstant, editUntilInstant, overlayAfterFreeze, LEADGEN_NOMINATIONS, buildRnkConv,
   type NominationKey, type Ranked, type Review, type Final, type NominationCell, type TeamWeek, type DeptWinner, type WeekView,
   type RnkConv, type ConvEdit,
 } from "./nominationRules.js";
@@ -148,8 +148,8 @@ export async function rnkConvWeek(from: string, to: string, rosterIn?: RosterRow
 }
 
 /** Живі блоки зафіксованого тижня: лідогенератори (CRM + рішення) і конверсія РНК — не зі знімка. */
-async function liveBlocks(from: string, to: string): Promise<Pick<WeekView, "leadgen" | "rnkConv">> {
-  const [reviews, leads, lgStats, rnkConv] = await Promise.all([latestReviews(from), teamLeads(), leadgenStats(from, to), rnkConvWeek(from, to)]);
+async function liveBlocks(from: string, to: string, reviews: Map<string, ReviewRow>): Promise<Pick<WeekView, "leadgen" | "rnkConv">> {
+  const [leads, lgStats, rnkConv] = await Promise.all([teamLeads(), leadgenStats(from, to), rnkConvWeek(from, to)]);
   return { leadgen: leadgenWeek(lgStats, reviews, leads), rnkConv };
 }
 
@@ -196,7 +196,7 @@ export async function draftWeek(weekFrom: string, teamId: number | null = null):
   const fz = weekOf(weekFrom);
   const view: WeekView = {
     weekFrom: from, weekTo: to, state: "draft", frozenAt: null, ruleVersion: NOMINATION_RULE_VERSION,
-    freezeDueAt: `${addDaysIso(fz.from, 8)} 08:00`, freezeInstant: freezeInstant(fz.from), teams, depts: depts(teams), names,
+    freezeDueAt: `${addDaysIso(fz.from, 8)} 08:00`, freezeInstant: freezeInstant(fz.from), editUntil: editUntilInstant(fz.from), teams, depts: depts(teams), names,
     leadgen: leadgenWeek(lgStats, reviews, leads), rnkConv,
   };
   if (view.leadgen) for (const m of view.leadgen.members) view.names[m.id] ??= m.name;
@@ -235,10 +235,19 @@ export async function frozenWeek(weekFrom: string, teamId: number | null = null)
     if (r.manager_id != null) (c.final.winners as number[]).push(r.manager_id);
   }
   const list = [...teams.values()].sort((a, b) => a.dept.localeCompare(b.dept) || a.teamName.localeCompare(b.teamName, "uk"));
+  // ✎ Поправки після фіксації (вікно до вт 14:00): поверх знімка, сам знімок не змінюється.
+  const reviews = await latestReviews(w.week_from);
+  const frozenAt = w.frozen_at.toISOString();
+  for (const t of list) t.cells = t.cells.map((c) => {
+    const rv = reviews.get(`${t.teamId}:${c.nomination}`) ?? null;
+    const o = overlayAfterFreeze(c.final, rv, frozenAt);
+    return o.after && rv ? { ...c, final: o.final, review: { action: rv.action, by: rv.by, at: rv.at } } : c;
+  });
+  for (const t of list) for (const c of t.cells) for (const id of c.final.winners) names[id] ??= t.members.find((m) => m.id === id)?.name ?? names[id];
   const view: WeekView = {
-    weekFrom: w.week_from, weekTo: w.week_to, state: "frozen", frozenAt: w.frozen_at.toISOString(), ruleVersion: w.rule_version,
-    freezeDueAt: `${addDaysIso(w.week_from, 8)} 08:00`, freezeInstant: freezeInstant(w.week_from), teams: list, depts: depts(list), names,
-    ...(await liveBlocks(w.week_from, w.week_to)),
+    weekFrom: w.week_from, weekTo: w.week_to, state: "frozen", frozenAt, ruleVersion: w.rule_version,
+    freezeDueAt: `${addDaysIso(w.week_from, 8)} 08:00`, freezeInstant: freezeInstant(w.week_from), editUntil: editUntilInstant(w.week_from), teams: list, depts: depts(list), names,
+    ...(await liveBlocks(w.week_from, w.week_to, reviews)),
   };
   return teamId == null ? view : { ...view, teams: view.teams.filter((t) => t.teamId === teamId) };
 }
