@@ -4392,6 +4392,12 @@ REVOKE ALL ON ai_spend_ledger FROM ai_readonly;
 UPDATE roles SET screen_access = screen_access || '{"ai-calls":true}'::jsonb
   WHERE key IN ('admin', 'kvp', 'ceo', 'opdir', 'team_lead')
     AND NOT (screen_access ? 'ai-calls');
+-- 🙅 Фінансисту, HR і менеджеру вкладки немає (рішення Романа 28.09.2026). Синк «financier = екрани адміна»
+-- вище копіює фінансисту все, що має адмін, тож на ДРУГОМУ прогоні схеми `ai-calls` протікала: заміряно на проді
+-- 29.09.2026 після чужого викату з міграцією — `/api/dashboard/ai-calls` для фінансиста 403 → 200 (#11). Той самий
+-- механізм, що з «Бізнес-асистентом» (#741b). Зняття стоїть ПІСЛЯ синку й після сиду; тримає #794.
+UPDATE roles SET screen_access = screen_access - 'ai-calls'
+ WHERE key IN ('financier', 'hr', 'manager');
 -- 💼 ВІДГУКИ З WORK.UA → «КАНДИДАТИ» (28.09.2026, прохід 7). Памʼять оброблених відгуків: той самий відгук
 -- удруге нічого не робить, а найбільший id — звідки продовжувати. Кандидат — `hiring_candidates` (той самий
 -- телефон → наявна картка, подія «повторний відгук»). Вакансію work.ua привʼязує людина у «Вакансіях».
