@@ -3,10 +3,12 @@ import { createPortal } from "react-dom";
 import { useSearchParams } from "react-router-dom";
 import {
   fetchBaMeta, fetchBaClaims, fetchBaClaim, createBaClaim, updateBaClaim, archiveBaClaim,
-  fetchBaCases, fetchBaCase, createBaCase, updateBaCase, archiveBaCase, uploadBaFile, fetchBaFileBlobUrl, hiringError,
+  fetchBaCases, fetchBaCase, createBaCase, updateBaCase, archiveBaCase, hiringError,
   type BaMeta, type BaClaim, type BaClaimCard, type BaCase, type BaCaseCard, type BaClaimStatus, type BaCaseStatus,
-  type BaDocType, type BaFile, type BaEvent,
 } from "../../../api";
+import { money, fmtDate, useEscape, Docs, History, type Toast } from "./BaShared";
+import { BaEquipment } from "./BaEquipment";
+import { BaTtn } from "./BaTtn";
 import "./hiring.css";
 
 /**
@@ -18,15 +20,11 @@ import "./hiring.css";
  * Стилі — `hiring.css` (`.hr-*`): той самий вигляд карток, таблиць і шухляд.
  */
 type Tab = "claims" | "cases" | "equip" | "ttn";
-type Toast = (text: string, opts?: { error?: boolean; action?: { label: string; run: () => void } }) => void;
 
 const LS_TAB = "ba.tab";
 const lsGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* приватне вікно */ } };
 
-const money = (n: number | null) => (n == null ? "—" : `${n.toLocaleString("uk-UA", { maximumFractionDigits: 2 })} ₴`);
-const fmtDate = (d: string | null) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : "—");
-const fmtTs = (ts: string) => new Date(ts).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
 const CLAIM_TONE: Record<BaClaimStatus, string> = { problem: "dg", sent: "pl", answered: "wn", noreply: "wn", court: "dg", paid: "ok", closed: "gr" };
 const CASE_TONE: Record<BaCaseStatus, string> = { prep: "gr", filed: "pl", going: "wn", done: "ok" };
@@ -62,12 +60,12 @@ export function BusinessAssistantSection() {
   if (err) return <div className="chart-card"><b>Розділ «Бізнес-асистент» недоступний.</b> <span className="hr-muted">{err}</span></div>;
   if (!meta) return <p className="loading-text">Завантаження…</p>;
 
-  const tabs: [Tab, string, boolean][] = [["claims", "Претензії", false], ["cases", "Судовий реєстр", false], ["equip", "Облік техніки", true], ["ttn", "ТТН-моніторинг", true]];
+  const tabs: [Tab, string, boolean][] = [["claims", "Претензії", false], ["cases", "Судовий реєстр", false], ["equip", "Облік техніки", false], ["ttn", "ТТН-моніторинг", false]];
   return (
     <div>
       <h1 className="page-title" style={{ marginBottom: 4 }}>Бізнес-асистент</h1>
       <p className="hr-muted" style={{ margin: "0 0 14px", fontSize: 13 }}>
-        Претензії, судові справи, видана техніка й ТТН в одному місці. Розділ бачать бізнес-асистент і керівництво.
+        Претензії, судові справи, облік техніки й ТТН в одному місці. Розділ бачать бізнес-асистент і керівництво.
       </p>
       <div className="hr-tabs" role="tablist" aria-label="Блоки бізнес-асистента">
         {tabs.map(([k, l, soon]) => (
@@ -79,15 +77,8 @@ export function BusinessAssistantSection() {
       </div>
       {tab === "claims" && <ClaimsTab meta={meta} nonce={nonce} onOpen={setOpenClaim} />}
       {tab === "cases" && <CasesTab meta={meta} nonce={nonce} onOpen={setOpenCase} onOpenClaim={(id) => { pick("claims"); setOpenClaim(id); }} />}
-      {tab === "equip" && <PlannedCard title="Облік техніки" will={[
-        "Хто яку техніку отримав: співробітник із реєстру дашборда, назва й інвентарний номер, дата видачі, договір (файл).",
-        "Статус «На руках / Повернено» з датою повернення, яке можна скасувати.",
-        "Підсвічування техніки, що лишилась у звільнених співробітників.",
-      ]} waits="Відповіді Сергія: техніка видається лише менеджерам чи будь-якому співробітнику." />}
-      {tab === "ttn" && <PlannedCard title="ТТН-моніторинг" will={[
-        "Щомісячна таблиця по менеджерах: наявні ТТН, необхідні ТТН, % відповідності.",
-        "Динаміка за 6 місяців по кожному менеджеру.",
-      ]} waits="Відповіді Сергія: що таке «необхідні ТТН» — число з CRM (у Kommo є поле «ТТН») чи ручна норма." />}
+      {tab === "equip" && <BaEquipment meta={meta} toast={toast} />}
+      {tab === "ttn" && <BaTtn meta={meta} toast={toast} />}
 
       {openClaim != null && (
         <ClaimDrawer meta={meta} id={openClaim} toast={toast} onClose={() => setOpenClaim(null)}
@@ -108,19 +99,6 @@ export function BusinessAssistantSection() {
   );
 }
 
-function PlannedCard({ title, will, waits }: { title: string; will: string[]; waits: string }) {
-  return (
-    <div className="hr-card">
-      <div className="hd"><h3>{title} · наступний етап</h3></div>
-      <div className="hr-sect" style={{ borderTop: 0 }}>
-        <h4>Що тут буде</h4>
-        <ul className="hr-hist">{will.map((w) => <li key={w}>{w}</li>)}</ul>
-        <h4 style={{ marginTop: 12 }}>Чого чекаємо</h4>
-        <p style={{ margin: 0, fontSize: 13 }}>{waits}</p>
-      </div>
-    </div>
-  );
-}
 
 // ── Претензії ────────────────────────────────────────────────────────────────
 type ClaimFilter = "all" | BaClaimStatus | "archive";
@@ -130,19 +108,23 @@ function ClaimsTab({ meta, nonce, onOpen }: { meta: BaMeta; nonce: number; onOpe
   const [status, setStatus] = useState<ClaimFilter>("all");
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<"sent" | "sum" | "days">("sent");
+  // Фільтр за датою відправки (ТЗ: «фільтрація … мінімум за статусом і датою»): місяць або «не відправлено».
+  const [period, setPeriod] = useState<"all" | "none" | string>("all");
   useEffect(() => { fetchBaClaims().then(setRows).catch((e) => setErr(hiringError(e))); }, [nonce]);
+  const sentMonths = useMemo(() => [...new Set((rows ?? []).map((c) => c.sentOn?.slice(0, 7)).filter((x): x is string => !!x))].sort().reverse(), [rows]);
 
   const shown = useMemo(() => (rows ?? []).filter((c) => {
     if (status === "archive" ? !c.archived : c.archived) return false;
     if (status !== "all" && status !== "archive" && c.status !== status) return false;
+    if (period === "none" ? c.sentOn : period !== "all" && c.sentOn?.slice(0, 7) !== period) return false;
     return !q || c.company.toLowerCase().includes(q.toLowerCase());
   }).sort((a, b) => {
     if (sort === "sum") return (b.debtAmount ?? -1) - (a.debtAmount ?? -1);
     if (sort === "days") return (b.overdueDays ?? -1) - (a.overdueDays ?? -1);
-    // Невідправлені — зверху: це робота, яку ще треба зробити.
-    if (!a.sentOn !== !b.sentOn) return a.sentOn ? 1 : -1;
+    // ТЗ: «за датою відправки, нові зверху»; невідправлені — внизу (рішення Романа 29.09.2026, #965).
+    if (!a.sentOn !== !b.sentOn) return a.sentOn ? -1 : 1;
     return (b.sentOn ?? "").localeCompare(a.sentOn ?? "") || b.id - a.id;
-  }), [rows, status, q, sort]);
+  }), [rows, status, q, sort, period]);
 
   if (err) return <div className="chart-card"><span className="hr-muted">{err}</span></div>;
   if (!rows) return <p className="loading-text">Завантаження…</p>;
@@ -156,6 +138,13 @@ function ClaimsTab({ meta, nonce, onOpen }: { meta: BaMeta; nonce: number; onOpe
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
           <label className="hr-muted">Пошук компанії<br />
             <input className="hr-inp" type="search" placeholder="Назва компанії" value={q} onChange={(e) => setQ(e.target.value)} />
+          </label>
+          <label className="hr-muted">Дата відправки<br />
+            <select className="hr-inp" value={period} onChange={(e) => setPeriod(e.target.value)}>
+              <option value="all">Усі дати</option>
+              {sentMonths.map((m) => <option key={m} value={m}>{`${m.slice(5, 7)}.${m.slice(0, 4)}`}</option>)}
+              <option value="none">Ще не відправлено</option>
+            </select>
           </label>
           <label className="hr-muted">Сортування<br />
             <select className="hr-inp" value={sort} onChange={(e) => setSort(e.target.value as typeof sort)}>
@@ -195,7 +184,7 @@ function ClaimsTab({ meta, nonce, onOpen }: { meta: BaMeta; nonce: number; onOpe
           </tbody>
         </table>
       </div>
-      <div className="hr-sect hr-muted">Сума боргу й дні прострочення беруться з «Активної дебіторки» в момент створення. Невідправлені претензії стоять зверху.</div>
+      <div className="hr-sect hr-muted">Сума боргу й дні прострочення беруться з «Активної дебіторки» в момент створення. Нові зверху, невідправлені — внизу.</div>
     </div>
   );
 }
@@ -295,6 +284,7 @@ function CasesTab({ meta, nonce, onOpen, onOpenClaim }: { meta: BaMeta; nonce: n
   const [rows, setRows] = useState<BaCase[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [status, setStatus] = useState<CaseFilter>("all");
+  const [sort, setSort] = useState<"hearing" | "filed">("hearing");
   useEffect(() => { fetchBaCases().then(setRows).catch((e) => setErr(hiringError(e))); }, [nonce]);
   if (err) return <div className="chart-card"><span className="hr-muted">{err}</span></div>;
   if (!rows) return <p className="loading-text">Завантаження…</p>;
@@ -302,15 +292,23 @@ function CasesTab({ meta, nonce, onOpen, onOpenClaim }: { meta: BaMeta; nonce: n
   const chips: [CaseFilter, string, number][] = [["all", "Усі", active.length],
     ...meta.caseStatuses.map((s) => [s.key, s.label, active.filter((k) => k.status === s.key).length] as [CaseFilter, string, number]),
     ["archive", "Архів", rows.length - active.length]];
-  // Порядок — з сервера: найближчі засідання зверху.
-  const shown = rows.filter((k) => (status === "archive" ? k.archived : !k.archived && (status === "all" || k.status === status)));
+  // «Засідання» — порядок сервера (найближчі зверху); «подання» — нові зверху, без дати внизу.
+  const filtered = rows.filter((k) => (status === "archive" ? k.archived : !k.archived && (status === "all" || k.status === status)));
+  const shown = sort === "hearing" ? filtered : [...filtered].sort((a, b) =>
+    (!a.filedOn !== !b.filedOn ? (a.filedOn ? -1 : 1) : (b.filedOn ?? "").localeCompare(a.filedOn ?? "")) || b.id - a.id);
   return (
     <div className="hr-card">
       <div className="hd">
         <div className="hr-pills" role="group" aria-label="Фільтр за статусом" style={{ marginBottom: 0 }}>
           {chips.map(([k, l, n]) => <button key={k} className={status === k ? "on" : ""} aria-pressed={status === k} onClick={() => setStatus(k)}>{l} · {n}</button>)}
         </div>
-        <button className="hr-btn p" onClick={() => onOpen("new")}>+ Справа</button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <select className="hr-inp" value={sort} onChange={(e) => setSort(e.target.value as typeof sort)} aria-label="Сортування справ">
+            <option value="hearing">Найближче засідання зверху</option>
+            <option value="filed">Дата подання: нові зверху</option>
+          </select>
+          <button className="hr-btn p" onClick={() => onOpen("new")}>+ Справа</button>
+        </div>
       </div>
       <div className="hr-tw">
         <table className="hr-table">
@@ -414,89 +412,4 @@ function CaseDrawer({ meta, id, toast, onClose, onChanged, onCreated, onOpenClai
         </>)}
       </aside>
     </div>, document.body);
-}
-
-// ── Спільне ──────────────────────────────────────────────────────────────────
-function useEscape(onClose: () => void) {
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
-  }, [onClose]);
-}
-
-/** Документи картки: список, перегляд (blob з токеном), додавання з типом. Видалення немає — документ справи є доказом. */
-function Docs({ kind, ownerId, files, types, maxBytes, toast, onAdded }: {
-  kind: "claims" | "cases"; ownerId: number; files: BaFile[]; types: { key: BaDocType; label: string }[];
-  maxBytes: number; toast: Toast; onAdded: () => void;
-}) {
-  const [docType, setDocType] = useState<BaDocType>(types[0]?.key ?? "other");
-  const [file, setFile] = useState<File | null>(null);
-  const [inputKey, setInputKey] = useState(0);
-  const [busy, setBusy] = useState(false);
-  const add = async () => {
-    if (!file) { toast("Оберіть файл", { error: true }); return; }
-    if (file.size > maxBytes) { toast("Файл більший за 10 МБ", { error: true }); return; }
-    setBusy(true);
-    try { await uploadBaFile(kind, ownerId, file, docType); setFile(null); setInputKey((k) => k + 1); onAdded(); toast("Документ додано"); }
-    catch (e) { toast(hiringError(e), { error: true }); } finally { setBusy(false); }
-  };
-  // Перегляд — на місці, а не новою вкладкою: вкладку, відкриту після очікування, блокувальник
-  // гасить мовчки (так «не клікався» скрин у задачі 4310). DOCX браузер не показує — лише «Завантажити».
-  const [preview, setPreview] = useState<{ url: string; name: string; mime: string } | null>(null);
-  const view = async (f: BaFile) => {
-    try { setPreview({ url: await fetchBaFileBlobUrl(kind, ownerId, f.id), name: f.name, mime: f.mime }); }
-    catch (e) { toast(hiringError(e), { error: true }); }
-  };
-  const closePreview = () => { if (preview) URL.revokeObjectURL(preview.url); setPreview(null); };
-  return (
-    <div className="hr-sect" style={{ marginTop: 14, paddingLeft: 0, paddingRight: 0 }}>
-      <h4>{kind === "claims" ? "Документи" : "Файли"} · {files.length}</h4>
-      {!files.length && <p className="hr-muted" style={{ margin: "0 0 8px" }}>Документів ще немає.</p>}
-      {files.map((f) => (
-        <div key={f.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "5px 0", borderBottom: "1px solid var(--border)", fontSize: 13 }}>
-          <span className="hr-pill gr">{f.docTypeLabel}</span>
-          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{f.name}{f.fromClaim && <span className="hr-muted"> · з претензії</span>}</span>
-          <span className="hr-muted">{fmtTs(f.createdAt).slice(0, 10)}</span>
-          <button className="hr-btn xs" onClick={() => void view(f)}>Переглянути</button>
-        </div>
-      ))}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
-        <select className="hr-inp" value={docType} onChange={(e) => setDocType(e.target.value as BaDocType)} aria-label="Тип документа">
-          {types.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
-        </select>
-        <input key={inputKey} type="file" accept=".pdf,.docx,.png,.jpg,.jpeg,.webp" onChange={(e) => setFile(e.target.files?.[0] ?? null)} aria-label="Файл" />
-        <button className="hr-btn xs" disabled={busy || !file} onClick={() => void add()}>Додати документ</button>
-      </div>
-      <p className="hr-muted" style={{ margin: "6px 0 0" }}>PDF, DOCX, PNG, JPG або WEBP, до 10 МБ.</p>
-      {preview && createPortal(
-        <div className="hr-modal-back" onClick={closePreview}>
-          <div className="hr-modal" style={{ maxWidth: 900, width: "94vw" }} role="dialog" aria-label={`Документ ${preview.name}`} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
-              <b style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{preview.name}</b>
-              <a className="hr-btn xs" href={preview.url} download={preview.name}>Завантажити</a>
-              <button className="hr-btn xs" onClick={closePreview} aria-label="Закрити перегляд">×</button>
-            </div>
-            {preview.mime.startsWith("image/")
-              ? <img src={preview.url} alt={preview.name} style={{ maxWidth: "100%", maxHeight: "75vh", display: "block", margin: "0 auto" }} />
-              : preview.mime === "application/pdf"
-                ? <iframe src={preview.url} title={preview.name} style={{ width: "100%", height: "75vh", border: 0 }} />
-                : <p className="hr-muted" style={{ margin: 0 }}>Цей формат браузер не показує. Натисніть «Завантажити», щоб відкрити файл.</p>}
-          </div>
-        </div>, document.body)}
-    </div>
-  );
-}
-
-function History({ events }: { events: BaEvent[] }) {
-  return (
-    <div className="hr-sect" style={{ paddingLeft: 0, paddingRight: 0 }}>
-      <h4>Історія</h4>
-      {!events.length ? <p className="hr-muted" style={{ margin: 0 }}>Подій ще немає.</p> : (
-        <ul className="hr-hist">
-          {events.map((e, i) => <li key={i}><span className="hr-muted">{fmtTs(e.at)}{e.actor ? ` · ${e.actor}` : ""}</span><br />{e.what}</li>)}
-        </ul>
-      )}
-    </div>
-  );
 }

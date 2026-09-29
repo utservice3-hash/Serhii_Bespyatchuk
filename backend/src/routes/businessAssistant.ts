@@ -4,14 +4,20 @@ import { mkdir, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { UPLOAD_DIR } from "./uploads.js";
 import { pool } from "../db/pool.js";
+import { config } from "../config.js";
 import { requireAuth } from "../auth/middleware.js";
 import { roleHasTab } from "../auth/rbac.js";
 import {
   CLAIM_STATUSES, CLAIM_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, DOC_TYPE_LABEL, CLAIM_DOC_TYPES, CASE_DOC_TYPES,
-  BA_FILE_MAX_BYTES, sniffBaMime, baStoredName,
+  ISSUE_DOC_TYPES, BA_FILE_MAX_BYTES, TTN_NORM_PCT, sniffBaMime, baStoredName, defaultTtnMonth,
 } from "../core/baRules.js";
 import {
-  BaError, type Db, listClaims, claimCard, createClaim, updateClaim, setClaimArchived,
+  employeesForIssue, listEquipment, equipmentCard, createEquipment, updateEquipment, setEquipmentArchived,
+  issueEquipment, returnIssue, undoReturn,
+} from "../core/baEquipment.js";
+import { ttnMonth, saveTtnCheck } from "../core/baTtn.js";
+import {
+  BaError, type Db, type FileOwner, listClaims, claimCard, createClaim, updateClaim, setClaimArchived,
   listCases, caseCard, createCase, updateCase, setCaseArchived, insertFile, fileForDownload,
 } from "../core/baClaims.js";
 
@@ -67,7 +73,11 @@ baRouter.get("/meta", (req, res) => {
       caseStatuses: CASE_STATUSES.map((k) => ({ key: k, label: CASE_STATUS_LABEL[k] })),
       claimDocTypes: CLAIM_DOC_TYPES.map((k) => ({ key: k, label: DOC_TYPE_LABEL[k] })),
       caseDocTypes: CASE_DOC_TYPES.map((k) => ({ key: k, label: DOC_TYPE_LABEL[k] })),
+      issueDocTypes: ISSUE_DOC_TYPES.map((k) => ({ key: k, label: DOC_TYPE_LABEL[k] })),
       fileMaxBytes: BA_FILE_MAX_BYTES,
+      // Місяць ТТН за замовчуванням — «два тому» за Києвом (1 жовтня перевіряють серпень).
+      ttnDefaultMonth: defaultTtnMonth(new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" })),
+      ttnNormPct: TTN_NORM_PCT,
     });
   } catch (e) { fail(res, e); }
 });
@@ -142,7 +152,7 @@ baRouter.post("/cases/:id/archive", async (req, res) => {
  * розмір — до 10 МБ. Байти пишуться ДО рядка в базі; не вставився рядок — файл прибирається.
  * Файли не видаляються: документ справи — доказ, а помилково доданий лишається в історії.
  */
-function uploadHandler(kind: "claim" | "case") {
+function uploadHandler(kind: FileOwner) {
   return async (req: Request, res: Response) => {
     try {
       onlyBa(req);
@@ -166,7 +176,7 @@ function uploadHandler(kind: "claim" | "case") {
     } catch (e) { fail(res, e); }
   };
 }
-function downloadHandler(kind: "claim" | "case") {
+function downloadHandler(kind: FileOwner) {
   return async (req: Request, res: Response) => {
     try {
       onlyBa(req);
@@ -184,3 +194,83 @@ baRouter.post("/claims/:id/files", uploadHandler("claim"));
 baRouter.get("/claims/:id/files/:fileId", downloadHandler("claim"));
 baRouter.post("/cases/:id/files", uploadHandler("case"));
 baRouter.get("/cases/:id/files/:fileId", downloadHandler("case"));
+baRouter.post("/issues/:id/files", uploadHandler("issue"));
+baRouter.get("/issues/:id/files/:fileId", downloadHandler("issue"));
+
+// ── Облік техніки (прохід 2, 29.09.2026) ─────────────────────────────────────
+/** Кому видати: лише id, ПІБ і стан із реєстру — телефонів, дат народження тощо розділ не отримує (#964). */
+baRouter.get("/employees", async (req, res) => {
+  try { onlyBa(req); res.json({ employees: await employeesForIssue(pool as unknown as Db) }); } catch (e) { fail(res, e); }
+});
+baRouter.get("/equipment", async (req, res) => {
+  try { onlyBa(req); res.json({ items: await listEquipment(pool as unknown as Db) }); } catch (e) { fail(res, e); }
+});
+baRouter.get("/equipment/:id", async (req, res) => {
+  try { onlyBa(req); res.json(await equipmentCard(pool as unknown as Db, idOf(req))); } catch (e) { fail(res, e); }
+});
+baRouter.post("/equipment", async (req, res) => {
+  try {
+    onlyBa(req);
+    const id = await tx((db) => createEquipment(db, req.auth!.userId, req.body));
+    res.status(201).json({ id });
+  } catch (e) { fail(res, e); }
+});
+baRouter.patch("/equipment/:id", async (req, res) => {
+  try {
+    onlyBa(req);
+    const id = idOf(req);
+    await tx((db) => updateEquipment(db, req.auth!.userId, id, req.body));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+baRouter.post("/equipment/:id/archive", async (req, res) => {
+  try {
+    onlyBa(req);
+    const id = idOf(req);
+    const archived = req.body?.archived !== false;
+    await tx((db) => setEquipmentArchived(db, req.auth!.userId, id, archived));
+    res.json({ ok: true, archived });
+  } catch (e) { fail(res, e); }
+});
+baRouter.post("/equipment/:id/issue", async (req, res) => {
+  try {
+    onlyBa(req);
+    const id = idOf(req);
+    const issueId = await tx((db) => issueEquipment(db, req.auth!.userId, id, req.body));
+    res.status(201).json({ issueId });
+  } catch (e) { fail(res, e); }
+});
+baRouter.post("/issues/:id/return", async (req, res) => {
+  try {
+    onlyBa(req);
+    const id = idOf(req);
+    await tx((db) => returnIssue(db, req.auth!.userId, id, req.body));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+baRouter.post("/issues/:id/undo-return", async (req, res) => {
+  try {
+    onlyBa(req);
+    const id = idOf(req);
+    await tx((db) => undoReturn(db, req.auth!.userId, id));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+// ── ТТН-моніторинг (прохід 2, 29.09.2026) ────────────────────────────────────
+baRouter.get("/ttn", async (req, res) => {
+  try {
+    onlyBa(req);
+    const month = String(req.query.month ?? "");
+    res.json(await ttnMonth(pool as unknown as Db, month, config.kommo.baseUrl));
+  } catch (e) { fail(res, e); }
+});
+baRouter.put("/ttn/:month/:managerId", async (req, res) => {
+  try {
+    onlyBa(req);
+    const managerId = idOf(req, "managerId");
+    const month = String(req.params.month);
+    await tx((db) => saveTtnCheck(db, req.auth!.userId, month, managerId, req.body));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});

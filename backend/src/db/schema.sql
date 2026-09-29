@@ -4319,6 +4319,78 @@ UPDATE roles SET permissions = permissions || '{"create_claim": true}'::jsonb
 UPDATE roles SET permissions = permissions - 'create_claim'
  WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp', 'financier');
 
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🗂 БІЗНЕС-АСИСТЕНТ, прохід 2 (29.09.2026): Облік техніки й ТТН-моніторинг.
+-- Техніку видають БУДЬ-ЯКОМУ співробітнику з реєстру (відповідь Даші 29.09, ширше за ТЗ «менеджер»).
+-- ⚠️ Revert коду таблиць і рядків не прибирає.
+-- ══════════════════════════════════════════════════════════════════════════
+-- Файли видач (договір) і події одиниць техніки — у тих самих `ba_files`/`ba_events`. Обмеження
+-- переписуються ідемпотентно: drop + add з повним переліком (наявні рядки 'claim'/'case' проходять).
+ALTER TABLE ba_files DROP CONSTRAINT IF EXISTS ba_files_owner_kind_check;
+ALTER TABLE ba_files ADD CONSTRAINT ba_files_owner_kind_check CHECK (owner_kind IN ('claim','case','issue'));
+ALTER TABLE ba_files DROP CONSTRAINT IF EXISTS ba_files_doc_type_check;
+ALTER TABLE ba_files ADD CONSTRAINT ba_files_doc_type_check
+  CHECK (doc_type IN ('claim','lawsuit','receipt','company_docs','contract','other'));
+ALTER TABLE ba_events DROP CONSTRAINT IF EXISTS ba_events_owner_kind_check;
+ALTER TABLE ba_events ADD CONSTRAINT ba_events_owner_kind_check CHECK (owner_kind IN ('claim','case','equipment'));
+
+-- Одиниця техніки — рядок реєстру, як у таблиці Даші «Облік техніки 2026».
+CREATE TABLE IF NOT EXISTS ba_equipment (
+  id            SERIAL PRIMARY KEY,
+  inv_no        TEXT NOT NULL DEFAULT '',
+  kind          TEXT NOT NULL,
+  model         TEXT NOT NULL DEFAULT '',
+  purchased_on  DATE,
+  price         NUMERIC(12,2),
+  purchase_url  TEXT,
+  location      TEXT NOT NULL DEFAULT '',
+  comment       TEXT NOT NULL DEFAULT '',
+  -- Ключ разового перенесення з таблиці (`tools/importEquipmentSheet.ts`): повторний прогін не дублює.
+  import_key    TEXT UNIQUE,
+  archived_at   TIMESTAMPTZ,
+  archived_by   INTEGER REFERENCES users(id),
+  created_by    INTEGER REFERENCES users(id),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Видача: кому, коли, повернення. Імʼя — знімок на момент видачі (людина могла змінити прізвище
+-- чи піти), `employee_id` — звʼязок із реєстром, з якого видно «звільнений, не повернено».
+CREATE TABLE IF NOT EXISTS ba_equipment_issues (
+  id            SERIAL PRIMARY KEY,
+  equipment_id  INTEGER NOT NULL REFERENCES ba_equipment(id),
+  employee_id   INTEGER REFERENCES employees(id),
+  holder_name   TEXT NOT NULL,
+  -- NULL — лише у перенесених із таблиці, де дати видачі не записували («дата невідома» на екрані).
+  -- Нова видача через розділ дату вимагає (API).
+  issued_on     DATE,
+  returned_on   DATE,
+  created_by    INTEGER REFERENCES users(id),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (returned_on IS NULL OR returned_on >= issued_on)
+);
+-- Одна одиниця не може бути «на руках» у двох людей одночасно (гейт видачі). Межу тримає база.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ba_equipment_open_issue ON ba_equipment_issues (equipment_id)
+  WHERE returned_on IS NULL;
+CREATE INDEX IF NOT EXISTS idx_ba_equipment_issues_emp ON ba_equipment_issues (employee_id);
+-- Імена людей, яким видано техніку, — як реєстр `employees`: моделі не віддаємо (після GRANT і CREATE).
+REVOKE ALL ON ba_equipment_issues FROM ai_readonly;
+
+-- ТТН-моніторинг: рядок на менеджера й місяць. `deals_needed` — ЗНІМОК числа угод із CRM на момент
+-- збереження (CRM потім зміниться, а перевірка стосувалась саме тих угод); `ttn_present` — вручну.
+CREATE TABLE IF NOT EXISTS ba_ttn_checks (
+  id            SERIAL PRIMARY KEY,
+  month         DATE NOT NULL CHECK (EXTRACT(DAY FROM month) = 1),
+  manager_id    INTEGER NOT NULL REFERENCES managers(id),
+  deals_needed  INTEGER NOT NULL CHECK (deals_needed >= 0),
+  ttn_present   INTEGER NOT NULL CHECK (ttn_present >= 0),
+  note          TEXT,
+  checked_by    INTEGER REFERENCES users(id),
+  checked_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (month, manager_id)
+);
+
 -- ▼ AI-АНАЛІЗ ДЗВІНКІВ ПО РЕКЛАМНИХ ЛІДАХ (ТЗ 22.09.2026, прохід A, коміт ②) ▼
 -- Три таблиці з ІСТОРІЄЮ: жодного TRUNCATE, жодного перезапису. Старий шлях (uts-bot → Google-лист →
 -- `first_touch_analysis` через TRUNCATE+insert) історії не мав — тут вона обовʼязкова.

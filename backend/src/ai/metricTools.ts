@@ -69,6 +69,8 @@ export const FORBIDDEN_TABLES = [
   "workua_responses",
   // 💰 Фінанси (29.09.2026): витрати компанії по статтях, зокрема фонд оплати праці. REVOKE у схемі. Тримає #934.
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_import_months",
+  // 🗂 Бізнес-асистент (29.09.2026): кому видано техніку — імена людей, як `employees`. REVOKE у схемі. Тримає #966.
+  "ba_equipment_issues",
 ];
 
 /**
