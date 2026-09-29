@@ -13,7 +13,7 @@ import { vaultBotConfigured, vaultBotSend, vaultBotUsername } from "../bot/vault
  * вкладка `hiring` і право `view_team_secrets` (видане лише `team_lead`). Третя межа — у КОЖНОМУ
  * обробнику, першим значущим оператором: `teamMemberVerdict` через `core/teamVault.ts` (своя команда
  * за CRM, лише менеджери, не сам тімлід). Значення виходить лише з `reveal` (код у Telegram) і
- * з `reset-password` (новий пароль, один раз). Тримають `#981`–`#984`.
+ * з `reset-password` (новий пароль, один раз). Тримають `#1021`–`#1023`.
  */
 export const teamVaultRouter = Router();
 teamVaultRouter.use(requireAuth, requirePerm("view_team_secrets"));
