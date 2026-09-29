@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { endOfKyivDay, nextWorkingDay, promiseDeadline, promiseState, worstPromiseState, DEFAULT_PROMISE_MINUTES, type CallFact } from "./callAiPromise.js";
+import { endOfKyivDay, nextWorkingDay, promiseDeadline, promiseState, worstPromiseState, DEFAULT_PROMISE_MINUTES, LATE_GRACE_MIN, type CallFact } from "./callAiPromise.js";
 
 /**
  * 🎯 #789–#790 — «ОБІЦЯВ І НЕ ПЕРЕДЗВОНИВ»: термін і стан обіцянки (рішення Романа 29.09.2026, П4–П7).
@@ -47,11 +47,31 @@ test("#790 СТАН ОБІЦЯНКИ: передзвонив / лише спро
   assert.equal(st("call", [call(10, "out", 40)]), "kept_talk", "🔴 наш вихідний із розмовою до терміну не зараховано");
   assert.equal(st("call", [call(10, "out", 0)]), "kept_attempt_only");
   assert.equal(st("call", [call(10, "in", 60)]), "client_called", "🔴 дзвінок клієнта зараховано як наш передзвін");
-  assert.equal(st("call", [call(30, "out", 60)]), "broken", "🔴 дзвінок ПІСЛЯ терміну врятував обіцянку");
+  assert.equal(st("call", [call(200, "out", 60)]), "broken", "🔴 дзвінок через 3 год ПІСЛЯ терміну врятував обіцянку");
   assert.equal(st("call", []), "broken");
   assert.equal(st("call", [], new Date(MADE.getTime() + 5 * 60_000)), "pending", "🔴 до терміну вже «не передзвонив»");
   assert.equal(st("message", []), "unverifiable", "🔴 обіцянку в месенджер позначено як невиконаний дзвінок");
   assert.equal(worstPromiseState(["kept_talk", "unverifiable", "broken"]), "broken");
   assert.equal(worstPromiseState(["unverifiable", "kept_talk"]), "kept_talk");
   assert.equal(worstPromiseState([]), null);
+});
+
+/**
+ * #795 — «ЗАПІЗНИВСЯ» І СИНК RINGOSTAT (Роман 29.09.2026). Перший замір: 21 із 54 «не передзвонив» — передзвін до
+ * 30 хв після терміну. Тепер наш вихідний до 2 год після терміну — «запізнився», пізніше чи ніколи — «не передзвонив»;
+ * межа по ОБИДВА боки (1 год 59 хв — так, 2 год 01 хв — ні). І «не передзвонив» — лише коли дзвінки вже
+ * синхронізовано за `термін + 2 год`: інакше свіжий передзвін, що ще не доїхав із Ringostat, читався б як порушення.
+ * 🧨 Червоніє, якщо прибрати «запізнився», зсунути 2 год чи рахувати «не передзвонив» від «зараз», а не від синку.
+ */
+test("#795 ЗАПІЗНИВСЯ: дзвінок до 2 год після терміну — жовтий, пізніше — не передзвонив; без синку за межу — чекає", () => {
+  assert.equal(LATE_GRACE_MIN, 120);
+  const far = new Date("2026-09-30T00:00:00Z");
+  const st = (calls: CallFact[], known = far) => promiseState({ channel: "call" }, MADE, DL, calls, known);
+  assert.equal(st([call(20 + 119, "out", 30)]), "late", "🔴 передзвін через 1 год 59 хв після терміну — не «запізнився»");
+  assert.equal(st([call(20 + 121, "out", 30)]), "broken", "🔴 передзвін через 2 год 01 хв після терміну — досі «запізнився»");
+  assert.equal(st([call(25, "out", 0)]), "late", "спроба після терміну — теж запізнення, а не порушення");
+  assert.equal(st([], new Date(DL.getTime() + 60 * 60_000)), "pending", "🔴 синк лише на годину за терміном, а вже «не передзвонив»");
+  assert.equal(st([], new Date(DL.getTime() + 121 * 60_000)), "broken", "дзеркало: синк за межею й дзвінка немає — не передзвонив");
+  assert.equal(worstPromiseState(["late", "kept_talk"]), "late");
+  assert.equal(worstPromiseState(["late", "broken"]), "broken");
 });

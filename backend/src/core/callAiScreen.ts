@@ -164,6 +164,16 @@ function managerPromisesOf(res: AnalysisResult): ModelPromise[] {
 /** Кінець розмови: початок + розмова. Від нього рахується термін і шукаються наші дзвінки. */
 const callEndOf = (calledAt: string, billsec: number): Date => new Date(Date.parse(calledAt) + billsec * 1000);
 
+/**
+ * До якої миті дзвінки Ringostat уже в базі: остання успішна синхронізація, але не пізніше «зараз».
+ * Синку ще не було — відомо лише «зараз» мінус нічого, тож беремо найраніше з двох (чесно: менше, ніж знаємо).
+ */
+async function callsKnownUntil(db: Db, now: Date): Promise<Date> {
+  const r = await db.query<{ at: Date | null }>("SELECT last_success_at AS at FROM job_runs WHERE name = 'syncRingostatCalls'");
+  const at = r.rows[0]?.at ? new Date(r.rows[0].at) : null;
+  return at && at.getTime() < now.getTime() ? at : now;
+}
+
 /** Дзвінки на номери рядків від найранішої розмови — ОДНИМ запитом, а не по запиту на рядок. */
 async function callsByPhone(db: Db, phones: readonly string[], since: Date): Promise<Map<string, CallFact[]>> {
   const out = new Map<string, CallFact[]>();
@@ -182,14 +192,14 @@ async function callsByPhone(db: Db, phones: readonly string[], since: Date): Pro
 export interface PromiseCheck { deadline: string; basis: DeadlineBasis; state: PromiseState }
 
 /** Термін і стан кожної обіцянки менеджера рядка — у порядку `result.promises` (клієнтські → `null`). */
-function checkPromises(res: AnalysisResult, calledAt: string, billsec: number, calls: readonly CallFact[], now: Date): (PromiseCheck | null)[] {
+function checkPromises(res: AnalysisResult, calledAt: string, billsec: number, calls: readonly CallFact[], knownUntil: Date): (PromiseCheck | null)[] {
   const end = callEndOf(calledAt, billsec);
   const after = calls.filter((c) => c.at.getTime() > end.getTime());
   return res.promises.map((p) => {
     if (p.who !== "manager" || !p.channel || !p.deadline_kind) return null;
     const mp = managerPromisesOf({ ...res, promises: [p] })[0];
     const { deadline, basis } = promiseDeadline(mp, end);
-    return { deadline: deadline.toISOString(), basis, state: promiseState(mp, end, deadline, after, now) };
+    return { deadline: deadline.toISOString(), basis, state: promiseState(mp, end, deadline, after, knownUntil) };
   });
 }
 
@@ -257,10 +267,11 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
   if (withPromises.length) {
     const since = new Date(Math.min(...withPromises.map((x) => new Date(x.calldate).getTime())));
     const calls = await callsByPhone(db, [...new Set(withPromises.map((x) => x.client_phone!))], since);
+    const known = await callsKnownUntil(db, now);
     raw.forEach((x, i) => {
       if (rows[i].managerPromises === 0 || !x.result) return;
       const phone = phoneOf.get(x.uniqueid);
-      const checks = checkPromises(x.result, rows[i].calledAt, rows[i].billsec, phone ? calls.get(phone) ?? [] : [], now);
+      const checks = checkPromises(x.result, rows[i].calledAt, rows[i].billsec, phone ? calls.get(phone) ?? [] : [], known);
       rows[i].promiseState = worstPromiseState(checks.filter((c): c is PromiseCheck => c != null).map((c) => c.state));
     });
   }
@@ -332,7 +343,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
   const after = raw.client_phone
     ? (await callsByPhone(db, [raw.client_phone], end)).get(raw.client_phone) ?? [] : [];
   const nowD = new Date();
-  const promiseChecks = done && raw.result ? checkPromises(raw.result, row.calledAt, row.billsec, after, nowD) : [];
+  const promiseChecks = done && raw.result ? checkPromises(raw.result, row.calledAt, row.billsec, after, await callsKnownUntil(db, nowD)) : [];
   const callsAfter = after.filter((c) => c.at.getTime() > end.getTime() && c.at.getTime() <= end.getTime() + 7 * 86_400_000)
     .slice(0, 12).map((c) => ({ at: c.at.toISOString(), billsec: c.billsec, direction: IN_TYPES.has(c.callType) ? "in" as const : "out" as const }));
   const { kommoId: _k, dealCreatedAt: _d, ...rest } = row;

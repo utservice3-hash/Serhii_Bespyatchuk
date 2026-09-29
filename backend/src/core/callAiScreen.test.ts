@@ -382,6 +382,13 @@ test("#792 ЕКРАН AI · ЖИВА СХЕМА: не передзвонив —
   assert.equal(by.get("y2")?.silentBeforeClose, true, "🔴 29 год без нашого дзвінка — не «тиша перед закриттям»");
   assert.equal(by.get("y3")?.silentBeforeClose, false, "🔴 23 год — уже «тиша» (поріг 24 год зсунувся)");
   assert.equal(by.get("y1")?.silentBeforeClose, null, "відкрита угода — не застосовно, а не «тиші немає»");
+
+  // #795 на живій схемі: синк Ringostat застряг до межі «термін + 2 год» → «чекає», а не «не передзвонив».
+  await c.raw.query(`INSERT INTO job_runs(name, last_success_at) VALUES ('syncRingostatCalls', '2026-09-24 11:30:00+03')
+    ON CONFLICT (name) DO UPDATE SET last_success_at = EXCLUDED.last_success_at`);
+  const lag = new Map((await aiCallsList(c.db, FAKE_AD, "2026-09-24", "2026-09-24", NOW, {})).rows.map((r) => [r.uniqueid, r]));
+  assert.equal(lag.get("y1")?.promiseState, "pending", "🔴 дзвінки ще не синхронізовано за межу, а вже «не передзвонив»");
+  await c.raw.query("DELETE FROM job_runs WHERE name = 'syncRingostatCalls'");
 });
 
 /**
@@ -395,7 +402,7 @@ test("#793 ОБІЦЯНКИ НА ЕКРАНІ: підписи станів, фі
     applyListFilter: (rows: { pipelineGroup: string; teamId: number | null; managerId: number | null; nonTarget: boolean }[], f: Record<string, unknown>) => unknown[];
     deadlineBasisLabel: (b: string) => string;
   };
-  for (const s of ["kept_talk", "kept_attempt_only", "client_called", "pending", "broken", "unverifiable"]) assert.ok(V.PROMISE_UI[s]?.label, `🔴 стан ${s} без підпису`);
+  for (const s of ["kept_talk", "kept_attempt_only", "client_called", "late", "pending", "broken", "unverifiable"]) assert.ok(V.PROMISE_UI[s]?.label, `🔴 стан ${s} без підпису`);
   assert.equal(V.matchesFilter({ state: "done", promiseState: "broken", priceDiscussed: null, objections: 0, promises: 1, promisesWithDeadline: 1 } as never, "broken"), true);
   assert.equal(V.matchesFilter({ state: "done", promiseState: "kept_talk", priceDiscussed: null, objections: 0, promises: 1, promisesWithDeadline: 1 } as never, "broken"), false);
   const rows = [
