@@ -4383,6 +4383,44 @@ CREATE TABLE IF NOT EXISTS ai_spend_ledger (
 );
 CREATE INDEX IF NOT EXISTS idx_ai_spend_ledger_at ON ai_spend_ledger(at);
 REVOKE ALL ON ai_spend_ledger FROM ai_readonly;
+-- 🚚 ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ (ТЗ 29.09.2026; правила — `core/carrierCallRules.ts`, METRICS_GLOSSARY §16).
+-- ЗАПИС ФАКТУ «угода стояла на етапі «Дзвінки на мобільні» після фільтра CRM». Етап — стан «зараз», подій входу
+-- в нього в нас немає, тож свідчення фіксується в момент, коли джоба його бачить (правило 17: знімок без історії).
+-- Номер телефону — персональні дані: таблиця відібрана в `ai_readonly` і є у `FORBIDDEN_TABLES`.
+-- Стан і його поле їдуть ОДНИМ оператором (CHECK між колонками + частковий upsert несумісні — db-sql.md).
+CREATE TABLE IF NOT EXISTS carrier_call_deals (
+  kommo_id            BIGINT PRIMARY KEY,
+  phone               TEXT NOT NULL,          -- '380XXXXXXXXX' з назви угоди, як `ringostat_calls.client_phone`
+  deal_created_at     TIMESTAMPTZ NOT NULL,
+  responsible_user_id BIGINT,
+  seen_at             TIMESTAMPTZ NOT NULL,   -- уперше побачили на етапі після фільтра
+  state               TEXT NOT NULL CHECK (state IN ('waiting','own','reused','no_talk')),
+  uniqueid            TEXT,                   -- розмова, чий вердикт діє (друга спроба замінює першу)
+  first_uniqueid      TEXT,                   -- перша розмова — історія спроб
+  talk_no             SMALLINT NOT NULL DEFAULT 0 CHECK (talk_no BETWEEN 0 AND 2),
+  reused_from         BIGINT,                 -- угода того самого номера, чий вердикт повторено (30 днів)
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((state = 'own') = (uniqueid IS NOT NULL)),
+  CHECK ((state = 'reused') = (reused_from IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_carrier_call_deals_phone ON carrier_call_deals(phone, deal_created_at);
+CREATE INDEX IF NOT EXISTS idx_carrier_call_deals_state ON carrier_call_deals(state, seen_at);
+REVOKE ALL ON carrier_call_deals FROM ai_readonly;
+
+-- 📣 «Стелю досягнуто» — один раз на місяць на межу бюджету (рішення Романа 29.09.2026). Рядок ставиться ДО
+-- відправки в Telegram, тож повтор щоп'ять хвилин неможливий за побудовою.
+CREATE TABLE IF NOT EXISTS ai_cap_alerts (
+  month   TEXT NOT NULL,                     -- 'YYYY-MM' за Києвом
+  scope   TEXT NOT NULL,                     -- first_touch | carrier
+  detail  TEXT,
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (month, scope)
+);
+REVOKE ALL ON ai_cap_alerts FROM ai_readonly;
+
+-- 🗑 Текст розмови видалено за строком зберігання (мобільні — 12 міс, рішення Романа 29.09.2026). Рядок і вердикт
+-- лишаються; NULL — текст на місці.
+ALTER TABLE call_transcripts ADD COLUMN IF NOT EXISTS text_purged_at TIMESTAMPTZ;
 -- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
 
 -- 🎧 ВКЛАДКА «ПЕРШИЙ ДОТИК · AI» (рішення Романа 28.09.2026). Без цього рядка вкладку не побачив би

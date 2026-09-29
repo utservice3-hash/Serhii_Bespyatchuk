@@ -196,6 +196,8 @@ export interface KommoDeal {
   };
 }
 
+import { pageStageLeads } from "./stageLeads.js";
+
 // Kommo custom-field ids for lead-source attribution (leads/custom_fields).
 import {
   CARRIER_PAY_FIELDS, carrierPaymentFrom, CARRIER_PARTY_FIELDS, carrierNameFrom, assertLeadIdsWithinLimit, LEADS_BY_IDS_MAX,
@@ -483,6 +485,11 @@ export async function fetchLeadsByIds(ids: number[]): Promise<KommoDeal[]> {
     `/api/v4/leads?limit=250&with=contacts,companies&${idFilter}`
   );
   return data._embedded?.leads ?? [];
+}
+
+/** 🚚 Угоди, що зараз на етапі (розбір сторінок — `stageLeads.ts`, без конфігу, щоб гейт міг його ганяти). */
+export async function fetchLeadsOnStage(pipelineId: number, statusId: number, maxPages = 4): Promise<KommoDeal[]> {
+  return pageStageLeads<KommoDeal>(kommoRequest, pipelineId, statusId, maxPages);
 }
 
 /**
