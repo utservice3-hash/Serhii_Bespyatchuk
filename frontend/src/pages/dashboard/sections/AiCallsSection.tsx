@@ -6,7 +6,7 @@ import {
 import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
-import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, speakerOf, mmss, afterLabel, aiDefaultPeriod,
+import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, speakerOf, mmss, afterLabel, aiDefaultPeriod, jobErrorIsCurrent,
   type AiFilter, type AiCallState } from "../aiCallsView";
 
 /**
@@ -163,7 +163,9 @@ export function AiCallsSection() {
         {meta && (
           <p style={{ margin: "0 0 10px", fontSize: 12.5, color: "var(--text-muted)" }}>
             Конвеєр: {meta.job?.lastSuccessAt ? `останній успішний запуск ${fmtTime(meta.job.lastSuccessAt)}` : "успішних запусків ще не було"}
-            {meta.job?.lastError && <span style={{ color: "var(--danger, #b3261e)" }}> · остання помилка {meta.job.lastErrorAt ? fmtTime(meta.job.lastErrorAt) : ""}: {meta.job.lastError}</span>}
+            {meta.job?.lastError && (jobErrorIsCurrent(meta.job)
+              ? <span style={{ color: "var(--danger, #b3261e)" }}> · остання помилка {meta.job.lastErrorAt ? fmtTime(meta.job.lastErrorAt) : ""}: {meta.job.lastError}</span>
+              : <span title={meta.job.lastError}> · остання помилка була {meta.job.lastErrorAt ? fmtTime(meta.job.lastErrorAt) : ""}, після неї — успішні запуски</span>)}
             {" · "}витрати місяця: розпізнавання {usd(meta.spend.stt)}{meta.caps.stt != null ? ` з ${usd(meta.caps.stt)}` : " (стелю не задано)"},
             {" "}аналіз {usd(meta.spend.analysis)}{meta.caps.analysis != null ? ` з ${usd(meta.caps.analysis)}` : " (стелю не задано)"}
           </p>

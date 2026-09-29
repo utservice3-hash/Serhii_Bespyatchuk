@@ -91,3 +91,14 @@ export function aiDefaultPeriod(today: string): PeriodState {
   const from = rolling > AI_START_DATE ? rolling : AI_START_DATE;
   return { mode: "range", anchor: today, focusDay: today, rangeFrom: from, rangeTo: today };
 }
+
+/**
+ * Чи остання помилка джоби АКТУАЛЬНА. `job_runs` свідомо не стирає помилку на успіху (історія збоїв не
+ * зникає), тож помилка, після якої вже були успішні запуски, — минуле, а не стан. Червоним — лише
+ * помилка без пізнішого успіху. Невідомий час помилки — актуальна (невідоме не ховаємо).
+ */
+export function jobErrorIsCurrent(job: { lastSuccessAt: string | null; lastError: string | null; lastErrorAt: string | null } | null): boolean {
+  if (!job?.lastError) return false;
+  if (!job.lastSuccessAt || !job.lastErrorAt) return true;
+  return Date.parse(job.lastErrorAt) > Date.parse(job.lastSuccessAt);
+}
