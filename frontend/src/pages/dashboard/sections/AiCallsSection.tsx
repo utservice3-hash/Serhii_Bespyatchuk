@@ -1,12 +1,10 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
-import {
-  fetchAiCalls, fetchAiCallCard, fetchAiCallsMeta,
-  type AiCallsResp, type AiCallCardResp, type AiCallsMetaResp, type AiQuoted,
-} from "../../../api";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { fetchAiCalls, fetchAiCallsMeta, type AiCallsResp, type AiCallsMetaResp } from "../../../api";
+import { AiCallDrawer } from "./AiCallDrawer";
 import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
-import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, speakerOf, mmss, afterLabel, aiDefaultPeriod, jobErrorIsCurrent,
+import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, mmss, aiDefaultPeriod, jobErrorIsCurrent, parseCallParam, withCallParam,
   type AiFilter, type AiCallState } from "../aiCallsView";
 
 /**
@@ -30,87 +28,6 @@ function StateChip({ state }: { state: AiCallState }) {
   return <span title={ui.hint} style={{ background: c.bg, color: c.fg, borderRadius: 999, padding: "1px 8px", fontSize: 12, whiteSpace: "nowrap" }}>{ui.label}</span>;
 }
 
-function Quote({ q }: { q: AiQuoted }) {
-  if (!q.quote.trim()) return null;
-  return (
-    <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 2 }}>
-      <q>{q.quote}</q>{" "}
-      {q.quote_found === true && <span style={{ color: "var(--ok-fg, #1d6b3a)", fontSize: 12 }}>✓ звірено з розшифровкою</span>}
-      {q.quote_found === false && <span style={{ color: "var(--danger, #b3261e)", fontSize: 12 }}>✗ такої фрази в розмові немає</span>}
-    </div>
-  );
-}
-
-function CallCard({ uniqueid }: { uniqueid: string }) {
-  const [c, setC] = useState<AiCallCardResp | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
-    let alive = true;
-    fetchAiCallCard(uniqueid)
-      .then((x) => { if (alive) setC(x); })
-      .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
-    return () => { alive = false; };
-  }, [uniqueid]);
-  if (err) return <p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>;
-  if (!c) return <p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>;
-  const r = c.result;
-  const row: React.CSSProperties = { display: "grid", gridTemplateColumns: "160px 1fr", gap: 10, padding: "4px 0" };
-  const k: React.CSSProperties = { fontSize: 12.5, color: "var(--text-muted)", fontWeight: 600 };
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "8px 4px" }}>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 13, color: "var(--text-muted)" }}>
-        <StateChip state={c.row.state} />
-        <span>тривалість запису {mmss(c.durationSec)}</span>
-        <span>· {afterLabel(c.row.calledAt, c.nextOutboundAt)}</span>
-        {c.dealUrls.map((d) => <a key={d.kommoId} href={d.url} target="_blank" rel="noreferrer">угода {d.kommoId} в Kommo ↗</a>)}
-      </div>
-      {c.row.failure && <div style={{ fontSize: 13, color: "var(--danger, #b3261e)" }}>Причина: {c.row.failure}</div>}
-      {r && (
-        <div>
-          <div style={row}><span style={k}>Про що</span><span>{r.summary}</span></div>
-          {r.client_request && <div style={row}><span style={k}>Запит</span><span>{r.client_request}</span></div>}
-          <div style={row}><span style={k}>Ціна</span><span>{r.price.discussed ? "обговорили" : "не прозвучала"}<Quote q={r.price} /></span></div>
-          {r.objections.map((o, i) => (
-            <div key={`o${String(i)}`} style={row}><span style={{ ...k, color: "var(--danger, #b3261e)" }}>Заперечення</span><span>{o.what}<Quote q={o} /></span></div>
-          ))}
-          {r.promises.map((p, i) => (
-            <div key={`p${String(i)}`} style={row}>
-              <span style={k}>Обіцянка · {p.who === "manager" ? "менеджер" : "клієнт"}</span>
-              <span>{p.what}{" "}
-                <span style={{ fontSize: 12, padding: "0 6px", borderRadius: 4, background: p.deadline_text.trim() ? "var(--info-bg, #e8f0fb)" : "var(--warn-bg, #fff4dc)" }}>
-                  {p.deadline_text.trim() ? `строк: ${p.deadline_text}` : "без строку"}
-                </span>
-                <Quote q={p} />
-              </span>
-            </div>
-          ))}
-          {r.next_step && <div style={row}><span style={k}>Далі</span><span>{r.next_step}</span></div>}
-        </div>
-      )}
-      {c.transcriptHidden
-        ? <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>Повний текст розмови бачать адмін і КВП. Цитати вище — дослівні.</div>
-        : c.turns && (
-          <details>
-            <summary style={{ cursor: "pointer", fontSize: 13 }}>Розшифровка · {c.turns.length} реплік</summary>
-            <div style={{ display: "flex", flexDirection: "column", gap: 2, maxHeight: 420, overflow: "auto", marginTop: 6 }}>
-              {c.turns.map((t, i) => {
-                const who = speakerOf(t.channel, c.managerChannel);
-                return (
-                  <div key={i} style={{ display: "grid", gridTemplateColumns: "44px 78px 1fr", gap: 8, fontSize: 13, padding: "2px 6px", borderRadius: 4,
-                    background: who === "Менеджер" ? "var(--ok-bg, #eef6ea)" : "var(--muted-bg, #f6f3ea)" }}>
-                    <span style={{ color: "var(--text-muted)", fontVariantNumeric: "tabular-nums" }}>{mmss(t.start)}</span>
-                    <b style={{ fontSize: 12.5 }}>{who}</b>
-                    <span>{t.text}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </details>
-        )}
-    </div>
-  );
-}
-
 export function AiCallsSection() {
   const today = todayKyiv();
   const [nav, setNav] = useState<PeriodState>(() => aiDefaultPeriod(today));
@@ -119,12 +36,18 @@ export function AiCallsSection() {
   const [meta, setMeta] = useState<AiCallsMetaResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [filter, setFilter] = useState<AiFilter>("all");
-  const [open, setOpen] = useState<string | null>(null);
+  // Відкрита картка живе в адресі (`?call=`): посилання можна переслати, і воно відкриє ту саму картку.
+  const [open, setOpenState] = useState<string | null>(() => parseCallParam(window.location.search));
+  const setOpen = useCallback((uniqueid: string | null) => {
+    setOpenState(uniqueid);
+    window.history.replaceState(window.history.state, "", withCallParam(window.location.href, uniqueid));
+  }, []);
+  const closeCard = useCallback(() => setOpen(null), [setOpen]);
 
   useEffect(() => {
     if (!from || !to) return;
     let alive = true;
-    setD(null); setErr(null); setOpen(null);
+    setD(null); setErr(null);
     fetchAiCalls({ from, to })
       .then((x) => { if (alive) setD(x); })
       .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
@@ -135,8 +58,9 @@ export function AiCallsSection() {
   const shown = useMemo(() => (d ? d.rows.filter((r) => matchesFilter(r, filter)) : []), [d, filter]);
 
   const navBar = <PeriodNav state={nav} onPatch={(patch) => setNav((st) => ({ ...st, ...patch }))} today={today} />;
-  if (err) return <div className="chart-card">{navBar}<p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p></div>;
-  if (!d) return <div className="chart-card">{navBar}<p className="loading-text" style={{ margin: 0 }}>Завантаження…</p></div>;
+  const drawer = open ? <AiCallDrawer uniqueid={open} onClose={closeCard} /> : null;
+  if (err) return <div className="chart-card">{navBar}<p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>{drawer}</div>;
+  if (!d) return <div className="chart-card">{navBar}<p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>{drawer}</div>;
 
   const rows = d.rows;
   const done = rows.filter((r) => r.state === "done");
@@ -207,8 +131,9 @@ export function AiCallsSection() {
               </thead>
               <tbody>
                 {shown.map((r) => (
-                  <Fragment key={r.uniqueid}>
-                    <tr onClick={() => setOpen(open === r.uniqueid ? null : r.uniqueid)} style={{ borderTop: "1px solid var(--border)", cursor: "pointer" }}>
+                  <tr key={r.uniqueid} tabIndex={0} aria-label={`Відкрити картку дзвінка ${fmtTime(r.calledAt)}`}
+                    onClick={() => setOpen(r.uniqueid)} onKeyDown={(e) => { if (e.key === "Enter") setOpen(r.uniqueid); }}
+                    style={{ borderTop: "1px solid var(--border)", cursor: "pointer", background: open === r.uniqueid ? "var(--accent-bg, #e8f0fb)" : undefined }}>
                       <td style={{ ...cell, whiteSpace: "nowrap" }}>
                         {fmtTime(r.calledAt)}<div style={{ fontSize: 12, color: "var(--text-muted)" }}>{r.direction === "in" ? "вхідний" : "вихідний"} · {mmss(r.billsec)}</div>
                       </td>
@@ -218,18 +143,13 @@ export function AiCallsSection() {
                       <td style={cell}>{r.priceDiscussed == null ? "—" : r.priceDiscussed ? "так" : "ні"}</td>
                       <td style={cell}>{r.state === "done" ? r.objections : "—"}</td>
                       <td style={cell}>{r.state === "done" ? `${String(r.promises)}${r.promises > r.promisesWithDeadline ? ` (без строку ${String(r.promises - r.promisesWithDeadline)})` : ""}` : "—"}</td>
-                    </tr>
-                    {open === r.uniqueid && (
-                      <tr><td colSpan={7} style={{ padding: "0 10px 10px", background: "var(--card-bg-alt, transparent)" }}>
-                        <CallCard uniqueid={r.uniqueid} />
-                      </td></tr>
-                    )}
-                  </Fragment>
+                  </tr>
                 ))}
               </tbody>
             </table>
           )}
       </div>
+      {drawer}
     </>
   );
 }

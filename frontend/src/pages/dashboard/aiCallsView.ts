@@ -102,3 +102,35 @@ export function jobErrorIsCurrent(job: { lastSuccessAt: string | null; lastError
   if (!job.lastSuccessAt || !job.lastErrorAt) return true;
   return Date.parse(job.lastErrorAt) > Date.parse(job.lastSuccessAt);
 }
+
+/**
+ * 🔗 ПРЯМЕ ПОСИЛАННЯ НА КАРТКУ ДЗВІНКА — `/ai-calls?call=<uniqueid>` (прохання Романа 29.09.2026: картку
+ * можна переслати колезі). Той самий прийом, що `?id=` у задачнику (`taskDeepLink.ts`). Ідентифікатор
+ * Ringostat — літери, цифри, `.`, `_`, `-`; сміття → `null`, а не запит із ним на сервер.
+ */
+export function parseCallParam(search: string): string | null {
+  const raw = new URLSearchParams(search).get("call")?.trim() ?? "";
+  return /^[\w.-]{1,100}$/.test(raw) ? raw : null;
+}
+
+/** Адреса з `?call=` (або без нього) — решта параметрів і шлях лишаються як були. */
+export function withCallParam(href: string, uniqueid: string | null): string {
+  const u = new URL(href);
+  if (uniqueid) u.searchParams.set("call", uniqueid); else u.searchParams.delete("call");
+  return u.pathname + u.search + u.hash;
+}
+
+export type DrawerTab = "analysis" | "transcript";
+
+/**
+ * Вкладки картки. «Розшифровка» є лише тоді, коли сервер віддав текст: ролі без права (усі, крім
+ * адміна й КВП) отримують `transcriptHidden`, і вкладки для них немає зовсім — а не порожня.
+ */
+export function drawerTabs(transcriptHidden: boolean, turns: number | null): DrawerTab[] {
+  return !transcriptHidden && turns != null && turns > 0 ? ["analysis", "transcript"] : ["analysis"];
+}
+
+/** Мітка обіцянок у шапці картки: «обіцянки: 1 з 2 зі строком» / «обіцянок немає». */
+export function promisesLabel(promises: number, withDeadline: number): string {
+  return promises === 0 ? "обіцянок немає" : `обіцянки: ${String(withDeadline)} з ${String(promises)} зі строком`;
+}
