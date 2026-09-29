@@ -138,6 +138,7 @@ export const MANIFEST_FILES: string[] = [
   "core/hiringTraining.test.js",
   "core/candidateTraining.test.js",
   "core/secrets.test.js",
+  "core/teamVault.test.js",
   "core/employees.test.js",
   "core/hiringFunnel.test.js",
   "core/offers.test.js",
@@ -946,6 +947,10 @@ export const MANIFEST_TESTS: string[] = [
   "#554 СЕЙФ: employee_secrets, secret_reveal_codes, vault_link_codes відібрані в ai_readonly і є в FORBIDDEN_TABLES",
   "#555 КЛЮЧ: без ключа — 503 на запис і показ, сервер при цьому стартує",
   "#556 БОТ СЕЙФУ: свій секрет вебхука, код привʼязки одноразовий",
+  "#981 ПРАВИЛО: тімлід бачить активних менеджерів лише своєї команди, без себе, адмінів, звільнених і карток",
+  "#981b ЖИВИЙ SQL: своя команда в списку, картці, показі й скиданні; чужі й картки — 403",
+  "#982 МЕЖІ: право на роутері лише в team_lead, вкладка hiring, межа команди перед показом і кодом",
+  "#983 СКИДАННЯ В НАЛАШТУВАННЯХ: той самий пароль іде в сейф",
   // core/employees.test.ts — реєстр співробітників + імпорт таблиці (18.09.2026, задача №3898)
   "#560 CSV: лапки, переноси й BOM як у Google; дати лише справжні",
   "#561 МЕЖА: пароль і картка — лише в сейф або «пропустити», сервер відмовляє інакше",

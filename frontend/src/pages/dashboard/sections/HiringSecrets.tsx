@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   createSecretsLink, unlinkSecretsBot, fetchSecretPerson, createSecret, updateSecret,
@@ -25,10 +25,13 @@ const ACTION: Record<string, string> = {
   "secret.delete": "видалив(ла)", "secret.restore": "відновив(ла)",
 };
 const kyiv = (iso: string | null) => (iso ? new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
-const titleOf = (i: SecretItem) => i.kind === "card" ? `Картка •••• ${i.last4 ?? "????"}` : i.service === "other" ? (i.label ?? "Інше") : SERVICE_LABEL[i.service] ?? i.service;
+const titleOf = (i: Pick<SecretItem, "kind" | "service" | "label" | "last4">) => i.kind === "card" ? `Картка •••• ${i.last4 ?? "????"}` : i.service === "other" ? (i.label ?? "Інше") : SERVICE_LABEL[i.service] ?? i.service;
 
 /** Ключ, бот і МОЯ привʼязка Telegram «UTS Сейф» — без неї «Показати» не спрацює. */
-export function StatusBar({ status, onChanged, toast }: { status: SecretsStatus; onChanged: () => void; toast: Toast }) {
+/** Двері привʼязки: за замовчуванням — сейф HR (`/secrets`), тімлід передає свої (`/team-vault`). */
+export interface LinkApi { link: typeof createSecretsLink; unlink: typeof unlinkSecretsBot }
+export function StatusBar({ status, onChanged, toast, api }: { status: SecretsStatus; onChanged: () => void; toast: Toast; api?: LinkApi }) {
+  const linkApi: LinkApi = api ?? { link: createSecretsLink, unlink: unlinkSecretsBot };
   const [link, setLink] = useState<{ code: string; url: string | null; bot: string | null } | null>(null);
   const poll = useRef<number | null>(null);
   useEffect(() => () => { if (poll.current) window.clearInterval(poll.current); }, []);
@@ -36,7 +39,7 @@ export function StatusBar({ status, onChanged, toast }: { status: SecretsStatus;
 
   const start = async () => {
     try {
-      const r = await createSecretsLink();
+      const r = await linkApi.link();
       setLink({ code: r.code, url: r.url, bot: r.botUsername });
       if (r.url) window.open(r.url, "_blank", "noopener");
       if (poll.current) window.clearInterval(poll.current);
@@ -49,7 +52,7 @@ export function StatusBar({ status, onChanged, toast }: { status: SecretsStatus;
   if (status.linked) return (
     <div className="hr-note" style={{ margin: "0 0 12px", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
       <span>✅ Ваш Telegram привʼязано до «UTS Сейф»{status.botUsername ? ` (@${status.botUsername})` : ""} з {kyiv(status.linkedAt)} — коди приходитимуть туди.</span>
-      <button className="hr-btn xs" onClick={() => { if (window.confirm("Відвʼязати Telegram від «UTS Сейф»? Без нього «Показати» не працюватиме.")) void unlinkSecretsBot().then(onChanged); }}>Відвʼязати</button>
+      <button className="hr-btn xs" onClick={() => { if (window.confirm("Відвʼязати Telegram від «UTS Сейф»? Без нього «Показати» не працюватиме.")) void linkApi.unlink().then(onChanged); }}>Відвʼязати</button>
     </div>
   );
   return (
@@ -160,7 +163,12 @@ export function VaultPanel({ id, status, toast, onStatus, onChanged }: { id: str
   );
 }
 
-function RevealDialog({ item, whose, onClose, onShown, onNeedLink }: { item: SecretItem; whose: string; onClose: () => void; onShown: (v: string) => void; onNeedLink: () => void }) {
+/** Двері показу: за замовчуванням — сейф HR, тімлід передає `/team-vault` (там межа «своя команда»). */
+export interface RevealApi { send: typeof sendSecretCode; reveal: typeof revealSecret }
+export function RevealDialog({ item, whose, onClose, onShown, onNeedLink, api }: { item: Pick<SecretItem, "id" | "kind" | "service" | "label" | "last4">; whose: string; onClose: () => void; onShown: (v: string) => void; onNeedLink: () => void; api?: RevealApi }) {
+  // 🔴 Стабільне посилання обовʼязкове: `send` нижче в `useCallback`, а ефект шле код на КОЖНУ його зміну —
+  // новий обʼєкт щорендеру слав би код у Telegram по колу. Викликач передає константу модуля.
+  const doors: RevealApi = useMemo(() => api ?? { send: sendSecretCode, reveal: revealSecret }, [api]);
   const [code, setCode] = useState("");
   const [reason, setReason] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
@@ -168,19 +176,19 @@ function RevealDialog({ item, whose, onClose, onShown, onNeedLink }: { item: Sec
   const [busy, setBusy] = useState(false);
   const send = useCallback(async () => {
     setBusy(true); setMsg(null);
-    try { await sendSecretCode(item.id); setSent(true); }
+    try { await doors.send(item.id); setSent(true); }
     catch (e) {
       const d = (e as { response?: { data?: { needLink?: boolean } } }).response?.data;
       if (d?.needLink) { onNeedLink(); return; }
       setMsg(hiringError(e));
     }
     setBusy(false);
-  }, [item.id, onNeedLink]);
+  }, [item.id, onNeedLink, doors]);
   useEffect(() => { void send(); }, [send]);
   const submit = async () => {
     if (!/^\d{6}$/.test(code.trim())) { setMsg("Введіть 6 цифр коду з Telegram"); return; }
     setBusy(true); setMsg(null);
-    try { const r = await revealSecret(item.id, code.trim(), reason.trim()); onShown(r.value); }
+    try { const r = await doors.reveal(item.id, code.trim(), reason.trim()); onShown(r.value); }
     catch (e) { setMsg(hiringError(e)); setBusy(false); }
   };
   return createPortal(

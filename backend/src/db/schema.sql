@@ -3685,6 +3685,13 @@ UPDATE roles SET permissions = permissions || '{"view_employee_secrets": true}':
 UPDATE roles SET permissions = permissions - 'view_employee_secrets'
  WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp', 'hr');
 
+-- 👥 Тімлід бачить людей і паролі СВОЄЇ команди (29.09.2026, Роман за погодженням Сергія). Лише team_lead:
+-- межа «своя команда» — у `core/teamVaultRules.ts`, тож право без неї нічого чужого не відкриває. Тримає #982.
+UPDATE roles SET permissions = permissions || '{"view_team_secrets": true}'::jsonb
+ WHERE key = 'team_lead';
+UPDATE roles SET permissions = permissions - 'view_team_secrets'
+ WHERE key <> 'team_lead';
+
 -- 🔒 Шифр, коди й чати — не для моделі. REVOKE після GRANT і CREATE. Тримає #554.
 REVOKE ALL ON employee_secrets, secret_reveal_codes, vault_link_codes FROM ai_readonly;
 

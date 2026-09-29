@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { fetchHiringMeta, fetchSecretsStatus, hiringError, type HiringMeta } from "../../../api";
+import { fetchHiringMeta, fetchSecretsStatus, fetchTeamVaultStatus, hiringError, type HiringMeta } from "../../../api";
 import { LS } from "../hiringView";
 import type { Toast } from "./HiringShared";
 import { HiringSchedule } from "./HiringSchedule";
@@ -9,6 +9,7 @@ import { HiringDaily } from "./HiringDaily";
 import { HiringVacancies } from "./HiringVacancies";
 import { HiringTraining } from "./HiringTraining";
 import { HiringEmployees } from "./HiringEmployees";
+import { HiringTeam } from "./HiringTeam";
 import { HiringSummary } from "./HiringSummary";
 import { OfferTemplatesTab } from "./HiringOffer";
 import { HiringChurnTab, HiringExitTab } from "./HiringChurn";
@@ -41,6 +42,9 @@ export function HiringSection() {
   // право могли видати після входу, а сервер однаково гейтить кожен запит.
   const [canSecrets, setCanSecrets] = useState(false);
   useEffect(() => { fetchSecretsStatus().then(() => setCanSecrets(true)).catch(() => setCanSecrets(false)); }, []);
+  // 👥 Тімлід (29.09.2026): «Співробітники» — люди й паролі СВОЄЇ команди (право `view_team_secrets`, межа — сервер).
+  const [canTeam, setCanTeam] = useState(false);
+  useEffect(() => { fetchTeamVaultStatus().then(() => setCanTeam(true)).catch(() => setCanTeam(false)); }, []);
 
   const toast: Toast = useCallback((text, opts) => {
     const key = Date.now();
@@ -60,7 +64,7 @@ export function HiringSection() {
   // «Співробітники» живі для тих, хто має право сейфу (імпорт кладе паролі туди); решті — пояснення.
   // «Зведення» живе (етап 2, 18.09.2026) для тих, хто редагує «Найм»; «Співробітники» — з правом сейфу.
   // «Плинність» і «Exit» (етап 5, 18.09.2026) — з реєстру, тож для тих самих, хто бачить «Співробітників».
-  const planned = new Set<Tab>([...(canSecrets ? [] : ["emp" as Tab, "churn" as Tab, "exit" as Tab]), ...(meta.access === "edit" ? [] : ["sum" as Tab])]);
+  const planned = new Set<Tab>([...(canSecrets ? [] : [...(canTeam ? [] : ["emp" as Tab]), "churn" as Tab, "exit" as Tab]), ...(meta.access === "edit" ? [] : ["sum" as Tab])]);
   // «Доступи» злиті в «Співробітники» (18.09.2026): збережена стара вкладка веде туди.
   const want: Tab = tab === "acc" ? "emp" : tab;
   const active = tabs.some(([k]) => k === want) ? want : tabs[0][0];
@@ -88,6 +92,7 @@ export function HiringSection() {
       {active === "vac" && <HiringVacancies meta={meta} toast={toast} onChanged={() => setNonce((n) => n + 1)}
         onOpenCandidates={(id) => { setVacFilter({ id, seq: Date.now() }); pick("base"); }} />}
       {active === "emp" && canSecrets && <HiringEmployees toast={toast} />}
+      {active === "emp" && !canSecrets && canTeam && <HiringTeam toast={toast} />}
       {active === "sum" && meta.access === "edit" && <HiringSummary />}
       {active === "tpl" && meta.access === "edit" && <OfferTemplatesTab toast={toast} />}
       {active === "churn" && canSecrets && <HiringChurnTab />}
