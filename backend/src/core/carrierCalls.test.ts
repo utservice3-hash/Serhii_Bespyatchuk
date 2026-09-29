@@ -618,9 +618,9 @@ test("#963 ПРОВОДКА ФРОНТУ: меню → секція → три �
   assert.equal(V.matchesCarrierFilter({ bucket: null }, "pending"), true);
   assert.equal(V.matchesCarrierFilter({ bucket: "carrier" }, "pending"), false, "🔴 розмова з вердиктом — у «ще слухаємо»");
   assert.equal(V.matchesCarrierFilter({ bucket: "low" }, "carrier"), false, "🔴 невпевнений вердикт показано як перевізника");
-  assert.equal(V.dealStatusLabel(70419108, null), "висить на етапі");
-  assert.equal(V.dealStatusLabel(143, "Перевізник"), "закрито: Перевізник");
-  assert.equal(V.dealStatusLabel(null, null), "угоди ще немає в дашборді", "🔴 невідомий стан угоди показано порожнім");
+  assert.equal(V.dealStatusLabel(70419108, null), "у CRM: на етапі");
+  assert.equal(V.dealStatusLabel(143, "Перевізник"), "у CRM: закрито (Перевізник)");
+  assert.equal(V.dealStatusLabel(null, null), "у CRM: ще не підтягнули", "🔴 невідомий стан угоди показано порожнім");
   assert.equal(V.carrierSpeaker(0, null), "Канал 0", "🔴 невідомий канал менеджера видано за відомий");
   assert.deepEqual([1, 2, 5, 11, 12, 21, 22].map(V.dealsWord), ["угода", "угоди", "угод", "угод", "угод", "угода", "угоди"]);
 });

@@ -5,7 +5,7 @@ import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
 import { STATE_UI, TONE_COLOR, mmss, jobErrorIsCurrent } from "../aiCallsView";
-import { BUCKET_UI, CARRIER_FILTERS, TONE, carrierSpeaker, closeLabel, closeModeLabel, confLabel, dealStatusLabel, dealsWord, matchesCarrierFilter,
+import { BUCKET_UI, CARRIER_FILTERS, TONE, carrierSpeaker, closeLabel, confLabel, dealStatusLabel, dealsWord, matchesCarrierFilter,
   type CarrierFilter } from "../carrierCallsView";
 
 /**
@@ -24,7 +24,6 @@ const fmtDate = (iso: string) => new Date(iso).toLocaleDateString("uk-UA", { tim
 const usd = (v: number) => `$${v.toFixed(2)}`;
 const pill = (bg: string, fg: string): React.CSSProperties => ({ background: bg, color: fg, borderRadius: 999, padding: "1px 8px", fontSize: 12, whiteSpace: "nowrap", fontWeight: 600 });
 
-const FLOW = ["Дзвінок на мобільний", "Угода на етапі", "Фільтр CRM · раз на 10 хв", "Не впізнав — лишилась", "AI слухає першу розмову номера", "Вердикт тут"];
 
 function CallDetail({ uniqueid, onChanged }: { uniqueid: string; onChanged: () => void }) {
   const [c, setC] = useState<CarrierCallCardResp | null>(null);
@@ -135,14 +134,8 @@ export function CarrierCallsSection() {
       <h3 style={{ margin: "0 0 4px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         Перевізники за розмовою
         <span style={pill("var(--danger-bg)", "var(--danger)")}>лише керівництво</span>
-        <InfoHint text="Етап «Дзвінки на мобільні» (Кваліфікація). Фільтр CRM прибирає тих, кого знає за списками; AI слухає решту — першу розмову кожного номера від 10 с — і каже, хто дзвонив. Угоди без розмови не показуються, їх число — нижче. У Kommo нічого не змінюється. Період — за датою створення угоди." />
+        <InfoHint text="Дзвінок на мобільний → угода на етапі «Дзвінки на мобільні» → фільтр CRM прибирає знайомих → AI слухає першу розмову решти (від 10 с) і каже, хто дзвонив. Упевнених перевізників дашборд закриває в CRM, невпевнених вирішує людина. Період — за датою створення угоди." />
       </h3>
-      <ol aria-label="Як угода доходить до AI" style={{ listStyle: "none", margin: "0 0 10px", padding: 0, display: "flex", flexWrap: "wrap", gap: 6, fontSize: 12.5 }}>
-        {FLOW.map((x, i) => (
-          <li key={x} style={{ border: `1px solid ${i === 3 || i === 4 ? "var(--warn)" : "var(--border)"}`, borderRadius: 999, padding: "2px 10px",
-            color: i === 3 || i === 4 ? "var(--text)" : "var(--text-muted)" }}>{i > 0 && "→ "}{x}</li>
-        ))}
-      </ol>
     </>
   );
   if (err) return <div className="chart-card">{header}<p style={{ margin: 0, color: "var(--danger)" }}>{err}</p></div>;
@@ -150,11 +143,10 @@ export function CarrierCallsSection() {
 
   const k = d.kpis;
   const count = (b: string) => rows.filter((r) => r.bucket === b).length;
-  const tile = (label: string, value: number, sub: string, hint: string, tone?: string) => (
-    <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px", minWidth: 150, flex: "1 1 150px" }}>
+  const tile = (label: string, value: number, hint: string, tone?: string) => (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px", minWidth: 130, flex: "1 1 130px" }}>
       <div style={{ fontSize: 22, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: tone }}>{value.toLocaleString("uk-UA")}</div>
       <div style={{ fontSize: 12.5, color: "var(--text-muted)", display: "flex", gap: 4, alignItems: "center" }}>{label}<InfoHint text={hint} /></div>
-      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{sub}</div>
     </div>
   );
   const since = k.recordingSince ? k.recordingSince.slice(0, 10) : null;
@@ -165,34 +157,22 @@ export function CarrierCallsSection() {
       <div className="chart-card">
         {header}
         {meta && (
-          <p style={{ margin: "0 0 10px", fontSize: 12.5, color: "var(--text-muted)" }}>
-            Конвеєр: {meta.job?.lastSuccessAt ? `останній успішний запуск ${fmtTime(meta.job.lastSuccessAt)}` : "успішних запусків ще не було"}
-            {meta.job?.lastError && jobErrorIsCurrent(meta.job)
-              && <span style={{ color: "var(--danger)" }}> · остання помилка {meta.job.lastErrorAt ? fmtTime(meta.job.lastErrorAt) : ""}: {meta.job.lastError}</span>}
-            {" · "}у черзі {(meta.transcripts.queued ?? 0) + (meta.analyses.queued ?? 0)}
-            {" · "}витрати мобільних за місяць {usd(meta.spend.carrier)} з {usd(meta.caps.carrier)}
-            {" · "}усього AI: розпізнавання {usd(meta.spend.stt)}{meta.caps.stt != null ? ` з ${usd(meta.caps.stt)}` : ""},
-            {" "}аналіз {usd(meta.spend.analysis)}{meta.caps.analysis != null ? ` з ${usd(meta.caps.analysis)}` : ""}
-            <br />{closeModeLabel(meta.close.mode)}: {meta.close.mode === "live"
-              ? `закрито ${String(meta.close.closed)}, повернуто людьми ${String(meta.close.reverted)}${meta.close.failed ? `, не вдалось ${String(meta.close.failed)}` : ""}`
-              : `закрили б ${String(meta.close.wouldClose)}`}
+          <p style={{ margin: "0 0 10px", fontSize: 12.5, color: "var(--text-muted)" }}
+            title={`Усього AI за місяць: розпізнавання ${usd(meta.spend.stt)}, аналіз ${usd(meta.spend.analysis)}. У черзі: ${String((meta.transcripts.queued ?? 0) + (meta.analyses.queued ?? 0))}.`}>
+            Оновлено {meta.job?.lastSuccessAt ? fmtTime(meta.job.lastSuccessAt) : "—"}
+            {meta.job?.lastError && jobErrorIsCurrent(meta.job) && <span style={{ color: "var(--danger)" }}> · помилка: {meta.job.lastError}</span>}
+            {" · "}витрати {usd(meta.spend.carrier)} / {usd(meta.caps.carrier)}
+            {" · "}закриття в CRM: {meta.close.mode === "live" ? `увімкнено (${String(meta.close.closed)})` : meta.close.mode === "off" ? "вимкнено" : `лише журнал (${String(meta.close.wouldClose)})`}
           </p>
         )}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>
-          {tile("Прибрав фільтр CRM", k.removedByFilter, "AI їх не слухає",
-            "Угоди етапу, які фільтр CRM закрив як «Перевізник». За даними CRM — оновлюються раз на 30 хв.")}
-          {tile("Лишилось після фільтра", k.leftAfterFilter, `прослухано номерів: ${String(k.listenedPhones)}`,
-            "Угоди, які стояли на етапі після фільтра (ми фіксуємо це в момент, коли бачимо). З розмовою й без.")}
-          {tile("Перевізник за розмовою", count("carrier"), "фільтр їх не знав", BUCKET_UI.carrier.hint, "var(--warn)")}
-          {tile("Клієнт за розмовою", count("client"), "", BUCKET_UI.client.hint, "var(--ok)")}
-          {tile("Інше · не розібрати · нижче порогу", count("other") + count("unclear") + count("low"), "",
-            "Розмова не про перевезення, розібрати не вдалось, або модель не впевнена.")}
+          {tile("Прибрав фільтр", k.removedByFilter, "Фільтр CRM закрив як «Перевізник». AI їх не слухає.")}
+          {tile("Після фільтра", k.leftAfterFilter, `Лишились на етапі після фільтра. Прослухано номерів: ${String(k.listenedPhones)}. Без розмови: чекають ${String(k.waitingTalk)}, пропущено ${String(k.noTalk)}.`)}
+          {tile("Перевізник", count("carrier"), BUCKET_UI.carrier.hint, "var(--warn)")}
+          {tile("Клієнт", count("client"), BUCKET_UI.client.hint, "var(--ok)")}
         </div>
-        <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "var(--text-muted)" }}>
-          Без розмови не показуємо: чекають розмови — {k.waitingTalk}, пропущено (розмова коротша 10 с або її не було за добу) — {k.noTalk}.
-          {since && since > from && <> Облік «після фільтра» ведеться з {fmtDate(k.recordingSince!)} — за раніші дні чисел немає.</>}
-          {!since && <> Облік «після фільтра» ще не почався.</>}
-        </p>
+        {since && since > from && <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "var(--text-muted)" }}>Облік ведеться з {fmtDate(k.recordingSince!)}.</p>}
+        {!since && <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "var(--text-muted)" }}>Облік ще не почався.</p>}
         {d.truncated && <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "var(--warn)" }}>Показано перші 5 000 — звузьте період.</p>}
         <div role="group" aria-label="Фільтр за вердиктом" style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
           {CARRIER_FILTERS.map((f) => (
@@ -245,7 +225,7 @@ export function CarrierCallsSection() {
                           {r.quote ? <i>«{r.quote}»</i> : r.summary ? <span style={{ color: "var(--text-muted)" }}>{r.summary}</span> : <span style={{ color: "var(--text-muted)" }}>—</span>}
                         </td>
                         <td style={{ ...cell, fontSize: 12.5, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
-                          {closeLabel(main?.close ?? null, fmtTime) ?? (r.bucket ? "вердикт записано" : "ще слухаємо")}
+                          {closeLabel(main?.close ?? null, fmtTime) ?? (r.bucket ? "не чіпаємо" : "ще слухаємо")}
                           <div>{main ? dealStatusLabel(main.statusId, main.rejectReason) : ""}</div>
                         </td>
                       </tr>

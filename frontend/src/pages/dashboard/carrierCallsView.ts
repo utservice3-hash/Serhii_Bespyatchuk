@@ -19,7 +19,7 @@ export const BUCKET_UI: Readonly<Record<CarrierBucketT, { label: string; tone: T
   client: { label: "клієнт", tone: "ok", hint: "Йому треба щось перевезти. Впевненість ≥ 0,85, цитата — зі слів співрозмовника." },
   other: { label: "інше", tone: "info", hint: "Розмова не про перевезення: реклама, опитування, вакансії, помилка номера." },
   unclear: { label: "не розібрати", tone: "muted", hint: "Розмова обірвалась або по суті її немає. Якщо була друга розмова номера — слухали і її." },
-  low: { label: "нижче порогу", tone: "muted", hint: "Модель не впевнена (менше 0,85) або цитата не знайдена в словах співрозмовника — вердикт не показуємо як факт." },
+  low: { label: "невпевнено", tone: "muted", hint: "Модель не впевнена (менше 0,85) або цитата не знайдена в словах співрозмовника — вердикт не показуємо як факт." },
 };
 
 export type CarrierFilter = "all" | CarrierBucketT | "pending";
@@ -29,7 +29,7 @@ export const CARRIER_FILTERS: readonly { key: CarrierFilter; label: string }[] =
   { key: "client", label: "Клієнт" },
   { key: "other", label: "Інше" },
   { key: "unclear", label: "Не розібрати" },
-  { key: "low", label: "Нижче порогу 0,85" },
+  { key: "low", label: "Невпевнені" },
   { key: "pending", label: "Ще слухаємо" },
 ];
 
@@ -42,11 +42,11 @@ export function matchesCarrierFilter(r: { bucket: CarrierBucketT | null }, f: Ca
 
 /** Стан угоди в CRM зараз — словами (невідоме має читатись як невідоме). */
 export function dealStatusLabel(statusId: number | null, rejectReason: string | null): string {
-  if (statusId == null) return "угоди ще немає в дашборді";
-  if (statusId === 70419108) return "висить на етапі";
-  if (statusId === 143) return rejectReason ? `закрито: ${rejectReason}` : "закрито без причини";
-  if (statusId === 142) return "успішно реалізовано";
-  return "пішла далі";
+  if (statusId == null) return "у CRM: ще не підтягнули";
+  if (statusId === 70419108) return "у CRM: на етапі";
+  if (statusId === 143) return rejectReason ? `у CRM: закрито (${rejectReason})` : "у CRM: закрито без причини";
+  if (statusId === 142) return "у CRM: успішна";
+  return "у CRM: пішла далі";
 }
 
 export const confLabel = (c: number | null): string => (c == null ? "—" : c.toFixed(2).replace(".", ","));
@@ -71,7 +71,7 @@ export function closeLabel(c: { state: string; at: string } | null, fmt: (iso: s
   if (c.state === "closed") return `закрито в CRM ${fmt(c.at)}`;
   if (c.state === "reverted") return `повернуто на етап ${fmt(c.at)}`;
   if (c.state === "failed") return "не вдалось закрити в CRM — спробуємо ще";
-  return "закрили б (поки лише журнал)";
+  return "закриємо (поки вимкнено)";
 }
 
 /** Режим закриття — для рядка стану. */
