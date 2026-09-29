@@ -99,11 +99,15 @@ export function weekOf(ymd: string): { from: string; to: string } {
 export const lastWeek = (at: Date): { from: string; to: string } => weekOf(addDays(weekOf(kyivDate(at)).from, -7));
 
 /**
- * Коли тиждень фіксується: вівторок 08:00 за Києвом після його неділі. До цієї миті тиждень —
+ * Коли тиждень фіксується: вівторок 15:00 за Києвом після його неділі (до 29.09.2026 — 08:00; перенесено
+ * рішенням Романа, бо презентацію готують у вівторок до 16:00). До цієї миті тиждень —
  * чернетка, яку тімліди ще правлять. Повертає київські дату й годину, а не UTC-мить: крон
  * і догін міряють «чи настало» теж за Києвом (`isFreezeDue`).
  */
-export const freezeAt = (weekFrom: string): { date: string; hour: number } => ({ date: addDays(weekFrom, 8), hour: 8 });
+export const FREEZE_HOUR = 15;
+export const freezeAt = (weekFrom: string): { date: string; hour: number } => ({ date: addDays(weekFrom, 8), hour: FREEZE_HOUR });
+/** «YYYY-MM-DD HH:00» за Києвом — для підписів «до вт … о 15:00». */
+export const freezeDueLabel = (weekFrom: string): string => `${addDays(weekFrom, 8)} ${String(FREEZE_HOUR).padStart(2, "0")}:00`;
 /**
  * Та сама мить фіксації, але як UTC-момент — для зворотного відліку на екрані (#655). Київ живе то
  * в +03:00, то в +02:00 (25.10.2026 — перехід), тож зсув не вгадуємо, а перевіряємо годинником Києва.
@@ -113,13 +117,15 @@ export function freezeInstant(weekFrom: string): string {
   return kyivInstant(date, hour);
 }
 /**
- * ✎ ВІКНО ПРАВОК ПІСЛЯ ФІКСАЦІЇ (29.09.2026, рішення Романа — терміново): презентацію готують у вівторок
- * з 08:00, і числа мусять правитись до 14:00. Знімок о 08:00 лишається незмінним; «свої дані», внесені
- * між фіксацією і цією миттю, лягають ПОВЕРХ знімка (`overlayAfterFreeze`) і йдуть на слайд із ✎.
+ * ✎ ВІКНО ПРАВОК ПІСЛЯ ФІКСАЦІЇ (29.09.2026, рішення Романа): презентацію можуть перенести, тож після
+ * знімка (вт 15:00) «свої дані» приймаються до ПʼЯТНИЦІ 23:59 того ж тижня — або до кнопки «Зафіксувати
+ * остаточно». Знімок лишається незмінним; поправки лягають ПОВЕРХ (`overlayAfterFreeze`), на слайд — із ✎.
+ * Та сама межа замикає лідогенераторів і конверсію РНК.
  */
-export const EDIT_UNTIL_HOUR = 14;
-export const editUntilInstant = (weekFrom: string): string => kyivInstant(addDays(weekFrom, 8), EDIT_UNTIL_HOUR);
-export const isEditOpen = (weekFrom: string, at: Date): boolean => at.getTime() < Date.parse(editUntilInstant(weekFrom));
+export const editUntilInstant = (weekFrom: string): string => kyivInstant(addDays(weekFrom, 12), 0); // сб 00:00 = кінець пт
+/** Чи ще приймаються правки зафіксованого тижня: до пт 23:59 і лише доки ніхто не зафіксував остаточно. */
+export const isEditOpen = (weekFrom: string, at: Date, lockedAt: string | null = null): boolean =>
+  lockedAt == null && at.getTime() < Date.parse(editUntilInstant(weekFrom));
 function kyivInstant(date: string, hour: number): string {
   const [y, m, d] = date.split("-").map(Number);
   for (const off of [3, 2]) {
@@ -319,6 +325,7 @@ export interface WeekView {
   freezeDueAt: string; // київська дата + година фіксації, для підпису «фіксація вт … о 08:00»
   freezeInstant: string; // та сама мить як UTC — для зворотного відліку
   editUntil?: string; // до якої миті (UTC) після фіксації ще приймаються «свої дані» — `editUntilInstant`
+  locked?: { at: string; by: string | null } | null; // «Зафіксувати остаточно» — хто й коли
   teams: TeamWeek[];
   depts: DeptWinner[];
   names: Record<number, string>;

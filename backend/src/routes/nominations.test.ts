@@ -14,7 +14,7 @@ import { skipReason } from "../db/scratchDb.js";
  *
  * 🧨 Червоніє від: помилки в SQL; межі київської доби (угода о 00:30 пн не в тижні); нічиєї, що
  * загубила когось; тімліда, що підтвердив чужу команду чи рядок про себе; виправлення без причини;
- * фіксації до вівторка 08:00; другої фіксації, що щось змінила; UPDATE/DELETE знімка.
+ * фіксації до вівторка 15:00; другої фіксації, що щось змінила; UPDATE/DELETE знімка.
  */
 test("#604 ДИМ: номінації тижня проти бази з нуля — межі, рішення тімліда, фіксація й незмінність знімка", async (t) => {
   const { provisionScratch } = await import("../db/scratchDb.js");
@@ -124,12 +124,12 @@ test("#604 ДИМ: номінації тижня проти бази з нуля
       "🔴 підтвердження пережило зміну CRM — тімлід «підтвердив» те, чого не бачив");
     assert.equal((await conf("lead", 13, "cars")).status, 200);
 
-    // ── фіксація: не раніше вівторка 08:00, один раз, і далі нічого не рухається ──
-    assert.equal(await freezeWeek(WEEK, new Date("2026-09-22T04:59:00Z")), "not-due", "🔴 зафіксовано до вівторка 08:00");
-    assert.equal(await freezeWeek(WEEK, new Date("2026-09-22T05:00:00Z")), "frozen");
+    // ── фіксація: не раніше вівторка 15:00, один раз, і далі нічого не рухається ──
+    assert.equal(await freezeWeek(WEEK, new Date("2026-09-22T11:59:00Z")), "not-due", "🔴 зафіксовано до вівторка 15:00");
+    assert.equal(await freezeWeek(WEEK, new Date("2026-09-22T12:00:00Z")), "frozen");
     const before = (await call("GET", "/week", { query: { weekFrom: WEEK } })).body;
     assert.equal(before.state, "frozen");
-    assert.equal(await freezeWeek(WEEK, new Date("2026-09-22T06:00:00Z")), "already", "🔴 друга фіксація не розпізнала першу");
+    assert.equal(await freezeWeek(WEEK, new Date("2026-09-22T13:00:00Z")), "already", "🔴 друга фіксація не розпізнала першу");
     // «Четвер»: CRM змінився після фіксації — зафіксоване не рухається.
     await c.query(`INSERT INTO deals (kommo_id,manager_id,pipeline_id,status_id,price,created_at_kommo,closed_at_kommo) VALUES (12,102,8921932,142,999999,'2026-09-10','2026-09-18T10:00Z')`);
     const after = (await call("GET", "/week", { query: { weekFrom: WEEK } })).body;
@@ -144,7 +144,7 @@ test("#604 ДИМ: номінації тижня проти бази з нуля
       await assert.rejects(() => c.query(sql), /зафіксоване не змінюється/, `🔴 БД дозволила: ${sql}`);
     }
     // 🪞 Дзеркало тригера: наступний тиждень фіксується нормально (тригер не блокує ВСЕ підряд).
-    assert.equal(await freezeWeek("2026-09-21", new Date("2026-09-29T06:00:00Z")), "frozen");
+    assert.equal(await freezeWeek("2026-09-21", new Date("2026-09-29T13:00:00Z")), "frozen");
   } finally {
     await c.end();
     const { pool } = await import("../db/pool.js");

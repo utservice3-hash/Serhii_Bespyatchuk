@@ -389,6 +389,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/nominations/rnk-conv", cls: "deny-only",
     allow: [], deny: ["hr", "manager"] },
+  /* 🔒 «Зафіксувати остаточно» (29.09.2026) — лише керівництво: тімлід проходить tab-гейт, але обробник дає 403. */
+  { method: "POST", path: "/api/nominations/lock", cls: "deny-only",
+    allow: [], deny: ["hr", "manager", "team_lead"] },
   /* 📷 Фото співробітників (22.09.2026). Саме фото — будь-кому залогіненому (0 → 400/404, але не 403);
      список і запис — право сейфу `view_employee_secrets`: admin, ceo, opdir, kvp, hr. Запис — deny-only. */
   /* Кандидату — 403 в самому обробнику, але проба матриці ходить від НЕАКТИВНОГО кандидата, і її раніше відсікає

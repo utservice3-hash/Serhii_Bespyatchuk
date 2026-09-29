@@ -115,7 +115,7 @@ test("#657 ДИМ: погодитись з рештою, скасувати, х�
     assert.deepEqual(t13.leads, [{ managerId: 103, name: "Тімлід РНК" }], "🔴 керівництво не бачить, хто тімлід команди");
     assert.deepEqual(cell(a.body, 13, "cars").ranking.map((x: any) => x.managerId), [101, 102, 103], "🔴 рейтинг «авто» не той");
     const draftRanking = cell(a.body, 13, "marginPct").ranking;
-    assert.equal(await freezeWeek(WEEK, new Date("2026-09-22T06:00:00Z")), "frozen");
+    assert.equal(await freezeWeek(WEEK, new Date("2026-09-22T13:00:00Z")), "frozen");
     const fz = await frozenWeek(WEEK);
     assert.deepEqual(fz!.teams.find((x) => x.teamId === 13)!.cells.find((x) => x.nomination === "marginPct")!.ranking, draftRanking, "🔴 знімок загубив рейтинг");
     assert.equal((await call("POST", "/review", { who: "lead", body: { weekFrom: WEEK, teamId: 13, action: "confirm", nominations: ["cars"] } })).status, 409, "🔴 масове погодження пройшло в зафіксований тиждень");

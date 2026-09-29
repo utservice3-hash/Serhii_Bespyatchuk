@@ -3906,6 +3906,17 @@ DROP TRIGGER IF EXISTS trg_nomination_conv_edits_immutable ON nomination_conv_ed
 CREATE TRIGGER trg_nomination_conv_edits_immutable BEFORE UPDATE OR DELETE ON nomination_conv_edits
   FOR EACH ROW EXECUTE FUNCTION nominations_immutable();
 
+-- 🔒 «ЗАФІКСУВАТИ ОСТАТОЧНО» (29.09.2026, рішення Романа): після знімка вт 15:00 «свої дані» приймаються до
+-- пт 23:59 — або до натискання цієї кнопки керівництвом. Один рядок на тиждень; змінити чи прибрати не можна.
+CREATE TABLE IF NOT EXISTS nomination_week_locks (
+  week_from  DATE PRIMARY KEY,
+  locked_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+DROP TRIGGER IF EXISTS trg_nomination_week_locks_immutable ON nomination_week_locks;
+CREATE TRIGGER trg_nomination_week_locks_immutable BEFORE UPDATE OR DELETE ON nomination_week_locks
+  FOR EACH ROW EXECUTE FUNCTION nominations_immutable();
+
 -- Вкладка «Номінації тижня»: керівництво (admin, ceo, opdir, kvp) і тімліди. Менеджерам — дошка в
 -- проході 3. ⚠️ Ідемпотентно й НЕ перетирає рішень адміна: чіпаємо лише ролі, де ключа ще немає.
 UPDATE roles SET screen_access = screen_access || '{"nominations":true}'::jsonb
