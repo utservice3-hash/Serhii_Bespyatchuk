@@ -148,6 +148,15 @@ export const geminiGenerateUrl = (model: string): string =>
  */
 export const RUBRIC_PILOT_V0 = "pilot-v0";
 
+/**
+ * Рубрика «ОБІЦЯВ І НЕ ПЕРЕДЗВОНИВ» (рішення Романа 29.09.2026, П4–П7): до обіцянки додано канал,
+ * вид і величину строку, умовність. Модель лише ЧИТАЄ слова; термін рахує `core/callAiPromise.ts`,
+ * виконання — дзвінки Ringostat. Нова рубрика — нові рядки аналізу, старі `pilot-v0` лишаються.
+ */
+export const RUBRIC_FIRST_TOUCH_V1 = "first-touch-v1";
+/** Рубрика, яку зараз ганяє джоба і показує екран. */
+export const RUBRIC_CURRENT = RUBRIC_FIRST_TOUCH_V1;
+
 export const ANALYSIS_SCHEMA = {
   type: "object",
   properties: {
@@ -172,8 +181,13 @@ export const ANALYSIS_SCHEMA = {
           what: { type: "string" },
           deadline_text: { type: "string", description: "строк дослівно, як прозвучав; порожньо, якщо строку не було" },
           quote: { type: "string" },
+          channel: { type: "string", enum: ["call", "message", "other"], description: "як виконати: call — зателефонувати; message — надіслати у Viber, Telegram, WhatsApp, SMS чи пошту; other — інше" },
+          deadline_kind: { type: "string", enum: ["minutes", "day", "none"], description: "minutes — названо тривалість або годину сьогодні; day — названо день; none — часу не названо" },
+          deadline_minutes: { type: "integer", description: "для minutes — хвилин від кінця розмови; інакше 0" },
+          deadline_date: { type: "string", description: "для day — дата YYYY-MM-DD, обчислена від дати розмови; інакше порожньо" },
+          conditional: { type: "boolean", description: "true, якщо обіцянка залежить від події («як знайду авто», «як буде пропозиція»)" },
         },
-        required: ["who", "what", "deadline_text", "quote"],
+        required: ["who", "what", "deadline_text", "quote", "channel", "deadline_kind", "deadline_minutes", "deadline_date", "conditional"],
       },
     },
     next_step: { type: "string" },
@@ -191,6 +205,12 @@ export const ANALYSIS_SYSTEM_PROMPT = [
   "3. Поле quote — дослівний уривок із розшифровки (без часу й номера каналу), не переказ. Немає дослівного уривка — не додавай пункт.",
   "4. Чого в розмові немає — порожній рядок або порожній масив.",
   "5. Пиши українською.",
+  "6. Обіцянка — будь-яке «повернусь до вас»: передзвоню, наберу, скину ціну, пошукаю авто, уточню, зокрема умовне («як знайду авто — наберу»). Для кожної:",
+  "   channel: call — зателефонувати чи передзвонити; message — надіслати у Viber, Telegram, WhatsApp, SMS чи на пошту; other — інше.",
+  "   deadline_kind: minutes — названо тривалість або годину сьогодні («за 20 хвилин», «через півгодини», «о 15:00»); day — названо день («завтра», «в понеділок», «до кінця тижня» — останній робочий день тижня); none — часу не названо («зараз», «одразу», «наберу»).",
+  "   deadline_minutes: для minutes — скільки хвилин від кінця розмови (для «о 15:00» — від часу розмови до 15:00); інакше 0.",
+  "   deadline_date: для day — дата YYYY-MM-DD, обчислена від дати розмови з першого рядка; інакше порожній рядок.",
+  "   conditional: true, якщо виконання залежить від події, а не від часу.",
 ].join("\n");
 
 const mmss = (sec: number | null): string => {
@@ -203,10 +223,19 @@ export function dialogText(turns: readonly Turn[]): string {
   return turns.map((t) => `[${mmss(t.start)}] Канал ${String(t.channel)}: ${t.text}`).join("\n");
 }
 
-export function buildAnalysisRequest(turns: readonly Turn[], maxOutputTokens: number): Record<string, unknown> {
+/** Перший рядок запиту: коли була розмова — від нього модель рахує «завтра» й «у понеділок». */
+export function callDateLine(callAt: Date): string {
+  const d = callAt.toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+  const t = callAt.toLocaleTimeString("uk-UA", { timeZone: "Europe/Kyiv", hour: "2-digit", minute: "2-digit" });
+  const wd = callAt.toLocaleDateString("uk-UA", { timeZone: "Europe/Kyiv", weekday: "long" });
+  return `Розмова почалась ${d} о ${t} за Києвом, ${wd}.`;
+}
+
+export function buildAnalysisRequest(turns: readonly Turn[], maxOutputTokens: number, callAt: Date | null = null): Record<string, unknown> {
+  const text = callAt ? `${callDateLine(callAt)}\n\n${dialogText(turns)}` : dialogText(turns);
   return {
     system_instruction: { parts: [{ text: ANALYSIS_SYSTEM_PROMPT }] },
-    contents: [{ role: "user", parts: [{ text: dialogText(turns) }] }],
+    contents: [{ role: "user", parts: [{ text }] }],
     generationConfig: {
       // Перелік, а не рядок MIME: живий API 28.09.2026 на "application/json" відповів 400
       // «Invalid value at generation_config.response_format.text.mime_type». Правий був довідник, не приклад гайду.
@@ -271,7 +300,12 @@ export interface AnalysisResult {
   client_request: string;
   price: { discussed: boolean; quote: string; quote_found?: boolean | null };
   objections: { what: string; quote: string; quote_found?: boolean | null }[];
-  promises: { who: "manager" | "client"; what: string; deadline_text: string; quote: string; quote_found?: boolean | null }[];
+  promises: {
+    who: "manager" | "client"; what: string; deadline_text: string; quote: string; quote_found?: boolean | null;
+    /** Поля рубрики `first-touch-v1`; у рядках `pilot-v0` їх немає. */
+    channel?: "call" | "message" | "other"; deadline_kind?: "minutes" | "day" | "none";
+    deadline_minutes?: number; deadline_date?: string; conditional?: boolean;
+  }[];
   next_step: string;
 }
 
@@ -289,6 +323,9 @@ export function validateAnalysis(x: unknown): { ok: true; value: AnalysisResult 
     return { ok: false, why: "objections не тієї форми" };
   if (!Array.isArray(o.promises) || !o.promises.every((i) => i && ["manager", "client"].includes(i.who) && isStr(i.what)
     && isStr(i.deadline_text) && isStr(i.quote))) return { ok: false, why: "promises не тієї форми" };
+  if (!o.promises.every((i) => ["call", "message", "other"].includes(i.channel) && ["minutes", "day", "none"].includes(i.deadline_kind)
+    && typeof i.deadline_minutes === "number" && isStr(i.deadline_date) && typeof i.conditional === "boolean"))
+    return { ok: false, why: "promises без полів строку (рубрика first-touch-v1)" };
   return { ok: true, value: o as unknown as AnalysisResult };
 }
 

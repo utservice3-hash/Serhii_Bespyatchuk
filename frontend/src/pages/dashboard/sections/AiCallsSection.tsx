@@ -5,6 +5,7 @@ import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
 import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, mmss, aiDefaultPeriod, jobErrorIsCurrent, parseCallParam, withCallParam,
+  PROMISE_UI, GROUP_LABEL, applyListFilter, type ListFilter, type PipelineGroupT,
   type AiFilter, type AiCallState } from "../aiCallsView";
 
 /**
@@ -36,6 +37,9 @@ export function AiCallsSection() {
   const [meta, setMeta] = useState<AiCallsMetaResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [filter, setFilter] = useState<AiFilter>("all");
+  // П8-Б: воронка, команда, менеджер; нецільові («Дубль», «Перевізник») сховані, їх число — у перемикачі.
+  const [lf, setLf] = useState<ListFilter>({ group: "all", teamId: null, managerId: null, showNonTarget: false });
+  const [silenceOnly, setSilenceOnly] = useState(false);
   // Відкрита картка живе в адресі (`?call=`): посилання можна переслати, і воно відкриє ту саму картку.
   const [open, setOpenState] = useState<string | null>(() => parseCallParam(window.location.search));
   const setOpen = useCallback((uniqueid: string | null) => {
@@ -55,15 +59,27 @@ export function AiCallsSection() {
   }, [from, to]);
   useEffect(() => { fetchAiCallsMeta().then(setMeta).catch(() => setMeta(null)); }, []);
 
-  const shown = useMemo(() => (d ? d.rows.filter((r) => matchesFilter(r, filter)) : []), [d, filter]);
+  const scoped = useMemo(() => (d ? applyListFilter(d.rows, lf) : []), [d, lf]);
+  // П3: прапорець «тиша» — лише з дати оголошення норми; до того фільтра немає зовсім.
+  const normFrom = d?.silence.normFrom ?? null;
+  const shown = useMemo(() => scoped.filter((r) => matchesFilter(r, filter)
+    && (!silenceOnly || (normFrom != null && r.silentBeforeClose === true && r.dealCreatedAt.slice(0, 10) >= normFrom))), [scoped, filter, silenceOnly, normFrom]);
 
   const navBar = <PeriodNav state={nav} onPatch={(patch) => setNav((st) => ({ ...st, ...patch }))} today={today} />;
   const drawer = open ? <AiCallDrawer uniqueid={open} onClose={closeCard} /> : null;
   if (err) return <div className="chart-card">{navBar}<p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>{drawer}</div>;
   if (!d) return <div className="chart-card">{navBar}<p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>{drawer}</div>;
 
-  const rows = d.rows;
+  const rows = scoped;
   const done = rows.filter((r) => r.state === "done");
+  const nonTargetHidden = applyListFilter(d.rows, { ...lf, showNonTarget: true }).length - applyListFilter(d.rows, { ...lf, showNonTarget: false }).length;
+  const groupCount = (g: PipelineGroupT | "all") => applyListFilter(d.rows, { ...lf, group: g }).length;
+  const teams = [...new Map(d.rows.filter((r) => r.teamId != null).map((r) => [r.teamId!, r.teamName ?? `Команда #${String(r.teamId)}`])).entries()]
+    .sort((a, b) => a[1].localeCompare(b[1], "uk"));
+  const managers = [...new Map(d.rows.filter((r) => r.managerId != null && (lf.teamId == null || r.teamId === lf.teamId))
+    .map((r) => [r.managerId!, r.managerName ?? `Менеджер #${String(r.managerId)}`])).entries()].sort((a, b) => a[1].localeCompare(b[1], "uk"));
+  const broken = done.filter((r) => r.promiseState === "broken").length;
+  const withMgrPromise = done.filter((r) => r.managerPromises > 0).length;
   const byState = new Map<AiCallState, number>();
   for (const r of rows) byState.set(r.state, (byState.get(r.state) ?? 0) + 1);
   const tile = (label: string, value: string, hint: string) => (
@@ -99,7 +115,8 @@ export function AiCallsSection() {
           {tile("проаналізовано", `${done.length.toLocaleString("uk-UA")}`, "Є розшифровка й витяг моделі. Решта — у черзі або з названою причиною (дивіться стан у рядку).")}
           {tile("обговорили ціну", done.filter((r) => r.priceDiscussed).length.toLocaleString("uk-UA"), "Серед проаналізованих.")}
           {tile("із запереченням", done.filter((r) => r.objections > 0).length.toLocaleString("uk-UA"), "Серед проаналізованих: клієнт висловив хоча б одне заперечення.")}
-          {tile("обіцянок зі строком", `${String(withDeadline)} з ${String(promises)}`, "Обіцянки менеджера й клієнта; строк — як прозвучав у розмові. Чи виконано — окремий крок (П5).")}
+          {tile("обіцянок зі строком", `${String(withDeadline)} з ${String(promises)}`, "Обіцянки менеджера й клієнта; строк — як прозвучав у розмові.")}
+          {tile("не передзвонив", `${String(broken)} з ${String(withMgrPromise)}`, "Розмов, де менеджер пообіцяв повернутись дзвінком, а до терміну на номер не було жодного нашого вихідного (колеги теж рахуються). Термін — як пообіцяв; без часу — 20 хв; умовна — до кінця наступного робочого дня. Обіцянки в месенджер не перевіряються.")}
         </div>
         {done.length < rows.length && (
           <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "var(--text-muted)" }}>
@@ -107,6 +124,39 @@ export function AiCallsSection() {
           </p>
         )}
         {d.truncated && <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "var(--warn-fg, #8a5a00)" }}>Показано перші 5 000 — звузьте період.</p>}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 8 }}>
+          <div className="hr-seg2" role="group" aria-label="Воронка">
+            {(["all", "full", "qualification"] as const).map((g) => (
+              <button key={g} type="button" className={lf.group === g ? "on" : ""} aria-pressed={lf.group === g} onClick={() => setLf({ ...lf, group: g })}>
+                {g === "all" ? "Усі воронки" : GROUP_LABEL[g]} · {groupCount(g)}
+              </button>
+            ))}
+          </div>
+          <label style={{ fontSize: 13, display: "flex", gap: 4, alignItems: "center" }}>Команда
+            <select id="ai-team" value={lf.teamId ?? ""} onChange={(e) => setLf({ ...lf, teamId: e.target.value ? Number(e.target.value) : null, managerId: null })}>
+              <option value="">усі</option>
+              {teams.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
+          </label>
+          <label style={{ fontSize: 13, display: "flex", gap: 4, alignItems: "center" }}>Менеджер
+            <select id="ai-manager" value={lf.managerId ?? ""} onChange={(e) => setLf({ ...lf, managerId: e.target.value ? Number(e.target.value) : null })}>
+              <option value="">усі</option>
+              {managers.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
+          </label>
+          <label style={{ fontSize: 13, display: "flex", gap: 4, alignItems: "center" }} title="«Дубль» і «Перевізник» — причина відмови в CRM">
+            <input id="ai-nontarget" type="checkbox" checked={lf.showNonTarget} onChange={(e) => setLf({ ...lf, showNonTarget: e.target.checked })} />
+            показати нецільові{lf.showNonTarget ? "" : ` (прибрано: ${String(nonTargetHidden)})`}
+          </label>
+          {normFrom
+            ? <label style={{ fontSize: 13, display: "flex", gap: 4, alignItems: "center" }}>
+                <input id="ai-silence" type="checkbox" checked={silenceOnly} onChange={(e) => setSilenceOnly(e.target.checked)} />
+                тиша перед закриттям
+              </label>
+            : <span style={{ fontSize: 12, color: "var(--text-muted)" }} title="Норма: перед закриттям — дзвінок із результатом. Прапорець з'явиться з дати, коли норму оголосять менеджерам.">
+                «Тиша перед закриттям» — з дати оголошення норми
+              </span>}
+        </div>
         <div role="group" aria-label="Фільтр" style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
           {FILTERS.map((f) => (
             <button key={f.key} type="button" onClick={() => setFilter(f.key)} aria-pressed={filter === f.key}
@@ -126,7 +176,7 @@ export function AiCallsSection() {
               <thead>
                 <tr style={{ textAlign: "left", color: "var(--text-muted)", fontSize: 12.5 }}>
                   <th style={cell}>Розмова</th><th style={cell}>Менеджер</th><th style={cell}>Стан</th>
-                  <th style={cell}>Про що</th><th style={cell}>Ціна</th><th style={cell}>Заперечення</th><th style={cell}>Обіцянки</th>
+                  <th style={cell}>Про що</th><th style={cell}>Ціна</th><th style={cell}>Заперечення</th><th style={cell}>Обіцянка</th>
                 </tr>
               </thead>
               <tbody>
@@ -142,7 +192,10 @@ export function AiCallsSection() {
                       <td style={{ ...cell, maxWidth: 420 }}>{r.summary ?? <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
                       <td style={cell}>{r.priceDiscussed == null ? "—" : r.priceDiscussed ? "так" : "ні"}</td>
                       <td style={cell}>{r.state === "done" ? r.objections : "—"}</td>
-                      <td style={cell}>{r.state === "done" ? `${String(r.promises)}${r.promises > r.promisesWithDeadline ? ` (без строку ${String(r.promises - r.promisesWithDeadline)})` : ""}` : "—"}</td>
+                      <td style={cell}>{r.state !== "done" ? "—" : r.promiseState
+                        ? <span title={PROMISE_UI[r.promiseState].hint} style={{ background: TONE_COLOR[PROMISE_UI[r.promiseState].tone].bg, color: TONE_COLOR[PROMISE_UI[r.promiseState].tone].fg,
+                            borderRadius: 999, padding: "1px 8px", fontSize: 12, whiteSpace: "nowrap" }}>{PROMISE_UI[r.promiseState].label}</span>
+                        : <span style={{ color: "var(--text-muted)" }}>немає</span>}</td>
                   </tr>
                 ))}
               </tbody>

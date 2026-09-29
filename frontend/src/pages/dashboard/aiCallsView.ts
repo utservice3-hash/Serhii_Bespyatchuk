@@ -31,10 +31,11 @@ export const TONE_COLOR: Readonly<Record<Tone, { bg: string; fg: string }>> = {
   muted: { bg: "var(--muted-bg, #f0f1f3)", fg: "var(--text-muted, #5a6676)" },
 };
 
-export type AiFilter = "all" | "done" | "price" | "objection" | "noDeadline" | "notDone";
+export type AiFilter = "all" | "done" | "broken" | "price" | "objection" | "noDeadline" | "notDone";
 export const FILTERS: readonly { key: AiFilter; label: string }[] = [
   { key: "all", label: "Усі" },
   { key: "done", label: "Проаналізовано" },
+  { key: "broken", label: "Не передзвонив" },
   { key: "price", label: "Обговорили ціну" },
   { key: "objection", label: "Є заперечення" },
   { key: "noDeadline", label: "Обіцянка без строку" },
@@ -43,6 +44,7 @@ export const FILTERS: readonly { key: AiFilter; label: string }[] = [
 
 export interface FilterableRow {
   state: AiCallState;
+  promiseState?: PromiseStateT | null;
   priceDiscussed: boolean | null;
   objections: number;
   promises: number;
@@ -51,6 +53,7 @@ export interface FilterableRow {
 
 export function matchesFilter(r: FilterableRow, f: AiFilter): boolean {
   if (f === "done") return r.state === "done";
+  if (f === "broken") return r.promiseState === "broken";
   if (f === "price") return r.priceDiscussed === true;
   if (f === "objection") return r.objections > 0;
   if (f === "noDeadline") return r.promises > r.promisesWithDeadline;
@@ -133,4 +136,43 @@ export function drawerTabs(transcriptHidden: boolean, turns: number | null): Dra
 /** Мітка обіцянок у шапці картки: «обіцянки: 1 з 2 зі строком» / «обіцянок немає». */
 export function promisesLabel(promises: number, withDeadline: number): string {
   return promises === 0 ? "обіцянок немає" : `обіцянки: ${String(withDeadline)} з ${String(promises)} зі строком`;
+}
+
+/** Стан обіцянки менеджера — дзеркало `PromiseState` у `core/callAiPromise.ts`. */
+export type PromiseStateT = "kept_talk" | "kept_attempt_only" | "client_called" | "pending" | "broken" | "unverifiable";
+export type PipelineGroupT = "full" | "qualification" | "other";
+
+/**
+ * Підписи станів обіцянки (П6-Б, рішення Романа 29.09.2026). «Не перевіряється» — обіцянка в месенджер:
+ * Ringostat Viber/Telegram не бачить, тож прапорця на ній немає.
+ */
+export const PROMISE_UI: Readonly<Record<PromiseStateT, { label: string; tone: Tone; hint: string }>> = {
+  broken: { label: "Не передзвонив", tone: "bad", hint: "Термін минув, а на номер не було жодного нашого вихідного — ні від менеджера, ні від колег." },
+  pending: { label: "Чекає строку", tone: "wait", hint: "Термін ще не минув, нашого дзвінка ще не було." },
+  kept_attempt_only: { label: "Лише спроби", tone: "warn", hint: "До терміну ми дзвонили, але розмови не було." },
+  client_called: { label: "Клієнт подзвонив сам", tone: "wait", hint: "До терміну клієнт подзвонив нам і поговорив; нашого вихідного не було." },
+  kept_talk: { label: "Передзвонив", tone: "ok", hint: "До терміну був наш вихідний із розмовою (колега теж рахується)." },
+  unverifiable: { label: "Не перевіряється", tone: "muted", hint: "Обіцянка в месенджер або інша дія — Ringostat цього не бачить, прапорця немає." },
+};
+
+export const GROUP_LABEL: Readonly<Record<PipelineGroupT, string>> = { full: "Повний цикл", qualification: "Кваліфікація", other: "Інші воронки" };
+
+export interface ListFilter { group: PipelineGroupT | "all"; teamId: number | null; managerId: number | null; showNonTarget: boolean }
+export interface ListFilterRow { pipelineGroup: PipelineGroupT; teamId: number | null; managerId: number | null; nonTarget: boolean }
+
+/**
+ * Фільтри списку, окрім кнопок стану (П8-Б): воронка, команда, менеджер; нецільові («Дубль», «Перевізник»)
+ * сховані за замовчуванням, а їх кількість видно в перемикачі — «прибрано: N», а не мовчки.
+ */
+export function applyListFilter<T extends ListFilterRow>(rows: readonly T[], f: ListFilter): T[] {
+  return rows.filter((r) => (f.group === "all" || r.pipelineGroup === f.group)
+    && (f.teamId == null || r.teamId === f.teamId)
+    && (f.managerId == null || r.managerId === f.managerId)
+    && (f.showNonTarget || !r.nonTarget));
+}
+
+/** Людський підпис терміну обіцянки в картці. */
+export function deadlineBasisLabel(basis: string): string {
+  return basis === "minutes" ? "як пообіцяв" : basis === "day" ? "до кінця названого дня"
+    : basis === "conditional_next_workday" ? "умовна — до кінця наступного робочого дня" : "часу не названо — 20 хв";
 }

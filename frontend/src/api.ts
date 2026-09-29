@@ -1,5 +1,5 @@
 import axios from "axios";
-import type { AiCallState } from "./pages/dashboard/aiCallsView";
+import type { AiCallState, PromiseStateT, PipelineGroupT } from "./pages/dashboard/aiCallsView";
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL ?? "http://localhost:4000/api",
@@ -338,8 +338,17 @@ export interface AiCallRowT {
   dealCreatedAt: string; managerId: number | null; managerName: string | null; teamId: number | null; teamName: string | null;
   state: AiCallState; failure: string | null; summary: string | null;
   priceDiscussed: boolean | null; objections: number; promises: number; promisesWithDeadline: number; unverifiedQuotes: number;
+  /** Воронка угоди (П8-Б) і нецільова відмова («Дубль», «Перевізник»). */
+  pipelineGroup: PipelineGroupT; nonTarget: boolean; rejectReason: string | null;
+  /** Найгірший стан обіцянок менеджера (П4–П7); `null` — обіцянок менеджера немає. */
+  promiseState: PromiseStateT | null; managerPromises: number;
+  /** П3 «тиша перед закриттям»; на екрані — лише з дати оголошення норми (`silence.normFrom`). */
+  silentBeforeClose: boolean | null;
 }
-export interface AiCallsResp { period: { from: string; to: string }; truncated: boolean; rows: AiCallRowT[] }
+export interface AiCallsResp {
+  period: { from: string; to: string }; truncated: boolean; rows: AiCallRowT[];
+  silence: { minGapHours: number; normFrom: string | null };
+}
 export async function fetchAiCalls(params: { from: string; to: string }): Promise<AiCallsResp> {
   const { data } = await api.get<AiCallsResp>("/dashboard/ai-calls", { params });
   return data;
@@ -349,15 +358,19 @@ export interface AiAnalysis {
   summary: string; manager_channel: "0" | "1" | "unknown"; client_request: string;
   price: { discussed: boolean } & AiQuoted;
   objections: ({ what: string } & AiQuoted)[];
-  promises: ({ who: "manager" | "client"; what: string; deadline_text: string } & AiQuoted)[];
+  promises: ({ who: "manager" | "client"; what: string; deadline_text: string;
+    channel?: "call" | "message" | "other"; conditional?: boolean } & AiQuoted)[];
   next_step: string;
 }
 export interface AiTurn { channel: number; start: number | null; end: number | null; text: string; lang: string | null }
 export interface AiCallCardResp {
-  row: Omit<AiCallRowT, "dealCreatedAt">;
+  row: Omit<AiCallRowT, "dealCreatedAt" | "nonTarget">;
   dealUrls: { kommoId: number; url: string }[];
   result: AiAnalysis | null; turns: AiTurn[] | null; transcriptHidden: boolean;
   managerChannel: number | null; durationSec: number | null; nextOutboundAt: string | null;
+  /** Термін і стан кожної обіцянки — у порядку `result.promises`; обіцянки клієнта → `null`. */
+  promiseChecks: ({ deadline: string; basis: string; state: PromiseStateT } | null)[];
+  callsAfter: { at: string; billsec: number; direction: "in" | "out" }[];
 }
 export async function fetchAiCallCard(uniqueid: string): Promise<AiCallCardResp> {
   const { data } = await api.get<AiCallCardResp>(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}`);

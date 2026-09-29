@@ -2,7 +2,7 @@ import type { Db } from "./adCallFacts.js";
 import { adDealFirstTalksSql, type AdFlag, type FirstTalkRow } from "./adCallFactsRules.js";
 import { createMinInterval, type HttpDeps } from "./callAiHttp.js";
 import { downloadRecording } from "./ringostatRecording.js";
-import { ELEVENLABS_STT_MODEL, elevenLabsTranscribe, GEMINI_MODEL, geminiGenerate, RUBRIC_PILOT_V0 } from "./callAiProviders.js";
+import { ELEVENLABS_STT_MODEL, elevenLabsTranscribe, GEMINI_MODEL, geminiGenerate, RUBRIC_CURRENT } from "./callAiProviders.js";
 import { dequeueOutside, enqueueAnalyses, enqueueTranscripts, runAnalysisPortion, runSttPortion, type PortionReport } from "./callAiPipeline.js";
 import { LLM_POLICY, LLM_PROVIDER, RECORDING_MAX_BYTES, RINGOSTAT_MIN_INTERVAL_MS, RINGOSTAT_POLICY, STT_POLICY,
   STT_PROVIDER, STUCK_AFTER_MIN, type AdPredicate } from "./callAiPilot.js";
@@ -133,7 +133,7 @@ export async function runCallAiTick(env: TickEnv): Promise<TickReport> {
   }), STT_BUDGET_MS, env.http.nowMs, out.stt);
   out.sttStoppedBy = stt.stoppedBy;
 
-  const ap = { provider: LLM_PROVIDER, model: GEMINI_MODEL, rubricVersion: RUBRIC_PILOT_V0,
+  const ap = { provider: LLM_PROVIDER, model: GEMINI_MODEL, rubricVersion: RUBRIC_CURRENT,
     sttProvider: STT_PROVIDER, sttModel: ELEVENLABS_STT_MODEL };
   await enqueueAnalyses(env.db, { ...ap, now: env.now() }, null);
   const llm = await drainWithBudget(() => runAnalysisPortion(env.db, {

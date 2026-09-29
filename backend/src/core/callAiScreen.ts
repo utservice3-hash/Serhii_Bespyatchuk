@@ -2,10 +2,28 @@ import type { Db } from "./adCallFacts.js";
 import { adDealFirstTalksSql } from "./adCallFactsRules.js";
 import { OUTBOUND_TYPES } from "./missedCallsRules.js";
 import type { MissedScope } from "./missedCallsRules.js";
-import { ELEVENLABS_STT_MODEL, GEMINI_MODEL, RUBRIC_PILOT_V0, type AnalysisResult, type Turn } from "./callAiProviders.js";
+import { ELEVENLABS_STT_MODEL, GEMINI_MODEL, RUBRIC_CURRENT, type AnalysisResult, type Turn } from "./callAiProviders.js";
 import { LLM_PROVIDER, STT_PROVIDER, type AdPredicate } from "./callAiPilot.js";
 import { FIRST_TOUCH_RULE } from "./callAiTick.js";
 import { monthSpend } from "./callAiPipeline.js";
+import { adCallFacts } from "./adCallFacts.js";
+import { silentBeforeClose, type AdCallFactsParams } from "./adCallFactsRules.js";
+import { promiseDeadline, promiseState, worstPromiseState, type CallFact, type DeadlineBasis, type ModelPromise, type PromiseState } from "./callAiPromise.js";
+
+/**
+ * 🤫 «ТИША ПЕРЕД ЗАКРИТТЯМ» (П3, рішення Романа 29.09.2026): угоду закрито «не реалізовано» пізніше ніж
+ * через 24 год після останньої розмови, і за цей час на номер не було жодного нашого вихідного. Прапорці —
+ * лише за період ПІСЛЯ оголошення норми менеджерам; дати ще немає (`normFrom: null`) → рахуємо, але на
+ * екрані прапорця не показуємо.
+ */
+export const SILENCE_RULE: Readonly<{ minGapHours: number; normFrom: string | null }> = { minGapHours: 24, normFrom: null };
+
+/** Воронки Кваліфікації (New і стара) — окрема група на екрані (П8-Б). Повний цикл — 8921932. */
+const QUALIFICATION_PIPELINES = new Set([8921928, 7336928]);
+const FULL_CYCLE_PIPELINE = 8921932;
+export type PipelineGroup = "full" | "qualification" | "other";
+export const pipelineGroupOf = (id: number | null): PipelineGroup =>
+  id == null ? "other" : QUALIFICATION_PIPELINES.has(id) ? "qualification" : id === FULL_CYCLE_PIPELINE ? "full" : "other";
 
 /**
  * 🎧 ЕКРАН «ПЕРШИЙ ДОТИК · AI» — ЛИШЕ ПЕРЕГЛЯД (прохід 1, рішення Романа 28.09.2026).
@@ -87,6 +105,16 @@ export interface AiCallRow {
   promisesWithDeadline: number;
   /** Цитат, яких немає в розмові (модель процитувала те, чого не казали). Нуль — норма. */
   unverifiedQuotes: number;
+  /** Воронка угоди (П8-Б: Кваліфікація — окремою групою). */
+  pipelineGroup: PipelineGroup;
+  /** «Причина відмови» угоди з CRM — для нецільових («Дубль», «Перевізник»). */
+  rejectReason: string | null;
+  /** Найгірший стан обіцянок МЕНЕДЖЕРА (П4–П7); `null` — обіцянок менеджера немає або аналізу ще немає. */
+  promiseState: PromiseState | null;
+  /** Обіцянок менеджера в розмові. */
+  managerPromises: number;
+  /** П3: `true` — тиша перед закриттям; `null` — не застосовно (угода не програна або без розмов). */
+  silentBeforeClose: boolean | null;
 }
 
 interface RawRow {
@@ -94,6 +122,7 @@ interface RawRow {
   manager_id: number | null; manager_name: string | null; team_id: number | null; team_name: string | null;
   stt_status: string | null; stt_failure: string | null; llm_status: string | null; llm_failure: string | null;
   result: AnalysisResult | null;
+  client_phone?: string | null; pipeline_id?: string | number | null; reject_reason?: string | null;
 }
 
 const IN_TYPES = new Set(["in", "transitin"]);
@@ -117,7 +146,51 @@ export function foldRow(r: RawRow): AiCallRow {
     promises: res?.promises.length ?? 0,
     promisesWithDeadline: res?.promises.filter((p) => p.deadline_text.trim() !== "").length ?? 0,
     unverifiedQuotes: quotes.filter((q) => q.quote_found === false).length,
+    pipelineGroup: pipelineGroupOf(r.pipeline_id == null ? null : Number(r.pipeline_id)),
+    rejectReason: r.reject_reason ?? null,
+    promiseState: null,
+    managerPromises: res ? managerPromisesOf(res).length : 0,
+    silentBeforeClose: null,
   };
+}
+
+/** Обіцянки менеджера з полями строку (рубрика first-touch-v1); без полів — не рахуються. */
+function managerPromisesOf(res: AnalysisResult): ModelPromise[] {
+  return res.promises.filter((p) => p.who === "manager" && p.channel && p.deadline_kind)
+    .map((p) => ({ who: "manager", what: p.what, deadline_text: p.deadline_text, channel: p.channel!, deadline_kind: p.deadline_kind!,
+      deadline_minutes: p.deadline_minutes ?? 0, deadline_date: p.deadline_date ?? "", conditional: p.conditional === true }));
+}
+
+/** Кінець розмови: початок + розмова. Від нього рахується термін і шукаються наші дзвінки. */
+const callEndOf = (calledAt: string, billsec: number): Date => new Date(Date.parse(calledAt) + billsec * 1000);
+
+/** Дзвінки на номери рядків від найранішої розмови — ОДНИМ запитом, а не по запиту на рядок. */
+async function callsByPhone(db: Db, phones: readonly string[], since: Date): Promise<Map<string, CallFact[]>> {
+  const out = new Map<string, CallFact[]>();
+  if (!phones.length) return out;
+  const r = await db.query<{ client_phone: string; calldate: Date; billsec: number; call_type: string }>(
+    `SELECT client_phone, calldate, billsec, call_type FROM ringostat_calls
+      WHERE client_phone = ANY($1::text[]) AND calldate >= $2 ORDER BY calldate`, [[...phones], since.toISOString()]);
+  for (const x of r.rows) {
+    const list = out.get(x.client_phone) ?? [];
+    list.push({ at: new Date(x.calldate), billsec: Number(x.billsec), callType: x.call_type });
+    out.set(x.client_phone, list);
+  }
+  return out;
+}
+
+export interface PromiseCheck { deadline: string; basis: DeadlineBasis; state: PromiseState }
+
+/** Термін і стан кожної обіцянки менеджера рядка — у порядку `result.promises` (клієнтські → `null`). */
+function checkPromises(res: AnalysisResult, calledAt: string, billsec: number, calls: readonly CallFact[], now: Date): (PromiseCheck | null)[] {
+  const end = callEndOf(calledAt, billsec);
+  const after = calls.filter((c) => c.at.getTime() > end.getTime());
+  return res.promises.map((p) => {
+    if (p.who !== "manager" || !p.channel || !p.deadline_kind) return null;
+    const mp = managerPromisesOf({ ...res, promises: [p] })[0];
+    const { deadline, basis } = promiseDeadline(mp, end);
+    return { deadline: deadline.toISOString(), basis, state: promiseState(mp, end, deadline, after, now) };
+  });
 }
 
 /** Рядок списку — ОДИН ДЗВІНОК: розмова, перша для кількох угод одного клієнта, несе всі ці угоди. */
@@ -136,6 +209,7 @@ export function collapseByCall(rows: readonly AiCallRow[]): AiCallListRow[] {
     if (seen) {
       if (!seen.kommoIds.includes(r.kommoId)) seen.kommoIds = [...seen.kommoIds, r.kommoId].sort((a, b) => a - b);
       if (r.dealCreatedAt < seen.dealCreatedAt) seen.dealCreatedAt = r.dealCreatedAt;
+      if (r.silentBeforeClose === true || (seen.silentBeforeClose == null && r.silentBeforeClose === false)) seen.silentBeforeClose = r.silentBeforeClose;
       continue;
     }
     const { kommoId, ...rest } = r;
@@ -160,8 +234,11 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
     SELECT ft.kommo_id, ft.uniqueid, ft.calldate, ft.call_type, ft.billsec, ft.created_at,
            ft.manager_id, m.name AS manager_name, m.team_id, tm.name AS team_name,
            t.status AS stt_status, t.failure AS stt_failure,
-           a.status AS llm_status, a.failure AS llm_failure, a.result
+           a.status AS llm_status, a.failure AS llm_failure, a.result,
+           rcx.client_phone, d.pipeline_id, d.reject_reason
       FROM (${q.sql}) ft
+      LEFT JOIN ringostat_calls rcx ON rcx.uniqueid = ft.uniqueid
+      LEFT JOIN deals d ON d.kommo_id = ft.kommo_id
       LEFT JOIN managers m ON m.id = ft.manager_id
       LEFT JOIN teams tm ON tm.id = m.team_id
       LEFT JOIN call_transcripts t ON t.uniqueid = ft.uniqueid AND t.provider = $8 AND t.model = $9
@@ -169,10 +246,34 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
      WHERE ($13::int IS NULL OR ft.manager_id = $13)
        AND ($14::int IS NULL OR m.team_id = $14)
      ORDER BY ft.calldate DESC, ft.kommo_id DESC`;
-  const params = [...q.params, STT_PROVIDER, ELEVENLABS_STT_MODEL, LLM_PROVIDER, GEMINI_MODEL, RUBRIC_PILOT_V0,
+  const params = [...q.params, STT_PROVIDER, ELEVENLABS_STT_MODEL, LLM_PROVIDER, GEMINI_MODEL, RUBRIC_CURRENT,
     scope.managerId ?? null, scope.teamId ?? null];
   const raw = (await db.query<RawRow>(sql, params)).rows;
-  return { rows: collapseByCall(raw.map(foldRow)), truncated: raw.length >= SCREEN_LIMIT };
+  const rows = raw.map(foldRow);
+
+  // П4–П7: стан обіцянок — з дзвінків Ringostat на номер після розмови.
+  const phoneOf = new Map(raw.map((x) => [x.uniqueid, x.client_phone ?? null]));
+  const withPromises = raw.filter((x, i) => rows[i].managerPromises > 0 && x.result && x.client_phone);
+  if (withPromises.length) {
+    const since = new Date(Math.min(...withPromises.map((x) => new Date(x.calldate).getTime())));
+    const calls = await callsByPhone(db, [...new Set(withPromises.map((x) => x.client_phone!))], since);
+    raw.forEach((x, i) => {
+      if (rows[i].managerPromises === 0 || !x.result) return;
+      const phone = phoneOf.get(x.uniqueid);
+      const checks = checkPromises(x.result, rows[i].calledAt, rows[i].billsec, phone ? calls.get(phone) ?? [] : [], now);
+      rows[i].promiseState = worstPromiseState(checks.filter((c): c is PromiseCheck => c != null).map((c) => c.state));
+    });
+  }
+
+  // П3: тиша перед закриттям — ядром фактів угоди (`adCallFacts`), тими самими параметрами вибірки.
+  const factsParams: AdCallFactsParams = { from, to, now, talkMinSec: FIRST_TOUCH_RULE.talkMinSec,
+    windowBefore: FIRST_TOUCH_RULE.windowBefore, adDealPredicate: ad.predicate, adSources: ad.adSources };
+  const facts = new Map((await adCallFacts(db, factsParams)).map((f) => [f.kommoId, f]));
+  for (const r of rows) {
+    const f = facts.get(r.kommoId);
+    r.silentBeforeClose = f ? silentBeforeClose(f, SILENCE_RULE.minGapHours) : null;
+  }
+  return { rows: collapseByCall(rows), truncated: raw.length >= SCREEN_LIMIT };
 }
 
 export interface AiCallCard {
@@ -185,6 +286,10 @@ export interface AiCallCard {
   durationSec: number | null;
   /** Перший наш ВИХІДНИЙ дзвінок на цей номер після розмови — факт Ringostat, не оцінка моделі. */
   nextOutboundAt: string | null;
+  /** Термін і стан кожної обіцянки — у порядку `result.promises`; обіцянки клієнта → `null`. */
+  promiseChecks: (PromiseCheck | null)[];
+  /** Дзвінки на номер після розмови (до 12, за 7 днів) — щоб стан обіцянки можна було перевірити очима. */
+  callsAfter: { at: string; billsec: number; direction: "in" | "out" }[];
 }
 
 /**
@@ -206,7 +311,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
      WHERE rc.uniqueid = $1
        AND ($7::int IS NULL OR rc.manager_id = $7)
        AND ($8::int IS NULL OR m.team_id = $8)`,
-  [uniqueid, STT_PROVIDER, ELEVENLABS_STT_MODEL, LLM_PROVIDER, GEMINI_MODEL, RUBRIC_PILOT_V0,
+  [uniqueid, STT_PROVIDER, ELEVENLABS_STT_MODEL, LLM_PROVIDER, GEMINI_MODEL, RUBRIC_CURRENT,
     scope.managerId ?? null, scope.teamId ?? null]);
   const raw = r.rows[0];
   if (!raw) return null;
@@ -223,6 +328,13 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
     : null;
   const allowed = canSeeTranscript;
   const done = row.state === "done";
+  const end = callEndOf(row.calledAt, row.billsec);
+  const after = raw.client_phone
+    ? (await callsByPhone(db, [raw.client_phone], end)).get(raw.client_phone) ?? [] : [];
+  const nowD = new Date();
+  const promiseChecks = done && raw.result ? checkPromises(raw.result, row.calledAt, row.billsec, after, nowD) : [];
+  const callsAfter = after.filter((c) => c.at.getTime() > end.getTime() && c.at.getTime() <= end.getTime() + 7 * 86_400_000)
+    .slice(0, 12).map((c) => ({ at: c.at.toISOString(), billsec: c.billsec, direction: IN_TYPES.has(c.callType) ? "in" as const : "out" as const }));
   const { kommoId: _k, dealCreatedAt: _d, ...rest } = row;
   const mc = done && raw.result ? raw.result.manager_channel : null;
   return {
@@ -233,6 +345,8 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
     managerChannel: mc === "0" ? 0 : mc === "1" ? 1 : null,
     durationSec: raw.duration_sec == null ? null : Number(raw.duration_sec),
     nextOutboundAt: next ? new Date(next).toISOString() : null,
+    promiseChecks,
+    callsAfter,
   };
 }
 

@@ -245,7 +245,7 @@ test("#764 GEMINI: контракт запиту, вихід із думками
     summary: "Клієнт питає ціну перевезення зерна.", manager_channel: "0", client_request: "20 т зерна Вінниця → Одеса",
     price: { discussed: true, quote: "Скільки коштує?" },
     objections: [{ what: "дорого", quote: "у конкурентів дешевше" }],
-    promises: [{ who: "manager", what: "передзвонити з ціною", deadline_text: "до обіду завтра", quote: "Порахую і передзвоню вам до обіду завтра" }],
+    promises: [{ who: "manager", what: "передзвонити з ціною", deadline_text: "до обіду завтра", quote: "Порахую і передзвоню вам до обіду завтра", channel: "call", deadline_kind: "day", deadline_minutes: 0, deadline_date: "2026-09-21", conditional: false }],
     next_step: "дзвінок із ціною",
   };
   const ok = interpretAnalysis({ text: JSON.stringify(good), finishReason: "STOP", blockReason: null, usage: null }, TURNS);
