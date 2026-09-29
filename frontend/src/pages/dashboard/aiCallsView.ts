@@ -7,7 +7,7 @@ import { addDays, type PeriodState } from "./periodRules";
  * в черзі», «не ввімкнено», «стеля», «запису немає» — різні причини, і жодна не показується нулем.
  */
 export type AiCallState = "not_queued" | "not_enabled" | "queued" | "capped" | "recording_unavailable"
-  | "stt_failed" | "llm_pending" | "llm_failed" | "done";
+  | "stt_failed" | "no_text" | "llm_pending" | "llm_failed" | "done";
 
 export type Tone = "ok" | "wait" | "warn" | "bad" | "muted";
 
@@ -19,6 +19,7 @@ export const STATE_UI: Readonly<Record<AiCallState, { label: string; tone: Tone;
   not_enabled: { label: "Не ввімкнено", tone: "muted", hint: "Ключа постачальника на сервері немає — назовні нічого не надсилається." },
   capped: { label: "Стеля місяця", tone: "warn", hint: "Бюджет місяця вичерпано; дзвінок розбереться, щойно з’явиться бюджет (з 1-го числа або після підняття стелі)." },
   recording_unavailable: { label: "Запису немає", tone: "muted", hint: "Ringostat не віддав запис розмови — аналізувати нічого." },
+  no_text: { label: "Розмова без тексту", tone: "muted", hint: "Запис розпізнано, але слів у ньому немає (тиша, гудки, автовідповідач) — аналізувати нічого, тож аналіз не запускається." },
   stt_failed: { label: "Не розпізнано", tone: "bad", hint: "Сервіс розпізнавання відмовив після всіх спроб; причина — у картці." },
   llm_failed: { label: "Аналіз не вдався", tone: "bad", hint: "Модель повернула непридатну відповідь після всіх спроб; причина — у картці." },
 };

@@ -4681,6 +4681,22 @@ export const sendSecretCode = async (id: number) => (await api.post<{ expiresInS
 export const revealSecret = async (id: number, code: string, reason: string) =>
   (await api.post<{ value: string; login: string | null; seconds: number }>(`/secrets/${id}/reveal`, { code, reason })).data;
 
+// 👥 ТІМЛІД І СЕЙФ СВОЄЇ КОМАНДИ (29.09.2026). Межа «своя команда» — на сервері; значення — лише з reveal/reset.
+export interface TeamPerson {
+  userId: number; name: string; login: string; position: string | null; phone: string | null; email: string | null;
+  telegram: string | null; birthDate: string | null; hiredAt: string | null; passwords: number; dashboardKnown: boolean;
+}
+export interface TeamSecretItem { id: number; kind: "password"; service: string; label: string | null; login: string | null; updated_at: string }
+export const fetchTeamVaultStatus = async () => (await api.get<SecretsStatus>("/team-vault/status")).data;
+export const createTeamVaultLink = async () => (await api.post<{ code: string; expiresInSec: number; botUsername: string | null; url: string | null }>("/team-vault/link")).data;
+export const unlinkTeamVault = async () => { await api.post("/team-vault/unlink"); };
+export const fetchTeamPeople = async () => (await api.get<{ rows: TeamPerson[]; reason: string | null }>("/team-vault/people")).data;
+export const fetchTeamPerson = async (userId: number) => (await api.get<{ person: TeamPerson; items: TeamSecretItem[] }>(`/team-vault/people/${userId}`)).data;
+export const sendTeamSecretCode = async (id: number) => (await api.post<{ expiresInSec: number }>(`/team-vault/${id}/code`)).data;
+export const revealTeamSecret = async (id: number, code: string, reason: string) =>
+  (await api.post<{ value: string; login: string | null; seconds: number }>(`/team-vault/${id}/reveal`, { code, reason })).data;
+export const resetTeamPassword = async (userId: number) => (await api.post<{ password: string }>(`/team-vault/people/${userId}/reset-password`)).data;
+
 
 // 🗂 Реєстр співробітників + імпорт «UTS Співробітники УКР» (18.09.2026, задача №3898).
 export interface EmployeeRow {

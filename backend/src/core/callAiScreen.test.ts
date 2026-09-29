@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Db } from "./adCallFacts.js";
-import { aiCallState, AI_CALL_STATES, TRANSCRIPT_ROLES, transcriptAllowed } from "./callAiScreen.js";
+import { aiCallState, AI_CALL_STATES, TRANSCRIPT_ROLES, transcriptAllowed, FIRST_TOUCH_TRANSCRIPT_ROLES } from "./callAiScreen.js";
 import { ACCESS_MATRIX } from "../auth/accessMatrix.js";
 
 /**
@@ -109,19 +109,20 @@ test("#830 ЕКРАН AI · ЖИВА СХЕМА: список = вибірка �
  * перший вихідний після розмови з Ringostat.
  * 🧨 Червоніє, якщо віддати текст усім, сховати його від КВП, чи відкрити картку поза скоупом.
  */
-test("#832 ЕКРАН AI · ЖИВА СХЕМА: картка — текст лише адміну й КВП, чужий дзвінок 404, наступний вихідний", async (t) => {
+test("#798 ЕКРАН AI · ЖИВА СХЕМА: картка — текст адміну, КВП, CEO й опдиру, тімліду — ні; чужий дзвінок 404; наступний вихідний", async (t) => {
   const c = await ctx(t); if (!c) return;
-  const { aiCallCard, transcriptAllowed } = await import("./callAiScreen.js");
-  const kvp = await aiCallCard(c.db, "x1", transcriptAllowed({ roleKey: "kvp" }), {});
+  const { aiCallCard, transcriptAllowed, FIRST_TOUCH_TRANSCRIPT_ROLES: R } = await import("./callAiScreen.js");
+  const kvp = await aiCallCard(c.db, "x1", transcriptAllowed({ roleKey: "kvp" }, R), {});
   assert.ok(kvp && kvp.turns && kvp.turns.length === 1 && !kvp.transcriptHidden, "дзеркало: КВП мусить бачити текст");
-  const admin = await aiCallCard(c.db, "x1", transcriptAllowed({ roleKey: "admin" }), {});
+  const admin = await aiCallCard(c.db, "x1", transcriptAllowed({ roleKey: "admin" }, R), {});
   assert.ok(admin?.turns, "дзеркало: адмін мусить бачити текст");
-  const lead = await aiCallCard(c.db, "x1", transcriptAllowed({ roleKey: "team_lead" }), { teamId: 901 });
+  const lead = await aiCallCard(c.db, "x1", transcriptAllowed({ roleKey: "team_lead" }, R), { teamId: 901 });
   assert.ok(lead, "🔴 тімлід не відкрив картку своєї команди");
   assert.equal(lead.turns, null, "🔴 тімлід отримав повний текст розмови");
   assert.equal(lead.transcriptHidden, true);
   assert.equal(lead.result?.promises.length, 2, "🔴 тімлід не бачить витягу з цитатами");
-  for (const role of ["ceo", "opdir"]) assert.equal((await aiCallCard(c.db, "x1", transcriptAllowed({ role: "admin", roleKey: role }), {}))?.turns, null, `🔴 ${role} отримав повний текст`);
+  for (const role of ["ceo", "opdir"]) assert.ok((await aiCallCard(c.db, "x1", transcriptAllowed({ role: "admin", roleKey: role }, R), {}))?.turns, `🔴 ${role} не отримав повного тексту (рішення 29.09.2026)`);
+  assert.equal((await aiCallCard(c.db, "x1", transcriptAllowed({ role: "admin", roleKey: "financier" }, R), {}))?.turns, null, "🔴 фінансист отримав повний текст");
   assert.equal(await aiCallCard(c.db, "x2", false, { teamId: 901 }), null, "🔴 тімлід відкрив картку чужої команди");
   assert.equal(await aiCallCard(c.db, "x3", false, { teamId: 901 }), null, "🔴 тімлід відкрив дзвінок без відомого менеджера");
   assert.equal(kvp.nextOutboundAt, new Date("2026-09-20T11:00:00Z").toISOString(), "🔴 наступний вихідний — не перший після розмови");
@@ -134,11 +135,11 @@ test("#832 ЕКРАН AI · ЖИВА СХЕМА: картка — текст л�
  * має підпис рівно для кожного з них — жодного «0» замість стану.
  * 🧨 Червоніє, якщо злити два стани в один або додати стан на бекенді без підпису на фронті.
  */
-test("#833 СТАНИ: розпізнавання × аналіз → дев’ять різних станів, фронт підписує кожен", async () => {
+test("#799 СТАНИ: розпізнавання × аналіз × порожній текст → десять станів, «Розмова без тексту» окремо, фронт підписує кожен", async () => {
   const stt = [null, "not_enabled", "queued", "working", "capped", "recording_unavailable", "failed", "done"];
   const llm = [null, "queued", "working", "not_enabled", "capped", "failed", "done"];
   const seen = new Set<string>();
-  for (const a of stt) for (const b of llm) seen.add(aiCallState(a, b));
+  for (const a of stt) for (const b of llm) for (const e of [false, true]) seen.add(aiCallState(a, b, e));
   assert.deepEqual([...seen].sort(), [...AI_CALL_STATES].sort(), "🔴 не всі стани досяжні або зʼявився зайвий");
   assert.equal(aiCallState(null, null), "not_queued");
   assert.equal(aiCallState("capped", null), "capped");
@@ -146,6 +147,8 @@ test("#833 СТАНИ: розпізнавання × аналіз → дев’�
   assert.equal(aiCallState("done", "failed"), "llm_failed");
   assert.equal(aiCallState("failed", null), "stt_failed");
   assert.equal(aiCallState("done", null), "llm_pending");
+  assert.equal(aiCallState("done", null, true), "no_text", "🔴 розмова без тексту висить «Аналіз у черзі» назавжди");
+  assert.equal(aiCallState("queued", null, true), "queued", "порожнеча має сенс лише для ГОТОВОГО розпізнавання");
   const V = await loadView();
   assert.deepEqual(Object.keys(V.STATE_UI).sort(), [...AI_CALL_STATES].sort(), "🔴 фронт і бекенд знають різні стани");
   const labels = Object.values(V.STATE_UI).map((x) => x.label);
@@ -237,17 +240,22 @@ test("#834 ПРОВОДКА ФРОНТУ: меню → секція → три �
  * текст розмов. Тепер роут кличе `transcriptAllowed(auth)`, а та дивиться лише на `roleKey`.
  * 🧨 Червоніє, якщо роут знову передасть `auth.role` або функція гляне на `role`.
  */
-test("#835 ПОВНИЙ ТЕКСТ ЗА КЛЮЧЕМ РОЛІ: CEO й опдир із сумісною роллю admin тексту не бачать", () => {
-  for (const key of ["ceo", "opdir", "team_lead", "financier", "hr", "manager"])
-    assert.equal(transcriptAllowed({ role: "admin", roleKey: key }), false, `🔴 ${key} із сумісною роллю admin бачить повний текст`);
-  assert.equal(transcriptAllowed({ role: "admin", roleKey: "kvp" }), true, "дзеркало: КВП мусить бачити текст");
-  assert.equal(transcriptAllowed({ role: "admin", roleKey: "admin" }), true, "дзеркало: адмін мусить бачити текст");
-  assert.equal(transcriptAllowed({ role: "admin" }), false, "🔴 токен без roleKey отримав текст за сумісною роллю");
+test("#797 ПОВНИЙ ТЕКСТ «ПЕРШОГО ДОТИКУ» ЗА КЛЮЧЕМ РОЛІ: адмін, КВП, CEO й опдир — так; тімлід, фінансист, HR, менеджер — ні", () => {
+  const R = FIRST_TOUCH_TRANSCRIPT_ROLES;
+  for (const key of ["team_lead", "financier", "hr", "manager"])
+    assert.equal(transcriptAllowed({ role: "admin", roleKey: key }, R), false, `🔴 ${key} із сумісною роллю admin бачить повний текст`);
+  for (const key of ["admin", "kvp", "ceo", "opdir"])
+    assert.equal(transcriptAllowed({ role: "admin", roleKey: key }, R), true, `дзеркало: ${key} мусить бачити текст (рішення 29.09.2026)`);
+  assert.equal(transcriptAllowed({ role: "admin" }, R), false, "🔴 токен без roleKey отримав текст за сумісною роллю");
+  // «Перевізники за розмовою» ділять `transcriptAllowed` — їхній набір рішення 29.09 НЕ розширило.
+  assert.equal(transcriptAllowed({ roleKey: "ceo" }), false, "🔴 розширення для «Першого дотику» протекло на типовий набір (Перевізники)");
+  const seeded = ["admin", "kvp", "ceo", "opdir", "team_lead"];
+  for (const r of R) assert.ok(seeded.includes(r), `🔴 ${r} бачить текст, але не бачить вкладки`);
   const route = SRC("routes/dashboard.ts");
   const at = route.indexOf('dashboardRouter.get("/ai-calls/:uniqueid"');
   assert.ok(at > 0, "🔴 роут картки не знайдено");
   const body = route.slice(at, route.indexOf("});", at));
-  assert.match(body, /aiCallCard\(pool, [^,]+, transcriptAllowed\(auth\),/, "🔴 роут картки вирішує право на текст не через transcriptAllowed(auth)");
+  assert.match(body, /aiCallCard\(pool, [^,]+, transcriptAllowed\(auth, FIRST_TOUCH_TRANSCRIPT_ROLES\),/, "🔴 роут картки вирішує право на текст не через transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES)");
 });
 
 /**
@@ -357,7 +365,7 @@ test("#792 ЕКРАН AI · ЖИВА СХЕМА: не передзвонив —
       VALUES ($1,$2,'out','ANSWERED',$3,$4,$5,$6,'https://rec/x')`, [u, at, sec, sec + 5, mgr, phone]);
   const analysed = async (u: string, minutes: number) => {
     const tid = (await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
-      VALUES ($1,'elevenlabs','scribe_v2','done','[]'::jsonb) RETURNING id`, [u])).rows[0].id;
+      VALUES ($1,'elevenlabs','scribe_v2','done','[{"channel":1,"start":0,"end":2,"text":"передзвоню за пів години","lang":"ukr"}]'::jsonb) RETURNING id`, [u])).rows[0].id;
     const res = { ...RESULT, objections: [], promises: [{ who: "manager", what: "передзвонити", deadline_text: "за пів години", quote: "q", quote_found: true,
       channel: "call", deadline_kind: "minutes", deadline_minutes: minutes, deadline_date: "", conditional: false }] };
     await c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result)
@@ -389,6 +397,11 @@ test("#792 ЕКРАН AI · ЖИВА СХЕМА: не передзвонив —
   const lag = new Map((await aiCallsList(c.db, FAKE_AD, "2026-09-24", "2026-09-24", NOW, {})).rows.map((r) => [r.uniqueid, r]));
   assert.equal(lag.get("y1")?.promiseState, "pending", "🔴 дзвінки ще не синхронізовано за межу, а вже «не передзвонив»");
   await c.raw.query("DELETE FROM job_runs WHERE name = 'syncRingostatCalls'");
+
+  // #799 на живій схемі: розпізнано, слів немає → «Розмова без тексту», а не вічне «Аналіз у черзі».
+  await c.raw.query(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments) VALUES ('y3','elevenlabs','scribe_v2','done','[]'::jsonb)`);
+  const empty = (await aiCallsList(c.db, FAKE_AD, "2026-09-24", "2026-09-24", NOW, {})).rows.find((r) => r.uniqueid === "y3");
+  assert.equal(empty?.state, "no_text", "🔴 порожня розшифровка на живій схемі — не «Розмова без тексту»");
 });
 
 /**

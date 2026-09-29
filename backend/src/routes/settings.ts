@@ -13,6 +13,9 @@ import { validateGrant } from "../auth/permGrant.js";
 import { wouldOrphanAdmin, otherActiveAdminCount } from "../auth/adminGuard.js";
 import { loginEnabledFor } from "../core/managerState.js";
 import { writeAudit } from "../db/audit.js";
+import { parseKey } from "../core/secretBox.js";
+import { storeDashboardPassword } from "../core/teamVault.js";
+import type { Db as SecretsDb } from "../core/secrets.js";
 
 export const settingsRouter = Router();
 settingsRouter.use(requireAuth);
@@ -284,7 +287,23 @@ settingsRouter.post("/users/:id/reset-password", async (req, res) => {
   if (!u.rows[0]) return res.status(404).json({ error: "Користувача не знайдено" });
   const password = await resetPassword(id);
   await writeAudit({ ...audit(req), action: "user.reset_password", targetType: "user", targetId: String(id), targetLabel: u.rows[0].email });
-  res.json({ password }); // ОДИН раз; у БД лише хеш
+  // 🔐 Той самий пароль — у сейф (сервіс «Дашборд»), щоб тімлід і HR могли його показати з кодом
+  // (29.09.2026). Без ключа сейфу скидання працює як раніше: пароль видно ОДИН раз, у сейфі його немає.
+  const vaultKey = parseKey(process.env.EMPLOYEE_SECRETS_KEY);
+  let storedInVault = false;
+  if (vaultKey) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await storeDashboardPassword(client as unknown as SecretsDb, vaultKey, req.auth!.userId, id, password);
+      await client.query("COMMIT");
+      storedInVault = true;
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      console.error("[settings] пароль не ліг у сейф:", (e as Error)?.message ?? "error");
+    } finally { client.release(); }
+  }
+  res.json({ password, storedInVault }); // ОДИН раз; у БД лише хеш, у сейфі — шифр
 });
 
 /**

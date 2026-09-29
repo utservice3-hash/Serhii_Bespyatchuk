@@ -546,6 +546,18 @@ export const ACCESS_MATRIX: AccessRow[] = [
      рівно admin, ceo, opdir, kvp, hr. Фінансист адмін-рівня, але права не має → 403 (на проді вкладку
      «Найм» йому ввімкнено поза сидом — див. ADMIN_DENIED_BY_PERM). Запис і показ — `deny-only`:
      проба дозволеної ролі надіслала б код у Telegram чи записала б дані. */
+  /* 👥 ТІМЛІД І СЕЙФ СВОЄЇ КОМАНДИ (29.09.2026). Вкладка `hiring` + право `view_team_secrets` (лише
+     team_lead) на рівні роутера; «своя команда» — `teamMemberVerdict` у кожному обробнику. Показ,
+     код, привʼязка й скидання — `deny-only`: проба дозволеної ролі надіслала б код у Telegram чи
+     скинула б людині пароль. Адмін-рівень права не має: у нього повний сейф у `/api/secrets`. */
+  { method: "GET", path: "/api/team-vault/status", cls: "GET", allow: ["team_lead"], deny: ["manager"] },
+  { method: "GET", path: "/api/team-vault/people", cls: "GET", allow: ["team_lead"], deny: ["manager"] },
+  { method: "GET", path: "/api/team-vault/people/:userId", cls: "GET", allow: ["team_lead"], deny: ["manager"] },
+  { method: "POST", path: "/api/team-vault/link", cls: "deny-only", allow: [], deny: ["manager"] },
+  { method: "POST", path: "/api/team-vault/unlink", cls: "deny-only", allow: [], deny: ["manager"] },
+  { method: "POST", path: "/api/team-vault/:id/code", cls: "deny-only", allow: [], deny: ["manager"] },
+  { method: "POST", path: "/api/team-vault/:id/reveal", cls: "deny-only", allow: [], deny: ["manager"] },
+  { method: "POST", path: "/api/team-vault/people/:userId/reset-password", cls: "deny-only", allow: [], deny: ["manager"] },
   { method: "GET", path: "/api/secrets/status", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
   { method: "GET", path: "/api/secrets/people", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
   { method: "GET", path: "/api/secrets/people/:userId", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },

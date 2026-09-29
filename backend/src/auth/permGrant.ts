@@ -77,6 +77,8 @@ export const PERMISSION_CATALOG = [
   "view_bank_totals",
   /** 🔐 Сейф доступів співробітників (18.09.2026): «Показати» пароль чи картку — admin, ceo, opdir, kvp, hr. */
   "view_employee_secrets",
+  /** 👥 Тімлід: люди й паролі СВОЄЇ команди (29.09.2026, Роман за погодженням Сергія). Лише team_lead. */
+  "view_team_secrets",
   "view_cashflow",
   "view_hidden_payments",
   "write_off_debt",

@@ -68,7 +68,7 @@ import * as metrics from "../core/metrics.js";
 import { ga4Configured } from "../ga4/client.js";
 import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
-import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE } from "../core/callAiScreen.js";
+import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES } from "../core/callAiScreen.js";
 import { carrierCallCard, carrierCallsList, carrierCallsMeta } from "../core/carrierCallScreen.js";
 import { closeModeOf, revertCarrierClose } from "../core/carrierClose.js";
 import { decisionQueue, recordDecision } from "../core/carrierDecisions.js";
@@ -10492,7 +10492,7 @@ dashboardRouter.get("/manager-report", async (req, res) => {
  * 🎧 «ПЕРШИЙ ДОТИК · AI» (прохід 1, рішення Романа 28.09.2026) — лише перегляд. Логіка й правила
  * доступу — `core/callAiScreen.ts`; межа — `pre("/api/dashboard/ai-calls")` → вкладка `ai-calls`
  * (routeTab), кламп скоупу — той самий `missedScopeFor`: тімлід бачить лише свою команду.
- * Повний текст розмови — лише admin і kvp (`TRANSCRIPT_ROLES`), решта — витяг із цитатами.
+ * Повний текст розмови — admin, kvp, ceo, opdir (`FIRST_TOUCH_TRANSCRIPT_ROLES`, рішення 29.09.2026), решта — витяг із цитатами.
  */
 dashboardRouter.get("/ai-calls", async (req, res) => {
   const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
@@ -10527,7 +10527,7 @@ dashboardRouter.get("/ai-calls/meta", async (_req, res) => {
 
 dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
   const auth = req.auth!;
-  const card = await aiCallCard(pool, String(req.params.uniqueid), transcriptAllowed(auth), missedScopeFor(auth, {}));
+  const card = await aiCallCard(pool, String(req.params.uniqueid), transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES), missedScopeFor(auth, {}));
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
   res.json({
     row: card.row, dealUrls: card.row.kommoIds.map((id) => ({ kommoId: id, url: kommoLeadUrl(id) })),

@@ -37,6 +37,7 @@ import { runDocText } from "./jobs/docText.js";
 import { signBotEnsureWebhook } from "./bot/signBot.js";
 import { vaultBotEnsureWebhook } from "./bot/vaultBot.js";
 import { secretsRouter } from "./routes/secrets.js";
+import { teamVaultRouter } from "./routes/teamVault.js";
 import { vaultBotRouter } from "./routes/vaultBot.js";
 import { oneOnOnesRouter } from "./routes/oneOnOnes.js";
 import { createOneOnOneReminders } from "./jobs/oneOnOneReminders.js";
@@ -172,6 +173,7 @@ app.use("/api/receivables-claims", receivablesClaimRouter); // кнопка «П
 app.use("/api/nominations", nominationsRouter); // 🏆 Номінації тижня (21.09.2026)
 app.use("/api/people", peopleRouter); // 📷 Фото співробітників (22.09.2026)
 app.use("/api/secrets", secretsRouter); // 🔐 сейф доступів співробітників (18.09.2026)
+app.use("/api/team-vault", teamVaultRouter); // 👥 тімлід: люди й паролі своєї команди (29.09.2026)
 app.use("/api/vault-bot", vaultBotRouter); // 🤖 вебхук бота «UTS Сейф» (без requireAuth, межа — секрет) // Найм: графік, кандидати, щоденний звіт (17.09.2026)
 app.use("/api/statistics", statisticsRouter);
 app.use("/api/statistics", statsSeriesRouter); // /series, /series/manual — падають повз депстат-роут
