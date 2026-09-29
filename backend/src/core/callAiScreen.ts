@@ -50,9 +50,16 @@ export const TRANSCRIPT_ROLES: ReadonlySet<string> = new Set(["admin", "kvp"]);
  * `admin_scope`), тож перевірка за `role` віддала б повний текст CEO й опдиру, хоча рішення
  * власника — лише адмін і КВП. Гейти ядра цього не бачили: вони кликали ядро з ключем напряму.
  */
-export function transcriptAllowed(auth: { role?: string; roleKey?: string | null }): boolean {
-  return auth.roleKey != null && TRANSCRIPT_ROLES.has(auth.roleKey);
+export function transcriptAllowed(auth: { role?: string; roleKey?: string | null }, roles: ReadonlySet<string> = TRANSCRIPT_ROLES): boolean {
+  return auth.roleKey != null && roles.has(auth.roleKey);
 }
+
+/**
+ * Хто бачить повний текст розмови на «Першому дотику · AI» (рішення Романа 29.09.2026: «відкривай повні тексти
+ * для ceo і оп диру»). Окремий набір, а НЕ розширення `TRANSCRIPT_ROLES`: той самий `transcriptAllowed` без
+ * другого аргументу стереже «Перевізників за розмовою», а про них рішення не було.
+ */
+export const FIRST_TOUCH_TRANSCRIPT_ROLES: ReadonlySet<string> = new Set(["admin", "kvp", "ceo", "opdir"]);
 
 /**
  * Стан рядка — ЧЕСНИЙ і РІЗНИЙ для кожної причини «ще не готово». Жоден не показується нулем.
@@ -66,11 +73,16 @@ export function transcriptAllowed(auth: { role?: string; roleKey?: string | null
  *   done                  — є витяг.
  */
 export type AiCallState = "not_queued" | "not_enabled" | "queued" | "capped" | "recording_unavailable"
-  | "stt_failed" | "llm_pending" | "llm_failed" | "done";
+  | "stt_failed" | "no_text" | "llm_pending" | "llm_failed" | "done";
 export const AI_CALL_STATES: readonly AiCallState[] = ["done", "llm_pending", "queued", "not_queued", "not_enabled",
-  "capped", "recording_unavailable", "stt_failed", "llm_failed"];
+  "capped", "recording_unavailable", "stt_failed", "no_text", "llm_failed"];
 
-export function aiCallState(stt: string | null, llm: string | null): AiCallState {
+/**
+ * `textEmpty` — розпізнавання завершилось, а слів у записі немає (тиша, гудки, автовідповідач). Такі розмови
+ * в аналіз не йдуть (черга аналізу бере лише непорожні), і без цього стану висіли б «Аналіз у черзі» назавжди
+ * (Роман 29.09.2026: «не роби аналіз для розмов без тексту, дай їм окремий статус»).
+ */
+export function aiCallState(stt: string | null, llm: string | null, textEmpty = false): AiCallState {
   if (stt == null) return "not_queued";
   if (stt === "not_enabled") return "not_enabled";
   if (stt === "queued" || stt === "working") return "queued";
@@ -78,6 +90,7 @@ export function aiCallState(stt: string | null, llm: string | null): AiCallState
   if (stt === "recording_unavailable") return "recording_unavailable";
   if (stt === "failed") return "stt_failed";
   // stt === "done"
+  if (textEmpty) return "no_text";
   if (llm == null || llm === "queued" || llm === "working") return "llm_pending";
   if (llm === "not_enabled") return "not_enabled";
   if (llm === "capped") return "capped";
@@ -123,12 +136,14 @@ interface RawRow {
   stt_status: string | null; stt_failure: string | null; llm_status: string | null; llm_failure: string | null;
   result: AnalysisResult | null;
   client_phone?: string | null; pipeline_id?: string | number | null; reject_reason?: string | null;
+  /** Розпізнано, але слів немає: `segments` порожній. */
+  stt_empty?: boolean | null;
 }
 
 const IN_TYPES = new Set(["in", "transitin"]);
 
 export function foldRow(r: RawRow): AiCallRow {
-  const state = aiCallState(r.stt_status, r.llm_status);
+  const state = aiCallState(r.stt_status, r.llm_status, r.stt_empty === true);
   const res = state === "done" ? r.result : null;
   const quotes = res ? [res.price, ...res.objections, ...res.promises] : [];
   return {
@@ -245,7 +260,8 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
            ft.manager_id, m.name AS manager_name, m.team_id, tm.name AS team_name,
            t.status AS stt_status, t.failure AS stt_failure,
            a.status AS llm_status, a.failure AS llm_failure, a.result,
-           rcx.client_phone, d.pipeline_id, d.reject_reason
+           rcx.client_phone, d.pipeline_id, d.reject_reason,
+           (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty
       FROM (${q.sql}) ft
       LEFT JOIN ringostat_calls rcx ON rcx.uniqueid = ft.uniqueid
       LEFT JOIN deals d ON d.kommo_id = ft.kommo_id
@@ -313,6 +329,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
     SELECT rc.uniqueid, rc.calldate, rc.call_type, rc.billsec, rc.calldate AS created_at, 0 AS kommo_id,
            rc.manager_id, m.name AS manager_name, m.team_id, tm.name AS team_name, rc.client_phone,
            t.status AS stt_status, t.failure AS stt_failure, t.segments, t.duration_sec,
+           (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
            a.status AS llm_status, a.failure AS llm_failure, a.result
       FROM ringostat_calls rc
       LEFT JOIN managers m ON m.id = rc.manager_id
