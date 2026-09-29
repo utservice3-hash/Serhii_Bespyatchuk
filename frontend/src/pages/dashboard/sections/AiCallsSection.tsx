@@ -175,8 +175,8 @@ export function AiCallsSection() {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
               <thead>
                 <tr style={{ textAlign: "left", color: "var(--text-muted)", fontSize: 12.5 }}>
-                  <th style={cell}>Розмова</th><th style={cell}>Менеджер</th><th style={cell}>Стан</th>
-                  <th style={cell}>Про що</th><th style={cell}>Ціна</th><th style={cell}>Заперечення</th><th style={cell}>Обіцянка</th>
+                  <th style={cell}>Розмова</th><th style={cell}>Менеджер</th><th style={cell}>Обіцянка</th>
+                  <th style={cell}>Про що</th><th style={cell}>Ціна</th><th style={cell}>Заперечення</th><th style={cell}>Стан</th>
                 </tr>
               </thead>
               <tbody>
@@ -188,14 +188,14 @@ export function AiCallsSection() {
                         {fmtTime(r.calledAt)}<div style={{ fontSize: 12, color: "var(--text-muted)" }}>{r.direction === "in" ? "вхідний" : "вихідний"} · {mmss(r.billsec)}</div>
                       </td>
                       <td style={cell}>{r.managerName ?? "невідомий"}<div style={{ fontSize: 12, color: "var(--text-muted)" }}>{r.teamName ?? ""}</div></td>
-                      <td style={cell}><StateChip state={r.state} /></td>
-                      <td style={{ ...cell, maxWidth: 420 }}>{r.summary ?? <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
-                      <td style={cell}>{r.priceDiscussed == null ? "—" : r.priceDiscussed ? "так" : "ні"}</td>
-                      <td style={cell}>{r.state === "done" ? r.objections : "—"}</td>
                       <td style={cell}>{r.state !== "done" ? "—" : r.promiseState
                         ? <span title={PROMISE_UI[r.promiseState].hint} style={{ background: TONE_COLOR[PROMISE_UI[r.promiseState].tone].bg, color: TONE_COLOR[PROMISE_UI[r.promiseState].tone].fg,
                             borderRadius: 999, padding: "1px 8px", fontSize: 12, whiteSpace: "nowrap" }}>{PROMISE_UI[r.promiseState].label}</span>
                         : <span style={{ color: "var(--text-muted)" }}>немає</span>}</td>
+                      <td style={{ ...cell, maxWidth: 420 }}>{r.summary ?? <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
+                      <td style={cell}>{r.priceDiscussed == null ? "—" : r.priceDiscussed ? "так" : "ні"}</td>
+                      <td style={cell}>{r.state === "done" ? r.objections : "—"}</td>
+                      <td style={cell}>{r.state === "done" ? null : <StateChip state={r.state} />}</td>
                   </tr>
                 ))}
               </tbody>
