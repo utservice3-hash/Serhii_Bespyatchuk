@@ -7,7 +7,7 @@
  * транзакцію, тож перенос у суд — справа, копії файлів і дві події — або всі, або жоден).
  */
 import {
-  CLAIM_STATUS_LABEL, CASE_STATUS_LABEL, DOC_TYPE_LABEL, CLAIM_DOC_TYPES, CASE_DOC_TYPES,
+  CLAIM_STATUS_LABEL, CASE_STATUS_LABEL, DOC_TYPE_LABEL, CLAIM_DOC_TYPES, CASE_DOC_TYPES, ISSUE_DOC_TYPES,
   isClaimStatus, isCaseStatus, isDocType, needsCourtCase, caseTitleFor, debtSnapshot, parseDateOrNull,
   type ClaimStatus, type CaseStatus, type DocType, type ReceivableRowLike,
 } from "./baRules.js";
@@ -19,6 +19,8 @@ export class BaError extends Error {
 }
 
 type Owner = "claim" | "case";
+/** Власник файла: претензія, справа або видача техніки (договір, прохід 2). */
+export type FileOwner = Owner | "issue";
 const DATE = (col: string) => `to_char(${col}, 'YYYY-MM-DD')`;
 const TS = (col: string) => `to_char(${col} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
 
@@ -64,7 +66,7 @@ function shapeClaim(r: any) {
 
 export async function listClaims(db: Db) {
   const r = await db.query(`SELECT ${CLAIM_COLS} FROM ba_claims c LEFT JOIN ba_court_cases k ON k.claim_id = c.id
-    ORDER BY c.sent_on DESC NULLS FIRST, c.id DESC`);
+    ORDER BY c.sent_on DESC NULLS LAST, c.id DESC`);
   return r.rows.map(shapeClaim);
 }
 
@@ -276,21 +278,31 @@ export async function setCaseArchived(db: Db, actor: number, id: number, archive
 }
 
 // ── Файли ────────────────────────────────────────────────────────────────────
-export async function insertFile(db: Db, actor: number, kind: Owner, ownerId: number,
+const FILE_OWNER = {
+  claim: { table: "ba_claims", types: CLAIM_DOC_TYPES, missing: "Претензію не знайдено" },
+  case: { table: "ba_court_cases", types: CASE_DOC_TYPES, missing: "Справу не знайдено" },
+  issue: { table: "ba_equipment_issues", types: ISSUE_DOC_TYPES, missing: "Видачу не знайдено" },
+} as const;
+export async function insertFile(db: Db, actor: number, kind: FileOwner, ownerId: number,
   f: { docType: unknown; name: string; storedName: string; mime: string; size: number }): Promise<number> {
-  if (!isDocType(f.docType) || !(kind === "claim" ? CLAIM_DOC_TYPES : CASE_DOC_TYPES).includes(f.docType)) {
+  const o = FILE_OWNER[kind];
+  if (!isDocType(f.docType) || !o.types.includes(f.docType)) {
     throw new BaError(400, "Невідомий тип документа");
   }
-  const table = kind === "claim" ? "ba_claims" : "ba_court_cases";
-  const exists = (await db.query(`SELECT 1 FROM ${table} WHERE id = $1`, [ownerId])).rows[0];
-  if (!exists) throw new BaError(404, kind === "claim" ? "Претензію не знайдено" : "Справу не знайдено");
+  const exists = (await db.query<{ equipment_id?: number }>(
+    `SELECT ${kind === "issue" ? "equipment_id" : "1 AS one"} FROM ${o.table} WHERE id = $1`, [ownerId])).rows[0];
+  if (!exists) throw new BaError(404, o.missing);
   const r = await db.query<{ id: number }>(
     `INSERT INTO ba_files (owner_kind, owner_id, doc_type, name, stored_name, mime, size_bytes, created_by)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`, [kind, ownerId, f.docType, f.name, f.storedName, f.mime, f.size, actor]);
-  await logEvent(db, kind, ownerId, actor, `Додано документ «${DOC_TYPE_LABEL[f.docType]}»: ${f.name}`);
+  const what = `Додано документ «${DOC_TYPE_LABEL[f.docType]}»: ${f.name}`;
+  // Видача окремої історії не має — подія лягає в історію одиниці техніки.
+  if (kind === "issue") {
+    await db.query(`INSERT INTO ba_events (owner_kind, owner_id, actor_id, what) VALUES ('equipment', $1, $2, $3)`, [exists.equipment_id, actor, what]);
+  } else await logEvent(db, kind, ownerId, actor, what);
   return r.rows[0].id;
 }
-export async function fileForDownload(db: Db, kind: Owner, ownerId: number, fileId: number) {
+export async function fileForDownload(db: Db, kind: FileOwner, ownerId: number, fileId: number) {
   const r = await db.query<{ name: string; stored_name: string; mime: string }>(
     `SELECT name, stored_name, mime FROM ba_files WHERE id = $1 AND owner_kind = $2 AND owner_id = $3`, [fileId, kind, ownerId]);
   if (!r.rows[0]) throw new BaError(404, "Файл не знайдено");

@@ -134,6 +134,7 @@ export const MANIFEST_FILES: string[] = [
   "core/missedCalls.test.js",
   "core/hiring.test.js",
   "core/baClaims.test.js",
+  "core/baEquipment.test.js",
   "core/finance.test.js",
   "core/hiringTraining.test.js",
   "core/candidateTraining.test.js",
@@ -308,6 +309,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "tldv_meetings",
   "workua_responses",
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_import_months",
+  "ba_equipment_issues",
 ];
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
@@ -2101,6 +2103,16 @@ export const MANIFEST_TESTS: string[] = [
   "#934 ФІНАНСИ: кожна fin_* таблиця відібрана в ai_readonly після CREATE і є у FORBIDDEN_TABLES",
   "#935 ЖИВИЙ SQL: перенесення — підсумок = сума рядків, файловий підсумок поруч, повтор — 409",
   "#936 ФРОНТ ФІНАНСІВ: меню після «Статистик (відділи)», статичний імпорт, права — з відповіді сервера, є «Повернути»",
+  // core/baEquipment.test.ts — Бізнес-асистент, прохід 2: облік техніки й ТТН-моніторинг (29.09.2026).
+  "#980 ТТН: місяць «два тому», межі включно, без угод — «—», норма 70%",
+  "#981 ТТН: посилання на Kommo — рівно фільтр Даші для менеджера й місяця",
+  "#982 ЖИВИЙ SQL ТТН: угоди == фільтр Даші, межі місяця за Києвом, знімок при збереженні",
+  "#983 ЖИВИЙ SQL ТЕХНІКИ: одна відкрита видача, повернення й скасування, звільнений не повернено",
+  "#984 КОМУ ВИДАТИ: з реєстру співробітників — рівно id, ПІБ і стан",
+  "#985 ЖИВИЙ SQL: претензії — за датою відправки, нові зверху, невідправлені внизу",
+  "#986 ba_equipment_issues відібрана в ai_readonly після GRANT і CREATE і є в FORBIDDEN_TABLES",
+  "#987 ПЕРЕНЕСЕННЯ: розкладка таблиці техніки, сентинели, «вільний», зіставлення з реєстром",
+  "#988 ФРОНТ БА-2: техніка й ТТН — справжні вкладки, статичний імпорт, перегляд без window.open",
 ];
 
 /**
