@@ -137,6 +137,8 @@ test("#917 ДИМ: після знімка свої дані до пт 23:59, «
     assert.equal((await own("admin", 13, "cars", [101], 3)).status, 409, "🔴 після «Зафіксувати остаточно» правку менеджерів прийнято");
     assert.equal((await own("lg", 11, "lgCars", [301], 2)).status, 409, "🔴 після «Зафіксувати остаточно» правку лідогенераторів прийнято");
     assert.equal((await conv("admin")).status, 409, "🔴 після «Зафіксувати остаточно» правку конверсії прийнято");
+    assert.equal((await call("POST", "/review", { who: "lg", body: { weekFrom: WEEK, teamId: 11, action: "confirm", nominations: ["lgQuotes"] } })).status, 409,
+      "🔴 після «Зафіксувати остаточно» масове погодження лідогенераторів прийнято");
     await assert.rejects(() => c.query(`DELETE FROM nomination_week_locks`), /заборонено/, "🔴 остаточну фіксацію можна прибрати");
   } finally {
     await c.end();
