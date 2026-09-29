@@ -4,6 +4,7 @@ import {
   fetchManualSlides, createManualSlide, updateManualSlide, deleteManualSlide, restoreManualSlide, fetchPeoplePhotos,
   type NominationWeek, type NominationTeam, type NominationCell, type NominationKey, type ManualSlidesResp, type ManualSlide, type ManualSlideKind, type PersonPhoto,
   type DayItems, type NominationDef, type RnkConvView,
+  lockNominationWeek,
 } from "../../../api";
 import { EmployeePhoto } from "./EmployeePhotos";
 import { NominationsPresentation } from "./NominationsPresentation";
@@ -18,7 +19,7 @@ import "./nominations.css";
  *
  * Модель (затверджено Романом 22.09): система ПРОПОНУЄ переможця з CRM «як на Звіті», тімлід натискає
  * «Погоджуюсь» або вводить «Свої дані» (хто, число, звідки воно); рядок, де переможець — сам тімлід,
- * вирішує керівництво. Кожне рішення скасовне до фіксації (вт 08:00). Хто що може — вирішує СЕРВЕР
+ * вирішує керівництво. Кожне рішення скасовне до фіксації (вт 15:00). Хто що може — вирішує СЕРВЕР
  * (`canReview` у кожній клітинці); логіка груп, відліку й повідомлення — `../nominationsView.ts` (гейти #650-#651).
  *
  * 🔴 Пропозиція системи не ховається ніколи: «свої дані» показуються поруч із закресленою пропозицією.
@@ -56,6 +57,7 @@ export function NominationsSection() {
   const [drill, setDrill] = useState<Drill | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [copied, setCopied] = useState<"ok" | string | null>(null);
+  const [locking, setLocking] = useState(false);
   const req = useRef(0);
 
   const load = useCallback((w?: string) => {
@@ -95,6 +97,15 @@ export function NominationsSection() {
   // Відповідь на рішення застосовуємо, лише якщо людина досі на тому самому тижні (не перетираємо новий старим).
   const applyData = (d: NominationWeek) => setData((cur) => (cur && cur.weekFrom !== d.weekFrom ? cur : d));
 
+  // 🔒 Остаточна фіксація незворотна — тому підтвердження словами, а не лише кліком.
+  const lockWeek = async () => {
+    if (!window.confirm(`Зафіксувати тиждень ${dm(data.weekFrom)}–${dm(data.weekTo)} остаточно? Після цього ніхто — ні тімліди, ні ви — не зможе змінити жодного числа, зокрема лідогенерацію й конверсію РНК.`)) return;
+    setLocking(true);
+    try { applyData(await lockNominationWeek(data.weekFrom)); }
+    catch (e) { window.alert(errorOf(e)); }
+    finally { setLocking(false); }
+  };
+
   const copyMessage = async () => {
     const text = leadsMessage(data, window.location.origin);
     try { await navigator.clipboard.writeText(text); setCopied("ok"); }
@@ -103,14 +114,18 @@ export function NominationsSection() {
   };
 
   const open = editOpen(data, now);
+  const dueTime = data.freezeDueAt.slice(11, 16) || "15:00";
+  const editDay = data.editUntil ? dm(kyivDateOf(Date.parse(data.editUntil) - 1)) : "";
   const statePill = frozen
-    ? open
-      ? <span className="nm-pill draft">Зафіксовано {data.frozenAt ? whenText(data.frozenAt) : ""} · свої дані — до вт 14:00 · лишилось {countdown(data.editUntil!, now).text}</span>
-      : <span className="nm-pill ok">Зафіксовано {data.frozenAt ? whenText(data.frozenAt) : ""}</span>
+    ? data.locked
+      ? <span className="nm-pill ok">Зафіксовано остаточно{data.locked.by ? ` · ${data.locked.by}` : ""} · {whenText(data.locked.at)}</span>
+      : open
+        ? <span className="nm-pill draft">Знімок {data.frozenAt ? whenText(data.frozenAt) : ""} · свої дані — до пт {editDay}, 23:59 · лишилось {countdown(data.editUntil!, now).text}</span>
+        : <span className="nm-pill ok">Зафіксовано · час правок вийшов</span>
     : ongoing
       ? <span className="nm-pill wait">Тиждень ще триває — числа зміняться до неділі</span>
       : <span className={`nm-pill ${cd.level === "danger" || cd.level === "past" ? "danger" : "draft"}`}>
-          {cd.level === "past" ? `Фіксація вт ${dm(data.freezeDueAt.slice(0, 10))} — ось-ось` : `Перевірте до вт ${dm(data.freezeDueAt.slice(0, 10))}, 08:00 · лишилось ${cd.text}`}
+          {cd.level === "past" ? `Фіксація вт ${dm(data.freezeDueAt.slice(0, 10))} — ось-ось` : `Перевірте до вт ${dm(data.freezeDueAt.slice(0, 10))}, ${dueTime} · лишилось ${cd.text}`}
         </span>;
 
   const header = (
@@ -129,6 +144,7 @@ export function NominationsSection() {
       {!isLead ? (
         <div className="nm-head-actions">
           {!frozen ? <button className="nm-btn lg" onClick={() => void copyMessage()}>{copied === "ok" ? "Скопійовано ✓" : "Скопіювати повідомлення для тімлідів"}</button> : null}
+          {frozen && open ? <button className="nm-btn lg" disabled={locking} onClick={() => void lockWeek()}>{locking ? "Фіксую…" : "Зафіксувати остаточно"}</button> : null}
           <button className="nm-btn lg p" onClick={() => setShow(true)}>Відкрити презентацію</button>
         </div>
       ) : null}
@@ -147,7 +163,7 @@ export function NominationsSection() {
           <textarea className="nm-inp" readOnly value={copied} rows={5} onFocus={(e) => e.currentTarget.select()} />
           <button className="nm-btn" onClick={() => setCopied(null)}>Закрити</button></div>
       ) : null}
-      {fs ? <div className="nm-card nm-banner">Тиждень зафіксовано{data.frozenAt ? ` ${whenText(data.frozenAt)}` : ""}: погоджено <b>{fs.confirmed}</b>, свої дані — <b>{fs.own}</b>, без рішення — <b>{fs.noDecision}</b> (пішла пропозиція системи). {open ? "До вт 14:00 ще можна внести свої дані — вони підуть на слайд із ✎." : "Змінити вже не можна."}</div> : null}
+      {fs ? <div className="nm-card nm-banner">Тиждень зафіксовано{data.frozenAt ? ` ${whenText(data.frozenAt)}` : ""}: погоджено <b>{fs.confirmed}</b>, свої дані — <b>{fs.own}</b>, без рішення — <b>{fs.noDecision}</b> (пішла пропозиція системи). {open ? `До пт ${editDay}, 23:59 (або до «Зафіксувати остаточно») ще можна внести свої дані — вони підуть на слайд із ✎.` : "Змінити вже не можна."}</div> : null}
 
       <div className={`nm-layout${drill ? " with-aside" : ""}`}>
         <div className="nm-main">
@@ -277,7 +293,7 @@ function TeamBoard({ week, team, mode, onData, onDrill }: {
   const [errs, setErrs] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<NominationKey | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  // лідогенератори живі — правляться й після фіксації; решта — лише «свої дані» до вт 14:00
+  // лідогенератори живі — правляться й після фіксації; решта — лише «свої дані»; усе — до пт 23:59 або «Зафіксувати остаточно»
   const frozen = week.state === "frozen" && team.dept !== "lg";
   const aboutIds = mode === "lead" ? [week.viewer.managerId] : team.leads.map((l) => l.managerId);
   const g = groupCells(team.cells, aboutIds, week.leadgenDefs.filter((d) => d.noCrm).map((d) => d.key));
@@ -340,7 +356,7 @@ function TeamBoard({ week, team, mode, onData, onDrill }: {
       {!frozen && bulkable.length > 1 ? (
         <div className="nm-bulk">
           <button className="nm-btn lg p" disabled={busy != null} onClick={() => void bulk()}>{busy === "bulk" ? "Погоджую…" : `Погодитись з рештою (${bulkable.length})`}</button>
-          <span className="nm-muted">Кожне рішення можна скасувати до вт 08:00</span>
+          <span className="nm-muted">Кожне рішення можна скасувати до вт {week.freezeDueAt.slice(11, 16) || "15:00"}</span>
         </div>
       ) : null}
     </div>
@@ -443,7 +459,7 @@ function Decision({ week, cell, mode, about, busy, saving, err, frozen, afterFre
   }
   if (!cell.canReview) return <span className="nm-muted">{about && mode === "lead" ? "Вирішує керівництво" : cell.whyNot ?? ""}</span>;
   if (afterFreeze) {
-    // ✎ Після фіксації (до вт 14:00): лише «свої дані» поверх знімка; скасувати можна лише поправку, внесену після фіксації.
+    // ✎ Після фіксації (до пт 23:59 або «Зафіксувати остаточно»): лише «свої дані» поверх знімка; скасувати можна лише поправку, внесену після фіксації.
     const mine = st === "overridden" && cell.review?.action === "override";
     return (
       <div className="nm-dec">

@@ -19,6 +19,12 @@ import { RNK_TEAM_IDS } from "../core/metrics.js";
 export const nominationsRouter = Router();
 nominationsRouter.use(requireAuth);
 
+/** Годинник роуту — підміняється лише в тестах, щоб межу «пт 23:59» перевіряти з обох боків. */
+export const nominationClock = { now: (): Date => new Date() };
+/** Правки зафіксованого тижня закриті: минула пт 23:59 або натиснули «Зафіксувати остаточно». Чернетку не замикає. */
+const editClosed = (view: WeekView): boolean =>
+  view.state === "frozen" && !isEditOpen(view.weekFrom, nominationClock.now(), view.locked?.at ?? null);
+
 type Viewer = { role: "admin" | "team_lead"; teamId: number | null; managerId: number | null };
 function viewerOf(req: Request): Viewer | null {
   const a = req.auth!;
@@ -32,11 +38,12 @@ function viewerOf(req: Request): Viewer | null {
  * тижня з реєстру «Співробітників» (менеджер → співробітник через `employees.manager_id`).
  */
 async function withRights(view: WeekView, v: Viewer) {
+  const closed = editClosed(view);
   // Лідогенератори живі (не в знімку) — їх можна правити й після фіксації тижня.
   const withCells = (t: TeamWeek) => ({
     ...t,
     cells: t.cells.map((c) => {
-      const r = view.state === "frozen" && t.teamId !== LEADGEN_TEAM_ID && !isEditOpen(view.weekFrom, new Date()) ? { ok: false as const, why: "тиждень зафіксовано" }
+      const r = closed ? { ok: false as const, why: view.locked ? "тиждень зафіксовано остаточно" : "час правок вийшов (пт 23:59)" }
         : canReview(v, { teamId: t.teamId, crmWinners: c.crm.state === "ok" ? c.crm.winners : [], overrideManagerIds: c.final.status === "overridden" ? c.final.winners : null });
       return { ...c, canReview: r.ok, whyNot: r.ok ? null : r.why };
     }),
@@ -48,8 +55,8 @@ async function withRights(view: WeekView, v: Viewer) {
   const rnkLead = v.teamId != null && (RNK_TEAM_IDS as readonly number[]).includes(v.teamId);
   const rnkConv = view.rnkConv && (admin || rnkLead) ? {
     comment: view.rnkConv.comment,
-    canComment: admin,
-    rows: view.rnkConv.rows.filter((row) => admin || row.teamId === v.teamId).map((row) => ({ ...row, canEditRow: admin || row.teamId === v.teamId })),
+    canComment: admin && !closed,
+    rows: view.rnkConv.rows.filter((row) => admin || row.teamId === v.teamId).map((row) => ({ ...row, canEditRow: !closed && (admin || row.teamId === v.teamId) })),
   } : null;
   return {
     ...view,
@@ -94,9 +101,11 @@ nominationsRouter.post("/review", safe(async (req: Request, res: Response) => {
   const parsed = validateReview(req.body);
   if (!parsed.ok) return res.status(400).json({ error: parsed.error });
   const b = parsed.value;
-  // ✎ Зафіксований тиждень до вт 14:00 приймає лише «свої дані» (і їх скасування) — поверх знімка, не в нього.
-  const frozen = b.teamId !== LEADGEN_TEAM_ID ? await frozenWeek(b.weekFrom) : null;
-  if (frozen && !isEditOpen(b.weekFrom, new Date())) return res.status(409).json({ error: "Тиждень уже зафіксовано, час правок (вт 14:00) вийшов — змінити неможливо" });
+  // ✎ Зафіксований тиждень до пт 23:59 (або кнопки) приймає лише «свої дані» (і їх скасування) — поверх знімка.
+  // Лідогенератори живуть поза знімком, але замикаються тією самою межею.
+  const fz = await frozenWeek(b.weekFrom);
+  if (fz && editClosed(fz)) return res.status(409).json({ error: fz.locked ? "Тиждень зафіксовано остаточно — змінити неможливо" : "Час правок вийшов (пт 23:59) — змінити неможливо" });
+  const frozen = b.teamId !== LEADGEN_TEAM_ID ? fz : null;
   if (frozen && b.action === "confirm") return res.status(409).json({ error: "Після фіксації можна лише внести свої дані" });
   const draft = frozen ?? await draftWeek(b.weekFrom);
   const team = teamOf(draft, b.teamId);
@@ -125,7 +134,8 @@ async function bulkConfirm(req: Request, res: Response, v: Viewer) {
   const parsed = validateBulkConfirm(req.body);
   if (!parsed.ok) return res.status(400).json({ error: parsed.error });
   const b = parsed.value;
-  if (b.teamId !== LEADGEN_TEAM_ID && await frozenWeek(b.weekFrom)) return res.status(409).json({ error: "Тиждень уже зафіксовано — змінити неможливо" });
+  const fz = await frozenWeek(b.weekFrom);
+  if (fz && (b.teamId !== LEADGEN_TEAM_ID || editClosed(fz))) return res.status(409).json({ error: "Тиждень уже зафіксовано — погоджувати неможливо" });
   const draft = await draftWeek(b.weekFrom);
   const team = teamOf(draft, b.teamId);
   if (!team) return res.status(404).json({ error: "Команди немає в заліку" });
@@ -160,6 +170,8 @@ nominationsRouter.post("/rnk-conv", safe(async (req: Request, res: Response) => 
   const p = validateConvEdit(req.body);
   if (!p.ok) return res.status(400).json({ error: p.error });
   const b = p.value;
+  const fz = await frozenWeek(b.weekFrom);
+  if (fz && editClosed(fz)) return res.status(409).json({ error: fz.locked ? "Тиждень зафіксовано остаточно — змінити неможливо" : "Час правок вийшов (пт 23:59) — змінити неможливо" });
   if (b.action === "comment") {
     if (v.role !== "admin") return res.status(403).json({ error: "Коментар до статистики відділу пише керівництво" });
   } else {
@@ -173,6 +185,21 @@ nominationsRouter.post("/rnk-conv", safe(async (req: Request, res: Response) => 
     `INSERT INTO nomination_conv_edits (week_from, manager_id, action, taken, won, on_slide, comment, user_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
     [b.weekFrom, b.managerId, b.action, b.taken, b.won, b.onSlide, b.comment, req.auth!.userId]);
   res.json(await withRights(await nominationWeek(b.weekFrom, v.teamId), v));
+}));
+
+/**
+ * 🔒 «ЗАФІКСУВАТИ ОСТАТОЧНО» (29.09.2026): керівництво закриває правки зафіксованого тижня раніше за пт 23:59 —
+ * напр., одразу після презентації. Лише для тижня, що вже має знімок; повторне натискання нічого не змінює.
+ */
+nominationsRouter.post("/lock", safe(async (req: Request, res: Response) => {
+  const v = viewerOf(req);
+  if (!v || v.role !== "admin") return res.status(403).json({ error: "Зафіксувати остаточно може лише керівництво" });
+  const weekFrom = typeof req.body?.weekFrom === "string" ? req.body.weekFrom : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(weekFrom) || weekOf(weekFrom).from !== weekFrom) return res.status(400).json({ error: "weekFrom — понеділок тижня (YYYY-MM-DD)" });
+  const fz = await frozenWeek(weekFrom);
+  if (!fz) return res.status(409).json({ error: "Тиждень ще не зафіксовано — спершу знімок (вт 15:00)" });
+  await pool.query(`INSERT INTO nomination_week_locks (week_from, user_id) VALUES ($1, $2) ON CONFLICT (week_from) DO NOTHING`, [weekFrom, req.auth!.userId]);
+  res.json(await withRights(await nominationWeek(weekFrom, v.teamId), v));
 }));
 
 /**

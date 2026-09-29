@@ -20,7 +20,7 @@ import { kommoLeadUrl } from "./kommoLinks.js";
 import { leadgenStats } from "./leadgenStats.js";
 import {
   NOMINATIONS, NOMINATION_RULE_VERSION, rankNominees, applyReview, fingerprint, deptWinners, weekOf, isFreezeDue, snapshotRows,
-  teamRanking, rankingFromExtra, freezeInstant, editUntilInstant, overlayAfterFreeze, LEADGEN_NOMINATIONS, buildRnkConv,
+  teamRanking, rankingFromExtra, freezeInstant, freezeDueLabel, editUntilInstant, overlayAfterFreeze, LEADGEN_NOMINATIONS, buildRnkConv,
   type NominationKey, type Ranked, type Review, type Final, type NominationCell, type TeamWeek, type DeptWinner, type WeekView,
   type RnkConv, type ConvEdit,
 } from "./nominationRules.js";
@@ -196,13 +196,21 @@ export async function draftWeek(weekFrom: string, teamId: number | null = null):
   const fz = weekOf(weekFrom);
   const view: WeekView = {
     weekFrom: from, weekTo: to, state: "draft", frozenAt: null, ruleVersion: NOMINATION_RULE_VERSION,
-    freezeDueAt: `${addDaysIso(fz.from, 8)} 08:00`, freezeInstant: freezeInstant(fz.from), editUntil: editUntilInstant(fz.from), teams, depts: depts(teams), names,
+    freezeDueAt: freezeDueLabel(fz.from), freezeInstant: freezeInstant(fz.from), editUntil: editUntilInstant(fz.from), locked: null, teams, depts: depts(teams), names,
     leadgen: leadgenWeek(lgStats, reviews, leads), rnkConv,
   };
   if (view.leadgen) for (const m of view.leadgen.members) view.names[m.id] ??= m.name;
   return teamId == null ? view : { ...view, teams: view.teams.filter((t) => t.teamId === teamId) };
 }
-const addDaysIso = (ymd: string, n: number): string => { const d = new Date(`${ymd}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+
+/** «Зафіксувати остаточно»: хто й коли; `null` — ще ні. */
+async function weekLock(weekFrom: string): Promise<{ at: string; by: string | null } | null> {
+  const r = (await pool.query<{ locked_at: Date; by_name: string | null }>(
+    `SELECT l.locked_at, COALESCE(u.full_name, m.name, u.email) AS by_name
+       FROM nomination_week_locks l LEFT JOIN users u ON u.id = l.user_id LEFT JOIN managers m ON m.id = u.manager_id
+      WHERE l.week_from = $1`, [weekFrom])).rows[0];
+  return r ? { at: r.locked_at.toISOString(), by: r.by_name } : null;
+}
 
 /** Зафіксований тиждень — зі знімка; `null`, якщо тиждень ще не фіксувався. */
 export async function frozenWeek(weekFrom: string, teamId: number | null = null): Promise<WeekView | null> {
@@ -235,8 +243,8 @@ export async function frozenWeek(weekFrom: string, teamId: number | null = null)
     if (r.manager_id != null) (c.final.winners as number[]).push(r.manager_id);
   }
   const list = [...teams.values()].sort((a, b) => a.dept.localeCompare(b.dept) || a.teamName.localeCompare(b.teamName, "uk"));
-  // ✎ Поправки після фіксації (вікно до вт 14:00): поверх знімка, сам знімок не змінюється.
-  const reviews = await latestReviews(w.week_from);
+  // ✎ Поправки після фіксації (до пт 23:59 або кнопки): поверх знімка, сам знімок не змінюється.
+  const [reviews, lock] = await Promise.all([latestReviews(w.week_from), weekLock(w.week_from)]);
   const frozenAt = w.frozen_at.toISOString();
   for (const t of list) t.cells = t.cells.map((c) => {
     const rv = reviews.get(`${t.teamId}:${c.nomination}`) ?? null;
@@ -246,7 +254,7 @@ export async function frozenWeek(weekFrom: string, teamId: number | null = null)
   for (const t of list) for (const c of t.cells) for (const id of c.final.winners) names[id] ??= t.members.find((m) => m.id === id)?.name ?? names[id];
   const view: WeekView = {
     weekFrom: w.week_from, weekTo: w.week_to, state: "frozen", frozenAt, ruleVersion: w.rule_version,
-    freezeDueAt: `${addDaysIso(w.week_from, 8)} 08:00`, freezeInstant: freezeInstant(w.week_from), editUntil: editUntilInstant(w.week_from), teams: list, depts: depts(list), names,
+    freezeDueAt: freezeDueLabel(w.week_from), freezeInstant: freezeInstant(w.week_from), editUntil: editUntilInstant(w.week_from), locked: lock, teams: list, depts: depts(list), names,
     ...(await liveBlocks(w.week_from, w.week_to, reviews)),
   };
   return teamId == null ? view : { ...view, teams: view.teams.filter((t) => t.teamId === teamId) };

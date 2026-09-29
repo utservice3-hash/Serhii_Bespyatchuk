@@ -7,7 +7,7 @@ import { skipReason } from "../db/scratchDb.js";
 /**
  * #666 — ЛІДОГЕНЕРАТОРИ Й КОНВЕРСІЯ РНК ПРОТИ БАЗИ З НУЛЯ (22.09.2026, слайди 4–5 Даші).
  * Лідогенератори: «прорахунки» — з CRM (Продзвін → «Кваліфіковано»), лише активні; зазор — лише свої дані: тімлід
- * лідогену вносить про іншого, про себе — ні, тімлід РНК — ні; ЖИВІ — правляться й після фіксації тижня.
+ * лідогену вносить про іншого, про себе — ні, тімлід РНК — ні; ЖИВІ — правляться й після фіксації тижня (до пт 23:59 — #917).
  * Конверсія РНК: число CRM = «Конв. реклама» (лише рекламні угоди, створені в тижні); керівництво правит будь-який
  * рядок і пише коментар; тімлід РНК бачить і правит лише свою команду (друга команда РНК — поза його відповіддю);
  * тімлід РПК таблиці не бачить; «Як у CRM» повертає справжнє (ненульове) число; вибір «на слайд» — окремо від чисел.
@@ -65,7 +65,7 @@ test("#666 ДИМ: лідогенератори (живі, дані тімлід
         (10,104,8921932,142,77777,'2026-09-10','2026-09-16T10:00Z','2026-09-16T08:00Z',NULL,NULL)`);
     await c.query(`INSERT INTO deal_stage_events (kommo_id,status_id,pipeline_id,changed_at) VALUES (8,69716460,8921932,'2026-09-16T10:00Z')`);
 
-    const { nominationsRouter } = await import("./nominations.js");
+    const { nominationsRouter, nominationClock } = await import("./nominations.js");
     const { refreshRoles } = await import("../auth/rbac.js");
     const { freezeWeek, frozenWeek } = await import("../core/nominations.js");
     await refreshRoles();
@@ -153,7 +153,8 @@ test("#666 ДИМ: лідогенератори (живі, дані тімлід
     await assert.rejects(() => c.query(`UPDATE nomination_conv_edits SET taken = 1`), /заборонено/, "🔴 правки конверсії переписуються");
 
     // ── Фіксація: лідогенератори НЕ в знімку, живі — видно й можна правити після вівторка; команди — заморожені.
-    assert.equal(await freezeWeek(WEEK, new Date("2026-09-22T06:00:00Z")), "frozen");
+    assert.equal(await freezeWeek(WEEK, new Date("2026-09-22T13:00:00Z")), "frozen");
+    nominationClock.now = () => new Date("2026-09-23T10:00:00Z"); // середа: вікно правок (до пт 23:59) ще відкрите
     const lgRows = await c.query(`SELECT COUNT(*)::int AS n FROM nomination_snapshot WHERE week_from = '2026-09-14' AND team_id = 11`);
     assert.equal(lgRows.rows[0].n, 0, "🔴 лідогенератори потрапили у знімок");
     const fz = await frozenWeek(WEEK);

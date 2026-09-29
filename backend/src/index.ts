@@ -542,8 +542,9 @@ cron.schedule("5,35 * * * *", () => {
   void runJob("docLifecycle", () => runDocLifecycle());
 });
 
-// 🏆 Номінації тижня: фіксація минулого тижня — вівторок 08:00 Києва (рішення 21.09.2026) + догін на старті.
-cron.schedule("0 8 * * 2", () => {
+// 🏆 Номінації тижня: фіксація минулого тижня — вівторок 15:00 Києва (з 29.09.2026; було 08:00) + догін на старті.
+// Година — з `FREEZE_HOUR` (nominationRules.ts); `isFreezeDue` однаково не фіксує раніше, тож розклад лише будить.
+cron.schedule("0 15 * * 2", () => {
   void runJob("freezeNominations", () => runFreezeNominations());
 }, { timezone: "Europe/Kyiv" });
 

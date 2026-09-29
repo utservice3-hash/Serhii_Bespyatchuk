@@ -4712,8 +4712,10 @@ export interface NominationWeek {
   weekFrom: string; weekTo: string; state: "draft" | "frozen"; frozenAt: string | null; ruleVersion: string; freezeDueAt: string;
   /** Мить фіксації як UTC — для зворотного відліку. */
   freezeInstant: string;
-  /** ✎ До якої миті (UTC) після фіксації ще приймаються «свої дані» — вт 14:00 за Києвом. */
+  /** ✎ До якої миті (UTC) після фіксації ще приймаються «свої дані» — пт 23:59 за Києвом. */
   editUntil?: string;
+  /** 🔒 «Зафіксувати остаточно» — хто й коли; `null` — правки ще відкриті до `editUntil`. */
+  locked?: { at: string; by: string | null } | null;
   teams: NominationTeam[]; depts: NominationDept[]; names: Record<string, string>;
   viewer: { role: "admin" | "team_lead"; teamId: number | null; managerId: number | null };
   defs: NominationDef[];
@@ -4740,6 +4742,9 @@ export const fetchNominationWeek = async (weekFrom?: string) =>
   (await api.get<NominationWeek>("/nominations/week", { params: weekFrom ? { weekFrom } : {} })).data;
 export const reviewNomination = async (p: { weekFrom: string; teamId: number; nomination: NominationKey; action: NominationAction; overrideManagerIds?: number[]; overrideValue?: number; reason?: string }) =>
   (await api.post<NominationWeek>("/nominations/review", p)).data;
+/** 🔒 «Зафіксувати остаточно» — лише керівництво; закриває правки тижня раніше за пт 23:59. */
+export const lockNominationWeek = async (weekFrom: string) =>
+  (await api.post<NominationWeek>("/nominations/lock", { weekFrom })).data;
 /** «Погодитись з рештою»: сервер сам бере лише рядки, що чекають і які цей глядач може погодити. */
 export const confirmNominationsBulk = async (p: { weekFrom: string; teamId: number; nominations: NominationKey[] }) =>
   (await api.post<NominationWeek>("/nominations/review", { ...p, action: "confirm" })).data;

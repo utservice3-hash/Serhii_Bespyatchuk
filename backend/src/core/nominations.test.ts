@@ -13,9 +13,9 @@ import {
 } from "./nominationRules.js";
 
 /**
- * Тиждень для ЖИВОЇ звірки (#600, #658): лише чернетка. Зафіксований тиждень тримає числа вівторка 08:00,
+ * Тиждень для ЖИВОЇ звірки (#600, #658): лише чернетка. Зафіксований тиждень тримає числа вівторка 15:00,
  * а Звіт і розкриття рахують CRM зараз — порівнювати їх означало б червоніти без дефекту з вт по нд
- * (ревʼю 22.09.2026). Тож: минулий тиждень, поки він чернетка (пн — вт 08:00), інакше поточний.
+ * (ревʼю 22.09.2026). Тож: минулий тиждень, поки він чернетка (пн — вт 15:00), інакше поточний.
  */
 async function draftWeekForLiveCheck(H: { headers: Record<string, string> }): Promise<{ from: string; to: string; body: unknown }> {
   for (const w of [lastWeek(new Date()), weekOf(kyivDate(new Date()))]) {
@@ -130,22 +130,6 @@ test("#602c переможець відділу — найкращий сере�
   assert.deepEqual(deptWinners([{ teamId: 5, dept: "rpk", winners: [], value: null }], "rpk"), { state: "empty" });
 });
 
-/* ─────────────────────────── #603 тиждень за Києвом ─────────────────────────── */
-
-test("#603 тиждень Пн–Нд і фіксація вівторок 08:00 — за Києвом, обидва боки межі", () => {
-  // Нд 20.09 23:30 Києва = 20:30 UTC — ще цей тиждень; Пн 21.09 00:30 Києва = Нд 21:30 UTC — уже наступний.
-  assert.deepEqual(weekOf(kyivDate(new Date("2026-09-20T20:30:00Z"))), { from: "2026-09-14", to: "2026-09-20" });
-  assert.deepEqual(weekOf(kyivDate(new Date("2026-09-20T21:30:00Z"))), { from: "2026-09-21", to: "2026-09-27" });
-  assert.deepEqual(lastWeek(new Date("2026-09-22T06:00:00Z")), { from: "2026-09-14", to: "2026-09-20" });
-  // Фіксація: вт 22.09 07:59 Києва — ще ні, 08:00 — так; понеділок — ні, середа — так.
-  assert.equal(isFreezeDue("2026-09-14", new Date("2026-09-22T04:59:00Z")), false);
-  assert.equal(isFreezeDue("2026-09-14", new Date("2026-09-22T05:00:00Z")), true);
-  assert.equal(isFreezeDue("2026-09-14", new Date("2026-09-21T09:00:00Z")), false);
-  assert.equal(isFreezeDue("2026-09-14", new Date("2026-09-23T01:00:00Z")), true);
-  // Зимовий час (UTC+2): Нд 25.10 після переходу — межа та сама, за Києвом.
-  assert.deepEqual(weekOf(kyivDate(new Date("2026-10-25T21:59:00Z"))), { from: "2026-10-19", to: "2026-10-25" });
-  assert.deepEqual(weekOf(kyivDate(new Date("2026-10-25T22:00:00Z"))), { from: "2026-10-26", to: "2026-11-01" });
-});
 
 /* ─────────────────────────── #605 права й тіло запиту ─────────────────────────── */
 
@@ -357,21 +341,6 @@ test("#654 скасування повертає рядок у «чекає»; �
   assert.equal(validateBulkConfirm({ weekFrom: "2026-09-15", teamId: 13, nominations: ["cars"] }).ok, false, "🔴 тиждень не з понеділка пройшов");
 });
 
-/**
- * #655 — МИТЬ ФІКСАЦІЇ ЯК UTC по обидва боки переходу на зимовий час: вт 20.10.2026 08:00 Києва = 05:00Z
- * (літній, +03), вт 27.10.2026 08:00 = 06:00Z (зимовий, +02). І ця мить та сама, що в `isFreezeDue`:
- * у неї — «пора», на мілісекунду раніше — ні. 🧨 «Завжди +3» червоніє на 27.10.
- */
-test("#655 мить фіксації: вт 08:00 за Києвом влітку й узимку, та сама, що в isFreezeDue", async () => {
-  const { freezeInstant } = await import("./nominationRules.js");
-  assert.equal(freezeInstant("2026-10-12"), "2026-10-20T05:00:00.000Z", "🔴 літній час: вт 08:00 Києва ≠ 05:00Z");
-  assert.equal(freezeInstant("2026-10-19"), "2026-10-27T06:00:00.000Z", "🔴 зимовий час: вт 08:00 Києва ≠ 06:00Z");
-  for (const w of ["2026-09-14", "2026-10-19", "2027-03-22", "2027-03-29"]) {
-    const at = Date.parse(freezeInstant(w));
-    assert.equal(isFreezeDue(w, new Date(at)), true, `🔴 ${w}: у мить фіксації isFreezeDue каже «ще ні»`);
-    assert.equal(isFreezeDue(w, new Date(at - 1)), false, `🔴 ${w}: за мілісекунду до фіксації isFreezeDue каже «пора»`);
-  }
-});
 
 /**
  * #656 — «РАХУЄМО / НЕ РАХУЄМО» Є В КОЖНОЇ НОМІНАЦІЇ І ЗБІГАЄТЬСЯ З ЧИННИМ ПРАВИЛОМ. Саме розбіжність «авто =
@@ -494,21 +463,49 @@ test("#665 конверсія РНК: числа й вибір «на слайд
   assert.equal(validateConvEdit({ weekFrom: "2026-09-15", action: "reset", managerId: 1 }).ok, false, "🔴 тиждень не з понеділка пройшов");
 });
 
-test("#915 вікно правок після фіксації: до вт 14:00 «свої дані» лягають поверх знімка, після — ні", async () => {
+/**
+ * #918 — ТИЖДЕНЬ ЗА КИЄВОМ І ЗНІМОК У ВІВТОРОК 15:00 (з 29.09.2026; до того 08:00 — #603/#655 виведені): обидва боки
+ * межі, мить як UTC влітку (+03) і взимку (+02), і вона та сама, що в `isFreezeDue`. Підпис для екрана — «… 15:00».
+ */
+test("#918 тиждень Пн–Нд за Києвом і знімок вівторок 15:00 — обидва боки межі, літо й зима, одна мить", async () => {
+  const { freezeInstant, freezeDueLabel } = await import("./nominationRules.js");
+  assert.deepEqual(weekOf(kyivDate(new Date("2026-09-20T20:30:00Z"))), { from: "2026-09-14", to: "2026-09-20" });
+  assert.deepEqual(weekOf(kyivDate(new Date("2026-09-20T21:30:00Z"))), { from: "2026-09-21", to: "2026-09-27" });
+  assert.deepEqual(lastWeek(new Date("2026-09-22T13:00:00Z")), { from: "2026-09-14", to: "2026-09-20" });
+  // Вт 22.09 14:59 Києва — ще ні, 15:00 — так; понеділок — ні, середа — так.
+  assert.equal(isFreezeDue("2026-09-14", new Date("2026-09-22T11:59:00Z")), false, "🔴 знімок раніше за вт 15:00");
+  assert.equal(isFreezeDue("2026-09-14", new Date("2026-09-22T12:00:00Z")), true, "🔴 о вт 15:00 знімка ще немає");
+  assert.equal(isFreezeDue("2026-09-14", new Date("2026-09-22T05:00:00Z")), false, "🔴 знімок о старій годині 08:00");
+  assert.equal(isFreezeDue("2026-09-14", new Date("2026-09-21T13:00:00Z")), false);
+  assert.equal(isFreezeDue("2026-09-14", new Date("2026-09-23T01:00:00Z")), true);
+  assert.equal(freezeInstant("2026-10-12"), "2026-10-20T12:00:00.000Z", "🔴 літній час: вт 15:00 Києва ≠ 12:00Z");
+  assert.equal(freezeInstant("2026-10-19"), "2026-10-27T13:00:00.000Z", "🔴 зимовий час: вт 15:00 Києва ≠ 13:00Z");
+  for (const w of ["2026-09-14", "2026-10-19", "2027-03-22", "2027-03-29"]) {
+    const at = Date.parse(freezeInstant(w));
+    assert.equal(isFreezeDue(w, new Date(at)), true, `🔴 ${w}: у мить знімка isFreezeDue каже «ще ні»`);
+    assert.equal(isFreezeDue(w, new Date(at - 1)), false, `🔴 ${w}: за мілісекунду до знімка isFreezeDue каже «пора»`);
+  }
+  assert.equal(freezeDueLabel("2026-09-21"), "2026-09-29 15:00", "🔴 підпис дедлайну для тімлідів не «вт … 15:00»");
+});
+
+/**
+ * #916 — ВІКНО ПРАВОК ПІСЛЯ ЗНІМКА: до ПʼЯТНИЦІ 23:59 за Києвом (29.09.2026; заміняє #915 «до вт 14:00»), або до
+ * «Зафіксувати остаточно». Поправка після знімка лягає поверх; рішення ДО знімка вже в ньому; скасування повертає знімок.
+ */
+test("#916 після знімка свої дані — до пт 23:59 (літо й зима) або до «Зафіксувати остаточно»; поправка поверх знімка", async () => {
   const { editUntilInstant, isEditOpen, overlayAfterFreeze } = await import("./nominationRules.js");
-  // Межа — вт 14:00 за Києвом, у літній і зимовий час.
-  assert.equal(editUntilInstant("2026-09-21"), "2026-09-29T11:00:00.000Z", "🔴 вт 14:00 Києва (літо) ≠ 11:00Z");
-  assert.equal(editUntilInstant("2026-10-19"), "2026-10-27T12:00:00.000Z", "🔴 вт 14:00 Києва (зима) ≠ 12:00Z");
-  assert.equal(isEditOpen("2026-09-21", new Date("2026-09-29T10:59:59Z")), true, "🔴 о 13:59 правки мають прийматись");
-  assert.equal(isEditOpen("2026-09-21", new Date("2026-09-29T11:00:00Z")), false, "🔴 о 14:00 вікно мусить закритись");
-  const frozenAt = "2026-09-29T05:00:01.000Z";
+  assert.equal(editUntilInstant("2026-09-21"), "2026-10-02T21:00:00.000Z", "🔴 кінець пт 02.10 за Києвом (літо) ≠ 21:00Z");
+  assert.equal(editUntilInstant("2026-10-19"), "2026-10-30T22:00:00.000Z", "🔴 кінець пт 30.10 за Києвом (зима) ≠ 22:00Z");
+  assert.equal(isEditOpen("2026-09-21", new Date("2026-10-02T20:59:59Z")), true, "🔴 у пт 23:59:59 правки мають прийматись");
+  assert.equal(isEditOpen("2026-09-21", new Date("2026-10-02T21:00:00Z")), false, "🔴 у сб 00:00 вікно мусить закритись");
+  assert.equal(isEditOpen("2026-09-21", new Date("2026-09-29T11:30:00Z")), true, "🔴 у вт по обіді (стара межа 14:00) вікно вже закрите");
+  assert.equal(isEditOpen("2026-09-21", new Date("2026-09-30T09:00:00Z"), "2026-09-29T14:00:00.000Z"), false, "🔴 «Зафіксувати остаточно» не закрило вікно");
+  const frozenAt = "2026-09-29T12:00:01.000Z";
   const snap = { status: "unconfirmed" as const, winners: [7], value: 447, reason: null, stale: false };
-  const ov = (at: string, action: "override" | "retract" | "confirm" = "override") =>
+  const ov = (at: string, action: "override" | "retract" = "override") =>
     ({ action, crmFingerprint: "x", overrideManagerIds: action === "override" ? [9, 3] : null, overrideValue: action === "override" ? 120 : null, reason: action === "override" ? "неповний Расход 1" : null, at });
-  const after = overlayAfterFreeze(snap, ov("2026-09-29T07:00:00.000Z"), frozenAt);
-  assert.deepEqual([after.final.status, after.final.winners, after.final.value, after.after], ["overridden", [3, 9], 120, true], "🔴 поправка після фіксації не лягла поверх знімка");
-  const before = overlayAfterFreeze(snap, ov("2026-09-29T04:59:00.000Z"), frozenAt);
-  assert.equal(before.final, snap, "🔴 рішення ДО фіксації вже у знімку — повторно накладати не можна");
-  assert.equal(overlayAfterFreeze(snap, ov("2026-09-29T08:00:00.000Z", "retract"), frozenAt).final, snap, "🔴 скасована поправка мусить повертати зафіксоване");
-  assert.equal(overlayAfterFreeze(snap, null, frozenAt).final, snap);
+  const after = overlayAfterFreeze(snap, ov("2026-10-01T07:00:00.000Z"), frozenAt);
+  assert.deepEqual([after.final.status, after.final.winners, after.final.value, after.after], ["overridden", [3, 9], 120, true], "🔴 поправка після знімка не лягла поверх");
+  assert.equal(overlayAfterFreeze(snap, ov("2026-09-29T11:59:00.000Z"), frozenAt).final, snap, "🔴 рішення ДО знімка вже в ньому — накладати вдруге не можна");
+  assert.equal(overlayAfterFreeze(snap, ov("2026-10-01T08:00:00.000Z", "retract"), frozenAt).final, snap, "🔴 скасована поправка мусить повертати знімок");
 });
