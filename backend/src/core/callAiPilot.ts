@@ -2,7 +2,7 @@ import type { Db } from "./adCallFacts.js";
 import { AD_FLAGS, adDealFirstTalksSql, ParamNotSetError, type AdFlag, type FirstTalkRow } from "./adCallFactsRules.js";
 import { createMinInterval, type HttpDeps, type RetryPolicy } from "./callAiHttp.js";
 import { downloadRecording } from "./ringostatRecording.js";
-import { ELEVENLABS_STT_MODEL, elevenLabsTranscribe, GEMINI_MODEL, geminiGenerate, RUBRIC_PILOT_V0 } from "./callAiProviders.js";
+import { ELEVENLABS_STT_MODEL, elevenLabsTranscribe, GEMINI_MODEL, geminiGenerate, RUBRIC_CURRENT } from "./callAiProviders.js";
 import { enqueueAnalyses, enqueueTranscripts, monthSpend, runAnalysisPortion, runSttPortion, type PortionReport } from "./callAiPipeline.js";
 
 /**
@@ -216,7 +216,7 @@ export async function runPilot(env: PilotEnv, plan: PilotPlan, a: PilotArgs): Pr
   if (sttStop) env.log(`розпізнавання зупинилось: ${sttStop}`);
 
   const ap = {
-    provider: LLM_PROVIDER, model: GEMINI_MODEL, rubricVersion: RUBRIC_PILOT_V0,
+    provider: LLM_PROVIDER, model: GEMINI_MODEL, rubricVersion: RUBRIC_CURRENT,
     sttProvider: STT_PROVIDER, sttModel: ELEVENLABS_STT_MODEL,
   };
   await enqueueAnalyses(env.db, { ...ap, now: env.now() }, ids);
@@ -239,7 +239,7 @@ export async function runPilot(env: PilotEnv, plan: PilotPlan, a: PilotArgs): Pr
   const an = await env.db.query<{ status: string; n: number }>(
     `SELECT a.status, count(*)::int AS n FROM call_analyses a JOIN call_transcripts t ON t.id = a.transcript_id
       WHERE a.provider = $1 AND a.model = $2 AND a.rubric_version = $3 AND t.uniqueid = ANY($4::text[]) GROUP BY a.status`,
-    [LLM_PROVIDER, GEMINI_MODEL, RUBRIC_PILOT_V0, ids]);
+    [LLM_PROVIDER, GEMINI_MODEL, RUBRIC_CURRENT, ids]);
   for (const x of an.rows) out.analyses[x.status] = Number(x.n);
   out.spendUsd = {
     stt: (await monthSpend(env.db, STT_PROVIDER, env.now())).usd,

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { fetchAiCallCard, hiringError, type AiCallCardResp, type AiQuoted } from "../../../api";
-import { STATE_UI, TONE_COLOR, speakerOf, mmss, afterLabel, drawerTabs, promisesLabel, type AiCallState, type DrawerTab, type Tone } from "../aiCallsView";
+import { STATE_UI, TONE_COLOR, PROMISE_UI, speakerOf, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, type AiCallState, type DrawerTab, type Tone } from "../aiCallsView";
 import "./hiring.css";
 
 /**
@@ -70,18 +70,38 @@ function Analysis({ c }: { c: AiCallCardResp }) {
           ? <span style={{ color: "var(--text-muted)" }}>не було</span>
           : (
             <span style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {r.promises.map((p, i) => (
-                <span key={i}>
-                  <b>{p.who === "manager" ? "Менеджер" : "Клієнт"}:</b> {p.what}{" · "}
-                  <span style={{ color: p.deadline_text.trim() ? "var(--ok-fg, #1d6b3a)" : "var(--warn-fg, #8a5a00)" }}>
-                    {p.deadline_text.trim() ? `строк: ${p.deadline_text}` : "без строку"}
+              {r.promises.map((p, i) => {
+                const chk = c.promiseChecks[i] ?? null;
+                return (
+                  <span key={i}>
+                    <b>{p.who === "manager" ? "Менеджер" : "Клієнт"}:</b> {p.what}{" · "}
+                    <span style={{ color: "var(--text-muted)" }}>{p.deadline_text.trim() ? `«${p.deadline_text}»` : "часу не названо"}</span>
+                    {chk && (
+                      <span style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 3 }}>
+                        <span title={PROMISE_UI[chk.state].hint}><Chip tone={PROMISE_UI[chk.state].tone}>{PROMISE_UI[chk.state].label}</Chip></span>
+                        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>термін {fmtFull(chk.deadline)} · {deadlineBasisLabel(chk.basis)}</span>
+                      </span>
+                    )}
+                    {p.who === "client" && <span style={{ fontSize: 12, color: "var(--text-muted)" }}> · обіцянка клієнта — не рахується</span>}
+                    <Quote q={p} />
                   </span>
-                  <Quote q={p} />
-                </span>
-              ))}
+                );
+              })}
             </span>
           )}
       </div>
+      {c.promiseChecks.some((x) => x != null) && (
+        <div style={row}>
+          <span style={key}>Дзвінки на номер після розмови</span>
+          {c.callsAfter.length === 0
+            ? <span style={{ color: "var(--text-muted)" }}>за 7 днів — жодного</span>
+            : <span style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 13 }}>
+                {c.callsAfter.map((x, i) => (
+                  <span key={i}>{fmtFull(x.at)} · {x.direction === "in" ? "клієнт нам" : "ми клієнту"} · {x.billsec > 0 ? `розмова ${mmss(x.billsec)}` : "без розмови"}</span>
+                ))}
+              </span>}
+        </div>
+      )}
       <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 8 }}>
         {c.transcriptHidden ? "Повний текст розмови бачать адмін і КВП. Цитати вище — дослівні." : "Оцінки менеджера тут немає — лише витяг із розмови."}
       </div>

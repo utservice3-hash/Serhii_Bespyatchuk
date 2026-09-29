@@ -291,7 +291,7 @@ test("#767 АНАЛІЗ · ЖИВА СХЕМА: черга лише з непо�
   assert.equal(await c.pl.enqueueAnalyses(c.db, ap, null), 0);
 
   const good = JSON.stringify({ summary: "s", manager_channel: "0", client_request: "", price: { discussed: false, quote: "" },
-    objections: [], promises: [{ who: "manager", what: "передзвонити", deadline_text: "завтра", quote: "передзвоню завтра" }], next_step: "" });
+    objections: [], promises: [{ who: "manager", what: "передзвонити", deadline_text: "завтра", quote: "передзвоню завтра", channel: "call", deadline_kind: "day", deadline_minutes: 0, deadline_date: "2026-09-21", conditional: false }], next_step: "" });
   const answers: GeminiOutcome[] = [
     { text: good, finishReason: "STOP", blockReason: null, usage: { input: 800, output: 350, thoughts: 250 } },
     { text: good.slice(0, 30), finishReason: "MAX_TOKENS", blockReason: null, usage: { input: 800, output: 2048, thoughts: 2000 } },
@@ -428,4 +428,39 @@ test("#788 ЧЕРГА: нові дзвінки першими, а не в пор
   await c.pl.runSttPortion(c.db, { apiKey: "k", ...f.w }, sttParams(P, { limit: 1 }));
   await c.pl.runSttPortion(c.db, { apiKey: "k", ...f.w }, sttParams(P, { limit: 1 }));
   assert.deepEqual(f.downloads, ["https://rec/o-new", "https://rec/o-mid"], `🔴 черга взяла не найновіші: ${JSON.stringify(f.downloads)}`);
+});
+
+/**
+ * #791 — РУБРИКА first-touch-v1: модель отримує ДАТУ розмови першим рядком (інакше «завтра» й «у понеділок»
+ * нема від чого рахувати), а відповідь без полів строку обіцянки — не за схемою, а не «обіцянка без строку».
+ * Джоба й екран беруть саме цю рубрику.
+ * 🧨 Червоніє, якщо не передати час розмови в запит або пропустити обіцянку без каналу.
+ */
+test("#791 РУБРИКА first-touch-v1: дата розмови в запиті, обіцянка без полів строку — не за схемою", async (t) => {
+  const pr = await import("./callAiProviders.js");
+  assert.equal(pr.RUBRIC_CURRENT, "first-touch-v1");
+  const txt = (b: Record<string, unknown>) => JSON.stringify(b);
+  assert.match(txt(pr.buildAnalysisRequest([], 100, new Date("2026-09-29T05:56:00Z"))), /Розмова почалась 2026-09-29 о 08:56 за Києвом, вівторок/);
+  const base = { summary: "", manager_channel: "1", client_request: "", next_step: "", price: { discussed: false, quote: "" }, objections: [] };
+  const old = { ...base, promises: [{ who: "manager", what: "x", deadline_text: "", quote: "q" }] };
+  assert.equal(pr.validateAnalysis(old).ok, false, "🔴 обіцянку без каналу й строку прийнято");
+  const v1 = { ...base, promises: [{ who: "manager", what: "x", deadline_text: "", quote: "q", channel: "call", deadline_kind: "none", deadline_minutes: 0, deadline_date: "", conditional: true }] };
+  assert.equal(pr.validateAnalysis(v1).ok, true, "дзеркало: повна обіцянка проходить");
+  const src = (f: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "src", "core", f), "utf8");
+  for (const f of ["callAiTick.ts", "callAiScreen.ts"]) assert.ok(src(f).includes("RUBRIC_CURRENT") && !src(f).includes("RUBRIC_PILOT_V0"), `🔴 ${f} не на поточній рубриці`);
+
+  const c = await ctx(t); if (!c) return;
+  const S = "el-791", G = "g-791";
+  await c.raw.query(`INSERT INTO ringostat_calls (uniqueid, calldate, call_type, billsec, duration) VALUES ('r791', '2026-09-29T05:56:00Z', 'out', 60, 70)`);
+  await c.raw.query(`INSERT INTO call_transcripts (uniqueid, provider, model, status, segments) VALUES ('r791', $1, 'scribe_v2', 'done', $2::jsonb)`,
+    [S, JSON.stringify([{ channel: 1, start: 0, end: 2, text: "наберу завтра", lang: "uk" }])]);
+  const ap = { provider: G, model: "gemini-3.8-flash", rubricVersion: "first-touch-v1", sttProvider: S, sttModel: "scribe_v2", now: NOW };
+  await c.pl.enqueueAnalyses(c.db, ap, null);
+  let sent = "";
+  const w = { apiKey: "k", generate: async (_k: string, _m: string, body: unknown): Promise<GeminiOutcome> => { sent = JSON.stringify(body);
+    return { text: JSON.stringify(v1), finishReason: "STOP", blockReason: null, usage: { input: 10, output: 10, thoughts: 0 } }; } };
+  const r = await c.pl.runAnalysisPortion(c.db, w, { ...ap, limit: 10, maxAttempts: 3, stuckAfterMin: 15, monthCapUsd: 10, operation: "analysis",
+    maxOutputTokens: 2048, usdPerInputToken: 0.75e-6, usdPerOutputToken: 3.75e-6 });
+  assert.equal(r.done, 1);
+  assert.match(sent, /Розмова почалась 2026-09-29 о 08:56 за Києвом/, "🔴 конвеєр не передав моделі дату розмови");
 });

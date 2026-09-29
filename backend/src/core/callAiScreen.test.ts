@@ -46,8 +46,8 @@ const RESULT = {
   price: { discussed: true, quote: "скільки коштує", quote_found: true },
   objections: [{ what: "дорого", quote: "у конкурентів дешевше", quote_found: false }],
   promises: [
-    { who: "manager", what: "порахувати", deadline_text: "до обіду", quote: "порахую до обіду", quote_found: true },
-    { who: "manager", what: "надіслати договір", deadline_text: "", quote: "надішлю договір", quote_found: true },
+    { who: "manager", what: "порахувати", deadline_text: "до обіду", quote: "порахую до обіду", quote_found: true, channel: "call", deadline_kind: "day", deadline_minutes: 0, deadline_date: "2026-09-20", conditional: false },
+    { who: "manager", what: "надіслати договір", deadline_text: "", quote: "надішлю договір", quote_found: true, channel: "message", deadline_kind: "none", deadline_minutes: 0, deadline_date: "", conditional: false },
   ],
 };
 
@@ -70,7 +70,7 @@ async function seed(c: import("pg").Client): Promise<void> {
     VALUES ('x1','elevenlabs','scribe_v2','done',$1::jsonb) RETURNING id`,
   [JSON.stringify([{ channel: 1, start: 0, end: 2, text: "Скільки коштує, порахую до обіду", lang: "ukr" }])])).rows[0].id;
   await c.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result)
-    VALUES ($1,'google','gemini-3.8-flash','pilot-v0','done',$2::jsonb)`, [tid, JSON.stringify(RESULT)]);
+    VALUES ($1,'google','gemini-3.8-flash','first-touch-v1','done',$2::jsonb)`, [tid, JSON.stringify(RESULT)]);
   await c.query("INSERT INTO call_transcripts(uniqueid,provider,model,status) VALUES ('x2','elevenlabs','scribe_v2','capped')");
 }
 
@@ -261,7 +261,8 @@ test("#836 ОДИН ДЗВІНОК = ОДИН РЯДОК: розмова, пер
   const { collapseByCall } = await import("./callAiScreen.js");
   const base = { uniqueid: "u", calledAt: "2026-09-23T07:30:00.000Z", direction: "out" as const, billsec: 40,
     managerId: 1, managerName: "М", teamId: 1, teamName: "Т", state: "not_queued" as const, failure: null, summary: null,
-    priceDiscussed: null, objections: 0, promises: 0, promisesWithDeadline: 0, unverifiedQuotes: 0 };
+    priceDiscussed: null, objections: 0, promises: 0, promisesWithDeadline: 0, unverifiedQuotes: 0,
+    pipelineGroup: "full" as const, rejectReason: null, promiseState: null, managerPromises: 0, silentBeforeClose: null };
   const got = collapseByCall([
     { ...base, kommoId: 9, dealCreatedAt: "2026-09-23T07:00:00.000Z" },
     { ...base, kommoId: 5, dealCreatedAt: "2026-09-22T07:00:00.000Z" },
@@ -336,4 +337,82 @@ test("#838 КАРТКА ДЗВІНКА: рядок відкриває панел
   const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
   assert.match(drw, /const tabs = c \? drawerTabs\(c\.transcriptHidden, c\.turns\?\.length \?\? null\) : \[\];/, "🔴 вкладки картки не з правила drawerTabs");
   assert.match(drw, /tab === "transcript" && tabs\.includes\("transcript"\)/, "🔴 розшифровка показується без перевірки права");
+});
+
+/**
+ * #792 — ОБІЦЯНКИ, ВОРОНКА, НЕЦІЛЬОВІ, ТИША — ЖИВА СХЕМА (рішення Романа 29.09.2026). Прапорець «не передзвонив»
+ * — на тому, хто ОБІЦЯВ (менеджер розмови), а не на відповідальному угоди (П7); дзвінок колеги до терміну —
+ * «передзвонив» (П6-Б); Кваліфікація — своя група, «Дубль» — причина відмови з CRM (П8-Б); «тиша перед
+ * закриттям» — межа 24 год ПО ОБИДВА боки: 29 год — так, 23 год — ні (П3).
+ * 🧨 Червоніє, якщо прапорець піде на відповідального, дзвінок колеги не зарахується чи зсунеться поріг тиші.
+ */
+test("#792 ЕКРАН AI · ЖИВА СХЕМА: не передзвонив — на тому, хто обіцяв; колега рятує; Кваліфікація й «Дубль»; тиша 24 год", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const { aiCallsList } = await import("./callAiScreen.js");
+  const deal = (id: number, key: string, pipeline: number, status: number, closed: string | null, reject: string | null) =>
+    c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,closed_at_kommo,client_key,lead_channel,manager_id,reject_reason)
+      VALUES ($1,$2,$3,$4,'2026-09-24 09:00:00+03',$5,$6,'ad',9021,$7)`, [id, `D${String(id)}`, pipeline, status, closed, key, reject]);
+  const call = (u: string, at: string, sec: number, mgr: number, phone: string) =>
+    c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
+      VALUES ($1,$2,'out','ANSWERED',$3,$4,$5,$6,'https://rec/x')`, [u, at, sec, sec + 5, mgr, phone]);
+  const analysed = async (u: string, minutes: number) => {
+    const tid = (await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
+      VALUES ($1,'elevenlabs','scribe_v2','done','[]'::jsonb) RETURNING id`, [u])).rows[0].id;
+    const res = { ...RESULT, objections: [], promises: [{ who: "manager", what: "передзвонити", deadline_text: "за пів години", quote: "q", quote_found: true,
+      channel: "call", deadline_kind: "minutes", deadline_minutes: minutes, deadline_date: "", conditional: false }] };
+    await c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result)
+      VALUES ($1,'google','gemini-3.8-flash','first-touch-v1','done',$2::jsonb)`, [tid, JSON.stringify(res)]);
+  };
+  await deal(8810, "0508800010", 8921932, 1, null, null);
+  await call("y1", "2026-09-24 10:00:00+03", 60, 9011, "380508800010");                 // обіцяла Олена, угода Петра
+  await analysed("y1", 30);
+  await deal(8811, "0508800011", 8921928, 143, "2026-09-25 16:00:00+03", "Дубль");
+  await call("y2", "2026-09-24 10:00:00+03", 60, 9011, "380508800011");
+  await call("y2b", "2026-09-24 10:10:00+03", 30, 9021, "380508800011");                // передзвонив колега
+  await analysed("y2", 30);
+  await deal(8812, "0508800012", 8921932, 143, "2026-09-25 09:00:00+03", null);          // 23 год після розмови
+  await call("y3", "2026-09-24 10:00:00+03", 60, 9011, "380508800012");
+
+  const rows = (await aiCallsList(c.db, FAKE_AD, "2026-09-24", "2026-09-24", NOW, {})).rows;
+  const by = new Map(rows.map((r) => [r.uniqueid, r]));
+  assert.deepEqual([by.get("y1")?.promiseState, by.get("y1")?.managerId], ["broken", 9011], "🔴 «не передзвонив» — не на тій, хто обіцяла");
+  assert.equal(by.get("y2")?.promiseState, "kept_talk", "🔴 дзвінок колеги до терміну не зараховано");
+  assert.deepEqual([by.get("y2")?.pipelineGroup, by.get("y2")?.rejectReason], ["qualification", "Дубль"], "🔴 Кваліфікація чи причина відмови загубились");
+  assert.equal(by.get("y1")?.pipelineGroup, "full");
+  assert.equal(by.get("y2")?.silentBeforeClose, true, "🔴 29 год без нашого дзвінка — не «тиша перед закриттям»");
+  assert.equal(by.get("y3")?.silentBeforeClose, false, "🔴 23 год — уже «тиша» (поріг 24 год зсунувся)");
+  assert.equal(by.get("y1")?.silentBeforeClose, null, "відкрита угода — не застосовно, а не «тиші немає»");
+});
+
+/**
+ * #793 — ОБІЦЯНКИ НА ЕКРАНІ: кожен стан має підпис; фільтр «Не передзвонив»; нецільові сховані за замовчуванням
+ * і видно, скільки прибрано; Кваліфікація — окрема група; секція й картка беруть стан із сервера, а не рахують самі.
+ * 🧨 Червоніє, якщо показати нецільові за замовчуванням, прибрати фільтр чи картка перестане показувати термін.
+ */
+test("#793 ОБІЦЯНКИ НА ЕКРАНІ: підписи станів, фільтр «Не передзвонив», нецільові сховані з лічильником, Кваліфікація окремо", async () => {
+  const V = await loadView() as unknown as ViewMod & {
+    PROMISE_UI: Record<string, { label: string }>;
+    applyListFilter: (rows: { pipelineGroup: string; teamId: number | null; managerId: number | null; nonTarget: boolean }[], f: Record<string, unknown>) => unknown[];
+    deadlineBasisLabel: (b: string) => string;
+  };
+  for (const s of ["kept_talk", "kept_attempt_only", "client_called", "pending", "broken", "unverifiable"]) assert.ok(V.PROMISE_UI[s]?.label, `🔴 стан ${s} без підпису`);
+  assert.equal(V.matchesFilter({ state: "done", promiseState: "broken", priceDiscussed: null, objections: 0, promises: 1, promisesWithDeadline: 1 } as never, "broken"), true);
+  assert.equal(V.matchesFilter({ state: "done", promiseState: "kept_talk", priceDiscussed: null, objections: 0, promises: 1, promisesWithDeadline: 1 } as never, "broken"), false);
+  const rows = [
+    { pipelineGroup: "full", teamId: 1, managerId: 11, nonTarget: false },
+    { pipelineGroup: "qualification", teamId: 1, managerId: 11, nonTarget: true },
+    { pipelineGroup: "qualification", teamId: 2, managerId: 21, nonTarget: false },
+  ];
+  const f = { group: "all", teamId: null, managerId: null, showNonTarget: false };
+  assert.equal(V.applyListFilter(rows, f).length, 2, "🔴 нецільові показано за замовчуванням");
+  assert.equal(V.applyListFilter(rows, { ...f, showNonTarget: true }).length, 3, "дзеркало: перемикач показує нецільові");
+  assert.equal(V.applyListFilter(rows, { ...f, group: "qualification" }).length, 1);
+  assert.equal(V.applyListFilter(rows, { ...f, teamId: 2 }).length, 1);
+  assert.match(V.deadlineBasisLabel("default_minutes"), /20 хв/);
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /applyListFilter\(d\.rows, lf\)/, "🔴 список не проходить через фільтр воронки/команди/нецільових");
+  assert.match(sec, /PROMISE_UI\[r\.promiseState\]/, "🔴 колонка «Обіцянка» не з серверного стану");
+  assert.match(sec, /прибрано: \$\{String\(nonTargetHidden\)\}/, "🔴 не видно, скільки нецільових прибрано");
+  const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
+  assert.match(drw, /c\.promiseChecks\[i\]/, "🔴 картка не показує термін і стан обіцянки");
 });

@@ -409,10 +409,13 @@ export async function runAnalysisPortion(db: Db, w: AnalysisWorker, p: AnalysisP
   let spent = pre.spentUsd;
   r.state = "ok";
 
-  const segs = new Map<string, { uniqueid: string; turns: Turn[] }>();
-  const t = await db.query<{ id: string; uniqueid: string; segments: Turn[] }>(
-    "SELECT id::text AS id, uniqueid, segments FROM call_transcripts WHERE id = ANY($1::bigint[])", [rows.map((x) => x.ref)]);
-  for (const x of t.rows) segs.set(String(x.id), { uniqueid: x.uniqueid, turns: x.segments ?? [] });
+  const segs = new Map<string, { uniqueid: string; turns: Turn[]; callAt: Date | null }>();
+  // Час розмови — щоб модель рахувала «завтра» й «у понеділок» від дня дзвінка (рубрика first-touch-v1).
+  const t = await db.query<{ id: string; uniqueid: string; segments: Turn[]; calldate: Date | null }>(
+    `SELECT t.id::text AS id, t.uniqueid, t.segments, rc.calldate
+       FROM call_transcripts t LEFT JOIN ringostat_calls rc ON rc.uniqueid = t.uniqueid
+      WHERE t.id = ANY($1::bigint[])`, [rows.map((x) => x.ref)]);
+  for (const x of t.rows) segs.set(String(x.id), { uniqueid: x.uniqueid, turns: x.segments ?? [], callAt: x.calldate ? new Date(x.calldate) : null });
 
   const kinds = new Map<VendorFailureKind, number>();
   let vendorFails = 0;
@@ -424,7 +427,7 @@ export async function runAnalysisPortion(db: Db, w: AnalysisWorker, p: AnalysisP
       r.failed++;
       continue;
     }
-    const body = buildAnalysisRequest(src.turns, p.maxOutputTokens);
+    const body = buildAnalysisRequest(src.turns, p.maxOutputTokens, src.callAt);
     const inBound = inputTokenUpperBound(body);
     const est = inBound * inPrice + p.maxOutputTokens * outPrice;
     if (spent + est > capUsd) {

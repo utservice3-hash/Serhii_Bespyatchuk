@@ -67,7 +67,7 @@ import * as metrics from "../core/metrics.js";
 import { ga4Configured } from "../ga4/client.js";
 import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
-import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed } from "../core/callAiScreen.js";
+import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE } from "../core/callAiScreen.js";
 import { adPlanForPeriod } from "../core/adBudget.js";
 import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, leadgenWeekly, leadGeneratorFill,
   pct, leadGeneratorFillNote, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS,
@@ -10503,8 +10503,13 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
       managerId: r.managerId, managerName: r.managerName, teamId: r.teamId, teamName: r.teamName,
       state: r.state, failure: r.failure, summary: r.summary, priceDiscussed: r.priceDiscussed,
       objections: r.objections, promises: r.promises, promisesWithDeadline: r.promisesWithDeadline,
-      unverifiedQuotes: r.unverifiedQuotes,
+      unverifiedQuotes: r.unverifiedQuotes, pipelineGroup: r.pipelineGroup,
+      nonTarget: r.rejectReason != null && metrics.REJECT_NONTARGET.includes(r.rejectReason), rejectReason: r.rejectReason,
+      promiseState: r.promiseState, managerPromises: r.managerPromises,
+      // П3: прапорець — лише за період після оголошення норми; до того поле є, а екран його не показує.
+      silentBeforeClose: r.silentBeforeClose,
     })),
+    silence: { minGapHours: SILENCE_RULE.minGapHours, normFrom: SILENCE_RULE.normFrom },
   });
 });
 
@@ -10523,6 +10528,7 @@ dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
     row: card.row, dealUrls: card.row.kommoIds.map((id) => ({ kommoId: id, url: kommoLeadUrl(id) })),
     result: card.result, turns: card.turns, transcriptHidden: card.transcriptHidden,
     managerChannel: card.managerChannel, durationSec: card.durationSec, nextOutboundAt: card.nextOutboundAt,
+    promiseChecks: card.promiseChecks, callsAfter: card.callsAfter,
   });
 });
 
