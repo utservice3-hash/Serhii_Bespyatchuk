@@ -1,6 +1,7 @@
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
-import { fetchLeadsOnStage } from "../kommo/client.js";
+import { fetchLeadsOnStage, kommoWrite } from "../kommo/client.js";
+import { closeModeOf } from "../core/carrierClose.js";
 import { sendAdminAlert } from "../bot/notify.js";
 import { runCarrierTick, type CarrierTickReport } from "../core/carrierCalls.js";
 import { CARRIER_STAGE } from "../core/carrierCallRules.js";
@@ -26,6 +27,13 @@ export async function carrierCallJob(): Promise<CarrierTickReport | GuardSkip> {
       stageLeads: async () => (await fetchLeadsOnStage(CARRIER_STAGE.pipelineId, CARRIER_STAGE.statusId))
         .map((l) => ({ id: l.id, name: l.name, created_at: l.created_at, responsible_user_id: l.responsible_user_id ?? null })),
       alert: sendAdminAlert,
+      close: {
+        mode: closeModeOf(config.callAi.carrierAutoClose),
+        kommo: {
+          patchLeads: (body) => kommoWrite("/api/v4/leads", body, "PATCH"),
+          addNotes: (body) => kommoWrite("/api/v4/leads/notes", body, "POST"),
+        },
+      },
     });
     const d = r.recorded, v = r.resolved;
     const sum = (xs: CarrierTickReport["stt"], k: "done" | "failed" | "unavailable") => xs.reduce((s, x) => s + x[k], 0);
@@ -33,6 +41,7 @@ export async function carrierCallJob(): Promise<CarrierTickReport | GuardSkip> {
       + `своя розмова ${String(v.own)}, повтор номера ${String(v.reused)}, без розмови ${String(v.noTalk)}, друга спроба ${String(v.secondTalk)} · `
       + `розпізнано ${String(sum(r.stt, "done"))}, проаналізовано ${String(sum(r.llm, "done"))}`
       + (r.purged ? ` · текст видалено за строком ${String(r.purged)}` : "")
+      + (r.closed ? ` · закриття (${r.closed.mode}): кандидатів ${String(r.closed.candidates)}, у журнал ${String(r.closed.logged)}, закрито ${String(r.closed.closed)}${r.closed.failed ? `, помилок ${String(r.closed.failed)}` : ""}` : "")
       + (r.sttStoppedBy ? ` · розпізнавання: ${r.sttStoppedBy}` : "")
       + (r.llmStoppedBy ? ` · аналіз: ${r.llmStoppedBy}` : ""));
     return r;

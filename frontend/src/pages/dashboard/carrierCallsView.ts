@@ -64,3 +64,19 @@ export function dealsWord(n: number): string {
   if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return "угоди";
   return "угод";
 }
+
+/** Стан закриття угоди в CRM — словами. `null` — автоматика угоду не чіпала. */
+export function closeLabel(c: { state: string; at: string } | null, fmt: (iso: string) => string): string | null {
+  if (!c) return null;
+  if (c.state === "closed") return `закрито в CRM ${fmt(c.at)}`;
+  if (c.state === "reverted") return `повернуто на етап ${fmt(c.at)}`;
+  if (c.state === "failed") return "не вдалось закрити в CRM — спробуємо ще";
+  return "закрили б (поки лише журнал)";
+}
+
+/** Режим закриття — для рядка стану. */
+export function closeModeLabel(mode: string): string {
+  if (mode === "live") return "закриття в CRM увімкнено";
+  if (mode === "off") return "закриття в CRM вимкнено";
+  return "закриття в CRM — лише журнал, у CRM нічого не пишемо";
+}

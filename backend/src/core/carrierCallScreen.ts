@@ -17,13 +17,24 @@ import { CARRIER_BUDGET, CARRIER_STAGE, carrierBucket, RUBRIC_CARRIER_V1, type C
 
 export const SCREEN_LIMIT = 5000;
 
+/** Що автоматика зробила з угодою в CRM (`carrier_close_log`): `would_close` — лише журнал; `null` — нічого. */
+export interface CloseState { state: "would_close" | "closed" | "reverted" | "failed"; at: string; error: string | null }
+function closeStateOf(x: { cl_decided: Date | null; cl_closed: Date | null; cl_reverted: Date | null; cl_error: string | null }): CloseState | null {
+  if (!x.cl_decided) return null;
+  const iso = (d: Date) => new Date(d).toISOString();
+  if (x.cl_reverted) return { state: "reverted", at: iso(x.cl_reverted), error: null };
+  if (x.cl_closed) return { state: "closed", at: iso(x.cl_closed), error: x.cl_error };
+  if (x.cl_error) return { state: "failed", at: iso(x.cl_decided), error: x.cl_error };
+  return { state: "would_close", at: iso(x.cl_decided), error: null };
+}
+
 export interface CarrierCallRow {
   uniqueid: string;
   calledAt: string;
   direction: "in" | "out";
   billsec: number;
   managerName: string | null;
-  deals: { kommoId: number; statusId: number | null; rejectReason: string | null; reused: boolean }[];
+  deals: { kommoId: number; statusId: number | null; rejectReason: string | null; reused: boolean; close: CloseState | null }[];
   talkNo: number;
   state: AiCallState;
   failure: string | null;
@@ -53,6 +64,7 @@ interface RawRow {
   manager_name: string | null; deal_status: string | null; reject_reason: string | null;
   stt_status: string | null; stt_failure: string | null; llm_status: string | null; llm_failure: string | null;
   result: CarrierResult | null;
+  cl_decided: Date | null; cl_closed: Date | null; cl_reverted: Date | null; cl_error: string | null;
 }
 
 const IN_TYPES = new Set(["in", "transitin"]);
@@ -70,9 +82,11 @@ export async function carrierCallsList(db: Db, from: string, to: string): Promis
     SELECT d.kommo_id::text, d.state AS deal_state, d.src_talk_no AS talk_no, d.u AS uniqueid,
            rc.calldate, rc.call_type, rc.billsec, m.name AS manager_name,
            dd.status_id::text AS deal_status, dd.reject_reason,
-           t.status AS stt_status, t.failure AS stt_failure, a.status AS llm_status, a.failure AS llm_failure, a.result
+           t.status AS stt_status, t.failure AS stt_failure, a.status AS llm_status, a.failure AS llm_failure, a.result,
+           cl.decided_at AS cl_decided, cl.closed_at AS cl_closed, cl.reverted_at AS cl_reverted, cl.close_error AS cl_error
       FROM d
       JOIN ringostat_calls rc ON rc.uniqueid = d.u
+      LEFT JOIN carrier_close_log cl ON cl.kommo_id = d.kommo_id
       LEFT JOIN managers m ON m.id = rc.manager_id
       LEFT JOIN deals dd ON dd.kommo_id = d.kommo_id
       LEFT JOIN call_transcripts t ON t.uniqueid = d.u AND t.provider = $3 AND t.model = $4
@@ -84,7 +98,7 @@ export async function carrierCallsList(db: Db, from: string, to: string): Promis
   const byCall = new Map<string, CarrierCallRow>();
   for (const x of r.rows.slice(0, SCREEN_LIMIT)) {
     const deal = { kommoId: Number(x.kommo_id), statusId: x.deal_status == null ? null : Number(x.deal_status),
-      rejectReason: x.reject_reason, reused: x.deal_state === "reused" };
+      rejectReason: x.reject_reason, reused: x.deal_state === "reused", close: closeStateOf(x) };
     const hit = byCall.get(x.uniqueid);
     if (hit) { hit.deals.push(deal); continue; }
     const state = aiCallState(x.stt_status, x.llm_status);
@@ -128,7 +142,7 @@ export interface CarrierCallCard {
   calledAt: string;
   billsec: number;
   managerName: string | null;
-  deals: { kommoId: number; reused: boolean }[];
+  deals: { kommoId: number; reused: boolean; close: CloseState | null }[];
   talkNo: number;
   /** Перша розмова, якщо цю слухали як другу спробу, — і що з неї вийшло. */
   firstTry: { uniqueid: string; role: string | null } | null;
@@ -147,10 +161,13 @@ export interface CarrierCallCard {
  * через цю вкладку не читались розмови інших екранів. Повний текст — лише тим, кому дозволено (`canSeeTranscript`).
  */
 export async function carrierCallCard(db: Db, uniqueid: string, canSeeTranscript: boolean): Promise<CarrierCallCard | null> {
-  const deals = (await db.query<{ kommo_id: string; state: string; talk_no: number; uniqueid: string | null; first_uniqueid: string | null }>(`
+  const deals = (await db.query<{ kommo_id: string; state: string; talk_no: number; uniqueid: string | null; first_uniqueid: string | null;
+    cl_decided: Date | null; cl_closed: Date | null; cl_reverted: Date | null; cl_error: string | null }>(`
     SELECT d.kommo_id::text, d.state, COALESCE(src.talk_no, d.talk_no) AS talk_no,
-           COALESCE(src.uniqueid, d.uniqueid) AS uniqueid, COALESCE(src.first_uniqueid, d.first_uniqueid) AS first_uniqueid
+           COALESCE(src.uniqueid, d.uniqueid) AS uniqueid, COALESCE(src.first_uniqueid, d.first_uniqueid) AS first_uniqueid,
+           cl.decided_at AS cl_decided, cl.closed_at AS cl_closed, cl.reverted_at AS cl_reverted, cl.close_error AS cl_error
       FROM carrier_call_deals d LEFT JOIN carrier_call_deals src ON src.kommo_id = d.reused_from
+      LEFT JOIN carrier_close_log cl ON cl.kommo_id = d.kommo_id
      WHERE COALESCE(src.uniqueid, d.uniqueid) = $1 OR d.first_uniqueid = $1
      ORDER BY d.deal_created_at DESC LIMIT 20`, [uniqueid])).rows;
   if (!deals.length) return null;
@@ -174,7 +191,7 @@ export async function carrierCallCard(db: Db, uniqueid: string, canSeeTranscript
   const mc = result?.manager_channel;
   return {
     uniqueid, calledAt: new Date(r.calldate).toISOString(), billsec: Number(r.billsec), managerName: r.manager_name,
-    deals: deals.filter((d) => d.uniqueid === uniqueid).map((d) => ({ kommoId: Number(d.kommo_id), reused: d.state === "reused" })),
+    deals: deals.filter((d) => d.uniqueid === uniqueid).map((d) => ({ kommoId: Number(d.kommo_id), reused: d.state === "reused", close: closeStateOf(d) })),
     talkNo: own ? Number(own.talk_no) : 1,
     firstTry: first ? { uniqueid: first, role: firstRole } : null,
     state, failure: r.llm_failure ?? r.stt_failure, result, bucket: result ? carrierBucket(result) : null,
@@ -192,9 +209,11 @@ export interface CarrierCallsMeta {
   analyses: Record<string, number>;
   spend: { carrier: number; stt: number; analysis: number };
   caps: { carrier: number; stt: number | null; analysis: number | null };
+  /** Режим закриття в Kommo і скільки чого в журналі. */
+  close: { mode: string; wouldClose: number; closed: number; reverted: number; failed: number };
 }
 
-export async function carrierCallsMeta(db: Db, now: Date, caps: { stt: number | null; analysis: number | null }): Promise<CarrierCallsMeta> {
+export async function carrierCallsMeta(db: Db, now: Date, caps: { stt: number | null; analysis: number | null }, closeMode: string): Promise<CarrierCallsMeta> {
   const j = (await db.query<{ last_success_at: Date | null; last_error: string | null; last_error_at: Date | null }>(
     "SELECT last_success_at, last_error, last_error_at FROM job_runs WHERE name = 'carrierCallJob'")).rows[0];
   const count = async (sql: string) => Object.fromEntries((await db.query<{ status: string; n: number }>(sql, [RUBRIC_CARRIER_V1])).rows
@@ -214,5 +233,14 @@ export async function carrierCallsMeta(db: Db, now: Date, caps: { stt: number | 
       analysis: (await monthSpend(db, LLM_PROVIDER, now)).usd,
     },
     caps: { carrier: CARRIER_BUDGET.monthCapUsd, ...caps },
+    close: await (async () => {
+      const c = (await db.query<{ w: number; c: number; r: number; f: number }>(`
+        SELECT count(*) FILTER (WHERE closed_at IS NULL AND close_error IS NULL)::int AS w,
+               count(*) FILTER (WHERE closed_at IS NOT NULL AND reverted_at IS NULL)::int AS c,
+               count(*) FILTER (WHERE reverted_at IS NOT NULL)::int AS r,
+               count(*) FILTER (WHERE closed_at IS NULL AND close_error IS NOT NULL)::int AS f
+          FROM carrier_close_log`)).rows[0];
+      return { mode: closeMode, wouldClose: Number(c?.w ?? 0), closed: Number(c?.c ?? 0), reverted: Number(c?.r ?? 0), failed: Number(c?.f ?? 0) };
+    })(),
   };
 }

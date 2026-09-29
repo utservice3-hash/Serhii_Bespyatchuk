@@ -1,11 +1,11 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { fetchCarrierCallCard, fetchCarrierCalls, fetchCarrierCallsMeta,
+import { fetchCarrierCallCard, fetchCarrierCalls, fetchCarrierCallsMeta, revertCarrierClose,
   type CarrierCallCardResp, type CarrierCallsMetaResp, type CarrierCallsResp } from "../../../api";
 import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
 import { STATE_UI, TONE_COLOR, mmss, jobErrorIsCurrent } from "../aiCallsView";
-import { BUCKET_UI, CARRIER_FILTERS, TONE, carrierSpeaker, confLabel, dealStatusLabel, dealsWord, matchesCarrierFilter,
+import { BUCKET_UI, CARRIER_FILTERS, TONE, carrierSpeaker, closeLabel, closeModeLabel, confLabel, dealStatusLabel, dealsWord, matchesCarrierFilter,
   type CarrierFilter } from "../carrierCallsView";
 
 /**
@@ -26,15 +26,26 @@ const pill = (bg: string, fg: string): React.CSSProperties => ({ background: bg,
 
 const FLOW = ["Дзвінок на мобільний", "Угода на етапі", "Фільтр CRM · раз на 10 хв", "Не впізнав — лишилась", "AI слухає першу розмову номера", "Вердикт тут"];
 
-function CallDetail({ uniqueid }: { uniqueid: string }) {
+function CallDetail({ uniqueid, onChanged }: { uniqueid: string; onChanged: () => void }) {
   const [c, setC] = useState<CarrierCallCardResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState<number | null>(null);
+  const [reload, setReload] = useState(0);
   useEffect(() => {
     let alive = true;
     fetchCarrierCallCard(uniqueid).then((x) => { if (alive) setC(x); })
       .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити розмову"); });
     return () => { alive = false; };
-  }, [uniqueid]);
+  }, [uniqueid, reload]);
+  const revert = async (kommoId: number) => {
+    if (!window.confirm(`Повернути угоду № ${String(kommoId)} на етап «Дзвінки на мобільні» і зняти причину «Перевізник»? Автоматика її більше не закриватиме.`)) return;
+    setBusy(kommoId);
+    try { await revertCarrierClose(kommoId); setReload((n) => n + 1); onChanged(); }
+    catch (e) {
+      const msg = (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? (e instanceof Error ? e.message : "не вдалося");
+      window.alert(`Не повернуто: ${msg}`);
+    } finally { setBusy(null); }
+  };
   if (err) return <p style={{ margin: 0, color: "var(--danger)" }}>{err}</p>;
   if (!c) return <p className="loading-text" style={{ margin: 0 }}>Завантаження розмови…</p>;
   const quote = c.result?.caller_role_quote?.trim() ?? "";
@@ -50,9 +61,21 @@ function CallDetail({ uniqueid }: { uniqueid: string }) {
           </p>
         )}
         {c.deals.length > 0 && (
-          <p style={{ margin: "6px 0 0", fontSize: 12.5 }}>
-            Угоди: {c.deals.map((d, i) => <Fragment key={d.kommoId}>{i > 0 && ", "}<a href={d.url} target="_blank" rel="noreferrer">№ {d.kommoId}</a>{d.reused && " (вердикт номера)"}</Fragment>)}
-          </p>
+          <div style={{ margin: "6px 0 0", fontSize: 12.5, display: "flex", flexDirection: "column", gap: 4 }}>
+            {c.deals.map((d) => (
+              <div key={d.kommoId} style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                <a href={d.url} target="_blank" rel="noreferrer" style={{ whiteSpace: "nowrap" }}>№ {d.kommoId}</a>
+                {d.reused && <span style={{ color: "var(--text-muted)" }}>(вердикт номера)</span>}
+                {closeLabel(d.close, fmtTime) && <span style={{ color: "var(--text-muted)" }}>· {closeLabel(d.close, fmtTime)}</span>}
+                {d.close?.state === "closed" && (
+                  <button type="button" disabled={busy === d.kommoId} onClick={() => { void revert(d.kommoId); }}
+                    style={{ border: "1px solid var(--border-strong, #d1d5db)", background: "var(--card-bg)", color: "var(--text)", borderRadius: 6, padding: "2px 8px", fontSize: 12, cursor: "pointer" }}>
+                    {busy === d.kommoId ? "Повертаю…" : "Повернути на етап"}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
         )}
       </div>
       <div>
@@ -89,17 +112,18 @@ export function CarrierCallsSection() {
   const [err, setErr] = useState<string | null>(null);
   const [filter, setFilter] = useState<CarrierFilter>("all");
   const [open, setOpen] = useState<string | null>(null);
+  const [refresh, setRefresh] = useState(0);
 
   useEffect(() => {
     if (!from || !to) return;
     let alive = true;
-    setD(null); setErr(null); setOpen(null);
+    setD(null); setErr(null);
     fetchCarrierCalls({ from, to })
       .then((x) => { if (alive) setD(x); })
       .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
     return () => { alive = false; };
-  }, [from, to]);
-  useEffect(() => { fetchCarrierCallsMeta().then(setMeta).catch(() => setMeta(null)); }, []);
+  }, [from, to, refresh]);
+  useEffect(() => { fetchCarrierCallsMeta().then(setMeta).catch(() => setMeta(null)); }, [refresh]);
 
   const rows = d?.rows ?? [];
   const shown = useMemo(() => rows.filter((r) => matchesCarrierFilter(r, filter)), [rows, filter]);
@@ -149,6 +173,9 @@ export function CarrierCallsSection() {
             {" · "}витрати мобільних за місяць {usd(meta.spend.carrier)} з {usd(meta.caps.carrier)}
             {" · "}усього AI: розпізнавання {usd(meta.spend.stt)}{meta.caps.stt != null ? ` з ${usd(meta.caps.stt)}` : ""},
             {" "}аналіз {usd(meta.spend.analysis)}{meta.caps.analysis != null ? ` з ${usd(meta.caps.analysis)}` : ""}
+            <br />{closeModeLabel(meta.close.mode)}: {meta.close.mode === "live"
+              ? `закрито ${String(meta.close.closed)}, повернуто людьми ${String(meta.close.reverted)}${meta.close.failed ? `, не вдалось ${String(meta.close.failed)}` : ""}`
+              : `закрили б ${String(meta.close.wouldClose)}`}
           </p>
         )}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>
@@ -218,11 +245,11 @@ export function CarrierCallsSection() {
                           {r.quote ? <i>«{r.quote}»</i> : r.summary ? <span style={{ color: "var(--text-muted)" }}>{r.summary}</span> : <span style={{ color: "var(--text-muted)" }}>—</span>}
                         </td>
                         <td style={{ ...cell, fontSize: 12.5, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
-                          {r.bucket ? "вердикт записано" : "ще слухаємо"}
+                          {closeLabel(main?.close ?? null, fmtTime) ?? (r.bucket ? "вердикт записано" : "ще слухаємо")}
                           <div>{main ? dealStatusLabel(main.statusId, main.rejectReason) : ""}</div>
                         </td>
                       </tr>
-                      {isOpen && <tr><td colSpan={6} style={{ padding: "0 10px 12px", background: "var(--surface-2)" }}><CallDetail uniqueid={r.uniqueid} /></td></tr>}
+                      {isOpen && <tr><td colSpan={6} style={{ padding: "0 10px 12px", background: "var(--surface-2)" }}><CallDetail uniqueid={r.uniqueid} onChanged={() => setRefresh((n) => n + 1)} /></td></tr>}
                     </Fragment>
                   );
                 })}

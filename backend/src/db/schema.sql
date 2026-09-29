@@ -4407,6 +4407,26 @@ CREATE INDEX IF NOT EXISTS idx_carrier_call_deals_phone ON carrier_call_deals(ph
 CREATE INDEX IF NOT EXISTS idx_carrier_call_deals_state ON carrier_call_deals(state, seen_at);
 REVOKE ALL ON carrier_call_deals FROM ai_readonly;
 
+-- 🧹 ЖУРНАЛ ЗАКРИТТІВ ПЕРЕВІЗНИКІВ У KOMMO (рішення Романа 29.09.2026; `core/carrierClose.ts`). Рядок на угоду:
+-- коли вирішено, у якому режимі (`dry` — лише журнал, `live` — записано в CRM), коли закрито, коли й ким повернуто.
+-- Повернуту людиною угоду автоматика більше не закриває. Стан і поле — одним оператором (db-sql.md).
+CREATE TABLE IF NOT EXISTS carrier_close_log (
+  kommo_id     BIGINT PRIMARY KEY,
+  uniqueid     TEXT NOT NULL,              -- розмова, з якої вердикт
+  confidence   NUMERIC NOT NULL,
+  quote        TEXT,
+  decided_at   TIMESTAMPTZ NOT NULL,
+  mode         TEXT NOT NULL CHECK (mode IN ('dry','live')),
+  closed_at    TIMESTAMPTZ,                -- NULL — у CRM ще не записано
+  close_error  TEXT,
+  last_try_at  TIMESTAMPTZ,
+  reverted_at  TIMESTAMPTZ,
+  reverted_by  INTEGER,
+  revert_error TEXT,
+  CHECK (reverted_at IS NULL OR closed_at IS NOT NULL)
+);
+REVOKE ALL ON carrier_close_log FROM ai_readonly;
+
 -- 📣 «Стелю досягнуто» — один раз на місяць на межу бюджету (рішення Романа 29.09.2026). Рядок ставиться ДО
 -- відправки в Telegram, тож повтор щоп'ять хвилин неможливий за побудовою.
 CREATE TABLE IF NOT EXISTS ai_cap_alerts (

@@ -9,6 +9,7 @@ import { LLM_POLICY, LLM_PROVIDER, RECORDING_MAX_BYTES, RINGOSTAT_MIN_INTERVAL_M
 import { drainWithBudget, MAX_OUTPUT_TOKENS, TICK_MAX_ATTEMPTS, TICK_PORTION, type TickPrices } from "./callAiTick.js";
 import { carrierActiveIds } from "./carrierCallQueue.js";
 import { notifyCapOnce } from "./aiCapAlert.js";
+import { runCarrierClose, type CloseMode, type CloseReport, type KommoCloser } from "./carrierClose.js";
 import { CARRIER_BUDGET, CARRIER_KIT, CARRIER_OPS, CARRIER_RULE, oldEnough, phoneFromDealName,
   RUBRIC_CARRIER_V1 } from "./carrierCallRules.js";
 
@@ -152,6 +153,8 @@ export interface CarrierTickEnv {
   /** Угоди, що зараз на етапі, — прямо з Kommo. */
   stageLeads: () => Promise<StageLead[]>;
   alert: (text: string) => Promise<void>;
+  /** Закриття впевнених перевізників у Kommo. Не задано — кроку немає (як `off`). */
+  close?: { mode: CloseMode; kommo: KommoCloser };
 }
 
 export interface CarrierTickReport {
@@ -165,18 +168,23 @@ export interface CarrierTickReport {
   sttStoppedBy: string | null;
   llmStoppedBy: string | null;
   capAlerted: boolean;
+  closed: CloseReport | null;
 }
 
 export async function runCarrierTick(env: CarrierTickEnv): Promise<CarrierTickReport> {
   const t0 = env.now();
-  const recorded = await recordStageDeals(env.db, await env.stageLeads(), t0);
+  const leads = await env.stageLeads();
+  const recorded = await recordStageDeals(env.db, leads, t0);
   const resolved = await resolveCarrierDeals(env.db, t0);
   const ids = await carrierActiveIds(env.db, t0);
   const enqueued = await enqueueTranscripts(env.db, ids, STT_PROVIDER, ELEVENLABS_STT_MODEL, t0);
   const purged = await purgeOldCarrierText(env.db, t0);
   const out: CarrierTickReport = { recorded, resolved, active: ids.length, enqueued, purged, stt: [], llm: [],
-    sttStoppedBy: null, llmStoppedBy: null, capAlerted: false };
-  if (!ids.length) return out;
+    sttStoppedBy: null, llmStoppedBy: null, capAlerted: false, closed: null };
+  // 🧹 Закриття — ПІСЛЯ вердиктів, по угодах, що стоять на етапі за ЦІЄЮ ж відповіддю Kommo.
+  const doClose = async () => env.close
+    ? runCarrierClose(env.db, env.now(), env.close.mode, new Set(leads.map((l) => l.id)), env.close.kommo) : null;
+  if (!ids.length) { out.closed = await doClose(); return out; }
 
   const throttle = createMinInterval(RINGOSTAT_MIN_INTERVAL_MS, env.http);
   const common = { limit: TICK_PORTION, maxAttempts: TICK_MAX_ATTEMPTS, stuckAfterMin: STUCK_AFTER_MIN,
@@ -210,7 +218,9 @@ export async function runCarrierTick(env: CarrierTickEnv): Promise<CarrierTickRe
 
   const capped = [...out.stt, ...out.llm].find((x) => x.state === "capped");
   if (capped) out.capAlerted = await notifyCapOnce(env.db, "carrier", capped.stoppedBy ?? "стеля вичерпана", env.now(), env.alert);
+  out.closed = await doClose();
   const errs = [stt.error, llm.error].filter((e): e is Error => e != null);
+  if (out.closed?.error) errs.push(new Error(`закриття в Kommo: ${out.closed.error}`));
   if (errs.length) throw new Error(errs.map((e) => e.message).join(" · "));
   return out;
 }

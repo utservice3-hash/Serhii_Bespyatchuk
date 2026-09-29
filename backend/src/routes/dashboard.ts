@@ -22,6 +22,7 @@ import { overviewCache } from "../core/lazyCache.js";
 /** Порожній зріз джерела — для менеджера, якого немає в розкладі створених. */
 const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, otherCount: 0, noChannelCount: 0 } as const;
 import { kommoLeadUrl } from "../core/kommoLinks.js";
+import { kommoWrite } from "../kommo/client.js";
 import { accumulateKpiTargets } from "../core/kpiTargets.js";
 
 /** Direct link to a deal (lead) card in Kommo/amoCRM. */
@@ -69,6 +70,7 @@ import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
 import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE } from "../core/callAiScreen.js";
 import { carrierCallCard, carrierCallsList, carrierCallsMeta } from "../core/carrierCallScreen.js";
+import { closeModeOf, revertCarrierClose } from "../core/carrierClose.js";
 import { adPlanForPeriod } from "../core/adBudget.js";
 import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, leadgenWeekly, leadGeneratorFill,
   pct, leadGeneratorFillNote, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS,
@@ -10547,7 +10549,8 @@ dashboardRouter.get("/carrier-calls", async (req, res) => {
     // Явний перелік полів, а не спред (#17e2).
     rows: rows.map((r) => ({
       uniqueid: r.uniqueid, calledAt: r.calledAt, direction: r.direction, billsec: r.billsec, managerName: r.managerName,
-      deals: r.deals.map((d) => ({ kommoId: d.kommoId, url: kommoLeadUrl(d.kommoId), statusId: d.statusId, rejectReason: d.rejectReason, reused: d.reused })),
+      deals: r.deals.map((d) => ({ kommoId: d.kommoId, url: kommoLeadUrl(d.kommoId), statusId: d.statusId, rejectReason: d.rejectReason,
+        reused: d.reused, close: d.close })),
       talkNo: r.talkNo, state: r.state, failure: r.failure, bucket: r.bucket, role: r.role, confidence: r.confidence,
       quote: r.quote, quoteCheck: r.quoteCheck, summary: r.summary,
     })),
@@ -10557,8 +10560,8 @@ dashboardRouter.get("/carrier-calls", async (req, res) => {
 dashboardRouter.get("/carrier-calls/meta", async (_req, res) => {
   const m = await carrierCallsMeta(pool, new Date(), {
     stt: config.callAi.prices.sttMonthCapUsd, analysis: config.callAi.prices.llmMonthCapUsd,
-  });
-  res.json({ job: m.job, transcripts: m.transcripts, analyses: m.analyses, spend: m.spend, caps: m.caps });
+  }, closeModeOf(config.callAi.carrierAutoClose));
+  res.json({ job: m.job, transcripts: m.transcripts, analyses: m.analyses, spend: m.spend, caps: m.caps, close: m.close });
 });
 
 dashboardRouter.get("/carrier-calls/:uniqueid", async (req, res) => {
@@ -10567,11 +10570,27 @@ dashboardRouter.get("/carrier-calls/:uniqueid", async (req, res) => {
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено серед дзвінків на мобільні" }); return; }
   res.json({
     uniqueid: card.uniqueid, calledAt: card.calledAt, billsec: card.billsec, managerName: card.managerName,
-    deals: card.deals.map((d) => ({ kommoId: d.kommoId, url: kommoLeadUrl(d.kommoId), reused: d.reused })),
+    deals: card.deals.map((d) => ({ kommoId: d.kommoId, url: kommoLeadUrl(d.kommoId), reused: d.reused, close: d.close })),
     talkNo: card.talkNo, firstTry: card.firstTry, state: card.state, failure: card.failure,
     result: card.result, bucket: card.bucket, turns: card.turns, transcriptHidden: card.transcriptHidden,
     textPurged: card.textPurged, managerChannel: card.managerChannel,
   });
+});
+
+/**
+ * ↩️ Повернути угоду, яку дашборд закрив як перевізника, назад на етап (дія людини; `core/carrierClose.ts`).
+ * Межа — та сама вкладка `carrier-calls` (routeTab); повернуту угоду автоматика більше не закриває.
+ */
+dashboardRouter.post("/carrier-calls/deals/:kommoId/revert", async (req, res) => {
+  const auth = req.auth!;
+  const id = Number(req.params.kommoId);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Невірний номер угоди" }); return; }
+  const r = await revertCarrierClose(pool, id, auth.userId, auth.email ?? `користувач #${String(auth.userId)}`, new Date(), {
+    patchLeads: (body) => kommoWrite("/api/v4/leads", body, "PATCH"),
+    addNotes: (body) => kommoWrite("/api/v4/leads/notes", body, "POST"),
+  });
+  if (!r.ok) { res.status(r.code).json({ error: r.why }); return; }
+  res.json({ ok: true });
 });
 
 dashboardRouter.get("/missed-calls", async (req, res) => {

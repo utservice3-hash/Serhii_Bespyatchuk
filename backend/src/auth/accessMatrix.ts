@@ -380,6 +380,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp"], deny: ["team_lead", "hr", "manager", "financier"] },
   { method: "GET", path: "/api/dashboard/carrier-calls/:uniqueid", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp"], deny: ["team_lead", "hr", "manager", "financier"] },
+  /* ↩️ Повернути закриту дашбордом угоду на етап — запис у Kommo, тож проба лише на відмову. */
+  { method: "POST", path: "/api/dashboard/carrier-calls/deals/:kommoId/revert", cls: "deny-only",
+    allow: [], deny: ["team_lead", "hr", "manager", "financier"] },
   /* 🧑‍💼 НАЙМ, прохід 1 (17.09.2026). Вкладку `hiring` сид дає admin, ceo, opdir, kvp, hr,
      team_lead — рядок `/api/hiring/candidates` звіряється з ним гейтом #504.
      Друга межа — `hiringAccess` першим оператором обробника: графік, звіт і запис веде

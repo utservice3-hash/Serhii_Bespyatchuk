@@ -390,10 +390,12 @@ export async function fetchAiCallsMeta(): Promise<AiCallsMetaResp> {
 /** 🚚 «Перевізники за розмовою» (29.09.2026) — лише керівництво; правила — METRICS_GLOSSARY §17. */
 export interface CarrierCallRowT {
   uniqueid: string; calledAt: string; direction: "in" | "out"; billsec: number; managerName: string | null;
-  deals: { kommoId: number; url: string; statusId: number | null; rejectReason: string | null; reused: boolean }[];
+  deals: { kommoId: number; url: string; statusId: number | null; rejectReason: string | null; reused: boolean; close: CarrierCloseT | null }[];
   talkNo: number; state: AiCallState; failure: string | null; bucket: CarrierBucketT | null; role: string | null;
   confidence: number | null; quote: string | null; quoteCheck: string | null; summary: string | null;
 }
+/** Що автоматика зробила з угодою в CRM: «закрили б» (лише журнал), закрито, повернуто, помилка запису. */
+export interface CarrierCloseT { state: "would_close" | "closed" | "reverted" | "failed"; at: string; error: string | null }
 export interface CarrierKpisT {
   removedByFilter: number; leftAfterFilter: number; waitingTalk: number; noTalk: number; listenedPhones: number;
   recordingSince: string | null;
@@ -405,7 +407,7 @@ export async function fetchCarrierCalls(params: { from: string; to: string }): P
 }
 export interface CarrierCallCardResp {
   uniqueid: string; calledAt: string; billsec: number; managerName: string | null;
-  deals: { kommoId: number; url: string; reused: boolean }[]; talkNo: number;
+  deals: { kommoId: number; url: string; reused: boolean; close: CarrierCloseT | null }[]; talkNo: number;
   firstTry: { uniqueid: string; role: string | null } | null; state: AiCallState; failure: string | null;
   result: { summary: string; manager_channel: string; caller_role: string; caller_role_confidence: number;
     caller_role_quote: string; quote_check?: string } | null;
@@ -420,6 +422,10 @@ export interface CarrierCallsMetaResp {
   transcripts: Record<string, number>; analyses: Record<string, number>;
   spend: { carrier: number; stt: number; analysis: number };
   caps: { carrier: number; stt: number | null; analysis: number | null };
+  close: { mode: string; wouldClose: number; closed: number; reverted: number; failed: number };
+}
+export async function revertCarrierClose(kommoId: number): Promise<void> {
+  await api.post(`/dashboard/carrier-calls/deals/${String(kommoId)}/revert`);
 }
 export async function fetchCarrierCallsMeta(): Promise<CarrierCallsMetaResp> {
   const { data } = await api.get<CarrierCallsMetaResp>("/dashboard/carrier-calls/meta");

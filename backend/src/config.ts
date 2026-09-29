@@ -81,6 +81,9 @@ export const config = {
   // ElevenLabs: ключ лише з дозволом «Speech to Text». Ціни й стелі сюди НЕ їдуть — їх називає
   // той, хто запускає (пілот / джоба), бо вони залежать від тарифу, а не від коду.
   callAi: {
+    // 🧹 Закриття перевізників у Kommo (`core/carrierClose.ts`): «live» — пишемо в CRM; «off» — нічого;
+    // будь-що інше, включно з відсутністю, — лише журнал (рішення Романа 29.09.2026: першу добу — журнал).
+    carrierAutoClose: process.env.CARRIER_AUTO_CLOSE ?? "",
     elevenlabsApiKey: process.env.ELEVENLABS_API_KEY ?? "",
     geminiApiKey: process.env.GEMINI_API_KEY ?? "",
     // Ціни й стелі — БЕЗ значень за замовчуванням: не задано → «не налаштовано», жодної витрати

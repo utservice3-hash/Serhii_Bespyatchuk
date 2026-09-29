@@ -62,7 +62,7 @@ export const FORBIDDEN_TABLES = [
   // 🚪 Звільнення (21.09.2026): причини й хто звільняв. REVOKE у схемі. Тримає #624.
   "employee_offboarding",
   // 🎙 AI-аналіз дзвінків (22.09.2026): тексти розмов клієнтів, аналізи й витрати. REVOKE у схемі. Тримає #653.
-  "call_transcripts", "call_analyses", "ai_spend_ledger", "carrier_call_deals", "ai_cap_alerts",
+  "call_transcripts", "call_analyses", "ai_spend_ledger", "carrier_call_deals", "ai_cap_alerts", "carrier_close_log",
   // 🎥 Зустрічі tl;dv (23.09.2026): пошта й імена учасників. REVOKE у схемі. Тримає #803.
   "tldv_meetings",
   // 💼 Відгуки work.ua (28.09.2026): памʼять відгуків кандидатів. REVOKE у схемі. Тримає #807.

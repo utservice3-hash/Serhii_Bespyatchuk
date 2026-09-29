@@ -549,8 +549,8 @@ test("#962 ДОСТУП: матриця = сид (admin, ceo, opdir, kvp), ме�
   assert.ok(m, "🔴 сиду вкладки carrier-calls у схемі немає");
   const seeded = m[1].split(",").map((x) => x.trim().replace(/'/g, "")).sort();
   assert.deepEqual(seeded, ["admin", "ceo", "kvp", "opdir"]);
-  const rows = ACCESS_MATRIX.filter((r) => r.path.startsWith("/api/dashboard/carrier-calls"));
-  assert.equal(rows.length, 3, "🔴 не всі роути вкладки в матриці");
+  const rows = ACCESS_MATRIX.filter((r) => r.path.startsWith("/api/dashboard/carrier-calls") && r.method === "GET");
+  assert.equal(rows.length, 3, "🔴 не всі роути читання вкладки в матриці");
   for (const r of rows) {
     assert.deepEqual([...r.allow].sort(), seeded, `🔴 ${r.path}: матриця ≠ сид`);
     for (const d of ["team_lead", "manager", "financier", "hr"]) assert.ok(r.deny.includes(d as never), `🔴 ${r.path}: ${d} не в deny`);
@@ -639,9 +639,191 @@ test("#964 СТАН МОБІЛЬНИХ · ЖИВА СХЕМА: черга й в�
     ('964-mob','elevenlabs','scribe_v2','queued'), ('964-ad','elevenlabs','scribe_v2','queued')`);
   await c.raw.query(`INSERT INTO ai_spend_ledger(at,provider,operation,units,unit,unit_price_usd) VALUES
     ($1,'elevenlabs','carrier_stt',2,'audio_sec',1), ($1,'elevenlabs','stt',5,'audio_sec',1)`, [NOW.toISOString()]);
-  const m = await carrierCallsMeta(c.db, NOW, { stt: 40, analysis: 10 });
+  const m = await carrierCallsMeta(c.db, NOW, { stt: 40, analysis: 10 }, "dry");
   assert.equal(m.transcripts.queued, 1, "🔴 у черзі мобільних рахується чужий дзвінок");
   assert.equal(m.spend.carrier, 2, "🔴 витрати мобільних змішано з рекламними");
   assert.equal(m.spend.stt, 7, "дзеркало: загальні витрати розпізнавання — усі");
   assert.equal(m.caps.carrier, 15);
+});
+
+// ─── Закриття перевізників у Kommo ──────────────────────────────────────────
+
+function fakeKommo(fail = false) {
+  const calls: { patch: unknown[][]; notes: unknown[][] } = { patch: [], notes: [] };
+  return { calls, kommo: {
+    patchLeads: async (b: unknown[]) => { calls.patch.push(b); if (fail) throw new Error("Kommo API error 502"); return {}; },
+    addNotes: async (b: unknown[]) => { calls.notes.push(b); return {}; },
+  } };
+}
+async function seedClose(c: Raw, base: number) {
+  const mk = async (n: number, role: string, conf: number, qc: string) => {
+    const P = phone(base, n), u = `${String(base)}-${String(n)}`;
+    await call(c, u, min(200), 40, P);
+    await carrierDeal(c, base + n, P, min(201), "own", u, 1);
+    await carrierAnalysed(c, u, role, conf, qc);
+  };
+  await mk(1, "carrier", 0.95, "counterpart");     // кандидат
+  await mk(2, "carrier", 0.84, "counterpart");     // нижче порогу
+  await mk(3, "client", 0.95, "counterpart");      // клієнт
+  await mk(4, "carrier", 0.95, "manager");         // цитата менеджера
+  await mk(5, "carrier", 0.95, "counterpart");     // уже не на етапі
+  await c.raw.query(`INSERT INTO carrier_call_deals(kommo_id,phone,deal_created_at,seen_at,state,reused_from)
+    VALUES ($1,$2,$3,$4,'reused',$5)`, [base + 6, phone(base, 1), min(100).toISOString(), NOW.toISOString(), base + 1]);
+  return new Set([base + 1, base + 2, base + 3, base + 4, base + 6]);
+}
+
+/**
+ * #970 — КАНДИДАТИ НА ЗАКРИТТЯ: лише впевнений перевізник (≥ 0,85 і цитата співрозмовника) і лише угода, що досі
+ * на етапі за відповіддю Kommo; угода з повтором вердикту номера — теж. Клієнт, нижче порогу, фраза менеджера,
+ * угода не на етапі, повернута людиною — ні.
+ * 🧨 Червоніє, якщо закрити клієнта чи невпевненого, або ігнорувати свіжий етап.
+ */
+test("#970 КАНДИДАТИ · ЖИВА СХЕМА: лише впевнений перевізник, що досі на етапі; клієнт, поріг, чужа цитата — ні", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await reset(c); await c.raw.query("TRUNCATE carrier_close_log");
+  const { closeCandidates } = await import("./carrierClose.js");
+  const B = 97000, onStage = await seedClose(c, B);
+  await c.raw.query(`INSERT INTO carrier_close_log(kommo_id,uniqueid,confidence,decided_at,mode,closed_at,reverted_at)
+    VALUES ($1,'x',0.95,$2,'live',$2,$2)`, [B + 6, NOW.toISOString()]);
+  const got = (await closeCandidates(c.db, onStage, NOW)).map((x) => x.kommoId).sort();
+  assert.deepEqual(got, [B + 1], "🔴 закриваємо не рівно впевненого перевізника на етапі (або повернуту людиною угоду)");
+  await c.raw.query("DELETE FROM carrier_close_log WHERE kommo_id = $1", [B + 6]);
+  assert.deepEqual((await closeCandidates(c.db, onStage, NOW)).map((x) => x.kommoId).sort(), [B + 1, B + 6],
+    "дзеркало: угода з повтором вердикту номера теж закривається");
+});
+
+/**
+ * #971 — РЕЖИМИ: `dry` — журнал без жодного запиту до Kommo, повтор не дублює; `live` — один пакет і примітки,
+ * закрите позначено й удруге не пишеться; `off` — нічого.
+ * 🧨 Червоніє, якщо «журнал» пише в CRM, «живий» не пише або пише двічі.
+ */
+test("#971 РЕЖИМИ · ЖИВА СХЕМА: журнал — нуль запитів до Kommo; живий — один пакет і примітки; повтор — нічого", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await reset(c); await c.raw.query("TRUNCATE carrier_close_log");
+  const { runCarrierClose } = await import("./carrierClose.js");
+  const B = 97100, onStage = await seedClose(c, B);
+  const off = fakeKommo();
+  assert.equal((await runCarrierClose(c.db, NOW, "off", onStage, off.kommo)).logged, 0);
+  const dry = fakeKommo();
+  const r1 = await runCarrierClose(c.db, NOW, "dry", onStage, dry.kommo);
+  assert.deepEqual([r1.logged, r1.closed, dry.calls.patch.length], [2, 0, 0], "🔴 «лише журнал» записав у Kommo");
+  assert.equal((await runCarrierClose(c.db, NOW, "dry", onStage, dry.kommo)).logged, 0, "🔴 журнал дублюється щопроходу");
+  const live = fakeKommo();
+  const r2 = await runCarrierClose(c.db, NOW, "live", onStage, live.kommo);
+  assert.equal(r2.closed, 2);
+  assert.equal(live.calls.patch.length, 1, "🔴 закриття не одним пакетом");
+  assert.deepEqual((live.calls.patch[0] as { id: number }[]).map((x) => x.id).sort(), [B + 1, B + 6]);
+  assert.equal(live.calls.notes.length, 1, "🔴 без примітки менеджер не знатиме, чому угоду закрито");
+  await runCarrierClose(c.db, NOW, "live", onStage, live.kommo);
+  assert.equal(live.calls.patch.length, 1, "🔴 закриту угоду закрито вдруге");
+});
+
+/**
+ * #972 — ЗАПИТ ДО KOMMO: закриття — статус 143 у воронці Кваліфікація з причиною «Перевізник» (6343043);
+ * повернення — етап «Дзвінки на мобільні» і причина знята; пакети по 50; запис вмикає лише рівно «live».
+ * 🧨 Червоніє, якщо переплутати статус, причину чи воронку або ввімкнути запис описком.
+ */
+test("#972 ЗАПИТ: 143 + «Перевізник», повернення — етап і без причини, пакети по 50, запис лише на «live»", async () => {
+  const { closePayload, revertPayload, closeModeOf, chunks } = await import("./carrierClose.js");
+  assert.deepEqual(closePayload([5]), [{ id: 5, pipeline_id: 8921928, status_id: 143,
+    custom_fields_values: [{ field_id: 2097265, values: [{ enum_id: 6343043 }] }] }]);
+  assert.deepEqual(revertPayload(5), [{ id: 5, pipeline_id: 8921928, status_id: 70419108,
+    custom_fields_values: [{ field_id: 2097265, values: null }] }]);
+  assert.deepEqual(chunks(Array.from({ length: 120 }, (_, i) => i), 50).map((x) => x.length), [50, 50, 20]);
+  assert.equal(closeModeOf("live"), "live");
+  assert.equal(closeModeOf("off"), "off");
+  for (const v of [undefined, "", "LIVE", "yes", "true", " live1"]) assert.equal(closeModeOf(v), "dry", `🔴 «${String(v)}» — не журнал`);
+});
+
+/**
+ * #973 — ПОВЕРНЕННЯ: закрита угода повертається на етап, у журналі — хто й коли; вдруге — відмова; повернуту
+ * автоматика більше не закриває; «лише журнал» і чужу угоду повертати нема чого.
+ * 🧨 Червоніє, якщо повернення не пише в Kommo, не лишає сліду або автоматика закриває повернуту знову.
+ */
+test("#973 ПОВЕРНЕННЯ · ЖИВА СХЕМА: на етап, хто й коли; повернуту більше не закриваємо; журнал і чуже — відмова", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await reset(c); await c.raw.query("TRUNCATE carrier_close_log");
+  const { runCarrierClose, revertCarrierClose } = await import("./carrierClose.js");
+  const B = 97300, onStage = await seedClose(c, B);
+  const k = fakeKommo();
+  await runCarrierClose(c.db, NOW, "live", onStage, k.kommo);
+  const r = await revertCarrierClose(c.db, B + 1, 42, "kvp@uts", NOW, k.kommo);
+  assert.deepEqual(r, { ok: true });
+  assert.deepEqual(k.calls.patch.at(-1), [{ id: B + 1, pipeline_id: 8921928, status_id: 70419108,
+    custom_fields_values: [{ field_id: 2097265, values: null }] }], "🔴 повернення не пішло в Kommo");
+  const l = (await c.raw.query<{ reverted_by: number; reverted_at: Date | null }>("SELECT reverted_by, reverted_at FROM carrier_close_log WHERE kommo_id=$1", [B + 1])).rows[0];
+  assert.equal(l.reverted_by, 42); assert.ok(l.reverted_at, "🔴 не видно, хто й коли повернув");
+  assert.equal((await revertCarrierClose(c.db, B + 1, 42, "kvp@uts", NOW, k.kommo) as { code?: number }).code, 409);
+  const before = k.calls.patch.length;
+  await runCarrierClose(c.db, NOW, "live", onStage, k.kommo);
+  assert.equal(k.calls.patch.length, before, "🔴 повернуту людиною угоду автоматика закрила знову");
+  await c.raw.query(`INSERT INTO carrier_close_log(kommo_id,uniqueid,confidence,decided_at,mode) VALUES (97399,'y',0.9,$1,'dry')`, [NOW.toISOString()]);
+  assert.equal((await revertCarrierClose(c.db, 97399, 42, "x", NOW, k.kommo) as { code?: number }).code, 409, "🔴 «повернуто» те, що не закривалось");
+  assert.equal((await revertCarrierClose(c.db, 97398, 42, "x", NOW, k.kommo) as { code?: number }).code, 404);
+});
+
+/**
+ * #974 — ПОМИЛКА KOMMO: невдалий запис не позначає угоду закритою, лишає причину; повтор — не раніше ніж за
+ * годину (не бомбимо CRM щоп'ять хвилин), після години — пробуємо знову.
+ * 🧨 Червоніє, якщо помилку прийняти за закриття або повторювати щопроходу.
+ */
+test("#974 ПОМИЛКА KOMMO · ЖИВА СХЕМА: не закрито, причина збережена, повтор — не раніше ніж за годину", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await reset(c); await c.raw.query("TRUNCATE carrier_close_log");
+  const { runCarrierClose } = await import("./carrierClose.js");
+  const B = 97400, onStage = await seedClose(c, B);
+  const bad = fakeKommo(true);
+  const r = await runCarrierClose(c.db, NOW, "live", onStage, bad.kommo);
+  assert.deepEqual([r.closed, r.failed], [0, 2]);
+  assert.match(r.error ?? "", /502/);
+  const l = (await c.raw.query<{ closed_at: Date | null; close_error: string | null }>("SELECT closed_at, close_error FROM carrier_close_log WHERE kommo_id=$1", [B + 1])).rows[0];
+  assert.equal(l.closed_at, null, "🔴 невдалий запис позначено закриттям");
+  assert.match(l.close_error ?? "", /502/);
+  await runCarrierClose(c.db, new Date(NOW.getTime() + 5 * 60_000), "live", onStage, bad.kommo);
+  assert.equal(bad.calls.patch.length, 1, "🔴 після помилки CRM бомбимо щоп'ять хвилин");
+  const ok = fakeKommo();
+  assert.equal((await runCarrierClose(c.db, new Date(NOW.getTime() + 61 * 60_000), "live", onStage, ok.kommo)).closed, 2, "дзеркало: за годину — пробуємо знову");
+});
+
+/**
+ * #975 — ДОСТУП І ПРОВОДКА: повернення — у матриці як запис, закрите для тімліда, менеджера, фінансиста й HR, межа —
+ * вкладка; роут кличе ядро; кнопка на фронті ходить на цей роут; джоба бере режим рівно з `closeModeOf`.
+ * 🧨 Червоніє, якщо відкрити запис іншим ролям, прибрати межу або вмикати запис в обхід `closeModeOf`.
+ */
+test("#975 ДОСТУП І ПРОВОДКА: повернення — лише ролі вкладки, роут → ядро, кнопка → роут, режим — з closeModeOf", async () => {
+  const w = ACCESS_MATRIX.find((r) => r.method === "POST" && r.path === "/api/dashboard/carrier-calls/deals/:kommoId/revert");
+  assert.ok(w, "🔴 роут повернення не в матриці");
+  for (const d of ["team_lead", "manager", "financier", "hr"]) assert.ok(w.deny.includes(d as never), `🔴 ${d} може повертати угоди`);
+  const { tabsForPath } = await import("../auth/routeTab.js");
+  assert.deepEqual(tabsForPath("/api/dashboard/carrier-calls/deals/123/revert"), ["carrier-calls"], "🔴 запис без межі вкладки");
+  const route = SRC("routes/dashboard.ts");
+  const at = route.indexOf('dashboardRouter.post("/carrier-calls/deals/:kommoId/revert"');
+  assert.ok(at > 0, "🔴 роут повернення не знайдено");
+  // Межа тіла — наступний роут, а не перше «});»: усередині є `json({ … });` (правило 9: межі змістові).
+  assert.match(route.slice(at, route.indexOf("dashboardRouter.", at + 10)), /revertCarrierClose\(pool,/, "🔴 роут повертає не через ядро");
+  const job = SRC("jobs/carrierCallJob.ts");
+  assert.match(job, /mode: closeModeOf\(config\.callAi\.carrierAutoClose\)/, "🔴 режим закриття береться не з closeModeOf");
+  const api = readFileSync(FE("api.ts"), "utf8");
+  assert.ok(api.includes("`/dashboard/carrier-calls/deals/${String(kommoId)}/revert`"), "🔴 api не ходить на роут повернення");
+  assert.ok(readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8").includes("revertCarrierClose("), "🔴 кнопки повернення немає");
+});
+
+/**
+ * #976 — ПРОХІД ЗАКРИВАЄ ЛИШЕ ТЕ, ЩО KOMMO ЩОЙНО ВІДДАВ «НА ЕТАПІ»: два впевнені перевізники, але Kommo цього
+ * проходу віддав лише одного — закривається лише він.
+ * 🧨 Червоніє, якщо крок закриття брати етап не з відповіді цього проходу.
+ */
+test("#976 ПРОХІД · ЖИВА СХЕМА: закривається лише угода з цієї ж відповіді Kommo", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await reset(c); await c.raw.query("TRUNCATE carrier_close_log");
+  const { runCarrierTick } = await import("./carrierCalls.js");
+  const B = 97600;
+  await seedClose(c, B);
+  const k = fakeKommo();
+  const net = fakeNet();
+  const lead = (id: number) => ({ id, name: phone(B, id - B), created_at: sec(min(201)), responsible_user_id: 1 });
+  const r = await runCarrierTick({ db: c.db, http: net.http, keys: { elevenlabs: "k", gemini: "g" }, prices: PRICES, now: () => NOW,
+    stageLeads: async () => [lead(B + 1)], alert: async () => {}, close: { mode: "live", kommo: k.kommo } });
+  assert.equal(r.closed?.closed, 1);
+  assert.deepEqual((k.calls.patch[0] as { id: number }[]).map((x) => x.id), [B + 1], "🔴 закрито угоду, якої Kommo цього проходу на етапі не віддав");
 });
