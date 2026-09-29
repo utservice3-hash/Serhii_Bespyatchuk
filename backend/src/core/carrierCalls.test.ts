@@ -370,11 +370,37 @@ test("#937 СТЕЛЯ МОБІЛЬНИХ · ЖИВА СХЕМА: стоять л
   assert.equal(await st("937-mob"), "capped");
   assert.equal(await st("937-ad"), "queued", "🔴 стеля мобільних заморозила рекламний дзвінок");
   assert.equal(net.hits.elevenlabs, 0, "🔴 за вичерпаною стелею пішла оплата");
+  assert.equal(net.hits.ringostat, 0, "🔴 за вичерпаною стелею рядки взято в роботу й завантажено запис — перший рубіж не спрацював");
   await runCarrierTick(env);
   assert.equal(sent.length, 1, "🔴 повідомлення про стелю не одне на місяць");
   assert.match(sent[0], /мобільні/);
   assert.equal(await notifyCapOnce(c.db, "carrier", "x", new Date("2026-10-01T09:00:00Z"), async () => {}), true,
     "дзеркало: наступного місяця — знову");
+});
+
+/**
+ * #937b — ДРУГИЙ РУБІЖ СТЕЛІ МОБІЛЬНИХ: витрачено трохи менше $15 — рядок береться, але дзвінок, що перевищив би
+ * стелю, не оплачується (оцінка до виклику). Дзеркало: без витрат — оплачується.
+ * 🧨 Червоніє, якщо прибрати перевірку додаткової стелі перед кожним дзвінком.
+ */
+test("#937b СТЕЛЯ МОБІЛЬНИХ · ЖИВА СХЕМА: під самою стелею дзвінок, що її перевищить, не оплачується", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await reset(c);
+  const { runCarrierTick } = await import("./carrierCalls.js");
+  const P = phone(93750, 1);
+  await call(c, "937b-mob", min(100), 30, P);
+  await carrierDeal(c, 93751, P, min(101), "own", "937b-mob", 1);
+  await c.raw.query(`INSERT INTO ai_spend_ledger(at,provider,operation,units,unit,unit_price_usd)
+    VALUES ($1,'google','carrier_analysis',14.9999,'input_tokens',1)`, [NOW.toISOString()]);
+  const net = fakeNet();
+  const env = { db: c.db, http: net.http, keys: { elevenlabs: "k", gemini: "g" }, prices: PRICES, now: () => NOW,
+    stageLeads: async () => [], alert: async () => {} };
+  const r = await runCarrierTick(env);
+  assert.equal(net.hits.elevenlabs, 0, "🔴 дзвінок, що перевищує стелю мобільних, оплачено");
+  assert.match(r.stt[0]?.stoppedBy ?? "", /мобільні/, "🔴 зупинка не названа стелею мобільних");
+  await c.raw.query("TRUNCATE ai_spend_ledger");
+  await runCarrierTick(env);
+  assert.equal(net.hits.elevenlabs, 1, "дзеркало: без витрат дзвінок оплачується");
 });
 
 /**
