@@ -4659,6 +4659,22 @@ export const sendSecretCode = async (id: number) => (await api.post<{ expiresInS
 export const revealSecret = async (id: number, code: string, reason: string) =>
   (await api.post<{ value: string; login: string | null; seconds: number }>(`/secrets/${id}/reveal`, { code, reason })).data;
 
+// 👥 ТІМЛІД І СЕЙФ СВОЄЇ КОМАНДИ (29.09.2026). Межа «своя команда» — на сервері; значення — лише з reveal/reset.
+export interface TeamPerson {
+  userId: number; name: string; login: string; position: string | null; phone: string | null; email: string | null;
+  telegram: string | null; birthDate: string | null; hiredAt: string | null; passwords: number; dashboardKnown: boolean;
+}
+export interface TeamSecretItem { id: number; kind: "password"; service: string; label: string | null; login: string | null; updated_at: string }
+export const fetchTeamVaultStatus = async () => (await api.get<SecretsStatus>("/team-vault/status")).data;
+export const createTeamVaultLink = async () => (await api.post<{ code: string; expiresInSec: number; botUsername: string | null; url: string | null }>("/team-vault/link")).data;
+export const unlinkTeamVault = async () => { await api.post("/team-vault/unlink"); };
+export const fetchTeamPeople = async () => (await api.get<{ rows: TeamPerson[]; reason: string | null }>("/team-vault/people")).data;
+export const fetchTeamPerson = async (userId: number) => (await api.get<{ person: TeamPerson; items: TeamSecretItem[] }>(`/team-vault/people/${userId}`)).data;
+export const sendTeamSecretCode = async (id: number) => (await api.post<{ expiresInSec: number }>(`/team-vault/${id}/code`)).data;
+export const revealTeamSecret = async (id: number, code: string, reason: string) =>
+  (await api.post<{ value: string; login: string | null; seconds: number }>(`/team-vault/${id}/reveal`, { code, reason })).data;
+export const resetTeamPassword = async (userId: number) => (await api.post<{ password: string }>(`/team-vault/people/${userId}/reset-password`)).data;
+
 
 // 🗂 Реєстр співробітників + імпорт «UTS Співробітники УКР» (18.09.2026, задача №3898).
 export interface EmployeeRow {
@@ -4875,11 +4891,12 @@ export async function createDashboardTeam(name: string): Promise<{ id: number; n
 // Дзеркало `routes/businessAssistant.ts`. Доступ — вкладка `ba`; кнопка в дебіторці — право `create_claim`.
 export type BaClaimStatus = "problem" | "sent" | "answered" | "noreply" | "court" | "paid" | "closed";
 export type BaCaseStatus = "prep" | "filed" | "going" | "done";
-export type BaDocType = "claim" | "lawsuit" | "receipt" | "company_docs" | "other";
+export type BaDocType = "claim" | "lawsuit" | "receipt" | "company_docs" | "contract" | "other";
 export interface BaOption<K extends string> { key: K; label: string }
 export interface BaMeta {
   claimStatuses: BaOption<BaClaimStatus>[]; caseStatuses: BaOption<BaCaseStatus>[];
-  claimDocTypes: BaOption<BaDocType>[]; caseDocTypes: BaOption<BaDocType>[]; fileMaxBytes: number;
+  claimDocTypes: BaOption<BaDocType>[]; caseDocTypes: BaOption<BaDocType>[]; issueDocTypes: BaOption<BaDocType>[];
+  fileMaxBytes: number; ttnDefaultMonth: string; ttnNormPct: number;
 }
 export interface BaFile { id: number; docType: BaDocType; docTypeLabel: string; name: string; mime: string; size: number; fromClaim: boolean; createdAt: string }
 export interface BaEvent { at: string; what: string; actor: string | null }
@@ -4909,7 +4926,8 @@ export const fetchBaCase = async (id: number) => (await api.get<BaCaseCard>(`/ba
 export const createBaCase = async (p: BaCaseInput) => (await api.post<{ id: number }>("/ba/cases", p)).data.id;
 export const updateBaCase = async (id: number, p: BaCaseInput) => { await api.patch(`/ba/cases/${id}`, p); };
 export const archiveBaCase = async (id: number, archived: boolean) => { await api.post(`/ba/cases/${id}/archive`, { archived }); };
-export async function uploadBaFile(kind: "claims" | "cases", id: number, file: File, docType: BaDocType): Promise<number> {
+export type BaFileKind = "claims" | "cases" | "issues";
+export async function uploadBaFile(kind: BaFileKind, id: number, file: File, docType: BaDocType): Promise<number> {
   const dataBase64 = await new Promise<string>((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => resolve(String(r.result));
@@ -4919,10 +4937,38 @@ export async function uploadBaFile(kind: "claims" | "cases", id: number, file: F
   return (await api.post<{ id: number }>(`/ba/${kind}/${id}/files`, { filename: file.name, dataBase64, docType })).data.id;
 }
 /** Файл тягнеться з токеном (звичайне посилання його не несе) і відкривається як blob. */
-export async function fetchBaFileBlobUrl(kind: "claims" | "cases", id: number, fileId: number): Promise<string> {
+export async function fetchBaFileBlobUrl(kind: BaFileKind, id: number, fileId: number): Promise<string> {
   const { data } = await api.get<Blob>(`/ba/${kind}/${id}/files/${fileId}`, { responseType: "blob" });
   return URL.createObjectURL(data);
 }
+// ── Облік техніки й ТТН (прохід 2, 29.09.2026). Дзеркало `core/baEquipment.ts` і `core/baTtn.ts`.
+export interface BaEmployee { id: number; fullName: string; status: "active" | "dismissed" }
+export interface BaHolder { issueId: number; name: string; employeeId: number | null; issuedOn: string | null; dismissed: boolean; dismissedOn: string | null; contractFiles: number }
+export interface BaEquipmentItem {
+  id: number; invNo: string; kind: string; model: string; purchasedOn: string | null; price: number | null;
+  purchaseUrl: string | null; location: string; comment: string; archived: boolean; holder: BaHolder | null; lastReturnedOn: string | null;
+}
+export interface BaIssueFile { id: number; docType: BaDocType; docTypeLabel: string; name: string; mime: string; size: number; createdAt: string }
+export interface BaIssue { id: number; name: string; employeeId: number | null; dismissed: boolean; issuedOn: string | null; returnedOn: string | null; files: BaIssueFile[] }
+export interface BaEquipmentCard extends BaEquipmentItem { issues: BaIssue[]; events: BaEvent[] }
+export interface BaEquipmentInput { kind?: string; invNo?: string; model?: string; purchasedOn?: string | null; price?: string | number | null; purchaseUrl?: string; location?: string; comment?: string }
+export const fetchBaEmployees = async () => (await api.get<{ employees: BaEmployee[] }>("/ba/employees")).data.employees;
+export const fetchBaEquipment = async () => (await api.get<{ items: BaEquipmentItem[] }>("/ba/equipment")).data.items;
+export const fetchBaEquipmentCard = async (id: number) => (await api.get<BaEquipmentCard>(`/ba/equipment/${id}`)).data;
+export const createBaEquipment = async (p: BaEquipmentInput) => (await api.post<{ id: number }>("/ba/equipment", p)).data.id;
+export const updateBaEquipment = async (id: number, p: BaEquipmentInput) => { await api.patch(`/ba/equipment/${id}`, p); };
+export const archiveBaEquipment = async (id: number, archived: boolean) => { await api.post(`/ba/equipment/${id}/archive`, { archived }); };
+export const issueBaEquipment = async (id: number, p: { employeeId: number; issuedOn: string }) => (await api.post<{ issueId: number }>(`/ba/equipment/${id}/issue`, p)).data.issueId;
+export const returnBaIssue = async (issueId: number, returnedOn: string) => { await api.post(`/ba/issues/${issueId}/return`, { returnedOn }); };
+export const undoReturnBaIssue = async (issueId: number) => { await api.post(`/ba/issues/${issueId}/undo-return`); };
+export interface BaTtnRow {
+  managerId: number; name: string; active: boolean; dealsNow: number; kommoUrl: string | null;
+  saved: { dealsNeeded: number; ttnPresent: number; note: string; pct: number | null; checkedAt: string; checkedBy: string | null } | null;
+  history: { month: string; pct: number | null }[];
+}
+export const fetchBaTtn = async (month: string) => (await api.get<{ month: string; rows: BaTtnRow[] }>("/ba/ttn", { params: { month } })).data;
+export const saveBaTtn = async (month: string, managerId: number, p: { ttnPresent: number; note: string }) => { await api.put(`/ba/ttn/${month}/${managerId}`, p); };
+
 /** Кнопка «Проблемний клієнт»: хто може створити / відкрити і де претензія вже є. */
 export interface ReceivableClaimsState { canCreate: boolean; canOpen: boolean; open: { clientKey: string; claimId: number }[] }
 export const fetchReceivableClaims = async () => (await api.get<ReceivableClaimsState>("/receivables-claims/open")).data;

@@ -234,7 +234,7 @@ test("#772 ДОСТУП БА: вкладка ba і право create_claim — �
 test("#772b ДОСТУП БА: onlyBa — перший оператор кожного обробника, кнопка — за правом", () => {
   const src = SRC("routes/businessAssistant.ts");
   const inline = [...src.matchAll(/baRouter\.(get|post|patch|put|delete)\("([^"]+)", (?:async )?\(req, res\) => \{\s*try \{\s*([^\n;]+);/g)];
-  const byFactory = [...src.matchAll(/baRouter\.(get|post)\("([^"]+)", (uploadHandler|downloadHandler)\("(claim|case)"\)\)/g)];
+  const byFactory = [...src.matchAll(/baRouter\.(get|post)\("([^"]+)", (uploadHandler|downloadHandler)\("(claim|case|issue)"\)\)/g)];
   const all = [...src.matchAll(/baRouter\.(get|post|patch|put|delete)\(/g)];
   assert.equal(inline.length + byFactory.length, all.length, `🔴 розпізнано ${inline.length + byFactory.length} із ${all.length} обробників`);
   assert.ok(all.length >= 15, `🔴 знайдено лише ${all.length} обробників — гейт нічого не перевіряє`);

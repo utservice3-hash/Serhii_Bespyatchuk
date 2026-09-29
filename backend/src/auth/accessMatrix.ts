@@ -532,6 +532,18 @@ export const ACCESS_MATRIX: AccessRow[] = [
      рівно admin, ceo, opdir, kvp, hr. Фінансист адмін-рівня, але права не має → 403 (на проді вкладку
      «Найм» йому ввімкнено поза сидом — див. ADMIN_DENIED_BY_PERM). Запис і показ — `deny-only`:
      проба дозволеної ролі надіслала б код у Telegram чи записала б дані. */
+  /* 👥 ТІМЛІД І СЕЙФ СВОЄЇ КОМАНДИ (29.09.2026). Вкладка `hiring` + право `view_team_secrets` (лише
+     team_lead) на рівні роутера; «своя команда» — `teamMemberVerdict` у кожному обробнику. Показ,
+     код, привʼязка й скидання — `deny-only`: проба дозволеної ролі надіслала б код у Telegram чи
+     скинула б людині пароль. Адмін-рівень права не має: у нього повний сейф у `/api/secrets`. */
+  { method: "GET", path: "/api/team-vault/status", cls: "GET", allow: ["team_lead"], deny: ["manager"] },
+  { method: "GET", path: "/api/team-vault/people", cls: "GET", allow: ["team_lead"], deny: ["manager"] },
+  { method: "GET", path: "/api/team-vault/people/:userId", cls: "GET", allow: ["team_lead"], deny: ["manager"] },
+  { method: "POST", path: "/api/team-vault/link", cls: "deny-only", allow: [], deny: ["manager"] },
+  { method: "POST", path: "/api/team-vault/unlink", cls: "deny-only", allow: [], deny: ["manager"] },
+  { method: "POST", path: "/api/team-vault/:id/code", cls: "deny-only", allow: [], deny: ["manager"] },
+  { method: "POST", path: "/api/team-vault/:id/reveal", cls: "deny-only", allow: [], deny: ["manager"] },
+  { method: "POST", path: "/api/team-vault/people/:userId/reset-password", cls: "deny-only", allow: [], deny: ["manager"] },
   { method: "GET", path: "/api/secrets/status", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
   { method: "GET", path: "/api/secrets/people", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
   { method: "GET", path: "/api/secrets/people/:userId", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
@@ -1387,6 +1399,33 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "DELETE", path: "/api/finance/items/:id", cls: "DELETE-ghost",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+  /* 🗂 БІЗНЕС-АСИСТЕНТ, прохід 2 (29.09.2026): Облік техніки й ТТН — та сама вкладка `ba` і `onlyBa`. */
+  { method: "GET", path: "/api/ba/employees", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/ba/equipment", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/ba/equipment/:id", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/ba/issues/:id/files/:fileId", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/ba/ttn?month=2026-08", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/ba/equipment", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "PATCH", path: "/api/ba/equipment/:id", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/ba/equipment/:id/archive", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/ba/equipment/:id/issue", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/ba/issues/:id/return", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/ba/issues/:id/undo-return", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/ba/issues/:id/files", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "PUT", path: "/api/ba/ttn/:month/:managerId", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   /* 🧾 Кнопка «Проблемний клієнт» у дебіторці — вкладка `receivables` + право `create_claim`
      (керівництво без HR і фінансист). Тімлід і менеджер вкладку мають, права — ні: GET дає їм 200 з
      порожнім списком, POST — 403 по праву. HR вкладки дебіторки не має → 403 на tab-гейті. */

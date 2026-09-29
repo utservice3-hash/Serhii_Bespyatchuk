@@ -64,6 +64,7 @@ export const MOUNTS: { mount: string; module: string; export: string }[] = [
   { mount: "/api/nominations", module: "../routes/nominations.js", export: "nominationsRouter" },
   { mount: "/api/people", module: "../routes/people.js", export: "peopleRouter" },
   { mount: "/api/secrets", module: "../routes/secrets.js", export: "secretsRouter" },
+  { mount: "/api/team-vault", module: "../routes/teamVault.js", export: "teamVaultRouter" },
   { mount: "/api/vault-bot", module: "../routes/vaultBot.js", export: "vaultBotRouter" },
   { mount: "/api/statistics", module: "../routes/statistics.js", export: "statisticsRouter" },
   { mount: "/api/statistics", module: "../routes/statisticsSeries.js", export: "statsSeriesRouter" },

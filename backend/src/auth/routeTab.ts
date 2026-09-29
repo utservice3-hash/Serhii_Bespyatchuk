@@ -170,6 +170,9 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/nominations"), tabs: ["nominations"] },
     // 🔐 Сейф доступів живе в «Наймі» → «Доступи». Друга межа — право `view_employee_secrets` на роутері.
     { test: pre("/api/secrets"), tabs: ["hiring"] },
+    // 👥 Тімлід бачить людей і паролі СВОЄЇ команди в «Наймі» → «Співробітники». Друга межа — право
+    // `view_team_secrets` на роутері, третя — `teamMemberVerdict` у кожному обробнику.
+    { test: pre("/api/team-vault"), tabs: ["hiring"] },
     { test: pre("/api/bank"), tabs: ["bank"] },
   ];
 })();
