@@ -1609,7 +1609,9 @@ export async function conversionByManager(s: MetricScope, channel?: "ad" | "lead
  *   всього  — угоди Кваліфікації 8921928 і Повного циклу 8921932, СТВОРЕНІ в періоді, «Источник клиента» ∈ KOMMO_CONV_SOURCES;
  *   цільові — всього мінус Кваліфікація з етапом 143 «Не цільові»;
  *   успіх   — Повний цикл, ПОТОЧНИЙ етап ∈ KOMMO_CONV_WON_STAGES, «Дата загрузки» в періоді,
- *             джерело ∈ KOMMO_CONV_SOURCES + KOMMO_CONV_WON_EXTRA_SOURCES (так у фільтрі власника).
+ *             джерело ∈ KOMMO_CONV_SOURCES.
+ * 🔁 30.09.2026 (Даша, через Романа): у фільтрі «Всього» в Kommo злетіла галочка реактивації — рахуючи, Даша її
+ * ставить. Тож ОДИН список джерел на всі три частини (10 значень, з «Реактивація наша база» і «Реактивація закриті»).
  * ⚠️ Успіх і цільові — РІЗНІ когорти (дата створення проти дати завантаження), тож відсоток може бути > 100%.
  * `outside` — друге число до предиката (правило 4): угоди тих самих менеджерів і воронок, створені в періоді, чиє
  * джерело порожнє або поза списком. Перейменують значення в Kommo — воно тут і зросте.
@@ -1617,8 +1619,8 @@ export async function conversionByManager(s: MetricScope, channel?: "ad" | "lead
 export const KOMMO_CONV_SOURCES = [
   "Холодная база", "Реактивация звонком", "uts.ua", "yalogist.com.ua",
   "Дзвінок з yalogist.com.ua", "Дзвінок з uts.ua", "Callback з yalogist.com.ua", "Callback з uts.ua",
+  "Реактивація наша база", "Реактивація закриті",
 ] as const;
-export const KOMMO_CONV_WON_EXTRA_SOURCES = ["Реактивація наша база", "Реактивація закриті"] as const;
 /** Контроль перед завантаженням · Авто працює · Виставлено рахунок · Очікуємо оплату · Оплата отримана · Успішна. */
 export const KOMMO_CONV_WON_STAGES = [69716260, 69716300, 69716304, 69716312, 69716460, 142] as const;
 const KOMMO_CONV_QUAL = 8921928, KOMMO_CONV_FC = 8921932, KOMMO_CONV_NOT_TARGET = 143;
@@ -1642,7 +1644,7 @@ export async function rnkConvAsKommo(s: { from: string; to: string }, managerIds
         WHERE d.manager_id = ANY($1) AND d.pipeline_id = $4 AND d.status_id = ANY($5) AND d.client_source = ANY($6)
           AND d.load_at IS NOT NULL AND (d.load_at ${KYIV})::date BETWEEN $2 AND $3
         GROUP BY d.manager_id`,
-      [managerIds, s.from, s.to, KOMMO_CONV_FC, KOMMO_CONV_WON_STAGES, [...KOMMO_CONV_SOURCES, ...KOMMO_CONV_WON_EXTRA_SOURCES]]),
+      [managerIds, s.from, s.to, KOMMO_CONV_FC, KOMMO_CONV_WON_STAGES, KOMMO_CONV_SOURCES]),
   ]);
   const b = new Map(base.rows.map((r) => [r.manager_id, r]));
   const w = new Map(won.rows.map((r) => [r.manager_id, Number(r.won)]));

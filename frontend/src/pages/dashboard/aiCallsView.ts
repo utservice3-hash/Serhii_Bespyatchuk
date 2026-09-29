@@ -139,7 +139,7 @@ export function promisesLabel(promises: number, withDeadline: number): string {
 }
 
 /** Стан обіцянки менеджера — дзеркало `PromiseState` у `core/callAiPromise.ts`. */
-export type PromiseStateT = "kept_talk" | "kept_attempt_only" | "client_called" | "pending" | "broken" | "unverifiable";
+export type PromiseStateT = "kept_talk" | "kept_attempt_only" | "client_called" | "late" | "pending" | "broken" | "unverifiable";
 export type PipelineGroupT = "full" | "qualification" | "other";
 
 /**
@@ -147,8 +147,9 @@ export type PipelineGroupT = "full" | "qualification" | "other";
  * Ringostat Viber/Telegram не бачить, тож прапорця на ній немає.
  */
 export const PROMISE_UI: Readonly<Record<PromiseStateT, { label: string; tone: Tone; hint: string }>> = {
-  broken: { label: "Не передзвонив", tone: "bad", hint: "Термін минув, а на номер не було жодного нашого вихідного — ні від менеджера, ні від колег." },
-  pending: { label: "Чекає строку", tone: "wait", hint: "Термін ще не минув, нашого дзвінка ще не було." },
+  broken: { label: "Не передзвонив", tone: "bad", hint: "Ні до терміну, ні протягом 2 год після нього на номер не було жодного нашого вихідного — ні від менеджера, ні від колег." },
+  late: { label: "Запізнився", tone: "warn", hint: "Наш дзвінок був, але після терміну — у межах 2 год після нього." },
+  pending: { label: "Чекає", tone: "wait", hint: "Термін (або 2 год запізнення після нього) ще не минули, або дзвінки Ringostat за цей час ще не синхронізовано." },
   kept_attempt_only: { label: "Лише спроби", tone: "warn", hint: "До терміну ми дзвонили, але розмови не було." },
   client_called: { label: "Клієнт подзвонив сам", tone: "wait", hint: "До терміну клієнт подзвонив нам і поговорив; нашого вихідного не було." },
   kept_talk: { label: "Передзвонив", tone: "ok", hint: "До терміну був наш вихідний із розмовою (колега теж рахується)." },
