@@ -1,5 +1,6 @@
 import axios from "axios";
 import type { AiCallState, PromiseStateT, PipelineGroupT } from "./pages/dashboard/aiCallsView";
+import type { CarrierBucketT } from "./pages/dashboard/carrierCallsView";
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL ?? "http://localhost:4000/api",
@@ -383,6 +384,45 @@ export interface AiCallsMetaResp {
 }
 export async function fetchAiCallsMeta(): Promise<AiCallsMetaResp> {
   const { data } = await api.get<AiCallsMetaResp>("/dashboard/ai-calls/meta");
+  return data;
+}
+
+/** 🚚 «Перевізники за розмовою» (29.09.2026) — лише керівництво; правила — METRICS_GLOSSARY §17. */
+export interface CarrierCallRowT {
+  uniqueid: string; calledAt: string; direction: "in" | "out"; billsec: number; managerName: string | null;
+  deals: { kommoId: number; url: string; statusId: number | null; rejectReason: string | null; reused: boolean }[];
+  talkNo: number; state: AiCallState; failure: string | null; bucket: CarrierBucketT | null; role: string | null;
+  confidence: number | null; quote: string | null; quoteCheck: string | null; summary: string | null;
+}
+export interface CarrierKpisT {
+  removedByFilter: number; leftAfterFilter: number; waitingTalk: number; noTalk: number; listenedPhones: number;
+  recordingSince: string | null;
+}
+export interface CarrierCallsResp { period: { from: string; to: string }; truncated: boolean; kpis: CarrierKpisT; rows: CarrierCallRowT[] }
+export async function fetchCarrierCalls(params: { from: string; to: string }): Promise<CarrierCallsResp> {
+  const { data } = await api.get<CarrierCallsResp>("/dashboard/carrier-calls", { params });
+  return data;
+}
+export interface CarrierCallCardResp {
+  uniqueid: string; calledAt: string; billsec: number; managerName: string | null;
+  deals: { kommoId: number; url: string; reused: boolean }[]; talkNo: number;
+  firstTry: { uniqueid: string; role: string | null } | null; state: AiCallState; failure: string | null;
+  result: { summary: string; manager_channel: string; caller_role: string; caller_role_confidence: number;
+    caller_role_quote: string; quote_check?: string } | null;
+  bucket: CarrierBucketT | null; turns: AiTurn[] | null; transcriptHidden: boolean; textPurged: boolean; managerChannel: number | null;
+}
+export async function fetchCarrierCallCard(uniqueid: string): Promise<CarrierCallCardResp> {
+  const { data } = await api.get<CarrierCallCardResp>(`/dashboard/carrier-calls/${encodeURIComponent(uniqueid)}`);
+  return data;
+}
+export interface CarrierCallsMetaResp {
+  job: { lastSuccessAt: string | null; lastError: string | null; lastErrorAt: string | null } | null;
+  transcripts: Record<string, number>; analyses: Record<string, number>;
+  spend: { carrier: number; stt: number; analysis: number };
+  caps: { carrier: number; stt: number | null; analysis: number | null };
+}
+export async function fetchCarrierCallsMeta(): Promise<CarrierCallsMetaResp> {
+  const { data } = await api.get<CarrierCallsMetaResp>("/dashboard/carrier-calls/meta");
   return data;
 }
 

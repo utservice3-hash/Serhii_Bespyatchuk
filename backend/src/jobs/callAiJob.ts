@@ -2,6 +2,7 @@ import { pool } from "../db/pool.js";
 import { config } from "../config.js";
 import { adDealSql } from "../core/metrics.js";
 import { getSettings } from "../routes/settings.js";
+import { sendAdminAlert } from "../bot/notify.js";
 import { runCallAiTick, type TickReport } from "../core/callAiTick.js";
 import { createRunGuard, type GuardSkip } from "./runGuard.js";
 
@@ -26,6 +27,7 @@ export async function callAiJob(): Promise<TickReport | GuardSkip> {
       ad: { predicate: adDealSql, adSources },
       prices: config.callAi.prices,
       now: () => new Date(),
+      alert: sendAdminAlert,
     });
     const sum = (xs: TickReport["stt"], k: "done" | "failed" | "unavailable") => xs.reduce((s, x) => s + x[k], 0);
     console.log(`callAiJob: відібрано ${String(r.selected)}, нових у черзі ${String(r.enqueued)}, прибрано з черги ${String(r.dequeued)} · `

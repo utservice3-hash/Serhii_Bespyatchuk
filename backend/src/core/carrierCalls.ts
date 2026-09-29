@@ -1,0 +1,216 @@
+import type { Db } from "./adCallFacts.js";
+import type { HttpDeps } from "./callAiHttp.js";
+import { createMinInterval } from "./callAiHttp.js";
+import { downloadRecording } from "./ringostatRecording.js";
+import { ELEVENLABS_STT_MODEL, elevenLabsTranscribe, GEMINI_MODEL, geminiGenerate } from "./callAiProviders.js";
+import { enqueueAnalyses, enqueueTranscripts, runAnalysisPortion, runSttPortion, type PortionReport } from "./callAiPipeline.js";
+import { LLM_POLICY, LLM_PROVIDER, RECORDING_MAX_BYTES, RINGOSTAT_MIN_INTERVAL_MS, RINGOSTAT_POLICY, STT_POLICY,
+  STT_PROVIDER, STUCK_AFTER_MIN } from "./callAiPilot.js";
+import { drainWithBudget, MAX_OUTPUT_TOKENS, TICK_MAX_ATTEMPTS, TICK_PORTION, type TickPrices } from "./callAiTick.js";
+import { carrierActiveIds } from "./carrierCallQueue.js";
+import { notifyCapOnce } from "./aiCapAlert.js";
+import { CARRIER_BUDGET, CARRIER_KIT, CARRIER_OPS, CARRIER_RULE, oldEnough, phoneFromDealName,
+  RUBRIC_CARRIER_V1 } from "./carrierCallRules.js";
+
+/**
+ * 🚚 ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ — база й прохід (правила й рубрика — `carrierCallRules.ts`).
+ *
+ * `carrier_call_deals` — ЗАПИС ФАКТУ «угода стояла на етапі після фільтра». Етап — це стан «зараз», і завтра
+ * угоди там уже не буде; подій входу на етап у нас немає (заміряно: 24 події за весь час). Тож свідчення
+ * фіксуємо самі в момент, коли бачимо, — інакше «скільки лишилось після фільтра» за минулий тиждень не
+ * відтворити нічим (правило 17 кореня: знімок не має історії).
+ *
+ * Стани угоди: `waiting` — розмови ≥10 с ще нема, вікно доби відкрите; `own` — слухаємо СВОЮ розмову
+ * (`uniqueid`, перша чи друга спроба); `reused` — номер уже слухали за 30 днів, вердикт береться з угоди
+ * `reused_from`; `no_talk` — доба минула, розмови ≥10 с не було: номер пропускаємо (рішення Романа).
+ */
+
+export interface StageLead { id: number; name: string; created_at: number; responsible_user_id: number | null }
+
+export interface RecordReport { onStage: number; tooYoung: number; noPhone: number; inserted: number }
+
+/** Записати угоди, що ЗАРАЗ стоять на етапі й старші за поріг. Повтор нічого не дублює. */
+export async function recordStageDeals(db: Db, leads: readonly StageLead[], now: Date): Promise<RecordReport> {
+  const rep: RecordReport = { onStage: leads.length, tooYoung: 0, noPhone: 0, inserted: 0 };
+  const ids: number[] = [], phones: string[] = [], created: string[] = [], resp: (number | null)[] = [];
+  for (const l of leads) {
+    if (!oldEnough(l.created_at, now)) { rep.tooYoung++; continue; }
+    const phone = phoneFromDealName(l.name);
+    if (!phone) { rep.noPhone++; continue; }
+    ids.push(l.id); phones.push(phone); created.push(new Date(l.created_at * 1000).toISOString()); resp.push(l.responsible_user_id);
+  }
+  if (!ids.length) return rep;
+  const r = await db.query(
+    `INSERT INTO carrier_call_deals (kommo_id, phone, deal_created_at, responsible_user_id, seen_at, state, updated_at)
+     SELECT i, p, c::timestamptz, u, $5::timestamptz, 'waiting', $5::timestamptz
+       FROM unnest($1::bigint[], $2::text[], $3::text[], $4::bigint[]) AS x(i, p, c, u)
+     ON CONFLICT (kommo_id) DO NOTHING`,
+    [ids, phones, created, resp, now.toISOString()]);
+  rep.inserted = r.rowCount ?? 0;
+  return rep;
+}
+
+/** Розмова, придатна до слухання: ≥10 с, із записом, у вікні угоди. `$…` — параметри з `talkParams`. */
+const TALK = (d: string, extra = "") => `
+  SELECT rc.uniqueid FROM ringostat_calls rc
+   WHERE rc.client_phone = ${d}.phone AND rc.billsec >= $2 AND rc.recording IS NOT NULL
+     AND rc.calldate >= ${d}.deal_created_at - make_interval(mins => $3)
+     AND rc.calldate <= ${d}.deal_created_at + make_interval(hours => $4) ${extra}
+   ORDER BY rc.calldate, rc.uniqueid LIMIT 1`;
+const talkParams = (now: Date) => [now.toISOString(), CARRIER_RULE.talkMinSec, CARRIER_RULE.windowBeforeMin, CARRIER_RULE.windowAfterHours];
+
+/** Вердикт аналізу carrier-v1 для дзвінка (текстом ролі) — для «вже розібрали» й «не розібрати». */
+const ROLE_OF = (u: string) => `(
+  SELECT a.result->>'caller_role' FROM call_transcripts t JOIN call_analyses a ON a.transcript_id = t.id
+   WHERE t.uniqueid = ${u} AND a.rubric_version = '${RUBRIC_CARRIER_V1}' AND a.status = 'done'
+   ORDER BY a.id DESC LIMIT 1)`;
+
+export interface ResolveReport { reused: number; own: number; noTalk: number; secondTalk: number }
+
+/**
+ * Крок угод: повтор вердикту номера → своя розмова → «розмови не було» → друга спроба.
+ * Порядок має значення: спершу повтор, щоб не платити вдруге за номер, який уже слухали.
+ */
+export async function resolveCarrierDeals(db: Db, now: Date): Promise<ResolveReport> {
+  const rep: ResolveReport = { reused: 0, own: 0, noTalk: 0, secondTalk: 0 };
+
+  // ① Номер слухали за 30 днів (своя розмова іншої угоди, вердикт не «не розібрати») — беремо його вердикт.
+  rep.reused = (await db.query(
+    `WITH cand AS (
+       SELECT d.kommo_id, (
+         SELECT o.kommo_id FROM carrier_call_deals o JOIN ringostat_calls rc ON rc.uniqueid = o.uniqueid
+          WHERE o.phone = d.phone AND o.state = 'own' AND o.kommo_id <> d.kommo_id
+            AND rc.calldate >= d.deal_created_at - make_interval(days => $2)
+            AND rc.calldate <= d.deal_created_at + make_interval(hours => $3)
+            AND COALESCE(${ROLE_OF("o.uniqueid")}, '') <> 'unclear'
+          ORDER BY rc.calldate DESC, o.kommo_id LIMIT 1) AS src
+         FROM carrier_call_deals d WHERE d.state = 'waiting')
+     UPDATE carrier_call_deals d SET state = 'reused', reused_from = cand.src, updated_at = $1
+       FROM cand WHERE cand.kommo_id = d.kommo_id AND cand.src IS NOT NULL`,
+    [now.toISOString(), CARRIER_RULE.reuseDays, CARRIER_RULE.windowAfterHours])).rowCount ?? 0;
+
+  // ② Своя перша розмова — лише для НАЙРАНІШОЇ угоди номера: решта дочекається й повторить її вердикт,
+  //    а не оплатить ту саму людину двічі за один прохід.
+  rep.own = (await db.query(
+    `WITH first AS (
+       SELECT DISTINCT ON (phone) kommo_id FROM carrier_call_deals WHERE state = 'waiting'
+        ORDER BY phone, deal_created_at, kommo_id),
+     cand AS (SELECT d.kommo_id, (${TALK("d")}) AS u FROM carrier_call_deals d JOIN first USING (kommo_id))
+     UPDATE carrier_call_deals d SET state = 'own', uniqueid = cand.u, first_uniqueid = cand.u, talk_no = 1, updated_at = $1
+       FROM cand WHERE cand.kommo_id = d.kommo_id AND cand.u IS NOT NULL`,
+    talkParams(now))).rowCount ?? 0;
+
+  // ③ Доба минула, розмови ≥10 с немає — номер пропускаємо.
+  rep.noTalk = (await db.query(
+    `UPDATE carrier_call_deals SET state = 'no_talk', updated_at = $1
+      WHERE state = 'waiting' AND deal_created_at + make_interval(hours => $2) < $1::timestamptz`,
+    [now.toISOString(), CARRIER_RULE.windowAfterHours])).rowCount ?? 0;
+
+  // ④ Першу розмову не розібрати (модель: unclear; або запису немає / розпізнати не вдалось) — друга, пізніша.
+  //    Текст, видалений за строком зберігання, — не причина слухати ще раз.
+  rep.secondTalk = (await db.query(
+    `WITH need AS (
+       SELECT d.kommo_id, rc1.calldate AS after_at FROM carrier_call_deals d
+         JOIN ringostat_calls rc1 ON rc1.uniqueid = d.uniqueid
+         LEFT JOIN call_transcripts t ON t.uniqueid = d.uniqueid
+        WHERE d.state = 'own' AND d.talk_no = 1 AND d.talk_no < $5
+          AND (t.status IN ('recording_unavailable', 'failed')
+               OR (t.status = 'done' AND t.text_purged_at IS NULL AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0)
+               OR ${ROLE_OF("d.uniqueid")} = 'unclear')),
+     cand AS (SELECT n.kommo_id, (${TALK("d", "AND rc.calldate > n.after_at")}) AS u
+                FROM need n JOIN carrier_call_deals d USING (kommo_id))
+     UPDATE carrier_call_deals d SET uniqueid = cand.u, talk_no = 2, updated_at = $1
+       FROM cand WHERE cand.kommo_id = d.kommo_id AND cand.u IS NOT NULL`,
+    [...talkParams(now), CARRIER_RULE.maxTalks])).rowCount ?? 0;
+  return rep;
+}
+
+/**
+ * 🗑 ТЕКСТ — 12 МІСЯЦІВ (рішення Романа 29.09.2026). Лише дзвінки мобільних, яких не аналізувала інша рубрика:
+ * дзвінок, що є і в «Першому дотику», живе за правилами того екрана. Вердикт і цитата лишаються в аналізі.
+ */
+export async function purgeOldCarrierText(db: Db, now: Date): Promise<number> {
+  const r = await db.query(
+    `UPDATE call_transcripts t SET segments = NULL, text_purged_at = $1, updated_at = $1
+      WHERE t.text_purged_at IS NULL AND t.status = 'done'
+        AND t.created_at < $1::timestamptz - make_interval(months => $2)
+        AND EXISTS (SELECT 1 FROM carrier_call_deals d WHERE d.uniqueid = t.uniqueid OR d.first_uniqueid = t.uniqueid)
+        AND NOT EXISTS (SELECT 1 FROM call_analyses a WHERE a.transcript_id = t.id AND a.rubric_version <> $3)`,
+    [now.toISOString(), CARRIER_RULE.retentionMonths, RUBRIC_CARRIER_V1]);
+  return r.rowCount ?? 0;
+}
+
+export const CARRIER_STT_BUDGET_MS = 150_000;
+export const CARRIER_LLM_BUDGET_MS = 60_000;
+
+export interface CarrierTickEnv {
+  db: Db;
+  http: HttpDeps;
+  keys: { elevenlabs: string; gemini: string };
+  prices: TickPrices;
+  now: () => Date;
+  /** Угоди, що зараз на етапі, — прямо з Kommo. */
+  stageLeads: () => Promise<StageLead[]>;
+  alert: (text: string) => Promise<void>;
+}
+
+export interface CarrierTickReport {
+  recorded: RecordReport;
+  resolved: ResolveReport;
+  active: number;
+  enqueued: number;
+  purged: number;
+  stt: PortionReport[];
+  llm: PortionReport[];
+  sttStoppedBy: string | null;
+  llmStoppedBy: string | null;
+  capAlerted: boolean;
+}
+
+export async function runCarrierTick(env: CarrierTickEnv): Promise<CarrierTickReport> {
+  const t0 = env.now();
+  const recorded = await recordStageDeals(env.db, await env.stageLeads(), t0);
+  const resolved = await resolveCarrierDeals(env.db, t0);
+  const ids = await carrierActiveIds(env.db, t0);
+  const enqueued = await enqueueTranscripts(env.db, ids, STT_PROVIDER, ELEVENLABS_STT_MODEL, t0);
+  const purged = await purgeOldCarrierText(env.db, t0);
+  const out: CarrierTickReport = { recorded, resolved, active: ids.length, enqueued, purged, stt: [], llm: [],
+    sttStoppedBy: null, llmStoppedBy: null, capAlerted: false };
+  if (!ids.length) return out;
+
+  const throttle = createMinInterval(RINGOSTAT_MIN_INTERVAL_MS, env.http);
+  const common = { limit: TICK_PORTION, maxAttempts: TICK_MAX_ATTEMPTS, stuckAfterMin: STUCK_AFTER_MIN,
+    calls: { only: ids }, subCap: { usd: CARRIER_BUDGET.monthCapUsd, opPrefix: CARRIER_BUDGET.opPrefix, label: CARRIER_BUDGET.label } };
+
+  const stt = await drainWithBudget(() => runSttPortion(env.db, {
+    apiKey: env.keys.elevenlabs,
+    download: async (url) => { await throttle(); return downloadRecording(env.http, url, { ...RINGOSTAT_POLICY, maxBytes: RECORDING_MAX_BYTES }); },
+    transcribe: (key, audio) => elevenLabsTranscribe(env.http, key, audio, STT_POLICY),
+  }, {
+    ...common, now: env.now(), operation: CARRIER_OPS.stt, provider: STT_PROVIDER, model: ELEVENLABS_STT_MODEL,
+    monthCapUsd: env.prices.sttMonthCapUsd,
+    usdPerAudioSec: env.prices.sttUsdPerHour == null ? null : env.prices.sttUsdPerHour / 3600,
+  }), CARRIER_STT_BUDGET_MS, env.http.nowMs, out.stt);
+  out.sttStoppedBy = stt.stoppedBy;
+
+  const ap = { provider: LLM_PROVIDER, model: GEMINI_MODEL, rubricVersion: RUBRIC_CARRIER_V1,
+    sttProvider: STT_PROVIDER, sttModel: ELEVENLABS_STT_MODEL };
+  await enqueueAnalyses(env.db, { ...ap, now: env.now() }, ids);
+  const llm = await drainWithBudget(() => runAnalysisPortion(env.db, {
+    apiKey: env.keys.gemini,
+    generate: (key, model, body) => geminiGenerate(env.http, key, model, body, LLM_POLICY),
+    kit: CARRIER_KIT,
+  }, {
+    ...common, ...ap, now: env.now(), operation: CARRIER_OPS.analysis, monthCapUsd: env.prices.llmMonthCapUsd,
+    maxOutputTokens: MAX_OUTPUT_TOKENS,
+    usdPerInputToken: env.prices.llmUsdPerMtokIn == null ? null : env.prices.llmUsdPerMtokIn / 1e6,
+    usdPerOutputToken: env.prices.llmUsdPerMtokOut == null ? null : env.prices.llmUsdPerMtokOut / 1e6,
+  }), CARRIER_LLM_BUDGET_MS, env.http.nowMs, out.llm);
+  out.llmStoppedBy = llm.stoppedBy;
+
+  const capped = [...out.stt, ...out.llm].find((x) => x.state === "capped");
+  if (capped) out.capAlerted = await notifyCapOnce(env.db, "carrier", capped.stoppedBy ?? "стеля вичерпана", env.now(), env.alert);
+  const errs = [stt.error, llm.error].filter((e): e is Error => e != null);
+  if (errs.length) throw new Error(errs.map((e) => e.message).join(" · "));
+  return out;
+}

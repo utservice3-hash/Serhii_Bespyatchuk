@@ -382,6 +382,13 @@ test("#792 ЕКРАН AI · ЖИВА СХЕМА: не передзвонив —
   assert.equal(by.get("y2")?.silentBeforeClose, true, "🔴 29 год без нашого дзвінка — не «тиша перед закриттям»");
   assert.equal(by.get("y3")?.silentBeforeClose, false, "🔴 23 год — уже «тиша» (поріг 24 год зсунувся)");
   assert.equal(by.get("y1")?.silentBeforeClose, null, "відкрита угода — не застосовно, а не «тиші немає»");
+
+  // #795 на живій схемі: синк Ringostat застряг до межі «термін + 2 год» → «чекає», а не «не передзвонив».
+  await c.raw.query(`INSERT INTO job_runs(name, last_success_at) VALUES ('syncRingostatCalls', '2026-09-24 11:30:00+03')
+    ON CONFLICT (name) DO UPDATE SET last_success_at = EXCLUDED.last_success_at`);
+  const lag = new Map((await aiCallsList(c.db, FAKE_AD, "2026-09-24", "2026-09-24", NOW, {})).rows.map((r) => [r.uniqueid, r]));
+  assert.equal(lag.get("y1")?.promiseState, "pending", "🔴 дзвінки ще не синхронізовано за межу, а вже «не передзвонив»");
+  await c.raw.query("DELETE FROM job_runs WHERE name = 'syncRingostatCalls'");
 });
 
 /**
@@ -395,7 +402,7 @@ test("#793 ОБІЦЯНКИ НА ЕКРАНІ: підписи станів, фі
     applyListFilter: (rows: { pipelineGroup: string; teamId: number | null; managerId: number | null; nonTarget: boolean }[], f: Record<string, unknown>) => unknown[];
     deadlineBasisLabel: (b: string) => string;
   };
-  for (const s of ["kept_talk", "kept_attempt_only", "client_called", "pending", "broken", "unverifiable"]) assert.ok(V.PROMISE_UI[s]?.label, `🔴 стан ${s} без підпису`);
+  for (const s of ["kept_talk", "kept_attempt_only", "client_called", "late", "pending", "broken", "unverifiable"]) assert.ok(V.PROMISE_UI[s]?.label, `🔴 стан ${s} без підпису`);
   assert.equal(V.matchesFilter({ state: "done", promiseState: "broken", priceDiscussed: null, objections: 0, promises: 1, promisesWithDeadline: 1 } as never, "broken"), true);
   assert.equal(V.matchesFilter({ state: "done", promiseState: "kept_talk", priceDiscussed: null, objections: 0, promises: 1, promisesWithDeadline: 1 } as never, "broken"), false);
   const rows = [
@@ -415,4 +422,17 @@ test("#793 ОБІЦЯНКИ НА ЕКРАНІ: підписи станів, фі
   assert.match(sec, /прибрано: \$\{String\(nonTargetHidden\)\}/, "🔴 не видно, скільки нецільових прибрано");
   const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
   assert.match(drw, /c\.promiseChecks\[i\]/, "🔴 картка не показує термін і стан обіцянки");
+});
+
+/**
+ * #796 — ПОРЯДОК КОЛОНОК (прохання Романа 29.09.2026): «Обіцянка» — третя, одразу за менеджером; «Стан» — у
+ * кінці й порожній для проаналізованих («Проаналізовано» — норма, а не новина). Інші стани лишаються видимими:
+ * «У черзі», «Запису немає» — це причина, чому розбору немає.
+ * 🧨 Червоніє, якщо повернути «Стан» третьою колонкою чи знову показувати «Проаналізовано» в рядку.
+ */
+test("#796 ТАБЛИЦЯ: «Обіцянка» третя, «Стан» у кінці й порожній для проаналізованих", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  const heads = [...sec.matchAll(/<th style=\{cell\}>([^<]+)<\/th>/g)].map((m) => m[1]);
+  assert.deepEqual(heads, ["Розмова", "Менеджер", "Обіцянка", "Про що", "Ціна", "Заперечення", "Стан"], `🔴 порядок колонок: ${heads.join(" · ")}`);
+  assert.match(sec, /<td style=\{cell\}>\{r\.state === "done" \? null : <StateChip state=\{r\.state\} \/>\}<\/td>/, "🔴 «Проаналізовано» знову видно в рядку або стан інших рядків сховано");
 });

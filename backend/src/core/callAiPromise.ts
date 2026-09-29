@@ -15,6 +15,13 @@ import { OUTBOUND_TYPES_FOR_PROMISE, promiseOutcome, type OutboundCall } from ".
  *          дзвінок клієнта — окремим станом «клієнт подзвонив сам»;
  *   П7   — прапорець на тому, хто обіцяв (менеджер розмови), а не на відповідальному угоди;
  *   месенджер — «не перевіряється»: Ringostat Viber/Telegram не бачить, а П6-Б рахує лише дзвінки.
+ *
+ * ⏰ «ЗАПІЗНИВСЯ» (Роман 29.09.2026, «з твоїми пропозиціями»): перший замір на проді дав 54 «не передзвонив»,
+ * і 21 з них — передзвін до 30 хв ПІСЛЯ терміну («дві-три хвилиночки» → через 8 хв). Тепер наш вихідний у
+ * межах 2 год після терміну — «запізнився» (жовтий), а «не передзвонив» — лише коли до терміну + 2 год
+ * нашого дзвінка не було зовсім.
+ * 🔄 СИНК RINGOSTAT ІДЕ РАЗ НА ~30 ХВ: дзвінок 10 хв тому ще може не лежати в базі. Тож «не передзвонив» —
+ * лише коли дзвінки вже синхронізовано за межу `термін + 2 год` (`knownUntil`), інакше — «чекає».
  */
 
 export type PromiseChannel = "call" | "message" | "other";
@@ -90,25 +97,34 @@ export function promiseDeadline(p: Pick<ModelPromise, "deadline_kind" | "deadlin
  * виконано (колега теж рахується); клієнт подзвонив сам — окремий стан, а не «передзвонив»; далі —
  * чекає строку або не передзвонив.
  */
-export type PromiseState = "kept_talk" | "kept_attempt_only" | "client_called" | "pending" | "broken" | "unverifiable";
+export type PromiseState = "kept_talk" | "kept_attempt_only" | "client_called" | "late" | "pending" | "broken" | "unverifiable";
+
+/** Скільки після терміну наш дзвінок ще «запізнився», а не «не передзвонив» (Роман 29.09.2026). */
+export const LATE_GRACE_MIN = 120;
 
 export interface CallFact { at: Date; billsec: number; callType: string }
 
 const IN_TYPES = new Set(["in", "transitin"]);
 
-export function promiseState(p: Pick<ModelPromise, "channel">, madeAt: Date, deadline: Date, calls: readonly CallFact[], now: Date): PromiseState {
+/**
+ * `knownUntil` — до якої миті дзвінки Ringostat уже є в базі: пізніше з «зараз» і останнього успішного синку.
+ * Поки він не перейшов межу `термін + 2 год`, відсутність дзвінка ще нічого не доводить.
+ */
+export function promiseState(p: Pick<ModelPromise, "channel">, madeAt: Date, deadline: Date, calls: readonly CallFact[], knownUntil: Date): PromiseState {
   if (p.channel !== "call") return "unverifiable";
   const outbound: OutboundCall[] = calls.filter((c) => (OUTBOUND_TYPES_FOR_PROMISE as readonly string[]).includes(c.callType));
-  const ours = promiseOutcome({ madeAt, deadline }, outbound, now);
+  const ours = promiseOutcome({ madeAt, deadline }, outbound, knownUntil);
   if (ours === "kept_talk" || ours === "kept_attempt_only") return ours;
   const clientTalk = calls.some((c) => IN_TYPES.has(c.callType) && c.billsec > 0
     && c.at.getTime() > madeAt.getTime() && c.at.getTime() <= deadline.getTime());
   if (clientTalk) return "client_called";
-  return ours === "pending" ? "pending" : "broken";
+  const graceEnd = deadline.getTime() + LATE_GRACE_MIN * 60_000;
+  if (outbound.some((c) => c.at.getTime() > deadline.getTime() && c.at.getTime() <= graceEnd)) return "late";
+  return knownUntil.getTime() < graceEnd ? "pending" : "broken";
 }
 
 /** Стан рядка — найгірший серед обіцянок менеджера. `null` — обіцянок менеджера немає. */
-const RANK: PromiseState[] = ["broken", "pending", "kept_attempt_only", "client_called", "kept_talk", "unverifiable"];
+const RANK: PromiseState[] = ["broken", "late", "pending", "kept_attempt_only", "client_called", "kept_talk", "unverifiable"];
 export function worstPromiseState(states: readonly PromiseState[]): PromiseState | null {
   for (const s of RANK) if (states.includes(s)) return s;
   return null;

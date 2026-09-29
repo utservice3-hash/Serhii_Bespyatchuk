@@ -179,6 +179,34 @@ test("#741b МІГРАЦІЯ ДВІЧІ: «Бізнес-асистента» б�
 });
 
 /**
+ * #794 — «ПЕРШИЙ ДОТИК · AI» ФІНАНСИСТУ НЕ ПОВЕРТАЄТЬСЯ ДРУГОЮ МІГРАЦІЄЮ. Прод 29.09.2026: після чужого викату з
+ * міграцією синк «financier = екрани адміна» скопіював фінансисту `ai-calls`, і `#11` показав 403 → 200. Дзеркала:
+ * пʼять ролей вкладки її мають (інакше «фінансист не бачить» — порожня правда), HR і менеджер — ні (рішення 28.09).
+ * 🧨 Червоніє, якщо прибрати зняття `ai-calls` після синку або поставити його вище за синк.
+ */
+test("#794 МІГРАЦІЯ ДВІЧІ: «Перший дотик · AI» — у адміна, КВП, CEO, опдира й тімліда; фінансист, HR і менеджер — НІ", async (t) => {
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const { default: pg } = await import("pg");
+  const schema = readFileSync(fileURLToPath(new URL("../../src/db/schema.sql", import.meta.url)), "utf8");
+  const client = new pg.Client({ connectionString: scratch.url });
+  try {
+    await client.connect();
+    await client.query(schema);
+    await client.query(schema);   // 🔴 саме ДРУГИЙ прогін копіює фінансисту те, що адмін дістав у першому
+    const rows = (await client.query<{ key: string; screen_access: Record<string, unknown> }>("SELECT key, screen_access FROM roles")).rows;
+    const sees = (k: string) => rows.find((r) => r.key === k)?.screen_access?.["ai-calls"] === true;
+    assert.ok(rows.some((r) => r.key === "financier"), "🔴 у scratch-базі немає ролі фінансиста — перевіряти нема чого");
+    for (const k of ["admin", "kvp", "ceo", "opdir", "team_lead"]) assert.ok(sees(k), `🔴 «${k}» не бачить «Перший дотик · AI» — зняття забрало більше, ніж вирішено`);
+    for (const k of ["financier", "hr", "manager"]) assert.ok(!sees(k), `🔴 «${k}» бачить «Перший дотик · AI» після ДРУГОЇ міграції`);
+  } finally {
+    await client.end().catch(() => {});
+    scratch.dispose();
+  }
+});
+
+/**
  * 🔁 #390i — ЗАМІНА `#231g`, і причина заміни в самому імені.
  *
  * `#231g` стверджував «ТРИ двері», і 09.09.2026 їх стало ЧОТИРИ: додано `/analytics`
