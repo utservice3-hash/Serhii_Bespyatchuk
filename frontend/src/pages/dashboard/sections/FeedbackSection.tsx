@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { rejectNote } from "../../../actionFeedback";
 import {
   fetchFeedback,
   submitFeedback,
@@ -51,7 +52,14 @@ export function FeedbackSection({ isAdmin }: { isAdmin: boolean }) {
   }
 
   async function setStatus(id: number, status: FeedbackStatus) {
-    const note = status === "rejected" ? window.prompt("Коментар (необовʼязково):") ?? undefined : undefined;
+    // «Скасувати» у вікні коментаря — нічого не робимо. Було `?? undefined`, і скасування однаково
+    // ВІДХИЛЯЛО звернення (30.09.2026, `#1103`).
+    let note: string | undefined;
+    if (status === "rejected") {
+      const r = rejectNote(window.prompt("Коментар (необовʼязково):"));
+      if (!r.reject) return;
+      note = r.note;
+    }
     const updated = await updateFeedback(id, { status, adminNote: note });
     setItems((prev) => prev.map((x) => (x.id === id ? updated : x)));
   }

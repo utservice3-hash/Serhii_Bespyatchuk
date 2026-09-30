@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { createPortal } from "react-dom";
+import { useToast } from "../../../components/Toasts";
 import { fetchHiringMeta, fetchSecretsStatus, fetchTeamVaultStatus, hiringError, type HiringMeta } from "../../../api";
 import { LS } from "../hiringView";
 import type { Toast } from "./HiringShared";
@@ -29,7 +29,6 @@ export function HiringSection() {
   const [meta, setMeta] = useState<HiringMeta | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>(() => (LS.get("tab") as Tab) || "sched");
-  const [toastState, setToastState] = useState<{ text: string; error?: boolean; action?: { label: string; run: () => void }; key: number } | null>(null);
   const [nonce, setNonce] = useState(0);
   // Клік по числу кандидатів вакансії відкриває «Кандидатів» із фільтром (прохід 1a).
   const [vacFilter, setVacFilter] = useState<{ id: number; seq: number } | null>(null);
@@ -46,11 +45,8 @@ export function HiringSection() {
   const [canTeam, setCanTeam] = useState(false);
   useEffect(() => { fetchTeamVaultStatus().then(() => setCanTeam(true)).catch(() => setCanTeam(false)); }, []);
 
-  const toast: Toast = useCallback((text, opts) => {
-    const key = Date.now();
-    setToastState({ text, ...opts, key });
-    window.setTimeout(() => setToastState((t) => (t && t.key === key ? null : t)), opts?.action ? 8000 : 4000);
-  }, []);
+  // 🔔 Спільне повідомлення дашборда (`components/Toasts.tsx`) — раніше тут жила своя копія.
+  const toast: Toast = useToast();
 
   if (err) return <div className="chart-card"><b>Розділ «Найм» недоступний.</b> <span className="hr-muted">{err}</span></div>;
   if (!meta) return <p className="loading-text">Завантаження…</p>;
@@ -99,11 +95,6 @@ export function HiringSection() {
       {active === "exit" && canSecrets && <HiringExitTab toast={toast} />}
       {active === "train" && <HiringTraining meta={meta} toast={toast} onChanged={() => setNonce((n) => n + 1)} />}
       {active === "daily" && <HiringDaily toast={toast} />}
-      {toastState && createPortal(
-        <div className={`hr-toast ${toastState.error ? "err" : ""}`} role="status">
-          <span>{toastState.text}</span>
-          {toastState.action && <button onClick={() => { toastState.action!.run(); setToastState(null); }}>{toastState.action.label}</button>}
-        </div>, document.body)}
     </div>
   );
 }

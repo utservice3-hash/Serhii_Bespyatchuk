@@ -7,6 +7,7 @@ import {
   type O2OMeeting, type O2OOpenTask, type O2OTaskOutcome, type O2OEnpsResponse, type O2OEnpsSummary,
 } from "../../../api";
 import { DatePicker } from "../../../components/DatePicker";
+import { useToast } from "../../../components/Toasts";
 import { DateRangeFilter, QuickPeriods, getDateRange } from "../../../components/DateRangeFilter";
 import { InfoHint } from "../widgets";
 import { enpsColor, CLASS_UI, BAND_COLOR, SCALE_CAPTION } from "./enpsScale";
@@ -121,6 +122,7 @@ function Pill({ active, onClick, children, title }: { active: boolean; onClick: 
 }
 
 export function OneOnOneSection() {
+  const toast = useToast();
   // Доступні для проведення типи + прапорці беремо з СЕРВЕРА (живий roleKey/права),
   // а не зі scope-clamped auth.role/знімку токена — тож працює за будь-якого data_scope.
   const [availableTypes, setAvailableTypes] = useState<O2OType[]>([]);
@@ -238,6 +240,9 @@ export function OneOnOneSection() {
     setTaskBusy(true); setErr(null);
     try {
       await createO2OTask({ type, subjectManagerId: selId, meetingDate: dateSel, title: newTask.trim(), deadline: newTaskDue || null });
+      // Раніше лише очищалось поле — і не було видно, чи задача десь зʼявилась (30.09.2026).
+      const who = subjects.find((s) => s.id === selId)?.name;
+      toast(`«${newTask.trim()}» — у Задачнику${who ? ` у ${who}` : ""}.`, { head: "Задачу поставлено" });
       setNewTask(""); setNewTaskDue("");
     } catch (e) { setErr(saveErrorText(e, "Задачу не поставлено")); }
     finally { setTaskBusy(false); }

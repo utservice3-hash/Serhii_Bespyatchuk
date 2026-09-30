@@ -93,6 +93,9 @@ export function AgreementEditor({ client, note, lastComment, lastAt, onPatch, on
       await saveReceivableNote({ clientKey: client.clientKey, comment: next, dueDate: nextDate, clear });
       onDone();
     } catch (e) {
+      // ↩ Рядок таблиці вже показував нове — повертаємо збережене, інакше за вікном лишалась би
+      // домовленість, якої в базі немає (30.09.2026). Порожній рядок і null на екрані читаються однаково.
+      onPatch({ comment: client.comment ?? "", dueDate: client.dueDate ?? null });
       const r = e as { response?: { data?: { error?: string } } };
       setErr(r?.response?.data?.error ?? "Не вдалось зберегти");
       setBusy(false);
