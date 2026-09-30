@@ -2,7 +2,7 @@ import type { Db } from "./adCallFacts.js";
 import { adDealFirstTalksSql } from "./adCallFactsRules.js";
 import { OUTBOUND_TYPES } from "./missedCallsRules.js";
 import type { MissedScope } from "./missedCallsRules.js";
-import { ELEVENLABS_STT_MODEL, GEMINI_MODEL, RUBRIC_CURRENT, type AnalysisResult, type Turn } from "./callAiProviders.js";
+import { ELEVENLABS_STT_MODEL, GEMINI_MODEL, RUBRIC_CURRENT, FIRST_TOUCH_RUBRICS, type AnalysisResult, type Turn } from "./callAiProviders.js";
 import { LLM_PROVIDER, STT_PROVIDER, type AdPredicate } from "./callAiPilot.js";
 import { FIRST_TOUCH_RULE, firstTouchExclusionSql } from "./callAiTick.js";
 import { monthSpend } from "./callAiPipeline.js";
@@ -381,11 +381,12 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
        AND ($8::int IS NULL OR m.team_id = $8)
        -- 🚚 Дзвінок на мобільні («Перевізники за розмовою») цією карткою не відкривається: там інші ролі, а
        -- тімлід за прямою адресою прочитав би розмову, якої його вкладка не показує. Виняток — дзвінок, що є
-       -- і першою розмовою рекламної угоди (має рекламний аналіз).
+       -- і першою розмовою рекламної угоди (має рекламний аналіз БУДЬ-ЯКОЇ версії рубрики: під час переаналізу
+       -- новою рубрикою дзвінок із розбором v1 інакше зник би з картки — спіймав #961 «Перевізників»).
        AND (NOT EXISTS (SELECT 1 FROM carrier_call_deals cd WHERE cd.uniqueid = rc.uniqueid OR cd.first_uniqueid = rc.uniqueid)
-            OR a.id IS NOT NULL)`,
+            OR EXISTS (SELECT 1 FROM call_analyses ax WHERE ax.transcript_id = t.id AND ax.rubric_version = ANY($9::text[])))`,
   [uniqueid, STT_PROVIDER, ELEVENLABS_STT_MODEL, LLM_PROVIDER, GEMINI_MODEL, RUBRIC_CURRENT,
-    scope.managerId ?? null, scope.teamId ?? null]);
+    scope.managerId ?? null, scope.teamId ?? null, [...FIRST_TOUCH_RUBRICS]]);
   const raw = r.rows[0];
   if (!raw) return null;
   const row = foldRow(raw);

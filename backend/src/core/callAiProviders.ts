@@ -162,6 +162,8 @@ export const RUBRIC_FIRST_TOUCH_V1 = "first-touch-v1";
  */
 export const RUBRIC_FIRST_TOUCH_V2 = "first-touch-v2";
 export const RUBRIC_CURRENT = RUBRIC_FIRST_TOUCH_V2;
+/** Усі версії рубрики «Першого дотику» — «дзвінок має рекламний розбір» не залежить від того, чи вже переаналізовано. */
+export const FIRST_TOUCH_RUBRICS: readonly string[] = [RUBRIC_PILOT_V0, RUBRIC_FIRST_TOUCH_V1, RUBRIC_FIRST_TOUCH_V2];
 
 /** Типи розмови (ТЗ 30.09.2026). У звіт іде лише `cargo_request`; решта — у «Виключені». */
 export const CONVERSATION_TYPES = ["cargo_request", "carrier", "vendor", "job_seeker", "wrong_number", "no_dialog", "other"] as const;

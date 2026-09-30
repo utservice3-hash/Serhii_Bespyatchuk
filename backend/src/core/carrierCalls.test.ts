@@ -831,7 +831,8 @@ test("#1060 РУБРИКА v2 · ЖИВА СХЕМА: нове — лише carr
   assert.deepEqual(await rubrics("1060-new"), ["carrier-v2"], "🔴 новий мобільний дзвінок слухається не рубрикою v2");
   assert.deepEqual(await rubrics("1060-old"), ["carrier-v1"], "🔴 розібраний v1 дзвінок переслухали й оплатили вдруге");
   assert.equal(net.hits.geminiCarrier, 1, "🔴 модель кликали не рівно для одного нового дзвінка");
-  assert.deepEqual(await rubrics("1060-ad"), ["first-touch-v1"], "🔴 рекламний дзвінок отримав рубрику перевізників");
+  // Рубрика «Першого дотику» — з константи: вона змінюється разом із ТЗ (30.09.2026 — first-touch-v2).
+  assert.deepEqual(await rubrics("1060-ad"), [(await import("./callAiProviders.js")).RUBRIC_CURRENT], "🔴 рекламний дзвінок отримав рубрику перевізників");
   const res = (await c.raw.query<{ result: CarrierResult }>(`SELECT a.result FROM call_analyses a JOIN call_transcripts t ON t.id=a.transcript_id
     WHERE t.uniqueid='1060-new'`)).rows[0].result;
   assert.deepEqual([res.caller_role, res.other_type, res.quote_check, carrierBucket(res)], ["carrier", null, "counterpart", "carrier"]);
