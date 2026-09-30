@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { Logo } from "./Logo";
 import { NavIcon } from "./NavIcon";
 import { CommandPalette } from "./CommandPalette";
-import { heartbeat, trackerSsoUrl } from "../api";
+import { heartbeat, trackerSsoUrl, surveysBadge, type SurveysBadge } from "../api";
 import { usePolling } from "../hooks/usePolling";
 // NAV_GROUPS drives the grouped sidebar; NAV_ITEMS (flattened) is used elsewhere.
 
@@ -81,6 +81,9 @@ export const NAV_GROUPS = [
       // 📄 Конструктор документів (30.09.2026, пакет Сергія). Без поля `roles`: видимість — `screen_access`
       // (сид у schema.sql: усі, хто формує заявки, + фінансист); пул усіх заявок — окреме право.
       { key: "constructor", label: "Конструктор документів", icon: "📄" },
+      // 📋 Опитування команди (30.09.2026, пакет Сергія). Вкладка є в усіх, крім кандидата, але ПУНКТ показується
+      // лише тому, хто керує опитуваннями (`manage_surveys`) або кому хоч одне адресоване — `surveysBadge` нижче.
+      { key: "surveys", label: "Опитування", icon: "📋" },
       { key: "documents", label: "Регламенти та документи", icon: "📁" },
       { key: "training", label: "Навчання", icon: "📚" },
     ],
@@ -197,7 +200,14 @@ export function Layout({
   newsUnread?: number;
 }) {
   const navigate = useNavigate();
-  const navGroups = withTracker(navGroupsForRole(role, screens), trackerEnabled);
+  // 📋 Опитування: пункт меню — лише тим, хто керує або кому є що відповідати; число — ще не відповіли.
+  const [surveys, setSurveys] = useState<SurveysBadge | null>(null);
+  const surveysOn = !screens || screens.includes("surveys");
+  usePolling(() => { surveysBadge().then(setSurveys).catch(() => undefined); }, 300000, { immediate: true, enabled: surveysOn });
+  const showSurveys = !!surveys && (surveys.canManage || surveys.assigned > 0);
+  const navGroups = withTracker(navGroupsForRole(role, screens), trackerEnabled)
+    .map((g) => ({ ...g, items: g.items.filter((it) => it.key !== "surveys" || showSurveys) }))
+    .filter((g) => g.items.length > 0);
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem("sidebarCollapsed") === "1"
   );
@@ -309,13 +319,14 @@ export function Layout({
                 // 🔔 ТОЙ САМИЙ механізм значка, що в месенджера, а не другий поруч:
                 // два різні способи показати «є нове» розійшлись би у вигляді й поведінці.
                 const badge = item.key === "messenger" ? messengerUnread
-                            : item.key === "news" ? newsUnread : 0;
+                            : item.key === "news" ? newsUnread
+                            : item.key === "surveys" ? (surveys?.fresh ?? 0) : 0;
                 return (
                 <button
                   key={item.key}
                   className={`sidebar-nav-item ${item.key === active ? "active" : ""}`}
                   onClick={() => onSelect(item.key as NavKey)}
-                  title={badge ? `${item.label} — ${badge} непрочитаних` : item.label}
+                  title={badge ? `${item.label} — ${badge} ${item.key === "surveys" ? "чекають відповіді" : "непрочитаних"}` : item.label}
                   style={{ position: "relative" }}
                 >
                   <span className="sidebar-nav-icon"><NavIcon k={item.key} /></span>

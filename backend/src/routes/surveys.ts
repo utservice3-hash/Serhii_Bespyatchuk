@@ -116,7 +116,8 @@ surveysRouter.put("/:id", h(async (req, res) => {
 
 /* ── Список: адмін — усі; інші — адресовані їм ── */
 surveysRouter.get("/", h(async (req, res) => {
-  if (isAdmin(req)) {
+  // `?mine=1` — «Мої опитування» і для адміна: групові аудиторії його оминають, але «окремі люди» можуть включити.
+  if (isAdmin(req) && req.query.mine !== "1") {
     const q = await pool.query(`SELECT ${SURVEY_COLS.split(", ").map((c) => "s." + c).join(", ")},
         (SELECT count(*) FROM survey_questions WHERE survey_id=s.id)::int AS q_count,
         (SELECT count(*) FROM survey_assignments WHERE survey_id=s.id)::int AS assigned,
@@ -164,14 +165,18 @@ surveysRouter.post("/notifications/:id/read", h(async (req, res) => {
 surveysRouter.get("/:id", h(async (req, res) => {
   const s = await one(idOf(req)); if (!s) throw new HttpError(404, "Немає.");
   const qs = await loadQuestions(pool, s.id);
-  if (isAdmin(req)) return void res.json({ ...s, questions: qs });
+  // «Від» у боковій картці форми (макет): імʼя автора, і для звільненого теж.
+  const author = s.created_by == null ? null
+    : (await pool.query<{ name: string }>(`SELECT n.name FROM (${NAME_SQL}) n WHERE n.id = $1`, [s.created_by])).rows[0]?.name ?? null;
   const a = await pool.query<{ responded_at: string | null }>(`SELECT a.responded_at FROM survey_assignments a
       WHERE a.survey_id=$1 AND a.user_id=$2`, [s.id, me(req)]);
-  if (!a.rows[0] || !["active", "closed"].includes(s.status)) throw new HttpError(403, "Це опитування вам не адресоване.");
   let mine: ResponseRow | null = null;
-  if (!s.anon) mine = (await loadResponses(pool, s.id)).find((x) => x.userId === String(me(req))) || null;
+  if (a.rows[0] && !s.anon) mine = (await loadResponses(pool, s.id)).find((x) => x.userId === String(me(req))) || null;
+  // Адмін бачить усе; якщо опитування адресоване й йому («окремі люди»), — ще й свою відповідь, щоб заповнити форму.
+  if (isAdmin(req)) return void res.json({ ...s, questions: qs, author, responded_at: a.rows[0]?.responded_at ?? null, mine });
+  if (!a.rows[0] || !["active", "closed"].includes(s.status)) throw new HttpError(403, "Це опитування вам не адресоване.");
   res.json({ id: s.id, title: s.title, description: s.description, status: s.status, anon: s.anon, due: s.due, allow_edit: s.allow_edit,
-    closed_at: s.closed_at, questions: qs, responded_at: a.rows[0].responded_at, mine });
+    closed_at: s.closed_at, questions: qs, responded_at: a.rows[0].responded_at, mine, author });
 }));
 
 /* ── Запустити / закрити / відкрити знову / нагадати ── */
@@ -282,6 +287,9 @@ surveysRouter.get("/:id/results", h(async (req, res) => {
   res.json({
     survey: { ...s, questions: qs },
     slice, n: rs.length, teams,
+    // Скільки відповідей у кожному розрізі — підпис на чипі макета (анонімний розріз < 3 фронт показує замком).
+    sliceCounts: { all: all.length, managers: all.filter((x) => x.role === "manager").length, leads: all.filter((x) => x.role === "lead").length,
+      ...Object.fromEntries(teams.map((t) => ["team:" + t, all.filter((x) => x.team === t).length])) },
     results: qs.map((q) => ({ questionId: q.id, ...aggregateQuestion(q, rs) })),
     enps: enpsQ ? enpsOf(rs.map((x) => x.answers[String(enpsQ.id)]).filter((v): v is number => typeof v === "number")) : null,
     participation: {
@@ -290,9 +298,15 @@ surveysRouter.get("/:id/results", h(async (req, res) => {
       respondedList: s.anon ? [] : asg.rows.filter((x) => x.responded_at).map((x) => ({ id: x.user_id, name: x.name, at: x.responded_at })),
       notResponded: asg.rows.filter((x) => !x.responded_at).map((x) => ({ id: x.user_id, name: x.name })),
     },
-    trend: issues.length >= 2 ? trend(qs, issues) : null,
+    // Заголовок колонки випуску в макеті — дата закриття або «триває»: дописуємо з тих самих випусків.
+    trend: issues.length >= 2 ? withIssueDates(trend(qs, issues), issues) : null,
   });
 }));
+
+function withIssueDates(t: ReturnType<typeof trend>, issues: Array<{ issue: number; status: string; closedAt: string | null }>) {
+  const by = new Map(issues.map((x) => [x.issue, x]));
+  return { ...t, participation: t.participation.map((p) => ({ ...p, status: by.get(p.issue)?.status ?? null, closedAt: by.get(p.issue)?.closedAt ?? null })) };
+}
 
 /* ── Експорт CSV ── */
 surveysRouter.get("/:id/export.csv", h(async (req, res) => {

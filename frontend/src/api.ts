@@ -5207,3 +5207,72 @@ export async function ctorConvertToPdf(name: string, data: string): Promise<Blob
 export async function ctorConvertFromPdf(name: string, data: string, target: "docx" | "txt"): Promise<Blob> {
   return (await api.post<Blob>("/constructor/convert/from-pdf", { name, data, target }, { responseType: "blob" })).data;
 }
+
+/* ── 📋 ОПИТУВАННЯ КОМАНДИ (/api/surveys, 30.09.2026, пакет Сергія) ── */
+export type SvQType = "single" | "multi" | "scale" | "enps" | "matrix" | "rank" | "text";
+export type SvStatus = "draft" | "scheduled" | "active" | "closed";
+export interface SvQuestion {
+  id?: number | string; text: string; type: SvQType; options: string[]; rows: string[];
+  image?: string | null; required: boolean; hint?: string; min: number; max: number; unsure?: string;
+}
+export interface SvAudience { kind: "all" | "leads" | "managers" | "team" | "custom"; team?: string; ids?: number[] }
+export interface SvRemind { on: boolean; days: number; time: string; dayOf: boolean }
+export interface SvRecur { on: boolean; per: "week" | "2week" | "month"; day: number; time: string; days: number }
+export interface SvDraft {
+  id?: number; title: string; desc: string; questions: SvQuestion[]; audience: SvAudience;
+  anon: boolean; due: string; remind: SvRemind; allowEdit: boolean; recur: SvRecur;
+}
+export type SvAnswer = string | number | string[] | Record<string, number>;
+export interface SvListRow {
+  id: number; title: string; description?: string | null; status: SvStatus; anon: boolean; due: string; closed_at: string | null;
+  created_at?: string; q_count: number; assigned?: number; responded?: number; recur?: SvRecur; issue?: number; series_id?: number;
+  audience?: SvAudience; responded_at?: string | null; allow_edit?: boolean;
+}
+export interface SvFull extends SvListRow {
+  questions: SvQuestion[]; remind?: SvRemind; closed_by?: string | null; created_by?: number | null; author?: string | null;
+  mine?: { answers: Record<string, SvAnswer>; at: string } | null;
+}
+export type SvQResult =
+  | { type: "choice"; n: number; bars: Array<{ label: string; count: number; pct: number }> }
+  | { type: "scale"; n: number; avg: number | null; bins: Array<{ value: number; count: number }> }
+  | { type: "enps"; n: number; avg: number | null; score: number | null; p: number; n0: number; d: number; bins: Array<{ value: number; count: number }> }
+  | { type: "matrix"; n: number; rows: Array<{ label: string; avg: number | null; n: number }> }
+  | { type: "rank"; n: number; order: Array<{ label: string; avgPos: number | null; n: number }> }
+  | { type: "text"; n: number; items: Array<{ text: string; userId: string | null; at: string }> };
+export interface SvResults {
+  survey: SvFull; slice: string; n: number; teams: string[]; sliceCounts: Record<string, number>;
+  results: Array<{ questionId: number } & SvQResult>;
+  enps: { score: number | null; p: number; n0: number; d: number; n: number } | null;
+  participation: { assigned: number; responded: number; respondedList: Array<{ id: number; name: string; at: string }>; notResponded: Array<{ id: number; name: string }> };
+  trend: { participation: Array<{ issue: number; pct: number; responded: number; assigned: number; closedAt?: string | null; status?: string }>;
+           rows: Array<{ questionId: number | string; text: string; lbl: string; cells: Array<{ v: number; out: string; delta: number | null; deltaOut: string | null } | null> }> } | null;
+}
+export interface SvPerson { id: number; name: string; role: string; team: string | null; teamId: number | null; isAdmin: boolean }
+export interface SvTemplate { id: number; name: string; questions: SvQuestion[]; anon: boolean; owner_id: number | null }
+export interface SvNotification { id: number; survey_id: number; kind: string; text: string; created_at: string; read_at: string | null }
+export interface SurveysBadge { canManage: boolean; assigned: number; unread: number; fresh: number }
+
+export const surveysBadge = async () => (await api.get<SurveysBadge>("/surveys/badge")).data;
+export const svParse = async (text: string) => (await api.post<{ title: string; desc: string; questions: SvQuestion[] }>("/surveys/parse", { text })).data;
+export const svList = async (mine = false) => (await api.get<SvListRow[]>("/surveys", { params: mine ? { mine: 1 } : {} })).data;
+export const svGet = async (id: number) => (await api.get<SvFull>(`/surveys/${id}`)).data;
+export const svCreate = async (d: SvDraft) => (await api.post<{ id: number }>("/surveys", d)).data;
+export const svUpdate = async (id: number, d: SvDraft) => (await api.put<{ id: number }>(`/surveys/${id}`, d)).data;
+export const svLaunch = async (id: number) => (await api.post<{ ok: true; assigned: number }>(`/surveys/${id}/launch`)).data;
+export const svClose = async (id: number) => (await api.post<{ ok: true }>(`/surveys/${id}/close`)).data;
+export const svReopen = async (id: number) => (await api.post<{ ok: true; due: string }>(`/surveys/${id}/reopen`)).data;
+export const svRemind = async (id: number, userIds?: number[]) =>
+  (await api.post<{ sent: number }>(`/surveys/${id}/remind`, userIds ? { userIds } : {})).data;
+export const svRespond = async (id: number, answers: Record<string, SvAnswer>) => (await api.post<{ ok: true }>(`/surveys/${id}/respond`, { answers })).data;
+export const svResults = async (id: number, slice = "all") => (await api.get<SvResults>(`/surveys/${id}/results`, { params: { slice } })).data;
+export const svPeople = async () => (await api.get<{ people: SvPerson[]; teams: Array<{ id: number; name: string }> }>("/surveys/people")).data;
+export const svTemplates = async () => (await api.get<SvTemplate[]>("/surveys/templates")).data;
+export const svSaveTemplate = async (t: { name: string; questions: SvQuestion[]; anon: boolean; shared?: boolean }) =>
+  (await api.post<SvTemplate>("/surveys/templates", t)).data;
+export const svDeleteTemplate = async (id: number) => (await api.delete(`/surveys/templates/${id}`)).data;
+export const svNotifications = async () => (await api.get<SvNotification[]>("/surveys/notifications")).data;
+export const svMarkRead = async (id: number) => (await api.post(`/surveys/notifications/${id}/read`)).data;
+/** CSV — blob із токеном: голе посилання пішло б без заголовка авторизації й отримало 401. */
+export async function svExportCsv(id: number): Promise<Blob> {
+  return (await api.get<Blob>(`/surveys/${id}/export.csv`, { responseType: "blob" })).data;
+}
