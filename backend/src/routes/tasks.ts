@@ -14,6 +14,9 @@ import {
   TASK_OWNER_JOINS, ASSIGNEE_TEAM_SQL,
   type TaskViewer, type TaskOwnerRow,
 } from "../core/taskVisibility.js";
+import {
+  statusRights, statusActor, canChangeReviewer, effectiveReviewer, REVIEWED_TASK_TYPES,
+} from "../core/taskStatusRights.js";
 
 export const tasksRouter = Router();
 tasksRouter.use(requireAuth);
@@ -76,6 +79,8 @@ const upsertSchema = z.object({
   department: z.string().nullable().optional(),
   /** Особиста група-папка автора. Доступу не змінює — лише розкладку. */
   groupId: z.number().nullable().optional(),
+  /** «Приймає» (`users.id`) — хто закриває задачу. Порожнє — приймає автор. */
+  reviewerId: z.number().nullable().optional(),
 });
 
 const checklistItem = z.object({
@@ -173,12 +178,20 @@ tasksRouter.get("/", async (req, res) => {
             -- тобто людина обирала причину зі списку, і та зникала з очей назавжди.
             t.close_reason AS "closeReason",
             to_char(t.closed_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS "closedAt",
-            COALESCE(cu.full_name, cu.email) AS "closedByName"
+            COALESCE(cu.full_name, cu.email) AS "closedByName",
+            -- ✅ «ПРИЙМАЄ» — уже з замовчуванням: порожнє поле означає автора
+            -- (core/taskStatusRights.ts). Імʼя тим самим виразом, що й у /assignees:
+            -- у CRM-акаунтів full_name порожнє свідомо, і без ПІБ менеджера екран
+            -- показав би логін «drv» замість «Денисюк Роман».
+            COALESCE(t.reviewer_id, t.created_by) AS "reviewerId",
+            COALESCE(NULLIF(btrim(rvu.full_name), ''), NULLIF(btrim(rvm.name), ''), split_part(rvu.email, '@', 1)) AS "reviewerName"
      FROM tasks t${TASK_OWNER_JOINS}
      LEFT JOIN users u ON u.id = t.created_by
      LEFT JOIN users ru ON ru.id = t.o2o_resolved_by
      LEFT JOIN managers rm ON rm.id = ru.manager_id
      LEFT JOIN users cu ON cu.id = t.closed_by
+     LEFT JOIN users rvu ON rvu.id = COALESCE(t.reviewer_id, t.created_by)
+     LEFT JOIN managers rvm ON rvm.id = rvu.manager_id
      LEFT JOIN task_groups g ON g.id = t.group_id
      LEFT JOIN task_views tv ON tv.task_id = t.id AND tv.user_id = $${me}
      LEFT JOIN (SELECT task_id, count(*)::int AS n FROM task_comments GROUP BY task_id) tc
@@ -193,7 +206,25 @@ tasksRouter.get("/", async (req, res) => {
     params
   );
 
-  res.json({ tasks: result.rows });
+  // ✅ ПРАВА НА СТАТУС РАХУЄ СЕРВЕР, фронт лише малює меню за ними. Та сама
+  // функція, що відмовляє в PATCH, — тож сірий пункт у меню і 403 не можуть
+  // розійтися (тримає #1080f).
+  const viewer = viewerOf(auth);
+  const tasks = result.rows.map((r) => {
+    const row = {
+      assigneeId: r.assigneeId, assigneeUserId: r.assigneeUserId, createdBy: r.createdById,
+      assigneeTeamId: r.assigneeTeamId, reviewerId: r.reviewerId, taskType: r.taskType,
+    };
+    const rights = statusRights(viewer, row);
+    return {
+      ...r,
+      statusRights: {
+        canChange: rights.canChange, canDone: rights.canDone,
+        canChangeReviewer: REVIEWED_TASK_TYPES.has(r.taskType) && canChangeReviewer(viewer, row),
+      },
+    };
+  });
+  res.json({ tasks });
 });
 
 /**
@@ -430,6 +461,12 @@ tasksRouter.post("/", async (req, res) => {
   const { title, status, deadline, priority, comments, department } = parsed.data;
   const auth = req.auth!;
 
+  // ✅ «Приймає» — будь-який активний акаунт; порожнє означає «приймаю я, автор».
+  const reviewerId = parsed.data.reviewerId ?? null;
+  if (reviewerId != null && !(await activeUserExists(reviewerId))) {
+    return res.status(400).json({ error: "Акаунт «Приймає» не знайдено" });
+  }
+
   // 📁 Група — лише власна (та сама межа, що в PATCH).
   const groupId = parsed.data.groupId ?? null;
   if (groupId != null) {
@@ -452,11 +489,11 @@ tasksRouter.post("/", async (req, res) => {
     const acc = await pool.query(`SELECT 1 FROM users WHERE id = $1 AND is_active`, [assigneeUserId]);
     if (!acc.rowCount) return res.status(400).json({ error: "Акаунт-виконавця не знайдено" });
     const one = await pool.query<{ id: number }>(
-      `INSERT INTO tasks (title, status, deadline, assignee_user_id, priority, comments, department, created_by, group_id)
-       VALUES ($1, COALESCE($2, 'not_started'), $3, $4, COALESCE($5, 'medium'), $6, $7, $8, $9)
+      `INSERT INTO tasks (title, status, deadline, assignee_user_id, priority, comments, department, created_by, group_id, reviewer_id)
+       VALUES ($1, COALESCE($2, 'not_started'), $3, $4, COALESCE($5, 'medium'), $6, $7, $8, $9, $10)
        RETURNING id`,
       [title, status ?? null, deadline ?? null, assigneeUserId, priority ?? null,
-       comments ?? null, department ?? null, auth.userId, groupId]
+       comments ?? null, department ?? null, auth.userId, groupId, reviewerId]
     );
     return res.status(201).json({ id: one.rows[0].id, ids: [one.rows[0].id] });
   }
@@ -495,10 +532,10 @@ tasksRouter.post("/", async (req, res) => {
   for (const assigneeId of uniqueAssignees) {
     const dept = await deptOf(assigneeId);
     const result = await pool.query(
-      `INSERT INTO tasks (title, status, deadline, assignee_id, priority, comments, department, created_by, group_id)
-       VALUES ($1, COALESCE($2, 'not_started'), $3, $4, COALESCE($5, 'medium'), $6, $7, $8, $9)
+      `INSERT INTO tasks (title, status, deadline, assignee_id, priority, comments, department, created_by, group_id, reviewer_id)
+       VALUES ($1, COALESCE($2, 'not_started'), $3, $4, COALESCE($5, 'medium'), $6, $7, $8, $9, $10)
        RETURNING id`,
-      [title, status ?? null, deadline ?? null, assigneeId, priority ?? null, comments ?? null, dept, auth.userId, groupId]
+      [title, status ?? null, deadline ?? null, assigneeId, priority ?? null, comments ?? null, dept, auth.userId, groupId, reviewerId]
     );
     ids.push(result.rows[0].id);
   }
@@ -517,13 +554,14 @@ tasksRouter.post("/", async (req, res) => {
 interface TaskMeta extends TaskOwnerRow {
   status: string;
   taskType: string;
+  reviewerId: number | null;
 }
 async function loadTaskMeta(taskId: number): Promise<TaskMeta | null> {
   const r = await pool.query<{
     assignee_id: number | null; assignee_user_id: number | null; created_by: number | null;
-    assignee_team_id: number | null; status: string; task_type: string;
+    assignee_team_id: number | null; status: string; task_type: string; reviewer_id: number | null;
   }>(
-    `SELECT t.assignee_id, t.assignee_user_id, t.created_by, t.status, t.task_type,
+    `SELECT t.assignee_id, t.assignee_user_id, t.created_by, t.status, t.task_type, t.reviewer_id,
             ${ASSIGNEE_TEAM_SQL} AS assignee_team_id
        FROM tasks t${TASK_OWNER_JOINS}
       WHERE t.id = $1`,
@@ -534,7 +572,24 @@ async function loadTaskMeta(taskId: number): Promise<TaskMeta | null> {
   return {
     assigneeId: t.assignee_id, assigneeUserId: t.assignee_user_id, createdBy: t.created_by,
     assigneeTeamId: t.assignee_team_id, status: t.status, taskType: t.task_type,
+    reviewerId: t.reviewer_id,
   };
+}
+
+/** Активний акаунт існує — інакше FK на `users` дав би 500 замість зрозумілої відмови. */
+async function activeUserExists(userId: number): Promise<boolean> {
+  const r = await pool.query(`SELECT 1 FROM users WHERE id = $1 AND is_active`, [userId]);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** Імʼя «Приймає» для тексту відмови — тим самим виразом, що й у видачі. */
+async function reviewerNameOf(t: TaskMeta): Promise<string> {
+  const id = effectiveReviewer(t);
+  if (id == null) return "адмін";
+  const r = await pool.query<{ name: string }>(
+    `SELECT COALESCE(NULLIF(btrim(u.full_name), ''), NULLIF(btrim(m.name), ''), split_part(u.email, '@', 1)) AS name
+       FROM users u LEFT JOIN managers m ON m.id = u.manager_id WHERE u.id = $1`, [id]);
+  return r.rows[0]?.name ?? "адмін";
 }
 
 /**
@@ -611,6 +666,7 @@ const PATCH_COLUMNS: Record<string, string> = {
   comments: "comments",
   department: "department",
   groupId: "group_id",
+  reviewerId: "reviewer_id",
   checklistJson: "checklist_json",
   subtasksJson: "subtasks_json",
 };
@@ -626,10 +682,20 @@ tasksRouter.patch("/:id", async (req, res) => {
   const auth = req.auth!;
   const before = await loadTaskMeta(id);
   if (!before) return res.status(404).json({ error: "Задачу не знайдено" });
+  const viewer = viewerOf(auth);
   const isO2O = before.taskType === "oneonone";
   const o2oFull = isO2O && o2oFullAccess(auth, before.createdBy);
+  /**
+   * ✅ «ПРИЙМАЄ» НЕ Є УЧАСНИКОМ ЗАДАЧІ, АЛЕ СТАТУС РУХАЄ. Межа `canTouchTask` його не
+   * пускає (і не мусить: назву, дедлайн чи виконавця він не править), тож для нього
+   * окремий вхід — рівно статус і сам «Приймає» (передати приймання іншому).
+   */
+  const reviewed = REVIEWED_TASK_TYPES.has(before.taskType);
+  const rights = statusRights(viewer, before);
+  const asReviewerOnly = reviewed && rights.canChange && effectiveReviewer(before) === auth.userId
+    && Object.keys(parsed.data).every((k) => k === "status" || k === "reviewerId");
   if (!o2oFull) {
-    if (!mayTouch(viewerOf(auth), before)) {
+    if (!mayTouch(viewer, before) && !asReviewerOnly) {
       return res.status(403).json({ error: "Немає доступу до цієї задачі" });
     }
     if (isO2O) {
@@ -640,6 +706,34 @@ tasksRouter.patch("/:id", async (req, res) => {
       if (parsed.data.status === "done") {
         return res.status(403).json({ error: "Задача з 1×1 закривається лише на наступному 1×1 — ведучим" });
       }
+    }
+  }
+  /**
+   * ✅ СТАТУС ЗВИЧАЙНОЇ ЗАДАЧІ — ЗА ПРАВИЛОМ «ЗАКРИВАЄ ТОЙ, ХТО ПРИЙМАЄ»
+   * (`core/taskStatusRights.ts`). Відмова НАЗИВАЄ, хто може закрити: без імені
+   * людина бачить «не можна» і не знає, кого просити.
+   * ⚠️ `done` відмовляємо й тоді, коли задача вже `done`: прямий PATCH від
+   * виконавця мусить бути 403, а не «тихо прийнято, нічого не змінилось».
+   */
+  if (reviewed && parsed.data.status !== undefined) {
+    if (!rights.canChange) {
+      return res.status(403).json({ error: "Статус цієї задачі змінюють виконавець, «Приймає» або адмін" });
+    }
+    if (parsed.data.status === "done" && !rights.canDone) {
+      return res.status(403).json({
+        error: `Закрити задачу може «Приймає»: ${await reviewerNameOf(before)}. Поставте «Готово на затвердження».`,
+      });
+    }
+  }
+  // ✅ «Приймає» міняють автор, сам «Приймає» і адмін — не виконавець (інакше він
+  // призначив би приймати себе й закрив би задачу сам).
+  if (parsed.data.reviewerId !== undefined) {
+    if (!reviewed) return res.status(400).json({ error: "«Приймає» є лише у звичайних задач" });
+    if (!canChangeReviewer(viewer, before)) {
+      return res.status(403).json({ error: "Змінити «Приймає» може автор, сам «Приймає» або адмін" });
+    }
+    if (parsed.data.reviewerId !== null && !(await activeUserExists(parsed.data.reviewerId))) {
+      return res.status(400).json({ error: "Акаунт «Приймає» не знайдено" });
     }
   }
   // 🔓 Перепризначення — як і створення: рішення власника 14.09.2026 «всі можуть
@@ -690,9 +784,11 @@ tasksRouter.patch("/:id", async (req, res) => {
   // Рядок «done → done» був би шумом, який знецінює історію; а порівняння йде з
   // тим самим рядком, який ми щойно перевіряли на межу, не з новим зчитуванням.
   if (parsed.data.status !== undefined && parsed.data.status !== before.status) {
+    // Роль — знімком на момент зміни: «хто прийняв» не переписується, коли
+    // пізніше призначать іншого «Приймає».
     await pool.query(
-      `INSERT INTO task_status_log (task_id, from_status, to_status, changed_by) VALUES ($1, $2, $3, $4)`,
-      [id, before.status, parsed.data.status, auth.userId]
+      `INSERT INTO task_status_log (task_id, from_status, to_status, changed_by, actor_role) VALUES ($1, $2, $3, $4, $5)`,
+      [id, before.status, parsed.data.status, auth.userId, statusActor(viewer, before)]
     );
   }
 
@@ -792,8 +888,11 @@ async function openTask(
   // 🔴 ЧУЖА ЗАДАЧА — 404, А НЕ 403. Особиста задача приватна, тож саме її
   // ІСНУВАННЯ не підтверджується: 403 казав би «така задача є, але не твоя».
   if (!seen.found || !seen.ok) { res.status(404).json({ error: "Задачу не знайдено" }); return null; }
-  if (mode === "touch" && !mayTouch(viewerOf(auth), seen.meta!)) {
-    res.status(403).json({ error: "Дописувати може автор, виконавець або керівник" });
+  // ✅ «Приймає» дописує теж: повертаючи задачу в роботу, він мусить мати змогу
+  // написати, ЧОМУ. Вкладення («own») йому не відкриваються — рішення Романа 30.09.
+  const iReview = REVIEWED_TASK_TYPES.has(seen.meta!.taskType) && effectiveReviewer(seen.meta!) === auth.userId;
+  if (mode === "touch" && !mayTouch(viewerOf(auth), seen.meta!) && !iReview) {
+    res.status(403).json({ error: "Дописувати може автор, виконавець, «Приймає» або керівник" });
     return null;
   }
   /**
@@ -851,7 +950,8 @@ tasksRouter.get("/:id/history", async (req, res) => {
   if (!t) return;
   const r = await pool.query(
     `SELECT l.id, l.from_status AS "fromStatus", l.to_status AS "toStatus",
-            l.changed_at AS "changedAt", COALESCE(u.full_name, u.email) AS "changedByName"
+            l.changed_at AS "changedAt", COALESCE(u.full_name, u.email) AS "changedByName",
+            l.actor_role AS "actorRole"
        FROM task_status_log l LEFT JOIN users u ON u.id = l.changed_by
       WHERE l.task_id = $1 ORDER BY l.changed_at`,
     [t.id]

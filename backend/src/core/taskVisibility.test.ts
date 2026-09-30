@@ -39,6 +39,9 @@ const TASKS: { name: string; t: TaskOwnerRow }[] = [
   // 28.09.2026 (#400t): «сам собі» — особиста. Менеджер у команді 7 — щоб тімлід команди теж був перевірений.
   { name: "САМ СОБІ — менеджер-акаунт", t: row({ assigneeUserId: MGR.userId, assigneeTeamId: 7, createdBy: MGR.userId }) },
   { name: "САМ СОБІ — HR", t: row({ assigneeUserId: HR.userId, createdBy: HR.userId }) },
+  // 30.09.2026: «Приймає» бачить задачу, яку приймає, — навіть чужої команди і навіть особисту.
+  { name: "ПРИЙМАЄ менеджер: задача чужій команді, автор — адмін", t: row({ assigneeId: 50, assigneeTeamId: 9, createdBy: ADMIN.userId, reviewerId: MGR.userId }) },
+  { name: "ПРИЙМАЄ менеджер: особиста задача адміна", t: row({ createdBy: ADMIN.userId, reviewerId: MGR.userId }) },
 ];
 
 /**
@@ -265,12 +268,12 @@ test("#400d 🪞 СХЕМА З НУЛЯ: SQL-скоуп == JS-правилу; CH
         (4,'mgr@uts.ua','x','manager',40,7,'Менеджер'),
         (5,'other@uts.ua','x','manager',50,9,'Чужий')`);
 
-    // Ті самі вісім задач, що у фікстурі вище — тепер рядками в базі.
+    // Ті самі задачі, що у фікстурі вище — тепер рядками в базі.
     for (const [i, { t: x }] of TASKS.entries()) {
       await c.query(
-        `INSERT INTO tasks (id, title, assignee_id, assignee_user_id, created_by)
-         VALUES ($1,$2,$3,$4,$5)`,
-        [100 + i, `задача ${i}`, x.assigneeId, x.assigneeUserId, x.createdBy]
+        `INSERT INTO tasks (id, title, assignee_id, assignee_user_id, created_by, reviewer_id)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [100 + i, `задача ${i}`, x.assigneeId, x.assigneeUserId, x.createdBy, x.reviewerId ?? null]
       );
     }
 
@@ -284,13 +287,13 @@ test("#400d 🪞 СХЕМА З НУЛЯ: SQL-скоуп == JS-правилу; CH
       const fromSql = sqlRows.rows.map((r) => r.id).sort((a, b) => a - b);
 
       // JS-бік рахується з ТИХ САМИХ рядків, узятих одним запитом.
-      const all = await c.query<{ id: number; assignee_id: number | null; assignee_user_id: number | null; created_by: number | null; team: number | null }>(
-        `SELECT t.id, t.assignee_id, t.assignee_user_id, t.created_by, ${ASSIGNEE_TEAM_SQL} AS team
+      const all = await c.query<{ id: number; assignee_id: number | null; assignee_user_id: number | null; created_by: number | null; reviewer_id: number | null; team: number | null }>(
+        `SELECT t.id, t.assignee_id, t.assignee_user_id, t.created_by, t.reviewer_id, ${ASSIGNEE_TEAM_SQL} AS team
            FROM tasks t${TASK_OWNER_JOINS} ORDER BY t.id`);
       const fromJs = all.rows
         .filter((r) => canSeeTask(v, {
           assigneeId: r.assignee_id, assigneeUserId: r.assignee_user_id,
-          createdBy: r.created_by, assigneeTeamId: r.team,
+          createdBy: r.created_by, assigneeTeamId: r.team, reviewerId: r.reviewer_id,
         }))
         .map((r) => r.id).sort((a, b) => a - b);
 

@@ -1,0 +1,177 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { skipReason } from "../db/scratchDb.js";
+
+/**
+ * #1080f — «ЗАКРИВАЄ ТОЙ, ХТО ПРИЙМАЄ» НА РОУТІ: обробники виконуються проти бази з нуля.
+ *
+ * `#1080`…`#1080e` перевіряють ПРАВИЛО (чиста функція). Тут — що роут справді його
+ * застосовує, і що видача віддає ті самі права, за якими фронт малює меню. Кличемо
+ * обробники В ПРОЦЕСІ з мок-`req`/`res` (той самий прийом, що `#400h`): без сервера,
+ * без мережі, проти одноразового кластера. На проді нічого не створюється.
+ *
+ * Акаунти — ті, що вимагає ТЗ: виконавець, «Приймає», третя людина без прав, адмін;
+ * плюс тімлід виконавця (рішення Романа 30.09: рухає, не закриває).
+ * ⚠️ «Приймає» тут НЕ адмін навмисно. У проді Юлія — КВП з `admin_scope` і пройшла б
+ * як адмін, тобто перевірка не торкнулась би гілки «Приймає» взагалі.
+ *
+ * 🧨 Червоніє, якщо: дати виконавцю `done` у PATCH; не пустити «Приймає» (він не
+ * учасник за `canTouchTask`); віддати у видачі права, що розходяться з PATCH;
+ * розповзтись правилом на інші типи задач чи системну задачу без автора.
+ */
+test("#1080f РОУТ: виконавець не закриває (403 з іменем), «Приймає» закриває, стороння людина — нічого, видача дзеркалить PATCH", async (t) => {
+  const { provisionScratch } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  process.env.DATABASE_URL = scratch.url;
+  process.env.JWT_SECRET ??= "test";
+  process.env.KOMMO_BASE_URL ??= "https://x.invalid";
+  process.env.KOMMO_API_TOKEN ??= "test";
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+    await c.query(`INSERT INTO teams (id,name) VALUES (7,'РПК-7'),(9,'РПК-9')`);
+    await c.query(`INSERT INTO managers (id,name,team_id,is_active) VALUES
+        (30,'Тімлід Сьомої',7,true),(40,'Виконавець Роман',7,true),(50,'Сторонній',9,true)`);
+    await c.query(`INSERT INTO users (id,email,password_hash,role,manager_id,team_id,full_name) VALUES
+        (1,'admin@uts.ua','x','admin',NULL,NULL,'Адмін'),
+        (3,'lead@uts.ua','x','team_lead',30,7,NULL),
+        (4,'exec@uts.ua','x','manager',40,7,NULL),
+        (5,'other@uts.ua','x','manager',50,9,NULL),
+        (6,'yulia@uts.ua','x','manager',NULL,NULL,'Юлія Приймає')`);
+
+    const { tasksRouter } = await import("./tasks.js");
+    const { refreshRoles } = await import("../auth/rbac.js");
+    await refreshRoles();
+
+    type Layer = { route?: { path: string; methods: Record<string, boolean>; stack: { handle: unknown }[] } };
+    const layers = (tasksRouter as unknown as { stack: Layer[] }).stack.filter((l) => l.route);
+    const AUTH: Record<string, unknown> = {
+      admin: { userId: 1, role: "admin", roleKey: "admin", managerId: null, teamId: null },
+      lead: { userId: 3, role: "team_lead", roleKey: "team_lead", managerId: 30, teamId: 7 },
+      exec: { userId: 4, role: "manager", roleKey: "manager", managerId: 40, teamId: 7 },
+      other: { userId: 5, role: "manager", roleKey: "manager", managerId: 50, teamId: 9 },
+      yulia: { userId: 6, role: "manager", roleKey: "manager", managerId: -1, teamId: null },
+    };
+    async function call(method: string, p: string, o: { who?: string; params?: Record<string, string>; body?: unknown } = {}) {
+      const layer = layers.find((l) => l.route!.path === p && l.route!.methods[method.toLowerCase()]);
+      assert.ok(layer, `🔴 роут не знайдено: ${method} ${p}`);
+      const handler = layer!.route!.stack[layer!.route!.stack.length - 1].handle as
+        (req: unknown, res: unknown, next: (e?: unknown) => void) => Promise<void>;
+      const req = { auth: AUTH[o.who ?? "admin"], params: o.params ?? {}, body: o.body ?? {}, query: {}, headers: {}, originalUrl: p };
+      let code = 200;
+      let payload: unknown;
+      const res = {
+        headersSent: false,
+        status(x: number) { code = x; return res; },
+        json(b: unknown) { payload = b; return res; },
+        send(b: unknown) { payload = b; return res; },
+        type() { return res; },
+        setHeader() { /* не потрібно */ },
+      };
+      await handler(req, res, (e?: unknown) => { if (e) throw e; });
+      return { code, payload: payload as Record<string, unknown> };
+    }
+    type Row = { id: number; status: string; reviewerId: number | null; reviewerName: string | null;
+      statusRights: { canChange: boolean; canDone: boolean; canChangeReviewer: boolean } };
+    const listOf = async (who: string) => ((await call("GET", "/", { who })).payload as unknown as { tasks: Row[] }).tasks;
+    const patch = (who: string, id: number, body: unknown) => call("PATCH", "/:id", { who, params: { id: String(id) }, body });
+    const statusOf = async (id: number) => (await c.query<{ status: string }>(`SELECT status FROM tasks WHERE id=$1`, [id])).rows[0].status;
+
+    // ── 1. СТВОРЕННЯ: автор-адмін ставить задачу виконавцю, приймає Юлія ──
+    const made = await call("POST", "/", { who: "admin", body: { title: "ТЗ Юлії", assigneeId: 40, reviewerId: 6 } });
+    assert.equal(made.code, 201, `створення з «Приймає»: ${JSON.stringify(made.payload)}`);
+    const id = (made.payload as unknown as { id: number }).id;
+    const ghost = await call("POST", "/", { who: "admin", body: { title: "х", assigneeId: 40, reviewerId: 999 } });
+    assert.equal(ghost.code, 400, "🔴 неіснуючий «Приймає» дав не 400 — далі FK і 500");
+
+    // ── 2. ВИДАЧА: «Приймає» бачить задачу, імʼя — людське ──
+    const yRow = (await listOf("yulia")).find((r) => r.id === id);
+    assert.ok(yRow, "🔴 «Приймає» не бачить задачу у своєму списку — закрити її він не зможе");
+    assert.equal(yRow!.reviewerName, "Юлія Приймає");
+
+    // ── 3. ВИКОНАВЕЦЬ: рухає до «на затвердження», але не закриває ──
+    assert.equal((await patch("exec", id, { status: "in_progress" })).code, 204);
+    assert.equal((await patch("exec", id, { status: "ready_for_approval" })).code, 204,
+      "🔴 виконавець не може поставити «Готово на затвердження»");
+    const denied = await patch("exec", id, { status: "done" });
+    assert.equal(denied.code, 403, `🔴 ВИКОНАВЕЦЬ ЗАКРИВ ЗАДАЧУ САМ (код ${denied.code})`);
+    assert.match(String(denied.payload.error), /Юлія Приймає/, "🔴 відмова не називає, хто може закрити");
+    assert.equal(await statusOf(id), "ready_for_approval", "🔴 після 403 статус у базі змінився");
+    // Тімлід виконавця — як виконавець: рухає, не закриває.
+    assert.equal((await patch("lead", id, { status: "done" })).code, 403, "🔴 тімлід закрив задачу замість «Приймає»");
+    // Виконавець не призначає приймати себе.
+    assert.equal((await patch("exec", id, { reviewerId: 4 })).code, 403,
+      "🔴 виконавець переписав «Приймає» на себе — правило обходиться одним PATCH");
+
+    // ── 4. СТОРОННЯ ЛЮДИНА: нічого ──
+    assert.equal((await patch("other", id, { status: "in_progress" })).code, 403, "🔴 стороння людина змінила статус");
+
+    // ── 5. «ПРИЙМАЄ»: не учасник за canTouchTask, але закриває й повертає ──
+    assert.equal((await patch("yulia", id, { title: "перейменую" })).code, 403,
+      "🔴 «Приймає» отримав право правити задачу цілком, а не лише статус");
+    assert.equal((await patch("yulia", id, { status: "ball_on_executor" })).code, 204, "🔴 «Приймає» не може повернути в роботу");
+    assert.equal((await patch("exec", id, { status: "ready_for_approval" })).code, 204);
+    const closed = await patch("yulia", id, { status: "done" });
+    assert.equal(closed.code, 204, `🔴 «ПРИЙМАЄ» НЕ МОЖЕ ЗАКРИТИ (код ${closed.code}): ${JSON.stringify(closed.payload)}`);
+    assert.equal(await statusOf(id), "done");
+    assert.equal((await call("POST", "/:id/comments", { who: "yulia", params: { id: String(id) }, body: { body: "Прийнято" } })).code, 201,
+      "🔴 «Приймає» не може написати, чому повертає чи приймає");
+
+    // Історія знає, ХТО прийняв, — знімком ролі.
+    const hist = ((await call("GET", "/:id/history", { params: { id: String(id) } })).payload as unknown as
+      { history: { toStatus: string; actorRole: string | null; changedByName: string }[] }).history;
+    const accepted = hist.filter((h) => h.toStatus === "done");
+    assert.deepEqual(accepted.map((h) => [h.actorRole, h.changedByName]), [["reviewer", "Юлія Приймає"]],
+      "🔴 історія не відмічає, хто прийняв");
+    assert.ok(hist.some((h) => h.actorRole === "executor"), "роль виконавця не записалась");
+
+    // ── 6. АДМІН: усе ──
+    assert.equal((await patch("admin", id, { status: "in_progress" })).code, 204);
+    assert.equal((await patch("admin", id, { status: "done" })).code, 204, "🔴 адмін не може закрити");
+
+    // ── 7. ВИДАЧА == PATCH: права з GET передбачають відповідь PATCH для КОЖНОГО глядача ──
+    await c.query(`UPDATE tasks SET status='ready_for_approval' WHERE id=$1`, [id]);
+    const mismatches: string[] = [];
+    for (const who of ["admin", "lead", "exec", "other", "yulia"]) {
+      const row = (await listOf(who)).find((r) => r.id === id);
+      const promisedDone = row?.statusRights.canDone ?? false;
+      await c.query(`UPDATE tasks SET status='ready_for_approval' WHERE id=$1`, [id]);
+      const r = await patch(who, id, { status: "done" });
+      if (promisedDone !== (r.code === 204)) mismatches.push(`${who}: меню обіцяє done=${promisedDone}, PATCH дав ${r.code}`);
+    }
+    assert.deepEqual(mismatches, [], "🔴 сірий пункт у меню і 403 розійшлись:\n  " + mismatches.join("\n  "));
+
+    // ── 8. ЗАМОВЧУВАННЯ: «Приймає» не обрано — приймає автор ──
+    const plain = (await call("POST", "/", { who: "lead", body: { title: "Без приймаючого", assigneeId: 40 } })).payload as unknown as { id: number };
+    const plainRow = (await listOf("lead")).find((r) => r.id === plain.id)!;
+    assert.equal(plainRow.reviewerId, 3, "🔴 без «Приймає» видача не показала автора");
+    assert.equal((await patch("exec", plain.id, { status: "done" })).code, 403);
+    assert.equal((await patch("lead", plain.id, { status: "done" })).code, 204, "🔴 автор не може закрити задачу без «Приймає»");
+
+    // ── 9. ПРАВИЛО НЕ РОЗПОВЗЛОСЬ: задача іншого типу і системна задача ──
+    // ⚠️ Не `reactivation_client`: закрити його PATCH-ем не можна й без цього правила —
+    // CHECK `tasks_reactivation_close_reason` вимагає причину, якої PATCH не несе.
+    // Тип поза правилом тут — денна KPI-задача з автором (дитина плану тімліда).
+    const kid = await c.query<{ id: number }>(
+      `INSERT INTO tasks (title, status, assignee_id, created_by, task_type) VALUES ('День плану','not_started',40,1,'daily_kpi') RETURNING id`);
+    assert.equal((await patch("exec", kid.rows[0].id, { status: "done" })).code, 204,
+      "🔴 виконавець не може закрити задачу поза правилом (daily_kpi) — правило розповзлось на всі типи");
+    const sys = await c.query<{ id: number }>(
+      `INSERT INTO tasks (title, status, assignee_id, created_by, task_type) VALUES ('Пропущений дзвінок','not_started',40,NULL,'simple') RETURNING id`);
+    assert.equal((await patch("exec", sys.rows[0].id, { status: "done" })).code, 204,
+      "🔴 менеджер не може закрити системну задачу без автора");
+    assert.equal((await patch("admin", kid.rows[0].id, { reviewerId: 6 })).code, 400,
+      "🔴 «Приймає» призначено задачі не звичайного типу");
+
+    const { pool } = await import("../db/pool.js");
+    await pool.end();
+  } finally {
+    await c.end();
+    scratch.dispose();
+  }
+});
