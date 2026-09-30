@@ -1,7 +1,7 @@
 import { pool } from "../db/pool.js";
 import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING } from "./metrics.js";
 import { LEADGEN_STAGE_IDS, QUALIFICATION_PIPELINES } from "./leadgenStages.js";
-import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery, leadStatusPred,
+import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery, leadStatusPred, relayEntryPred,
   type SqlQuery, type LeadgenBucketGrain } from "./leadgenSql.js";
 import { FC_PIPELINES, handoffDealStates, clientSuccessHistory } from "./money.js";
 import { stageName } from "./stageNames.js";
@@ -68,6 +68,8 @@ export interface LeadgenStats {
 }
 
 const K = "AT TIME ZONE 'Europe/Kyiv'";
+/** Вікно звʼязку «вхід у 142 → угода, створена з нього» — і для передач, і для естафети (`relayEntryPred`). */
+const LINK_WIN = { beforeSec: LINK_BEFORE_SEC, afterSec: LINK_AFTER_SEC };
 
 /**
  * 📞 ЗАПИТ ДЗВІНКІВ — ОДИН НА РЯДКИ ЛЮДЕЙ І НА РОЗБИВКУ. Правило «успішного дзвінка»
@@ -96,7 +98,7 @@ function callsQuery(ids: number[], from: string, to: string, bucket: LeadgenBuck
 export async function leadgenStats(from: string, to: string): Promise<LeadgenStats> {
   // 🧾 Текст запиту — у чистому `leadgenSql.ts`: той самий рядок женуть і пул тут, і гейт
   // на тимчасовій базі. Id стадій — ОДНИМ обʼєктом (`LEADGEN_STAGE_IDS`), не поштучно.
-  const sq = stageCountsQuery(from, to, LEADGEN_STAGE_IDS);
+  const sq = stageCountsQuery(from, to, LEADGEN_STAGE_IDS, LINK_WIN);
   const stages = await pool.query<{
     manager_id: number; name: string; team_id: number | null; team_name: string | null;
     is_active: boolean; leads: string; opr: string; quotes: string; warming: string;
@@ -200,6 +202,7 @@ export async function leadgenHandoffs(from: string, to: string, limit = 500): Pr
        LEFT JOIN managers m ON m.id = d.manager_id
       WHERE e.pipeline_id = ANY($3) AND e.status_id = 142
         AND (e.changed_at ${K})::date BETWEEN $1 AND $2
+        AND NOT ${relayEntryPred("$3", LINK_WIN)}
       GROUP BY e.kommo_id
       ORDER BY day DESC, e.kommo_id DESC
       LIMIT $4`,
@@ -236,8 +239,9 @@ export async function leadgenWeekly(from: string, to: string): Promise<LeadgenWe
     `SELECT to_char(date_trunc('week', (e.changed_at ${K})), 'YYYY-MM-DD') AS week,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE ${leadStatusPred("e.status_id", "$4", "$5")}) AS leads,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.status_id = $5) AS opr,
-            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.status_id = 142) AS quotes
+            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.status_id = 142 AND NOT ${relayEntryPred("$3", LINK_WIN)}) AS quotes
        FROM deal_stage_events e
+       JOIN deals d ON d.kommo_id = e.kommo_id
       WHERE e.pipeline_id = ANY($3) AND e.status_id IN ($4, $5, 142)
         AND (e.changed_at ${K})::date BETWEEN $1 AND $2
       GROUP BY 1 ORDER BY 1`,
@@ -273,7 +277,7 @@ export async function leadGeneratorFill(from: string, to: string): Promise<{ wit
  */
 async function bucketQueryRows(from: string, to: string, grain: LeadgenBucketGrain):
   Promise<{ stages: StageBucketRow[]; calls: CallBucketRow[] }> {
-  const sq = stageCountsQuery(from, to, LEADGEN_STAGE_IDS, grain);
+  const sq = stageCountsQuery(from, to, LEADGEN_STAGE_IDS, LINK_WIN, grain);
   const st = await pool.query<{ bucket: string; manager_id: number; team_id: number | null;
     leads: string; opr: string; quotes: string; warming: string }>(sq.text, sq.values);
   const stages = st.rows.map((r): StageBucketRow => ({
@@ -309,7 +313,7 @@ async function handoffLinks(from: string, to: string): Promise<HandoffLinkInfo[]
   const q = handoffLinkQuery(from, to,
     { pz: LEADGEN_STAGE_IDS.pz, qualified: LEADGEN_STAGE_IDS.qualified,
       managerPipelines: [...QUALIFICATION_PIPELINES, ...FC_PIPELINES] },
-    { beforeSec: LINK_BEFORE_SEC, afterSec: LINK_AFTER_SEC });
+    LINK_WIN);
   const r = await pool.query<{ pz_id: string; lg_id: number; lg_team_id: number | null; at: Date; day: string;
     pz_name: string | null; pz_client: string | null; client_key: string | null; deal_id: string | null; deal_name: string | null;
     deal_client: string | null; sales_manager: string | null; deal_reason: string | null;
