@@ -165,6 +165,25 @@ before(async () => {
     const d = await deal({ manager: m, pipeline: PZ, ck: null });
     await ev(d, PZ, st, utc(when));
   }
+
+  // ── #1090/#1090b (задача 4668, 30.09.2026): СІЧЕНЬ 2025 — поза вікнами всіх гейтів вище (тренд
+  // тягнеться з 2025-10, плани — березень 2025). Людина 70, тиждень 13–19.01.2025, по угоді на випадок:
+  // A — «Взято» і ОПР (один лід) · B — лише ОПР (лід: так лідген ставить реактивацію й повернуте
+  // менеджером) · C — лише «Кваліфіковано» (не лід) · D — лише «Взято» · E — статус ОПР у воронці
+  // Реактивації (не лід: чужа воронка) · F — «Підігрівається» (підігрів, не лід). Джерела різні.
+  await client.query(`INSERT INTO managers (id, name, team_id) VALUES (70,'Лідген Лід',1)`);
+  const lg = async (src: string, pipeline: number, evs: [number, string][]) => {
+    const d = await deal({ manager: 70, pipeline, ck: null });
+    await client!.query(`UPDATE deals SET client_source = $2 WHERE kommo_id = $1`, [d, src]);
+    for (const [st, when] of evs) await ev(d, pipeline, st, utc(when));
+  };
+  const RE = LEADGEN_STAGE_IDS.react[0];
+  await lg("Холодная база", PZ, [[LEADGEN_STAGE_IDS.taken, "2025-01-13T08:00:00"], [LEADGEN_STAGE_IDS.opr, "2025-01-14T08:00:00"]]);
+  await lg("Реактивація закриті", PZ, [[LEADGEN_STAGE_IDS.opr, "2025-01-15T08:00:00"]]);
+  await lg("Холодная база", PZ, [[Q, "2025-01-15T09:00:00"]]);
+  await lg("Реактивація наша база", PZ, [[LEADGEN_STAGE_IDS.taken, "2025-01-16T08:00:00"]]);
+  await lg("Реактивація наша база", RE, [[LEADGEN_STAGE_IDS.opr, "2025-01-16T09:00:00"]]);
+  await lg("Реактивація наша база", RE, [[LEADGEN_STAGE_IDS.warming, "2025-01-17T08:00:00"]]);
 });
 
 after(async () => {
@@ -484,7 +503,8 @@ test("#748 ЖИВИЙ SQL: ростер — активні учасники 5001
   assert.deepEqual(v.others.map((r) => r.managerId).sort(), [62, 63], "🔴 «інші» — не всі, хто з подіями поза командою");
   assert.deepEqual(v.totals, st.totals, "🔴 підсумок відділу змінився");
   assert.deepEqual(rosterInvariantBreaks(v), []);
-  assert.equal(st.totals.leads, 4, "фікстура: 4 ліди в березні 2025 — інакше перевіряти нічого");
+  // 5, а не 4: у людини 60 окрема угода лише з ОПР — з 30.09.2026 це теж лід (`leadStatusPred`, задача 4668).
+  assert.equal(st.totals.leads, 5, "фікстура: 5 лідів у березні 2025 — інакше перевіряти нічого");
   const lead = leadgenRosterView(st.rows, members, 50011, zero);
   assert.deepEqual(lead.rows.map((r) => r.managerId).sort(), [60, 61, 63, 64], "🔴 тімлід 50011 бачить не свою команду");
   assert.deepEqual(lead.others, []);
@@ -526,4 +546,42 @@ test("#749 ЖИВИЙ SQL: подання → затвердження → по�
     "🔴 місяць не з першого числа прийнято");
   await assert.rejects(client!.query(`INSERT INTO plans (manager_id, plan_date, metric, planned_value) VALUES (61, '2025-04-01', 'quotes', 1)`), /check/i,
     "🔴 продажний plans приймає лідоген-метрику");
+});
+
+/**
+ * #1090 — ЛІД = ВХІД У «ВЗЯТО В РОБОТУ» АБО В «ОПР» (правило Ярослава, задача 4668, 30.09.2026).
+ * Фікстура — по угоді на кожен бік межі: лише ОПР (лід), обидва етапи (один лід), лише «Кваліфіковано»,
+ * ОПР чужої воронки й «Підігрівається» (не ліди). Плюс інваріант, заради якого все це: за будь-який
+ * період у кожної людини лідів не менше, ніж ОПР (до 30.09 Сердюк мав 19 лідів на 45 ОПР).
+ * 🧨 САБОТАЖ: у `leadStatusPred` повернути `${col} = ${taken}` → угода «лише ОПР» перестає бути лідом → червоніє.
+ */
+test("#1090 ЖИВИЙ SQL: лід — «Взято в роботу» АБО «ОПР», одна угода — один лід; лідів ≥ ОПР у кожного", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const wk = await run<{ manager_id: number; leads: string; opr: string; quotes: string; warming: string }>(
+    stageCountsQuery("2025-01-13", "2025-01-19", LEADGEN_STAGE_IDS));
+  const r70 = wk.find((r) => r.manager_id === 70);
+  assert.ok(r70, "фікстура вироджена — людини 70 у тижні немає");
+  assert.deepEqual([Number(r70.leads), Number(r70.opr), Number(r70.quotes), Number(r70.warming)], [3, 2, 1, 1],
+    "🔴 ліди/ОПР/прорахунки/підігрів людини 70 не ті: лід — це «Взято» АБО «ОПР» Продзвону, і лише вони");
+  const all = await run<{ manager_id: number; leads: string; opr: string }>(stageCountsQuery("2025-01-01", "2026-12-31", LEADGEN_STAGE_IDS));
+  assert.ok(all.length >= 4, "фікстура вироджена — людей замало");
+  for (const r of all) assert.ok(Number(r.leads) >= Number(r.opr), `🔴 людина ${r.manager_id}: лідів ${r.leads} < ОПР ${r.opr}`);
+});
+
+/**
+ * #1090b — ТРИ ЛІЧИЛЬНИКИ ЛІДІВ, ОДНЕ ПРАВИЛО: рядок людини (`leadgenStats().rows`), розріз за джерелом
+ * (`bySource`) і тижні (`leadgenWeekly`) — справжнє ядро на тимчасовій базі. Друга копія предиката в
+ * будь-якому з них розійшлась би мовчки: екран показав би 3 ліди в рядку й 2 у «Звідки ліди».
+ * 🧨 САБОТАЖ: у запиті `bySource` (`leadgenStats.ts`) замінити `leadStatusPred(...)` на `e.status_id = $4` → червоніє.
+ */
+test("#1090b ЖИВИЙ SQL: рядок, джерела й тижні рахують ліди одним правилом", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { stats } = await core();
+  const st = await stats.leadgenStats("2025-01-13", "2025-01-19");
+  const row = st.rows.find((r) => r.managerId === 70);
+  assert.equal(row?.leads, 3, "🔴 рядок людини рахує ліди не за правилом");
+  assert.deepEqual(st.bySource.map((s) => [s.source, s.leads]).sort(), [["Холодная база", 1], ["Реактивація закриті", 1], ["Реактивація наша база", 1]].sort(),
+    "🔴 розріз за джерелом рахує ліди іншим правилом, ніж рядок");
+  const weeks = await stats.leadgenWeekly("2025-01-13", "2025-01-19");
+  assert.deepEqual(weeks.map((w) => [w.week, w.leads, w.opr]), [["2025-01-13", 3, 2]], "🔴 тижні рахують ліди іншим правилом, ніж рядок");
 });

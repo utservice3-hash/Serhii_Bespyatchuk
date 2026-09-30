@@ -1,7 +1,7 @@
 import { pool } from "../db/pool.js";
 import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING } from "./metrics.js";
 import { LEADGEN_STAGE_IDS, QUALIFICATION_PIPELINES } from "./leadgenStages.js";
-import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery,
+import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery, leadStatusPred,
   type SqlQuery, type LeadgenBucketGrain } from "./leadgenSql.js";
 import { FC_PIPELINES, handoffDealStates } from "./money.js";
 import { stageName } from "./stageNames.js";
@@ -52,7 +52,7 @@ export interface LeadgenPersonRow {
   teamId: number | null;
   teamName: string | null;
   isActive: boolean;
-  leads: number;      // входи в «Взято в роботу» (Продзвін)
+  leads: number;      // входи в «Взято в роботу» АБО «ОПР» (Продзвін) — `leadStatusPred`
   opr: number;        // входи в «Отримано контакти ОПР»
   quotes: number;     // входи в «Кваліфіковано» = передано на прорахунок
   warming: number;    // входи в «Клієнт підігрівається» (Реактивація)
@@ -119,10 +119,10 @@ export async function leadgenStats(from: string, to: string): Promise<LeadgenSta
             COUNT(DISTINCT e.kommo_id) AS leads
        FROM deal_stage_events e
        JOIN deals d ON d.kommo_id = e.kommo_id
-      WHERE e.pipeline_id = ANY($3) AND e.status_id = $4
+      WHERE e.pipeline_id = ANY($3) AND ${leadStatusPred("e.status_id", "$4", "$5")}
         AND (e.changed_at ${K})::date BETWEEN $1 AND $2
       GROUP BY 1 ORDER BY leads DESC`,
-    [from, to, PRODZVIN_PIPELINES, PZ_TAKEN]
+    [from, to, PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR]
   );
 
   const rows: LeadgenPersonRow[] = stages.rows.map((r) => ({
@@ -234,7 +234,7 @@ export interface LeadgenWeekRow { week: string; leads: number; opr: number; quot
 export async function leadgenWeekly(from: string, to: string): Promise<LeadgenWeekRow[]> {
   const r = await pool.query<{ week: string; leads: string; opr: string; quotes: string }>(
     `SELECT to_char(date_trunc('week', (e.changed_at ${K})), 'YYYY-MM-DD') AS week,
-            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.status_id = $4) AS leads,
+            COUNT(DISTINCT e.kommo_id) FILTER (WHERE ${leadStatusPred("e.status_id", "$4", "$5")}) AS leads,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.status_id = $5) AS opr,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.status_id = 142) AS quotes
        FROM deal_stage_events e

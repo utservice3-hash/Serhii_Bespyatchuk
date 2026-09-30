@@ -545,7 +545,7 @@ function Glance({ d, cmp, cmpData, cmpErr, who, whoName, whoAbsent, periodLabel,
           title={st.overfull ? `ОПР (${t.opr}) більше, ніж лідів (${t.leads}) — конверсія цього періоду нічого не каже`
             : st.conv == null ? "Лідів у періоді немає" : !statusful ? "Статус — лише за місяць і довше." : undefined} />}
         <div>
-          <div style={lab}>{title} · {periodLabel} <InfoHint text={d.callRule + " Ліди — входи в «Взято в роботу», ОПР — «Отримано контакти ОПР», прорахунки — «Кваліфіковано», підігрів — воронка Реактивації."} /></div>
+          <div style={lab}>{title} · {periodLabel} <InfoHint text={d.callRule + " Лід — угода Продзвону, яку лідген опрацював: перевів у «Взято в роботу» АБО одразу в «Отримано контакти ОПР» (так ставлять реактивацію й повернуте менеджером); угода з обома етапами — один лід. ОПР — «Отримано контакти ОПР», прорахунки — «Кваліфіковано», підігрів — «Клієнт підігрівається» воронки Реактивації."} /></div>
           <div style={val}>{t.leads.toLocaleString("uk-UA")} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>{plural(t.leads, "лід", "ліди", "лідів")} · {t.quotes.toLocaleString("uk-UA")} {plural(t.quotes, "прорахунок", "прорахунки", "прорахунків")}</small></div>
           <div style={{ fontSize: 11, color: MUTED, marginTop: 3 }}>
             дзвінки {whoAbsent ? "—" : t.calls.toLocaleString("uk-UA")} · ОПР {t.opr.toLocaleString("uk-UA")} · підігрів {t.warming.toLocaleString("uk-UA")}
