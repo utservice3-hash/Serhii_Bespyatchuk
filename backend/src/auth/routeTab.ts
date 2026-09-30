@@ -170,6 +170,9 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // 📄 Конструктор документів (30.09.2026). Вкладка — перша межа; друга — «лише свої» (`canSeeConstructorDoc`)
     // і право `view_all_constructor_docs` для пулу.
     { test: pre("/api/constructor"), tabs: ["constructor"] },
+    // 📋 Опитування (30.09.2026). Вкладка — у всіх, крім кандидата; керування й відповіді — право `manage_surveys`,
+    // решта — лише адресовані їм опитування (межа всередині роуту).
+    { test: pre("/api/surveys"), tabs: ["surveys"] },
     // Кнопка «Проблемний клієнт» живе в ДЕБІТОРЦІ: вкладка `receivables`, а дію гейтить право
     // `create_claim` — фінансист розділу не бачить, але кнопку натискає.
     { test: pre("/api/receivables-claims"), tabs: ["receivables"] },

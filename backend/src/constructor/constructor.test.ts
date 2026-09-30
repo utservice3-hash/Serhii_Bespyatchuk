@@ -162,7 +162,11 @@ test("#1123 ЛИШЕ СВОЇ: автор бачить свій, чужий — 
 
   const src = SRC("routes/constructor.ts");
   const byId = [...src.matchAll(/FROM constructor_documents[^`]*WHERE (?:d\.)?id = \$1/g)];
-  assert.equal(byId.length, 1, "🔴 документ за id читається більше ніж в одному місці — межу можна обійти");
+  assert.equal(byId.length, 2, "🔴 документ за id читається в новому місці — межу можна обійти");
+  // Друге читання — друга сторона пакета угоди: `stateById` кличеться лише там і лише для рядка, що пройшов межу.
+  assert.equal([...src.matchAll(/stateById\(req, /g)].length, 1, "🔴 stateById кличеться поза пакетом угоди");
+  assert.match(src, /const other = q\.rows\.find\(\(r\) => canSeeConstructorDoc\([\s\S]{0,700}for \(const id of \[Number\(row\.id\), Number\(other\.id\)\]\)[\s\S]{0,80}stateById\(req, id\)/,
+    "🔴 пакет угоди бере другу сторону без межі «лише свої»");
   assert.match(src, /async function visibleRow[\s\S]{0,400}canSeeConstructorDoc\(/, "🔴 читання за id без межі «лише свої»");
   for (const route of ["/documents/:id\"", "/documents/:id/docx", "/documents/:id/pdf"]) {
     const at = src.indexOf(`constructorRouter.get("${route.replace(/"$/, "")}"`);
@@ -295,4 +299,56 @@ test("#1127 PDF-ДРУК: стиль друку після CSS документ�
   assert.match(PRINT_CSS, /\.docfmt \.sigend\{display:none\}/, "🔴 спейсер не схований — порожня остання сторінка");
   assert.match(PRINT_CSS, /@page\{size:A4;margin:10mm 11mm 12mm 11mm\}/, "🔴 поля не як у макеті");
   assert.match(PRINT_CSS, /print-color-adjust:exact/, "🔴 фони (смуга, клітинки умов) не друкуються");
+});
+
+/**
+ * #1128 — КОНВЕРТЕР (макет K-15): абзаци зберігаються, Word — коректний zip із `word/document.xml` і текстом,
+ * лише DOCX/TXT/JPG/PNG ідуть у PDF, пошкоджена картинка — відмова, а не порожній PDF.
+ * 🧨 Червоніє, якщо склеїти абзаци, загубити текст у Word або пропустити невідомий формат.
+ */
+test("#1128 КОНВЕРТЕР: абзаци цілі, Word із текстом, лише 4 формати в PDF, пошкоджена картинка — відмова", async () => {
+  const cv = await import("./services/convert.js");
+  assert.deepEqual(cv.splitParagraphs("Перший рядок\nдругий рядок\n\n\nДругий абзац\r\n\r\nТретій\f"), ["Перший рядок\nдругий рядок", "Другий абзац", "Третій"],
+    "🔴 абзаци склеєно або загублено перенос усередині абзацу");
+  const docx = cv.paragraphsDocx(["Договір № 1 <&>", "Рядок 1\nРядок 2"]);
+  const files = unzipStored(docx);
+  assert.ok(files.has("[Content_Types].xml") && files.has("_rels/.rels") && files.has("word/document.xml"), "🔴 у Word бракує обовʼязкових частин");
+  const xml = new TextDecoder().decode(files.get("word/document.xml")!);
+  assert.match(xml, /Договір № 1 &lt;&amp;&gt;/, "🔴 текст у Word не екрановано або загублено");
+  assert.match(xml, /Рядок 1<\/w:t><\/w:r><w:r>[\s\S]*?<w:br\/>[\s\S]*?Рядок 2/, "🔴 перенос рядка всередині абзацу загублено");
+  assert.deepEqual(["a.docx", "b.TXT", "c.jpeg", "d.png", "e.pdf", "f.xlsx", "g"].map(cv.toPdfKind),
+    ["docx", "txt", "image/jpeg", "image/png", null, null, null], "🔴 у PDF пропускається не той формат");
+  assert.throws(() => cv.imagePageHtml("image/png", "не base64 <script>"), /пошкоджена/, "🔴 пошкоджена картинка пройшла в сторінку");
+  assert.match(cv.textPageHtml(["<b>x</b>"]), /&lt;b&gt;x&lt;\/b&gt;/, "🔴 текст файла потрапляє в HTML без екранування");
+  assert.equal(cv.outName("Заявка №5 (копія).pdf", "docx"), "Заявка _5 _копія_.docx");
+});
+
+/**
+ * #1129 — МАКЕТ ІЗОЛЬОВАНИЙ І БЕЗ GOOGLE (рішення Романа 30.09.2026: шрифти макета — лише в цих розділах, зі свого
+ * сервера). Кожне правило `constructor.css` — під `.ctorx`; `mockFonts.css` посилається лише на файли в репозиторії.
+ * 🧨 Червоніє, якщо правило макета вилізе на весь дашборд (`.btn{…}` без префікса перефарбував би кнопки всюди)
+ * або шрифт піде з fonts.googleapis.com.
+ */
+test("#1129 МАКЕТ ІЗОЛЬОВАНИЙ: усі селектори під .ctorx, шрифти — з репозиторію, не з Google", () => {
+  const css = readFileSync(path.join(REPO, "frontend", "src", "pages", "dashboard", "sections", "constructor.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const sels: string[] = [];
+  const walk = (text: string) => {
+    let i = 0;
+    while (i < text.length) {
+      const j = text.indexOf("{", i); if (j < 0) break;
+      const sel = text.slice(i, j).trim(); let d = 0, k = j;
+      for (; k < text.length; k++) { if (text[k] === "{") d++; else if (text[k] === "}" && --d === 0) break; }
+      if (sel.startsWith("@media")) walk(text.slice(j + 1, k)); else sels.push(sel);
+      i = k + 1;
+    }
+  };
+  walk(css);
+  assert.ok(sels.length > 100, "🔴 CSS макета порожній — перевірці нічого перевіряти");
+  const leak = sels.flatMap((s) => s.split(",").map((x) => x.trim())).filter((x) => !/^(:root\[data-theme="dark"\] )?\.ctorx\b/.test(x));
+  assert.deepEqual(leak, [], "🔴 правило макета діє поза розділом конструктора");
+  const fonts = readFileSync(path.join(REPO, "frontend", "src", "pages", "dashboard", "sections", "mockFonts.css"), "utf8");
+  assert.doesNotMatch(fonts, /googleapis|gstatic|https?:/, "🔴 шрифт вантажиться з інтернету, а не з нашого сервера");
+  const urls = [...fonts.matchAll(/url\('([^']+)'\)/g)].map((m) => m[1]);
+  assert.ok(urls.length >= 6, "🔴 шрифтів макета немає");
+  for (const u of urls) readFileSync(path.join(REPO, "frontend", "src", "pages", "dashboard", "sections", u)); // файл існує — інакше кине
 });

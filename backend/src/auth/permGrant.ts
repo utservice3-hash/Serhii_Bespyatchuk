@@ -43,6 +43,8 @@ export const PERMISSION_CATALOG = [
   "approve_finance_plan",
   /** 📄 Конструктор документів: пул усіх заявок і лічильник за день (рішення Сергія 30.09.2026) — admin, СЕО, ОД. */
   "view_all_constructor_docs",
+  /** 📋 Опитування: створювати, запускати, бачити відповіді й підсумки (рішення Романа 30.09.2026) — admin, СЕО, ОД, HR. */
+  "manage_surveys",
   "manage_bank_accounts",
   "manage_bank_hidden",
   "manage_credit_limits",

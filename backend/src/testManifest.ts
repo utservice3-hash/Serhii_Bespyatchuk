@@ -138,6 +138,7 @@ export const MANIFEST_FILES: string[] = [
   "core/baEquipment.test.js",
   "core/finance.test.js",
   "constructor/constructor.test.js",
+  "surveys/surveys.test.js",
   "core/hiringTraining.test.js",
   "core/candidateTraining.test.js",
   "core/secrets.test.js",
@@ -315,6 +316,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "workua_responses",
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_import_months",
   "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates",
+  "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   "ba_equipment_issues",
 ];
 
@@ -2162,6 +2164,16 @@ export const MANIFEST_TESTS: string[] = [
   "#1125 СТАН ФОРМИ: невідома юрособа — 400 словами; сторона з виду документа; менеджер лише із сесії",
   "#1126 ФРОНТ КОНСТРУКТОРА: пункт меню, статичний імпорт, файли — через api з токеном",
   "#1127 PDF-ДРУК: стиль друку після CSS документа, спейсер схований, поля й фони макета",
+  "#1128 КОНВЕРТЕР: абзаци цілі, Word із текстом, лише 4 формати в PDF, пошкоджена картинка — відмова",
+  "#1129 МАКЕТ ІЗОЛЬОВАНИЙ: усі селектори під .ctorx, шрифти — з репозиторію, не з Google",
+  // surveys/surveys.test.ts — Опитування команди, пакет Сергія (30.09.2026).
+  "#1130 ПАРСЕР ОПИТУВАНЬ: 8 текстів як у макеті; кирилиця без межі слова; eNPS за замовчуванням",
+  "#1131 РЕЗУЛЬТАТИ ЯК У МАКЕТІ: 4 опитування — бари, середні, eNPS, матриця, ранжування, підсумок, CSV посимвольно",
+  "#1131b ДИНАМІКА ПО ВИПУСКАХ: участь і дельти ↑↓ по кожному питанню як у макеті",
+  "#1132 ПЛАНУВАЛЬНИК: нагадування за день і в день дедлайну; наступний випуск — найближчий заданий день",
+  "#1132b ПРАВИЛА ФОРМИ: запуск без адресатів/дедлайну — відмова словами; шкала в межах; картинка лише JPEG/PNG",
+  "#1133 ЖИВИЙ ЦИКЛ ОПИТУВАННЯ через HTTP: доступ, анонімність до дня, автозакриття, серія, нагадування один раз",
+  "#1134 ФРОНТ ОПИТУВАНЬ: пункт меню за бейджем, статичний імпорт, CSV через api, CSS під .srvx",
   // core/baEquipment.test.ts — Бізнес-асистент, прохід 2: облік техніки й ТТН-моніторинг (29.09.2026).
   "#980 ТТН: місяць «два тому», межі включно, без угод — «—», норма 70%",
   "#981 ТТН: посилання на Kommo — рівно фільтр Даші для менеджера й місяця",

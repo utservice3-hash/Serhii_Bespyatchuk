@@ -4951,3 +4951,138 @@ UPDATE roles SET permissions = permissions || '{"view_all_constructor_docs": tru
  WHERE key IN ('admin', 'ceo', 'opdir');
 UPDATE roles SET permissions = permissions - 'view_all_constructor_docs'
  WHERE key NOT IN ('admin', 'ceo', 'opdir');
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 📋 ОПИТУВАННЯ КОМАНДИ (30.09.2026) — пакет Сергія `roman-package-opytuvannya` (migrations/001), перенесений
+-- майже дослівно. Змінено ЛИШЕ типи людей: `created_by`/`user_id`/`owner_id` були `text` без FK (пакет не знав
+-- нашого ключа), у нас `users.id` INTEGER — з FK, щоб «число проти тексту» не падало на кожному JOIN (той самий
+-- клас, що в конструкторі). Анонімність (README пакета §7) тримає роут: у анонімному опитуванні `user_id = NULL`,
+-- а обидва часи (подача й «відповів») — з точністю до ДНЯ, інакше рівний час до мілісекунди звʼязує людину з
+-- відповіддю. Доступ: створювати й бачити результати — право `manage_surveys` (admin, ceo, opdir, hr — рішення
+-- Романа 30.09.2026); решта бачить лише адресовані їй опитування. Гейти — surveys/surveys.test.ts.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- ── Опитування (один рядок = один випуск; повторювані утворюють серію) ──────────
+CREATE TABLE IF NOT EXISTS surveys (
+  id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  series_id    bigint,                                   -- id першого випуску серії; для разових = власний id (ставить тригер)
+  issue        int NOT NULL DEFAULT 1,                   -- № випуску в серії
+  title        text NOT NULL,
+  description  text,
+  status       text NOT NULL CHECK (status IN ('draft','scheduled','active','closed')),
+  anon         boolean NOT NULL DEFAULT false,           -- анонімне: відповіді без user_id (рішення 09.10)
+  due          timestamptz,                              -- дедлайн; після нього планувальник закриває сам
+  launch_at    timestamptz,                              -- для status='scheduled' (наступний випуск серії)
+  remind       jsonb NOT NULL DEFAULT '{"on":true,"days":1,"time":"10:00","dayOf":true}',
+  remind_sent  jsonb NOT NULL DEFAULT '{}',              -- {"before":true,"dayOf":true} — щоб не слати двічі
+  allow_edit   boolean NOT NULL DEFAULT true,            -- змінювати відповідь до дедлайну (в анонімних завжди false)
+  recur        jsonb NOT NULL DEFAULT '{"on":false}',    -- {on, per:'week'|'2week'|'month', day:1..5, time:'09:00', days:2}; ВИМКНЕНО за замовчуванням (рішення 09.10)
+  audience     jsonb NOT NULL,                           -- {kind:'all'|'leads'|'managers'|'team'|'custom', team?, ids?[]}
+  created_by   INTEGER NOT NULL REFERENCES users(id),
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  launched_at  timestamptz,
+  closed_at    timestamptz,
+  closed_by    text CHECK (closed_by IN ('auto','manual')),
+  CONSTRAINT anon_no_edit CHECK (NOT anon OR NOT allow_edit)
+);
+CREATE INDEX IF NOT EXISTS idx_surveys_status ON surveys (status, due);
+CREATE INDEX IF NOT EXISTS idx_surveys_series ON surveys (series_id, issue);
+
+CREATE OR REPLACE FUNCTION surveys_default_series() RETURNS trigger AS $$
+BEGIN
+  IF NEW.series_id IS NULL THEN NEW.series_id := NEW.id; END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_surveys_series ON surveys;
+CREATE TRIGGER trg_surveys_series BEFORE INSERT ON surveys
+  FOR EACH ROW EXECUTE FUNCTION surveys_default_series();
+
+-- ── Питання (заморожуються після запуску — редагування лише в чернетці) ──────────
+CREATE TABLE IF NOT EXISTS survey_questions (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  survey_id  bigint NOT NULL REFERENCES surveys(id) ON DELETE CASCADE,
+  ord        int NOT NULL,
+  type       text NOT NULL CHECK (type IN ('single','multi','scale','enps','matrix','rank','text')),
+  text       text NOT NULL,
+  hint       text,
+  options    jsonb NOT NULL DEFAULT '[]',                -- single/multi/rank
+  rows       jsonb NOT NULL DEFAULT '[]',                -- matrix
+  min        int NOT NULL DEFAULT 1,
+  max        int NOT NULL DEFAULT 10,                    -- enps: 0..10
+  required   boolean NOT NULL DEFAULT true,
+  image_url  text,                                       -- картинка до питання: файл у вашому сховищі (рішення 10.10)
+  series_key text                                        -- стабільний ключ питання в серії (тренд зіставляє за ним, далі за текстом, далі за позицією)
+);
+CREATE INDEX IF NOT EXISTS idx_sq_survey ON survey_questions (survey_id, ord);
+
+-- ── Адресати: хто отримав і чи подав відповідь. ────────────────────────────────
+-- responded_at ставиться і в АНОНІМНИХ опитуваннях (щоб не нагадувати зайвий раз і рахувати участь),
+-- але зв'язку з рядком відповіді немає — це і є механізм анонімності.
+CREATE TABLE IF NOT EXISTS survey_assignments (
+  survey_id    bigint NOT NULL REFERENCES surveys(id) ON DELETE CASCADE,
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  notified_at  timestamptz,
+  responded_at timestamptz,
+  reminded_at  timestamptz,
+  PRIMARY KEY (survey_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_sa_user ON survey_assignments (user_id, responded_at);
+
+-- ── Відповіді ────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS survey_responses (
+  id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  survey_id    bigint NOT NULL REFERENCES surveys(id) ON DELETE CASCADE,
+  user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,  -- NULL в анонімних (ніколи не заповнювати!)
+  role         text,                                     -- знімок ролі/команди для розрізів (в анонімних — лише вони)
+  team         text,
+  submitted_at timestamptz NOT NULL DEFAULT now(),
+  updated_at   timestamptz NOT NULL DEFAULT now()
+);
+-- іменне: одна відповідь на людину (зміна = UPDATE); анонімне: повтор блокує assignments.responded_at
+CREATE UNIQUE INDEX IF NOT EXISTS uq_sr_user ON survey_responses (survey_id, user_id) WHERE user_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_sr_survey ON survey_responses (survey_id);
+
+CREATE TABLE IF NOT EXISTS survey_answers (
+  response_id  bigint NOT NULL REFERENCES survey_responses(id) ON DELETE CASCADE,
+  question_id  bigint NOT NULL REFERENCES survey_questions(id) ON DELETE CASCADE,
+  value        jsonb NOT NULL,                           -- single: "текст"; multi: ["a","b"]; scale/enps: 7; matrix: {"рядок":4}; rank: ["b","a"]; text: "…"
+  PRIMARY KEY (response_id, question_id)
+);
+
+-- ── Шаблони ──────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS survey_templates (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name       text NOT NULL,
+  questions  jsonb NOT NULL,                             -- масив питань у форматі ParsedQuestion
+  anon       boolean NOT NULL DEFAULT false,
+  owner_id   INTEGER REFERENCES users(id) ON DELETE CASCADE,  -- NULL = спільний
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- ── Сповіщення (якщо в дашборді є своя система — використайте її, ця таблиця тоді не потрібна) ──
+CREATE TABLE IF NOT EXISTS survey_notifications (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  survey_id  bigint REFERENCES surveys(id) ON DELETE CASCADE,
+  kind       text NOT NULL CHECK (kind IN ('new','reminder','summary')),
+  text       text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  read_at    timestamptz
+);
+CREATE INDEX IF NOT EXISTS idx_sn_user ON survey_notifications (user_id, read_at, created_at DESC);
+
+-- 🔒 Відповіді людей і сповіщення — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`.
+REVOKE ALL ON surveys, survey_questions, survey_assignments, survey_responses, survey_answers, survey_templates, survey_notifications FROM ai_readonly;
+
+-- Екран «Опитування»: усім працівникам, крім кандидатів — але пункт меню фронт показує лише тому, кому є
+-- адресоване опитування або хто має право ними керувати (рішення Романа 30.09.2026: «на вибір — група або одна
+-- людина»). Ідемпотентно й НЕ перетирає рішень адміна: лише де ключа ще немає.
+UPDATE roles SET screen_access = screen_access || '{"surveys":true}'::jsonb
+  WHERE key <> 'candidate' AND NOT (screen_access ? 'surveys');
+
+-- Керувати опитуваннями (створювати, запускати, бачити відповіді) — admin, ceo, opdir, hr (рішення Романа
+-- 30.09.2026). Склад фіксований кодом, парою «видати / зняти» ПІСЛЯ синку фінансиста (інакше розтеклось би).
+UPDATE roles SET permissions = permissions || '{"manage_surveys": true}'::jsonb
+ WHERE key IN ('admin', 'ceo', 'opdir', 'hr');
+UPDATE roles SET permissions = permissions - 'manage_surveys'
+ WHERE key NOT IN ('admin', 'ceo', 'opdir', 'hr');
