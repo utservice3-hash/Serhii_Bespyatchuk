@@ -304,7 +304,7 @@ export function carrierBucket(r: Pick<CarrierResult, "caller_role" | "caller_rol
 // ─── Категорія угоди — ОДНЕ правило для вкладок, черги, звіту й закриття (ТЗ 30.09.2026) ───────────
 
 export type HumanDecision = "carrier" | "client" | "other";
-export type DealCategory = "client" | "carrier" | "other" | "review" | "error" | "waiting";
+export type DealCategory = "client" | "carrier" | "other" | "review" | "error" | "waiting" | "no_talk";
 /** Стан обробки розмови (`aiCallState` екрана «Перший дотик»), якщо вердикту ще немає. */
 export type CarrierAiState = "not_queued" | "not_enabled" | "queued" | "capped" | "recording_unavailable"
   | "stt_failed" | "no_text" | "llm_pending" | "llm_failed" | "done";
@@ -327,8 +327,8 @@ const ERROR_WHY: Partial<Record<CarrierAiState, string>> = {
 
 /**
  * Куди потрапляє угода. Рішення людини сильніше за AI; далі впевнений вердикт AI (≥ поріг і цитата
- * співрозмовника, `carrierBucket`); невпевнений, «не розібрати» й угода без розмови ≥10 с — «На перевірці»
- * (менеджер вирішує свої пропущені); збій після спроб — «Помилка»; решта — AI ще працює.
+ * співрозмовника, `carrierBucket`); невпевнений і «не розібрати» — «На перевірці»; угода без розмови ≥10 с —
+ * «без розмови» (закривається «Немає зв'язку», Роман 30.09.2026); збій після спроб — «Помилка»; решта — AI ще працює.
  * `waiting`, `review` і `error` разом — «не розібрано» у звіті.
  */
 export function dealCategory(x: { human: HumanDecision | null; result: CarrierResult | null; dealState: string; ai: CarrierAiState | null }):
@@ -339,7 +339,8 @@ export function dealCategory(x: { human: HumanDecision | null; result: CarrierRe
     if (b === "carrier" || b === "client" || b === "other") return { category: b, source: "ai", why: null };
     return { category: "review", source: null, why: whyUncertain(x.result) };
   }
-  if (x.dealState === "no_talk") return { category: "review", source: null, why: "розмови від 10 с не було" };
+  // Без розмови від 10 с — не аналізуємо й закриваємо «Немає зв'язку» (Роман 30.09.2026); у вкладки не йде.
+  if (x.dealState === "no_talk") return { category: "no_talk", source: null, why: "розмови від 10 с не було" };
   if (x.ai && ERROR_WHY[x.ai]) return { category: "error", source: null, why: ERROR_WHY[x.ai] ?? null };
   return { category: "waiting", source: null, why: x.dealState === "waiting" ? "чекаємо розмову" : "AI слухає" };
 }

@@ -20,7 +20,7 @@ import { CARRIER_RUBRICS, carrierBucket, dealCategory, reviewDeadline, type Carr
 
 export type CarrierScope = MissedScope;
 
-export interface CloseState { state: "would_close" | "closed" | "reverted" | "failed"; at: string; error: string | null; reason: "carrier" | "other" }
+export interface CloseState { state: "would_close" | "closed" | "reverted" | "failed"; at: string; error: string | null; reason: "carrier" | "other" | "no_talk" }
 
 export interface DealRow {
   kommoId: number;
@@ -81,7 +81,7 @@ interface Raw {
   d_upd: Date; t_upd: Date | null; a_upd: Date | null;
   dec: HumanDecision | null; dec_other: OtherType | null; dec_note: string | null; dec_role: string | null; dec_at: Date | null; dec_by: string | null;
   deal_status: string | null; reject_reason: string | null;
-  cl_decided: Date | null; cl_closed: Date | null; cl_reverted: Date | null; cl_error: string | null; cl_reason: "carrier" | "other" | null;
+  cl_decided: Date | null; cl_closed: Date | null; cl_reverted: Date | null; cl_error: string | null; cl_reason: "carrier" | "other" | "no_talk" | null;
 }
 
 const IN_TYPES = new Set(["in", "transitin"]);
@@ -206,12 +206,15 @@ export interface ReportCounts {
   unsorted: number;
   /** З «не розібрано» — не розібрані до кінця робочого дня (червоне в звіті). */
   overdue: number;
+  /** Без розмови від 10 с — закриті «Немає зв'язку», не аналізуються; у «усього» й вкладки НЕ входять. */
+  noTalk: number;
 }
 export interface ReportLine extends ReportCounts { managerId: number | null; managerName: string | null; teamId: number | null; teamName: string | null }
 
-const zero = (): ReportCounts => ({ total: 0, clients: 0, carriersAuto: 0, carriersManual: 0, otherAuto: 0, otherManual: 0, unsorted: 0, overdue: 0 });
+const zero = (): ReportCounts => ({ total: 0, clients: 0, carriersAuto: 0, carriersManual: 0, otherAuto: 0, otherManual: 0, unsorted: 0, overdue: 0, noTalk: 0 });
 
 function add(c: ReportCounts, r: Pick<DealRow, "category" | "source" | "overdue">): void {
+  if (r.category === "no_talk") { c.noTalk++; return; }
   c.total++;
   if (r.overdue) c.overdue++;
   if (r.category === "client") c.clients++;

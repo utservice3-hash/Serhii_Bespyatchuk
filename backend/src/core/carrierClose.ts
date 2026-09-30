@@ -35,8 +35,12 @@ export const REJECT_FIELD = 2097265;
 export const REJECT_ENUM_CARRIER = 6343043;
 /** «Нецільове звернення» — для «Інше» (заміряно в Kommo 30.09.2026; Роман: «взяти наявні»). */
 export const REJECT_ENUM_NONTARGET = 6340787;
-export type CloseReason = "carrier" | "other";
-export const REJECT_ENUM: Readonly<Record<CloseReason, number>> = { carrier: REJECT_ENUM_CARRIER, other: REJECT_ENUM_NONTARGET };
+/** «Немає зв'язку» — угода без розмови від 10 с (заміряно в Kommo 30.09.2026; Роман: «Немає зв'язку»). */
+export const REJECT_ENUM_NO_TALK = 6343067;
+export type CloseReason = "carrier" | "other" | "no_talk";
+export const REJECT_ENUM: Readonly<Record<CloseReason, number>> = { carrier: REJECT_ENUM_CARRIER, other: REJECT_ENUM_NONTARGET, no_talk: REJECT_ENUM_NO_TALK };
+export const NO_TALK_NOTE = "Закрито дашбордом: розмови від 10 с не було (пропущений або короткий дзвінок), розмову не аналізуємо. "
+  + "Помилка — поверніть угоду на етап у вкладці «Перевізники за розмовою».";
 export const LOST_STATUS = 143;
 export const CLOSE_BATCH = 50;
 export const CLOSE_MAX_PER_TICK = 50;
@@ -102,7 +106,7 @@ export async function closeCandidates(db: Db, onStage: ReadonlySet<number>, now:
     .map((x) => [Number(x.kommo_id), x]));
   const out: CloseCandidate[] = [];
   for (const r of [...rows].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.kommoId - b.kommoId)) {
-    if (r.category !== "carrier" && r.category !== "other") continue;
+    if (r.category !== "carrier" && r.category !== "other" && r.category !== "no_talk") continue;
     const l = log.get(r.kommoId);
     if (r.close?.state === "closed" || l?.reverted || l?.recent_fail) continue;
     const byHuman = r.source === "human";
@@ -142,7 +146,7 @@ export async function runCarrierClose(db: Db, now: Date, mode: CloseMode, onStag
   if (mode !== "live") return rep;
 
   const live = cands.filter((c) => !c.aiOther || otherMode === "live").slice(0, CLOSE_MAX_PER_TICK);
-  for (const reason of ["carrier", "other"] as const) {
+  for (const reason of ["carrier", "other", "no_talk"] as const) {
     for (const batch of chunks(live.filter((c) => c.reason === reason), CLOSE_BATCH)) {
       const ids = batch.map((c) => c.kommoId);
       try {
@@ -159,8 +163,8 @@ export async function runCarrierClose(db: Db, now: Date, mode: CloseMode, onStag
         [ids, now.toISOString()]);
       rep.closed += ids.length;
       // Примітка — пояснення для менеджера. Її збій закриття не скасовує: угода вже закрита, а причина стоїть у полі.
-      const text = (c: CloseCandidate) => reason === "carrier"
-        ? closeNoteText(c.confidence ?? 0, c.quote, c.byHuman) : closeNoteTextOther(c.confidence, c.otherType, c.byHuman);
+      const text = (c: CloseCandidate) => reason === "carrier" ? closeNoteText(c.confidence ?? 0, c.quote, c.byHuman)
+        : reason === "no_talk" ? NO_TALK_NOTE : closeNoteTextOther(c.confidence, c.otherType, c.byHuman);
       await kommo.addNotes(batch.map((c) => ({ entity_id: c.kommoId, note_type: "common", params: { text: text(c) } })))
         .catch((e: unknown) => db.query(`UPDATE carrier_close_log SET close_error = $2 WHERE kommo_id = ANY($1::bigint[])`,
           [ids, `закрито, але примітку не додано: ${(e instanceof Error ? e.message : String(e)).slice(0, 300)}`]));
