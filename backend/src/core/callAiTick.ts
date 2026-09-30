@@ -48,9 +48,11 @@ export function selectionFrom(now: Date): string {
 
 export const TICK_PORTION = 10;
 export const TICK_MAX_ATTEMPTS = 3;
-/** Час на розпізнавання й на аналіз в одному тіку. Разом менше за годину між тіками й за `MAX_RUN_MS`. */
-export const STT_BUDGET_MS = 8 * 60_000;
-export const LLM_BUDGET_MS = 4 * 60_000;
+/** Час на розпізнавання й на аналіз в одному тіку. Разом менше за 10 хв між тіками (ТЗ 30.09.2026) і за `MAX_RUN_MS`. */
+export const STT_BUDGET_MS = 5 * 60_000;
+export const LLM_BUDGET_MS = 3 * 60_000;
+/** Між тіками — 10 хв; сума бюджетів мусить лишати запас на вибірку й останню порцію. */
+export const TICK_EVERY_MIN = 10;
 export const MAX_OUTPUT_TOKENS = 2048;
 
 /** Київська дата моменту — `sv-SE` дає рівно YYYY-MM-DD (як `kyivToday`, але для заданого «зараз»). */

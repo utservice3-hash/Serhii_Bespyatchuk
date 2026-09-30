@@ -203,11 +203,11 @@ test("#783 ТІК У ЧАСІ: порції до дедлайну, idle — кі
 });
 
 /**
- * #784 — ПРОВОДКА: `callAiJob` запускається кроном раз на годину, не на :00/:30, і стоїть під
+ * #853 — ПРОВОДКА: `callAiJob` запускається кроном раз на 10 хв (ТЗ 30.09.2026), не на :00/:30, і стоїть під
  * наглядом із тією самою частотою. Хвилини — з матчера самої бібліотеки, а не з тексту (як `#458`).
  * 🧨 Червоніє, якщо змінити крон, не змінивши `everyMin`, або прибрати джобу з нагляду.
  */
-test("#784 ПРОВОДКА: крон callAiJob раз на годину не на :00/:30, під наглядом із тією самою частотою", async () => {
+test("#853 ПРОВОДКА: крон callAiJob раз на 10 хв не на :00/:30, під наглядом із тією самою частотою, тік вкладається в 10 хв", async () => {
   const src = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "index.ts"), "utf8");
   const at = src.indexOf('runJob("callAiJob"');
   assert.ok(at > 0, "🔴 callAiJob не запускається з index.ts");
@@ -217,12 +217,16 @@ test("#784 ПРОВОДКА: крон callAiJob раз на годину не н
   const TimeMatcher = createRequire(import.meta.url)("node-cron/src/time-matcher.js") as new (p: string) => { match(d: Date): boolean };
   const tm = new TimeMatcher(`0 ${spec}`);
   const minutes = Array.from({ length: 60 }, (_, i) => i).filter((i) => tm.match(new Date(2026, 8, 28, 10, i, 0)));
-  assert.equal(minutes.length, 1, `🔴 крон «${spec}» стріляє ${String(minutes.length)} раз(и) на годину`);
-  assert.ok(![0, 30].includes(minutes[0]), `🔴 крон «${spec}» стріляє разом із syncKommo`);
+  assert.equal(minutes.length, 6, `🔴 крон «${spec}» стріляє ${String(minutes.length)} раз(и) на годину, а не раз на 10 хв`);
+  assert.ok(!minutes.some((m) => [0, 30].includes(m)), `🔴 крон «${spec}» стріляє разом із syncKommo`);
+  const gaps = minutes.slice(1).map((m, k) => m - minutes[k]);
+  assert.ok(gaps.every((g) => g === 10), `🔴 інтервали між тіками нерівні: ${gaps.join(",")}`);
+  const T = await import("./callAiTick.js");
+  assert.ok(T.STT_BUDGET_MS + T.LLM_BUDGET_MS <= (T.TICK_EVERY_MIN - 1.5) * 60_000, "🔴 бюджет тіку не вкладається в 10 хв із запасом на вибірку й останню порцію");
   const { MONITORED_JOBS } = await import("../jobs/monitoredJobs.js");
   const j = MONITORED_JOBS.find((x) => x.name === "callAiJob");
   assert.ok(j, "🔴 callAiJob не під наглядом — його мовчання ніхто не побачить");
-  assert.equal(j.everyMin, 60, "🔴 частота в нагляді ≠ крону — сторож мовчання бив би тривогу сам на себе");
+  assert.equal(j.everyMin, 10, "🔴 частота в нагляді ≠ крону — сторож мовчання бив би тривогу сам на себе");
 });
 
 /**
