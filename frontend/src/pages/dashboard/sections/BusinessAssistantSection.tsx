@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { useToast } from "../../../components/Toasts";
 import { useSearchParams } from "react-router-dom";
 import {
   fetchBaMeta, fetchBaClaims, fetchBaClaim, createBaClaim, updateBaClaim, archiveBaClaim,
@@ -37,7 +38,6 @@ export function BusinessAssistantSection() {
   const [openClaim, setOpenClaim] = useState<number | "new" | null>(null);
   const [openCase, setOpenCase] = useState<number | "new" | null>(null);
   const [nonce, setNonce] = useState(0);
-  const [toastState, setToastState] = useState<{ text: string; error?: boolean; action?: { label: string; run: () => void }; key: number } | null>(null);
 
   useEffect(() => { fetchBaMeta().then(setMeta).catch((e) => setErr(hiringError(e))); }, []);
   // Посилання з дебіторки: `/ba?claim=ID` відкриває картку претензії одразу.
@@ -49,11 +49,8 @@ export function BusinessAssistantSection() {
     }
   }, [params, setParams]);
 
-  const toast: Toast = useCallback((text, opts) => {
-    const key = Date.now();
-    setToastState({ text, ...opts, key });
-    window.setTimeout(() => setToastState((t) => (t && t.key === key ? null : t)), opts?.action ? 8000 : 4000);
-  }, []);
+  // 🔔 Спільне повідомлення дашборда (`components/Toasts.tsx`) — раніше тут жила своя копія.
+  const toast: Toast = useToast();
   const pick = (t: Tab) => { setTab(t); lsSet(LS_TAB, t); };
   const refresh = () => setNonce((n) => n + 1);
 
@@ -90,11 +87,6 @@ export function BusinessAssistantSection() {
           onChanged={refresh} onCreated={(id) => setOpenCase(id)}
           onOpenClaim={(id) => { setOpenCase(null); pick("claims"); setOpenClaim(id); }} />
       )}
-      {toastState && createPortal(
-        <div className={`hr-toast ${toastState.error ? "err" : ""}`} role="status">
-          <span>{toastState.text}</span>
-          {toastState.action && <button onClick={() => { toastState.action!.run(); setToastState(null); }}>{toastState.action.label}</button>}
-        </div>, document.body)}
     </div>
   );
 }

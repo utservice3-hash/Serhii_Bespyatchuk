@@ -4,7 +4,8 @@ import { hiringError, setHiringStatus, refuseHiringCandidate, addHiringRefusalRe
 import { NEEDS_TEAM, STATUS_TONE } from "../hiringView";
 
 /** Спливаюче повідомлення розділу; `action` — наприклад, «Відновити» після видалення рядка. */
-export type Toast = (text: string, opts?: { error?: boolean; action?: { label: string; run: () => void } }) => void;
+import type { Toast } from "../../../components/Toasts";
+export type { Toast };
 
 export function StatusPill({ meta, status }: { meta: HiringMeta; status: HiringStatus | null }) {
   if (!status) return <span className="hr-muted">—</span>;

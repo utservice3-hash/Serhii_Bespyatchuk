@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useToast, type Toast } from "../../../components/Toasts";
 import {
   fetchFinMonth, fetchFinItem, createFin, updateFin, deleteFin, restoreFin, setFinItemOff, saveFinValues, saveFinNote,
   setFinApproval, finErrorData, hiringError,
@@ -17,7 +18,6 @@ import "./finance.css";
  * Стилі — `hiring.css` (`.hr-*`) + `finance.css` (`.fin-*`).
  */
 type Tab = "pf" | "art" | "week" | "cash" | "overview";
-type Toast = (text: string, opts?: { error?: boolean; action?: { label: string; run: () => void } }) => void;
 
 const MONTHS = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
 const monthLabel = (m: string) => `${MONTHS[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`;
@@ -162,7 +162,6 @@ export function FinanceSection() {
   const [nonce, setNonce] = useState(0);
   const [dialog, setDialog] = useState<DialogSpec | null>(null);
   const [sel, setSel] = useState<number | null>(null);
-  const [toastState, setToastState] = useState<{ text: string; error?: boolean; action?: { label: string; run: () => void }; key: number } | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -171,11 +170,8 @@ export function FinanceSection() {
   }, [month, nonce]);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
-  const toast: Toast = useCallback((text, opts) => {
-    const key = Date.now();
-    setToastState({ text, ...opts, key });
-    window.setTimeout(() => setToastState((t) => (t && t.key === key ? null : t)), opts?.action ? 8000 : 4000);
-  }, []);
+  // 🔔 Спільне повідомлення дашборда (`components/Toasts.tsx`) — раніше тут жила своя копія.
+  const toast: Toast = useToast();
   const ask = useCallback((d: DialogSpec) => setDialog(d), []);
   const act = useStructureActions(data, reload, ask, toast);
   const pick = (t: Tab) => { setTab(t); lsSet(LS_TAB, t); };
@@ -216,11 +212,6 @@ export function FinanceSection() {
 
       {sel != null && <ItemDrawer id={sel} month={month} canEdit={data.canEdit} act={act} data={data} reloadKey={nonce} toast={toast} onChanged={reload} onClose={() => setSel(null)} />}
       {dialog && <Dialog spec={dialog} onClose={() => setDialog(null)} />}
-      {toastState && createPortal(
-        <div className={`hr-toast ${toastState.error ? "err" : ""}`} role="status">
-          <span>{toastState.text}</span>
-          {toastState.action && <button onClick={() => { toastState.action!.run(); setToastState(null); }}>{toastState.action.label}</button>}
-        </div>, document.body)}
     </div>
   );
 }
