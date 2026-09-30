@@ -56,15 +56,15 @@ export interface LinkWindow { beforeSec: number; afterSec: number }
  * Продзвону, і НЕ створила нічого поза Продзвоном (інакше це справжня передача, як і була).
  * Копію, що ще не кваліфікована, не чіпаємо: поки другої кваліфікації немає, перша — єдиний прорахунок.
  * ОДИН вираз на лічильник `quotes` і на передачі (`handoffLinkQuery`), тож їхня рівність (`#675b`) тримається.
- * `pz` — місце параметра воронок Продзвону; аліаси `e` (подія) і `d` (угода Продзвону).
+ * `pz`, `qualified` — місця параметрів (воронки Продзвону, «Кваліфіковано»); аліаси `e` (подія) і `d` (угода Продзвону).
  */
-export function relayEntryPred(pz: string, win: LinkWindow): string {
+export function relayEntryPred(pz: string, qualified: string, win: LinkWindow): string {
   const w = `BETWEEN e.changed_at - INTERVAL '${Math.trunc(win.beforeSec)} seconds'
                                     AND e.changed_at + INTERVAL '${Math.trunc(win.afterSec)} seconds'`;
   return `(EXISTS (SELECT 1 FROM lead_child_links rl JOIN deals rc ON rc.kommo_id = rl.child_id
                    WHERE rl.parent_id = d.kommo_id AND rc.pipeline_id = ANY(${pz}) AND rc.created_at_kommo ${w}
                      AND EXISTS (SELECT 1 FROM deal_stage_events re WHERE re.kommo_id = rc.kommo_id
-                                   AND re.pipeline_id = ANY(${pz}) AND re.status_id = 142))
+                                   AND re.pipeline_id = ANY(${pz}) AND re.status_id = ${qualified}))
         AND NOT EXISTS (SELECT 1 FROM lead_child_links rl JOIN deals rc ON rc.kommo_id = rl.child_id
                    WHERE rl.parent_id = d.kommo_id AND NOT (rc.pipeline_id = ANY(${pz})) AND rc.created_at_kommo ${w}))`;
 }
@@ -74,7 +74,7 @@ function stageCounts(win: LinkWindow): string {
   return `COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND ${leadStatusPred("e.status_id", "$4", "$5")}) AS leads,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = $5) AS opr,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = $8
-                                               AND NOT ${relayEntryPred("$3", win)}) AS quotes,
+                                               AND NOT ${relayEntryPred("$3", "$8", win)}) AS quotes,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($6) AND e.status_id = $7) AS warming`;
 }
 
@@ -217,7 +217,7 @@ export function handoffLinkQuery(
        LEFT JOIN managers sm ON sm.id = x.manager_id
       WHERE e.pipeline_id = ANY($3) AND e.status_id = $4
         AND (e.changed_at ${K})::date BETWEEN $1 AND $2
-        AND NOT ${relayEntryPred("$3", win)}
+        AND NOT ${relayEntryPred("$3", "$4", win)}
       ORDER BY e.changed_at, e.kommo_id`,
     values: [from, to, ids.pz, ids.qualified, ids.managerPipelines],
   };
