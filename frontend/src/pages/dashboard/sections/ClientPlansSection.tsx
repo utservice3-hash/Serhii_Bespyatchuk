@@ -957,15 +957,15 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
       {/* 🌉 МІСТОК. Сплячі й втрачені з екрана ЗНИКЛИ (жорсткий поділ) — без цього
           рядка вони зникли б МОВЧКИ, і це читалось би як «клієнти загубились».
           У Σ «постійні принесуть» місток НЕ входить: це не план, а вказівник. */}
-      {t.inReactivation > 0 && (
+      {/* 🔁 З блоку 4 (30.09.2026) число містка — РІВНО лічильник вкладки «Реактивація» (3 повні місяці без
+          рахунку). Доти тут стояло `t.inReactivation` за станом (сплячі + втрачені): 677 поруч із вкладкою 501 —
+          два джерела одного показника на одному екрані. Стан лишився підфільтром усередині вкладки. */}
+      {tab !== "react" && tab !== "pool" && tabCounts.react > 0 && (
         <div style={{ ...S.card, borderLeft: "3px solid #b45309", display: "flex",
                       alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <span style={{ fontSize: 13 }}>
-            🌉 Ще <b>{t.inReactivation}</b> постійних зараз у <b>реактивації</b>
-            <span style={{ color: "#6b7280" }}>
-              {" "}(сплячих {t.inReactivationSleeping} · втрачених {t.inReactivationLost})
-            </span>
-            <span style={{ color: "#6b7280" }}> — вони не в плані й у суму не входять.</span>
+            🌉 Ще <b>{tabCounts.react}</b> постійних зараз у <b>реактивації</b>
+            <span style={{ color: "#6b7280" }}> — без виставленого рахунку {data.reactRules?.quietMonths ?? 3} повні місяці.</span>
           </span>
           <button type="button" onClick={() => setTab("react")}
             style={{ fontSize: 12, color: "#b45309", border: "none", background: "transparent", cursor: "pointer", padding: 0, textDecoration: "underline" }}>
