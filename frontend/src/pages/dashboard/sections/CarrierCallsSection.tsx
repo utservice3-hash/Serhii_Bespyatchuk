@@ -5,9 +5,10 @@ import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
 import { jobErrorIsCurrent, mmss } from "../aiCallsView";
-import { CARRIER_STAGE_STATUS, CARRIER_TABS, CATEGORY_UI, OTHER_TYPE_UI, OTHER_TYPES_HINT, ROLE_UI, TONE, closeLabel, closeModeLabel, dealStatusLabel, deciderLabel, pctLabel,
+import { CARRIER_STAGE_STATUS, CARRIER_TABS, CATEGORY_UI, DECISION_UI, OTHER_TYPE_UI, OTHER_TYPES_HINT, ROLE_UI, TONE, closeLabel, closeModeLabel, dealStatusLabel, deciderLabel, pctLabel,
   otherModeLabel, tabOf, type CarrierTab } from "../carrierCallsView";
 import { CarrierDealPanel, pill } from "./CarrierDealPanel";
+import { CarrierStatsCard } from "./CarrierStatsCard";
 
 /**
  * 🚚 «ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ» — відсів дзвінків на мобільні (29.09.2026; ТЗ Романа 30.09.2026).
@@ -24,6 +25,60 @@ const fmtTime = (iso: string) => new Date(iso).toLocaleString("uk-UA", {
 const fmtDate = (iso: string) => new Date(iso).toLocaleDateString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", year: "numeric" });
 const usd = (v: number) => `$${v.toFixed(2)}`;
 const muted: React.CSSProperties = { color: "var(--text-muted)" };
+
+/**
+ * «AI проти людини» поіменно (прохання Романа 30.09.2026: «бачити хто це вирішив, і який дзвінок»): останнє рішення
+ * людини по кожній угоді, де AI мав вердикт, — коли, яка угода, чий менеджер, що казав AI, що вирішила людина, хто.
+ * Зверху — підсумок по вердикту AI. Лише керівництву (сервер іншим віддає порожній список).
+ */
+function AgreementCard({ meta }: { meta: CarrierCallsMetaResp }) {
+  const [onlyDiff, setOnlyDiff] = useState(false);
+  const rows = onlyDiff ? meta.agreementRows.filter((r) => !r.agreed) : meta.agreementRows;
+  const cell: React.CSSProperties = { padding: "6px 10px", verticalAlign: "top", fontSize: 13 };
+  const verdict = (role: string) => ROLE_UI[role]?.label ?? role;
+  return (
+    <details className="chart-card" style={{ fontSize: 13 }} open>
+      <summary style={{ cursor: "pointer", fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+        AI проти людини — хто й що вирішив після прослуховування
+        <InfoHint text="Кожне рішення людини по угоді, де AI мав свій вердикт: людина послухала запис і погодилась чи виправила AI. Здебільшого люди вирішують саме невпевнені вердикти, тож відсоток збігів — нижня межа точності AI. Бачить лише керівництво." />
+      </summary>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 16px", margin: "10px 0" }}>
+        {meta.agreement.map((a) => (
+          <span key={a.aiRole} style={{ fontVariantNumeric: "tabular-nums" }}>
+            AI казав «{verdict(a.aiRole)}»: людина погодилась <b>{a.agreed}</b> з {a.decisions} ({a.decisions ? Math.round(a.agreed / a.decisions * 100) : 0}%)
+          </span>
+        ))}
+        <label style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+          <input id="carrier-agreement-only-diff" type="checkbox" checked={onlyDiff} onChange={(e) => setOnlyDiff(e.target.checked)} /> лише де людина не погодилась
+        </label>
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ textAlign: "left", color: "var(--text-muted)", fontSize: 12.5 }}>
+              <th style={cell}>Коли</th><th style={cell}>Угода</th><th style={cell}>Менеджер угоди</th>
+              <th style={cell}>AI казав</th><th style={cell}>Людина вирішила</th><th style={cell}>Хто вирішив</th><th style={cell}>Збіг</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.kommoId} style={{ borderTop: "1px solid var(--border)" }}>
+                <td style={{ ...cell, whiteSpace: "nowrap" }}>{fmtTime(r.at)}</td>
+                <td style={{ ...cell, whiteSpace: "nowrap" }}><a href={r.url} target="_blank" rel="noreferrer">№ {r.kommoId}</a></td>
+                <td style={cell}>{r.managerName ?? <span style={muted}>невідомий</span>}</td>
+                <td style={{ ...cell, whiteSpace: "nowrap" }}>{verdict(r.aiRole)}<span style={muted}> · {pctLabel(r.aiConfidence)}</span></td>
+                <td style={{ ...cell, whiteSpace: "nowrap" }}><b>{DECISION_UI[r.decision].label}</b>{r.otherType ? <span style={muted}> · {OTHER_TYPE_UI[r.otherType]}</span> : null}</td>
+                <td style={cell}>{r.by}<span style={muted}> · {deciderLabel(r.byRole)}</span></td>
+                <td style={{ ...cell, fontWeight: 600, color: r.agreed ? "var(--ok)" : "var(--danger)" }}>{r.agreed ? "✓ так" : "✗ ні"}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={7} style={{ ...cell, ...muted }}>Розбіжностей немає.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  );
+}
 
 /** Заголовок колонки з поясненням під ⓘ (прохання Романа 30.09.2026: «знаки питання над незрозумілими значеннями»). */
 function Hd({ t, h }: { t: string; h: string }) {
@@ -178,6 +233,8 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
         )}
       </div>
 
+      <CarrierStatsCard from={from} to={to} refresh={refresh} />
+
       <div className="chart-card" style={{ overflowX: "auto" }}>
         {shown.length === 0
           ? <p className="cq-fade" style={{ margin: 0, ...muted }}>{tab === "review" ? (rows.length ? "Усе розсортовано 👌" : "У періоді угод немає.") : "У цій вкладці за період угод немає."}</p>
@@ -235,25 +292,7 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
           )}
       </div>
 
-      {meta && isLead && meta.agreement.length > 0 && (
-        <details className="chart-card" style={{ fontSize: 13 }}>
-          <summary style={{ cursor: "pointer", fontWeight: 600 }}>AI проти людини — точність за рішеннями після прослуховування</summary>
-          <table style={{ marginTop: 8, borderCollapse: "collapse", fontSize: 13 }}>
-            <thead><tr style={{ textAlign: "left", ...muted, fontSize: 12.5 }}><th style={cell}>AI казав</th><th style={cell}>Рішень</th><th style={cell}>Людина погодилась</th><th style={cell}>Що вирішила людина</th></tr></thead>
-            <tbody>
-              {meta.agreement.map((a) => (
-                <tr key={a.aiRole} style={{ borderTop: "1px solid var(--border)" }}>
-                  <td style={cell}>{a.aiRole}</td>
-                  <td style={{ ...cell, fontVariantNumeric: "tabular-nums" }}>{a.decisions}</td>
-                  <td style={{ ...cell, fontVariantNumeric: "tabular-nums" }}>{a.agreed} ({a.decisions ? Math.round(a.agreed / a.decisions * 100) : 0}%)</td>
-                  <td style={cell}>{Object.entries(a.byDecision).map(([k2, v]) => `${k2}: ${String(v)}`).join(" · ")}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p style={{ margin: "6px 0 0", fontSize: 12, ...muted }}>Людина вирішує, послухавши запис. Здебільшого вирішують невпевнені вердикти, тож число — нижня межа точності.</p>
-        </details>
-      )}
+      {meta && isLead && meta.agreementRows.length > 0 && <AgreementCard meta={meta} />}
     </>
   );
 }

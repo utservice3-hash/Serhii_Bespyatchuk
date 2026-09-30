@@ -456,7 +456,17 @@ export interface CarrierCallsMetaResp {
   caps: { carrier: number; stt: number | null; analysis: number | null };
   close: { mode: string; otherMode: string; wouldClose: number; closed: number; reverted: number; failed: number; otherWouldClose: number; otherClosed: number };
   agreement: { aiRole: string; decisions: number; agreed: number; byDecision: Record<string, number> }[];
+  agreementRows: CarrierAgreementRowT[];
 }
+/** 📈 Динаміка за період: по днях — відсіяно, без розмови, категорії; витрати — лише керівництву (інакше `null`). */
+export interface CarrierDayStatT { day: string; filtered: number; noTalk: number; clients: number; carriers: number; other: number; unsorted: number; spendUsd: number | null }
+export async function fetchCarrierStats(params: { from: string; to: string }): Promise<{ period: { from: string; to: string }; days: CarrierDayStatT[]; spendCapUsd: number }> {
+  const { data } = await api.get<{ period: { from: string; to: string }; days: CarrierDayStatT[]; spendCapUsd: number }>("/dashboard/carrier-calls/stats", { params });
+  return data;
+}
+/** «AI проти людини» поіменно (лише керівництву). */
+export interface CarrierAgreementRowT { kommoId: number; url: string; uniqueid: string | null; managerName: string | null; aiRole: string; aiConfidence: number | null;
+  decision: CarrierDecisionT; otherType: CarrierOtherTypeT | null; by: string; byRole: string | null; at: string; agreed: boolean }
 /** 🙋 «На перевірці» на етапі (без періоду) і вирішені за 30 днів — у скоупі ролі. */
 export interface CarrierPendingT { kommoId: number; url: string; uniqueid: string | null; phone: string; createdAt: string; calledAt: string | null;
   billsec: number | null; managerName: string | null; teamName: string | null; category: CarrierCategoryT; why: string | null; dealState: string;

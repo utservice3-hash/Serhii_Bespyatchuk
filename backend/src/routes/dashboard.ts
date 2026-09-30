@@ -70,8 +70,8 @@ import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
 import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES } from "../core/callAiScreen.js";
 import { CARRIER_LISTEN_ROLES, carrierCallCard, carrierCallsList, carrierCallsMeta } from "../core/carrierCallScreen.js";
-import { callInScope, carrierDealRows, carrierReport, filterRemovedByManager } from "../core/carrierDeals.js";
-import { CARRIER_STAGE } from "../core/carrierCallRules.js";
+import { callInScope, carrierAgreementRows, carrierDailyStats, carrierDealRows, carrierReport, filterRemovedByManager } from "../core/carrierDeals.js";
+import { CARRIER_BUDGET, CARRIER_STAGE } from "../core/carrierCallRules.js";
 import { closeModeOf, revertCarrierClose } from "../core/carrierClose.js";
 import { decisionQueue, recordDecision } from "../core/carrierDecisions.js";
 import { carrierRecording } from "../core/carrierAudio.js";
@@ -10700,6 +10700,8 @@ dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
  * запис чужого дзвінка — 404, а не 403: для менеджера чужої угоди не існує.
  */
 const carrierScope = (req: { auth?: AuthPayload; query: Record<string, unknown> }) => missedScopeFor(req.auth!, req.query);
+/** Керівництво (адмін, CEO, опдир, КВП): бачить витрати AI й поіменні рішення інших. Менеджер і тімлід — ні. */
+const carrierIsLeadership = (auth: AuthPayload) => auth.roleKey !== "manager" && auth.roleKey !== "team_lead";
 /** 🏁 Точка старту відсіву: раніше створені угоди у вкладки, чергу й звіт не йдуть (Роман 30.09.2026: «працюємо з 0»). */
 const CARRIER_SINCE = () => config.callAi.carrierLaunchAt;
 
@@ -10743,11 +10745,26 @@ dashboardRouter.get("/carrier-calls/report", async (req, res) => {
   });
 });
 
-dashboardRouter.get("/carrier-calls/meta", async (_req, res) => {
+dashboardRouter.get("/carrier-calls/meta", async (req, res) => {
   const m = await carrierCallsMeta(pool, new Date(), {
     stt: config.callAi.prices.sttMonthCapUsd, analysis: config.callAi.prices.llmMonthCapUsd,
   }, { mode: closeModeOf(config.callAi.carrierAutoClose), otherMode: closeModeOf(config.callAi.carrierAutoCloseOther) });
-  res.json({ job: m.job, transcripts: m.transcripts, analyses: m.analyses, spend: m.spend, caps: m.caps, close: m.close, agreement: m.agreement });
+  // «AI проти людини» поіменно (хто вирішив, яка угода) — лише керівництву: це рішення людей з усіх команд.
+  const lead = carrierIsLeadership(req.auth!);
+  res.json({ job: m.job, transcripts: m.transcripts, analyses: m.analyses, spend: m.spend, caps: m.caps, close: m.close, agreement: m.agreement,
+    agreementRows: lead ? (await carrierAgreementRows(pool)).map((r) => ({ ...r, url: kommoLeadUrl(r.kommoId) })) : [] });
+});
+
+/**
+ * 📈 Динаміка за період (Роман 30.09.2026: «графіки … скільки відсіяно, пропущено, скільки грошей»): по днях —
+ * відсіяв фільтр, без розмови, клієнти, перевізники, інше, чекають рішення (ті самі рядки, що вкладки, у скоупі ролі);
+ * витрати AI — лише керівництву. ⚠️ До `/:uniqueid`: інакше «stats» пішло б як номер дзвінка.
+ */
+dashboardRouter.get("/carrier-calls/stats", async (req, res) => {
+  const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
+  const days = await carrierDailyStats(pool, from, to, carrierScope(req), CARRIER_SINCE(), CARRIER_STAGE.pipelineId, carrierIsLeadership(req.auth!));
+  res.json({ period: { from, to }, days: days.map((d) => ({ day: d.day, filtered: d.filtered, noTalk: d.noTalk, clients: d.clients,
+    carriers: d.carriers, other: d.other, unsorted: d.unsorted, spendUsd: d.spendUsd })), spendCapUsd: CARRIER_BUDGET.monthCapUsd });
 });
 
 /**
