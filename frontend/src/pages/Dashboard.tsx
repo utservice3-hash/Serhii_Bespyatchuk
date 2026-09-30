@@ -54,6 +54,7 @@ import {
 import { Layout, NAV_ITEMS, HIDDEN_NAV, type NavKey } from "../components/Layout";
 import { getDateRange } from "../components/DateRangeFilter";
 import { isSignalAlert, signalAlertText, knownOf, type KnownTask } from "./dashboard/signalTaskNotify";
+import { isAcceptanceAlert, acceptanceAlertText } from "./dashboard/acceptanceNotify";
 import { getAuthPayload } from "../auth";
 import { currentMonth, formatAmount, formatAmountFull, previousRange, getRank, presence } from "./dashboard/format";
 import { STAGE_LABELS, STAGE_ORDER } from "./dashboard/constants";
@@ -416,6 +417,15 @@ export function Dashboard() {
           const text = `Задача ${t.status === "done" ? "виконана ✅" : "взята в роботу ▶️"}${who}: ${t.title.slice(0, 90)}`;
           setToasts((cur) => [...cur, { id: Date.now() + t.id, text }]);
           beep(t.status === "done");
+          if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+            try { new Notification("UTS Dashboard", { body: text }); } catch { /* ignore */ }
+          }
+        }
+        // ✅ «Приймає»: задача перейшла на затвердження — чекає мого прийняття (тримає #1080h).
+        if (isAcceptanceAlert(t, was, { userId: auth?.userId, managerId: auth?.managerId })) {
+          const text = acceptanceAlertText(t.title, t.assigneeName);
+          setToasts((cur) => [...cur, { id: Date.now() + t.id + 0.5, text }]);
+          beep(true);
           if (typeof Notification !== "undefined" && Notification.permission === "granted") {
             try { new Notification("UTS Dashboard", { body: text }); } catch { /* ignore */ }
           }

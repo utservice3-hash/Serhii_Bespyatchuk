@@ -243,3 +243,42 @@ test("#1080g ФРОНТ: меню статусу вище за картку, п�
   const reasonFn = dash.slice(dash.indexOf("function serverReason("), dash.indexOf("function serverReason(") + 400);
   assert.match(reasonFn, /response\?\.data\?\.error/, "🔴 тост відмови не бере причину з відповіді сервера");
 });
+
+/**
+ * #1080h — «ПРИЙМАЄ» ОТРИМУЄ СИГНАЛ, КОЛИ ЗАДАЧА ЧЕКАЄ ЙОГО ПРИЙНЯТТЯ (рішення Романа 30.09.2026).
+ *
+ * Функцію фронта транспілюємо й кличемо (прийом `missedCallsTab.test.ts`), фікстури — по
+ * обидва боки кожної умови. Окремо: виклик справді стоїть в ефекті сповіщень `Dashboard.tsx`
+ * — функція без виклику була б зеленою і німою.
+ *
+ * 🧨 Червоніє, якщо прибрати будь-яку з умов (перехід, «я — Приймає», «я не виконавець»,
+ * лише звичайні задачі, мовчання на першому опитуванні) або сам виклик.
+ */
+test("#1080h СПОВІЩЕННЯ «ПРИЙМАЄ»: перехід на затвердження дзвонить тому, хто приймає, — і лише йому", async () => {
+  const ts = (await import("typescript")).default;
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "acceptanceNotify.ts"), "utf8");
+  const js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const N = await import(`data:text/javascript,${encodeURIComponent(js)}`) as {
+    isAcceptanceAlert: (t: Record<string, unknown>, prev: string | undefined, me: { userId: number | null; managerId: number | null }) => boolean;
+    acceptanceAlertText: (title: string, executor?: string | null) => string;
+  };
+  const YULIA = { userId: 6, managerId: null };
+  const EXEC = { userId: 4, managerId: 40 };
+  const task = { id: 1, title: "ТЗ Юлії", status: "ready_for_approval", taskType: "simple", reviewerId: 6, assigneeId: 40, assigneeUserId: null };
+
+  assert.equal(N.isAcceptanceAlert(task, "in_progress", YULIA), true, "🔴 «ПРИЙМАЄ» НЕ ОТРИМАВ СИГНАЛУ про задачу на затвердженні");
+  assert.equal(N.isAcceptanceAlert(task, "in_progress", EXEC), false, "🔴 сигнал отримав виконавець, а не «Приймає»");
+  assert.equal(N.isAcceptanceAlert({ ...task, reviewerId: 4, assigneeId: 40 }, "in_progress", EXEC), false,
+    "🔴 людина, що сама себе приймає, отримала сигнал про власний клік");
+  assert.equal(N.isAcceptanceAlert({ ...task, assigneeId: null, assigneeUserId: 6 }, "in_progress", YULIA), false,
+    "🔴 виконавець-акаунт, що сам себе приймає, отримав сигнал");
+  assert.equal(N.isAcceptanceAlert(task, undefined, YULIA), false, "🔴 перше завантаження дзвонить про все, що вже висить");
+  assert.equal(N.isAcceptanceAlert(task, "ready_for_approval", YULIA), false, "🔴 дзвонить без переходу — на кожному опитуванні");
+  assert.equal(N.isAcceptanceAlert({ ...task, status: "done" }, "ready_for_approval", YULIA), false, "🔴 дзвонить не на той статус");
+  assert.equal(N.isAcceptanceAlert({ ...task, taskType: "daily_kpi" }, "in_progress", YULIA), false, "🔴 дзвонить про тип поза правилом");
+  assert.match(N.acceptanceAlertText("ТЗ Юлії", "Роман"), /Чекає вашого прийняття — Роман: ТЗ Юлії/);
+
+  const dash = codeOf("pages", "Dashboard.tsx");
+  assert.match(dash, /if \(isAcceptanceAlert\(t, was, \{ userId: auth\?\.userId, managerId: auth\?\.managerId \}\)\)/,
+    "🔴 функцію сповіщення «Приймає» НЕ ВИКЛИКАЮТЬ в ефекті сповіщень — вона зелена й німа");
+});
