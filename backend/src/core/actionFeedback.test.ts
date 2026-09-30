@@ -92,3 +92,64 @@ test("#1103 «ВІДХИЛИТИ» ЗВЕРНЕННЯ: «Скасувати» н
   assert.deepEqual(rejectNote("   "), { reject: true, note: undefined });
   assert.deepEqual(rejectNote(" дубль #85 "), { reject: true, note: "дубль #85" });
 });
+
+test("#1102b ↩ ТРИ МІСЦЯ «НА ЛЬОТУ» ЙДУТЬ ЧЕРЕЗ commitOptimistic, А НЕ .catch(() => {}): рахунок дебіторки, статус задачі у Звіті, план КВП", () => {
+  const sites: [string, string][] = [
+    ["pages/dashboard/sections/ReceivablesSection.tsx", "saveReceivableInvoiceNote("],
+    ["pages/dashboard/sections/ReportSection.tsx", "updateTask(id, { status })"],
+    ["pages/dashboard/sections/KvpReportSection.tsx", "saveKvpPlan(monthSel, { [k]: val })"],
+  ];
+  for (const [file, call] of sites) {
+    const src = readFileSync(FE(file), "utf8");
+    const at = src.indexOf(call);
+    assert.ok(at >= 0, `🔴 ${file}: виклик «${call}» не знайдено — перевірка стала б порожньою`);
+    assert.equal(src.indexOf(call, at + 1), -1, `${file}: «${call}» більше одного — уточни межу`);
+    // Межа ЗМІСТОВА: виклик мусить стояти в `save: () => …` усередині commitOptimistic, а не голим.
+    const open = src.lastIndexOf("commitOptimistic({", at);
+    const close = src.indexOf("});", at);
+    assert.ok(open >= 0 && close > at, `🔴 ${file}: «${call}» не всередині commitOptimistic({ … })`);
+    assert.match(src.slice(open, at + call.length), /save: \(\) => [^\n]*$/, `🔴 ${file}: «${call}» не є save-кроком`);
+    assert.ok(!src.slice(at, close + 3).includes(".catch(() => {})"), `🔴 ${file}: помилку «${call}» знову ковтають`);
+  }
+});
+
+test("#1104 «ГРАФІК» НАЙМУ: «перенесено» й «позначку знято» — лише коли сервер зберіг; save повертає результат", () => {
+  const src = readFileSync(FE("pages/dashboard/sections/HiringSchedule.tsx"), "utf8");
+  const save = src.slice(src.indexOf("const save = async"), src.indexOf("const nextTime ="));
+  assert.ok(save.length > 0, "тіло save не знайдено — перевірка стала б порожньою");
+  assert.match(save, /return true;\s*\n\s*\} catch \(e\) \{[^\n]*return false; \}/, "🔴 save мусить казати «вдалось / ні»");
+  for (const [name, from, to] of [["move", "const move = async", "const remove = async"], ["clearMark", "const clearMark = async", "const undoStatus = async"]] as const) {
+    const body = src.slice(src.indexOf(from), src.indexOf(to));
+    assert.ok(body.length > 0, `тіло ${name} не знайдено`);
+    const guard = body.search(/if \(!\(await save\(r, /);
+    const firstToast = body.indexOf("toast(");
+    assert.ok(guard >= 0, `🔴 ${name}: немає перевірки результату save — успіх покажеться поверх помилки`);
+    assert.ok(firstToast < 0 || guard < firstToast, `🔴 ${name}: повідомлення про успіх стоїть ДО перевірки save`);
+  }
+});
+
+test("#1105 «ДОКУМЕНТИ»: помилки йдуть червоним (failToast / error: true), а не зеленим, як успіх", () => {
+  const src = readFileSync(FE("pages/dashboard/sections/DocumentsSection.tsx"), "utf8");
+  assert.ok(src.includes("useToast()"), "🔴 «Документи» не на спільному повідомленні");
+  assert.ok(!/var\(--ok-bg\)[^\n]*role="status"|role="status"[^\n]*var\(--ok-bg\)/.test(src), "🔴 повернулось власне зелене повідомлення");
+  // Будь-яке повідомлення з причиною від сервера (`errOf(`) мусить бути помилкою.
+  const lines = src.split("\n");
+  const green = lines.map((l, i) => [i + 1, l] as const)
+    .filter(([, l]) => /\b(setToast|onToast)\(errOf\(/.test(l) && !/error: true/.test(l));
+  assert.deepEqual(green.map(([n]) => n), [], `🔴 помилка зеленим у рядках: ${green.map(([n]) => n).join(", ")}`);
+  assert.ok((src.match(/\bfailToast\(e, /g) ?? []).length >= 15, "🔴 помилки перестали йти через failToast — перевір, куди вони поділись");
+});
+
+test("#1106 ВІКНА РЕАКТИВАЦІЇ («＋ Задача», «＋ Контакт», «Закрити»): відмову сервера видно ВСЕРЕДИНІ вікна", () => {
+  const bits = readFileSync(FE("pages/dashboard/sections/ReactivationBits.tsx"), "utf8");
+  const modal = bits.slice(bits.indexOf("export function Modal("), bits.indexOf("export function CreateTaskDialog("));
+  assert.match(modal, /\{error && \(\s*<div role="alert"/, "🔴 Modal не показує помилку");
+  for (const t of ["＋ Задача реактивації", "Закрити задачу", "📱 Контакт"])
+    assert.match(bits, new RegExp(`<Modal title=\\{\`${t}[^\`]*\`\\} error=\\{error\\}>`), `🔴 вікно «${t}» не передає error у Modal`);
+  const plans = readFileSync(FE("pages/dashboard/sections/ClientPlansSection.tsx"), "utf8");
+  for (const d of ["<CreateTaskDialog", "<ContactDialog", "<CloseTaskDialog"]) {
+    const at = plans.indexOf(d);
+    assert.ok(at >= 0, `${d} не знайдено`);
+    assert.ok(plans.slice(at, plans.indexOf("\n", at)).includes("error={actErr}"), `🔴 ${d} не отримує actErr — помилка знову піде під вікно`);
+  }
+});

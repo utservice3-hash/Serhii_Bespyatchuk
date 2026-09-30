@@ -7,6 +7,7 @@ import {
   type ClientPlansResp, type ClientPlanRow, type ClientComment, type ManagerOption,
 } from "../../../api";
 import { formatAmountFull } from "../format";
+import { useToast } from "../../../components/Toasts";
 import { SegmentBadge, ForcedBadge, MergedLine } from "./SegmentBadge";
 import { RowComment } from "./RowComment";
 import { CreateTaskDialog, CloseTaskDialog, ContactDialog } from "./ReactivationBits";
@@ -266,6 +267,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
    * для збою завантаження, але для відмови дії це сховало б таблицю разом із помилкою.
    */
   const [actErr, setActErr] = useState<string | null>(null);
+  const toast = useToast();
   const explain = (e: unknown): string => {
     const r = (e as { response?: { status?: number; data?: { error?: unknown } } }).response;
     const raw = r?.data?.error;
@@ -959,11 +961,12 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
       </div>
 
       {creating && (
-        <CreateTaskDialog client={creating} busy={busy}
-          onCancel={() => setCreating(null)}
+        <CreateTaskDialog client={creating} busy={busy} error={actErr}
+          onCancel={() => { setCreating(null); setActErr(null); }}
           onSubmit={(deadline, comment) => act(async () => {
-            await createClientReactivationTask({ clientKey: creating.clientKey, deadline, comment });
+            const r = await createClientReactivationTask({ clientKey: creating.clientKey, deadline, comment });
             setCreating(null);
+            toast(`«${r.clientName || creating.name}». Виконавець — основний менеджер клієнта, задача в його Задачнику.`, { head: "Задачу реактивації створено" });
           })} />
       )}
       {viewingFiles && (
@@ -971,19 +974,21 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           initialId={viewingFiles.initialId ?? null} onClose={() => setViewingFiles(null)} />
       )}
       {contacting && (
-        <ContactDialog client={contacting} busy={busy}
-          onCancel={() => setContacting(null)}
+        <ContactDialog client={contacting} busy={busy} error={actErr}
+          onCancel={() => { setContacting(null); setActErr(null); }}
           onSubmit={(channel, note, file) => act(async () => {
             await addClientContact({ clientKey: contacting.clientKey, channel, note, file });
             setContacting(null);
+            toast(`Контакт записано: «${contacting.name}»`);
           })} />
       )}
       {closing && data.closeReasons && (
-        <CloseTaskDialog task={closing} reasons={data.closeReasons} busy={busy}
-          onCancel={() => setClosing(null)}
+        <CloseTaskDialog task={closing} reasons={data.closeReasons} busy={busy} error={actErr}
+          onCancel={() => { setClosing(null); setActErr(null); }}
           onSubmit={(reason, note) => act(async () => {
             await closeReactivationTask({ taskId: closing.taskId, reason, note });
             setClosing(null);
+            toast(`Задачу закрито: «${closing.name}»`);
           })} />
       )}
     </div>

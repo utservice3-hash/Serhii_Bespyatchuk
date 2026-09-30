@@ -44,6 +44,12 @@ export function mutationFailureText(reason: unknown): { head: string; text: stri
   };
 }
 
+/** Причина відмови так, як її назвав сервер (`{ error }`), — або запасний текст. */
+export function failureReason(e: unknown, fallback: string): string {
+  const d = (e as AxiosLike | null)?.response?.data as { error?: unknown } | undefined;
+  return d && typeof d.error === "string" && d.error.trim() ? d.error.trim() : fallback;
+}
+
 /**
  * ↩ ПОКАЗАТИ ОДРАЗУ, А ПРИ ПОМИЛЦІ — ПОВЕРНУТИ. Для полів, що зберігаються «на льоту» (коментар рахунку,
  * статус задачі у Звіті, клітинка плану КВП). Раніше там стояло `.catch(() => {})`: нове значення лишалось

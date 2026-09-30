@@ -1,4 +1,6 @@
 import { CarrierReportCard } from "./CarrierReportCard";
+import { useToast } from "../../../components/Toasts";
+import { commitOptimistic, failureReason } from "../../../actionFeedback";
 import { Fragment, useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import {
   BarChart,
@@ -203,9 +205,16 @@ function MyTasksBlock() {
   const [tasks, setTasks] = useState<Task[]>([]);
   useEffect(() => { fetchTasks().then(setTasks).catch(() => setTasks([])); }, []);
   const open = tasks.filter((t) => !t.auto && t.status !== "done");
+  const toast = useToast();
+  // ↩ При помилці статус повертається, а не лишається «зміненим» лише на екрані (30.09.2026, `#1102`).
   const move = (id: number, status: Task["status"]) => {
-    setTasks((p) => p.map((t) => (t.id === id ? { ...t, status } : t)));
-    updateTask(id, { status }).catch(() => {});
+    const before = tasks;
+    void commitOptimistic({
+      apply: () => setTasks((p) => p.map((t) => (t.id === id ? { ...t, status } : t))),
+      save: () => updateTask(id, { status }),
+      revert: () => setTasks(before),
+      onError: (e) => toast(`Статус задачі не змінено — ${failureReason(e, "помилка сервера")}.`, { error: true }),
+    });
   };
   if (open.length === 0) return null;
   const overdue = (d: string | null) => d != null && new Date(d) < new Date(new Date().toDateString());
