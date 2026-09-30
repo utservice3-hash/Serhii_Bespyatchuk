@@ -73,6 +73,9 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/dashboard/client-next-step"), tabs: ["loyalty"] },
     // 📌 Обґрунтування плану (ТЗ 22.09, п.3.3) — окремий роут: `pre("…/client-plan")` сусіда через дефіс НЕ накриває.
     { test: pre("/api/dashboard/client-plan-basis"), tabs: ["loyalty"] },
+    // 🔁 Цикл реактивації і пул лідгенів (ТЗ 22.09, блок 4) — той самий екран клієнтів.
+    { test: pre("/api/dashboard/react-decision"), tabs: ["loyalty"] },
+    { test: pre("/api/dashboard/leadgen-pool"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-search"), tabs: ["loyalty"] },
     // 🔴 ДОДАНО 04.08.2026, КОЛИ `requirePerm` ПІШОВ. Обʼєднання відкрилось тімліду
     // (у межах команди), тож єдиною межею роутів лишився кламп усередині — а це

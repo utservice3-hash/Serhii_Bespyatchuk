@@ -660,6 +660,18 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/dashboard/client-plan-basis/clear", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  // 🔁 Цикл реактивації (ТЗ 22.09, блок 4; 30.09.2026). Кнопки «сам / лідгенам» — та сама межа, що
+  // картка (`canSeeClient` першим оператором): менеджер і тімлід ДОЗВОЛЕНІ для своїх клієнтів.
+  { method: "POST", path: "/api/dashboard/react-decision", cls: "deny-only",
+    allow: [], deny: ["hr"] },
+  // Пул лідгенів бачать лідгени (команда «Лідогенерація») і керівництво (`isAdminScope`). Менеджер і
+  // тімлід не проби — відповідь залежить від того, чи тестовий акаунт лідген, а не від ролі.
+  { method: "GET", path: "/api/dashboard/leadgen-pool", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr"] },
+  // Брати може ЛИШЕ лідген (собі). Керівництво в deny не пишемо: його відмова — не по праву, а «не лідген»
+  // (#11b вимагає для адмін-рівня назване право), а проба з порожнім тілом дала б 400, не мутацію.
+  { method: "POST", path: "/api/dashboard/leadgen-pool/take", cls: "deny-only",
+    allow: [], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/client-contacts?clientKey=zzz", cls: "GET",
     allow: [], deny: ["hr"] },
   // Менеджер і тімлід ДОДАЮТЬ контакти по своїх клієнтах — це і є фіча (у Viber/Telegram

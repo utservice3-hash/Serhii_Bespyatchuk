@@ -678,23 +678,28 @@ test("#359d 🪞 наявний власник виграє, менеджер л
 });
 
 /**
- * #810c — ЖИВИЙ: група вкладки кожного рядка рахується тим самим правилом, що в ядрі, від тих
- * самих полів, що бачить екран (`state`, `lastOrderDays`), а три групи разом дають увесь ростер.
- * Рівність, а не «≥N»: істинна й тоді, коли жовтих сьогодні нуль (правило про календарні гейти).
+ * #840b — ЖИВИЙ: група вкладки кожного рядка рахується тим самим правилом ядра від полів, що бачить
+ * екран (`lastInvoice` → 3 повні місяці без рахунку; `lastOrderDays` → «жовтий»), цикл є рівно в
+ * рядків реактивації, а три групи разом дають увесь ростер. Рівність, а не «≥N» (календарні гейти).
  */
-test("#810c ЖИВИЙ: tabGroup кожного рядка == clientTabGroup(state, lastOrderDays); Постійні + Реактивація == Всі", needsApi(), async () => {
+test("#840b ЖИВИЙ: tabGroup кожного рядка == правилу рахунку; цикл рівно в реактивації; Постійні + Реактивація == Всі", needsApi(), async () => {
   const { clientTabGroup, tabOf } = await import("../core/clientTabs.js");
+  const { inReact } = await import("../core/reactCycleRules.js");
   const m = await monthWithPlans();
   assert.ok(m, "🔴 планів немає взагалі");
   const token = await adminToken();
   const b = await (await get(`/api/dashboard/client-plans?month=${m.month}`, token)).json() as {
-    clients: { clientKey: string; state: string; lastOrderDays: number | null; tabGroup?: string }[];
+    clients: { clientKey: string; lastInvoice?: string | null; lastOrderDays: number | null; tabGroup?: string; reactCycle?: unknown }[];
     tabGroupRank?: Record<string, number>;
   };
   assert.ok(b.clients.length > 0, "🔴 ростер порожній — гейт нічого не перевіряє");
-  const wrong = b.clients.filter((c) => c.tabGroup !== clientTabGroup(c.state, c.lastOrderDays));
-  assert.deepEqual(wrong.slice(0, 5).map((c) => `${c.clientKey}: ${c.tabGroup} при ${c.state}/${c.lastOrderDays}`), [],
-    `🔴 ${wrong.length} рядків мають групу вкладки не за правилом ядра`);
+  assert.ok(b.clients.every((c) => "lastInvoice" in c), "🔴 рядок не несе дати останнього рахунку — правило не перевірити");
+  const nowYm = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" }).slice(0, 7);
+  const wrong = b.clients.filter((c) => c.tabGroup !== clientTabGroup(inReact(c.lastInvoice ?? null, nowYm), c.lastOrderDays));
+  assert.deepEqual(wrong.slice(0, 5).map((c) => `${c.clientKey}: ${c.tabGroup} при рахунку ${c.lastInvoice}/${c.lastOrderDays}`), [],
+    `🔴 ${wrong.length} рядків мають групу вкладки не за правилом рахунку`);
+  const cycleMismatch = b.clients.filter((c) => (c.tabGroup === "react") !== (c.reactCycle != null));
+  assert.equal(cycleMismatch.length, 0, "🔴 цикл реактивації є поза вкладкою або відсутній у ній — кнопки не там");
   const regular = b.clients.filter((c) => tabOf(c.tabGroup as "regular" | "yellow" | "react") === "regular").length;
   const react = b.clients.filter((c) => c.tabGroup === "react").length;
   assert.equal(regular + react, b.clients.length, "🔴 клієнт випав з обох вкладок або потрапив в обидві");
