@@ -4863,6 +4863,16 @@ CREATE TABLE IF NOT EXISTS constructor_counterparties (
 );
 CREATE INDEX IF NOT EXISTS idx_ccp_name ON constructor_counterparties USING gin (to_tsvector('simple', name));
 
+-- 🔎 Кеш ЄДР (YouScore, 30.09.2026): кожен запит до API — транзакція тарифу, тож картку контрагента з реєстру
+-- тримаємо 30 днів (`constructor/youscore.ts`, CACHE_DAYS). Лише перекладена картка (реквізити для договору),
+-- без засновників і бенефіціарів. Кількість рядків = скільки транзакцій витрачено на нові коди.
+CREATE TABLE IF NOT EXISTS youscore_cache (
+  code       text PRIMARY KEY,                  -- ЄДРПОУ (8) або ІПН ФОП (10)
+  card       jsonb NOT NULL,
+  fetched_at timestamptz NOT NULL DEFAULT now(),
+  fetched_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+
 -- ── Документи (заявки й договори) — це і є «архів» з історією версій ────────
 CREATE TABLE IF NOT EXISTS constructor_documents (
   id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -4934,7 +4944,7 @@ ON CONFLICT (key) DO UPDATE SET
   dwell_default=EXCLUDED.dwell_default, sig_file=EXCLUDED.sig_file, stamp_file=EXCLUDED.stamp_file;
 
 -- 🔒 Реквізити контрагентів і суми заявок — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`.
-REVOKE ALL ON constructor_entities, constructor_counterparties, constructor_documents, constructor_route_templates FROM ai_readonly;
+REVOKE ALL ON constructor_entities, constructor_counterparties, constructor_documents, constructor_route_templates, youscore_cache FROM ai_readonly;
 
 -- Екран «Конструктор документів»: усі, хто формує заявки (рішення Сергія 30.09.2026: «кожен, хто
 -- створює заявку»). Ідемпотентно й НЕ перетирає рішень адміна: лише де ключа ще немає.

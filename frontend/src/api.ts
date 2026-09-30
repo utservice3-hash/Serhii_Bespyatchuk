@@ -5234,8 +5234,18 @@ export const ctorParseOld = async (text: string) => (await api.post<CtorOldDoc>(
 export const ctorCounterparties = async (q = "") =>
   (await api.get<CtorCounterpartyRow[]>("/constructor/counterparties", { params: { q } })).data;
 export const ctorSaveCounterparty = async (c: CtorCounterparty) => (await api.put<CtorCounterpartyRow>("/constructor/counterparties", c)).data;
+/** Картка з ЄДР (YouScore) — поля форми + стан і дата актуальності реєстру. */
+export interface CtorRegistryCard {
+  edrpou: string; name: string; ipn: string; addr: string; dir: string; phone: string; email: string;
+  isFop: boolean; actualDate: string | null; status: string | null; warn: string | null;
+}
+/** Пошук за ЄДРПОУ: свій довідник → ЄДР. `updating` — реєстр оновлює дані (HTTP 202), повторити пізніше. */
+export type CtorEdrResult =
+  | { source: "book"; row: CtorCounterpartyRow }
+  | { source: "youscore"; card: CtorRegistryCard; cached: boolean }
+  | { updating: true; error: string };
 export const ctorByEdrpou = async (code: string) =>
-  (await api.get<{ source: string; row: CtorCounterpartyRow }>(`/constructor/edrpou/${encodeURIComponent(code)}`)).data;
+  (await api.get<CtorEdrResult>(`/constructor/edrpou/${encodeURIComponent(code)}`)).data;
 export const ctorPreview = async (state: CtorForm) =>
   (await api.post<{ html: string; fragment: string; blockers: string | null; assetsNote: string | null }>("/constructor/preview", { state })).data;
 export const ctorCreate = async (state: CtorForm) =>

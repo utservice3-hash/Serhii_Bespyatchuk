@@ -138,6 +138,7 @@ export const MANIFEST_FILES: string[] = [
   "core/baEquipment.test.js",
   "core/finance.test.js",
   "constructor/constructor.test.js",
+  "constructor/youscore.test.js",
   "surveys/surveys.test.js",
   "core/hiringTraining.test.js",
   "core/candidateTraining.test.js",
@@ -315,7 +316,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "tldv_meetings",
   "workua_responses",
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_import_months",
-  "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates",
+  "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache",
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   "ba_equipment_issues",
 ];
@@ -2166,6 +2167,12 @@ export const MANIFEST_TESTS: string[] = [
   "#1127 PDF-ДРУК: стиль друку після CSS документа, спейсер схований, поля й фони макета",
   "#1128 КОНВЕРТЕР: абзаци цілі, Word із текстом, лише 4 формати в PDF, пошкоджена картинка — відмова",
   "#1129 МАКЕТ ІЗОЛЬОВАНИЙ: усі селектори під .ctorx, шрифти — з репозиторію, не з Google",
+  // constructor/youscore.test.ts — ЄДР через YouScore (API YouControl) у пошуку за ЄДРПОУ (30.09.2026).
+  "#1160 КАРТКА З ЄДР: юрособа, ФОП і припинена — поля форми рівно ті, засновники не потрапляють",
+  "#1160b ЛАПКИ Й ПІБ: вкладені лапки → ялинки; ПІБ великими → звичайний регістр, нормальний не чіпається",
+  "#1161 КЕШ ЄДР: другий пошук без мережі, прострочений — знову, 202 і 404 не кешуються, без ПДВ реквізити є",
+  "#1162 КЛЮЧ ЄДР: лише в заголовку bearer, не в адресі й не в тексті помилки",
+  "#1163 БЕЗ КЛЮЧА: жодного запиту в мережу, роут каже «не налаштовано»",
   // surveys/surveys.test.ts — Опитування команди, пакет Сергія (30.09.2026).
   "#1130 ПАРСЕР ОПИТУВАНЬ: 8 текстів як у макеті; кирилиця без межі слова; eNPS за замовчуванням",
   "#1131 РЕЗУЛЬТАТИ ЯК У МАКЕТІ: 4 опитування — бари, середні, eNPS, матриця, ранжування, підсумок, CSV посимвольно",

@@ -21,7 +21,7 @@ import {
   ctorParse, ctorParseOld, ctorPool, ctorPoolStats, ctorPreview, ctorRouteTemplates, ctorSaveCounterparty, ctorSaveRouteTemplate,
   ctorDeleteRouteTemplate, ctorPairZip, ctorConvertToPdf, ctorConvertFromPdf,
   type CtorArchiveRow, type CtorCounterparty, type CtorCounterpartyRow, type CtorEntityKey, type CtorEntityRow, type CtorForm,
-  type CtorParty, type CtorRouteTemplate, type CtorStatDay,
+  type CtorParty, type CtorRouteTemplate, type CtorStatDay, type CtorRegistryCard,
 } from "../../../api";
 import "./mockFonts.css";
 import "./constructor.css";
@@ -114,6 +114,10 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
   const [bookQ, setBookQ] = useState("");
   const [bookPick, setBookPick] = useState<number | null>(null);
   const [edrq, setEdrq] = useState("");
+  /** Звідки підставлено реквізити за ЄДРПОУ і чи є тривога реєстру (припинення, банкрутство). */
+  const [edrNote, setEdrNote] = useState<{ t: string; warn?: string | null } | null>(null);
+  const edrTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (edrTimer.current) clearTimeout(edrTimer.current); }, []);
   const [raw, setRaw] = useState("");
   const [files, setFiles] = useState<FileChip[]>([]);
   const [tpls, setTpls] = useState<CtorRouteTemplate[]>([]);
@@ -213,7 +217,30 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
       bank: row.bank || "", phone: row.phone || "", email: row.email || "", dir: row.director || "" });
     ok(`Підставлено з довідника: ${row.name}.`);
   };
-  const onEdr = async () => { try { onPickBook((await ctorByEdrpou(edrq)).row); } catch (e) { await bad(e); } };
+  const onPickRegistry = (c: CtorRegistryCard, cached: boolean) => {
+    setBookPick(null);
+    applyParsed({ name: c.name, edrpou: c.edrpou, ipn: c.ipn, addr: c.addr, phone: c.phone, email: c.email, dir: c.dir });
+    const at = c.actualDate ? new Date(c.actualDate).toLocaleDateString("uk-UA") : "—";
+    setEdrNote({ t: `З ЄДР (YouControl), станом на ${at}${cached ? " · з кешу" : ""}. IBAN і банк у реєстрі немає — впишіть вручну.`, warn: c.warn });
+    if (c.warn) void bad(`Увага: ${c.warn}. Перевірте, чи можна укладати договір.`);
+    else ok(`Підставлено з ЄДР: ${c.name}.`);
+  };
+  /** 202 — реєстр оновлює дані: повторюємо самі, до трьох разів із паузою 20 с (заміряно: ФОП ожив за ~20 с). */
+  const onEdr = async (attempt = 0) => {
+    if (edrTimer.current) { clearTimeout(edrTimer.current); edrTimer.current = null; }
+    setEdrNote(null);
+    try {
+      const r = await ctorByEdrpou(edrq);
+      if ("updating" in r) {
+        if (attempt >= 3) { await bad("Реєстр досі оновлює дані — спробуйте за кілька хвилин або впишіть реквізити вручну."); return; }
+        ok(`${r.error} (спроба ${attempt + 1} з 3)`);
+        edrTimer.current = setTimeout(() => void onEdr(attempt + 1), 20000);
+        return;
+      }
+      if (r.source === "book") { onPickBook(r.row); setEdrNote({ t: "З вашого довідника контрагентів." }); }
+      else onPickRegistry(r.card, r.cached);
+    } catch (e) { await bad(e); }
+  };
 
   /* ── Сформувати (макет: generate) ── */
   const onMake = async () => {
@@ -414,9 +441,11 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                     <input type="text" value={edrq} onChange={(e) => setEdrq(e.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="8 цифр коду ЄДРПОУ"
                       inputMode="numeric" onKeyDown={(e) => { if (e.key === "Enter") void onEdr(); }}
                       style={{ flex: "0 1 220px", fontFamily: "var(--mono)", letterSpacing: ".08em" }} />
-                    <button className="btn pri sm" onClick={() => void onEdr()}>Підтягнути з довідника</button>
-                    <span style={{ fontSize: 11.5, color: "var(--muted)" }}>Живий держреєстр підключимо окремо; поки шукаємо у вашому довіднику контрагентів.</span>
+                    <button className="btn pri sm" onClick={() => void onEdr()}>Підтягнути реквізити</button>
+                    <span style={{ fontSize: 11.5, color: "var(--muted)" }}>Спершу — ваш довідник контрагентів, якщо там немає — ЄДР через YouControl.</span>
                   </div>
+                  {edrNote && <div style={{ fontSize: 12, marginTop: 7, color: edrNote.warn ? "var(--bad)" : "var(--muted)" }}>
+                    {edrNote.warn && <b>⚠ {edrNote.warn}. </b>}{edrNote.t}</div>}
                 </div>
               )}
               {way === "book" && (
