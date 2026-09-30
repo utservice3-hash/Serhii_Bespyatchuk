@@ -4558,6 +4558,18 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+-- 📋 ЗАДАЧА «РОЗІБРАТИ ДЗВІНКИ НА МОБІЛЬНІ» (Роман 30.09.2026: «тільки в задачник», одна на менеджера; `core/carrierReviewTasks.ts`).
+-- Рядок на задачу; відкрита в менеджера одна — унікальний індекс, а не перевірка в коді. Задачу видалили — рядок іде
+-- каскадом, і наступний прохід поставить нову. ⚠️ revert коду таблицю не прибирає; створені задачі лишаються звичайними.
+CREATE TABLE IF NOT EXISTS carrier_review_tasks (
+  task_id    INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+  manager_id INTEGER NOT NULL,
+  opened_at  TIMESTAMPTZ NOT NULL,
+  closed_at  TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_carrier_review_tasks_open ON carrier_review_tasks(manager_id) WHERE closed_at IS NULL;
+REVOKE ALL ON carrier_review_tasks FROM ai_readonly;
+
 -- 📣 «Стелю досягнуто» — один раз на місяць на межу бюджету (рішення Романа 29.09.2026). Рядок ставиться ДО
 -- відправки в Telegram, тож повтор щоп'ять хвилин неможливий за побудовою.
 CREATE TABLE IF NOT EXISTS ai_cap_alerts (

@@ -146,7 +146,7 @@ test("#950 ВИБІРКА · ЖИВА СХЕМА: лише угоди з від�
     { id: 93005, name: "380500000005", created_at: sec(min(60)), responsible_user_id: 7 },
   ];
   const r = await recordStageDeals(c.db, leads, NOW);
-  assert.deepEqual(r, { onStage: 4, tooYoung: 1, noPhone: 1, inserted: 2 });
+  assert.deepEqual(r, { onStage: 4, tooYoung: 1, noPhone: 1, beforeLaunch: 0, inserted: 2 });
   const ids = (await c.raw.query<{ k: string }>("SELECT kommo_id::text k FROM carrier_call_deals WHERE kommo_id BETWEEN 93000 AND 93099 ORDER BY 1")).rows.map((x) => x.k);
   assert.deepEqual(ids, ["93001", "93005"], "🔴 вибірка — не відповідь Kommo (93004 є лише в `deals`, 93005 — навпаки)");
   assert.equal((await recordStageDeals(c.db, leads, NOW)).inserted, 0, "🔴 повтор записав угоди вдруге");
@@ -985,7 +985,7 @@ test("#1064 ЗВІТ · ЖИВА СХЕМА: клітинка = рядки вк�
   const route = SRC("routes/dashboard.ts");
   const at2 = route.indexOf('dashboardRouter.get("/carrier-calls/report"');
   assert.ok(at2 > 0, "🔴 роуту звіту немає");
-  assert.match(route.slice(at2, route.indexOf("dashboardRouter.", at2 + 10)), /const rows = await carrierDealRows\(pool, \{ period: \{ from, to \}, scope \}\);\s*const rep = carrierReport\(rows\);/,
+  assert.match(route.slice(at2, route.indexOf("dashboardRouter.", at2 + 10)), /const rows = await carrierDealRows\(pool, \{ period: \{ from, to \}, scope, since: CARRIER_SINCE\(\) \}\);\s*const rep = carrierReport\(rows\);/,
     "🔴 звіт рахується не з тих самих рядків, що вкладки");
 });
 
@@ -1273,4 +1273,144 @@ test("#1072 AI ПРОТИ ЛЮДИНИ · ЖИВА СХЕМА: останнє р
   const m = await carrierCallsMeta(c.db, NOW, { stt: 40, analysis: 10 }, { mode: "dry", otherMode: "dry" });
   const by = Object.fromEntries(m.agreement.map((a) => [a.aiRole, [a.decisions, a.agreed]]));
   assert.deepEqual(by, { carrier: [2, 1], other: [1, 1] }, "🔴 точність за рішеннями людей порахована не з останнього рішення або з угодами без вердикту");
+});
+
+/**
+ * #1073 — ТОЧКА СТАРТУ (Роман 30.09.2026: «працюємо з 0, тільки після деплою починаємо транскрибацію нового»):
+ * угода, створена ДО старту, не записується з відповіді Kommo, її розмова не оплачується, у вкладки й звіт не йде;
+ * створена ПІСЛЯ — усе як звичайно. Джоба й чотири роути беруть старт із конфігу.
+ * 🧨 Червоніє, якщо зняти межу в записі, у черзі транскрибації чи в рядках вкладок.
+ */
+test("#1073 ТОЧКА СТАРТУ · ЖИВА СХЕМА: до старту — не пишемо, не слухаємо, не показуємо; після — як звичайно", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  const { runCarrierTick, recordStageDeals } = await import("./carrierCalls.js");
+  const { carrierDealRows } = await import("./carrierDeals.js");
+  const launch = min(200);
+  const Old = phone(10730, 1), New = phone(10730, 2);
+  const rec = await recordStageDeals(c.db, [
+    { id: 107301, name: Old, created_at: sec(min(300)), responsible_user_id: null },
+    { id: 107302, name: New, created_at: sec(min(100)), responsible_user_id: null }], NOW, launch);
+  assert.deepEqual([rec.beforeLaunch, rec.inserted], [1, 1], "🔴 угоду до старту записано (або нову — ні)");
+  // Стара угода, записана ще до запровадження старту, — з розмовою: платити за неї не можна.
+  await call(c, "1073-old", min(400), 40, phone(10730, 3));
+  await carrierDeal(c, 107303, phone(10730, 3), min(401), "own", "1073-old", 1);
+  await call(c, "1073-new", min(90), 40, New);
+  const net = fakeNet();
+  await runCarrierTick({ db: c.db, http: net.http, keys: { elevenlabs: "k", gemini: "g" }, prices: PRICES, now: () => NOW,
+    stageLeads: async () => [], alert: async () => {}, launchAt: launch });
+  const st = async (u: string) => (await c.raw.query<{ status: string }>("SELECT status FROM call_transcripts WHERE uniqueid=$1", [u])).rows[0]?.status ?? null;
+  assert.equal(await st("1073-old"), null, "🔴 розмову угоди до старту поставлено в чергу й оплачено");
+  assert.equal(await st("1073-new"), "done", "дзеркало: нова угода слухається");
+  const shown = (await carrierDealRows(c.db, { period: null, scope: {}, since: launch.toISOString() })).map((r) => r.kommoId).sort();
+  assert.deepEqual(shown, [107302], "🔴 угода до старту потрапила у вкладки/звіт");
+  const route = SRC("routes/dashboard.ts");
+  assert.match(route, /const CARRIER_SINCE = \(\) => config\.callAi\.carrierLaunchAt;/);
+  assert.equal((route.match(/CARRIER_SINCE\(\)/g) ?? []).length, 4, "🔴 не всі роути вкладки й звіту беруть точку старту");
+  assert.match(SRC("jobs/carrierCallJob.ts"), /launchAt: new Date\(config\.callAi\.carrierLaunchAt\)/, "🔴 джоба слухає без точки старту");
+  assert.match(SRC("config.ts"), /carrierLaunchAt: process\.env\.CARRIER_LAUNCH_AT \?\? "2026-09-30T09:48:08Z"/, "🔴 точка старту ≠ рішенню 30.09.2026");
+});
+
+/**
+ * #1074 — СТРОК «ДО КІНЦЯ РОБОЧОГО ДНЯ» (Роман 30.09.2026): прийшла в будній день до 18:00 за Києвом — розібрати до
+ * 18:00 того ж дня; о 18:00 і пізніше, у п'ятницю ввечері чи у вихідні — до 18:00 наступного робочого дня.
+ * 🧨 Червоніє, якщо зсунути межу 18:00, забути вихідні чи рахувати в UTC замість Києва.
+ */
+test("#1074 СТРОК: до 18:00 того ж будня; після 18:00, вечір пʼятниці й вихідні — наступний робочий день, за Києвом", async () => {
+  const { reviewDeadline } = await import("./carrierCallRules.js");
+  const k = (iso: string) => reviewDeadline(new Date(iso)).toISOString();
+  // Київ у вересні — UTC+3: 18:00 Києва = 15:00 UTC. 30.09.2026 — середа.
+  assert.equal(k("2026-09-30T07:00:00Z"), "2026-09-30T15:00:00.000Z", "🔴 ранок будня — не до 18:00 того ж дня");
+  assert.equal(k("2026-09-30T14:59:00Z"), "2026-09-30T15:00:00.000Z", "🔴 17:59 — не того ж дня");
+  assert.equal(k("2026-09-30T15:00:00Z"), "2026-10-01T15:00:00.000Z", "🔴 рівно 18:00 — має перейти на наступний день");
+  assert.equal(k("2026-09-29T22:30:00Z"), "2026-09-30T15:00:00.000Z", "🔴 01:30 ночі за Києвом (ще вівторок в UTC) — не той день");
+  assert.equal(k("2026-10-02T16:00:00Z"), "2026-10-05T15:00:00.000Z", "🔴 вечір пʼятниці — не на понеділок");
+  assert.equal(k("2026-10-03T09:00:00Z"), "2026-10-05T15:00:00.000Z", "🔴 субота — не на понеділок");
+  assert.equal(k("2026-10-04T20:59:00Z"), "2026-10-05T15:00:00.000Z", "🔴 неділя 23:59 — не на понеділок");
+  // Зимовий час (UTC+2): 18:00 Києва = 16:00 UTC — зсув береться на ту саму мить.
+  assert.equal(k("2026-11-02T08:00:00Z"), "2026-11-02T16:00:00.000Z", "🔴 зимовий час порахований як літній");
+});
+
+/**
+ * #1075 — ПРОСТРОЧКА В РЯДКАХ І ЗВІТІ: невирішена «На перевірці» після строку — прострочена; до строку — ні; вирішена
+ * людиною — ні; упевнена категорія — ні. У звіті «прострочено» = рядкам вкладки з тією ж позначкою.
+ * 🧨 Червоніє, якщо позначати вирішені, не рахувати прострочку або розвести звіт і вкладку.
+ */
+test("#1075 ПРОСТРОЧКА · ЖИВА СХЕМА: після строку — так, до строку й вирішена — ні; звіт = рядки", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  const { carrierDealRows, carrierReport } = await import("./carrierDeals.js");
+  const { recordDecision } = await import("./carrierDecisions.js");
+  const came = new Date("2026-09-30T08:00:00Z");     // середа 11:00 Києва → строк 15:00 UTC того ж дня
+  const mk = async (n: number, role: string, conf: number) => {
+    const P = phone(10750, n), u = `1075-${String(n)}`;
+    await call(c, u, came, 40, P);
+    await carrierDeal(c, 107500 + n, P, came, "own", u, 1);
+    await carrierAnalysedV2(c, u, role, conf, "counterpart");
+    await c.raw.query(`UPDATE call_analyses a SET updated_at = $2 FROM call_transcripts t WHERE t.id = a.transcript_id AND t.uniqueid = $1`, [u, came.toISOString()]);
+  };
+  await mk(1, "carrier", 0.6); await mk(2, "carrier", 0.6); await mk(3, "carrier", 0.95);
+  await recordDecision(c.db, 107502, "client", null, "", lead(1), came);
+  const at = async (iso: string) => new Map((await carrierDealRows(c.db, { period: null, scope: {}, now: new Date(iso) })).map((r) => [r.kommoId, r]));
+  const before = await at("2026-09-30T14:59:00Z"), after = await at("2026-09-30T15:01:00Z");
+  assert.equal(before.get(107501)?.overdue, false, "🔴 до кінця робочого дня вже «прострочено»");
+  assert.equal(after.get(107501)?.overdue, true, "🔴 після 18:00 невирішена — не прострочена");
+  assert.equal(after.get(107501)?.reviewDeadline, "2026-09-30T15:00:00.000Z");
+  assert.equal(after.get(107502)?.overdue, false, "🔴 вирішена людиною позначена простроченою");
+  assert.equal(after.get(107503)?.overdue, false, "🔴 упевнений перевізник позначений простроченим");
+  const rows = [...after.values()];
+  assert.equal(carrierReport(rows).total.overdue, rows.filter((r) => r.overdue).length, "🔴 «прострочено» у звіті ≠ рядкам вкладки");
+  assert.equal(carrierReport(rows).total.overdue, 1);
+});
+
+/**
+ * #1076 — ЗАДАЧА В ЗАДАЧНИКУ: одна відкрита на менеджера з числом угод «На перевірці» й строком — найранішим кінцем
+ * робочого дня; число оновлюється; розібрав усе — задача закривається сама з причиною й записом у журналі статусів;
+ * нова угода після закриття — нова задача; менеджер без черги — без задачі; двох відкритих не буває.
+ * 🧨 Червоніє, якщо плодити задачі щопроходу, не закривати розібране чи ставити задачу не тому менеджеру.
+ */
+test("#1076 ЗАДАЧНИК · ЖИВА СХЕМА: одна відкрита на менеджера, число оновлюється, розібрав — закрилась сама", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  await c.raw.query("DELETE FROM tasks WHERE assignee_id IN (10611, 10612, 10613)");
+  await seedTeams(c);
+  const { syncCarrierReviewTasks, REVIEW_TASK_DONE_REASON } = await import("./carrierReviewTasks.js");
+  const { recordDecision } = await import("./carrierDecisions.js");
+  const came = new Date("2026-09-30T08:00:00Z");
+  const mk = async (n: number, user: number, role: string, conf: number) => {
+    const P = phone(10760, n), u = `1076-${String(n)}`;
+    await call(c, u, came, 40, P);
+    await carrierDeal(c, 107600 + n, P, came, "own", u, 1); await owner(c, 107600 + n, user);
+    await carrierAnalysedV2(c, u, role, conf, "counterpart");
+  };
+  await mk(1, 10601, "carrier", 0.6); await mk(2, 10601, "unclear", 0.3); await mk(3, 10602, "client", 0.95);
+  const tasks = async () => (await c.raw.query<{ id: number; assignee_id: number; title: string; status: string; deadline: string; close_reason: string | null }>(
+    `SELECT id, assignee_id, title, status, to_char(deadline,'YYYY-MM-DD') AS deadline, close_reason FROM tasks
+      WHERE assignee_id IN (10611, 10612, 10613) ORDER BY id`)).rows;
+  const t1 = new Date("2026-09-30T09:00:00Z");
+  const s1 = await syncCarrierReviewTasks(c.db, t1, null);
+  assert.deepEqual([s1.created, s1.closed], [1, 0]);
+  let all = await tasks();
+  assert.deepEqual(all.map((x) => [x.assignee_id, x.title, x.status, x.deadline]),
+    [[10611, "📞 Дзвінки на мобільні: розібрати 2", "not_started", "2026-09-30"]], "🔴 задача не тому, не з тим числом чи строком (у м2 черги немає — задачі теж)");
+  await syncCarrierReviewTasks(c.db, t1, null);
+  assert.equal((await tasks()).length, 1, "🔴 повторний прохід поставив другу задачу");
+  await recordDecision(c.db, 107601, "carrier", null, "", lead(21, "manager", { managerId: 10611 }), t1);
+  const s2 = await syncCarrierReviewTasks(c.db, t1, null);
+  assert.equal(s2.updated, 1);
+  assert.equal((await tasks())[0].title, "📞 Дзвінки на мобільні: розібрати 1", "🔴 число в задачі не оновилось");
+  await recordDecision(c.db, 107602, "other", "spam", "", lead(21, "manager", { managerId: 10611 }), t1);
+  const s3 = await syncCarrierReviewTasks(c.db, t1, null);
+  all = await tasks();
+  assert.deepEqual([s3.closed, all[0].status, all[0].close_reason], [1, "done", REVIEW_TASK_DONE_REASON], "🔴 розібрав усе — задача не закрилась сама");
+  const log = (await c.raw.query("SELECT 1 FROM task_status_log WHERE task_id = $1 AND to_status = 'done'", [all[0].id])).rowCount;
+  assert.equal(log, 1, "🔴 автозакриття без запису в журналі статусів");
+  await mk(4, 10601, "carrier", 0.5);
+  await syncCarrierReviewTasks(c.db, t1, null);
+  all = await tasks();
+  assert.deepEqual(all.map((x) => x.status), ["done", "not_started"], "дзеркало: нова угода після закриття — нова задача");
+  await assert.rejects(c.raw.query(`WITH t AS (INSERT INTO tasks (title, status, assignee_id) VALUES ('x','not_started',10611) RETURNING id)
+    INSERT INTO carrier_review_tasks (task_id, manager_id, opened_at) SELECT id, 10611, now() FROM t`), /idx_carrier_review_tasks_open/,
+    "🔴 база дозволила другу відкриту задачу менеджеру");
+  assert.match(SRC("jobs/carrierCallJob.ts"), /reviewTasks: true,/, "🔴 бойова джоба задач не ставить");
 });
