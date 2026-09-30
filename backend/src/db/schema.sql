@@ -341,6 +341,21 @@ CREATE TABLE IF NOT EXISTS lead_transfer_events (
 );
 CREATE INDEX IF NOT EXISTS idx_lte_time ON lead_transfer_events(changed_at);
 
+-- 🔗 «З ЯКОЇ УГОДИ СТВОРЕНО ЦЮ» — системні примітки Kommo `lead_auto_created` (30.09.2026).
+-- Коли лідген кваліфікує угоду Продзвону, CRM створює угоду менеджеру й пише в ОБИДВІ примітку:
+-- у батьківську «child = id», у дочірню «parent = id». Це ТОЧНИЙ звʼязок передачі з угодою
+-- менеджера — на відміну від здогаду «той самий client_key у межах 2 хв», який мовчки ламається,
+-- коли в угоді Продзвону не заповнено клієнта (вересень 2026: 48 з 464 передач без угоди).
+-- Пише `jobs/syncLeadChildLinks.ts`; читає `core/leadgenSql.handoffLinkQuery` (пріоритет над здогадом).
+CREATE TABLE IF NOT EXISTS lead_child_links (
+  parent_id  BIGINT NOT NULL,
+  child_id   BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (parent_id, child_id)
+);
+CREATE INDEX IF NOT EXISTS idx_lcl_child ON lead_child_links(child_id);
+ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_child_link_at TIMESTAMPTZ;
+
 CREATE TABLE IF NOT EXISTS plans (
   id SERIAL PRIMARY KEY,
   manager_id INTEGER NOT NULL REFERENCES managers(id),

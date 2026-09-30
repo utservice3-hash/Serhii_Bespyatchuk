@@ -71,6 +71,7 @@ import { checkFreshness, checkAbandonedStages } from "./core/reconcile.js";
 import { isKommoPaused } from "./kommo/pause.js";
 import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.js";
 import { syncTransfers } from "./jobs/syncTransfers.js";
+import { syncLeadChildLinks } from "./jobs/syncLeadChildLinks.js";
 import { syncDealActivity, syncContactActivity, recomputeActivity } from "./jobs/syncDealActivity.js";
 import { syncAdBudget } from "./jobs/syncAdBudget.js";
 import { syncGa4Ads } from "./jobs/syncGa4Ads.js";
@@ -513,6 +514,14 @@ cron.schedule("40 4 * * *", () => {
 cron.schedule("20 5 * * *", () => {
   if (isKommoPaused()) return;
   void runJob("syncTransfers", () => syncTransfers());
+});
+
+// 🔗 «З якої угоди створено цю» (примітки Kommo lead_auto_created) — щогодини о :55. Живить точний
+// звʼязок передачі лідгена з угодою менеджера; поки примітка не приїхала, діє старий здогад за клієнтом,
+// тож запізнення тут лише відкладає уточнення, а не ламає гроші. ~1 запит на годину.
+cron.schedule("55 * * * *", () => {
+  if (isKommoPaused()) return;
+  void runJob("syncLeadChildLinks", () => syncLeadChildLinks());
 });
 
 // Ad budget (Google Ads sheet) hourly + on startup — feeds the КВП report.
