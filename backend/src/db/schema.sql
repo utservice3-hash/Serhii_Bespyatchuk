@@ -341,6 +341,21 @@ CREATE TABLE IF NOT EXISTS lead_transfer_events (
 );
 CREATE INDEX IF NOT EXISTS idx_lte_time ON lead_transfer_events(changed_at);
 
+-- 🔗 «З ЯКОЇ УГОДИ СТВОРЕНО ЦЮ» — системні примітки Kommo `lead_auto_created` (30.09.2026).
+-- Коли лідген кваліфікує угоду Продзвону, CRM створює угоду менеджеру й пише в ОБИДВІ примітку:
+-- у батьківську «child = id», у дочірню «parent = id». Це ТОЧНИЙ звʼязок передачі з угодою
+-- менеджера — на відміну від здогаду «той самий client_key у межах 2 хв», який мовчки ламається,
+-- коли в угоді Продзвону не заповнено клієнта (вересень 2026: 48 з 464 передач без угоди).
+-- Пише `jobs/syncLeadChildLinks.ts`; читає `core/leadgenSql.handoffLinkQuery` (пріоритет над здогадом).
+CREATE TABLE IF NOT EXISTS lead_child_links (
+  parent_id  BIGINT NOT NULL,
+  child_id   BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (parent_id, child_id)
+);
+CREATE INDEX IF NOT EXISTS idx_lcl_child ON lead_child_links(child_id);
+ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_child_link_at TIMESTAMPTZ;
+
 CREATE TABLE IF NOT EXISTS plans (
   id SERIAL PRIMARY KEY,
   manager_id INTEGER NOT NULL REFERENCES managers(id),
@@ -4601,6 +4616,34 @@ REVOKE ALL ON ai_cap_alerts FROM ai_readonly;
 -- 🗑 Текст розмови видалено за строком зберігання (мобільні — 12 міс, рішення Романа 29.09.2026). Рядок і вердикт
 -- лишаються; NULL — текст на місці.
 ALTER TABLE call_transcripts ADD COLUMN IF NOT EXISTS text_purged_at TIMESTAMPTZ;
+
+-- 🗂 РУЧНИЙ ТИП РОЗМОВИ «ПЕРШОГО ДОТИКУ» (ТЗ «звіт тімліда» 30.09.2026): тімлід чи адмін каже «Це вантаж» / «Це не
+-- вантаж», і це важить більше за модель. ЖУРНАЛ: кожна зміна — окремий рядок, діє остання; хто й коли — назавжди.
+CREATE TABLE IF NOT EXISTS call_type_overrides (
+  id          BIGSERIAL PRIMARY KEY,
+  uniqueid    TEXT NOT NULL,              -- ringostat_calls.uniqueid; без FK — журнал переживає перезапис CDR
+  is_cargo    BOOLEAN NOT NULL,
+  set_by      INTEGER,                    -- users.id; NULL — службовий запис
+  set_by_name TEXT,
+  set_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_call_type_overrides_call ON call_type_overrides(uniqueid, set_at DESC);
+REVOKE ALL ON call_type_overrides FROM ai_readonly;
+
+-- 📝 КОМЕНТАРІ ДО ПЕРШОГО ДОТИКУ (ТЗ «звіт тімліда» 30.09.2026, п.5 і п.6.3): «Чому не озвучено ціну» (`price`) —
+-- пише менеджер по своїх розмовах, тімлід — по команді, адмін — усе; «Опрацьовано» (`missed`) до невиконаної
+-- домовленості — тімлід і адмін, після нього банер «Пообіцяв і не передзвонив» цю розмову більше не показує.
+-- Зберігається в дашборді, НЕ в Kommo. Один чинний коментар кожного виду на розмову; хто й коли — поруч.
+CREATE TABLE IF NOT EXISTS first_touch_notes (
+  uniqueid    TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('price', 'missed')),
+  note        TEXT NOT NULL CHECK (length(btrim(note)) > 0),
+  set_by      INTEGER,
+  set_by_name TEXT,
+  set_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (uniqueid, kind)
+);
+REVOKE ALL ON first_touch_notes FROM ai_readonly;
 -- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
 
 -- 🎧 ВКЛАДКА «ПЕРШИЙ ДОТИК · AI» (рішення Романа 28.09.2026). Без цього рядка вкладку не побачив би
@@ -4608,14 +4651,15 @@ ALTER TABLE call_transcripts ADD COLUMN IF NOT EXISTS text_purged_at TIMESTAMPTZ
 -- ні (П18). Ідемпотентно й НЕ перетирає рішень адміна: чіпаємо лише ролі, де ключа ще немає.
 -- ⚠️ revert коду ключ із ролей не прибирає — знімати тумблером у Налаштуваннях.
 UPDATE roles SET screen_access = screen_access || '{"ai-calls":true}'::jsonb
-  WHERE key IN ('admin', 'kvp', 'ceo', 'opdir', 'team_lead')
+  WHERE key IN ('admin', 'kvp', 'ceo', 'opdir', 'team_lead', 'manager')
     AND NOT (screen_access ? 'ai-calls');
+-- ↑ 'manager' — ТЗ «звіт тімліда» 30.09.2026 п.7: менеджер бачить свої заявки й свій звіт (кламп — `missedScopeFor`).
 -- 🙅 Фінансисту, HR і менеджеру вкладки немає (рішення Романа 28.09.2026). Синк «financier = екрани адміна»
 -- вище копіює фінансисту все, що має адмін, тож на ДРУГОМУ прогоні схеми `ai-calls` протікала: заміряно на проді
 -- 29.09.2026 після чужого викату з міграцією — `/api/dashboard/ai-calls` для фінансиста 403 → 200 (#11). Той самий
 -- механізм, що з «Бізнес-асистентом» (#741b). Зняття стоїть ПІСЛЯ синку й після сиду; тримає #794.
 UPDATE roles SET screen_access = screen_access - 'ai-calls'
- WHERE key IN ('financier', 'hr', 'manager');
+ WHERE key IN ('financier', 'hr');
 
 -- 🚚 ВКЛАДКА «ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ»: керівництво (admin, ceo, opdir, kvp — рішення 29.09.2026) + тімлід і
 -- менеджер (ТЗ «Відсів перевізників», Роман 30.09.2026: менеджер — свої, тімлід — команда; межа — у ядрі).

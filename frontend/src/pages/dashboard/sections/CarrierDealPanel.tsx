@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { fetchCarrierAudio, fetchCarrierCallCard, postCarrierDecision, revertCarrierClose,
   type CarrierCallCardResp, type CarrierDealT, type CarrierOtherTypeT } from "../../../api";
 import { mmss } from "../aiCallsView";
-import { CATEGORY_UI, DECISION_UI, OTHER_TYPE_UI, ROLE_UI, TONE, closeLabel, confLabel, deciderLabel, speakerShort,
+import { InfoHint } from "../widgets";
+import { CATEGORY_UI, DECISION_UI, OTHER_TYPE_UI, OTHER_TYPES_HINT, ROLE_UI, TONE, closeLabel, deciderLabel, pctLabel, speakerShort,
   type HumanDecisionT } from "../carrierCallsView";
 
 /**
@@ -18,6 +19,11 @@ export const pill = (bg: string, fg: string): React.CSSProperties => ({ backgrou
 const muted: React.CSSProperties = { color: "var(--text-muted)" };
 export const errText = (e: unknown) => (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? (e instanceof Error ? e.message : "не вдалося");
 const label: React.CSSProperties = { fontSize: 11.5, ...muted, fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase", marginBottom: 4 };
+
+/** Підпис блоку картки з поясненням під ⓘ. */
+function LabelHint({ t, h }: { t: string; h: string }) {
+  return <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>{t}<InfoHint text={h} /></span>;
+}
 
 function Player({ uniqueid, quoteAt, onTime, seekRef }: { uniqueid: string; quoteAt: number | null; onTime: (t: number) => void;
   seekRef: React.MutableRefObject<((t: number) => void) | null> }) {
@@ -109,7 +115,7 @@ export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: Carrier
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16, background: "var(--card-bg)",
       border: "1px solid var(--border)", borderRadius: 8, padding: 12 }}>
       <div style={{ minWidth: 0 }}>
-        <div style={label}>Розмова</div>
+        <div style={label}><LabelHint t="Розмова" h="Запис дзвінка і його текст. ▶ — слухати; клік по репліці — перемотати туди. «Він» — той, хто дзвонив; жовтим — фраза, з якої AI зробив висновок." /></div>
         {!deal.uniqueid
           ? <p style={{ margin: 0, fontSize: 13, ...muted }}>{deal.dealState === "no_talk"
               ? "Розмови від 10 с з цим номером не було: пропущений або короткий дзвінок. Вирішіть за номером або передзвоніть."
@@ -139,11 +145,11 @@ export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: Carrier
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
         <div>
-          <div style={label}>Вердикт AI</div>
+          <div style={label}><LabelHint t="Що почув AI" h="Хто, на думку AI, дзвонив, наскільки він певен (від 85% — вирішує сам, нижче — рішення за вами) і чому він так вирішив." /></div>
           {verdictUi
             ? <div style={{ fontSize: 13 }}>
                 <span style={pill(verdictUi.bg, verdictUi.fg)}>{verdictUi.label}{deal.ai.otherType ? ` · ${OTHER_TYPE_UI[deal.ai.otherType]}` : ""}</span>
-                <span style={{ ...muted, marginLeft: 6, fontVariantNumeric: "tabular-nums" }}>впевненість {confLabel(deal.ai.confidence)}</span>
+                <span style={{ ...muted, marginLeft: 6, fontVariantNumeric: "tabular-nums" }}>впевненість {pctLabel(deal.ai.confidence)}</span>
                 {deal.ai.reason && <div style={{ marginTop: 4 }}>{deal.ai.reason}</div>}
                 {quote && <div style={{ fontStyle: "italic", marginTop: 4 }}>«{quote}»</div>}
                 {!deal.ai.reason && deal.ai.summary && <div style={{ marginTop: 4, ...muted }}>{deal.ai.summary}</div>}
@@ -152,7 +158,7 @@ export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: Carrier
         </div>
 
         <div style={{ fontSize: 13 }}>
-          <span style={{ ...muted, marginRight: 6 }}>Зараз:</span>
+          <span style={{ ...muted, marginRight: 6, display: "inline-flex", alignItems: "center", gap: 4 }}>Рішення зараз<InfoHint text="Чинне рішення по угоді: AI (якщо він певен від 85%) або людини — рішення людини завжди сильніше. Нижче — що з угодою в CRM." />:</span>
           <span style={pill(TONE[cat.tone].bg, TONE[cat.tone].fg)}>{cat.label}{deal.otherType ? ` · ${OTHER_TYPE_UI[deal.otherType]}` : ""}</span>
           <span style={{ ...muted, marginLeft: 6 }}>
             {deal.source === "human" && deal.human ? `вирішив ${deviceName(deal.human.by)} (${deciderLabel(deal.human.role)})` : deal.source === "ai" ? "вирішив AI" : verdictUi ? deal.why ?? "" : ""}
@@ -187,6 +193,7 @@ export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: Carrier
               </div>
               {pickOther && (
                 <div className="cq-fade" role="group" aria-label="Підтип «Інше»" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <span style={{ alignSelf: "center" }}><InfoHint text={OTHER_TYPES_HINT} /></span>
                   {(Object.keys(OTHER_TYPE_UI) as CarrierOtherTypeT[]).map((t) => (
                     <button key={t} type="button" disabled={busy} onClick={() => { void decide("other", t); }}
                       style={{ border: "1px solid var(--border)", background: t === deal.otherType ? "var(--info-bg)" : "transparent", color: "var(--text)",
@@ -194,7 +201,7 @@ export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: Carrier
                   ))}
                 </div>
               )}
-              <div style={{ ...muted, fontSize: 12 }}>«Перевізник» і «Інше» закриємо в CRM, «Клієнт» лишиться на етапі.</div>
+              <div style={{ ...muted, fontSize: 12 }}>«Перевізник» і «Інше» закриємо в CRM, «Клієнт» лишиться на етапі. Тімлід і керівник можуть змінити ваше рішення.</div>
               {noteOpen
                 ? <textarea id={`carrier-note-${String(deal.kommoId)}`} autoFocus value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="Коментар"
                     style={{ fontSize: 13, minHeight: 44, border: "1px solid var(--border)", borderRadius: 8, padding: "6px 8px", background: "var(--card-bg)", color: "var(--text)", resize: "vertical" }} />
@@ -203,12 +210,12 @@ export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: Carrier
 
         {journal.length > 0 && (
           <div>
-            <div style={label}>Журнал рішень</div>
+            <div style={label}><LabelHint t="Журнал рішень" h="Усі рішення людей по цій угоді, старі теж: хто, коли, що вирішив і що в цей момент казав AI. Діє останнє." /></div>
             <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, display: "flex", flexDirection: "column", gap: 2 }}>
               {journal.map((j, i) => (
                 <li key={i} style={i < journal.length - 1 ? muted : undefined}>
                   {fmtTime(j.at)} · {j.by} ({deciderLabel(j.role)}): <b>{DECISION_UI[j.decision].label}</b>{j.otherType ? ` · ${OTHER_TYPE_UI[j.otherType]}` : ""}
-                  {j.aiRole && <span style={muted}> · AI казав «{ROLE_UI[j.aiRole]?.label ?? j.aiRole}» {confLabel(j.aiConfidence)}</span>}
+                  {j.aiRole && <span style={muted}> · AI казав «{ROLE_UI[j.aiRole]?.label ?? j.aiRole}», {pctLabel(j.aiConfidence)}</span>}
                   {j.note && <span> · «{j.note}»</span>}
                 </li>
               ))}

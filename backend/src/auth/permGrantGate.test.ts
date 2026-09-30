@@ -179,12 +179,12 @@ test("#741b МІГРАЦІЯ ДВІЧІ: «Бізнес-асистента» б�
 });
 
 /**
- * #794 — «ПЕРШИЙ ДОТИК · AI» ФІНАНСИСТУ НЕ ПОВЕРТАЄТЬСЯ ДРУГОЮ МІГРАЦІЄЮ. Прод 29.09.2026: після чужого викату з
+ * #858 — «ПЕРШИЙ ДОТИК · AI» ФІНАНСИСТУ НЕ ПОВЕРТАЄТЬСЯ ДРУГОЮ МІГРАЦІЄЮ (менеджер — БАЧИТЬ, ТЗ 30.09.2026 п.7). Прод 29.09.2026: після чужого викату з
  * міграцією синк «financier = екрани адміна» скопіював фінансисту `ai-calls`, і `#11` показав 403 → 200. Дзеркала:
  * пʼять ролей вкладки її мають (інакше «фінансист не бачить» — порожня правда), HR і менеджер — ні (рішення 28.09).
  * 🧨 Червоніє, якщо прибрати зняття `ai-calls` після синку або поставити його вище за синк.
  */
-test("#794 МІГРАЦІЯ ДВІЧІ: «Перший дотик · AI» — у адміна, КВП, CEO, опдира й тімліда; фінансист, HR і менеджер — НІ", async (t) => {
+test("#858 МІГРАЦІЯ ДВІЧІ: «Перший дотик · AI» — у адміна, КВП, CEO, опдира, тімліда й менеджера; фінансист і HR — НІ", async (t) => {
   const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
   const scratch = provisionScratch();
   if ("unavailable" in scratch) return t.skip(skipReason(scratch));
@@ -198,8 +198,8 @@ test("#794 МІГРАЦІЯ ДВІЧІ: «Перший дотик · AI» — у
     const rows = (await client.query<{ key: string; screen_access: Record<string, unknown> }>("SELECT key, screen_access FROM roles")).rows;
     const sees = (k: string) => rows.find((r) => r.key === k)?.screen_access?.["ai-calls"] === true;
     assert.ok(rows.some((r) => r.key === "financier"), "🔴 у scratch-базі немає ролі фінансиста — перевіряти нема чого");
-    for (const k of ["admin", "kvp", "ceo", "opdir", "team_lead"]) assert.ok(sees(k), `🔴 «${k}» не бачить «Перший дотик · AI» — зняття забрало більше, ніж вирішено`);
-    for (const k of ["financier", "hr", "manager"]) assert.ok(!sees(k), `🔴 «${k}» бачить «Перший дотик · AI» після ДРУГОЇ міграції`);
+    for (const k of ["admin", "kvp", "ceo", "opdir", "team_lead", "manager"]) assert.ok(sees(k), `🔴 «${k}» не бачить «Перший дотик · AI» — зняття забрало більше, ніж вирішено`);
+    for (const k of ["financier", "hr"]) assert.ok(!sees(k), `🔴 «${k}» бачить «Перший дотик · AI» після ДРУГОЇ міграції`);
   } finally {
     await client.end().catch(() => {});
     scratch.dispose();

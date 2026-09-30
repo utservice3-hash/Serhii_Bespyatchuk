@@ -127,6 +127,14 @@ export interface HandoffLinkIds { pz: readonly number[]; qualified: number; mana
 /**
  * 🔗 ПЕРЕДАЧІ ПЕРІОДУ Й УГОДА МЕНЕДЖЕРА ДЛЯ КОЖНОГО ВХОДУ (правила 1–2 власника).
  *
+ * 🔗 УГОДА МЕНЕДЖЕРА — ДВА ШЛЯХИ, У ПОРЯДКУ ДОВІРИ (30.09.2026):
+ *   0) примітка Kommo `lead_auto_created` (`lead_child_links`): CRM сама записала, що цю угоду створено
+ *      з цієї угоди Продзвону. Точний звʼязок, не залежить від заповненості клієнта;
+ *   1) здогад, як до 30.09: той самий НЕпорожній `client_key` — лише коли примітки немає.
+ * Обидва — у тому самому вікні −`beforeSec`…+`afterSec` від входу: примітка звʼязує угоди, а вікно
+ * вирішує, ЯКИЙ вхід у 142 цю угоду породив (угода Продзвону буває кваліфікована кілька разів).
+ * `link_prio` — яким шляхом знайдено (0 — примітка, 1 — здогад), для перевірки й розбору.
+ *
  * Вхід = подія 142 угоди Продзвону в київську дату періоду; предикат і `JOIN managers` —
  * ТІ САМІ, що в «Прорахунків» (`stageCountsQuery`, лічильник `quotes`), тож передачі людини
  * дорівнюють її прорахункам ЗАВЖДИ (`#675b`). Угода менеджера — НАЙРАНІША угода того самого
@@ -143,7 +151,8 @@ export function handoffLinkQuery(
   return {
     text: `SELECT e.kommo_id AS pz_id, d.manager_id AS lg_id, m.team_id AS lg_team_id,
             e.changed_at AS at, to_char((e.changed_at ${K}), 'YYYY-MM-DD') AS day,
-            d.name AS pz_name, d.client_name AS pz_client, d.client_key AS client_key,
+            d.name AS pz_name, d.client_name AS pz_client, COALESCE(x.client_key, d.client_key) AS client_key,
+            x.prio AS link_prio,
             x.kommo_id AS deal_id, x.name AS deal_name, x.client_name AS deal_client,
             sm.name AS sales_manager, x.reject_reason AS deal_reason,
             to_char((x.closed_at_kommo ${K}), 'YYYY-MM-DD') AS closed_day,
@@ -152,14 +161,25 @@ export function handoffLinkQuery(
        JOIN deals d ON d.kommo_id = e.kommo_id
        JOIN managers m ON m.id = d.manager_id
        LEFT JOIN LATERAL (
-         SELECT q.kommo_id, q.name, q.client_name, q.manager_id, q.reject_reason,
-                q.closed_at_kommo, q.planned_payment_at
-           FROM deals q
-          WHERE d.client_key IS NOT NULL AND q.client_key = d.client_key
-            AND q.pipeline_id = ANY($5)
-            AND q.created_at_kommo BETWEEN e.changed_at - INTERVAL '${before} seconds'
-                                       AND e.changed_at + INTERVAL '${after} seconds'
-          ORDER BY q.created_at_kommo, q.kommo_id
+         SELECT z.* FROM (
+           SELECT 0 AS prio, q.kommo_id, q.name, q.client_name, q.client_key, q.manager_id, q.reject_reason,
+                  q.closed_at_kommo, q.planned_payment_at, q.created_at_kommo
+             FROM lead_child_links l
+             JOIN deals q ON q.kommo_id = l.child_id
+            WHERE l.parent_id = d.kommo_id
+              AND q.pipeline_id = ANY($5)
+              AND q.created_at_kommo BETWEEN e.changed_at - INTERVAL '${before} seconds'
+                                         AND e.changed_at + INTERVAL '${after} seconds'
+           UNION ALL
+           SELECT 1 AS prio, q.kommo_id, q.name, q.client_name, q.client_key, q.manager_id, q.reject_reason,
+                  q.closed_at_kommo, q.planned_payment_at, q.created_at_kommo
+             FROM deals q
+            WHERE d.client_key IS NOT NULL AND q.client_key = d.client_key
+              AND q.pipeline_id = ANY($5)
+              AND q.created_at_kommo BETWEEN e.changed_at - INTERVAL '${before} seconds'
+                                         AND e.changed_at + INTERVAL '${after} seconds'
+         ) z
+          ORDER BY z.prio, z.created_at_kommo, z.kommo_id
           LIMIT 1) x ON TRUE
        LEFT JOIN managers sm ON sm.id = x.manager_id
       WHERE e.pipeline_id = ANY($3) AND e.status_id = $4

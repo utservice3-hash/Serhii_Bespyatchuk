@@ -1,5 +1,5 @@
 import axios from "axios";
-import type { AiCallState, PromiseStateT, PipelineGroupT } from "./pages/dashboard/aiCallsView";
+import type { AiCallState, PromiseStateT, PipelineGroupT, ConversationTypeT } from "./pages/dashboard/aiCallsView";
 import type { CarrierBucketT } from "./pages/dashboard/carrierCallsView";
 
 export const api = axios.create({
@@ -352,9 +352,17 @@ export interface AiCallRowT {
   promiseState: PromiseStateT | null; managerPromises: number;
   /** П3 «тиша перед закриттям»; на екрані — лише з дати оголошення норми (`silence.normFrom`). */
   silentBeforeClose: boolean | null;
+  /** Тип розмови (рубрика v2, ТЗ 30.09.2026) і куди вона йде: звіт чи «Виключені». */
+  conversationType: ConversationTypeT | null; typeConfidence: number | null; typeReason: string | null; priceValue: string | null;
+  inReport: boolean; typeCheck: boolean; typeOverride: { isCargo: boolean; byName: string | null; at: string } | null;
+  /** «Чому не озвучено ціну» і «Опрацьовано» (ТЗ 30.09.2026). */
+  priceNote: AiNoteT | null; missedNote: AiNoteT | null;
 }
+export interface AiNoteT { text: string; byName: string | null; at: string }
 export interface AiCallsResp {
   period: { from: string; to: string }; truncated: boolean; rows: AiCallRowT[];
+  /** Менеджер «Виключених» не бачить (ТЗ 30.09.2026 п.7) — сервер їх і не віддає. */
+  canSeeExcluded: boolean;
   silence: { minGapHours: number; normFrom: string | null };
 }
 export async function fetchAiCalls(params: { from: string; to: string }): Promise<AiCallsResp> {
@@ -378,7 +386,49 @@ export interface AiCallCardResp {
   managerChannel: number | null; durationSec: number | null; nextOutboundAt: string | null;
   /** Термін і стан кожної обіцянки — у порядку `result.promises`; обіцянки клієнта → `null`. */
   promiseChecks: ({ deadline: string; basis: string; state: PromiseStateT } | null)[];
-  callsAfter: { at: string; billsec: number; direction: "in" | "out" }[];
+  callsAfter: { at: string; billsec: number; direction: "in" | "out"; managerName: string | null; byPromiser: boolean }[];
+  /** Журнал ручних змін типу (від найновішої) і чи може ЦЕЙ користувач змінювати тип. */
+  typeHistory: { isCargo: boolean; byName: string | null; at: string }[];
+  canEditType: boolean;
+  /** Хто що може писати й чи можна слухати запис — вирішує сервер. */
+  noteRights: { price: boolean; missed: boolean };
+  canListen: boolean;
+}
+/** Коментар: `price` — «Чому не озвучено ціну», `missed` — «Опрацьовано». Порожній текст прибирає. */
+export async function putAiCallNote(uniqueid: string, kind: "price" | "missed", text: string): Promise<void> {
+  await api.put(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/note`, { kind, text });
+}
+/** Запис розмови — байтами через наш сервер (з авторизацією), а не прямим посиланням Ringostat. */
+export async function fetchAiCallRecording(uniqueid: string): Promise<Blob> {
+  const { data } = await api.get<Blob>(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/recording`, { responseType: "blob" });
+  return data;
+}
+/** 📊 Звіт тімліда «Перший дотик» (ТЗ 30.09.2026 п.6). */
+export interface AiManagerLineT {
+  managerId: number | null; managerName: string; teamName: string | null;
+  accepted: number; analysed: number; priceVoiced: number; pricePct: number | null; noPriceNoComment: number;
+  agreements: number; done: number; late: number; missed: number;
+}
+export interface AiPoolRowT {
+  uniqueid: string; calledAt: string; managerId: number | null; managerName: string | null; teamName: string | null;
+  clientPhone: string | null; kommoIds: number[]; state: AiCallState; summary: string | null;
+  priceDiscussed: boolean | null; priceValue: string | null; priceNote: AiNoteT | null; missedNote: AiNoteT | null;
+  promiseState: PromiseStateT | null; objections: number; typeCheck: boolean;
+  flags: { analysed: boolean; noPrice: boolean; noComment: boolean; missed: boolean; banner: boolean };
+}
+export interface AiTeamReportResp {
+  period: { from: string; to: string }; truncated: boolean;
+  managers: AiManagerLineT[]; total: AiManagerLineT;
+  banner: { total: number; byManager: { managerId: number | null; managerName: string; count: number }[] };
+  rows: AiPoolRowT[];
+}
+export async function fetchAiTeamReport(params: { from: string; to: string; teamId?: number; managerId?: number }): Promise<AiTeamReportResp> {
+  const { data } = await api.get<AiTeamReportResp>("/dashboard/ai-calls/team-report", { params });
+  return data;
+}
+/** «Це вантаж» / «Це не вантаж» — ручний тип розмови (тімлід своєї команди, адмін). */
+export async function setAiCallType(uniqueid: string, isCargo: boolean): Promise<void> {
+  await api.post(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/type`, { isCargo });
 }
 export async function fetchAiCallCard(uniqueid: string): Promise<AiCallCardResp> {
   const { data } = await api.get<AiCallCardResp>(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}`);
@@ -456,7 +506,17 @@ export interface CarrierCallsMetaResp {
   caps: { carrier: number; stt: number | null; analysis: number | null };
   close: { mode: string; otherMode: string; wouldClose: number; closed: number; reverted: number; failed: number; otherWouldClose: number; otherClosed: number };
   agreement: { aiRole: string; decisions: number; agreed: number; byDecision: Record<string, number> }[];
+  agreementRows: CarrierAgreementRowT[];
 }
+/** 📈 Динаміка за період: по днях — відсіяно, без розмови, категорії; витрати — лише керівництву (інакше `null`). */
+export interface CarrierDayStatT { day: string; filtered: number; noTalk: number; clients: number; carriers: number; other: number; unsorted: number; spendUsd: number | null }
+export async function fetchCarrierStats(params: { from: string; to: string }): Promise<{ period: { from: string; to: string }; days: CarrierDayStatT[]; spendCapUsd: number }> {
+  const { data } = await api.get<{ period: { from: string; to: string }; days: CarrierDayStatT[]; spendCapUsd: number }>("/dashboard/carrier-calls/stats", { params });
+  return data;
+}
+/** «AI проти людини» поіменно (лише керівництву). */
+export interface CarrierAgreementRowT { kommoId: number; url: string; uniqueid: string | null; managerName: string | null; aiRole: string; aiConfidence: number | null;
+  decision: CarrierDecisionT; otherType: CarrierOtherTypeT | null; by: string; byRole: string | null; at: string; agreed: boolean }
 /** 🙋 «На перевірці» на етапі (без періоду) і вирішені за 30 днів — у скоупі ролі. */
 export interface CarrierPendingT { kommoId: number; url: string; uniqueid: string | null; phone: string; createdAt: string; calledAt: string | null;
   billsec: number | null; managerName: string | null; teamName: string | null; category: CarrierCategoryT; why: string | null; dealState: string;

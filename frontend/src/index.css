@@ -1285,3 +1285,15 @@ tr.recv-row:focus-visible { outline: 2px solid var(--accent, #c5141c); outline-o
 .app-toast-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
 .app-toast-act { flex-shrink: 0; background: transparent; color: #fff; border: 1px solid rgba(255, 255, 255, .5); border-radius: var(--r-md); padding: 3px 10px; cursor: pointer; font: inherit; font-size: 13px; }
 .app-toast-x { flex-shrink: 0; width: 26px; height: 26px; border: none; border-radius: var(--r-md); background: rgba(255, 255, 255, .15); color: #fff; cursor: pointer; font-size: 18px; line-height: 1; padding: 0; }
+
+/* 📈 «Дзвінки на мобільні» — кольори категорій на графіках (30.09.2026). Шість слотів перевіреного категоріального ряду
+   (dataviz validate_palette: світла й темна тема — усі перевірки PASS у цьому порядку стосу). Колір іде за КАТЕГОРІЄЮ,
+   а не за місцем. Контраст трьох світлих слотів < 3:1 — тому легенда з числами й підказка з числами обовʼязкові. */
+:root {
+  --cc-filtered: #eb6834; --cc-notalk: #4a3aa7; --cc-client: #1baf7a;
+  --cc-carrier: #eda100; --cc-other: #2a78d6; --cc-unsorted: #e87ba4; --cc-spend: #2a78d6;
+}
+:root[data-theme="dark"] {
+  --cc-filtered: #d95926; --cc-notalk: #9085e9; --cc-client: #199e70;
+  --cc-carrier: #c98500; --cc-other: #3987e5; --cc-unsorted: #d55181; --cc-spend: #3987e5;
+}

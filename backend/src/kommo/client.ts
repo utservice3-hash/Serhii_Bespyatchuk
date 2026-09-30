@@ -777,6 +777,37 @@ export async function forEachResponsibleChangeEventPage(
   return total;
 }
 
+/**
+ * 🔗 Потік системних приміток `lead_auto_created` угод за [fromUnix, toUnix] — сторінками по 250.
+ * Сира форма приміток; пару «батьківська → дочірня» дістає чиста `parseLeadChildLink`. Фільтр за
+ * `updated_at`: такі примітки не редагуються, тож він дорівнює моменту створення.
+ */
+export async function forEachLeadAutoCreatedNotePage(
+  fromUnix: number,
+  toUnix: number,
+  onPage: (notes: Record<string, unknown>[]) => Promise<void>
+): Promise<number> {
+  const limit = 250;
+  let page = 1;
+  let total = 0;
+  for (;;) {
+    const data = await kommoRequest<KommoListResponse<Record<string, unknown>> | null>(
+      `/api/v4/leads/notes?limit=${limit}&page=${page}` +
+        `&${encodeURIComponent("filter[note_type]")}=lead_auto_created` +
+        `&${encodeURIComponent("filter[updated_at][from]")}=${fromUnix}` +
+        `&${encodeURIComponent("filter[updated_at][to]")}=${toUnix}`
+    );
+    const raw = (data?._embedded as { notes?: Record<string, unknown>[] } | undefined)?.notes ?? [];
+    if (raw.length) {
+      await onPage(raw);
+      total += raw.length;
+    }
+    if (raw.length < limit || !data?._links?.next) break;
+    page += 1;
+  }
+  return total;
+}
+
 export async function fetchAllCompanies(): Promise<KommoCompany[]> {
   const companies: KommoCompany[] = [];
   const limit = 250;

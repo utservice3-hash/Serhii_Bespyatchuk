@@ -73,6 +73,7 @@ import { checkFreshness, checkAbandonedStages } from "./core/reconcile.js";
 import { isKommoPaused } from "./kommo/pause.js";
 import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.js";
 import { syncTransfers } from "./jobs/syncTransfers.js";
+import { syncLeadChildLinks } from "./jobs/syncLeadChildLinks.js";
 import { syncDealActivity, syncContactActivity, recomputeActivity } from "./jobs/syncDealActivity.js";
 import { syncAdBudget } from "./jobs/syncAdBudget.js";
 import { syncGa4Ads } from "./jobs/syncGa4Ads.js";
@@ -518,6 +519,14 @@ cron.schedule("20 5 * * *", () => {
   void runJob("syncTransfers", () => syncTransfers());
 });
 
+// 🔗 «З якої угоди створено цю» (примітки Kommo lead_auto_created) — щогодини о :55. Живить точний
+// звʼязок передачі лідгена з угодою менеджера; поки примітка не приїхала, діє старий здогад за клієнтом,
+// тож запізнення тут лише відкладає уточнення, а не ламає гроші. ~1 запит на годину.
+cron.schedule("55 * * * *", () => {
+  if (isKommoPaused()) return;
+  void runJob("syncLeadChildLinks", () => syncLeadChildLinks());
+});
+
 // Ad budget (Google Ads sheet) hourly + on startup — feeds the КВП report.
 cron.schedule("15 * * * *", () => {
   void runJob("syncAdBudget", () => syncAdBudget());
@@ -663,10 +672,11 @@ cron.schedule("35 * * * *", () => {
 });
 
 // 🤖 AI-АНАЛІЗ ДЗВІНКІВ ПЕРШОГО ДОТИКУ (ТЗ «AI-аналіз», коміт ④, рішення Романа 28.09.2026).
-// Щогодини о :45 — за 10 хв після годинного `syncCalls` (:35), не на :00/:30 із syncKommo.
-// Тік обмежений часом (8 + 4 хв), тож не наздоганяє наступний. Без ключів — «не ввімкнено»,
+// Раз на 10 хв (ТЗ «звіт тімліда» 30.09.2026, «черга раз на 10 хв») о :05, :15 … :55 — не на :00/:30 із
+// syncKommo. ⚠️ Хвилини — ЯВНИМ СПИСКОМ: node-cron читає «5-59/10» як 5 пострілів, а не 6 (спіймав #853).
+// Тік обмежений часом (5 + 3 хв), тож не наздоганяє наступний. Без ключів — «не ввімкнено»,
 // назовні нуль запитів. Під наглядом (`monitoredJobs.ts`), everyMin == крону — тримає гейт.
-cron.schedule("45 * * * *", () => {
+cron.schedule("5,15,25,35,45,55 * * * *", () => {
   void runJob("callAiJob", () => callAiJob());
 });
 

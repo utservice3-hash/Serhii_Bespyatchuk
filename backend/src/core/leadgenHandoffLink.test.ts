@@ -184,6 +184,35 @@ before(async () => {
   await lg("Реактивація наша база", PZ, [[LEADGEN_STAGE_IDS.taken, "2025-01-16T08:00:00"]]);
   await lg("Реактивація наша база", RE, [[LEADGEN_STAGE_IDS.opr, "2025-01-16T09:00:00"]]);
   await lg("Реактивація наша база", RE, [[LEADGEN_STAGE_IDS.warming, "2025-01-17T08:00:00"]]);
+
+  // ── #1094b (30.09.2026): ЧЕРВЕНЬ 2025 — звʼязок за приміткою Kommo `lead_child_links`. Поза вікнами решти.
+  const T2 = utc("2025-06-10T09:00:00");
+  const note = async (parent: number, child: number) =>
+    client!.query(`INSERT INTO lead_child_links (parent_id, child_id, created_at) VALUES ($1, $2, now())`, [parent, child]);
+  { // a) клієнта в Продзвоні немає, примітка є → угода з примітки
+    const pz = await deal({ manager: 1, pipeline: PZ, ck: null }); await ev(pz, PZ, Q, T2);
+    const a = await deal({ manager: 3, pipeline: FC[0], ck: "n-a", created: sec(T2, 1) }); await note(pz, a);
+    fx["n-nokey"] = { pz, want: a };
+  }
+  { // b) здогад знаходить B, примітка каже C → C (примітка точніша)
+    const at = sec(T2, 600);
+    const pz = await deal({ manager: 1, pipeline: PZ, ck: "n-c" }); await ev(pz, PZ, Q, at);
+    await deal({ manager: 3, pipeline: FC[0], ck: "n-c", created: sec(at, 5) });
+    const c = await deal({ manager: 3, pipeline: FC[0], ck: "n-other", created: sec(at, 20) }); await note(pz, c);
+    fx["n-conflict"] = { pz, want: c };
+  }
+  { // c) дочірня з примітки поза вікном цього входу → лишається здогад E
+    const at = sec(T2, 1200);
+    const pz = await deal({ manager: 1, pipeline: PZ, ck: "n-o" }); await ev(pz, PZ, Q, at);
+    const dd = await deal({ manager: 3, pipeline: FC[0], ck: "n-d", created: sec(at, 300) }); await note(pz, dd);
+    const ee = await deal({ manager: 3, pipeline: FC[0], ck: "n-o", created: sec(at, 3) });
+    fx["n-outside"] = { pz, want: ee };
+  }
+  { // d) ні клієнта, ні примітки → без угоди, як і було
+    const pz = await deal({ manager: 1, pipeline: PZ, ck: null }); await ev(pz, PZ, Q, sec(T2, 1800));
+    await deal({ manager: 3, pipeline: FC[0], ck: "n-z", created: sec(T2, 1801) });
+    fx["n-none"] = { pz, want: null };
+  }
 });
 
 after(async () => {
@@ -633,4 +662,45 @@ test("#1091c ЖИВИЙ SQL: історія успіхів — лише FC-142 �
   assert.equal(cls.get(pzOne), "success", "🔴 клієнт з одним успіхом до передачі визнаний постійним");
   assert.deepEqual([hm.totals.success.n, hm.totals.success.sum, hm.totals.regular.n, hm.totals.regular.sum], [1, 5000, 1, 5000],
     "🔴 гроші лідгена не без постійного, або постійного не названо числом");
+});
+
+/**
+ * #1093 — МЕЖА «УСПІШНОГО ДЗВІНКА» НЕВКЛЮЧНА: розмова ДОВША за 8 с, як фільтр Ringostat «тривалість
+ * більше 00:08», яким рахує Ярослав (30.09.2026: з `>= 8` Сердюк мав 1 106 проти 1 102 у Ringostat — рівно
+ * 4 дзвінки по 8 с). Справжній `leadgenStats` на тимчасовій базі; фікстура — по обидва боки межі:
+ * 7 і 8 с — ні, 9 і 60 с — так; вхідний 60 с — ні (напрямок).
+ * 🧨 САБОТАЖ: у `callsQuery` (`leadgenStats.ts`) `c.billsec > $4` → `c.billsec >= $4` → червоніє.
+ */
+test("#1093 ЖИВИЙ SQL: успішний дзвінок — вихідний, розмова ДОВША за 8 с (8 с — ні, 9 с — так)", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { stats } = await core();
+  let k = 0;
+  for (const [type, sec] of [["out", 7], ["out", 8], ["out", 9], ["out", 60], ["in", 60]] as [string, number][]) {
+    await client!.query(`INSERT INTO ringostat_calls (uniqueid, calldate, call_type, billsec, manager_id) VALUES ($1, $2, $3, $4, 70)`,
+      [`gt8-${k++}`, utc("2025-01-14T10:00:00"), type, sec]);
+  }
+  const st = await stats.leadgenStats("2025-01-13", "2025-01-19");
+  const row = st.rows.find((r) => r.managerId === 70);
+  assert.ok(row, "фікстура вироджена — людини 70 у тижні немає");
+  assert.equal(row.calls, 2, "🔴 успішні дзвінки не ті: рахуються лише вихідні, ДОВШІ за 8 с (як фільтр Ringostat «більше 00:08»)");
+});
+
+/**
+ * #1094b — УГОДА МЕНЕДЖЕРА ЗА ПРИМІТКОЮ KOMMO, А НЕ ЗДОГАДОМ (30.09.2026, угода 62668945). Кожен бік:
+ * без клієнта, але з приміткою — звʼязано (раніше — «без угоди»); примітка проти здогаду — примітка;
+ * дочірня з примітки поза вікном цього входу — здогад; ні того, ні іншого — без угоди.
+ * 🧨 САБОТАЖ: у `handoffLinkQuery` поміняти пріоритети (`0 AS prio` ↔ `1 AS prio`) → червоніє «n-conflict»;
+ * прибрати вікно з гілки примітки → червоніє «n-outside».
+ */
+test("#1094b ЖИВИЙ SQL: угода менеджера — спершу за приміткою Kommo, здогад за клієнтом — лише без неї", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const rows = await run<{ pz_id: string; deal_id: string | null; link_prio: number | null }>(linkQ("2025-06-10", "2025-06-10"));
+  const got = new Map(rows.map((r) => [Number(r.pz_id), r]));
+  for (const [k, prio] of [["n-nokey", 0], ["n-conflict", 0], ["n-outside", 1], ["n-none", null]] as [string, number | null][]) {
+    const r = got.get(fx[k].pz);
+    assert.ok(r, `🔴 передача ${k} зникла з результату`);
+    assert.equal(r.deal_id == null ? null : Number(r.deal_id), fx[k].want, `🔴 ${k}: угода менеджера ${r.deal_id} замість ${fx[k].want}`);
+    assert.equal(r.link_prio == null ? null : Number(r.link_prio), prio, `🔴 ${k}: звʼязано не тим шляхом`);
+  }
+  assert.equal(rows.length, 4, "🔴 гілки звʼязку розмножили передачі");
 });

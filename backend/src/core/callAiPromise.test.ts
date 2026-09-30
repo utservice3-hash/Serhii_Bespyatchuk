@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { endOfKyivDay, nextWorkingDay, promiseDeadline, promiseState, worstPromiseState, DEFAULT_PROMISE_MINUTES, LATE_GRACE_MIN, type CallFact } from "./callAiPromise.js";
+import { endOfKyivDay, nextWorkingDay, promiseDeadline, promiseState, worstPromiseState, DEFAULT_PROMISE_MINUTES, type CallFact } from "./callAiPromise.js";
 
 /**
  * 🎯 #789–#790 — «ОБІЦЯВ І НЕ ПЕРЕДЗВОНИВ»: термін і стан обіцянки (рішення Романа 29.09.2026, П4–П7).
@@ -36,7 +36,7 @@ const MADE = END, DL = new Date("2026-09-25T09:20:00Z");
 const call = (min: number, callType: string, billsec: number): CallFact => ({ at: new Date(MADE.getTime() + min * 60_000), callType, billsec });
 
 /**
- * #790 — СТАН (П6-Б): наш вихідний із розмовою до терміну — «передзвонив», КОЛЕГИ теж; лише спроби — окремо;
+ * #790 — СТАН: вихідний із розмовою до терміну — «передзвонив» (чий саме — `#850`); лише спроби — окремо;
  * клієнт подзвонив сам — окремий стан, а не «передзвонив»; дзвінок після терміну не рятує; до терміну — «чекає»;
  * месенджер — «не перевіряється», навіть без жодного дзвінка. Рядок бере найгірший стан.
  * 🧨 Червоніє, якщо зарахувати дзвінок клієнта нашим, дзвінок після терміну, чи ставити прапорець на месенджер.
@@ -47,7 +47,7 @@ test("#790 СТАН ОБІЦЯНКИ: передзвонив / лише спро
   assert.equal(st("call", [call(10, "out", 40)]), "kept_talk", "🔴 наш вихідний із розмовою до терміну не зараховано");
   assert.equal(st("call", [call(10, "out", 0)]), "kept_attempt_only");
   assert.equal(st("call", [call(10, "in", 60)]), "client_called", "🔴 дзвінок клієнта зараховано як наш передзвін");
-  assert.equal(st("call", [call(200, "out", 60)]), "broken", "🔴 дзвінок через 3 год ПІСЛЯ терміну врятував обіцянку");
+  assert.equal(st("call", [call(200, "out", 60)]), "late", "🔴 дзвінок ПІСЛЯ терміну зараховано як вчасний");
   assert.equal(st("call", []), "broken");
   assert.equal(st("call", [], new Date(MADE.getTime() + 5 * 60_000)), "pending", "🔴 до терміну вже «не передзвонив»");
   assert.equal(st("message", []), "unverifiable", "🔴 обіцянку в месенджер позначено як невиконаний дзвінок");
@@ -57,21 +57,21 @@ test("#790 СТАН ОБІЦЯНКИ: передзвонив / лише спро
 });
 
 /**
- * #795 — «ЗАПІЗНИВСЯ» І СИНК RINGOSTAT (Роман 29.09.2026). Перший замір: 21 із 54 «не передзвонив» — передзвін до
- * 30 хв після терміну. Тепер наш вихідний до 2 год після терміну — «запізнився», пізніше чи ніколи — «не передзвонив»;
- * межа по ОБИДВА боки (1 год 59 хв — так, 2 год 01 хв — ні). І «не передзвонив» — лише коли дзвінки вже
- * синхронізовано за `термін + 2 год`: інакше свіжий передзвін, що ще не доїхав із Ringostat, читався б як порушення.
- * 🧨 Червоніє, якщо прибрати «запізнився», зсунути 2 год чи рахувати «не передзвонив» від «зараз», а не від синку.
+ * #850 — ЛИШЕ ТОЙ, ХТО ОБІЦЯВ, І «ЗАПІЗНИВСЯ» БЕЗ МЕЖІ (ТЗ «звіт тімліда», відповіді Романа 30.09.2026). Дзвінок
+ * колеги до терміну обіцянку НЕ виконує; дзвінок того, хто обіцяв, до терміну — «передзвонив», після — «запізнився»
+ * будь-коли (і через 3 доби); «не передзвонив» — поки його дзвінка немає; до синку за термін — «чекає».
+ * 🧨 Червоніє, якщо зарахувати колегу, повернути межу запізнення чи рахувати «не передзвонив» до синку.
  */
-test("#795 ЗАПІЗНИВСЯ: дзвінок до 2 год після терміну — жовтий, пізніше — не передзвонив; без синку за межу — чекає", () => {
-  assert.equal(LATE_GRACE_MIN, 120);
-  const far = new Date("2026-09-30T00:00:00Z");
-  const st = (calls: CallFact[], known = far) => promiseState({ channel: "call" }, MADE, DL, calls, known);
-  assert.equal(st([call(20 + 119, "out", 30)]), "late", "🔴 передзвін через 1 год 59 хв після терміну — не «запізнився»");
-  assert.equal(st([call(20 + 121, "out", 30)]), "broken", "🔴 передзвін через 2 год 01 хв після терміну — досі «запізнився»");
-  assert.equal(st([call(25, "out", 0)]), "late", "спроба після терміну — теж запізнення, а не порушення");
-  assert.equal(st([], new Date(DL.getTime() + 60 * 60_000)), "pending", "🔴 синк лише на годину за терміном, а вже «не передзвонив»");
-  assert.equal(st([], new Date(DL.getTime() + 121 * 60_000)), "broken", "дзеркало: синк за межею й дзвінка немає — не передзвонив");
-  assert.equal(worstPromiseState(["late", "kept_talk"]), "late");
-  assert.equal(worstPromiseState(["late", "broken"]), "broken");
+test("#850 ОБІЦЯНКА — ЛИШЕ ТОЙ, ХТО ОБІЦЯВ: колега не рахується, «запізнився» без межі, до синку — чекає", () => {
+  const far = new Date("2026-10-05T00:00:00Z");
+  const ME = 7, MATE = 8;
+  const by = (min: number, mgr: number, sec = 40): CallFact => ({ ...call(min, "out", sec), managerId: mgr });
+  const st = (calls: CallFact[], known = far) => promiseState({ channel: "call" }, MADE, DL, calls, known, ME);
+  assert.equal(st([by(10, ME)]), "kept_talk");
+  assert.equal(st([by(10, MATE)]), "broken", "🔴 дзвінок колеги до терміну виконав чужу обіцянку");
+  assert.equal(st([by(10, MATE), by(3 * 24 * 60, ME)]), "late", "🔴 передзвін через 3 доби — не «запізнився» (межу не знято)");
+  assert.equal(st([by(25, ME, 0)]), "late", "спроба після терміну — теж запізнення");
+  assert.equal(st([], new Date(DL.getTime() - 60_000)), "pending", "🔴 дзвінки ще не синхронізовано за термін, а вже «не передзвонив»");
+  assert.equal(st([], new Date(DL.getTime() + 60_000)), "broken", "дзеркало: синк за терміном і дзвінка немає — не передзвонив");
+  assert.equal(promiseState({ channel: "call" }, MADE, DL, [by(10, MATE)], far, null), "kept_talk", "невідомий менеджер — приписати нікому: рахується будь-хто");
 });
