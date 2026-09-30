@@ -124,7 +124,7 @@ import * as reactCycle from "../core/reactCycle.js";
 import * as reactCycleRules from "../core/reactCycleRules.js";
 import * as clientAliasNames from "../core/clientAliasNames.js";
 import * as categoryRules from "../core/categoryRules.js";
-import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf, kyivToday, isRealDate } from "../core/dates.js";
+import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf, kyivToday, isRealDate, periodNotOver } from "../core/dates.js";
 import { weekPlansForMonth } from "../core/weekPlan.js";
 import { sumDaysIntoBlocks } from "../core/weekFacts.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
@@ -9102,7 +9102,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // КВП: minule/тиждень → прогноз = факт). Зона = expectedZoneByScope (expM, той самий
   // предикат, що expectedPaymentsByPlanned.total). Добір — батчева двійня newBusinessDobir.
   const isFullMonth = from === from.slice(0, 7) + "-01" && to === monthEndOf(from) && from.slice(0, 7) === to.slice(0, 7);
-  const monthInProgress = isFullMonth && wdElapsed < wdTotal;
+  // Межа — календарна (`periodNotOver`): в останній робочий день wdElapsed == wdTotal, а місяць ще йде.
+  const monthInProgress = isFullMonth && periodNotOver(to, kyivToday);
   // 🔴 ДОБІР — ЧАСТКА, А НЕ ПОВТОРНЕ УСЕРЕДНЕННЯ (рішення власника 06.08.2026).
   // `newBusinessDobirByManager` рахував КОЖНОМУ власне середнє (raw_m ÷ місяців_m), і
   // такі середні НЕ АДИТИВНІ: Σ по менеджерах давала **1 599 273 ₴** проти справжніх

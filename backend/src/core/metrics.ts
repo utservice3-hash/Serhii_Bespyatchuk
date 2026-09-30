@@ -6,7 +6,7 @@ import { SCOPE_STATUSES, STUCK_MIN_DAYS, stuckBaseConds, stuckSignals, stuckCloc
 import { stageName } from "./stageNames.js";
 import { orphanManagerSql, orphanReason, type OrphanReason } from "./orphanClients.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
-import { monthEndOf } from "./dates.js";
+import { monthEndOf, periodNotOver, kyivToday } from "./dates.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
 import { dayBucketCase } from "./dayBuckets.js";
 
@@ -3897,7 +3897,8 @@ export async function buildProjection(s: ProjectionScope, plan?: number | null):
   ]);
   const fact = proj.fact;
   const gran = s.granularity ?? "month";
-  const monthInProgress = gran === "month" && proj.elapsedWorkingDays < proj.totalWorkingDays;
+  // Межа — календарна (`periodNotOver`), не «робочих днів минуло < усього»: див. її доккоментар.
+  const monthInProgress = gran === "month" && periodNotOver(s.to ?? kyivToday());
   const zoneFull = monthInProgress ? expected.total.sum : 0;
   const zoneDeals = monthInProgress ? expected.total.deals : 0;
   const dobir = monthInProgress ? await newBusinessDobir({ managerId: s.managerId, teamId: s.teamId }) : 0;

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { monthKeys, expectedSplitByMonth, forecastMonth, paceProjection } from "./forecast.js";
+import { periodNotOver } from "./dates.js";
 
 /**
  * K8 — ПРОГНОЗ КВП РАХУЄТЬСЯ ТИМ САМИМ КОДОМ, ЩО ПРОГНОЗ КАРТКИ МЕНЕДЖЕРА.
@@ -203,4 +204,20 @@ test("#357e ПРОВОДКА: обидві половини «з минулих 
   assert.match(s, /expectedOverdue: delta\(current\.expected\.overdue\.sum/,
     "🔴 зникло ПЕРЕДІСНУЮЧЕ «прострочено» КВП: нове число з межею «місяць» посіло поле "
     + "величини з межею «сьогодні» — два різні питання під одним підписом");
+});
+
+test("#1170 МІСЯЦЬ ТРИВАЄ ДО КІНЦЯ СВОГО ОСТАННЬОГО ДНЯ — і прогноз Звіту бере саме цю межу", () => {
+  // Заміряно 30.09.2026: в останній робочий день «минуло == усього», і Звіт показував
+  // прогноз = факт у всіх (`#65`: 0 менеджерів із планом). Фікстура — по обидва боки межі.
+  assert.equal(periodNotOver("2026-09-30", "2026-09-29"), true, "🔴 передостанній день — місяць завершено?");
+  assert.equal(periodNotOver("2026-09-30", "2026-09-30"), true,
+    "🔴 останній день місяця вважається завершеним — прогноз Звіту стане фактом ще до кінця дня");
+  assert.equal(periodNotOver("2026-10-31", "2026-10-31"), true, "🔴 субота 31-го — теж ще жовтень");
+  assert.equal(periodNotOver("2026-09-30", "2026-10-01"), false,
+    "🔴 минулий місяць знову «триває» — у нього домальовується очікування");
+  // Обидва читачі — ядро й роут Звіту — беруть саме цю межу, а не підрахунок робочих днів.
+  const core = readFileSync(path.join(SRC, "core", "metrics.ts"), "utf8");
+  const route = routes();
+  assert.match(core, /const monthInProgress = gran === "month" && periodNotOver\(/, "🔴 buildProjection не бере periodNotOver");
+  assert.match(route, /const monthInProgress = isFullMonth && periodNotOver\(to, kyivToday\)/, "🔴 /report-plan не бере periodNotOver");
 });
