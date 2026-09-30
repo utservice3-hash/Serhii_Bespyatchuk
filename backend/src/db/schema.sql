@@ -4025,6 +4025,35 @@ CREATE TABLE IF NOT EXISTS client_plan_basis (
   CONSTRAINT client_plan_basis_one CHECK ((call_uniqueid IS NULL) <> (contact_id IS NULL))
 );
 
+-- 🔁 ЦИКЛ РЕАКТИВАЦІЇ (ТЗ Юлі 22.09.2026, блок 4; задача 4313) — див. core/reactCycle.ts.
+-- Рядок = РІШЕННЯ по клієнту в одному циклі; цикл = місяць, коли клієнт упав у реактивацію
+-- (4-й місяць без рахунку). Немає рядка = рішення ще не було — це і є стан «чекає кнопки».
+-- Пул лідгенів — відкритий рядок з `pooled_at`; «взяв» закриває його й закріплює клієнта за
+-- лідгеном звичайним `loyalty_overrides`. У Kommo нічого не пишеться.
+-- ⚠️ revert коду таблицю не прибирає; закріплення, зроблені «Взяти», лишаються в loyalty_overrides.
+CREATE TABLE IF NOT EXISTS client_react_cycles (
+  client_key          TEXT NOT NULL,
+  cycle_month         DATE NOT NULL CHECK (cycle_month = date_trunc('month', cycle_month)::date),
+  decision            TEXT CHECK (decision IN ('self', 'leadgen')),
+  decided_by          INTEGER REFERENCES users(id),
+  decided_at          TIMESTAMPTZ,
+  pooled_at           TIMESTAMPTZ,
+  pool_reason         TEXT CHECK (pool_reason IN ('manager', 'auto', 'self_expired')),
+  from_manager_id     INTEGER,
+  taken_by_manager_id INTEGER,
+  taken_at            TIMESTAMPTZ,
+  closed_at           TIMESTAMPTZ,
+  close_reason        TEXT CHECK (close_reason IN ('invoice', 'taken')),
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (client_key, cycle_month),
+  CONSTRAINT client_react_cycles_pool CHECK ((pooled_at IS NULL) = (pool_reason IS NULL)),
+  CONSTRAINT client_react_cycles_close CHECK ((closed_at IS NULL) = (close_reason IS NULL)),
+  CONSTRAINT client_react_cycles_decided CHECK ((decision IS NULL) = (decided_at IS NULL))
+);
+-- У пулі клієнт буває ОДИН раз за раз: другий відкритий рядок — це вже подвійна видача.
+CREATE UNIQUE INDEX IF NOT EXISTS client_react_cycles_one_open_pool
+  ON client_react_cycles(client_key) WHERE pooled_at IS NOT NULL AND closed_at IS NULL;
+
 -- 🎓 ОДНОРАЗОВИЙ ПЕРЕНОС АКАДЕМІЇ SEREDA (23.09.2026, рішення Романа: «переносимо все, далі навчання живе
 -- на нашому сервері»). `external_id` — ключ ідемпотентності імпорту: повторний прогін ОНОВЛЮЄ той самий
 -- рядок, а не створює другий. Після переносу Sereda не потрібна; колонки лишаються слідом походження.

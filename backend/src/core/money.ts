@@ -418,6 +418,30 @@ export const fromInvoiceTotal = async (s: MoneyScope): Promise<MoneyAgg> => {
   return { revenue: rows.reduce((a, r) => a + r.revenue, 0), deals: rows.reduce((a, r) => a + r.deals, 0) };
 };
 
+/**
+ * 🔁 ДАТА ОСТАННЬОГО РАХУНКУ ПО КЛІЄНТУ (ТЗ Юлі 22.09, блок 4, п.4.1; задача 4313) — за Києвом, `YYYY-MM-DD`.
+ *
+ * «Рахунок виставлено» = той самий анкер, що й факт екрана «з рахунку» (`sourceSql("fromInvoice")`):
+ * перший вхід угоди в «Виставлення рахунку» або будь-який етап після нього; програні — ні. Останній
+ * рахунок клієнта = найпізніший такий анкер серед його угод. Окремої копії правила тут немає — інакше
+ * «без рахунку 3 місяці» і «факт з рахунку» розійшлися б на тих самих угодах.
+ *
+ * Клієнта без жодного рахунку в мапі немає (читач сам вирішує, що означає відсутність).
+ */
+export async function lastInvoiceByClientKey(keys: string[]): Promise<Map<string, string>> {
+  if (!keys.length) return new Map();
+  const p: unknown[] = [];
+  const src = sourceSql("fromInvoice", p);
+  p.push(keys);
+  const rows = (await pool.query<{ ck: string; d: string }>(
+    `SELECT dd.client_key AS ck, to_char(MAX(src.anchor_at AT TIME ZONE 'Europe/Kyiv'), 'YYYY-MM-DD') AS d
+       FROM (${src}) src
+       JOIN deals dd ON dd.kommo_id = src.kommo_id
+      WHERE dd.client_key = ANY($${p.length})
+      GROUP BY 1`, p)).rows;
+  return new Map(rows.map((r) => [r.ck, r.d]));
+}
+
 export interface ClientBucketRow { clientKey: string; bucket: string; revenue: number; deals: number }
 /**
  * ① по клієнту × календарному бакету (день/тиждень/місяць) — для міні-барів

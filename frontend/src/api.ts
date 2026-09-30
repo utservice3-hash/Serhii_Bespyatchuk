@@ -3853,6 +3853,10 @@ export interface ClientPlanRow {
   history: number[]; plan: number; planStatus: "draft" | "pending" | "approved" | "none";
   /** 🗂 Вкладка й порядок «Всі» (ТЗ 22.09, п.3.1) — з сервера (`core/clientTabs.ts`), фронт не рахує. */
   tabGroup: "regular" | "yellow" | "react";
+  /** 🧾 Останній виставлений рахунок (київська дата) — основа вкладки «Реактивація» з блоку 4. */
+  lastInvoice?: string | null;
+  /** 🔁 Цикл реактивації (ТЗ 22.09, блок 4) — лише у вкладці «Реактивація», решті `null`. */
+  reactCycle?: ReactCycleView | null;
   reviewNote: string | null; weeks: ClientPlanWeek[];
   /** 🧾 Факт «з рахунку і далі» (ТЗ 22.09, п.2.1) — не «успішно реалізовано». */
   fact: number; pct: number | null;
@@ -3922,6 +3926,10 @@ export interface ClientPlansResp {
   month: string; historyMonths: string[];
   /** Порядок груп у вкладці «Всі» — з сервера, щоб фронт не тримав копії. */
   tabGroupRank: Record<"regular" | "yellow" | "react", number>;
+  /** 🔁 Пул лідгенів (ТЗ 22.09, блок 4): хто бачить вкладку пулу і хто бере — вирішує сервер. */
+  leadgenPool?: { canSee: boolean; canTake: boolean };
+  /** 🔁 Числа правила реактивації з ядра — для підпису, фронт їх не рахує. */
+  reactRules?: { quietMonths: number; selfGraceMonths: number; launchMonth: string };
   weeks: { label: string; from: string; to: string; status: "past" | "current" | "future"; workingDays: number }[];
   /** Довідники дій, що переїхали з вкладки «Реактивація». Приходять із ядра. */
   closeReasons?: { key: string; label: string }[];
@@ -3940,7 +3948,7 @@ export interface ClientPlansResp {
     /** Скільки рядків у списку — ЛИШЕ через план (клієнт уже не активний). */
     planOnlyClients: number;
     /** 🔢 Три цифри реактивації (ТЗ 3989): у роботі · повернуто за місяць · Σ повернутої маржі; gapDays — поріг «повернуто». */
-    react?: { inWork: number; returnedMonth: number; returnedMargin: number; gapDays: number };
+    react?: { inWork: number; inPool?: number; returnedMonth: number; returnedMargin: number; gapDays: number };
     rosterClients: number;
     byState: { active: number; reactivation: number; planOnly: number };
     /** 🕳 Плани без клієнтського рядка. `canSee` вирішує СЕРВЕР (isAdminScope). */
@@ -4049,7 +4057,43 @@ export async function fetchContactFileBlobUrl(id: number): Promise<string> {
   return URL.createObjectURL(data as Blob);
 }
 
+/**
+ * 🔁 ЦИКЛ РЕАКТИВАЦІЇ (ТЗ 22.09, блок 4; `core/reactCycleRules.ts`). Стан і дозволені кнопки рахує сервер.
+ * waiting — рішення ще немає · self — «реактивую сам» · pool — у пулі лідгенів · taken — взяв лідген.
+ */
+export interface ReactCycleView {
+  cycleMonth: string;
+  lastInvoice: string | null;
+  status: "waiting" | "self" | "pool" | "taken";
+  poolReason: "manager" | "auto" | "self_expired" | null;
+  /** Останній місяць, до кінця якого рахунок або дія ще рятують від автопередачі; null — строку немає. */
+  deadline: string | null;
+  daysLeft: number | null;
+  allowed: ("self" | "leadgen")[];
+}
+export async function reactDecision(p: { clientKey: string; decision: "self" | "leadgen" }): Promise<ReactCycleView> {
+  const { data } = await api.post<{ reactCycle: ReactCycleView }>("/dashboard/react-decision", p);
+  return data.reactCycle;
+}
+export interface LeadgenPoolRow {
+  clientKey: string; clientName: string; pooledAt: string;
+  poolReason: "manager" | "auto" | "self_expired";
+  fromManagerName: string | null; lastInvoice: string | null;
+  /** ① за весь час — щоб лідген бачив, кого брати першим. */
+  successRevenue: number; successDeals: number;
+}
+export async function fetchLeadgenPool(): Promise<{ canTake: boolean; rows: LeadgenPoolRow[]; revivedClosed: number }> {
+  const { data } = await api.get<{ canTake: boolean; rows: LeadgenPoolRow[]; revivedClosed: number }>("/dashboard/leadgen-pool");
+  return data;
+}
+export async function takeFromLeadgenPool(clientKey: string): Promise<void> {
+  await api.post("/dashboard/leadgen-pool/take", { clientKey });
+}
+
 export interface ClientCard {
+  /** 🔁 Цикл реактивації — те саме, що в рядку списку; `null` — клієнт не в реактивації. */
+  reactCycle?: ReactCycleView | null;
+  lastInvoice?: string | null;
   /** 🔗 Приєднані записи CRM — ТЗ 22.09, п.2.3. */
   merged?: AliasName[];
   /** 📱 Контакти з клієнтом поза дзвінками (Viber/Telegram/…), зі скринами. */

@@ -80,6 +80,7 @@ import { syncFirstTouch } from "./jobs/syncFirstTouch.js";
 import { recomputeStatistics, getStatisticsStatus } from "./jobs/recomputeStatistics.js";
 import { recomputeClientKeys } from "./jobs/recomputeClientKeys.js";
 import { closeExpiredCandidateAccess } from "./jobs/hiringAccess.js";
+import { runReactCycleSweep } from "./jobs/reactCycleSweep.js";
 import { syncRingostatCalls, getRingostatStatus } from "./jobs/syncRingostatCalls.js";
 import { syncTldv } from "./jobs/syncTldv.js";
 import { syncWorkua } from "./jobs/syncWorkua.js";
@@ -427,6 +428,15 @@ cron.schedule("20 4 * * *", () => {
     return { closed: n };
   });
 });
+
+/**
+ * 🔁 Цикл реактивації (ТЗ 22.09, блок 4, п.4.3; задача 4313): щоночі о 00:40 за Києвом — ожилих
+ * клієнтів прибрати з пулу лідгенів, тих, у кого минув строк без рахунку й без дії, — покласти в пул.
+ * Щодня, а не 1-го: пропущена ніч зсуває передачу на добу, а не на місяць. everyMin == 1440 у нагляді.
+ */
+cron.schedule("40 0 * * *", () => {
+  void runJob("reactCycleSweep", () => runReactCycleSweep());
+}, { timezone: "Europe/Kyiv" });
 
 // КРОК 4 (Звірка) + AUTO-HEAL. ЩОНОЧІ 03:35 — лише ОСТАННІ 2 МІСЯЦІ: швидко/дешево,
 // ловить свіжу дормантність (угода не встигає застаріти непоміченою). Читає Kommo API.
@@ -876,6 +886,7 @@ const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["recomputeStatistics", () => recomputeStatistics()],
   ["recomputeClientKeys", () => recomputeClientKeys()],
   ["hiringAccess", () => closeExpiredCandidateAccess()],
+  ["reactCycleSweep", () => runReactCycleSweep()],
   ["syncReceivables", () => syncReceivables()],
   ["syncLeadgenRegistry", () => syncLeadgenRegistry()],
   ["syncFirstTouch", () => syncFirstTouch()],
