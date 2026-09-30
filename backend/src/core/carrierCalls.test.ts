@@ -477,7 +477,7 @@ test("#961 КАРТКА · ЖИВА СХЕМА: лише дзвінки мобі
 });
 
 interface CarrierView {
-  CARRIER_TABS: readonly { key: string; label: string }[];
+  CARRIER_TABS: readonly { key: string; label: string; hint: string }[];
   tabOf: (c: string) => string | null;
   CATEGORY_UI: Record<string, { label: string }>;
   OTHER_TYPE_UI: Record<string, string>;
@@ -708,7 +708,7 @@ test("#1040 ЧЕРГА · ЖИВА СХЕМА: лише невпевнені н�
   const B = 98000; await seedDecide(c, B);
   const q1 = await decisionQueue(c.db, NOW);
   assert.deepEqual(q1.pending.map((x) => x.kommoId).sort(), [B + 1, B + 2, B + 3], "🔴 черга — не рівно невпевнені на етапі");
-  assert.deepEqual(q1.pending.map((x) => x.why).sort(), ["невпевнено", "не чути", "цитата менеджера"].sort());
+  assert.deepEqual(q1.pending.map((x) => x.why).sort(), ["впевненість нижче 85%", "розмову не розібрати", "доказ — слова менеджера, а не того, хто дзвонив"].sort());
   assert.equal((await recordDecision(c.db, B + 1, "client", null, "", lead(7), NOW)).ok, true);
   const q2 = await decisionQueue(c.db, NOW);
   assert.ok(!q2.pending.some((x) => x.kommoId === B + 1), "🔴 вирішена угода лишилась у черзі");
@@ -767,10 +767,10 @@ test("#1043 ЧОМУ НЕ ВПЕВНЕНИЙ: чотири різні причи
   const { whyUncertain } = await import("./carrierDecisions.js");
   const w = (role: CarrierResult["caller_role"], conf: number, qc: CarrierResult["quote_check"]) =>
     whyUncertain({ caller_role: role, caller_role_confidence: conf, quote_check: qc });
-  assert.equal(w("carrier", 0.8, "counterpart"), "невпевнено");
-  assert.equal(w("carrier", 0.95, "manager"), "цитата менеджера");
-  assert.equal(w("client", 0.95, "absent"), "цитата не знайдена");
-  assert.equal(w("unclear", 0.3, "empty"), "не чути");
+  assert.equal(w("carrier", 0.8, "counterpart"), "впевненість нижче 85%");
+  assert.equal(w("carrier", 0.95, "manager"), "доказ — слова менеджера, а не того, хто дзвонив");
+  assert.equal(w("client", 0.95, "absent"), "у розмові немає фрази-доказу");
+  assert.equal(w("unclear", 0.3, "empty"), "розмову не розібрати");
   assert.equal(w("carrier", 0.95, "counterpart"), null, "🔴 упевнений вердикт отримав причину — потрапить у чергу");
   assert.equal(w("other", 0.9, "empty"), null);
 });
@@ -1151,7 +1151,8 @@ test("#1069 ПРОВОДКА ФРОНТУ: вкладки ТЗ, картка у�
     assert.ok(api.includes(p), `🔴 api не ходить на ${p}`);
   assert.match(api, /\/audio`, \{ responseType: "blob" \}/, "🔴 запис не йде байтами з нашого сервера");
   const V = await loadCarrierView();
-  assert.deepEqual(V.CARRIER_TABS.map((x) => x.label), ["Клієнти", "Перевізники", "Інше", "На перевірці"], "🔴 вкладки ≠ ТЗ");
+  assert.deepEqual(V.CARRIER_TABS.map((x) => x.label), ["Клієнти", "Перевізники", "Інше", "AI не впевнений"], "🔴 вкладки ≠ ТЗ (четверта — «AI не впевнений», Роман 30.09.2026)");
+  assert.ok(V.CARRIER_TABS.every((x) => x.hint.length > 20), "🔴 у вкладки немає пояснення під ⓘ");
   assert.deepEqual(["client", "carrier", "other", "review", "error", "waiting", "no_talk"].map(V.tabOf), ["client", "carrier", "other", "review", "review", "review", null],
     "🔴 нерозсортоване (помилка, AI слухає) загубилось з вкладок або «без розмови» потрапило у вкладку");
   assert.deepEqual(Object.keys(V.CATEGORY_UI).sort(), ["carrier", "client", "error", "no_talk", "other", "review", "waiting"]);
@@ -1476,7 +1477,7 @@ test("#1079 ЕКРАН МЕНЕДЖЕРА: без службового рядк�
   assert.match(sec, /const isManager = roleKey === "manager";/);
   assert.match(sec, /const isLead = roleKey !== "manager" && roleKey !== "team_lead";/, "🔴 керівництво визначено не як «не менеджер і не тімлід»");
   assert.match(sec, /\{meta && isLead && \(\s*<p/, "🔴 службовий рядок бачить не лише керівництво");
-  assert.match(sec, /\{!isManager && <th style=\{cell\}>Менеджер<\/th>\}/, "🔴 колонка «Менеджер» є в менеджера");
+  assert.match(sec, /\{!isManager && <th style=\{cell\}><Hd t="Менеджер" /, "🔴 колонка «Менеджер» є в менеджера");
   assert.match(sec, /\{meta && isLead && meta\.agreement\.length > 0 && \(/, "🔴 точність AI бачить не лише керівництво");
   assert.match(readFileSync(FE("pages/Dashboard.tsx"), "utf8"), /<CarrierCallsSection roleKey=\{auth\?\.roleKey \?\? null\} \/>/, "🔴 роль не передано в секцію");
   const card = readFileSync(FE("pages/dashboard/sections/CarrierReportCard.tsx"), "utf8");

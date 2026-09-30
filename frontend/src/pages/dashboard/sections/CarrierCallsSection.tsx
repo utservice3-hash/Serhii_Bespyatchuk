@@ -5,7 +5,7 @@ import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
 import { jobErrorIsCurrent, mmss } from "../aiCallsView";
-import { CARRIER_STAGE_STATUS, CARRIER_TABS, CATEGORY_UI, OTHER_TYPE_UI, ROLE_UI, TONE, closeLabel, closeModeLabel, confLabel, dealStatusLabel, deciderLabel,
+import { CARRIER_STAGE_STATUS, CARRIER_TABS, CATEGORY_UI, OTHER_TYPE_UI, OTHER_TYPES_HINT, ROLE_UI, TONE, closeLabel, closeModeLabel, dealStatusLabel, deciderLabel, pctLabel,
   otherModeLabel, tabOf, type CarrierTab } from "../carrierCallsView";
 import { CarrierDealPanel, pill } from "./CarrierDealPanel";
 
@@ -25,16 +25,22 @@ const fmtDate = (iso: string) => new Date(iso).toLocaleDateString("uk-UA", { tim
 const usd = (v: number) => `$${v.toFixed(2)}`;
 const muted: React.CSSProperties = { color: "var(--text-muted)" };
 
+/** Заголовок колонки з поясненням під ⓘ (прохання Романа 30.09.2026: «знаки питання над незрозумілими значеннями»). */
+function Hd({ t, h }: { t: string; h: string }) {
+  return <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>{t}<InfoHint text={h} /></span>;
+}
+
 function Verdict({ r }: { r: CarrierDealT }) {
   const cat = CATEGORY_UI[r.category];
   return (
     <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-      <span style={pill(TONE[cat.tone].bg, TONE[cat.tone].fg)}>{cat.label}{r.otherType ? ` · ${OTHER_TYPE_UI[r.otherType]}` : ""}</span>
-      {r.overdue && <span title={`Треба було розібрати до ${fmtTime(r.reviewDeadline!)}`} style={pill(TONE.bad.bg, TONE.bad.fg)}>прострочено</span>}
-      <span style={{ fontSize: 12, ...muted, fontVariantNumeric: "tabular-nums" }}>
-        {r.source === "human" && r.human ? deciderLabel(r.human.role)
-          : r.source === "ai" ? `AI ${confLabel(r.ai.confidence)}`
-          : r.ai.verdict ? `AI: ${ROLE_UI[r.ai.verdict]?.label ?? r.ai.verdict} ${confLabel(r.ai.confidence)}` : ""}
+      <span title={cat.hint} style={pill(TONE[cat.tone].bg, TONE[cat.tone].fg)}>{cat.label}{r.otherType ? ` · ${OTHER_TYPE_UI[r.otherType]}` : ""}</span>
+      {r.overdue && <span title={`Не розібрано до кінця робочого дня: треба було до ${fmtTime(r.reviewDeadline!)}`} style={pill(TONE.bad.bg, TONE.bad.fg)}>прострочено</span>}
+      <span style={{ fontSize: 12, ...muted, fontVariantNumeric: "tabular-nums" }}
+        title={r.source === "human" ? "Так вирішила людина — це сильніше за AI" : "Впевненість AI: наскільки він певен у вердикті. Від 85% — рішення приймає сам, нижче — вирішуєте ви"}>
+        {r.source === "human" && r.human ? `вирішив ${deciderLabel(r.human.role)}`
+          : r.source === "ai" ? `AI, впевненість ${pctLabel(r.ai.confidence)}`
+          : r.ai.verdict ? `AI думає: ${ROLE_UI[r.ai.verdict]?.label ?? r.ai.verdict}, ${pctLabel(r.ai.confidence)}` : ""}
       </span>
     </span>
   );
@@ -126,9 +132,9 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
         )}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>
           {[
-            ["Прибрав фільтр", k.removedByFilter, "Фільтр CRM закрив як «Перевізник» (Lardi, відомі перевізники). AI їх не слухає."],
-            ["Після фільтра", k.leftAfterFilter - k.noTalk, `Лишились на етапі після фільтра й мали розмову — усі вкладки разом. Чекають розмову: ${String(k.waitingTalk)}.`],
-            ["Без розмови", k.noTalk, "Розмови від 10 с не було (пропущений або короткий дзвінок): не аналізуємо, дашборд закриває в CRM як «Немає зв'язку»."],
+            ["Відсіяв фільтр CRM", k.removedByFilter, "Угоди, які фільтр CRM закрив сам як «Перевізник» ще до AI: номер із Lardi чи зі списку відомих перевізників. AI їх не слухає."],
+            ["Слухав AI", k.leftAfterFilter - k.noTalk, `Угоди, що пройшли фільтр CRM і мали розмову від 10 с, — усі чотири вкладки нижче разом. Ще чекають розмову: ${String(k.waitingTalk)}.`],
+            ["Без розмови", k.noTalk, "Розмови від 10 с не було (пропущений або короткий дзвінок): AI не слухає, через 4 год дашборд закриває угоду в CRM як «Немає зв'язку»."],
           ].map(([l, v, h]) => (
             <div key={String(l)} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px", minWidth: 130, flex: "1 1 130px" }}>
               <div style={{ fontSize: 22, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{Number(v).toLocaleString("uk-UA")}</div>
@@ -146,6 +152,7 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
                 background: tab === t.key ? "var(--accent-bg, #e8f0fb)" : "transparent", fontWeight: tab === t.key ? 600 : 400, color: "var(--text)" }}>
               {t.label} <span key={count(t.key)} className="cq-pop" style={{ fontVariantNumeric: "tabular-nums" }}>{count(t.key)}</span>
               {t.key === "review" && overdueN > 0 && <span style={{ ...pill(TONE.bad.bg, TONE.bad.fg), marginLeft: 6 }}>{overdueN} прострочено</span>}
+              <span onClick={(e) => e.stopPropagation()} style={{ marginLeft: 4 }}><InfoHint text={t.hint} /></span>
             </button>
           ))}
         </div>
@@ -163,10 +170,11 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
               );
             })}
             {unknownSub > 0 && <span style={{ fontSize: 12.5, ...muted, alignSelf: "center" }}>без підтипу (до 30.09): {unknownSub}</span>}
+            <span style={{ alignSelf: "center" }}><InfoHint text={OTHER_TYPES_HINT} /></span>
           </div>
         )}
         {tab === "review" && reviewOutside > 0 && (
-          <p style={{ margin: "8px 0 0", fontSize: 12.5, color: "var(--warn)" }}>Ще {reviewOutside} на перевірці з угод поза цим періодом — розширте період.</p>
+          <p style={{ margin: "8px 0 0", fontSize: 12.5, color: "var(--warn)" }}>Ще {reviewOutside} угод, де AI не впевнений, — поза цим періодом. Розширте період.</p>
         )}
       </div>
 
@@ -177,8 +185,12 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
               <thead>
                 <tr style={{ textAlign: "left", ...muted, fontSize: 12.5 }}>
-                  <th style={cell}>Угода</th><th style={cell}>Розмова</th>{!isManager && <th style={cell}>Менеджер</th>}<th style={cell}>Хто це</th>
-                  <th style={cell}>Чому</th><th style={cell}>У CRM</th>
+                  <th style={cell}><Hd t="Угода" h="Номер угоди в Kommo (клік — відкрити в CRM) і коли її створено." /></th>
+                  <th style={cell}><Hd t="Розмова" h="Перша розмова від 10 с з цим номером: коли, вхідна чи вихідна, тривалість." /></th>
+                  {!isManager && <th style={cell}><Hd t="Менеджер" h="Відповідальний за угоду в Kommo." /></th>}
+                  <th style={cell}><Hd t="Хто дзвонив" h="Вердикт: клієнт, перевізник чи інше. Поруч — хто вирішив (AI з відсотком впевненості чи людина). Від 85% AI вирішує сам." /></th>
+                  <th style={cell}><Hd t="Пояснення" h="Чому саме такий вердикт: пояснення AI, коментар людини або чому AI не впевнений." /></th>
+                  <th style={cell}><Hd t="У CRM" h="Що дашборд зробив з угодою в Kommo і в якому вона стані зараз (оновлюється раз на 30 хв)." /></th>
                 </tr>
               </thead>
               <tbody key={tab} className="cq-fade">
@@ -192,12 +204,12 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
                         style={{ borderTop: "1px solid var(--border)", cursor: "pointer", background: isOpen ? "var(--surface-2)" : undefined }}>
                         <td style={{ ...cell, whiteSpace: "nowrap" }}>
                           <a href={r.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>№ {r.kommoId}</a>
-                          <div style={{ fontSize: 12, ...muted }}>{fmtTime(r.createdAt)}{r.reused ? " · вердикт номера" : ""}</div>
+                          <div style={{ fontSize: 12, ...muted }}>{fmtTime(r.createdAt)}{r.reused && <span title="Цей номер уже дзвонив за останні 30 днів — вердикт узято з тієї розмови, вдруге не слухаємо"> · вердикт з попереднього дзвінка</span>}</div>
                         </td>
                         <td style={{ ...cell, whiteSpace: "nowrap" }}>
                           {r.calledAt
-                            ? <>{fmtTime(r.calledAt)}<div style={{ fontSize: 12, ...muted }}>{r.direction === "in" ? "вхідний" : "вихідний"} · {mmss(r.billsec ?? 0)}{r.talkNo === 2 ? " · друга розмова" : ""}</div></>
-                            : <span style={muted}>{r.dealState === "no_talk" ? "без розмови від 10 с" : "ще немає"}</span>}
+                            ? <>{fmtTime(r.calledAt)}<div style={{ fontSize: 12, ...muted }}>{r.direction === "in" ? "вхідний" : "вихідний"} · {mmss(r.billsec ?? 0)}{r.talkNo === 2 && <span title="Першу розмову не вдалось розібрати — AI послухав наступну розмову з цим номером"> · друга розмова</span>}</div></>
+                            : <span style={muted} title={r.dealState === "no_talk" ? CATEGORY_UI.no_talk.hint : "Розмови від 10 с ще не було — чекаємо дзвінок"}>{r.dealState === "no_talk" ? "без розмови від 10 с" : "розмови ще не було"}</span>}
                         </td>
                         {!isManager && <td style={cell}>{r.managerName ?? <span style={muted}>невідомий</span>}{r.teamName && <div style={{ fontSize: 12, ...muted }}>{r.teamName}</div>}</td>}
                         <td style={cell}><Verdict r={r} /></td>

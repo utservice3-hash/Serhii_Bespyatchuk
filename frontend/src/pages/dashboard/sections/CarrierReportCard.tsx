@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { fetchCarrierCalls, fetchCarrierReport, type CarrierDealT, type CarrierReportLineT, type CarrierReportResp } from "../../../api";
 import { InfoHint } from "../widgets";
-import { CATEGORY_UI, OTHER_TYPE_UI, TONE, confLabel, deciderLabel } from "../carrierCallsView";
+import { CATEGORY_UI, OTHER_TYPE_UI, TONE, deciderLabel, pctLabel } from "../carrierCallsView";
 import { pill } from "./CarrierDealPanel";
 
 /**
@@ -12,15 +12,15 @@ import { pill } from "./CarrierDealPanel";
  */
 
 type Col = "total" | "clients" | "carriersAuto" | "carriersManual" | "otherAuto" | "otherManual" | "unsorted" | "overdue";
-const COLS: readonly { key: Col; label: string; match: (r: CarrierDealT) => boolean }[] = [
-  { key: "total", label: "Усього", match: (r) => r.category !== "no_talk" },
-  { key: "clients", label: "Клієнти", match: (r) => r.category === "client" },
-  { key: "carriersAuto", label: "Перевізники · AI", match: (r) => r.category === "carrier" && r.source !== "human" },
-  { key: "carriersManual", label: "Перевізники · вручну", match: (r) => r.category === "carrier" && r.source === "human" },
-  { key: "otherAuto", label: "Інше · AI", match: (r) => r.category === "other" && r.source !== "human" },
-  { key: "otherManual", label: "Інше · вручну", match: (r) => r.category === "other" && r.source === "human" },
-  { key: "unsorted", label: "Не розібрано", match: (r) => r.category === "review" || r.category === "error" || r.category === "waiting" },
-  { key: "overdue", label: "з них прострочено", match: (r) => r.overdue },
+const COLS: readonly { key: Col; label: string; hint: string; match: (r: CarrierDealT) => boolean }[] = [
+  { key: "total", label: "Усього", hint: "Усі угоди «Дзвінки на мобільні» менеджера за період, які слухав AI (без відсіяних фільтром і без розмови).", match: (r) => r.category !== "no_talk" },
+  { key: "clients", label: "Клієнти", hint: "Виявились клієнтами — угода лишилась на етапі.", match: (r) => r.category === "client" },
+  { key: "carriersAuto", label: "Перевізники (AI)", hint: "Перевізники, яких AI визначив сам (певен від 85%) і закрив у CRM.", match: (r) => r.category === "carrier" && r.source !== "human" },
+  { key: "carriersManual", label: "Перевізники (людина)", hint: "Перевізники, яких визначила людина після прослуховування.", match: (r) => r.category === "carrier" && r.source === "human" },
+  { key: "otherAuto", label: "Інше (AI)", hint: "Не клієнт і не перевізник (спам, постачальник, робота, особисте, помилка номера) — визначив AI.", match: (r) => r.category === "other" && r.source !== "human" },
+  { key: "otherManual", label: "Інше (людина)", hint: "Не клієнт і не перевізник — визначила людина.", match: (r) => r.category === "other" && r.source === "human" },
+  { key: "unsorted", label: "Чекають рішення", hint: "AI не впевнений, помилка обробки або AI ще слухає — рішення за менеджером.", match: (r) => r.category === "review" || r.category === "error" || r.category === "waiting" },
+  { key: "overdue", label: "Прострочено", hint: "З тих, що чекають рішення: не розібрані до кінця робочого дня (18:00 Пн–Пт).", match: (r) => r.overdue },
 ];
 const fmtTime = (iso: string) => new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const muted: React.CSSProperties = { color: "var(--text-muted)" };
@@ -90,9 +90,9 @@ export function CarrierReportCard({ from, to, managerId, teamId }: { from: strin
         <thead>
           <tr style={{ ...muted, fontSize: 12.5 }}>
             <th style={{ textAlign: "left", padding: "6px 10px" }}>Менеджер</th>
-            {COLS.map((c) => <th key={c.key} style={num}>{c.label}</th>)}
-            <th style={num}>Без розмови</th>
-            <th style={num}>Прибрав фільтр</th>
+            {COLS.map((c) => <th key={c.key} style={num}><span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>{c.label}<InfoHint text={c.hint} /></span></th>)}
+            <th style={num}><span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>Без розмови<InfoHint text="Розмови від 10 с не було — AI не слухав, угода закрита «Немає зв'язку». У «Усього» не входить." /></span></th>
+            <th style={num}><span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>Відсіяв фільтр CRM<InfoHint text="Фільтр CRM сам закрив як «Перевізник» ще до AI (Lardi, список відомих перевізників). У «Усього» не входить." /></span></th>
           </tr>
         </thead>
         <tbody>
@@ -142,7 +142,7 @@ export function CarrierReportCard({ from, to, managerId, teamId }: { from: strin
                         <td style={{ padding: "5px 10px" }}>{r.managerName ?? <span style={muted}>без менеджера</span>}</td>
                         <td style={{ padding: "5px 10px", whiteSpace: "nowrap" }}>
                           <span style={pill(TONE[cat.tone].bg, TONE[cat.tone].fg)}>{cat.label}{r.otherType ? ` · ${OTHER_TYPE_UI[r.otherType]}` : ""}</span>
-                          <span style={{ ...muted, fontSize: 12, marginLeft: 6 }}>{r.source === "human" && r.human ? deciderLabel(r.human.role) : r.source === "ai" ? `AI ${confLabel(r.ai.confidence)}` : r.why ?? ""}</span>
+                          <span style={{ ...muted, fontSize: 12, marginLeft: 6 }}>{r.source === "human" && r.human ? deciderLabel(r.human.role) : r.source === "ai" ? `AI, ${pctLabel(r.ai.confidence)}` : r.why ?? ""}</span>
                         </td>
                         <td style={{ padding: "5px 10px", ...muted }}>{r.human?.note ?? r.ai.reason ?? r.ai.quote ?? ""}</td>
                       </tr>
