@@ -10,8 +10,8 @@ import { drainWithBudget, MAX_OUTPUT_TOKENS, TICK_MAX_ATTEMPTS, TICK_PORTION, ty
 import { carrierActiveIds } from "./carrierCallQueue.js";
 import { notifyCapOnce } from "./aiCapAlert.js";
 import { runCarrierClose, type CloseMode, type CloseReport, type KommoCloser } from "./carrierClose.js";
-import { CARRIER_BUDGET, CARRIER_KIT, CARRIER_OPS, CARRIER_RULE, oldEnough, phoneFromDealName,
-  RUBRIC_CARRIER_V1 } from "./carrierCallRules.js";
+import { CARRIER_BUDGET, CARRIER_KIT_V2, CARRIER_OPS, CARRIER_RUBRIC, CARRIER_RUBRICS, CARRIER_RULE, oldEnough,
+  phoneFromDealName } from "./carrierCallRules.js";
 
 /**
  * 🚚 ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ — база й прохід (правила й рубрика — `carrierCallRules.ts`).
@@ -60,10 +60,11 @@ const TALK = (d: string, extra = "") => `
    ORDER BY rc.calldate, rc.uniqueid LIMIT 1`;
 const talkParams = (now: Date) => [now.toISOString(), CARRIER_RULE.talkMinSec, CARRIER_RULE.windowBeforeMin, CARRIER_RULE.windowAfterHours];
 
-/** Вердикт аналізу carrier-v1 для дзвінка (текстом ролі) — для «вже розібрали» й «не розібрати». */
+/** Вердикт мобільних (будь-якої з рубрик, найсвіжіший) для дзвінка текстом ролі — для «вже розібрали» й «не розібрати». */
+const RUBRICS_SQL = CARRIER_RUBRICS.map((r) => `'${r}'`).join(", ");
 const ROLE_OF = (u: string) => `(
   SELECT a.result->>'caller_role' FROM call_transcripts t JOIN call_analyses a ON a.transcript_id = t.id
-   WHERE t.uniqueid = ${u} AND a.rubric_version = '${RUBRIC_CARRIER_V1}' AND a.status = 'done'
+   WHERE t.uniqueid = ${u} AND a.rubric_version IN (${RUBRICS_SQL}) AND a.status = 'done'
    ORDER BY a.id DESC LIMIT 1)`;
 
 export interface ResolveReport { reused: number; own: number; noTalk: number; secondTalk: number }
@@ -136,9 +137,19 @@ export async function purgeOldCarrierText(db: Db, now: Date): Promise<number> {
       WHERE t.text_purged_at IS NULL AND t.status = 'done'
         AND t.created_at < $1::timestamptz - make_interval(months => $2)
         AND EXISTS (SELECT 1 FROM carrier_call_deals d WHERE d.uniqueid = t.uniqueid OR d.first_uniqueid = t.uniqueid)
-        AND NOT EXISTS (SELECT 1 FROM call_analyses a WHERE a.transcript_id = t.id AND a.rubric_version <> $3)`,
-    [now.toISOString(), CARRIER_RULE.retentionMonths, RUBRIC_CARRIER_V1]);
+        AND NOT EXISTS (SELECT 1 FROM call_analyses a WHERE a.transcript_id = t.id AND NOT (a.rubric_version = ANY($3::text[])))`,
+    [now.toISOString(), CARRIER_RULE.retentionMonths, [...CARRIER_RUBRICS]]);
   return r.rowCount ?? 0;
+}
+
+/** Розмови з готовим вердиктом СТАРШОЇ рубрики мобільних — нова їх не переслуховує. */
+export async function carrierAnalysedEarlier(db: Db, ids: readonly string[]): Promise<string[]> {
+  if (!ids.length) return [];
+  const r = await db.query<{ u: string }>(`
+    SELECT DISTINCT t.uniqueid AS u FROM call_transcripts t JOIN call_analyses a ON a.transcript_id = t.id
+     WHERE t.uniqueid = ANY($1::text[]) AND a.status = 'done' AND a.rubric_version = ANY($2::text[]) AND a.rubric_version <> $3`,
+  [[...ids], [...CARRIER_RUBRICS], CARRIER_RUBRIC]);
+  return r.rows.map((x) => x.u);
 }
 
 export const CARRIER_STT_BUDGET_MS = 150_000;
@@ -153,8 +164,8 @@ export interface CarrierTickEnv {
   /** Угоди, що зараз на етапі, — прямо з Kommo. */
   stageLeads: () => Promise<StageLead[]>;
   alert: (text: string) => Promise<void>;
-  /** Закриття впевнених перевізників у Kommo. Не задано — кроку немає (як `off`). */
-  close?: { mode: CloseMode; kommo: KommoCloser };
+  /** Закриття в Kommo (перевізники, рішення людей; AI-«Інше» — `otherMode`). Не задано — кроку немає (як `off`). */
+  close?: { mode: CloseMode; otherMode?: CloseMode; kommo: KommoCloser };
 }
 
 export interface CarrierTickReport {
@@ -183,7 +194,7 @@ export async function runCarrierTick(env: CarrierTickEnv): Promise<CarrierTickRe
     sttStoppedBy: null, llmStoppedBy: null, capAlerted: false, closed: null };
   // 🧹 Закриття — ПІСЛЯ вердиктів, по угодах, що стоять на етапі за ЦІЄЮ ж відповіддю Kommo.
   const doClose = async () => env.close
-    ? runCarrierClose(env.db, env.now(), env.close.mode, new Set(leads.map((l) => l.id)), env.close.kommo) : null;
+    ? runCarrierClose(env.db, env.now(), env.close.mode, new Set(leads.map((l) => l.id)), env.close.kommo, env.close.otherMode ?? "dry") : null;
   if (!ids.length) { out.closed = await doClose(); return out; }
 
   const throttle = createMinInterval(RINGOSTAT_MIN_INTERVAL_MS, env.http);
@@ -201,13 +212,14 @@ export async function runCarrierTick(env: CarrierTickEnv): Promise<CarrierTickRe
   }), CARRIER_STT_BUDGET_MS, env.http.nowMs, out.stt);
   out.sttStoppedBy = stt.stoppedBy;
 
-  const ap = { provider: LLM_PROVIDER, model: GEMINI_MODEL, rubricVersion: RUBRIC_CARRIER_V1,
+  const ap = { provider: LLM_PROVIDER, model: GEMINI_MODEL, rubricVersion: CARRIER_RUBRIC,
     sttProvider: STT_PROVIDER, sttModel: ELEVENLABS_STT_MODEL };
-  await enqueueAnalyses(env.db, { ...ap, now: env.now() }, ids);
+  // Розмова, яку вже розібрала попередня рубрика, другий раз не оплачується: її вердикт чинний (ТЗ 30.09.2026).
+  await enqueueAnalyses(env.db, { ...ap, now: env.now() }, ids, await carrierAnalysedEarlier(env.db, ids));
   const llm = await drainWithBudget(() => runAnalysisPortion(env.db, {
     apiKey: env.keys.gemini,
     generate: (key, model, body) => geminiGenerate(env.http, key, model, body, LLM_POLICY),
-    kit: CARRIER_KIT,
+    kit: CARRIER_KIT_V2,
   }, {
     ...common, ...ap, now: env.now(), operation: CARRIER_OPS.analysis, monthCapUsd: env.prices.llmMonthCapUsd,
     maxOutputTokens: MAX_OUTPUT_TOKENS,

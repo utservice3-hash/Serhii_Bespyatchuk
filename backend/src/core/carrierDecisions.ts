@@ -1,100 +1,92 @@
 import type { Db } from "./adCallFacts.js";
-import { CARRIER_STAGE, CARRIER_THRESHOLD, carrierBucket, RUBRIC_CARRIER_V1, type CarrierResult } from "./carrierCallRules.js";
+import { CARRIER_STAGE, isOtherType, whyUncertain, type HumanDecision, type OtherType } from "./carrierCallRules.js";
+import { carrierDealRows, type CarrierScope, type DealRow } from "./carrierDeals.js";
+
+export { whyUncertain };
+export type { HumanDecision };
 
 /**
- * 🙋 РІШЕННЯ ЛЮДИНИ ПО НЕВПЕВНЕНИХ (рішення Романа 29.09.2026, макет погоджено).
+ * 🙋 РІШЕННЯ ЛЮДИНИ (29.09.2026 — керівництво по невпевнених; ТЗ Романа 30.09.2026 — менеджер і тімлід).
  *
- * AI не впевнений (нижче 0,85, цитата — слова менеджера, розмову не розібрати) — вирішує людина: «Перевізник»,
- * «Клієнт» або «Інше». Рішення людини СИЛЬНІШЕ за AI в обидва боки:
- *   · «Перевізник» → угода йде тим самим шляхом закриття в CRM, що й упевнені (`carrierClose.ts`);
- *   · «Клієнт» / «Інше» → автоматика цю угоду не закриває НІКОЛИ, хоч би що потім сказав AI.
- * Історія рішень лише дописується (хто, коли, що, що казав AI); чинне — останнє. Змінити можна, доки угоду
- * не закрито в CRM; після закриття — лише «Повернути на етап».
+ * «На перевірці» (невпевнений AI, «не розібрати», угода без розмови від 10 с) і «Помилка» вирішує людина:
+ * «Перевізник», «Клієнт» або «Інше» (+ підтип). Хто:
+ *   · менеджер — лише угоди, де він відповідальний;
+ *   · тімлід — угоди своєї команди; може змінити рішення менеджера;
+ *   · керівництво (адмін, CEO, опдир, КВП) — усе; може змінити будь-яке.
+ * Змінити рішення СТАРШОГО не можна: тімлідове не перепише менеджер, керівництва — ні тімлід, ні менеджер.
+ * Рішення людини сильніше за AI: «Перевізник» і «Інше» закриваються в CRM, «Клієнт» — ніколи (`carrierClose.ts`).
+ * Історія лише дописується (хто, яка роль, коли, що казав AI); чинне — останнє. Після закриття в CRM — лише
+ * «Повернути на етап».
  */
 
-export type HumanDecision = "carrier" | "client" | "other";
 export const HUMAN_DECISIONS: readonly HumanDecision[] = ["carrier", "client", "other"];
 export const NOTE_MAX = 500;
 
-/** Чому AI не впевнений — коротко, для рядка черги. `null` — упевнений (у черзі не буває). */
-export function whyUncertain(r: Pick<CarrierResult, "caller_role" | "caller_role_confidence" | "quote_check">): string | null {
-  const b = carrierBucket(r);
-  if (b === "unclear") return "не чути";
-  if (b !== "low") return null;
-  if (r.caller_role_confidence < CARRIER_THRESHOLD) return "невпевнено";
-  if (r.quote_check === "manager") return "цитата менеджера";
-  return "цитата не знайдена";
+/** Старшинство ролі для «хто може переписати чиє рішення». Невідома роль (старі рядки до 30.09) — керівництво. */
+export function decisionRank(roleKey: string | null): number {
+  if (roleKey === "manager") return 1;
+  if (roleKey === "team_lead") return 2;
+  return 3;
 }
 
-export interface PendingRow {
-  kommoId: number; uniqueid: string; calledAt: string; billsec: number; managerName: string | null;
-  role: string; confidence: number; why: string;
-}
-export interface DecidedRow extends PendingRow { decision: HumanDecision; note: string | null; by: string; at: string }
+export type PendingRow = Pick<DealRow, "kommoId" | "uniqueid" | "calledAt" | "billsec" | "managerName" | "teamName" | "category" | "why"
+  | "dealState" | "createdAt" | "phone"> & { role: string | null; confidence: number | null; otherType: OtherType | null; reason: string | null };
+export interface DecidedRow extends PendingRow { decision: HumanDecision; decisionOther: OtherType | null; note: string | null; by: string; byRole: string | null; at: string }
 
-interface Raw {
-  kommo_id: string; u: string; calldate: Date; billsec: number; manager_name: string | null; result: CarrierResult;
-  dec: HumanDecision | null; dec_note: string | null; dec_by: string | null; dec_at: Date | null; closed: boolean;
-}
+const pendingOf = (r: DealRow): PendingRow => ({
+  kommoId: r.kommoId, uniqueid: r.uniqueid, calledAt: r.calledAt, billsec: r.billsec, managerName: r.managerName, teamName: r.teamName,
+  category: r.category, why: r.why, dealState: r.dealState, createdAt: r.createdAt, phone: r.phone,
+  role: r.ai.verdict, confidence: r.ai.confidence, otherType: r.ai.otherType, reason: r.ai.reason,
+});
 
 /**
- * Черга: угоди, що стоять на етапі (за `deals`, синк раз на 30 хв), з вердиктом «невпевнено/не розібрати»,
- * без рішення людини й не закриті дашбордом. «Вирішені» — останні рішення за `decidedDays`.
+ * Черга: «На перевірці» й «Помилка» в межах скоупу, досі на етапі (за `deals`, синк раз на 30 хв; ще не
+ * синкнута — теж у черзі) і не закриті дашбордом. «Вирішені» — рішення людей за `decidedDays`.
  */
-export async function decisionQueue(db: Db, now: Date, decidedDays = 30): Promise<{ pending: PendingRow[]; decided: DecidedRow[] }> {
-  const r = await db.query<Raw>(`
-    SELECT d.kommo_id::text, t.uniqueid AS u, rc.calldate, rc.billsec, m.name AS manager_name, a.result,
-           cd.decision AS dec, cd.note AS dec_note, COALESCE(um.name, uu.email) AS dec_by, cd.decided_at AS dec_at,
-           (cl.closed_at IS NOT NULL AND cl.reverted_at IS NULL) AS closed
-      FROM carrier_call_deals d
-      LEFT JOIN carrier_call_deals src ON src.kommo_id = d.reused_from
-      JOIN call_transcripts t ON t.uniqueid = COALESCE(src.uniqueid, d.uniqueid)
-      JOIN call_analyses a ON a.transcript_id = t.id AND a.rubric_version = $1 AND a.status = 'done'
-      JOIN ringostat_calls rc ON rc.uniqueid = t.uniqueid
-      LEFT JOIN managers m ON m.id = rc.manager_id
-      LEFT JOIN deals dd ON dd.kommo_id = d.kommo_id
-      LEFT JOIN LATERAL (SELECT x.decision, x.note, x.decided_by, x.decided_at FROM carrier_decisions x
-                          WHERE x.kommo_id = d.kommo_id ORDER BY x.id DESC LIMIT 1) cd ON true
-      LEFT JOIN users uu ON uu.id = cd.decided_by
-      LEFT JOIN managers um ON um.id = uu.manager_id
-      LEFT JOIN carrier_close_log cl ON cl.kommo_id = d.kommo_id
-     WHERE d.state IN ('own', 'reused')
-       AND (cd.decision IS NOT NULL AND cd.decided_at >= $2::timestamptz - make_interval(days => $3)
-            OR cd.decision IS NULL AND dd.status_id = $4)
-     ORDER BY rc.calldate DESC, d.kommo_id`,
-  [RUBRIC_CARRIER_V1, now.toISOString(), decidedDays, CARRIER_STAGE.statusId]);
+export async function decisionQueue(db: Db, now: Date, scope: CarrierScope = {}, decidedDays = 30):
+  Promise<{ pending: PendingRow[]; decided: DecidedRow[] }> {
+  const rows = await carrierDealRows(db, { period: null, scope });
+  const since = now.getTime() - decidedDays * 86_400_000;
   const pending: PendingRow[] = [], decided: DecidedRow[] = [];
-  for (const x of r.rows) {
-    const why = whyUncertain(x.result);
-    const base: PendingRow = { kommoId: Number(x.kommo_id), uniqueid: x.u, calledAt: new Date(x.calldate).toISOString(), billsec: Number(x.billsec),
-      managerName: x.manager_name, role: x.result.caller_role, confidence: Number(x.result.caller_role_confidence), why: why ?? "" };
-    if (x.dec) decided.push({ ...base, decision: x.dec, note: x.dec_note, by: x.dec_by ?? "невідомо", at: new Date(x.dec_at!).toISOString() });
-    else if (why && !x.closed) pending.push(base);
+  for (const r of rows) {
+    if (r.human) {
+      if (new Date(r.human.at).getTime() >= since) decided.push({ ...pendingOf(r), decision: r.human.decision, decisionOther: r.human.otherType,
+        note: r.human.note, by: r.human.by, byRole: r.human.role, at: r.human.at });
+      continue;
+    }
+    const onStage = r.crm.statusId == null || r.crm.statusId === CARRIER_STAGE.statusId;
+    const closed = r.close?.state === "closed";
+    if ((r.category === "review" || r.category === "error") && onStage && !closed) pending.push(pendingOf(r));
   }
+  decided.sort((a, b) => b.at.localeCompare(a.at));
   return { pending, decided };
 }
 
+export interface Decider { userId: number; roleKey: string | null; scope: CarrierScope }
+
 /**
- * Записати рішення. Відмова: невідоме рішення (400), угоди немає серед дзвінків на мобільні (404), угоду вже
- * закрито в CRM — повертати треба кнопкою «Повернути на етап» (409).
+ * Записати рішення. Відмова: невідоме рішення чи підтип (400); угоди немає серед дзвінків на мобільні АБО вона
+ * поза скоупом (404 — чужа угода для менеджера не існує); угоду вже закрито в CRM (409 — повертати кнопкою
+ * «Повернути на етап»); чинне рішення ухвалив старший (409).
  */
-export async function recordDecision(db: Db, kommoId: number, decision: string, note: unknown, userId: number, now: Date):
+export async function recordDecision(db: Db, kommoId: number, decision: string, otherType: unknown, note: unknown, who: Decider, now: Date):
   Promise<{ ok: true } | { ok: false; code: 400 | 404 | 409; why: string }> {
   if (!HUMAN_DECISIONS.includes(decision as HumanDecision)) return { ok: false, code: 400, why: "рішення — «carrier», «client» або «other»" };
+  let sub: OtherType | null = null;
+  if (otherType != null && otherType !== "") {
+    if (decision !== "other") return { ok: false, code: 400, why: "підтип буває лише в «Інше»" };
+    if (!isOtherType(otherType)) return { ok: false, code: 400, why: "невідомий підтип «Інше»" };
+    sub = otherType;
+  }
   const n = typeof note === "string" ? note.trim().slice(0, NOTE_MAX) : "";
-  const d = (await db.query<{ closed: boolean; role: string | null; conf: string | null }>(`
-    SELECT (cl.closed_at IS NOT NULL AND cl.reverted_at IS NULL) AS closed,
-           a.result->>'caller_role' AS role, a.result->>'caller_role_confidence' AS conf
-      FROM carrier_call_deals d
-      LEFT JOIN carrier_call_deals src ON src.kommo_id = d.reused_from
-      LEFT JOIN call_transcripts t ON t.uniqueid = COALESCE(src.uniqueid, d.uniqueid)
-      LEFT JOIN call_analyses a ON a.transcript_id = t.id AND a.rubric_version = $2 AND a.status = 'done'
-      LEFT JOIN carrier_close_log cl ON cl.kommo_id = d.kommo_id
-     WHERE d.kommo_id = $1 LIMIT 1`, [kommoId, RUBRIC_CARRIER_V1])).rows[0];
-  if (!d) return { ok: false, code: 404, why: "угоди немає серед дзвінків на мобільні" };
-  if (d.closed) return { ok: false, code: 409, why: "угоду вже закрито в CRM — поверніть її на етап кнопкою «Повернути на етап»" };
-  await db.query(`INSERT INTO carrier_decisions (kommo_id, decision, note, decided_by, decided_at, ai_role, ai_confidence)
-                  VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-  [kommoId, decision, n || null, userId, now.toISOString(), d.role, d.conf == null ? null : Number(d.conf)]);
+  const d = (await carrierDealRows(db, { period: null, scope: who.scope, ids: [kommoId] }))[0];
+  if (!d) return { ok: false, code: 404, why: "угоди немає серед ваших дзвінків на мобільні" };
+  if (d.close?.state === "closed") return { ok: false, code: 409, why: "угоду вже закрито в CRM — поверніть її на етап кнопкою «Повернути на етап»" };
+  if (d.human && decisionRank(d.human.role) > decisionRank(who.roleKey)) {
+    return { ok: false, code: 409, why: `рішення ухвалив ${d.human.role === "team_lead" ? "тімлід" : "керівник"} (${d.human.by}) — змінити може він або старший` };
+  }
+  await db.query(`INSERT INTO carrier_decisions (kommo_id, decision, other_type, note, decided_by, decider_role, decided_at, ai_role, ai_confidence)
+                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+  [kommoId, decision, sub, n || null, who.userId, who.roleKey, now.toISOString(), d.ai.verdict, d.ai.confidence]);
   return { ok: true };
 }

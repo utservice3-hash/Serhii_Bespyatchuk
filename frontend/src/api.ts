@@ -387,30 +387,53 @@ export async function fetchAiCallsMeta(): Promise<AiCallsMetaResp> {
   return data;
 }
 
-/** 🚚 «Перевізники за розмовою» (29.09.2026) — лише керівництво; правила — METRICS_GLOSSARY §17. */
-export interface CarrierCallRowT {
-  uniqueid: string; calledAt: string; direction: "in" | "out"; billsec: number; managerName: string | null;
-  deals: { kommoId: number; url: string; statusId: number | null; rejectReason: string | null; reused: boolean; close: CarrierCloseT | null }[];
-  talkNo: number; state: AiCallState; failure: string | null; bucket: CarrierBucketT | null; role: string | null;
-  confidence: number | null; quote: string | null; quoteCheck: string | null; summary: string | null;
-}
+/**
+ * 🚚 «Перевізники за розмовою» (29.09.2026; ТЗ Романа 30.09.2026 «Відсів перевізників»): рядок — угода; сервер сам
+ * звужує до скоупу ролі (менеджер — свої, тімлід — команда). Правила — METRICS_GLOSSARY §17.
+ */
+export type CarrierCategoryT = "client" | "carrier" | "other" | "review" | "error" | "waiting";
+export type CarrierOtherTypeT = "spam" | "supplier" | "job_seeker" | "personal" | "wrong_number" | "other";
+export type CarrierDecisionT = "carrier" | "client" | "other";
 /** Що автоматика зробила з угодою в CRM: «закрили б» (лише журнал), закрито, повернуто, помилка запису. */
-export interface CarrierCloseT { state: "would_close" | "closed" | "reverted" | "failed"; at: string; error: string | null }
-export interface CarrierKpisT {
-  removedByFilter: number; leftAfterFilter: number; waitingTalk: number; noTalk: number; listenedPhones: number;
-  recordingSince: string | null;
+export interface CarrierCloseT { state: "would_close" | "closed" | "reverted" | "failed"; at: string; error: string | null; reason: "carrier" | "other" }
+export interface CarrierDealT {
+  kommoId: number; url: string; phone: string; createdAt: string; dealState: string; reused: boolean; talkNo: number;
+  uniqueid: string | null; calledAt: string | null; billsec: number | null; direction: "in" | "out" | null;
+  managerId: number | null; managerName: string | null; teamId: number | null; teamName: string | null;
+  ai: { state: AiCallState | null; failure: string | null; rubric: string | null; verdict: string | null; confidence: number | null;
+    otherType: CarrierOtherTypeT | null; reason: string | null; quote: string | null; quoteCheck: string | null; summary: string | null;
+    bucket: CarrierBucketT | null };
+  human: { decision: CarrierDecisionT; otherType: CarrierOtherTypeT | null; note: string | null; by: string; role: string | null; at: string } | null;
+  journal: CarrierJournalT[];
+  category: CarrierCategoryT; source: "human" | "ai" | null; why: string | null; otherType: CarrierOtherTypeT | null;
+  close: CarrierCloseT | null; crm: { statusId: number | null; rejectReason: string | null };
 }
-export interface CarrierCallsResp { period: { from: string; to: string }; truncated: boolean; kpis: CarrierKpisT; rows: CarrierCallRowT[] }
-export async function fetchCarrierCalls(params: { from: string; to: string }): Promise<CarrierCallsResp> {
+export interface CarrierKpisT { removedByFilter: number; leftAfterFilter: number; waitingTalk: number; noTalk: number; recordingSince: string | null }
+export interface CarrierCallsResp { period: { from: string; to: string }; truncated: boolean; kpis: CarrierKpisT; rows: CarrierDealT[] }
+export async function fetchCarrierCalls(params: { from: string; to: string; managerId?: number; teamId?: number }): Promise<CarrierCallsResp> {
   const { data } = await api.get<CarrierCallsResp>("/dashboard/carrier-calls", { params });
   return data;
 }
+/** 📊 Блок «Звіт»: по менеджерах і командах — ті самі рядки, що й вкладки. */
+export interface CarrierReportLineT {
+  managerId: number | null; managerName: string | null; teamId: number | null; teamName: string | null;
+  total: number; clients: number; carriersAuto: number; carriersManual: number; otherAuto: number; otherManual: number; unsorted: number;
+  filterRemoved?: number;
+}
+export interface CarrierReportResp { period: { from: string; to: string }; managers: CarrierReportLineT[]; teams: CarrierReportLineT[];
+  total: Omit<CarrierReportLineT, "managerId" | "managerName" | "teamId" | "teamName">; filterRemoved: number }
+export async function fetchCarrierReport(params: { from: string; to: string; managerId?: number; teamId?: number }): Promise<CarrierReportResp> {
+  const { data } = await api.get<CarrierReportResp>("/dashboard/carrier-calls/report", { params });
+  return data;
+}
+export interface CarrierJournalT { by: string; role: string | null; decision: CarrierDecisionT; otherType: CarrierOtherTypeT | null;
+  note: string | null; at: string; aiRole: string | null; aiConfidence: number | null }
 export interface CarrierCallCardResp {
   uniqueid: string; calledAt: string; billsec: number; managerName: string | null;
   deals: { kommoId: number; url: string; reused: boolean; close: CarrierCloseT | null }[]; talkNo: number;
   firstTry: { uniqueid: string; role: string | null } | null; state: AiCallState; failure: string | null;
   result: { summary: string; manager_channel: string; caller_role: string; caller_role_confidence: number;
-    caller_role_quote: string; quote_check?: string } | null;
+    caller_role_quote: string; quote_check?: string; other_type?: CarrierOtherTypeT | null; reason?: string } | null;
   bucket: CarrierBucketT | null; turns: AiTurn[] | null; transcriptHidden: boolean; textPurged: boolean; managerChannel: number | null;
 }
 export async function fetchCarrierCallCard(uniqueid: string): Promise<CarrierCallCardResp> {
@@ -422,20 +445,23 @@ export interface CarrierCallsMetaResp {
   transcripts: Record<string, number>; analyses: Record<string, number>;
   spend: { carrier: number; stt: number; analysis: number };
   caps: { carrier: number; stt: number | null; analysis: number | null };
-  close: { mode: string; wouldClose: number; closed: number; reverted: number; failed: number };
+  close: { mode: string; otherMode: string; wouldClose: number; closed: number; reverted: number; failed: number; otherWouldClose: number; otherClosed: number };
+  agreement: { aiRole: string; decisions: number; agreed: number; byDecision: Record<string, number> }[];
 }
-/** 🙋 Черга невпевнених вердиктів і вирішені за 30 днів. */
-export interface CarrierPendingT { kommoId: number; url: string; uniqueid: string; calledAt: string; billsec: number;
-  managerName: string | null; role: string; confidence: number; why: string }
-export interface CarrierDecidedT extends CarrierPendingT { decision: "carrier" | "client" | "other"; note: string | null; by: string; at: string }
+/** 🙋 «На перевірці» на етапі (без періоду) і вирішені за 30 днів — у скоупі ролі. */
+export interface CarrierPendingT { kommoId: number; url: string; uniqueid: string | null; phone: string; createdAt: string; calledAt: string | null;
+  billsec: number | null; managerName: string | null; teamName: string | null; category: CarrierCategoryT; why: string | null; dealState: string;
+  role: string | null; confidence: number | null; otherType: CarrierOtherTypeT | null; reason: string | null }
+export interface CarrierDecidedT extends CarrierPendingT { decision: CarrierDecisionT; decisionOther: CarrierOtherTypeT | null; note: string | null;
+  by: string; byRole: string | null; at: string }
 export async function fetchCarrierPending(): Promise<{ pending: CarrierPendingT[]; decided: CarrierDecidedT[] }> {
   const { data } = await api.get<{ pending: CarrierPendingT[]; decided: CarrierDecidedT[] }>("/dashboard/carrier-calls/pending");
   return data;
 }
-export async function postCarrierDecision(kommoId: number, decision: "carrier" | "client" | "other", note: string): Promise<void> {
-  await api.post(`/dashboard/carrier-calls/deals/${String(kommoId)}/decision`, { decision, note });
+export async function postCarrierDecision(kommoId: number, decision: CarrierDecisionT, note: string, otherType: CarrierOtherTypeT | null = null): Promise<void> {
+  await api.post(`/dashboard/carrier-calls/deals/${String(kommoId)}/decision`, { decision, note, otherType });
 }
-/** Запис розмови — байтами з нашого сервера (посилання Ringostat назовні не йде); лише адмін і КВП. */
+/** Запис розмови — байтами з нашого сервера (посилання Ringostat назовні не йде); ролі вкладки в межах скоупу. */
 export async function fetchCarrierAudio(uniqueid: string): Promise<Blob> {
   const { data } = await api.get<Blob>(`/dashboard/carrier-calls/${encodeURIComponent(uniqueid)}/audio`, { responseType: "blob" });
   return data;

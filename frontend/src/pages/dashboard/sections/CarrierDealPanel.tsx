@@ -1,0 +1,221 @@
+import { useEffect, useRef, useState } from "react";
+import { fetchCarrierAudio, fetchCarrierCallCard, postCarrierDecision, revertCarrierClose,
+  type CarrierCallCardResp, type CarrierDealT, type CarrierOtherTypeT } from "../../../api";
+import { mmss } from "../aiCallsView";
+import { CATEGORY_UI, DECISION_UI, OTHER_TYPE_UI, ROLE_UI, TONE, closeLabel, confLabel, deciderLabel, speakerShort,
+  type HumanDecisionT } from "../carrierCallsView";
+
+/**
+ * 🎧 КАРТКА УГОДИ «Перевізників за розмовою» (ТЗ Романа 30.09.2026): запис, розшифровка, вердикт AI з впевненістю й
+ * причиною, кнопки «Клієнт / Перевізник / Інше» (+ підтип), журнал рішень. Що дозволено — вирішує сервер: менеджер
+ * бачить і вирішує свої угоди, тімлід — команди, керівництво — усі; чуже сервер віддає як «не знайдено».
+ */
+
+const fmtTime = (iso: string) => new Date(iso).toLocaleString("uk-UA", {
+  timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+});
+export const pill = (bg: string, fg: string): React.CSSProperties => ({ background: bg, color: fg, borderRadius: 999, padding: "1px 8px", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" });
+const muted: React.CSSProperties = { color: "var(--text-muted)" };
+export const errText = (e: unknown) => (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? (e instanceof Error ? e.message : "не вдалося");
+const label: React.CSSProperties = { fontSize: 11.5, ...muted, fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase", marginBottom: 4 };
+
+function Player({ uniqueid, quoteAt, onTime, seekRef }: { uniqueid: string; quoteAt: number | null; onTime: (t: number) => void;
+  seekRef: React.MutableRefObject<((t: number) => void) | null> }) {
+  const audio = useRef<HTMLAudioElement | null>(null);
+  const [src, setSrc] = useState<string | null>(null);
+  const [state, setState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [err, setErr] = useState<string | null>(null);
+  const [pos, setPos] = useState(0); const [dur, setDur] = useState(0); const [play, setPlay] = useState(false); const [speed, setSpeed] = useState(1);
+  useEffect(() => () => { if (src) URL.revokeObjectURL(src); }, [src]);
+  const toggle = async () => {
+    if (state === "idle" || state === "error") {
+      setState("loading"); setErr(null);
+      try { const b = await fetchCarrierAudio(uniqueid); setSrc(URL.createObjectURL(b)); setState("ready"); }
+      catch (e) { setErr(errText(e)); setState("error"); }
+      return;
+    }
+    const a = audio.current; if (!a) return;
+    if (a.paused) void a.play(); else a.pause();
+  };
+  useEffect(() => { if (state === "ready" && audio.current) void audio.current.play(); }, [state]);
+  useEffect(() => { if (audio.current) audio.current.playbackRate = speed; }, [speed]);
+  const seek = (t: number) => { const a = audio.current; if (a && Number.isFinite(t)) { a.currentTime = t; setPos(t); } };
+  // Перемотка з розшифровки: батько кличе через посилання (клік по репліці).
+  useEffect(() => { seekRef.current = seek; return () => { seekRef.current = null; }; });
+  return (
+    <div>
+      {src && <audio ref={audio} src={src} preload="auto" onPlay={() => setPlay(true)} onPause={() => setPlay(false)}
+        onLoadedMetadata={(e) => setDur(e.currentTarget.duration)} onTimeUpdate={(e) => { setPos(e.currentTarget.currentTime); onTime(e.currentTarget.currentTime); }} />}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button type="button" className="cq-play" onClick={() => { void toggle(); }} aria-label={play ? "Пауза" : "Слухати"} disabled={state === "loading"}
+          style={{ width: 34, height: 34, borderRadius: "50%", border: 0, background: "var(--brand)", color: "#fff", cursor: "pointer", flex: "none" }}>
+          {state === "loading" ? "…" : play ? "❚❚" : "▶"}</button>
+        <div onClick={(e) => { if (!dur) return; const b = e.currentTarget.getBoundingClientRect(); seek((e.clientX - b.left) / b.width * dur); }}
+          style={{ flex: 1, height: 6, borderRadius: 3, background: "var(--border)", position: "relative", cursor: dur ? "pointer" : "default" }}>
+          <i className="cq-bar" style={{ position: "absolute", inset: "0 auto 0 0", width: `${String(dur ? pos / dur * 100 : 0)}%`, background: "var(--brand)", borderRadius: 3 }} />
+          {quoteAt != null && dur > 0 && <span title="Тут цитата" style={{ position: "absolute", top: -4, left: `${String(Math.min(100, quoteAt / dur * 100))}%`, width: 3, height: 14, background: "var(--warn)", borderRadius: 2 }} />}
+        </div>
+        <span style={{ fontSize: 12, ...muted, fontVariantNumeric: "tabular-nums" }}>{mmss(pos)} / {dur ? mmss(dur) : "—"}</span>
+        <button type="button" onClick={() => setSpeed(speed === 1 ? 1.5 : speed === 1.5 ? 2 : 1)}
+          style={{ fontSize: 12, border: "1px solid var(--border)", background: "transparent", color: "var(--text)", borderRadius: 6, padding: "2px 6px", cursor: "pointer" }}>{speed}×</button>
+      </div>
+      {err && <p style={{ margin: "6px 0 0", fontSize: 12.5, color: "var(--danger)" }}>Запис недоступний: {err}</p>}
+    </div>
+  );
+}
+
+/** Панель однієї угоди: ліворуч — розмова, праворуч — вердикт, рішення, журнал. `onDecided` — після запису рішення. */
+export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: CarrierDealT; onDecided: () => void; onChanged: () => void }) {
+  const [card, setCard] = useState<CarrierCallCardResp | null>(null);
+  const [cardErr, setCardErr] = useState<string | null>(null);
+  const [now, setNow] = useState(0);
+  const [note, setNote] = useState(""); const [noteOpen, setNoteOpen] = useState(false); const [busy, setBusy] = useState(false);
+  const [pickOther, setPickOther] = useState(false);
+  const [reload, setReload] = useState(0);
+  const seekRef = useRef<((t: number) => void) | null>(null);
+  useEffect(() => {
+    if (!deal.uniqueid) return;
+    let alive = true;
+    fetchCarrierCallCard(deal.uniqueid).then((c) => { if (alive) setCard(c); }).catch((e) => { if (alive) setCardErr(errText(e)); });
+    return () => { alive = false; };
+  }, [deal.uniqueid, reload]);
+
+  const quote = deal.ai.quote?.trim() ?? "";
+  const turns = card?.turns ?? [];
+  const mc = card?.managerChannel ?? null;
+  const quoteTurn = turns.find((t) => quote && t.channel !== mc && t.text.includes(quote));
+  const canListen = deal.uniqueid != null && card != null && !card.transcriptHidden;
+  const journal = deal.journal;
+  const closed = deal.close?.state === "closed";
+  const current = deal.human?.decision ?? null;
+
+  const decide = async (d: HumanDecisionT, other: CarrierOtherTypeT | null = null) => {
+    setBusy(true);
+    try { await postCarrierDecision(deal.kommoId, d, note, other); setNote(""); setNoteOpen(false); setPickOther(false); setReload((n) => n + 1); onDecided(); }
+    catch (e) { window.alert(`Рішення не записано: ${errText(e)}`); }
+    finally { setBusy(false); }
+  };
+  const revert = async () => {
+    if (!window.confirm(`Повернути угоду № ${String(deal.kommoId)} на етап «Дзвінки на мобільні» і зняти причину? Автоматика її більше не закриватиме.`)) return;
+    setBusy(true);
+    try { await revertCarrierClose(deal.kommoId); onChanged(); }
+    catch (e) { window.alert(`Не повернуто: ${errText(e)}`); }
+    finally { setBusy(false); }
+  };
+
+  const verdictUi = deal.ai.verdict ? ROLE_UI[deal.ai.verdict] : null;
+  const cat = CATEGORY_UI[deal.category];
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16, background: "var(--card-bg)",
+      border: "1px solid var(--border)", borderRadius: 8, padding: 12 }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={label}>Розмова</div>
+        {!deal.uniqueid
+          ? <p style={{ margin: 0, fontSize: 13, ...muted }}>{deal.dealState === "no_talk"
+              ? "Розмови від 10 с з цим номером не було: пропущений або короткий дзвінок. Вирішіть за номером або передзвоніть."
+              : "Розмови ще немає — чекаємо дзвінок до доби після створення угоди."}</p>
+          : cardErr ? <p style={{ margin: 0, fontSize: 13, color: "var(--danger)" }}>{cardErr}</p>
+          : !card ? <p className="loading-text" style={{ margin: 0 }}>Завантаження розмови…</p>
+          : card.transcriptHidden ? <p style={{ margin: 0, fontSize: 13, ...muted }}>Запис і текст цій ролі недоступні.</p>
+          : <>
+              <Player uniqueid={deal.uniqueid} quoteAt={quoteTurn?.start ?? null} onTime={setNow} seekRef={seekRef} />
+              <div style={{ marginTop: 10, maxHeight: 220, overflowY: "auto" }}>
+                {turns.map((t, i) => {
+                  const next = turns[i + 1]; const cur = t.start != null && now >= t.start && (!next || next.start == null || now < next.start);
+                  const them = mc != null && t.channel !== mc;
+                  return <p key={i} className="cq-line" title="Перемотати сюди"
+                    onClick={() => { if (t.start != null) seekRef.current?.(t.start); }}
+                    style={{ margin: "1px 0", fontSize: 13, padding: "3px 6px", borderRadius: 6, cursor: "pointer", background: cur ? "var(--info-bg)" : undefined }}>
+                    <span style={{ fontWeight: 600, marginRight: 6, color: them ? "var(--warn)" : "var(--text-muted)" }}>{speakerShort(t.channel, mc)}</span>
+                    {t === quoteTurn ? <mark style={{ background: "var(--warn-bg)", color: "inherit", borderRadius: 3 }}>{t.text}</mark> : t.text}</p>;
+                })}
+                {!turns.length && <p style={{ margin: 0, fontSize: 13, ...muted }}>{card.textPurged ? "Текст видалено за строком зберігання (12 місяців). Вердикт лишився." : "Розшифровки немає."}</p>}
+              </div>
+            </>}
+        {canListen && card?.firstTry && (
+          <p style={{ margin: "6px 0 0", fontSize: 12.5, ...muted }}>Це друга розмова номера: першу не вдалось розібрати.</p>
+        )}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
+        <div>
+          <div style={label}>Вердикт AI</div>
+          {verdictUi
+            ? <div style={{ fontSize: 13 }}>
+                <span style={pill(verdictUi.bg, verdictUi.fg)}>{verdictUi.label}{deal.ai.otherType ? ` · ${OTHER_TYPE_UI[deal.ai.otherType]}` : ""}</span>
+                <span style={{ ...muted, marginLeft: 6, fontVariantNumeric: "tabular-nums" }}>впевненість {confLabel(deal.ai.confidence)}</span>
+                {deal.ai.reason && <div style={{ marginTop: 4 }}>{deal.ai.reason}</div>}
+                {quote && <div style={{ fontStyle: "italic", marginTop: 4 }}>«{quote}»</div>}
+                {!deal.ai.reason && deal.ai.summary && <div style={{ marginTop: 4, ...muted }}>{deal.ai.summary}</div>}
+              </div>
+            : <div style={{ fontSize: 13, ...muted }}>{deal.why ?? "вердикту немає"}</div>}
+        </div>
+
+        <div style={{ fontSize: 13 }}>
+          <span style={{ ...muted, marginRight: 6 }}>Зараз:</span>
+          <span style={pill(TONE[cat.tone].bg, TONE[cat.tone].fg)}>{cat.label}{deal.otherType ? ` · ${OTHER_TYPE_UI[deal.otherType]}` : ""}</span>
+          <span style={{ ...muted, marginLeft: 6 }}>
+            {deal.source === "human" && deal.human ? `вирішив ${deviceName(deal.human.by)} (${deciderLabel(deal.human.role)})` : deal.source === "ai" ? "вирішив AI" : deal.why ?? ""}
+          </span>
+          {deal.close && <div style={{ ...muted, fontSize: 12.5, marginTop: 4 }}>{closeLabel(deal.close, fmtTime)}</div>}
+        </div>
+
+        {closed
+          ? <div>
+              <button type="button" disabled={busy} onClick={() => { void revert(); }}
+                style={{ border: "1px solid var(--border-strong, #d1d5db)", background: "var(--card-bg)", color: "var(--text)", borderRadius: 6, padding: "4px 10px", fontSize: 13, cursor: "pointer" }}>
+                {busy ? "Повертаю…" : "Повернути на етап"}</button>
+              <div style={{ ...muted, fontSize: 12, marginTop: 4 }}>Угоду закрито в CRM — щоб змінити рішення, спершу поверніть її.</div>
+            </div>
+          : <>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {(Object.keys(DECISION_UI) as HumanDecisionT[]).map((v) => {
+                  const on = current === v;
+                  return (
+                    <button key={v} type="button" className="cq-btn" title={DECISION_UI[v].hint} disabled={busy} aria-pressed={on}
+                      onClick={() => { if (v === "other") setPickOther(!pickOther); else void decide(v); }}
+                      style={{ flex: "1 1 0", minWidth: 96, border: `1px solid ${DECISION_UI[v].fg}`, background: on ? DECISION_UI[v].bg : "transparent", color: "var(--text)",
+                        borderRadius: 8, padding: "8px 6px", fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}>
+                      {on ? "✓ " : ""}{DECISION_UI[v].icon} {DECISION_UI[v].label}</button>
+                  );
+                })}
+              </div>
+              {pickOther && (
+                <div className="cq-fade" role="group" aria-label="Підтип «Інше»" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {(Object.keys(OTHER_TYPE_UI) as CarrierOtherTypeT[]).map((t) => (
+                    <button key={t} type="button" disabled={busy} onClick={() => { void decide("other", t); }}
+                      style={{ border: "1px solid var(--border)", background: t === deal.otherType ? "var(--info-bg)" : "transparent", color: "var(--text)",
+                        borderRadius: 999, padding: "3px 10px", fontSize: 12.5, cursor: "pointer" }}>{OTHER_TYPE_UI[t]}</button>
+                  ))}
+                </div>
+              )}
+              <div style={{ ...muted, fontSize: 12 }}>«Перевізник» і «Інше» закриємо в CRM, «Клієнт» лишиться на етапі.</div>
+              {noteOpen
+                ? <textarea id={`carrier-note-${String(deal.kommoId)}`} autoFocus value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="Коментар"
+                    style={{ fontSize: 13, minHeight: 44, border: "1px solid var(--border)", borderRadius: 8, padding: "6px 8px", background: "var(--card-bg)", color: "var(--text)", resize: "vertical" }} />
+                : <button type="button" onClick={() => setNoteOpen(true)} style={{ alignSelf: "flex-start", border: 0, background: "none", color: "var(--info)", cursor: "pointer", fontSize: 12.5, padding: 0 }}>+ коментар</button>}
+            </>}
+
+        {journal.length > 0 && (
+          <div>
+            <div style={label}>Журнал рішень</div>
+            <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, display: "flex", flexDirection: "column", gap: 2 }}>
+              {journal.map((j, i) => (
+                <li key={i} style={i < journal.length - 1 ? muted : undefined}>
+                  {fmtTime(j.at)} · {j.by} ({deciderLabel(j.role)}): <b>{DECISION_UI[j.decision].label}</b>{j.otherType ? ` · ${OTHER_TYPE_UI[j.otherType]}` : ""}
+                  {j.aiRole && <span style={muted}> · AI казав «{ROLE_UI[j.aiRole]?.label ?? j.aiRole}» {confLabel(j.aiConfidence)}</span>}
+                  {j.note && <span> · «{j.note}»</span>}
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Ім'я без пошти: `ivan@uts.ua` → `ivan` (у журналі пошта — лише якщо користувач не привʼязаний до менеджера). */
+function deviceName(by: string): string {
+  return by.includes("@") ? by.split("@")[0] : by;
+}

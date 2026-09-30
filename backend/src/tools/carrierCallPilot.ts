@@ -3,21 +3,23 @@ import { config } from "../config.js";
 import { pilotVerdict, planCarrierPilot, runCarrierPilot } from "../core/carrierCallPilot.js";
 
 /**
- * 🧪 CLI ПІЛОТУ «ПЕРЕВІЗНИКІВ ЗА РОЗМОВОЮ» (логіка — `core/carrierCallPilot.ts`).
+ * 🧪 CLI ТЕСТУ ТОЧНОСТІ «ПЕРЕВІЗНИКІВ ЗА РОЗМОВОЮ» (логіка — `core/carrierCallPilot.ts`): три групи з розміткою CRM
+ * (перевізник / клієнт / «Нецільове звернення»), по 30 за замовчуванням (ТЗ 30.09.2026: «20–30 на категорію»).
  *
  * СУХИЙ ПРОГІН (за замовчуванням) — лише читання, у ролі `test_readonly`: скільки угод і хвилин піде в пілот.
  *   cd backend && set -a && . ./.env && set +a && TEST_SCOPE=prod \
- *     node --import ./dist/testReadOnly.js dist/tools/carrierCallPilot.js [--per-group=50]
+ *     node --import ./dist/testReadOnly.js dist/tools/carrierCallPilot.js [--per-group=30]
  *
- * `--go` — ПИШЕ в чергу й ПЛАТИТЬ (≈ $2 за 100 розмов; ціни й стелі — з .env, плюс стеля мобільних $15).
+ * `--go` — ПИШЕ в чергу й ПЛАТИТЬ (≈ $2 за 100 розмов; уже розпізнані розмови вдруге не розпізнаються;
+ * ціни й стелі — з .env, плюс стеля мобільних $15).
  * Повтор тієї самої команди не платить удруге: розшифровки й аналізи вже є.
- *   … dist/tools/carrierCallPilot.js --go [--per-group=50]
+ *   … dist/tools/carrierCallPilot.js --go [--per-group=30]
  * Звіт — без номерів телефонів.
  */
 if (import.meta.url === `file://${process.argv[1]}`) {
   (async () => {
     const go = process.argv.includes("--go");
-    const n = Number(process.argv.find((a) => a.startsWith("--per-group="))?.split("=")[1] ?? 50);
+    const n = Number(process.argv.find((a) => a.startsWith("--per-group="))?.split("=")[1] ?? 30);
     if (!Number.isInteger(n) || n < 1 || n > 200) throw new Error(`--per-group поза 1..200: ${String(n)}`);
     const role = (await pool.query<{ u: string }>("SELECT current_user AS u")).rows[0]?.u;
     if (!go && role !== "test_readonly")
@@ -28,7 +30,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const min = (g: string) => Math.round(picks.filter((p) => p.group === g).reduce((s, p) => s + p.billsec, 0) / 60);
     console.log(JSON.stringify({ mode: go ? "go" : "dry-run",
       carriers: picks.filter((p) => p.group === "carrier").length, carrierMin: min("carrier"),
-      clients: picks.filter((p) => p.group === "client").length, clientMin: min("client") }, null, 2));
+      clients: picks.filter((p) => p.group === "client").length, clientMin: min("client"),
+      other: picks.filter((p) => p.group === "other").length, otherMin: min("other") }, null, 2));
     if (!go) return;
 
     const run = await runCarrierPilot({

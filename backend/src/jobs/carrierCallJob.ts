@@ -29,6 +29,7 @@ export async function carrierCallJob(): Promise<CarrierTickReport | GuardSkip> {
       alert: sendAdminAlert,
       close: {
         mode: closeModeOf(config.callAi.carrierAutoClose),
+        otherMode: closeModeOf(config.callAi.carrierAutoCloseOther),
         kommo: {
           patchLeads: (body) => kommoWrite("/api/v4/leads", body, "PATCH"),
           addNotes: (body) => kommoWrite("/api/v4/leads/notes", body, "POST"),
@@ -41,7 +42,7 @@ export async function carrierCallJob(): Promise<CarrierTickReport | GuardSkip> {
       + `своя розмова ${String(v.own)}, повтор номера ${String(v.reused)}, без розмови ${String(v.noTalk)}, друга спроба ${String(v.secondTalk)} · `
       + `розпізнано ${String(sum(r.stt, "done"))}, проаналізовано ${String(sum(r.llm, "done"))}`
       + (r.purged ? ` · текст видалено за строком ${String(r.purged)}` : "")
-      + (r.closed ? ` · закриття (${r.closed.mode}): кандидатів ${String(r.closed.candidates)}, у журнал ${String(r.closed.logged)}, закрито ${String(r.closed.closed)}${r.closed.failed ? `, помилок ${String(r.closed.failed)}` : ""}` : "")
+      + (r.closed ? ` · закриття (${r.closed.mode}, «інше» ${r.closed.otherMode}): кандидатів ${String(r.closed.candidates)}, у журнал ${String(r.closed.logged)}, закрито ${String(r.closed.closed)}${r.closed.failed ? `, помилок ${String(r.closed.failed)}` : ""}` : "")
       + (r.sttStoppedBy ? ` · розпізнавання: ${r.sttStoppedBy}` : "")
       + (r.llmStoppedBy ? ` · аналіз: ${r.llmStoppedBy}` : ""));
     return r;

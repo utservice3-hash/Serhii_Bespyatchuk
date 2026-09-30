@@ -1,19 +1,25 @@
 import type { Db } from "./adCallFacts.js";
-import { CARRIER_STAGE, carrierBucket, RUBRIC_CARRIER_V1, type CarrierResult } from "./carrierCallRules.js";
+import { CARRIER_STAGE, OTHER_TYPE_UA, type OtherType } from "./carrierCallRules.js";
+import { carrierDealRows } from "./carrierDeals.js";
 
 /**
- * 🧹 ЗАКРИТТЯ ПЕРЕВІЗНИКІВ У KOMMO (рішення Романа 29.09.2026: «прибирати з рішенням від Gemini»).
+ * 🧹 ЗАКРИТТЯ В KOMMO (29.09.2026 — перевізники; ТЗ Романа 30.09.2026 — ще й «Інше»).
  *
- * Kommo угоди не видаляє — угода закривається «Не цільовою» (статус 143) з причиною «Перевізник», так само,
- * як це робить фільтр CRM. Закриваємо ЛИШЕ впевненого перевізника (≥ 0,85 і цитата співрозмовника, кошик
- * `carrier`) і ЛИШЕ угоду, що ДОСІ стоїть на етапі за свіжою відповіддю Kommo цього ж проходу.
+ * Kommo угоди не видаляє — угода закривається «Не цільовою» (статус 143) з причиною, як це робить фільтр CRM:
+ *   · перевізник (впевнений AI ≥ 0,85 з цитатою співрозмовника АБО рішення людини) → «Перевізник»;
+ *   · «Інше» (рішення людини — завжди; впевнений AI — лише коли ввімкнено окремо) → «Нецільове звернення»,
+ *     підтип — у примітці угоди й у дашборді (окремого значення в полі немає; Роман 30.09.2026: «взяти наявні»);
+ *   · «Клієнт» — не закриваємо ніколи.
+ * Категорію дає ОДНЕ правило (`dealCategory` через `carrierDealRows`) — те саме, що рахує вкладки й звіт.
+ * Лише угода, що ДОСІ стоїть на етапі за свіжою відповіддю Kommo цього ж проходу.
  *
- * Режим — змінна `CARRIER_AUTO_CLOSE` на сервері: `live` — пишемо в Kommo; `off` — нічого; будь-що інше,
- * включно з відсутністю, — `dry`: лише журнал «кого закрили б» (рішення Романа: першу добу — лише журнал).
- * Вмикає запис рівно одне значення, тож описка не вмикає запис у CRM.
+ * Режими — змінні на сервері: `CARRIER_AUTO_CLOSE` (перевізники й рішення людей) і `CARRIER_AUTO_CLOSE_OTHER`
+ * (AI-«Інше»; ТЗ: вмикати лише після тесту точності, показаного Роману). `live` — пишемо в Kommo; `off` — нічого;
+ * будь-що інше, включно з відсутністю, — `dry`: лише журнал «кого закрили б». Описка запису в CRM не вмикає.
+ * AI-«Інше» закривається, лише коли ввімкнено ОБИДВА: вимкнений основний режим вимикає все.
  *
- * Журнал `carrier_close_log` — рядок на угоду: коли вирішено, коли закрито, коли й ким повернуто. Повернута
- * людиною угода більше НЕ закривається автоматично: рішення людини сильніше за модель.
+ * Журнал `carrier_close_log` — рядок на угоду: з чим закрито, коли вирішено, коли закрито, коли й ким повернуто.
+ * Повернута людиною угода більше НЕ закривається автоматично: рішення людини сильніше за модель.
  */
 
 export type CloseMode = "off" | "dry" | "live";
@@ -27,16 +33,20 @@ export function closeModeOf(raw: string | null | undefined): CloseMode {
 export const REJECT_FIELD = 2097265;
 /** Значення «Перевізник» поля «Причина отказа» — заміряно в Kommo 29.09.2026 (GET /leads/custom_fields/2097265). */
 export const REJECT_ENUM_CARRIER = 6343043;
+/** «Нецільове звернення» — для «Інше» (заміряно в Kommo 30.09.2026; Роман: «взяти наявні»). */
+export const REJECT_ENUM_NONTARGET = 6340787;
+export type CloseReason = "carrier" | "other";
+export const REJECT_ENUM: Readonly<Record<CloseReason, number>> = { carrier: REJECT_ENUM_CARRIER, other: REJECT_ENUM_NONTARGET };
 export const LOST_STATUS = 143;
 export const CLOSE_BATCH = 50;
 export const CLOSE_MAX_PER_TICK = 50;
 /** Після невдалого запису до Kommo повтор — не частіше ніж раз на годину: не бомбимо CRM помилками щоп'ять хвилин. */
 export const RETRY_AFTER_MIN = 60;
 
-export function closePayload(ids: readonly number[]): unknown[] {
+export function closePayload(ids: readonly number[], reason: CloseReason = "carrier"): unknown[] {
   return ids.map((id) => ({
     id, pipeline_id: CARRIER_STAGE.pipelineId, status_id: LOST_STATUS,
-    custom_fields_values: [{ field_id: REJECT_FIELD, values: [{ enum_id: REJECT_ENUM_CARRIER }] }],
+    custom_fields_values: [{ field_id: REJECT_FIELD, values: [{ enum_id: REJECT_ENUM[reason] }] }],
   }));
 }
 
@@ -52,6 +62,13 @@ export function closeNoteText(confidence: number, quote: string | null, byHuman 
     + "Помилка — поверніть угоду на етап у вкладці «Перевізники за розмовою».";
 }
 
+export function closeNoteTextOther(confidence: number | null, otherType: OtherType | null, byHuman: boolean): string {
+  const sub = otherType ? OTHER_TYPE_UA[otherType] : "підтип не вказано";
+  const who = byHuman ? "рішення людини" : `AI, впевненість ${(confidence ?? 0).toFixed(2).replace(".", ",")}`;
+  return `Закрито дашбордом: не клієнт і не перевізник — ${sub} (${who}). `
+    + "Помилка — поверніть угоду на етап у вкладці «Перевізники за розмовою».";
+}
+
 export function chunks<T>(xs: readonly T[], n: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < xs.length; i += n) out.push(xs.slice(i, i + n));
@@ -63,74 +80,91 @@ export interface KommoCloser {
   addNotes: (body: unknown[]) => Promise<unknown>;
 }
 
-export interface CloseCandidate { kommoId: number; uniqueid: string; confidence: number; quote: string | null; logged: boolean; byHuman: boolean }
+export interface CloseCandidate {
+  kommoId: number; uniqueid: string | null; confidence: number | null; quote: string | null; logged: boolean; byHuman: boolean;
+  reason: CloseReason; otherType: OtherType | null;
+  /** AI-«Інше» без рішення людини — окремий перемикач (`CARRIER_AUTO_CLOSE_OTHER`). */
+  aiOther: boolean;
+}
 
 /**
  * Хто зараз підлягає закриттю. `onStage` — id угод із ВІДПОВІДІ Kommo цього проходу: угоду, яку фільтр чи
  * менеджер уже зрушили, не чіпаємо навіть за впевненого вердикту.
  */
 export async function closeCandidates(db: Db, onStage: ReadonlySet<number>, now: Date): Promise<CloseCandidate[]> {
-  const r = await db.query<{ kommo_id: string; u: string; result: CarrierResult; logged: boolean; closed: boolean; reverted: boolean;
-    recent_fail: boolean; dec: string | null }>(`
-    SELECT d.kommo_id::text, t.uniqueid AS u, a.result,
-           (SELECT x.decision FROM carrier_decisions x WHERE x.kommo_id = d.kommo_id ORDER BY x.id DESC LIMIT 1) AS dec,
-           l.kommo_id IS NOT NULL AS logged, l.closed_at IS NOT NULL AS closed, l.reverted_at IS NOT NULL AS reverted,
-           (l.last_try_at IS NOT NULL AND l.close_error IS NOT NULL AND l.last_try_at > $1::timestamptz - make_interval(mins => $2)) AS recent_fail
-      FROM carrier_call_deals d
-      LEFT JOIN carrier_call_deals src ON src.kommo_id = d.reused_from
-      JOIN call_transcripts t ON t.uniqueid = COALESCE(src.uniqueid, d.uniqueid)
-      JOIN call_analyses a ON a.transcript_id = t.id AND a.rubric_version = $3 AND a.status = 'done'
-      LEFT JOIN carrier_close_log l ON l.kommo_id = d.kommo_id
-     WHERE d.state IN ('own', 'reused')
-     ORDER BY d.deal_created_at, d.kommo_id`, [now.toISOString(), RETRY_AFTER_MIN, RUBRIC_CARRIER_V1]);
-  // 🙋 Рішення людини сильніше за AI в обидва боки: «Перевізник» закриваємо й без упевненого AI,
-  // «Клієнт»/«Інше» не закриваємо ніколи (`carrierDecisions.ts`).
-  const wanted = (x: { dec: string | null; result: CarrierResult }) =>
-    x.dec != null ? x.dec === "carrier" : carrierBucket(x.result) === "carrier";
-  return r.rows
-    .filter((x) => onStage.has(Number(x.kommo_id)) && !x.closed && !x.reverted && !x.recent_fail && wanted(x))
-    .map((x) => ({ kommoId: Number(x.kommo_id), uniqueid: x.u, confidence: Number(x.result.caller_role_confidence),
-      quote: x.result.caller_role_quote || null, logged: x.logged, byHuman: x.dec === "carrier" }));
+  if (!onStage.size) return [];
+  const rows = await carrierDealRows(db, { period: null, scope: {}, ids: [...onStage] });
+  const log = new Map((await db.query<{ kommo_id: string; reverted: boolean; recent_fail: boolean }>(`
+    SELECT kommo_id::text, reverted_at IS NOT NULL AS reverted,
+           (last_try_at IS NOT NULL AND close_error IS NOT NULL AND closed_at IS NULL
+            AND last_try_at > $2::timestamptz - make_interval(mins => $3)) AS recent_fail
+      FROM carrier_close_log WHERE kommo_id = ANY($1::bigint[])`, [[...onStage], now.toISOString(), RETRY_AFTER_MIN])).rows
+    .map((x) => [Number(x.kommo_id), x]));
+  const out: CloseCandidate[] = [];
+  for (const r of [...rows].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.kommoId - b.kommoId)) {
+    if (r.category !== "carrier" && r.category !== "other") continue;
+    const l = log.get(r.kommoId);
+    if (r.close?.state === "closed" || l?.reverted || l?.recent_fail) continue;
+    const byHuman = r.source === "human";
+    out.push({ kommoId: r.kommoId, uniqueid: r.uniqueid, confidence: r.ai.confidence, quote: r.ai.quote, logged: l != null,
+      byHuman, reason: r.category, otherType: r.otherType, aiOther: r.category === "other" && !byHuman });
+  }
+  return out;
 }
 
-export interface CloseReport { mode: CloseMode; candidates: number; logged: number; closed: number; failed: number; error: string | null }
+export interface CloseReport { mode: CloseMode; otherMode: CloseMode; candidates: number; logged: number; closed: number; failed: number; error: string | null }
 
-export async function runCarrierClose(db: Db, now: Date, mode: CloseMode, onStage: ReadonlySet<number>, kommo: KommoCloser): Promise<CloseReport> {
-  const rep: CloseReport = { mode, candidates: 0, logged: 0, closed: 0, failed: 0, error: null };
+export async function runCarrierClose(db: Db, now: Date, mode: CloseMode, onStage: ReadonlySet<number>, kommo: KommoCloser,
+  otherMode: CloseMode = "dry"): Promise<CloseReport> {
+  const rep: CloseReport = { mode, otherMode, candidates: 0, logged: 0, closed: 0, failed: 0, error: null };
   if (mode === "off") return rep;
-  const cands = await closeCandidates(db, onStage, now);
+  const cands = (await closeCandidates(db, onStage, now)).filter((c) => !(c.aiOther && otherMode === "off"));
   rep.candidates = cands.length;
   const fresh = cands.filter((c) => !c.logged);
   if (fresh.length) {
     const ins = await db.query(
-      `INSERT INTO carrier_close_log (kommo_id, uniqueid, confidence, quote, decided_at, mode)
-       SELECT k, u, c, q, $5::timestamptz, $6 FROM unnest($1::bigint[], $2::text[], $3::numeric[], $4::text[]) AS x(k, u, c, q)
+      `INSERT INTO carrier_close_log (kommo_id, uniqueid, confidence, quote, decided_at, mode, reason, other_type)
+       SELECT k, u, c, q, $5::timestamptz, m, r, o
+         FROM unnest($1::bigint[], $2::text[], $3::numeric[], $4::text[], $6::text[], $7::text[], $8::text[]) AS x(k, u, c, q, m, r, o)
        ON CONFLICT (kommo_id) DO NOTHING`,
       [fresh.map((c) => c.kommoId), fresh.map((c) => c.uniqueid), fresh.map((c) => c.confidence), fresh.map((c) => c.quote),
-        now.toISOString(), mode]);
+        now.toISOString(), fresh.map((c) => (c.aiOther && otherMode !== "live" ? "dry" : mode)),
+        fresh.map((c) => c.reason), fresh.map((c) => c.otherType)]);
     rep.logged = ins.rowCount ?? 0;
+  }
+  // Причину й підтип тримаємо свіжими: людина могла змінити «Інше» на «Перевізник» до закриття.
+  if (cands.length) {
+    await db.query(`UPDATE carrier_close_log l SET reason = x.r, other_type = x.o
+                      FROM unnest($1::bigint[], $2::text[], $3::text[]) AS x(k, r, o)
+                     WHERE l.kommo_id = x.k AND l.closed_at IS NULL AND (l.reason <> x.r OR l.other_type IS DISTINCT FROM x.o)`,
+    [cands.map((c) => c.kommoId), cands.map((c) => c.reason), cands.map((c) => c.otherType)]);
   }
   if (mode !== "live") return rep;
 
-  for (const batch of chunks(cands.slice(0, CLOSE_MAX_PER_TICK), CLOSE_BATCH)) {
-    const ids = batch.map((c) => c.kommoId);
-    try {
-      await kommo.patchLeads(closePayload(ids));
-    } catch (e) {
-      const why = (e instanceof Error ? e.message : String(e)).slice(0, 500);
-      await db.query(`UPDATE carrier_close_log SET close_error = $2, last_try_at = $3 WHERE kommo_id = ANY($1::bigint[])`,
-        [ids, why, now.toISOString()]);
-      rep.failed += ids.length;
-      rep.error = why;
-      continue;
+  const live = cands.filter((c) => !c.aiOther || otherMode === "live").slice(0, CLOSE_MAX_PER_TICK);
+  for (const reason of ["carrier", "other"] as const) {
+    for (const batch of chunks(live.filter((c) => c.reason === reason), CLOSE_BATCH)) {
+      const ids = batch.map((c) => c.kommoId);
+      try {
+        await kommo.patchLeads(closePayload(ids, reason));
+      } catch (e) {
+        const why = (e instanceof Error ? e.message : String(e)).slice(0, 500);
+        await db.query(`UPDATE carrier_close_log SET close_error = $2, last_try_at = $3 WHERE kommo_id = ANY($1::bigint[])`,
+          [ids, why, now.toISOString()]);
+        rep.failed += ids.length;
+        rep.error = why;
+        continue;
+      }
+      await db.query(`UPDATE carrier_close_log SET mode = 'live', closed_at = $2, close_error = NULL, last_try_at = $2 WHERE kommo_id = ANY($1::bigint[])`,
+        [ids, now.toISOString()]);
+      rep.closed += ids.length;
+      // Примітка — пояснення для менеджера. Її збій закриття не скасовує: угода вже закрита, а причина стоїть у полі.
+      const text = (c: CloseCandidate) => reason === "carrier"
+        ? closeNoteText(c.confidence ?? 0, c.quote, c.byHuman) : closeNoteTextOther(c.confidence, c.otherType, c.byHuman);
+      await kommo.addNotes(batch.map((c) => ({ entity_id: c.kommoId, note_type: "common", params: { text: text(c) } })))
+        .catch((e: unknown) => db.query(`UPDATE carrier_close_log SET close_error = $2 WHERE kommo_id = ANY($1::bigint[])`,
+          [ids, `закрито, але примітку не додано: ${(e instanceof Error ? e.message : String(e)).slice(0, 300)}`]));
     }
-    await db.query(`UPDATE carrier_close_log SET mode = 'live', closed_at = $2, close_error = NULL, last_try_at = $2 WHERE kommo_id = ANY($1::bigint[])`,
-      [ids, now.toISOString()]);
-    rep.closed += ids.length;
-    // Примітка — пояснення для менеджера. Її збій закриття не скасовує: угода вже закрита, а причина стоїть у полі.
-    await kommo.addNotes(batch.map((c) => ({ entity_id: c.kommoId, note_type: "common", params: { text: closeNoteText(c.confidence, c.quote, c.byHuman) } })))
-      .catch((e: unknown) => db.query(`UPDATE carrier_close_log SET close_error = $2 WHERE kommo_id = ANY($1::bigint[])`,
-        [ids, `закрито, але примітку не додано: ${(e instanceof Error ? e.message : String(e)).slice(0, 300)}`]));
   }
   return rep;
 }

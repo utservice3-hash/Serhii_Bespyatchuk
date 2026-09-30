@@ -372,28 +372,30 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["hr", "manager", "financier"] },
   { method: "GET", path: "/api/dashboard/ai-calls/:uniqueid", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["hr", "manager", "financier"] },
-  /* 🚚 ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ (29.09.2026) — лише керівництво (рішення Романа): admin, ceo, opdir, kvp.
-     Тімлід теж у deny — на відміну від «Першого дотику». Межа — вкладка `carrier-calls` (routeTab). */
+  /* 🚚 ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ — керівництво (29.09.2026) + тімлід і менеджер (ТЗ Романа 30.09.2026 «Відсів
+     перевізників»: менеджер — свої угоди, тімлід — команда; кламп — у ЯДРІ через `missedScopeFor`, не тут).
+     Межа — вкладка `carrier-calls` (routeTab), звіряється із сидом. HR і фінансист — ні. */
   { method: "GET", path: "/api/dashboard/carrier-calls", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["team_lead", "hr", "manager", "financier"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
   { method: "GET", path: "/api/dashboard/carrier-calls/meta", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["team_lead", "hr", "manager", "financier"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
+  { method: "GET", path: "/api/dashboard/carrier-calls/report", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
   { method: "GET", path: "/api/dashboard/carrier-calls/:uniqueid", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["team_lead", "hr", "manager", "financier"] },
-  /* 🙋 Черга невпевнених — ролі вкладки. Запис розмови — вужче: лише адмін і КВП (варіант А, 29.09.2026),
-     CEO й опдир отримують 403 від обробника. Рішення — запис у БД, тож проба лише на відмову; фінансиста тримає
-     межа вкладки (#11b). */
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
+  /* 🙋 Черга «На перевірці» і запис розмови — ролі вкладки, кожен у своєму скоупі (чужий дзвінок — 404 від обробника).
+     Рішення й повернення — запис у БД/Kommo, тож проба лише на відмову; фінансиста тримає межа вкладки (#11b). */
   { method: "GET", path: "/api/dashboard/carrier-calls/pending", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["team_lead", "hr", "manager", "financier"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
   { method: "GET", path: "/api/dashboard/carrier-calls/:uniqueid/audio", cls: "GET",
-    allow: ["admin", "kvp"], deny: ["ceo", "opdir", "team_lead", "hr", "manager", "financier"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
   { method: "POST", path: "/api/dashboard/carrier-calls/deals/:kommoId/decision", cls: "deny-only",
-    allow: [], deny: ["team_lead", "hr", "manager"] },
+    allow: [], deny: ["hr"] },
   /* ↩️ Повернути закриту дашбордом угоду на етап — запис у Kommo, тож проба лише на відмову. Фінансист
-     адмін-рівня, але вкладки не має → 403 на tab-гейті (сид доводить #962b); у deny-only рядок його не пишемо —
+     адмін-рівня, але вкладки не має → 403 на tab-гейті (сид доводить гейт сиду); у deny-only рядок його не пишемо —
      та сама причина, що в «Номінаціях»: проба адмін-рівня ризикувала б справжнім записом. */
   { method: "POST", path: "/api/dashboard/carrier-calls/deals/:kommoId/revert", cls: "deny-only",
-    allow: [], deny: ["team_lead", "hr", "manager"] },
+    allow: [], deny: ["hr"] },
   /* 🧑‍💼 НАЙМ, прохід 1 (17.09.2026). Вкладку `hiring` сид дає admin, ceo, opdir, kvp, hr,
      team_lead — рядок `/api/hiring/candidates` звіряється з ним гейтом #504.
      Друга межа — `hiringAccess` першим оператором обробника: графік, звіт і запис веде

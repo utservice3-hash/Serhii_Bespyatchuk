@@ -47,6 +47,14 @@ export const CARRIER_OPS = {
 export const CARRIER_THRESHOLD = 0.85;
 
 export const RUBRIC_CARRIER_V1 = "carrier-v1";
+/**
+ * Рубрика з підтипом «Інше» й причиною (ТЗ «Відсів перевізників з „Дзвінків на мобільні“», Роман 30.09.2026).
+ * Нові розмови слухаються лише нею; вердикти `carrier-v1` лишаються чинними для своїх угод і повторно не
+ * оплачуються (`carrierCalls.ts`, крок аналізу). Читачі беруть найсвіжіший готовий вердикт із будь-якої з двох.
+ */
+export const RUBRIC_CARRIER_V2 = "carrier-v2";
+export const CARRIER_RUBRIC = RUBRIC_CARRIER_V2;
+export const CARRIER_RUBRICS: readonly string[] = [RUBRIC_CARRIER_V2, RUBRIC_CARRIER_V1];
 
 /**
  * Номер з назви угоди. Ringostat називає угоду номером того, хто дзвонив (`380XXXXXXXXX`) — так само
@@ -129,6 +137,9 @@ export interface CarrierResult {
   caller_role_confidence: number;
   caller_role_quote: string;
   quote_check?: QuoteCheck;
+  /** Лише `carrier-v2`: підтип «Інше» (для решти — `null`) і коротко, чому так вирішено. */
+  other_type?: OtherType | null;
+  reason?: string;
 }
 
 const ROLES: readonly string[] = ["client", "carrier", "other", "unclear"];
@@ -169,6 +180,108 @@ export function interpretCarrier(out: GeminiOutcome, turns: readonly Turn[]): { 
   return { ok: true, result: { ...v.value, quote_check: checkCarrierQuote(v.value, turns) } };
 }
 
+// ─── Рубрика carrier-v2 (ТЗ 30.09.2026): вердикт + підтип «Інше» + причина ─────────────────
+
+/** Підтипи «Інше» — дослівно з ТЗ. `other` — усе, що не лягло в перші п'ять. */
+export const OTHER_TYPES = ["spam", "supplier", "job_seeker", "personal", "wrong_number", "other"] as const;
+export type OtherType = (typeof OTHER_TYPES)[number];
+export const OTHER_TYPE_UA: Readonly<Record<OtherType, string>> = {
+  spam: "спам / реклама", supplier: "постачальник", job_seeker: "шукає роботу", personal: "особисте",
+  wrong_number: "помилка номера", other: "інше",
+};
+export const isOtherType = (x: unknown): x is OtherType => typeof x === "string" && (OTHER_TYPES as readonly string[]).includes(x);
+
+/** Відповідь моделі — ключі з ТЗ (`verdict`, `other_type`, `confidence`, `reason`, `summary`) + канал і цитата. */
+export const CARRIER_SCHEMA_V2 = {
+  type: "object",
+  properties: {
+    summary: { type: "string", description: "1–2 речення: хто дзвонив і навіщо" },
+    manager_channel: { type: "string", enum: ["0", "1", "unknown"], description: "номер каналу менеджера UTS, визначений зі змісту" },
+    verdict: { type: "string", enum: ["client", "carrier", "other", "unclear"], description: "хто співрозмовник менеджера" },
+    other_type: { type: "string", enum: ["", ...OTHER_TYPES], description: "лише для verdict=other; інакше порожньо" },
+    confidence: { type: "number", description: "впевненість від 0 до 1" },
+    reason: { type: "string", description: "одне речення: чому саме такий вердикт" },
+    quote: { type: "string", description: "дослівний уривок зі слів СПІВРОЗМОВНИКА (не менеджера), на підставі якого вирішено; немає — порожньо" },
+  },
+  required: ["summary", "manager_channel", "verdict", "other_type", "confidence", "reason", "quote"],
+} as const;
+
+export const CARRIER_SYSTEM_PROMPT_V2 = [
+  "Ти отримуєш автоматичну розшифровку телефонної розмови менеджера логістичної компанії UTS.",
+  "Людина подзвонила менеджеру на мобільний. Треба визначити, ХТО це: клієнт, перевізник чи хтось інший.",
+  "Розшифровку зроблено по двох каналах запису; кожен рядок — час від початку розмови, номер каналу і текст.",
+  "Хто з каналів менеджер UTS — визнач зі змісту розмови.",
+  "verdict:",
+  "  carrier — у співрозмовника є транспорт і він шукає вантаж, пропонує перевезення чи свою машину, питає про оплату за вже виконаний рейс; водій шукає роботу на своїй машині.",
+  "  client — йому треба щось перевезти: шукає машину, питає ціну чи умови перевезення. Якщо людина і сама возить, і просить перевезти («возимо самі, але на Молдову машин нема — порахуйте») — це client: він просить перевезти.",
+  "  other — розмова не про перевезення вантажу для співрозмовника і не пропозиція транспорту.",
+  "  unclear — розмова обірвалась, не чути, розмови по суті немає.",
+  "other_type (лише для other, інакше порожній рядок):",
+  "  spam — реклама, продаж послуг, опитування, автодзвінки;",
+  "  supplier — постачальник чи продавець для самої компанії: пальне, запчастини, сервіс, зв'язок, банк, софт;",
+  "  job_seeker — шукає роботу (не на своїй машині) чи відповідає на вакансію;",
+  "  personal — особиста розмова: знайомий, родина, не по роботі;",
+  "  wrong_number — помилився номером, шукав іншу людину чи компанію;",
+  "  other — інше, що не підходить під попередні.",
+  "Правила:",
+  "1. Вирішуй лише за тим, що прямо сказано. Нічого не домислюй.",
+  "2. quote — дослівний уривок зі слів СПІВРОЗМОВНИКА (не менеджера), без часу й номера каналу. Немає такого уривка — порожній рядок.",
+  "3. confidence — наскільки ти впевнений, від 0 до 1. Для unclear — не більше 0.5.",
+  "4. reason — одне коротке речення, чому саме такий вердикт.",
+  "5. Пиши українською.",
+].join("\n");
+
+export function buildCarrierRequestV2(turns: readonly Turn[], maxOutputTokens: number): Record<string, unknown> {
+  const text = turns.map((t) => `[${mmss(t.start)}] Канал ${String(t.channel)}: ${t.text}`).join("\n");
+  return {
+    system_instruction: { parts: [{ text: CARRIER_SYSTEM_PROMPT_V2 }] },
+    contents: [{ role: "user", parts: [{ text }] }],
+    generationConfig: {
+      responseFormat: { text: { mimeType: "APPLICATION_JSON", schema: CARRIER_SCHEMA_V2 } },
+      thinkingConfig: { thinkingLevel: "low" },
+      maxOutputTokens,
+    },
+  };
+}
+
+/**
+ * Відповідь v2 → той самий внутрішній вигляд, що й v1 (`caller_role`…), плюс `other_type` і `reason`: так усі
+ * читачі вердикту працюють з обома рубриками однаково. Підтип поза переліком для «Інше» → `other`, а не відмова:
+ * вердикт «Інше» правдивий і без точного підтипу; для решти вердиктів підтип завжди `null`.
+ */
+export function validateCarrierV2(x: unknown): { ok: true; value: CarrierResult } | { ok: false; why: string } {
+  if (!x || typeof x !== "object") return { ok: false, why: "не обʼєкт" };
+  const o = x as Record<string, unknown>;
+  for (const k of ["summary", "quote", "reason"]) if (typeof o[k] !== "string") return { ok: false, why: `поле ${k} не рядок` };
+  if (!["0", "1", "unknown"].includes(o.manager_channel as string)) return { ok: false, why: "manager_channel поза переліком" };
+  if (!ROLES.includes(o.verdict as string)) return { ok: false, why: "verdict поза переліком" };
+  const c = o.confidence;
+  if (typeof c !== "number" || !Number.isFinite(c) || c < 0 || c > 1) return { ok: false, why: "confidence не число 0..1" };
+  const role = o.verdict as CallerRole;
+  return { ok: true, value: {
+    summary: o.summary as string, manager_channel: o.manager_channel as CarrierResult["manager_channel"],
+    caller_role: role, caller_role_confidence: c, caller_role_quote: o.quote as string,
+    other_type: role === "other" ? (isOtherType(o.other_type) ? o.other_type : "other") : null,
+    reason: o.reason as string,
+  } };
+}
+
+export function interpretCarrierV2(out: GeminiOutcome, turns: readonly Turn[]): { ok: true; result: CarrierResult } | { ok: false; why: string } {
+  if (out.blockReason) return { ok: false, why: `запит заблоковано постачальником: ${out.blockReason}` };
+  if (out.finishReason && out.finishReason !== "STOP") return { ok: false, why: `модель не завершила відповідь: ${out.finishReason}` };
+  if (!out.text) return { ok: false, why: "модель повернула порожню відповідь" };
+  let parsed: unknown;
+  try { parsed = JSON.parse(out.text); } catch { return { ok: false, why: "відповідь моделі не JSON" }; }
+  const v = validateCarrierV2(parsed);
+  if (!v.ok) return { ok: false, why: `відповідь моделі не за схемою: ${v.why}` };
+  return { ok: true, result: { ...v.value, quote_check: checkCarrierQuote(v.value, turns) } };
+}
+
+export const CARRIER_KIT_V2 = {
+  build: (turns: readonly Turn[], maxOutputTokens: number) => buildCarrierRequestV2(turns, maxOutputTokens),
+  interpret: interpretCarrierV2,
+};
+
 export const CARRIER_KIT = {
   build: (turns: readonly Turn[], maxOutputTokens: number) => buildCarrierRequest(turns, maxOutputTokens),
   interpret: interpretCarrier,
@@ -186,4 +299,47 @@ export function carrierBucket(r: Pick<CarrierResult, "caller_role" | "caller_rol
   if (r.caller_role_confidence < threshold) return "low";
   if (r.caller_role !== "other" && r.quote_check !== "counterpart") return "low";
   return r.caller_role;
+}
+
+// ─── Категорія угоди — ОДНЕ правило для вкладок, черги, звіту й закриття (ТЗ 30.09.2026) ───────────
+
+export type HumanDecision = "carrier" | "client" | "other";
+export type DealCategory = "client" | "carrier" | "other" | "review" | "error" | "waiting";
+/** Стан обробки розмови (`aiCallState` екрана «Перший дотик»), якщо вердикту ще немає. */
+export type CarrierAiState = "not_queued" | "not_enabled" | "queued" | "capped" | "recording_unavailable"
+  | "stt_failed" | "no_text" | "llm_pending" | "llm_failed" | "done";
+
+/** Чому AI не впевнений — коротко, для рядка черги. `null` — упевнений. */
+export function whyUncertain(r: Pick<CarrierResult, "caller_role" | "caller_role_confidence" | "quote_check">): string | null {
+  const b = carrierBucket(r);
+  if (b === "unclear") return "не чути";
+  if (b !== "low") return null;
+  if (r.caller_role_confidence < CARRIER_THRESHOLD) return "невпевнено";
+  if (r.quote_check === "manager") return "цитата менеджера";
+  return "цитата не знайдена";
+}
+
+/** «Помилка» (ТЗ: після N спроб): розпізнати чи проаналізувати не вдалось — вирішує людина. */
+const ERROR_WHY: Partial<Record<CarrierAiState, string>> = {
+  recording_unavailable: "запису немає", stt_failed: "не вдалось розпізнати", no_text: "у записі немає мови",
+  llm_failed: "AI не відповів після кількох спроб",
+};
+
+/**
+ * Куди потрапляє угода. Рішення людини сильніше за AI; далі впевнений вердикт AI (≥ поріг і цитата
+ * співрозмовника, `carrierBucket`); невпевнений, «не розібрати» й угода без розмови ≥10 с — «На перевірці»
+ * (менеджер вирішує свої пропущені); збій після спроб — «Помилка»; решта — AI ще працює.
+ * `waiting`, `review` і `error` разом — «не розібрано» у звіті.
+ */
+export function dealCategory(x: { human: HumanDecision | null; result: CarrierResult | null; dealState: string; ai: CarrierAiState | null }):
+  { category: DealCategory; source: "human" | "ai" | null; why: string | null } {
+  if (x.human) return { category: x.human, source: "human", why: null };
+  if (x.result) {
+    const b = carrierBucket(x.result);
+    if (b === "carrier" || b === "client" || b === "other") return { category: b, source: "ai", why: null };
+    return { category: "review", source: null, why: whyUncertain(x.result) };
+  }
+  if (x.dealState === "no_talk") return { category: "review", source: null, why: "розмови від 10 с не було" };
+  if (x.ai && ERROR_WHY[x.ai]) return { category: "error", source: null, why: ERROR_WHY[x.ai] ?? null };
+  return { category: "waiting", source: null, why: x.dealState === "waiting" ? "чекаємо розмову" : "AI слухає" };
 }

@@ -60,10 +60,13 @@ function wav(seconds: number): Uint8Array<ArrayBuffer> {
 
 const CARRIER_JSON = JSON.stringify({ summary: "перевізник шукає вантаж", manager_channel: "1", caller_role: "carrier",
   caller_role_confidence: 0.95, caller_role_quote: "своя фура шукаю вантаж" });
+/** Відповідь рубрики `carrier-v2` — ключі з ТЗ 30.09.2026. */
+const CARRIER_JSON_V2 = JSON.stringify({ summary: "перевізник шукає вантаж", manager_channel: "1", verdict: "carrier", other_type: "",
+  confidence: 0.95, reason: "має свою фуру й шукає вантаж", quote: "своя фура шукаю вантаж" });
 const FIRST_TOUCH_JSON = JSON.stringify({ summary: "s", manager_channel: "1", client_request: "тент", next_step: "",
   price: { discussed: false, quote: "" }, objections: [], promises: [] });
 
-/** Мережа: Gemini відповідає за РУБРИКОЮ запиту (схема з `caller_role` — перевізники, інакше — перший дотик). */
+/** Мережа: Gemini відповідає за РУБРИКОЮ запиту (схема з `other_type` — перевізники v2, з `caller_role` — v1, інакше — перший дотик). */
 function fakeNet() {
   const hits = { ringostat: 0, elevenlabs: 0, gemini: 0, geminiCarrier: 0, other: 0 };
   const http: HttpDeps = {
@@ -83,9 +86,10 @@ function fakeNet() {
       }
       if (url.includes("generativelanguage.googleapis.com")) {
         hits.gemini++;
-        const carrier = String(init?.body ?? "").includes("caller_role");
+        const body = String(init?.body ?? "");
+        const v2 = body.includes("other_type"), carrier = v2 || body.includes("caller_role");
         if (carrier) hits.geminiCarrier++;
-        return Response.json({ candidates: [{ content: { parts: [{ text: carrier ? CARRIER_JSON : FIRST_TOUCH_JSON }] }, finishReason: "STOP" }],
+        return Response.json({ candidates: [{ content: { parts: [{ text: v2 ? CARRIER_JSON_V2 : carrier ? CARRIER_JSON : FIRST_TOUCH_JSON }] }, finishReason: "STOP" }],
           usageMetadata: { promptTokenCount: 700, candidatesTokenCount: 90, thoughtsTokenCount: 40 } });
       }
       hits.other++;
@@ -289,35 +293,6 @@ test("#954 ЧЕРГА · ЖИВА СХЕМА: мобільна бере лише
 });
 
 /**
- * #955 — РУБРИКИ НЕ ПЕРЕТИНАЮТЬСЯ: мобільний дзвінок отримує лише carrier-v1, рекламний — лише рекламну.
- * 🧨 Червоніє, якщо рекламна джоба ставитиме аналіз без межі або мобільна — рекламну рубрику.
- */
-test("#955 РУБРИКИ · ЖИВА СХЕМА: мобільний — лише carrier-v1, рекламний — лише рекламна", async (t) => {
-  const c = await ctx(t); if (!c) return;
-  await reset(c);
-  const { runCarrierTick } = await import("./carrierCalls.js");
-  const { runCallAiTick } = await import("./callAiTick.js");
-  const P = phone(93500, 1);
-  await call(c, "935-mob", min(100), 30, P);
-  await carrierDeal(c, 93501, P, min(101), "own", "935-mob", 1);
-  await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel)
-    VALUES (93599,'D',8921932,1,'2026-09-26 10:00:00+03','0999935999','ad')`);
-  await call(c, "935-ad", new Date("2026-09-26T07:30:00Z"), 35, "380999935999");
-  const net = fakeNet();
-  const tick = { http: net.http, keys: { elevenlabs: "k", gemini: "g" }, prices: PRICES, now: () => NOW };
-  await runCarrierTick({ db: c.db, ...tick, stageLeads: async () => [], alert: async () => {} });
-  await runCallAiTick({ db: c.db, ...tick, ad: { predicate: (r: string) => `(d.client_source = ANY(${r}))`, adSources: ["uts.ua"] } });
-  const rubrics = async (u: string) => (await c.raw.query<{ r: string }>(`SELECT a.rubric_version r FROM call_analyses a
-    JOIN call_transcripts t ON t.id=a.transcript_id WHERE t.uniqueid=$1 ORDER BY 1`, [u])).rows.map((x) => x.r);
-  assert.deepEqual(await rubrics("935-mob"), ["carrier-v1"], "🔴 мобільний дзвінок отримав чужу рубрику");
-  assert.deepEqual(await rubrics("935-ad"), ["first-touch-v1"], "🔴 рекламний дзвінок отримав рубрику перевізників");
-  const res = (await c.raw.query<{ result: CarrierResult }>(`SELECT a.result FROM call_analyses a JOIN call_transcripts t ON t.id=a.transcript_id
-    WHERE t.uniqueid='935-mob'`)).rows[0].result;
-  assert.equal(res.quote_check, "counterpart", "дзеркало: цитата співрозмовника підтверджена на справжній розшифровці");
-  assert.equal(carrierBucket(res), "carrier");
-});
-
-/**
  * #956 — ЦИТАТА СПІВРОЗМОВНИКА: підтверджує лише цитата з каналу НЕ менеджера; фраза менеджера, вигадка,
  * невідомий бік — не підтвердження, і такий вердикт іде «нижче порогу». Поріг 0,85 — з обох боків.
  * 🧨 Червоніє, якщо прийняти фразу менеджера, шукати у склейці каналів або зсунути поріг.
@@ -475,43 +450,6 @@ async function carrierAnalysed(c: Raw, u: string, role: string, conf: number, qu
 }
 
 /**
- * #960 — СПИСОК І ПЛИТКИ: рядок — дзвінок, угода з повтором вердикту номера стоїть у рядку свого джерела;
- * угоди без розмови в список не йдуть, але їх число — у плитках; «прибрав фільтр» — лише угоди етапу (назва-номер)
- * з причиною «Перевізник» у періоді; «лишилось після фільтра» — усі наші записи періоду.
- * 🧨 Червоніє, якщо рядок стане угодою, загубиться повтор, прибрати назву-номер чи розвести період.
- */
-test("#960 СПИСОК · ЖИВА СХЕМА: рядок — дзвінок з усіма угодами номера; без розмови — лише числом; плитки з обох джерел", async (t) => {
-  const c = await ctx(t); if (!c) return;
-  await reset(c);
-  const { carrierCallsList } = await import("./carrierCallScreen.js");
-  const P = phone(96000, 1), Q = phone(96000, 2);
-  const at = new Date("2026-09-24T08:00:00Z");
-  await call(c, "960-a", at, 40, P); await call(c, "960-c", at, 25, Q);
-  await carrierDeal(c, 96001, P, at, "own", "960-a", 1);
-  await c.raw.query(`INSERT INTO carrier_call_deals(kommo_id,phone,deal_created_at,seen_at,state,reused_from)
-    VALUES (96002,$1,$2,$3,'reused',96001)`, [P, new Date("2026-09-25T08:00:00Z").toISOString(), NOW.toISOString()]);
-  await carrierDeal(c, 96003, Q, at, "own", "960-c", 1);
-  await carrierDeal(c, 96004, phone(96000, 4), at);
-  await carrierDeal(c, 96005, phone(96000, 5), at, "no_talk");
-  await carrierDeal(c, 96006, phone(96000, 6), new Date("2026-09-10T08:00:00Z"));
-  await carrierAnalysed(c, "960-a", "carrier", 0.95, "counterpart");
-  await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,reject_reason,created_at_kommo) VALUES
-    (96101,'380500960101',8921928,143,'Перевізник','2026-09-24 10:00:00+03'),
-    (96102,'ТОВ Вантаж',8921928,143,'Перевізник','2026-09-24 10:00:00+03'),
-    (96103,'380500960103',8921928,143,'Дубль','2026-09-24 10:00:00+03'),
-    (96104,'380500960104',8921928,143,'Перевізник','2026-09-10 10:00:00+03')`);
-  const { rows, kpis } = await carrierCallsList(c.db, "2026-09-22", "2026-09-28");
-  assert.equal(rows.length, 2, "🔴 у списку не рівно два дзвінки (угоди без розмови чи поза періодом просочились, або рядок став угодою)");
-  const a = rows.find((r) => r.uniqueid === "960-a")!;
-  assert.deepEqual(a.deals.map((d) => [d.kommoId, d.reused]).sort(), [[96001, false], [96002, true]], "🔴 угода з повтором вердикту загубилась");
-  assert.equal(a.bucket, "carrier");
-  assert.equal(rows.find((r) => r.uniqueid === "960-c")!.bucket, null, "🔴 вердикт без аналізу");
-  assert.deepEqual({ removed: kpis.removedByFilter, left: kpis.leftAfterFilter, waiting: kpis.waitingTalk, noTalk: kpis.noTalk, listened: kpis.listenedPhones },
-    { removed: 1, left: 5, waiting: 1, noTalk: 1, listened: 1 });
-  assert.ok(kpis.recordingSince, "🔴 не видно, з якого моменту ведеться облік — старі дні читались би як нуль");
-});
-
-/**
  * #961 — КАРТКА: лише дзвінок мобільних (чужий → null → 404); повний текст — лише кому дозволено. І з другого
  * боку: картка «Першого дотику» не відкриває дзвінок мобільних за прямою адресою, а дзвінок, що є і там, і там, — відкриває.
  * 🧨 Червоніє, якщо картка віддасть чужий дзвінок, текст — без права, або зняти захист у картці «Першого дотику».
@@ -538,56 +476,15 @@ test("#961 КАРТКА · ЖИВА СХЕМА: лише дзвінки мобі
   assert.ok(await aiCallCard(c.db, "961-ad", true, {}), "дзеркало: звичайний дзвінок картка «Першого дотику» відкриває");
 });
 
-/**
- * #962 — ДОСТУП: три роути в матриці = сид вкладки (admin, ceo, opdir, kvp), тімлід, менеджер, фінансист і HR — у deny;
- * межа роутів — вкладка `carrier-calls`, і вона не накриває сусіда `ai-calls`; текст — через `transcriptAllowed(auth)`.
- * 🧨 Червоніє, якщо розвести сид і матрицю, прибрати межу або вирішувати право на текст за `auth.role`.
- */
-test("#962 ДОСТУП: матриця = сид (admin, ceo, opdir, kvp), межа — carrier-calls, текст — за ключем ролі", async () => {
-  const schema = SRC("db/schema.sql");
-  const m = /UPDATE roles SET screen_access = screen_access \|\| '\{"carrier-calls":true\}'::jsonb\s+WHERE key IN \(([^)]+)\)/.exec(schema);
-  assert.ok(m, "🔴 сиду вкладки carrier-calls у схемі немає");
-  const seeded = m[1].split(",").map((x) => x.trim().replace(/'/g, "")).sort();
-  assert.deepEqual(seeded, ["admin", "ceo", "kvp", "opdir"]);
-  const MAIN = ["/api/dashboard/carrier-calls", "/api/dashboard/carrier-calls/meta", "/api/dashboard/carrier-calls/:uniqueid"];
-  const rows = ACCESS_MATRIX.filter((r) => r.method === "GET" && MAIN.includes(r.path));
-  assert.equal(rows.length, 3, "🔴 не всі основні роути читання вкладки в матриці");
-  for (const r of rows) {
-    assert.deepEqual([...r.allow].sort(), seeded, `🔴 ${r.path}: матриця ≠ сид`);
-    for (const d of ["team_lead", "manager", "financier", "hr"]) assert.ok(r.deny.includes(d as never), `🔴 ${r.path}: ${d} не в deny`);
-  }
-  const { tabsForPath } = await import("../auth/routeTab.js");
-  for (const p of ["/api/dashboard/carrier-calls", "/api/dashboard/carrier-calls/meta", "/api/dashboard/carrier-calls/123.45"])
-    assert.deepEqual(tabsForPath(p), ["carrier-calls"], `🔴 ${p} без межі вкладки`);
-  assert.deepEqual(tabsForPath("/api/dashboard/ai-calls"), ["ai-calls"], "🔴 межа мобільних накрила сусідню вкладку");
-  const route = SRC("routes/dashboard.ts");
-  const at = route.indexOf('dashboardRouter.get("/carrier-calls/:uniqueid"');
-  assert.ok(at > 0, "🔴 роут картки не знайдено");
-  assert.match(route.slice(at, route.indexOf("});", at)), /carrierCallCard\(pool, [^,]+, transcriptAllowed\(auth\)\)/,
-    "🔴 право на текст вирішується не через transcriptAllowed(auth)");
-});
-
-/**
- * #962b — МІГРАЦІЯ ДВІЧІ: вкладку мають admin, ceo, opdir, kvp; фінансист (синк «= екрани адміна»), тімлід, HR і
- * менеджер — ні, і ДРУГИЙ прогін схеми цього не змінює (той механізм, що протік `ai-calls`, #794).
- * 🧨 Червоніє, якщо прибрати зняття після синку або поставити його вище за синк.
- */
-test("#962b МІГРАЦІЯ ДВІЧІ · ЖИВА СХЕМА: «Перевізники» — у керівництва; фінансист, тімлід, HR і менеджер — НІ", async (t) => {
-  const c = await ctx(t); if (!c) return;
-  await c.raw.query(readFileSync(path.join(import.meta.dirname, "..", "..", "src", "db", "schema.sql"), "utf8"));
-  const rows = (await c.raw.query<{ key: string; screen_access: Record<string, unknown> }>("SELECT key, screen_access FROM roles")).rows;
-  const sees = (k: string) => rows.find((r) => r.key === k)?.screen_access?.["carrier-calls"] === true;
-  assert.ok(rows.some((r) => r.key === "financier"), "🔴 у scratch-базі немає ролі фінансиста — перевіряти нема чого");
-  for (const k of ["admin", "ceo", "opdir", "kvp"]) assert.ok(sees(k), `🔴 «${k}» не бачить вкладки — зняття забрало більше, ніж вирішено`);
-  for (const k of ["financier", "team_lead", "hr", "manager"]) assert.ok(!sees(k), `🔴 «${k}» бачить вкладку після ДРУГОЇ міграції`);
-});
-
 interface CarrierView {
-  BUCKET_UI: Record<string, { label: string }>;
-  matchesCarrierFilter: (r: { bucket: string | null }, f: string) => boolean;
+  CARRIER_TABS: readonly { key: string; label: string }[];
+  tabOf: (c: string) => string;
+  CATEGORY_UI: Record<string, { label: string }>;
+  OTHER_TYPE_UI: Record<string, string>;
+  DECISION_UI: Record<string, { label: string }>;
   dealStatusLabel: (s: number | null, r: string | null) => string;
-  carrierSpeaker: (ch: number, mgr: number | null) => string;
-  dealsWord: (n: number) => string;
+  closeLabel: (c: { state: string; at: string; reason?: string } | null, fmt: (iso: string) => string) => string | null;
+  deciderLabel: (role: string | null) => string;
 }
 async function loadCarrierView(): Promise<CarrierView> {
   const ts = (await import("typescript")).default;
@@ -595,36 +492,6 @@ async function loadCarrierView(): Promise<CarrierView> {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
   return await import(`data:text/javascript,${encodeURIComponent(js)}`) as CarrierView;
 }
-
-/**
- * #963 — ПРОВОДКА ФРОНТУ: пункт меню в «Продажі», секція — статичним імпортом (#225), кличе три роути; правила
- * вигляду: кошики фронту = кошики бекенду з різними підписами, «ще слухаємо» = без вердикту, стан угоди словами.
- * 🧨 Червоніє, якщо відʼєднати секцію від меню чи роутів, завести lazy або злити підписи кошиків.
- */
-test("#963 ПРОВОДКА ФРОНТУ: меню → секція → три роути; кошики, фільтри й стан угоди словами", async () => {
-  const layout = readFileSync(FE("components/Layout.tsx"), "utf8");
-  assert.match(layout, /label: "Продаж",[\s\S]{0,400}\{ key: "carrier-calls"/, "🔴 пункту «Перевізники за розмовою» у групі «Продаж» немає");
-  const dash = readFileSync(FE("pages/Dashboard.tsx"), "utf8");
-  assert.match(dash, /import \{ CarrierCallsSection \} from "\.\/dashboard\/sections\/CarrierCallsSection";/, "🔴 секція не імпортована статично");
-  assert.match(dash, /section === "carrier-calls" && \([\s\S]{0,200}<CarrierCallsSection \/>/, "🔴 секція не рендериться на своєму ключі");
-  assert.doesNotMatch(dash, /lazy\([^)]*CarrierCallsSection/, "🔴 lazy-імпорт розбив би бандл (#225)");
-  const sec = readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8");
-  for (const fn of ["fetchCarrierCalls(", "fetchCarrierCallCard(", "fetchCarrierCallsMeta("]) assert.ok(sec.includes(fn), `🔴 секція не кличе ${fn}`);
-  const api = readFileSync(FE("api.ts"), "utf8");
-  for (const p of ['"/dashboard/carrier-calls"', '"/dashboard/carrier-calls/meta"', "`/dashboard/carrier-calls/${"]) assert.ok(api.includes(p), `🔴 api не ходить на ${p}`);
-  const V = await loadCarrierView();
-  assert.deepEqual(Object.keys(V.BUCKET_UI).sort(), ["carrier", "client", "low", "other", "unclear"], "🔴 фронт і бекенд знають різні кошики");
-  const labels = Object.values(V.BUCKET_UI).map((x) => x.label);
-  assert.equal(new Set(labels).size, labels.length, "🔴 два кошики з однаковим підписом");
-  assert.equal(V.matchesCarrierFilter({ bucket: null }, "pending"), true);
-  assert.equal(V.matchesCarrierFilter({ bucket: "carrier" }, "pending"), false, "🔴 розмова з вердиктом — у «ще слухаємо»");
-  assert.equal(V.matchesCarrierFilter({ bucket: "low" }, "carrier"), false, "🔴 невпевнений вердикт показано як перевізника");
-  assert.equal(V.dealStatusLabel(70419108, null), "у CRM: на етапі");
-  assert.equal(V.dealStatusLabel(143, "Перевізник"), "у CRM: закрито (Перевізник)");
-  assert.equal(V.dealStatusLabel(null, null), "у CRM: ще не підтягнули", "🔴 невідомий стан угоди показано порожнім");
-  assert.equal(V.carrierSpeaker(0, null), "Канал 0", "🔴 невідомий канал менеджера видано за відомий");
-  assert.deepEqual([1, 2, 5, 11, 12, 21, 22].map(V.dealsWord), ["угода", "угоди", "угод", "угод", "угод", "угода", "угоди"]);
-});
 
 /**
  * #964 — СТАН КОНВЕЄРА МОБІЛЬНИХ: черга рахує лише дзвінки мобільних (рекламний рядок не домішується), витрати —
@@ -640,7 +507,7 @@ test("#964 СТАН МОБІЛЬНИХ · ЖИВА СХЕМА: черга й в�
     ('964-mob','elevenlabs','scribe_v2','queued'), ('964-ad','elevenlabs','scribe_v2','queued')`);
   await c.raw.query(`INSERT INTO ai_spend_ledger(at,provider,operation,units,unit,unit_price_usd) VALUES
     ($1,'elevenlabs','carrier_stt',2,'audio_sec',1), ($1,'elevenlabs','stt',5,'audio_sec',1)`, [NOW.toISOString()]);
-  const m = await carrierCallsMeta(c.db, NOW, { stt: 40, analysis: 10 }, "dry");
+  const m = await carrierCallsMeta(c.db, NOW, { stt: 40, analysis: 10 }, { mode: "dry", otherMode: "dry" });
   assert.equal(m.transcripts.queued, 1, "🔴 у черзі мобільних рахується чужий дзвінок");
   assert.equal(m.spend.carrier, 2, "🔴 витрати мобільних змішано з рекламними");
   assert.equal(m.spend.stt, 7, "дзеркало: загальні витрати розпізнавання — усі");
@@ -787,30 +654,6 @@ test("#974 ПОМИЛКА KOMMO · ЖИВА СХЕМА: не закрито, п�
 });
 
 /**
- * #975 — ДОСТУП І ПРОВОДКА: повернення — у матриці як запис, закрите для тімліда, менеджера, фінансиста й HR, межа —
- * вкладка; роут кличе ядро; кнопка на фронті ходить на цей роут; джоба бере режим рівно з `closeModeOf`.
- * 🧨 Червоніє, якщо відкрити запис іншим ролям, прибрати межу або вмикати запис в обхід `closeModeOf`.
- */
-test("#975 ДОСТУП І ПРОВОДКА: повернення — лише ролі вкладки, роут → ядро, кнопка → роут, режим — з closeModeOf", async () => {
-  const w = ACCESS_MATRIX.find((r) => r.method === "POST" && r.path === "/api/dashboard/carrier-calls/deals/:kommoId/revert");
-  assert.ok(w, "🔴 роут повернення не в матриці");
-  for (const d of ["team_lead", "manager", "hr"]) assert.ok(w.deny.includes(d as never), `🔴 ${d} може повертати угоди`);
-  // Фінансиста тримає межа вкладки (у нього її немає — #962b), а не рядок запису: проба адмін-рівня писала б у CRM (#11b).
-  const { tabsForPath } = await import("../auth/routeTab.js");
-  assert.deepEqual(tabsForPath("/api/dashboard/carrier-calls/deals/123/revert"), ["carrier-calls"], "🔴 запис без межі вкладки");
-  const route = SRC("routes/dashboard.ts");
-  const at = route.indexOf('dashboardRouter.post("/carrier-calls/deals/:kommoId/revert"');
-  assert.ok(at > 0, "🔴 роут повернення не знайдено");
-  // Межа тіла — наступний роут, а не перше «});»: усередині є `json({ … });` (правило 9: межі змістові).
-  assert.match(route.slice(at, route.indexOf("dashboardRouter.", at + 10)), /revertCarrierClose\(pool,/, "🔴 роут повертає не через ядро");
-  const job = SRC("jobs/carrierCallJob.ts");
-  assert.match(job, /mode: closeModeOf\(config\.callAi\.carrierAutoClose\)/, "🔴 режим закриття береться не з closeModeOf");
-  const api = readFileSync(FE("api.ts"), "utf8");
-  assert.ok(api.includes("`/dashboard/carrier-calls/deals/${String(kommoId)}/revert`"), "🔴 api не ходить на роут повернення");
-  assert.ok(readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8").includes("revertCarrierClose("), "🔴 кнопки повернення немає");
-});
-
-/**
  * #976 — ПРОХІД ЗАКРИВАЄ ЛИШЕ ТЕ, ЩО KOMMO ЩОЙНО ВІДДАВ «НА ЕТАПІ»: два впевнені перевізники, але Kommo цього
  * проходу віддав лише одного — закривається лише він.
  * 🧨 Червоніє, якщо крок закриття брати етап не з відповіді цього проходу.
@@ -831,6 +674,9 @@ test("#976 ПРОХІД · ЖИВА СХЕМА: закривається лиш�
 });
 
 // ─── Рішення людини по невпевнених ──────────────────────────────────────────
+
+/** Хто вирішує: керівництво без скоупу (роль до 30.09.2026 не записувалась — `null`), якщо гейт не каже інакше. */
+const lead = (userId: number, roleKey: string | null = null, scope: { managerId?: number | null; teamId?: number | null } = {}) => ({ userId, roleKey, scope });
 
 async function seedDecide(c: Raw, base: number) {
   const mk = async (n: number, role: string, conf: number, qc: string, status = 70419108) => {
@@ -863,7 +709,7 @@ test("#1040 ЧЕРГА · ЖИВА СХЕМА: лише невпевнені н�
   const q1 = await decisionQueue(c.db, NOW);
   assert.deepEqual(q1.pending.map((x) => x.kommoId).sort(), [B + 1, B + 2, B + 3], "🔴 черга — не рівно невпевнені на етапі");
   assert.deepEqual(q1.pending.map((x) => x.why).sort(), ["невпевнено", "не чути", "цитата менеджера"].sort());
-  assert.equal((await recordDecision(c.db, B + 1, "client", "", 7, NOW)).ok, true);
+  assert.equal((await recordDecision(c.db, B + 1, "client", null, "", lead(7), NOW)).ok, true);
   const q2 = await decisionQueue(c.db, NOW);
   assert.ok(!q2.pending.some((x) => x.kommoId === B + 1), "🔴 вирішена угода лишилась у черзі");
   assert.deepEqual(q2.decided.map((x) => [x.kommoId, x.decision]), [[B + 1, "client"]], "дзеркало: вирішена — у «Вирішених»");
@@ -882,12 +728,12 @@ test("#1041 ЛЮДИНА СИЛЬНІША · ЖИВА СХЕМА: «Переві
   const B = 98100; const onStage = await seedDecide(c, B);
   const before = (await closeCandidates(c.db, onStage, NOW)).map((x) => x.kommoId);
   assert.deepEqual(before, [B + 4], "дзеркало: без рішень закривається лише впевнений перевізник");
-  await recordDecision(c.db, B + 1, "carrier", "свій бус", 7, NOW);
-  await recordDecision(c.db, B + 4, "client", "він просив машину", 7, NOW);
+  await recordDecision(c.db, B + 1, "carrier", null, "свій бус", lead(7), NOW);
+  await recordDecision(c.db, B + 4, "client", null, "він просив машину", lead(7), NOW);
   const after = await closeCandidates(c.db, onStage, NOW);
   assert.deepEqual(after.map((x) => x.kommoId), [B + 1], "🔴 рішення людини не переважило AI");
   assert.equal(after[0].byHuman, true);
-  assert.match(closeNoteText(after[0].confidence, after[0].quote, true), /рішення людини/);
+  assert.match(closeNoteText(after[0].confidence ?? 0, after[0].quote, true), /рішення людини/);
 });
 
 /**
@@ -900,17 +746,17 @@ test("#1042 РІШЕННЯ · ЖИВА СХЕМА: 400/404/409, історія �
   await reset(c); await c.raw.query("TRUNCATE carrier_close_log, carrier_decisions");
   const { recordDecision, decisionQueue } = await import("./carrierDecisions.js");
   const B = 98200; await seedDecide(c, B);
-  assert.equal((await recordDecision(c.db, B + 1, "maybe", "", 7, NOW) as { code?: number }).code, 400);
-  assert.equal((await recordDecision(c.db, 98299, "client", "", 7, NOW) as { code?: number }).code, 404);
-  await recordDecision(c.db, B + 1, "carrier", "", 7, NOW);
-  await recordDecision(c.db, B + 1, "other", "реклама", 8, new Date(NOW.getTime() + 1000));
+  assert.equal((await recordDecision(c.db, B + 1, "maybe", null, "", lead(7), NOW) as { code?: number }).code, 400);
+  assert.equal((await recordDecision(c.db, 98299, "client", null, "", lead(7), NOW) as { code?: number }).code, 404);
+  await recordDecision(c.db, B + 1, "carrier", null, "", lead(7), NOW);
+  await recordDecision(c.db, B + 1, "other", null, "реклама", lead(8), new Date(NOW.getTime() + 1000));
   const h = (await c.raw.query<{ decision: string; ai_role: string | null; ai_confidence: string | null }>(
     "SELECT decision, ai_role, ai_confidence FROM carrier_decisions WHERE kommo_id=$1 ORDER BY id", [B + 1])).rows;
   assert.deepEqual(h.map((x) => x.decision), ["carrier", "other"], "🔴 історію рішень переписано");
   assert.deepEqual([h[0].ai_role, Number(h[0].ai_confidence)], ["carrier", 0.78], "🔴 не видно, що казав AI у момент рішення");
   assert.equal((await decisionQueue(c.db, NOW)).decided.find((x) => x.kommoId === B + 1)?.decision, "other", "🔴 чинне — не останнє");
   await c.raw.query(`INSERT INTO carrier_close_log(kommo_id,uniqueid,confidence,decided_at,mode,closed_at) VALUES ($1,'x',0.9,$2,'live',$2)`, [B + 2, NOW.toISOString()]);
-  assert.equal((await recordDecision(c.db, B + 2, "client", "", 7, NOW) as { code?: number }).code, 409, "🔴 змінили рішення по вже закритій угоді");
+  assert.equal((await recordDecision(c.db, B + 2, "client", null, "", lead(7), NOW) as { code?: number }).code, 409, "🔴 змінили рішення по вже закритій угоді");
 });
 
 /**
@@ -929,71 +775,502 @@ test("#1043 ЧОМУ НЕ ВПЕВНЕНИЙ: чотири різні причи
   assert.equal(w("other", 0.9, "empty"), null);
 });
 
-/**
- * #1044 — ЗАПИС РОЗМОВИ: лише дзвінки цієї вкладки (чужий — 404 без жодного запиту до Ringostat), байти — з нашого
- * сервера; роут пускає лише адміна й КВП і не віддає посилання Ringostat.
- * 🧨 Червоніє, якщо віддати чужий запис, піти по мережі за чужим дзвінком або «засвітити» посилання.
- */
-test("#1044 ЗАПИС · ЖИВА СХЕМА: лише дзвінки вкладки, байти з нашого сервера, роут — адмін і КВП, без посилання", async (t) => {
-  const c = await ctx(t); if (!c) return;
+
+// ─── Відсів перевізників (ТЗ Романа 30.09.2026): рубрика v2, категорії, скоуп ролей, звіт, «Інше» ─────────
+
+/** Вердикт рубрики `carrier-v2` (підтип і причина) на розшифровці з двома каналами. */
+async function carrierAnalysedV2(c: Raw, u: string, role: string, conf: number, quoteCheck: string, otherType: string | null = null) {
+  const t = await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
+    VALUES ($1,'elevenlabs','scribe_v2','done','[{"channel":1,"start":0,"end":1,"text":"Добрий день","lang":"ukr"},{"channel":0,"start":1,"end":3,"text":"у мене своя фура","lang":"ukr"}]'::jsonb) RETURNING id`, [u]);
+  await c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result)
+    VALUES ($1,'google','gemini-3.8-flash','carrier-v2','done',$2::jsonb)`,
+  [t.rows[0].id, JSON.stringify({ summary: "s", manager_channel: "1", caller_role: role, caller_role_confidence: conf, caller_role_quote: "своя фура",
+    quote_check: quoteCheck, other_type: otherType, reason: `чому ${role}` })]);
+  return t.rows[0].id;
+}
+/** Дві команди, три менеджери: A — 1 і 2, B — 3. Kommo user id менеджера = 10600 + n. Повтор нічого не дублює. */
+async function seedTeams(c: Raw) {
+  await c.raw.query(`INSERT INTO teams(id,name) VALUES (10601,'Команда A 1060'),(10602,'Команда B 1060') ON CONFLICT (id) DO NOTHING`);
+  await c.raw.query(`INSERT INTO managers(id,name,team_id,kommo_user_id) VALUES
+    (10611,'Менеджер 1',10601,10601),(10612,'Менеджер 2',10601,10602),(10613,'Менеджер 3',10602,10603) ON CONFLICT (id) DO NOTHING`);
+  return { A: 10601, B: 10602, m1: 10611, m2: 10612, m3: 10613 };
+}
+async function owner(c: Raw, kommoId: number, kommoUser: number | null) {
+  await c.raw.query("UPDATE carrier_call_deals SET responsible_user_id = $2 WHERE kommo_id = $1", [kommoId, kommoUser]);
+}
+async function resetAll(c: Raw) {
   await reset(c);
-  const { carrierRecording } = await import("./carrierAudio.js");
-  const P = phone(98400, 1);
-  await call(c, "984-mob", min(100), 40, P); await call(c, "984-ad", min(100), 40, "380999984000");
-  await carrierDeal(c, 98401, P, min(101), "own", "984-mob", 1);
+  await c.raw.query("TRUNCATE carrier_close_log, carrier_decisions");
+}
+
+/**
+ * #1060 — РУБРИКА v2: новий мобільний дзвінок слухається лише `carrier-v2` (ключі з ТЗ), а розмова з готовим вердиктом
+ * `carrier-v1` удруге НЕ оплачується; рекламний дзвінок — лише рекламна рубрика.
+ * 🧨 Червоніє, якщо тік лишиться на v1, або переслуховуватиме вже розібране (прибрати `carrierAnalysedEarlier`).
+ */
+test("#1060 РУБРИКА v2 · ЖИВА СХЕМА: нове — лише carrier-v2, розібране v1 не оплачується вдруге, рекламне — лише рекламна", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  const { runCarrierTick } = await import("./carrierCalls.js");
+  const { runCallAiTick } = await import("./callAiTick.js");
+  const P = phone(10600, 1), Q = phone(10600, 2);
+  await call(c, "1060-new", min(100), 30, P);
+  await carrierDeal(c, 106001, P, min(101), "own", "1060-new", 1);
+  await call(c, "1060-old", min(100), 30, Q);
+  await carrierDeal(c, 106002, Q, min(101), "own", "1060-old", 1);
+  await carrierAnalysed(c, "1060-old", "client", 0.95, "counterpart");
+  await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel)
+    VALUES (106099,'D',8921932,1,'2026-09-26 10:00:00+03','0999106099','ad')`);
+  await call(c, "1060-ad", new Date("2026-09-26T07:30:00Z"), 35, "380999106099");
   const net = fakeNet();
-  const other = await carrierRecording(c.db, "984-ad", net.http);
-  assert.deepEqual([other.ok, (other as { code?: number }).code, net.hits.ringostat], [false, 404, 0], "🔴 віддали чужий запис або ходили по нього");
-  const mine = await carrierRecording(c.db, "984-mob", net.http);
-  assert.equal(mine.ok, true); assert.ok(mine.ok && mine.bytes.length > 44, "дзеркало: свій запис віддається байтами");
-  const route = SRC("routes/dashboard.ts");
-  const at = route.indexOf('dashboardRouter.get("/carrier-calls/:uniqueid/audio"');
-  assert.ok(at > 0, "🔴 роут запису не знайдено");
-  const body = route.slice(at, route.indexOf("dashboardRouter.", at + 10));
-  assert.ok(body.indexOf("transcriptAllowed(req.auth!)") >= 0 && body.indexOf("transcriptAllowed(req.auth!)") < body.indexOf("carrierRecording("),
-    "🔴 перевірка права стоїть не ДО завантаження запису");
-  assert.doesNotMatch(body, /recording|json\(\{[^}]*url/, "🔴 роут віддає посилання на запис");
+  const tick = { http: net.http, keys: { elevenlabs: "k", gemini: "g" }, prices: PRICES, now: () => NOW };
+  await runCarrierTick({ db: c.db, ...tick, stageLeads: async () => [], alert: async () => {} });
+  await runCallAiTick({ db: c.db, ...tick, ad: { predicate: (r: string) => `(d.client_source = ANY(${r}))`, adSources: ["uts.ua"] } });
+  const rubrics = async (u: string) => (await c.raw.query<{ r: string }>(`SELECT a.rubric_version r FROM call_analyses a
+    JOIN call_transcripts t ON t.id=a.transcript_id WHERE t.uniqueid=$1 ORDER BY 1`, [u])).rows.map((x) => x.r);
+  assert.deepEqual(await rubrics("1060-new"), ["carrier-v2"], "🔴 новий мобільний дзвінок слухається не рубрикою v2");
+  assert.deepEqual(await rubrics("1060-old"), ["carrier-v1"], "🔴 розібраний v1 дзвінок переслухали й оплатили вдруге");
+  assert.equal(net.hits.geminiCarrier, 1, "🔴 модель кликали не рівно для одного нового дзвінка");
+  assert.deepEqual(await rubrics("1060-ad"), ["first-touch-v1"], "🔴 рекламний дзвінок отримав рубрику перевізників");
+  const res = (await c.raw.query<{ result: CarrierResult }>(`SELECT a.result FROM call_analyses a JOIN call_transcripts t ON t.id=a.transcript_id
+    WHERE t.uniqueid='1060-new'`)).rows[0].result;
+  assert.deepEqual([res.caller_role, res.other_type, res.quote_check, carrierBucket(res)], ["carrier", null, "counterpart", "carrier"]);
+  assert.equal(res.reason, "має свою фуру й шукає вантаж", "🔴 причина вердикту загубилась");
 });
 
 /**
- * #1045 — ДОСТУП: черга — ролям вкладки; запис — лише адмін і КВП (CEO й опдир — 403, варіант А); рішення — запис,
- * закритий для тімліда, HR і менеджера; черга зареєстрована ДО `/:uniqueid` (інакше «pending» пішов би як дзвінок).
- * 🧨 Червоніє, якщо розширити запис, відкрити рішення іншим ролям або переставити роути.
+ * #1061 — РОЗБІР v2: ключі відповіді — дослівно з ТЗ; підтип є лише в «Інше» (у решти — null, навіть якщо модель його
+ * дала); невідомий підтип «Інше» → «other», а не відмова; сміття — відмова.
+ * 🧨 Червоніє, якщо пропустити підтип іншим вердиктам, відкидати «Інше» з незнайомим підтипом або змінити ключі.
  */
-test("#1045 ДОСТУП: черга — ролі вкладки, запис — лише адмін і КВП, рішення — не тімлід/HR/менеджер, черга до /:uniqueid", async () => {
-  const get = (p: string, m = "GET") => ACCESS_MATRIX.find((r) => r.method === m && r.path === p);
-  const q = get("/api/dashboard/carrier-calls/pending");
-  assert.ok(q); assert.deepEqual([...q.allow].sort(), ["admin", "ceo", "kvp", "opdir"]);
-  const a = get("/api/dashboard/carrier-calls/:uniqueid/audio");
-  assert.ok(a); assert.deepEqual([...a.allow].sort(), ["admin", "kvp"], "🔴 запис розмови слухає ширше коло, ніж вирішено (А)");
-  for (const d of ["ceo", "opdir", "team_lead"]) assert.ok(a.deny.includes(d as never), `🔴 ${d} слухає запис`);
-  const w = get("/api/dashboard/carrier-calls/deals/:kommoId/decision", "POST");
-  assert.ok(w); for (const d of ["team_lead", "hr", "manager"]) assert.ok(w.deny.includes(d as never), `🔴 ${d} вирішує`);
+test("#1061 РОЗБІР v2: ключі з ТЗ, підтип лише в «Інше», невідомий підтип — «other», сміття — відмова", async () => {
+  const { CARRIER_SCHEMA_V2, OTHER_TYPES, OTHER_TYPE_UA, interpretCarrierV2 } = await import("./carrierCallRules.js");
+  assert.deepEqual([...OTHER_TYPES], ["spam", "supplier", "job_seeker", "personal", "wrong_number", "other"], "🔴 підтипи ≠ ТЗ");
+  assert.deepEqual(Object.keys(OTHER_TYPE_UA).sort(), [...OTHER_TYPES].sort());
+  for (const k of ["verdict", "other_type", "confidence", "reason", "summary"]) assert.ok((CARRIER_SCHEMA_V2.required as readonly string[]).includes(k), `🔴 ключа ${k} з ТЗ немає`);
+  const turns = [{ channel: 1, start: 0, end: 1, text: "Добрий день", lang: "ukr" }, { channel: 0, start: 1, end: 3, text: "продаємо пальне оптом", lang: "ukr" }];
+  const run = (o: Record<string, unknown>) => interpretCarrierV2({ text: JSON.stringify({ summary: "s", manager_channel: "1", verdict: "other",
+    other_type: "supplier", confidence: 0.9, reason: "продає пальне", quote: "продаємо пальне оптом", ...o }), finishReason: "STOP", blockReason: null, usage: null }, turns);
+  const ok = run({});
+  assert.ok(ok.ok); assert.deepEqual(ok.ok && [ok.result.caller_role, ok.result.other_type, ok.result.quote_check, ok.result.reason],
+    ["other", "supplier", "counterpart", "продає пальне"]);
+  const strange = run({ other_type: "бухгалтерія" });
+  assert.ok(strange.ok && strange.result.other_type === "other", "🔴 «Інше» з незнайомим підтипом відкинуто або підтип вигадано");
+  const carrier = run({ verdict: "carrier", other_type: "spam" });
+  assert.ok(carrier.ok && carrier.result.other_type === null, "🔴 підтип «Інше» потрапив у вердикт «перевізник»");
+  assert.equal(run({ confidence: 1.2 }).ok, false, "🔴 впевненість поза 0..1 прийнята");
+  assert.equal(run({ reason: 5 }).ok, false, "🔴 причина не рядком прийнята");
+  assert.equal(run({ verdict: "maybe" }).ok, false, "🔴 вердикт поза переліком прийнято");
+});
+
+/**
+ * #1062 — КАТЕГОРІЯ УГОДИ — одне правило для вкладок, звіту й закриття: людина сильніша за AI; упевнений AI —
+ * його категорія; невпевнений, «не чути» й без розмови — «На перевірці»; збій після спроб — «Помилка»; решта — AI слухає.
+ * 🧨 Червоніє, якщо AI переважить людину, невпевнений стане категорією, помилка злиється з очікуванням.
+ */
+test("#1062 КАТЕГОРІЯ: людина > AI; поріг 0,85 з обох боків; без розмови — перевірка; збій — помилка; черга — AI слухає", async () => {
+  const { dealCategory } = await import("./carrierCallRules.js");
+  const r = (role: CarrierResult["caller_role"], conf: number, qc: CarrierResult["quote_check"] = "counterpart"): CarrierResult =>
+    ({ summary: "", manager_channel: "1", caller_role: role, caller_role_confidence: conf, caller_role_quote: "x", quote_check: qc });
+  const cat = (x: Parameters<typeof dealCategory>[0]) => { const v = dealCategory(x); return [v.category, v.source]; };
+  const base = { human: null, result: null, dealState: "own", ai: null } as Parameters<typeof dealCategory>[0];
+  assert.deepEqual(cat({ ...base, human: "client", result: r("carrier", 0.99), ai: "done" }), ["client", "human"], "🔴 AI переважив людину");
+  assert.deepEqual(cat({ ...base, result: r("carrier", 0.85), ai: "done" }), ["carrier", "ai"]);
+  assert.deepEqual(cat({ ...base, result: r("carrier", 0.8499), ai: "done" }), ["review", null], "🔴 невпевнений став категорією");
+  assert.deepEqual(cat({ ...base, result: r("client", 0.95, "manager"), ai: "done" }), ["review", null], "🔴 цитата менеджера — упевнений клієнт");
+  assert.deepEqual(cat({ ...base, result: r("other", 0.9, "empty"), ai: "done" }), ["other", "ai"], "дзеркало: «Інше» цитати не вимагає");
+  assert.deepEqual(cat({ ...base, result: r("unclear", 0.3, "empty"), ai: "done" }), ["review", null]);
+  assert.deepEqual(cat({ ...base, dealState: "no_talk" }), ["review", null], "🔴 угода без розмови не дійшла до людини");
+  assert.deepEqual(cat({ ...base, dealState: "waiting" }), ["waiting", null]);
+  for (const ai of ["llm_failed", "stt_failed", "recording_unavailable", "no_text"] as const)
+    assert.deepEqual(cat({ ...base, ai }), ["error", null], `🔴 «${ai}» не став «Помилкою»`);
+  for (const ai of ["queued", "llm_pending", "capped", "not_enabled", "not_queued"] as const)
+    assert.deepEqual(cat({ ...base, ai }), ["waiting", null], `🔴 «${ai}» — не «AI слухає»`);
+});
+
+/**
+ * #1063 — СПИСОК УГОД І СКОУП: рядок — угода (і без розмови теж); менеджер бачить лише свої, тімлід — команду,
+ * керівництво — усе; порожній скоуп (`-1`) — нікого; «прибрав фільтр» — лише ті, кого ми після фільтра не бачили.
+ * 🧨 Червоніє, якщо зняти фільтр менеджера чи команди, загубити угоду без розмови або рахувати свої закриття як фільтр.
+ */
+test("#1063 СПИСОК УГОД · ЖИВА СХЕМА: рядок — угода; менеджер — свої, тімлід — команда, керівництво — усе", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  const T = await seedTeams(c);
+  const { carrierCallsList } = await import("./carrierCallScreen.js");
+  const at = new Date("2026-09-24T08:00:00Z");
+  const mk = async (n: number, user: number | null, state = "own") => {
+    const P = phone(10630, n), u = `1063-${String(n)}`;
+    if (state === "own") await call(c, u, at, 40, P);
+    await carrierDeal(c, 106300 + n, P, at, state, state === "own" ? u : null, state === "own" ? 1 : 0);
+    await owner(c, 106300 + n, user);
+    return u;
+  };
+  await carrierAnalysed(c, await mk(1, 10601), "carrier", 0.95, "counterpart");       // м1 · перевізник
+  await mk(2, 10601, "no_talk");                                                           // м1 · без розмови → перевірка
+  await carrierAnalysedV2(c, await mk(3, 10602), "client", 0.95, "counterpart");        // м2 · клієнт
+  const u4 = await mk(4, 10602);                                                           // м2 · збій аналізу → помилка
+  const t4 = await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
+    VALUES ($1,'elevenlabs','scribe_v2','done','[{"channel":0,"start":0,"end":1,"text":"так","lang":"ukr"}]'::jsonb) RETURNING id`, [u4]);
+  await c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,attempts,failure)
+    VALUES ($1,'google','gemini-3.8-flash','carrier-v2','failed',3,'502')`, [t4.rows[0].id]);
+  await carrierAnalysedV2(c, await mk(5, 10603), "other", 0.9, "counterpart", "spam"); // м3 · інше/спам
+  await mk(6, 99999, "waiting");                                                           // невідомий менеджер
+  await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,reject_reason,created_at_kommo) VALUES
+    (106391,'380500106391',8921928,143,'Перевізник','2026-09-24 10:00:00+03'),
+    (106301,'380500106301',8921928,143,'Перевізник','2026-09-24 10:00:00+03')`);
+  const all = await carrierCallsList(c.db, "2026-09-22", "2026-09-28", {});
+  const byId = new Map(all.rows.map((r) => [r.kommoId, r]));
+  assert.equal(all.rows.length, 6, "🔴 не кожна угода — рядок (без розмови чи без менеджера загубились)");
+  assert.deepEqual([1, 2, 3, 4, 5, 6].map((n) => byId.get(106300 + n)?.category), ["carrier", "review", "client", "error", "other", "waiting"]);
+  assert.equal(byId.get(106305)?.otherType, "spam");
+  assert.equal(byId.get(106304)?.why, "AI не відповів після кількох спроб", "🔴 «Помилка» не каже причину");
+  assert.equal(all.kpis.removedByFilter, 1, "🔴 нашу угоду, закриту як «Перевізник», пораховано як роботу фільтра");
+  const ids = async (scope: { managerId?: number | null; teamId?: number | null }) =>
+    (await carrierCallsList(c.db, "2026-09-22", "2026-09-28", scope)).rows.map((r) => r.kommoId - 106300).sort();
+  assert.deepEqual(await ids({ managerId: T.m1 }), [1, 2], "🔴 менеджер бачить не рівно свої угоди");
+  assert.deepEqual(await ids({ teamId: T.A }), [1, 2, 3, 4], "🔴 тімлід бачить не рівно свою команду");
+  assert.deepEqual(await ids({ teamId: T.B }), [5]);
+  assert.deepEqual(await ids({ managerId: -1 }), [], "🔴 порожній скоуп менеджера відкрив чужі угоди");
+});
+
+/**
+ * #1064 — ЗВІТ = СПИСКИ: кожна клітинка звіту — рівно кількість рядків вкладки з тим самим менеджером і категорією;
+ * рядок команди — сума її менеджерів; «Інше» окремо від перевізників; вручну — окремо від AI; без менеджера — свій рядок.
+ * 🧨 Червоніє, якщо звіт рахувати інакше, ніж вкладки, злити «Інше» з перевізниками чи ручне з AI.
+ */
+test("#1064 ЗВІТ · ЖИВА СХЕМА: клітинка = рядки вкладки; команда = сума менеджерів; «Інше» й «вручну» окремо", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  await seedTeams(c);
+  const { carrierDealRows, carrierReport } = await import("./carrierDeals.js");
+  const { recordDecision } = await import("./carrierDecisions.js");
+  const at = new Date("2026-09-24T08:00:00Z");
+  const mk = async (n: number, user: number | null, role: string, conf: number, other: string | null = null) => {
+    const P = phone(10640, n), u = `1064-${String(n)}`;
+    await call(c, u, at, 40, P);
+    await carrierDeal(c, 106400 + n, P, at, "own", u, 1);
+    await owner(c, 106400 + n, user);
+    await carrierAnalysedV2(c, u, role, conf, "counterpart", other);
+  };
+  await mk(1, 10601, "carrier", 0.95); await mk(2, 10601, "carrier", 0.6); await mk(3, 10601, "other", 0.9, "spam");
+  await mk(4, 10602, "client", 0.95); await mk(5, 10602, "carrier", 0.5); await mk(6, 10603, "other", 0.5);
+  await mk(7, null, "client", 0.95);
+  await recordDecision(c.db, 106402, "carrier", null, "", lead(1), NOW);           // м1: вручну перевізник
+  await recordDecision(c.db, 106406, "other", "wrong_number", "", lead(1), NOW);   // м3: вручну інше
+  const rows = await carrierDealRows(c.db, { period: { from: "2026-09-22", to: "2026-09-28" }, scope: {} });
+  const rep = carrierReport(rows);
+  const COLS = {
+    clients: (r: (typeof rows)[number]) => r.category === "client",
+    carriersAuto: (r: (typeof rows)[number]) => r.category === "carrier" && r.source !== "human",
+    carriersManual: (r: (typeof rows)[number]) => r.category === "carrier" && r.source === "human",
+    otherAuto: (r: (typeof rows)[number]) => r.category === "other" && r.source !== "human",
+    otherManual: (r: (typeof rows)[number]) => r.category === "other" && r.source === "human",
+    unsorted: (r: (typeof rows)[number]) => ["review", "error", "waiting"].includes(r.category),
+  } as const;
+  for (const m of rep.managers) {
+    const mine = rows.filter((r) => r.managerId === m.managerId);
+    assert.equal(m.total, mine.length, `🔴 ${String(m.managerName)}: «усього» ≠ рядкам вкладки`);
+    for (const [k, f] of Object.entries(COLS)) assert.equal(m[k as keyof typeof COLS], mine.filter(f).length, `🔴 ${String(m.managerName)} · ${k} ≠ списку`);
+  }
+  const m1 = rep.managers.find((m) => m.managerId === 10611)!;
+  assert.deepEqual([m1.carriersAuto, m1.carriersManual, m1.otherAuto, m1.otherManual], [1, 1, 1, 0], "🔴 ручне й AI або «Інше» й перевізники злились");
+  const m3 = rep.managers.find((m) => m.managerId === 10613)!;
+  assert.deepEqual([m3.otherManual, m3.unsorted], [1, 0]);
+  assert.ok(rep.managers.some((m) => m.managerId === null && m.total === 1), "🔴 угода без менеджера зникла зі звіту");
+  const A = rep.teams.find((x) => x.teamId === 10601)!;
+  const sumA = rep.managers.filter((m) => m.teamId === 10601).reduce((s, m) => s + m.total, 0);
+  assert.equal(A.total, sumA, "🔴 рядок команди ≠ сумі її менеджерів");
+  assert.equal(rep.total.total, rows.length, "🔴 «разом» ≠ усім рядкам вкладок");
+  const route = SRC("routes/dashboard.ts");
+  const at2 = route.indexOf('dashboardRouter.get("/carrier-calls/report"');
+  assert.ok(at2 > 0, "🔴 роуту звіту немає");
+  assert.match(route.slice(at2, route.indexOf("dashboardRouter.", at2 + 10)), /const rows = await carrierDealRows\(pool, \{ period: \{ from, to \}, scope \}\);\s*const rep = carrierReport\(rows\);/,
+    "🔴 звіт рахується не з тих самих рядків, що вкладки");
+});
+
+/**
+ * #1065 — РІШЕННЯ ЗА РОЛЛЮ: менеджер — лише свої (чужа — 404), тімлід — команда (інша — 404) і може переписати
+ * менеджера; менеджер не переписує тімліда, тімлід — керівника (409); підтип — лише для «Інше»; журнал — усі рішення з ролями.
+ * 🧨 Червоніє, якщо зняти скоуп, дозволити молодшому переписати старшого або загубити старі рішення.
+ */
+test("#1065 РІШЕННЯ ЗА РОЛЛЮ · ЖИВА СХЕМА: менеджер — свої, тімлід — команда й над менеджером, старшого не переписати", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  const T = await seedTeams(c);
+  const { recordDecision } = await import("./carrierDecisions.js");
+  const { carrierDealRows } = await import("./carrierDeals.js");
+  const mk = async (n: number, user: number) => {
+    const P = phone(10650, n), u = `1065-${String(n)}`;
+    await call(c, u, min(300), 40, P);
+    await carrierDeal(c, 106500 + n, P, min(301), "own", u, 1);
+    await owner(c, 106500 + n, user);
+    await carrierAnalysedV2(c, u, "carrier", 0.6, "counterpart");
+  };
+  await mk(1, 10601); await mk(2, 10602); await mk(3, 10603);
+  const mgr1 = lead(21, "manager", { managerId: T.m1 }), tlA = lead(22, "team_lead", { teamId: T.A }), boss = lead(23, "kvp", {});
+  const code = (x: { ok: true } | { ok: false; code: number }) => (x.ok ? 200 : x.code);
+  assert.equal(code(await recordDecision(c.db, 106501, "client", null, "", mgr1, NOW)), 200, "дзеркало: менеджер вирішує своє");
+  assert.equal(code(await recordDecision(c.db, 106502, "client", null, "", mgr1, NOW)), 404, "🔴 менеджер вирішив чужу угоду");
+  assert.equal(code(await recordDecision(c.db, 106503, "client", null, "", tlA, NOW)), 404, "🔴 тімлід вирішив угоду іншої команди");
+  assert.equal(code(await recordDecision(c.db, 106501, "carrier", null, "", tlA, new Date(NOW.getTime() + 1000))), 200, "🔴 тімлід не може переписати менеджера");
+  assert.equal(code(await recordDecision(c.db, 106501, "client", null, "", mgr1, new Date(NOW.getTime() + 2000))), 409, "🔴 менеджер переписав тімліда");
+  assert.equal(code(await recordDecision(c.db, 106501, "other", "spam", "", boss, new Date(NOW.getTime() + 3000))), 200, "дзеркало: керівник переписує тімліда");
+  assert.equal(code(await recordDecision(c.db, 106501, "client", null, "", tlA, new Date(NOW.getTime() + 4000))), 409, "🔴 тімлід переписав керівника");
+  assert.equal(code(await recordDecision(c.db, 106502, "client", "spam", "", boss, NOW)), 400, "🔴 підтип «Інше» прийнято для «Клієнт»");
+  assert.equal(code(await recordDecision(c.db, 106502, "other", "бухгалтерія", "", boss, NOW)), 400, "🔴 невідомий підтип прийнято");
+  const [row] = await carrierDealRows(c.db, { period: null, scope: {}, ids: [106501] });
+  assert.deepEqual(row.journal.map((j) => [j.decision, j.role, j.otherType]),
+    [["client", "manager", null], ["carrier", "team_lead", null], ["other", "kvp", "spam"]], "🔴 журнал загубив попередні рішення або ролі");
+  assert.deepEqual([row.category, row.source, row.otherType], ["other", "human", "spam"], "🔴 чинне — не останнє рішення");
+});
+
+/**
+ * #1066 — ЗАКРИТТЯ «ІНШЕ»: рішення людини «Інше» закривається «Нецільовим зверненням» (6340787) з підтипом у примітці;
+ * AI-«Інше» — окремим перемикачем: `dry` — лише журнал, `live` — закриваємо, `off` — навіть не пишемо в журнал;
+ * «Клієнт» (AI чи людина) — ніколи; перевізник і «Інше» — різними пакетами з різною причиною.
+ * 🧨 Червоніє, якщо закрити клієнта, закрити AI-«Інше» без перемикача чи поставити «Інше» причину «Перевізник».
+ */
+test("#1066 ЗАКРИТТЯ «ІНШЕ» · ЖИВА СХЕМА: людина — закриваємо, AI — лише з перемикачем; клієнт — ніколи; своя причина", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  const { runCarrierClose } = await import("./carrierClose.js");
+  const { recordDecision } = await import("./carrierDecisions.js");
+  const B = 106600;
+  const mk = async (n: number, role: string, conf: number, other: string | null = null) => {
+    const P = phone(B, n), u = `1066-${String(n)}`;
+    await call(c, u, min(300), 40, P);
+    await carrierDeal(c, B + n, P, min(301), "own", u, 1);
+    await carrierAnalysedV2(c, u, role, conf, "counterpart", other);
+  };
+  await mk(1, "other", 0.9, "spam");     // AI-«Інше»
+  await mk(2, "carrier", 0.6);           // людина → «Інше»
+  await mk(3, "client", 0.95);           // AI-клієнт
+  await mk(4, "carrier", 0.95);          // людина → «Клієнт» поверх упевненого перевізника
+  await mk(5, "carrier", 0.95);          // AI-перевізник
+  await recordDecision(c.db, B + 2, "other", "supplier", "", lead(1), NOW);
+  await recordDecision(c.db, B + 4, "client", null, "", lead(1), NOW);
+  const onStage = new Set([1, 2, 3, 4, 5].map((n) => B + n));
+  const k = fakeKommo();
+  const r1 = await runCarrierClose(c.db, NOW, "live", onStage, k.kommo, "dry");
+  const byEnum = new Map(k.calls.patch.map((b) => [(b as { custom_fields_values: { values: { enum_id: number }[] }[] }[])[0].custom_fields_values[0].values[0].enum_id,
+    (b as { id: number }[]).map((x) => x.id).sort()]));
+  assert.deepEqual(byEnum.get(6343043), [B + 5], "🔴 «Перевізник» закрито не рівно перевізнику");
+  assert.deepEqual(byEnum.get(6340787), [B + 2], "🔴 «Інше» людини не закрито «Нецільовим зверненням» або закрито AI-«Інше» без перемикача");
+  assert.equal(r1.closed, 2);
+  const notes = k.calls.notes.flat() as { entity_id: number; params: { text: string } }[];
+  assert.match(notes.find((x) => x.entity_id === B + 2)?.params.text ?? "", /постачальник/, "🔴 підтип не записано в примітку угоди");
+  const log = async (id: number) => (await c.raw.query<{ mode: string; closed_at: Date | null; reason: string }>(
+    "SELECT mode, closed_at, reason FROM carrier_close_log WHERE kommo_id=$1", [id])).rows[0];
+  assert.deepEqual([(await log(B + 1))?.mode, (await log(B + 1))?.closed_at, (await log(B + 1))?.reason], ["dry", null, "other"], "🔴 AI-«Інше» в режимі журналу не лягло в журнал");
+  assert.equal(await log(B + 3), undefined, "🔴 клієнта AI поставлено на закриття");
+  assert.equal(await log(B + 4), undefined, "🔴 клієнта людини поставлено на закриття");
+  const k2 = fakeKommo();
+  await runCarrierClose(c.db, NOW, "live", onStage, k2.kommo, "live");
+  assert.deepEqual(k2.calls.patch.map((b) => (b as { id: number }[]).map((x) => x.id)), [[B + 1]], "дзеркало: з перемикачем AI-«Інше» закривається, решта — удруге ні");
+  await c.raw.query("TRUNCATE carrier_close_log");
+  const k3 = fakeKommo();
+  const r3 = await runCarrierClose(c.db, NOW, "dry", new Set([B + 1]), k3.kommo, "off");
+  assert.deepEqual([r3.candidates, r3.logged], [0, 0], "🔴 «off» для «Інше» усе одно пише в журнал");
+  const r4 = await runCarrierClose(c.db, NOW, "off", onStage, k3.kommo, "live");
+  assert.deepEqual([r4.logged, k3.calls.patch.length], [0, 0], "🔴 вимкнений основний режим не вимкнув «Інше»");
+});
+
+/**
+ * #1067 — ДОСТУП І ПРОВОДКА: шість роутів читання в матриці = сид вкладки (керівництво + тімлід + менеджер), HR і
+ * фінансист — ні; запис (рішення, повернення) закритий HR; межа — вкладка; скоуп — `missedScopeFor` у кожному роуті;
+ * картка, запис і повернення перевіряють скоуп ДО роботи; «pending» і «report» зареєстровані ДО `/:uniqueid`.
+ * 🧨 Червоніє, якщо розвести матрицю й сид, прибрати скоуп із роуту чи перевіряти його ПІСЛЯ завантаження запису.
+ */
+test("#1067 ДОСТУП · ПРОВОДКА: матриця = сид (6 ролей), скоуп у кожному роуті, перевірка ДО роботи, службові до /:uniqueid", async () => {
+  const schema = SRC("db/schema.sql");
+  const m = /UPDATE roles SET screen_access = screen_access \|\| '\{"carrier-calls":true\}'::jsonb\s+WHERE key IN \(([^)]+)\)/.exec(schema);
+  assert.ok(m, "🔴 сиду вкладки carrier-calls у схемі немає");
+  const seeded = m[1].split(",").map((x) => x.trim().replace(/'/g, "")).sort();
+  assert.deepEqual(seeded, ["admin", "ceo", "kvp", "manager", "opdir", "team_lead"]);
+  const { CARRIER_LISTEN_ROLES } = await import("./carrierCallScreen.js");
+  assert.deepEqual([...CARRIER_LISTEN_ROLES].sort(), seeded, "🔴 слухати запис може не рівно той, хто має вкладку");
+  const GETS = ["", "/meta", "/report", "/pending", "/:uniqueid", "/:uniqueid/audio"].map((x) => `/api/dashboard/carrier-calls${x}`);
+  for (const p of GETS) {
+    const r = ACCESS_MATRIX.find((x) => x.method === "GET" && x.path === p);
+    assert.ok(r, `🔴 ${p} немає в матриці`);
+    assert.deepEqual([...r.allow].sort(), seeded, `🔴 ${p}: матриця ≠ сид`);
+    for (const d of ["hr", "financier"]) assert.ok(r.deny.includes(d as never), `🔴 ${p}: ${d} не в deny`);
+  }
+  for (const p of ["/api/dashboard/carrier-calls/deals/:kommoId/decision", "/api/dashboard/carrier-calls/deals/:kommoId/revert"]) {
+    const w = ACCESS_MATRIX.find((x) => x.method === "POST" && x.path === p);
+    assert.ok(w && w.deny.includes("hr" as never), `🔴 ${p}: HR може писати`);
+  }
   const { tabsForPath } = await import("../auth/routeTab.js");
-  for (const p of ["/api/dashboard/carrier-calls/pending", "/api/dashboard/carrier-calls/x/audio", "/api/dashboard/carrier-calls/deals/1/decision"])
+  for (const p of ["/api/dashboard/carrier-calls", "/api/dashboard/carrier-calls/report", "/api/dashboard/carrier-calls/x/audio", "/api/dashboard/carrier-calls/deals/1/decision"])
     assert.deepEqual(tabsForPath(p), ["carrier-calls"], `🔴 ${p} без межі вкладки`);
   const route = SRC("routes/dashboard.ts");
-  const iq = route.indexOf('dashboardRouter.get("/carrier-calls/pending"'), iu = route.indexOf('dashboardRouter.get("/carrier-calls/:uniqueid"');
-  assert.ok(iq > 0 && iu > 0 && iq < iu, "🔴 черга зареєстрована ПІСЛЯ /:uniqueid — «pending» піде як номер дзвінка");
+  const body = (sig: string) => {
+    const at = route.indexOf(sig); assert.ok(at > 0, `🔴 роут ${sig} не знайдено`);
+    return route.slice(at, route.indexOf("dashboardRouter.", at + 10));
+  };
+  assert.match(route, /const carrierScope = \(req[^)]*\) => missedScopeFor\(req\.auth!, req\.query\);/, "🔴 скоуп вкладки не з missedScopeFor");
+  for (const sig of ['dashboardRouter.get("/carrier-calls",', 'dashboardRouter.get("/carrier-calls/report"', 'dashboardRouter.get("/carrier-calls/pending"'])
+    assert.match(body(sig), /carrierScope\(req\)/, `🔴 ${sig}: без скоупу ролі`);
+  const audio = body('dashboardRouter.get("/carrier-calls/:uniqueid/audio"');
+  assert.ok(audio.indexOf("callInScope(") > 0 && audio.indexOf("callInScope(") < audio.indexOf("carrierRecording("), "🔴 запис вантажиться ДО перевірки скоупу");
+  assert.match(audio, /transcriptAllowed\(auth, CARRIER_LISTEN_ROLES\)/);
+  const card = body('dashboardRouter.get("/carrier-calls/:uniqueid",');
+  assert.ok(card.indexOf("callInScope(") > 0 && card.indexOf("callInScope(") < card.indexOf("carrierCallCard("), "🔴 картка вантажиться ДО перевірки скоупу");
+  const revert = body('dashboardRouter.post("/carrier-calls/deals/:kommoId/revert"');
+  assert.ok(revert.indexOf("carrierDealRows(") > 0 && revert.indexOf("carrierDealRows(") < revert.indexOf("revertCarrierClose("), "🔴 повернення пише в Kommo ДО перевірки скоупу");
+  assert.match(body('dashboardRouter.post("/carrier-calls/deals/:kommoId/decision"'), /scope: missedScopeFor\(auth, \{\}\)/, "🔴 рішення без скоупу ролі");
+  const iu = route.indexOf('dashboardRouter.get("/carrier-calls/:uniqueid"');
+  for (const s of ['dashboardRouter.get("/carrier-calls/pending"', 'dashboardRouter.get("/carrier-calls/report"', 'dashboardRouter.get("/carrier-calls/meta"'])
+    assert.ok(route.indexOf(s) > 0 && route.indexOf(s) < iu, `🔴 ${s} зареєстровано ПІСЛЯ /:uniqueid — піде як номер дзвінка`);
+  const job = SRC("jobs/carrierCallJob.ts");
+  assert.match(job, /mode: closeModeOf\(config\.callAi\.carrierAutoClose\)/, "🔴 режим закриття береться не з closeModeOf");
+  assert.match(job, /otherMode: closeModeOf\(config\.callAi\.carrierAutoCloseOther\)/, "🔴 перемикач «Інше» береться не з closeModeOf");
 });
 
 /**
- * #1046 — ПРОВОДКА ФРОНТУ: черга в секції, кличе чергу, рішення, запис (байтами — `blob`), картку; кнопки = рішення бекенду;
- * анімації вимикаються для «зменшити рух».
- * 🧨 Червоніє, якщо від'єднати чергу, розвести кнопки з бекендом або прибрати вимкнення анімацій.
+ * #1068 — МІГРАЦІЯ ДВІЧІ: вкладку мають керівництво, тімлід і менеджер; фінансист (синк «= екрани адміна») і HR — ні,
+ * і ДРУГИЙ прогін схеми цього не змінює. Підтип у журналі рішень — лише для «Інше» (перевірка в самій базі).
+ * 🧨 Червоніє, якщо прибрати зняття після синку, забути тімліда/менеджера або зняти CHECK підтипу.
  */
-test("#1046 ПРОВОДКА ФРОНТУ: черга → чотири виклики, запис байтами, кнопки = рішення бекенду, «зменшити рух»", async () => {
+test("#1068 МІГРАЦІЯ ДВІЧІ · ЖИВА СХЕМА: вкладка — керівництво, тімлід, менеджер; фінансист і HR — НІ; підтип лише в «Інше»", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await c.raw.query(readFileSync(path.join(import.meta.dirname, "..", "..", "src", "db", "schema.sql"), "utf8"));
+  const rows = (await c.raw.query<{ key: string; screen_access: Record<string, unknown> }>("SELECT key, screen_access FROM roles")).rows;
+  const sees = (k: string) => rows.find((r) => r.key === k)?.screen_access?.["carrier-calls"] === true;
+  assert.ok(rows.some((r) => r.key === "financier"), "🔴 у scratch-базі немає ролі фінансиста — перевіряти нема чого");
+  for (const k of ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"]) assert.ok(sees(k), `🔴 «${k}» не бачить вкладки`);
+  for (const k of ["financier", "hr"]) assert.ok(!sees(k), `🔴 «${k}» бачить вкладку після ДРУГОЇ міграції`);
+  await assert.rejects(c.raw.query("INSERT INTO carrier_decisions(kommo_id,decision,other_type,decided_by) VALUES (1,'client','spam',1)"), /carrier_decisions_other_type_chk/,
+    "🔴 база прийняла підтип «Інше» для «Клієнт»");
+  await c.raw.query("INSERT INTO carrier_decisions(kommo_id,decision,other_type,decided_by) VALUES (1068,'other','spam',1)");
+  await c.raw.query("DELETE FROM carrier_decisions WHERE kommo_id = 1068");
+});
+
+/**
+ * #1069 — ПРОВОДКА ФРОНТУ: меню → секція (статичний імпорт, #225) → список, метадані, черга; картка угоди → картка
+ * дзвінка, запис байтами, рішення з підтипом, повернення; блок у «Звіті» → звіт і той самий список; вкладки =
+ * «Клієнти / Перевізники / Інше / На перевірці», усе нерозсортоване — у «На перевірці»; підтипи й кнопки = бекенду.
+ * 🧨 Червоніє, якщо від'єднати будь-що з цього, розвести підтипи чи кнопки з бекендом або загубити «Помилку».
+ */
+test("#1069 ПРОВОДКА ФРОНТУ: вкладки ТЗ, картка угоди, блок у «Звіті»; підтипи й кнопки = бекенду", async () => {
+  const layout = readFileSync(FE("components/Layout.tsx"), "utf8");
+  assert.match(layout, /label: "Продаж",[\s\S]{0,400}\{ key: "carrier-calls"/, "🔴 пункту «Перевізники за розмовою» у групі «Продаж» немає");
+  const dash = readFileSync(FE("pages/Dashboard.tsx"), "utf8");
+  assert.match(dash, /import \{ CarrierCallsSection \} from "\.\/dashboard\/sections\/CarrierCallsSection";/, "🔴 секція не імпортована статично");
+  assert.doesNotMatch(dash, /lazy\([^)]*CarrierCallsSection/, "🔴 lazy-імпорт розбив би бандл (#225)");
   const sec = readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8");
-  assert.match(sec, /<CarrierDecisionQueue /, "🔴 черга рішень не на вкладці");
-  const q = readFileSync(FE("pages/dashboard/sections/CarrierDecisionQueue.tsx"), "utf8");
-  for (const fn of ["fetchCarrierPending(", "postCarrierDecision(", "fetchCarrierAudio(", "fetchCarrierCallCard("]) assert.ok(q.includes(fn), `🔴 черга не кличе ${fn}`);
+  for (const fn of ["fetchCarrierCalls(", "fetchCarrierCallsMeta(", "fetchCarrierPending(", "<CarrierDealPanel "]) assert.ok(sec.includes(fn), `🔴 секція не має ${fn}`);
+  const panel = readFileSync(FE("pages/dashboard/sections/CarrierDealPanel.tsx"), "utf8");
+  for (const fn of ["fetchCarrierCallCard(", "fetchCarrierAudio(", "postCarrierDecision(", "revertCarrierClose("]) assert.ok(panel.includes(fn), `🔴 картка не кличе ${fn}`);
+  const report = readFileSync(FE("pages/dashboard/sections/ReportSection.tsx"), "utf8");
+  assert.match(report, /<CarrierReportCard[\s\S]{0,80}from=\{dateRange\.from\}/, "🔴 блоку «Дзвінки на мобільні» у «Звіті» немає");
+  const card = readFileSync(FE("pages/dashboard/sections/CarrierReportCard.tsx"), "utf8");
+  for (const fn of ["fetchCarrierReport(", "fetchCarrierCalls("]) assert.ok(card.includes(fn), `🔴 блок звіту не кличе ${fn}`);
   const api = readFileSync(FE("api.ts"), "utf8");
+  for (const p of ['"/dashboard/carrier-calls"', '"/dashboard/carrier-calls/report"', '"/dashboard/carrier-calls/pending"', "`/dashboard/carrier-calls/deals/${String(kommoId)}/decision`, { decision, note, otherType }"])
+    assert.ok(api.includes(p), `🔴 api не ходить на ${p}`);
   assert.match(api, /\/audio`, \{ responseType: "blob" \}/, "🔴 запис не йде байтами з нашого сервера");
+  const V = await loadCarrierView();
+  assert.deepEqual(V.CARRIER_TABS.map((x) => x.label), ["Клієнти", "Перевізники", "Інше", "На перевірці"], "🔴 вкладки ≠ ТЗ");
+  assert.deepEqual(["client", "carrier", "other", "review", "error", "waiting"].map(V.tabOf), ["client", "carrier", "other", "review", "review", "review"],
+    "🔴 нерозсортоване (помилка, AI слухає) загубилось з вкладок");
+  assert.deepEqual(Object.keys(V.CATEGORY_UI).sort(), ["carrier", "client", "error", "other", "review", "waiting"]);
+  const { OTHER_TYPE_UA } = await import("./carrierCallRules.js");
+  assert.deepEqual(V.OTHER_TYPE_UI, { ...OTHER_TYPE_UA }, "🔴 підтипи фронту ≠ бекенду");
   const { HUMAN_DECISIONS } = await import("./carrierDecisions.js");
-  const view = readFileSync(FE("pages/dashboard/carrierCallsView.ts"), "utf8");
-  const ui = /export const DECISION_UI[\s\S]*?= \{([\s\S]*?)\n\};/.exec(view)?.[1] ?? "";
-  assert.deepEqual([...ui.matchAll(/^\s+(\w+): \{/gm)].map((m) => m[1]).sort(), [...HUMAN_DECISIONS].sort(), "🔴 кнопки фронту ≠ рішення бекенду");
+  assert.deepEqual(Object.keys(V.DECISION_UI).sort(), [...HUMAN_DECISIONS].sort(), "🔴 кнопки фронту ≠ рішення бекенду");
+  assert.equal(V.dealStatusLabel(70419108, null), "у CRM: на етапі");
+  assert.equal(V.dealStatusLabel(null, null), "у CRM: ще не підтягнули", "🔴 невідомий стан угоди показано порожнім");
+  assert.match(V.closeLabel({ state: "closed", at: "2026-09-30T08:00:00Z", reason: "other" }, () => "30.09") ?? "", /Нецільове звернення/);
+  assert.deepEqual(["manager", "team_lead", "kvp", null].map(V.deciderLabel), ["менеджер", "тімлід", "керівник", "керівник"]);
   const css = readFileSync(FE("index.css"), "utf8");
   const rm = /@media \(prefers-reduced-motion: reduce\) \{\s*\.cq-panel[^}]*\}[^}]*\}/.exec(css)?.[0] ?? "";
   assert.ok(rm.includes("animation: none") && rm.includes("transition: none"), "🔴 анімації не вимикаються для «зменшити рух»");
+});
+
+/**
+ * #1070 — ЗАПИС І СКОУП ДЗВІНКА: запис віддається лише для дзвінків вкладки (чужий — 404 без запиту до Ringostat),
+ * байтами з нашого сервера; дзвінок бачить лише той скоуп, чия угода: менеджер — свій, тімлід — команди, керівництво — усі.
+ * 🧨 Червоніє, якщо віддати чужий запис, ходити за ним у мережу або відкрити дзвінок чужому менеджеру.
+ */
+test("#1070 ЗАПИС І СКОУП · ЖИВА СХЕМА: лише дзвінки вкладки, байтами; менеджер — свій, тімлід — команда", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  const T = await seedTeams(c);
+  const { carrierRecording } = await import("./carrierAudio.js");
+  const { callInScope } = await import("./carrierDeals.js");
+  const P = phone(10700, 1), Q = phone(10700, 2);
+  await call(c, "1070-m1", min(100), 40, P); await call(c, "1070-m3", min(100), 40, Q); await call(c, "1070-ad", min(100), 40, "380999107000");
+  await carrierDeal(c, 107001, P, min(101), "own", "1070-m1", 1); await owner(c, 107001, 10601);
+  await carrierDeal(c, 107002, Q, min(101), "own", "1070-m3", 1); await owner(c, 107002, 10603);
+  const net = fakeNet();
+  const other = await carrierRecording(c.db, "1070-ad", net.http);
+  assert.deepEqual([other.ok, (other as { code?: number }).code, net.hits.ringostat], [false, 404, 0], "🔴 віддали чужий запис або ходили по нього");
+  const mine = await carrierRecording(c.db, "1070-m1", net.http);
+  assert.ok(mine.ok && mine.bytes.length > 44, "дзеркало: свій запис віддається байтами");
+  assert.equal(await callInScope(c.db, "1070-m1", { managerId: T.m1 }), true, "дзеркало: менеджер бачить свій дзвінок");
+  assert.equal(await callInScope(c.db, "1070-m3", { managerId: T.m1 }), false, "🔴 менеджер бачить чужий дзвінок");
+  assert.equal(await callInScope(c.db, "1070-m3", { teamId: T.A }), false, "🔴 тімлід бачить дзвінок іншої команди");
+  assert.equal(await callInScope(c.db, "1070-m3", { teamId: T.B }), true);
+  assert.equal(await callInScope(c.db, "1070-m3", {}), true, "дзеркало: керівництво бачить усі");
+  assert.equal(await callInScope(c.db, "1070-ad", {}), false, "🔴 чужий дзвінок «у скоупі» вкладки");
+});
+
+/**
+ * #1071 — ТЕСТ ТОЧНОСТІ: три групи з розміткою CRM (перевізник / клієнт / «Нецільове звернення»); угоди, що пройшли через
+ * нашу вкладку, еталоном не є; матриця «група × вердикт» і точність рахуються лише з розібраних; «клієнт як Інше» — окремо.
+ * 🧨 Червоніє, якщо взяти в еталон угоду, закриту дашбордом, або рахувати точність із нерозібраними.
+ */
+test("#1071 ТЕСТ ТОЧНОСТІ · ЖИВА СХЕМА: три групи з CRM, наші закриття — не еталон, точність — з розібраних", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  await c.raw.query("DELETE FROM deals WHERE kommo_id BETWEEN 107100 AND 107199");
+  const { planCarrierPilot, pilotVerdict } = await import("./carrierCallPilot.js");
+  const at = new Date("2026-09-20T08:00:00Z");
+  const mk = async (id: number, pipeline: number, status: number, reason: string | null, analysed: string | null, conf = 0.95) => {
+    const P = `380500${String(id)}`;
+    await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,reject_reason,created_at_kommo) VALUES ($1,$2,$3,$4,$5,$6)`,
+      [id, P, pipeline, status, reason, at.toISOString()]);
+    await call(c, `1071-${String(id)}`, at, 40, P);
+    if (analysed) await carrierAnalysedV2(c, `1071-${String(id)}`, analysed, conf, "counterpart", analysed === "other" ? "spam" : null);
+  };
+  await mk(107101, 8921928, 143, "Перевізник", "carrier");
+  await mk(107102, 8921928, 143, "Перевізник", "client");
+  await mk(107103, 8921928, 143, "Перевізник", null);                 // не розібрано — у точність не йде
+  await mk(107111, 8921932, 142, null, "client");
+  await mk(107112, 8921932, 142, null, "other");                      // клієнт як «Інше»
+  await mk(107121, 8921928, 143, "Нецільове звернення", "other");
+  await mk(107122, 8921928, 143, "Нецільове звернення", "other", 0.5); // невпевнено — не влучання
+  await mk(107123, 8921928, 143, "Нецільове звернення", "other");     // закрита нашою вкладкою — не еталон
+  await carrierDeal(c, 107123, "380500107123", at, "own", "1071-107123", 1);
+  const picks = await planCarrierPilot(c.db, 30);
+  const ours = picks.filter((p) => Number(p.kommo_id) >= 107100 && Number(p.kommo_id) < 107200);
+  assert.ok(!ours.some((p) => p.kommo_id === "107123"), "🔴 угода, закрита дашбордом, пішла в еталон");
+  assert.deepEqual(["carrier", "client", "other"].map((g) => ours.filter((p) => p.group === g).length), [3, 2, 2]);
+  const v = await pilotVerdict(c.db, ours);
+  const g = (k: string) => v.groups.find((x) => x.group === k)!;
+  assert.deepEqual([g("carrier").n, g("carrier").analysed, g("carrier").hit, g("carrier").accuracy], [3, 2, 1, 0.5], "🔴 точність перевізників з нерозібраними");
+  assert.deepEqual([g("other").hit, g("other").accuracy], [1, 0.5], "🔴 невпевнене «Інше» пораховано влучанням");
+  assert.equal(v.clientsAsOther, 1, "🔴 клієнта, названого «Інше», не видно окремо");
+  assert.equal(v.clientsAsCarrier, 0);
+});
+
+/**
+ * #1072 — AI ПРОТИ ЛЮДИНИ: по кожному вердикту AI — скільки рішень людей і скільки погодились; рахується ОСТАННЄ рішення
+ * по угоді проти того, що AI казав у момент рішення; рішення без вердикту AI (угода без розмови) — не рахується.
+ * 🧨 Червоніє, якщо рахувати всі рішення історії чи порівнювати не з тим, що казав AI.
+ */
+test("#1072 AI ПРОТИ ЛЮДИНИ · ЖИВА СХЕМА: останнє рішення по угоді проти вердикту AI; без вердикту — не рахується", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  const { carrierCallsMeta } = await import("./carrierCallScreen.js");
+  await c.raw.query(`INSERT INTO carrier_decisions(kommo_id,decision,decided_by,ai_role,ai_confidence,decided_at) VALUES
+    (1,'client',1,'carrier',0.6,$1), (1,'carrier',1,'carrier',0.6,$2),
+    (2,'client',1,'carrier',0.7,$1),
+    (3,'other',1,'other',0.8,$1),
+    (4,'client',1,NULL,NULL,$1)`, [NOW.toISOString(), new Date(NOW.getTime() + 1000).toISOString()]);
+  const m = await carrierCallsMeta(c.db, NOW, { stt: 40, analysis: 10 }, { mode: "dry", otherMode: "dry" });
+  const by = Object.fromEntries(m.agreement.map((a) => [a.aiRole, [a.decisions, a.agreed]]));
+  assert.deepEqual(by, { carrier: [2, 1], other: [1, 1] }, "🔴 точність за рішеннями людей порахована не з останнього рішення або з угодами без вердикту");
 });

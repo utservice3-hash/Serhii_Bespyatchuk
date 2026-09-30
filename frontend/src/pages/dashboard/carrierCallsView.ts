@@ -22,28 +22,52 @@ export const BUCKET_UI: Readonly<Record<CarrierBucketT, { label: string; tone: T
   low: { label: "невпевнено", tone: "muted", hint: "Модель не впевнена (менше 0,85) або цитата не знайдена в словах співрозмовника — вердикт не показуємо як факт." },
 };
 
-export type CarrierFilter = "all" | CarrierBucketT | "pending";
-export const CARRIER_FILTERS: readonly { key: CarrierFilter; label: string }[] = [
-  { key: "all", label: "Усі" },
-  { key: "carrier", label: "Перевізник" },
-  { key: "client", label: "Клієнт" },
+/**
+ * 🧭 Вкладки (ТЗ Романа 30.09.2026): «Клієнти / Перевізники / Інше / На перевірці». Категорію дає бекенд
+ * (`dealCategory`); «На перевірці» збирає всіх, кого ще не розсортовано: невпевнені й без розмови, «Помилка»,
+ * і ті, кого AI ще слухає. Так вкладки разом = усі угоди періоду, і звіт з ними сходиться.
+ */
+export type CarrierCategoryT = "client" | "carrier" | "other" | "review" | "error" | "waiting";
+export type CarrierTab = "client" | "carrier" | "other" | "review";
+export const CARRIER_TABS: readonly { key: CarrierTab; label: string }[] = [
+  { key: "client", label: "Клієнти" },
+  { key: "carrier", label: "Перевізники" },
   { key: "other", label: "Інше" },
-  { key: "unclear", label: "Не розібрати" },
-  { key: "low", label: "Невпевнені" },
-  { key: "pending", label: "Ще слухаємо" },
+  { key: "review", label: "На перевірці" },
 ];
-
-/** `pending` — вердикту ще немає (черга, стеля, немає запису): кошик порожній. */
-export function matchesCarrierFilter(r: { bucket: CarrierBucketT | null }, f: CarrierFilter): boolean {
-  if (f === "all") return true;
-  if (f === "pending") return r.bucket == null;
-  return r.bucket === f;
+export function tabOf(c: CarrierCategoryT): CarrierTab {
+  return c === "client" || c === "carrier" || c === "other" ? c : "review";
 }
+export const CATEGORY_UI: Readonly<Record<CarrierCategoryT, { label: string; tone: Tone }>> = {
+  client: { label: "клієнт", tone: "ok" },
+  carrier: { label: "перевізник", tone: "warn" },
+  other: { label: "інше", tone: "info" },
+  review: { label: "на перевірці", tone: "muted" },
+  error: { label: "помилка", tone: "bad" },
+  waiting: { label: "AI слухає", tone: "muted" },
+};
+
+/** Підтипи «Інше» — ті самі ключі й підписи, що `OTHER_TYPE_UA` бекенду (звіряє гейт). */
+export type CarrierOtherTypeT = "spam" | "supplier" | "job_seeker" | "personal" | "wrong_number" | "other";
+export const OTHER_TYPE_UI: Readonly<Record<CarrierOtherTypeT, string>> = {
+  spam: "спам / реклама", supplier: "постачальник", job_seeker: "шукає роботу", personal: "особисте",
+  wrong_number: "помилка номера", other: "інше",
+};
+
+/** Хто вирішив — для журналу й рядка. Роль невідома (рішення до 30.09.2026) — «керівник»: тоді вирішувало лише воно. */
+export function deciderLabel(role: string | null): string {
+  if (role === "manager") return "менеджер";
+  if (role === "team_lead") return "тімлід";
+  return "керівник";
+}
+
+/** Етап «Дзвінки на мобільні» (Кваліфікація) — як `CARRIER_STAGE.statusId` бекенду. */
+export const CARRIER_STAGE_STATUS = 70419108;
 
 /** Стан угоди в CRM зараз — словами (невідоме має читатись як невідоме). */
 export function dealStatusLabel(statusId: number | null, rejectReason: string | null): string {
   if (statusId == null) return "у CRM: ще не підтягнули";
-  if (statusId === 70419108) return "у CRM: на етапі";
+  if (statusId === CARRIER_STAGE_STATUS) return "у CRM: на етапі";
   if (statusId === 143) return rejectReason ? `у CRM: закрито (${rejectReason})` : "у CRM: закрито без причини";
   if (statusId === 142) return "у CRM: успішна";
   return "у CRM: пішла далі";
@@ -66,12 +90,13 @@ export function dealsWord(n: number): string {
 }
 
 /** Стан закриття угоди в CRM — словами. `null` — автоматика угоду не чіпала. */
-export function closeLabel(c: { state: string; at: string } | null, fmt: (iso: string) => string): string | null {
+export function closeLabel(c: { state: string; at: string; reason?: string } | null, fmt: (iso: string) => string): string | null {
   if (!c) return null;
-  if (c.state === "closed") return `закрито в CRM ${fmt(c.at)}`;
+  const why = c.reason === "other" ? "«Нецільове звернення»" : "«Перевізник»";
+  if (c.state === "closed") return `закрито в CRM ${fmt(c.at)} · ${why}`;
   if (c.state === "reverted") return `повернуто на етап ${fmt(c.at)}`;
   if (c.state === "failed") return "не вдалось закрити в CRM — спробуємо ще";
-  return "закриємо (поки вимкнено)";
+  return `закриємо як ${why} (поки лише журнал)`;
 }
 
 /** Режим закриття — для рядка стану. */
@@ -85,8 +110,8 @@ export function closeModeLabel(mode: string): string {
 export type HumanDecisionT = "carrier" | "client" | "other";
 export const DECISION_UI: Readonly<Record<HumanDecisionT, { label: string; icon: string; hint: string; bg: string; fg: string }>> = {
   carrier: { label: "Перевізник", icon: "🚚", hint: "Закриємо в CRM як «Не цільові · Перевізник»", bg: TONE.warn.bg, fg: TONE.warn.fg },
-  client: { label: "Клієнт", icon: "👤", hint: "Лишиться на етапі, AI більше не чіпає", bg: TONE.ok.bg, fg: TONE.ok.fg },
-  other: { label: "Інше", icon: "💬", hint: "Лишиться на етапі", bg: TONE.info.bg, fg: TONE.info.fg },
+  client: { label: "Клієнт", icon: "👤", hint: "Лишиться на етапі з позначкою «клієнт», AI більше не чіпає", bg: TONE.ok.bg, fg: TONE.ok.fg },
+  other: { label: "Інше", icon: "💬", hint: "Закриємо в CRM як «Не цільові · Нецільове звернення», підтип — у примітці", bg: TONE.info.bg, fg: TONE.info.fg },
 };
 /** Що сказав AI — підпис і колір (сирі ролі моделі, не кошики). */
 export const ROLE_UI: Readonly<Record<string, { label: string; bg: string; fg: string }>> = {

@@ -69,7 +69,9 @@ import { ga4Configured } from "../ga4/client.js";
 import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
 import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES } from "../core/callAiScreen.js";
-import { carrierCallCard, carrierCallsList, carrierCallsMeta } from "../core/carrierCallScreen.js";
+import { CARRIER_LISTEN_ROLES, carrierCallCard, carrierCallsList, carrierCallsMeta } from "../core/carrierCallScreen.js";
+import { callInScope, carrierDealRows, carrierReport, filterRemovedByManager } from "../core/carrierDeals.js";
+import { CARRIER_STAGE } from "../core/carrierCallRules.js";
 import { closeModeOf, revertCarrierClose } from "../core/carrierClose.js";
 import { decisionQueue, recordDecision } from "../core/carrierDecisions.js";
 import { carrierRecording } from "../core/carrierAudio.js";
@@ -10538,52 +10540,82 @@ dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
 });
 
 /**
- * 🚚 «ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ» (ТЗ 29.09.2026, прохід 2) — лише перегляд, лише керівництво. Логіка —
- * `core/carrierCallScreen.ts`; межа — `pre("/api/dashboard/carrier-calls")` → вкладка `carrier-calls` (routeTab);
- * ролі — сид у схемі (admin, ceo, opdir, kvp). Скоупу немає: вкладку мають лише ролі всієї компанії.
- * Повний текст розмови — як у «Першому дотику»: лише admin і kvp (`transcriptAllowed`, за ключем ролі).
+ * 🚚 «ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ» (29.09.2026; ТЗ Романа 30.09.2026 «Відсів перевізників»). Логіка — `core/carrierDeals.ts`
+ * (рядок = угода, одне правило категорії) і `core/carrierCallScreen.ts`; межа роута — `pre("/api/dashboard/carrier-calls")`
+ * → вкладка `carrier-calls` (routeTab; сид — керівництво, тімлід, менеджер). Друга межа — скоуп у ЯДРІ через
+ * `missedScopeFor`: менеджер — свої угоди, тімлід — команда, керівництво — усе (або звужене запитом). Картка й
+ * запис чужого дзвінка — 404, а не 403: для менеджера чужої угоди не існує.
  */
+const carrierScope = (req: { auth?: AuthPayload; query: Record<string, unknown> }) => missedScopeFor(req.auth!, req.query);
+
 dashboardRouter.get("/carrier-calls", async (req, res) => {
   const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
-  const { rows, kpis, truncated } = await carrierCallsList(pool, from, to);
+  const { rows, kpis, truncated } = await carrierCallsList(pool, from, to, carrierScope(req));
   res.json({
     period: { from, to }, truncated, kpis,
     // Явний перелік полів, а не спред (#17e2).
     rows: rows.map((r) => ({
-      uniqueid: r.uniqueid, calledAt: r.calledAt, direction: r.direction, billsec: r.billsec, managerName: r.managerName,
-      deals: r.deals.map((d) => ({ kommoId: d.kommoId, url: kommoLeadUrl(d.kommoId), statusId: d.statusId, rejectReason: d.rejectReason,
-        reused: d.reused, close: d.close })),
-      talkNo: r.talkNo, state: r.state, failure: r.failure, bucket: r.bucket, role: r.role, confidence: r.confidence,
-      quote: r.quote, quoteCheck: r.quoteCheck, summary: r.summary,
+      kommoId: r.kommoId, url: kommoLeadUrl(r.kommoId), phone: r.phone, createdAt: r.createdAt, dealState: r.dealState, reused: r.reused,
+      talkNo: r.talkNo, uniqueid: r.uniqueid, calledAt: r.calledAt, billsec: r.billsec, direction: r.direction,
+      managerId: r.managerId, managerName: r.managerName, teamId: r.teamId, teamName: r.teamName,
+      ai: r.ai, human: r.human, journal: r.journal, category: r.category, source: r.source, why: r.why, otherType: r.otherType,
+      close: r.close, crm: r.crm,
     })),
+  });
+});
+
+/**
+ * 📊 Блок «Звіт»: по менеджерах — усього, клієнти, перевізники (авто/вручну), інше (авто/вручну), не розібрано.
+ * Ті самі рядки, що й вкладки (`carrierReport(carrierDealRows)`), тож числа збігаються зі списками за побудовою.
+ * «Прибрав фільтр CRM» — окремим числом, поза «усього»: ці угоди AI не слухав.
+ */
+dashboardRouter.get("/carrier-calls/report", async (req, res) => {
+  const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
+  const scope = carrierScope(req);
+  const rows = await carrierDealRows(pool, { period: { from, to }, scope });
+  const rep = carrierReport(rows);
+  const filtered = await filterRemovedByManager(pool, from, to, CARRIER_STAGE.pipelineId, scope);
+  const line = (x: (typeof rep.managers)[number]) => ({ managerId: x.managerId, managerName: x.managerName, teamId: x.teamId, teamName: x.teamName,
+    total: x.total, clients: x.clients, carriersAuto: x.carriersAuto, carriersManual: x.carriersManual,
+    otherAuto: x.otherAuto, otherManual: x.otherManual, unsorted: x.unsorted });
+  res.json({
+    period: { from, to },
+    managers: rep.managers.map((x) => ({ ...line(x), filterRemoved: filtered.get(x.managerId) ?? 0 })),
+    teams: rep.teams.map(line),
+    total: rep.total,
+    filterRemoved: [...filtered.values()].reduce((a, b) => a + b, 0),
   });
 });
 
 dashboardRouter.get("/carrier-calls/meta", async (_req, res) => {
   const m = await carrierCallsMeta(pool, new Date(), {
     stt: config.callAi.prices.sttMonthCapUsd, analysis: config.callAi.prices.llmMonthCapUsd,
-  }, closeModeOf(config.callAi.carrierAutoClose));
-  res.json({ job: m.job, transcripts: m.transcripts, analyses: m.analyses, spend: m.spend, caps: m.caps, close: m.close });
+  }, { mode: closeModeOf(config.callAi.carrierAutoClose), otherMode: closeModeOf(config.callAi.carrierAutoCloseOther) });
+  res.json({ job: m.job, transcripts: m.transcripts, analyses: m.analyses, spend: m.spend, caps: m.caps, close: m.close, agreement: m.agreement });
 });
 
 /**
- * 🙋 Черга «Потрібне ваше рішення» (невпевнені вердикти) і вирішені за 30 днів. ⚠️ Стоїть ДО `/:uniqueid`:
- * Express зіставляє за порядком, і «pending» інакше пішов би як номер дзвінка.
+ * 🙋 Черга «На перевірці» (невпевнені, без розмови, помилка) і вирішені за 30 днів — у межах скоупу.
+ * ⚠️ Стоїть ДО `/:uniqueid`: Express зіставляє за порядком, і «pending» інакше пішов би як номер дзвінка.
  */
-dashboardRouter.get("/carrier-calls/pending", async (_req, res) => {
-  const { pending, decided } = await decisionQueue(pool, new Date());
-  const row = (r: (typeof pending)[number]) => ({ kommoId: r.kommoId, url: kommoLeadUrl(r.kommoId), uniqueid: r.uniqueid,
-    calledAt: r.calledAt, billsec: r.billsec, managerName: r.managerName, role: r.role, confidence: r.confidence, why: r.why });
+dashboardRouter.get("/carrier-calls/pending", async (req, res) => {
+  const { pending, decided } = await decisionQueue(pool, new Date(), carrierScope(req));
+  const row = (r: (typeof pending)[number]) => ({ kommoId: r.kommoId, url: kommoLeadUrl(r.kommoId), uniqueid: r.uniqueid, phone: r.phone,
+    createdAt: r.createdAt, calledAt: r.calledAt, billsec: r.billsec, managerName: r.managerName, teamName: r.teamName,
+    category: r.category, why: r.why, dealState: r.dealState, role: r.role, confidence: r.confidence, otherType: r.otherType, reason: r.reason });
   res.json({
     pending: pending.map(row),
-    decided: decided.map((r) => ({ ...row(r), decision: r.decision, note: r.note, by: r.by, at: r.at })),
+    decided: decided.map((r) => ({ ...row(r), decision: r.decision, decisionOther: r.decisionOther, note: r.note, by: r.by, byRole: r.byRole, at: r.at })),
   });
 });
 
-/** 🎧 Запис розмови — лише адмін і КВП (як повний текст; `transcriptAllowed`), лише дзвінки цієї вкладки. */
+/** 🎧 Запис розмови — ролі вкладки в межах скоупу (ТЗ 30.09.2026), лише дзвінки цієї вкладки. */
 dashboardRouter.get("/carrier-calls/:uniqueid/audio", async (req, res) => {
-  if (!transcriptAllowed(req.auth!)) { res.status(403).json({ error: "Запис розмови слухають адмін і КВП" }); return; }
-  const r = await carrierRecording(pool, String(req.params.uniqueid), {
+  const auth = req.auth!;
+  const u = String(req.params.uniqueid);
+  if (!transcriptAllowed(auth, CARRIER_LISTEN_ROLES)) { res.status(403).json({ error: "Запис розмови цій ролі недоступний" }); return; }
+  if (!(await callInScope(pool, u, carrierScope(req)))) { res.status(404).json({ error: "Дзвінка немає серед ваших дзвінків на мобільні" }); return; }
+  const r = await carrierRecording(pool, u, {
     fetch, sleep: (ms) => new Promise((ok) => setTimeout(ok, ms)), nowMs: () => Date.now() });
   if (!r.ok) { res.status(r.code).json({ error: r.why }); return; }
   res.setHeader("Content-Type", "audio/wav");
@@ -10593,7 +10625,9 @@ dashboardRouter.get("/carrier-calls/:uniqueid/audio", async (req, res) => {
 
 dashboardRouter.get("/carrier-calls/:uniqueid", async (req, res) => {
   const auth = req.auth!;
-  const card = await carrierCallCard(pool, String(req.params.uniqueid), transcriptAllowed(auth));
+  const u = String(req.params.uniqueid);
+  if (!(await callInScope(pool, u, carrierScope(req)))) { res.status(404).json({ error: "Дзвінок не знайдено серед ваших дзвінків на мобільні" }); return; }
+  const card = await carrierCallCard(pool, u, transcriptAllowed(auth, CARRIER_LISTEN_ROLES));
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено серед дзвінків на мобільні" }); return; }
   res.json({
     uniqueid: card.uniqueid, calledAt: card.calledAt, billsec: card.billsec, managerName: card.managerName,
@@ -10605,23 +10639,31 @@ dashboardRouter.get("/carrier-calls/:uniqueid", async (req, res) => {
 });
 
 /**
- * ↩️ Повернути угоду, яку дашборд закрив як перевізника, назад на етап (дія людини; `core/carrierClose.ts`).
- * Межа — та сама вкладка `carrier-calls` (routeTab); повернуту угоду автоматика більше не закриває.
+ * 🙋 Рішення людини по угоді: «carrier» / «client» / «other» (+ підтип) + коментар. Сильніше за AI; менеджер — свої,
+ * тімлід — команда й може переписати менеджера, керівництво — усе (`carrierDecisions.ts`).
  */
-/** 🙋 Рішення людини по угоді: «carrier» / «client» / «other» + коментар. Сильніше за AI (`carrierDecisions.ts`). */
 dashboardRouter.post("/carrier-calls/deals/:kommoId/decision", async (req, res) => {
+  const auth = req.auth!;
   const id = Number(req.params.kommoId);
   if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Невірний номер угоди" }); return; }
-  const body = (req.body ?? {}) as { decision?: unknown; note?: unknown };
-  const r = await recordDecision(pool, id, String(body.decision ?? ""), body.note, req.auth!.userId, new Date());
+  const body = (req.body ?? {}) as { decision?: unknown; otherType?: unknown; note?: unknown };
+  const r = await recordDecision(pool, id, String(body.decision ?? ""), body.otherType, body.note,
+    { userId: auth.userId, roleKey: auth.roleKey ?? null, scope: missedScopeFor(auth, {}) }, new Date());
   if (!r.ok) { res.status(r.code).json({ error: r.why }); return; }
   res.json({ ok: true });
 });
 
+/**
+ * ↩️ Повернути угоду, яку дашборд закрив, назад на етап (дія людини; `core/carrierClose.ts`). У межах скоупу:
+ * чужа угода — 404. Повернуту угоду автоматика більше не закриває.
+ */
 dashboardRouter.post("/carrier-calls/deals/:kommoId/revert", async (req, res) => {
   const auth = req.auth!;
   const id = Number(req.params.kommoId);
   if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Невірний номер угоди" }); return; }
+  if (!(await carrierDealRows(pool, { period: null, scope: missedScopeFor(auth, {}), ids: [id] })).length) {
+    res.status(404).json({ error: "Угоди немає серед ваших дзвінків на мобільні" }); return;
+  }
   const r = await revertCarrierClose(pool, id, auth.userId, auth.email ?? `користувач #${String(auth.userId)}`, new Date(), {
     patchLeads: (body) => kommoWrite("/api/v4/leads", body, "PATCH"),
     addNotes: (body) => kommoWrite("/api/v4/leads/notes", body, "POST"),

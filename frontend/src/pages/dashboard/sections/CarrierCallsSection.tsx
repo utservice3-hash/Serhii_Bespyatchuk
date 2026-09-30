@@ -1,21 +1,21 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { fetchCarrierCallCard, fetchCarrierCalls, fetchCarrierCallsMeta, revertCarrierClose,
-  type CarrierCallCardResp, type CarrierCallsMetaResp, type CarrierCallsResp } from "../../../api";
+import { fetchCarrierCalls, fetchCarrierCallsMeta, fetchCarrierPending,
+  type CarrierCallsMetaResp, type CarrierCallsResp, type CarrierDealT, type CarrierOtherTypeT } from "../../../api";
 import { InfoHint } from "../widgets";
-import { CarrierDecisionQueue } from "./CarrierDecisionQueue";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
-import { STATE_UI, TONE_COLOR, mmss, jobErrorIsCurrent } from "../aiCallsView";
-import { BUCKET_UI, CARRIER_FILTERS, TONE, carrierSpeaker, closeLabel, confLabel, dealStatusLabel, dealsWord, matchesCarrierFilter,
-  type CarrierFilter } from "../carrierCallsView";
+import { jobErrorIsCurrent, mmss } from "../aiCallsView";
+import { CARRIER_STAGE_STATUS, CARRIER_TABS, CATEGORY_UI, OTHER_TYPE_UI, TONE, closeLabel, closeModeLabel, confLabel, dealStatusLabel, deciderLabel,
+  tabOf, type CarrierTab } from "../carrierCallsView";
+import { CarrierDealPanel, pill } from "./CarrierDealPanel";
 
 /**
- * 🚚 «ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ» — лише керівництво, лише перегляд (ТЗ 29.09.2026, макет — на ньому).
+ * 🚚 «ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ» — відсів дзвінків на мобільні (29.09.2026; ТЗ Романа 30.09.2026).
  *
- * Хто подзвонив менеджеру на мобільний, коли фільтр CRM цю людину не впізнав: AI слухає першу розмову
- * номера й каже «перевізник / клієнт / інше / не розібрати» з цитатою співрозмовника. У Kommo нічого не пишемо.
- * Правила (15 хв після фільтра, розмова від 10 с, вердикт на номер 30 днів) — METRICS_GLOSSARY §17.
- * Повний текст розмови сервер віддає лише адміну й КВП; тут показуємо те, що прийшло.
+ * Дзвінок на мобільний → угода на етапі «Дзвінки на мобільні» → фільтр CRM прибирає знайомих → AI слухає першу
+ * розмову решти (від 10 с) і каже: клієнт, перевізник чи інше (з підтипом). Упевнених перевізників і «Інше»
+ * дашборд закриває в CRM, клієнт лишається; решту — «На перевірці» — вирішує людина. Сервер сам звужує список:
+ * менеджер бачить свої угоди, тімлід — команду, керівництво — усі. Правила — METRICS_GLOSSARY §17.
  */
 
 const fmtTime = (iso: string) => new Date(iso).toLocaleString("uk-UA", {
@@ -23,83 +23,17 @@ const fmtTime = (iso: string) => new Date(iso).toLocaleString("uk-UA", {
 });
 const fmtDate = (iso: string) => new Date(iso).toLocaleDateString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", year: "numeric" });
 const usd = (v: number) => `$${v.toFixed(2)}`;
-const pill = (bg: string, fg: string): React.CSSProperties => ({ background: bg, color: fg, borderRadius: 999, padding: "1px 8px", fontSize: 12, whiteSpace: "nowrap", fontWeight: 600 });
+const muted: React.CSSProperties = { color: "var(--text-muted)" };
 
-
-function CallDetail({ uniqueid, onChanged }: { uniqueid: string; onChanged: () => void }) {
-  const [c, setC] = useState<CarrierCallCardResp | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState<number | null>(null);
-  const [reload, setReload] = useState(0);
-  useEffect(() => {
-    let alive = true;
-    fetchCarrierCallCard(uniqueid).then((x) => { if (alive) setC(x); })
-      .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити розмову"); });
-    return () => { alive = false; };
-  }, [uniqueid, reload]);
-  const revert = async (kommoId: number) => {
-    if (!window.confirm(`Повернути угоду № ${String(kommoId)} на етап «Дзвінки на мобільні» і зняти причину «Перевізник»? Автоматика її більше не закриватиме.`)) return;
-    setBusy(kommoId);
-    try { await revertCarrierClose(kommoId); setReload((n) => n + 1); onChanged(); }
-    catch (e) {
-      const msg = (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? (e instanceof Error ? e.message : "не вдалося");
-      window.alert(`Не повернуто: ${msg}`);
-    } finally { setBusy(null); }
-  };
-  if (err) return <p style={{ margin: 0, color: "var(--danger)" }}>{err}</p>;
-  if (!c) return <p className="loading-text" style={{ margin: 0 }}>Завантаження розмови…</p>;
-  const quote = c.result?.caller_role_quote?.trim() ?? "";
+function Verdict({ r }: { r: CarrierDealT }) {
+  const cat = CATEGORY_UI[r.category];
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 12, background: "var(--card-bg)",
-      border: "1px solid var(--border)", borderRadius: 8, padding: "10px 12px" }}>
-      <div>
-        <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600, marginBottom: 4 }}>РЕЗЮМЕ</div>
-        <p style={{ margin: 0, fontSize: 13 }}>{c.result?.summary || <span style={{ color: "var(--text-muted)" }}>{c.failure ?? "вердикту ще немає"}</span>}</p>
-        {c.firstTry && (
-          <p style={{ margin: "6px 0 0", fontSize: 12.5, color: "var(--text-muted)" }}>
-            Це друга розмова номера: першу не вдалось розібрати{c.firstTry.role ? ` (${c.firstTry.role === "unclear" ? "не розібрати" : c.firstTry.role})` : " (без запису)"}.
-          </p>
-        )}
-        {c.deals.length > 0 && (
-          <div style={{ margin: "6px 0 0", fontSize: 12.5, display: "flex", flexDirection: "column", gap: 4 }}>
-            {c.deals.map((d) => (
-              <div key={d.kommoId} style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-                <a href={d.url} target="_blank" rel="noreferrer" style={{ whiteSpace: "nowrap" }}>№ {d.kommoId}</a>
-                {d.reused && <span style={{ color: "var(--text-muted)" }}>(вердикт номера)</span>}
-                {closeLabel(d.close, fmtTime) && <span style={{ color: "var(--text-muted)" }}>· {closeLabel(d.close, fmtTime)}</span>}
-                {d.close?.state === "closed" && (
-                  <button type="button" disabled={busy === d.kommoId} onClick={() => { void revert(d.kommoId); }}
-                    style={{ border: "1px solid var(--border-strong, #d1d5db)", background: "var(--card-bg)", color: "var(--text)", borderRadius: 6, padding: "2px 8px", fontSize: 12, cursor: "pointer" }}>
-                    {busy === d.kommoId ? "Повертаю…" : "Повернути на етап"}
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      <div>
-        <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600, marginBottom: 4 }}>РОЗМОВА</div>
-        {c.textPurged
-          ? <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>Текст видалено за строком зберігання (12 місяців). Вердикт і цитата лишились.</p>
-          : c.transcriptHidden
-            ? <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>Повний текст бачать адмін і КВП. Цитата співрозмовника — у рядку.</p>
-            : !c.turns?.length
-              ? <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>Розшифровки ще немає.</p>
-              : <div style={{ maxHeight: 220, overflowY: "auto" }}>
-                  {c.turns.map((t, i) => {
-                    const who = carrierSpeaker(t.channel, c.managerChannel);
-                    const hit = quote && t.channel !== c.managerChannel && t.text.includes(quote);
-                    return (
-                      <p key={i} style={{ margin: "2px 0", fontSize: 13 }}>
-                        <span style={{ fontWeight: 600, marginRight: 6, color: who === "Співрозмовник" ? "var(--warn)" : "var(--text-muted)" }}>{who}</span>
-                        {hit ? <mark style={{ background: "var(--warn-bg)", color: "inherit", borderRadius: 3 }}>{t.text}</mark> : t.text}
-                      </p>
-                    );
-                  })}
-                </div>}
-      </div>
-    </div>
+    <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+      <span style={pill(TONE[cat.tone].bg, TONE[cat.tone].fg)}>{cat.label}{r.otherType ? ` · ${OTHER_TYPE_UI[r.otherType]}` : ""}</span>
+      <span style={{ fontSize: 12, ...muted, fontVariantNumeric: "tabular-nums" }}>
+        {r.source === "human" && r.human ? deciderLabel(r.human.role) : r.source === "ai" ? `AI ${confLabel(r.ai.confidence)}` : r.why ?? ""}
+      </span>
+    </span>
   );
 }
 
@@ -109,33 +43,48 @@ export function CarrierCallsSection() {
   const { from, to } = periodOf(nav);
   const [d, setD] = useState<CarrierCallsResp | null>(null);
   const [meta, setMeta] = useState<CarrierCallsMetaResp | null>(null);
+  const [pendingAll, setPendingAll] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [filter, setFilter] = useState<CarrierFilter>("all");
-  const [open, setOpen] = useState<string | null>(null);
+  const [tab, setTab] = useState<CarrierTab>("review");
+  const [sub, setSub] = useState<CarrierOtherTypeT | "all">("all");
+  const [open, setOpen] = useState<number | null>(null);
+  const [leaving, setLeaving] = useState<number | null>(null);
   const [refresh, setRefresh] = useState(0);
 
   useEffect(() => {
     if (!from || !to) return;
     let alive = true;
-    setD(null); setErr(null);
+    setErr(null);
     fetchCarrierCalls({ from, to })
       .then((x) => { if (alive) setD(x); })
       .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
     return () => { alive = false; };
   }, [from, to, refresh]);
   useEffect(() => { fetchCarrierCallsMeta().then(setMeta).catch(() => setMeta(null)); }, [refresh]);
+  useEffect(() => { fetchCarrierPending().then((p) => setPendingAll(p.pending.length)).catch(() => setPendingAll(null)); }, [refresh]);
 
-  const rows = d?.rows ?? [];
-  const shown = useMemo(() => rows.filter((r) => matchesCarrierFilter(r, filter)), [rows, filter]);
+  const rows = useMemo(() => d?.rows ?? [], [d]);
+  const inTab = useMemo(() => rows.filter((r) => tabOf(r.category) === tab), [rows, tab]);
+  const shown = useMemo(() => (tab === "other" && sub !== "all" ? inTab.filter((r) => r.otherType === sub) : inTab), [inTab, tab, sub]);
+  const count = (t: CarrierTab) => rows.filter((r) => tabOf(r.category) === t).length;
+  const reduce = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
-  const navBar = <PeriodNav state={nav} onPatch={(patch) => setNav((st) => ({ ...st, ...patch }))} today={today} />;
+  /** Рішення записано: у «На перевірці» рядок плавно відходить і відкривається наступний — черга розбирається підряд. */
+  const onDecided = (kommoId: number) => {
+    const idx = shown.findIndex((r) => r.kommoId === kommoId);
+    const next = tab === "review" ? (shown[idx + 1] ?? shown[idx - 1])?.kommoId ?? null : kommoId;
+    const finish = () => { setLeaving(null); setOpen(next); setRefresh((n) => n + 1); };
+    if (tab !== "review" || reduce) { finish(); return; }
+    setLeaving(kommoId); setOpen(null);
+    setTimeout(finish, 300);
+  };
+
   const header = (
     <>
-      {navBar}
+      <PeriodNav state={nav} onPatch={(patch) => setNav((st) => ({ ...st, ...patch }))} today={today} />
       <h3 style={{ margin: "0 0 4px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         Перевізники за розмовою
-        <span style={pill("var(--danger-bg)", "var(--danger)")}>лише керівництво</span>
-        <InfoHint text="Дзвінок на мобільний → угода на етапі «Дзвінки на мобільні» → фільтр CRM прибирає знайомих → AI слухає першу розмову решти (від 10 с) і каже, хто дзвонив. Упевнених перевізників дашборд закриває в CRM, невпевнених вирішує людина. Період — за датою створення угоди." />
+        <InfoHint text="Дзвінок на мобільний → угода на етапі «Дзвінки на мобільні» → фільтр CRM прибирає знайомих → AI слухає першу розмову решти (від 10 с): клієнт, перевізник чи інше. Упевнених перевізників і «Інше» дашборд закриває в CRM, клієнт лишається. Невпевнених і без розмови вирішує людина: менеджер — свої, тімлід — команди, керівництво — усі. Період — за датою створення угоди." />
       </h3>
     </>
   );
@@ -143,96 +92,117 @@ export function CarrierCallsSection() {
   if (!d) return <div className="chart-card">{header}<p className="loading-text" style={{ margin: 0 }}>Завантаження…</p></div>;
 
   const k = d.kpis;
-  const count = (b: string) => rows.filter((r) => r.bucket === b).length;
-  const tile = (label: string, value: number, hint: string, tone?: string) => (
-    <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px", minWidth: 130, flex: "1 1 130px" }}>
-      <div style={{ fontSize: 22, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: tone }}>{value.toLocaleString("uk-UA")}</div>
-      <div style={{ fontSize: 12.5, color: "var(--text-muted)", display: "flex", gap: 4, alignItems: "center" }}>{label}<InfoHint text={hint} /></div>
-    </div>
-  );
   const since = k.recordingSince ? k.recordingSince.slice(0, 10) : null;
   const cell: React.CSSProperties = { padding: "7px 10px", verticalAlign: "top" };
+  const reviewOutside = pendingAll != null ? pendingAll - rows.filter((r) => (r.category === "review" || r.category === "error") && !r.human
+    && r.close?.state !== "closed" && (r.crm.statusId == null || r.crm.statusId === CARRIER_STAGE_STATUS)).length : 0;
+  const subCount = (t: CarrierOtherTypeT) => inTab.filter((r) => r.otherType === t).length;
+  const unknownSub = tab === "other" ? inTab.filter((r) => r.otherType == null).length : 0;
 
   return (
     <>
       <div className="chart-card">
         {header}
         {meta && (
-          <p style={{ margin: "0 0 10px", fontSize: 12.5, color: "var(--text-muted)" }}
+          <p style={{ margin: "0 0 10px", fontSize: 12.5, ...muted }}
             title={`Усього AI за місяць: розпізнавання ${usd(meta.spend.stt)}, аналіз ${usd(meta.spend.analysis)}. У черзі: ${String((meta.transcripts.queued ?? 0) + (meta.analyses.queued ?? 0))}.`}>
             Оновлено {meta.job?.lastSuccessAt ? fmtTime(meta.job.lastSuccessAt) : "—"}
             {meta.job?.lastError && jobErrorIsCurrent(meta.job) && <span style={{ color: "var(--danger)" }}> · помилка: {meta.job.lastError}</span>}
             {" · "}витрати {usd(meta.spend.carrier)} / {usd(meta.caps.carrier)}
-            {" · "}закриття в CRM: {meta.close.mode === "live" ? `увімкнено (${String(meta.close.closed)})` : meta.close.mode === "off" ? "вимкнено" : `лише журнал (${String(meta.close.wouldClose)})`}
+            {" · "}перевізники: {closeModeLabel(meta.close.mode)}{meta.close.mode === "live" ? ` (${String(meta.close.closed)})` : ""}
+            {" · "}«Інше» від AI: {meta.close.mode === "off" ? "вимкнено" : closeModeLabel(meta.close.otherMode).replace("закриття в CRM ", "")}
+            {meta.close.otherMode !== "live" && meta.close.otherWouldClose > 0 ? ` (у журналі ${String(meta.close.otherWouldClose)})` : ""}
           </p>
         )}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>
-          {tile("Прибрав фільтр", k.removedByFilter, "Фільтр CRM закрив як «Перевізник». AI їх не слухає.")}
-          {tile("Після фільтра", k.leftAfterFilter, `Лишились на етапі після фільтра. Прослухано номерів: ${String(k.listenedPhones)}. Без розмови: чекають ${String(k.waitingTalk)}, пропущено ${String(k.noTalk)}.`)}
-          {tile("Перевізник", count("carrier"), BUCKET_UI.carrier.hint, "var(--warn)")}
-          {tile("Клієнт", count("client"), BUCKET_UI.client.hint, "var(--ok)")}
+          {[
+            ["Прибрав фільтр", k.removedByFilter, "Фільтр CRM закрив як «Перевізник» (Lardi, відомі перевізники). AI їх не слухає."],
+            ["Після фільтра", k.leftAfterFilter, `Лишились на етапі після фільтра — усі вкладки разом. Без розмови: чекають ${String(k.waitingTalk)}, без розмови від 10 с ${String(k.noTalk)}.`],
+          ].map(([l, v, h]) => (
+            <div key={String(l)} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px", minWidth: 130, flex: "1 1 130px" }}>
+              <div style={{ fontSize: 22, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{Number(v).toLocaleString("uk-UA")}</div>
+              <div style={{ fontSize: 12.5, ...muted, display: "flex", gap: 4, alignItems: "center" }}>{l}<InfoHint text={String(h)} /></div>
+            </div>
+          ))}
         </div>
-        {since && since > from && <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "var(--text-muted)" }}>Облік ведеться з {fmtDate(k.recordingSince!)}.</p>}
-        {!since && <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "var(--text-muted)" }}>Облік ще не почався.</p>}
+        {since && since > from && <p style={{ margin: "0 0 8px", fontSize: 12.5, ...muted }}>Облік ведеться з {fmtDate(k.recordingSince!)}.</p>}
+        {!since && <p style={{ margin: "0 0 8px", fontSize: 12.5, ...muted }}>Облік ще не почався.</p>}
         {d.truncated && <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "var(--warn)" }}>Показано перші 5 000 — звузьте період.</p>}
-        <div role="group" aria-label="Фільтр за вердиктом" style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-          {CARRIER_FILTERS.map((f) => (
-            <button key={f.key} type="button" onClick={() => setFilter(f.key)} aria-pressed={filter === f.key}
-              style={{ border: "1px solid var(--border)", borderRadius: 999, padding: "3px 12px", fontSize: 13, cursor: "pointer",
-                background: filter === f.key ? "var(--accent-bg, #e8f0fb)" : "transparent", fontWeight: filter === f.key ? 600 : 400 }}>
-              {f.label} · {rows.filter((r) => matchesCarrierFilter(r, f.key)).length}
+        <div role="tablist" aria-label="Категорії" style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {CARRIER_TABS.map((t) => (
+            <button key={t.key} type="button" role="tab" onClick={() => { setTab(t.key); setOpen(null); setSub("all"); }} aria-selected={tab === t.key}
+              style={{ border: "1px solid var(--border)", borderRadius: 999, padding: "4px 14px", fontSize: 13.5, cursor: "pointer",
+                background: tab === t.key ? "var(--accent-bg, #e8f0fb)" : "transparent", fontWeight: tab === t.key ? 600 : 400, color: "var(--text)" }}>
+              {t.label} <span key={count(t.key)} className="cq-pop" style={{ fontVariantNumeric: "tabular-nums" }}>{count(t.key)}</span>
             </button>
           ))}
         </div>
+        {tab === "other" && inTab.length > 0 && (
+          <div role="group" aria-label="Підтип «Інше»" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+            {(["all", ...Object.keys(OTHER_TYPE_UI)] as (CarrierOtherTypeT | "all")[]).map((t) => {
+              const n = t === "all" ? inTab.length : subCount(t);
+              if (t !== "all" && n === 0) return null;
+              return (
+                <button key={t} type="button" onClick={() => setSub(t)} aria-pressed={sub === t}
+                  style={{ border: "1px solid var(--border)", borderRadius: 999, padding: "2px 10px", fontSize: 12.5, cursor: "pointer", color: "var(--text)",
+                    background: sub === t ? "var(--info-bg)" : "transparent" }}>
+                  {t === "all" ? "Усі" : OTHER_TYPE_UI[t]} · {n}
+                </button>
+              );
+            })}
+            {unknownSub > 0 && <span style={{ fontSize: 12.5, ...muted, alignSelf: "center" }}>без підтипу (до 30.09): {unknownSub}</span>}
+          </div>
+        )}
+        {tab === "review" && reviewOutside > 0 && (
+          <p style={{ margin: "8px 0 0", fontSize: 12.5, color: "var(--warn)" }}>Ще {reviewOutside} на перевірці з угод поза цим періодом — розширте період.</p>
+        )}
       </div>
 
-      {/* 🙋 Невпевнені вердикти — одразу під шапкою, над списком (макет погоджено 29.09.2026). */}
-      <div style={{ marginTop: 16 }}><CarrierDecisionQueue onChanged={() => setRefresh((n) => n + 1)} /></div>
       <div className="chart-card" style={{ overflowX: "auto" }}>
         {shown.length === 0
-          ? <p style={{ margin: 0, color: "var(--text-muted)" }}>{rows.length === 0 ? "У періоді немає прослуханих розмов після фільтра." : "Під цей фільтр розмов немає."}</p>
+          ? <p className="cq-fade" style={{ margin: 0, ...muted }}>{tab === "review" ? (rows.length ? "Усе розсортовано 👌" : "У періоді угод немає.") : "У цій вкладці за період угод немає."}</p>
           : (
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
               <thead>
-                <tr style={{ textAlign: "left", color: "var(--text-muted)", fontSize: 12.5 }}>
-                  <th style={cell}>Розмова</th><th style={cell}>Угода</th><th style={cell}>Менеджер</th><th style={cell}>Хто дзвонив</th>
-                  <th style={cell}>Що сказав співрозмовник</th><th style={cell}>Що зроблено</th>
+                <tr style={{ textAlign: "left", ...muted, fontSize: 12.5 }}>
+                  <th style={cell}>Угода</th><th style={cell}>Розмова</th><th style={cell}>Менеджер</th><th style={cell}>Хто це</th>
+                  <th style={cell}>Чому</th><th style={cell}>У CRM</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody key={tab} className="cq-fade">
                 {shown.map((r) => {
-                  const main = r.deals[0];
-                  const isOpen = open === r.uniqueid;
-                  const toggle = () => setOpen(isOpen ? null : r.uniqueid);
+                  const isOpen = open === r.kommoId;
+                  const toggle = () => setOpen(isOpen ? null : r.kommoId);
                   return (
-                    <Fragment key={r.uniqueid}>
-                      <tr tabIndex={0} aria-expanded={isOpen} aria-label={`Розгорнути розмову ${fmtTime(r.calledAt)}`}
+                    <Fragment key={r.kommoId}>
+                      <tr className={`cq-row${leaving === r.kommoId ? " leave" : ""}`} tabIndex={0} aria-expanded={isOpen} aria-label={`Розгорнути угоду ${String(r.kommoId)}`}
                         onClick={toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } }}
                         style={{ borderTop: "1px solid var(--border)", cursor: "pointer", background: isOpen ? "var(--surface-2)" : undefined }}>
                         <td style={{ ...cell, whiteSpace: "nowrap" }}>
-                          {fmtTime(r.calledAt)}
-                          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{r.direction === "in" ? "вхідний" : "вихідний"} · {mmss(r.billsec)}{r.talkNo === 2 ? " · друга розмова" : ""}</div>
+                          <a href={r.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>№ {r.kommoId}</a>
+                          <div style={{ fontSize: 12, ...muted }}>{fmtTime(r.createdAt)}{r.reused ? " · вердикт номера" : ""}</div>
                         </td>
-                        <td style={cell}>
-                          {main ? <a href={main.url} target="_blank" rel="noreferrer" style={{ whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>№ {main.kommoId}</a> : "—"}
-                          {r.deals.length > 1 && <div style={{ fontSize: 12, color: "var(--text-muted)" }}>+ ще {r.deals.length - 1} {dealsWord(r.deals.length - 1)} цього номера</div>}
-                        </td>
-                        <td style={cell}>{r.managerName ?? <span style={{ color: "var(--text-muted)" }}>невідомий</span>}</td>
                         <td style={{ ...cell, whiteSpace: "nowrap" }}>
-                          {r.bucket
-                            ? <><span title={BUCKET_UI[r.bucket].hint} style={pill(TONE[BUCKET_UI[r.bucket].tone].bg, TONE[BUCKET_UI[r.bucket].tone].fg)}>{BUCKET_UI[r.bucket].label}</span>
-                                <span style={{ fontSize: 12, marginLeft: 4, color: r.bucket === "low" ? "var(--danger)" : "var(--text-muted)", fontVariantNumeric: "tabular-nums" }}>{confLabel(r.confidence)}</span></>
-                            : <span title={STATE_UI[r.state].hint} style={pill(TONE_COLOR[STATE_UI[r.state].tone].bg, TONE_COLOR[STATE_UI[r.state].tone].fg)}>{STATE_UI[r.state].label}</span>}
+                          {r.calledAt
+                            ? <>{fmtTime(r.calledAt)}<div style={{ fontSize: 12, ...muted }}>{r.direction === "in" ? "вхідний" : "вихідний"} · {mmss(r.billsec ?? 0)}{r.talkNo === 2 ? " · друга розмова" : ""}</div></>
+                            : <span style={muted}>{r.dealState === "no_talk" ? "без розмови від 10 с" : "ще немає"}</span>}
                         </td>
-                        <td style={{ ...cell, maxWidth: 420 }}>
-                          {r.quote ? <i>«{r.quote}»</i> : r.summary ? <span style={{ color: "var(--text-muted)" }}>{r.summary}</span> : <span style={{ color: "var(--text-muted)" }}>—</span>}
+                        <td style={cell}>{r.managerName ?? <span style={muted}>невідомий</span>}{r.teamName && <div style={{ fontSize: 12, ...muted }}>{r.teamName}</div>}</td>
+                        <td style={cell}><Verdict r={r} /></td>
+                        <td style={{ ...cell, maxWidth: 380 }}>
+                          {r.human?.note ? <span>«{r.human.note}»</span>
+                            : r.ai.reason ? <span>{r.ai.reason}</span>
+                            : r.ai.quote ? <i>«{r.ai.quote}»</i>
+                            : <span style={muted}>{r.why ?? "—"}</span>}
                         </td>
-                        <td style={{ ...cell, fontSize: 12.5, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
-                          {closeLabel(main?.close ?? null, fmtTime) ?? (r.bucket ? "не чіпаємо" : "ще слухаємо")}
-                          <div>{main ? dealStatusLabel(main.statusId, main.rejectReason) : ""}</div>
+                        <td style={{ ...cell, fontSize: 12.5, ...muted, whiteSpace: "nowrap" }}>
+                          {closeLabel(r.close, fmtTime) ?? (r.category === "client" ? "лишається на етапі" : "—")}
+                          <div>{dealStatusLabel(r.crm.statusId, r.crm.rejectReason)}</div>
                         </td>
                       </tr>
-                      {isOpen && <tr><td colSpan={6} style={{ padding: "0 10px 12px", background: "var(--surface-2)" }}><CallDetail uniqueid={r.uniqueid} onChanged={() => setRefresh((n) => n + 1)} /></td></tr>}
+                      {isOpen && <tr><td colSpan={6} style={{ padding: "0 10px 12px", background: "var(--surface-2)" }}>
+                        <div className="cq-panel"><CarrierDealPanel deal={r} onDecided={() => onDecided(r.kommoId)} onChanged={() => setRefresh((n) => n + 1)} /></div>
+                      </td></tr>}
                     </Fragment>
                   );
                 })}
@@ -240,6 +210,26 @@ export function CarrierCallsSection() {
             </table>
           )}
       </div>
+
+      {meta && meta.agreement.length > 0 && (
+        <details className="chart-card" style={{ fontSize: 13 }}>
+          <summary style={{ cursor: "pointer", fontWeight: 600 }}>AI проти людини — точність за рішеннями після прослуховування</summary>
+          <table style={{ marginTop: 8, borderCollapse: "collapse", fontSize: 13 }}>
+            <thead><tr style={{ textAlign: "left", ...muted, fontSize: 12.5 }}><th style={cell}>AI казав</th><th style={cell}>Рішень</th><th style={cell}>Людина погодилась</th><th style={cell}>Що вирішила людина</th></tr></thead>
+            <tbody>
+              {meta.agreement.map((a) => (
+                <tr key={a.aiRole} style={{ borderTop: "1px solid var(--border)" }}>
+                  <td style={cell}>{a.aiRole}</td>
+                  <td style={{ ...cell, fontVariantNumeric: "tabular-nums" }}>{a.decisions}</td>
+                  <td style={{ ...cell, fontVariantNumeric: "tabular-nums" }}>{a.agreed} ({a.decisions ? Math.round(a.agreed / a.decisions * 100) : 0}%)</td>
+                  <td style={cell}>{Object.entries(a.byDecision).map(([k2, v]) => `${k2}: ${String(v)}`).join(" · ")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p style={{ margin: "6px 0 0", fontSize: 12, ...muted }}>Людина вирішує, послухавши запис. Здебільшого вирішують невпевнені вердикти, тож число — нижня межа точності.</p>
+        </details>
+      )}
     </>
   );
 }

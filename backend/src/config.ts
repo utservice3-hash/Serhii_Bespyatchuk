@@ -84,6 +84,8 @@ export const config = {
     // 🧹 Закриття перевізників у Kommo (`core/carrierClose.ts`): «live» — пишемо в CRM; «off» — нічого;
     // будь-що інше, включно з відсутністю, — лише журнал (рішення Романа 29.09.2026: першу добу — журнал).
     carrierAutoClose: process.env.CARRIER_AUTO_CLOSE ?? "",
+    // AI-«Інше» закривається окремим перемикачем (ТЗ 30.09.2026: лише після тесту точності, показаного Роману).
+    carrierAutoCloseOther: process.env.CARRIER_AUTO_CLOSE_OTHER ?? "",
     elevenlabsApiKey: process.env.ELEVENLABS_API_KEY ?? "",
     geminiApiKey: process.env.GEMINI_API_KEY ?? "",
     // Ціни й стелі — БЕЗ значень за замовчуванням: не задано → «не налаштовано», жодної витрати

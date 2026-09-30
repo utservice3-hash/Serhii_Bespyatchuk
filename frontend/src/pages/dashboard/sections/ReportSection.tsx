@@ -1,3 +1,4 @@
+import { CarrierReportCard } from "./CarrierReportCard";
 import { Fragment, useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import {
   BarChart,
@@ -889,6 +890,14 @@ export function ReportSection({
             from={dateRange.from}
             to={dateRange.to}
             granularity={granularity}
+            managerId={canPickManager && reportManagerId ? Number(reportManagerId) : undefined}
+            teamId={canPickManager && reportTeamId ? Number(reportTeamId) : undefined}
+          />
+
+          {/* 🚚 Дзвінки на мобільні — хто це виявився (ТЗ 30.09.2026); ті самі рядки, що вкладка «Перевізники». */}
+          <CarrierReportCard
+            from={dateRange.from}
+            to={dateRange.to}
             managerId={canPickManager && reportManagerId ? Number(reportManagerId) : undefined}
             teamId={canPickManager && reportTeamId ? Number(reportTeamId) : undefined}
           />

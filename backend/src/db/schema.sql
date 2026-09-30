@@ -4520,6 +4520,29 @@ CREATE TABLE IF NOT EXISTS carrier_decisions (
 );
 CREATE INDEX IF NOT EXISTS idx_carrier_decisions_deal ON carrier_decisions(kommo_id, id DESC);
 REVOKE ALL ON carrier_decisions FROM ai_readonly;
+-- 🧭 ВІДСІВ ПЕРЕВІЗНИКІВ (ТЗ Романа 30.09.2026): рішення бачить і ухвалює менеджер (свої), тімлід (команда) і
+-- керівництво; журнал каже, ХТО вирішив — роль у момент рішення. Підтип — лише для «Інше». Старі рядки: роль NULL
+-- (до 30.09 вирішувало лише керівництво), підтип NULL («невідомий», а не вигаданий).
+-- ⚠️ revert коду колонки не прибирає; старий код їх просто не читає.
+ALTER TABLE carrier_decisions ADD COLUMN IF NOT EXISTS other_type TEXT;
+ALTER TABLE carrier_decisions ADD COLUMN IF NOT EXISTS decider_role TEXT;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'carrier_decisions_other_type_chk') THEN
+    ALTER TABLE carrier_decisions ADD CONSTRAINT carrier_decisions_other_type_chk CHECK (other_type IS NULL OR (decision = 'other'
+      AND other_type IN ('spam','supplier','job_seeker','personal','wrong_number','other')));
+  END IF;
+END $$;
+-- Закриваємо тепер і «Інше» (причина «Нецільове звернення»), і рішення людини по угоді без розмови — тож розмови
+-- й впевненості в рядку журналу може не бути. `reason` — з чим закрито; старі рядки — «carrier».
+ALTER TABLE carrier_close_log ALTER COLUMN uniqueid DROP NOT NULL;
+ALTER TABLE carrier_close_log ALTER COLUMN confidence DROP NOT NULL;
+ALTER TABLE carrier_close_log ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT 'carrier';
+ALTER TABLE carrier_close_log ADD COLUMN IF NOT EXISTS other_type TEXT;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'carrier_close_log_reason_chk') THEN
+    ALTER TABLE carrier_close_log ADD CONSTRAINT carrier_close_log_reason_chk CHECK (reason IN ('carrier','other'));
+  END IF;
+END $$;
 
 -- 📣 «Стелю досягнуто» — один раз на місяць на межу бюджету (рішення Романа 29.09.2026). Рядок ставиться ДО
 -- відправки в Telegram, тож повтор щоп'ять хвилин неможливий за побудовою.
@@ -4551,16 +4574,17 @@ UPDATE roles SET screen_access = screen_access || '{"ai-calls":true}'::jsonb
 UPDATE roles SET screen_access = screen_access - 'ai-calls'
  WHERE key IN ('financier', 'hr', 'manager');
 
--- 🚚 ВКЛАДКА «ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ» (рішення Романа 29.09.2026): лише керівництво — admin, ceo, opdir, kvp.
+-- 🚚 ВКЛАДКА «ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ»: керівництво (admin, ceo, opdir, kvp — рішення 29.09.2026) + тімлід і
+-- менеджер (ТЗ «Відсів перевізників», Роман 30.09.2026: менеджер — свої, тімлід — команда; межа — у ядрі).
 -- Ідемпотентно й не перетирає рішень адміна: чіпаємо лише ролі, де ключа ще немає.
 -- Зняття — ПІСЛЯ синку «фінансист = екрани адміна» (той самий механізм, що протік `ai-calls`, #794):
--- інакше на другому прогоні схеми фінансист отримав би вкладку від адміна. Тімлід, HR і менеджер — теж ні.
+-- інакше на другому прогоні схеми фінансист отримав би вкладку від адміна. HR — теж ні.
 -- ⚠️ revert коду ключ із ролей не прибирає — знімати тумблером у Налаштуваннях.
 UPDATE roles SET screen_access = screen_access || '{"carrier-calls":true}'::jsonb
-  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp')
+  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'team_lead', 'manager')
     AND NOT (screen_access ? 'carrier-calls');
 UPDATE roles SET screen_access = screen_access - 'carrier-calls'
- WHERE key IN ('financier', 'hr', 'manager', 'team_lead');
+ WHERE key IN ('financier', 'hr');
 -- 💼 ВІДГУКИ З WORK.UA → «КАНДИДАТИ» (28.09.2026, прохід 7). Памʼять оброблених відгуків: той самий відгук
 -- удруге нічого не робить, а найбільший id — звідки продовжувати. Кандидат — `hiring_candidates` (той самий
 -- телефон → наявна картка, подія «повторний відгук»). Вакансію work.ua привʼязує людина у «Вакансіях».
