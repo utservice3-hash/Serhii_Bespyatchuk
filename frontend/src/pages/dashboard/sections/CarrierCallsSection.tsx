@@ -5,7 +5,7 @@ import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
 import { jobErrorIsCurrent, mmss } from "../aiCallsView";
-import { CARRIER_STAGE_STATUS, CARRIER_TABS, CATEGORY_UI, DECISION_UI, OTHER_TYPE_UI, OTHER_TYPES_HINT, ROLE_UI, TONE, closeLabel, closeModeLabel, dealStatusLabel, deciderLabel, pctLabel,
+import { CARRIER_STAGE_STATUS, CARRIER_TABS, CATEGORY_UI, DECISION_UI, crmOutcome, OTHER_TYPE_UI, OTHER_TYPES_HINT, ROLE_UI, TONE, closeLabel, closeModeLabel, dealStatusLabel, deciderLabel, pctLabel,
   otherModeLabel, tabOf, type CarrierTab } from "../carrierCallsView";
 import { CarrierDealById, CarrierDealPanel, pill } from "./CarrierDealPanel";
 import { CarrierStatsCard } from "./CarrierStatsCard";
@@ -277,7 +277,7 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
                   {!isManager && <th style={cell}><Hd t="Менеджер" h="Відповідальний за угоду в Kommo." /></th>}
                   <th style={cell}><Hd t="Хто дзвонив" h="Вердикт: клієнт, перевізник чи інше. Поруч — хто вирішив (AI з відсотком впевненості чи людина). Від 85% AI вирішує сам." /></th>
                   <th style={cell}><Hd t="Пояснення" h="Чому саме такий вердикт: пояснення AI, коментар людини або чому AI не впевнений." /></th>
-                  <th style={cell}><Hd t="У CRM" h="Що дашборд зробив з угодою в Kommo і в якому вона стані зараз (оновлюється раз на 30 хв)." /></th>
+                  <th style={cell}><Hd t="Що з угодою в CRM" h="✅ лишилась у CRM (клієнт, працюєте далі) · 🗑 прибрана — закрита «Не цільовою» з причиною (Kommo угод не видаляє) · ⏳ буде прибрана найближчим проходом або чекає вашого рішення · ↩️ повернута на етап. Нижче — стан угоди в Kommo (оновлюється раз на 30 хв)." /></th>
                 </tr>
               </thead>
               <tbody key={tab} className="cq-fade">
@@ -307,8 +307,10 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
                             : <span style={muted}>{r.why ?? "—"}</span>}
                         </td>
                         <td style={{ ...cell, fontSize: 12.5, ...muted, whiteSpace: "nowrap" }}>
-                          {closeLabel(r.close, fmtTime) ?? (r.category === "client" ? "лишається на етапі" : "—")}
-                          <div>{dealStatusLabel(r.crm.statusId, r.crm.rejectReason)}</div>
+                          {(() => { const o = crmOutcome(r); return (
+                            <span title={`${o.hint}${r.close ? ` · ${closeLabel(r.close, fmtTime) ?? ""}` : ""}`} style={{ ...pill(TONE[o.tone].bg, TONE[o.tone].fg), fontWeight: 600 }}>{o.icon} {o.label}</span>
+                          ); })()}
+                          <div style={{ marginTop: 3 }}>{dealStatusLabel(r.crm.statusId, r.crm.rejectReason)}</div>
                         </td>
                       </tr>
                       {isOpen && <tr><td colSpan={isManager ? 5 : 6} style={{ padding: "0 10px 12px", background: "var(--surface-2)" }}>

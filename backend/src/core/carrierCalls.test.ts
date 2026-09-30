@@ -1607,3 +1607,34 @@ test("#1143 УГОДА З «AI ПРОТИ ЛЮДИНИ»: повна картк�
   assert.match(byId, /fetchCarrierDeal\(kommoId\)/, "🔴 картка за номером вантажить не угоду за номером");
   assert.match(byId, /<CarrierDealPanel deal=\{deal\}/, "🔴 картка за номером — не та сама повна картка угоди");
 });
+
+/**
+ * #1144 — «ЩО З УГОДОЮ В CRM» ОДНИМ РЯДКОМ (Роман 30.09.2026: «скажи які угоди пішли в crm, які видалені, щоб розуміти»):
+ * клієнт — лишилась; закрита дашбордом — прибрана з причиною; вирішено, але ще не закрито — буде прибрана; невирішена —
+ * чекає рішення; повернута — повернута; закрита не нами (фільтр/людина в Kommo) — закрита в CRM; переведена далі — пішла
+ * далі. Факт у CRM сильніший за наш намір.
+ * 🧨 Червоніє, якщо переплутати причину, показати «лишилась» для прибраної чи намір замість факту.
+ */
+test("#1144 ЩО З УГОДОЮ В CRM: лишилась / прибрана з причиною / буде прибрана / чекає / повернута; факт CRM сильніший", async () => {
+  const ts = (await import("typescript")).default;
+  const js = ts.transpileModule(readFileSync(FE("pages/dashboard/carrierCallsView.ts"), "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const V = await import(`data:text/javascript,${encodeURIComponent(js)}`) as { crmOutcome: (r: unknown) => { icon: string; label: string } };
+  const o = (category: string, close: unknown, statusId: number | null = 70419108, rejectReason: string | null = null) =>
+    V.crmOutcome({ category, close, crm: { statusId, rejectReason } }).label;
+  const closed = (reason: string) => ({ state: "closed", at: "2026-09-30T12:00:00Z", reason });
+  assert.equal(o("client", null), "лишилась у CRM");
+  assert.equal(o("carrier", closed("carrier"), 143, "Перевізник"), "прибрана: «Перевізник»");
+  assert.equal(o("other", closed("other"), 143), "прибрана: «Нецільове звернення»", "🔴 причину «Інше» переплутано");
+  assert.equal(o("no_talk", closed("no_talk"), 143), "прибрана: «Немає зв'язку»");
+  assert.equal(o("carrier", null), "буде прибрана: «Перевізник»", "🔴 вирішену, але ще не закриту угоду показано як прибрану або як таку, що лишилась");
+  assert.equal(o("review", null), "чекає рішення");
+  assert.equal(o("carrier", { state: "reverted", at: "x", reason: "carrier" }), "повернута на етап");
+  assert.equal(o("client", null, 143, "Дубль"), "закрита в CRM: «Дубль»", "🔴 факт CRM (закрита) переважила наш намір «лишилась»");
+  assert.equal(o("client", null, 142), "успішна угода");
+  assert.equal(o("review", null, 69693668), "пішла далі по воронці");
+  const card = readFileSync(FE("pages/dashboard/sections/CarrierStatsCard.tsx"), "utf8");
+  assert.match(card, /title: "Лишились у CRM", n: totals\.clients/, "🔴 «лишились у CRM» рахує не клієнтів");
+  assert.match(card, /title: "Прибрано з CRM", n: totals\.filtered \+ totals\.carriers \+ totals\.other \+ totals\.noTalk/, "🔴 «прибрано з CRM» рахує не всі закриття");
+  assert.match(readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8"), /const o = crmOutcome\(r\)/, "🔴 рядок угоди не показує, що з нею в CRM");
+});
