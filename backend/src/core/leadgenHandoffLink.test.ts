@@ -634,3 +634,24 @@ test("#1091c ЖИВИЙ SQL: історія успіхів — лише FC-142 �
   assert.deepEqual([hm.totals.success.n, hm.totals.success.sum, hm.totals.regular.n, hm.totals.regular.sum], [1, 5000, 1, 5000],
     "🔴 гроші лідгена не без постійного, або постійного не названо числом");
 });
+
+/**
+ * #1093 — МЕЖА «УСПІШНОГО ДЗВІНКА» НЕВКЛЮЧНА: розмова ДОВША за 8 с, як фільтр Ringostat «тривалість
+ * більше 00:08», яким рахує Ярослав (30.09.2026: з `>= 8` Сердюк мав 1 106 проти 1 102 у Ringostat — рівно
+ * 4 дзвінки по 8 с). Справжній `leadgenStats` на тимчасовій базі; фікстура — по обидва боки межі:
+ * 7 і 8 с — ні, 9 і 60 с — так; вхідний 60 с — ні (напрямок).
+ * 🧨 САБОТАЖ: у `callsQuery` (`leadgenStats.ts`) `c.billsec > $4` → `c.billsec >= $4` → червоніє.
+ */
+test("#1093 ЖИВИЙ SQL: успішний дзвінок — вихідний, розмова ДОВША за 8 с (8 с — ні, 9 с — так)", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { stats } = await core();
+  let k = 0;
+  for (const [type, sec] of [["out", 7], ["out", 8], ["out", 9], ["out", 60], ["in", 60]] as [string, number][]) {
+    await client!.query(`INSERT INTO ringostat_calls (uniqueid, calldate, call_type, billsec, manager_id) VALUES ($1, $2, $3, $4, 70)`,
+      [`gt8-${k++}`, utc("2025-01-14T10:00:00"), type, sec]);
+  }
+  const st = await stats.leadgenStats("2025-01-13", "2025-01-19");
+  const row = st.rows.find((r) => r.managerId === 70);
+  assert.ok(row, "фікстура вироджена — людини 70 у тижні немає");
+  assert.equal(row.calls, 2, "🔴 успішні дзвінки не ті: рахуються лише вихідні, ДОВШІ за 8 с (як фільтр Ringostat «більше 00:08»)");
+});

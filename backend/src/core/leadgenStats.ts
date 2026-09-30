@@ -71,7 +71,7 @@ const K = "AT TIME ZONE 'Europe/Kyiv'";
 
 /**
  * 📞 ЗАПИТ ДЗВІНКІВ — ОДИН НА РЯДКИ ЛЮДЕЙ І НА РОЗБИВКУ. Правило «успішного дзвінка»
- * (вихідний, `billsec >= LEADGEN_CALL_MIN_SEC`) і ростер (лише люди, передані в `ids`)
+ * (вихідний, `billsec > LEADGEN_CALL_MIN_SEC` — межа НЕвключна, як фільтр Ringostat «більше 00:08») і ростер (лише люди, передані в `ids`)
  * живуть в одному тексті: друга копія для розбивки розійшлась би з рядком мовчки.
  * `bucket` — одиниця розбивки (ключ `bucketKeySql`), `null` — підсумок за період.
  */
@@ -82,7 +82,7 @@ function callsQuery(ids: number[], from: string, to: string, bucket: LeadgenBuck
          FROM ringostat_calls c
         WHERE c.manager_id = ANY($1)
           AND (c.calldate ${K})::date BETWEEN $2 AND $3
-          AND c.call_type = 'out' AND c.billsec >= $4
+          AND c.call_type = 'out' AND c.billsec > $4
         GROUP BY ${bucket ? "1, 2" : "1"}`,
     values: [ids, from, to, LEADGEN_CALL_MIN_SEC],
   };
