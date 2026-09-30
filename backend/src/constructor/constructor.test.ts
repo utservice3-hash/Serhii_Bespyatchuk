@@ -276,3 +276,23 @@ test("#1126 ФРОНТ КОНСТРУКТОРА: пункт меню, стати
   assert.doesNotMatch(sec, /React\.lazy|import\(/, "🔴 динамічний імпорт — другий чанк (#225)");
   assert.match(FE("api.ts"), /\/constructor\/documents\/\$\{id\}\/\$\{kind\}`, \{ responseType: "blob"/, "🔴 Word/PDF не через api з токеном");
 });
+
+/**
+ * #1127 — СТОРІНКА ДЛЯ ДРУКУ PDF: стиль друку стоїть ПІСЛЯ CSS документа (інакше рівна специфічність програє),
+ * спейсер `.sigend` схований `display:none`, поля — як у макеті, фони друкуються. Заміряно 30.09.2026 тим
+ * самим chrome-headless-shell 154, що на сервері: без цього клієнтська разова — 4 сторінки, четверта біла;
+ * з цим — 3, як у приймальній перевірці пакета Сергія (README §10 п.4).
+ * 🧨 Червоніє, якщо вставити стиль друку перед CSS документа або повернути `height:0`.
+ */
+test("#1127 PDF-ДРУК: стиль друку після CSS документа, спейсер схований, поля й фони макета", async () => {
+  const { printable, PRINT_CSS } = await import("./services/pdfRenderer.js");
+  const r = ref["once-client-uts"];
+  const page = printable(fullPageHTML(r.state, r.state.num, {}));
+  const at = page.indexOf(PRINT_CSS);
+  assert.ok(at > 0, "🔴 стиль друку не вставлено");
+  assert.ok(at > page.indexOf(".docfmt .sigend{height:26pt}"), "🔴 стиль друку стоїть ДО CSS документа — і програє йому");
+  assert.ok(at < page.indexOf("</head>"), "🔴 стиль друку поза <head>");
+  assert.match(PRINT_CSS, /\.docfmt \.sigend\{display:none\}/, "🔴 спейсер не схований — порожня остання сторінка");
+  assert.match(PRINT_CSS, /@page\{size:A4;margin:10mm 11mm 12mm 11mm\}/, "🔴 поля не як у макеті");
+  assert.match(PRINT_CSS, /print-color-adjust:exact/, "🔴 фони (смуга, клітинки умов) не друкуються");
+});
