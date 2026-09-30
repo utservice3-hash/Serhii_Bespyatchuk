@@ -393,7 +393,7 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
     // 💰 Гроші з передач: домен — УВЕСЬ період, скоуп лише звужує відповідь (правило 3).
     // Та сама функція ядра, що й у `/leadgen-handoff-deals`, — тож список і число рядка
     // не можуть розійтись (`#677`).
-    leadgenHandoffMoney(from, to, scope),
+    leadgenHandoffMoney(from, to, scope, grain),
     leadgenTeamMembers(),
   ]);
 
@@ -461,6 +461,10 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
     body.grain = grain;
     body.buckets = sumBuckets(scoped);
     body.bucketsByPerson = scoped.map(personBucketWire);
+    // 💰 Гроші з передач по тих самих одиницях (задача 4668, п.6): «Успішні» й «Очікування» по тижнях/днях.
+    body.handoffMoneyBuckets = (hm.buckets ?? []).map((b) => bucketMoneyWire(b.bucket, b.totals));
+    body.handoffMoneyBucketsByPerson = (hm.buckets ?? []).flatMap((b) =>
+      b.byPerson.map((p) => bucketPersonMoneyWire(b.bucket, p.managerId, p.money)));
   }
   res.json(body);
 });

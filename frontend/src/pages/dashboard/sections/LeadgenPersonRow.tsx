@@ -103,7 +103,7 @@ export function bucketLabel(b: string, grain: LeadgenGrain, period: { from: stri
  * кільце, головні числа; клік розгортає розбивку на одиницю нижче обраного періоду
  * (місяць/довгий період — тижні, тиждень/короткий період — дні, день — без розбивки).
  */
-export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, grain, units, targets, period, statusful, open, onToggle }: {
+export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, moneyBuckets, grain, units, targets, period, statusful, open, onToggle }: {
   row: Row;
   /** План і виконання на період (лише учасникам команди). Немає або `none` — «плану немає», кільце — конверсія, як було. */
   plan?: LeadgenPersonPlan;
@@ -113,6 +113,8 @@ export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, grain,
    *  обраний `period`: інакше під час перезавантаження список нового періоду звірявся б зі старим рядком. */
   dataPeriod: { from: string; to: string };
   buckets: LeadgenBucket[];
+  /** Гроші з передач цієї людини по тих самих одиницях (лише з `grain`). */
+  moneyBuckets?: (LeadgenHandoffMoney & { bucket: string })[];
   grain: LeadgenGrain | null;
   units: string[];
   targets: { oprOfLeads: number; quotesOfOpr: number };
@@ -168,9 +170,13 @@ export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, grain,
           <Stat v={row.opr} l="ОПР" />
           <Stat v={row.quotes} l="Прорахунки" />
           <Stat v={row.warming} l="Підігрів" />
-          <span style={{ textAlign: "center", minWidth: 64 }} title="Сума успішних угод з лідів, переданих у цьому періоді (стан — зараз)">
+          <span style={{ textAlign: "center", minWidth: 64 }} title="Сума успішних угод з лідів, переданих у цьому періоді (стан — зараз; без постійних клієнтів)">
             <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.success.sum ? "var(--ok)" : MUTED }}>{money ? formatAmount(money.success.sum) : "—"}</span>
             <span style={{ display: "block", fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>Успішні з передач ₴</span>
+          </span>
+          <span style={{ textAlign: "center", minWidth: 64 }} title="Оплата отримана + зона «Очікуємо» угод із лідів, переданих у цьому періоді (без постійних клієнтів)">
+            <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.waiting.sum ? "var(--warn)" : MUTED }}>{money ? formatAmount(money.waiting.sum) : "—"}</span>
+            <span style={{ display: "block", fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>Очікування ₴</span>
           </span>
         </span>
         <span aria-hidden="true" style={{ color: MUTED, fontSize: 14, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
@@ -185,7 +191,7 @@ export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, grain,
             {st.overfull && <span style={{ color: "var(--warn)", flexBasis: "100%", fontSize: 12.5 }}>⚠ {overfullWhy}</span>}
           </div>
           <LeadgenMoneyDetails period={dataPeriod} managerId={row.managerId} summary={money} />
-          {grain ? <Buckets row={row} rows={fillBuckets(units, buckets)} grain={grain} period={period} />
+          {grain ? <Buckets row={row} rows={fillBuckets(units, buckets)} money={moneyBuckets ?? []} grain={grain} period={period} />
             : <p style={{ margin: "8px 0 0", fontSize: 12.5, color: MUTED }}>За один день розбивки немає — оберіть тиждень чи місяць.</p>}
         </div>
       )}
@@ -218,7 +224,9 @@ export function BucketNote({ total, rows, grain, period }: { total: Record<F, nu
   );
 }
 
-function Buckets({ row, rows, grain, period }: { row: Row; rows: LeadgenBucket[]; grain: LeadgenGrain; period: { from: string; to: string } }) {
+function Buckets({ row, rows, money, grain, period }: {
+  row: Row; rows: LeadgenBucket[]; money: (LeadgenHandoffMoney & { bucket: string })[]; grain: LeadgenGrain; period: { from: string; to: string };
+}) {
   const cell: React.CSSProperties = { padding: "7px 10px", textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" };
   const head: React.CSSProperties = { ...cell, fontWeight: 600, fontSize: 12.5, color: MUTED };
   if (rows.length === 0) return <p style={{ margin: 0, fontSize: 13, color: MUTED }}>Період ще не почався.</p>;
@@ -230,18 +238,22 @@ function Buckets({ row, rows, grain, period }: { row: Row; rows: LeadgenBucket[]
             <th style={{ ...head, textAlign: "left" }}>{grain === "day" ? "День" : "Тиждень"}</th>
             <th style={head}>Дзвінки</th><th style={head}>Ліди</th><th style={head}>ОПР</th>
             <th style={head}>Прорахунки</th><th style={head}>Підігрів</th><th style={head}>Ліди → ОПР</th>
+            <th style={head}>Успішні ₴</th><th style={head}>Очікування ₴</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((w) => {
             const c = ratio(w.opr, w.leads);
-            const empty = !w.calls && !w.leads && !w.opr && !w.quotes && !w.warming;
+            const mb = money.find((x) => x.bucket === w.bucket);
+            const empty = !w.calls && !w.leads && !w.opr && !w.quotes && !w.warming && !mb?.handoffs;
             return (
               <tr key={w.bucket} style={{ borderTop: "1px solid var(--border)", color: empty ? MUTED : undefined }}>
                 <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>{bucketLabel(w.bucket, grain, period)}</td>
                 <td style={cell}>{n(w.calls)}</td><td style={cell}>{n(w.leads)}</td><td style={cell}>{n(w.opr)}</td>
                 <td style={cell}>{n(w.quotes)}</td><td style={cell}>{n(w.warming)}</td>
                 <td style={cell}>{c == null ? "—" : c > 100 ? `${pct1(c)} ⚠` : pct1(c)}</td>
+                <td style={cell}>{mb ? formatAmount(mb.success.sum) : "—"}</td>
+                <td style={cell}>{mb ? formatAmount(mb.waiting.sum) : "—"}</td>
               </tr>
             );
           })}

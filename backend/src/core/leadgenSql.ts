@@ -22,9 +22,26 @@ export interface LeadgenStageIds {
 
 export interface SqlQuery { text: string; values: unknown[] }
 
+/**
+ * 🧲 ЛІД ЛІДГЕНА — угода Продзвону, що увійшла у «Взято в роботу» АБО в «Отримано контакти ОПР».
+ *
+ * Правило Ярослава (розмова 10.09.2026, підтверджено 30.09 у задачі 4668): «вважається лідом все,
+ * що потрапило у взято в роботу і отримала ОПР». Закинута тімлідом угода ще НЕ лід — лише
+ * опрацьована. Угоди, які лідген отримує вже з розмовою (реактивація, повернуте менеджером),
+ * він ставить одразу на ОПР, минаючи «Взято»; до 30.09 ми рахували лише «Взято» і недораховували
+ * їх (Сердюк 21–27.09: 19 замість 63, конверсія «ліди → ОПР» 236 %). Угода, що пройшла обидва
+ * етапи в періоді, — один лід (`COUNT DISTINCT`), тож лідів за період завжди ≥ ОПР.
+ *
+ * ОДИН вираз на всі лічильники лідів — рядки людей і одиниці (тут), тижні й розріз за джерелом
+ * (`leadgenStats.ts`). Друга копія розійшлась би мовчки; `#1090b` жене всі три на тимчасовій базі.
+ */
+export function leadStatusPred(col: string, taken: string, opr: string): string {
+  return `${col} IN (${taken}, ${opr})`;
+}
+
 /** Чотири лічильники — ОДИН вираз на всі форми запиту. */
 const STAGE_COUNTS =
-  `COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = $4) AS leads,
+  `COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND ${leadStatusPred("e.status_id", "$4", "$5")}) AS leads,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = $5) AS opr,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = $8) AS quotes,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($6) AND e.status_id = $7) AS warming`;
@@ -60,7 +77,7 @@ export function bucketKeySql(grain: LeadgenBucketGrain, col: string): string {
 }
 
 /**
- * Лічильники стадій по людях за період: ліди (вхід у «Взято в роботу»), ОПР, прорахунки
+ * Лічильники стадій по людях за період: ліди (вхід у «Взято в роботу» АБО «ОПР» — `leadStatusPred`), ОПР, прорахунки
  * (вхід у «Кваліфіковано»), підігрів (Реактивація). Атрибуція — ПОТОЧНИЙ `deals.manager_id`,
  * `JOIN managers` внутрішній: угода без менеджера в ростер не потрапляє.
  *
@@ -126,7 +143,7 @@ export function handoffLinkQuery(
   return {
     text: `SELECT e.kommo_id AS pz_id, d.manager_id AS lg_id, m.team_id AS lg_team_id,
             e.changed_at AS at, to_char((e.changed_at ${K}), 'YYYY-MM-DD') AS day,
-            d.name AS pz_name, d.client_name AS pz_client,
+            d.name AS pz_name, d.client_name AS pz_client, d.client_key AS client_key,
             x.kommo_id AS deal_id, x.name AS deal_name, x.client_name AS deal_client,
             sm.name AS sales_manager, x.reject_reason AS deal_reason,
             to_char((x.closed_at_kommo ${K}), 'YYYY-MM-DD') AS closed_day,

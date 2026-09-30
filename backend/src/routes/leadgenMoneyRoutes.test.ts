@@ -115,9 +115,10 @@ function scopeViolations(body: string): string[] {
   const out: string[] = [];
   if (!calls.length) out.push("жодного виклику ядра з грошима/трендом");
   for (const c of calls) {
-    if (!/^\s*[\w.]+\s*,\s*[\w.]+\s*,\s*(scope|clamp\.scope)\s*$/.test(c[2])) out.push(`${c[1]}(${c[2].trim()})`);
+    // Скоуп — ТРЕТІЙ аргумент; після нього дозволено лише одиницю розбивки `grain` (задача 4668, гроші по тижнях).
+    if (!/^\s*[\w.]+\s*,\s*[\w.]+\s*,\s*(scope|clamp\.scope)\s*(,\s*grain\s*)?$/.test(c[2])) out.push(`${c[1]}(${c[2].trim()})`);
   }
-  if (calls.some((c) => /,\s*scope\s*$/.test(c[2])) && !/\bconst scope = leadgenAuthScope\(auth\);/.test(code)) {
+  if (calls.some((c) => /,\s*scope\s*(,\s*grain\s*)?$/.test(c[2])) && !/\bconst scope = leadgenAuthScope\(auth\);/.test(code)) {
     out.push("`scope` не з leadgenAuthScope(auth)");
   }
   if (calls.some((c) => /,\s*clamp\.scope\s*$/.test(c[2])) && !/\bconst clamp = handoffDealsScope\(/.test(code)) {
@@ -156,6 +157,11 @@ test("#681b ДЖЕРЕЛО: у ядро йде скоуп із leadgenAuthScope/
   assert.notDeepEqual(scopeViolations(planted("scope") + '  const teamId = auth.role === "team_lead" ? 1 : null;\n'), [],
     "🔴 детектор не бачить власного клампу тімліда");
   assert.deepEqual(scopeViolations(planted("scope")), [], "🔴 детектор червоніє і на правильному виклику — беззубий навпаки");
+  // Четвертий аргумент `grain` (задача 4668) не відкриває шпарини: літерал перед ним ловиться, помічник — чистий.
+  assert.deepEqual(scopeViolations(planted("scope, grain")), [], "🔴 детектор червоніє на правильному виклику з `grain`");
+  assert.notDeepEqual(scopeViolations(planted("{ teamId: null, managerId: null }, grain")), [],
+    "🔴 детектор не бачить літерала, захованого перед `grain`");
+  assert.notDeepEqual(scopeViolations(planted("scope, { teamId: null }")), [], "🔴 після скоупу пропущено щось, крім `grain`");
   assert.deepEqual(scopeViolations("  // було: leadgenHandoffMoney(from, to, { teamId: null })\n" + planted("scope")), [],
     "🔴 згадка в коментарі читається як виклик");
 });

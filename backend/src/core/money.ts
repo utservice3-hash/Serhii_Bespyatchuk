@@ -5,7 +5,7 @@ import { pool } from "../db/pool.js";
 // до першого виклику (request-time), коли обидва модулі вже ініціалізовані.
 import { adDealSql } from "./metrics.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
-import { managerDealClass, type DealState } from "./leadgenHandoffRules.js";
+import { managerDealClass, type DealState, type ClientSuccess } from "./leadgenHandoffRules.js";
 // 💰 Правила класу угоди менеджера з передачі — ОДИН обʼєкт у реєстрі корзин (там і 143
 // «Закрито і не реалізовано», у Кваліфікації — «Не цільові» / «Сміття»). `#683` звіряє його
 // поля з константами цього ядра; друга копія тут розійшлась би мовчки (ревʼю F3/F5).
@@ -1265,6 +1265,37 @@ export async function handoffDealStates(dealIds: readonly number[]): Promise<Map
       cls: managerDealClass({ pipelineId, statusId, closed: x.closed, writtenOff: x.written_off }, HANDOFF_CLASS_RULES),
       price: Math.round(Number(x.price ?? 0)),
     });
+  }
+  return out;
+}
+
+/**
+ * 🔁 УСПІХИ КЛІЄНТІВ — вхід правила «постійний клієнт на дату передачі» (`isRegularAt`, задача 4668).
+ *
+ * Успіх — РІВНО той самий предикат, що клас `success` угоди менеджера (`managerDealClass` над
+ * `HANDOFF_CLASS_RULES`): повний цикл, «Успішна угода» і є `closed_at`. Друга копія розійшлась би
+ * мовчки — тому воронки й статуси беруться з того ж реєстру, а не пишуться тут числами.
+ * Мінусові угоди (поле «Мінусова угода») НЕ рахуються: це сторно чи другий рахунок того самого
+ * перевезення, а не ще одне перевезення (`money-core`: «два рахунки на одне перевезення»).
+ * Момент — `closed_at_kommo`; дата — київська, бо межа «3 місяці» рахується київськими днями.
+ */
+export async function clientSuccessHistory(clientKeys: readonly string[]): Promise<Map<string, ClientSuccess[]>> {
+  const out = new Map<string, ClientSuccess[]>();
+  const keys = [...new Set(clientKeys.filter((k) => k))];
+  if (!keys.length) return out;
+  const r = await pool.query<{ client_key: string; at: Date; day: string }>(
+    `SELECT d.client_key, d.closed_at_kommo AS at,
+            to_char(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS day
+       FROM deals d
+      WHERE d.client_key = ANY($1::text[])
+        AND d.pipeline_id = ANY($2::bigint[]) AND d.status_id = ANY($3::bigint[])
+        AND d.closed_at_kommo IS NOT NULL AND NOT d.is_minus`,
+    [keys, HANDOFF_CLASS_RULES.fcPipelines, HANDOFF_CLASS_RULES.success]
+  );
+  for (const x of r.rows) {
+    const xs = out.get(x.client_key) ?? [];
+    xs.push({ at: new Date(x.at).getTime(), day: x.day });
+    out.set(x.client_key, xs);
   }
   return out;
 }
