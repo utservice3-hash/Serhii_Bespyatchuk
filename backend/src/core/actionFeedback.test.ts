@@ -93,10 +93,11 @@ test("#1103 «ВІДХИЛИТИ» ЗВЕРНЕННЯ: «Скасувати» н
   assert.deepEqual(rejectNote(" дубль #85 "), { reject: true, note: "дубль #85" });
 });
 
-test("#1102b ↩ ТРИ МІСЦЯ «НА ЛЬОТУ» ЙДУТЬ ЧЕРЕЗ commitOptimistic, А НЕ .catch(() => {}): рахунок дебіторки, статус задачі у Звіті, план КВП", () => {
+test("#1102b ↩ ПОЛЯ «НА ЛЬОТУ» ЙДУТЬ ЧЕРЕЗ commitOptimistic, А НЕ .catch(() => {}): рахунок дебіторки, план КВП", () => {
+  // `ReportSection.tsx` (блок «Мої задачі») свідомо НЕ тут: файл ніде не рендериться (30.09.2026 —
+  // «Звіт» живе в `ReportPlanSection`), а гейт на мертвий код стеріг би те, чого людина не бачить.
   const sites: [string, string][] = [
     ["pages/dashboard/sections/ReceivablesSection.tsx", "saveReceivableInvoiceNote("],
-    ["pages/dashboard/sections/ReportSection.tsx", "updateTask(id, { status })"],
     ["pages/dashboard/sections/KvpReportSection.tsx", "saveKvpPlan(monthSel, { [k]: val })"],
   ];
   for (const [file, call] of sites) {

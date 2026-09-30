@@ -1,3 +1,4 @@
+import { CarrierReportCard } from "./CarrierReportCard";
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   fetchReportPlan, fetchManagerDetail, fetchStuckGrouped, saveDealNote, fetchDayItems,
@@ -472,6 +473,12 @@ export function ReportPlanSection({ auth, teams }: {
           <Legend />
         </SliceCtx.Provider>
       )}
+      {/* 🚚 Дзвінки на мобільні — хто це виявився (ТЗ Романа 30.09.2026). Окремий блок із НОВИМИ числами (жодне не
+          дублює карток вище); той самий період і та сама команда, що й звіт; рядки — ті самі, що вкладка «Перевізники».
+          Ролі без вкладки блок не бачать (сервер 403 → блок ховається). */}
+      <div style={{ marginTop: 18 }}>
+        <CarrierReportCard from={selectedPeriod.from} to={selectedPeriod.to} teamId={teamIds.length === 1 ? teamIds[0] : undefined} />
+      </div>
     </div>
   );
 }

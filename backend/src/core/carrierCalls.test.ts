@@ -1138,8 +1138,12 @@ test("#1069 ПРОВОДКА ФРОНТУ: вкладки ТЗ, картка у�
   for (const fn of ["fetchCarrierCalls(", "fetchCarrierCallsMeta(", "fetchCarrierPending(", "<CarrierDealPanel "]) assert.ok(sec.includes(fn), `🔴 секція не має ${fn}`);
   const panel = readFileSync(FE("pages/dashboard/sections/CarrierDealPanel.tsx"), "utf8");
   for (const fn of ["fetchCarrierCallCard(", "fetchCarrierAudio(", "postCarrierDecision(", "revertCarrierClose("]) assert.ok(panel.includes(fn), `🔴 картка не кличе ${fn}`);
-  const report = readFileSync(FE("pages/dashboard/sections/ReportSection.tsx"), "utf8");
-  assert.match(report, /<CarrierReportCard[\s\S]{0,80}from=\{dateRange\.from\}/, "🔴 блоку «Дзвінки на мобільні» у «Звіті» немає");
+  // Ланцюжок ДО ЕКРАНА, а не «блок є в якомусь файлі» (правило 10): меню «Звіт» рендерить `ReportPlanSection`, і саме
+  // в ньому блок. 📐 Куплено 30.09.2026: блок стояв у `ReportSection`, який «Звіт» не рендерить, — гейт був зелений,
+  // а на екрані блоку не було.
+  assert.match(dash, /section === "report" && auth && \(\s*<ReportPlanSection/, "🔴 меню «Звіт» рендерить не ReportPlanSection — блок треба шукати в іншому файлі");
+  const report = readFileSync(FE("pages/dashboard/sections/ReportPlanSection.tsx"), "utf8");
+  assert.match(report, /<CarrierReportCard from=\{selectedPeriod\.from\} to=\{selectedPeriod\.to\}/, "🔴 блоку «Дзвінки на мобільні» у «Звіті» немає");
   const card = readFileSync(FE("pages/dashboard/sections/CarrierReportCard.tsx"), "utf8");
   for (const fn of ["fetchCarrierReport(", "fetchCarrierCalls("]) assert.ok(card.includes(fn), `🔴 блок звіту не кличе ${fn}`);
   const api = readFileSync(FE("api.ts"), "utf8");

@@ -1,6 +1,3 @@
-import { CarrierReportCard } from "./CarrierReportCard";
-import { useToast } from "../../../components/Toasts";
-import { commitOptimistic, failureReason } from "../../../actionFeedback";
 import { Fragment, useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import {
   BarChart,
@@ -205,16 +202,9 @@ function MyTasksBlock() {
   const [tasks, setTasks] = useState<Task[]>([]);
   useEffect(() => { fetchTasks().then(setTasks).catch(() => setTasks([])); }, []);
   const open = tasks.filter((t) => !t.auto && t.status !== "done");
-  const toast = useToast();
-  // ↩ При помилці статус повертається, а не лишається «зміненим» лише на екрані (30.09.2026, `#1102`).
   const move = (id: number, status: Task["status"]) => {
-    const before = tasks;
-    void commitOptimistic({
-      apply: () => setTasks((p) => p.map((t) => (t.id === id ? { ...t, status } : t))),
-      save: () => updateTask(id, { status }),
-      revert: () => setTasks(before),
-      onError: (e) => toast(`Статус задачі не змінено — ${failureReason(e, "помилка сервера")}.`, { error: true }),
-    });
+    setTasks((p) => p.map((t) => (t.id === id ? { ...t, status } : t)));
+    updateTask(id, { status }).catch(() => {});
   };
   if (open.length === 0) return null;
   const overdue = (d: string | null) => d != null && new Date(d) < new Date(new Date().toDateString());
@@ -899,14 +889,6 @@ export function ReportSection({
             from={dateRange.from}
             to={dateRange.to}
             granularity={granularity}
-            managerId={canPickManager && reportManagerId ? Number(reportManagerId) : undefined}
-            teamId={canPickManager && reportTeamId ? Number(reportTeamId) : undefined}
-          />
-
-          {/* 🚚 Дзвінки на мобільні — хто це виявився (ТЗ 30.09.2026); ті самі рядки, що вкладка «Перевізники». */}
-          <CarrierReportCard
-            from={dateRange.from}
-            to={dateRange.to}
             managerId={canPickManager && reportManagerId ? Number(reportManagerId) : undefined}
             teamId={canPickManager && reportTeamId ? Number(reportTeamId) : undefined}
           />
