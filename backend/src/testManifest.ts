@@ -136,6 +136,7 @@ export const MANIFEST_FILES: string[] = [
   "core/baClaims.test.js",
   "core/baEquipment.test.js",
   "core/finance.test.js",
+  "constructor/constructor.test.js",
   "core/hiringTraining.test.js",
   "core/candidateTraining.test.js",
   "core/secrets.test.js",
@@ -311,6 +312,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "tldv_meetings",
   "workua_responses",
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_import_months",
+  "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates",
   "ba_equipment_issues",
 ];
 
@@ -2126,6 +2128,16 @@ export const MANIFEST_TESTS: string[] = [
   "#934 ФІНАНСИ: кожна fin_* таблиця відібрана в ai_readonly після CREATE і є у FORBIDDEN_TABLES",
   "#935 ЖИВИЙ SQL: перенесення — підсумок = сума рядків, файловий підсумок поруч, повтор — 409",
   "#936 ФРОНТ ФІНАНСІВ: меню після «Статистик (відділи)», статичний імпорт, права — з відповіді сервера, є «Повернути»",
+  // constructor/constructor.test.ts — Конструктор документів, пакет Сергія (30.09.2026).
+  "#1120 WORD ЯК У МАКЕТІ: document.xml посимвольно в 4 конфігураціях; ФОП без печатки; перемикач вимикає картинки",
+  "#1120b НАЗВИ: зверху повна форма, внизу скорочена; власна назва й «ТОВстун» не чіпаються",
+  "#1121 PDF/ПРЕВʼЮ ЯК У МАКЕТІ: printHTML посимвольно; повна сторінка несе CSS і захист від різаної печатки",
+  "#1122 ПАРСЕР: 4 кейси як у макеті; телефон не з хвоста ІПН; стара заявка — без наших реквізитів",
+  "#1123 ЛИШЕ СВОЇ: автор бачить свій, чужий — ні, право пулу — усі; Word/PDF/картка — через одну межу",
+  "#1123b ЖИВИЙ SQL: версії 1→2, без № — відмова, особа з картки, лічильник із нулями, пул лише керівництву",
+  "#1124 ПІДПИСИ НЕ В GIT: тека в .gitignore, жодного PNG і base64-скану в репозиторії; тека — під бекапом",
+  "#1125 СТАН ФОРМИ: невідома юрособа — 400 словами; сторона з виду документа; менеджер лише із сесії",
+  "#1126 ФРОНТ КОНСТРУКТОРА: пункт меню, статичний імпорт, файли — через api з токеном",
   // core/baEquipment.test.ts — Бізнес-асистент, прохід 2: облік техніки й ТТН-моніторинг (29.09.2026).
   "#980 ТТН: місяць «два тому», межі включно, без угод — «—», норма 70%",
   "#981 ТТН: посилання на Kommo — рівно фільтр Даші для менеджера й місяця",

@@ -41,6 +41,8 @@ export const PERMISSION_CATALOG = [
   "edit_finance",
   /** 💰 «Фінанси»: погодити план місяця — admin, СЕО, ОД. */
   "approve_finance_plan",
+  /** 📄 Конструктор документів: пул усіх заявок і лічильник за день (рішення Сергія 30.09.2026) — admin, СЕО, ОД. */
+  "view_all_constructor_docs",
   "manage_bank_accounts",
   "manage_bank_hidden",
   "manage_credit_limits",

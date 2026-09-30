@@ -1,0 +1,30 @@
+/* 📄 КОНСТРУКТОР ДОКУМЕНТІВ — лише розкладка; кольори й картки — спільні класи `.hr-*` і токени дашборда. */
+.ctor-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 1200px) { .ctor-grid { grid-template-columns: minmax(0, 1fr); } }
+.ctor-preview { position: sticky; top: 12px; }
+.ctor-preview iframe { width: 100%; height: calc(100vh - 90px); min-height: 600px; border: 1px solid var(--border); border-radius: var(--r-2xl); background: #fff; }
+.ctor-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px 12px; }
+.ctor-f { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 12px; color: var(--text-muted); }
+.ctor-f.wide { grid-column: 1 / -1; }
+.ctor-f .hr-inp { width: 100%; color: var(--text); }
+.ctor-ro { font-size: 13px; color: var(--text); padding: 6px 0; }
+.ctor-wide { width: 100%; }
+.ctor-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ctor-check { display: flex; gap: 8px; align-items: center; font-size: 13px; margin: 8px 0; }
+.ctor-n { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: var(--brand); color: #fff; font-size: 12px; margin-right: 8px; }
+.ctor-vat { color: inherit; opacity: .75; }
+.ctor-book { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; margin-top: 8px; }
+.ctor-bookrow { text-align: left; border: 1px solid var(--border); background: var(--card-bg); color: var(--text); border-radius: var(--r-lg); padding: 6px 10px; cursor: pointer; font-size: 13px; }
+.ctor-bookrow:hover { background: var(--surface-2); }
+.ctor-drop { display: flex; flex-direction: column; gap: 4px; align-items: center; justify-content: center; border: 2px dashed var(--border-strong); border-radius: var(--r-2xl); padding: 22px; cursor: pointer; font-size: 13px; color: var(--text); }
+.ctor-drop.on { border-color: var(--brand); background: var(--surface-2); }
+.ctor-mini { border-collapse: collapse; font-size: 13px; }
+.ctor-mini td { padding: 4px 16px 4px 0; border-bottom: 1px solid var(--border); }
+.hr-note.ctor-err { background: var(--danger-bg); color: var(--danger); }
+.hr-note.ctor-warn { background: var(--warn-bg); color: var(--warn); }
+.hr-note.ctor-ok { background: var(--ok-bg); color: var(--ok); }
+.ctor-bars { display: flex; align-items: flex-end; gap: 3px; height: 90px; }
+.ctor-bar { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; min-width: 0; }
+.ctor-bar i { display: block; width: 100%; background: var(--brand); border-radius: 3px 3px 0 0; min-height: 2px; }
+.ctor-bar i.zero { background: var(--border); }
+.ctor-bar span { font-size: 9px; color: var(--text-muted); margin-top: 2px; }

@@ -4733,3 +4733,148 @@ UPDATE roles SET permissions = permissions || '{"approve_finance_plan": true}'::
  WHERE key IN ('admin', 'ceo', 'opdir');
 UPDATE roles SET permissions = permissions - 'approve_finance_plan'
  WHERE key NOT IN ('admin', 'ceo', 'opdir');
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 📄 КОНСТРУКТОР ДОКУМЕНТІВ (30.09.2026) — пакет Сергія `roman-package` (migrations/001 + 002),
+-- перенесений майже дослівно. Змінено ЛИШЕ типи авторів: `created_by`/`updated_by`/`owner_id`
+-- були `text`, а `users.id` у нас INTEGER — порівняння `u.id = d.created_by` падало б на
+-- кожному завантаженні Word/PDF з архіву («operator does not exist: integer = text»).
+-- Доступ (рішення Сергія 30.09.2026): кожен бачить ЛИШЕ СВОЇ документи; пул усіх — право
+-- `view_all_constructor_docs` (керівництво). Межу тримає роут, гейти — constructor/*.test.ts.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- 001_constructor.sql — конструктор документів UTS
+-- Стек: Neon Postgres. Нумерація заявки = ID угоди в Kommo (рішення 03.10), вводиться вручну.
+-- Жодних секретів у цьому файлі. Запускати одним куском; все idempotent через IF NOT EXISTS.
+
+-- ── Юрособи ─────────────────────────────────────────────────────────────────
+-- Реквізити наших трьох компаній. Дані сідаються з server/data/entities.ts
+-- (see seed нижче) — БД потрібна, щоб бухгалтерія могла міняти реквізити без деплою.
+CREATE TABLE IF NOT EXISTS constructor_entities (
+  key            text PRIMARY KEY,              -- 'uts' | 'avm' | 'fop'
+  code           text NOT NULL,                 -- 'UTS' | 'AVM' | 'FOP' (для імен файлів)
+  name           text NOT NULL,
+  full_name      text NOT NULL,
+  edrpou         text NOT NULL,                 -- для ФОП тут ІПН
+  ipn            text,
+  vat_label      text NOT NULL,                 -- 'з ПДВ' | 'без ПДВ' | 'єдиний податок'
+  tax_line       text NOT NULL,                 -- рядок «Платник …» у реквізитах
+  address        text,                          -- ФОП: NULL — адресу не друкуємо (рішення 30.09)
+  phone          text NOT NULL,                 -- бухгалтерія: 068 807 08 16 (рішення 29.09)
+  email          text NOT NULL,                 -- bukhgalter@uts.ua
+  director       text NOT NULL,
+  director_short text NOT NULL,
+  accounts       jsonb NOT NULL,                -- [{bank, iban}] — перший = за замовчуванням (ФОП: Приват)
+  fines          jsonb NOT NULL,                -- сітка санкцій для клієнтського п.4.1 (у ЮТС і АвтоМув РІЗНА — чинні шаблони)
+  dwell_default  text NOT NULL,                 -- нормативний простій за замовчуванням
+  sig_file       text,                          -- assets/pidpys-*.png
+  stamp_file     text,                          -- assets/pechatka-*.png; ФОП: NULL — без печатки
+  is_active      boolean NOT NULL DEFAULT true
+);
+
+-- ── Довідник контрагентів ────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS constructor_counterparties (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  edrpou     text UNIQUE,                       -- 8 цифр; ФОП — ІПН 10 цифр теж сюди
+  name       text NOT NULL,
+  ipn        text,
+  address    text,
+  iban       text,
+  bank       text,
+  phone      text,
+  email      text,
+  director   text,
+  is_fop     boolean NOT NULL DEFAULT false,    -- для правила «ФОП продає лише ФОПам» (рішення 03.10)
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ccp_name ON constructor_counterparties USING gin (to_tsvector('simple', name));
+
+-- ── Документи (заявки й договори) — це і є «архів» з історією версій ────────
+CREATE TABLE IF NOT EXISTS constructor_documents (
+  id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  deal_no       text NOT NULL,                  -- = ID угоди в Kommo, вручну, ОБОВ'ЯЗКОВЕ (рішення 03.10)
+  doc_kind      text NOT NULL CHECK (doc_kind IN ('once','main','carr')),
+  party         text NOT NULL CHECK (party IN ('client','carrier')),
+  entity_key    text NOT NULL REFERENCES constructor_entities(key),
+  version       int  NOT NULL,                  -- рахує тригер нижче: 1,2,3… по (deal_no, party, doc_kind)
+  doc_date      date,                           -- дата договору для заявок (календарик)
+  main_no       text,                           -- № основного — вручну (рішення 02.10)
+  main_date     text,                           -- «діє з» для основного
+  contractor    jsonb NOT NULL,                 -- знімок реквізитів контрагента на момент формування
+  trip          jsonb NOT NULL DEFAULT '{}',    -- поля рейсу (route, cargo, …, driver, extra)
+  pay           jsonb NOT NULL DEFAULT '{}',    -- {sum, cur, form, order}; ФОП: form='СОФТ платіж' (рішення 03.10)
+  intl          boolean NOT NULL DEFAULT false, -- міжнародне: замитнення/кордон/розмитнення
+  with_stamp    boolean NOT NULL DEFAULT true,
+  fop_account   int NOT NULL DEFAULT 0,         -- індекс рахунку ФОП (0 = Приват)
+  created_by    INTEGER NOT NULL REFERENCES users(id),  -- автор; ПІБ+телефон для документа — з картки співробітника
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  docx_file     text,                           -- шлях/ключ згенерованого файлу в сховищі (як вирішите з файлами)
+  pdf_file      text
+);
+CREATE INDEX IF NOT EXISTS idx_cdoc_deal    ON constructor_documents (deal_no);
+CREATE INDEX IF NOT EXISTS idx_cdoc_created ON constructor_documents (created_by, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cdoc_search  ON constructor_documents
+  USING gin (to_tsvector('simple',
+    coalesce(contractor->>'name','') || ' ' || coalesce(trip->>'route','') || ' ' ||
+    coalesce(trip->>'cargo','')      || ' ' || coalesce(trip->>'driver','') || ' ' || deal_no));
+
+-- Версія: конкурентно-безпечно, з блокуванням по ключу угоди.
+CREATE OR REPLACE FUNCTION constructor_next_version() RETURNS trigger AS $$
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext(NEW.deal_no || NEW.party || NEW.doc_kind));
+  SELECT coalesce(max(version), 0) + 1 INTO NEW.version
+    FROM constructor_documents
+   WHERE deal_no = NEW.deal_no AND party = NEW.party AND doc_kind = NEW.doc_kind;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_constructor_version ON constructor_documents;
+CREATE TRIGGER trg_constructor_version BEFORE INSERT ON constructor_documents
+  FOR EACH ROW EXECUTE FUNCTION constructor_next_version();
+
+-- ── Шаблони маршрутів ────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS constructor_route_templates (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  owner_id   INTEGER REFERENCES users(id) ON DELETE CASCADE,  -- NULL = спільний для всіх; інакше автор
+  name       text NOT NULL,
+  fields     jsonb NOT NULL,                    -- {route, cargo, places, special, loadAddr, unloadAddr, reqs}
+  intl       boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- ── Реквізити юросіб (пакет: 002_seed_entities.sql, згенеровано з constructor/data/entities.ts) ──
+-- 002_seed_entities.sql — реквізити трьох юросіб.
+-- ЗГЕНЕРОВАНО з server/data/entities.ts (не редагувати руками — перегенерувати).
+-- Повторний запуск безпечний: upsert по key.
+INSERT INTO constructor_entities
+  (key, code, name, full_name, edrpou, ipn, vat_label, tax_line, address, phone, email,
+   director, director_short, accounts, fines, dwell_default, sig_file, stamp_file)
+VALUES
+('uts', 'UTS', 'ТОВ «Юнайтед Транспорт Сервіс»', 'ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ «ЮНАЙТЕД ТРАНСПОРТ СЕРВІС»', '44186230', '441862326595', 'з ПДВ', 'Платник податку на прибуток на загальних підставах', 'Україна, 04053, м. Київ, Шевченківський р-н, вул. Володимира Винниченка, буд. 7, оф. 12', '+380 68 807 08 16', 'bukhgalter@uts.ua', 'Беспятчук Сергій Степанович', 'Беспятчук С.С.', '[{"bank":"АТ КБ «ПриватБанк», МФО 305299","iban":"UA693052990000026009035008866"}]'::jsonb, '{"rows":[["Простій, внутрішні","1500 / 3000 / 6000 грн"],["Простій, міжнародні","150 / 200 / 300 €"],["Відмова від договору","20%, але не менше 100 €"]],"note":"Три суми — за типом авто: тент/цільномет · реф/цистерна · трал/платформа."}'::jsonb, '24 години на завантаження/розвантаження (внутрішні), 48+48 годин (міжнародні)', 'sig-bespyatchuk.png', 'stamp-uts.png'),
+('avm', 'AVM', 'ТОВ «АвтоМув»', 'ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ «АвтоМув»', '45618360', NULL, 'без ПДВ', 'Платник єдиного податку 3 групи (5%), без ПДВ', '04201, м. Київ, вул. Полярна, буд. 10Г', '+380 68 807 08 16', 'bukhgalter@uts.ua', 'Ковтонюк Тетяна Миколаївна', 'Ковтонюк Т.М.', '[{"bank":"АТ КБ «ПриватБанк»","iban":"UA103052990000026004005027883"}]'::jsonb, '{"rows":[["Простій, внутрішні","50 €"],["Простій, міжнародні","150 €"],["Відмова від договору","20%, але не менше 100 €"]],"note":"Без поділу за типом авто — так у вашому чинному шаблоні."}'::jsonb, '4 години на завантаження/розвантаження (внутрішні), 48+48 годин (міжнародні)', 'sig-kovtonyuk.png', 'stamp-avtomuv.png'),
+('fop', 'FOP', 'ФОП Беспятчук С.С. · 2 група', 'ФІЗИЧНА ОСОБА-ПІДПРИЄМЕЦЬ БЕСПЯТЧУК СЕРГІЙ СТЕПАНОВИЧ', '3478512294', NULL, 'єдиний податок', 'Платник єдиного податку 2 групи', NULL, '+380 68 807 08 16', 'bukhgalter@uts.ua', 'Беспятчук Сергій Степанович', 'Беспятчук С.С.', '[{"bank":"АТ КБ «ПриватБанк»","iban":"UA703052990000026004006016688"},{"bank":"АТ «Універсал Банк», МФО 322001","iban":"UA843220010000026003380037591"}]'::jsonb, '{"rows":[["Простій, внутрішні","50 €"],["Простій, міжнародні","150 €"],["Відмова від договору","20%, але не менше 100 €"]],"note":""}'::jsonb, '24 години на завантаження/розвантаження (внутрішні), 48+48 годин (міжнародні)', 'sig-bespyatchuk.png', NULL)
+ON CONFLICT (key) DO UPDATE SET
+  code=EXCLUDED.code, name=EXCLUDED.name, full_name=EXCLUDED.full_name, edrpou=EXCLUDED.edrpou,
+  ipn=EXCLUDED.ipn, vat_label=EXCLUDED.vat_label, tax_line=EXCLUDED.tax_line, address=EXCLUDED.address,
+  phone=EXCLUDED.phone, email=EXCLUDED.email, director=EXCLUDED.director,
+  director_short=EXCLUDED.director_short, accounts=EXCLUDED.accounts, fines=EXCLUDED.fines,
+  dwell_default=EXCLUDED.dwell_default, sig_file=EXCLUDED.sig_file, stamp_file=EXCLUDED.stamp_file;
+
+-- 🔒 Реквізити контрагентів і суми заявок — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`.
+REVOKE ALL ON constructor_entities, constructor_counterparties, constructor_documents, constructor_route_templates FROM ai_readonly;
+
+-- Екран «Конструктор документів»: усі, хто формує заявки (рішення Сергія 30.09.2026: «кожен, хто
+-- створює заявку»). Ідемпотентно й НЕ перетирає рішень адміна: лише де ключа ще немає.
+-- `financier` — явно: синк вище («фінансист = екрани адміна») дав би йому вкладку лише на ДРУГОМУ
+-- прогоні схеми, і зліпок доступу (#11) зрушив би між викатами без жодної зміни коду.
+UPDATE roles SET screen_access = screen_access || '{"constructor":true}'::jsonb
+  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'financier', 'team_lead', 'manager')
+    AND NOT (screen_access ? 'constructor');
+
+-- Пул усіх заявок + лічильник за день (рішення Сергія 30.09.2026: «адмін має бачити пул»). Сергій на
+-- проді — роль `opdir`, тож «адмін» = керівництво: admin, ceo, opdir. Склад фіксований кодом (як
+-- `approve_finance_plan`), парою «видати / зняти» ПІСЛЯ синку фінансиста.
+UPDATE roles SET permissions = permissions || '{"view_all_constructor_docs": true}'::jsonb
+ WHERE key IN ('admin', 'ceo', 'opdir');
+UPDATE roles SET permissions = permissions - 'view_all_constructor_docs'
+ WHERE key NOT IN ('admin', 'ceo', 'opdir');

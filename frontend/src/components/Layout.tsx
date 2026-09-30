@@ -78,6 +78,9 @@ export const NAV_GROUPS = [
       // 🧑‍💼 Найм (17.09.2026): графік співбесід, кандидати, щоденний звіт. Видимість — `screen_access`
       // (сид у schema.sql: admin, ceo, opdir, kvp, hr, team_lead); що саме видно всередині, вирішує сервер.
       { key: "hiring", label: "Найм", icon: "🧑‍💼" },
+      // 📄 Конструктор документів (30.09.2026, пакет Сергія). Без поля `roles`: видимість — `screen_access`
+      // (сид у schema.sql: усі, хто формує заявки, + фінансист); пул усіх заявок — окреме право.
+      { key: "constructor", label: "Конструктор документів", icon: "📄" },
       { key: "documents", label: "Регламенти та документи", icon: "📁" },
       { key: "training", label: "Навчання", icon: "📚" },
     ],

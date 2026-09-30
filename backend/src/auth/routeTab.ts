@@ -164,6 +164,9 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/ba"), tabs: ["ba"] },
     // 💰 Фінанси (29.09.2026). Вкладка — перша межа; друга — `onlyFinance`/`canEdit`/`canApprove` першим оператором.
     { test: pre("/api/finance"), tabs: ["finance"] },
+    // 📄 Конструктор документів (30.09.2026). Вкладка — перша межа; друга — «лише свої» (`canSeeConstructorDoc`)
+    // і право `view_all_constructor_docs` для пулу.
+    { test: pre("/api/constructor"), tabs: ["constructor"] },
     // Кнопка «Проблемний клієнт» живе в ДЕБІТОРЦІ: вкладка `receivables`, а дію гейтить право
     // `create_claim` — фінансист розділу не бачить, але кнопку натискає.
     { test: pre("/api/receivables-claims"), tabs: ["receivables"] },

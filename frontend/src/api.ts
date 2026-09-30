@@ -5065,3 +5065,80 @@ export const saveFinNote = async (itemId: number, month: string, text: string) =
 export const setFinApproval = async (month: string, approved: boolean) => { await api.post("/finance/approval", { month, approved }); };
 /** Тіло відповіді з помилкою (409 з кількістю місяців, 400 зі списком поганих клітинок). */
 export const finErrorData = (e: unknown) => (e as { response?: { status?: number; data?: Record<string, unknown> } })?.response;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 📄 КОНСТРУКТОР ДОКУМЕНТІВ (30.09.2026) — клієнт пакета Сергія (`client/api.ts` + `types.ts`), переведений
+// з голого fetch на наш `api`: вхід у дашборді — заголовком із токеном, не кукою, тож `<a href="/api/…">`
+// на Word/PDF повертав би 401. Файли — blob через `api`, як скрини клієнтів.
+// ═══════════════════════════════════════════════════════════════════════════
+export type CtorEntityKey = "uts" | "avm" | "fop";
+export type CtorDocKind = "once" | "main" | "carr";
+export type CtorParty = "client" | "carrier";
+export interface CtorCounterparty {
+  name?: string; edrpou?: string; ipn?: string; addr?: string;
+  iban?: string; bank?: string; phone?: string; email?: string; dir?: string;
+}
+export interface CtorPay { sum: string; cur: string; form: string; order: string }
+/** Стан форми — це і є payload POST /documents та /preview. */
+export interface CtorForm {
+  ent: CtorEntityKey; doc: CtorDocKind; party: CtorParty; intl: boolean; stamp: boolean; fopAcc: number;
+  cp: CtorCounterparty; trip: Record<string, string>; pay: CtorPay;
+  dealNo: string; docDate: string; mainNo: string; mainDate: string;
+}
+export const CTOR_EMPTY_FORM: CtorForm = {
+  ent: "uts", doc: "once", party: "client", intl: false, stamp: true, fopAcc: 0,
+  cp: {}, trip: {}, pay: { sum: "", cur: "грн", form: "б/г без ПДВ", order: "по отриманні документів" },
+  dealNo: "", docDate: "", mainNo: "", mainDate: "",
+};
+export interface CtorEntityRow {
+  key: CtorEntityKey; code: string; name: string; full_name: string; edrpou: string; ipn: string | null;
+  vat_label: string; tax_line: string; address: string | null; phone: string; email: string;
+  director: string; director_short: string; accounts: Array<{ bank: string; iban: string }>;
+  fines: { rows?: Array<[string, string]>; note?: string } | null; dwell_default: string;
+}
+export interface CtorCounterpartyRow {
+  id: number; edrpou: string | null; name: string; ipn: string | null; address: string | null; iban: string | null;
+  bank: string | null; phone: string | null; email: string | null; director: string | null; is_fop: boolean; updated_at: string;
+}
+export interface CtorArchiveRow {
+  id: number; deal_no: string; doc_kind: CtorDocKind; party: CtorParty; entity_key: CtorEntityKey; version: number;
+  doc_date: string | null; contractor_name: string | null; route: string | null; sum: string | null;
+  created_by: number; created_at: string; author?: string | null;
+}
+export interface CtorRouteTemplate { id: number; owner_id: number | null; name: string; fields: Record<string, string>; intl: boolean; created_at: string }
+export interface CtorOldDoc {
+  dealNo?: string; party: CtorParty; ent: string | null; cp: CtorCounterparty; trip: Record<string, string>;
+  pay?: { sum: string; cur: string; form: string }; intl?: boolean;
+}
+export interface CtorStatDay { day: string; docs: number; authors: number; once: number; carr: number; main: number }
+
+export const ctorMe = async () =>
+  (await api.get<{ manager: { name: string; phone: string }; canSeeAll: boolean }>("/constructor/me")).data;
+export const ctorEntities = async () => (await api.get<CtorEntityRow[]>("/constructor/entities")).data;
+export const ctorParse = async (text: string) =>
+  (await api.post<{ out: CtorCounterparty; found: Record<string, boolean> }>("/constructor/parse", { text })).data;
+export const ctorParseOld = async (text: string) => (await api.post<CtorOldDoc>("/constructor/parse-old", { text })).data;
+export const ctorCounterparties = async (q = "") =>
+  (await api.get<CtorCounterpartyRow[]>("/constructor/counterparties", { params: { q } })).data;
+export const ctorSaveCounterparty = async (c: CtorCounterparty) => (await api.put<CtorCounterpartyRow>("/constructor/counterparties", c)).data;
+export const ctorByEdrpou = async (code: string) =>
+  (await api.get<{ source: string; row: CtorCounterpartyRow }>(`/constructor/edrpou/${encodeURIComponent(code)}`)).data;
+export const ctorPreview = async (state: CtorForm) =>
+  (await api.post<{ html: string; blockers: string | null; assetsNote: string | null }>("/constructor/preview", { state })).data;
+export const ctorCreate = async (state: CtorForm) =>
+  (await api.post<{ id: number; version: number; num: string; createdAt: string }>("/constructor/documents", { state })).data;
+export const ctorArchive = async (q = "", deal = "") =>
+  (await api.get<CtorArchiveRow[]>("/constructor/documents", { params: { q, deal } })).data;
+export const ctorDocument = async (id: number) => (await api.get<Record<string, unknown>>(`/constructor/documents/${id}`)).data;
+export const ctorPool = async (q = "") => (await api.get<CtorArchiveRow[]>("/constructor/pool", { params: { q } })).data;
+export const ctorPoolStats = async (days = 30) =>
+  (await api.get<{ days: number; rows: CtorStatDay[] }>("/constructor/pool/stats", { params: { days } })).data;
+export const ctorRouteTemplates = async () => (await api.get<CtorRouteTemplate[]>("/constructor/route-templates")).data;
+export const ctorSaveRouteTemplate = async (t: { name: string; fields: Record<string, string>; intl: boolean; shared?: boolean }) =>
+  (await api.post<CtorRouteTemplate>("/constructor/route-templates", t)).data;
+export const ctorDeleteRouteTemplate = async (id: number) => (await api.delete(`/constructor/route-templates/${id}`)).data;
+/** Word/PDF документа — blob із токеном. `inline` лише для PDF «відкрити у вкладці». */
+export async function ctorFile(id: number, kind: "docx" | "pdf", inline = false): Promise<Blob> {
+  const { data } = await api.get<Blob>(`/constructor/documents/${id}/${kind}`, { responseType: "blob", params: { view: inline ? 1 : undefined } });
+  return data;
+}
