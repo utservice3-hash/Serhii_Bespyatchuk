@@ -398,6 +398,7 @@ function Details({ d, grain, period, today, open, onToggle }: {
                 <tr>
                   <th style={{ ...head, textAlign: "left" }}>{grain === "day" ? "День" : "Тиждень"}</th>
                   <th style={head}>Дзвінки</th><th style={head}>Ліди</th><th style={head}>ОПР</th><th style={head}>Прорахунки</th><th style={head}>Підігрів</th>
+                  <th style={head} title="Успішні + очікування одиниці — як «Кількість поставлених машин» у таблицях">Машин</th>
                   <th style={head} title="Угоди з передач лідгенів, що стали «Успішна угода» в цю одиницю (передача — будь-коли)">Успішні ₴</th>
                   <th style={head} title="Угоди з передач лідгенів, у яких авто поїхало в цю одиницю, а зараз вони оплачені чи в зоні «Очікуємо»">Очікування ₴</th>
                 </tr>
@@ -414,12 +415,13 @@ function Details({ d, grain, period, today, open, onToggle }: {
                       <td style={cell}>{w.opr.toLocaleString("uk-UA")}</td>
                       <td style={cell}>{w.quotes.toLocaleString("uk-UA")}</td>
                       <td style={cell}>{w.warming.toLocaleString("uk-UA")}</td>
+                      <td style={cell}>{mb ? mb.machines.toLocaleString("uk-UA") : "—"}</td>
                       <td style={cell}>{mb ? formatAmount(mb.earned.sum) : "—"}</td>
                       <td style={cell}>{mb ? formatAmount(mb.pending.sum) : "—"}</td>
                     </tr>
                   );
                 })}
-                {rows.length === 0 && <tr><td colSpan={8} style={{ padding: 14, color: MUTED }}>Період ще не почався.</td></tr>}
+                {rows.length === 0 && <tr><td colSpan={9} style={{ padding: 14, color: MUTED }}>Період ще не почався.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -624,6 +626,7 @@ function HandoffMoneyCol({ m }: { m: LeadgenHandoffMoney | undefined }) {
     <div>
       <div style={lab}>💰 Гроші з переданих лідів <InfoHint text={hint} /></div>
       <div style={{ fontSize: 11, color: MUTED, margin: "1px 0 2px" }}>успішні — за датою успіху · очікування — за датою авто · з передач будь-якого місяця</div>
+      <div style={{ fontSize: 13, fontWeight: 700, margin: "2px 0" }} title="Як «Кількість поставлених машин» у таблицях лідгенів: угоди, по яких авто поїхало й гроші прийшли чи йдуть (успішні + очікування)">🚚 {m.machines.toLocaleString("uk-UA")} {plural(m.machines, "машина", "машини", "машин")}</div>
       <div style={val}>{formatAmount(m.earned.sum)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>успішні · {m.earned.n.toLocaleString("uk-UA")} {plural(m.earned.n, "угода", "угоди", "угод")}</small></div>
       <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{formatAmount(m.pending.sum)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>очікування · {m.pending.n.toLocaleString("uk-UA")} {plural(m.pending.n, "угода", "угоди", "угод")}</small></div>
       <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>

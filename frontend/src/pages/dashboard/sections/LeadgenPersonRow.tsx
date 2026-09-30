@@ -170,6 +170,7 @@ export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, moneyB
           <Stat v={row.opr} l="ОПР" />
           <Stat v={row.quotes} l="Прорахунки" />
           <Stat v={row.warming} l="Підігрів" />
+          <Stat v={money?.machines ?? 0} l="Машин" />
           <span style={{ textAlign: "center", minWidth: 64 }} title="Угоди з передач цього лідгена (будь-коли), що стали «Успішна угода» в цьому періоді; без постійних клієнтів">
             <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.earned.sum ? "var(--ok)" : MUTED }}>{money ? formatAmount(money.earned.sum) : "—"}</span>
             <span style={{ display: "block", fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>Успішні з передач ₴</span>
@@ -238,7 +239,7 @@ function Buckets({ row, rows, money, grain, period }: {
             <th style={{ ...head, textAlign: "left" }}>{grain === "day" ? "День" : "Тиждень"}</th>
             <th style={head}>Дзвінки</th><th style={head}>Ліди</th><th style={head}>ОПР</th>
             <th style={head}>Прорахунки</th><th style={head}>Підігрів</th><th style={head}>Ліди → ОПР</th>
-            <th style={head}>Успішні ₴</th><th style={head}>Очікування ₴</th>
+            <th style={head}>Машин</th><th style={head}>Успішні ₴</th><th style={head}>Очікування ₴</th>
           </tr>
         </thead>
         <tbody>
@@ -252,6 +253,7 @@ function Buckets({ row, rows, money, grain, period }: {
                 <td style={cell}>{n(w.calls)}</td><td style={cell}>{n(w.leads)}</td><td style={cell}>{n(w.opr)}</td>
                 <td style={cell}>{n(w.quotes)}</td><td style={cell}>{n(w.warming)}</td>
                 <td style={cell}>{c == null ? "—" : c > 100 ? `${pct1(c)} ⚠` : pct1(c)}</td>
+                <td style={cell}>{mb ? n(mb.machines) : "—"}</td>
                 <td style={cell}>{mb ? formatAmount(mb.earned.sum) : "—"}</td>
                 <td style={cell}>{mb ? formatAmount(mb.pending.sum) : "—"}</td>
               </tr>

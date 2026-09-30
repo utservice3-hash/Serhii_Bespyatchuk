@@ -191,7 +191,7 @@ test("#672b 🪞 ДЗЕРКАЛО: скоуп тімліда відсікає ч
   assert.equal(dept.totals.success.sum + dept.totals.paid.sum, 34_000);
   // Форма відповіді — явними полями: жодного зайвого ключа не поїде назовні.
   assert.deepEqual(Object.keys(personMoneyWire(8, team2.totals)).sort(),
-    ["earned", "expect", "handoffs", "lost", "managerId", "paid", "pending", "regular", "sameDeal", "success", "unlinked", "waiting", "work"]);
+    ["earned", "expect", "handoffs", "lost", "machines", "managerId", "paid", "pending", "regular", "sameDeal", "success", "unlinked", "waiting", "work"]);
 });
 
 /**
@@ -572,4 +572,31 @@ test("#1095 ГРОШІ: «Успішні» — у місяць успіху, «�
   for (const f of ["earned", "pending"] as const)
     assert.equal(weeks.reduce((a, b) => a + b.totals[f].sum, 0), v.totals[f].sum, `🔴 Σ тижнів «${f}» ≠ вересню`);
   assert.equal(weeks.find((b) => b.bucket === "2026-09-07")?.totals.earned.sum, 10_000, "🔴 успіх 12.09 ліг не в тиждень 07.09");
+});
+
+/**
+ * #1096 — «МАШИН» = «УСПІШНІ» + «ОЧІКУВАННЯ» ПЕРІОДУ, ОДНЕ ЧИСЛО ДЛЯ ВІДДІЛУ, ЛЮДИНИ Й ТИЖНІВ (30.09.2026).
+ * Колонка «Кількість поставлених машин» таблиць лідгенів: угоди, по яких авто поїхало й гроші прийшли чи йдуть.
+ * Фікстура по обидва боки: успіх періоду й авто періоду — машини; успіх поза періодом, авто поза періодом,
+ * авто ще не поїхало, постійний клієнт — ні. Σ людей == відділ, Σ тижнів == період.
+ * 🧨 САБОТАЖ: у `withAnchored` `machines: a.earned.n + a.pending.n` → `a.earned.n` → червоніє.
+ */
+test("#1096 МАШИН = успішні + очікування періоду: відділ, люди й тижні — одне число", () => {
+  const E = (pz: number, day: string, deal: number, lg: number): HandoffEntry =>
+    ({ pzId: pz, lgId: lg, lgTeamId: 1, at: Date.parse(day + "T09:00:00Z") + pz, day, dealId: deal });
+  const S = (cls: DealState["cls"], closedDay: string | null, autoDay: string | null): DealState => ({ cls, price: 1000, closedDay, autoDay });
+  const states = new Map<number, DealState>([
+    [9401, S("success", "2026-09-10", "2026-09-02")], [9402, S("paid", null, "2026-09-15")], [9403, S("expect", null, "2026-09-22")],
+    [9404, S("success", "2026-10-03", "2026-09-28")], [9405, S("expect", null, "2026-08-30")], [9406, S("expect", null, null)],
+  ]);
+  const domain = [E(1, "2026-08-20", 9401, 7), E(2, "2026-09-01", 9402, 8), E(3, "2026-09-05", 9403, 7),
+    E(4, "2026-09-10", 9404, 8), E(5, "2026-08-15", 9405, 7), E(6, "2026-09-12", 9406, 8)];
+  const sept = dayInRange("2026-09-01", "2026-09-30");
+  const v = handoffView(domain, states, { teamId: null, managerId: null }, new Map(), sept);
+  assert.equal(v.totals.machines, 3, "🔴 машин вересня не 3 (успіх 9401 + авто 9402 і 9403)");
+  assert.equal(v.totals.machines, v.totals.earned.n + v.totals.pending.n);
+  assert.equal(v.byPerson.reduce((a, p) => a + p.money.machines, 0), v.totals.machines, "🔴 Σ людей ≠ відділ");
+  const weeks = handoffMoneyBuckets(v.rows, "week", sept);
+  assert.equal(weeks.reduce((a, b) => a + b.totals.machines, 0), v.totals.machines, "🔴 Σ тижнів ≠ вересню");
+  assert.equal(personMoneyWire(7, v.totals).machines, 3, "🔴 машини не доїхали у відповідь");
 });

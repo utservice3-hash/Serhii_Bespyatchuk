@@ -38,7 +38,7 @@ type Field = [string, (m: LeadgenHandoffMoney) => number];
 const FIELDS: Field[] = [
   ["передач", (m) => m.handoffs], ["без угоди менеджера", (m) => m.unlinked], ["програно", (m) => m.lost], ["у ту саму угоду", (m) => m.sameDeal],
   ["постійних клієнтів", (m) => m.regular.n], ["Очікування: сума", (m) => m.waiting.sum],
-  ["Успішні за період: сума", (m) => m.earned.sum], ["Очікування за період: сума", (m) => m.pending.sum],
+  ["Успішні за період: сума", (m) => m.earned.sum], ["Очікування за період: сума", (m) => m.pending.sum], ["машин", (m) => m.machines],
   ...(["success", "paid", "expect", "work"] as const).flatMap((k): Field[] => [
     [`${META[k].tab}: угод`, (m) => m[k].n],
     [`${META[k].tab}: сума`, (m) => m[k].sum],

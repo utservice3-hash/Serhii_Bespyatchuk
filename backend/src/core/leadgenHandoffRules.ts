@@ -45,6 +45,12 @@ export interface LeadgenHandoffMoney {
    */
   earned: LeadgenMoneyCell;
   pending: LeadgenMoneyCell;
+  /**
+   * 🚚 «Машин» — як колонка «Кількість поставлених машин» у таблицях лідгенів: угоди, по яких авто поїхало
+   * й гроші прийшли чи йдуть = `earned.n + pending.n`. ПОХІДНЕ — рахується ЛИШЕ в `withAnchored`, щоб
+   * рядок, відділ і тижні не мали трьох різних «машин». Звірка вересня: Шевчук 9 + 2 = 11 = її таблиця.
+   */
+  machines: number;
 }
 
 /**
@@ -184,7 +190,7 @@ const cell = (): LeadgenMoneyCell => ({ n: 0, sum: 0, priced: 0 });
 /** Порожній підсумок — для місяця чи людини без передач (нуль, який СКАЗАЛИ дані). */
 export function emptyHandoffMoney(): LeadgenHandoffMoney {
   return { handoffs: 0, unlinked: 0, lost: 0, sameDeal: 0, success: cell(), paid: cell(), expect: cell(), work: cell(),
-    regular: cell(), waiting: cell(), earned: cell(), pending: cell() };
+    regular: cell(), waiting: cell(), earned: cell(), pending: cell(), machines: 0 };
 }
 
 /**
@@ -284,7 +290,7 @@ export function anchoredMoney(rows: readonly { cls: LeadgenDealClass; price: num
 
 function withAnchored(m: LeadgenHandoffMoney, anchored: readonly ClassifiedHandoff<HandoffEntry>[], inP: DayIn): LeadgenHandoffMoney {
   const a = anchoredMoney(anchored, inP);
-  return Object.assign(m, { earned: a.earned, pending: a.pending });
+  return Object.assign(m, { earned: a.earned, pending: a.pending, machines: a.earned.n + a.pending.n });
 }
 
 /**
@@ -330,6 +336,7 @@ export function handoffMoneyWire(m: LeadgenHandoffMoney): LeadgenHandoffMoney {
     handoffs: m.handoffs, unlinked: m.unlinked, lost: m.lost, sameDeal: m.sameDeal,
     success: cellWire(m.success), paid: cellWire(m.paid), expect: cellWire(m.expect), work: cellWire(m.work),
     regular: cellWire(m.regular), waiting: cellWire(m.waiting), earned: cellWire(m.earned), pending: cellWire(m.pending),
+    machines: m.machines,
   };
 }
 
@@ -338,7 +345,7 @@ export function personMoneyWire(managerId: number, m: LeadgenHandoffMoney): Lead
   return {
     managerId, handoffs: w.handoffs, unlinked: w.unlinked, lost: w.lost, sameDeal: w.sameDeal,
     success: w.success, paid: w.paid, expect: w.expect, work: w.work, regular: w.regular, waiting: w.waiting,
-    earned: w.earned, pending: w.pending,
+    earned: w.earned, pending: w.pending, machines: w.machines,
   };
 }
 
@@ -347,7 +354,7 @@ export function bucketMoneyWire(bucket: string, m: LeadgenHandoffMoney): Leadgen
   return {
     bucket, handoffs: w.handoffs, unlinked: w.unlinked, lost: w.lost, sameDeal: w.sameDeal,
     success: w.success, paid: w.paid, expect: w.expect, work: w.work, regular: w.regular, waiting: w.waiting,
-    earned: w.earned, pending: w.pending,
+    earned: w.earned, pending: w.pending, machines: w.machines,
   };
 }
 
@@ -357,7 +364,7 @@ export function bucketPersonMoneyWire(bucket: string, managerId: number, m: Lead
   return {
     bucket, managerId, handoffs: w.handoffs, unlinked: w.unlinked, lost: w.lost, sameDeal: w.sameDeal,
     success: w.success, paid: w.paid, expect: w.expect, work: w.work, regular: w.regular, waiting: w.waiting,
-    earned: w.earned, pending: w.pending,
+    earned: w.earned, pending: w.pending, machines: w.machines,
   };
 }
 
