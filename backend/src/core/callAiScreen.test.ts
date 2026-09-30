@@ -539,3 +539,73 @@ test("#857 ТИП НА ЕКРАНІ: вкладки «Звіт / Виключе�
   assert.match(drw, /\{c\.canEditType && \(/, "🔴 кнопки зміни типу показуються без дозволу сервера");
   assert.match(drw, /setAiCallType\(r\.uniqueid, isCargo\)/, "🔴 кнопки не пишуть тип");
 });
+
+/**
+ * #862 — ЗВІТ ТІМЛІДА: ЯДРО (ТЗ «звіт тімліда» 30.09.2026, п.6). Рахуються лише розмови у звіті; відсоток ціни — від
+ * РОЗІБРАНИХ (нерозібране не читається як «не назвав»); «без ціни й коментаря» зникає, щойно написали «чому»;
+ * «виконано / запізнився / не передзвонив» — окремо; «Разом» = сума менеджерів; банер — лише «не передзвонив» без
+ * «Опрацьовано»; пул за кожним фільтром = рівно ті рядки, з яких пораховано клітинку.
+ * 🧨 Червоніє, якщо рахувати «Виключені», ділити на нерозібрані, лишати в банері опрацьоване чи розвести пул і клітинку.
+ */
+test("#862 ЗВІТ ТІМЛІДА · ЯДРО: лише звіт, відсоток від розібраних, коментар гасить «без ціни», банер — лише не передзвонив без «опрацьовано»", async () => {
+  const { teamReport, poolRows } = await import("./firstTouchTeamReport.js");
+  const r = (id: string, mgr: number, o: Record<string, unknown>) => ({ uniqueid: id, calledAt: "2026-09-29T08:00:00Z", managerId: mgr, managerName: `M${String(mgr)}`,
+    teamName: "T", inReport: true, state: "done", priceDiscussed: true, promiseState: null, typeCheck: false, priceNote: null, missedNote: null, ...o });
+  const rows = [
+    r("a", 1, { priceDiscussed: true, promiseState: "kept_talk" }),
+    r("b", 1, { priceDiscussed: false, promiseState: "broken" }),
+    r("c", 1, { priceDiscussed: false, priceNote: { text: "клієнт поклав слухавку" }, promiseState: "broken", missedNote: { text: "набрав сам" } }),
+    r("d", 1, { state: "llm_pending", priceDiscussed: null }),
+    r("e", 2, { priceDiscussed: true, promiseState: "late", typeCheck: true }),
+    r("f", 2, { inReport: false, priceDiscussed: false, promiseState: "broken" }),
+    r("g", 2, { priceDiscussed: true, promiseState: "unverifiable" }),
+  ] as never[];
+  const t = teamReport(rows);
+  const m1 = t.managers.find((x) => x.managerId === 1)!;
+  assert.deepEqual([m1.accepted, m1.analysed, m1.priceVoiced, m1.pricePct, m1.noPriceNoComment, m1.agreements, m1.done, m1.late, m1.missed],
+    [4, 3, 1, 33.3, 1, 3, 1, 0, 2], "🔴 рядок менеджера порахований не за правилами ТЗ");
+  const m2 = t.managers.find((x) => x.managerId === 2)!;
+  assert.deepEqual([m2.accepted, m2.agreements, m2.late, m2.missed], [2, 1, 1, 0], "🔴 «Виключені» чи обіцянка в месенджер потрапили в звіт тімліда");
+  for (const k of ["accepted", "analysed", "priceVoiced", "noPriceNoComment", "agreements", "done", "late", "missed"] as const)
+    assert.equal(t.total[k], m1[k] + m2[k], `🔴 «Разом» ≠ сумі менеджерів у колонці ${k}`);
+  assert.deepEqual([t.banner.total, t.banner.byManager.map((x) => [x.managerId, x.count])], [1, [[1, 1]]], "🔴 банер показує опрацьоване або не лише «не передзвонив»");
+  assert.equal(poolRows(rows, 1, "noComment").length, m1.noPriceNoComment, "🔴 пул «без коментаря» ≠ клітинці");
+  assert.equal(poolRows(rows, 1, "missed").length, m1.missed, "🔴 пул «не передзвонив» ≠ клітинці");
+  assert.equal(poolRows(rows, 2, "typeCheck").length, 1);
+  assert.equal(poolRows(rows, "all", "all").length, t.total.accepted, "🔴 пул «усі» ≠ «прийнято заявок»");
+});
+
+/**
+ * #863 — КОМЕНТАРІ, ЗАПИС, РОУТ ЗВІТУ (ТЗ 30.09.2026, п.5–7). «Чому не озвучено ціну» пишуть менеджер, тімлід, адмін;
+ * «Опрацьовано» — лише тімлід і адмін; CEO не пише нічого. Коментар замінюється, порожній — прибирається. Роути:
+ * право — першим оператором, скоуп картки — до запису чи завантаження; звіт — з тих самих рядків вкладки.
+ * 🧨 Червоніє, якщо відкрити «Опрацьовано» менеджеру, писати без скоупу чи рахувати звіт окремим SQL.
+ */
+test("#863 КОМЕНТАРІ Й ЗАПИС: права за видом коментаря, заміна й прибирання, роути — право першим, скоуп до запису", async (t) => {
+  const { canWriteNote } = await import("./callAiScreen.js");
+  for (const k of ["admin", "team_lead", "manager"]) assert.equal(canWriteNote(k, "price"), true, `дзеркало: ${k} пише «чому не озвучено ціну»`);
+  for (const k of ["ceo", "opdir", "kvp", "financier", "hr"]) assert.equal(canWriteNote(k, "price"), false, `🔴 ${k} пише коментар до ціни`);
+  for (const k of ["admin", "team_lead"]) assert.equal(canWriteNote(k, "missed"), true, `дзеркало: ${k} пише «Опрацьовано»`);
+  for (const k of ["manager", "ceo"]) assert.equal(canWriteNote(k, "missed"), false, `🔴 ${k} пише «Опрацьовано» — банер гасив би сам собі`);
+  assert.equal(canWriteNote("admin", "other"), false);
+  const route = SRC("routes/dashboard.ts");
+  const body = (head: string) => { const at = route.indexOf(head); assert.ok(at > 0, `🔴 роуту ${head} немає`); const nx = route.indexOf("dashboardRouter.", at + 10); return route.slice(at, nx > at ? nx : undefined); };
+  const note = body('dashboardRouter.put("/ai-calls/:uniqueid/note"');
+  assert.match(note, /const kind = String\(req\.body\?\.kind \?\? ""\);\s*if \(!canWriteNote\(auth\.roleKey, kind\)\) \{ res\.status\(403\)/, "🔴 право на коментар — не першим оператором");
+  assert.ok(note.indexOf("aiCallCard(") > 0 && note.indexOf("aiCallCard(") < note.indexOf("setCallNote("), "🔴 коментар пишеться до перевірки скоупу");
+  const rec = body('dashboardRouter.get("/ai-calls/:uniqueid/recording"');
+  assert.match(rec, /const auth = req\.auth!;\s*if \(!transcriptAllowed\(auth, FIRST_TOUCH_TRANSCRIPT_ROLES\)\) \{ res\.status\(403\)/, "🔴 право на запис — не першим оператором");
+  assert.ok(rec.indexOf("aiCallCard(") < rec.indexOf("fetchCallRecording("), "🔴 запис завантажується до перевірки скоупу");
+  const rep = body('dashboardRouter.get("/ai-calls/team-report"');
+  assert.match(rep, /aiCallsList\(pool,[\s\S]*teamReport\(rows\)/, "🔴 звіт тімліда рахується не з рядків вкладки");
+  assert.match(rep, /missedScopeFor\(req\.auth!, req\.query\)/, "🔴 звіт тімліда без клампу скоупу");
+
+  const c = await ctx(t); if (!c) return;
+  const { setCallNote, aiCallCard } = await import("./callAiScreen.js");
+  await setCallNote(c.db, "x1", "price", "  клієнт поспішав  ", { userId: 1, name: "Менеджер М" }, new Date("2026-09-30T09:00:00Z"));
+  assert.deepEqual([(await aiCallCard(c.db, "x1", true, {}))?.row.priceNote?.text, (await aiCallCard(c.db, "x1", true, {}))?.row.priceNote?.byName], ["клієнт поспішав", "Менеджер М"]);
+  await setCallNote(c.db, "x1", "price", "інша причина", { userId: 2, name: "Тімлід Т" }, new Date("2026-09-30T10:00:00Z"));
+  assert.equal((await aiCallCard(c.db, "x1", true, {}))?.row.priceNote?.text, "інша причина", "🔴 коментар не замінився");
+  await setCallNote(c.db, "x1", "price", "   ", { userId: 2, name: "Тімлід Т" }, new Date("2026-09-30T11:00:00Z"));
+  assert.equal((await aiCallCard(c.db, "x1", true, {}))?.row.priceNote, null, "🔴 порожній текст не прибрав коментар");
+});
