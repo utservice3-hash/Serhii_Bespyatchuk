@@ -5,8 +5,8 @@ import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
 import { jobErrorIsCurrent, mmss } from "../aiCallsView";
-import { CARRIER_STAGE_STATUS, CARRIER_TABS, CATEGORY_UI, OTHER_TYPE_UI, TONE, closeLabel, closeModeLabel, confLabel, dealStatusLabel, deciderLabel,
-  tabOf, type CarrierTab } from "../carrierCallsView";
+import { CARRIER_STAGE_STATUS, CARRIER_TABS, CATEGORY_UI, OTHER_TYPE_UI, ROLE_UI, TONE, closeLabel, closeModeLabel, confLabel, dealStatusLabel, deciderLabel,
+  otherModeLabel, tabOf, type CarrierTab } from "../carrierCallsView";
 import { CarrierDealPanel, pill } from "./CarrierDealPanel";
 
 /**
@@ -31,7 +31,9 @@ function Verdict({ r }: { r: CarrierDealT }) {
     <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
       <span style={pill(TONE[cat.tone].bg, TONE[cat.tone].fg)}>{cat.label}{r.otherType ? ` · ${OTHER_TYPE_UI[r.otherType]}` : ""}</span>
       <span style={{ fontSize: 12, ...muted, fontVariantNumeric: "tabular-nums" }}>
-        {r.source === "human" && r.human ? deciderLabel(r.human.role) : r.source === "ai" ? `AI ${confLabel(r.ai.confidence)}` : r.why ?? ""}
+        {r.source === "human" && r.human ? deciderLabel(r.human.role)
+          : r.source === "ai" ? `AI ${confLabel(r.ai.confidence)}`
+          : r.ai.verdict ? `AI: ${ROLE_UI[r.ai.verdict]?.label ?? r.ai.verdict} ${confLabel(r.ai.confidence)}` : ""}
       </span>
     </span>
   );
@@ -110,7 +112,7 @@ export function CarrierCallsSection() {
             {meta.job?.lastError && jobErrorIsCurrent(meta.job) && <span style={{ color: "var(--danger)" }}> · помилка: {meta.job.lastError}</span>}
             {" · "}витрати {usd(meta.spend.carrier)} / {usd(meta.caps.carrier)}
             {" · "}перевізники: {closeModeLabel(meta.close.mode)}{meta.close.mode === "live" ? ` (${String(meta.close.closed)})` : ""}
-            {" · "}«Інше» від AI: {meta.close.mode === "off" ? "вимкнено" : closeModeLabel(meta.close.otherMode).replace("закриття в CRM ", "")}
+            {" · "}«Інше» від AI: {otherModeLabel(meta.close.mode, meta.close.otherMode)}
             {meta.close.otherMode !== "live" && meta.close.otherWouldClose > 0 ? ` (у журналі ${String(meta.close.otherWouldClose)})` : ""}
           </p>
         )}

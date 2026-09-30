@@ -155,7 +155,7 @@ export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: Carrier
           <span style={{ ...muted, marginRight: 6 }}>Зараз:</span>
           <span style={pill(TONE[cat.tone].bg, TONE[cat.tone].fg)}>{cat.label}{deal.otherType ? ` · ${OTHER_TYPE_UI[deal.otherType]}` : ""}</span>
           <span style={{ ...muted, marginLeft: 6 }}>
-            {deal.source === "human" && deal.human ? `вирішив ${deviceName(deal.human.by)} (${deciderLabel(deal.human.role)})` : deal.source === "ai" ? "вирішив AI" : deal.why ?? ""}
+            {deal.source === "human" && deal.human ? `вирішив ${deviceName(deal.human.by)} (${deciderLabel(deal.human.role)})` : deal.source === "ai" ? "вирішив AI" : verdictUi ? deal.why ?? "" : ""}
           </span>
           {deal.close && <div style={{ ...muted, fontSize: 12.5, marginTop: 4 }}>{closeLabel(deal.close, fmtTime)}</div>}
         </div>

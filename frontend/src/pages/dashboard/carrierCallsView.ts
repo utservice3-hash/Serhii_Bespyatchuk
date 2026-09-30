@@ -106,6 +106,13 @@ export function closeModeLabel(mode: string): string {
   return "закриття в CRM — лише журнал, у CRM нічого не пишемо";
 }
 
+/** Режим закриття AI-«Інше» (окремий перемикач; вимкнений основний режим вимикає і його). */
+export function otherModeLabel(mode: string, otherMode: string): string {
+  if (mode === "off" || otherMode === "off") return "не закриваємо";
+  if (mode === "live" && otherMode === "live") return "закриваємо в CRM";
+  return "поки лише журнал (до тесту точності)";
+}
+
 /** 🙋 Рішення людини по невпевнених — підписи й кольори кнопок. */
 export type HumanDecisionT = "carrier" | "client" | "other";
 export const DECISION_UI: Readonly<Record<HumanDecisionT, { label: string; icon: string; hint: string; bg: string; fg: string }>> = {
