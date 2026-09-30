@@ -7,7 +7,7 @@ import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
 import { jobErrorIsCurrent, mmss } from "../aiCallsView";
 import { CARRIER_STAGE_STATUS, CARRIER_TABS, CATEGORY_UI, DECISION_UI, OTHER_TYPE_UI, OTHER_TYPES_HINT, ROLE_UI, TONE, closeLabel, closeModeLabel, dealStatusLabel, deciderLabel, pctLabel,
   otherModeLabel, tabOf, type CarrierTab } from "../carrierCallsView";
-import { CarrierDealPanel, pill } from "./CarrierDealPanel";
+import { CarrierDealById, CarrierDealPanel, pill } from "./CarrierDealPanel";
 import { CarrierStatsCard } from "./CarrierStatsCard";
 
 /**
@@ -31,8 +31,9 @@ const muted: React.CSSProperties = { color: "var(--text-muted)" };
  * людини по кожній угоді, де AI мав вердикт, — коли, яка угода, чий менеджер, що казав AI, що вирішила людина, хто.
  * Зверху — підсумок по вердикту AI. Лише керівництву (сервер іншим віддає порожній список).
  */
-function AgreementCard({ meta }: { meta: CarrierCallsMetaResp }) {
+function AgreementCard({ meta, onChanged }: { meta: CarrierCallsMetaResp; onChanged: () => void }) {
   const [onlyDiff, setOnlyDiff] = useState(false);
+  const [open, setOpen] = useState<number | null>(null);
   const rows = onlyDiff ? meta.agreementRows.filter((r) => !r.agreed) : meta.agreementRows;
   const cell: React.CSSProperties = { padding: "6px 10px", verticalAlign: "top", fontSize: 13 };
   const verdict = (role: string) => ROLE_UI[role]?.label ?? role;
@@ -57,22 +58,31 @@ function AgreementCard({ meta }: { meta: CarrierCallsMetaResp }) {
           <thead>
             <tr style={{ textAlign: "left", color: "var(--text-muted)", fontSize: 12.5 }}>
               <th style={cell}>Коли</th><th style={cell}>Угода</th><th style={cell}>Менеджер угоди</th>
-              <th style={cell}>AI казав</th><th style={cell}>Людина вирішила</th><th style={cell}>Хто вирішив</th><th style={cell}>Збіг</th>
+              <th style={cell}>AI казав</th><th style={cell}>Людина вирішила</th><th style={cell}>Хто вирішив</th><th style={cell}>Збіг</th><th style={cell} />
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.kommoId} style={{ borderTop: "1px solid var(--border)" }}>
+              <Fragment key={r.kommoId}>
+              <tr tabIndex={0} aria-expanded={open === r.kommoId} title="Відкрити угоду: запис, текст розмови, вердикт AI, журнал рішень"
+                onClick={() => setOpen(open === r.kommoId ? null : r.kommoId)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(open === r.kommoId ? null : r.kommoId); } }}
+                style={{ borderTop: "1px solid var(--border)", cursor: "pointer", background: open === r.kommoId ? "var(--surface-2)" : undefined }}>
                 <td style={{ ...cell, whiteSpace: "nowrap" }}>{fmtTime(r.at)}</td>
-                <td style={{ ...cell, whiteSpace: "nowrap" }}><a href={r.url} target="_blank" rel="noreferrer">№ {r.kommoId}</a></td>
+                <td style={{ ...cell, whiteSpace: "nowrap" }}><a href={r.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>№ {r.kommoId}</a></td>
                 <td style={cell}>{r.managerName ?? <span style={muted}>невідомий</span>}</td>
                 <td style={{ ...cell, whiteSpace: "nowrap" }}>{verdict(r.aiRole)}<span style={muted}> · {pctLabel(r.aiConfidence)}</span></td>
                 <td style={{ ...cell, whiteSpace: "nowrap" }}><b>{DECISION_UI[r.decision].label}</b>{r.otherType ? <span style={muted}> · {OTHER_TYPE_UI[r.otherType]}</span> : null}</td>
                 <td style={cell}>{r.by}<span style={muted}> · {deciderLabel(r.byRole)}</span></td>
                 <td style={{ ...cell, fontWeight: 600, color: r.agreed ? "var(--ok)" : "var(--danger)" }}>{r.agreed ? "✓ так" : "✗ ні"}</td>
+                <td style={{ ...cell, whiteSpace: "nowrap", color: "var(--info)" }}>{open === r.kommoId ? "згорнути" : "відкрити →"}</td>
               </tr>
+              {open === r.kommoId && <tr><td colSpan={8} style={{ padding: "0 10px 12px", background: "var(--surface-2)" }}>
+                <div className="cq-panel"><CarrierDealById kommoId={r.kommoId} onChanged={onChanged} /></div>
+              </td></tr>}
+              </Fragment>
             ))}
-            {rows.length === 0 && <tr><td colSpan={7} style={{ ...cell, ...muted }}>Розбіжностей немає.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={8} style={{ ...cell, ...muted }}>Розбіжностей немає.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -178,7 +188,7 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
     <>
       <div className="chart-card">{header}</div>
       <CarrierStatsCard from={from} to={to} refresh={refresh} />
-      {meta && isLead && meta.agreementRows.length > 0 && <AgreementCard meta={meta} />}
+      {meta && isLead && meta.agreementRows.length > 0 && <AgreementCard meta={meta} onChanged={() => setRefresh((n) => n + 1)} />}
     </>
   );
   if (err) return <div className="chart-card">{header}<p style={{ margin: 0, color: "var(--danger)" }}>{err}</p></div>;

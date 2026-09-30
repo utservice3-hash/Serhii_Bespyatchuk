@@ -1287,7 +1287,7 @@ test("#1073 ТОЧКА СТАРТУ · ЖИВА СХЕМА: до старту �
   assert.deepEqual(shown, [107302], "🔴 угода до старту потрапила у вкладки/звіт");
   const route = SRC("routes/dashboard.ts");
   assert.match(route, /const CARRIER_SINCE = \(\) => config\.callAi\.carrierLaunchAt;/);
-  assert.equal((route.match(/CARRIER_SINCE\(\)/g) ?? []).length, 5, "🔴 не всі роути вкладки, звіту й динаміки беруть точку старту");
+  assert.equal((route.match(/CARRIER_SINCE\(\)/g) ?? []).length, 6, "🔴 не всі роути вкладки, звіту, динаміки й однієї угоди беруть точку старту");
   assert.match(SRC("jobs/carrierCallJob.ts"), /launchAt: new Date\(config\.callAi\.carrierLaunchAt\)/, "🔴 джоба слухає без точки старту");
   assert.match(SRC("config.ts"), /carrierLaunchAt: process\.env\.CARRIER_LAUNCH_AT \?\? "2026-09-30T09:48:08Z"/, "🔴 точка старту ≠ рішенню 30.09.2026");
 });
@@ -1573,9 +1573,37 @@ test("#1142 АНАЛІТИКА — ОКРЕМА СТОРІНКА: «Угоди»
   assert.ok(a > 0, "🔴 сторінки «Аналітика» немає");
   const analytics = sec.slice(a, sec.indexOf("\n  );\n", a));
   assert.match(analytics, /<CarrierStatsCard from=\{from\} to=\{to\}/, "🔴 графіків немає на «Аналітиці»");
-  assert.match(analytics, /<AgreementCard meta=\{meta\} \/>/, "🔴 «AI проти людини» немає на «Аналітиці»");
+  assert.match(analytics, /<AgreementCard meta=\{meta\}/, "🔴 «AI проти людини» немає на «Аналітиці»");
   const rest = sec.slice(0, a) + sec.slice(a + analytics.length);
   const body = rest.slice(rest.indexOf("export function CarrierCallsSection"));
   assert.doesNotMatch(body, /<CarrierStatsCard /, "🔴 графік повернувся на сторінку угод");
   assert.doesNotMatch(body, /<AgreementCard /, "🔴 «AI проти людини» повернулось на сторінку угод");
+});
+
+/**
+ * #1143 — УГОДА З «AI ПРОТИ ЛЮДИНИ» ВІДКРИВАЄТЬСЯ ПОВНІСТЮ (Роман 30.09.2026: «щоб можна було повністю відкрити
+ * транскрипт»): клік по рядку — повна картка угоди (запис, текст, вердикт, журнал, кнопки) через `/carrier-calls/deal/:id`;
+ * роут — у скоупі ролі й з точкою старту (чужа угода — 404), до `/:uniqueid`, у матриці; відповідь — тим самим переліком
+ * полів, що й список.
+ * 🧨 Червоніє, якщо зняти скоуп з роуту, віддати іншим переліком полів чи рядок перестане відкривати картку.
+ */
+test("#1143 УГОДА З «AI ПРОТИ ЛЮДИНИ»: повна картка, роут у скоупі ролі, до /:uniqueid, у матриці, той самий перелік полів", async () => {
+  const route = SRC("routes/dashboard.ts");
+  const at = route.indexOf('dashboardRouter.get("/carrier-calls/deal/:kommoId"');
+  assert.ok(at > 0 && at < route.indexOf('dashboardRouter.get("/carrier-calls/:uniqueid"'), "🔴 роуту однієї угоди немає або він після /:uniqueid");
+  const body = route.slice(at, route.indexOf("dashboardRouter.", at + 10));
+  assert.match(body, /carrierDealRows\(pool, \{ period: null, scope: carrierScope\(req\), ids: \[id\], since: CARRIER_SINCE\(\) \}\)/, "🔴 угода за номером без скоупу ролі чи точки старту");
+  assert.match(body, /res\.status\(404\)/, "🔴 чужа угода не 404");
+  assert.match(body, /res\.json\(carrierDealJson\(r\)\)/, "🔴 одна угода віддається іншим переліком полів, ніж список");
+  assert.match(route, /rows: rows\.map\(carrierDealJson\)/, "🔴 список і одна угода розійшлись у переліку полів");
+  const row = ACCESS_MATRIX.find((r) => r.method === "GET" && r.path === "/api/dashboard/carrier-calls/deal/:kommoId");
+  assert.ok(row && row.deny.includes("hr" as never) && row.deny.includes("financier" as never), "🔴 роут однієї угоди не в матриці або відкритий HR/фінансисту");
+  const sec = readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8");
+  assert.match(sec, /<CarrierDealById kommoId=\{r\.kommoId\}/, "🔴 рядок «AI проти людини» не відкриває картку угоди");
+  const panel = readFileSync(FE("pages/dashboard/sections/CarrierDealPanel.tsx"), "utf8");
+  // Межа — тіло самої функції (правило 9: змістова, а не за довжиною).
+  const byId = panel.slice(panel.indexOf("export function CarrierDealById"), panel.indexOf("export function CarrierDealPanel"));
+  assert.ok(byId.length > 0, "🔴 CarrierDealById не знайдено");
+  assert.match(byId, /fetchCarrierDeal\(kommoId\)/, "🔴 картка за номером вантажить не угоду за номером");
+  assert.match(byId, /<CarrierDealPanel deal=\{deal\}/, "🔴 картка за номером — не та сама повна картка угоди");
 });

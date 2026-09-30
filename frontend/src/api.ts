@@ -508,6 +508,11 @@ export interface CarrierCallsMetaResp {
   agreement: { aiRole: string; decisions: number; agreed: number; byDecision: Record<string, number> }[];
   agreementRows: CarrierAgreementRowT[];
 }
+/** 🔎 Одна угода за номером (повна картка з «AI проти людини»); у скоупі ролі. */
+export async function fetchCarrierDeal(kommoId: number): Promise<CarrierDealT> {
+  const { data } = await api.get<CarrierDealT>(`/dashboard/carrier-calls/deal/${String(kommoId)}`);
+  return data;
+}
 /** 📈 Динаміка за період: по днях — відсіяно, без розмови, категорії; витрати — лише керівництву (інакше `null`). */
 export interface CarrierDayStatT { day: string; filtered: number; noTalk: number; clients: number; carriers: number; other: number; unsorted: number; spendUsd: number | null }
 export async function fetchCarrierStats(params: { from: string; to: string }): Promise<{ period: { from: string; to: string }; days: CarrierDayStatT[]; spendCapUsd: number }> {

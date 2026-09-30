@@ -10796,6 +10796,15 @@ dashboardRouter.get("/ai-calls/:uniqueid/recording", async (req, res) => {
  * запис чужого дзвінка — 404, а не 403: для менеджера чужої угоди не існує.
  */
 const carrierScope = (req: { auth?: AuthPayload; query: Record<string, unknown> }) => missedScopeFor(req.auth!, req.query);
+/** Угода вкладки у відповіді — явний перелік полів, а не спред (#17e2); один для списку й для однієї угоди. */
+const carrierDealJson = (r: Awaited<ReturnType<typeof carrierDealRows>>[number]) => ({
+  kommoId: r.kommoId, url: kommoLeadUrl(r.kommoId), phone: r.phone, createdAt: r.createdAt, dealState: r.dealState, reused: r.reused,
+  talkNo: r.talkNo, uniqueid: r.uniqueid, calledAt: r.calledAt, billsec: r.billsec, direction: r.direction,
+  managerId: r.managerId, managerName: r.managerName, teamId: r.teamId, teamName: r.teamName,
+  ai: r.ai, human: r.human, journal: r.journal, category: r.category, source: r.source, why: r.why, otherType: r.otherType,
+  reviewSince: r.reviewSince, reviewDeadline: r.reviewDeadline, overdue: r.overdue,
+  close: r.close, crm: r.crm,
+});
 /** Керівництво (адмін, CEO, опдир, КВП): бачить витрати AI й поіменні рішення інших. Менеджер і тімлід — ні. */
 const carrierIsLeadership = (auth: AuthPayload) => auth.roleKey !== "manager" && auth.roleKey !== "team_lead";
 /** 🏁 Точка старту відсіву: раніше створені угоди у вкладки, чергу й звіт не йдуть (Роман 30.09.2026: «працюємо з 0»). */
@@ -10806,15 +10815,7 @@ dashboardRouter.get("/carrier-calls", async (req, res) => {
   const { rows, kpis, truncated } = await carrierCallsList(pool, from, to, carrierScope(req), CARRIER_SINCE());
   res.json({
     period: { from, to }, truncated, kpis,
-    // Явний перелік полів, а не спред (#17e2).
-    rows: rows.map((r) => ({
-      kommoId: r.kommoId, url: kommoLeadUrl(r.kommoId), phone: r.phone, createdAt: r.createdAt, dealState: r.dealState, reused: r.reused,
-      talkNo: r.talkNo, uniqueid: r.uniqueid, calledAt: r.calledAt, billsec: r.billsec, direction: r.direction,
-      managerId: r.managerId, managerName: r.managerName, teamId: r.teamId, teamName: r.teamName,
-      ai: r.ai, human: r.human, journal: r.journal, category: r.category, source: r.source, why: r.why, otherType: r.otherType,
-      reviewSince: r.reviewSince, reviewDeadline: r.reviewDeadline, overdue: r.overdue,
-      close: r.close, crm: r.crm,
-    })),
+    rows: rows.map(carrierDealJson),
   });
 });
 
@@ -10852,6 +10853,18 @@ dashboardRouter.get("/carrier-calls/meta", async (req, res) => {
     agreementRows: lead ? (await carrierAgreementRows(pool)).map((r) => ({ kommoId: r.kommoId, url: kommoLeadUrl(r.kommoId), uniqueid: r.uniqueid,
       managerName: r.managerName, aiRole: r.aiRole, aiConfidence: r.aiConfidence, decision: r.decision, otherType: r.otherType, by: r.by,
       byRole: r.byRole, at: r.at, agreed: r.agreed })) : [] });
+});
+
+/**
+ * 🔎 Одна угода за номером — повна картка з «AI проти людини» (Роман 30.09.2026: «щоб можна було повністю відкрити
+ * транскрипт»). Без періоду (угода може бути поза вибраним), у скоупі ролі: чужа — 404.
+ */
+dashboardRouter.get("/carrier-calls/deal/:kommoId", async (req, res) => {
+  const id = Number(req.params.kommoId);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Невірний номер угоди" }); return; }
+  const [r] = await carrierDealRows(pool, { period: null, scope: carrierScope(req), ids: [id], since: CARRIER_SINCE() });
+  if (!r) { res.status(404).json({ error: "Угоди немає серед ваших дзвінків на мобільні" }); return; }
+  res.json(carrierDealJson(r));
 });
 
 /**
