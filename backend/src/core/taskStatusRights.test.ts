@@ -156,4 +156,11 @@ test("#1080e ПЕРЕПРИЗНАЧИТИ «ПРИЙМАЄ» МОЖУТЬ АВТ
     "admin#1": true, "team_lead#3": false, "manager#4": false,
     "manager#5": false, "manager#6": true, "manager#7": true,
   });
+  // 🪞 Автор, який сам виконує задачу, приймання не переписує (спіймано HTTP-прогоном
+  // 30.09.2026: автор-виконавець переписав «Приймає» з Юлії на себе й закрив задачу).
+  const authorExec = row({ assigneeId: 40, assigneeTeamId: 7, createdBy: EXEC.userId, reviewerId: REVIEWER.userId });
+  assert.equal(canChangeReviewer(EXEC, authorExec), false, "🔴 АВТОР-ВИКОНАВЕЦЬ ПЕРЕПИСАВ «ПРИЙМАЄ» НА СЕБЕ");
+  assert.equal(canChangeReviewer(REVIEWER, authorExec), true, "«Приймає» не може передати приймання");
+  // Одна людина в трьох ролях (приймає за замовчуванням сама) — може передати іншому.
+  assert.equal(canChangeReviewer(EXEC, { ...authorExec, reviewerId: null }), true);
 });

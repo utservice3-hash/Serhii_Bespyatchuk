@@ -151,6 +151,8 @@ test("#1080f РОУТ: виконавець не закриває (403 з іме
     assert.equal((await patch("exec", own.id, { status: "ready_for_approval" })).code, 204);
     assert.equal((await patch("exec", own.id, { status: "done" })).code, 403,
       "🔴 АВТОР-ВИКОНАВЕЦЬ ЗАКРИВ ЗАДАЧУ, ЯКУ ПРИЙМАЄ ЮЛІЯ — правило не діє там, заради чого писалось");
+    assert.equal((await patch("exec", own.id, { reviewerId: 4 })).code, 403,
+      "🔴 АВТОР-ВИКОНАВЕЦЬ ПЕРЕПИСАВ «ПРИЙМАЄ» НА СЕБЕ — правило обходиться одним PATCH");
     assert.equal((await patch("yulia", own.id, { status: "done" })).code, 204);
 
     // ── 8. ЗАМОВЧУВАННЯ: «Приймає» не обрано — приймає автор ──

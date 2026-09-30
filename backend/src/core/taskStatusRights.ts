@@ -121,8 +121,14 @@ export function statusRights(v: TaskViewer, t: StatusRightsRow): StatusRights {
  * Хто може ПЕРЕПРИЗНАЧИТИ «Приймає»: автор, поточний «Приймає» і адмін
  * (рішення Романа 30.09.2026). Виконавець — ні: інакше він призначив би
  * приймати себе і закрив би задачу сам, тобто правило вище стало б декоративним.
+ *
+ * 🔴 І АВТОР, ЯКИЙ САМ Є ВИКОНАВЦЕМ, — ТЕЖ НІ. Спіймано HTTP-прогоном 30.09.2026:
+ * автор-виконавець (випадок 4172/4310/4312) переписав «Приймає» з Юлії на себе
+ * (204) і одразу закрив задачу — а Юлія втратила до неї доступ. Передати
+ * приймання може сам «Приймає» або адмін; тримає `#1080e`/`#1080f`.
  */
 export function canChangeReviewer(v: TaskViewer, t: StatusRightsRow): boolean {
   if (!canSeeTask(v, t)) return false;
-  return v.adminScope || t.createdBy === v.userId || effectiveReviewer(t) === v.userId;
+  if (v.adminScope || effectiveReviewer(t) === v.userId) return true;
+  return t.createdBy === v.userId && !isExecutor(v, t);
 }
