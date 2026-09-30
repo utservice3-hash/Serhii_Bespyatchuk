@@ -398,11 +398,11 @@ export async function fetchAiCallsMeta(): Promise<AiCallsMetaResp> {
  * 🚚 «Перевізники за розмовою» (29.09.2026; ТЗ Романа 30.09.2026 «Відсів перевізників»): рядок — угода; сервер сам
  * звужує до скоупу ролі (менеджер — свої, тімлід — команда). Правила — METRICS_GLOSSARY §17.
  */
-export type CarrierCategoryT = "client" | "carrier" | "other" | "review" | "error" | "waiting";
+export type CarrierCategoryT = "client" | "carrier" | "other" | "review" | "error" | "waiting" | "no_talk";
 export type CarrierOtherTypeT = "spam" | "supplier" | "job_seeker" | "personal" | "wrong_number" | "other";
 export type CarrierDecisionT = "carrier" | "client" | "other";
 /** Що автоматика зробила з угодою в CRM: «закрили б» (лише журнал), закрито, повернуто, помилка запису. */
-export interface CarrierCloseT { state: "would_close" | "closed" | "reverted" | "failed"; at: string; error: string | null; reason: "carrier" | "other" }
+export interface CarrierCloseT { state: "would_close" | "closed" | "reverted" | "failed"; at: string; error: string | null; reason: "carrier" | "other" | "no_talk" }
 export interface CarrierDealT {
   kommoId: number; url: string; phone: string; createdAt: string; dealState: string; reused: boolean; talkNo: number;
   uniqueid: string | null; calledAt: string | null; billsec: number | null; direction: "in" | "out" | null;
@@ -427,7 +427,7 @@ export async function fetchCarrierCalls(params: { from: string; to: string; mana
 export interface CarrierReportLineT {
   managerId: number | null; managerName: string | null; teamId: number | null; teamName: string | null;
   total: number; clients: number; carriersAuto: number; carriersManual: number; otherAuto: number; otherManual: number; unsorted: number;
-  overdue: number; filterRemoved?: number;
+  overdue: number; noTalk: number; filterRemoved?: number;
 }
 export interface CarrierReportResp { period: { from: string; to: string }; managers: CarrierReportLineT[]; teams: CarrierReportLineT[];
   total: Omit<CarrierReportLineT, "managerId" | "managerName" | "teamId" | "teamName">; filterRemoved: number }

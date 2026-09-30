@@ -27,7 +27,7 @@ export const BUCKET_UI: Readonly<Record<CarrierBucketT, { label: string; tone: T
  * (`dealCategory`); «На перевірці» збирає всіх, кого ще не розсортовано: невпевнені й без розмови, «Помилка»,
  * і ті, кого AI ще слухає. Так вкладки разом = усі угоди періоду, і звіт з ними сходиться.
  */
-export type CarrierCategoryT = "client" | "carrier" | "other" | "review" | "error" | "waiting";
+export type CarrierCategoryT = "client" | "carrier" | "other" | "review" | "error" | "waiting" | "no_talk";
 export type CarrierTab = "client" | "carrier" | "other" | "review";
 export const CARRIER_TABS: readonly { key: CarrierTab; label: string }[] = [
   { key: "client", label: "Клієнти" },
@@ -35,7 +35,9 @@ export const CARRIER_TABS: readonly { key: CarrierTab; label: string }[] = [
   { key: "other", label: "Інше" },
   { key: "review", label: "На перевірці" },
 ];
-export function tabOf(c: CarrierCategoryT): CarrierTab {
+/** «Без розмови» (закрито «Немає зв'язку», не аналізуємо — Роман 30.09.2026) — у жодну вкладку: `null`. */
+export function tabOf(c: CarrierCategoryT): CarrierTab | null {
+  if (c === "no_talk") return null;
   return c === "client" || c === "carrier" || c === "other" ? c : "review";
 }
 export const CATEGORY_UI: Readonly<Record<CarrierCategoryT, { label: string; tone: Tone }>> = {
@@ -45,6 +47,7 @@ export const CATEGORY_UI: Readonly<Record<CarrierCategoryT, { label: string; ton
   review: { label: "на перевірці", tone: "muted" },
   error: { label: "помилка", tone: "bad" },
   waiting: { label: "AI слухає", tone: "muted" },
+  no_talk: { label: "без розмови", tone: "muted" },
 };
 
 /** Підтипи «Інше» — ті самі ключі й підписи, що `OTHER_TYPE_UA` бекенду (звіряє гейт). */
@@ -92,7 +95,7 @@ export function dealsWord(n: number): string {
 /** Стан закриття угоди в CRM — словами. `null` — автоматика угоду не чіпала. */
 export function closeLabel(c: { state: string; at: string; reason?: string } | null, fmt: (iso: string) => string): string | null {
   if (!c) return null;
-  const why = c.reason === "other" ? "«Нецільове звернення»" : "«Перевізник»";
+  const why = c.reason === "other" ? "«Нецільове звернення»" : c.reason === "no_talk" ? "«Немає зв'язку»" : "«Перевізник»";
   if (c.state === "closed") return `закрито в CRM ${fmt(c.at)} · ${why}`;
   if (c.state === "reverted") return `повернуто на етап ${fmt(c.at)}`;
   if (c.state === "failed") return "не вдалось закрити в CRM — спробуємо ще";

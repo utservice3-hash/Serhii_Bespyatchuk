@@ -56,7 +56,7 @@ export async function carrierCallsList(db: Db, from: string, to: string, scope: 
 }
 
 function closeStateOf(x: { cl_decided: Date | null; cl_closed: Date | null; cl_reverted: Date | null; cl_error: string | null;
-  cl_reason: "carrier" | "other" | null }): CloseState | null {
+  cl_reason: "carrier" | "other" | "no_talk" | null }): CloseState | null {
   if (!x.cl_decided) return null;
   const iso = (d: Date) => new Date(d).toISOString();
   const reason = x.cl_reason ?? "carrier";
@@ -91,7 +91,7 @@ export interface CarrierCallCard {
  */
 export async function carrierCallCard(db: Db, uniqueid: string, canSeeTranscript: boolean): Promise<CarrierCallCard | null> {
   const deals = (await db.query<{ kommo_id: string; state: string; talk_no: number; uniqueid: string | null; first_uniqueid: string | null;
-    cl_decided: Date | null; cl_closed: Date | null; cl_reverted: Date | null; cl_error: string | null; cl_reason: "carrier" | "other" | null }>(`
+    cl_decided: Date | null; cl_closed: Date | null; cl_reverted: Date | null; cl_error: string | null; cl_reason: "carrier" | "other" | "no_talk" | null }>(`
     SELECT d.kommo_id::text, d.state, COALESCE(src.talk_no, d.talk_no) AS talk_no,
            COALESCE(src.uniqueid, d.uniqueid) AS uniqueid, COALESCE(src.first_uniqueid, d.first_uniqueid) AS first_uniqueid,
            cl.decided_at AS cl_decided, cl.closed_at AS cl_closed, cl.reverted_at AS cl_reverted, cl.close_error AS cl_error,

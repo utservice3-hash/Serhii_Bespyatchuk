@@ -29,6 +29,7 @@ export async function carrierCallJob(): Promise<CarrierTickReport | GuardSkip> {
       alert: sendAdminAlert,
       launchAt: new Date(config.callAi.carrierLaunchAt),
       reviewTasks: true,
+      noTalkAfterMin: config.callAi.carrierNoTalkCloseMin,
       close: {
         mode: closeModeOf(config.callAi.carrierAutoClose),
         otherMode: closeModeOf(config.callAi.carrierAutoCloseOther),

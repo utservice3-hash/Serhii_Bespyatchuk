@@ -478,7 +478,7 @@ test("#961 КАРТКА · ЖИВА СХЕМА: лише дзвінки мобі
 
 interface CarrierView {
   CARRIER_TABS: readonly { key: string; label: string }[];
-  tabOf: (c: string) => string;
+  tabOf: (c: string) => string | null;
   CATEGORY_UI: Record<string, { label: string }>;
   OTHER_TYPE_UI: Record<string, string>;
   DECISION_UI: Record<string, { label: string }>;
@@ -864,31 +864,6 @@ test("#1061 РОЗБІР v2: ключі з ТЗ, підтип лише в «Ін
 });
 
 /**
- * #1062 — КАТЕГОРІЯ УГОДИ — одне правило для вкладок, звіту й закриття: людина сильніша за AI; упевнений AI —
- * його категорія; невпевнений, «не чути» й без розмови — «На перевірці»; збій після спроб — «Помилка»; решта — AI слухає.
- * 🧨 Червоніє, якщо AI переважить людину, невпевнений стане категорією, помилка злиється з очікуванням.
- */
-test("#1062 КАТЕГОРІЯ: людина > AI; поріг 0,85 з обох боків; без розмови — перевірка; збій — помилка; черга — AI слухає", async () => {
-  const { dealCategory } = await import("./carrierCallRules.js");
-  const r = (role: CarrierResult["caller_role"], conf: number, qc: CarrierResult["quote_check"] = "counterpart"): CarrierResult =>
-    ({ summary: "", manager_channel: "1", caller_role: role, caller_role_confidence: conf, caller_role_quote: "x", quote_check: qc });
-  const cat = (x: Parameters<typeof dealCategory>[0]) => { const v = dealCategory(x); return [v.category, v.source]; };
-  const base = { human: null, result: null, dealState: "own", ai: null } as Parameters<typeof dealCategory>[0];
-  assert.deepEqual(cat({ ...base, human: "client", result: r("carrier", 0.99), ai: "done" }), ["client", "human"], "🔴 AI переважив людину");
-  assert.deepEqual(cat({ ...base, result: r("carrier", 0.85), ai: "done" }), ["carrier", "ai"]);
-  assert.deepEqual(cat({ ...base, result: r("carrier", 0.8499), ai: "done" }), ["review", null], "🔴 невпевнений став категорією");
-  assert.deepEqual(cat({ ...base, result: r("client", 0.95, "manager"), ai: "done" }), ["review", null], "🔴 цитата менеджера — упевнений клієнт");
-  assert.deepEqual(cat({ ...base, result: r("other", 0.9, "empty"), ai: "done" }), ["other", "ai"], "дзеркало: «Інше» цитати не вимагає");
-  assert.deepEqual(cat({ ...base, result: r("unclear", 0.3, "empty"), ai: "done" }), ["review", null]);
-  assert.deepEqual(cat({ ...base, dealState: "no_talk" }), ["review", null], "🔴 угода без розмови не дійшла до людини");
-  assert.deepEqual(cat({ ...base, dealState: "waiting" }), ["waiting", null]);
-  for (const ai of ["llm_failed", "stt_failed", "recording_unavailable", "no_text"] as const)
-    assert.deepEqual(cat({ ...base, ai }), ["error", null], `🔴 «${ai}» не став «Помилкою»`);
-  for (const ai of ["queued", "llm_pending", "capped", "not_enabled", "not_queued"] as const)
-    assert.deepEqual(cat({ ...base, ai }), ["waiting", null], `🔴 «${ai}» — не «AI слухає»`);
-});
-
-/**
  * #1063 — СПИСОК УГОД І СКОУП: рядок — угода (і без розмови теж); менеджер бачить лише свої, тімлід — команду,
  * керівництво — усе; порожній скоуп (`-1`) — нікого; «прибрав фільтр» — лише ті, кого ми після фільтра не бачили.
  * 🧨 Червоніє, якщо зняти фільтр менеджера чи команди, загубити угоду без розмови або рахувати свої закриття як фільтр.
@@ -922,7 +897,7 @@ test("#1063 СПИСОК УГОД · ЖИВА СХЕМА: рядок — уго�
   const all = await carrierCallsList(c.db, "2026-09-22", "2026-09-28", {});
   const byId = new Map(all.rows.map((r) => [r.kommoId, r]));
   assert.equal(all.rows.length, 6, "🔴 не кожна угода — рядок (без розмови чи без менеджера загубились)");
-  assert.deepEqual([1, 2, 3, 4, 5, 6].map((n) => byId.get(106300 + n)?.category), ["carrier", "review", "client", "error", "other", "waiting"]);
+  assert.deepEqual([1, 2, 3, 4, 5, 6].map((n) => byId.get(106300 + n)?.category), ["carrier", "no_talk", "client", "error", "other", "waiting"]);
   assert.equal(byId.get(106305)?.otherType, "spam");
   assert.equal(byId.get(106304)?.why, "AI не відповів після кількох спроб", "🔴 «Помилка» не каже причину");
   assert.equal(all.kpis.removedByFilter, 1, "🔴 нашу угоду, закриту як «Перевізник», пораховано як роботу фільтра");
@@ -1163,8 +1138,12 @@ test("#1069 ПРОВОДКА ФРОНТУ: вкладки ТЗ, картка у�
   for (const fn of ["fetchCarrierCalls(", "fetchCarrierCallsMeta(", "fetchCarrierPending(", "<CarrierDealPanel "]) assert.ok(sec.includes(fn), `🔴 секція не має ${fn}`);
   const panel = readFileSync(FE("pages/dashboard/sections/CarrierDealPanel.tsx"), "utf8");
   for (const fn of ["fetchCarrierCallCard(", "fetchCarrierAudio(", "postCarrierDecision(", "revertCarrierClose("]) assert.ok(panel.includes(fn), `🔴 картка не кличе ${fn}`);
-  const report = readFileSync(FE("pages/dashboard/sections/ReportSection.tsx"), "utf8");
-  assert.match(report, /<CarrierReportCard[\s\S]{0,80}from=\{dateRange\.from\}/, "🔴 блоку «Дзвінки на мобільні» у «Звіті» немає");
+  // Ланцюжок ДО ЕКРАНА, а не «блок є в якомусь файлі» (правило 10): меню «Звіт» рендерить `ReportPlanSection`, і саме
+  // в ньому блок. 📐 Куплено 30.09.2026: блок стояв у `ReportSection`, який «Звіт» не рендерить, — гейт був зелений,
+  // а на екрані блоку не було.
+  assert.match(dash, /section === "report" && auth && \(\s*<ReportPlanSection/, "🔴 меню «Звіт» рендерить не ReportPlanSection — блок треба шукати в іншому файлі");
+  const report = readFileSync(FE("pages/dashboard/sections/ReportPlanSection.tsx"), "utf8");
+  assert.match(report, /<CarrierReportCard from=\{selectedPeriod\.from\} to=\{selectedPeriod\.to\}/, "🔴 блоку «Дзвінки на мобільні» у «Звіті» немає");
   const card = readFileSync(FE("pages/dashboard/sections/CarrierReportCard.tsx"), "utf8");
   for (const fn of ["fetchCarrierReport(", "fetchCarrierCalls("]) assert.ok(card.includes(fn), `🔴 блок звіту не кличе ${fn}`);
   const api = readFileSync(FE("api.ts"), "utf8");
@@ -1173,9 +1152,9 @@ test("#1069 ПРОВОДКА ФРОНТУ: вкладки ТЗ, картка у�
   assert.match(api, /\/audio`, \{ responseType: "blob" \}/, "🔴 запис не йде байтами з нашого сервера");
   const V = await loadCarrierView();
   assert.deepEqual(V.CARRIER_TABS.map((x) => x.label), ["Клієнти", "Перевізники", "Інше", "На перевірці"], "🔴 вкладки ≠ ТЗ");
-  assert.deepEqual(["client", "carrier", "other", "review", "error", "waiting"].map(V.tabOf), ["client", "carrier", "other", "review", "review", "review"],
-    "🔴 нерозсортоване (помилка, AI слухає) загубилось з вкладок");
-  assert.deepEqual(Object.keys(V.CATEGORY_UI).sort(), ["carrier", "client", "error", "other", "review", "waiting"]);
+  assert.deepEqual(["client", "carrier", "other", "review", "error", "waiting", "no_talk"].map(V.tabOf), ["client", "carrier", "other", "review", "review", "review", null],
+    "🔴 нерозсортоване (помилка, AI слухає) загубилось з вкладок або «без розмови» потрапило у вкладку");
+  assert.deepEqual(Object.keys(V.CATEGORY_UI).sort(), ["carrier", "client", "error", "no_talk", "other", "review", "waiting"]);
   const { OTHER_TYPE_UA } = await import("./carrierCallRules.js");
   assert.deepEqual(V.OTHER_TYPE_UI, { ...OTHER_TYPE_UA }, "🔴 підтипи фронту ≠ бекенду");
   const { HUMAN_DECISIONS } = await import("./carrierDecisions.js");
@@ -1413,4 +1392,93 @@ test("#1076 ЗАДАЧНИК · ЖИВА СХЕМА: одна відкрита �
     INSERT INTO carrier_review_tasks (task_id, manager_id, opened_at) SELECT id, 10611, now() FROM t`), /idx_carrier_review_tasks_open/,
     "🔴 база дозволила другу відкриту задачу менеджеру");
   assert.match(SRC("jobs/carrierCallJob.ts"), /reviewTasks: true,/, "🔴 бойова джоба задач не ставить");
+});
+
+/**
+ * #1077 — КАТЕГОРІЯ УГОДИ (редакція 30.09.2026): людина сильніша за AI; упевнений AI — його категорія; невпевнений і
+ * «не чути» — «На перевірці»; без розмови від 10 с — «без розмови» (закривається, не аналізується); збій після спроб —
+ * «Помилка»; решта — AI слухає.
+ * 🧨 Червоніє, якщо AI переважить людину, «без розмови» піде людині на перевірку чи помилка злиється з очікуванням.
+ */
+test("#1077 КАТЕГОРІЯ: людина > AI; поріг 0,85 з обох боків; без розмови — окремо; збій — помилка; черга — AI слухає", async () => {
+  const { dealCategory } = await import("./carrierCallRules.js");
+  const r = (role: CarrierResult["caller_role"], conf: number, qc: CarrierResult["quote_check"] = "counterpart"): CarrierResult =>
+    ({ summary: "", manager_channel: "1", caller_role: role, caller_role_confidence: conf, caller_role_quote: "x", quote_check: qc });
+  const cat = (x: Parameters<typeof dealCategory>[0]) => { const v = dealCategory(x); return [v.category, v.source]; };
+  const base = { human: null, result: null, dealState: "own", ai: null } as Parameters<typeof dealCategory>[0];
+  assert.deepEqual(cat({ ...base, human: "client", result: r("carrier", 0.99), ai: "done" }), ["client", "human"], "🔴 AI переважив людину");
+  assert.deepEqual(cat({ ...base, result: r("carrier", 0.85), ai: "done" }), ["carrier", "ai"]);
+  assert.deepEqual(cat({ ...base, result: r("carrier", 0.8499), ai: "done" }), ["review", null], "🔴 невпевнений став категорією");
+  assert.deepEqual(cat({ ...base, result: r("client", 0.95, "manager"), ai: "done" }), ["review", null], "🔴 цитата менеджера — упевнений клієнт");
+  assert.deepEqual(cat({ ...base, result: r("other", 0.9, "empty"), ai: "done" }), ["other", "ai"], "дзеркало: «Інше» цитати не вимагає");
+  assert.deepEqual(cat({ ...base, result: r("unclear", 0.3, "empty"), ai: "done" }), ["review", null]);
+  assert.deepEqual(cat({ ...base, dealState: "no_talk" }), ["no_talk", null], "🔴 угоду без розмови віддано людині на перевірку");
+  assert.deepEqual(cat({ ...base, dealState: "waiting" }), ["waiting", null]);
+  for (const ai of ["llm_failed", "stt_failed", "recording_unavailable", "no_text"] as const)
+    assert.deepEqual(cat({ ...base, ai }), ["error", null], `🔴 «${ai}» не став «Помилкою»`);
+  for (const ai of ["queued", "llm_pending", "capped", "not_enabled", "not_queued"] as const)
+    assert.deepEqual(cat({ ...base, ai }), ["waiting", null], `🔴 «${ai}» — не «AI слухає»`);
+});
+
+/**
+ * #1078 — БЕЗ РОЗМОВИ (Роман 30.09.2026: «розмови менш 10 секунд видаляємо, не аналізуй їх»; строк — 4 год після заміру):
+ * угода без розмови від 10 с стає «без розмови» щойно минув строк (бойовий — `carrierNoTalkCloseMin`, 240 хв; гейт
+ * ганяє механізм зі строком 0 і з типовою добою), закривається
+ * «Немає зв'язку» (6343067) з приміткою й нічого не оплачує; угода, в номера якої є раніша угода, що ще слухається, —
+ * чекає повтору вердикту, а не закривається; у звіті — окремим числом, поза «усього».
+ * 🧨 Червоніє, якщо чекати добу, закрити сусіда за номером, поставити не ту причину чи домішати в «усього».
+ */
+test("#1078 БЕЗ РОЗМОВИ · ЖИВА СХЕМА: після строку (бойовий — 4 год) «Немає зв'язку», без оплати; сусід за номером чекає; у звіті окремо", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  const { resolveCarrierDeals } = await import("./carrierCalls.js");
+  const { runCarrierClose } = await import("./carrierClose.js");
+  const { carrierDealRows, carrierReport } = await import("./carrierDeals.js");
+  const B = 107800;
+  const silent = phone(B, 1), P = phone(B, 2);
+  await carrierDeal(c, B + 1, silent, min(20));                  // дзвінок 5 с — розмови від 10 с немає
+  await call(c, "1078-short", min(20), 5, silent);
+  await call(c, "1078-talk", min(40), 40, P);                    // номер P: перша угода з розмовою
+  await carrierDeal(c, B + 2, P, min(40));
+  await carrierDeal(c, B + 3, P, min(20));                       // друга угода того ж номера — повторить вердикт
+  const r1 = await resolveCarrierDeals(c.db, NOW, 0);
+  const st = async (id: number) => (await row(c, id)).state;
+  assert.equal(await st(B + 1), "no_talk", "🔴 угода без розмови чекає добу замість закриття одразу");
+  assert.equal(await st(B + 2), "own");
+  assert.equal(await st(B + 3), "waiting", "🔴 сусіда за номером закрито «немає зв'язку», хоча розмова в номера є");
+  assert.equal(r1.noTalk, 1);
+  await resolveCarrierDeals(c.db, NOW, 0);
+  assert.equal(await st(B + 3), "reused", "дзеркало: наступним проходом сусід повторює вердикт номера");
+  assert.equal((await resolveCarrierDeals(c.db, NOW)).noTalk, 0, "дзеркало: за замовчуванням — доба (стара поведінка ядра)");
+  const k = fakeKommo();
+  const rep = await runCarrierClose(c.db, NOW, "live", new Set([B + 1]), k.kommo);
+  assert.equal(rep.closed, 1);
+  assert.deepEqual(k.calls.patch[0], [{ id: B + 1, pipeline_id: 8921928, status_id: 143,
+    custom_fields_values: [{ field_id: 2097265, values: [{ enum_id: 6343067 }] }] }], "🔴 закрито не «Немає зв'язку»");
+  assert.match(((k.calls.notes[0] as { params: { text: string } }[])[0]).params.text, /розмови від 10 с не було/);
+  const t0 = (await c.raw.query("SELECT 1 FROM call_transcripts WHERE uniqueid = '1078-short'")).rowCount;
+  assert.equal(t0, 0, "🔴 короткий дзвінок поставлено на розпізнавання");
+  const rows = await carrierDealRows(c.db, { period: null, scope: {}, ids: [B + 1, B + 2] });
+  const rp = carrierReport(rows);
+  assert.deepEqual([rp.total.noTalk, rp.total.total, rp.total.unsorted], [1, 1, 1], "🔴 «без розмови» домішано в «усього» чи «не розібрано»");
+  assert.match(SRC("jobs/carrierCallJob.ts"), /noTalkAfterMin: config\.callAi\.carrierNoTalkCloseMin/, "🔴 бойова джоба не бере строк «без розмови»");
+  assert.match(SRC("config.ts"), /carrierNoTalkCloseMin: Number\(process\.env\.CARRIER_NO_TALK_CLOSE_MIN \?\? "240"\)/, "🔴 строк «без розмови» ≠ рішенню 30.09.2026 (4 год)");
+});
+
+/**
+ * #1079 — ЕКРАН МЕНЕДЖЕРА (Роман 30.09.2026): менеджер не бачить службового рядка (витрати, режими) і точності AI,
+ * у його таблиці немає колонки «Менеджер»; тімлід не бачить службового рядка; керівництво — усе. Звіт з одним
+ * менеджером не повторює його рядок «разом». Роль іде в секцію з контейнера.
+ * 🧨 Червоніє, якщо показати менеджеру службовий рядок чи не передати роль.
+ */
+test("#1079 ЕКРАН МЕНЕДЖЕРА: без службового рядка й колонки «Менеджер»; тімлід без службового; роль — з контейнера", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8");
+  assert.match(sec, /const isManager = roleKey === "manager";/);
+  assert.match(sec, /const isLead = roleKey !== "manager" && roleKey !== "team_lead";/, "🔴 керівництво визначено не як «не менеджер і не тімлід»");
+  assert.match(sec, /\{meta && isLead && \(\s*<p/, "🔴 службовий рядок бачить не лише керівництво");
+  assert.match(sec, /\{!isManager && <th style=\{cell\}>Менеджер<\/th>\}/, "🔴 колонка «Менеджер» є в менеджера");
+  assert.match(sec, /\{meta && isLead && meta\.agreement\.length > 0 && \(/, "🔴 точність AI бачить не лише керівництво");
+  assert.match(readFileSync(FE("pages/Dashboard.tsx"), "utf8"), /<CarrierCallsSection roleKey=\{auth\?\.roleKey \?\? null\} \/>/, "🔴 роль не передано в секцію");
+  const card = readFileSync(FE("pages/dashboard/sections/CarrierReportCard.tsx"), "utf8");
+  assert.match(card, /\{rep\.managers\.length > 1 && <tr/, "🔴 звіт з одним менеджером повторює його рядок «разом»");
 });

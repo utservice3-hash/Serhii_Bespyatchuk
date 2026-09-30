@@ -78,7 +78,7 @@ export interface ResolveReport { reused: number; own: number; noTalk: number; se
  * Крок угод: повтор вердикту номера → своя розмова → «розмови не було» → друга спроба.
  * Порядок має значення: спершу повтор, щоб не платити вдруге за номер, який уже слухали.
  */
-export async function resolveCarrierDeals(db: Db, now: Date): Promise<ResolveReport> {
+export async function resolveCarrierDeals(db: Db, now: Date, noTalkAfterMin: number = CARRIER_RULE.windowAfterHours * 60): Promise<ResolveReport> {
   const rep: ResolveReport = { reused: 0, own: 0, noTalk: 0, secondTalk: 0 };
 
   // ① Номер слухали за 30 днів (своя розмова іншої угоди, вердикт не «не розібрати») — беремо його вердикт.
@@ -107,11 +107,15 @@ export async function resolveCarrierDeals(db: Db, now: Date): Promise<ResolveRep
        FROM cand WHERE cand.kommo_id = d.kommo_id AND cand.u IS NOT NULL`,
     talkParams(now))).rowCount ?? 0;
 
-  // ③ Доба минула, розмови ≥10 с немає — номер пропускаємо.
+  // ③ Строк минув (`noTalkAfterMin`: за замовчуванням доба; бойова джоба — рішення Романа 30.09.2026), розмови ≥10 с
+  //    немає — «без розмови». Угоду, у номера якої є інша угода, що ще чекає чи вже слухається, не чіпаємо: вона
+  //    повторить вердикт номера наступним проходом (крок ①), а не закриється як «немає зв'язку».
   rep.noTalk = (await db.query(
-    `UPDATE carrier_call_deals SET state = 'no_talk', updated_at = $1
-      WHERE state = 'waiting' AND deal_created_at + make_interval(hours => $2) < $1::timestamptz`,
-    [now.toISOString(), CARRIER_RULE.windowAfterHours])).rowCount ?? 0;
+    `UPDATE carrier_call_deals d SET state = 'no_talk', updated_at = $1
+      WHERE d.state = 'waiting' AND d.deal_created_at + make_interval(mins => $2) <= $1::timestamptz
+        AND NOT EXISTS (SELECT 1 FROM carrier_call_deals o WHERE o.phone = d.phone AND o.kommo_id <> d.kommo_id
+                         AND o.state IN ('own', 'waiting') AND o.deal_created_at < d.deal_created_at)`,
+    [now.toISOString(), Math.max(0, Math.round(noTalkAfterMin))])).rowCount ?? 0;
 
   // ④ Першу розмову не розібрати (модель: unclear; або запису немає / розпізнати не вдалось) — друга, пізніша.
   //    Текст, видалений за строком зберігання, — не причина слухати ще раз.
@@ -171,6 +175,8 @@ export interface CarrierTickEnv {
   alert: (text: string) => Promise<void>;
   /** Точка старту: угоди, створені раніше, не записуються й не слухаються. `null` — без межі. */
   launchAt?: Date | null;
+  /** Через скільки хвилин угода без розмови ≥10 с стає «без розмови» (і закривається). Не задано — доба. */
+  noTalkAfterMin?: number;
   /** Задача «розібрати дзвінки на мобільні» в задачнику (лише бойова джоба; гейти вмикають явно). */
   reviewTasks?: boolean;
   /** Закриття в Kommo (перевізники, рішення людей; AI-«Інше» — `otherMode`). Не задано — кроку немає (як `off`). */
@@ -197,7 +203,7 @@ export async function runCarrierTick(env: CarrierTickEnv): Promise<CarrierTickRe
   const leads = await env.stageLeads();
   const launchAt = env.launchAt ?? null;
   const recorded = await recordStageDeals(env.db, leads, t0, launchAt);
-  const resolved = await resolveCarrierDeals(env.db, t0);
+  const resolved = await resolveCarrierDeals(env.db, t0, env.noTalkAfterMin);
   // Слухаємо лише угоди від точки старту: записані раніше (до 30.09.2026) більше не оплачуються.
   const ids = await carrierActiveIds(env.db, t0, launchAt);
   const enqueued = await enqueueTranscripts(env.db, ids, STT_PROVIDER, ELEVENLABS_STT_MODEL, t0);

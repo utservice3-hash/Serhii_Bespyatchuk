@@ -10584,7 +10584,7 @@ dashboardRouter.get("/carrier-calls/report", async (req, res) => {
   const filtered = await filterRemovedByManager(pool, from, to, CARRIER_STAGE.pipelineId, scope, CARRIER_SINCE());
   const line = (x: (typeof rep.managers)[number]) => ({ managerId: x.managerId, managerName: x.managerName, teamId: x.teamId, teamName: x.teamName,
     total: x.total, clients: x.clients, carriersAuto: x.carriersAuto, carriersManual: x.carriersManual,
-    otherAuto: x.otherAuto, otherManual: x.otherManual, unsorted: x.unsorted, overdue: x.overdue });
+    otherAuto: x.otherAuto, otherManual: x.otherManual, unsorted: x.unsorted, overdue: x.overdue, noTalk: x.noTalk });
   res.json({
     period: { from, to },
     managers: rep.managers.map((x) => ({ ...line(x), filterRemoved: filtered.get(x.managerId) ?? 0 })),

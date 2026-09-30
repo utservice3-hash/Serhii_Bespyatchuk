@@ -4538,9 +4538,11 @@ ALTER TABLE carrier_close_log ALTER COLUMN uniqueid DROP NOT NULL;
 ALTER TABLE carrier_close_log ALTER COLUMN confidence DROP NOT NULL;
 ALTER TABLE carrier_close_log ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT 'carrier';
 ALTER TABLE carrier_close_log ADD COLUMN IF NOT EXISTS other_type TEXT;
+-- «no_talk» — угода без розмови від 10 с, «Немає зв'язку» (Роман 30.09.2026). Перше обмеження (без no_talk) знімаємо.
+ALTER TABLE carrier_close_log DROP CONSTRAINT IF EXISTS carrier_close_log_reason_chk;
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'carrier_close_log_reason_chk') THEN
-    ALTER TABLE carrier_close_log ADD CONSTRAINT carrier_close_log_reason_chk CHECK (reason IN ('carrier','other'));
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'carrier_close_log_reason_chk2') THEN
+    ALTER TABLE carrier_close_log ADD CONSTRAINT carrier_close_log_reason_chk2 CHECK (reason IN ('carrier','other','no_talk'));
   END IF;
 END $$;
 
