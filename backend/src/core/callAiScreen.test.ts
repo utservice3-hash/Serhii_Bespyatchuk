@@ -517,7 +517,7 @@ test("#856 ТИП · ЖИВА СХЕМА: «Виключені» з причин
   const body = route.slice(at, next > at ? next : undefined);
   assert.ok(body.includes("setCallType("), "🔴 роут зміни типу не пише журнал");
   assert.match(body, /const auth = req\.auth!;\s*if \(!canEditType\(auth\.roleKey\)\) \{ res\.status\(403\)/, "🔴 право на зміну типу — не першим оператором");
-  assert.ok(body.indexOf("aiCallCard(") < body.indexOf("setCallType("), "🔴 тип пишеться до перевірки скоупу");
+  assert.match(body, /const card = await aiCallCard\([^;]+;\s*if \(!card\) \{ res\.status\(404\)[\s\S]*setCallType\(/, "🔴 тип пишеться без відмови 404 поза скоупом");
 });
 
 /**
@@ -592,10 +592,10 @@ test("#863 КОМЕНТАРІ Й ЗАПИС: права за видом коме
   const body = (head: string) => { const at = route.indexOf(head); assert.ok(at > 0, `🔴 роуту ${head} немає`); const nx = route.indexOf("dashboardRouter.", at + 10); return route.slice(at, nx > at ? nx : undefined); };
   const note = body('dashboardRouter.put("/ai-calls/:uniqueid/note"');
   assert.match(note, /const kind = String\(req\.body\?\.kind \?\? ""\);\s*if \(!canWriteNote\(auth\.roleKey, kind\)\) \{ res\.status\(403\)/, "🔴 право на коментар — не першим оператором");
-  assert.ok(note.indexOf("aiCallCard(") > 0 && note.indexOf("aiCallCard(") < note.indexOf("setCallNote("), "🔴 коментар пишеться до перевірки скоупу");
+  assert.match(note, /const card = await aiCallCard\([^;]+;\s*if \(!card\) \{ res\.status\(404\)[\s\S]*setCallNote\(/, "🔴 коментар пишеться без відмови 404 поза скоупом");
   const rec = body('dashboardRouter.get("/ai-calls/:uniqueid/recording"');
   assert.match(rec, /const auth = req\.auth!;\s*if \(!transcriptAllowed\(auth, FIRST_TOUCH_TRANSCRIPT_ROLES\)\) \{ res\.status\(403\)/, "🔴 право на запис — не першим оператором");
-  assert.ok(rec.indexOf("aiCallCard(") < rec.indexOf("fetchCallRecording("), "🔴 запис завантажується до перевірки скоупу");
+  assert.match(rec, /const card = await aiCallCard\([^;]+;\s*if \(!card\) \{ res\.status\(404\)[\s\S]*fetchCallRecording\(/, "🔴 запис віддається без відмови 404 поза скоупом");
   const rep = body('dashboardRouter.get("/ai-calls/team-report"');
   assert.match(rep, /aiCallsList\(pool,[\s\S]*teamReport\(rows\)/, "🔴 звіт тімліда рахується не з рядків вкладки");
   assert.match(rep, /missedScopeFor\(req\.auth!, req\.query\)/, "🔴 звіт тімліда без клампу скоупу");
