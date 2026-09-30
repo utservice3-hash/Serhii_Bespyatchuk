@@ -50,6 +50,8 @@ import { hiringRouter } from "./routes/hiring.js";
 import { baRouter } from "./routes/businessAssistant.js";
 import { financeRouter } from "./routes/finance.js";
 import { constructorRouter } from "./routes/constructor.js";
+import { surveysRouter } from "./routes/surveys.js";
+import { tickSurveys } from "./surveys/surveyScheduler.js";
 import { receivablesClaimRouter } from "./routes/receivablesClaims.js";
 import { nominationsRouter } from "./routes/nominations.js";
 import { peopleRouter } from "./routes/people.js";
@@ -172,6 +174,7 @@ app.use("/api/hiring", hiringRouter);
 app.use("/api/ba", baRouter); // 🗂 Бізнес-асистент: претензії й судовий реєстр (задача 4314)
 app.use("/api/finance", financeRouter); // 💰 Фінанси: план/факт витрат і статті (29.09.2026)
 app.use("/api/constructor", constructorRouter); // 📄 Конструктор документів — пакет Сергія (30.09.2026)
+app.use("/api/surveys", surveysRouter); // 📋 Опитування команди — пакет Сергія (30.09.2026)
 app.use("/api/receivables-claims", receivablesClaimRouter); // кнопка «Проблемний клієнт» у дебіторці
 app.use("/api/nominations", nominationsRouter); // 🏆 Номінації тижня (21.09.2026)
 app.use("/api/people", peopleRouter); // 📷 Фото співробітників (22.09.2026)
@@ -865,6 +868,14 @@ cron.schedule("2,7,12,17,22,27,32,37,42,47,52,57 * * * *", () => {
     await runJob("missedCallTasks", () => missedCallTasks());
   })();
 });
+
+// 📋 ОПИТУВАННЯ (30.09.2026, пакет Сергія): автозакриття по дедлайну + підсумок, запуск запланованих випусків,
+// нагадування. Раз на 5 хв ПЕРЕЛІКОМ хвилин (:03, :08 …) — не на :00/:30 із syncKommo і не разом із поштарем;
+// «3-59/5» node-cron читає інакше (див. коментар про missedCallTasks нижче). Функція ідемпотентна.
+cron.schedule("3,8,13,18,23,28,33,38,43,48,53,58 * * * *", () => {
+  void runJob("tickSurveys", async () => { await tickSurveys(pool); });
+});
+
 
 // 🔴 СТАРТ БЕЗ СПЛЕСКУ ПАМʼЯТІ (2 ГБ shared-акаунт adm.tools, crash-loop 15.07.2026).
 // Раніше вся батарея синків стартувала СИНХРОННО на буті → пік памʼяті → хостинг

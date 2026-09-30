@@ -71,6 +71,8 @@ export const FORBIDDEN_TABLES = [
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_import_months",
   // 📄 Конструктор документів (30.09.2026): реквізити контрагентів і суми заявок. REVOKE у схемі.
   "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates",
+  // 📋 Опитування (30.09.2026): відповіді людей, зокрема анонімні. REVOKE у схемі.
+  "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   // 🗂 Бізнес-асистент (29.09.2026): кому видано техніку — імена людей, як `employees`. REVOKE у схемі. Тримає #986.
   "ba_equipment_issues",
 ];
