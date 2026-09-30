@@ -25,6 +25,7 @@ export const MANIFEST_FILES: string[] = [
   "core/clientPlans.test.js",
   "core/forecast.test.js",
   "core/clientCard.test.js",
+  "kommo/leadChildLink.test.js",
   "versionStale.test.js",
   "clientStale.test.js",
   "bundleBuildSha.test.js",
@@ -2179,6 +2180,12 @@ export const MANIFEST_TESTS: string[] = [
   "#1091b ГРОШІ: постійні поза «Успішними» й «Очікуванням», тотожність передач ціла, «Очікування» = оплачено + «Очікуємо»",
   "#1091c ЖИВИЙ SQL: історія успіхів — лише FC-142 з closed_at без мінусових; передача постійного — поза грошима",
   "#1092 ГРОШІ ПО ОДИНИЦЯХ: Σ тижнів/днів == період по кожному полю й людині; тиждень — з понеділка",
+  // 30.09.2026: межа «успішного дзвінка» — як фільтр Ringostat «більше 00:08» — core/leadgenHandoffLink.test.ts.
+  "#1093 ЖИВИЙ SQL: успішний дзвінок — вихідний, розмова ДОВША за 8 с (8 с — ні, 9 с — так)",
+  // 30.09.2026: передача ↔ угода менеджера за приміткою Kommo lead_auto_created — kommo/leadChildLink.test.ts,
+  // core/leadgenHandoffLink.test.ts (#1094b).
+  "#1094 ПРИМІТКА KOMMO: «child» і «parent» дають одну пару; чуже й биті id — null",
+  "#1094b ЖИВИЙ SQL: угода менеджера — спершу за приміткою Kommo, здогад за клієнтом — лише без неї",
   "#1101 СТРАХОВКА: невдалий ЗАПИС показує причину сервера; читання, 401, скасоване й не-серверне — мовчать",
   "#1101b СТРАХОВКА ПІДКЛЮЧЕНА: застосунок у <ToastProvider>, і той слухає непіймані помилки через mutationFailureText",
   "#1102 commitOptimistic: при помилці значення ПОВЕРТАЄТЬСЯ і причина передається; при успіху лишається нове",
