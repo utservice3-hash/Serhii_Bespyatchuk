@@ -4614,6 +4614,21 @@ CREATE TABLE IF NOT EXISTS call_type_overrides (
 );
 CREATE INDEX IF NOT EXISTS idx_call_type_overrides_call ON call_type_overrides(uniqueid, set_at DESC);
 REVOKE ALL ON call_type_overrides FROM ai_readonly;
+
+-- 📝 КОМЕНТАРІ ДО ПЕРШОГО ДОТИКУ (ТЗ «звіт тімліда» 30.09.2026, п.5 і п.6.3): «Чому не озвучено ціну» (`price`) —
+-- пише менеджер по своїх розмовах, тімлід — по команді, адмін — усе; «Опрацьовано» (`missed`) до невиконаної
+-- домовленості — тімлід і адмін, після нього банер «Пообіцяв і не передзвонив» цю розмову більше не показує.
+-- Зберігається в дашборді, НЕ в Kommo. Один чинний коментар кожного виду на розмову; хто й коли — поруч.
+CREATE TABLE IF NOT EXISTS first_touch_notes (
+  uniqueid    TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('price', 'missed')),
+  note        TEXT NOT NULL CHECK (length(btrim(note)) > 0),
+  set_by      INTEGER,
+  set_by_name TEXT,
+  set_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (uniqueid, kind)
+);
+REVOKE ALL ON first_touch_notes FROM ai_readonly;
 -- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
 
 -- 🎧 ВКЛАДКА «ПЕРШИЙ ДОТИК · AI» (рішення Романа 28.09.2026). Без цього рядка вкладку не побачив би
@@ -4621,14 +4636,15 @@ REVOKE ALL ON call_type_overrides FROM ai_readonly;
 -- ні (П18). Ідемпотентно й НЕ перетирає рішень адміна: чіпаємо лише ролі, де ключа ще немає.
 -- ⚠️ revert коду ключ із ролей не прибирає — знімати тумблером у Налаштуваннях.
 UPDATE roles SET screen_access = screen_access || '{"ai-calls":true}'::jsonb
-  WHERE key IN ('admin', 'kvp', 'ceo', 'opdir', 'team_lead')
+  WHERE key IN ('admin', 'kvp', 'ceo', 'opdir', 'team_lead', 'manager')
     AND NOT (screen_access ? 'ai-calls');
+-- ↑ 'manager' — ТЗ «звіт тімліда» 30.09.2026 п.7: менеджер бачить свої заявки й свій звіт (кламп — `missedScopeFor`).
 -- 🙅 Фінансисту, HR і менеджеру вкладки немає (рішення Романа 28.09.2026). Синк «financier = екрани адміна»
 -- вище копіює фінансисту все, що має адмін, тож на ДРУГОМУ прогоні схеми `ai-calls` протікала: заміряно на проді
 -- 29.09.2026 після чужого викату з міграцією — `/api/dashboard/ai-calls` для фінансиста 403 → 200 (#11). Той самий
 -- механізм, що з «Бізнес-асистентом» (#741b). Зняття стоїть ПІСЛЯ синку й після сиду; тримає #794.
 UPDATE roles SET screen_access = screen_access - 'ai-calls'
- WHERE key IN ('financier', 'hr', 'manager');
+ WHERE key IN ('financier', 'hr');
 
 -- 🚚 ВКЛАДКА «ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ»: керівництво (admin, ceo, opdir, kvp — рішення 29.09.2026) + тімлід і
 -- менеджер (ТЗ «Відсів перевізників», Роман 30.09.2026: менеджер — свої, тімлід — команда; межа — у ядрі).

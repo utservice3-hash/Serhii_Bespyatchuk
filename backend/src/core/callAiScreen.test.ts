@@ -110,7 +110,7 @@ test("#830 ЕКРАН AI · ЖИВА СХЕМА: список = вибірка �
  * перший вихідний після розмови з Ringostat.
  * 🧨 Червоніє, якщо віддати текст усім, сховати його від КВП, чи відкрити картку поза скоупом.
  */
-test("#798 ЕКРАН AI · ЖИВА СХЕМА: картка — текст адміну, КВП, CEO й опдиру, тімліду — ні; чужий дзвінок 404; наступний вихідний", async (t) => {
+test("#860 ЕКРАН AI · ЖИВА СХЕМА: картка — текст тімліду своєї команди й менеджеру своїх; чужий дзвінок 404; наступний вихідний", async (t) => {
   const c = await ctx(t); if (!c) return;
   const { aiCallCard, transcriptAllowed, FIRST_TOUCH_TRANSCRIPT_ROLES: R } = await import("./callAiScreen.js");
   const kvp = await aiCallCard(c.db, "x1", transcriptAllowed({ roleKey: "kvp" }, R), {});
@@ -119,8 +119,11 @@ test("#798 ЕКРАН AI · ЖИВА СХЕМА: картка — текст а�
   assert.ok(admin?.turns, "дзеркало: адмін мусить бачити текст");
   const lead = await aiCallCard(c.db, "x1", transcriptAllowed({ roleKey: "team_lead" }, R), { teamId: 901 });
   assert.ok(lead, "🔴 тімлід не відкрив картку своєї команди");
-  assert.equal(lead.turns, null, "🔴 тімлід отримав повний текст розмови");
-  assert.equal(lead.transcriptHidden, true);
+  assert.ok(lead.turns, "🔴 тімлід своєї команди не отримав повного тексту (ТЗ 30.09.2026)");
+  assert.equal(lead.transcriptHidden, false);
+  const own = await aiCallCard(c.db, "x1", transcriptAllowed({ roleKey: "manager" }, R), { managerId: 9011 });
+  assert.ok(own?.turns, "🔴 менеджер не отримав тексту СВОЄЇ розмови");
+  assert.equal(await aiCallCard(c.db, "x1", true, { managerId: 9021 }), null, "🔴 менеджер відкрив чужу розмову");
   assert.equal(lead.result?.promises.length, 2, "🔴 тімлід не бачить витягу з цитатами");
   for (const role of ["ceo", "opdir"]) assert.ok((await aiCallCard(c.db, "x1", transcriptAllowed({ role: "admin", roleKey: role }, R), {}))?.turns, `🔴 ${role} не отримав повного тексту (рішення 29.09.2026)`);
   assert.equal((await aiCallCard(c.db, "x1", transcriptAllowed({ role: "admin", roleKey: "financier" }, R), {}))?.turns, null, "🔴 фінансист отримав повний текст");
@@ -162,23 +165,25 @@ test("#799 СТАНИ: розпізнавання × аналіз × порож�
  * правом на повний текст — підмножина ролей вкладки.
  * 🧨 Червоніє, якщо розвести сид і матрицю або прибрати межу роута.
  */
-test("#831 ДОСТУП: матриця = сид вкладки, межа роута — ai-calls, текст — вужче за вкладку", async () => {
+test("#861 ДОСТУП: матриця читання = сид вкладки (з менеджером), межа роута — ai-calls, текст — усім ролям вкладки у своєму скоупі", async () => {
   const schema = SRC("db/schema.sql");
   const m = /UPDATE roles SET screen_access = screen_access \|\| '\{"ai-calls":true\}'::jsonb\s+WHERE key IN \(([^)]+)\)/.exec(schema);
   assert.ok(m, "🔴 сиду вкладки ai-calls у схемі немає — вкладку не побачить ніхто, навіть адмін");
   const seeded = m[1].split(",").map((x) => x.trim().replace(/'/g, "")).sort();
-  assert.deepEqual(seeded, ["admin", "ceo", "kvp", "opdir", "team_lead"]);
+  assert.deepEqual(seeded, ["admin", "ceo", "kvp", "manager", "opdir", "team_lead"]);
   const rows = ACCESS_MATRIX.filter((r) => r.path.startsWith("/api/dashboard/ai-calls") && r.method === "GET");
-  assert.equal(rows.length, 3, "🔴 не всі роути екрана в матриці");
+  assert.equal(rows.length, 5, "🔴 не всі роути читання екрана в матриці (список, meta, звіт тімліда, картка, запис)");
   for (const r of rows) {
     assert.deepEqual([...r.allow].sort(), seeded, `🔴 ${r.path}: матриця ≠ сид вкладки`);
-    for (const d of ["manager", "financier", "hr"]) assert.ok(r.deny.includes(d as never), `🔴 ${r.path}: ${d} не в deny`);
+    for (const d of ["financier", "hr"]) assert.ok(r.deny.includes(d as never), `🔴 ${r.path}: ${d} не в deny`);
   }
   const { tabsForPath } = await import("../auth/routeTab.js");
   for (const p of ["/api/dashboard/ai-calls", "/api/dashboard/ai-calls/meta", "/api/dashboard/ai-calls/123.45"])
     assert.deepEqual(tabsForPath(p), ["ai-calls"], `🔴 ${p} без межі вкладки`);
   for (const role of TRANSCRIPT_ROLES) assert.ok(seeded.includes(role), `🔴 ${role} бачить текст, але не бачить вкладки`);
   assert.deepEqual([...TRANSCRIPT_ROLES].sort(), ["admin", "kvp"]);
+  assert.deepEqual([...FIRST_TOUCH_TRANSCRIPT_ROLES].sort(), seeded, "🔴 текст «Першого дотику» не збігається з ролями вкладки (ТЗ 30.09.2026)");
+  assert.match(SRC("routes/dashboard.ts"), /const canSeeExcluded = req\.auth!\.roleKey !== "manager";/, "🔴 менеджер бачить «Виключені» (ТЗ 30.09.2026 п.7: лише тімлід і адмін)");
 });
 
 interface ViewMod {
@@ -241,16 +246,16 @@ test("#834 ПРОВОДКА ФРОНТУ: меню → секція → три �
  * текст розмов. Тепер роут кличе `transcriptAllowed(auth)`, а та дивиться лише на `roleKey`.
  * 🧨 Червоніє, якщо роут знову передасть `auth.role` або функція гляне на `role`.
  */
-test("#797 ПОВНИЙ ТЕКСТ «ПЕРШОГО ДОТИКУ» ЗА КЛЮЧЕМ РОЛІ: адмін, КВП, CEO й опдир — так; тімлід, фінансист, HR, менеджер — ні", () => {
+test("#859 ПОВНИЙ ТЕКСТ «ПЕРШОГО ДОТИКУ» ЗА КЛЮЧЕМ РОЛІ: усі ролі вкладки — так (у своєму скоупі); фінансист і HR — ні", () => {
   const R = FIRST_TOUCH_TRANSCRIPT_ROLES;
-  for (const key of ["team_lead", "financier", "hr", "manager"])
+  for (const key of ["financier", "hr"])
     assert.equal(transcriptAllowed({ role: "admin", roleKey: key }, R), false, `🔴 ${key} із сумісною роллю admin бачить повний текст`);
-  for (const key of ["admin", "kvp", "ceo", "opdir"])
-    assert.equal(transcriptAllowed({ role: "admin", roleKey: key }, R), true, `дзеркало: ${key} мусить бачити текст (рішення 29.09.2026)`);
+  for (const key of ["admin", "kvp", "ceo", "opdir", "team_lead", "manager"])
+    assert.equal(transcriptAllowed({ role: "admin", roleKey: key }, R), true, `дзеркало: ${key} мусить бачити текст (ТЗ 30.09.2026: тімлід — команда, менеджер — свої)`);
   assert.equal(transcriptAllowed({ role: "admin" }, R), false, "🔴 токен без roleKey отримав текст за сумісною роллю");
   // «Перевізники за розмовою» ділять `transcriptAllowed` — їхній набір рішення 29.09 НЕ розширило.
   assert.equal(transcriptAllowed({ roleKey: "ceo" }), false, "🔴 розширення для «Першого дотику» протекло на типовий набір (Перевізники)");
-  const seeded = ["admin", "kvp", "ceo", "opdir", "team_lead"];
+  const seeded = ["admin", "kvp", "ceo", "opdir", "team_lead", "manager"];
   for (const r of R) assert.ok(seeded.includes(r), `🔴 ${r} бачить текст, але не бачить вкладки`);
   const route = SRC("routes/dashboard.ts");
   const at = route.indexOf('dashboardRouter.get("/ai-calls/:uniqueid"');
@@ -272,7 +277,8 @@ test("#836 ОДИН ДЗВІНОК = ОДИН РЯДОК: розмова, пер
     managerId: 1, managerName: "М", teamId: 1, teamName: "Т", state: "not_queued" as const, failure: null, summary: null,
     priceDiscussed: null, objections: 0, promises: 0, promisesWithDeadline: 0, unverifiedQuotes: 0,
     pipelineGroup: "full" as const, rejectReason: null, promiseState: null, managerPromises: 0, silentBeforeClose: null,
-    conversationType: null, typeConfidence: null, typeReason: null, priceValue: null, inReport: true, typeCheck: false, typeOverride: null };
+    conversationType: null, typeConfidence: null, typeReason: null, priceValue: null, inReport: true, typeCheck: false, typeOverride: null,
+    priceNote: null, missedNote: null, clientPhone: null };
   const got = collapseByCall([
     { ...base, kommoId: 9, dealCreatedAt: "2026-09-23T07:00:00.000Z" },
     { ...base, kommoId: 5, dealCreatedAt: "2026-09-22T07:00:00.000Z" },

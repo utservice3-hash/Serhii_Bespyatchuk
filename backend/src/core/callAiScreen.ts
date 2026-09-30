@@ -3,7 +3,8 @@ import { adDealFirstTalksSql } from "./adCallFactsRules.js";
 import { OUTBOUND_TYPES } from "./missedCallsRules.js";
 import type { MissedScope } from "./missedCallsRules.js";
 import { ELEVENLABS_STT_MODEL, GEMINI_MODEL, RUBRIC_CURRENT, FIRST_TOUCH_RUBRICS, type AnalysisResult, type Turn } from "./callAiProviders.js";
-import { LLM_PROVIDER, STT_PROVIDER, type AdPredicate } from "./callAiPilot.js";
+import { LLM_PROVIDER, STT_PROVIDER, RINGOSTAT_POLICY, RECORDING_MAX_BYTES, type AdPredicate } from "./callAiPilot.js";
+import { downloadRecording, type DownloadOutcome } from "./ringostatRecording.js";
 import { FIRST_TOUCH_RULE, firstTouchExclusionSql } from "./callAiTick.js";
 import { monthSpend } from "./callAiPipeline.js";
 import { adCallFacts } from "./adCallFacts.js";
@@ -61,7 +62,19 @@ export function transcriptAllowed(auth: { role?: string; roleKey?: string | null
  * для ceo і оп диру»). Окремий набір, а НЕ розширення `TRANSCRIPT_ROLES`: той самий `transcriptAllowed` без
  * другого аргументу стереже «Перевізників за розмовою», а про них рішення не було.
  */
-export const FIRST_TOUCH_TRANSCRIPT_ROLES: ReadonlySet<string> = new Set(["admin", "kvp", "ceo", "opdir"]);
+export const FIRST_TOUCH_TRANSCRIPT_ROLES: ReadonlySet<string> = new Set(["admin", "kvp", "ceo", "opdir", "team_lead", "manager"]);
+// ↑ ТЗ «звіт тімліда» 30.09.2026, відповідь Романа: «відкривай тімліду свою команду а менеджеру свої угоди» — роль
+//   відкриває текст і запис, а ЧИЇ саме розмови — вирішує скоуп картки (тімлід — команда, менеджер — свої).
+
+/**
+ * Хто пише коментар (ТЗ п.5 і п.6.3): «Чому не озвучено ціну» — менеджер (свої), тімлід (команда), адмін;
+ * «Опрацьовано» до невиконаної домовленості — лише тімлід і адмін. Скоуп — у роуті через картку.
+ */
+export function canWriteNote(roleKey: string | null | undefined, kind: string): boolean {
+  if (kind === "price") return roleKey === "admin" || roleKey === "team_lead" || roleKey === "manager";
+  if (kind === "missed") return roleKey === "admin" || roleKey === "team_lead";
+  return false;
+}
 
 /**
  * Стан рядка — ЧЕСНИЙ і РІЗНИЙ для кожної причини «ще не готово». Жоден не показується нулем.
@@ -142,7 +155,14 @@ export interface AiCallRow {
   typeCheck: boolean;
   /** Остання ручна позначка тімліда чи адміна, якщо була. */
   typeOverride: TypeOverride | null;
+  /** «Чому не озвучено ціну» і «Опрацьовано» (ТЗ 30.09.2026) — `null`, якщо не писали. */
+  priceNote: CallNote | null;
+  missedNote: CallNote | null;
+  /** Номер клієнта (для пулу заявок тімліда, ТЗ п.6.2) — `null`, якщо Ringostat його не дав. */
+  clientPhone: string | null;
 }
+
+export interface CallNote { text: string; byName: string | null; at: string }
 
 interface RawRow {
   kommo_id: string | number; uniqueid: string; calldate: Date; call_type: string; billsec: number; created_at: Date;
@@ -153,6 +173,8 @@ interface RawRow {
   /** Розпізнано, але слів немає: `segments` порожній. */
   stt_empty?: boolean | null;
   ov_is_cargo?: boolean | null; ov_by?: string | null; ov_at?: Date | null;
+  pn_text?: string | null; pn_by?: string | null; pn_at?: Date | null;
+  mn_text?: string | null; mn_by?: string | null; mn_at?: Date | null;
 }
 
 const IN_TYPES = new Set(["in", "transitin"]);
@@ -182,8 +204,16 @@ export function foldRow(r: RawRow): AiCallRow {
     managerPromises: res ? managerPromisesOf(res).length : 0,
     silentBeforeClose: null,
     ...typeFields(res, r),
+    priceNote: r.pn_text ? { text: r.pn_text, byName: r.pn_by ?? null, at: r.pn_at ? new Date(r.pn_at).toISOString() : "" } : null,
+    missedNote: r.mn_text ? { text: r.mn_text, byName: r.mn_by ?? null, at: r.mn_at ? new Date(r.mn_at).toISOString() : "" } : null,
+    clientPhone: r.client_phone ?? null,
   };
 }
+
+/** Коментарі «ціна» і «опрацьовано» — по одному на розмову (`alias` — таблиця з `uniqueid`). */
+const notesJoin = (alias: string): string => `LEFT JOIN first_touch_notes pn ON pn.uniqueid = ${alias}.uniqueid AND pn.kind = 'price'
+      LEFT JOIN first_touch_notes mn ON mn.uniqueid = ${alias}.uniqueid AND mn.kind = 'missed'`;
+const NOTE_COLS = "pn.note AS pn_text, pn.set_by_name AS pn_by, pn.set_at AS pn_at, mn.note AS mn_text, mn.set_by_name AS mn_by, mn.set_at AS mn_at";
 
 function typeFields(res: AnalysisResult | null, r: RawRow): Pick<AiCallRow, "conversationType" | "typeConfidence" | "typeReason" | "priceValue" | "inReport" | "typeCheck" | "typeOverride"> {
   const override: TypeOverride | null = r.ov_is_cargo == null ? null
@@ -295,11 +325,12 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
            a.status AS llm_status, a.failure AS llm_failure, a.result,
            rcx.client_phone, d.pipeline_id, d.reject_reason,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
-           ov.ov_is_cargo, ov.ov_by, ov.ov_at
+           ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS}
       FROM (${q.sql}) ft
       LEFT JOIN ringostat_calls rcx ON rcx.uniqueid = ft.uniqueid
       LEFT JOIN deals d ON d.kommo_id = ft.kommo_id
       ${overrideJoin("ft")}
+      ${notesJoin("ft")}
       LEFT JOIN managers m ON m.id = ft.manager_id
       LEFT JOIN teams tm ON tm.id = m.team_id
       LEFT JOIN call_transcripts t ON t.uniqueid = ft.uniqueid AND t.provider = $8 AND t.model = $9
@@ -368,10 +399,11 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
            rc.manager_id, m.name AS manager_name, m.team_id, tm.name AS team_name, rc.client_phone,
            t.status AS stt_status, t.failure AS stt_failure, t.segments, t.duration_sec,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
-           ov.ov_is_cargo, ov.ov_by, ov.ov_at,
+           ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS},
            a.status AS llm_status, a.failure AS llm_failure, a.result
       FROM ringostat_calls rc
       ${overrideJoin("rc")}
+      ${notesJoin("rc")}
       LEFT JOIN managers m ON m.id = rc.manager_id
       LEFT JOIN teams tm ON tm.id = m.team_id
       LEFT JOIN call_transcripts t ON t.uniqueid = rc.uniqueid AND t.provider = $2 AND t.model = $3
@@ -463,4 +495,20 @@ export async function aiCallsMeta(db: Db, now: Date, caps: AiCallsMeta["caps"]):
 export async function setCallType(db: Db, uniqueid: string, isCargo: boolean, by: { userId: number | null; name: string | null }, at: Date): Promise<void> {
   await db.query("INSERT INTO call_type_overrides (uniqueid, is_cargo, set_by, set_by_name, set_at) VALUES ($1, $2, $3, $4, $5)",
     [uniqueid, isCargo, by.userId, by.name, at.toISOString()]);
+}
+
+export type NoteKind = "price" | "missed";
+/** Записати (або замінити) коментар виду `kind`. Порожній текст — прибрати коментар. Право й скоуп — у роуті. */
+export async function setCallNote(db: Db, uniqueid: string, kind: NoteKind, text: string, by: { userId: number | null; name: string | null }, at: Date): Promise<void> {
+  const t = text.trim();
+  if (!t) { await db.query("DELETE FROM first_touch_notes WHERE uniqueid = $1 AND kind = $2", [uniqueid, kind]); return; }
+  await db.query(`INSERT INTO first_touch_notes (uniqueid, kind, note, set_by, set_by_name, set_at) VALUES ($1, $2, $3, $4, $5, $6)
+    ON CONFLICT (uniqueid, kind) DO UPDATE SET note = EXCLUDED.note, set_by = EXCLUDED.set_by, set_by_name = EXCLUDED.set_by_name, set_at = EXCLUDED.set_at`,
+  [uniqueid, kind, t, by.userId, by.name, at.toISOString()]);
+}
+
+/** Байти запису розмови з Ringostat — та сама політика повторів і стеля розміру, що й у розпізнаванні. */
+export async function fetchCallRecording(url: string | null): Promise<DownloadOutcome> {
+  return downloadRecording({ fetch, sleep: (ms) => new Promise((r) => setTimeout(r, ms)), nowMs: () => Date.now() }, url,
+    { ...RINGOSTAT_POLICY, maxBytes: RECORDING_MAX_BYTES });
 }
