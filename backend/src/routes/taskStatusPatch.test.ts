@@ -268,6 +268,9 @@ test("#1080h СПОВІЩЕННЯ «ПРИЙМАЄ»: перехід на зат
 
   assert.equal(N.isAcceptanceAlert(task, "in_progress", YULIA), true, "🔴 «ПРИЙМАЄ» НЕ ОТРИМАВ СИГНАЛУ про задачу на затвердженні");
   assert.equal(N.isAcceptanceAlert(task, "in_progress", EXEC), false, "🔴 сигнал отримав виконавець, а не «Приймає»");
+  // Третя людина — ні виконавець, ні «Приймає» (саботаж S15 спершу лишав гейт зеленим без цього рядка).
+  assert.equal(N.isAcceptanceAlert(task, "in_progress", { userId: 5, managerId: 50 }), false,
+    "🔴 сигнал отримала стороння людина, яку ніхто не призначав приймати");
   assert.equal(N.isAcceptanceAlert({ ...task, reviewerId: 4, assigneeId: 40 }, "in_progress", EXEC), false,
     "🔴 людина, що сама себе приймає, отримала сигнал про власний клік");
   assert.equal(N.isAcceptanceAlert({ ...task, assigneeId: null, assigneeUserId: 6 }, "in_progress", YULIA), false,
