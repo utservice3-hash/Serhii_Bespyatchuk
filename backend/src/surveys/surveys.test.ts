@@ -19,7 +19,7 @@ import { validateSurvey, hasValue, cleanImage } from "./surveyRules.js";
 const FIX = (f: string) => JSON.parse(readFileSync(path.join(import.meta.dirname, "..", "..", "src", "surveys", "fixtures", f), "utf8"));
 
 /** #1130 — розумна вставка поводиться ЯК ЕТАЛОН на 8 текстах + регрес-страховки (кирилиця й `\b`). */
-test("#1130 ПАРСЕР ОПИТУВАНЬ: 8 текстів як у макеті; кирилиця без \\b; eNPS за замовчуванням", () => {
+test("#1130 ПАРСЕР ОПИТУВАНЬ: 8 текстів як у макеті; кирилиця без межі слова; eNPS за замовчуванням", () => {
   const ref = FIX("parser-ref.json") as Record<string, { in: string; out: unknown }>;
   assert.ok(Object.keys(ref).length >= 8, "🔴 фікстура порожня — перевірці нічого порівнювати");
   for (const [name, c] of Object.entries(ref)) assert.deepEqual(parseSurveyText(c.in), c.out, `🔴 «${name}» розібрано не так, як у макеті`);
