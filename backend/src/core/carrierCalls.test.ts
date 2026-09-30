@@ -1559,3 +1559,23 @@ test("#1141 AI ПРОТИ ЛЮДИНИ ПОІМЕННО · ЖИВА СХЕМА: 
   assert.match(route.slice(at, route.indexOf("dashboardRouter.", at + 10)), /agreementRows: lead \? \(await carrierAgreementRows\(pool\)\)/, "🔴 поіменний список віддається не лише керівництву");
   assert.match(route, /const carrierIsLeadership = \(auth: AuthPayload\) => auth\.roleKey !== "manager" && auth\.roleKey !== "team_lead";/);
 });
+
+/**
+ * #1142 — АНАЛІТИКА — ОКРЕМА СТОРІНКА (Роман 30.09.2026: «мав залишитися інтерфейс як і до цього … а графіки і
+ * аналітика на іншій вкладці цієї сторінки»): «Угоди» — угоди за період по категоріях, без графіків; графіки й
+ * «AI проти людини» — лише на «Аналітиці». Перемикач — у шапці, період спільний.
+ * 🧨 Червоніє, якщо графік чи «AI проти людини» повернуться на сторінку угод або зникне перемикач.
+ */
+test("#1142 АНАЛІТИКА — ОКРЕМА СТОРІНКА: «Угоди» без графіків, графіки й «AI проти людини» — лише на «Аналітиці»", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8");
+  assert.match(sec, /\[\["deals", "Угоди"\], \["analytics", "Аналітика"\]\]/, "🔴 перемикача «Угоди / Аналітика» немає");
+  const a = sec.indexOf('if (page === "analytics") return (');
+  assert.ok(a > 0, "🔴 сторінки «Аналітика» немає");
+  const analytics = sec.slice(a, sec.indexOf("\n  );\n", a));
+  assert.match(analytics, /<CarrierStatsCard from=\{from\} to=\{to\}/, "🔴 графіків немає на «Аналітиці»");
+  assert.match(analytics, /<AgreementCard meta=\{meta\} \/>/, "🔴 «AI проти людини» немає на «Аналітиці»");
+  const rest = sec.slice(0, a) + sec.slice(a + analytics.length);
+  const body = rest.slice(rest.indexOf("export function CarrierCallsSection"));
+  assert.doesNotMatch(body, /<CarrierStatsCard /, "🔴 графік повернувся на сторінку угод");
+  assert.doesNotMatch(body, /<AgreementCard /, "🔴 «AI проти людини» повернулось на сторінку угод");
+});

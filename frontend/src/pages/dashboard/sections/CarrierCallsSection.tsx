@@ -120,6 +120,12 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
   const [open, setOpen] = useState<number | null>(null);
   const [leaving, setLeaving] = useState<number | null>(null);
   const [refresh, setRefresh] = useState(0);
+  /**
+   * Дві сторінки однієї вкладки (Роман 30.09.2026: «мав залишитися інтерфейс як і до цього … а графіки і аналітика на
+   * іншій вкладці цієї сторінки»): «Угоди» — угоди за період по категоріях, як було; «Аналітика» — графіки й «AI
+   * проти людини». Період — спільний.
+   */
+  const [page, setPage] = useState<"deals" | "analytics">("deals");
 
   useEffect(() => {
     if (!from || !to) return;
@@ -156,7 +162,23 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
       <h3 style={{ margin: "0 0 4px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         Перевізники за розмовою
         <InfoHint text="Дзвінок на мобільний → угода на етапі «Дзвінки на мобільні» → фільтр CRM прибирає знайомих → AI слухає першу розмову решти (від 10 с): клієнт, перевізник чи інше. Упевнених перевізників і «Інше» дашборд закриває в CRM, клієнт лишається. Невпевнених і без розмови вирішує людина: менеджер — свої, тімлід — команди, керівництво — усі. Період — за датою створення угоди." />
+        <span role="tablist" aria-label="Сторінка" style={{ marginLeft: "auto", display: "inline-flex", gap: 4, background: "var(--surface-2)", border: "1px solid var(--border)", padding: 3, borderRadius: 9 }}>
+          {([["deals", "Угоди"], ["analytics", "Аналітика"]] as const).map(([k2, l]) => (
+            <button key={k2} type="button" role="tab" aria-selected={page === k2} onClick={() => setPage(k2)}
+              style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600,
+                background: page === k2 ? "var(--card-bg)" : "transparent", color: page === k2 ? "var(--brand)" : "var(--text-muted)",
+                boxShadow: page === k2 ? "var(--shadow)" : "none" }}>{l}</button>
+          ))}
+        </span>
       </h3>
+    </>
+  );
+  // 📈 «Аналітика» — окрема сторінка: графіки за період і «AI проти людини» (останнє — лише керівництву).
+  if (page === "analytics") return (
+    <>
+      <div className="chart-card">{header}</div>
+      <CarrierStatsCard from={from} to={to} refresh={refresh} />
+      {meta && isLead && meta.agreementRows.length > 0 && <AgreementCard meta={meta} />}
     </>
   );
   if (err) return <div className="chart-card">{header}<p style={{ margin: 0, color: "var(--danger)" }}>{err}</p></div>;
@@ -233,8 +255,6 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
         )}
       </div>
 
-      <CarrierStatsCard from={from} to={to} refresh={refresh} />
-
       <div className="chart-card" style={{ overflowX: "auto" }}>
         {shown.length === 0
           ? <p className="cq-fade" style={{ margin: 0, ...muted }}>{tab === "review" ? (rows.length ? "Усе розсортовано 👌" : "У періоді угод немає.") : "У цій вкладці за період угод немає."}</p>
@@ -291,8 +311,6 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
             </table>
           )}
       </div>
-
-      {meta && isLead && meta.agreementRows.length > 0 && <AgreementCard meta={meta} />}
     </>
   );
 }
