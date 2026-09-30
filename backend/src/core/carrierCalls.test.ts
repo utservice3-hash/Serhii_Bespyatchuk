@@ -1287,7 +1287,7 @@ test("#1073 ТОЧКА СТАРТУ · ЖИВА СХЕМА: до старту �
   assert.deepEqual(shown, [107302], "🔴 угода до старту потрапила у вкладки/звіт");
   const route = SRC("routes/dashboard.ts");
   assert.match(route, /const CARRIER_SINCE = \(\) => config\.callAi\.carrierLaunchAt;/);
-  assert.equal((route.match(/CARRIER_SINCE\(\)/g) ?? []).length, 5, "🔴 не всі роути вкладки, звіту й динаміки беруть точку старту");
+  assert.equal((route.match(/CARRIER_SINCE\(\)/g) ?? []).length, 6, "🔴 не всі роути вкладки, звіту, динаміки й однієї угоди беруть точку старту");
   assert.match(SRC("jobs/carrierCallJob.ts"), /launchAt: new Date\(config\.callAi\.carrierLaunchAt\)/, "🔴 джоба слухає без точки старту");
   assert.match(SRC("config.ts"), /carrierLaunchAt: process\.env\.CARRIER_LAUNCH_AT \?\? "2026-09-30T09:48:08Z"/, "🔴 точка старту ≠ рішенню 30.09.2026");
 });
@@ -1558,4 +1558,83 @@ test("#1141 AI ПРОТИ ЛЮДИНИ ПОІМЕННО · ЖИВА СХЕМА: 
   const at = route.indexOf('dashboardRouter.get("/carrier-calls/meta"');
   assert.match(route.slice(at, route.indexOf("dashboardRouter.", at + 10)), /agreementRows: lead \? \(await carrierAgreementRows\(pool\)\)/, "🔴 поіменний список віддається не лише керівництву");
   assert.match(route, /const carrierIsLeadership = \(auth: AuthPayload\) => auth\.roleKey !== "manager" && auth\.roleKey !== "team_lead";/);
+});
+
+/**
+ * #1142 — АНАЛІТИКА — ОКРЕМА СТОРІНКА (Роман 30.09.2026: «мав залишитися інтерфейс як і до цього … а графіки і
+ * аналітика на іншій вкладці цієї сторінки»): «Угоди» — угоди за період по категоріях, без графіків; графіки й
+ * «AI проти людини» — лише на «Аналітиці». Перемикач — у шапці, період спільний.
+ * 🧨 Червоніє, якщо графік чи «AI проти людини» повернуться на сторінку угод або зникне перемикач.
+ */
+test("#1142 АНАЛІТИКА — ОКРЕМА СТОРІНКА: «Угоди» без графіків, графіки й «AI проти людини» — лише на «Аналітиці»", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8");
+  assert.match(sec, /\[\["deals", "Угоди"\], \["analytics", "Аналітика"\]\]/, "🔴 перемикача «Угоди / Аналітика» немає");
+  const a = sec.indexOf('if (page === "analytics") return (');
+  assert.ok(a > 0, "🔴 сторінки «Аналітика» немає");
+  const analytics = sec.slice(a, sec.indexOf("\n  );\n", a));
+  assert.match(analytics, /<CarrierStatsCard from=\{from\} to=\{to\}/, "🔴 графіків немає на «Аналітиці»");
+  assert.match(analytics, /<AgreementCard meta=\{meta\}/, "🔴 «AI проти людини» немає на «Аналітиці»");
+  const rest = sec.slice(0, a) + sec.slice(a + analytics.length);
+  const body = rest.slice(rest.indexOf("export function CarrierCallsSection"));
+  assert.doesNotMatch(body, /<CarrierStatsCard /, "🔴 графік повернувся на сторінку угод");
+  assert.doesNotMatch(body, /<AgreementCard /, "🔴 «AI проти людини» повернулось на сторінку угод");
+});
+
+/**
+ * #1143 — УГОДА З «AI ПРОТИ ЛЮДИНИ» ВІДКРИВАЄТЬСЯ ПОВНІСТЮ (Роман 30.09.2026: «щоб можна було повністю відкрити
+ * транскрипт»): клік по рядку — повна картка угоди (запис, текст, вердикт, журнал, кнопки) через `/carrier-calls/deal/:id`;
+ * роут — у скоупі ролі й з точкою старту (чужа угода — 404), до `/:uniqueid`, у матриці; відповідь — тим самим переліком
+ * полів, що й список.
+ * 🧨 Червоніє, якщо зняти скоуп з роуту, віддати іншим переліком полів чи рядок перестане відкривати картку.
+ */
+test("#1143 УГОДА З «AI ПРОТИ ЛЮДИНИ»: повна картка, роут у скоупі ролі, до /:uniqueid, у матриці, той самий перелік полів", async () => {
+  const route = SRC("routes/dashboard.ts");
+  const at = route.indexOf('dashboardRouter.get("/carrier-calls/deal/:kommoId"');
+  assert.ok(at > 0 && at < route.indexOf('dashboardRouter.get("/carrier-calls/:uniqueid"'), "🔴 роуту однієї угоди немає або він після /:uniqueid");
+  const body = route.slice(at, route.indexOf("dashboardRouter.", at + 10));
+  assert.match(body, /carrierDealRows\(pool, \{ period: null, scope: carrierScope\(req\), ids: \[id\], since: CARRIER_SINCE\(\) \}\)/, "🔴 угода за номером без скоупу ролі чи точки старту");
+  assert.match(body, /res\.status\(404\)/, "🔴 чужа угода не 404");
+  assert.match(body, /res\.json\(carrierDealJson\(r\)\)/, "🔴 одна угода віддається іншим переліком полів, ніж список");
+  assert.match(route, /rows: rows\.map\(carrierDealJson\)/, "🔴 список і одна угода розійшлись у переліку полів");
+  const row = ACCESS_MATRIX.find((r) => r.method === "GET" && r.path === "/api/dashboard/carrier-calls/deal/:kommoId");
+  assert.ok(row && row.deny.includes("hr" as never) && row.deny.includes("financier" as never), "🔴 роут однієї угоди не в матриці або відкритий HR/фінансисту");
+  const sec = readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8");
+  assert.match(sec, /<CarrierDealById kommoId=\{r\.kommoId\}/, "🔴 рядок «AI проти людини» не відкриває картку угоди");
+  const panel = readFileSync(FE("pages/dashboard/sections/CarrierDealPanel.tsx"), "utf8");
+  // Межа — тіло самої функції (правило 9: змістова, а не за довжиною).
+  const byId = panel.slice(panel.indexOf("export function CarrierDealById"), panel.indexOf("export function CarrierDealPanel"));
+  assert.ok(byId.length > 0, "🔴 CarrierDealById не знайдено");
+  assert.match(byId, /fetchCarrierDeal\(kommoId\)/, "🔴 картка за номером вантажить не угоду за номером");
+  assert.match(byId, /<CarrierDealPanel deal=\{deal\}/, "🔴 картка за номером — не та сама повна картка угоди");
+});
+
+/**
+ * #1144 — «ЩО З УГОДОЮ В CRM» ОДНИМ РЯДКОМ (Роман 30.09.2026: «скажи які угоди пішли в crm, які видалені, щоб розуміти»):
+ * клієнт — лишилась; закрита дашбордом — прибрана з причиною; вирішено, але ще не закрито — буде прибрана; невирішена —
+ * чекає рішення; повернута — повернута; закрита не нами (фільтр/людина в Kommo) — закрита в CRM; переведена далі — пішла
+ * далі. Факт у CRM сильніший за наш намір.
+ * 🧨 Червоніє, якщо переплутати причину, показати «лишилась» для прибраної чи намір замість факту.
+ */
+test("#1144 ЩО З УГОДОЮ В CRM: лишилась / прибрана з причиною / буде прибрана / чекає / повернута; факт CRM сильніший", async () => {
+  const ts = (await import("typescript")).default;
+  const js = ts.transpileModule(readFileSync(FE("pages/dashboard/carrierCallsView.ts"), "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const V = await import(`data:text/javascript,${encodeURIComponent(js)}`) as { crmOutcome: (r: unknown) => { icon: string; label: string } };
+  const o = (category: string, close: unknown, statusId: number | null = 70419108, rejectReason: string | null = null) =>
+    V.crmOutcome({ category, close, crm: { statusId, rejectReason } }).label;
+  const closed = (reason: string) => ({ state: "closed", at: "2026-09-30T12:00:00Z", reason });
+  assert.equal(o("client", null), "лишилась у CRM");
+  assert.equal(o("carrier", closed("carrier"), 143, "Перевізник"), "прибрана: «Перевізник»");
+  assert.equal(o("other", closed("other"), 143), "прибрана: «Нецільове звернення»", "🔴 причину «Інше» переплутано");
+  assert.equal(o("no_talk", closed("no_talk"), 143), "прибрана: «Немає зв'язку»");
+  assert.equal(o("carrier", null), "буде прибрана: «Перевізник»", "🔴 вирішену, але ще не закриту угоду показано як прибрану або як таку, що лишилась");
+  assert.equal(o("review", null), "чекає рішення");
+  assert.equal(o("carrier", { state: "reverted", at: "x", reason: "carrier" }), "повернута на етап");
+  assert.equal(o("client", null, 143, "Дубль"), "закрита в CRM: «Дубль»", "🔴 факт CRM (закрита) переважила наш намір «лишилась»");
+  assert.equal(o("client", null, 142), "успішна угода");
+  assert.equal(o("review", null, 69693668), "пішла далі по воронці");
+  const card = readFileSync(FE("pages/dashboard/sections/CarrierStatsCard.tsx"), "utf8");
+  assert.match(card, /title: "Лишились у CRM", n: totals\.clients/, "🔴 «лишились у CRM» рахує не клієнтів");
+  assert.match(card, /title: "Прибрано з CRM", n: totals\.filtered \+ totals\.carriers \+ totals\.other \+ totals\.noTalk/, "🔴 «прибрано з CRM» рахує не всі закриття");
+  assert.match(readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8"), /const o = crmOutcome\(r\)/, "🔴 рядок угоди не показує, що з нею в CRM");
 });

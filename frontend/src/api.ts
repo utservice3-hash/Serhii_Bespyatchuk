@@ -182,6 +182,12 @@ export interface LeadgenHandoffMoney {
   regular: LeadgenMoneyCell;
   /** «Очікування» = оплачено + зона «Очікуємо» (похідне, у тотожність передач не входить). */
   waiting: LeadgenMoneyCell;
+  /** «Успішні» за правилом Ярослава: угоди, що стали «Успішна угода» В ПЕРІОДІ, з передач будь-якої давності. */
+  earned: LeadgenMoneyCell;
+  /** «Очікування» за правилом Ярослава: авто поїхало В ПЕРІОДІ, зараз «Оплата отримана» / зона «Очікуємо». */
+  pending: LeadgenMoneyCell;
+  /** «Машин» — як колонка «Кількість поставлених машин» таблиць лідгенів: `earned.n + pending.n` (рахує бекенд). */
+  machines: number;
 }
 /** Стан угоди менеджера з передачі — ЗАРАЗ. `none` — угоди менеджера не знайшлося; `same` — ця передача
  *  привела в угоду, вже пораховану іншою передачею (гроші не двоїмо); `regular` — угода постійного клієнта. */
@@ -193,6 +199,8 @@ export interface LeadgenHandoffDeal {
   cls: LeadgenDealClass; price: number; closedDay: string | null; planPayDay: string | null;
   /** Причина відмови — лише для програних (у решті поле буває заповнене залишком з угоди Продзвону). */
   reason: string | null; url: string | null;
+  /** Дата «авто поїхало»; `inPeriod: false` — передано раніше за період, у період потрапили гроші. */
+  autoDay: string | null; inPeriod: boolean;
 }
 /** Розкривний список «Гроші з передач»: ті самі правила, що `handoffMoney` у /leadgen-stats; `totals` мусять із ним збігатися. */
 export interface LeadgenHandoffDealsResp { from: string; to: string; managerId: number | null; deals: LeadgenHandoffDeal[]; totals: LeadgenHandoffMoney }
@@ -507,6 +515,11 @@ export interface CarrierCallsMetaResp {
   close: { mode: string; otherMode: string; wouldClose: number; closed: number; reverted: number; failed: number; otherWouldClose: number; otherClosed: number };
   agreement: { aiRole: string; decisions: number; agreed: number; byDecision: Record<string, number> }[];
   agreementRows: CarrierAgreementRowT[];
+}
+/** 🔎 Одна угода за номером (повна картка з «AI проти людини»); у скоупі ролі. */
+export async function fetchCarrierDeal(kommoId: number): Promise<CarrierDealT> {
+  const { data } = await api.get<CarrierDealT>(`/dashboard/carrier-calls/deal/${String(kommoId)}`);
+  return data;
 }
 /** 📈 Динаміка за період: по днях — відсіяно, без розмови, категорії; витрати — лише керівництву (інакше `null`). */
 export interface CarrierDayStatT { day: string; filtered: number; noTalk: number; clients: number; carriers: number; other: number; unsorted: number; spendUsd: number | null }

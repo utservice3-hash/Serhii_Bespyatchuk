@@ -79,6 +79,26 @@ export function CarrierStatsCard({ from, to, refresh }: { from: string; to: stri
   return (
     <div className="chart-card">
       {head}
+      {/* Підсумок «що сталося з угодами в CRM» (Роман 30.09.2026: «скажи які угоди пішли в crm, які видалені»). */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, margin: "6px 0 12px" }}>
+        {[
+          { icon: "✅", title: "Лишились у CRM", n: totals.clients, color: "var(--cc-client)",
+            sub: "клієнти — працюєте з ними далі", hint: "Угоди, де дзвонив клієнт: лишаються на етапі й ідуть у роботу." },
+          { icon: "🗑", title: "Прибрано з CRM", n: totals.filtered + totals.carriers + totals.other + totals.noTalk, color: "var(--cc-filtered)",
+            sub: `фільтр ${String(totals.filtered)} · перевізники ${String(totals.carriers)} · інше ${String(totals.other)} · без розмови ${String(totals.noTalk)}`,
+            hint: "Закриті «Не цільовими» (Kommo угод не видаляє): фільтр CRM — «Перевізник»; дашборд — «Перевізник», «Нецільове звернення» (інше) чи «Немає зв'язку» (без розмови від 10 с за 4 год). Щойно вирішені закриваються найближчим проходом (до 5 хв)." },
+          { icon: "⏳", title: "Чекають рішення", n: totals.unsorted, color: "var(--cc-unsorted)",
+            sub: "AI не впевнений або ще слухає", hint: "Угоди ще в CRM: їх треба розібрати у вкладці «AI не впевнений» на сторінці «Угоди»." },
+        ].map((t) => (
+          <div key={t.title} style={{ flex: "1 1 200px", border: "1px solid var(--border)", borderLeft: `4px solid ${t.color}`, borderRadius: 8, padding: "8px 12px" }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+              <span style={{ fontSize: 22, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{t.n}</span>
+              <span style={{ fontSize: 13, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}>{t.icon} {t.title}<InfoHint text={t.hint} /></span>
+            </div>
+            <div style={{ fontSize: 12, ...muted, marginTop: 2 }}>{t.sub}</div>
+          </div>
+        ))}
+      </div>
       {/* Легенда з числами — вона ж підписи (три слоти мають контраст < 3:1, колір не може бути єдиним носієм). */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 14px", margin: "4px 0 10px", fontSize: 13 }}>
         {SERIES.map((x) => (

@@ -394,6 +394,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
   { method: "GET", path: "/api/dashboard/carrier-calls/stats", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
+  { method: "GET", path: "/api/dashboard/carrier-calls/deal/:kommoId", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
   { method: "GET", path: "/api/dashboard/carrier-calls/:uniqueid", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
   /* 🙋 Черга «На перевірці» і запис розмови — ролі вкладки, кожен у своєму скоупі (чужий дзвінок — 404 від обробника).

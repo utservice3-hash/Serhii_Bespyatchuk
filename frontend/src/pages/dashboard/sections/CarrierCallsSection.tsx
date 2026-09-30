@@ -5,9 +5,9 @@ import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
 import { jobErrorIsCurrent, mmss } from "../aiCallsView";
-import { CARRIER_STAGE_STATUS, CARRIER_TABS, CATEGORY_UI, DECISION_UI, OTHER_TYPE_UI, OTHER_TYPES_HINT, ROLE_UI, TONE, closeLabel, closeModeLabel, dealStatusLabel, deciderLabel, pctLabel,
+import { CARRIER_STAGE_STATUS, CARRIER_TABS, CATEGORY_UI, DECISION_UI, crmOutcome, OTHER_TYPE_UI, OTHER_TYPES_HINT, ROLE_UI, TONE, closeLabel, closeModeLabel, dealStatusLabel, deciderLabel, pctLabel,
   otherModeLabel, tabOf, type CarrierTab } from "../carrierCallsView";
-import { CarrierDealPanel, pill } from "./CarrierDealPanel";
+import { CarrierDealById, CarrierDealPanel, pill } from "./CarrierDealPanel";
 import { CarrierStatsCard } from "./CarrierStatsCard";
 
 /**
@@ -31,8 +31,9 @@ const muted: React.CSSProperties = { color: "var(--text-muted)" };
  * людини по кожній угоді, де AI мав вердикт, — коли, яка угода, чий менеджер, що казав AI, що вирішила людина, хто.
  * Зверху — підсумок по вердикту AI. Лише керівництву (сервер іншим віддає порожній список).
  */
-function AgreementCard({ meta }: { meta: CarrierCallsMetaResp }) {
+function AgreementCard({ meta, onChanged }: { meta: CarrierCallsMetaResp; onChanged: () => void }) {
   const [onlyDiff, setOnlyDiff] = useState(false);
+  const [open, setOpen] = useState<number | null>(null);
   const rows = onlyDiff ? meta.agreementRows.filter((r) => !r.agreed) : meta.agreementRows;
   const cell: React.CSSProperties = { padding: "6px 10px", verticalAlign: "top", fontSize: 13 };
   const verdict = (role: string) => ROLE_UI[role]?.label ?? role;
@@ -57,22 +58,31 @@ function AgreementCard({ meta }: { meta: CarrierCallsMetaResp }) {
           <thead>
             <tr style={{ textAlign: "left", color: "var(--text-muted)", fontSize: 12.5 }}>
               <th style={cell}>Коли</th><th style={cell}>Угода</th><th style={cell}>Менеджер угоди</th>
-              <th style={cell}>AI казав</th><th style={cell}>Людина вирішила</th><th style={cell}>Хто вирішив</th><th style={cell}>Збіг</th>
+              <th style={cell}>AI казав</th><th style={cell}>Людина вирішила</th><th style={cell}>Хто вирішив</th><th style={cell}>Збіг</th><th style={cell} />
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.kommoId} style={{ borderTop: "1px solid var(--border)" }}>
+              <Fragment key={r.kommoId}>
+              <tr tabIndex={0} aria-expanded={open === r.kommoId} title="Відкрити угоду: запис, текст розмови, вердикт AI, журнал рішень"
+                onClick={() => setOpen(open === r.kommoId ? null : r.kommoId)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(open === r.kommoId ? null : r.kommoId); } }}
+                style={{ borderTop: "1px solid var(--border)", cursor: "pointer", background: open === r.kommoId ? "var(--surface-2)" : undefined }}>
                 <td style={{ ...cell, whiteSpace: "nowrap" }}>{fmtTime(r.at)}</td>
-                <td style={{ ...cell, whiteSpace: "nowrap" }}><a href={r.url} target="_blank" rel="noreferrer">№ {r.kommoId}</a></td>
+                <td style={{ ...cell, whiteSpace: "nowrap" }}><a href={r.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>№ {r.kommoId}</a></td>
                 <td style={cell}>{r.managerName ?? <span style={muted}>невідомий</span>}</td>
                 <td style={{ ...cell, whiteSpace: "nowrap" }}>{verdict(r.aiRole)}<span style={muted}> · {pctLabel(r.aiConfidence)}</span></td>
                 <td style={{ ...cell, whiteSpace: "nowrap" }}><b>{DECISION_UI[r.decision].label}</b>{r.otherType ? <span style={muted}> · {OTHER_TYPE_UI[r.otherType]}</span> : null}</td>
                 <td style={cell}>{r.by}<span style={muted}> · {deciderLabel(r.byRole)}</span></td>
                 <td style={{ ...cell, fontWeight: 600, color: r.agreed ? "var(--ok)" : "var(--danger)" }}>{r.agreed ? "✓ так" : "✗ ні"}</td>
+                <td style={{ ...cell, whiteSpace: "nowrap", color: "var(--info)" }}>{open === r.kommoId ? "згорнути" : "відкрити →"}</td>
               </tr>
+              {open === r.kommoId && <tr><td colSpan={8} style={{ padding: "0 10px 12px", background: "var(--surface-2)" }}>
+                <div className="cq-panel"><CarrierDealById kommoId={r.kommoId} onChanged={onChanged} /></div>
+              </td></tr>}
+              </Fragment>
             ))}
-            {rows.length === 0 && <tr><td colSpan={7} style={{ ...cell, ...muted }}>Розбіжностей немає.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={8} style={{ ...cell, ...muted }}>Розбіжностей немає.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -120,6 +130,12 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
   const [open, setOpen] = useState<number | null>(null);
   const [leaving, setLeaving] = useState<number | null>(null);
   const [refresh, setRefresh] = useState(0);
+  /**
+   * Дві сторінки однієї вкладки (Роман 30.09.2026: «мав залишитися інтерфейс як і до цього … а графіки і аналітика на
+   * іншій вкладці цієї сторінки»): «Угоди» — угоди за період по категоріях, як було; «Аналітика» — графіки й «AI
+   * проти людини». Період — спільний.
+   */
+  const [page, setPage] = useState<"deals" | "analytics">("deals");
 
   useEffect(() => {
     if (!from || !to) return;
@@ -156,7 +172,23 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
       <h3 style={{ margin: "0 0 4px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         Перевізники за розмовою
         <InfoHint text="Дзвінок на мобільний → угода на етапі «Дзвінки на мобільні» → фільтр CRM прибирає знайомих → AI слухає першу розмову решти (від 10 с): клієнт, перевізник чи інше. Упевнених перевізників і «Інше» дашборд закриває в CRM, клієнт лишається. Невпевнених і без розмови вирішує людина: менеджер — свої, тімлід — команди, керівництво — усі. Період — за датою створення угоди." />
+        <span role="tablist" aria-label="Сторінка" style={{ marginLeft: "auto", display: "inline-flex", gap: 4, background: "var(--surface-2)", border: "1px solid var(--border)", padding: 3, borderRadius: 9 }}>
+          {([["deals", "Угоди"], ["analytics", "Аналітика"]] as const).map(([k2, l]) => (
+            <button key={k2} type="button" role="tab" aria-selected={page === k2} onClick={() => setPage(k2)}
+              style={{ padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600,
+                background: page === k2 ? "var(--card-bg)" : "transparent", color: page === k2 ? "var(--brand)" : "var(--text-muted)",
+                boxShadow: page === k2 ? "var(--shadow)" : "none" }}>{l}</button>
+          ))}
+        </span>
       </h3>
+    </>
+  );
+  // 📈 «Аналітика» — окрема сторінка: графіки за період і «AI проти людини» (останнє — лише керівництву).
+  if (page === "analytics") return (
+    <>
+      <div className="chart-card">{header}</div>
+      <CarrierStatsCard from={from} to={to} refresh={refresh} />
+      {meta && isLead && meta.agreementRows.length > 0 && <AgreementCard meta={meta} onChanged={() => setRefresh((n) => n + 1)} />}
     </>
   );
   if (err) return <div className="chart-card">{header}<p style={{ margin: 0, color: "var(--danger)" }}>{err}</p></div>;
@@ -233,8 +265,6 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
         )}
       </div>
 
-      <CarrierStatsCard from={from} to={to} refresh={refresh} />
-
       <div className="chart-card" style={{ overflowX: "auto" }}>
         {shown.length === 0
           ? <p className="cq-fade" style={{ margin: 0, ...muted }}>{tab === "review" ? (rows.length ? "Усе розсортовано 👌" : "У періоді угод немає.") : "У цій вкладці за період угод немає."}</p>
@@ -247,7 +277,7 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
                   {!isManager && <th style={cell}><Hd t="Менеджер" h="Відповідальний за угоду в Kommo." /></th>}
                   <th style={cell}><Hd t="Хто дзвонив" h="Вердикт: клієнт, перевізник чи інше. Поруч — хто вирішив (AI з відсотком впевненості чи людина). Від 85% AI вирішує сам." /></th>
                   <th style={cell}><Hd t="Пояснення" h="Чому саме такий вердикт: пояснення AI, коментар людини або чому AI не впевнений." /></th>
-                  <th style={cell}><Hd t="У CRM" h="Що дашборд зробив з угодою в Kommo і в якому вона стані зараз (оновлюється раз на 30 хв)." /></th>
+                  <th style={cell}><Hd t="Що з угодою в CRM" h="✅ лишилась у CRM (клієнт, працюєте далі) · 🗑 прибрана — закрита «Не цільовою» з причиною (Kommo угод не видаляє) · ⏳ буде прибрана найближчим проходом або чекає вашого рішення · ↩️ повернута на етап. Нижче — стан угоди в Kommo (оновлюється раз на 30 хв)." /></th>
                 </tr>
               </thead>
               <tbody key={tab} className="cq-fade">
@@ -277,8 +307,10 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
                             : <span style={muted}>{r.why ?? "—"}</span>}
                         </td>
                         <td style={{ ...cell, fontSize: 12.5, ...muted, whiteSpace: "nowrap" }}>
-                          {closeLabel(r.close, fmtTime) ?? (r.category === "client" ? "лишається на етапі" : "—")}
-                          <div>{dealStatusLabel(r.crm.statusId, r.crm.rejectReason)}</div>
+                          {(() => { const o = crmOutcome(r); return (
+                            <span title={`${o.hint}${r.close ? ` · ${closeLabel(r.close, fmtTime) ?? ""}` : ""}`} style={{ ...pill(TONE[o.tone].bg, TONE[o.tone].fg), fontWeight: 600 }}>{o.icon} {o.label}</span>
+                          ); })()}
+                          <div style={{ marginTop: 3 }}>{dealStatusLabel(r.crm.statusId, r.crm.rejectReason)}</div>
                         </td>
                       </tr>
                       {isOpen && <tr><td colSpan={isManager ? 5 : 6} style={{ padding: "0 10px 12px", background: "var(--surface-2)" }}>
@@ -291,8 +323,6 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
             </table>
           )}
       </div>
-
-      {meta && isLead && meta.agreementRows.length > 0 && <AgreementCard meta={meta} />}
     </>
   );
 }

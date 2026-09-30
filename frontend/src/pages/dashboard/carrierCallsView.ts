@@ -96,6 +96,26 @@ export function dealsWord(n: number): string {
   return "угод";
 }
 
+/**
+ * Що сталося з угодою в CRM — ОДНИМ рядком, щоб менеджер розумів (Роман 30.09.2026: «скажи які угоди пішли в crm, які
+ * видалені»). «Прибрана» = закрита «Не цільовою» (Kommo угод не видаляє); «лишилась» = працює далі.
+ * Порядок має значення: що вже сталося в CRM (закрито / повернуто / пішла далі) — сильніше за наш намір.
+ */
+export const CLOSE_REASON_UI: Readonly<Record<string, string>> = { carrier: "«Перевізник»", other: "«Нецільове звернення»", no_talk: "«Немає зв'язку»" };
+export function crmOutcome(r: { category: string; close: { state: string; reason?: string } | null; crm: { statusId: number | null; rejectReason: string | null } }):
+  { icon: string; label: string; tone: Tone; hint: string } {
+  const reasonOf = (x: string | undefined) => CLOSE_REASON_UI[x ?? ""] ?? "";
+  if (r.close?.state === "reverted") return { icon: "↩️", label: "повернута на етап", tone: "info", hint: "Людина повернула угоду на етап — вона знову в роботі, автоматика її більше не закриває." };
+  if (r.close?.state === "closed") return { icon: "🗑", label: `прибрана: ${reasonOf(r.close.reason)}`, tone: "muted", hint: "Дашборд закрив угоду в CRM як «Не цільова» з цією причиною. Помилка — «Повернути на етап» у картці." };
+  if (r.crm.statusId === 142) return { icon: "✅", label: "успішна угода", tone: "ok", hint: "Угода в CRM уже успішна." };
+  if (r.crm.statusId === 143) return { icon: "🗑", label: `закрита в CRM${r.crm.rejectReason ? `: «${r.crm.rejectReason}»` : ""}`, tone: "muted", hint: "Угоду закрили в CRM — людина чи фільтр, не дашборд." };
+  if (r.crm.statusId != null && r.crm.statusId !== CARRIER_STAGE_STATUS) return { icon: "✅", label: "пішла далі по воронці", tone: "ok", hint: "Угоду перевели з етапу «Дзвінки на мобільні» далі — з нею працюють." };
+  if (r.category === "client") return { icon: "✅", label: "лишилась у CRM", tone: "ok", hint: "Клієнт — угода лишається на етапі, працюйте з нею як завжди." };
+  if (r.category === "carrier" || r.category === "other" || r.category === "no_talk")
+    return { icon: "⏳", label: `буде прибрана: ${reasonOf(r.category)}`, tone: "warn", hint: "Рішення вже є — дашборд закриє угоду в CRM найближчим проходом (кожні 5 хв; без розмови — через 4 год після дзвінка)." };
+  return { icon: "⏳", label: "чекає рішення", tone: "muted", hint: "AI не впевнений або ще слухає — угода лишається в CRM, доки не вирішите." };
+}
+
 /** Стан закриття угоди в CRM — словами. `null` — автоматика угоду не чіпала. */
 export function closeLabel(c: { state: string; at: string; reason?: string } | null, fmt: (iso: string) => string): string | null {
   if (!c) return null;

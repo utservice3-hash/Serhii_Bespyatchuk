@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchCarrierAudio, fetchCarrierCallCard, postCarrierDecision, revertCarrierClose,
+import { fetchCarrierAudio, fetchCarrierCallCard, fetchCarrierDeal, postCarrierDecision, revertCarrierClose,
   type CarrierCallCardResp, type CarrierDealT, type CarrierOtherTypeT } from "../../../api";
 import { mmss } from "../aiCallsView";
 import { InfoHint } from "../widgets";
@@ -70,15 +70,58 @@ function Player({ uniqueid, quoteAt, onTime, seekRef }: { uniqueid: string; quot
   );
 }
 
+/**
+ * 🎧 Запис розмови з розшифровкою (картка угоди й «AI проти людини» — один компонент): ▶ слухати, клік по репліці —
+ * перемотка, жовтим — фраза, з якої AI зробив висновок. Права сервер перевіряє сам (скоуп ролі).
+ */
+export function CallRecording({ uniqueid, card, quote }: { uniqueid: string; card: CarrierCallCardResp; quote: string }) {
+  const [now, setNow] = useState(0);
+  const seekRef = useRef<((t: number) => void) | null>(null);
+  const turns = card.turns ?? [];
+  const mc = card.managerChannel;
+  const quoteTurn = turns.find((t) => quote && t.channel !== mc && t.text.includes(quote));
+  return (
+    <>
+      <Player uniqueid={uniqueid} quoteAt={quoteTurn?.start ?? null} onTime={setNow} seekRef={seekRef} />
+      <div style={{ marginTop: 10, maxHeight: 220, overflowY: "auto" }}>
+        {turns.map((t, i) => {
+          const next = turns[i + 1]; const cur = t.start != null && now >= t.start && (!next || next.start == null || now < next.start);
+          const them = mc != null && t.channel !== mc;
+          return <p key={i} className="cq-line" title="Перемотати сюди"
+            onClick={() => { if (t.start != null) seekRef.current?.(t.start); }}
+            style={{ margin: "1px 0", fontSize: 13, padding: "3px 6px", borderRadius: 6, cursor: "pointer", background: cur ? "var(--info-bg)" : undefined }}>
+            <span style={{ fontWeight: 600, marginRight: 6, color: them ? "var(--warn)" : "var(--text-muted)" }}>{speakerShort(t.channel, mc)}</span>
+            {t === quoteTurn ? <mark style={{ background: "var(--warn-bg)", color: "inherit", borderRadius: 3 }}>{t.text}</mark> : t.text}</p>;
+        })}
+        {!turns.length && <p style={{ margin: 0, fontSize: 13, ...muted }}>{card.textPurged ? "Текст видалено за строком зберігання (12 місяців). Вердикт лишився." : "Розшифровки немає."}</p>}
+      </div>
+    </>
+  );
+}
+
+/** Картка угоди за номером — сама вантажить угоду (рядки «AI проти людини», де повної угоди ще немає). */
+export function CarrierDealById({ kommoId, onChanged }: { kommoId: number; onChanged: () => void }) {
+  const [deal, setDeal] = useState<CarrierDealT | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    fetchCarrierDeal(kommoId).then((d) => { if (alive) setDeal(d); }).catch((e) => { if (alive) setErr(errText(e)); });
+    return () => { alive = false; };
+  }, [kommoId, reload]);
+  if (err) return <p style={{ margin: 0, fontSize: 13, color: "var(--danger)" }}>{err}</p>;
+  if (!deal) return <p className="loading-text" style={{ margin: 0 }}>Завантаження угоди…</p>;
+  const changed = () => { setReload((n) => n + 1); onChanged(); };
+  return <CarrierDealPanel deal={deal} onDecided={changed} onChanged={changed} />;
+}
+
 /** Панель однієї угоди: ліворуч — розмова, праворуч — вердикт, рішення, журнал. `onDecided` — після запису рішення. */
 export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: CarrierDealT; onDecided: () => void; onChanged: () => void }) {
   const [card, setCard] = useState<CarrierCallCardResp | null>(null);
   const [cardErr, setCardErr] = useState<string | null>(null);
-  const [now, setNow] = useState(0);
   const [note, setNote] = useState(""); const [noteOpen, setNoteOpen] = useState(false); const [busy, setBusy] = useState(false);
   const [pickOther, setPickOther] = useState(false);
   const [reload, setReload] = useState(0);
-  const seekRef = useRef<((t: number) => void) | null>(null);
   useEffect(() => {
     if (!deal.uniqueid) return;
     let alive = true;
@@ -87,9 +130,6 @@ export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: Carrier
   }, [deal.uniqueid, reload]);
 
   const quote = deal.ai.quote?.trim() ?? "";
-  const turns = card?.turns ?? [];
-  const mc = card?.managerChannel ?? null;
-  const quoteTurn = turns.find((t) => quote && t.channel !== mc && t.text.includes(quote));
   const canListen = deal.uniqueid != null && card != null && !card.transcriptHidden;
   const journal = deal.journal;
   const closed = deal.close?.state === "closed";
@@ -123,21 +163,7 @@ export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: Carrier
           : cardErr ? <p style={{ margin: 0, fontSize: 13, color: "var(--danger)" }}>{cardErr}</p>
           : !card ? <p className="loading-text" style={{ margin: 0 }}>Завантаження розмови…</p>
           : card.transcriptHidden ? <p style={{ margin: 0, fontSize: 13, ...muted }}>Запис і текст цій ролі недоступні.</p>
-          : <>
-              <Player uniqueid={deal.uniqueid} quoteAt={quoteTurn?.start ?? null} onTime={setNow} seekRef={seekRef} />
-              <div style={{ marginTop: 10, maxHeight: 220, overflowY: "auto" }}>
-                {turns.map((t, i) => {
-                  const next = turns[i + 1]; const cur = t.start != null && now >= t.start && (!next || next.start == null || now < next.start);
-                  const them = mc != null && t.channel !== mc;
-                  return <p key={i} className="cq-line" title="Перемотати сюди"
-                    onClick={() => { if (t.start != null) seekRef.current?.(t.start); }}
-                    style={{ margin: "1px 0", fontSize: 13, padding: "3px 6px", borderRadius: 6, cursor: "pointer", background: cur ? "var(--info-bg)" : undefined }}>
-                    <span style={{ fontWeight: 600, marginRight: 6, color: them ? "var(--warn)" : "var(--text-muted)" }}>{speakerShort(t.channel, mc)}</span>
-                    {t === quoteTurn ? <mark style={{ background: "var(--warn-bg)", color: "inherit", borderRadius: 3 }}>{t.text}</mark> : t.text}</p>;
-                })}
-                {!turns.length && <p style={{ margin: 0, fontSize: 13, ...muted }}>{card.textPurged ? "Текст видалено за строком зберігання (12 місяців). Вердикт лишився." : "Розшифровки немає."}</p>}
-              </div>
-            </>}
+          : <CallRecording uniqueid={deal.uniqueid} card={card} quote={quote} />}
         {canListen && card?.firstTry && (
           <p style={{ margin: "6px 0 0", fontSize: 12.5, ...muted }}>Це друга розмова номера: першу не вдалось розібрати.</p>
         )}

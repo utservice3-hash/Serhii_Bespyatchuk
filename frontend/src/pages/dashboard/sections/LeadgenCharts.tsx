@@ -17,12 +17,12 @@ const C = { leads: COLORS[0], opr: COLORS[2], quotes: COLORS[1], calls: "#94a3b8
  * бюджет там здебільшого не проставлений (86 %), тож смуга брехала б про масштаб.
  */
 const MONEY = [
-  { k: "success", name: "Успішні", fill: "#16a34a" },
-  { k: "pipe", name: "Оплачено + зона «Очікуємо» (ще не успіх)", fill: "#d97706" },
+  { k: "success", name: "Успішні (за місяцем успіху)", fill: "#16a34a" },
+  { k: "pipe", name: "Очікування (авто поїхало в місяці)", fill: "#d97706" },
 ] as const;
-const moneyRow = (m: LeadgenHandoffMoney | undefined) => ({ success: m ? m.success.sum : 0, pipe: m ? m.paid.sum + m.expect.sum : 0 });
+const moneyRow = (m: LeadgenHandoffMoney | undefined) => ({ success: m ? m.earned.sum : 0, pipe: m ? m.pending.sum : 0 });
 const moneyLabel = (l: unknown, m: LeadgenHandoffMoney | undefined) => !m ? `${String(l)} · передач немає`
-  : `${String(l)} · передано ${n(m.handoffs)}: успішні ${n(m.success.n)}, оплачено ${n(m.paid.n)}, «Очікуємо» ${n(m.expect.n)}, в роботі ${n(m.work.n)}, програно ${n(m.lost)}${m.unlinked ? `, без угоди ${n(m.unlinked)}` : ""}`;
+  : `${String(l)} · успішних ${n(m.earned.n)}, очікування ${n(m.pending.n)} · передано в місяці ${n(m.handoffs)}: в роботі ${n(m.work.n)}, програно ${n(m.lost)}${m.unlinked ? `, без угоди ${n(m.unlinked)}` : ""}`;
 /** Рівні поділки для грошей: 4 кроки по 1 / 2 / 2,5 / 5 × 10^k, щоб підписи не були «19тис · 29тис». */
 function moneyTicks(max: number): number[] {
   if (!(max > 0)) return [0];
