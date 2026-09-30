@@ -24,7 +24,7 @@ const row = (o: Partial<StatusRightsRow>): StatusRightsRow => ({
   reviewerId: null, taskType: "simple", ...o,
 });
 
-/** Випадок Юлії: автор — один, виконавець — він же чи інший, приймає третя людина. */
+/** Автор, виконавець і «Приймає» — троє різних людей. Випадок «автор = виконавець» — окремо нижче. */
 const REVIEWED = row({ assigneeId: 40, assigneeTeamId: 7, createdBy: AUTHOR.userId, reviewerId: REVIEWER.userId });
 
 /**
@@ -64,6 +64,12 @@ test("#1080 ЗАКРИВАЄ ТОЙ, ХТО ПРИЙМАЄ: виконавець
   // Одна людина — автор, виконавець і «Приймає» одночасно: закриває (вимога ТЗ).
   const allInOne = row({ assigneeId: 40, assigneeTeamId: 7, createdBy: EXEC.userId });
   assert.equal(statusRights(EXEC, allInOne).canDone, true, "🔴 автор-виконавець не може закрити власну задачу");
+  // 🪞 ВИПАДОК 4172/4310/4312: автор = виконавець, а приймає ІНША людина. Закрити
+  // він не може — інакше правило не діяло б саме там, заради чого його писали.
+  const authorExec = { ...allInOne, reviewerId: REVIEWER.userId };
+  assert.deepEqual([statusRights(EXEC, authorExec).canDone, statusRights(EXEC, authorExec).actor], [false, "executor"],
+    "🔴 АВТОР-ВИКОНАВЕЦЬ ЗАКРИВ ЗАДАЧУ, ЯКУ ПРИЙМАЄ ІНША ЛЮДИНА");
+  assert.equal(statusRights(REVIEWER, authorExec).canDone, true);
 });
 
 /**

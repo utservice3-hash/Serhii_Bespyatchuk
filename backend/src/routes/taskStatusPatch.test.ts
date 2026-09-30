@@ -146,6 +146,13 @@ test("#1080f РОУТ: виконавець не закриває (403 з іме
     }
     assert.deepEqual(mismatches, [], "🔴 сірий пункт у меню і 403 розійшлись:\n  " + mismatches.join("\n  "));
 
+    // ── 7b. ВИПАДОК 4172/4310/4312: автор = виконавець, приймає інша людина ──
+    const own = (await call("POST", "/", { who: "exec", body: { title: "Роман за ТЗ Юлії", assigneeId: 40, reviewerId: 6 } })).payload as unknown as { id: number };
+    assert.equal((await patch("exec", own.id, { status: "ready_for_approval" })).code, 204);
+    assert.equal((await patch("exec", own.id, { status: "done" })).code, 403,
+      "🔴 АВТОР-ВИКОНАВЕЦЬ ЗАКРИВ ЗАДАЧУ, ЯКУ ПРИЙМАЄ ЮЛІЯ — правило не діє там, заради чого писалось");
+    assert.equal((await patch("yulia", own.id, { status: "done" })).code, 204);
+
     // ── 8. ЗАМОВЧУВАННЯ: «Приймає» не обрано — приймає автор ──
     const plain = (await call("POST", "/", { who: "lead", body: { title: "Без приймаючого", assigneeId: 40 } })).payload as unknown as { id: number };
     const plainRow = (await listOf("lead")).find((r) => r.id === plain.id)!;
