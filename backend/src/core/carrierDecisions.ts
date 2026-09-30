@@ -43,9 +43,9 @@ const pendingOf = (r: DealRow): PendingRow => ({
  * Черга: «На перевірці» й «Помилка» в межах скоупу, досі на етапі (за `deals`, синк раз на 30 хв; ще не
  * синкнута — теж у черзі) і не закриті дашбордом. «Вирішені» — рішення людей за `decidedDays`.
  */
-export async function decisionQueue(db: Db, now: Date, scope: CarrierScope = {}, decidedDays = 30):
+export async function decisionQueue(db: Db, now: Date, scope: CarrierScope = {}, decidedDays = 30, launchSince: string | null = null):
   Promise<{ pending: PendingRow[]; decided: DecidedRow[] }> {
-  const rows = await carrierDealRows(db, { period: null, scope });
+  const rows = await carrierDealRows(db, { period: null, scope, since: launchSince });
   const since = now.getTime() - decidedDays * 86_400_000;
   const pending: PendingRow[] = [], decided: DecidedRow[] = [];
   for (const r of rows) {

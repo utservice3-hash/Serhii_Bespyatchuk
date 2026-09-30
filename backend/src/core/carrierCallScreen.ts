@@ -32,17 +32,18 @@ export interface CarrierKpis {
   recordingSince: string | null;
 }
 
-export async function carrierCallsList(db: Db, from: string, to: string, scope: CarrierScope = {}):
+export async function carrierCallsList(db: Db, from: string, to: string, scope: CarrierScope = {}, since: string | null = null):
   Promise<{ rows: DealRow[]; kpis: CarrierKpis; truncated: boolean }> {
-  const all = await carrierDealRows(db, { period: { from, to }, scope });
+  const all = await carrierDealRows(db, { period: { from, to }, scope, since });
   const k = (await db.query<{ removed: number; since: Date | null }>(`
     SELECT (SELECT count(*) FROM deals dd LEFT JOIN managers m ON m.id = dd.manager_id
              WHERE dd.pipeline_id = $3 AND dd.status_id = 143 AND dd.reject_reason = 'Перевізник' AND dd.name ~ '^380[0-9]{9}$'
                AND (dd.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1::date AND $2::date
                AND NOT EXISTS (SELECT 1 FROM carrier_call_deals x WHERE x.kommo_id = dd.kommo_id)
-               AND ($4::int IS NULL OR m.id = $4::int) AND ($5::int IS NULL OR m.team_id = $5::int))::int AS removed,
-           (SELECT min(seen_at) FROM carrier_call_deals) AS since`,
-  [from, to, CARRIER_STAGE.pipelineId, scope.managerId ?? null, scope.teamId ?? null])).rows[0];
+               AND ($4::int IS NULL OR m.id = $4::int) AND ($5::int IS NULL OR m.team_id = $5::int)
+               AND ($6::timestamptz IS NULL OR dd.created_at_kommo >= $6::timestamptz))::int AS removed,
+           GREATEST((SELECT min(seen_at) FROM carrier_call_deals), $6::timestamptz) AS since`,
+  [from, to, CARRIER_STAGE.pipelineId, scope.managerId ?? null, scope.teamId ?? null, since])).rows[0];
   return {
     rows: all.slice(0, SCREEN_LIMIT),
     truncated: all.length > SCREEN_LIMIT,

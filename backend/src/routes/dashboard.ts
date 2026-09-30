@@ -10547,10 +10547,12 @@ dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
  * запис чужого дзвінка — 404, а не 403: для менеджера чужої угоди не існує.
  */
 const carrierScope = (req: { auth?: AuthPayload; query: Record<string, unknown> }) => missedScopeFor(req.auth!, req.query);
+/** 🏁 Точка старту відсіву: раніше створені угоди у вкладки, чергу й звіт не йдуть (Роман 30.09.2026: «працюємо з 0»). */
+const CARRIER_SINCE = () => config.callAi.carrierLaunchAt;
 
 dashboardRouter.get("/carrier-calls", async (req, res) => {
   const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
-  const { rows, kpis, truncated } = await carrierCallsList(pool, from, to, carrierScope(req));
+  const { rows, kpis, truncated } = await carrierCallsList(pool, from, to, carrierScope(req), CARRIER_SINCE());
   res.json({
     period: { from, to }, truncated, kpis,
     // Явний перелік полів, а не спред (#17e2).
@@ -10572,9 +10574,9 @@ dashboardRouter.get("/carrier-calls", async (req, res) => {
 dashboardRouter.get("/carrier-calls/report", async (req, res) => {
   const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
   const scope = carrierScope(req);
-  const rows = await carrierDealRows(pool, { period: { from, to }, scope });
+  const rows = await carrierDealRows(pool, { period: { from, to }, scope, since: CARRIER_SINCE() });
   const rep = carrierReport(rows);
-  const filtered = await filterRemovedByManager(pool, from, to, CARRIER_STAGE.pipelineId, scope);
+  const filtered = await filterRemovedByManager(pool, from, to, CARRIER_STAGE.pipelineId, scope, CARRIER_SINCE());
   const line = (x: (typeof rep.managers)[number]) => ({ managerId: x.managerId, managerName: x.managerName, teamId: x.teamId, teamName: x.teamName,
     total: x.total, clients: x.clients, carriersAuto: x.carriersAuto, carriersManual: x.carriersManual,
     otherAuto: x.otherAuto, otherManual: x.otherManual, unsorted: x.unsorted });
@@ -10599,7 +10601,7 @@ dashboardRouter.get("/carrier-calls/meta", async (_req, res) => {
  * ⚠️ Стоїть ДО `/:uniqueid`: Express зіставляє за порядком, і «pending» інакше пішов би як номер дзвінка.
  */
 dashboardRouter.get("/carrier-calls/pending", async (req, res) => {
-  const { pending, decided } = await decisionQueue(pool, new Date(), carrierScope(req));
+  const { pending, decided } = await decisionQueue(pool, new Date(), carrierScope(req), 30, CARRIER_SINCE());
   const row = (r: (typeof pending)[number]) => ({ kommoId: r.kommoId, url: kommoLeadUrl(r.kommoId), uniqueid: r.uniqueid, phone: r.phone,
     createdAt: r.createdAt, calledAt: r.calledAt, billsec: r.billsec, managerName: r.managerName, teamName: r.teamName,
     category: r.category, why: r.why, dealState: r.dealState, role: r.role, confidence: r.confidence, otherType: r.otherType, reason: r.reason });

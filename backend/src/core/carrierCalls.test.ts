@@ -146,7 +146,7 @@ test("#950 ВИБІРКА · ЖИВА СХЕМА: лише угоди з від�
     { id: 93005, name: "380500000005", created_at: sec(min(60)), responsible_user_id: 7 },
   ];
   const r = await recordStageDeals(c.db, leads, NOW);
-  assert.deepEqual(r, { onStage: 4, tooYoung: 1, noPhone: 1, inserted: 2 });
+  assert.deepEqual(r, { onStage: 4, tooYoung: 1, noPhone: 1, beforeLaunch: 0, inserted: 2 });
   const ids = (await c.raw.query<{ k: string }>("SELECT kommo_id::text k FROM carrier_call_deals WHERE kommo_id BETWEEN 93000 AND 93099 ORDER BY 1")).rows.map((x) => x.k);
   assert.deepEqual(ids, ["93001", "93005"], "🔴 вибірка — не відповідь Kommo (93004 є лише в `deals`, 93005 — навпаки)");
   assert.equal((await recordStageDeals(c.db, leads, NOW)).inserted, 0, "🔴 повтор записав угоди вдруге");
@@ -985,7 +985,7 @@ test("#1064 ЗВІТ · ЖИВА СХЕМА: клітинка = рядки вк�
   const route = SRC("routes/dashboard.ts");
   const at2 = route.indexOf('dashboardRouter.get("/carrier-calls/report"');
   assert.ok(at2 > 0, "🔴 роуту звіту немає");
-  assert.match(route.slice(at2, route.indexOf("dashboardRouter.", at2 + 10)), /const rows = await carrierDealRows\(pool, \{ period: \{ from, to \}, scope \}\);\s*const rep = carrierReport\(rows\);/,
+  assert.match(route.slice(at2, route.indexOf("dashboardRouter.", at2 + 10)), /const rows = await carrierDealRows\(pool, \{ period: \{ from, to \}, scope, since: CARRIER_SINCE\(\) \}\);\s*const rep = carrierReport\(rows\);/,
     "🔴 звіт рахується не з тих самих рядків, що вкладки");
 });
 
@@ -1273,4 +1273,40 @@ test("#1072 AI ПРОТИ ЛЮДИНИ · ЖИВА СХЕМА: останнє р
   const m = await carrierCallsMeta(c.db, NOW, { stt: 40, analysis: 10 }, { mode: "dry", otherMode: "dry" });
   const by = Object.fromEntries(m.agreement.map((a) => [a.aiRole, [a.decisions, a.agreed]]));
   assert.deepEqual(by, { carrier: [2, 1], other: [1, 1] }, "🔴 точність за рішеннями людей порахована не з останнього рішення або з угодами без вердикту");
+});
+
+/**
+ * #1073 — ТОЧКА СТАРТУ (Роман 30.09.2026: «працюємо з 0, тільки після деплою починаємо транскрибацію нового»):
+ * угода, створена ДО старту, не записується з відповіді Kommo, її розмова не оплачується, у вкладки й звіт не йде;
+ * створена ПІСЛЯ — усе як звичайно. Джоба й чотири роути беруть старт із конфігу.
+ * 🧨 Червоніє, якщо зняти межу в записі, у черзі транскрибації чи в рядках вкладок.
+ */
+test("#1073 ТОЧКА СТАРТУ · ЖИВА СХЕМА: до старту — не пишемо, не слухаємо, не показуємо; після — як звичайно", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  const { runCarrierTick, recordStageDeals } = await import("./carrierCalls.js");
+  const { carrierDealRows } = await import("./carrierDeals.js");
+  const launch = min(200);
+  const Old = phone(10730, 1), New = phone(10730, 2);
+  const rec = await recordStageDeals(c.db, [
+    { id: 107301, name: Old, created_at: sec(min(300)), responsible_user_id: null },
+    { id: 107302, name: New, created_at: sec(min(100)), responsible_user_id: null }], NOW, launch);
+  assert.deepEqual([rec.beforeLaunch, rec.inserted], [1, 1], "🔴 угоду до старту записано (або нову — ні)");
+  // Стара угода, записана ще до запровадження старту, — з розмовою: платити за неї не можна.
+  await call(c, "1073-old", min(400), 40, phone(10730, 3));
+  await carrierDeal(c, 107303, phone(10730, 3), min(401), "own", "1073-old", 1);
+  await call(c, "1073-new", min(90), 40, New);
+  const net = fakeNet();
+  await runCarrierTick({ db: c.db, http: net.http, keys: { elevenlabs: "k", gemini: "g" }, prices: PRICES, now: () => NOW,
+    stageLeads: async () => [], alert: async () => {}, launchAt: launch });
+  const st = async (u: string) => (await c.raw.query<{ status: string }>("SELECT status FROM call_transcripts WHERE uniqueid=$1", [u])).rows[0]?.status ?? null;
+  assert.equal(await st("1073-old"), null, "🔴 розмову угоди до старту поставлено в чергу й оплачено");
+  assert.equal(await st("1073-new"), "done", "дзеркало: нова угода слухається");
+  const shown = (await carrierDealRows(c.db, { period: null, scope: {}, since: launch.toISOString() })).map((r) => r.kommoId).sort();
+  assert.deepEqual(shown, [107302], "🔴 угода до старту потрапила у вкладки/звіт");
+  const route = SRC("routes/dashboard.ts");
+  assert.match(route, /const CARRIER_SINCE = \(\) => config\.callAi\.carrierLaunchAt;/);
+  assert.equal((route.match(/CARRIER_SINCE\(\)/g) ?? []).length, 4, "🔴 не всі роути вкладки й звіту беруть точку старту");
+  assert.match(SRC("jobs/carrierCallJob.ts"), /launchAt: new Date\(config\.callAi\.carrierLaunchAt\)/, "🔴 джоба слухає без точки старту");
+  assert.match(SRC("config.ts"), /carrierLaunchAt: process\.env\.CARRIER_LAUNCH_AT \?\? "2026-09-30T09:48:08Z"/, "🔴 точка старту ≠ рішенню 30.09.2026");
 });

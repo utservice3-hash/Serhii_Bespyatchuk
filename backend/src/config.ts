@@ -86,6 +86,9 @@ export const config = {
     carrierAutoClose: process.env.CARRIER_AUTO_CLOSE ?? "",
     // AI-«Інше» закривається окремим перемикачем (ТЗ 30.09.2026: лише після тесту точності, показаного Роману).
     carrierAutoCloseOther: process.env.CARRIER_AUTO_CLOSE_OTHER ?? "",
+    // 🏁 Точка старту відсіву (Роман 30.09.2026: «працюємо з 0, тільки після деплою починаємо транскрибацію нового»):
+    // угоди, створені раніше, не записуються, не слухаються й не показуються. За замовчуванням — старт `b6965f8` на проді.
+    carrierLaunchAt: process.env.CARRIER_LAUNCH_AT ?? "2026-09-30T09:48:08Z",
     elevenlabsApiKey: process.env.ELEVENLABS_API_KEY ?? "",
     geminiApiKey: process.env.GEMINI_API_KEY ?? "",
     // Ціни й стелі — БЕЗ значень за замовчуванням: не задано → «не налаштовано», жодної витрати

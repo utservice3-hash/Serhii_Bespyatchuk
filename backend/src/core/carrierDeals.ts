@@ -94,6 +94,8 @@ export interface DealQuery {
   scope: CarrierScope;
   /** Лише ці угоди (закриття: id з відповіді Kommo цього проходу). */
   ids?: readonly number[];
+  /** Точка старту: угоди, створені раніше, у вкладки й звіт не йдуть (Роман 30.09.2026: «працюємо з 0»). */
+  since?: string | null;
 }
 
 /** Найсвіжіший вердикт будь-якої з рубрик мобільних; готовий — першим. */
@@ -132,9 +134,10 @@ export async function carrierDealRows(db: Db, q: DealQuery): Promise<DealRow[]> 
        AND ($6::int IS NULL OR m.id = $6::int)
        AND ($7::int IS NULL OR m.team_id = $7::int)
        AND ($8::bigint[] IS NULL OR d.kommo_id = ANY($8::bigint[]))
+       AND ($9::timestamptz IS NULL OR d.deal_created_at >= $9::timestamptz)
      ORDER BY d.deal_created_at DESC, d.kommo_id`,
   [STT_PROVIDER, ELEVENLABS_STT_MODEL, [...CARRIER_RUBRICS], q.period?.from ?? null, q.period?.to ?? null,
-    q.scope.managerId ?? null, q.scope.teamId ?? null, q.ids ? [...q.ids] : null]);
+    q.scope.managerId ?? null, q.scope.teamId ?? null, q.ids ? [...q.ids] : null, q.since ?? null]);
   const rows = r.rows.map(toRow);
   if (!rows.length) return rows;
   const j = await db.query<{ kommo_id: string; by: string | null; role: string | null; decision: HumanDecision; other_type: OtherType | null;
@@ -221,15 +224,16 @@ export function carrierReport(rows: readonly Pick<DealRow, "category" | "source"
  * «Фільтр», а не «хтось закрив як перевізника»: угоду, яку ми бачили на етапі після фільтра, закрили вже ми чи людина
  * (зокрема разове закриття старих 30.09.2026) — вона в рядках вкладок, а не тут. Інакше одна угода рахувалась би двічі.
  */
-export async function filterRemovedByManager(db: Db, from: string, to: string, pipelineId: number, scope: CarrierScope):
-  Promise<Map<number | null, number>> {
+export async function filterRemovedByManager(db: Db, from: string, to: string, pipelineId: number, scope: CarrierScope,
+  since: string | null = null): Promise<Map<number | null, number>> {
   const r = await db.query<{ manager_id: number | null; n: number }>(`
     SELECT m.id AS manager_id, count(*)::int AS n FROM deals dd LEFT JOIN managers m ON m.id = dd.manager_id
      WHERE dd.pipeline_id = $3 AND dd.status_id = 143 AND dd.reject_reason = 'Перевізник' AND dd.name ~ '^380[0-9]{9}$'
        AND (dd.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1::date AND $2::date
        AND NOT EXISTS (SELECT 1 FROM carrier_call_deals x WHERE x.kommo_id = dd.kommo_id)
        AND ($4::int IS NULL OR m.id = $4::int) AND ($5::int IS NULL OR m.team_id = $5::int)
-     GROUP BY 1`, [from, to, pipelineId, scope.managerId ?? null, scope.teamId ?? null]);
+       AND ($6::timestamptz IS NULL OR dd.created_at_kommo >= $6::timestamptz)
+     GROUP BY 1`, [from, to, pipelineId, scope.managerId ?? null, scope.teamId ?? null, since]);
   return new Map(r.rows.map((x) => [x.manager_id, Number(x.n)]));
 }
 
