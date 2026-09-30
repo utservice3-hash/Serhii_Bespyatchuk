@@ -3,7 +3,7 @@ import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WAR
 import { LEADGEN_STAGE_IDS, QUALIFICATION_PIPELINES } from "./leadgenStages.js";
 import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery, leadStatusPred,
   type SqlQuery, type LeadgenBucketGrain } from "./leadgenSql.js";
-import { FC_PIPELINES, handoffDealStates } from "./money.js";
+import { FC_PIPELINES, handoffDealStates, clientSuccessHistory } from "./money.js";
 import { stageName } from "./stageNames.js";
 import {
   handoffView, trendWindow, mergeBucketRows, assembleTrend, handoffDealRow, LINK_BEFORE_SEC, LINK_AFTER_SEC,
@@ -299,6 +299,11 @@ export async function leadgenBuckets(
   return mergeBucketRows(q.stages, q.calls, rosterPerBucket);
 }
 
+/** Історія успіхів клієнтів цих передач — для правила «постійний клієнт» (`isRegularAt`). */
+function historyFor(links: readonly HandoffLinkInfo[]) {
+  return clientSuccessHistory(links.flatMap((l) => (l.dealId != null && l.clientKey ? [l.clientKey] : [])));
+}
+
 /** Входи в 142 періоду з угодою менеджера й описом обох угод — усе, крім грошей (їх дає `money.ts`). */
 async function handoffLinks(from: string, to: string): Promise<HandoffLinkInfo[]> {
   const q = handoffLinkQuery(from, to,
@@ -306,12 +311,12 @@ async function handoffLinks(from: string, to: string): Promise<HandoffLinkInfo[]
       managerPipelines: [...QUALIFICATION_PIPELINES, ...FC_PIPELINES] },
     { beforeSec: LINK_BEFORE_SEC, afterSec: LINK_AFTER_SEC });
   const r = await pool.query<{ pz_id: string; lg_id: number; lg_team_id: number | null; at: Date; day: string;
-    pz_name: string | null; pz_client: string | null; deal_id: string | null; deal_name: string | null;
+    pz_name: string | null; pz_client: string | null; client_key: string | null; deal_id: string | null; deal_name: string | null;
     deal_client: string | null; sales_manager: string | null; deal_reason: string | null;
     closed_day: string | null; plan_pay_day: string | null }>(q.text, q.values);
   return r.rows.map((x) => ({
     pzId: Number(x.pz_id), lgId: x.lg_id, lgTeamId: x.lg_team_id, at: new Date(x.at).getTime(), day: x.day,
-    dealId: x.deal_id == null ? null : Number(x.deal_id),
+    dealId: x.deal_id == null ? null : Number(x.deal_id), clientKey: x.client_key,
     pzName: x.pz_name, pzClient: x.pz_client, dealName: x.deal_name, dealClient: x.deal_client,
     salesManager: x.sales_manager, dealReason: x.deal_reason, closedDay: x.closed_day, planPayDay: x.plan_pay_day,
   }));
@@ -344,8 +349,9 @@ export interface LeadgenHandoffMoneyResult {
  */
 export async function leadgenHandoffMoney(from: string, to: string, scope: HandoffScope): Promise<LeadgenHandoffMoneyResult> {
   const links = await handoffLinks(from, to);
-  const states = await handoffDealStates(links.flatMap((l) => (l.dealId == null ? [] : [l.dealId])));
-  const view = handoffView(links, states, scope);
+  const [states, history] = await Promise.all([
+    handoffDealStates(links.flatMap((l) => (l.dealId == null ? [] : [l.dealId]))), historyFor(links)]);
+  const view = handoffView(links, states, scope, history);
   const deals = view.rows.map((h) =>
     handoffDealRow(h, h.dealId == null ? undefined : states.get(h.dealId), HANDOFF_ROW_DEPS));
   return { totals: view.totals, byPerson: view.byPerson, deals };
@@ -381,8 +387,9 @@ export async function leadgenTrend(to: string, months: number, scope: HandoffSco
     handoffLinks(w.from, to),
     firstStageEventDay(),
   ]);
-  const states = await handoffDealStates(links.flatMap((l) => (l.dealId == null ? [] : [l.dealId])));
-  const t = assembleTrend({ monthStarts: w.monthStarts, stages: q.stages, calls: q.calls, links, states, firstDay, scope });
+  const [states, history] = await Promise.all([
+    handoffDealStates(links.flatMap((l) => (l.dealId == null ? [] : [l.dealId]))), historyFor(links)]);
+  const t = assembleTrend({ monthStarts: w.monthStarts, stages: q.stages, calls: q.calls, links, states, firstDay, scope, history });
   return { months: w.months, to, monthStarts: t.monthStarts, byPerson: t.byPerson, money: t.money };
 }
 

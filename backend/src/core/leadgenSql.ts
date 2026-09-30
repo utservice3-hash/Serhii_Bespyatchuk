@@ -143,7 +143,7 @@ export function handoffLinkQuery(
   return {
     text: `SELECT e.kommo_id AS pz_id, d.manager_id AS lg_id, m.team_id AS lg_team_id,
             e.changed_at AS at, to_char((e.changed_at ${K}), 'YYYY-MM-DD') AS day,
-            d.name AS pz_name, d.client_name AS pz_client,
+            d.name AS pz_name, d.client_name AS pz_client, d.client_key AS client_key,
             x.kommo_id AS deal_id, x.name AS deal_name, x.client_name AS deal_client,
             sm.name AS sales_manager, x.reject_reason AS deal_reason,
             to_char((x.closed_at_kommo ${K}), 'YYYY-MM-DD') AS closed_day,

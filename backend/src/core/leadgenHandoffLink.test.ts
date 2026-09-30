@@ -572,7 +572,9 @@ test("#1090 ЖИВИЙ SQL: лід — «Взято в роботу» АБО «�
  * #1090b — ТРИ ЛІЧИЛЬНИКИ ЛІДІВ, ОДНЕ ПРАВИЛО: рядок людини (`leadgenStats().rows`), розріз за джерелом
  * (`bySource`) і тижні (`leadgenWeekly`) — справжнє ядро на тимчасовій базі. Друга копія предиката в
  * будь-якому з них розійшлась би мовчки: екран показав би 3 ліди в рядку й 2 у «Звідки ліди».
- * 🧨 САБОТАЖ: у запиті `bySource` (`leadgenStats.ts`) замінити `leadStatusPred(...)` на `e.status_id = $4` → червоніє.
+ * 🧨 САБОТАЖ: у запиті `bySource` (`leadgenStats.ts`) у виклику `leadStatusPred` замінити `"$5"` на `"$4"` і дописати
+ * `AND $5::bigint > 0` (запит лишається ВАЛІДНИМ, змінюється лише зміст) → червоніє саме розріз. Просто прибрати `$5`
+ * не можна: Postgres упаде на невизначеному типі параметра, і червоне доведе аварію, а не гейт (♾ правило 6).
  */
 test("#1090b ЖИВИЙ SQL: рядок, джерела й тижні рахують ліди одним правилом", async (t) => {
   if (!client) return t.skip(skip ?? "кластер не піднявся");
@@ -584,4 +586,51 @@ test("#1090b ЖИВИЙ SQL: рядок, джерела й тижні рахую
     "🔴 розріз за джерелом рахує ліди іншим правилом, ніж рядок");
   const weeks = await stats.leadgenWeekly("2025-01-13", "2025-01-19");
   assert.deepEqual(weeks.map((w) => [w.week, w.leads, w.opr]), [["2025-01-13", 3, 2]], "🔴 тижні рахують ліди іншим правилом, ніж рядок");
+});
+
+/**
+ * #1091c — ПОСТІЙНИЙ КЛІЄНТ НАСКРІЗЬ: справжні `money.clientSuccessHistory` і `leadgenHandoffMoney` на
+ * тимчасовій базі (задача 4668, п.5). Успіх клієнта — рівно клас `success`: повний цикл, 142, є
+ * `closed_at`, не мінусова. Поруч — усе, що схоже, але НЕ успіх: 142 без `closed_at`, 142 Кваліфікації,
+ * «Оплата отримана», мінусова 142. Дві передачі одного дня: клієнта з 2 успіхами до передачі — `regular`
+ * (поза грошима), клієнта з 1 успіхом — у «Успішних». Лютий 2025 — поза вікнами решти гейтів.
+ * 🧨 САБОТАЖ: у `clientSuccessHistory` прибрати `AND NOT d.is_minus` → у «k-one» стає 2 успіхи → червоніє.
+ */
+test("#1091c ЖИВИЙ SQL: історія успіхів — лише FC-142 з closed_at без мінусових; передача постійного — поза грошима", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { money, stats } = await core();
+  await client!.query(`INSERT INTO managers (id, name, team_id) VALUES (71,'Лідген Постійні',1) ON CONFLICT DO NOTHING`);
+  const hist = async (ck: string, pipeline: number, status: number, closed: string | null, minus = false) => {
+    const id = await deal({ manager: 3, pipeline, status, ck, created: utc("2024-12-01T08:00:00") });
+    await client!.query(`UPDATE deals SET closed_at_kommo = $2, is_minus = $3, price = 1000 WHERE kommo_id = $1`,
+      [id, closed == null ? null : utc(closed), minus]);
+  };
+  const PAID = 69716460;
+  await hist("k-reg", FC[0], Q, "2025-01-10T10:00:00");
+  await hist("k-reg", FC[1], Q, "2025-02-01T10:00:00");
+  await hist("k-one", FC[0], Q, "2025-01-20T10:00:00");
+  await hist("k-one", FC[0], Q, null);                              // 142 без closed_at — не успіх
+  await hist("k-one", QUAL, Q, "2025-01-21T10:00:00");               // 142 Кваліфікації — не успіх
+  await hist("k-one", FC[0], PAID, "2025-01-22T10:00:00");           // «Оплата отримана» — не успіх
+  await hist("k-one", FC[0], Q, "2025-01-23T10:00:00", true);        // мінусова — не перевезення
+  const handoff = async (ck: string) => {
+    const pz = await deal({ manager: 71, pipeline: PZ, ck });
+    const at = utc("2025-02-10T09:00:00");
+    await ev(pz, PZ, Q, at);
+    const md = await deal({ manager: 3, pipeline: FC[0], status: Q, ck, created: sec(at, 30) });
+    await client!.query(`UPDATE deals SET closed_at_kommo = $2, price = 5000 WHERE kommo_id = $1`, [md, utc("2025-02-20T10:00:00")]);
+    return pz;
+  };
+  const pzReg = await handoff("k-reg"), pzOne = await handoff("k-one");
+  const h = await money.clientSuccessHistory(["k-reg", "k-one"]);
+  assert.deepEqual((h.get("k-reg") ?? []).map((x) => x.day).sort(), ["2025-01-10", "2025-02-01", "2025-02-20"],
+    "🔴 історія постійного клієнта не та (успіх — FC-142 з closed_at, обидві FC-воронки)");
+  assert.deepEqual((h.get("k-one") ?? []).map((x) => x.day).sort(), ["2025-01-20", "2025-02-20"],
+    "🔴 в історію потрапило те, що не є успішним перевезенням (без closed_at / Кваліфікація / оплата / мінусова)");
+  const hm = await stats.leadgenHandoffMoney("2025-02-10", "2025-02-10", { teamId: null, managerId: null });
+  const cls = new Map(hm.deals.map((d) => [d.pzId, d.cls]));
+  assert.equal(cls.get(pzReg), "regular", "🔴 передача клієнта з 2 успіхами ДО неї не визнана постійною");
+  assert.equal(cls.get(pzOne), "success", "🔴 клієнт з одним успіхом до передачі визнаний постійним");
+  assert.deepEqual([hm.totals.success.n, hm.totals.success.sum, hm.totals.regular.n, hm.totals.regular.sum], [1, 5000, 1, 5000],
+    "🔴 гроші лідгена не без постійного, або постійного не названо числом");
 });
