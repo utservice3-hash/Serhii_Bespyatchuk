@@ -175,3 +175,57 @@ test("#1080f РОУТ: виконавець не закриває (403 з іме
     scratch.dispose();
   }
 });
+
+/** Код фронта без коментарів — гейт не має задовольнятись текстом у коментарі (урок `#400l`). */
+function codeOf(...rel: string[]): string {
+  return readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", ...rel), "utf8")
+    .replace(/^\s*\/\/.*$/gm, " ")
+    .replace(/\{?\/\*[\s\S]*?\*\/\}?/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * #1080g — ФРОНТ ДЗЕРКАЛИТЬ, А НЕ МОВЧИТЬ: меню над карткою, права з сервера, причина відмови.
+ *
+ * ① МЕНЮ НАД КАРТКОЮ. Заміряно на проді 30.09.2026: у бічній картці поповер статусу
+ *   монтувався (`zIndex: 1000`) ПІД карткою (`zIndex: 2600`) — клік «нічого не робив».
+ *   Порівнюємо ЧИСЛА з обох файлів, а не наявність рядка.
+ * ② ОБИДВА МІСЦЯ (рядок і картка) передають у меню права з сервера й імʼя «Приймає».
+ * ③ Сірий «Готово»: `disabled` за `canDone`.
+ * ④ Тост відмови бере причину з ТІЛА відповіді (`response.data.error`), а не
+ *   «Request failed with status code 403».
+ *
+ * 🧨 Червоніє, якщо повернути `STATUS_MENU_Z` нижче картки, прибрати `rights=` з
+ * будь-якого з двох місць або повернути `err.message` як єдине джерело тексту.
+ */
+test("#1080g ФРОНТ: меню статусу вище за картку, права й «Приймає» в обох місцях, тост із причиною сервера", () => {
+  const picker = codeOf("components", "StatusPicker.tsx");
+  const section = codeOf("pages", "dashboard", "sections", "TasksSection.tsx");
+  const dash = codeOf("pages", "Dashboard.tsx");
+
+  // ① Числа, а не рядки.
+  const menuZ = Number(picker.match(/export const STATUS_MENU_Z = (\d+);/)?.[1]);
+  assert.ok(Number.isFinite(menuZ), "🔴 не знайдено STATUS_MENU_Z — предмет гейта зник");
+  assert.match(picker, /zIndex: STATUS_MENU_Z\b/, "🔴 поповер не використовує STATUS_MENU_Z");
+  const cardZ = [...section.matchAll(/overflowY: "auto", padding: 24, zIndex: (\d+)/g)].map((m) => Number(m[1]));
+  assert.equal(cardZ.length, 1, `🔴 не знайдено картки задачі (знайдено ${cardZ.length}) — предмет гейта зник`);
+  assert.ok(menuZ > cardZ[0], `🔴 МЕНЮ СТАТУСУ (${menuZ}) ПІД КАРТКОЮ (${cardZ[0]}) — клік у картці знову «нічого не робить»`);
+
+  // ② Обидва місця.
+  const pickers = section.match(/<StatusPicker [^>]*>/g) ?? [];
+  assert.equal(pickers.length, 2, `🔴 очікували два меню статусу (рядок і картка), знайдено ${pickers.length}`);
+  for (const p of pickers) {
+    assert.match(p, /rights=\{\w+\.statusRights\}/, `🔴 меню без прав із сервера: ${p.slice(0, 120)}`);
+    assert.match(p, /reviewerName=\{\w+\.reviewerName\}/, `🔴 меню без імені «Приймає»: ${p.slice(0, 120)}`);
+  }
+
+  // ③ Сірий «Готово».
+  assert.match(picker, /const off = s === "done" && !canDone/, "🔴 «Готово» не сіріє без права закривати");
+  assert.match(picker, /disabled=\{off\}/, "🔴 сірий пункт лишився клікабельним");
+  assert.match(picker, /disabled=\{!canChange\}/, "🔴 без прав на статус кнопка відкриває меню-пустушку");
+
+  // ④ Причина з тіла відповіді.
+  const commit = dash.slice(dash.indexOf("async function commitTask("), dash.indexOf("function patchTaskLocal("));
+  assert.ok(commit.length > 0, "🔴 commitTask не знайдено");
+  assert.match(commit, /response\?\.data\?\.error/, "🔴 тост відмови не бере причину з відповіді сервера");
+});

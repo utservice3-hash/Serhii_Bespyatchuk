@@ -9,6 +9,8 @@ export type TaskForm = {
   assigneeId2: number | ""; // друга людина (задача одразу на двох менеджерів)
   /** Виконавець-АКАУНТ (HR, бухгалтерія, рекрутер — кого немає в CRM). Разом із assigneeId неможливий. */
   assigneeUserId: number | "";
+  /** ✅ «Приймає» (`users.id`) — хто закриває задачу. Порожнє — приймає автор. */
+  reviewerId: number | "";
   /**
    * 📎 Файл, обраний ЩЕ НА ЕТАПІ СТВОРЕННЯ (вимога власника 14.09.2026).
    *
@@ -45,6 +47,7 @@ export const emptyTaskForm: TaskForm = {
   assigneeId: "",
   assigneeId2: "",
   assigneeUserId: "",
+  reviewerId: "",
   pendingFile: null,
   priority: "medium",
   department: "",

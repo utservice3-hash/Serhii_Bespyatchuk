@@ -1425,6 +1425,8 @@ export function TasksSection({
                     <td>
                       <StatusPicker
                         value={task.status}
+                        rights={task.statusRights}
+                        reviewerName={task.reviewerName}
                         onChange={(status) => {
                           patchTaskLocal(task.id, { status });
                           commitTask(task.id, { status });
@@ -1556,6 +1558,39 @@ export function TasksSection({
                   <F icon="✍️" label="Автор">
                     <span style={{ fontSize: 13 }}>{openTask.createdByName ?? "—"}</span>
                   </F>
+                  {/* ✅ «ПРИЙМАЄ» — хто закриває задачу (правило Сергія, 30.09.2026). Лише у
+                      звичайних задач: KPI, реактивація й 1×1 закриваються своїм шляхом.
+                      Змінити можуть автор, сам «Приймає» і адмін — це право рахує сервер;
+                      решті поле показується текстом, щоб не обіцяти правки, яку відхилять. */}
+                  {openTask.taskType === "simple" && (
+                    <F icon="✅" label="Приймає">
+                      {openTask.statusRights?.canChangeReviewer ? (
+                        <select
+                          value={openTask.reviewerId ?? ""}
+                          onChange={(e) => {
+                            if (!e.target.value) return;
+                            const reviewerId = Number(e.target.value);
+                            const reviewerName = accounts.find((a) => a.id === reviewerId)?.name ?? null;
+                            patchTaskLocal(openTask.id, { reviewerId, reviewerName });
+                            // Права на статус залежать від «Приймає» — перечитуємо їх із сервера.
+                            void Promise.resolve(commitTask(openTask.id, { reviewerId })).then(() => refreshTasks?.());
+                          }}
+                          style={{ width: "100%" }}
+                        >
+                          {openTask.reviewerId != null && !accounts.some((a) => a.id === openTask.reviewerId) && (
+                            <option value={openTask.reviewerId}>{openTask.reviewerName ?? `#${openTask.reviewerId}`}</option>
+                          )}
+                          {accounts.map((a) => (
+                            <option key={a.id} value={a.id}>{a.name}{a.nameIsLogin ? " (логін)" : ""}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span style={{ fontSize: 13 }} title="Змінити «Приймає» може автор, сам «Приймає» або адмін">
+                          {openTask.reviewerName ?? "—"}
+                        </span>
+                      )}
+                    </F>
+                  )}
                   <F icon="👤" label="Виконавець">
                     <select value={openTask.assigneeId ?? ""} onChange={(e) => { const assigneeId = e.target.value ? Number(e.target.value) : null; const assigneeName = managerOptions.find((m) => m.id === assigneeId)?.name ?? null; patchTaskLocal(openTask.id, { assigneeId, assigneeName }); commitTask(openTask.id, { assigneeId }); }} style={{ width: "100%" }}>
                       <option value="">— (моя / без виконавця)</option>
@@ -1616,6 +1651,7 @@ export function TasksSection({
                   </F>
                   <F icon="◔" label="Статус">
                     <StatusPicker value={openTask.status} fullWidth
+                      rights={openTask.statusRights} reviewerName={openTask.reviewerName}
                       onChange={(status) => { patchTaskLocal(openTask.id, { status }); commitTask(openTask.id, { status }); }} />
                   </F>
                 </>
@@ -1778,6 +1814,12 @@ export function TasksSection({
                   {history.map((h) => (
                     <div key={h.id} style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)" }}>
                       {String(h.changedAt).slice(0, 16).replace("T", " ")} · {h.fromStatus ?? "—"} → <b style={{ color: "var(--text)" }}>{h.toStatus}</b> · {h.changedByName ?? "невідомо"}
+                      {/* ✅ ХТО ПРИЙНЯВ — окремою позначкою. Роль записана знімком на момент
+                          зміни (task_status_log.actor_role); у старих рядках її немає, і
+                          заднім числом ми її не вигадуємо. */}
+                      {h.toStatus === "done" && (h.actorRole === "reviewer" || h.actorRole === "author" || h.actorRole === "admin") && (
+                        <b style={{ color: "#16a34a" }}> · ✅ прийняв(ла)</b>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -2082,6 +2124,21 @@ export function TasksSection({
                     >
                       <option value="">—</option>
                       {accounts.map((a) => (
+                        <option key={a.id} value={a.id}>{a.name}{a.nameIsLogin ? " (логін)" : ""}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {/* ✅ «ПРИЙМАЄ» — хто закриває задачу. Порожнє = «я» (автор). */}
+                {taskForm.taskType === "simple" && (
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
+                    Приймає <span style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)" }}>(хто ставить «Готово»)</span>
+                    <select
+                      value={taskForm.reviewerId}
+                      onChange={(e) => setTaskForm((f) => ({ ...f, reviewerId: e.target.value === "" ? "" : Number(e.target.value) }))}
+                    >
+                      <option value="">— я (автор)</option>
+                      {accounts.filter((a) => a.id !== currentUserId).map((a) => (
                         <option key={a.id} value={a.id}>{a.name}{a.nameIsLogin ? " (логін)" : ""}</option>
                       ))}
                     </select>

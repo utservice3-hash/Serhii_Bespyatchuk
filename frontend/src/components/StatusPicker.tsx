@@ -18,6 +18,13 @@ const hexA = (hex: string, a: number) => {
 export const STATUS_MENU_Z = 3000;
 
 /**
+ * ✅ ПРАВА НА СТАТУС — ЛИШЕ ДЗЕРКАЛО СЕРВЕРА (`statusRights` у `GET /tasks`).
+ * Не передано — меню повне (оптимістичний рядок до першого рефетчу; сервер усе
+ * одно відмовить 403, і тост назве причину).
+ */
+export type StatusRightsView = { canChange: boolean; canDone: boolean };
+
+/**
  * Kommo-style status picker: a coloured pill trigger (dot + label) opening a
  * grouped popover (To-do / In progress / Complete) where every status carries
  * its own coloured dot, like the CRM. Replaces the plain native <select> whose
@@ -25,12 +32,21 @@ export const STATUS_MENU_Z = 3000;
  * fixed positioning so it is never clipped by a table cell's overflow:hidden.
  */
 export function StatusPicker({
-  value, onChange, fullWidth = false,
+  value, onChange, fullWidth = false, rights, reviewerName,
 }: {
   value: TaskStatus;
   onChange: (s: TaskStatus) => void;
   fullWidth?: boolean;
+  rights?: StatusRightsView;
+  /** Хто може закрити — для підказки на сірому «Готово». */
+  reviewerName?: string | null;
 }) {
+  const canChange = rights?.canChange ?? true;
+  const canDone = rights?.canDone ?? true;
+  const closer = reviewerName ? `Закрити може: ${reviewerName}` : "Закрити може той, хто приймає задачу";
+  // 🔴 Відмова називає себе ДО кліку: кнопка без прав не відкриває меню, яке нічого не зробить.
+  const lockedTitle = canChange ? undefined
+    : `Статус змінюють виконавець, «Приймає»${reviewerName ? ` (${reviewerName})` : ""} або адмін`;
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
@@ -81,12 +97,14 @@ export function StatusPicker({
 
   return (
     <div style={{ display: fullWidth ? "block" : "inline-block", width: fullWidth ? "100%" : undefined, maxWidth: "100%" }}>
-      <button ref={btnRef} type="button" onClick={() => setOpen((o) => !o)}
+      <button ref={btnRef} type="button" onClick={() => { if (canChange) setOpen((o) => !o); }}
+        disabled={!canChange} title={lockedTitle} aria-disabled={!canChange}
         style={{ display: "inline-flex", alignItems: "center", gap: 7, width: fullWidth ? "100%" : undefined, maxWidth: "100%",
           background: hexA(color, 0.16), color: "var(--text)", border: "none", borderRadius: 999,
-          padding: "4px 12px", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>
+          padding: "4px 12px", fontWeight: 600, fontSize: 12, cursor: canChange ? "pointer" : "not-allowed" }}>
         {dot(color)}
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{STATUS_LABELS[value]}</span>
+        {!canChange && <span aria-hidden style={{ fontSize: 10, opacity: 0.7 }}>🔒</span>}
       </button>
       {open && pos && createPortal(
         <div ref={popRef} style={{ position: "fixed", zIndex: STATUS_MENU_Z, top: pos.top, left: pos.left, minWidth: 240,
@@ -99,16 +117,22 @@ export function StatusPicker({
               {group.statuses.map((s) => {
                 const c = STATUS_DOT_COLORS[s] ?? "#94a3b8";
                 const sel = s === value;
+                // ✅ «Готово» без права закривати — сірий пункт із причиною, а не кнопка-пустушка.
+                const off = s === "done" && !canDone && !sel;
                 return (
-                  <button key={s} type="button"
-                    onClick={() => { onChange(s); setOpen(false); }}
+                  <button key={s} type="button" disabled={off} title={off ? closer : undefined}
+                    onClick={() => { if (off) return; onChange(s); setOpen(false); }}
                     style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left", border: "none",
-                      background: sel ? hexA(c, 0.16) : "transparent", color: "var(--text)", cursor: "pointer",
+                      background: sel ? hexA(c, 0.16) : "transparent", color: off ? "var(--text-muted)" : "var(--text)",
+                      cursor: off ? "not-allowed" : "pointer", opacity: off ? 0.6 : 1,
                       borderRadius: 999, padding: "6px 10px", fontSize: 13, fontWeight: sel ? 700 : 500, marginBottom: 2 }}
-                    onMouseEnter={(e) => { if (!sel) (e.currentTarget.style.background = hexA(c, 0.10)); }}
-                    onMouseLeave={(e) => { if (!sel) (e.currentTarget.style.background = "transparent"); }}>
-                    {dot(c)}
-                    <span style={{ flex: 1 }}>{STATUS_LABELS[s]}</span>
+                    onMouseEnter={(e) => { if (!sel && !off) (e.currentTarget.style.background = hexA(c, 0.10)); }}
+                    onMouseLeave={(e) => { if (!sel && !off) (e.currentTarget.style.background = "transparent"); }}>
+                    {dot(off ? "#94a3b8" : c)}
+                    <span style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+                      <span>{STATUS_LABELS[s]}{off ? " 🔒" : ""}</span>
+                      {off && <span style={{ fontSize: 11, fontWeight: 400 }}>{closer}</span>}
+                    </span>
                     {sel && <span style={{ color: c, fontWeight: 700 }}>✓</span>}
                   </button>
                 );

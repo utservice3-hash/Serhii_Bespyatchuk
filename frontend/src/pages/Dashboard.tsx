@@ -444,10 +444,33 @@ export function Dashboard() {
       await updateTask(id, patch as Parameters<typeof updateTask>[1]);
     } catch (err) {
       const what = Object.keys(patch)[0] ?? "поле";
-      const detail = err instanceof Error && err.message ? ` (${err.message})` : "";
+      /**
+       * 🗣 ПРИЧИНА — З ТІЛА ВІДПОВІДІ СЕРВЕРА, А НЕ З AXIOS. `err.message` — це
+       * «Request failed with status code 403», тобто рівно те, що людині нічого не
+       * каже. Сервер пише причину в `{ error }`: «Закрити задачу може «Приймає»: …».
+       */
+      const body = (err as { response?: { data?: { error?: unknown } } })?.response?.data?.error;
+      const reason = typeof body === "string" && body.trim() ? body
+        : err instanceof Error && err.message ? err.message : "";
+      /**
+       * ✅ ВІДХИЛЕНИЙ СТАТУС НЕ ЛИШАЄТЬСЯ НА ЕКРАНІ. Для тексту позначка «редагується»
+       * тримає набране (його шкода втратити); для статусу навпаки — «Готово», якого
+       * сервер не прийняв, читалось би як «закрито». Знімаємо позначку й перечитуємо
+       * задачі: на екран повертається те, що справді лежить у базі.
+       */
+      if (patch.status !== undefined) {
+        dirtyTaskFields.current.get(id)?.delete("status");
+        setToasts((cur) => [...cur, { id: Date.now() + id, text: `⚠️ Статус задачі #${id} не змінено${reason ? `: ${reason}` : ""}` }]);
+        try {
+          const fresh = await fetchTasks();
+          // Злиття, а не заміна: чужі незбережені правки в інших полях мусять уціліти.
+          setTasks((prev) => mergeTasksPreservingEdits(prev, fresh, dirtyTaskFields.current));
+        } catch { /* рефетч підхопить поллер */ }
+        return;
+      }
       setToasts((cur) => [...cur, {
         id: Date.now() + id,
-        text: `⚠️ Не вдалося зберегти «${what}» задачі #${id}${detail}. Текст на екрані НЕ втрачено — спробуйте ще раз.`,
+        text: `⚠️ Не вдалося зберегти «${what}» задачі #${id}${reason ? ` (${reason})` : ""}. Текст на екрані НЕ втрачено — спробуйте ще раз.`,
       }]);
     }
   }
@@ -465,6 +488,7 @@ export function Dashboard() {
     deadline?: string | null;
     assigneeId?: number | null;
     assigneeUserId?: number | null;
+    reviewerId?: number | null;
     priority?: TaskPriority;
     department?: string | null;
     comments?: string | null;
@@ -477,7 +501,8 @@ export function Dashboard() {
     const department = payload.department?.trim() || null;
     const comments = payload.comments?.trim() || null;
     const assigneeUserId = payload.assigneeUserId ?? null;
-    const { id } = await createTask({ title, deadline, assigneeId, assigneeUserId, priority, department, comments });
+    const reviewerId = payload.reviewerId ?? null;
+    const { id } = await createTask({ title, deadline, assigneeId, assigneeUserId, reviewerId, priority, department, comments });
     setTasks((prev) => [
       {
         id,
@@ -576,6 +601,7 @@ export function Dashboard() {
           deadline: taskForm.deadline,
           assigneeId: null,
           assigneeUserId: Number(taskForm.assigneeUserId),
+          reviewerId: taskForm.reviewerId === "" ? null : taskForm.reviewerId,
           priority: taskForm.priority,
           department: taskForm.department,
           comments: taskForm.comments,
@@ -588,6 +614,7 @@ export function Dashboard() {
           title: taskForm.title,
           deadline: taskForm.deadline || null,
           assigneeIds: ids,
+          reviewerId: taskForm.reviewerId === "" ? null : taskForm.reviewerId,
           priority: taskForm.priority,
           department: taskForm.department?.trim() || null,
           comments: taskForm.comments?.trim() || null,
@@ -602,11 +629,14 @@ export function Dashboard() {
           title: taskForm.title,
           deadline: taskForm.deadline,
           assigneeId: taskForm.assigneeId === "" ? null : Number(taskForm.assigneeId),
+          reviewerId: taskForm.reviewerId === "" ? null : taskForm.reviewerId,
           priority: taskForm.priority,
           department: taskForm.department,
           comments: taskForm.comments,
         });
         await attachPendingFile(newId != null ? [newId] : []);
+        // Оптимістичний рядок не знає ні імені «Приймає», ні прав на статус — їх рахує сервер.
+        if (taskForm.reviewerId !== "") setTasks(await fetchTasks());
       }
     } else {
       // Менеджер ставить план ЛИШЕ собі — виконавець форсується на себе.
