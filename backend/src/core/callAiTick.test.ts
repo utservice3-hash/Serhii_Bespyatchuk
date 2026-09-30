@@ -270,3 +270,41 @@ test("#786 ДАТА СТАРТУ: угоди раніше 20.09.2026 (Київ) 
   assert.ok(!ids.includes("7600-before"), "🔴 угоду з 19.09 (Київ) узято, хоча старт — 20.09");
   assert.ok(ids.includes("7600-after"), "дзеркало: угоду з 20.09 00:10 (Київ) мусить бути взято");
 });
+
+/**
+ * #852 — ЩО НЕ АНАЛІЗУЄМО (ТЗ «звіт тімліда» 30.09.2026), ЖИВА СХЕМА. Кожна ознака лідгену ОКРЕМО виводить
+ * розмову з черги й з екрана: мітка угоди, реєстр лідгену, команда відповідального, команда того, хто говорив;
+ * повторний контакт (із номером уже була розмова від порогу) — теж; 14 с — ні, 15 с — так. Дзеркало: звичайна
+ * рекламна розмова береться. Екран бере ту саму умову, тож ці розмови не видно й там.
+ * 🧨 Червоніє, якщо прибрати будь-яку з ознак, повернути поріг 20 с чи брати повторний контакт.
+ */
+test("#852 ВИБІРКА: лідген за кожною з 4 ознак і повторний контакт не йдуть ні в чергу, ні на екран; поріг 15 с", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const { selectFirstTouchCalls, FIRST_TOUCH_RULE } = await import("./callAiTick.js");
+  const { aiCallsList } = await import("./callAiScreen.js");
+  assert.equal(FIRST_TOUCH_RULE.talkMinSec, 15);
+  await c.raw.query("INSERT INTO teams(id,name) VALUES (8520,'Продаж 852'),(8521,'Лідогенерація 852') ON CONFLICT DO NOTHING");
+  await c.raw.query("INSERT INTO managers(id,name,team_id) VALUES (85200,'Продавець',8520),(85210,'Лідген',8521) ON CONFLICT DO NOTHING");
+  const deal = (id: number, key: string, mgr: number, ch: string) =>
+    c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel,manager_id)
+      VALUES ($1,$2,8921932,1,'2026-09-25 09:00:00+03',$3,$4,$5)`, [id, `D${String(id)}`, key, ch, mgr]);
+  const call = (u: string, at: string, sec: number, mgr: number, key: string) =>
+    c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
+      VALUES ($1,$2,'out','ANSWERED',$3,$4,$5,$6,'https://rec/x')`, [u, at, sec, sec + 5, mgr, "38" + key]);
+  const k = (n: number) => `05085200${String(n).padStart(2, "0")}`;
+  await deal(85201, k(1), 85200, "ad");      await call("852-ok", "2026-09-25 10:00:00+03", 40, 85200, k(1));
+  await deal(85202, k(2), 85200, "leadgen"); await call("852-tag", "2026-09-25 10:00:00+03", 40, 85200, k(2));
+  await deal(85203, k(3), 85200, "ad");      await call("852-reg", "2026-09-25 10:00:00+03", 40, 85200, k(3));
+  await c.raw.query("INSERT INTO leadgen_touch(lead_kommo_id, source) VALUES (85203, 'registry')");
+  await deal(85204, k(4), 85210, "ad");      await call("852-dteam", "2026-09-25 10:00:00+03", 40, 85200, k(4));
+  await deal(85205, k(5), 85200, "ad");      await call("852-cteam", "2026-09-25 10:00:00+03", 40, 85210, k(5));
+  await deal(85206, k(6), 85200, "ad");      await call("852-old", "2026-07-01 10:00:00+03", 30, 85200, k(6));
+  await call("852-rep", "2026-09-25 10:00:00+03", 40, 85200, k(6));
+  await deal(85207, k(7), 85200, "ad");      await call("852-14s", "2026-09-25 10:00:00+03", 14, 85200, k(7));
+  await deal(85208, k(8), 85200, "ad");      await call("852-15s", "2026-09-25 10:00:00+03", 15, 85200, k(8));
+  const ad = FAKE_AD;
+  const picked = (await selectFirstTouchCalls(c.db, ad, NOW)).filter((u) => u.startsWith("852-")).sort();
+  assert.deepEqual(picked, ["852-15s", "852-ok"], `🔴 у чергу пішли виключені або не пішли свої: ${picked.join(", ")}`);
+  const shown = (await aiCallsList(c.db, ad, "2026-09-25", "2026-09-25", NOW, {})).rows.map((r) => r.uniqueid).filter((u) => u.startsWith("852-")).sort();
+  assert.deepEqual(shown, picked, "🔴 екран і черга джоби показують різні множини");
+});

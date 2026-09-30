@@ -4,7 +4,7 @@ import { OUTBOUND_TYPES } from "./missedCallsRules.js";
 import type { MissedScope } from "./missedCallsRules.js";
 import { ELEVENLABS_STT_MODEL, GEMINI_MODEL, RUBRIC_CURRENT, type AnalysisResult, type Turn } from "./callAiProviders.js";
 import { LLM_PROVIDER, STT_PROVIDER, type AdPredicate } from "./callAiPilot.js";
-import { FIRST_TOUCH_RULE } from "./callAiTick.js";
+import { FIRST_TOUCH_RULE, firstTouchExclusionSql } from "./callAiTick.js";
 import { monthSpend } from "./callAiPipeline.js";
 import { adCallFacts } from "./adCallFacts.js";
 import { silentBeforeClose, type AdCallFactsParams } from "./adCallFactsRules.js";
@@ -274,6 +274,7 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
       LEFT JOIN call_analyses a ON a.transcript_id = t.id AND a.provider = $10 AND a.model = $11 AND a.rubric_version = $12
      WHERE ($13::int IS NULL OR ft.manager_id = $13)
        AND ($14::int IS NULL OR m.team_id = $14)
+       AND ${firstTouchExclusionSql("ft", "rcx.client_phone")}
      ORDER BY ft.calldate DESC, ft.kommo_id DESC`;
   const params = [...q.params, STT_PROVIDER, ELEVENLABS_STT_MODEL, LLM_PROVIDER, GEMINI_MODEL, RUBRIC_CURRENT,
     scope.managerId ?? null, scope.teamId ?? null];
