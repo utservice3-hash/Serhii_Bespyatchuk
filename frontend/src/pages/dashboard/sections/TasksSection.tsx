@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, useEffect, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import { parseTaskIdParam, deepLinkState } from "../taskDeepLink";
+import { awaitsMyAcceptance } from "../acceptanceNotify";
 import {
   createReactivationTask,
   fetchReactivationCandidates,
@@ -565,7 +566,7 @@ export function TasksSection({
   const accountName = managerOptions.find((m) => m.id === currentManagerId)?.name || accountEmail || "мій акаунт";
   // Department dropdown = fixed відділи + all team names, de-duplicated.
   const deptOptions = Array.from(new Set([...DEPARTMENTS, ...(teams ?? []).map((t) => t.name)]));
-  const [adminTab, setAdminTab] = useState<"mine" | "shared" | "all">("mine");
+  const [adminTab, setAdminTab] = useState<"mine" | "shared" | "all" | "review">("mine");
   // 👁 Яку задачу переглядаємо у вкладеннях (id) — модалка поверх списку.
   const [filesViewer, setFilesViewer] = useState<number | null>(null);
   /** 🤝 Форму відкрито зі «Спільних» — виконавець не підставляється, і без нього не створити. */
@@ -809,6 +810,14 @@ export function TasksSection({
   const sharedOpen = tasks.filter((t) => isSharedWithMe(t) && t.status !== "done" && t.taskType !== "daily_kpi");
   const sharedNew = sharedOpen.filter((t) => t.hasUnseen).length;
 
+  /**
+   * ✅ «НА МОЄМУ ПРИЙНЯТТІ» (рішення Романа 30.09.2026) — задачі, які виконавець довів до
+   * «Готово на затвердження» і які закриваю я. Предикат той самий, що в сповіщенні
+   * (`acceptanceNotify.ts`): тост і список не мусять розходитись. Тримає `#1080i`.
+   */
+  const awaitsMe = (t: Task) => awaitsMyAcceptance(t, { userId: currentUserId, managerId: currentManagerId });
+  const reviewOpen = tasks.filter(awaitsMe);
+
   type SynthU = { synthKey: string; assigneeId: number | null; assigneeName: string | null; weekStart: string; weekEnd: string; kids: Task[]; status: string; title: string; department: string | null };
   // Рядок СИНТЕТИЧНОЇ парасольки (згорнуті сироти-daily_kpi одного менеджера за тиждень).
   // Віртуальний — статус/виконавець read-only; факт агрегується з реальних дітей (UmbBody).
@@ -935,11 +944,18 @@ export function TasksSection({
               borderRadius: "var(--r-pill)", background: adminTab === "shared" ? "#fff" : "var(--brand)", marginLeft: 6 }} />
           )}
         </button>
+        <button style={tabBtn(adminTab === "review")} onClick={() => setAdminTab("review")}
+          title="Задачі на «Готово на затвердження», які закриваєте ви">
+          ✅ На моєму прийнятті{reviewOpen.length > 0 ? ` · ${reviewOpen.length}` : ""}
+        </button>
         {(isAdmin || role === "team_lead" || role === "company") && (
           <button style={tabBtn(adminTab === "all")} onClick={() => setAdminTab("all")}>{isAdmin || role === "company" ? "🗂️ Усі задачі" : "👥 Командні задачі"}</button>
         )}
         {adminTab === "mine" && (
           <span style={{ fontSize: 13, color: "var(--text-muted)" }}>· {accountName}</span>
+        )}
+        {adminTab === "review" && (
+          <span style={{ fontSize: 13, color: "var(--text-muted)" }}>· чекають, поки ви приймете</span>
         )}
         {adminTab === "shared" && (
           <>
@@ -1117,6 +1133,7 @@ export function TasksSection({
                 const canSeeAllTab = isAdmin || role === "team_lead" || role === "company";
                 if (adminTab === "mine" && canSeeAllTab) { base = base.filter(isMine); synths = synths.filter((s) => s.assigneeId === currentManagerId); }
                 else if (adminTab === "shared") { base = base.filter(isSharedWithMe); synths = []; }
+                else if (adminTab === "review") { base = base.filter(awaitsMe); synths = []; }
                 if (assigneeFilter !== "") { base = base.filter((t) => t.assigneeId === assigneeFilter); synths = synths.filter((s) => s.assigneeId === assigneeFilter); }
                 // 📁 Фільтр по групі. Синтетичні парасольки KPI груп не мають, тож
                 // будь-який вибір, крім «Усі», їх свідомо прибирає.

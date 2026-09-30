@@ -285,3 +285,43 @@ test("#1080h СПОВІЩЕННЯ «ПРИЙМАЄ»: перехід на зат
   assert.match(dash, /if \(isAcceptanceAlert\(t, was, \{ userId: auth\?\.userId, managerId: auth\?\.managerId \}\)\)/,
     "🔴 функцію сповіщення «Приймає» НЕ ВИКЛИКАЮТЬ в ефекті сповіщень — вона зелена й німа");
 });
+
+/**
+ * #1080i — ВКЛАДКА «НА МОЄМУ ПРИЙНЯТТІ»: задачі на затвердженні, які закриваю я (рішення Романа 30.09.2026).
+ *
+ * ① Предикат (транспіляцією) — по обидва боки кожної умови. Він СПІЛЬНИЙ зі сповіщенням
+ *   `#1080h`: тост і список не мусять розходитись.
+ * ② Джерело: кнопка, ВЛАСНА гілка фільтра (без неї вкладка провалилась би в «показати все» —
+ *   урок `#400m`), лічильник тим самим предикатом.
+ *
+ * 🧨 Червоніє, якщо прибрати будь-яку умову предиката, гілку фільтра, кнопку чи спільність зі сповіщенням.
+ */
+test("#1080i ВКЛАДКА «НА МОЄМУ ПРИЙНЯТТІ»: лише мої задачі на затвердженні, власна гілка фільтра, той самий предикат, що в сповіщенні", async () => {
+  const ts = (await import("typescript")).default;
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "acceptanceNotify.ts"), "utf8");
+  const js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const N = await import(`data:text/javascript,${encodeURIComponent(js)}`) as {
+    awaitsMyAcceptance: (t: Record<string, unknown>, me: { userId: number | null; managerId: number | null }) => boolean;
+  };
+  const YULIA = { userId: 6, managerId: null };
+  const t = { id: 1, title: "ТЗ", status: "ready_for_approval", taskType: "simple", reviewerId: 6, assigneeId: 40, assigneeUserId: null };
+  assert.equal(N.awaitsMyAcceptance(t, YULIA), true, "🔴 моя задача на затвердженні не потрапила у вкладку");
+  assert.equal(N.awaitsMyAcceptance({ ...t, status: "in_progress" }, YULIA), false, "🔴 у вкладку потрапила задача не на затвердженні");
+  assert.equal(N.awaitsMyAcceptance({ ...t, status: "done" }, YULIA), false, "🔴 у вкладці лишилась уже прийнята задача");
+  assert.equal(N.awaitsMyAcceptance({ ...t, reviewerId: 9 }, YULIA), false, "🔴 у вкладку потрапила задача, яку приймає інший");
+  assert.equal(N.awaitsMyAcceptance({ ...t, assigneeId: null, assigneeUserId: 6 }, YULIA), false, "🔴 у вкладку потрапила задача, яку я сам виконую");
+  assert.equal(N.awaitsMyAcceptance({ ...t, taskType: "daily_kpi" }, YULIA), false, "🔴 у вкладку потрапив тип поза правилом");
+
+  const notify = src.replace(/\s+/g, " ");
+  assert.match(notify, /export function isAcceptanceAlert[^{]*\{[^}]*return awaitsMyAcceptance\(t, me\);/,
+    "🔴 сповіщення перестало спиратись на той самий предикат, що вкладка — тост і список розійдуться");
+
+  const sec = codeOf("pages", "dashboard", "sections", "TasksSection.tsx");
+  assert.match(sec, /setAdminTab\("review"\)/, "🔴 кнопки вкладки «На моєму прийнятті» немає");
+  assert.match(sec, /На моєму прийнятті\{reviewOpen\.length > 0 \? ` · \$\{reviewOpen\.length\}` : ""\}/, "🔴 на вкладці немає лічильника");
+  assert.match(sec, /const awaitsMe = \(t: Task\) => awaitsMyAcceptance\(t, \{ userId: currentUserId, managerId: currentManagerId \}\);/,
+    "🔴 вкладка рахує не тим предикатом, що сповіщення");
+  assert.match(sec, /const reviewOpen = tasks\.filter\(awaitsMe\);/, "🔴 лічильник рахується не предикатом вкладки");
+  assert.match(sec, /else if \(adminTab === "review"\) \{ base = base\.filter\(awaitsMe\); synths = \[\]; \}/,
+    "🔴 ВКЛАДКА БЕЗ ГІЛКИ ФІЛЬТРА: «review» провалюється в «показати все» — кнопка активна, список повний");
+});

@@ -9,7 +9,7 @@
  * сторінки. Задача, що перейшла, поки дашборд був закритий, лишається під тихим бейджем
  * «є нове»; зведений тост при відкритті власник відхилив (30.09.2026).
  *
- * Модуль чистий і без імпортів — його транспілює й кличе гейт `#1080h`.
+ * Модуль чистий і без імпортів — його транспілюють і кличуть гейти `#1080h`/`#1080i`.
  */
 
 export interface AcceptanceTaskLike {
@@ -33,8 +33,18 @@ export interface AcceptanceViewer { userId: number | null | undefined; managerId
  * · Лише звичайні задачі: «Приймає» діє тільки на них.
  */
 export function isAcceptanceAlert(t: AcceptanceTaskLike, prevStatus: string | undefined, me: AcceptanceViewer): boolean {
-  if (me.userId == null || !prevStatus) return false;
-  if (t.status !== "ready_for_approval" || prevStatus === "ready_for_approval") return false;
+  if (!prevStatus || prevStatus === "ready_for_approval") return false;
+  return awaitsMyAcceptance(t, me);
+}
+
+/**
+ * ✅ ЗАДАЧА ЧЕКАЄ МОГО ПРИЙНЯТТЯ — стан, а не подія. Його читають і сповіщення (разом
+ * з умовою «щойно перейшла»), і вкладка «На моєму прийнятті» в Задачнику — одне
+ * визначення, щоб тост і список не розійшлися (тримає `#1080i`).
+ */
+export function awaitsMyAcceptance(t: AcceptanceTaskLike, me: AcceptanceViewer): boolean {
+  if (me.userId == null) return false;
+  if (t.status !== "ready_for_approval") return false;
   if ((t.taskType ?? "simple") !== "simple") return false;
   if (t.reviewerId !== me.userId) return false;
   const iExecute = (me.managerId != null && t.assigneeId === me.managerId)
