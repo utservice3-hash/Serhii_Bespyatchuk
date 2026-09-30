@@ -227,5 +227,7 @@ test("#1080g ФРОНТ: меню статусу вище за картку, п�
   // ④ Причина з тіла відповіді.
   const commit = dash.slice(dash.indexOf("async function commitTask("), dash.indexOf("function patchTaskLocal("));
   assert.ok(commit.length > 0, "🔴 commitTask не знайдено");
-  assert.match(commit, /response\?\.data\?\.error/, "🔴 тост відмови не бере причину з відповіді сервера");
+  assert.match(commit, /const reason = serverReason\(err\)/, "🔴 commitTask не бере причину відмови з serverReason");
+  const reasonFn = dash.slice(dash.indexOf("function serverReason("), dash.indexOf("function serverReason(") + 400);
+  assert.match(reasonFn, /response\?\.data\?\.error/, "🔴 тост відмови не бере причину з відповіді сервера");
 });

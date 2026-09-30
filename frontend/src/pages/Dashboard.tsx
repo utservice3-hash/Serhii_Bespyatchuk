@@ -115,6 +115,17 @@ function beep(success: boolean) {
   } catch { /* audio not available — ignore */ }
 }
 
+/**
+ * 🗣 ПРИЧИНА ВІДМОВИ — З ТІЛА ВІДПОВІДІ СЕРВЕРА, А НЕ З AXIOS. `err.message` — це
+ * «Request failed with status code 403», тобто рівно те, що людині нічого не каже.
+ * Сервер пише причину в `{ error }`: «Закрити задачу може «Приймає»: …».
+ */
+function serverReason(err: unknown): string {
+  const body = (err as { response?: { data?: { error?: unknown } } })?.response?.data?.error;
+  if (typeof body === "string" && body.trim()) return body;
+  return err instanceof Error && err.message ? err.message : "";
+}
+
 export function Dashboard() {
   const auth = useMemo(() => getAuthPayload(), []);
   // Розділ живе в URL (/report, /kvp, …) — посилання, «назад/вперед», закладки
@@ -444,35 +455,28 @@ export function Dashboard() {
       await updateTask(id, patch as Parameters<typeof updateTask>[1]);
     } catch (err) {
       const what = Object.keys(patch)[0] ?? "поле";
-      /**
-       * 🗣 ПРИЧИНА — З ТІЛА ВІДПОВІДІ СЕРВЕРА, А НЕ З AXIOS. `err.message` — це
-       * «Request failed with status code 403», тобто рівно те, що людині нічого не
-       * каже. Сервер пише причину в `{ error }`: «Закрити задачу може «Приймає»: …».
-       */
-      const body = (err as { response?: { data?: { error?: unknown } } })?.response?.data?.error;
-      const reason = typeof body === "string" && body.trim() ? body
-        : err instanceof Error && err.message ? err.message : "";
-      /**
-       * ✅ ВІДХИЛЕНИЙ СТАТУС НЕ ЛИШАЄТЬСЯ НА ЕКРАНІ. Для тексту позначка «редагується»
-       * тримає набране (його шкода втратити); для статусу навпаки — «Готово», якого
-       * сервер не прийняв, читалось би як «закрито». Знімаємо позначку й перечитуємо
-       * задачі: на екран повертається те, що справді лежить у базі.
-       */
-      if (patch.status !== undefined) {
-        dirtyTaskFields.current.get(id)?.delete("status");
-        setToasts((cur) => [...cur, { id: Date.now() + id, text: `⚠️ Статус задачі #${id} не змінено${reason ? `: ${reason}` : ""}` }]);
-        try {
-          const fresh = await fetchTasks();
-          // Злиття, а не заміна: чужі незбережені правки в інших полях мусять уціліти.
-          setTasks((prev) => mergeTasksPreservingEdits(prev, fresh, dirtyTaskFields.current));
-        } catch { /* рефетч підхопить поллер */ }
-        return;
-      }
+      const reason = serverReason(err);
+      if (patch.status !== undefined) { await rejectStatus(id, reason); return; }
       setToasts((cur) => [...cur, {
         id: Date.now() + id,
         text: `⚠️ Не вдалося зберегти «${what}» задачі #${id}${reason ? ` (${reason})` : ""}. Текст на екрані НЕ втрачено — спробуйте ще раз.`,
       }]);
     }
+  }
+
+  /**
+   * ✅ ВІДХИЛЕНИЙ СТАТУС НЕ ЛИШАЄТЬСЯ НА ЕКРАНІ. Для тексту позначка «редагується»
+   * тримає набране (його шкода втратити); для статусу навпаки — «Готово», якого
+   * сервер не прийняв, читалось би як «закрито». Знімаємо позначку й перечитуємо
+   * задачі злиттям (чужі незбережені правки в інших полях мусять уціліти).
+   */
+  async function rejectStatus(id: number, reason: string) {
+    dirtyTaskFields.current.get(id)?.delete("status");
+    setToasts((cur) => [...cur, { id: Date.now() + id, text: `⚠️ Статус задачі #${id} не змінено${reason ? `: ${reason}` : ""}` }]);
+    try {
+      const fresh = await fetchTasks();
+      setTasks((prev) => mergeTasksPreservingEdits(prev, fresh, dirtyTaskFields.current));
+    } catch { /* рефетч підхопить поллер */ }
   }
 
   function patchTaskLocal(id: number, patch: Partial<Task>) {
