@@ -278,6 +278,8 @@ test("#1080h СПОВІЩЕННЯ «ПРИЙМАЄ»: перехід на зат
   assert.equal(N.isAcceptanceAlert(task, undefined, YULIA), false, "🔴 перше завантаження дзвонить про все, що вже висить");
   assert.equal(N.isAcceptanceAlert(task, "ready_for_approval", YULIA), false, "🔴 дзвонить без переходу — на кожному опитуванні");
   assert.equal(N.isAcceptanceAlert({ ...task, status: "done" }, "ready_for_approval", YULIA), false, "🔴 дзвонить не на той статус");
+  assert.equal(N.isAcceptanceAlert({ ...task, status: "done" }, "in_progress", YULIA), false,
+    "🔴 перехід одразу в «Готово» дзвонить «Чекає вашого прийняття» — приймати вже нічого");
   assert.equal(N.isAcceptanceAlert({ ...task, taskType: "daily_kpi" }, "in_progress", YULIA), false, "🔴 дзвонить про тип поза правилом");
   assert.match(N.acceptanceAlertText("ТЗ Юлії", "Роман"), /Чекає вашого прийняття — Роман: ТЗ Юлії/);
 
