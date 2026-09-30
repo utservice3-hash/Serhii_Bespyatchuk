@@ -68,7 +68,10 @@ import * as metrics from "../core/metrics.js";
 import { ga4Configured } from "../ga4/client.js";
 import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
-import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES } from "../core/callAiScreen.js";
+import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType, setCallNote, canWriteNote, fetchCallRecording } from "../core/callAiScreen.js";
+import { teamReport, isAnalysed, noPrice, noPriceNoComment, hasAgreement } from "../core/firstTouchTeamReport.js";
+
+import { canEditType } from "../core/callAiType.js";
 import { CARRIER_LISTEN_ROLES, carrierCallCard, carrierCallsList, carrierCallsMeta } from "../core/carrierCallScreen.js";
 import { callInScope, carrierAgreementRows, carrierDailyStats, carrierDealRows, carrierReport, filterRemovedByManager } from "../core/carrierDeals.js";
 import { CARRIER_BUDGET, CARRIER_STAGE } from "../core/carrierCallRules.js";
@@ -10653,9 +10656,13 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
   const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
   const scope = missedScopeFor(req.auth!, {});
   const { adSources } = await getSettings();
-  const { rows, truncated } = await aiCallsList(pool, { predicate: metrics.adDealSql, adSources }, from, to, new Date(), scope);
+  const all = await aiCallsList(pool, { predicate: metrics.adDealSql, adSources }, from, to, new Date(), scope);
+  // ТЗ 30.09.2026 п.7: менеджер бачить свої заявки, але НЕ «Виключені» — їх переглядають тімлід і адмін.
+  const canSeeExcluded = req.auth!.roleKey !== "manager";
+  const rows = canSeeExcluded ? all.rows : all.rows.filter((r) => r.inReport);
+  const truncated = all.truncated;
   res.json({
-    period: { from, to }, truncated,
+    period: { from, to }, truncated, canSeeExcluded,
     // Явний перелік полів, а не спред (#17e2).
     rows: rows.map((r) => ({
       kommoIds: r.kommoIds, uniqueid: r.uniqueid, calledAt: r.calledAt,
@@ -10668,8 +10675,39 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
       promiseState: r.promiseState, managerPromises: r.managerPromises,
       // П3: прапорець — лише за період після оголошення норми; до того поле є, а екран його не показує.
       silentBeforeClose: r.silentBeforeClose,
+      conversationType: r.conversationType, typeConfidence: r.typeConfidence, typeReason: r.typeReason, priceValue: r.priceValue,
+      inReport: r.inReport, typeCheck: r.typeCheck, typeOverride: r.typeOverride,
+      priceNote: r.priceNote, missedNote: r.missedNote,
     })),
     silence: { minGapHours: SILENCE_RULE.minGapHours, normFrom: SILENCE_RULE.normFrom },
+  });
+});
+
+/**
+ * 📊 Звіт тімліда «Перший дотик» (ТЗ «звіт тімліда» 30.09.2026, п.6) — блок у вкладці «Звіт». Ті самі рядки, що й
+ * вкладка «Перший дотик» (`aiCallsList`), лише запити на перевезення; кламп — `missedScopeFor` (менеджер — свої,
+ * тімлід — команда; адмін може звузити `teamId`/`managerId`). Пул заявок — ті самі рядки з готовими прапорцями
+ * фільтрів, тож число в клітинці й список за ним не розходяться.
+ */
+dashboardRouter.get("/ai-calls/team-report", async (req, res) => {
+  const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
+  const scope = missedScopeFor(req.auth!, req.query);
+  const { adSources } = await getSettings();
+  const { rows, truncated } = await aiCallsList(pool, { predicate: metrics.adDealSql, adSources }, from, to, new Date(), scope);
+  const report = teamReport(rows);
+  const inReport = rows.filter((r) => r.inReport);
+  res.json({
+    period: { from, to }, truncated,
+    managers: report.managers, total: report.total, banner: report.banner,
+    // Явний перелік полів (#17e2).
+    rows: inReport.map((r) => ({
+      uniqueid: r.uniqueid, calledAt: r.calledAt, managerId: r.managerId, managerName: r.managerName, teamName: r.teamName,
+      clientPhone: r.clientPhone, kommoIds: r.kommoIds, state: r.state, summary: r.summary,
+      priceDiscussed: r.priceDiscussed, priceValue: r.priceValue, priceNote: r.priceNote, missedNote: r.missedNote,
+      promiseState: r.promiseState, objections: r.objections, typeCheck: r.typeCheck,
+      flags: { analysed: isAnalysed(r), noPrice: noPrice(r), noComment: noPriceNoComment(r),
+        missed: hasAgreement(r) && r.promiseState === "broken", banner: r.promiseState === "broken" && !r.missedNote },
+    })),
   });
 });
 
@@ -10683,12 +10721,70 @@ dashboardRouter.get("/ai-calls/meta", async (_req, res) => {
 dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
   const auth = req.auth!;
   const card = await aiCallCard(pool, String(req.params.uniqueid), transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES), missedScopeFor(auth, {}));
+  if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" });
+
+/**
+ * 🗂 Ручний тип розмови (ТЗ «звіт тімліда» 30.09.2026): «Це вантаж» / «Це не вантаж». Право — ПЕРШИМ оператором
+ * (адмін або тімлід; `accessMatrix` — deny-only), скоуп тімліда — той самий, що в картки: чужий дзвінок → 404.
+ * Лише дописує журнал `call_type_overrides`.
+ */
+dashboardRouter.post("/ai-calls/:uniqueid/type", async (req, res) => {
+  const auth = req.auth!;
+  if (!canEditType(auth.roleKey)) { res.status(403).json({ error: "Змінювати тип розмови можуть тімлід (своя команда) і адмін" }); return; }
+  const isCargo = req.body?.isCargo;
+  if (typeof isCargo !== "boolean") { res.status(400).json({ error: "isCargo має бути true або false" }); return; }
+  const uniqueid = String(req.params.uniqueid);
+  const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
+  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? null;
+  await setCallType(pool, uniqueid, isCargo, { userId: auth.userId ?? null, name: who }, new Date());
+  res.json({ ok: true });
+});
+
+/**
+ * 📝 Коментар до першого дотику (ТЗ 30.09.2026): `price` — «Чому не озвучено ціну» (менеджер свої, тімлід команда,
+ * адмін); `missed` — «Опрацьовано» до невиконаної домовленості (тімлід, адмін). Право — ПЕРШИМ оператором, скоуп —
+ * той самий, що в картки: чужий дзвінок → 404. Порожній текст прибирає коментар.
+ */
+dashboardRouter.put("/ai-calls/:uniqueid/note", async (req, res) => {
+  const auth = req.auth!;
+  const kind = String(req.body?.kind ?? "");
+  if (!canWriteNote(auth.roleKey, kind)) { res.status(403).json({ error: kind === "missed" ? "«Опрацьовано» пишуть тімлід і адмін" : "Коментар до ціни пишуть менеджер (свої), тімлід (команда) і адмін" }); return; }
+  const text = req.body?.text;
+  if (typeof text !== "string" || text.length > 2000) { res.status(400).json({ error: "text — рядок до 2000 символів" }); return; }
+  const uniqueid = String(req.params.uniqueid);
+  const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
+  if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
+  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? null;
+  await setCallNote(pool, uniqueid, kind as "price" | "missed", text, { userId: auth.userId ?? null, name: who }, new Date());
+  res.json({ ok: true });
+});
+
+/**
+ * 🎧 Запис розмови (ТЗ п.6.2 «посилання на запис»): той самий допуск, що й до тексту (`FIRST_TOUCH_TRANSCRIPT_ROLES`),
+ * і той самий скоуп картки. Сервер віддає байти сам — пряме посилання Ringostat назовні не йде.
+ */
+dashboardRouter.get("/ai-calls/:uniqueid/recording", async (req, res) => {
+  const auth = req.auth!;
+  if (!transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES)) { res.status(403).json({ error: "Запис розмови цій ролі недоступний" }); return; }
+  const uniqueid = String(req.params.uniqueid);
+  const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
+  if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
+  const url = (await pool.query<{ recording: string | null }>("SELECT recording FROM ringostat_calls WHERE uniqueid = $1", [uniqueid])).rows[0]?.recording ?? null;
+  const d = await fetchCallRecording(url);
+  if (!d.ok) { res.status(404).json({ error: "Запису в Ringostat немає" }); return; }
+  res.setHeader("Content-Type", "audio/wav");
+  res.setHeader("Cache-Control", "private, no-store");
+  res.end(Buffer.from(d.bytes));
+}); return; }
   res.json({
     row: card.row, dealUrls: card.row.kommoIds.map((id) => ({ kommoId: id, url: kommoLeadUrl(id) })),
     result: card.result, turns: card.turns, transcriptHidden: card.transcriptHidden,
     managerChannel: card.managerChannel, durationSec: card.durationSec, nextOutboundAt: card.nextOutboundAt,
     promiseChecks: card.promiseChecks, callsAfter: card.callsAfter,
+    typeHistory: card.typeHistory, canEditType: canEditType(auth.roleKey),
+    noteRights: { price: canWriteNote(auth.roleKey, "price"), missed: canWriteNote(auth.roleKey, "missed") },
+    canListen: transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES),
   });
 });
 

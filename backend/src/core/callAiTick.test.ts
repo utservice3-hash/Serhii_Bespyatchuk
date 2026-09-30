@@ -54,7 +54,7 @@ function wav(sec: number): Uint8Array<ArrayBuffer> {
   return b;
 }
 
-const ANALYSIS = JSON.stringify({ summary: "s", manager_channel: "1", client_request: "тент", next_step: "",
+const ANALYSIS = JSON.stringify({ summary: "s", manager_channel: "1", client_request: "тент", next_step: "", conversation_type: "cargo_request", type_confidence: 0.95, type_reason: "клієнт питає ціну перевезення", price_value: "",
   price: { discussed: true, quote: "скільки коштує" }, objections: [], promises: [] });
 
 /** Мережа за адресою: скільки запитів пішло до кожного постачальника. */
@@ -203,11 +203,11 @@ test("#783 ТІК У ЧАСІ: порції до дедлайну, idle — кі
 });
 
 /**
- * #784 — ПРОВОДКА: `callAiJob` запускається кроном раз на годину, не на :00/:30, і стоїть під
+ * #853 — ПРОВОДКА: `callAiJob` запускається кроном раз на 10 хв (ТЗ 30.09.2026), не на :00/:30, і стоїть під
  * наглядом із тією самою частотою. Хвилини — з матчера самої бібліотеки, а не з тексту (як `#458`).
  * 🧨 Червоніє, якщо змінити крон, не змінивши `everyMin`, або прибрати джобу з нагляду.
  */
-test("#784 ПРОВОДКА: крон callAiJob раз на годину не на :00/:30, під наглядом із тією самою частотою", async () => {
+test("#853 ПРОВОДКА: крон callAiJob раз на 10 хв не на :00/:30, під наглядом із тією самою частотою, тік вкладається в 10 хв", async () => {
   const src = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "index.ts"), "utf8");
   const at = src.indexOf('runJob("callAiJob"');
   assert.ok(at > 0, "🔴 callAiJob не запускається з index.ts");
@@ -217,12 +217,16 @@ test("#784 ПРОВОДКА: крон callAiJob раз на годину не н
   const TimeMatcher = createRequire(import.meta.url)("node-cron/src/time-matcher.js") as new (p: string) => { match(d: Date): boolean };
   const tm = new TimeMatcher(`0 ${spec}`);
   const minutes = Array.from({ length: 60 }, (_, i) => i).filter((i) => tm.match(new Date(2026, 8, 28, 10, i, 0)));
-  assert.equal(minutes.length, 1, `🔴 крон «${spec}» стріляє ${String(minutes.length)} раз(и) на годину`);
-  assert.ok(![0, 30].includes(minutes[0]), `🔴 крон «${spec}» стріляє разом із syncKommo`);
+  assert.equal(minutes.length, 6, `🔴 крон «${spec}» стріляє ${String(minutes.length)} раз(и) на годину, а не раз на 10 хв`);
+  assert.ok(!minutes.some((m) => [0, 30].includes(m)), `🔴 крон «${spec}» стріляє разом із syncKommo`);
+  const gaps = minutes.slice(1).map((m, k) => m - minutes[k]);
+  assert.ok(gaps.every((g) => g === 10), `🔴 інтервали між тіками нерівні: ${gaps.join(",")}`);
+  const T = await import("./callAiTick.js");
+  assert.ok(T.STT_BUDGET_MS + T.LLM_BUDGET_MS <= (T.TICK_EVERY_MIN - 1.5) * 60_000, "🔴 бюджет тіку не вкладається в 10 хв із запасом на вибірку й останню порцію");
   const { MONITORED_JOBS } = await import("../jobs/monitoredJobs.js");
   const j = MONITORED_JOBS.find((x) => x.name === "callAiJob");
   assert.ok(j, "🔴 callAiJob не під наглядом — його мовчання ніхто не побачить");
-  assert.equal(j.everyMin, 60, "🔴 частота в нагляді ≠ крону — сторож мовчання бив би тривогу сам на себе");
+  assert.equal(j.everyMin, 10, "🔴 частота в нагляді ≠ крону — сторож мовчання бив би тривогу сам на себе");
 });
 
 /**
@@ -269,4 +273,43 @@ test("#786 ДАТА СТАРТУ: угоди раніше 20.09.2026 (Київ) 
   const ids = await selectFirstTouchCalls(c.db, FAKE_AD, NOW);
   assert.ok(!ids.includes("7600-before"), "🔴 угоду з 19.09 (Київ) узято, хоча старт — 20.09");
   assert.ok(ids.includes("7600-after"), "дзеркало: угоду з 20.09 00:10 (Київ) мусить бути взято");
+});
+
+/**
+ * #852 — ЩО НЕ АНАЛІЗУЄМО (ТЗ «звіт тімліда» 30.09.2026), ЖИВА СХЕМА. Кожна ознака лідгену ОКРЕМО виводить
+ * розмову з черги й з екрана: мітка угоди, реєстр лідгену, команда відповідального, команда того, хто говорив;
+ * повторний контакт (із номером уже була розмова від порогу) — теж; 14 с — ні, 15 с — так. Дзеркало: звичайна
+ * рекламна розмова береться. Екран бере ту саму умову, тож ці розмови не видно й там.
+ * 🧨 Червоніє, якщо прибрати будь-яку з ознак, повернути поріг 20 с чи брати повторний контакт.
+ */
+test("#852 ВИБІРКА: лідген за кожною з 4 ознак і повторний контакт не йдуть ні в чергу, ні на екран; поріг 15 с", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const { selectFirstTouchCalls, FIRST_TOUCH_RULE } = await import("./callAiTick.js");
+  const { aiCallsList } = await import("./callAiScreen.js");
+  assert.equal(FIRST_TOUCH_RULE.talkMinSec, 15);
+  await c.raw.query("INSERT INTO teams(id,name) VALUES (8520,'Продаж 852'),(8521,'Лідогенерація 852') ON CONFLICT DO NOTHING");
+  await c.raw.query("INSERT INTO managers(id,name,team_id) VALUES (85200,'Продавець',8520),(85210,'Лідген',8521) ON CONFLICT DO NOTHING");
+  // client_source 'uts.ua' — рекламна за правилом Звіту НАВІТЬ з міткою лідгену (на проді таких 6 із 334).
+  const deal = (id: number, key: string, mgr: number, ch: string) =>
+    c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel,manager_id,client_source)
+      VALUES ($1,$2,8921932,1,'2026-09-25 09:00:00+03',$3,$4,$5,'uts.ua')`, [id, `D${String(id)}`, key, ch, mgr]);
+  const call = (u: string, at: string, sec: number, mgr: number, key: string) =>
+    c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
+      VALUES ($1,$2,'out','ANSWERED',$3,$4,$5,$6,'https://rec/x')`, [u, at, sec, sec + 5, mgr, "38" + key]);
+  const k = (n: number) => `05085200${String(n).padStart(2, "0")}`;
+  await deal(85201, k(1), 85200, "ad");      await call("852-ok", "2026-09-25 10:00:00+03", 40, 85200, k(1));
+  await deal(85202, k(2), 85200, "leadgen"); await call("852-tag", "2026-09-25 10:00:00+03", 40, 85200, k(2));
+  await deal(85203, k(3), 85200, "ad");      await call("852-reg", "2026-09-25 10:00:00+03", 40, 85200, k(3));
+  await c.raw.query("INSERT INTO leadgen_touch(lead_kommo_id, source) VALUES (85203, 'registry')");
+  await deal(85204, k(4), 85210, "ad");      await call("852-dteam", "2026-09-25 10:00:00+03", 40, 85200, k(4));
+  await deal(85205, k(5), 85200, "ad");      await call("852-cteam", "2026-09-25 10:00:00+03", 40, 85210, k(5));
+  await deal(85206, k(6), 85200, "ad");      await call("852-old", "2026-07-01 10:00:00+03", 30, 85200, k(6));
+  await call("852-rep", "2026-09-25 10:00:00+03", 40, 85200, k(6));
+  await deal(85207, k(7), 85200, "ad");      await call("852-14s", "2026-09-25 10:00:00+03", 14, 85200, k(7));
+  await deal(85208, k(8), 85200, "ad");      await call("852-15s", "2026-09-25 10:00:00+03", 15, 85200, k(8));
+  const ad = FAKE_AD;
+  const picked = (await selectFirstTouchCalls(c.db, ad, NOW)).filter((u) => u.startsWith("852-")).sort();
+  assert.deepEqual(picked, ["852-15s", "852-ok"], `🔴 у чергу пішли виключені або не пішли свої: ${picked.join(", ")}`);
+  const shown = (await aiCallsList(c.db, ad, "2026-09-25", "2026-09-25", NOW, {})).rows.map((r) => r.uniqueid).filter((u) => u.startsWith("852-")).sort();
+  assert.deepEqual(shown, picked, "🔴 екран і черга джоби показують різні множини");
 });

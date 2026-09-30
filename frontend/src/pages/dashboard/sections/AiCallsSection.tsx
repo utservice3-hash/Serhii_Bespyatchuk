@@ -6,6 +6,7 @@ import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
 import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, mmss, aiDefaultPeriod, jobErrorIsCurrent, parseCallParam, withCallParam,
   PROMISE_UI, GROUP_LABEL, applyListFilter, type ListFilter, type PipelineGroupT,
+  TYPE_LABEL, tabRows, type ListTab, type ConversationTypeT,
   type AiFilter, type AiCallState } from "../aiCallsView";
 
 /**
@@ -36,6 +37,8 @@ export function AiCallsSection() {
   const [d, setD] = useState<AiCallsResp | null>(null);
   const [meta, setMeta] = useState<AiCallsMetaResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // Після ручної зміни типу список перечитується: розмова переходить між «Звітом» і «Виключеними».
+  const [reload, setReload] = useState(0);
   const [filter, setFilter] = useState<AiFilter>("all");
   // П8-Б: воронка, команда, менеджер; нецільові («Дубль», «Перевізник») сховані, їх число — у перемикачі.
   const [lf, setLf] = useState<ListFilter>({ group: "all", teamId: null, managerId: null, showNonTarget: false });
@@ -56,21 +59,27 @@ export function AiCallsSection() {
       .then((x) => { if (alive) setD(x); })
       .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
     return () => { alive = false; };
-  }, [from, to]);
+  }, [from, to, reload]);
   useEffect(() => { fetchAiCallsMeta().then(setMeta).catch(() => setMeta(null)); }, []);
 
-  const scoped = useMemo(() => (d ? applyListFilter(d.rows, lf) : []), [d, lf]);
+  // ТЗ 30.09.2026: «Звіт» — запити на перевезення (і непевні з позначкою), «Виключені» — решта, з фільтром за типом.
+  const [tab, setTab] = useState<ListTab>("report");
+  const [exType, setExType] = useState<ConversationTypeT | "all">("all");
+  const scopedAll = useMemo(() => (d ? applyListFilter(d.rows, lf) : []), [d, lf]);
+  const scoped = useMemo(() => tabRows(scopedAll, tab, exType), [scopedAll, tab, exType]);
   // П3: прапорець «тиша» — лише з дати оголошення норми; до того фільтра немає зовсім.
   const normFrom = d?.silence.normFrom ?? null;
   const shown = useMemo(() => scoped.filter((r) => matchesFilter(r, filter)
     && (!silenceOnly || (normFrom != null && r.silentBeforeClose === true && r.dealCreatedAt.slice(0, 10) >= normFrom))), [scoped, filter, silenceOnly, normFrom]);
 
   const navBar = <PeriodNav state={nav} onPatch={(patch) => setNav((st) => ({ ...st, ...patch }))} today={today} />;
-  const drawer = open ? <AiCallDrawer uniqueid={open} onClose={closeCard} /> : null;
+  const drawer = open ? <AiCallDrawer uniqueid={open} onClose={closeCard} onChanged={() => setReload((x) => x + 1)} /> : null;
   if (err) return <div className="chart-card">{navBar}<p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>{drawer}</div>;
   if (!d) return <div className="chart-card">{navBar}<p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>{drawer}</div>;
 
-  const rows = scoped;
+  // Плитки й підсумки рахуються лише по ЗВІТУ: виключене сміття не розмиває відсотки (ТЗ 30.09.2026).
+  const rows = tabRows(scopedAll, "report");
+  const excludedCount = tabRows(scopedAll, "excluded").length;
   const done = rows.filter((r) => r.state === "done");
   const nonTargetHidden = applyListFilter(d.rows, { ...lf, showNonTarget: true }).length - applyListFilter(d.rows, { ...lf, showNonTarget: false }).length;
   const groupCount = (g: PipelineGroupT | "all") => applyListFilter(d.rows, { ...lf, group: g }).length;
@@ -125,6 +134,19 @@ export function AiCallsSection() {
         )}
         {d.truncated && <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "var(--warn-fg, #8a5a00)" }}>Показано перші 5 000 — звузьте період.</p>}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 8 }}>
+          <div className="hr-seg2" role="tablist" aria-label="Звіт чи виключені">
+            <button type="button" role="tab" aria-selected={tab === "report"} className={tab === "report" ? "on" : ""} onClick={() => setTab("report")}>Звіт · {rows.length}</button>
+            {d.canSeeExcluded && <button type="button" role="tab" aria-selected={tab === "excluded"} className={tab === "excluded" ? "on" : ""} onClick={() => setTab("excluded")}
+              title="Розмови, які модель упевнено визнала не запитом на перевезення: перевізники, продавці, пошук роботи, помилка номером, розмови немає">Виключені · {excludedCount}</button>}
+          </div>
+          {tab === "excluded" && (
+            <label style={{ fontSize: 13, display: "flex", gap: 4, alignItems: "center" }}>Тип
+              <select id="ai-extype" value={exType} onChange={(e) => setExType(e.target.value as ConversationTypeT | "all")}>
+                <option value="all">усі</option>
+                {(Object.keys(TYPE_LABEL) as ConversationTypeT[]).filter((k) => k !== "cargo_request").map((k) => <option key={k} value={k}>{TYPE_LABEL[k]}</option>)}
+              </select>
+            </label>
+          )}
           <div className="hr-seg2" role="group" aria-label="Воронка">
             {(["all", "full", "qualification"] as const).map((g) => (
               <button key={g} type="button" className={lf.group === g ? "on" : ""} aria-pressed={lf.group === g} onClick={() => setLf({ ...lf, group: g })}>
@@ -192,7 +214,18 @@ export function AiCallsSection() {
                         ? <span title={PROMISE_UI[r.promiseState].hint} style={{ background: TONE_COLOR[PROMISE_UI[r.promiseState].tone].bg, color: TONE_COLOR[PROMISE_UI[r.promiseState].tone].fg,
                             borderRadius: 999, padding: "1px 8px", fontSize: 12, whiteSpace: "nowrap" }}>{PROMISE_UI[r.promiseState].label}</span>
                         : <span style={{ color: "var(--text-muted)" }}>немає</span>}</td>
-                      <td style={{ ...cell, maxWidth: 420 }}>{r.summary ?? <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
+                      <td style={{ ...cell, maxWidth: 420 }}>
+                        {(r.typeCheck || !r.inReport || r.typeOverride) && (
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 3 }}>
+                            {r.typeCheck && <span title={`Модель не впевнена в типі (${r.conversationType ? TYPE_LABEL[r.conversationType] : "—"}, ${String(r.typeConfidence ?? "—")}): ${r.typeReason ?? ""}`}
+                              style={{ background: TONE_COLOR.warn.bg, color: TONE_COLOR.warn.fg, borderRadius: 999, padding: "1px 8px", fontSize: 12 }}>Перевірити тип</span>}
+                            {!r.inReport && r.conversationType && <span title={r.typeReason ?? ""}
+                              style={{ background: TONE_COLOR.muted.bg, color: TONE_COLOR.muted.fg, borderRadius: 999, padding: "1px 8px", fontSize: 12 }}>{TYPE_LABEL[r.conversationType]}</span>}
+                            {r.typeOverride && <span style={{ fontSize: 12, color: "var(--text-muted)" }}>позначено вручну{r.typeOverride.byName ? ` · ${r.typeOverride.byName}` : ""}</span>}
+                          </div>
+                        )}
+                        {r.summary ?? <span style={{ color: "var(--text-muted)" }}>—</span>}
+                      </td>
                       <td style={cell}>{r.priceDiscussed == null ? "—" : r.priceDiscussed ? "так" : "ні"}</td>
                       <td style={cell}>{r.state === "done" ? r.objections : "—"}</td>
                       <td style={cell}>{r.state === "done" ? null : <StateChip state={r.state} />}</td>

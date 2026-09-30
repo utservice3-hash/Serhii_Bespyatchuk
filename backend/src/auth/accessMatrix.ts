@@ -364,14 +364,25 @@ export const ACCESS_MATRIX: AccessRow[] = [
   /* 🎧 «ПЕРШИЙ ДОТИК · AI» (рішення Романа 28.09.2026). Вкладку сид дає admin, ceo, opdir, kvp, team_lead;
      менеджер, фінансист і HR — ні (П18: розмови колег менеджеру не показуємо на старті). Тімлід
      бачить лише свою команду — кламп у роуті. Усі підроути ловить ОДИН tab-гейт, тож межі однакові;
-     звіряє з сидом #831. Повний текст розмови всередині картки — ще вужче (admin, kvp), це вже
+     звіряє з сидом #831. Повний текст розмови всередині картки — ще вужче (admin, kvp, ceo, opdir), це вже
      правило відповіді, а не межа роута. */
   { method: "GET", path: "/api/dashboard/ai-calls", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["hr", "manager", "financier"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
   { method: "GET", path: "/api/dashboard/ai-calls/meta", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["hr", "manager", "financier"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
   { method: "GET", path: "/api/dashboard/ai-calls/:uniqueid", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "team_lead"], deny: ["hr", "manager", "financier"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
+  { method: "GET", path: "/api/dashboard/ai-calls/team-report", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
+  { method: "GET", path: "/api/dashboard/ai-calls/:uniqueid/recording", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "manager"], deny: ["hr", "financier"] },
+  /* Ручний тип розмови (ТЗ 30.09.2026): лише адмін і тімлід (своя команда). Менеджер має вкладку, тож 403 йому дає
+     обробник першим оператором; HR — tab-гейт. */
+  { method: "POST", path: "/api/dashboard/ai-calls/:uniqueid/type", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
+  /* Коментарі (ТЗ 30.09.2026 п.5, п.6.3): право — першим оператором обробника за видом коментаря. */
+  { method: "PUT", path: "/api/dashboard/ai-calls/:uniqueid/note", cls: "deny-only",
+    allow: [], deny: ["hr"] },
   /* 🚚 ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ — керівництво (29.09.2026) + тімлід і менеджер (ТЗ Романа 30.09.2026 «Відсів
      перевізників»: менеджер — свої угоди, тімлід — команда; кламп — у ЯДРІ через `missedScopeFor`, не тут).
      Межа — вкладка `carrier-calls` (routeTab), звіряється із сидом. HR і фінансист — ні. */

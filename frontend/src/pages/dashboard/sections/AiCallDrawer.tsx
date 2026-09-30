@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { fetchAiCallCard, hiringError, type AiCallCardResp, type AiQuoted } from "../../../api";
-import { STATE_UI, TONE_COLOR, PROMISE_UI, speakerOf, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, type AiCallState, type DrawerTab, type Tone } from "../aiCallsView";
+import { fetchAiCallCard, setAiCallType, putAiCallNote, fetchAiCallRecording, hiringError, type AiCallCardResp, type AiQuoted } from "../../../api";
+import { STATE_UI, TONE_COLOR, PROMISE_UI, speakerOf, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, TYPE_LABEL, type AiCallState, type DrawerTab, type Tone } from "../aiCallsView";
 import "./hiring.css";
 
 /**
@@ -97,7 +97,7 @@ function Analysis({ c }: { c: AiCallCardResp }) {
             ? <span style={{ color: "var(--text-muted)" }}>за 7 днів — жодного</span>
             : <span style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 13 }}>
                 {c.callsAfter.map((x, i) => (
-                  <span key={i}>{fmtFull(x.at)} · {x.direction === "in" ? "клієнт нам" : "ми клієнту"} · {x.billsec > 0 ? `розмова ${mmss(x.billsec)}` : "без розмови"}</span>
+                  <span key={i}>{fmtFull(x.at)} · {x.direction === "in" ? "клієнт нам" : "ми клієнту"}{x.direction === "out" ? ` · ${x.managerName ?? "лінія без менеджера"}${x.byPromiser ? " (той, хто обіцяв)" : " — не рахується: обіцяв інший"}` : ""} · {x.billsec > 0 ? `розмова ${mmss(x.billsec)}` : "без розмови"}</span>
                 ))}
               </span>}
         </div>
@@ -127,19 +127,125 @@ function Transcript({ c }: { c: AiCallCardResp }) {
   );
 }
 
-export function AiCallDrawer({ uniqueid, onClose }: { uniqueid: string; onClose: () => void }) {
+/**
+ * 🗂 Тип розмови (ТЗ 30.09.2026): що сказала модель, чи це ручна позначка, і кнопки «Це вантаж» / «Це не вантаж»
+ * для тімліда своєї команди й адміна (право вирішує сервер — `canEditType`). Помилку запису видно, а не «нічого».
+ */
+function TypeBlock({ c, onChanged }: { c: AiCallCardResp; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const r = c.row;
+  const set = async (isCargo: boolean) => {
+    setBusy(true); setMsg(null);
+    try { await setAiCallType(r.uniqueid, isCargo); onChanged(); } catch (e) { setMsg(hiringError(e)); }
+    setBusy(false);
+  };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13.5, border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+        <b>Тип розмови:</b>
+        {r.conversationType ? TYPE_LABEL[r.conversationType] : <span style={{ color: "var(--text-muted)" }}>ще не визначено</span>}
+        {r.typeConfidence != null && <span style={{ color: "var(--text-muted)", fontSize: 12.5 }}>· упевненість {Math.round(r.typeConfidence * 100)}%</span>}
+        {r.typeCheck && <Chip tone="warn">Перевірити тип</Chip>}
+        <Chip tone={r.inReport ? "ok" : "muted"}>{r.inReport ? "у звіті" : "у виключених"}</Chip>
+      </div>
+      {r.typeReason && <div style={{ color: "var(--text-muted)", fontSize: 13 }}>{r.typeReason}</div>}
+      {c.typeHistory.length > 0 && (
+        <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>
+          {c.typeHistory.map((h, i) => <div key={i}>{fmtFull(h.at)} · {h.byName ?? "невідомо хто"} · {h.isCargo ? "«Це вантаж»" : "«Це не вантаж»"}{i === 0 ? " — діє" : ""}</div>)}
+        </div>
+      )}
+      {c.canEditType && (
+        <div style={{ display: "flex", gap: 6 }}>
+          <button type="button" className="hr-btn" disabled={busy} onClick={() => void set(true)}>Це вантаж</button>
+          <button type="button" className="hr-btn" disabled={busy} onClick={() => void set(false)}>Це не вантаж</button>
+        </div>
+      )}
+      {msg && <div style={{ color: "var(--danger, #b3261e)", fontSize: 13 }}>{msg}</div>}
+    </div>
+  );
+}
+
+/**
+ * 📝 Коментарі (ТЗ 30.09.2026): «Чому не озвучено ціну» — коли ціни в розмові не було; «Опрацьовано» — коли менеджер
+ * не передзвонив (після нього банер у звіті цю розмову не показує). Хто пише — вирішує сервер (`noteRights`).
+ */
+function NoteField({ c, kind, title, hint, onSaved }: { c: AiCallCardResp; kind: "price" | "missed"; title: string; hint: string; onSaved: () => void }) {
+  const cur = kind === "price" ? c.row.priceNote : c.row.missedNote;
+  const can = c.noteRights[kind];
+  const [text, setText] = useState(cur?.text ?? "");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  useEffect(() => { setText(cur?.text ?? ""); }, [cur?.text]);
+  const save = async () => {
+    setBusy(true); setMsg(null);
+    try { await putAiCallNote(c.row.uniqueid, kind, text); onSaved(); } catch (e) { setMsg(hiringError(e)); }
+    setBusy(false);
+  };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13.5 }}>
+      <b>{title}</b>
+      {cur ? <span>{cur.text} <span style={{ color: "var(--text-muted)", fontSize: 12 }}>· {cur.byName ?? "невідомо хто"}, {fmtFull(cur.at)}</span></span>
+        : <span style={{ color: "var(--warn-fg, #8a5a00)", fontSize: 13 }}>{hint}</span>}
+      {can && (
+        <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+          <textarea id={`ai-note-${kind}`} className="hr-inp" rows={2} value={text} onChange={(e) => setText(e.target.value)} style={{ flex: 1 }} maxLength={2000} />
+          <button type="button" className="hr-btn p" disabled={busy || text === (cur?.text ?? "")} onClick={() => void save()}>{busy ? "Зберігаю…" : "Зберегти"}</button>
+        </div>
+      )}
+      {msg && <span style={{ color: "var(--danger, #b3261e)", fontSize: 13 }}>{msg}</span>}
+    </div>
+  );
+}
+
+function NotesBlock({ c, onSaved }: { c: AiCallCardResp; onSaved: () => void }) {
+  const needPrice = c.result != null && c.result.price.discussed === false;
+  const needMissed = c.row.promiseState === "broken";
+  if (!needPrice && !needMissed) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px" }}>
+      {needPrice && <NoteField c={c} kind="price" title="Чому не озвучено ціну" hint="Ціни в розмові не було, а причину ще не написали." onSaved={onSaved} />}
+      {needMissed && <NoteField c={c} kind="missed" title="Опрацьовано (не передзвонив)" hint="Менеджер не передзвонив. Поки тут порожньо, розмова стоїть у червоному банері звіту." onSaved={onSaved} />}
+    </div>
+  );
+}
+
+/** 🎧 Запис розмови — байтами через наш сервер; слухати можуть ті, кому видно текст (у своєму скоупі). */
+function RecordingPlayer({ uniqueid }: { uniqueid: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  useEffect(() => () => { if (src) URL.revokeObjectURL(src); }, [src]);
+  const load = async () => {
+    setBusy(true); setMsg(null);
+    try { setSrc(URL.createObjectURL(await fetchAiCallRecording(uniqueid))); } catch (e) { setMsg(hiringError(e)); }
+    setBusy(false);
+  };
+  return src ? <audio controls src={src} style={{ width: "100%" }} />
+    : (
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <button type="button" className="hr-btn" disabled={busy} onClick={() => void load()}>{busy ? "Завантажую запис…" : "▶ Прослухати запис"}</button>
+        {msg && <span style={{ color: "var(--danger, #b3261e)", fontSize: 13 }}>{msg}</span>}
+      </div>
+    );
+}
+
+export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: string; onClose: () => void; onChanged?: () => void }) {
   const [c, setC] = useState<AiCallCardResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [tab, setTab] = useState<DrawerTab>("analysis");
+  const [rev, setRev] = useState(0);
 
   useEffect(() => {
     let alive = true;
-    setC(null); setErr(null); setTab("analysis");
+    setErr(null);
+    if (rev === 0) { setC(null); setTab("analysis"); }
     fetchAiCallCard(uniqueid)
       .then((x) => { if (alive) setC(x); })
       .catch((e) => { if (alive) setErr(hiringError(e)); });
     return () => { alive = false; };
-  }, [uniqueid]);
+  }, [uniqueid, rev]);
+  useEffect(() => { setRev(0); }, [uniqueid]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -184,6 +290,10 @@ export function AiCallDrawer({ uniqueid, onClose }: { uniqueid: string; onClose:
                   style={{ background: "var(--muted-bg, #f0f1f3)", borderRadius: 999, padding: "3px 10px", fontSize: 12 }}>угода {d.kommoId} в Kommo ↗</a>
               ))}
             </div>
+
+            <TypeBlock c={c} onChanged={() => { setRev((x) => x + 1); onChanged?.(); }} />
+            <NotesBlock c={c} onSaved={() => { setRev((x) => x + 1); onChanged?.(); }} />
+            {c.canListen && c.durationSec != null && <RecordingPlayer uniqueid={c.row.uniqueid} />}
 
             {tabs.length > 1 && (
               <div className="hr-seg2" role="tablist" aria-label="Розділи картки" style={{ alignSelf: "flex-start" }}>

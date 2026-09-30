@@ -241,7 +241,7 @@ test("#764 GEMINI: контракт запиту, вихід із думками
   assert.equal(out.text, "{}", "🔴 частину-думку взято як відповідь");
   assert.deepEqual(out.usage, { input: 900, output: 420, thoughts: 300 }, "🔴 оплачений вихід без думок");
 
-  const good = {
+  const good = { conversation_type: "cargo_request", type_confidence: 0.95, type_reason: "клієнт питає ціну перевезення", price_value: "",
     summary: "Клієнт питає ціну перевезення зерна.", manager_channel: "0", client_request: "20 т зерна Вінниця → Одеса",
     price: { discussed: true, quote: "Скільки коштує?" },
     objections: [{ what: "дорого", quote: "у конкурентів дешевше" }],

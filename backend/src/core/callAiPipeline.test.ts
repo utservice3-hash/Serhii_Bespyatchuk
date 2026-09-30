@@ -290,7 +290,7 @@ test("#767 АНАЛІЗ · ЖИВА СХЕМА: черга лише з непо�
   assert.equal(await c.pl.enqueueAnalyses(c.db, ap, null), 3, "🔴 у чергу аналізу потрапили порожні, провалені чи чужі розшифровки");
   assert.equal(await c.pl.enqueueAnalyses(c.db, ap, null), 0);
 
-  const good = JSON.stringify({ summary: "s", manager_channel: "0", client_request: "", price: { discussed: false, quote: "" },
+  const good = JSON.stringify({ summary: "s", manager_channel: "0", client_request: "", price: { discussed: false, quote: "" }, conversation_type: "cargo_request", type_confidence: 0.95, type_reason: "клієнт питає ціну перевезення", price_value: "",
     objections: [], promises: [{ who: "manager", what: "передзвонити", deadline_text: "завтра", quote: "передзвоню завтра", channel: "call", deadline_kind: "day", deadline_minutes: 0, deadline_date: "2026-09-21", conditional: false }], next_step: "" });
   const answers: GeminiOutcome[] = [
     { text: good, finishReason: "STOP", blockReason: null, usage: { input: 800, output: 350, thoughts: 250 } },
@@ -431,30 +431,37 @@ test("#788 ЧЕРГА: нові дзвінки першими, а не в пор
 });
 
 /**
- * #791 — РУБРИКА first-touch-v1: модель отримує ДАТУ розмови першим рядком (інакше «завтра» й «у понеділок»
- * нема від чого рахувати), а відповідь без полів строку обіцянки — не за схемою, а не «обіцянка без строку».
- * Джоба й екран беруть саме цю рубрику.
- * 🧨 Червоніє, якщо не передати час розмови в запит або пропустити обіцянку без каналу.
+ * #854 — РУБРИКА first-touch-v2 (ТЗ «звіт тімліда» 30.09.2026): модель отримує ДАТУ розмови першим рядком; відповідь
+ * без полів строку обіцянки або без ТИПУ розмови (зі списку ТЗ, з упевненістю 0..1 і причиною) — не за схемою, а
+ * не «тип невідомий»; у промпті — правило «хоч одна ознака запиту на перевезення → cargo_request». Джоба й екран
+ * беруть саме цю рубрику.
+ * 🧨 Червоніє, якщо не передати час розмови, пропустити відповідь без типу чи прибрати правило з промпту.
  */
-test("#791 РУБРИКА first-touch-v1: дата розмови в запиті, обіцянка без полів строку — не за схемою", async (t) => {
+test("#854 РУБРИКА first-touch-v2: дата розмови в запиті; без полів строку чи без типу розмови — не за схемою; правило «хоч одна ознака — вантаж» у промпті", async (t) => {
   const pr = await import("./callAiProviders.js");
-  assert.equal(pr.RUBRIC_CURRENT, "first-touch-v1");
+  assert.equal(pr.RUBRIC_CURRENT, "first-touch-v2");
+  assert.deepEqual([...pr.CONVERSATION_TYPES], ["cargo_request", "carrier", "vendor", "job_seeker", "wrong_number", "no_dialog", "other"]);
+  assert.match(pr.ANALYSIS_SYSTEM_PROMPT, /ХОЧА Б ОДНА ознака запиту на перевезення/, "🔴 правила «хоч одна ознака — вантаж» у промпті немає");
   const txt = (b: Record<string, unknown>) => JSON.stringify(b);
   assert.match(txt(pr.buildAnalysisRequest([], 100, new Date("2026-09-29T05:56:00Z"))), /Розмова почалась 2026-09-29 о 08:56 за Києвом, вівторок/);
   const base = { summary: "", manager_channel: "1", client_request: "", next_step: "", price: { discussed: false, quote: "" }, objections: [] };
   const old = { ...base, promises: [{ who: "manager", what: "x", deadline_text: "", quote: "q" }] };
   assert.equal(pr.validateAnalysis(old).ok, false, "🔴 обіцянку без каналу й строку прийнято");
-  const v1 = { ...base, promises: [{ who: "manager", what: "x", deadline_text: "", quote: "q", channel: "call", deadline_kind: "none", deadline_minutes: 0, deadline_date: "", conditional: true }] };
-  assert.equal(pr.validateAnalysis(v1).ok, true, "дзеркало: повна обіцянка проходить");
+  const v1only = { ...base, promises: [{ who: "manager", what: "x", deadline_text: "", quote: "q", channel: "call", deadline_kind: "none", deadline_minutes: 0, deadline_date: "", conditional: true }] };
+  assert.equal(pr.validateAnalysis(v1only).ok, false, "🔴 відповідь без типу розмови прийнято — тип став би «невідомий» мовчки");
+  const v1 = { ...v1only, conversation_type: "cargo_request", type_confidence: 0.9, type_reason: "питає ціну", price_value: "" };
+  assert.equal(pr.validateAnalysis(v1).ok, true, "дзеркало: повна відповідь v2 проходить");
+  assert.equal(pr.validateAnalysis({ ...v1, conversation_type: "spam" }).ok, false, "🔴 тип поза списком ТЗ прийнято");
+  assert.equal(pr.validateAnalysis({ ...v1, type_confidence: 1.4 }).ok, false, "🔴 упевненість поза 0..1 прийнято");
   const src = (f: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "src", "core", f), "utf8");
   for (const f of ["callAiTick.ts", "callAiScreen.ts"]) assert.ok(src(f).includes("RUBRIC_CURRENT") && !src(f).includes("RUBRIC_PILOT_V0"), `🔴 ${f} не на поточній рубриці`);
 
   const c = await ctx(t); if (!c) return;
-  const S = "el-791", G = "g-791";
-  await c.raw.query(`INSERT INTO ringostat_calls (uniqueid, calldate, call_type, billsec, duration) VALUES ('r791', '2026-09-29T05:56:00Z', 'out', 60, 70)`);
-  await c.raw.query(`INSERT INTO call_transcripts (uniqueid, provider, model, status, segments) VALUES ('r791', $1, 'scribe_v2', 'done', $2::jsonb)`,
+  const S = "el-854", G = "g-854";
+  await c.raw.query(`INSERT INTO ringostat_calls (uniqueid, calldate, call_type, billsec, duration) VALUES ('r854', '2026-09-29T05:56:00Z', 'out', 60, 70)`);
+  await c.raw.query(`INSERT INTO call_transcripts (uniqueid, provider, model, status, segments) VALUES ('r854', $1, 'scribe_v2', 'done', $2::jsonb)`,
     [S, JSON.stringify([{ channel: 1, start: 0, end: 2, text: "наберу завтра", lang: "uk" }])]);
-  const ap = { provider: G, model: "gemini-3.8-flash", rubricVersion: "first-touch-v1", sttProvider: S, sttModel: "scribe_v2", now: NOW };
+  const ap = { provider: G, model: "gemini-3.8-flash", rubricVersion: "first-touch-v2", sttProvider: S, sttModel: "scribe_v2", now: NOW };
   await c.pl.enqueueAnalyses(c.db, ap, null);
   let sent = "";
   const w = { apiKey: "k", generate: async (_k: string, _m: string, body: unknown): Promise<GeminiOutcome> => { sent = JSON.stringify(body);
