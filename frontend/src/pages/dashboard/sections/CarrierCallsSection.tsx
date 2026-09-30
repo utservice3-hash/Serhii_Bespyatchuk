@@ -30,6 +30,7 @@ function Verdict({ r }: { r: CarrierDealT }) {
   return (
     <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
       <span style={pill(TONE[cat.tone].bg, TONE[cat.tone].fg)}>{cat.label}{r.otherType ? ` · ${OTHER_TYPE_UI[r.otherType]}` : ""}</span>
+      {r.overdue && <span title={`Треба було розібрати до ${fmtTime(r.reviewDeadline!)}`} style={pill(TONE.bad.bg, TONE.bad.fg)}>прострочено</span>}
       <span style={{ fontSize: 12, ...muted, fontVariantNumeric: "tabular-nums" }}>
         {r.source === "human" && r.human ? deciderLabel(r.human.role)
           : r.source === "ai" ? `AI ${confLabel(r.ai.confidence)}`
@@ -69,6 +70,7 @@ export function CarrierCallsSection() {
   const inTab = useMemo(() => rows.filter((r) => tabOf(r.category) === tab), [rows, tab]);
   const shown = useMemo(() => (tab === "other" && sub !== "all" ? inTab.filter((r) => r.otherType === sub) : inTab), [inTab, tab, sub]);
   const count = (t: CarrierTab) => rows.filter((r) => tabOf(r.category) === t).length;
+  const overdueN = rows.filter((r) => r.overdue).length;
   const reduce = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
   /** Рішення записано: у «На перевірці» рядок плавно відходить і відкривається наступний — черга розбирається підряд. */
@@ -136,6 +138,7 @@ export function CarrierCallsSection() {
               style={{ border: "1px solid var(--border)", borderRadius: 999, padding: "4px 14px", fontSize: 13.5, cursor: "pointer",
                 background: tab === t.key ? "var(--accent-bg, #e8f0fb)" : "transparent", fontWeight: tab === t.key ? 600 : 400, color: "var(--text)" }}>
               {t.label} <span key={count(t.key)} className="cq-pop" style={{ fontVariantNumeric: "tabular-nums" }}>{count(t.key)}</span>
+              {t.key === "review" && overdueN > 0 && <span style={{ ...pill(TONE.bad.bg, TONE.bad.fg), marginLeft: 6 }}>{overdueN} прострочено</span>}
             </button>
           ))}
         </div>

@@ -343,3 +343,43 @@ export function dealCategory(x: { human: HumanDecision | null; result: CarrierRe
   if (x.ai && ERROR_WHY[x.ai]) return { category: "error", source: null, why: ERROR_WHY[x.ai] ?? null };
   return { category: "waiting", source: null, why: x.dealState === "waiting" ? "чекаємо розмову" : "AI слухає" };
 }
+
+// ─── Прострочка «На перевірці» (Роман 30.09.2026: «до кінця робочого дня») ────────────────────────
+
+/** Кінець робочого дня — 18:00 за Києвом, Пн–Пт. Свята компанії НЕ враховуються (борг 2 кореня — той самий календар). */
+export const REVIEW_DAY_END_HOUR = 18;
+
+function kyivParts(d: Date): { y: number; m: number; day: number; dow: number; hour: number; minute: number } {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23", weekday: "short" }).formatToParts(d).map((x) => [x.type, x.value]));
+  const dow = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(p.weekday) + 1;
+  return { y: Number(p.year), m: Number(p.month), day: Number(p.day), dow, hour: Number(p.hour), minute: Number(p.minute) };
+}
+
+/** Момент «Y-M-D HH:00 за Києвом» в UTC (зсув Києва беремо на цю саму мить — переходи часу враховано). */
+function kyivAt(y: number, m: number, day: number, hour: number): Date {
+  const guess = Date.UTC(y, m - 1, day, hour, 0, 0);
+  const p = kyivParts(new Date(guess));
+  const offsetMs = Date.UTC(p.y, p.m - 1, p.day, p.hour, p.minute) - guess;
+  return new Date(guess - offsetMs);
+}
+
+/**
+ * До якого моменту угоду, що потрапила «На перевірку» в `since`, треба розібрати: кінець ТОГО Ж робочого дня,
+ * якщо вона прийшла в будній день до 18:00; інакше — кінець наступного робочого дня (вечір п'ятниці й вихідні →
+ * понеділок 18:00).
+ */
+export function reviewDeadline(since: Date): Date {
+  const p = kyivParts(since);
+  let { y, m, day } = p;
+  let dow = p.dow;
+  const sameDay = dow <= 5 && p.hour < REVIEW_DAY_END_HOUR;
+  if (!sameDay) {
+    do {
+      const next = new Date(Date.UTC(y, m - 1, day + 1));
+      y = next.getUTCFullYear(); m = next.getUTCMonth() + 1; day = next.getUTCDate();
+      dow = dow === 7 ? 1 : dow + 1;
+    } while (dow > 5);
+  }
+  return kyivAt(y, m, day, REVIEW_DAY_END_HOUR);
+}

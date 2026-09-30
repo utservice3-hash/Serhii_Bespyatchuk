@@ -28,6 +28,7 @@ export async function carrierCallJob(): Promise<CarrierTickReport | GuardSkip> {
         .map((l) => ({ id: l.id, name: l.name, created_at: l.created_at, responsible_user_id: l.responsible_user_id ?? null })),
       alert: sendAdminAlert,
       launchAt: new Date(config.callAi.carrierLaunchAt),
+      reviewTasks: true,
       close: {
         mode: closeModeOf(config.callAi.carrierAutoClose),
         otherMode: closeModeOf(config.callAi.carrierAutoCloseOther),
@@ -44,6 +45,7 @@ export async function carrierCallJob(): Promise<CarrierTickReport | GuardSkip> {
       + (d.beforeLaunch ? `, до старту ${String(d.beforeLaunch)}` : "") + ` · розпізнано ${String(sum(r.stt, "done"))}, проаналізовано ${String(sum(r.llm, "done"))}`
       + (r.purged ? ` · текст видалено за строком ${String(r.purged)}` : "")
       + (r.closed ? ` · закриття (${r.closed.mode}, «інше» ${r.closed.otherMode}): кандидатів ${String(r.closed.candidates)}, у журнал ${String(r.closed.logged)}, закрито ${String(r.closed.closed)}${r.closed.failed ? `, помилок ${String(r.closed.failed)}` : ""}` : "")
+      + (r.reviewTasks && (r.reviewTasks.created || r.reviewTasks.closed) ? ` · задачі: нових ${String(r.reviewTasks.created)}, закрито ${String(r.reviewTasks.closed)}` : "")
       + (r.sttStoppedBy ? ` · розпізнавання: ${r.sttStoppedBy}` : "")
       + (r.llmStoppedBy ? ` · аналіз: ${r.llmStoppedBy}` : ""));
     return r;

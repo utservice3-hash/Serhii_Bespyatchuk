@@ -158,6 +158,11 @@ export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: Carrier
             {deal.source === "human" && deal.human ? `вирішив ${deviceName(deal.human.by)} (${deciderLabel(deal.human.role)})` : deal.source === "ai" ? "вирішив AI" : verdictUi ? deal.why ?? "" : ""}
           </span>
           {deal.close && <div style={{ ...muted, fontSize: 12.5, marginTop: 4 }}>{closeLabel(deal.close, fmtTime)}</div>}
+          {deal.reviewDeadline && !deal.human && (
+            <div style={{ fontSize: 12.5, marginTop: 4, color: deal.overdue ? "var(--danger)" : "var(--text-muted)" }}>
+              {deal.overdue ? "Прострочено: треба було розібрати до " : "Розібрати до "}{fmtTime(deal.reviewDeadline)} (кінець робочого дня)
+            </div>
+          )}
         </div>
 
         {closed

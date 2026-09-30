@@ -306,7 +306,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "hiring_invites",
   "hiring_training_questions",
   "employee_offboarding",
-  "call_transcripts", "call_analyses", "ai_spend_ledger", "carrier_call_deals", "ai_cap_alerts", "carrier_close_log", "carrier_decisions",
+  "call_transcripts", "call_analyses", "ai_spend_ledger", "carrier_call_deals", "ai_cap_alerts", "carrier_close_log", "carrier_decisions", "carrier_review_tasks",
   "tldv_meetings",
   "workua_responses",
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_import_months",
@@ -1127,6 +1127,9 @@ export const MANIFEST_TESTS: string[] = [
   "#1071 ТЕСТ ТОЧНОСТІ · ЖИВА СХЕМА: три групи з CRM, наші закриття — не еталон, точність — з розібраних",
   "#1072 AI ПРОТИ ЛЮДИНИ · ЖИВА СХЕМА: останнє рішення по угоді проти вердикту AI; без вердикту — не рахується",
   "#1073 ТОЧКА СТАРТУ · ЖИВА СХЕМА: до старту — не пишемо, не слухаємо, не показуємо; після — як звичайно",
+  "#1074 СТРОК: до 18:00 того ж будня; після 18:00, вечір пʼятниці й вихідні — наступний робочий день, за Києвом",
+  "#1075 ПРОСТРОЧКА · ЖИВА СХЕМА: після строку — так, до строку й вирішена — ні; звіт = рядки",
+  "#1076 ЗАДАЧНИК · ЖИВА СХЕМА: одна відкрита на менеджера, число оновлюється, розібрав — закрилась сама",
   // core/callAiPipeline.test.ts — конвеєр на живій схемі; прохід A, коміт ③ (22.09.2026)
   "#765 КОНВЕЄР · ЖИВА СХЕМА: два тіки — одна оплата, повтор не платить, завислий повертається",
   "#765b БЕЗ КЛЮЧА: нуль запитів, черга «не ввімкнено», з ключем — працює",

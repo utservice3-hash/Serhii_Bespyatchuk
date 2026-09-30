@@ -1310,3 +1310,107 @@ test("#1073 ТОЧКА СТАРТУ · ЖИВА СХЕМА: до старту �
   assert.match(SRC("jobs/carrierCallJob.ts"), /launchAt: new Date\(config\.callAi\.carrierLaunchAt\)/, "🔴 джоба слухає без точки старту");
   assert.match(SRC("config.ts"), /carrierLaunchAt: process\.env\.CARRIER_LAUNCH_AT \?\? "2026-09-30T09:48:08Z"/, "🔴 точка старту ≠ рішенню 30.09.2026");
 });
+
+/**
+ * #1074 — СТРОК «ДО КІНЦЯ РОБОЧОГО ДНЯ» (Роман 30.09.2026): прийшла в будній день до 18:00 за Києвом — розібрати до
+ * 18:00 того ж дня; о 18:00 і пізніше, у п'ятницю ввечері чи у вихідні — до 18:00 наступного робочого дня.
+ * 🧨 Червоніє, якщо зсунути межу 18:00, забути вихідні чи рахувати в UTC замість Києва.
+ */
+test("#1074 СТРОК: до 18:00 того ж будня; після 18:00, вечір пʼятниці й вихідні — наступний робочий день, за Києвом", async () => {
+  const { reviewDeadline } = await import("./carrierCallRules.js");
+  const k = (iso: string) => reviewDeadline(new Date(iso)).toISOString();
+  // Київ у вересні — UTC+3: 18:00 Києва = 15:00 UTC. 30.09.2026 — середа.
+  assert.equal(k("2026-09-30T07:00:00Z"), "2026-09-30T15:00:00.000Z", "🔴 ранок будня — не до 18:00 того ж дня");
+  assert.equal(k("2026-09-30T14:59:00Z"), "2026-09-30T15:00:00.000Z", "🔴 17:59 — не того ж дня");
+  assert.equal(k("2026-09-30T15:00:00Z"), "2026-10-01T15:00:00.000Z", "🔴 рівно 18:00 — має перейти на наступний день");
+  assert.equal(k("2026-09-29T22:30:00Z"), "2026-09-30T15:00:00.000Z", "🔴 01:30 ночі за Києвом (ще вівторок в UTC) — не той день");
+  assert.equal(k("2026-10-02T16:00:00Z"), "2026-10-05T15:00:00.000Z", "🔴 вечір пʼятниці — не на понеділок");
+  assert.equal(k("2026-10-03T09:00:00Z"), "2026-10-05T15:00:00.000Z", "🔴 субота — не на понеділок");
+  assert.equal(k("2026-10-04T20:59:00Z"), "2026-10-05T15:00:00.000Z", "🔴 неділя 23:59 — не на понеділок");
+  // Зимовий час (UTC+2): 18:00 Києва = 16:00 UTC — зсув береться на ту саму мить.
+  assert.equal(k("2026-11-02T08:00:00Z"), "2026-11-02T16:00:00.000Z", "🔴 зимовий час порахований як літній");
+});
+
+/**
+ * #1075 — ПРОСТРОЧКА В РЯДКАХ І ЗВІТІ: невирішена «На перевірці» після строку — прострочена; до строку — ні; вирішена
+ * людиною — ні; упевнена категорія — ні. У звіті «прострочено» = рядкам вкладки з тією ж позначкою.
+ * 🧨 Червоніє, якщо позначати вирішені, не рахувати прострочку або розвести звіт і вкладку.
+ */
+test("#1075 ПРОСТРОЧКА · ЖИВА СХЕМА: після строку — так, до строку й вирішена — ні; звіт = рядки", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  const { carrierDealRows, carrierReport } = await import("./carrierDeals.js");
+  const { recordDecision } = await import("./carrierDecisions.js");
+  const came = new Date("2026-09-30T08:00:00Z");     // середа 11:00 Києва → строк 15:00 UTC того ж дня
+  const mk = async (n: number, role: string, conf: number) => {
+    const P = phone(10750, n), u = `1075-${String(n)}`;
+    await call(c, u, came, 40, P);
+    await carrierDeal(c, 107500 + n, P, came, "own", u, 1);
+    await carrierAnalysedV2(c, u, role, conf, "counterpart");
+    await c.raw.query(`UPDATE call_analyses a SET updated_at = $2 FROM call_transcripts t WHERE t.id = a.transcript_id AND t.uniqueid = $1`, [u, came.toISOString()]);
+  };
+  await mk(1, "carrier", 0.6); await mk(2, "carrier", 0.6); await mk(3, "carrier", 0.95);
+  await recordDecision(c.db, 107502, "client", null, "", lead(1), came);
+  const at = async (iso: string) => new Map((await carrierDealRows(c.db, { period: null, scope: {}, now: new Date(iso) })).map((r) => [r.kommoId, r]));
+  const before = await at("2026-09-30T14:59:00Z"), after = await at("2026-09-30T15:01:00Z");
+  assert.equal(before.get(107501)?.overdue, false, "🔴 до кінця робочого дня вже «прострочено»");
+  assert.equal(after.get(107501)?.overdue, true, "🔴 після 18:00 невирішена — не прострочена");
+  assert.equal(after.get(107501)?.reviewDeadline, "2026-09-30T15:00:00.000Z");
+  assert.equal(after.get(107502)?.overdue, false, "🔴 вирішена людиною позначена простроченою");
+  assert.equal(after.get(107503)?.overdue, false, "🔴 упевнений перевізник позначений простроченим");
+  const rows = [...after.values()];
+  assert.equal(carrierReport(rows).total.overdue, rows.filter((r) => r.overdue).length, "🔴 «прострочено» у звіті ≠ рядкам вкладки");
+  assert.equal(carrierReport(rows).total.overdue, 1);
+});
+
+/**
+ * #1076 — ЗАДАЧА В ЗАДАЧНИКУ: одна відкрита на менеджера з числом угод «На перевірці» й строком — найранішим кінцем
+ * робочого дня; число оновлюється; розібрав усе — задача закривається сама з причиною й записом у журналі статусів;
+ * нова угода після закриття — нова задача; менеджер без черги — без задачі; двох відкритих не буває.
+ * 🧨 Червоніє, якщо плодити задачі щопроходу, не закривати розібране чи ставити задачу не тому менеджеру.
+ */
+test("#1076 ЗАДАЧНИК · ЖИВА СХЕМА: одна відкрита на менеджера, число оновлюється, розібрав — закрилась сама", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  await c.raw.query("DELETE FROM tasks WHERE assignee_id IN (10611, 10612, 10613)");
+  await seedTeams(c);
+  const { syncCarrierReviewTasks, REVIEW_TASK_DONE_REASON } = await import("./carrierReviewTasks.js");
+  const { recordDecision } = await import("./carrierDecisions.js");
+  const came = new Date("2026-09-30T08:00:00Z");
+  const mk = async (n: number, user: number, role: string, conf: number) => {
+    const P = phone(10760, n), u = `1076-${String(n)}`;
+    await call(c, u, came, 40, P);
+    await carrierDeal(c, 107600 + n, P, came, "own", u, 1); await owner(c, 107600 + n, user);
+    await carrierAnalysedV2(c, u, role, conf, "counterpart");
+  };
+  await mk(1, 10601, "carrier", 0.6); await mk(2, 10601, "unclear", 0.3); await mk(3, 10602, "client", 0.95);
+  const tasks = async () => (await c.raw.query<{ id: number; assignee_id: number; title: string; status: string; deadline: string; close_reason: string | null }>(
+    `SELECT id, assignee_id, title, status, to_char(deadline,'YYYY-MM-DD') AS deadline, close_reason FROM tasks
+      WHERE assignee_id IN (10611, 10612, 10613) ORDER BY id`)).rows;
+  const t1 = new Date("2026-09-30T09:00:00Z");
+  const s1 = await syncCarrierReviewTasks(c.db, t1, null);
+  assert.deepEqual([s1.created, s1.closed], [1, 0]);
+  let all = await tasks();
+  assert.deepEqual(all.map((x) => [x.assignee_id, x.title, x.status, x.deadline]),
+    [[10611, "📞 Дзвінки на мобільні: розібрати 2", "not_started", "2026-09-30"]], "🔴 задача не тому, не з тим числом чи строком (у м2 черги немає — задачі теж)");
+  await syncCarrierReviewTasks(c.db, t1, null);
+  assert.equal((await tasks()).length, 1, "🔴 повторний прохід поставив другу задачу");
+  await recordDecision(c.db, 107601, "carrier", null, "", lead(21, "manager", { managerId: 10611 }), t1);
+  const s2 = await syncCarrierReviewTasks(c.db, t1, null);
+  assert.equal(s2.updated, 1);
+  assert.equal((await tasks())[0].title, "📞 Дзвінки на мобільні: розібрати 1", "🔴 число в задачі не оновилось");
+  await recordDecision(c.db, 107602, "other", "spam", "", lead(21, "manager", { managerId: 10611 }), t1);
+  const s3 = await syncCarrierReviewTasks(c.db, t1, null);
+  all = await tasks();
+  assert.deepEqual([s3.closed, all[0].status, all[0].close_reason], [1, "done", REVIEW_TASK_DONE_REASON], "🔴 розібрав усе — задача не закрилась сама");
+  const log = (await c.raw.query("SELECT 1 FROM task_status_log WHERE task_id = $1 AND to_status = 'done'", [all[0].id])).rowCount;
+  assert.equal(log, 1, "🔴 автозакриття без запису в журналі статусів");
+  await mk(4, 10601, "carrier", 0.5);
+  await syncCarrierReviewTasks(c.db, t1, null);
+  all = await tasks();
+  assert.deepEqual(all.map((x) => x.status), ["done", "not_started"], "дзеркало: нова угода після закриття — нова задача");
+  await assert.rejects(c.raw.query(`WITH t AS (INSERT INTO tasks (title, status, assignee_id) VALUES ('x','not_started',10611) RETURNING id)
+    INSERT INTO carrier_review_tasks (task_id, manager_id, opened_at) SELECT id, 10611, now() FROM t`), /idx_carrier_review_tasks_open/,
+    "🔴 база дозволила другу відкриту задачу менеджеру");
+  assert.match(SRC("jobs/carrierCallJob.ts"), /reviewTasks: true,/, "🔴 бойова джоба задач не ставить");
+});

@@ -29,13 +29,14 @@ export function decisionRank(roleKey: string | null): number {
   return 3;
 }
 
-export type PendingRow = Pick<DealRow, "kommoId" | "uniqueid" | "calledAt" | "billsec" | "managerName" | "teamName" | "category" | "why"
-  | "dealState" | "createdAt" | "phone"> & { role: string | null; confidence: number | null; otherType: OtherType | null; reason: string | null };
+export type PendingRow = Pick<DealRow, "kommoId" | "uniqueid" | "calledAt" | "billsec" | "managerId" | "managerName" | "teamId" | "teamName"
+  | "category" | "why" | "dealState" | "createdAt" | "phone" | "reviewDeadline" | "overdue"> & { role: string | null; confidence: number | null; otherType: OtherType | null; reason: string | null };
 export interface DecidedRow extends PendingRow { decision: HumanDecision; decisionOther: OtherType | null; note: string | null; by: string; byRole: string | null; at: string }
 
 const pendingOf = (r: DealRow): PendingRow => ({
-  kommoId: r.kommoId, uniqueid: r.uniqueid, calledAt: r.calledAt, billsec: r.billsec, managerName: r.managerName, teamName: r.teamName,
-  category: r.category, why: r.why, dealState: r.dealState, createdAt: r.createdAt, phone: r.phone,
+  kommoId: r.kommoId, uniqueid: r.uniqueid, calledAt: r.calledAt, billsec: r.billsec, managerId: r.managerId, managerName: r.managerName,
+  teamId: r.teamId, teamName: r.teamName, category: r.category, why: r.why, dealState: r.dealState, createdAt: r.createdAt, phone: r.phone,
+  reviewDeadline: r.reviewDeadline, overdue: r.overdue,
   role: r.ai.verdict, confidence: r.ai.confidence, otherType: r.ai.otherType, reason: r.ai.reason,
 });
 
@@ -45,7 +46,7 @@ const pendingOf = (r: DealRow): PendingRow => ({
  */
 export async function decisionQueue(db: Db, now: Date, scope: CarrierScope = {}, decidedDays = 30, launchSince: string | null = null):
   Promise<{ pending: PendingRow[]; decided: DecidedRow[] }> {
-  const rows = await carrierDealRows(db, { period: null, scope, since: launchSince });
+  const rows = await carrierDealRows(db, { period: null, scope, since: launchSince, now });
   const since = now.getTime() - decidedDays * 86_400_000;
   const pending: PendingRow[] = [], decided: DecidedRow[] = [];
   for (const r of rows) {

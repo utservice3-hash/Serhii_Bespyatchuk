@@ -3,7 +3,7 @@ import { ELEVENLABS_STT_MODEL } from "./callAiProviders.js";
 import { STT_PROVIDER } from "./callAiPilot.js";
 import { aiCallState } from "./callAiScreen.js";
 import type { MissedScope } from "./missedCallsRules.js";
-import { CARRIER_RUBRICS, carrierBucket, dealCategory, type CarrierAiState, type CarrierBucket, type CarrierResult,
+import { CARRIER_RUBRICS, carrierBucket, dealCategory, reviewDeadline, type CarrierAiState, type CarrierBucket, type CarrierResult,
   type DealCategory, type HumanDecision, type OtherType } from "./carrierCallRules.js";
 
 /**
@@ -56,6 +56,13 @@ export interface DealRow {
   category: DealCategory;
   source: "human" | "ai" | null;
   why: string | null;
+  /**
+   * «На перевірці» / «Помилка»: з якого моменту чекає людину, до коли її треба розібрати (кінець робочого дня,
+   * `reviewDeadline`) і чи вже прострочено. Для решти категорій — `null` / `false`.
+   */
+  reviewSince: string | null;
+  reviewDeadline: string | null;
+  overdue: boolean;
   /** Підтип «Інше»: людини, якщо вона вирішила «Інше», інакше AI; для решти категорій — `null`. */
   otherType: OtherType | null;
   close: CloseState | null;
@@ -71,6 +78,7 @@ interface Raw {
   calldate: Date | null; billsec: number | null; call_type: string | null;
   stt_status: string | null; stt_failure: string | null; text_empty: boolean | null;
   llm_status: string | null; llm_failure: string | null; result: CarrierResult | null; rubric: string | null;
+  d_upd: Date; t_upd: Date | null; a_upd: Date | null;
   dec: HumanDecision | null; dec_other: OtherType | null; dec_note: string | null; dec_role: string | null; dec_at: Date | null; dec_by: string | null;
   deal_status: string | null; reject_reason: string | null;
   cl_decided: Date | null; cl_closed: Date | null; cl_reverted: Date | null; cl_error: string | null; cl_reason: "carrier" | "other" | null;
@@ -96,11 +104,13 @@ export interface DealQuery {
   ids?: readonly number[];
   /** Точка старту: угоди, створені раніше, у вкладки й звіт не йдуть (Роман 30.09.2026: «працюємо з 0»). */
   since?: string | null;
+  /** «Зараз» для прострочки; за замовчуванням — мить запиту. */
+  now?: Date;
 }
 
 /** Найсвіжіший вердикт будь-якої з рубрик мобільних; готовий — першим. */
 export const CARRIER_ANALYSIS_LATERAL = (t: string, rubricsParam: string) => `LEFT JOIN LATERAL (
-    SELECT a.status, a.failure, a.result, a.rubric_version FROM call_analyses a
+    SELECT a.status, a.failure, a.result, a.rubric_version, a.updated_at FROM call_analyses a
      WHERE a.transcript_id = ${t}.id AND a.rubric_version = ANY(${rubricsParam}::text[])
      ORDER BY (a.status = 'done') DESC, a.id DESC LIMIT 1) a ON true`;
 
@@ -113,6 +123,7 @@ export async function carrierDealRows(db: Db, q: DealQuery): Promise<DealRow[]> 
            t.status AS stt_status, t.failure AS stt_failure,
            (t.status = 'done' AND t.text_purged_at IS NULL AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS text_empty,
            a.status AS llm_status, a.failure AS llm_failure, a.result, a.rubric_version AS rubric,
+           d.updated_at AS d_upd, t.updated_at AS t_upd, a.updated_at AS a_upd,
            cd.decision AS dec, cd.other_type AS dec_other, cd.note AS dec_note, cd.decider_role AS dec_role, cd.decided_at AS dec_at,
            COALESCE(um.name, uu.email) AS dec_by,
            dd.status_id::text AS deal_status, dd.reject_reason,
@@ -138,7 +149,8 @@ export async function carrierDealRows(db: Db, q: DealQuery): Promise<DealRow[]> 
      ORDER BY d.deal_created_at DESC, d.kommo_id`,
   [STT_PROVIDER, ELEVENLABS_STT_MODEL, [...CARRIER_RUBRICS], q.period?.from ?? null, q.period?.to ?? null,
     q.scope.managerId ?? null, q.scope.teamId ?? null, q.ids ? [...q.ids] : null, q.since ?? null]);
-  const rows = r.rows.map(toRow);
+  const now = q.now ?? new Date();
+  const rows = r.rows.map((x) => toRow(x, now));
   if (!rows.length) return rows;
   const j = await db.query<{ kommo_id: string; by: string | null; role: string | null; decision: HumanDecision; other_type: OtherType | null;
     note: string | null; at: Date; ai_role: string | null; ai_confidence: string | null }>(`
@@ -152,13 +164,18 @@ export async function carrierDealRows(db: Db, q: DealQuery): Promise<DealRow[]> 
   return rows;
 }
 
-function toRow(x: Raw): DealRow {
+function toRow(x: Raw, now: Date): DealRow {
   const aiState = x.u ? aiCallState(x.stt_status, x.llm_status, x.text_empty === true) as CarrierAiState : null;
   const result = aiState === "done" ? x.result : null;
   const human = x.dec ? { decision: x.dec, otherType: x.dec_other, note: x.dec_note, by: x.dec_by ?? "невідомо", role: x.dec_role,
     at: iso(x.dec_at!) } : null;
   const cat = dealCategory({ human: x.dec, result, dealState: x.state, ai: aiState });
   const aiOther = result?.caller_role === "other" ? (result.other_type ?? null) : null;
+  // Коли угода стала чекати людину: без розмови — коли доба минула (зміна стану угоди); інакше — коли AI дав
+  // невпевнений вердикт чи здався (оновлення аналізу, а без нього — розпізнавання).
+  const waitsHuman = cat.category === "review" || cat.category === "error";
+  const sinceAt = !waitsHuman ? null : x.state === "no_talk" ? x.d_upd : (x.a_upd ?? x.t_upd ?? x.d_upd);
+  const deadline = sinceAt ? reviewDeadline(new Date(sinceAt)) : null;
   return {
     kommoId: Number(x.kommo_id), phone: x.phone, createdAt: iso(x.deal_created_at), dealState: x.state, reused: x.reused,
     talkNo: Number(x.talk_no), uniqueid: x.u, calledAt: x.calldate ? iso(x.calldate) : null,
@@ -171,6 +188,8 @@ function toRow(x: Raw): DealRow {
       quoteCheck: result?.quote_check ?? null, summary: result?.summary || null, bucket: result ? carrierBucket(result) : null,
     },
     human, journal: [], category: cat.category, source: cat.source, why: cat.why,
+    reviewSince: sinceAt ? iso(sinceAt) : null, reviewDeadline: deadline ? deadline.toISOString() : null,
+    overdue: deadline != null && now.getTime() > deadline.getTime(),
     otherType: cat.category !== "other" ? null : cat.source === "human" ? (human?.otherType ?? null) : aiOther,
     close: closeStateOf(x),
     crm: { statusId: x.deal_status == null ? null : Number(x.deal_status), rejectReason: x.reject_reason },
@@ -185,13 +204,16 @@ export interface ReportCounts {
   otherAuto: number; otherManual: number;
   /** «На перевірці» + «Помилка» + AI ще слухає. */
   unsorted: number;
+  /** З «не розібрано» — не розібрані до кінця робочого дня (червоне в звіті). */
+  overdue: number;
 }
 export interface ReportLine extends ReportCounts { managerId: number | null; managerName: string | null; teamId: number | null; teamName: string | null }
 
-const zero = (): ReportCounts => ({ total: 0, clients: 0, carriersAuto: 0, carriersManual: 0, otherAuto: 0, otherManual: 0, unsorted: 0 });
+const zero = (): ReportCounts => ({ total: 0, clients: 0, carriersAuto: 0, carriersManual: 0, otherAuto: 0, otherManual: 0, unsorted: 0, overdue: 0 });
 
-function add(c: ReportCounts, r: Pick<DealRow, "category" | "source">): void {
+function add(c: ReportCounts, r: Pick<DealRow, "category" | "source" | "overdue">): void {
   c.total++;
+  if (r.overdue) c.overdue++;
   if (r.category === "client") c.clients++;
   else if (r.category === "carrier") { if (r.source === "human") c.carriersManual++; else c.carriersAuto++; }
   else if (r.category === "other") { if (r.source === "human") c.otherManual++; else c.otherAuto++; }
@@ -202,7 +224,7 @@ function add(c: ReportCounts, r: Pick<DealRow, "category" | "source">): void {
  * Рядок на менеджера + сума команди + сума всього — з ТИХ САМИХ рядків, що й вкладки. «Без менеджера» — окремим
  * рядком (невідоме видиме, frontend.md), а не розчиняється в сумі.
  */
-export function carrierReport(rows: readonly Pick<DealRow, "category" | "source" | "managerId" | "managerName" | "teamId" | "teamName">[]):
+export function carrierReport(rows: readonly Pick<DealRow, "category" | "source" | "overdue" | "managerId" | "managerName" | "teamId" | "teamName">[]):
   { managers: ReportLine[]; teams: ReportLine[]; total: ReportCounts } {
   const byMgr = new Map<string, ReportLine>(), byTeam = new Map<string, ReportLine>();
   const total = zero();

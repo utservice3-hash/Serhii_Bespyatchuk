@@ -406,6 +406,8 @@ export interface CarrierDealT {
   human: { decision: CarrierDecisionT; otherType: CarrierOtherTypeT | null; note: string | null; by: string; role: string | null; at: string } | null;
   journal: CarrierJournalT[];
   category: CarrierCategoryT; source: "human" | "ai" | null; why: string | null; otherType: CarrierOtherTypeT | null;
+  /** «На перевірці»: до коли розібрати (кінець робочого дня) і чи вже прострочено. */
+  reviewSince: string | null; reviewDeadline: string | null; overdue: boolean;
   close: CarrierCloseT | null; crm: { statusId: number | null; rejectReason: string | null };
 }
 export interface CarrierKpisT { removedByFilter: number; leftAfterFilter: number; waitingTalk: number; noTalk: number; recordingSince: string | null }
@@ -418,7 +420,7 @@ export async function fetchCarrierCalls(params: { from: string; to: string; mana
 export interface CarrierReportLineT {
   managerId: number | null; managerName: string | null; teamId: number | null; teamName: string | null;
   total: number; clients: number; carriersAuto: number; carriersManual: number; otherAuto: number; otherManual: number; unsorted: number;
-  filterRemoved?: number;
+  overdue: number; filterRemoved?: number;
 }
 export interface CarrierReportResp { period: { from: string; to: string }; managers: CarrierReportLineT[]; teams: CarrierReportLineT[];
   total: Omit<CarrierReportLineT, "managerId" | "managerName" | "teamId" | "teamName">; filterRemoved: number }
@@ -451,7 +453,8 @@ export interface CarrierCallsMetaResp {
 /** 🙋 «На перевірці» на етапі (без періоду) і вирішені за 30 днів — у скоупі ролі. */
 export interface CarrierPendingT { kommoId: number; url: string; uniqueid: string | null; phone: string; createdAt: string; calledAt: string | null;
   billsec: number | null; managerName: string | null; teamName: string | null; category: CarrierCategoryT; why: string | null; dealState: string;
-  role: string | null; confidence: number | null; otherType: CarrierOtherTypeT | null; reason: string | null }
+  role: string | null; confidence: number | null; otherType: CarrierOtherTypeT | null; reason: string | null;
+  reviewDeadline: string | null; overdue: boolean }
 export interface CarrierDecidedT extends CarrierPendingT { decision: CarrierDecisionT; decisionOther: CarrierOtherTypeT | null; note: string | null;
   by: string; byRole: string | null; at: string }
 export async function fetchCarrierPending(): Promise<{ pending: CarrierPendingT[]; decided: CarrierDecidedT[] }> {

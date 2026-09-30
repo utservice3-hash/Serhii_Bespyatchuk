@@ -11,7 +11,7 @@ import { pill } from "./CarrierDealPanel";
  * не можуть розійтись. Ролі без вкладки «Перевізники» блок не бачать (сервер відповідає 403 — ховаємо).
  */
 
-type Col = "total" | "clients" | "carriersAuto" | "carriersManual" | "otherAuto" | "otherManual" | "unsorted";
+type Col = "total" | "clients" | "carriersAuto" | "carriersManual" | "otherAuto" | "otherManual" | "unsorted" | "overdue";
 const COLS: readonly { key: Col; label: string; match: (r: CarrierDealT) => boolean }[] = [
   { key: "total", label: "Усього", match: () => true },
   { key: "clients", label: "Клієнти", match: (r) => r.category === "client" },
@@ -20,6 +20,7 @@ const COLS: readonly { key: Col; label: string; match: (r: CarrierDealT) => bool
   { key: "otherAuto", label: "Інше · AI", match: (r) => r.category === "other" && r.source !== "human" },
   { key: "otherManual", label: "Інше · вручну", match: (r) => r.category === "other" && r.source === "human" },
   { key: "unsorted", label: "Не розібрано", match: (r) => r.category === "review" || r.category === "error" || r.category === "waiting" },
+  { key: "overdue", label: "з них прострочено", match: (r) => r.overdue },
 ];
 const fmtTime = (iso: string) => new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const muted: React.CSSProperties = { color: "var(--text-muted)" };
@@ -60,7 +61,7 @@ export function CarrierReportCard({ from, to, managerId, teamId }: { from: strin
   const head = (
     <h2 className="chart-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
       Дзвінки на мобільні
-      <InfoHint text="Угоди етапу «Дзвінки на мобільні», що лишились після фільтра CRM, — хто це виявився: клієнт, перевізник чи інше; AI — упевнений вердикт, вручну — рішення менеджера, тімліда чи керівника. «Не розібрано» — на перевірці, помилка або AI ще слухає. «Прибрав фільтр» — окремо, у «Усього» не входить. Клік по числу — список угод." />
+      <InfoHint text="Угоди етапу «Дзвінки на мобільні», що лишились після фільтра CRM, — хто це виявився: клієнт, перевізник чи інше; AI — упевнений вердикт, вручну — рішення менеджера, тімліда чи керівника. «Не розібрано» — на перевірці, помилка або AI ще слухає; «прострочено» — не розібрані до кінця робочого дня (18:00, Пн–Пт). «Прибрав фільтр» — окремо, у «Усього» не входить. Облік — з 30.09.2026 12:48. Клік по числу — список угод." />
     </h2>
   );
   if (err) return <div className="chart-card">{head}<p style={{ margin: 0, color: "var(--danger)" }}>{err}</p></div>;
@@ -72,10 +73,10 @@ export function CarrierReportCard({ from, to, managerId, teamId }: { from: strin
     const v = line[c.key];
     const on = pick?.who === p.who && pick.id === p.id && pick.col === c.key;
     return (
-      <td key={c.key} style={{ ...num, fontWeight: c.key === "total" ? 600 : 400 }}>
+      <td key={c.key} style={{ ...num, fontWeight: c.key === "total" ? 600 : 400, color: c.key === "overdue" && v > 0 ? "var(--danger)" : undefined }}>
         {v === 0 ? <span style={muted}>0</span>
           : <button type="button" onClick={() => { void open({ ...p, col: c.key, title: `${title} · ${c.label}` }); }} aria-pressed={on}
-              style={{ border: 0, background: on ? "var(--info-bg)" : "none", color: "var(--info)", cursor: "pointer", padding: "1px 4px", borderRadius: 4, fontVariantNumeric: "tabular-nums", font: "inherit" }}>{v}</button>}
+              style={{ border: 0, background: on ? "var(--info-bg)" : "none", color: c.key === "overdue" ? "var(--danger)" : "var(--info)", cursor: "pointer", padding: "1px 4px", borderRadius: 4, fontVariantNumeric: "tabular-nums", font: "inherit" }}>{v}</button>}
       </td>
     );
   });

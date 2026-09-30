@@ -10,6 +10,7 @@ import { drainWithBudget, MAX_OUTPUT_TOKENS, TICK_MAX_ATTEMPTS, TICK_PORTION, ty
 import { carrierActiveIds } from "./carrierCallQueue.js";
 import { notifyCapOnce } from "./aiCapAlert.js";
 import { runCarrierClose, type CloseMode, type CloseReport, type KommoCloser } from "./carrierClose.js";
+import { syncCarrierReviewTasks, type ReviewTaskStats } from "./carrierReviewTasks.js";
 import { CARRIER_BUDGET, CARRIER_KIT_V2, CARRIER_OPS, CARRIER_RUBRIC, CARRIER_RUBRICS, CARRIER_RULE, oldEnough,
   phoneFromDealName } from "./carrierCallRules.js";
 
@@ -170,6 +171,8 @@ export interface CarrierTickEnv {
   alert: (text: string) => Promise<void>;
   /** Точка старту: угоди, створені раніше, не записуються й не слухаються. `null` — без межі. */
   launchAt?: Date | null;
+  /** Задача «розібрати дзвінки на мобільні» в задачнику (лише бойова джоба; гейти вмикають явно). */
+  reviewTasks?: boolean;
   /** Закриття в Kommo (перевізники, рішення людей; AI-«Інше» — `otherMode`). Не задано — кроку немає (як `off`). */
   close?: { mode: CloseMode; otherMode?: CloseMode; kommo: KommoCloser };
 }
@@ -186,6 +189,7 @@ export interface CarrierTickReport {
   llmStoppedBy: string | null;
   capAlerted: boolean;
   closed: CloseReport | null;
+  reviewTasks: ReviewTaskStats | null;
 }
 
 export async function runCarrierTick(env: CarrierTickEnv): Promise<CarrierTickReport> {
@@ -199,11 +203,13 @@ export async function runCarrierTick(env: CarrierTickEnv): Promise<CarrierTickRe
   const enqueued = await enqueueTranscripts(env.db, ids, STT_PROVIDER, ELEVENLABS_STT_MODEL, t0);
   const purged = await purgeOldCarrierText(env.db, t0);
   const out: CarrierTickReport = { recorded, resolved, active: ids.length, enqueued, purged, stt: [], llm: [],
-    sttStoppedBy: null, llmStoppedBy: null, capAlerted: false, closed: null };
+    sttStoppedBy: null, llmStoppedBy: null, capAlerted: false, closed: null, reviewTasks: null };
   // 🧹 Закриття — ПІСЛЯ вердиктів, по угодах, що стоять на етапі за ЦІЄЮ ж відповіддю Kommo.
   const doClose = async () => env.close
     ? runCarrierClose(env.db, env.now(), env.close.mode, new Set(leads.map((l) => l.id)), env.close.kommo, env.close.otherMode ?? "dry") : null;
-  if (!ids.length) { out.closed = await doClose(); return out; }
+  // 📋 Задачі — ПІСЛЯ закриття: закрита цим проходом угода вже не рахується в «розібрати».
+  const doTasks = async () => (env.reviewTasks ? syncCarrierReviewTasks(env.db, env.now(), launchAt) : null);
+  if (!ids.length) { out.closed = await doClose(); out.reviewTasks = await doTasks(); return out; }
 
   const throttle = createMinInterval(RINGOSTAT_MIN_INTERVAL_MS, env.http);
   const common = { limit: TICK_PORTION, maxAttempts: TICK_MAX_ATTEMPTS, stuckAfterMin: STUCK_AFTER_MIN,
@@ -239,6 +245,7 @@ export async function runCarrierTick(env: CarrierTickEnv): Promise<CarrierTickRe
   const capped = [...out.stt, ...out.llm].find((x) => x.state === "capped");
   if (capped) out.capAlerted = await notifyCapOnce(env.db, "carrier", capped.stoppedBy ?? "стеля вичерпана", env.now(), env.alert);
   out.closed = await doClose();
+  out.reviewTasks = await doTasks();
   const errs = [stt.error, llm.error].filter((e): e is Error => e != null);
   if (out.closed?.error) errs.push(new Error(`закриття в Kommo: ${out.closed.error}`));
   if (errs.length) throw new Error(errs.map((e) => e.message).join(" · "));

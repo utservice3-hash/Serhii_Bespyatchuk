@@ -10561,6 +10561,7 @@ dashboardRouter.get("/carrier-calls", async (req, res) => {
       talkNo: r.talkNo, uniqueid: r.uniqueid, calledAt: r.calledAt, billsec: r.billsec, direction: r.direction,
       managerId: r.managerId, managerName: r.managerName, teamId: r.teamId, teamName: r.teamName,
       ai: r.ai, human: r.human, journal: r.journal, category: r.category, source: r.source, why: r.why, otherType: r.otherType,
+      reviewSince: r.reviewSince, reviewDeadline: r.reviewDeadline, overdue: r.overdue,
       close: r.close, crm: r.crm,
     })),
   });
@@ -10579,7 +10580,7 @@ dashboardRouter.get("/carrier-calls/report", async (req, res) => {
   const filtered = await filterRemovedByManager(pool, from, to, CARRIER_STAGE.pipelineId, scope, CARRIER_SINCE());
   const line = (x: (typeof rep.managers)[number]) => ({ managerId: x.managerId, managerName: x.managerName, teamId: x.teamId, teamName: x.teamName,
     total: x.total, clients: x.clients, carriersAuto: x.carriersAuto, carriersManual: x.carriersManual,
-    otherAuto: x.otherAuto, otherManual: x.otherManual, unsorted: x.unsorted });
+    otherAuto: x.otherAuto, otherManual: x.otherManual, unsorted: x.unsorted, overdue: x.overdue });
   res.json({
     period: { from, to },
     managers: rep.managers.map((x) => ({ ...line(x), filterRemoved: filtered.get(x.managerId) ?? 0 })),
@@ -10604,7 +10605,8 @@ dashboardRouter.get("/carrier-calls/pending", async (req, res) => {
   const { pending, decided } = await decisionQueue(pool, new Date(), carrierScope(req), 30, CARRIER_SINCE());
   const row = (r: (typeof pending)[number]) => ({ kommoId: r.kommoId, url: kommoLeadUrl(r.kommoId), uniqueid: r.uniqueid, phone: r.phone,
     createdAt: r.createdAt, calledAt: r.calledAt, billsec: r.billsec, managerName: r.managerName, teamName: r.teamName,
-    category: r.category, why: r.why, dealState: r.dealState, role: r.role, confidence: r.confidence, otherType: r.otherType, reason: r.reason });
+    category: r.category, why: r.why, dealState: r.dealState, role: r.role, confidence: r.confidence, otherType: r.otherType, reason: r.reason,
+    reviewDeadline: r.reviewDeadline, overdue: r.overdue });
   res.json({
     pending: pending.map(row),
     decided: decided.map((r) => ({ ...row(r), decision: r.decision, decisionOther: r.decisionOther, note: r.note, by: r.by, byRole: r.byRole, at: r.at })),
