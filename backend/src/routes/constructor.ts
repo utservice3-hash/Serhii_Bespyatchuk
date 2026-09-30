@@ -22,8 +22,13 @@ import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { roleHasTab, roleHasPerm } from "../auth/rbac.js";
 import { parseRequisites, parseOldDoc } from "../constructor/services/requisitesParser.js";
-import { buildDocx, blockers, currentNum, type DocumentState, type EntityKey } from "../constructor/services/docgen.js";
-import { fullPageHTML } from "../constructor/services/printTemplate.js";
+import { buildDocx, blockers, currentNum, zipStore, type DocumentState, type EntityKey } from "../constructor/services/docgen.js";
+import { splitParagraphs, textPageHtml, imagePageHtml, paragraphsDocx, toPdfKind, outName } from "../constructor/services/convert.js";
+import { parseDocx, docxText, OfficeParseError } from "../core/officeParse.js";
+import { extractText } from "../core/docText.js";
+import { mkdtemp, writeFile, rm } from "fs/promises";
+import { tmpdir } from "os";
+import { fullPageHTML, printHTML } from "../constructor/services/printTemplate.js";
 import { loadDocImages, docImageDataUris, AssetsMissing } from "../constructor/services/docAssets.js";
 import { htmlToPdf, PdfUnavailable } from "../constructor/services/pdfRenderer.js";
 import { canSeeConstructorDoc, stateFromBody, fileBase, VIEW_ALL_PERM } from "../constructor/access.js";
@@ -103,10 +108,10 @@ constructorRouter.get("/counterparties", h(async (req, res) => {
   const q = String(req.query.q || "").trim();
   const rows = q
     ? await pool.query(
-        `SELECT id, edrpou, name, ipn, address, iban, bank, phone, email, director, is_fop, updated_at FROM constructor_counterparties
-          WHERE name ILIKE '%'||$1||'%' OR edrpou = $1 OR iban ILIKE '%'||$1||'%'
+        `SELECT c.id, c.edrpou, c.name, c.ipn, c.address, c.iban, c.bank, c.phone, c.email, c.director, c.is_fop, c.updated_at, (SELECT max(d.created_at) FROM constructor_documents d WHERE d.contractor->>'edrpou' = c.edrpou AND c.edrpou IS NOT NULL) AS last_doc_at FROM constructor_counterparties c
+          WHERE c.name ILIKE '%'||$1||'%' OR c.edrpou = $1 OR c.iban ILIKE '%'||$1||'%'
           ORDER BY updated_at DESC LIMIT 30`, [q])
-    : await pool.query(`SELECT id, edrpou, name, ipn, address, iban, bank, phone, email, director, is_fop, updated_at FROM constructor_counterparties ORDER BY updated_at DESC LIMIT 30`);
+    : await pool.query(`SELECT c.id, c.edrpou, c.name, c.ipn, c.address, c.iban, c.bank, c.phone, c.email, c.director, c.is_fop, c.updated_at, (SELECT max(d.created_at) FROM constructor_documents d WHERE d.contractor->>'edrpou' = c.edrpou AND c.edrpou IS NOT NULL) AS last_doc_at FROM constructor_counterparties c ORDER BY c.updated_at DESC LIMIT 30`);
   res.json(rows.rows);
 }));
 
@@ -140,7 +145,8 @@ constructorRouter.get("/edrpou/:code", h(async (req, res) => {
 constructorRouter.post("/preview", h(async (req, res) => {
   const s = await stateOrFail(req);
   const img: { uris: { sig?: string; stamp?: string }; note?: string } = s.stamp ? safeImages(s.ent, true) : { uris: {} };
-  res.json({ html: fullPageHTML(s, currentNum(s) || "_______", img.uris), blockers: blockers(s), assetsNote: img.note ?? null });
+  const num = currentNum(s) || (s.doc === "main" ? "______" : "______ (ID угоди)"); // заглушка — як у макеті
+  res.json({ html: fullPageHTML(s, num, img.uris), fragment: printHTML(s, num, img.uris), blockers: blockers(s), assetsNote: img.note ?? null });
 }));
 
 /** Прев'ю не падає, якщо картинок ще немає на сервері: показує документ без них і каже чому. */
@@ -166,6 +172,8 @@ constructorRouter.post("/documents", h(async (req, res) => {
      s.intl, s.stamp, s.fopAcc, req.auth!.userId]);
   res.json({ id: Number(q.rows[0].id), version: q.rows[0].version, num, createdAt: q.rows[0].created_at });
 }));
+
+const DOC_COLS = "id, deal_no, doc_kind, party, entity_key, version, doc_date, main_no, main_date, contractor, trip, pay, intl, with_stamp, fop_account, created_by, created_at";
 
 const ARCHIVE_COLS = `d.id, d.deal_no, d.doc_kind, d.party, d.entity_key, d.version, d.doc_date,
   d.contractor->>'name' AS contractor_name, d.trip->>'route' AS route,
@@ -197,7 +205,7 @@ constructorRouter.get("/documents", h(async (req, res) => {
 
 /** Один рядок архіву з межею: чужий → 404 (не 403 — id не підтверджує існування чужого запису). */
 async function visibleRow(req: Request): Promise<Record<string, unknown>> {
-  const q = await pool.query(`SELECT id, deal_no, doc_kind, party, entity_key, version, doc_date, main_no, main_date, contractor, trip, pay, intl, with_stamp, fop_account, created_by, created_at FROM constructor_documents WHERE id = $1`, [idOf(req)]);
+  const q = await pool.query(`SELECT ${DOC_COLS} FROM constructor_documents WHERE id = $1`, [idOf(req)]);
   const row = q.rows[0];
   if (!row || !canSeeConstructorDoc(req.auth!.userId, Number(row.created_by), canSeeAll(req))) throw new HttpError(404, "Запису немає.");
   return row;
@@ -210,7 +218,17 @@ constructorRouter.get("/documents/:id", h(async (req, res) => {
 
 /* ── Регенерація файлів із запису архіву (менеджер — автор документа, не той, хто завантажує) ── */
 async function docStateOf(req: Request): Promise<{ s: DocumentState; num: string }> {
-  const row = await visibleRow(req);
+  return stateFromRow(await visibleRow(req));
+}
+
+/** Друга сторона пакета: той самий збирач стану, id — не з адреси, межу вже перевірив викликач. */
+async function stateById(_req: Request, id: number): Promise<{ s: DocumentState; num: string }> {
+  const q = await pool.query(`SELECT ${DOC_COLS} FROM constructor_documents WHERE id = $1`, [id]);
+  if (!q.rows[0]) throw new HttpError(404, "Запису немає.");
+  return stateFromRow(q.rows[0]);
+}
+
+async function stateFromRow(row: Record<string, unknown>): Promise<{ s: DocumentState; num: string }> {
   const s: DocumentState = {
     ent: row.entity_key as EntityKey, doc: row.doc_kind as DocumentState["doc"], party: row.party as DocumentState["party"],
     intl: !!row.intl, stamp: !!row.with_stamp, fopAcc: Number(row.fop_account) | 0,
@@ -247,6 +265,79 @@ constructorRouter.get("/documents/:id/pdf", h(async (req, res) => {
     "Content-Type": "application/pdf",
     "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${fileBase(d.num)}.pdf"`,
   }).send(Buffer.from(pdf));
+}));
+
+/**
+ * 📦 ПАКЕТ УГОДИ (макет K-11/K-12b): обидва PDF — клієнтська й перевізницька заявка з тим самим № угоди.
+ * Друга сторона — найновіша версія, і лише та, яку цей користувач і так бачить (та сама межа
+ * `canSeeConstructorDoc`): пакет не може стати обхідним шляхом до чужого документа.
+ */
+constructorRouter.get("/documents/:id/pair.zip", h(async (req, res) => {
+  const row = await visibleRow(req);
+  if (row.doc_kind === "main") throw new HttpError(404, "Для основного договору пакета угоди немає.");
+  const q = await pool.query<{ id: string; created_by: number }>(
+    `SELECT id, created_by FROM constructor_documents
+      WHERE deal_no = $1 AND party <> $2 AND doc_kind <> 'main'
+      ORDER BY version DESC, created_at DESC`, [row.deal_no, row.party]);
+  const other = q.rows.find((r) => canSeeConstructorDoc(req.auth!.userId, Number(r.created_by), canSeeAll(req)));
+  if (!other) throw new HttpError(404, "Другої сторони цієї угоди у вашому архіві ще немає — сформуйте дзеркальну заявку.");
+  const files: Array<{ name: string; data: Uint8Array }> = [];
+  for (const id of [Number(row.id), Number(other.id)]) {
+    const d = await stateById(req, id);
+    const pdf = await htmlToPdf(fullPageHTML(d.s, d.num, docImageDataUris(CONSTRUCTOR_ASSETS_DIR, d.s.ent, d.s.stamp)));
+    files.push({ name: `${fileBase(d.num)}-${d.s.party === "carrier" ? "perevizny" : "klient"}.pdf`, data: pdf });
+  }
+  res.set({ "Content-Type": "application/zip", "Content-Disposition": `attachment; filename="${fileBase(String(row.deal_no))}-paket.zip"` })
+    .send(Buffer.from(zipStore(files)));
+}));
+
+/* ── 🔁 КОНВЕРТЕР (макет K-15): тільки перетворення формату, у базу нічого не пишеться ── */
+const MAX_CONVERT_BYTES = 20 * 1024 * 1024;
+function fileFromBody(req: Request): { name: string; buf: Buffer } {
+  const name = String(req.body?.name || "").slice(0, 200);
+  const data = String(req.body?.data || "");
+  if (!name || !data) throw new HttpError(400, "Оберіть файл.");
+  const buf = Buffer.from(data, "base64");
+  if (!buf.length) throw new HttpError(400, "Файл порожній.");
+  if (buf.length > MAX_CONVERT_BYTES) throw new HttpError(413, "Файл більший за 20 МБ — такий конвертувати тут не вийде.");
+  return { name, buf };
+}
+const attach = (name: string) => `attachment; filename="${name.replace(/[^\w.-]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+
+constructorRouter.post("/convert/to-pdf", h(async (req, res) => {
+  const { name, buf } = fileFromBody(req);
+  const kind = toPdfKind(name);
+  if (!kind) throw new HttpError(400, "У PDF тут перетворюються лише DOCX, TXT, JPG і PNG.");
+  let html: string;
+  if (kind === "docx") {
+    try { html = textPageHtml(splitParagraphs(docxText(parseDocx(buf)))); }
+    catch (e) { if (e instanceof OfficeParseError) throw new HttpError(400, "Файл Word пошкоджений або це не .docx."); throw e; }
+  } else if (kind === "txt") html = textPageHtml(splitParagraphs(buf.toString("utf8")));
+  else html = imagePageHtml(kind, buf.toString("base64"));
+  const pdf = await htmlToPdf(html);
+  res.set({ "Content-Type": "application/pdf", "Content-Disposition": attach(outName(name, "pdf")) }).send(Buffer.from(pdf));
+}));
+
+constructorRouter.post("/convert/from-pdf", h(async (req, res) => {
+  const { name, buf } = fileFromBody(req);
+  const target = req.body?.target === "txt" ? "txt" : "docx";
+  if (!/\.pdf$/i.test(name) && buf.subarray(0, 4).toString("latin1") !== "%PDF") throw new HttpError(400, "Це не PDF.");
+  const dir = await mkdtemp(path.join(tmpdir(), "ctor-conv-"));
+  try {
+    const file = path.join(dir, "in.pdf");
+    await writeFile(file, buf);
+    const r = await extractText("pdf", buf, file);
+    if (r.status === "failed") throw new HttpError(503, `PDF не прочитався: ${r.reason ?? "невідома причина"}.`);
+    const paras = splitParagraphs(r.text ?? "");
+    if (!paras.length) throw new HttpError(422, "У цьому PDF немає текстового шару — схоже, це скан. Розпізнавання сканів (OCR) у дашборді поки немає.");
+    if (target === "txt") {
+      res.set({ "Content-Type": "text/plain; charset=utf-8", "Content-Disposition": attach(outName(name, "txt")) })
+        .send("\uFEFF" + paras.join("\n\n"));
+    } else {
+      res.set({ "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "Content-Disposition": attach(outName(name, "docx")) })
+        .send(Buffer.from(paragraphsDocx(paras)));
+    }
+  } finally { await rm(dir, { recursive: true, force: true }).catch(() => undefined); }
 }));
 
 /* ── 🗂 ПУЛ ЗАЯВОК (рішення Сергія 30.09.2026): усі документи з автором — лише за правом ── */

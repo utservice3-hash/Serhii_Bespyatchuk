@@ -1,30 +1,262 @@
-/* 📄 КОНСТРУКТОР ДОКУМЕНТІВ — лише розкладка; кольори й картки — спільні класи `.hr-*` і токени дашборда. */
-.ctor-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
-@media (max-width: 1200px) { .ctor-grid { grid-template-columns: minmax(0, 1fr); } }
-.ctor-preview { position: sticky; top: 12px; }
-.ctor-preview iframe { width: 100%; height: calc(100vh - 90px); min-height: 600px; border: 1px solid var(--border); border-radius: var(--r-2xl); background: #fff; }
-.ctor-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px 12px; }
-.ctor-f { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 12px; color: var(--text-muted); }
-.ctor-f.wide { grid-column: 1 / -1; }
-.ctor-f .hr-inp { width: 100%; color: var(--text); }
-.ctor-ro { font-size: 13px; color: var(--text); padding: 6px 0; }
-.ctor-wide { width: 100%; }
-.ctor-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.ctor-check { display: flex; gap: 8px; align-items: center; font-size: 13px; margin: 8px 0; }
-.ctor-n { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: var(--brand); color: #fff; font-size: 12px; margin-right: 8px; }
-.ctor-vat { color: inherit; opacity: .75; }
-.ctor-book { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; margin-top: 8px; }
-.ctor-bookrow { text-align: left; border: 1px solid var(--border); background: var(--card-bg); color: var(--text); border-radius: var(--r-lg); padding: 6px 10px; cursor: pointer; font-size: 13px; }
-.ctor-bookrow:hover { background: var(--surface-2); }
-.ctor-drop { display: flex; flex-direction: column; gap: 4px; align-items: center; justify-content: center; border: 2px dashed var(--border-strong); border-radius: var(--r-2xl); padding: 22px; cursor: pointer; font-size: 13px; color: var(--text); }
-.ctor-drop.on { border-color: var(--brand); background: var(--surface-2); }
-.ctor-mini { border-collapse: collapse; font-size: 13px; }
-.ctor-mini td { padding: 4px 16px 4px 0; border-bottom: 1px solid var(--border); }
-.hr-note.ctor-err { background: var(--danger-bg); color: var(--danger); }
-.hr-note.ctor-warn { background: var(--warn-bg); color: var(--warn); }
-.hr-note.ctor-ok { background: var(--ok-bg); color: var(--ok); }
-.ctor-bars { display: flex; align-items: flex-end; gap: 3px; height: 90px; }
-.ctor-bar { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; min-width: 0; }
-.ctor-bar i { display: block; width: 100%; background: var(--brand); border-radius: 3px 3px 0 0; min-height: 2px; }
-.ctor-bar i.zero { background: var(--border); }
-.ctor-bar span { font-size: 9px; color: var(--text-muted); margin-top: 2px; }
+/* 📄 КОНСТРУКТОР ДОКУМЕНТІВ — CSS затвердженого макета Сергія (konstruktor-dokumentiv.html, v19), ЗГЕНЕРОВАНИЙ:
+   кожен селектор ізольовано під .ctorx (решта дашборда не зачіпається), змінні теми — від нашого
+   :root[data-theme="dark"]. Обгортку макета (шапка, друк, «знахідки») відкинуто. Правити синхронно з макетом. */
+.ctorx{--bg:#f4f1ee; --surface:#fff; --surface-2:#faf8f6; --surface-3:#f0ece8;
+  --ink:#1c1e26; --ink-2:#464b58; --muted:#7c8090;
+  --line:#e6e0da; --line-2:#efeae5;
+  --brand:#c5141c;
+  --e-uts:#c5141c; --e-avm:#0f766e; --e-fop:#a45a12;
+  --ok:#15803d; --warn:#b45309; --bad:#b91c1c;
+  --shadow:0 1px 2px rgba(28,30,38,.05), 0 10px 30px -18px rgba(28,30,38,.35);
+  --shadow-lg:0 2px 4px rgba(28,30,38,.06), 0 24px 60px -24px rgba(28,30,38,.45);
+  --sans:"Golos Text", system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+  --disp:"Unbounded", var(--sans);
+  --mono:"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --ent:var(--e-uts);}
+:root[data-theme="dark"] .ctorx{--bg:#121317; --surface:#1a1c21; --surface-2:#202329; --surface-3:#272b32;
+  --ink:#f1efed; --ink-2:#c5c9d1; --muted:#8b909c; --line:#2c3038; --line-2:#242830;
+  --brand:#ef4444; --e-uts:#f2585f; --e-avm:#2dd4bf; --e-fop:#d9a05b;
+  --ok:#4ade80; --warn:#fbbf24; --bad:#f87171;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -18px rgba(0,0,0,.8);
+  --shadow-lg:0 2px 4px rgba(0,0,0,.5), 0 24px 60px -24px rgba(0,0,0,.9);}
+.ctorx *{box-sizing:border-box}
+.ctorx [hidden]{display:none!important}
+.ctorx{margin:0;padding:0}
+.ctorx{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.ctorx button, .ctorx input, .ctorx select, .ctorx textarea{font:inherit;color:inherit}
+.ctorx button{cursor:pointer;background:none;border:0;padding:0}
+.ctorx :focus-visible{outline:2px solid var(--ent);outline-offset:2px;border-radius:6px}
+.ctorx h1{font-family:var(--disp);font-weight:500;font-size:19px;letter-spacing:-.01em;margin:0}
+.ctorx .iconbtn{width:36px;height:36px;border:1px solid var(--line);border-radius:10px;background:var(--surface);
+  display:grid;place-items:center;color:var(--ink-2)}
+.ctorx .btn{display:inline-flex;align-items:center;gap:7px;padding:9px 14px;border-radius:10px;border:1px solid var(--line);
+  background:var(--surface);font-weight:600;font-size:13px;white-space:nowrap}
+.ctorx .btn:hover{background:var(--surface-2)}
+.ctorx .btn.pri{background:var(--ent);border-color:var(--ent);color:#fff}
+.ctorx .btn.pri:hover{filter:brightness(1.08)}
+.ctorx .btn.sm{padding:6px 11px;font-size:12.5px;border-radius:9px}
+.ctorx .btn:disabled{opacity:.45;cursor:not-allowed}
+.ctorx .asrole{display:flex;align-items:center;gap:8px;border:1px dashed var(--line);border-radius:10px;
+  padding:7px 6px 7px 11px;background:var(--surface)}
+.ctorx .asrole label{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.ctorx .payrow{display:grid;grid-template-columns:130px 130px 170px minmax(0,1fr);gap:9px;margin:12px 0 0 30px}
+.ctorx .payrow select, .ctorx .payrow input{width:100%;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);
+  padding:9px 11px;font-size:13px}
+.ctorx .fopwarn{margin:12px 0 0 30px;padding:11px 13px;border-radius:11px;font-size:12.5px;line-height:1.45;
+  border:1px solid color-mix(in srgb, var(--bad) 40%, transparent);
+  background:color-mix(in srgb, var(--bad) 9%, transparent);color:var(--ink-2)}
+.ctorx .fopwarn b{color:var(--bad)}
+.ctorx .ibannote{padding:7px 13px;font-size:11.5px;color:var(--bad);border-top:1px dashed var(--line-2)}
+.ctorx .entities{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin-bottom:12px}
+.ctorx .ent{position:relative;text-align:left;border:1.5px solid var(--line);border-radius:13px;padding:13px 15px;
+  background:var(--surface);display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:start}
+.ctorx .ent:hover{border-color:color-mix(in srgb, var(--ec) 50%, var(--line))}
+.ctorx .ent[aria-pressed="true"]{border-color:var(--ec);background:color-mix(in srgb, var(--ec) 7%, var(--surface));
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--ec) 13%, transparent)}
+.ctorx .ent .nm{font-weight:700;font-size:15px;letter-spacing:-.2px;line-height:1.2}
+.ctorx .ent .sub{grid-column:1;font-size:12px;color:var(--muted);font-family:var(--mono)}
+.ctorx .ent .vat{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:3px 8px;
+  border-radius:999px;background:color-mix(in srgb, var(--ec) 15%, transparent);color:var(--ec);white-space:nowrap}
+.ctorx .ent .warn{grid-column:1/-1;margin-top:5px;font-size:11.5px;color:var(--warn);display:flex;gap:6px;align-items:center}
+.ctorx .doctabs{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}
+.ctorx .doctab{padding:9px 15px;border-radius:11px;border:1px solid var(--line);background:var(--surface);
+  font-weight:600;font-size:13px;display:flex;align-items:center;gap:9px}
+.ctorx .doctab:hover{background:var(--surface-2)}
+.ctorx .doctab[aria-pressed="true"]{background:var(--ink);border-color:var(--ink);color:var(--surface)}
+.ctorx .party{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-bottom:12px}
+.ctorx .pcard{position:relative;text-align:left;border:1.5px solid var(--line);border-radius:13px;padding:14px 16px;
+  background:var(--surface);display:flex;align-items:center;gap:13px}
+.ctorx .pcard .ic{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;flex:none;
+  background:var(--surface-3);color:var(--ink-2)}
+.ctorx .pcard .nm{font-weight:700;font-size:15.5px;letter-spacing:-.2px}
+.ctorx .pcard .ds{font-size:12px;color:var(--muted);margin-top:1px}
+.ctorx .pcard[aria-pressed="true"]{border-color:var(--ent);background:color-mix(in srgb, var(--ent) 6%, var(--surface));
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--ent) 12%, transparent)}
+.ctorx .pcard[aria-pressed="true"] .ic{background:var(--ent);color:#fff}
+.ctorx .doctab .p{font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:999px;background:var(--surface-3);color:var(--muted)}
+.ctorx .doctab[aria-pressed="true"] .p{background:rgba(255,255,255,.18);color:#fff}
+:root[data-theme="dark"] .ctorx .doctab[aria-pressed="true"] .p{background:rgba(0,0,0,.25)}
+.ctorx .grid{display:grid;grid-template-columns:minmax(0,1fr) 540px;gap:14px;align-items:start}
+.ctorx .card{background:var(--surface);border:1px solid var(--line);border-radius:13px;box-shadow:var(--shadow)}
+.ctorx .sec{padding:15px 16px;border-bottom:1px solid var(--line-2)}
+.ctorx .sec:last-child{border-bottom:0}
+.ctorx .sec h3{margin:0 0 3px;font-size:14px;font-weight:700;display:flex;align-items:center;gap:9px}
+.ctorx .sec h3 .n{width:21px;height:21px;border-radius:7px;background:var(--ent);color:#fff;display:grid;place-items:center;
+  font-size:11.5px;font-weight:800;flex:none}
+.ctorx .sec .hint{font-size:12.5px;color:var(--muted);margin:0 0 12px 30px;line-height:1.4}
+.ctorx .ways{display:flex;gap:2px;background:var(--surface-3);border-radius:10px;padding:3px;margin:0 0 12px 30px;width:fit-content}
+.ctorx .ways button{padding:6px 13px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--muted)}
+.ctorx .ways button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.07)}
+.ctorx .way{margin-left:30px}
+.ctorx .way[hidden]{display:none}
+.ctorx textarea, .ctorx input[type=text], .ctorx input[type=search]{width:100%;border:1px solid var(--line);border-radius:10px;
+  background:var(--surface-2);padding:10px 12px;color:var(--ink);font-size:13.5px}
+.ctorx textarea{min-height:118px;resize:vertical;line-height:1.5;font-size:12.5px}
+.ctorx textarea::placeholder, .ctorx input::placeholder{color:var(--muted)}
+.ctorx .drop{border:1.5px dashed var(--line);border-radius:12px;padding:22px;text-align:center;background:var(--surface-2)}
+.ctorx .drop b{display:block;font-size:13.5px;margin-bottom:3px}
+.ctorx .drop span{font-size:12px;color:var(--muted)}
+.ctorx .drop .fmt{margin-top:10px;display:flex;gap:6px;justify-content:center;flex-wrap:wrap}
+.ctorx .fchip{font-family:var(--mono);font-size:10.5px;font-weight:600;border:1px solid var(--line);padding:3px 8px;
+  border-radius:6px;color:var(--muted);background:var(--surface)}
+.ctorx .book{display:flex;flex-direction:column;gap:6px;margin-top:9px}
+.ctorx .bookrow{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;text-align:left;width:100%;
+  border:1px solid var(--line);border-radius:10px;padding:9px 12px;background:var(--surface)}
+.ctorx .bookrow:hover{background:var(--surface-2)}
+.ctorx .bookrow[aria-pressed="true"]{border-color:var(--ent);background:color-mix(in srgb, var(--ent) 6%, transparent)}
+.ctorx .bookrow .n{font-weight:600;font-size:13.5px}
+.ctorx .bookrow .m{font-size:11.5px;color:var(--muted);font-family:var(--mono);margin-top:2px}
+.ctorx .bookrow .last{font-size:11.5px;color:var(--muted);text-align:right;white-space:nowrap}
+.ctorx .fields{margin:14px 0 0 30px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.ctorx .fhead{display:flex;align-items:center;gap:9px;padding:9px 13px;background:var(--surface-2);
+  border-bottom:1px solid var(--line-2);font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.ctorx .fhead .score{margin-left:auto;letter-spacing:0;text-transform:none;font-size:12px;font-weight:600}
+.ctorx .frow{display:grid;grid-template-columns:150px 1fr 22px;gap:11px;align-items:center;padding:8px 13px;
+  border-bottom:1px solid var(--line-2)}
+.ctorx .frow:last-child{border-bottom:0}
+.ctorx .frow label{font-size:12.5px;color:var(--muted)}
+.ctorx .frow input{border:0;background:transparent;padding:3px 0;font-size:13.5px;font-weight:500;width:100%;border-radius:0}
+.ctorx .frow input:focus{outline:none;border-bottom:1.5px solid var(--ent)}
+.ctorx .frow .st{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:800}
+.ctorx .frow .st.ok{background:color-mix(in srgb, var(--ok) 14%, transparent);color:var(--ok)}
+.ctorx .frow .st.no{background:color-mix(in srgb, var(--warn) 16%, transparent);color:var(--warn)}
+.ctorx .frow.miss input{color:var(--warn)}
+.ctorx .frow.miss input::placeholder{color:var(--warn);opacity:.75}
+.ctorx .g2{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-left:30px}
+.ctorx .fld label{display:block;font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:4px}
+.ctorx .fld.full{grid-column:1/-1}
+.ctorx .terms{margin-left:30px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2);padding:12px 14px}
+.ctorx .terms .t{display:flex;justify-content:space-between;gap:12px;font-size:12.5px;padding:5px 0;border-bottom:1px dashed var(--line)}
+.ctorx .terms .t:last-child{border-bottom:0}
+.ctorx .terms .t b{font-weight:600;color:var(--ink-2)}
+.ctorx .terms .t span{color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+.ctorx .terms .note{margin-top:9px;font-size:11.5px;color:var(--muted);line-height:1.4}
+.ctorx .toggle{display:flex;align-items:center;gap:11px;margin-left:30px;padding:11px 13px;border:1px solid var(--line);
+  border-radius:11px;background:var(--surface-2)}
+.ctorx .sw{width:42px;height:24px;border-radius:999px;background:var(--surface-3);position:relative;flex:none;
+  border:1px solid var(--line);transition:background .15s}
+.ctorx .sw::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .15s}
+.ctorx .sw[aria-pressed="true"]{background:var(--ok);border-color:var(--ok)}
+.ctorx .sw[aria-pressed="true"]::after{transform:translateX(18px)}
+.ctorx .toggle .tx{font-size:13px}
+.ctorx .toggle .tx em{display:block;font-style:normal;font-size:11.5px;color:var(--muted);margin-top:2px}
+.ctorx .actbar{padding:14px 16px;background:var(--surface-2);border-top:1px solid var(--line-2);
+  display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-radius:0 0 13px 13px}
+.ctorx .preview{position:sticky;top:18px;display:flex;flex-direction:column;max-height:calc(100vh - 34px)}
+.ctorx .pvhead{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line-2);flex-wrap:wrap}
+.ctorx .pvhead .t{font-size:12.5px;font-weight:700}
+.ctorx .pvhead .num{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:#fff;background:var(--ent);
+  padding:3px 9px;border-radius:7px}
+.ctorx .pvbody{overflow:auto;padding:16px;background:var(--surface-3);border-radius:0 0 13px 13px}
+.ctorx .a4{background:#fff;color:#14161c;border-radius:3px;box-shadow:0 2px 10px rgba(0,0,0,.14);padding:0 0 22px;
+  font-size:8.6px;line-height:1.46;position:relative;overflow:hidden}
+.ctorx .a4 .band{background:#17181c;color:#fff;padding:12px 22px;display:flex;align-items:center;justify-content:space-between}
+.ctorx .a4 .band .lg{display:flex;align-items:center;gap:8px}
+.ctorx .a4 .band .mk{background:var(--ent);font-family:var(--disp);font-weight:600;font-size:11px;letter-spacing:.06em;
+  padding:3px 8px;border-radius:5px}
+.ctorx .a4 .band .co{font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:#c9ccd2;font-weight:700}
+.ctorx .a4 .band .rq{font-size:7.4px;color:#9aa0ac;text-align:right;line-height:1.5}
+.ctorx .a4 .in{padding:16px 22px 0}
+.ctorx .a4 h2{font-size:12px;font-weight:800;text-align:center;margin:0;letter-spacing:-.2px}
+.ctorx .a4 .sub2{text-align:center;font-size:8.6px;margin:2px 0 0;color:#44485a}
+.ctorx .a4 .dline{display:flex;justify-content:space-between;margin-top:11px;font-size:8.4px;color:#44485a}
+.ctorx .a4 .pre{margin-top:10px;text-align:justify}
+.ctorx .a4 .pre b{font-weight:700}
+.ctorx .a4 table{width:100%;border-collapse:collapse;margin-top:11px}
+.ctorx .a4 td{border:.6px solid #d8d3cd;padding:3.5px 6px;vertical-align:top}
+.ctorx .a4 td.k{width:41%;color:#4a4f5c;background:#faf8f6}
+.ctorx .a4 td.v{font-weight:600}
+.ctorx .a4 td.v.ph{color:#b9b4ae;font-weight:400}
+.ctorx .a4 .rq2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:13px}
+.ctorx .a4 .rq2 h4{margin:0 0 4px;font-size:8.2px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#6b7280}
+.ctorx .a4 .rq2 p{margin:0;font-size:7.8px;line-height:1.5;color:#2b2f3a}
+.ctorx .a4 .sig{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px;align-items:end}
+.ctorx .a4 .sig .cell{position:relative;min-height:62px}
+.ctorx .a4 .sig .lbl{font-size:8px;color:#4a4f5c}
+.ctorx .a4 .sig .ln{border-bottom:.8px solid #14161c;margin-top:30px}
+.ctorx .a4 .sig .who{font-size:8px;margin-top:3px}
+.ctorx .conv{margin-top:14px}
+.ctorx .conv .in{padding:15px 16px}
+.ctorx .conv h3{margin:0 0 3px;font-size:14px;font-weight:700}
+.ctorx .conv p{margin:0 0 12px;font-size:12.5px;color:var(--muted);line-height:1.45}
+.ctorx .convrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ctorx .arrow{color:var(--muted);font-size:15px}
+@media(max-width:1260px){
+  .ctorx .grid{grid-template-columns:minmax(0,1fr)}
+  .ctorx .preview{position:static;max-height:none}
+  .ctorx .a4{max-width:560px;margin:0 auto}
+}
+@media(max-width:780px){
+  .ctorx .entities{grid-template-columns:1fr}
+  .ctorx .g2{grid-template-columns:1fr}
+  .ctorx .sec .hint, .ctorx .ways, .ctorx .way, .ctorx .fields, .ctorx .g2, .ctorx .terms, .ctorx .toggle{margin-left:0}
+  .ctorx .frow{grid-template-columns:1fr 22px;row-gap:2px}
+  .ctorx .frow label{grid-column:1/-1}
+}
+@media(prefers-reduced-motion:reduce){
+  .ctorx *{transition:none!important}
+}
+.ctorx .docfmt{font-family:'Times New Roman','Tinos','Liberation Serif',serif;font-size:11pt;line-height:1.45;color:#111}
+.ctorx .docfmt .sigend{height:26pt}
+.ctorx .docsm .sigend{height:32px}
+.ctorx .docfmt h2{font-size:15pt;font-weight:700;text-align:center;margin:0 0 2pt;letter-spacing:.02em}
+.ctorx .docfmt .sub{text-align:center;font-size:10.5pt;margin:0 0 10pt;color:#222}
+.ctorx .docfmt .dl{display:flex;justify-content:space-between;font-size:10.5pt;margin:0 0 12pt}
+.ctorx .docfmt p{margin:0 0 7pt;text-align:justify;text-indent:32pt}
+.ctorx .docfmt h3{font-size:11.5pt;font-weight:700;margin:10pt 0 4pt}
+.ctorx .docfmt table{width:100%;border-collapse:collapse;margin:8pt 0 14pt;font-size:10pt;line-height:1.35}
+.ctorx .docfmt td{border:.6pt solid #555;padding:5pt 7pt;vertical-align:top}
+.ctorx .docfmt td.v2{font-weight:700;font-size:10.5pt}
+.ctorx .docfmt td.k{width:42%;background:#f6f4f1;color:#222}
+.ctorx .docfmt .rq2{display:grid;grid-template-columns:1fr 1fr;gap:26pt;margin-top:8pt;font-size:9.8pt;line-height:1.55;break-inside:avoid;page-break-inside:avoid}
+.ctorx .docfmt .rq2 h4{margin:0 0 5pt;font-size:10pt;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+.ctorx .docfmt .sigs{display:grid;grid-template-columns:1fr 1fr;gap:18pt;margin-top:4pt;padding-top:14pt;padding-bottom:17pt;break-inside:avoid;page-break-inside:avoid}
+.ctorx .docfmt .cell{position:relative;min-height:80px;font-size:9.5pt}
+.ctorx .docfmt .ln{border-bottom:1pt solid #14161c;margin-top:30pt}
+.ctorx .docfmt .simg{position:absolute;left:14pt;bottom:2pt;width:62pt;mix-blend-mode:multiply}
+.ctorx .docfmt .stimg{position:absolute;left:58pt;bottom:-10pt;width:82pt;transform:rotate(-8deg);mix-blend-mode:multiply}
+.ctorx .docfmt .dband{background:#17181c;color:#fff;display:flex;align-items:center;gap:10pt;padding:8pt 14pt;
+  font-size:8pt;-webkit-print-color-adjust:exact;print-color-adjust:exact;margin:0 0 10pt}
+.ctorx .docfmt .dband .dmk{background:#c5141c;font-weight:800;letter-spacing:.08em;padding:2pt 6pt;border-radius:4pt}
+.ctorx .docfmt .dband .dco{color:#c9ccd2;font-weight:600}
+.ctorx .docfmt .dband .dnum{margin-left:auto;font-family:var(--mono);font-size:7.5pt}
+.ctorx .docsm{font-size:8.2px;line-height:1.5;padding:0 0 14px}
+.ctorx .docsm h2{font-size:11px;margin:0 0 2px}
+.ctorx .docsm .sub{font-size:8.2px;margin:0 0 7px}
+.ctorx .docsm .dl{font-size:8.2px;margin:0 14px 7px}
+.ctorx .docsm p{margin:0 14px 5px;text-align:justify}
+.ctorx .docsm h3{font-size:8.8px;margin:8px 14px 3px}
+.ctorx .docsm .dband{padding:8px 14px;font-size:8px;margin-bottom:9px}
+.ctorx .docsm table{width:calc(100% - 28px);margin:5px 14px 8px;font-size:7.6px}
+.ctorx .docsm td{border:.5px solid #b9b4ae;padding:2.5px 4px}
+.ctorx .docsm .rq2{margin:8px 14px 0;font-size:7.3px;gap:12px}
+.ctorx .docsm .rq2 h4{font-size:7.6px}
+.ctorx .docsm .sigs{margin:12px 14px 0;gap:12px}
+.ctorx .docsm .cell{min-height:64px;font-size:7.6px}
+.ctorx .docsm .ln{margin-top:26px}
+.ctorx .docsm .simg{width:46px;left:10px;bottom:2px}
+.ctorx .docsm .stimg{width:62px;left:42px;bottom:-7px}
+.ctorx .docsm .dl, .ctorx .docsm h2, .ctorx .docsm .sub{padding:0 14px}
+
+/* ── Дашборд: те, чого в макеті немає, бо там окрема сторінка ── */
+.ctorx{border-radius:14px;padding:4px 0 24px}
+.ctorx .top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+.ctorx .top h1{font-family:var(--disp);font-weight:500;font-size:19px;letter-spacing:-.01em;margin:0}
+.ctorx .top .grow{flex:1}
+.ctorx .viewtabs{display:flex;gap:2px;background:var(--surface-3);border-radius:10px;padding:3px;width:fit-content;margin-bottom:14px}
+.ctorx .viewtabs button{padding:7px 14px;border-radius:8px;font-size:13px;font-weight:600;color:var(--muted)}
+.ctorx .viewtabs button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.07)}
+.ctorx .ext{font-family:var(--mono);font-size:10.5px;font-weight:600;border:1px solid var(--line);padding:2px 7px;border-radius:6px;color:var(--ink-2);background:var(--surface-2)}
+.ctorx .msg{font-size:12px;font-weight:600;align-self:flex-end;padding-bottom:9px}
+.ctorx .msg.bad{color:var(--bad)} .ctorx .msg.ok{color:var(--ok)}
+.ctorx .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.ctorx .kpi{border:1px solid var(--line);border-radius:12px;background:var(--surface-2);padding:12px 14px}
+.ctorx .kpi .v{font-family:var(--disp);font-size:22px;font-weight:600}
+.ctorx .kpi .l{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.ctorx .bars{display:flex;align-items:flex-end;gap:3px;height:90px}
+.ctorx .bars .b{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;min-width:0}
+.ctorx .bars .b i{display:block;width:100%;background:var(--ent);border-radius:3px 3px 0 0;min-height:2px}
+.ctorx .bars .b i.z{background:var(--line)}
+.ctorx .bars .b span{font-size:9px;color:var(--muted);margin-top:2px;font-family:var(--mono)}
+@media(max-width:780px){.ctorx .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}

@@ -5150,6 +5150,8 @@ export interface CtorEntityRow {
 export interface CtorCounterpartyRow {
   id: number; edrpou: string | null; name: string; ipn: string | null; address: string | null; iban: string | null;
   bank: string | null; phone: string | null; email: string | null; director: string | null; is_fop: boolean; updated_at: string;
+  /** Коли востаннє формували документ із цим ЄДРПОУ (рядок довідника в макеті K-04). */
+  last_doc_at: string | null;
 }
 export interface CtorArchiveRow {
   id: number; deal_no: string; doc_kind: CtorDocKind; party: CtorParty; entity_key: CtorEntityKey; version: number;
@@ -5175,7 +5177,7 @@ export const ctorSaveCounterparty = async (c: CtorCounterparty) => (await api.pu
 export const ctorByEdrpou = async (code: string) =>
   (await api.get<{ source: string; row: CtorCounterpartyRow }>(`/constructor/edrpou/${encodeURIComponent(code)}`)).data;
 export const ctorPreview = async (state: CtorForm) =>
-  (await api.post<{ html: string; blockers: string | null; assetsNote: string | null }>("/constructor/preview", { state })).data;
+  (await api.post<{ html: string; fragment: string; blockers: string | null; assetsNote: string | null }>("/constructor/preview", { state })).data;
 export const ctorCreate = async (state: CtorForm) =>
   (await api.post<{ id: number; version: number; num: string; createdAt: string }>("/constructor/documents", { state })).data;
 export const ctorArchive = async (q = "", deal = "") =>
@@ -5192,4 +5194,16 @@ export const ctorDeleteRouteTemplate = async (id: number) => (await api.delete(`
 export async function ctorFile(id: number, kind: "docx" | "pdf", inline = false): Promise<Blob> {
   const { data } = await api.get<Blob>(`/constructor/documents/${id}/${kind}`, { responseType: "blob", params: { view: inline ? 1 : undefined } });
   return data;
+}
+/** 📦 Пакет угоди: обидва PDF (клієнт і перевізник з тим самим № угоди) одним zip. */
+export async function ctorPairZip(id: number): Promise<Blob> {
+  const { data } = await api.get<Blob>(`/constructor/documents/${id}/pair.zip`, { responseType: "blob" });
+  return data;
+}
+/** 🔁 Конвертер: файл (base64) → PDF, або PDF → Word/текст. У базу нічого не пишеться. */
+export async function ctorConvertToPdf(name: string, data: string): Promise<Blob> {
+  return (await api.post<Blob>("/constructor/convert/to-pdf", { name, data }, { responseType: "blob" })).data;
+}
+export async function ctorConvertFromPdf(name: string, data: string, target: "docx" | "txt"): Promise<Blob> {
+  return (await api.post<Blob>("/constructor/convert/from-pdf", { name, data, target }, { responseType: "blob" })).data;
 }
