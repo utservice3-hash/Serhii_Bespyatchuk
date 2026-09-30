@@ -1,5 +1,5 @@
 import axios from "axios";
-import type { AiCallState, PromiseStateT, PipelineGroupT } from "./pages/dashboard/aiCallsView";
+import type { AiCallState, PromiseStateT, PipelineGroupT, ConversationTypeT } from "./pages/dashboard/aiCallsView";
 import type { CarrierBucketT } from "./pages/dashboard/carrierCallsView";
 
 export const api = axios.create({
@@ -352,6 +352,9 @@ export interface AiCallRowT {
   promiseState: PromiseStateT | null; managerPromises: number;
   /** П3 «тиша перед закриттям»; на екрані — лише з дати оголошення норми (`silence.normFrom`). */
   silentBeforeClose: boolean | null;
+  /** Тип розмови (рубрика v2, ТЗ 30.09.2026) і куди вона йде: звіт чи «Виключені». */
+  conversationType: ConversationTypeT | null; typeConfidence: number | null; typeReason: string | null; priceValue: string | null;
+  inReport: boolean; typeCheck: boolean; typeOverride: { isCargo: boolean; byName: string | null; at: string } | null;
 }
 export interface AiCallsResp {
   period: { from: string; to: string }; truncated: boolean; rows: AiCallRowT[];
@@ -379,6 +382,13 @@ export interface AiCallCardResp {
   /** Термін і стан кожної обіцянки — у порядку `result.promises`; обіцянки клієнта → `null`. */
   promiseChecks: ({ deadline: string; basis: string; state: PromiseStateT } | null)[];
   callsAfter: { at: string; billsec: number; direction: "in" | "out"; managerName: string | null; byPromiser: boolean }[];
+  /** Журнал ручних змін типу (від найновішої) і чи може ЦЕЙ користувач змінювати тип. */
+  typeHistory: { isCargo: boolean; byName: string | null; at: string }[];
+  canEditType: boolean;
+}
+/** «Це вантаж» / «Це не вантаж» — ручний тип розмови (тімлід своєї команди, адмін). */
+export async function setAiCallType(uniqueid: string, isCargo: boolean): Promise<void> {
+  await api.post(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/type`, { isCargo });
 }
 export async function fetchAiCallCard(uniqueid: string): Promise<AiCallCardResp> {
   const { data } = await api.get<AiCallCardResp>(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}`);

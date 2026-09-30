@@ -155,7 +155,17 @@ export const RUBRIC_PILOT_V0 = "pilot-v0";
  */
 export const RUBRIC_FIRST_TOUCH_V1 = "first-touch-v1";
 /** Рубрика, яку зараз ганяє джоба і показує екран. */
-export const RUBRIC_CURRENT = RUBRIC_FIRST_TOUCH_V1;
+/**
+ * Рубрика з ТИПОМ РОЗМОВИ (ТЗ «звіт тімліда» 30.09.2026): модель каже, чи це запит на перевезення, чи сміття
+ * (перевізник, продавець, пошук роботи, помилка номером, розмови немає, інше), з упевненістю й причиною. Решта
+ * полів — як у v1. Рішення «у звіт чи у Виключені» — не модель, а `core/callAiType.ts`.
+ */
+export const RUBRIC_FIRST_TOUCH_V2 = "first-touch-v2";
+export const RUBRIC_CURRENT = RUBRIC_FIRST_TOUCH_V2;
+
+/** Типи розмови (ТЗ 30.09.2026). У звіт іде лише `cargo_request`; решта — у «Виключені». */
+export const CONVERSATION_TYPES = ["cargo_request", "carrier", "vendor", "job_seeker", "wrong_number", "no_dialog", "other"] as const;
+export type ConversationType = typeof CONVERSATION_TYPES[number];
 
 export const ANALYSIS_SCHEMA = {
   type: "object",
@@ -191,8 +201,13 @@ export const ANALYSIS_SCHEMA = {
       },
     },
     next_step: { type: "string" },
+    conversation_type: { type: "string", enum: [...CONVERSATION_TYPES], description: "тип розмови за правилом 7" },
+    type_confidence: { type: "number", description: "упевненість у типі від 0 до 1" },
+    type_reason: { type: "string", description: "одне речення: чому саме цей тип" },
+    price_value: { type: "string", description: "названа ціна дослівно з валютою («18000 грн»); порожньо, якщо суми не прозвучало" },
   },
-  required: ["summary", "manager_channel", "client_request", "price", "objections", "promises", "next_step"],
+  required: ["summary", "manager_channel", "client_request", "price", "objections", "promises", "next_step",
+    "conversation_type", "type_confidence", "type_reason", "price_value"],
 } as const;
 
 export const ANALYSIS_SYSTEM_PROMPT = [
@@ -211,6 +226,12 @@ export const ANALYSIS_SYSTEM_PROMPT = [
   "   deadline_minutes: для minutes — скільки хвилин від кінця розмови (для «о 15:00» — від часу розмови до 15:00); інакше 0.",
   "   deadline_date: для day — дата YYYY-MM-DD, обчислена від дати розмови з першого рядка; інакше порожній рядок.",
   "   conditional: true, якщо виконання залежить від події, а не від часу.",
+  "7. conversation_type — тип розмови:",
+  "   cargo_request — людина хоче перевезти вантаж. Став його, якщо є ХОЧА Б ОДНА ознака запиту на перевезення: маршрут (звідки-куди), опис вантажу, вага чи обсяг, дата відвантаження, тип авто, питання «скільки коштує перевезти» — навіть якщо клієнт лише уточнював і нічого не домовились.",
+  "   carrier — перевізник пропонує машину або шукає вантаж; vendor — нам щось продають (акумулятори, пальне, рекламу, послуги); job_seeker — питання про роботу чи вакансію; wrong_number — помилились номером, шукали іншу компанію; no_dialog — автовідповідач, тиша, обрив, розмови по суті немає; other — щось інше, не про перевезення вантажу клієнта.",
+  "   Будь-який тип, крім cargo_request, — ЛИШЕ якщо ознак запиту на перевезення немає зовсім.",
+  "   type_confidence — наскільки ти впевнений у типі, від 0 до 1; type_reason — одне речення, чому так.",
+  "8. price_value — названа ціна дослівно з валютою; порожньо, якщо конкретної суми не прозвучало.",
 ].join("\n");
 
 const mmss = (sec: number | null): string => {
@@ -295,6 +316,8 @@ export async function geminiGenerate(deps: HttpDeps, apiKey: string, model: stri
 // ─── Результат аналізу: перевірка форми і цитат ─────────────────────────────
 
 export interface AnalysisResult {
+  /** Поля рубрики `first-touch-v2`; у рядках v1 і `pilot-v0` їх немає. */
+  conversation_type?: ConversationType; type_confidence?: number; type_reason?: string; price_value?: string;
   summary: string;
   manager_channel: "0" | "1" | "unknown";
   client_request: string;
@@ -326,6 +349,9 @@ export function validateAnalysis(x: unknown): { ok: true; value: AnalysisResult 
   if (!o.promises.every((i) => ["call", "message", "other"].includes(i.channel) && ["minutes", "day", "none"].includes(i.deadline_kind)
     && typeof i.deadline_minutes === "number" && isStr(i.deadline_date) && typeof i.conditional === "boolean"))
     return { ok: false, why: "promises без полів строку (рубрика first-touch-v1)" };
+  if (!(CONVERSATION_TYPES as readonly string[]).includes(o.conversation_type as string)) return { ok: false, why: "conversation_type поза переліком (рубрика first-touch-v2)" };
+  if (typeof o.type_confidence !== "number" || !(o.type_confidence >= 0 && o.type_confidence <= 1)) return { ok: false, why: "type_confidence не число 0..1" };
+  if (!isStr(o.type_reason) || !isStr(o.price_value)) return { ok: false, why: "type_reason або price_value не рядок" };
   return { ok: true, value: o as unknown as AnalysisResult };
 }
 

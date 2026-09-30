@@ -8,6 +8,8 @@ import { FIRST_TOUCH_RULE, firstTouchExclusionSql } from "./callAiTick.js";
 import { monthSpend } from "./callAiPipeline.js";
 import { adCallFacts } from "./adCallFacts.js";
 import { silentBeforeClose, type AdCallFactsParams } from "./adCallFactsRules.js";
+import { typeVerdict, type TypeOverride } from "./callAiType.js";
+import type { ConversationType } from "./callAiProviders.js";
 import { promiseDeadline, promiseState, worstPromiseState, type CallFact, type DeadlineBasis, type ModelPromise, type PromiseState } from "./callAiPromise.js";
 
 /**
@@ -128,6 +130,18 @@ export interface AiCallRow {
   managerPromises: number;
   /** П3: `true` — тиша перед закриттям; `null` — не застосовно (угода не програна або без розмов). */
   silentBeforeClose: boolean | null;
+  /** Тип розмови від моделі (рубрика v2) — `null`, поки не розібрано. */
+  conversationType: ConversationType | null;
+  typeConfidence: number | null;
+  typeReason: string | null;
+  /** Названа ціна дослівно («18000 грн»); `null` — суми не прозвучало або ще не розібрано. */
+  priceValue: string | null;
+  /** У звіті (ТЗ 30.09.2026) чи у «Виключених» — `core/callAiType.ts`. */
+  inReport: boolean;
+  /** Модель не впевнена (< 0.85) — у звіті з позначкою «Перевірити тип». */
+  typeCheck: boolean;
+  /** Остання ручна позначка тімліда чи адміна, якщо була. */
+  typeOverride: TypeOverride | null;
 }
 
 interface RawRow {
@@ -138,6 +152,7 @@ interface RawRow {
   client_phone?: string | null; pipeline_id?: string | number | null; reject_reason?: string | null;
   /** Розпізнано, але слів немає: `segments` порожній. */
   stt_empty?: boolean | null;
+  ov_is_cargo?: boolean | null; ov_by?: string | null; ov_at?: Date | null;
 }
 
 const IN_TYPES = new Set(["in", "transitin"]);
@@ -166,8 +181,23 @@ export function foldRow(r: RawRow): AiCallRow {
     promiseState: null,
     managerPromises: res ? managerPromisesOf(res).length : 0,
     silentBeforeClose: null,
+    ...typeFields(res, r),
   };
 }
+
+function typeFields(res: AnalysisResult | null, r: RawRow): Pick<AiCallRow, "conversationType" | "typeConfidence" | "typeReason" | "priceValue" | "inReport" | "typeCheck" | "typeOverride"> {
+  const override: TypeOverride | null = r.ov_is_cargo == null ? null
+    : { isCargo: r.ov_is_cargo === true, byName: r.ov_by ?? null, at: r.ov_at ? new Date(r.ov_at).toISOString() : "" };
+  const type = res?.conversation_type ?? null;
+  const conf = typeof res?.type_confidence === "number" ? res.type_confidence : null;
+  const v = typeVerdict(type, conf, override);
+  return { conversationType: type, typeConfidence: conf, typeReason: res?.type_reason ?? null,
+    priceValue: res?.price_value?.trim() ? res.price_value.trim() : null, inReport: v.inReport, typeCheck: v.typeCheck, typeOverride: override };
+}
+
+/** Остання ручна позначка типу для дзвінка — латеральним підзапитом (`alias` — таблиця з `uniqueid`). */
+const overrideJoin = (alias: string): string => `LEFT JOIN LATERAL (SELECT o.is_cargo AS ov_is_cargo, o.set_by_name AS ov_by, o.set_at AS ov_at
+      FROM call_type_overrides o WHERE o.uniqueid = ${alias}.uniqueid ORDER BY o.set_at DESC, o.id DESC LIMIT 1) ov ON true`;
 
 /** Обіцянки менеджера з полями строку (рубрика first-touch-v1); без полів — не рахуються. */
 function managerPromisesOf(res: AnalysisResult): ModelPromise[] {
@@ -264,10 +294,12 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
            t.status AS stt_status, t.failure AS stt_failure,
            a.status AS llm_status, a.failure AS llm_failure, a.result,
            rcx.client_phone, d.pipeline_id, d.reject_reason,
-           (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty
+           (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
+           ov.ov_is_cargo, ov.ov_by, ov.ov_at
       FROM (${q.sql}) ft
       LEFT JOIN ringostat_calls rcx ON rcx.uniqueid = ft.uniqueid
       LEFT JOIN deals d ON d.kommo_id = ft.kommo_id
+      ${overrideJoin("ft")}
       LEFT JOIN managers m ON m.id = ft.manager_id
       LEFT JOIN teams tm ON tm.id = m.team_id
       LEFT JOIN call_transcripts t ON t.uniqueid = ft.uniqueid AND t.provider = $8 AND t.model = $9
@@ -319,6 +351,8 @@ export interface AiCallCard {
   nextOutboundAt: string | null;
   /** Термін і стан кожної обіцянки — у порядку `result.promises`; обіцянки клієнта → `null`. */
   promiseChecks: (PromiseCheck | null)[];
+  /** Журнал ручних змін типу — від найновішої; діє перша. */
+  typeHistory: { isCargo: boolean; byName: string | null; at: string }[];
   /** Дзвінки на номер після розмови (до 12, за 7 днів) — щоб стан обіцянки можна було перевірити очима. */
   callsAfter: { at: string; billsec: number; direction: "in" | "out"; managerName: string | null; byPromiser: boolean }[];
 }
@@ -334,8 +368,10 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
            rc.manager_id, m.name AS manager_name, m.team_id, tm.name AS team_name, rc.client_phone,
            t.status AS stt_status, t.failure AS stt_failure, t.segments, t.duration_sec,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
+           ov.ov_is_cargo, ov.ov_by, ov.ov_at,
            a.status AS llm_status, a.failure AS llm_failure, a.result
       FROM ringostat_calls rc
+      ${overrideJoin("rc")}
       LEFT JOIN managers m ON m.id = rc.manager_id
       LEFT JOIN teams tm ON tm.id = m.team_id
       LEFT JOIN call_transcripts t ON t.uniqueid = rc.uniqueid AND t.provider = $2 AND t.model = $3
@@ -385,6 +421,9 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
     nextOutboundAt: next ? new Date(next).toISOString() : null,
     promiseChecks,
     callsAfter,
+    typeHistory: (await db.query<{ is_cargo: boolean; set_by_name: string | null; set_at: Date }>(
+      "SELECT is_cargo, set_by_name, set_at FROM call_type_overrides WHERE uniqueid = $1 ORDER BY set_at DESC, id DESC LIMIT 20", [uniqueid]))
+      .rows.map((x) => ({ isCargo: x.is_cargo === true, byName: x.set_by_name, at: new Date(x.set_at).toISOString() })),
   };
 }
 
@@ -414,4 +453,13 @@ export async function aiCallsMeta(db: Db, now: Date, caps: AiCallsMeta["caps"]):
     spend: { stt: (await monthSpend(db, STT_PROVIDER, now)).usd, analysis: (await monthSpend(db, LLM_PROVIDER, now)).usd },
     caps,
   };
+}
+
+/**
+ * Ручна позначка типу (ТЗ 30.09.2026): «Це вантаж» / «Це не вантаж». Лише ДОПИСУЄ рядок журналу — попередні
+ * лишаються, і видно, хто й коли змінював. Право й скоуп перевіряє роут ДО виклику.
+ */
+export async function setCallType(db: Db, uniqueid: string, isCargo: boolean, by: { userId: number | null; name: string | null }, at: Date): Promise<void> {
+  await db.query("INSERT INTO call_type_overrides (uniqueid, is_cargo, set_by, set_by_name, set_at) VALUES ($1, $2, $3, $4, $5)",
+    [uniqueid, isCargo, by.userId, by.name, at.toISOString()]);
 }

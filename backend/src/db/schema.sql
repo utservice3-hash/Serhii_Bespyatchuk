@@ -4601,6 +4601,19 @@ REVOKE ALL ON ai_cap_alerts FROM ai_readonly;
 -- 🗑 Текст розмови видалено за строком зберігання (мобільні — 12 міс, рішення Романа 29.09.2026). Рядок і вердикт
 -- лишаються; NULL — текст на місці.
 ALTER TABLE call_transcripts ADD COLUMN IF NOT EXISTS text_purged_at TIMESTAMPTZ;
+
+-- 🗂 РУЧНИЙ ТИП РОЗМОВИ «ПЕРШОГО ДОТИКУ» (ТЗ «звіт тімліда» 30.09.2026): тімлід чи адмін каже «Це вантаж» / «Це не
+-- вантаж», і це важить більше за модель. ЖУРНАЛ: кожна зміна — окремий рядок, діє остання; хто й коли — назавжди.
+CREATE TABLE IF NOT EXISTS call_type_overrides (
+  id          BIGSERIAL PRIMARY KEY,
+  uniqueid    TEXT NOT NULL,              -- ringostat_calls.uniqueid; без FK — журнал переживає перезапис CDR
+  is_cargo    BOOLEAN NOT NULL,
+  set_by      INTEGER,                    -- users.id; NULL — службовий запис
+  set_by_name TEXT,
+  set_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_call_type_overrides_call ON call_type_overrides(uniqueid, set_at DESC);
+REVOKE ALL ON call_type_overrides FROM ai_readonly;
 -- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
 
 -- 🎧 ВКЛАДКА «ПЕРШИЙ ДОТИК · AI» (рішення Романа 28.09.2026). Без цього рядка вкладку не побачив би

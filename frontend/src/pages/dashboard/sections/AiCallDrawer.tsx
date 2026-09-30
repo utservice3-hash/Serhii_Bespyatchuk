@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { fetchAiCallCard, hiringError, type AiCallCardResp, type AiQuoted } from "../../../api";
-import { STATE_UI, TONE_COLOR, PROMISE_UI, speakerOf, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, type AiCallState, type DrawerTab, type Tone } from "../aiCallsView";
+import { fetchAiCallCard, setAiCallType, hiringError, type AiCallCardResp, type AiQuoted } from "../../../api";
+import { STATE_UI, TONE_COLOR, PROMISE_UI, speakerOf, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, TYPE_LABEL, type AiCallState, type DrawerTab, type Tone } from "../aiCallsView";
 import "./hiring.css";
 
 /**
@@ -127,19 +127,61 @@ function Transcript({ c }: { c: AiCallCardResp }) {
   );
 }
 
-export function AiCallDrawer({ uniqueid, onClose }: { uniqueid: string; onClose: () => void }) {
+/**
+ * 🗂 Тип розмови (ТЗ 30.09.2026): що сказала модель, чи це ручна позначка, і кнопки «Це вантаж» / «Це не вантаж»
+ * для тімліда своєї команди й адміна (право вирішує сервер — `canEditType`). Помилку запису видно, а не «нічого».
+ */
+function TypeBlock({ c, onChanged }: { c: AiCallCardResp; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const r = c.row;
+  const set = async (isCargo: boolean) => {
+    setBusy(true); setMsg(null);
+    try { await setAiCallType(r.uniqueid, isCargo); onChanged(); } catch (e) { setMsg(hiringError(e)); }
+    setBusy(false);
+  };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13.5, border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+        <b>Тип розмови:</b>
+        {r.conversationType ? TYPE_LABEL[r.conversationType] : <span style={{ color: "var(--text-muted)" }}>ще не визначено</span>}
+        {r.typeConfidence != null && <span style={{ color: "var(--text-muted)", fontSize: 12.5 }}>· упевненість {Math.round(r.typeConfidence * 100)}%</span>}
+        {r.typeCheck && <Chip tone="warn">Перевірити тип</Chip>}
+        <Chip tone={r.inReport ? "ok" : "muted"}>{r.inReport ? "у звіті" : "у виключених"}</Chip>
+      </div>
+      {r.typeReason && <div style={{ color: "var(--text-muted)", fontSize: 13 }}>{r.typeReason}</div>}
+      {c.typeHistory.length > 0 && (
+        <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>
+          {c.typeHistory.map((h, i) => <div key={i}>{fmtFull(h.at)} · {h.byName ?? "невідомо хто"} · {h.isCargo ? "«Це вантаж»" : "«Це не вантаж»"}{i === 0 ? " — діє" : ""}</div>)}
+        </div>
+      )}
+      {c.canEditType && (
+        <div style={{ display: "flex", gap: 6 }}>
+          <button type="button" className="hr-btn" disabled={busy} onClick={() => void set(true)}>Це вантаж</button>
+          <button type="button" className="hr-btn" disabled={busy} onClick={() => void set(false)}>Це не вантаж</button>
+        </div>
+      )}
+      {msg && <div style={{ color: "var(--danger, #b3261e)", fontSize: 13 }}>{msg}</div>}
+    </div>
+  );
+}
+
+export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: string; onClose: () => void; onChanged?: () => void }) {
   const [c, setC] = useState<AiCallCardResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [tab, setTab] = useState<DrawerTab>("analysis");
+  const [rev, setRev] = useState(0);
 
   useEffect(() => {
     let alive = true;
-    setC(null); setErr(null); setTab("analysis");
+    setErr(null);
+    if (rev === 0) { setC(null); setTab("analysis"); }
     fetchAiCallCard(uniqueid)
       .then((x) => { if (alive) setC(x); })
       .catch((e) => { if (alive) setErr(hiringError(e)); });
     return () => { alive = false; };
-  }, [uniqueid]);
+  }, [uniqueid, rev]);
+  useEffect(() => { setRev(0); }, [uniqueid]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -184,6 +226,8 @@ export function AiCallDrawer({ uniqueid, onClose }: { uniqueid: string; onClose:
                   style={{ background: "var(--muted-bg, #f0f1f3)", borderRadius: 999, padding: "3px 10px", fontSize: 12 }}>угода {d.kommoId} в Kommo ↗</a>
               ))}
             </div>
+
+            <TypeBlock c={c} onChanged={() => { setRev((x) => x + 1); onChanged?.(); }} />
 
             {tabs.length > 1 && (
               <div className="hr-seg2" role="tablist" aria-label="Розділи картки" style={{ alignSelf: "flex-start" }}>

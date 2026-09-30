@@ -178,3 +178,22 @@ export function deadlineBasisLabel(basis: string): string {
   return basis === "minutes" ? "як пообіцяв" : basis === "day" ? "до кінця названого дня"
     : basis === "conditional_next_workday" ? "умовна — до кінця наступного робочого дня" : "часу не названо — 20 хв";
 }
+
+/** Тип розмови — дзеркало `CONVERSATION_TYPES` у `core/callAiProviders.ts` (ТЗ 30.09.2026). */
+export type ConversationTypeT = "cargo_request" | "carrier" | "vendor" | "job_seeker" | "wrong_number" | "no_dialog" | "other";
+export const TYPE_LABEL: Readonly<Record<ConversationTypeT, string>> = {
+  cargo_request: "Запит на перевезення",
+  carrier: "Перевізник",
+  vendor: "Нам щось продають",
+  job_seeker: "Пошук роботи",
+  wrong_number: "Помилились номером",
+  no_dialog: "Розмови немає",
+  other: "Інше",
+};
+
+export type ListTab = "report" | "excluded";
+/** Рядок у вкладці: «Звіт» — `inReport`, «Виключені» — решта. Фільтр за типом — лише у «Виключених». */
+export function tabRows<T extends { inReport: boolean; conversationType: ConversationTypeT | null }>(rows: readonly T[], tab: ListTab,
+  type: ConversationTypeT | "all" = "all"): T[] {
+  return rows.filter((r) => (tab === "report" ? r.inReport : !r.inReport) && (tab === "report" || type === "all" || r.conversationType === type));
+}

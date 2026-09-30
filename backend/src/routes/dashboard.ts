@@ -68,7 +68,8 @@ import * as metrics from "../core/metrics.js";
 import { ga4Configured } from "../ga4/client.js";
 import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
-import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES } from "../core/callAiScreen.js";
+import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType } from "../core/callAiScreen.js";
+import { canEditType } from "../core/callAiType.js";
 import { CARRIER_LISTEN_ROLES, carrierCallCard, carrierCallsList, carrierCallsMeta } from "../core/carrierCallScreen.js";
 import { callInScope, carrierDealRows, carrierReport, filterRemovedByManager } from "../core/carrierDeals.js";
 import { CARRIER_STAGE } from "../core/carrierCallRules.js";
@@ -10668,6 +10669,8 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
       promiseState: r.promiseState, managerPromises: r.managerPromises,
       // П3: прапорець — лише за період після оголошення норми; до того поле є, а екран його не показує.
       silentBeforeClose: r.silentBeforeClose,
+      conversationType: r.conversationType, typeConfidence: r.typeConfidence, typeReason: r.typeReason, priceValue: r.priceValue,
+      inReport: r.inReport, typeCheck: r.typeCheck, typeOverride: r.typeOverride,
     })),
     silence: { minGapHours: SILENCE_RULE.minGapHours, normFrom: SILENCE_RULE.normFrom },
   });
@@ -10683,12 +10686,31 @@ dashboardRouter.get("/ai-calls/meta", async (_req, res) => {
 dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
   const auth = req.auth!;
   const card = await aiCallCard(pool, String(req.params.uniqueid), transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES), missedScopeFor(auth, {}));
+  if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" });
+
+/**
+ * 🗂 Ручний тип розмови (ТЗ «звіт тімліда» 30.09.2026): «Це вантаж» / «Це не вантаж». Право — ПЕРШИМ оператором
+ * (адмін або тімлід; `accessMatrix` — deny-only), скоуп тімліда — той самий, що в картки: чужий дзвінок → 404.
+ * Лише дописує журнал `call_type_overrides`.
+ */
+dashboardRouter.post("/ai-calls/:uniqueid/type", async (req, res) => {
+  const auth = req.auth!;
+  if (!canEditType(auth.roleKey)) { res.status(403).json({ error: "Змінювати тип розмови можуть тімлід (своя команда) і адмін" }); return; }
+  const isCargo = req.body?.isCargo;
+  if (typeof isCargo !== "boolean") { res.status(400).json({ error: "isCargo має бути true або false" }); return; }
+  const uniqueid = String(req.params.uniqueid);
+  const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
+  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? null;
+  await setCallType(pool, uniqueid, isCargo, { userId: auth.userId ?? null, name: who }, new Date());
+  res.json({ ok: true });
+}); return; }
   res.json({
     row: card.row, dealUrls: card.row.kommoIds.map((id) => ({ kommoId: id, url: kommoLeadUrl(id) })),
     result: card.result, turns: card.turns, transcriptHidden: card.transcriptHidden,
     managerChannel: card.managerChannel, durationSec: card.durationSec, nextOutboundAt: card.nextOutboundAt,
     promiseChecks: card.promiseChecks, callsAfter: card.callsAfter,
+    typeHistory: card.typeHistory, canEditType: canEditType(auth.roleKey),
   });
 });
 
