@@ -284,6 +284,7 @@ export const MANIFEST_FILES: string[] = [
   "core/callAiScreen.test.js",
   "core/callAiPromise.test.js",
   "core/carrierCalls.test.js",
+  "core/actionFeedback.test.js",
 ];
 
 /**
@@ -2135,6 +2136,10 @@ export const MANIFEST_TESTS: string[] = [
   "#986 ba_equipment_issues відібрана в ai_readonly після GRANT і CREATE і є в FORBIDDEN_TABLES",
   "#987 ПЕРЕНЕСЕННЯ: розкладка таблиці техніки, сентинели, «вільний», зіставлення з реєстром",
   "#988 ФРОНТ БА-2: техніка й ТТН — справжні вкладки, статичний імпорт, перегляд без window.open",
+  "#1101 СТРАХОВКА: невдалий ЗАПИС показує причину сервера; читання, 401, скасоване й не-серверне — мовчать",
+  "#1101b СТРАХОВКА ПІДКЛЮЧЕНА: застосунок у <ToastProvider>, і той слухає непіймані помилки через mutationFailureText",
+  "#1102 commitOptimistic: при помилці значення ПОВЕРТАЄТЬСЯ і причина передається; при успіху лишається нове",
+  "#1103 «ВІДХИЛИТИ» ЗВЕРНЕННЯ: «Скасувати» не відхиляє; порожній «OK» — без коментаря; текст — з коментарем",
 ];
 
 /**
