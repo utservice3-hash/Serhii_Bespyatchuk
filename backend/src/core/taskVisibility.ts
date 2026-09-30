@@ -50,6 +50,11 @@ export interface TaskOwnerRow {
   assigneeUserId: number | null;
   createdBy: number | null;
   assigneeTeamId: number | null;
+  /**
+   * «Приймає» (`tasks.reviewer_id`) — той, хто закриває задачу (`taskStatusRights.ts`).
+   * Необовʼязкове: `null`/відсутнє означає «приймає автор», а автор задачу й так бачить.
+   */
+  reviewerId?: number | null;
 }
 
 /**
@@ -119,19 +124,25 @@ export const ASSIGNEE_TEAM_SQL = "COALESCE(m.team_id, am.team_id)";
  *
  * - наскрізний / company: усі ПРИЗНАЧЕНІ + лише ВЛАСНІ особисті;
  * - тімлід: задачі своєї команди + власні + призначені особисто йому;
- * - менеджер: призначені йому (як менеджеру або як акаунту) + створені ним.
+ * - менеджер: призначені йому (як менеджеру або як акаунту) + створені ним;
+ * - і КОЖЕН — задачі, які він ПРИЙМАЄ (30.09.2026).
+ *
+ * 🔴 «Приймає» мусить бачити задачу, інакше закрити її він не зможе: права на
+ * статус рахуються лише поверх видимості. Особиста задача з призначеним
+ * «Приймає» відкривається рівно йому — автор обрав його сам.
  */
 export function canSeeTask(v: TaskViewer, t: TaskOwnerRow): boolean {
   const mine = t.createdBy === v.userId;
   const toMyAccount = t.assigneeUserId != null && t.assigneeUserId === v.userId;
+  const iReview = t.reviewerId != null && t.reviewerId === v.userId;
   if (v.adminScope || v.role === "company") {
-    return !isPersonalTask(t) || mine;
+    return !isPersonalTask(t) || mine || iReview;
   }
   if (v.role === "team_lead") {
     // Особиста задача підлеглого («сам собі») має команду виконавця, але тімліду не відкривається.
-    return (!isPersonalTask(t) && t.assigneeTeamId != null && t.assigneeTeamId === v.teamId) || mine || toMyAccount;
+    return (!isPersonalTask(t) && t.assigneeTeamId != null && t.assigneeTeamId === v.teamId) || mine || toMyAccount || iReview;
   }
-  return (t.assigneeId != null && t.assigneeId === v.managerId) || mine || toMyAccount;
+  return (t.assigneeId != null && t.assigneeId === v.managerId) || mine || toMyAccount || iReview;
 }
 
 /**
@@ -165,16 +176,17 @@ export function canTouchTask(v: TaskViewer, t: TaskOwnerRow): boolean {
  */
 export function visibilityCondSql(v: TaskViewer, push: (value: unknown) => number): string {
   if (v.adminScope || v.role === "company") {
-    return `(${ASSIGNED_TASK_SQL} OR t.created_by = $${push(v.userId)})`;
+    const me = push(v.userId);
+    return `(${ASSIGNED_TASK_SQL} OR t.created_by = $${me} OR t.reviewer_id = $${me})`;
   }
   if (v.role === "team_lead") {
     const team = push(v.teamId);
     const me = push(v.userId);
-    return `((${ASSIGNED_TASK_SQL} AND ${ASSIGNEE_TEAM_SQL} = $${team}) OR t.created_by = $${me} OR t.assignee_user_id = $${me})`;
+    return `((${ASSIGNED_TASK_SQL} AND ${ASSIGNEE_TEAM_SQL} = $${team}) OR t.created_by = $${me} OR t.assignee_user_id = $${me} OR t.reviewer_id = $${me})`;
   }
   const mgr = push(v.managerId);
   const me = push(v.userId);
-  return `(t.assignee_id = $${mgr} OR t.created_by = $${me} OR t.assignee_user_id = $${me})`;
+  return `(t.assignee_id = $${mgr} OR t.created_by = $${me} OR t.assignee_user_id = $${me} OR t.reviewer_id = $${me})`;
 }
 
 /**

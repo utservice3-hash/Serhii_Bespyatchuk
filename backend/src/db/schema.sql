@@ -2991,6 +2991,20 @@ CREATE TABLE IF NOT EXISTS task_status_log (
 );
 CREATE INDEX IF NOT EXISTS idx_task_status_log_task ON task_status_log(task_id, changed_at);
 
+-- ✅ «ПРИЙМАЄ» (30.09.2026). Задачу закриває той, хто її приймає, а не виконавець
+-- (правило Сергія; `core/taskStatusRights.ts`). Автор часто не той, хто ставив ТЗ,
+-- тому це окреме поле, а не «автор».
+-- 🔴 NULL ОЗНАЧАЄ «ПРИЙМАЄ АВТОР» — і саме так виконано «для наявних задач
+-- Приймає = автор»: БЕЗ бекфілу, жоден наявний рядок не переписується. Відкат коду
+-- лишає порожню колонку, яка нікому не заважає.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS reviewer_id INTEGER REFERENCES users(id);
+CREATE INDEX IF NOT EXISTS idx_tasks_reviewer ON tasks(reviewer_id) WHERE reviewer_id IS NOT NULL;
+-- Роль того, хто рухав статус, НА МОМЕНТ зміни: admin | reviewer | author |
+-- executor | team_lead. Знімок, а не обчислення: «хто прийняв» не мусить
+-- переписуватись, коли пізніше призначать іншого «Приймає». Старі рядки — NULL
+-- (роль тоді не записувалась, і вигадувати її заднім числом не будемо).
+ALTER TABLE task_status_log ADD COLUMN IF NOT EXISTS actor_role TEXT;
+
 -- 📎 ФАЙЛИ ЗАДАЧІ. Структура — за зразком `doc_files`; тека інша
 -- (`backend/task-files`), щоб публічний static `/api/files` не віддавав
 -- вкладення задач за прямим URL в обхід авторизації.

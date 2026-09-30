@@ -518,7 +518,8 @@ function codeOf(...rel: string[]): string {
 test("#400m ВКЛАДКА «СПІЛЬНІ»: кнопка, предикат «автор не я» і ВЛАСНА гілка фільтра", () => {
   const src = codeOf("pages", "dashboard", "sections", "TasksSection.tsx");
 
-  assert.match(src, /useState<"mine" \| "shared" \| "all">/,
+  // 30.09.2026: четверта вкладка «review» («На моєму прийнятті», гейт #1080i) — перелік значень свідомо розширено.
+  assert.match(src, /useState<"mine" \| "shared" \| "all" \| "review">/,
     "🔴 стан вкладок не знає значення «shared» — третьої вкладки немає в принципі");
   assert.match(src, /setAdminTab\("shared"\)/,
     "🔴 КНОПКИ «СПІЛЬНІ ЗАДАЧІ» НЕМА: людина не може перемкнутись на те, що їй поставили");

@@ -444,6 +444,10 @@ export interface SpreadExemption { file: string; frag: string; why: string }
  * акумулятори.
  */
 export const ROW_SPREAD_EXEMPTIONS: SpreadExemption[] = [
+  // ✅ Задачник (30.09.2026): рядок `GET /tasks` — ЯВНИЙ SELECT (перелік колонок у запиті), до нього
+  // дописуються права глядача на статус, обчислені `core/taskStatusRights.ts`.
+  { file: "routes/tasks.ts", frag: "return { ...r, statusRights",
+    why: "`r` — рядок `GET /tasks` з явним переліком колонок; `statusRights` — права глядача, обчислені ядром (`statusRights`/`canChangeReviewer`)." },
   // 💼 Вакансії (22.09.2026): рядок `listVacancies` — ЯВНИЙ SELECT (id, назва, статус, need, дати, candidates,
   // days_open; жодних персональних полів), до нього дописується обчислена воронка `vacancyFunnels`.
   { file: "routes/hiring.ts", frag: "({ ...v, funnel",

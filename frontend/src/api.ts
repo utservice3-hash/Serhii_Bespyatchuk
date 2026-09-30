@@ -2811,6 +2811,18 @@ export interface Task {
   closeReason?: string | null;
   closedAt?: string | null;
   closedByName?: string | null;
+  /**
+   * ✅ «Приймає» — хто закриває задачу. Уже з замовчуванням: порожнє поле в базі
+   * сервер віддає як автора (core/taskStatusRights.ts).
+   */
+  reviewerId?: number | null;
+  reviewerName?: string | null;
+  /**
+   * ✅ ПРАВА НА СТАТУС РАХУЄ СЕРВЕР — тією самою функцією, що відмовляє в PATCH.
+   * Фронт лише малює меню за ними: власна копія правила тут розійшлась би з
+   * сервером мовчки, і сірий пункт перестав би означати 403.
+   */
+  statusRights?: { canChange: boolean; canDone: boolean; canChangeReviewer: boolean };
   deadline: string | null;
   assigneeId: number | null;
   assigneeName: string | null;
@@ -2978,6 +2990,8 @@ export async function createTask(payload: {
   department?: string | null;
   groupId?: number | null;
   assigneeUserId?: number | null;
+  /** «Приймає» (`users.id`); не передано — приймає автор. */
+  reviewerId?: number | null;
 }): Promise<{ id: number; ids?: number[] }> {
   const { data } = await api.post<{ id: number; ids?: number[] }>("/tasks", payload);
   return data;
@@ -2995,6 +3009,7 @@ export async function updateTask(
     department: string | null;
     groupId: number | null;
     assigneeUserId: number | null;
+    reviewerId: number | null;
     checklistJson: ChecklistItem[] | null;
     subtasksJson: Subtask[] | null;
   }>
@@ -3018,6 +3033,8 @@ export interface TaskFile {
 export interface TaskHistoryEntry {
   id: number; fromStatus: TaskStatus | null; toStatus: TaskStatus;
   changedAt: string; changedByName: string | null;
+  /** Роль того, хто рухав, на момент зміни: admin | reviewer | author | executor | team_lead. Старі рядки — null. */
+  actorRole?: string | null;
 }
 /** Кандидат у виконавці-акаунти. Сервер віддає імʼя без email — логін не їде на екран. */
 export interface TaskAssignee { id: number; name: string; nameIsLogin: boolean; managerId: number | null }
