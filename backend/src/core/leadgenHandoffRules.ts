@@ -510,6 +510,41 @@ export function assembleTrend<T extends HandoffEntry>(input: {
   return { monthStarts, byPerson, money };
 }
 
+// ─────────────────────── ГРОШІ ПО ТИЖНЯХ І ДНЯХ ПЕРІОДУ (задача 4668, п.6) ───────────────────────
+
+/** Понеділок тижня київської дати `day` ('YYYY-MM-DD') — той самий ключ, що `bucketKeySql("week")`. */
+export function mondayOf(day: string): string {
+  const t = Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)));
+  const dow = new Date(t).getUTCDay();
+  return new Date(t - ((dow + 6) % 7) * 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * 📅 ГРОШІ З ПЕРЕДАЧ ПО ОДИНИЦЯХ ПЕРІОДУ — розклад ТИХ САМИХ класифікованих передач, що й підсумок
+ * періоду, за днем передачі (день або понеділок тижня). Одна передача й «та сама угода» вирішені над
+ * періодом (`handoffView`), тож Σ одиниць == підсумку періоду ЗАВЖДИ (`#1092`) — на відміну від
+ * лічильників стадій, де угода з двома входами в різні тижні рахується в кожному.
+ * Вхід — `rows` уже звуженого скоупу (межа тімліда з того самого `handoffView`).
+ */
+export function handoffMoneyBuckets<T extends HandoffEntry>(
+  rows: readonly ClassifiedHandoff<T>[], grain: "day" | "week",
+): TrendMoneyBucket[] {
+  const by = new Map<string, ClassifiedHandoff<T>[]>();
+  for (const r of rows) {
+    const k = grain === "day" ? r.day : mondayOf(r.day);
+    const xs = by.get(k) ?? []; xs.push(r); by.set(k, xs);
+  }
+  return [...by.keys()].sort().map((bucket): TrendMoneyBucket => {
+    const xs = by.get(bucket)!;
+    const per = new Map<number, ClassifiedHandoff<T>[]>();
+    for (const h of xs) { const ys = per.get(h.lgId) ?? []; ys.push(h); per.set(h.lgId, ys); }
+    return {
+      bucket, totals: aggregateHandoffMoney(xs),
+      byPerson: [...per.entries()].sort((a, b) => a[0] - b[0]).map(([managerId, ys]) => ({ managerId, money: aggregateHandoffMoney(ys) })),
+    };
+  });
+}
+
 // ─────────────────────── ПАРАМЕТРИ ЗАПИТІВ ЕКРАНА ЛІДОГЕНУ ───────────────────────
 // Чисті, щоб їх межі перевірялись викликом, а не читанням роуту. Порожній рядок у query —
 // «не задано» (той самий урок, що `dateParam`: `?grain=` доходить до сервера як "").

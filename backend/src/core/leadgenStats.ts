@@ -6,7 +6,7 @@ import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery,
 import { FC_PIPELINES, handoffDealStates, clientSuccessHistory } from "./money.js";
 import { stageName } from "./stageNames.js";
 import {
-  handoffView, trendWindow, mergeBucketRows, assembleTrend, handoffDealRow, LINK_BEFORE_SEC, LINK_AFTER_SEC,
+  handoffView, trendWindow, mergeBucketRows, assembleTrend, handoffDealRow, handoffMoneyBuckets, LINK_BEFORE_SEC, LINK_AFTER_SEC,
   type HandoffScope, type LeadgenHandoffMoney, type HandoffLinkInfo, type LeadgenHandoffDeal, type HandoffRowDeps,
   type LeadgenPersonBucketRow, type StageBucketRow, type CallBucketRow, type TrendMoneyBucket,
 } from "./leadgenHandoffRules.js";
@@ -337,6 +337,8 @@ export interface LeadgenHandoffMoneyResult {
   totals: LeadgenHandoffMoney;
   byPerson: { managerId: number; money: LeadgenHandoffMoney }[];
   deals: LeadgenHandoffDeal[];
+  /** Гроші по днях/тижнях періоду — лише коли просили `grain`; Σ одиниць == `totals` (`#1092`). */
+  buckets: TrendMoneyBucket[] | null;
 }
 
 /**
@@ -347,14 +349,16 @@ export interface LeadgenHandoffMoneyResult {
  * Порядок — рішення (правило 3): домен = УСІ передачі періоду; вибір передачі й «та сама
  * угода» — над усім доменом; скоуп (`teamId`/`managerId`) лише звужує ВІДПОВІДЬ.
  */
-export async function leadgenHandoffMoney(from: string, to: string, scope: HandoffScope): Promise<LeadgenHandoffMoneyResult> {
+export async function leadgenHandoffMoney(
+  from: string, to: string, scope: HandoffScope, grain: "day" | "week" | null = null,
+): Promise<LeadgenHandoffMoneyResult> {
   const links = await handoffLinks(from, to);
   const [states, history] = await Promise.all([
     handoffDealStates(links.flatMap((l) => (l.dealId == null ? [] : [l.dealId]))), historyFor(links)]);
   const view = handoffView(links, states, scope, history);
   const deals = view.rows.map((h) =>
     handoffDealRow(h, h.dealId == null ? undefined : states.get(h.dealId), HANDOFF_ROW_DEPS));
-  return { totals: view.totals, byPerson: view.byPerson, deals };
+  return { totals: view.totals, byPerson: view.byPerson, deals, buckets: grain ? handoffMoneyBuckets(view.rows, grain) : null };
 }
 
 /** Найраніша київська дата подій чотирьох стадій — глибина памʼяті журналу (`null` — подій немає). */

@@ -178,10 +178,14 @@ export interface LeadgenHandoffMoney {
   /** Передачі, що вели в угоду, вже пораховану іншою передачею (гроші не двоїмо). */
   sameDeal: number;
   success: LeadgenMoneyCell; paid: LeadgenMoneyCell; expect: LeadgenMoneyCell; work: LeadgenMoneyCell;
+  /** Передачі в угоди ПОСТІЙНИХ клієнтів (2+ успіхи до передачі, останній свіжіший за 3 міс.) — поза грошима лідгена. */
+  regular: LeadgenMoneyCell;
+  /** «Очікування» = оплачено + зона «Очікуємо» (похідне, у тотожність передач не входить). */
+  waiting: LeadgenMoneyCell;
 }
 /** Стан угоди менеджера з передачі — ЗАРАЗ. `none` — угоди менеджера не знайшлося; `same` — ця передача
- *  привела в угоду, вже пораховану іншою передачею (гроші не двоїмо). */
-export type LeadgenDealClass = "success" | "paid" | "expect" | "work" | "lost" | "none" | "same";
+ *  привела в угоду, вже пораховану іншою передачею (гроші не двоїмо); `regular` — угода постійного клієнта. */
+export type LeadgenDealClass = "success" | "paid" | "expect" | "work" | "lost" | "none" | "same" | "regular";
 /** Одна передача лідгена й угода менеджера, що з неї виросла. Для `none` поля угоди — з угоди Продзвону. */
 export interface LeadgenHandoffDeal {
   day: string; lgId: number; pzId: number; dealId: number | null;
@@ -218,6 +222,9 @@ export interface LeadgenStatsResp {
   buckets?: LeadgenBucket[];
   bucketsByPerson?: LeadgenPersonBucket[];
   handoffMoney?: { totals: LeadgenHandoffMoney; byPerson: (LeadgenHandoffMoney & { managerId: number })[] };
+  /** Гроші з передач по тих самих одиницях, що `buckets` (лише з `grain`); Σ одиниць == `handoffMoney`. */
+  handoffMoneyBuckets?: (LeadgenHandoffMoney & { bucket: string })[];
+  handoffMoneyBucketsByPerson?: (LeadgenHandoffMoney & { bucket: string; managerId: number })[];
   closures: { reason: string; deals: number }[];
   handoffs: { kommoId: number; day: string; name: string | null; manager: string | null; url: string }[];
   handoffsLimit: number;

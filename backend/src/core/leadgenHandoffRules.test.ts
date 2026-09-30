@@ -9,7 +9,7 @@ import {
   type StageBucketRow, type CallBucketRow, type HandoffLinkInfo, type HandoffRowDeps, type LeadgenDealClass, type HandoffEntry, type DealState, type LeadgenHandoffMoney,
 } from "./leadgenHandoffRules.js";
 import { HANDOFF_CLASS_RULES } from "./moneyBuckets.js";
-import { isRegularAt, monthsBackDay, REGULAR_MIN_SUCCESSES, REGULAR_FRESH_MONTHS, type ClientSuccess } from "./leadgenHandoffRules.js";
+import { isRegularAt, monthsBackDay, REGULAR_MIN_SUCCESSES, REGULAR_FRESH_MONTHS, handoffMoneyBuckets, mondayOf, type ClientSuccess } from "./leadgenHandoffRules.js";
 
 /**
  * #670…#674, #680 — ГРОШІ З ПЕРЕДАНИХ ЛІДІВ: чисті правила (рішення власника 22.09.2026).
@@ -496,4 +496,36 @@ test("#1091b ГРОШІ: постійні поза «Успішними» й «�
     "🔴 тотожність передач зламалась — хтось зник або порахований двічі");
   // Без історії постійних немає — поведінка до задачі 4668 (дзеркало: правило не вмикається саме).
   assert.equal(classifyHandoffs([H(2, 9102, "reg")], states).map((r) => r.cls)[0], "success");
+});
+
+/**
+ * #1092 — ГРОШІ ПО ТИЖНЯХ І ДНЯХ (задача 4668, п.6): розклад ТИХ САМИХ класифікованих передач періоду,
+ * тож Σ одиниць == періоду по кожному полю — навіть коли друга передача в ту саму угоду лягла в інший
+ * тиждень (`same`). Ключ тижня — понеділок (неділя → попередній понеділок), дня — сама дата; по людях — теж Σ.
+ * 🧨 САБОТАЖ: у `mondayOf` `(dow + 6) % 7` → `dow` (тиждень з неділі) → червоніє; у `handoffMoneyBuckets`
+ * рахувати підсумок одиниці без `same` → Σ передач ≠ періоду → червоніє.
+ */
+test("#1092 ГРОШІ ПО ОДИНИЦЯХ: Σ тижнів/днів == період по кожному полю й людині; тиждень — з понеділка", () => {
+  assert.equal(mondayOf("2026-09-21"), "2026-09-21", "понеділок — сам собі");
+  assert.equal(mondayOf("2026-09-27"), "2026-09-21", "🔴 неділя лягла не в свій тиждень");
+  assert.equal(mondayOf("2026-10-01"), "2026-09-28", "🔴 межа місяця зсунула тиждень");
+  const E = (pz: number, lg: number, day: string, deal: number | null): HandoffEntry =>
+    ({ pzId: pz, lgId: lg, lgTeamId: 1, at: Date.parse(day + "T09:00:00Z") + pz, day, dealId: deal });
+  const states = new Map<number, DealState>([[9201, st("success", 10_000)], [9202, st("paid", 3_000)], [9203, st("expect", 2_000)], [9204, st("work", 500)]]);
+  const view = handoffView([E(1, 7, "2026-09-21", 9201), E(2, 7, "2026-09-27", 9202), E(3, 8, "2026-09-28", 9203),
+    E(4, 8, "2026-09-29", 9201), E(5, 8, "2026-09-30", null), E(6, 7, "2026-10-01", 9204)], states, { teamId: null, managerId: null });
+  assert.ok(view.rows.some((r) => r.cls === "same"), "фікстура вироджена — немає «тієї самої угоди» в іншому тижні");
+  for (const grain of ["week", "day"] as const) {
+    const b = handoffMoneyBuckets(view.rows, grain);
+    if (grain === "week") assert.deepEqual(b.map((x) => x.bucket), ["2026-09-21", "2026-09-28"], "🔴 ключі тижнів не понеділки");
+    else assert.equal(b.length, 6, "🔴 днів не стільки, скільки різних дат передач");
+    const sum = (f: (m: LeadgenHandoffMoney) => number, ms: LeadgenHandoffMoney[]) => ms.reduce((a, m) => a + f(m), 0);
+    const fields: [string, (m: LeadgenHandoffMoney) => number][] = [["передачі", (m) => m.handoffs], ["без угоди", (m) => m.unlinked],
+      ["та сама", (m) => m.sameDeal], ["успішні ₴", (m) => m.success.sum], ["очікування ₴", (m) => m.waiting.sum], ["в роботі", (m) => m.work.n]];
+    for (const [name, f] of fields) {
+      assert.equal(sum(f, b.map((x) => x.totals)), f(view.totals), `🔴 ${grain}: Σ одиниць «${name}» ≠ періоду`);
+      for (const p of view.byPerson) assert.equal(sum(f, b.flatMap((x) => x.byPerson.filter((y) => y.managerId === p.managerId).map((y) => y.money))),
+        f(p.money), `🔴 ${grain}: людина ${p.managerId}, «${name}» по одиницях ≠ періоду`);
+    }
+  }
 });

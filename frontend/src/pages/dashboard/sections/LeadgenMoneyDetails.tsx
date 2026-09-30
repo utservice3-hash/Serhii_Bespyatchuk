@@ -25,6 +25,8 @@ const CLS: { k: LeadgenDealClass; tab: string; color: string; hint: string }[] =
     hint: "Угода менеджера закрита без реалізації (143, у Кваліфікації — «Не цільові»/«Сміття») або борг по ній списано" },
   { k: "none", tab: "Без угоди менеджера", color: MUTED, hint: "Угоди менеджера (той самий клієнт, створена в межах 2 хв від передачі) не знайшлося — гроші не прив'язати" },
   { k: "same", tab: "Та сама угода", color: MUTED, hint: "Ця передача привела в угоду, вже пораховану іншою передачею: гроші не двоїмо" },
+  { k: "regular", tab: "Постійний клієнт", color: MUTED,
+    hint: "На дату передачі клієнт уже мав 2+ успішні перевезення, і останнє — менше ніж 3 місяці тому: такі гроші лідгену не зараховуються (правило Ярослава, задача 4668). Якщо з останнього успіху минуло 3+ місяці — клієнт знову «лідгенів»" },
 ];
 const ORDER = Object.fromEntries(CLS.map((c, i) => [c.k, i])) as Record<LeadgenDealClass, number>;
 const META = Object.fromEntries(CLS.map((c) => [c.k, c])) as Record<LeadgenDealClass, (typeof CLS)[number]>;
@@ -35,6 +37,7 @@ type Field = [string, (m: LeadgenHandoffMoney) => number];
 /** Поля підсумку, які мусять збігтися з числами рядка — УСІ, а не лише передачі й успіх. */
 const FIELDS: Field[] = [
   ["передач", (m) => m.handoffs], ["без угоди менеджера", (m) => m.unlinked], ["програно", (m) => m.lost], ["у ту саму угоду", (m) => m.sameDeal],
+  ["постійних клієнтів", (m) => m.regular.n], ["Очікування: сума", (m) => m.waiting.sum],
   ...(["success", "paid", "expect", "work"] as const).flatMap((k): Field[] => [
     [`${META[k].tab}: угод`, (m) => m[k].n],
     [`${META[k].tab}: сума`, (m) => m[k].sum],
@@ -255,8 +258,9 @@ function DealRow({ d, period }: { d: LeadgenHandoffDeal; period: { from: string;
     : d.cls === "lost" ? `${d.reason ?? "причину не вказано"}${d.closedDay ? ` · ${dayLbl(d.closedDay, period)}` : ""}`
     : d.cls === "none" ? "посилання — на угоду лідгена в Продзвоні"
     : d.cls === "same" ? "гроші пораховано в іншій передачі"
+    : d.cls === "regular" ? "постійний клієнт — у гроші лідгена не йде"
     : "";
-  const hasMoney = d.cls !== "none" && d.cls !== "same" && d.cls !== "lost";
+  const hasMoney = d.cls !== "none" && d.cls !== "same" && d.cls !== "lost" && d.cls !== "regular";
   const title = d.route ?? "угода без назви";
   return (
     <tr style={{ borderTop: "1px solid var(--border)" }}>
