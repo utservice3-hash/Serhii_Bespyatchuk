@@ -38,6 +38,7 @@ type Field = [string, (m: LeadgenHandoffMoney) => number];
 const FIELDS: Field[] = [
   ["передач", (m) => m.handoffs], ["без угоди менеджера", (m) => m.unlinked], ["програно", (m) => m.lost], ["у ту саму угоду", (m) => m.sameDeal],
   ["постійних клієнтів", (m) => m.regular.n], ["Очікування: сума", (m) => m.waiting.sum],
+  ["Успішні за період: сума", (m) => m.earned.sum], ["Очікування за період: сума", (m) => m.pending.sum],
   ...(["success", "paid", "expect", "work"] as const).flatMap((k): Field[] => [
     [`${META[k].tab}: угод`, (m) => m[k].n],
     [`${META[k].tab}: сума`, (m) => m[k].sum],
@@ -254,7 +255,7 @@ function DealRow({ d, period }: { d: LeadgenHandoffDeal; period: { from: string;
   const m = META[d.cls];
   const detail =
     d.cls === "success" ? (d.closedDay ? `закрито ${dayLbl(d.closedDay, period)}` : "")
-    : d.cls === "expect" || d.cls === "paid" ? (d.planPayDay ? `план оплати ${dayLbl(d.planPayDay, period)}` : "")
+    : d.cls === "expect" || d.cls === "paid" ? [d.autoDay ? `авто ${dayLbl(d.autoDay, period)}` : "авто ще не поїхало", d.planPayDay ? `план оплати ${dayLbl(d.planPayDay, period)}` : ""].filter(Boolean).join(" · ")
     : d.cls === "lost" ? `${d.reason ?? "причину не вказано"}${d.closedDay ? ` · ${dayLbl(d.closedDay, period)}` : ""}`
     : d.cls === "none" ? "посилання — на угоду лідгена в Продзвоні"
     : d.cls === "same" ? "гроші пораховано в іншій передачі"
@@ -264,7 +265,10 @@ function DealRow({ d, period }: { d: LeadgenHandoffDeal; period: { from: string;
   const title = d.route ?? "угода без назви";
   return (
     <tr style={{ borderTop: "1px solid var(--border)" }}>
-      <td style={{ ...td, textAlign: "left" }}>{dayLbl(d.day, period)}</td>
+      <td style={{ ...td, textAlign: "left", color: d.inPeriod ? undefined : MUTED }}
+        title={d.inPeriod ? "Дата передачі" : "Передано раніше за період — у період потрапили гроші (успіх чи авто)"}>
+        {dayLbl(d.day, period)}{!d.inPeriod && <div style={{ fontSize: 11 }}>передано раніше</div>}
+      </td>
       <td style={{ ...td, textAlign: "left", whiteSpace: "normal", overflowWrap: "anywhere", minWidth: 160, maxWidth: 280 }}>
         {d.url
           ? <a href={d.url} target="_blank" rel="noreferrer" style={{ fontWeight: 600, color: LINK }}

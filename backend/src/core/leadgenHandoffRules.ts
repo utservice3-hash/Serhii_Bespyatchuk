@@ -34,6 +34,17 @@ export interface LeadgenHandoffMoney {
    * зона «Очікуємо», тобто `paid ∪ expect`. ПОХІДНЕ, у тотожність передач не входить (не двоїти).
    */
   waiting: LeadgenMoneyCell;
+  /**
+   * 💰 ГРОШІ ЗА ПРАВИЛОМ ЯРОСЛАВА (30.09.2026) — головні два числа екрана:
+   *  • `earned` («Успішні») — угоди менеджера, що стали «Успішна угода» В ПЕРІОДІ (дата закриття), з передач
+   *    БУДЬ-ЯКОЇ давності: «прорахунок могли передати хоч пів року тому — сума рахується в місяць успіху»;
+   *  • `pending` («Очікування») — угоди, у яких АВТО ПОЇХАЛО в періоді (перший вхід у «Авто працює» чи далі),
+   *    а зараз вони «Оплата отримана» або в зоні «Очікуємо».
+   * Решта полів — КОГОРТА передач періоду («що сталося з переданим цього періоду»); у тотожність когорти
+   * `earned`/`pending` не входять. Постійні клієнти й «та сама угода» — поза грошима, як і в когорті.
+   */
+  earned: LeadgenMoneyCell;
+  pending: LeadgenMoneyCell;
 }
 
 /**
@@ -119,8 +130,21 @@ export type ClientHistory = ReadonlyMap<string, readonly ClientSuccess[]>;
 const NO_HISTORY: ClientHistory = new Map();
 
 /** Стан угоди менеджера й її бюджет — те, що віддає грошове ядро. */
-export interface DealState { cls: ManagerDealClass; price: number }
-export type ClassifiedHandoff<T extends HandoffEntry> = T & { cls: LeadgenDealClass; price: number };
+export interface DealState {
+  cls: ManagerDealClass; price: number;
+  /** Київська дата закриття угоди менеджера (для «Успішних» — дата успіху). */
+  closedDay?: string | null;
+  /** Київська дата першого входу в етап «авто поїхало» (`ClassRules.autoWent`). */
+  autoDay?: string | null;
+}
+/**
+ * Класифікована передача. `successDay`/`autoDay` — якорі грошей: заповнені лише там, де гроші ЦІЄЇ передачі
+ * можуть рахуватись (успіх / оплачено-очікуємо); у `none`/`same`/`regular` — `null`, щоб не двоїти й не рахувати
+ * виключене. `inPeriod` ставить `handoffView`: чи сама передача в періоді (когорта), а не лише її гроші.
+ */
+export type ClassifiedHandoff<T extends HandoffEntry> = T & {
+  cls: LeadgenDealClass; price: number; successDay: string | null; autoDay: string | null; inPeriod?: boolean;
+};
 
 /**
  * 📌 ПРАВИЛО 3 + 4: КЛАС КОЖНОЇ ОБРАНОЇ ПЕРЕДАЧІ.
@@ -135,16 +159,23 @@ export type ClassifiedHandoff<T extends HandoffEntry> = T & { cls: LeadgenDealCl
  */
 export function classifyHandoffs<T extends HandoffEntry>(
   picked: readonly T[], states: ReadonlyMap<number, DealState>, history: ClientHistory = NO_HISTORY,
+  ownedEarlier: ReadonlySet<number> = new Set(),
 ): ClassifiedHandoff<T>[] {
-  const seen = new Set<number>();
+  // Угоди, які забрали передачі РАНІШЕ за період, — для когорти вже «та сама угода» (гроші в них рахуються там).
+  const seen = new Set<number>(ownedEarlier);
   return picked.map((h) => {
-    if (h.dealId == null) return Object.assign({}, h, { cls: "none" as const, price: 0 });
+    const noAnchor = { successDay: null, autoDay: null };
+    if (h.dealId == null) return Object.assign({}, h, { cls: "none" as const, price: 0 }, noAnchor);
     const st = states.get(h.dealId);
     if (!st) throw new Error(`угода менеджера ${h.dealId} (передача ${h.pzId}) без стану з грошового ядра`);
-    if (h.clientKey && isRegularAt(history.get(h.clientKey) ?? [], h)) return Object.assign({}, h, { cls: "regular" as const, price: st.price });
-    if (seen.has(h.dealId)) return Object.assign({}, h, { cls: "same" as const, price: st.price });
+    if (h.clientKey && isRegularAt(history.get(h.clientKey) ?? [], h)) return Object.assign({}, h, { cls: "regular" as const, price: st.price }, noAnchor);
+    if (seen.has(h.dealId)) return Object.assign({}, h, { cls: "same" as const, price: st.price }, noAnchor);
     seen.add(h.dealId);
-    return Object.assign({}, h, { cls: st.cls, price: st.price });
+    return Object.assign({}, h, {
+      cls: st.cls, price: st.price,
+      successDay: st.cls === "success" ? st.closedDay ?? null : null,
+      autoDay: st.cls === "paid" || st.cls === "expect" ? st.autoDay ?? null : null,
+    });
   });
 }
 
@@ -153,7 +184,7 @@ const cell = (): LeadgenMoneyCell => ({ n: 0, sum: 0, priced: 0 });
 /** Порожній підсумок — для місяця чи людини без передач (нуль, який СКАЗАЛИ дані). */
 export function emptyHandoffMoney(): LeadgenHandoffMoney {
   return { handoffs: 0, unlinked: 0, lost: 0, sameDeal: 0, success: cell(), paid: cell(), expect: cell(), work: cell(),
-    regular: cell(), waiting: cell() };
+    regular: cell(), waiting: cell(), earned: cell(), pending: cell() };
 }
 
 /**
@@ -198,14 +229,62 @@ export interface HandoffView<T extends HandoffEntry> {
  */
 export function handoffView<T extends HandoffEntry>(
   domain: readonly T[], states: ReadonlyMap<number, DealState>, scope: HandoffScope, history: ClientHistory = NO_HISTORY,
+  period?: DayIn,
 ): HandoffView<T> {
-  const all = classifyHandoffs(pickHandoffs(domain), states, history);
-  const rows = all.filter((h) => inScope(scope, h.lgTeamId, h.lgId));
-  const per = new Map<number, ClassifiedHandoff<T>[]>();
-  for (const h of rows) { const xs = per.get(h.lgId) ?? []; xs.push(h); per.set(h.lgId, xs); }
-  const byPerson = [...per.entries()].sort((a, b) => a[0] - b[0])
-    .map(([managerId, xs]) => ({ managerId, money: aggregateHandoffMoney(xs) }));
-  return { rows, totals: aggregateHandoffMoney(rows), byPerson };
+  const inP: DayIn = period ?? (() => true);
+  // Когорта: передачі періоду, одна на угоду Продзвону. «Та сама угода» — і щодо передач РАНІШЕ за період:
+  // угода менеджера належить першій передачі, що до неї привела, в якому б місяці та не була.
+  const inDomain = domain.filter((h) => inP(h.day));
+  const firstAt = inDomain.reduce((a, h) => Math.min(a, h.at), Infinity);
+  const ownedEarlier = new Set(domain.filter((h) => !inP(h.day) && h.at < firstAt && h.dealId != null).map((h) => h.dealId!));
+  const cohort = classifyHandoffs(pickHandoffs(inDomain), states, history, ownedEarlier)
+    .filter((h) => inScope(scope, h.lgTeamId, h.lgId)).map((h) => Object.assign(h, { inPeriod: true }));
+  // Гроші — з УСІХ передач домену (будь-якої давності): угода менеджера належить першій передачі, що до неї
+  // привела; «Успішні» — за датою успіху в періоді, «Очікування» — за датою авто в періоді.
+  const money = anchoredRows(domain, states, history, inP).filter((h) => inScope(scope, h.lgTeamId, h.lgId));
+  const key = (h: { pzId: number; dealId: number | null }) => `${h.pzId}|${h.dealId}`;
+  const inCohort = new Set(cohort.map(key));
+  const rows = [...cohort, ...money.filter((h) => !inCohort.has(key(h))).map((h) => Object.assign(h, { inPeriod: false }))];
+  const persons = [...new Set(rows.map((h) => h.lgId))].sort((a, b) => a - b);
+  const byPerson = persons.map((managerId) => ({
+    managerId,
+    money: withAnchored(aggregateHandoffMoney(cohort.filter((h) => h.lgId === managerId)), money.filter((h) => h.lgId === managerId), inP),
+  }));
+  return { rows, totals: withAnchored(aggregateHandoffMoney(cohort), money, inP), byPerson };
+}
+
+/** Предикат «київська дата в періоді» — одна форма на період, місяць тренду й одиницю розбивки. */
+export type DayIn = (day: string) => boolean;
+export const dayInRange = (from: string, to: string): DayIn => (d) => d >= from && d <= to;
+
+/**
+ * Передачі домену, чиї ГРОШІ потрапляють у період: класифікація над УСІМ доменом у порядку часу (перша
+ * передача забирає угоду менеджера, решта — `same`), без вибору «одна на угоду Продзвону» — повторна
+ * кваліфікація веде до ІНШОЇ угоди менеджера і має свої гроші.
+ */
+export function anchoredRows<T extends HandoffEntry>(
+  domain: readonly T[], states: ReadonlyMap<number, DealState>, history: ClientHistory, inP: DayIn,
+): ClassifiedHandoff<T>[] {
+  const sorted = domain.filter((h) => h.dealId != null).sort(byTime);
+  return classifyHandoffs(sorted, states, history)
+    .filter((h) => (h.successDay != null && inP(h.successDay)) || (h.autoDay != null && inP(h.autoDay)));
+}
+
+/** «Успішні» й «Очікування» периоду над класифікованими передачами (`anchoredRows`). */
+export function anchoredMoney(rows: readonly { cls: LeadgenDealClass; price: number; successDay: string | null; autoDay: string | null }[], inP: DayIn):
+  { earned: LeadgenMoneyCell; pending: LeadgenMoneyCell } {
+  const earned = cell(), pending = cell();
+  const add = (c: LeadgenMoneyCell, price: number) => { c.n++; c.sum += price; if (price !== 0) c.priced++; };
+  for (const r of rows) {
+    if (r.cls === "success" && r.successDay != null && inP(r.successDay)) add(earned, r.price);
+    else if ((r.cls === "paid" || r.cls === "expect") && r.autoDay != null && inP(r.autoDay)) add(pending, r.price);
+  }
+  return { earned, pending };
+}
+
+function withAnchored(m: LeadgenHandoffMoney, anchored: readonly ClassifiedHandoff<HandoffEntry>[], inP: DayIn): LeadgenHandoffMoney {
+  const a = anchoredMoney(anchored, inP);
+  return Object.assign(m, { earned: a.earned, pending: a.pending });
 }
 
 /**
@@ -216,6 +295,8 @@ export function handoffView<T extends HandoffEntry>(
 export interface ClassRules {
   fcPipelines: readonly number[]; success: readonly number[]; paid: readonly number[];
   expectZone: readonly number[]; lostStatus: number;
+  /** Етапи «авто поїхало» (від «Авто працює» далі, без 142) — дата машини для «Очікування». */
+  autoWent: readonly number[];
 }
 
 /**
@@ -248,7 +329,7 @@ export function handoffMoneyWire(m: LeadgenHandoffMoney): LeadgenHandoffMoney {
   return {
     handoffs: m.handoffs, unlinked: m.unlinked, lost: m.lost, sameDeal: m.sameDeal,
     success: cellWire(m.success), paid: cellWire(m.paid), expect: cellWire(m.expect), work: cellWire(m.work),
-    regular: cellWire(m.regular), waiting: cellWire(m.waiting),
+    regular: cellWire(m.regular), waiting: cellWire(m.waiting), earned: cellWire(m.earned), pending: cellWire(m.pending),
   };
 }
 
@@ -257,6 +338,7 @@ export function personMoneyWire(managerId: number, m: LeadgenHandoffMoney): Lead
   return {
     managerId, handoffs: w.handoffs, unlinked: w.unlinked, lost: w.lost, sameDeal: w.sameDeal,
     success: w.success, paid: w.paid, expect: w.expect, work: w.work, regular: w.regular, waiting: w.waiting,
+    earned: w.earned, pending: w.pending,
   };
 }
 
@@ -265,6 +347,7 @@ export function bucketMoneyWire(bucket: string, m: LeadgenHandoffMoney): Leadgen
   return {
     bucket, handoffs: w.handoffs, unlinked: w.unlinked, lost: w.lost, sameDeal: w.sameDeal,
     success: w.success, paid: w.paid, expect: w.expect, work: w.work, regular: w.regular, waiting: w.waiting,
+    earned: w.earned, pending: w.pending,
   };
 }
 
@@ -274,6 +357,7 @@ export function bucketPersonMoneyWire(bucket: string, managerId: number, m: Lead
   return {
     bucket, managerId, handoffs: w.handoffs, unlinked: w.unlinked, lost: w.lost, sameDeal: w.sameDeal,
     success: w.success, paid: w.paid, expect: w.expect, work: w.work, regular: w.regular, waiting: w.waiting,
+    earned: w.earned, pending: w.pending,
   };
 }
 
@@ -292,6 +376,10 @@ export interface LeadgenHandoffDeal {
   route: string | null; client: string | null; salesManager: string | null; stage: string | null;
   cls: LeadgenDealClass; price: number; closedDay: string | null; planPayDay: string | null;
   reason: string | null; url: string | null;
+  /** Дата «авто поїхало» (для «Очікування»); `null` — ще не поїхало або не про гроші. */
+  autoDay: string | null;
+  /** Передача — у вибраному періоді; `false` — передано раніше, а в період потрапили її ГРОШІ. */
+  inPeriod: boolean;
 }
 
 /** Порожній або з самих пробілів текст CRM — «не заповнено», а не порожній підпис. */
@@ -338,6 +426,7 @@ export function handoffDealRow(
     planPayDay: linked ? h.planPayDay : null,
     reason: h.cls === "lost" ? blankToNull(h.dealReason) : null,
     url: deps.leadUrl(h.dealId ?? h.pzId),
+    autoDay: h.autoDay, inPeriod: h.inPeriod !== false,
   };
 }
 
@@ -504,7 +593,8 @@ export function assembleTrend<T extends HandoffEntry>(input: {
   const byPerson = mergeBucketRows(input.stages, input.calls, true).filter((r) => inScope(scope, r.teamId, r.managerId));
   const money = monthStarts.map((ms): TrendMoneyBucket => {
     const ym = ms.slice(0, 7);
-    const v = handoffView(input.links.filter((l) => l.day.slice(0, 7) === ym), input.states, scope, input.history);
+    // Той самий `handoffView`, що й `/leadgen-stats` місяця: когорта — передачі місяця, гроші — з усього домену.
+    const v = handoffView(input.links, input.states, scope, input.history, (d) => d.slice(0, 7) === ym);
     return { bucket: ms, totals: v.totals, byPerson: v.byPerson };
   });
   return { monthStarts, byPerson, money };
@@ -527,20 +617,26 @@ export function mondayOf(day: string): string {
  * Вхід — `rows` уже звуженого скоупу (межа тімліда з того самого `handoffView`).
  */
 export function handoffMoneyBuckets<T extends HandoffEntry>(
-  rows: readonly ClassifiedHandoff<T>[], grain: "day" | "week",
+  rows: readonly ClassifiedHandoff<T>[], grain: "day" | "week", period: DayIn = () => true,
 ): TrendMoneyBucket[] {
-  const by = new Map<string, ClassifiedHandoff<T>[]>();
+  // Три якорі — три розклади: когорта за днем передачі, «Успішні» — за днем успіху, «Очікування» — за днем авто.
+  const k = (d: string) => (grain === "day" ? d : mondayOf(d));
+  const cohort = new Map<string, ClassifiedHandoff<T>[]>(), money = new Map<string, ClassifiedHandoff<T>[]>();
+  const put = (m: Map<string, ClassifiedHandoff<T>[]>, b: string, r: ClassifiedHandoff<T>) => { const xs = m.get(b) ?? []; xs.push(r); m.set(b, xs); };
   for (const r of rows) {
-    const k = grain === "day" ? r.day : mondayOf(r.day);
-    const xs = by.get(k) ?? []; xs.push(r); by.set(k, xs);
+    if (r.inPeriod !== false && period(r.day)) put(cohort, k(r.day), r);
+    if (r.cls === "success" && r.successDay != null && period(r.successDay)) put(money, k(r.successDay), r);
+    else if ((r.cls === "paid" || r.cls === "expect") && r.autoDay != null && period(r.autoDay)) put(money, k(r.autoDay), r);
   }
-  return [...by.keys()].sort().map((bucket): TrendMoneyBucket => {
-    const xs = by.get(bucket)!;
-    const per = new Map<number, ClassifiedHandoff<T>[]>();
-    for (const h of xs) { const ys = per.get(h.lgId) ?? []; ys.push(h); per.set(h.lgId, ys); }
+  const buckets = [...new Set([...cohort.keys(), ...money.keys()])].sort();
+  return buckets.map((bucket): TrendMoneyBucket => {
+    const cs = cohort.get(bucket) ?? [], ms = money.get(bucket) ?? [];
+    const inB: DayIn = (d) => k(d) === bucket && period(d);
+    const persons = [...new Set([...cs, ...ms].map((h) => h.lgId))].sort((a, b) => a - b);
     return {
-      bucket, totals: aggregateHandoffMoney(xs),
-      byPerson: [...per.entries()].sort((a, b) => a[0] - b[0]).map(([managerId, ys]) => ({ managerId, money: aggregateHandoffMoney(ys) })),
+      bucket, totals: withAnchored(aggregateHandoffMoney(cs), ms, inB),
+      byPerson: persons.map((managerId) => ({ managerId,
+        money: withAnchored(aggregateHandoffMoney(cs.filter((h) => h.lgId === managerId)), ms.filter((h) => h.lgId === managerId), inB) })),
     };
   });
 }

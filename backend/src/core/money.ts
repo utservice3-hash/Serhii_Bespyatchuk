@@ -1250,13 +1250,18 @@ export async function handoffDealStates(dealIds: readonly number[]): Promise<Map
   const ids = [...new Set(dealIds)];
   if (!ids.length) return out;
   const r = await pool.query<{ kommo_id: string; pipeline_id: string; status_id: string; price: string | null;
-    closed: boolean; written_off: boolean }>(
+    closed: boolean; written_off: boolean; closed_day: string | null; auto_day: string | null }>(
     `SELECT d.kommo_id, d.pipeline_id, d.status_id, d.price,
             (d.closed_at_kommo IS NOT NULL) AS closed,
-            NOT (${DEAL_NOT_WRITTEN_OFF}) AS written_off
+            NOT (${DEAL_NOT_WRITTEN_OFF}) AS written_off,
+            to_char(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS closed_day,
+            (SELECT to_char(min(s.changed_at) AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD')
+               FROM deal_stage_events s
+              WHERE s.kommo_id = d.kommo_id AND s.pipeline_id = ANY($2::bigint[])
+                AND s.status_id = ANY($3::bigint[])) AS auto_day
        FROM deals d
       WHERE d.kommo_id = ANY($1::bigint[])`,
-    [ids]
+    [ids, HANDOFF_CLASS_RULES.fcPipelines, HANDOFF_CLASS_RULES.autoWent]
   );
   for (const x of r.rows) {
     const pipelineId = Number(x.pipeline_id), statusId = Number(x.status_id);
@@ -1264,6 +1269,7 @@ export async function handoffDealStates(dealIds: readonly number[]): Promise<Map
       pipelineId, statusId,
       cls: managerDealClass({ pipelineId, statusId, closed: x.closed, writtenOff: x.written_off }, HANDOFF_CLASS_RULES),
       price: Math.round(Number(x.price ?? 0)),
+      closedDay: x.closed_day, autoDay: x.auto_day,
     });
   }
   return out;
