@@ -285,9 +285,10 @@ test("#852 ВИБІРКА: лідген за кожною з 4 ознак і п�
   assert.equal(FIRST_TOUCH_RULE.talkMinSec, 15);
   await c.raw.query("INSERT INTO teams(id,name) VALUES (8520,'Продаж 852'),(8521,'Лідогенерація 852') ON CONFLICT DO NOTHING");
   await c.raw.query("INSERT INTO managers(id,name,team_id) VALUES (85200,'Продавець',8520),(85210,'Лідген',8521) ON CONFLICT DO NOTHING");
+  // client_source 'uts.ua' — рекламна за правилом Звіту НАВІТЬ з міткою лідгену (на проді таких 6 із 334).
   const deal = (id: number, key: string, mgr: number, ch: string) =>
-    c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel,manager_id)
-      VALUES ($1,$2,8921932,1,'2026-09-25 09:00:00+03',$3,$4,$5)`, [id, `D${String(id)}`, key, ch, mgr]);
+    c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel,manager_id,client_source)
+      VALUES ($1,$2,8921932,1,'2026-09-25 09:00:00+03',$3,$4,$5,'uts.ua')`, [id, `D${String(id)}`, key, ch, mgr]);
   const call = (u: string, at: string, sec: number, mgr: number, key: string) =>
     c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
       VALUES ($1,$2,'out','ANSWERED',$3,$4,$5,$6,'https://rec/x')`, [u, at, sec, sec + 5, mgr, "38" + key]);
