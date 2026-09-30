@@ -114,6 +114,9 @@ test("#1080f РОУТ: виконавець не закриває (403 з іме
     // ── 5. «ПРИЙМАЄ»: не учасник за canTouchTask, але закриває й повертає ──
     assert.equal((await patch("yulia", id, { title: "перейменую" })).code, 403,
       "🔴 «Приймає» отримав право правити задачу цілком, а не лише статус");
+    // 🪞 Власна папка — можна: група особиста й доступу не змінює.
+    const yGroup = (await call("POST", "/groups", { who: "yulia", body: { name: "Прийняти" } })).payload as unknown as { id: number };
+    assert.equal((await patch("yulia", id, { groupId: yGroup.id })).code, 204, "🔴 «Приймає» не може покласти задачу у власну папку");
     assert.equal((await patch("yulia", id, { status: "ball_on_executor" })).code, 204, "🔴 «Приймає» не може повернути в роботу");
     assert.equal((await patch("exec", id, { status: "ready_for_approval" })).code, 204);
     const closed = await patch("yulia", id, { status: "done" });

@@ -635,6 +635,8 @@ async function canSeeTaskById(
 // з-під нагляду — ведучий бачить задачу незалежно від папки. Заборона тут
 // означала б «класифікуй свої 1×1 задачі — 403», тобто відмову на безпечній дії.
 const O2O_SUBJECT_ALLOWED = new Set(["comments", "status", "groupId"]);
+/** Що «Приймає», який не є учасником задачі, може змінити в ній PATCH-ем. */
+const REVIEWER_ALLOWED = new Set(["status", "reviewerId", "groupId"]);
 /** Повний доступ до задачі з 1×1 (обходить замок субʼєкта): автор (ведучий), адмін
  *  (тепер і СЕО/ОД — scopeCompatRole), або наскрізний 1×1 (HR за правом). Субʼєкту —
  *  лише коментарі й статус, крім 'done'. */
@@ -688,12 +690,13 @@ tasksRouter.patch("/:id", async (req, res) => {
   /**
    * ✅ «ПРИЙМАЄ» НЕ Є УЧАСНИКОМ ЗАДАЧІ, АЛЕ СТАТУС РУХАЄ. Межа `canTouchTask` його не
    * пускає (і не мусить: назву, дедлайн чи виконавця він не править), тож для нього
-   * окремий вхід — рівно статус і сам «Приймає» (передати приймання іншому).
+   * окремий вхід — рівно статус, сам «Приймає» (передати приймання іншому) і власна
+   * папка: група особиста й доступу не змінює (та сама логіка, що `O2O_SUBJECT_ALLOWED`).
    */
   const reviewed = REVIEWED_TASK_TYPES.has(before.taskType);
   const rights = statusRights(viewer, before);
   const asReviewerOnly = reviewed && rights.canChange && effectiveReviewer(before) === auth.userId
-    && Object.keys(parsed.data).every((k) => k === "status" || k === "reviewerId");
+    && Object.keys(parsed.data).every((k) => REVIEWER_ALLOWED.has(k));
   if (!o2oFull) {
     if (!mayTouch(viewer, before) && !asReviewerOnly) {
       return res.status(403).json({ error: "Немає доступу до цієї задачі" });
@@ -730,7 +733,7 @@ tasksRouter.patch("/:id", async (req, res) => {
   if (parsed.data.reviewerId !== undefined) {
     if (!reviewed) return res.status(400).json({ error: "«Приймає» є лише у звичайних задач" });
     if (!canChangeReviewer(viewer, before)) {
-      return res.status(403).json({ error: "Змінити «Приймає» може автор, сам «Приймає» або адмін" });
+      return res.status(403).json({ error: "Змінити «Приймає» може сам «Приймає», адмін або автор, який не виконує задачу" });
     }
     if (parsed.data.reviewerId !== null && !(await activeUserExists(parsed.data.reviewerId))) {
       return res.status(400).json({ error: "Акаунт «Приймає» не знайдено" });

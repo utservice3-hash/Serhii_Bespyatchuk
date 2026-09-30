@@ -56,7 +56,10 @@ export function StatusPicker({
     const r = btnRef.current?.getBoundingClientRect();
     if (!r) return;
     const vw = window.innerWidth, vh = window.innerHeight;
-    const popW = 240, popH = popRef.current?.offsetHeight ?? 320;
+    // Оцінка висоти до монтування — з реальної повної висоти меню (9 пунктів, 3 групи
+    // і підпис «Закрити може: …» ≈ 440 px). Стара оцінка 320 ставила меню внизу
+    // картки так, що нижні пункти — саме «Готово» з причиною — виходили за екран.
+    const popW = 240, popH = popRef.current?.offsetHeight ?? 460;
     // Не вилазимо за правий край; якщо знизу не влазить — відкриваємось вгору.
     const left = Math.max(8, Math.min(r.left, vw - popW - 8));
     const top = r.bottom + 6 + popH > vh - 8 && r.top - popH - 6 > 8

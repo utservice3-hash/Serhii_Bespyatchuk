@@ -1585,7 +1585,7 @@ export function TasksSection({
                           ))}
                         </select>
                       ) : (
-                        <span style={{ fontSize: 13 }} title="Змінити «Приймає» може автор, сам «Приймає» або адмін">
+                        <span style={{ fontSize: 13 }} title="Змінити «Приймає» може сам «Приймає», адмін або автор, який не виконує задачу">
                           {openTask.reviewerName ?? "—"}
                         </span>
                       )}
