@@ -45,7 +45,13 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
   const nextId = day === today ? dayRows.find((r) => r.attended == null && (r.interview_time ?? "99:99") >= now)?.id : undefined;
   const unmarked = (r: HiringScheduleRow) => r.attended == null && (r.interview_date < today || (r.interview_date === today && !!r.interview_time && r.interview_time < now));
 
-  const save = async (r: HiringScheduleRow, patch: Record<string, unknown>) => {
+  /**
+   * Повертає `true`, лише коли сервер зберіг. 🔴 Хто показує СВІЙ «успіх» після `save` — мусить дивитись
+   * на цей результат: раніше `move`/`clearMark` показували «перенесено» / «позначку знято» одразу після
+   * червоної помилки й перекривали її (30.09.2026, тримає `#1104`). `announceMove: false` — коли
+   * перенесення оголошує сам викликач, щоб не було двох повідомлень про одне.
+   */
+  const save = async (r: HiringScheduleRow, patch: Record<string, unknown>, opts?: { announceMove?: boolean }): Promise<boolean> => {
     try {
       const res = await patchHiringInterview(r.id, patch);
       if (res.repeat) {
@@ -54,11 +60,12 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
           { error: res.repeat.status === "black" });
       }
       if ("responsible" in patch && typeof patch.responsible === "string") LS.set("responsible", patch.responsible);
-      if ("interviewDate" in patch && patch.interviewDate !== day) toast(`Співбесіду перенесено на ${dm(String(patch.interviewDate))}`);
+      if ("interviewDate" in patch && patch.interviewDate !== day && opts?.announceMove !== false) toast(`Співбесіду перенесено на ${dm(String(patch.interviewDate))}`);
       load();
       if ("source" in patch || "responsible" in patch) onMetaStale();
       if ("vacancyId" in patch) toast("Вакансію привʼязано");
-    } catch (e) { toast(hiringError(e), { error: true }); load(); }
+      return true;
+    } catch (e) { toast(hiringError(e), { error: true }); load(); return false; }
   };
 
   const nextTime = () => {
@@ -83,7 +90,7 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
    * рухається: це факт дня, а не план. Помилковий рядок прибирається «Видалити» — воно скасовне.
    */
   const move = async (r: HiringScheduleRow, date: string, time: string) => {
-    await save(r, { interviewDate: date, interviewTime: time });
+    if (!(await save(r, { interviewDate: date, interviewTime: time }, { announceMove: false }))) return;
     const to = `${date.slice(8, 10)}.${date.slice(5, 7)}${time ? ` ${time}` : ""}`;
     toast(`${r.full_name || "Рядок"}: перенесено на ${to}`, { action: { label: "Відкрити той день", run: () => setDay(date) } });
   };
@@ -95,7 +102,7 @@ export function HiringSchedule({ meta, toast, onMetaStale }: { meta: HiringMeta;
    * правило «повернути останню зміну», що й кнопка в картці кандидата. Тримає #691.
    */
   const clearMark = async (r: HiringScheduleRow) => {
-    await save(r, { attended: null });
+    if (!(await save(r, { attended: null }))) return;
     if (!r.candidate_id) return;
     try {
       const card = await fetchHiringCard(r.candidate_id);

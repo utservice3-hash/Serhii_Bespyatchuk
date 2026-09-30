@@ -1,5 +1,7 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import type { AuthPayload } from "../../../auth";
+import { useToast } from "../../../components/Toasts";
+import { commitOptimistic, failureReason } from "../../../actionFeedback";
 import {
   saveReceivableInvoiceNote, fetchReceivableInvoices, triggerReceivablesSync,
   fetchManagerOptions, type ManagerOption,
@@ -177,6 +179,7 @@ export function ReceivablesSection({
   onEditorsChange?: (n: number) => void;
   onRefresh?: () => void;
 }) {
+  const toast = useToast();
   const [syncing, setSyncing] = useState(false);
   const refreshFrom1c = async () => {
     setSyncing(true);
@@ -222,30 +225,30 @@ export function ReceivablesSection({
     /**
      * Оптимістично оновлюємо кеш і зберігаємо на бекенді.
      *
-     * 🧾 БОРГ, НАЗВАНИЙ ЧЕСНО: перечитування ПІСЛЯ збереження тут НЕМАЄ. Раніше цей
-     * коментар обіцяв «потім тихо перечитуємо» — у коді такого не було жодного разу,
-     * тобто коментар описував намір, а не поведінку. Наслідок: якщо збереження впало
-     * (`.catch(() => {})` ковтає помилку), екран і далі показує оптимістичне значення,
-     * і людина вважає зміну збереженою.
-     * ⚠️ УМОВА ПОВЕРНЕННЯ: щойно зʼявиться скарга «зміна не збереглась» — дописуємо
-     * перечитування. Робити це зараз означало б змінити поведінку в проході, який
-     * лагодить втрату чернетки, а не поведінку збереження.
+     * ✅ БОРГ ЗАКРИТО 30.09.2026 (`#1102`): раніше `.catch(() => {})` ковтав помилку, і екран показував
+     * незбережене значення як збережене. Тепер при помилці рядок повертається до того, що було, а причина
+     * відмови — червоним повідомленням. Перечитування після УСПІХУ досі немає: сервер пише рівно те, що ми
+     * показали, тож розійтись їм нема з чого.
      */
-    setInvCache((c) => {
-      const list = c[clientKey];
-      if (!Array.isArray(list)) return c;
-      return {
-        ...c,
-        [clientKey]: list.map((x) => ((x.invoiceNo ?? "") === invoiceNo ? { ...x, ...("dueDate" in patch ? { dueDate: patch.dueDate ?? null } : {}), ...("comment" in patch ? { comment: patch.comment ?? null } : {}) } : x)),
-      };
-    });
     const cur = invCache[clientKey];
     const row = Array.isArray(cur) ? cur.find((x) => (x.invoiceNo ?? "") === invoiceNo) : undefined;
-    saveReceivableInvoiceNote({
-      clientKey, invoiceNo,
-      dueDate: "dueDate" in patch ? patch.dueDate ?? null : row?.dueDate ?? null,
-      comment: "comment" in patch ? patch.comment ?? null : row?.comment ?? null,
-    }).catch(() => {});
+    void commitOptimistic({
+      apply: () => setInvCache((c) => {
+        const list = c[clientKey];
+        if (!Array.isArray(list)) return c;
+        return {
+          ...c,
+          [clientKey]: list.map((x) => ((x.invoiceNo ?? "") === invoiceNo ? { ...x, ...("dueDate" in patch ? { dueDate: patch.dueDate ?? null } : {}), ...("comment" in patch ? { comment: patch.comment ?? null } : {}) } : x)),
+        };
+      }),
+      save: () => saveReceivableInvoiceNote({
+        clientKey, invoiceNo,
+        dueDate: "dueDate" in patch ? patch.dueDate ?? null : row?.dueDate ?? null,
+        comment: "comment" in patch ? patch.comment ?? null : row?.comment ?? null,
+      }),
+      revert: () => setInvCache((c) => ({ ...c, [clientKey]: cur })),
+      onError: (e) => toast(`Рахунок ${invoiceNo}: не збережено — ${failureReason(e, "помилка сервера")}. Повернуто попереднє значення.`, { error: true }),
+    });
   };
 
   const today = new Date().toISOString().slice(0, 10);

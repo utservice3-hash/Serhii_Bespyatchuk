@@ -97,9 +97,6 @@ textarea.hr-c { resize: vertical; min-height: 28px; }
 .hr-kv .k { color: var(--text-muted); padding-top: 6px; }
 .hr-hist { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; }
 .hr-hist li { margin: 0 0 6px; }
-.hr-toast { position: fixed; right: 16px; bottom: 16px; background: var(--sidebar-bg); color: #fff; padding: 10px 14px; border-radius: var(--r-xl); font-size: 13px; z-index: 2800; display: flex; gap: 12px; align-items: center; max-width: 420px; }
-.hr-toast.err { background: var(--danger); }
-.hr-toast button { background: transparent; color: #fff; border: 1px solid rgba(255, 255, 255, .5); border-radius: var(--r-md); padding: 2px 8px; cursor: pointer; }
 .hr-note { border-radius: var(--r-lg); padding: 8px 12px; font-size: 12.5px; background: var(--info-bg); color: var(--info); margin-top: 10px; }
 
 @media (max-width: 760px) {

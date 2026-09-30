@@ -22,7 +22,8 @@ test("#690 РОЗКЛАД: рядок можна перенести й вида�
     assert.ok(src.includes(need), `🔴 у «Розкладі» немає «${need}»`);
   // Межа ЗМІСТОВА: тіло `move` — від його оголошення до наступного `const`, а не «N рядків» (правило 9).
   const move = src.slice(src.indexOf("const move = async"), src.indexOf("const remove = async"));
-  assert.ok(move.includes("save(r, { interviewDate: date, interviewTime: time })"),
+  // Третій аргумент `save` — лише як оголосити успіх (`announceMove`, 30.09.2026), запис той самий.
+  assert.match(move, /\bsave\(r, \{ interviewDate: date, interviewTime: time \}(?:, \{ announceMove: false \})?\)/,
     "🔴 перенесення не йде тим самим записом рядка (`save` з датою й часом)");
   assert.ok(!/patchHiringInterview\(/.test(move), "🔴 перенесення шле власний запит повз `save`");
   const remove = src.slice(src.indexOf("const remove = async"), src.indexOf("const badge ="));

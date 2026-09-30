@@ -10,7 +10,8 @@ type CardFile = Omit<BaFile, "fromClaim"> & { fromClaim?: boolean };
  * історія, закриття Escape. Винесено з `BusinessAssistantSection.tsx` у проході 2 (29.09.2026),
  * щоб «Облік техніки» (договори до видачі) брав той самий блок документів, а не копію.
  */
-export type Toast = (text: string, opts?: { error?: boolean; action?: { label: string; run: () => void } }) => void;
+import type { Toast } from "../../../components/Toasts";
+export type { Toast };
 export const money = (n: number | null) => (n == null ? "—" : `${n.toLocaleString("uk-UA", { maximumFractionDigits: 2 })} ₴`);
 export const fmtDate = (d: string | null) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : "—");
 export const fmtTs = (ts: string) => new Date(ts).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
