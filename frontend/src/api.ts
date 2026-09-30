@@ -378,7 +378,7 @@ export interface AiCallCardResp {
   managerChannel: number | null; durationSec: number | null; nextOutboundAt: string | null;
   /** Термін і стан кожної обіцянки — у порядку `result.promises`; обіцянки клієнта → `null`. */
   promiseChecks: ({ deadline: string; basis: string; state: PromiseStateT } | null)[];
-  callsAfter: { at: string; billsec: number; direction: "in" | "out" }[];
+  callsAfter: { at: string; billsec: number; direction: "in" | "out"; managerName: string | null; byPromiser: boolean }[];
 }
 export async function fetchAiCallCard(uniqueid: string): Promise<AiCallCardResp> {
   const { data } = await api.get<AiCallCardResp>(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}`);

@@ -190,15 +190,17 @@ async function callsKnownUntil(db: Db, now: Date): Promise<Date> {
 }
 
 /** Дзвінки на номери рядків від найранішої розмови — ОДНИМ запитом, а не по запиту на рядок. */
-async function callsByPhone(db: Db, phones: readonly string[], since: Date): Promise<Map<string, CallFact[]>> {
-  const out = new Map<string, CallFact[]>();
+async function callsByPhone(db: Db, phones: readonly string[], since: Date): Promise<Map<string, (CallFact & { managerName: string | null })[]>> {
+  const out = new Map<string, (CallFact & { managerName: string | null })[]>();
   if (!phones.length) return out;
-  const r = await db.query<{ client_phone: string; calldate: Date; billsec: number; call_type: string }>(
-    `SELECT client_phone, calldate, billsec, call_type FROM ringostat_calls
-      WHERE client_phone = ANY($1::text[]) AND calldate >= $2 ORDER BY calldate`, [[...phones], since.toISOString()]);
+  const r = await db.query<{ client_phone: string; calldate: Date; billsec: number; call_type: string; manager_id: number | null; manager_name: string | null }>(
+    `SELECT rc.client_phone, rc.calldate, rc.billsec, rc.call_type, rc.manager_id, m.name AS manager_name
+       FROM ringostat_calls rc LEFT JOIN managers m ON m.id = rc.manager_id
+      WHERE rc.client_phone = ANY($1::text[]) AND rc.calldate >= $2 ORDER BY rc.calldate`, [[...phones], since.toISOString()]);
   for (const x of r.rows) {
     const list = out.get(x.client_phone) ?? [];
-    list.push({ at: new Date(x.calldate), billsec: Number(x.billsec), callType: x.call_type });
+    list.push({ at: new Date(x.calldate), billsec: Number(x.billsec), callType: x.call_type,
+      managerId: x.manager_id == null ? null : Number(x.manager_id), managerName: x.manager_name });
     out.set(x.client_phone, list);
   }
   return out;
@@ -207,14 +209,15 @@ async function callsByPhone(db: Db, phones: readonly string[], since: Date): Pro
 export interface PromiseCheck { deadline: string; basis: DeadlineBasis; state: PromiseState }
 
 /** Термін і стан кожної обіцянки менеджера рядка — у порядку `result.promises` (клієнтські → `null`). */
-function checkPromises(res: AnalysisResult, calledAt: string, billsec: number, calls: readonly CallFact[], knownUntil: Date): (PromiseCheck | null)[] {
+function checkPromises(res: AnalysisResult, calledAt: string, billsec: number, calls: readonly CallFact[], knownUntil: Date,
+  promiserId: number | null): (PromiseCheck | null)[] {
   const end = callEndOf(calledAt, billsec);
   const after = calls.filter((c) => c.at.getTime() > end.getTime());
   return res.promises.map((p) => {
     if (p.who !== "manager" || !p.channel || !p.deadline_kind) return null;
     const mp = managerPromisesOf({ ...res, promises: [p] })[0];
     const { deadline, basis } = promiseDeadline(mp, end);
-    return { deadline: deadline.toISOString(), basis, state: promiseState(mp, end, deadline, after, knownUntil) };
+    return { deadline: deadline.toISOString(), basis, state: promiseState(mp, end, deadline, after, knownUntil, promiserId) };
   });
 }
 
@@ -287,7 +290,7 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
     raw.forEach((x, i) => {
       if (rows[i].managerPromises === 0 || !x.result) return;
       const phone = phoneOf.get(x.uniqueid);
-      const checks = checkPromises(x.result, rows[i].calledAt, rows[i].billsec, phone ? calls.get(phone) ?? [] : [], known);
+      const checks = checkPromises(x.result, rows[i].calledAt, rows[i].billsec, phone ? calls.get(phone) ?? [] : [], known, rows[i].managerId);
       rows[i].promiseState = worstPromiseState(checks.filter((c): c is PromiseCheck => c != null).map((c) => c.state));
     });
   }
@@ -316,7 +319,7 @@ export interface AiCallCard {
   /** Термін і стан кожної обіцянки — у порядку `result.promises`; обіцянки клієнта → `null`. */
   promiseChecks: (PromiseCheck | null)[];
   /** Дзвінки на номер після розмови (до 12, за 7 днів) — щоб стан обіцянки можна було перевірити очима. */
-  callsAfter: { at: string; billsec: number; direction: "in" | "out" }[];
+  callsAfter: { at: string; billsec: number; direction: "in" | "out"; managerName: string | null; byPromiser: boolean }[];
 }
 
 /**
@@ -365,9 +368,10 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
   const after = raw.client_phone
     ? (await callsByPhone(db, [raw.client_phone], end)).get(raw.client_phone) ?? [] : [];
   const nowD = new Date();
-  const promiseChecks = done && raw.result ? checkPromises(raw.result, row.calledAt, row.billsec, after, await callsKnownUntil(db, nowD)) : [];
+  const promiseChecks = done && raw.result ? checkPromises(raw.result, row.calledAt, row.billsec, after, await callsKnownUntil(db, nowD), row.managerId) : [];
   const callsAfter = after.filter((c) => c.at.getTime() > end.getTime() && c.at.getTime() <= end.getTime() + 7 * 86_400_000)
-    .slice(0, 12).map((c) => ({ at: c.at.toISOString(), billsec: c.billsec, direction: IN_TYPES.has(c.callType) ? "in" as const : "out" as const }));
+    .slice(0, 12).map((c) => ({ at: c.at.toISOString(), billsec: c.billsec, direction: IN_TYPES.has(c.callType) ? "in" as const : "out" as const,
+      managerName: c.managerName, byPromiser: row.managerId != null && c.managerId === row.managerId }));
   const { kommoId: _k, dealCreatedAt: _d, ...rest } = row;
   const mc = done && raw.result ? raw.result.manager_channel : null;
   return {

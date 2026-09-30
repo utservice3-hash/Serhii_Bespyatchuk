@@ -97,7 +97,7 @@ function Analysis({ c }: { c: AiCallCardResp }) {
             ? <span style={{ color: "var(--text-muted)" }}>за 7 днів — жодного</span>
             : <span style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 13 }}>
                 {c.callsAfter.map((x, i) => (
-                  <span key={i}>{fmtFull(x.at)} · {x.direction === "in" ? "клієнт нам" : "ми клієнту"} · {x.billsec > 0 ? `розмова ${mmss(x.billsec)}` : "без розмови"}</span>
+                  <span key={i}>{fmtFull(x.at)} · {x.direction === "in" ? "клієнт нам" : "ми клієнту"}{x.direction === "out" ? ` · ${x.managerName ?? "лінія без менеджера"}${x.byPromiser ? " (той, хто обіцяв)" : " — не рахується: обіцяв інший"}` : ""} · {x.billsec > 0 ? `розмова ${mmss(x.billsec)}` : "без розмови"}</span>
                 ))}
               </span>}
         </div>

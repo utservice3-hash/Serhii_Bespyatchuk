@@ -354,7 +354,7 @@ test("#838 КАРТКА ДЗВІНКА: рядок відкриває панел
  * закриттям» — межа 24 год ПО ОБИДВА боки: 29 год — так, 23 год — ні (П3).
  * 🧨 Червоніє, якщо прапорець піде на відповідального, дзвінок колеги не зарахується чи зсунеться поріг тиші.
  */
-test("#792 ЕКРАН AI · ЖИВА СХЕМА: не передзвонив — на тому, хто обіцяв; колега рятує; Кваліфікація й «Дубль»; тиша 24 год", async (t) => {
+test("#851 ЕКРАН AI · ЖИВА СХЕМА: не передзвонив — на тому, хто обіцяв; колега НЕ рятує, сам — рятує; Кваліфікація й «Дубль»; тиша 24 год", async (t) => {
   const c = await ctx(t); if (!c) return;
   const { aiCallsList } = await import("./callAiScreen.js");
   const deal = (id: number, key: string, pipeline: number, status: number, closed: string | null, reject: string | null) =>
@@ -376,7 +376,7 @@ test("#792 ЕКРАН AI · ЖИВА СХЕМА: не передзвонив —
   await analysed("y1", 30);
   await deal(8811, "0508800011", 8921928, 143, "2026-09-25 16:00:00+03", "Дубль");
   await call("y2", "2026-09-24 10:00:00+03", 60, 9011, "380508800011");
-  await call("y2b", "2026-09-24 10:10:00+03", 30, 9021, "380508800011");                // передзвонив колега
+  await call("y2b", "2026-09-24 10:10:00+03", 30, 9021, "380508800011");                // передзвонив колега — не рахується (30.09)
   await analysed("y2", 30);
   await deal(8812, "0508800012", 8921932, 143, "2026-09-25 09:00:00+03", null);          // 23 год після розмови
   await call("y3", "2026-09-24 10:00:00+03", 60, 9011, "380508800012");
@@ -384,19 +384,23 @@ test("#792 ЕКРАН AI · ЖИВА СХЕМА: не передзвонив —
   const rows = (await aiCallsList(c.db, FAKE_AD, "2026-09-24", "2026-09-24", NOW, {})).rows;
   const by = new Map(rows.map((r) => [r.uniqueid, r]));
   assert.deepEqual([by.get("y1")?.promiseState, by.get("y1")?.managerId], ["broken", 9011], "🔴 «не передзвонив» — не на тій, хто обіцяла");
-  assert.equal(by.get("y2")?.promiseState, "kept_talk", "🔴 дзвінок колеги до терміну не зараховано");
+  assert.equal(by.get("y2")?.promiseState, "broken", "🔴 дзвінок колеги до терміну виконав чужу обіцянку (рішення 30.09.2026: лише той, хто обіцяв)");
   assert.deepEqual([by.get("y2")?.pipelineGroup, by.get("y2")?.rejectReason], ["qualification", "Дубль"], "🔴 Кваліфікація чи причина відмови загубились");
   assert.equal(by.get("y1")?.pipelineGroup, "full");
   assert.equal(by.get("y2")?.silentBeforeClose, true, "🔴 29 год без нашого дзвінка — не «тиша перед закриттям»");
   assert.equal(by.get("y3")?.silentBeforeClose, false, "🔴 23 год — уже «тиша» (поріг 24 год зсунувся)");
   assert.equal(by.get("y1")?.silentBeforeClose, null, "відкрита угода — не застосовно, а не «тиші немає»");
 
-  // #795 на живій схемі: синк Ringostat застряг до межі «термін + 2 год» → «чекає», а не «не передзвонив».
-  await c.raw.query(`INSERT INTO job_runs(name, last_success_at) VALUES ('syncRingostatCalls', '2026-09-24 11:30:00+03')
+  // на живій схемі: синк Ringostat застряг до терміну → «чекає», а не «не передзвонив».
+  await c.raw.query(`INSERT INTO job_runs(name, last_success_at) VALUES ('syncRingostatCalls', '2026-09-24 10:20:00+03')
     ON CONFLICT (name) DO UPDATE SET last_success_at = EXCLUDED.last_success_at`);
   const lag = new Map((await aiCallsList(c.db, FAKE_AD, "2026-09-24", "2026-09-24", NOW, {})).rows.map((r) => [r.uniqueid, r]));
   assert.equal(lag.get("y1")?.promiseState, "pending", "🔴 дзвінки ще не синхронізовано за межу, а вже «не передзвонив»");
   await c.raw.query("DELETE FROM job_runs WHERE name = 'syncRingostatCalls'");
+  // дзеркало: та, що обіцяла, передзвонила через добу — «запізнилась» (без межі), а не «не передзвонила».
+  await call("y1b", "2026-09-25 11:00:00+03", 40, 9011, "380508800010");
+  const late = new Map((await aiCallsList(c.db, FAKE_AD, "2026-09-24", "2026-09-24", NOW, {})).rows.map((r) => [r.uniqueid, r]));
+  assert.equal(late.get("y1")?.promiseState, "late", "🔴 передзвін того, хто обіцяв, через добу — не «запізнився»");
 
   // #799 на живій схемі: розпізнано, слів немає → «Розмова без тексту», а не вічне «Аналіз у черзі».
   await c.raw.query(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments) VALUES ('y3','elevenlabs','scribe_v2','done','[]'::jsonb)`);
