@@ -10783,6 +10783,8 @@ dashboardRouter.get("/ai-calls/:uniqueid/recording", async (req, res) => {
     managerChannel: card.managerChannel, durationSec: card.durationSec, nextOutboundAt: card.nextOutboundAt,
     promiseChecks: card.promiseChecks, callsAfter: card.callsAfter,
     typeHistory: card.typeHistory, canEditType: canEditType(auth.roleKey),
+    noteRights: { price: canWriteNote(auth.roleKey, "price"), missed: canWriteNote(auth.roleKey, "missed") },
+    canListen: transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES),
   });
 });
 

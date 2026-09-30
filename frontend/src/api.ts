@@ -355,9 +355,14 @@ export interface AiCallRowT {
   /** Тип розмови (рубрика v2, ТЗ 30.09.2026) і куди вона йде: звіт чи «Виключені». */
   conversationType: ConversationTypeT | null; typeConfidence: number | null; typeReason: string | null; priceValue: string | null;
   inReport: boolean; typeCheck: boolean; typeOverride: { isCargo: boolean; byName: string | null; at: string } | null;
+  /** «Чому не озвучено ціну» і «Опрацьовано» (ТЗ 30.09.2026). */
+  priceNote: AiNoteT | null; missedNote: AiNoteT | null;
 }
+export interface AiNoteT { text: string; byName: string | null; at: string }
 export interface AiCallsResp {
   period: { from: string; to: string }; truncated: boolean; rows: AiCallRowT[];
+  /** Менеджер «Виключених» не бачить (ТЗ 30.09.2026 п.7) — сервер їх і не віддає. */
+  canSeeExcluded: boolean;
   silence: { minGapHours: number; normFrom: string | null };
 }
 export async function fetchAiCalls(params: { from: string; to: string }): Promise<AiCallsResp> {
@@ -385,6 +390,41 @@ export interface AiCallCardResp {
   /** Журнал ручних змін типу (від найновішої) і чи може ЦЕЙ користувач змінювати тип. */
   typeHistory: { isCargo: boolean; byName: string | null; at: string }[];
   canEditType: boolean;
+  /** Хто що може писати й чи можна слухати запис — вирішує сервер. */
+  noteRights: { price: boolean; missed: boolean };
+  canListen: boolean;
+}
+/** Коментар: `price` — «Чому не озвучено ціну», `missed` — «Опрацьовано». Порожній текст прибирає. */
+export async function putAiCallNote(uniqueid: string, kind: "price" | "missed", text: string): Promise<void> {
+  await api.put(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/note`, { kind, text });
+}
+/** Запис розмови — байтами через наш сервер (з авторизацією), а не прямим посиланням Ringostat. */
+export async function fetchAiCallRecording(uniqueid: string): Promise<Blob> {
+  const { data } = await api.get<Blob>(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/recording`, { responseType: "blob" });
+  return data;
+}
+/** 📊 Звіт тімліда «Перший дотик» (ТЗ 30.09.2026 п.6). */
+export interface AiManagerLineT {
+  managerId: number | null; managerName: string; teamName: string | null;
+  accepted: number; analysed: number; priceVoiced: number; pricePct: number | null; noPriceNoComment: number;
+  agreements: number; done: number; late: number; missed: number;
+}
+export interface AiPoolRowT {
+  uniqueid: string; calledAt: string; managerId: number | null; managerName: string | null; teamName: string | null;
+  clientPhone: string | null; kommoIds: number[]; state: AiCallState; summary: string | null;
+  priceDiscussed: boolean | null; priceValue: string | null; priceNote: AiNoteT | null; missedNote: AiNoteT | null;
+  promiseState: PromiseStateT | null; objections: number; typeCheck: boolean;
+  flags: { analysed: boolean; noPrice: boolean; noComment: boolean; missed: boolean; banner: boolean };
+}
+export interface AiTeamReportResp {
+  period: { from: string; to: string }; truncated: boolean;
+  managers: AiManagerLineT[]; total: AiManagerLineT;
+  banner: { total: number; byManager: { managerId: number | null; managerName: string; count: number }[] };
+  rows: AiPoolRowT[];
+}
+export async function fetchAiTeamReport(params: { from: string; to: string; teamId?: number; managerId?: number }): Promise<AiTeamReportResp> {
+  const { data } = await api.get<AiTeamReportResp>("/dashboard/ai-calls/team-report", { params });
+  return data;
 }
 /** «Це вантаж» / «Це не вантаж» — ручний тип розмови (тімлід своєї команди, адмін). */
 export async function setAiCallType(uniqueid: string, isCargo: boolean): Promise<void> {

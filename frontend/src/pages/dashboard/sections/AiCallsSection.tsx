@@ -136,8 +136,8 @@ export function AiCallsSection() {
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 8 }}>
           <div className="hr-seg2" role="tablist" aria-label="Звіт чи виключені">
             <button type="button" role="tab" aria-selected={tab === "report"} className={tab === "report" ? "on" : ""} onClick={() => setTab("report")}>Звіт · {rows.length}</button>
-            <button type="button" role="tab" aria-selected={tab === "excluded"} className={tab === "excluded" ? "on" : ""} onClick={() => setTab("excluded")}
-              title="Розмови, які модель упевнено визнала не запитом на перевезення: перевізники, продавці, пошук роботи, помилка номером, розмови немає">Виключені · {excludedCount}</button>
+            {d.canSeeExcluded && <button type="button" role="tab" aria-selected={tab === "excluded"} className={tab === "excluded" ? "on" : ""} onClick={() => setTab("excluded")}
+              title="Розмови, які модель упевнено визнала не запитом на перевезення: перевізники, продавці, пошук роботи, помилка номером, розмови немає">Виключені · {excludedCount}</button>}
           </div>
           {tab === "excluded" && (
             <label style={{ fontSize: 13, display: "flex", gap: 4, alignItems: "center" }}>Тип

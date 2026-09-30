@@ -609,3 +609,23 @@ test("#863 КОМЕНТАРІ Й ЗАПИС: права за видом коме
   await setCallNote(c.db, "x1", "price", "   ", { userId: 2, name: "Тімлід Т" }, new Date("2026-09-30T11:00:00Z"));
   assert.equal((await aiCallCard(c.db, "x1", true, {}))?.row.priceNote, null, "🔴 порожній текст не прибрав коментар");
 });
+
+/**
+ * #864 — ЗВІТ ТІМЛІДА НА ЕКРАНІ (ТЗ 30.09.2026, п.6–7): блок стоїть у «Звіті» з тим самим періодом і командою; пул і банер
+ * фільтруються ПРАПОРЦЯМИ СЕРВЕРА (жодної другої копії предикатів на фронті); у картці коментарі й запис — лише з дозволу
+ * сервера; менеджер «Виключених» не бачить.
+ * 🧨 Червоніє, якщо переписати фільтр пулу на фронті, показати кнопку запису без дозволу чи вкладку «Виключені» менеджеру.
+ */
+test("#864 ЗВІТ ТІМЛІДА НА ЕКРАНІ: блок у «Звіті» з тим самим періодом, пул і банер — прапорці сервера, коментарі й запис — з дозволу сервера", () => {
+  const rp = readFileSync(FE("pages/dashboard/sections/ReportPlanSection.tsx"), "utf8");
+  assert.match(rp, /<FirstTouchReportCard from=\{selectedPeriod\.from\} to=\{selectedPeriod\.to\} teamId=\{teamIds\.length === 1 \? teamIds\[0\] : undefined\} \/>/, "🔴 блоку «Перший дотик» у «Звіті» немає або період інший");
+  const card = readFileSync(FE("pages/dashboard/sections/FirstTouchReportCard.tsx"), "utf8");
+  for (const f of ["r.flags.noPrice", "r.flags.noComment", "r.flags.missed", "r.flags.banner"]) assert.ok(card.includes(f), `🔴 фільтр пулу чи банер не з прапорця сервера: ${f}`);
+  assert.ok(!/priceDiscussed === false|promiseState === "broken"/.test(card), "🔴 предикат звіту переписано на фронті — друга копія правила");
+  assert.match(card, /fetchAiTeamReport\(\{ from, to, teamId \}\)/);
+  const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
+  assert.match(drw, /\{c\.canListen && c\.durationSec != null && <RecordingPlayer/, "🔴 запис показується без дозволу сервера");
+  assert.match(drw, /const can = c\.noteRights\[kind\];/, "🔴 право писати коментар — не з сервера");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /\{d\.canSeeExcluded && <button type="button" role="tab"/, "🔴 менеджер бачить вкладку «Виключені»");
+});

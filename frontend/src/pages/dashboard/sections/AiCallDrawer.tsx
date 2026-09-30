@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { fetchAiCallCard, setAiCallType, hiringError, type AiCallCardResp, type AiQuoted } from "../../../api";
+import { fetchAiCallCard, setAiCallType, putAiCallNote, fetchAiCallRecording, hiringError, type AiCallCardResp, type AiQuoted } from "../../../api";
 import { STATE_UI, TONE_COLOR, PROMISE_UI, speakerOf, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, TYPE_LABEL, type AiCallState, type DrawerTab, type Tone } from "../aiCallsView";
 import "./hiring.css";
 
@@ -166,6 +166,70 @@ function TypeBlock({ c, onChanged }: { c: AiCallCardResp; onChanged: () => void 
   );
 }
 
+/**
+ * 📝 Коментарі (ТЗ 30.09.2026): «Чому не озвучено ціну» — коли ціни в розмові не було; «Опрацьовано» — коли менеджер
+ * не передзвонив (після нього банер у звіті цю розмову не показує). Хто пише — вирішує сервер (`noteRights`).
+ */
+function NoteField({ c, kind, title, hint, onSaved }: { c: AiCallCardResp; kind: "price" | "missed"; title: string; hint: string; onSaved: () => void }) {
+  const cur = kind === "price" ? c.row.priceNote : c.row.missedNote;
+  const can = c.noteRights[kind];
+  const [text, setText] = useState(cur?.text ?? "");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  useEffect(() => { setText(cur?.text ?? ""); }, [cur?.text]);
+  const save = async () => {
+    setBusy(true); setMsg(null);
+    try { await putAiCallNote(c.row.uniqueid, kind, text); onSaved(); } catch (e) { setMsg(hiringError(e)); }
+    setBusy(false);
+  };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13.5 }}>
+      <b>{title}</b>
+      {cur ? <span>{cur.text} <span style={{ color: "var(--text-muted)", fontSize: 12 }}>· {cur.byName ?? "невідомо хто"}, {fmtFull(cur.at)}</span></span>
+        : <span style={{ color: "var(--warn-fg, #8a5a00)", fontSize: 13 }}>{hint}</span>}
+      {can && (
+        <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+          <textarea id={`ai-note-${kind}`} className="hr-inp" rows={2} value={text} onChange={(e) => setText(e.target.value)} style={{ flex: 1 }} maxLength={2000} />
+          <button type="button" className="hr-btn p" disabled={busy || text === (cur?.text ?? "")} onClick={() => void save()}>{busy ? "Зберігаю…" : "Зберегти"}</button>
+        </div>
+      )}
+      {msg && <span style={{ color: "var(--danger, #b3261e)", fontSize: 13 }}>{msg}</span>}
+    </div>
+  );
+}
+
+function NotesBlock({ c, onSaved }: { c: AiCallCardResp; onSaved: () => void }) {
+  const needPrice = c.result != null && c.result.price.discussed === false;
+  const needMissed = c.row.promiseState === "broken";
+  if (!needPrice && !needMissed) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px" }}>
+      {needPrice && <NoteField c={c} kind="price" title="Чому не озвучено ціну" hint="Ціни в розмові не було, а причину ще не написали." onSaved={onSaved} />}
+      {needMissed && <NoteField c={c} kind="missed" title="Опрацьовано (не передзвонив)" hint="Менеджер не передзвонив. Поки тут порожньо, розмова стоїть у червоному банері звіту." onSaved={onSaved} />}
+    </div>
+  );
+}
+
+/** 🎧 Запис розмови — байтами через наш сервер; слухати можуть ті, кому видно текст (у своєму скоупі). */
+function RecordingPlayer({ uniqueid }: { uniqueid: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  useEffect(() => () => { if (src) URL.revokeObjectURL(src); }, [src]);
+  const load = async () => {
+    setBusy(true); setMsg(null);
+    try { setSrc(URL.createObjectURL(await fetchAiCallRecording(uniqueid))); } catch (e) { setMsg(hiringError(e)); }
+    setBusy(false);
+  };
+  return src ? <audio controls src={src} style={{ width: "100%" }} />
+    : (
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <button type="button" className="hr-btn" disabled={busy} onClick={() => void load()}>{busy ? "Завантажую запис…" : "▶ Прослухати запис"}</button>
+        {msg && <span style={{ color: "var(--danger, #b3261e)", fontSize: 13 }}>{msg}</span>}
+      </div>
+    );
+}
+
 export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: string; onClose: () => void; onChanged?: () => void }) {
   const [c, setC] = useState<AiCallCardResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -228,6 +292,8 @@ export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: strin
             </div>
 
             <TypeBlock c={c} onChanged={() => { setRev((x) => x + 1); onChanged?.(); }} />
+            <NotesBlock c={c} onSaved={() => { setRev((x) => x + 1); onChanged?.(); }} />
+            {c.canListen && c.durationSec != null && <RecordingPlayer uniqueid={c.row.uniqueid} />}
 
             {tabs.length > 1 && (
               <div className="hr-seg2" role="tablist" aria-label="Розділи картки" style={{ alignSelf: "flex-start" }}>
