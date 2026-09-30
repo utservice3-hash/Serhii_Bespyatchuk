@@ -10752,7 +10752,10 @@ dashboardRouter.get("/carrier-calls/meta", async (req, res) => {
   // «AI проти людини» поіменно (хто вирішив, яка угода) — лише керівництву: це рішення людей з усіх команд.
   const lead = carrierIsLeadership(req.auth!);
   res.json({ job: m.job, transcripts: m.transcripts, analyses: m.analyses, spend: m.spend, caps: m.caps, close: m.close, agreement: m.agreement,
-    agreementRows: lead ? (await carrierAgreementRows(pool)).map((r) => ({ ...r, url: kommoLeadUrl(r.kommoId) })) : [] });
+    // Явний перелік полів, а не спред (#17e2).
+    agreementRows: lead ? (await carrierAgreementRows(pool)).map((r) => ({ kommoId: r.kommoId, url: kommoLeadUrl(r.kommoId), uniqueid: r.uniqueid,
+      managerName: r.managerName, aiRole: r.aiRole, aiConfidence: r.aiConfidence, decision: r.decision, otherType: r.otherType, by: r.by,
+      byRole: r.byRole, at: r.at, agreed: r.agreed })) : [] });
 });
 
 /**
