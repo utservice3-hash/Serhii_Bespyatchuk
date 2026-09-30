@@ -13,7 +13,7 @@ import { pill } from "./CarrierDealPanel";
 
 type Col = "total" | "clients" | "carriersAuto" | "carriersManual" | "otherAuto" | "otherManual" | "unsorted" | "overdue";
 const COLS: readonly { key: Col; label: string; match: (r: CarrierDealT) => boolean }[] = [
-  { key: "total", label: "Усього", match: () => true },
+  { key: "total", label: "Усього", match: (r) => r.category !== "no_talk" },
   { key: "clients", label: "Клієнти", match: (r) => r.category === "client" },
   { key: "carriersAuto", label: "Перевізники · AI", match: (r) => r.category === "carrier" && r.source !== "human" },
   { key: "carriersManual", label: "Перевізники · вручну", match: (r) => r.category === "carrier" && r.source === "human" },
@@ -61,7 +61,7 @@ export function CarrierReportCard({ from, to, managerId, teamId }: { from: strin
   const head = (
     <h2 className="chart-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
       Дзвінки на мобільні
-      <InfoHint text="Угоди етапу «Дзвінки на мобільні», що лишились після фільтра CRM, — хто це виявився: клієнт, перевізник чи інше; AI — упевнений вердикт, вручну — рішення менеджера, тімліда чи керівника. «Не розібрано» — на перевірці, помилка або AI ще слухає; «прострочено» — не розібрані до кінця робочого дня (18:00, Пн–Пт). «Прибрав фільтр» — окремо, у «Усього» не входить. Облік — з 30.09.2026 12:48. Клік по числу — список угод." />
+      <InfoHint text="Угоди етапу «Дзвінки на мобільні», що лишились після фільтра CRM, — хто це виявився: клієнт, перевізник чи інше; AI — упевнений вердикт, вручну — рішення менеджера, тімліда чи керівника. «Не розібрано» — на перевірці, помилка або AI ще слухає; «прострочено» — не розібрані до кінця робочого дня (18:00, Пн–Пт). «Без розмови» (коротше 10 с — закрито «Немає зв'язку», не аналізуємо) і «Прибрав фільтр» — окремо, у «Усього» не входять. Облік — з 30.09.2026 12:48. Клік по числу — список угод." />
     </h2>
   );
   if (err) return <div className="chart-card">{head}<p style={{ margin: 0, color: "var(--danger)" }}>{err}</p></div>;
@@ -91,6 +91,7 @@ export function CarrierReportCard({ from, to, managerId, teamId }: { from: strin
           <tr style={{ ...muted, fontSize: 12.5 }}>
             <th style={{ textAlign: "left", padding: "6px 10px" }}>Менеджер</th>
             {COLS.map((c) => <th key={c.key} style={num}>{c.label}</th>)}
+            <th style={num}>Без розмови</th>
             <th style={num}>Прибрав фільтр</th>
           </tr>
         </thead>
@@ -103,24 +104,27 @@ export function CarrierReportCard({ from, to, managerId, teamId }: { from: strin
                   <tr key={m.managerId ?? "none"} style={{ borderTop: "1px solid var(--border)" }}>
                     <td style={{ padding: "6px 10px" }}>{m.managerName ?? <span style={muted}>без менеджера</span>}</td>
                     {cellBtn(m, { who: "manager", id: m.managerId }, m.managerName ?? "без менеджера")}
+                    <td style={{ ...num, ...muted }}>{m.noTalk}</td>
                     <td style={{ ...num, ...muted }}>{m.filterRemoved ?? 0}</td>
                   </tr>
                 ))}
-                {t && (
+                {t && mgrs.length > 1 && (
                   <tr style={{ borderTop: "1px solid var(--border)", background: "var(--surface-2)", fontWeight: 600 }}>
                     <td style={{ padding: "6px 10px" }}>Разом · {t.teamName ?? "поза командами"}</td>
                     {cellBtn(t, { who: "team", id: t.teamId }, t.teamName ?? "поза командами")}
+                    <td style={{ ...num, ...muted }}>{t.noTalk}</td>
                     <td style={{ ...num, ...muted }}>{mgrs.reduce((s, m) => s + (m.filterRemoved ?? 0), 0)}</td>
                   </tr>
                 )}
               </Fragment>
             );
           })}
-          <tr style={{ borderTop: "2px solid var(--border)", fontWeight: 700 }}>
+          {rep.managers.length > 1 && <tr style={{ borderTop: "2px solid var(--border)", fontWeight: 700 }}>
             <td style={{ padding: "6px 10px" }}>{teamsShown || rep.managers.length > 1 ? "Разом" : "Разом по команді"}</td>
             {cellBtn(rep.total, { who: "all", id: null }, "Разом")}
+            <td style={{ ...num, ...muted }}>{rep.total.noTalk}</td>
             <td style={{ ...num, ...muted }}>{rep.filterRemoved}</td>
-          </tr>
+          </tr>}
         </tbody>
       </table>
       {pick && (

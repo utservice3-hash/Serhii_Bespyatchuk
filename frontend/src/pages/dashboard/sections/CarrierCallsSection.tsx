@@ -40,7 +40,13 @@ function Verdict({ r }: { r: CarrierDealT }) {
   );
 }
 
-export function CarrierCallsSection() {
+/**
+ * `roleKey` — лише для ВИГЛЯДУ (межу тримає сервер): менеджер не бачить службового рядка (витрати, режими), колонки
+ * «Менеджер» (там завжди він) і точності AI; тімлід — службового рядка й точності. Рішення Романа 30.09.2026.
+ */
+export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | null }) {
+  const isManager = roleKey === "manager";
+  const isLead = roleKey !== "manager" && roleKey !== "team_lead";
   const today = todayKyiv();
   const [nav, setNav] = useState<PeriodState>(() => ({ mode: "week", anchor: today, focusDay: today, rangeFrom: today, rangeTo: today }));
   const { from, to } = periodOf(nav);
@@ -107,7 +113,7 @@ export function CarrierCallsSection() {
     <>
       <div className="chart-card">
         {header}
-        {meta && (
+        {meta && isLead && (
           <p style={{ margin: "0 0 10px", fontSize: 12.5, ...muted }}
             title={`Усього AI за місяць: розпізнавання ${usd(meta.spend.stt)}, аналіз ${usd(meta.spend.analysis)}. У черзі: ${String((meta.transcripts.queued ?? 0) + (meta.analyses.queued ?? 0))}.`}>
             Оновлено {meta.job?.lastSuccessAt ? fmtTime(meta.job.lastSuccessAt) : "—"}
@@ -121,7 +127,8 @@ export function CarrierCallsSection() {
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>
           {[
             ["Прибрав фільтр", k.removedByFilter, "Фільтр CRM закрив як «Перевізник» (Lardi, відомі перевізники). AI їх не слухає."],
-            ["Після фільтра", k.leftAfterFilter, `Лишились на етапі після фільтра — усі вкладки разом. Без розмови: чекають ${String(k.waitingTalk)}, без розмови від 10 с ${String(k.noTalk)}.`],
+            ["Після фільтра", k.leftAfterFilter - k.noTalk, `Лишились на етапі після фільтра й мали розмову — усі вкладки разом. Чекають розмову: ${String(k.waitingTalk)}.`],
+            ["Без розмови", k.noTalk, "Розмови від 10 с не було (пропущений або короткий дзвінок): не аналізуємо, дашборд закриває в CRM як «Немає зв'язку»."],
           ].map(([l, v, h]) => (
             <div key={String(l)} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px", minWidth: 130, flex: "1 1 130px" }}>
               <div style={{ fontSize: 22, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{Number(v).toLocaleString("uk-UA")}</div>
@@ -170,7 +177,7 @@ export function CarrierCallsSection() {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
               <thead>
                 <tr style={{ textAlign: "left", ...muted, fontSize: 12.5 }}>
-                  <th style={cell}>Угода</th><th style={cell}>Розмова</th><th style={cell}>Менеджер</th><th style={cell}>Хто це</th>
+                  <th style={cell}>Угода</th><th style={cell}>Розмова</th>{!isManager && <th style={cell}>Менеджер</th>}<th style={cell}>Хто це</th>
                   <th style={cell}>Чому</th><th style={cell}>У CRM</th>
                 </tr>
               </thead>
@@ -192,7 +199,7 @@ export function CarrierCallsSection() {
                             ? <>{fmtTime(r.calledAt)}<div style={{ fontSize: 12, ...muted }}>{r.direction === "in" ? "вхідний" : "вихідний"} · {mmss(r.billsec ?? 0)}{r.talkNo === 2 ? " · друга розмова" : ""}</div></>
                             : <span style={muted}>{r.dealState === "no_talk" ? "без розмови від 10 с" : "ще немає"}</span>}
                         </td>
-                        <td style={cell}>{r.managerName ?? <span style={muted}>невідомий</span>}{r.teamName && <div style={{ fontSize: 12, ...muted }}>{r.teamName}</div>}</td>
+                        {!isManager && <td style={cell}>{r.managerName ?? <span style={muted}>невідомий</span>}{r.teamName && <div style={{ fontSize: 12, ...muted }}>{r.teamName}</div>}</td>}
                         <td style={cell}><Verdict r={r} /></td>
                         <td style={{ ...cell, maxWidth: 380 }}>
                           {r.human?.note ? <span>«{r.human.note}»</span>
@@ -205,7 +212,7 @@ export function CarrierCallsSection() {
                           <div>{dealStatusLabel(r.crm.statusId, r.crm.rejectReason)}</div>
                         </td>
                       </tr>
-                      {isOpen && <tr><td colSpan={6} style={{ padding: "0 10px 12px", background: "var(--surface-2)" }}>
+                      {isOpen && <tr><td colSpan={isManager ? 5 : 6} style={{ padding: "0 10px 12px", background: "var(--surface-2)" }}>
                         <div className="cq-panel"><CarrierDealPanel deal={r} onDecided={() => onDecided(r.kommoId)} onChanged={() => setRefresh((n) => n + 1)} /></div>
                       </td></tr>}
                     </Fragment>
@@ -216,7 +223,7 @@ export function CarrierCallsSection() {
           )}
       </div>
 
-      {meta && meta.agreement.length > 0 && (
+      {meta && isLead && meta.agreement.length > 0 && (
         <details className="chart-card" style={{ fontSize: 13 }}>
           <summary style={{ cursor: "pointer", fontWeight: 600 }}>AI проти людини — точність за рішеннями після прослуховування</summary>
           <table style={{ marginTop: 8, borderCollapse: "collapse", fontSize: 13 }}>

@@ -1166,7 +1166,7 @@ export function Dashboard() {
       )}
       {section === "carrier-calls" && (
         /* 🚚 «Перевізники за розмовою». СТАТИЧНИЙ імпорт свідомо (гейт #225): lazy розбив би бандл на чанки. */
-        <CarrierCallsSection />
+        <CarrierCallsSection roleKey={auth?.roleKey ?? null} />
       )}
 
       {section === "receivables" && (
