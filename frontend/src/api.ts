@@ -182,6 +182,10 @@ export interface LeadgenHandoffMoney {
   regular: LeadgenMoneyCell;
   /** «Очікування» = оплачено + зона «Очікуємо» (похідне, у тотожність передач не входить). */
   waiting: LeadgenMoneyCell;
+  /** «Успішні» за правилом Ярослава: угоди, що стали «Успішна угода» В ПЕРІОДІ, з передач будь-якої давності. */
+  earned: LeadgenMoneyCell;
+  /** «Очікування» за правилом Ярослава: авто поїхало В ПЕРІОДІ, зараз «Оплата отримана» / зона «Очікуємо». */
+  pending: LeadgenMoneyCell;
 }
 /** Стан угоди менеджера з передачі — ЗАРАЗ. `none` — угоди менеджера не знайшлося; `same` — ця передача
  *  привела в угоду, вже пораховану іншою передачею (гроші не двоїмо); `regular` — угода постійного клієнта. */
@@ -193,6 +197,8 @@ export interface LeadgenHandoffDeal {
   cls: LeadgenDealClass; price: number; closedDay: string | null; planPayDay: string | null;
   /** Причина відмови — лише для програних (у решті поле буває заповнене залишком з угоди Продзвону). */
   reason: string | null; url: string | null;
+  /** Дата «авто поїхало»; `inPeriod: false` — передано раніше за період, у період потрапили гроші. */
+  autoDay: string | null; inPeriod: boolean;
 }
 /** Розкривний список «Гроші з передач»: ті самі правила, що `handoffMoney` у /leadgen-stats; `totals` мусять із ним збігатися. */
 export interface LeadgenHandoffDealsResp { from: string; to: string; managerId: number | null; deals: LeadgenHandoffDeal[]; totals: LeadgenHandoffMoney }

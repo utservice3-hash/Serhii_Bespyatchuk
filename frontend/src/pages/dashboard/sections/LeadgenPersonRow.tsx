@@ -170,12 +170,12 @@ export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, moneyB
           <Stat v={row.opr} l="ОПР" />
           <Stat v={row.quotes} l="Прорахунки" />
           <Stat v={row.warming} l="Підігрів" />
-          <span style={{ textAlign: "center", minWidth: 64 }} title="Сума успішних угод з лідів, переданих у цьому періоді (стан — зараз; без постійних клієнтів)">
-            <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.success.sum ? "var(--ok)" : MUTED }}>{money ? formatAmount(money.success.sum) : "—"}</span>
+          <span style={{ textAlign: "center", minWidth: 64 }} title="Угоди з передач цього лідгена (будь-коли), що стали «Успішна угода» в цьому періоді; без постійних клієнтів">
+            <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.earned.sum ? "var(--ok)" : MUTED }}>{money ? formatAmount(money.earned.sum) : "—"}</span>
             <span style={{ display: "block", fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>Успішні з передач ₴</span>
           </span>
-          <span style={{ textAlign: "center", minWidth: 64 }} title="Оплата отримана + зона «Очікуємо» угод із лідів, переданих у цьому періоді (без постійних клієнтів)">
-            <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.waiting.sum ? "var(--warn)" : MUTED }}>{money ? formatAmount(money.waiting.sum) : "—"}</span>
+          <span style={{ textAlign: "center", minWidth: 64 }} title="Угоди з передач цього лідгена, у яких авто поїхало в цьому періоді, а зараз вони оплачені чи в зоні «Очікуємо»">
+            <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.pending.sum ? "var(--warn)" : MUTED }}>{money ? formatAmount(money.pending.sum) : "—"}</span>
             <span style={{ display: "block", fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>Очікування ₴</span>
           </span>
         </span>
@@ -252,8 +252,8 @@ function Buckets({ row, rows, money, grain, period }: {
                 <td style={cell}>{n(w.calls)}</td><td style={cell}>{n(w.leads)}</td><td style={cell}>{n(w.opr)}</td>
                 <td style={cell}>{n(w.quotes)}</td><td style={cell}>{n(w.warming)}</td>
                 <td style={cell}>{c == null ? "—" : c > 100 ? `${pct1(c)} ⚠` : pct1(c)}</td>
-                <td style={cell}>{mb ? formatAmount(mb.success.sum) : "—"}</td>
-                <td style={cell}>{mb ? formatAmount(mb.waiting.sum) : "—"}</td>
+                <td style={cell}>{mb ? formatAmount(mb.earned.sum) : "—"}</td>
+                <td style={cell}>{mb ? formatAmount(mb.pending.sum) : "—"}</td>
               </tr>
             );
           })}

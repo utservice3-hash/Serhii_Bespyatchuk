@@ -398,8 +398,8 @@ function Details({ d, grain, period, today, open, onToggle }: {
                 <tr>
                   <th style={{ ...head, textAlign: "left" }}>{grain === "day" ? "День" : "Тиждень"}</th>
                   <th style={head}>Дзвінки</th><th style={head}>Ліди</th><th style={head}>ОПР</th><th style={head}>Прорахунки</th><th style={head}>Підігрів</th>
-                  <th style={head} title="Гроші з лідів, переданих у цю одиницю: успішні угоди менеджера (стан — зараз)">Успішні ₴</th>
-                  <th style={head} title="Оплата отримана + зона «Очікуємо» угод із передач цієї одиниці">Очікування ₴</th>
+                  <th style={head} title="Угоди з передач лідгенів, що стали «Успішна угода» в цю одиницю (передача — будь-коли)">Успішні ₴</th>
+                  <th style={head} title="Угоди з передач лідгенів, у яких авто поїхало в цю одиницю, а зараз вони оплачені чи в зоні «Очікуємо»">Очікування ₴</th>
                 </tr>
               </thead>
               <tbody>
@@ -414,8 +414,8 @@ function Details({ d, grain, period, today, open, onToggle }: {
                       <td style={cell}>{w.opr.toLocaleString("uk-UA")}</td>
                       <td style={cell}>{w.quotes.toLocaleString("uk-UA")}</td>
                       <td style={cell}>{w.warming.toLocaleString("uk-UA")}</td>
-                      <td style={cell}>{mb ? formatAmount(mb.success.sum) : "—"}</td>
-                      <td style={cell}>{mb ? formatAmount(mb.waiting.sum) : "—"}</td>
+                      <td style={cell}>{mb ? formatAmount(mb.earned.sum) : "—"}</td>
+                      <td style={cell}>{mb ? formatAmount(mb.pending.sum) : "—"}</td>
                     </tr>
                   );
                 })}
@@ -611,27 +611,23 @@ function Glance({ d, cmp, cmpData, cmpErr, who, whoName, whoAbsent, periodLabel,
  */
 function HandoffMoneyCol({ m }: { m: LeadgenHandoffMoney | undefined }) {
   const hint = "Передача — угода, яку лідген кваліфікував у Продзвоні. З неї Kommo створює угоду менеджеру (той самий клієнт, у межах 2 хв від передачі). "
-    + "Гроші — за ДАТОЮ ПЕРЕДАЧІ: угоди з лідів, переданих у цьому періоді, в якому б місяці вони не закрились. Тому це НЕ «Дохід лідогену» КВП і не «отримано» в блоці «Канал «лідоген» загалом»: там — отримані кошти (успіх + оплата отримана) угод із каналом «лідоген», за датою оплати. "
+    + "«Успішні» — угоди менеджера, які стали «Успішна угода» В ЦЬОМУ ПЕРІОДІ, з передач будь-якої давності (правило Ярослава: прорахунок могли передати й пів року тому — сума рахується в місяць успіху). «Очікування» — угоди, у яких авто ПОЇХАЛО в цьому періоді, а зараз вони «Оплата отримана» чи в зоні «Очікуємо». Це НЕ «Дохід лідогену» КВП і не «отримано» в блоці «Канал «лідоген» загалом» (там — угоди з каналом «лідоген» за датою оплати). "
     + "Стан угоди — ЗАРАЗ: успішна (142), оплата отримана, у зоні «Очікуємо» Звіту (від виставлення рахунку до очікуємо оплату), ще в роботі (не закрита грошима й не програна — зокрема «Кваліфіковано» у Кваліфікації), програна (143, у Кваліфікації — «Не цільові»/«Сміття», або борг по ній списано). "
-    + `Сума — бюджет (price) угоди менеджера. В успішних цього періоду він проставлений у ${m ? m.success.priced : "—"} з ${m ? m.success.n : "—"}; у програних і тих, що в роботі, здебільшого ні — тому для них головне число — кількість. `
+    + `Сума — бюджет (price) угоди менеджера. В успішних цього періоду він проставлений у ${m ? m.earned.priced : "—"} з ${m ? m.earned.n : "—"}. `
+    + "Рядок унизу — що сталося з передачами САМЕ цього періоду (стан зараз): скільки передано, програно, ще в роботі. "
     + "«Передано» — те саме, що «Прорахунки» (входи в «Кваліфіковано» Продзвону); це не «Передані» КВП (там — реєстр бота). "
     + "Передачі без угоди менеджера показано окремо: їхні гроші не привʼязати. "
     + "«Очікування» — оплата отримана + зона «Очікуємо»: гроші, що вже в дорозі, але ще не успіх. "
     + "Угоди ПОСТІЙНИХ клієнтів у гроші лідгена не йдуть: на дату передачі в клієнта вже 2+ успішні перевезення, і останнє — менше ніж 3 місяці тому (правило Ярослава). Минуло 3+ місяці — клієнт знову «лідгенів».";
   if (!m) return <div><div style={lab}>💰 Гроші з переданих лідів</div><div style={{ ...val, color: MUTED }}>—</div></div>;
-  const line = (label: string, c: { n: number; sum: number }, color?: string) =>
-    <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{label}: <b style={{ color: color ?? "var(--text)" }}>{formatAmount(c.sum)}</b> · {c.n.toLocaleString("uk-UA")} {plural(c.n, "угода", "угоди", "угод")}</div>;
   return (
     <div>
       <div style={lab}>💰 Гроші з переданих лідів <InfoHint text={hint} /></div>
-      <div style={{ fontSize: 11, color: MUTED, margin: "1px 0 2px" }}>за датою передачі · стан — зараз · не «Дохід лідогену» КВП</div>
-      <div style={val}>{formatAmount(m.success.sum)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>успішні · {m.success.n.toLocaleString("uk-UA")} {plural(m.success.n, "угода", "угоди", "угод")}</small></div>
-      <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{formatAmount(m.waiting.sum)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>очікування · {m.waiting.n.toLocaleString("uk-UA")} {plural(m.waiting.n, "угода", "угоди", "угод")}</small></div>
-      {m.paid.n > 0 && line("з них оплачено, ще не закрито", m.paid, "var(--info)")}
-      {line("з них у зоні «Очікуємо»", m.expect, "var(--warn)")}
-      <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>ще в роботі: <b style={{ color: "var(--text)" }}>{m.work.n.toLocaleString("uk-UA")} {plural(m.work.n, "угода", "угоди", "угод")}</b> · бюджет є у {m.work.priced.toLocaleString("uk-UA")}: {formatAmount(m.work.sum)}</div>
+      <div style={{ fontSize: 11, color: MUTED, margin: "1px 0 2px" }}>успішні — за датою успіху · очікування — за датою авто · з передач будь-якого місяця</div>
+      <div style={val}>{formatAmount(m.earned.sum)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>успішні · {m.earned.n.toLocaleString("uk-UA")} {plural(m.earned.n, "угода", "угоди", "угод")}</small></div>
+      <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{formatAmount(m.pending.sum)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>очікування · {m.pending.n.toLocaleString("uk-UA")} {plural(m.pending.n, "угода", "угоди", "угод")}</small></div>
       <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>
-        передано (= прорахунки) {m.handoffs.toLocaleString("uk-UA")} · програно {m.lost.toLocaleString("uk-UA")}
+        передачі цього періоду: передано (= прорахунки) {m.handoffs.toLocaleString("uk-UA")} · вже успішні {m.success.n.toLocaleString("uk-UA")} · в роботі {m.work.n.toLocaleString("uk-UA")} · програно {m.lost.toLocaleString("uk-UA")}
         {m.unlinked > 0 && <> · без угоди менеджера {m.unlinked.toLocaleString("uk-UA")}</>}{m.sameDeal > 0 && <> · у ту саму угоду {m.sameDeal}</>}
         {m.regular.n > 0 && <> · постійні клієнти (не рахуються) {m.regular.n.toLocaleString("uk-UA")} на {formatAmount(m.regular.sum)}</>}
       </div>
@@ -713,7 +709,7 @@ function Others({ d, who }: { d: LeadgenStatsResp; who: number | "all" }) {
                   <td style={{ padding: "7px 10px", color: MUTED }}>{r.teamName ?? "поза командою"}</td>
                   <td style={cell}>{nf(r.calls)}</td><td style={cell}>{nf(r.leads)}</td><td style={cell}>{nf(r.opr)}</td>
                   <td style={cell}>{nf(r.quotes)}</td><td style={cell}>{nf(r.warming)}</td>
-                  <td style={cell} title={m ? `передано ${m.handoffs} · успішних ${m.success.n}` : undefined}>{m ? formatAmount(m.success.sum) : "—"}</td>
+                  <td style={cell} title={m ? `успішних за період ${m.earned.n} · передано в періоді ${m.handoffs}` : undefined}>{m ? formatAmount(m.earned.sum) : "—"}</td>
                 </tr>
               );
             })}

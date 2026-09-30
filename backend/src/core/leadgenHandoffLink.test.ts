@@ -399,8 +399,8 @@ test("#683b ЖИВИЙ SQL: стан угоди менеджера — успі�
  * `leadgenHandoffMoney` того місяця, у відділі й у команді. Фікстура тримає обидві пастки ревʼю:
  * людина 4 дзвонить у травні без жодної події стадій у травні; угоду менеджера привели передачі
  * 30.04 23:59:30 і 01.05 00:00:30 за Києвом (різні місяці, одне вікно звʼязку).
- * 🧨 САБОТАЖ: в `assembleTrend` ростер на все вікно (`true` → `false`) → червоніє; дедуп над
- * передачами всього вікна → червоніє; у `leadgenTrend` передачі лише за місяць `to` → червоніє.
+ * 🧨 САБОТАЖ: в `assembleTrend` ростер на все вікно (`true` → `false`) → червоніє; у `leadgenTrend` передачі
+ * лише за місяць `to` → червоніє. Дедуп угоди менеджера з 30.09.2026 — над УСІМ доменом (`#1095`).
  */
 test("#682b ЖИВИЙ SQL: місяць тренду == /leadgen-stats і гроші з передач того місяця — з дзвінками, у відділі й команді", async (t) => {
   if (!client) return t.skip(skip ?? "кластер не піднявся");
@@ -457,7 +457,11 @@ test("#682b ЖИВИЙ SQL: місяць тренду == /leadgen-stats і гр�
     assert.ok(!may.rows.some((r) => r.managerId === 4), "фікстура: у травні людина 4 без подій");
     const money = (ms: string) => trend.money.find((b) => b.bucket === ms)!.totals;
     assert.equal(money("2026-04-01").success.n, 1, "фікстура: квітнева передача веде в успішну угоду");
-    assert.equal(money("2026-05-01").success.n, 1, "🔴 травнева передача в ту саму угоду стала «тією самою» — дедуп вийшов за місяць");
+    // З 30.09.2026 (правило Ярослава, `#1095`): угода належить ПЕРШІЙ передачі — квітневій; травнева — «та сама»,
+    // а «Успішні» рахуються в місяць успіху (20.05), не в місяць передачі.
+    assert.equal(money("2026-05-01").sameDeal, 1, "🔴 травнева передача в угоду квітневої не стала «тією самою»");
+    assert.equal(money("2026-04-01").earned.n, 0, "🔴 успіх 20.05 потрапив у квітень (місяць передачі)");
+    assert.equal(money("2026-05-01").earned.n, 1, "🔴 успіх 20.05 не потрапив у травень (місяць успіху)");
   }
   assert.ok(compared >= 5, "фікстура вироджена — порівнювати нема чого");
   const jun = (await stats.leadgenTrend("2026-06-30", 3, { teamId: null, managerId: null })).money[2].totals;
@@ -703,4 +707,34 @@ test("#1094b ЖИВИЙ SQL: угода менеджера — спершу за
     assert.equal(r.link_prio == null ? null : Number(r.link_prio), prio, `🔴 ${k}: звʼязано не тим шляхом`);
   }
   assert.equal(rows.length, 4, "🔴 гілки звʼязку розмножили передачі");
+});
+
+/**
+ * #1095b — ДАТИ ГРОШЕЙ НА ЖИВОМУ SQL: справжній `money.handoffDealStates` дає дату закриття й дату «авто
+ * поїхало» = ПЕРШИЙ вхід у «Авто працює» чи далі (обидві воронки повного циклу), без «фантомного» 142 на
+ * початку шляху й без етапів ДО авто («Виставлення рахунку»). Наскрізь: передача липня 2025, успіх
+ * серпня → «Успішні» серпня, не липня.
+ * 🧨 САБОТАЖ: у `HANDOFF_CLASS_RULES.autoWent` додати 142 → дата авто зсувається на фантомний 142 → червоніє.
+ */
+test("#1095b ЖИВИЙ SQL: дата успіху й дата авто для грошей; передача липня з успіхом серпня — у серпні", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { money, stats } = await core();
+  await client!.query(`INSERT INTO managers (id, name, team_id) VALUES (72,'Лідген Гроші',1) ON CONFLICT DO NOTHING`);
+  const at = utc("2025-07-07T09:00:00");
+  const pz = await deal({ manager: 72, pipeline: PZ, ck: "m-1" }); await ev(pz, PZ, Q, at);
+  const md = await deal({ manager: 3, pipeline: FC[0], status: Q, ck: "m-1", created: sec(at, 20) });
+  await client!.query(`UPDATE deals SET closed_at_kommo = $2, price = 8000 WHERE kommo_id = $1`, [md, utc("2025-08-20T10:00:00")]);
+  await ev(md, FC[0], Q, utc("2025-07-08T08:00:00"));            // фантомний 142 на початку шляху
+  await ev(md, FC[0], 100274340, utc("2025-07-20T08:00:00"));    // «Виставлення рахунку» — ще не авто
+  await ev(md, FC[0], 69716300, utc("2025-08-05T08:00:00"));     // «Авто працює» — дата авто
+  await ev(md, FC[0], Q, utc("2025-08-20T10:00:00"));
+  const st = (await money.handoffDealStates([md])).get(md);
+  assert.equal(st?.closedDay, "2025-08-20", "🔴 дата успіху не з closed_at за Києвом");
+  assert.equal(st?.autoDay, "2025-08-05", "🔴 дата авто — не перший вхід у «Авто працює» чи далі (фантомний 142 / рахунок?)");
+  const aug = await stats.leadgenHandoffMoney("2025-08-01", "2025-08-31", { teamId: null, managerId: 72 });
+  const jul = await stats.leadgenHandoffMoney("2025-07-01", "2025-07-31", { teamId: null, managerId: 72 });
+  assert.deepEqual([aug.totals.earned.n, aug.totals.earned.sum], [1, 8000], "🔴 успіх серпня з липневої передачі не в серпні");
+  assert.equal(jul.totals.earned.n, 0, "🔴 успіх серпня потрапив у липень (місяць передачі)");
+  assert.equal(jul.totals.handoffs, 1, "фікстура: передача — у липні");
+  assert.equal(aug.deals.find((d) => d.pzId === pz)?.inPeriod, false, "🔴 у списку серпня угода не позначена «передано раніше»");
 });

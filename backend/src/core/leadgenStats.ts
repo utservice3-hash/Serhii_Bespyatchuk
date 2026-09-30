@@ -6,7 +6,7 @@ import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery,
 import { FC_PIPELINES, handoffDealStates, clientSuccessHistory } from "./money.js";
 import { stageName } from "./stageNames.js";
 import {
-  handoffView, trendWindow, mergeBucketRows, assembleTrend, handoffDealRow, handoffMoneyBuckets, LINK_BEFORE_SEC, LINK_AFTER_SEC,
+  handoffView, trendWindow, mergeBucketRows, assembleTrend, handoffDealRow, handoffMoneyBuckets, dayInRange, LINK_BEFORE_SEC, LINK_AFTER_SEC,
   type HandoffScope, type LeadgenHandoffMoney, type HandoffLinkInfo, type LeadgenHandoffDeal, type HandoffRowDeps,
   type LeadgenPersonBucketRow, type StageBucketRow, type CallBucketRow, type TrendMoneyBucket,
 } from "./leadgenHandoffRules.js";
@@ -352,13 +352,16 @@ export interface LeadgenHandoffMoneyResult {
 export async function leadgenHandoffMoney(
   from: string, to: string, scope: HandoffScope, grain: "day" | "week" | null = null,
 ): Promise<LeadgenHandoffMoneyResult> {
-  const links = await handoffLinks(from, to);
+  // 💰 Гроші — за правилом Ярослава (30.09.2026): «Успішні» в місяць успіху, «Очікування» — в місяць авто, з
+  // передач БУДЬ-ЯКОЇ давності. Тож домен — уся памʼять журналу до кінця періоду; когорту період звужує сам.
+  const links = await handoffLinks((await firstStageEventDay()) ?? from, to);
   const [states, history] = await Promise.all([
     handoffDealStates(links.flatMap((l) => (l.dealId == null ? [] : [l.dealId]))), historyFor(links)]);
-  const view = handoffView(links, states, scope, history);
+  const inP = dayInRange(from, to);
+  const view = handoffView(links, states, scope, history, inP);
   const deals = view.rows.map((h) =>
     handoffDealRow(h, h.dealId == null ? undefined : states.get(h.dealId), HANDOFF_ROW_DEPS));
-  return { totals: view.totals, byPerson: view.byPerson, deals, buckets: grain ? handoffMoneyBuckets(view.rows, grain) : null };
+  return { totals: view.totals, byPerson: view.byPerson, deals, buckets: grain ? handoffMoneyBuckets(view.rows, grain, inP) : null };
 }
 
 /** Найраніша київська дата подій чотирьох стадій — глибина памʼяті журналу (`null` — подій немає). */
@@ -386,10 +389,11 @@ export interface LeadgenTrendResult {
  */
 export async function leadgenTrend(to: string, months: number, scope: HandoffScope): Promise<LeadgenTrendResult> {
   const w = trendWindow(to, months);
-  const [q, links, firstDay] = await Promise.all([
+  const firstDay = await firstStageEventDay();
+  // Гроші місяця — з передач будь-якої давності (правило Ярослава), тож домен передач — уся памʼять журналу.
+  const [q, links] = await Promise.all([
     bucketQueryRows(w.from, to, "month"),
-    handoffLinks(w.from, to),
-    firstStageEventDay(),
+    handoffLinks(firstDay ?? w.from, to),
   ]);
   const [states, history] = await Promise.all([
     handoffDealStates(links.flatMap((l) => (l.dealId == null ? [] : [l.dealId]))), historyFor(links)]);
