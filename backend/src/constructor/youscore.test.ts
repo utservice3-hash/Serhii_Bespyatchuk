@@ -104,6 +104,9 @@ test("#1161 КЕШ ЄДР: другий пошук без мережі, прос
 
   const u = await lookupRegistry(db, "1234567890", { key: "k", doFetch: fakeFetch({ "/v1/usr/": 202 }, calls), now: t0 });
   assert.equal(u.kind, "updating"); assert.equal(db.rows.has("1234567890"), false, "🔴 «оновлюється» поклали в кеш");
+  const v = await lookupRegistry(db, "11112222", { key: "k", doFetch: fakeFetch({ "/v1/usr/": [200, LEGAL], "/v1/vat/": 202 }, calls), now: t0 });
+  assert.equal(v.kind, "updating", "🔴 ПДВ «оновлюється» прочитано як «не платник» — номер губиться на 30 днів");
+  assert.equal(db.rows.has("11112222"), false, "🔴 картку без номера ПДВ поклали в кеш");
   const n = await lookupRegistry(db, "99999999", { key: "k", doFetch: fakeFetch({}, calls), now: t0 });
   assert.equal(n.kind, "notFound"); assert.equal(db.rows.has("99999999"), false);
 });

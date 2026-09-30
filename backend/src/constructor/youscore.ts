@@ -119,6 +119,10 @@ export async function lookupRegistry(db: Db, code: string, opts: {
     if (usr.status !== 200 || !usr.body) return { kind: "failed", why: `ЄДР відповів ${usr.status}` };
     // ПДВ — друга транзакція; не платник ПДВ (404) чи збій — не причина відмовляти в реквізитах.
     const vat = await get(`/v1/vat/${code}`, key, doFetch).catch(() => ({ status: 0, body: null }));
+    // 🔴 202 від реєстру ПДВ — «оновлюється», а НЕ «не платник». Заміряно на проді 30.09.2026: ЮТС (платник ПДВ)
+    // на першому запиті лишився без номера, а повтор за хвилину віддав його. Кешувати таку картку — на 30 днів
+    // зберегти порожнє поле, тож уся відповідь — «оновлюється», фронт повторить сам.
+    if (vat.status === 202) return { kind: "updating" };
     const card = toCounterparty(code, usr.body, vat.status === 200 ? vat.body : null);
     if (!card.name) return { kind: "failed", why: "ЄДР віддав запис без назви" };
     await db.query(
