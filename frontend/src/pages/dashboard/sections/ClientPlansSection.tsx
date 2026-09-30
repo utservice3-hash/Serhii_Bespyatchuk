@@ -12,6 +12,7 @@ import { RowComment } from "./RowComment";
 import { CreateTaskDialog, CloseTaskDialog, ContactDialog } from "./ReactivationBits";
 import { ClientCardPanel } from "./ClientCardPanel";
 import { ClientContactFileViewer } from "./ClientContactFileViewer";
+import { ReactCycleStatus, ReactCycleButtons, LeadgenPoolPanel } from "./ReactivationCycle";
 
 /**
  * ФАЗА A · «ПОСТІЙНІ КЛІЄНТИ · ПЛАН МІСЯЦЯ» (макет 1).
@@ -201,8 +202,10 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
    * клієнт не додається й не зникає, група рядка приходить із сервера (`tabGroup`, `core/clientTabs.ts`).
    * Усередині «Реактивації» — підфільтр сплячі / втрачені, бо це різні пороги й різна робота.
    */
-  const [tab, setTab] = useState<"all" | "regular" | "react">(fromReact ? "react" : "all");
+  const [tab, setTab] = useState<"all" | "regular" | "react" | "pool">(fromReact ? "react" : "all");
   const [reactSub, setReactSub] = useState<"all" | "sleeping" | "lost">("all");
+  /** 🔁 Рішення по циклу реактивації (ТЗ 22.09, блок 4): чекають · реактивую сам · у пулі. Стан — з сервера. */
+  const [cycleSub, setCycleSub] = useState<"all" | "waiting" | "self" | "pool">("all");
   /** 📅 Тижні згорнуті за замовчуванням (п.3.5): у 663 з 873 рядків вони порожні. Вибір памʼятає браузер. */
   const [weeksOpen, setWeeksOpen] = useState<boolean>(() => {
     try { return window.localStorage.getItem("clientPlans.weeksOpen") === "1"; } catch { return false; }
@@ -295,6 +298,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
     if (tab === "regular" && c.tabGroup === "react") return false;
     if (tab === "react" && c.tabGroup !== "react") return false;
     if (tab === "react" && reactSub !== "all" && c.state !== reactSub) return false;
+    if (tab === "react" && cycleSub !== "all" && c.reactCycle?.status !== cycleSub) return false;
     if (mgrFilter !== "" && c.managerId !== mgrFilter) return false;
     if (reactFilter === "no_talk" && c.lastTalk != null) return false;
     if (reactFilter === "step_overdue" && c.nextStep?.state !== "overdue") return false;
@@ -468,6 +472,13 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           </div>
         </td>
         <td style={S.td}>
+          {/* 🔁 ЦИКЛ РЕАКТИВАЦІЇ (ТЗ 22.09, блок 4, п.4.2–4.3): стан, строк і кнопки — з сервера. */}
+          {c.reactCycle && (
+            <div style={{ marginBottom: 6 }}>
+              <ReactCycleStatus cycle={c.reactCycle} />
+              <ReactCycleButtons clientKey={c.clientKey} cycle={c.reactCycle} onDone={load} onError={setActErr} />
+            </div>
+          )}
           {/* 🔁 Перенесено з вкладки «Реактивація» дослівно. Єдина додана межа —
               активним кнопки НЕМАЄ: задача реактивації ставиться тому, хто перестав
               замовляти, і до злиття вкладок активний клієнт у цьому списку не бував
@@ -726,6 +737,15 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
             {label} <span style={{ fontSize: 12, padding: "1px 7px", borderRadius: 999, background: "#f3f4f6", color: "#374151" }}>{tabCounts[k]}</span>
           </button>
         ))}
+        {/* 🎯 Пул лідгенів (ТЗ 22.09, п.4.2–4.4) — вкладку бачить лише той, кому сервер відкрив пул. */}
+        {data.leadgenPool?.canSee && (
+          <button role="tab" aria-selected={tab === "pool"} onClick={() => setTab("pool")}
+            style={{ padding: "9px 16px", border: "none", borderBottom: `3px solid ${tab === "pool" ? "#6d28d9" : "transparent"}`,
+                     marginBottom: -1, background: "transparent", cursor: "pointer", fontSize: 14,
+                     fontWeight: tab === "pool" ? 700 : 500, color: tab === "pool" ? "#111827" : "#6b7280" }}>
+            🎯 Пул лідгенів
+          </button>
+        )}
       </div>
 
       {/* ── ФІЛЬТРИ + ДІЇ ЦИКЛУ */}
@@ -748,6 +768,17 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         ))}
         {tab === "react" && (
           <>
+            <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}
+              title="Стан рішення по клієнту в поточному циклі реактивації — з сервера">Рішення:</span>
+            {([["all", "усі"], ["waiting", "чекають рішення"], ["self", "реактивую сам"], ["pool", "у пулі лідгенів"]] as const).map(([k, label]) => (
+              <button key={k} onClick={() => setCycleSub(k)}
+                style={{ fontSize: 12, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
+                         border: `1px solid ${cycleSub === k ? "#6d28d9" : "#d1d5db"}`,
+                         background: cycleSub === k ? "#f5f3ff" : "#fff",
+                         color: cycleSub === k ? "#6d28d9" : "#374151" }}>
+                {label}{k !== "all" ? ` · ${data.clients.filter((c) => c.reactCycle?.status === k).length}` : ""}
+              </button>
+            ))}
             <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}>Реактивація:</span>
             {([["all", "усі"], ["sleeping", "сплячі"], ["lost", "втрачені"]] as const).map(([k, label]) => (
               <button key={k} onClick={() => setReactSub(k)}
@@ -845,6 +876,15 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
             style={{ border: "none", background: "transparent", cursor: "pointer", color: "#b91c1c", fontSize: 15 }}>×</button>
         </div>
       )}
+      {tab === "react" && data.reactRules && (
+        <div style={{ ...S.card, marginBottom: 8, fontSize: 12.5, color: "#4b5563", lineHeight: 1.55, borderLeft: "3px solid #6d28d9" }}>
+          <b>Реактивація</b> — клієнти без виставленого рахунку {data.reactRules.quietMonths} повні календарні місяці
+          (з 4-го місяця). Натисніть «🙋 Реактивую сам» або «🎯 Передати лідгенам». Без рахунку й без рішення до кінця
+          місяця клієнт іде в пул лідгенів автоматично; після «Реактивую сам» строк — до кінця наступного місяця.
+          Для тих, хто вже був у реактивації, відлік почався з жовтня 2026 — перша автопередача 01.11.2026.
+        </div>
+      )}
+      {tab === "pool" ? <LeadgenPoolPanel onTaken={load} /> : (
       <div style={{ ...S.card, padding: 0, overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1180 }}>
           <thead>
@@ -910,6 +950,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           )}
         </table>
       </div>
+      )}
 
       {/* 🌉 МІСТОК. Сплячі й втрачені з екрана ЗНИКЛИ (жорсткий поділ) — без цього
           рядка вони зникли б МОВЧКИ, і це читалось би як «клієнти загубились».

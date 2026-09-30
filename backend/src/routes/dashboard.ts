@@ -117,6 +117,8 @@ import * as managerState from "../core/managerState.js";
 import * as clientCalls from "../core/clientCalls.js";
 import * as planBasis from "../core/planBasis.js";
 import * as clientTabs from "../core/clientTabs.js";
+import * as reactCycle from "../core/reactCycle.js";
+import * as reactCycleRules from "../core/reactCycleRules.js";
 import * as clientAliasNames from "../core/clientAliasNames.js";
 import * as categoryRules from "../core/categoryRules.js";
 import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf, kyivToday, isRealDate } from "../core/dates.js";
@@ -5801,6 +5803,15 @@ dashboardRouter.get("/plans-grid", async (req, res) => {
  */
 async function canSeeClient(auth: NonNullable<typeof import("express")["request"]["auth"]>, clientKey: string): Promise<boolean> {
   if (isAdminScope(auth)) return true;
+  const row = await clientOwnerRow(clientKey);
+  if (!row) return false;
+  if (auth.role === "manager") return row.manager_id === auth.managerId;
+  if (auth.role === "team_lead") return row.team_id === auth.teamId;
+  return false;
+}
+
+/** Хто веде клієнта зараз (ефективний менеджер) і його команда — одне джерело для межі й циклу реактивації. */
+async function clientOwnerRow(clientKey: string): Promise<{ manager_id: number; team_id: number | null } | null> {
   const r = await pool.query<{ manager_id: number; team_id: number | null }>(
     `WITH paid AS (
        SELECT d.manager_id, d.closed_at_kommo FROM deals d
@@ -5814,11 +5825,7 @@ async function canSeeClient(auth: NonNullable<typeof import("express")["request"
      SELECT ${effectiveManagerSql("lo", "pm")} AS manager_id, m.team_id
        FROM pm LEFT JOIN loyalty_overrides lo ON lo.client_key = $1
        JOIN managers m ON m.id = ${effectiveManagerSql("lo", "pm")}`, [clientKey]);
-  const row = r.rows[0];
-  if (!row) return false;
-  if (auth.role === "manager") return row.manager_id === auth.managerId;
-  if (auth.role === "team_lead") return row.team_id === auth.teamId;
-  return false;
+  return r.rows[0] ?? null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5943,10 +5950,16 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   const todayKyiv = (await pool.query<{ d: string }>(`SELECT to_char(now() AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS d`)).rows[0].d;
   // 📞 Дзвінки за ОБРАНИЙ місяць (ТЗ 22.09, п.3.3) і 📌 обґрунтування плану цього місяця (там само) —
   // обидва ядром, по тих самих ключах.
-  const [callsMonthByKey, basisByKey] = await Promise.all([
+  // 🔁 Цикл реактивації (ТЗ 22.09, блок 4): останній рахунок і рішення по кожному клієнту — від СЬОГОДНІ,
+  // а не від обраного місяця: вкладка «Реактивація» — це поточний стан, як і стан клієнта.
+  const [callsMonthByKey, basisByKey, lastInvByKey, cyclesByKey] = await Promise.all([
     clientCalls.callsByMonth(clientKeys, monthStr),
     planBasis.basisForMonth(clientKeys, `${monthStr}-01`),
+    money.lastInvoiceByClientKey(clientKeys),
+    reactCycle.cyclesFor(pool, clientKeys),
   ]);
+  const nowYm = kyivToday().slice(0, 7);
+  const inReactNow = (key: string) => reactCycleRules.inReact(lastInvByKey.get(key) ?? null, nowYm);
   // 🔗 Хто приєднаний до кожного рядка (ТЗ 22.09, п.2.3) — лише назви, у гроші не входить.
   const aliasByKey = await clientAliasNames.aliasNamesFor(clientKeys);
   // 🛑 СТОП ЧЕРЕЗ ДЕБІТОРКУ (ТЗ 3989, п.6) — по тих самих ключах: є прострочений рядок дебіторки.
@@ -6208,7 +6221,14 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       since: c.first_paid ? c.first_paid.slice(0, 7) : null,   // YYYY-MM
       lastOrderDays: dayOf(c.last_paid),
       // 🗂 Вкладка й порядок «Всі» (ТЗ 22.09, п.3.1): одне правило на сервері — `core/clientTabs.ts`.
-      tabGroup: clientTabs.clientTabGroup(stateOf(c.client_key), dayOf(c.last_paid)),
+      // 🔁 З блоку 4 (п.4.1) «Реактивація» = 3 повні місяці без рахунку, а не дні від оплати.
+      tabGroup: clientTabs.clientTabGroup(inReactNow(c.client_key), dayOf(c.last_paid)),
+      // 🔁 Цикл реактивації (п.4.2–4.3): стан рішення, строк до автопередачі й дозволені кнопки. Лише для
+      // тих, хто у вкладці; решті — null («не стосується»), щоб фронт не малював кнопки живому клієнту.
+      lastInvoice: lastInvByKey.get(c.client_key) ?? null,
+      reactCycle: inReactNow(c.client_key)
+        ? reactCycle.cycleView(lastInvByKey.get(c.client_key) ?? null, cyclesByKey.get(c.client_key), todayStr)
+        : null,
       history: histByKey.get(c.client_key) ?? histMonths.map(() => 0),
       plan,
       planStatus: p?.status ?? "none",
@@ -6302,6 +6322,10 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     categoryRules: categoryRules.categoryRulesPayload(),
     // 🗂 Порядок груп у «Всі» (ТЗ 22.09, п.3.1) — одна копія, у ядрі.
     tabGroupRank: clientTabs.TAB_GROUP_RANK,
+    // 🔁 Пул лідгенів (ТЗ 22.09, п.4.2–4.4): хто бачить вкладку пулу і хто може брати.
+    leadgenPool: await leadgenPoolAccess(auth),
+    reactRules: { quietMonths: reactCycleRules.QUIET_MONTHS, selfGraceMonths: reactCycleRules.SELF_GRACE_MONTHS,
+                  launchMonth: reactCycleRules.LAUNCH_MONTH },
     thresholds: {
       sleepingDays: reactivationRules.SEGMENT_SLEEPING_DAYS,
       lostDays: reactivationRules.LOST_DAYS,
@@ -6343,7 +6367,10 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       // 🔢 ТРИ ЦИФРИ ЗВЕРХУ (ТЗ 3989, п.5): у роботі = клієнти зі станом «сплячі»/«втрачені» у скоупі,
       // повернуто за місяць = перша оплата місяця після паузи ≥ RETURN_GAP_DAYS (поріг — відкрите
       // питання власнику), сума повернутої маржі = Σ price їхніх оплат цього місяця.
-      react: { inWork: clients.filter((c) => c.state === "sleeping" || c.state === "lost").length,
+      // 🔁 З блоку 4 «у роботі» = рівно вкладка «Реактивація» (3 міс без рахунку), інакше число зверху
+      // й лічильник вкладки розходились би на тих самих клієнтах.
+      react: { inWork: clients.filter((c) => c.tabGroup === "react").length,
+               inPool: clients.filter((c) => c.reactCycle?.status === "pool").length,
                returnedMonth: returned.count, returnedMargin: returned.margin, gapDays: RETURN_GAP_DAYS },
       inReactivationSleeping: bridge.sleeping,
       inReactivationLost: bridge.lost,
@@ -6812,6 +6839,122 @@ dashboardRouter.post("/client-plan-basis/clear", async (req, res) => {
   res.json({ ok: true, planBasis: null });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 🔁 ЦИКЛ РЕАКТИВАЦІЇ І ПУЛ ЛІДГЕНІВ (ТЗ Юлі 22.09.2026, блок 4; задача 4313)
+// Правило — `core/reactCycleRules.ts`, запити — `core/reactCycle.ts`, нічний прохід — `jobs/reactCycleSweep.ts`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Хто бачить пул (лідгени + керівництво) і хто може брати з нього (лише лідген — собі). */
+async function leadgenPoolAccess(auth: NonNullable<typeof import("express")["request"]["auth"]>):
+    Promise<{ canSee: boolean; canTake: boolean }> {
+  const isLeadgen = await reactCycle.isLeadgenManager(pool, auth.managerId, metrics.LEADGEN_DASH_TEAM_ID);
+  return reactCycleRules.poolAccess(isLeadgen, isAdminScope(auth));
+}
+
+/**
+ * 4.2 — «Реактивую сам» / «Передати лідгенам». Межа — `canSeeClient` ПЕРШИМ оператором: кнопку тисне той,
+ * хто веде клієнта, його тімлід або керівництво; далі тіло, далі правило циклу (409 зі словами, чому ні).
+ */
+dashboardRouter.post("/react-decision", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey || !(await canSeeClient(auth, clientKey))) return res.status(403).json({ error: "Forbidden" });
+  const decision = String(req.body?.decision ?? "");
+  if (decision !== "self" && decision !== "leadgen") return res.status(400).json({ error: "decision: self або leadgen" });
+  const lastInvoice = (await money.lastInvoiceByClientKey([clientKey])).get(clientKey) ?? null;
+  const owner = await clientOwnerRow(clientKey);
+  try {
+    const r = await reactCycle.decide(pool, { clientKey, decision, userId: auth.userId,
+      managerId: owner?.manager_id ?? null, lastInvoice, nowYm: kyivToday().slice(0, 7) });
+    const rows = await reactCycle.cyclesFor(pool, [clientKey]);
+    res.json({ ok: true, ...r, reactCycle: reactCycle.cycleView(lastInvoice, rows.get(clientKey), kyivToday()) });
+  } catch (e) {
+    if (e instanceof reactCycle.ReactCycleError) return res.status(e.status).json({ error: e.message });
+    throw e;
+  }
+});
+
+/**
+ * 4.2/4.4 — пул лідгенів. Бачать лідгени й керівництво; менеджеру й тімліду не-лідгенів — 403.
+ * Кожен рядок ще раз звіряється з рахунками: клієнт, що ожив, у пулі не показується й не береться,
+ * навіть якщо нічний прохід ще не дійшов (його рядок закривається тут же).
+ */
+dashboardRouter.get("/leadgen-pool", async (req, res) => {
+  const auth = req.auth!;
+  const access = await leadgenPoolAccess(auth);
+  if (!access.canSee) return res.status(403).json({ error: "Пул бачать лише лідгени й керівництво" });
+  const nowYm = kyivToday().slice(0, 7);
+  const open = await reactCycle.openPool(pool);
+  const keys = open.map((o) => o.clientKey);
+  const inv = await money.lastInvoiceByClientKey(keys);
+  const revived = open.filter((o) => !reactCycleRules.inReact(inv.get(o.clientKey) ?? null, nowYm));
+  if (revived.length) await reactCycle.closeRevived(pool, revived);
+  const live = open.filter((o) => reactCycleRules.inReact(inv.get(o.clientKey) ?? null, nowYm));
+  const [names, success] = await Promise.all([
+    pool.query<{ client_key: string; client_name: string | null }>(
+      `SELECT DISTINCT ON (client_key) client_key, client_name FROM deals
+        WHERE client_key = ANY($1) ORDER BY client_key, closed_at_kommo DESC NULLS LAST`, [keys]),
+    // ① за весь час — щоб лідген бачив, кого брати першим (гроші лише ядром, ворота #17c).
+    money.successByClientKey({}),
+  ]);
+  const nameByKey = new Map(names.rows.map((r) => [r.client_key, r.client_name]));
+  const liveKeys = new Set(live.map((o) => o.clientKey));
+  const revByKey = new Map(success.filter((r) => liveKeys.has(r.key)).map((r) => [r.key, r]));
+  res.json({
+    canTake: access.canTake,
+    rows: live.map((o) => ({
+      clientKey: o.clientKey,
+      clientName: nameByKey.get(o.clientKey) ?? o.clientKey,
+      pooledAt: o.pooledAt,
+      poolReason: o.poolReason,
+      fromManagerName: o.fromManagerName,
+      lastInvoice: inv.get(o.clientKey) ?? null,
+      successRevenue: Math.round(revByKey.get(o.clientKey)?.revenue ?? 0),
+      successDeals: revByKey.get(o.clientKey)?.deals ?? 0,
+    })),
+    revivedClosed: revived.length,
+  });
+});
+
+/**
+ * 4.2 — «Взяти» з пулу: лідген бере клієнта СОБІ. Межа першим оператором (лише лідген); двоє одночасно —
+ * рівно один отримує клієнта (UPDATE … WHERE closed_at IS NULL у транзакції), другий — 409.
+ * Закріплення — той самий `loyalty_overrides`, що кнопка «Передати клієнта», вид `fix` (з поточного місяця).
+ */
+dashboardRouter.post("/leadgen-pool/take", async (req, res) => {
+  const auth = req.auth!;
+  const access = await leadgenPoolAccess(auth);
+  if (!access.canTake) return res.status(403).json({ error: "Брати з пулу можуть лише лідгени" });
+  const clientKey = String(req.body?.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  const lastInvoice = (await money.lastInvoiceByClientKey([clientKey])).get(clientKey) ?? null;
+  const today = kyivToday();
+  const effectiveFrom = effectiveFromFor("fix", today);
+  // 4.4: у клієнта є рахунок за 3 місяці — лідгену його не можна. Рядок пулу закриваємо ДО транзакції,
+  // інакше ROLLBACK відкотив би й закриття, і клієнт лишився б у пулі до ночі.
+  if (!reactCycleRules.inReact(lastInvoice, today.slice(0, 7))) {
+    await pool.query(`UPDATE client_react_cycles SET closed_at = now(), close_reason = 'invoice'
+                       WHERE client_key = $1 AND pooled_at IS NOT NULL AND closed_at IS NULL`, [clientKey]);
+    return res.status(409).json({ error: "Клієнт ожив: є рахунок за останні 3 місяці — він лишається за менеджером" });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await reactCycle.take(client, { clientKey, managerId: auth.managerId!, userId: auth.userId,
+      lastInvoice, nowYm: today.slice(0, 7), effectiveFrom });
+    await client.query("COMMIT");
+    await logClientAdmin("manager_change", clientKey, auth.userId,
+      { fromManagerId: r.fromManagerId, toManagerId: auth.managerId, effectiveFrom, kind: "fix", reason: "Взято з пулу лідгенів" });
+    res.json({ ok: true, effectiveFrom });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    if (e instanceof reactCycle.ReactCycleError) return res.status(e.status).json({ error: e.message });
+    throw e;
+  } finally {
+    client.release();
+  }
+});
+
 /** Список контактів клієнта — тим, хто бачить клієнта. */
 dashboardRouter.get("/client-contacts", async (req, res) => {
   const clientKey = String(req.query.clientKey ?? "").trim();
@@ -7042,10 +7185,16 @@ dashboardRouter.get("/client-card", async (req, res) => {
   /* 🗒 Журнал керівницьких дій — окремою стрічкою, бо стан їх НЕ памʼятає:
      повернення з архіву занулює і причину, і того, хто архівував. */
   const adminLog = await clientAdminLog(clientKey);
+  // 🔁 Цикл реактивації (ТЗ 22.09, блок 4) — те саме правило й ті самі кнопки, що в рядку списку.
+  const cardLastInvoice = (await money.lastInvoiceByClientKey([clientKey])).get(clientKey) ?? null;
+  const cardCycles = await reactCycle.cyclesFor(pool, [clientKey]);
 
   res.json({
     clientKey,
     clientName: h?.client_name ?? clientKey,
+    lastInvoice: cardLastInvoice,
+    reactCycle: reactCycleRules.inReact(cardLastInvoice, today.slice(0, 7))
+      ? reactCycle.cycleView(cardLastInvoice, cardCycles.get(clientKey), today) : null,
     managerName: h?.manager_name ?? null,
     teamName: h?.team_name ?? null,
     pinned: h?.pinned_manager_id != null,
