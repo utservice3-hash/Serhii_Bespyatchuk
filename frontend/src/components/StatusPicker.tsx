@@ -9,6 +9,15 @@ const hexA = (hex: string, a: number) => {
 };
 
 /**
+ * 🔝 ШАР МЕНЮ — ВИЩЕ ЗА БІЧНУ КАРТКУ ЗАДАЧІ (`zIndex: 2600`) І ЇЇ ПІДКЛАДКУ (2500).
+ * Доти меню стояло на 1000: у рядку списку воно відкривалось, а в картці
+ * монтувалось ПІД нею — клік «нічого не робив». Заміряно на проді 30.09.2026
+ * (задача 4312): поповер у DOM є, `elementFromPoint` у його центрі — картка.
+ * Число — одне на файл і експортується: його звіряє гейт `#1080g` з карткою.
+ */
+export const STATUS_MENU_Z = 3000;
+
+/**
  * Kommo-style status picker: a coloured pill trigger (dot + label) opening a
  * grouped popover (To-do / In progress / Complete) where every status carries
  * its own coloured dot, like the CRM. Replaces the plain native <select> whose
@@ -80,7 +89,7 @@ export function StatusPicker({
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{STATUS_LABELS[value]}</span>
       </button>
       {open && pos && createPortal(
-        <div ref={popRef} style={{ position: "fixed", zIndex: 1000, top: pos.top, left: pos.left, minWidth: 240,
+        <div ref={popRef} style={{ position: "fixed", zIndex: STATUS_MENU_Z, top: pos.top, left: pos.left, minWidth: 240,
           background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, boxShadow: "0 12px 32px rgba(0,0,0,0.18)", padding: 8 }}>
           {STATUS_GROUPS.map((group, gi) => (
             <div key={group.label} style={{ marginTop: gi === 0 ? 0 : 6, paddingTop: gi === 0 ? 0 : 6, borderTop: gi === 0 ? "none" : "1px solid var(--border)" }}>
