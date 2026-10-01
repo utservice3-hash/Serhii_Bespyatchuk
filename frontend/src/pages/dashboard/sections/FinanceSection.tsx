@@ -6,6 +6,7 @@ import {
   setFinApproval, finErrorData, hiringError,
   type FinMonth, type FinItem, type FinGroup, type FinResp, type FinItemCard, type FinKind, type FinCell,
 } from "../../../api";
+import { rowVisible } from "./financeView";
 import "./hiring.css";
 import "./finance.css";
 
@@ -293,13 +294,7 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
   const left = t.plan - t.fact;
   const im = data.imported;
   const imDiff = im && ((im.filePlan != null && Math.abs(im.filePlan - im.rowsPlan) >= 0.01) || (im.fileFact != null && Math.abs(im.fileFact - im.rowsFact) >= 0.01));
-  const visible = (it: FinItem) => {
-    if (!it.active) return false;
-    if (edit) return true;
-    if (onlyOver) return it.state === "over" || it.state === "noplan";
-    if (!showEmpty && it.state === "empty" && !future) return false;
-    return true;
-  };
+  const visible = (it: FinItem) => rowVisible(it, { month, currentMonth: data.currentMonth, edit, onlyOver, showEmpty });
   let shown = 0;
   return (
     <div className="hr-card">

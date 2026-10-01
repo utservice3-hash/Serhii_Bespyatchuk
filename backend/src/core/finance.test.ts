@@ -391,3 +391,30 @@ test("#936 ФРОНТ ФІНАНСІВ: меню після «Статистик
   for (const k of ["resp", "group", "item"])
     assert.match(sec, new RegExp(`await deleteFin\\("${k}", [a-z]+\\.id(?:, confirm)?\\); reload\\(\\); undo\\("${k}", `), `🔴 видалення «${k}» без «Повернути»`);
 });
+
+/**
+ * #937 — ПОРОЖНЯ СТАТТЯ ВИДНА В ПОТОЧНОМУ Й МАЙБУТНІХ МІСЯЦЯХ, ховається лише в минулих. 01.10.2026 жовтень став
+ * поточним без жодної цифри, і стара умова («ховати порожнє, якщо місяць не майбутній») показала самі назви груп:
+ * 69 статей «зникли» (скрін Романа). Перевіряється САМА функція фронту `rowVisible`, транспільована, а не регулярка.
+ * 🧨 Червоніє, якщо повернути `!future`, ховати порожнє в поточному місяці, або показувати вимкнену статтю.
+ */
+test("#937 ФРОНТ ФІНАНСІВ: порожня стаття видна в поточному й майбутніх місяцях, схована лише в минулих", async () => {
+  const ts = (await import("typescript")).default;
+  const js = ts.transpileModule(FE("pages/dashboard/sections/financeView.ts"), {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const { rowVisible } = await import(`data:text/javascript,${encodeURIComponent(js)}`) as {
+    rowVisible: (it: { active: boolean; state: string }, o: { month: string; currentMonth: string; edit: boolean; onlyOver: boolean; showEmpty: boolean }) => boolean;
+  };
+  const base = { currentMonth: "2026-10-01", edit: false, onlyOver: false, showEmpty: false };
+  const empty = { active: true, state: "empty" as const };
+  assert.equal(rowVisible(empty, { ...base, month: "2026-10-01" }), true, "🔴 порожня стаття схована в ПОТОЧНОМУ місяці — жовтень знову покаже самі групи");
+  assert.equal(rowVisible(empty, { ...base, month: "2026-11-01" }), true, "🔴 порожня стаття схована в майбутньому місяці");
+  assert.equal(rowVisible(empty, { ...base, month: "2026-09-01" }), false, "🔴 у минулому місяці порожні рядки не сховані");
+  assert.equal(rowVisible(empty, { ...base, month: "2026-09-01", showEmpty: true }), true, "🔴 «показати порожні» не працює");
+  assert.equal(rowVisible({ active: false, state: "ok" }, { ...base, month: "2026-10-01", edit: true }), false, "🔴 вимкнена стаття видна");
+  assert.equal(rowVisible(empty, { ...base, month: "2026-09-01", edit: true }), true, "🔴 у режимі внесення порожня стаття схована");
+  assert.equal(rowVisible(empty, { ...base, month: "2026-10-01", onlyOver: true }), false, "🔴 «лише понад план» показує порожні");
+  assert.match(FE("pages/dashboard/sections/FinanceSection.tsx"), /const visible = \(it: FinItem\) => rowVisible\(it, \{ month, currentMonth: data\.currentMonth,/,
+    "🔴 екран не користується rowVisible — гейт перевіряє не те, що показується");
+});
