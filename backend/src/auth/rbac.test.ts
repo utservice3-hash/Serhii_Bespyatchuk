@@ -438,8 +438,10 @@ test("#5.13 🔴 HR НЕ успадкував нічого з того, що о�
   // Фінансист цього права НЕ має, тож твердження «HR не поїхав за фінансистом» тримається.
   // 30.09.2026: + `manage_surveys` — опитування команди (рішення Романа: керують admin, СЕО, ОД і HR).
   // Фінансист його теж НЕ має — твердження про «успадкування» лишається чесним.
-  assert.deepEqual(perms, ["edit_1x1_forms", "manage_surveys", "view_all_1x1", "view_employee_secrets"],
-    `🔴 набір прав HR змінився: ${perms.join(", ")} — очікували два 1×1-права, право сейфу й керування опитуваннями`);
+  // 01.10.2026: + `manage_training` — HR редагує навчання (рішення Романа: «так, дай hr редагування навчання»).
+  // Фінансист його НЕ має (рішення 14.09.2026, тримає #411b) — «успадкування» й тут не відбулось.
+  assert.deepEqual(perms, ["edit_1x1_forms", "manage_surveys", "manage_training", "view_all_1x1", "view_employee_secrets"],
+    `🔴 набір прав HR змінився: ${perms.join(", ")} — очікували два 1×1-права, право сейфу, керування опитуваннями й редагування навчання`);
   // Жодного з прав, які фінансист дістав при підйомі до адміна.
   const gained = ["admin_scope", "approve_plans", "enter_manual_stats", "export",
     "manage_bank_accounts", "manage_bank_hidden", "manage_goals", "submit_plans",
