@@ -8,10 +8,9 @@ import {
 } from "../core/finance.js";
 import {
   loadPeriod, kpiCard, saveKpiValues, setKpiNote, setPeriodClosed, createSection, renameSection, deleteSection,
-  createKpi, updateKpi, setKpiOff, deleteKpi, restoreKpiThing, periodStart, periodEnd, currentPeriod, type RefValues,
+  createKpi, updateKpi, setKpiOff, deleteKpi, restoreKpiThing,
 } from "../core/financeKpi.js";
-import { finDeliveredByLoadDate, finUnloadedByActDate } from "../core/money.js";
-import { receivablesTotal } from "../core/metrics.js";
+import { fmRefsFor } from "../core/financeKpiRefs.js";
 
 /**
  * 💰 ФІНАНСИ, прохід 1 (29.09.2026): «План/факт витрат» і «Статті».
@@ -157,18 +156,8 @@ financeRouter.post("/approval", async (req, res) => {
 });
 
 // ── Тиждень і місяць (прохід 2а) ─────────────────────────────────────────────
-/**
- * Довідкові числа ядра для періоду: поставлені / вигружені (CRM) — для будь-якого періоду; дебіторка — лише для
- * ПОТОЧНОГО (це знімок «зараз», для минулого тижня він бреше). Рахує ядро, роут лише кличе (#17c).
- */
-async function refsFor(kindArg: unknown, dateArg: unknown): Promise<RefValues> {
-  const { kind, start } = periodStart(kindArg, dateArg);
-  const end = periodEnd(kind, start);
-  const [d, u] = await Promise.all([finDeliveredByLoadDate(start, end), finUnloadedByActDate(start, end)]);
-  const refs: RefValues = { delivered_income: d.income, delivered_expense: d.expense, unloaded_income: u.income, unloaded_expense: u.expense };
-  if (start === currentPeriod(kind)) refs.receivables = await receivablesTotal({ managerId: null, teamId: null });
-  return refs;
-}
+/** Числа ядра для автоматичних рядків періоду (`core/financeKpiRefs.ts`): роут лише кличе (#17c). */
+const refsFor = (kind: unknown, p: unknown) => fmRefsFor(kind, p);
 financeRouter.get("/kpi", async (req, res) => {
   try {
     onlyFinance(req);

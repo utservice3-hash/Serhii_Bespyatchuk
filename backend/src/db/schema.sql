@@ -184,6 +184,10 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS carrier_pay_amount NUMERIC;
 -- Обидві NULLABLE: syncKommo пише їх щопрохід, NOT NULL поклав би синк.
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS client_pay_amount NUMERIC;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS carrier_obligation NUMERIC;
+-- 💰 Суми за правилом фінансиста (аркуш «ФМ», 01.10.2026): Σ «Приход 1–5» і Σ «Расход 1–5» без «Оплата на выгрузке».
+-- Правило — `core/fmSums.ts`. Пише синк щопроходу; наявні угоди — разовим `tools/backfillFmSums.ts`.
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS fm_income NUMERIC;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS fm_expense NUMERIC;
 
 -- 🚚 ХТО ПЕРЕВІЗНИК (14.09.2026) — для реєстру заявок на оплату у дебіторці.
 -- Заявка в Kommo = угода-«Автосделка» у воронці «Оплата перевозчикам» (7341740);
@@ -5202,3 +5206,19 @@ CREATE TABLE IF NOT EXISTS fin_kpi_imports (
 
 -- 🔒 Як і таблиці проходу 1 — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`; перелік звіряє #934 (усі fin_*).
 REVOKE ALL ON fin_kpi_sections, fin_kpis, fin_kpi_values, fin_kpi_closes, fin_kpi_log, fin_kpi_imports FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💰 ФІНАНСИ, прохід 2б (01.10.2026): рядки «ФМ», що рахуються самі за фільтрами фінансиста.
+-- kind 'auto' — значення бере ядро (ref_source), руками не вноситься; за минулий тиждень/місяць фіксується
+-- джобою `freezeFinanceKpis` (frozen_at), бо CRM змінюється заднім числом. ⚠️ Revert коду не відкочує цих змін.
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE fin_kpis DROP CONSTRAINT IF EXISTS fin_kpis_kind_check;
+ALTER TABLE fin_kpis ADD CONSTRAINT fin_kpis_kind_check CHECK (kind IN ('manual','sum','diff','auto'));
+ALTER TABLE fin_kpis DROP CONSTRAINT IF EXISTS fin_kpis_auto_ref_check;
+ALTER TABLE fin_kpis ADD CONSTRAINT fin_kpis_auto_ref_check CHECK (kind <> 'auto' OR ref_source IS NOT NULL);
+ALTER TABLE fin_kpi_values ADD COLUMN IF NOT EXISTS frozen_at TIMESTAMPTZ;
+-- Разово: показники з довідкою CRM / дебіторки стають автоматичними (рішення Романа 01.10.2026: «робимо по фільтрах
+-- Тані»). Позначка в `fin_kpi_imports` — щоб повторний прогін схеми не перемикав назад свідомих правок.
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('auto-2026-10-01', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key)
+UPDATE fin_kpis SET kind = 'auto'
+ WHERE kind = 'manual' AND ref_source IS NOT NULL AND EXISTS (SELECT 1 FROM step);

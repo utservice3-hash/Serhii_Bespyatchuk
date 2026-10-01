@@ -5368,10 +5368,13 @@ export async function svExportCsv(id: number): Promise<Blob> {
 export type FinPeriodKind = "week" | "month";
 export type FinKpiRefSource = "delivered_income" | "delivered_expense" | "unloaded_income" | "unloaded_expense" | "receivables";
 export interface FinKpi {
-  id: number; name: string; unit: "UAH" | "USD" | "EUR"; kind: "manual" | "sum" | "diff"; argA: number | null; argB: number | null;
+  id: number; name: string; unit: "UAH" | "USD" | "EUR"; kind: "manual" | "sum" | "diff" | "auto"; argA: number | null; argB: number | null;
   refSource: FinKpiRefSource | null; offFrom: string | null; active: boolean;
   value: number | null; prevValue: number | null; note: string | null;
   savedRef: { value: number; at: string } | null; liveRef: number | null;
+  /** Лише для `kind = "auto"` (прохід 2б): live — число ядра зараз; frozen — зафіксоване джобою; closed — із закритого
+   *  періоду (перенесене з «ФМ»); saved — живого для періоду немає, показано збережене. */
+  autoState: "live" | "frozen" | "closed" | "saved" | null;
 }
 export interface FinKpiPeriod {
   kind: FinPeriodKind; start: string; end: string; prev: string; label: string; prevLabel: string; current: string;

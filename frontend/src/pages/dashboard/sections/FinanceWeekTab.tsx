@@ -32,11 +32,19 @@ const title = (p: FinKpiPeriod) => (p.kind === "week" ? `Тиждень ${p.labe
 
 /** Як рахується довідка — підпис поруч із числом (правило: дві різні величини без підпису читаються як поломка). */
 export const REF_HINT: Record<FinKpiRefSource, string> = {
-  delivered_income: "CRM: «Повний цикл», етапи від «Контролю перед завантаженням» до «Успішної», «Дата загрузки» в періоді, сума «Приход 1»",
-  delivered_expense: "CRM: ті самі угоди, сума «Расход 1»",
-  unloaded_income: "CRM: ті самі етапи, «Дата акту» в періоді, сума «Приход 1»",
-  unloaded_expense: "CRM: ті самі етапи, «Дата акту» в періоді, сума «Расход 1»",
-  receivables: "Дебіторка в дашборді ЗАРАЗ (знімок без історії) — для минулих періодів лише та, що збережена при внесенні",
+  delivered_income: "Фільтр фінансиста в Kommo: «Повний цикл», 8 етапів від «Контролю перед завантаженням» до «Успішної», «Дата загрузки» в періоді; сума «Приход 1–5»",
+  delivered_expense: "Ті самі угоди; сума «Расход 1–5», крім типу оплати «Оплата на выгрузке»",
+  unloaded_income: "Два фільтри фінансиста: «Очікуємо оплату» / «Оплата отримана» за датою створення + «Успішна» за датою закриття; сума «Приход 1–5»",
+  unloaded_expense: "Ті самі два фільтри; сума «Расход 1–5», крім типу оплати «Оплата на выгрузке»",
+  receivables: "Дебіторка в дашборді ЗАРАЗ (знімок без історії) — фіксується в ніч після кінця періоду",
+};
+
+/** Підпис автоматичного рядка: звідки зараз число. */
+const AUTO_STATE: Record<NonNullable<FinKpi["autoState"]>, [string, string]> = {
+  live: ["авто · наживо", "Рахується з CRM зараз; у ніч після кінця періоду зафіксується й більше не змінюватиметься"],
+  frozen: ["авто · зафіксовано", "Число зафіксовано після кінця періоду; CRM могла змінитись після цього — поточне видно в довідці"],
+  closed: ["з «ФМ»", "Період закрито; число перенесене з аркуша «ФМ»"],
+  saved: ["збережене", "Живого числа для цього періоду немає — показано збережене"],
 };
 
 export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
@@ -184,7 +192,9 @@ export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
                   const cur = draft[k.id] ?? asInput(k.value);
                   return (
                     <tr key={k.id} className={`it ${k.active ? "" : "off"}`} onClick={() => !edit && setCard(k.id)}>
-                      <td className="ind1">{k.name}{k.kind !== "manual" && <span className="hr-muted" style={{ fontSize: 11, marginLeft: 6 }}>{k.kind === "sum" ? "сума" : "різниця"}</span>}</td>
+                      <td className="ind1">{k.name}{(k.kind === "sum" || k.kind === "diff") && <span className="hr-muted" style={{ fontSize: 11, marginLeft: 6 }}>{k.kind === "sum" ? "сума" : "різниця"}</span>}
+                        {k.kind === "auto" && <span className={`hr-pill ${k.autoState === "live" ? "pl" : ""}`} style={{ fontSize: 11, marginLeft: 6 }}
+                          title={k.autoState ? AUTO_STATE[k.autoState][1] : "Рахується з CRM; для цього періоду числа немає"}>{k.autoState ? AUTO_STATE[k.autoState][0] : "авто"}</span>}</td>
                       <td className="num hr-muted">{money(k.prevValue, k.unit)}</td>
                       <td className="num">{input
                         ? <input className={`fin-cell ${draft[k.id] !== undefined ? "ch" : ""} ${bad.has(k.id) ? "bad" : ""}`} inputMode="decimal" aria-label={`${k.name}: ${data.label}`}
@@ -210,7 +220,7 @@ export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
         </table>
       </div>
       <div className="hr-sect hr-muted" style={{ fontSize: 12.5, display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <span>Тиждень — з понеділка по неділю за Києвом. Довідка CRM / 1С стоїть поруч і не підміняє внесене число; при збереженні вона запамʼятовується.</span>
+        <span>Тиждень — з понеділка по неділю за Києвом. Рядки «авто» рахуються за фільтрами Kommo і фіксуються в ніч після кінця періоду — далі CRM може змінитись, а число тижня ні. Довідка CRM / 1С біля ручних рядків не підміняє внесене число.</span>
         {data.canEdit && !edit && <button className="fin-link" onClick={act.addSection}>+ Розділ</button>}
       </div>
       {card != null && <KpiDrawer id={card} kind={data.kind} periodStart={data.start} closed={!!data.closed} canEdit={data.canEdit} toast={toast} onChanged={reload} onClose={() => setCard(null)} />}
@@ -237,6 +247,17 @@ function SectionRows({ s, canEdit, act, children }: { s: { id: number; name: str
 /** Довідка: живе число (для дебіторки — лише в поточному періоді) і збережене при внесенні; різниця з числом людини. */
 function RefCell({ k }: { k: FinKpi }) {
   if (!k.refSource) return null;
+  // Авто-рядок: число І є ядро. Довідка має сенс лише тоді, коли показане не живе — тоді видно, куди CRM поїхала після.
+  if (k.kind === "auto") {
+    const now = k.autoState !== "live" ? k.liveRef : null;
+    const d = now != null && k.value != null ? k.value - now : null;
+    return (
+      <span title={REF_HINT[k.refSource]} style={{ fontSize: 12.5 }}>
+        {now != null ? <span>у CRM зараз {money(now)}{d ? <span className="hr-muted"> ({d > 0 ? "−" : "+"}{money(Math.abs(d))})</span> : null}</span>
+          : <span className="hr-muted">фільтр Kommo</span>}
+      </span>
+    );
+  }
   const live = k.liveRef, saved = k.savedRef;
   const diff = (r: number) => (k.value == null ? null : k.value - r);
   const pct = (r: number) => (k.value == null || !r ? "" : ` (${k.value >= r ? "+" : "−"}${Math.abs(Math.round(((k.value - r) / r) * 1000) / 10)}%)`);
