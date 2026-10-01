@@ -297,7 +297,7 @@ test("#1127 PDF-ДРУК: стиль друку після CSS документ�
   assert.ok(at > page.indexOf(".docfmt .sigend{height:26pt}"), "🔴 стиль друку стоїть ДО CSS документа — і програє йому");
   assert.ok(at < page.indexOf("</head>"), "🔴 стиль друку поза <head>");
   assert.match(PRINT_CSS, /\.docfmt \.sigend\{display:none\}/, "🔴 спейсер не схований — порожня остання сторінка");
-  assert.match(PRINT_CSS, /@page\{size:A4;margin:10mm 11mm 12mm 11mm\}/, "🔴 поля не як у макеті");
+  assert.match(PRINT_CSS, /@page\{size:A4;margin:8mm 10mm 8mm 10mm\}/, "🔴 поля друку не ті, що затверджено 01.10.2026 (щільна заявка)");
   assert.match(PRINT_CSS, /print-color-adjust:exact/, "🔴 фони (смуга, клітинки умов) не друкуються");
 });
 
@@ -406,4 +406,31 @@ test("#1190b «ДІЄ ДО» ЗБЕРІГАЄТЬСЯ: колонка, запи�
   assert.match(route, /mainUntil: String\(row\.main_until \|\| ""\)/, "🔴 стан з архіву без mainUntil");
   assert.equal((stateFromBody({ ent: "uts", doc: "main", mainUntil: " 31.12.2027 " }, { name: "", phone: "" }) as DocumentState).mainUntil, "31.12.2027",
     "🔴 форма не передає «Діє до» в стан");
+});
+
+/**
+ * #1185 — ЗАЯВКИ НЕ ДОВШІ ЗА 3 СТОРІНКИ (прохання Сергія 01.10.2026, варіант затвердив Роман): друкуємо тим самим
+ * chrome-headless-shell, що на сервері, і рахуємо сторінки PDF. До правки заявка перевізнику — 5 сторінок (4 з
+ * текстом + підписи окремо), основний договір — 13. Біжить там, де є браузер (`CONSTRUCTOR_CHROME_PATH`): на проді —
+ * у прийманні `test:prod` (змінна з .env); без браузера — чесний скіп із причиною.
+ * 🧨 Червоніє, якщо повернути щільність макета v15 (11pt/1.45, абзаци 7pt) — заявка перевізнику знову 5 сторінок.
+ */
+test("#1185 ЗАЯВКИ ≤ 3 СТОРІНОК: перевізнику (ЮТС і ФОП) і клієнту друкуються не довше трьох аркушів", async (t) => {
+  if (!process.env.CONSTRUCTOR_CHROME_PATH) { t.skip("немає браузера для PDF (CONSTRUCTOR_CHROME_PATH) — на проді гейт біжить у test:prod"); return; }
+  const { htmlToPdf } = await import("./services/pdfRenderer.js");
+  const a = fakeAssets();
+  try {
+    const pages: Record<string, number> = {};
+    for (const name of ["carr-uts", "carr-fop", "once-client-uts", "main-uts"]) {
+      const r = ref[name];
+      const pdf = await htmlToPdf(fullPageHTML(r.state, r.state.num, r.state.stamp ? docImageDataUris(a.dir, r.state.ent, true) : {}));
+      pages[name] = (Buffer.from(pdf).toString("latin1").match(/\/Type\s*\/Page[^s]/g) || []).length;
+    }
+    assert.ok(Object.values(pages).every((n) => n >= 1), "🔴 PDF без сторінок — рахувати нічого: " + JSON.stringify(pages));
+    for (const name of ["carr-uts", "carr-fop", "once-client-uts"]) {
+      assert.ok(pages[name] <= 3, `🔴 «${name}»: ${pages[name]} стор. — заявка мусить вміщатись у 3 (усі: ${JSON.stringify(pages)})`);
+    }
+    // Основний договір — не заявка, межі для нього не ставили; число — щоб зростання було видно, а не тихим.
+    assert.ok(pages["main-uts"] <= 9, `🔴 основний договір розрісся до ${pages["main-uts"]} стор. (після 01.10.2026 — 8)`);
+  } finally { a.dispose(); }
 });

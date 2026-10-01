@@ -41,7 +41,7 @@ export class PdfUnavailable extends Error {}
  * 30.09.2026: клієнтська разова — 4 сторінки, четверта біла). Від різаної печатки й далі стереже
  * `padding-bottom` і `break-inside:avoid` на `.sigs`.
  */
-export const PRINT_CSS = '<style>@page{size:A4;margin:10mm 11mm 12mm 11mm}'
+export const PRINT_CSS = '<style>@page{size:A4;margin:8mm 10mm 8mm 10mm}'
   + 'html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact}'
   + '.docfmt .sigend{display:none}</style>';
 
