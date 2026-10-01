@@ -4655,6 +4655,11 @@ CREATE TABLE IF NOT EXISTS first_touch_notes (
   PRIMARY KEY (uniqueid, kind)
 );
 REVOKE ALL ON first_touch_notes FROM ai_readonly;
+-- 📞 «Передзвонив поза телефонією» (`offline`, 01.10.2026): звірка 30 «не передзвонив» з Ringostat напряму — у 25
+-- випадках нашого дзвінка в телефонії немає зовсім, а керівники знайшли передзвони з мобільного чи в месенджер.
+-- Таку позначку ставлять менеджер (свої), тімлід (команда), адмін — і обіцянка рахується виконаною.
+ALTER TABLE first_touch_notes DROP CONSTRAINT IF EXISTS first_touch_notes_kind_check;
+ALTER TABLE first_touch_notes ADD CONSTRAINT first_touch_notes_kind_check CHECK (kind IN ('price', 'missed', 'offline'));
 -- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
 
 -- 🎧 ВКЛАДКА «ПЕРШИЙ ДОТИК · AI» (рішення Романа 28.09.2026). Без цього рядка вкладку не побачив би

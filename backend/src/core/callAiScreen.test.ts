@@ -278,7 +278,7 @@ test("#836 ОДИН ДЗВІНОК = ОДИН РЯДОК: розмова, пер
     priceDiscussed: null, objections: 0, promises: 0, promisesWithDeadline: 0, unverifiedQuotes: 0,
     pipelineGroup: "full" as const, rejectReason: null, promiseState: null, managerPromises: 0, silentBeforeClose: null,
     conversationType: null, typeConfidence: null, typeReason: null, priceValue: null, inReport: true, typeCheck: false, typeOverride: null,
-    priceNote: null, missedNote: null, clientPhone: null };
+    priceNote: null, missedNote: null, offlineNote: null, clientPhone: null };
   const got = collapseByCall([
     { ...base, kommoId: 9, dealCreatedAt: "2026-09-23T07:00:00.000Z" },
     { ...base, kommoId: 5, dealCreatedAt: "2026-09-22T07:00:00.000Z" },
@@ -628,4 +628,70 @@ test("#864 ЗВІТ ТІМЛІДА НА ЕКРАНІ: блок у «Звіті»
   assert.match(drw, /const can = c\.noteRights\[kind\];/, "🔴 право писати коментар — не з сервера");
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
   assert.match(sec, /\{d\.canSeeExcluded && <button type="button" role="tab"/, "🔴 менеджер бачить вкладку «Виключені»");
+});
+
+/**
+ * #865 — «ПЕРЕДЗВОНИВ ПОЗА ТЕЛЕФОНІЄЮ» · ЯДРО Й ЕКРАН (Юля й Андрій 01.10.2026). Звірка 30 «не передзвонив» з Ringostat:
+ * у 25 нашого дзвінка в телефонії немає зовсім, а передзвони були з мобільного чи в месенджер. Тому: ручна позначка
+ * переводить «немає дзвінка», «запізнився» й «чекає» у виконане й рахується в «виконано», а не в «немає дзвінка» чи
+ * банер; ставлять її менеджер (свої), тімлід, адмін; на екрані — без червоного й з чесним «за даними телефонії».
+ * 🧨 Червоніє, якщо позначка не гасить банер, не рахується виконаною, перебиває «Передзвонив» з телефонії, відкрита
+ * CEO чи якщо стан знову назвуть вироком червоним.
+ */
+test("#865 ПЕРЕДЗВОНИВ ПОЗА ТЕЛЕФОНІЄЮ · ЯДРО Й ЕКРАН: позначка = виконано, гасить банер, ставлять менеджер/тімлід/адмін; без червоного", async () => {
+  const { withOfflineMark } = await import("./callAiPromise.js");
+  for (const s of ["broken", "late", "pending"] as const) assert.equal(withOfflineMark(s, true), "kept_offline", `🔴 позначка не перевела «${s}» у виконане`);
+  for (const s of ["broken", "late", "pending"] as const) assert.equal(withOfflineMark(s, false), s, "дзеркало: без позначки стан не міняється");
+  for (const s of ["kept_talk", "kept_attempt_only", "client_called", "unverifiable"] as const) assert.equal(withOfflineMark(s, true), s, `🔴 позначка перебила стан з телефонії «${s}»`);
+  assert.equal(withOfflineMark(null, true), null, "🔴 позначка вигадала обіцянку там, де її немає");
+
+  const { teamReport } = await import("./firstTouchTeamReport.js");
+  const r = (id: string, o: Record<string, unknown>) => ({ uniqueid: id, calledAt: "2026-09-29T08:00:00Z", managerId: 1, managerName: "M1",
+    teamName: "T", inReport: true, state: "done", priceDiscussed: true, promiseState: null, typeCheck: false, priceNote: null, missedNote: null, ...o });
+  const t = teamReport([r("a", { promiseState: "kept_offline" }), r("b", { promiseState: "broken" })] as never[]);
+  assert.deepEqual([t.total.agreements, t.total.done, t.total.missed, t.banner.total], [2, 1, 1, 1], "🔴 «поза телефонією» не рахується виконаним або лишилось у банері");
+
+  const { canWriteNote } = await import("./callAiScreen.js");
+  for (const k of ["admin", "team_lead", "manager"]) assert.equal(canWriteNote(k, "offline"), true, `дзеркало: ${k} позначає «поза телефонією»`);
+  for (const k of ["ceo", "opdir", "kvp", "financier", "hr"]) assert.equal(canWriteNote(k, "offline"), false, `🔴 ${k} позначає «поза телефонією»`);
+
+  const V = await loadView() as unknown as { PROMISE_UI: Record<string, { label: string; tone: string }> };
+  assert.equal(V.PROMISE_UI.broken.tone === "bad", false, "🔴 «немає дзвінка в телефонії» знову червоне — вирок до звірки людиною");
+  assert.match(V.PROMISE_UI.broken.label, /телефоні/, "🔴 підпис знову звучить як вирок, а не як стан даних");
+  assert.deepEqual([V.PROMISE_UI.kept_offline?.label, V.PROMISE_UI.kept_offline?.tone], ["Передзвонив поза телефонією", "ok"]);
+  const card = readFileSync(FE("pages/dashboard/sections/FirstTouchReportCard.tsx"), "utf8");
+  assert.ok(!/role="alert"|--danger-bg/.test(card), "🔴 блок «немає дзвінка» знову червона тривога");
+  assert.match(card, /перевіряється, не для розборів/, "🔴 блок не каже, що дані перевіряються");
+  const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
+  assert.match(drw, /<NoteField c=\{c\} kind="offline"/, "🔴 у картці немає позначки «Передзвонив поза телефонією»");
+  assert.match(drw, /const needOffline = c\.row\.promiseState === "broken" \|\| c\.row\.promiseState === "late" \|\| c\.row\.offlineNote != null;/, "🔴 позначку не видно там, де вона потрібна");
+});
+
+/**
+ * #866 — «ПОЗА ТЕЛЕФОНІЄЮ» · ЖИВА СХЕМА: CHECK приймає `offline` і не приймає сміття; на справжній обіцянці без дзвінка
+ * позначка дає `kept_offline` і в списку, і в картці (по кожній обіцянці); зняли позначку — знову «немає дзвінка».
+ * 🧨 Червоніє, якщо забути CHECK, джойн позначки чи застосувати її лише в списку, а не в картці.
+ */
+test("#866 ПОЗА ТЕЛЕФОНІЄЮ · ЖИВА СХЕМА: позначка приймається, список і картка — kept_offline, зняття повертає «немає дзвінка»", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const { aiCallsList, aiCallCard, setCallNote } = await import("./callAiScreen.js");
+  await assert.rejects(c.raw.query("INSERT INTO first_touch_notes(uniqueid, kind, note) VALUES ('z0', 'bogus', 'x')"), /check/i, "🔴 CHECK виду позначки зник");
+  await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel,manager_id)
+    VALUES (8830,'D8830',8921932,1,'2026-09-26 09:00:00+03','0508800030','ad',9011)`);
+  await c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
+    VALUES ('of1','2026-09-26 10:00:00+03','out','ANSWERED',60,65,9011,'380508800030','https://rec/x')`);
+  const tid = (await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
+    VALUES ('of1','elevenlabs','scribe_v2','done','[{"channel":1,"start":0,"end":2,"text":"передзвоню за пів години","lang":"ukr"}]'::jsonb) RETURNING id`)).rows[0].id;
+  const res = { ...RESULT, objections: [], promises: [{ who: "manager", what: "передзвонити", deadline_text: "за пів години", quote: "q", quote_found: true,
+    channel: "call", deadline_kind: "minutes", deadline_minutes: 30, deadline_date: "", conditional: false }] };
+  await c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result)
+    VALUES ($1,'google','gemini-3.8-flash','first-touch-v2','done',$2::jsonb)`, [tid, JSON.stringify(res)]);
+  const state = async () => (await aiCallsList(c.db, FAKE_AD, "2026-09-26", "2026-09-26", NOW, {})).rows.find((r) => r.uniqueid === "of1")?.promiseState;
+  assert.equal(await state(), "broken", "передумова: без дзвінка в телефонії — «немає дзвінка»");
+  await setCallNote(c.db, "of1", "offline", "передзвонила з мобільного о 10:20", { userId: 1, name: "Олена Т1" }, new Date("2026-09-26T08:00:00Z"));
+  assert.equal(await state(), "kept_offline", "🔴 позначка «поза телефонією» не дійшла до списку");
+  const card = await aiCallCard(c.db, "of1", true, {});
+  assert.deepEqual([card?.row.offlineNote?.text, card?.promiseChecks.map((x) => x?.state)], ["передзвонила з мобільного о 10:20", ["kept_offline"]], "🔴 картка показує «немає дзвінка» поруч із позначкою");
+  await setCallNote(c.db, "of1", "offline", "", { userId: 1, name: "Олена Т1" }, new Date("2026-09-26T09:00:00Z"));
+  assert.equal(await state(), "broken", "🔴 зняту позначку не прибрано — стан застряг у «виконано»");
 });

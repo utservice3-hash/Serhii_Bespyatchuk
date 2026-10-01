@@ -366,7 +366,7 @@ export interface AiCallRowT {
   conversationType: ConversationTypeT | null; typeConfidence: number | null; typeReason: string | null; priceValue: string | null;
   inReport: boolean; typeCheck: boolean; typeOverride: { isCargo: boolean; byName: string | null; at: string } | null;
   /** «Чому не озвучено ціну» і «Опрацьовано» (ТЗ 30.09.2026). */
-  priceNote: AiNoteT | null; missedNote: AiNoteT | null;
+  priceNote: AiNoteT | null; missedNote: AiNoteT | null; offlineNote: AiNoteT | null;
 }
 export interface AiNoteT { text: string; byName: string | null; at: string }
 export interface AiCallsResp {
@@ -401,11 +401,11 @@ export interface AiCallCardResp {
   typeHistory: { isCargo: boolean; byName: string | null; at: string }[];
   canEditType: boolean;
   /** Хто що може писати й чи можна слухати запис — вирішує сервер. */
-  noteRights: { price: boolean; missed: boolean };
+  noteRights: { price: boolean; missed: boolean; offline: boolean };
   canListen: boolean;
 }
 /** Коментар: `price` — «Чому не озвучено ціну», `missed` — «Опрацьовано». Порожній текст прибирає. */
-export async function putAiCallNote(uniqueid: string, kind: "price" | "missed", text: string): Promise<void> {
+export async function putAiCallNote(uniqueid: string, kind: "price" | "missed" | "offline", text: string): Promise<void> {
   await api.put(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/note`, { kind, text });
 }
 /** Запис розмови — байтами через наш сервер (з авторизацією), а не прямим посиланням Ringostat. */
@@ -422,7 +422,7 @@ export interface AiManagerLineT {
 export interface AiPoolRowT {
   uniqueid: string; calledAt: string; managerId: number | null; managerName: string | null; teamName: string | null;
   clientPhone: string | null; kommoIds: number[]; state: AiCallState; summary: string | null;
-  priceDiscussed: boolean | null; priceValue: string | null; priceNote: AiNoteT | null; missedNote: AiNoteT | null;
+  priceDiscussed: boolean | null; priceValue: string | null; priceNote: AiNoteT | null; missedNote: AiNoteT | null; offlineNote: AiNoteT | null;
   promiseState: PromiseStateT | null; objections: number; typeCheck: boolean;
   flags: { analysed: boolean; noPrice: boolean; noComment: boolean; missed: boolean; banner: boolean };
 }

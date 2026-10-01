@@ -36,7 +36,7 @@ export type AiFilter = "all" | "done" | "broken" | "price" | "objection" | "noDe
 export const FILTERS: readonly { key: AiFilter; label: string }[] = [
   { key: "all", label: "Усі" },
   { key: "done", label: "Проаналізовано" },
-  { key: "broken", label: "Не передзвонив" },
+  { key: "broken", label: "Немає дзвінка в телефонії" },
   { key: "price", label: "Обговорили ціну" },
   { key: "objection", label: "Є заперечення" },
   { key: "noDeadline", label: "Обіцянка без строку" },
@@ -140,19 +140,24 @@ export function promisesLabel(promises: number, withDeadline: number): string {
 }
 
 /** Стан обіцянки менеджера — дзеркало `PromiseState` у `core/callAiPromise.ts`. */
-export type PromiseStateT = "kept_talk" | "kept_attempt_only" | "client_called" | "late" | "pending" | "broken" | "unverifiable";
+export type PromiseStateT = "kept_talk" | "kept_attempt_only" | "kept_offline" | "client_called" | "late" | "pending" | "broken" | "unverifiable";
 export type PipelineGroupT = "full" | "qualification" | "other";
 
 /**
  * Підписи станів обіцянки (П6-Б, рішення Романа 29.09.2026). «Не перевіряється» — обіцянка в месенджер:
  * Ringostat Viber/Telegram не бачить, тож прапорця на ній немає.
+ *
+ * 📞 01.10.2026: «Не передзвонив» → «Немає дзвінка в телефонії», без червоного. Звірка 30 таких розмов з Ringostat
+ * напряму: у 25 нашого дзвінка в телефонії немає зовсім, а керівники знайшли передзвони з мобільного чи в месенджер.
+ * Система бачить лише Ringostat — тож це стан даних, а не вирок, доки людина не перевірила.
  */
 export const PROMISE_UI: Readonly<Record<PromiseStateT, { label: string; tone: Tone; hint: string }>> = {
-  broken: { label: "Не передзвонив", tone: "bad", hint: "Термін минув, а менеджер, що обіцяв, так і не набрав клієнта. Дзвінки колег не рахуються (рішення 30.09)." },
+  broken: { label: "Немає дзвінка в телефонії", tone: "warn", hint: "Термін минув, а в Ringostat немає дзвінка менеджера, що обіцяв (дзвінки колег не рахуються). Передзвін з мобільного, у месенджер чи з іншого номера система не бачить — перевірте й позначте в картці розмови." },
   late: { label: "Запізнився", tone: "warn", hint: "Менеджер, що обіцяв, передзвонив, але пізніше терміну." },
   pending: { label: "Чекає", tone: "wait", hint: "Термін ще не минув, або дзвінки Ringostat за цей час ще не синхронізовано." },
   kept_attempt_only: { label: "Лише спроби", tone: "warn", hint: "До терміну менеджер, що обіцяв, дзвонив, але розмови не було." },
   client_called: { label: "Клієнт подзвонив сам", tone: "wait", hint: "До терміну клієнт подзвонив нам і поговорив; нашого вихідного не було." },
+  kept_offline: { label: "Передзвонив поза телефонією", tone: "ok", hint: "Позначено вручну в картці: передзвін з мобільного, у месенджер чи з іншого номера. Рахується виконаним." },
   kept_talk: { label: "Передзвонив", tone: "ok", hint: "До терміну менеджер, що обіцяв, набрав клієнта й поговорив." },
   unverifiable: { label: "Не перевіряється", tone: "muted", hint: "Обіцянка в месенджер або інша дія — Ringostat цього не бачить, прапорця немає." },
 };
