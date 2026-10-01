@@ -6,8 +6,9 @@ import { withHeavyJobLock } from "./jobLock.js";
  * 💰 РАЗОВИЙ БЕКФІЛ СУМ ЗА ПРАВИЛОМ ФІНАНСИСТА (`deals.fm_income` / `fm_expense`, прохід 2б, 01.10.2026).
  *
  * Синк пише ці колонки щопрохід, але лише угодам, які Kommo відтоді змінював. Автоматичним рядкам «ФМ» потрібні
- * угоди воронки «Повний цикл», що стосуються періодів від 29.12.2025 (дата створення, загрузки чи закриття) —
- * саме вони потрапляють у фільтри фінансиста. Решту бази НЕ тягнемо (урок КРОКУ 1.4: 35 тис. угод випалили
+ * угоди воронки «Повний цикл» від тижня 28.09.2026 (дата створення, загрузки чи закриття — разом із майбутніми
+ * датами загрузки): автоматика рахує з 05.10, минуле — числа з таблиці (рішення Романа 01.10.2026). Заміряно: 1 041 угода.
+ * Решту бази НЕ тягнемо (урок КРОКУ 1.4: 35 тис. угод випалили
  * compute-квоту Neon). Перед записом — сухий прогін з кількістю.
  *
  * 🔒 Під `withHeavyJobLock`: `UPDATE` по `deals` конкурує з `syncKommo`. Батчі по 250 у порядку `kommo_id`,
@@ -18,7 +19,7 @@ import { withHeavyJobLock } from "./jobLock.js";
  *   node dist/jobs/backfillFmSums.js --since=2026-09-01 --write   # вужче вікно
  */
 export async function backfillFmSums(opts: { write?: boolean; since?: string } = {}) {
-  const since = opts.since ?? "2025-12-29";
+  const since = opts.since ?? "2026-09-28"; // тиждень перед стартом автоматики (FM_AUTO_FROM): минуле — з таблиці
   const ids = (await pool.query<{ kommo_id: string }>(
     `SELECT kommo_id FROM deals
       WHERE pipeline_id = 8921932 AND fm_income IS NULL AND fm_expense IS NULL

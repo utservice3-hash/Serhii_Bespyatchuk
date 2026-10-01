@@ -220,7 +220,7 @@ export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
         </table>
       </div>
       <div className="hr-sect hr-muted" style={{ fontSize: 12.5, display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <span>Тиждень — з понеділка по неділю за Києвом. Рядки «авто» рахуються за фільтрами Kommo і фіксуються в ніч після кінця періоду — далі CRM може змінитись, а число тижня ні. Довідка CRM / 1С біля ручних рядків не підміняє внесене число.</span>
+        <span>Тиждень — з понеділка по неділю за Києвом. Рядки «авто» (з тижня 05.10 і з жовтня) рахуються за фільтрами Kommo і фіксуються в ніч після кінця періоду — далі CRM може змінитись, а число тижня ні; раніші періоди — числа з таблиці «ФМ». Довідка CRM / 1С біля ручних рядків не підміняє внесене число.</span>
         {data.canEdit && !edit && <button className="fin-link" onClick={act.addSection}>+ Розділ</button>}
       </div>
       {card != null && <KpiDrawer id={card} kind={data.kind} periodStart={data.start} closed={!!data.closed} canEdit={data.canEdit} toast={toast} onChanged={reload} onClose={() => setCard(null)} />}

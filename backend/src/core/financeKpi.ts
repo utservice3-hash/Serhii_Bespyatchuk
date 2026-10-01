@@ -63,6 +63,13 @@ export function receivablesSnapshotFits(kind: PeriodKind, start: string, now: Da
   const today = kyivDate(now), end = periodEnd(kind, start);
   return start === currentPeriod(kind, now) || (forFreeze && today > end && today <= addDays(end, 1));
 }
+/**
+ * 🗓 СТАРТ АВТОМАТИКИ «ФМ» (рішення Романа 01.10.2026: «суми з цього тижня, бекфіл по таблиці, фільтри тільки з нового
+ * тижня»). Періоди ДО старту — числа з таблиці Тетяни: авто-рядок там поводиться як ручний (вноситься, не
+ * фіксується, без CRM поруч). З тижня 05.10 і з жовтня — рахується за фільтрами й фіксується.
+ */
+export const FM_AUTO_FROM: Readonly<Record<PeriodKind, string>> = { week: "2026-10-05", month: "2026-10-01" };
+export const autoActive = (kind: PeriodKind, start: string) => start >= FM_AUTO_FROM[kind];
 export const isActiveIn = (offFrom: string | null, start: string) => offFrom == null || start < offFrom;
 
 // ── Обчислювані показники ─────────────────────────────────────────────────────
@@ -145,6 +152,8 @@ export async function loadPeriod(db: Db, kindArg: unknown, dateArg: unknown, ref
   const closedSet = new Set(cls.rows.map((x: any) => x.p));
   const cur = new Map<number, any>(), old = new Map<number, any>();
   for (const x of v.rows) (x.p === start ? cur : old).set(x.kpi_id, x);
+  // До старту автоматики авто-рядок — ручний (число з таблиці); `kind` у відповіді — уже з поправкою на період.
+  const kindIn = (x: any, period: string) => (x.kind === "auto" && !autoActive(kind, period) ? "manual" : x.kind);
   const defs: KpiDef[] = k.rows.filter((x: any) => x.id != null).map((x: any) => ({
     id: x.id, sectionId: x.section_id, kind: x.kind, argA: x.arg_a, argB: x.arg_b, active: isActiveIn(x.off_from, start) }));
   const prevDefs = defs.map((d) => ({ ...d, active: isActiveIn(k.rows.find((x: any) => x.id === d.id).off_from, prev) }));
@@ -158,7 +167,7 @@ export async function loadPeriod(db: Db, kindArg: unknown, dateArg: unknown, ref
     row?.frozen_at ? "frozen" : closedSet.has(period) && row?.value != null ? "closed" : !liveOk && row?.value != null ? "saved" : null;
   const pick = (map: Map<number, any>, period: string, live: boolean) => new Map([...kindOf.keys()].map((id) => {
     const x: any = kindOf.get(id), row = map.get(id);
-    if (x.kind !== "auto") return [id, num(row?.value)];
+    if (kindIn(x, period) !== "auto") return [id, num(row?.value)];
     if (autoSource(row, period, hasLive(x, live))) return [id, num(row.value)];
     return [id, hasLive(x, live) ? refs[x.ref_source as RefSource] ?? null : null];
   }));
@@ -171,12 +180,12 @@ export async function loadPeriod(db: Db, kindArg: unknown, dateArg: unknown, ref
     if (x.id == null) continue;
     const c = cur.get(x.id);
     s.kpis.push({
-      id: x.id, name: x.name, unit: x.unit, kind: x.kind, argA: x.arg_a, argB: x.arg_b, refSource: x.ref_source,
+      id: x.id, name: x.name, unit: x.unit, kind: kindIn(x, start), argA: x.arg_a, argB: x.arg_b, refSource: x.ref_source,
       offFrom: x.off_from, active: isActiveIn(x.off_from, start),
       value: curVals.get(x.id) ?? null, prevValue: prevVals.get(x.id) ?? null, note: c?.note ?? null,
       savedRef: c?.ref_value != null ? { value: Number(c.ref_value), at: c.ref_at } : null,
-      autoState: x.kind === "auto" ? (autoSource(c, start, hasLive(x, true)) ?? (hasLive(x, true) ? "live" : null)) : null,
-      liveRef: x.ref_source && x.ref_source in refs ? refs[x.ref_source as RefSource] ?? null : null,
+      autoState: kindIn(x, start) === "auto" ? (autoSource(c, start, hasLive(x, true)) ?? (hasLive(x, true) ? "live" : null)) : null,
+      liveRef: x.ref_source && x.ref_source in refs && !(x.kind === "auto" && !autoActive(kind, start)) ? refs[x.ref_source as RefSource] ?? null : null,
     });
   }
   const cl = await db.query(`SELECT c.closed_at AS at, c.note, ${ACTOR} AS actor FROM fin_kpi_closes c LEFT JOIN users u ON u.id = c.closed_by
@@ -243,8 +252,8 @@ export async function saveKpiValues(db: Db, actor: number, kindArg: unknown, dat
   for (const id of ids) {
     const x: any = kpis.get(id);
     if (!x || x.deleted_at) throw new FinError(404, "Показник не знайдено — нічого не збережено");
-    if (x.kind === "auto") throw new FinError(400, `«${x.name}» рахується сам за фільтрами Kommo — його не вносять`);
-    if (x.kind !== "manual") throw new FinError(400, `«${x.name}» рахується сам — його не вносять`);
+    if (x.kind === "auto" && autoActive(kind, start)) throw new FinError(400, `«${x.name}» рахується сам за фільтрами Kommo — його не вносять`);
+    if (x.kind !== "manual" && x.kind !== "auto") throw new FinError(400, `«${x.name}» рахується сам — його не вносять`);
     if (!isActiveIn(x.off_from, start)) throw new FinError(409, `Показник «${x.name}» вимкнений у цьому періоді — нічого не збережено`);
   }
   const cur = await db.query(`SELECT kpi_id, value::text AS value FROM fin_kpi_values WHERE period_kind = $1 AND period_start = $2::date AND kpi_id = ANY($3::int[]) FOR UPDATE`, [kind, start, ids]);
@@ -596,6 +605,7 @@ export async function importFm(db: Db, actor: number | null, file: FmFile, fromM
  */
 export async function freezeAutoKpis(db: Db, kindArg: unknown, dateArg: unknown, refs: RefValues): Promise<{ frozen: number; skipped: string | null }> {
   const { kind, start } = periodStart(kindArg, dateArg);
+  if (!autoActive(kind, start)) return { frozen: 0, skipped: "до старту автоматики — число з таблиці" };
   const cl = await db.query(`SELECT 1 FROM fin_kpi_closes WHERE period_kind = $1 AND period_start = $2::date`, [kind, start]);
   if (cl.rows.length) return { frozen: 0, skipped: "період закрито" };
   const k = await db.query(`SELECT f.id, f.name, f.ref_source, f.off_from::text AS off_from, v.frozen_at, v.value::text AS value
@@ -613,4 +623,61 @@ export async function freezeAutoKpis(db: Db, kindArg: unknown, dateArg: unknown,
     frozen++;
   }
   return { frozen, skipped: null };
+}
+
+// ── Дотягування окремих періодів із «ФМ» (прохід 2б, 01.10.2026) ───────────────
+
+/**
+ * «Бекфіл по таблиці»: ФІНАЛЬНІ числа названих періодів з аркуша «ФМ» лягають у базу, період закривається
+ * («перенесено з «ФМ»»), як при разовому перенесенні. Лише періоди ДО старту автоматики і лише незакриті —
+ * закрите незмінне, а після старту число рахує CRM. Проміжне (ще не фінальне у файлі) — відмова, а не здогад.
+ * Усе або нічого; що змінилось — у журнал з «було → стало».
+ */
+export async function importFmPeriods(db: Db, actor: number | null, file: FmFile, targets: { kind: PeriodKind; start: string }[]) {
+  if (!targets.length) throw new FinError(400, "Не названо жодного періоду");
+  const plan = planFmImport(file, "2000-01-03");
+  const src = { week: new Map(plan.weeks), month: new Map(plan.months) };
+  const flat = FM_LAYOUT.flatMap((sec) => sec.kpis.map((k) => ({ ...k, section: sec.section }))).filter((k) => isInput(k.kind));
+  const ids = new Map<string, number>();
+  for (const k of flat) {
+    const r = await db.query(`SELECT f.id FROM fin_kpis f JOIN fin_kpi_sections s ON s.id = f.section_id
+       WHERE s.name = $1 AND f.name = $2 AND f.deleted_at IS NULL AND s.deleted_at IS NULL`, [k.section, k.name]);
+    if (r.rows.length !== 1) throw new FinError(409, `Рядок «${k.section} · ${k.name}» не знайдено однозначно — нічого не записано`);
+    ids.set(k.key, r.rows[0].id);
+  }
+  // Спершу перевірити ВСІ періоди, потім писати: погана назва в кінці списку не лишає першого записаним.
+  const ready: { kind: PeriodKind; start: string; p: { values: Record<string, number | null>; final: boolean } }[] = [];
+  for (const t of targets) {
+    const { kind, start } = periodStart(t.kind, t.start);
+    if (autoActive(kind, start)) throw new FinError(409, `${pLabel(kind, start)} — після старту автоматики, його рахує CRM`);
+    await assertOpen(db, kind, start);
+    const p = src[kind].get(start);
+    if (!p) throw new FinError(409, `${pLabel(kind, start)}: у файлі немає чисел`);
+    if (!p.final) throw new FinError(409, `${pLabel(kind, start)}: у файлі ще проміжне число — фінал з'явиться з наступним блоком`);
+    ready.push({ kind, start, p });
+  }
+  const out: { kind: PeriodKind; start: string; changed: string[] }[] = [];
+  for (const { kind, start, p } of ready) {
+    const notes = (p as { notes?: Record<string, string> }).notes ?? {};
+    const changed: string[] = [];
+    for (const k of flat) {
+      const v = p.values[k.key] ?? null, n = notes[k.key] ?? null, id = ids.get(k.key)!;
+      const cur = await db.query(`SELECT value::text AS value, note FROM fin_kpi_values WHERE kpi_id = $1 AND period_kind = $2 AND period_start = $3::date`, [id, kind, start]);
+      const was = num(cur.rows[0]?.value);
+      if (v == null && !n && was == null) continue; // порожня фінальна клітинка стирає проміжне: правда — файл
+      await db.query(`INSERT INTO fin_kpi_values (kpi_id, period_kind, period_start, value, note, updated_by, updated_at) VALUES ($1, $2, $3::date, $4, $5, $6, now())
+        ON CONFLICT (kpi_id, period_kind, period_start) DO UPDATE SET value = EXCLUDED.value, note = COALESCE(EXCLUDED.note, fin_kpi_values.note),
+          updated_by = EXCLUDED.updated_by, updated_at = now()`, [id, kind, start, v, n, actor]);
+      if (was !== v) {
+        await log(db, actor, "kpi", id, `${k.name} · ${pLabel(kind, start)}: ${fmt(was)} → ${fmt(v)} (фінал з «ФМ»)`, { kind, start, field: "value", old: was, new: v });
+        changed.push(`${k.section} · ${k.name}: ${fmt(was)} → ${fmt(v)}`);
+      }
+    }
+    await db.query(`INSERT INTO fin_kpi_closes (period_kind, period_start, closed_by, note) VALUES ($1, $2::date, $3, 'перенесено з «ФМ»')`, [kind, start, actor]);
+    await db.query(`UPDATE fin_kpi_imports SET detail = jsonb_set(detail, ARRAY['interim', $1::text],
+        COALESCE((SELECT jsonb_agg(x) FROM jsonb_array_elements(detail->'interim'->$1::text) x WHERE x <> to_jsonb($2::text)), '[]'::jsonb))
+      WHERE key = 'fm-2026' AND detail->'interim' ? $1::text`, [kind, start]);
+    out.push({ kind, start, changed });
+  }
+  return out;
 }
