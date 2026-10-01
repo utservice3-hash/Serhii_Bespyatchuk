@@ -2919,7 +2919,7 @@ SELECT u.id, m.id, 'done', now()
 --
 -- ➕ 01.10.2026 СКЛАД РОЗШИРЕНО НА HR — рішення Романа дослівно: «так, дай hr редагування навчання».
 -- HR не адмін-рівня, тож разом із правом він дістає й перегляд чернеток через `seesDrafts` у
--- `routes/training.ts` — інакше редагував би лише опубліковане (11 із 12 курсів були чернетками). Тримає `#411b`, `#742`.
+-- `routes/training.ts` — інакше редагував би лише опубліковане (11 із 12 курсів були чернетками). Тримає `#411b`, `#774`.
 UPDATE roles SET permissions = permissions || '{"manage_training": true}'::jsonb
  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'hr');
 UPDATE roles SET permissions = permissions - 'manage_training'

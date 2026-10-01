@@ -1327,7 +1327,7 @@ export const ACCESS_MATRIX: AccessRow[] = [
      з `allow` на `deny-only` рядках ніхто б не побачив — там дозволених не пробують.
      `candidate` у `deny` з народження: його єдиний екран — навчання, але лише читати.
      ➕ 01.10.2026 `hr` вийшов із `deny` усіх роутів запису навчання — Роман: «так, дай hr редагування навчання».
-     На `deny-only` рядках дозволених не пробують, тож доказ дозволу — жива проба в прийманні і `#742`. */
+     На `deny-only` рядках дозволених не пробують, тож доказ дозволу — жива проба в прийманні і `#774`. */
   { method: "POST", path: "/api/training/folder", cls: "deny-only",
     allow: [], deny: ["financier", "team_lead", "manager"] },
   { method: "DELETE", path: "/api/training/folder/:id", cls: "DELETE-ghost",

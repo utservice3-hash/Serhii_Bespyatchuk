@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 /**
- * ✏️ HR РЕДАГУЄ НАВЧАННЯ (01.10.2026) — гейт `#742`. Роман: «так, дай hr редагування навчання».
+ * ✏️ HR РЕДАГУЄ НАВЧАННЯ (01.10.2026) — гейт `#774`. Роман: «так, дай hr редагування навчання».
  *
  * Права `manage_training` HR замало: «бачить чернетки» в навчанні до цього дня вирішував адмін-рівень, а HR не
  * адмін — він отримав би кнопки редактора над списком без чернеток (на проді 11 із 12 курсів — чернетки). Тому
@@ -17,7 +17,7 @@ import path from "node:path";
  */
 const SCHEMA = path.join(import.meta.dirname, "..", "db", "schema.sql");
 
-test("#742 ЖИВИЙ SQL: HR бачить чернетки й редагує навчання; тімлід — ні; фінансист бачить, але не редагує", async (t) => {
+test("#774 ЖИВИЙ SQL: HR бачить чернетки й редагує навчання; тімлід — ні; фінансист бачить, але не редагує", async (t) => {
   const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
   const s = provisionScratch();
   if ("unavailable" in s) return t.skip(skipReason(s));
