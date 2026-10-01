@@ -202,7 +202,7 @@ export async function leadgenHandoffs(from: string, to: string, limit = 500): Pr
        LEFT JOIN managers m ON m.id = d.manager_id
       WHERE e.pipeline_id = ANY($3) AND e.status_id = 142
         AND (e.changed_at ${K})::date BETWEEN $1 AND $2
-        AND NOT ${relayEntryPred("$3", String(LEADGEN_STAGE_IDS.qualified), LINK_WIN)}
+        AND NOT ${relayEntryPred("$3", LINK_WIN)}
       GROUP BY e.kommo_id
       ORDER BY day DESC, e.kommo_id DESC
       LIMIT $4`,
@@ -239,7 +239,7 @@ export async function leadgenWeekly(from: string, to: string): Promise<LeadgenWe
     `SELECT to_char(date_trunc('week', (e.changed_at ${K})), 'YYYY-MM-DD') AS week,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE ${leadStatusPred("e.status_id", "$4", "$5")}) AS leads,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.status_id = $5) AS opr,
-            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.status_id = 142 AND NOT ${relayEntryPred("$3", String(LEADGEN_STAGE_IDS.qualified), LINK_WIN)}) AS quotes
+            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.status_id = 142 AND NOT ${relayEntryPred("$3", LINK_WIN)}) AS quotes
        FROM deal_stage_events e
        JOIN deals d ON d.kommo_id = e.kommo_id
       WHERE e.pipeline_id = ANY($3) AND e.status_id IN ($4, $5, 142)
