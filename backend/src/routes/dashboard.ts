@@ -6331,8 +6331,9 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     tabGroupRank: clientTabs.TAB_GROUP_RANK,
     // 🔁 Пул лідгенів (ТЗ 22.09, п.4.2–4.4): хто бачить вкладку пулу і хто може брати.
     leadgenPool: await leadgenPoolAccess(auth),
-    reactRules: { quietMonths: reactCycleRules.QUIET_MONTHS, selfGraceMonths: reactCycleRules.SELF_GRACE_MONTHS,
-                  launchMonth: reactCycleRules.LAUNCH_MONTH },
+    reactRules: { quietMonths: reactCycleRules.QUIET_MONTHS, decisionDays: reactCycleRules.DECISION_DAYS,
+                  selfGraceDays: reactCycleRules.SELF_GRACE_DAYS, weeklyCap: reactCycleRules.WEEKLY_CAP,
+                  launchRelease: reactCycleRules.LAUNCH_RELEASE, transferHour: reactCycleRules.TRANSFER_HOUR },
     thresholds: {
       sleepingDays: reactivationRules.SEGMENT_SLEEPING_DAYS,
       lostDays: reactivationRules.LOST_DAYS,

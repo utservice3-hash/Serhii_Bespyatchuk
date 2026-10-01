@@ -4002,7 +4002,7 @@ export interface ClientPlansResp {
   /** 🔁 Пул лідгенів (ТЗ 22.09, блок 4): хто бачить вкладку пулу і хто бере — вирішує сервер. */
   leadgenPool?: { canSee: boolean; canTake: boolean };
   /** 🔁 Числа правила реактивації з ядра — для підпису, фронт їх не рахує. */
-  reactRules?: { quietMonths: number; selfGraceMonths: number; launchMonth: string };
+  reactRules?: { quietMonths: number; decisionDays: number; selfGraceDays: number; weeklyCap: number; launchRelease: string; transferHour: number };
   weeks: { label: string; from: string; to: string; status: "past" | "current" | "future"; workingDays: number }[];
   /** Довідники дій, що переїхали з вкладки «Реактивація». Приходять із ядра. */
   closeReasons?: { key: string; label: string }[];
@@ -4139,7 +4139,7 @@ export interface ReactCycleView {
   lastInvoice: string | null;
   status: "waiting" | "self" | "pool" | "taken";
   poolReason: "manager" | "auto" | "self_expired" | null;
-  /** Останній місяць, до кінця якого рахунок або дія ще рятують від автопередачі; null — строку немає. */
+  /** Понеділок (`YYYY-MM-DD`), з якого клієнт до передачі лідгенам; черга по 100 на тиждень може відсунути. null — строку немає. */
   deadline: string | null;
   daysLeft: number | null;
   allowed: ("self" | "leadgen")[];

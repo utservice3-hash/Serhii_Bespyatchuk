@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
-  addMonths, inReact, cycleMonthOf, statusOf, deadlineMonth, autoDue, autoReason, allowedDecisions,
-  planSweep, poolAccess, daysLeft, LAUNCH_MONTH, type CycleRow,
+  addMonths, inReact, cycleMonthOf, statusOf, transferMonday, autoDue, autoReason, allowedDecisions,
+  planSweep, poolAccess, daysLeft, LAUNCH_MONTH, LAUNCH_RELEASE, WEEKLY_CAP, weekMonday, mondayOnOrAfter,
+  transferWindowOpen, type CycleRow, type Candidate,
 } from "./reactCycleRules.js";
 import { clientTabGroup, tabOf, TAB_GROUP_RANK, YELLOW_DAYS } from "./clientTabs.js";
 import { skipReason } from "../db/scratchDb.js";
@@ -17,12 +18,12 @@ const codeOnly = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[
 
 /**
  * 🔁 #840–#848 — ТЗ Юлі 22.09.2026, блок 4 «Реактивація і лідгени» (задача 4313, 30.09.2026).
- * Рішення Романа 30.09: «сам» — зі строком до кінця наступного місяця; у пул — усі без рахунку;
- * гроші — за угодою в Kommo (тут не рахуються).
+ * Рішення Романа 30.09: «сам» — зі строком (з 01.10 — 4 тижні від натискання, `#1211`); у пул — усі без рахунку;
+ * гроші — за угодою в Kommo (тут не рахуються). З 01.10.2026 передача щотижня — `#1210`–`#1215`.
  */
 
 const row = (p: Partial<CycleRow> & { cycleMonth: string }): CycleRow => ({
-  decision: null, decidedMonth: null, pooled: false, poolReason: null, closed: false, closeReason: null, ...p,
+  decision: null, decidedDate: null, pooled: false, poolReason: null, closed: false, closeReason: null, ...p,
 });
 
 test("#840 3 ПОВНІ МІСЯЦІ БЕЗ РАХУНКУ: межа по обидва боки, вкладка за рахунком, а не за днями оплати", () => {
@@ -68,60 +69,6 @@ test("#840c ФРОНТ НЕ МАЄ ВЛАСНОГО ПРАВИЛА ВКЛАДО�
   assert.match(dash, /tabGroupRank: clientTabs\.TAB_GROUP_RANK,/, "🔴 ранги груп не приходять із сервера");
   assert.match(dash, /inWork: clients\.filter\(\(c\) => c\.tabGroup === "react"\)\.length,/,
     "🔴 «у роботі» зверху рахує не ту множину, що вкладка «Реактивація»");
-});
-
-test("#841 АВТОПЕРЕДАЧА: без рішення — після кінця місяця циклу; пул, взятий і боржник — не чіпаються; ожилий закривається", () => {
-  const cm = "2026-11";                  // рахунок у липні → листопад — 4-й місяць
-  const inv = "2026-07-10";
-  assert.equal(cycleMonthOf(inv), cm);
-  assert.equal(autoDue(cm, null, "2026-11"), false, "🔴 передача ВСЕРЕДИНІ 4-го місяця — ТЗ дає весь місяць");
-  assert.equal(autoDue(cm, null, "2026-12"), true, "🔴 4-й місяць минув без дії, а клієнт не пішов у пул");
-  assert.equal(autoReason(null), "auto");
-  const cand = (k: string, lastInvoice: string | null, debtHold = false) => ({ clientKey: k, lastInvoice, managerId: 10, debtHold });
-  const rows = new Map<string, CycleRow[]>([
-    ["pooled", [row({ cycleMonth: cm, decision: "leadgen", pooled: true, poolReason: "manager" })]],
-    ["taken", [row({ cycleMonth: cm, pooled: true, poolReason: "auto", closed: true, closeReason: "taken" })]],
-  ]);
-  const a = planSweep(
-    [cand("silent", inv), cand("pooled", inv), cand("taken", inv), cand("debtor", inv, true), cand("alive", "2026-11-20")],
-    rows, [{ clientKey: "revived", cycleMonth: "2026-10", lastInvoice: "2026-12-03" },
-           { clientKey: "stillquiet", cycleMonth: "2026-10", lastInvoice: "2026-05-01" }], "2026-12");
-  assert.deepEqual(a.pool.map((p) => `${p.clientKey}:${p.reason}:${p.fromManagerId}`), ["silent:auto:10"],
-    "🔴 у пул пішов не рівно «мовчазний»: пул/взятий/боржник/живий мають лишитись");
-  assert.deepEqual(a.close.map((c) => c.clientKey), ["revived"], "🔴 ожилий (рахунок у грудні) лишився в пулі або закрито ще тихого");
-});
-
-test("#842 СТАРТ — ЖОВТЕНЬ 2026 ДЛЯ ВСІХ, ХТО ВЖЕ В РЕАКТИВАЦІЇ: перша ніч нікого не переносить", () => {
-  assert.equal(LAUNCH_MONTH, "2026-10");
-  // Давній клієнт: справжній «4-й місяць» був у 2025, але цикл — жовтень 2026.
-  assert.equal(cycleMonthOf("2025-01-15"), "2026-10", "🔴 цикл пішов від історії — перша ніч скине сотні клієнтів у пул");
-  assert.equal(cycleMonthOf(null), "2026-10");
-  assert.equal(cycleMonthOf("2026-06-30"), "2026-10");
-  const old = [{ clientKey: "old", lastInvoice: "2025-01-15", managerId: 1, debtHold: false }];
-  for (const now of ["2026-09", "2026-10"]) {
-    assert.deepEqual(planSweep(old, new Map(), [], now).pool, [], `🔴 ${now}: автопередача раніше за 01.11.2026`);
-  }
-  assert.equal(planSweep(old, new Map(), [], "2026-11").pool.length, 1, "дзеркало: у листопаді давній клієнт таки йде в пул");
-});
-
-test("#847 «РЕАКТИВУЮ САМ» — ЗІ СТРОКОМ І ОДИН РАЗ: до кінця наступного місяця, повторно не продовжується", () => {
-  const cm = "2026-10";
-  const self = row({ cycleMonth: cm, decision: "self", decidedMonth: "2026-10" });
-  assert.equal(statusOf(self), "self");
-  assert.equal(deadlineMonth(cm, self), "2026-11", "🔴 строк «сам» не до кінця наступного місяця");
-  assert.equal(autoDue(cm, self, "2026-11"), false, "🔴 «сам» натиснули — а клієнт пішов у пул, не дочекавшись строку");
-  assert.equal(autoDue(cm, self, "2026-12"), true, "🔴 рішення 1: строк «сам» минув без рахунку — клієнт мав піти в пул");
-  assert.equal(autoReason(self), "self_expired", "🔴 у пулі не видно, що менеджер не встиг за власним строком");
-  // Натиснули в останній день 4-го місяця — строк від місяця натискання, а не від циклу.
-  const late = row({ cycleMonth: cm, decision: "self", decidedMonth: "2026-11" });
-  assert.equal(deadlineMonth(cm, late), "2026-12");
-  // Кнопки: «сам» — лише раз; після нього можна лише передати лідгенам; у пулі — нічого.
-  assert.deepEqual(allowedDecisions(null), ["self", "leadgen"]);
-  assert.deepEqual(allowedDecisions(self), ["leadgen"], "🔴 «сам» можна натиснути вдруге — строк продовжується без кінця");
-  assert.deepEqual(allowedDecisions(row({ cycleMonth: cm, pooled: true, poolReason: "manager", decision: "leadgen" })), []);
-  assert.deepEqual(allowedDecisions(row({ cycleMonth: cm, pooled: true, poolReason: "auto", closed: true, closeReason: "taken" })), []);
-  assert.equal(daysLeft("2026-10", "2026-10-30"), 1);
-  assert.equal(daysLeft("2026-11", "2026-10-30"), 31);
 });
 
 test("#845 ПУЛ: бачать лідгени й керівництво, бере лише лідген; менеджер — ні (дзеркало в обидва боки)", () => {
@@ -184,6 +131,154 @@ test("#848 ФРОНТ НЕ МАЄ ВЛАСНОГО ПРАВИЛА ЦИКЛУ: к
   assert.match(card, /<ReactCycleButtons clientKey=\{card\.clientKey\} cycle=\{card\.reactCycle\}/);
   // Помилка кнопки видима (борг 15): відмова сервера не летить у порожнечу.
   assert.match(bits, /onError\(r\?\.data\?\.error \?\?/, "🔴 відмова сервера на кнопці циклу мовчить");
+});
+
+// ───────────── ЩОТИЖНЯ ЗАМІСТЬ РАЗ НА МІСЯЦЬ (рішення Романа 01.10.2026, підтвердила Юля) ─────────────
+
+const cand = (k: string, lastInvoice: string | null, debtHold = false): Candidate => ({ clientKey: k, lastInvoice, managerId: 10, debtHold });
+
+/**
+ * #1210 — 4 ТИЖНІ НА РІШЕННЯ ВІД ВХОДУ, ПЕРЕДАЧА В НАЙБЛИЖЧИЙ ПОНЕДІЛОК. Рахунок у липні → вхід 01.11 →
+ * 4 тижні до 28.11 → передача пн 30.11. Пул, взятий, боржник і живий не чіпаються; ожилий закривається.
+ * 🧨 Червоніє, якщо повернути «кінець місяця» або передати на день раніше.
+ */
+test("#1210 СТРОК РІШЕННЯ: 4 тижні від входу → найближчий понеділок; пул, взятий, боржник, живий — не чіпаються; ожилий закривається", () => {
+  const cm = "2026-11";
+  const inv = "2026-07-10";
+  assert.equal(cycleMonthOf(inv), cm);
+  assert.equal(transferMonday(cm, null), "2026-11-30", "🔴 вхід 01.11 + 4 тижні → не понеділок 30.11");
+  assert.equal(autoDue(cm, null, "2026-11-29"), false, "🔴 передача раніше, ніж минуло 4 тижні");
+  assert.equal(autoDue(cm, null, "2026-11-30"), true, "🔴 4 тижні минули без дії, а клієнт не до передачі");
+  // Вхід у понеділок: 4 тижні закінчуються в неділю, передача — у наступний понеділок, рівно через 28 днів.
+  assert.equal(transferMonday("2027-02", null), "2027-03-01", "🔴 вхід у понеділок 01.02.2027 — передача не через 4 тижні");
+  assert.equal(autoReason(null), "auto");
+  const rows = new Map<string, CycleRow[]>([
+    ["pooled", [row({ cycleMonth: cm, decision: "leadgen", pooled: true, poolReason: "manager" })]],
+    ["taken", [row({ cycleMonth: cm, pooled: true, poolReason: "auto", closed: true, closeReason: "taken" })]],
+  ]);
+  const a = planSweep(
+    [cand("silent", inv), cand("pooled", inv), cand("taken", inv), cand("debtor", inv, true), cand("alive", "2026-11-20")],
+    rows, [{ clientKey: "revived", cycleMonth: "2026-10", lastInvoice: "2026-11-27" },
+           { clientKey: "stillquiet", cycleMonth: "2026-10", lastInvoice: "2026-05-01" }], "2026-11-30");
+  assert.deepEqual(a.pool.map((p) => `${p.clientKey}:${p.reason}:${p.fromManagerId}`), ["silent:auto:10"],
+    "🔴 у пул пішов не рівно «мовчазний»: пул/взятий/боржник/живий мають лишитись");
+  assert.deepEqual(a.close.map((c) => c.clientKey), ["revived"], "🔴 ожилий (рахунок у листопаді) лишився в пулі або закрито ще тихого");
+});
+
+/**
+ * #1210b — ХВІСТ ЖОВТНЯ: хто вже був у реактивації (цикл `LAUNCH_MONTH`), до передачі з пн 05.10.2026,
+ * а не через 4 тижні (рішення Романа 01.10: «з 05.10»). Раніше — нікого.
+ * 🧨 Червоніє, якщо віддати 04.10 або чекати 02.11.
+ */
+test("#1210b ХВІСТ ЖОВТНЯ: до передачі з понеділка 05.10.2026 — не раніше й не пізніше", () => {
+  assert.equal(LAUNCH_MONTH, "2026-10");
+  assert.equal(LAUNCH_RELEASE, "2026-10-05");
+  assert.equal(cycleMonthOf("2025-01-15"), "2026-10", "🔴 цикл пішов від історії — давні клієнти не в хвості");
+  assert.equal(transferMonday("2026-10", null), "2026-10-05");
+  const old = [cand("old", "2025-01-15")];
+  for (const d of ["2026-10-01", "2026-10-04"]) {
+    assert.deepEqual(planSweep(old, new Map(), [], d).pool, [], `🔴 ${d}: хвіст пішов раніше за 05.10`);
+  }
+  assert.equal(planSweep(old, new Map(), [], "2026-10-05").pool.length, 1, "🔴 05.10 хвіст не пішов — чекає 02.11, як у місячному правилі");
+});
+
+/**
+ * #1211 — «РЕАКТИВУЮ САМ»: 4 тижні від натискання, далі найближчий понеділок; один раз за цикл.
+ * 🧨 Червоніє, якщо рахувати від кінця місяця або дозволити натиснути вдруге.
+ */
+test("#1211 «РЕАКТИВУЮ САМ»: 4 тижні від натискання → понеділок; один раз; у пулі видно «минув строк»", () => {
+  const cm = "2026-10";
+  const self = row({ cycleMonth: cm, decision: "self", decidedDate: "2026-10-01" });
+  assert.equal(statusOf(self), "self");
+  assert.equal(transferMonday(cm, self), "2026-11-02", "🔴 натиснули 01.10 → +4 тижні 29.10 → передача не в пн 02.11");
+  assert.equal(autoDue(cm, self, "2026-11-01"), false, "🔴 «сам» натиснули — а клієнт пішов, не дочекавшись 4 тижнів");
+  assert.equal(autoDue(cm, self, "2026-11-02"), true, "🔴 4 тижні «сам» минули без рахунку — клієнт мав піти");
+  assert.equal(autoReason(self), "self_expired", "🔴 у пулі не видно, що менеджер не встиг за власним строком");
+  // Натиснули в понеділок → рівно через 4 тижні, теж у понеділок.
+  assert.equal(transferMonday(cm, row({ cycleMonth: cm, decision: "self", decidedDate: "2026-10-26" })), "2026-11-23");
+  assert.deepEqual(allowedDecisions(null), ["self", "leadgen"]);
+  assert.deepEqual(allowedDecisions(self), ["leadgen"], "🔴 «сам» можна натиснути вдруге — строк продовжується без кінця");
+  assert.deepEqual(allowedDecisions(row({ cycleMonth: cm, pooled: true, poolReason: "manager", decision: "leadgen" })), []);
+  assert.equal(daysLeft("2026-10-05", "2026-10-01"), 4);
+  assert.equal(daysLeft("2026-10-05", "2026-10-07"), 0, "🔴 у черзі — від'ємні дні на екрані");
+});
+
+/**
+ * #1212 — ЧЕРГА І МЕЖА: за тиждень не більше `WEEKLY_CAP`; першими — з найсвіжішим рахунком; уже передане
+ * цього тижня зменшує місце; передача закрита — нікого, але ожилі однаково закриваються.
+ * 🧨 Червоніє, якщо прибрати межу, порядок або облік уже переданого.
+ */
+test("#1212 ЧЕРГА: ≤100 за тиждень, від найсвіжішого рахунку; передане цього тижня рахується; закрита передача — лише закриття", () => {
+  assert.equal(WEEKLY_CAP, 100);
+  // 150 клієнтів хвоста з різними датами рахунку (2025-01-01 + i днів), перемішані.
+  const many = Array.from({ length: 150 }, (_, i) => cand(`k${String(i).padStart(3, "0")}`, `2025-${String(1 + Math.floor(i / 28)).padStart(2, "0")}-${String(1 + (i % 28)).padStart(2, "0")}`));
+  const shuffled = [...many].sort((a, b) => (a.clientKey.charCodeAt(3) * 7 % 11) - (b.clientKey.charCodeAt(3) * 7 % 11) || b.clientKey.localeCompare(a.clientKey));
+  const a = planSweep(shuffled, new Map(), [], "2026-10-05");
+  assert.equal(a.pool.length, 100, "🔴 за тиждень пішло не 100");
+  assert.equal(a.deferred, 50);
+  const freshest = [...many].sort((x, y) => (y.lastInvoice ?? "").localeCompare(x.lastInvoice ?? "")).slice(0, 100).map((c) => c.clientKey).sort();
+  assert.deepEqual(a.pool.map((p) => p.clientKey).sort(), freshest, "🔴 першими пішли не клієнти з найсвіжішим рахунком");
+  // Без рахунку взагалі — в кінці черги.
+  const withNull = planSweep([cand("none", null), cand("fresh", "2025-12-01")], new Map(), [], "2026-10-05",
+    { transfer: true, pooledThisWeek: 99 });
+  assert.deepEqual(withNull.pool.map((p) => p.clientKey), ["fresh"], "🔴 клієнт без рахунку випередив того, хто замовляв");
+  assert.equal(planSweep(shuffled, new Map(), [], "2026-10-05", { transfer: true, pooledThisWeek: 60 }).pool.length, 40,
+    "🔴 уже передане цього тижня не зменшило місце — рестарт віддасть понад 100");
+  assert.equal(planSweep(shuffled, new Map(), [], "2026-10-05", { transfer: true, pooledThisWeek: 100 }).pool.length, 0);
+  const closedOnly = planSweep(shuffled, new Map(), [{ clientKey: "revived", cycleMonth: "2026-10", lastInvoice: "2026-10-02" }], "2026-10-05",
+    { transfer: false, pooledThisWeek: 0 });
+  assert.deepEqual(closedOnly.pool, [], "🔴 передача закрита, а клієнти пішли в пул");
+  assert.deepEqual(closedOnly.close.map((c) => c.clientKey), ["revived"], "🔴 закриття ожилих залежить від дня тижня");
+});
+
+/**
+ * #1212b — ВІКНО ПЕРЕДАЧІ: у понеділок лише з 08:00 за Києвом; решта тижня відкрита (добір пропущеного понеділка);
+ * понеділки рахуються правильно й через межу року.
+ * 🧨 Червоніє, якщо віддавати в понеділок уночі або закрити добір.
+ */
+test("#1212b ВІКНО: понеділок — з 08:00; вівторок–неділя — добір; понеділки через межу року", () => {
+  assert.equal(transferWindowOpen("2026-10-05", 0), false, "🔴 нічний прогін понеділка віддав клієнтів до 08:00");
+  assert.equal(transferWindowOpen("2026-10-05", 7), false);
+  assert.equal(transferWindowOpen("2026-10-05", 8), true, "🔴 о 08:00 понеділка передача закрита");
+  assert.equal(transferWindowOpen("2026-10-06", 0), true, "🔴 пропущений понеділок ніхто не добере");
+  assert.equal(transferWindowOpen("2026-10-11", 23), true);
+  assert.equal(weekMonday("2026-10-11"), "2026-10-05", "🔴 неділя віднесена не до свого тижня");
+  assert.equal(weekMonday("2027-01-01"), "2026-12-28");
+  assert.equal(mondayOnOrAfter("2026-12-29"), "2027-01-04");
+  assert.equal(mondayOnOrAfter("2026-10-05"), "2026-10-05");
+});
+
+/**
+ * #1214 — РОЗКЛАД: передача щопонеділка о 08:00 за Києвом окремим запуском; нічний прогін і старт лишаються;
+ * джоба передає в правило вікно передачі й уже передане цього тижня.
+ * 🧨 Червоніє, якщо прибрати понеділковий запуск або не рахувати передане цього тижня.
+ */
+test("#1214 РОЗКЛАД: пн 08:00 за Києвом + нічний прогін; джоба рахує вікно й передане за тиждень", () => {
+  const idx = codeOnly(read("backend/src/index.ts"));
+  assert.match(idx, /cron\.schedule\("0 8 \* \* 1", \(\) => \{\n\s*void runJob\("reactCycleSweep", \(\) => runReactCycleSweep\(\)\);\n\}, \{ timezone: "Europe\/Kyiv" \}\);/,
+    "🔴 немає запуску щопонеділка о 08:00 за Києвом — передача станеться лише вночі вівторка");
+  const job = codeOnly(read("backend/src/jobs/reactCycleSweep.ts"));
+  assert.match(job, /const transfer = transferWindowOpen\(today, kyivHour\(\)\);/, "🔴 джоба не питає, чи відкрита передача");
+  assert.match(job, /await autoPooledSince\(pool, weekMonday\(today\)\)/, "🔴 джоба не рахує вже передане цього тижня — рестарт віддасть понад 100");
+  assert.match(job, /today, \{ transfer, pooledThisWeek \}\);/, "🔴 вікно й передане не дійшли до правила");
+});
+
+/**
+ * #1215 — ФРОНТ НЕ РАХУЄ СТРОК САМ: понеділок приходить із сервера; «з», бо черга може відсунути; пояснення
+ * над вкладкою — з констант ядра, без «до кінця місяця» й «01.11».
+ * 🧨 Червоніє, якщо повернути `lastDay`/«кінець місяця» у фронт або зашити числа в текст.
+ */
+test("#1215 ФРОНТ: строк — понеділок із сервера («з пн DD.MM»), пояснення — з констант ядра", () => {
+  const bits = codeOnly(read(`${SECTIONS}/ReactivationCycle.tsx`));
+  assert.match(bits, /const dl = cycle\.deadline;/, "🔴 фронт перетворює строк сам");
+  assert.doesNotMatch(bits, /lastDay|Date\.UTC\(/, "🔴 у фронті знову «останній день місяця»");
+  assert.match(bits, /передача лідгенам з <b>пн \{ddmm\(dl\)\}<\/b>/, "🔴 на екрані не «з понеділка»");
+  assert.doesNotMatch(read(`${SECTIONS}/ReactivationCycle.tsx`), /до кінця наступного місяця/, "🔴 кнопка обіцяє місячний строк");
+  const list = codeOnly(read(`${SECTIONS}/ClientPlansSection.tsx`));
+  for (const k of ["decisionDays", "selfGraceDays", "weeklyCap", "launchRelease", "transferHour"]) {
+    assert.match(list, new RegExp(`data\\.reactRules\\.${k}`), `🔴 пояснення над вкладкою не бере ${k} із сервера`);
+  }
+  assert.doesNotMatch(list, /перша автопередача 01\.11\.2026|до кінця\s+місяця клієнт іде/, "🔴 над вкладкою лишився місячний текст");
 });
 
 // ─────────────────────────────── ЖИВИЙ SQL ───────────────────────────────
@@ -330,4 +425,33 @@ test("#848b МІСТОК «ЩЕ N У РЕАКТИВАЦІЇ» == ЛІЧИЛЬН�
   assert.match(list, /🌉 Ще <b>\{tabCounts\.react\}<\/b> постійних зараз у <b>реактивації<\/b>/,
     "🔴 місток рахує реактивацію не тим числом, що вкладка — два джерела одного показника на екрані");
   assert.doesNotMatch(list, /Ще <b>\{t\.inReactivation\}<\/b>/, "🔴 місток знову на стані за днями оплати");
+});
+
+/**
+ * #1213 — ЖИВИЙ SQL: «передано цього тижня» рахує лише АВТОМАТИЧНІ передачі з понеділка за Києвом; ручна
+ * передача менеджером межі не їсть; другий прогін того ж тижня понад межу не віддає.
+ * 🧨 Червоніє, якщо рахувати ручні, минулий тиждень або забути тижневу межу на повторі.
+ */
+test("#1213 ЖИВИЙ SQL: тижневий лічильник — лише авто з понеділка; повтор тижня понад 100 не віддає", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  try {
+    const R = await import("./reactCycle.js");
+    const ins = (k: string, reason: string, at: string) => c.query(
+      `INSERT INTO client_react_cycles (client_key, cycle_month, pooled_at, pool_reason, from_manager_id) VALUES ($1, '2026-10-01', $2::timestamptz, $3, 10)`,
+      [k, at, reason]);
+    await ins("auto-mon", "auto", "2026-10-05 08:00:00+03");
+    await ins("self-tue", "self_expired", "2026-10-06 00:40:00+03");
+    await ins("manual", "manager", "2026-10-05 09:00:00+03");
+    await ins("last-week", "auto", "2026-10-04 23:59:00+03");     // неділя минулого тижня за Києвом
+    await ins("utc-trap", "auto", "2026-10-04 22:30:00+00");      // 05.10 01:30 за Києвом — уже цей тиждень
+    assert.equal(await R.autoPooledSince(c, "2026-10-05"), 3, "🔴 лічильник тижня: ручна передача чи минулий тиждень, або UTC замість Києва");
+    // Повтор того ж тижня: межа знає про вже передане.
+    const due = Array.from({ length: 120 }, (_, i) => cand(`d${i}`, `2025-06-${String(1 + (i % 28)).padStart(2, "0")}`));
+    const again = planSweep(due, new Map(), [], "2026-10-07", { transfer: true, pooledThisWeek: await R.autoPooledSince(c, "2026-10-05") });
+    assert.equal(again.pool.length, 97, "🔴 повторний прогін тижня не врахував уже передане");
+  } finally {
+    await s.done();
+  }
 });
