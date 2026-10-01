@@ -4453,6 +4453,12 @@ CREATE TABLE IF NOT EXISTS ba_ttn_checks (
   UNIQUE (month, manager_id)
 );
 
+-- 🔒 Увесь розділ «Бізнес-асистент» закрито від моделі (рішення Романа 01.10.2026 «5а»): борги клієнтів,
+-- судові справи, документи, видача техніки, перевірки ТТН. Після GRANT і після CREATE усіх таблиць блоку;
+-- `ba_equipment_issues` закрита вище. Гейт #1240 бере перелік ЗІ СХЕМИ за префіксом `ba_` — нова таблиця
+-- розділу без REVOKE червоніє сама.
+REVOKE ALL ON ba_claims, ba_court_cases, ba_files, ba_events, ba_equipment, ba_ttn_checks, ba_migrations FROM ai_readonly;
+
 -- ▼ AI-АНАЛІЗ ДЗВІНКІВ ПО РЕКЛАМНИХ ЛІДАХ (ТЗ 22.09.2026, прохід A, коміт ②) ▼
 -- Три таблиці з ІСТОРІЄЮ: жодного TRUNCATE, жодного перезапису. Старий шлях (uts-bot → Google-лист →
 -- `first_touch_analysis` через TRUNCATE+insert) історії не мав — тут вона обовʼязкова.

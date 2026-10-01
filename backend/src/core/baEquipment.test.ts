@@ -294,3 +294,40 @@ test("#988 ФРОНТ БА-2: техніка й ТТН — справжні вк
     assert.doesNotMatch(codeOnly(FE(`pages/dashboard/sections/${f}`)), /window\.open\(/, `🔴 ${f}: window.open — блокувальник гасить вкладку після очікування`);
   assert.match(FE("pages/dashboard/sections/BaTtn.tsx"), /<a className="hr-link" href=\{r\.kommoUrl\} target="_blank" rel="noopener noreferrer">/, "🔴 посилання на Kommo не звичайним <a>");
 });
+
+/**
+ * #1240 — РОЗДІЛ «БІЗНЕС-АСИСТЕНТ» ЦІЛКОМ ЗАКРИТИЙ ВІД МОДЕЛІ (рішення Романа 01.10.2026 «5а»).
+ * Перелік таблиць береться ЗІ СХЕМИ за префіксом `ba_`, а не з рук: нова таблиця розділу без
+ * закриття червоніє сама (правило 12 — множина мусить бути гейтом). Кожна — REVOKE після GRANT і
+ * після свого CREATE, і є у FORBIDDEN_TABLES. Дзеркало: гейт мусить мати що перевіряти (≥ 8 таблиць).
+ * 🧨 Червоніє, якщо прибрати будь-яку таблицю з REVOKE чи з переліку, або завести нову без них.
+ */
+test("#1240 Бізнес-асистент закритий від моделі: кожна таблиця ba_* — REVOKE після GRANT і CREATE, і в FORBIDDEN_TABLES", () => {
+  const sql = SRC("db/schema.sql");
+  const tables = [...sql.matchAll(/CREATE TABLE IF NOT EXISTS (ba_[a-z_]+) \(/g)].map((m) => m[1]);
+  assert.ok(tables.length >= 8, `🔴 у схемі знайдено лише ${tables.length} таблиць ba_* — гейт нічого не перевіряє`);
+  const grantAt = sql.indexOf("GRANT SELECT ON ALL TABLES IN SCHEMA public TO ai_readonly;");
+  const revokes = [...sql.matchAll(/REVOKE ALL ON ([^;]*?) FROM ai_readonly;/g)];
+  const forbidden = /FORBIDDEN_TABLES\s*=\s*\[([\s\S]*?)\]/.exec(SRC("ai/metricTools.ts"))![1];
+  const bad: string[] = [];
+  for (const t of tables) {
+    const createAt = sql.indexOf(`CREATE TABLE IF NOT EXISTS ${t} (`);
+    const ok = revokes.some((m) => new RegExp(`(^|[\\s,])${t}([\\s,]|$)`).test(m[1]) && m.index! > grantAt && m.index! > createAt);
+    if (!ok) bad.push(`${t}: немає REVOKE після GRANT і CREATE`);
+    if (!forbidden.includes(`"${t}"`)) bad.push(`${t}: немає у FORBIDDEN_TABLES`);
+  }
+  assert.deepEqual(bad, [], `🔴 ${bad.join("; ")}`);
+});
+
+/**
+ * #1241 — ФІЛЬТР ЗА ДАТОЮ В «ОБЛІКУ ТЕХНІКИ» (ТЗ: «фільтр за статусом і датою в кожному блоці»;
+ * рішення Романа 01.10.2026 «2а»). Місяць береться з дати ПОТОЧНОЇ видачі; невідома дата — окремим
+ * пунктом, а не губиться. 🧨 Червоніє, якщо прибрати фільтр або фільтрувати не за датою видачі.
+ */
+test("#1241 ФРОНТ: «Облік техніки» фільтрує за місяцем видачі й окремо — «дата невідома»", () => {
+  const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages/dashboard/sections/BaEquipment.tsx"), "utf8");
+  assert.match(fe, /<label className="hr-muted">Видано<br \/>/, "🔴 немає фільтра «Видано»");
+  assert.match(fe, /<option value="unknown">Дата невідома<\/option>/, "🔴 невідома дата видачі не має свого пункту");
+  assert.match(fe, /r\.holder\?\.issuedOn\?\.slice\(0, 7\) !== issued/, "🔴 фільтр не за місяцем дати видачі");
+  assert.match(fe, /\}\), \[rows, filter, kind, loc, q, issued\]\);/, "🔴 фільтр не перераховує список при зміні");
+});
