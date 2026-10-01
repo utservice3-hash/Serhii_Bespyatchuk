@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchLeadgenHandoffDeals } from "../../../api";
 import type { LeadgenHandoffDeal, LeadgenHandoffDealsResp, LeadgenHandoffMoney, LeadgenDealClass } from "../../../api";
-import { formatAmount, formatAmountFull } from "../format";
+import { formatAmountFull } from "../format";
 import { plural } from "../receivablesView";
 import { ddmm } from "../periodRules";
 
@@ -163,8 +163,8 @@ export function LeadgenMoneyDetails({ period, managerId, summary }: {
         <Pill on={tab === "all"} onClick={() => { setTab("all"); setShown(PAGE); }} color="var(--text)">Усі · {n(scoped.length)}</Pill>
         {tabs.map((c) => {
           const xs = of(c.k), s = xs.reduce((a, d) => a + d.price, 0), priced = xs.filter((d) => d.price).length;
-          const money = c.k === "work" ? (s > 0 ? ` · бюджет у ${n(priced)}: ${formatAmount(s)}` : "")
-            : c.k === "success" || c.k === "paid" || c.k === "expect" ? (s > 0 ? ` · ${formatAmount(s)}` : "") : "";
+          const money = c.k === "work" ? (s > 0 ? ` · бюджет у ${n(priced)}: ${formatAmountFull(s)}` : "")
+            : c.k === "success" || c.k === "paid" || c.k === "expect" ? (s > 0 ? ` · ${formatAmountFull(s)}` : "") : "";
           return (
             <Pill key={c.k} on={tab === c.k} onClick={() => { setTab(c.k); setShown(PAGE); }} color={c.color} title={c.hint}>
               {c.tab} · {n(xs.length)}{money}
@@ -234,8 +234,8 @@ export function LeadgenMoneyDetails({ period, managerId, summary }: {
                         </button>
                       </td>
                       <td style={td}>{n(x.n)}</td>
-                      <td style={{ ...td, color: x.success ? "var(--ok)" : MUTED }}>{x.success ? `${n(x.success)} · ${formatAmount(x.successSum)}` : "—"}</td>
-                      <td className="lg-opt" style={{ ...td, color: x.pipe ? "var(--warn)" : MUTED }}>{x.pipe ? `${n(x.pipe)} · ${formatAmount(x.pipeSum)}` : "—"}</td>
+                      <td style={{ ...td, color: x.success ? "var(--ok)" : MUTED }}>{x.success ? `${n(x.success)} · ${formatAmountFull(x.successSum)}` : "—"}</td>
+                      <td className="lg-opt" style={{ ...td, color: x.pipe ? "var(--warn)" : MUTED }}>{x.pipe ? `${n(x.pipe)} · ${formatAmountFull(x.pipeSum)}` : "—"}</td>
                       <td className="lg-opt" style={td}>{x.work ? n(x.work) : "—"}</td>
                       <td className="lg-opt" style={td}>{x.lost ? n(x.lost) : "—"}</td>
                       <td className="lg-opt" style={td}>{x.name === NO_SALES ? "—" : `${Math.round((x.success / x.n) * 100)} %`}</td>

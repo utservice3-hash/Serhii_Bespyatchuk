@@ -1,5 +1,5 @@
 import type { LeadgenPersonRow as Row, LeadgenBucket, LeadgenGrain, LeadgenHandoffMoney, LeadgenPersonPlan, LeadgenPlanExec } from "../../../api";
-import { formatAmount } from "../format";
+import { formatAmountFull } from "../format";
 import { Donut } from "./ReportPlanSection";
 import { ddmm, addDays, dow, mondayOf } from "../periodRules";
 import { LeadgenMoneyDetails } from "./LeadgenMoneyDetails";
@@ -172,11 +172,11 @@ export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, moneyB
           <Stat v={row.warming} l="Підігрів" />
           <Stat v={money?.machines ?? 0} l="Машин" />
           <span style={{ textAlign: "center", minWidth: 64 }} title="Угоди з передач цього лідгена (будь-коли), що стали «Успішна угода» в цьому періоді; без постійних клієнтів">
-            <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.earned.sum ? "var(--ok)" : MUTED }}>{money ? formatAmount(money.earned.sum) : "—"}</span>
+            <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.earned.sum ? "var(--ok)" : MUTED }}>{money ? formatAmountFull(money.earned.sum) : "—"}</span>
             <span style={{ display: "block", fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>Успішні з передач ₴</span>
           </span>
           <span style={{ textAlign: "center", minWidth: 64 }} title="Угоди з передач цього лідгена, у яких авто поїхало в цьому періоді, а зараз вони оплачені чи в зоні «Очікуємо»">
-            <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.pending.sum ? "var(--warn)" : MUTED }}>{money ? formatAmount(money.pending.sum) : "—"}</span>
+            <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.pending.sum ? "var(--warn)" : MUTED }}>{money ? formatAmountFull(money.pending.sum) : "—"}</span>
             <span style={{ display: "block", fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>Очікування ₴</span>
           </span>
         </span>
@@ -254,8 +254,8 @@ function Buckets({ row, rows, money, grain, period }: {
                 <td style={cell}>{n(w.quotes)}</td><td style={cell}>{n(w.warming)}</td>
                 <td style={cell}>{c == null ? "—" : c > 100 ? `${pct1(c)} ⚠` : pct1(c)}</td>
                 <td style={cell}>{mb ? n(mb.machines) : "—"}</td>
-                <td style={cell}>{mb ? formatAmount(mb.earned.sum) : "—"}</td>
-                <td style={cell}>{mb ? formatAmount(mb.pending.sum) : "—"}</td>
+                <td style={cell}>{mb ? formatAmountFull(mb.earned.sum) : "—"}</td>
+                <td style={cell}>{mb ? formatAmountFull(mb.pending.sum) : "—"}</td>
               </tr>
             );
           })}

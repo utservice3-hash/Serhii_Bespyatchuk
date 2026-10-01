@@ -251,3 +251,26 @@ test("#688b 🪞 ДЗЕРКАЛО: index.html макета й переймено
   assert.deepEqual(scriptProblems("<script src='/src/main.tsx' type=\"module\"></script>"), [], "🔴 переставлені атрибути оголошено дефектом");
   assert.deepEqual(scriptProblems(`<!-- <script src="./maket.js"></script> -->\n${entry}`), [], "🔴 закоментований скрипт прийнято за живий");
 });
+
+/**
+ * #1172 — ЕКРАН ЛІДОГЕНЕРАЦІЇ ПОКАЗУЄ ГРОШІ ПОВНОЮ СУМОЮ, БЕЗ «тис».
+ * Привід (01.10.2026): Сердюк звіряв 34 530 ₴ зі своїм фільтром у Kommo, а картка показувала «35тис ₴» —
+ * округлення на 470 ₴ читалось як розбіжність. Множина файлів — від предмета: УСІ `Leadgen*.tsx` секції,
+ * крім картки постійних (живе у Звіті КВП, не на цьому екрані) і графіків (там лише шкала осі; підказки — вже повні).
+ * 🧨 САБОТАЖ: повернути один `formatAmountFull(` → `formatAmount(` у `LeadgenPersonRow.tsx` → червоніє.
+ */
+test("#1172 ЕКРАН ЛІДОГЕНЕРАЦІЇ: гроші повною сумою, жодного скорочення до «тис»", () => {
+  const dir = path.join(FE, "src", "pages", "dashboard", "sections");
+  const EXEMPT = new Set(["LeadgenRegularsCard.tsx", "LeadgenCharts.tsx"]);
+  const files = readdirSync(dir).filter((f) => /^Leadgen.*\.tsx$/.test(f) && !EXEMPT.has(f));
+  assert.ok(files.length >= 4, `🔴 файлів екрана ${files.length} — маска нічого не знайшла, гейту нема що перевіряти`);
+  for (const f of files) {
+    const s = readFileSync(path.join(dir, f), "utf8");
+    assert.ok(!/\bformatAmount\(/.test(s), `🔴 ${f} скорочує гроші до «тис» (formatAmount) — лідген не звірить до гривні`);
+  }
+  // 🪞 Дзеркало: гроші на екрані Є і йдуть повною сумою — інакше «нуль formatAmount» пройшов би й без грошей.
+  const full = files.filter((f) => /\bformatAmountFull\(/.test(readFileSync(path.join(dir, f), "utf8")));
+  for (const must of ["LeadgenSection.tsx", "LeadgenPersonRow.tsx", "LeadgenMoneyDetails.tsx"]) {
+    assert.ok(full.includes(must), `🔴 ${must} більше не показує гроші повною сумою — зник предмет гейта`);
+  }
+});

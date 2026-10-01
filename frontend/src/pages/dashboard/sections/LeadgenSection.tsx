@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchLeadgenStats, fetchLeadgenTrend, type LeadgenStatsResp, type LeadgenTrendResp, type LeadgenGrain, type LeadgenPersonRow as PersonRow, type LeadgenHandoffMoney,
   type LeadgenTeamPlan, type LeadgenPersonPlan, type LeadgenPlanExec } from "../../../api";
-import { formatAmount } from "../format";
+import { formatAmountFull } from "../format";
 import { InfoHint } from "../widgets";
 import { PeriodNav, navBtn } from "../PeriodNav";
 import {
@@ -416,8 +416,8 @@ function Details({ d, grain, period, today, open, onToggle }: {
                       <td style={cell}>{w.quotes.toLocaleString("uk-UA")}</td>
                       <td style={cell}>{w.warming.toLocaleString("uk-UA")}</td>
                       <td style={cell}>{mb ? mb.machines.toLocaleString("uk-UA") : "—"}</td>
-                      <td style={cell}>{mb ? formatAmount(mb.earned.sum) : "—"}</td>
-                      <td style={cell}>{mb ? formatAmount(mb.pending.sum) : "—"}</td>
+                      <td style={cell}>{mb ? formatAmountFull(mb.earned.sum) : "—"}</td>
+                      <td style={cell}>{mb ? formatAmountFull(mb.pending.sum) : "—"}</td>
                     </tr>
                   );
                 })}
@@ -433,8 +433,8 @@ function Details({ d, grain, period, today, open, onToggle }: {
         🚚 Канал «лідоген» загалом <InfoHint text={`${d.department.note} ⚓ ${d.department.anchors}`} />
       </h3>
       <p style={{ margin: "0 0 12px", fontSize: 13, color: MUTED }}>
-        Усі угоди каналу «лідоген» (не лише з передач цього періоду): відправлено {d.department.machines.toLocaleString("uk-UA")} авто на {formatAmount(d.department.machinesRevenue)},
-        отримано {formatAmount(d.department.receivedRevenue)}.
+        Усі угоди каналу «лідоген» (не лише з передач цього періоду): відправлено {d.department.machines.toLocaleString("uk-UA")} авто на {formatAmountFull(d.department.machinesRevenue)},
+        отримано {formatAmountFull(d.department.receivedRevenue)}.
       </p>
 
       {d.scopedTo != null && (
@@ -627,12 +627,12 @@ function HandoffMoneyCol({ m }: { m: LeadgenHandoffMoney | undefined }) {
       <div style={lab}>💰 Гроші з переданих лідів <InfoHint text={hint} /></div>
       <div style={{ fontSize: 11, color: MUTED, margin: "1px 0 2px" }}>успішні — за датою успіху · очікування — за датою авто · з передач будь-якого місяця</div>
       <div style={{ fontSize: 13, fontWeight: 700, margin: "2px 0" }} title="Як «Кількість поставлених машин» у таблицях лідгенів: угоди, по яких авто поїхало й гроші прийшли чи йдуть (успішні + очікування)">🚚 {m.machines.toLocaleString("uk-UA")} {plural(m.machines, "машина", "машини", "машин")}</div>
-      <div style={val}>{formatAmount(m.earned.sum)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>успішні · {m.earned.n.toLocaleString("uk-UA")} {plural(m.earned.n, "угода", "угоди", "угод")}</small></div>
-      <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{formatAmount(m.pending.sum)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>очікування · {m.pending.n.toLocaleString("uk-UA")} {plural(m.pending.n, "угода", "угоди", "угод")}</small></div>
+      <div style={val}>{formatAmountFull(m.earned.sum)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>успішні · {m.earned.n.toLocaleString("uk-UA")} {plural(m.earned.n, "угода", "угоди", "угод")}</small></div>
+      <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{formatAmountFull(m.pending.sum)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>очікування · {m.pending.n.toLocaleString("uk-UA")} {plural(m.pending.n, "угода", "угоди", "угод")}</small></div>
       <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>
         передачі цього періоду: передано (= прорахунки) {m.handoffs.toLocaleString("uk-UA")} · вже успішні {m.success.n.toLocaleString("uk-UA")} · в роботі {m.work.n.toLocaleString("uk-UA")} · програно {m.lost.toLocaleString("uk-UA")}
         {m.unlinked > 0 && <> · без угоди менеджера {m.unlinked.toLocaleString("uk-UA")}</>}{m.sameDeal > 0 && <> · у ту саму угоду {m.sameDeal}</>}
-        {m.regular.n > 0 && <> · постійні клієнти (не рахуються) {m.regular.n.toLocaleString("uk-UA")} на {formatAmount(m.regular.sum)}</>}
+        {m.regular.n > 0 && <> · постійні клієнти (не рахуються) {m.regular.n.toLocaleString("uk-UA")} на {formatAmountFull(m.regular.sum)}</>}
       </div>
     </div>
   );
@@ -712,7 +712,7 @@ function Others({ d, who }: { d: LeadgenStatsResp; who: number | "all" }) {
                   <td style={{ padding: "7px 10px", color: MUTED }}>{r.teamName ?? "поза командою"}</td>
                   <td style={cell}>{nf(r.calls)}</td><td style={cell}>{nf(r.leads)}</td><td style={cell}>{nf(r.opr)}</td>
                   <td style={cell}>{nf(r.quotes)}</td><td style={cell}>{nf(r.warming)}</td>
-                  <td style={cell} title={m ? `успішних за період ${m.earned.n} · передано в періоді ${m.handoffs}` : undefined}>{m ? formatAmount(m.earned.sum) : "—"}</td>
+                  <td style={cell} title={m ? `успішних за період ${m.earned.n} · передано в періоді ${m.handoffs}` : undefined}>{m ? formatAmountFull(m.earned.sum) : "—"}</td>
                 </tr>
               );
             })}
