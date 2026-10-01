@@ -247,15 +247,17 @@ export interface LeadgenStatsResp {
   plans?: { elapsed: number; byPerson: LeadgenPersonPlan[]; team: LeadgenTeamPlan };
 }
 /** План на обраний період (місячний, поділений за робочими днями, як у Звіті); `null` — затвердженого плану немає. */
-export interface LeadgenPeriodPlan { leads: number | null; opr: number | null; quotes: number | null }
+export interface LeadgenPeriodPlan { leads: number | null; opr: number | null; quotes: number | null; calls: number | null; money: number | null }
 export type LeadgenPlanExec =
   | { kind: "none" } | { kind: "zero" }
   | { kind: "plan"; fact: number; plan: number; pct: number; level: "g" | "a" | "r" };
-export interface LeadgenPersonPlan { managerId: number; plan: LeadgenPeriodPlan; exec: LeadgenPlanExec }
-export interface LeadgenTeamPlan { total: number; planned: number; fact: number; plan: number | null; exec: LeadgenPlanExec }
+/** Дзвінки й гроші (01.10.2026): гроші — ОДИН план, два порівняння — з «Успішні» і з «Успішні + Очікування». */
+export interface LeadgenExtraExec { calls: LeadgenPlanExec; moneyEarned: LeadgenPlanExec; moneyTotal: LeadgenPlanExec }
+export interface LeadgenPersonPlan { managerId: number; plan: LeadgenPeriodPlan; exec: LeadgenPlanExec; extra: LeadgenExtraExec }
+export interface LeadgenTeamPlan { total: number; planned: number; fact: number; plan: number | null; exec: LeadgenPlanExec; extra: LeadgenExtraExec }
 
 /** 📋 Формування плану лідгенів (дзеркало формування плану продажів). */
-export type LgPlanMetric = "leads" | "opr" | "quotes";
+export type LgPlanMetric = "leads" | "opr" | "quotes" | "calls" | "money";
 export type LgPlanValues = Record<LgPlanMetric, number | null>;
 export interface LgPlanMember {
   managerId: number; name: string; canSubmit: boolean;
@@ -263,7 +265,7 @@ export interface LgPlanMember {
   proposed: LgPlanValues; approved: LgPlanValues;
   comment: string | null; returnComment: string | null;
   submittedBy: string | null; submittedAt: string | null; decidedBy: string | null; decidedAt: string | null;
-  history: { month: string; leads: number; opr: number; quotes: number }[];
+  history: { month: string; leads: number; opr: number; quotes: number; calls: number }[];
 }
 export interface LgPlanFormation {
   month: string; role: string; canApprove: boolean; scopedTo: number | null;
@@ -273,7 +275,7 @@ export async function fetchLeadgenPlans(month: string): Promise<LgPlanFormation>
   const { data } = await api.get<LgPlanFormation>("/dashboard/leadgen-plans", { params: { month } });
   return data;
 }
-export async function submitLeadgenPlan(body: { managerId: number; month: string; leads: number; opr: number; quotes: number; comment?: string }): Promise<void> {
+export async function submitLeadgenPlan(body: { managerId: number; month: string; leads: number; opr: number; quotes: number; calls: number | null; money: number | null; comment?: string }): Promise<void> {
   await api.post("/dashboard/leadgen-plans/submit", body);
 }
 export async function approveLeadgenPlan(body: { managerId?: number; month: string }): Promise<{ approved: number }> {

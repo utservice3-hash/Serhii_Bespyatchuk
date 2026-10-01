@@ -274,3 +274,24 @@ test("#1172 ЕКРАН ЛІДОГЕНЕРАЦІЇ: гроші повною су�
     assert.ok(full.includes(must), `🔴 ${must} більше не показує гроші повною сумою — зник предмет гейта`);
   }
 });
+
+/**
+ * #1175 — ПЛАН НА ДЗВІНКИ Й ГРОШІ ВИДНО НА ЕКРАНІ (рішення власника 01.10.2026): форма має обидва пункти
+ * як необовʼязкові; гроші — ДВА підписані рядки (проти «Успішні» і проти «Успішні + Очікування») і в
+ * картці людини, і в рядку плану плитки (людина й команда).
+ * 🧨 САБОТАЖ: прибрати рядок `line("гроші · успішні + очікування", …)` з `ExtraPlanLines` → червоніє.
+ */
+test("#1175 ЕКРАН: план на дзвінки й гроші — у формі необовʼязково, гроші — двома підписаними рядками", () => {
+  const dir = path.join(FE, "src", "pages", "dashboard", "sections");
+  const form = readFileSync(path.join(dir, "LeadgenPlanFormation.tsx"), "utf8");
+  assert.match(form, /\{ k: "calls", label: "Дзвінки", optional: true \}/, "🔴 у формі плану немає необовʼязкових «Дзвінки»");
+  assert.match(form, /\{ k: "money", label: "Гроші ₴", optional: true \}/, "🔴 у формі плану немає необовʼязкових «Гроші ₴»");
+  const row = readFileSync(path.join(dir, "LeadgenPersonRow.tsx"), "utf8");
+  assert.match(row, /line\("гроші · успішні", extra\.moneyEarned, true/, "🔴 зник рядок «гроші · успішні»");
+  assert.match(row, /line\("гроші · успішні \+ очікування", extra\.moneyTotal, true/, "🔴 зник рядок «гроші · успішні + очікування»");
+  assert.match(row, /line\("дзвінки", extra\.calls, false/, "🔴 зник рядок «дзвінки»");
+  assert.match(row, /<ExtraPlanLines extra=\{plan\.extra\} \/>/, "🔴 картка людини не показує дзвінки й гроші проти плану");
+  const sec = readFileSync(path.join(dir, "LeadgenSection.tsx"), "utf8");
+  assert.match(sec, /<ExtraPlanLines extra=\{tp\.extra\} \/>/, "🔴 плитка команди не показує дзвінки й гроші проти плану");
+  assert.match(sec, /<ExtraPlanLines extra=\{pp\.extra\} \/>/, "🔴 плитка людини не показує дзвінки й гроші проти плану");
+});
