@@ -170,8 +170,8 @@ function TypeBlock({ c, onChanged }: { c: AiCallCardResp; onChanged: () => void 
  * 📝 Коментарі (ТЗ 30.09.2026): «Чому не озвучено ціну» — коли ціни в розмові не було; «Опрацьовано» — коли менеджер
  * не передзвонив (після нього банер у звіті цю розмову не показує). Хто пише — вирішує сервер (`noteRights`).
  */
-function NoteField({ c, kind, title, hint, onSaved }: { c: AiCallCardResp; kind: "price" | "missed"; title: string; hint: string; onSaved: () => void }) {
-  const cur = kind === "price" ? c.row.priceNote : c.row.missedNote;
+function NoteField({ c, kind, title, hint, onSaved }: { c: AiCallCardResp; kind: "price" | "missed" | "offline"; title: string; hint: string; onSaved: () => void }) {
+  const cur = kind === "price" ? c.row.priceNote : kind === "missed" ? c.row.missedNote : c.row.offlineNote;
   const can = c.noteRights[kind];
   const [text, setText] = useState(cur?.text ?? "");
   const [busy, setBusy] = useState(false);
@@ -201,11 +201,15 @@ function NoteField({ c, kind, title, hint, onSaved }: { c: AiCallCardResp; kind:
 function NotesBlock({ c, onSaved }: { c: AiCallCardResp; onSaved: () => void }) {
   const needPrice = c.result != null && c.result.price.discussed === false;
   const needMissed = c.row.promiseState === "broken";
-  if (!needPrice && !needMissed) return null;
+  // 📞 01.10.2026: Ringostat не бачить мобільного й месенджера — передзвін поза телефонією позначає людина.
+  const needOffline = c.row.promiseState === "broken" || c.row.promiseState === "late" || c.row.offlineNote != null;
+  if (!needPrice && !needMissed && !needOffline) return null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px" }}>
       {needPrice && <NoteField c={c} kind="price" title="Чому не озвучено ціну" hint="Ціни в розмові не було, а причину ще не написали." onSaved={onSaved} />}
-      {needMissed && <NoteField c={c} kind="missed" title="Опрацьовано (не передзвонив)" hint="Менеджер не передзвонив. Поки тут порожньо, розмова стоїть у червоному банері звіту." onSaved={onSaved} />}
+      {needOffline && <NoteField c={c} kind="offline" title="Передзвонив поза телефонією (мобільний, месенджер, інший номер)"
+        hint="Якщо передзвін був не через Ringostat — напишіть коротко як і коли. Обіцянка тоді рахується виконаною." onSaved={onSaved} />}
+      {needMissed && <NoteField c={c} kind="missed" title="Опрацьовано (тімлід)" hint="Дзвінка в телефонії немає. Поки тут порожньо, розмова стоїть у блоці «Немає дзвінка в телефонії» у звіті." onSaved={onSaved} />}
     </div>
   );
 }

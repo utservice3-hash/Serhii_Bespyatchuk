@@ -1,4 +1,4 @@
-import type { LeadgenPersonRow as Row, LeadgenBucket, LeadgenGrain, LeadgenHandoffMoney, LeadgenPersonPlan, LeadgenPlanExec } from "../../../api";
+import type { LeadgenPersonRow as Row, LeadgenBucket, LeadgenGrain, LeadgenHandoffMoney, LeadgenPersonPlan, LeadgenPlanExec, LeadgenExtraExec } from "../../../api";
 import { formatAmountFull } from "../format";
 import { Donut } from "./ReportPlanSection";
 import { ddmm, addDays, dow, mondayOf } from "../periodRules";
@@ -65,6 +65,27 @@ export function PlanRing({ exec, title }: { exec: Extract<LeadgenPlanExec, { kin
 /** «12 / 40» — факт і план; план дробовий лише в неповному місяці (частка за робочими днями). */
 export const fmtPlan = (plan: number) => plan.toLocaleString("uk-UA", { maximumFractionDigits: 1 });
 export const factOfPlan = (fact: number, plan: number | null) => `${n(fact)} / ${plan == null ? "—" : fmtPlan(plan)}`;
+
+/**
+ * 📞💰 ДЗВІНКИ Й ГРОШІ ПРОТИ ПЛАНУ (рішення власника 01.10.2026). Обидва пункти необовʼязкові: немає плану —
+ * рядка немає. Гроші — ОДИН план і ДВА рядки, підписані явно: проти «Успішні» і проти «Успішні + Очікування».
+ */
+export function ExtraPlanLines({ extra }: { extra: LeadgenExtraExec | undefined }) {
+  if (!extra) return null;
+  const uah = (v: number) => `${Math.round(v).toLocaleString("uk-UA")} ₴`;
+  const line = (label: string, e: LeadgenPlanExec, money: boolean, key: string) => {
+    if (e.kind === "none") return null;
+    if (e.kind === "zero") return <span key={key} style={{ color: MUTED }}>{label}: план 0 — не оцінюємо</span>;
+    const f = money ? uah : n, p = money ? uah : fmtPlan;
+    return <span key={key}>{label} <b style={{ color: planLevelColor(e.level) }}>{f(e.fact)} / {p(e.plan)}</b> · {e.pct}%</span>;
+  };
+  const rows = [
+    line("дзвінки", extra.calls, false, "c"),
+    line("гроші · успішні", extra.moneyEarned, true, "e"),
+    line("гроші · успішні + очікування", extra.moneyTotal, true, "t"),
+  ].filter(Boolean);
+  return rows.length ? <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>{rows}</span> : null;
+}
 
 /**
  * 📅 ОДИНИЦІ РОЗБИВКИ — З КАЛЕНДАРЯ, А НЕ З ДАНИХ. Бекенд віддає лише бакети, де були
@@ -149,6 +170,7 @@ export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, moneyB
             <span style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 13 }}>
               <span><b style={{ fontSize: 16 }}>{factOfPlan(pe.fact, pe.plan)}</b> прорахунки · план</span>
               <span style={{ color: MUTED }}>ліди {factOfPlan(row.leads, plan.plan.leads)} · ОПР {factOfPlan(row.opr, plan.plan.opr)}</span>
+              <ExtraPlanLines extra={plan.extra} />
             </span>
           </span>
         ) : (

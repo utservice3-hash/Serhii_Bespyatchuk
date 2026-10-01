@@ -7,6 +7,7 @@ import {
   type FinMonth, type FinItem, type FinGroup, type FinResp, type FinItemCard, type FinKind, type FinCell,
 } from "../../../api";
 import { rowVisible, asInput, planFromPrevious } from "./financeView";
+import { FinanceWeekTab } from "./FinanceWeekTab";
 import "./hiring.css";
 import "./finance.css";
 
@@ -179,7 +180,7 @@ export function FinanceSection() {
   if (err && !data) return <div className="chart-card"><b>Розділ «Фінанси» недоступний.</b> <span className="hr-muted">{err}</span></div>;
   if (!data) return <p className="loading-text">Завантаження…</p>;
 
-  const tabs: [Tab, string, boolean][] = [["pf", "План/факт витрат", false], ["art", "Статті", false], ["week", "Тиждень і місяць", true], ["cash", "Каса", true], ["overview", "Огляд", true]];
+  const tabs: [Tab, string, boolean][] = [["pf", "План/факт витрат", false], ["art", "Статті", false], ["week", "Тиждень і місяць", false], ["cash", "Каса", true], ["overview", "Огляд", true]];
   return (
     <div>
       <h1 className="page-title" style={{ marginBottom: 4 }}>Фінанси</h1>
@@ -196,11 +197,7 @@ export function FinanceSection() {
       </div>
       {tab === "pf" && <PlanFactTab data={data} month={month} setMonth={setMonth} act={act} reload={reload} toast={toast} ask={ask} sel={sel} setSel={setSel} />}
       {tab === "art" && <ArticlesTab data={data} act={act} />}
-      {tab === "week" && <PlannedCard title="Тиждень і місяць" will={[
-        "Тижневі й місячні показники з аркуша «ФМ»: надходження, витрати, поставлені авто, по даті вигрузки, операційні витрати, залишки.",
-        "Цифри з CRM підставляються самі; ручні — вносяться тут, з історією змін.",
-        "Показники можна додавати, перейменовувати й вимикати так само, як статті.",
-      ]} waits="Звірки CRM-цифр із таблицею на трьох тижнях: доки не зійдеться, CRM-рядки лишаються ручними, а наше число стоїть поруч." />}
+      {tab === "week" && <FinanceWeekTab ask={ask} toast={toast} />}
       {tab === "cash" && <PlannedCard title="Каса" will={[
         "Рух готівки по місцях зберігання (сейф) і валютах: прихід, видача, обмін — з коментарем.",
         "Залишок на дату рахується з руху, а не вноситься руками.",

@@ -38,6 +38,8 @@ export interface DocumentState {
   docDate: string;           // 'YYYY-MM-DD' або '' (тоді сьогодні)
   mainNo: string;
   mainDate: string;
+  /** «Діє до» основного договору, ДД.ММ.РРРР; порожньо = 31 грудня року дати договору (Роман, 01.10.2026). */
+  mainUntil?: string;
   manager: { name: string; phone: string };  // з профілю користувача дашборда
 }
 
@@ -78,6 +80,39 @@ export function docDateStr(s: DocumentState, now = new Date()): string {
     return `${d}.${m}.${y}`;
   }
   return String(now.getDate()).padStart(2, '0') + '.' + String(now.getMonth() + 1).padStart(2, '0') + '.' + now.getFullYear();
+}
+
+const MONTHS_GEN = ['січня', 'лютого', 'березня', 'квітня', 'травня', 'червня',
+  'липня', 'серпня', 'вересня', 'жовтня', 'листопада', 'грудня'];
+
+/** ДД.ММ.РРРР → [д, м, р] лише для справжньої календарної дати (31.02 — ні). */
+function parseDmy(v: string): [number, number, number] | null {
+  const m = /^\s*(\d{1,2})\.(\d{1,2})\.(\d{4})\s*$/.exec(v);
+  if (!m) return null;
+  const [d, mo, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const t = new Date(Date.UTC(y, mo - 1, d));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d ? [d, mo, y] : null;
+}
+
+/**
+ * 📅 СТРОК ДІЇ ОСНОВНОГО ДОГОВОРУ (п. 8.1, рішення Романа 01.10.2026). У шаблоні було зашито «до 31 грудня
+ * 2024 року» — кожен договір виходив би з минулим строком. Тепер: введене «Діє до» (ДД.ММ.РРРР), а порожнє —
+ * 31 грудня року дати договору (п. 8.3 однаково поновлює договір щороку). `null` — строку не визначити
+ * (тоді `blockers` не дає сформувати документ). Тримає `#1190`.
+ */
+export function mainUntilText(s: DocumentState): string | null {
+  const raw = (s.mainUntil ?? '').trim();
+  if (raw) {
+    const p = parseDmy(raw);
+    return p ? `${p[0]} ${MONTHS_GEN[p[1] - 1]} ${p[2]}` : null;
+  }
+  const y = /(?:^|\D)(\d{4})(?:\D|$)/.exec(s.mainDate || '');
+  return y ? `31 грудня ${y[1]}` : null;
+}
+
+/** Текст пункту основного договору з підставленими мітками (спільне для Word і PDF). */
+export function mainClauseText(s: DocumentState, t: string, third: string): string {
+  return t.replace('@THIRD@', third).replace('@UNTIL@', mainUntilText(s) ?? '«___» ____________ 20__');
 }
 
 export function currentNum(s: DocumentState): string {
@@ -231,6 +266,8 @@ export function blockers(s: DocumentState): string | null {
   if (s.party === 'carrier' && s.doc === 'carr' && !s.cp.iban) return 'Немає IBAN перевізника — оплата йде на його рахунок, без нього заявка не формується.';
   if (s.doc === 'main' && !s.mainNo) return 'Вкажіть номер основного договору — він вноситься вручну після погодження.';
   if (s.doc === 'main' && !s.mainDate) return 'Вкажіть дату, з якої діє основний договір.';
+  if (s.doc === 'main' && (s.mainUntil ?? '').trim() && !mainUntilText(s)) return '«Діє до» — дата у форматі ДД.ММ.РРРР, напр. 31.12.2026.';
+  if (s.doc === 'main' && !mainUntilText(s)) return 'Вкажіть «Діє до» або дату договору з роком — інакше строк дії договору (п. 8.1) не визначити.';
   if (s.doc !== 'main' && !s.dealNo) return 'Вкажіть № заявки — це ID угоди в СРМ, поле обов\'язкове.';
   return null;
 }
@@ -287,15 +324,17 @@ export function zipStore(files: Array<{ name: string; data: string | Uint8Array 
 const X = (s: string) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const RF = '<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>';
 
+/* 📏 01.10.2026 — Word щільніший синхронно з PDF (docCss.ts): основний текст 10pt (sz 20), після абзацу 2pt (after 40),
+   заголовок 13pt, поля 8/10 мм. Прохання Сергія «заявка в 3 листки», варіант затвердив Роман. Текст не змінювався. */
 interface POpts { c?: 1; b?: 1; sp?: false; sz?: number }
 
 const wP = (t: string, o: POpts = {}) =>
-  `<w:p><w:pPr>${o.c ? '<w:jc w:val="center"/>' : '<w:jc w:val="both"/>'}${o.sp !== false ? '<w:spacing w:after="120"/>' : ''}</w:pPr><w:r><w:rPr>${RF}${o.b ? '<w:b/>' : ''}<w:sz w:val="${o.sz || 22}"/></w:rPr><w:t xml:space="preserve">${X(t)}</w:t></w:r></w:p>`;
+  `<w:p><w:pPr>${o.c ? '<w:jc w:val="center"/>' : '<w:jc w:val="both"/>'}${o.sp !== false ? '<w:spacing w:after="40"/>' : ''}</w:pPr><w:r><w:rPr>${RF}${o.b ? '<w:b/>' : ''}<w:sz w:val="${o.sz || 20}"/></w:rPr><w:t xml:space="preserve">${X(t)}</w:t></w:r></w:p>`;
 
 /** Абзац із кількох ранів — для жирних назв/ПІБ усередині речення. */
 const wPRich = (segs: Seg[], o: POpts = {}) =>
-  `<w:p><w:pPr>${o.c ? '<w:jc w:val="center"/>' : '<w:jc w:val="both"/>'}${o.sp !== false ? '<w:spacing w:after="120"/>' : ''}</w:pPr>` +
-  segs.map(x => `<w:r><w:rPr>${RF}${x.b ? '<w:b/>' : ''}<w:sz w:val="${o.sz || 22}"/></w:rPr><w:t xml:space="preserve">${X(x.t)}</w:t></w:r>`).join('') + `</w:p>`;
+  `<w:p><w:pPr>${o.c ? '<w:jc w:val="center"/>' : '<w:jc w:val="both"/>'}${o.sp !== false ? '<w:spacing w:after="40"/>' : ''}</w:pPr>` +
+  segs.map(x => `<w:r><w:rPr>${RF}${x.b ? '<w:b/>' : ''}<w:sz w:val="${o.sz || 20}"/></w:rPr><w:t xml:space="preserve">${X(x.t)}</w:t></w:r>`).join('') + `</w:p>`;
 
 function wCell(txts: string | string[], w: number, opts: { shade?: 1; b?: 1 } = {}): string {
   return `<w:tc><w:tcPr><w:tcW w:w="${w}" w:type="dxa"/>${opts.shade ? '<w:shd w:val="clear" w:fill="F4F2F0"/>' : ''}</w:tcPr>` +
@@ -329,7 +368,7 @@ export function buildDocx(s: DocumentState, num: string, img: DocImages = {}): U
   let seq = 0;
 
   let body = wP(`UTS · ${('docName' in e && e.docName) || e.name} · ${s.ent === 'fop' ? 'ІПН' : 'ЄДРПОУ'} ${e.edrpou} · ${e.vat}`, { c: 1, b: 1, sz: 16 }) +
-    wP(`${title} № ${num}`, { c: 1, b: 1, sz: 28 }) + wP(sub, { c: 1 }) +
+    wP(`${title} № ${num}`, { c: 1, b: 1, sz: 26 }) + wP(sub, { c: 1 }) +
     `<w:tbl><w:tblPr><w:tblW w:w="9800" w:type="dxa"/></w:tblPr><w:tr>` +
     wCell('м. Київ', 4900) + wCell(dateStr, 4900) + `</w:tr></w:tbl>` + wP('', { sp: false }) +
     wPRich(preambleSegs(s));
@@ -337,7 +376,7 @@ export function buildDocx(s: DocumentState, num: string, img: DocImages = {}): U
   if (mainMode) {
     (MAIN_BODY as ReadonlyArray<{ h?: string; n?: string; t?: string }>).forEach(b => {
       if (b.h) { body += wP(b.h, { c: 1, b: 1 }); return; }
-      body += wP(b.n + ' ' + (b.t || '').replace('@THIRD@', (MAIN_THIRD as Record<EntityKey, string>)[s.ent] || ''));
+      body += wP(b.n + ' ' + mainClauseText(s, b.t || '', (MAIN_THIRD as Record<EntityKey, string>)[s.ent] || ''));
     });
   } else {
     body += (legal ? wP(legal[0] as string) : '') +
@@ -370,7 +409,7 @@ export function buildDocx(s: DocumentState, num: string, img: DocImages = {}): U
       wPRich([{ t: '__________________  ' + (s.ent === 'fop' ? 'ФОП ' : 'Директор ') }, { t: e.dirShort, b: 1 }], { sp: false, sz: 20 })
       , 4900) +
     `</w:tr></w:tbl>` +
-    `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="900" w:right="850" w:bottom="900" w:left="850"/></w:sectPr>`;
+    `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="454" w:right="567" w:bottom="454" w:left="567"/></w:sectPr>`;
 
   const doc = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${body}</w:body></w:document>`;

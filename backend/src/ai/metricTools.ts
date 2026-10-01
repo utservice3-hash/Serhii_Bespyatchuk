@@ -69,12 +69,16 @@ export const FORBIDDEN_TABLES = [
   "workua_responses",
   // 💰 Фінанси (29.09.2026): витрати компанії по статтях, зокрема фонд оплати праці. REVOKE у схемі. Тримає #934.
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_import_months",
+  // 💰 Фінанси · «Тиждень і місяць» (прохід 2а, 01.10.2026). REVOKE у схемі. Тримає #934.
+  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports",
   // 📄 Конструктор документів (30.09.2026): реквізити контрагентів і суми заявок. REVOKE у схемі.
   "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache",
   // 📋 Опитування (30.09.2026): відповіді людей, зокрема анонімні. REVOKE у схемі.
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   // 🗂 Бізнес-асистент (29.09.2026): кому видано техніку — імена людей, як `employees`. REVOKE у схемі. Тримає #986.
   "ba_equipment_issues",
+  // 🗂 Бізнес-асистент цілком (01.10.2026, рішення Романа «5а»): борги, суди, документи, техніка, ТТН. Тримає #1240.
+  "ba_claims", "ba_court_cases", "ba_files", "ba_events", "ba_equipment", "ba_ttn_checks", "ba_migrations",
 ];
 
 /**

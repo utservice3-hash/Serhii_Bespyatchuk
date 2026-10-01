@@ -1305,3 +1305,41 @@ export async function clientSuccessHistory(clientKeys: readonly string[]): Promi
   }
   return out;
 }
+
+
+/**
+ * 💰 РЯДКИ «ФМ» ЗА ФІЛЬТРАМИ ФІНАНСИСТА (прохід 2б, 01.10.2026) — НЕ метрика продажу і НЕ виручка.
+ * Фільтри — рівно ті, що стоять у колонці «Фильтр» аркуша «ФМ» (розшифровано з посилань Kommo 01.10.2026):
+ *   поставлені — воронка «Повний цикл» 8921932, ПОТОЧНИЙ етап ∈ `FM_DELIVERED_STAGES` (8 етапів: Контроль перед
+ *               завантаженням · Виставлення рахунку · Авто працює · Перевезення завершено · Дзвінок після
+ *               розвантаження · Очікуємо оплату · Оплата отримана · Успішна), «Дата загрузки» в періоді;
+ *   вигружені  — СУМА ДВОХ фільтрів: ① етап «Очікуємо оплату» / «Оплата отримана», дата СТВОРЕННЯ в періоді
+ *               (у посиланні тип дати не вказано — це типовий у Kommo); ② «Успішна», дата ЗАКРИТТЯ в періоді.
+ * Суми — `deals.fm_income` / `fm_expense` (правило — `core/fmSums.ts`): звірено до копійки на «Поставлених» 14–20.09.
+ * Період — дати за Києвом, обидва кінці включно. ⚠️ Обидва рядки змінюються заднім числом (заміряно на 12 тижнях:
+ * поставлені ростуть +4…+54%, вигружені меншають −2…−55%), тому число тижня фіксує `freezeFinanceKpis`.
+ * `noIncome` — друге число до предиката (правило 4): угоди множини без жодної суми доходу.
+ * `db` — параметр, щоб гейти ганяли САМУ функцію на scratch-базі.
+ */
+export const FM_DELIVERED_STAGES = [69716260, 100274340, 69716300, 98470988, 69716304, 69716312, 69716460, 142] as const;
+export const FM_UNLOAD_OPEN_STAGES = [69716312, 69716460] as const;
+export interface FinRefSums { deals: number; income: number; expense: number; noIncome: number }
+type Q = { query: typeof pool.query };
+const FM_PIPELINE = 8921932;
+async function fmSums(where: string, params: unknown[], db: Q): Promise<FinRefSums> {
+  const r = await db.query<{ deals: string; income: string; expense: string; no_income: string }>(
+    `SELECT count(*) AS deals, COALESCE(sum(d.fm_income), 0) AS income, COALESCE(sum(d.fm_expense), 0) AS expense,
+            count(*) FILTER (WHERE d.fm_income IS NULL) AS no_income
+       FROM deals d WHERE d.pipeline_id = ${FM_PIPELINE} AND ${where}`, params);
+  const x = r.rows[0];
+  return { deals: Number(x.deals), income: Math.round(Number(x.income) * 100) / 100, expense: Math.round(Number(x.expense) * 100) / 100, noIncome: Number(x.no_income) };
+}
+const kyivIn = (col: string) => `d.${col} IS NOT NULL AND (d.${col} AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1::date AND $2::date`;
+export const finDeliveredByLoadDate = (from: string, to: string, db: Q = pool) =>
+  fmSums(`d.status_id = ANY($3) AND ${kyivIn("load_at")}`, [from, to, FM_DELIVERED_STAGES], db);
+export async function finUnloadedTwoFilters(from: string, to: string, db: Q = pool): Promise<FinRefSums & { open: FinRefSums; closed: FinRefSums }> {
+  const open = await fmSums(`d.status_id = ANY($3) AND ${kyivIn("created_at_kommo")}`, [from, to, FM_UNLOAD_OPEN_STAGES], db);
+  const closed = await fmSums(`d.status_id = 142 AND ${kyivIn("closed_at_kommo")}`, [from, to], db);
+  const add = (a: number, b: number) => Math.round((a + b) * 100) / 100;
+  return { deals: open.deals + closed.deals, income: add(open.income, closed.income), expense: add(open.expense, closed.expense), noIncome: open.noIncome + closed.noIncome, open, closed };
+}

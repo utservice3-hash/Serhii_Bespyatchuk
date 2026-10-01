@@ -46,7 +46,7 @@ export function stateFromBody(body: unknown, manager: { name: string; phone: str
     cp: obj(b.cp), trip: obj(b.trip),
     pay: { sum: String(pay.sum ?? ''), cur: String(pay.cur ?? 'грн'), form: String(pay.form ?? ''), order: String(pay.order ?? '') },
     dealNo: String(b.dealNo ?? '').trim(), docDate: /^\d{4}-\d{2}-\d{2}$/.test(String(b.docDate ?? '')) ? String(b.docDate) : '',
-    mainNo: String(b.mainNo ?? '').trim(), mainDate: String(b.mainDate ?? ''),
+    mainNo: String(b.mainNo ?? '').trim(), mainDate: String(b.mainDate ?? ''), mainUntil: String(b.mainUntil ?? '').trim(),
     manager,
   };
 }

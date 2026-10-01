@@ -11,7 +11,7 @@ import { adCallFacts } from "./adCallFacts.js";
 import { silentBeforeClose, type AdCallFactsParams } from "./adCallFactsRules.js";
 import { typeVerdict, type TypeOverride } from "./callAiType.js";
 import type { ConversationType } from "./callAiProviders.js";
-import { promiseDeadline, promiseState, worstPromiseState, type CallFact, type DeadlineBasis, type ModelPromise, type PromiseState } from "./callAiPromise.js";
+import { promiseDeadline, promiseState, worstPromiseState, withOfflineMark, type CallFact, type DeadlineBasis, type ModelPromise, type PromiseState } from "./callAiPromise.js";
 
 /**
  * 🤫 «ТИША ПЕРЕД ЗАКРИТТЯМ» (П3, рішення Романа 29.09.2026): угоду закрито «не реалізовано» пізніше ніж
@@ -71,7 +71,7 @@ export const FIRST_TOUCH_TRANSCRIPT_ROLES: ReadonlySet<string> = new Set(["admin
  * «Опрацьовано» до невиконаної домовленості — лише тімлід і адмін. Скоуп — у роуті через картку.
  */
 export function canWriteNote(roleKey: string | null | undefined, kind: string): boolean {
-  if (kind === "price") return roleKey === "admin" || roleKey === "team_lead" || roleKey === "manager";
+  if (kind === "price" || kind === "offline") return roleKey === "admin" || roleKey === "team_lead" || roleKey === "manager";
   if (kind === "missed") return roleKey === "admin" || roleKey === "team_lead";
   return false;
 }
@@ -158,6 +158,8 @@ export interface AiCallRow {
   /** «Чому не озвучено ціну» і «Опрацьовано» (ТЗ 30.09.2026) — `null`, якщо не писали. */
   priceNote: CallNote | null;
   missedNote: CallNote | null;
+  /** «Передзвонив поза телефонією» (01.10.2026) — `null`, якщо не позначали. */
+  offlineNote: CallNote | null;
   /** Номер клієнта (для пулу заявок тімліда, ТЗ п.6.2) — `null`, якщо Ringostat його не дав. */
   clientPhone: string | null;
 }
@@ -175,6 +177,7 @@ interface RawRow {
   ov_is_cargo?: boolean | null; ov_by?: string | null; ov_at?: Date | null;
   pn_text?: string | null; pn_by?: string | null; pn_at?: Date | null;
   mn_text?: string | null; mn_by?: string | null; mn_at?: Date | null;
+  on_text?: string | null; on_by?: string | null; on_at?: Date | null;
 }
 
 const IN_TYPES = new Set(["in", "transitin"]);
@@ -206,14 +209,17 @@ export function foldRow(r: RawRow): AiCallRow {
     ...typeFields(res, r),
     priceNote: r.pn_text ? { text: r.pn_text, byName: r.pn_by ?? null, at: r.pn_at ? new Date(r.pn_at).toISOString() : "" } : null,
     missedNote: r.mn_text ? { text: r.mn_text, byName: r.mn_by ?? null, at: r.mn_at ? new Date(r.mn_at).toISOString() : "" } : null,
+    offlineNote: r.on_text ? { text: r.on_text, byName: r.on_by ?? null, at: r.on_at ? new Date(r.on_at).toISOString() : "" } : null,
     clientPhone: r.client_phone ?? null,
   };
 }
 
 /** Коментарі «ціна» і «опрацьовано» — по одному на розмову (`alias` — таблиця з `uniqueid`). */
 const notesJoin = (alias: string): string => `LEFT JOIN first_touch_notes pn ON pn.uniqueid = ${alias}.uniqueid AND pn.kind = 'price'
-      LEFT JOIN first_touch_notes mn ON mn.uniqueid = ${alias}.uniqueid AND mn.kind = 'missed'`;
-const NOTE_COLS = "pn.note AS pn_text, pn.set_by_name AS pn_by, pn.set_at AS pn_at, mn.note AS mn_text, mn.set_by_name AS mn_by, mn.set_at AS mn_at";
+      LEFT JOIN first_touch_notes mn ON mn.uniqueid = ${alias}.uniqueid AND mn.kind = 'missed'
+      LEFT JOIN first_touch_notes onx ON onx.uniqueid = ${alias}.uniqueid AND onx.kind = 'offline'`;
+const NOTE_COLS = "pn.note AS pn_text, pn.set_by_name AS pn_by, pn.set_at AS pn_at, mn.note AS mn_text, mn.set_by_name AS mn_by, mn.set_at AS mn_at, "
+  + "onx.note AS on_text, onx.set_by_name AS on_by, onx.set_at AS on_at";
 
 function typeFields(res: AnalysisResult | null, r: RawRow): Pick<AiCallRow, "conversationType" | "typeConfidence" | "typeReason" | "priceValue" | "inReport" | "typeCheck" | "typeOverride"> {
   const override: TypeOverride | null = r.ov_is_cargo == null ? null
@@ -355,7 +361,7 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
       if (rows[i].managerPromises === 0 || !x.result) return;
       const phone = phoneOf.get(x.uniqueid);
       const checks = checkPromises(x.result, rows[i].calledAt, rows[i].billsec, phone ? calls.get(phone) ?? [] : [], known, rows[i].managerId);
-      rows[i].promiseState = worstPromiseState(checks.filter((c): c is PromiseCheck => c != null).map((c) => c.state));
+      rows[i].promiseState = withOfflineMark(worstPromiseState(checks.filter((c): c is PromiseCheck => c != null).map((c) => c.state)), rows[i].offlineNote != null);
     });
   }
 
@@ -438,7 +444,8 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
   const after = raw.client_phone
     ? (await callsByPhone(db, [raw.client_phone], end)).get(raw.client_phone) ?? [] : [];
   const nowD = new Date();
-  const promiseChecks = done && raw.result ? checkPromises(raw.result, row.calledAt, row.billsec, after, await callsKnownUntil(db, nowD), row.managerId) : [];
+  const promiseChecks = (done && raw.result ? checkPromises(raw.result, row.calledAt, row.billsec, after, await callsKnownUntil(db, nowD), row.managerId) : [])
+    .map((c) => (c ? { ...c, state: withOfflineMark(c.state, row.offlineNote != null) ?? c.state } : c));
   const callsAfter = after.filter((c) => c.at.getTime() > end.getTime() && c.at.getTime() <= end.getTime() + 7 * 86_400_000)
     .slice(0, 12).map((c) => ({ at: c.at.toISOString(), billsec: c.billsec, direction: IN_TYPES.has(c.callType) ? "in" as const : "out" as const,
       managerName: c.managerName, byPromiser: row.managerId != null && c.managerId === row.managerId }));
@@ -497,7 +504,7 @@ export async function setCallType(db: Db, uniqueid: string, isCargo: boolean, by
     [uniqueid, isCargo, by.userId, by.name, at.toISOString()]);
 }
 
-export type NoteKind = "price" | "missed";
+export type NoteKind = "price" | "missed" | "offline";
 /** Записати (або замінити) коментар виду `kind`. Порожній текст — прибрати коментар. Право й скоуп — у роуті. */
 export async function setCallNote(db: Db, uniqueid: string, kind: NoteKind, text: string, by: { userId: number | null; name: string | null }, at: Date): Promise<void> {
   const t = text.trim();

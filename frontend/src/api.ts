@@ -247,15 +247,17 @@ export interface LeadgenStatsResp {
   plans?: { elapsed: number; byPerson: LeadgenPersonPlan[]; team: LeadgenTeamPlan };
 }
 /** План на обраний період (місячний, поділений за робочими днями, як у Звіті); `null` — затвердженого плану немає. */
-export interface LeadgenPeriodPlan { leads: number | null; opr: number | null; quotes: number | null }
+export interface LeadgenPeriodPlan { leads: number | null; opr: number | null; quotes: number | null; calls: number | null; money: number | null }
 export type LeadgenPlanExec =
   | { kind: "none" } | { kind: "zero" }
   | { kind: "plan"; fact: number; plan: number; pct: number; level: "g" | "a" | "r" };
-export interface LeadgenPersonPlan { managerId: number; plan: LeadgenPeriodPlan; exec: LeadgenPlanExec }
-export interface LeadgenTeamPlan { total: number; planned: number; fact: number; plan: number | null; exec: LeadgenPlanExec }
+/** Дзвінки й гроші (01.10.2026): гроші — ОДИН план, два порівняння — з «Успішні» і з «Успішні + Очікування». */
+export interface LeadgenExtraExec { calls: LeadgenPlanExec; moneyEarned: LeadgenPlanExec; moneyTotal: LeadgenPlanExec }
+export interface LeadgenPersonPlan { managerId: number; plan: LeadgenPeriodPlan; exec: LeadgenPlanExec; extra: LeadgenExtraExec }
+export interface LeadgenTeamPlan { total: number; planned: number; fact: number; plan: number | null; exec: LeadgenPlanExec; extra: LeadgenExtraExec }
 
 /** 📋 Формування плану лідгенів (дзеркало формування плану продажів). */
-export type LgPlanMetric = "leads" | "opr" | "quotes";
+export type LgPlanMetric = "leads" | "opr" | "quotes" | "calls" | "money";
 export type LgPlanValues = Record<LgPlanMetric, number | null>;
 export interface LgPlanMember {
   managerId: number; name: string; canSubmit: boolean;
@@ -263,7 +265,7 @@ export interface LgPlanMember {
   proposed: LgPlanValues; approved: LgPlanValues;
   comment: string | null; returnComment: string | null;
   submittedBy: string | null; submittedAt: string | null; decidedBy: string | null; decidedAt: string | null;
-  history: { month: string; leads: number; opr: number; quotes: number }[];
+  history: { month: string; leads: number; opr: number; quotes: number; calls: number }[];
 }
 export interface LgPlanFormation {
   month: string; role: string; canApprove: boolean; scopedTo: number | null;
@@ -273,7 +275,7 @@ export async function fetchLeadgenPlans(month: string): Promise<LgPlanFormation>
   const { data } = await api.get<LgPlanFormation>("/dashboard/leadgen-plans", { params: { month } });
   return data;
 }
-export async function submitLeadgenPlan(body: { managerId: number; month: string; leads: number; opr: number; quotes: number; comment?: string }): Promise<void> {
+export async function submitLeadgenPlan(body: { managerId: number; month: string; leads: number; opr: number; quotes: number; calls: number | null; money: number | null; comment?: string }): Promise<void> {
   await api.post("/dashboard/leadgen-plans/submit", body);
 }
 export async function approveLeadgenPlan(body: { managerId?: number; month: string }): Promise<{ approved: number }> {
@@ -364,7 +366,7 @@ export interface AiCallRowT {
   conversationType: ConversationTypeT | null; typeConfidence: number | null; typeReason: string | null; priceValue: string | null;
   inReport: boolean; typeCheck: boolean; typeOverride: { isCargo: boolean; byName: string | null; at: string } | null;
   /** «Чому не озвучено ціну» і «Опрацьовано» (ТЗ 30.09.2026). */
-  priceNote: AiNoteT | null; missedNote: AiNoteT | null;
+  priceNote: AiNoteT | null; missedNote: AiNoteT | null; offlineNote: AiNoteT | null;
 }
 export interface AiNoteT { text: string; byName: string | null; at: string }
 export interface AiCallsResp {
@@ -399,11 +401,11 @@ export interface AiCallCardResp {
   typeHistory: { isCargo: boolean; byName: string | null; at: string }[];
   canEditType: boolean;
   /** Хто що може писати й чи можна слухати запис — вирішує сервер. */
-  noteRights: { price: boolean; missed: boolean };
+  noteRights: { price: boolean; missed: boolean; offline: boolean };
   canListen: boolean;
 }
 /** Коментар: `price` — «Чому не озвучено ціну», `missed` — «Опрацьовано». Порожній текст прибирає. */
-export async function putAiCallNote(uniqueid: string, kind: "price" | "missed", text: string): Promise<void> {
+export async function putAiCallNote(uniqueid: string, kind: "price" | "missed" | "offline", text: string): Promise<void> {
   await api.put(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/note`, { kind, text });
 }
 /** Запис розмови — байтами через наш сервер (з авторизацією), а не прямим посиланням Ringostat. */
@@ -420,7 +422,7 @@ export interface AiManagerLineT {
 export interface AiPoolRowT {
   uniqueid: string; calledAt: string; managerId: number | null; managerName: string | null; teamName: string | null;
   clientPhone: string | null; kommoIds: number[]; state: AiCallState; summary: string | null;
-  priceDiscussed: boolean | null; priceValue: string | null; priceNote: AiNoteT | null; missedNote: AiNoteT | null;
+  priceDiscussed: boolean | null; priceValue: string | null; priceNote: AiNoteT | null; missedNote: AiNoteT | null; offlineNote: AiNoteT | null;
   promiseState: PromiseStateT | null; objections: number; typeCheck: boolean;
   flags: { analysed: boolean; noPrice: boolean; noComment: boolean; missed: boolean; banner: boolean };
 }
@@ -5208,11 +5210,13 @@ export interface CtorForm {
   ent: CtorEntityKey; doc: CtorDocKind; party: CtorParty; intl: boolean; stamp: boolean; fopAcc: number;
   cp: CtorCounterparty; trip: Record<string, string>; pay: CtorPay;
   dealNo: string; docDate: string; mainNo: string; mainDate: string;
+  /** «Діє до» основного договору (ДД.ММ.РРРР); порожньо = 31 грудня року дати договору. */
+  mainUntil: string;
 }
 export const CTOR_EMPTY_FORM: CtorForm = {
   ent: "uts", doc: "once", party: "client", intl: false, stamp: true, fopAcc: 0,
   cp: {}, trip: {}, pay: { sum: "", cur: "грн", form: "б/г без ПДВ", order: "по отриманні документів" },
-  dealNo: "", docDate: "", mainNo: "", mainDate: "",
+  dealNo: "", docDate: "", mainNo: "", mainDate: "", mainUntil: "",
 };
 export interface CtorEntityRow {
   key: CtorEntityKey; code: string; name: string; full_name: string; edrpou: string; ipn: string | null;
@@ -5359,3 +5363,39 @@ export const svMarkRead = async (id: number) => (await api.post(`/surveys/notifi
 export async function svExportCsv(id: number): Promise<Blob> {
   return (await api.get<Blob>(`/surveys/${id}/export.csv`, { responseType: "blob" })).data;
 }
+
+// ── 💰 Фінанси · «Тиждень і місяць» (прохід 2а, 01.10.2026) ─────────────────────
+export type FinPeriodKind = "week" | "month";
+export type FinKpiRefSource = "delivered_income" | "delivered_expense" | "unloaded_income" | "unloaded_expense" | "receivables";
+export interface FinKpi {
+  id: number; name: string; unit: "UAH" | "USD" | "EUR"; kind: "manual" | "sum" | "diff" | "auto"; argA: number | null; argB: number | null;
+  refSource: FinKpiRefSource | null; offFrom: string | null; active: boolean;
+  value: number | null; prevValue: number | null; note: string | null;
+  savedRef: { value: number; at: string } | null; liveRef: number | null;
+  /** Лише для `kind = "auto"` (прохід 2б): live — число ядра зараз; frozen — зафіксоване джобою; closed — із закритого
+   *  періоду (перенесене з «ФМ»); saved — живого для періоду немає, показано збережене. */
+  autoState: "live" | "frozen" | "closed" | "saved" | null;
+}
+export interface FinKpiPeriod {
+  kind: FinPeriodKind; start: string; end: string; prev: string; label: string; prevLabel: string; current: string;
+  sections: { id: number; name: string; kpis: FinKpi[] }[];
+  closed: { at: string; by: string | null; note: string | null } | null; importedInterim: boolean; canEdit: boolean;
+}
+export interface FinKpiCard {
+  id: number; name: string; unit: string; kind: string; refSource: string | null; offFrom: string | null; deleted: boolean; section: string;
+  periods: { start: string; value: number | null; note: string | null; ref: number | null }[];
+  log: { at: string; what: string; actor: string | null }[];
+}
+export type FinKpiThing = "section" | "kpi";
+const kpiPath = (k: FinKpiThing) => (k === "section" ? "sections" : "items");
+export const fetchFinKpiPeriod = async (kind: FinPeriodKind, p: string) => (await api.get<FinKpiPeriod>("/finance/kpi", { params: { kind, p } })).data;
+export const fetchFinKpiCard = async (id: number, kind: FinPeriodKind) => (await api.get<FinKpiCard>(`/finance/kpi/items/${id}`, { params: { kind } })).data;
+export const saveFinKpiValues = async (kind: FinPeriodKind, p: string, cells: { kpiId: number; value: string }[]) =>
+  (await api.put<{ changed: number }>("/finance/kpi/values", { kind, p, cells })).data;
+export const saveFinKpiNote = async (kpiId: number, kind: FinPeriodKind, p: string, text: string) => { await api.put("/finance/kpi/notes", { kpiId, kind, p, text }); };
+export const setFinKpiClosed = async (kind: FinPeriodKind, p: string, closed: boolean) => { await api.post("/finance/kpi/close", { kind, p, closed }); };
+export const createFinKpi = async (k: FinKpiThing, body: Record<string, unknown>) => (await api.post<{ id: number }>(`/finance/kpi/${kpiPath(k)}`, body)).data.id;
+export const updateFinKpi = async (k: FinKpiThing, id: number, body: Record<string, unknown>) => { await api.patch(`/finance/kpi/${kpiPath(k)}/${id}`, body); };
+export const deleteFinKpi = async (k: FinKpiThing, id: number, confirm = false) => { await api.delete(`/finance/kpi/${kpiPath(k)}/${id}`, { params: confirm ? { confirm: 1 } : {} }); };
+export const restoreFinKpi = async (k: FinKpiThing, id: number) => { await api.post("/finance/kpi/restore", { kind: k, id }); };
+export const setFinKpiOff = async (id: number, off: boolean) => (await api.post<{ offFrom: string | null }>(`/finance/kpi/items/${id}/off`, { off })).data;

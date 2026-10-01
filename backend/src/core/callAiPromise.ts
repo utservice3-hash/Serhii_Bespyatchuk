@@ -103,7 +103,7 @@ export function promiseDeadline(p: Pick<ModelPromise, "deadline_kind" | "deadlin
  * терміну — виконано; клієнт подзвонив сам — окремий стан, а не «передзвонив»; його ж вихідний після терміну —
  * «запізнився»; далі — чекає строку або не передзвонив.
  */
-export type PromiseState = "kept_talk" | "kept_attempt_only" | "client_called" | "late" | "pending" | "broken" | "unverifiable";
+export type PromiseState = "kept_talk" | "kept_attempt_only" | "kept_offline" | "client_called" | "late" | "pending" | "broken" | "unverifiable";
 
 /** Хто дзвонив — менеджер Ringostat (`null` — лінія без привʼязаного менеджера). */
 export interface CallFact { at: Date; billsec: number; callType: string; managerId?: number | null }
@@ -130,8 +130,18 @@ export function promiseState(p: Pick<ModelPromise, "channel">, madeAt: Date, dea
   return knownUntil.getTime() < deadline.getTime() ? "pending" : "broken";
 }
 
+/**
+ * 📞 ПЕРЕДЗВОНИВ ПОЗА ТЕЛЕФОНІЄЮ (01.10.2026). Ringostat бачить лише свої лінії; передзвін з мобільного чи в месенджер
+ * для нього не існує. Ручна позначка (менеджер свої, тімлід, адмін) переводить «немає дзвінка» й «запізнився» у
+ * виконане. На «передзвонив» (уже з телефонії) та «не перевіряється» не впливає — там нічого виправляти.
+ */
+export function withOfflineMark(state: PromiseState | null, offlineMarked: boolean): PromiseState | null {
+  if (!offlineMarked || state == null) return state;
+  return state === "broken" || state === "late" || state === "pending" ? "kept_offline" : state;
+}
+
 /** Стан рядка — найгірший серед обіцянок менеджера. `null` — обіцянок менеджера немає. */
-const RANK: PromiseState[] = ["broken", "late", "pending", "kept_attempt_only", "client_called", "kept_talk", "unverifiable"];
+const RANK: PromiseState[] = ["broken", "late", "pending", "kept_attempt_only", "client_called", "kept_offline", "kept_talk", "unverifiable"];
 export function worstPromiseState(states: readonly PromiseState[]): PromiseState | null {
   for (const s of RANK) if (states.includes(s)) return s;
   return null;

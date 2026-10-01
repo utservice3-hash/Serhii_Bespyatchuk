@@ -6,6 +6,11 @@ import {
   FinError, type Db, loadMonth, itemCard, createResp, renameResp, deleteResp, createGroup, updateGroup, deleteGroup,
   createItem, updateItem, setItemOff, deleteItem, restore, saveValues, setNote, setApproval,
 } from "../core/finance.js";
+import {
+  loadPeriod, kpiCard, saveKpiValues, setKpiNote, setPeriodClosed, createSection, renameSection, deleteSection,
+  createKpi, updateKpi, setKpiOff, deleteKpi, restoreKpiThing,
+} from "../core/financeKpi.js";
+import { fmRefsFor } from "../core/financeKpiRefs.js";
 
 /**
  * 💰 ФІНАНСИ, прохід 1 (29.09.2026): «План/факт витрат» і «Статті».
@@ -147,5 +152,82 @@ financeRouter.post("/approval", async (req, res) => {
     const approved = req.body?.approved !== false;
     await tx((db) => setApproval(db, req.auth!.userId, req.body?.month, approved));
     res.json({ ok: true, approved });
+  } catch (e) { fail(res, e); }
+});
+
+// ── Тиждень і місяць (прохід 2а) ─────────────────────────────────────────────
+/** Числа ядра для автоматичних рядків періоду (`core/financeKpiRefs.ts`): роут лише кличе (#17c). */
+const refsFor = (kind: unknown, p: unknown) => fmRefsFor(kind, p);
+financeRouter.get("/kpi", async (req, res) => {
+  try {
+    onlyFinance(req);
+    const refs = await refsFor(req.query.kind, req.query.p);
+    const p = await loadPeriod(pool as unknown as Db, req.query.kind, req.query.p, refs);
+    res.json({
+      kind: p.kind, start: p.start, end: p.end, prev: p.prev, label: p.label, prevLabel: p.prevLabel, current: p.current,
+      sections: p.sections, closed: p.closed, importedInterim: p.importedInterim, canEdit: roleHasPerm(req.auth!.roleKey, "edit_finance"),
+    });
+  } catch (e) { fail(res, e); }
+});
+financeRouter.get("/kpi/items/:id", async (req, res) => {
+  try { onlyFinance(req); res.json(await kpiCard(pool as unknown as Db, idOf(req), req.query.kind)); } catch (e) { fail(res, e); }
+});
+financeRouter.put("/kpi/values", async (req, res) => {
+  try {
+    canEdit(req);
+    const refs = await refsFor(req.body?.kind, req.body?.p);
+    res.json(await tx((db) => saveKpiValues(db, req.auth!.userId, req.body?.kind, req.body?.p, req.body?.cells, refs)));
+  } catch (e) { fail(res, e); }
+});
+financeRouter.put("/kpi/notes", async (req, res) => {
+  try {
+    canEdit(req);
+    const kpiId = Number(req.body?.kpiId);
+    if (!Number.isInteger(kpiId) || kpiId <= 0) throw new FinError(400, "Некоректний показник");
+    await tx((db) => setKpiNote(db, req.auth!.userId, kpiId, req.body?.kind, req.body?.p, req.body?.text));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+financeRouter.post("/kpi/close", async (req, res) => {
+  try {
+    canEdit(req);
+    const closed = req.body?.closed !== false;
+    await tx((db) => setPeriodClosed(db, req.auth!.userId, req.body?.kind, req.body?.p, closed));
+    res.json({ ok: true, closed });
+  } catch (e) { fail(res, e); }
+});
+financeRouter.post("/kpi/sections", async (req, res) => {
+  try { canEdit(req); res.status(201).json({ id: await tx((db) => createSection(db, req.auth!.userId, req.body)) }); } catch (e) { fail(res, e); }
+});
+financeRouter.patch("/kpi/sections/:id", async (req, res) => {
+  try { canEdit(req); const id = idOf(req); await tx((db) => renameSection(db, req.auth!.userId, id, req.body)); res.json({ ok: true }); } catch (e) { fail(res, e); }
+});
+financeRouter.delete("/kpi/sections/:id", async (req, res) => {
+  try { canEdit(req); const id = idOf(req); await tx((db) => deleteSection(db, req.auth!.userId, id)); res.json({ ok: true, undo: { kind: "section", id } }); } catch (e) { fail(res, e); }
+});
+financeRouter.post("/kpi/items", async (req, res) => {
+  try { canEdit(req); res.status(201).json({ id: await tx((db) => createKpi(db, req.auth!.userId, req.body)) }); } catch (e) { fail(res, e); }
+});
+financeRouter.patch("/kpi/items/:id", async (req, res) => {
+  try { canEdit(req); const id = idOf(req); await tx((db) => updateKpi(db, req.auth!.userId, id, req.body)); res.json({ ok: true }); } catch (e) { fail(res, e); }
+});
+financeRouter.post("/kpi/items/:id/off", async (req, res) => {
+  try { canEdit(req); const id = idOf(req); res.json(await tx((db) => setKpiOff(db, req.auth!.userId, id, req.body?.off !== false))); } catch (e) { fail(res, e); }
+});
+financeRouter.delete("/kpi/items/:id", async (req, res) => {
+  try {
+    canEdit(req);
+    const id = idOf(req);
+    await tx((db) => deleteKpi(db, req.auth!.userId, id, confirmed(req)));
+    res.json({ ok: true, undo: { kind: "kpi", id } });
+  } catch (e) { fail(res, e); }
+});
+financeRouter.post("/kpi/restore", async (req, res) => {
+  try {
+    canEdit(req);
+    const id = Number(req.body?.id);
+    if (!Number.isInteger(id) || id <= 0) throw new FinError(400, "Некоректний id");
+    await tx((db) => restoreKpiThing(db, req.auth!.userId, req.body?.kind, id));
+    res.json({ ok: true });
   } catch (e) { fail(res, e); }
 });
