@@ -307,11 +307,14 @@ test("#990 ПЕРІОДИ З «ФМ»: лише фінал, лише незак�
       (await k.loadPeriod(db, kind, p)).sections.find((x) => x.name.startsWith(sec))!.kpis.find((x) => x.name === name)!.value;
     assert.equal(await val("week", "2026-09-28", "Гроші", "Надходження загальні"), 50, "🔴 фікстура: тиждень 28.09 не проміжний");
 
-    await assert.rejects(k.importFmPeriods(db, null, file1, [{ kind: "week", start: "2026-09-28" }]), (e: unknown) => status(e) === 409, "🔴 записано проміжне");
+    // причина перевіряється ТЕКСТОМ: усі три відмови — 409, і одна може прикрити відсутність іншої (05.10 у файлі теж проміжний)
+    const why = (re: RegExp) => (e: unknown) => status(e) === 409 && re.test((e as Error).message);
+    await assert.rejects(k.importFmPeriods(db, null, file1, [{ kind: "week", start: "2026-09-28" }]), why(/проміжне/), "🔴 записано проміжне");
     await assert.rejects(k.importFmPeriods(db, null, file2, [{ kind: "week", start: "2026-09-28" }, { kind: "week", start: "2026-09-21" }]),
-      (e: unknown) => status(e) === 409, "🔴 переписано закритий тиждень");
+      why(/закрито/), "🔴 переписано закритий тиждень");
     await assert.rejects(k.importFmPeriods(db, null, file2, [{ kind: "week", start: "2026-09-28" }, { kind: "week", start: "2026-10-05" }]),
-      (e: unknown) => status(e) === 409, "🔴 записано тиждень, який рахує CRM");
+      why(/після старту автоматики/), "🔴 записано тиждень, який рахує CRM");
+    await assert.rejects(k.importFmPeriods(db, null, file2, [{ kind: "month", start: "2026-10-01" }]), why(/після старту автоматики/), "🔴 записано жовтень");
     assert.equal(await val("week", "2026-09-28", "Гроші", "Надходження загальні"), 50, "🔴 відмова лишила перший період записаним");
 
     const out = await k.importFmPeriods(db, null, file2, [{ kind: "week", start: "2026-09-28" }, { kind: "month", start: "2026-09-01" }]);
