@@ -205,6 +205,7 @@ import {
   carrierObligationFrom, clientPaymentFrom,
 } from "../core/carrierPayment.js";
 export { LEADS_BY_IDS_MAX };
+import { fmIncomeFrom, fmExpenseFrom } from "../core/fmSums.js";
 
 const FIELD_UTM_SOURCE = 481993;
 const FIELD_LEAD_GENERATOR = 2098037; // "Лидогенератор"
@@ -326,6 +327,17 @@ export function extractClientPayment(deal: KommoDeal): number | null {
  * нуль, бо нуль-знаменник маржі все одно непридатний. Тобто сторожа там нема —
  * є побічний ефект іншої вимоги, і копіювати його як зразок не можна.
  */
+/**
+ * 💰 Дохід і витрати угоди за правилом фінансиста (аркуш «ФМ»): Σ «Приход 1–5» і Σ «Расход 1–5» без «Оплата на
+ * выгрузке». Правило — у чистому `core/fmSums.ts` (звірено до копійки, 01.10.2026).
+ */
+export function extractFmIncome(deal: KommoDeal): number | null {
+  return fmIncomeFrom((id) => fieldText(deal, id));
+}
+export function extractFmExpense(deal: KommoDeal): number | null {
+  return fmExpenseFrom((id) => fieldText(deal, id));
+}
+
 export function extractCarrierObligation(deal: KommoDeal): number | null {
   return carrierObligationFrom(fieldText(deal, CARRIER_OBLIGATION_FIELD));
 }

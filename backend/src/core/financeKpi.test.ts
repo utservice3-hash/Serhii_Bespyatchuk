@@ -143,12 +143,218 @@ test("#943 ЖИВИЙ SQL: довідка CRM/1С не підміняє числ
 });
 
 /**
- * #944 — ЖИВИЙ SQL: ДОВІДКОВІ СУМИ ЯДРА ГРОШЕЙ (`money.finDeliveredByLoadDate` / `finUnloadedByActDate`). За Києвом,
- * обидва кінці включно; лише воронка «Повний цикл» і етапи від «Контролю перед завантаженням» до «Успішної»;
- * `noIncome` рахує угоди без «Приходу 1». Ганяється САМА функція ядра на scratch-базі.
- * 🧨 Червоніє, якщо поставити `col <= $to` (ріже останній день), брати UTC, іншу воронку чи «Закрито» (143).
+ * #977 — ЖИВИЙ SQL: АВТОМАТИЧНИЙ РЯДОК «ФМ» (`kind = 'auto'`, прохід 2б). Поточний тиждень — живе число ядра, не
+ * збережене; руками не вноситься (400); фіксація пише число з `frozen_at` і далі воно не рухається від живого;
+ * повторна фіксація нічого не змінює; закритий період не фіксується; ключа немає (дебіторка вже не того дня) —
+ * лишається незафіксованим, а не отримує чуже число. По обидва боки: ручний рядок поруч вноситься як раніше.
+ * 🧨 Червоніє, якщо віддати збережене замість живого, дозволити ручне внесення, перезаписати зафіксоване чи
+ * зафіксувати дебіторку без знімка.
  */
-test("#944 ЖИВИЙ SQL: довідка «поставлені / вигружені» — Київ, обидва кінці, лише ПЦ і етапи від контролю", async (t) => {
+test("#977 ЖИВИЙ SQL: авто-рядок — живе ядро до фіксації, зафіксоване не рухається, руками не вноситься", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const k = await import("./financeKpi.js");
+  const { db, c } = s;
+  try {
+    const sec = await k.createSection(db, 901, { name: "Поставлені авто" });
+    const inc = await k.createKpi(db, 901, { sectionId: sec, name: "Дохід" });
+    const deb = await k.createKpi(db, 901, { sectionId: sec, name: "Дебіторка 1С" });
+    const man = await k.createKpi(db, 901, { sectionId: sec, name: "Ручний" });
+    await c.query(`UPDATE fin_kpis SET kind = 'auto', ref_source = 'delivered_income' WHERE id = $1`, [inc]);
+    await c.query(`UPDATE fin_kpis SET kind = 'auto', ref_source = 'receivables' WHERE id = $1`, [deb]);
+    // проміжне число з «ФМ», не зафіксоване — живого не перекриває
+    await c.query(`INSERT INTO fin_kpi_values (kpi_id, period_kind, period_start, value) VALUES ($1, 'week', '2026-10-12', 111)`, [inc]);
+    const now = new Date("2026-10-14T10:00:00Z");
+    const row = async (refs: Record<string, number>, id = inc) =>
+      (await k.loadPeriod(db, "week", "2026-10-12", refs, now)).sections[0].kpis.find((x: any) => x.id === id);
+    const live = await row({ delivered_income: 5000 });
+    assert.deepEqual([live.value, live.autoState], [5000, "live"], "🔴 авто-рядок показав збережене замість живого ядра");
+    await assert.rejects(k.saveKpiValues(db, 901, "week", "2026-10-12", [{ kpiId: inc, value: "1" }]), (e: any) => e.status === 400,
+      "🔴 авто-рядок прийняв ручне число");
+    assert.deepEqual(await k.saveKpiValues(db, 901, "week", "2026-10-12", [{ kpiId: man, value: "7" }]), { changed: 1 }, "🔴 ручний рядок поруч перестав вноситись");
+
+    const f1 = await k.freezeAutoKpis(db, "week", "2026-10-12", { delivered_income: 5000 });
+    assert.equal(f1.frozen, 1, "🔴 фіксація не записала авто-рядок або зафіксувала дебіторку без знімка");
+    const after = await row({ delivered_income: 9000 });
+    assert.deepEqual([after.value, after.autoState], [5000, "frozen"], "🔴 зафіксоване число поїхало за живим");
+    assert.equal((await row({ receivables: 42 }, deb)).autoState, "live", "🔴 дебіторка без знімка позначена зафіксованою");
+    const f2 = await k.freezeAutoKpis(db, "week", "2026-10-12", { delivered_income: 9000, receivables: 42 });
+    assert.equal(f2.frozen, 1, "🔴 повторна фіксація перезаписала зафіксоване (або не зафіксувала дебіторку зі знімком)");
+    assert.equal((await row({ delivered_income: 9000 })).value, 5000, "🔴 повторна фіксація перезаписала число");
+
+    // минулий тиждень: дебіторки «зараз» для нього немає — показуємо збережене (з «ФМ»), а не порожнечу
+    await c.query(`INSERT INTO fin_kpi_values (kpi_id, period_kind, period_start, value) VALUES ($1, 'week', '2026-10-05', 777)`, [deb]);
+    const past = (await k.loadPeriod(db, "week", "2026-10-05", { delivered_income: 1 }, now)).sections[0].kpis.find((x: any) => x.id === deb);
+    assert.deepEqual([past.value, past.autoState], [777, "saved"], "🔴 авто-рядок без живого числа сховав збережене");
+
+    await k.setPeriodClosed(db, 901, "week", "2026-10-19", true);
+    assert.deepEqual(await k.freezeAutoKpis(db, "week", "2026-10-19", { delivered_income: 1 }), { frozen: 0, skipped: "період закрито" },
+      "🔴 зафіксовано в закритому періоді");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #978 — ПРОВОДКА АВТОМАТИКИ: синк пише `fm_income`/`fm_expense` у КОЖНОМУ проході (вставка й оновлення, параметри
+ * в тому ж порядку, що колонки); фіксація має крон за Києвом, догін на старті й нагляд; дебіторка дається періоду
+ * лише як знімок свого дня — по обидва боки межі. 🧨 Червоніє, якщо синк пише колонки лише при вставці, параметри
+ * зсунуті, джобу не заплановано / не наглядають, або минулий тиждень отримує сьогоднішню дебіторку.
+ */
+test("#978 ПРОВОДКА: синк пише fm_income і fm_expense щопрохід, фіксація в кроні й нагляді, дебіторка — лише знімок свого дня", async () => {
+  const sync = SRC("jobs/syncKommo.ts");
+  const ins = sync.slice(sync.indexOf("INSERT INTO deals ("));
+  const cols = ins.slice(ins.indexOf("(") + 1, ins.indexOf(")")).split(",").map((x) => x.trim()).filter(Boolean);
+  const upd = ins.slice(ins.indexOf("ON CONFLICT (kommo_id) DO UPDATE SET"), ins.indexOf("`,"));
+  const params = ins.slice(ins.indexOf("`,") + 2, ins.indexOf("]\n    );")).split("\n").map((x) => x.trim().replace(/,$/, "")).filter((x) => x && x !== "[");
+  const maxPh = Math.max(...[...ins.slice(0, ins.indexOf("`,")).matchAll(/\$(\d+)/g)].map((m) => Number(m[1])));
+  assert.equal(maxPh, params.length, "🔴 у вставці угоди кількість параметрів не дорівнює кількості плейсхолдерів");
+  for (const [col, fn] of [["fm_income", "extractFmIncome(deal)"], ["fm_expense", "extractFmExpense(deal)"]]) {
+    // дві колонки без власного параметра: `synced_at` = now(), `client_key` ділить $12 з `client_key_raw` —
+    // отже колонка після них = параметр на два позиції раніше
+    assert.equal(params.indexOf(fn), cols.indexOf(col) - 2, `🔴 ${col} пишеться не своїм параметром`);
+    assert.match(upd, new RegExp(`\\b${col} = EXCLUDED\\.${col}\\b`), `🔴 ${col} не оновлюється на вже відомих угодах`);
+  }
+  const idx = SRC("index.ts");
+  assert.match(idx, /cron\.schedule\("5 0 \* \* \*",\s*\(\) => \{\s*void runJob\("freezeFinanceKpis", \(\) => runFreezeFinanceKpis\(\)\);\s*\}, \{ timezone: "Europe\/Kyiv" \}\)/,
+    "🔴 фіксація не запланована щодня за Києвом");
+  assert.match(idx, /\["freezeFinanceKpis", \(\) => runFreezeFinanceKpis\(\)\]/, "🔴 немає догону фіксації на старті");
+  const { MONITORED_JOBS } = await import("../jobs/monitoredJobs.js");
+  assert.equal(MONITORED_JOBS.find((j) => j.name === "freezeFinanceKpis")?.everyMin, 1440, "🔴 мовчання фіксації ніхто не помітить");
+
+  const { receivablesSnapshotFits: fits } = await import("./financeKpi.js");
+  const at = (iso: string) => new Date(iso);
+  assert.equal(fits("week", "2026-09-28", at("2026-09-30T10:00:00Z"), false), true, "🔴 поточний тиждень без дебіторки");
+  assert.equal(fits("week", "2026-09-21", at("2026-09-30T10:00:00Z"), false), false, "🔴 минулий тиждень на екрані отримав сьогоднішню дебіторку");
+  assert.equal(fits("week", "2026-09-21", at("2026-09-27T21:05:00Z"), true), true, "🔴 фіксація в понеділок 00:05 Києва не взяла дебіторку");
+  assert.equal(fits("week", "2026-09-21", at("2026-09-28T21:05:00Z"), true), false, "🔴 фіксація у вівторок узяла дебіторку чужого дня");
+  assert.equal(fits("month", "2026-09-01", at("2026-09-30T21:05:00Z"), true), true, "🔴 місяць: 1-ше 00:05 Києва не взяло дебіторку");
+});
+
+/**
+ * #979 — ФРОНТ АВТОМАТИЧНИХ РЯДКІВ: поле вводу — лише в ручних (авто не редагується навіть у режимі внесення);
+ * авто-рядок підписаний станом із сервера (наживо / зафіксовано / з «ФМ» / збережене); підказка називає правило
+ * фінансиста, а не «Приход 1». По обидва боки: ручний рядок лишається полем вводу.
+ * 🧨 Червоніє, якщо дати поле авто-рядку, прибрати підпис стану або повернути в підказку «Приход 1».
+ */
+test("#979 ФРОНТ АВТО-РЯДКІВ: поле лише в ручних, підпис стану з сервера, підказка — правило фінансиста", () => {
+  const wk = FE("pages/dashboard/sections/FinanceWeekTab.tsx");
+  assert.match(wk, /const input = edit && k\.kind === "manual" && k\.active;/, "🔴 поле вводу не лише в ручних рядках");
+  assert.match(wk, /\{input\s*\? <input /, "🔴 ручний рядок перестав бути полем вводу");
+  assert.match(wk, /k\.kind === "auto" && <span [^>]*title=\{k\.autoState \? AUTO_STATE\[k\.autoState\]\[1\]/, "🔴 авто-рядок без підпису стану");
+  for (const st of ["live", "frozen", "closed", "saved"]) assert.match(wk, new RegExp(`\\b${st}: \\["`), `🔴 немає підпису стану «${st}»`);
+  const hint = wk.slice(wk.indexOf("export const REF_HINT"), wk.indexOf("};", wk.indexOf("export const REF_HINT")));
+  assert.equal((hint.match(/«Приход 1–5»/g) ?? []).length, 2, "🔴 підказка доходу — не Σ «Приход 1–5»");
+  assert.equal((hint.match(/крім типу оплати «Оплата на выгрузке»/g) ?? []).length, 2, "🔴 підказка витрат не каже про виключення");
+  assert.doesNotMatch(hint, /«Приход 1»|«Расход 1»|Дата акту/, "🔴 у підказці старе правило");
+});
+
+/**
+ * #989 — СТАРТ АВТОМАТИКИ (рішення Романа 01.10.2026: «фільтри тільки з нового тижня»). До тижня 05.10 і до жовтня
+ * авто-рядок — ручний: число з таблиці вноситься, не фіксується, CRM поруч не показується й не рахується. З 05.10 —
+ * автоматичний, а «минулий тиждень» поруч — табличне 28.09. По обидва боки межі.
+ * 🧨 Червоніє, якщо зсунути старт, дозволити фіксацію вересня чи показати CRM на тижні з таблиці.
+ */
+test("#989 СТАРТ АВТОМАТИКИ: до 05.10 і жовтня — число з таблиці, вноситься й не фіксується; з 05.10 — авто", async (t) => {
+  const kk = await import("./financeKpi.js");
+  assert.deepEqual([kk.autoActive("week", "2026-09-28"), kk.autoActive("week", "2026-10-05"), kk.autoActive("month", "2026-09-01"), kk.autoActive("month", "2026-10-01")],
+    [false, true, false, true], "🔴 межа старту автоматики зсунута");
+  const s = await scratchDb(t);
+  if (!s) return;
+  process.env.DATABASE_URL ??= s.url;
+  process.env.JWT_SECRET ??= "test";
+  process.env.KOMMO_BASE_URL ??= "https://x.invalid";
+  process.env.KOMMO_API_TOKEN ??= "x";
+  const { fmRefsFor } = await import("./financeKpiRefs.js");
+  assert.deepEqual(await fmRefsFor("week", "2026-09-28"), {}, "🔴 для тижня з таблиці рахується CRM");
+  assert.deepEqual(await fmRefsFor("month", "2026-09-01"), {}, "🔴 для вересня рахується CRM");
+  const { db, c } = s;
+  try {
+    const sec = await kk.createSection(db, 901, { name: "Поставлені авто" });
+    const inc = await kk.createKpi(db, 901, { sectionId: sec, name: "Дохід" });
+    await c.query(`UPDATE fin_kpis SET kind = 'auto', ref_source = 'delivered_income' WHERE id = $1`, [inc]);
+    const now = new Date("2026-10-06T10:00:00Z");
+    assert.deepEqual(await kk.saveKpiValues(db, 901, "week", "2026-09-28", [{ kpiId: inc, value: "2 973 228" }]), { changed: 1 }, "🔴 тиждень з таблиці не вноситься");
+    const old = (await kk.loadPeriod(db, "week", "2026-09-28", { delivered_income: 5000 }, now)).sections[0].kpis[0];
+    assert.deepEqual([old.value, old.kind, old.autoState, old.liveRef], [2973228, "manual", null, null], "🔴 тиждень з таблиці показав CRM або позначку «авто»");
+    assert.deepEqual(await kk.freezeAutoKpis(db, "week", "2026-09-28", { delivered_income: 5000 }), { frozen: 0, skipped: "до старту автоматики — число з таблиці" });
+    assert.deepEqual(await kk.freezeAutoKpis(db, "month", "2026-09-01", { delivered_income: 5000 }), { frozen: 0, skipped: "до старту автоматики — число з таблиці" },
+      "🔴 вересень зафіксовано числом із CRM");
+    assert.equal((await kk.loadPeriod(db, "week", "2026-09-28", {}, now)).sections[0].kpis[0].value, 2973228, "🔴 число з таблиці переписано");
+
+    const neu = (await kk.loadPeriod(db, "week", "2026-10-05", { delivered_income: 5000 }, now)).sections[0].kpis[0];
+    assert.deepEqual([neu.value, neu.kind, neu.autoState, neu.prevValue], [5000, "auto", "live", 2973228], "🔴 новий тиждень не автоматичний або «минулий» не з таблиці");
+    await assert.rejects(kk.saveKpiValues(db, 901, "week", "2026-10-05", [{ kpiId: inc, value: "1" }]), (e: unknown) => status(e) === 400, "🔴 новий тиждень вноситься руками");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #990 — «БЕКФІЛ ПО ТАБЛИЦІ» (`importFmPeriods`): фінал тижня 28.09 і вересня з аркуша лягає в базу, період
+ * закривається, позначка «проміжне» знімається. Відмова (нічого не записано): проміжне у файлі, закритий період,
+ * період після старту автоматики. 🧨 Червоніє, якщо записати проміжне, переписати закрите чи період, який рахує CRM.
+ */
+test("#990 ПЕРІОДИ З «ФМ»: лише фінал, лише незакриті й до старту автоматики; період закривається", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const k = await import("./financeKpi.js");
+  const row = (e: string, g: string): [string, string, string] => [e, "", g];
+  const b28 = { b: 1, label: "28.09-04.10.2026", rows: { 3: row("1000", "50"), 5: row("10", "5"), 21: row("24 000 000", "26 000 000") } };
+  const b21 = { b: 2, label: "21.09-27.09.2026", rows: { 3: row("900", "400"), 21: row("24 000 000", "") } };
+  const file1: FmFile = { blocks: [b28, b21] };
+  const file2: FmFile = { blocks: [{ b: 0, label: "05.10-11.10.2026", rows: { 3: row("1 111", "77"), 5: row("12", "3"), 21: row("30 858 596", "1") } }, b28, b21] };
+  const { db } = s;
+  try {
+    await k.importFm(db, null, file1, "2026-09-21", new Date("2026-10-01T09:00:00Z"));
+    const val = async (kind: "week" | "month", p: string, sec: string, name: string) =>
+      (await k.loadPeriod(db, kind, p)).sections.find((x) => x.name.startsWith(sec))!.kpis.find((x) => x.name === name)!.value;
+    assert.equal(await val("week", "2026-09-28", "Гроші", "Надходження загальні"), 50, "🔴 фікстура: тиждень 28.09 не проміжний");
+
+    // причина перевіряється ТЕКСТОМ: усі три відмови — 409, і одна може прикрити відсутність іншої (05.10 у файлі теж проміжний)
+    const why = (re: RegExp) => (e: unknown) => status(e) === 409 && re.test((e as Error).message);
+    await assert.rejects(k.importFmPeriods(db, null, file1, [{ kind: "week", start: "2026-09-28" }]), why(/проміжне/), "🔴 записано проміжне");
+    await assert.rejects(k.importFmPeriods(db, null, file2, [{ kind: "week", start: "2026-09-28" }, { kind: "week", start: "2026-09-21" }]),
+      why(/закрито/), "🔴 переписано закритий тиждень");
+    await assert.rejects(k.importFmPeriods(db, null, file2, [{ kind: "week", start: "2026-09-28" }, { kind: "week", start: "2026-10-05" }]),
+      why(/після старту автоматики/), "🔴 записано тиждень, який рахує CRM");
+    await assert.rejects(k.importFmPeriods(db, null, file2, [{ kind: "month", start: "2026-10-01" }]), why(/після старту автоматики/), "🔴 записано жовтень");
+    assert.equal(await val("week", "2026-09-28", "Гроші", "Надходження загальні"), 50, "🔴 відмова лишила перший період записаним");
+
+    const out = await k.importFmPeriods(db, null, file2, [{ kind: "week", start: "2026-09-28" }, { kind: "month", start: "2026-09-01" }]);
+    assert.equal(out.length, 2);
+    assert.deepEqual([await val("week", "2026-09-28", "Гроші", "Надходження загальні"), await val("week", "2026-09-28", "Поставлені", "Дохід")], [1111, 12],
+      "🔴 тиждень 28.09 не взяв фінал із блоку 05.10");
+    assert.equal(await val("month", "2026-09-01", "Гроші", "Надходження загальні"), 30858596, "🔴 вересень не взяв фінал");
+    const p = await k.loadPeriod(db, "week", "2026-09-28");
+    assert.deepEqual([!!p.closed, p.importedInterim], [true, false], "🔴 період не закрито або лишився «проміжним»");
+    await assert.rejects(k.importFmPeriods(db, null, file2, [{ kind: "week", start: "2026-09-28" }]), (e: unknown) => status(e) === 409, "🔴 повтор переписав закритий");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #948 — СУМИ ЗА ПРАВИЛОМ ФІНАНСИСТА (`core/fmSums.ts`, підтверджено Тетяною 01.10.2026): дохід = Σ «Приход 1–5»,
+ * витрати = Σ «Расход 1–5» КРІМ слотів «Оплата на выгрузке». По обидва боки: той самий слот з іншим типом рахується.
+ * Порожнє ≠ нуль. 🧨 Червоніє, якщо брати лише «Приход 1», не виключати «Оплата на выгрузке» чи виключати інші типи.
+ */
+test("#948 СУМИ «ФМ»: дохід = Σ Приход 1–5, витрати = Σ Расход 1–5 без «Оплата на выгрузке», порожнє ≠ нуль", async () => {
+  const fm = await import("./fmSums.js");
+  const deal = (f: Record<number, string>) => (id: number) => f[id] ?? null;
+  const d = deal({ 2097627: "1000", 2097683: "250.5", 2097689: "1 000,25", 2097661: "800", 2097651: "Безнал с НДС",
+    2097663: "300", 2097653: "Оплата на выгрузке", 2097669: "50", 2097659: "Наличные" });
+  assert.equal(fm.fmIncomeFrom(d), 2250.75, "🔴 дохід — не сума всіх п'яти «Приходів»");
+  assert.equal(fm.fmExpenseFrom(d), 850, "🔴 «Оплата на выгрузке» не виключено або виключено зайве");
+  const same = deal({ 2097661: "800", 2097651: "Оплата на выгрузке" });
+  assert.equal(fm.fmExpenseFrom(same), 0, "🔴 угода з єдиним розходом «на выгрузке» має витрати 0, а не «не знаємо»");
+  assert.equal(fm.fmExpenseFrom(deal({ 2097661: "800", 2097651: "Оплата на выгрузке ", 2097663: "1", 2097653: "Наличные" })), 1);
+  assert.equal(fm.fmIncomeFrom(deal({})), null, "🔴 порожня угода дала нуль замість «не знаємо»");
+  assert.equal(fm.fmExpenseFrom(deal({ 2097651: "Наличные" })), null);
+  assert.equal(fm.fmIncomeFrom(deal({ 2097627: "0.1", 2097683: "0.2" })), 0.3, "🔴 сума з плаваючою похибкою");
+});
+
+/**
+ * #949 — ЖИВИЙ SQL: ФІЛЬТРИ ФІНАНСИСТА В ЯДРІ ГРОШЕЙ (`money.finDeliveredByLoadDate` / `finUnloadedTwoFilters`).
+ * «Поставлені» — 8 етапів (з «Виставленням рахунку» й «Перевезення завершено»), «Дата загрузки» за Києвом, обидва кінці;
+ * «Вигружені» — ① «Очікуємо оплату»/«Оплата отримана» за датою СТВОРЕННЯ + ② «Успішна» за датою ЗАКРИТТЯ. Суми — `fm_*`.
+ * 🧨 Червоніє, якщо взяти 6 етапів, «Приход 1» замість `fm_income`, UTC або дату акту для «Вигружених».
+ */
+test("#949 ЖИВИЙ SQL: «поставлені» — 8 етапів за датою загрузки, «вигружені» — два фільтри, суми fm_income і fm_expense, Київ", async (t) => {
   const s = await scratchDb(t);
   if (!s) return;
   // money.ts тягне db/pool.js → config.js, який вимагає змінні ще на імпорті; сам пул тут не використовується
@@ -160,20 +366,26 @@ test("#944 ЖИВИЙ SQL: довідка «поставлені / вигруж�
   const money = await import("./money.js");
   const { c } = s;
   try {
-    const ins = (id: number, pipe: number, st: number, load: string | null, unload: string | null, inc: number | null, exp: number | null) =>
-      c.query(`INSERT INTO deals (kommo_id, pipeline_id, status_id, load_at, unload_at, client_pay_amount, carrier_obligation) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [id, pipe, st, load, unload, inc, exp]);
-    await ins(1, 8921932, 142, "2026-09-13T21:30:00Z", null, 1000, 800);        // пн 14.09 00:30 Київ — у тижні
-    await ins(2, 8921932, 69716300, "2026-09-20T20:30:00Z", null, 2000, 1500);  // нд 20.09 23:30 Київ — останній день, у тижні
-    await ins(3, 8921932, 142, "2026-09-13T20:30:00Z", null, 50000, 1);         // нд 13.09 23:30 Київ — минулий тиждень
-    await ins(4, 8921932, 143, "2026-09-15T10:00:00Z", null, 70000, 1);         // «Закрито і не реалізовано» — ні
-    await ins(5, 8921936, 142, "2026-09-15T10:00:00Z", null, 90000, 1);         // інша воронка — ні
-    await ins(6, 8921932, 69716260, "2026-09-16T10:00:00Z", "2026-09-20T20:30:00Z", null, 300); // без «Приходу»
-    await ins(7, 8921932, 100274340, "2026-09-16T10:00:00Z", null, 40000, 1);   // «Виставлення рахунку» — поза множиною «ФМ»
+    const ins = (id: number, pipe: number, st: number, x: { load?: string; created?: string; closed?: string; unload?: string }, inc: number | null, exp: number | null, p1 = 999999) =>
+      c.query(`INSERT INTO deals (kommo_id, pipeline_id, status_id, load_at, created_at_kommo, closed_at_kommo, unload_at, fm_income, fm_expense, client_pay_amount)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [id, pipe, st, x.load ?? null, x.created ?? null, x.closed ?? null, x.unload ?? null, inc, exp, p1]);
+    await ins(1, 8921932, 142, { load: "2026-09-13T21:30:00Z" }, 1000, 800);          // пн 14.09 00:30 Київ
+    await ins(2, 8921932, 100274340, { load: "2026-09-20T20:30:00Z" }, 2000, 1500);   // «Виставлення рахунку», нд 23:30 Київ
+    await ins(3, 8921932, 98470988, { load: "2026-09-15T10:00:00Z" }, 300, 100);      // «Перевезення завершено»
+    await ins(4, 8921932, 142, { load: "2026-09-13T20:30:00Z" }, 50000, 1);           // нд 13.09 23:30 Київ — минулий тиждень
+    await ins(5, 8921932, 143, { load: "2026-09-15T10:00:00Z" }, 70000, 1);           // «Закрито» — ні
+    await ins(6, 8921936, 142, { load: "2026-09-15T10:00:00Z" }, 90000, 1);           // інша воронка — ні
+    await ins(7, 8921932, 69716260, { load: "2026-09-16T10:00:00Z" }, null, 40);      // без суми доходу
     const d = await money.finDeliveredByLoadDate("2026-09-14", "2026-09-20", c as never);
-    assert.deepEqual(d, { deals: 3, income: 3000, expense: 2600, noIncome: 1 }, "🔴 поставлені за тиждень порахувались не тією множиною");
-    const u = await money.finUnloadedByActDate("2026-09-14", "2026-09-20", c as never);
-    assert.deepEqual(u, { deals: 1, income: 0, expense: 300, noIncome: 1 }, "🔴 вигружені за датою акту (останній день) не враховано");
+    assert.deepEqual(d, { deals: 4, income: 3300, expense: 2440, noIncome: 1 }, "🔴 «поставлені» порахувались не за фільтром фінансиста");
+
+    await ins(10, 8921932, 69716312, { created: "2026-09-14T08:00:00Z", unload: "2026-08-01T10:00:00Z" }, 100, 60);   // ① створена в тижні
+    await ins(11, 8921932, 69716460, { created: "2026-09-10T08:00:00Z", unload: "2026-09-15T10:00:00Z" }, 7777, 7777); // ① створена ДО тижня — ні (дата акту не рахується)
+    await ins(12, 8921932, 142, { closed: "2026-09-20T20:30:00Z" }, 400, 300);         // ② закрита нд 23:30 Київ
+    await ins(13, 8921932, 142, { closed: "2026-09-13T20:30:00Z" }, 5555, 5555);       // ② закрита в минулому тижні — ні
+    const u = await money.finUnloadedTwoFilters("2026-09-14", "2026-09-20", c as never);
+    assert.deepEqual([u.open.deals, u.closed.deals, u.income, u.expense], [1, 1, 500, 360],
+      "🔴 «вигружені» — не сума двох фільтрів (створення + закриття) на fm_*");
   } finally { await s.dispose(); }
 });
 
