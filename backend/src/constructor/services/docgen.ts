@@ -1,5 +1,5 @@
 /**
- * Серверна збірка DOCX — порт 1:1 із затвердженого макета (v15).
+ * Серверна збірка DOCX — порт 1:1 із затвердженого макета (v20, оформлення «Б», 15.10).
  *
  * Нуль залежностей: власний zip-writer (stored, без компресії) + WordprocessingML
  * руками. Так зроблено свідомо: макет генерує документ саме цим кодом, тож
@@ -18,6 +18,17 @@ import { LEGAL, MAIN_BODY, MAIN_THIRD } from '../data/legalTexts.js';
 export type EntityKey = 'uts' | 'avm' | 'fop';
 export type DocKind = 'once' | 'main' | 'carr';
 export type Party = 'client' | 'carrier';
+
+/* Щільність документа (рішення 14–15.10). Заявка має бути рівно на 3 сторінках:
+   клієнтська стартує з d1 (10,5 пт), перевізницька — з dc (10 пт); якщо з довгими даними виходить
+   4-та сторінка — крок щільніше, до d95 (9,5 пт) — це «автопідгонка» (pdfRenderer.renderDocumentPdf).
+   Основний договір — dm (9,5 пт, 8 сторінок), без підгонки. Ті самі значення — у CSS (.dens-*) і в Word (W_DENS). */
+export type Density = 'd1' | 'dc' | 'd95' | 'dm';
+export const DENS_STEPS: Record<DocKind, Density[]> = { once: ['d1', 'dc', 'd95'], carr: ['dc', 'd95'], main: ['dm'] };
+export const MAX_PAGES = 3;
+/** Заголовок колонтитула «… № N · сторінка X з Y». */
+export const FOOT_TITLE: Record<DocKind, string> = { once: 'Разовий договір', carr: 'Заявка-договір', main: 'Договір' };
+export const densSteps = (s: { doc: DocKind }): Density[] => DENS_STEPS[s.doc] || ['d1'];
 
 export interface Counterparty {
   name?: string; edrpou?: string; ipn?: string; addr?: string;
@@ -44,6 +55,9 @@ export interface DocumentState {
 }
 
 export interface DocImages {
+  /** логотип юрособи в шапці (ЮТС, АвтоМув; ФОП — немає) */
+  logo?: Uint8Array;
+  logoDim?: [number, number];
   /** PNG байти (прозорий фон); відсутність = не вставляти (ФОП без печатки, вимкнений перемикач) */
   sig?: Uint8Array;
   stamp?: Uint8Array;
@@ -55,7 +69,7 @@ export interface DocImages {
 /* Розміри вшитих картинок макета (px). Якщо Роман замінить файли в assets/ —
    передати реальні розміри через DocImages, інакше пропорції попливуть. */
 export const DEFAULT_IMG_DIM: Record<string, [number, number]> = {
-  sigB: [200, 276], sigK: [240, 205], stU: [300, 308], stA: [300, 300],
+  sigB: [200, 276], sigK: [240, 205], stU: [300, 308], stA: [300, 300], logoU: [441, 330], logoA: [799, 180],
 };
 
 /* ──────────────────── Довідкові збирачі контенту ────────────────────
@@ -320,105 +334,193 @@ export function zipStore(files: Array<{ name: string; data: string | Uint8Array 
 }
 
 /* ──────────────────────── WordprocessingML ──────────────────────── */
+/* Оформлення «Б» (рішення 14–15.10) — порт buildDocx() макета v20 символ у символ (тест docgen.test.ts):
+   шапка-таблиця [логотип · юрособа] [№ у рамці] зі смугою акценту; таблиця умов з акцентною лівою межею;
+   реквізити в картках; колонтитул footer1.xml «… № · сторінка {PAGE} з {NUMPAGES}»; рамка адреси для
+   оригіналів (ЮТС) у самому низу. Кеглі/інтервали — з тієї ж щільності, що PDF. */
 
 const X = (s: string) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const RF = '<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>';
 
-interface POpts { c?: 1; b?: 1; sp?: false; sz?: number }
+/** ширина тексту, twips: A4 11906 − 2 × 624 (поля 11 мм) */
+const W_TXT = 10658;
+const WC = { ink: '17181C', grey: '5A5F6B', key: 'F8F5F2', line: 'D8D2CC', card: 'F8F6F4', cardLine: 'EBE5DF', band: 'E3DDD7', foot: '7C8090' };
 
-const wP = (t: string, o: POpts = {}) =>
-  `<w:p><w:pPr>${o.c ? '<w:jc w:val="center"/>' : '<w:jc w:val="both"/>'}${o.sp !== false ? '<w:spacing w:after="120"/>' : ''}</w:pPr><w:r><w:rPr>${RF}${o.b ? '<w:b/>' : ''}<w:sz w:val="${o.sz || 22}"/></w:rPr><w:t xml:space="preserve">${X(t)}</w:t></w:r></w:p>`;
-
-/** Абзац із кількох ранів — для жирних назв/ПІБ усередині речення. */
-const wPRich = (segs: Seg[], o: POpts = {}) =>
-  `<w:p><w:pPr>${o.c ? '<w:jc w:val="center"/>' : '<w:jc w:val="both"/>'}${o.sp !== false ? '<w:spacing w:after="120"/>' : ''}</w:pPr>` +
-  segs.map(x => `<w:r><w:rPr>${RF}${x.b ? '<w:b/>' : ''}<w:sz w:val="${o.sz || 22}"/></w:rPr><w:t xml:space="preserve">${X(x.t)}</w:t></w:r>`).join('') + `</w:p>`;
-
-function wCell(txts: string | string[], w: number, opts: { shade?: 1; b?: 1 } = {}): string {
-  return `<w:tc><w:tcPr><w:tcW w:w="${w}" w:type="dxa"/>${opts.shade ? '<w:shd w:val="clear" w:fill="F4F2F0"/>' : ''}</w:tcPr>` +
-    (Array.isArray(txts) ? txts : [txts]).map(t => wP(t, { sp: false, sz: 20, b: opts.b })).join('') + `</w:tc>`;
+interface WDens {
+  sz: number; line: number; after: number; ind: number; bandA: number; logoU: number; h2: number; sub: number; subA: number;
+  dl: number; dlA: number; h3: number; h3B: number; h3A: number; tB: number; tA: number; tk: number; tkL: number; tv: number;
+  tvL: number; cV: number; cH: number; kW: number; rqB: number; rq: number; rqL: number; gap: number; cardV: number;
+  cardH: number; sigB: number; hang?: number;
 }
+/* кеглі — півпункти, інтервали й відступи — twips (1/20 пт); ті самі значення, що в CSS .dens-* */
+const W_DENS: Record<Density, WDens> = {
+  d1: { sz: 21, line: 294, after: 70, ind: 640, bandA: 240, logoU: 21, h2: 30, sub: 21, subA: 200, dl: 21, dlA: 240,
+    h3: 22, h3B: 160, h3A: 60, tB: 100, tA: 200, tk: 19, tkL: 256, tv: 20, tvL: 270, cV: 60, cH: 140, kW: 4476,
+    rqB: 160, rq: 19, rqL: 281, gap: 280, cardV: 160, cardH: 200, sigB: 360 },
+  dc: { sz: 20, line: 244, after: 30, ind: 480, bandA: 160, logoU: 19, h2: 27, sub: 19, subA: 120, dl: 19, dlA: 140,
+    h3: 21, h3B: 100, h3A: 40, tB: 80, tA: 140, tk: 18, tkL: 216, tv: 19, tvL: 228, cV: 40, cH: 100, kW: 4903,
+    rqB: 60, rq: 18, rqL: 230, gap: 240, cardV: 120, cardH: 180, sigB: 200 },
+  d95: { sz: 19, line: 228, after: 20, ind: 480, bandA: 140, logoU: 18, h2: 26, sub: 18, subA: 100, dl: 18, dlA: 120,
+    h3: 20, h3B: 80, h3A: 40, tB: 60, tA: 120, tk: 17, tkL: 200, tv: 18, tvL: 212, cV: 30, cH: 100, kW: 4903,
+    rqB: 60, rq: 17, rqL: 212, gap: 240, cardV: 100, cardH: 160, sigB: 180 },
+  dm: { sz: 19, line: 232, after: 30, ind: 480, bandA: 160, logoU: 19, h2: 27, sub: 19, subA: 120, dl: 19, dlA: 140,
+    h3: 20, h3B: 120, h3A: 40, tB: 80, tA: 140, tk: 18, tkL: 216, tv: 19, tvL: 228, cV: 40, cH: 100, kW: 4903,
+    rqB: 60, rq: 18, rqL: 230, gap: 240, cardV: 120, cardH: 180, sigB: 200, hang: 640 },
+};
 
-const wCellRaw = (xml: string, w: number) =>
-  `<w:tc><w:tcPr><w:tcW w:w="${w}" w:type="dxa"/></w:tcPr>${xml}</w:tc>`;
+interface ROpts { b?: 1 | 0; color?: string; pos?: number; sz: number; bdr?: string }
+const wR = (t: string, o: ROpts) => `<w:r><w:rPr>${RF}${o.b ? '<w:b/>' : ''}${o.color ? `<w:color w:val="${o.color}"/>` : ''}${o.pos ? `<w:position w:val="${o.pos}"/>` : ''}<w:sz w:val="${o.sz}"/><w:szCs w:val="${o.sz}"/>${o.bdr ? `<w:bdr w:val="single" w:sz="8" w:space="1" w:color="${o.bdr}"/>` : ''}</w:rPr><w:t xml:space="preserve">${X(t)}</w:t></w:r>`;
+const wTab = (sz: number) => `<w:r><w:rPr>${RF}<w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/></w:rPr><w:tab/></w:r>`;
 
-/** Inline-картинка (підпис/печатка) у спільному абзаці — щоб стояли ПОРУЧ (рішення 07.10). */
-function wImgRun(rid: string, dim: [number, number], targetCm: number, seq: number): string {
-  const [wpx, hpx] = dim;
-  const cx = Math.round(targetCm * 360000), cy = Math.round(cx * hpx / wpx);
+interface POpts {
+  jc?: 'left' | 'center' | 'right' | 'both'; va?: string; before?: number; after?: number; line?: number;
+  ind?: number; indL?: number; indR?: number; hang?: number; keep?: 1; bdr?: string; tabs?: string;
+}
+function wPa(runs: string, o: POpts = {}): string {
+  const ind = (o.ind || o.indL || o.indR || o.hang) ? `<w:ind${o.indL ? ` w:left="${o.indL}"` : ''}${o.indR ? ` w:right="${o.indR}"` : ''}${o.ind ? ` w:firstLine="${o.ind}"` : ''}${o.hang ? ` w:hanging="${o.hang}"` : ''}/>` : '';
+  return `<w:p><w:pPr>${o.keep ? '<w:keepNext/>' : ''}${o.bdr || ''}${o.tabs || ''}<w:spacing w:before="${o.before || 0}" w:after="${o.after || 0}"${o.line ? ` w:line="${o.line}" w:lineRule="exact"` : ''}/>${ind}<w:jc w:val="${o.jc || 'both'}"/>${o.va ? `<w:textAlignment w:val="${o.va}"/>` : ''}</w:pPr>${runs}</w:p>`;
+}
+/** порожній абзац точної висоти — відступ між блоками (keep — тримати з наступним) */
+const wGap = (tw: number, keep?: 1) => `<w:p><w:pPr>${keep ? '<w:keepNext/>' : ''}<w:spacing w:before="0" w:after="0" w:line="${tw}" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>`;
+const wMar = (tag: string, v: number, h: number) => `<w:${tag}><w:top w:w="${v}" w:type="dxa"/><w:left w:w="${h}" w:type="dxa"/><w:bottom w:w="${v}" w:type="dxa"/><w:right w:w="${h}" w:type="dxa"/></w:${tag}>`;
+
+/** Inline-картинка DrawingML (логотип, підпис, печатка). */
+function wDraw(rid: string, cx: number, cy: number, seq: number): string {
   return `<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${seq}" name="img${seq}"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="${seq}" name="img${seq}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
 }
 
 /* ─────────────────────────── buildDocx ─────────────────────────── */
 
-export function buildDocx(s: DocumentState, num: string, img: DocImages = {}): Uint8Array {
+/** dens — щільність, з якою зібрано PDF цього документа (зберігається в constructor_documents.dens);
+ *  без неї — стартова для типу документа. Так Word має ті самі кеглі й ті самі 3 (8) сторінки, що PDF. */
+export function buildDocx(s: DocumentState, num: string, img: DocImages = {}, dens?: Density): Uint8Array {
   const e = ent(s);
+  const acc: string = e.acc;
+  const orig: string | undefined = 'orig' in e ? e.orig : undefined;
+  const hasStampFile = 'stampImg' in e && !!e.stampImg;
   const { title, sub } = docTitleParts(s);
   const rows = condRows(s);
   const legal = legalBlocks(s);
   const other = partyLabel(s) === 'перевізник' ? 'ПЕРЕВІЗНИК' : 'ЗАМОВНИК';
-  const B = '<w:tblBorders>' + ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']
-    .map(x => `<w:${x} w:val="single" w:sz="6" w:color="444444"/>`).join('') + '</w:tblBorders>';
   const mainMode = s.doc === 'main';
   const dateStr = mainMode ? (s.mainDate || '«___» ____________ 2026 р.') : docDateStr(s);
+  const dn = W_DENS[dens || densSteps(s)[0]] || W_DENS.d1;
   const hasSig = s.stamp && !!img.sig;
   const hasStamp = s.stamp && !!img.stamp;
   let seq = 0;
+  const draw = (rid: string, cx: number, cy: number) => wDraw(rid, cx, cy, ++seq);
+  const imgRun = (rid: string, dim: [number, number], targetCm: number) => {
+    const [wpx, hpx] = dim;
+    const cx = Math.round(targetCm * 360000), cy = Math.round(cx * hpx / wpx);
+    return draw(rid, cx, cy);
+  };
 
-  let body = wP(`UTS · ${('docName' in e && e.docName) || e.name} · ${s.ent === 'fop' ? 'ІПН' : 'ЄДРПОУ'} ${e.edrpou} · ${e.vat}`, { c: 1, b: 1, sz: 16 }) +
-    wP(`${title} № ${num}`, { c: 1, b: 1, sz: 28 }) + wP(sub, { c: 1 }) +
-    `<w:tbl><w:tblPr><w:tblW w:w="9800" w:type="dxa"/></w:tblPr><w:tr>` +
-    wCell('м. Київ', 4900) + wCell(dateStr, 4900) + `</w:tr></w:tbl>` + wP('', { sp: false }) +
-    wPRich(preambleSegs(s));
+  /* шапка — таблиця в один рядок: [логотип · юрособа] [№ у рамці]; зліва смуга акценту, знизу тонка лінія.
+     Таблиця, а не табулятор: рамка номера біля правого табулятора в LibreOffice губить праву сторону. */
+  const logoPt = img.logo ? (s.ent === 'avm' ? 17 : dn.logoU) : 0;
+  const logoDim = img.logoDim || DEFAULT_IMG_DIM[s.ent === 'avm' ? 'logoA' : 'logoU'];
+  const logoRun = img.logo ? draw('rIdLogo', Math.round(logoPt * 12700 * logoDim[0] / logoDim[1]), Math.round(logoPt * 12700)) : '';
+  const numW = 2700;
+  let body = `<w:tbl><w:tblPr><w:tblW w:w="${W_TXT}" w:type="dxa"/><w:tblInd w:w="0" w:type="dxa"/>` +
+      `<w:tblBorders><w:left w:val="single" w:sz="32" w:space="0" w:color="${acc}"/><w:bottom w:val="single" w:sz="6" w:space="0" w:color="${WC.band}"/></w:tblBorders>` +
+      `<w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="80" w:type="dxa"/><w:left w:w="200" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:right w:w="60" w:type="dxa"/></w:tblCellMar></w:tblPr>` +
+      `<w:tblGrid><w:gridCol w:w="${W_TXT - numW}"/><w:gridCol w:w="${numW}"/></w:tblGrid><w:tr>` +
+      `<w:tc><w:tcPr><w:tcW w:w="${W_TXT - numW}" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr>` +
+        wPa(logoRun + wR((img.logo ? '   ' : '') + `${('docName' in e && e.docName) || e.name} · ${s.ent === 'fop' ? 'ІПН' : 'ЄДРПОУ'} ${e.edrpou} · ${e.vat}`, { b: 1, color: WC.ink, sz: 17 }),
+          { jc: 'left', va: 'center' }) + `</w:tc>` +
+      `<w:tc><w:tcPr><w:tcW w:w="${numW}" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr>` +
+        wPa(wR(` № ${num} `, { b: 1, color: acc, sz: 17, bdr: acc }), { jc: 'right', indR: 40 }) + `</w:tc>` +
+      `</w:tr></w:tbl>` + wGap(dn.bandA) +
+    wPa(wR(`${title} № ${num}`, { b: 1, color: WC.ink, sz: dn.h2 }), { jc: 'center', after: 40 }) +
+    wPa(wR(sub, { color: WC.grey, sz: dn.sub }), { jc: 'center', after: dn.subA }) +
+    wPa(wR('м. Київ', { sz: dn.dl }) + wTab(dn.dl) + wR(dateStr, { sz: dn.dl }),
+      { jc: 'left', after: dn.dlA, tabs: `<w:tabs><w:tab w:val="right" w:pos="${W_TXT}"/></w:tabs>` }) +
+    wPa(preambleSegs(s).map(x => wR(x.t, { b: x.b, sz: dn.sz })).join(''), { line: dn.line, after: dn.after, ind: dn.ind });
+  const pTxt = (t: string) => wPa(wR(t, { sz: dn.sz }), { line: dn.line, after: dn.after, ind: dn.ind });
+  const h3 = (t: string, c?: 1) => wPa(wR(t, { b: 1, color: acc, sz: dn.h3 }), { jc: c ? 'center' : 'left', before: dn.h3B, after: dn.h3A, keep: 1 });
 
   if (mainMode) {
+    /* основний договір: розділ — з тонкою лінією знизу; пункт — номер висячим стовпчиком (як у PDF) */
+    const secBdr = `<w:pBdr><w:bottom w:val="single" w:sz="4" w:space="1" w:color="${WC.band}"/></w:pBdr>`;
     (MAIN_BODY as ReadonlyArray<{ h?: string; n?: string; t?: string }>).forEach(b => {
-      if (b.h) { body += wP(b.h, { c: 1, b: 1 }); return; }
-      body += wP(b.n + ' ' + mainClauseText(s, b.t || '', (MAIN_THIRD as Record<EntityKey, string>)[s.ent] || ''));
+      if (b.h) { body += wPa(wR(b.h, { b: 1, color: acc, sz: dn.h3 }), { jc: 'left', before: dn.h3B, after: dn.h3A, keep: 1, bdr: secBdr }); return; }
+      body += wPa(wR(b.n || '', { b: 1, sz: dn.sz }) + wTab(dn.sz) + wR(mainClauseText(s, b.t || '', (MAIN_THIRD as Record<EntityKey, string>)[s.ent] || ''), { sz: dn.sz }),
+        { line: dn.line, after: dn.after, indL: dn.hang || 640, hang: dn.hang || 640 });
     });
   } else {
-    body += (legal ? wP(legal[0] as string) : '') +
-      wP('2. Основні умови перевезення:', { b: 1 }) +
-      `<w:tbl><w:tblPr><w:tblW w:w="9800" w:type="dxa"/>${B}</w:tblPr>` +
-      rows.map(([k, v]) => `<w:tr>${wCell(k, 4100, { shade: 1 })}${wCell(v || '—', 5700, { b: 1 })}</w:tr>`).join('') + `</w:tbl>` + wP('', { sp: false });
-    legal!.slice(1).forEach(b => { body += (typeof b === 'object') ? wP(b.h, { b: 1 }) : wP(b); });
+    if (legal) body += pTxt(legal[0] as string);
+    const vW = W_TXT - dn.kW;
+    const tb = (side: string) => `<w:${side} w:val="single" w:sz="${side === 'left' ? 20 : 4}" w:space="0" w:color="${side === 'left' ? acc : WC.line}"/>`;
+    body += h3('2. Основні умови перевезення:') + wGap(dn.tB, 1) +
+      `<w:tbl><w:tblPr><w:tblW w:w="${W_TXT}" w:type="dxa"/><w:tblInd w:w="0" w:type="dxa"/>` +
+      `<w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(tb).join('')}</w:tblBorders>` +
+      `<w:tblLayout w:type="fixed"/>${wMar('tblCellMar', dn.cV, dn.cH)}</w:tblPr>` +
+      `<w:tblGrid><w:gridCol w:w="${dn.kW}"/><w:gridCol w:w="${vW}"/></w:tblGrid>` +
+      rows.map(([k, v]) => `<w:tr><w:trPr><w:cantSplit/></w:trPr>` +
+        `<w:tc><w:tcPr><w:tcW w:w="${dn.kW}" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="${WC.key}"/></w:tcPr>` +
+          wPa(wR(k, { color: WC.grey, sz: dn.tk }), { jc: 'left', line: dn.tkL }) + `</w:tc>` +
+        `<w:tc><w:tcPr><w:tcW w:w="${vW}" w:type="dxa"/></w:tcPr>` +
+          wPa(wR(v || '—', { b: 1, color: WC.ink, sz: dn.tv }), { jc: 'left', line: dn.tvL }) + `</w:tc></w:tr>`).join('') +
+      `</w:tbl>` + wGap(dn.tA);
+    legal!.slice(1).forEach(b => { body += (typeof b === 'object') ? h3(b.h) : pTxt(b); });
   }
 
-  body += wP('РЕКВІЗИТИ СТОРІН', { c: 1, b: 1 }) +
-    `<w:tbl><w:tblPr><w:tblW w:w="9800" w:type="dxa"/></w:tblPr><w:tr>` +
-    wCellRaw([other, ...reqLines(s, 'their')].map((t, i) => wP(t, { sp: false, sz: 20, b: i < 2 ? 1 : undefined })).join(''), 4900) +
-    wCellRaw(['ЕКСПЕДИТОР', ...reqLines(s, 'our')].map((t, i) => wP(t, { sp: false, sz: 20, b: i < 2 ? 1 : undefined })).join(''), 4900) +
-    `</w:tr><w:tr>` +
-    wCellRaw(
-      wP('', { sp: false, sz: 20 }) + wP('Від ' + (other === 'ПЕРЕВІЗНИК' ? 'Перевізника' : 'Замовника') + ':', { sp: false, sz: 20 }) +
-      wP('', { sp: false, sz: 20 }) +
-      wPRich([{ t: '__________________  Директор ' }, { t: (s.cp.dir || '_______________'), b: 1 }], { sp: false, sz: 20 }) +
-      wP('М.П.', { sp: false, sz: 20 })
-      , 4900) +
-    wCellRaw(
-      wP('', { sp: false, sz: 20 }) + wP('Від Експедитора:', { sp: false, sz: 20 }) +
-      (hasSig || hasStamp
-        ? `<w:p><w:pPr><w:spacing w:after="40"/></w:pPr>` +
-          (hasSig ? wImgRun('rIdSig', img.sigDim || DEFAULT_IMG_DIM[s.ent === 'avm' ? 'sigK' : 'sigB'], 2.3, ++seq) : '') +
-          `<w:r><w:rPr>${RF}</w:rPr><w:t xml:space="preserve">  </w:t></w:r>` +
-          (hasStamp ? wImgRun('rIdSt', img.stampDim || DEFAULT_IMG_DIM[s.ent === 'avm' ? 'stA' : 'stU'], 3.0, ++seq) : '') +
-          `</w:p>`
-        : wP('', { sp: false, sz: 20 })) +
-      wPRich([{ t: '__________________  ' + (s.ent === 'fop' ? 'ФОП ' : 'Директор ') }, { t: e.dirShort, b: 1 }], { sp: false, sz: 20 })
-      , 4900) +
-    `</w:tr></w:tbl>` +
-    `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="900" w:right="850" w:bottom="900" w:left="850"/></w:sectPr>`;
+  /* реквізити — у світлих картках, під ними підписи; рядки не розриваються між сторінками */
+  const cw = Math.floor((W_TXT - dn.gap) / 2);
+  const card = (head: string, lines: string[]) => `<w:tc><w:tcPr><w:tcW w:w="${cw}" w:type="dxa"/><w:tcBorders>` +
+      ['top', 'left', 'bottom', 'right'].map(x => `<w:${x} w:val="single" w:sz="4" w:space="0" w:color="${WC.cardLine}"/>`).join('') +
+      `</w:tcBorders><w:shd w:val="clear" w:color="auto" w:fill="${WC.card}"/>${wMar('tcMar', dn.cardV, dn.cardH)}</w:tcPr>` +
+    wPa(wR(head, { b: 1, color: acc, sz: 20 }), { jc: 'left', after: 100 }) +
+    lines.map((l, i) => wPa(wR(l, { b: i === 0 ? 1 : 0, sz: dn.rq }), { jc: 'left', line: dn.rqL })).join('') + `</w:tc>`;
+  const gapCell = `<w:tc><w:tcPr><w:tcW w:w="${dn.gap}" w:type="dxa"/></w:tcPr><w:p/></w:tc>`;
+  const sigCell = (xml: string) => `<w:tc><w:tcPr><w:tcW w:w="${cw}" w:type="dxa"/></w:tcPr>${xml}</w:tc>`;
+  const sp = (t: string, b?: 1) => wPa(wR(t, { b, sz: 19 }), { jc: 'left' });
+  body += h3('РЕКВІЗИТИ СТОРІН', 1) + wGap(dn.rqB, 1) +
+    `<w:tbl><w:tblPr><w:tblW w:w="${W_TXT}" w:type="dxa"/><w:tblInd w:w="0" w:type="dxa"/><w:tblLayout w:type="fixed"/>${wMar('tblCellMar', 0, 0)}</w:tblPr>` +
+    `<w:tblGrid><w:gridCol w:w="${cw}"/><w:gridCol w:w="${dn.gap}"/><w:gridCol w:w="${cw}"/></w:tblGrid>` +
+    `<w:tr><w:trPr><w:cantSplit/></w:trPr>` + card(other, reqLines(s, 'their')) + gapCell + card('ЕКСПЕДИТОР', reqLines(s, 'our')) + `</w:tr>` +
+    `<w:tr><w:trPr><w:cantSplit/></w:trPr>` +
+      sigCell(wPa(wR('Від ' + (other === 'ПЕРЕВІЗНИК' ? 'Перевізника' : 'Замовника') + ':', { sz: 19 }), { jc: 'left', before: dn.sigB }) + sp('') +
+        wPa(wR('__________________  Директор ', { sz: 19 }) + wR(s.cp.dir || '_______________', { b: 1, sz: 19 }), { jc: 'left' }) + sp('М.П.')) +
+      gapCell +
+      sigCell(wPa(wR('Від Експедитора:', { sz: 19 }), { jc: 'left', before: dn.sigB }) +
+        ((hasSig || hasStamp)
+          ? `<w:p><w:pPr><w:spacing w:before="0" w:after="40"/></w:pPr>` +
+            (hasSig ? imgRun('rIdSig', img.sigDim || DEFAULT_IMG_DIM[s.ent === 'avm' ? 'sigK' : 'sigB'], 2.3) : '') +
+            `<w:r><w:rPr>${RF}</w:rPr><w:t xml:space="preserve">  </w:t></w:r>` +
+            (hasStamp ? imgRun('rIdSt', img.stampDim || DEFAULT_IMG_DIM[s.ent === 'avm' ? 'stA' : 'stU'], 3.0) : '') + `</w:p>`
+          : sp('')) +
+        wPa(wR('__________________  ' + (s.ent === 'fop' ? 'ФОП ' : 'Директор '), { sz: 19 }) + wR(e.dirShort, { b: 1, sz: 19 }), { jc: 'left' }) +
+        (hasStampFile ? sp('М.П.') : '')) +
+    `</w:tr></w:tbl>`;
+  /* у самому низу документів ЮТС — маленька рамка з адресою для оригіналів (рішення 15.10) */
+  body += orig
+    ? wPa(wR('Адреса для надсилання оригіналів документів: ', { b: 1, color: acc, sz: 17 }) + wR(orig, { color: WC.ink, sz: 17 }),
+        { jc: 'left', before: 160, line: 230, indL: 120, indR: 120,
+          bdr: '<w:pBdr>' + ['top', 'left', 'bottom', 'right'].map(x =>
+            `<w:${x} w:val="single" w:sz="6" w:space="${x === 'top' || x === 'bottom' ? 3 : 5}" w:color="${acc}"/>`).join('') + '</w:pBdr>' })
+    : wGap(20);                           // Word вимагає абзац після таблиці — мінімальний, щоб не створив зайву сторінку
+  body += `<w:sectPr><w:footerReference w:type="default" r:id="rIdFtr"/><w:pgSz w:w="11906" w:h="16838"/>` +
+    `<w:pgMar w:top="567" w:right="624" w:bottom="850" w:left="624" w:header="284" w:footer="340" w:gutter="0"/></w:sectPr>`;
 
   const doc = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${body}</w:body></w:document>`;
+  const fr = (t: string) => `<w:r><w:rPr>${RF}<w:color w:val="${WC.foot}"/><w:sz w:val="12"/><w:szCs w:val="12"/></w:rPr><w:t xml:space="preserve">${X(t)}</w:t></w:r>`;
+  const fld = (instr: string) => `<w:fldSimple w:instr=" ${instr} ">${fr('1')}</w:fldSimple>`;
+  const footer = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="${W_TXT}"/></w:tabs><w:spacing w:before="0" w:after="0"/></w:pPr>${fr((FOOT_TITLE[s.doc] || 'Договір') + ' № ' + num)}${wTab(12)}${fr('сторінка ')}${fld('PAGE')}${fr(' з ')}${fld('NUMPAGES')}</w:p></w:ftr>`;
 
   const files: Array<{ name: string; data: string | Uint8Array }> = [
     { name: '[Content_Types].xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>` },
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/></Types>` },
     { name: '_rels/.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>` },
   ];
-  let rels = '';
+  let rels = '<Relationship Id="rIdFtr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>';
+  if (img.logo) {
+    files.push({ name: 'word/media/logo.png', data: img.logo });
+    rels += '<Relationship Id="rIdLogo" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/logo.png"/>';
+  }
   if (hasSig) {
     files.push({ name: 'word/media/sig.png', data: img.sig! });
     rels += '<Relationship Id="rIdSig" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/sig.png"/>';
@@ -430,5 +532,6 @@ export function buildDocx(s: DocumentState, num: string, img: DocImages = {}): U
   files.push({ name: 'word/_rels/document.xml.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>` });
   files.push({ name: 'word/document.xml', data: doc });
+  files.push({ name: 'word/footer1.xml', data: footer });
   return zipStore(files);
 }

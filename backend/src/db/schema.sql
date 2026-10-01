@@ -4923,6 +4923,22 @@ CREATE TABLE IF NOT EXISTS constructor_documents (
 );
 -- «Діє до» основного договору, ДД.ММ.РРРР (п. 8.1; порожньо = 31 грудня року дати договору). Рішення Романа 01.10.2026.
 ALTER TABLE constructor_documents ADD COLUMN IF NOT EXISTS main_until text;
+
+-- 📄 Оформлення «Б» (пакет Сергія v2, migrations/003_b_style.sql; передано 01.10.2026). Повторний запуск безпечний.
+-- Генерація бере ці значення з constructor/data/entities.ts (acc, orig); колонки тут — для довідника юросіб.
+ALTER TABLE constructor_entities
+  ADD COLUMN IF NOT EXISTS logo_file          text,
+  ADD COLUMN IF NOT EXISTS accent             text,
+  ADD COLUMN IF NOT EXISTS originals_address  text;
+UPDATE constructor_entities SET logo_file = 'logo-uts.png', accent = 'C30010',
+  originals_address = 'Нова Пошта, м. Київ, відділення № 70 · Отримувач: ТОВ «Юнайтед Транспорт Сервіс», ЄДРПОУ 44186230 · Контактна особа: Зубрицька Катерина Анатоліївна, +380 67 807 54 51'
+  WHERE key = 'uts' AND originals_address IS DISTINCT FROM 'Нова Пошта, м. Київ, відділення № 70 · Отримувач: ТОВ «Юнайтед Транспорт Сервіс», ЄДРПОУ 44186230 · Контактна особа: Зубрицька Катерина Анатоліївна, +380 67 807 54 51';
+UPDATE constructor_entities SET logo_file = 'logo-avm.png', accent = '2B2F3A', originals_address = NULL WHERE key = 'avm' AND accent IS DISTINCT FROM '2B2F3A';
+UPDATE constructor_entities SET logo_file = NULL, accent = '2B2F3A', originals_address = NULL WHERE key = 'fop' AND accent IS DISTINCT FROM '2B2F3A';
+-- Щільність, з якою документ влазить у 3 сторінки (автопідгонка PDF), — Word бере ту саму.
+ALTER TABLE constructor_documents
+  ADD COLUMN IF NOT EXISTS dens  text CHECK (dens IN ('d1', 'dc', 'd95', 'dm')),
+  ADD COLUMN IF NOT EXISTS pages int;
 CREATE INDEX IF NOT EXISTS idx_cdoc_deal    ON constructor_documents (deal_no);
 CREATE INDEX IF NOT EXISTS idx_cdoc_created ON constructor_documents (created_by, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cdoc_search  ON constructor_documents

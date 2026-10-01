@@ -5266,7 +5266,9 @@ export const ctorByEdrpou = async (code: string) =>
 export const ctorPreview = async (state: CtorForm) =>
   (await api.post<{ html: string; fragment: string; blockers: string | null; assetsNote: string | null }>("/constructor/preview", { state })).data;
 export const ctorCreate = async (state: CtorForm) =>
-  (await api.post<{ id: number; version: number; num: string; createdAt: string }>("/constructor/documents", { state })).data;
+  (await api.post<{ id: number; version: number; num: string; createdAt: string;
+    /** Автопідгонка PDF (v2): скільки сторінок, яка щільність, чи не влізло в 3. */
+    pages: number | null; dens: string | null; overflow: boolean }>("/constructor/documents", { state })).data;
 export const ctorArchive = async (q = "", deal = "") =>
   (await api.get<CtorArchiveRow[]>("/constructor/documents", { params: { q, deal } })).data;
 export const ctorDocument = async (id: number) => (await api.get<Record<string, unknown>>(`/constructor/documents/${id}`)).data;

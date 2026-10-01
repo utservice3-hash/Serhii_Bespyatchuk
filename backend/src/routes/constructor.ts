@@ -16,6 +16,8 @@
  *  7. «SELECT зірочка» пакета → явні переліки колонок (гейт #17e): нова колонка не поїде назовні сама,
  *     а назви файлів підпису/печатки юросіб у відповідь не йдуть узагалі.
  *  8. Пошук за ЄДРПОУ: свій довідник, далі ЄДР через YouScore (`constructor/youscore.ts`, кеш 30 днів).
+ *  9. v2 пакета (оформлення «Б», 01.10.2026): формування підганяє PDF під 3 сторінки й пише `dens`/`pages`,
+ *     Word бере ту саму щільність, PDF несе `X-Doc-Pages/Density/Overflow`, у пакеті угоди — та сама підгонка.
  */
 import { Router, type Request, type Response } from "express";
 import path from "path";
@@ -23,7 +25,7 @@ import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { roleHasTab, roleHasPerm } from "../auth/rbac.js";
 import { parseRequisites, parseOldDoc } from "../constructor/services/requisitesParser.js";
-import { buildDocx, blockers, currentNum, zipStore, type DocumentState, type EntityKey } from "../constructor/services/docgen.js";
+import { buildDocx, blockers, currentNum, zipStore, type DocumentState, type EntityKey, type Density } from "../constructor/services/docgen.js";
 import { splitParagraphs, textPageHtml, imagePageHtml, paragraphsDocx, toPdfKind, outName } from "../constructor/services/convert.js";
 import { parseDocx, docxText, OfficeParseError } from "../core/officeParse.js";
 import { extractText } from "../core/docText.js";
@@ -31,7 +33,7 @@ import { mkdtemp, writeFile, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { fullPageHTML, printHTML } from "../constructor/services/printTemplate.js";
 import { loadDocImages, docImageDataUris, AssetsMissing } from "../constructor/services/docAssets.js";
-import { htmlToPdf, PdfUnavailable } from "../constructor/services/pdfRenderer.js";
+import { htmlToPdf, renderDocumentPdf, PdfUnavailable, type RenderedPdf } from "../constructor/services/pdfRenderer.js";
 import { canSeeConstructorDoc, stateFromBody, fileBase, VIEW_ALL_PERM } from "../constructor/access.js";
 import { DOCS_DIR } from "../jobs/backupDb.js";
 import { MANAGER_CONTACT_SQL, POOL_STATS_SQL } from "../constructor/sql.js";
@@ -154,13 +156,14 @@ constructorRouter.get("/edrpou/:code", h(async (req, res) => {
 /* ── Прев'ю без збереження ── */
 constructorRouter.post("/preview", h(async (req, res) => {
   const s = await stateOrFail(req);
-  const img: { uris: { sig?: string; stamp?: string }; note?: string } = s.stamp ? safeImages(s.ent, true) : { uris: {} };
+  const img = safeImages(s.ent, s.stamp);   // логотип є завжди; перемикач прибирає лише підпис і печатку (v2)
   const num = currentNum(s) || (s.doc === "main" ? "______" : "______ (ID угоди)"); // заглушка — як у макеті
   res.json({ html: fullPageHTML(s, num, img.uris), fragment: printHTML(s, num, img.uris), blockers: blockers(s), assetsNote: img.note ?? null });
+  // `html` — повна сторінка з CSS «Б» (iframe srcDoc, як у пакеті v2); `fragment` лишено для сумісності.
 }));
 
 /** Прев'ю не падає, якщо картинок ще немає на сервері: показує документ без них і каже чому. */
-function safeImages(ent: EntityKey, stampOn: boolean): { uris: { sig?: string; stamp?: string }; note?: string } {
+function safeImages(ent: EntityKey, stampOn: boolean): { uris: { logo?: string; sig?: string; stamp?: string }; note?: string } {
   try { return { uris: docImageDataUris(CONSTRUCTOR_ASSETS_DIR, ent, stampOn) }; }
   catch (e) { if (e instanceof AssetsMissing) return { uris: {}, note: e.message }; throw e; }
 }
@@ -180,10 +183,28 @@ constructorRouter.post("/documents", h(async (req, res) => {
     [num, s.doc, s.party, s.ent, s.docDate || null, s.mainNo || null, s.mainDate || null,
      JSON.stringify(s.cp), JSON.stringify(s.trip), JSON.stringify(s.pay),
      s.intl, s.stamp, s.fopAcc, req.auth!.userId, s.doc === "main" ? (s.mainUntil || null) : null]);
-  res.json({ id: Number(q.rows[0].id), version: q.rows[0].version, num, createdAt: q.rows[0].created_at });
+  const fit = await fitAndStore(Number(q.rows[0].id), s, num);
+  res.json({ id: Number(q.rows[0].id), version: q.rows[0].version, num, createdAt: q.rows[0].created_at,
+    pages: fit?.pages ?? null, dens: fit?.dens ?? null, overflow: !!fit?.overflow });
 }));
 
-const DOC_COLS = "id, deal_no, doc_kind, party, entity_key, version, doc_date, main_no, main_date, main_until, contractor, trip, pay, intl, with_stamp, fop_account, created_by, created_at";
+/**
+ * 📄 АВТОПІДГОНКА (v2 пакета, рішення 14–15.10): щільність, з якою документ влазить у 3 сторінки, пишеться в
+ * запис — Word бере ту саму (однакові кеглі → ті самі сторінки). Збій рендера (немає браузера, картинок) не
+ * валить формування: запис уже в архіві, PDF підбереться при першому завантаженні.
+ */
+async function fitAndStore(id: number, s: DocumentState, num: string): Promise<RenderedPdf | null> {
+  try {
+    const fit = await renderDocumentPdf(s, num, docImageDataUris(CONSTRUCTOR_ASSETS_DIR, s.ent, s.stamp));
+    await pool.query("UPDATE constructor_documents SET dens = $1, pages = $2 WHERE id = $3", [fit.dens, fit.pages, id]);
+    return fit;
+  } catch (err) {
+    console.error("[constructor] PDF-підгонка не вдалась:", (err as Error).message);
+    return null;
+  }
+}
+
+const DOC_COLS = "id, deal_no, doc_kind, party, entity_key, version, doc_date, main_no, main_date, main_until, contractor, trip, pay, intl, with_stamp, fop_account, created_by, created_at, dens, pages";
 
 const ARCHIVE_COLS = `d.id, d.deal_no, d.doc_kind, d.party, d.entity_key, d.version, d.doc_date,
   d.contractor->>'name' AS contractor_name, d.trip->>'route' AS route,
@@ -227,18 +248,18 @@ constructorRouter.get("/documents/:id", h(async (req, res) => {
 }));
 
 /* ── Регенерація файлів із запису архіву (менеджер — автор документа, не той, хто завантажує) ── */
-async function docStateOf(req: Request): Promise<{ s: DocumentState; num: string }> {
+async function docStateOf(req: Request): Promise<{ s: DocumentState; num: string; dens: Density | null }> {
   return stateFromRow(await visibleRow(req));
 }
 
 /** Друга сторона пакета: той самий збирач стану, id — не з адреси, межу вже перевірив викликач. */
-async function stateById(_req: Request, id: number): Promise<{ s: DocumentState; num: string }> {
+async function stateById(_req: Request, id: number): Promise<{ s: DocumentState; num: string; dens: Density | null }> {
   const q = await pool.query(`SELECT ${DOC_COLS} FROM constructor_documents WHERE id = $1`, [id]);
   if (!q.rows[0]) throw new HttpError(404, "Запису немає.");
   return stateFromRow(q.rows[0]);
 }
 
-async function stateFromRow(row: Record<string, unknown>): Promise<{ s: DocumentState; num: string }> {
+async function stateFromRow(row: Record<string, unknown>): Promise<{ s: DocumentState; num: string; dens: Density | null }> {
   const s: DocumentState = {
     ent: row.entity_key as EntityKey, doc: row.doc_kind as DocumentState["doc"], party: row.party as DocumentState["party"],
     intl: !!row.intl, stamp: !!row.with_stamp, fopAcc: Number(row.fop_account) | 0,
@@ -249,7 +270,7 @@ async function stateFromRow(row: Record<string, unknown>): Promise<{ s: Document
     mainUntil: String(row.main_until || ""),
     manager: await managerOf(Number(row.created_by)),
   };
-  return { s, num: String(row.deal_no) };
+  return { s, num: String(row.deal_no), dens: (row.dens as Density) || null };
 }
 
 /** `date` із pg приходить як JS Date опівночі ЛОКАЛЬНОГО часу — беремо локальні складові, не UTC. */
@@ -260,7 +281,9 @@ function isoDate(v: unknown): string {
 
 constructorRouter.get("/documents/:id/docx", h(async (req, res) => {
   const d = await docStateOf(req);
-  const bytes = buildDocx(d.s, d.num, loadDocImages(CONSTRUCTOR_ASSETS_DIR, d.s.ent, d.s.stamp));
+  // щільність — та сама, що в PDF цього запису; якщо PDF ще не рендерився — підбираємо зараз (v2)
+  const dens = d.dens ?? (await fitAndStore(idOf(req), d.s, d.num))?.dens;
+  const bytes = buildDocx(d.s, d.num, loadDocImages(CONSTRUCTOR_ASSETS_DIR, d.s.ent, d.s.stamp), dens);
   res.set({
     "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "Content-Disposition": `attachment; filename="${fileBase(d.num)}.docx"`,
@@ -269,11 +292,13 @@ constructorRouter.get("/documents/:id/docx", h(async (req, res) => {
 
 constructorRouter.get("/documents/:id/pdf", h(async (req, res) => {
   const d = await docStateOf(req);
-  const html = fullPageHTML(d.s, d.num, docImageDataUris(CONSTRUCTOR_ASSETS_DIR, d.s.ent, d.s.stamp));
-  const pdf = await htmlToPdf(html);
+  const fit = await renderDocumentPdf(d.s, d.num, docImageDataUris(CONSTRUCTOR_ASSETS_DIR, d.s.ent, d.s.stamp));
+  if (fit.dens !== d.dens) await pool.query("UPDATE constructor_documents SET dens = $1, pages = $2 WHERE id = $3", [fit.dens, fit.pages, idOf(req)]);
+  const pdf = fit.pdf;
   const inline = req.query.view === "1";
   res.set({
     "Content-Type": "application/pdf",
+    "X-Doc-Pages": String(fit.pages), "X-Doc-Density": fit.dens, "X-Doc-Overflow": fit.overflow ? "1" : "0",
     "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${fileBase(d.num)}.pdf"`,
   }).send(Buffer.from(pdf));
 }));
@@ -295,7 +320,7 @@ constructorRouter.get("/documents/:id/pair.zip", h(async (req, res) => {
   const files: Array<{ name: string; data: Uint8Array }> = [];
   for (const id of [Number(row.id), Number(other.id)]) {
     const d = await stateById(req, id);
-    const pdf = await htmlToPdf(fullPageHTML(d.s, d.num, docImageDataUris(CONSTRUCTOR_ASSETS_DIR, d.s.ent, d.s.stamp)));
+    const pdf = (await renderDocumentPdf(d.s, d.num, docImageDataUris(CONSTRUCTOR_ASSETS_DIR, d.s.ent, d.s.stamp))).pdf;
     files.push({ name: `${fileBase(d.num)}-${d.s.party === "carrier" ? "perevizny" : "klient"}.pdf`, data: pdf });
   }
   res.set({ "Content-Type": "application/zip", "Content-Disposition": `attachment; filename="${fileBase(String(row.deal_no))}-paket.zip"` })
