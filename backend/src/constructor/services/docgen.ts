@@ -324,17 +324,15 @@ export function zipStore(files: Array<{ name: string; data: string | Uint8Array 
 const X = (s: string) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const RF = '<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>';
 
-/* 📏 01.10.2026 — Word щільніший синхронно з PDF (docCss.ts): основний текст 10pt (sz 20), після абзацу 2pt (after 40),
-   заголовок 13pt, поля 8/10 мм. Прохання Сергія «заявка в 3 листки», варіант затвердив Роман. Текст не змінювався. */
 interface POpts { c?: 1; b?: 1; sp?: false; sz?: number }
 
 const wP = (t: string, o: POpts = {}) =>
-  `<w:p><w:pPr>${o.c ? '<w:jc w:val="center"/>' : '<w:jc w:val="both"/>'}${o.sp !== false ? '<w:spacing w:after="40"/>' : ''}</w:pPr><w:r><w:rPr>${RF}${o.b ? '<w:b/>' : ''}<w:sz w:val="${o.sz || 20}"/></w:rPr><w:t xml:space="preserve">${X(t)}</w:t></w:r></w:p>`;
+  `<w:p><w:pPr>${o.c ? '<w:jc w:val="center"/>' : '<w:jc w:val="both"/>'}${o.sp !== false ? '<w:spacing w:after="120"/>' : ''}</w:pPr><w:r><w:rPr>${RF}${o.b ? '<w:b/>' : ''}<w:sz w:val="${o.sz || 22}"/></w:rPr><w:t xml:space="preserve">${X(t)}</w:t></w:r></w:p>`;
 
 /** Абзац із кількох ранів — для жирних назв/ПІБ усередині речення. */
 const wPRich = (segs: Seg[], o: POpts = {}) =>
-  `<w:p><w:pPr>${o.c ? '<w:jc w:val="center"/>' : '<w:jc w:val="both"/>'}${o.sp !== false ? '<w:spacing w:after="40"/>' : ''}</w:pPr>` +
-  segs.map(x => `<w:r><w:rPr>${RF}${x.b ? '<w:b/>' : ''}<w:sz w:val="${o.sz || 20}"/></w:rPr><w:t xml:space="preserve">${X(x.t)}</w:t></w:r>`).join('') + `</w:p>`;
+  `<w:p><w:pPr>${o.c ? '<w:jc w:val="center"/>' : '<w:jc w:val="both"/>'}${o.sp !== false ? '<w:spacing w:after="120"/>' : ''}</w:pPr>` +
+  segs.map(x => `<w:r><w:rPr>${RF}${x.b ? '<w:b/>' : ''}<w:sz w:val="${o.sz || 22}"/></w:rPr><w:t xml:space="preserve">${X(x.t)}</w:t></w:r>`).join('') + `</w:p>`;
 
 function wCell(txts: string | string[], w: number, opts: { shade?: 1; b?: 1 } = {}): string {
   return `<w:tc><w:tcPr><w:tcW w:w="${w}" w:type="dxa"/>${opts.shade ? '<w:shd w:val="clear" w:fill="F4F2F0"/>' : ''}</w:tcPr>` +
@@ -368,7 +366,7 @@ export function buildDocx(s: DocumentState, num: string, img: DocImages = {}): U
   let seq = 0;
 
   let body = wP(`UTS · ${('docName' in e && e.docName) || e.name} · ${s.ent === 'fop' ? 'ІПН' : 'ЄДРПОУ'} ${e.edrpou} · ${e.vat}`, { c: 1, b: 1, sz: 16 }) +
-    wP(`${title} № ${num}`, { c: 1, b: 1, sz: 26 }) + wP(sub, { c: 1 }) +
+    wP(`${title} № ${num}`, { c: 1, b: 1, sz: 28 }) + wP(sub, { c: 1 }) +
     `<w:tbl><w:tblPr><w:tblW w:w="9800" w:type="dxa"/></w:tblPr><w:tr>` +
     wCell('м. Київ', 4900) + wCell(dateStr, 4900) + `</w:tr></w:tbl>` + wP('', { sp: false }) +
     wPRich(preambleSegs(s));
@@ -409,7 +407,7 @@ export function buildDocx(s: DocumentState, num: string, img: DocImages = {}): U
       wPRich([{ t: '__________________  ' + (s.ent === 'fop' ? 'ФОП ' : 'Директор ') }, { t: e.dirShort, b: 1 }], { sp: false, sz: 20 })
       , 4900) +
     `</w:tr></w:tbl>` +
-    `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="454" w:right="567" w:bottom="454" w:left="567"/></w:sectPr>`;
+    `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="900" w:right="850" w:bottom="900" w:left="850"/></w:sectPr>`;
 
   const doc = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${body}</w:body></w:document>`;

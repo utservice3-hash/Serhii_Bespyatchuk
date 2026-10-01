@@ -78,7 +78,7 @@ export function printHTML(s: DocumentState, num: string, img: PrintImages = {}):
 /**
  * Повна сторінка для puppeteer. Рекомендовані параметри page.pdf():
  *   format:'A4', printBackground:true,
- *   margin:{top:'8mm', right:'10mm', bottom:'8mm', left:'10mm'} (з 01.10.2026; було 10/11/12/11 — див. docCss.ts)
+ *   margin:{top:'10mm', right:'11mm', bottom:'12mm', left:'11mm'}
  * (ті самі поля, що в макеті). preferCSSPageSize не потрібен.
  */
 export function fullPageHTML(s: DocumentState, num: string, img: PrintImages = {}): string {
