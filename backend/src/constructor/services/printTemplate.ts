@@ -13,7 +13,7 @@ import { MAIN_BODY, MAIN_THIRD } from '../data/legalTexts.js';
 import { DOC_CSS } from '../data/docCss.js';
 import {
   DocumentState, EntityKey, Seg,
-  condRows, legalBlocks, preambleSegs, reqLines, docTitleParts, docDateStr,
+  condRows, legalBlocks, preambleSegs, reqLines, docTitleParts, docDateStr, mainClauseText,
 } from './docgen.js';
 
 const esc = (s: string) => String(s)
@@ -45,7 +45,7 @@ export function printHTML(s: DocumentState, num: string, img: PrintImages = {}):
   if (mainMode) {
     (MAIN_BODY as ReadonlyArray<{ h?: string; n?: string; t?: string }>).forEach(b => {
       if (b.h) { h += `<h3 style="text-align:center">${esc(b.h)}</h3>`; return; }
-      const t = (b.t || '').replace('@THIRD@', (MAIN_THIRD as Record<EntityKey, string>)[s.ent] || '');
+      const t = mainClauseText(s, b.t || '', (MAIN_THIRD as Record<EntityKey, string>)[s.ent] || '');
       h += `<p><b>${esc(b.n || '')}</b> ${esc(t)}</p>`;
     });
   } else {

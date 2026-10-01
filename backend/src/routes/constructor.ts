@@ -174,16 +174,16 @@ constructorRouter.post("/documents", h(async (req, res) => {
   const q = await pool.query<{ id: string; version: number; created_at: string }>(
     `INSERT INTO constructor_documents
        (deal_no, doc_kind, party, entity_key, doc_date, main_no, main_date,
-        contractor, trip, pay, intl, with_stamp, fop_account, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+        contractor, trip, pay, intl, with_stamp, fop_account, created_by, main_until)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      RETURNING id, version, created_at`,
     [num, s.doc, s.party, s.ent, s.docDate || null, s.mainNo || null, s.mainDate || null,
      JSON.stringify(s.cp), JSON.stringify(s.trip), JSON.stringify(s.pay),
-     s.intl, s.stamp, s.fopAcc, req.auth!.userId]);
+     s.intl, s.stamp, s.fopAcc, req.auth!.userId, s.doc === "main" ? (s.mainUntil || null) : null]);
   res.json({ id: Number(q.rows[0].id), version: q.rows[0].version, num, createdAt: q.rows[0].created_at });
 }));
 
-const DOC_COLS = "id, deal_no, doc_kind, party, entity_key, version, doc_date, main_no, main_date, contractor, trip, pay, intl, with_stamp, fop_account, created_by, created_at";
+const DOC_COLS = "id, deal_no, doc_kind, party, entity_key, version, doc_date, main_no, main_date, main_until, contractor, trip, pay, intl, with_stamp, fop_account, created_by, created_at";
 
 const ARCHIVE_COLS = `d.id, d.deal_no, d.doc_kind, d.party, d.entity_key, d.version, d.doc_date,
   d.contractor->>'name' AS contractor_name, d.trip->>'route' AS route,
@@ -246,6 +246,7 @@ async function stateFromRow(row: Record<string, unknown>): Promise<{ s: Document
     dealNo: row.doc_kind === "main" ? "" : String(row.deal_no),
     docDate: row.doc_date ? isoDate(row.doc_date) : "",
     mainNo: row.doc_kind === "main" ? String(row.deal_no) : "", mainDate: String(row.main_date || ""),
+    mainUntil: String(row.main_until || ""),
     manager: await managerOf(Number(row.created_by)),
   };
   return { s, num: String(row.deal_no) };

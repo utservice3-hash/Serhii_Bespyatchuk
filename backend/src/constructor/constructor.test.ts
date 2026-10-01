@@ -4,7 +4,7 @@ import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildDocx, expandOrgName, shortOrgName, type DocumentState } from "./services/docgen.js";
+import { buildDocx, expandOrgName, shortOrgName, mainUntilText, blockers, type DocumentState } from "./services/docgen.js";
 import { loadDocImages, docImageDataUris, AssetsMissing } from "./services/docAssets.js";
 import { printHTML, fullPageHTML } from "./services/printTemplate.js";
 import { normPhone, findPhone, parseRequisites, parseOldDoc } from "./services/requisitesParser.js";
@@ -351,4 +351,59 @@ test("#1129 МАКЕТ ІЗОЛЬОВАНИЙ: усі селектори під 
   const urls = [...fonts.matchAll(/url\('([^']+)'\)/g)].map((m) => m[1]);
   assert.ok(urls.length >= 6, "🔴 шрифтів макета немає");
   for (const u of urls) readFileSync(path.join(REPO, "frontend", "src", "pages", "dashboard", "sections", u)); // файл існує — інакше кине
+});
+
+/**
+ * #1172 — СТРОК ДІЇ ОСНОВНОГО ДОГОВОРУ (п. 8.1, рішення Романа 01.10.2026). У шаблоні було зашито «діє до
+ * 31 грудня 2024 року». Тепер: введене «Діє до» (ДД.ММ.РРРР) потрапляє і у Word, і в PDF; порожнє —
+ * 31 грудня року дати договору; кривий формат чи дата без року — документ не формується, а не виходить
+ * із вигаданим строком.
+ * 🧨 Червоніє, якщо повернути зашитий рік, забути підстановку в одному з двох виходів або пропустити кривий формат.
+ */
+test("#1172 СТРОК ДОГОВОРУ: «Діє до» у Word і PDF; порожнє — 31 грудня року договору; кривий формат — не формується", () => {
+  const base = ref["main-uts"].state;
+  const st = (p: Partial<DocumentState>) => ({ ...base, ...p }) as DocumentState;
+  // Обидва боки межі: введене значення і порожнє.
+  assert.equal(mainUntilText(st({ mainUntil: "31.12.2027" })), "31 грудня 2027");
+  assert.equal(mainUntilText(st({ mainUntil: "05.03.2028" })), "5 березня 2028");
+  assert.equal(mainUntilText(st({ mainUntil: "", mainDate: "01.10.2026" })), "31 грудня 2026", "🔴 порожнє — не 31 грудня року договору");
+  assert.equal(mainUntilText(st({ mainUntil: "", mainDate: "15.01.2027" })), "31 грудня 2027");
+  // Кривий формат і рік, якого нема звідки взяти, — строк невідомий, документ блокується словами.
+  for (const bad of ["31.02.2027", "2027-12-31", "до кінця року"]) {
+    assert.equal(mainUntilText(st({ mainUntil: bad })), null, `🔴 «${bad}» прийнято за дату`);
+    assert.match(blockers(st({ mainUntil: bad })) ?? "", /ДД\.ММ\.РРРР/, `🔴 «${bad}»: документ формується з кривим строком`);
+  }
+  assert.ok(blockers(st({ mainUntil: "", mainDate: "з понеділка" })), "🔴 строк без року не заблоковано");
+  assert.equal(blockers(st({ mainUntil: "31.12.2027" })), null, "🔴 правильний строк заблоковано");
+
+  // У ДВОХ виходах — та сама дата, і зашитого року більше немає.
+  const a = fakeAssets();
+  try {
+    const s = st({ mainUntil: "31.12.2027" });
+    const xml = new TextDecoder().decode(unzipStored(buildDocx(s, s.mainNo, loadDocImages(a.dir, s.ent, s.stamp))).get("word/document.xml")!);
+    const html = printHTML(s, s.mainNo, docImageDataUris(a.dir, s.ent, s.stamp));
+    for (const [name, out] of [["Word", xml], ["PDF", html]] as const) {
+      assert.ok(out.includes("діє до 31 грудня 2027 року"), `🔴 ${name}: введений строк не потрапив у п. 8.1`);
+      assert.ok(!out.includes("@UNTIL@") && !out.includes("2024 року"), `🔴 ${name}: лишилась мітка або зашитий рік`);
+    }
+  } finally { a.dispose(); }
+  assert.ok(!SRC("constructor/data/legalTexts.ts").includes("31 грудня 2024"), "🔴 у шаблоні знову зашитий строк");
+});
+
+/**
+ * #1172b — «ДІЄ ДО» ЗБЕРІГАЄТЬСЯ З ДОКУМЕНТОМ: колонка в схемі, запис у POST /documents, повернення в стан
+ * при відкритті з архіву, форма приймає поле. Без цього версія 2 того самого договору мовчки повернулась би
+ * до «31 грудня року договору».
+ * 🧨 Червоніє, якщо прибрати колонку, не записати поле або не підняти його назад у стан.
+ */
+test("#1172b «ДІЄ ДО» ЗБЕРІГАЄТЬСЯ: колонка, запис, відновлення з архіву, форма", () => {
+  assert.match(SRC("db/schema.sql"), /ALTER TABLE constructor_documents ADD COLUMN IF NOT EXISTS main_until text;/, "🔴 немає колонки main_until");
+  const route = SRC("routes/constructor.ts");
+  const ins = route.slice(route.indexOf("INSERT INTO constructor_documents"), route.indexOf("RETURNING id, version"));
+  assert.ok(/\bmain_until\)/.test(ins), "🔴 POST /documents не пише main_until");
+  assert.match(route, /s\.doc === "main" \? \(s\.mainUntil \|\| null\) : null\]\);/, "🔴 у main_until іде не s.mainUntil");
+  assert.match(route, /const DOC_COLS = "[^"]*\bmain_until\b/, "🔴 відкриття з архіву не читає main_until");
+  assert.match(route, /mainUntil: String\(row\.main_until \|\| ""\)/, "🔴 стан з архіву без mainUntil");
+  assert.equal((stateFromBody({ ent: "uts", doc: "main", mainUntil: " 31.12.2027 " }, { name: "", phone: "" }) as DocumentState).mainUntil, "31.12.2027",
+    "🔴 форма не передає «Діє до» в стан");
 });

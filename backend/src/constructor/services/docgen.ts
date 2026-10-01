@@ -38,6 +38,8 @@ export interface DocumentState {
   docDate: string;           // 'YYYY-MM-DD' або '' (тоді сьогодні)
   mainNo: string;
   mainDate: string;
+  /** «Діє до» основного договору, ДД.ММ.РРРР; порожньо = 31 грудня року дати договору (Роман, 01.10.2026). */
+  mainUntil?: string;
   manager: { name: string; phone: string };  // з профілю користувача дашборда
 }
 
@@ -78,6 +80,39 @@ export function docDateStr(s: DocumentState, now = new Date()): string {
     return `${d}.${m}.${y}`;
   }
   return String(now.getDate()).padStart(2, '0') + '.' + String(now.getMonth() + 1).padStart(2, '0') + '.' + now.getFullYear();
+}
+
+const MONTHS_GEN = ['січня', 'лютого', 'березня', 'квітня', 'травня', 'червня',
+  'липня', 'серпня', 'вересня', 'жовтня', 'листопада', 'грудня'];
+
+/** ДД.ММ.РРРР → [д, м, р] лише для справжньої календарної дати (31.02 — ні). */
+function parseDmy(v: string): [number, number, number] | null {
+  const m = /^\s*(\d{1,2})\.(\d{1,2})\.(\d{4})\s*$/.exec(v);
+  if (!m) return null;
+  const [d, mo, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const t = new Date(Date.UTC(y, mo - 1, d));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d ? [d, mo, y] : null;
+}
+
+/**
+ * 📅 СТРОК ДІЇ ОСНОВНОГО ДОГОВОРУ (п. 8.1, рішення Романа 01.10.2026). У шаблоні було зашито «до 31 грудня
+ * 2024 року» — кожен договір виходив би з минулим строком. Тепер: введене «Діє до» (ДД.ММ.РРРР), а порожнє —
+ * 31 грудня року дати договору (п. 8.3 однаково поновлює договір щороку). `null` — строку не визначити
+ * (тоді `blockers` не дає сформувати документ). Тримає `#1172`.
+ */
+export function mainUntilText(s: DocumentState): string | null {
+  const raw = (s.mainUntil ?? '').trim();
+  if (raw) {
+    const p = parseDmy(raw);
+    return p ? `${p[0]} ${MONTHS_GEN[p[1] - 1]} ${p[2]}` : null;
+  }
+  const y = /(?:^|\D)(\d{4})(?:\D|$)/.exec(s.mainDate || '');
+  return y ? `31 грудня ${y[1]}` : null;
+}
+
+/** Текст пункту основного договору з підставленими мітками (спільне для Word і PDF). */
+export function mainClauseText(s: DocumentState, t: string, third: string): string {
+  return t.replace('@THIRD@', third).replace('@UNTIL@', mainUntilText(s) ?? '«___» ____________ 20__');
 }
 
 export function currentNum(s: DocumentState): string {
@@ -231,6 +266,8 @@ export function blockers(s: DocumentState): string | null {
   if (s.party === 'carrier' && s.doc === 'carr' && !s.cp.iban) return 'Немає IBAN перевізника — оплата йде на його рахунок, без нього заявка не формується.';
   if (s.doc === 'main' && !s.mainNo) return 'Вкажіть номер основного договору — він вноситься вручну після погодження.';
   if (s.doc === 'main' && !s.mainDate) return 'Вкажіть дату, з якої діє основний договір.';
+  if (s.doc === 'main' && (s.mainUntil ?? '').trim() && !mainUntilText(s)) return '«Діє до» — дата у форматі ДД.ММ.РРРР, напр. 31.12.2026.';
+  if (s.doc === 'main' && !mainUntilText(s)) return 'Вкажіть «Діє до» або дату договору з роком — інакше строк дії договору (п. 8.1) не визначити.';
   if (s.doc !== 'main' && !s.dealNo) return 'Вкажіть № заявки — це ID угоди в СРМ, поле обов\'язкове.';
   return null;
 }
@@ -337,7 +374,7 @@ export function buildDocx(s: DocumentState, num: string, img: DocImages = {}): U
   if (mainMode) {
     (MAIN_BODY as ReadonlyArray<{ h?: string; n?: string; t?: string }>).forEach(b => {
       if (b.h) { body += wP(b.h, { c: 1, b: 1 }); return; }
-      body += wP(b.n + ' ' + (b.t || '').replace('@THIRD@', (MAIN_THIRD as Record<EntityKey, string>)[s.ent] || ''));
+      body += wP(b.n + ' ' + mainClauseText(s, b.t || '', (MAIN_THIRD as Record<EntityKey, string>)[s.ent] || ''));
     });
   } else {
     body += (legal ? wP(legal[0] as string) : '') +

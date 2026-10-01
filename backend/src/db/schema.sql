@@ -4899,6 +4899,8 @@ CREATE TABLE IF NOT EXISTS constructor_documents (
   docx_file     text,                           -- шлях/ключ згенерованого файлу в сховищі (як вирішите з файлами)
   pdf_file      text
 );
+-- «Діє до» основного договору, ДД.ММ.РРРР (п. 8.1; порожньо = 31 грудня року дати договору). Рішення Романа 01.10.2026.
+ALTER TABLE constructor_documents ADD COLUMN IF NOT EXISTS main_until text;
 CREATE INDEX IF NOT EXISTS idx_cdoc_deal    ON constructor_documents (deal_no);
 CREATE INDEX IF NOT EXISTS idx_cdoc_created ON constructor_documents (created_by, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cdoc_search  ON constructor_documents

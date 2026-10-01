@@ -5208,11 +5208,13 @@ export interface CtorForm {
   ent: CtorEntityKey; doc: CtorDocKind; party: CtorParty; intl: boolean; stamp: boolean; fopAcc: number;
   cp: CtorCounterparty; trip: Record<string, string>; pay: CtorPay;
   dealNo: string; docDate: string; mainNo: string; mainDate: string;
+  /** «Діє до» основного договору (ДД.ММ.РРРР); порожньо = 31 грудня року дати договору. */
+  mainUntil: string;
 }
 export const CTOR_EMPTY_FORM: CtorForm = {
   ent: "uts", doc: "once", party: "client", intl: false, stamp: true, fopAcc: 0,
   cp: {}, trip: {}, pay: { sum: "", cur: "грн", form: "б/г без ПДВ", order: "по отриманні документів" },
-  dealNo: "", docDate: "", mainNo: "", mainDate: "",
+  dealNo: "", docDate: "", mainNo: "", mainDate: "", mainUntil: "",
 };
 export interface CtorEntityRow {
   key: CtorEntityKey; code: string; name: string; full_name: string; edrpou: string; ipn: string | null;

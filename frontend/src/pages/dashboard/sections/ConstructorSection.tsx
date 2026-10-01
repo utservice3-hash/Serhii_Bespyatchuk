@@ -304,11 +304,11 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
     try {
       const row = await ctorDocument(id) as {
         entity_key: CtorEntityKey; doc_kind: CtorForm["doc"]; party: CtorParty; intl: boolean; with_stamp: boolean; fop_account: number;
-        contractor: CtorForm["cp"]; trip: Record<string, string>; pay: CtorForm["pay"]; deal_no: string; doc_date: string | null; main_date: string | null;
+        contractor: CtorForm["cp"]; trip: Record<string, string>; pay: CtorForm["pay"]; deal_no: string; doc_date: string | null; main_date: string | null; main_until: string | null;
       };
       setForm({ ent: row.entity_key, doc: row.doc_kind, party: row.party, intl: row.intl, stamp: row.with_stamp, fopAcc: row.fop_account,
         cp: row.contractor, trip: row.trip, pay: row.pay, dealNo: row.doc_kind === "main" ? "" : row.deal_no,
-        docDate: row.doc_date ? String(row.doc_date).slice(0, 10) : "", mainNo: row.doc_kind === "main" ? row.deal_no : "", mainDate: row.main_date || "" });
+        docDate: row.doc_date ? String(row.doc_date).slice(0, 10) : "", mainNo: row.doc_kind === "main" ? row.deal_no : "", mainDate: row.main_date || "", mainUntil: row.main_until || "" });
       setMade(null);
       ok("Заявку піднято у форму — внесіть правки і сформуйте нову версію з тим самим №.");
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -570,6 +570,11 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                 <div className="g2">
                   <div className="fld"><label htmlFor="mainNo">№ договору</label><input type="text" id="mainNo" value={form.mainNo} onChange={(e) => set("mainNo", e.target.value)} placeholder="напр. 62555699 або UTS-2026-15" /></div>
                   <div className="fld"><label htmlFor="mainDate">Дата договору (діє з)</label><input type="text" id="mainDate" value={form.mainDate} onChange={(e) => set("mainDate", e.target.value)} placeholder="напр. 01.10.2026" /></div>
+                </div>
+                {/* 📅 Строк дії (п. 8.1). Порожньо — 31 грудня року дати договору (рішення Романа 01.10.2026). */}
+                <div className="g2" style={{ marginTop: 9 }}>
+                  <div className="fld"><label htmlFor="mainUntil">Діє до</label><input type="text" id="mainUntil" value={form.mainUntil} onChange={(e) => set("mainUntil", e.target.value)}
+                    placeholder={/\d{4}/.test(form.mainDate) ? `31.12.${/\d{4}/.exec(form.mainDate)![0]} — якщо не змінювати` : "напр. 31.12.2026"} /></div>
                 </div>
               </div>
             )}
