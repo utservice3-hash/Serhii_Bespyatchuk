@@ -11,10 +11,11 @@ import { withHeavyJobLock } from "./jobLock.js";
  * compute-квоту Neon). Перед записом — сухий прогін з кількістю.
  *
  * 🔒 Під `withHeavyJobLock`: `UPDATE` по `deals` конкурує з `syncKommo`. Батчі по 250 у порядку `kommo_id`,
- * кожен — окремий короткий запит; збій посередині втрачає лише батч, повторний запуск догонить решту (`IS NULL`).
+ * кожен — ОДИН запит `UPDATE … FROM unnest(…)`; збій посередині втрачає лише батч, повторний запуск догонить решту (`IS NULL`).
  *
  *   node dist/jobs/backfillFmSums.js            # сухий прогін
  *   node dist/jobs/backfillFmSums.js --write    # із записом
+ *   node dist/jobs/backfillFmSums.js --since=2026-09-01 --write   # вужче вікно
  */
 export async function backfillFmSums(opts: { write?: boolean; since?: string } = {}) {
   const since = opts.since ?? "2025-12-29";
@@ -30,10 +31,12 @@ export async function backfillFmSums(opts: { write?: boolean; since?: string } =
     for (let i = 0; i < ids.length; i += LEADS_BY_IDS_MAX) {
       const leads = await fetchLeadsByIds(ids.slice(i, i + LEADS_BY_IDS_MAX));
       fetched += leads.length;
-      for (const l of leads.sort((a, b) => a.id - b.id)) {
-        const r = await pool.query(`UPDATE deals SET fm_income = $2, fm_expense = $3 WHERE kommo_id = $1`, [l.id, extractFmIncome(l), extractFmExpense(l)]);
-        updated += r.rowCount ?? 0;
-      }
+      // один UPDATE на батч (не 250): Neon платить за кожен запит, а рядки беруться в порядку kommo_id, як у синку
+      const sorted = leads.sort((a, b) => a.id - b.id);
+      const r = await pool.query(`UPDATE deals d SET fm_income = x.inc, fm_expense = x.exp
+          FROM unnest($1::bigint[], $2::numeric[], $3::numeric[]) AS x(id, inc, exp) WHERE d.kommo_id = x.id`,
+        [sorted.map((l) => l.id), sorted.map(extractFmIncome), sorted.map(extractFmExpense)]);
+      updated += r.rowCount ?? 0;
       console.log(`  батч ${i / LEADS_BY_IDS_MAX + 1}: отримано ${leads.length}, разом оновлено ${updated}`);
     }
     return { candidates: ids.length, fetched, updated };
@@ -41,7 +44,8 @@ export async function backfillFmSums(opts: { write?: boolean; since?: string } =
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  backfillFmSums({ write: process.argv.includes("--write") })
+  const since = process.argv.find((a) => a.startsWith("--since="))?.slice(8);
+  backfillFmSums({ write: process.argv.includes("--write"), since })
     .then((r) => { console.log(JSON.stringify(r)); return pool.end(); })
     .catch((e) => { console.error(e); process.exit(1); });
 }
