@@ -1325,29 +1325,31 @@ export const ACCESS_MATRIX: AccessRow[] = [
      рішення власника дослівно: «admin, ceo, opdir, kvp». `financier` ВТРАЧАЄ доступ,
      який мав досі через `admin_scope`, і тому переїхав у `deny` явно: мовчазне зникнення
      з `allow` на `deny-only` рядках ніхто б не побачив — там дозволених не пробують.
-     `candidate` у `deny` з народження: його єдиний екран — навчання, але лише читати. */
+     `candidate` у `deny` з народження: його єдиний екран — навчання, але лише читати.
+     ➕ 01.10.2026 `hr` вийшов із `deny` усіх роутів запису навчання — Роман: «так, дай hr редагування навчання».
+     На `deny-only` рядках дозволених не пробують, тож доказ дозволу — жива проба в прийманні і `#742`. */
   { method: "POST", path: "/api/training/folder", cls: "deny-only",
-    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "team_lead", "manager"] },
   { method: "DELETE", path: "/api/training/folder/:id", cls: "DELETE-ghost",
-    allow: ["admin", "ceo", "opdir", "kvp", "candidate"], deny: ["financier", "hr", "team_lead", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "candidate"], deny: ["financier", "team_lead", "manager"] },
   { method: "PATCH", path: "/api/training/folder/:id", cls: "deny-only",
-    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "team_lead", "manager"] },
   { method: "POST", path: "/api/training/material", cls: "deny-only",
-    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "team_lead", "manager"] },
   { method: "DELETE", path: "/api/training/material/:id", cls: "DELETE-ghost",
-    allow: ["admin", "ceo", "opdir", "kvp", "candidate"], deny: ["financier", "hr", "team_lead", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "hr", "candidate"], deny: ["financier", "team_lead", "manager"] },
   { method: "PATCH", path: "/api/training/material/:id", cls: "deny-only",
-    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "team_lead", "manager"] },
   /* ✏️ Повний редактор (28.09.2026): заміна файлу й порядок — та сама межа `manage_training`, що й решта запису.
      Кандидата в deny немає свідомо — його проба дає 401 «до навчання закрито» ДО tab-гейта (див. CANDIDATE_401). */
   { method: "PUT", path: "/api/training/material/:id/file", cls: "deny-only",
-    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "team_lead", "manager"] },
   { method: "POST", path: "/api/training/reorder", cls: "deny-only",
-    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "team_lead", "manager"] },
   { method: "GET", path: "/api/training/material/:id/file", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
   { method: "POST", path: "/api/training/materials/:id/publish", cls: "deny-only",
-    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "team_lead", "manager"] },
   /* 🎓 КУРСИ Й ПРОГРЕС (крок 2, 15.09.2026). Читання відкрите всім, хто має вкладку
      `training`, — включно з кандидатом: це його єдиний екран. */
   { method: "GET", path: "/api/training/courses", cls: "GET",
@@ -1367,9 +1369,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: [] },
   /* Створення й правка курсу — те саме право, що решта редагування навчання. */
   { method: "POST", path: "/api/training/courses", cls: "deny-only",
-    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "team_lead", "manager"] },
   { method: "PATCH", path: "/api/training/courses/:id", cls: "deny-only",
-    allow: [], deny: ["financier", "hr", "team_lead", "manager"] },
+    allow: [], deny: ["financier", "team_lead", "manager"] },
   { method: "GET", path: "/api/training/tree", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
   { method: "POST", path: "/api/uploads", cls: "deny-only",

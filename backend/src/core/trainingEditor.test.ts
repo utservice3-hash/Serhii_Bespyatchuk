@@ -134,7 +134,7 @@ test("#542 ЖИВИЙ SQL: курс для кандидата з модулем 
 
 /**
  * #543 — РЕДАГУВАННЯ НАВЧАННЯ — ПРАВО, А НЕ РІВЕНЬ. Курс, модуль і обовʼязковість змінює лише
- * `manage_training`; рекрутер, тімлід і менеджер — ні, КВП — так (рішення власника 14.09.2026).
+ * `manage_training`; тімлід і менеджер — ні, КВП — так (рішення власника 14.09.2026), HR — так з 01.10.2026.
  * 🧨 Червоніє, якщо зняти гейт із нового запису або розсипати право іншим ролям.
  */
 test("#543 ПРАВО: курс, модуль і обовʼязковість змінює лише manage_training", () => {
@@ -148,6 +148,6 @@ test("#543 ПРАВО: курс, модуль і обовʼязковість з
   const give = /UPDATE roles SET permissions = permissions \|\| '\{"manage_training": true\}'::jsonb\s*\n\s*WHERE key IN \(([^)]*)\)/.exec(sql);
   assert.ok(give, "🔴 у схемі немає видачі manage_training");
   const roles = give[1].split(",").map((x) => x.trim().replace(/'/g, "")).sort();
-  assert.deepEqual(roles, ["admin", "ceo", "kvp", "opdir"], `🔴 склад ролей із правом змінився: ${roles.join(", ")}`);
+  assert.deepEqual(roles, ["admin", "ceo", "hr", "kvp", "opdir"], `🔴 склад ролей із правом змінився: ${roles.join(", ")}`);
   assert.match(sql, /UPDATE roles SET permissions = permissions - 'manage_training'\s*\n\s*WHERE key NOT IN/, "🔴 зняття права в решти ролей прибрано");
 });

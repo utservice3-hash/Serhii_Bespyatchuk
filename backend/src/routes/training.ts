@@ -71,6 +71,14 @@ async function storeUpload(b: Record<string, unknown>, fallbackName: string):
  * `#11` дозволені ролі на них не пробує. Доказ звуження — жива проба в прийманні.
  */
 const canEditTraining = requirePerm("manage_training");
+/**
+ * 📝 ХТО БАЧИТЬ ЧЕРНЕТКИ: адмін-рівень (як було) АБО редактор навчання. Редактор мусить бачити те, що править:
+ * до 01.10.2026 усі редактори були адмін-рівня, і різниці не було; HR (право з 01.10, рішення Романа) — не адмін,
+ * і без цього правила отримав би кнопки редактора над порожнім списком (11 із 12 курсів — чернетки). Одне місце
+ * на всі запити навчання — тримає `#742`.
+ */
+const seesDrafts = (auth: Parameters<typeof isAdminScope>[0] & { roleKey: string }): boolean =>
+  isAdminScope(auth) || roleHasPerm(auth.roleKey, "manage_training");
 const KINDS = new Set(["video_embed", "file", "link", "text"]);
 
 /** Уся структура: пласкі списки папок і матеріалів (дерево будує фронт). */
@@ -78,8 +86,8 @@ trainingRouter.get("/tree", async (req, res) => {
   const [folders, materials] = await Promise.all([
     pool.query(`SELECT id, parent_id, name, position, created_at, course_id FROM training_folders ORDER BY position, name`),
     pool.query(
-      // 🔴 ЧЕРНЕТКИ (в т.ч. згенеровані АІ) бачить ЛИШЕ admin — решта отримує тільки
-      // опубліковане. Публікація — окрема людська дія (POST /materials/:id/publish).
+      // 🔴 ЧЕРНЕТКИ (в т.ч. згенеровані АІ) бачать лише адмін-рівень і редактори навчання (`seesDrafts`) —
+      // решта отримує тільки опубліковане. Публікація — окрема людська дія (POST /materials/:id/publish).
       `SELECT m.id, m.folder_id, m.title, m.kind, m.url, m.mime, m.stored_name, m.size_bytes, m.content, m.position, m.created_at, m.lesson_id, m.part_role,
               m.status, m.created_by_ai, m.required,
               COALESCE(mm.name, u.email) AS author
@@ -88,7 +96,7 @@ trainingRouter.get("/tree", async (req, res) => {
          LEFT JOIN managers mm ON mm.id = u.manager_id
         WHERE ($1::boolean OR m.status = 'published')
         ORDER BY m.position, m.created_at`,
-      [isAdminScope(req.auth!)]
+      [seesDrafts(req.auth!)]
     ),
   ]);
   /* 📄 Тип файла — через ядро: у 84 перенесених документів колонка порожня (core/trainingMime.ts).
@@ -446,7 +454,7 @@ trainingRouter.get("/courses", async (req, res) => {
          FROM training_courses
         WHERE audience = ANY($1) AND (published OR $2::boolean)
         ORDER BY position, id`,
-      [canEdit ? ["candidate", "manager", "all"] : audienceFor(req.auth!.roleKey), isAdminScope(req.auth!)]
+      [canEdit ? ["candidate", "manager", "all"] : audienceFor(req.auth!.roleKey), seesDrafts(req.auth!)]
     ),
     pool.query(`SELECT id, parent_id, name, position, course_id FROM training_folders`),
     // 📘 Кроки — ЛИШЕ уроки (`core/trainingLesson.ts`): частина не додає кроку ні у відсоток, ні в лічильник.
@@ -564,7 +572,7 @@ trainingRouter.get("/material/:id", async (req, res) => {
     mime: string | null; size_bytes: string | null; content: string | null; required: boolean; stored_name: string | null }>(
     `SELECT id, folder_id, title, kind, url, mime, size_bytes, content, required, stored_name
        FROM training_materials WHERE id = $1 AND (status = 'published' OR $2::boolean)`,
-    [id, isAdminScope(req.auth!)]);
+    [id, seesDrafts(req.auth!)]);
   const m = r.rows[0];
   if (!m) return res.status(404).json({ error: "Матеріал не знайдено" });
   /* ✏️ Редактор відкриває будь-який урок (рішення Романа: «знімати замок для редакторів»): інакше він не міг би
@@ -580,7 +588,7 @@ trainingRouter.get("/material/:id", async (req, res) => {
     `SELECT id, title, kind, url, mime, size_bytes, stored_name, part_role, content
        FROM training_materials WHERE lesson_id = $1 AND (status = 'published' OR $2::boolean)
       ORDER BY position, id`,
-    [id, isAdminScope(req.auth!)]);
+    [id, seesDrafts(req.auth!)]);
   res.json({
     id: m.id, folderId: m.folder_id, title: m.title, kind: m.kind, url: m.url,
     mime: effectiveMime(m.mime, m.stored_name, m.title),
