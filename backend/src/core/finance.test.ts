@@ -306,13 +306,15 @@ test("#934 ФІНАНСИ: кожна fin_* таблиця відібрана в
   const sql = SRC("db/schema.sql");
   const tables = [...sql.matchAll(/CREATE TABLE IF NOT EXISTS (fin_[a-z_]+)/g)].map((m) => m[1]);
   assert.ok(tables.length >= 7, `🔴 знайдено лише ${tables.length} таблиць fin_* — гейт нічого не перевіряє`);
-  const rev = /REVOKE ALL ON ((?:fin_[a-z_]+(?:, )?)+) FROM ai_readonly;/.exec(sql);
-  assert.ok(rev, "🔴 REVOKE для таблиць фінансів не знайдено");
-  const revoked = rev[1].split(", ");
+  // Усі REVOKE з таблицями fin_* (проходи додають свої рядки) — кожна таблиця мусить бути в якомусь із них, ПІСЛЯ свого CREATE.
+  const revs = [...sql.matchAll(/REVOKE ALL ON ((?:fin_[a-z_]+(?:, )?)+) FROM ai_readonly;/g)];
+  assert.ok(revs.length >= 1, "🔴 REVOKE для таблиць фінансів не знайдено");
+  const revokedAt = new Map<string, number>();
+  for (const r of revs) for (const tb of r[1].split(", ")) revokedAt.set(tb, r.index!);
   const forbidden = SRC("ai/metricTools.ts");
   for (const tb of tables) {
-    assert.ok(revoked.includes(tb), `🔴 ${tb} не відібрана в ai_readonly`);
-    assert.ok(sql.indexOf(`CREATE TABLE IF NOT EXISTS ${tb}`) < rev.index, `🔴 REVOKE стоїть вище CREATE ${tb} — з нуля схема впаде`);
+    assert.ok(revokedAt.has(tb), `🔴 ${tb} не відібрана в ai_readonly`);
+    assert.ok(sql.indexOf(`CREATE TABLE IF NOT EXISTS ${tb}`) < revokedAt.get(tb)!, `🔴 REVOKE стоїть вище CREATE ${tb} — з нуля схема впаде`);
     assert.match(forbidden, new RegExp(`"${tb}"`), `🔴 ${tb} немає у FORBIDDEN_TABLES`);
   }
 });

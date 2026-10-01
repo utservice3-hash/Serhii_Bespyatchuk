@@ -69,6 +69,8 @@ export const FORBIDDEN_TABLES = [
   "workua_responses",
   // 💰 Фінанси (29.09.2026): витрати компанії по статтях, зокрема фонд оплати праці. REVOKE у схемі. Тримає #934.
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_import_months",
+  // 💰 Фінанси · «Тиждень і місяць» (прохід 2а, 01.10.2026). REVOKE у схемі. Тримає #934.
+  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports",
   // 📄 Конструктор документів (30.09.2026): реквізити контрагентів і суми заявок. REVOKE у схемі.
   "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache",
   // 📋 Опитування (30.09.2026): відповіді людей, зокрема анонімні. REVOKE у схемі.

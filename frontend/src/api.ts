@@ -5361,3 +5361,36 @@ export const svMarkRead = async (id: number) => (await api.post(`/surveys/notifi
 export async function svExportCsv(id: number): Promise<Blob> {
   return (await api.get<Blob>(`/surveys/${id}/export.csv`, { responseType: "blob" })).data;
 }
+
+// ── 💰 Фінанси · «Тиждень і місяць» (прохід 2а, 01.10.2026) ─────────────────────
+export type FinPeriodKind = "week" | "month";
+export type FinKpiRefSource = "delivered_income" | "delivered_expense" | "unloaded_income" | "unloaded_expense" | "receivables";
+export interface FinKpi {
+  id: number; name: string; unit: "UAH" | "USD" | "EUR"; kind: "manual" | "sum" | "diff"; argA: number | null; argB: number | null;
+  refSource: FinKpiRefSource | null; offFrom: string | null; active: boolean;
+  value: number | null; prevValue: number | null; note: string | null;
+  savedRef: { value: number; at: string } | null; liveRef: number | null;
+}
+export interface FinKpiPeriod {
+  kind: FinPeriodKind; start: string; end: string; prev: string; label: string; prevLabel: string; current: string;
+  sections: { id: number; name: string; kpis: FinKpi[] }[];
+  closed: { at: string; by: string | null; note: string | null } | null; importedInterim: boolean; canEdit: boolean;
+}
+export interface FinKpiCard {
+  id: number; name: string; unit: string; kind: string; refSource: string | null; offFrom: string | null; deleted: boolean; section: string;
+  periods: { start: string; value: number | null; note: string | null; ref: number | null }[];
+  log: { at: string; what: string; actor: string | null }[];
+}
+export type FinKpiThing = "section" | "kpi";
+const kpiPath = (k: FinKpiThing) => (k === "section" ? "sections" : "items");
+export const fetchFinKpiPeriod = async (kind: FinPeriodKind, p: string) => (await api.get<FinKpiPeriod>("/finance/kpi", { params: { kind, p } })).data;
+export const fetchFinKpiCard = async (id: number, kind: FinPeriodKind) => (await api.get<FinKpiCard>(`/finance/kpi/items/${id}`, { params: { kind } })).data;
+export const saveFinKpiValues = async (kind: FinPeriodKind, p: string, cells: { kpiId: number; value: string }[]) =>
+  (await api.put<{ changed: number }>("/finance/kpi/values", { kind, p, cells })).data;
+export const saveFinKpiNote = async (kpiId: number, kind: FinPeriodKind, p: string, text: string) => { await api.put("/finance/kpi/notes", { kpiId, kind, p, text }); };
+export const setFinKpiClosed = async (kind: FinPeriodKind, p: string, closed: boolean) => { await api.post("/finance/kpi/close", { kind, p, closed }); };
+export const createFinKpi = async (k: FinKpiThing, body: Record<string, unknown>) => (await api.post<{ id: number }>(`/finance/kpi/${kpiPath(k)}`, body)).data.id;
+export const updateFinKpi = async (k: FinKpiThing, id: number, body: Record<string, unknown>) => { await api.patch(`/finance/kpi/${kpiPath(k)}/${id}`, body); };
+export const deleteFinKpi = async (k: FinKpiThing, id: number, confirm = false) => { await api.delete(`/finance/kpi/${kpiPath(k)}/${id}`, { params: confirm ? { confirm: 1 } : {} }); };
+export const restoreFinKpi = async (k: FinKpiThing, id: number) => { await api.post("/finance/kpi/restore", { kind: k, id }); };
+export const setFinKpiOff = async (id: number, off: boolean) => (await api.post<{ offFrom: string | null }>(`/finance/kpi/items/${id}/off`, { off })).data;

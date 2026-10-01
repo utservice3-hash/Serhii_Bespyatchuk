@@ -5102,3 +5102,96 @@ UPDATE roles SET permissions = permissions || '{"manage_surveys": true}'::jsonb
  WHERE key IN ('admin', 'ceo', 'opdir', 'hr');
 UPDATE roles SET permissions = permissions - 'manage_surveys'
  WHERE key NOT IN ('admin', 'ceo', 'opdir', 'hr');
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💰 ФІНАНСИ, прохід 2а (01.10.2026): «Тиждень і місяць» — аркуш «ФМ» книги «UTS Щотижневі плани».
+-- Показники (розділ → показник) і їхні значення за тиждень (Пн–Нд за Києвом) або місяць. Правила —
+-- `core/financeKpi.ts`. Вхід, права й межі — ті самі, що в проходу 1 (вкладка `finance`, `edit_finance`).
+-- ⚠️ Revert коду не відкочує таблиць і рядків. Видалення мʼяке, «Повернути» — та сама кнопка.
+-- ══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS fin_kpi_sections (
+  id          SERIAL PRIMARY KEY,
+  name        TEXT NOT NULL CHECK (btrim(name) <> ''),
+  sort        INTEGER NOT NULL DEFAULT 0,
+  deleted_at  TIMESTAMPTZ,
+  deleted_by  INTEGER REFERENCES users(id),
+  created_by  INTEGER REFERENCES users(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fin_kpi_sections_name ON fin_kpi_sections (lower(btrim(name))) WHERE deleted_at IS NULL;
+
+-- kind: 'manual' — вносять руками; 'sum' — сума решти «ручних» показників свого розділу; 'diff' — arg_a − arg_b.
+-- ref_source — довідкове число з CRM / 1С поруч із ручним (НЕ підміняє його, #943).
+CREATE TABLE IF NOT EXISTS fin_kpis (
+  id          SERIAL PRIMARY KEY,
+  section_id  INTEGER NOT NULL REFERENCES fin_kpi_sections(id),
+  name        TEXT NOT NULL CHECK (btrim(name) <> ''),
+  unit        TEXT NOT NULL DEFAULT 'UAH' CHECK (unit IN ('UAH','USD','EUR')),
+  kind        TEXT NOT NULL DEFAULT 'manual' CHECK (kind IN ('manual','sum','diff')),
+  arg_a       INTEGER REFERENCES fin_kpis(id),
+  arg_b       INTEGER REFERENCES fin_kpis(id),
+  ref_source  TEXT CHECK (ref_source IS NULL OR ref_source IN ('delivered_income','delivered_expense','unloaded_income','unloaded_expense','receivables')),
+  sort        INTEGER NOT NULL DEFAULT 0,
+  -- «Вимкнено з періоду»: показник діє в періодах, що ПОЧИНАЮТЬСЯ раніше за цю дату.
+  off_from    DATE,
+  deleted_at  TIMESTAMPTZ,
+  deleted_by  INTEGER REFERENCES users(id),
+  created_by  INTEGER REFERENCES users(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (kind <> 'diff' OR (arg_a IS NOT NULL AND arg_b IS NOT NULL AND arg_a <> arg_b))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fin_kpis_name ON fin_kpis (section_id, lower(btrim(name))) WHERE deleted_at IS NULL;
+
+-- Значення за період. NULL — «не внесено», не нуль. ref_value — довідка CRM/1С, ЗБЕРЕЖЕНА в момент збереження:
+-- дебіторка в дашборді — знімок без історії, і без цього старий тиждень не мав би з чим порівнятись.
+CREATE TABLE IF NOT EXISTS fin_kpi_values (
+  kpi_id        INTEGER NOT NULL REFERENCES fin_kpis(id),
+  period_kind   TEXT NOT NULL CHECK (period_kind IN ('week','month')),
+  period_start  DATE NOT NULL,
+  value         NUMERIC(16,2),
+  note          TEXT,
+  ref_value     NUMERIC(16,2),
+  ref_at        TIMESTAMPTZ,
+  updated_by    INTEGER REFERENCES users(id),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (kpi_id, period_kind, period_start),
+  CHECK ((period_kind = 'week' AND EXTRACT(ISODOW FROM period_start) = 1)
+      OR (period_kind = 'month' AND period_start = date_trunc('month', period_start)::date))
+);
+CREATE INDEX IF NOT EXISTS idx_fin_kpi_values_period ON fin_kpi_values (period_kind, period_start);
+
+-- Закритий період незмінний (409); відкривається тією ж кнопкою. Закривати може кожен, хто вносить
+-- (рішення Романа 29.09.2026) — окремого права немає.
+CREATE TABLE IF NOT EXISTS fin_kpi_closes (
+  period_kind   TEXT NOT NULL CHECK (period_kind IN ('week','month')),
+  period_start  DATE NOT NULL,
+  closed_by     INTEGER REFERENCES users(id),
+  closed_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  note          TEXT,
+  PRIMARY KEY (period_kind, period_start)
+);
+
+CREATE TABLE IF NOT EXISTS fin_kpi_log (
+  id            BIGSERIAL PRIMARY KEY,
+  at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actor_id      INTEGER REFERENCES users(id),
+  target        TEXT NOT NULL CHECK (target IN ('section','kpi','period')),
+  target_id     INTEGER,
+  period_kind   TEXT,
+  period_start  DATE,
+  field         TEXT CHECK (field IS NULL OR field IN ('value','note')),
+  old_value     NUMERIC(16,2),
+  new_value     NUMERIC(16,2),
+  what          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fin_kpi_log_target ON fin_kpi_log (target, target_id, at DESC);
+
+-- Разове перенесення «ФМ» (`tools/importFinanceKpiHistory.ts`): позначка проти повторного запуску й звіт розбіжностей файлу.
+CREATE TABLE IF NOT EXISTS fin_kpi_imports (
+  key       TEXT PRIMARY KEY,
+  done_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  detail    JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+-- 🔒 Як і таблиці проходу 1 — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`; перелік звіряє #934 (усі fin_*).
+REVOKE ALL ON fin_kpi_sections, fin_kpis, fin_kpi_values, fin_kpi_closes, fin_kpi_log, fin_kpi_imports FROM ai_readonly;
