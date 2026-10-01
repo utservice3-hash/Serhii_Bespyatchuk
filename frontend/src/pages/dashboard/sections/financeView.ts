@@ -19,3 +19,29 @@ export function rowVisible(it: RowLike, o: ViewOpts): boolean {
   if (!o.showEmpty && it.state === "empty" && o.month < o.currentMonth) return false;
   return true;
 }
+
+/** Як число стоїть у клітинці внесення: «1234,5», порожнє — «». */
+export const asInput = (v: number | null) => (v == null ? "" : String(v).replace(".", ","));
+
+/**
+ * «Взяти план із попереднього місяця» (рішення Романа 01.10.2026: кнопкою, не автоматично) — чернетки для клітинок
+ * плану. Заповнює ЛИШЕ порожні: план у статті вже є або клітинку вже правили — не чіпаємо. Нічого не записує:
+ * чернетки йдуть у звичайне «Зберегти», тож план з'являється, лише коли людина його підтвердила (і він в історії).
+ * Вимкнена стаття і стаття без плану в попередньому місяці — пропускаються.
+ */
+export function planFromPrevious(
+  items: readonly { id: number; active: boolean; plan: number | null }[],
+  prevPlan: ReadonlyMap<number, number | null>,
+  drafts: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const it of items) {
+    if (!it.active || it.plan != null) continue;
+    const key = `${it.id}:plan`;
+    if (drafts[key] !== undefined) continue;
+    const p = prevPlan.get(it.id);
+    if (p == null) continue;
+    out[key] = asInput(p);
+  }
+  return out;
+}

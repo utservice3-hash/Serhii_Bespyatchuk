@@ -418,3 +418,32 @@ test("#937 ФРОНТ ФІНАНСІВ: порожня стаття видна �
   assert.match(FE("pages/dashboard/sections/FinanceSection.tsx"), /const visible = \(it: FinItem\) => rowVisible\(it, \{ month, currentMonth: data\.currentMonth,/,
     "🔴 екран не користується rowVisible — гейт перевіряє не те, що показується");
 });
+
+/**
+ * #937b — «ВЗЯТИ ПЛАН ПОПЕРЕДНЬОГО МІСЯЦЯ» (рішення Романа 01.10.2026: кнопкою, не автоматично). Заповнює ЛИШЕ порожні
+ * клітинки плану діючих статей і нічого не записує сама: результат — чернетки, які йдуть у звичайне «Зберегти».
+ * 🧨 Червоніє, якщо перезатерти внесений план або вже виправлену чернетку, підставити у вимкнену статтю,
+ * чи поставити «0» там, де в попередньому місяці плану не було.
+ */
+test("#937b ФРОНТ ФІНАНСІВ: план попереднього місяця — лише в порожні клітинки, внесене й правлене не чіпає", async () => {
+  const ts = (await import("typescript")).default;
+  const js = ts.transpileModule(FE("pages/dashboard/sections/financeView.ts"), {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const { planFromPrevious } = await import(`data:text/javascript,${encodeURIComponent(js)}`) as {
+    planFromPrevious: (items: { id: number; active: boolean; plan: number | null }[], prev: Map<number, number | null>, drafts: Record<string, string>) => Record<string, string>;
+  };
+  const items = [
+    { id: 1, active: true, plan: null },   // порожня → бере 2 400
+    { id: 2, active: true, plan: 900 },    // уже внесено → не чіпати
+    { id: 3, active: true, plan: null },   // уже правлена чернетка → не чіпати
+    { id: 4, active: false, plan: null },  // вимкнена → не чіпати
+    { id: 5, active: true, plan: null },   // у попередньому місяці плану не було → не чіпати
+    { id: 6, active: true, plan: null },   // план був 1234.5 → «1234,5»
+  ];
+  const prev = new Map<number, number | null>([[1, 2400], [2, 15000], [3, 700], [4, 100], [5, null], [6, 1234.5]]);
+  const out = planFromPrevious(items, prev, { "3:plan": "650" });
+  assert.deepEqual(out, { "1:plan": "2400", "6:plan": "1234,5" }, "🔴 підставлено не рівно в порожні клітинки діючих статей");
+  assert.match(FE("pages/dashboard/sections/FinanceSection.tsx"), /const add = planFromPrevious\(items, prevPlan, draft\);[\s\S]{0,120}setDraft\(\(d\) => \(\{ \.\.\.d, \.\.\.add \}\)\)/,
+    "🔴 кнопка не кладе результат у чернетки (або пише в базу сама)");
+});
