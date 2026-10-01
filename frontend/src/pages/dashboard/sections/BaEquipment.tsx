@@ -21,6 +21,9 @@ export function BaEquipment({ meta, toast }: { meta: BaMeta; toast: Toast }) {
   const [kind, setKind] = useState("");
   const [loc, setLoc] = useState("");
   const [q, setQ] = useState("");
+  // Фільтр за датою видачі (ТЗ: «фільтр за статусом і датою в кожному блоці»; рішення Романа 01.10.2026 «2а»):
+  // місяць поточної видачі або «дата невідома» (перенесені з таблиці без дати).
+  const [issued, setIssued] = useState<"all" | "unknown" | string>("all");
   const [open, setOpen] = useState<number | "new" | null>(null);
   const [nonce, setNonce] = useState(0);
   useEffect(() => { fetchBaEquipment().then(setRows).catch((e) => setErr(hiringError(e))); }, [nonce]);
@@ -29,6 +32,7 @@ export function BaEquipment({ meta, toast }: { meta: BaMeta; toast: Toast }) {
   const active = useMemo(() => (rows ?? []).filter((r) => !r.archived), [rows]);
   const kinds = useMemo(() => [...new Set(active.map((r) => r.kind))].sort((a, b) => a.localeCompare(b, "uk")), [active]);
   const locs = useMemo(() => [...new Set(active.map((r) => r.location).filter(Boolean))].sort(), [active]);
+  const issuedMonths = useMemo(() => [...new Set(active.map((r) => r.holder?.issuedOn?.slice(0, 7)).filter((x): x is string => !!x))].sort().reverse(), [active]);
   const shown = useMemo(() => (rows ?? []).filter((r) => {
     if (filter === "archive" ? !r.archived : r.archived) return false;
     if (filter === "hands" && !r.holder) return false;
@@ -36,9 +40,10 @@ export function BaEquipment({ meta, toast }: { meta: BaMeta; toast: Toast }) {
     if (filter === "dismissed" && !r.holder?.dismissed) return false;
     if (kind && r.kind !== kind) return false;
     if (loc && r.location !== loc) return false;
+    if (issued === "unknown" ? !(r.holder && !r.holder.issuedOn) : issued !== "all" && r.holder?.issuedOn?.slice(0, 7) !== issued) return false;
     const needle = q.trim().toLowerCase();
     return !needle || [r.invNo, r.kind, r.model, r.holder?.name ?? ""].some((x) => x.toLowerCase().includes(needle));
-  }), [rows, filter, kind, loc, q]);
+  }), [rows, filter, kind, loc, q, issued]);
 
   if (err) return <div className="chart-card"><span className="hr-muted">{err}</span></div>;
   if (!rows) return <p className="loading-text">Завантаження…</p>;
@@ -58,6 +63,13 @@ export function BaEquipment({ meta, toast }: { meta: BaMeta; toast: Toast }) {
           <label className="hr-muted">Тип<br />
             <select className="hr-inp" value={kind} onChange={(e) => setKind(e.target.value)}>
               <option value="">Усі типи</option>{kinds.map((k) => <option key={k} value={k}>{k}</option>)}
+            </select>
+          </label>
+          <label className="hr-muted">Видано<br />
+            <select className="hr-inp" value={issued} onChange={(e) => setIssued(e.target.value)}>
+              <option value="all">Усі дати</option>
+              {issuedMonths.map((m) => <option key={m} value={m}>{`${m.slice(5, 7)}.${m.slice(0, 4)}`}</option>)}
+              <option value="unknown">Дата невідома</option>
             </select>
           </label>
           <label className="hr-muted">Розташування<br />
