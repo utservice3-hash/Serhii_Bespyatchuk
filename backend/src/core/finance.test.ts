@@ -391,3 +391,59 @@ test("#936 ФРОНТ ФІНАНСІВ: меню після «Статистик
   for (const k of ["resp", "group", "item"])
     assert.match(sec, new RegExp(`await deleteFin\\("${k}", [a-z]+\\.id(?:, confirm)?\\); reload\\(\\); undo\\("${k}", `), `🔴 видалення «${k}» без «Повернути»`);
 });
+
+/**
+ * #937 — ПОРОЖНЯ СТАТТЯ ВИДНА В ПОТОЧНОМУ Й МАЙБУТНІХ МІСЯЦЯХ, ховається лише в минулих. 01.10.2026 жовтень став
+ * поточним без жодної цифри, і стара умова («ховати порожнє, якщо місяць не майбутній») показала самі назви груп:
+ * 69 статей «зникли» (скрін Романа). Перевіряється САМА функція фронту `rowVisible`, транспільована, а не регулярка.
+ * 🧨 Червоніє, якщо повернути `!future`, ховати порожнє в поточному місяці, або показувати вимкнену статтю.
+ */
+test("#937 ФРОНТ ФІНАНСІВ: порожня стаття видна в поточному й майбутніх місяцях, схована лише в минулих", async () => {
+  const ts = (await import("typescript")).default;
+  const js = ts.transpileModule(FE("pages/dashboard/sections/financeView.ts"), {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const { rowVisible } = await import(`data:text/javascript,${encodeURIComponent(js)}`) as {
+    rowVisible: (it: { active: boolean; state: string }, o: { month: string; currentMonth: string; edit: boolean; onlyOver: boolean; showEmpty: boolean }) => boolean;
+  };
+  const base = { currentMonth: "2026-10-01", edit: false, onlyOver: false, showEmpty: false };
+  const empty = { active: true, state: "empty" as const };
+  assert.equal(rowVisible(empty, { ...base, month: "2026-10-01" }), true, "🔴 порожня стаття схована в ПОТОЧНОМУ місяці — жовтень знову покаже самі групи");
+  assert.equal(rowVisible(empty, { ...base, month: "2026-11-01" }), true, "🔴 порожня стаття схована в майбутньому місяці");
+  assert.equal(rowVisible(empty, { ...base, month: "2026-09-01" }), false, "🔴 у минулому місяці порожні рядки не сховані");
+  assert.equal(rowVisible(empty, { ...base, month: "2026-09-01", showEmpty: true }), true, "🔴 «показати порожні» не працює");
+  assert.equal(rowVisible({ active: false, state: "ok" }, { ...base, month: "2026-10-01", edit: true }), false, "🔴 вимкнена стаття видна");
+  assert.equal(rowVisible(empty, { ...base, month: "2026-09-01", edit: true }), true, "🔴 у режимі внесення порожня стаття схована");
+  assert.equal(rowVisible(empty, { ...base, month: "2026-10-01", onlyOver: true }), false, "🔴 «лише понад план» показує порожні");
+  assert.match(FE("pages/dashboard/sections/FinanceSection.tsx"), /const visible = \(it: FinItem\) => rowVisible\(it, \{ month, currentMonth: data\.currentMonth,/,
+    "🔴 екран не користується rowVisible — гейт перевіряє не те, що показується");
+});
+
+/**
+ * #937b — «ВЗЯТИ ПЛАН ПОПЕРЕДНЬОГО МІСЯЦЯ» (рішення Романа 01.10.2026: кнопкою, не автоматично). Заповнює ЛИШЕ порожні
+ * клітинки плану діючих статей і нічого не записує сама: результат — чернетки, які йдуть у звичайне «Зберегти».
+ * 🧨 Червоніє, якщо перезатерти внесений план або вже виправлену чернетку, підставити у вимкнену статтю,
+ * чи поставити «0» там, де в попередньому місяці плану не було.
+ */
+test("#937b ФРОНТ ФІНАНСІВ: план попереднього місяця — лише в порожні клітинки, внесене й правлене не чіпає", async () => {
+  const ts = (await import("typescript")).default;
+  const js = ts.transpileModule(FE("pages/dashboard/sections/financeView.ts"), {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const { planFromPrevious } = await import(`data:text/javascript,${encodeURIComponent(js)}`) as {
+    planFromPrevious: (items: { id: number; active: boolean; plan: number | null }[], prev: Map<number, number | null>, drafts: Record<string, string>) => Record<string, string>;
+  };
+  const items = [
+    { id: 1, active: true, plan: null },   // порожня → бере 2 400
+    { id: 2, active: true, plan: 900 },    // уже внесено → не чіпати
+    { id: 3, active: true, plan: null },   // уже правлена чернетка → не чіпати
+    { id: 4, active: false, plan: null },  // вимкнена → не чіпати
+    { id: 5, active: true, plan: null },   // у попередньому місяці плану не було → не чіпати
+    { id: 6, active: true, plan: null },   // план був 1234.5 → «1234,5»
+  ];
+  const prev = new Map<number, number | null>([[1, 2400], [2, 15000], [3, 700], [4, 100], [5, null], [6, 1234.5]]);
+  const out = planFromPrevious(items, prev, { "3:plan": "650" });
+  assert.deepEqual(out, { "1:plan": "2400", "6:plan": "1234,5" }, "🔴 підставлено не рівно в порожні клітинки діючих статей");
+  assert.match(FE("pages/dashboard/sections/FinanceSection.tsx"), /const add = planFromPrevious\(items, prevPlan, draft\);[\s\S]{0,120}setDraft\(\(d\) => \(\{ \.\.\.d, \.\.\.add \}\)\)/,
+    "🔴 кнопка не кладе результат у чернетки (або пише в базу сама)");
+});

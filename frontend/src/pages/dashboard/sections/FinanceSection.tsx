@@ -6,6 +6,7 @@ import {
   setFinApproval, finErrorData, hiringError,
   type FinMonth, type FinItem, type FinGroup, type FinResp, type FinItemCard, type FinKind, type FinCell,
 } from "../../../api";
+import { rowVisible, asInput, planFromPrevious } from "./financeView";
 import "./hiring.css";
 import "./finance.css";
 
@@ -29,7 +30,6 @@ const addMonths = (m: string, n: number) => {
 const kyivMonthNow = () => `${new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" }).slice(0, 7)}-01`;
 const money = (v: number | null | undefined) => (v == null ? "—" : v.toLocaleString("uk-UA", { maximumFractionDigits: 2 }));
 const fmtTs = (ts: string) => new Date(ts).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
-const asInput = (v: number | null) => (v == null ? "" : String(v).replace(".", ","));
 
 const LS_TAB = "fin.tab";
 const lsGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
@@ -266,6 +266,21 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
     if (v === orig(it, f)) delete next[k]; else next[k] = v;
     return next;
   });
+  // «Взяти план із попереднього місяця»: лише чернетки в порожні клітинки плану; записує звичайне «Зберегти».
+  const takePrevPlan = async () => {
+    const prev = addMonths(month, -1);
+    setBusy(true);
+    try {
+      const p = await fetchFinMonth(prev.slice(0, 7));
+      const prevPlan = new Map(p.tree.flatMap((r) => r.groups.flatMap((g) => g.items.map((i) => [i.id, i.plan] as [number, number | null]))));
+      const items = data.tree.flatMap((r) => r.groups.flatMap((g) => g.items));
+      const add = planFromPrevious(items, prevPlan, draft);
+      const n = Object.keys(add).length;
+      setDraft((d) => ({ ...d, ...add }));
+      toast(n ? `Підставлено план за ${monthLabel(prev).toLowerCase()}: статей ${n}. Перевірте й натисніть «Зберегти».`
+        : `Нічого підставляти: за ${monthLabel(prev).toLowerCase()} немає плану для порожніх статей`);
+    } catch (e) { toast(hiringError(e), { error: true }); } finally { setBusy(false); }
+  };
   const save = async () => {
     if (!changedKeys.length) { setEdit(false); return; }
     const cells: FinCell[] = changedKeys.map((k) => { const [id, f] = k.split(":"); return { itemId: Number(id), field: f as "plan" | "fact", value: draft[k] }; });
@@ -293,13 +308,7 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
   const left = t.plan - t.fact;
   const im = data.imported;
   const imDiff = im && ((im.filePlan != null && Math.abs(im.filePlan - im.rowsPlan) >= 0.01) || (im.fileFact != null && Math.abs(im.fileFact - im.rowsFact) >= 0.01));
-  const visible = (it: FinItem) => {
-    if (!it.active) return false;
-    if (edit) return true;
-    if (onlyOver) return it.state === "over" || it.state === "noplan";
-    if (!showEmpty && it.state === "empty" && !future) return false;
-    return true;
-  };
+  const visible = (it: FinItem) => rowVisible(it, { month, currentMonth: data.currentMonth, edit, onlyOver, showEmpty });
   let shown = 0;
   return (
     <div className="hr-card">
@@ -347,6 +356,8 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
           <b>Внесення · {monthLabel(month).toLowerCase()}</b>
           <span>Змінені клітинки підсвічуються. Порожня клітинка — «не внесено», не нуль.{future ? " Факт майбутнього місяця внести не можна." : ""}</span>
           <span style={{ flex: 1 }} />
+          <button className="hr-btn" disabled={busy} onClick={() => void takePrevPlan()}
+            title={`Підставить у порожні клітинки плану суми за ${monthLabel(addMonths(month, -1)).toLowerCase()}. Записується лише після «Зберегти».`}>Взяти план попереднього місяця</button>
           <span>змін: {changedKeys.length}</span>
           <button className="hr-btn" disabled={busy} onClick={leave(() => undefined)}>Скасувати</button>
           <button className="hr-btn p" disabled={busy} onClick={() => void save()}>Зберегти</button>
