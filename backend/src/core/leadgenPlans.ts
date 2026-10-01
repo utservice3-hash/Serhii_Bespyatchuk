@@ -2,7 +2,7 @@ import { pool } from "../db/pool.js";
 import { LEADGEN_DASH_TEAM_ID } from "./metrics.js";
 import { activeManagerSql } from "./activeManager.js";
 import {
-  LEADGEN_PLAN_METRICS, personFormationStatus,
+  LEADGEN_PLAN_METRICS, personFormationStatus, emptyPlanRecord,
   type TeamMember, type ApprovedByMonth, type LeadgenPlanMetric, type LeadgenPlanValues, type LgFormationStatus,
 } from "./leadgenPlanRules.js";
 
@@ -75,7 +75,7 @@ export interface LeadgenFormationRow {
 export async function leadgenFormation(month: string, managerIds: readonly number[]): Promise<Map<number, LeadgenFormationRow>> {
   const out = new Map<number, LeadgenFormationRow>();
   if (!managerIds.length) return out;
-  const r = await pool.query<{ manager_id: number; metric: LeadgenPlanMetric; proposed_value: number; approved_value: number | null;
+  const r = await pool.query<{ manager_id: number; metric: LeadgenPlanMetric; proposed_value: number | null; approved_value: number | null;
     status: LgFormationStatus; comment: string | null; return_comment: string | null;
     submitted_name: string | null; submitted_at: string | null; decided_name: string | null; decided_at: string | null }>(
     `SELECT lp.manager_id, lp.metric, lp.proposed_value, lp.approved_value, lp.status, lp.comment, lp.return_comment,
@@ -89,10 +89,10 @@ export async function leadgenFormation(month: string, managerIds: readonly numbe
   for (const x of r.rows) {
     const e = out.get(x.manager_id) ?? {
       managerId: x.manager_id, status: "draft" as LgFormationStatus,
-      proposed: { leads: null, opr: null, quotes: null }, approved: { leads: null, opr: null, quotes: null },
+      proposed: emptyPlanRecord(), approved: emptyPlanRecord(),
       comment: null, returnComment: null, submittedBy: null, submittedAt: null, decidedBy: null, decidedAt: null,
     };
-    e.proposed[x.metric] = Number(x.proposed_value);
+    e.proposed[x.metric] = x.proposed_value == null ? null : Number(x.proposed_value);
     e.approved[x.metric] = x.approved_value == null ? null : Number(x.approved_value);
     e.comment ??= x.comment; e.returnComment ??= x.return_comment;
     e.submittedBy ??= x.submitted_name; e.submittedAt ??= x.submitted_at;
@@ -105,7 +105,9 @@ export async function leadgenFormation(month: string, managerIds: readonly numbe
 }
 
 /**
- * ↑ ПОДАННЯ: три рядки однією транзакцією, стан → `submitted`. `approved_value` НЕ чіпається —
+ * ↑ ПОДАННЯ: рядок на КОЖЕН пункт однією транзакцією, стан → `submitted`. Необовʼязковий пункт,
+ * якого немає в поданні, пишеться з `proposed_value = NULL` («не плануємо»), а не пропускається:
+ * інакше значення з попереднього подання лишилось би й стало живим на затвердженні. `approved_value` НЕ чіпається —
  * живим лишається попередній затверджений план, поки новий на розгляді (як `plans` у продажах).
  * Межу (хто кому) перевіряє роут ДО виклику — `leadgenSubmitRefusal`.
  */

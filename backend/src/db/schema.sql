@@ -4267,6 +4267,13 @@ CREATE TABLE IF NOT EXISTS leadgen_plans (
   UNIQUE (manager_id, month, metric)
 );
 CREATE INDEX IF NOT EXISTS idx_leadgen_plans_month ON leadgen_plans (month, status);
+-- 📞💰 01.10.2026 (прохання Ярослава, рішення власника): план також на ДЗВІНКИ й ГРОШІ, обидва НЕОБОВʼЯЗКОВІ.
+-- `proposed_value IS NULL` = «цей пункт не плануємо» — подання пише рядок на КОЖЕН пункт, щоб значення
+-- з попереднього подання не лишилось і не стало живим на затвердженні. Ідемпотентно: DROP IF EXISTS + ADD.
+-- ⚠️ Revert коду не відкочує ширший CHECK — і не мусить: старий код нових пунктів просто не пише.
+ALTER TABLE leadgen_plans DROP CONSTRAINT IF EXISTS leadgen_plans_metric_check;
+ALTER TABLE leadgen_plans ADD CONSTRAINT leadgen_plans_metric_check CHECK (metric IN ('leads', 'opr', 'quotes', 'calls', 'money'));
+ALTER TABLE leadgen_plans ALTER COLUMN proposed_value DROP NOT NULL;
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 🗂 БІЗНЕС-АСИСТЕНТ, прохід 1 (ТЗ «Блок Бізнес-асистент», задача 4314, 28.09.2026):

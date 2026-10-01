@@ -86,7 +86,7 @@ import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, 
 import { handoffMoneyWire, personMoneyWire, bucketMoneyWire, bucketPersonMoneyWire, handoffDealsScope,
   leadgenAuthScope, parseLeadgenGrain, parseTrendMonths, parseManagerIdParam } from "../core/leadgenHandoffRules.js";
 import { leadgenRosterView, planView, planMonthOf, parseLeadgenSubmit, leadgenSubmitRefusal, mayEverSubmitLeadgenPlan,
-  mayApproveLeadgenPlan, LEADGEN_PLAN_METRICS, type RosterRow, type TeamMember } from "../core/leadgenPlanRules.js";
+  mayApproveLeadgenPlan, LEADGEN_PLAN_METRICS, emptyPlanRecord, type RosterRow, type TeamMember } from "../core/leadgenPlanRules.js";
 import { leadgenTeamMembers, leadgenPlanTarget, approvedLeadgenPlans, leadgenFormation, submitLeadgenPlan,
   approveLeadgenPlans, returnLeadgenPlan } from "../core/leadgenPlans.js";
 import * as expectSplit from "../core/expectSplit.js";
@@ -411,7 +411,9 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
   const totals = view.totals;
   // 📋 План і виконання — лише рядкам команди: плани ставляться учасникам (рішення 3–4).
   const approved = await approvedLeadgenPlans(rows.map((r) => r.managerId), from, to);
-  const pv = planView(rows, approved, from, to, kyivToday());
+  // 💰 Гроші людини для плану по грошах — ТІ САМІ числа, що на картці (`hm`), без другого розрахунку.
+  const moneyFact = new Map(hm.byPerson.map((p) => [p.managerId, { earned: p.money.earned.sum, pending: p.money.pending.sum }]));
+  const pv = planView(rows, approved, from, to, kyivToday(), moneyFact);
 
   const body: Record<string, unknown> = {
     from, to,
@@ -567,14 +569,14 @@ dashboardRouter.get("/leadgen-plans", async (req, res) => {
       managerId: m.managerId, name: m.name,
       canSubmit: refusal == null,
       status: f?.status ?? "draft",
-      proposed: f?.proposed ?? { leads: null, opr: null, quotes: null },
-      approved: f?.approved ?? { leads: null, opr: null, quotes: null },
+      proposed: f?.proposed ?? emptyPlanRecord(),
+      approved: f?.approved ?? emptyPlanRecord(),
       comment: f?.comment ?? null, returnComment: f?.returnComment ?? null,
       submittedBy: f?.submittedBy ?? null, submittedAt: f?.submittedAt ?? null,
       decidedBy: f?.decidedBy ?? null, decidedAt: f?.decidedAt ?? null,
       history: histMonths.map((mo) => {
         const b = buckets.find((x) => x.managerId === m.managerId && x.bucket === mo);
-        return { month: mo, leads: b?.leads ?? 0, opr: b?.opr ?? 0, quotes: b?.quotes ?? 0 };
+        return { month: mo, leads: b?.leads ?? 0, opr: b?.opr ?? 0, quotes: b?.quotes ?? 0, calls: b?.calls ?? 0 };
       }),
     };
   });
