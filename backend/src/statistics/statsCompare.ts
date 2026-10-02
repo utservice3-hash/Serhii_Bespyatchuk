@@ -87,3 +87,36 @@ export function rankByPlan<T extends { pct: number | null; fact: number }>(rows:
   });
   return sorted.map((r, i) => ({ ...r, rank: i + 1 }));
 }
+
+/**
+ * Клітинка плану тижня: менеджер × частина тижня в межах місяця (будує `statsSummary.monthWeekPlanCells`).
+ * `manual` / `manualTaskId` — ручна ціль тімліда, що діє в цій частині, і задача, з якої вона взята.
+ */
+export interface WeekPlanCell {
+  managerId: number; teamId: number | null; blockFrom: string; blockTo: string;
+  auto: number; manual: number | null; manualTaskId: number | null;
+}
+
+/**
+ * Згортка частин одного календарного тижня в план менеджера. Кожна частина — як на Звіті: ручна ціль ?? автоплан.
+ * 🔴 РУЧНА ЦІЛЬ РАХУЄТЬСЯ РАЗ НА ЗАДАЧУ, А НЕ РАЗ НА ЛЮДИНУ. Заміряно 02.10.2026 на тижні 28.09–04.10: 7 людей мали
+ * ОДНУ задачу на весь тиждень (вона покриває обидві частини — рахувати раз), а 11 — ДВІ, окремо на 28–30.09 і на
+ * 01–02.10 (рахувати обидві). Правило «раз на людину» губило жовтневі 42 100 ₴, «раз на частину» подвоїло б 106 000.
+ * Повертає автоплан по частинах і ручні цілі окремо — для розбивки під плиткою.
+ */
+export function foldWeek(cells: readonly WeekPlanCell[], blockStarts: readonly string[]):
+    Map<number, { teamId: number | null; autoPerBlock: number[]; manual: number }> {
+  const out = new Map<number, { teamId: number | null; autoPerBlock: number[]; manual: number }>();
+  const counted = new Set<number>();
+  for (const [bi, bf] of blockStarts.entries()) {
+    for (const c of cells) {
+      if (c.blockFrom !== bf) continue;
+      const cur = out.get(c.managerId) ?? { teamId: c.teamId, autoPerBlock: blockStarts.map(() => 0), manual: 0 };
+      if (c.manual != null && c.manualTaskId != null) {
+        if (!counted.has(c.manualTaskId)) { counted.add(c.manualTaskId); cur.manual += c.manual; }
+      } else cur.autoPerBlock[bi] += c.auto;
+      out.set(c.managerId, cur);
+    }
+  }
+  return out;
+}

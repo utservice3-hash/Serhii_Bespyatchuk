@@ -2736,16 +2736,18 @@ export interface StatsSeries { scopeType: string; scopeKey: string; scopeName: s
   /** Розформована команда — історія є, у дефолтному вигляді її немає (ТЗ 28.09, блок 3). */
   archived?: boolean }
 /** ⚠️ Відома аномалія точки з доказом CRM (ТЗ 28.09, блок 1, п.3) — реєстр `statistics/anomalies.ts`. */
-export interface StatsAnomaly { metric: string; granularity: string; scopeKey: string; period: string; kind: "real" | "data_error"; note: string; crm: string }
+export interface StatsAnomaly { metric: string; granularity: string; scopeKey: string; period: string; kind: "real" | "data_error" | "corrected"; note: string; crm: string }
 export interface StatsSeriesResp { block: string; metric: string; granularity: "day" | "week" | "month"; seam: string; crmAble: boolean; live: boolean; series: StatsSeries[];
   anomalies?: StatsAnomaly[];
   /** 📈 Сходинки плану — лише для «Оплата отримана» (②). */
   plan?: { scopeKey: string; points: { period: string; value: number }[] }[] }
 /** 📊 Плитки й таблиця команд (ТЗ 28.09, блоки 1–3). Числа рахує сервер; фронт лише показує. */
 export interface StatsTile {
-  key: "revenue" | "cars" | "calls" | "transfers"; label: string; unit: "₴" | "шт";
+  key: "revenue" | "dispatched" | "calls" | "transfers"; label: string; unit: "₴" | "шт";
   now: number; prev: number; deltaPct: number | null; plan: number | null; planPct: number | null;
   sub: { label: string; value: number } | null; planNote: string | null; formula: string;
+  /** Тиждень через межу місяців: план = сума частин (по одній на місяць). */
+  planParts?: { from: string; to: string; plan: number; kind: "auto" | "manual" }[];
 }
 export interface StatsTeamRow { teamId: number; name: string; archived: boolean; fact: number; prev: number;
   deltaPct: number | null; plan: number | null; pct: number | null; rank: number }

@@ -14,7 +14,7 @@ import {
   STATS_SEAM, isCrmAble, LIVE_TEAMS, DEPSTATS_DEPT, DEPSTATS_METRIC_MAP, hasDepstats,
 } from "../statistics/seriesCatalog.js";
 import { sheetWeekToMonday } from "../statistics/statsCompare.js";
-import { anomaliesFor } from "../statistics/anomalies.js";
+import { anomaliesFor, applyCorrections } from "../statistics/anomalies.js";
 import { buildSummary, planSeries, ARCHIVED_TEAM_IDS } from "../statistics/statsSummary.js";
 
 /**
@@ -182,6 +182,8 @@ async function stitch(block: string, metric: string, g: Gran, from: string, to: 
     ? await companySalesSheet(metric, g)
     : await storedPoints(metric, g, sc.scopeType, sc.scopeKey, "sheet");
   if (crmAble) sheet = sheet.filter((p) => p.period < STATS_SEAM);
+  // ✏️ Відомі помилки ручної таблиці — замінені числами CRM (реєстр `statistics/anomalies.ts`, рішення Романа 02.10).
+  sheet = applyCorrections(metric, g, sc.scopeKey, sheet);
 
   let crm: Point[] = [];
   const liveScope = sc.scopeType === "company" || sc.teamId != null || sc.managerId != null;

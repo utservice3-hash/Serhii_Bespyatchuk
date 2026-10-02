@@ -48,6 +48,16 @@ function TileCard({ t, cmpLabel }: { t: StatsTile; cmpLabel: string }) {
       {t.plan != null ? (
         <div style={{ fontSize: 13 }}>
           план <b>{fmtV(t.plan, t.unit)}</b> · <b style={{ color: tone.fg }}>{t.planPct}%</b>
+          {/* 📅 Тиждень через межу місяців (рішення Романа 02.10): план складається з двох місячних частин — видно, звідки
+              число й чому воно інше, ніж «план тижня» на Звіті (там показана лише частина поточного місяця). */}
+          {t.planParts && t.planParts.length > 1 && (
+            <div style={{ fontSize: 11.5, color: MUTED, marginTop: 1 }}
+              title="Звіт ділить тиждень по місяцях і показує план частини поточного місяця; тут — увесь тиждень Пн–Нд. Автоплан — по частинах місяців; кожна ручна ціль тімліда рахується один раз (і та, що на весь тиждень, і дві окремі на частини).">
+              = {t.planParts.map((p) => p.kind === "manual"
+                ? `${fmtV(p.plan, t.unit)} (ручні цілі тижня)`
+                : `${fmtV(p.plan, t.unit)} (автоплан ${dm(p.from)}–${dm(p.to)})`).join(" + ")}
+            </div>
+          )}
         </div>
       ) : <div style={{ fontSize: 12.5, color: MUTED }}>{t.planNote}</div>}
       <div style={{ fontSize: 12.5, marginTop: 3 }}>

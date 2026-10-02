@@ -373,7 +373,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                             <b>{shortDate(String(label))}</b>{String(label) < SEAM && <span style={{ color: MUTED }}> · ручна таблиця</span>}
                             {payload.map((p: any) => <div key={p.dataKey} style={{ color: p.stroke }}>{p.name}: {fmt(Number(p.value), metric.unit)}</div>)}
                             {an.map((a, k) => (
-                              <div key={k} style={{ marginTop: 4, color: a.kind === "real" ? "#b45309" : "#b91c1c" }}>⚠️ {a.note}<br /><span style={{ color: MUTED }}>{a.crm}</span></div>
+                              <div key={k} style={{ marginTop: 4, color: a.kind === "real" ? "#b45309" : a.kind === "corrected" ? "#1d4ed8" : "#b91c1c" }}>{a.kind === "corrected" ? "✏️" : "⚠️"} {a.note}<br /><span style={{ color: MUTED }}>{a.crm}</span></div>
                             ))}
                           </div>
                         );
@@ -397,8 +397,9 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                       const si = seriesList.findIndex((s) => s.scopeKey === a.scopeKey);
                       if (si < 0 || !visibleKeys.has(a.scopeKey)) return [];
                       const v = rows.find((r) => r.period === a.period)?.[`s${si}`];
-                      return typeof v === "number" ? [<ReferenceDot key={`an${k}`} x={a.period} y={v} r={6} fill={a.kind === "real" ? "#f59e0b" : "#dc2626"} stroke="#fff"
-                        label={{ value: "!", position: "top", fontSize: 12, fontWeight: 800, fill: a.kind === "real" ? "#b45309" : "#b91c1c" }} />] : [];
+                      const fill = a.kind === "real" ? "#f59e0b" : a.kind === "corrected" ? "#2563eb" : "#dc2626";
+                      return typeof v === "number" ? [<ReferenceDot key={`an${k}`} x={a.period} y={v} r={6} fill={fill} stroke="#fff"
+                        label={{ value: a.kind === "corrected" ? "✎" : "!", position: "top", fontSize: 12, fontWeight: 800, fill }} />] : [];
                     })}
                     {drag.a && drag.b && <ReferenceArea x1={drag.a} x2={drag.b} fill="#2f6fdb" fillOpacity={0.08} />}
                     <Brush dataKey="period" height={24} travellerWidth={9} stroke="#94a3b8" tickFormatter={shortDate}
