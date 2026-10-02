@@ -815,6 +815,7 @@ dashboardRouter.get("/overview", async (req, res) => {
               COALESCE(SUM(p.planned_value), 0) AS plan
        FROM plans p JOIN managers mp ON mp.id = p.manager_id
        WHERE p.metric = 'payment_amount'
+         AND ${metrics.commercialManagerSql("mp")}   -- 🏢 план компанії — лише комерційні команди, як у Звіті (02.10.2026)
          ${scopeSql}
        GROUP BY 1`,
       prms
