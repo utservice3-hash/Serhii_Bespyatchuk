@@ -398,3 +398,19 @@ export async function dynamicTarget(scope: DynScope, granularity: "month" | "wee
     return { managerId: r.managerId, name: r.name, teamId: r.teamId, monthPlan: Math.round(r.plan), factMonth, factWeek, weeksLeft, presentDaysLeftWeek: pdl, ...dec, target: pick(dec) };
   });
 }
+
+/**
+ * 👥 СКЛАД «ФОРМУВАННЯ ПЛАНУ» — ті, кому ставимо план (`hasPlanSql`): «звільнений» і «завершує» плану не
+ * мають, як у Звіті й Номінаціях. Раніше роут брав лише `m.is_active` з Kommo — і звільнений у дашборді
+ * Шевчук Назар (02.10.2026) лишався у формуванні, бо в CRM його ще не деактивували. Тримає `#1300`.
+ * `db` — явно: гейт ганяє запит на тимчасовому кластері.
+ */
+export async function formationRoster(
+  db: { query: <R>(sql: string, params?: unknown[]) => Promise<{ rows: R[] }> }, teamId: number | null,
+): Promise<{ id: number; name: string; team_id: number | null; team_name: string | null }[]> {
+  return (await db.query<{ id: number; name: string; team_id: number | null; team_name: string | null }>(
+    `SELECT m.id, m.name, m.team_id, t.name AS team_name
+       FROM managers m LEFT JOIN teams t ON t.id = m.team_id ${stateJoinSql("m")}
+      WHERE ${hasPlanSql("m", "m.is_active")} ${teamId ? "AND m.team_id = $1" : "AND m.team_id IS NOT NULL"}
+      ORDER BY t.name NULLS LAST, m.name`, teamId ? [teamId] : [])).rows;
+}

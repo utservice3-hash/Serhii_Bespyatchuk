@@ -8,7 +8,7 @@ import * as money from "../core/money.js";
 import { maySubmit, mayEverSubmit, submitRefusal } from "../core/planScope.js";
 import { getSettings } from "./settings.js";
 import * as metrics from "../core/metrics.js";
-import { planRecommendation, baseMonthsFor } from "../core/plans.js";
+import { planRecommendation, baseMonthsFor, formationRoster } from "../core/plans.js";
 import { monthEndOf } from "../core/dates.js";
 
 export const plansRouter = Router();
@@ -86,13 +86,10 @@ plansRouter.get("/formation", async (req, res) => {
   const scopeM: money.MoneyScope = { teamId };
   const scopeMetric: metrics.MetricScope = { teamId };
 
-  // Ростер активних менеджерів у скоупі, згруповано по команді.
-  const roster = (await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null }>(
-    `SELECT m.id, m.name, m.team_id, t.name AS team_name
-       FROM managers m LEFT JOIN teams t ON t.id = m.team_id
-      WHERE m.is_active ${teamId ? "AND m.team_id = $1" : "AND m.team_id IS NOT NULL"}
-      ORDER BY t.name NULLS LAST, m.name`, teamId ? [teamId] : []
-  )).rows;
+  // Ростер — ті, КОМУ СТАВИМО ПЛАН (`hasPlanSql`, те саме правило, що `core/plans.ts`): «звільнений» і
+  // «завершує» плану не мають. Раніше тут був лише `m.is_active` з Kommo — і звільнений у дашборді
+  // Шевчук Назар (02.10.2026) лишався у формуванні плану, бо в CRM його ще не деактивували. Тримає `#1300`.
+  const roster = await formationRoster(pool, teamId ?? null);
 
   // 🔴 ДОВІДКОВО: Σ ЗАТВЕРДЖЕНИХ планів по клієнтах за TARGET-місяць.
   // Рішення власника 03.08.2026: ручне поле «постійні принесуть» ЛИШАЄТЬСЯ, а ця

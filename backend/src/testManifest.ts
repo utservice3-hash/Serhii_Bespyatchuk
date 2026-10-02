@@ -294,6 +294,7 @@ export const MANIFEST_FILES: string[] = [
   "core/callAiPromise.test.js",
   "core/carrierCalls.test.js",
   "core/actionFeedback.test.js",
+  "core/formationRoster.test.js",
 ];
 
 /**
@@ -2283,6 +2284,7 @@ export const MANIFEST_TESTS: string[] = [
   "#1104 «ГРАФІК» НАЙМУ: «перенесено» й «позначку знято» — лише коли сервер зберіг; save повертає результат",
   "#1105 «ДОКУМЕНТИ»: помилки йдуть червоним (failToast / error: true), а не зеленим, як успіх",
   "#1106 ВІКНА РЕАКТИВАЦІЇ («＋ Задача», «＋ Контакт», «Закрити»): відмову сервера видно ВСЕРЕДИНІ вікна",
+  "#1300 ФОРМУВАННЯ ПЛАНУ: звільнений, «завершує» й неактивний у Kommo — без плану; активний — у складі",
 ];
 
 /**
