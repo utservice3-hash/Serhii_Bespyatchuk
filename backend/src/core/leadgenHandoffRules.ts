@@ -142,7 +142,15 @@ export interface DealState {
   closedDay?: string | null;
   /** Київська дата першого входу в етап «авто поїхало» (`ClassRules.autoWent`). */
   autoDay?: string | null;
+  /**
+   * Історія «чи була угода в зоні очікування» по київських днях (останній стан дня), за зростанням.
+   * Будує `money.handoffDealStates` з журналу етапів. Потрібна для правила «очікування — станом на кінець
+   * періоду» (рішення власника 02.10.2026). Після останнього запису діє ПОТОЧНИЙ клас (`cls`).
+   */
+  pendDays?: readonly PendDay[];
 }
+/** Стан дня угоди менеджера для «Очікування»: `pending` — у зоні «оплачено / очікуємо» на кінець дня. */
+export interface PendDay { day: string; pending: boolean }
 /**
  * Класифікована передача. `successDay`/`autoDay` — якорі грошей: заповнені лише там, де гроші ЦІЄЇ передачі
  * можуть рахуватись (успіх / оплачено-очікуємо); у `none`/`same`/`regular` — `null`, щоб не двоїти й не рахувати
@@ -150,6 +158,10 @@ export interface DealState {
  */
 export type ClassifiedHandoff<T extends HandoffEntry> = T & {
   cls: LeadgenDealClass; price: number; successDay: string | null; autoDay: string | null; inPeriod?: boolean;
+  /** Історія зони очікування угоди (з `DealState.pendDays`); є лише там, де гроші цієї передачі рахуються. */
+  pendDays?: readonly PendDay[];
+  /** Гроші періоду — «Очікування», перенесене з минулого періоду (авто поїхало ДО початку). Ставить `handoffView`. */
+  carried?: boolean;
 };
 
 /**
@@ -180,7 +192,10 @@ export function classifyHandoffs<T extends HandoffEntry>(
     return Object.assign({}, h, {
       cls: st.cls, price: st.price,
       successDay: st.cls === "success" ? st.closedDay ?? null : null,
-      autoDay: st.cls === "paid" || st.cls === "expect" ? st.autoDay ?? null : null,
+      // Дата авто — для БУДЬ-ЯКОГО поточного класу: угода, що зараз «успішна» чи «програна», могла висіти
+      // в очікуванні на кінець минулого періоду (`pendingIn`). Сама по собі ця дата грошей не дає.
+      autoDay: st.autoDay ?? null,
+      pendDays: st.pendDays ?? [],
     });
   });
 }
@@ -251,6 +266,8 @@ export function handoffView<T extends HandoffEntry>(
   const key = (h: { pzId: number; dealId: number | null }) => `${h.pzId}|${h.dealId}`;
   const inCohort = new Set(cohort.map(key));
   const rows = [...cohort, ...money.filter((h) => !inCohort.has(key(h))).map((h) => Object.assign(h, { inPeriod: false }))];
+  // «Перенесено»: гроші періоду — «Очікування», а авто поїхало ДО його початку (видно в списку угод).
+  for (const h of rows) h.carried = inP.start != null && h.autoDay != null && h.autoDay < inP.start && pendingIn(h, inP);
   const persons = [...new Set(rows.map((h) => h.lgId))].sort((a, b) => a - b);
   const byPerson = persons.map((managerId) => ({
     managerId,
@@ -260,8 +277,36 @@ export function handoffView<T extends HandoffEntry>(
 }
 
 /** Предикат «київська дата в періоді» — одна форма на період, місяць тренду й одиницю розбивки. */
-export type DayIn = (day: string) => boolean;
-export const dayInRange = (from: string, to: string): DayIn => (d) => d >= from && d <= to;
+export type DayIn = ((day: string) => boolean) & { start?: string; end?: string };
+export const dayInRange = (from: string, to: string): DayIn => Object.assign((d: string) => d >= from && d <= to, { start: from, end: to });
+/** Календарний місяць `ym` ('YYYY-MM') як період — з відомими межами (для «Очікування» станом на кінець). */
+export function monthIn(ym: string): DayIn {
+  const y = Number(ym.slice(0, 4)), m = Number(ym.slice(5, 7));
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return dayInRange(`${ym}-01`, `${ym}-${String(last).padStart(2, "0")}`);
+}
+
+const isWaitingCls = (c: LeadgenDealClass) => c === "paid" || c === "expect";
+
+/**
+ * ⏳ «ОЧІКУВАННЯ» ПЕРІОДУ — СТАНОМ НА КІНЕЦЬ ПЕРІОДУ (рішення власника 02.10.2026: «якщо не перейшло в успіх у
+ * минулому місяці — переходить в очікування в цей»). Угода в «Очікуванні» періоду, якщо авто поїхало ДО кінця
+ * періоду (у ньому чи раніше) і на кінець періоду вона стояла в зоні «оплачено / очікуємо». Минулий період —
+ * станом на його останній день з журналу етапів; поточний — станом зараз (після останнього запису — поточний клас).
+ * Тож угода тягнеться з місяця в місяць, поки не стане «Успішною» чи не закриється, і суми очікувань різних
+ * місяців НЕ складаються. Період без відомого кінця (старі виклики) — як було: авто поїхало в періоді, клас зараз.
+ */
+export function pendingIn(r: { cls: LeadgenDealClass; autoDay: string | null; pendDays?: readonly PendDay[] }, inP: DayIn): boolean {
+  if (r.autoDay == null) return false;
+  const end = inP.end;
+  if (end == null) return isWaitingCls(r.cls) && inP(r.autoDay);
+  if (r.autoDay > end) return false;
+  const days = r.pendDays ?? [];
+  if (!days.length || end >= days[days.length - 1].day) return isWaitingCls(r.cls);
+  let at = false;
+  for (const x of days) { if (x.day <= end) at = x.pending; else break; }
+  return at;
+}
 
 /**
  * Передачі домену, чиї ГРОШІ потрапляють у період: класифікація над УСІМ доменом у порядку часу (перша
@@ -273,17 +318,17 @@ export function anchoredRows<T extends HandoffEntry>(
 ): ClassifiedHandoff<T>[] {
   const sorted = domain.filter((h) => h.dealId != null).sort(byTime);
   return classifyHandoffs(sorted, states, history)
-    .filter((h) => (h.successDay != null && inP(h.successDay)) || (h.autoDay != null && inP(h.autoDay)));
+    .filter((h) => (h.successDay != null && inP(h.successDay)) || pendingIn(h, inP));
 }
 
 /** «Успішні» й «Очікування» периоду над класифікованими передачами (`anchoredRows`). */
-export function anchoredMoney(rows: readonly { cls: LeadgenDealClass; price: number; successDay: string | null; autoDay: string | null }[], inP: DayIn):
+export function anchoredMoney(rows: readonly { cls: LeadgenDealClass; price: number; successDay: string | null; autoDay: string | null; pendDays?: readonly PendDay[] }[], inP: DayIn):
   { earned: LeadgenMoneyCell; pending: LeadgenMoneyCell } {
   const earned = cell(), pending = cell();
   const add = (c: LeadgenMoneyCell, price: number) => { c.n++; c.sum += price; if (price !== 0) c.priced++; };
   for (const r of rows) {
     if (r.cls === "success" && r.successDay != null && inP(r.successDay)) add(earned, r.price);
-    else if ((r.cls === "paid" || r.cls === "expect") && r.autoDay != null && inP(r.autoDay)) add(pending, r.price);
+    else if (pendingIn(r, inP)) add(pending, r.price);
   }
   return { earned, pending };
 }
@@ -387,6 +432,8 @@ export interface LeadgenHandoffDeal {
   autoDay: string | null;
   /** Передача — у вибраному періоді; `false` — передано раніше, а в період потрапили її ГРОШІ. */
   inPeriod: boolean;
+  /** «Очікування», перенесене з минулого періоду: авто поїхало раніше, а на кінець періоду угода ще чекала. */
+  carried: boolean;
 }
 
 /** Порожній або з самих пробілів текст CRM — «не заповнено», а не порожній підпис. */
@@ -433,7 +480,7 @@ export function handoffDealRow(
     planPayDay: linked ? h.planPayDay : null,
     reason: h.cls === "lost" ? blankToNull(h.dealReason) : null,
     url: deps.leadUrl(h.dealId ?? h.pzId),
-    autoDay: h.autoDay, inPeriod: h.inPeriod !== false,
+    autoDay: h.autoDay, inPeriod: h.inPeriod !== false, carried: h.carried === true,
   };
 }
 
@@ -677,6 +724,8 @@ export function assembleTrend<T extends HandoffEntry>(input: {
   monthStarts: readonly string[]; stages: readonly StageBucketRow[]; calls: readonly CallBucketRow[];
   links: readonly T[]; states: ReadonlyMap<number, DealState>; firstDay: string | null; scope: HandoffScope;
   history?: ClientHistory;
+  /** Київське «сьогодні»: кінець поточного місяця обрізається ним (очікування — станом на кінець, майбутнього немає). */
+  today?: string;
 }): TrendAssembly {
   const { firstDay, scope } = input;
   const monthStarts = firstDay == null ? [] : input.monthStarts.filter((m) => m.slice(0, 7) >= firstDay.slice(0, 7));
@@ -684,7 +733,9 @@ export function assembleTrend<T extends HandoffEntry>(input: {
   const money = monthStarts.map((ms): TrendMoneyBucket => {
     const ym = ms.slice(0, 7);
     // Той самий `handoffView`, що й `/leadgen-stats` місяця: когорта — передачі місяця, гроші — з усього домену.
-    const v = handoffView(input.links, input.states, scope, input.history, (d) => d.slice(0, 7) === ym);
+    const mi = monthIn(ym);
+    const period = input.today != null && mi.end != null && input.today < mi.end ? dayInRange(mi.start as string, input.today) : mi;
+    const v = handoffView(input.links, input.states, scope, input.history, period);
     return { bucket: ms, totals: v.totals, byPerson: v.byPerson };
   });
   return { monthStarts, byPerson, money };
@@ -693,6 +744,11 @@ export function assembleTrend<T extends HandoffEntry>(input: {
 // ─────────────────────── ГРОШІ ПО ТИЖНЯХ І ДНЯХ ПЕРІОДУ (задача 4668, п.6) ───────────────────────
 
 /** Понеділок тижня київської дати `day` ('YYYY-MM-DD') — той самий ключ, що `bucketKeySql("week")`. */
+/** Київська дата + `n` днів ('YYYY-MM-DD'). */
+export function addDays(day: string, n: number): string {
+  return new Date(Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)) + n)).toISOString().slice(0, 10);
+}
+
 export function mondayOf(day: string): string {
   const t = Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)));
   const dow = new Date(t).getUTCDay();
@@ -713,15 +769,28 @@ export function handoffMoneyBuckets<T extends HandoffEntry>(
   const k = (d: string) => (grain === "day" ? d : mondayOf(d));
   const cohort = new Map<string, ClassifiedHandoff<T>[]>(), money = new Map<string, ClassifiedHandoff<T>[]>();
   const put = (m: Map<string, ClassifiedHandoff<T>[]>, b: string, r: ClassifiedHandoff<T>) => { const xs = m.get(b) ?? []; xs.push(r); m.set(b, xs); };
+  // Одиниця як період зі своїми межами — «Очікування» одиниці станом на її кінець (`pendingIn`).
+  const unitOf = (b: string): DayIn => {
+    const bEnd = grain === "day" ? b : addDays(b, 6);
+    const start = period.start != null && period.start > b ? period.start : b;
+    const end = period.end != null && period.end < bEnd ? period.end : bEnd;
+    return Object.assign((d: string) => k(d) === b && period(d), { start, end });
+  };
+  // Одиниці періоду: коли межі відомі — УСІ (угода, що висить в очікуванні, є в кожній, на кінець якої висіла).
+  const units = new Set<string>();
+  if (period.start != null && period.end != null) for (let d = period.start; d <= period.end; d = addDays(d, 1)) units.add(k(d));
   for (const r of rows) {
     if (r.inPeriod !== false && period(r.day)) put(cohort, k(r.day), r);
     if (r.cls === "success" && r.successDay != null && period(r.successDay)) put(money, k(r.successDay), r);
-    else if ((r.cls === "paid" || r.cls === "expect") && r.autoDay != null && period(r.autoDay)) put(money, k(r.autoDay), r);
+    else if (r.autoDay != null) {
+      if (period.end == null) { if (pendingIn(r, period)) put(money, k(r.autoDay), r); }
+      else for (const b of units) if (pendingIn(r, unitOf(b))) put(money, b, r);
+    }
   }
   const buckets = [...new Set([...cohort.keys(), ...money.keys()])].sort();
   return buckets.map((bucket): TrendMoneyBucket => {
     const cs = cohort.get(bucket) ?? [], ms = money.get(bucket) ?? [];
-    const inB: DayIn = (d) => k(d) === bucket && period(d);
+    const inB: DayIn = unitOf(bucket);
     const persons = [...new Set([...cs, ...ms].map((h) => h.lgId))].sort((a, b) => a - b);
     return {
       bucket, totals: withAnchored(aggregateHandoffMoney(cs), ms, inB),

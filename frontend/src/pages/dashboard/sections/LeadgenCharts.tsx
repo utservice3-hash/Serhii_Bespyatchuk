@@ -18,7 +18,7 @@ const C = { leads: COLORS[0], opr: COLORS[2], quotes: COLORS[1], calls: "#94a3b8
  */
 const MONEY = [
   { k: "success", name: "Успішні (за місяцем успіху)", fill: "#16a34a" },
-  { k: "pipe", name: "Очікування (авто поїхало в місяці)", fill: "#d97706" },
+  { k: "pipe", name: "Очікування (на кінець місяця)", fill: "#d97706" },
 ] as const;
 const moneyRow = (m: LeadgenHandoffMoney | undefined) => ({ success: m ? m.earned.sum : 0, pipe: m ? m.pending.sum : 0 });
 const moneyLabel = (l: unknown, m: LeadgenHandoffMoney | undefined) => !m ? `${String(l)} · передач немає`

@@ -201,6 +201,8 @@ export interface LeadgenHandoffDeal {
   reason: string | null; url: string | null;
   /** Дата «авто поїхало»; `inPeriod: false` — передано раніше за період, у період потрапили гроші. */
   autoDay: string | null; inPeriod: boolean;
+  /** «Очікування», перенесене з минулого періоду: авто поїхало раніше, на кінець періоду угода ще чекала (02.10.2026). */
+  carried?: boolean;
 }
 /** Розкривний список «Гроші з передач»: ті самі правила, що `handoffMoney` у /leadgen-stats; `totals` мусять із ним збігатися. */
 export interface LeadgenHandoffDealsResp { from: string; to: string; managerId: number | null; deals: LeadgenHandoffDeal[]; totals: LeadgenHandoffMoney }
