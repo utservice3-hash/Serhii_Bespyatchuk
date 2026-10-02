@@ -21,10 +21,10 @@ test("#1300 ФОРМУВАННЯ ПЛАНУ: звільнений, «завер�
   await c.connect();
   try {
     await c.query(readFileSync(path.join(ROOT, "backend/src/db/schema.sql"), "utf8"));
-    await c.query(`INSERT INTO teams (id, name) VALUES (5, 'РПК'), (6, 'РНК') ON CONFLICT (id) DO NOTHING`);
+    await c.query(`INSERT INTO teams (id, name) VALUES (5, 'РПК'), (6, 'РНК'), (12, 'Фінанси') ON CONFLICT (id) DO NOTHING`);
     await c.query(`INSERT INTO managers (id, name, team_id, is_active) VALUES
       (1, 'Активний', 5, true), (2, 'Звільнений у дашборді', 5, true), (3, 'Завершує', 5, true),
-      (4, 'Неактивний у Kommo', 5, false), (5, 'Інша команда', 6, true), (6, 'Без команди', NULL, true)
+      (4, 'Неактивний у Kommo', 5, false), (5, 'Інша команда', 6, true), (6, 'Без команди', NULL, true), (7, 'Фінансист', 12, true)
       ON CONFLICT (id) DO NOTHING`);
     await c.query(`INSERT INTO manager_work_state (manager_id, state) VALUES (2, 'dismissed'), (3, 'finishing')`);
     // ⚠️ `DATABASE_URL` — ДО імпорту ядра: `db/pool` читає конфіг на імпорті (той самий прийом, що в #843).
@@ -36,7 +36,11 @@ test("#1300 ФОРМУВАННЯ ПЛАНУ: звільнений, «завер�
     const team5 = (await formationRoster(c, 5)).map((r) => r.name);
     assert.deepEqual(team5, ["Активний"], "🔴 у формуванні команди — не рівно ті, кому ставимо план");
     const all = (await formationRoster(c, null)).map((r) => r.name).sort();
-    assert.deepEqual(all, ["Активний", "Інша команда"].sort(), "🔴 без фільтра команди — звільнені або «без команди» в складі");
+    assert.deepEqual(all, ["Активний", "Інша команда", "Фінансист"].sort(), "🔴 без фільтра команди — звільнені або «без команди» в складі");
+    // Комерційна умова (як її передає роут, `#1256`): фінанси випадають, продажні лишаються.
+    const { commercialManagerSql } = await import("./metrics.js");
+    const sales = (await formationRoster(c, null, commercialManagerSql("m"))).map((r) => r.name).sort();
+    assert.deepEqual(sales, ["Активний", "Інша команда"].sort(), "🔴 комерційна умова не доїхала в ростер формування");
   } finally {
     await c.end();
     scratch.dispose();

@@ -63,3 +63,48 @@ test("#279h ГРУБИЙ ФІЛЬТР: подання взагалі недос�
     assert.equal(mayEverSubmit(r), false,
       `🔴 роль «${r}» пройшла грубий фільтр — її 403 стане 400, і клітинка зліпка зрушиться мовчки`);
 });
+
+import { readFileSync as readSrc } from "node:fs";
+import pathMod from "node:path";
+import { commercialPlanRefusal, NON_COMMERCIAL_PLAN_TEXT } from "./planScope.js";
+
+/**
+ * #1255 — ПЛАН ПРОДАЖІВ ЛИШЕ КОМЕРЦІЙНИМ КОМАНДАМ (рішення власника 02.10.2026): лідогенерація (стара 11,
+ * нова 50011), фінанси (12) і людина без команди — відмова; продажна команда — так. Обидва боки межі.
+ * 🧨 САБОТАЖ: у `commercialPlanRefusal` прибрати `teamId == null ||` → «без команди» проходить → червоніє.
+ */
+test("#1255 ПЛАН ПРОДАЖІВ: лідогенерація, фінанси й «без команди» — відмова; продажна команда — так", () => {
+  const NC = [11, 12, 50011];
+  for (const t of [50011, 11, 12, null]) {
+    assert.equal(commercialPlanRefusal(t, NC), NON_COMMERCIAL_PLAN_TEXT, `🔴 команді ${t} можна поставити план продажів`);
+  }
+  for (const t of [5, 6, 13, 14, 15, 37283]) assert.equal(commercialPlanRefusal(t, NC), null, `🔴 продажній команді ${t} заборонено план`);
+});
+
+/**
+ * #1256 — ПРАВИЛО ЗАСТОСОВАНЕ ВСЮДИ, ДЕ ПЛАН ПРОДАЖІВ ПИШЕТЬСЯ Й СУМУЄТЬСЯ: прямий запис адміна, подання,
+ * затвердження (некомерційні рядки не переходять у `plans`), ростер екрана формування і «план компанії» Огляду.
+ * Привід: 02.10.2026 140 000 ₴ планів лідгенів затвердили через формування, і Огляд з КВП показали інший
+ * план компанії, ніж Звіт продажів.
+ * 🧨 САБОТАЖ: прибрати `AND ${metrics.commercialManagerSql("m")}` із запиту затвердження → червоніє.
+ */
+test("#1256 ПЛАН ПРОДАЖІВ: запис, подання, затвердження, ростер формування й план Огляду — лише комерційні", () => {
+  const SRC = pathMod.join(import.meta.dirname, "..", "..", "src");
+  const plans = readSrc(pathMod.join(SRC, "routes", "plans.ts"), "utf8");
+  const handler = (sig: string) => { const i = plans.indexOf(sig); assert.ok(i > 0, `🔴 ${sig} не знайдено`); return plans.slice(i, plans.indexOf("\n});", i)); };
+  const direct = handler('plansRouter.post("/", requireRole("admin")');
+  assert.ok(direct.indexOf("commercialPlanRefusal(") > 0 && direct.indexOf("commercialPlanRefusal(") < direct.indexOf("INSERT INTO plans"),
+    "🔴 прямий запис у plans без перевірки «комерційний»");
+  const submit = handler('plansRouter.post("/formation/submit"');
+  assert.ok(submit.indexOf("commercialPlanRefusal(") > 0 && submit.indexOf("commercialPlanRefusal(") < submit.indexOf("INSERT INTO plan_formation"),
+    "🔴 подання плану продажів без перевірки «комерційний»");
+  const approve = handler('plansRouter.post("/formation/approve"');
+  assert.match(approve, /pf\.status = 'submitted' \$\{scopeSql\}\s*\n\s*AND \$\{metrics\.commercialManagerSql\("m"\)\}/,
+    "🔴 затвердження переносить у plans і некомерційні рядки");
+  // Ростер формування живе в `core/plans.formationRoster` (#1300); комерційна умова їде в нього аргументом.
+  assert.match(handler('plansRouter.get("/formation"'), /formationRoster\(pool, teamId \?\? null, metrics\.commercialManagerSql\("m"\)\)/,
+    "🔴 екран формування показує некомерційні команди");
+  const dash = readSrc(pathMod.join(SRC, "routes", "dashboard.ts"), "utf8");
+  assert.match(dash, /WHERE p\.metric = 'payment_amount'\s*\n\s*AND \$\{metrics\.commercialManagerSql\("mp"\)\}/,
+    "🔴 «план компанії» Огляду сумує й некомерційні команди");
+});

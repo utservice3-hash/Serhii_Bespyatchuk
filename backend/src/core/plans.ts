@@ -411,10 +411,12 @@ export async function dynamicTarget(scope: DynScope, granularity: "month" | "wee
  */
 export async function formationRoster(
   db: { query: <R>(sql: string, params?: unknown[]) => Promise<{ rows: R[] }> }, teamId: number | null,
+  /** Додаткова умова складу (`metrics.commercialManagerSql`): параметром, бо `core/plans` не тягне `metrics`. */
+  extraCond = "TRUE",
 ): Promise<{ id: number; name: string; team_id: number | null; team_name: string | null }[]> {
   return (await db.query<{ id: number; name: string; team_id: number | null; team_name: string | null }>(
     `SELECT m.id, m.name, m.team_id, t.name AS team_name
        FROM managers m LEFT JOIN teams t ON t.id = m.team_id ${stateJoinSql("m")}
-      WHERE ${hasPlanSql("m", "m.is_active")} ${teamId ? "AND m.team_id = $1" : "AND m.team_id IS NOT NULL"}
+      WHERE ${hasPlanSql("m", "m.is_active")} ${teamId ? "AND m.team_id = $1" : "AND m.team_id IS NOT NULL"} AND ${extraCond}
       ORDER BY t.name NULLS LAST, m.name`, teamId ? [teamId] : [])).rows;
 }

@@ -72,3 +72,17 @@ export function submitRefusal(a: SubmitActor, t: SubmitTarget): string | null {
   if (a.role === "team_lead") return "Лише своя команда";
   return "Подання плану недоступне для цієї ролі";
 }
+
+/**
+ * 🏢 ПЛАН ПРОДАЖІВ — ЛИШЕ КОМЕРЦІЙНИМ КОМАНДАМ (рішення власника 02.10.2026: «лідгени не повинні йти
+ * в комерційний відділ»). Привід заміряний: 02.10 тімлід лідогенерації подав чотирьом лідгенам план продажів
+ * по 35 000 ₴, КВП затвердила, і «план компанії» в Огляді та стратегічний план КВП виросли на 140 000 ₴
+ * (Звіт продажів їх не брав — три екрани показували різне). План лідгена живе в ІНШІЙ таблиці (вкладка
+ * «Лідогенерація», `leadgen_plans`). Без команди — теж ні: «комерційний» = має команду і вона не з переліку.
+ * `nonCommercial` — `metrics.NON_COMMERCIAL_TEAM_IDS` (модуль чистий, тому перелік передає викличник).
+ */
+export const NON_COMMERCIAL_PLAN_TEXT =
+  "План продажів ставиться лише менеджерам комерційних команд. Лідогенерація — план у вкладці «Лідогенерація»; фінанси — без плану продажів.";
+export function commercialPlanRefusal(teamId: number | null, nonCommercial: readonly number[]): string | null {
+  return teamId == null || nonCommercial.includes(teamId) ? NON_COMMERCIAL_PLAN_TEXT : null;
+}
