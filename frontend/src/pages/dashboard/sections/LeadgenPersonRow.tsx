@@ -197,7 +197,7 @@ export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, moneyB
             <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.earned.sum ? "var(--ok)" : MUTED }}>{money ? formatAmountFull(money.earned.sum) : "—"}</span>
             <span style={{ display: "block", fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>Успішні з передач ₴</span>
           </span>
-          <span style={{ textAlign: "center", minWidth: 64 }} title="Угоди з передач цього лідгена, у яких авто поїхало в цьому періоді, а зараз вони оплачені чи в зоні «Очікуємо»">
+          <span style={{ textAlign: "center", minWidth: 64 }} title="Угоди з передач цього лідгена, які на кінець періоду (поточного — зараз) чекали оплати: авто поїхало в цьому чи раніших місяцях, «Успішною» угода ще не стала. Переносяться з місяця в місяць, тож суми різних місяців не складаються">
             <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.pending.sum ? "var(--warn)" : MUTED }}>{money ? formatAmountFull(money.pending.sum) : "—"}</span>
             <span style={{ display: "block", fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>Очікування ₴</span>
           </span>

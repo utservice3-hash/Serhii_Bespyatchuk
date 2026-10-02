@@ -268,6 +268,7 @@ function DealRow({ d, period }: { d: LeadgenHandoffDeal; period: { from: string;
       <td style={{ ...td, textAlign: "left", color: d.inPeriod ? undefined : MUTED }}
         title={d.inPeriod ? "Дата передачі" : "Передано раніше за період — у період потрапили гроші (успіх чи авто)"}>
         {dayLbl(d.day, period)}{!d.inPeriod && <div style={{ fontSize: 11 }}>передано раніше</div>}
+        {d.carried && <div style={{ fontSize: 11, color: "var(--warn)" }} title="Авто поїхало раніше, а на кінець цього періоду угода ще не стала «Успішною» — тому вона в «Очікуванні» і тут">⏳ перенесено з минулого</div>}
       </td>
       <td style={{ ...td, textAlign: "left", whiteSpace: "normal", overflowWrap: "anywhere", minWidth: 160, maxWidth: 280 }}>
         {d.url
