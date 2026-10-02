@@ -15,7 +15,7 @@ import {
 } from "../statistics/seriesCatalog.js";
 import { sheetWeekToMonday } from "../statistics/statsCompare.js";
 import { anomaliesFor, applyCorrections } from "../statistics/anomalies.js";
-import { buildSummary, planSeries, ARCHIVED_TEAM_IDS } from "../statistics/statsSummary.js";
+import { buildSummary, planSeries, dispatchPlanSeries, ARCHIVED_TEAM_IDS } from "../statistics/statsSummary.js";
 
 /**
  * Вкладка «Статистики» (діаграми). Зшивка на серію: sheet (stats_series, <шов) +
@@ -243,12 +243,13 @@ statsSeriesRouter.get("/series", async (req, res) => {
   const set = await seriesSet({ role: auth.role, roleKey: auth.roleKey, teamId: auth.teamId ?? null, managerId: auth.managerId ?? null }, unit);
   const series = await Promise.all(set.map((s) => stitch(block, metric, g, from, to, s)));
   // ⚠️ Аномалії — з реєстру з доказом CRM (ТЗ 28.09, блок 1, п.3); фронт позначає точку, а не мовчки тягне лінію.
-  // 📈 План — лише на ②, і лише в скоупі глядача (тімлід — своя команда, менеджер — нічого).
+  // 📈 План — там, де він є в CRM-дзеркалі, і лише в скоупі глядача (тімлід — своя команда, менеджер — нічого):
+  //    ② — план грошей Звіту; «Поставлені» (= плитка «Відправлені авто») — KPI-цілі задачника, від шва.
   let plan: Awaited<ReturnType<typeof planSeries>> = [];
-  if (metric === "payment_received" && block === "sales") {
-    const keys = new Set(set.map((s) => s.scopeKey));
-    plan = (await planSeries(g, from, to)).filter((p) => keys.has(p.scopeKey) && !(set.find((s) => s.scopeKey === p.scopeKey)?.benchmark));
-  }
+  const keys = new Set(set.map((s) => s.scopeKey));
+  const inScope = (p: { scopeKey: string }) => keys.has(p.scopeKey) && !(set.find((s) => s.scopeKey === p.scopeKey)?.benchmark);
+  if (metric === "payment_received" && block === "sales") plan = (await planSeries(g, from, to)).filter(inScope);
+  else if (metric === "cars_delivered" && block === "sales") plan = (await dispatchPlanSeries(g, from > STATS_SEAM ? from : STATS_SEAM, to)).filter(inScope);
   res.json({ block, metric, granularity: g, seam: STATS_SEAM, crmAble: isCrmAble(block, metric), live: hasLive(block, metric), series,
     anomalies: anomaliesFor(metric, g), plan });
 });

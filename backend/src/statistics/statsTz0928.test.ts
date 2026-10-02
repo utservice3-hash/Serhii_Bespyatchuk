@@ -198,6 +198,26 @@ test("#881c ПЛАНИ «ВІДПРАВЛЕНИХ» І «ПРОРАХУНКІВ�
   assert.match(codeOnly(read("backend/src/routes/dashboard.ts")), /loadKpiTargets\(/, "🔴 Звіт читає цілі задачника іншим запитом, ніж Статистики");
 });
 
+test("#882 ПЛАН АВТО НА ГРАФІКУ — ТА САМА ФУНКЦІЯ, ЩО ПЛИТКА «ВІДПРАВЛЕНІ АВТО», і лише від шва", () => {
+  const src = codeOnly(read("backend/src/statistics/statsSummary.ts"));
+  assert.equal((src.match(/loadKpiTargets\(/g) ?? []).length, 1, "🔴 цілі KPI читаються двома шляхами — плитка й графік розійдуться");
+  assert.match(src, /async function dispatchPlan\([^)]*\)[^{]*\{[\s\S]*?await dispatchTargets\(full\)/, "🔴 плитка бере план авто не з dispatchTargets");
+  assert.match(src, /windows\.map\(\(w\) => dispatchTargets\(w\)\)/, "🔴 лінія плану авто на графіку не з dispatchTargets");
+  const route = codeOnly(read("backend/src/routes/statisticsSeries.ts"));
+  assert.match(route, /metric === "cars_delivered" && block === "sales"\) plan = \(await dispatchPlanSeries\(g, from > STATS_SEAM \? from : STATS_SEAM, to\)\)\.filter\(inScope\)/,
+    "🔴 графік «Поставлені» не отримує план або отримує його до шва (до 01.07 цілей задачника не було)");
+});
+
+test("#883 ФОРМУЛА — ВИДИМИМ ПІДПИСОМ У КОЖНОГО ПОКАЗНИКА ГРАФІКА (ТЗ, блок 4, п.5)", () => {
+  const fe = read(`${SEC}/StatisticsChartsSection.tsx`);
+  const cats = fe.slice(fe.indexOf("const CATS"), fe.indexOf('{ key: "manual"'));
+  const lines = cats.split("\n").filter((l) => /^\s*\{ key: "\w+", block:/.test(l));
+  assert.ok(lines.length >= 30, `🔴 знайдено лише ${lines.length} показників — зріз CATS зламався, перевіряти нема що`);
+  const bare = lines.filter((l) => !/\bhint: (?:"[^"]{10,}"|[A-Z_]+_HINT)/.test(l)).map((l) => l.match(/label: "([^"]+)"/)?.[1]);
+  assert.deepEqual(bare, [], `🔴 показники без видимої формули: ${bare.join(", ")}`);
+  assert.match(fe, /\{metric\.hint && <div style=\{\{ fontSize: 12, color: MUTED, margin: "6px 0 0" \}\}>📐 \{metric\.hint\}/, "🔴 формула більше не виводиться під чипами показників");
+});
+
 // ─────────────────────────────── ЖИВІ (test:prod) ───────────────────────────────
 
 async function adminToken(): Promise<string> {
@@ -266,4 +286,19 @@ test("#881d ЖИВИЙ: лінія плану на графіку за закр�
   const pt = b.plan?.find((p) => p.scopeKey === "company")?.points.find((p) => p.period === a.cur.from);
   assert.ok(pt, "🔴 на графіку немає точки плану за цей тиждень");
   assert.equal(Math.round(pt.value), tilePlan, "🔴 графік і плитка показують різний план того самого тижня");
+});
+
+test("#882b ЖИВИЙ: план авто на графіку за закритий тиждень == плану плитки «Відправлені авто»", needsApi(), async () => {
+  const anchor = lastSunday();
+  const tok = await adminToken();
+  const a = await (await fetch(`${API_BASE}/api/statistics/summary?gran=week&anchor=${anchor}`, { headers: { Authorization: `Bearer ${tok}` } })).json() as
+    { cur: { from: string }; tiles: { key: string; plan: number | null }[] };
+  const tilePlan = a.tiles.find((t) => t.key === "dispatched")!.plan;
+  assert.ok(tilePlan != null && tilePlan > 0, "🔴 у плитки «Відправлені авто» за закритий тиждень немає плану — звіряти нема з чим");
+  const r = await fetch(`${API_BASE}/api/statistics/series?block=sales&metric=cars_delivered&granularity=week&from=${a.cur.from}&to=${anchor}`, { headers: { Authorization: `Bearer ${tok}` } });
+  assert.equal(r.status, 200);
+  const b = await r.json() as { plan?: { scopeKey: string; points: { period: string; value: number }[] }[] };
+  const pt = b.plan?.find((p) => p.scopeKey === "company")?.points.find((p) => p.period === a.cur.from);
+  assert.ok(pt, "🔴 на графіку «Поставлені» немає точки плану за цей тиждень");
+  assert.equal(pt.value, tilePlan, "🔴 графік і плитка показують різний план авто того самого тижня");
 });

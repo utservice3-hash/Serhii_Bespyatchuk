@@ -29,21 +29,21 @@ const CATS: Cat[] = [
     { key: "avg_check", block: "sales", label: "Середній чек", unit: "₴", hint: "виручка «успішно реалізовано» ÷ кількість таких угод — окремо за кожну точку (день, тиждень чи місяць — за «Кроком»); дата угоди — день переходу в «Успішно реалізовано», за Києвом (не дата оплати й не відвантаження)", seamHint: SEAM_CARS },
     { key: "revenue_success", block: "sales", label: "Дохід (успіх)", unit: "₴", hint: "успішні угоди (142) за датою закриття, signed" },
     { key: "payment_received", block: "sales", label: "Отримані кошти", unit: "₴", hint: "оплата отримана ∪ успішно реалізовано, без подвоєння — на цих грошах стоїть план" },
-    { key: "cash_deals_sum", block: "sales", label: "Готівкові", unit: "₴" },
+    { key: "cash_deals_sum", block: "sales", label: "Готівкові", unit: "₴", hint: "сума готівкових угод — лише історія ручної таблиці до 01.07.2026; з CRM цей показник не продовжується, тому після шва точок немає" },
   ] },
   { key: "auto", icon: "🚚", label: "Авто", metrics: [
-    { key: "cars_success", block: "sales", label: "Успішні", seamHint: SEAM_CARS },
-    { key: "cars_delivered", block: "sales", label: "Поставлені", hint: "за датою завантаження — те саме, що плитка «Відправлені авто»; company включає поставки поза 6 командами (~0.5%)", seamHint: SEAM_CARS },
+    { key: "cars_success", block: "sales", label: "Успішні", hint: "кількість угод, що перейшли в «Успішно реалізовано», за датою переходу (Київ), кожна раз", seamHint: SEAM_CARS },
+    { key: "cars_delivered", block: "sales", label: "Поставлені", hint: "авто за датою завантаження — те саме, що плитка «Відправлені авто»; план — KPI-цілі задачника «відправлено авто»; company включає поставки поза 6 командами (~0.5%)", seamHint: SEAM_CARS },
   ] },
   { key: "leads", icon: "📈", label: "Ліди й канали", metrics: [
-    { key: "ad_leads", block: "marketing", label: "Ліди з реклами" },
-    { key: "lg_transfers", block: "marketing", label: "Прорахунки лідгенів" },
+    { key: "ad_leads", block: "marketing", label: "Ліди з реклами", hint: "угоди з каналом «реклама», за першим входом у «Взято в роботу» в межах періоду — кожна угода раз" },
+    { key: "lg_transfers", block: "marketing", label: "Прорахунки лідгенів", hint: "входи угод у «Кваліфіковано» — як на екрані «Лідогенерація»; лише компанія, по командах не розрізається" },
   ] },
   { key: "clients", icon: "👥", label: "Клієнти", metrics: [
     { key: "repeat_clients_active", block: "logistics", label: "Постійні в роботі", hint: "постійний = has_prior (≥1 попередня виграна)" },
-    { key: "repeat_clients_cars", block: "logistics", label: "Машини постійних" },
-    { key: "repeat_clients_sum", block: "logistics", label: "Сума постійних", unit: "₴" },
-    { key: "repeat_avg_check", block: "logistics", label: "Чек постійних", unit: "₴" },
+    { key: "repeat_clients_cars", block: "logistics", label: "Машини постійних", hint: "відправлені авто клієнтів, у яких уже була виграна угода, — за датою завантаження" },
+    { key: "repeat_clients_sum", block: "logistics", label: "Сума постійних", unit: "₴", hint: "сума угод (ціна) тих самих авто постійних клієнтів, за датою завантаження" },
+    { key: "repeat_avg_check", block: "logistics", label: "Чек постійних", unit: "₴", hint: "сума постійних ÷ машини постійних — окремо за кожну точку" },
   ] },
   { key: "calls", icon: "☎️", label: "Дзвінки", metrics: [
     { key: "calls", block: "sales", label: "Результативні", hint: CALLS_HINT },
@@ -386,7 +386,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                         stroke={s.benchmark ? "#94a3b8" : color(i)} strokeWidth={s.benchmark ? 1.6 : i === 0 ? 2.4 : 1.8}
                         strokeDasharray={s.benchmark ? "6 4" : undefined} dot={false} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
                     ))}
-                    {/* 📈 Сходинки плану (ТЗ, блок 2, п.2) — для «Отримані кошти», тією ж кольоровою гамою, пунктиром. */}
+                    {/* 📈 Сходинки плану (ТЗ, блок 2, п.2) — для «Отримані кошти» і «Поставлені» (KPI авто), тією ж кольоровою гамою, пунктиром. */}
                     {planVisible.map((pl) => {
                       const idx = seriesList.findIndex((s) => s.scopeKey === pl.scopeKey);
                       return <Line key={`plan-${pl.scopeKey}`} type="stepAfter" dataKey={`p${pl.scopeKey}`} name={`План · ${seriesList[idx]?.scopeName ?? pl.scopeKey}`}
@@ -417,7 +417,9 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                 </ResponsiveContainer>
               </div>
               <div style={{ fontSize: 11.5, color: MUTED, marginTop: 4 }}>
-                {SEAM_NOTE}{planVisible.length > 0 && effGran === "week" ? " План тижня на графіку — те саме число, що на плитці: автоплан частин тижня + ручні цілі тімлідів." : ""}
+                {SEAM_NOTE}{planVisible.length > 0 ? (metric.key === "cars_delivered"
+                  ? " План — KPI-цілі задачника «відправлено авто» (є з 07.2026), те саме число, що на плитці «Відправлені авто»."
+                  : effGran === "week" ? " План тижня на графіку — те саме число, що на плитці: автоплан частин тижня + ручні цілі тімлідів." : "") : ""}
               </div>
               {stat ? (
                 <div style={{ display: "flex", gap: 26, flexWrap: "wrap", paddingTop: 8, borderTop: "1px solid var(--border)", marginTop: 8, fontSize: 13 }}>

@@ -29,7 +29,7 @@ import * as metrics from "../core/metrics.js";
 import { loadKpiTargets } from "../core/kpiTargetsDb.js";
 import { leadgenTeamMembers, approvedLeadgenPlans } from "../core/leadgenPlans.js";
 import { planForPeriod } from "../core/leadgenPlanRules.js";
-import { compareWindows, deltaPct, planPct, rankByPlan, foldWeek, type Gran, type Window, type WeekPlanCell } from "./statsCompare.js";
+import { compareWindows, deltaPct, planPct, rankByPlan, foldWeek, weekOf, type Gran, type Window, type WeekPlanCell } from "./statsCompare.js";
 
 /** Розформовані команди — історія лишається, у дефолтному вигляді їх немає (рішення Романа 02.10, питання 4). */
 export const ARCHIVED_TEAM_IDS = new Set<number>([36283]);
@@ -158,18 +158,61 @@ async function dispatchedIn(w: Window, viewer: Viewer): Promise<number> {
   return own.reduce((a, r) => a + r.deals, 0);
 }
 
-/** План KPI «відправлено авто» (`dispatch_count`) за період — ті самі цілі задачника, що на Звіті. */
+/**
+ * Цілі KPI «відправлено авто» (`dispatch_count`) по менеджерах за період — ті самі цілі задачника, що на Звіті.
+ * ОДНЕ джерело і для плитки «Відправлені авто», і для лінії плану на графіку «Поставлені» (той самий факт).
+ */
+async function dispatchTargets(w: Window): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  for (const [aid, m] of await loadKpiTargets(w.from, w.to)) if (m.dispatch_count != null) out.set(aid, m.dispatch_count);
+  return out;
+}
+
+/** План KPI «відправлено авто» за період у скоупі глядача. */
 async function dispatchPlan(full: Window, viewer: Viewer, teamOfMgr: Map<number, number | null>): Promise<number | null> {
-  const t = await loadKpiTargets(full.from, full.to);
   let sum = 0, any = false;
-  for (const [aid, m] of t) {
-    const v = m.dispatch_count; if (v == null) continue;
+  for (const [aid, v] of await dispatchTargets(full)) {
     const inScope = viewer.allTeams || (viewer.teamId != null ? teamOfMgr.get(aid) === viewer.teamId : aid === viewer.managerId);
     if (!inScope) continue;
     sum += v; any = true;
   }
   return any ? Math.round(sum) : null;
 }
+
+/**
+ * 📈 Лінія плану «відправлено авто» на графіку: по повних тижнях Пн–Нд або місяцях, компанія + живі команди.
+ * Та сама `dispatchTargets`, що плитка, тож точка тижня == план плитки за той тиждень (гейт #882b).
+ * Будується лише від `seamFrom` (01.07.2026): до шва на графіку історія ручної таблиці, а цілей задачника
+ * тоді ще не було (перші — 06.07.2026). Точка без жодної цілі не ставиться — «плану немає» ≠ «план 0».
+ */
+export async function dispatchPlanSeries(g: "day" | "week" | "month", seamFrom: string, to: string):
+    Promise<{ scopeKey: string; points: { period: string; value: number }[] }[]> {
+  if (g === "day" || seamFrom > to) return [];
+  const windows: Window[] = [];
+  if (g === "week") {
+    for (let w = weekOf(seamFrom); w.from <= to; w = weekOf(addDaysIso(w.to, 1))) windows.push(w);
+  } else {
+    for (let m = `${seamFrom.slice(0, 7)}-01`; m <= to; m = addMonthIso(m)) windows.push({ from: m, to: monthEndIso(m) });
+  }
+  const live = new Set(LIVE_TEAMS.map((t) => t.id));
+  const teamOf = new Map((await pool.query<{ id: number; team_id: number | null }>(`SELECT id, team_id FROM managers`)).rows.map((x) => [x.id, x.team_id]));
+  const byScope = new Map<string, { period: string; value: number }[]>();
+  const push = (k: string, period: string, v: number) => { const a = byScope.get(k) ?? []; a.push({ period, value: Math.round(v) }); byScope.set(k, a); };
+  const all = await Promise.all(windows.map((w) => dispatchTargets(w)));
+  windows.forEach((w, i) => {
+    const t = all[i];
+    if (!t.size) return;
+    const team = new Map<number, number>();
+    let company = 0;
+    for (const [aid, v] of t) { company += v; const tid = teamOf.get(aid); if (tid != null && live.has(tid)) team.set(tid, (team.get(tid) ?? 0) + v); }
+    push("company", w.from, company);
+    for (const [tid, v] of team) push(String(tid), w.from, v);
+  });
+  return [...byScope].map(([scopeKey, points]) => ({ scopeKey, points }));
+}
+const addDaysIso = (d: string, n: number) => { const x = new Date(`${d}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+const addMonthIso = (m: string) => { const x = new Date(`${m}T00:00:00Z`); x.setUTCMonth(x.getUTCMonth() + 1, 1); return x.toISOString().slice(0, 10); };
+const monthEndIso = (m: string) => { const x = new Date(`${m}T00:00:00Z`); x.setUTCMonth(x.getUTCMonth() + 1, 0); return x.toISOString().slice(0, 10); };
 
 /** План прорахунків лідгенів — затверджені плани учасників «Лідогенерації» на період, як на її екрані (`planForPeriod`). */
 async function quotesPlan(full: Window): Promise<number | null> {
