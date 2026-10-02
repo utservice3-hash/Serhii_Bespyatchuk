@@ -160,6 +160,8 @@ export function LeadgenSection() {
   const [d, setD] = useState<LeadgenStatsResp | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(false);
+  /** Відмова сервера (403) — текстом сервера: це НЕ збій зʼєднання, і «спробувати знову» тут не допоможе. */
+  const [denied, setDenied] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   const [cmpData, setCmpData] = useState<{ cur: LeadgenStatsResp; prev: LeadgenStatsResp } | null>(null);
   const [cmpErr, setCmpErr] = useState(false);
@@ -174,15 +176,20 @@ export function LeadgenSection() {
   useEffect(() => {
     let cancelled = false;
     if (future) { setLoading(false); setErr(false); return; }
-    setLoading(true); setErr(false);
+    setLoading(true); setErr(false); setDenied(null);
     (async () => {
       for (let i = 0; i < 3; i++) {
         try {
           const r = await fetchLeadgenStats(grain ? { from, to, grain } : { from, to });
           if (!cancelled) { setD(r); setLoading(false); }
           return;
-        } catch {
+        } catch (e) {
           if (cancelled) return;
+          const r = (e as { response?: { status?: number; data?: { error?: unknown } } }).response;
+          if (r?.status === 403) {
+            setDenied(typeof r.data?.error === "string" ? r.data.error : "Немає доступу до цього розділу.");
+            setLoading(false); return;
+          }
           if (i < 2) await new Promise((res) => setTimeout(res, 400 * 2 ** i));
         }
       }
@@ -237,6 +244,8 @@ export function LeadgenSection() {
 
   /** Усі люди відповіді: рядки команди + «Інші». Пошук людини — тут, щоб вибір «іншого» не читався як «без дій». */
   const everyone = useMemo(() => (d ? [...d.rows, ...(d.others ?? [])] : []), [d]);
+  /** Відповідь лідгену (рішення власника 02.10.2026): лише свій рядок + підсумки команди. */
+  const own = d?.viewer === "own";
   const pickWho = (v: string) => {
     if (v === "all") { setWho("all"); return; }
     const id = Number(v);
@@ -262,13 +271,13 @@ export function LeadgenSection() {
         </div>
         {d && (
           <div style={{ fontSize: 12, color: MUTED, background: "var(--card-bg)", border: "1px solid var(--border)", padding: "4px 11px", borderRadius: 20 }}>
-            Ти бачиш: <b style={{ color: "var(--text)" }}>{d.scopedTo != null ? "свою команду" : "весь відділ"}</b>
+            Ти бачиш: <b style={{ color: "var(--text)" }}>{own ? "свої цифри й підсумок команди" : d.scopedTo != null ? "свою команду" : "весь відділ"}</b>
           </div>
         )}
       </div>
 
       <PeriodNav state={nav} onPatch={patchNav} today={today}>
-        <select value={who} onChange={(e) => pickWho(e.target.value)} style={{ ...navBtn, cursor: "pointer" }} aria-label="Лідген">
+        {!own && <select value={who} onChange={(e) => pickWho(e.target.value)} style={{ ...navBtn, cursor: "pointer" }} aria-label="Лідген">
           <option value="all">Усі лідгени{d ? ` (${d.rows.length}${others.length ? ` + ${others.length} не з команди` : ""})` : ""}</option>
           <optgroup label="Команда «Лідогенерація»">
             {(d?.rows ?? []).map((r) => <option key={r.managerId} value={r.managerId}>{r.name}</option>)}
@@ -279,7 +288,7 @@ export function LeadgenSection() {
             </optgroup>
           )}
           {whoAbsent && <option value={who}>{whoName} — без дій у періоді</option>}
-        </select>
+        </select>}
       </PeriodNav>
 
       {/* Смуга одиниць обраного режиму — розмітка дня-strip зі Звіту, одиниці — від режиму */}
@@ -314,6 +323,12 @@ export function LeadgenSection() {
         </div>
       )}
 
+      {denied && (
+        <div style={{ textAlign: "center", padding: 28, color: MUTED }}>
+          <div style={{ fontSize: 30, marginBottom: 6 }}>🔒</div>
+          <div>{denied}</div>
+        </div>
+      )}
       {err && (
         <div style={{ textAlign: "center", padding: 28, color: MUTED }}>
           <div style={{ fontSize: 30, marginBottom: 6 }}>⚠️</div>
@@ -325,8 +340,8 @@ export function LeadgenSection() {
         </div>
       )}
       {future && <div style={{ padding: 20, color: MUTED }}>Період {periodLabel} ще не настав — дій у CRM за нього немає.</div>}
-      {!future && !d && !err && <div style={{ padding: 20, color: MUTED }}>Завантаження…</div>}
-      {!future && d && !err && (
+      {!future && !d && !err && !denied && <div style={{ padding: 20, color: MUTED }}>Завантаження…</div>}
+      {!future && d && !err && !denied && (
         <div style={{ opacity: loading ? 0.55 : 1, transition: "opacity .15s" }}>
           <Glance d={d} cmp={cmp} cmpData={cmpData} cmpErr={cmpErr} who={who} whoName={whoName} whoAbsent={whoAbsent}
             periodLabel={periodLabel} statusful={statusful} />
@@ -337,8 +352,9 @@ export function LeadgenSection() {
           <h3 style={{ margin: "4px 0 10px" }}>👥 Лідгени · {periodLabel} <span style={{ fontSize: 12, fontWeight: 400, color: MUTED }}>· гроші — з лідів, переданих у періоді, стан угод — зараз</span></h3>
           <People d={d} who={who} whoName={whoName} whoAbsent={whoAbsent} grain={grain} period={period} today={today}
             statusful={statusful} open={open} onToggle={toggle} />
-          <Others d={d} who={who} />
-          <Details d={d} grain={grain} period={period} today={today} open={detailsOpen} onToggle={setDetailsOpen} />
+          {/* Лідгену «Інших» і рівня відділу сервер не віддає (білий список) — і блоків під них немає. */}
+          {!own && <Others d={d} who={who} />}
+          {!own && <Details d={d} grain={grain} period={period} today={today} open={detailsOpen} onToggle={setDetailsOpen} />}
         </div>
       )}
       <LeadgenPlanFormation initialMonth={period.from.slice(0, 7)} />
@@ -429,13 +445,15 @@ function Details({ d, grain, period, today, open, onToggle }: {
         </>
       )}
 
+      {d.department && (() => { const dep = d.department; return (<>
       <h3 style={{ margin: "20px 0 4px", display: "flex", alignItems: "center", gap: 8 }}>
-        🚚 Канал «лідоген» загалом <InfoHint text={`${d.department.note} ⚓ ${d.department.anchors}`} />
+        🚚 Канал «лідоген» загалом <InfoHint text={`${dep.note} ⚓ ${dep.anchors}`} />
       </h3>
       <p style={{ margin: "0 0 12px", fontSize: 13, color: MUTED }}>
-        Усі угоди каналу «лідоген» (не лише з передач цього періоду): відправлено {d.department.machines.toLocaleString("uk-UA")} авто на {formatAmountFull(d.department.machinesRevenue)},
-        отримано {formatAmountFull(d.department.receivedRevenue)}.
+        Усі угоди каналу «лідоген» (не лише з передач цього періоду): відправлено {dep.machines.toLocaleString("uk-UA")} авто на {formatAmountFull(dep.machinesRevenue)},
+        отримано {formatAmountFull(dep.receivedRevenue)}.
       </p>
+      </>); })()}
 
       {d.scopedTo != null && (
         <p style={{ margin: "14px 0 0", fontSize: 12.5, color: "var(--warn)" }}>⚠ Причини закриття, передані прорахунки й джерела нижче — по всьому відділу, не лише по вашій команді.</p>
@@ -446,7 +464,7 @@ function Details({ d, grain, period, today, open, onToggle }: {
       </h3>
       <p style={{ margin: "0 0 12px", fontSize: 13, color: MUTED }}>
         Разом {d.closures.reduce((a, c) => a + c.deals, 0).toLocaleString("uk-UA")} закриттів ·
-        зараз висить у «Клієнт підігрівається»: <b>{d.warmingNow.toLocaleString("uk-UA")}</b>
+        зараз висить у «Клієнт підігрівається»: <b>{d.warmingNow == null ? "—" : d.warmingNow.toLocaleString("uk-UA")}</b>
       </p>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
         <tbody>

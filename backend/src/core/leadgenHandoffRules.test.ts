@@ -600,3 +600,75 @@ test("#1096 МАШИН = успішні + очікування періоду: �
   assert.equal(weeks.reduce((a, b) => a + b.totals.machines, 0), v.totals.machines, "🔴 Σ тижнів ≠ вересню");
   assert.equal(personMoneyWire(7, v.totals).machines, 3, "🔴 машини не доїхали у відповідь");
 });
+
+import { leadgenViewer, leadgenAuthScope as scopeOf, handoffDealsScope as dealsScopeOf, ownLeadgenStatsBody, ownLeadgenTrendBody,
+  NOT_LEADGEN_TEXT } from "./leadgenHandoffRules.js";
+
+/**
+ * #1250 — ХТО ДИВИТЬСЯ ЕКРАН (рішення власника 02.10.2026): лідген (роль «менеджер» + активний учасник
+ * «Лідогенерації») — свої дані й підсумок команди; менеджер продажу (та сама роль, поза командою) — відмова
+ * з поясненням; тімлід і компанія — як були. Кожна межа — по обидва боки.
+ * 🧨 САБОТАЖ: у `leadgenViewer` прибрати перевірку `auth.leadgenTeamId != null` → менеджер продажу стає `own` → червоніє.
+ */
+test("#1250 ХТО ДИВИТЬСЯ: лідген — свої дані й підсумок команди; менеджер продажу — відмова; тімлід — як був", () => {
+  const LG = 50011;
+  const lidgen = { role: "manager", teamId: null, managerId: 118, leadgenTeamId: LG };
+  const sales = { role: "manager", teamId: 7, managerId: 8, leadgenTeamId: null };
+  assert.deepEqual(leadgenViewer(lidgen), { kind: "own", selfId: 118 });
+  assert.deepEqual(leadgenViewer(sales), { kind: "deny", error: NOT_LEADGEN_TEXT }, "🔴 менеджер продажу бачить екран лідгенів");
+  assert.equal(leadgenViewer({ ...lidgen, managerId: null }).kind, "deny", "🔴 «свої дані» без «себе» — відкрито");
+  assert.equal(leadgenViewer({ ...lidgen, managerId: -1 }).kind, "deny", "🔴 порожній менеджер (-1) прочитався як «свій»");
+  assert.equal(leadgenViewer({ role: "team_lead", teamId: LG }).kind, "all");
+  // Скоуп: лідгену — команда (підсумок), менеджеру продажу — ніщо, тімліду — своя команда, як було.
+  assert.deepEqual(scopeOf(lidgen), { teamId: LG, managerId: null });
+  assert.deepEqual(scopeOf(sales), { teamId: -1, managerId: -1 }, "🔴 менеджеру продажу пішов скоуп із даними");
+  assert.deepEqual(scopeOf({ role: "team_lead", teamId: LG }), { teamId: LG, managerId: null });
+  // Список угод: лідген — лише свої; чужий `managerId` — 403, а не «тихо свої»; продажі — 403.
+  assert.deepEqual(dealsScopeOf(lidgen, null, null), { ok: true, scope: { teamId: LG, managerId: 118 } });
+  assert.deepEqual(dealsScopeOf(lidgen, 118, LG), { ok: true, scope: { teamId: LG, managerId: 118 } });
+  assert.deepEqual(dealsScopeOf(lidgen, 190, LG), { ok: false, status: 403 }, "🔴 лідген отримав угоди колеги");
+  assert.deepEqual(dealsScopeOf(sales, null, null), { ok: false, status: 403 });
+  assert.deepEqual(dealsScopeOf({ role: "team_lead", teamId: LG }, 190, LG), { ok: true, scope: { teamId: LG, managerId: 190 } },
+    "🔴 тімлід втратив угоди своєї команди");
+});
+
+/**
+ * #1251 — ВІДПОВІДЬ ДЛЯ ЛІДГЕНА — БІЛИЙ СПИСОК: свій рядок, свої гроші й розбивка, підсумки КОМАНДИ;
+ * рядків, грошей, передач колег, «Інших», рівня відділу — НЕМАЄ; поле, якого немає в списку, не проходить.
+ * 🧨 САБОТАЖ: в `ownLeadgenStatsBody` замінити `onlySelf(body.rows, selfId)` на `body.rows` → червоніє.
+ */
+test("#1251 ВІДПОВІДЬ ЛІДГЕНУ: лише своє + підсумок команди; невідоме поле не проходить", () => {
+  const me = 118, mate = 190;
+  const person = (id: number) => ({ managerId: id, name: `Л${id}`, quotes: id });
+  const body = {
+    from: "2026-10-01", to: "2026-10-31", grain: "week",
+    rows: [person(me), person(mate)], teamMembers: [person(me), person(mate)],
+    totals: { quotes: 308 }, conversions: { oprOfLeads: 50 },
+    plans: { elapsed: 0.1, byPerson: [person(me), person(mate)], team: { plan: 300 } },
+    handoffMoney: { totals: { earned: { sum: 99 } }, byPerson: [person(me), person(mate)] },
+    buckets: [{ bucket: "2026-09-28", quotes: 9 }], bucketsByPerson: [person(me), person(mate)],
+    handoffMoneyBuckets: [{ bucket: "2026-09-28" }], handoffMoneyBucketsByPerson: [person(me), person(mate)],
+    others: [person(5)], othersTotals: { quotes: 5 }, bySource: [{ source: "x" }], weeks: [{ week: "x" }],
+    closures: [{ reason: "x", deals: 1 }], handoffs: [{ kommoId: 1, manager: "Л190" }], handoffsLimit: 500,
+    warmingNow: 1682, department: { machines: 103 }, secretTomorrow: "чуже",
+  };
+  const o = ownLeadgenStatsBody(body, me);
+  for (const k of ["rows", "teamMembers", "bucketsByPerson", "handoffMoneyBucketsByPerson"] as const) {
+    assert.deepEqual(o[k], [person(me)], `🔴 «${k}»: у відповіді лідгену чужі рядки`);
+  }
+  assert.deepEqual((o.plans as { byPerson: unknown }).byPerson, [person(me)], "🔴 план колеги у відповіді лідгену");
+  assert.deepEqual((o.handoffMoney as { byPerson: unknown }).byPerson, [person(me)], "🔴 гроші колеги у відповіді лідгену");
+  // Підсумки команди — є (рішення: «свій рядок + підсумок команди»).
+  assert.deepEqual([o.totals, (o.plans as { team: unknown }).team, (o.handoffMoney as { totals: unknown }).totals, o.buckets],
+    [body.totals, body.plans.team, body.handoffMoney.totals, body.buckets], "🔴 підсумок команди зник з відповіді лідгену");
+  // Чуже й відділ — порожні, а невідоме поле не проходить зовсім.
+  assert.deepEqual([o.others, o.bySource, o.weeks, o.closures, o.handoffs, o.department, o.warmingNow, o.othersTotals],
+    [[], [], [], [], [], null, null, null], "🔴 лідгену пішли «Інші», журнал передач з іменами чи рівень відділу");
+  assert.ok(!("secretTomorrow" in o), "🔴 нове поле відповіді пройшло до лідгена без внесення в білий список");
+  assert.equal(o.viewer, "own");
+  // Тренд — той самий принцип.
+  const t = ownLeadgenTrendBody({ months: 12, to: "2026-10-31", buckets: [1], handoffMoney: [2],
+    bucketsByPerson: [person(me), person(mate)], handoffMoneyByPerson: [person(mate)], extra: 1 }, me);
+  assert.deepEqual([t.bucketsByPerson, t.handoffMoneyByPerson, t.buckets, t.handoffMoney], [[person(me)], [], [1], [2]]);
+  assert.ok(!("extra" in t), "🔴 тренд: невідоме поле пройшло до лідгена");
+});

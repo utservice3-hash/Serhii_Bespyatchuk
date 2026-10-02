@@ -217,12 +217,13 @@ export interface LeadgenStatsResp {
     oprOfLeads: number | null; quotesOfOpr: number | null;
     targets: { oprOfLeads: number; quotesOfOpr: number; machinesOfQuotes: number };
   };
+  /** `null` — для лідгена (рівень відділу йому не показується, рішення 02.10.2026). */
   department: {
     machines: number; machinesRevenue: number; receivedRevenue: number; receivedDeals: number;
     note: string; anchors: string;
     /** Покриття поля «Лидогенератор» у періоді — межа розрізу по особах. */
     leadGeneratorFill: { withPerson: number; total: number };
-  };
+  } | null;
   weeks: { week: string; leads: number; opr: number; quotes: number }[];
   /** Розбивка за `grain` (якщо його передали): відділ і кожна людина — ті самі предикати й атрибуція, що в `rows`;
    *  тімлід отримує лише свою команду. Відділ = сума людей (як `totals`). */
@@ -236,9 +237,12 @@ export interface LeadgenStatsResp {
   closures: { reason: string; deals: number }[];
   handoffs: { kommoId: number; day: string; name: string | null; manager: string | null; url: string }[];
   handoffsLimit: number;
-  warmingNow: number;
+  warmingNow: number | null;
   callRule: string;
   scopedTo: number | null;
+  /** «own» — відповідь лідгену: лише свій рядок + підсумки команди (рішення власника 02.10.2026). */
+  viewer?: "own";
+  selfId?: number;
   /** Люди з подіями поза командою «Лідогенерація» — лише рівню компанії (тімліду порожньо). */
   others?: LeadgenPersonRow[];
   othersTotals?: { leads: number; opr: number; quotes: number; warming: number; calls: number };

@@ -295,3 +295,21 @@ test("#1175 ЕКРАН: план на дзвінки й гроші — у фор
   assert.match(sec, /<ExtraPlanLines extra=\{tp\.extra\} \/>/, "🔴 плитка команди не показує дзвінки й гроші проти плану");
   assert.match(sec, /<ExtraPlanLines extra=\{pp\.extra\} \/>/, "🔴 плитка людини не показує дзвінки й гроші проти плану");
 });
+
+/**
+ * #1254 — ЕКРАН ДЛЯ ЛІДГЕНА Й ДЛЯ МЕНЕДЖЕРА ПРОДАЖУ (рішення власника 02.10.2026): відмова 403 показується
+ * ТЕКСТОМ СЕРВЕРА (не «тимчасовий збій зʼєднання» з кнопкою повтору) і на статистиці, і в планах; лідгену
+ * не малюються блоки, яких сервер йому не віддає («Інші», «Деталі» з рівнем відділу), і немає вибору людини.
+ * 🧨 САБОТАЖ: прибрати `if (r?.status === 403)` з циклу завантаження → червоніє.
+ */
+test("#1254 ЕКРАН: 403 — текстом сервера, не «збій зʼєднання»; лідгену без «Інших», «Деталей» і вибору людини", () => {
+  const dir = path.join(FE, "src", "pages", "dashboard", "sections");
+  const sec = readFileSync(path.join(dir, "LeadgenSection.tsx"), "utf8");
+  assert.match(sec, /if \(r\?\.status === 403\) \{\s*setDenied\(/, "🔴 статистика: відмову 403 читає як збій зʼєднання");
+  assert.match(sec, /const own = d\?\.viewer === "own";/, "🔴 екран не розпізнає відповідь лідгену");
+  assert.match(sec, /\{!own && <Others /, "🔴 лідгену малюється блок «Інші»");
+  assert.match(sec, /\{!own && <Details /, "🔴 лідгену малюються «Деталі» з рівнем відділу");
+  assert.match(sec, /\{!own && <select value=\{who\}/, "🔴 лідгену показується вибір людини");
+  const plans = readFileSync(path.join(dir, "LeadgenPlanFormation.tsx"), "utf8");
+  assert.match(plans, /r\?\.status === 403 && typeof r\.data\?\.error === "string" \? r\.data\.error/, "🔴 плани: відмову 403 показано як збій");
+});
