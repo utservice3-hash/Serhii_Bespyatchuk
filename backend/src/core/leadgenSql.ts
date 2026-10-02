@@ -39,44 +39,12 @@ export function leadStatusPred(col: string, taken: string, opr: string): string 
   return `${col} IN (${taken}, ${opr})`;
 }
 
-/** Вікно «вхід у 142 → угода, яку CRM з нього створила», секунди. Значення — `LINK_*_SEC` у `leadgenHandoffRules.ts`. */
-export interface LinkWindow { beforeSec: number; afterSec: number }
-
-/**
- * 🔁 ЕСТАФЕТНА КВАЛІФІКАЦІЯ — вхід у 142, який породив лише КОПІЮ в Продзвоні, а копію потім
- * кваліфікували знову. Прорахунок тут ОДИН, і рахується його друга, справжня кваліфікація.
- *
- * Звідки (30.09.2026, звірка з таблицями лідгенів): CRM на кваліфікації інколи створює не угоду
- * менеджера, а нову угоду в Продзвоні (примітка `lead_auto_created`, `lead_child_links`); лідген
- * кваліфікує її вдруге, і тоді вже зʼявляється угода менеджера. Ми рахували обидва входи: вересень
- * Сердюк 116 (таблиця 115), Шевчук 137 (136), Демчук 149 → 148; Крупник 53 без змін. Розрив
- * «кваліфікація → створення копії» на проді — до 9 с, тож вікно передач (−10…+120 с) її покриває.
- *
- * Естафета = за вікном від входу CRM створила з цієї угоди копію в Продзвоні, яка сама має вхід у 142
- * Продзвону, і НЕ створила нічого поза Продзвоном (інакше це справжня передача, як і була).
- * Копію, що ще не кваліфікована, не чіпаємо: поки другої кваліфікації немає, перша — єдиний прорахунок.
- * ОДИН вираз на лічильник `quotes` і на передачі (`handoffLinkQuery`), тож їхня рівність (`#675b`) тримається.
- * `pz`, `qualified` — місця параметрів (воронки Продзвону, «Кваліфіковано»); аліаси `e` (подія) і `d` (угода Продзвону).
- */
-export function relayEntryPred(pz: string, qualified: string, win: LinkWindow): string {
-  const w = `BETWEEN e.changed_at - INTERVAL '${Math.trunc(win.beforeSec)} seconds'
-                                    AND e.changed_at + INTERVAL '${Math.trunc(win.afterSec)} seconds'`;
-  return `(EXISTS (SELECT 1 FROM lead_child_links rl JOIN deals rc ON rc.kommo_id = rl.child_id
-                   WHERE rl.parent_id = d.kommo_id AND rc.pipeline_id = ANY(${pz}) AND rc.created_at_kommo ${w}
-                     AND EXISTS (SELECT 1 FROM deal_stage_events re WHERE re.kommo_id = rc.kommo_id
-                                   AND re.pipeline_id = ANY(${pz}) AND re.status_id = ${qualified}))
-        AND NOT EXISTS (SELECT 1 FROM lead_child_links rl JOIN deals rc ON rc.kommo_id = rl.child_id
-                   WHERE rl.parent_id = d.kommo_id AND NOT (rc.pipeline_id = ANY(${pz})) AND rc.created_at_kommo ${w}))`;
-}
-
 /** Чотири лічильники — ОДИН вираз на всі форми запиту. */
-function stageCounts(win: LinkWindow): string {
-  return `COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND ${leadStatusPred("e.status_id", "$4", "$5")}) AS leads,
+const STAGE_COUNTS =
+  `COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND ${leadStatusPred("e.status_id", "$4", "$5")}) AS leads,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = $5) AS opr,
-            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = $8
-                                               AND NOT ${relayEntryPred("$3", "$8", win)}) AS quotes,
+            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = $8) AS quotes,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($6) AND e.status_id = $7) AS warming`;
-}
 
 /** Чотири стадії, що рахуються, — з місцями параметрів, щоб той самий предикат ставав у різні запити. */
 function stagePred(p: { pz: string; taken: string; opr: string; qualified: string; react: string; warming: string }): string {
@@ -120,12 +88,11 @@ export function bucketKeySql(grain: LeadgenBucketGrain, col: string): string {
  * тижні, рахується в кожному з них, а за період — раз. Σ тижнів ≥ періоду, і це правда.
  *
  * Параметри: $1 from · $2 to · $3 воронки Продзвону · $4 «Взято в роботу» · $5 «ОПР» ·
- * $6 воронки Реактивації · $7 «Підігрівається» · $8 «Кваліфіковано». `win` — вікно естафети (`relayEntryPred`).
+ * $6 воронки Реактивації · $7 «Підігрівається» · $8 «Кваліфіковано».
  */
 export function stageCountsQuery(
-  from: string, to: string, ids: LeadgenStageIds, win: LinkWindow, bucket: LeadgenBucketGrain | null = null,
+  from: string, to: string, ids: LeadgenStageIds, bucket: LeadgenBucketGrain | null = null,
 ): SqlQuery {
-  const STAGE_COUNTS = stageCounts(win);
   const values = [from, to, ids.pz, ids.taken, ids.opr, ids.react, ids.warming, ids.qualified];
   if (bucket) {
     return {
@@ -178,7 +145,7 @@ export interface HandoffLinkIds { pz: readonly number[]; qualified: number; mana
  * Параметри: $1 from · $2 to · $3 воронки Продзвону · $4 «Кваліфіковано» · $5 воронки угод менеджера.
  */
 export function handoffLinkQuery(
-  from: string, to: string, ids: HandoffLinkIds, win: LinkWindow,
+  from: string, to: string, ids: HandoffLinkIds, win: { beforeSec: number; afterSec: number },
 ): SqlQuery {
   const before = Math.trunc(win.beforeSec), after = Math.trunc(win.afterSec);
   return {
@@ -217,7 +184,6 @@ export function handoffLinkQuery(
        LEFT JOIN managers sm ON sm.id = x.manager_id
       WHERE e.pipeline_id = ANY($3) AND e.status_id = $4
         AND (e.changed_at ${K})::date BETWEEN $1 AND $2
-        AND NOT ${relayEntryPred("$3", "$4", win)}
       ORDER BY e.changed_at, e.kommo_id`,
     values: [from, to, ids.pz, ids.qualified, ids.managerPipelines],
   };
