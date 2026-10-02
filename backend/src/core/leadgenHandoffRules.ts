@@ -440,12 +440,85 @@ export function handoffDealRow(
 // ─────────────────────── МЕЖА ТІМЛІДА — ОДИН ПОМІЧНИК НА ТРИ РОУТИ ЕКРАНА ───────────────────────
 
 /**
+ * Автор запиту для меж екрана. `leadgenTeamId` — команда «Лідогенерація», якщо автор ЗАРАЗ її
+ * активний учасник (заповнює роут одним запитом, `leadgenViewerAuth`); інакше `null`/відсутнє.
+ */
+export interface LeadgenAuth {
+  role: string; teamId: number | null | undefined; managerId?: number | null; leadgenTeamId?: number | null;
+}
+
+/** Текст відмови менеджеру, який не в команді «Лідогенерація» (рішення власника 02.10.2026). */
+export const NOT_LEADGEN_TEXT = "Розділ для команди «Лідогенерація» — для вашої ролі тут даних немає.";
+
+/**
+ * 👁 ХТО ДИВИТЬСЯ ЕКРАН (рішення власника 02.10.2026, ТЗ 07.09: «лідген бачить свій рядок і підсумок
+ * команди»). Лідгени ходять роллю «менеджер», а нею ж — менеджери продажу, тож роль сама нічого не
+ * каже; вирішує ЧЛЕНСТВО в команді:
+ *  • не менеджер (тімлід, адмін-рівень…) — `all`: як було, межі тімліда тримає `leadgenAuthScope`;
+ *  • менеджер — активний учасник «Лідогенерації» — `own`: свій рядок, свої угоди й гроші, свій план,
+ *    підсумок команди; рядків, угод і грошей колег — НІ;
+ *  • менеджер поза командою (продажі) — `deny` з поясненням, без жодних цифр.
+ * `managerId` без значення чи ≤ 0 — `deny`: «свої дані» без «себе» не існують (♾ правило 7).
+ */
+export type LeadgenViewer = { kind: "all" } | { kind: "own"; selfId: number } | { kind: "deny"; error: string };
+export function leadgenViewer(auth: LeadgenAuth): LeadgenViewer {
+  if (auth.role !== "manager") return { kind: "all" };
+  if (auth.leadgenTeamId != null && auth.managerId != null && auth.managerId > 0) return { kind: "own", selfId: auth.managerId };
+  return { kind: "deny", error: NOT_LEADGEN_TEXT };
+}
+
+/** Лише «свої» елементи масиву з полем `managerId`. Не масив — порожньо (fail-closed). */
+function onlySelf(v: unknown, selfId: number): unknown[] {
+  return Array.isArray(v) ? v.filter((x) => (x as { managerId?: unknown })?.managerId === selfId) : [];
+}
+
+/**
+ * ✂️ ВІДПОВІДЬ `/leadgen-stats` ДЛЯ ЛІДГЕНА — БІЛИЙ СПИСОК, а не «прибрати зайве»: поле, яке хтось
+ * додасть у відповідь завтра, лідгену НЕ піде, доки його свідомо не внесуть сюди.
+ * Лишається: свій рядок, підсумки КОМАНДИ (totals, конверсії, розбивка команди, план команди), свої
+ * гроші й розбивка. Порожніми (форма та сама, щоб екран не падав) — «Інші», джерела, тижні відділу,
+ * закриття, журнал передач з іменами, рівень відділу.
+ */
+export function ownLeadgenStatsBody(body: Record<string, unknown>, selfId: number): Record<string, unknown> {
+  const plans = body.plans as { elapsed?: unknown; byPerson?: unknown; team?: unknown } | undefined;
+  const hm = body.handoffMoney as { totals?: unknown; byPerson?: unknown } | undefined;
+  const out: Record<string, unknown> = {
+    viewer: "own", selfId,
+    from: body.from, to: body.to, totals: body.totals, conversions: body.conversions, callRule: body.callRule,
+    scopedTo: body.scopedTo,
+    rows: onlySelf(body.rows, selfId), teamMembers: onlySelf(body.teamMembers, selfId),
+    plans: plans ? { elapsed: plans.elapsed, byPerson: onlySelf(plans.byPerson, selfId), team: plans.team } : undefined,
+    handoffMoney: hm ? { totals: hm.totals, byPerson: onlySelf(hm.byPerson, selfId) } : undefined,
+    others: [], othersTotals: null, bySource: [], weeks: [], closures: [], handoffs: [], handoffsLimit: 0,
+    warmingNow: null, department: null,
+  };
+  if (body.grain) {
+    out.grain = body.grain;
+    out.buckets = body.buckets;
+    out.bucketsByPerson = onlySelf(body.bucketsByPerson, selfId);
+    out.handoffMoneyBuckets = body.handoffMoneyBuckets;
+    out.handoffMoneyBucketsByPerson = onlySelf(body.handoffMoneyBucketsByPerson, selfId);
+  }
+  return out;
+}
+
+/** ✂️ Тренд для лідгена — той самий білий список: підсумки команди + лише свій рядок і свої гроші. */
+export function ownLeadgenTrendBody(body: Record<string, unknown>, selfId: number): Record<string, unknown> {
+  return {
+    viewer: "own", selfId, months: body.months, to: body.to, buckets: body.buckets, handoffMoney: body.handoffMoney,
+    bucketsByPerson: onlySelf(body.bucketsByPerson, selfId),
+    handoffMoneyByPerson: onlySelf(body.handoffMoneyByPerson, selfId),
+  };
+}
+
+/**
  * 🔒 СКОУП ВІДПОВІДІ З РОЛІ — ЄДИНЕ МІСЦЕ, ДЕ ВІН ОБЧИСЛЮЄТЬСЯ для `/leadgen-stats`,
  * `/leadgen-trend` і `/leadgen-handoff-deals` (рішення власника 22.09.2026, правило 7).
  *  • тімлід — лише своя команда; без команди — `-1` (жодної), а НЕ `null` (весь відділ):
  *    порожній скоуп не можна виражати значенням, що означає «без обмеження» (♾ правило 7);
- *  • менеджер — ніщо (`-1`/`-1`). Роут відмовляє йому першим оператором; тут — друга лінія,
- *    щоб помилковий виклик дав порожнечу, а не чужі гроші;
+ *  • менеджер-лідген (`leadgenViewer` → `own`) — скоуп команди «Лідогенерація» (підсумок команди),
+ *    рядки колег ріже `ownLeadgen*Body`; будь-який інший менеджер — ніщо (`-1`/`-1`): роут відмовляє
+ *    йому першим, тут — друга лінія, щоб помилковий виклик дав порожнечу, а не чужі гроші;
  *  • решта (адмін-рівень, фінансист, КВП…) — весь відділ.
  *
  * 🔴 НАВІЩО ОКРЕМОЮ ФУНКЦІЄЮ (ревʼю F1). Скоуп писався в кожному обробнику літералом, і жоден
@@ -453,8 +526,13 @@ export function handoffDealRow(
  * всього відділу при повністю зеленому наборі. Тепер роут не складає скоуп сам — `#681b`
  * вимагає, щоб у ядро йшов саме результат цієї функції (або `clamp.scope`, що з неї ж).
  */
-export function leadgenAuthScope(auth: { role: string; teamId: number | null | undefined }): HandoffScope {
-  if (auth.role === "manager") return { teamId: -1, managerId: -1 };
+export function leadgenAuthScope(auth: LeadgenAuth): HandoffScope {
+  // Лідген (роль «менеджер», активний учасник команди) — скоуп КОМАНДИ: підсумок команди йому
+  // показується (рішення власника 02.10.2026). Чужі рядки ріже вже `ownLeadgen*Body`, а не скоуп.
+  if (auth.role === "manager") {
+    const v = leadgenViewer(auth);
+    return v.kind === "own" ? { teamId: auth.leadgenTeamId as number, managerId: null } : { teamId: -1, managerId: -1 };
+  }
   if (auth.role === "team_lead") return { teamId: auth.teamId ?? -1, managerId: null };
   return { teamId: null, managerId: null };
 }
@@ -464,17 +542,22 @@ export type HandoffDealsScope = { ok: true; scope: HandoffScope } | { ok: false;
 /**
  * 🔒 ХТО ЯКИЙ СПИСОК ПЕРЕДАЧ БАЧИТЬ — та сама межа, що в рядків `/leadgen-stats`
  * (`leadgenAuthScope`), плюс одна людина:
- *  • менеджер — 403 (роут перевіряє це першим оператором; тут — друга лінія);
+ *  • менеджер — лише лідген і лише СВОЇ угоди (рішення власника 02.10.2026); решта менеджерів — 403;
  *  • тімлід — лише своя команда; `managerId` людини з ЧУЖОЇ команди (або невідомої) — 403,
  *    а не порожній список: порожнеча читалась би як «у неї нуль передач»;
  *  • решта — будь-кого, або весь відділ.
  * `managerTeamId` — команда запитаної людини (`undefined` — такої людини немає).
  */
 export function handoffDealsScope(
-  auth: { role: string; teamId: number | null | undefined },
+  auth: LeadgenAuth,
   managerId: number | null, managerTeamId: number | null | undefined,
 ): HandoffDealsScope {
-  if (auth.role === "manager") return { ok: false, status: 403 };
+  if (auth.role === "manager") {
+    // Лідген — лише СВОЇ угоди: чужий `managerId` — 403 (а не «тихо свої»), без нього — свої.
+    const v = leadgenViewer(auth);
+    if (v.kind !== "own" || (managerId != null && managerId !== v.selfId)) return { ok: false, status: 403 };
+    return { ok: true, scope: { teamId: auth.leadgenTeamId as number, managerId: v.selfId } };
+  }
   const base = leadgenAuthScope(auth);
   if (base.teamId != null && managerId != null && managerTeamId !== base.teamId) return { ok: false, status: 403 };
   return { ok: true, scope: { teamId: base.teamId, managerId } };

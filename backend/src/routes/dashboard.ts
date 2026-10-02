@@ -84,7 +84,8 @@ import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, 
   leadgenBuckets, sumBuckets, personBucketWire, leadgenHandoffMoney, leadgenTrend, leadgenManagerTeam,
 } from "../core/leadgenStats.js";
 import { handoffMoneyWire, personMoneyWire, bucketMoneyWire, bucketPersonMoneyWire, handoffDealsScope,
-  leadgenAuthScope, parseLeadgenGrain, parseTrendMonths, parseManagerIdParam } from "../core/leadgenHandoffRules.js";
+  leadgenAuthScope, parseLeadgenGrain, parseTrendMonths, parseManagerIdParam,
+  leadgenViewer, ownLeadgenStatsBody, ownLeadgenTrendBody, type LeadgenAuth } from "../core/leadgenHandoffRules.js";
 import { leadgenRosterView, planView, planMonthOf, parseLeadgenSubmit, leadgenSubmitRefusal, mayEverSubmitLeadgenPlan,
   mayApproveLeadgenPlan, LEADGEN_PLAN_METRICS, emptyPlanRecord, type RosterRow, type TeamMember } from "../core/leadgenPlanRules.js";
 import { leadgenTeamMembers, leadgenPlanTarget, approvedLeadgenPlans, leadgenFormation, submitLeadgenPlan,
@@ -367,9 +368,23 @@ const zeroLeadgenRow = (m: TeamMember): RosterRow => ({
  * число. Обидва якорі підписані окремо (правило №1): відправлення — `load_at`,
  * отримані кошти — датований анкер ядра.
  */
+/**
+ * 👁 Автор запиту для меж екрана «Лідогенерація» + чи він ЗАРАЗ активний учасник команди
+ * (рішення власника 02.10.2026: лідген бачить свою картку й підсумок команди, менеджер продажу —
+ * напис без даних). Запит членства — ЛИШЕ для ролі «менеджер»: решті він нічого не змінює.
+ * Сама межа — чиста `leadgenViewer` / `leadgenAuthScope` / `handoffDealsScope` (`#1250`).
+ */
+async function leadgenViewerAuth(a: NonNullable<Express.Request["auth"]>): Promise<LeadgenAuth> {
+  const base: LeadgenAuth = { role: a.role, teamId: a.teamId, managerId: a.managerId };
+  if (a.role !== "manager" || a.managerId == null || a.managerId <= 0) return base;
+  const t = await leadgenPlanTarget(a.managerId);
+  return { ...base, leadgenTeamId: t?.isMember ? metrics.LEADGEN_DASH_TEAM_ID : null };
+}
+
 dashboardRouter.get("/leadgen-stats", async (req, res) => {
-  const auth = req.auth!;
-  if (auth.role === "manager") return res.status(403).json({ error: "Forbidden" });
+  const auth = await leadgenViewerAuth(req.auth!);
+  const viewer = leadgenViewer(auth);
+  if (viewer.kind === "deny") return res.status(403).json({ error: viewer.error });
   // Порожнє = «не задано» (`dateParam`), а неіснуюча дата — 400, а не 500 з глибини запиту.
   const from = dateParam(req.query.from);
   const to = dateParam(req.query.to);
@@ -471,7 +486,8 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
     body.handoffMoneyBucketsByPerson = (hm.buckets ?? []).flatMap((b) =>
       b.byPerson.map((p) => bucketPersonMoneyWire(b.bucket, p.managerId, p.money)));
   }
-  res.json(body);
+  // Лідген — лише своє + підсумок команди, білим списком (`#1251`).
+  res.json(viewer.kind === "own" ? ownLeadgenStatsBody(body, viewer.selfId) : body);
 });
 
 /**
@@ -484,8 +500,9 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
  * 🔒 Межа — як у `/leadgen-stats`: вкладка `leadgen`, менеджер — 403 першим оператором.
  */
 dashboardRouter.get("/leadgen-trend", async (req, res) => {
-  if (req.auth!.role === "manager") return res.status(403).json({ error: "Forbidden" });
-  const auth = req.auth!;
+  const auth = await leadgenViewerAuth(req.auth!);
+  const viewer = leadgenViewer(auth);
+  if (viewer.kind === "deny") return res.status(403).json({ error: viewer.error });
   const to = dateParam(req.query.to);
   if (!to || !isRealDate(to)) return res.status(400).json({ error: "Потрібен to — дата YYYY-MM-DD" });
   const months = parseTrendMonths(req.query.months);
@@ -493,14 +510,15 @@ dashboardRouter.get("/leadgen-trend", async (req, res) => {
   const scope = leadgenAuthScope(auth);
 
   const t = await leadgenTrend(to, months, scope);
-  res.json({
+  const trend: Record<string, unknown> = {
     months: t.months, to: t.to,
     buckets: sumBuckets(t.byPerson, t.monthStarts),
     bucketsByPerson: t.byPerson.map(personBucketWire),
     handoffMoney: t.money.map((m) => bucketMoneyWire(m.bucket, m.totals)),
     handoffMoneyByPerson: t.money.flatMap((m) =>
       m.byPerson.map((p) => bucketPersonMoneyWire(m.bucket, p.managerId, p.money))),
-  });
+  };
+  res.json(viewer.kind === "own" ? ownLeadgenTrendBody(trend, viewer.selfId) : trend);
 });
 
 /**
@@ -515,8 +533,9 @@ dashboardRouter.get("/leadgen-trend", async (req, res) => {
  * команда; `managerId` людини з чужої команди — 403, а не порожній список.
  */
 dashboardRouter.get("/leadgen-handoff-deals", async (req, res) => {
-  if (req.auth!.role === "manager") return res.status(403).json({ error: "Forbidden" });
-  const auth = req.auth!;
+  const auth = await leadgenViewerAuth(req.auth!);
+  const viewer = leadgenViewer(auth);
+  if (viewer.kind === "deny") return res.status(403).json({ error: viewer.error });
   const from = dateParam(req.query.from);
   const to = dateParam(req.query.to);
   if (!from || !to || !isRealDate(from) || !isRealDate(to)) {
@@ -527,7 +546,7 @@ dashboardRouter.get("/leadgen-handoff-deals", async (req, res) => {
   // Команду людини питаємо завжди, коли її названо: рішення «своя / чужа» — лише в `handoffDealsScope`,
   // а не в другій умові по ролі тут (`#681b`). Запит — один рядок за ключем.
   const managerTeam = managerId != null ? await leadgenManagerTeam(managerId) : null;
-  const clamp = handoffDealsScope({ role: auth.role, teamId: auth.teamId }, managerId, managerTeam);
+  const clamp = handoffDealsScope(auth, managerId, managerTeam);
   if (!clamp.ok) return res.status(clamp.status).json({ error: "Forbidden" });
 
   const hm = await leadgenHandoffMoney(from, to, clamp.scope);
@@ -546,14 +565,17 @@ dashboardRouter.get("/leadgen-handoff-deals", async (req, res) => {
  * накриває) + рядки `accessMatrix.ts`. SQL — лише в `core/leadgenPlans.ts` (`#17c`, `#750`).
  */
 dashboardRouter.get("/leadgen-plans", async (req, res) => {
-  if (req.auth!.role === "manager") return res.status(403).json({ error: "Forbidden" });
-  const auth = req.auth!;
+  const auth = await leadgenViewerAuth(req.auth!);
+  const viewer = leadgenViewer(auth);
+  if (viewer.kind === "deny") return res.status(403).json({ error: viewer.error });
   const month = planMonthOf(req.query.month);
   if (!month) return res.status(400).json({ error: "month — YYYY-MM" });
   const scope = leadgenAuthScope(auth);
   const all = await leadgenTeamMembers();
   // Тімлід — лише своя команда (межа та сама, що в рядків екрана); компанія — усі учасники.
-  const members = all.filter((m) => scope.teamId == null || m.teamId === scope.teamId);
+  const members = all.filter((m) => (scope.teamId == null || m.teamId === scope.teamId)
+    // Лідген бачить лише СВІЙ план (рішення власника 02.10.2026); подати чи затвердити він і так не може.
+    && (viewer.kind !== "own" || m.managerId === viewer.selfId));
   const ids = members.map((m) => m.managerId);
   // Довідка для тімліда — факт трьох попередніх місяців і цього, ТИМИ САМИМИ лічильниками, що екран.
   const histFrom = shiftMonthStart(month, -3), monthTo = monthEndOf(month);
@@ -564,7 +586,7 @@ dashboardRouter.get("/leadgen-plans", async (req, res) => {
   const histMonths = [-3, -2, -1, 0].map((k) => shiftMonthStart(month, k));
   const out = members.map((m) => {
     const f = form.get(m.managerId);
-    const refusal = leadgenSubmitRefusal({ role: auth.role, teamId: auth.teamId }, { managerId: m.managerId, teamId: m.teamId, isMember: true });
+    const refusal = leadgenSubmitRefusal({ role: auth.role, teamId: auth.teamId ?? null }, { managerId: m.managerId, teamId: m.teamId, isMember: true });
     return {
       managerId: m.managerId, name: m.name,
       canSubmit: refusal == null,
