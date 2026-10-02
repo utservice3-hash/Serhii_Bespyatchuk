@@ -378,7 +378,7 @@ async function leadgenViewerAuth(a: NonNullable<Express.Request["auth"]>): Promi
   const base: LeadgenAuth = { role: a.role, teamId: a.teamId, managerId: a.managerId };
   if (a.role !== "manager" || a.managerId == null || a.managerId <= 0) return base;
   const t = await leadgenPlanTarget(a.managerId);
-  return { ...base, leadgenTeamId: t?.isMember ? metrics.LEADGEN_DASH_TEAM_ID : null };
+  return { role: a.role, teamId: a.teamId, managerId: a.managerId, leadgenTeamId: t?.isMember ? metrics.LEADGEN_DASH_TEAM_ID : null };
 }
 
 dashboardRouter.get("/leadgen-stats", async (req, res) => {
