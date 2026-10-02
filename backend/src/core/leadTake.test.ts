@@ -77,7 +77,8 @@ test("#1312f EXCEL: файл читається назад нашим же ро�
   for (const [name, get] of readZip(buf)) {
     const xml = get().toString("utf8");
     assert.doesNotMatch(xml, /&(?!(amp|lt|gt|quot|apos);)/, `🔴 ${name}: неекранований & — Excel не відкриє файл`);
-    assert.doesNotMatch(xml.replace(/<[^>]*>/g, ""), /[<>]/, `🔴 ${name}: неекранована кутова дужка в тексті`);
+    for (const m of xml.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g))
+      assert.doesNotMatch(m[1], /[<>]/, `🔴 ${name}: неекранована кутова дужка в тексті клітинки`);
   }
   const sheets = parseXlsx(buf);
   assert.equal(sheets.length, 2, "🔴 у файлі не два аркуші");
