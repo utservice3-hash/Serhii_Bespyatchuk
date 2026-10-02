@@ -120,3 +120,12 @@ export function foldWeek(cells: readonly WeekPlanCell[], blockStarts: readonly s
   }
   return out;
 }
+
+/**
+ * План на графіку — лише до поточного періоду включно (точка = понеділок тижня або 1-ше місяця ≤ сьогодні).
+ * 📐 Заміряно 02.10.2026 на справжньому екрані: без обрізки лінія тяглась до 26.10 і до 2 млн ₴ — майбутні тижні
+ * Звіт ще не зафіксував, їхній автоплан рухається щодня. Ще й вісь X їхала в майбутнє, і «3 міс» зсувалось уперед.
+ */
+export function clipPlanToToday<T extends { points: { period: string }[] }>(plan: T[], today: string): T[] {
+  return plan.map((p) => ({ ...p, points: p.points.filter((x) => x.period <= today) })).filter((p) => p.points.length > 0);
+}

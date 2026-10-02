@@ -13,7 +13,7 @@ import { leadgenBuckets, sumBuckets } from "../core/leadgenStats.js";
 import {
   STATS_SEAM, isCrmAble, LIVE_TEAMS, DEPSTATS_DEPT, DEPSTATS_METRIC_MAP, hasDepstats,
 } from "../statistics/seriesCatalog.js";
-import { sheetWeekToMonday } from "../statistics/statsCompare.js";
+import { sheetWeekToMonday, clipPlanToToday } from "../statistics/statsCompare.js";
 import { anomaliesFor, applyCorrections } from "../statistics/anomalies.js";
 import { buildSummary, planSeries, dispatchPlanSeries, ARCHIVED_TEAM_IDS } from "../statistics/statsSummary.js";
 
@@ -250,6 +250,7 @@ statsSeriesRouter.get("/series", async (req, res) => {
   const inScope = (p: { scopeKey: string }) => keys.has(p.scopeKey) && !(set.find((s) => s.scopeKey === p.scopeKey)?.benchmark);
   if (metric === "payment_received" && block === "sales") plan = (await planSeries(g, from, to)).filter(inScope);
   else if (metric === "cars_delivered" && block === "sales") plan = (await dispatchPlanSeries(g, from > STATS_SEAM ? from : STATS_SEAM, to)).filter(inScope);
+  plan = clipPlanToToday(plan, kyivToday());
   res.json({ block, metric, granularity: g, seam: STATS_SEAM, crmAble: isCrmAble(block, metric), live: hasLive(block, metric), series,
     anomalies: anomaliesFor(metric, g), plan });
 });

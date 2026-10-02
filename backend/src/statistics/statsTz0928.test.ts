@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { compareWindows, deltaPct, planPct, rankByPlan, sheetWeekToMonday, weekOf, foldWeek, type WeekPlanCell } from "./statsCompare.js";
+import { compareWindows, deltaPct, planPct, rankByPlan, sheetWeekToMonday, weekOf, foldWeek, clipPlanToToday, type WeekPlanCell } from "./statsCompare.js";
 import { ANOMALIES, anomaliesFor, CORRECTIONS, applyCorrections } from "./anomalies.js";
 import { needsApi, API_BASE } from "../testMode.js";
 
@@ -216,6 +216,16 @@ test("#883 ФОРМУЛА — ВИДИМИМ ПІДПИСОМ У КОЖНОГО 
   const bare = lines.filter((l) => !/\bhint: (?:"[^"]{10,}"|[A-Z_]+_HINT)/.test(l)).map((l) => l.match(/label: "([^"]+)"/)?.[1]);
   assert.deepEqual(bare, [], `🔴 показники без видимої формули: ${bare.join(", ")}`);
   assert.match(fe, /\{metric\.hint && <div style=\{\{ fontSize: 12, color: MUTED, margin: "6px 0 0" \}\}>📐 \{metric\.hint\}/, "🔴 формула більше не виводиться під чипами показників");
+});
+
+test("#882c ПЛАН НА ГРАФІКУ — НЕ В МАЙБУТНЄ: поточний тиждень лишається, наступний — ні", () => {
+  const plan = [{ scopeKey: "company", points: [{ period: "2026-09-21", value: 1 }, { period: "2026-09-28", value: 2 }, { period: "2026-10-05", value: 3 }] },
+                { scopeKey: "5", points: [{ period: "2026-10-12", value: 4 }] }];
+  const c = clipPlanToToday(plan, "2026-10-02");
+  assert.deepEqual(c.map((p) => [p.scopeKey, p.points.map((x) => x.period)]), [["company", ["2026-09-21", "2026-09-28"]]],
+    "🔴 план майбутніх тижнів на графіку (або обрізано поточний тиждень, що вже йде)");
+  assert.deepEqual(clipPlanToToday([{ scopeKey: "company", points: [{ period: "2026-10-01", value: 9 }] }], "2026-10-01")[0].points.length, 1, "🔴 сьогоднішній місяць/тиждень зник");
+  assert.match(codeOnly(read("backend/src/routes/statisticsSeries.ts")), /plan = clipPlanToToday\(plan, kyivToday\(\)\);\s*res\.json\(/, "🔴 серія віддає план без обрізки майбутнього");
 });
 
 // ─────────────────────────────── ЖИВІ (test:prod) ───────────────────────────────
