@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea, ReferenceDot, Brush,
 } from "recharts";
@@ -6,6 +6,7 @@ import { effGranOf } from "../statsGran";
 import { fetchStatsSeries, saveStatsManual, fetchLapsedClients, type StatsSeriesResp, type StatsSeries, type LapsedClientsResp } from "../../../api";
 import { todayKyiv } from "../periodRules";
 import { StatisticsSummary } from "./StatisticsSummary";
+import { ChartSkeleton, SkelBox, TableSkeleton } from "../Skeleton";
 
 const SEAM = "2026-07-01";
 // dataviz категорійна палітра (фіксований порядок; компанія завжди [0]). CVD-safe рампи.
@@ -141,6 +142,10 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   const [range, setRange] = useState("3м");
   const [resp, setResp] = useState<StatsSeriesResp | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
+  /* ⏳ Графік вантажиться — на його місці заготовка ТІЄЇ САМОЇ висоти, легенда лишається (прохання Романа 02.10). */
+  const [chartLoading, setChartLoading] = useState(true);
+  /** Карта графіка — сюди плавно прокручує клік по команді в таблиці. */
+  const chartRef = useRef<HTMLDivElement | null>(null);
   const [nonce, setNonce] = useState(0);
   /** Які серії ПОКАЗАНІ. Дефолт — лише компанія; команди додаються вибором (ТЗ, блок 4, п.1). */
   const [shown, setShown] = useState<Set<string> | null>(null);
@@ -151,14 +156,14 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
 
   const effGran = effGranOf(metric, gran); // напрямок без місячних (ВЛТ) → тиждень
   useEffect(() => {
-    let alive = true; setResp(null); setLoadErr(null); setWin(null);
+    let alive = true; setChartLoading(true); setLoadErr(null); setWin(null);
     if (!metric) return; // категорія без метрик серій не тягне
     const m = metric;    // звужений локальний — далі жодного дотику до можливо-порожнього `metric`
     fetchStatsSeries({ block: m.block, metric: m.key, granularity: effGran, ...(m.unitScope ? { unit: m.unitScope } : {}) })
-      .then((d) => alive && setResp(d))
+      .then((d) => { if (alive) { setResp(d); setChartLoading(false); } })
       /* 🔴 ПОМИЛКА — ЯВНО, а не «Немає даних (очікує вводу)» і не вічне «Завантаження…» (ТЗ, блок 1, п.2):
          обидва варіанти брехали про причину. */
-      .catch((e) => alive && setLoadErr(e?.response?.data?.error ?? (e?.response?.status ? `сервер відповів ${e.response.status}` : "немає звʼязку з сервером")));
+      .catch((e) => alive && (setChartLoading(false), setLoadErr(e?.response?.data?.error ?? (e?.response?.status ? `сервер відповів ${e.response.status}` : "немає звʼязку з сервером"))));
     return () => { alive = false; };
   }, [metric?.block, metric?.key, effGran, metric?.unitScope, nonce]);
 
@@ -245,6 +250,8 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
     setPickedTeam(teamId); setShown(null);
     // Таблиця команд рахує «отримані кошти» — графік показує ту саму величину для обраної команди.
     setCatKey("money"); setMetricKey("payment_received");
+    // Плавно до графіка (прохання Романа 02.10): таблиця нагорі, графік нижче — інакше клік «нічого не робить».
+    requestAnimationFrame(() => chartRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
 
   const segBtn = (on: boolean, disabled = false) => ({ fontSize: 12.5, fontWeight: 700, padding: "6px 12px", cursor: disabled ? "not-allowed" : "pointer", border: "none",
@@ -275,7 +282,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
       </div>
 
       {!cat.manualForm && metric && (
-        <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 16, padding: "18px 20px" }}>
+        <div ref={chartRef} style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 16, padding: "18px 20px", scrollMarginTop: 16 }}>
           {/* Чипи метрик; формула — видимим підписом під ними (ТЗ, блок 4, п.5) */}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {cat.metrics.map((m) => (
@@ -333,6 +340,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                 <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> показати архівні
               </label>
             )}
+            {!resp && !loadErr && <SkelBox w={420} h={14} />}
           </div>
 
           {loadErr ? (
@@ -340,8 +348,8 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
               ⚠️ Графік не завантажився: {loadErr}.{" "}
               <button onClick={() => setNonce((n) => n + 1)} style={{ fontSize: 12.5, padding: "4px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", cursor: "pointer" }}>Повторити</button>
             </div>
-          ) : !resp ? (
-            <div className="loading-text" style={{ padding: "18px 0" }}>Завантаження графіка…</div>
+          ) : (chartLoading || !resp) ? (
+            <ChartSkeleton height={300} />
           ) : (
             <>
               <div style={{ userSelect: "none" }}>
@@ -497,7 +505,7 @@ function LapsedClientsBlock() {
         </div>
       </div>
       {err && <div style={{ color: "#b91c1c", fontSize: 13 }}>{err}</div>}
-      {!data && !err && <div className="loading-text">Завантаження…</div>}
+      {!data && !err && <TableSkeleton rows={6} />}
       {data && (
         <>
           <div style={{ fontSize: 13, marginBottom: 10 }}>Разом: <b>{data.total.clients}</b> клієнтів · минулого місяця принесли <b>{fmt(data.total.prevRevenue)} ₴</b></div>

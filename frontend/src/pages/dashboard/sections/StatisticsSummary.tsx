@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchStatsSummary, type StatsSummaryResp, type StatsTile, type StatsTeamRow } from "../../../api";
-import { addDays, sundayOf, monthEnd, addMonth, ddmm } from "../periodRules";
+import { addDays, sundayOf, mondayOf, monthEnd, addMonth, ddmm } from "../periodRules";
+import { TilesSkeleton, TableSkeleton } from "../Skeleton";
 
 /**
  * 📊 ВЕРХ СТОРІНКИ «СТАТИСТИКИ» — ЦИФРИ ЗАМІСТЬ КЛУБКА ЛІНІЙ (ТЗ 28.09.2026, блоки 1–3; задачі 4603–4605, 4367).
@@ -116,6 +117,9 @@ function TeamsTable({ rows, onPick, picked }: { rows: StatsTeamRow[]; onPick: (t
 }
 
 export function StatisticsSummary({ today, onPickTeam, pickedTeam }: { today: string; onPickTeam: (teamId: number) => void; pickedTeam: number | null }) {
+  /* ⏳ ПІД ЧАС ПЕРЕМИКАННЯ ПЕРІОДУ БЛОК НЕ ЗНИКАЄ (прохання Романа 02.10): попередні цифри лишаються
+     приглушеними, поки вантажаться нові; назва періоду рахується з ВИБОРУ, а не з відповіді сервера. */
+  const [loading, setLoading] = useState(true);
   const [gran, setGran] = useState<"week" | "month">("week");
   /** Кінець обраного періоду (неділя / останній день місяця); поточний клампиться до сьогодні сервером. */
   const [end, setEnd] = useState<string>(() => sundayOf(today));
@@ -125,10 +129,10 @@ export function StatisticsSummary({ today, onPickTeam, pickedTeam }: { today: st
 
   const anchor = end > today ? today : end;
   useEffect(() => {
-    let alive = true; setData(null); setErr(null);
+    let alive = true; setLoading(true); setErr(null);
     fetchStatsSummary({ gran, anchor })
-      .then((d) => { if (alive) setData(d); })
-      .catch((e) => { if (alive) setErr(e?.response?.data?.error ?? (e?.response?.status ? `сервер відповів ${e.response.status}` : "немає звʼязку з сервером")); });
+      .then((d) => { if (alive) { setData(d); setLoading(false); } })
+      .catch((e) => { if (alive) { setLoading(false); setErr(e?.response?.data?.error ?? (e?.response?.status ? `сервер відповів ${e.response.status}` : "немає звʼязку з сервером")); } });
     return () => { alive = false; };
   }, [gran, anchor, nonce]);
 
@@ -136,9 +140,9 @@ export function StatisticsSummary({ today, onPickTeam, pickedTeam }: { today: st
   const shift = (n: number) => setEnd((e) => (gran === "week" ? addDays(e, 7 * n) : monthEnd(shiftMonth(e, n))));
   const isCurrent = gran === "week" ? end === sundayOf(today) : end === monthEnd(today);
 
-  const title = data ? (gran === "week"
-    ? `Тиждень ${dm(data.period.from)}–${dm(data.period.to)}`
-    : `${MONTHS[Number(data.period.from.slice(5, 7)) - 1]} ${data.period.from.slice(0, 4)}`) : "…";
+  const title = gran === "week"
+    ? `Тиждень ${dm(mondayOf(end))}–${dm(end)}`
+    : `${MONTHS[Number(end.slice(5, 7)) - 1]} ${end.slice(0, 4)}`;
   const cmpLabel = data ? (data.complete
     ? (gran === "week" ? `минулого тижня` : `минулого місяця`)
     : `${dm(data.prev.from)}–${dm(data.prev.to)}`) : "";
@@ -166,7 +170,8 @@ export function StatisticsSummary({ today, onPickTeam, pickedTeam }: { today: st
             onChange={(e) => e.target.value && setEnd(gran === "week" ? sundayOf(e.target.value) : monthEnd(e.target.value))}
             style={{ padding: "4px 6px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
         </label>
-        {data && !data.complete && (
+        {loading && data && <span style={{ fontSize: 12.5, color: MUTED }}>⏳ оновлюємо…</span>}
+        {!loading && data && !data.complete && (
           <span style={{ fontSize: 12.5, fontWeight: 700, color: "#b45309" }}>
             станом на {dm(data.asOf)} ({dow(data.asOf)}) · порівняння з {dm(data.prev.from)}–{dm(data.prev.to)}
           </span>
@@ -178,14 +183,21 @@ export function StatisticsSummary({ today, onPickTeam, pickedTeam }: { today: st
           ⚠️ Не вдалося порахувати цифри: {err}. <button style={pill} onClick={() => setNonce((n) => n + 1)}>Повторити</button>
         </div>
       )}
-      {!data && !err && <div className="loading-text">Рахуємо цифри періоду…</div>}
-      {data && (
+      {!data && !err && (
         <>
+          <TilesSkeleton n={4} />
+          <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, padding: "12px 14px", marginTop: 14 }}>
+            <TableSkeleton rows={5} />
+          </div>
+        </>
+      )}
+      {data && (
+        <div className={loading ? "is-refreshing" : undefined} aria-busy={loading}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: 12 }}>
             {data.tiles.map((t) => <TileCard key={t.key} t={t} cmpLabel={cmpLabel} />)}
           </div>
           {data.teams.length > 0 && <TeamsTable rows={data.teams} onPick={onPickTeam} picked={pickedTeam} />}
-        </>
+        </div>
       )}
     </div>
   );
