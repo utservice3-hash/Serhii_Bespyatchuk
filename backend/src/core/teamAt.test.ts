@@ -309,3 +309,36 @@ test("#1310 РЕКЛАМНА КОГОРТА: виконується; по ком
     await x.c.query(`DELETE FROM deals WHERE kommo_id IN (201, 202)`);
   }
 });
+
+/**
+ * #1311 — БЕЗ ПЕРЕХОДІВ ДЖЕРЕЛА ВИКОНУЮТЬСЯ І ДАЮТЬ СТАРІ ЧИСЛА. Привід: golden на проді впав
+ * `bind message supplies 1 parameters, but prepared statement requires 0` — без переходів вираз команди
+ * перестав згадувати `$1`, а ростер `managerPlan` передавав місяць лише для нього. Усі інші гейти тут
+ * ходять ІЗ переходами, тож порожній знімок — саме той стан, у якому прод живе сьогодні, — не перевірявся.
+ */
+test("#1311 БЕЗ ПЕРЕХОДІВ: план, гроші, конверсії, воронка, номінації виконуються й рахують за поточною командою", async (t) => {
+  const x = await db(); if ("skip" in x) return t.skip(x.skip);
+  const saved = (await x.c.query(`SELECT manager_id, from_team_id, to_team_id, effective_from, source FROM manager_team_moves`)).rows;
+  await x.c.query(`DELETE FROM manager_team_moves`);
+  try {
+    assert.equal(await x.sql.refreshTeamMoves(x.c), 0, "🔴 знімок не порожній — перевірка не про той стан");
+    const P = { from: "2026-09-01", to: "2026-10-31" };
+    const sep = await x.plans.managerPlan({ month: "2026-09-01", teamId: 5 });
+    assert.deepEqual(sep.rows.map((r) => r.managerId).sort(), [2, 4], "🔴 план команди без переходів не за поточною командою");
+    assert.ok((await x.plans.managerPlan({ month: "2026-09-01" })).rows.length >= 3, "🔴 план відділу порожній");
+    assert.equal((await x.plans.planPerWorkingDay({ teamId: 5 }, "2026-09-01")).monthPlan, 2000, "🔴 план на день команди не той");
+    const byTeam = await x.money.receivedByTeam(P);
+    assert.equal(byTeam.find((r) => r.teamId === 5)?.revenue, 50, "🔴 без переходів гроші команди не за поточною командою");
+    assert.equal((await x.money.successByMgrAtTeam(P)).filter((r) => r.managerId === 1).length, 1, "🔴 без переходів рядок менеджера розколовся");
+    await x.metrics.conversionAdsByTeam(P, []);
+    await x.metrics.funnelCohortHonest({ ...P, teamId: 5 }, "month");
+    await x.metrics.dispatchedByManager({ ...P, teamId: 5 });
+    const { nominationRoster } = await import("./nominations.js");
+    assert.deepEqual((await nominationRoster(5, "2026-09-28")).map((r) => r.id).sort(), [2, 4], "🔴 номінації без переходів не за поточною командою");
+  } finally {
+    for (const r of saved) await x.c.query(
+      `INSERT INTO manager_team_moves (manager_id, from_team_id, to_team_id, effective_from, source) VALUES ($1, $2, $3, $4, $5)`,
+      [r.manager_id, r.from_team_id, r.to_team_id, r.effective_from, r.source]);
+    await x.sql.refreshTeamMoves(x.c);
+  }
+});

@@ -71,6 +71,12 @@ export async function refreshTeamMoves(db: Db): Promise<number> {
 export function forgetTeamMoves(): void { snapshot = null; }
 
 const intLit = (v: number | null): string => (v == null ? "NULL::int" : String(Math.trunc(Number(v))));
+/**
+ * Дата константою SQL (`DATE 'YYYY-MM-DD'`, формат перевіряється). Для запитів, де дата потрібна ЛИШЕ
+ * виразу команди: без переходів вираз її не згадує, і параметр `$1` лишився б зайвим — Postgres відмовляє
+ * (`bind message supplies 1 parameters, but prepared statement requires 0`; спіймав golden 02.10.2026).
+ */
+export const sqlDate = (ymd: string): string => dateLit(ymd);
 const dateLit = (ymd: string): string => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) throw new Error(`teamAt: дата переходу не YYYY-MM-DD: ${ymd}`);
   return `DATE '${ymd}'`;

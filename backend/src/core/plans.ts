@@ -3,7 +3,7 @@ import { workingDaysBetween, monthEndOf, fixedWeekBlocks } from "./dates.js";
 import { weekPlansForMonth } from "./weekPlan.js";
 import { receivedByMgr } from "./money.js";
 import { hasPlanSql, stateJoinSql } from "./managerState.js";
-import { teamAtSql } from "./teamAt.js";
+import { teamAtSql, sqlDate } from "./teamAt.js";
 
 /**
  * ЄДИНЕ ДЖЕРЕЛО «плану на менеджера для ДИСПЛЕЮ» (цеглина 1 міграції, рішення власника).
@@ -43,7 +43,7 @@ export async function managerPlan(s: PlanScope): Promise<ManagerPlanResult> {
   const params: unknown[] = [s.month];
   // 🔀 Команда — на 1-ше число місяця плану (задача 4892, `core/teamAt.ts`): вересневий план
   // того, хто з 01.10 перейшов, лишається у вересневій команді. Без переходів — поточна.
-  const TEAM = teamAtSql("m", "$1::date");
+  const TEAM = teamAtSql("m", sqlDate(s.month.slice(0, 10)));
   const teamCond = s.teamId ? `AND ${TEAM} = $2` : "";
   if (s.teamId) params.push(s.teamId);
 
@@ -80,10 +80,10 @@ export async function managerPlan(s: PlanScope): Promise<ManagerPlanResult> {
     pool.query<{ id: number; name: string; team_id: number | null }>(
       s.teamId
         ? `SELECT m.id, m.name, ${TEAM} AS team_id FROM managers m ${stateJoinSql("m")}
-            WHERE ${PLANNED} AND ${TEAM} = $2 ORDER BY m.id`
+            WHERE ${PLANNED} AND ${TEAM} = $1 ORDER BY m.id`
         : `SELECT m.id, m.name, ${TEAM} AS team_id FROM managers m ${stateJoinSql("m")}
             WHERE ${PLANNED} ORDER BY m.id`,
-      s.teamId ? [s.month, s.teamId] : [s.month]),
+      s.teamId ? [s.teamId] : []),
   ]);
 
   const ownPlan = new Map(ownRes.rows.map((r) => [r.manager_id, Math.round(Number(r.s))]));

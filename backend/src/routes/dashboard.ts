@@ -118,7 +118,7 @@ import {
 import { canRequestLimitFor, canAssignTaskToOthers } from "../auth/taskAssignScope.js";
 import { activeManagerSql } from "../core/activeManager.js";
 import * as managerState from "../core/managerState.js";
-import { teamAtSql, inTeamDuringSql, teamOnDateSql } from "../core/teamAt.js";
+import { teamAtSql, inTeamDuringSql, teamOnDateSql, sqlDate } from "../core/teamAt.js";
 import * as clientCalls from "../core/clientCalls.js";
 import * as planBasis from "../core/planBasis.js";
 import * as clientTabs from "../core/clientTabs.js";
@@ -10519,7 +10519,7 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   // 🔀 Перенесене — знімок на 00:00 1-го числа, тож і команда — на цей день (задача 4892).
   const teamOfMgr = new Map(
     (await pool.query<{ id: number; team_id: number | null }>(
-      `SELECT m.id, ${teamAtSql("m", "$1::date")} AS team_id FROM managers m`, [monthStartOf(from)])).rows.map((r) => [r.id, r.team_id])
+      `SELECT m.id, ${teamAtSql("m", sqlDate(monthStartOf(from)))} AS team_id FROM managers m`)).rows.map((r) => [r.id, r.team_id])
   );
   const coByTeam = new Map<number, { amount: number; deals: number }>();
   for (const r of coByMgrRows) {
