@@ -361,7 +361,8 @@ export function recountCandidatesSql(): string {
 const AUTO_CLOSE_PREFIX_SQL = "Закрито автоматично:";
 
 export const RECOUNT_NOTE = "Перевідкрито 02.10.2026: задачу раніше закрив вихідний без розмови від 10 с — "
-  + "це була спроба, а не передзвін (ТЗ «автозакриття пропущених»). Передзвоніть клієнту.";
+  + "це була спроба, а не передзвін (ТЗ «автозакриття пропущених»). Передзвоніть клієнту. "
+  + "Увага: перевірка номерів на біржі Lardi-Trans не працює з 28.09.2026, тож це може бути й перевізник.";
 
 export async function recountMissedTasks(db: Db, apply: boolean): Promise<{ rows: RecountRow[]; reopened: number }> {
   const rows = (await db.query<RecountRow>(recountCandidatesSql())).rows;
