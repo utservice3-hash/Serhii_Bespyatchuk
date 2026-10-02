@@ -45,7 +45,8 @@ export interface Tile {
   deltaPct: number | null;
   plan: number | null;
   planPct: number | null;
-  /** Підрядок: для грошей — ① «з них успішно». */
+  /** Підрядок: для грошей — ① успішно реалізовано за ті самі дати. НЕ «з них»: ① і ② анкеряться на різні дати
+   *  входу в етап, тож ① буває більшим за ② (серпень 2026: 2 550 073 проти 2 543 993). */
   sub: { label: string; value: number } | null;
   /** Чому плану немає — словами, а не порожнечею. */
   planNote: string | null;
@@ -240,7 +241,7 @@ export async function buildSummary(gran: Gran, anchor: string, viewer: Viewer) {
   const tiles: Tile[] = [
     { key: "revenue", label: "Отримані кошти", unit: "₴", now: Math.round(recvNow.revenue), prev: Math.round(recvPrev.revenue),
       deltaPct: deltaPct(recvNow.revenue, recvPrev.revenue), plan, planPct: planPct(recvNow.revenue, plan),
-      sub: { label: "з них успішно реалізовано", value: Math.round(succNow.revenue) },
+      sub: { label: "успішно реалізовано за ці дати", value: Math.round(succNow.revenue) },
       planNote: plan == null ? "план на цей період ще не заведено" : null, ...(planParts ? { planParts } : {}),
       formula: "оплата отримана ∪ успішно реалізовано (без подвоєння) — як план і факт на Звіті" },
     /* 🚚 «Відправлені авто» з планом KPI (рішення Романа 02.10): план у задачнику ставиться саме на відправлені
@@ -248,7 +249,7 @@ export async function buildSummary(gran: Gran, anchor: string, viewer: Viewer) {
        «Успішно» — підрядком. */
     { key: "dispatched", label: "Відправлені авто", unit: "шт", now: dispNow, prev: dispPrev,
       deltaPct: deltaPct(dispNow, dispPrev), plan: dispPlan, planPct: planPct(dispNow, dispPlan),
-      sub: { label: "з них успішно реалізовано (закриті)", value: succNow.deals },
+      sub: { label: "успішно закрито угод за ці дати", value: succNow.deals },
       planNote: dispPlan == null ? "тижневих KPI-цілей на авто за цей період у задачнику немає" : null,
       formula: "авто за датою завантаження; план — KPI-цілі задачника («відправлено авто»), як на Звіті" },
     { key: "calls", label: "Результативні дзвінки", unit: "шт", now: callsNow, prev: callsPrev,
