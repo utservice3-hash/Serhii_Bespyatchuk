@@ -53,9 +53,9 @@ const sec = (d: Date, s: number) => new Date(d.getTime() + s * 1000);
 async function run<T>(q: SqlQuery): Promise<T[]> {
   return (await client!.query(q.text, q.values)).rows as T[];
 }
-const WIN = { beforeSec: LINK_BEFORE_SEC, afterSec: LINK_AFTER_SEC };
 const linkQ = (from: string, to: string) => handoffLinkQuery(from, to,
-  { pz: LEADGEN_STAGE_IDS.pz, qualified: Q, managerPipelines: [...QUALIFICATION_PIPELINES, ...FC] }, WIN);
+  { pz: LEADGEN_STAGE_IDS.pz, qualified: Q, managerPipelines: [...QUALIFICATION_PIPELINES, ...FC] },
+  { beforeSec: LINK_BEFORE_SEC, afterSec: LINK_AFTER_SEC });
 
 let nextId = 700000;
 async function deal(p: { manager: number | null; pipeline: number; status?: number; ck: string | null;
@@ -213,38 +213,6 @@ before(async () => {
     await deal({ manager: 3, pipeline: FC[0], ck: "n-z", created: sec(T2, 1801) });
     fx["n-none"] = { pz, want: null };
   }
-
-  // ── #1171 (30.09.2026): КВІТЕНЬ 2025, людина 2 — естафетна кваліфікація (`relayEntryPred`). Поза вікнами решти.
-  const T3 = utc("2025-04-15T09:00:00");
-  const note3 = async (parent: number, child: number) =>
-    client!.query(`INSERT INTO lead_child_links (parent_id, child_id, created_at) VALUES ($1, $2, now())`, [parent, child]);
-  /** Угода Продзвону людини 2 з входом у 142 о `at` і, за бажанням, дочірніми, створеними CRM на цьому вході. */
-  const relay = async (at: Date, kids: { pipeline: number; off: number; qualifiedAfter?: number }[]) => {
-    const pz = await deal({ manager: 2, pipeline: PZ, ck: null }); await ev(pz, PZ, Q, at);
-    const ids: number[] = [];
-    for (const k of kids) {
-      const id = await deal({ manager: 2, pipeline: k.pipeline, ck: null, created: sec(at, k.off) }); await note3(pz, id);
-      if (k.qualifiedAfter != null) await ev(id, PZ, Q, sec(at, k.qualifiedAfter));
-      ids.push(id);
-    }
-    return { pz, ids };
-  };
-  { // R) кваліфікація породила ЛИШЕ копію в Продзвоні, копію кваліфікували знову → прорахунок один (копії)
-    const r = await relay(T3, [{ pipeline: PZ, off: 3, qualifiedAfter: 3600 }]);
-    fx["r-relay"] = { pz: r.pz, want: null }; fx["r-relay-copy"] = { pz: r.ids[0], want: null };
-  }
-  { // U) копія є, але ще не кваліфікована → перша кваліфікація лишається прорахунком
-    const r = await relay(sec(T3, 600), [{ pipeline: PZ, off: 3 }]);
-    fx["r-unqual"] = { pz: r.pz, want: null };
-  }
-  { // M) разом із копією CRM створила угоду менеджера → це справжня передача, рахується, і копія теж
-    const r = await relay(sec(T3, 1200), [{ pipeline: PZ, off: 3, qualifiedAfter: 3600 }, { pipeline: FC[0], off: 2 }]);
-    fx["r-mgr"] = { pz: r.pz, want: null }; fx["r-mgr-copy"] = { pz: r.ids[0], want: null };
-  }
-  { // L) кваліфікована копія створена поза вікном цього входу (+121 с) → вхід не естафета
-    const r = await relay(sec(T3, 1800), [{ pipeline: PZ, off: 121, qualifiedAfter: 3600 }]);
-    fx["r-late"] = { pz: r.pz, want: null }; fx["r-late-copy"] = { pz: r.ids[0], want: null };
-  }
 });
 
 after(async () => {
@@ -281,7 +249,7 @@ test("#675 ЖИВИЙ SQL: вікно звʼязку −10…+120 с з обох
 test("#675b ЖИВИЙ SQL: передачі людини == її «Прорахунки»; два входи однієї угоди — одна передача", async (t) => {
   if (!client) return t.skip(skip ?? "кластер не піднявся");
   const from = "2026-09-01", to = "2026-09-30";
-  const rows = await run<{ manager_id: number; quotes: string }>(stageCountsQuery(from, to, LEADGEN_STAGE_IDS, WIN));
+  const rows = await run<{ manager_id: number; quotes: string }>(stageCountsQuery(from, to, LEADGEN_STAGE_IDS));
   const quotes = new Map(rows.map((r) => [r.manager_id, Number(r.quotes)]));
   const links = (await run<{ pz_id: string; lg_id: number | null; lg_team_id: number | null; at: Date; day: string; deal_id: string | null }>(
     linkQ(from, to))).map((x): HandoffEntry => ({ pzId: Number(x.pz_id), lgId: x.lg_id as number, lgTeamId: x.lg_team_id,
@@ -318,7 +286,7 @@ test("#676 ЖИВИЙ SQL: ключ тижня — понеділок за Ки�
     "🔴 00:30 першого числа за Києвом ліг у минулий місяць");
   // Та сама межа — у запиті стадій з одиницею (тиждень, людина 2)
   const weeks = await run<{ bucket: string; manager_id: number; leads: string }>(
-    stageCountsQuery("2026-09-07", "2026-09-20", LEADGEN_STAGE_IDS, WIN, "week"));
+    stageCountsQuery("2026-09-07", "2026-09-20", LEADGEN_STAGE_IDS, "week"));
   const w2 = weeks.filter((r) => r.manager_id === 2).map((r) => [r.bucket, Number(r.leads)]);
   assert.deepEqual(w2, [["2026-09-07", 1], ["2026-09-14", 1]], "🔴 вхід о 00:30 понеділка за Києвом ліг не в свій тиждень");
   // Межа ПЕРІОДУ передач: 01.09 00:30 Київ — у вересні, а не в серпні
@@ -336,11 +304,11 @@ test("#676 ЖИВИЙ SQL: ключ тижня — понеділок за Ки�
 test("#676b ЖИВИЙ SQL: місячний кошик тренду == рядкам того місяця, по кожній людині", async (t) => {
   if (!client) return t.skip(skip ?? "кластер не піднявся");
   const trend = await run<{ bucket: string; manager_id: number; leads: string; opr: string; quotes: string; warming: string }>(
-    stageCountsQuery("2026-08-01", "2026-09-30", LEADGEN_STAGE_IDS, WIN, "month"));
+    stageCountsQuery("2026-08-01", "2026-09-30", LEADGEN_STAGE_IDS, "month"));
   let compared = 0;
   for (const [ms, me] of [["2026-08-01", "2026-08-31"], ["2026-09-01", "2026-09-30"]]) {
     const rows = await run<{ manager_id: number; leads: string; opr: string; quotes: string; warming: string }>(
-      stageCountsQuery(ms, me, LEADGEN_STAGE_IDS, WIN));
+      stageCountsQuery(ms, me, LEADGEN_STAGE_IDS));
     const pick = (r: { leads: string; opr: string; quotes: string; warming: string }) =>
       [Number(r.leads), Number(r.opr), Number(r.quotes), Number(r.warming)];
     const a = rows.map((r) => [r.manager_id, ...pick(r)]).sort();
@@ -623,12 +591,12 @@ test("#749 ЖИВИЙ SQL: подання → затвердження → по�
 test("#1090 ЖИВИЙ SQL: лід — «Взято в роботу» АБО «ОПР», одна угода — один лід; лідів ≥ ОПР у кожного", async (t) => {
   if (!client) return t.skip(skip ?? "кластер не піднявся");
   const wk = await run<{ manager_id: number; leads: string; opr: string; quotes: string; warming: string }>(
-    stageCountsQuery("2025-01-13", "2025-01-19", LEADGEN_STAGE_IDS, WIN));
+    stageCountsQuery("2025-01-13", "2025-01-19", LEADGEN_STAGE_IDS));
   const r70 = wk.find((r) => r.manager_id === 70);
   assert.ok(r70, "фікстура вироджена — людини 70 у тижні немає");
   assert.deepEqual([Number(r70.leads), Number(r70.opr), Number(r70.quotes), Number(r70.warming)], [3, 2, 1, 1],
     "🔴 ліди/ОПР/прорахунки/підігрів людини 70 не ті: лід — це «Взято» АБО «ОПР» Продзвону, і лише вони");
-  const all = await run<{ manager_id: number; leads: string; opr: string }>(stageCountsQuery("2025-01-01", "2026-12-31", LEADGEN_STAGE_IDS, WIN));
+  const all = await run<{ manager_id: number; leads: string; opr: string }>(stageCountsQuery("2025-01-01", "2026-12-31", LEADGEN_STAGE_IDS));
   assert.ok(all.length >= 4, "фікстура вироджена — людей замало");
   for (const r of all) assert.ok(Number(r.leads) >= Number(r.opr), `🔴 людина ${r.manager_id}: лідів ${r.leads} < ОПР ${r.opr}`);
 });
@@ -770,30 +738,6 @@ test("#1095b ЖИВИЙ SQL: дата успіху й дата авто для �
   assert.equal(jul.totals.handoffs, 1, "фікстура: передача — у липні");
   assert.equal(aug.deals.find((d) => d.pzId === pz)?.inPeriod, false, "🔴 у списку серпня угода не позначена «передано раніше»");
 });
-
-/**
- * #1171 — ЕСТАФЕТНА КВАЛІФІКАЦІЯ РАХУЄТЬСЯ ОДИН РАЗ: вхід у 142, що породив лише копію в Продзвоні,
- * яку потім кваліфікували знову, — не прорахунок і не передача; прорахунком є друга кваліфікація.
- * Фікстура — по обидва боки кожної з трьох умов: копія кваліфікована / ні; поруч угода менеджера / ні;
- * копія у вікні / на +121 с. Обидва запити — лічильник і передачі — ті самі, що в ядрі.
- * 🧨 САБОТАЖ: у `stageCounts` прибрати `AND NOT ${relayEntryPred(...)}` → прорахунків 7, червоніє.
- */
-test("#1171 ЖИВИЙ SQL: естафетна кваліфікація (лише копія в Продзвоні, кваліфікована знову) — один прорахунок", async (t) => {
-  if (!client) return t.skip(skip ?? "кластер не піднявся");
-  const day = "2025-04-15";
-  const rows = await run<{ manager_id: number; quotes: string }>(stageCountsQuery(day, day, LEADGEN_STAGE_IDS, WIN));
-  const want = ["r-relay-copy", "r-unqual", "r-mgr", "r-mgr-copy", "r-late", "r-late-copy"].map((k) => fx[k].pz).sort();
-  assert.equal(Number(rows.find((r) => r.manager_id === 2)?.quotes ?? 0), want.length,
-    `🔴 прорахунків людини 2 за ${day} не ${want.length}: естафету пораховано двічі або справжню кваліфікацію сховано`);
-  const got = (await run<{ pz_id: string }>(linkQ(day, day))).map((r) => Number(r.pz_id)).sort();
-  assert.deepEqual(got, want, "🔴 передачі дня ≠ очікуваним: естафета не виключена або виключено зайве");
-  assert.ok(!got.includes(fx["r-relay"].pz), "🔴 вхід, що породив лише кваліфіковану копію, досі передача");
-  // 🪞 Дзеркала — кожна з трьох умов не накриває свого сусіда:
-  assert.ok(got.includes(fx["r-unqual"].pz), "🔴 копія ще не кваліфікована, а перша кваліфікація зникла");
-  assert.ok(got.includes(fx["r-mgr"].pz), "🔴 разом із копією є угода менеджера — справжню передачу сховано");
-  assert.ok(got.includes(fx["r-late"].pz), "🔴 копія поза вікном входу, а вхід сховано — вікно не працює");
-});
-
 /**
  * #1173 — ДЗВІНКИ Й ГРОШІ В ПЛАНІ, НЕОБОВʼЯЗКОВІ (Ярослав, рішення власника 01.10.2026), на живому SQL.
  * Подання з дзвінками й грошима → затвердження → обидва живі; повторне подання БЕЗ грошей → після

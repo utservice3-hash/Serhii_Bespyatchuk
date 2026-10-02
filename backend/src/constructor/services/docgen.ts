@@ -277,7 +277,8 @@ export function reqLines(s: DocumentState, side: 'our' | 'their'): string[] {
 export function blockers(s: DocumentState): string | null {
   const fopConflict = s.ent === 'fop' && s.party === 'client' && !!s.cp.name && !/^ФОП/i.test(s.cp.name);
   if (fopConflict) return 'Від ФОП Беспятчука клієнтом може бути лише інший ФОП — для цього контрагента оберіть ЮТС або АвтоМув.';
-  if (s.party === 'carrier' && s.doc === 'carr' && !s.cp.iban) return 'Немає IBAN перевізника — оплата йде на його рахунок, без нього заявка не формується.';
+  // IBAN перевізника — НЕОБОВʼЯЗКОВИЙ з 02.10.2026 (Юля в чаті: «можна»; перевізник однаково виставляє рахунок з IBAN).
+  // Порожній — рядка «п/р» у його реквізитах немає (reqLines); заявка формується.
   if (s.doc === 'main' && !s.mainNo) return 'Вкажіть номер основного договору — він вноситься вручну після погодження.';
   if (s.doc === 'main' && !s.mainDate) return 'Вкажіть дату, з якої діє основний договір.';
   if (s.doc === 'main' && (s.mainUntil ?? '').trim() && !mainUntilText(s)) return '«Діє до» — дата у форматі ДД.ММ.РРРР, напр. 31.12.2026.';

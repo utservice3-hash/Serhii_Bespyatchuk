@@ -217,12 +217,13 @@ export interface LeadgenStatsResp {
     oprOfLeads: number | null; quotesOfOpr: number | null;
     targets: { oprOfLeads: number; quotesOfOpr: number; machinesOfQuotes: number };
   };
+  /** `null` — для лідгена (рівень відділу йому не показується, рішення 02.10.2026). */
   department: {
     machines: number; machinesRevenue: number; receivedRevenue: number; receivedDeals: number;
     note: string; anchors: string;
     /** Покриття поля «Лидогенератор» у періоді — межа розрізу по особах. */
     leadGeneratorFill: { withPerson: number; total: number };
-  };
+  } | null;
   weeks: { week: string; leads: number; opr: number; quotes: number }[];
   /** Розбивка за `grain` (якщо його передали): відділ і кожна людина — ті самі предикати й атрибуція, що в `rows`;
    *  тімлід отримує лише свою команду. Відділ = сума людей (як `totals`). */
@@ -236,9 +237,12 @@ export interface LeadgenStatsResp {
   closures: { reason: string; deals: number }[];
   handoffs: { kommoId: number; day: string; name: string | null; manager: string | null; url: string }[];
   handoffsLimit: number;
-  warmingNow: number;
+  warmingNow: number | null;
   callRule: string;
   scopedTo: number | null;
+  /** «own» — відповідь лідгену: лише свій рядок + підсумки команди (рішення власника 02.10.2026). */
+  viewer?: "own";
+  selfId?: number;
   /** Люди з подіями поза командою «Лідогенерація» — лише рівню компанії (тімліду порожньо). */
   others?: LeadgenPersonRow[];
   othersTotals?: { leads: number; opr: number; quotes: number; warming: number; calls: number };
@@ -4030,7 +4034,7 @@ export interface ClientPlansResp {
   /** 🔁 Пул лідгенів (ТЗ 22.09, блок 4): хто бачить вкладку пулу і хто бере — вирішує сервер. */
   leadgenPool?: { canSee: boolean; canTake: boolean };
   /** 🔁 Числа правила реактивації з ядра — для підпису, фронт їх не рахує. */
-  reactRules?: { quietMonths: number; selfGraceMonths: number; launchMonth: string };
+  reactRules?: { quietMonths: number; decisionDays: number; selfGraceDays: number; weeklyCap: number; launchRelease: string; transferHour: number };
   weeks: { label: string; from: string; to: string; status: "past" | "current" | "future"; workingDays: number }[];
   /** Довідники дій, що переїхали з вкладки «Реактивація». Приходять із ядра. */
   closeReasons?: { key: string; label: string }[];
@@ -4167,7 +4171,7 @@ export interface ReactCycleView {
   lastInvoice: string | null;
   status: "waiting" | "self" | "pool" | "taken";
   poolReason: "manager" | "auto" | "self_expired" | null;
-  /** Останній місяць, до кінця якого рахунок або дія ще рятують від автопередачі; null — строку немає. */
+  /** Понеділок (`YYYY-MM-DD`), з якого клієнт до передачі лідгенам; черга по 100 на тиждень може відсунути. null — строку немає. */
   deadline: string | null;
   daysLeft: number | null;
   allowed: ("self" | "leadgen")[];
@@ -5289,8 +5293,10 @@ export type CtorEdrResult =
   | { updating: true; error: string };
 export const ctorByEdrpou = async (code: string) =>
   (await api.get<CtorEdrResult>(`/constructor/edrpou/${encodeURIComponent(code)}`)).data;
+/** ✅ Перевірка поля (сервер, `constructor/validate.ts`): error — блокує формування, warn — лише попереджає. */
+export interface CtorIssue { field: string; level: "error" | "warn"; msg: string }
 export const ctorPreview = async (state: CtorForm) =>
-  (await api.post<{ html: string; fragment: string; blockers: string | null; assetsNote: string | null }>("/constructor/preview", { state })).data;
+  (await api.post<{ html: string; fragment: string; blockers: string | null; issues?: CtorIssue[]; assetsNote: string | null }>("/constructor/preview", { state })).data;
 export const ctorCreate = async (state: CtorForm) =>
   (await api.post<{ id: number; version: number; num: string; createdAt: string;
     /** Автопідгонка PDF (v2): скільки сторінок, яка щільність, чи не влізло в 3. */

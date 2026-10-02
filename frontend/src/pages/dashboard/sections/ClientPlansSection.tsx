@@ -881,9 +881,11 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
       {tab === "react" && data.reactRules && (
         <div style={{ ...S.card, marginBottom: 8, fontSize: 12.5, color: "#4b5563", lineHeight: 1.55, borderLeft: "3px solid #6d28d9" }}>
           <b>Реактивація</b> — клієнти без виставленого рахунку {data.reactRules.quietMonths} повні календарні місяці
-          (з 4-го місяця). Натисніть «🙋 Реактивую сам» або «🎯 Передати лідгенам». Без рахунку й без рішення до кінця
-          місяця клієнт іде в пул лідгенів автоматично; після «Реактивую сам» строк — до кінця наступного місяця.
-          Для тих, хто вже був у реактивації, відлік почався з жовтня 2026 — перша автопередача 01.11.2026.
+          (з 4-го місяця). Натисніть «🙋 Реактивую сам» або «🎯 Передати лідгенам». Без рахунку й без рішення
+          за {Math.round(data.reactRules.decisionDays / 7)} тижні клієнт іде в пул лідгенів автоматично; після «Реактивую сам» —
+          через {Math.round(data.reactRules.selfGraceDays / 7)} тижні без рахунку. Передача — щопонеділка о {data.reactRules.transferHour}:00, не більше{" "}
+          {data.reactRules.weeklyCap} клієнтів на тиждень, першими — з найсвіжішим рахунком. Ті, хто вже був у реактивації,
+          ідуть порціями з понеділка {data.reactRules.launchRelease.slice(8, 10)}.{data.reactRules.launchRelease.slice(5, 7)}.
         </div>
       )}
       {tab === "pool" ? <LeadgenPoolPanel onTaken={load} /> : (

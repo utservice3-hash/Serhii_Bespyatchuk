@@ -119,12 +119,14 @@ test("#751 МАТРИЦЯ Й ВКЛАДКА: плани лідгенів — р�
 });
 
 /**
- * #751b — ПЕРШИЙ ОПЕРАТОР: GET і submit — відмова менеджеру (403 раніше за 400); approve/return стоять за
+ * #1253 — ЗАПИС ПЛАНІВ: submit — відмова менеджеру ПЕРШИМ оператором (403 раніше за 400); approve/return стоять за
  * `requireRole("admin")` (той самий засув, що в продажах), а submit — ще й `mayEverSubmitLeadgenPlan` ДО розбору тіла.
+ * Перегляд (GET) відтепер відкритий лідгену на СВІЙ план (рішення власника 02.10.2026) — його перший
+ * оператор стереже `#1252`; запис лідгену, як і раніше, закритий. Наступник `#751b` (знятий: GET змінив твердження).
  * 🧨 САБОТАЖ: у `/leadgen-plans/approve` прибрати `requireRole("admin"), ` → червоніє.
  */
-test("#751b ПЕРШИЙ ОПЕРАТОР і засув адміна на затвердженні/поверненні", () => {
-  for (const [m, r] of [["get", "/leadgen-plans"], ["post", "/leadgen-plans/submit"]] as const) {
+test("#1253 ЗАПИС ПЛАНІВ: submit — відмова менеджеру першим оператором, approve/return — засув адміна", () => {
+  for (const [m, r] of [["post", "/leadgen-plans/submit"]] as const) {
     assert.match(firstStatement(handler(m, r)), /^if \(req\.auth!\.role === "manager"\) return res\.status\(403\)/, `🔴 ${r}: перший оператор не відмова менеджеру`);
   }
   const sub = codeOf(handler("post", "/leadgen-plans/submit"));

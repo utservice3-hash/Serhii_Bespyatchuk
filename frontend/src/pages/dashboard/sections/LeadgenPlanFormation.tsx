@@ -45,7 +45,12 @@ export function LeadgenPlanFormation({ initialMonth }: { initialMonth: string })
   useEffect(() => {
     if (!open) return;
     let alive = true; setErr(null);
-    fetchLeadgenPlans(month).then((d) => alive && setData(d)).catch(() => alive && setErr("Не вдалося завантажити плани лідгенів."));
+    fetchLeadgenPlans(month).then((d) => alive && setData(d)).catch((e) => {
+      if (!alive) return;
+      // 403 — це відмова з поясненням сервера (менеджер не з команди), а не збій: показуємо її текст.
+      const r = (e as { response?: { status?: number; data?: { error?: unknown } } }).response;
+      setErr(r?.status === 403 && typeof r.data?.error === "string" ? r.data.error : "Не вдалося завантажити плани лідгенів.");
+    });
     return () => { alive = false; };
   }, [month, reload, open]);
   const refresh = () => setReload((x) => x + 1);

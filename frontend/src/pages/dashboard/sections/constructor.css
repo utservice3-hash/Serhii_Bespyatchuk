@@ -47,6 +47,7 @@
   background:color-mix(in srgb, var(--bad) 9%, transparent);color:var(--ink-2)}
 .ctorx .fopwarn b{color:var(--bad)}
 .ctorx .ibannote{padding:7px 13px;font-size:11.5px;color:var(--bad);border-top:1px dashed var(--line-2)}
+.ctorx .ibannote.soft{color:var(--muted)}
 .ctorx .entities{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin-bottom:12px}
 .ctorx .ent{position:relative;text-align:left;border:1.5px solid var(--line);border-radius:13px;padding:13px 15px;
   background:var(--surface);display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:start}
@@ -120,6 +121,20 @@
 .ctorx .frow .st{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:800}
 .ctorx .frow .st.ok{background:color-mix(in srgb, var(--ok) 14%, transparent);color:var(--ok)}
 .ctorx .frow .st.no{background:color-mix(in srgb, var(--warn) 16%, transparent);color:var(--warn)}
+.ctorx .frow .st.opt{background:var(--surface-3);color:var(--muted)}
+/* ✅ Перевірка полів (02.10.2026): 🔴 «✕» червоне, 🟡 «⚠» жовте, пояснення під полем, підсумок біля кнопки */
+.ctorx .frow .st.err{background:color-mix(in srgb, var(--bad) 16%, transparent);color:var(--bad)}
+.ctorx .frow .st.wrn{background:color-mix(in srgb, var(--warn) 16%, transparent);color:var(--warn)}
+.ctorx .frow .fmsg{grid-column:1/-1;margin:0}
+.ctorx .fmsg{font-size:11.5px;line-height:1.35;margin-top:4px}
+.ctorx .fmsg.err{color:var(--bad)}
+.ctorx .fmsg.wrn{color:var(--warn)}
+.ctorx .frow.has-err input{color:var(--bad)}
+.ctorx .issum{align-self:flex-end;padding-bottom:9px;font-size:12px;cursor:help}
+.ctorx .actbar .fld .fmsg{max-width:230px;white-space:normal}
+.ctorx .payrow .fmsg{min-width:150px}
+.ctorx .issum .err{color:var(--bad)}
+.ctorx .issum .wrn{color:var(--warn)}
 .ctorx .frow.miss input{color:var(--warn)}
 .ctorx .frow.miss input::placeholder{color:var(--warn);opacity:.75}
 .ctorx .g2{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-left:30px}

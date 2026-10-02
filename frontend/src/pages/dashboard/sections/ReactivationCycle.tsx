@@ -18,7 +18,6 @@ const btn = (primary?: boolean) => ({ fontSize: 11, fontWeight: primary ? 700 : 
   background: primary ? "#111827" : "#fff", color: primary ? "#fff" : "#374151" } as const);
 
 const ddmm = (ymd: string) => ymd.slice(5, 10).split("-").reverse().join(".");
-const lastDay = (ym: string) => new Date(Date.UTC(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0)).toISOString().slice(0, 10);
 
 export const POOL_REASON: Record<string, string> = {
   manager: "передав менеджер",
@@ -37,12 +36,16 @@ export function ReactCycleStatus({ cycle }: { cycle: ReactCycleView }) {
   if (cycle.status === "taken") {
     return <div style={{ fontSize: 11, color: "#047857", fontWeight: 600 }} title={inv}>🎯 взяв лідген</div>;
   }
-  const dl = cycle.deadline ? lastDay(cycle.deadline) : null;
+  // 📅 Строк — ПОНЕДІЛОК із сервера (рішення 01.10.2026: щотижня, ≤100 за тиждень, від найсвіжішого рахунку).
+  // «з» — бо черга може відсунути клієнта на тиждень-другий; точного дня фронт не вигадує.
+  const dl = cycle.deadline;
   return (
     <div style={{ fontSize: 11, color: cycle.daysLeft != null && cycle.daysLeft <= 7 ? "#b91c1c" : "#374151" }}
-      title={`${inv}. Без рахунку до ${dl ? ddmm(dl) : "—"} клієнт автоматично піде в пул лідгенів.`}>
+      title={`${inv}. Без рахунку й без рішення клієнт піде в пул лідгенів не раніше понеділка ${dl ? ddmm(dl) : "—"}. Передача — щопонеділка, не більше 100 клієнтів на тиждень, першими — з найсвіжішим рахунком.`}>
       {cycle.status === "self" ? "🙋 реактивую сам · " : "⏳ чекає рішення · "}
-      {dl ? <>до автопередачі <b>{cycle.daysLeft} дн.</b> (до {ddmm(dl)})</> : "без строку"}
+      {dl ? (cycle.daysLeft
+        ? <>передача лідгенам з <b>пн {ddmm(dl)}</b> (через {cycle.daysLeft} дн.)</>
+        : <>у черзі на передачу лідгенам (з пн {ddmm(dl)})</>) : "без строку"}
     </div>
   );
 }
@@ -66,7 +69,7 @@ export function ReactCycleButtons({ clientKey, cycle, onDone, onError }: {
     <div style={{ display: "flex", gap: 5, marginTop: 4, flexWrap: "wrap" }}>
       {cycle.allowed.includes("self") && (
         <button type="button" disabled={busy} style={btn(true)} onClick={() => go("self")}
-          title="Лишається за вами. Якщо рахунку не буде до кінця наступного місяця — клієнт піде лідгенам автоматично; продовжити строк повторним натисканням не можна">
+          title="Лишається за вами 4 тижні. Якщо рахунку не буде — у найближчий понеділок клієнт піде лідгенам автоматично; продовжити строк повторним натисканням не можна">
           🙋 Реактивую сам
         </button>
       )}
@@ -110,7 +113,7 @@ export function LeadgenPoolPanel({ onTaken }: { onTaken: () => void }) {
       </div>
       {err && <div role="alert" style={{ padding: "8px 14px", color: "#b91c1c", fontWeight: 600, fontSize: 13 }}>⚠️ {err}</div>}
       {!data ? <div style={{ padding: 14, color: "#6b7280" }}>завантаження…</div> : !data.rows.length ? (
-        <div style={{ padding: 14, color: "#6b7280" }}>У пулі зараз нікого. Автопередача — щоночі; перша можлива — 01.11.2026.</div>
+        <div style={{ padding: 14, color: "#6b7280" }}>У пулі зараз нікого. Нова порція — щопонеділка о 08:00 (до 100 клієнтів).</div>
       ) : (
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
           <thead><tr>

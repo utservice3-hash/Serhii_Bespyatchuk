@@ -38,6 +38,7 @@ import { canSeeConstructorDoc, stateFromBody, fileBase, VIEW_ALL_PERM } from "..
 import { DOCS_DIR } from "../jobs/backupDb.js";
 import { MANAGER_CONTACT_SQL, POOL_STATS_SQL } from "../constructor/sql.js";
 import { lookupRegistry } from "../constructor/youscore.js";
+import { validateForm, firstError, type Issue } from "../constructor/validate.js";
 
 /** Підписи й печатки — лише на сервері, поза git (репозиторій публічний). Тека вже в нічному бекапі. */
 export const CONSTRUCTOR_ASSETS_DIR = process.env.CONSTRUCTOR_ASSETS_DIR ?? path.join(DOCS_DIR, "constructor-assets");
@@ -158,9 +159,25 @@ constructorRouter.post("/preview", h(async (req, res) => {
   const s = await stateOrFail(req);
   const img = safeImages(s.ent, s.stamp);   // логотип є завжди; перемикач прибирає лише підпис і печатку (v2)
   const num = currentNum(s) || (s.doc === "main" ? "______" : "______ (ID угоди)"); // заглушка — як у макеті
-  res.json({ html: fullPageHTML(s, num, img.uris), fragment: printHTML(s, num, img.uris), blockers: blockers(s), assetsNote: img.note ?? null });
+  const issues = await checkFields(s);
+  res.json({ html: fullPageHTML(s, num, img.uris), fragment: printHTML(s, num, img.uris),
+    blockers: blockers(s) ?? firstError(issues), issues, assetsNote: img.note ?? null });
   // `html` — повна сторінка з CSS «Б» (iframe srcDoc, як у пакеті v2); `fragment` лишено для сумісності.
 }));
+
+/**
+ * ✅ Перевірка полів (затверджено 02.10.2026, `constructor/validate.ts`): 🔴 блокують формування, 🟡 лише в прев'ю.
+ * «Угода є в CRM» — по `deals.kommo_id`; базу не вдалося спитати — не перевіряли (null), а не «немає».
+ */
+async function checkFields(s: DocumentState): Promise<Issue[]> {
+  const deal = (s.dealNo || "").trim();
+  let dealKnown: boolean | null = null;
+  if (s.doc !== "main" && /^\d{1,15}$/.test(deal)) {
+    dealKnown = await pool.query<{ e: boolean }>("SELECT EXISTS (SELECT 1 FROM deals WHERE kommo_id = $1::bigint) AS e", [deal])
+      .then((r) => r.rows[0].e).catch(() => null);
+  }
+  return validateForm(s, { dealKnown });
+}
 
 /** Прев'ю не падає, якщо картинок ще немає на сервері: показує документ без них і каже чому. */
 function safeImages(ent: EntityKey, stampOn: boolean): { uris: { logo?: string; sig?: string; stamp?: string }; note?: string } {
@@ -171,7 +188,7 @@ function safeImages(ent: EntityKey, stampOn: boolean): { uris: { logo?: string; 
 /* ── Сформувати: перевірити гейти, записати версію в архів ── */
 constructorRouter.post("/documents", h(async (req, res) => {
   const s = await stateOrFail(req);
-  const block = blockers(s);
+  const block = blockers(s) ?? firstError(await checkFields(s));
   if (block) throw new HttpError(422, block);
   const num = currentNum(s);
   const q = await pool.query<{ id: string; version: number; created_at: string }>(
