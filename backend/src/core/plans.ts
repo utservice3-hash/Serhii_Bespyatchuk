@@ -300,14 +300,22 @@ export interface EffWeekTarget {
  * ⚠️ FAIL-CLOSED: рядки без `period_kind = 'week'` не беруться (див. коментар у `effectiveWeekTargets`).
  */
 export async function manualWeekTargetsOn(day: string): Promise<Map<number, number>> {
-  const mw = await pool.query<{ assignee_id: number; metrics_json: { metric: string; target: number | string }[] | null }>(
-    `SELECT assignee_id, metrics_json FROM tasks
+  return new Map([...(await manualWeekTasksOn(day))].map(([mid, t]) => [mid, t.target]));
+}
+
+/**
+ * Те саме, що `manualWeekTargetsOn`, плюс id задачі-переможниці. Потрібно тому, хто складає ціль ДЕКІЛЬКОХ днів:
+ * одна задача на тиждень через межу місяця має рахуватись раз, а дві задачі (по частині місяця) — обидві.
+ */
+export async function manualWeekTasksOn(day: string): Promise<Map<number, { target: number; taskId: number }>> {
+  const mw = await pool.query<{ id: number; assignee_id: number; metrics_json: { metric: string; target: number | string }[] | null }>(
+    `SELECT id, assignee_id, metrics_json FROM tasks
       WHERE auto AND task_type = 'kpi_period' AND assignee_id IS NOT NULL AND metrics_json IS NOT NULL
         AND period_kind = 'week'
         AND period_start <= $1 AND COALESCE(period_end, period_start) >= $1
       ORDER BY period_start ASC, id ASC`, [day]);
-  const manual = new Map<number, number>();
-  for (const r of mw.rows) { const pa = (r.metrics_json ?? []).find((x) => x.metric === "payment_amount"); if (pa) manual.set(r.assignee_id, Number(pa.target) || 0); }
+  const manual = new Map<number, { target: number; taskId: number }>();
+  for (const r of mw.rows) { const pa = (r.metrics_json ?? []).find((x) => x.metric === "payment_amount"); if (pa) manual.set(r.assignee_id, { target: Number(pa.target) || 0, taskId: r.id }); }
   return manual;
 }
 
