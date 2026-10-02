@@ -102,8 +102,9 @@ function Verdict({ r }: { r: CarrierDealT }) {
       <span title={cat.hint} style={pill(TONE[cat.tone].bg, TONE[cat.tone].fg)}>{cat.label}{r.otherType ? ` · ${OTHER_TYPE_UI[r.otherType]}` : ""}</span>
       {r.overdue && <span title={`Не розібрано до кінця робочого дня: треба було до ${fmtTime(r.reviewDeadline!)}`} style={pill(TONE.bad.bg, TONE.bad.fg)}>прострочено</span>}
       <span style={{ fontSize: 12, ...muted, fontVariantNumeric: "tabular-nums" }}
-        title={r.source === "human" ? "Так вирішила людина — це сильніше за AI" : "Впевненість AI: наскільки він певен у вердикті. Від 85% — рішення приймає сам, нижче — вирішуєте ви"}>
+        title={r.source === "human" ? "Так вирішила людина — це сильніше за AI" : r.source === "crm" ? "Номер уже закривали як «Перевізник» у CRM, угоди замовника немає — розмову не слухали" : "Впевненість AI: наскільки він певен у вердикті. Від 85% — рішення приймає сам, нижче — вирішуєте ви"}>
         {r.source === "human" && r.human ? `вирішив ${deciderLabel(r.human.role)}`
+          : r.source === "crm" ? `історія CRM${r.historyFrom ? ` · угода №${String(r.historyFrom)}` : ""}`
           : r.source === "ai" ? `AI, впевненість ${pctLabel(r.ai.confidence)}`
           : r.ai.verdict ? `AI думає: ${ROLE_UI[r.ai.verdict]?.label ?? r.ai.verdict}, ${pctLabel(r.ai.confidence)}` : ""}
       </span>

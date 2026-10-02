@@ -347,6 +347,11 @@ export interface MissedCallsResp {
   teams: MissedTeamRow[];
   /** `false` у зрізі команди чи менеджера: «без відповідального» туди не входить за побудовою. */
   ownerlessInScope: boolean;
+  /** Контроль ТЗ «автозакриття пропущених» (задача 4373): ефект за 7 днів від сьогодні. */
+  automation?: MissedAutomation;
+}
+export interface MissedAutomation {
+  days: number; skippedCarrier: number; closedCallback: number; closedCarrier: number; openNow: number; dealsHistory: number | null;
 }
 export async function fetchMissedCalls(params: { from: string; to: string }): Promise<MissedCallsResp> {
   const { data } = await api.get<MissedCallsResp>("/dashboard/missed-calls", { params });
@@ -476,7 +481,7 @@ export interface CarrierDealT {
     bucket: CarrierBucketT | null };
   human: { decision: CarrierDecisionT; otherType: CarrierOtherTypeT | null; note: string | null; by: string; role: string | null; at: string } | null;
   journal: CarrierJournalT[];
-  category: CarrierCategoryT; source: "human" | "ai" | null; why: string | null; otherType: CarrierOtherTypeT | null;
+  category: CarrierCategoryT; source: "human" | "ai" | "crm" | null; historyFrom?: number | null; why: string | null; otherType: CarrierOtherTypeT | null;
   /** «На перевірці»: до коли розібрати (кінець робочого дня) і чи вже прострочено. */
   reviewSince: string | null; reviewDeadline: string | null; overdue: boolean;
   close: CarrierCloseT | null; crm: { statusId: number | null; rejectReason: string | null };

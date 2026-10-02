@@ -5,7 +5,21 @@ import {
   type SeriesGranularity, type MissedSeries, type MissedSeriesRaw,
   missedListSql, noDealCountsSql, noDealListSql, nextStep, OWNERLESS_LABEL, capRows,
   type MissedScope, type MissedManagerRaw, type MissedManagerRow, type MissedTeamRow, type NextStep, type NoDealState,
+  missedAutomationSql,
 } from "./missedCallsRules.js";
+
+export interface MissedAutomation {
+  days: number; skippedCarrier: number; closedCallback: number; closedCarrier: number; openNow: number;
+  /** Угоди етапу фільтра з вердиктом «історія CRM» у журналі закриттів; `null` — у скоупі команди/менеджера не показуємо. */
+  dealsHistory: number | null;
+}
+/** Ефект автозакриття за 7 днів (контроль ТЗ 4373). */
+export async function missedAutomation(today: string, s: MissedScope = {}): Promise<MissedAutomation> {
+  const q = missedAutomationSql(today, s);
+  const x = (await pool.query<{ skipped_carrier: number; closed_callback: number; closed_carrier: number; open_now: number; deals_history: number | null }>(q.sql, q.params)).rows[0];
+  return { days: 7, skippedCarrier: x.skipped_carrier, closedCallback: x.closed_callback, closedCarrier: x.closed_carrier,
+    openNow: x.open_now, dealsHistory: x.deals_history };
+}
 
 /**
  * 📵 ПРОПУЩЕНІ ВХІДНІ — ШАР, ЩО ХОДИТЬ У БАЗУ. ТЗ-1 від 14.09.2026.

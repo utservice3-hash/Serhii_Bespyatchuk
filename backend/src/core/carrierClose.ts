@@ -1,6 +1,7 @@
 import type { Db } from "./adCallFacts.js";
 import { CARRIER_STAGE, OTHER_TYPE_UA, type OtherType } from "./carrierCallRules.js";
 import { carrierDealRows } from "./carrierDeals.js";
+import { AUTO_CARRIER_TAG, historyCloseNote } from "./carrierHistory.js";
 
 /**
  * 🧹 ЗАКРИТТЯ В KOMMO (29.09.2026 — перевізники; ТЗ Романа 30.09.2026 — ще й «Інше»).
@@ -47,12 +48,20 @@ export const CLOSE_MAX_PER_TICK = 50;
 /** Після невдалого запису до Kommo повтор — не частіше ніж раз на годину: не бомбимо CRM помилками щоп'ять хвилин. */
 export const RETRY_AFTER_MIN = 60;
 
-export function closePayload(ids: readonly number[], reason: CloseReason = "carrier"): unknown[] {
+/**
+ * `tag` — тег, що ДОДАЄТЬСЯ до наявних (`tags_to_add`). 🔴 НЕ `_embedded.tags`: у Kommo це ЗАМІНА всього списку,
+ * тобто закриття стерло б теги, які на угоді поставили телефонія чи люди.
+ */
+export function closePayload(ids: readonly number[], reason: CloseReason = "carrier", tag: string | null = null): unknown[] {
   return ids.map((id) => ({
     id, pipeline_id: CARRIER_STAGE.pipelineId, status_id: LOST_STATUS,
     custom_fields_values: [{ field_id: REJECT_FIELD, values: [{ enum_id: REJECT_ENUM[reason] }] }],
+    ...(tag ? { tags_to_add: [{ name: tag }] } : {}),
   }));
 }
+
+/** Текст результату задачі Kommo, яку гасимо разом з угодою (Kommo не закриває деякі типи задач без результату). */
+export const TASK_RESULT_TEXT = "Автоматично: угоду закрито дашбордом як «не цільову» (перевізник / не клієнт / без розмови).";
 
 export function revertPayload(id: number): unknown[] {
   return [{ id, pipeline_id: CARRIER_STAGE.pipelineId, status_id: CARRIER_STAGE.statusId,
@@ -82,6 +91,13 @@ export function chunks<T>(xs: readonly T[], n: number): T[][] {
 export interface KommoCloser {
   patchLeads: (body: unknown[]) => Promise<unknown>;
   addNotes: (body: unknown[]) => Promise<unknown>;
+  /**
+   * Відкриті задачі угод — щоб погасити їх ДО закриття угоди (урок Espo-фільтра 03.09: при автоматичному переході
+   * Kommo не питає «закрити всі задачі?», і задача «передзвоніть» лишалась висіти на закритій угоді).
+   * Не задано — задачі не чіпаємо.
+   */
+  openTaskIds?: (leadIds: readonly number[]) => Promise<number[]>;
+  closeTasks?: (taskIds: readonly number[], resultText: string) => Promise<unknown>;
 }
 
 export interface CloseCandidate {
@@ -89,6 +105,9 @@ export interface CloseCandidate {
   reason: CloseReason; otherType: OtherType | null;
   /** AI-«Інше» без рішення людини — окремий перемикач (`CARRIER_AUTO_CLOSE_OTHER`). */
   aiOther: boolean;
+  /** Вердикт з історії CRM (блок 1 ТЗ 4373) — окремий перемикач (`CARRIER_HISTORY_CLOSE`); `historyFrom` — угода-джерело. */
+  history: boolean;
+  historyFrom: number | null;
 }
 
 /**
@@ -111,18 +130,25 @@ export async function closeCandidates(db: Db, onStage: ReadonlySet<number>, now:
     if (r.close?.state === "closed" || l?.reverted || l?.recent_fail) continue;
     const byHuman = r.source === "human";
     out.push({ kommoId: r.kommoId, uniqueid: r.uniqueid, confidence: r.ai.confidence, quote: r.ai.quote, logged: l != null,
-      byHuman, reason: r.category, otherType: r.otherType, aiOther: r.category === "other" && !byHuman });
+      byHuman, reason: r.category, otherType: r.otherType, aiOther: r.category === "other" && !byHuman,
+      history: r.source === "crm", historyFrom: r.historyFrom });
   }
   return out;
 }
 
-export interface CloseReport { mode: CloseMode; otherMode: CloseMode; candidates: number; logged: number; closed: number; failed: number; error: string | null }
+export interface CloseReport { mode: CloseMode; otherMode: CloseMode; historyMode: CloseMode; candidates: number; logged: number; closed: number;
+  failed: number; tasksClosed: number; error: string | null }
+
+/** Чи пише цей кандидат у CRM у ЦЬОМУ проході: основний режим «live» і його власний перемикач «live». */
+export const liveFor = (c: Pick<CloseCandidate, "aiOther" | "history">, mode: CloseMode, otherMode: CloseMode, historyMode: CloseMode): boolean =>
+  mode === "live" && (!c.aiOther || otherMode === "live") && (!c.history || historyMode === "live");
 
 export async function runCarrierClose(db: Db, now: Date, mode: CloseMode, onStage: ReadonlySet<number>, kommo: KommoCloser,
-  otherMode: CloseMode = "dry"): Promise<CloseReport> {
-  const rep: CloseReport = { mode, otherMode, candidates: 0, logged: 0, closed: 0, failed: 0, error: null };
+  otherMode: CloseMode = "dry", historyMode: CloseMode = "dry"): Promise<CloseReport> {
+  const rep: CloseReport = { mode, otherMode, historyMode, candidates: 0, logged: 0, closed: 0, failed: 0, tasksClosed: 0, error: null };
   if (mode === "off") return rep;
-  const cands = (await closeCandidates(db, onStage, now)).filter((c) => !(c.aiOther && otherMode === "off"));
+  const cands = (await closeCandidates(db, onStage, now))
+    .filter((c) => !(c.aiOther && otherMode === "off") && !(c.history && historyMode === "off"));
   rep.candidates = cands.length;
   const fresh = cands.filter((c) => !c.logged);
   if (fresh.length) {
@@ -132,7 +158,7 @@ export async function runCarrierClose(db: Db, now: Date, mode: CloseMode, onStag
          FROM unnest($1::bigint[], $2::text[], $3::numeric[], $4::text[], $6::text[], $7::text[], $8::text[]) AS x(k, u, c, q, m, r, o)
        ON CONFLICT (kommo_id) DO NOTHING`,
       [fresh.map((c) => c.kommoId), fresh.map((c) => c.uniqueid), fresh.map((c) => c.confidence), fresh.map((c) => c.quote),
-        now.toISOString(), fresh.map((c) => (c.aiOther && otherMode !== "live" ? "dry" : mode)),
+        now.toISOString(), fresh.map((c) => (liveFor(c, mode, otherMode, historyMode) ? mode : "dry")),
         fresh.map((c) => c.reason), fresh.map((c) => c.otherType)]);
     rep.logged = ins.rowCount ?? 0;
   }
@@ -145,12 +171,25 @@ export async function runCarrierClose(db: Db, now: Date, mode: CloseMode, onStag
   }
   if (mode !== "live") return rep;
 
-  const live = cands.filter((c) => !c.aiOther || otherMode === "live").slice(0, CLOSE_MAX_PER_TICK);
-  for (const reason of ["carrier", "other", "no_talk"] as const) {
-    for (const batch of chunks(live.filter((c) => c.reason === reason), CLOSE_BATCH)) {
+  const live = cands.filter((c) => liveFor(c, mode, otherMode, historyMode)).slice(0, CLOSE_MAX_PER_TICK);
+  const groups: { reason: CloseReason; history: boolean }[] = [
+    { reason: "carrier", history: false }, { reason: "carrier", history: true }, { reason: "other", history: false }, { reason: "no_talk", history: false }];
+  for (const g of groups) {
+    const reason = g.reason;
+    for (const batch of chunks(live.filter((c) => c.reason === reason && c.history === g.history), CLOSE_BATCH)) {
       const ids = batch.map((c) => c.kommoId);
+      // Задачі угоди — ПЕРШИМИ: якщо закриття угоди впаде, задачі вже погашені, а угода лишиться на етапі й
+      // наступний прохід її добере. Зворотний порядок лишив би задачу на угоді, що вже пішла з етапу.
+      if (kommo.openTaskIds && kommo.closeTasks) {
+        try {
+          const tids = await kommo.openTaskIds(ids);
+          if (tids.length) { await kommo.closeTasks(tids, TASK_RESULT_TEXT); rep.tasksClosed += tids.length; }
+        } catch (e) {
+          rep.error = `задачі Kommo не закрито: ${(e instanceof Error ? e.message : String(e)).slice(0, 300)}`;
+        }
+      }
       try {
-        await kommo.patchLeads(closePayload(ids, reason));
+        await kommo.patchLeads(closePayload(ids, reason, g.history ? AUTO_CARRIER_TAG : null));
       } catch (e) {
         const why = (e instanceof Error ? e.message : String(e)).slice(0, 500);
         await db.query(`UPDATE carrier_close_log SET close_error = $2, last_try_at = $3 WHERE kommo_id = ANY($1::bigint[])`,
@@ -163,7 +202,8 @@ export async function runCarrierClose(db: Db, now: Date, mode: CloseMode, onStag
         [ids, now.toISOString()]);
       rep.closed += ids.length;
       // Примітка — пояснення для менеджера. Її збій закриття не скасовує: угода вже закрита, а причина стоїть у полі.
-      const text = (c: CloseCandidate) => reason === "carrier" ? closeNoteText(c.confidence ?? 0, c.quote, c.byHuman)
+      const text = (c: CloseCandidate) => c.history ? historyCloseNote(c.historyFrom ?? "?")
+        : reason === "carrier" ? closeNoteText(c.confidence ?? 0, c.quote, c.byHuman)
         : reason === "no_talk" ? NO_TALK_NOTE : closeNoteTextOther(c.confidence, c.otherType, c.byHuman);
       await kommo.addNotes(batch.map((c) => ({ entity_id: c.kommoId, note_type: "common", params: { text: text(c) } })))
         .catch((e: unknown) => db.query(`UPDATE carrier_close_log SET close_error = $2 WHERE kommo_id = ANY($1::bigint[])`,

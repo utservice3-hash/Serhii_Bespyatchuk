@@ -13,9 +13,9 @@ import { pill } from "./CarrierDealPanel";
 
 type Col = "total" | "clients" | "carriersAuto" | "carriersManual" | "otherAuto" | "otherManual" | "unsorted" | "overdue";
 const COLS: readonly { key: Col; label: string; hint: string; match: (r: CarrierDealT) => boolean }[] = [
-  { key: "total", label: "Усього", hint: "Усі угоди «Дзвінки на мобільні» менеджера за період, які слухав AI (без відсіяних фільтром і без розмови).", match: (r) => r.category !== "no_talk" },
+  { key: "total", label: "Усього", hint: "Усі угоди «Дзвінки на мобільні» менеджера за період, які розібрала автоматика — AI за розмовою або історія CRM (без відсіяних фільтром і без розмови).", match: (r) => r.category !== "no_talk" },
   { key: "clients", label: "Клієнти", hint: "Виявились клієнтами — угода лишилась на етапі.", match: (r) => r.category === "client" },
-  { key: "carriersAuto", label: "Перевізники (AI)", hint: "Перевізники, яких AI визначив сам (певен від 85%) і закрив у CRM.", match: (r) => r.category === "carrier" && r.source !== "human" },
+  { key: "carriersAuto", label: "Перевізники (авто)", hint: "Перевізники, визначені без людини: AI (певен від 85%) або історія CRM — номер уже закривали як «Перевізник» і угоди замовника немає.", match: (r) => r.category === "carrier" && r.source !== "human" },
   { key: "carriersManual", label: "Перевізники (людина)", hint: "Перевізники, яких визначила людина після прослуховування.", match: (r) => r.category === "carrier" && r.source === "human" },
   { key: "otherAuto", label: "Інше (AI)", hint: "Не клієнт і не перевізник (спам, постачальник, робота, особисте, помилка номера) — визначив AI.", match: (r) => r.category === "other" && r.source !== "human" },
   { key: "otherManual", label: "Інше (людина)", hint: "Не клієнт і не перевізник — визначила людина.", match: (r) => r.category === "other" && r.source === "human" },
@@ -142,7 +142,7 @@ export function CarrierReportCard({ from, to, managerId, teamId }: { from: strin
                         <td style={{ padding: "5px 10px" }}>{r.managerName ?? <span style={muted}>без менеджера</span>}</td>
                         <td style={{ padding: "5px 10px", whiteSpace: "nowrap" }}>
                           <span style={pill(TONE[cat.tone].bg, TONE[cat.tone].fg)}>{cat.label}{r.otherType ? ` · ${OTHER_TYPE_UI[r.otherType]}` : ""}</span>
-                          <span style={{ ...muted, fontSize: 12, marginLeft: 6 }}>{r.source === "human" && r.human ? deciderLabel(r.human.role) : r.source === "ai" ? `AI, ${pctLabel(r.ai.confidence)}` : r.why ?? ""}</span>
+                          <span style={{ ...muted, fontSize: 12, marginLeft: 6 }}>{r.source === "human" && r.human ? deciderLabel(r.human.role) : r.source === "ai" ? `AI, ${pctLabel(r.ai.confidence)}` : r.source === "crm" ? "історія CRM" : r.why ?? ""}</span>
                         </td>
                         <td style={{ padding: "5px 10px", ...muted }}>{r.human?.note ?? r.ai.reason ?? r.ai.quote ?? ""}</td>
                       </tr>

@@ -18,7 +18,8 @@ export async function missedCallTasks(): Promise<SignalStats | GuardSkip> {
     try {
       const s = await applyMissedCallSignals(client, new Date());
       console.log(`missedCallTasks: груп ${String(s.groups)}, створено ${String(s.created)}, `
-        + `перевідкрито ${String(s.reopened)}, оновлено ${String(s.updated)}, закрито ${String(s.closed)}.`);
+        + `перевідкрито ${String(s.reopened)}, оновлено ${String(s.updated)}, закрито ${String(s.closed)}, `
+        + `перевізник за історією CRM: не поставлено ${String(s.skippedCarrier)}, закрито ${String(s.closedCarrier)}.`);
       return s;
     } finally {
       client.release();

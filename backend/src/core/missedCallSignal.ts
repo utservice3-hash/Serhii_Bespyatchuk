@@ -1,6 +1,7 @@
 import { CALL_MERGE_WINDOW, mergedLagGapExpr, mergedLagFirst } from "./callMerge.js";
 import { INBOUND_TYPES, OUTBOUND_TYPES, missedDispSql, CALLBACK_MIN_TALK_SEC } from "./missedCallsRules.js";
 import { dayBucketCase, dayBucketParts, type DayBucket } from "./dayBuckets.js";
+import { carrierHistorySql, carrierTaskCloseReason } from "./carrierHistory.js";
 
 /**
  * 📵 СИГНАЛ МЕНЕДЖЕРУ ПО ПРОПУЩЕНОМУ — ТЗ-1, прохід 3 (16.09.2026).
@@ -67,6 +68,8 @@ export interface SignalGroup {
   last_bucket: DayBucket;
   team_name: string | null;
   today: string;
+  /** Угода номера, закрита як «Перевізник» (блок 1 ТЗ 4373); NULL — не перевізник або є угода замовника. */
+  carrier_deal: string | null;
 }
 
 /**
@@ -125,7 +128,8 @@ export function signalGroupsSql(now: Date): { sql: string; params: unknown[] } {
            to_char(MAX(f.calldate) ${KY}, 'HH24:MI') AS last_hhmm,
            (array_agg(${dayBucketCase("f.dow", "f.hr")} ORDER BY f.calldate DESC))[1] AS last_bucket,
            MAX(t.name) AS team_name,
-           to_char((MAX(bd.now_at) ${KY})::date, 'YYYY-MM-DD') AS today
+           to_char((MAX(bd.now_at) ${KY})::date, 'YYYY-MM-DD') AS today,
+           ${carrierHistorySql("f.client_phone")}::text AS carrier_deal
       FROM flagged f
       CROSS JOIN bounds bd
       JOIN managers mg ON mg.id = f.manager_id AND mg.is_active
@@ -214,6 +218,25 @@ export const autoCloseReason = (outLabel: string, who: string | null = null, sec
 
 export interface SignalStats {
   groups: number; created: number; reopened: number; updated: number; closed: number;
+  /** Блок 1 ТЗ 4373: задачу не поставлено — номер перевізника за історією CRM (нові записи в `missed_call_skips`). */
+  skippedCarrier: number;
+  /** Блок 1: відкриту задачу закрито — номер перевізника за історією CRM. */
+  closedCarrier: number;
+}
+
+/**
+ * Відкриті задачі сигналу, номер яких — перевізник за історією CRM (блок 1 ТЗ 4373). Закриваємо з поясненням:
+ * передзвонювати перевізнику не треба. Людина, яка вважає інакше, відкриває задачу знову — і тоді сигнал її не чіпає,
+ * поки не прийде новий пропущений (а на новий пропущений від цього номера задача вже не ставиться).
+ */
+export function carrierCloseCandidatesSql(): string {
+  return `
+    SELECT l.manager_id, l.client_phone, to_char(l.kday, 'YYYY-MM-DD') AS kday, l.task_id, c.carrier_deal::text AS carrier_deal
+      FROM missed_call_tasks l
+      JOIN tasks t ON t.id = l.task_id
+      CROSS JOIN LATERAL (SELECT ${carrierHistorySql("l.client_phone")} AS carrier_deal) c
+     WHERE l.closed_at IS NULL AND t.status <> 'done' AND c.carrier_deal IS NOT NULL
+     ORDER BY l.kday, l.manager_id, l.client_phone`;
 }
 
 /**
@@ -225,12 +248,25 @@ export interface SignalStats {
  * журналу означала б дубль на наступному тіку.
  */
 export async function applyMissedCallSignals(db: Db, now: Date): Promise<SignalStats> {
-  const stats: SignalStats = { groups: 0, created: 0, reopened: 0, updated: 0, closed: 0 };
+  const stats: SignalStats = { groups: 0, created: 0, reopened: 0, updated: 0, closed: 0, skippedCarrier: 0, closedCarrier: 0 };
   const g = signalGroupsSql(now);
   const groups = (await db.query<SignalGroup>(g.sql, g.params)).rows;
   stats.groups = groups.length;
 
   for (const r of groups) {
+    if (r.carrier_deal != null) {
+      // Перевізник за історією CRM — задачу не ставимо (ТЗ: «задача менеджеру не створюється»), лише слід для звіту.
+      // Лише якщо задачі на цю групу НЕ БУЛО: поставлену раніше й закриту як перевізника рахує «закрито», а не
+      // «не поставлено» — інакше звіт контролю рахував би один номер двічі (спіймав `#1309`).
+      const ins = await db.query(
+        `INSERT INTO missed_call_skips (manager_id, client_phone, kday, reason, carrier_deal)
+         SELECT $1, $2, $3::date, 'carrier_history', $4::bigint
+          WHERE NOT EXISTS (SELECT 1 FROM missed_call_tasks WHERE manager_id = $1 AND client_phone = $2 AND kday = $3::date)
+         ON CONFLICT DO NOTHING`,
+        [r.manager_id, r.client_phone, r.kday, r.carrier_deal]);
+      stats.skippedCarrier += ins.rowCount ?? 0;
+      continue;
+    }
     const title = signalTitle(r.client_phone);
     const description = signalDescription({
       missedTotal: r.missed_total, dayLabel: r.day_label, lastHhmm: r.last_hhmm, lastBucket: r.last_bucket,
@@ -297,6 +333,28 @@ export async function applyMissedCallSignals(db: Db, now: Date): Promise<SignalS
     }
   }
 
+  // Перевізники — ДО закриття передзвоном: задача на номер перевізника закривається з правильною причиною.
+  for (const r of (await db.query<{ manager_id: number; client_phone: string; kday: string; task_id: number; carrier_deal: string }>(
+    carrierCloseCandidatesSql())).rows) {
+    await db.query("BEGIN");
+    try {
+      const prev = (await db.query<{ status: string }>("SELECT status FROM tasks WHERE id = $1 FOR UPDATE", [r.task_id])).rows[0];
+      if (prev && prev.status !== "done") {
+        await db.query(`UPDATE tasks SET status = 'done', closed_at = $2, close_reason = $3, updated_at = now() WHERE id = $1`,
+          [r.task_id, now, carrierTaskCloseReason(r.carrier_deal)]);
+        await db.query("INSERT INTO task_status_log (task_id, from_status, to_status, changed_by) VALUES ($1, $2, 'done', NULL)",
+          [r.task_id, prev.status]);
+        stats.closedCarrier++;
+      }
+      await db.query(`UPDATE missed_call_tasks SET closed_at = $4, updated_at = now()
+                        WHERE manager_id = $1 AND client_phone = $2 AND kday = $3::date`, [r.manager_id, r.client_phone, r.kday, now]);
+      await db.query("COMMIT");
+    } catch (e) {
+      await db.query("ROLLBACK");
+      throw e;
+    }
+  }
+
   const c = closeCandidatesSql(now);
   for (const r of (await db.query<CloseCandidate>(c.sql, c.params)).rows) {
     await db.query("BEGIN");
@@ -354,6 +412,8 @@ export function recountCandidatesSql(): string {
                 AND o.call_type IN (${inList(OUTBOUND_TYPES)})
                 AND o.billsec >= ${String(CALLBACK_MIN_TALK_SEC)}
                 AND o.calldate > l.last_signal_at)
+       -- Номер перевізника за історією CRM не перевідкриваємо: блок 1 ТЗ однаково закрив би задачу (заміряно 02.10: 9 із 27).
+       AND ${carrierHistorySql("l.client_phone")} IS NULL
      ORDER BY l.kday, l.manager_id, l.client_phone`;
 }
 

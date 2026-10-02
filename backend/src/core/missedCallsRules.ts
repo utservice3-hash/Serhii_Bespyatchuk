@@ -639,3 +639,35 @@ export function noDealListSql(from: string, to: string, s: MissedScope, state: N
      LIMIT ${MISSED_LIST_LIMIT + 1}`;
   return { sql, params };
 }
+
+/* ─────────────── Контроль ТЗ «автозакриття пропущених» (задача 4373): ефект за 7 днів ─────────────── */
+
+/** Префікси причин автозакриття — контракт із `missedCallSignal.autoCloseReason` і `carrierHistory.carrierTaskCloseReason`. */
+export const AUTO_CLOSE_CALLBACK_PREFIX = "Закрито автоматично: передзвонив";
+export const AUTO_CLOSE_CARRIER_PREFIX = "Закрито автоматично: номер у CRM";
+export const AUTOMATION_DAYS = 7;
+
+/**
+ * ТЗ, «Контроль»: «ефект: скільки задач не створилось і скільки закрилось автоматом за тиждень». Сім київських днів
+ * до `today` включно, у скоупі глядача (той самий кламп, що й решта екрана). Угоди Kommo, закриті за історією, —
+ * лише без скоупу: угода етапу фільтра менеджеру ще не належить.
+ */
+export function missedAutomationSql(today: string, s: MissedScope): { sql: string; params: unknown[] } {
+  const scope = `($2::int IS NULL OR m.id = $2::int) AND ($3::int IS NULL OR m.team_id = $3::int)`;
+  const closedIn = (prefix: string) => `(SELECT count(*) FROM missed_call_tasks l JOIN tasks t ON t.id = l.task_id
+        LEFT JOIN managers m ON m.id = l.manager_id
+       WHERE t.status = 'done' AND t.close_reason LIKE '${prefix}%' AND ${scope}
+         AND (t.closed_at AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1::date - ${String(AUTOMATION_DAYS - 1)} AND $1::date)::int`;
+  const sql = `
+    SELECT (SELECT count(*) FROM missed_call_skips k LEFT JOIN managers m ON m.id = k.manager_id
+             WHERE k.kday BETWEEN $1::date - ${String(AUTOMATION_DAYS - 1)} AND $1::date AND ${scope})::int AS skipped_carrier,
+           ${closedIn(AUTO_CLOSE_CALLBACK_PREFIX)} AS closed_callback,
+           ${closedIn(AUTO_CLOSE_CARRIER_PREFIX)} AS closed_carrier,
+           (SELECT count(*) FROM missed_call_tasks l JOIN tasks t ON t.id = l.task_id LEFT JOIN managers m ON m.id = l.manager_id
+             WHERE t.status <> 'done' AND ${scope})::int AS open_now,
+           CASE WHEN $2::int IS NULL AND $3::int IS NULL THEN (
+             SELECT count(*) FROM carrier_close_log cl JOIN carrier_call_deals d ON d.kommo_id = cl.kommo_id
+              WHERE d.state = 'history' AND (cl.decided_at AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1::date - ${String(AUTOMATION_DAYS - 1)} AND $1::date
+           )::int END AS deals_history`;
+  return { sql, params: [today, s.managerId ?? null, s.teamId ?? null] };
+}
