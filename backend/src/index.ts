@@ -65,6 +65,7 @@ import { createReceivableDeadlineTasks } from "./jobs/receivableDeadlineTasks.js
 import { syncKommo } from "./jobs/syncKommo.js";
 import * as reactivation from "./core/reactivation.js";
 import { refreshRoles, rolesCacheSize } from "./auth/rbac.js";
+import { refreshTeamMoves } from "./core/teamAt.js";
 import { seedOneOnOneForms } from "./oneOnOne/catalog.js";
 import { bankRouter } from "./routes/bank.js";
 import { trackerRouter } from "./routes/tracker.js";
@@ -833,7 +834,10 @@ async function loadRolesOrDie(): Promise<void> {
   }
 }
 
-loadRolesOrDie().then(() => {
+loadRolesOrDie().then(async () => {
+  // 🔀 Знімок переходів між командами (`core/teamAt.ts`) — ДО першого запиту: без нього звіти
+  // підуть повільною запасною формою. Збій не валить старт — запасна форма правильна.
+  await refreshTeamMoves(pool).catch((e) => console.error("refreshTeamMoves at boot failed:", e));
   // 1×1 форми: гарантуємо наявність version 1 (A/Б/В) — ідемпотентно, не блокує старт.
   seedOneOnOneForms(pool).catch((e) => console.error("seedOneOnOneForms at boot failed:", e));
   // 🔌 ЖУРНАЛ СТАРТІВ. Пишемо ОДРАЗУ, до першого тіку поштаря: інакше «несподіваний
@@ -849,6 +853,10 @@ loadRolesOrDie().then(() => {
 // (один SELECT по 8 рядках) і робить стан самовідновним.
 cron.schedule("*/10 * * * *", () => {
   refreshRoles().catch((e) => console.error("periodic refreshRoles failed:", e));
+});
+// 🔀 Страховка знімка переходів: писарі оновлюють його самі, крон — на випадок запису з іншого процесу.
+cron.schedule("*/10 * * * *", () => {
+  refreshTeamMoves(pool).catch((e) => console.error("periodic refreshTeamMoves failed:", e));
 });
 
 // 📮 ПОШТАР ТРИВОГ — раз на 5 хвилин. Не детектор: кличе ТОЙ САМИЙ `collectAlerts()`,

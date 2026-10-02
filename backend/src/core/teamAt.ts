@@ -42,17 +42,56 @@ export function inTeamDuring(currentTeamId: number | null, moves: readonly TeamM
 }
 
 /**
- * SQL-вираз «команда менеджера `alias` на дату `dateExpr`» (`dateExpr` — вираз типу date).
+ * 🧠 ЗНІМОК ПЕРЕХОДІВ У ПАМʼЯТІ ПРОЦЕСУ — і саме він робить вираз дешевим.
  *
- * 🔴 ПЕРША ГІЛКА — ШВИДКИЙ ШЛЯХ, А НЕ ПРИКРАСА. `NOT IN (SELECT …)` без кореляції Postgres
- * рахує ОДИН раз (хешований підплан), тож рядки людей без переходів — це всі рядки, поки
- * таблиця порожня, — не платять за корельований пошук. Інакше кожна угода кожного запиту
- * робила б підзапит, а `/overview` ×4 і так стоїть на порозі `#36`.
- * `CASE` гарантує порядок гілок, тож корельований підзапит біжить лише для тих, хто переходив.
- * `EXISTS` окремо від `SELECT from_team_id`, бо `from_team_id` буває NULL («був без команди»),
- * і `COALESCE` сплутав би його з «переходу немає».
+ * 📐 ЧОМУ НЕ ПІДЗАПИТ (заміряно 02.10.2026 на проді, golden «до/після»). Перша редакція рахувала команду
+ * на дату підзапитами до `manager_team_moves` прямо в рядковій умові. Числа сходились байт-у-байт, але
+ * планувальник втрачав оцінки: чесна воронка команди Яцика 0.13 → 16.5 с, звіт менеджера по команді
+ * 4 → 18 с (межа сервера 20 с), рекламна когорта «Звіту» 0.4 → 1.35 с, передачі в Огляді → 6.5 с.
+ * Переходів одиниці, тож вони вбудовуються в SQL КОНСТАНТАМИ: без переходів вираз — рівно `m.team_id`
+ * (запит той самий, що до модуля), з переходами — `CASE` без жодного підзапиту.
+ *
+ * Знімок оновлюють: старт сервера (до `listen`), кожен запис переходу (`refreshTeamMoves` після
+ * COMMIT у Налаштуваннях і синку) і крон раз на 10 хв (страховка). Поки знімка немає (окремий
+ * процес, тест без завантаження) — запасна форма з підзапитами: повільніша, але правильна.
+ */
+let snapshot: Map<number, TeamMove[]> | null = null;
+
+/** Перечитати знімок із бази. Повертає кількість переходів. */
+export async function refreshTeamMoves(db: Db): Promise<number> {
+  const r = await db.query<{ manager_id: number; ef: string; f: number | null; t: number | null }>(
+    `SELECT manager_id, to_char(effective_from, 'YYYY-MM-DD') AS ef, from_team_id AS f, to_team_id AS t
+       FROM manager_team_moves ORDER BY manager_id, effective_from`);
+  const m = new Map<number, TeamMove[]>();
+  for (const x of r.rows) m.set(x.manager_id, [...(m.get(x.manager_id) ?? []), { effectiveFrom: x.ef, fromTeamId: x.f, toTeamId: x.t }]);
+  snapshot = m;
+  return r.rows.length;
+}
+/** Для тестів: повернутись до запасної форми (знімка немає). */
+export function forgetTeamMoves(): void { snapshot = null; }
+
+const intLit = (v: number | null): string => (v == null ? "NULL::int" : String(Math.trunc(Number(v))));
+const dateLit = (ymd: string): string => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) throw new Error(`teamAt: дата переходу не YYYY-MM-DD: ${ymd}`);
+  return `DATE '${ymd}'`;
+};
+const moverIds = (snap: Map<number, TeamMove[]>): string => `ARRAY[${[...snap.keys()].map((id) => intLit(id)).join(",")}]::int[]`;
+
+/**
+ * SQL-вираз «команда менеджера `alias` на дату `dateExpr`» (`dateExpr` — вираз типу date).
+ * Зі знімком: `CASE m.id WHEN <хто переходив> THEN CASE WHEN дата < перехід₁ THEN from₁ … ELSE m.team_id END
+ * … ELSE m.team_id END` — переходи кожного відсортовані за датою, тож перша гілка, де дата раніша за перехід,
+ * і дає `from` найранішого переходу після дати (правило `teamAt`).
  */
 export function teamAtSql(alias: string, dateExpr: string): string {
+  if (snapshot) {
+    if (!snapshot.size) return `${alias}.team_id`;
+    const arms = [...snapshot].map(([id, moves]) =>
+      `WHEN ${intLit(id)} THEN CASE ${moves.map((mv) => `WHEN (${dateExpr}) < ${dateLit(mv.effectiveFrom)} THEN ${intLit(mv.fromTeamId)}`).join(" ")} ELSE ${alias}.team_id END`);
+    return `(CASE ${alias}.id ${arms.join(" ")} ELSE ${alias}.team_id END)`;
+  }
+  // Запасна форма (знімка немає). `NOT IN (…)` без кореляції — хешований підплан, один на запит;
+  // `EXISTS` окремо від `SELECT from_team_id`, бо `from_team_id` буває NULL («був без команди»).
   const later = `FROM manager_team_moves mv WHERE mv.manager_id = ${alias}.id AND mv.effective_from > (${dateExpr})`;
   return `(CASE WHEN ${alias}.id NOT IN (SELECT mv0.manager_id FROM manager_team_moves mv0) THEN ${alias}.team_id`
     + ` WHEN EXISTS (SELECT 1 ${later}) THEN (SELECT mv.from_team_id ${later} ORDER BY mv.effective_from LIMIT 1)`
@@ -62,11 +101,13 @@ export function teamAtSql(alias: string, dateExpr: string): string {
 /**
  * Умова «рядок належить команді `teamRef` на свою дату» — заміна `m.team_id = $n` у запитах, де
  * в рядка є дата (анкер грошей, дата створення, день події).
- * Перша половина — дешевий фільтр по самій `managers` (планувальник відсікає чужих ДО зʼєднання
- * з угодами, як і раніше); друга — саме правило. Без першої зʼєднання йшло б по всіх менеджерах.
+ * Без переходів — рівно `m.team_id = $n`. З переходами перша половина — дешевий фільтр по самій
+ * `managers` (планувальник відсікає чужих ДО зʼєднання з угодами, як і раніше); друга — саме правило.
  */
 export function teamOnDateSql(alias: string, dateExpr: string, teamRef: string): string {
-  return `((${alias}.team_id = ${teamRef} OR ${alias}.id IN (SELECT mv1.manager_id FROM manager_team_moves mv1))`
+  if (snapshot && !snapshot.size) return `${alias}.team_id = ${teamRef}`;
+  const movers = snapshot ? `${alias}.id = ANY(${moverIds(snapshot)})` : `${alias}.id IN (SELECT mv1.manager_id FROM manager_team_moves mv1)`;
+  return `((${alias}.team_id = ${teamRef} OR ${movers})`
     + ` AND ${teamAtSql(alias, dateExpr)} IS NOT DISTINCT FROM ${teamRef})`;
 }
 

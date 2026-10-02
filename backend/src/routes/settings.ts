@@ -15,7 +15,7 @@ import { loginEnabledFor } from "../core/managerState.js";
 import { writeAudit } from "../db/audit.js";
 import { parseKey } from "../core/secretBox.js";
 import { storeDashboardPassword } from "../core/teamVault.js";
-import { recordTeamMove } from "../core/teamAt.js";
+import { recordTeamMove, refreshTeamMoves } from "../core/teamAt.js";
 import type { Db as SecretsDb } from "../core/secrets.js";
 
 export const settingsRouter = Router();
@@ -737,6 +737,7 @@ settingsRouter.put("/team-overrides/:kommoUserId", async (req, res) => {
   } finally {
     client.release();
   }
+  await refreshTeamMoves(pool); // звіти мусять побачити перехід одразу, а не через 10 хв
   await writeAudit({ ...audit(req), action: "manager.team_override", targetType: "manager",
     targetId: String(mgr.id), targetLabel: `${mgr.name} → ${label}${mode !== "crm" ? ` з ${effectiveFrom}` : ""}` });
   res.json({ ok: true, mode, teamId, appliedNow: mode !== "crm", effectiveFrom: mode !== "crm" ? effectiveFrom : null });

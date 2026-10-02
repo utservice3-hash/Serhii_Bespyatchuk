@@ -41,7 +41,7 @@ import { jobSkip, type JobSkip } from "./jobRuns.js";
 import { guardDecision, MAX_RUN_MS } from "./syncGuardRule.js";
 import { getSettings } from "../routes/settings.js";
 import { effectiveTeamId, type TeamOverride } from "../core/teamOverride.js";
-import { recordTeamMove } from "../core/teamAt.js";
+import { recordTeamMove, refreshTeamMoves } from "../core/teamAt.js";
 import { kyivToday } from "../core/dates.js";
 
 function toTimestamp(unixSeconds: number | null): Date | null {
@@ -128,6 +128,7 @@ export async function syncManagers(): Promise<number> {
     prevRows.rows.map((r) => [String(r.kommo_user_id), { id: r.id, teamId: r.team_id }])
   );
 
+  let teamMoved = false;
   for (const user of users) {
     const group = user._embedded?.groups?.[0];
     // Перевизначення бʼє групу з CRM — core/teamOverride.effectiveTeamId.
@@ -165,6 +166,7 @@ export async function syncManagers(): Promise<number> {
         const mv = await recordTeamMove(client, { managerId: prev.id, fromTeamId: prev.teamId, toTeamId: teamId,
           effectiveFrom: kyivToday(), source: "kommo" });
         if (mv.kind === "rejected") console.warn(`syncKommo: перехід менеджера ${prev.id} не записано — ${mv.reason}`);
+        else if (mv.kind !== "none") teamMoved = true;
         await client.query(`INSERT INTO manager_team_history (manager_id, team_id) VALUES ($1, $2)`, [prev.id, teamId]);
         await client.query("COMMIT");
       } catch (e) {
@@ -187,6 +189,9 @@ export async function syncManagers(): Promise<number> {
       );
     }
   }
+
+  // Знімок переходів (`core/teamAt.ts`) — одразу, щоб звіти не чекали крона.
+  if (teamMoved) await refreshTeamMoves(pool);
 
   const activeKommoIds = users.map((user) => user.id);
   await pool.query(

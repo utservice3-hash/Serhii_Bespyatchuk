@@ -86,6 +86,8 @@ async function db(): Promise<Ctx | { skip: string }> {
       (1, 'payment_amount', '2026-09-01', 1000), (1, 'payment_amount', '2026-10-01', 900), (2, 'payment_amount', '2026-09-01', 2000)`);
     const [money, plans, metrics, sql] = await Promise.all([
       import("./money.js"), import("./plans.js"), import("./metrics.js"), import("./teamAt.js")]);
+    // Як сервер на старті: знімок переходів у памʼяті (`refreshTeamMoves`). #1302/#1302b окремо женуть і запасну форму.
+    await sql.refreshTeamMoves(c);
     dispose = async () => {
       const { pool } = await import("../db/pool.js");
       await pool.end();
@@ -108,13 +110,25 @@ const DAYS = ["2026-09-29", "2026-09-30", "2026-10-01", "2026-10-02"];
 
 test("#1302 ЖИВИЙ SQL: вираз «команда на дату» == правилу для кожного менеджера й дня (і для «був без команди»)", async (t) => {
   const x = await db(); if ("skip" in x) return t.skip(x.skip);
+  try {
+    for (const form of ["знімок", "запасна"] as const) {
+      if (form === "запасна") x.sql.forgetTeamMoves(); else await x.sql.refreshTeamMoves(x.c);
+      await checkTeamAtSql(x, form);
+    }
+  } finally { await x.sql.refreshTeamMoves(x.c); }
+});
+
+async function checkTeamAtSql(x: Ctx, form: string): Promise<void> {
   const moves = await movesOf(x.c);
   const mgrs = (await x.c.query<{ id: number; team_id: number | null }>(`SELECT id, team_id FROM managers ORDER BY id`)).rows;
   assert.equal(mgrs.length, 4, "🔴 фікстура не засіялась — порожньо означає ПРОВАЛ");
   for (const m of mgrs) for (const d of DAYS) {
     const got: number | null = (await x.c.query<{ t: number | null }>(
       `SELECT ${x.sql.teamAtSql("m", "$1::date")} AS t FROM managers m WHERE m.id = $2`, [d, m.id])).rows[0].t;
-    assert.equal(got, teamAt(m.team_id, moves.get(m.id) ?? [], d), `🔴 менеджер ${m.id} на ${d}: SQL розійшовся з правилом`);
+    assert.equal(got, teamAt(m.team_id, moves.get(m.id) ?? [], d), `🔴 [${form}] менеджер ${m.id} на ${d}: SQL розійшовся з правилом`);
+    const on: boolean = (await x.c.query<{ v: boolean }>(
+      `SELECT ${x.sql.teamOnDateSql("m", "$1::date", "$3")} AS v FROM managers m WHERE m.id = $2`, [d, m.id, 5])).rows[0].v ?? false;
+    assert.equal(on, teamAt(m.team_id, moves.get(m.id) ?? [], d) === 5, `🔴 [${form}] «рядок у команді 5» для менеджера ${m.id} на ${d} не той`);
   }
   for (const [from, to] of [["2026-09-01", "2026-09-30"], ["2026-10-01", "2026-10-31"], ["2026-09-15", "2026-10-15"]]) {
     for (const m of mgrs) for (const team of [5, 6]) {
@@ -128,19 +142,26 @@ test("#1302 ЖИВИЙ SQL: вираз «команда на дату» == пр�
     `SELECT ${x.metrics.commercialDuringSql("m", "$1", "$2")} AS v FROM managers m WHERE m.id = $3`, [from, to, id])).rows[0].v;
   assert.equal(await commercial(1, "2026-09-01", "2026-09-30"), true, "🔴 у вересні Хомік не продажна — випаде з ростера Звіту");
   assert.equal(await commercial(1, "2026-10-01", "2026-10-31"), false, "🔴 у жовтні Хомік без команди, а рахується продажною");
-});
+}
 
 test("#1302b ЖИВИЙ SQL: без жодного переходу вираз == поточна команда кожного менеджера (звіти байт-у-байт як були)", async (t) => {
   const x = await db(); if ("skip" in x) return t.skip(x.skip);
   await x.c.query("BEGIN");
   try {
     await x.c.query(`DELETE FROM manager_team_moves`);
-    const r = await x.c.query<{ n: string; same: string }>(
-      `SELECT COUNT(*) AS n, COUNT(*) FILTER (WHERE ${x.sql.teamAtSql("m", "d::date")} IS NOT DISTINCT FROM m.team_id) AS same
-         FROM managers m CROSS JOIN unnest($1::date[]) AS d`, [DAYS]);
-    assert.equal(Number(r.rows[0].n), 16, "🔴 сітка менеджер × день не та — перевіряти нема чого");
-    assert.equal(Number(r.rows[0].same), 16, "🔴 без переходів команда на дату відрізняється від поточної — зрушить усі звіти");
-  } finally { await x.c.query("ROLLBACK"); }
+    for (const form of ["знімок", "запасна"] as const) {
+      if (form === "запасна") x.sql.forgetTeamMoves(); else await x.sql.refreshTeamMoves(x.c);
+      const r: { rows: { n: string; same: string }[] } = await x.c.query<{ n: string; same: string }>(
+        `SELECT COUNT(*) AS n, COUNT(*) FILTER (WHERE ${x.sql.teamAtSql("m", "d::date")} IS NOT DISTINCT FROM m.team_id) AS same
+           FROM managers m CROSS JOIN unnest($1::date[]) AS d`, [DAYS]);
+      assert.equal(Number(r.rows[0].n), 16, "🔴 сітка менеджер × день не та — перевіряти нема чого");
+      assert.equal(Number(r.rows[0].same), 16, `🔴 [${form}] без переходів команда на дату відрізняється від поточної — зрушить усі звіти`);
+    }
+    // Зі знімком без переходів вираз — ДОСЛІВНО старий: той самий SQL, той самий план, ніякого регресу часу.
+    await x.sql.refreshTeamMoves(x.c);
+    assert.equal(x.sql.teamOnDateSql("m", "d::date", "$9"), "m.team_id = $9", "🔴 без переходів запит уже не той, що до модуля");
+    assert.equal(x.sql.teamAtSql("m", "d::date"), "m.team_id", "🔴 без переходів вираз команди уже не `m.team_id`");
+  } finally { await x.c.query("ROLLBACK"); await x.sql.refreshTeamMoves(x.c); }
 });
 
 test("#1303 ГРОШІ З ПЕРЕХОДОМ: вересень Хомік — у Яцика, жовтень — без команди; Σ команд == відділ; рядок у команді — лише її частка", async (t) => {
@@ -160,12 +181,14 @@ test("#1303 ГРОШІ З ПЕРЕХОДОМ: вересень Хомік — у
     "🔴 жовтень Хомік рахується в команді, з якої вона пішла");
   // 🪞 Дзеркало: прибрати перехід — і вересень іде за людиною (старе правило). Отже тримає саме перехід.
   await x.c.query(`DELETE FROM manager_team_moves WHERE manager_id = 1`);
+  await x.sql.refreshTeamMoves(x.c);
   try {
     const old = await x.money.receivedByTeam(P);
     assert.equal(old.find((r) => r.teamId === 5)?.revenue ?? 0, 50, "🔴 без переходу команда й далі тримає вересень — гейт міряє не перехід");
   } finally {
     await x.c.query(`INSERT INTO manager_team_moves (manager_id, from_team_id, to_team_id, effective_from, source)
                      VALUES (1, 5, NULL, '2026-10-01', 'settings')`);
+    await x.sql.refreshTeamMoves(x.c);
   }
 });
 
@@ -213,6 +236,11 @@ test("#1306 ОБИДВА ПИСАРІ КОМАНДИ ПИШУТЬ ПЕРЕХІД
   assert.match(sync, /\brecordTeamMove\(client, \{[^}]*source: "kommo"/s, "🔴 синк міняє команду без переходу — минуле переїде за людиною");
   assert.match(settings, /\brecordTeamMove\(client, \{[^}]*effectiveFrom,[^}]*source: "settings"/s,
     "🔴 Налаштування міняють команду без переходу з датою");
+  // Знімок переходів: без оновлення звіти бачили б перехід лише через 10 хв (крон) — або ніколи без старту.
+  const index = readFileSync(path.join(ROOT, "backend/src/index.ts"), "utf8");
+  assert.match(settings, /\bawait refreshTeamMoves\(pool\)/, "🔴 Налаштування не оновлюють знімок переходів");
+  assert.match(sync, /if \(teamMoved\) await refreshTeamMoves\(pool\)/, "🔴 синк не оновлює знімок переходів");
+  assert.match(index, /\bawait refreshTeamMoves\(pool\)/, "🔴 сервер стартує без знімка переходів — звіти підуть запасною формою");
 });
 
 // ── Прохід 2: розгортка «Команд», номінації тижня, пропущені дзвінки ─────────────────────────────

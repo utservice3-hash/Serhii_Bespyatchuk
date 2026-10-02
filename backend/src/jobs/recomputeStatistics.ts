@@ -19,8 +19,6 @@ import { STAGE_RECEIVED } from "../core/money.js";
 // 🔀 Серії «закрито» і «відправлено» — на команду НА ДАТУ рядка (задача 4892): перехід людини
 // не переписує минулі тижні тімліда. Знімки поточного стану нижче — на поточній команді.
 import { teamAtSql } from "../core/teamAt.js";
-const CLOSED_TEAM = teamAtSql("m", "(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date");
-const CREATED_TEAM = teamAtSql("m", "(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date");
 
 const FULL_CYCLE = [8921932, 155304];
 const SALES_TEAM_IDS = Object.keys(SALES_TEAM_LEAD).map(Number);
@@ -66,6 +64,9 @@ const DISPATCH_LEADS = [...new Set([
 ])];
 
 async function run(): Promise<void> {
+  // Вираз будується на КОЖНОМУ прогоні, а не на імпорті: він залежить від знімка переходів (`core/teamAt.ts`).
+  const CLOSED_TEAM = teamAtSql("m", "(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date");
+  const CREATED_TEAM = teamAtSql("m", "(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date");
   // ключ `${pt}|${ps}|${lead}|${metric}` → value
   const out = new Map<string, number>();
   const add = (pt: string, ps: string, lead: string, metric: string, v: number) => {
