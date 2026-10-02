@@ -124,7 +124,7 @@ export function validateForm(s: DocumentState, ctx: ValidateCtx = {}): Issue[] {
 
     const sumRaw = (s.pay?.sum || '').trim();
     const sum = Number(sumRaw.replace(/[\s ]/g, '').replace(',', '.'));
-    if (!sumRaw) add('pay.sum', 'error', 'Вкажіть суму — без неї заявка не формується.');
+    if (!sumRaw) add('pay.sum', 'error', 'Вкажіть суму — обовʼязкова.');
     else if (!Number.isFinite(sum) || sum <= 0) add('pay.sum', 'error', 'Сума — число більше нуля (напр. 13 000 або 13000,50).');
 
     const load = dateOf(s.trip?.loadDate || ''), unload = dateOf(s.trip?.unloadDate || '');

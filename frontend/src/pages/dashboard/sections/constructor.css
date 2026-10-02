@@ -131,6 +131,8 @@
 .ctorx .fmsg.wrn{color:var(--warn)}
 .ctorx .frow.has-err input{color:var(--bad)}
 .ctorx .issum{align-self:flex-end;padding-bottom:9px;font-size:12px;cursor:help}
+.ctorx .actbar .fld .fmsg{max-width:230px;white-space:normal}
+.ctorx .payrow .fmsg{min-width:150px}
 .ctorx .issum .err{color:var(--bad)}
 .ctorx .issum .wrn{color:var(--warn)}
 .ctorx .frow.miss input{color:var(--warn)}
