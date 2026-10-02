@@ -9,6 +9,7 @@ import { clientOwnersFor } from "../core/clientOwner.js";
 import { kyivToday } from "../core/dates.js";
 import { dispatchedByLoadBucket, leadsTakenByBucket, repeatClientsByBucket, type MetricScope } from "../core/metrics.js";
 import { SALES_TEAM_LEAD } from "../statistics/catalog.js";
+import { leadgenBuckets, sumBuckets } from "../core/leadgenStats.js";
 import {
   STATS_SEAM, isCrmAble, LIVE_TEAMS, DEPSTATS_DEPT, DEPSTATS_METRIC_MAP, hasDepstats,
 } from "../statistics/seriesCatalog.js";
@@ -60,46 +61,17 @@ const COMPUTERS: Record<string, Computer> = {
       if (r.channel === "ad") agg.set(r.bucket, (agg.get(r.bucket) ?? 0) + Number(r.deals));
     return [...agg].map(([period, v]) => P(period, v));
   },
-  // Прорахунки лідгенів — ПЕРЕДАЧІ ліда, COUNT(DISTINCT lead). Company-level.
+  // Прорахунки лідгенів — ТІЄЮ САМОЮ функцією, що екран «Лідогенерація» (`leadgenBuckets` → входи угод у
+  // «Кваліфіковано»). Company-level.
   //
-  // 🔴 ДЖЕРЕЛО ЗМІНЕНО 24.08.2026: `leadgen_registry` → `leadgen_touch`. МЕТРИКА ТА
-  // САМА (передані ліди за датою передачі) — змінилась лише таблиця, з якої вона
-  // читається, і саме тому це правка, а не нова метрика.
-  //   • `leadgen_registry` — дзеркало Google-аркуша бота, і `syncLeadgenRegistry`
-  //     робить йому `TRUNCATE` щосинку. Тобто ряд обрізаний до того, що зараз
-  //     лежить в аркуші (заміряно 24.08: найраніший запис 15.06.2026), а екран
-  //     «Статистики» малює місяці й роки. Усе, що старше, читалось як НУЛЬ —
-  //     тобто як «лідген нічого не передавав», а не як «ми туди не дивились».
-  //   • `leadgen_touch` — той самий факт передачі, персистований append-only
-  //     (`ON CONFLICT DO NOTHING`, пише `syncKommo` з того ж реєстру + бекфіл із
-  //     `lead_transfer_events`). Ряд лише зростає.
-  // 📐 Сьогодні обидві таблиці дають ІДЕНТИЧНИЙ ряд (15.06-24.08, 999 лідів) — тож
-  // ця правка НЕ рухає жодного числа на екрані зараз; вона прибирає майбутню
-  // обрізку. Записано навмисно: «нуль розбіжностей» тут — очікуваний результат,
-  // а не доказ, що правка нічого не робить (тримає `#172`).
-  //
-  // ⚠️ ЩО СВІДОМО НЕ ЗРОБЛЕНО: цей ряд НЕ переведено на `lead_channel='leadgen'`,
-  // як три сусідні лідген-місця. Він міряє ПЕРЕДАЧІ (дію лідоген-бота), а не
-  // угоди з лідоген-каналом; підмінивши джерело на канал, ми зробили б назву
-  // «Прорахунки лідгенів» неправдою і, головне, СХОВАЛИ б операційний обвал
-  // передач (з ~130/тиждень до 11/20/1 з 10.08.2026) за рівним каналом. Розбіжність
-  // із формулюванням задачі названа вголос у звіті проходу, а не залатана мовчки.
+  // 🔴 ДЖЕРЕЛО ЗМІНЕНО 02.10.2026 (рішення Романа, варіант А): було `leadgen_touch` — передачі через бот.
+  // Бот із серпня майже не пише (вересень — 2 передачі), і графік «Прорахунки лідгенів» показував
+  // 2–186, коли «Лідогенерація» під тією самою назвою — десятки на тиждень у кожного лідгена. Два числа
+  // під однією назвою на двох екранах — та сама поломка, яку лікує ТЗ Статистик. Обвал БОТА видно й далі —
+  // у таблиці передач на екрані «Лідогенерація»; тут показник про роботу лідгенів, а не про бота.
   lg_transfers: async (g, from, to, teamId, managerId) => {
     if (teamId != null || managerId != null) return []; // per-team поки не розрізаємо (лише компанія)
-    const r = await pool.query<{ period: string; v: string }>(
-      // ⚠️ БЕЗ `AT TIME ZONE`: `leadgen_touch.transfer_date` — це вже DATE, зведений
-      // до Києва НА ЗАПИСІ (`syncKommo.upsertLeadgenTouch`). Друга конверсія над
-      // готовою датою зсунула б ряд на добу — той самий клас, що «дати завжди
-      // по-київськи», лише в інший бік: тут TZ уже застосована, і застосувати її
-      // вдруге означає збрехати рівно на один день.
-      `SELECT to_char(date_trunc($1, transfer_date::timestamp)::date, 'YYYY-MM-DD') AS period,
-              COUNT(DISTINCT lead_kommo_id) AS v
-         FROM leadgen_touch
-        WHERE transfer_date BETWEEN $2 AND $3
-        GROUP BY 1 ORDER BY 1`,
-      [g, from, to]
-    );
-    return r.rows.map((x) => P(x.period, Number(x.v)));
+    return sumBuckets(await leadgenBuckets(from, to, g, false)).map((x) => P(x.bucket, x.quotes));
   },
   // Логістика: усі поставлені авто (=dispatched total).
   cars_delivered_all: async (g, from, to, teamId, managerId) =>

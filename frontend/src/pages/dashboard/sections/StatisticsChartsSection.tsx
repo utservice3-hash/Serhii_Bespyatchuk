@@ -23,7 +23,10 @@ const DIR_HINT = "Напрямок (unit-серія). Історія з табл
 
 const CATS: Cat[] = [
   { key: "money", icon: "💰", label: "Гроші", metrics: [
-    { key: "avg_check", block: "sales", label: "Середній чек", unit: "₴", hint: "виручка успіху ÷ успішні угоди", seamHint: SEAM_CARS },
+    /* 4367 (ТЗ Юлії): з підказки мусить бути видно, ЗА ЯКИЙ ПЕРІОД і ЗА ЯКОЮ ДАТОЮ угоди. Перевірено в ядрі
+       (`money.successByBucket`): анкер — дата переходу угоди в «Успішно реалізовано» (142) за Києвом, не дата
+       оплати й не відвантаження; кожна точка — чек саме за свій день / тиждень / місяць. */
+    { key: "avg_check", block: "sales", label: "Середній чек", unit: "₴", hint: "виручка «успішно реалізовано» ÷ кількість таких угод — окремо за кожну точку (день, тиждень чи місяць — за «Кроком»); дата угоди — день переходу в «Успішно реалізовано», за Києвом (не дата оплати й не відвантаження)", seamHint: SEAM_CARS },
     { key: "revenue_success", block: "sales", label: "Дохід (успіх)", unit: "₴", hint: "успішні угоди (142) за датою закриття, signed" },
     { key: "payment_received", block: "sales", label: "Оплата отримана", unit: "₴", hint: "оплата отримана ∪ успішно реалізовано, без подвоєння — на цих грошах стоїть план" },
     { key: "cash_deals_sum", block: "sales", label: "Готівкові", unit: "₴" },
@@ -417,8 +420,8 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
               </div>
               {stat ? (
                 <div style={{ display: "flex", gap: 26, flexWrap: "wrap", paddingTop: 8, borderTop: "1px solid var(--border)", marginTop: 8, fontSize: 13 }}>
-                  <span style={{ color: MUTED }}>{stat.name}, у вікні графіка —</span>
-                  <span style={{ color: MUTED }}>середнє: <b style={{ color: "var(--text)" }}>{fmt(stat.avg, metric.unit)}</b></span>
+                  <span style={{ color: MUTED }}>{stat.name}, точки у вікні графіка —</span>
+                  <span style={{ color: MUTED }} title="середнє значення ТОЧОК, видимих на графіку; для чека це не «чек за весь період», а середнє чеків по днях / тижнях / місяцях">середнє точок: <b style={{ color: "var(--text)" }}>{fmt(stat.avg, metric.unit)}</b></span>
                   <span style={{ color: MUTED }}>мін: <b style={{ color: "var(--text)" }}>{fmt(stat.min.v, metric.unit)}</b> ({shortDate(stat.min.p)})</span>
                   <span style={{ color: MUTED }}>макс: <b style={{ color: "var(--text)" }}>{fmt(stat.max.v, metric.unit)}</b> ({shortDate(stat.max.p)})</span>
                 </div>

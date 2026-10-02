@@ -140,6 +140,17 @@ export function StatisticsSummary({ today, onPickTeam, pickedTeam }: { today: st
   const shift = (n: number) => setEnd((e) => (gran === "week" ? addDays(e, 7 * n) : monthEnd(shiftMonth(e, n))));
   const isCurrent = gran === "week" ? end === sundayOf(today) : end === monthEnd(today);
 
+  /** Список періодів для вибору: 26 тижнів Пн–Нд або 18 місяців, найсвіжіший зверху. */
+  const periodOptions = useMemo(() => {
+    const out: { end: string; label: string }[] = [];
+    if (gran === "week") {
+      for (let i = 0; i < 26; i++) { const e = addDays(sundayOf(today), -7 * i); out.push({ end: e, label: `${dm(mondayOf(e))}–${dm(e)}${i === 0 ? " (цей)" : i === 1 ? " (минулий)" : ""}` }); }
+    } else {
+      for (let i = 0; i < 18; i++) { const e = monthEnd(shiftMonth(today, -i)); out.push({ end: e, label: `${MONTHS[Number(e.slice(5, 7)) - 1]} ${e.slice(0, 4)}` }); }
+    }
+    if (!out.some((o) => o.end === end)) out.push({ end, label: gran === "week" ? `${dm(mondayOf(end))}–${dm(end)}` : `${MONTHS[Number(end.slice(5, 7)) - 1]} ${end.slice(0, 4)}` });
+    return out;
+  }, [gran, today, end]);
   const title = gran === "week"
     ? `Тиждень ${dm(mondayOf(end))}–${dm(end)}`
     : `${MONTHS[Number(end.slice(5, 7)) - 1]} ${end.slice(0, 4)}`;
@@ -164,11 +175,14 @@ export function StatisticsSummary({ today, onPickTeam, pickedTeam }: { today: st
         <button style={pill} onClick={() => shift(-1)} aria-label="попередній">‹</button>
         <b style={{ fontSize: 14, minWidth: 150, textAlign: "center" }}>{title}</b>
         <button style={pill} onClick={() => shift(1)} disabled={isCurrent} aria-label="наступний">›</button>
-        {/* 4367: БУДЬ-ЯКИЙ тиждень одним кліком — будь-який день обирає свій тиждень Пн–Нд. */}
+        {/* 4367 (ТЗ Юлії): «можна вибрати будь-який тиждень зі списку: 14.09–20.09, 07.09–13.09…» — список Пн–Нд
+            (півроку тижнів) або місяців (півтора року), значення — кінець періоду. */}
         <label style={{ fontSize: 12.5, color: MUTED }}>
-          обрати дату: <input type="date" max={today} value={anchor}
-            onChange={(e) => e.target.value && setEnd(gran === "week" ? sundayOf(e.target.value) : monthEnd(e.target.value))}
-            style={{ padding: "4px 6px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
+          {gran === "week" ? "тиждень:" : "місяць:"}{" "}
+          <select value={end} onChange={(e) => setEnd(e.target.value)}
+            style={{ padding: "5px 6px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontSize: 13 }}>
+            {periodOptions.map((o) => <option key={o.end} value={o.end}>{o.label}</option>)}
+          </select>
         </label>
         {loading && data && <span style={{ fontSize: 12.5, color: MUTED }}>⏳ оновлюємо…</span>}
         {!loading && data && !data.complete && (

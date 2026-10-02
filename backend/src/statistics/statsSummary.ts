@@ -23,6 +23,7 @@ import { fixedWeekBlocks } from "../core/dates.js";
 import { LIVE_TEAMS } from "./seriesCatalog.js";
 import { SALES_TEAM_LEAD } from "./catalog.js";
 import { buildLeadMap, resolveLead } from "../jobs/syncRingostatCalls.js";
+import { leadgenStats } from "../core/leadgenStats.js";
 import { compareWindows, deltaPct, planPct, rankByPlan, type Gran, type Window } from "./statsCompare.js";
 
 /** Розформовані команди — історія лишається, у дефолтному вигляді їх немає (рішення Романа 02.10, питання 4). */
@@ -84,11 +85,13 @@ async function callsOfManager(w: Window, managerId: number): Promise<number> {
   return Number(r.rows[0]?.n ?? 0);
 }
 
-/** Прорахунки лідгенів — передачі з `leadgen_touch` (та сама таблиця, що серія `lg_transfers`). */
+/**
+ * Прорахунки лідгенів — ТІЄЮ САМОЮ функцією, що екран «Лідогенерація» (`leadgenStats`: входи угод у
+ * «Кваліфіковано»). Рішення Романа 02.10.2026 (варіант А): доти плитка брала передачі бота
+ * (`leadgen_touch`) і показувала 2 за вересень, коли «Лідогенерація» — 27 лише в Сердюка за тиждень.
+ */
 async function transfers(w: Window): Promise<number> {
-  const r = await pool.query<{ n: string }>(
-    `SELECT COUNT(DISTINCT lead_kommo_id) AS n FROM leadgen_touch WHERE transfer_date BETWEEN $1 AND $2`, [w.from, w.to]);
-  return Number(r.rows[0]?.n ?? 0);
+  return (await leadgenStats(w.from, w.to)).totals.quotes;
 }
 
 /** План ② по менеджерах за повний період: місяць — місячний план, тиждень — сума тижневих цілей Звіту. */
@@ -169,7 +172,7 @@ export async function buildSummary(gran: Gran, anchor: string, viewer: Viewer) {
   ];
   if (viewer.allTeams) tiles.push({ key: "transfers", label: "Прорахунки лідгенів", unit: "шт", now: trNow, prev: trPrev,
     deltaPct: deltaPct(trNow, trPrev), plan: null, planPct: null, sub: null,
-    planNote: "плану на прорахунки тут немає", formula: "передані лідгенами ліди (бот передач) за датою передачі" });
+    planNote: "плану на прорахунки тут немає", formula: "входи угод у «Кваліфіковано» — як на екрані «Лідогенерація»" });
 
   const rnow = new Map(recvTeamNow.map((t) => [t.teamId, t.revenue]));
   const rprev = new Map(recvTeamPrev.map((t) => [t.teamId, t.revenue]));

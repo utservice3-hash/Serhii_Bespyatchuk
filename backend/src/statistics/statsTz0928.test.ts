@@ -136,6 +136,18 @@ test("#879 ВІСЬ Y — КРУГЛІ ПОДІЛКИ; керування — д
   assert.match(src, /01\.07: таблиця → CRM, рівні не порівнюються/, "🔴 шов 01.07 не підписаний на графіку");
 });
 
+test("#880 «ПРОРАХУНКИ ЛІДГЕНІВ» — ТА САМА ФУНКЦІЯ, ЩО ЕКРАН «ЛІДОГЕНЕРАЦІЯ», і на плитці, і на графіку", () => {
+  const route = codeOnly(read("backend/src/routes/statisticsSeries.ts"));
+  const block = /lg_transfers:[\s\S]*?\n  \},/.exec(route)?.[0] ?? "";
+  assert.ok(block, "🔴 не знайдено ряд `lg_transfers` — гейт втратив предмет");
+  assert.match(block, /sumBuckets\(await leadgenBuckets\(from, to, g, false\)\)\.map\(\(x\) => P\(x\.bucket, x\.quotes\)\)/,
+    "🔴 графік прорахунків рахує не функцією екрана «Лідогенерація» — під однією назвою знову два числа");
+  assert.doesNotMatch(block, /leadgen_touch/, "🔴 графік повернувся на передачі бота (вересень — 2 проти десятків на «Лідогенерації»)");
+  const sum = codeOnly(read("backend/src/statistics/statsSummary.ts"));
+  assert.match(sum, /return \(await leadgenStats\(w\.from, w\.to\)\)\.totals\.quotes;/, "🔴 плитка прорахунків рахує не як «Лідогенерація»");
+  assert.doesNotMatch(sum, /FROM leadgen_touch/, "🔴 плитка знову на передачах бота");
+});
+
 // ─────────────────────────────── ЖИВІ (test:prod) ───────────────────────────────
 
 async function adminToken(): Promise<string> {
@@ -177,4 +189,16 @@ test("#873 ЖИВИЙ: дзвінки плитки за закритий тиж�
   assert.ok(depV > 0, "🔴 депстат за закритий тиждень порожній — звіряти нема з чим");
   // Межа 5%: привʼязка людей до команд береться на сьогодні, депстат — тодішня (02.10: 0% і 3.9% за два тижні).
   assert.ok(Math.abs(tile - depV) / depV <= 0.05, `🔴 дзвінки плитки ${tile} проти депстату ${depV} — два різні правила «дзвінка» на одному екрані`);
+});
+
+test("#880b ЖИВИЙ: прорахунки плитки за закритий тиждень == «Лідогенерація» за ті самі дати", needsApi(), async () => {
+  const anchor = lastSunday();
+  const tok = await adminToken();
+  const a = await (await fetch(`${API_BASE}/api/statistics/summary?gran=week&anchor=${anchor}`, { headers: { Authorization: `Bearer ${tok}` } })).json() as
+    { cur: { from: string; to: string }; tiles: { key: string; now: number }[] };
+  const lg = await (await fetch(`${API_BASE}/api/dashboard/leadgen-stats?from=${a.cur.from}&to=${a.cur.to}`, { headers: { Authorization: `Bearer ${tok}` } })).json() as
+    { totals: { quotes: number } };
+  const tile = a.tiles.find((t) => t.key === "transfers")!.now;
+  assert.ok(lg.totals.quotes > 0, "🔴 «Лідогенерація» за закритий тиждень дала 0 прорахунків — звіряти нема з чим");
+  assert.equal(tile, lg.totals.quotes, "🔴 плитка й екран «Лідогенерація» показують різні прорахунки за ті самі дати");
 });
