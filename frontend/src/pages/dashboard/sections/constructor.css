@@ -47,6 +47,7 @@
   background:color-mix(in srgb, var(--bad) 9%, transparent);color:var(--ink-2)}
 .ctorx .fopwarn b{color:var(--bad)}
 .ctorx .ibannote{padding:7px 13px;font-size:11.5px;color:var(--bad);border-top:1px dashed var(--line-2)}
+.ctorx .ibannote.soft{color:var(--muted)}
 .ctorx .entities{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin-bottom:12px}
 .ctorx .ent{position:relative;text-align:left;border:1.5px solid var(--line);border-radius:13px;padding:13px 15px;
   background:var(--surface);display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:start}
