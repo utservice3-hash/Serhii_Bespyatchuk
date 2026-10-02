@@ -1297,3 +1297,16 @@ tr.recv-row:focus-visible { outline: 2px solid var(--accent, #c5141c); outline-o
   --cc-filtered: #d95926; --cc-notalk: #9085e9; --cc-client: #199e70;
   --cc-carrier: #c98500; --cc-other: #3987e5; --cc-unsorted: #d55181; --cc-spend: #3987e5;
 }
+
+/* ⏳ ЗАГОТОВКИ ЗАВАНТАЖЕННЯ (skeleton) — блок тримає свій розмір, поки вантажаться дані; сторінка не «стрибає»
+   і не зникає між перемиканнями (Статистики, 02.10.2026). Компоненти — `pages/dashboard/Skeleton.tsx`. */
+.skel {
+  background: linear-gradient(90deg, rgba(148,163,184,0.14) 25%, rgba(148,163,184,0.28) 37%, rgba(148,163,184,0.14) 63%);
+  background-size: 400% 100%;
+  animation: skel-shimmer 1.3s ease-in-out infinite;
+  border-radius: 8px;
+}
+@keyframes skel-shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+/* Попередні дані лишаються на місці, приглушені, поки вантажаться нові. */
+.is-refreshing { opacity: 0.5; transition: opacity 0.15s; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .skel { animation: none; } }

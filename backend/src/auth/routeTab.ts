@@ -140,6 +140,7 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // /api/statistics — series* → statistics; інше → depstats
     { test: pre("/api/statistics/series"), tabs: ["statistics"] },
     { test: pre("/api/statistics/lapsed-clients"), tabs: ["statistics"] },
+    { test: pre("/api/statistics/summary"), tabs: ["statistics"] },
     { test: pre("/api/statistics"), tabs: ["depstats"] },
     // виділені роутери
     { test: pre("/api/plans"), tabs: ["plans"] },

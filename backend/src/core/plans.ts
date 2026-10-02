@@ -298,6 +298,32 @@ export interface EffWeekTarget {
   workingDaysWeek: number;
 }
 /**
+ * Ручна ціль тижня (гроші) на день `day`: тижнева KPI-задача задачника, що покриває цей день; при кількох —
+ * НАЙСВІЖІША (ORDER BY period_start, id — виграє остання). Ключ — `assignee_id` (= менеджер).
+ * Винесено з `effectiveWeekTargets` без змін (02.10.2026), щоб Статистики будували план тижня ТИМ САМИМ правилом.
+ * ⚠️ FAIL-CLOSED: рядки без `period_kind = 'week'` не беруться (див. коментар у `effectiveWeekTargets`).
+ */
+export async function manualWeekTargetsOn(day: string): Promise<Map<number, number>> {
+  return new Map([...(await manualWeekTasksOn(day))].map(([mid, t]) => [mid, t.target]));
+}
+
+/**
+ * Те саме, що `manualWeekTargetsOn`, плюс id задачі-переможниці. Потрібно тому, хто складає ціль ДЕКІЛЬКОХ днів:
+ * одна задача на тиждень через межу місяця має рахуватись раз, а дві задачі (по частині місяця) — обидві.
+ */
+export async function manualWeekTasksOn(day: string): Promise<Map<number, { target: number; taskId: number }>> {
+  const mw = await pool.query<{ id: number; assignee_id: number; metrics_json: { metric: string; target: number | string }[] | null }>(
+    `SELECT id, assignee_id, metrics_json FROM tasks
+      WHERE auto AND task_type = 'kpi_period' AND assignee_id IS NOT NULL AND metrics_json IS NOT NULL
+        AND period_kind = 'week'
+        AND period_start <= $1 AND COALESCE(period_end, period_start) >= $1
+      ORDER BY period_start ASC, id ASC`, [day]);
+  const manual = new Map<number, { target: number; taskId: number }>();
+  for (const r of mw.rows) { const pa = (r.metrics_json ?? []).find((x) => x.metric === "payment_amount"); if (pa) manual.set(r.assignee_id, { target: Number(pa.target) || 0, taskId: r.id }); }
+  return manual;
+}
+
+/**
  * ЄДИНИЙ ВИРАЗ «тижневої цілі» для ВСІХ трьох екранів (Variant A — одна цифра скрізь):
  *   target = manualWeekTarget ?? dynamicTarget.week
  * manualWeekTarget = payment_amount з kpi_period-парасольки Задачника, що ПОКРИВАЄ сьогодні
@@ -348,14 +374,7 @@ export async function effectiveWeekTargets(scope: DynScope, kyivToday: string): 
    * у ручну ціль НЕ потрапляють — краще показати динамічний план, ніж чужу
    * цифру з підписом «задано вручну».
    */
-  const mw = await pool.query<{ assignee_id: number; metrics_json: { metric: string; target: number | string }[] | null }>(
-    `SELECT assignee_id, metrics_json FROM tasks
-      WHERE auto AND task_type = 'kpi_period' AND assignee_id IS NOT NULL AND metrics_json IS NOT NULL
-        AND period_kind = 'week'
-        AND period_start <= $1 AND COALESCE(period_end, period_start) >= $1
-      ORDER BY period_start ASC, id ASC`, [kyivToday]);
-  const manual = new Map<number, number>();
-  for (const r of mw.rows) { const pa = (r.metrics_json ?? []).find((x) => x.metric === "payment_amount"); if (pa) manual.set(r.assignee_id, Number(pa.target) || 0); }
+  const manual = await manualWeekTargetsOn(kyivToday);
   const out = new Map<number, EffWeekTarget>();
   for (const d of dyn) {
     const man = manual.get(d.managerId) ?? null;

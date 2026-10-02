@@ -1236,6 +1236,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "POST", path: "/api/statistics/series/manual", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  // 📊 Плитки й таблиця команд Статистик (ТЗ 28.09, 02.10.2026) — та сама межа, що серії; скоуп клампиться всередині.
+  { method: "GET", path: "/api/statistics/summary?gran=week", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/tasks", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "POST", path: "/api/tasks", cls: "deny-only",

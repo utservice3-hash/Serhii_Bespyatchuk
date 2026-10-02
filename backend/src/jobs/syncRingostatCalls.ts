@@ -54,8 +54,8 @@ function leadOfTeam(team: string | null): string | null {
   if (/Самост/i.test(team)) return "Шевчук Назар";
   return null;
 }
-/** ПІБ (employee_fio) → тімлід. Ключі: «прізвищеімʼя» + прізвище (fallback). */
-async function buildLeadMap(): Promise<Map<string, string>> {
+/** ПІБ (employee_fio) → тімлід. Ключі: «прізвищеімʼя» + прізвище (fallback). Експортовано для плиток Статистик — одне правило. */
+export async function buildLeadMap(): Promise<Map<string, string>> {
   const r = await pool.query<{ name: string; team: string | null }>(
     `SELECT m.name, t.name AS team FROM managers m LEFT JOIN teams t ON t.id = m.team_id WHERE m.is_active`
   );
@@ -69,7 +69,7 @@ async function buildLeadMap(): Promise<Map<string, string>> {
   }
   return map;
 }
-function resolveLead(fio: string, map: Map<string, string>): string | null {
+export function resolveLead(fio: string, map: Map<string, string>): string | null {
   const toks = (fio ?? "").trim().split(/\s+/).filter(Boolean);
   if (!toks.length) return null;
   return map.get(norm(toks.slice(0, 2).join(""))) ?? map.get(norm(toks[0])) ?? null;
