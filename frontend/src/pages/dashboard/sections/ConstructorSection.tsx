@@ -508,11 +508,14 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                 </div>
                 {FIELDS.map(([k, l]) => {
                   const v = form.cp[k] || "";
+                  // IBAN і банк перевізника — необовʼязкові з 02.10.2026 (перевізник вказує їх у рахунку): порожнє поле
+                  // не «!» і не «впишіть вручну», а сіре «—» з поясненням — інакше виглядає як обовʼязкове.
+                  const optional = form.party === "carrier" && (k === "iban" || k === "bank");
                   return (
-                    <div key={k} className={`frow ${v ? "" : "miss"}`}>
+                    <div key={k} className={`frow ${v || optional ? "" : "miss"}`}>
                       <label htmlFor={`f-${k}`}>{l}</label>
-                      <input id={`f-${k}`} value={v} placeholder="впишіть вручну" onChange={(e) => setCp(k, e.target.value)} />
-                      <span className={`st ${v ? "ok" : "no"}`}>{v ? "✓" : "!"}</span>
+                      <input id={`f-${k}`} value={v} placeholder={optional ? "необовʼязково — перевізник вкаже в рахунку" : "впишіть вручну"} onChange={(e) => setCp(k, e.target.value)} />
+                      <span className={`st ${v ? "ok" : optional ? "opt" : "no"}`} title={!v && optional ? "Необовʼязкове поле" : undefined}>{v ? "✓" : optional ? "—" : "!"}</span>
                     </div>
                   );
                 })}
