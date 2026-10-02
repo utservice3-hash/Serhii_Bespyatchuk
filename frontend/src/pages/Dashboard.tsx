@@ -58,6 +58,7 @@ import { getAuthPayload } from "../auth";
 import { currentMonth, formatAmount, formatAmountFull, previousRange, getRank, presence } from "./dashboard/format";
 import { STAGE_LABELS, STAGE_ORDER } from "./dashboard/constants";
 import StatisticsChartsSection from "./dashboard/sections/StatisticsChartsSection";
+import AdsPage from "./dashboard/sections/AdsPage";
 import SettingsSection from "./dashboard/sections/SettingsSection";
 import { LeadgenSection } from "./dashboard/sections/LeadgenSection";
 import { MissedCallsSection } from "./dashboard/sections/MissedCallsSection";
@@ -1023,15 +1024,11 @@ export function Dashboard() {
 
       {section === "dataquality" && (auth?.role === "admin" || auth?.role === "team_lead") && <DataQualitySection />}
 
-      {section === "statistics" && (
-        /* 📣 Вкладка «Реклама» всередині Статистик тримає ВЛАСНИЙ період, як Звіт, —
-           тому спільний `dateRange` сюди більше не їде взагалі, і це рішення, а не
-           спрощення. Саме спільний період і зламав екран: його ставлять на Звіті чи
-           Огляді, він переживає перезавантаження в `localStorage`, і «Реклама»
-           відкривалась із 14.07–14.07, привезеним із чужого екрана (заміряно на проді:
-           у смузі днів був рівно один день). Видимість вкладки — ключ `ads` зі `screens`. */
-        <StatisticsChartsSection role={auth?.role} screens={screens} />
-      )}
+      {section === "statistics" && <StatisticsChartsSection role={auth?.role} />}
+      {/* 📣 «Реклама» — окремий розділ меню (ТЗ Статистик 28.09, блок 4, п.6). Період ВЛАСНИЙ (усередині
+          AdsPage), спільний `dateRange` сюди не їде: саме він колись відкривав екран із 14.07–14.07.
+          Видимість — ключ `ads` у screen_access, як і була. */}
+      {section === "ads" && <AdsPage role={auth?.role} />}
       {section === "bank" && <BankSection />}
 
       {section === "teams" && auth?.role !== "manager" && (

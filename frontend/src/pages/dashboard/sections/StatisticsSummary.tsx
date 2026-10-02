@@ -1,0 +1,192 @@
+import { useEffect, useMemo, useState } from "react";
+import { fetchStatsSummary, type StatsSummaryResp, type StatsTile, type StatsTeamRow } from "../../../api";
+import { addDays, sundayOf, monthEnd, addMonth, ddmm } from "../periodRules";
+
+/**
+ * 📊 ВЕРХ СТОРІНКИ «СТАТИСТИКИ» — ЦИФРИ ЗАМІСТЬ КЛУБКА ЛІНІЙ (ТЗ 28.09.2026, блоки 1–3; задачі 4603–4605, 4367).
+ *
+ * За 10 секунд: скільки зараз · добре чи погано (до плану й до ТАКОГО САМОГО відрізка минулого періоду) ·
+ * хто з команд тягне вгору / вниз. Усі числа рахує сервер (`/statistics/summary`): плитки — ядро грошей і
+ * ті самі плани, що на Звіті; фронт лише показує. Порівняння завжди однакової довжини: пн–сьогодні проти
+ * пн–того самого дня минулого тижня, тож у понеділок жодна плитка не «падає» на 90%.
+ */
+
+const MUTED = "var(--text-muted)";
+const fmtN = (n: number) => Math.round(n).toLocaleString("uk-UA").replace(/,/g, " ");
+const fmtV = (n: number, unit: string) => (unit === "₴" ? `${fmtN(n)} ₴` : fmtN(n));
+const dm = ddmm;
+const DOW = ["нд", "пн", "вт", "ср", "чт", "пт", "сб"];
+const dow = (s: string) => DOW[new Date(`${s}T00:00:00Z`).getUTCDay()];
+const MONTHS = ["січень", "лютий", "березень", "квітень", "травень", "червень", "липень", "серпень", "вересень", "жовтень", "листопад", "грудень"];
+
+/* 📅 Дати — СПІЛЬНИМ модулем `periodRules` (як Звіт і «Реклама»), а не власними копіями: саме так дві копії
+   починали збігатись одна з одною, а не з правилом (гейт #395b). Тиждень — Пн–Нд. */
+const shiftMonth = addMonth;
+
+/** Колір від % ПЛАНУ, а не від Δ (ТЗ, блок 2, п.1). Без плану — нейтральний. */
+export function planTone(pct: number | null): { bg: string; border: string; fg: string } {
+  if (pct == null) return { bg: "var(--card-bg)", border: "var(--border)", fg: "var(--text)" };
+  if (pct >= 100) return { bg: "rgba(22,163,74,0.07)", border: "rgba(22,163,74,0.45)", fg: "#15803d" };
+  if (pct >= 80) return { bg: "rgba(217,119,6,0.07)", border: "rgba(217,119,6,0.45)", fg: "#b45309" };
+  return { bg: "rgba(220,38,38,0.06)", border: "rgba(220,38,38,0.4)", fg: "#b91c1c" };
+}
+
+function Delta({ v }: { v: number | null }) {
+  if (v == null) return <span style={{ color: MUTED }}>—</span>;
+  return <span style={{ color: v >= 0 ? "#16a34a" : "#dc2626", fontWeight: 700 }}>{v >= 0 ? "▲" : "▼"} {Math.abs(v).toFixed(1)}%</span>;
+}
+
+function TileCard({ t, cmpLabel }: { t: StatsTile; cmpLabel: string }) {
+  const tone = planTone(t.planPct);
+  return (
+    <div style={{ background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 14, padding: "13px 15px" }}>
+      <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: 0.3, textTransform: "uppercase", color: MUTED }}>{t.label}</div>
+      {/* 📐 Формула — видимим підписом, а не лише під ⓘ (ТЗ, блок 4, п.5). */}
+      <div style={{ fontSize: 11, color: MUTED, marginTop: 2, lineHeight: 1.35 }}>{t.formula}</div>
+      <div style={{ fontSize: 26, fontWeight: 800, margin: "6px 0 2px" }}>{fmtV(t.now, t.unit)}</div>
+      {t.plan != null ? (
+        <div style={{ fontSize: 13 }}>
+          план <b>{fmtV(t.plan, t.unit)}</b> · <b style={{ color: tone.fg }}>{t.planPct}%</b>
+        </div>
+      ) : <div style={{ fontSize: 12.5, color: MUTED }}>{t.planNote}</div>}
+      <div style={{ fontSize: 12.5, marginTop: 3 }}>
+        <Delta v={t.deltaPct} /> <span style={{ color: MUTED }}>до {cmpLabel} ({fmtV(t.prev, t.unit)})</span>
+      </div>
+      {t.sub && <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{t.sub.label}: <b style={{ color: "var(--text)" }}>{fmtV(t.sub.value, t.unit)}</b></div>}
+    </div>
+  );
+}
+
+type SortKey = "rank" | "name" | "fact" | "plan" | "pct" | "deltaPct";
+
+function TeamsTable({ rows, onPick, picked }: { rows: StatsTeamRow[]; onPick: (teamId: number) => void; picked: number | null }) {
+  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "rank", dir: 1 });
+  const [showArchived, setShowArchived] = useState(false);
+  const archivedCount = rows.filter((r) => r.archived).length;
+  const sorted = useMemo(() => {
+    const live = rows.filter((r) => showArchived || !r.archived);
+    const val = (r: StatsTeamRow): number | string | null => sort.key === "name" ? r.name : sort.key === "rank" ? (r.rank || 999) : r[sort.key];
+    return [...live].sort((a, b) => {
+      const A = val(a), B = val(b);
+      if (A == null && B == null) return 0;
+      if (A == null) return 1;               // без плану / без Δ — завжди внизу, у будь-якому напрямку
+      if (B == null) return -1;
+      return (typeof A === "string" ? A.localeCompare(B as string) : (A as number) - (B as number)) * sort.dir;
+    });
+  }, [rows, sort, showArchived]);
+  const th = (key: SortKey, label: string, right = false) => (
+    <th onClick={() => setSort((s) => ({ key, dir: s.key === key ? (s.dir === 1 ? -1 : 1) : key === "name" || key === "rank" ? 1 : -1 }))}
+      style={{ textAlign: right ? "right" : "left", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
+      title="сортувати">{label}{sort.key === key ? (sort.dir === 1 ? " ↑" : " ↓") : ""}</th>
+  );
+  return (
+    <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, padding: "12px 14px", marginTop: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, gap: 10, flexWrap: "wrap" }}>
+        <b style={{ fontSize: 14 }}>Команди</b>
+        <span style={{ fontSize: 12, color: MUTED }}>
+          факт — отримані кошти, як на Звіті · клік по команді — її графік нижче
+          {archivedCount > 0 && (
+            <label style={{ marginLeft: 12, cursor: "pointer" }}>
+              <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> показати архівні ({archivedCount})
+            </label>
+          )}
+        </span>
+      </div>
+      <table className="data-table" style={{ width: "100%", fontSize: 13 }}>
+        <thead><tr>{th("rank", "Ранг")}{th("name", "Команда")}{th("fact", "Факт", true)}{th("plan", "План", true)}{th("pct", "% плану", true)}{th("deltaPct", "Δ до попер.", true)}</tr></thead>
+        <tbody>
+          {sorted.map((r) => {
+            const tone = planTone(r.pct);
+            return (
+              <tr key={r.teamId} onClick={() => onPick(r.teamId)}
+                style={{ cursor: "pointer", background: picked === r.teamId ? "rgba(47,111,219,0.08)" : undefined, opacity: r.archived ? 0.6 : 1 }}>
+                <td>{r.archived ? <span style={{ color: MUTED }}>архів</span> : r.rank}</td>
+                <td style={{ fontWeight: 700 }}>{r.name}</td>
+                <td style={{ textAlign: "right" }}>{fmtN(r.fact)} ₴</td>
+                <td style={{ textAlign: "right" }}>{r.plan != null ? `${fmtN(r.plan)} ₴` : <span style={{ color: MUTED }}>плану немає</span>}</td>
+                <td style={{ textAlign: "right", fontWeight: 800, color: tone.fg }}>{r.pct != null ? `${r.pct}%` : "—"}</td>
+                <td style={{ textAlign: "right" }}><Delta v={r.deltaPct} /></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export function StatisticsSummary({ today, onPickTeam, pickedTeam }: { today: string; onPickTeam: (teamId: number) => void; pickedTeam: number | null }) {
+  const [gran, setGran] = useState<"week" | "month">("week");
+  /** Кінець обраного періоду (неділя / останній день місяця); поточний клампиться до сьогодні сервером. */
+  const [end, setEnd] = useState<string>(() => sundayOf(today));
+  const [data, setData] = useState<StatsSummaryResp | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [nonce, setNonce] = useState(0);
+
+  const anchor = end > today ? today : end;
+  useEffect(() => {
+    let alive = true; setData(null); setErr(null);
+    fetchStatsSummary({ gran, anchor })
+      .then((d) => { if (alive) setData(d); })
+      .catch((e) => { if (alive) setErr(e?.response?.data?.error ?? (e?.response?.status ? `сервер відповів ${e.response.status}` : "немає звʼязку з сервером")); });
+    return () => { alive = false; };
+  }, [gran, anchor, nonce]);
+
+  const setGranKeep = (g: "week" | "month") => { setGran(g); setEnd(g === "week" ? sundayOf(today) : monthEnd(today)); };
+  const shift = (n: number) => setEnd((e) => (gran === "week" ? addDays(e, 7 * n) : monthEnd(shiftMonth(e, n))));
+  const isCurrent = gran === "week" ? end === sundayOf(today) : end === monthEnd(today);
+
+  const title = data ? (gran === "week"
+    ? `Тиждень ${dm(data.period.from)}–${dm(data.period.to)}`
+    : `${MONTHS[Number(data.period.from.slice(5, 7)) - 1]} ${data.period.from.slice(0, 4)}`) : "…";
+  const cmpLabel = data ? (data.complete
+    ? (gran === "week" ? `минулого тижня` : `минулого місяця`)
+    : `${dm(data.prev.from)}–${dm(data.prev.to)}`) : "";
+
+  const btn = (on: boolean) => ({ fontSize: 12.5, fontWeight: 700, padding: "6px 12px", cursor: "pointer", border: "none",
+    background: on ? "#1f2330" : "var(--card-bg)", color: on ? "#fff" : "var(--text)" } as const);
+  const pill = { fontSize: 12.5, fontWeight: 700, padding: "6px 11px", borderRadius: 8, cursor: "pointer", border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" } as const;
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        <span style={{ fontSize: 12.5, color: MUTED, fontWeight: 700 }}>Період:</span>
+        <div style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 9, overflow: "hidden" }}>
+          <button style={btn(gran === "week")} onClick={() => setGranKeep("week")}>Тиждень</button>
+          <button style={btn(gran === "month")} onClick={() => setGranKeep("month")}>Місяць</button>
+        </div>
+        <button style={pill} onClick={() => setEnd(gran === "week" ? sundayOf(today) : monthEnd(today))} disabled={isCurrent}>{gran === "week" ? "Цей тиждень" : "Цей місяць"}</button>
+        <button style={pill} onClick={() => setEnd(gran === "week" ? addDays(sundayOf(today), -7) : monthEnd(shiftMonth(today, -1)))}>{gran === "week" ? "Минулий" : "Минулий"}</button>
+        <button style={pill} onClick={() => shift(-1)} aria-label="попередній">‹</button>
+        <b style={{ fontSize: 14, minWidth: 150, textAlign: "center" }}>{title}</b>
+        <button style={pill} onClick={() => shift(1)} disabled={isCurrent} aria-label="наступний">›</button>
+        {/* 4367: БУДЬ-ЯКИЙ тиждень одним кліком — будь-який день обирає свій тиждень Пн–Нд. */}
+        <label style={{ fontSize: 12.5, color: MUTED }}>
+          обрати дату: <input type="date" max={today} value={anchor}
+            onChange={(e) => e.target.value && setEnd(gran === "week" ? sundayOf(e.target.value) : monthEnd(e.target.value))}
+            style={{ padding: "4px 6px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }} />
+        </label>
+        {data && !data.complete && (
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: "#b45309" }}>
+            станом на {dm(data.asOf)} ({dow(data.asOf)}) · порівняння з {dm(data.prev.from)}–{dm(data.prev.to)}
+          </span>
+        )}
+      </div>
+
+      {err && (
+        <div role="alert" style={{ padding: "10px 14px", border: "1px solid rgba(220,38,38,0.4)", borderRadius: 12, color: "#b91c1c", fontSize: 13 }}>
+          ⚠️ Не вдалося порахувати цифри: {err}. <button style={pill} onClick={() => setNonce((n) => n + 1)}>Повторити</button>
+        </div>
+      )}
+      {!data && !err && <div className="loading-text">Рахуємо цифри періоду…</div>}
+      {data && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: 12 }}>
+            {data.tiles.map((t) => <TileCard key={t.key} t={t} cmpLabel={cmpLabel} />)}
+          </div>
+          {data.teams.length > 0 && <TeamsTable rows={data.teams} onPick={onPickTeam} picked={pickedTeam} />}
+        </>
+      )}
+    </div>
+  );
+}

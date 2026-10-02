@@ -1,0 +1,180 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { compareWindows, deltaPct, planPct, rankByPlan, sheetWeekToMonday, weekOf } from "./statsCompare.js";
+import { ANOMALIES, anomaliesFor } from "./anomalies.js";
+import { needsApi, API_BASE } from "../testMode.js";
+
+/**
+ * 📊 #870–#879 — ТЗ «Статистики в дашборді UTS» 28.09.2026 (задачі 4603–4606 + 4367), 02.10.2026.
+ * Рішення Романа 02.10: план — проти ② як на Звіті; план тижня — правило Звіту; помилку таблиці
+ * позначаємо, не переписуємо; розформовану команду — у «архівні».
+ */
+
+const ROOT = path.join(import.meta.dirname, "..", "..", "..");
+const read = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8");
+const SEC = "frontend/src/pages/dashboard/sections";
+const codeOnly = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+test("#870 ПОРІВНЯННЯ ОДНАКОВИХ ВІДРІЗКІВ: понеділок проти понеділка, четвер проти четверга, неділя — повні тижні", () => {
+  // Понеділок 28.09.2026: поточний відрізок — 1 день, і попередній — теж 1 день (а не повний тиждень → «▼93%»).
+  const mon = compareWindows("week", "2026-09-28");
+  assert.deepEqual(mon.cur, { from: "2026-09-28", to: "2026-09-28" });
+  assert.deepEqual(mon.prev, { from: "2026-09-21", to: "2026-09-21" }, "🔴 понеділок порівнюється не з понеділком");
+  assert.equal(mon.complete, false);
+  const thu = compareWindows("week", "2026-10-01");
+  assert.deepEqual(thu.prev, { from: "2026-09-21", to: "2026-09-24" }, "🔴 пн–чт порівнюється не з пн–чт минулого тижня");
+  assert.deepEqual(thu.full, { from: "2026-09-28", to: "2026-10-04" }, "🔴 тиждень не Пн–Нд або зламався на межі місяця");
+  const sun = compareWindows("week", "2026-09-27");
+  assert.equal(sun.complete, true);
+  assert.deepEqual(sun.prev, { from: "2026-09-14", to: "2026-09-20" });
+  // Місяць: 31.03 → 1–28.02 (клампиться), січень → грудень минулого року.
+  assert.deepEqual(compareWindows("month", "2026-03-31").prev, { from: "2026-02-01", to: "2026-02-28" }, "🔴 31-ше не клампиться до кінця лютого");
+  assert.equal(compareWindows("month", "2026-03-31").complete, true);
+  assert.deepEqual(compareWindows("month", "2026-01-15").prev, { from: "2025-12-01", to: "2025-12-15" });
+  assert.deepEqual(weekOf("2026-10-04"), { from: "2026-09-28", to: "2026-10-04" }, "🔴 неділя віднесена до наступного тижня (4367)");
+});
+
+test("#870b Δ і % ПЛАНУ — ЧЕСНІ ПОРОЖНЕЧІ, ранг — за % плану, без плану внизу", () => {
+  assert.equal(deltaPct(10, 0), null, "🔴 Δ до нуля стало числом — «▼100%» / «∞» замість «порівнювати нема з чим»");
+  assert.equal(deltaPct(50, 100), -50);
+  assert.equal(planPct(500, null), null, "🔴 без плану — 0%, а це читається як провал");
+  assert.equal(planPct(500, 1000), 50);
+  const r = rankByPlan([{ id: "a", pct: 80, fact: 9 }, { id: "b", pct: null, fact: 100 }, { id: "c", pct: 120, fact: 1 }]);
+  assert.deepEqual(r.map((x) => `${x.id}:${x.rank}`), ["c:1", "a:2", "b:3"], "🔴 команда без плану обігнала тих, хто план має");
+});
+
+test("#871 ТИЖДЕНЬ — ПОНЕДІЛКОМ: тижні ручної таблиці (неділя) зводяться до понеділка, як CRM", () => {
+  assert.equal(sheetWeekToMonday("2026-01-04"), "2025-12-29", "🔴 тиждень таблиці лишився датований неділею — зсув на 6 днів відносно CRM");
+  assert.equal(sheetWeekToMonday("2025-12-29"), "2025-12-29", "🔴 понеділок CRM зсунуло");
+  const route = codeOnly(read("backend/src/routes/statisticsSeries.ts"));
+  assert.match(route, /period: weekLabel\(g, x\.period\)/, "🔴 точки з таблиці віддаються без зведення до понеділка");
+  assert.equal((route.match(/weekLabel\(g, x\.period\)/g) ?? []).length, 3, "🔴 не всі три читачі історії таблиці зводять тиждень до понеділка");
+});
+
+test("#874 АНОМАЛІЇ — З ДОКАЗОМ CRM ЧИСЛОМ, на понеділок, і серія їх віддає", () => {
+  assert.ok(ANOMALIES.length >= 2);
+  for (const a of ANOMALIES) {
+    assert.match(a.crm, /\d/, `🔴 ${a.metric}/${a.scopeKey}: позначка без числа з CRM — це думка, а не факт`);
+    assert.ok(a.note.length > 10);
+    assert.equal(sheetWeekToMonday(a.period), a.period, `🔴 ${a.period}: аномалія не на понеділку — позначка не ляже на точку`);
+    assert.ok(a.kind === "real" || a.kind === "data_error");
+  }
+  assert.ok(anomaliesFor("cars_success", "week").some((a) => a.period === "2025-12-29" && a.kind === "real"));
+  assert.ok(anomaliesFor("avg_check", "week").some((a) => a.scopeKey === "13" && a.kind === "data_error"));
+  assert.deepEqual(anomaliesFor("cars_success", "month"), [], "🔴 тижнева аномалія поїхала на місячний графік");
+  assert.match(codeOnly(read("backend/src/routes/statisticsSeries.ts")), /anomalies: anomaliesFor\(metric, g\)/, "🔴 серія не віддає аномалій");
+  assert.match(read(`${SEC}/StatisticsChartsSection.tsx`), /<ReferenceDot key=\{`an\$\{k\}`\}/, "🔴 графік не позначає аномалію");
+});
+
+test("#875 ПЛАН — ТІ САМІ ФУНКЦІЇ, ЩО НА ЗВІТІ; власного пропорційного плану немає", () => {
+  const src = codeOnly(read("backend/src/statistics/statsSummary.ts"));
+  assert.match(src, /plans\.effectiveWeekTargets\(/, "🔴 план тижня рахується не правилом Звіту");
+  assert.match(src, /plans\.dynamicTarget\(\{ month: full\.from \}, "month"\)/, "🔴 план місяця не з того ж джерела, що Звіт");
+  assert.doesNotMatch(src, /planned_value/, "🔴 у статистиках зʼявився власний SQL по плану — розійдеться зі Звітом");
+  assert.match(src, /if \(t\.isManual\) \{ if \(manualCounted\.has\(mid\)\) continue;/, "🔴 ручна ціль тижня через межу місяця рахується двічі");
+  assert.match(src, /money\.receivedMoney\(scope\(win\.cur\)\)/, "🔴 факт плитки з планом — не ② ядра (рішення 1: як на Звіті)");
+});
+
+test("#876 РОЗФОРМОВАНА КОМАНДА — У «АРХІВНИХ»: поза рейтингом і поза дефолтом, із перемикачем — видно (дзеркало)", () => {
+  const src = read("backend/src/statistics/statsSummary.ts");
+  assert.match(src, /new Set<number>\(\[36283\]\)/, "🔴 «Самостійні» не позначені розформованими");
+  assert.match(src, /\.map\(\(t\) => \(\{ \.\.\.rowOf\(t\), rank: 0 \}\)\)/, "🔴 архівна команда займає місце в рейтингу");
+  const sum = read(`${SEC}/StatisticsSummary.tsx`);
+  assert.match(sum, /useState\(false\)/, "🔴 архівні показані за замовчуванням");
+  assert.match(sum, /filter\(\(r\) => showArchived \|\| !r\.archived\)/, "🔴 перемикач «показати архівні» нічого не робить");
+  const ch = read(`${SEC}/StatisticsChartsSection.tsx`);
+  assert.match(ch, /\(s\.archived && !showArchived\) \? null/, "🔴 розформована команда знову жива серія в легенді");
+});
+
+test("#877 ПЛИТКИ — З СЕРВЕРА; фронт не порівнює останню точку з «4 тижні тому» і не бреше «Немає даних» на помилці", () => {
+  const ch = codeOnly(read(`${SEC}/StatisticsChartsSection.tsx`));
+  assert.doesNotMatch(ch, /pts\[pts\.length - 5\]|function MiniTiles/, "🔴 повернулись старі міні-плитки з порівнянням неповного тижня");
+  assert.doesNotMatch(ch, /Δ до попер\./, "🔴 під графіком знову «Δ до попер.» неповного відрізка");
+  assert.doesNotMatch(ch, /очікує вводу/, "🔴 помилка завантаження знову читається як «немає даних»");
+  assert.match(ch, /setLoadErr\(/, "🔴 збій запиту не показується як помилка");
+  const sum = codeOnly(read(`${SEC}/StatisticsSummary.tsx`));
+  assert.match(sum, /fetchStatsSummary\(\{ gran, anchor \}\)/, "🔴 плитки рахує не сервер");
+  assert.match(sum, /станом на/, "🔴 неповний період не підписаний «станом на»");
+});
+
+test("#878 «РЕКЛАМА» — ОКРЕМИЙ РОЗДІЛ: власний навігатор періоду, той самий, що на Звіті, і вибір застосовується", () => {
+  const ads = codeOnly(read(`${SEC}/AdsPage.tsx`));
+  assert.match(ads, /import \{ PeriodNav \} from "\.\.\/PeriodNav"/, "🔴 «Реклама» без того самого навігатора, що на Звіті");
+  assert.match(ads, /onPatch=\{\(patch\) => setNav\(/, "🔴 навігатор малюється, але період не змінює");
+  assert.match(ads, /<AdsSection from=\{adsPeriod\.from\} to=\{adsPeriod\.to\}/, "🔴 дані беруть період не з навігатора");
+  assert.doesNotMatch(ads, /<QuickPeriods\b/, "🔴 другий перемикач періоду поруч із PeriodNav");
+  const dash = read("frontend/src/pages/Dashboard.tsx");
+  assert.match(dash, /section === "ads" && <AdsPage role=\{auth\?\.role\} \/>/, "🔴 пункт меню «Реклама» без блоку рендера");
+});
+
+test("#878b 🪞 У СТАТИСТИКАХ «РЕКЛАМИ» БІЛЬШЕ НЕМАЄ, а в меню вона видима", () => {
+  const ch = read(`${SEC}/StatisticsChartsSection.tsx`);
+  assert.doesNotMatch(codeOnly(ch), /<PeriodNav\b|<AdsSection\b|custom: "ads"/, "🔴 «Реклама» лишилась і вкладкою в Статистиках — дві копії");
+  const lay = read("frontend/src/components/Layout.tsx");
+  const hid = /HIDDEN_NAV[^=]*=\s*new Set[^(]*\(\[([^\]]*)\]/.exec(lay)?.[1] ?? "";
+  assert.ok(hid.length > 0, "🔴 не знайшов HIDDEN_NAV — перевірка стала б порожньою");
+  assert.doesNotMatch(hid, /"ads"/, "🔴 «Реклама» досі прихована з меню");
+  assert.match(lay, /\{ key: "ads", label: "Реклама", icon: "📣" \}/);
+});
+
+test("#879 ВІСЬ Y — КРУГЛІ ПОДІЛКИ; керування — дві підписані групи; дефолт — 3 місяці", async () => {
+  const ts = (await import("typescript")).default;
+  const src = read(`${SEC}/StatisticsChartsSection.tsx`);
+  const fn = src.slice(src.indexOf("export function niceTicks"), src.indexOf("const axisFmt"));
+  const js = ts.transpileModule(fn.replace("export function", "function") + "\nmodule.exports = niceTicks;", { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
+  const m = { exports: {} as unknown };
+  new Function("module", js)(m);
+  const niceTicks = m.exports as (max: number) => number[];
+  assert.deepEqual(niceTicks(14000), [0, 5000, 10000, 15000], "🔴 поділки знову «0к · 4к · 7к · 11к · 14к»");
+  assert.deepEqual(niceTicks(1440000), [0, 500000, 1000000, 1500000]);
+  assert.deepEqual(niceTicks(0), [0]);
+  assert.match(src, />Крок:</, "🔴 крок графіка без підпису");
+  assert.match(src, />Період:</, "🔴 діапазон без підпису");
+  assert.match(src, /useState\("3м"\)/, "🔴 дефолтний діапазон не 3 місяці");
+  assert.match(src, /01\.07: таблиця → CRM, рівні не порівнюються/, "🔴 шов 01.07 не підписаний на графіку");
+});
+
+// ─────────────────────────────── ЖИВІ (test:prod) ───────────────────────────────
+
+async function adminToken(): Promise<string> {
+  const { signToken } = await import("../auth/auth.js");
+  return signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
+}
+/** Остання ЗАВЕРШЕНА неділя за Києвом — закритий тиждень, щоб живі числа не повзли під час прогону. */
+function lastSunday(): string {
+  const t = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+  const d = new Date(`${t}T00:00:00Z`); const w = d.getUTCDay();
+  d.setUTCDate(d.getUTCDate() - (w === 0 ? 7 : w));
+  return d.toISOString().slice(0, 10);
+}
+
+test("#872 ЖИВИЙ: плитка «Отримані кошти» і Σ команд == ядру грошей за ті самі дати", needsApi(), async () => {
+  const money = await import("../core/money.js");
+  const anchor = lastSunday();
+  const r = await fetch(`${API_BASE}/api/statistics/summary?gran=week&anchor=${anchor}`, { headers: { Authorization: `Bearer ${await adminToken()}` } });
+  assert.equal(r.status, 200);
+  const b = await r.json() as { cur: { from: string; to: string }; tiles: { key: string; now: number }[]; teams: { teamId: number; fact: number }[] };
+  const core = await money.receivedMoney({ from: b.cur.from, to: b.cur.to });
+  const tile = b.tiles.find((t) => t.key === "revenue")!;
+  assert.ok(core.revenue > 0, "🔴 ядро дало 0 за закритий тиждень — перевіряти нема чого");
+  assert.equal(tile.now, Math.round(core.revenue), "🔴 плитка рахує гроші не ядром");
+  const byTeam = new Map((await money.receivedByTeam({ from: b.cur.from, to: b.cur.to })).map((x) => [x.teamId, Math.round(x.revenue)]));
+  for (const t of b.teams) assert.equal(t.fact, byTeam.get(t.teamId) ?? 0, `🔴 команда ${t.teamId}: факт таблиці ≠ ядру`);
+});
+
+test("#873 ЖИВИЙ: дзвінки плитки за закритий тиждень == депстату в межах 5% (одна привʼязка ПІБ → команда)", needsApi(), async () => {
+  const { pool } = await import("../db/pool.js");
+  const anchor = lastSunday();
+  const r = await fetch(`${API_BASE}/api/statistics/summary?gran=week&anchor=${anchor}`, { headers: { Authorization: `Bearer ${await adminToken()}` } });
+  const b = await r.json() as { cur: { from: string }; tiles: { key: string; now: number }[] };
+  const dep = await pool.query<{ v: string }>(
+    `SELECT COALESCE(SUM(value),0) AS v FROM statistics_values
+      WHERE department='sales' AND metric_key='calls' AND period_type='week' AND period_start=$1 AND team_lead IS NOT NULL`, [b.cur.from]);
+  const depV = Number(dep.rows[0].v);
+  const tile = b.tiles.find((t) => t.key === "calls")!.now;
+  assert.ok(depV > 0, "🔴 депстат за закритий тиждень порожній — звіряти нема з чим");
+  // Межа 5%: привʼязка людей до команд береться на сьогодні, депстат — тодішня (02.10: 0% і 3.9% за два тижні).
+  assert.ok(Math.abs(tile - depV) / depV <= 0.05, `🔴 дзвінки плитки ${tile} проти депстату ${depV} — два різні правила «дзвінка» на одному екрані`);
+});

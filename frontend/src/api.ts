@@ -2732,8 +2732,32 @@ export async function fetchStuckGrouped(params: { teamId?: number; managerId?: n
 
 // ── Статистики (діаграми) ──
 export interface StatsPoint { period: string; value: number; source: "sheet" | "crm" | "manual" }
-export interface StatsSeries { scopeType: string; scopeKey: string; scopeName: string; points: StatsPoint[]; benchmark?: boolean }
-export interface StatsSeriesResp { block: string; metric: string; granularity: "day" | "week" | "month"; seam: string; crmAble: boolean; live: boolean; series: StatsSeries[] }
+export interface StatsSeries { scopeType: string; scopeKey: string; scopeName: string; points: StatsPoint[]; benchmark?: boolean;
+  /** Розформована команда — історія є, у дефолтному вигляді її немає (ТЗ 28.09, блок 3). */
+  archived?: boolean }
+/** ⚠️ Відома аномалія точки з доказом CRM (ТЗ 28.09, блок 1, п.3) — реєстр `statistics/anomalies.ts`. */
+export interface StatsAnomaly { metric: string; granularity: string; scopeKey: string; period: string; kind: "real" | "data_error"; note: string; crm: string }
+export interface StatsSeriesResp { block: string; metric: string; granularity: "day" | "week" | "month"; seam: string; crmAble: boolean; live: boolean; series: StatsSeries[];
+  anomalies?: StatsAnomaly[];
+  /** 📈 Сходинки плану — лише для «Оплата отримана» (②). */
+  plan?: { scopeKey: string; points: { period: string; value: number }[] }[] }
+/** 📊 Плитки й таблиця команд (ТЗ 28.09, блоки 1–3). Числа рахує сервер; фронт лише показує. */
+export interface StatsTile {
+  key: "revenue" | "cars" | "calls" | "transfers"; label: string; unit: "₴" | "шт";
+  now: number; prev: number; deltaPct: number | null; plan: number | null; planPct: number | null;
+  sub: { label: string; value: number } | null; planNote: string | null; formula: string;
+}
+export interface StatsTeamRow { teamId: number; name: string; archived: boolean; fact: number; prev: number;
+  deltaPct: number | null; plan: number | null; pct: number | null; rank: number }
+export interface StatsSummaryResp {
+  gran: "week" | "month"; asOf: string; complete: boolean;
+  period: { from: string; to: string }; cur: { from: string; to: string }; prev: { from: string; to: string };
+  tiles: StatsTile[]; teams: StatsTeamRow[];
+}
+export async function fetchStatsSummary(params: { gran: "week" | "month"; anchor?: string }): Promise<StatsSummaryResp> {
+  const { data } = await api.get<StatsSummaryResp>("/statistics/summary", { params });
+  return data;
+}
 export async function fetchStatsSeries(params: { block: string; metric: string; granularity: string; from?: string; to?: string; unit?: string }): Promise<StatsSeriesResp> {
   const { data } = await api.get<StatsSeriesResp>("/statistics/series", { params });
   return data;
