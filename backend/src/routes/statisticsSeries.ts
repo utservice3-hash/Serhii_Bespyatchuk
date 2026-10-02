@@ -242,7 +242,8 @@ statsSeriesRouter.get("/series", async (req, res) => {
   const unit = req.query.unit ? String(req.query.unit) : null; // напрямок (unit-scope)
   const set = await seriesSet({ role: auth.role, roleKey: auth.roleKey, teamId: auth.teamId ?? null, managerId: auth.managerId ?? null }, unit);
   const today = kyivToday();
-  const series = (await Promise.all(set.map((s) => stitch(block, metric, g, from, to, s)))).map((s) => ({ ...s, points: clipPointsToToday(s.points, today) }));
+  const series = await Promise.all(set.map((s) => stitch(block, metric, g, from, to, s)));
+  for (const s of series) s.points = clipPointsToToday(s.points, today); // обчислений обʼєкт stitch, не рядок БД
   // ⚠️ Аномалії — з реєстру з доказом CRM (ТЗ 28.09, блок 1, п.3); фронт позначає точку, а не мовчки тягне лінію.
   // 📈 План — там, де він є в CRM-дзеркалі, і лише в скоупі глядача (тімлід — своя команда, менеджер — нічого):
   //    ② — план грошей Звіту; «Поставлені» (= плитка «Відправлені авто») — KPI-цілі задачника, від шва.

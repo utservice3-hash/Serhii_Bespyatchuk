@@ -233,7 +233,7 @@ test("#882d ФАКТ НА ГРАФІКУ — НЕ В МАЙБУТНЄ, а під
   assert.deepEqual(clipPointsToToday(pts, "2026-10-02").map((p) => p.period), ["2026-09-28"],
     "🔴 заплановані завантаження стоять на графіку як факт майбутніх тижнів (або зник поточний тиждень)");
   const route = codeOnly(read("backend/src/routes/statisticsSeries.ts"));
-  assert.match(route, /\.map\(\(s\) => \(\{ \.\.\.s, points: clipPointsToToday\(s\.points, today\) \}\)\)/, "🔴 серія віддає точки з майбутнього");
+  assert.match(route, /for \(const s of series\) s\.points = clipPointsToToday\(s\.points, today\);/, "🔴 серія віддає точки з майбутнього");
   const fe = read(`${SEC}/StatisticsChartsSection.tsx`);
   assert.match(fe, /\{rows\[eff\.lo\]\?\.period < SEAM && \(rows\[eff\.hi\]\?\.period \?\? ""\) >= SEAM && \(\s*<ReferenceLine/,
     "🔴 підпис шва малюється й тоді, коли шов на краю вікна — налазить на вісь Y");
