@@ -1,0 +1,137 @@
+/**
+ * 🔀 КОМАНДА МЕНЕДЖЕРА НА ДАТУ (02.10.2026, задача 4892).
+ *
+ * ЗВІДКИ ВЗЯЛОСЬ. Хомік з 01.10 іде від Яцика «без команди». Командний розріз скрізь
+ * читав ПОТОЧНУ прив'язку `managers.team_id` (варіант A від 05.08.2026), тож перенос
+ * забрав би з команди Яцика і всі її минулі місяці. Відповідь власника (Юля/Сергій):
+ * **«все що було залишається в команді у якій працювала»**. Рішення Романа: лагодимо
+ * лише від сьогодні — минулих переходів не відновлюємо.
+ *
+ * ПРАВИЛО. Перехід = рядок `manager_team_moves` «з дати F людина в to, до неї — у from».
+ *   команда на дату D = from найранішого переходу з F > D; немає такого — `managers.team_id`.
+ * Немає переходів у людини → поточна команда, тобто рівно як до цього модуля. Тому зміна
+ * НЕ рухає жодного числа, доки хтось не запише перехід (тримає `#1302`).
+ *
+ * 🔴 ЛАНЦЮГ МУСИТЬ СХОДИТИСЬ: from кожного переходу = to попереднього, а to останнього =
+ * `managers.team_id`. Тому писати переходи можна лише через `recordTeamMove`: він бере
+ * from із поточної команди, не пускає дату раніше за останній перехід і зливає два записи
+ * одного дня в один (виправлення, а не два переходи).
+ *
+ * ⚠️ ЗНІМКИ «СТАНОМ НА ЗАРАЗ» (очікування, дебіторка, застряглі, перенесені) і межі доступу
+ * лишаються на ПОТОЧНІЙ команді: там питання «хто зараз», а не «коли заробив».
+ */
+
+export interface TeamMove {
+  /** Перший день у новій команді, `YYYY-MM-DD` за Києвом. */
+  effectiveFrom: string;
+  fromTeamId: number | null;
+  toTeamId: number | null;
+}
+
+/** Чиста форма правила — для тестів і для тих, хто вже тримає переходи в памʼяті. */
+export function teamAt(currentTeamId: number | null, moves: readonly TeamMove[], date: string): number | null {
+  let best: TeamMove | null = null;
+  for (const m of moves) if (m.effectiveFrom > date && (!best || m.effectiveFrom < best.effectiveFrom)) best = m;
+  return best ? best.fromTeamId : currentTeamId;
+}
+
+/** Чи був менеджер у команді `teamId` хоч один день періоду `[from, to]`. */
+export function inTeamDuring(currentTeamId: number | null, moves: readonly TeamMove[], teamId: number, from: string, to: string): boolean {
+  if (teamAt(currentTeamId, moves, from) === teamId) return true;
+  return moves.some((m) => m.toTeamId === teamId && m.effectiveFrom > from && m.effectiveFrom <= to);
+}
+
+/**
+ * SQL-вираз «команда менеджера `alias` на дату `dateExpr`» (`dateExpr` — вираз типу date).
+ *
+ * 🔴 ПЕРША ГІЛКА — ШВИДКИЙ ШЛЯХ, А НЕ ПРИКРАСА. `NOT IN (SELECT …)` без кореляції Postgres
+ * рахує ОДИН раз (хешований підплан), тож рядки людей без переходів — це всі рядки, поки
+ * таблиця порожня, — не платять за корельований пошук. Інакше кожна угода кожного запиту
+ * робила б підзапит, а `/overview` ×4 і так стоїть на порозі `#36`.
+ * `CASE` гарантує порядок гілок, тож корельований підзапит біжить лише для тих, хто переходив.
+ * `EXISTS` окремо від `SELECT from_team_id`, бо `from_team_id` буває NULL («був без команди»),
+ * і `COALESCE` сплутав би його з «переходу немає».
+ */
+export function teamAtSql(alias: string, dateExpr: string): string {
+  const later = `FROM manager_team_moves mv WHERE mv.manager_id = ${alias}.id AND mv.effective_from > (${dateExpr})`;
+  return `(CASE WHEN ${alias}.id NOT IN (SELECT mv0.manager_id FROM manager_team_moves mv0) THEN ${alias}.team_id`
+    + ` WHEN EXISTS (SELECT 1 ${later}) THEN (SELECT mv.from_team_id ${later} ORDER BY mv.effective_from LIMIT 1)`
+    + ` ELSE ${alias}.team_id END)`;
+}
+
+/**
+ * Умова «рядок належить команді `teamRef` на свою дату» — заміна `m.team_id = $n` у запитах, де
+ * в рядка є дата (анкер грошей, дата створення, день події).
+ * Перша половина — дешевий фільтр по самій `managers` (планувальник відсікає чужих ДО зʼєднання
+ * з угодами, як і раніше); друга — саме правило. Без першої зʼєднання йшло б по всіх менеджерах.
+ */
+export function teamOnDateSql(alias: string, dateExpr: string, teamRef: string): string {
+  return `((${alias}.team_id = ${teamRef} OR ${alias}.id IN (SELECT mv1.manager_id FROM manager_team_moves mv1))`
+    + ` AND ${teamAtSql(alias, dateExpr)} IS NOT DISTINCT FROM ${teamRef})`;
+}
+
+/**
+ * Умова «менеджер був у команді `teamRef` хоч один день `[fromRef, toRef]`» — для РОСТЕРІВ
+ * періоду: у вересневому Звіті команди Яцика Хомік мусить стояти, хоч сьогодні вона вже не там.
+ * Команда змінюється лише в дати переходів, тож досить перевірити початок періоду й кожен
+ * перехід усередині нього. `IS NOT DISTINCT FROM`, а не `=`: «на початку був без команди» дає
+ * NULL, і під `NOT (…)` чи в `SELECT` він читався б не як «ні» (спіймано `#1302`).
+ */
+export function inTeamDuringSql(alias: string, teamRef: string, fromRef: string, toRef: string): string {
+  return `(${teamAtSql(alias, `${fromRef}::date`)} IS NOT DISTINCT FROM ${teamRef}`
+    + ` OR EXISTS (SELECT 1 FROM manager_team_moves mv2 WHERE mv2.manager_id = ${alias}.id AND mv2.to_team_id = ${teamRef}`
+    + ` AND mv2.effective_from > ${fromRef}::date AND mv2.effective_from <= ${toRef}::date))`;
+}
+
+type Db = { query: <R = Record<string, unknown>>(sql: string, params?: unknown[]) => Promise<{ rows: R[] }> };
+
+export type MoveSource = "settings" | "kommo";
+export type RecordResult =
+  | { kind: "none" }                         // команда не змінилась
+  | { kind: "inserted" | "updated" | "cancelled"; effectiveFrom: string }
+  | { kind: "rejected"; reason: string };
+
+/**
+ * Записати перехід менеджера з ПОТОЧНОЇ команди в `toTeamId` з дати `effectiveFrom`.
+ * Викликати в тій самій транзакції, що й зміну `managers.team_id`: ДО неї (`from` читається з
+ * `managers`) або після, передавши `fromTeamId` явно (синк уже переписав рядок upsert-ом).
+ *   • дата раніша за останній перехід → `rejected` (ланцюг розірвався б);
+ *   • перехід того ж дня вже є → це виправлення: міняємо його `to`; якщо `to` повернувся до
+ *     `from`, переходу не було зовсім — рядок видаляється (`cancelled`);
+ *   • інакше новий рядок.
+ */
+export async function recordTeamMove(db: Db, p: {
+  managerId: number; toTeamId: number | null; effectiveFrom: string;
+  source: MoveSource; setBy?: number | null; note?: string | null;
+  /** Команда ДО зміни; не передано — читається з `managers`. */
+  fromTeamId?: number | null;
+}): Promise<RecordResult> {
+  let fromTeamId = p.fromTeamId;
+  if (fromTeamId === undefined) {
+    const cur = (await db.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [p.managerId])).rows[0];
+    if (!cur) return { kind: "rejected", reason: "менеджера немає" };
+    fromTeamId = cur.team_id;
+  }
+  if (fromTeamId === p.toTeamId) return { kind: "none" };
+  const last = (await db.query<{ id: string; from_team_id: number | null; ef: string }>(
+    `SELECT id, from_team_id, to_char(effective_from, 'YYYY-MM-DD') AS ef FROM manager_team_moves
+      WHERE manager_id = $1 ORDER BY effective_from DESC LIMIT 1`, [p.managerId])).rows[0];
+  if (last && last.ef > p.effectiveFrom) {
+    return { kind: "rejected", reason: `останній перехід уже з ${last.ef} — раніша дата розірвала б історію` };
+  }
+  if (last && last.ef === p.effectiveFrom) {
+    if (last.from_team_id === p.toTeamId) {
+      await db.query(`DELETE FROM manager_team_moves WHERE id = $1`, [last.id]);
+      return { kind: "cancelled", effectiveFrom: p.effectiveFrom };
+    }
+    await db.query(
+      `UPDATE manager_team_moves SET to_team_id = $2, source = $3, set_by = $4, note = $5, recorded_at = now() WHERE id = $1`,
+      [last.id, p.toTeamId, p.source, p.setBy ?? null, p.note ?? null]);
+    return { kind: "updated", effectiveFrom: p.effectiveFrom };
+  }
+  await db.query(
+    `INSERT INTO manager_team_moves (manager_id, from_team_id, to_team_id, effective_from, source, set_by, note)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [p.managerId, fromTeamId, p.toTeamId, p.effectiveFrom, p.source, p.setBy ?? null, p.note ?? null]);
+  return { kind: "inserted", effectiveFrom: p.effectiveFrom };
+}

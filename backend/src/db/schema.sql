@@ -4234,6 +4234,33 @@ SELECT v.k, v.t, v.n
    AND (SELECT id FROM teams WHERE name = 'Комерційний відділ') IS NOT NULL;
 
 -- ═══════════════════════════════════════════════════════════════════════════
+-- 🔀 ПЕРЕХОДИ МЕНЕДЖЕРА МІЖ КОМАНДАМИ З ДАТОЮ (02.10.2026, задача 4892; core/teamAt.ts).
+-- Відповідь власника: «все що було залишається в команді у якій працювала» — і лише для
+-- переходів ВІД СЬОГОДНІ (рішення Романа: «фікс, який буде тільки з зараз працювати»).
+-- Рядок = «з дати effective_from людина в to_team_id, до неї була в from_team_id».
+-- Команда на дату D = from_team_id найранішого переходу з effective_from > D, інакше
+-- `managers.team_id`. Немає рядків → звіти байт-у-байт як до цієї таблиці.
+-- 🔴 Минулих переходів НЕ відновлюємо (`manager_team_history` лишається, як була): дата
+-- там — час синку, а не рішення людини, і заднім числом це зрушило б закриті місяці.
+-- Пишуть лише `recordTeamMove` (Налаштування → «Команди» з датою; синк при зміні групи).
+-- ═══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS manager_team_moves (
+  id             BIGSERIAL PRIMARY KEY,
+  manager_id     INT NOT NULL REFERENCES managers(id) ON DELETE CASCADE,
+  from_team_id   INT,                 -- NULL = був без команди
+  to_team_id     INT,                 -- NULL = став без команди
+  effective_from DATE NOT NULL,       -- перший день у новій команді (за Києвом)
+  source         TEXT NOT NULL CHECK (source IN ('settings', 'kommo')),
+  set_by         INT REFERENCES users(id),
+  note           TEXT,
+  recorded_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- Один перехід на день: другий запис того ж дня — це виправлення першого (recordTeamMove).
+  UNIQUE (manager_id, effective_from),
+  CHECK (from_team_id IS DISTINCT FROM to_team_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mtm_manager_date ON manager_team_moves(manager_id, effective_from);
+
+-- ═══════════════════════════════════════════════════════════════════════════
 -- 📋 ПЛАНИ ЛІДГЕНІВ (рішення власника 25.09.2026) — core/leadgenPlans.ts, правила — core/leadgenPlanRules.ts.
 -- План на людину × місяць × метрику: ліди · ОПР · прорахунки — ті самі лічильники, що на екрані
 -- «Лідогенерація». Процес — дзеркало формування плану продажів: тімлід подає (submitted),

@@ -41,6 +41,8 @@ import { jobSkip, type JobSkip } from "./jobRuns.js";
 import { guardDecision, MAX_RUN_MS } from "./syncGuardRule.js";
 import { getSettings } from "../routes/settings.js";
 import { effectiveTeamId, type TeamOverride } from "../core/teamOverride.js";
+import { recordTeamMove } from "../core/teamAt.js";
+import { kyivToday } from "../core/dates.js";
 
 function toTimestamp(unixSeconds: number | null): Date | null {
   return unixSeconds ? new Date(unixSeconds * 1000) : null;
@@ -135,7 +137,7 @@ export async function syncManagers(): Promise<number> {
     const isTeamLead = role.toLowerCase().includes("тимл") || TEAM_LEAD_OVERRIDES.has(String(user.id));
     const displayName = NAME_OVERRIDES[String(user.id)] ?? user.name;
 
-    const up = await pool.query<{ id: number }>(
+    const upsertSql =
       `INSERT INTO managers (name, kommo_user_id, team_id, is_team_lead, is_active, email)
        VALUES ($1, $2, $3, $4, true, $5)
        ON CONFLICT (kommo_user_id) DO UPDATE SET
@@ -144,15 +146,41 @@ export async function syncManagers(): Promise<number> {
          is_team_lead = EXCLUDED.is_team_lead,
          is_active = true,
          email = COALESCE(EXCLUDED.email, managers.email)
-       RETURNING id`,
-      [displayName, user.id, teamId, isTeamLead, user.email ?? null]
-    );
+       RETURNING id`;
+    const upsertArgs = [displayName, user.id, teamId, isTeamLead, user.email ?? null];
+    const prev = prevByUser.get(String(user.id));
+
+    if (prev && prev.teamId !== teamId) {
+      /**
+       * 🔀 ЗМІНА КОМАНДИ = ПЕРЕХІД З ДАТОЮ (задача 4892, `core/teamAt.ts`). Із сьогоднішнього дня
+       * людина в новій команді, а все, що було до, лишається в старій. Дата — київське сьогодні:
+       * синк бачить зміну групи в Kommo не пізніше ніж за 30 хв, а точнішої дати Kommo не дає.
+       * Команду й перехід пише ОДНА транзакція: команда без переходу переписала б минуле
+       * (так було до 02.10.2026), перехід без команди розірвав би ланцюг.
+       */
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(upsertSql, upsertArgs);
+        const mv = await recordTeamMove(client, { managerId: prev.id, fromTeamId: prev.teamId, toTeamId: teamId,
+          effectiveFrom: kyivToday(), source: "kommo" });
+        if (mv.kind === "rejected") console.warn(`syncKommo: перехід менеджера ${prev.id} не записано — ${mv.reason}`);
+        await client.query(`INSERT INTO manager_team_history (manager_id, team_id) VALUES ($1, $2)`, [prev.id, teamId]);
+        await client.query("COMMIT");
+      } catch (e) {
+        await client.query("ROLLBACK");
+        throw e;
+      } finally {
+        client.release();
+      }
+      continue;
+    }
+
+    const up = await pool.query<{ id: number }>(upsertSql, upsertArgs);
     const managerId = up.rows[0].id;
 
-    // Снапшот у manager_team_history: новий менеджер (немає prev) АБО team_id змінився.
-    // null!==null → false (без зайвого рядка); зміна null↔команда → рядок переходу.
-    const prev = prevByUser.get(String(user.id));
-    if (!prev || prev.teamId !== teamId) {
+    // Снапшот у manager_team_history: новий менеджер (немає prev). Зміну команди пише гілка вище.
+    if (!prev) {
       await pool.query(
         `INSERT INTO manager_team_history (manager_id, team_id) VALUES ($1, $2)`,
         [managerId, teamId]

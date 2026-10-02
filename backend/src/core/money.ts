@@ -10,6 +10,12 @@ import { managerDealClass, type DealState, type ClientSuccess } from "./leadgenH
 // «Закрито і не реалізовано», у Кваліфікації — «Не цільові» / «Сміття»). `#683` звіряє його
 // поля з константами цього ядра; друга копія тут розійшлась би мовчки (ревʼю F3/F5).
 import { HANDOFF_CLASS_RULES } from "./moneyBuckets.js";
+// 🔀 Команда — НА ДАТУ АНКЕРА грошей, а не поточна (задача 4892, `core/teamAt.ts`): гроші,
+// зароблені в команді, лишаються в ній після переходу людини. Без переходів — поточна команда.
+// Знімки «станом на зараз» (`snapshotBy`, `awaitingNowSnapshot`) свідомо лишаються на поточній.
+import { teamAtSql, teamOnDateSql } from "./teamAt.js";
+const ANCHOR_DAY = "(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date";
+const CLOSED_DAY = "(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date";
 
 /**
  * ЄДИНЕ джерело грошових метрик (MASTER_PLAN КРОК 2, виправлено КРОКОМ 4 — опція Б).
@@ -178,9 +184,9 @@ function scopeClause(s: MoneyScope, p: unknown[], extraSelect: string, groupBy: 
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", ANCHOR_DAY, `$${p.length}`)); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
-  const teamsJoin = /\bt\./.test(extraSelect + groupBy) ? "LEFT JOIN teams t ON t.id = m.team_id" : "";
+  const teamsJoin = /\bt\./.test(extraSelect + groupBy) ? `LEFT JOIN teams t ON t.id = ${teamAtSql("m", ANCHOR_DAY)}` : "";
   return {
     where: conds.length ? "WHERE " + conds.join(" AND ") : "",
     joins: `JOIN managers m ON m.id = src.manager_id ${activeJoin}\n    ${teamsJoin}`,
@@ -332,7 +338,7 @@ export async function receivedDealStatsByMgr(s: MoneyScope): Promise<MgrDealStat
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at ${K})::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at ${K})::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", ANCHOR_DAY, `$${p.length}`)); }
   const ratio = "CASE WHEN dd.carrier_obligation > 0 AND src.price > 0 THEN src.price / dd.carrier_obligation * 100 END";
   const rows = (await pool.query<{ manager_id: number; revenue: string; deals: string; max_deal: string | null; max_deal_id: string | null;
     max_pct: string | null; pct_id: string | null; pct_price: string | null; pct_cost: string | null; no_cost: string }>(
@@ -380,7 +386,7 @@ async function byDealAttr(kind: Kind, s: MoneyScope, expr: string): Promise<DimR
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at ${K})::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at ${K})::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", ANCHOR_DAY, `$${p.length}`)); }
   const rows = (await pool.query<{ k: string; revenue: string; deals: string }>(
     `SELECT ${expr} AS k, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals
        FROM (${src}) src
@@ -473,7 +479,7 @@ async function byClientBucket(
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at ${K})::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at ${K})::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", ANCHOR_DAY, `$${p.length}`)); }
   if (onlyClientKey) { p.push(onlyClientKey); conds.push(`dd.client_key = $${p.length}`); }
   const rows = (await pool.query<{ ck: string; b: string; revenue: string; deals: string }>(
     `SELECT COALESCE(dd.client_key, '—') AS ck,
@@ -546,7 +552,7 @@ export async function receivedBySegment(s: MoneyScope): Promise<SegmentAgg> {
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at ${K})::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at ${K})::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", ANCHOR_DAY, `$${p.length}`)); }
   const fromRef = s.from ? (p.push(s.from), `$${p.length}`) : "NULL";
   const rows = (await pool.query<{ seg: string; revenue: string; deals: string }>(
     `WITH firsts AS (
@@ -848,7 +854,7 @@ export async function receivedByChannel(s: MoneyScope, adSources: string[]): Pro
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", ANCHOR_DAY, `$${p.length}`)); }
   p.push(adSources); const adRef = `$${p.length}`;
   const ad = adDealSql(adRef);
   const r = await pool.query<{ ad_rev: string; ad_deals: string; lg_rev: string; lg_deals: string }>(
@@ -960,7 +966,7 @@ export async function newBusinessDobir(s: MoneyScope): Promise<number> {
     `(d.closed_at_kommo ${K})::date < date_trunc('month', now() ${K})::date`,
   ];
   if (s.managerId) { p.push(s.managerId); conds.push(`d.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", CLOSED_DAY, `$${p.length}`)); }
   const r = await pool.query<{ ym: string; s: string }>(
     `SELECT to_char((d.closed_at_kommo ${K}),'YYYY-MM') ym, COALESCE(SUM(d.price),0) s
        FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
@@ -985,7 +991,7 @@ export async function newBusinessDobirByManager(s: MoneyScope): Promise<Map<numb
     `(d.closed_at_kommo ${K})::date >= (date_trunc('month', now() ${K}) - interval '3 months')::date`,
     `(d.closed_at_kommo ${K})::date < date_trunc('month', now() ${K})::date`,
   ];
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", CLOSED_DAY, `$${p.length}`)); }
   const r = await pool.query<{ manager_id: number; ym: string; s: string }>(
     `SELECT d.manager_id, to_char((d.closed_at_kommo ${K}),'YYYY-MM') ym, COALESCE(SUM(d.price),0) s
        FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
@@ -1028,7 +1034,7 @@ export async function dobirByManager(s: MoneyScope): Promise<DobirRow[]> {
   const p: unknown[] = [FC_PIPELINES];
   const sc: string[] = [];
   if (s.managerId) { p.push(s.managerId); sc.push(`AND d.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); sc.push(`AND m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); sc.push(`AND ${teamOnDateSql("m", CLOSED_DAY, `$${p.length}`)}`); }
   const rows = await pool.query<{ manager_id: number; raw: string }>(
     `SELECT d.manager_id, COALESCE(SUM(d.price),0) raw
        FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
@@ -1156,7 +1162,7 @@ export async function receivedByMgrKlass(s: MoneyScope): Promise<MoneyByKlass[]>
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", ANCHOR_DAY, `$${p.length}`)); }
   const r = await pool.query<{ manager_id: number; klass: string; n: string; s: string }>(
     `WITH src AS (${src})
      SELECT src.manager_id, (${dealKlassSql("d")}) AS klass,
@@ -1213,7 +1219,7 @@ export async function receivedUndefDeals(s: MoneyScope): Promise<UndefDealRow[]>
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", ANCHOR_DAY, `$${p.length}`)); }
   const r = await pool.query<{ kommo_id: string; manager_id: number | null; s: string; client_key: string | null; sales_channel: string | null }>(
     `WITH src AS (${src})
      SELECT src.kommo_id, src.manager_id, src.price AS s, d.client_key, d.sales_channel

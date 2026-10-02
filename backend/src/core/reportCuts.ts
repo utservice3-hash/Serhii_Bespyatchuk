@@ -1,6 +1,8 @@
 import { pool } from "../db/pool.js";
 import { FC_PIPELINES, STAGE_RECEIVED } from "./money.js";
 import { mergedLagGapExpr, mergedLagFirst } from "./callMerge.js";
+// 🔀 Команда в денних розрізах — на дату рядка (задача 4892); знімки стадій — на поточній.
+import { teamOnDateSql } from "./teamAt.js";
 
 /**
  * 📊 РОЗРІЗИ ЗВІТУ, ЯКИХ НЕ БУЛО В ЯДРІ (макет 06.08.2026).
@@ -41,7 +43,7 @@ export async function callsByManager(from: string, to: string, scope: { managerI
   const p: unknown[] = [from, to];
   const conds = [`(rc.calldate ${K})::date BETWEEN $1 AND $2`, "rc.manager_id IS NOT NULL"];
   if (scope.managerId) { p.push(scope.managerId); conds.push(`rc.manager_id = $${p.length}`); }
-  if (scope.teamId) { p.push(scope.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (scope.teamId) { p.push(scope.teamId); conds.push(teamOnDateSql("m", `(rc.calldate ${K})::date`, `$${p.length}`)); }
   const r = await pool.query<{ manager_id: number; talks: string; attempts: string }>(
     `WITH marked AS (
        SELECT rc.manager_id, rc.billsec, ${mergedLagGapExpr("rc")} AS gap
@@ -68,7 +70,7 @@ export async function callsByManagerDay(from: string, to: string, scope: { manag
   const p: unknown[] = [from, to];
   const conds = [`(rc.calldate ${K})::date BETWEEN $1 AND $2`, "rc.manager_id IS NOT NULL"];
   if (scope.managerId) { p.push(scope.managerId); conds.push(`rc.manager_id = $${p.length}`); }
-  if (scope.teamId) { p.push(scope.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (scope.teamId) { p.push(scope.teamId); conds.push(teamOnDateSql("m", `(rc.calldate ${K})::date`, `$${p.length}`)); }
   /**
    * 🔗 ПЛЕЧІ ОДНОГО ДЗВІНКА СКЛЕЮЮТЬСЯ (рішення власника 07.08.2026).
    *
@@ -162,7 +164,7 @@ export async function invoicedByManagerDay(from: string, to: string, scope: { ma
   const p: unknown[] = [FC_PIPELINES, STAGE_INVOICING, from, to];
   const conds = [`(ev.first_at ${K})::date BETWEEN $3 AND $4`];
   if (scope.managerId) { p.push(scope.managerId); conds.push(`d.manager_id = $${p.length}`); }
-  if (scope.teamId) { p.push(scope.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (scope.teamId) { p.push(scope.teamId); conds.push(teamOnDateSql("m", `(ev.first_at ${K})::date`, `$${p.length}`)); }
   const r = await pool.query<{ manager_id: number; day: string; n: string; s: string }>(
     `SELECT d.manager_id, to_char((ev.first_at ${K})::date,'YYYY-MM-DD') AS day,
             COUNT(*)::int n, COALESCE(SUM(d.price),0) s
@@ -211,7 +213,7 @@ export async function dispatchCohortByManagerDay(
   const p: unknown[] = [from, to, FC_PIPELINES, STAGE_RECEIVED];
   const conds = [`(d.load_at ${K})::date BETWEEN $1 AND $2`, "d.pipeline_id = ANY($3)", "m.is_active"];
   if (scope.managerId) { p.push(scope.managerId); conds.push(`d.manager_id = $${p.length}`); }
-  if (scope.teamId) { p.push(scope.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (scope.teamId) { p.push(scope.teamId); conds.push(teamOnDateSql("m", `(d.load_at ${K})::date`, `$${p.length}`)); }
   const r = await pool.query<{ manager_id: number; day: string; n: string; s: string;
     pn: string; ps: string; an: string; as_: string; ad_: string; an_: string }>(
     `SELECT d.manager_id, to_char((d.load_at ${K})::date,'YYYY-MM-DD') AS day,

@@ -5050,6 +5050,8 @@ export function employeePhotoUrl(p: PhotoRef): Promise<string | null> {
 export interface TeamOverrideRow {
   managerId: number; name: string; kommoUserId: string; teamId: number | null;
   override: { teamId: number | null; note: string | null } | null;
+  /** Останній перехід із датою: до `effectiveFrom` людина рахується в `fromTeamId` (задача 4892). */
+  lastMove: { effectiveFrom: string; fromTeamId: number | null; toTeamId: number | null } | null;
 }
 export interface TeamOverridesPayload {
   teams: { id: number; name: string; dashboardOnly: boolean; active: number }[];
@@ -5059,8 +5061,8 @@ export async function fetchTeamOverrides(): Promise<TeamOverridesPayload> {
   const { data } = await api.get<TeamOverridesPayload>("/settings/team-overrides");
   return data;
 }
-export async function setTeamOverride(kommoUserId: string, body: { mode: "crm" | "team" | "none"; teamId?: number; note?: string }) {
-  const { data } = await api.put<{ ok: true; appliedNow: boolean }>(`/settings/team-overrides/${kommoUserId}`, body);
+export async function setTeamOverride(kommoUserId: string, body: { mode: "crm" | "team" | "none"; teamId?: number; note?: string; effectiveFrom?: string }) {
+  const { data } = await api.put<{ ok: true; appliedNow: boolean; effectiveFrom: string | null }>(`/settings/team-overrides/${kommoUserId}`, body);
   return data;
 }
 export async function createDashboardTeam(name: string): Promise<{ id: number; name: string }> {

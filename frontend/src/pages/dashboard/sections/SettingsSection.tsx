@@ -7,6 +7,7 @@ import {
   type Team, type SyncStatus, setWorkState,
   fetchTeamOverrides, setTeamOverride, createDashboardTeam, type TeamOverridesPayload } from "../../../api";
 import { NAV_GROUPS } from "../../../components/Layout";
+import { todayKyiv } from "../periodRules";
 
 // Усі вкладки (ключ+назва) — беремо з реальної навігації, щоб screen_access-редактор
 // точно збігався з тим, що гейтить сервер.
@@ -124,14 +125,20 @@ export default function SettingsSection({ role, teams, syncStatus, syncing, onMa
 }
 
 // ─────────────────────────── Команди ────────────────
+/** `YYYY-MM-DD` → `DD.MM.YYYY`. */
+const fmtDay = (ymd: string) => `${ymd.slice(8, 10)}.${ymd.slice(5, 7)}.${ymd.slice(0, 4)}`;
 /**
  * 🧭 Команда менеджера в дашборді = Kommo-група, і синк переписує її кожні 30 хв.
  * Тут — перевизначення, яке синк читає (core/teamOverride.ts): «з CRM» / конкретна
  * команда / примусово без команди. Так «архівується» група: її люди виходять із неї,
  * порожня команда зникає зі списків сама. Скасовується тим самим перемикачем.
+ *
+ * 🔀 «Діє з» (задача 4892): зміна команди рахується з цієї дати; усе, що людина зробила
+ * до неї, лишається в старій команді — у звітах, планах і статистиках.
  */
 function TeamsTab({ isAdminUx }: { isAdminUx: boolean }) {
   const [data, setData] = useState<TeamOverridesPayload | null>(null);
+  const [effFrom, setEffFrom] = useState(todayKyiv());
   const [newTeam, setNewTeam] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -144,9 +151,13 @@ function TeamsTab({ isAdminUx }: { isAdminUx: boolean }) {
   const change = async (r: TeamOverridesPayload["managers"][number], v: string) => {
     setBusy(r.kommoUserId); setMsg(null);
     try {
-      const body = v === "crm" ? { mode: "crm" as const } : v === "none" ? { mode: "none" as const } : { mode: "team" as const, teamId: Number(v.slice(5)) };
+      const body = v === "crm" ? { mode: "crm" as const }
+        : v === "none" ? { mode: "none" as const, effectiveFrom: effFrom }
+        : { mode: "team" as const, teamId: Number(v.slice(5)), effectiveFrom: effFrom };
       const res = await setTeamOverride(r.kommoUserId, body);
-      setMsg(res.appliedNow ? `${r.name}: застосовано одразу` : `${r.name}: група з CRM повернеться наступним тіком синку (до 30 хв)`);
+      setMsg(res.appliedNow
+        ? `${r.name}: застосовано з ${fmtDay(res.effectiveFrom ?? effFrom)} — до цієї дати результати лишаються в попередній команді`
+        : `${r.name}: група з CRM повернеться наступним тіком синку (до 30 хв), перехід — з дня, коли синк її побачить`);
       await reload();
     } catch (e) { setMsg(err(e)); } finally { setBusy(null); }
   };
@@ -187,10 +198,17 @@ function TeamsTab({ isAdminUx }: { isAdminUx: boolean }) {
         <h2 className="chart-title">Команда менеджера в дашборді</h2>
         <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 0 }}>
           «з CRM» — як у Kommo-групі. Інше значення <b>бʼє</b> групу з CRM і переживає синк. Перевизначено зараз: <b>{overridden.length}</b>.
+          Зміна команди діє <b>з дати</b> нижче: усе, що людина зробила раніше, лишається в попередній команді (звіти, плани, статистики).
         </p>
+        {isAdminUx && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "flex-end" }}>
+            <L label="ЗМІНА КОМАНДИ ДІЄ З"><input type="date" value={effFrom} max={todayKyiv()} onChange={(e) => setEffFrom(e.target.value || todayKyiv())} /></L>
+            <span style={{ fontSize: 12, color: "var(--text-muted)", paddingBottom: 6 }}>не пізніше сьогодні; для «з CRM» — день, коли синк побачить групу</span>
+          </div>
+        )}
         {msg && <p style={{ fontSize: 12.5, color: "#2f6fdb" }}>{msg}</p>}
         <table className="data-table">
-          <thead><tr><th>ПІБ</th><th>КОМАНДА ЗАРАЗ</th><th>У ДАШБОРДІ</th><th>ПРИМІТКА</th></tr></thead>
+          <thead><tr><th>ПІБ</th><th>КОМАНДА ЗАРАЗ</th><th>У ДАШБОРДІ</th><th>ПЕРЕХІД</th><th>ПРИМІТКА</th></tr></thead>
           <tbody>
             {data.managers.map((r) => (
               <tr key={r.kommoUserId} style={r.override ? { background: "rgba(47,111,219,0.06)" } : undefined}>
@@ -202,6 +220,9 @@ function TeamsTab({ isAdminUx }: { isAdminUx: boolean }) {
                     <option value="none">без команди (примусово)</option>
                     {data.teams.map((t) => <option key={t.id} value={`team:${t.id}`}>{t.name}</option>)}
                   </select>
+                </td>
+                <td style={{ fontSize: 12 }}>
+                  {r.lastMove ? `з ${fmtDay(r.lastMove.effectiveFrom)}: ${teamName(r.lastMove.fromTeamId)} → ${teamName(r.lastMove.toTeamId)}` : "—"}
                 </td>
                 <td style={{ fontSize: 12, color: "var(--text-muted)" }}>{r.override?.note ?? ""}</td>
               </tr>

@@ -9,6 +9,7 @@ import { clientOwnersFor } from "../core/clientOwner.js";
 import { kyivToday } from "../core/dates.js";
 import { dispatchedByLoadBucket, leadsTakenByBucket, repeatClientsByBucket, type MetricScope } from "../core/metrics.js";
 import { SALES_TEAM_LEAD } from "../statistics/catalog.js";
+import { teamAtSql } from "../core/teamAt.js";
 import {
   STATS_SEAM, isCrmAble, LIVE_TEAMS, DEPSTATS_DEPT, DEPSTATS_METRIC_MAP, hasDepstats,
 } from "../statistics/seriesCatalog.js";
@@ -118,7 +119,7 @@ const COMPUTERS: Record<string, Computer> = {
     const params: unknown[] = [from, to];
     let scope = "";
     if (managerId != null) { params.push(managerId); scope = `AND p.manager_id = $${params.length}`; }
-    else if (teamId != null) { params.push(teamId); scope = `AND m.team_id = $${params.length}`; }
+    else if (teamId != null) { params.push(teamId); scope = `AND ${teamAtSql("m", "date_trunc('month', p.plan_date)::date")} = $${params.length}`; } // 🔀 команда на місяць плану (4892)
     const pl = await pool.query<{ period: string; plan: string }>(
       `SELECT to_char(date_trunc('month', p.plan_date), 'YYYY-MM-DD') period, SUM(p.planned_value)::float plan
          FROM plans p JOIN managers m ON m.id = p.manager_id

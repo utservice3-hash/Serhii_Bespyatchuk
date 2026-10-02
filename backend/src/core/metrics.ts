@@ -7,6 +7,10 @@ import { stageName } from "./stageNames.js";
 import { orphanManagerSql, orphanReason, type OrphanReason } from "./orphanClients.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
 import { monthEndOf, periodNotOver, kyivToday } from "./dates.js";
+// 🔀 Команда в ПЕРІОДНИХ розрізах — на дату рядка (створення / подія / анкер), а не поточна
+// (задача 4892, `core/teamAt.ts`). Знімки «станом на зараз» (очікування, дебіторка, застряглі,
+// прострочені) лишаються на поточній команді; когортні воронки — окремим проходом.
+import { teamAtSql, teamOnDateSql } from "./teamAt.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
 import { dayBucketCase } from "./dayBuckets.js";
 
@@ -57,6 +61,9 @@ export interface SnapshotScope {
 /** Команда «Лідогенерація», заведена лише в дашборді (сид у schema.sql, id фіксований). Тримає #740. */
 export const LEADGEN_DASH_TEAM_ID = 50011;
 export const NON_COMMERCIAL_TEAM_IDS = [11, 12, LEADGEN_DASH_TEAM_ID];
+/** Та сама умова над БУДЬ-ЯКИМ виразом команди (поточна, на дату, `to_team_id` переходу). */
+const commercialTeamSql = (teamExpr: string) =>
+  `(${teamExpr} IS NOT NULL AND NOT (${teamExpr} = ANY(ARRAY[${NON_COMMERCIAL_TEAM_IDS.join(", ")}]::int[])))`;
 /**
  * SQL-предикат «КОМЕРЦІЙНИЙ менеджер» (рішення власника 24.07, Опція 2 — строго):
  * має команду І команда не лідген/фінанси. Ловить усі три класи не-комерц: team NULL
@@ -64,8 +71,17 @@ export const NON_COMMERCIAL_TEAM_IDS = [11, 12, LEADGEN_DASH_TEAM_ID];
  * ЄДИНЕ джерело для обох поверхонь (/report roster + stuckDealsGrouped) — не дублювати SQL.
  * `alias` — аліас таблиці managers у запиті (дефолт "m").
  */
-export const commercialManagerSql = (alias = "m") =>
-  `(${alias}.team_id IS NOT NULL AND NOT (${alias}.team_id = ANY(ARRAY[${NON_COMMERCIAL_TEAM_IDS.join(", ")}]::int[])))`;
+export const commercialManagerSql = (alias = "m") => commercialTeamSql(`${alias}.team_id`);
+/**
+ * 🔀 «Комерційний хоч один день періоду» — для РОСТЕРІВ періоду (задача 4892, `core/teamAt.ts`).
+ * Хомік з 01.10 без команди: у вересневому Звіті вона продажна (була в Яцика), у жовтневому — ні.
+ * Без переходів збігається з `commercialManagerSql` (команда на дату = поточна).
+ */
+export const commercialDuringSql = (alias: string, fromRef: string, toRef: string) =>
+  `(${commercialTeamSql(teamAtSql(alias, `${fromRef}::date`))}`
+  + ` OR EXISTS (SELECT 1 FROM manager_team_moves mv3 WHERE mv3.manager_id = ${alias}.id`
+  + ` AND mv3.effective_from > ${fromRef}::date AND mv3.effective_from <= ${toRef}::date`
+  + ` AND ${commercialTeamSql("mv3.to_team_id")}))`;
 
 // Команди РНК (рекламний напрям, тімліди Безпамʼятний/Михальчевська). Джерело правди
 // (== RNK_TEAM_IDS у routes/dashboard.ts, який тепер імпортує звідси — не дублювати число).
@@ -192,7 +208,7 @@ function cohortScope(s: MetricScope): { where: string; params: unknown[]; active
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   return { where: conds.join(" AND "), params, activeJoin: s.activeOnly ? "AND m.is_active" : "" };
 }
 
@@ -252,7 +268,7 @@ export async function funnelByStage(s: MetricScope): Promise<StageRow[]> {
   const params: unknown[] = [];
   const conds: string[] = [];
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
@@ -377,7 +393,7 @@ export async function funnelWeekly(s: MetricScope, granularity: "day" | "week" |
   if (s.from) { params.push(s.from); conds.push(`(dse.changed_at ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(dse.changed_at ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(dse.changed_at ${KYIV})::date`, `$${params.length}`)); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
   const chanSel = byChannel ? `, COALESCE(d.lead_channel, 'other') AS channel` : "";
   const chanGrp = byChannel ? `, COALESCE(d.lead_channel, 'other')` : "";
@@ -422,7 +438,7 @@ export async function funnelWeeklyByManager(s: MetricScope, granularity: "day" |
   if (s.from) { params.push(s.from); conds.push(`(dse.changed_at ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(dse.changed_at ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(dse.changed_at ${KYIV})::date`, `$${params.length}`)); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
   const chanSel = byChannel ? `, COALESCE(d.lead_channel, 'other') AS channel` : "";
   const chanGrp = byChannel ? `, COALESCE(d.lead_channel, 'other')` : "";
@@ -461,7 +477,7 @@ export async function leadsTakenByBucket(s: MetricScope, granularity: "day" | "w
   if (s.to) { params.push(s.to); winConds.push(`(dse.changed_at ${KYIV})::date <= $${params.length}`); }
   const scopeConds: string[] = [];
   if (s.managerId) { params.push(s.managerId); scopeConds.push(`d2.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scopeConds.push(teamOnDateSql("m", `(f.anchor_at ${KYIV})::date`, `$${params.length}`)); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
   const chanSel = byChannel ? `, COALESCE(d2.lead_channel, 'other') AS channel` : "";
   const chanGrp = byChannel ? `, COALESCE(d2.lead_channel, 'other')` : "";
@@ -750,7 +766,7 @@ function classifyCte(
   if (s.from) { params.push(s.from); conds.push(`(${windowCol} ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(${windowCol} ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(${windowCol} ${KYIV})::date`, `$${params.length}`)); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
   const bcol = opts.bucketExpr ? `, ${opts.bucketExpr} AS bucket` : "";
   const bcarry = opts.bucketExpr ? ", bucket" : "";
@@ -933,7 +949,7 @@ function wonScopeConds(s: MetricScope, params: unknown[]): string {
   if (s.from) { params.push(s.from); conds.push(`(dd.closed_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(dd.closed_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`dd.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(dd.closed_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   return conds.join(" AND ");
 }
 
@@ -1057,7 +1073,7 @@ export async function createdByBucket(s: MetricScope, granularity: "day" | "week
   if (s.from) { params.push(s.from); conds.push(`${col}::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`${col}::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `${col}::date`, `$${params.length}`)); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
   const r = await pool.query<{ bucket: string; deals: string }>(
     `SELECT to_char(${bucket}, 'YYYY-MM-DD') AS bucket, COUNT(*) AS deals
@@ -1106,7 +1122,7 @@ function adsScope(s: MetricScope, adSources: string[]): { where: string; params:
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   params.push(adSources);
   conds.push(adDealSql(`$${params.length}`));
   return { where: conds.join(" AND "), params, activeJoin: s.activeOnly ? "AND m.is_active" : "" };
@@ -1199,7 +1215,7 @@ export async function nonTargetLeads(s: MetricScope, adSources: string[]): Promi
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   const r = await pool.query<{ n: string }>(
     `SELECT COUNT(*)::int AS n FROM deals d ${join} WHERE ${conds.join(" AND ")}`, params);
   return Number(r.rows[0]?.n ?? 0);
@@ -1244,7 +1260,7 @@ async function newRepeatRows(s: MetricScope, by: "manager" | "team" | null): Pro
   if (s.from) { params.push(s.from); scope.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); scope.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); scope.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); scope.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scope.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   const fromRef = s.from ? (params.push(s.from), `$${params.length}`) : "NULL";
   const idSel = by === "team" ? "pc.team_id AS id, t.name, NULL::int AS team_id"
              : by === "manager" ? "pc.manager_id AS id, mm.name, pc.team_id AS team_id"
@@ -1259,7 +1275,7 @@ async function newRepeatRows(s: MetricScope, by: "manager" | "team" | null): Pro
 
   const r = await pool.query<{ id: number; name: string; team_id: number | null; new_clients: string; new_revenue: string; repeat_clients: string; repeat_revenue: string }>(
     `WITH paid AS (
-       SELECT d.client_key, d.manager_id, m.team_id, d.price, d.created_at_kommo
+       SELECT d.client_key, d.manager_id, ${teamAtSql("m", `(d.created_at_kommo ${KYIV})::date`)} AS team_id, d.price, d.created_at_kommo
          FROM deals d
          JOIN managers m ON m.id = d.manager_id
          JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
@@ -1346,7 +1362,7 @@ export async function dispatchedByLoadMonth(s: MetricScope, channel?: "leadgen" 
   const conds = ["d.pipeline_id = ANY($1)", "d.load_at IS NOT NULL"];
   if (channel) { params.push(channel); conds.push(`d.lead_channel = $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.load_at ${KYIV})::date`, `$${params.length}`)); }
   // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
   // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
   const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
@@ -1434,7 +1450,7 @@ export async function dispatchedByManagerDay(s: MetricScope): Promise<MgrDayN[]>
   const conds = ["d.pipeline_id = ANY($1)", "d.load_at IS NOT NULL"];
   if (s.from) { params.push(s.from); conds.push(`(d.load_at ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.load_at ${KYIV})::date <= $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.load_at ${KYIV})::date`, `$${params.length}`)); }
   // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
   // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
   const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
@@ -1453,7 +1469,7 @@ export async function leadsByManagerDay(s: MetricScope): Promise<MgrDayLeads[]> 
   if (s.from) { params.push(s.from); winConds.push(`(dse.changed_at ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); winConds.push(`(dse.changed_at ${KYIV})::date <= $${params.length}`); }
   // Active-only: INNER JOIN managers + m.is_active (неактивний зникає з агрегату).
-  const teamCond = s.teamId ? (params.push(s.teamId), `AND m.team_id = $${params.length}`) : "";
+  const teamCond = s.teamId ? (params.push(s.teamId), `AND ${teamOnDateSql("m", `(f.anchor_at ${KYIV})::date`, `$${params.length}`)}`) : "";
   const r = await pool.query<{ manager_id: number; bkt: string; ad: string; leadgen: string }>(
     `WITH first_lt AS (
        SELECT dse.kommo_id, MIN(dse.changed_at) AS anchor_at
@@ -1587,7 +1603,7 @@ export async function conversionByManager(s: MetricScope, channel?: "ad" | "lead
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
   // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
   const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
@@ -1683,7 +1699,7 @@ export async function avgDealCycleDays(s: MetricScope): Promise<number | null> {
   const conds = ["d.pipeline_id = ANY($1)", "d.status_id = 142", "d.created_at_kommo IS NOT NULL", "d.closed_at_kommo IS NOT NULL", "d.closed_at_kommo >= d.created_at_kommo"];
   if (s.from) { params.push(s.from); conds.push(`(d.closed_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.closed_at_kommo ${KYIV})::date <= $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.closed_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
   // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
   const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
@@ -1700,7 +1716,7 @@ export async function lostDeals(s: MetricScope): Promise<{ count: number; sum: n
   const conds = ["d.pipeline_id = ANY($1)", "d.status_id = 143", "d.closed_at_kommo IS NOT NULL"];
   if (s.from) { params.push(s.from); conds.push(`(d.closed_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.closed_at_kommo ${KYIV})::date <= $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.closed_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
   // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
   const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
@@ -3193,7 +3209,7 @@ function responseScope(s: MetricScope): { conds: string[]; params: unknown[] } {
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KY})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KY})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KY})::date`, `$${params.length}`)); }
   return { conds, params };
 }
 
@@ -3494,7 +3510,7 @@ export async function conversionLeadgenByManager(s: MetricScope): Promise<MgrCon
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; entered: string; won: string }>(
     `SELECT d.manager_id, m.name, m.team_id,
             COUNT(*) AS entered,

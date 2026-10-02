@@ -118,6 +118,7 @@ import {
 import { canRequestLimitFor, canAssignTaskToOthers } from "../auth/taskAssignScope.js";
 import { activeManagerSql } from "../core/activeManager.js";
 import * as managerState from "../core/managerState.js";
+import { teamAtSql, inTeamDuringSql } from "../core/teamAt.js";
 import * as clientCalls from "../core/clientCalls.js";
 import * as planBasis from "../core/planBasis.js";
 import * as clientTabs from "../core/clientTabs.js";
@@ -8932,12 +8933,19 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   //    отже випадає звідси і потрапляє нижче в `dismissed`, тобто РАЗОМ ЗІ СВОЇМИ
   //    ГРІШМИ в суму команди. Це не «сховати людину», це рівно правило власника:
   //    «план його зникає, але результат залишається».
-  const rConds = [managerState.hasPlanSql("m", activeManagerSql("m")), metrics.commercialManagerSql("m")];
+  // 🔀 СКЛАД ПЕРІОДУ, А НЕ СЬОГОДНІШНІЙ (задача 4892, `core/teamAt.ts`): у вересневому Звіті
+  //    команди Яцика стоїть і той, хто з 01.10 перейшов, — зі своїми вересневими грошима, які
+  //    ядро вже кладе в команду на дату анкера. Підпис команди — на кінець періоду (або обрана
+  //    команда). Без переходів — рівно `commercialManagerSql` і `m.team_id`, як було.
+  rp.push(from, to);
+  const fromRef = "$1", toRef = "$2";
+  const rConds = [managerState.hasPlanSql("m", activeManagerSql("m")), metrics.commercialDuringSql("m", fromRef, toRef)];
   if (managerId) { rp.push(managerId); rConds.push(`m.id = $${rp.length}`); }
-  if (teamId) { rp.push(teamId); rConds.push(`m.team_id = $${rp.length}`); }
+  let rosterTeam = teamAtSql("m", `${toRef}::date`);
+  if (teamId) { rp.push(teamId); rConds.push(inTeamDuringSql("m", `$${rp.length}`, fromRef, toRef)); rosterTeam = `$${rp.length}::int`; }
   const roster = (await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null }>(
-    `SELECT m.id, m.name, m.team_id, t.name AS team_name FROM managers m
-       LEFT JOIN teams t ON t.id = m.team_id ${managerState.stateJoinSql("m")}
+    `SELECT m.id, m.name, ${rosterTeam} AS team_id, t.name AS team_name FROM managers m
+       LEFT JOIN teams t ON t.id = ${rosterTeam} ${managerState.stateJoinSql("m")}
       WHERE ${rConds.join(" AND ")} ORDER BY m.name`, rp
   )).rows;
 

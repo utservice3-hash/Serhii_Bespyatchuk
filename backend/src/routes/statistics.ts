@@ -2,6 +2,7 @@ import { Router } from "express";
 import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { pool } from "../db/pool.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
+import { teamAtSql } from "../core/teamAt.js";
 import {
   CATALOG, getDepartment, getMetric, canonTeamLead, SALES_TEAM_LEAD, STATS_AUTO_FROM,
   visibleDepartments,
@@ -71,10 +72,12 @@ statisticsRouter.get("/", async (req, res) => {
     if (from) { pp.push(from); pc.push(`p.plan_date >= $${pp.length}`); }
     if (to) { pp.push(to); pc.push(`p.plan_date <= $${pp.length}`); }
     const pr = await pool.query<{ month: string; team_id: number | null; plan: string }>(
-      `SELECT to_char(p.plan_date,'YYYY-MM-DD') AS month, m.team_id, COALESCE(SUM(p.planned_value),0) AS plan
+      // 🔀 Команда — на місяць плану (задача 4892, `core/teamAt.ts`), а не поточна.
+      `SELECT to_char(p.plan_date,'YYYY-MM-DD') AS month, ${teamAtSql("m", "date_trunc('month', p.plan_date)::date")} AS team_id,
+              COALESCE(SUM(p.planned_value),0) AS plan
          FROM plans p JOIN managers m ON m.id = p.manager_id
         WHERE ${pc.join(" AND ")}
-        GROUP BY month, m.team_id`, pp);
+        GROUP BY 1, 2`, pp);
     const scopedLead = !isAdminScope(auth) ? ownTeamLead(auth.teamId) : null;
     for (const row of pr.rows) {
       const lead = row.team_id != null && SALES_TEAM_LEAD[row.team_id]

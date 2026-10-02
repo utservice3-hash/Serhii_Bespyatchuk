@@ -3,6 +3,7 @@ import { workingDaysBetween, monthEndOf, fixedWeekBlocks } from "./dates.js";
 import { weekPlansForMonth } from "./weekPlan.js";
 import { receivedByMgr } from "./money.js";
 import { hasPlanSql, stateJoinSql } from "./managerState.js";
+import { teamAtSql } from "./teamAt.js";
 
 /**
  * ЄДИНЕ ДЖЕРЕЛО «плану на менеджера для ДИСПЛЕЮ» (цеглина 1 міграції, рішення власника).
@@ -40,7 +41,10 @@ export interface ManagerPlanResult {
 
 export async function managerPlan(s: PlanScope): Promise<ManagerPlanResult> {
   const params: unknown[] = [s.month];
-  const teamCond = s.teamId ? `AND m.team_id = $2` : "";
+  // 🔀 Команда — на 1-ше число місяця плану (задача 4892, `core/teamAt.ts`): вересневий план
+  // того, хто з 01.10 перейшов, лишається у вересневій команді. Без переходів — поточна.
+  const TEAM = teamAtSql("m", "$1::date");
+  const teamCond = s.teamId ? `AND ${TEAM} = $2` : "";
   if (s.teamId) params.push(s.teamId);
 
   /**
@@ -64,22 +68,22 @@ export async function managerPlan(s: PlanScope): Promise<ManagerPlanResult> {
         GROUP BY p.manager_id`, params),
     // по команді: Σ планів тих, кому план БІЛЬШЕ НЕ СТАВИТЬСЯ + к-сть тих, кому ставиться
     pool.query<{ team_id: number; deact: string; nactive: string }>(
-      `SELECT m.team_id,
+      `SELECT ${TEAM} AS team_id,
               COALESCE(SUM(p.planned_value) FILTER (WHERE NOT ${PLANNED}),0) deact,
               COUNT(DISTINCT m.id) FILTER (WHERE ${PLANNED}) nactive
          FROM managers m ${stateJoinSql("m")}
          LEFT JOIN plans p ON p.manager_id = m.id AND p.metric='payment_amount'
                           AND date_trunc('month',p.plan_date) = $1::date
-        WHERE m.team_id IS NOT NULL ${teamCond}
-        GROUP BY m.team_id`, params),
+        WHERE ${TEAM} IS NOT NULL ${teamCond}
+        GROUP BY 1`, params),
     // ростер тих, кому план ставиться — ORDER BY id, щоб залишок ішов першому по id (як fix #3)
     pool.query<{ id: number; name: string; team_id: number | null }>(
       s.teamId
-        ? `SELECT m.id, m.name, m.team_id FROM managers m ${stateJoinSql("m")}
-            WHERE ${PLANNED} AND m.team_id = $1 ORDER BY m.id`
-        : `SELECT m.id, m.name, m.team_id FROM managers m ${stateJoinSql("m")}
+        ? `SELECT m.id, m.name, ${TEAM} AS team_id FROM managers m ${stateJoinSql("m")}
+            WHERE ${PLANNED} AND ${TEAM} = $2 ORDER BY m.id`
+        : `SELECT m.id, m.name, ${TEAM} AS team_id FROM managers m ${stateJoinSql("m")}
             WHERE ${PLANNED} ORDER BY m.id`,
-      s.teamId ? [s.teamId] : []),
+      s.teamId ? [s.month, s.teamId] : [s.month]),
   ]);
 
   const ownPlan = new Map(ownRes.rows.map((r) => [r.manager_id, Math.round(Number(r.s))]));
@@ -130,7 +134,7 @@ export async function planPerWorkingDay(s: { managerId?: number | null; teamId?:
   const params: unknown[] = [month];
   const conds = ["p.metric='payment_amount'", "date_trunc('month',p.plan_date) = $1::date"];
   if (s.managerId) { params.push(s.managerId); conds.push(`p.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`${teamAtSql("m", "$1::date")} = $${params.length}`); }
   const r = await pool.query<{ s: string }>(
     `SELECT COALESCE(SUM(p.planned_value),0) s
        FROM plans p JOIN managers m ON m.id = p.manager_id

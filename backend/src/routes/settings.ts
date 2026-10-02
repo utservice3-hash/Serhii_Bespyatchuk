@@ -5,7 +5,7 @@ import { CALLS_NORM_BOUNDS } from "../core/callNorm.js";
 import bcrypt from "bcryptjs";
 import { pool } from "../db/pool.js";
 import { setAdPlan } from "../core/adBudget.js";
-import { monthStartOf } from "../core/dates.js";
+import { monthStartOf, kyivToday } from "../core/dates.js";
 import { requireAuth } from "../auth/middleware.js";
 import { provisionUsers, resetPassword, generatePassword } from "../db/userProvisioning.js";
 import { roleHasPerm, getRoleDef, refreshRoles, isAdminScope, isAdminOrLead } from "../auth/rbac.js";
@@ -15,6 +15,7 @@ import { loginEnabledFor } from "../core/managerState.js";
 import { writeAudit } from "../db/audit.js";
 import { parseKey } from "../core/secretBox.js";
 import { storeDashboardPassword } from "../core/teamVault.js";
+import { recordTeamMove } from "../core/teamAt.js";
 import type { Db as SecretsDb } from "../core/secrets.js";
 
 export const settingsRouter = Router();
@@ -638,10 +639,15 @@ settingsRouter.get("/team-overrides", async (req, res) => {
               (SELECT COUNT(*) FROM managers m WHERE m.team_id = t.id AND m.is_active) AS active
          FROM teams t ORDER BY t.name`),
     pool.query<{ id: number; name: string; kommo_user_id: string; team_id: number | null;
-                 ov_team_id: number | null; ov_note: string | null; has_ov: boolean }>(
+                 ov_team_id: number | null; ov_note: string | null; has_ov: boolean;
+                 mv_from: string | null; mv_from_team: number | null; mv_to_team: number | null }>(
+      // 🔀 Останній перехід із датою (задача 4892) — щоб на екрані було видно, з якого дня діє зміна.
       `SELECT m.id, m.name, m.kommo_user_id, m.team_id,
-              o.team_id AS ov_team_id, o.note AS ov_note, (o.kommo_user_id IS NOT NULL) AS has_ov
+              o.team_id AS ov_team_id, o.note AS ov_note, (o.kommo_user_id IS NOT NULL) AS has_ov,
+              to_char(mv.effective_from, 'YYYY-MM-DD') AS mv_from, mv.from_team_id AS mv_from_team, mv.to_team_id AS mv_to_team
          FROM managers m LEFT JOIN manager_team_overrides o ON o.kommo_user_id = m.kommo_user_id
+         LEFT JOIN LATERAL (SELECT effective_from, from_team_id, to_team_id FROM manager_team_moves
+                             WHERE manager_id = m.id ORDER BY effective_from DESC LIMIT 1) mv ON true
         WHERE m.is_active AND m.kommo_user_id IS NOT NULL
         ORDER BY m.name`),
   ]);
@@ -651,6 +657,7 @@ settingsRouter.get("/team-overrides", async (req, res) => {
       managerId: m.id, name: m.name, kommoUserId: String(m.kommo_user_id),
       teamId: m.team_id,
       override: m.has_ov ? { teamId: m.ov_team_id, note: m.ov_note } : null,
+      lastMove: m.mv_from ? { effectiveFrom: m.mv_from, fromTeamId: m.mv_from_team, toTeamId: m.mv_to_team } : null,
     })),
   });
 });
@@ -661,6 +668,10 @@ settingsRouter.get("/team-overrides", async (req, res) => {
  * без команди. Застосовується ОДРАЗУ (managers.team_id + історія), не чекаючи тіка синку.
  * ⚠️ При `crm` негайно повернути групу ми не можемо (її знає лише Kommo) — команда
  * повернеться наступним тіком; відповідь це називає.
+ *
+ * 🔀 `effectiveFrom` (`YYYY-MM-DD`, не пізніше сьогодні; за замовчуванням сьогодні) — з якого
+ * дня людина в новій команді (задача 4892, `core/teamAt.ts`). Усе до цієї дати лишається в
+ * старій команді. Для `crm` дату не приймаємо: перехід запише синк, коли побачить групу.
  */
 settingsRouter.put("/team-overrides/:kommoUserId", async (req, res) => {
   if (!requireManageUsers(req, res)) return;
@@ -674,6 +685,15 @@ settingsRouter.put("/team-overrides/:kommoUserId", async (req, res) => {
     `SELECT id, name, team_id FROM managers WHERE kommo_user_id = $1`, [kommoUserId])).rows[0];
   if (!mgr) return res.status(404).json({ error: "Менеджера з таким kommo_user_id немає" });
   const note = typeof req.body?.note === "string" && req.body.note.trim() ? req.body.note.trim() : null;
+  const today = kyivToday();
+  const effectiveFrom = req.body?.effectiveFrom == null || req.body.effectiveFrom === "" ? today : String(req.body.effectiveFrom);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom) || Number.isNaN(Date.parse(effectiveFrom + "T00:00:00Z"))) {
+    return res.status(400).json({ error: "effectiveFrom: дата YYYY-MM-DD" });
+  }
+  if (effectiveFrom > today) return res.status(400).json({ error: "effectiveFrom: не пізніше сьогодні" });
+  if (mode === "crm" && effectiveFrom !== today) {
+    return res.status(400).json({ error: "Для «з CRM» дату не задаємо: перехід запише синк, коли побачить групу в Kommo" });
+  }
 
   let teamId: number | null = null;
   let label = "з CRM (повернеться наступним тіком синку)";
@@ -699,6 +719,13 @@ settingsRouter.put("/team-overrides/:kommoUserId", async (req, res) => {
            team_id = EXCLUDED.team_id, note = EXCLUDED.note, set_by = EXCLUDED.set_by, set_at = now()`,
         [kommoUserId, teamId, note, req.auth?.userId ?? null]);
       if (mgr.team_id !== teamId) {
+        // Перехід — ДО зміни команди: `from` береться з поточної (ланцюг сходиться).
+        const mv = await recordTeamMove(client, { managerId: mgr.id, toTeamId: teamId, effectiveFrom,
+          source: "settings", setBy: req.auth?.userId ?? null, note });
+        if (mv.kind === "rejected") {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: `Перехід не записано: ${mv.reason}` });
+        }
         await client.query(`UPDATE managers SET team_id = $2 WHERE id = $1`, [mgr.id, teamId]);
         await client.query(`INSERT INTO manager_team_history (manager_id, team_id) VALUES ($1, $2)`, [mgr.id, teamId]);
       }
@@ -711,8 +738,8 @@ settingsRouter.put("/team-overrides/:kommoUserId", async (req, res) => {
     client.release();
   }
   await writeAudit({ ...audit(req), action: "manager.team_override", targetType: "manager",
-    targetId: String(mgr.id), targetLabel: `${mgr.name} → ${label}` });
-  res.json({ ok: true, mode, teamId, appliedNow: mode !== "crm" });
+    targetId: String(mgr.id), targetLabel: `${mgr.name} → ${label}${mode !== "crm" ? ` з ${effectiveFrom}` : ""}` });
+  res.json({ ok: true, mode, teamId, appliedNow: mode !== "crm", effectiveFrom: mode !== "crm" ? effectiveFrom : null });
 });
 
 /** Команда лише в дашборді (без Kommo-групи). Існує через перевизначення; синк її не чіпає. */

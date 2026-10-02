@@ -16,6 +16,11 @@ import {
 import { computeDeptAuto, computeFinanceSnapshot, computeCohortConversions } from "../statistics/computeAuto.js";
 import { dispatchedWhere, cohortMonth, DISPATCH_FROM } from "../core/dispatched.js";
 import { STAGE_RECEIVED } from "../core/money.js";
+// 🔀 Серії «закрито» і «відправлено» — на команду НА ДАТУ рядка (задача 4892): перехід людини
+// не переписує минулі тижні тімліда. Знімки поточного стану нижче — на поточній команді.
+import { teamAtSql } from "../core/teamAt.js";
+const CLOSED_TEAM = teamAtSql("m", "(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date");
+const CREATED_TEAM = teamAtSql("m", "(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date");
 
 const FULL_CYCLE = [8921932, 155304];
 const SALES_TEAM_IDS = Object.keys(SALES_TEAM_LEAD).map(Number);
@@ -71,14 +76,14 @@ async function run(): Promise<void> {
   for (const [ptype, trunc] of [["month", "month"], ["week", "week"]] as const) {
     // Q1 closed-based: revenue_won, machines_success (готівку НЕ пишемо — imported)
     const q1 = await pool.query<{ team_id: number | null; bucket: string; rev: string; succ: string }>(
-      `SELECT m.team_id AS team_id,
+      `SELECT ${CLOSED_TEAM} AS team_id,
               to_char(date_trunc('${trunc}', (d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')), 'YYYY-MM-DD') AS bucket,
               COALESCE(SUM(d.price),0) AS rev, COUNT(*) AS succ
          FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
         WHERE d.pipeline_id = ANY($1) AND d.status_id = 142 AND d.closed_at_kommo IS NOT NULL
           AND (d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= (CURRENT_DATE - $3::int)
-          AND (m.team_id IS NULL OR m.team_id = ANY($2))
-        GROUP BY m.team_id, bucket`,
+          AND (${CLOSED_TEAM} IS NULL OR ${CLOSED_TEAM} = ANY($2))
+        GROUP BY 1, bucket`,
       [FULL_CYCLE, SALES_TEAM_IDS, RECENT_DAYS]
     );
     for (const r of q1.rows) {
@@ -121,14 +126,14 @@ async function run(): Promise<void> {
      */
     const zone = `${bucket} >= $5::date`;
     const q2 = await pool.query<{ team_id: number | null; bucket: string; n: string }>(
-      `SELECT m.team_id AS team_id, to_char(${bucket}, 'YYYY-MM-DD') AS bucket, COUNT(*) AS n
+      `SELECT ${CREATED_TEAM} AS team_id, to_char(${bucket}, 'YYYY-MM-DD') AS bucket, COUNT(*) AS n
          FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
         WHERE d.pipeline_id = ANY($1)
           AND (d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= (CURRENT_DATE - $3::int)
-          AND (m.team_id IS NULL OR m.team_id = ANY($2))
+          AND (${CREATED_TEAM} IS NULL OR ${CREATED_TEAM} = ANY($2))
           AND ${zone}
           AND ${dispatchedWhere("d", "$4")}
-        GROUP BY m.team_id, bucket`,
+        GROUP BY 1, bucket`,
       [FULL_CYCLE, SALES_TEAM_IDS, RECENT_DAYS, STAGE_RECEIVED, DISPATCH_FROM]
     );
     // Бакети, за які джоба ВІДПОВІДАЄ, беруться з ДАНИХ, а не з календаря: календар

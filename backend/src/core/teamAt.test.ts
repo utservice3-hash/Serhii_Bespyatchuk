@@ -1,0 +1,216 @@
+import { test, after } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { skipReason } from "../db/scratchDb.js";
+import { teamAt, inTeamDuring, type TeamMove } from "./teamAt.js";
+
+const ROOT = path.join(import.meta.dirname, "..", "..", "..");
+
+/**
+ * 🔀 КОМАНДА НА ДАТУ (02.10.2026, задача 4892). Хомік з 01.10 іде від Яцика «без команди»; відповідь
+ * власника — «все що було залишається в команді у якій працювала». Гейти стережуть правило з обох
+ * боків межі переходу, його SQL-форму, гроші й план поверх неї, запис переходу й обох писарів.
+ */
+const KHOMIK: TeamMove[] = [{ effectiveFrom: "2026-10-01", fromTeamId: 5, toTeamId: null }];
+const CHAIN: TeamMove[] = [
+  { effectiveFrom: "2026-10-01", fromTeamId: 5, toTeamId: 6 },
+  { effectiveFrom: "2026-11-15", fromTeamId: 6, toTeamId: 7 },
+];
+/** Перехід ІЗ «без команди»: `from` = NULL — і саме його `COALESCE` сплутав би з «переходу немає». */
+const FROM_NONE: TeamMove[] = [{ effectiveFrom: "2026-10-01", fromTeamId: null, toTeamId: 5 }];
+
+test("#1301 КОМАНДА НА ДАТУ: до дня переходу — стара, з дня переходу — нова; без переходів — поточна", () => {
+  assert.equal(teamAt(null, KHOMIK, "2026-09-30"), 5, "🔴 останній день у Яцика віддано новій команді");
+  assert.equal(teamAt(null, KHOMIK, "2026-10-01"), null, "🔴 день переходу лишився в старій команді");
+  assert.equal(teamAt(6, [], "2020-01-01"), 6, "🔴 без переходів команда не поточна");
+  assert.deepEqual(["2026-09-30", "2026-10-01", "2026-11-14", "2026-11-15"].map((d) => teamAt(7, CHAIN, d)), [5, 6, 6, 7],
+    "🔴 ланцюг із двох переходів дає не ту команду");
+  assert.equal(teamAt(5, FROM_NONE, "2026-09-30"), null, "🔴 «був без команди» прочитано як «переходу немає»");
+});
+
+test("#1301b БУВ У КОМАНДІ ХОЧ ДЕНЬ ПЕРІОДУ: вересень Хомік — у Яцика, жовтень — ні; перехід усередині періоду рахується", () => {
+  assert.equal(inTeamDuring(null, KHOMIK, 5, "2026-09-01", "2026-09-30"), true, "🔴 вересень без Хомік у команді Яцика");
+  assert.equal(inTeamDuring(null, KHOMIK, 5, "2026-10-01", "2026-10-31"), false, "🔴 жовтень із Хомік у команді Яцика");
+  assert.equal(inTeamDuring(null, KHOMIK, 5, "2026-09-15", "2026-10-15"), true, "🔴 період через межу загубив людину");
+  assert.equal(inTeamDuring(7, CHAIN, 7, "2026-11-01", "2026-11-30"), true, "🔴 перехід У команду посеред періоду не врахований");
+  assert.equal(inTeamDuring(7, CHAIN, 7, "2026-10-01", "2026-10-31"), false, "🔴 людина в команді раніше за перехід");
+  assert.equal(inTeamDuring(7, CHAIN, 6, "2026-11-20", "2026-11-30"), false, "🔴 людина в команді після переходу з неї");
+});
+
+// ── Живий SQL на scratch-кластері: один кластер на файл, пул ядра дивиться в нього ──────────────────
+type Ctx = {
+  c: import("pg").Client;
+  money: typeof import("./money.js");
+  plans: typeof import("./plans.js");
+  metrics: typeof import("./metrics.js");
+  sql: typeof import("./teamAt.js");
+};
+let ctxP: Promise<Ctx | { skip: string }> | null = null;
+let dispose: (() => Promise<void>) | null = null;
+after(async () => { if (dispose) await dispose(); });
+
+const FC = 8921932;
+async function db(): Promise<Ctx | { skip: string }> {
+  ctxP ??= (async () => {
+    const { provisionScratch } = await import("../db/scratchDb.js");
+    const scratch = provisionScratch();
+    if ("unavailable" in scratch) return { skip: skipReason(scratch) };
+    // ⚠️ `DATABASE_URL` — ДО імпорту ядра: `db/pool` читає конфіг на імпорті (прийом #843 / #1300).
+    process.env.DATABASE_URL = scratch.url;
+    process.env.JWT_SECRET ??= "test";
+    process.env.KOMMO_BASE_URL ??= "https://x.invalid";
+    process.env.KOMMO_API_TOKEN ??= "x";
+    const { default: pg } = await import("pg");
+    const c = new pg.Client({ connectionString: scratch.url });
+    await c.connect();
+    await c.query(readFileSync(path.join(ROOT, "backend/src/db/schema.sql"), "utf8"));
+    await c.query(`INSERT INTO teams (id, name) VALUES (5, 'РПК-Яцика'), (6, 'РНК'), (7, 'РПК-2') ON CONFLICT (id) DO NOTHING`);
+    await c.query(`INSERT INTO managers (id, name, team_id, is_active) VALUES
+      (1, 'Хомік', NULL, true), (2, 'Сусід', 5, true), (3, 'Без переходів', 6, true), (4, 'Новенький', 5, true)
+      ON CONFLICT (id) DO NOTHING`);
+    await c.query(`INSERT INTO manager_team_moves (manager_id, from_team_id, to_team_id, effective_from, source) VALUES
+      (1, 5, NULL, '2026-10-01', 'settings'), (4, NULL, 5, '2026-10-01', 'kommo')`);
+    await c.query(`INSERT INTO pipeline_stage_map (pipeline_id, status_id, funnel_stage) VALUES (${FC}, 142, 'paid') ON CONFLICT DO NOTHING`);
+    // Межа з ОБОХ боків: 30.09 (ще Яцик) і 01.10 (уже без команди) — полудень за Києвом, щоб доба не з'їхала.
+    for (const [id, mgr, price, at] of [
+      [101, 1, 100, "2026-09-30 12:00+03"], [102, 1, 30, "2026-10-01 12:00+03"],
+      [103, 2, 50, "2026-09-20 12:00+03"], [104, 3, 7, "2026-09-10 12:00+03"],
+    ] as const) {
+      await c.query(
+        `INSERT INTO deals (kommo_id, name, manager_id, pipeline_id, status_id, price, created_at_kommo, closed_at_kommo)
+         VALUES ($1, $2, $3, ${FC}, 142, $4, $5::timestamptz - interval '3 days', $5::timestamptz)`,
+        [id, `угода ${id}`, mgr, price, at]);
+    }
+    await c.query(`INSERT INTO plans (manager_id, metric, plan_date, planned_value) VALUES
+      (1, 'payment_amount', '2026-09-01', 1000), (1, 'payment_amount', '2026-10-01', 900), (2, 'payment_amount', '2026-09-01', 2000)`);
+    const [money, plans, metrics, sql] = await Promise.all([
+      import("./money.js"), import("./plans.js"), import("./metrics.js"), import("./teamAt.js")]);
+    dispose = async () => {
+      const { pool } = await import("../db/pool.js");
+      await pool.end();
+      await c.end();
+      scratch.dispose();
+    };
+    return { c, money, plans, metrics, sql };
+  })();
+  return ctxP;
+}
+
+async function movesOf(c: import("pg").Client): Promise<Map<number, TeamMove[]>> {
+  const r = await c.query<{ manager_id: number; ef: string; f: number | null; t: number | null }>(
+    `SELECT manager_id, to_char(effective_from, 'YYYY-MM-DD') AS ef, from_team_id AS f, to_team_id AS t FROM manager_team_moves`);
+  const m = new Map<number, TeamMove[]>();
+  for (const x of r.rows) m.set(x.manager_id, [...(m.get(x.manager_id) ?? []), { effectiveFrom: x.ef, fromTeamId: x.f, toTeamId: x.t }]);
+  return m;
+}
+const DAYS = ["2026-09-29", "2026-09-30", "2026-10-01", "2026-10-02"];
+
+test("#1302 ЖИВИЙ SQL: вираз «команда на дату» == правилу для кожного менеджера й дня (і для «був без команди»)", async (t) => {
+  const x = await db(); if ("skip" in x) return t.skip(x.skip);
+  const moves = await movesOf(x.c);
+  const mgrs = (await x.c.query<{ id: number; team_id: number | null }>(`SELECT id, team_id FROM managers ORDER BY id`)).rows;
+  assert.equal(mgrs.length, 4, "🔴 фікстура не засіялась — порожньо означає ПРОВАЛ");
+  for (const m of mgrs) for (const d of DAYS) {
+    const got: number | null = (await x.c.query<{ t: number | null }>(
+      `SELECT ${x.sql.teamAtSql("m", "$1::date")} AS t FROM managers m WHERE m.id = $2`, [d, m.id])).rows[0].t;
+    assert.equal(got, teamAt(m.team_id, moves.get(m.id) ?? [], d), `🔴 менеджер ${m.id} на ${d}: SQL розійшовся з правилом`);
+  }
+  for (const [from, to] of [["2026-09-01", "2026-09-30"], ["2026-10-01", "2026-10-31"], ["2026-09-15", "2026-10-15"]]) {
+    for (const m of mgrs) for (const team of [5, 6]) {
+      const got: boolean = (await x.c.query<{ v: boolean }>(
+        `SELECT ${x.sql.inTeamDuringSql("m", "$3", "$1", "$2")} AS v FROM managers m WHERE m.id = $4`, [from, to, team, m.id])).rows[0].v;
+      assert.equal(got, inTeamDuring(m.team_id, moves.get(m.id) ?? [], team, from, to),
+        `🔴 «був у команді ${team} за ${from}…${to}» для менеджера ${m.id}: SQL розійшовся з правилом`);
+    }
+  }
+  const commercial = async (id: number, from: string, to: string) => (await x.c.query<{ v: boolean }>(
+    `SELECT ${x.metrics.commercialDuringSql("m", "$1", "$2")} AS v FROM managers m WHERE m.id = $3`, [from, to, id])).rows[0].v;
+  assert.equal(await commercial(1, "2026-09-01", "2026-09-30"), true, "🔴 у вересні Хомік не продажна — випаде з ростера Звіту");
+  assert.equal(await commercial(1, "2026-10-01", "2026-10-31"), false, "🔴 у жовтні Хомік без команди, а рахується продажною");
+});
+
+test("#1302b ЖИВИЙ SQL: без жодного переходу вираз == поточна команда кожного менеджера (звіти байт-у-байт як були)", async (t) => {
+  const x = await db(); if ("skip" in x) return t.skip(x.skip);
+  await x.c.query("BEGIN");
+  try {
+    await x.c.query(`DELETE FROM manager_team_moves`);
+    const r = await x.c.query<{ n: string; same: string }>(
+      `SELECT COUNT(*) AS n, COUNT(*) FILTER (WHERE ${x.sql.teamAtSql("m", "d::date")} IS NOT DISTINCT FROM m.team_id) AS same
+         FROM managers m CROSS JOIN unnest($1::date[]) AS d`, [DAYS]);
+    assert.equal(Number(r.rows[0].n), 16, "🔴 сітка менеджер × день не та — перевіряти нема чого");
+    assert.equal(Number(r.rows[0].same), 16, "🔴 без переходів команда на дату відрізняється від поточної — зрушить усі звіти");
+  } finally { await x.c.query("ROLLBACK"); }
+});
+
+test("#1303 ГРОШІ З ПЕРЕХОДОМ: вересень Хомік — у Яцика, жовтень — без команди; Σ команд == відділ; рядок у команді — лише її частка", async (t) => {
+  const x = await db(); if ("skip" in x) return t.skip(x.skip);
+  const P = { from: "2026-09-01", to: "2026-10-31" };
+  const byTeam = await x.money.receivedByTeam(P);
+  const of = (id: number | null) => byTeam.find((r) => r.teamId === id)?.revenue ?? 0;
+  assert.equal(of(5), 150, "🔴 команда Яцика втратила вересень Хомік (або отримала її жовтень)");
+  assert.equal(of(null), 30, "🔴 жовтень Хомік не в «без команди»");
+  assert.equal(of(6), 7, "🔴 команда без переходів зрушилась");
+  const total = (await x.money.receivedMoney(P)).revenue;
+  assert.equal(byTeam.reduce((a, r) => a + r.revenue, 0), total, "🔴 Σ команд ≠ відділу — гроші загубились або задвоїлись");
+  const rows = await x.money.receivedByMgr({ ...P, teamId: 5 });
+  assert.deepEqual(rows.map((r) => [r.managerId, r.revenue]).sort((a, b) => a[0] - b[0]), [[1, 100], [2, 50]],
+    "🔴 у розрізі команди Яцика рядок Хомік — не її вересенева частка");
+  assert.equal((await x.money.receivedMoney({ from: "2026-10-01", to: "2026-10-31", teamId: 5 })).revenue, 0,
+    "🔴 жовтень Хомік рахується в команді, з якої вона пішла");
+  // 🪞 Дзеркало: прибрати перехід — і вересень іде за людиною (старе правило). Отже тримає саме перехід.
+  await x.c.query(`DELETE FROM manager_team_moves WHERE manager_id = 1`);
+  try {
+    const old = await x.money.receivedByTeam(P);
+    assert.equal(old.find((r) => r.teamId === 5)?.revenue ?? 0, 50, "🔴 без переходу команда й далі тримає вересень — гейт міряє не перехід");
+  } finally {
+    await x.c.query(`INSERT INTO manager_team_moves (manager_id, from_team_id, to_team_id, effective_from, source)
+                     VALUES (1, 5, NULL, '2026-10-01', 'settings')`);
+  }
+});
+
+test("#1304 ПЛАН З ПЕРЕХОДОМ: вересневий план Хомік — у плані команди Яцика, жовтневий — поза нею", async (t) => {
+  const x = await db(); if ("skip" in x) return t.skip(x.skip);
+  const sep = await x.plans.managerPlan({ month: "2026-09-01", teamId: 5 });
+  assert.deepEqual(sep.rows.map((r) => r.managerId).sort(), [1, 2], "🔴 у вересневому плані команди Яцика немає Хомік");
+  assert.equal(sep.rows.find((r) => r.managerId === 1)?.plan, 1000, "🔴 вересневий план Хомік не той");
+  const oct = await x.plans.managerPlan({ month: "2026-10-01", teamId: 5 });
+  assert.ok(!oct.rows.some((r) => r.managerId === 1), "🔴 жовтневий план Хомік рахується в команді, з якої вона пішла");
+  const octAll = await x.plans.managerPlan({ month: "2026-10-01" });
+  assert.equal(octAll.rows.find((r) => r.managerId === 1)?.teamId, null, "🔴 у жовтні Хомік підписана старою командою");
+});
+
+test("#1305 ЗАПИС ПЕРЕХОДУ: новий день — рядок; той самий день — виправлення; повернення того ж дня — переходу не було; раніша дата — відмова", async (t) => {
+  const x = await db(); if ("skip" in x) return t.skip(x.skip);
+  const rows = async () => (await x.c.query<{ ef: string; f: number | null; t: number | null }>(
+    `SELECT to_char(effective_from, 'YYYY-MM-DD') AS ef, from_team_id AS f, to_team_id AS t FROM manager_team_moves
+      WHERE manager_id = 3 ORDER BY effective_from`)).rows;
+  // Як роут: перехід пишеться з поточної команди, ПОТІМ команда міняється (інакше «той самий день» не перевірити).
+  const rec = async (to: number | null, ef: string) => {
+    const r = await x.sql.recordTeamMove(x.c, { managerId: 3, toTeamId: to, effectiveFrom: ef, source: "settings" });
+    if (r.kind !== "rejected" && r.kind !== "none") await x.c.query(`UPDATE managers SET team_id = $2 WHERE id = $1`, [3, to]);
+    return r;
+  };
+  assert.deepEqual(await rec(6, "2026-10-02"), { kind: "none" }, "🔴 перехід у ту саму команду записано");
+  assert.equal((await rec(5, "2026-10-02")).kind, "inserted");
+  assert.deepEqual(await rows(), [{ ef: "2026-10-02", f: 6, t: 5 }], "🔴 перехід лягав не з поточної команди");
+  assert.equal((await rec(7, "2026-10-02")).kind, "updated", "🔴 друга зміна того ж дня стала другим переходом");
+  assert.deepEqual(await rows(), [{ ef: "2026-10-02", f: 6, t: 7 }]);
+  assert.equal((await rec(6, "2026-10-02")).kind, "cancelled", "🔴 повернення в ту саму команду того ж дня лишило перехід");
+  assert.deepEqual(await rows(), [], "🔴 скасований перехід лишився рядком");
+  assert.equal((await rec(5, "2026-10-05")).kind, "inserted");
+  const back = await rec(6, "2026-10-03");
+  assert.equal(back.kind, "rejected", "🔴 перехід раніше за останній прийнято — ланцюг розірвався б");
+  assert.equal((await x.sql.recordTeamMove(x.c, { managerId: 3, fromTeamId: 5, toTeamId: 5, effectiveFrom: "2026-10-06", source: "kommo" })).kind,
+    "none", "🔴 синк записав перехід без зміни команди");
+  await x.c.query(`DELETE FROM manager_team_moves WHERE manager_id = 3`);
+  await x.c.query(`UPDATE managers SET team_id = 6 WHERE id = 3`);
+});
+
+test("#1306 ОБИДВА ПИСАРІ КОМАНДИ ПИШУТЬ ПЕРЕХІД: синк (джерело kommo) і Налаштування (джерело settings, з датою)", () => {
+  const sync = readFileSync(path.join(ROOT, "backend/src/jobs/syncKommo.ts"), "utf8");
+  const settings = readFileSync(path.join(ROOT, "backend/src/routes/settings.ts"), "utf8");
+  assert.match(sync, /\brecordTeamMove\(client, \{[^}]*source: "kommo"/s, "🔴 синк міняє команду без переходу — минуле переїде за людиною");
+  assert.match(settings, /\brecordTeamMove\(client, \{[^}]*effectiveFrom,[^}]*source: "settings"/s,
+    "🔴 Налаштування міняють команду без переходу з датою");
+});
