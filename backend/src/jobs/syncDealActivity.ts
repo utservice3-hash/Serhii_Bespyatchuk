@@ -72,7 +72,14 @@ export async function applyNotes(notes: KommoLeadNote[]): Promise<void> {
   const earliest = new Map<number, number>();
   const latest = new Map<number, number>();
   const latestCall = new Map<number, number>(); // останній ДЗВІНОК (call_in/call_out) per lead
+  // ⏱ Найраніший ВИХІДНИЙ дзвінок (вікно «Час опрацювання заявки», ТЗ 24.09.2026). Будь-який `call_out`, і на
+  // 0 с, і від системного автора: за ТЗ «взято в роботу» — це сам факт, що менеджер набрав, а не розмова.
+  const firstOut = new Map<number, number>();
   for (const n of notes) {
+    if (n.noteType === "call_out") {
+      const f = firstOut.get(n.entityId);
+      if (f == null || n.createdAt < f) firstOut.set(n.entityId, n.createdAt);
+    }
     if (isHumanCall(n)) {
       const c = latestCall.get(n.entityId) ?? 0;
       if (n.createdAt > c) latestCall.set(n.entityId, n.createdAt);
@@ -82,6 +89,16 @@ export async function applyNotes(notes: KommoLeadNote[]): Promise<void> {
     if (lo == null || n.createdAt < lo) earliest.set(n.entityId, n.createdAt);
     const hi = latest.get(n.entityId) ?? 0;
     if (n.createdAt > hi) latest.set(n.entityId, n.createdAt);
+  }
+  if (firstOut.size) {
+    // Лише дзвінки НЕ РАНІШЕ створення угоди: контактна нотатка розноситься на всі угоди контакта, і
+    // дзвінок по старій угоді не має «взяти» нову. LEAST — рухаємося лише назад, як `first_activity_at`.
+    const ids = [...firstOut.keys()];
+    await pool.query(
+      `UPDATE deals d SET first_call_out_at = LEAST(d.first_call_out_at, v.co)
+         FROM (SELECT UNNEST($1::bigint[]) AS kommo_id, UNNEST($2::timestamptz[]) AS co) v
+        WHERE d.kommo_id = v.kommo_id AND v.co >= d.created_at_kommo`,
+      [ids, ids.map((id) => new Date(firstOut.get(id)! * 1000))]);
   }
   if (latest.size === 0 && latestCall.size === 0) return;
 

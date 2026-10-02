@@ -1421,6 +1421,45 @@ export interface ResponseTime {
   taken15minPct: number;
   neglectedOver24h: number;
 }
+/* ⏱ Вікно «Час опрацювання заявки» (ТЗ Юлії 24.09.2026) — бекенд `core/leadTake.ts`. */
+export type LeadTakeSource = "all" | "ad" | "site" | "leadgen";
+export type LeadTakeTime = "all" | "work" | "off";
+export type LeadTakeColumn = "all" | "m1" | "m5" | "m30" | "m60" | "h1" | "none" | "slowLost";
+export interface LeadTakeParams { from: string; to: string; source: LeadTakeSource; time: LeadTakeTime; campaign?: string; teamId?: number }
+export interface LeadTakeRow {
+  kind: "manager" | "group" | "dept"; key: string; label: string; group?: string;
+  n: number; m1Pct: number | null; m5Pct: number | null; m30Pct: number | null; m60Pct: number | null; h1Pct: number | null;
+  notTaken: number; medianMin: number | null; slowLost: number; loss: number | null;
+  red: { m1: boolean; m5: boolean; notTaken: boolean };
+}
+export interface LeadTakeTable {
+  rows: LeadTakeRow[]; avgCheck: number | null; avgCheckDeals: number;
+  campaigns: { campaign: string; n: number }[];
+  norm: { m1Pct: number; m5Pct: number; notTaken: number };
+}
+export interface LeadTakeDeal {
+  kommoId: number; name: string; url: string; manager: string | null; group: string;
+  createdAt: string; takenAt: string | null; event: string | null; minutes: number | null;
+  offHours: boolean; status: "open" | "won" | "lost"; rejectReason: string | null; source: string | null; campaign: string;
+}
+export async function fetchLeadTake(params: LeadTakeParams): Promise<LeadTakeTable> {
+  const { data } = await api.get<LeadTakeTable>("/dashboard/response-time/take", { params });
+  return data;
+}
+export async function fetchLeadTakeDeals(params: LeadTakeParams & { row: string; col: LeadTakeColumn }): Promise<LeadTakeDeal[]> {
+  const { data } = await api.get<{ deals: LeadTakeDeal[] }>("/dashboard/response-time/take/deals", { params });
+  return data.deals ?? [];
+}
+/** Excel формує сервер (без бібліотеки у фронті); тут лише зберегти файл. */
+export async function downloadLeadTakeXlsx(params: LeadTakeParams): Promise<void> {
+  const { data } = await api.get<Blob>("/dashboard/response-time/take/export", { params, responseType: "blob" });
+  const url = URL.createObjectURL(data);
+  const a = document.createElement("a");
+  a.href = url; a.download = `chas-opracyuvannya_${params.from}_${params.to}.xlsx`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export async function fetchResponseTime(params: {
   from?: string;
   to?: string;

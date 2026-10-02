@@ -927,6 +927,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/response-time/by-manager", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  // ⏱ Вікно «Час опрацювання заявки» (ТЗ 24.09.2026): ті самі ролі, що стара картка; менеджер/тімлід звужені кламом.
+  { method: "GET", path: "/api/dashboard/response-time/take", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/dashboard/response-time/take/deals", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/dashboard/response-time/take/export", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/stuck-deals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/stuck-deals-grouped", cls: "GET",
