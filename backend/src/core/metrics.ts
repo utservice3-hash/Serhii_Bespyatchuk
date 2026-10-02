@@ -1890,7 +1890,7 @@ export async function expectedPastMonthsByScope(s: SnapshotScope, by: "team" | "
 function paidScopeConds(s: MetricScope, params: unknown[], needTeamJoin = false): { conds: string[]; join: string } {
   const conds = ["psm.funnel_stage = 'paid'", "d.client_key IS NOT NULL"];
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   const join = (needTeamJoin || s.teamId) ? "JOIN managers m ON m.id = d.manager_id" : "";
   return { conds, join };
 }
@@ -2164,7 +2164,7 @@ function dealCohortCte(entryRef: string, srcRef: string, scopeWhere: string): st
             рахують COUNT, а не вибирають усі колонки.
             ⚠️ БЕЗ ЗВОРОТНИХ ЛАПОК: цей коментар живе ВСЕРЕДИНІ шаблонного літерала,
             і будь-яка з них закрила б рядок (TS1005). */
-         SELECT a.entered_at, w.won_at, d.manager_id, m.team_id, d.request_type,
+         SELECT a.entered_at, w.won_at, d.manager_id, ${teamAtSql("m", "(a.entered_at ${KYIV})::date")} AS team_id, d.request_type,
                 d.kommo_id, d.name, d.price, d.status_id
            FROM adzone a
            JOIN deals d ON d.kommo_id = a.kommo_id
@@ -2199,7 +2199,7 @@ async function conversionByCohort(s: MetricScope, entry: CohortEntry): Promise<C
     const srcRef = `$${params.length}`;
     const scopeConds: string[] = [];
     if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
-    if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+    if (s.teamId) { params.push(s.teamId); scopeConds.push(teamOnDateSql("m", `(a.entered_at ${KYIV})::date`, `$${params.length}`)); }
     const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
     cte = dealCohortCte(entryRef, srcRef, scopeWhere); // спільне ядро deal-grain (реклама)
   } else if (entry.kind === "stage") {
@@ -2209,7 +2209,7 @@ async function conversionByCohort(s: MetricScope, entry: CohortEntry): Promise<C
     const entryPipeRef = `$${params.length}`;
     const scopeConds: string[] = [];
     if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
-    if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+    if (s.teamId) { params.push(s.teamId); scopeConds.push(teamOnDateSql("m", `(e.changed_at ${KYIV})::date`, `$${params.length}`)); }
     const scopeJoin = s.teamId ? "LEFT JOIN managers m ON m.id = d.manager_id" : "";
     const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
     cte = `entered AS (
@@ -2281,14 +2281,14 @@ async function conversionByCohort(s: MetricScope, entry: CohortEntry): Promise<C
     // доводить, що дві редакції справді різні. Не «спрощувати» цей каст.
     const scopeConds: string[] = ["t.name NOT ILIKE '%лідоген%'", "d.client_key IS NOT NULL"];
     if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
-    if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+    if (s.teamId) { params.push(s.teamId); scopeConds.push(teamOnDateSql("m", "lt.transfer_date::date", `$${params.length}`)); }
     const scopeWhere = scopeConds.join(" AND ");
     cte = `entered AS (
          SELECT d.client_key, MIN(lt.transfer_date)::timestamp ${KYIV} AS entered_at
            FROM leadgen_touch lt
            JOIN deals d ON d.kommo_id = lt.lead_kommo_id
            JOIN managers m ON m.id = d.manager_id
-           JOIN teams t ON t.id = m.team_id
+           JOIN teams t ON t.id = ${teamAtSql("m", "lt.transfer_date::date")}
           WHERE ${scopeWhere}
           GROUP BY d.client_key
        ),
@@ -2381,30 +2381,42 @@ export interface MgrConversion {
  * самий kommo_id). Стеля ≤100% (won ⊆ entered). entered<10 → cohortPct=null.
  */
 export async function conversionAdsByManager(s: MetricScope, adSources: string[]): Promise<MgrConversion[]> {
+  const byMgr = new Map<number, MgrConversion>();
+  for (const x of await adsConvRows(s, adSources)) {
+    const e = byMgr.get(x.managerId) ?? { managerId: x.managerId, name: x.name, teamId: x.teamId, entered: 0, won: 0, cohortPct: null };
+    e.entered += x.entered; e.won += x.won; byMgr.set(x.managerId, e);
+  }
+  return [...byMgr.values()].map((e) => ({ ...e, cohortPct: e.entered >= 10 ? Math.round((e.won / e.entered) * 1000) / 10 : null }));
+}
+
+/**
+ * 🔀 Рекламна когорта ПО (менеджер × команда НА ДАТУ ВХОДУ) — задача 4892, `core/teamAt.ts`. Один запит
+ * на обидва розрізи: по менеджеру рядки зливаються в один (підпис — поточна команда, як було), по команді
+ * — групуються за командою на дату, тож вересневі ліди того, хто з 01.10 перейшов, лишаються у вересневій
+ * команді. Без переходів кожен менеджер дає рівно один рядок — числа як до зміни.
+ */
+async function adsConvRows(s: MetricScope, adSources: string[]): Promise<(MgrConversion & { atTeam: number | null })[]> {
   // $1 MONEY_ZONE (won), $2 FC, $3 ADZONE (вхід), $4 adSources — контракт dealCohortCte.
   const params: unknown[] = [MONEY_ZONE, FC_PIPELINES, ADZONE_TAKEN, adSources];
   const scopeConds: string[] = [];
   if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scopeConds.push(teamOnDateSql("m", `(a.entered_at ${KYIV})::date`, `$${params.length}`)); }
   const fromRef = (params.push(s.from ?? null), `$${params.length}`);
   const toRef = (params.push(s.to ?? null), `$${params.length}`);
   const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
 
-  const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; entered: string; won: string }>(
+  const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; at_team: number | null; entered: string; won: string }>(
     `WITH ${dealCohortCte("$3", "$4", scopeWhere)}
-     SELECT mm.id AS manager_id, mm.name, mm.team_id,
+     SELECT mm.id AS manager_id, mm.name, mm.team_id, pop.team_id AS at_team,
             COUNT(*)::int AS entered, COUNT(*) FILTER (WHERE pop.won_at IS NOT NULL)::int AS won
        FROM pop JOIN managers mm ON mm.id = pop.manager_id
       WHERE ((${fromRef})::date IS NULL OR (pop.entered_at ${KYIV})::date >= (${fromRef})::date)
         AND ((${toRef})::date IS NULL OR (pop.entered_at ${KYIV})::date <= (${toRef})::date)
-      GROUP BY mm.id, mm.name, mm.team_id`,
+      GROUP BY mm.id, mm.name, mm.team_id, pop.team_id`,
     params
   );
-  return r.rows.map((x) => {
-    const entered = Number(x.entered), won = Number(x.won);
-    return { managerId: x.manager_id, name: x.name, teamId: x.team_id, entered, won,
-      cohortPct: entered >= 10 ? Math.round((won / entered) * 1000) / 10 : null };
-  });
+  return r.rows.map((x) => ({ managerId: x.manager_id, name: x.name, teamId: x.team_id, atTeam: x.at_team,
+    entered: Number(x.entered), won: Number(x.won), cohortPct: null }));
 }
 
 /**
@@ -2472,7 +2484,7 @@ export async function conversionAdsByDay(s: MetricScope, adSources: string[]): P
   const params: unknown[] = [MONEY_ZONE, FC_PIPELINES, ADZONE_TAKEN, adSources];
   const scopeConds: string[] = [];
   if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scopeConds.push(teamOnDateSql("m", `(a.entered_at ${KYIV})::date`, `$${params.length}`)); }
   const fromRef = (params.push(s.from ?? null), `$${params.length}`);
   const toRef = (params.push(s.to ?? null), `$${params.length}`);
   const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
@@ -2546,11 +2558,12 @@ export interface TeamConversion { teamId: number | null; entered: number; won: n
  * entered<10 → null. Additive: Σ команд = відділ (бо Σ мгр = відділ, доведено Крок В).
  */
 export async function conversionAdsByTeam(s: MetricScope, adSources: string[]): Promise<TeamConversion[]> {
-  const mgrs = await conversionAdsByManager(s, adSources);
+  // 🔀 Ті самі рядки, що в `conversionAdsByManager`, лише за командою НА ДАТУ ВХОДУ (задача 4892).
+  const mgrs = await adsConvRows(s, adSources);
   const byTeam = new Map<number | null, { entered: number; won: number }>();
   for (const r of mgrs) {
-    const e = byTeam.get(r.teamId) ?? { entered: 0, won: 0 };
-    e.entered += r.entered; e.won += r.won; byTeam.set(r.teamId, e);
+    const e = byTeam.get(r.atTeam) ?? { entered: 0, won: 0 };
+    e.entered += r.entered; e.won += r.won; byTeam.set(r.atTeam, e);
   }
   return [...byTeam.entries()].map(([teamId, v]) => ({
     teamId, entered: v.entered, won: v.won,
@@ -2605,7 +2618,7 @@ async function handoffByMonth(
   const params: unknown[] = [cfg.entryPipelines, cfg.entryStatus, STATUS_142];
   const scopeConds: string[] = [];
   if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scopeConds.push(teamOnDateSql("m", `(e.changed_at ${KYIV})::date`, `$${params.length}`)); }
   const scopeJoin = s.teamId ? "LEFT JOIN managers m ON m.id = d.manager_id" : "";
   const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
 
@@ -2740,7 +2753,7 @@ export async function funnelCohortHonest(
   const params: unknown[] = [FC_PIPELINES];
   const scopeConds: string[] = [];
   if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scopeConds.push(teamOnDateSql("m", `(ev.changed_at ${KYIV})::date`, `$${params.length}`)); }
   const fromRef = (params.push(s.from ?? null), `$${params.length}`);
   const toRef = (params.push(s.to ?? null), `$${params.length}`);
   const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";

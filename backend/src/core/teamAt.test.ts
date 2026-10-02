@@ -214,3 +214,43 @@ test("#1306 ОБИДВА ПИСАРІ КОМАНДИ ПИШУТЬ ПЕРЕХІД
   assert.match(settings, /\brecordTeamMove\(client, \{[^}]*effectiveFrom,[^}]*source: "settings"/s,
     "🔴 Налаштування міняють команду без переходу з датою");
 });
+
+// ── Прохід 2: розгортка «Команд», номінації тижня, пропущені дзвінки ─────────────────────────────
+
+test("#1307 РОЗГОРТКА КОМАНДИ: хто перейшов — рядок у кожній команді зі своєю частиною; Σ рядків команди == команда", async (t) => {
+  const x = await db(); if ("skip" in x) return t.skip(x.skip);
+  const P = { from: "2026-09-01", to: "2026-10-31" };
+  const [rows, teams] = await Promise.all([x.money.successByMgrAtTeam(P), x.money.successByTeam(P)]);
+  const khomik = rows.filter((r) => r.managerId === 1).map((r) => [r.teamId, r.revenue]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  assert.deepEqual(khomik, [[5, 100], [null, 30]], "🔴 Хомік у розгортці не розкладена між вереснем у Яцика і жовтнем без команди");
+  for (const tm of teams) {
+    const sum = rows.filter((r) => r.teamId === tm.teamId).reduce((a, r) => a + r.revenue, 0);
+    assert.equal(sum, tm.revenue, `🔴 команда ${tm.teamId}: Σ менеджерів розгортки ≠ рядку команди`);
+  }
+});
+
+test("#1308 НОМІНАЦІЇ ТИЖНЯ: склад — команда на понеділок тижня (Хомік у Яцика до 01.10, після — поза заліком)", async (t) => {
+  const x = await db(); if ("skip" in x) return t.skip(x.skip);
+  const { nominationRoster } = await import("./nominations.js");
+  const ids = async (asOf: string) => (await nominationRoster(5, asOf)).map((r) => r.id).sort();
+  assert.deepEqual(await ids("2026-09-28"), [1, 2], "🔴 у тижні 28.09 Хомік не змагається в команді Яцика");
+  assert.deepEqual(await ids("2026-10-05"), [2, 4], "🔴 у тижні 05.10 склад команди Яцика не той (Хомік пішла, Новенький прийшов)");
+});
+
+test("#1309 ПРОПУЩЕНІ ДЗВІНКИ: рядок команди й скоуп тімліда — за командою на день дзвінка", async (t) => {
+  const x = await db(); if ("skip" in x) return t.skip(x.skip);
+  const rules = await import("./missedCallsRules.js");
+  await x.c.query(`INSERT INTO ringostat_calls (uniqueid, calldate, call_type, disposition, billsec, manager_id, client_phone) VALUES
+    ('mc1', '2026-09-30 12:00+03', 'in', 'NO ANSWER', 0, 1, '380500000001'),
+    ('mc2', '2026-10-01 12:00+03', 'in', 'NO ANSWER', 0, 1, '380500000002')`);
+  try {
+    const q = rules.missedByTeamSql("2026-09-01", "2026-10-31", {});
+    const byTeam = new Map((await x.c.query<{ team_id: number | null; missed: number }>(q.sql, q.params)).rows.map((r) => [r.team_id, r.missed]));
+    assert.equal(byTeam.get(5), 1, "🔴 вересневий пропущений Хомік не в рядку команди Яцика");
+    assert.equal(byTeam.get(null), 1, "🔴 жовтневий пропущений Хомік не «поза командами»");
+    const s = rules.missedSummarySql("2026-09-01", "2026-10-31", { teamId: 5 });
+    assert.equal((await x.c.query<{ missed: number }>(s.sql, s.params)).rows[0].missed, 1, "🔴 тімлід Яцика бачить жовтневий пропущений Хомік");
+  } finally {
+    await x.c.query(`DELETE FROM ringostat_calls WHERE uniqueid IN ('mc1', 'mc2')`);
+  }
+});

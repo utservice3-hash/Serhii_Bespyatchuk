@@ -615,6 +615,21 @@ export async function receivedSegByDay(s: MoneyScope): Promise<SegDayRow[]> {
 export const successMoney = (s: MoneyScope) => agg("success", s);
 export const successByTeam = (s: MoneyScope) => aggByTeam("success", s);
 export const successByMgr = (s: MoneyScope) => aggByMgr("success", s);
+/**
+ * 🔀 ① по (менеджер × команда НА ДАТУ анкера) — для розгорток «команда → її менеджери» (задача 4892).
+ * Той самий `query`, що `successByMgr`; інший лише ключ групування. Хто перейшов посеред періоду, дає
+ * ДВА рядки — по одному в кожній команді, кожен зі своєю частиною; без переходів — рівно `successByMgr`
+ * (підпис `teamId` = поточна команда, бо на будь-яку дату вона та сама). Σ рядків команди == `successByTeam`.
+ */
+export async function successByMgrAtTeam(s: MoneyScope): Promise<MgrRow[]> {
+  const rows = await query<{ manager_id: number; name: string; team_id: number | null; is_active: boolean; revenue: string; deals: string }>(
+    "success", s,
+    `m.id AS manager_id, m.name, ${teamAtSql("m", ANCHOR_DAY)} AS team_id, m.is_active, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals`,
+    "GROUP BY m.id, m.name, 3, m.is_active"
+  );
+  return rows.map((x) => ({ managerId: x.manager_id, name: x.name, teamId: x.team_id,
+    isActive: x.is_active, revenue: Number(x.revenue), deals: Number(x.deals) }));
+}
 export interface MgrAvgCheck { managerId: number; revenue: number; successDeals: number; avgCheck: number | null }
 /**
  * СЕРЕДНІЙ ЧЕК ПО МЕНЕДЖЕРУ (`avg_check_success_only`) — ЄДИНЕ джерело для Звіту й

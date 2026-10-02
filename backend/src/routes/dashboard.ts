@@ -118,7 +118,7 @@ import {
 import { canRequestLimitFor, canAssignTaskToOthers } from "../auth/taskAssignScope.js";
 import { activeManagerSql } from "../core/activeManager.js";
 import * as managerState from "../core/managerState.js";
-import { teamAtSql, inTeamDuringSql } from "../core/teamAt.js";
+import { teamAtSql, inTeamDuringSql, teamOnDateSql } from "../core/teamAt.js";
 import * as clientCalls from "../core/clientCalls.js";
 import * as planBasis from "../core/planBasis.js";
 import * as clientTabs from "../core/clientTabs.js";
@@ -250,7 +250,8 @@ dashboardRouter.get("/leadgen", async (req, res) => {
   // Скоуп — по ЗМАПОВАНОМУ менеджеру, а не по текстовій назві команди з аркуша:
   // назва в таблиці бота може розійтись із нашою, і тімлід тоді побачив би чуже.
   if (managerId) { params.push(managerId); conds.push(`m.id = $${params.length}`); }
-  if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
+  // 🔀 Команда — на дату передачі (задача 4892): передачі того, хто потім перейшов, лишаються в тодішній команді.
+  if (teamId) { params.push(teamId); conds.push(teamOnDateSql("m", `(lr.transferred_at ${K})::date`, `$${params.length}`)); }
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
 
   const result = await pool.query<{
@@ -275,7 +276,7 @@ dashboardRouter.get("/leadgen", async (req, res) => {
        -- це була б тиха втрата саме тих рядків, заради яких реєстр і заводили.
        LEFT JOIN deals d ON d.kommo_id = lr.lead_id
        LEFT JOIN managers m ON m.name = lr.manager_name
-       LEFT JOIN teams t ON t.id = m.team_id
+       LEFT JOIN teams t ON t.id = ${teamAtSql("m", `(lr.transferred_at ${K})::date`)}
        ${where}
       GROUP BY m.id, COALESCE(m.name, lr.manager_name, 'Не вказано'),
                COALESCE(t.name, lr.team_name, 'Без команди'),
@@ -674,7 +675,7 @@ dashboardRouter.get("/overview", async (req, res) => {
   }
   if (teamId) {
     params.push(teamId);
-    paidConds.push(`m.team_id = $${params.length}`);
+    paidConds.push(teamOnDateSql("m", `(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date`, `$${params.length}`)); // 🔀 команда на дату (4892)
   }
   if (from) {
     params.push(from);
@@ -696,7 +697,7 @@ dashboardRouter.get("/overview", async (req, res) => {
   }
   if (teamId) {
     closedParams.push(teamId);
-    closedConds.push(`m.team_id = $${closedParams.length}`);
+    closedConds.push(teamOnDateSql("m", `(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date`, `$${closedParams.length}`)); // 🔀 команда на дату (4892)
   }
   if (from) {
     closedParams.push(from);
@@ -804,7 +805,7 @@ dashboardRouter.get("/overview", async (req, res) => {
   const planScope: string[] = [];
   const planParams: unknown[] = [];
   if (managerId) { planParams.push(managerId); planScope.push(`p.manager_id = $${planParams.length}`); }
-  if (teamId) { planParams.push(teamId); planScope.push(`mp.team_id = $${planParams.length}`); }
+  if (teamId) { planParams.push(teamId); planScope.push(`${teamAtSql("mp", "date_trunc('month', p.plan_date)::date")} = $${planParams.length}`); }
   // ⏱ Кешується САМ ЗАПИТ (у ньому немає дат — плани лежать по місяцях), а
   // ПРОРАТАЦІЯ під [from, to] лишається нижче, поза кешем. Ключ містить і текст
   // умови скоупу, і її параметри: SQL тут будується рядком, тож ключ без `planScope`
@@ -868,7 +869,7 @@ dashboardRouter.get("/overview", async (req, res) => {
   const cfScope: string[] = ["d.pipeline_id = ANY($1)"];
   const cfParams: unknown[] = [FULL_CYCLE_PIPELINES];
   if (managerId) { cfParams.push(managerId); cfScope.push(`d.manager_id = $${cfParams.length}`); }
-  if (teamId) { cfParams.push(teamId); cfScope.push(`m.team_id = $${cfParams.length}`); }
+  if (teamId) { cfParams.push(teamId); cfScope.push(teamOnDateSql("m", `(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date`, `$${cfParams.length}`)); }
   if (from) { cfParams.push(from); cfScope.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date >= $${cfParams.length}`); }
   if (to) { cfParams.push(to); cfScope.push(`(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date <= $${cfParams.length}`); }
   const createdFullRes = await pool.query<{ c: string }>(
@@ -1015,7 +1016,7 @@ dashboardRouter.get("/overview", async (req, res) => {
   const trParams: unknown[] = [];
   const trConds: string[] = ["t.name NOT ILIKE '%лідоген%'"];
   if (managerId) { trParams.push(managerId); trConds.push(`d.manager_id = $${trParams.length}`); }
-  if (teamId) { trParams.push(teamId); trConds.push(`m.team_id = $${trParams.length}`); }
+  if (teamId) { trParams.push(teamId); trConds.push(teamOnDateSql("m", `(lr.transferred_at AT TIME ZONE 'Europe/Kyiv')::date`, `$${trParams.length}`)); }
   if (from) { trParams.push(from); trConds.push(`(lr.transferred_at AT TIME ZONE 'Europe/Kyiv')::date >= $${trParams.length}`); }
   if (to) { trParams.push(to); trConds.push(`(lr.transferred_at AT TIME ZONE 'Europe/Kyiv')::date <= $${trParams.length}`); }
   const trWhere = trConds.join(" AND ");
@@ -1034,7 +1035,7 @@ dashboardRouter.get("/overview", async (req, res) => {
        FROM leadgen_registry lr
        JOIN deals d ON d.kommo_id = lr.lead_id
        JOIN managers m ON m.id = d.manager_id
-       JOIN teams t ON t.id = m.team_id
+       JOIN teams t ON t.id = ${teamAtSql("m", "(lr.transferred_at AT TIME ZONE 'Europe/Kyiv')::date")}
        WHERE ${trWhere}
      )
      SELECT team_id, team_name,
@@ -1055,7 +1056,7 @@ dashboardRouter.get("/overview", async (req, res) => {
        FROM leadgen_registry lr
        JOIN deals d ON d.kommo_id = lr.lead_id
        JOIN managers m ON m.id = d.manager_id
-       JOIN teams t ON t.id = m.team_id
+       JOIN teams t ON t.id = ${teamAtSql("m", "(lr.transferred_at AT TIME ZONE 'Europe/Kyiv')::date")}
        WHERE ${trWhere} AND d.client_key IS NOT NULL
      )
      SELECT tlc.team_id, COALESCE(SUM(won.rev), 0) AS revenue
@@ -1078,7 +1079,7 @@ dashboardRouter.get("/overview", async (req, res) => {
   // Last 3 complete months (deals / paid / revenue) for the drill-down trend.
   const histScope: string[] = [];
   if (managerId) histScope.push(`d.manager_id = ${Number(managerId)}`);
-  if (teamId) histScope.push(`m.team_id = ${Number(teamId)}`);
+  if (teamId) histScope.push(teamOnDateSql("m", `(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date`, String(Number(teamId))));
   const histWhere = histScope.length ? "AND " + histScope.join(" AND ") : "";
   const histRes = await pool.query<{
     month: string;
@@ -1355,7 +1356,7 @@ dashboardRouter.get("/conversion", async (req, res) => {
   }
   if (teamId) {
     params.push(teamId);
-    conditions.push(`m.team_id = $${params.length}`);
+    conditions.push(teamOnDateSql("m", `(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date`, `$${params.length}`)); // 🔀 4892
   }
   if (from) {
     params.push(from);
@@ -1459,7 +1460,7 @@ dashboardRouter.get("/conversion-timeseries", async (req, res) => {
     `(d.created_at_kommo ${KYIV})::date BETWEEN $1 AND $2`,
   ];
   if (managerId) { params.push(managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (teamId) { params.push(teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
 
   const r = await pool.query<{ bucket: string; leads: string; paid: string; ad_leads: string; ad_paid: string }>(
     `WITH paid_clients AS (
@@ -1534,7 +1535,7 @@ dashboardRouter.get("/timeseries", async (req, res) => {
   }
   if (teamId) {
     params.push(teamId);
-    conditions.push(`m.team_id = $${params.length}`);
+    conditions.push(teamOnDateSql("m", `(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date`, `$${params.length}`)); // 🔀 4892
   }
   if (from) {
     params.push(from);
@@ -3463,7 +3464,9 @@ dashboardRouter.get("/teams", async (req, res) => {
   // Тепер обидві пари з одного джерела, тож чек ділить те саме на те саме.
   const [sucTeamAgg, sucMgrAgg] = await Promise.all([
     money.successByTeam(teamScope),
-    money.successByMgr(teamScope),
+    // 🔀 Розгортка — за командою НА ДАТУ (задача 4892): той, хто перейшов, стоїть у кожній команді
+    //    зі своєю частиною, і Σ менеджерів команди == рядок команди.
+    money.successByMgrAtTeam(teamScope),
   ]);
   const recvTeamAgg = sucTeamAgg, recvMgrAgg = sucMgrAgg;
   const lc: string[] = [];
@@ -3473,7 +3476,8 @@ dashboardRouter.get("/teams", async (req, res) => {
   // Словник §2: знаменник БЕЗ INNER psm (немапнуті не зникають), база — повний цикл.
   const conv = await pool.query<{ tid: number; leads: string; paid: string }>(
     `SELECT t.id AS tid, COUNT(*) AS leads, COUNT(*) FILTER (WHERE psm.funnel_stage='paid') AS paid
-     FROM deals d JOIN managers m ON m.id = d.manager_id JOIN teams t ON t.id = m.team_id
+     FROM deals d JOIN managers m ON m.id = d.manager_id
+     JOIN teams t ON t.id = ${teamAtSql("m", "(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date")}
      LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      WHERE d.pipeline_id IN (8921932,155304) ${lc.length ? "AND " + lc.join(" AND ") : ""} GROUP BY t.id`,
     lp
@@ -3507,10 +3511,11 @@ dashboardRouter.get("/teams", async (req, res) => {
   // спокусив би когось «полагодити» його підстановкою випадкового джерела.
   // Живе «Очікування» по менеджеру віддає `/dashboard/managers` (гейт #47).
   type MgrRow = { id: number; name: string; teamId: number; isActive: boolean; revenue: number; deals: number; plan: number; receivables: number; dispatched: number; successRev: number };
-  const mmap = new Map<number, MgrRow>();
+  // Ключ — менеджер × команда: людина, що перейшла, має рядок у кожній своїй команді періоду.
+  const mmap = new Map<string, MgrRow>();
   const mget = (id: number, tid: number | null, name: string, isActive?: boolean): MgrRow => {
-    let e = mmap.get(id);
-    if (!e) { e = { id, name, teamId: tid ?? 0, isActive: true, revenue: 0, deals: 0, plan: 0, receivables: 0, dispatched: 0, successRev: 0 }; mmap.set(id, e); }
+    let e = mmap.get(`${id}|${tid ?? 0}`);
+    if (!e) { e = { id, name, teamId: tid ?? 0, isActive: true, revenue: 0, deals: 0, plan: 0, receivables: 0, dispatched: 0, successRev: 0 }; mmap.set(`${id}|${tid ?? 0}`, e); }
     if (name) e.name = name;
     if (isActive === false) e.isActive = false;
     if (tid) e.teamId = tid;
@@ -3520,7 +3525,7 @@ dashboardRouter.get("/teams", async (req, res) => {
   for (const r of recvMgrAgg) { const e = mget(r.managerId, r.teamId, r.name, r.isActive); e.revenue += r.revenue; e.deals += r.deals; }
   for (const r of sucMgrAgg) { const e = mget(r.managerId, r.teamId, r.name, r.isActive); e.dispatched += r.deals; e.successRev += r.revenue; }
   for (const r of mPlan.rows) { mget(r.managerId, r.teamId, r.name).plan += r.plan; }
-  for (const d of debtByMgr) { if (d.managerId != null) { const e = mmap.get(d.managerId); if (e) e.receivables += d.debt; } }
+  for (const d of debtByMgr) { if (d.managerId != null) { const e = mmap.get(`${d.managerId}|${d.teamId ?? 0}`); if (e) e.receivables += d.debt; } }
 
   // `expected` прибрано з тієї ж причини, що й у `MgrRow` вище — мертвий нуль.
   const map = new Map<number, { teamId: number; teamName: string; revenue: number; deals: number; leads: number; paid: number; receivables: number; dispatched: number; successRev: number }>();
@@ -4454,10 +4459,11 @@ dashboardRouter.get("/report", async (req, res) => {
   }
   const KYIV = "AT TIME ZONE 'Europe/Kyiv'";
 
-  const scopeSql = (params: unknown[]) => {
+  // 🔀 Команда — на дату РЯДКА (`dateExpr`: створення угоди / передача), задача 4892.
+  const scopeSql = (params: unknown[], dateExpr: string) => {
     const c: string[] = [];
     if (managerId) { params.push(managerId); c.push(`d.manager_id = $${params.length}`); }
-    if (teamId) { params.push(teamId); c.push(`m.team_id = $${params.length}`); }
+    if (teamId) { params.push(teamId); c.push(teamOnDateSql("m", dateExpr, `$${params.length}`)); }
     return c;
   };
   const dateSql = (col: string, params: unknown[]) => {
@@ -4474,7 +4480,7 @@ dashboardRouter.get("/report", async (req, res) => {
 
   // Created full-cycle deals per bucket (by create date).
   const p2: unknown[] = [[8921932, 155304]];
-  const createdWhere = ["d.pipeline_id = ANY($1)", ...scopeSql(p2), ...dateSql("created_at_kommo", p2)].join(" AND ");
+  const createdWhere = ["d.pipeline_id = ANY($1)", ...scopeSql(p2, `(d.created_at_kommo ${KYIV})::date`), ...dateSql("created_at_kommo", p2)].join(" AND ");
   const createdPeriod = await pool.query<{ bucket: string; c: string }>(
     `SELECT to_char(date_trunc('${granularity}', (d.created_at_kommo ${KYIV})), 'YYYY-MM-DD') AS bucket, COUNT(*) AS c
      FROM deals d JOIN managers m ON m.id = d.manager_id WHERE ${createdWhere} GROUP BY 1`, p2);
@@ -4500,7 +4506,7 @@ dashboardRouter.get("/report", async (req, res) => {
   const createdTotal = byPeriod.reduce((s, e) => s + e.created, 0);
 
   const p4: unknown[] = [];
-  const nrScope = scopeSql(p4);
+  const nrScope = scopeSql(p4, `(d.created_at_kommo ${KYIV})::date`);
   const nrDate = dateSql("created_at_kommo", p4);
   const nrWhere = ["psm.funnel_stage = 'paid'", ...nrScope, ...nrDate].join(" AND ");
   const fromIdx = from ? (p4.push(from), p4.length) : null;
@@ -4532,7 +4538,7 @@ dashboardRouter.get("/report", async (req, res) => {
   // Full per-manager scorecard (the metrics from the manual Excel report).
   const { adSources: reportAdSources } = await getSettings();
   const actP: unknown[] = [[8921932, 155304]];
-  const actConds = ["d.pipeline_id = ANY($1)", ...scopeSql(actP), ...dateSql("created_at_kommo", actP)];
+  const actConds = ["d.pipeline_id = ANY($1)", ...scopeSql(actP, `(d.created_at_kommo ${KYIV})::date`), ...dateSql("created_at_kommo", actP)];
   actP.push(reportAdSources);
   const actAdIdx = actP.length;
   const actByMgr = await pool.query<{ id: number; name: string; ad_leads: string; quotes: string; success: string; success_sum: string }>(
@@ -4597,7 +4603,7 @@ dashboardRouter.get("/report", async (req, res) => {
   } else if (teamId) {
     ftP.push(teamId);
     ftJoin = "JOIN deals d ON d.kommo_id = fta.lead_id JOIN managers m ON m.id = d.manager_id";
-    ftConds.push(`m.team_id = $${ftP.length}`);
+    ftConds.push(teamOnDateSql("m", "fta.analyzed_at::date", `$${ftP.length}`));
   }
   const ftRes = await pool.query<{ analyzed: string; voiced: string }>(
     `SELECT COUNT(*) AS analyzed, COUNT(*) FILTER (WHERE fta.price_voiced) AS voiced
@@ -4626,7 +4632,7 @@ dashboardRouter.get("/report", async (req, res) => {
   // один вхід у «Нова заявка від лідогенератора», DISTINCT lead_id за період.
   // (Раніше lead_transfer_events рахував зміни відповідального → завищення в рази.)
   const trP: unknown[] = [];
-  const trScope = scopeSql(trP);
+  const trScope = scopeSql(trP, `(lr.transferred_at ${KYIV})::date`);
   const trDate: string[] = [];
   if (from) { trP.push(from); trDate.push(`(lr.transferred_at ${KYIV})::date >= $${trP.length}`); }
   if (to) { trP.push(to); trDate.push(`(lr.transferred_at ${KYIV})::date <= $${trP.length}`); }
@@ -4686,7 +4692,7 @@ dashboardRouter.get("/report", async (req, res) => {
   // (навіть коли вибрано одного менеджера) і плитка «Виконання плану» показує
   // командний план замість плану менеджера.
   if (managerId) { planScoreP.push(managerId); planScoreC.push(`p.manager_id = $${planScoreP.length}`); }
-  if (teamId) { planScoreP.push(teamId); planScoreC.push(`m.team_id = $${planScoreP.length}`); }
+  if (teamId) { planScoreP.push(teamId); planScoreC.push(`${teamAtSql("m", "$1::date")} = $${planScoreP.length}`); }
   const planByMgr = await pool.query<{ id: number; plan: string }>(
     `SELECT p.manager_id AS id, SUM(p.planned_value) AS plan
      FROM plans p JOIN managers m ON m.id = p.manager_id
@@ -4843,7 +4849,7 @@ dashboardRouter.get("/funnel-report", async (req, res) => {
   const planParams: unknown[] = [planMonthDate];
   const planConds: string[] = ["fp.month = $1"];
   if (managerId) { planParams.push(managerId); planConds.push(`fp.manager_id = $${planParams.length}`); }
-  if (teamId) { planParams.push(teamId); planConds.push(`m.team_id = $${planParams.length}`); }
+  if (teamId) { planParams.push(teamId); planConds.push(`${teamAtSql("m", "$1::date")} = $${planParams.length}`); }
   const planRows = await pool.query<{ manager_id: number; stage: string; planned: string }>(
     `SELECT fp.manager_id, fp.stage, fp.planned_value AS planned
      FROM funnel_plans fp JOIN managers m ON m.id = fp.manager_id
@@ -4965,7 +4971,7 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
   const pParams: unknown[] = [planMonthDate];
   const pConds = ["fp.month = $1"];
   if (managerId) { pParams.push(managerId); pConds.push(`fp.manager_id = $${pParams.length}`); }
-  if (teamId) { pParams.push(teamId); pConds.push(`m.team_id = $${pParams.length}`); }
+  if (teamId) { pParams.push(teamId); pConds.push(`${teamAtSql("m", "$1::date")} = $${pParams.length}`); }
   const planRows = await pool.query<{ manager_id: number; stage: string; planned: string }>(
     `SELECT fp.manager_id, fp.stage, fp.planned_value AS planned
      FROM funnel_plans fp JOIN managers m ON m.id = fp.manager_id
@@ -5037,7 +5043,7 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
   const rpParams: unknown[] = [planMonthDate];
   const rpConds = ["p.plan_date = $1", "p.metric = 'payment_amount'"];
   if (managerId) { rpParams.push(managerId); rpConds.push(`p.manager_id = $${rpParams.length}`); }
-  if (teamId) { rpParams.push(teamId); rpConds.push(`m.team_id = $${rpParams.length}`); }
+  if (teamId) { rpParams.push(teamId); rpConds.push(`${teamAtSql("m", "$1::date")} = $${rpParams.length}`); }
   const revPlanRows = await pool.query<{ manager_id: number; v: string }>(
     `SELECT p.manager_id, SUM(p.planned_value) AS v
        FROM plans p JOIN managers m ON m.id = p.manager_id
@@ -5061,7 +5067,7 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
   const paidP: unknown[] = [[8921932, 155304], fmt(mStart), fmt(mEnd)];
   const paidC = ["d.pipeline_id = ANY($1)", `(x.first_paid ${KYIV})::date BETWEEN $2 AND $3`];
   if (managerId) { paidP.push(managerId); paidC.push(`d.manager_id = $${paidP.length}`); }
-  if (teamId) { paidP.push(teamId); paidC.push(`m.team_id = $${paidP.length}`); }
+  if (teamId) { paidP.push(teamId); paidC.push(teamOnDateSql("m", `(x.first_paid ${KYIV})::date`, `$${paidP.length}`)); }
   const paidWeekly = await pool.query<{ manager_id: number; day: string; v: string }>(
     `SELECT d.manager_id, to_char((x.first_paid ${KYIV})::date, 'YYYY-MM-DD') AS day, SUM(d.price) AS v
        FROM (SELECT kommo_id, MIN(changed_at) AS first_paid FROM deal_stage_events
@@ -5089,7 +5095,7 @@ dashboardRouter.get("/funnel-weekly", async (req, res) => {
   const expP: unknown[] = [[8921932, 155304], fmt(mStart), fmt(mEnd)];
   const expC = ["d.pipeline_id = ANY($1)", `(x.first_inv ${KYIV})::date BETWEEN $2 AND $3`];
   if (managerId) { expP.push(managerId); expC.push(`d.manager_id = $${expP.length}`); }
-  if (teamId) { expP.push(teamId); expC.push(`m.team_id = $${expP.length}`); }
+  if (teamId) { expP.push(teamId); expC.push(teamOnDateSql("m", `(x.first_inv ${KYIV})::date`, `$${expP.length}`)); }
   const expWeekly = await pool.query<{ manager_id: number; day: string; v: string }>(
     `SELECT d.manager_id, to_char((x.first_inv ${KYIV})::date, 'YYYY-MM-DD') AS day, SUM(d.price) AS v
        FROM (SELECT dse.kommo_id, MIN(dse.changed_at) AS first_inv
@@ -5660,7 +5666,7 @@ dashboardRouter.get("/lead-quality", async (req, res) => {
   const countFor = async (extra: string): Promise<number> => {
     const params: unknown[] = [];
     const conds = [extra, ...dateScope("d", params)];
-    if (teamId) { params.push(teamId); conds.push(`m.team_id = $${params.length}`); }
+    if (teamId) { params.push(teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date`, `$${params.length}`)); }
     const r = await pool.query<{ n: string }>(
       `SELECT COUNT(*)::int AS n FROM deals d ${teamJoin} WHERE ${conds.join(" AND ")}`,
       params
@@ -5689,7 +5695,7 @@ dashboardRouter.get("/lead-quality", async (req, res) => {
   const targetLeadsDedup = async (): Promise<{ deals: number; clients: number }> => {
     const p2: unknown[] = [];
     const c2 = ["d.pipeline_id = 8921932", ...dateScope("d", p2)];
-    if (teamId) { p2.push(teamId); c2.push(`m.team_id = $${p2.length}`); }
+    if (teamId) { p2.push(teamId); c2.push(teamOnDateSql("m", `(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date`, `$${p2.length}`)); }
     const r = await pool.query<{ deals: string; clients: string }>(
       `SELECT COUNT(*)::int AS deals,
               (COUNT(DISTINCT d.client_key)
@@ -10366,7 +10372,8 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   const { adSources } = await getSettings();
 
   const monthStartOf = (d: string) => d.slice(0, 7) + "-01";
-  const planScopeSql = (p: unknown[], mgrCol = "p.manager_id", teamCol = "mp.team_id") => {
+  // 🔀 Команда плану — на 1-ше число місяця плану ($1), задача 4892.
+  const planScopeSql = (p: unknown[], mgrCol = "p.manager_id", teamCol = teamAtSql("mp", "$1::date")) => {
     const sc: string[] = [];
     if (managerId) { p.push(managerId); sc.push(`${mgrCol} = $${p.length}`); }
     if (teamId) { p.push(teamId); sc.push(`${teamCol} = $${p.length}`); }
@@ -10509,8 +10516,10 @@ dashboardRouter.get("/manager-report", async (req, res) => {
   // data.carryover і /report·plans-grid. Інваріант: Σ мгр = команда = скалярний тотал.
   const coByMgrRows = await metrics.carryoverByManager({ managerId, teamId }, monthStartOf(from));
   const coByMgr = new Map(coByMgrRows.map((r) => [r.managerId, { amount: r.amount, deals: r.deals }]));
+  // 🔀 Перенесене — знімок на 00:00 1-го числа, тож і команда — на цей день (задача 4892).
   const teamOfMgr = new Map(
-    (await pool.query<{ id: number; team_id: number | null }>(`SELECT id, team_id FROM managers`)).rows.map((r) => [r.id, r.team_id])
+    (await pool.query<{ id: number; team_id: number | null }>(
+      `SELECT m.id, ${teamAtSql("m", "$1::date")} AS team_id FROM managers m`, [monthStartOf(from)])).rows.map((r) => [r.id, r.team_id])
   );
   const coByTeam = new Map<number, { amount: number; deals: number }>();
   for (const r of coByMgrRows) {
@@ -10531,8 +10540,8 @@ dashboardRouter.get("/manager-report", async (req, res) => {
       pool.query<{ team_id: number; s: string }>(
         // План команди = УСІ плани її членів (вкл. деактивованих) → ціль команди повна;
         // деактивований плану не втрачає, він перерозподіляється на активних (нижче).
-        `SELECT mp.team_id, COALESCE(SUM(p.planned_value),0) s FROM plans p JOIN managers mp ON mp.id = p.manager_id
-          WHERE p.metric='payment_amount' AND date_trunc('month',p.plan_date) = $1::date AND mp.team_id IS NOT NULL GROUP BY mp.team_id`, [monthStartOf(from)]),
+        `SELECT ${teamAtSql("mp", "$1::date")} AS team_id, COALESCE(SUM(p.planned_value),0) s FROM plans p JOIN managers mp ON mp.id = p.manager_id
+          WHERE p.metric='payment_amount' AND date_trunc('month',p.plan_date) = $1::date AND ${teamAtSql("mp", "$1::date")} IS NOT NULL GROUP BY 1`, [monthStartOf(from)]),
       pool.query<{ id: number; name: string }>(`SELECT id, name FROM teams`),
       compareFrom && compareTo ? money.successByTeam({ from, to }) : Promise.resolve(null),
       compareFrom && compareTo ? money.successByTeam({ from: compareFrom, to: compareTo }) : Promise.resolve(null),

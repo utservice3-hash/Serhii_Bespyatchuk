@@ -1,5 +1,6 @@
 import { mergedLagGapExpr, mergedLagFirst } from "./callMerge.js";
 import { dayBucketCase, dayBucketParts } from "./dayBuckets.js";
+import { teamAtSql, teamOnDateSql } from "./teamAt.js";
 
 /**
  * 📵 ПРОПУЩЕНІ ВХІДНІ — ОЗНАЧЕННЯ Й ФОРМА ЗАПИТУ. ТЗ-1 від 14.09.2026.
@@ -138,10 +139,11 @@ function baseCte(from: string, to: string, s: MissedScope): { cte: string; param
     "rc.billsec = 0",
   ];
   if (s.managerId) { p.push(s.managerId); conds.push(`rc.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", "(rc.calldate AT TIME ZONE 'Europe/Kyiv')::date", `$${p.length}`)); }
   const cte = `
     WITH base AS (
       SELECT rc.uniqueid, rc.manager_id, rc.client_phone, rc.client_key, rc.calldate, rc.billsec, rc.disposition,
+             ${teamAtSql("m", "(rc.calldate AT TIME ZONE 'Europe/Kyiv')::date")} AS team_at,
              ${dayBucketParts("rc.calldate")}
         FROM ringostat_calls rc
         LEFT JOIN managers m ON m.id = rc.manager_id
@@ -233,9 +235,9 @@ export function missedByManagerSql(from: string, to: string, s: MissedScope): { 
  * над рядками, а не над медіанами людей. Та сама причина, чому медіана «всього» береться з
  * підсумку, а не з таблиці.
  *
- * ⚠️ КОМАНДА — ПОТОЧНА (`managers.team_id`), не на момент дзвінка. Це те саме правило, за
- * яким скоуп тімліда відбирає дзвінки в `baseCte` (`m.team_id = $N`): інакше рядок команди
- * в адміна і вся таблиця тімліда тієї ж команди розійшлися б на людях, що змінили команду.
+ * ⚠️ КОМАНДА — НА ДЕНЬ ДЗВІНКА (`team_at` з `baseCte`, задача 4892, `core/teamAt.ts`), за тим самим
+ * правилом, за яким скоуп тімліда відбирає дзвінки в `baseCte`: інакше рядок команди в адміна і вся
+ * таблиця тімліда тієї ж команди розійшлися б на людях, що змінили команду. Без переходів — поточна.
  *
  * «Без відповідального» сюди НЕ входить — він не належить жодній команді (РІШЕННЯ 3) і
  * лишається своїм рядком. Менеджер без команди — чесне «Поза командами», а не пропуск.
@@ -244,7 +246,7 @@ export function missedByTeamSql(from: string, to: string, s: MissedScope): { sql
   const { cte, params } = baseCte(from, to, s);
   const m = missedDispSql();
   const sql = `${cte}
-    SELECT mg.team_id, MAX(t.name) AS team_name,
+    SELECT w.team_at AS team_id, MAX(t.name) AS team_name,
            COUNT(*)::int AS missed,
            COUNT(*) FILTER (WHERE cb_at IS NOT NULL AND (${SELF_CALLBACK_SQL}))::int AS callback_self,
            COUNT(*) FILTER (WHERE cb_at IS NOT NULL AND NOT (${SELF_CALLBACK_SQL}))::int AS callback_colleague,
@@ -252,9 +254,9 @@ export function missedByTeamSql(from: string, to: string, s: MissedScope): { sql
            ${MEDIAN_MIN_SQL} AS median_min
       FROM withNext w
       JOIN managers mg ON mg.id = w.manager_id
-      LEFT JOIN teams t ON t.id = mg.team_id
+      LEFT JOIN teams t ON t.id = w.team_at
      WHERE ${m}
-     GROUP BY mg.team_id`;
+     GROUP BY w.team_at`;
   return { sql, params };
 }
 
@@ -272,7 +274,7 @@ export type SeriesGranularity = (typeof SERIES_GRANULARITIES)[number];
  *
  * Серії: `total` (увесь зріз), кожна команда (`team:<id>`), «Поза командами» (`noteam`) і «Без
  * відповідального» (`ownerless`) — ОДНИМ запитом через GROUPING SETS, тож Σ серій == `total` у кожній
- * точці за побудовою. Команда — ПОТОЧНА, як у скоупі тімліда. Тиждень починається з понеділка,
+ * точці за побудовою. Команда — на день дзвінка, як у скоупі тімліда (задача 4892). Тиждень починається з понеділка,
  * межі — за Києвом.
  */
 export function missedSeriesSql(granularity: SeriesGranularity, from: string, to: string, s: MissedScope): { sql: string; params: unknown[] } {
@@ -283,15 +285,15 @@ export function missedSeriesSql(granularity: SeriesGranularity, from: string, to
     r AS (
       SELECT to_char(date_trunc('${granularity}', (w.calldate AT TIME ZONE 'Europe/Kyiv')), 'YYYY-MM-DD') AS period,
              CASE WHEN w.manager_id IS NULL THEN 'ownerless'
-                  WHEN mg.team_id IS NULL THEN 'noteam'
-                  ELSE 'team:' || mg.team_id::text END AS skey,
+                  WHEN w.team_at IS NULL THEN 'noteam'
+                  ELSE 'team:' || w.team_at::text END AS skey,
              CASE WHEN w.manager_id IS NULL THEN '${OWNERLESS_LABEL}'
-                  WHEN mg.team_id IS NULL THEN '${NO_TEAM_LABEL}'
-                  ELSE COALESCE(t.name, 'Команда #' || mg.team_id::text) END AS sname,
+                  WHEN w.team_at IS NULL THEN '${NO_TEAM_LABEL}'
+                  ELSE COALESCE(t.name, 'Команда #' || w.team_at::text) END AS sname,
              w.calldate, w.cb_at, w.cs_at
         FROM withNext w
         LEFT JOIN managers mg ON mg.id = w.manager_id
-        LEFT JOIN teams t ON t.id = mg.team_id
+        LEFT JOIN teams t ON t.id = w.team_at
        WHERE ${m}
     )
     SELECT period,
@@ -573,7 +575,7 @@ function answeredCte(from: string, to: string, s: MissedScope): { cte: string; p
     "rc.billsec > 0",
   ];
   if (s.managerId) { p.push(s.managerId); conds.push(`rc.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", "(rc.calldate AT TIME ZONE 'Europe/Kyiv')::date", `$${p.length}`)); }
   const cte = `
     WITH base AS (
       SELECT rc.uniqueid, rc.manager_id, rc.client_phone, rc.client_key, rc.calldate, rc.billsec
