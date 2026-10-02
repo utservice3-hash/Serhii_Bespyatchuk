@@ -81,8 +81,8 @@ export function validateForm(s: DocumentState, ctx: ValidateCtx = {}): Issue[] {
     else if ((OWN_IDS as readonly string[]).includes(code)) add('cp.edrpou', 'error', 'Це код нашої юрособи — впишіть реквізити контрагента.');
     else if (fop && code.length === 8) add('cp.edrpou', 'error', 'У назві ФОП, а код 8-значний (як у компанії). Для ФОП — ІПН, 10 цифр.');
     else if (!fop && code.length === 10 && name) add('cp.edrpou', 'error', 'Код 10-значний (ІПН ФОП), а в назві не ФОП. Для компанії — ЄДРПОУ, 8 цифр.');
-    else if (code.length === 8) { if (!edrpouValid(code)) add('cp.edrpou', 'error', 'ЄДРПОУ не сходиться за контрольною цифрою — перевірте, чи не переставлені цифри.'); }
-    else if (code.length === 10) { if (!rnokppValid(code)) add('cp.edrpou', 'error', 'ІПН ФОП не сходиться за контрольною цифрою — перевірте цифри.'); }
+    else if (code.length === 8) { if (!edrpouValid(code)) add('cp.edrpou', 'error', 'Такого ЄДРПОУ не існує — схоже на описку. Перевірте цифри з документа контрагента.'); }
+    else if (code.length === 10) { if (!rnokppValid(code)) add('cp.edrpou', 'error', 'Такого ІПН не існує — схоже на описку. Перевірте цифри з документа контрагента.'); }
     else add('cp.edrpou', 'error', `ЄДРПОУ компанії — 8 цифр, ІПН ФОП — 10; тут ${code.length}.`);
   }
 
@@ -98,7 +98,7 @@ export function validateForm(s: DocumentState, ctx: ValidateCtx = {}): Issue[] {
   if (ibanRaw) {
     if (/^\d{27}$/.test(iban)) add('cp.iban', 'error', 'IBAN має починатися з UA — допишіть UA перед цифрами.');
     else if (!/^UA\d{27}$/.test(iban)) add('cp.iban', 'error', `IBAN — UA і 27 цифр (29 знаків); тут ${iban.length}.`);
-    else if (!ibanValid(iban)) add('cp.iban', 'error', 'IBAN не сходиться за контрольною сумою — перевірте цифри.');
+    else if (!ibanValid(iban)) add('cp.iban', 'error', 'Такого рахунку не існує — схоже на описку в IBAN. Перевірте цифри з рахунку контрагента.');
   }
   const bank = (cp.bank || '').trim();
   if (ibanRaw && ibanValid(iban)) {
