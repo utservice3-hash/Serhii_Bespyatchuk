@@ -8,7 +8,7 @@ import {
   type DealTake, type TakeRowInput,
 } from "./leadTakeRules.js";
 import { buildXlsx } from "./xlsxWrite.js";
-import { parseXlsx } from "./officeParse.js";
+import { parseXlsx, readZip } from "./officeParse.js";
 
 const ROOT = path.join(import.meta.dirname, "..", "..", "..");
 const MIN = 60_000;
@@ -71,7 +71,15 @@ test("#1312e «ЦЕЙ ТИЖДЕНЬ» = Пн–Нд поточного тижн
 
 test("#1312f EXCEL: файл читається назад нашим же розбором — ті самі клітинки, кирилиця й числа на місці", () => {
   const rows = [["Менеджер", "Заявок", "до 1 хв, %"], ["Хомік <тест> & «лапки»", 12, 91.7], ["ВІДДІЛ", 100, null]];
-  const sheets = parseXlsx(buildXlsx([{ name: "Час опрацювання", rows }, { name: "Угоди", rows: [["Угода"], ["#1"]] }]));
+  const buf = buildXlsx([{ name: "Час опрацювання", rows }, { name: "Угоди", rows: [["Угода"], ["#1"]] }]);
+  // Наш `parseXlsx` поблажливий і ковтає неекранований `&`, який справжній Excel відкидає цілим файлом
+  // (спіймано саботажем 02.10.2026: гейт лишався зеленим). Тому XML кожної частини звіряємо окремо.
+  for (const [name, get] of readZip(buf)) {
+    const xml = get().toString("utf8");
+    assert.doesNotMatch(xml, /&(?!(amp|lt|gt|quot|apos);)/, `🔴 ${name}: неекранований & — Excel не відкриє файл`);
+    assert.doesNotMatch(xml.replace(/<[^>]*>/g, ""), /[<>]/, `🔴 ${name}: неекранована кутова дужка в тексті`);
+  }
+  const sheets = parseXlsx(buf);
   assert.equal(sheets.length, 2, "🔴 у файлі не два аркуші");
   assert.deepEqual(sheets[0].rows.slice(0, 3).map((r) => r.slice(0, 3)),
     [["Менеджер", "Заявок", "до 1 хв, %"], ["Хомік <тест> & «лапки»", "12", "91.7"], ["ВІДДІЛ", "100"]], // порожня клітинка в .xlsx не пишеться — це норма формату
