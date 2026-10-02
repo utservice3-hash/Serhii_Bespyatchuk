@@ -378,9 +378,12 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                           </div>
                         );
                       }} />
-                    {/* 🪡 ШОВ ДАНИХ — ПІДПИСАНИЙ НА ГРАФІКУ (ТЗ, блок 4, п.3), а не дрібним текстом унизу сторінки. */}
-                    <ReferenceLine x={rows.find((r) => r.period >= SEAM)?.period} stroke="#94a3b8" strokeDasharray="5 4"
-                      label={{ value: "01.07: таблиця → CRM, рівні не порівнюються", position: "insideTopRight", fontSize: 10.5, fill: MUTED }} />
+                    {/* 🪡 ШОВ ДАНИХ — ПІДПИСАНИЙ НА ГРАФІКУ (ТЗ, блок 4, п.3), а не дрібним текстом унизу сторінки.
+                        Лише коли шов ВСЕРЕДИНІ вікна: на самому краю (вікно «3 міс» з 06.07) підпис налазив на вісь Y і обрізався. */}
+                    {rows[eff.lo]?.period < SEAM && (rows[eff.hi]?.period ?? "") >= SEAM && (
+                      <ReferenceLine x={rows.find((r) => r.period >= SEAM)?.period} stroke="#94a3b8" strokeDasharray="5 4"
+                        label={{ value: "01.07: таблиця → CRM, рівні не порівнюються", position: "insideTopRight", fontSize: 10.5, fill: MUTED }} />
+                    )}
                     {visibleSeries.map(({ s, i }) => (
                       <Line key={s.scopeKey} type="monotone" dataKey={`s${i}`} name={s.scopeName}
                         stroke={s.benchmark ? "#94a3b8" : color(i)} strokeWidth={s.benchmark ? 1.6 : i === 0 ? 2.4 : 1.8}

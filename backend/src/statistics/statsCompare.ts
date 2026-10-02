@@ -127,5 +127,14 @@ export function foldWeek(cells: readonly WeekPlanCell[], blockStarts: readonly s
  * Звіт ще не зафіксував, їхній автоплан рухається щодня. Ще й вісь X їхала в майбутнє, і «3 міс» зсувалось уперед.
  */
 export function clipPlanToToday<T extends { points: { period: string }[] }>(plan: T[], today: string): T[] {
-  return plan.map((p) => ({ ...p, points: p.points.filter((x) => x.period <= today) })).filter((p) => p.points.length > 0);
+  return plan.map((p) => ({ ...p, points: clipPointsToToday(p.points, today) })).filter((p) => p.points.length > 0);
+}
+
+/**
+ * Факт на графіку — теж лише до поточного періоду. 📐 Заміряно 02.10.2026 на «Поставлених»: угоди із ЗАПЛАНОВАНОЮ
+ * датою завантаження давали точки 05.10 і 12.10 (5 і 1 авто) — лінія «падала» в майбутньому, а вікно «3 міс»
+ * рахувалось від 12.10. Плитка «Відправлені авто» майбутніх завантажень не рахує; графік тепер теж.
+ */
+export function clipPointsToToday<P extends { period: string }>(points: P[], today: string): P[] {
+  return points.filter((x) => x.period <= today);
 }

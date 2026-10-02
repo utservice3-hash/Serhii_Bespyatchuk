@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { compareWindows, deltaPct, planPct, rankByPlan, sheetWeekToMonday, weekOf, foldWeek, clipPlanToToday, type WeekPlanCell } from "./statsCompare.js";
+import { compareWindows, deltaPct, planPct, rankByPlan, sheetWeekToMonday, weekOf, foldWeek, clipPlanToToday, clipPointsToToday, type WeekPlanCell } from "./statsCompare.js";
 import { ANOMALIES, anomaliesFor, CORRECTIONS, applyCorrections } from "./anomalies.js";
 import { needsApi, API_BASE } from "../testMode.js";
 
@@ -225,7 +225,18 @@ test("#882c ПЛАН НА ГРАФІКУ — НЕ В МАЙБУТНЄ: пото�
   assert.deepEqual(c.map((p) => [p.scopeKey, p.points.map((x) => x.period)]), [["company", ["2026-09-21", "2026-09-28"]]],
     "🔴 план майбутніх тижнів на графіку (або обрізано поточний тиждень, що вже йде)");
   assert.deepEqual(clipPlanToToday([{ scopeKey: "company", points: [{ period: "2026-10-01", value: 9 }] }], "2026-10-01")[0].points.length, 1, "🔴 сьогоднішній місяць/тиждень зник");
-  assert.match(codeOnly(read("backend/src/routes/statisticsSeries.ts")), /plan = clipPlanToToday\(plan, kyivToday\(\)\);\s*res\.json\(/, "🔴 серія віддає план без обрізки майбутнього");
+  assert.match(codeOnly(read("backend/src/routes/statisticsSeries.ts")), /const today = kyivToday\(\);[\s\S]*?plan = clipPlanToToday\(plan, today\);\s*res\.json\(/, "🔴 серія віддає план без обрізки майбутнього");
+});
+
+test("#882d ФАКТ НА ГРАФІКУ — НЕ В МАЙБУТНЄ, а підпис шва — лише коли шов усередині вікна", () => {
+  const pts = [{ period: "2026-09-28", value: 207 }, { period: "2026-10-05", value: 5 }, { period: "2026-10-12", value: 1 }];
+  assert.deepEqual(clipPointsToToday(pts, "2026-10-02").map((p) => p.period), ["2026-09-28"],
+    "🔴 заплановані завантаження стоять на графіку як факт майбутніх тижнів (або зник поточний тиждень)");
+  const route = codeOnly(read("backend/src/routes/statisticsSeries.ts"));
+  assert.match(route, /\.map\(\(s\) => \(\{ \.\.\.s, points: clipPointsToToday\(s\.points, today\) \}\)\)/, "🔴 серія віддає точки з майбутнього");
+  const fe = read(`${SEC}/StatisticsChartsSection.tsx`);
+  assert.match(fe, /\{rows\[eff\.lo\]\?\.period < SEAM && \(rows\[eff\.hi\]\?\.period \?\? ""\) >= SEAM && \(\s*<ReferenceLine/,
+    "🔴 підпис шва малюється й тоді, коли шов на краю вікна — налазить на вісь Y");
 });
 
 // ─────────────────────────────── ЖИВІ (test:prod) ───────────────────────────────
