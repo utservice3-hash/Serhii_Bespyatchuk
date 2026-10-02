@@ -5263,8 +5263,10 @@ export type CtorEdrResult =
   | { updating: true; error: string };
 export const ctorByEdrpou = async (code: string) =>
   (await api.get<CtorEdrResult>(`/constructor/edrpou/${encodeURIComponent(code)}`)).data;
+/** ✅ Перевірка поля (сервер, `constructor/validate.ts`): error — блокує формування, warn — лише попереджає. */
+export interface CtorIssue { field: string; level: "error" | "warn"; msg: string }
 export const ctorPreview = async (state: CtorForm) =>
-  (await api.post<{ html: string; fragment: string; blockers: string | null; assetsNote: string | null }>("/constructor/preview", { state })).data;
+  (await api.post<{ html: string; fragment: string; blockers: string | null; issues?: CtorIssue[]; assetsNote: string | null }>("/constructor/preview", { state })).data;
 export const ctorCreate = async (state: CtorForm) =>
   (await api.post<{ id: number; version: number; num: string; createdAt: string;
     /** Автопідгонка PDF (v2): скільки сторінок, яка щільність, чи не влізло в 3. */

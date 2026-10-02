@@ -22,7 +22,7 @@ import {
   ctorParse, ctorParseOld, ctorPool, ctorPoolStats, ctorPreview, ctorRouteTemplates, ctorSaveCounterparty, ctorSaveRouteTemplate,
   ctorDeleteRouteTemplate, ctorPairZip, ctorConvertToPdf, ctorConvertFromPdf,
   type CtorArchiveRow, type CtorCounterparty, type CtorCounterpartyRow, type CtorEntityKey, type CtorEntityRow, type CtorForm,
-  type CtorParty, type CtorRouteTemplate, type CtorStatDay, type CtorRegistryCard,
+  type CtorParty, type CtorRouteTemplate, type CtorStatDay, type CtorIssue, type CtorRegistryCard,
 } from "../../../api";
 import "./mockFonts.css";
 import "./constructor.css";
@@ -106,6 +106,9 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
   const [form, setForm] = useState<CtorForm>(() => ({ ...CTOR_EMPTY_FORM, ...initial }));
   const [fragment, setFragment] = useState("");
   const [blocker, setBlocker] = useState<string | null>(null);
+  /** ✅ Перевірка полів (затверджено 02.10.2026): список приходить із прев'ю, правила — лише на сервері. */
+  const [issues, setIssues] = useState<CtorIssue[]>([]);
+  const iss = (field: string) => issues.find((i) => i.field === field && i.level === "error") ?? issues.find((i) => i.field === field);
   const [assetsNote, setAssetsNote] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ t: string; bad?: boolean }>({ t: "" });
   const [busy, setBusy] = useState(false);
@@ -174,7 +177,7 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
     if (view !== "make") return;
     clearTimeout(timer.current);
     timer.current = setTimeout(async () => {
-      try { const r = await ctorPreview(form); setFragment(r.fragment); setBlocker(r.blockers); setAssetsNote(r.assetsNote); }
+      try { const r = await ctorPreview(form); setFragment(r.fragment); setBlocker(r.blockers); setIssues(r.issues ?? []); setAssetsNote(r.assetsNote); }
       catch (e) { setBlocker(await errOf(e)); }
     }, 350);
     return () => clearTimeout(timer.current);
@@ -511,11 +514,15 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                   // IBAN і банк перевізника — необовʼязкові з 02.10.2026 (перевізник вказує їх у рахунку): порожнє поле
                   // не «!» і не «впишіть вручну», а сіре «—» з поясненням — інакше виглядає як обовʼязкове.
                   const optional = form.party === "carrier" && (k === "iban" || k === "bank");
+                  const is = iss(`cp.${k}`);
+                  // перевірка поверх «заповнено/ні»: 🔴 — «✕», 🟡 — «⚠», пояснення під полем
+                  const st = is ? (is.level === "error" ? "err" : "wrn") : v ? "ok" : optional ? "opt" : "no";
                   return (
-                    <div key={k} className={`frow ${v || optional ? "" : "miss"}`}>
+                    <div key={k} className={`frow ${v || optional ? "" : "miss"} ${is ? "has-" + st : ""}`}>
                       <label htmlFor={`f-${k}`}>{l}</label>
                       <input id={`f-${k}`} value={v} placeholder={optional ? "необовʼязково — перевізник вкаже в рахунку" : "впишіть вручну"} onChange={(e) => setCp(k, e.target.value)} />
-                      <span className={`st ${v ? "ok" : optional ? "opt" : "no"}`} title={!v && optional ? "Необовʼязкове поле" : undefined}>{v ? "✓" : optional ? "—" : "!"}</span>
+                      <span className={`st ${st}`} title={is?.msg ?? (!v && optional ? "Необовʼязкове поле" : undefined)}>{is ? (is.level === "error" ? "✕" : "⚠") : v ? "✓" : optional ? "—" : "!"}</span>
+                      {is && <div className={`fmsg ${st}`}>{is.msg}</div>}
                     </div>
                   );
                 })}
@@ -554,11 +561,13 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                       <label htmlFor={`t-${k}`}>{k === "otherResp" ? (form.party === "carrier" ? "Відповідальна особа Перевізника, телефон" : "Відповідальна особа Замовника, телефон") : l}
                         {!req && <span style={{ color: "var(--muted)", fontWeight: 400 }}> · необов’язкове</span>}</label>
                       <input type="text" id={`t-${k}`} value={form.trip[k] || ""} onChange={(e) => setTrip(k, e.target.value)} />
+                      <FieldMsg is={iss(`trip.${k}`)} />
                     </div>
                   ))}
                 </div>
                 <div className="payrow">
-                  <div className="fld"><label htmlFor="paysum">Плата, сума</label><input type="text" id="paysum" value={form.pay.sum} onChange={(e) => setPay("sum", e.target.value)} />
+                  <div className="fld"><label htmlFor="paysum">Плата, сума <span style={{ color: "var(--bad)" }}>*</span></label><input type="text" id="paysum" value={form.pay.sum} onChange={(e) => setPay("sum", e.target.value)} />
+                    <FieldMsg is={iss("pay.sum")} />
                     {margin !== null && <span style={{ display: "block", fontSize: 11.5, color: margin >= 0 ? "var(--ok)" : "var(--bad)", fontWeight: 600, marginTop: 3 }}>маржа {margin.toLocaleString("uk-UA")}</span>}</div>
                   <div className="fld"><label htmlFor="paycur">Валюта</label><select id="paycur" value={form.pay.cur} onChange={(e) => setPay("cur", e.target.value)}>
                     <option>грн</option><option>€ по курсу НБУ на день завантаження</option></select></div>
@@ -628,14 +637,17 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                   <label htmlFor="dealNo" style={{ display: "block", fontSize: 11, fontWeight: 700, color: "var(--muted)", marginBottom: 3 }}>№ заявки = ID угоди в СРМ <span style={{ color: "var(--bad)" }}>*</span></label>
                   <input type="text" id="dealNo" value={form.dealNo} onChange={(e) => set("dealNo", e.target.value.trim())} placeholder="напр. 61575919" inputMode="numeric"
                     style={{ width: "100%", border: "1px solid var(--line)", borderRadius: 9, background: "var(--surface)", padding: "8px 11px", fontFamily: "var(--mono)", fontSize: 13 }} />
+                  <FieldMsg is={iss("dealNo")} />
                 </div>
                 <div className="fld" style={{ minWidth: 150 }}>
                   <label htmlFor="docDate" style={{ display: "block", fontSize: 11, fontWeight: 700, color: "var(--muted)", marginBottom: 3 }}>Дата договору</label>
                   <input type="date" id="docDate" value={form.docDate} onChange={(e) => set("docDate", e.target.value)}
                     style={{ width: "100%", border: "1px solid var(--line)", borderRadius: 9, background: "var(--surface)", padding: "7px 10px", fontSize: 13 }} />
+                  <FieldMsg is={iss("docDate")} />
                 </div>
               </>)}
               <button className="btn pri" style={{ alignSelf: "flex-end" }} disabled={busy || fopConflict} onClick={() => void onMake()}>{busy ? "Формую…" : "Сформувати документ"}</button>
+              <IssueSummary issues={issues} />
               {!isMain && (
                 <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: "var(--ink-2)", alignSelf: "flex-end", paddingBottom: 9, cursor: "pointer" }}>
                   <input type="checkbox" checked={pairMode} onChange={(e) => setPairMode(e.target.checked)} style={{ width: 15, height: 15, accentColor: "var(--ent)" }} />
@@ -808,4 +820,24 @@ async function docxText(buf: ArrayBuffer): Promise<string> {
     off = dstart + csize;
   }
   throw new Error("У файлі немає тексту документа (word/document.xml) — це точно .docx?");
+}
+
+/** Пояснення під полем — текст із серверної перевірки (🔴 червоний, 🟡 жовтий). */
+function FieldMsg({ is }: { is?: CtorIssue }) {
+  if (!is) return null;
+  return <div className={`fmsg ${is.level === "error" ? "err" : "wrn"}`}>{is.level === "error" ? "✕ " : "⚠ "}{is.msg}</div>;
+}
+
+/** Підсумок біля «Сформувати»: «2 помилки, 1 попередження» (затверджено 02.10.2026). */
+function IssueSummary({ issues }: { issues: CtorIssue[] }) {
+  const e = issues.filter((i) => i.level === "error").length, w = issues.length - e;
+  if (!issues.length) return null;
+  const pl = (n: number, one: string, few: string, many: string) => n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? few : many;
+  return (
+    <span className="issum" title={issues.map((i) => (i.level === "error" ? "✕ " : "⚠ ") + i.msg).join("\n")}>
+      {e > 0 && <b className="err">{e} {pl(e, "помилка", "помилки", "помилок")}</b>}
+      {e > 0 && w > 0 && ", "}
+      {w > 0 && <b className="wrn">{w} {pl(w, "попередження", "попередження", "попереджень")}</b>}
+    </span>
+  );
 }
