@@ -24,6 +24,7 @@ const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, otherCount: 0, noCh
 import { kommoLeadUrl } from "../core/kommoLinks.js";
 import { kommoWrite } from "../kommo/client.js";
 import { accumulateKpiTargets } from "../core/kpiTargets.js";
+import { loadKpiTargets } from "../core/kpiTargetsDb.js";
 
 /** Direct link to a deal (lead) card in Kommo/amoCRM. */
 // Посилання на картку угоди — з `core/kommoLinks` (одне місце на весь продукт).
@@ -9045,28 +9046,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // потрібні — але лише щоб їхні дні лишались ПОКРИТИМИ: інакше 21 прихована денна
   // дитина місячного плану стала б «нічийною», і daily-фолбек повернув би зняту ціль
   // через задні двері. Рішення «яку ціль читати» ухвалює `accumulateKpiTargets`.
-  const umbRows = (await pool.query<{ assignee_id: number; ps: string; pe: string; kind: string | null; metrics_json: { metric: string; target: number | string }[] | null }>(
-    `SELECT t.assignee_id, to_char(t.period_start,'YYYY-MM-DD') ps,
-            to_char(COALESCE(t.period_end, t.period_start),'YYYY-MM-DD') pe,
-            t.period_kind AS kind, t.metrics_json
-       FROM tasks t
-      WHERE t.auto AND t.task_type = 'kpi_period' AND t.assignee_id IS NOT NULL
-        AND t.metrics_json IS NOT NULL
-        AND t.period_start <= $2 AND COALESCE(t.period_end, t.period_start) >= $1`, [from, to]
-  )).rows;
-  const dayRows = (await pool.query<{ assignee_id: number; pd: string; metrics_json: { metric: string; target: number | string }[] | null }>(
-    `SELECT t.assignee_id, to_char(t.plan_date,'YYYY-MM-DD') pd, t.metrics_json
-       FROM tasks t
-      WHERE t.auto AND t.task_type = 'daily_kpi' AND t.assignee_id IS NOT NULL
-        AND t.metrics_json IS NOT NULL AND t.plan_date BETWEEN $1 AND $2`, [from, to]
-  )).rows;
-  // Накопичення — у ЧИСТІЙ функції `core/kpiTargets` (гейти #80…#80c). Інлайном воно
-  // не мало жодної перевірки, окрім живого екрана.
-  const planByMgr = accumulateKpiTargets(
-    umbRows.map((u) => ({ assigneeId: u.assignee_id, from: u.ps, to: u.pe, kind: u.kind, metrics: u.metrics_json })),
-    dayRows.map((r) => ({ assigneeId: r.assignee_id, day: r.pd, metrics: r.metrics_json })),
-    from, to
-  );
+  // Запити парасольок і денних KPI — у ядрі (`core/kpiTargetsDb.ts`), щоб Статистики брали ТІ САМІ цілі.
+  const planByMgr = await loadKpiTargets(from, to);
 
   // ГРОШОВИЙ ПЛАН = СТРАТЕГІЧНИЙ план із таблиці `plans` (core plans.managerPlan — повне
   // покриття, ціль відділу 2.7млн), рішення власника 22.07. НЕ задачник: задачник покриває
