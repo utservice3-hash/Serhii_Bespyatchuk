@@ -113,7 +113,7 @@ export function LeadgenPoolPanel({ onTaken }: { onTaken: () => void }) {
       </div>
       {err && <div role="alert" style={{ padding: "8px 14px", color: "#b91c1c", fontWeight: 600, fontSize: 13 }}>⚠️ {err}</div>}
       {!data ? <div style={{ padding: 14, color: "#6b7280" }}>завантаження…</div> : !data.rows.length ? (
-        <div style={{ padding: 14, color: "#6b7280" }}>У пулі зараз нікого. Автопередача — щоночі; перша можлива — 01.11.2026.</div>
+        <div style={{ padding: 14, color: "#6b7280" }}>У пулі зараз нікого. Нова порція — щопонеділка о 08:00 (до 100 клієнтів).</div>
       ) : (
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
           <thead><tr>

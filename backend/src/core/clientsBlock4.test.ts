@@ -274,6 +274,7 @@ test("#1215 ФРОНТ: строк — понеділок із сервера (�
   assert.doesNotMatch(bits, /lastDay|Date\.UTC\(/, "🔴 у фронті знову «останній день місяця»");
   assert.match(bits, /передача лідгенам з <b>пн \{ddmm\(dl\)\}<\/b>/, "🔴 на екрані не «з понеділка»");
   assert.doesNotMatch(read(`${SECTIONS}/ReactivationCycle.tsx`), /до кінця наступного місяця/, "🔴 кнопка обіцяє місячний строк");
+  assert.doesNotMatch(read(`${SECTIONS}/ReactivationCycle.tsx`), /Автопередача — щоночі|перша можлива — 01\.11/, "🔴 порожній пул обіцяє нічну/листопадову передачу");
   const list = codeOnly(read(`${SECTIONS}/ClientPlansSection.tsx`));
   for (const k of ["decisionDays", "selfGraceDays", "weeklyCap", "launchRelease", "transferHour"]) {
     assert.match(list, new RegExp(`data\\.reactRules\\.${k}`), `🔴 пояснення над вкладкою не бере ${k} із сервера`);
