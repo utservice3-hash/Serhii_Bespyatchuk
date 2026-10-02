@@ -118,7 +118,7 @@ import {
 import { canRequestLimitFor, canAssignTaskToOthers } from "../auth/taskAssignScope.js";
 import { activeManagerSql } from "../core/activeManager.js";
 import * as managerState from "../core/managerState.js";
-import { teamAtSql, inTeamDuringSql, teamOnDateSql, sqlDate } from "../core/teamAt.js";
+import { teamAtSql, inTeamDuringSql, teamOnDateSql, sqlDate, teamJoinSql } from "../core/teamAt.js";
 import * as clientCalls from "../core/clientCalls.js";
 import * as planBasis from "../core/planBasis.js";
 import * as clientTabs from "../core/clientTabs.js";
@@ -276,7 +276,7 @@ dashboardRouter.get("/leadgen", async (req, res) => {
        -- це була б тиха втрата саме тих рядків, заради яких реєстр і заводили.
        LEFT JOIN deals d ON d.kommo_id = lr.lead_id
        LEFT JOIN managers m ON m.name = lr.manager_name
-       LEFT JOIN teams t ON t.id = ${teamAtSql("m", `(lr.transferred_at ${K})::date`)}
+       LEFT JOIN teams t ON ${teamJoinSql("t", "m", `(lr.transferred_at ${K})::date`)}
        ${where}
       GROUP BY m.id, COALESCE(m.name, lr.manager_name, 'Не вказано'),
                COALESCE(t.name, lr.team_name, 'Без команди'),
@@ -1035,7 +1035,7 @@ dashboardRouter.get("/overview", async (req, res) => {
        FROM leadgen_registry lr
        JOIN deals d ON d.kommo_id = lr.lead_id
        JOIN managers m ON m.id = d.manager_id
-       JOIN teams t ON t.id = ${teamAtSql("m", "(lr.transferred_at AT TIME ZONE 'Europe/Kyiv')::date")}
+       JOIN teams t ON ${teamJoinSql("t", "m", "(lr.transferred_at AT TIME ZONE 'Europe/Kyiv')::date")}
        WHERE ${trWhere}
      )
      SELECT team_id, team_name,
@@ -1056,7 +1056,7 @@ dashboardRouter.get("/overview", async (req, res) => {
        FROM leadgen_registry lr
        JOIN deals d ON d.kommo_id = lr.lead_id
        JOIN managers m ON m.id = d.manager_id
-       JOIN teams t ON t.id = ${teamAtSql("m", "(lr.transferred_at AT TIME ZONE 'Europe/Kyiv')::date")}
+       JOIN teams t ON ${teamJoinSql("t", "m", "(lr.transferred_at AT TIME ZONE 'Europe/Kyiv')::date")}
        WHERE ${trWhere} AND d.client_key IS NOT NULL
      )
      SELECT tlc.team_id, COALESCE(SUM(won.rev), 0) AS revenue
@@ -3477,7 +3477,7 @@ dashboardRouter.get("/teams", async (req, res) => {
   const conv = await pool.query<{ tid: number; leads: string; paid: string }>(
     `SELECT t.id AS tid, COUNT(*) AS leads, COUNT(*) FILTER (WHERE psm.funnel_stage='paid') AS paid
      FROM deals d JOIN managers m ON m.id = d.manager_id
-     JOIN teams t ON t.id = ${teamAtSql("m", "(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date")}
+     JOIN teams t ON ${teamJoinSql("t", "m", "(d.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date")}
      LEFT JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
      WHERE d.pipeline_id IN (8921932,155304) ${lc.length ? "AND " + lc.join(" AND ") : ""} GROUP BY t.id`,
     lp

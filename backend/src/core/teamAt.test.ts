@@ -129,6 +129,10 @@ async function checkTeamAtSql(x: Ctx, form: string): Promise<void> {
     const on: boolean = (await x.c.query<{ v: boolean }>(
       `SELECT ${x.sql.teamOnDateSql("m", "$1::date", "$3")} AS v FROM managers m WHERE m.id = $2`, [d, m.id, 5])).rows[0].v ?? false;
     assert.equal(on, teamAt(m.team_id, moves.get(m.id) ?? [], d) === 5, `🔴 [${form}] «рядок у команді 5» для менеджера ${m.id} на ${d} не той`);
+    const joined = (await x.c.query<{ id: number }>(
+      `SELECT t.id FROM managers m JOIN teams t ON ${x.sql.teamJoinSql("t", "m", "$1::date")} WHERE m.id = $2`, [d, m.id])).rows.map((r) => r.id);
+    const want = teamAt(m.team_id, moves.get(m.id) ?? [], d);
+    assert.deepEqual(joined, want == null ? [] : [want], `🔴 [${form}] зʼєднання з командою для менеджера ${m.id} на ${d} не те`);
   }
   for (const [from, to] of [["2026-09-01", "2026-09-30"], ["2026-10-01", "2026-10-31"], ["2026-09-15", "2026-10-15"]]) {
     for (const m of mgrs) for (const team of [5, 6]) {
@@ -161,6 +165,7 @@ test("#1302b ЖИВИЙ SQL: без жодного переходу вираз =
     await x.sql.refreshTeamMoves(x.c);
     assert.equal(x.sql.teamOnDateSql("m", "d::date", "$9"), "m.team_id = $9", "🔴 без переходів запит уже не той, що до модуля");
     assert.equal(x.sql.teamAtSql("m", "d::date"), "m.team_id", "🔴 без переходів вираз команди уже не `m.team_id`");
+    assert.equal(x.sql.teamJoinSql("t", "m", "d::date"), "t.id = m.team_id", "🔴 без переходів зʼєднання з командою уже не `t.id = m.team_id`");
   } finally { await x.c.query("ROLLBACK"); await x.sql.refreshTeamMoves(x.c); }
 });
 

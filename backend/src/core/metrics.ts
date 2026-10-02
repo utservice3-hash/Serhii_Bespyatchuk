@@ -10,7 +10,7 @@ import { monthEndOf, periodNotOver, kyivToday } from "./dates.js";
 // 🔀 Команда в ПЕРІОДНИХ розрізах — на дату рядка (створення / подія / анкер), а не поточна
 // (задача 4892, `core/teamAt.ts`). Знімки «станом на зараз» (очікування, дебіторка, застряглі,
 // прострочені) лишаються на поточній команді; когортні воронки — окремим проходом.
-import { teamAtSql, teamOnDateSql } from "./teamAt.js";
+import { teamAtSql, teamOnDateSql, teamJoinSql } from "./teamAt.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
 import { dayBucketCase } from "./dayBuckets.js";
 
@@ -2288,7 +2288,7 @@ async function conversionByCohort(s: MetricScope, entry: CohortEntry): Promise<C
            FROM leadgen_touch lt
            JOIN deals d ON d.kommo_id = lt.lead_kommo_id
            JOIN managers m ON m.id = d.manager_id
-           JOIN teams t ON t.id = ${teamAtSql("m", "lt.transfer_date::date")}
+           JOIN teams t ON ${teamJoinSql("t", "m", "lt.transfer_date::date")}
           WHERE ${scopeWhere}
           GROUP BY d.client_key
        ),

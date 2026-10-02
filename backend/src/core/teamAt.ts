@@ -112,9 +112,34 @@ export function teamAtSql(alias: string, dateExpr: string): string {
  */
 export function teamOnDateSql(alias: string, dateExpr: string, teamRef: string): string {
   if (snapshot && !snapshot.size) return `${alias}.team_id = ${teamRef}`;
-  const movers = snapshot ? `${alias}.id = ANY(${moverIds(snapshot)})` : `${alias}.id IN (SELECT mv1.manager_id FROM manager_team_moves mv1)`;
-  return `((${alias}.team_id = ${teamRef} OR ${movers})`
+  if (snapshot) {
+    /**
+     * 📐 РОЗЩЕПЛЕНО НАВМИСНО (заміряно 02.10.2026 на проді з одним фіктивним переходом у знімку): умова
+     * `CASE … IS NOT DISTINCT FROM $t` на ВСІХ рядках позбавляла планувальник статистики по `team_id` —
+     * звіт менеджера по команді 3.5 → 13 с, Огляд команди «холодний» 4 → 20 с. Тепер ті, хто не переходив,
+     * ідуть рівно старою умовою `m.team_id = $t`, а `CASE` перевіряється лише для одиниць, що переходили.
+     */
+    const ids = moverIds(snapshot);
+    return `((${alias}.team_id = ${teamRef} AND ${alias}.id <> ALL(${ids}))`
+      + ` OR (${alias}.id = ANY(${ids}) AND ${teamAtSql(alias, dateExpr)} IS NOT DISTINCT FROM ${teamRef}))`;
+  }
+  return `((${alias}.team_id = ${teamRef} OR ${alias}.id IN (SELECT mv1.manager_id FROM manager_team_moves mv1))`
     + ` AND ${teamAtSql(alias, dateExpr)} IS NOT DISTINCT FROM ${teamRef})`;
+}
+
+/**
+ * Умова з'єднання з `teams` за командою на дату: `JOIN teams t ON ${teamJoinSql("t", "m", дата)}`.
+ * Без переходів — рівно `t.id = m.team_id`. З переходами розщеплено, як `teamOnDateSql`: зʼєднання по
+ * виразу `CASE` для всіх рядків коштувало «переданим заявкам» Огляду команди 0.4 → 5.6 с (заміряно 02.10.2026).
+ */
+export function teamJoinSql(teamAlias: string, alias: string, dateExpr: string): string {
+  if (snapshot && !snapshot.size) return `${teamAlias}.id = ${alias}.team_id`;
+  if (snapshot) {
+    const ids = moverIds(snapshot);
+    return `((${teamAlias}.id = ${alias}.team_id AND ${alias}.id <> ALL(${ids}))`
+      + ` OR (${alias}.id = ANY(${ids}) AND ${teamAlias}.id = ${teamAtSql(alias, dateExpr)}))`;
+  }
+  return `${teamAlias}.id = ${teamAtSql(alias, dateExpr)}`;
 }
 
 /**

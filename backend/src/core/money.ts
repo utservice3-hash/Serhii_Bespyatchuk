@@ -13,7 +13,7 @@ import { HANDOFF_CLASS_RULES } from "./moneyBuckets.js";
 // 🔀 Команда — НА ДАТУ АНКЕРА грошей, а не поточна (задача 4892, `core/teamAt.ts`): гроші,
 // зароблені в команді, лишаються в ній після переходу людини. Без переходів — поточна команда.
 // Знімки «станом на зараз» (`snapshotBy`, `awaitingNowSnapshot`) свідомо лишаються на поточній.
-import { teamAtSql, teamOnDateSql } from "./teamAt.js";
+import { teamAtSql, teamOnDateSql, teamJoinSql } from "./teamAt.js";
 const ANCHOR_DAY = "(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date";
 const CLOSED_DAY = "(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date";
 
@@ -186,7 +186,7 @@ function scopeClause(s: MoneyScope, p: unknown[], extraSelect: string, groupBy: 
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
   if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", ANCHOR_DAY, `$${p.length}`)); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
-  const teamsJoin = /\bt\./.test(extraSelect + groupBy) ? `LEFT JOIN teams t ON t.id = ${teamAtSql("m", ANCHOR_DAY)}` : "";
+  const teamsJoin = /\bt\./.test(extraSelect + groupBy) ? `LEFT JOIN teams t ON ${teamJoinSql("t", "m", ANCHOR_DAY)}` : "";
   return {
     where: conds.length ? "WHERE " + conds.join(" AND ") : "",
     joins: `JOIN managers m ON m.id = src.manager_id ${activeJoin}\n    ${teamsJoin}`,
