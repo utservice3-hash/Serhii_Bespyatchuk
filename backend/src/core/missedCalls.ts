@@ -17,14 +17,14 @@ import {
 
 export interface MissedSummary {
   missed: number; excluded: number; ownerless: number;
-  callback: number; callbackTalked: number; callbackSelf: number; callbackColleague: number;
+  callback: number; callbackAttempt: number; callbackSelf: number; callbackColleague: number;
   clientSelf: number; medianMin: number | null;
   buckets: Record<DayBucket, number>;
 }
 
 interface SummaryRaw {
   missed: number; excluded: number; ownerless: number; callback: number;
-  callback_talked: number; callback_self: number; callback_colleague: number;
+  callback_attempt: number; callback_self: number; callback_colleague: number;
   client_self: number; median_min: string | null;
   b_work: number; b_evening: number; b_weekend: number; b_night: number;
 }
@@ -42,7 +42,7 @@ export async function missedSummary(from: string, to: string, s: MissedScope = {
   const n = (v: number | undefined): number => Number(v ?? 0);
   return {
     missed: n(x?.missed), excluded: n(x?.excluded), ownerless: n(x?.ownerless),
-    callback: n(x?.callback), callbackTalked: n(x?.callback_talked),
+    callback: n(x?.callback), callbackAttempt: n(x?.callback_attempt),
     callbackSelf: n(x?.callback_self), callbackColleague: n(x?.callback_colleague),
     clientSelf: n(x?.client_self),
     medianMin: x?.median_min == null ? null : Math.round(Number(x.median_min)),

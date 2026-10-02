@@ -313,7 +313,7 @@ export async function fetchLeadgenStats(params: { from: string; to: string; grai
 export type MissedDayBucket = "work" | "evening" | "weekend" | "night";
 export interface MissedSummary {
   missed: number; excluded: number; ownerless: number;
-  callback: number; callbackTalked: number; callbackSelf: number; callbackColleague: number;
+  callback: number; callbackAttempt: number; callbackSelf: number; callbackColleague: number;
   clientSelf: number;
   /** `null` — передзвонів за період не було, тобто медіану нема з чого рахувати. */
   medianMin: number | null;
