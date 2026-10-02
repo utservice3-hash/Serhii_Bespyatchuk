@@ -12,7 +12,7 @@
  */
 import {
   type CycleRow, type Decision, type PoolReason,
-  inReact, cycleMonthOf, allowedDecisions, statusOf, deadlineMonth, daysLeft,
+  inReact, cycleMonthOf, allowedDecisions, statusOf, transferMonday, daysLeft,
 } from "./reactCycleRules.js";
 
 export interface Db {
@@ -24,14 +24,14 @@ export class ReactCycleError extends Error {
 }
 
 type DbRow = {
-  client_key: string; cycle_month: string; decision: Decision | null; decided_month: string | null;
+  client_key: string; cycle_month: string; decision: Decision | null; decided_date: string | null;
   pooled: boolean; pool_reason: PoolReason | null; closed: boolean; close_reason: "invoice" | "taken" | null;
 };
 const ROW_COLS = `client_key, to_char(cycle_month, 'YYYY-MM') AS cycle_month, decision,
-  to_char(decided_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM') AS decided_month,
+  to_char(decided_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS decided_date,
   (pooled_at IS NOT NULL) AS pooled, pool_reason, (closed_at IS NOT NULL) AS closed, close_reason`;
 const toRow = (r: DbRow): CycleRow => ({
-  cycleMonth: r.cycle_month, decision: r.decision, decidedMonth: r.decided_month,
+  cycleMonth: r.cycle_month, decision: r.decision, decidedDate: r.decided_date,
   pooled: r.pooled, poolReason: r.pool_reason, closed: r.closed, closeReason: r.close_reason,
 });
 
@@ -55,7 +55,7 @@ export function currentRow(rows: CycleRow[] | undefined, lastInvoice: string | n
 }
 
 /**
- * Кнопка 4.2. «self» — лишити за собою (раз за цикл, зі строком до кінця наступного місяця);
+ * Кнопка 4.2. «self» — лишити за собою (раз за цикл, зі строком 4 тижні від натискання);
  * «leadgen» — у пул зараз (можна й після «self», якщо менеджер передумав).
  */
 export async function decide(db: Db, a: {
@@ -127,6 +127,18 @@ export async function closeRevived(db: Db, items: { clientKey: string; cycleMont
   return n;
 }
 
+/**
+ * Скільки клієнтів уже передано АВТОМАТИЧНО з понеділка цього тижня (за Києвом). Межа `WEEKLY_CAP` —
+ * на тиждень, тож рестарт чи нічний добір не віддадуть понад 100. Ручна передача менеджером не рахується.
+ */
+export async function autoPooledSince(db: Db, mondayYmd: string): Promise<number> {
+  const r = await db.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM client_react_cycles
+      WHERE pool_reason IN ('auto', 'self_expired') AND (pooled_at AT TIME ZONE 'Europe/Kyiv')::date >= $1::date`,
+    [mondayYmd]);
+  return r.rows[0]?.n ?? 0;
+}
+
 /** Автопередача (4.3). Ідемпотентно: рядок, що вже в пулі чи закритий, не чіпається. */
 export async function poolAuto(db: Db, items: { clientKey: string; cycleMonth: string; reason: PoolReason; fromManagerId: number | null }[]): Promise<number> {
   let n = 0;
@@ -194,14 +206,15 @@ export async function isLeadgenManager(db: Db, managerId: number | null | undefi
 export function cycleView(lastInvoice: string | null, rows: CycleRow[] | undefined, todayYmd: string) {
   const cm = cycleMonthOf(lastInvoice);
   const row = currentRow(rows, lastInvoice);
-  const dl = deadlineMonth(cm, row);
+  const dl = transferMonday(cm, row);
   return {
     cycleMonth: cm,
     lastInvoice,
     status: statusOf(row),
     poolReason: row?.poolReason ?? null,
+    /** Понеділок, з якого клієнт до передачі (`YYYY-MM-DD`); черга по 100 може відсунути на тиждень-другий. */
     deadline: dl,
-    daysLeft: dl ? Math.max(0, daysLeft(dl, todayYmd)) : null,
+    daysLeft: dl ? daysLeft(dl, todayYmd) : null,
     allowed: allowedDecisions(row),
   };
 }
