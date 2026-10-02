@@ -475,3 +475,23 @@ test("#323b 🪞 ДЗЕРКАЛО: мапер — БІЛИЙ СПИСОК, і р
     "🔴 відповідь збирається не рівно мапером — множина ключів перестає бути гарантією");
 });
 
+test("#323c звільнений менеджер (manager_work_state = dismissed) для трекера неактивний", async () => {
+  const { rosterPerson } = await import("../auth/trackerRoster.js");
+  const base = { id: 1, email: "a@b", name: "А", is_active: true, tracker_enabled: true,
+    team_name: null, data_scope: null };
+  // Обидва боки межі: звільнений — ні, «завершує» і без картки — так.
+  assert.equal(rosterPerson({ ...base, work_state: "dismissed" }).active, false,
+    "🔴 «Завершити звільнення» менеджеру не знімає users.is_active — трекер мусить бачити стан");
+  assert.equal(rosterPerson({ ...base, work_state: "finishing" }).active, true,
+    "🔴 «завершує» ще працює й доводить угоди — вимикати трекер рано");
+  assert.equal(rosterPerson({ ...base, work_state: null }).active, true);
+  assert.equal(rosterPerson(base).active, true, "🔴 акаунт без картки менеджера — за users.is_active");
+  assert.equal(rosterPerson({ ...base, is_active: false, work_state: null }).active, false);
+
+  // Стан має доїхати з SQL: без JOIN-у поле завжди null, і правка вище нічого б не робила.
+  const body = handlerBody(read("backend/src/routes/auth.ts"), 'authRouter.get("/tracker-users"');
+  assert.match(body, /LEFT JOIN manager_work_state mws ON mws\.manager_id = u\.manager_id/,
+    "🔴 реєстр не приєднує стан менеджера — звільнені знову виглядатимуть працюючими");
+  assert.match(body, /mws\.state AS work_state/);
+});
+

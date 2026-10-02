@@ -11,6 +11,8 @@
 export interface RosterRow {
   id: number; email: string; name: string | null; is_active: boolean;
   tracker_enabled: boolean; team_name: string | null; data_scope: string | null;
+  /** `manager_work_state.state` картки менеджера; `null`, якщо картки немає. */
+  work_state?: string | null;
 }
 
 /**
@@ -37,7 +39,13 @@ export function rosterPerson(r: RosterRow): {
     id: r.id,
     email: r.email,
     name: r.name ?? r.email,
-    active: r.is_active,
+    // 🔴 Звільнений менеджер Kommo — неактивний для трекера, хоч `users.is_active` і `true`.
+    // «Завершити звільнення» менеджеру ставить `manager_work_state = 'dismissed'` і НЕ чіпає
+    // `users.is_active` (його щопівгодини перераховує синк Kommo — див. core/offboarding.ts).
+    // Без цього рядка трекер вважав звільненого працюючим, доки його не вимкнуть у самому
+    // Kommo: так 02.10.2026 «звільнений» Шевчук Назар лишився активним у трекері.
+    // «Завершує» (`finishing`) — ще активний: людина доводить свої угоди й працює.
+    active: r.is_active && r.work_state !== "dismissed",
     trackerEnabled: r.tracker_enabled === true,
     team: r.team_name,
     // Невідома роль означає НАЙМЕНШІ права, ніколи не найбільші: роль, видалену з таблиці,

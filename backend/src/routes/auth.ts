@@ -391,9 +391,11 @@ authRouter.get("/tracker-users", async (req, res) => {
             u.is_active,
             u.tracker_enabled,
             t.name AS team_name,
-            r.data_scope
+            r.data_scope,
+            mws.state AS work_state
        FROM users u
        LEFT JOIN managers m ON m.id = u.manager_id
+       LEFT JOIN manager_work_state mws ON mws.manager_id = u.manager_id
        LEFT JOIN teams t ON t.id = u.team_id
        LEFT JOIN roles r ON r.key = COALESCE(u.role_override, u.role)
       ORDER BY u.email`
