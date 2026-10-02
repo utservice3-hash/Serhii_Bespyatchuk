@@ -254,3 +254,30 @@ test("#1309 ПРОПУЩЕНІ ДЗВІНКИ: рядок команди й ск
     await x.c.query(`DELETE FROM ringostat_calls WHERE uniqueid IN ('mc1', 'mc2')`);
   }
 });
+
+/**
+ * #1310 — РЕКЛАМНА КОГОРТА ВИКОНУЄТЬСЯ Й ДІЛИТЬСЯ ЗА КОМАНДОЮ НА ДАТУ ВХОДУ. Привід: golden на проді впав
+ * `syntax error at or near "$"` — `${KYIV}` у звичайних лапках пішов у SQL буквально. `tsc` і 1433 гейти
+ * мовчали, бо цей запит не виконувався ніде, крім живого Звіту. Тепер виконується тут.
+ */
+test("#1310 РЕКЛАМНА КОГОРТА: виконується; по команді — за датою входу в зону, по менеджеру — один рядок", async (t) => {
+  const x = await db(); if ("skip" in x) return t.skip(x.skip);
+  for (const [id, at] of [[201, "2026-09-29 12:00+03"], [202, "2026-10-02 12:00+03"]] as const) {
+    await x.c.query(`INSERT INTO deals (kommo_id, name, manager_id, pipeline_id, status_id, price, client_key, lead_channel, utm_medium, created_at_kommo)
+                     VALUES ($1, 'реклама', 1, ${FC}, 69693652, 0, $2, 'ad', 'cpc', $3::timestamptz)`, [id, `k${id}`, at]);
+    await x.c.query(`INSERT INTO deal_stage_events (kommo_id, status_id, pipeline_id, changed_at) VALUES ($1, 69693652, ${FC}, $2)`, [id, at]);
+  }
+  try {
+    const P = { from: "2026-09-01", to: "2026-10-31" };
+    const byTeam = new Map((await x.metrics.conversionAdsByTeam(P, [])).map((r) => [r.teamId, r.entered]));
+    assert.equal(byTeam.get(5), 1, "🔴 вересневий рекламний лід Хомік не в команді Яцика");
+    assert.equal(byTeam.get(null), 1, "🔴 жовтневий рекламний лід Хомік не «без команди»");
+    const mgr = (await x.metrics.conversionAdsByManager(P, [])).filter((r) => r.managerId === 1);
+    assert.deepEqual(mgr.map((r) => r.entered), [2], "🔴 по менеджеру рядок Хомік розколовся або загубив лід");
+    const yat = await x.metrics.conversionAdsByManager({ ...P, teamId: 5 }, []);
+    assert.deepEqual(yat.map((r) => [r.managerId, r.entered]), [[1, 1]], "🔴 у скоупі команди Яцика не рівно вересневий лід Хомік");
+  } finally {
+    await x.c.query(`DELETE FROM deal_stage_events WHERE kommo_id IN (201, 202)`);
+    await x.c.query(`DELETE FROM deals WHERE kommo_id IN (201, 202)`);
+  }
+});

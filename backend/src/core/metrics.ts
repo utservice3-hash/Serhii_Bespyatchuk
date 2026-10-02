@@ -2164,7 +2164,7 @@ function dealCohortCte(entryRef: string, srcRef: string, scopeWhere: string): st
             рахують COUNT, а не вибирають усі колонки.
             ⚠️ БЕЗ ЗВОРОТНИХ ЛАПОК: цей коментар живе ВСЕРЕДИНІ шаблонного літерала,
             і будь-яка з них закрила б рядок (TS1005). */
-         SELECT a.entered_at, w.won_at, d.manager_id, ${teamAtSql("m", "(a.entered_at ${KYIV})::date")} AS team_id, d.request_type,
+         SELECT a.entered_at, w.won_at, d.manager_id, ${teamAtSql("m", `(a.entered_at ${KYIV})::date`)} AS team_id, d.request_type,
                 d.kommo_id, d.name, d.price, d.status_id
            FROM adzone a
            JOIN deals d ON d.kommo_id = a.kommo_id
