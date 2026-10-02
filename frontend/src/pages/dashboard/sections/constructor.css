@@ -47,6 +47,7 @@
   background:color-mix(in srgb, var(--bad) 9%, transparent);color:var(--ink-2)}
 .ctorx .fopwarn b{color:var(--bad)}
 .ctorx .ibannote{padding:7px 13px;font-size:11.5px;color:var(--bad);border-top:1px dashed var(--line-2)}
+.ctorx .ibannote.soft{color:var(--muted)}
 .ctorx .entities{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin-bottom:12px}
 .ctorx .ent{position:relative;text-align:left;border:1.5px solid var(--line);border-radius:13px;padding:13px 15px;
   background:var(--surface);display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:start}
@@ -260,3 +261,87 @@
 .ctorx .bars .b i.z{background:var(--line)}
 .ctorx .bars .b span{font-size:9px;color:var(--muted);margin-top:2px;font-family:var(--mono)}
 @media(max-width:780px){.ctorx .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* 📄 ОФОРМЛЕННЯ «Б» документа (макет v20, 14–15.10; передано 01.10.2026) — ті самі правила, що в серверному
+   DOC_CSS: шапка з логотипом, акцент юрособи, картки реквізитів, рамка адреси для оригіналів, щільність
+   d1/dc/d95/dm. Згенеровано з макета, ізольовано під .ctorx. Інтерфейс у v20 не змінювався. */
+.ctorx .docfmt.doc-b{--acc:#c30010}
+.ctorx .docfmt.doc-b.ent-avm, .ctorx .docfmt.doc-b.ent-fop{--acc:#2b2f3a}
+.ctorx .doc-b .dband{background:#fff;color:#17181c;border-left:4pt solid var(--acc);border-bottom:.75pt solid #e3ddd7;padding:6pt 2pt 6pt 10pt;margin:0 0 12pt;font-size:8.5pt;gap:10pt}
+.ctorx .doc-b .dband .dlogo{height:21pt;width:auto;display:block;flex:none}
+.ctorx .doc-b .dband .dco{color:#17181c;font-weight:600}
+.ctorx .doc-b .dband .dnum{color:var(--acc);border:1pt solid var(--acc);border-radius:3pt;padding:2pt 7pt;font-size:8.5pt;font-weight:600}
+.ctorx .doc-b h2{color:#17181c}
+.ctorx .doc-b .sub{color:#5a5f6b}
+.ctorx .doc-b h3{color:var(--acc)}
+.ctorx .doc-b table{border-left:2.5pt solid var(--acc)}
+.ctorx .doc-b td{border:.5pt solid #d8d2cc}
+.ctorx .doc-b td.k{background:#f8f5f2;color:#5a5f6b}
+.ctorx .doc-b .rq2{gap:14pt}
+.ctorx .doc-b .rq2 > div{background:#f8f6f4;border:.5pt solid #ebe5df;border-radius:4pt;padding:8pt 10pt}
+.ctorx .doc-b .rq2 h4{color:var(--acc)}
+.ctorx .dens-d1{font-size:10.5pt;line-height:1.4}
+.ctorx .dens-d1 p{margin:0 0 3.5pt}
+.ctorx .dens-d1 h3{font-size:11pt;margin:8pt 0 3pt}
+.ctorx .dens-d1 table{font-size:9.5pt;margin:5pt 0 10pt}
+.ctorx .dens-d1 td{padding:3pt 7pt}
+.ctorx .dens-d1 td.v2{font-size:10pt}
+.ctorx .dens-d1 .rq2{font-size:9.5pt;line-height:1.48}
+.ctorx .dens-dc{font-size:10pt;line-height:1.22}
+.ctorx .dens-dc .dband{padding:5pt 2pt 5pt 9pt;margin:0 0 8pt}
+.ctorx .dens-dc .dband .dlogo{height:19pt}
+.ctorx .dens-dc h2{font-size:13.5pt}
+.ctorx .dens-dc .sub{margin:0 0 6pt;font-size:9.5pt}
+.ctorx .dens-dc .dl{margin:0 0 7pt;font-size:9.5pt}
+.ctorx .dens-dc p{margin:0 0 1.5pt;text-indent:24pt}
+.ctorx .dens-dc h3{font-size:10.5pt;margin:5pt 0 2pt}
+.ctorx .dens-dc table{font-size:9pt;line-height:1.2;margin:4pt 0 7pt}
+.ctorx .dens-dc td{padding:2pt 5pt}
+.ctorx .dens-dc td.v2{font-size:9.5pt}
+.ctorx .dens-dc td.k{width:46%}
+.ctorx .dens-dc .rq2{font-size:9pt;line-height:1.28;margin-top:3pt;gap:12pt}
+.ctorx .dens-dc .rq2 > div{padding:6pt 9pt}
+.ctorx .dens-dc .sigs{padding-top:6pt}
+.ctorx .dens-d95{font-size:9.5pt;line-height:1.2}
+.ctorx .dens-d95 .dband{padding:5pt 2pt 5pt 9pt;margin:0 0 7pt}
+.ctorx .dens-d95 .dband .dlogo{height:18pt}
+.ctorx .dens-d95 h2{font-size:13pt}
+.ctorx .dens-d95 .sub{margin:0 0 5pt;font-size:9pt}
+.ctorx .dens-d95 .dl{margin:0 0 6pt;font-size:9pt}
+.ctorx .dens-d95 p{margin:0 0 1pt;text-indent:24pt}
+.ctorx .dens-d95 h3{font-size:10pt;margin:4pt 0 2pt}
+.ctorx .dens-d95 table{font-size:8.5pt;line-height:1.18;margin:3pt 0 6pt}
+.ctorx .dens-d95 td{padding:1.5pt 5pt}
+.ctorx .dens-d95 td.v2{font-size:9pt}
+.ctorx .dens-d95 td.k{width:46%}
+.ctorx .dens-d95 .rq2{font-size:8.5pt;line-height:1.25;margin-top:3pt;gap:12pt}
+.ctorx .dens-d95 .rq2 > div{padding:5pt 8pt}
+.ctorx .dens-d95 .sigs{padding-top:5pt}
+.ctorx .dens-dm{font-size:9.5pt;line-height:1.22}
+.ctorx .dens-dm .dband{padding:5pt 2pt 5pt 9pt;margin:0 0 8pt}
+.ctorx .dens-dm .dband .dlogo{height:19pt}
+.ctorx .dens-dm h2{font-size:13.5pt}
+.ctorx .dens-dm .sub{margin:0 0 6pt;font-size:9.5pt}
+.ctorx .dens-dm .dl{margin:0 0 7pt;font-size:9.5pt}
+.ctorx .dens-dm p{margin:0 0 1.5pt;text-indent:24pt}
+.ctorx .dens-dm h3{font-size:10pt;margin:6pt 0 2pt}
+.ctorx .dens-dm .rq2{font-size:9pt;line-height:1.28;margin-top:3pt;gap:12pt}
+.ctorx .dens-dm .rq2 > div{padding:6pt 9pt}
+.ctorx .dens-dm .sigs{padding-top:6pt}
+.ctorx .doc-b p.dcl{text-indent:-32pt;padding-left:32pt}
+.ctorx .doc-b p.dcl b.dno{display:inline-block;min-width:32pt;text-indent:0}
+.ctorx .doc-b h3.dsec{border-bottom:.5pt solid #e3ddd7;padding-bottom:1.5pt}
+.ctorx .doc-b h3{break-after:avoid}
+.ctorx .doc-b .rqb{break-inside:avoid;page-break-inside:avoid}
+.ctorx .doc-b tr{break-inside:avoid}
+.ctorx .doc-b .dband .dlogo-avm{height:17pt}
+.ctorx .doc-b .orig-mini{margin:4pt 0 0;border:.75pt solid var(--acc);border-radius:3pt;padding:3.5pt 8pt 4pt;font-size:8.5pt;line-height:1.35;color:#17181c;text-indent:0;break-inside:avoid}
+.ctorx .doc-b .orig-mini b{color:var(--acc)}
+.ctorx .docsm.doc-b .dband{font-size:8px;padding:6px 6px 6px 12px;margin:0 0 9px;gap:8px}
+.ctorx .docsm.doc-b .dband .dlogo{height:20px}
+.ctorx .docsm.doc-b .dband .dlogo-avm{height:15px}
+.ctorx .docsm.doc-b .dband .dnum{font-size:7.5px;padding:1px 5px}
+.ctorx .docsm.doc-b .rq2{gap:12px}
+.ctorx .docsm.doc-b p.dcl{text-indent:-26px;padding-left:26px}
+.ctorx .docsm.doc-b p.dcl b.dno{min-width:26px}
+.ctorx .docsm .orig-mini{margin:6px 14px 0;padding:3px 6px;font-size:7px}
+.ctorx .docsm td.v2{font-size:8px}

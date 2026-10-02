@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { needsDb, needsApi, API_BASE, emptyPeriodSkip, smallSampleSkip } from "../testMode.js";
+import { needsDb, needsApi, API_BASE, emptyPeriodSkip, smallSampleSkip, monthStartSkip } from "../testMode.js";
 import { fixedWeekBlocks, kyivMonthBounds } from "../core/dates.js";
 import { sumDaysIntoBlocks } from "../core/weekFacts.js";
 import { responseViolations, NEED_LEADS } from "./responseSlice.js";
@@ -89,6 +89,9 @@ test("#89 ЧАСТКА ПОВІЛЬНИХ == НЕЗАЛЕЖНОМУ ПІДРАХ
   const from = `${ym}-01`, to = now.toISOString().slice(0, 10);
 
   const rows = await m.responseTimeByManager({ from, to });
+  // 🗓 01.10.2026: у перший день місяця лідів ще немає — календар, а не зламаний предикат (`monthStartSkip`).
+  const early = monthStartSkip("менеджерів із вхідними лідами", rows.length, 1, ym);
+  if (early) return t.skip(early);
   assert.ok(rows.length > 0,
     "🔴 розріз порожній — або вхідних лідів немає взагалі, або предикат зламався. "
     + "Порожній результат тут це ПРОВАЛ, а не «немає даних»");
@@ -150,7 +153,7 @@ test("#89b МЕНЕДЖЕР БЕЗ ЛІДІВ ВІДСУТНІЙ У ВИДАЧІ
 
 // ─────────────────── #57c · smoke кліком по новому вигляду ───────────────────
 
-test("#57c SMOKE: розкриття тижнів і час реакції відповідають ДАНИМИ", needsApi(), async () => {
+test("#57c SMOKE: розкриття тижнів і час реакції відповідають ДАНИМИ", needsApi(), async (t) => {
   const { signToken } = await import("../auth/auth.js");
   const token = signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null });
   const H = { Authorization: `Bearer ${token}` };
@@ -178,6 +181,9 @@ test("#57c SMOKE: розкриття тижнів і час реакції ві�
   const rt = await fetch(`${API_BASE}/api/dashboard/response-time/by-manager?from=${from}&to=${to}`, { headers: H });
   assert.equal(rt.status, 200, `🔴 response-time/by-manager віддав ${rt.status}`);
   const rtb = await rt.json() as { managers: { managerId: number; count: number }[] };
+  // 🗓 Живість роуту (200) уже доведено; порожній розріз у перші 2 робочі дні — календар (`monthStartSkip`).
+  const early = monthStartSkip("менеджерів у розрізі часу реакції", (rtb.managers ?? []).length, 1, ym);
+  if (early) return t.skip(early);
   assert.ok((rtb.managers ?? []).length > 0,
     "🔴 розріз часу реакції порожній — колонка показуватиме «—» усім, тобто мовчки зникне");
 });

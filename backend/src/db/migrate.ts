@@ -3,12 +3,14 @@ import { fileURLToPath } from "url";
 import path from "path";
 import { pool } from "./pool.js";
 import { seedOneOnOneForms } from "../oneOnOne/catalog.js";
+import { withMigrationRetry } from "./migrateRetry.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 async function main() {
   const sql = readFileSync(path.join(__dirname, "schema.sql"), "utf-8");
-  await pool.query(sql);
+  // 🔁 Схема — однією транзакцією; на взаємному блокуванні з живим сервером повторюємо (`db/migrateRetry.ts`, #776).
+  await withMigrationRetry(() => pool.query(sql));
   console.log("Migration applied.");
 
   await seedOneOnOneForms(pool);

@@ -28,14 +28,14 @@ const FIX = (f: string) => JSON.parse(readFileSync(path.join(import.meta.dirname
 const SRC = (rel: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "src", rel), "utf8");
 const REPO = path.join(import.meta.dirname, "..", "..", "..");
 
-type Ref = Record<string, { state: DocumentState & { num: string }; documentXml: string; media: string[]; printHtml: string }>;
+type Ref = Record<string, { state: DocumentState & { num: string }; documentXml: string; footerXml: string; media: string[]; printHtml: string }>;
 const ref = FIX("docgen-ref.json") as Ref;
 
 /** Тимчасова тека з фальшивими PNG під іменами справжніх — байти не важливі, важлива присутність. */
 function fakeAssets(): { dir: string; dispose: () => void } {
   const dir = mkdtempSync(path.join(tmpdir(), "constructor-assets-"));
   const png = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082", "hex");
-  for (const f of ["sig-bespyatchuk.png", "sig-kovtonyuk.png", "stamp-uts.png", "stamp-avtomuv.png"]) writeFileSync(path.join(dir, f), png);
+  for (const f of ["logo-uts.png", "logo-avm.png", "sig-bespyatchuk.png", "sig-kovtonyuk.png", "stamp-uts.png", "stamp-avtomuv.png"]) writeFileSync(path.join(dir, f), png);
   return { dir, dispose: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -61,27 +61,31 @@ const normXml = (xml: string) => xml.replace(/ id="\d+" name="img\d+"/g, ' id="#
 const normHtml = (h: string) => h.replace(/data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]*/g, "data:IMG");
 
 /**
- * #1120 — WORD ПОСИМВОЛЬНО ЯК У МАКЕТІ (порт `docgen.test.ts` Сергія): 4 конфігурації, ФОП без печатки,
- * вимкнений перемикач — без картинок.
+ * #1120 — WORD ПОСИМВОЛЬНО ЯК У МАКЕТІ (порт `docgen.test.ts` Сергія): з v2 (01.10.2026, оформлення «Б») —
+ * 6 конфігурацій (+ АвтоМув клієнт/перевізник) і колонтитул `footer1.xml`; ФОП без печатки й логотипа;
+ * вимкнений перемикач прибирає підпис і печатку, логотип юрособи лишається (рішення 14–15.10).
+ * Фікстура знеособлена й без картинок; що наш злитий код дає ТІ САМІ байти, що еталони пакета v2 на справжніх
+ * реквізитах і картинках, доведено окремою звіркою 01.10.2026 (6/6 Word, колонтитул, media, HTML; CSS = макет).
  * 🧨 Червоніє на будь-якій зміні юртексту, таблиці умов, реквізитів чи розкладки підписів у `docgen.ts`.
  */
 test("#1120 WORD ЯК У МАКЕТІ: document.xml посимвольно в 4 конфігураціях; ФОП без печатки; перемикач вимикає картинки", () => {
   const a = fakeAssets();
   try {
-    assert.ok(Object.keys(ref).length >= 4, "🔴 фікстура порожня — перевірці нічого порівнювати");
+    assert.ok(Object.keys(ref).length >= 6, "🔴 фікстура порожня або без конфігурацій АвтоМув — перевірці нічого порівнювати");
     for (const [name, r] of Object.entries(ref)) {
       const zip = buildDocx(r.state, r.state.num, loadDocImages(a.dir, r.state.ent, r.state.stamp));
       assert.deepEqual([zip[0], zip[1]], [0x50, 0x4b], `🔴 «${name}»: не zip`);
       const files = unzipStored(zip);
       const xml = new TextDecoder().decode(files.get("word/document.xml")!);
       assert.equal(normXml(xml), normXml(r.documentXml), `🔴 «${name}»: Word розійшовся з затвердженим макетом`);
+      assert.equal(new TextDecoder().decode(files.get("word/footer1.xml")!), r.footerXml, `🔴 «${name}»: колонтитул Word розійшовся з макетом`);
       assert.deepEqual([...files.keys()].filter((n) => n.startsWith("word/media/")).sort(), r.media, `🔴 «${name}»: інший набір картинок`);
     }
     const fop = loadDocImages(a.dir, "fop", true);
-    assert.ok(fop.sig && !fop.stamp, "🔴 у ФОП зʼявилась печатка або зник підпис (рішення 29.09)");
+    assert.ok(fop.sig && !fop.stamp && !fop.logo, "🔴 у ФОП зʼявилась печатка чи логотип або зник підпис (рішення 29.09, 14.10)");
     assert.deepEqual(ref["carr-fop"].media, ["word/media/sig.png"]);
     const off = unzipStored(buildDocx({ ...ref["once-client-uts"].state, stamp: false }, "1", loadDocImages(a.dir, "uts", false)));
-    assert.deepEqual([...off.keys()].filter((n) => n.startsWith("word/media/")), [], "🔴 вимкнений перемикач лишив підпис/печатку");
+    assert.deepEqual([...off.keys()].filter((n) => n.startsWith("word/media/")), ["word/media/logo.png"], "🔴 вимкнений перемикач лишив підпис/печатку або прибрав логотип");
   } finally { a.dispose(); }
 });
 
@@ -297,7 +301,7 @@ test("#1127 PDF-ДРУК: стиль друку після CSS документ�
   assert.ok(at > page.indexOf(".docfmt .sigend{height:26pt}"), "🔴 стиль друку стоїть ДО CSS документа — і програє йому");
   assert.ok(at < page.indexOf("</head>"), "🔴 стиль друку поза <head>");
   assert.match(PRINT_CSS, /\.docfmt \.sigend\{display:none\}/, "🔴 спейсер не схований — порожня остання сторінка");
-  assert.match(PRINT_CSS, /@page\{size:A4;margin:10mm 11mm 12mm 11mm\}/, "🔴 поля не як у макеті");
+  assert.match(PRINT_CSS, /@page\{size:A4;margin:10mm 11mm 15mm 11mm\}/, "🔴 поля не як у пакеті v2 (низ 15 мм — під колонтитул)");
   assert.match(PRINT_CSS, /print-color-adjust:exact/, "🔴 фони (смуга, клітинки умов) не друкуються");
 });
 
@@ -406,4 +410,121 @@ test("#1190b «ДІЄ ДО» ЗБЕРІГАЄТЬСЯ: колонка, запи�
   assert.match(route, /mainUntil: String\(row\.main_until \|\| ""\)/, "🔴 стан з архіву без mainUntil");
   assert.equal((stateFromBody({ ent: "uts", doc: "main", mainUntil: " 31.12.2027 " }, { name: "", phone: "" }) as DocumentState).mainUntil, "31.12.2027",
     "🔴 форма не передає «Діє до» в стан");
+});
+
+/**
+ * #1186 — ОФОРМЛЕННЯ «Б» (пакет v2, рішення 14–15.10): логотип своєї юрособи (ЮТС, АвтоМув; ФОП — без), рамка
+ * «Адреса для надсилання оригіналів» лише в документах ЮТС, колонтитул Word з полями PAGE/NUMPAGES, клас щільності
+ * в повній сторінці; Word бере ту саму щільність, що PDF.
+ * 🧨 Червоніє, якщо рамку дати АвтоМув/ФОП, загубити логотип або Word перестане слухатись щільності.
+ */
+test("#1186 ОФОРМЛЕННЯ «Б»: логотип юрособи, рамка адреси лише ЮТС, колонтитул X з Y, щільність Word = PDF", () => {
+  const a = fakeAssets();
+  try {
+    const has = (k: string) => ref[k].documentXml.includes("Адреса для надсилання оригіналів документів");
+    assert.deepEqual(["once-client-uts", "carr-uts", "main-uts"].map(has), [true, true, true], "🔴 у документі ЮТС немає рамки адреси для оригіналів");
+    assert.deepEqual(["once-client-avm", "carr-avm", "carr-fop"].map(has), [false, false, false], "🔴 рамку ЮТС (отримувач ТОВ «ЮТС») дано АвтоМув чи ФОП");
+    assert.ok(ref["once-client-avm"].media.includes("word/media/logo.png") && !ref["carr-fop"].media.includes("word/media/logo.png"), "🔴 логотип: АвтоМув без свого або ФОП із чужим");
+    const f = ref["carr-uts"].footerXml;
+    assert.ok(f.includes("Заявка-договір № 61575919") && f.includes('w:instr=" PAGE "') && f.includes('w:instr=" NUMPAGES "'), "🔴 колонтитул Word без № чи номерів сторінок");
+    const r = ref["carr-uts"]; const img = loadDocImages(a.dir, "uts", true);
+    const xml = (dens?: "dc" | "d95") => new TextDecoder().decode(unzipStored(buildDocx(r.state, r.state.num, img, dens)).get("word/document.xml")!);
+    assert.equal(xml(), xml("dc"), "🔴 без щільності перевізницька має стартувати з dc");
+    assert.notEqual(xml("d95"), xml("dc"), "🔴 щільність не міняє Word — Word і PDF розійдуться в кількості сторінок");
+    assert.ok(fullPageHTML(r.state, r.state.num, {}, "d95").includes('<div class="docfmt doc-b ent-uts dens-d95">'), "🔴 повна сторінка без класів «Б»");
+    assert.ok(fullPageHTML(ref["once-client-uts"].state, "1", {}).includes('<div class="docfmt doc-b ent-uts dens-d1">'), "🔴 клієнтська має стартувати з d1");
+  } finally { a.dispose(); }
+});
+
+/**
+ * #1187 — АВТОПІДГОНКА ПІД 3 СТОРІНКИ без браузера (порт `pdfRenderer.test.ts` пакета): влізла одразу — один рендер;
+ * 4-та сторінка — крок щільніше; не влізла навіть у d95 — `overflow`; основний договір — dm без підгонки.
+ * Рендер підмінено «PDF» із заданою кількістю сторінок.
+ * 🧨 Червоніє, якщо прибрати крок щільніше або вважати 8 сторінок договору «переповненням».
+ */
+test("#1187 АВТОПІДГОНКА: d1→dc→d95 до 3 сторінок, інакше overflow; договір — dm без підгонки", async () => {
+  const { renderDocumentPdf, countPdfPages } = await import("./services/pdfRenderer.js");
+  const fake = (n: number) => new TextEncoder().encode("%PDF " + "<< /Type /Pages >> " + "<< /Type /Page >> ".repeat(n));
+  assert.equal(countPdfPages(fake(3)), 3, "🔴 лічильник сторінок рахує /Pages або губить сторінки");
+  const run = async (state: DocumentState, pagesByDens: Record<string, number>) => {
+    const seen: string[] = [];
+    const out = await renderDocumentPdf(state, "1", {}, async (html) => {
+      const dens = /class="docfmt doc-b ent-\w+ dens-(d1|dc|d95|dm)"/.exec(html)![1]; seen.push(dens); return fake(pagesByDens[dens]);
+    });
+    return { seen, out };
+  };
+  const once = ref["once-client-uts"].state, carr = ref["carr-uts"].state, main = ref["main-uts"].state;
+  let r = await run(once, { d1: 3 });
+  assert.deepEqual([r.seen, r.out.dens, r.out.overflow], [["d1"], "d1", false]);
+  r = await run(once, { d1: 4, dc: 4, d95: 3 });
+  assert.deepEqual([r.seen, r.out.dens, r.out.pages, r.out.overflow], [["d1", "dc", "d95"], "d95", 3, false], "🔴 немає кроку щільніше");
+  r = await run(carr, { dc: 5, d95: 4 });
+  assert.deepEqual([r.seen, r.out.overflow, r.out.pages], [["dc", "d95"], true, 4], "🔴 непомічене переповнення — менеджер не отримає попередження");
+  r = await run(main, { dm: 8 });
+  assert.deepEqual([r.seen, r.out.overflow], [["dm"], false], "🔴 основний договір підганяється або 8 сторінок вважаються переповненням");
+});
+
+/**
+ * #1188 — CSS ДОКУМЕНТА ЦІЛИЙ (порт перевірки пакета): дужки збалансовані, правило шапки `.dband` ціле (у v1 обрізалось —
+ * PDF друкувався без стилів шапки), є рамка адреси, ховання спейсера в друці і захист від різаних рядків/печаток.
+ * Що DOC_CSS ДОСЛІВНО = CSS макета v20, доведено звіркою 01.10.2026 (макет у репозиторій не кладемо).
+ */
+test("#1188 CSS ДОКУМЕНТА: дужки збалансовані, шапка ціла, рамка адреси, друк без порожньої сторінки", async () => {
+  const { DOC_CSS } = await import("./data/docCss.js");
+  assert.equal((DOC_CSS.match(/{/g) || []).length, (DOC_CSS.match(/}/g) || []).length, "🔴 дужки CSS не збалансовані — частина правил мовчки зникне");
+  assert.match(DOC_CSS, /\.docfmt \.dband\{[^}]*margin:0 0 10pt\}/, "🔴 правило шапки обрізане (помилка v1)");
+  assert.ok(DOC_CSS.includes(".doc-b .orig-mini{"), "🔴 немає стилю рамки адреси для оригіналів");
+  assert.ok(DOC_CSS.includes("@media print{.docfmt .sigend{display:none}}"), "🔴 спейсер у друці не схований — порожня остання сторінка");
+  assert.ok(DOC_CSS.includes("break-inside:avoid"), "🔴 зник захист від розрізаних печаток і рядків таблиці");
+  for (const d of ["d1", "dc", "d95", "dm"]) assert.ok(DOC_CSS.includes(`.dens-${d}`), `🔴 немає щільності ${d}`);
+});
+
+/**
+ * #1189 — СПРАВЖНІЙ ДРУК (порт `pdf-autofit.integration.ts` пакета): тим самим Chrome, що на сервері, з автопідгонкою —
+ * кожна заявка (6 конфігурацій) рівно на 3 сторінках, основний договір — 8; колонтитул «сторінка X з Y» надруковано.
+ * Біжить там, де є браузер (`CONSTRUCTOR_CHROME_PATH`): на проді — у прийманні `test:prod`; без браузера — скіп.
+ * 🧨 Червоніє, якщо повернути щільність до v1 (заявка перевізнику — 5 сторінок) або зламати колонтитул.
+ */
+test("#1189 ДРУК PDF: заявки рівно 3 сторінки, договір 8, колонтитул «сторінка X з Y»", async (t) => {
+  if (!process.env.CONSTRUCTOR_CHROME_PATH) { t.skip("немає браузера для PDF (CONSTRUCTOR_CHROME_PATH) — на проді гейт біжить у test:prod"); return; }
+  const { renderDocumentPdf } = await import("./services/pdfRenderer.js");
+  const a = fakeAssets();
+  try {
+    const pages: Record<string, number> = {}; let footerSeen = false; let footerChecked = false;
+    for (const [name, r] of Object.entries(ref)) {
+      const fit = await renderDocumentPdf(r.state, r.state.num, docImageDataUris(a.dir, r.state.ent, r.state.stamp));
+      pages[name] = fit.pages;
+      if (name === "carr-uts") {
+        try {
+          const txt = execFileSync("pdftotext", ["-", "-"], { input: Buffer.from(fit.pdf) }).toString("utf8");
+          footerChecked = true; footerSeen = /Заявка-договір № 61575919/.test(txt) && /сторінка 3 з 3/.test(txt);
+        } catch { /* pdftotext немає — колонтитул перевіряє #1186 (Word) і очі приймання */ }
+      }
+    }
+    for (const [name, n] of Object.entries(pages)) {
+      if (name === "main-uts") assert.equal(n, 8, `🔴 основний договір: ${n} стор. замість 8 (усі: ${JSON.stringify(pages)})`);
+      else assert.equal(n, 3, `🔴 «${name}»: ${n} стор. замість рівно 3 (усі: ${JSON.stringify(pages)})`);
+    }
+    if (footerChecked) assert.ok(footerSeen, "🔴 у PDF немає колонтитула «Заявка-договір № … · сторінка X з Y»");
+  } finally { a.dispose(); }
+});
+
+/**
+ * #1195 — IBAN ПЕРЕВІЗНИКА НЕОБОВʼЯЗКОВИЙ (02.10.2026, рішення в чаті команди: Юля «можна», перевізник однаково
+ * виставляє рахунок з IBAN). Заявка перевізнику без IBAN формується; у його картці реквізитів немає рядка «п/р»,
+ * а в картці експедитора — є. Дзеркало: інші гейти (№ угоди) не зняті разом із цим.
+ * 🧨 Червоніє, якщо повернути перевірку «Немає IBAN перевізника».
+ */
+test("#1195 IBAN ПЕРЕВІЗНИКА НЕОБОВʼЯЗКОВИЙ: заявка формується, у картці перевізника немає «п/р», № угоди — досі обовʼязковий", () => {
+  const base = ref["carr-uts"].state;
+  const noIban = { ...base, cp: { ...base.cp, iban: "" } };
+  assert.equal(blockers(noIban), null, "🔴 заявку перевізнику без IBAN знову заблоковано");
+  const html = printHTML(noIban, noIban.num, {});
+  const theirs = html.slice(html.indexOf("<h4>ПЕРЕВІЗНИК</h4>"), html.indexOf("<h4>ЕКСПЕДИТОР</h4>"));
+  const ours = html.slice(html.indexOf("<h4>ЕКСПЕДИТОР</h4>"));
+  assert.ok(theirs.length > 20 && ours.length > 20, "🔴 карток реквізитів не знайдено — перевіряти нічого");
+  assert.ok(!/п\/р/.test(theirs), "🔴 у картці перевізника лишився порожній рядок «п/р»");
+  assert.ok(/п\/р UA/.test(ours), "🔴 зник рахунок експедитора — правка зачепила не ту сторону");
+  assert.ok(/п\/р/.test(printHTML(base, base.num, {}).split("<h4>ЕКСПЕДИТОР</h4>")[0]), "🔴 з IBAN рядок «п/р» перевізника має бути");
+  assert.match(blockers({ ...noIban, dealNo: "" }) ?? "", /№ заявки/, "🔴 разом з IBAN зник гейт № угоди");
 });

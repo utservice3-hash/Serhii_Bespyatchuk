@@ -10,7 +10,8 @@ import type { PromiseState } from "./callAiPromise.js";
  *   озвучено ціну          — розібрано й ціну обговорили;
  *   без ціни й коментаря   — розібрано, ціни не було, «Чому не озвучено ціну» ніхто не написав;
  *   домовленостей          — розібрано й є обіцянка менеджера ПЕРЕДЗВОНИТИ (месенджер не перевіряється й сюди не йде);
- *   виконано               — передзвонив до терміну (з розмовою чи лише спробами) — той, хто обіцяв;
+ *   виконано               — передзвонив до терміну (з розмовою чи лише спробами) — той, хто обіцяв; або позначено
+ *                            «передзвонив поза телефонією» (мобільний, месенджер, інший номер — 01.10.2026);
  *   запізнився             — передзвонив, але після терміну;
  *   не передзвонив         — його дзвінка немає, а дзвінки вже синхронізовано за термін.
  */
@@ -46,7 +47,7 @@ export interface ManagerLine {
   missed: number;
 }
 
-const CALL_PROMISE: ReadonlySet<PromiseState> = new Set(["kept_talk", "kept_attempt_only", "client_called", "late", "pending", "broken"]);
+const CALL_PROMISE: ReadonlySet<PromiseState> = new Set(["kept_talk", "kept_attempt_only", "kept_offline", "client_called", "late", "pending", "broken"]);
 
 export const isAnalysed = (r: ReportRowIn): boolean => r.inReport && r.state === "done";
 export const noPrice = (r: ReportRowIn): boolean => isAnalysed(r) && r.priceDiscussed === false;
@@ -67,7 +68,7 @@ function line(rows: readonly ReportRowIn[], managerId: number | null, managerNam
     pricePct: analysed.length ? Math.round((priceVoiced / analysed.length) * 1000) / 10 : null,
     noPriceNoComment: mine.filter(noPriceNoComment).length,
     agreements: mine.filter(hasAgreement).length,
-    done: mine.filter((r) => hasAgreement(r) && (r.promiseState === "kept_talk" || r.promiseState === "kept_attempt_only")).length,
+    done: mine.filter((r) => hasAgreement(r) && (r.promiseState === "kept_talk" || r.promiseState === "kept_attempt_only" || r.promiseState === "kept_offline")).length,
     late: mine.filter((r) => hasAgreement(r) && r.promiseState === "late").length,
     missed: mine.filter((r) => hasAgreement(r) && r.promiseState === "broken").length,
   };

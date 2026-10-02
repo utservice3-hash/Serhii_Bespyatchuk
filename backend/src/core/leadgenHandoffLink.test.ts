@@ -587,18 +587,18 @@ test("#749 ЖИВИЙ SQL: подання → затвердження → по�
   const count = async () => (await client!.query(`SELECT (SELECT COUNT(*) FROM plans) + (SELECT COUNT(*) FROM plan_formation) AS n`)).rows[0].n;
   const sales0 = await count();
   const M = "2025-04-01";
-  await lgPlans.submitLeadgenPlan(60, M, { leads: 200, opr: 80, quotes: 40 }, "перший", 901);
+  await lgPlans.submitLeadgenPlan(60, M, { leads: 200, opr: 80, quotes: 40, calls: null, money: null }, "перший", 901);
   let f = (await lgPlans.leadgenFormation(M, [60])).get(60)!;
   assert.equal(f.status, "submitted");
-  assert.deepEqual(f.approved, { leads: null, opr: null, quotes: null }, "🔴 план став живим до затвердження");
+  assert.deepEqual(f.approved, { leads: null, opr: null, quotes: null, calls: null, money: null }, "🔴 план став живим до затвердження");
   assert.equal(await lgPlans.approveLeadgenPlans(M, null, 902), 1);
   const ap1 = await lgPlans.approvedLeadgenPlans([60], "2025-04-01", "2025-04-30");
   assert.deepEqual(ap1.get(60)?.get(M), { leads: 200, opr: 80, quotes: 40 });
-  await lgPlans.submitLeadgenPlan(60, M, { leads: 250, opr: 90, quotes: 50 }, "другий", 901);
-  assert.equal(await lgPlans.returnLeadgenPlan(M, 60, "замало", 902), 3, "🔴 повернуто не всі три метрики");
+  await lgPlans.submitLeadgenPlan(60, M, { leads: 250, opr: 90, quotes: 50, calls: null, money: null }, "другий", 901);
+  assert.equal(await lgPlans.returnLeadgenPlan(M, 60, "замало", 902), 5, "🔴 повернуто не всі пʼять пунктів (рядок на кожен, і на «не плануємо» теж)");
   f = (await lgPlans.leadgenFormation(M, [60])).get(60)!;
   assert.equal(f.status, "returned");
-  assert.deepEqual(f.proposed, { leads: 250, opr: 90, quotes: 50 });
+  assert.deepEqual(f.proposed, { leads: 250, opr: 90, quotes: 50, calls: null, money: null });
   assert.equal(f.returnComment, "замало");
   const ap2 = await lgPlans.approvedLeadgenPlans([60], "2025-04-01", "2025-04-30");
   assert.deepEqual(ap2.get(60)?.get(M), { leads: 200, opr: 80, quotes: 40 }, "🔴 повернення стерло попередній затверджений план");
@@ -792,4 +792,35 @@ test("#1171 ЖИВИЙ SQL: естафетна кваліфікація (лиш�
   assert.ok(got.includes(fx["r-unqual"].pz), "🔴 копія ще не кваліфікована, а перша кваліфікація зникла");
   assert.ok(got.includes(fx["r-mgr"].pz), "🔴 разом із копією є угода менеджера — справжню передачу сховано");
   assert.ok(got.includes(fx["r-late"].pz), "🔴 копія поза вікном входу, а вхід сховано — вікно не працює");
+});
+
+/**
+ * #1173 — ДЗВІНКИ Й ГРОШІ В ПЛАНІ, НЕОБОВʼЯЗКОВІ (Ярослав, рішення власника 01.10.2026), на живому SQL.
+ * Подання з дзвінками й грошима → затвердження → обидва живі; повторне подання БЕЗ грошей → після
+ * затвердження грошей у плані НЕМАЄ (а не «лишились з минулого подання»). База приймає `calls`/`money`
+ * і відмовляє невідомому пункту.
+ * 🧨 САБОТАЖ: у `submitLeadgenPlan` пропускати пункти зі значенням `null` → гроші з першого подання
+ * лишаються живими після другого → червоніє.
+ */
+test("#1173 ЖИВИЙ SQL: план на дзвінки й гроші — необовʼязковий; пропущений пункт після затвердження зникає", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { lgPlans } = await core();
+  const M = "2025-03-01";
+  await lgPlans.submitLeadgenPlan(60, M, { leads: 10, opr: 5, quotes: 3, calls: 1200, money: 150000 }, null, 901);
+  await lgPlans.approveLeadgenPlans(M, 60, 902);
+  let ap = (await lgPlans.approvedLeadgenPlans([60], M, "2025-03-31")).get(60)?.get(M);
+  assert.deepEqual(ap, { leads: 10, opr: 5, quotes: 3, calls: 1200, money: 150000 }, "🔴 дзвінки чи гроші не стали живим планом");
+  await lgPlans.submitLeadgenPlan(60, M, { leads: 11, opr: 5, quotes: 3, calls: 1300, money: null }, null, 901);
+  const f = (await lgPlans.leadgenFormation(M, [60])).get(60)!;
+  assert.equal(f.proposed.money, null, "🔴 «не плануємо» прочиталось як число");
+  assert.equal(f.approved.money, 150000, "🔴 до затвердження нового живий план мусить лишатись попереднім");
+  await lgPlans.approveLeadgenPlans(M, 60, 902);
+  ap = (await lgPlans.approvedLeadgenPlans([60], M, "2025-03-31")).get(60)?.get(M);
+  assert.deepEqual(ap, { leads: 11, opr: 5, quotes: 3, calls: 1300 },
+    "🔴 гроші з ПОПЕРЕДНЬОГО подання лишились живими, хоча нове подання їх не планувало");
+  // База: новий пункт приймається, невідомий — ні.
+  await assert.rejects(client!.query(
+    `INSERT INTO leadgen_plans (manager_id, month, metric, proposed_value) VALUES (60, '2025-02-01', 'revenue', 1)`),
+    /leadgen_plans_metric_check/, "🔴 база прийняла пункт, якого немає в переліку");
+  await client!.query(`INSERT INTO leadgen_plans (manager_id, month, metric, proposed_value) VALUES (60, '2025-02-01', 'money', 1)`);
 });

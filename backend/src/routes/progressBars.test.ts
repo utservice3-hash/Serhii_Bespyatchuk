@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { needsApi, API_BASE, planGraceSkip, emptyPeriodSkip } from "../testMode.js";
+import { needsApi, API_BASE, planGraceSkip, emptyPeriodSkip, monthStartSkip } from "../testMode.js";
 import { kyivMonthBounds } from "../core/dates.js";
 
 /**
@@ -149,6 +149,10 @@ test("#65c три сегменти місяця не перетинаються"
    */
   const graced3 = planGraceSkip("менеджерів із планом і рухом", live.length);
   if (graced3) return t.skip(graced3);
+  /* 🗓 01.10.2026: на 1-ше число менеджерів із планом і рухом було 2 (не нуль), і `planGraceSkip` мовчав —
+     гейт падав на «замало». У вікні перших 2 робочих днів «замало» — теж законний стан (`monthStartSkip`). */
+  const early3 = monthStartSkip("менеджерів із планом і рухом", live.length, 3, ym);
+  if (early3) return t.skip(early3);
   assert.ok(live.length >= 3, `🔴 лише ${live.length} менеджерів із планом і рухом — перевіряти нема на чому`);
 
   const bad: string[] = [];
@@ -165,6 +169,11 @@ test("#65c три сегменти місяця не перетинаються"
   assert.deepEqual(bad, [], "🔴 СЕГМЕНТИ ПЕРЕТИНАЮТЬСЯ АБО ЛІЗУТЬ У ЧУЖИЙ МІСЯЦЬ:\n  " + bad.join("\n  "));
 
   // ⚠️ Порожній результат = ПРОВАЛ: третій сегмент має бути видно хоч у когось.
+  /* 🗓 01.10.2026 (викат 75251a7): увечері 1-го числа менеджерів уже вистачило, але когорта місяця ще не мала
+     жодного «чекає без дати» — той самий календар рядком нижче. Перетин сегментів УЖЕ перевірено вище; скіп
+     лише у вікні 2 робочих днів поточного місяця (`monthStartSkip`), після нього — падіння. */
+  const early3rd = monthStartSkip("менеджерів із «чекає без дати»", live.filter((m) => m.cohort.awaitNoDateSum > 0).length, 1, ym);
+  if (early3rd) return t.skip(early3rd);
   assert.ok(live.some((m) => m.cohort.awaitNoDateSum > 0),
     "🔴 у жодного менеджера немає «чекає без дати» — третій сегмент ніде не видно, "
     + "і гейт про нього нічого не довів");

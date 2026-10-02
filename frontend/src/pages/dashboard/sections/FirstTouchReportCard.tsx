@@ -21,7 +21,7 @@ const COLS: readonly { key: SortKey; label: string; hint?: string }[] = [
   { key: "agreements", label: "Домовленостей", hint: "Менеджер пообіцяв передзвонити. Обіцянки в месенджер не перевіряються й сюди не входять." },
   { key: "done", label: "Виконано", hint: "Той, хто обіцяв, передзвонив до терміну." },
   { key: "late", label: "Запізнився", hint: "Передзвонив, але пізніше терміну." },
-  { key: "missed", label: "Не передзвонив", hint: "Дзвінка того, хто обіцяв, немає, а дзвінки вже синхронізовано за термін." },
+  { key: "missed", label: "Немає дзвінка в телефонії", hint: "У Ringostat немає дзвінка того, хто обіцяв, хоч дзвінки вже синхронізовано за термін. Передзвін з мобільного чи в месенджер система не бачить — це не вирок, а привід перевірити." },
 ];
 
 type PoolKey = "all" | "noPrice" | "noComment" | "missed" | "typeCheck";
@@ -29,7 +29,7 @@ const POOL: readonly { key: PoolKey; label: string; match: (r: AiPoolRowT) => bo
   { key: "all", label: "Усі", match: () => true },
   { key: "noPrice", label: "Без ціни", match: (r) => r.flags.noPrice },
   { key: "noComment", label: "Без коментаря", match: (r) => r.flags.noComment },
-  { key: "missed", label: "Не передзвонив", match: (r) => r.flags.missed },
+  { key: "missed", label: "Немає дзвінка в телефонії", match: (r) => r.flags.missed },
   { key: "typeCheck", label: "Перевірити тип", match: (r) => r.typeCheck },
 ];
 
@@ -89,10 +89,11 @@ export function FirstTouchReportCard({ from, to, teamId }: { from: string; to: s
       </h3>
 
       {rep.banner.total > 0 && (
-        <div role="alert" style={{ background: "var(--danger-bg, #fde8e8)", border: "1px solid var(--danger, #b3261e)", borderRadius: 8, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ fontWeight: 700, color: "var(--danger, #b3261e)", fontSize: 15 }}>Пообіцяв і не передзвонив · {rep.banner.total}</div>
+        <div style={{ background: "var(--surface-2, #f4f5f7)", border: "1px solid var(--border)", borderRadius: 8, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>Обіцяв передзвонити — дзвінка в телефонії немає · {rep.banner.total}</div>
+          <div style={{ fontSize: 13, ...muted }}>За даними Ringostat. Передзвін з мобільного, у месенджер чи з іншого номера система не бачить — <b>перевіряється, не для розборів</b>.</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {rep.banner.byManager.map((m) => <span key={String(m.managerId)}>{chip("bad", `${m.managerName} · ${String(m.count)}`)}</span>)}
+            {rep.banner.byManager.map((m) => <span key={String(m.managerId)}>{chip("muted", `${m.managerName} · ${String(m.count)}`)}</span>)}
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 13 }}>
             {bannerRows.slice(0, 12).map((r) => (
@@ -101,9 +102,9 @@ export function FirstTouchReportCard({ from, to, teamId }: { from: string; to: s
                 {fmt(r.calledAt)} · <b>{r.managerName ?? "невідомий"}</b> · {r.summary ?? "—"}
               </button>
             ))}
-            {bannerRows.length > 12 && <span style={muted}>ще {String(bannerRows.length - 12)} — у «Заявках» з фільтром «Не передзвонив»</span>}
+            {bannerRows.length > 12 && <span style={muted}>ще {String(bannerRows.length - 12)} — у «Заявках» з фільтром «Немає дзвінка в телефонії»</span>}
           </div>
-          <div style={{ fontSize: 12, ...muted }}>Рядок зникає, коли менеджер передзвонить або тімлід напише «Опрацьовано» в картці розмови.</div>
+          <div style={{ fontSize: 12, ...muted }}>Рядок зникає, коли в телефонії зʼявиться дзвінок, у картці розмови позначать «Передзвонив поза телефонією» або тімлід напише «Опрацьовано».</div>
         </div>
       )}
 

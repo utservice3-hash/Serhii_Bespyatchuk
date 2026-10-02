@@ -13,7 +13,8 @@
  *  - «Пул заявок» і лічильник за день — вкладка для керівництва (рішення Сергія 30.09.2026).
  *
  * Інваріанти пакета (НЕ ламати): № заявки = ID угоди в Kommo, вручну, обовʼязковий; ФОП продає лише ФОПам, його
- * оплата — «СОФТ платіж»; дзеркальна заявка — ТІЛЬКИ за чекбоксом; перевізницька без IBAN не формується.
+ * оплата — «СОФТ платіж»; дзеркальна заявка — ТІЛЬКИ за чекбоксом. IBAN перевізника з 02.10.2026
+ * НЕОБОВʼЯЗКОВИЙ (рішення в чаті: перевізник однаково виставляє рахунок з IBAN) — лише сіра підказка.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
@@ -32,6 +33,9 @@ const ENT_UI: Record<CtorEntityKey, { c: string; warn?: string; fallback: string
   avm: { c: "--e-avm", fallback: "ТОВ «АвтоМув»" },
   fop: { c: "--e-fop", fallback: "ФОП Беспятчук С.С. · 2 група", warn: "Клієнти — лише ФОП; оплата — СОФТ платіж. Без печатки, лише підпис" },
 };
+/* Оформлення «Б» (v20): стартова щільність прев'ю за типом документа — та сама, з якої починає автопідгонка PDF
+   (DENS_STEPS у docgen.ts пакета): клієнтська d1, перевізницька dc, основний dm. Підсумкову видно після «Сформувати». */
+const DENS0: Record<string, string> = { once: "d1", carr: "dc", main: "dm" };
 const DOCS: Array<{ k: string; t: string; p: CtorParty; off?: string; fopOff?: boolean }> = [
   { k: "once", t: "Разовий договір-заявка", p: "client" },
   { k: "main", t: "Основний договір", p: "client", fopOff: true },
@@ -249,7 +253,10 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
     try {
       const r = await ctorCreate(form);
       setMade({ ...r, party: form.party });
-      setMsg({ t: "" });
+      // v2: заявка мусить уміщатись у 3 сторінки; не влізла навіть у найщільнішому — текст попередження з пакета.
+      setMsg(r.overflow
+        ? { t: `Увага: заявка вийшла на ${r.pages} сторінки навіть у найщільнішому оформленні — скоротіть найдовші поля (адреси, вимоги, додаткові умови).`, bad: true }
+        : { t: "" });
       if (form.cp.name) ctorSaveCounterparty(form.cp).catch(() => {});   // контрагент — у довідник для наступного разу
       loadArch();
       const others = await ctorArchive("", r.num).catch(() => []);
@@ -510,7 +517,7 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                   );
                 })}
                 {form.party === "carrier" && !form.cp.iban && (
-                  <div className="ibannote">Без IBAN перевізника заявку не сформувати: оплата йде на його рахунок.</div>
+                  <div className="ibannote soft">IBAN не вказано — у реквізитах перевізника рядка «п/р» не буде. Заявку можна сформувати.</div>
                 )}
               </div>
               {fopConflict && (
@@ -655,7 +662,7 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
               <span className="num">{num}</span>
             </div>
             {blocker && <div style={{ padding: "8px 14px", fontSize: 12, color: "var(--warn)", borderBottom: "1px solid var(--line-2)" }}>⚠ {blocker}</div>}
-            <div className="pvbody"><div className="a4"><div className="docfmt docsm" dangerouslySetInnerHTML={{ __html: fragment }} /></div></div>
+            <div className="pvbody"><div className="a4"><div className={`docfmt doc-b ent-${form.ent} dens-${DENS0[form.doc] ?? "d1"} docsm`} dangerouslySetInnerHTML={{ __html: fragment }} /></div></div>
           </section>
         </div>
 

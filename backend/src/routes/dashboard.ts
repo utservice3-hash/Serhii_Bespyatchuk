@@ -86,7 +86,7 @@ import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, 
 import { handoffMoneyWire, personMoneyWire, bucketMoneyWire, bucketPersonMoneyWire, handoffDealsScope,
   leadgenAuthScope, parseLeadgenGrain, parseTrendMonths, parseManagerIdParam } from "../core/leadgenHandoffRules.js";
 import { leadgenRosterView, planView, planMonthOf, parseLeadgenSubmit, leadgenSubmitRefusal, mayEverSubmitLeadgenPlan,
-  mayApproveLeadgenPlan, LEADGEN_PLAN_METRICS, type RosterRow, type TeamMember } from "../core/leadgenPlanRules.js";
+  mayApproveLeadgenPlan, LEADGEN_PLAN_METRICS, emptyPlanRecord, type RosterRow, type TeamMember } from "../core/leadgenPlanRules.js";
 import { leadgenTeamMembers, leadgenPlanTarget, approvedLeadgenPlans, leadgenFormation, submitLeadgenPlan,
   approveLeadgenPlans, returnLeadgenPlan } from "../core/leadgenPlans.js";
 import * as expectSplit from "../core/expectSplit.js";
@@ -411,7 +411,9 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
   const totals = view.totals;
   // 📋 План і виконання — лише рядкам команди: плани ставляться учасникам (рішення 3–4).
   const approved = await approvedLeadgenPlans(rows.map((r) => r.managerId), from, to);
-  const pv = planView(rows, approved, from, to, kyivToday());
+  // 💰 Гроші людини для плану по грошах — ТІ САМІ числа, що на картці (`hm`), без другого розрахунку.
+  const moneyFact = new Map(hm.byPerson.map((p) => [p.managerId, { earned: p.money.earned.sum, pending: p.money.pending.sum }]));
+  const pv = planView(rows, approved, from, to, kyivToday(), moneyFact);
 
   const body: Record<string, unknown> = {
     from, to,
@@ -567,14 +569,14 @@ dashboardRouter.get("/leadgen-plans", async (req, res) => {
       managerId: m.managerId, name: m.name,
       canSubmit: refusal == null,
       status: f?.status ?? "draft",
-      proposed: f?.proposed ?? { leads: null, opr: null, quotes: null },
-      approved: f?.approved ?? { leads: null, opr: null, quotes: null },
+      proposed: f?.proposed ?? emptyPlanRecord(),
+      approved: f?.approved ?? emptyPlanRecord(),
       comment: f?.comment ?? null, returnComment: f?.returnComment ?? null,
       submittedBy: f?.submittedBy ?? null, submittedAt: f?.submittedAt ?? null,
       decidedBy: f?.decidedBy ?? null, decidedAt: f?.decidedAt ?? null,
       history: histMonths.map((mo) => {
         const b = buckets.find((x) => x.managerId === m.managerId && x.bucket === mo);
-        return { month: mo, leads: b?.leads ?? 0, opr: b?.opr ?? 0, quotes: b?.quotes ?? 0 };
+        return { month: mo, leads: b?.leads ?? 0, opr: b?.opr ?? 0, quotes: b?.quotes ?? 0, calls: b?.calls ?? 0 };
       }),
     };
   });
@@ -10679,7 +10681,7 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
       silentBeforeClose: r.silentBeforeClose,
       conversationType: r.conversationType, typeConfidence: r.typeConfidence, typeReason: r.typeReason, priceValue: r.priceValue,
       inReport: r.inReport, typeCheck: r.typeCheck, typeOverride: r.typeOverride,
-      priceNote: r.priceNote, missedNote: r.missedNote,
+      priceNote: r.priceNote, missedNote: r.missedNote, offlineNote: r.offlineNote,
     })),
     silence: { minGapHours: SILENCE_RULE.minGapHours, normFrom: SILENCE_RULE.normFrom },
   });
@@ -10705,7 +10707,7 @@ dashboardRouter.get("/ai-calls/team-report", async (req, res) => {
     rows: inReport.map((r) => ({
       uniqueid: r.uniqueid, calledAt: r.calledAt, managerId: r.managerId, managerName: r.managerName, teamName: r.teamName,
       clientPhone: r.clientPhone, kommoIds: r.kommoIds, state: r.state, summary: r.summary,
-      priceDiscussed: r.priceDiscussed, priceValue: r.priceValue, priceNote: r.priceNote, missedNote: r.missedNote,
+      priceDiscussed: r.priceDiscussed, priceValue: r.priceValue, priceNote: r.priceNote, missedNote: r.missedNote, offlineNote: r.offlineNote,
       promiseState: r.promiseState, objections: r.objections, typeCheck: r.typeCheck,
       flags: { analysed: isAnalysed(r), noPrice: noPrice(r), noComment: noPriceNoComment(r),
         missed: hasAgreement(r) && r.promiseState === "broken", banner: r.promiseState === "broken" && !r.missedNote },
@@ -10751,14 +10753,14 @@ dashboardRouter.post("/ai-calls/:uniqueid/type", async (req, res) => {
 dashboardRouter.put("/ai-calls/:uniqueid/note", async (req, res) => {
   const auth = req.auth!;
   const kind = String(req.body?.kind ?? "");
-  if (!canWriteNote(auth.roleKey, kind)) { res.status(403).json({ error: kind === "missed" ? "«Опрацьовано» пишуть тімлід і адмін" : "Коментар до ціни пишуть менеджер (свої), тімлід (команда) і адмін" }); return; }
+  if (!canWriteNote(auth.roleKey, kind)) { res.status(403).json({ error: kind === "missed" ? "«Опрацьовано» пишуть тімлід і адмін" : kind === "offline" ? "«Передзвонив поза телефонією» позначають менеджер (свої), тімлід (команда) і адмін" : "Коментар до ціни пишуть менеджер (свої), тімлід (команда) і адмін" }); return; }
   const text = req.body?.text;
   if (typeof text !== "string" || text.length > 2000) { res.status(400).json({ error: "text — рядок до 2000 символів" }); return; }
   const uniqueid = String(req.params.uniqueid);
   const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
   const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? null;
-  await setCallNote(pool, uniqueid, kind as "price" | "missed", text, { userId: auth.userId ?? null, name: who }, new Date());
+  await setCallNote(pool, uniqueid, kind as "price" | "missed" | "offline", text, { userId: auth.userId ?? null, name: who }, new Date());
   res.json({ ok: true });
 });
 
@@ -10785,7 +10787,7 @@ dashboardRouter.get("/ai-calls/:uniqueid/recording", async (req, res) => {
     managerChannel: card.managerChannel, durationSec: card.durationSec, nextOutboundAt: card.nextOutboundAt,
     promiseChecks: card.promiseChecks, callsAfter: card.callsAfter,
     typeHistory: card.typeHistory, canEditType: canEditType(auth.roleKey),
-    noteRights: { price: canWriteNote(auth.roleKey, "price"), missed: canWriteNote(auth.roleKey, "missed") },
+    noteRights: { price: canWriteNote(auth.roleKey, "price"), missed: canWriteNote(auth.roleKey, "missed"), offline: canWriteNote(auth.roleKey, "offline") },
     canListen: transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES),
   });
 });

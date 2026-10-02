@@ -184,6 +184,10 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS carrier_pay_amount NUMERIC;
 -- Обидві NULLABLE: syncKommo пише їх щопрохід, NOT NULL поклав би синк.
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS client_pay_amount NUMERIC;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS carrier_obligation NUMERIC;
+-- 💰 Суми за правилом фінансиста (аркуш «ФМ», 01.10.2026): Σ «Приход 1–5» і Σ «Расход 1–5» без «Оплата на выгрузке».
+-- Правило — `core/fmSums.ts`. Пише синк щопроходу; наявні угоди — разовим `tools/backfillFmSums.ts`.
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS fm_income NUMERIC;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS fm_expense NUMERIC;
 
 -- 🚚 ХТО ПЕРЕВІЗНИК (14.09.2026) — для реєстру заявок на оплату у дебіторці.
 -- Заявка в Kommo = угода-«Автосделка» у воронці «Оплата перевозчикам» (7341740);
@@ -4267,6 +4271,13 @@ CREATE TABLE IF NOT EXISTS leadgen_plans (
   UNIQUE (manager_id, month, metric)
 );
 CREATE INDEX IF NOT EXISTS idx_leadgen_plans_month ON leadgen_plans (month, status);
+-- 📞💰 01.10.2026 (прохання Ярослава, рішення власника): план також на ДЗВІНКИ й ГРОШІ, обидва НЕОБОВʼЯЗКОВІ.
+-- `proposed_value IS NULL` = «цей пункт не плануємо» — подання пише рядок на КОЖЕН пункт, щоб значення
+-- з попереднього подання не лишилось і не стало живим на затвердженні. Ідемпотентно: DROP IF EXISTS + ADD.
+-- ⚠️ Revert коду не відкочує ширший CHECK — і не мусить: старий код нових пунктів просто не пише.
+ALTER TABLE leadgen_plans DROP CONSTRAINT IF EXISTS leadgen_plans_metric_check;
+ALTER TABLE leadgen_plans ADD CONSTRAINT leadgen_plans_metric_check CHECK (metric IN ('leads', 'opr', 'quotes', 'calls', 'money'));
+ALTER TABLE leadgen_plans ALTER COLUMN proposed_value DROP NOT NULL;
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 🗂 БІЗНЕС-АСИСТЕНТ, прохід 1 (ТЗ «Блок Бізнес-асистент», задача 4314, 28.09.2026):
@@ -4445,6 +4456,12 @@ CREATE TABLE IF NOT EXISTS ba_ttn_checks (
   checked_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (month, manager_id)
 );
+
+-- 🔒 Увесь розділ «Бізнес-асистент» закрито від моделі (рішення Романа 01.10.2026 «5а»): борги клієнтів,
+-- судові справи, документи, видача техніки, перевірки ТТН. Після GRANT і після CREATE усіх таблиць блоку;
+-- `ba_equipment_issues` закрита вище. Гейт #1240 бере перелік ЗІ СХЕМИ за префіксом `ba_` — нова таблиця
+-- розділу без REVOKE червоніє сама.
+REVOKE ALL ON ba_claims, ba_court_cases, ba_files, ba_events, ba_equipment, ba_ttn_checks, ba_migrations FROM ai_readonly;
 
 -- ▼ AI-АНАЛІЗ ДЗВІНКІВ ПО РЕКЛАМНИХ ЛІДАХ (ТЗ 22.09.2026, прохід A, коміт ②) ▼
 -- Три таблиці з ІСТОРІЄЮ: жодного TRUNCATE, жодного перезапису. Старий шлях (uts-bot → Google-лист →
@@ -4648,6 +4665,11 @@ CREATE TABLE IF NOT EXISTS first_touch_notes (
   PRIMARY KEY (uniqueid, kind)
 );
 REVOKE ALL ON first_touch_notes FROM ai_readonly;
+-- 📞 «Передзвонив поза телефонією» (`offline`, 01.10.2026): звірка 30 «не передзвонив» з Ringostat напряму — у 25
+-- випадках нашого дзвінка в телефонії немає зовсім, а керівники знайшли передзвони з мобільного чи в месенджер.
+-- Таку позначку ставлять менеджер (свої), тімлід (команда), адмін — і обіцянка рахується виконаною.
+ALTER TABLE first_touch_notes DROP CONSTRAINT IF EXISTS first_touch_notes_kind_check;
+ALTER TABLE first_touch_notes ADD CONSTRAINT first_touch_notes_kind_check CHECK (kind IN ('price', 'missed', 'offline'));
 -- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
 
 -- 🎧 ВКЛАДКА «ПЕРШИЙ ДОТИК · AI» (рішення Романа 28.09.2026). Без цього рядка вкладку не побачив би
@@ -4901,6 +4923,22 @@ CREATE TABLE IF NOT EXISTS constructor_documents (
 );
 -- «Діє до» основного договору, ДД.ММ.РРРР (п. 8.1; порожньо = 31 грудня року дати договору). Рішення Романа 01.10.2026.
 ALTER TABLE constructor_documents ADD COLUMN IF NOT EXISTS main_until text;
+
+-- 📄 Оформлення «Б» (пакет Сергія v2, migrations/003_b_style.sql; передано 01.10.2026). Повторний запуск безпечний.
+-- Генерація бере ці значення з constructor/data/entities.ts (acc, orig); колонки тут — для довідника юросіб.
+ALTER TABLE constructor_entities
+  ADD COLUMN IF NOT EXISTS logo_file          text,
+  ADD COLUMN IF NOT EXISTS accent             text,
+  ADD COLUMN IF NOT EXISTS originals_address  text;
+UPDATE constructor_entities SET logo_file = 'logo-uts.png', accent = 'C30010',
+  originals_address = 'Нова Пошта, м. Київ, відділення № 70 · Отримувач: ТОВ «Юнайтед Транспорт Сервіс», ЄДРПОУ 44186230 · Контактна особа: Зубрицька Катерина Анатоліївна, +380 67 807 54 51'
+  WHERE key = 'uts' AND originals_address IS DISTINCT FROM 'Нова Пошта, м. Київ, відділення № 70 · Отримувач: ТОВ «Юнайтед Транспорт Сервіс», ЄДРПОУ 44186230 · Контактна особа: Зубрицька Катерина Анатоліївна, +380 67 807 54 51';
+UPDATE constructor_entities SET logo_file = 'logo-avm.png', accent = '2B2F3A', originals_address = NULL WHERE key = 'avm' AND accent IS DISTINCT FROM '2B2F3A';
+UPDATE constructor_entities SET logo_file = NULL, accent = '2B2F3A', originals_address = NULL WHERE key = 'fop' AND accent IS DISTINCT FROM '2B2F3A';
+-- Щільність, з якою документ влазить у 3 сторінки (автопідгонка PDF), — Word бере ту саму.
+ALTER TABLE constructor_documents
+  ADD COLUMN IF NOT EXISTS dens  text CHECK (dens IN ('d1', 'dc', 'd95', 'dm')),
+  ADD COLUMN IF NOT EXISTS pages int;
 CREATE INDEX IF NOT EXISTS idx_cdoc_deal    ON constructor_documents (deal_no);
 CREATE INDEX IF NOT EXISTS idx_cdoc_created ON constructor_documents (created_by, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cdoc_search  ON constructor_documents
@@ -5195,3 +5233,19 @@ CREATE TABLE IF NOT EXISTS fin_kpi_imports (
 
 -- 🔒 Як і таблиці проходу 1 — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`; перелік звіряє #934 (усі fin_*).
 REVOKE ALL ON fin_kpi_sections, fin_kpis, fin_kpi_values, fin_kpi_closes, fin_kpi_log, fin_kpi_imports FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💰 ФІНАНСИ, прохід 2б (01.10.2026): рядки «ФМ», що рахуються самі за фільтрами фінансиста.
+-- kind 'auto' — значення бере ядро (ref_source), руками не вноситься; за минулий тиждень/місяць фіксується
+-- джобою `freezeFinanceKpis` (frozen_at), бо CRM змінюється заднім числом. ⚠️ Revert коду не відкочує цих змін.
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE fin_kpis DROP CONSTRAINT IF EXISTS fin_kpis_kind_check;
+ALTER TABLE fin_kpis ADD CONSTRAINT fin_kpis_kind_check CHECK (kind IN ('manual','sum','diff','auto'));
+ALTER TABLE fin_kpis DROP CONSTRAINT IF EXISTS fin_kpis_auto_ref_check;
+ALTER TABLE fin_kpis ADD CONSTRAINT fin_kpis_auto_ref_check CHECK (kind <> 'auto' OR ref_source IS NOT NULL);
+ALTER TABLE fin_kpi_values ADD COLUMN IF NOT EXISTS frozen_at TIMESTAMPTZ;
+-- Разово: показники з довідкою CRM / дебіторки стають автоматичними (рішення Романа 01.10.2026: «робимо по фільтрах
+-- Тані»). Позначка в `fin_kpi_imports` — щоб повторний прогін схеми не перемикав назад свідомих правок.
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('auto-2026-10-01', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key)
+UPDATE fin_kpis SET kind = 'auto'
+ WHERE kind = 'manual' AND ref_source IS NOT NULL AND EXISTS (SELECT 1 FROM step);

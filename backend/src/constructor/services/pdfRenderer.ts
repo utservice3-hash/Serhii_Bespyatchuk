@@ -1,7 +1,13 @@
 /**
  * Серверний PDF — векторний друк HTML документа браузером (на відміну від html2pdf у макеті, растр):
- * менші файли, чіткий друк, пошук по тексту. Поля ті самі, що в макеті: 10/11/12/11 мм. Пагінацію
- * тримає CSS шаблона (break-inside:avoid на .sigs/.rq2) — «різана печатка» тут неможлива.
+ * менші файли, чіткий друк, пошук по тексту. Пагінацію тримає CSS шаблона (break-inside:avoid на
+ * .sigs/.rq2/.rqb/рядках таблиці) — «різана печатка» тут неможлива.
+ *
+ * 📄 v2 ПАКЕТА (оформлення «Б», 14–15.10, передано 01.10.2026): поля 10/11/15/11 мм (низ — під колонтитул
+ * «Разовий договір № N · сторінка X з Y»), автопідгонка заявки під 3 сторінки (`renderDocumentPdf`),
+ * лічильник сторінок (`countPdfPages`). У пакеті колонтитул — `footerTemplate` puppeteer; тут той самий
+ * текст друкують поля сторінки CSS (`@page { @bottom-left / @bottom-right }`, Chrome ≥ 131 — заміряно на
+ * 154 01.10.2026), бо CLI-друк шаблонів колонтитула не має.
  *
  * 🔧 ПІДКЛЮЧЕННЯ ДО ДАШБОРДА (30.09.2026) — проти пакета Сергія змінено ЛИШЕ спосіб запуску браузера:
  *
@@ -25,6 +31,8 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { densSteps, MAX_PAGES, FOOT_TITLE, type DocumentState, type Density } from './docgen.js';
+import { fullPageHTML, type PrintImages } from './printTemplate.js';
 
 /** Шлях до chrome-headless-shell на сервері. Без нього PDF чесно відмовляє, а не падає 500-ю. */
 export function chromePath(): string | null {
@@ -35,34 +43,46 @@ export function chromePath(): string | null {
 export class PdfUnavailable extends Error {}
 
 /**
- * Поля макета (10/11/12/11 мм) і друк фонів (темна смуга, сірі клітинки таблиці умов).
- * `.sigend` (білий спейсер 26 pt під підписами) — для браузерної нарізки html2canvas у макеті; у векторному
- * друку він лише виштовхував ПОРОЖНЮ останню сторінку, коли документ займав сторінку вщерть (заміряно
- * 30.09.2026: клієнтська разова — 4 сторінки, четверта біла). Від різаної печатки й далі стереже
- * `padding-bottom` і `break-inside:avoid` на `.sigs`.
+ * Поля «Б» (10/11/15/11 мм) і друк фонів (смуга, клітинки умов, картки реквізитів). `.sigend` (білий спейсер
+ * під підписами) — для браузерної нарізки html2canvas у макеті; у векторному друку він виштовхував ПОРОЖНЮ
+ * останню сторінку (заміряно 30.09.2026), тож ховаємо його й тут, хоч DOC_CSS v2 має для цього `@media print`.
  */
-export const PRINT_CSS = '<style>@page{size:A4;margin:10mm 11mm 12mm 11mm}'
+export const PRINT_CSS = '<style>@page{size:A4;margin:10mm 11mm 15mm 11mm}'
   + 'html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact}'
   + '.docfmt .sigend{display:none}</style>';
 
+/** Рядок для `content:"…"` у CSS: лапки й зворотні риски — екрановано, переноси — пробіл. */
+const cssStr = (t: string) => '"' + t.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]+/g, ' ') + '"';
+
 /**
- * Сторінка для друку: та сама `fullPageHTML`, плюс `PRINT_CSS` ПЕРЕД `</head>` — тобто ПІСЛЯ CSS документа.
- * Порядок не косметичний: `.docfmt .sigend` має ту саму специфічність, що й у `DOC_CSS`, і правило, вставлене
- * раніше, мовчки програвало (заміряно 30.09.2026: з ним — так само 4 сторінки). `height:0` теж не лікує —
- * лише `display:none` (заміряно: 4 → 3 сторінки, остання з текстом).
+ * Колонтитул як у `footerTemplate` пакета: ліворуч «<назва> № N», праворуч «сторінка X з Y»; Times, 8 px, сірий.
+ * Порожній `title` — без колонтитула.
  */
-export function printable(fullHtml: string): string {
-  return fullHtml.includes('</head>') ? fullHtml.replace('</head>', PRINT_CSS + '</head>') : PRINT_CSS + fullHtml;
+export function footerCss(title: string): string {
+  if (!title) return '';
+  const font = "font-family:'Times New Roman','Tinos','Liberation Serif',serif;font-size:8px;color:#7c8090;vertical-align:middle";
+  return `<style>@page{@bottom-left{content:${cssStr(title)};${font}}`
+    + `@bottom-right{content:"сторінка " counter(page) " з " counter(pages);${font}}}</style>`;
 }
 
-export async function htmlToPdf(fullHtml: string): Promise<Uint8Array> {
+/**
+ * Сторінка для друку: та сама `fullPageHTML`, плюс `PRINT_CSS` (і колонтитул) ПЕРЕД `</head>` — тобто ПІСЛЯ
+ * CSS документа. Порядок не косметичний: `.docfmt .sigend` має ту саму специфічність, що й у `DOC_CSS`, і
+ * правило, вставлене раніше, мовчки програвало (заміряно 30.09.2026).
+ */
+export function printable(fullHtml: string, footerTitle = ''): string {
+  const css = PRINT_CSS + footerCss(footerTitle);
+  return fullHtml.includes('</head>') ? fullHtml.replace('</head>', css + '</head>') : css + fullHtml;
+}
+
+export async function htmlToPdf(fullHtml: string, footerTitle = ''): Promise<Uint8Array> {
   const chrome = chromePath();
   if (!chrome) throw new PdfUnavailable('PDF на сервері не налаштовано (CONSTRUCTOR_CHROME_PATH). Word працює.');
   const dir = await mkdtemp(join(tmpdir(), 'ctor-pdf-'));
   try {
     const src = join(dir, 'doc.html');
     const out = join(dir, 'doc.pdf');
-    await writeFile(src, printable(fullHtml), 'utf8');
+    await writeFile(src, printable(fullHtml, footerTitle), 'utf8');
     await new Promise<void>((resolve, reject) => {
       execFile(chrome, [
         '--headless', '--no-sandbox', '--disable-gpu', '--no-pdf-header-footer', '--font-render-hinting=none',
@@ -74,3 +94,30 @@ export async function htmlToPdf(fullHtml: string): Promise<Uint8Array> {
     await rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
+
+/** Кількість сторінок у PDF Chromium (об'єкти /Type /Page, без /Pages) — як у пакеті. */
+export function countPdfPages(pdf: Uint8Array): number {
+  return (Buffer.from(pdf).toString('latin1').match(/\/Type\s*\/Page(?![s\w])/g) || []).length;
+}
+
+export interface RenderedPdf { pdf: Uint8Array; pages: number; dens: Density; overflow: boolean }
+export type PdfRender = (fullHtml: string, footerTitle: string) => Promise<Uint8Array>;
+
+/**
+ * PDF документа з автопідгонкою під 3 сторінки (рішення 14–15.10) — логіка пакета без змін: стартова щільність
+ * за типом (клієнтська d1, перевізницька dc), 4-та сторінка → крок щільніше до d95; основний — dm без підгонки;
+ * не влізло й так — віддаємо як є з `overflow: true`. `render` підміняється в гейтах (без браузера).
+ */
+export async function renderDocumentPdf(s: DocumentState, num: string, img: PrintImages, render: PdfRender = htmlToPdf): Promise<RenderedPdf> {
+  let out: RenderedPdf | null = null;
+  for (const dens of densSteps(s)) {
+    const pdf = await render(fullPageHTML(s, num, img, dens), footerTitle(s, num));
+    const pages = countPdfPages(pdf);
+    out = { pdf, pages, dens, overflow: s.doc !== 'main' && pages > MAX_PAGES };
+    if (s.doc === 'main' || pages <= MAX_PAGES) break;
+  }
+  return out!;
+}
+
+/** Текст лівої частини колонтитула — той самий, що `footerTemplate` пакета і `footer1.xml` у Word. */
+export const footerTitle = (s: DocumentState, num: string) => `${FOOT_TITLE[s.doc] || 'Договір'} № ${num}`;
