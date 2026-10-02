@@ -28,12 +28,12 @@ const CATS: Cat[] = [
        оплати й не відвантаження; кожна точка — чек саме за свій день / тиждень / місяць. */
     { key: "avg_check", block: "sales", label: "Середній чек", unit: "₴", hint: "виручка «успішно реалізовано» ÷ кількість таких угод — окремо за кожну точку (день, тиждень чи місяць — за «Кроком»); дата угоди — день переходу в «Успішно реалізовано», за Києвом (не дата оплати й не відвантаження)", seamHint: SEAM_CARS },
     { key: "revenue_success", block: "sales", label: "Дохід (успіх)", unit: "₴", hint: "успішні угоди (142) за датою закриття, signed" },
-    { key: "payment_received", block: "sales", label: "Оплата отримана", unit: "₴", hint: "оплата отримана ∪ успішно реалізовано, без подвоєння — на цих грошах стоїть план" },
+    { key: "payment_received", block: "sales", label: "Отримані кошти", unit: "₴", hint: "оплата отримана ∪ успішно реалізовано, без подвоєння — на цих грошах стоїть план" },
     { key: "cash_deals_sum", block: "sales", label: "Готівкові", unit: "₴" },
   ] },
   { key: "auto", icon: "🚚", label: "Авто", metrics: [
     { key: "cars_success", block: "sales", label: "Успішні", seamHint: SEAM_CARS },
-    { key: "cars_delivered", block: "sales", label: "Поставлені", hint: "company включає поставки поза 6 командами (~0.5%)", seamHint: SEAM_CARS },
+    { key: "cars_delivered", block: "sales", label: "Поставлені", hint: "за датою завантаження — те саме, що плитка «Відправлені авто»; company включає поставки поза 6 командами (~0.5%)", seamHint: SEAM_CARS },
   ] },
   { key: "leads", icon: "📈", label: "Ліди й канали", metrics: [
     { key: "ad_leads", block: "marketing", label: "Ліди з реклами" },
@@ -49,7 +49,7 @@ const CATS: Cat[] = [
     { key: "calls", block: "sales", label: "Результативні", hint: CALLS_HINT },
   ] },
   { key: "plan", icon: "🎯", label: "План / факт", metrics: [
-    { key: "plan_execution", block: "sales", label: "% виконання", unit: "%", monthOnly: true, hint: "received-факт ÷ план (payment_amount). Тижневих планів нема." },
+    { key: "plan_execution", block: "sales", label: "% виконання", unit: "%", monthOnly: true, hint: "отримані кошти ÷ місячний план, по місяцях; план тижня — на плитках угорі й лінією на графіку «Отримані кошти»" },
   ] },
   { key: "intl", icon: "🌍", label: "Напрямки", metrics: [
     // Кожен напрямок — unit-серія (scope_type='unit'). Історія з таблиці; CRM-обчислювачі
@@ -386,7 +386,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                         stroke={s.benchmark ? "#94a3b8" : color(i)} strokeWidth={s.benchmark ? 1.6 : i === 0 ? 2.4 : 1.8}
                         strokeDasharray={s.benchmark ? "6 4" : undefined} dot={false} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
                     ))}
-                    {/* 📈 Сходинки плану (ТЗ, блок 2, п.2) — для «Оплата отримана», тією ж кольоровою гамою, пунктиром. */}
+                    {/* 📈 Сходинки плану (ТЗ, блок 2, п.2) — для «Отримані кошти», тією ж кольоровою гамою, пунктиром. */}
                     {planVisible.map((pl) => {
                       const idx = seriesList.findIndex((s) => s.scopeKey === pl.scopeKey);
                       return <Line key={`plan-${pl.scopeKey}`} type="stepAfter" dataKey={`p${pl.scopeKey}`} name={`План · ${seriesList[idx]?.scopeName ?? pl.scopeKey}`}
@@ -417,7 +417,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                 </ResponsiveContainer>
               </div>
               <div style={{ fontSize: 11.5, color: MUTED, marginTop: 4 }}>
-                {SEAM_NOTE}{planVisible.length > 0 && effGran === "week" ? " План тижня на графіку — зафіксовані знімки Звіту без ручних цілей задачника (вони є в плитках і таблиці вище)." : ""}
+                {SEAM_NOTE}{planVisible.length > 0 && effGran === "week" ? " План тижня на графіку — те саме число, що на плитці: автоплан частин тижня + ручні цілі тімлідів." : ""}
               </div>
               {stat ? (
                 <div style={{ display: "flex", gap: 26, flexWrap: "wrap", paddingTop: 8, borderTop: "1px solid var(--border)", marginTop: 8, fontSize: 13 }}>
