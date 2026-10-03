@@ -4936,8 +4936,11 @@ export const fetchEmployees = async () => (await api.get<{ rows: EmployeeRow[]; 
 export type EmployeePatch = Partial<Pick<EmployeeRow, "full_name" | "position" | "team_label" | "phone" | "email" | "telegram" | "birth_date" | "hired_at" | "dismissed_at" | "dismiss_reason" | "note" | "status">>;
 export const updateEmployee = async (id: number, b: EmployeePatch) => (await api.patch<{ ok: true; changed: string[] }>(`/secrets/employees/${id}`, b)).data.changed;
 // 🚪 Звільнення у два кроки (21.09.2026) — `backend/src/core/offboarding.ts`.
-export const startDismissal = async (id: number, lastDay: string, reason: string) =>
-  (await api.post<{ status: "finishing"; managers: number }>(`/secrets/employees/${id}/dismiss`, { lastDay, reason })).data;
+// ⚠️ 409 з `needsConfirm` — сервер перепитує (людина активна в Kommo або поруч схожий запис); повтор з `confirmRisk`.
+export const startDismissal = async (id: number, lastDay: string, reason: string, confirmRisk = false) =>
+  (await api.post<{ status: "finishing"; managers: number }>(`/secrets/employees/${id}/dismiss`, { lastDay, reason, confirmRisk })).data;
+export const dismissNeedsConfirm = (e: unknown): boolean =>
+  !!(e as { response?: { status?: number; data?: { needsConfirm?: boolean } } })?.response?.data?.needsConfirm;
 export const finishDismissal = async (id: number) =>
   (await api.post<{ status: "dismissed"; accountOff: boolean }>(`/secrets/employees/${id}/dismiss/finish`)).data;
 export const revertDismissal = async (id: number) =>

@@ -53,17 +53,17 @@ test("#620 ЖИВИЙ SQL: звільнення у два кроки — «за�
   try {
     const conflict = (e: unknown) => (e as { status?: number }).status === 409;
     await assert.rejects(s.off.finishDismissal(s.db, s.hr, s.eMgr), conflict, "🔴 крок 2 без кроку 1 прийнято");
-    await s.off.startDismissal(s.db, s.hr, s.eMgr, { lastDay: "30.09.2026", reason: "власне бажання" });
+    await s.off.startDismissal(s.db, s.hr, s.eMgr, { lastDay: "30.09.2026", reason: "власне бажання", confirmRisk: true });
     assert.deepEqual(await emp(s, s.eMgr), { status: "finishing", d: "2026-09-30", r: "власне бажання" });
     assert.equal(await mws(s), "finishing", "🔴 менеджер не став «завершує»");
     assert.equal(await s.canLogin("nazar@uts.ua"), true, "🔴 «завершує» закрило вхід — людина ще доводить угоди");
-    await assert.rejects(s.off.startDismissal(s.db, s.hr, s.eMgr, { lastDay: "30.09.2026", reason: "ще раз" }), conflict, "🔴 крок 1 двічі");
+    await assert.rejects(s.off.startDismissal(s.db, s.hr, s.eMgr, { lastDay: "30.09.2026", reason: "ще раз", confirmRisk: true }), conflict, "🔴 крок 1 двічі");
     await s.off.finishDismissal(s.db, s.hr, s.eMgr);
     assert.equal((await emp(s, s.eMgr)).status, "dismissed");
     assert.equal(await mws(s), "dismissed", "🔴 менеджер не став «звільнений»");
     assert.equal(await s.canLogin("nazar@uts.ua"), false, "🔴 звільнений менеджер заходить");
     // Дзеркало: акаунт без картки менеджера закривається прапорцем, не станом.
-    await s.off.startDismissal(s.db, s.hr, s.eAcc, { lastDay: "2026-09-25", reason: "переїзд" });
+    await s.off.startDismissal(s.db, s.hr, s.eAcc, { lastDay: "2026-09-25", reason: "переїзд", confirmRisk: true });
     assert.equal(await s.canLogin("buh@uts.ua"), true);
     const r = await s.off.finishDismissal(s.db, s.hr, s.eAcc);
     assert.equal(r.accountOff, true);
@@ -92,7 +92,7 @@ test("#621 ЖИВИЙ SQL: «Повернути» — реєстр, стан м�
     const count = async () => (await s.c.query(`SELECT (SELECT count(*) FROM employee_secrets)::int + (SELECT count(*) FROM doc_files WHERE deleted_at IS NULL)::int AS n`)).rows[0].n as number;
     const before = await snap(), kept = await count();
     for (const id of [s.eMgr, s.eAcc]) {
-      await s.off.startDismissal(s.db, s.hr, id, { lastDay: "2026-09-30", reason: "скорочення" });
+      await s.off.startDismissal(s.db, s.hr, id, { lastDay: "2026-09-30", reason: "скорочення", confirmRisk: true });
       await s.off.finishDismissal(s.db, s.hr, id);
     }
     assert.equal(await count(), kept, "🔴 звільнення видалило записи сейфу чи документи");
@@ -101,7 +101,7 @@ test("#621 ЖИВИЙ SQL: «Повернути» — реєстр, стан м�
     assert.equal(await snap(), before, "🔴 «Повернути» не відновило стан до байта");
     assert.equal((await s.c.query(`SELECT count(*)::int n FROM employee_offboarding`)).rows[0].n, 0);
     // Повернення з кроку 1 — теж до байта, і вдруге повертати нічого.
-    await s.off.startDismissal(s.db, s.hr, s.eNo, { lastDay: "2026-09-30", reason: "x" });
+    await s.off.startDismissal(s.db, s.hr, s.eNo, { lastDay: "2026-09-30", reason: "x", confirmRisk: true });
     await s.off.revertDismissal(s.db, s.hr, s.eNo);
     assert.equal(await snap(), before, "🔴 повернення з «завершує» не до байта");
     await assert.rejects(s.off.revertDismissal(s.db, s.hr, s.eNo), (e: unknown) => (e as { status?: number }).status === 409);
@@ -120,9 +120,9 @@ test("#622 ЖИВИЙ SQL: під час звільнення форма й по
   try {
     const bad = (x: unknown) => (x as { status?: number }).status === 400;
     await assert.rejects(s.off.startDismissal(s.db, s.hr, s.eNo, { reason: "x" }), bad, "🔴 без дати прийнято");
-    await assert.rejects(s.off.startDismissal(s.db, s.hr, s.eNo, { lastDay: "2026-09-30", reason: "  " }), bad, "🔴 без причини прийнято");
+    await assert.rejects(s.off.startDismissal(s.db, s.hr, s.eNo, { lastDay: "2026-09-30", reason: "  ", confirmRisk: true }), bad, "🔴 без причини прийнято");
     await assert.rejects(s.off.startDismissal(s.db, s.mgrUser, s.eMgr, { lastDay: "2026-09-30", reason: "x" }), bad, "🔴 себе звільнив");
-    await s.off.startDismissal(s.db, s.hr, s.eNo, { lastDay: "2026-09-30", reason: "x" });
+    await s.off.startDismissal(s.db, s.hr, s.eNo, { lastDay: "2026-09-30", reason: "x", confirmRisk: true });
     await assert.rejects(e.updateEmployee(s.db, s.hr, s.eNo, { status: "active" }), (x: unknown) => (x as { status?: number }).status === 409, "🔴 форма повернула статус в обхід кнопок");
     await assert.rejects(e.updateEmployee(s.db, s.hr, s.eNo, { dismissed_at: "2026-10-05" }), (x: unknown) => (x as { status?: number }).status === 409);
     assert.deepEqual((await e.updateEmployee(s.db, s.hr, s.eNo, { position: "логіст" })).changed, ["position"], "дзеркало: решта полів редагується");
@@ -216,4 +216,87 @@ test("#624 ЗВІЛЬНЕННЯ: employee_offboarding відібрана в ai_r
   const sql = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "backend", "src", "db", "schema.sql"), "utf8");
   assert.ok(sql.indexOf("REVOKE ALL ON employee_offboarding FROM ai_readonly;") > sql.indexOf("CREATE TABLE IF NOT EXISTS employee_offboarding ("), "🔴 REVOKE немає або вище за CREATE");
   assert.match(readFileSync(path.join(import.meta.dirname, "..", "..", "..", "backend", "src", "ai", "metricTools.ts"), "utf8"), /"employee_offboarding",/, "🔴 немає у FORBIDDEN_TABLES");
+});
+
+/**
+ * #1340 — «ЗВІЛЬНИТИ…» ПЕРЕПИТУЄ, КОЛИ ЛЮДИНА АКТИВНА В KOMMO (03.10.2026). 02.10 HR звільнив справжній запис Яцика,
+ * прийнявши його за дубль: тімлід був активний у Kommo, і саме це мало зупинити. Без підтвердження — 409 із
+ * `needsConfirm` і назвою менеджера; з `confirmRisk` — звичайне звільнення. 🪞 Дзеркало: неактивний у Kommo без
+ * схожих записів — жодного зайвого питання.
+ */
+test("#1340 ЖИВИЙ SQL: «Звільнити…» перепитує, якщо менеджер активний у Kommo; з підтвердженням — звільняє; неактивного — не перепитує", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  try {
+    const needsConfirm = (e: unknown) => (e as { status?: number; needsConfirm?: boolean }).status === 409
+      && (e as { needsConfirm?: boolean }).needsConfirm === true && /Шевчук Назар/.test((e as Error).message);
+    await assert.rejects(s.off.startDismissal(s.db, s.hr, s.eMgr, { lastDay: "30.09.2026", reason: "власне бажання" }), needsConfirm,
+      "🔴 активного в Kommo менеджера звільнено без перепитування");
+    assert.equal((await emp(s, s.eMgr)).status, "active", "🔴 відмова все одно щось записала");
+    await s.off.startDismissal(s.db, s.hr, s.eMgr, { lastDay: "30.09.2026", reason: "власне бажання", confirmRisk: true });
+    assert.equal((await emp(s, s.eMgr)).status, "finishing", "🔴 з підтвердженням не звільняє");
+    await s.c.query(`UPDATE managers SET is_active = false WHERE id = 7`);
+    await s.off.revertDismissal(s.db, s.hr, s.eMgr);
+    await s.off.startDismissal(s.db, s.hr, s.eMgr, { lastDay: "30.09.2026", reason: "власне бажання" });
+    assert.equal((await emp(s, s.eMgr)).status, "finishing", "🔴 неактивного в Kommo без схожих записів перепитує — зайве питання");
+  } finally { await s.done(); }
+});
+
+/**
+ * #1340b — ПОРУЧ СХОЖИЙ ЗАПИС: короткий «Дмитро Сергійович» (привʼязаний до менеджера «Яцик Дмитро») і повний
+ * «Яцик Дмитро Сергійович» без привʼязки — звільнення короткого перепитує й називає повний. Навіть коли в Kommo
+ * людина вже неактивна: питання про дубль окреме від питання про Kommo.
+ */
+test("#1340b ЖИВИЙ SQL: поруч схожий незвільнений запис — «Звільнити…» перепитує й називає його", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  try {
+    await s.c.query(`INSERT INTO managers (id, name, kommo_user_id, is_active) VALUES (8, 'Яцик Дмитро', 800, false)`);
+    const short = (await s.c.query(`INSERT INTO employees (full_name, import_key, manager_id) VALUES ('Дмитро Сергійович', 'дмитро сергійович', 8) RETURNING id`)).rows[0].id;
+    await s.c.query(`INSERT INTO employees (full_name, import_key) VALUES ('Яцик Дмитро Сергійович', 'яцик дмитро сергійович')`);
+    await assert.rejects(s.off.startDismissal(s.db, s.hr, short, { lastDay: "2026-10-02", reason: "дубль" }),
+      (e: unknown) => (e as { needsConfirm?: boolean }).needsConfirm === true && /Яцик Дмитро Сергійович/.test((e as Error).message),
+      "🔴 звільнення привʼязаного запису при схожому дублі не перепитано");
+  } finally { await s.done(); }
+});
+
+/**
+ * #1341 — ЗІСТАВЛЕННЯ ІМПОРТУ: рядок «Прізвище Імʼя По-батькові» дописує прізвище в наявний запис без прізвища, якщо
+ * однозначно. Доказ — привʼязаний менеджер/акаунт з тим самим прізвищем+імʼям; без привʼязки — лише єдиний збіг.
+ */
+test("#1341 ІМПОРТ: запис без прізвища — та сама людина лише за доказом привʼязки або при єдиному збігу", async () => {
+  const { adoptionsFor } = await import("./employees.js");
+  const { nameKey, shortKey } = await import("./employeeImport.js");
+  const row = (n: string) => ({ key: nameKey(n), short: shortKey(n) });
+  const ex = (id: number, n: string, linked: string[] = []) => ({ id, import_key: nameKey(n), full_name: n, linked });
+  const base = [ex(36, "Дмитро Сергійович", ["Яцик Дмитро", "Дмитро Сергійович"]), ex(279, "Шморгун Дмитро Сергійович")];
+  assert.equal(adoptionsFor([row("Яцик Дмитро Сергійович")], base).get(nameKey("Яцик Дмитро Сергійович"))?.id, 36,
+    "🔴 привʼязаний до «Яцик Дмитро» запис не впізнано — імпорт створить дубль, як 28.09");
+  assert.equal(adoptionsFor([row("Петренко Дмитро Сергійович")], base).size, 0, "🔴 чуже прізвище прийнято без доказу");
+  assert.equal(adoptionsFor([row("Коваль Олена Петрівна")], [ex(5, "Олена Петрівна")]).get(nameKey("Коваль Олена Петрівна"))?.id, 5,
+    "🔴 єдиний збіг без привʼязки не впізнано");
+  assert.equal(adoptionsFor([row("Коваль Олена Петрівна")], [ex(5, "Олена Петрівна"), ex(6, "Бойко Олена Петрівна")]).size, 0,
+    "🔴 «Олена Петрівна» прийнято за Коваль, хоча в реєстрі є й Бойко з тим самим імʼям");
+  assert.equal(adoptionsFor([row("Коваль Олена Петрівна"), row("Мороз Олена Петрівна")], [ex(5, "Олена Петрівна")]).size, 0,
+    "🔴 один запис без прізвища віддано одному з двох рядків файлу");
+  assert.equal(adoptionsFor([row("Олена Петрівна")], [ex(5, "Олена Петрівна")]).size, 0, "🔴 рядок без прізвища щось «доповнив»");
+});
+
+/**
+ * #1341b — ІМПОРТ НА ЖИВОМУ SQL: після імпорту рядка «Яцик Дмитро Сергійович» у реєстрі ОДИН запис — той самий,
+ * привʼязаний, тепер із прізвищем; нового запису немає. Повторний імпорт його ж і оновлює.
+ */
+test("#1341b ЖИВИЙ SQL: імпорт дописує прізвище в привʼязаний запис і не створює дубль", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  try {
+    await s.c.query(`INSERT INTO managers (id, name, kommo_user_id) VALUES (8, 'Яцик Дмитро', 800)`);
+    const short = (await s.c.query(`INSERT INTO employees (full_name, import_key, manager_id) VALUES ('Дмитро Сергійович', 'дмитро сергійович', 8) RETURNING id`)).rows[0].id;
+    const e = await import("./employees.js");
+    const csv = "ПІБ,Посада\nЯцик Дмитро Сергійович,Тімлід\n";
+    const c1 = await e.commitImport(s.db, null, s.hr, csv, ["full_name", "position"], "active");
+    assert.equal(c1.created, 0, "🔴 імпорт створив новий запис замість дописати прізвище");
+    const rows = (await s.c.query(`SELECT id, full_name, manager_id, position FROM employees WHERE full_name ILIKE '%Дмитро Сергійович%'`)).rows;
+    assert.deepEqual(rows, [{ id: short, full_name: "Яцик Дмитро Сергійович", manager_id: 8, position: "Тімлід" }],
+      "🔴 після імпорту не рівно один привʼязаний запис із повним ПІБ");
+    const c2 = await e.commitImport(s.db, null, s.hr, csv, ["full_name", "position"], "active");
+    assert.deepEqual([c2.created, c2.updated], [0, 1], "🔴 повторний імпорт не знайшов той самий запис");
+  } finally { await s.done(); }
 });
