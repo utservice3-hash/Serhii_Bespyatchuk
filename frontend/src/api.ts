@@ -5233,13 +5233,19 @@ export const archiveBaEquipment = async (id: number, archived: boolean) => { awa
 export const issueBaEquipment = async (id: number, p: { employeeId: number; issuedOn: string }) => (await api.post<{ issueId: number }>(`/ba/equipment/${id}/issue`, p)).data.issueId;
 export const returnBaIssue = async (issueId: number, returnedOn: string) => { await api.post(`/ba/issues/${issueId}/return`, { returnedOn }); };
 export const undoReturnBaIssue = async (issueId: number) => { await api.post(`/ba/issues/${issueId}/undo-return`); };
+export interface BaTtnCounts { needed: number; attached: number; mismatched: number; unsynced: number; present: number; pct: number | null }
 export interface BaTtnRow {
-  managerId: number; name: string; active: boolean; dealsNow: number; kommoUrl: string | null;
-  saved: { dealsNeeded: number; ttnPresent: number; note: string; pct: number | null; checkedAt: string; checkedBy: string | null } | null;
+  managerId: number; name: string; active: boolean; live: BaTtnCounts; kommoUrl: string | null;
+  saved: { dealsNeeded: number; ttnAttached: number | null; routeMismatch: number | null; ttnPresent: number; note: string; pct: number | null; checkedAt: string; checkedBy: string | null } | null;
   history: { month: string; pct: number | null }[];
 }
+export interface BaTtnDeal { kommoId: number; name: string; client: string; closedOn: string; ttnFiles: number | null; mismatch: { note: string } | null; url: string }
 export const fetchBaTtn = async (month: string) => (await api.get<{ month: string; rows: BaTtnRow[] }>("/ba/ttn", { params: { month } })).data;
-export const saveBaTtn = async (month: string, managerId: number, p: { ttnPresent: number; note: string }) => { await api.put(`/ba/ttn/${month}/${managerId}`, p); };
+export const fetchBaTtnDeals = async (month: string, managerId: number) => (await api.get<{ deals: BaTtnDeal[] }>(`/ba/ttn/${month}/${managerId}/deals`)).data.deals;
+export const setBaTtnMismatch = async (kommoId: number, note: string) => { await api.put(`/ba/ttn/deals/${kommoId}/mismatch`, { note }); };
+export const clearBaTtnMismatch = async (kommoId: number) => { await api.delete(`/ba/ttn/deals/${kommoId}/mismatch`); };
+/** «Зафіксувати місяць»: знімок трьох чисел цієї миті (05.10.2026 — «наявні» вже не вводяться руками). */
+export const saveBaTtn = async (month: string, managerId: number, p: { note: string }) => { await api.put(`/ba/ttn/${month}/${managerId}`, p); };
 
 /** Кнопка «Проблемний клієнт»: хто може створити / відкрити і де претензія вже є. */
 export interface ReceivableClaimsState { canCreate: boolean; canOpen: boolean; open: { clientKey: string; claimId: number }[] }
@@ -5251,8 +5257,11 @@ export const createReceivableClaim = async (clientKey: string) =>
 // Дзеркало `routes/finance.ts`. Доступ — вкладка `finance`; запис — право `edit_finance`,
 // погодження плану — `approve_finance_plan`. Що дозволено, каже сервер (`canEdit`/`canApprove`).
 export type FinRowState = "empty" | "noplan" | "nofact" | "over" | "ok";
+/** Розділ статті → місячний рядок «Операційних витрат» у «Тиждень і місяць» (прохід 2в, 05.10.2026). */
+export type FinSection = "commercial" | "general" | "admin" | "payroll";
+export const FIN_SECTIONS: Record<FinSection, string> = { commercial: "Комерційні", general: "Загальні", admin: "Адміністративні", payroll: "ЗП + Податки на ЗП" };
 export interface FinItem {
-  id: number; name: string; offFrom: string | null; active: boolean;
+  id: number; name: string; section: FinSection | null; offFrom: string | null; active: boolean;
   plan: number | null; fact: number | null; note: string | null; state: FinRowState; dataMonths: number;
 }
 export interface FinGroup { id: number; name: string; items: FinItem[] }
@@ -5280,6 +5289,9 @@ export const createFin = async (kind: FinKind, body: Record<string, unknown>) =>
 export const updateFin = async (kind: FinKind, id: number, body: Record<string, unknown>) => { await api.patch(`/finance/${kind}s/${id}`, body); };
 export const deleteFin = async (kind: FinKind, id: number, confirm = false) => { await api.delete(`/finance/${kind}s/${id}`, { params: confirm ? { confirm: 1 } : {} }); };
 export const restoreFin = async (kind: FinKind, id: number) => { await api.post("/finance/restore", { kind, id }); };
+/** Розділ кільком статтям одразу; відповідь — що було (для «Повернути»). */
+export const setFinItemSections = async (items: { id: number; section: FinSection | null }[]) =>
+  (await api.put<{ previous: { id: number; section: FinSection | null }[] }>("/finance/item-sections", { items })).data;
 export const setFinItemOff = async (id: number, off: boolean) => (await api.post<{ offFrom: string | null }>(`/finance/items/${id}/off`, { off })).data;
 export const saveFinValues = async (month: string, cells: FinCell[]) => (await api.put<{ changed: number }>("/finance/values", { month, cells })).data;
 export const saveFinNote = async (itemId: number, month: string, text: string) => { await api.put("/finance/notes", { itemId, month, text }); };
@@ -5465,7 +5477,8 @@ export async function svExportCsv(id: number): Promise<Blob> {
 
 // ── 💰 Фінанси · «Тиждень і місяць» (прохід 2а, 01.10.2026) ─────────────────────
 export type FinPeriodKind = "week" | "month";
-export type FinKpiRefSource = "delivered_income" | "delivered_expense" | "unloaded_income" | "unloaded_expense" | "receivables";
+export type FinKpiRefSource = "delivered_income" | "delivered_expense" | "unloaded_income" | "unloaded_expense" | "receivables"
+  | "opex_commercial" | "opex_general" | "opex_admin" | "opex_payroll" | "receivables_fx";
 export interface FinKpi {
   id: number; name: string; unit: "UAH" | "USD" | "EUR"; kind: "manual" | "sum" | "diff" | "auto"; argA: number | null; argB: number | null;
   refSource: FinKpiRefSource | null; offFrom: string | null; active: boolean;
@@ -5479,6 +5492,10 @@ export interface FinKpiPeriod {
   kind: FinPeriodKind; start: string; end: string; prev: string; label: string; prevLabel: string; current: string;
   sections: { id: number; name: string; kpis: FinKpi[] }[];
   closed: { at: string; by: string | null; note: string | null } | null; importedInterim: boolean; canEdit: boolean;
+  /** Місяць: статті «План/факт» без розділу, що мають факт цього місяця, — їхні гроші не в жодному рядку. */
+  opexUnassigned: { items: number; fact: number } | null;
+  /** Валютна дебіторка з 1С на кінець періоду: Σ у гривні, Σ у валюті (різні валюти разом), рядки з нульовим ₴. */
+  receivablesFx: { uah: number; val: number; zeroUah: number; at: string } | null;
 }
 export interface FinKpiCard {
   id: number; name: string; unit: string; kind: string; refSource: string | null; offFrom: string | null; deleted: boolean; section: string;
