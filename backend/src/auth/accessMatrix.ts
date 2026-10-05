@@ -1215,6 +1215,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/settings/teams", cls: "deny-only",
     allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
+  // 🗓 Виправити дату останнього переходу між командами (05.10.2026) — та сама межа manage_users.
+  { method: "PATCH", path: "/api/settings/team-moves/:managerId/last", cls: "deny-only",
+    allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "PUT", path: "/api/settings/ad-plan", cls: "deny-only",
     allow: [], deny: ["kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/settings/users/:id/reactivate", cls: "deny-only",

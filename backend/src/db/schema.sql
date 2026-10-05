@@ -5302,3 +5302,26 @@ CREATE TABLE IF NOT EXISTS missed_call_skips (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (manager_id, client_phone, kday)
 );
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🛡 ЖУРНАЛ ВІДХИЛЕНИХ СПАМ-ЗАЯВОК (слово Романа 05.10.2026; `jobs/declineSpamForms.ts`).
+-- Відхилення в Kommo безповоротне, а серверний лог живе добу — тож на «скільки відхилено за тиждень» відповісти
+-- не було з чого. Рядок пишеться ДО відхилення (стан `pending`), після — `declined` або `failed`. Імена, пошти
+-- й IP — персональні дані: REVOKE після CREATE, дзеркало у `FORBIDDEN_TABLES`. Тримає #1362c.
+-- ⚠️ revert коду таблицю не прибирає; відхилень до 05.10.2026 тут немає й не буде.
+CREATE TABLE IF NOT EXISTS kommo_declined_forms (
+  uid          TEXT PRIMARY KEY,
+  received_at  TIMESTAMPTZ,
+  declined_at  TIMESTAMPTZ,
+  state        TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','declined','failed')),
+  error        TEXT,
+  form_name    TEXT,
+  form_page    TEXT,
+  ip           TEXT,
+  contact_name TEXT,
+  email        TEXT,
+  raw          JSONB,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_kommo_declined_forms_at ON kommo_declined_forms (declined_at);
+REVOKE ALL ON kommo_declined_forms FROM ai_readonly;
