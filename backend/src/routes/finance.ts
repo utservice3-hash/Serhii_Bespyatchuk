@@ -8,7 +8,7 @@ import {
 } from "../core/finance.js";
 import {
   loadPeriod, kpiCard, saveKpiValues, setKpiNote, setPeriodClosed, createSection, renameSection, deleteSection,
-  createKpi, updateKpi, setKpiOff, deleteKpi, restoreKpiThing, autoActive, opexMonth, receivablesFxAt, bankTotals,
+  createKpi, updateKpi, setKpiOff, deleteKpi, restoreKpiThing, autoActive, opexMonth, receivablesFxAt, bankTotals, periodStart, shiftPeriod,
 } from "../core/financeKpi.js";
 import { fmRefsFor } from "../core/financeKpiRefs.js";
 
@@ -165,7 +165,10 @@ financeRouter.get("/kpi", async (req, res) => {
   try {
     onlyFinance(req);
     const refs = await refsFor(req.query.kind, req.query.p);
-    const p = await loadPeriod(pool as unknown as Db, req.query.kind, req.query.p, refs);
+    // Стовпець «минулий» — теж із джерел (тижні не фіксуються), а не збережене число таблиці.
+    const cur = periodStart(req.query.kind, req.query.p);
+    const prevRefs = await refsFor(cur.kind, shiftPeriod(cur.kind, cur.start, -1));
+    const p = await loadPeriod(pool as unknown as Db, req.query.kind, req.query.p, refs, new Date(), prevRefs);
     // Друге число до предиката (правило 4): статті без розділу з фактом місяця і деталі валютної дебіторки.
     const opex = p.kind === "month" && autoActive(p.kind, p.start) ? (await opexMonth(pool as unknown as Db, p.start)).unassigned : null;
     const fx = autoActive(p.kind, p.start) ? await receivablesFxAt(pool as unknown as Db, p.end, new Date()) : null;
