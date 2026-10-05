@@ -46,29 +46,6 @@ const stripComments = (s: string): string =>
 
 const WEEK = { from: "2026-08-17", to: "2026-08-23" };
 
-/**
- * #141 — ФАКТ ЗВІТУ БЕРЕТЬСЯ З КАНАЛУ, А НЕ З РЕЄСТРУ.
- *
- * Перевіряється ДЖЕРЕЛО в коді роута, бо саме підміна джерела і є зміною: число
- * на екрані однакове в обох випадках рівно доти, доки реєстр не просів.
- *
- * 🧨 САБОТАЖ (виконано): повернути `lgM.get(m.id)?.deals` у рядок факту → червоніє.
- */
-test("#141 лідген-факт Звіту рахується за каналом (lead_channel), не за реєстром", async () => {
-  const src = stripComments(readDash());
-
-  const line = /leadgen:\s*\{\s*fact:([^,]+),/.exec(src)?.[1] ?? "";
-  assert.ok(line, "🔴 не знайдено рядок лідген-факту — гейт втратив предмет");
-  assert.match(line, /splitM\.get\(m\.id\)\?\.leadgenCount/,
-    "🔴 факт не з канального виразу — повернулась залежність від аркуша лідоген-бота");
-  assert.doesNotMatch(line, /lgM/,
-    "🔴 факт знову читає реєстр (`leadgen_touch`), який сліпий до 15.06.2026 і обвалився з 10.08");
-
-  // Мертвий виклик реєстру не має лишитись у роуті: живий виклик до джерела,
-  // якого ніхто не читає, з часом читається як робочий (урок мертвого `expected`).
-  assert.doesNotMatch(src, /metrics\.leadgenByManager\(scope\)/,
-    "🔴 у /report-plan лишився виклик `leadgenByManager` — зайвий запит і оманливий слід");
-});
 
 /**
  * #141b — 🪞 ДВА КАНАЛЬНІ ВИРАЗИ — ЦЕ ОДНЕ ОЗНАЧЕННЯ, А НЕ ДВА СХОЖІ.
@@ -107,25 +84,6 @@ test("#141b канальний факт == канальний знаменник
       `🔴 за тиждень ${WEEK.from}..${WEEK.to} канальних лідген-угод нуль — перевіряти нема чого`);
   });
 
-/**
- * #142 — ФАКТ ЗАДАЧІ == ФАКТ ЗВІТУ.
- *
- * 🔴 Задачник і Звіт задумані як ОДНЕ число (принцип «єдине джерело факту KPI»).
- * Поки факт Звіту переїжджав на канал, `evaluateKpiTasks` міг лишитись на реєстрі —
- * і задача рахувала б одне, а екран поруч інше. Саме так і виглядав вихідний баг,
- * лише з іншого боку: ціль 15 проти факту 1.
- *
- * 🧨 САБОТАЖ (виконано): повернути `leadgenByManager` у `factFor` → червоніє.
- */
-test("#142 факт KPI-задачі бере те саме канальне джерело, що й Звіт", async () => {
-  const job = stripComments(readKpiJob());
-  const branch = /case\s+"leadgen_count":[\s\S]{0,240}?;/.exec(job)?.[0] ?? "";
-  assert.ok(branch, "🔴 не знайдено гілку `leadgen_count` — гейт втратив предмет");
-  assert.match(branch, /createdSplitByManager/,
-    "🔴 задача рахує лідген НЕ канальним виразом — розійдеться зі Звітом");
-  assert.doesNotMatch(branch, /leadgenByManager/,
-    "🔴 у задачі повернувся реєстр — факт задачі й факт Звіту стануть різними числами");
-});
 
 /**
  * #142b — ФАКТ БІЛЬШЕ НЕ ЗАЛЕЖИТЬ ВІД `leadgen_touch`.
@@ -198,4 +156,25 @@ test("#143 знаменник лайфтайм-конверсії РПК — к�
   assert.ok(fn, "🔴 не знайдено `reachedAutoByManager`");
   assert.match(fn, /lead_channel\s*=\s*'leadgen'/,
     "🔴 чисельник більше не канальний — вирівнювання пішло в бік реєстру, а не каналу");
+});
+
+/**
+ * #1259 — «ПРИЙНЯТО ЛІДОГЕН»: ЗВІТ І ЗАДАЧА KPI — З ОДНІЄЇ ФУНКЦІЇ, І ЦЕ НЕ КАНАЛ (рішення власника 05.10.2026).
+ * Канал `lead_channel` губив ~60% угод, створених Kommo з передачі лідгена (вересень 182 проти 451); факт тепер —
+ * `metrics.leadgenAcceptedByManager` (звʼязок «створено з угоди Продзвону»). Звіт і задачник мусять мати ОДНЕ число:
+ * інакше задача рахує одне, а екран поруч — інше. Наступник `#141` і `#142` (зняті: змінилось твердження про джерело).
+ * 🧨 САБОТАЖ: у `factFor` повернути `createdSplitByManager(scope))?.leadgenCount` → червоніє.
+ */
+test("#1259 «ПРИЙНЯТО ЛІДОГЕН»: Звіт і задача KPI — з leadgenAcceptedByManager, не з каналу", () => {
+  const src = stripComments(readDash());
+  const line = /leadgen:\s*\{\s*fact:([^,]+),/.exec(src)?.[1] ?? "";
+  assert.ok(line, "🔴 не знайдено рядок лідген-факту — гейт втратив предмет");
+  assert.match(line, /lgAcceptedM\.get\(m\.id\)/, "🔴 факт Звіту не з leadgenAcceptedByManager");
+  assert.doesNotMatch(line, /leadgenCount/, "🔴 факт Звіту знову з каналу lead_channel");
+  assert.match(src, /const lgAcceptedP = metrics\.leadgenAcceptedByManager\(scope\);/, "🔴 /report-plan не кличе leadgenAcceptedByManager зі своїм скоупом");
+  const job = stripComments(readKpiJob());
+  const branch = /case\s+"leadgen_count":[\s\S]{0,240}?;/.exec(job)?.[0] ?? "";
+  assert.ok(branch, "🔴 не знайдено гілку `leadgen_count` — гейт втратив предмет");
+  assert.match(branch, /leadgenAcceptedByManager\(scope\)/, "🔴 задача KPI рахує лідоген НЕ тим джерелом, що Звіт");
+  assert.doesNotMatch(branch, /createdSplitByManager|leadgenByManager/, "🔴 у задачі KPI лишилось старе джерело");
 });

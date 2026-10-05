@@ -8960,6 +8960,9 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // ФАКТ per-manager з ЯДРА (ті самі функції, що задачник).
   // #4 ср.чек Звіту = пул `reportChain` (угоди ЗАРАЗ у «авто працює→оплата» ⊎ виграні
   // за період) — signed Σ÷count per manager; команда/відділ = Σsum÷Σcount (glance нижче).
+  // 🤝 «Прийнято лідоген» — угоди, які Kommo створила менеджеру з передачі лідгена (рішення 05.10.2026, `#1259`).
+  // Стартує паралельно з рештою запитів; чекаємо там, де він потрібен.
+  const lgAcceptedP = metrics.leadgenAcceptedByManager(scope);
   const [recv, succ, paid, disp, ads, conv, avgc, expZone, split, expDays, convAd, convLg, recvKl, expKl] = await Promise.all([
     money.receivedByMgr(scope), money.successByMgr(scope), money.paidOnlyByMgr(scope),
     metrics.dispatchedByManager(scope),
@@ -9011,6 +9014,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   const jamM = new Map(jamRows.map((r) => [r.managerId, r]));
   const noDateM = new Map(noDateRows.map((r) => [r.managerId, r]));
   const splitM = new Map(split.map((s) => [s.managerId, s]));
+  const lgAcceptedM = new Map((await lgAcceptedP).map((x) => [x.managerId, x.count]));
   // #1 круг оплати: факт(received) = успішно(142) ⊎ оплачено(етап 9). Per manager → Σ==факт.
   const succM = new Map(succ.map((x) => [x.managerId, x])), paidM = new Map(paid.map((x) => [x.managerId, x]));
   // Бакетуємо планові оплати у поточний/наступний календарний місяць (за київським сьогодні).
@@ -9367,7 +9371,9 @@ dashboardRouter.get("/report-plan", async (req, res) => {
          * лип 571→637, сер 166→339. До обвалу канал і реєстр розходились на 7-20%,
          * тож це не нова величина, а та сама без сліпоти. Тримають `#141`/`#141b`.
          */
-        leadgen: { fact: splitM.get(m.id)?.leadgenCount ?? 0, target: Math.round(pl.leadgen_count ?? 0) },
+        // 🤝 ЗМІНЕНО 05.10.2026: не канал, а зв'язок Kommo «створено з угоди Продзвону» — канал губив ~60% угод
+        // (вересень: 182 проти 451). Те саме джерело, що й у задачі KPI (`#1259`).
+        leadgen: { fact: lgAcceptedM.get(m.id) ?? 0, target: Math.round(pl.leadgen_count ?? 0) },
         dispatch: { fact: dispM.get(m.id)?.deals ?? 0, target: Math.round(pl.dispatch_count ?? 0), revenue: Math.round(dispM.get(m.id)?.revenue ?? 0),
           // Розбивка авто за джерелом (постійний / лідоген / реклама / невизн). Σ = fact.
           repeat: dispM.get(m.id)?.repeat ?? 0, leadgen: dispM.get(m.id)?.leadgen ?? 0, ad: dispM.get(m.id)?.ad ?? 0, undef: dispM.get(m.id)?.undef ?? 0 },
