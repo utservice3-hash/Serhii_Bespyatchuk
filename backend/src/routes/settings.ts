@@ -15,7 +15,7 @@ import { loginEnabledFor } from "../core/managerState.js";
 import { writeAudit } from "../db/audit.js";
 import { parseKey } from "../core/secretBox.js";
 import { storeDashboardPassword } from "../core/teamVault.js";
-import { recordTeamMove, refreshTeamMoves } from "../core/teamAt.js";
+import { recordTeamMove, refreshTeamMoves, redateLastTeamMove } from "../core/teamAt.js";
 import type { Db as SecretsDb } from "../core/secrets.js";
 
 export const settingsRouter = Router();
@@ -753,6 +753,44 @@ settingsRouter.post("/teams", async (req, res) => {
   const r = await pool.query<{ id: number }>(`INSERT INTO teams (name, kommo_group_id) VALUES ($1, NULL) RETURNING id`, [name]);
   await writeAudit({ ...audit(req), action: "team.create", targetType: "team", targetId: String(r.rows[0].id), targetLabel: name });
   res.status(201).json({ id: r.rows[0].id, name });
+});
+
+/**
+ * 🗓 Виправити дату ОСТАННЬОГО переходу менеджера між командами (05.10.2026). Інакше помилкову дату
+ * не поправити ніяк: той самий вибір команди переходу не пише, а «з CRM» віддає людину синку.
+ * Правила — `core/teamAt.redateLastTeamMove`. Стоїть ПІСЛЯ `post("/teams")` свідомо: `#709c` читає
+ * обробник PUT зрізом до `post("/teams")`, і чужий `UPDATE` у тому зрізі послабив би гейт.
+ */
+settingsRouter.patch("/team-moves/:managerId/last", async (req, res) => {
+  if (!requireManageUsers(req, res)) return;
+  const managerId = Number(req.params.managerId);
+  if (!Number.isInteger(managerId) || managerId <= 0) return res.status(400).json({ error: "managerId: число" });
+  const effectiveFrom = String(req.body?.effectiveFrom ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom) || Number.isNaN(Date.parse(effectiveFrom + "T00:00:00Z"))) {
+    return res.status(400).json({ error: "effectiveFrom: дата YYYY-MM-DD" });
+  }
+  const mgr = (await pool.query<{ name: string }>(`SELECT name FROM managers WHERE id = $1`, [managerId])).rows[0];
+  if (!mgr) return res.status(404).json({ error: "Менеджера немає" });
+  const client = await pool.connect();
+  let r: Awaited<ReturnType<typeof redateLastTeamMove>>;
+  try {
+    await client.query("BEGIN");
+    r = await redateLastTeamMove(client, { managerId, effectiveFrom, today: kyivToday(), setBy: req.auth?.userId ?? null });
+    await client.query(r.kind === "updated" ? "COMMIT" : "ROLLBACK");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+  if (r.kind === "rejected") return res.status(400).json({ error: `Дату не змінено: ${r.reason}` });
+  if (r.kind === "same") return res.json({ ok: true, changed: false, effectiveFrom });
+  await refreshTeamMoves(pool); // звіти мусять побачити нову дату одразу
+  const tn = async (id: number | null) => id == null ? "без команди"
+    : ((await pool.query<{ name: string }>(`SELECT name FROM teams WHERE id = $1`, [id])).rows[0]?.name ?? `Команда #${id}`);
+  await writeAudit({ ...audit(req), action: "manager.team_move_redate", targetType: "manager",
+    targetId: String(managerId), targetLabel: `${mgr.name}: перехід ${await tn(r.fromTeamId)} → ${await tn(r.toTeamId)} — дата ${r.oldFrom} → ${r.effectiveFrom}` });
+  res.json({ ok: true, changed: true, oldFrom: r.oldFrom, effectiveFrom: r.effectiveFrom });
 });
 
 settingsRouter.get("/audit", async (req, res) => {

@@ -5107,6 +5107,12 @@ export async function setTeamOverride(kommoUserId: string, body: { mode: "crm" |
   const { data } = await api.put<{ ok: true; appliedNow: boolean; effectiveFrom: string | null }>(`/settings/team-overrides/${kommoUserId}`, body);
   return data;
 }
+/** Виправити дату ОСТАННЬОГО переходу між командами (05.10.2026). `changed:false` — дата та сама. */
+export async function setTeamMoveDate(managerId: number, effectiveFrom: string) {
+  const { data } = await api.patch<{ ok: true; changed: boolean; oldFrom?: string; effectiveFrom: string }>(
+    `/settings/team-moves/${managerId}/last`, { effectiveFrom });
+  return data;
+}
 export async function createDashboardTeam(name: string): Promise<{ id: number; name: string }> {
   const { data } = await api.post<{ id: number; name: string }>("/settings/teams", { name });
   return data;

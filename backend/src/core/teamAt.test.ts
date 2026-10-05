@@ -347,3 +347,88 @@ test("#1361 БЕЗ ПЕРЕХОДІВ: план, гроші, конверсії,
     await x.sql.refreshTeamMoves(x.c);
   }
 });
+
+// ── 🗓 ВИПРАВЛЕННЯ ДАТИ ПЕРЕХОДУ (05.10.2026) — привід: Хомік записалась «з 05.10» замість 01.10 ──────
+const T31 = "2026-10-31"; // «сьогодні» фікстури — константою, щоб гейт не залежав від календаря
+
+test("#1362 ЖИВИЙ SQL: нова дата останнього переходу пересуває гроші рівно на дні між датами; Σ відділу та сама", async (t) => {
+  const x = await db(); if ("skip" in x) return t.skip(x.skip);
+  const P = { from: "2026-09-01", to: "2026-10-31" };
+  const split = async () => {
+    const b = await x.money.receivedByTeam(P);
+    return { y: b.find((r) => r.teamId === 5)?.revenue ?? 0, none: b.find((r) => r.teamId === null)?.revenue ?? 0,
+      total: (await x.money.receivedMoney(P)).revenue };
+  };
+  const redate = async (ef: string) => {
+    await x.c.query("BEGIN");
+    const r = await x.sql.redateLastTeamMove(x.c, { managerId: 1, effectiveFrom: ef, today: T31 });
+    await x.c.query("COMMIT");
+    await x.sql.refreshTeamMoves(x.c);
+    return r;
+  };
+  const base = await split();
+  assert.deepEqual(base, { y: 150, none: 30, total: 187 }, "🔴 фікстура не та — перевіряти нема чого");
+  try {
+    // Пізніше на день: угода 01.10 (30 ₴) повертається в команду, з якої людина ще не пішла.
+    const later = await redate("2026-10-02");
+    assert.equal(later.kind, "updated", "🔴 дату не змінено");
+    assert.deepEqual(await split(), { y: 180, none: 0, total: 187 }, "🔴 угода 01.10 не повернулась у команду Яцика (знімок не оновлено?)");
+    // Раніше на день: угода 30.09 (100 ₴) іде за людиною «без команди». Обидва боки межі.
+    assert.equal((await redate("2026-09-30")).kind, "updated");
+    assert.deepEqual(await split(), { y: 50, none: 130, total: 187 }, "🔴 угода 30.09 лишилась у старій команді після переносу дати раніше");
+    assert.equal((await redate("2026-09-30")).kind, "same", "🔴 та сама дата читається як зміна");
+  } finally {
+    await redate("2026-10-01");
+  }
+  assert.deepEqual(await split(), base, "🔴 повернення дати не повернуло розподіл до байта");
+});
+
+test("#1362b ЖИВИЙ SQL: дату не змінити, якщо перехід не останній, дата пізніше сьогодні, не пізніше попереднього або команду вже змінено", async (t) => {
+  const x = await db(); if ("skip" in x) return t.skip(x.skip);
+  const r = (managerId: number, ef: string, today = T31) => x.sql.redateLastTeamMove(x.c, { managerId, effectiveFrom: ef, today });
+  await x.c.query("BEGIN");
+  try {
+    assert.equal((await r(3, "2026-10-02")).kind, "rejected", "🔴 дата переходу, якого немає, «змінена»");
+    assert.equal((await r(1, "2026-10-02", "2026-10-01")).kind, "rejected", "🔴 дата пізніше сьогодні прийнята");
+    assert.equal((await r(1, "2026-10-01", "2026-10-01")).kind, "same", "🔴 межа «сьогодні» не включна — сьогоднішню дату не поставити");
+    // Попередній перехід 15.09 (РНК → Яцик): межа СТРОГА з обох боків — 15.09 і раніше ні, 16.09 так.
+    await x.c.query(`INSERT INTO manager_team_moves (manager_id, from_team_id, to_team_id, effective_from, source) VALUES (1, 6, 5, '2026-09-15', 'settings')`);
+    assert.equal((await r(1, "2026-09-15")).kind, "rejected", "🔴 два переходи в один день — ланцюг злився б");
+    assert.equal((await r(1, "2026-09-10")).kind, "rejected", "🔴 дата раніше за попередній перехід прийнята — ланцюг розірвався б");
+    const ok = await r(1, "2026-09-16");
+    assert.equal(ok.kind, "updated", "🔴 законну дату (день після попереднього) відхилено");
+    const rows = (await x.c.query<{ ef: string }>(`SELECT to_char(effective_from,'YYYY-MM-DD') AS ef FROM manager_team_moves WHERE manager_id = 1 ORDER BY effective_from`)).rows;
+    assert.deepEqual(rows.map((q) => q.ef), ["2026-09-15", "2026-09-16"], "🔴 змінено не останній перехід");
+    // Синк уже переписав команду — останній перехід більше не описує стан.
+    await x.c.query(`UPDATE managers SET team_id = 7 WHERE id = 1`);
+    assert.equal((await r(1, "2026-09-20")).kind, "rejected", "🔴 дату змінено переходу, що вже не веде в поточну команду");
+  } finally {
+    await x.c.query("ROLLBACK");
+    await x.sql.refreshTeamMoves(x.c);
+  }
+});
+
+test("#1363 НАЛАШТУВАННЯ: вибір команди в рядку лише відкриває віконце з датою; зберігає кнопка, дата — з віконця", () => {
+  const fe = readFileSync(path.join(ROOT, "frontend/src/pages/dashboard/sections/SettingsSection.tsx"), "utf8");
+  const sel = fe.slice(fe.indexOf("<select value={valueOf(r)}"), fe.indexOf("</select>", fe.indexOf("<select value={valueOf(r)}")));
+  assert.ok(sel.length > 0, "🔴 перемикач команди в рядку не знайдено");
+  assert.match(sel, /setPending\(\{ r, kind: "move"/, "🔴 вибір у рядку не відкриває віконце");
+  assert.doesNotMatch(sel, /setTeamOverride|save\(/, "🔴 вибір у рядку знову зберігає одразу — дата знову «сьогодні» без питання");
+  assert.doesNotMatch(fe, /\beffFrom\b/, "🔴 повернулось окреме поле дати над таблицею");
+  assert.match(fe, /mode: "none" as const, effectiveFrom: day\b/, "🔴 «без команди» зберігається не з датою з віконця");
+  assert.match(fe, /mode: "team" as const, teamId: Number\(v\.slice\(5\)\), effectiveFrom: day\b/, "🔴 зміна команди зберігається не з датою з віконця");
+  assert.match(fe, /setPending\(\{ r, kind: "redate" \}\)/, "🔴 немає «змінити дату» — помилкову дату знову не поправити");
+  assert.match(fe, /setTeamMoveDate\(r\.managerId, day\)/, "🔴 «змінити дату» не кличе роут виправлення");
+});
+
+test("#1364 РОУТ ДАТИ ПЕРЕХОДУ: межа manage_users першим рядком; у матриці; стоїть ПІСЛЯ post(\"/teams\") — зріз #709c чистий", () => {
+  const routes = readFileSync(path.join(ROOT, "backend/src/routes/settings.ts"), "utf8");
+  const at = routes.indexOf('settingsRouter.patch("/team-moves/:managerId/last"');
+  assert.ok(at > 0, "🔴 роуту виправлення дати немає");
+  assert.match(routes.slice(at, at + 200), /async \(req, res\) => \{\s*if \(!requireManageUsers\(req, res\)\) return;/,
+    "🔴 межа доступу не першим рядком — роут відкритий раніше, ніж перевірено право");
+  assert.ok(at > routes.indexOf('settingsRouter.post("/teams"'), "🔴 роут став у зріз #709c (PUT…post(\"/teams\")) — чужий UPDATE послабив би той гейт");
+  const matrix = readFileSync(path.join(ROOT, "backend/src/auth/accessMatrix.ts"), "utf8");
+  assert.match(matrix, /method: "PATCH", path: "\/api\/settings\/team-moves\/:managerId\/last", cls: "deny-only"/,
+    "🔴 роуту немає в матриці доступу");
+});
