@@ -801,6 +801,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/client-archive", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  // 🚚 Плашка «перевізник у коментарі» (05.10.2026) — та сама межа, що в архіву: тімлід свою команду
+  // (кламп у SQL), КВП/ОД/адмін усіх; масова дія ЗАПИСУЄ, тож, як і POST вище, без allow.
+  { method: "GET", path: "/api/dashboard/client-archive/carrier-candidates", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  { method: "POST", path: "/api/dashboard/client-archive/carriers", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
   { method: "DELETE", path: "/api/dashboard/loyalty-override/:clientKey", cls: "DELETE-ghost",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/dashboard/loyalty-overrides", cls: "GET",

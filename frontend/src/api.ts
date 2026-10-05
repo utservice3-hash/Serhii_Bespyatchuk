@@ -4376,6 +4376,18 @@ export const fetchClientArchive = () =>
 export const archiveClient = (body: { clientKey: string; reason?: string; restore?: boolean }) =>
   api.post("/dashboard/client-archive", body).then((r) => r.data);
 
+/** 🚚 Клієнти з коментарем «перевізник», що ще не в архіві (тімлід — своя команда, керівництво — усі). */
+export interface CarrierCandidate {
+  clientKey: string; clientName: string; comment: string; commentedAt: string; commentBy: string | null;
+  managerName: string | null; teamName: string | null;
+}
+export const fetchCarrierCandidates = () =>
+  api.get<{ scope: "company" | "team"; clients: CarrierCandidate[] }>("/dashboard/client-archive/carrier-candidates").then((r) => r.data);
+/** Архівувати вибраних з причиною «Перевізник». Сервер бере лише тих, хто ЗАРАЗ кандидат у вашому скоупі. */
+export const archiveCarriers = (clientKeys: string[]) =>
+  api.post<{ ok: true; archived: number; archivedKeys: string[]; skipped: { clientKey: string; why: string }[] }>(
+    "/dashboard/client-archive/carriers", { clientKeys }).then((r) => r.data);
+
 // ── ФАЗА B · Реактивація · обʼєднання · відповідальний ───────────────────────
 export type ClientState = "active" | "sleeping" | "lost";
 export type ClientSegment = "vip" | "regular" | "episodic" | "unknown";

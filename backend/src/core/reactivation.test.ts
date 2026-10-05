@@ -1115,6 +1115,44 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
         await c.query(`DELETE FROM managers WHERE id = 9901`);
       }
     });
+
+    /**
+     * #1380d — ЖИВИЙ SQL ПЛАШКИ «ПЕРЕВІЗНИК»: кандидати = останній коментар зі словом «перевіз…» І клієнт
+     * ЗАРАЗ не в архіві (повернутий новою оплатою — знову кандидат); тімлід бачить лише свою команду.
+     */
+    await t.test("#1380d ЖИВИЙ SQL ПЛАШКИ: «перевізник» у коментарі й не в архіві; повернутий оплатою — знову кандидат; тімлід — лише своя команда", async () => {
+      const A = await import("./clientArchive.js");
+      const RC = await import("./reactivationClose.js");
+      const seed: [number, string, number, string][] = [
+        [9800001, "пер-1", 10, "now() - interval '40 days'"],   // РПК (команда 1), не в архіві
+        [9800002, "пер-2", 20, "now() - interval '40 days'"],   // РНК (команда 2), не в архіві
+        [9800003, "пер-3", 10, "now() - interval '40 days'"],   // в архіві, оплат після — немає
+        [9800004, "пер-4", 10, "now() - interval '2 days'"],    // в архіві 10 днів тому, оплата 2 дні тому → повернувся
+        [9800005, "пер-5", 10, "now() - interval '40 days'"],   // коментар без слова — не кандидат
+      ];
+      for (const [id, ck, mgr, at] of seed) {
+        await c.query(`INSERT INTO deals (kommo_id,name,manager_id,pipeline_id,status_id,price,client_key,client_name,created_at_kommo,closed_at_kommo)
+                       VALUES ($1,$2,$3,8921932,142,500,$2,$2, ${at} - interval '3 days', ${at})`, [id, ck, mgr]);
+      }
+      await c.query(`INSERT INTO client_comments (client_key, body) VALUES
+        ('пер-1','Перевiзник ОЛХ'), ('пер-2','перевізник'), ('пер-3','перевізник'), ('пер-4','ПЕРЕВІЗНИК'), ('пер-5','перевезення раз на рік')`);
+      await c.query(`INSERT INTO loyalty_overrides (client_key, archived_at, archive_reason) VALUES
+        ('пер-3', now() - interval '10 days', 'carrier'), ('пер-4', now() - interval '10 days', 'carrier')`);
+      try {
+        const keys = async (clamp: string, params: unknown[]) =>
+          (await c.query<{ client_key: string }>(A.carrierCandidatesSql(clamp), params)).rows.map((r) => r.client_key).filter((k) => k.startsWith("пер-")).sort();
+        assert.deepEqual(await keys("", []), ["пер-1", "пер-2", "пер-4"],
+          "🔴 кандидати не ті: латинська i / верхній регістр / повернутий оплатою / заархівований / «перевезення»");
+        assert.deepEqual(await keys(RC.ownerTeamClamp(1, "$1"), [1]), ["пер-1", "пер-4"], "🔴 тімлід команди 1 бачить чужу команду або не бачить свою");
+        assert.deepEqual(await keys(RC.ownerTeamClamp(2, "$1"), [2]), ["пер-2"], "🔴 тімлід команди 2 бачить не свою команду");
+        const only = await c.query<{ client_key: string }>(A.carrierCandidatesSql(RC.ownerTeamClamp(1, "$1"), "$2"), [1, ["пер-1", "пер-2", "пер-3"]]);
+        assert.deepEqual(only.rows.map((r) => r.client_key).sort(), ["пер-1"], "🔴 фільтр ключів масової дії пропускає чужу команду чи заархівованого");
+      } finally {
+        await c.query(`DELETE FROM loyalty_overrides WHERE client_key LIKE 'пер-%'`);
+        await c.query(`DELETE FROM client_comments WHERE client_key LIKE 'пер-%'`);
+        await c.query(`DELETE FROM deals WHERE kommo_id BETWEEN 9800001 AND 9800005`);
+      }
+    });
   } finally {
     await pool.end().catch(() => {});
     await c.end();

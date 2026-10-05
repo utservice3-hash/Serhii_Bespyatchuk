@@ -58,7 +58,7 @@ import * as reactivationRules from "../core/reactivationRules.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
 import { loadClientSegments, factsFor, keepInReactivation } from "../core/clientSegments.js";
 import { archivedSql, isArchived, LAST_PAID_CTE, LAST_PAID_JOIN, ARCHIVE_REASONS, ARCHIVE_REASON_KEYS,
-         archiveListSql } from "../core/clientArchive.js";
+         archiveListSql, carrierCandidatesSql } from "../core/clientArchive.js";
 import { clientsListSql } from "../core/clientPlansList.js";
 import { logClientAdmin, clientAdminLog } from "../core/clientAdminLog.js";
 import { ownerTeamClamp, assigneeTeamClamp, closedListSql, closeReasonClass,
@@ -3717,6 +3717,71 @@ dashboardRouter.post("/client-archive", async (req, res) => {
     [clientKey, reason, req.auth!.userId]);
   await logClientAdmin("archive", clientKey, req.auth!.userId, { reason });
   res.json({ ok: true, archived: true });
+});
+
+type CarrierCandidateRow = {
+  client_key: string; client_name: string | null; comment: string; commented_at: string;
+  comment_by: string | null; manager_name: string | null; team_name: string | null; team_id: number | null;
+};
+/**
+ * 🚚 КЛІЄНТИ З КОМЕНТАРЕМ «ПЕРЕВІЗНИК», ЩО ЩЕ НЕ В АРХІВІ (05.10.2026, зворотний звʼязок #104/#69).
+ * Межа та сама, що в архіві: КВП/ОД/адмін — уся компанія, тімлід — лише клієнти своєї команди
+ * (кламп у SQL, `ownerTeamClamp`). Правило впізнавання — `core/clientArchive.carrierCandidatesSql`.
+ */
+dashboardRouter.get("/client-archive/carrier-candidates", async (req, res) => {
+  const auth = req.auth!;
+  if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Лише КВП, ОД, адміністратор або тімлід" });
+  const leadTeamId = isAdminScope(auth) ? null : auth.teamId ?? -1;
+  const params: unknown[] = [];
+  let clamp = "";
+  if (leadTeamId != null) { params.push(leadTeamId); clamp = ownerTeamClamp(leadTeamId, `$${params.length}`); }
+  const r = await pool.query<CarrierCandidateRow>(carrierCandidatesSql(clamp), params);
+  res.json({
+    scope: leadTeamId == null ? "company" : "team",
+    clients: r.rows.map((x) => ({
+      clientKey: x.client_key, clientName: x.client_name ?? x.client_key,
+      comment: x.comment, commentedAt: x.commented_at, commentBy: x.comment_by,
+      managerName: x.manager_name, teamName: x.team_name,
+    })),
+  });
+});
+
+/**
+ * 🚚 АРХІВУВАТИ ВИБРАНИХ ЯК «ПЕРЕВІЗНИК» — тим самим записом, що й ручна «🗄 в архів».
+ * Архівуються ЛИШЕ ключі, які ЗАРАЗ є кандидатами в скоупі того, хто натиснув (той самий запит, що й
+ * список): кнопка не стає обхідним шляхом архівувати будь-кого з причиною «Перевізник» чи чужу
+ * команду. Решта повертається поіменно з причиною відмови — не мовчки.
+ */
+dashboardRouter.post("/client-archive/carriers", async (req, res) => {
+  const auth = req.auth!;
+  if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Лише КВП, ОД, адміністратор або тімлід" });
+  const keys = Array.isArray(req.body?.clientKeys)
+    ? [...new Set((req.body.clientKeys as unknown[]).map((k) => String(k ?? "").trim()).filter(Boolean))] : [];
+  if (keys.length === 0 || keys.length > 300) return res.status(400).json({ error: "clientKeys: від 1 до 300 ключів" });
+  const leadTeamId = isAdminScope(auth) ? null : auth.teamId ?? -1;
+  const params: unknown[] = [];
+  let clamp = "";
+  if (leadTeamId != null) { params.push(leadTeamId); clamp = ownerTeamClamp(leadTeamId, `$${params.length}`); }
+  params.push(keys);
+  const ok = new Map((await pool.query<CarrierCandidateRow>(carrierCandidatesSql(clamp, `$${params.length}`), params))
+    .rows.map((x) => [x.client_key, x]));
+  const archived: string[] = [];
+  for (const k of keys) {
+    const row = ok.get(k);
+    if (!row) continue;
+    await pool.query(
+      `INSERT INTO loyalty_overrides (client_key, archived_at, archive_reason, archived_by, updated_by, updated_at)
+       VALUES ($1, now(), 'carrier', $2, $2, now())
+       ON CONFLICT (client_key) DO UPDATE
+         SET archived_at = now(), archive_reason = 'carrier',
+             archived_by = EXCLUDED.archived_by, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+      [k, auth.userId]);
+    await logClientAdmin("archive", k, auth.userId, { reason: "carrier", via: "carrier_comment", comment: row.comment.slice(0, 200) });
+    archived.push(k);
+  }
+  const skipped = keys.filter((k) => !ok.has(k)).map((k) => ({
+    clientKey: k, why: "уже в архіві, без коментаря «перевізник» або не з вашої команди" }));
+  res.json({ ok: true, archived: archived.length, archivedKeys: archived, skipped });
 });
 
 /**
