@@ -727,6 +727,9 @@ test("#867 НАЛАШТУВАННЯ ПЕРШОГО ДОТИКУ · ЯДРО: м�
   assert.equal(countingDeadline(at(45), "minutes", end, on).toISOString(), at(55).toISOString(), "🔴 мінімум укоротив довшу обіцянку");
   const eod = new Date("2026-10-03T20:59:59Z");
   assert.equal(countingDeadline(eod, "day", end, on).toISOString(), new Date(eod.getTime() + 10 * 60_000).toISOString(), "🔴 «завтра» — мінімум чи допуск не так");
+  // по інший бік: розмова о 23:55 Києва, «сьогодні» до 23:59:59 — мінімум 20 хв тягнув би термін у завтра.
+  const late = new Date("2026-10-02T20:55:00Z"), today = new Date("2026-10-02T20:59:59Z");
+  assert.equal(countingDeadline(today, "day", late, on).toISOString(), new Date(today.getTime() + 10 * 60_000).toISOString(), "🔴 мінімум дедлайну зачепив «сьогодні»");
   for (const b of ["minutes", "default_minutes", "day", "conditional_next_workday"] as const)
     assert.equal(countingDeadline(at(2), b, end, off).toISOString(), at(2).toISOString(), `🔴 нулі зсунули термін (${b}) — викат змінив би цифри`);
   const call = (m: number) => [{ at: at(m), billsec: 30, callType: "out", managerId: 7 }];
