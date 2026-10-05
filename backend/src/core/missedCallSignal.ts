@@ -1,7 +1,7 @@
 import { CALL_MERGE_WINDOW, mergedLagGapExpr, mergedLagFirst } from "./callMerge.js";
 import { INBOUND_TYPES, OUTBOUND_TYPES, missedDispSql, CALLBACK_MIN_TALK_SEC } from "./missedCallsRules.js";
 import { dayBucketCase, dayBucketParts, type DayBucket } from "./dayBuckets.js";
-import { carrierHistorySql, carrierTaskCloseReason } from "./carrierHistory.js";
+import { carrierHistorySql, carrierTaskCloseReason, HISTORY_GUARD, readHistoryGate } from "./carrierHistory.js";
 
 /**
  * 📵 СИГНАЛ МЕНЕДЖЕРУ ПО ПРОПУЩЕНОМУ — ТЗ-1, прохід 3 (16.09.2026).
@@ -222,6 +222,8 @@ export interface SignalStats {
   skippedCarrier: number;
   /** Блок 1: відкриту задачу закрито — номер перевізника за історією CRM. */
   closedCarrier: number;
+  /** Синк угод Kommo застарів — блок 1 на паузі (задачі ставляться звичайно); `null` — свіжий. Вік у хв або «невідомо». */
+  carrierPausedSyncAgeMin: number | "невідомо" | null;
 }
 
 /**
@@ -247,14 +249,19 @@ export function carrierCloseCandidatesSql(): string {
  * Кожна група — окрема транзакція з `FOR UPDATE` на рядку журналу: задача без рядка
  * журналу означала б дубль на наступному тіку.
  */
-export async function applyMissedCallSignals(db: Db, now: Date): Promise<SignalStats> {
-  const stats: SignalStats = { groups: 0, created: 0, reopened: 0, updated: 0, closed: 0, skippedCarrier: 0, closedCarrier: 0 };
+export async function applyMissedCallSignals(db: Db, now: Date, historySyncMaxMin: number = HISTORY_GUARD.defaultMaxAgeMin): Promise<SignalStats> {
+  const stats: SignalStats = { groups: 0, created: 0, reopened: 0, updated: 0, closed: 0, skippedCarrier: 0, closedCarrier: 0,
+    carrierPausedSyncAgeMin: null };
+  // 🛡 Блок 1 тримається на копії угод: застаріла — номер «перевізника» може вже мати угоду клієнта, якої ми не бачимо.
+  // На паузі задачу ставимо звичайно (передзвонити перевізнику дешевше, ніж не передзвонити клієнту) і перевізників не закриваємо.
+  const hg = await readHistoryGate(db, now, historySyncMaxMin);
+  if (!hg.open) stats.carrierPausedSyncAgeMin = hg.syncAgeMin ?? "невідомо";
   const g = signalGroupsSql(now);
   const groups = (await db.query<SignalGroup>(g.sql, g.params)).rows;
   stats.groups = groups.length;
 
   for (const r of groups) {
-    if (r.carrier_deal != null) {
+    if (hg.open && r.carrier_deal != null) {
       // Перевізник за історією CRM — задачу не ставимо (ТЗ: «задача менеджеру не створюється»), лише слід для звіту.
       // Лише якщо задачі на цю групу НЕ БУЛО: поставлену раніше й закриту як перевізника рахує «закрито», а не
       // «не поставлено» — інакше звіт контролю рахував би один номер двічі (спіймав `#1309`).
@@ -334,8 +341,8 @@ export async function applyMissedCallSignals(db: Db, now: Date): Promise<SignalS
   }
 
   // Перевізники — ДО закриття передзвоном: задача на номер перевізника закривається з правильною причиною.
-  for (const r of (await db.query<{ manager_id: number; client_phone: string; kday: string; task_id: number; carrier_deal: string }>(
-    carrierCloseCandidatesSql())).rows) {
+  for (const r of hg.open ? (await db.query<{ manager_id: number; client_phone: string; kday: string; task_id: number; carrier_deal: string }>(
+    carrierCloseCandidatesSql())).rows : []) {
     await db.query("BEGIN");
     try {
       const prev = (await db.query<{ status: string }>("SELECT status FROM tasks WHERE id = $1 FOR UPDATE", [r.task_id])).rows[0];

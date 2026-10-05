@@ -1504,6 +1504,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/ba/issues/:id/files", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/ba/ttn/:month/:managerId/deals", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
+  { method: "PUT", path: "/api/ba/ttn/deals/:kommoId/mismatch", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "DELETE", path: "/api/ba/ttn/deals/:kommoId/mismatch", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "PUT", path: "/api/ba/ttn/:month/:managerId", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
   /* 🧾 Кнопка «Проблемний клієнт» у дебіторці — вкладка `receivables` + право `create_claim`

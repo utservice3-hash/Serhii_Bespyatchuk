@@ -41,6 +41,11 @@ const deal = (c: Client, id: number, name: string, pipeline: number, status: num
 const call = (c: Client, at: string, type: string, disp: string | null, sec: number, mgr: number | null, phone: string) =>
   c.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,manager_id,client_phone) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
     [`h${String(++seq)}`, at, type, disp, sec, mgr, phone]);
+/** Свіжість угод: останній успіх `syncKommo` (захист «історії» читає саме його — `readHistoryGate`). `null` — рядка немає. */
+const syncAt = (c: Client, at: string | null) => at == null
+  ? c.query("DELETE FROM job_runs WHERE name = 'syncKommo'")
+  : c.query(`INSERT INTO job_runs(name, last_success_at) VALUES ('syncKommo', $1)
+             ON CONFLICT (name) DO UPDATE SET last_success_at = EXCLUDED.last_success_at`, [at]);
 const hist = async (c: Client, phone: string, self: number | null = null) => {
   const { carrierHistorySql } = await import("./carrierHistory.js");
   return (await c.query<{ v: string | null }>(`SELECT ${carrierHistorySql("$1::text", "$2::bigint")}::text AS v`, [phone, self])).rows[0].v;
@@ -77,6 +82,7 @@ test("#1302b СИГНАЛ: на номер перевізника задачу �
   await call(c, `${D} 10:00:00+03`, "in", "NO ANSWER", 0, 1, CAR);
   await call(c, `${D} 10:00:00+03`, "in", "NO ANSWER", 0, 1, CLI);
   await call(c, `${D} 10:00:00+03`, "in", "NO ANSWER", 0, 2, OPEN);
+  await syncAt(c, `${D} 10:00:00+03`);
   const s1 = await applyMissedCallSignals(c, new Date(`${D} 10:05:00+03`));
   const tasks = async (p: string) => (await c.query<{ status: string; close_reason: string | null }>(
     "SELECT status, close_reason FROM tasks WHERE title LIKE $1", [`%+${p}`])).rows;
@@ -122,6 +128,7 @@ test("#1303 «ВІДСІВ»: історія CRM — вердикт без ро�
   await deal(c, 9301, PH, STAGE.p, 143, "Перевізник");
   await deal(c, 9302, PH, STAGE.p, STAGE.s);
   await c.query(`INSERT INTO carrier_call_deals(kommo_id,phone,deal_created_at,seen_at,state) VALUES (9302,$1,$2,$2,'waiting')`, [PH, `${D} 11:50:00+03`]);
+  await syncAt(c, `${D} 11:55:00+03`);
   const rep = await resolveCarrierDeals(c, NOW);
   assert.equal(rep.history, 1, "🔴 угода номера-перевізника не отримала вердикт «історія CRM»");
   const st = (await c.query<{ state: string; history_from: string }>("SELECT state, history_from::text FROM carrier_call_deals WHERE kommo_id = 9302")).rows[0];
@@ -197,4 +204,103 @@ test("#1309 КОНТРОЛЬ ТЗ: «не поставлено / закрито 
   const m2 = await run({ managerId: 2 });
   assert.deepEqual([m2.skipped_carrier, m2.closed_callback, m2.closed_carrier, m2.deals_history], [0, 0, 1, null],
     "🔴 скоуп не звужує звіт: менеджер бачить чужі задачі або угоди фільтра");
+});
+
+// ───────────── 🛡 ЗАХИСТ ВІД ЗАСТАРІЛИХ УГОД (рішення Романа 05.10.2026, до увімкнення закриття в Kommo) ─────────────
+
+test("#1370 ЗАХИСТ ІСТОРІЇ: синк угод 59 хв тому — можна; 61 хв — пауза; невідомо коли — пауза (а не «добре»)", async () => {
+  const { historyGate, HISTORY_GUARD } = await import("./carrierHistory.js");
+  const now = new Date("2026-10-05T10:00:00Z");
+  const ago = (m: number) => new Date(now.getTime() - m * 60_000);
+  assert.equal(HISTORY_GUARD.syncJob, "syncKommo", "🔴 свіжість історії міряється не синком УГОД — виняток читає `deals`");
+  assert.equal(historyGate(ago(59), now, 60).open, true, "🔴 свіжий синк блокує історію — автоматика не працює взагалі");
+  assert.equal(historyGate(ago(61), now, 60).open, false, "🔴 синк угод застарів, а історія закриває — свіжої угоди клієнта не видно");
+  assert.equal(historyGate(null, now, 60).open, false, "🔴 вік синку невідомий — і це прочитано як «свіжий»");
+  assert.equal(historyGate(ago(61), now, 60).syncAgeMin, 61, "🔴 лог паузи не називає вік синку");
+});
+
+test("#1371 ЗАСТАРІЛИЙ СИНК УГОД: «історія» не ставиться, задача «передзвони» — ставиться; свіжий — як раніше", async (t) => {
+  const c = await db(); if (typeof c === "string") return t.skip(c);
+  const { resolveCarrierDeals } = await import("./carrierCalls.js");
+  const { applyMissedCallSignals } = await import("./missedCallSignal.js");
+  const DAY = "2026-09-16", PH = "380671371001", OPEN = "380671371002";
+  const NOW = new Date(`${DAY} 12:00:00+03`);
+  await deal(c, 13701, PH, STAGE.p, 143, "Перевізник");
+  await deal(c, 13702, PH, STAGE.p, STAGE.s);
+  await c.query(`INSERT INTO carrier_call_deals(kommo_id,phone,deal_created_at,seen_at,state) VALUES (13702,$1,$2,$2,'waiting')`, [PH, `${DAY} 11:50:00+03`]);
+  await call(c, `${DAY} 11:50:00+03`, "in", "NO ANSWER", 0, 1, PH);
+  // Задача, поставлена ДО того, як номер став перевізником, — закриття теж має чекати свіжих угод.
+  await call(c, `${DAY} 11:40:00+03`, "in", "NO ANSWER", 0, 2, OPEN);
+  await syncAt(c, `${DAY} 11:46:00+03`);
+  await applyMissedCallSignals(c, new Date(`${DAY} 11:46:00+03`));
+  await deal(c, 13703, OPEN, STAGE.p, 143, "Перевізник");
+
+  await syncAt(c, `${DAY} 10:30:00+03`);                       // 90 хв тому
+  const r1 = await resolveCarrierDeals(c, NOW);
+  assert.equal(r1.historyGate.open, false);
+  assert.equal(r1.history, 0, "🔴 вердикт «історія» поставлено на застарілих угодах");
+  const s1 = await applyMissedCallSignals(c, NOW);
+  const task = async (p: string) => (await c.query<{ status: string }>("SELECT status FROM tasks WHERE title LIKE $1", [`%+${p}`])).rows;
+  assert.equal(s1.skippedCarrier, 0, "🔴 задачу не поставлено як перевізнику на застарілих угодах");
+  assert.equal((await task(PH)).length, 1, "🔴 на паузі задача «передзвони» не поставлена — клієнт міг лишитись без дзвінка");
+  assert.equal(s1.closedCarrier, 0, "🔴 відкриту задачу закрито «перевізником» на застарілих угодах");
+  assert.equal((await task(OPEN))[0]?.status, "not_started");
+  assert.equal(s1.carrierPausedSyncAgeMin, 90, "🔴 пауза мовчить у звіті джоби");
+  await syncAt(c, null);
+  assert.equal((await applyMissedCallSignals(c, NOW)).carrierPausedSyncAgeMin, "невідомо", "🔴 невідомий вік синку — не пауза");
+
+  // Дзеркало: синк свіжий — працює як раніше.
+  await syncAt(c, `${DAY} 11:58:00+03`);
+  assert.equal((await resolveCarrierDeals(c, NOW)).history, 1, "🔴 свіжий синк, а вердикту «історія» немає — захист блокує все");
+  const s2 = await applyMissedCallSignals(c, NOW);
+  assert.equal(s2.carrierPausedSyncAgeMin, null);
+  assert.equal(s2.closedCarrier, 2, "🔴 свіжий синк, а задачі перевізників не закрито");
+});
+
+test("#1372 ПОВТОРНА ПЕРЕВІРКА ПЕРЕД ЗАКРИТТЯМ: угода клієнта зʼявилась після вердикту — Kommo не чіпаємо, угода в черзі; синк застарів — чекаємо", async (t) => {
+  const c = await db(); if (typeof c === "string") return t.skip(c);
+  const { runCarrierClose } = await import("./carrierClose.js");
+  const DAY = "2026-09-17", NOW = new Date(`${DAY} 12:00:00+03`);
+  const A = "380671372001", B = "380671372002";
+  for (const [src, id, ph] of [[13711, 13712, A], [13721, 13722, B]] as const) {
+    await deal(c, src, ph, STAGE.p, 143, "Перевізник");
+    await deal(c, id, ph, STAGE.p, STAGE.s);
+    await c.query(`INSERT INTO carrier_call_deals(kommo_id,phone,deal_created_at,seen_at,state,history_from) VALUES ($1,$2,$3,$3,'history',$4)`,
+      [id, ph, `${DAY} 11:30:00+03`, src]);
+  }
+  const patched: number[] = [];
+  const kommo = { patchLeads: async (b: unknown[]) => { for (const x of b) patched.push((x as { id: number }).id); return {}; }, addNotes: async () => ({}) };
+  const onStage = new Set([13712, 13722]);
+
+  // Синк угод 2 год тому — історію не закриваємо, лише журнал.
+  await syncAt(c, `${DAY} 10:00:00+03`);
+  const r0 = await runCarrierClose(c, NOW, "live", onStage, kommo, "dry", "live");
+  assert.equal(r0.closed, 0, "🔴 закрито в Kommo на застарілих угодах");
+  assert.equal(r0.historyPaused, 2);
+  assert.equal(patched.length, 0, "🔴 Kommo викликано на паузі");
+
+  // Синк свіжий, але по номеру A тим часом відкрили угоду замовника.
+  await deal(c, 13713, A, 8921932, 61234567);
+  await syncAt(c, `${DAY} 11:55:00+03`);
+  const r1 = await runCarrierClose(c, NOW, "live", onStage, kommo, "dry", "live");
+  assert.ok(!patched.includes(13712), "🔴 закрито угоду номера, що вже має угоду замовника в роботі — закрили клієнта");
+  assert.equal(r1.historyRevoked, 1);
+  const st = (await c.query<{ state: string; history_from: string | null }>("SELECT state, history_from::text FROM carrier_call_deals WHERE kommo_id = 13712")).rows[0];
+  assert.deepEqual(st, { state: "waiting", history_from: null }, "🔴 знятий вердикт лишився «історією» — наступний прохід закрив би знову");
+  assert.ok(patched.includes(13722), "🔴 сусідня угода без клієнта не закрита — перевірка гасить усіх");
+});
+
+test("#1373 ДЗЕРКАЛО ЗАХИСТУ: свіжий синк і жодного клієнта — угода історії закривається, як і до захисту", async (t) => {
+  const c = await db(); if (typeof c === "string") return t.skip(c);
+  const { runCarrierClose } = await import("./carrierClose.js");
+  const DAY = "2026-09-18", NOW = new Date(`${DAY} 12:00:00+03`), PH = "380671373001";
+  await deal(c, 13731, PH, STAGE.p, 143, "Перевізник");
+  await deal(c, 13732, PH, STAGE.p, STAGE.s);
+  await c.query(`INSERT INTO carrier_call_deals(kommo_id,phone,deal_created_at,seen_at,state,history_from) VALUES (13732,$1,$2,$2,'history',13731)`,
+    [PH, `${DAY} 11:30:00+03`]);
+  await syncAt(c, `${DAY} 11:30:00+03`);
+  let n = 0;
+  const r = await runCarrierClose(c, NOW, "live", new Set([13732]), { patchLeads: async () => { n++; return {}; }, addNotes: async () => ({}) }, "dry", "live");
+  assert.deepEqual([r.closed, r.historyPaused, r.historyRevoked, n], [1, 0, 0, 1], "🔴 захист заблокував законне закриття");
+  assert.equal((await c.query<{ mode: string }>("SELECT mode FROM carrier_close_log WHERE kommo_id = 13732")).rows[0]?.mode, "live");
 });

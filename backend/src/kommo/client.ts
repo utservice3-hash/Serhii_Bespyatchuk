@@ -367,6 +367,21 @@ export function extractCarrierEdrpou(deal: KommoDeal): string | null {
   return v || null;
 }
 
+/**
+ * 🗂 Поле «ТТН» (2097291, тип «файл»): скільки файлів ТТН прикріплено до угоди. Видалені
+ * (`is_deleted`) не рахуються. Поля немає в угоді — Kommo так віддає ПОРОЖНЄ поле, тож це 0, а
+ * не «невідомо»: «невідомо» (NULL у `deals.ttn_files`) — лише угода, яку синк ще не бачив після
+ * появи колонки. Живить ТТН-моніторинг Бізнес-асистента (05.10.2026).
+ */
+export const FIELD_TTN = 2097291;
+export function extractTtnFiles(deal: KommoDeal): number {
+  const f = deal.custom_fields_values?.find((v) => v.field_id === FIELD_TTN);
+  return (f?.values ?? []).filter((v) => {
+    const file = v.value as { file_uuid?: unknown; is_deleted?: unknown } | null | undefined;
+    return !!file && typeof file === "object" && !!file.file_uuid && file.is_deleted !== true;
+  }).length;
+}
+
 /** Payment form of the deal ("форма расчета"), e.g. "Безнал с НДС". */
 export function extractPaymentType(deal: KommoDeal): string | null {
   return fieldText(deal, FIELD_PAYMENT_TYPE);

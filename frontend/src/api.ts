@@ -5194,13 +5194,19 @@ export const archiveBaEquipment = async (id: number, archived: boolean) => { awa
 export const issueBaEquipment = async (id: number, p: { employeeId: number; issuedOn: string }) => (await api.post<{ issueId: number }>(`/ba/equipment/${id}/issue`, p)).data.issueId;
 export const returnBaIssue = async (issueId: number, returnedOn: string) => { await api.post(`/ba/issues/${issueId}/return`, { returnedOn }); };
 export const undoReturnBaIssue = async (issueId: number) => { await api.post(`/ba/issues/${issueId}/undo-return`); };
+export interface BaTtnCounts { needed: number; attached: number; mismatched: number; unsynced: number; present: number; pct: number | null }
 export interface BaTtnRow {
-  managerId: number; name: string; active: boolean; dealsNow: number; kommoUrl: string | null;
-  saved: { dealsNeeded: number; ttnPresent: number; note: string; pct: number | null; checkedAt: string; checkedBy: string | null } | null;
+  managerId: number; name: string; active: boolean; live: BaTtnCounts; kommoUrl: string | null;
+  saved: { dealsNeeded: number; ttnAttached: number | null; routeMismatch: number | null; ttnPresent: number; note: string; pct: number | null; checkedAt: string; checkedBy: string | null } | null;
   history: { month: string; pct: number | null }[];
 }
+export interface BaTtnDeal { kommoId: number; name: string; client: string; closedOn: string; ttnFiles: number | null; mismatch: { note: string } | null; url: string }
 export const fetchBaTtn = async (month: string) => (await api.get<{ month: string; rows: BaTtnRow[] }>("/ba/ttn", { params: { month } })).data;
-export const saveBaTtn = async (month: string, managerId: number, p: { ttnPresent: number; note: string }) => { await api.put(`/ba/ttn/${month}/${managerId}`, p); };
+export const fetchBaTtnDeals = async (month: string, managerId: number) => (await api.get<{ deals: BaTtnDeal[] }>(`/ba/ttn/${month}/${managerId}/deals`)).data.deals;
+export const setBaTtnMismatch = async (kommoId: number, note: string) => { await api.put(`/ba/ttn/deals/${kommoId}/mismatch`, { note }); };
+export const clearBaTtnMismatch = async (kommoId: number) => { await api.delete(`/ba/ttn/deals/${kommoId}/mismatch`); };
+/** «Зафіксувати місяць»: знімок трьох чисел цієї миті (05.10.2026 — «наявні» вже не вводяться руками). */
+export const saveBaTtn = async (month: string, managerId: number, p: { note: string }) => { await api.put(`/ba/ttn/${month}/${managerId}`, p); };
 
 /** Кнопка «Проблемний клієнт»: хто може створити / відкрити і де претензія вже є. */
 export interface ReceivableClaimsState { canCreate: boolean; canOpen: boolean; open: { clientKey: string; claimId: number }[] }

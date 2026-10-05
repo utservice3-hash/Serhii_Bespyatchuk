@@ -11,7 +11,7 @@ import { carrierActiveIds } from "./carrierCallQueue.js";
 import { notifyCapOnce } from "./aiCapAlert.js";
 import { runCarrierClose, type CloseMode, type CloseReport, type KommoCloser } from "./carrierClose.js";
 import { syncCarrierReviewTasks, type ReviewTaskStats } from "./carrierReviewTasks.js";
-import { carrierHistorySql } from "./carrierHistory.js";
+import { carrierHistorySql, HISTORY_GUARD, readHistoryGate, type HistoryGate } from "./carrierHistory.js";
 import { CREATING_CALL_SQL, NO_TALK_DUE_SQL, NO_TALK_GUARD, readNoTalkGuard, type NoTalkGate } from "./carrierNoTalkGuard.js";
 import { CARRIER_BUDGET, CARRIER_KIT_V2, CARRIER_OPS, CARRIER_RUBRIC, CARRIER_RUBRICS, CARRIER_RULE, oldEnough,
   phoneFromDealName } from "./carrierCallRules.js";
@@ -78,6 +78,8 @@ export interface ResolveReport {
   history: number; reused: number; own: number; noTalk: number; secondTalk: number;
   /** Захист «без розмови»: стан синку дзвінків у момент кроку ③ і скільки угод тримає відсутній дзвінок-творець. */
   noTalkGate: NoTalkGate; noTalkNoCreatingCall: number;
+  /** Захист «історії CRM» від застарілих угод (`carrierHistory.ts`): закрито — крок ⓪ не виконувався. */
+  historyGate: HistoryGate;
 }
 
 /**
@@ -85,14 +87,16 @@ export interface ResolveReport {
  * Порядок має значення: спершу повтор, щоб не платити вдруге за номер, який уже слухали.
  */
 export async function resolveCarrierDeals(db: Db, now: Date, noTalkAfterMin: number = CARRIER_RULE.windowAfterHours * 60,
-  noTalkSyncMaxMin: number = NO_TALK_GUARD.defaultMaxAgeMin): Promise<ResolveReport> {
+  noTalkSyncMaxMin: number = NO_TALK_GUARD.defaultMaxAgeMin, historySyncMaxMin: number = HISTORY_GUARD.defaultMaxAgeMin): Promise<ResolveReport> {
   const guard = await readNoTalkGuard(db, now, noTalkAfterMin, noTalkSyncMaxMin);
+  const historyGate = await readHistoryGate(db, now, historySyncMaxMin);
   const rep: ResolveReport = { history: 0, reused: 0, own: 0, noTalk: 0, secondTalk: 0,
-    noTalkGate: guard.gate, noTalkNoCreatingCall: guard.noCreatingCall };
+    noTalkGate: guard.gate, noTalkNoCreatingCall: guard.noCreatingCall, historyGate };
 
   // ⓪ Номер уже закривали як «Перевізник» у CRM, угоди замовника в «Успіх» чи в роботі немає (ТЗ 17.09, блок 1;
   //    `core/carrierHistory.ts`) — вердикт без розмови: не слухаємо й не платимо. ПЕРШИМ — раніше за повтор номера.
-  rep.history = (await db.query(
+  //    Лише при свіжих угодах (`readHistoryGate`): на паузі угода лишається «чекає» й іде звичайним шляхом.
+  if (historyGate.open) rep.history = (await db.query(
     `UPDATE carrier_call_deals d SET state = 'history', history_from = h.src, updated_at = $1
        FROM (SELECT w.kommo_id, ${carrierHistorySql("w.phone", "w.kommo_id")} AS src
                FROM carrier_call_deals w WHERE w.state = 'waiting') h
@@ -197,6 +201,8 @@ export interface CarrierTickEnv {
   noTalkAfterMin?: number;
   /** Синк дзвінків старший за це — «без розмови» на паузі (`carrierNoTalkGuard.ts`). Не задано — 30 хв. */
   noTalkSyncMaxMin?: number;
+  /** Синк угод Kommo старший за це — «історія CRM» на паузі (`carrierHistory.ts`). Не задано — 60 хв. */
+  historySyncMaxMin?: number;
   /** Задача «розібрати дзвінки на мобільні» в задачнику (лише бойова джоба; гейти вмикають явно). */
   reviewTasks?: boolean;
   /** Закриття в Kommo (перевізники, рішення людей; AI-«Інше» — `otherMode`). Не задано — кроку немає (як `off`). */
@@ -223,7 +229,7 @@ export async function runCarrierTick(env: CarrierTickEnv): Promise<CarrierTickRe
   const leads = await env.stageLeads();
   const launchAt = env.launchAt ?? null;
   const recorded = await recordStageDeals(env.db, leads, t0, launchAt);
-  const resolved = await resolveCarrierDeals(env.db, t0, env.noTalkAfterMin, env.noTalkSyncMaxMin);
+  const resolved = await resolveCarrierDeals(env.db, t0, env.noTalkAfterMin, env.noTalkSyncMaxMin, env.historySyncMaxMin);
   // Слухаємо лише угоди від точки старту: записані раніше (до 30.09.2026) більше не оплачуються.
   const ids = await carrierActiveIds(env.db, t0, launchAt);
   const enqueued = await enqueueTranscripts(env.db, ids, STT_PROVIDER, ELEVENLABS_STT_MODEL, t0);
@@ -233,7 +239,7 @@ export async function runCarrierTick(env: CarrierTickEnv): Promise<CarrierTickRe
   // 🧹 Закриття — ПІСЛЯ вердиктів, по угодах, що стоять на етапі за ЦІЄЮ ж відповіддю Kommo.
   const doClose = async () => env.close
     ? runCarrierClose(env.db, env.now(), env.close.mode, new Set(leads.map((l) => l.id)), env.close.kommo, env.close.otherMode ?? "dry",
-      env.close.historyMode ?? "dry") : null;
+      env.close.historyMode ?? "dry", env.historySyncMaxMin) : null;
   // 📋 Задачі — ПІСЛЯ закриття: закрита цим проходом угода вже не рахується в «розібрати».
   const doTasks = async () => (env.reviewTasks ? syncCarrierReviewTasks(env.db, env.now(), launchAt) : null);
   if (!ids.length) { out.closed = await doClose(); out.reviewTasks = await doTasks(); return out; }
