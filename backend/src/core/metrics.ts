@@ -13,6 +13,7 @@ import { monthEndOf, periodNotOver, kyivToday } from "./dates.js";
 import { teamAtSql, teamOnDateSql, teamJoinSql } from "./teamAt.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
 import { dayBucketCase } from "./dayBuckets.js";
+import { FC_PIPELINE_IDS } from "./moneyBuckets.js";
 
 /**
  * ЄДИНЕ місце в проєкті з SQL по НЕ-грошових бізнес-метриках (гроші — `core/money.ts`).
@@ -811,6 +812,40 @@ function createdSplitCte(s: MetricScope, params: unknown[], bucketExpr?: string)
  * рахуються — лише лічильники угод. Σ(new+repeat+undef)=created (партиція);
  * ad/leadgen — ПІДМНОЖИНИ, у created не додаються. Σ менеджерів = команда = відділ.
  */
+/**
+ * 🤝 «ПРИЙНЯТО ЛІДОГЕН» МЕНЕДЖЕРА — угоди, які Kommo СТВОРИЛА йому з передачі лідгена (рішення власника 05.10.2026).
+ *
+ * 🔴 ПРИВІД, ЗАМІРЯНИЙ 05.10.2026 (відгук тімліда Шаврової «кількість взятих лідів від лідгена не вірно
+ * підтягує менеджерам»). Факт рахувався за каналом `lead_channel = 'leadgen'` (рішення 24.08 — замість реєстру
+ * бота). Але канал сліпий: з 451 угоди, яку Kommo у вересні створила менеджерам із кваліфікації в Продзвоні,
+ * каналом «лідоген» мічені 182 (решта — «інше» з джерелами «Реактивація закриті», «Реактивация звонком»,
+ * «Холодная база»; кілька — «реклама»). Пехньо: 7 за каналом проти 30 реальних.
+ *
+ * ✅ Тепер — той самий зв'язок, що екран «Лідогенерація»: примітка Kommo «створено з угоди» (`lead_child_links`)
+ * від угоди Продзвону. Угода менеджера — воронки Кваліфікації й повного циклу; дата — створення, київська,
+ * обидва кінці включно; зараховується поточному відповідальному (активному, як у `createdSplitByManager`).
+ * Канал `lead_channel` НЕ чіпаємо: колонки «зі створених: лідоген» і «Конв. Р+Л» лишаються на ньому — окремий
+ * прохід (варіант «б»). Одне джерело для Звіту й задач KPI (`#1259`), живий SQL — `#1260`.
+ */
+export async function leadgenAcceptedByManager(s: MetricScope): Promise<{ managerId: number; count: number }[]> {
+  const params: unknown[] = [PRODZVIN_PIPELINES, [...QUALIFICATION_PIPELINES, ...FC_PIPELINE_IDS]];
+  const conds: string[] = [];
+  if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
+  const r = await pool.query<{ manager_id: number; n: string }>(
+    `SELECT m.id AS manager_id, COUNT(DISTINCT d.kommo_id) AS n
+       FROM deals d
+       JOIN managers m ON m.id = d.manager_id AND m.is_active
+      WHERE d.pipeline_id = ANY($2::bigint[])
+        AND EXISTS (SELECT 1 FROM lead_child_links l JOIN deals p ON p.kommo_id = l.parent_id
+                     WHERE l.child_id = d.kommo_id AND p.pipeline_id = ANY($1::bigint[]))
+        ${conds.length ? "AND " + conds.join(" AND ") : ""}
+      GROUP BY m.id`, params);
+  return r.rows.map((x) => ({ managerId: x.manager_id, count: Number(x.n) }));
+}
+
 export async function createdSplitByManager(s: MetricScope): Promise<CreatedSplitRow[]> {
   const params: unknown[] = [];
   const cte = createdSplitCte(s, params);

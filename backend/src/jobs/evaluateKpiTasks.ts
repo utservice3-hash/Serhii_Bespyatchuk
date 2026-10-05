@@ -26,8 +26,9 @@ async function factFor(metric: string, managerId: number, day: string, adSources
     // це критично: факт задачі й факт Звіту задумані як ОДНЕ число, тож означення
     // мусять переїхати разом. Лишити тут реєстр означало б, що задача рахує одне,
     // а екран поруч — інше, і розбіжність нічим не ловилась би. Тримає `#142`.
+    // 🤝 ЗМІНЕНО 05.10.2026 разом зі Звітом: угоди, створені Kommo з передачі лідгена (`#1259`).
     case "leadgen_count":
-      return pick(await metrics.createdSplitByManager(scope))?.leadgenCount ?? 0;
+      return pick(await metrics.leadgenAcceptedByManager(scope))?.count ?? 0;
     case "dispatch_count": return pick(await metrics.dispatchedByManager(scope))?.deals ?? 0;
     case "avg_check": return pick(await money.avgCheckByManager(scope))?.avgCheck ?? 0;
     case "payment_amount": return Math.round(pick(await money.receivedByMgr(scope))?.revenue ?? 0);

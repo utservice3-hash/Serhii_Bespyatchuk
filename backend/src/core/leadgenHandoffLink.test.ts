@@ -768,3 +768,35 @@ test("#1173 ЖИВИЙ SQL: план на дзвінки й гроші — не�
     /leadgen_plans_metric_check/, "🔴 база прийняла пункт, якого немає в переліку");
   await client!.query(`INSERT INTO leadgen_plans (manager_id, month, metric, proposed_value) VALUES (60, '2025-02-01', 'money', 1)`);
 });
+
+/**
+ * #1260 — «ПРИЙНЯТО ЛІДОГЕН» НА ЖИВОМУ SQL (рішення власника 05.10.2026): угода менеджера, яку Kommo створила з
+ * угоди Продзвону (`lead_child_links`), — рахується; угода з каналом «лідоген», але без звʼязку, — ні; створена
+ * поза періодом — ні; створена з угоди НЕ з Продзвону — ні; угода в чужій воронці (не Кваліфікація/повний цикл) — ні.
+ * 🧨 САБОТАЖ: у `leadgenAcceptedByManager` прибрати `AND p.pipeline_id = ANY($1::bigint[])` → звʼязок з не-Продзвону
+ * рахується → червоніє.
+ */
+test("#1260 ЖИВИЙ SQL: прийнято лідоген — лише угоди, створені Kommo з передачі Продзвону, у періоді", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const metrics = await import("./metrics.js");
+  await client!.query(`INSERT INTO managers (id, name, team_id, is_active) VALUES (80,'Продажі Прийм',1,true) ON CONFLICT (id) DO NOTHING`);
+  const mk = async (id: number, pipeline: number, created: string, channel: string | null = null) =>
+    client!.query(`INSERT INTO deals (kommo_id, name, manager_id, pipeline_id, status_id, created_at_kommo, lead_channel) VALUES ($1,$2,80,$3,1,$4,$5)`,
+      [id, `угода ${id}`, pipeline, created, channel]);
+  const link = (parent: number, child: number) => client!.query(`INSERT INTO lead_child_links (parent_id, child_id, created_at) VALUES ($1,$2,now())`, [parent, child]);
+  await mk(810001, PZ, "2025-02-01T09:00:00Z");                    // угода Продзвону (батько)
+  await mk(810002, 9999999, "2025-02-01T09:00:00Z");               // батько НЕ з Продзвону
+  await mk(810011, FC[0], "2025-02-10T09:00:00Z"); await link(810001, 810011);          // ✅ рахується
+  await mk(810012, QUAL, "2025-02-11T09:00:00Z"); await link(810001, 810012);           // ✅ рахується (Кваліфікація)
+  await mk(810013, FC[0], "2025-02-12T09:00:00Z", "leadgen");                          // ❌ канал є, звʼязку немає
+  await mk(810014, FC[0], "2025-03-01T09:00:00Z"); await link(810001, 810014);          // ❌ поза періодом
+  await mk(810015, FC[0], "2025-02-13T09:00:00Z"); await link(810002, 810015);          // ❌ батько не з Продзвону
+  await mk(810016, 9999999, "2025-02-14T09:00:00Z"); await link(810001, 810016);        // ❌ не воронка менеджера
+  const rows = await metrics.leadgenAcceptedByManager({ from: "2025-02-01", to: "2025-02-28", managerId: 80 });
+  assert.deepEqual(rows, [{ managerId: 80, count: 2 }],
+    "🔴 «прийнято лідоген» не рівно 2: рахує канал без звʼязку, угоду поза періодом, звʼязок не з Продзвону чи чужу воронку");
+  // 🪞 Межа періоду включно, по-київськи: 28.02 23:30 Київ (21:30 UTC) — ще лютий.
+  await mk(810017, FC[0], "2025-02-28T21:30:00Z"); await link(810001, 810017);
+  const r2 = await metrics.leadgenAcceptedByManager({ from: "2025-02-01", to: "2025-02-28", managerId: 80 });
+  assert.equal(r2[0]?.count, 3, "🔴 угода, створена 28.02 о 23:30 за Києвом, випала з лютого — межа не київська або не включна");
+});
