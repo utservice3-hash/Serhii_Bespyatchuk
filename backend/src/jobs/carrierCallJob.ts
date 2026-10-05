@@ -1,7 +1,7 @@
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
 import { fetchLeadsOnStage, kommoGet, kommoWrite } from "../kommo/client.js";
-import { closeTasksBody, openTasksPath } from "../core/carrierHistory.js";
+import { closeTasksBody, HISTORY_GUARD, openTasksPath } from "../core/carrierHistory.js";
 import { closeModeOf } from "../core/carrierClose.js";
 import { sendAdminAlert } from "../bot/notify.js";
 import { runCarrierTick, type CarrierTickReport } from "../core/carrierCalls.js";
@@ -33,6 +33,7 @@ export async function carrierCallJob(): Promise<CarrierTickReport | GuardSkip> {
       reviewTasks: true,
       noTalkAfterMin: config.callAi.carrierNoTalkCloseMin,
       noTalkSyncMaxMin: minutesSetting(config.callAi.carrierNoTalkSyncMaxMin, NO_TALK_GUARD.defaultMaxAgeMin),
+      historySyncMaxMin: minutesSetting(config.callAi.carrierHistorySyncMaxMin, HISTORY_GUARD.defaultMaxAgeMin),
       close: {
         mode: closeModeOf(config.callAi.carrierAutoClose),
         otherMode: closeModeOf(config.callAi.carrierAutoCloseOther),
@@ -57,7 +58,8 @@ export async function carrierCallJob(): Promise<CarrierTickReport | GuardSkip> {
       + (d.beforeLaunch ? `, до старту ${String(d.beforeLaunch)}` : "") + ` · розпізнано ${String(sum(r.stt, "done"))}, проаналізовано ${String(sum(r.llm, "done"))}`
       + (r.purged ? ` · текст видалено за строком ${String(r.purged)}` : "")
       + (v.history ? ` · історія CRM ${String(v.history)}` : "")
-      + (r.closed ? ` · закриття (${r.closed.mode}, «інше» ${r.closed.otherMode}, історія ${r.closed.historyMode}): кандидатів ${String(r.closed.candidates)}, у журнал ${String(r.closed.logged)}, закрито ${String(r.closed.closed)}, задач Kommo ${String(r.closed.tasksClosed)}${r.closed.failed ? `, помилок ${String(r.closed.failed)}` : ""}` : "")
+      + (v.historyGate.open ? "" : ` · «історія CRM» НА ПАУЗІ: синк угод ${v.historyGate.syncAgeMin == null ? "невідомо коли" : `${String(v.historyGate.syncAgeMin)} хв тому`} (поріг ${String(v.historyGate.maxAgeMin)} хв)`)
+      + (r.closed ? ` · закриття (${r.closed.mode}, «інше» ${r.closed.otherMode}, історія ${r.closed.historyMode}): кандидатів ${String(r.closed.candidates)}, у журнал ${String(r.closed.logged)}, закрито ${String(r.closed.closed)}, задач Kommo ${String(r.closed.tasksClosed)}${r.closed.historyPaused ? `, історія чекає синку ${String(r.closed.historyPaused)}` : ""}${r.closed.historyRevoked ? `, історію знято (зʼявився клієнт) ${String(r.closed.historyRevoked)}` : ""}${r.closed.failed ? `, помилок ${String(r.closed.failed)}` : ""}` : "")
       + (r.reviewTasks && (r.reviewTasks.created || r.reviewTasks.closed) ? ` · задачі: нових ${String(r.reviewTasks.created)}, закрито ${String(r.reviewTasks.closed)}` : "")
       + (r.sttStoppedBy ? ` · розпізнавання: ${r.sttStoppedBy}` : "")
       + (r.llmStoppedBy ? ` · аналіз: ${r.llmStoppedBy}` : ""));
