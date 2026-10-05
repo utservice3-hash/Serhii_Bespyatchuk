@@ -421,7 +421,7 @@ test("#1363 НАЛАШТУВАННЯ: вибір команди в рядку л
   assert.match(fe, /setTeamMoveDate\(r\.managerId, day\)/, "🔴 «змінити дату» не кличе роут виправлення");
 });
 
-test("#1364 РОУТ ДАТИ ПЕРЕХОДУ: межа manage_users першим рядком; у матриці; стоїть ПІСЛЯ post(\"/teams\") — зріз #709c чистий", () => {
+test("#1364 РОУТ ДАТИ ПЕРЕХОДУ: межа manage_users першим рядком; у матриці; стоїть ПІСЛЯ створення команди — зріз #709c чистий", () => {
   const routes = readFileSync(path.join(ROOT, "backend/src/routes/settings.ts"), "utf8");
   const at = routes.indexOf('settingsRouter.patch("/team-moves/:managerId/last"');
   assert.ok(at > 0, "🔴 роуту виправлення дати немає");
