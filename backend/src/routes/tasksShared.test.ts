@@ -963,3 +963,30 @@ test("#493 СЕЛЕКТ ВИКОНАВЦЯ: моя команда першою, 
   assert.match(teams, /myTeamInactive/, "🔴 роут не віддає неактивних з моєї команди");
   assert.match(teams, /is_active = false\s+AND m\.team_id = COALESCE\(\$1::int/, "🔴 неактивні беруться не з команди того, хто питає");
 });
+
+/**
+ * #494 — ПОМИЛКА ЗАВАНТАЖЕННЯ НЕ СТИРАЄ СПИСОК ВИКОНАВЦІВ, А ПОРОЖНІЙ СПИСОК НАЗИВАЄ СЕБЕ.
+ *
+ * Відгук Шаврової 05.10.2026, скріншот: селект «Виконавець» — лише «—». Права в неї
+ * правильні (тімлід, вкладки tasks/teams), сервер віддає 47 людей. Причина в коді:
+ * список тягнуть ДВА ефекти паралельно, і кожен мав `.catch(() => setManagerOptions([]))`,
+ * тож падіння будь-якого затирало порожнечею те, що інший щойно приніс.
+ *
+ * 🧨 Червоніє, якщо: catch знову пише порожній масив; хоч один ефект тягне список в обхід
+ * `loadManagerOptions`; форма чи картка не кажуть словами, що список не дійшов; відкриття
+ * форми з порожнім списком не пробує завантажити його ще раз.
+ */
+test("#494 СПИСОК ВИКОНАВЦІВ: помилка не стирає отримане, порожнеча названа й повторюється", () => {
+  const dash = codeOf("pages", "Dashboard.tsx");
+  assert.doesNotMatch(dash, /\.catch\(\(\) => setManagerOptions\(\[\]\)\)/, "🔴 помилка знову затирає список порожнечею");
+  assert.equal(dash.split("fetchManagerOptions()").length - 1, 1, "🔴 список тягнуть в обхід loadManagerOptions");
+  assert.match(dash, /\.catch\(\(\) => setManagerOptionsFailed\(true\)\)/, "🔴 помилка не піднімає прапорець");
+  assert.ok(dash.split("loadManagerOptions();").length - 1 >= 2, "🔴 ефекти не кличуть loadManagerOptions");
+  assert.match(dash, /onReloadManagerOptions=\{loadManagerOptions\}/, "🔴 задачник не може повторити завантаження");
+
+  const src = codeOf("pages", "dashboard", "sections", "TasksSection.tsx");
+  assert.ok(src.split("<AssigneeListStatus empty={managerOptions.length === 0}").length - 1 >= 2, "🔴 порожній список мовчить у формі чи картці");
+  assert.match(src, /Список виконавців не завантажився\./, "🔴 немає слів про те, що список не дійшов");
+  assert.match(src, /const needAssigneeList = \(taskModalOpen \|\| openTaskId != null\) && managerOptions\.length === 0;/, "🔴 умова повтору змінилась");
+  assert.match(src, /useEffect\(\(\) => \{ if \(needAssigneeList\) onReloadManagerOptions\?\.\(\); \}, \[needAssigneeList\]\)/, "🔴 відкриття форми не повторює завантаження");
+});

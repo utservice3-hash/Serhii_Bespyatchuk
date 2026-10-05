@@ -195,6 +195,19 @@ export function Dashboard() {
   const mountedAt = useRef(Date.now());
   const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
   const [managerOptions, setManagerOptions] = useState<ManagerOption[]>([]);
+  /**
+   * 🔴 ПОМИЛКА НЕ СТИРАЄ СПИСОК (відгук Шаврової 05.10.2026: селект виконавця — лише «—»).
+   * Список тягнуть ДВА ефекти паралельно, і кожен мав `.catch(() => setManagerOptions([]))`:
+   * упав будь-який — і він затирав порожнечею те, що інший щойно приніс. Тепер помилка
+   * лише піднімає прапорець (форма каже це словами й дає «Повторити»), а отриманий список
+   * лишається. Тримає `#494`.
+   */
+  const [managerOptionsFailed, setManagerOptionsFailed] = useState(false);
+  const loadManagerOptions = useCallback(() => {
+    fetchManagerOptions()
+      .then((m) => { setManagerOptions(m); setManagerOptionsFailed(false); })
+      .catch(() => setManagerOptionsFailed(true));
+  }, []);
   const [taskSearch, setTaskSearch] = useState("");
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [taskForm, setTaskForm] = useState(emptyTaskForm);
@@ -318,8 +331,8 @@ export function Dashboard() {
     // dropdown populated (used by task assignment and other sections).
     // 🔓 Гард `role === "manager" → return` знято 16.09.2026: саме він лишав
     // менеджера з порожнім селектом виконавця (сервер тепер віддає список усім).
-    fetchManagerOptions().then(setManagerOptions).catch(() => setManagerOptions([]));
-  }, [auth, refreshNonce]);
+    loadManagerOptions();
+  }, [auth, refreshNonce, loadManagerOptions]);
 
   useEffect(() => {
     if (section !== "tasks") return;
@@ -328,8 +341,8 @@ export function Dashboard() {
       .then((t) => { setTasks(t); setTasksLoadFailed(false); })
       .catch(() => { setTasks([]); setTasksLoadFailed(true); })
       .finally(() => setTasksLoading(false));
-    fetchManagerOptions().then(setManagerOptions).catch(() => setManagerOptions([]));
-  }, [section]);
+    loadManagerOptions();
+  }, [section, loadManagerOptions]);
 
   // Ask for notification permission once, and poll tasks in the background (any
   // section) so status-change alerts still fire when you're elsewhere.
@@ -1491,6 +1504,8 @@ export function Dashboard() {
           tasksLoadFailed={tasksLoadFailed}
           tasks={tasks}
           managerOptions={managerOptions}
+          managerOptionsFailed={managerOptionsFailed}
+          onReloadManagerOptions={loadManagerOptions}
           patchTaskLocal={patchTaskLocal}
           commitTask={commitTask}
           handleDeleteTask={handleDeleteTask}
