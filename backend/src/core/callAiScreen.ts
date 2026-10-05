@@ -2,7 +2,7 @@ import type { Db } from "./adCallFacts.js";
 import { adDealFirstTalksSql } from "./adCallFactsRules.js";
 import { OUTBOUND_TYPES } from "./missedCallsRules.js";
 import type { MissedScope } from "./missedCallsRules.js";
-import { ELEVENLABS_STT_MODEL, GEMINI_MODEL, RUBRIC_CURRENT, FIRST_TOUCH_RUBRICS, type AnalysisResult, type Turn } from "./callAiProviders.js";
+import { ELEVENLABS_STT_MODEL, GEMINI_MODEL, FIRST_TOUCH_SHOWN_RUBRICS, FIRST_TOUCH_RUBRICS, type AnalysisResult, type Turn } from "./callAiProviders.js";
 import { LLM_PROVIDER, STT_PROVIDER, RINGOSTAT_POLICY, RECORDING_MAX_BYTES, type AdPredicate } from "./callAiPilot.js";
 import { downloadRecording, type DownloadOutcome } from "./ringostatRecording.js";
 import { FIRST_TOUCH_RULE, firstTouchExclusionSql } from "./callAiTick.js";
@@ -12,6 +12,7 @@ import { silentBeforeClose, type AdCallFactsParams } from "./adCallFactsRules.js
 import { typeVerdict, type TypeOverride } from "./callAiType.js";
 import type { ConversationType } from "./callAiProviders.js";
 import { loadTunables, type FirstTouchTunables } from "./firstTouchTunables.js";
+import { offHours, reactionMinutes } from "./leadReaction.js";
 import { countingDeadline, promiseDeadline, promiseState, worstPromiseState, withOfflineMark, type CallFact, type DeadlineBasis, type ModelPromise, type PromiseState } from "./callAiPromise.js";
 
 /**
@@ -163,6 +164,12 @@ export interface AiCallRow {
   offlineNote: CallNote | null;
   /** Номер клієнта (для пулу заявок тімліда, ТЗ п.6.2) — `null`, якщо Ringostat його не дав. */
   clientPhone: string | null;
+  /** ⏱ Перший наш вихідний на номер після створення угоди (`core/leadReaction.ts`); `null` — не дзвонили / невідомо. */
+  firstOutboundAt: string | null;
+  /** Хвилин від створення угоди до першого вихідного; рахується після згортання (від найранішої угоди). */
+  reactionMin: number | null;
+  /** Заявка надійшла у вихідний чи поза робочими годинами. */
+  reactionOffHours: boolean;
 }
 
 export interface CallNote { text: string; byName: string | null; at: string }
@@ -179,6 +186,7 @@ interface RawRow {
   pn_text?: string | null; pn_by?: string | null; pn_at?: Date | null;
   mn_text?: string | null; mn_by?: string | null; mn_at?: Date | null;
   on_text?: string | null; on_by?: string | null; on_at?: Date | null;
+  first_out_at?: Date | null;
 }
 
 const IN_TYPES = new Set(["in", "transitin"]);
@@ -212,6 +220,9 @@ export function foldRow(r: RawRow): AiCallRow {
     missedNote: r.mn_text ? { text: r.mn_text, byName: r.mn_by ?? null, at: r.mn_at ? new Date(r.mn_at).toISOString() : "" } : null,
     offlineNote: r.on_text ? { text: r.on_text, byName: r.on_by ?? null, at: r.on_at ? new Date(r.on_at).toISOString() : "" } : null,
     clientPhone: r.client_phone ?? null,
+    firstOutboundAt: r.first_out_at ? new Date(r.first_out_at).toISOString() : null,
+    reactionMin: null,
+    reactionOffHours: false,
   };
 }
 
@@ -227,7 +238,9 @@ function typeFields(res: AnalysisResult | null, r: RawRow): Pick<AiCallRow, "con
     : { isCargo: r.ov_is_cargo === true, byName: r.ov_by ?? null, at: r.ov_at ? new Date(r.ov_at).toISOString() : "" };
   const type = res?.conversation_type ?? null;
   const conf = typeof res?.type_confidence === "number" ? res.type_confidence : null;
-  const v = typeVerdict(type, conf, override);
+  // Домовленість ПЕРЕДЗВОНИТИ від менеджера (а не «напишу в месенджер») — правило 05.10.2026 у `typeVerdict`.
+  const callback = (res?.promises ?? []).some((p) => p.who === "manager" && p.channel === "call");
+  const v = typeVerdict(type, conf, override, callback);
   return { conversationType: type, typeConfidence: conf, typeReason: res?.type_reason ?? null,
     priceValue: res?.price_value?.trim() ? res.price_value.trim() : null, inReport: v.inReport, typeCheck: v.typeCheck, typeOverride: override };
 }
@@ -306,6 +319,8 @@ export function collapseByCall(rows: readonly AiCallRow[]): AiCallListRow[] {
     if (seen) {
       if (!seen.kommoIds.includes(r.kommoId)) seen.kommoIds = [...seen.kommoIds, r.kommoId].sort((a, b) => a - b);
       if (r.dealCreatedAt < seen.dealCreatedAt) seen.dealCreatedAt = r.dealCreatedAt;
+      // Перший вихідний рахується від створення угоди; найраніша угода дає найраніший — беремо мінімум.
+      if (r.firstOutboundAt && (!seen.firstOutboundAt || r.firstOutboundAt < seen.firstOutboundAt)) seen.firstOutboundAt = r.firstOutboundAt;
       if (r.silentBeforeClose === true || (seen.silentBeforeClose == null && r.silentBeforeClose === false)) seen.silentBeforeClose = r.silentBeforeClose;
       continue;
     }
@@ -335,7 +350,9 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
            a.status AS llm_status, a.failure AS llm_failure, a.result,
            rcx.client_phone, d.pipeline_id, d.reject_reason,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
-           ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS}
+           ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS},
+           (SELECT min(e.calldate) FROM ringostat_calls e WHERE rcx.client_phone IS NOT NULL AND e.client_phone = rcx.client_phone
+               AND e.call_type = ANY($15::text[]) AND e.calldate >= ft.created_at) AS first_out_at
       FROM (${q.sql}) ft
       LEFT JOIN ringostat_calls rcx ON rcx.uniqueid = ft.uniqueid
       LEFT JOIN deals d ON d.kommo_id = ft.kommo_id
@@ -344,13 +361,15 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
       LEFT JOIN managers m ON m.id = ft.manager_id
       LEFT JOIN teams tm ON tm.id = m.team_id
       LEFT JOIN call_transcripts t ON t.uniqueid = ft.uniqueid AND t.provider = $8 AND t.model = $9
-      LEFT JOIN call_analyses a ON a.transcript_id = t.id AND a.provider = $10 AND a.model = $11 AND a.rubric_version = $12
+      LEFT JOIN LATERAL (SELECT ax.status, ax.failure, ax.result FROM call_analyses ax
+                  WHERE ax.transcript_id = t.id AND ax.provider = $10 AND ax.model = $11 AND ax.rubric_version = ANY($12::text[])
+                  ORDER BY (ax.status = 'done') DESC, array_position($12::text[], ax.rubric_version) LIMIT 1) a ON true
      WHERE ($13::int IS NULL OR ft.manager_id = $13)
        AND ($14::int IS NULL OR m.team_id = $14)
        AND ${firstTouchExclusionSql("ft", "rcx.client_phone", tun.repeatWindowDays)}
      ORDER BY ft.calldate DESC, ft.kommo_id DESC`;
-  const params = [...q.params, STT_PROVIDER, ELEVENLABS_STT_MODEL, LLM_PROVIDER, GEMINI_MODEL, RUBRIC_CURRENT,
-    scope.managerId ?? null, scope.teamId ?? null];
+  const params = [...q.params, STT_PROVIDER, ELEVENLABS_STT_MODEL, LLM_PROVIDER, GEMINI_MODEL, [...FIRST_TOUCH_SHOWN_RUBRICS],
+    scope.managerId ?? null, scope.teamId ?? null, [...OUTBOUND_TYPES]];
   const raw = (await db.query<RawRow>(sql, params)).rows;
   const rows = raw.map(foldRow);
 
@@ -377,7 +396,9 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
     const f = facts.get(r.kommoId);
     r.silentBeforeClose = f ? silentBeforeClose(f, SILENCE_RULE.minGapHours) : null;
   }
-  return { rows: collapseByCall(rows), truncated: raw.length >= SCREEN_LIMIT };
+  const out = collapseByCall(rows);
+  for (const r of out) { r.reactionMin = reactionMinutes(r.dealCreatedAt, r.firstOutboundAt); r.reactionOffHours = offHours(r.dealCreatedAt); }
+  return { rows: out, truncated: raw.length >= SCREEN_LIMIT };
 }
 
 export interface AiCallCard {
@@ -417,7 +438,9 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
       LEFT JOIN managers m ON m.id = rc.manager_id
       LEFT JOIN teams tm ON tm.id = m.team_id
       LEFT JOIN call_transcripts t ON t.uniqueid = rc.uniqueid AND t.provider = $2 AND t.model = $3
-      LEFT JOIN call_analyses a ON a.transcript_id = t.id AND a.provider = $4 AND a.model = $5 AND a.rubric_version = $6
+      LEFT JOIN LATERAL (SELECT ax.status, ax.failure, ax.result FROM call_analyses ax
+                  WHERE ax.transcript_id = t.id AND ax.provider = $4 AND ax.model = $5 AND ax.rubric_version = ANY($6::text[])
+                  ORDER BY (ax.status = 'done') DESC, array_position($6::text[], ax.rubric_version) LIMIT 1) a ON true
      WHERE rc.uniqueid = $1
        AND ($7::int IS NULL OR rc.manager_id = $7)
        AND ($8::int IS NULL OR m.team_id = $8)
@@ -427,7 +450,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
        -- новою рубрикою дзвінок із розбором v1 інакше зник би з картки — спіймав #961 «Перевізників»).
        AND (NOT EXISTS (SELECT 1 FROM carrier_call_deals cd WHERE cd.uniqueid = rc.uniqueid OR cd.first_uniqueid = rc.uniqueid)
             OR EXISTS (SELECT 1 FROM call_analyses ax WHERE ax.transcript_id = t.id AND ax.rubric_version = ANY($9::text[])))`,
-  [uniqueid, STT_PROVIDER, ELEVENLABS_STT_MODEL, LLM_PROVIDER, GEMINI_MODEL, RUBRIC_CURRENT,
+  [uniqueid, STT_PROVIDER, ELEVENLABS_STT_MODEL, LLM_PROVIDER, GEMINI_MODEL, [...FIRST_TOUCH_SHOWN_RUBRICS],
     scope.managerId ?? null, scope.teamId ?? null, [...FIRST_TOUCH_RUBRICS]]);
   const raw = r.rows[0];
   if (!raw) return null;

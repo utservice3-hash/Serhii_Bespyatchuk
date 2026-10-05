@@ -278,7 +278,7 @@ test("#836 ОДИН ДЗВІНОК = ОДИН РЯДОК: розмова, пер
     priceDiscussed: null, objections: 0, promises: 0, promisesWithDeadline: 0, unverifiedQuotes: 0,
     pipelineGroup: "full" as const, rejectReason: null, promiseState: null, managerPromises: 0, silentBeforeClose: null,
     conversationType: null, typeConfidence: null, typeReason: null, priceValue: null, inReport: true, typeCheck: false, typeOverride: null,
-    priceNote: null, missedNote: null, offlineNote: null, clientPhone: null };
+    priceNote: null, missedNote: null, offlineNote: null, clientPhone: null, firstOutboundAt: null, reactionMin: null, reactionOffHours: false };
   const got = collapseByCall([
     { ...base, kommoId: 9, dealCreatedAt: "2026-09-23T07:00:00.000Z" },
     { ...base, kommoId: 5, dealCreatedAt: "2026-09-22T07:00:00.000Z" },
@@ -805,4 +805,107 @@ test("#868 НАЛАШТУВАННЯ ПЕРШОГО ДОТИКУ · ЖИВА СХ
   await put({});
   assert.deepEqual(await loadTunables(c.db), CURRENT_BEHAVIOUR, "🔴 чинним узято не останній рядок журналу");
   assert.equal(await st(), "late", "дзеркало: повернули нулі — знову «пізно»");
+});
+
+/**
+ * #885 — ВТРАЧЕНИЙ ЛІД І ПРАВИЛО ПЕРЕДЗВОНУ · ЯДРО (рішення власника 05.10.2026). `lead_lost` — у звіті за будь-якої
+ * впевненості; «інше» і «без розмови» з домовленістю ПЕРЕДЗВОНИТИ — у звіті (правило), а перевізник, продавець, пошук
+ * роботи й помилка номером — ні, навіть з обіцянкою; обіцянка в месенджер правила не вмикає; ручна позначка сильніша.
+ * У звіті тімліда втрачений — у «прийнято» й у своїй колонці, але НЕ в знаменнику ціни й не в «без ціни»; пул
+ * «Втрачені» = клітинці; медіана хвилин реакції — лише по втрачених. Хвилини — від заявки до першого вихідного, з
+ * межами робочого часу з обох боків.
+ * 🧨 Червоніє, якщо втрачений піде у «Виключені» чи в знаменник ціни, перевізник з обіцянкою зайде у звіт, межа
+ * робочого часу зсунеться або медіана рахуватиме не тих.
+ */
+test("#885 ВТРАЧЕНИЙ ЛІД І ПЕРЕДЗВІН · ЯДРО: lead_lost у звіті поза ціною, правило передзвону лише для «інше»/«без розмови», медіана реакції", async () => {
+  const { typeVerdict } = await import("./callAiType.js");
+  assert.deepEqual(typeVerdict("lead_lost", 0.5, null), { inReport: true, typeCheck: false, source: "model" }, "🔴 втрачений лід виключено або позначено «перевірити»");
+  for (const ty of ["other", "no_dialog"] as const) {
+    assert.deepEqual(typeVerdict(ty, 0.95, null, true), { inReport: true, typeCheck: false, source: "rule" }, `🔴 «${ty}» з домовленістю передзвонити не у звіті`);
+    assert.equal(typeVerdict(ty, 0.95, null, false).inReport, false, `дзеркало: «${ty}» без домовленості — у «Виключених»`);
+  }
+  for (const ty of ["carrier", "vendor", "job_seeker", "wrong_number"] as const)
+    assert.equal(typeVerdict(ty, 0.95, null, true).inReport, false, `🔴 «${ty}» з обіцянкою передзвонити зайшов у звіт`);
+  assert.equal(typeVerdict("other", 0.95, { isCargo: false, byName: "Т", at: "" }, true).inReport, false, "🔴 правило перебило ручну позначку");
+  const scr = SRC("core/callAiScreen.ts");
+  assert.match(scr, /const callback = \(res\?\.promises \?\? \[\]\)\.some\(\(p\) => p\.who === "manager" && p\.channel === "call"\);\s*const v = typeVerdict\(type, conf, override, callback\);/,
+    "🔴 правило вмикає не домовленість менеджера ПЕРЕДЗВОНИТИ");
+
+  const { teamReport, poolRows } = await import("./firstTouchTeamReport.js");
+  const r = (id: string, o: Record<string, unknown>) => ({ uniqueid: id, calledAt: "2026-09-29T08:00:00Z", managerId: 1, managerName: "M1",
+    teamName: "T", inReport: true, state: "done", priceDiscussed: true, promiseState: null, typeCheck: false, priceNote: null, missedNote: null,
+    conversationType: "cargo_request", reactionMin: 5, ...o });
+  const rows = [
+    r("a", { priceDiscussed: true }), r("b", { priceDiscussed: false }),
+    r("l1", { conversationType: "lead_lost", priceDiscussed: false, reactionMin: 20 }),
+    r("l2", { conversationType: "lead_lost", priceDiscussed: false, reactionMin: 3525 }),
+    r("l3", { conversationType: "lead_lost", priceDiscussed: false, reactionMin: 65 }),
+    r("l4", { conversationType: "lead_lost", priceDiscussed: false, reactionMin: null }),
+  ] as never[];
+  const m = teamReport(rows).managers[0];
+  assert.deepEqual([m.accepted, m.analysed, m.priceVoiced, m.pricePct, m.noPriceNoComment, m.lost, m.lostReactionMedianMin], [6, 6, 1, 50, 1, 4, 65],
+    "🔴 втрачений лід зіпсував ціну або колонка/медіана пораховані не так");
+  assert.equal(poolRows(rows, 1, "lost").length, m.lost, "🔴 пул «Втрачені» ≠ клітинці");
+  assert.equal(poolRows(rows, 1, "noPrice").length, 1, "🔴 втрачений лід у «без ціни»");
+
+  const { reactionMinutes, offHours, median } = await import("./leadReaction.js");
+  assert.deepEqual([reactionMinutes("2026-09-28T07:00:00Z", "2026-09-28T07:20:00Z"), reactionMinutes("2026-09-28T07:00:00Z", null),
+    reactionMinutes("2026-09-28T07:00:00Z", "2026-09-28T06:59:00Z")], [20, null, 0]);
+  // пн 28.09: 08:59 і 18:00 Києва — поза, 09:00 і 17:59 — у робочий час; субота — поза.
+  assert.deepEqual(["2026-09-28T05:59:00Z", "2026-09-28T06:00:00Z", "2026-09-28T14:59:00Z", "2026-09-28T15:00:00Z", "2026-09-26T09:00:00Z"].map(offHours),
+    [true, false, false, true, true], "🔴 межі робочого часу зсунулись");
+  assert.deepEqual([median([]), median([20, 3525, 65]), median([10, 20])], [null, 65, 15]);
+});
+
+/**
+ * #886 — РЕАКЦІЯ І ПЕРЕАНАЛІЗ · ЖИВА СХЕМА. Перший вихідний рахується від створення угоди: спроба без відповіді —
+ * рахується, вхідний клієнта — ні, наш дзвінок ДО створення угоди — ні. Поки v3 у черзі, список показує готовий v2
+ * (а не «у черзі»); щойно v3 готовий — показує його (тут: втрачений лід, у звіті).
+ * 🧨 Червоніє, якщо рахувати до розмови, брати вхідні чи дзвінки до заявки, або список порожніє під час переаналізу.
+ */
+test("#886 РЕАКЦІЯ І ПЕРЕАНАЛІЗ · ЖИВА СХЕМА: перший вихідний після заявки (спроба — так, вхідний — ні), v2 видно, поки v3 у черзі", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const { aiCallsList } = await import("./callAiScreen.js");
+  await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel,manager_id)
+    VALUES (8850,'D8850',8921932,1,'2026-09-28 10:00:00+03','0508800050','ad',9011)`);
+  const call = (u: string, at: string, type: string, sec: number) => c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
+    VALUES ($1,$2,$3,$4,$5,$6,9011,'380508800050','https://rec/x')`, [u, at, type, sec > 0 ? "ANSWERED" : "NO ANSWER", sec, sec + 5]);
+  await call("re0", "2026-09-28 09:50:00+03", "out", 0);      // до заявки — не рахується
+  await call("re1", "2026-09-28 10:05:00+03", "in", 0);       // вхідний клієнта — не реакція
+  await call("re2", "2026-09-28 10:20:00+03", "out", 0);      // перша спроба — це і є реакція
+  await call("re3", "2026-09-28 10:40:00+03", "out", 60);     // сама розмова
+  const tid = (await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
+    VALUES ('re3','elevenlabs','scribe_v2','done','[{"channel":1,"start":0,"end":2,"text":"вже не актуально","lang":"ukr"}]'::jsonb) RETURNING id`)).rows[0].id;
+  await c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result) VALUES ($1,'google','gemini-3.8-flash','first-touch-v2','done',$2::jsonb)`,
+    [tid, JSON.stringify({ ...RESULT, promises: [], conversation_type: "other", type_confidence: 0.95 })]);
+  await c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status) VALUES ($1,'google','gemini-3.8-flash','first-touch-v3','queued')`, [tid]);
+  const row = async () => (await aiCallsList(c.db, FAKE_AD, "2026-09-28", "2026-09-28", NOW, {})).rows.find((r) => r.uniqueid === "re3");
+  const a = await row();
+  assert.deepEqual([a?.state, a?.conversationType, a?.inReport], ["done", "other", false], "🔴 поки v3 у черзі, список не показує готовий v2");
+  assert.deepEqual([a?.reactionMin, a?.reactionOffHours], [20, false], "🔴 реакція — не від заявки до першого вихідного (спроба рахується, вхідний і дзвінок до заявки — ні)");
+  await c.raw.query(`UPDATE call_analyses SET status = 'done', result = $2::jsonb WHERE transcript_id = $1 AND rubric_version = 'first-touch-v3'`,
+    [tid, JSON.stringify({ ...RESULT, conversation_type: "lead_lost", type_confidence: 0.9 })]);
+  const b = await row();
+  assert.deepEqual([b?.conversationType, b?.inReport], ["lead_lost", true], "🔴 готовий v3 не взято або втрачений лід не у звіті");
+});
+
+/**
+ * #887 — ВТРАЧЕНІ ЛІДИ НА ЕКРАНІ: колонка «Втрачені ліди» з медіаною хвилин, фільтр пулу з прапорця сервера, у рядку
+ * пулу — «перший наш дзвінок через …» і «заявка поза робочим часом»; тип має підпис; роут віддає прапорець і хвилини.
+ * 🧨 Червоніє, якщо фільтр перепишуть на фронті, колонку чи підпис приберуть, або роут не віддасть хвилини.
+ */
+test("#887 ВТРАЧЕНІ ЛІДИ НА ЕКРАНІ: колонка з медіаною, фільтр пулу з прапорця сервера, хвилини й «поза робочим часом» у рядку", async () => {
+  const card = readFileSync(FE("pages/dashboard/sections/FirstTouchReportCard.tsx"), "utf8");
+  assert.match(card, /\{ key: "lost", label: "Втрачені ліди"/, "🔴 колонки «Втрачені ліди» немає");
+  assert.match(card, /\{ key: "lost", label: "Втрачені ліди", match: \(r\) => r\.flags\.lost \}/, "🔴 фільтр пулу не з прапорця сервера");
+  assert.ok(!/conversationType === "lead_lost"/.test(card), "🔴 правило «втрачений» переписано на фронті");
+  assert.match(card, /l\.lostReactionMedianMin == null \? "" : ` · \$\{fmtMinutes\(l\.lostReactionMedianMin\)\}`/, "🔴 медіану реакції не показано поруч");
+  assert.match(card, /перший наш дзвінок через \$\{fmtMinutes\(r\.reactionMin\)\}/);
+  assert.match(card, /r\.reactionOffHours \? " · заявка поза робочим часом" : ""/, "🔴 вихідні читатимуться як лінь");
+  const V = await loadView() as unknown as { TYPE_LABEL: Record<string, string>; fmtMinutes: (m: number) => string };
+  assert.match(V.TYPE_LABEL.lead_lost ?? "", /Втрачений лід/, "🔴 тип без підпису");
+  assert.deepEqual([45, 190, 3525].map(V.fmtMinutes), ["45 хв", "3 год 10 хв", "2 дн 10 год"]);
+  const rep = SRC("routes/dashboard.ts");
+  const at0 = rep.indexOf('dashboardRouter.get("/ai-calls/team-report"'), nx = rep.indexOf("dashboardRouter.", at0 + 10);
+  assert.match(rep.slice(at0, nx), /reactionMin: r\.reactionMin, reactionOffHours: r\.reactionOffHours,[\s\S]*lost: isLost\(r\)/, "🔴 роут не віддає хвилини чи прапорець «втрачений»");
 });

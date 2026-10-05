@@ -431,17 +431,27 @@ test("#788 ЧЕРГА: нові дзвінки першими, а не в пор
 });
 
 /**
- * #854 — РУБРИКА first-touch-v2 (ТЗ «звіт тімліда» 30.09.2026): модель отримує ДАТУ розмови першим рядком; відповідь
- * без полів строку обіцянки або без ТИПУ розмови (зі списку ТЗ, з упевненістю 0..1 і причиною) — не за схемою, а
- * не «тип невідомий»; у промпті — правило «хоч одна ознака запиту на перевезення → cargo_request». Джоба й екран
- * беруть саме цю рубрику.
- * 🧨 Червоніє, якщо не передати час розмови, пропустити відповідь без типу чи прибрати правило з промпту.
+ * #884 — РУБРИКА first-touch-v3 (замінює #854; рішення власника 05.10.2026): модель отримує ДАТУ розмови першим
+ * рядком; відповідь без полів строку обіцянки або без ТИПУ розмови — не за схемою, а не «тип невідомий». Тип
+ * `lead_lost` (запит став неактуальним) — у переліку; у промпті чотири правила: «хоч одна ознака запиту → вантаж»,
+ * «домовленість передзвонити чи підтверджена актуальність → вантаж» (крім перевізника, продавця, роботи, помилки
+ * номером), «вже вирішили/пішли до інших → lead_lost, навіть з обіцянкою перевірити», «розмитнення — наша послуга».
+ * Джоба пише поточну рубрику; екран показує поточну, а поки її немає — v2 (не «у черзі»). «Перевізники» відкривають
+ * картку для всіх версій.
+ * 🧨 Червоніє, якщо не передати час розмови, пропустити відповідь без типу, прибрати будь-яке з правил з промпту,
+ * забути v3 у переліку для «Перевізників» чи показувати під час переаналізу порожнечу.
  */
-test("#854 РУБРИКА first-touch-v2: дата розмови в запиті; без полів строку чи без типу розмови — не за схемою; правило «хоч одна ознака — вантаж» у промпті", async (t) => {
+test("#884 РУБРИКА first-touch-v3: дата в запиті; без полів строку чи типу — не за схемою; у промпті «хоч одна ознака», «втрачений лід», «домовленість передзвонити» і розмитнення", async (t) => {
   const pr = await import("./callAiProviders.js");
-  assert.equal(pr.RUBRIC_CURRENT, "first-touch-v2");
-  assert.deepEqual([...pr.CONVERSATION_TYPES], ["cargo_request", "carrier", "vendor", "job_seeker", "wrong_number", "no_dialog", "other"]);
+  assert.equal(pr.RUBRIC_CURRENT, "first-touch-v3");
+  assert.deepEqual([...pr.CONVERSATION_TYPES], ["cargo_request", "lead_lost", "carrier", "vendor", "job_seeker", "wrong_number", "no_dialog", "other"]);
   assert.match(pr.ANALYSIS_SYSTEM_PROMPT, /ХОЧА Б ОДНА ознака запиту на перевезення/, "🔴 правила «хоч одна ознака — вантаж» у промпті немає");
+  assert.match(pr.ANALYSIS_SYSTEM_PROMPT, /домовився передзвонити клієнту або клієнт підтвердив, що його запит актуальний/, "🔴 правила «домовленість передзвонити → вантаж» немає");
+  assert.match(pr.ANALYSIS_SYSTEM_PROMPT, /крім випадків, коли це явно перевізник, продавець, пошук роботи чи помилка номером/, "🔴 правило передзвону без винятку — затягне перевізників у звіт");
+  assert.match(pr.ANALYSIS_SYSTEM_PROMPT, /lead_lost — клієнт звертався по перевезення[^\n]*навіть якщо менеджер пообіцяв перевірити пізніше/, "🔴 визначення втраченого ліда чи його пріоритет над обіцянкою зникли");
+  assert.match(pr.ANALYSIS_SYSTEM_PROMPT, /розмитнення чи митне оформлення вантажу — теж cargo_request/, "🔴 розмитнення не назване запитом (рішення власника 05.10)");
+  assert.deepEqual([...pr.FIRST_TOUCH_SHOWN_RUBRICS], ["first-touch-v3", "first-touch-v2"], "🔴 під час переаналізу екран не матиме що показати");
+  assert.ok(pr.FIRST_TOUCH_RUBRICS.includes("first-touch-v3"), "🔴 «Перевізники» не відкриють картку дзвінка, переаналізованого v3 (#961)");
   const txt = (b: Record<string, unknown>) => JSON.stringify(b);
   assert.match(txt(pr.buildAnalysisRequest([], 100, new Date("2026-09-29T05:56:00Z"))), /Розмова почалась 2026-09-29 о 08:56 за Києвом, вівторок/);
   const base = { summary: "", manager_channel: "1", client_request: "", next_step: "", price: { discussed: false, quote: "" }, objections: [] };
@@ -452,9 +462,13 @@ test("#854 РУБРИКА first-touch-v2: дата розмови в запит�
   const v1 = { ...v1only, conversation_type: "cargo_request", type_confidence: 0.9, type_reason: "питає ціну", price_value: "" };
   assert.equal(pr.validateAnalysis(v1).ok, true, "дзеркало: повна відповідь v2 проходить");
   assert.equal(pr.validateAnalysis({ ...v1, conversation_type: "spam" }).ok, false, "🔴 тип поза списком ТЗ прийнято");
+  assert.equal(pr.validateAnalysis({ ...v1, conversation_type: "lead_lost" }).ok, true, "🔴 втрачений лід не проходить схему");
   assert.equal(pr.validateAnalysis({ ...v1, type_confidence: 1.4 }).ok, false, "🔴 упевненість поза 0..1 прийнято");
   const src = (f: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "src", "core", f), "utf8");
-  for (const f of ["callAiTick.ts", "callAiScreen.ts"]) assert.ok(src(f).includes("RUBRIC_CURRENT") && !src(f).includes("RUBRIC_PILOT_V0"), `🔴 ${f} не на поточній рубриці`);
+  assert.ok(src("callAiTick.ts").includes("rubricVersion: RUBRIC_CURRENT") && !src("callAiTick.ts").includes("RUBRIC_PILOT_V0"), "🔴 джоба пише не поточну рубрику");
+  const scr = src("callAiScreen.ts");
+  assert.equal((scr.match(/GEMINI_MODEL, \[\.\.\.FIRST_TOUCH_SHOWN_RUBRICS\],/g) ?? []).length, 2, "🔴 список чи картка читають не «поточну, а поки її немає — v2»");
+  assert.equal((scr.match(/ORDER BY \(ax\.status = 'done'\) DESC, array_position\(\$\d+::text\[\], ax\.rubric_version\) LIMIT 1\) a ON true/g) ?? []).length, 2, "🔴 порядок вибору розбору інший");
 
   const c = await ctx(t); if (!c) return;
   const S = "el-854", G = "g-854";

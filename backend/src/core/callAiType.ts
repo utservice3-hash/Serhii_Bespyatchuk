@@ -9,7 +9,13 @@ import type { ConversationType } from "./callAiProviders.js";
  *   • будь-який інший тип з упевненістю < 0.85 — теж у звіті, з позначкою «Перевірити тип»: краще зайвий рядок у
  *     звіті, ніж схований клієнт;
  *   • решта — у «Виключених», з типом і причиною.
+ * 05.10.2026 (рішення власника після перегляду «Виключених»):
+ *   • `lead_lost` (запит став неактуальним) — у звіті, окремою колонкою «Втрачені ліди»: для тімліда це головний сигнал;
+ *   • «інше» чи «без розмови», де менеджер домовився ПЕРЕДЗВОНИТИ, — у звіті як запит (`source: "rule"`). Перевізника,
+ *     продавця, пошук роботи й помилку номером правило не чіпає: обіцянку їм теж дають, але клієнтами вони не стають.
  */
+/** Типи, які правило «є домовленість передзвонити → запит» переводить у звіт. */
+export const CALLBACK_RESCUES: ReadonlySet<string> = new Set(["other", "no_dialog"]);
 export const TYPE_CONFIDENCE_MIN = 0.85;
 
 export interface TypeOverride { isCargo: boolean; byName: string | null; at: string }
@@ -19,14 +25,15 @@ export interface TypeVerdict {
   /** Модель не впевнена — людині варто глянути. На ручно позначених не ставиться. */
   typeCheck: boolean;
   /** Звідки рішення: ручна позначка, модель чи «ще не розібрано». */
-  source: "manual" | "model" | "none";
+  source: "manual" | "model" | "rule" | "none";
 }
 
 export function typeVerdict(type: ConversationType | null | undefined, confidence: number | null | undefined,
-  override: TypeOverride | null): TypeVerdict {
+  override: TypeOverride | null, callbackPromised = false): TypeVerdict {
   if (override) return { inReport: override.isCargo, typeCheck: false, source: "manual" };
   if (!type) return { inReport: true, typeCheck: false, source: "none" };
-  if (type === "cargo_request") return { inReport: true, typeCheck: false, source: "model" };
+  if (type === "cargo_request" || type === "lead_lost") return { inReport: true, typeCheck: false, source: "model" };
+  if (callbackPromised && CALLBACK_RESCUES.has(type)) return { inReport: true, typeCheck: false, source: "rule" };
   const sure = typeof confidence === "number" && confidence >= TYPE_CONFIDENCE_MIN;
   return sure ? { inReport: false, typeCheck: false, source: "model" } : { inReport: true, typeCheck: true, source: "model" };
 }

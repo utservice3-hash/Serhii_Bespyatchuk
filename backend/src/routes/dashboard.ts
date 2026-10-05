@@ -70,7 +70,7 @@ import { ga4Configured } from "../ga4/client.js";
 import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
 import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType, setCallNote, canWriteNote, fetchCallRecording } from "../core/callAiScreen.js";
-import { teamReport, isAnalysed, noPrice, noPriceNoComment, hasAgreement } from "../core/firstTouchTeamReport.js";
+import { teamReport, isAnalysed, isLost, noPrice, noPriceNoComment, hasAgreement } from "../core/firstTouchTeamReport.js";
 import { loadTunables } from "../core/firstTouchTunables.js";
 
 import { canEditType } from "../core/callAiType.js";
@@ -10704,6 +10704,7 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
       conversationType: r.conversationType, typeConfidence: r.typeConfidence, typeReason: r.typeReason, priceValue: r.priceValue,
       inReport: r.inReport, typeCheck: r.typeCheck, typeOverride: r.typeOverride,
       priceNote: r.priceNote, missedNote: r.missedNote, offlineNote: r.offlineNote,
+      reactionMin: r.reactionMin, reactionOffHours: r.reactionOffHours,
     })),
     silence: { minGapHours: SILENCE_RULE.minGapHours, normFrom: SILENCE_RULE.normFrom },
   });
@@ -10732,7 +10733,8 @@ dashboardRouter.get("/ai-calls/team-report", async (req, res) => {
       clientPhone: r.clientPhone, kommoIds: r.kommoIds, state: r.state, summary: r.summary,
       priceDiscussed: r.priceDiscussed, priceValue: r.priceValue, priceNote: r.priceNote, missedNote: r.missedNote, offlineNote: r.offlineNote,
       promiseState: r.promiseState, objections: r.objections, typeCheck: r.typeCheck,
-      flags: { analysed: isAnalysed(r), noPrice: noPrice(r), noComment: noPriceNoComment(r),
+      conversationType: r.conversationType, reactionMin: r.reactionMin, reactionOffHours: r.reactionOffHours,
+      flags: { analysed: isAnalysed(r), noPrice: noPrice(r), noComment: noPriceNoComment(r), lost: isLost(r),
         missed: hasAgreement(r) && r.promiseState === "broken", banner: r.promiseState === "broken" && !r.missedNote },
     })),
   });

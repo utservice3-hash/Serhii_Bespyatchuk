@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchAiTeamReport, hiringError, type AiManagerLineT, type AiPoolRowT, type AiTeamReportResp } from "../../../api";
 import { InfoHint } from "../widgets";
-import { PROMISE_UI, TONE_COLOR } from "../aiCallsView";
+import { PROMISE_UI, TONE_COLOR, fmtMinutes } from "../aiCallsView";
 import { AiCallDrawer } from "./AiCallDrawer";
 
 /**
@@ -11,26 +11,28 @@ import { AiCallDrawer } from "./AiCallDrawer";
  * лише невиконані домовленості без «Опрацьовано». Ролі без вкладки блок не бачать (403 → ховається).
  */
 
-type SortKey = keyof Pick<AiManagerLineT, "managerName" | "accepted" | "priceVoiced" | "pricePct" | "noPriceNoComment" | "agreements" | "done" | "late" | "missed">;
+type SortKey = keyof Pick<AiManagerLineT, "managerName" | "accepted" | "priceVoiced" | "pricePct" | "noPriceNoComment" | "agreements" | "done" | "late" | "missed" | "lost">;
 const COLS: readonly { key: SortKey; label: string; hint?: string }[] = [
   { key: "managerName", label: "Менеджер" },
   { key: "accepted", label: "Прийнято заявок з реклами", hint: "Перші розмови рекламних угод, які модель визнала запитом на перевезення (або непевні — з «Перевірити тип»). Лідген і повторні контакти не рахуються." },
   { key: "priceVoiced", label: "Озвучено ціну" },
-  { key: "pricePct", label: "%", hint: "Від розібраних розмов: ще не розібрана розмова не читається як «ціну не назвали»." },
+  { key: "pricePct", label: "%", hint: "Від розібраних розмов, крім втрачених лідів: ще не розібрана розмова не читається як «ціну не назвали», а втраченому ліду ціну називати нікому." },
   { key: "noPriceNoComment", label: "Без ціни й коментаря", hint: "Ціни не було, а «Чому не озвучено ціну» ще ніхто не написав." },
   { key: "agreements", label: "Домовленостей", hint: "Менеджер пообіцяв передзвонити. Обіцянки в месенджер не перевіряються й сюди не входять." },
   { key: "done", label: "Виконано", hint: "Той, хто обіцяв, передзвонив до терміну." },
   { key: "late", label: "Запізнився", hint: "Передзвонив, але пізніше терміну." },
   { key: "missed", label: "Немає дзвінка в телефонії", hint: "У Ringostat немає дзвінка того, хто обіцяв, хоч дзвінки вже синхронізовано за термін. Передзвін з мобільного чи в месенджер система не бачить — це не вирок, а привід перевірити." },
+  { key: "lost", label: "Втрачені ліди", hint: "Клієнт звертався, але запит уже неактуальний: вирішив сам чи пішов до інших. Поруч — медіана: через скільки після заявки ми вперше набрали (будь-хто з менеджерів, навіть без відповіді)." },
 ];
 
-type PoolKey = "all" | "noPrice" | "noComment" | "missed" | "typeCheck";
+type PoolKey = "all" | "noPrice" | "noComment" | "missed" | "typeCheck" | "lost";
 const POOL: readonly { key: PoolKey; label: string; match: (r: AiPoolRowT) => boolean }[] = [
   { key: "all", label: "Усі", match: () => true },
   { key: "noPrice", label: "Без ціни", match: (r) => r.flags.noPrice },
   { key: "noComment", label: "Без коментаря", match: (r) => r.flags.noComment },
   { key: "missed", label: "Немає дзвінка в телефонії", match: (r) => r.flags.missed },
   { key: "typeCheck", label: "Перевірити тип", match: (r) => r.typeCheck },
+  { key: "lost", label: "Втрачені ліди", match: (r) => r.flags.lost },
 ];
 
 const fmt = (iso: string) => new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
@@ -81,7 +83,8 @@ export function FirstTouchReportCard({ from, to, teamId }: { from: string; to: s
   // 🎛 Колір — з «Налаштувань» (адмін, 05.10.2026); заголовок і підпис однакові в обох кольорах.
   const alert = rep.bannerTone === "alert";
   const poolRows = pool ? rep.rows.filter((r) => (pool.managerId === "all" || r.managerId === pool.managerId) && POOL.find((p) => p.key === poolKey)!.match(r)) : [];
-  const cell = (l: AiManagerLineT, k: SortKey) => k === "pricePct" ? (l.pricePct == null ? "—" : `${String(l.pricePct)}%`) : String(l[k]);
+  const cell = (l: AiManagerLineT, k: SortKey) => k === "pricePct" ? (l.pricePct == null ? "—" : `${String(l.pricePct)}%`)
+    : k === "lost" ? (l.lost === 0 ? "0" : `${String(l.lost)}${l.lostReactionMedianMin == null ? "" : ` · ${fmtMinutes(l.lostReactionMedianMin)}`}`) : String(l[k]);
 
   return (
     <div className="chart-card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -174,11 +177,12 @@ export function FirstTouchReportCard({ from, to, teamId }: { from: string; to: s
                     style={{ borderTop: "1px solid var(--border)", cursor: "pointer", verticalAlign: "top" }}>
                     <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>{fmt(r.calledAt)}{pool.managerId === "all" && <div style={{ fontSize: 12, ...muted }}>{r.managerName ?? "невідомий"}</div>}</td>
                     <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>{r.clientPhone ?? <span style={muted}>номера немає</span>}{r.kommoIds.length > 0 && <div style={{ fontSize: 12, ...muted }}>угода {r.kommoIds.join(", ")}</div>}</td>
-                    <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>{!r.flags.analysed ? <span style={muted}>ще не розібрано</span> : r.priceDiscussed ? <>так{r.priceValue ? ` · ${r.priceValue}` : ""}</> : chip("warn", "ні")}</td>
+                    <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>{!r.flags.analysed ? <span style={muted}>ще не розібрано</span> : r.flags.lost ? <span style={muted}>не потрібна</span> : r.priceDiscussed ? <>так{r.priceValue ? ` · ${r.priceValue}` : ""}</> : chip("warn", "ні")}</td>
                     <td style={{ padding: "5px 8px", maxWidth: 220 }}>{r.priceNote?.text ?? (r.flags.noPrice ? chip("warn", "без коментаря") : <span style={muted}>—</span>)}</td>
                     <td style={{ padding: "5px 8px" }}>{r.promiseState ? chip(PROMISE_UI[r.promiseState].tone, PROMISE_UI[r.promiseState].label) : <span style={muted}>немає</span>}{r.missedNote && <div style={{ fontSize: 12, ...muted }}>опрацьовано</div>}</td>
                     <td style={{ ...num, textAlign: "center" }}>{r.flags.analysed ? r.objections : "—"}</td>
-                    <td style={{ padding: "5px 8px", maxWidth: 380 }}>{r.typeCheck && <div style={{ marginBottom: 2 }}>{chip("warn", "Перевірити тип")}</div>}{r.summary ?? <span style={muted}>—</span>}</td>
+                    <td style={{ padding: "5px 8px", maxWidth: 380 }}>{r.typeCheck && <div style={{ marginBottom: 2 }}>{chip("warn", "Перевірити тип")}</div>}
+                      {r.flags.lost && <div style={{ marginBottom: 2 }}>{chip("bad", "Втрачений лід")} <span style={{ fontSize: 12, ...muted }}>{r.reactionMin == null ? "наш вихідний не знайдено" : `перший наш дзвінок через ${fmtMinutes(r.reactionMin)}`}{r.reactionOffHours ? " · заявка поза робочим часом" : ""}</span></div>}{r.summary ?? <span style={muted}>—</span>}</td>
                   </tr>
                 ))}
                 {poolRows.length === 0 && <tr><td colSpan={7} style={{ padding: 10, ...muted }}>Під цей фільтр заявок немає.</td></tr>}

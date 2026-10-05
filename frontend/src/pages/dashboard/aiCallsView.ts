@@ -185,9 +185,10 @@ export function deadlineBasisLabel(basis: string): string {
 }
 
 /** Тип розмови — дзеркало `CONVERSATION_TYPES` у `core/callAiProviders.ts` (ТЗ 30.09.2026). */
-export type ConversationTypeT = "cargo_request" | "carrier" | "vendor" | "job_seeker" | "wrong_number" | "no_dialog" | "other";
+export type ConversationTypeT = "cargo_request" | "lead_lost" | "carrier" | "vendor" | "job_seeker" | "wrong_number" | "no_dialog" | "other";
 export const TYPE_LABEL: Readonly<Record<ConversationTypeT, string>> = {
   cargo_request: "Запит на перевезення",
+  lead_lost: "Втрачений лід (запит неактуальний)",
   carrier: "Перевізник",
   vendor: "Нам щось продають",
   job_seeker: "Пошук роботи",
@@ -195,6 +196,13 @@ export const TYPE_LABEL: Readonly<Record<ConversationTypeT, string>> = {
   no_dialog: "Розмови немає",
   other: "Інше",
 };
+
+/** Хвилини реакції коротко: «45 хв», «3 год 10 хв», «2 дн 3 год». */
+export function fmtMinutes(m: number): string {
+  if (m < 60) return `${String(m)} хв`;
+  if (m < 1440) return `${String(Math.floor(m / 60))} год${m % 60 ? ` ${String(m % 60)} хв` : ""}`;
+  return `${String(Math.floor(m / 1440))} дн${Math.floor((m % 1440) / 60) ? ` ${String(Math.floor((m % 1440) / 60))} год` : ""}`;
+}
 
 export type ListTab = "report" | "excluded";
 /** Рядок у вкладці: «Звіт» — `inReport`, «Виключені» — решта. Фільтр за типом — лише у «Виключених». */

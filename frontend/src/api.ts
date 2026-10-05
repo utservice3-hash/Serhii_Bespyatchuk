@@ -429,13 +429,16 @@ export interface AiManagerLineT {
   managerId: number | null; managerName: string; teamName: string | null;
   accepted: number; analysed: number; priceVoiced: number; pricePct: number | null; noPriceNoComment: number;
   agreements: number; done: number; late: number; missed: number;
+  /** Втрачені ліди (тип `lead_lost`) і медіана хвилин від заявки до першого нашого вихідного по них. */
+  lost: number; lostReactionMedianMin: number | null;
 }
 export interface AiPoolRowT {
   uniqueid: string; calledAt: string; managerId: number | null; managerName: string | null; teamName: string | null;
   clientPhone: string | null; kommoIds: number[]; state: AiCallState; summary: string | null;
   priceDiscussed: boolean | null; priceValue: string | null; priceNote: AiNoteT | null; missedNote: AiNoteT | null; offlineNote: AiNoteT | null;
   promiseState: PromiseStateT | null; objections: number; typeCheck: boolean;
-  flags: { analysed: boolean; noPrice: boolean; noComment: boolean; missed: boolean; banner: boolean };
+  conversationType: ConversationTypeT | null; reactionMin: number | null; reactionOffHours: boolean;
+  flags: { analysed: boolean; noPrice: boolean; noComment: boolean; missed: boolean; banner: boolean; lost: boolean };
 }
 export interface AiTeamReportResp {
   period: { from: string; to: string }; truncated: boolean;
