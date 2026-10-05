@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { skipReason } from "../db/scratchDb.js";
 
 /**
@@ -918,4 +919,47 @@ test("#492 СОРТУВАННЯ КЛІКОМ ПО ЗАГОЛОВКУ: дедла
   const j = src.indexOf("return cmp * dir;");
   assert.ok(i > 0 && j > 0 && i < j, "🔴 правило «без дедлайну — в кінці» зникло або стоїть після множення на напрямок");
   assert.match(src, /if \(na !== nb\) return na \? 1 : -1;/, "🔴 задачі без дедлайну не йдуть у кінець");
+});
+
+/**
+ * #493 — СЕЛЕКТ ВИКОНАВЦЯ: МОЯ КОМАНДА ПЕРШОЮ, НЕАКТИВНІ З НЕЇ НАЗВАНІ СЛОВАМИ.
+ *
+ * Відгук Шаврової (тімлід) 05.10.2026: «в задачнику не можу ставити відповідального
+ * менеджера з команди». Заміряно: заборони немає (#423), але з 9 людей її команди
+ * активних 3 — шестеро вимкнених у Kommo просто зникали з селекта, а своя команда
+ * губилась серед 47 людей. Склад списку НЕ змінюється — лише порядок і підпис.
+ *
+ * 🧨 Червоніє, якщо: своя команда не перша (або не тимлідова зверху); `skipId` не
+ * вирізає першого виконавця з другого селекта; людина дублюється; будь-який селект
+ * виконавця знову малює плоский `managerOptions.map`; підказка про неактивних зникла
+ * з форми чи картки; роут перестав віддавати неактивних САМЕ з моєї команди.
+ */
+test("#493 СЕЛЕКТ ВИКОНАВЦЯ: моя команда першою, неактивні з неї названі словами", async () => {
+  const spec = fileURLToPath(new URL("../../../frontend/src/pages/dashboard/assigneeGroups.ts", import.meta.url).href.replace("/dist/", "/src/"));
+  const { teamGroups } = await import(spec) as { teamGroups: (o: unknown[], my: number | null, skip?: number | "") => [string, { id: number }[]][] };
+  const opts = [
+    { id: 1, name: "А", teamId: 10, teamName: "Альфа" },
+    { id: 2, name: "Б", teamId: 14, teamName: "РПК" },
+    { id: 3, name: "В", teamId: 20, teamName: "Ґамма" },
+    { id: 4, name: "Г", teamId: 14, teamName: "РПК" },
+    { id: 5, name: "Ґ", teamId: null, teamName: null },
+  ];
+  const mine = teamGroups(opts, 14);
+  assert.equal(mine[0][0], "★ Моя команда · РПК", "🔴 своя команда не перша");
+  assert.deepEqual(mine[0][1].map((m) => m.id), [2, 4]);
+  assert.deepEqual(mine.map(([, ms]) => ms.length).reduce((x, y) => x + y, 0), 5, "🔴 склад списку змінився (дубль або втрата)");
+  // Інший бік межі: без команди — порядок сервера, без «★».
+  const none = teamGroups(opts, null);
+  assert.deepEqual(none.map(([t]) => t), ["Альфа", "РПК", "Ґамма", "Без команди"], "🔴 без своєї команди порядок має лишатись серверним");
+  assert.ok(!teamGroups(opts, 14, 2).flatMap(([, ms]) => ms).some((m) => m.id === 2), "🔴 skipId не вирізає першого виконавця");
+
+  const src = codeOf("pages", "dashboard", "sections", "TasksSection.tsx");
+  const groups = src.split("<AssigneeOptgroups options=").length - 1;
+  assert.ok(groups >= 4, `🔴 селектів виконавця з групуванням ${groups}, чекали ≥4 (форма ×2, картка, клітинка)`);
+  assert.equal(src.split("managerOptions.map((m) => <option").length - 1, 1, "🔴 якийсь селект знову плоский (дозволено лише фільтр у шапці)");
+  assert.ok(src.split("<InactiveTeamHint people={myTeamInactive} />").length - 1 >= 2, "🔴 підказки про неактивних немає у формі чи картці");
+
+  const teams = readFileSync(path.join(import.meta.dirname, "teams.js"), "utf8");
+  assert.match(teams, /myTeamInactive/, "🔴 роут не віддає неактивних з моєї команди");
+  assert.match(teams, /is_active = false\s+AND m\.team_id = COALESCE\(\$1::int/, "🔴 неактивні беруться не з команди того, хто питає");
 });

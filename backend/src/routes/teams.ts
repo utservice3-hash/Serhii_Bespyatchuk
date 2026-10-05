@@ -35,5 +35,17 @@ teamsRouter.get("/managers", async (req, res) => {
       ORDER BY t.name NULLS LAST, m.name`,
     params
   );
-  res.json({ managers: result.rows });
+  // 👁 НЕВІДОМЕ МАЄ БУТИ ВИДИМИМ (відгук Шаврової 05.10.2026: «не можу ставити
+  // менеджера з команди»). Список вище — лише активні, тож людина, вимкнена в Kommo,
+  // просто зникає з селекта, і це читається як заборона задачника. Віддаємо
+  // неактивних ЛИШЕ з команди того, хто питає, — щоб форма могла сказати це словами.
+  const a = req.auth!;
+  const inactive = await pool.query<{ id: number; name: string }>(
+    `SELECT m.id, m.name FROM managers m
+      WHERE m.is_active = false
+        AND m.team_id = COALESCE($1::int, (SELECT team_id FROM managers WHERE id = $2::int))
+      ORDER BY m.name`,
+    [a.teamId ?? null, a.managerId && a.managerId > 0 ? a.managerId : null]
+  );
+  res.json({ managers: result.rows, myTeamInactive: inactive.rows });
 });
