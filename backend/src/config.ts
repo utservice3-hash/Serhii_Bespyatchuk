@@ -89,6 +89,9 @@ export const config = {
     // 🚚 Закриття в Kommo за ІСТОРІЄЮ CRM (ТЗ 17.09 «автозакриття пропущених», блок 1). Окремий перемикач, як і «Інше»:
     // будь-що, крім «live», — лише журнал. «live» — лише словом Романа після перевірки вибірки (контроль із ТЗ).
     carrierHistoryClose: process.env.CARRIER_HISTORY_CLOSE ?? "",
+    // 🧽 Задачі робота на закритих угодах «Дзвінків на мобільні» (Роман 05.10.2026, `core/carrierTaskSweep.ts`): «live» —
+    // закриваємо в Kommo; «off» — нічого; решта — журнал «що закрили б».
+    carrierTaskSweep: process.env.CARRIER_TASK_SWEEP ?? "",
     // 🛡 «Історія CRM» лише при свіжих угодах (рішення 05.10.2026, `core/carrierHistory.ts`): синк Kommo старший за це —
     // вердикти й закриття за історією на паузі, задача «передзвони» ставиться звичайно.
     carrierHistorySyncMaxMin: Number(process.env.CARRIER_HISTORY_SYNC_MAX_MIN ?? "60"),

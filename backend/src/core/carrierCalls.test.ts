@@ -1760,3 +1760,142 @@ test("#1149 СЛУЖБОВИЙ РЯДОК: стан захисту лише ке
   assert.match(sec, /\{meta\.noTalkGuard && <NoTalkGuardNote g=\{meta\.noTalkGuard\} \/>\}/, "🔴 стан захисту не виведено в службовий рядок");
   assert.match(sec, /color: "var\(--danger\)" \}[^>]*>\s*на паузі — синк дзвінків \{age\}, угоди чекають/, "🔴 пауза не сказана словами й червоним");
 });
+
+/** Kommo для прибирання задач: статуси угод і відкриті задачі з фікстури, запис закриття — у журнал викликів. */
+function fakeSweepKommo(statuses: Record<number, number>, tasks: { id: number; leadId: number; createdBy: number; completed: boolean }[], failClose = false) {
+  const calls: { statuses: number[][]; tasks: number[][]; close: { ids: number[]; text: string }[] } = { statuses: [], tasks: [], close: [] };
+  return { calls, kommo: {
+    leadStatuses: async (ids: readonly number[]) => { calls.statuses.push([...ids]); return ids.map((id) => ({ id, statusId: statuses[id] ?? 143 })); },
+    openTasks: async (ids: readonly number[]) => { calls.tasks.push([...ids]); return tasks.filter((t) => ids.includes(t.leadId)); },
+    closeTasks: async (ids: readonly number[], text: string) => { calls.close.push({ ids: [...ids], text }); if (failClose) throw new Error("Kommo API error 502"); return {}; },
+  } };
+}
+
+/**
+ * #1150 — ЯКІ ЗАДАЧІ ЗАКРИВАЄМО (Роман 05.10.2026: «треба щоб автоматично закривало також задачу»): лише ВІДКРИТУ задачу
+ * РОБОТА (`created_by = 0`, «Связаться» від Ringostat) на угоді, яка в Kommo ЗАРАЗ закрита. Задача людини, уже виконана
+ * задача й задача на повернутій у роботу угоді — лишаються. Межі — технічні (90 днів, 10 хв, 80 угод за прохід). Без бази.
+ * 🧨 Червоніє, якщо закривати задачі людей, задачі на відкритих угодах чи зсунути межі.
+ */
+test("#1150 ЯКІ ЗАДАЧІ: лише відкрита задача робота на угоді, закритій у Kommo зараз; людей не чіпаємо", async () => {
+  const S = await import("./carrierTaskSweep.js");
+  const t = (id: number, leadId: number, createdBy: number, completed = false) => ({ id, leadId, createdBy, completed });
+  const picked = S.robotTasksToClose([t(1, 10, 0), t(2, 10, 77), t(3, 10, 0, true), t(4, 20, 0)], new Set([10]));
+  assert.deepEqual(picked.map((x) => x.id), [1], "🔴 закрито не лише відкриту задачу робота на закритій угоді");
+  assert.deepEqual([S.TASK_SWEEP.horizonDays, S.TASK_SWEEP.settleMin, S.TASK_SWEEP.maxPerTick], [90, 10, 80], "🔴 межі прибирання зсунуто");
+  const { closeModeOf } = await import("./carrierClose.js");
+  assert.deepEqual([closeModeOf(""), closeModeOf("live"), closeModeOf("off"), closeModeOf("Live")], ["dry", "live", "off", "dry"],
+    "🔴 описка в налаштуванні вмикає запис у CRM");
+});
+
+/**
+ * #1151 — ПРОХІД · ЖИВА СХЕМА: кандидати — угоди етапу, закриті 10 хв … 90 днів тому, ще не прибрані в цьому режимі;
+ * свіжий статус у Kommo — повернуту угоду не чіпаємо й не позначаємо; журнал (`dry`) нічого не пише в Kommo й не заважає
+ * бойовому (`live` бере і ті, що бачив журнал); прибрана в `live` угода вдруге не береться; збій запису — угода лишається
+ * кандидатом. Підсумок для службового рядка — з тієї самої таблиці.
+ * 🧨 Червоніє, якщо брати угоди поза вікном / інших воронок, довіряти статусу з `deals`, писати в Kommo в журналі, чи
+ * позначати угоду прибраною, коли запис не вдався.
+ */
+test("#1151 ПРИБИРАННЯ · ЖИВА СХЕМА: вікно, свіжий статус, журнал проти бою, повтор і збій", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const S = await import("./carrierTaskSweep.js");
+  const B = 115100, ins = async (id: number, pipeline: number, status: number, closedMinAgo: number | null) => c.raw.query(
+    "INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,closed_at_kommo) VALUES ($1,'380500000000',$2,$3,$4,$5)",
+    [id, pipeline, status, min(2000).toISOString(), closedMinAgo == null ? null : min(closedMinAgo).toISOString()]);
+  await c.raw.query("DELETE FROM carrier_task_sweeps WHERE kommo_id BETWEEN $1 AND $2", [B, B + 99]);
+  await ins(B + 1, 8921928, 143, 30);            // закрита 30 хв тому — кандидат
+  await ins(B + 2, 8921928, 143, 5);             // щойно — ще ні (10 хв)
+  await ins(B + 3, 8921928, 143, 100 * 24 * 60); // 100 днів тому — поза вікном
+  await ins(B + 4, 7341740, 143, 30);            // інша воронка
+  await ins(B + 5, 8921928, 143, 40);            // у `deals` закрита, а в Kommo вже повернута
+  await ins(B + 6, 8921928, 70419108, null);     // відкрита на етапі
+  const tasks = [{ id: 9001, leadId: B + 1, createdBy: 0, completed: false }, { id: 9002, leadId: B + 1, createdBy: 77, completed: false },
+    { id: 9003, leadId: B + 1, createdBy: 0, completed: true }, { id: 9005, leadId: B + 5, createdBy: 0, completed: false }];
+  const ours = (k: { calls: { statuses: number[][] } }) => k.calls.statuses.flat().filter((id) => id > B && id < B + 100).sort();
+  const row = async (id: number) => (await c.raw.query<{ mode: string; robot_tasks: number; closed_tasks: number }>(
+    "SELECT mode, robot_tasks, closed_tasks FROM carrier_task_sweeps WHERE kommo_id = $1", [id])).rows[0] ?? null;
+
+  const k1 = fakeSweepKommo({ [B + 5]: 70419108 }, tasks);
+  const r1 = await S.runTaskSweep(c.db, NOW, "dry", k1.kommo);
+  assert.deepEqual(ours(k1), [B + 1, B + 5], "🔴 кандидати не ті: вікно 10 хв … 90 днів і лише воронка етапу");
+  assert.equal(k1.calls.close.length, 0, "🔴 журнальний прохід написав у Kommo");
+  assert.deepEqual([r1.robotTasks, r1.closedTasks, r1.peopleTasks, r1.reopened], [1, 0, 1, 1]);
+  assert.deepEqual(await row(B + 1), { mode: "dry", robot_tasks: 1, closed_tasks: 0 });
+  assert.equal(await row(B + 5), null, "🔴 повернуту в роботу угоду позначено прибраною");
+  assert.ok(!k1.calls.tasks.flat().includes(B + 5), "🔴 задачі повернутої угоди взагалі запитано");
+
+  const k2 = fakeSweepKommo({ [B + 5]: 70419108 }, tasks);
+  await S.runTaskSweep(c.db, NOW, "dry", k2.kommo);
+  assert.deepEqual(ours(k2), [B + 5], "🔴 журнал удруге бере вже прибрану в журналі угоду");
+
+  const k3 = fakeSweepKommo({ [B + 5]: 70419108 }, tasks);
+  const r3 = await S.runTaskSweep(c.db, NOW, "live", k3.kommo);
+  assert.deepEqual(ours(k3), [B + 1, B + 5], "🔴 бойовий прохід пропустив угоду, яку бачив лише журнал");
+  assert.deepEqual(k3.calls.close, [{ ids: [9001], text: S.TASK_SWEEP_TEXT }], "🔴 закрито не рівно задачу робота на закритій угоді");
+  assert.equal(r3.closedTasks, 1);
+  assert.deepEqual(await row(B + 1), { mode: "live", robot_tasks: 1, closed_tasks: 1 });
+
+  const k4 = fakeSweepKommo({ [B + 5]: 70419108 }, tasks);
+  await S.runTaskSweep(c.db, NOW, "live", k4.kommo);
+  assert.deepEqual([ours(k4), k4.calls.close.length], [[B + 5], 0], "🔴 прибрану угоду взято вдруге");
+
+  await ins(B + 7, 8921928, 143, 50);
+  const bad = fakeSweepKommo({ [B + 5]: 70419108 }, [{ id: 9007, leadId: B + 7, createdBy: 0, completed: false }], true);
+  const r5 = await S.runTaskSweep(c.db, NOW, "live", bad.kommo);
+  assert.match(r5.error ?? "", /502/, "🔴 збій Kommo проковтнуто");
+  assert.equal(await row(B + 7), null, "🔴 запис не вдався, а угоду позначено прибраною — задача висітиме вічно");
+  const good = fakeSweepKommo({ [B + 5]: 70419108 }, [{ id: 9007, leadId: B + 7, createdBy: 0, completed: false }]);
+  await S.runTaskSweep(c.db, NOW, "live", good.kommo);
+  assert.deepEqual(good.calls.close.map((x) => x.ids), [[9007]], "дзеркало: наступним проходом угоду після збою прибрано");
+
+  const off = fakeSweepKommo({}, tasks);
+  const r6 = await S.runTaskSweep(c.db, NOW, "off", off.kommo);
+  assert.deepEqual([r6.candidates, off.calls.statuses.length], [0, 0], "🔴 вимкнений режим ходить у Kommo");
+  const st = await S.taskSweepStats(c.db, "live");
+  assert.ok(st.closedTasks >= 2 && st.deals >= 2, "🔴 підсумок службового рядка не з таблиці прибирання");
+});
+
+/**
+ * #1152 — ПРОВОДКА: прохід «Відсіву» прибирає задачі НАВІТЬ коли слухати нічого (ранній вихід тіку), збій прибирання
+ * червонить джобу; бойова джоба бере режим із `CARRIER_TASK_SWEEP` (типово — журнал), статус угоди — свіжий із Kommo.
+ * 🧨 Червоніє, якщо загубити прибирання в ранньому виході, проковтнути збій чи зашити режим.
+ */
+test("#1152 ПРОВОДКА: тік прибирає й без розмов, збій червоний; режим — з налаштувань", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  const { runCarrierTick } = await import("./carrierCalls.js");
+  const B = 115200;
+  await c.raw.query("INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,closed_at_kommo) VALUES ($1,'380500000000',8921928,143,$2,$3)",
+    [B + 1, min(500).toISOString(), min(60).toISOString()]);
+  const net = fakeNet();
+  const tick = { http: net.http, keys: { elevenlabs: "k", gemini: "g" }, prices: PRICES, now: () => NOW, stageLeads: async () => [], alert: async () => {} };
+  const k = fakeSweepKommo({}, [{ id: 9101, leadId: B + 1, createdBy: 0, completed: false }]);
+  const r = await runCarrierTick({ db: c.db, ...tick, taskSweep: { mode: "live", kommo: k.kommo } });
+  assert.ok(r.taskSweep, "🔴 тік без розмов пропустив прибирання задач");
+  assert.ok(k.calls.close.some((x) => x.ids.includes(9101)), "🔴 задачу робота на закритій угоді не закрито");
+  await c.raw.query("INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,closed_at_kommo) VALUES ($1,'380500000000',8921928,143,$2,$3)",
+    [B + 2, min(500).toISOString(), min(60).toISOString()]);
+  const bad = fakeSweepKommo({}, [{ id: 9102, leadId: B + 2, createdBy: 0, completed: false }], true);
+  await assert.rejects(runCarrierTick({ db: c.db, ...tick, taskSweep: { mode: "live", kommo: bad.kommo } }), /задачі на закритих угодах/,
+    "🔴 збій прибирання проковтнуто — джоба зелена, задачі висять");
+  const job = SRC("jobs/carrierCallJob.ts");
+  assert.match(job, /taskSweep: \{\s*mode: closeModeOf\(config\.callAi\.carrierTaskSweep\),/, "🔴 бойова джоба не бере режим прибирання з налаштувань");
+  assert.match(job, /leadStatuses: async \(ids\) => \{[\s\S]*?kommoGet<[^>]*status_id[\s\S]*?\/api\/v4\/leads\?/, "🔴 статус угоди не зі свіжої відповіді Kommo");
+  assert.match(SRC("config.ts"), /carrierTaskSweep: process\.env\.CARRIER_TASK_SWEEP \?\? "",/, "🔴 режим прибирання не в налаштуваннях");
+});
+
+/**
+ * #1153 — СЛУЖБОВИЙ РЯДОК: `/carrier-calls/meta` віддає підсумок прибирання лише керівництву явними полями; екран
+ * каже, скільки задач закрито (або «журнал — закрили б»), щоб увімкнення було видно без логів.
+ * 🧨 Червоніє, якщо віддати не керівництву або прибрати рядок з екрана.
+ */
+test("#1153 СЛУЖБОВИЙ РЯДОК: підсумок прибирання — лише керівництву; на екрані закрито / журнал", async () => {
+  const r = SRC("routes/dashboard.ts");
+  const i = r.indexOf('dashboardRouter.get("/carrier-calls/meta"'); assert.ok(i > 0);
+  const body = r.slice(i, r.indexOf("dashboardRouter.", i + 10));
+  assert.match(body, /const sw = lead \? await taskSweepStats\(pool, closeModeOf\(config\.callAi\.carrierTaskSweep\)\) : null;/, "🔴 підсумок не лише керівництву");
+  assert.match(body, /taskSweep: sw \? \{ mode: sw\.mode, deals: sw\.deals, robotTasks: sw\.robotTasks, closedTasks: sw\.closedTasks \} : null,/, "🔴 не явний перелік полів");
+  const sec = readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8");
+  assert.match(sec, /задачі на закритих угодах: \{meta\.taskSweep\.mode === "live"\s*\? `закрито \$\{String\(meta\.taskSweep\.closedTasks\)\}`\s*: `журнал — закрили б/,
+    "🔴 підсумок прибирання не виведено в службовий рядок");
+});
