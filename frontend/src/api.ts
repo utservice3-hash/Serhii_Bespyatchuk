@@ -530,6 +530,8 @@ export interface CarrierCallsMetaResp {
   agreementRows: CarrierAgreementRowT[];
   /** 🛡 Захист «без розмови» від падіння Ringostat — лише керівництву (інакше `null`). */
   noTalkGuard: { open: boolean; syncAgeMin: number | null; maxAgeMin: number; lastSyncAt: string | null; noCreatingCall: number } | null;
+  /** 🧽 Задачі робота на закритих угодах етапу — лише керівництву (інакше `null`). */
+  taskSweep: { mode: string; deals: number; robotTasks: number; closedTasks: number } | null;
 }
 /** 🔎 Одна угода за номером (повна картка з «AI проти людини»); у скоупі ролі. */
 export async function fetchCarrierDeal(kommoId: number): Promise<CarrierDealT> {

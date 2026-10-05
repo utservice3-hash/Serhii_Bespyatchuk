@@ -4673,6 +4673,19 @@ CREATE TABLE IF NOT EXISTS carrier_review_tasks (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_carrier_review_tasks_open ON carrier_review_tasks(manager_id) WHERE closed_at IS NULL;
 REVOKE ALL ON carrier_review_tasks FROM ai_readonly;
 
+-- 🧽 ЗАДАЧІ НА ЗАКРИТИХ УГОДАХ «ДЗВІНКІВ НА МОБІЛЬНІ» (Роман 05.10.2026: «автоматично закривало також задачу»;
+-- `core/carrierTaskSweep.ts`). Рядок на угоду, яку вже прибрано: коли, у якому режимі (`dry` — лише журнал), скільки
+-- задач робота було й скільки закрито. Без телефонів, але відібрана в `ai_readonly`, як решта таблиць «Відсіву».
+-- ⚠️ revert коду таблицю не прибирає; закриті в Kommo задачі лишаються закритими.
+CREATE TABLE IF NOT EXISTS carrier_task_sweeps (
+  kommo_id     BIGINT PRIMARY KEY,
+  swept_at     TIMESTAMPTZ NOT NULL,
+  mode         TEXT NOT NULL CHECK (mode IN ('dry','live')),
+  robot_tasks  INTEGER NOT NULL DEFAULT 0 CHECK (robot_tasks >= 0),
+  closed_tasks INTEGER NOT NULL DEFAULT 0 CHECK (closed_tasks >= 0)
+);
+REVOKE ALL ON carrier_task_sweeps FROM ai_readonly;
+
 -- 📣 «Стелю досягнуто» — один раз на місяць на межу бюджету (рішення Романа 29.09.2026). Рядок ставиться ДО
 -- відправки в Telegram, тож повтор щоп'ять хвилин неможливий за побудовою.
 CREATE TABLE IF NOT EXISTS ai_cap_alerts (

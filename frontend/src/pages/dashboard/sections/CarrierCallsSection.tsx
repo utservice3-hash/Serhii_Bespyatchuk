@@ -235,6 +235,13 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
             {" · "}«Інше» від AI: {otherModeLabel(meta.close.mode, meta.close.otherMode)}
             {meta.close.otherMode !== "live" && meta.close.otherWouldClose > 0 ? ` (у журналі ${String(meta.close.otherWouldClose)})` : ""}
             {meta.noTalkGuard && <NoTalkGuardNote g={meta.noTalkGuard} />}
+            {meta.taskSweep && meta.taskSweep.mode !== "off" && (
+              <span title="Задачі «Связаться» від Ringostat на угодах етапу, які вже закрито в CRM (фільтром, дашбордом чи людиною): дашборд закриває їх сам, задачі людей не чіпає.">
+                {" · "}задачі на закритих угодах: {meta.taskSweep.mode === "live"
+                  ? `закрито ${String(meta.taskSweep.closedTasks)}`
+                  : `журнал — закрили б ${String(meta.taskSweep.robotTasks)}`}
+              </span>
+            )}
           </p>
         )}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>

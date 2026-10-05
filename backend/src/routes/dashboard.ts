@@ -76,6 +76,7 @@ import { canEditType } from "../core/callAiType.js";
 import { CARRIER_LISTEN_ROLES, carrierCallCard, carrierCallsList, carrierCallsMeta } from "../core/carrierCallScreen.js";
 import { callInScope, carrierAgreementRows, carrierDailyStats, carrierDealRows, carrierReport, filterRemovedByManager } from "../core/carrierDeals.js";
 import { minutesSetting, NO_TALK_GUARD, readNoTalkGuard } from "../core/carrierNoTalkGuard.js";
+import { taskSweepStats } from "../core/carrierTaskSweep.js";
 import { CARRIER_BUDGET, CARRIER_STAGE } from "../core/carrierCallRules.js";
 import { closeModeOf, revertCarrierClose } from "../core/carrierClose.js";
 import { decisionQueue, recordDecision } from "../core/carrierDecisions.js";
@@ -10941,9 +10942,12 @@ dashboardRouter.get("/carrier-calls/meta", async (req, res) => {
   // 🛡 Захист «без розмови» (05.10.2026): працює / на паузі, вік синку дзвінків, скільки угод без дзвінка-творця — службовий рядок керівництва.
   const g = lead ? await readNoTalkGuard(pool, new Date(), config.callAi.carrierNoTalkCloseMin,
     minutesSetting(config.callAi.carrierNoTalkSyncMaxMin, NO_TALK_GUARD.defaultMaxAgeMin)) : null;
+  // 🧽 Задачі робота на закритих угодах (05.10.2026): скільки прибрано — службовий рядок керівництва.
+  const sw = lead ? await taskSweepStats(pool, closeModeOf(config.callAi.carrierTaskSweep)) : null;
   res.json({ job: m.job, transcripts: m.transcripts, analyses: m.analyses, spend: m.spend, caps: m.caps, close: m.close, agreement: m.agreement,
     noTalkGuard: g ? { open: g.gate.open, syncAgeMin: g.gate.syncAgeMin, maxAgeMin: g.gate.maxAgeMin, lastSyncAt: g.gate.lastSyncAt,
       noCreatingCall: g.noCreatingCall } : null,
+    taskSweep: sw ? { mode: sw.mode, deals: sw.deals, robotTasks: sw.robotTasks, closedTasks: sw.closedTasks } : null,
     // Явний перелік полів, а не спред (#17e2).
     agreementRows: lead ? (await carrierAgreementRows(pool)).map((r) => ({ kommoId: r.kommoId, url: kommoLeadUrl(r.kommoId), uniqueid: r.uniqueid,
       managerName: r.managerName, aiRole: r.aiRole, aiConfidence: r.aiConfidence, decision: r.decision, otherType: r.otherType, by: r.by,
