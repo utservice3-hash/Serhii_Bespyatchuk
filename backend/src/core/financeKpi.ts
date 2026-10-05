@@ -16,9 +16,9 @@ import { FinError, parseAmount, type Db } from "./finance.js";
 
 export type PeriodKind = "week" | "month";
 export type RefSource = "delivered_income" | "delivered_expense" | "unloaded_income" | "unloaded_expense" | "receivables"
-  | "opex_commercial" | "opex_general" | "opex_admin" | "opex_payroll" | "receivables_fx";
+  | "opex_commercial" | "opex_general" | "opex_admin" | "opex_payroll" | "receivables_fx" | "bank_in" | "bank_out";
 export const REF_SOURCES: readonly RefSource[] = ["delivered_income", "delivered_expense", "unloaded_income", "unloaded_expense", "receivables",
-  "opex_commercial", "opex_general", "opex_admin", "opex_payroll", "receivables_fx"];
+  "opex_commercial", "opex_general", "opex_admin", "opex_payroll", "receivables_fx", "bank_in", "bank_out"];
 /**
  * Розділ статті «План/факт» → рядок «Операційних витрат» (прохід 2в, прохання Тетяни 05.10.2026). Факт у «План/факт»
  * лише ПОМІСЯЧНИЙ, тож із нього рахується тільки МІСЯЦЬ; тиждень лишається ручним. Розділ без жодної статті — теж
@@ -28,6 +28,12 @@ export const OPEX_SECTIONS = ["commercial", "general", "admin", "payroll"] as co
 export type OpexSection = (typeof OPEX_SECTIONS)[number];
 export const OPEX_REF: Record<OpexSection, RefSource> = { commercial: "opex_commercial", general: "opex_general", admin: "opex_admin", payroll: "opex_payroll" };
 const isOpexRef = (r: unknown) => typeof r === "string" && r.startsWith("opex_");
+/**
+ * Рядки, які вночі НЕ фіксуються, а лише закриттям періоду (і відкриття знову робить їх живими): їхнє джерело
+ * дописують ПІСЛЯ кінця періоду — факт «План/факт» і ручний Сейф у «Виписці» (прохід 2г). Рядки з Kommo — навпаки,
+ * фіксуються вночі, бо CRM змінюється заднім числом сама.
+ */
+const isCloseOnlyRef = (r: unknown) => typeof r === "string" && (r.startsWith("opex_") || r.startsWith("bank_"));
 
 // ── Дати й періоди (чисті функції, UTC-арифметика над 'YYYY-MM-DD') ──────────────
 
@@ -272,7 +278,7 @@ export async function saveKpiValues(db: Db, actor: number, kindArg: unknown, dat
   for (const id of ids) {
     const x: any = kpis.get(id);
     if (!x || x.deleted_at) throw new FinError(404, "Показник не знайдено — нічого не збережено");
-    if (isAutoIn(x, kind, start, refs)) throw new FinError(400, `«${x.name}» рахується сам${isOpexRef(x.ref_source) ? " зі статей «План/факт»" : " за фільтрами Kommo"} — його не вносять`);
+    if (isAutoIn(x, kind, start, refs)) throw new FinError(400, `«${x.name}» рахується сам${isOpexRef(x.ref_source) ? " зі статей «План/факт»" : String(x.ref_source).startsWith("bank_") ? " з «Виписки»" : " за фільтрами Kommo"} — його не вносять`);
     if (x.kind !== "manual" && x.kind !== "auto") throw new FinError(400, `«${x.name}» рахується сам — його не вносять`);
     if (!isActiveIn(x.off_from, start)) throw new FinError(409, `Показник «${x.name}» вимкнений у цьому періоді — нічого не збережено`);
   }
@@ -339,7 +345,7 @@ export async function setPeriodClosed(db: Db, actor: number, kindArg: unknown, d
     if (!r.rows.length) throw new FinError(409, "Період і так відкритий");
     await log(db, actor, "period", null, `Відкрито ${kind === "week" ? "тиждень" : "місяць"} ${pLabel(kind, start)}`, { kind, start });
     await db.query(`UPDATE fin_kpi_values v SET frozen_at = NULL FROM fin_kpis f
-       WHERE f.id = v.kpi_id AND f.kind = 'auto' AND f.ref_source LIKE 'opex\\_%' AND v.period_kind = $1 AND v.period_start = $2::date AND v.frozen_at IS NOT NULL`, [kind, start]);
+       WHERE f.id = v.kpi_id AND f.kind = 'auto' AND (f.ref_source LIKE 'opex\\_%' OR f.ref_source LIKE 'bank\\_%') AND v.period_kind = $1 AND v.period_start = $2::date AND v.frozen_at IS NOT NULL`, [kind, start]);
   }
 }
 
@@ -462,8 +468,8 @@ export async function restoreKpiThing(db: Db, actor: number, targetArg: unknown,
 /** Рядки аркуша (номер рядка CSV-вивантаження) → показник. `w` — рядок тижневої секції, `m` — місячної. */
 export const FM_LAYOUT: { section: string; kpis: { key: string; name: string; kind: "manual" | "sum" | "diff" | "auto"; w?: number; m?: number; ref?: RefSource; diff?: [string, string] }[] }[] = [
   { section: "Гроші", kpis: [
-    { key: "in", name: "Надходження загальні", kind: "manual", w: 3, m: 21 },
-    { key: "out", name: "Витрати загальні", kind: "manual", w: 4, m: 22 },
+    { key: "in", name: "Надходження загальні", kind: "auto", w: 3, m: 21, ref: "bank_in" },
+    { key: "out", name: "Витрати загальні", kind: "auto", w: 4, m: 22, ref: "bank_out" },
   ] },
   { section: "Поставлені авто (за датою загрузки)", kpis: [
     { key: "d_inc", name: "Дохід", kind: "auto", w: 5, m: 23, ref: "delivered_income" },
@@ -654,7 +660,7 @@ export async function freezeAutoKpis(db: Db, kindArg: unknown, dateArg: unknown,
   let frozen = 0;
   for (const x of k.rows as any[]) {
     // Операційні витрати вночі не фіксуються: факт у «План/факт» вносять ПІСЛЯ кінця місяця. Їх фіксує закриття місяця.
-    if (x.frozen_at || isOpexRef(x.ref_source) || !isActiveIn(x.off_from, start) || !(x.ref_source in refs)) continue;
+    if (x.frozen_at || isCloseOnlyRef(x.ref_source) || !isActiveIn(x.off_from, start) || !(x.ref_source in refs)) continue;
     const v = refs[x.ref_source as RefSource] ?? null;
     if (v == null) continue;
     await db.query(`INSERT INTO fin_kpi_values (kpi_id, period_kind, period_start, value, frozen_at, updated_at) VALUES ($1, $2, $3::date, $4, now(), now())
@@ -751,10 +757,37 @@ export async function opexMonth(db: Db, month: string): Promise<{ refs: RefValue
  * Валютна дебіторка з 1С на КІНЕЦЬ періоду: останній підсумок синку не пізніше кінця останнього дня періоду (або
  * «зараз», якщо період ще йде). Підсумок старший за добу від цієї межі — немає числа (синк мовчав), а не старе число.
  */
-export async function receivablesFxAt(db: Db, end: string, now: Date): Promise<{ uah: number; val: number; zeroUah: number; at: string } | null> {
+export async function receivablesFxAt(db: Db, end: string, now: Date): Promise<{ uah: number; val: number; zeroUah: number; at: string;
+  usd: number | null; eur: number | null; unknownVal: number | null } | null> {
   const r = await db.query(`WITH cut AS (SELECT LEAST($2::timestamptz, (($1::date + 1)::timestamp AT TIME ZONE 'Europe/Kyiv')) AS t)
-    SELECT total_uah::text AS uah, total_val::text AS val, zero_uah, synced_at FROM receivables_fx_totals, cut
+    SELECT total_uah::text AS uah, total_val::text AS val, zero_uah, synced_at, usd::text AS usd, eur::text AS eur, unknown_val::text AS unk
+      FROM receivables_fx_totals, cut
      WHERE synced_at <= cut.t AND synced_at > cut.t - interval '1 day' ORDER BY synced_at DESC LIMIT 1`, [end, now.toISOString()]);
   const x = r.rows[0];
-  return x ? { uah: Number(x.uah), val: Number(x.val), zeroUah: x.zero_uah, at: new Date(x.synced_at).toISOString() } : null;
+  // usd / eur / unknownVal — null у підсумках ДО проходу 2г (тоді валюту ще не визначали), а не нуль.
+  return x ? { uah: Number(x.uah), val: Number(x.val), zeroUah: x.zero_uah, at: new Date(x.synced_at).toISOString(),
+    usd: num(x.usd), eur: num(x.eur), unknownVal: num(x.unk) } : null;
+}
+
+/**
+ * «Надходження / Витрати загальні» з «Виписки» за період (прохід 2г, 05.10.2026): усі АКТИВНІ рахунки, разом із
+ * рахунками «лише фінанси» (картки, Сейф), без видалених ручних записів; дати — за Києвом, обидва кінці. Витрати —
+ * без банківських комісій (так само, як кешфлоу). Перекази між НАШИМИ рахунками — окремим числом (`ownIn`/`ownOut`):
+ * чи виключати їх, ВІДКРИТЕ ПИТАННЯ до Тетяни (рішення Романа 05.10.2026 «залиш відкрите»), тож рахуємо все й
+ * показуємо, скільки з цього — свої. «Свій» = IBAN контрагента збігається з IBAN нашого рахунку.
+ */
+export async function bankTotals(db: Db, from: string, to: string): Promise<{ in: number; out: number; ownIn: number; ownOut: number; rows: number }> {
+  const r = await db.query(`SELECT
+      COALESCE(sum(abs(t.amount_uah)) FILTER (WHERE t.direction = 'in'), 0)::text AS inc,
+      COALESCE(sum(abs(t.amount_uah)) FILTER (WHERE t.direction = 'out' AND NOT COALESCE(t.is_bank_fee, false)), 0)::text AS outg,
+      COALESCE(sum(abs(t.amount_uah)) FILTER (WHERE t.direction = 'in' AND own.iban IS NOT NULL), 0)::text AS own_in,
+      COALESCE(sum(abs(t.amount_uah)) FILTER (WHERE t.direction = 'out' AND NOT COALESCE(t.is_bank_fee, false) AND own.iban IS NOT NULL), 0)::text AS own_out,
+      count(*)::int AS rows
+      FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
+      LEFT JOIN LATERAL (SELECT b.iban FROM bank_accounts b WHERE b.iban IS NOT NULL AND b.iban = t.counterparty_iban LIMIT 1) own ON true
+     WHERE a.is_active AND t.deleted_at IS NULL
+       AND (t.booked_at AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1::date AND $2::date`, [from, to]);
+  const x = r.rows[0];
+  const m = (v: string) => Math.round(Number(v) * 100) / 100;
+  return { in: m(x.inc), out: m(x.outg), ownIn: m(x.own_in), ownOut: m(x.own_out), rows: x.rows };
 }

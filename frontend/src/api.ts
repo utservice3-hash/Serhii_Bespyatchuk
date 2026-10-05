@@ -3838,7 +3838,9 @@ export async function fetchManagerReport(params: {
 
 // ─────────────────────────── Виписка (банк) ───────────────────────────
 export interface BankAccount {
-  id: number; company: string; bank: "mono" | "privat"; label: string; currency: string;
+  id: number; company: string; bank: "mono" | "privat" | "manual"; label: string; currency: string;
+  /** Рахунок «лише фінанси» (особисті картки власника ФОП, Сейф): сервер віддає його лише ролям із `view_cashflow`. */
+  finance_only?: boolean;
   external_account_id: string | null; is_active: boolean;
   legal_name: string | null; edrpou_ipn: string | null; iban: string | null;
   key_card?: string | null; // ключ-карта ФОП (звичайні реквізити, як IBAN)
@@ -3900,6 +3902,17 @@ export async function saveBankAccount(id: number | null, patch: Partial<BankAcco
 export interface BankBalance { id: number; label: string; company: string; balance_amount: string | null; balance_currency: string | null; balance_updated_at: string | null; balance_uah?: number | null; fx_gain_period?: number | null }
 export interface BankBalancesResp { balances: BankBalance[]; period?: { from: string; to: string } }
 export interface CashflowMonth { month: string; incoming_uah: number; outgoing_uah: number; net_uah: number }
+// 💰 Ручний рахунок «Сейф» (прохід 2г фінансів): записи по операції або підсумком тижня. Правила — на сервері.
+export interface BankManualRow { id: number; day: string; direction: "in" | "out"; amount: number; kind: "op" | "week"; name: string | null; purpose: string | null; deleted: boolean; entered_by: string | null }
+export async function fetchBankManual(account: number, from: string, to: string): Promise<BankManualRow[]> {
+  const { data } = await api.get<{ rows: BankManualRow[] }>("/bank/manual", { params: { account, from, to } });
+  return data.rows;
+}
+export async function addBankManual(body: { accountId: number; kind: "op" | "week"; date: string; direction?: "in" | "out"; amount?: string; inAmount?: string; outAmount?: string; purpose?: string }) {
+  return (await api.post<{ ids: number[]; monday: string }>("/bank/manual", body)).data;
+}
+export async function deleteBankManual(id: number) { await api.delete(`/bank/manual/${id}`); }
+export async function restoreBankManual(id: number) { await api.post(`/bank/manual/${id}/restore`, {}); }
 export async function fetchBankCashflow(months = 12): Promise<CashflowMonth[]> {
   const { data } = await api.get<{ cashflow: CashflowMonth[] }>("/bank/cashflow", { params: { months } });
   return data.cashflow;
@@ -5480,7 +5493,7 @@ export async function svExportCsv(id: number): Promise<Blob> {
 // ── 💰 Фінанси · «Тиждень і місяць» (прохід 2а, 01.10.2026) ─────────────────────
 export type FinPeriodKind = "week" | "month";
 export type FinKpiRefSource = "delivered_income" | "delivered_expense" | "unloaded_income" | "unloaded_expense" | "receivables"
-  | "opex_commercial" | "opex_general" | "opex_admin" | "opex_payroll" | "receivables_fx";
+  | "opex_commercial" | "opex_general" | "opex_admin" | "opex_payroll" | "receivables_fx" | "bank_in" | "bank_out";
 export interface FinKpi {
   id: number; name: string; unit: "UAH" | "USD" | "EUR"; kind: "manual" | "sum" | "diff" | "auto"; argA: number | null; argB: number | null;
   refSource: FinKpiRefSource | null; offFrom: string | null; active: boolean;
@@ -5497,7 +5510,9 @@ export interface FinKpiPeriod {
   /** Місяць: статті «План/факт» без розділу, що мають факт цього місяця, — їхні гроші не в жодному рядку. */
   opexUnassigned: { items: number; fact: number } | null;
   /** Валютна дебіторка з 1С на кінець періоду: Σ у гривні, Σ у валюті (різні валюти разом), рядки з нульовим ₴. */
-  receivablesFx: { uah: number; val: number; zeroUah: number; at: string } | null;
+  receivablesFx: { uah: number; val: number; zeroUah: number; at: string; usd: number | null; eur: number | null; unknownVal: number | null } | null;
+  /** «З них перекази між нашими рахунками» біля «Надходження / Витрати загальні» (чи виключати — відкрите питання). */
+  bankOwn: { in: number; out: number } | null;
 }
 export interface FinKpiCard {
   id: number; name: string; unit: string; kind: string; refSource: string | null; offFrom: string | null; deleted: boolean; section: string;

@@ -2,12 +2,14 @@
 export interface BankAccountRow {
   id: number;
   company: string;
-  bank: "mono" | "privat";
+  bank: "mono" | "privat" | "manual";
   label: string;
   currency: string;
   external_account_id: string | null;
   iban: string | null;
   env_key_name: string | null;
+  /** Моно: тип рахунку під тим самим токеном (black / white / madeInUkraine …); null — ФОП, як було. */
+  mono_type?: string | null;
 }
 
 export interface NormalizedTx {

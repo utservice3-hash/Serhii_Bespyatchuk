@@ -5374,7 +5374,9 @@ ALTER TABLE fin_items ADD CONSTRAINT fin_items_section_check CHECK (section IS N
 ALTER TABLE fin_kpis DROP CONSTRAINT IF EXISTS fin_kpis_ref_source_check;
 ALTER TABLE fin_kpis ADD CONSTRAINT fin_kpis_ref_source_check CHECK (ref_source IS NULL OR ref_source IN (
   'delivered_income','delivered_expense','unloaded_income','unloaded_expense','receivables',
-  'opex_commercial','opex_general','opex_admin','opex_payroll','receivables_fx'));
+  'opex_commercial','opex_general','opex_admin','opex_payroll','receivables_fx','bank_in','bank_out'));
+-- ⚠️ ЄДИНЕ визначення списку джерел — нове джерело додається СЮДИ. Рядок перевизначається на кожному прогоні схеми:
+-- друга, неповна копія нижче впала б на вже записаних рядках на наступному викаті (спіймав #1203, 05.10.2026).
 -- Разово (позначка в `fin_kpi_imports`): рядки «Операційних витрат» і «Валютна дебіторка» отримують джерело;
 -- «Загальновиробничі витрати» → «Загальні витрати» (назва розділу Тетяни); новий рядок «ЗП + Податки на ЗП».
 -- Рядок шукається за розділом + назвою: якщо його вже перейменували чи видалили — разовий крок його не чіпає.
@@ -5408,3 +5410,56 @@ CREATE TABLE IF NOT EXISTS receivables_fx_totals (
   zero_uah    INTEGER NOT NULL DEFAULT 0       -- рядків із боргом у валюті, але нульовим гривневим еквівалентом
 );
 CREATE INDEX IF NOT EXISTS ix_receivables_fx_totals_at ON receivables_fx_totals (synced_at);
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💰 ФІНАНСИ, прохід 2г (05.10.2026, рішення Романа «роби і викочуй»): Сейф і картки у «Виписці»,
+-- «Надходження / Витрати загальні» з «Виписки», валютна дебіторка ще й у валюті.
+--  · `bank = 'manual'` — рахунок без банку (Сейф): записи вносить людина — по операції АБО підсумком тижня.
+--  · `finance_only` — рахунок «лише фінанси»: його операції НЕ бачать ролі без `view_cashflow` (стрічка «Виписки»
+--    відкрита всім ролям), не бачить AI і не бере зіставлення оплат з рахунками. Картки моно — ОСОБИСТІ картки власника
+--    ФОП (заміряно 05.10: black, white, madeInUkraine під MONO_TOKEN_FOP), тому лише так.
+-- ⚠️ Revert коду не прибирає рахунків і ручних записів — це дані людини, їх не стираємо.
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE bank_accounts DROP CONSTRAINT IF EXISTS bank_accounts_bank_check;
+ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_bank_check CHECK (bank IN ('mono','privat','manual'));
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS finance_only BOOLEAN NOT NULL DEFAULT false;
+-- Тип рахунку моно під тим самим токеном (fop / black / white / madeInUkraine …). NULL — ФОП, як було.
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS mono_type TEXT;
+ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS manual_kind TEXT;
+ALTER TABLE bank_transactions DROP CONSTRAINT IF EXISTS bank_transactions_manual_kind_check;
+ALTER TABLE bank_transactions ADD CONSTRAINT bank_transactions_manual_kind_check CHECK (manual_kind IS NULL OR manual_kind IN ('op','week'));
+ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS entered_by INTEGER REFERENCES users(id);
+ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS deleted_by INTEGER REFERENCES users(id);
+-- Разово: Сейф і три картки моно (тип — замір 05.10.2026). Позначка в `fin_kpi_imports`: видалений чи вимкнений
+-- рахунок повторний прогін схеми не відроджує.
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('bank-safe-cards-2026-10-05', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key),
+safe AS (
+  INSERT INTO bank_accounts (company, bank, label, currency, finance_only)
+  SELECT 'uts', 'manual', 'Сейф', 'UAH', true WHERE EXISTS (SELECT 1 FROM step)
+  RETURNING id)
+INSERT INTO bank_accounts (company, bank, label, currency, env_key_name, mono_type, finance_only)
+SELECT 'fop_mono', 'mono', 'Картка ' || t.label, 'UAH', f.env_key_name, t.type, true
+  FROM (VALUES ('black', 'black'), ('white', 'white'), ('madeInUkraine', '«Зроблено в Україні»')) AS t(type, label)
+  CROSS JOIN LATERAL (SELECT env_key_name FROM bank_accounts WHERE bank = 'mono' AND mono_type IS NULL AND NOT finance_only
+                       AND env_key_name IS NOT NULL ORDER BY id LIMIT 1) f
+ WHERE EXISTS (SELECT 1 FROM step) AND (SELECT count(*) FROM safe) >= 0;
+-- Джерела 'bank_in'/'bank_out' дозволено вище, в ЄДИНОМУ визначенні `fin_kpis_ref_source_check` (блок 2в).
+-- «Надходження / Витрати загальні» — з «Виписки» (разово; свідома правка після кроку виживає).
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('bank-fm-2026-10-05', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key)
+UPDATE fin_kpis f SET kind = 'auto', ref_source = CASE f.name WHEN 'Надходження загальні' THEN 'bank_in' ELSE 'bank_out' END
+  FROM fin_kpi_sections s
+ WHERE s.id = f.section_id AND s.name = 'Гроші' AND s.deleted_at IS NULL AND f.deleted_at IS NULL AND f.kind = 'manual'
+   AND f.name IN ('Надходження загальні', 'Витрати загальні') AND EXISTS (SELECT 1 FROM step);
+-- Валютна дебіторка ще й у валюті: USD / EUR визначено за курсом рядка 1С (валюти 1С не віддає), невизначене — окремо.
+ALTER TABLE receivables_fx_totals ADD COLUMN IF NOT EXISTS usd NUMERIC(14,2);
+ALTER TABLE receivables_fx_totals ADD COLUMN IF NOT EXISTS eur NUMERIC(14,2);
+ALTER TABLE receivables_fx_totals ADD COLUMN IF NOT EXISTS unknown_val NUMERIC(14,2);
+-- 🔒 AI не бачить операцій рахунків «лише фінанси» (особисті картки, Сейф): сира таблиця — відібрана, натомість вью
+-- без них. Той самий прийом, що `ai_tasks`. Тримає гейт проходу 2г.
+CREATE OR REPLACE VIEW ai_bank_transactions AS
+  SELECT t.id, t.account_id, t.direction, t.booked_at, t.counterparty_name, t.purpose, t.amount, t.currency, t.amount_uah, t.is_bank_fee
+    FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
+   WHERE NOT a.finance_only AND t.deleted_at IS NULL;
+REVOKE ALL ON bank_transactions FROM ai_readonly;
+GRANT SELECT ON ai_bank_transactions TO ai_readonly;

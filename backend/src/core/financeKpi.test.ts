@@ -462,7 +462,8 @@ test("#994 ВАЛЮТНА ДЕБІТОРКА: підсумок 1С (362) на к
   const rc = await import("./receivables1c.js");
   const rows = rc.parse1cPayload([{ Contractor: "А ТОВ", DetailInfo: [{ Account: "Рахунок 1 від 01.09.2026", Sum: 100000.1, SumVal: 2400.5 }, { Sum: 0, SumVal: 15 }] },
     { Contractor: "Б ТОВ", DetailInfo: [{ Sum: 0.2, SumVal: 0 }] }]).rows;
-  assert.deepEqual(rc.fxTotals(rows), { rows: 3, totalUah: 100000.3, totalVal: 2415.5, zeroUah: 1 }, "🔴 підсумок валютної дебіторки хибний або загубив рахунок із нульовим ₴");
+  const tot = rc.fxTotals(rows);
+  assert.deepEqual([tot.rows, tot.totalUah, tot.totalVal, tot.zeroUah], [3, 100000.3, 2415.5, 1], "🔴 підсумок валютної дебіторки хибний або загубив рахунок із нульовим ₴");
   const cfg = SRC("config.ts");
   assert.match(cfg, /receivables1cFxUrl:[\s\S]*?debit-balance-account-362"/, "🔴 валютна дебіторка не з рахунку 362");
   assert.match(cfg, /\/-361\$\/\.test\(process\.env\.RECEIVABLES_1C_URL/, "🔴 перевизначений URL 361 може потрапити у валютну без заміни");
@@ -495,7 +496,7 @@ test("#995 ЖИВИЙ SQL: разовий крок 2в — авто-операц
   const sync = SRC("jobs/syncReceivables.ts");
   const body = sync.slice(sync.indexOf("export async function syncReceivables(): Promise<void> {"));
   assert.match(body.split("\n")[1], /await syncReceivablesFx\(\)\.catch\(/, "🔴 збій 362 може зупинити синк 361 (або 362 не синкається)");
-  assert.match(sync, /INSERT INTO receivables_fx_totals \(rows, total_uah, total_val, zero_uah\)/, "🔴 синк 362 не пише журнал підсумків");
+  assert.match(sync, /INSERT INTO receivables_fx_totals \(rows, total_uah, total_val, zero_uah[,)]/, "🔴 синк 362 не пише журнал підсумків");
 
   const s = await scratchDb(t);
   if (!s) return;
@@ -540,6 +541,222 @@ test("#996 ФРОНТ РОЗДІЛІВ: чотири розділи як на с
   assert.match(sec, /g\.items\.map\(\(i\) => \(\{ id: i\.id, section: v \}\)\)/, "🔴 немає «всім у групі»");
   assert.match(sec, /Без розділу: <b>\{loose\.length\}<\/b>/, "🔴 на «Статтях» не видно статей без розділу");
   assert.match(FE("pages/dashboard/sections/FinanceWeekTab.tsx"), /data\.opexUnassigned && data\.opexUnassigned\.items > 0/, "🔴 «Тиждень і місяць» мовчить про статті без розділу");
+});
+
+/** Рахунки «Виписки» для гейтів проходу 2г: банк ЮТС (iban), картка «лише фінанси», Сейф. */
+async function bankFixture(c: import("pg").Client) {
+  const ins = async (company: string, bank: string, label: string, financeOnly: boolean, iban: string | null = null) =>
+    (await c.query(`INSERT INTO bank_accounts (company, bank, label, currency, finance_only, iban) VALUES ($1, $2, $3, 'UAH', $4, $5) RETURNING id`,
+      [company, bank, label, financeOnly, iban])).rows[0].id as number;
+  const uts = await ins("uts", "privat", "ТОВ ЮТС · тест", false, "UA000000000000000000000000001");
+  const am = await ins("automuv", "privat", "ТОВ Автомув · тест", false, "UA000000000000000000000000002");
+  const card = await ins("fop_mono", "mono", "Картка black · тест", true);
+  const safe = (await c.query(`SELECT id FROM bank_accounts WHERE bank = 'manual' AND label = 'Сейф'`)).rows[0]?.id
+    ?? await ins("uts", "manual", "Сейф", true);
+  let n = 0;
+  const tx = (acc: number, amount: number, at: string, x: { iban?: string; fee?: boolean; name?: string } = {}) =>
+    c.query(`INSERT INTO bank_transactions (account_id, direction, external_tx_id, booked_at, counterparty_name, counterparty_iban, amount, currency, fx_rate, amount_uah, is_bank_fee)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'UAH', 1, $7, $8)`, [acc, amount >= 0 ? "in" : "out", `t:${++n}`, at, x.name ?? "Контрагент", x.iban ?? null, amount, x.fee ?? false]);
+  return { uts, am, card, safe, tx };
+}
+
+/**
+ * #997 — ЖИВИЙ SQL: СЕЙФ — РУЧНИЙ РАХУНОК (`core/bankManual.ts`). Тиждень — АБО операції, АБО один підсумок (інакше
+ * тиждень порахувався б двічі), межа — Пн–Нд за Києвом, по обидва боки; у банківський рахунок руками не пишемо;
+ * видалення → «Повернути» повертає той самий рядок, і повернення знову перевіряє правило.
+ * 🧨 Червоніє, якщо дозволити підсумок поверх операцій (чи навпаки), другий підсумок тижня або запис у банк.
+ */
+test("#997 ЖИВИЙ SQL: Сейф — тиждень або операції, або один підсумок; банк руками не пишеться; «Повернути»", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const bm = await import("./bankManual.js");
+  const { db, c } = s;
+  try {
+    const { uts, safe } = await bankFixture(c);
+    const err = (re: RegExp) => (e: unknown) => status(e) === 409 && re.test((e as Error).message);
+    await assert.rejects(bm.addManual(db, 901, { accountId: uts, kind: "op", date: "2026-10-06", direction: "in", amount: "1" }), (e: unknown) => status(e) === 400,
+      "🔴 у банківський рахунок записано руками");
+    const op = await bm.addManual(db, 901, { accountId: safe, kind: "op", date: "2026-10-11", direction: "out", amount: "1 500,50", purpose: "Пальне" }); // нд — тиждень 05.10
+    assert.equal(op.monday, "2026-10-05");
+    await assert.rejects(bm.addManual(db, 901, { accountId: safe, kind: "week", date: "2026-10-07", inAmount: "1000" }), err(/уже є операції/),
+      "🔴 підсумок тижня поверх операцій — тиждень порахується двічі");
+    const wk = await bm.addManual(db, 901, { accountId: safe, kind: "week", date: "2026-10-12", inAmount: "1000", outAmount: "400" }); // пн — наступний тиждень
+    assert.equal(wk.ids.length, 2, "🔴 підсумок тижня не дав двох рядків (прийшло / пішло)");
+    await assert.rejects(bm.addManual(db, 901, { accountId: safe, kind: "op", date: "2026-10-18", direction: "in", amount: "5" }), err(/уже внесено підсумок/),
+      "🔴 операція поверх підсумку тижня");
+    await assert.rejects(bm.addManual(db, 901, { accountId: safe, kind: "week", date: "2026-10-14", outAmount: "1" }), err(/уже є/), "🔴 другий підсумок того самого тижня");
+    await assert.rejects(bm.addManual(db, 901, { accountId: safe, kind: "op", date: "2026-10-06", direction: "in", amount: "-5" }), (e: unknown) => status(e) === 400);
+
+    const before = (await c.query(`SELECT id, amount::text, booked_at FROM bank_transactions WHERE id = $1`, [op.ids[0]])).rows[0];
+    await bm.setManualDeleted(db, 901, op.ids[0], true);
+    // тиждень 05.10 тепер порожній — підсумок можна; тоді повернення операції мусить відмовити
+    const wk2 = await bm.addManual(db, 901, { accountId: safe, kind: "week", date: "2026-10-05", inAmount: "1" });
+    await assert.rejects(bm.setManualDeleted(db, 901, op.ids[0], false), err(/уже внесено підсумок/), "🔴 «Повернути» обійшло правило тижня");
+    await bm.setManualDeleted(db, 901, wk2.ids[0], true);
+    await bm.setManualDeleted(db, 901, op.ids[0], false);
+    assert.deepEqual((await c.query(`SELECT id, amount::text, booked_at FROM bank_transactions WHERE id = $1 AND deleted_at IS NULL`, [op.ids[0]])).rows[0], before,
+      "🔴 «Повернути» повернуло не той рядок");
+    assert.equal((await bm.listManual(db, safe, "2026-10-01", "2026-10-31")).rows.filter((r: any) => !r.deleted).length, 3);
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #998 — «ЛИШЕ ФІНАНСИ»: особисті картки власника ФОП і Сейф (`finance_only`) — стрічка «Виписки» відкрита ВСІМ
+ * ролям, тож без права їх рядків немає (і з правом — є: дзеркало); видалених ручних записів немає ні для кого; в
+ * зіставлення оплат з рахунками вони не йдуть; AI їх не бачить (сира таблиця відібрана, вью — без них); реквізити й
+ * CSV-виписка їх не віддають. 🧨 Червоніє, якщо менеджер побачить картку, AI — сиру таблицю чи готівка закриє рахунок.
+ */
+test("#998 ЛИШЕ ФІНАНСИ: картки й Сейф — лише з правом, не в зіставленні оплат, не в AI, не в реквізитах", async (t) => {
+  const route = SRC("routes/bank.ts");
+  for (const r of ["incoming", "outgoing"]) {
+    const body = route.slice(route.indexOf(`bankRouter.get("/${r}"`), route.indexOf("});", route.indexOf(`bankRouter.get("/${r}"`)));
+    assert.match(body, /canSeePrivate: roleHasPerm\(req\.auth!\.roleKey, "view_cashflow"\)/, `🔴 /${r}: право на картки не з view_cashflow`);
+  }
+  assert.match(route, /FROM bank_accounts WHERE is_active = true AND NOT finance_only ORDER BY id, currency/, "🔴 реквізити віддають картки / Сейф");
+  assert.match(route, /statementData\(account, from, to, await getHiddenPayees\(\), canSeeHidden, roleHasPerm\(req\.auth!\.roleKey, "view_cashflow"\)\)/,
+    "🔴 CSV-виписка картки — без перевірки права");
+  const schema = readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8");
+  const rev = schema.lastIndexOf("REVOKE ALL ON bank_transactions FROM ai_readonly;");
+  assert.ok(rev > schema.lastIndexOf("GRANT SELECT ON ALL TABLES IN SCHEMA public TO ai_readonly;"), "🔴 AI бачить сиру таблицю банку (REVOKE вище за GRANT)");
+  const view = schema.slice(schema.indexOf("CREATE OR REPLACE VIEW ai_bank_transactions"), schema.indexOf(";", schema.indexOf("CREATE OR REPLACE VIEW ai_bank_transactions")));
+  assert.match(view, /WHERE NOT a\.finance_only AND t\.deleted_at IS NULL/, "🔴 вью для AI віддає картки / Сейф");
+
+  const s = await scratchDb(t);
+  if (!s) return;
+  process.env.DATABASE_URL ??= s.url; process.env.JWT_SECRET ??= "test"; process.env.KOMMO_BASE_URL ??= "https://x.invalid"; process.env.KOMMO_API_TOKEN ??= "x";
+  const { c } = s;
+  try {
+    const { uts, card, safe, tx } = await bankFixture(c);
+    await tx(uts, 1000, "2026-10-06T10:00:00Z"); await tx(card, 70, "2026-10-06T11:00:00Z"); await tx(safe, 500, "2026-10-06T12:00:00Z");
+    await tx(safe, 999, "2026-10-06T13:00:00Z");
+    await c.query(`UPDATE bank_transactions SET deleted_at = now(), manual_kind = 'op' WHERE amount = 999`);
+    const pm = await import("./paymentMatch.js");
+    const paid = (await c.query(pm.invoicePaymentsSql(1), [3650])).rows.map((r: any) => Number(r.amount)).sort((a: number, b: number) => a - b);
+    assert.deepEqual(paid, [1000], "🔴 картка / Сейф / видалений запис потрапили в зіставлення оплат з рахунками");
+    // та сама умова стрічки, що в `bankReport.whereClause` — над scratch-базою (модуль бере пул прода, тож — текстом)
+    const report = SRC("core/bankReport.ts");
+    assert.match(report, /const c = \[`t\.direction = '\$\{dir\}'`, `a\.is_active = true`, `t\.deleted_at IS NULL`\];\s*if \(!f\.canSeePrivate\) c\.push\(`NOT a\.finance_only`\);/,
+      "🔴 стрічка «Виписки» не ховає картки / видалене");
+    const feed = async (priv: boolean) => (await c.query(`SELECT t.amount::int AS a FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
+      WHERE t.direction = 'in' AND a.is_active = true AND t.deleted_at IS NULL ${priv ? "" : "AND NOT a.finance_only"} ORDER BY 1`)).rows.map((r: any) => r.a);
+    assert.deepEqual([await feed(false), await feed(true)], [[1000], [70, 500, 1000]], "🔴 право на картки не розрізняє ролі");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1200 — КАРТКИ МОНО (`pickAccount`): рядок без `mono_type` — ФОП, як було (без нього пропала б ФОП-виписка); з
+ * типом — саме ця картка; банки-jars і чужі типи — ніколи; синк банку не чіпає ручний рахунок. По обидва боки.
+ * 🧨 Червоніє, якщо картку взяти замість ФОП, або навпаки, або синк піде у Сейф.
+ */
+test("#1200 КАРТКИ МОНО: без типу — ФОП, з типом — рівно ця картка; Сейф синк не чіпає", async () => {
+  process.env.DATABASE_URL ??= "postgres://x@localhost/x"; process.env.JWT_SECRET ??= "test"; process.env.KOMMO_BASE_URL ??= "https://x.invalid"; process.env.KOMMO_API_TOKEN ??= "x";
+  const { pickAccount } = await import("../bankSources/mono.js");
+  const info = { accounts: [{ id: "b", type: "black", currencyCode: 980 }, { id: "f", type: "fop", currencyCode: 980 }, { id: "w", type: "white", currencyCode: 980 },
+    { id: "fu", type: "fop", currencyCode: 840 }], jars: [{ id: "j" }] };
+  assert.equal(pickAccount(info, "UAH")?.id, "f", "🔴 рядок ФОП узяв картку");
+  assert.equal(pickAccount(info, "USD")?.id, "fu", "🔴 валютний ФОП узяв гривневий");
+  assert.equal(pickAccount(info, "UAH", "black")?.id, "b", "🔴 картка black не знайдена");
+  assert.equal(pickAccount(info, "UAH", "white")?.id, "w");
+  assert.equal(pickAccount(info, "UAH", "platinum"), null, "🔴 неіснуючий тип підмінено іншим рахунком");
+  assert.match(SRC("jobs/syncBank.ts"), /FROM bank_accounts WHERE is_active = true AND bank <> 'manual'/, "🔴 синк банку пішов у ручний рахунок");
+  assert.match(SRC("bankSources/mono.ts"), /const res = await paced\(token, \(\) => fetch\(`\$\{BASE\}\/personal\/statement/, "🔴 виписка моно без паузи токена — під одним токеном кілька рахунків");
+});
+
+/**
+ * #1201 — ЖИВИЙ SQL: «НАДХОДЖЕННЯ / ВИТРАТИ ЗАГАЛЬНІ» З «ВИПИСКИ» (`bankTotals`). Усі активні рахунки разом із
+ * картками й Сейфом, без видалених записів; витрати — без комісій банку; дати — за Києвом, обидва кінці; перекази між
+ * нашими рахунками — ОКРЕМИМ числом (у суму входять — питання відкрите). Рядок «Гроші» — авто й тиждень, і місяць;
+ * вночі НЕ фіксується (Сейф вносять після тижня), фіксує закриття. 🧨 Червоніє, якщо загубити Сейф, взяти комісію,
+ * зрізати день на межі чи зафіксувати тиждень уночі.
+ */
+test("#1201 ЖИВИЙ SQL: надходження / витрати загальні — уся «Виписка» за Києвом, свої перекази окремо, фіксує лише закриття", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const k = await import("./financeKpi.js");
+  const { db, c } = s;
+  try {
+    const { uts, am, card, safe, tx } = await bankFixture(c);
+    await tx(uts, 1000, "2026-10-04T21:30:00Z");                                   // пн 05.10 00:30 Київ — у тижні
+    await tx(am, 200, "2026-10-11T20:30:00Z", { iban: "UA000000000000000000000000001" }); // нд 23:30 Київ, переказ від ЮТС — свій
+    await tx(card, -70, "2026-10-08T10:00:00Z"); await tx(safe, -30, "2026-10-08T10:00:00Z");
+    await tx(uts, -5, "2026-10-08T10:00:00Z", { fee: true });                       // комісія — не витрата
+    await tx(uts, -200, "2026-10-08T10:00:00Z", { iban: "UA000000000000000000000000002" }); // переказ на Автомув — свій
+    await tx(uts, 777, "2026-10-04T20:30:00Z");                                    // нд 04.10 23:30 Київ — минулий тиждень
+    await tx(safe, 9999, "2026-10-06T10:00:00Z");
+    await c.query(`UPDATE bank_transactions SET deleted_at = now(), manual_kind = 'op' WHERE amount = 9999`);
+    const b = await k.bankTotals(db, "2026-10-05", "2026-10-11");
+    assert.deepEqual(b, { in: 1200, out: 300, ownIn: 200, ownOut: 200, rows: 6 }, "🔴 надходження / витрати з «Виписки» пораховано хибно");
+
+    const sec = await k.createSection(db, 901, { name: "Гроші" });
+    const inc = await k.createKpi(db, 901, { sectionId: sec, name: "Надходження загальні" });
+    await c.query(`UPDATE fin_kpis SET kind = 'auto', ref_source = 'bank_in' WHERE id = $1`, [inc]);
+    const refs = { bank_in: b.in, bank_out: b.out };
+    const row = async (kind: "week" | "month", p: string) => (await k.loadPeriod(db, kind, p, refs, new Date("2026-10-14T10:00:00Z"))).sections[0].kpis[0];
+    assert.deepEqual([(await row("week", "2026-10-05")).kind, (await row("month", "2026-10-01")).kind], ["auto", "auto"], "🔴 «Гроші» не рахуються з «Виписки»");
+    assert.equal((await row("week", "2026-09-28")).kind, "manual", "🔴 тиждень до старту порахувався з «Виписки»");
+    assert.equal((await k.freezeAutoKpis(db, "week", "2026-10-05", refs)).frozen, 0, "🔴 тиждень зафіксовано вночі — Сейф ще не внесено");
+    await k.setPeriodClosed(db, 901, "week", "2026-10-05", true, refs);
+    assert.deepEqual([(await row("week", "2026-10-05")).value, (await row("week", "2026-10-05")).autoState], [1200, "frozen"], "🔴 закриття не зафіксувало");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1202 — ВАЛЮТА ВАЛЮТНОЇ ДЕБІТОРКИ ЗА КУРСОМ (`fxByRate`): 1С валюти не віддає, тож вона ВИВОДИТЬСЯ з курсу рядка —
+ * найближчий курс НБУ при відхиленні ≤ 10%; без курсу чи з далеким — «не визначено», окремим числом, а не в USD.
+ * Числа — заміряні 05.10.2026 рядки 42,39 / 49,86 / 51,77. 🧨 Червоніє, якщо далекий курс віднести до найближчої
+ * валюти, рядок без гривні — до USD, або загубити невизначене.
+ */
+test("#1202 ВАЛЮТА ЗА КУРСОМ: 42→USD, 50→EUR, далекий чи без курсу — «не визначено» окремо", async () => {
+  const rc = await import("./receivables1c.js");
+  const nbu = { USD: 41.2, EUR: 48.1 };
+  assert.equal(rc.fxByRate(4239, 100, nbu), "USD");
+  assert.equal(rc.fxByRate(4986, 100, nbu), "EUR");
+  assert.equal(rc.fxByRate(5177, 100, nbu), "EUR");
+  assert.equal(rc.fxByRate(6000, 100, nbu), null, "🔴 далекий курс віднесено до найближчої валюти");
+  assert.equal(rc.fxByRate(0, 15, nbu), null, "🔴 рядок без гривні віднесено до валюти");
+  assert.equal(rc.fxByRate(4239, 100, {}), null, "🔴 без курсів НБУ валюту вгадано");
+  const rows = rc.parse1cPayload([{ Contractor: "А", DetailInfo: [{ Sum: 4239, SumVal: 100 }, { Sum: 4986, SumVal: 100 }, { Sum: 0, SumVal: 15 }] }]).rows;
+  const t = rc.fxTotals(rows, nbu);
+  assert.deepEqual([t.usd, t.eur, t.unknownVal, t.totalVal], [100, 100, 15, 215], "🔴 USD / EUR / невизначене не сходяться з сумою у валюті");
+});
+
+/**
+ * #1203 — РАЗОВИЙ КРОК 2г і ФРОНТ. Схема: Сейф і три картки моно (з токеном рядка ФОП, «лише фінанси») — один раз;
+ * видалений чи вимкнений рахунок повторний прогін не відроджує; «Надходження / Витрати загальні» — з «Виписки».
+ * Фронт: «Сейф» — лише з `view_cashflow`, запис — лише з `edit_finance`; чип компанії не бере назву картки чи Сейфу.
+ * 🧨 Червоніє, якщо крок повторюється, картка не «лише фінанси» або кнопка Сейфу видна всім.
+ */
+test("#1203 ЖИВИЙ SQL: разовий крок 2г — Сейф і картки один раз, «лише фінанси»; фронт Сейфу — за правами", async (t) => {
+  const fe = FE("pages/dashboard/sections/BankSection.tsx");
+  assert.match(fe, /\{canViewCashflow && active\.some\(\(a\) => a\.bank === "manual"\) && \(/, "🔴 кнопка «Сейф» не за view_cashflow");
+  assert.match(fe, /\{safeOpen && canViewCashflow && <SafeModal accounts=\{active\.filter\(\(a\) => a\.bank === "manual"\)\} canEdit=\{canEditFinance\}/, "🔴 запис у Сейф не за edit_finance");
+  assert.match(fe, /if \(a\.finance_only && m\.has\(a\.company\)\) continue;/, "🔴 чип компанії може назватись «Сейф» / «Картка»");
+
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  try {
+    await c.query(`DELETE FROM fin_kpi_imports WHERE key IN ('bank-safe-cards-2026-10-05', 'bank-fm-2026-10-05')`);
+    await c.query(`DELETE FROM bank_accounts`);
+    await c.query(`INSERT INTO bank_accounts (company, bank, label, currency, env_key_name) VALUES ('fop_mono', 'mono', 'ФОП Моно', 'UAH', 'MONO_TOKEN_FOP')`);
+    const sec = (await c.query(`INSERT INTO fin_kpi_sections (name) VALUES ('Гроші') RETURNING id`)).rows[0].id;
+    for (const n of ["Надходження загальні", "Витрати загальні"]) await c.query(`INSERT INTO fin_kpis (section_id, name, kind) VALUES ($1, $2, 'manual')`, [sec, n]);
+    const schema = readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8");
+    await c.query(schema);
+    const accs = async () => (await c.query(`SELECT label, bank, finance_only, mono_type, env_key_name FROM bank_accounts ORDER BY id`)).rows
+      .map((x) => `${x.label}|${x.bank}|${x.finance_only}|${x.mono_type ?? ""}|${x.env_key_name ?? ""}`);
+    assert.deepEqual(await accs(), ["ФОП Моно|mono|false||MONO_TOKEN_FOP", "Сейф|manual|true||", "Картка black|mono|true|black|MONO_TOKEN_FOP",
+      "Картка white|mono|true|white|MONO_TOKEN_FOP", "Картка «Зроблено в Україні»|mono|true|madeInUkraine|MONO_TOKEN_FOP"], "🔴 разовий крок створив не те");
+    assert.deepEqual((await c.query(`SELECT name, kind, ref_source FROM fin_kpis ORDER BY id`)).rows.map((x) => `${x.name}|${x.kind}|${x.ref_source}`),
+      ["Надходження загальні|auto|bank_in", "Витрати загальні|auto|bank_out"], "🔴 «Гроші» не переведено на «Виписку»");
+    await c.query(`DELETE FROM bank_accounts WHERE label = 'Картка white'`);
+    await c.query(`UPDATE bank_accounts SET is_active = false WHERE label = 'Сейф'`);
+    await c.query(`UPDATE fin_kpis SET kind = 'manual', ref_source = NULL WHERE name = 'Витрати загальні'`);
+    const edited = await accs();
+    await c.query(schema);
+    assert.deepEqual(await accs(), edited, "🔴 повторний прогін схеми відродив видалений рахунок");
+    assert.equal((await c.query(`SELECT kind FROM fin_kpis WHERE name = 'Витрати загальні'`)).rows[0].kind, "manual", "🔴 повторний прогін переписав свідому правку");
+  } finally { await s.dispose(); }
 });
 
 /**

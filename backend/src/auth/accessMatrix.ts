@@ -260,6 +260,15 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/bank/cashflow", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+  // 💰 Ручний рахунок «Сейф» (прохід 2г фінансів, 05.10.2026): перегляд — `view_cashflow`, запис — `edit_finance`.
+  { method: "GET", path: "/api/bank/manual?account=1&from=2026-10-01&to=2026-10-31", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/bank/manual", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/bank/manual/:id/restore", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "DELETE", path: "/api/bank/manual/:id", cls: "DELETE-ghost",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   // 🏦 Виписка у форматі банку (21.09.2026): право `export_bank_statement` — бухгалтерія,
   // фінансист, керівництво. КВП свідомо в deny: файл несе реквізити всіх контрагентів, а КВП
   // це продажі. Проба бере один день, щоб дозволені ролі не тягнули місяць операцій.

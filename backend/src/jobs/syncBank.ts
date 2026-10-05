@@ -8,7 +8,7 @@ import * as privat from "../bankSources/privat.js";
 import type { BankAccountRow, NormalizedTx, BankAdapter } from "../bankSources/types.js";
 import { syncBankOutcome } from "./syncBankOutcome.js";
 
-const ADAPTERS: Record<BankAccountRow["bank"], BankAdapter> = { mono, privat };
+const ADAPTERS: Partial<Record<BankAccountRow["bank"], BankAdapter>> = { mono, privat };
 // Історія ≥60 днів. mono statement обмежений 31 добою/запит → адаптер сам чанкує (2 вікна на 60д);
 // privat покриває вікно followId-пагінацією. Нічого молодшого за 60 днів не чистимо.
 const INITIAL_LOOKBACK_DAYS = 60;
@@ -37,8 +37,9 @@ export async function upsertTx(accountId: number, tx: NormalizedTx, unmatched = 
 
 export async function syncBank(): Promise<{ synced: number; inserted: number; skipped: string[] }> {
   const accounts = await pool.query<BankAccountRow>(
-    `SELECT id, company, bank, label, currency, external_account_id, iban, env_key_name
-       FROM bank_accounts WHERE is_active = true`
+    // `manual` (Сейф) — без банку: записи вносить людина (`core/bankManual.ts`), синкати нічого.
+    `SELECT id, company, bank, label, currency, external_account_id, iban, env_key_name, mono_type
+       FROM bank_accounts WHERE is_active = true AND bank <> 'manual'`
   );
   let inserted = 0, synced = 0;
   const skipped: string[] = [];
