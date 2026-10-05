@@ -138,6 +138,7 @@ export const MANIFEST_FILES: string[] = [
   "core/hiring.test.js",
   "core/baClaims.test.js",
   "core/baEquipment.test.js",
+  "core/baTtnSync.test.js",
   "core/finance.test.js",
   "core/financeKpi.test.js",
   "constructor/constructor.test.js",
@@ -330,7 +331,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache",
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   "ba_equipment_issues",
-  "ba_claims", "ba_court_cases", "ba_files", "ba_events", "ba_equipment", "ba_ttn_checks", "ba_migrations",
+  "ba_claims", "ba_court_cases", "ba_files", "ba_events", "ba_equipment", "ba_ttn_checks", "ba_migrations", "ba_ttn_route_mismatch",
   "kommo_declined_forms",
 ];
 
@@ -2315,6 +2316,10 @@ export const MANIFEST_TESTS: string[] = [
   "#988 ФРОНТ БА-2: техніка й ТТН — справжні вкладки, статичний імпорт, перегляд без window.open",
   "#1240 Бізнес-асистент закритий від моделі: кожна таблиця ba_* — REVOKE після GRANT і CREATE, і в FORBIDDEN_TABLES",
   "#1241 ФРОНТ: «Облік техніки» фільтрує за місяцем видачі й окремо — «дата невідома»",
+  "#1400 ТТН З KOMMO: рахуються лише живі файли поля 2097291; поля немає — 0",
+  "#1401 ЖИВИЙ SQL СИНКУ: upsertDeal пише deals.ttn_files і на вставці, і на оновленні",
+  "#1402 ЖИВИЙ SQL ТТН: прикріплено серед тих самих угод, «не збігся» лише з прикріплених, NULL — не синхронізовано",
+  "#1403 ФРОНТ ТТН: наявні — з сервера, без ручного вводу; розкриття з угодами й «маршрут не збігся»",
   // Задача 4668 (30.09.2026): лід лідгена = «Взято в роботу» АБО «ОПР» (правило Ярослава) —
   // core/leadgenHandoffLink.test.ts.
   "#1090 ЖИВИЙ SQL: лід — «Взято в роботу» АБО «ОПР», одна угода — один лід; лідів ≥ ОПР у кожного",

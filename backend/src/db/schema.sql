@@ -4484,11 +4484,27 @@ CREATE TABLE IF NOT EXISTS ba_ttn_checks (
   UNIQUE (month, manager_id)
 );
 
+-- 🗂 ТТН АВТОМАТИЧНО (05.10.2026, рішення Романа): «прикріплено ТТН» — з поля Kommo «ТТН» (2097291),
+-- яке синк пише в `deals.ttn_files` (NULL = угоду синк ще не бачив після появи колонки — «не
+-- синхронізовано», НЕ 0). «Наявні» = прикріплено − позначені Дашею «маршрут не збігся».
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS ttn_files INTEGER;
+-- Знімок фіксації місяця тепер несе всі три числа; `ttn_present` = прикріплено − не збігся.
+ALTER TABLE ba_ttn_checks ADD COLUMN IF NOT EXISTS ttn_attached INTEGER;
+ALTER TABLE ba_ttn_checks ADD COLUMN IF NOT EXISTS route_mismatch INTEGER;
+-- Угоди, де ТТН прикріплено, але маршрут у ній НЕ збігся з угодою (звіряє людина). Позначка —
+-- на угоді, а не на місяці: угода закривається один раз, і її місяць визначає дата закриття.
+CREATE TABLE IF NOT EXISTS ba_ttn_route_mismatch (
+  kommo_id   BIGINT PRIMARY KEY REFERENCES deals(kommo_id),
+  note       TEXT,
+  marked_by  INTEGER REFERENCES users(id),
+  marked_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- 🔒 Увесь розділ «Бізнес-асистент» закрито від моделі (рішення Романа 01.10.2026 «5а»): борги клієнтів,
 -- судові справи, документи, видача техніки, перевірки ТТН. Після GRANT і після CREATE усіх таблиць блоку;
 -- `ba_equipment_issues` закрита вище. Гейт #1240 бере перелік ЗІ СХЕМИ за префіксом `ba_` — нова таблиця
 -- розділу без REVOKE червоніє сама.
-REVOKE ALL ON ba_claims, ba_court_cases, ba_files, ba_events, ba_equipment, ba_ttn_checks, ba_migrations FROM ai_readonly;
+REVOKE ALL ON ba_claims, ba_court_cases, ba_files, ba_events, ba_equipment, ba_ttn_checks, ba_migrations, ba_ttn_route_mismatch FROM ai_readonly;
 
 -- ▼ AI-АНАЛІЗ ДЗВІНКІВ ПО РЕКЛАМНИХ ЛІДАХ (ТЗ 22.09.2026, прохід A, коміт ②) ▼
 -- Три таблиці з ІСТОРІЄЮ: жодного TRUNCATE, жодного перезапису. Старий шлях (uts-bot → Google-лист →
