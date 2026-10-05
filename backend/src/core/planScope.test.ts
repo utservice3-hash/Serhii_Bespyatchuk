@@ -101,7 +101,7 @@ test("#1256 ПЛАН ПРОДАЖІВ: запис, подання, затвер�
   const approve = handler('plansRouter.post("/formation/approve"');
   assert.match(approve, /pf\.status = 'submitted' \$\{scopeSql\}\s*\n\s*AND \$\{metrics\.commercialManagerSql\("m"\)\}/,
     "🔴 затвердження переносить у plans і некомерційні рядки");
-  // Ростер формування живе в `core/plans.formationRoster` (#1300); комерційна умова їде в нього аргументом.
+  // Ростер формування живе в `core/plans.formationRoster` (#1350); комерційна умова їде в нього аргументом.
   assert.match(handler('plansRouter.get("/formation"'), /formationRoster\(pool, teamId \?\? null, metrics\.commercialManagerSql\("m"\)\)/,
     "🔴 екран формування показує некомерційні команди");
   const dash = readSrc(pathMod.join(SRC, "routes", "dashboard.ts"), "utf8");

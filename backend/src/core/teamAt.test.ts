@@ -20,7 +20,7 @@ const CHAIN: TeamMove[] = [
 /** Перехід ІЗ «без команди»: `from` = NULL — і саме його `COALESCE` сплутав би з «переходу немає». */
 const FROM_NONE: TeamMove[] = [{ effectiveFrom: "2026-10-01", fromTeamId: null, toTeamId: 5 }];
 
-test("#1301 КОМАНДА НА ДАТУ: до дня переходу — стара, з дня переходу — нова; без переходів — поточна", () => {
+test("#1351 КОМАНДА НА ДАТУ: до дня переходу — стара, з дня переходу — нова; без переходів — поточна", () => {
   assert.equal(teamAt(null, KHOMIK, "2026-09-30"), 5, "🔴 останній день у Яцика віддано новій команді");
   assert.equal(teamAt(null, KHOMIK, "2026-10-01"), null, "🔴 день переходу лишився в старій команді");
   assert.equal(teamAt(6, [], "2020-01-01"), 6, "🔴 без переходів команда не поточна");
@@ -29,7 +29,7 @@ test("#1301 КОМАНДА НА ДАТУ: до дня переходу — ст�
   assert.equal(teamAt(5, FROM_NONE, "2026-09-30"), null, "🔴 «був без команди» прочитано як «переходу немає»");
 });
 
-test("#1301b БУВ У КОМАНДІ ХОЧ ДЕНЬ ПЕРІОДУ: вересень Хомік — у Яцика, жовтень — ні; перехід усередині періоду рахується", () => {
+test("#1351b БУВ У КОМАНДІ ХОЧ ДЕНЬ ПЕРІОДУ: вересень Хомік — у Яцика, жовтень — ні; перехід усередині періоду рахується", () => {
   assert.equal(inTeamDuring(null, KHOMIK, 5, "2026-09-01", "2026-09-30"), true, "🔴 вересень без Хомік у команді Яцика");
   assert.equal(inTeamDuring(null, KHOMIK, 5, "2026-10-01", "2026-10-31"), false, "🔴 жовтень із Хомік у команді Яцика");
   assert.equal(inTeamDuring(null, KHOMIK, 5, "2026-09-15", "2026-10-15"), true, "🔴 період через межу загубив людину");
@@ -56,7 +56,7 @@ async function db(): Promise<Ctx | { skip: string }> {
     const { provisionScratch } = await import("../db/scratchDb.js");
     const scratch = provisionScratch();
     if ("unavailable" in scratch) return { skip: skipReason(scratch) };
-    // ⚠️ `DATABASE_URL` — ДО імпорту ядра: `db/pool` читає конфіг на імпорті (прийом #843 / #1300).
+    // ⚠️ `DATABASE_URL` — ДО імпорту ядра: `db/pool` читає конфіг на імпорті (прийом #843 / #1350).
     process.env.DATABASE_URL = scratch.url;
     process.env.JWT_SECRET ??= "test";
     process.env.KOMMO_BASE_URL ??= "https://x.invalid";
@@ -86,7 +86,7 @@ async function db(): Promise<Ctx | { skip: string }> {
       (1, 'payment_amount', '2026-09-01', 1000), (1, 'payment_amount', '2026-10-01', 900), (2, 'payment_amount', '2026-09-01', 2000)`);
     const [money, plans, metrics, sql] = await Promise.all([
       import("./money.js"), import("./plans.js"), import("./metrics.js"), import("./teamAt.js")]);
-    // Як сервер на старті: знімок переходів у памʼяті (`refreshTeamMoves`). #1302/#1302b окремо женуть і запасну форму.
+    // Як сервер на старті: знімок переходів у памʼяті (`refreshTeamMoves`). #1352/#1352b окремо женуть і запасну форму.
     await sql.refreshTeamMoves(c);
     dispose = async () => {
       const { pool } = await import("../db/pool.js");
@@ -108,7 +108,7 @@ async function movesOf(c: import("pg").Client): Promise<Map<number, TeamMove[]>>
 }
 const DAYS = ["2026-09-29", "2026-09-30", "2026-10-01", "2026-10-02"];
 
-test("#1302 ЖИВИЙ SQL: вираз «команда на дату» == правилу для кожного менеджера й дня (і для «був без команди»)", async (t) => {
+test("#1352 ЖИВИЙ SQL: вираз «команда на дату» == правилу для кожного менеджера й дня (і для «був без команди»)", async (t) => {
   const x = await db(); if ("skip" in x) return t.skip(x.skip);
   try {
     for (const form of ["знімок", "запасна"] as const) {
@@ -148,7 +148,7 @@ async function checkTeamAtSql(x: Ctx, form: string): Promise<void> {
   assert.equal(await commercial(1, "2026-10-01", "2026-10-31"), false, "🔴 у жовтні Хомік без команди, а рахується продажною");
 }
 
-test("#1302b ЖИВИЙ SQL: без жодного переходу вираз == поточна команда кожного менеджера (звіти байт-у-байт як були)", async (t) => {
+test("#1352b ЖИВИЙ SQL: без жодного переходу вираз == поточна команда кожного менеджера (звіти байт-у-байт як були)", async (t) => {
   const x = await db(); if ("skip" in x) return t.skip(x.skip);
   await x.c.query("BEGIN");
   try {
@@ -169,7 +169,7 @@ test("#1302b ЖИВИЙ SQL: без жодного переходу вираз =
   } finally { await x.c.query("ROLLBACK"); await x.sql.refreshTeamMoves(x.c); }
 });
 
-test("#1303 ГРОШІ З ПЕРЕХОДОМ: вересень Хомік — у Яцика, жовтень — без команди; Σ команд == відділ; рядок у команді — лише її частка", async (t) => {
+test("#1353 ГРОШІ З ПЕРЕХОДОМ: вересень Хомік — у Яцика, жовтень — без команди; Σ команд == відділ; рядок у команді — лише її частка", async (t) => {
   const x = await db(); if ("skip" in x) return t.skip(x.skip);
   const P = { from: "2026-09-01", to: "2026-10-31" };
   const byTeam = await x.money.receivedByTeam(P);
@@ -197,7 +197,7 @@ test("#1303 ГРОШІ З ПЕРЕХОДОМ: вересень Хомік — у
   }
 });
 
-test("#1304 ПЛАН З ПЕРЕХОДОМ: вересневий план Хомік — у плані команди Яцика, жовтневий — поза нею", async (t) => {
+test("#1354 ПЛАН З ПЕРЕХОДОМ: вересневий план Хомік — у плані команди Яцика, жовтневий — поза нею", async (t) => {
   const x = await db(); if ("skip" in x) return t.skip(x.skip);
   const sep = await x.plans.managerPlan({ month: "2026-09-01", teamId: 5 });
   assert.deepEqual(sep.rows.map((r) => r.managerId).sort(), [1, 2], "🔴 у вересневому плані команди Яцика немає Хомік");
@@ -208,7 +208,7 @@ test("#1304 ПЛАН З ПЕРЕХОДОМ: вересневий план Хом
   assert.equal(octAll.rows.find((r) => r.managerId === 1)?.teamId, null, "🔴 у жовтні Хомік підписана старою командою");
 });
 
-test("#1305 ЗАПИС ПЕРЕХОДУ: новий день — рядок; той самий день — виправлення; повернення того ж дня — переходу не було; раніша дата — відмова", async (t) => {
+test("#1355 ЗАПИС ПЕРЕХОДУ: новий день — рядок; той самий день — виправлення; повернення того ж дня — переходу не було; раніша дата — відмова", async (t) => {
   const x = await db(); if ("skip" in x) return t.skip(x.skip);
   const rows = async () => (await x.c.query<{ ef: string; f: number | null; t: number | null }>(
     `SELECT to_char(effective_from, 'YYYY-MM-DD') AS ef, from_team_id AS f, to_team_id AS t FROM manager_team_moves
@@ -235,7 +235,7 @@ test("#1305 ЗАПИС ПЕРЕХОДУ: новий день — рядок; т�
   await x.c.query(`UPDATE managers SET team_id = 6 WHERE id = 3`);
 });
 
-test("#1306 ОБИДВА ПИСАРІ КОМАНДИ ПИШУТЬ ПЕРЕХІД: синк (джерело kommo) і Налаштування (джерело settings, з датою)", () => {
+test("#1356 ОБИДВА ПИСАРІ КОМАНДИ ПИШУТЬ ПЕРЕХІД: синк (джерело kommo) і Налаштування (джерело settings, з датою)", () => {
   const sync = readFileSync(path.join(ROOT, "backend/src/jobs/syncKommo.ts"), "utf8");
   const settings = readFileSync(path.join(ROOT, "backend/src/routes/settings.ts"), "utf8");
   assert.match(sync, /\brecordTeamMove\(client, \{[^}]*source: "kommo"/s, "🔴 синк міняє команду без переходу — минуле переїде за людиною");
@@ -250,7 +250,7 @@ test("#1306 ОБИДВА ПИСАРІ КОМАНДИ ПИШУТЬ ПЕРЕХІД
 
 // ── Прохід 2: розгортка «Команд», номінації тижня, пропущені дзвінки ─────────────────────────────
 
-test("#1307 РОЗГОРТКА КОМАНДИ: хто перейшов — рядок у кожній команді зі своєю частиною; Σ рядків команди == команда", async (t) => {
+test("#1357 РОЗГОРТКА КОМАНДИ: хто перейшов — рядок у кожній команді зі своєю частиною; Σ рядків команди == команда", async (t) => {
   const x = await db(); if ("skip" in x) return t.skip(x.skip);
   const P = { from: "2026-09-01", to: "2026-10-31" };
   const [rows, teams] = await Promise.all([x.money.successByMgrAtTeam(P), x.money.successByTeam(P)]);
@@ -262,7 +262,7 @@ test("#1307 РОЗГОРТКА КОМАНДИ: хто перейшов — ря�
   }
 });
 
-test("#1308 НОМІНАЦІЇ ТИЖНЯ: склад — команда на понеділок тижня (Хомік у Яцика до 01.10, після — поза заліком)", async (t) => {
+test("#1358 НОМІНАЦІЇ ТИЖНЯ: склад — команда на понеділок тижня (Хомік у Яцика до 01.10, після — поза заліком)", async (t) => {
   const x = await db(); if ("skip" in x) return t.skip(x.skip);
   const { nominationRoster } = await import("./nominations.js");
   const ids = async (asOf: string) => (await nominationRoster(5, asOf)).map((r) => r.id).sort();
@@ -270,7 +270,7 @@ test("#1308 НОМІНАЦІЇ ТИЖНЯ: склад — команда на п
   assert.deepEqual(await ids("2026-10-05"), [2, 4], "🔴 у тижні 05.10 склад команди Яцика не той (Хомік пішла, Новенький прийшов)");
 });
 
-test("#1309 ПРОПУЩЕНІ ДЗВІНКИ: рядок команди й скоуп тімліда — за командою на день дзвінка", async (t) => {
+test("#1359 ПРОПУЩЕНІ ДЗВІНКИ: рядок команди й скоуп тімліда — за командою на день дзвінка", async (t) => {
   const x = await db(); if ("skip" in x) return t.skip(x.skip);
   const rules = await import("./missedCallsRules.js");
   await x.c.query(`INSERT INTO ringostat_calls (uniqueid, calldate, call_type, disposition, billsec, manager_id, client_phone) VALUES
@@ -289,11 +289,11 @@ test("#1309 ПРОПУЩЕНІ ДЗВІНКИ: рядок команди й ск
 });
 
 /**
- * #1310 — РЕКЛАМНА КОГОРТА ВИКОНУЄТЬСЯ Й ДІЛИТЬСЯ ЗА КОМАНДОЮ НА ДАТУ ВХОДУ. Привід: golden на проді впав
+ * #1360 — РЕКЛАМНА КОГОРТА ВИКОНУЄТЬСЯ Й ДІЛИТЬСЯ ЗА КОМАНДОЮ НА ДАТУ ВХОДУ. Привід: golden на проді впав
  * `syntax error at or near "$"` — `${KYIV}` у звичайних лапках пішов у SQL буквально. `tsc` і 1433 гейти
  * мовчали, бо цей запит не виконувався ніде, крім живого Звіту. Тепер виконується тут.
  */
-test("#1310 РЕКЛАМНА КОГОРТА: виконується; по команді — за датою входу в зону, по менеджеру — один рядок", async (t) => {
+test("#1360 РЕКЛАМНА КОГОРТА: виконується; по команді — за датою входу в зону, по менеджеру — один рядок", async (t) => {
   const x = await db(); if ("skip" in x) return t.skip(x.skip);
   for (const [id, at] of [[201, "2026-09-29 12:00+03"], [202, "2026-10-02 12:00+03"]] as const) {
     await x.c.query(`INSERT INTO deals (kommo_id, name, manager_id, pipeline_id, status_id, price, client_key, lead_channel, utm_medium, created_at_kommo)
@@ -316,12 +316,12 @@ test("#1310 РЕКЛАМНА КОГОРТА: виконується; по ком
 });
 
 /**
- * #1311 — БЕЗ ПЕРЕХОДІВ ДЖЕРЕЛА ВИКОНУЮТЬСЯ І ДАЮТЬ СТАРІ ЧИСЛА. Привід: golden на проді впав
+ * #1361 — БЕЗ ПЕРЕХОДІВ ДЖЕРЕЛА ВИКОНУЮТЬСЯ І ДАЮТЬ СТАРІ ЧИСЛА. Привід: golden на проді впав
  * `bind message supplies 1 parameters, but prepared statement requires 0` — без переходів вираз команди
  * перестав згадувати `$1`, а ростер `managerPlan` передавав місяць лише для нього. Усі інші гейти тут
  * ходять ІЗ переходами, тож порожній знімок — саме той стан, у якому прод живе сьогодні, — не перевірявся.
  */
-test("#1311 БЕЗ ПЕРЕХОДІВ: план, гроші, конверсії, воронка, номінації виконуються й рахують за поточною командою", async (t) => {
+test("#1361 БЕЗ ПЕРЕХОДІВ: план, гроші, конверсії, воронка, номінації виконуються й рахують за поточною командою", async (t) => {
   const x = await db(); if ("skip" in x) return t.skip(x.skip);
   const saved = (await x.c.query(`SELECT manager_id, from_team_id, to_team_id, effective_from, source FROM manager_team_moves`)).rows;
   await x.c.query(`DELETE FROM manager_team_moves`);
