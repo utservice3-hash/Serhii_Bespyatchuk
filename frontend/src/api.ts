@@ -2644,6 +2644,32 @@ export interface FeedbackItem {
   updatedAt: string;
   authorUserId: number;
   authorName: string;
+  /** Коли закрили («вирішено»/«відхилено»); null — відкрите або повернуте на розгляд. */
+  closedAt: string | null;
+  /** Коли звернення разом із фото буде безповоротно видалене (closedAt + 30 днів). */
+  purgeAt: string | null;
+  files: FeedbackFile[];
+}
+export interface FeedbackFile { id: number; name: string; mime: string; sizeBytes: number; createdById: number | null }
+/** Ліміти — дзеркало `core/feedbackRetention.ts`; сервер однаково перевіряє сам. */
+export const FEEDBACK_FILE_MAX_BYTES = 5 * 1024 * 1024;
+export const FEEDBACK_FILES_PER_ITEM = 5;
+export async function uploadFeedbackFile(feedbackId: number, file: File): Promise<FeedbackFile> {
+  const dataBase64 = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  const { data } = await api.post<FeedbackFile>(`/feedback/${feedbackId}/files`, { filename: file.name, dataBase64 });
+  return data;
+}
+export async function deleteFeedbackFile(feedbackId: number, fileId: number): Promise<void> {
+  await api.delete(`/feedback/${feedbackId}/files/${fileId}`);
+}
+export async function fetchFeedbackFileBlobUrl(feedbackId: number, fileId: number): Promise<string> {
+  const { data } = await api.get(`/feedback/${feedbackId}/files/${fileId}`, { responseType: "blob" });
+  return URL.createObjectURL(data as Blob);
 }
 export async function fetchFeedback(): Promise<FeedbackItem[]> {
   const { data } = await api.get<{ feedback: FeedbackItem[] }>("/feedback");
