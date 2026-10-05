@@ -5212,8 +5212,11 @@ export const createReceivableClaim = async (clientKey: string) =>
 // Дзеркало `routes/finance.ts`. Доступ — вкладка `finance`; запис — право `edit_finance`,
 // погодження плану — `approve_finance_plan`. Що дозволено, каже сервер (`canEdit`/`canApprove`).
 export type FinRowState = "empty" | "noplan" | "nofact" | "over" | "ok";
+/** Розділ статті → місячний рядок «Операційних витрат» у «Тиждень і місяць» (прохід 2в, 05.10.2026). */
+export type FinSection = "commercial" | "general" | "admin" | "payroll";
+export const FIN_SECTIONS: Record<FinSection, string> = { commercial: "Комерційні", general: "Загальні", admin: "Адміністративні", payroll: "ЗП + Податки на ЗП" };
 export interface FinItem {
-  id: number; name: string; offFrom: string | null; active: boolean;
+  id: number; name: string; section: FinSection | null; offFrom: string | null; active: boolean;
   plan: number | null; fact: number | null; note: string | null; state: FinRowState; dataMonths: number;
 }
 export interface FinGroup { id: number; name: string; items: FinItem[] }
@@ -5241,6 +5244,9 @@ export const createFin = async (kind: FinKind, body: Record<string, unknown>) =>
 export const updateFin = async (kind: FinKind, id: number, body: Record<string, unknown>) => { await api.patch(`/finance/${kind}s/${id}`, body); };
 export const deleteFin = async (kind: FinKind, id: number, confirm = false) => { await api.delete(`/finance/${kind}s/${id}`, { params: confirm ? { confirm: 1 } : {} }); };
 export const restoreFin = async (kind: FinKind, id: number) => { await api.post("/finance/restore", { kind, id }); };
+/** Розділ кільком статтям одразу; відповідь — що було (для «Повернути»). */
+export const setFinItemSections = async (items: { id: number; section: FinSection | null }[]) =>
+  (await api.put<{ previous: { id: number; section: FinSection | null }[] }>("/finance/item-sections", { items })).data;
 export const setFinItemOff = async (id: number, off: boolean) => (await api.post<{ offFrom: string | null }>(`/finance/items/${id}/off`, { off })).data;
 export const saveFinValues = async (month: string, cells: FinCell[]) => (await api.put<{ changed: number }>("/finance/values", { month, cells })).data;
 export const saveFinNote = async (itemId: number, month: string, text: string) => { await api.put("/finance/notes", { itemId, month, text }); };
@@ -5426,7 +5432,8 @@ export async function svExportCsv(id: number): Promise<Blob> {
 
 // ── 💰 Фінанси · «Тиждень і місяць» (прохід 2а, 01.10.2026) ─────────────────────
 export type FinPeriodKind = "week" | "month";
-export type FinKpiRefSource = "delivered_income" | "delivered_expense" | "unloaded_income" | "unloaded_expense" | "receivables";
+export type FinKpiRefSource = "delivered_income" | "delivered_expense" | "unloaded_income" | "unloaded_expense" | "receivables"
+  | "opex_commercial" | "opex_general" | "opex_admin" | "opex_payroll" | "receivables_fx";
 export interface FinKpi {
   id: number; name: string; unit: "UAH" | "USD" | "EUR"; kind: "manual" | "sum" | "diff" | "auto"; argA: number | null; argB: number | null;
   refSource: FinKpiRefSource | null; offFrom: string | null; active: boolean;
@@ -5440,6 +5447,10 @@ export interface FinKpiPeriod {
   kind: FinPeriodKind; start: string; end: string; prev: string; label: string; prevLabel: string; current: string;
   sections: { id: number; name: string; kpis: FinKpi[] }[];
   closed: { at: string; by: string | null; note: string | null } | null; importedInterim: boolean; canEdit: boolean;
+  /** Місяць: статті «План/факт» без розділу, що мають факт цього місяця, — їхні гроші не в жодному рядку. */
+  opexUnassigned: { items: number; fact: number } | null;
+  /** Валютна дебіторка з 1С на кінець періоду: Σ у гривні, Σ у валюті (різні валюти разом), рядки з нульовим ₴. */
+  receivablesFx: { uah: number; val: number; zeroUah: number; at: string } | null;
 }
 export interface FinKpiCard {
   id: number; name: string; unit: string; kind: string; refSource: string | null; offFrom: string | null; deleted: boolean; section: string;

@@ -119,6 +119,13 @@ export const config = {
   receivables1cUrl:
     process.env.RECEIVABLES_1C_URL ??
     "http://193.200.173.188:8010/rest-bk/hs/service/debit-balance-account-361",
+  // 💱 Валютна дебіторка (рахунок 362) — той самий сервіс 1С, інший рахунок (прохід 2в фінансів, 05.10.2026).
+  receivables1cFxUrl:
+    process.env.RECEIVABLES_1C_FX_URL ??
+    // Перевизначено лише 361 — беремо той самий хост, але ТІЛЬКИ коли URL справді закінчується на -361: інакше
+    // .replace не спрацював би, і «валютна» тягнула б гривневий рахунок, показуючи гривневий борг як валютний.
+    (/-361$/.test(process.env.RECEIVABLES_1C_URL ?? "") ? process.env.RECEIVABLES_1C_URL!.replace(/-361$/, "-362")
+      : "http://193.200.173.188:8010/rest-bk/hs/service/debit-balance-account-362"),
   // ⚠️ Ключа `receivablesSheetUrl` (аркуш «выгрузка») БІЛЬШЕ НЕМАЄ — його ніхто не
   // читає, а мертвий ключ у конфізі читається як живий (урок `expected` у /teams).
   // Аркуш ЛІМІТІВ нижче — читається далі, він з 1С не приходить.

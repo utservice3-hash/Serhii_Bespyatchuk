@@ -1436,6 +1436,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/finance/items/:id/off", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "PUT", path: "/api/finance/item-sections", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/finance/restore", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "PUT", path: "/api/finance/values", cls: "deny-only",

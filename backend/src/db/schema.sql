@@ -5325,3 +5325,50 @@ CREATE TABLE IF NOT EXISTS kommo_declined_forms (
 );
 CREATE INDEX IF NOT EXISTS ix_kommo_declined_forms_at ON kommo_declined_forms (declined_at);
 REVOKE ALL ON kommo_declined_forms FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💰 ФІНАНСИ, прохід 2в (05.10.2026, прохання Тетяни + рішення Романа «роби все»):
+--  · розділ статті «План/факт» → місячні рядки «Операційних витрат» у «Тиждень і місяць» (Σ факту статей розділу);
+--  · «Валютна дебіторка» — з 1С (рахунок 362), журнал підсумків кожного синку (`receivables_fx_totals`).
+-- ⚠️ Revert коду не відкочує цих змін (колонка, показник «ЗП + Податки на ЗП», перейменування, журнал підсумків).
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE fin_items ADD COLUMN IF NOT EXISTS section TEXT;
+ALTER TABLE fin_items DROP CONSTRAINT IF EXISTS fin_items_section_check;
+ALTER TABLE fin_items ADD CONSTRAINT fin_items_section_check CHECK (section IS NULL OR section IN ('commercial','general','admin','payroll'));
+ALTER TABLE fin_kpis DROP CONSTRAINT IF EXISTS fin_kpis_ref_source_check;
+ALTER TABLE fin_kpis ADD CONSTRAINT fin_kpis_ref_source_check CHECK (ref_source IS NULL OR ref_source IN (
+  'delivered_income','delivered_expense','unloaded_income','unloaded_expense','receivables',
+  'opex_commercial','opex_general','opex_admin','opex_payroll','receivables_fx'));
+-- Разово (позначка в `fin_kpi_imports`): рядки «Операційних витрат» і «Валютна дебіторка» отримують джерело;
+-- «Загальновиробничі витрати» → «Загальні витрати» (назва розділу Тетяни); новий рядок «ЗП + Податки на ЗП».
+-- Рядок шукається за розділом + назвою: якщо його вже перейменували чи видалили — разовий крок його не чіпає.
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('opex-fx-2026-10-05', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key),
+sec AS (SELECT id FROM fin_kpi_sections WHERE name = 'Операційні витрати' AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM step)),
+opex AS (
+  UPDATE fin_kpis f SET kind = 'auto',
+         ref_source = CASE f.name WHEN 'Комерційні витрати' THEN 'opex_commercial' WHEN 'Загальновиробничі витрати' THEN 'opex_general'
+                                  WHEN 'Адміністративні витрати' THEN 'opex_admin' END,
+         name = CASE f.name WHEN 'Загальновиробничі витрати' THEN 'Загальні витрати' ELSE f.name END
+   WHERE f.section_id IN (SELECT id FROM sec) AND f.deleted_at IS NULL AND f.kind = 'manual'
+     AND f.name IN ('Комерційні витрати', 'Загальновиробничі витрати', 'Адміністративні витрати')
+  RETURNING f.id),
+fx AS (
+  UPDATE fin_kpis f SET kind = 'auto', ref_source = 'receivables_fx'
+    FROM fin_kpi_sections s
+   WHERE s.id = f.section_id AND s.name = 'Залишки на дату' AND s.deleted_at IS NULL AND f.name = 'Валютна дебіторка'
+     AND f.kind = 'manual' AND f.deleted_at IS NULL AND EXISTS (SELECT 1 FROM step)
+  RETURNING f.id)
+INSERT INTO fin_kpis (section_id, name, kind, ref_source, sort)
+SELECT s.id, 'ЗП + Податки на ЗП', 'auto', 'opex_payroll', COALESCE((SELECT max(sort) + 1 FROM fin_kpis WHERE section_id = s.id), 0)
+  FROM sec s WHERE NOT EXISTS (SELECT 1 FROM fin_kpis WHERE section_id = s.id AND name = 'ЗП + Податки на ЗП' AND deleted_at IS NULL);
+-- Валютна дебіторка з 1С: ПІДСУМОК кожного синку (не знімок під TRUNCATE) — щоб минулий тиждень мав своє число.
+-- Лише суми й лічильники, без клієнтів і рахунків.
+CREATE TABLE IF NOT EXISTS receivables_fx_totals (
+  id          BIGSERIAL PRIMARY KEY,
+  synced_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  rows        INTEGER NOT NULL,
+  total_uah   NUMERIC(14,2) NOT NULL,          -- Σ гривневого еквівалента (1С `Sum`)
+  total_val   NUMERIC(14,2) NOT NULL,          -- Σ у валюті (1С `SumVal`; валюти рахунку 1С не віддає)
+  zero_uah    INTEGER NOT NULL DEFAULT 0       -- рядків із боргом у валюті, але нульовим гривневим еквівалентом
+);
+CREATE INDEX IF NOT EXISTS ix_receivables_fx_totals_at ON receivables_fx_totals (synced_at);

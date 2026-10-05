@@ -37,7 +37,14 @@ export const REF_HINT: Record<FinKpiRefSource, string> = {
   unloaded_income: "Два фільтри фінансиста: «Очікуємо оплату» / «Оплата отримана» за датою створення + «Успішна» за датою закриття; сума «Приход 1–5»",
   unloaded_expense: "Ті самі два фільтри; сума «Расход 1–5», крім типу оплати «Оплата на выгрузке»",
   receivables: "Дебіторка в дашборді ЗАРАЗ (знімок без історії) — фіксується в ніч після кінця періоду",
+  opex_commercial: "Місяць: Σ факту статей «План/факт» з розділом «Комерційні». Тиждень — вручну (факт у статтях лише помісячний)",
+  opex_general: "Місяць: Σ факту статей «План/факт» з розділом «Загальні». Тиждень — вручну",
+  opex_admin: "Місяць: Σ факту статей «План/факт» з розділом «Адміністративні». Тиждень — вручну",
+  opex_payroll: "Місяць: Σ факту статей «План/факт» з розділом «ЗП + Податки на ЗП»; поки таких статей немає — вручну",
+  receivables_fx: "1С, рахунок 362: гривневий еквівалент валютних рахунків на кінець періоду (журнал кожного синку)",
 };
+/** Звідки авто-рядок бере число — підпис на позначці й у довідці. */
+const SOURCE_OF = (r: FinKpiRefSource | null) => (r?.startsWith("opex_") ? "План/факт" : r === "receivables_fx" ? "1С" : r === "receivables" ? "дебіторка" : "фільтр Kommo");
 
 /** Підпис автоматичного рядка: звідки зараз число. */
 const AUTO_STATE: Record<NonNullable<FinKpi["autoState"]>, [string, string]> = {
@@ -194,7 +201,8 @@ export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
                     <tr key={k.id} className={`it ${k.active ? "" : "off"}`} onClick={() => !edit && setCard(k.id)}>
                       <td className="ind1">{k.name}{(k.kind === "sum" || k.kind === "diff") && <span className="hr-muted" style={{ fontSize: 11, marginLeft: 6 }}>{k.kind === "sum" ? "сума" : "різниця"}</span>}
                         {k.kind === "auto" && <span className={`hr-pill ${k.autoState === "live" ? "pl" : ""}`} style={{ fontSize: 11, marginLeft: 6 }}
-                          title={k.autoState ? AUTO_STATE[k.autoState][1] : "Рахується з CRM; для цього періоду числа немає"}>{k.autoState ? AUTO_STATE[k.autoState][0] : "авто"}</span>}</td>
+                          title={`${k.refSource ? REF_HINT[k.refSource] + ". " : ""}${k.autoState ? AUTO_STATE[k.autoState][1] : "Для цього періоду числа немає"}`}>
+                          {k.autoState === "live" && k.refSource?.startsWith("opex_") ? "з «План/факт»" : k.autoState ? AUTO_STATE[k.autoState][0] : "авто"}</span>}</td>
                       <td className="num hr-muted">{money(k.prevValue, k.unit)}</td>
                       <td className="num">{input
                         ? <input className={`fin-cell ${draft[k.id] !== undefined ? "ch" : ""} ${bad.has(k.id) ? "bad" : ""}`} inputMode="decimal" aria-label={`${k.name}: ${data.label}`}
@@ -219,8 +227,15 @@ export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
           </tbody>
         </table>
       </div>
+      {data.opexUnassigned && data.opexUnassigned.items > 0 && <div className="hr-note" style={{ margin: "10px 16px 0" }}>
+        Статей «План/факт» без розділу з фактом за цей місяць: <b>{data.opexUnassigned.items}</b> на <b>{money(data.opexUnassigned.fact)}</b> — в «Операційні витрати» вони не потрапили. Розділ ставиться на вкладці «Статті».
+      </div>}
+      {data.receivablesFx && <div className="hr-sect hr-muted" style={{ fontSize: 12.5 }}>
+        Валютна дебіторка з 1С на {new Date(data.receivablesFx.at).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}: {money(data.receivablesFx.uah)} у гривні · {money(data.receivablesFx.val)} у валюті (1С не каже, у якій — це сума різних валют)
+        {data.receivablesFx.zeroUah > 0 && <> · <b>{data.receivablesFx.zeroUah}</b> рах. мають борг у валюті з нульовим гривневим еквівалентом — у гривневу суму вони не ввійшли</>}
+      </div>}
       <div className="hr-sect hr-muted" style={{ fontSize: 12.5, display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <span>Тиждень — з понеділка по неділю за Києвом. Рядки «авто» (з тижня 05.10 і з жовтня) рахуються за фільтрами Kommo і фіксуються в ніч після кінця періоду — далі CRM може змінитись, а число тижня ні; раніші періоди — числа з таблиці «ФМ». Довідка CRM / 1С біля ручних рядків не підміняє внесене число.</span>
+        <span>Тиждень — з понеділка по неділю за Києвом. Рядки «авто» (з тижня 05.10 і з жовтня) рахуються за фільтрами Kommo і фіксуються в ніч після кінця періоду — далі CRM може змінитись, а число тижня ні; раніші періоди — числа з таблиці «ФМ». Операційні витрати місяця — з «План/факт» за розділами статей, фіксуються закриттям місяця. Довідка CRM / 1С біля ручних рядків не підміняє внесене число.</span>
         {data.canEdit && !edit && <button className="fin-link" onClick={act.addSection}>+ Розділ</button>}
       </div>
       {card != null && <KpiDrawer id={card} kind={data.kind} periodStart={data.start} closed={!!data.closed} canEdit={data.canEdit} toast={toast} onChanged={reload} onClose={() => setCard(null)} />}
@@ -253,8 +268,8 @@ function RefCell({ k }: { k: FinKpi }) {
     const d = now != null && k.value != null ? k.value - now : null;
     return (
       <span title={REF_HINT[k.refSource]} style={{ fontSize: 12.5 }}>
-        {now != null ? <span>у CRM зараз {money(now)}{d ? <span className="hr-muted"> ({d > 0 ? "−" : "+"}{money(Math.abs(d))})</span> : null}</span>
-          : <span className="hr-muted">фільтр Kommo</span>}
+        {now != null ? <span>{SOURCE_OF(k.refSource) === "фільтр Kommo" ? "у CRM" : SOURCE_OF(k.refSource)} зараз {money(now)}{d ? <span className="hr-muted"> ({d > 0 ? "−" : "+"}{money(Math.abs(d))})</span> : null}</span>
+          : <span className="hr-muted">{SOURCE_OF(k.refSource)}</span>}
       </span>
     );
   }
