@@ -15,8 +15,19 @@
 import { FinError, parseAmount, type Db } from "./finance.js";
 
 export type PeriodKind = "week" | "month";
-export type RefSource = "delivered_income" | "delivered_expense" | "unloaded_income" | "unloaded_expense" | "receivables";
-export const REF_SOURCES: readonly RefSource[] = ["delivered_income", "delivered_expense", "unloaded_income", "unloaded_expense", "receivables"];
+export type RefSource = "delivered_income" | "delivered_expense" | "unloaded_income" | "unloaded_expense" | "receivables"
+  | "opex_commercial" | "opex_general" | "opex_admin" | "opex_payroll" | "receivables_fx";
+export const REF_SOURCES: readonly RefSource[] = ["delivered_income", "delivered_expense", "unloaded_income", "unloaded_expense", "receivables",
+  "opex_commercial", "opex_general", "opex_admin", "opex_payroll", "receivables_fx"];
+/**
+ * Розділ статті «План/факт» → рядок «Операційних витрат» (прохід 2в, прохання Тетяни 05.10.2026). Факт у «План/факт»
+ * лише ПОМІСЯЧНИЙ, тож із нього рахується тільки МІСЯЦЬ; тиждень лишається ручним. Розділ без жодної статті — теж
+ * ручний (інакше «ЗП + Податки», для яких статей ще немає, не можна було б внести взагалі).
+ */
+export const OPEX_SECTIONS = ["commercial", "general", "admin", "payroll"] as const;
+export type OpexSection = (typeof OPEX_SECTIONS)[number];
+export const OPEX_REF: Record<OpexSection, RefSource> = { commercial: "opex_commercial", general: "opex_general", admin: "opex_admin", payroll: "opex_payroll" };
+const isOpexRef = (r: unknown) => typeof r === "string" && r.startsWith("opex_");
 
 // ── Дати й періоди (чисті функції, UTC-арифметика над 'YYYY-MM-DD') ──────────────
 
@@ -70,6 +81,15 @@ export function receivablesSnapshotFits(kind: PeriodKind, start: string, now: Da
  */
 export const FM_AUTO_FROM: Readonly<Record<PeriodKind, string>> = { week: "2026-10-05", month: "2026-10-01" };
 export const autoActive = (kind: PeriodKind, start: string) => start >= FM_AUTO_FROM[kind];
+/**
+ * Чи рахується авто-рядок сам у ЦЬОМУ періоді. До старту — ні (число з таблиці). Операційні витрати — лише місяць і
+ * лише коли в розділі є статті (`refs` несе ключ розділу тільки тоді). Решта авто-рядків — завжди після старту.
+ */
+export function isAutoIn(x: { kind: string; ref_source?: string | null }, kind: PeriodKind, start: string, refs: RefValues): boolean {
+  if (x.kind !== "auto" || !autoActive(kind, start)) return false;
+  if (isOpexRef(x.ref_source)) return kind === "month" && (x.ref_source as string) in refs;
+  return true;
+}
 export const isActiveIn = (offFrom: string | null, start: string) => offFrom == null || start < offFrom;
 
 // ── Обчислювані показники ─────────────────────────────────────────────────────
@@ -153,7 +173,7 @@ export async function loadPeriod(db: Db, kindArg: unknown, dateArg: unknown, ref
   const cur = new Map<number, any>(), old = new Map<number, any>();
   for (const x of v.rows) (x.p === start ? cur : old).set(x.kpi_id, x);
   // До старту автоматики авто-рядок — ручний (число з таблиці); `kind` у відповіді — уже з поправкою на період.
-  const kindIn = (x: any, period: string) => (x.kind === "auto" && !autoActive(kind, period) ? "manual" : x.kind);
+  const kindIn = (x: any, period: string) => (x.kind === "auto" && !isAutoIn(x, kind, period, refs) ? "manual" : x.kind);
   const defs: KpiDef[] = k.rows.filter((x: any) => x.id != null).map((x: any) => ({
     id: x.id, sectionId: x.section_id, kind: x.kind, argA: x.arg_a, argB: x.arg_b, active: isActiveIn(x.off_from, start) }));
   const prevDefs = defs.map((d) => ({ ...d, active: isActiveIn(k.rows.find((x: any) => x.id === d.id).off_from, prev) }));
@@ -185,7 +205,7 @@ export async function loadPeriod(db: Db, kindArg: unknown, dateArg: unknown, ref
       value: curVals.get(x.id) ?? null, prevValue: prevVals.get(x.id) ?? null, note: c?.note ?? null,
       savedRef: c?.ref_value != null ? { value: Number(c.ref_value), at: c.ref_at } : null,
       autoState: kindIn(x, start) === "auto" ? (autoSource(c, start, hasLive(x, true)) ?? (hasLive(x, true) ? "live" : null)) : null,
-      liveRef: x.ref_source && x.ref_source in refs && !(x.kind === "auto" && !autoActive(kind, start)) ? refs[x.ref_source as RefSource] ?? null : null,
+      liveRef: x.ref_source && x.ref_source in refs && !(x.kind === "auto" && !isAutoIn(x, kind, start, refs)) ? refs[x.ref_source as RefSource] ?? null : null,
     });
   }
   const cl = await db.query(`SELECT c.closed_at AS at, c.note, ${ACTOR} AS actor FROM fin_kpi_closes c LEFT JOIN users u ON u.id = c.closed_by
@@ -252,7 +272,7 @@ export async function saveKpiValues(db: Db, actor: number, kindArg: unknown, dat
   for (const id of ids) {
     const x: any = kpis.get(id);
     if (!x || x.deleted_at) throw new FinError(404, "Показник не знайдено — нічого не збережено");
-    if (x.kind === "auto" && autoActive(kind, start)) throw new FinError(400, `«${x.name}» рахується сам за фільтрами Kommo — його не вносять`);
+    if (isAutoIn(x, kind, start, refs)) throw new FinError(400, `«${x.name}» рахується сам${isOpexRef(x.ref_source) ? " зі статей «План/факт»" : " за фільтрами Kommo"} — його не вносять`);
     if (x.kind !== "manual" && x.kind !== "auto") throw new FinError(400, `«${x.name}» рахується сам — його не вносять`);
     if (!isActiveIn(x.off_from, start)) throw new FinError(409, `Показник «${x.name}» вимкнений у цьому періоді — нічого не збережено`);
   }
@@ -291,16 +311,35 @@ export async function setKpiNote(db: Db, actor: number, kpiId: number, kindArg: 
 }
 
 /** Закрити / відкрити період. Обидві дії — в історії; повторне закриття чи відкриття відкритого — 409. */
-export async function setPeriodClosed(db: Db, actor: number, kindArg: unknown, dateArg: unknown, closed: boolean) {
+/**
+ * Закрити / відкрити період. Закриття ФІКСУЄ авто-рядки, що рахуються в цьому періоді, числом на цей момент (`refs`):
+ * закритий період незмінний, а «План/факт» і далі правлять. Відкриття знімає фіксацію лише з операційних витрат —
+ * вони знову йдуть за «План/факт»; рядки з Kommo лишаються зафіксованими (CRM змінюється заднім числом, #977).
+ */
+export async function setPeriodClosed(db: Db, actor: number, kindArg: unknown, dateArg: unknown, closed: boolean, refs: RefValues = {}) {
   const { kind, start } = periodStart(kindArg, dateArg);
   if (closed) {
     const r = await db.query(`INSERT INTO fin_kpi_closes (period_kind, period_start, closed_by) VALUES ($1, $2::date, $3) ON CONFLICT DO NOTHING RETURNING 1`, [kind, start, actor]);
     if (!r.rows.length) throw new FinError(409, "Період уже закрито");
     await log(db, actor, "period", null, `Закрито ${kind === "week" ? "тиждень" : "місяць"} ${pLabel(kind, start)}`, { kind, start });
+    const k = await db.query(`SELECT f.id, f.name, f.kind, f.ref_source, f.off_from::text AS off_from, v.frozen_at
+        FROM fin_kpis f LEFT JOIN fin_kpi_values v ON v.kpi_id = f.id AND v.period_kind = $1 AND v.period_start = $2::date
+       WHERE f.kind = 'auto' AND f.deleted_at IS NULL`, [kind, start]);
+    for (const x of k.rows as any[]) {
+      // Немає числа для періоду (дебіторка минулого тижня) — не фіксуємо порожнечу поверх збереженого.
+      if (x.frozen_at || !isActiveIn(x.off_from, start) || !isAutoIn(x, kind, start, refs) || !(x.ref_source in refs)) continue;
+      const v = refs[x.ref_source as RefSource] ?? null;
+      await db.query(`INSERT INTO fin_kpi_values (kpi_id, period_kind, period_start, value, frozen_at, updated_by, updated_at) VALUES ($1, $2, $3::date, $4, now(), $5, now())
+        ON CONFLICT (kpi_id, period_kind, period_start) DO UPDATE SET value = EXCLUDED.value, frozen_at = now(), updated_by = EXCLUDED.updated_by, updated_at = now()`,
+      [x.id, kind, start, v, actor]);
+      await log(db, actor, "kpi", x.id, `${x.name} · ${pLabel(kind, start)}: зафіксовано при закритті ${fmt(v)}`, { kind, start, field: "value", new: v });
+    }
   } else {
     const r = await db.query(`DELETE FROM fin_kpi_closes WHERE period_kind = $1 AND period_start = $2::date RETURNING 1`, [kind, start]);
     if (!r.rows.length) throw new FinError(409, "Період і так відкритий");
     await log(db, actor, "period", null, `Відкрито ${kind === "week" ? "тиждень" : "місяць"} ${pLabel(kind, start)}`, { kind, start });
+    await db.query(`UPDATE fin_kpi_values v SET frozen_at = NULL FROM fin_kpis f
+       WHERE f.id = v.kpi_id AND f.kind = 'auto' AND f.ref_source LIKE 'opex\\_%' AND v.period_kind = $1 AND v.period_start = $2::date AND v.frozen_at IS NOT NULL`, [kind, start]);
   }
 }
 
@@ -438,14 +477,15 @@ export const FM_LAYOUT: { section: string; kpis: { key: string; name: string; ki
   ] },
   { section: "Операційні витрати", kpis: [
     { key: "op", name: "Разом", kind: "sum", w: 11, m: 29 },
-    { key: "op_com", name: "Комерційні витрати", kind: "manual", w: 13, m: 31 },
-    { key: "op_gen", name: "Загальновиробничі витрати", kind: "manual", w: 14, m: 32 },
-    { key: "op_adm", name: "Адміністративні витрати", kind: "manual", w: 15, m: 33 },
+    { key: "op_com", name: "Комерційні витрати", kind: "auto", w: 13, m: 31, ref: "opex_commercial" },
+    { key: "op_gen", name: "Загальні витрати", kind: "auto", w: 14, m: 32, ref: "opex_general" },
+    { key: "op_adm", name: "Адміністративні витрати", kind: "auto", w: 15, m: 33, ref: "opex_admin" },
+    { key: "op_pay", name: "ЗП + Податки на ЗП", kind: "auto", ref: "opex_payroll" },
   ] },
   { section: "Залишки на дату", kpis: [
     { key: "deb", name: "Дебіторка 1С", kind: "auto", w: 16, m: 34, ref: "receivables" },
     { key: "tender", name: "Тендерна дебіторка", kind: "manual", w: 17, m: 35 },
-    { key: "val", name: "Валютна дебіторка", kind: "manual", m: 36 },
+    { key: "val", name: "Валютна дебіторка", kind: "auto", m: 36, ref: "receivables_fx" },
   ] },
 ];
 
@@ -613,7 +653,8 @@ export async function freezeAutoKpis(db: Db, kindArg: unknown, dateArg: unknown,
      WHERE f.kind = 'auto' AND f.deleted_at IS NULL`, [kind, start]);
   let frozen = 0;
   for (const x of k.rows as any[]) {
-    if (x.frozen_at || !isActiveIn(x.off_from, start) || !(x.ref_source in refs)) continue;
+    // Операційні витрати вночі не фіксуються: факт у «План/факт» вносять ПІСЛЯ кінця місяця. Їх фіксує закриття місяця.
+    if (x.frozen_at || isOpexRef(x.ref_source) || !isActiveIn(x.off_from, start) || !(x.ref_source in refs)) continue;
     const v = refs[x.ref_source as RefSource] ?? null;
     if (v == null) continue;
     await db.query(`INSERT INTO fin_kpi_values (kpi_id, period_kind, period_start, value, frozen_at, updated_at) VALUES ($1, $2, $3::date, $4, now(), now())
@@ -680,4 +721,40 @@ export async function importFmPeriods(db: Db, actor: number | null, file: FmFile
     out.push({ kind, start, changed });
   }
   return out;
+}
+
+// ── Джерела проходу 2в: «План/факт» за розділами, валютна дебіторка з 1С ─────
+
+/**
+ * Операційні витрати МІСЯЦЯ за розділами статей «План/факт»: Σ факту невидалених статей, що діють у місяці.
+ * Ключ розділу є лише тоді, коли в ньому є хоч одна стаття (інакше рядок лишається ручним, `isAutoIn`); статей є,
+ * а фактів ще немає — `null` («не внесено», а не нуль). `unassigned` — друге число до предиката: статті БЕЗ розділу
+ * з фактом цього місяця, щоб їхні гроші не зникали мовчки.
+ */
+export async function opexMonth(db: Db, month: string): Promise<{ refs: RefValues; unassigned: { items: number; fact: number } }> {
+  const r = await db.query(`SELECT i.section, count(*)::int AS items, sum(v.fact)::text AS fact, count(v.fact)::int AS facts
+      FROM fin_items i JOIN fin_groups g ON g.id = i.group_id AND g.deleted_at IS NULL
+      JOIN fin_resps rr ON rr.id = g.resp_id AND rr.deleted_at IS NULL
+      LEFT JOIN fin_values v ON v.item_id = i.id AND v.month = $1::date
+     WHERE i.deleted_at IS NULL AND (i.off_from IS NULL OR $1::date < i.off_from)
+     GROUP BY i.section`, [month]);
+  const refs: RefValues = {};
+  let unassigned = { items: 0, fact: 0 };
+  for (const x of r.rows as any[]) {
+    if (x.section == null) { unassigned = { items: x.facts, fact: Math.round(Number(x.fact ?? 0) * 100) / 100 }; continue; }
+    refs[OPEX_REF[x.section as OpexSection]] = x.facts ? Math.round(Number(x.fact) * 100) / 100 : null;
+  }
+  return { refs, unassigned };
+}
+
+/**
+ * Валютна дебіторка з 1С на КІНЕЦЬ періоду: останній підсумок синку не пізніше кінця останнього дня періоду (або
+ * «зараз», якщо період ще йде). Підсумок старший за добу від цієї межі — немає числа (синк мовчав), а не старе число.
+ */
+export async function receivablesFxAt(db: Db, end: string, now: Date): Promise<{ uah: number; val: number; zeroUah: number; at: string } | null> {
+  const r = await db.query(`WITH cut AS (SELECT LEAST($2::timestamptz, (($1::date + 1)::timestamp AT TIME ZONE 'Europe/Kyiv')) AS t)
+    SELECT total_uah::text AS uah, total_val::text AS val, zero_uah, synced_at FROM receivables_fx_totals, cut
+     WHERE synced_at <= cut.t AND synced_at > cut.t - interval '1 day' ORDER BY synced_at DESC LIMIT 1`, [end, now.toISOString()]);
+  const x = r.rows[0];
+  return x ? { uah: Number(x.uah), val: Number(x.val), zeroUah: x.zero_uah, at: new Date(x.synced_at).toISOString() } : null;
 }

@@ -4,7 +4,7 @@ import { pool } from "../db/pool.js";
 import { fetchLeadsByIds, extractIncomeAmount, LEADS_BY_IDS_MAX } from "../kommo/client.js";
 import { normalizeClientName } from "../utils/clientName.js";
 import { parseCsv } from "../utils/csv.js";
-import { loadReceivables1c, resolveManagerId, type Receivable1cRow } from "../core/receivables1c.js";
+import { loadReceivables1c, resolveManagerId, parse1cPayload, fxTotals, type Receivable1cRow } from "../core/receivables1c.js";
 import { recomputeOwners } from "../core/receivablesOwnerStore.js";
 import { RECOMPUTE_RECEIVABLES_SQL } from "./clientKeySql.js";
 import { CLIENT_DEBT_AGE_SQL } from "../core/receivablesAge.js";
@@ -188,7 +188,23 @@ export async function fetchSheetLimitsForReconcile(): Promise<Map<string, Client
   return limitsByKey;
 }
 
+/**
+ * 💱 Валютна дебіторка з 1С (рахунок 362) → один рядок підсумку в `receivables_fx_totals` (прохід 2в фінансів).
+ * Окремо від гривневої: збій 362 не зупиняє синк 361 і навпаки. Не вдалось — рядка немає, і «Тиждень і місяць»
+ * покаже порожнечу, коли підсумок застаріє на добу (`receivablesFxAt`), а не старе число під новою датою.
+ * Порожня відповідь тут — не аварія: валютних боргів буває нуль (на відміну від 361, де 0 рядків = збій).
+ */
+export async function syncReceivablesFx(): Promise<{ rows: number; totalUah: number }> {
+  const res = await fetch(config.receivables1cFxUrl, { signal: AbortSignal.timeout(30_000) });
+  if (!res.ok) throw new Error(`1С (362): HTTP ${res.status}`);
+  const t = fxTotals(parse1cPayload(await res.json()).rows);
+  await pool.query(`INSERT INTO receivables_fx_totals (rows, total_uah, total_val, zero_uah) VALUES ($1, $2, $3, $4)`,
+    [t.rows, t.totalUah, t.totalVal, t.zeroUah]);
+  return { rows: t.rows, totalUah: t.totalUah };
+}
+
 export async function syncReceivables(): Promise<void> {
+  await syncReceivablesFx().catch((e) => console.warn("syncReceivablesFx:", e instanceof Error ? e.message : e));
   const previousRes = await pool.query<{ n: string }>(`SELECT COUNT(*) AS n FROM receivable_invoices`);
   // ⚠️ Лічильник НАВМИСНО грубий: у `receivable_invoices` крім рахунків 1С лежить
   // ще ~12 готівкових рядків із CRM, і відділити їх без нової колонки нічим.

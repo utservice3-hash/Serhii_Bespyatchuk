@@ -137,8 +137,21 @@ const ACTOR = `COALESCE(NULLIF(btrim(u.full_name), ''), split_part(u.email, '@',
 
 // ── Читання ──────────────────────────────────────────────────────────────────
 
+/**
+ * Розділ статті (прохання Тетяни 05.10.2026) → місячний рядок «Операційних витрат» у «Тиждень і місяць».
+ * Порожній — стаття ще не розподілена: її факт не потрапляє в жоден рядок, і екран це показує окремим числом.
+ */
+export const ITEM_SECTIONS = { commercial: "Комерційні", general: "Загальні", admin: "Адміністративні", payroll: "ЗП + Податки на ЗП" } as const;
+export type ItemSection = keyof typeof ITEM_SECTIONS;
+function sectionArg(v: unknown): ItemSection | null {
+  if (v === null || v === "") return null;
+  if (typeof v === "string" && Object.hasOwn(ITEM_SECTIONS, v)) return v as ItemSection;
+  throw new FinError(400, "Розділ — комерційні, загальні, адміністративні або ЗП + податки");
+}
+const sectionName = (v: string | null) => (v ? ITEM_SECTIONS[v as ItemSection] : "без розділу");
+
 export interface FinItemRow {
-  id: number; name: string; offFrom: string | null; active: boolean;
+  id: number; name: string; section: ItemSection | null; offFrom: string | null; active: boolean;
   plan: number | null; fact: number | null; note: string | null; state: RowState; dataMonths: number;
 }
 export interface FinGroupRow { id: number; name: string; items: FinItemRow[] }
@@ -151,7 +164,7 @@ export async function loadMonth(db: Db, monthArg: unknown, now: Date = new Date(
   const month = parseMonth(monthArg);
   const r = await db.query(`
     SELECT r.id AS resp_id, r.name AS resp_name, g.id AS group_id, g.name AS group_name,
-           i.id AS item_id, i.name AS item_name, i.off_from::text AS off_from,
+           i.id AS item_id, i.name AS item_name, i.section, i.off_from::text AS off_from,
            v.plan::text AS plan, v.fact::text AS fact, v.note,
            (SELECT count(*) FROM fin_values h WHERE h.item_id = i.id
               AND (COALESCE(h.plan, 0) <> 0 OR COALESCE(h.fact, 0) <> 0))::int AS data_months
@@ -171,7 +184,7 @@ export async function loadMonth(db: Db, monthArg: unknown, now: Date = new Date(
     if (!grp || grp.id !== x.group_id) { grp = { id: x.group_id, name: x.group_name, items: [] }; resp.groups.push(grp); }
     if (x.item_id == null) continue;
     const plan = num(x.plan), fact = num(x.fact);
-    const it: FinItemRow = { id: x.item_id, name: x.item_name, offFrom: x.off_from, active: isActiveIn(x.off_from, month),
+    const it: FinItemRow = { id: x.item_id, name: x.item_name, section: x.section ?? null, offFrom: x.off_from, active: isActiveIn(x.off_from, month),
       plan, fact, note: x.note ?? null, state: rowState(plan, fact), dataMonths: x.data_months };
     grp.items.push(it); all.push(it);
   }
@@ -194,7 +207,7 @@ export async function loadMonth(db: Db, monthArg: unknown, now: Date = new Date(
 export async function itemCard(db: Db, id: number, yearArg: unknown) {
   const year = Number(yearArg);
   if (!Number.isInteger(year) || year < 2000 || year > 2100) throw new FinError(400, "Некоректний рік");
-  const r = await db.query(`SELECT i.id, i.name, i.off_from::text AS off_from, i.deleted_at, g.id AS group_id, g.name AS group_name,
+  const r = await db.query(`SELECT i.id, i.name, i.section, i.off_from::text AS off_from, i.deleted_at, g.id AS group_id, g.name AS group_name,
       r.id AS resp_id, r.name AS resp_name FROM fin_items i JOIN fin_groups g ON g.id = i.group_id JOIN fin_resps r ON r.id = g.resp_id
      WHERE i.id = $1`, [id]);
   const it = r.rows[0];
@@ -210,7 +223,7 @@ export async function itemCard(db: Db, id: number, yearArg: unknown) {
   const lg = await db.query(`SELECT l.at, l.month::text AS month, l.field, l.old_value::text AS old, l.new_value::text AS new, l.what, ${ACTOR} AS actor
       FROM fin_log l LEFT JOIN users u ON u.id = l.actor_id WHERE l.kind = 'item' AND l.target_id = $1 ORDER BY l.at DESC, l.id DESC LIMIT 50`, [id]);
   return {
-    id: it.id, name: it.name, offFrom: it.off_from, deleted: it.deleted_at != null,
+    id: it.id, name: it.name, section: it.section ?? null, offFrom: it.off_from, deleted: it.deleted_at != null,
     group: { id: it.group_id, name: it.group_name }, resp: { id: it.resp_id, name: it.resp_name },
     months,
     log: lg.rows.map((l: any) => ({ at: l.at, month: l.month, field: l.field, old: num(l.old), new: num(l.new), what: l.what, actor: l.actor ?? null })),
@@ -333,6 +346,33 @@ export async function updateItem(db: Db, actor: number, id: number, body: any) {
       await log(db, actor, "item", id, `Перенесено до групи «${to.name}»`);
     }
   }
+}
+
+/**
+ * Розділ статтям — одній або кільком одразу («всім у групі», і «Повернути» тим самим викликом зі старими значеннями).
+ * Усе або нічого: спершу перевіряються ВСІ статті й значення, потім пишеться. Повертає, що було, — для «Повернути».
+ */
+export async function setItemSections(db: Db, actor: number, list: unknown): Promise<{ previous: { id: number; section: ItemSection | null }[] }> {
+  if (!Array.isArray(list) || !list.length) throw new FinError(400, "Немає статей");
+  if (list.length > 500) throw new FinError(400, "Забагато статей за раз");
+  const want = new Map<number, ItemSection | null>();
+  for (const x of list as any[]) {
+    const id = idArg(x?.id, "стаття");
+    if (want.has(id)) throw new FinError(400, "Одна стаття двічі");
+    want.set(id, sectionArg(x?.section));
+  }
+  const r = await db.query(`SELECT id, name, section, deleted_at FROM fin_items WHERE id = ANY($1::int[]) FOR UPDATE`, [[...want.keys()]]);
+  const rows = new Map(r.rows.map((x: any) => [x.id, x]));
+  for (const id of want.keys()) { const x: any = rows.get(id); if (!x || x.deleted_at) throw new FinError(404, "Статтю не знайдено — нічого не змінено"); }
+  const previous: { id: number; section: ItemSection | null }[] = [];
+  for (const [id, section] of want) {
+    const x: any = rows.get(id);
+    previous.push({ id, section: x.section ?? null });
+    if ((x.section ?? null) === section) continue;
+    await db.query(`UPDATE fin_items SET section = $2 WHERE id = $1`, [id, section]);
+    await log(db, actor, "item", id, `Розділ «${x.name}»: ${sectionName(x.section ?? null)} → ${sectionName(section)}`);
+  }
+  return { previous };
 }
 
 /** Вимкнути / увімкнути. Вимкнення — з місяця ПІСЛЯ останньої цифри (не раніше поточного). */

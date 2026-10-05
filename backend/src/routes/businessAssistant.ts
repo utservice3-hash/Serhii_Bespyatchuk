@@ -15,7 +15,7 @@ import {
   employeesForIssue, listEquipment, equipmentCard, createEquipment, updateEquipment, setEquipmentArchived,
   issueEquipment, returnIssue, undoReturn,
 } from "../core/baEquipment.js";
-import { ttnMonth, saveTtnCheck } from "../core/baTtn.js";
+import { ttnMonth, saveTtnCheck, ttnDealsOf, setRouteMismatch, clearRouteMismatch } from "../core/baTtn.js";
 import {
   BaError, type Db, type FileOwner, listClaims, claimCard, createClaim, updateClaim, setClaimArchived,
   listCases, caseCard, createCase, updateCase, setCaseArchived, insertFile, fileForDownload,
@@ -263,6 +263,29 @@ baRouter.get("/ttn", async (req, res) => {
     onlyBa(req);
     const month = String(req.query.month ?? "");
     res.json(await ttnMonth(pool as unknown as Db, month, config.kommo.baseUrl));
+  } catch (e) { fail(res, e); }
+});
+/** Угоди менеджера за місяць (05.10.2026): де ТТН немає, і де позначено «маршрут не збігся». */
+baRouter.get("/ttn/:month/:managerId/deals", async (req, res) => {
+  try {
+    onlyBa(req);
+    res.json({ deals: await ttnDealsOf(pool as unknown as Db, String(req.params.month), idOf(req, "managerId"), config.kommo.baseUrl) });
+  } catch (e) { fail(res, e); }
+});
+baRouter.put("/ttn/deals/:kommoId/mismatch", async (req, res) => {
+  try {
+    onlyBa(req);
+    const kommoId = idOf(req, "kommoId");
+    await tx((db) => setRouteMismatch(db, req.auth!.userId, kommoId, req.body));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+baRouter.delete("/ttn/deals/:kommoId/mismatch", async (req, res) => {
+  try {
+    onlyBa(req);
+    const kommoId = idOf(req, "kommoId");
+    await tx((db) => clearRouteMismatch(db, kommoId));
+    res.json({ ok: true });
   } catch (e) { fail(res, e); }
 });
 baRouter.put("/ttn/:month/:managerId", async (req, res) => {

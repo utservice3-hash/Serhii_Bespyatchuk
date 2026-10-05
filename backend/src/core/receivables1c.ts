@@ -238,6 +238,18 @@ export function parse1cPayload(payload: unknown): Parse1cResult {
   return { rows, skipped };
 }
 
+/**
+ * 💱 Підсумок валютної дебіторки (рахунок 362) для «Фінансів → Тиждень і місяць». Лише суми й лічильники —
+ * без клієнтів. `zeroUah` — друге число (правило 4): рядки з боргом у валюті, але нульовим гривневим еквівалентом,
+ * тобто те, що Σ у гривні НЕ показує. Валюти рахунку 1С не віддає, тож `totalVal` — сума різних валют, лише довідка.
+ */
+export function fxTotals(rows: readonly Receivable1cRow[]): { rows: number; totalUah: number; totalVal: number; zeroUah: number } {
+  const c = (v: number) => Math.round(v * 100);
+  let uah = 0, val = 0, zero = 0;
+  for (const r of rows) { uah += c(r.amount); val += c(r.amountVal); if (r.amount === 0 && r.amountVal !== 0) zero++; }
+  return { rows: rows.length, totalUah: uah / 100, totalVal: val / 100, zeroUah: zero };
+}
+
 // ───────────────────────── ЗАПОБІЖНИК: порожня відповідь = ПРОВАЛ ─────────────────────────
 
 /**

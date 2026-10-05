@@ -1,5 +1,7 @@
+import type { Db } from "./adCallFacts.js";
 import { PAYMENT_REQUEST_PIPELINE } from "./paymentRequests.js";
 import { CARRIER_STAGE } from "./carrierCallRules.js";
+import { noTalkGate, type NoTalkGate } from "./carrierNoTalkGuard.js";
 
 /**
  * 🚚 «ПЕРЕВІЗНИК» ЗА ІСТОРІЄЮ CRM — ТЗ Юлії 17.09.2026 «автозакриття пропущених», блок 1 (задача 4373;
@@ -57,6 +59,30 @@ export function carrierHistorySql(phone: string, self = "NULL::bigint", a = "ch_
            WHERE ${a}h.status_id = ${String(LOST_STATUS_ID)} AND ${a}h.reject_reason = '${CARRIER_REJECT_REASON}'
              AND ${a}h.kommo_id IS DISTINCT FROM ${self})
     END)`;
+}
+
+/**
+ * 🛡 ЗАХИСТ ВІД ЗАСТАРІЛИХ УГОД (рішення Романа 05.10.2026, перед увімкненням закриття в Kommo).
+ *
+ * Виняток «угода замовника в „Успіх“ чи в роботі» читає НАШУ копію `deals`, а не Kommo. Відстав синк — свіжої
+ * угоди клієнта в копії немає, і «відсутність винятку» доводила б лише те, що ми її ще не бачили (правило 16
+ * кореня: порожньо ≠ нічого). Тому висновок «перевізник за історією» робиться лише при ВІДОМОМУ й свіжому
+ * `syncKommo` (кожні 30 хв; поріг 60 хв = один пропущений прохід). Невідомий вік — теж пауза: «не знаю» ≠ «добре».
+ *
+ * На паузі: нові вердикти «історія» не ставляться, угоди історії в Kommo не закриваються (чекають), а задача
+ * «передзвони» ставиться звичайно — передзвонити перевізнику дешевше, ніж не передзвонити клієнту.
+ * Рішення — та сама чиста функція, що в захисту «без розмови» (`carrierNoTalkGuard.ts`), інше джерело свіжості.
+ */
+export const HISTORY_GUARD = { syncJob: "syncKommo", defaultMaxAgeMin: 60 } as const;
+export type HistoryGate = NoTalkGate;
+
+export const historyGate = (lastSyncAt: Date | null, now: Date, maxAgeMin: number): HistoryGate =>
+  noTalkGate(lastSyncAt, now, maxAgeMin);
+
+export async function readHistoryGate(db: Db, now: Date, maxAgeMin: number = HISTORY_GUARD.defaultMaxAgeMin): Promise<HistoryGate> {
+  const s = await db.query<{ last_success_at: Date | null }>("SELECT last_success_at FROM job_runs WHERE name = $1", [HISTORY_GUARD.syncJob]);
+  const last = s.rows[0]?.last_success_at ?? null;
+  return historyGate(last ? new Date(last) : null, now, maxAgeMin);
 }
 
 /** Причина закриття задачі «передзвони» на номер перевізника. Префікс — контракт із фронтом (`#462`). */
