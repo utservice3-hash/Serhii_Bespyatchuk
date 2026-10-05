@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { FinError, parseAmount, type Db } from "./finance.js";
 import { weekStart, addDays } from "./financeKpi.js";
 
@@ -130,11 +130,89 @@ export async function listManual(db: Db, accountArg: unknown, from: string, to: 
   const acc = await manualAccount(db, accountArg);
   if (!isDay(from) || !isDay(to) || from > to) throw new FinError(400, "Період — РРРР-ММ-ДД, від ≤ до");
   const r = await db.query(`SELECT t.id, (t.booked_at AT TIME ZONE 'Europe/Kyiv')::date::text AS day, t.direction, t.amount::text AS amount,
-      t.currency, t.amount_uah::text AS amount_uah, t.fin_item_id AS item_id, i.name AS item,
+      t.currency, t.amount_uah::text AS amount_uah, t.fin_item_id AS item_id,
+      COALESCE(i.name, CASE WHEN t.external_tx_id LIKE 'safe-import:%' THEN t.counterparty_name END) AS item,
       t.manual_kind AS kind, t.counterparty_name AS name, t.purpose, t.deleted_at IS NOT NULL AS deleted,
       COALESCE(NULLIF(btrim(u.full_name), ''), split_part(u.email, '@', 1)) AS entered_by
       FROM bank_transactions t LEFT JOIN users u ON u.id = t.entered_by LEFT JOIN fin_items i ON i.id = t.fin_item_id
      WHERE t.account_id = $1 AND (t.booked_at AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $2::date AND $3::date
      ORDER BY t.booked_at DESC, t.id DESC`, [acc.id, from, to]);
   return { account: acc, rows: r.rows.map((x: any) => ({ ...x, amount: Number(x.amount), amount_uah: Number(x.amount_uah) })) };
+}
+
+// ── Перенесення таблиці «Сейф» (вкладка «Сейф» книги «UTS Сделки Сводка»; Роман 05.10.2026: «роби, переносимо як є») ──
+
+export interface SafeRow { day: string; amount: number; currency: string; uah: number | null; rate: number | null; purpose: string; deal: string; category: string; key: string }
+
+const num = (v: string): number | null => {
+  const s = (v ?? "").replace(/[\s  ]/g, "").replace(",", ".");
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+};
+
+/**
+ * Розбір CSV вкладки «Сейф»: шапка — рядок, що починається з «Дата»; далі рядки «ДД.ММ.РРРР, сума, валюта, курс, сума в
+ * грн, на що, кому (ID), категорія, …». Пропускаються: рядки до `from`, нульові суми, рядки ЗАЛИШКІВ («Текущий остаток…»)
+ * — це не операції. Гривня — зі стовпця «сума в грн» таблиці (так рахує фінансист), але ЗНАК — від суми операції
+ * (у таблиці трапляється продаж валюти з додатною гривнею); немає «суми в грн» — курс зі стовпця, інакше `null` (тоді
+ * НБУ при записі). `key` — детермінований: однаковий рядок двічі в один день лишається ДВОМА операціями (порядковий
+ * номер серед однакових), а повторний прогін того самого файлу нічого не задвоює.
+ */
+export function parseSafeCsv(rows: readonly string[][], from: string): { rows: SafeRow[]; skipped: { balance: number; zero: number; before: number; bad: number } } {
+  const head = rows.findIndex((r) => (r[0] ?? "").trim() === "Дата");
+  if (head < 0) throw new FinError(400, "У файлі Сейфу немає шапки «Дата»");
+  const out: SafeRow[] = [];
+  const skipped = { balance: 0, zero: 0, before: 0, bad: 0 };
+  const seen = new Map<string, number>();
+  for (const r of rows.slice(head + 1)) {
+    const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec((r[0] ?? "").trim());
+    if (!m) continue;
+    const day = `${m[3]}-${m[2]}-${m[1]}`;
+    if (day < from) { skipped.before++; continue; }
+    const purpose = (r[5] ?? "").trim();
+    if (/остаток|залишок/i.test(purpose)) { skipped.balance++; continue; }
+    const amount = num(r[1]);
+    if (amount == null) { skipped.bad++; continue; }
+    if (amount === 0) { skipped.zero++; continue; }
+    const currency = ((r[2] ?? "").trim().toUpperCase() || "UAH");
+    if (!(MANUAL_CURRENCIES as readonly string[]).includes(currency)) { skipped.bad++; continue; }
+    const grn = num(r[4]);
+    const rateCol = num(r[3]);
+    const uah = currency === "UAH" ? amount : grn != null ? Math.sign(amount) * Math.abs(grn) : rateCol != null ? Math.round(amount * rateCol * 100) / 100 : null;
+    const deal = (r[6] ?? "").trim(), category = (r[7] ?? "").trim();
+    const base = [day, amount, currency, purpose, deal, category].join("|");
+    const n = (seen.get(base) ?? 0) + 1;
+    seen.set(base, n);
+    out.push({ day, amount, currency, uah, rate: currency === "UAH" ? 1 : rateCol, purpose, deal, category, key: `safe-import:${createHash("sha1").update(`${base}|#${n}`).digest("hex")}` });
+  }
+  return { rows: out, skipped };
+}
+
+/**
+ * Записати розібрані рядки в ручний рахунок Сейфу як операції (`manual_kind = 'op'`). Категорія таблиці — у
+ * `counterparty_name` (її й видно в «Виписці»), «на що» + № угоди — у призначенні. Гривня без «суми в грн» і курсу —
+ * за НБУ на дату (`rateOf`). Повторний прогін: `ON CONFLICT (external_tx_id) DO NOTHING` — 0 нових.
+ * ⚠️ Правило «тиждень — або операції, або підсумок» тут не перевіряється по рядку: перенесення пише лише операції, а
+ * тижні з уже внесеним підсумком відмовляють ЦІЛКОМ (`conflicts`), щоб тиждень не порахувався двічі.
+ */
+export async function importSafe(db: Db, accountArg: unknown, rows: readonly SafeRow[], rateOf: RateOf): Promise<{ inserted: number; existing: number; conflicts: string[] }> {
+  const acc = await manualAccount(db, accountArg);
+  const weeks = [...new Set(rows.map((r) => weekStart(r.day)))];
+  const conflicts: string[] = [];
+  for (const w of weeks) if ((await weekHas(db, acc.id, w)).week) conflicts.push(w);
+  if (conflicts.length) throw new FinError(409, `У тижнях ${conflicts.join(", ")} уже внесено підсумок тижня — перенесення операцій порахувало б їх двічі`);
+  let inserted = 0, existing = 0;
+  for (const r of rows) {
+    const rate = r.currency === "UAH" ? 1 : r.rate ?? (await rateOf(r.currency, r.day));
+    const uah = r.uah ?? Math.round(r.amount * rate * 100) / 100;
+    const res = await db.query(`INSERT INTO bank_transactions (account_id, direction, external_tx_id, booked_at, processed_at, counterparty_name,
+        purpose, amount, currency, fx_rate, amount_uah, manual_kind)
+      VALUES ($1, $2, $3, $4::timestamptz, $4::timestamptz, $5, $6, $7, $8, $9, $10, 'op')
+      ON CONFLICT (external_tx_id) DO NOTHING RETURNING id`,
+    [acc.id, r.amount >= 0 ? "in" : "out", r.key, kyivNoon(r.day), r.category || "Сейф",
+      [r.purpose, r.deal ? `угода ${r.deal}` : ""].filter(Boolean).join(" · ") || null, r.amount, r.currency, rate, uah]);
+    if (res.rows.length) inserted++; else existing++;
+  }
+  return { inserted, existing, conflicts };
 }

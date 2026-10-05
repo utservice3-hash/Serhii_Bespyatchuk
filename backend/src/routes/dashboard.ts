@@ -88,9 +88,10 @@ import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, 
 } from "../core/leadgenStats.js";
 import { handoffMoneyWire, personMoneyWire, bucketMoneyWire, bucketPersonMoneyWire, handoffDealsScope,
   leadgenAuthScope, parseLeadgenGrain, parseTrendMonths, parseManagerIdParam,
-  leadgenViewer, ownLeadgenStatsBody, ownLeadgenTrendBody, type LeadgenAuth } from "../core/leadgenHandoffRules.js";
+  leadgenViewer, ownLeadgenStatsBody, ownLeadgenTrendBody, addDays, type LeadgenAuth } from "../core/leadgenHandoffRules.js";
 import { leadgenRosterView, planView, planMonthOf, parseLeadgenSubmit, leadgenSubmitRefusal, mayEverSubmitLeadgenPlan,
-  mayApproveLeadgenPlan, LEADGEN_PLAN_METRICS, emptyPlanRecord, type RosterRow, type TeamMember } from "../core/leadgenPlanRules.js";
+  mayApproveLeadgenPlan, LEADGEN_PLAN_METRICS, emptyPlanRecord, planPace, isCurrentFullMonth, PACE_METRICS,
+  type RosterRow, type TeamMember } from "../core/leadgenPlanRules.js";
 import { leadgenTeamMembers, leadgenPlanTarget, approvedLeadgenPlans, leadgenFormation, submitLeadgenPlan,
   approveLeadgenPlans, returnLeadgenPlan } from "../core/leadgenPlans.js";
 import * as expectSplit from "../core/expectSplit.js";
@@ -437,6 +438,23 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
   // 💰 Гроші людини для плану по грошах — ТІ САМІ числа, що на картці (`hm`), без другого розрахунку.
   const moneyFact = new Map(hm.byPerson.map((p) => [p.managerId, { earned: p.money.earned.sum, pending: p.money.pending.sum }]));
   const pv = planView(rows, approved, from, to, kyivToday(), moneyFact);
+  // 🏃 «Лишилось до плану» (рішення власника 05.10.2026) — лише на поточний місяць: факт ДО сьогодні й СЬОГОДНІ тим
+  // самим `leadgenStats`, що рядки, тож норма й рядок не можуть рахувати різне. Минулий місяць наздоганяти пізно.
+  const todayK = kyivToday();
+  if (isCurrentFullMonth(from, to, todayK)) {
+    const yest = addDays(todayK, -1);
+    const [beforeS, todayS] = await Promise.all([
+      yest >= from ? leadgenStats(from, yest) : Promise.resolve(null), leadgenStats(todayK, todayK)]);
+    const bM = new Map((beforeS?.rows ?? []).map((r) => [r.managerId, r])), tM = new Map(todayS.rows.map((r) => [r.managerId, r]));
+    for (const p of pv.byPerson) {
+      const b = bM.get(p.managerId), t = tM.get(p.managerId);
+      const one = (k: (typeof PACE_METRICS)[number]) =>
+        planPace({ plan: p.plan[k], before: b?.[k] ?? 0, today: t?.[k] ?? 0, todayDay: todayK, monthEnd: to });
+      const m = moneyFact.get(p.managerId);
+      p.pace = { calls: one("calls"), leads: one("leads"), opr: one("opr"), quotes: one("quotes"),
+        moneyLeft: p.plan.money == null ? null : Math.max(0, p.plan.money - ((m?.earned ?? 0) + (m?.pending ?? 0))) };
+    }
+  }
 
   const body: Record<string, unknown> = {
     from, to,
@@ -9112,6 +9130,9 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // ФАКТ per-manager з ЯДРА (ті самі функції, що задачник).
   // #4 ср.чек Звіту = пул `reportChain` (угоди ЗАРАЗ у «авто працює→оплата» ⊎ виграні
   // за період) — signed Σ÷count per manager; команда/відділ = Σsum÷Σcount (glance нижче).
+  // 🤝 «Прийнято лідоген» — угоди, які Kommo створила менеджеру з передачі лідгена (рішення 05.10.2026, `#1259`).
+  // Стартує паралельно з рештою запитів; чекаємо там, де він потрібен.
+  const lgAcceptedP = metrics.leadgenAcceptedByManager(scope);
   const [recv, succ, paid, disp, ads, conv, avgc, expZone, split, expDays, convAd, convLg, recvKl, expKl] = await Promise.all([
     money.receivedByMgr(scope), money.successByMgr(scope), money.paidOnlyByMgr(scope),
     metrics.dispatchedByManager(scope),
@@ -9163,6 +9184,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   const jamM = new Map(jamRows.map((r) => [r.managerId, r]));
   const noDateM = new Map(noDateRows.map((r) => [r.managerId, r]));
   const splitM = new Map(split.map((s) => [s.managerId, s]));
+  const lgAcceptedM = new Map((await lgAcceptedP).map((x) => [x.managerId, x.count]));
   // #1 круг оплати: факт(received) = успішно(142) ⊎ оплачено(етап 9). Per manager → Σ==факт.
   const succM = new Map(succ.map((x) => [x.managerId, x])), paidM = new Map(paid.map((x) => [x.managerId, x]));
   // Бакетуємо планові оплати у поточний/наступний календарний місяць (за київським сьогодні).
@@ -9519,7 +9541,9 @@ dashboardRouter.get("/report-plan", async (req, res) => {
          * лип 571→637, сер 166→339. До обвалу канал і реєстр розходились на 7-20%,
          * тож це не нова величина, а та сама без сліпоти. Тримають `#141`/`#141b`.
          */
-        leadgen: { fact: splitM.get(m.id)?.leadgenCount ?? 0, target: Math.round(pl.leadgen_count ?? 0) },
+        // 🤝 ЗМІНЕНО 05.10.2026: не канал, а зв'язок Kommo «створено з угоди Продзвону» — канал губив ~60% угод
+        // (вересень: 182 проти 451). Те саме джерело, що й у задачі KPI (`#1259`).
+        leadgen: { fact: lgAcceptedM.get(m.id) ?? 0, target: Math.round(pl.leadgen_count ?? 0) },
         dispatch: { fact: dispM.get(m.id)?.deals ?? 0, target: Math.round(pl.dispatch_count ?? 0), revenue: Math.round(dispM.get(m.id)?.revenue ?? 0),
           // Розбивка авто за джерелом (постійний / лідоген / реклама / невизн). Σ = fact.
           repeat: dispM.get(m.id)?.repeat ?? 0, leadgen: dispM.get(m.id)?.leadgen ?? 0, ad: dispM.get(m.id)?.ad ?? 0, undef: dispM.get(m.id)?.undef ?? 0 },
