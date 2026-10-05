@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   fetchEmployees, previewEmployeeImport, commitEmployeeImport, updateEmployee, fetchSecretsStatus, linkEmployeesKommo, hiringError,
-  startDismissal, finishDismissal, revertDismissal, fetchEmployeeDocs, uploadEmployeeDoc, employeeDocBlobUrl, deleteEmployeeDoc, restoreEmployeeDoc, HR_DOC_KINDS,
+  startDismissal, dismissNeedsConfirm, finishDismissal, revertDismissal, fetchEmployeeDocs, uploadEmployeeDoc, employeeDocBlobUrl, deleteEmployeeDoc, restoreEmployeeDoc, HR_DOC_KINDS,
   fetchPeoplePhotos,
   type EmployeeDoc, type EmployeeRow, type ImportPreview, type SecretsStatus, type EmployeePatch, type PersonPhoto,
 } from "../../../api";
@@ -317,12 +317,17 @@ function DismissDialog({ row, onClose, onDone }: { row: EmployeeRow; onClose: ()
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const submit = async () => {
+  // ⚠️ Сервер перепитав (активний у Kommo / схожий запис поруч) — показуємо причину й чекаємо явного «так».
+  const [risk, setRisk] = useState<string | null>(null);
+  const submit = async (confirmRisk = false) => {
     setBusy(true); setErr(null);
     try {
-      const r = await startDismissal(row.id, lastDay, reason);
+      const r = await startDismissal(row.id, lastDay, reason, confirmRisk);
       onDone(`${row.full_name}: «завершує» до ${d(lastDay)}${r.managers ? " · у Звіті позначено «завершує», плану немає" : ""}`);
-    } catch (e) { setErr(hiringError(e)); setBusy(false); }
+    } catch (e) {
+      if (!confirmRisk && dismissNeedsConfirm(e)) setRisk(hiringError(e)); else setErr(hiringError(e));
+      setBusy(false);
+    }
   };
   return (
     <div className="hr-modal-back" onClick={(e) => { e.stopPropagation(); onClose(); }}>
@@ -337,9 +342,18 @@ function DismissDialog({ row, onClose, onDone }: { row: EmployeeRow; onClose: ()
           <label className="wide"><span>Причина *</span><input className="hr-inp" autoFocus value={reason} onChange={(e) => setReason(e.target.value)} placeholder="власне бажання, скорочення, не пройшов випробувальний…" /></label>
         </div>
         {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 8 }}>{err}</div>}
+        {risk && (
+          <div role="alert" style={{ marginTop: 10, padding: "10px 12px", borderRadius: 8, background: "rgba(217,119,6,0.12)", border: "1px solid #d97706", fontSize: 13 }}>
+            ⚠️ {risk}
+          </div>
+        )}
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
           <button className="hr-btn" onClick={onClose}>Скасувати</button>
-          <button className="hr-btn p" disabled={busy || !lastDay || !reason.trim()} onClick={() => void submit()}>{busy ? "Зберігаю…" : "Звільнити — «завершує»"}</button>
+          {risk ? (
+            <button className="hr-btn p" disabled={busy} onClick={() => void submit(true)}>{busy ? "Зберігаю…" : "Так, звільнити саме цей запис"}</button>
+          ) : (
+            <button className="hr-btn p" disabled={busy || !lastDay || !reason.trim()} onClick={() => void submit()}>{busy ? "Зберігаю…" : "Звільнити — «завершує»"}</button>
+          )}
         </div>
       </div>
     </div>

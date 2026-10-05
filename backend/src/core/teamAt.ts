@@ -10,7 +10,7 @@
  * ПРАВИЛО. Перехід = рядок `manager_team_moves` «з дати F людина в to, до неї — у from».
  *   команда на дату D = from найранішого переходу з F > D; немає такого — `managers.team_id`.
  * Немає переходів у людини → поточна команда, тобто рівно як до цього модуля. Тому зміна
- * НЕ рухає жодного числа, доки хтось не запише перехід (тримає `#1302`).
+ * НЕ рухає жодного числа, доки хтось не запише перехід (тримає `#1352`).
  *
  * 🔴 ЛАНЦЮГ МУСИТЬ СХОДИТИСЬ: from кожного переходу = to попереднього, а to останнього =
  * `managers.team_id`. Тому писати переходи можна лише через `recordTeamMove`: він бере
@@ -147,7 +147,7 @@ export function teamJoinSql(teamAlias: string, alias: string, dateExpr: string):
  * періоду: у вересневому Звіті команди Яцика Хомік мусить стояти, хоч сьогодні вона вже не там.
  * Команда змінюється лише в дати переходів, тож досить перевірити початок періоду й кожен
  * перехід усередині нього. `IS NOT DISTINCT FROM`, а не `=`: «на початку був без команди» дає
- * NULL, і під `NOT (…)` чи в `SELECT` він читався б не як «ні» (спіймано `#1302`).
+ * NULL, і під `NOT (…)` чи в `SELECT` він читався б не як «ні» (спіймано `#1352`).
  */
 export function inTeamDuringSql(alias: string, teamRef: string, fromRef: string, toRef: string): string {
   return `(${teamAtSql(alias, `${fromRef}::date`)} IS NOT DISTINCT FROM ${teamRef}`
@@ -206,4 +206,45 @@ export async function recordTeamMove(db: Db, p: {
      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
     [p.managerId, fromTeamId, p.toTeamId, p.effectiveFrom, p.source, p.setBy ?? null, p.note ?? null]);
   return { kind: "inserted", effectiveFrom: p.effectiveFrom };
+}
+
+export type RedateResult =
+  | { kind: "updated"; oldFrom: string; effectiveFrom: string; fromTeamId: number | null; toTeamId: number | null }
+  | { kind: "same" }                         // дата та сама — змінювати нічого
+  | { kind: "rejected"; reason: string };
+
+/**
+ * 🗓 ВИПРАВИТИ ДАТУ ОСТАННЬОГО ПЕРЕХОДУ (05.10.2026). Без цього дату неможливо поправити взагалі:
+ * повторний вибір тієї ж команди переходу не пише (команда не змінилась), а «з CRM» знімає
+ * перевизначення й віддає людину синку. Так 05.10 Хомік записалась «з 05.10» замість «з 01.10».
+ *
+ * Лише ОСТАННІЙ перехід і лише в межах, що не розривають ланцюг:
+ *   • останній перехід мусить вести в ПОТОЧНУ команду (`to == managers.team_id`) — інакше синк
+ *     уже переписав команду, і правити дату переходу, якого фактично немає, означало б брехати;
+ *   • нова дата не пізніше `today` і СТРОГО пізніше попереднього переходу (у той самий день —
+ *     це вже один перехід, а не два; `UNIQUE (manager_id, effective_from)`).
+ * Викликати в транзакції; після COMMIT — `refreshTeamMoves`.
+ */
+export async function redateLastTeamMove(db: Db, p: {
+  managerId: number; effectiveFrom: string; today: string; setBy?: number | null;
+}): Promise<RedateResult> {
+  if (p.effectiveFrom > p.today) return { kind: "rejected", reason: "дата пізніше сьогодні" };
+  const moves = (await db.query<{ id: string; f: number | null; t: number | null; ef: string }>(
+    `SELECT id, from_team_id AS f, to_team_id AS t, to_char(effective_from, 'YYYY-MM-DD') AS ef
+       FROM manager_team_moves WHERE manager_id = $1 ORDER BY effective_from DESC LIMIT 2 FOR UPDATE`, [p.managerId])).rows;
+  const last = moves[0];
+  if (!last) return { kind: "rejected", reason: "у менеджера немає жодного переходу" };
+  const cur = (await db.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [p.managerId])).rows[0];
+  if (!cur || cur.team_id !== last.t) {
+    return { kind: "rejected", reason: "останній перехід уже не відповідає поточній команді (її змінив синк або інший запис)" };
+  }
+  if (last.ef === p.effectiveFrom) return { kind: "same" };
+  const prev = moves[1];
+  if (prev && prev.ef >= p.effectiveFrom) {
+    return { kind: "rejected", reason: `попередній перехід — з ${prev.ef}; нова дата мусить бути пізніше` };
+  }
+  await db.query(
+    `UPDATE manager_team_moves SET effective_from = $2, set_by = $3, recorded_at = now() WHERE id = $1`,
+    [last.id, p.effectiveFrom, p.setBy ?? null]);
+  return { kind: "updated", oldFrom: last.ef, effectiveFrom: p.effectiveFrom, fromTeamId: last.f, toTeamId: last.t };
 }

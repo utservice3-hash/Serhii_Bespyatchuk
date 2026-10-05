@@ -1,4 +1,5 @@
 import { pool } from "../db/pool.js";
+import { kyivToday } from "./dates.js";
 import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING } from "./metrics.js";
 import { LEADGEN_STAGE_IDS, QUALIFICATION_PIPELINES } from "./leadgenStages.js";
 import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery, leadStatusPred,
@@ -357,7 +358,9 @@ export async function leadgenHandoffMoney(
   const links = await handoffLinks((await firstStageEventDay()) ?? from, to);
   const [states, history] = await Promise.all([
     handoffDealStates(links.flatMap((l) => (l.dealId == null ? [] : [l.dealId]))), historyFor(links)]);
-  const inP = dayInRange(from, to);
+  // Кінець періоду — не пізніше сьогодні: «Очікування» рахується станом на кінець, а майбутніх днів ще немає.
+  const today = kyivToday();
+  const inP = dayInRange(from, to < today ? to : today);
   const view = handoffView(links, states, scope, history, inP);
   const deals = view.rows.map((h) =>
     handoffDealRow(h, h.dealId == null ? undefined : states.get(h.dealId), HANDOFF_ROW_DEPS));
@@ -397,7 +400,8 @@ export async function leadgenTrend(to: string, months: number, scope: HandoffSco
   ]);
   const [states, history] = await Promise.all([
     handoffDealStates(links.flatMap((l) => (l.dealId == null ? [] : [l.dealId]))), historyFor(links)]);
-  const t = assembleTrend({ monthStarts: w.monthStarts, stages: q.stages, calls: q.calls, links, states, firstDay, scope, history });
+  const t = assembleTrend({ monthStarts: w.monthStarts, stages: q.stages, calls: q.calls, links, states, firstDay, scope, history,
+    today: kyivToday() });
   return { months: w.months, to, monthStarts: t.monthStarts, byPerson: t.byPerson, money: t.money };
 }
 

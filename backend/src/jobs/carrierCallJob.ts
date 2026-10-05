@@ -1,6 +1,7 @@
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
-import { fetchLeadsOnStage, kommoWrite } from "../kommo/client.js";
+import { fetchLeadsOnStage, kommoGet, kommoWrite } from "../kommo/client.js";
+import { closeTasksBody, openTasksPath } from "../core/carrierHistory.js";
 import { closeModeOf } from "../core/carrierClose.js";
 import { sendAdminAlert } from "../bot/notify.js";
 import { runCarrierTick, type CarrierTickReport } from "../core/carrierCalls.js";
@@ -33,9 +34,15 @@ export async function carrierCallJob(): Promise<CarrierTickReport | GuardSkip> {
       close: {
         mode: closeModeOf(config.callAi.carrierAutoClose),
         otherMode: closeModeOf(config.callAi.carrierAutoCloseOther),
+        historyMode: closeModeOf(config.callAi.carrierHistoryClose),
         kommo: {
           patchLeads: (body) => kommoWrite("/api/v4/leads", body, "PATCH"),
           addNotes: (body) => kommoWrite("/api/v4/leads/notes", body, "POST"),
+          openTaskIds: async (leadIds) => {
+            const r = await kommoGet<{ _embedded?: { tasks?: { id: number; is_completed: boolean }[] } }>(openTasksPath(leadIds));
+            return (r._embedded?.tasks ?? []).filter((t) => !t.is_completed).map((t) => t.id);
+          },
+          closeTasks: (taskIds, text) => kommoWrite("/api/v4/tasks", closeTasksBody(taskIds, text), "PATCH"),
         },
       },
     });
@@ -45,7 +52,8 @@ export async function carrierCallJob(): Promise<CarrierTickReport | GuardSkip> {
       + `своя розмова ${String(v.own)}, повтор номера ${String(v.reused)}, без розмови ${String(v.noTalk)}, друга спроба ${String(v.secondTalk)} · `
       + (d.beforeLaunch ? `, до старту ${String(d.beforeLaunch)}` : "") + ` · розпізнано ${String(sum(r.stt, "done"))}, проаналізовано ${String(sum(r.llm, "done"))}`
       + (r.purged ? ` · текст видалено за строком ${String(r.purged)}` : "")
-      + (r.closed ? ` · закриття (${r.closed.mode}, «інше» ${r.closed.otherMode}): кандидатів ${String(r.closed.candidates)}, у журнал ${String(r.closed.logged)}, закрито ${String(r.closed.closed)}${r.closed.failed ? `, помилок ${String(r.closed.failed)}` : ""}` : "")
+      + (v.history ? ` · історія CRM ${String(v.history)}` : "")
+      + (r.closed ? ` · закриття (${r.closed.mode}, «інше» ${r.closed.otherMode}, історія ${r.closed.historyMode}): кандидатів ${String(r.closed.candidates)}, у журнал ${String(r.closed.logged)}, закрито ${String(r.closed.closed)}, задач Kommo ${String(r.closed.tasksClosed)}${r.closed.failed ? `, помилок ${String(r.closed.failed)}` : ""}` : "")
       + (r.reviewTasks && (r.reviewTasks.created || r.reviewTasks.closed) ? ` · задачі: нових ${String(r.reviewTasks.created)}, закрито ${String(r.reviewTasks.closed)}` : "")
       + (r.sttStoppedBy ? ` · розпізнавання: ${r.sttStoppedBy}` : "")
       + (r.llmStoppedBy ? ` · аналіз: ${r.llmStoppedBy}` : ""));

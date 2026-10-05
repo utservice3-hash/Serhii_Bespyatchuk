@@ -201,6 +201,8 @@ export interface LeadgenHandoffDeal {
   reason: string | null; url: string | null;
   /** Дата «авто поїхало»; `inPeriod: false` — передано раніше за період, у період потрапили гроші. */
   autoDay: string | null; inPeriod: boolean;
+  /** «Очікування», перенесене з минулого періоду: авто поїхало раніше, на кінець періоду угода ще чекала (02.10.2026). */
+  carried?: boolean;
 }
 /** Розкривний список «Гроші з передач»: ті самі правила, що `handoffMoney` у /leadgen-stats; `totals` мусять із ним збігатися. */
 export interface LeadgenHandoffDealsResp { from: string; to: string; managerId: number | null; deals: LeadgenHandoffDeal[]; totals: LeadgenHandoffMoney }
@@ -313,7 +315,7 @@ export async function fetchLeadgenStats(params: { from: string; to: string; grai
 export type MissedDayBucket = "work" | "evening" | "weekend" | "night";
 export interface MissedSummary {
   missed: number; excluded: number; ownerless: number;
-  callback: number; callbackTalked: number; callbackSelf: number; callbackColleague: number;
+  callback: number; callbackAttempt: number; callbackSelf: number; callbackColleague: number;
   clientSelf: number;
   /** `null` — передзвонів за період не було, тобто медіану нема з чого рахувати. */
   medianMin: number | null;
@@ -347,6 +349,11 @@ export interface MissedCallsResp {
   teams: MissedTeamRow[];
   /** `false` у зрізі команди чи менеджера: «без відповідального» туди не входить за побудовою. */
   ownerlessInScope: boolean;
+  /** Контроль ТЗ «автозакриття пропущених» (задача 4373): ефект за 7 днів від сьогодні. */
+  automation?: MissedAutomation;
+}
+export interface MissedAutomation {
+  days: number; skippedCarrier: number; closedCallback: number; closedCarrier: number; openNow: number; dealsHistory: number | null;
 }
 export async function fetchMissedCalls(params: { from: string; to: string }): Promise<MissedCallsResp> {
   const { data } = await api.get<MissedCallsResp>("/dashboard/missed-calls", { params });
@@ -476,7 +483,7 @@ export interface CarrierDealT {
     bucket: CarrierBucketT | null };
   human: { decision: CarrierDecisionT; otherType: CarrierOtherTypeT | null; note: string | null; by: string; role: string | null; at: string } | null;
   journal: CarrierJournalT[];
-  category: CarrierCategoryT; source: "human" | "ai" | null; why: string | null; otherType: CarrierOtherTypeT | null;
+  category: CarrierCategoryT; source: "human" | "ai" | "crm" | null; historyFrom?: number | null; why: string | null; otherType: CarrierOtherTypeT | null;
   /** «На перевірці»: до коли розібрати (кінець робочого дня) і чи вже прострочено. */
   reviewSince: string | null; reviewDeadline: string | null; overdue: boolean;
   close: CarrierCloseT | null; crm: { statusId: number | null; rejectReason: string | null };
@@ -1565,6 +1572,12 @@ export interface ManagerOption {
 export async function fetchManagerOptions(teamId?: number): Promise<ManagerOption[]> {
   const { data } = await api.get<{ managers: ManagerOption[] }>("/teams/managers", { params: teamId ? { teamId } : undefined });
   return data.managers;
+}
+
+/** Неактивні (вимкнені в Kommo) менеджери з МОЄЇ команди — їх немає в селекті виконавця. */
+export async function fetchMyTeamInactive(): Promise<{ id: number; name: string }[]> {
+  const { data } = await api.get<{ myTeamInactive?: { id: number; name: string }[] }>("/teams/managers");
+  return data.myTeamInactive ?? [];
 }
 
 export interface ManagerWeekRow {
@@ -4968,8 +4981,11 @@ export const fetchEmployees = async () => (await api.get<{ rows: EmployeeRow[]; 
 export type EmployeePatch = Partial<Pick<EmployeeRow, "full_name" | "position" | "team_label" | "phone" | "email" | "telegram" | "birth_date" | "hired_at" | "dismissed_at" | "dismiss_reason" | "note" | "status">>;
 export const updateEmployee = async (id: number, b: EmployeePatch) => (await api.patch<{ ok: true; changed: string[] }>(`/secrets/employees/${id}`, b)).data.changed;
 // 🚪 Звільнення у два кроки (21.09.2026) — `backend/src/core/offboarding.ts`.
-export const startDismissal = async (id: number, lastDay: string, reason: string) =>
-  (await api.post<{ status: "finishing"; managers: number }>(`/secrets/employees/${id}/dismiss`, { lastDay, reason })).data;
+// ⚠️ 409 з `needsConfirm` — сервер перепитує (людина активна в Kommo або поруч схожий запис); повтор з `confirmRisk`.
+export const startDismissal = async (id: number, lastDay: string, reason: string, confirmRisk = false) =>
+  (await api.post<{ status: "finishing"; managers: number }>(`/secrets/employees/${id}/dismiss`, { lastDay, reason, confirmRisk })).data;
+export const dismissNeedsConfirm = (e: unknown): boolean =>
+  !!(e as { response?: { status?: number; data?: { needsConfirm?: boolean } } })?.response?.data?.needsConfirm;
 export const finishDismissal = async (id: number) =>
   (await api.post<{ status: "dismissed"; accountOff: boolean }>(`/secrets/employees/${id}/dismiss/finish`)).data;
 export const revertDismissal = async (id: number) =>
@@ -5128,6 +5144,12 @@ export async function fetchTeamOverrides(): Promise<TeamOverridesPayload> {
 }
 export async function setTeamOverride(kommoUserId: string, body: { mode: "crm" | "team" | "none"; teamId?: number; note?: string; effectiveFrom?: string }) {
   const { data } = await api.put<{ ok: true; appliedNow: boolean; effectiveFrom: string | null }>(`/settings/team-overrides/${kommoUserId}`, body);
+  return data;
+}
+/** Виправити дату ОСТАННЬОГО переходу між командами (05.10.2026). `changed:false` — дата та сама. */
+export async function setTeamMoveDate(managerId: number, effectiveFrom: string) {
+  const { data } = await api.patch<{ ok: true; changed: boolean; oldFrom?: string; effectiveFrom: string }>(
+    `/settings/team-moves/${managerId}/last`, { effectiveFrom });
   return data;
 }
 export async function createDashboardTeam(name: string): Promise<{ id: number; name: string }> {

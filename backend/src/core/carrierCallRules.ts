@@ -332,8 +332,11 @@ const ERROR_WHY: Partial<Record<CarrierAiState, string>> = {
  * `waiting`, `review` і `error` разом — «не розібрано» у звіті.
  */
 export function dealCategory(x: { human: HumanDecision | null; result: CarrierResult | null; dealState: string; ai: CarrierAiState | null }):
-  { category: DealCategory; source: "human" | "ai" | null; why: string | null } {
+  { category: DealCategory; source: "human" | "ai" | "crm" | null; why: string | null } {
   if (x.human) return { category: x.human, source: "human", why: null };
+  // Номер уже закривали як «Перевізник» у CRM, угоди замовника немає (ТЗ 17.09 «автозакриття пропущених», блок 1;
+  // `core/carrierHistory.ts`). Розмову не слухаємо — вердикт з історії; людина, як і скрізь, сильніша.
+  if (x.dealState === "history") return { category: "carrier", source: "crm", why: "номер уже закривали як «Перевізник» у CRM" };
   if (x.result) {
     const b = carrierBucket(x.result);
     if (b === "carrier" || b === "client" || b === "other") return { category: b, source: "ai", why: null };

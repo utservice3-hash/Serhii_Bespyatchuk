@@ -18,6 +18,15 @@ import { teamAtSql, teamOnDateSql } from "./teamAt.js";
 export const CALLBACK_WINDOW = "24 hours";
 
 /**
+ * 🔴 ПЕРЕДЗВІН — ЦЕ РОЗМОВА ВІД 10 С, а не будь-який вихідний (ТЗ Юлії 17.09.2026 «автозакриття
+ * пропущених», блок 2; задача 4373; рішення Романа 02.10.2026 «робимо як в ТЗ»). «Не закривати, якщо
+ * вихідний без з'єднання або коротший 10 секунд». Заміряно 02.10.2026: із 19 524 вихідних за 30 днів
+ * 7 006 (36%) — нульові; рахувати їх передзвоном означало закривати задачі по клієнтах, до яких не додзвонились.
+ * Одна константа на ВСЕ: норматив на вкладці, сигнал «передзвони» і його автозакриття.
+ */
+export const CALLBACK_MIN_TALK_SEC = 10;
+
+/**
  * 🔴 BUSY — ЦЕ ПРОПУЩЕНИЙ (рішення власника 15.09.2026). Лінія зайнята означає, що
  * клієнт не додзвонився, а не що ми відповіли.
  */
@@ -153,16 +162,27 @@ function baseCte(from: string, to: string, s: MissedScope): { cte: string; param
     legs AS (SELECT *, ${dayBucketCase()} AS bucket FROM marked WHERE ${mergedLagFirst()}),
     withNext AS (
       SELECT f.*, cb.calldate AS cb_at, cb.billsec AS cb_billsec, cb.manager_id AS cb_manager,
-             cs.calldate AS cs_at
+             ca.calldate AS ca_at, cs.calldate AS cs_at
         FROM legs f
         LEFT JOIN LATERAL (
           SELECT o.calldate, o.billsec, o.manager_id
             FROM ringostat_calls o
            WHERE o.client_phone = f.client_phone
              AND o.call_type IN (${list(OUTBOUND_TYPES)})
+             AND o.billsec >= ${String(CALLBACK_MIN_TALK_SEC)}
              AND o.calldate >  f.calldate
              AND o.calldate <= f.calldate + interval '${CALLBACK_WINDOW}'
            ORDER BY o.calldate, o.uniqueid LIMIT 1) cb ON TRUE
+        -- Спроба: перший вихідний БУДЬ-ЯКОЇ довжини. Передзвоном не є (це cb), але видима окремо —
+        -- щоб «не передзвонили» не ховало тих, кому набирали й не додзвонились.
+        LEFT JOIN LATERAL (
+          SELECT o.calldate
+            FROM ringostat_calls o
+           WHERE o.client_phone = f.client_phone
+             AND o.call_type IN (${list(OUTBOUND_TYPES)})
+             AND o.calldate >  f.calldate
+             AND o.calldate <= f.calldate + interval '${CALLBACK_WINDOW}'
+           ORDER BY o.calldate, o.uniqueid LIMIT 1) ca ON TRUE
         LEFT JOIN LATERAL (
           SELECT i.calldate
             FROM ringostat_calls i
@@ -195,7 +215,7 @@ export function missedSummarySql(from: string, to: string, s: MissedScope): { sq
            COUNT(*) FILTER (WHERE disposition IS NULL OR NOT (${m}))::int AS excluded,
            COUNT(*) FILTER (WHERE ${m} AND manager_id IS NULL)::int AS ownerless,
            COUNT(*) FILTER (WHERE ${m} AND cb_at IS NOT NULL)::int AS callback,
-           COUNT(*) FILTER (WHERE ${m} AND cb_at IS NOT NULL AND cb_billsec > 0)::int AS callback_talked,
+           COUNT(*) FILTER (WHERE ${m} AND cb_at IS NULL AND ca_at IS NOT NULL)::int AS callback_attempt,
            COUNT(*) FILTER (WHERE ${m} AND cb_at IS NOT NULL AND (${SELF_CALLBACK_SQL}))::int AS callback_self,
            COUNT(*) FILTER (WHERE ${m} AND cb_at IS NOT NULL AND NOT (${SELF_CALLBACK_SQL}))::int AS callback_colleague,
            COUNT(*) FILTER (WHERE ${m} AND cs_at IS NOT NULL)::int AS client_self,
@@ -500,8 +520,8 @@ export function missedListSql(day: string, s: MissedScope, onlyNoCallback = fals
     SELECT w.uniqueid,
            to_char(w.calldate AT TIME ZONE 'Europe/Kyiv', 'HH24:MI') AS at,
            w.client_phone, w.client_key, w.manager_id, mg.name AS manager_name, w.bucket,
-           EXTRACT(EPOCH FROM (w.cb_at - w.calldate))/60.0 AS cb_min,
-           (w.cb_billsec > 0) AS cb_talked,
+           EXTRACT(EPOCH FROM (COALESCE(w.cb_at, w.ca_at) - w.calldate))/60.0 AS cb_min,
+           (w.cb_at IS NOT NULL) AS cb_talked,
            EXTRACT(EPOCH FROM (w.cs_at - w.calldate))/60.0 AS cs_min,
            dl.kommo_id AS deal_id
       FROM withNext w
@@ -620,4 +640,36 @@ export function noDealListSql(from: string, to: string, s: MissedScope, state: N
      ORDER BY c.calldate DESC, c.uniqueid
      LIMIT ${MISSED_LIST_LIMIT + 1}`;
   return { sql, params };
+}
+
+/* ─────────────── Контроль ТЗ «автозакриття пропущених» (задача 4373): ефект за 7 днів ─────────────── */
+
+/** Префікси причин автозакриття — контракт із `missedCallSignal.autoCloseReason` і `carrierHistory.carrierTaskCloseReason`. */
+export const AUTO_CLOSE_CALLBACK_PREFIX = "Закрито автоматично: передзвонив";
+export const AUTO_CLOSE_CARRIER_PREFIX = "Закрито автоматично: номер у CRM";
+export const AUTOMATION_DAYS = 7;
+
+/**
+ * ТЗ, «Контроль»: «ефект: скільки задач не створилось і скільки закрилось автоматом за тиждень». Сім київських днів
+ * до `today` включно, у скоупі глядача (той самий кламп, що й решта екрана). Угоди Kommo, закриті за історією, —
+ * лише без скоупу: угода етапу фільтра менеджеру ще не належить.
+ */
+export function missedAutomationSql(today: string, s: MissedScope): { sql: string; params: unknown[] } {
+  const scope = `($2::int IS NULL OR m.id = $2::int) AND ($3::int IS NULL OR m.team_id = $3::int)`;
+  const closedIn = (prefix: string) => `(SELECT count(*) FROM missed_call_tasks l JOIN tasks t ON t.id = l.task_id
+        LEFT JOIN managers m ON m.id = l.manager_id
+       WHERE t.status = 'done' AND t.close_reason LIKE '${prefix}%' AND ${scope}
+         AND (t.closed_at AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1::date - ${String(AUTOMATION_DAYS - 1)} AND $1::date)::int`;
+  const sql = `
+    SELECT (SELECT count(*) FROM missed_call_skips k LEFT JOIN managers m ON m.id = k.manager_id
+             WHERE k.kday BETWEEN $1::date - ${String(AUTOMATION_DAYS - 1)} AND $1::date AND ${scope})::int AS skipped_carrier,
+           ${closedIn(AUTO_CLOSE_CALLBACK_PREFIX)} AS closed_callback,
+           ${closedIn(AUTO_CLOSE_CARRIER_PREFIX)} AS closed_carrier,
+           (SELECT count(*) FROM missed_call_tasks l JOIN tasks t ON t.id = l.task_id LEFT JOIN managers m ON m.id = l.manager_id
+             WHERE t.status <> 'done' AND ${scope})::int AS open_now,
+           CASE WHEN $2::int IS NULL AND $3::int IS NULL THEN (
+             SELECT count(*) FROM carrier_close_log cl JOIN carrier_call_deals d ON d.kommo_id = cl.kommo_id
+              WHERE d.state = 'history' AND (cl.decided_at AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1::date - ${String(AUTOMATION_DAYS - 1)} AND $1::date
+           )::int END AS deals_history`;
+  return { sql, params: [today, s.managerId ?? null, s.teamId ?? null] };
 }

@@ -5,7 +5,21 @@ import {
   type SeriesGranularity, type MissedSeries, type MissedSeriesRaw,
   missedListSql, noDealCountsSql, noDealListSql, nextStep, OWNERLESS_LABEL, capRows,
   type MissedScope, type MissedManagerRaw, type MissedManagerRow, type MissedTeamRow, type NextStep, type NoDealState,
+  missedAutomationSql,
 } from "./missedCallsRules.js";
+
+export interface MissedAutomation {
+  days: number; skippedCarrier: number; closedCallback: number; closedCarrier: number; openNow: number;
+  /** Угоди етапу фільтра з вердиктом «історія CRM» у журналі закриттів; `null` — у скоупі команди/менеджера не показуємо. */
+  dealsHistory: number | null;
+}
+/** Ефект автозакриття за 7 днів (контроль ТЗ 4373). */
+export async function missedAutomation(today: string, s: MissedScope = {}): Promise<MissedAutomation> {
+  const q = missedAutomationSql(today, s);
+  const x = (await pool.query<{ skipped_carrier: number; closed_callback: number; closed_carrier: number; open_now: number; deals_history: number | null }>(q.sql, q.params)).rows[0];
+  return { days: 7, skippedCarrier: x.skipped_carrier, closedCallback: x.closed_callback, closedCarrier: x.closed_carrier,
+    openNow: x.open_now, dealsHistory: x.deals_history };
+}
 
 /**
  * 📵 ПРОПУЩЕНІ ВХІДНІ — ШАР, ЩО ХОДИТЬ У БАЗУ. ТЗ-1 від 14.09.2026.
@@ -17,14 +31,14 @@ import {
 
 export interface MissedSummary {
   missed: number; excluded: number; ownerless: number;
-  callback: number; callbackTalked: number; callbackSelf: number; callbackColleague: number;
+  callback: number; callbackAttempt: number; callbackSelf: number; callbackColleague: number;
   clientSelf: number; medianMin: number | null;
   buckets: Record<DayBucket, number>;
 }
 
 interface SummaryRaw {
   missed: number; excluded: number; ownerless: number; callback: number;
-  callback_talked: number; callback_self: number; callback_colleague: number;
+  callback_attempt: number; callback_self: number; callback_colleague: number;
   client_self: number; median_min: string | null;
   b_work: number; b_evening: number; b_weekend: number; b_night: number;
 }
@@ -42,7 +56,7 @@ export async function missedSummary(from: string, to: string, s: MissedScope = {
   const n = (v: number | undefined): number => Number(v ?? 0);
   return {
     missed: n(x?.missed), excluded: n(x?.excluded), ownerless: n(x?.ownerless),
-    callback: n(x?.callback), callbackTalked: n(x?.callback_talked),
+    callback: n(x?.callback), callbackAttempt: n(x?.callback_attempt),
     callbackSelf: n(x?.callback_self), callbackColleague: n(x?.callback_colleague),
     clientSelf: n(x?.client_self),
     medianMin: x?.median_min == null ? null : Math.round(Number(x.median_min)),
