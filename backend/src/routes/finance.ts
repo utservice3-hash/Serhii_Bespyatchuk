@@ -8,7 +8,7 @@ import {
 } from "../core/finance.js";
 import {
   loadPeriod, kpiCard, saveKpiValues, setKpiNote, setPeriodClosed, createSection, renameSection, deleteSection,
-  createKpi, updateKpi, setKpiOff, deleteKpi, restoreKpiThing, autoActive, opexMonth, receivablesFxAt,
+  createKpi, updateKpi, setKpiOff, deleteKpi, restoreKpiThing, autoActive, opexMonth, receivablesFxAt, bankTotals,
 } from "../core/financeKpi.js";
 import { fmRefsFor } from "../core/financeKpiRefs.js";
 
@@ -169,8 +169,10 @@ financeRouter.get("/kpi", async (req, res) => {
     // Друге число до предиката (правило 4): статті без розділу з фактом місяця і деталі валютної дебіторки.
     const opex = p.kind === "month" && autoActive(p.kind, p.start) ? (await opexMonth(pool as unknown as Db, p.start)).unassigned : null;
     const fx = autoActive(p.kind, p.start) ? await receivablesFxAt(pool as unknown as Db, p.end, new Date()) : null;
+    // «з них перекази між своїми рахунками» — друге число біля «Надходження / Витрати загальні» (питання відкрите).
+    const bank = autoActive(p.kind, p.start) ? await bankTotals(pool as unknown as Db, p.start, p.end) : null;
     res.json({
-      opexUnassigned: opex, receivablesFx: fx,
+      opexUnassigned: opex, receivablesFx: fx, bankOwn: bank ? { in: bank.ownIn, out: bank.ownOut } : null,
       kind: p.kind, start: p.start, end: p.end, prev: p.prev, label: p.label, prevLabel: p.prevLabel, current: p.current,
       sections: p.sections, closed: p.closed, importedInterim: p.importedInterim, canEdit: roleHasPerm(req.auth!.roleKey, "edit_finance"),
     });

@@ -6,6 +6,7 @@ import { normalizeClientName } from "../utils/clientName.js";
 import { parseCsv } from "../utils/csv.js";
 import { loadReceivables1c, resolveManagerId, parse1cPayload, fxTotals, type Receivable1cRow } from "../core/receivables1c.js";
 import { recomputeOwners } from "../core/receivablesOwnerStore.js";
+import { getRate } from "../bankSources/fx.js";
 import { RECOMPUTE_RECEIVABLES_SQL } from "./clientKeySql.js";
 import { CLIENT_DEBT_AGE_SQL } from "../core/receivablesAge.js";
 
@@ -197,9 +198,13 @@ export async function fetchSheetLimitsForReconcile(): Promise<Map<string, Client
 export async function syncReceivablesFx(): Promise<{ rows: number; totalUah: number }> {
   const res = await fetch(config.receivables1cFxUrl, { signal: AbortSignal.timeout(30_000) });
   if (!res.ok) throw new Error(`1С (362): HTTP ${res.status}`);
-  const t = fxTotals(parse1cPayload(await res.json()).rows);
-  await pool.query(`INSERT INTO receivables_fx_totals (rows, total_uah, total_val, zero_uah) VALUES ($1, $2, $3, $4)`,
-    [t.rows, t.totalUah, t.totalVal, t.zeroUah]);
+  const payload = await res.json();
+  // Курси НБУ — лише щоб ВИЗНАЧИТИ валюту рядка за його курсом (`fxByRate`); недоступні — валюта «не визначено».
+  const now = new Date();
+  const nbu = { USD: await getRate("USD", now).catch(() => undefined), EUR: await getRate("EUR", now).catch(() => undefined) };
+  const t = fxTotals(parse1cPayload(payload).rows, nbu);
+  await pool.query(`INSERT INTO receivables_fx_totals (rows, total_uah, total_val, zero_uah, usd, eur, unknown_val) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [t.rows, t.totalUah, t.totalVal, t.zeroUah, t.usd, t.eur, t.unknownVal]);
   return { rows: t.rows, totalUah: t.totalUah };
 }
 

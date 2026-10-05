@@ -243,11 +243,37 @@ export function parse1cPayload(payload: unknown): Parse1cResult {
  * без клієнтів. `zeroUah` — друге число (правило 4): рядки з боргом у валюті, але нульовим гривневим еквівалентом,
  * тобто те, що Σ у гривні НЕ показує. Валюти рахунку 1С не віддає, тож `totalVal` — сума різних валют, лише довідка.
  */
-export function fxTotals(rows: readonly Receivable1cRow[]): { rows: number; totalUah: number; totalVal: number; zeroUah: number } {
+export function fxTotals(rows: readonly Receivable1cRow[], nbu: { USD?: number; EUR?: number } = {}): {
+  rows: number; totalUah: number; totalVal: number; zeroUah: number; usd: number; eur: number; unknownVal: number;
+} {
   const c = (v: number) => Math.round(v * 100);
-  let uah = 0, val = 0, zero = 0;
-  for (const r of rows) { uah += c(r.amount); val += c(r.amountVal); if (r.amount === 0 && r.amountVal !== 0) zero++; }
-  return { rows: rows.length, totalUah: uah / 100, totalVal: val / 100, zeroUah: zero };
+  let uah = 0, val = 0, zero = 0, usd = 0, eur = 0, unk = 0;
+  for (const r of rows) {
+    uah += c(r.amount); val += c(r.amountVal); if (r.amount === 0 && r.amountVal !== 0) zero++;
+    const cur = fxByRate(r.amount, r.amountVal, nbu);
+    if (cur === "USD") usd += c(r.amountVal); else if (cur === "EUR") eur += c(r.amountVal); else unk += c(r.amountVal);
+  }
+  return { rows: rows.length, totalUah: uah / 100, totalVal: val / 100, zeroUah: zero, usd: usd / 100, eur: eur / 100, unknownVal: unk / 100 };
+}
+
+/**
+ * 💱 Валюта рядка 362, ВИВЕДЕНА за курсом (рішення Романа 05.10.2026 «і так і так» — і в гривні, і у валюті): 1С
+ * валюти рахунку не віддає, але курс рядка `Sum / SumVal` видно. Найближчий із курсів НБУ USD / EUR — за умови, що
+ * відхилення ≤ 10%; інакше (або без курсу — `Sum = 0`) — `null`, «валюту не визначено», і екран це показує окремо.
+ * Заміряно 05.10.2026: курси рядків 42,39 / 49,86 / 51,77 при НБУ ≈ 41 / 48 — розрив між валютами ~7 ₴, тож 10% не
+ * зливає їх. Це висновок, а не дане 1С, — тому підпис на екрані каже «визначено за курсом».
+ */
+export function fxByRate(uah: number, val: number, nbu: { USD?: number; EUR?: number }): "USD" | "EUR" | null {
+  if (!(uah > 0) || !(val > 0)) return null;
+  const rate = uah / val;
+  let best: "USD" | "EUR" | null = null, dev = Infinity;
+  for (const k of ["USD", "EUR"] as const) {
+    const ref = nbu[k];
+    if (!ref || !(ref > 0)) continue;
+    const d = Math.abs(rate - ref) / ref;
+    if (d < dev) { dev = d; best = k; }
+  }
+  return dev <= 0.1 ? best : null;
 }
 
 // ───────────────────────── ЗАПОБІЖНИК: порожня відповідь = ПРОВАЛ ─────────────────────────
