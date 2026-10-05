@@ -1535,6 +1535,12 @@ export async function fetchManagerOptions(teamId?: number): Promise<ManagerOptio
   return data.managers;
 }
 
+/** Неактивні (вимкнені в Kommo) менеджери з МОЄЇ команди — їх немає в селекті виконавця. */
+export async function fetchMyTeamInactive(): Promise<{ id: number; name: string }[]> {
+  const { data } = await api.get<{ myTeamInactive?: { id: number; name: string }[] }>("/teams/managers");
+  return data.myTeamInactive ?? [];
+}
+
 export interface ManagerWeekRow {
   weekStart: string;
   metric: string;
