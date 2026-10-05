@@ -33,7 +33,6 @@ import { telegramRouter } from "./routes/telegram.js";
 import { sendOfferReminders } from "./jobs/offerReminders.js";
 import { runDocLifecycle } from "./jobs/docLifecycle.js";
 import { runFreezeNominations } from "./jobs/freezeNominations.js";
-import { runFreezeFinanceKpis } from "./jobs/freezeFinanceKpis.js";
 import { runDocText } from "./jobs/docText.js";
 import { signBotEnsureWebhook } from "./bot/signBot.js";
 import { vaultBotEnsureWebhook } from "./bot/vaultBot.js";
@@ -583,11 +582,9 @@ cron.schedule("0 15 * * 2", () => {
   void runJob("freezeNominations", () => runFreezeNominations());
 }, { timezone: "Europe/Kyiv" });
 
-// 💰 Фінанси «Тиждень і місяць»: фіксація автоматичних рядків «ФМ» за минулий тиждень і місяць — щодня 00:05 Києва
-// (ідемпотентна: зафіксоване не чіпає, пропущений день доганяє наступний) + догін на старті.
-cron.schedule("5 0 * * *", () => {
-  void runJob("freezeFinanceKpis", () => runFreezeFinanceKpis());
-}, { timezone: "Europe/Kyiv" });
+// 💰 Фінанси «Тиждень і місяць»: НІЧНОЇ фіксації немає (рішення Тетяни на зустрічі 05.10.2026: «тиждень хай
+// змінюється, місяць закриваю я кнопкою»). Число фіксує лише «Закрити» (`setPeriodClosed`). Джоба `freezeFinanceKpis`
+// лишилась у коді для ручного запуску, але не планується й не наглядається.
 
 // 🔎 Текст документів для пошуку: нові файли й нові версії, які не встигло обробити завантаження.
 cron.schedule("20,50 * * * *", () => {
@@ -925,7 +922,6 @@ const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["vaultBotEnsureWebhook", () => vaultBotEnsureWebhook()],
   ["docLifecycle", () => runDocLifecycle()],
   ["freezeNominations", () => runFreezeNominations()],
-  ["freezeFinanceKpis", () => runFreezeFinanceKpis()],
   ["docText", () => runDocText()],
   ["createOneOnOneReminders", () => createOneOnOneReminders()],
   ["createDutyReminders", () => createDutyReminders()],

@@ -88,11 +88,22 @@ export function receivablesSnapshotFits(kind: PeriodKind, start: string, now: Da
 export const FM_AUTO_FROM: Readonly<Record<PeriodKind, string>> = { week: "2026-10-05", month: "2026-10-01" };
 export const autoActive = (kind: PeriodKind, start: string) => start >= FM_AUTO_FROM[kind];
 /**
+ * 🗓 Рядки з ФІЛЬТРІВ KOMMO («Поставлені», «Вигрузка») рахуються з CRM уже з ВЕРЕСНЯ (зустріч з Тетяною 05.10.2026:
+ * «вересень не сходиться» — бо на екрані стояло її проміжне число з таблиці). Звірено того ж дня: CRM за вересень
+ * 26 725 166 / 21 851 027 — рівно її фільтр (26 725 165 і 21 846 527 + «4 500, що десь випали»). Решта авто-рядків
+ * (Виписка, «План/факт», дебіторка) — з `FM_AUTO_FROM`: у вересні там немає Сейфу, карток і зарплат.
+ */
+export const FM_KOMMO_FROM: Readonly<Record<PeriodKind, string>> = { week: "2026-08-31", month: "2026-09-01" };
+const isKommoRef = (r: unknown) => typeof r === "string" && (r.startsWith("delivered_") || r.startsWith("unloaded_"));
+export const kommoActive = (kind: PeriodKind, start: string) => start >= FM_KOMMO_FROM[kind];
+/** Чи діє автоматика для рядка з цим джерелом у цьому періоді. */
+export const autoActiveFor = (ref: unknown, kind: PeriodKind, start: string) => (isKommoRef(ref) ? kommoActive(kind, start) : autoActive(kind, start));
+/**
  * Чи рахується авто-рядок сам у ЦЬОМУ періоді. До старту — ні (число з таблиці). Операційні витрати — лише місяць і
  * лише коли в розділі є статті (`refs` несе ключ розділу тільки тоді). Решта авто-рядків — завжди після старту.
  */
 export function isAutoIn(x: { kind: string; ref_source?: string | null }, kind: PeriodKind, start: string, refs: RefValues): boolean {
-  if (x.kind !== "auto" || !autoActive(kind, start)) return false;
+  if (x.kind !== "auto" || !autoActiveFor(x.ref_source, kind, start)) return false;
   if (isOpexRef(x.ref_source)) return kind === "month" && (x.ref_source as string) in refs;
   return true;
 }
@@ -708,6 +719,8 @@ export async function importFmPeriods(db: Db, actor: number | null, file: FmFile
     const notes = (p as { notes?: Record<string, string> }).notes ?? {};
     const changed: string[] = [];
     for (const k of flat) {
+      // Рядки з фільтрів Kommo в цьому періоді вже рахує CRM — число з таблиці їх не перекриває (звірено 05.10.2026).
+      if (k.kind === "auto" && k.ref && isKommoRef(k.ref) && kommoActive(kind, start)) continue;
       const v = p.values[k.key] ?? null, n = notes[k.key] ?? null, id = ids.get(k.key)!;
       const cur = await db.query(`SELECT value::text AS value, note FROM fin_kpi_values WHERE kpi_id = $1 AND period_kind = $2 AND period_start = $3::date`, [id, kind, start]);
       const was = num(cur.rows[0]?.value);

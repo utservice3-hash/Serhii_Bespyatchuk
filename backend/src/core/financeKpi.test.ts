@@ -194,12 +194,13 @@ test("#977 ЖИВИЙ SQL: авто-рядок — живе ядро до фік
 });
 
 /**
- * #978 — ПРОВОДКА АВТОМАТИКИ: синк пише `fm_income`/`fm_expense` у КОЖНОМУ проході (вставка й оновлення, параметри
- * в тому ж порядку, що колонки); фіксація має крон за Києвом, догін на старті й нагляд; дебіторка дається періоду
+ * #1205 — ПРОВОДКА АВТОМАТИКИ: синк пише `fm_income`/`fm_expense` у КОЖНОМУ проході (вставка й оновлення, параметри
+ * в тому ж порядку, що колонки); НІЧНОЇ фіксації немає (рішення Тетяни 05.10.2026: тижні живі, місяць — кнопкою), і
+ * нагляд її не чекає (інакше вартовий кричав би «мовчить»); дебіторка дається періоду
  * лише як знімок свого дня — по обидва боки межі. 🧨 Червоніє, якщо синк пише колонки лише при вставці, параметри
- * зсунуті, джобу не заплановано / не наглядають, або минулий тиждень отримує сьогоднішню дебіторку.
+ * зсунуті, нічну фіксацію повернуто в крон або нагляд, або минулий тиждень отримує сьогоднішню дебіторку.
  */
-test("#978 ПРОВОДКА: синк пише fm_income і fm_expense щопрохід, фіксація в кроні й нагляді, дебіторка — лише знімок свого дня", async () => {
+test("#1205 ПРОВОДКА: синк пише fm_income і fm_expense щопрохід, нічної фіксації немає, дебіторка — лише знімок свого дня", async () => {
   const sync = SRC("jobs/syncKommo.ts");
   const ins = sync.slice(sync.indexOf("INSERT INTO deals ("));
   const cols = ins.slice(ins.indexOf("(") + 1, ins.indexOf(")")).split(",").map((x) => x.trim()).filter(Boolean);
@@ -213,12 +214,12 @@ test("#978 ПРОВОДКА: синк пише fm_income і fm_expense щопр�
     assert.equal(params.indexOf(fn), cols.indexOf(col) - 2, `🔴 ${col} пишеться не своїм параметром`);
     assert.match(upd, new RegExp(`\\b${col} = EXCLUDED\\.${col}\\b`), `🔴 ${col} не оновлюється на вже відомих угодах`);
   }
-  const idx = SRC("index.ts");
-  assert.match(idx, /cron\.schedule\("5 0 \* \* \*",\s*\(\) => \{\s*void runJob\("freezeFinanceKpis", \(\) => runFreezeFinanceKpis\(\)\);\s*\}, \{ timezone: "Europe\/Kyiv" \}\)/,
-    "🔴 фіксація не запланована щодня за Києвом");
-  assert.match(idx, /\["freezeFinanceKpis", \(\) => runFreezeFinanceKpis\(\)\]/, "🔴 немає догону фіксації на старті");
+  const idx = SRC("index.ts").replace(/\/\/[^\n]*/g, "");
+  assert.doesNotMatch(idx, /runJob\("freezeFinanceKpis"|runFreezeFinanceKpis\(\)/, "🔴 нічна фіксація знову в розкладі — тижні замерзнуть без Тетяни");
   const { MONITORED_JOBS } = await import("../jobs/monitoredJobs.js");
-  assert.equal(MONITORED_JOBS.find((j) => j.name === "freezeFinanceKpis")?.everyMin, 1440, "🔴 мовчання фіксації ніхто не помітить");
+  assert.equal(MONITORED_JOBS.some((j) => j.name === "freezeFinanceKpis"), false, "🔴 нагляд чекає джобу, якої немає в розкладі — тривога «мовчить»");
+  // а ДЕ ЦЕ ТЕПЕР: фіксує закриття (`setPeriodClosed` з refs) — доведено в #993 / #1201
+  assert.match(SRC("routes/finance.ts"), /const refs = closed \? await refsFor\(req\.body\?\.kind, req\.body\?\.p\) : \{\};/, "🔴 закриття не отримує числа для фіксації");
 
   const { receivablesSnapshotFits: fits } = await import("./financeKpi.js");
   const at = (iso: string) => new Date(iso);
@@ -251,50 +252,46 @@ test("#979 ФРОНТ АВТО-РЯДКІВ: поле лише в ручних, 
 });
 
 /**
- * #989 — СТАРТ АВТОМАТИКИ (рішення Романа 01.10.2026: «фільтри тільки з нового тижня»). До тижня 05.10 і до жовтня
- * авто-рядок — ручний: число з таблиці вноситься, не фіксується, CRM поруч не показується й не рахується. З 05.10 —
- * автоматичний, а «минулий тиждень» поруч — табличне 28.09. По обидва боки межі.
- * 🧨 Червоніє, якщо зсунути старт, дозволити фіксацію вересня чи показати CRM на тижні з таблиці.
+ * #1204 — СТАРТ АВТОМАТИКИ ЗА ДЖЕРЕЛОМ (зустріч з Тетяною 05.10.2026). Фільтри Kommo («Поставлені», «Вигрузка») — з
+ * ВЕРЕСНЯ (тиждень 31.08), бо звірка дала рівно її числа; решта авто-рядків («Виписка», «План/факт», дебіторка) — як
+ * і було, з 05.10 / жовтня: у вересні там немає Сейфу, карток і зарплат. По обидва боки кожної межі.
+ * 🧨 Червоніє, якщо вересень «Поставлених» знову показує число з таблиці, або «Гроші» вересня — неповну «Виписку».
  */
-test("#989 СТАРТ АВТОМАТИКИ: до 05.10 і жовтня — число з таблиці, вноситься й не фіксується; з 05.10 — авто", async (t) => {
+test("#1204 СТАРТ ЗА ДЖЕРЕЛОМ: фільтри Kommo — з вересня, «Виписка» й «План/факт» — з 05.10 / жовтня", async (t) => {
   const kk = await import("./financeKpi.js");
-  assert.deepEqual([kk.autoActive("week", "2026-09-28"), kk.autoActive("week", "2026-10-05"), kk.autoActive("month", "2026-09-01"), kk.autoActive("month", "2026-10-01")],
-    [false, true, false, true], "🔴 межа старту автоматики зсунута");
+  assert.deepEqual([kk.autoActiveFor("delivered_income", "week", "2026-08-24"), kk.autoActiveFor("delivered_income", "week", "2026-08-31"),
+    kk.autoActiveFor("unloaded_expense", "month", "2026-08-01"), kk.autoActiveFor("unloaded_expense", "month", "2026-09-01")], [false, true, false, true],
+  "🔴 межа старту фільтрів Kommo зсунута");
+  assert.deepEqual([kk.autoActiveFor("bank_in", "month", "2026-09-01"), kk.autoActiveFor("bank_in", "month", "2026-10-01"),
+    kk.autoActiveFor("opex_general", "week", "2026-09-28"), kk.autoActiveFor("opex_general", "week", "2026-10-05")], [false, true, false, true],
+  "🔴 «Виписка» / «План/факт» стартували з вересня — там немає Сейфу, карток і зарплат");
   const s = await scratchDb(t);
   if (!s) return;
-  process.env.DATABASE_URL ??= s.url;
-  process.env.JWT_SECRET ??= "test";
-  process.env.KOMMO_BASE_URL ??= "https://x.invalid";
-  process.env.KOMMO_API_TOKEN ??= "x";
-  const { fmRefsFor } = await import("./financeKpiRefs.js");
-  assert.deepEqual(await fmRefsFor("week", "2026-09-28"), {}, "🔴 для тижня з таблиці рахується CRM");
-  assert.deepEqual(await fmRefsFor("month", "2026-09-01"), {}, "🔴 для вересня рахується CRM");
   const { db, c } = s;
   try {
-    const sec = await kk.createSection(db, 901, { name: "Поставлені авто" });
-    const inc = await kk.createKpi(db, 901, { sectionId: sec, name: "Дохід" });
-    await c.query(`UPDATE fin_kpis SET kind = 'auto', ref_source = 'delivered_income' WHERE id = $1`, [inc]);
-    const now = new Date("2026-10-06T10:00:00Z");
-    assert.deepEqual(await kk.saveKpiValues(db, 901, "week", "2026-09-28", [{ kpiId: inc, value: "2 973 228" }]), { changed: 1 }, "🔴 тиждень з таблиці не вноситься");
-    const old = (await kk.loadPeriod(db, "week", "2026-09-28", { delivered_income: 5000 }, now)).sections[0].kpis[0];
-    assert.deepEqual([old.value, old.kind, old.autoState, old.liveRef], [2973228, "manual", null, null], "🔴 тиждень з таблиці показав CRM або позначку «авто»");
-    assert.deepEqual(await kk.freezeAutoKpis(db, "week", "2026-09-28", { delivered_income: 5000 }), { frozen: 0, skipped: "до старту автоматики — число з таблиці" });
-    assert.deepEqual(await kk.freezeAutoKpis(db, "month", "2026-09-01", { delivered_income: 5000 }), { frozen: 0, skipped: "до старту автоматики — число з таблиці" },
-      "🔴 вересень зафіксовано числом із CRM");
-    assert.equal((await kk.loadPeriod(db, "week", "2026-09-28", {}, now)).sections[0].kpis[0].value, 2973228, "🔴 число з таблиці переписано");
-
-    const neu = (await kk.loadPeriod(db, "week", "2026-10-05", { delivered_income: 5000 }, now)).sections[0].kpis[0];
-    assert.deepEqual([neu.value, neu.kind, neu.autoState, neu.prevValue], [5000, "auto", "live", 2973228], "🔴 новий тиждень не автоматичний або «минулий» не з таблиці");
-    await assert.rejects(kk.saveKpiValues(db, 901, "week", "2026-10-05", [{ kpiId: inc, value: "1" }]), (e: unknown) => status(e) === 400, "🔴 новий тиждень вноситься руками");
+    const sec = await kk.createSection(db, 901, { name: "Зміш" });
+    const del = await kk.createKpi(db, 901, { sectionId: sec, name: "Поставлені · дохід" });
+    const inc = await kk.createKpi(db, 901, { sectionId: sec, name: "Надходження загальні" });
+    await c.query(`UPDATE fin_kpis SET kind = 'auto', ref_source = 'delivered_income' WHERE id = $1`, [del]);
+    await c.query(`UPDATE fin_kpis SET kind = 'auto', ref_source = 'bank_in' WHERE id = $1`, [inc]);
+    await c.query(`INSERT INTO fin_kpi_values (kpi_id, period_kind, period_start, value) VALUES ($1, 'month', '2026-09-01', 26220353), ($2, 'month', '2026-09-01', 30000000)`, [del, inc]);
+    const refs = { delivered_income: 26725166, bank_in: 1 };
+    const rows = (await kk.loadPeriod(db, "month", "2026-09-01", refs, new Date("2026-10-05T15:00:00Z"))).sections[0].kpis;
+    const by = (id: number) => rows.find((x: any) => x.id === id);
+    assert.deepEqual([by(del).value, by(del).kind, by(del).autoState], [26725166, "auto", "live"], "🔴 вересень «Поставлених» показує число з таблиці, а не CRM");
+    assert.deepEqual([by(inc).value, by(inc).kind], [30000000, "manual"], "🔴 вересень «Надходжень» підмінено неповною «Виписки»");
+    await assert.rejects(kk.saveKpiValues(db, 901, "month", "2026-09-01", [{ kpiId: del, value: "1" }], refs), (e: unknown) => status(e) === 400, "🔴 CRM-рядок вересня вноситься руками");
+    assert.deepEqual(await kk.saveKpiValues(db, 901, "month", "2026-09-01", [{ kpiId: inc, value: "31 000 000" }], refs), { changed: 1 }, "🔴 табличний рядок вересня не вноситься");
   } finally { await s.dispose(); }
 });
 
 /**
- * #990 — «БЕКФІЛ ПО ТАБЛИЦІ» (`importFmPeriods`): фінал тижня 28.09 і вересня з аркуша лягає в базу, період
- * закривається, позначка «проміжне» знімається. Відмова (нічого не записано): проміжне у файлі, закритий період,
+ * #1206 — «БЕКФІЛ ПО ТАБЛИЦІ» (`importFmPeriods`): фінал тижня 28.09 і вересня з аркуша лягає в базу, період
+ * закривається, позначка «проміжне» знімається — КРІМ рядків із фільтрів Kommo: їх у цих періодах уже рахує CRM
+ * (з вересня, #1204), і число з таблиці їх не перекриває. Відмова (нічого не записано): проміжне у файлі, закритий період,
  * період після старту автоматики. 🧨 Червоніє, якщо записати проміжне, переписати закрите чи період, який рахує CRM.
  */
-test("#990 ПЕРІОДИ З «ФМ»: лише фінал, лише незакриті й до старту автоматики; період закривається", async (t) => {
+test("#1206 ПЕРІОДИ З «ФМ»: лише фінал, лише незакриті й до старту; рядки Kommo — з CRM, таблиця їх не перекриває", async (t) => {
   const s = await scratchDb(t);
   if (!s) return;
   const k = await import("./financeKpi.js");
@@ -322,8 +319,10 @@ test("#990 ПЕРІОДИ З «ФМ»: лише фінал, лише незак�
 
     const out = await k.importFmPeriods(db, null, file2, [{ kind: "week", start: "2026-09-28" }, { kind: "month", start: "2026-09-01" }]);
     assert.equal(out.length, 2);
-    assert.deepEqual([await val("week", "2026-09-28", "Гроші", "Надходження загальні"), await val("week", "2026-09-28", "Поставлені", "Дохід")], [1111, 12],
-      "🔴 тиждень 28.09 не взяв фінал із блоку 05.10");
+    assert.equal(await val("week", "2026-09-28", "Гроші", "Надходження загальні"), 1111, "🔴 тиждень 28.09 не взяв фінал із блоку 05.10");
+    const stored = await s.c.query(`SELECT v.value::text AS v FROM fin_kpi_values v JOIN fin_kpis f ON f.id = v.kpi_id JOIN fin_kpi_sections x ON x.id = f.section_id
+      WHERE x.name LIKE 'Поставлені%' AND f.name = 'Дохід' AND v.period_kind = 'week' AND v.period_start = '2026-09-28'`);
+    assert.deepEqual(stored.rows.map((r: any) => r.v), ["5.00"], "🔴 таблиця перекрила рядок Kommo, який з вересня рахує CRM (лишилось проміжне 5 — його ніхто не чіпав)");
     assert.equal(await val("month", "2026-09-01", "Гроші", "Надходження загальні"), 30858596, "🔴 вересень не взяв фінал");
     const p = await k.loadPeriod(db, "week", "2026-09-28");
     assert.deepEqual([!!p.closed, p.importedInterim], [true, false], "🔴 період не закрито або лишився «проміжним»");
