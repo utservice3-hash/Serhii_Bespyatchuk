@@ -157,6 +157,13 @@ ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_transfer_at TIMESTAMPTZ;
 -- Used by "stuck deals": a deal with no human activity for a while is stuck.
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS first_activity_at TIMESTAMPTZ; -- перший людський контакт (для «час опрацювання»)
+-- ⏱ «Час опрацювання заявки» (ТЗ Юлії 24.09.2026, `core/leadTake.ts`). Дві з трьох подій «взято в роботу»;
+-- третя — перша зміна етапу, вона вже є в `deal_stage_events`.
+--   taken_field_at      — поле Kommo «Взято в работу» (раніше з «(ппц)» 2097983 і «(пр)» 2098493), пише syncKommo;
+--   first_call_out_at   — перший ВИХІДНИЙ дзвінок по угоді НЕ РАНІШЕ її створення (примітка call_out, яку
+--                         Ringostat кладе в Kommo на контакт; розноситься на угоди через `deal_contacts`).
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS taken_field_at TIMESTAMPTZ;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS first_call_out_at TIMESTAMPTZ;
 -- Дата останнього ДЗВІНКА клієнту (лише call_in/call_out, created_by<>0), окремо від будь-якої активності.
 -- Живить прапорець «метушня без контакту» у «Застряглих»: свіжа нотатка є, але місяць без дзвінка.
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS last_call_at TIMESTAMPTZ;

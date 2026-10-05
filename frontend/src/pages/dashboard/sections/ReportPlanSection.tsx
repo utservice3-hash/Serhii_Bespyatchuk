@@ -14,7 +14,7 @@ import {
   periodOf, periodLabelOf, type PeriodMode, type PeriodState,
 } from "../periodRules";
 import { InfoHint } from "../widgets";
-import { ResponseTimeCard } from "./ResponseTimeCard";
+import { LeadTakeCard } from "./LeadTakeCard";
 import { ReportTableSection } from "./ReportTableSection";
 import { mergeReportPlans } from "../reportScope";
 import { firstTouchLabel, firstTouchStale } from "../reportTableCols";
@@ -406,8 +406,8 @@ export function ReportPlanSection({ auth, teams }: {
           {/* Блоки як у КВП — ВГОРУ, перед списком менеджерів (на видноті). Роль-скоуп на
               бекенді за токеном; teamId впливає лише на admin (manager/team_lead форсяться роллю). */}
           <StuckBlock teamId={teamId ? Number(teamId) : undefined} />
-          {/* Час реакції — за ОБРАНИМ періодом (був прибитий до місяця). */}
-          <ResponseTimeCard from={selectedPeriod.from} to={selectedPeriod.to} teamId={teamId ? Number(teamId) : undefined} />
+          {/* ⏱ «Час опрацювання заявки» (ТЗ 24.09.2026) — стартує з ОБРАНОГО періоду, далі має власні кнопки тижня. */}
+          <LeadTakeCard from={selectedPeriod.from} to={selectedPeriod.to} teamId={teamId ? Number(teamId) : undefined} />
           {view === "table" ? (
             <ReportTableSection
               data={data} teams={teams} auth={auth}

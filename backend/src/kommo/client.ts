@@ -265,6 +265,21 @@ export function extractPlannedPaymentDate(deal: KommoDeal): Date | null {
   return fieldDate(deal, FIELD_PLANNED_PAYMENT);
 }
 
+/**
+ * ⏱ «Взято в работу» — два date_time-поля Kommo: «(ппц)» 2097983 і «(пр)» 2098493 (`docs/CRM_SCHEMA.md`).
+ * Третя з трьох подій «взято в роботу» вікна «Час опрацювання заявки» (ТЗ Юлії 24.09.2026). Беремо РАНІШЕ
+ * з двох: поле означає момент, коли людина взялась за заявку, і пізніше заповнене друге його не скасовує.
+ */
+export const FIELDS_TAKEN_IN_WORK = [2097983, 2098493] as const;
+export function extractTakenInWork(deal: KommoDeal): Date | null {
+  let best: Date | null = null;
+  for (const f of FIELDS_TAKEN_IN_WORK) {
+    const d = fieldDate(deal, f);
+    if (d && (!best || d < best)) best = d;
+  }
+  return best;
+}
+
 /** «Дата загрузки» — операційна дата початку перевезення. */
 export function extractLoadDate(deal: KommoDeal): Date | null {
   return fieldDate(deal, FIELD_LOAD_DATE);

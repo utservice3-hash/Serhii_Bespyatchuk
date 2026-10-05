@@ -121,6 +121,9 @@ import { canRequestLimitFor, canAssignTaskToOthers } from "../auth/taskAssignSco
 import { activeManagerSql } from "../core/activeManager.js";
 import * as managerState from "../core/managerState.js";
 import { teamAtSql, inTeamDuringSql, teamOnDateSql, sqlDate, teamJoinSql } from "../core/teamAt.js";
+import * as leadTake from "../core/leadTake.js";
+import * as leadTakeRules from "../core/leadTakeRules.js";
+import { buildXlsx } from "../core/xlsxWrite.js";
 import * as clientCalls from "../core/clientCalls.js";
 import * as planBasis from "../core/planBasis.js";
 import * as clientTabs from "../core/clientTabs.js";
@@ -3983,6 +3986,67 @@ dashboardRouter.get("/response-time/by-manager", async (req, res) => {
   else if (auth.role === "team_lead") teamId = auth.teamId;
   const rows = await metrics.responseTimeByManager({ from, to, managerId, teamId });
   res.json({ from, to, managers: rows });
+});
+
+/**
+ * ⏱ ВІКНО «ЧАС ОПРАЦЮВАННЯ ЗАЯВКИ» (ТЗ Юлії 24.09.2026) — таблиця, угоди клітинки, Excel. Усе з одного ядра
+ * `core/leadTake.ts`, тож список угод і файл не можуть розійтись із числами таблиці.
+ * Шлях під `/response-time/` навмисно: межа вкладки «Звіт» (`routeTab` → `pre("/api/dashboard/response-time")`)
+ * накриває їх сама, і тімлід/менеджер звужуються тим самим кламом, що й стара картка.
+ */
+function leadTakeQuery(req: import("express").Request): leadTake.TakeQuery | { error: string } {
+  const auth = req.auth!;
+  const ymd = /^\d{4}-\d{2}-\d{2}$/;
+  const from = String(req.query.from ?? ""), to = String(req.query.to ?? "");
+  if (!ymd.test(from) || !ymd.test(to) || from > to) return { error: "from/to: YYYY-MM-DD, from ≤ to" };
+  const source = String(req.query.source ?? "all") as leadTake.TakeSource;
+  if (!["all", "ad", "site", "leadgen"].includes(source)) return { error: "source: all | ad | site | leadgen" };
+  const time = String(req.query.time ?? "all") as leadTake.TakeTime;
+  if (!["all", "work", "off"].includes(time)) return { error: "time: all | work | off" };
+  const campaign = source === "ad" && typeof req.query.campaign === "string" && req.query.campaign ? req.query.campaign : null;
+  let managerId = req.query.managerId ? Number(req.query.managerId) : null;
+  let teamId = req.query.teamId ? Number(req.query.teamId) : null;
+  if (auth.role === "manager") { managerId = auth.managerId ?? -1; teamId = null; }
+  else if (auth.role === "team_lead") teamId = auth.teamId ?? -1;
+  return { from, to, source, time, campaign, managerId, teamId };
+}
+
+dashboardRouter.get("/response-time/take", async (req, res) => {
+  const q = leadTakeQuery(req);
+  if ("error" in q) return res.status(400).json({ error: q.error });
+  res.json({ ...(await leadTake.leadTakeTable(q)), query: q, norm: leadTakeRules.NORM });
+});
+
+const TAKE_COLUMNS: leadTakeRules.TakeColumn[] = ["all", "m1", "m5", "m30", "m60", "h1", "none", "slowLost"];
+dashboardRouter.get("/response-time/take/deals", async (req, res) => {
+  const q = leadTakeQuery(req);
+  if ("error" in q) return res.status(400).json({ error: q.error });
+  const row = String(req.query.row ?? "dept");
+  const col = String(req.query.col ?? "all") as leadTakeRules.TakeColumn;
+  if (!TAKE_COLUMNS.includes(col)) return res.status(400).json({ error: `col: ${TAKE_COLUMNS.join(" | ")}` });
+  res.json({ deals: await leadTake.leadTakeDeals(q, row, col) });
+});
+
+dashboardRouter.get("/response-time/take/export", async (req, res) => {
+  const q = leadTakeQuery(req);
+  if ("error" in q) return res.status(400).json({ error: q.error });
+  const [t, deals] = await Promise.all([leadTake.leadTakeTable(q), leadTake.leadTakeDeals(q, "dept", "all")]);
+  const pc = (v: number | null) => (v == null ? null : v);
+  const head = ["Менеджер / команда", "Заявок", "до 1 хв, %", "до 5 хв, %", "5-30 хв, %", "30-60 хв, %", "> 1 год, %",
+    "Не взято", "Медіана, хв", "Повільні без результату", "Втрати, ₴"];
+  const table = [head, ...t.rows.map((r) => [
+    r.kind === "manager" ? `  ${r.label}` : r.label, r.n, pc(r.m1Pct), pc(r.m5Pct), pc(r.m30Pct), pc(r.m60Pct), pc(r.h1Pct),
+    r.notTaken, r.medianMin, r.slowLost, r.loss,
+  ]), ["Норматив", null, leadTakeRules.NORM.m1Pct, leadTakeRules.NORM.m5Pct, null, null, null, leadTakeRules.NORM.notTaken]];
+  const kyiv = (iso: string | null) => (iso == null ? null
+    : new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }));
+  const list = [["Угода", "Посилання", "Менеджер", "Група", "Створено", "Взято", "Подія", "Хвилин", "Неробочий час", "Стан", "Причина закриття", "Джерело", "Кампанія"],
+    ...deals.map((d) => [d.name, d.url, d.manager, d.group, kyiv(d.createdAt), kyiv(d.takenAt), d.event ?? "не взято", d.minutes,
+      d.offHours ? "так" : "", d.status === "won" ? "успішна" : d.status === "lost" ? "не реалізовано" : "в роботі", d.rejectReason, d.source, d.campaign])];
+  const buf = buildXlsx([{ name: "Час опрацювання", rows: table }, { name: "Угоди", rows: list }]);
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="lead-take_${q.from}_${q.to}.xlsx"`);
+  res.send(buf);
 });
 
 /**
