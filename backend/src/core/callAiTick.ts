@@ -1,4 +1,5 @@
 import type { Db } from "./adCallFacts.js";
+import { loadTunables } from "./firstTouchTunables.js";
 import { adDealFirstTalksSql, type AdFlag, type FirstTalkRow } from "./adCallFactsRules.js";
 import { createMinInterval, type HttpDeps } from "./callAiHttp.js";
 import { downloadRecording } from "./ringostatRecording.js";
@@ -66,15 +67,18 @@ export const kyivDateOf = (d: Date): string => d.toLocaleDateString("sv-SE", { t
  *     команду впізнають за назвою, не за id). Тегів контакту в базі дашборду немає — Kommo їх не синкає;
  *   • ПОВТОРНИЙ КОНТАКТ — із цим номером уже була розмова від порогу раніше (будь-коли): «тільки перший
  *     дзвінок по контакту». Замір 30.09: 29 із 311 нелідгенових розмов.
+ *     🎛 `windowDays` (05.10.2026, «Налаштування»): повторна — лише якщо попередня розмова була не раніше ніж за
+ *     N днів (межа включно). `null` — без обмеження, як було.
  */
-export function firstTouchExclusionSql(ft: string, phone: string): string {
+export function firstTouchExclusionSql(ft: string, phone: string, windowDays: number | null): string {
   const talk = String(Math.trunc(Number(FIRST_TOUCH_RULE.talkMinSec)));
+  const win = windowDays == null ? "" : ` AND e.calldate >= ${ft}.calldate - interval '${String(Math.trunc(Number(windowDays)))} days'`;
   return `NOT EXISTS (SELECT 1 FROM deals dx LEFT JOIN managers mx ON mx.id = dx.manager_id LEFT JOIN teams tx ON tx.id = mx.team_id
                        WHERE dx.kommo_id = ${ft}.kommo_id AND (dx.lead_channel = 'leadgen' OR tx.name ILIKE '%лідоген%'))
       AND NOT EXISTS (SELECT 1 FROM leadgen_touch lt WHERE lt.lead_kommo_id = ${ft}.kommo_id)
       AND NOT EXISTS (SELECT 1 FROM managers mc JOIN teams tc ON tc.id = mc.team_id WHERE mc.id = ${ft}.manager_id AND tc.name ILIKE '%лідоген%')
       AND NOT EXISTS (SELECT 1 FROM ringostat_calls e WHERE ${phone} IS NOT NULL AND e.client_phone = ${phone}
-                       AND e.calldate < ${ft}.calldate AND e.billsec >= ${talk})`;
+                       AND e.calldate < ${ft}.calldate AND e.billsec >= ${talk}${win})`;
 }
 
 /** Дзвінки першого дотику від `selectionFrom` до сьогодні (дата створення угоди, за Києвом, обидва кінці), без виключених. */
@@ -84,7 +88,7 @@ export async function selectFirstTouchCalls(db: Db, ad: AdPredicate, now: Date):
     windowBefore: FIRST_TOUCH_RULE.windowBefore, adDealPredicate: ad.predicate, adSources: ad.adSources },
   FIRST_TOUCH_RULE.flag, 5000);
   const sql = `SELECT DISTINCT ft.uniqueid FROM (${q.sql}) ft LEFT JOIN ringostat_calls rcx ON rcx.uniqueid = ft.uniqueid
-    WHERE ${firstTouchExclusionSql("ft", "rcx.client_phone")}`;
+    WHERE ${firstTouchExclusionSql("ft", "rcx.client_phone", (await loadTunables(db)).repeatWindowDays)}`;
   return (await db.query<FirstTalkRow>(sql, q.params)).rows.map((r) => r.uniqueid);
 }
 

@@ -78,6 +78,8 @@ export function FirstTouchReportCard({ from, to, teamId }: { from: string; to: s
   if (!rep) return <div className="chart-card"><p className="loading-text" style={{ margin: 0 }}>Перший дотик: завантаження…</p></div>;
 
   const bannerRows = rep.rows.filter((r) => r.flags.banner);
+  // 🎛 Колір — з «Налаштувань» (адмін, 05.10.2026); заголовок і підпис однакові в обох кольорах.
+  const alert = rep.bannerTone === "alert";
   const poolRows = pool ? rep.rows.filter((r) => (pool.managerId === "all" || r.managerId === pool.managerId) && POOL.find((p) => p.key === poolKey)!.match(r)) : [];
   const cell = (l: AiManagerLineT, k: SortKey) => k === "pricePct" ? (l.pricePct == null ? "—" : `${String(l.pricePct)}%`) : String(l[k]);
 
@@ -89,11 +91,12 @@ export function FirstTouchReportCard({ from, to, teamId }: { from: string; to: s
       </h3>
 
       {rep.banner.total > 0 && (
-        <div style={{ background: "var(--surface-2, #f4f5f7)", border: "1px solid var(--border)", borderRadius: 8, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ fontWeight: 700, fontSize: 15 }}>Обіцяв передзвонити — дзвінка в телефонії немає · {rep.banner.total}</div>
+        <div style={{ background: alert ? "var(--danger-bg, #fde8e8)" : "var(--surface-2, #f4f5f7)", border: `1px solid ${alert ? "var(--danger, #b3261e)" : "var(--border)"}`,
+          borderRadius: 8, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ fontWeight: 700, fontSize: 15, color: alert ? "var(--danger, #b3261e)" : undefined }}>Обіцяв передзвонити — дзвінка в телефонії немає · {rep.banner.total}</div>
           <div style={{ fontSize: 13, ...muted }}>За даними Ringostat. Передзвін з мобільного, у месенджер чи з іншого номера система не бачить — <b>перевіряється, не для розборів</b>.</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {rep.banner.byManager.map((m) => <span key={String(m.managerId)}>{chip("muted", `${m.managerName} · ${String(m.count)}`)}</span>)}
+            {rep.banner.byManager.map((m) => <span key={String(m.managerId)}>{chip(alert ? "bad" : "muted", `${m.managerName} · ${String(m.count)}`)}</span>)}
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 13 }}>
             {bannerRows.slice(0, 12).map((r) => (

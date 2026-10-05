@@ -4697,6 +4697,20 @@ REVOKE ALL ON first_touch_notes FROM ai_readonly;
 -- Таку позначку ставлять менеджер (свої), тімлід (команда), адмін — і обіцянка рахується виконаною.
 ALTER TABLE first_touch_notes DROP CONSTRAINT IF EXISTS first_touch_notes_kind_check;
 ALTER TABLE first_touch_notes ADD CONSTRAINT first_touch_notes_kind_check CHECK (kind IN ('price', 'missed', 'offline'));
+-- 🎛 НАЛАШТУВАННЯ «ПЕРШОГО ДОТИКУ» (05.10.2026): вікно повторного дзвінка, допуск і мінімальний дедлайн передзвону,
+-- колір блоку «дзвінка в телефонії немає». Журнал: кожна зміна — новий рядок з автором, чинне — останній рядок,
+-- порожньо — поточна поведінка (`core/firstTouchTunables.ts`). Змінює лише адмін у «Налаштуваннях».
+CREATE TABLE IF NOT EXISTS first_touch_settings_log (
+  id                        BIGSERIAL PRIMARY KEY,
+  repeat_window_days        INTEGER CHECK (repeat_window_days IS NULL OR repeat_window_days BETWEEN 1 AND 365),
+  callback_grace_min        INTEGER NOT NULL CHECK (callback_grace_min BETWEEN 0 AND 120),
+  callback_min_deadline_min INTEGER NOT NULL CHECK (callback_min_deadline_min BETWEEN 0 AND 240),
+  banner_tone               TEXT NOT NULL CHECK (banner_tone IN ('neutral', 'alert')),
+  set_by                    INTEGER,
+  set_by_name               TEXT,
+  set_at                    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+REVOKE ALL ON first_touch_settings_log FROM ai_readonly;
 -- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
 
 -- 🎧 ВКЛАДКА «ПЕРШИЙ ДОТИК · AI» (рішення Романа 28.09.2026). Без цього рядка вкладку не побачив би

@@ -11,7 +11,8 @@ import { adCallFacts } from "./adCallFacts.js";
 import { silentBeforeClose, type AdCallFactsParams } from "./adCallFactsRules.js";
 import { typeVerdict, type TypeOverride } from "./callAiType.js";
 import type { ConversationType } from "./callAiProviders.js";
-import { promiseDeadline, promiseState, worstPromiseState, withOfflineMark, type CallFact, type DeadlineBasis, type ModelPromise, type PromiseState } from "./callAiPromise.js";
+import { loadTunables, type FirstTouchTunables } from "./firstTouchTunables.js";
+import { countingDeadline, promiseDeadline, promiseState, worstPromiseState, withOfflineMark, type CallFact, type DeadlineBasis, type ModelPromise, type PromiseState } from "./callAiPromise.js";
 
 /**
  * 🤫 «ТИША ПЕРЕД ЗАКРИТТЯМ» (П3, рішення Романа 29.09.2026): угоду закрито «не реалізовано» пізніше ніж
@@ -272,18 +273,20 @@ async function callsByPhone(db: Db, phones: readonly string[], since: Date): Pro
   return out;
 }
 
-export interface PromiseCheck { deadline: string; basis: DeadlineBasis; state: PromiseState }
+/** `deadline` — обіцяне; `countUntil` — до якої миті зараховуємо (мінімальний дедлайн + допуск з «Налаштувань»). */
+export interface PromiseCheck { deadline: string; countUntil: string; basis: DeadlineBasis; state: PromiseState }
 
 /** Термін і стан кожної обіцянки менеджера рядка — у порядку `result.promises` (клієнтські → `null`). */
 function checkPromises(res: AnalysisResult, calledAt: string, billsec: number, calls: readonly CallFact[], knownUntil: Date,
-  promiserId: number | null): (PromiseCheck | null)[] {
+  promiserId: number | null, t: FirstTouchTunables): (PromiseCheck | null)[] {
   const end = callEndOf(calledAt, billsec);
   const after = calls.filter((c) => c.at.getTime() > end.getTime());
   return res.promises.map((p) => {
     if (p.who !== "manager" || !p.channel || !p.deadline_kind) return null;
     const mp = managerPromisesOf({ ...res, promises: [p] })[0];
     const { deadline, basis } = promiseDeadline(mp, end);
-    return { deadline: deadline.toISOString(), basis, state: promiseState(mp, end, deadline, after, knownUntil, promiserId) };
+    const until = countingDeadline(deadline, basis, end, t);
+    return { deadline: deadline.toISOString(), countUntil: until.toISOString(), basis, state: promiseState(mp, end, until, after, knownUntil, promiserId) };
   });
 }
 
@@ -322,6 +325,7 @@ export const SCREEN_LIMIT = 5000;
  */
 export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: string, now: Date, scope: MissedScope):
   Promise<{ rows: AiCallListRow[]; truncated: boolean }> {
+  const tun = await loadTunables(db);
   const q = adDealFirstTalksSql({ from, to, now, talkMinSec: FIRST_TOUCH_RULE.talkMinSec, windowBefore: FIRST_TOUCH_RULE.windowBefore,
     adDealPredicate: ad.predicate, adSources: ad.adSources }, FIRST_TOUCH_RULE.flag, SCREEN_LIMIT);
   const sql = `
@@ -343,7 +347,7 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
       LEFT JOIN call_analyses a ON a.transcript_id = t.id AND a.provider = $10 AND a.model = $11 AND a.rubric_version = $12
      WHERE ($13::int IS NULL OR ft.manager_id = $13)
        AND ($14::int IS NULL OR m.team_id = $14)
-       AND ${firstTouchExclusionSql("ft", "rcx.client_phone")}
+       AND ${firstTouchExclusionSql("ft", "rcx.client_phone", tun.repeatWindowDays)}
      ORDER BY ft.calldate DESC, ft.kommo_id DESC`;
   const params = [...q.params, STT_PROVIDER, ELEVENLABS_STT_MODEL, LLM_PROVIDER, GEMINI_MODEL, RUBRIC_CURRENT,
     scope.managerId ?? null, scope.teamId ?? null];
@@ -360,7 +364,7 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
     raw.forEach((x, i) => {
       if (rows[i].managerPromises === 0 || !x.result) return;
       const phone = phoneOf.get(x.uniqueid);
-      const checks = checkPromises(x.result, rows[i].calledAt, rows[i].billsec, phone ? calls.get(phone) ?? [] : [], known, rows[i].managerId);
+      const checks = checkPromises(x.result, rows[i].calledAt, rows[i].billsec, phone ? calls.get(phone) ?? [] : [], known, rows[i].managerId, tun);
       rows[i].promiseState = withOfflineMark(worstPromiseState(checks.filter((c): c is PromiseCheck => c != null).map((c) => c.state)), rows[i].offlineNote != null);
     });
   }
@@ -444,7 +448,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
   const after = raw.client_phone
     ? (await callsByPhone(db, [raw.client_phone], end)).get(raw.client_phone) ?? [] : [];
   const nowD = new Date();
-  const promiseChecks = (done && raw.result ? checkPromises(raw.result, row.calledAt, row.billsec, after, await callsKnownUntil(db, nowD), row.managerId) : [])
+  const promiseChecks = (done && raw.result ? checkPromises(raw.result, row.calledAt, row.billsec, after, await callsKnownUntil(db, nowD), row.managerId, await loadTunables(db)) : [])
     .map((c) => (c ? { ...c, state: withOfflineMark(c.state, row.offlineNote != null) ?? c.state } : c));
   const callsAfter = after.filter((c) => c.at.getTime() > end.getTime() && c.at.getTime() <= end.getTime() + 7 * 86_400_000)
     .slice(0, 12).map((c) => ({ at: c.at.toISOString(), billsec: c.billsec, direction: IN_TYPES.has(c.callType) ? "in" as const : "out" as const,

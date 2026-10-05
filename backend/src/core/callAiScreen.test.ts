@@ -631,14 +631,16 @@ test("#864 ЗВІТ ТІМЛІДА НА ЕКРАНІ: блок у «Звіті»
 });
 
 /**
- * #865 — «ПЕРЕДЗВОНИВ ПОЗА ТЕЛЕФОНІЄЮ» · ЯДРО Й ЕКРАН (Юля й Андрій 01.10.2026). Звірка 30 «не передзвонив» з Ringostat:
+ * #869 — «ПЕРЕДЗВОНИВ ПОЗА ТЕЛЕФОНІЄЮ» · ЯДРО Й ЕКРАН (Юля й Андрій 01.10.2026). Звірка 30 «не передзвонив» з Ringostat:
  * у 25 нашого дзвінка в телефонії немає зовсім, а передзвони були з мобільного чи в месенджер. Тому: ручна позначка
  * переводить «немає дзвінка», «запізнився» й «чекає» у виконане й рахується в «виконано», а не в «немає дзвінка» чи
- * банер; ставлять її менеджер (свої), тімлід, адмін; на екрані — без червоного й з чесним «за даними телефонії».
+ * банер; ставлять її менеджер (свої), тімлід, адмін; стан у таблиці — без червоного й з чесним «за даними телефонії».
+ * 🎛 05.10.2026 (замінює #865): колір БЛОКУ тепер перемикає адмін у «Налаштуваннях» — червоний лише за `bannerTone
+ * === "alert"`, заголовок і підпис «перевіряється» в обох кольорах однакові (рішення власника: «перемикач тільки кольору»).
  * 🧨 Червоніє, якщо позначка не гасить банер, не рахується виконаною, перебиває «Передзвонив» з телефонії, відкрита
- * CEO чи якщо стан знову назвуть вироком червоним.
+ * CEO, якщо стан у таблиці знову червоний або блок червоніє без налаштування.
  */
-test("#865 ПЕРЕДЗВОНИВ ПОЗА ТЕЛЕФОНІЄЮ · ЯДРО Й ЕКРАН: позначка = виконано, гасить банер, ставлять менеджер/тімлід/адмін; без червоного", async () => {
+test("#869 ПОЗА ТЕЛЕФОНІЄЮ І КОЛІР БЛОКУ: позначка = виконано, гасить банер; блок червоний лише з «Налаштувань» адміна, заголовок той самий; у картці обидва терміни", async () => {
   const { withOfflineMark } = await import("./callAiPromise.js");
   for (const s of ["broken", "late", "pending"] as const) assert.equal(withOfflineMark(s, true), "kept_offline", `🔴 позначка не перевела «${s}» у виконане`);
   for (const s of ["broken", "late", "pending"] as const) assert.equal(withOfflineMark(s, false), s, "дзеркало: без позначки стан не міняється");
@@ -660,8 +662,20 @@ test("#865 ПЕРЕДЗВОНИВ ПОЗА ТЕЛЕФОНІЄЮ · ЯДРО Й �
   assert.match(V.PROMISE_UI.broken.label, /телефоні/, "🔴 підпис знову звучить як вирок, а не як стан даних");
   assert.deepEqual([V.PROMISE_UI.kept_offline?.label, V.PROMISE_UI.kept_offline?.tone], ["Передзвонив поза телефонією", "ok"]);
   const card = readFileSync(FE("pages/dashboard/sections/FirstTouchReportCard.tsx"), "utf8");
-  assert.ok(!/role="alert"|--danger-bg/.test(card), "🔴 блок «немає дзвінка» знову червона тривога");
+  assert.ok(!/role="alert"/.test(card), "🔴 блок «немає дзвінка» знову тривога для скрінрідера");
+  assert.match(card, /const alert = rep\.bannerTone === "alert";/, "🔴 колір блоку не з налаштування сервера");
+  assert.equal((card.match(/--danger-bg/g) ?? []).length, 1, "🔴 червоний фон зʼявився поза перемикачем");
+  assert.match(card, /background: alert \? "var\(--danger-bg, #fde8e8\)" : "var\(--surface-2, #f4f5f7\)"/, "🔴 червоний фон не залежить від налаштування");
+  assert.equal((card.match(/Обіцяв передзвонити — дзвінка в телефонії немає/g) ?? []).length, 1, "🔴 заголовок залежить від кольору — а мав лишитись чесним в обох");
   assert.match(card, /перевіряється, не для розборів/, "🔴 блок не каже, що дані перевіряються");
+  const rep = SRC("routes/dashboard.ts");
+  const at0 = rep.indexOf('dashboardRouter.get("/ai-calls/team-report"'), nx = rep.indexOf("dashboardRouter.", at0 + 10);
+  assert.match(rep.slice(at0, nx), /const \{ bannerTone \} = await loadTunables\(pool\);[\s\S]*truncated, bannerTone,/, "🔴 колір блоку не з налаштувань сервера");
+  const setUi = readFileSync(FE("pages/dashboard/sections/SettingsSection.tsx"), "utf8");
+  assert.match(setUi, /\{sub === "Загальні" && roleKey === "admin" && <FirstTouchSettingsCard \/>\}/, "🔴 блок налаштувань видно не лише адміну (чи за сумісною role, де CEO теж «admin»)");
+  assert.match(readFileSync(FE("pages/Dashboard.tsx"), "utf8"), /role=\{auth\?\.role\}\s*roleKey=\{auth\?\.roleKey\}/, "🔴 ключ ролі не доходить до «Налаштувань»");
+  const drw0 = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
+  assert.match(drw0, /обіцяв до \{fmtFull\(chk\.deadline\)\}[\s\S]{0,160}chk\.countUntil !== chk\.deadline && <> · <b>зараховуємо до \{fmtFull\(chk\.countUntil\)\}/, "🔴 картка не показує обидва терміни");
   const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
   assert.match(drw, /<NoteField c=\{c\} kind="offline"/, "🔴 у картці немає позначки «Передзвонив поза телефонією»");
   assert.match(drw, /const needOffline = c\.row\.promiseState === "broken" \|\| c\.row\.promiseState === "late" \|\| c\.row\.offlineNote != null;/, "🔴 позначку не видно там, де вона потрібна");
@@ -694,4 +708,98 @@ test("#866 ПОЗА ТЕЛЕФОНІЄЮ · ЖИВА СХЕМА: позначк�
   assert.deepEqual([card?.row.offlineNote?.text, card?.promiseChecks.map((x) => x?.state)], ["передзвонила з мобільного о 10:20", ["kept_offline"]], "🔴 картка показує «немає дзвінка» поруч із позначкою");
   await setCallNote(c.db, "of1", "offline", "", { userId: 1, name: "Олена Т1" }, new Date("2026-09-26T09:00:00Z"));
   assert.equal(await state(), "broken", "🔴 зняту позначку не прибрано — стан застряг у «виконано»");
+});
+
+/**
+ * #867 — НАЛАШТУВАННЯ «ПЕРШОГО ДОТИКУ» · ЯДРО І ПРОВОДКА (рішення власника 05.10.2026). Термін зараховується до
+ * `max(обіцяне, кінець + мінімум) + допуск`; мінімум — лише для обіцянок у хвилинах; межа включно з обох боків;
+ * нулі = поточна поведінка. Ввід адміна — лише цілі в межах і всі чотири поля; вікно повторного — у ТІЙ САМІЙ умові
+ * для джоби й екрана; роут налаштувань — лише адмін за ключем ролі, першим оператором.
+ * 🧨 Червоніє, якщо допуск застосувати двічі, мінімум зачепить «завтра», `<=` стане `<`, нулі щось зрушать, вікно
+ * піде лише в екран чи лише в джобу, або змінювати налаштування зможе CEO.
+ */
+test("#867 НАЛАШТУВАННЯ ПЕРШОГО ДОТИКУ · ЯДРО: мінімум і допуск з обох боків межі, нулі = як було, ввід суворий, вікно — одна умова", async () => {
+  const { countingDeadline, promiseState } = await import("./callAiPromise.js");
+  const end = new Date("2026-10-02T10:00:00Z"), at = (m: number) => new Date(end.getTime() + m * 60_000);
+  const on = { callbackGraceMin: 10, callbackMinDeadlineMin: 20 }, off = { callbackGraceMin: 0, callbackMinDeadlineMin: 0 };
+  assert.equal(countingDeadline(at(2), "minutes", end, on).toISOString(), at(30).toISOString(), "🔴 «дві хвилини» не стали 20 + 10 хв допуску");
+  assert.equal(countingDeadline(at(20), "default_minutes", end, on).toISOString(), at(30).toISOString(), "🔴 допуск застосовано двічі або не застосовано");
+  assert.equal(countingDeadline(at(45), "minutes", end, on).toISOString(), at(55).toISOString(), "🔴 мінімум укоротив довшу обіцянку");
+  const eod = new Date("2026-10-03T20:59:59Z");
+  assert.equal(countingDeadline(eod, "day", end, on).toISOString(), new Date(eod.getTime() + 10 * 60_000).toISOString(), "🔴 «завтра» — мінімум чи допуск не так");
+  for (const b of ["minutes", "default_minutes", "day", "conditional_next_workday"] as const)
+    assert.equal(countingDeadline(at(2), b, end, off).toISOString(), at(2).toISOString(), `🔴 нулі зсунули термін (${b}) — викат змінив би цифри`);
+  const call = (m: number) => [{ at: at(m), billsec: 30, callType: "out", managerId: 7 }];
+  const st = (m: number) => promiseState({ channel: "call" }, end, countingDeadline(at(2), "minutes", end, on), call(m), at(120), 7);
+  assert.deepEqual([st(30), st(31)], ["kept_talk", "late"], "🔴 межа зарахування не включна або зсунута");
+
+  const { parseTunables, CURRENT_BEHAVIOUR } = await import("./firstTouchTunables.js");
+  assert.deepEqual(CURRENT_BEHAVIOUR, { repeatWindowDays: null, callbackGraceMin: 0, callbackMinDeadlineMin: 0, bannerTone: "neutral" }, "🔴 старт ≠ поточна поведінка");
+  const ok = { repeatWindowDays: 30, callbackGraceMin: 10, callbackMinDeadlineMin: 20, bannerTone: "alert" };
+  assert.deepEqual(parseTunables(ok), { ok: true, value: ok });
+  assert.equal(parseTunables({ ...ok, repeatWindowDays: null }).ok, true, "дзеркало: «без обмеження» — законне значення");
+  for (const bad of [{ repeatWindowDays: 0 }, { repeatWindowDays: 366 }, { callbackGraceMin: 121 }, { callbackGraceMin: -1 }, { callbackGraceMin: "10" },
+    { callbackMinDeadlineMin: 2.5 }, { bannerTone: "red" }, { bannerTone: undefined }])
+    assert.equal(parseTunables({ ...ok, ...bad }).ok, false, `🔴 прийнято неприпустиме: ${JSON.stringify(bad)}`);
+
+  const { firstTouchExclusionSql } = await import("./callAiTick.js");
+  assert.doesNotMatch(firstTouchExclusionSql("ft", "p", null), /interval/, "🔴 «без обмеження» обмежує");
+  assert.match(firstTouchExclusionSql("ft", "p", 30), /e\.calldate >= ft\.calldate - interval '30 days'/, "🔴 вікно не включне або не те");
+  const tick = SRC("core/callAiTick.ts"), scr = SRC("core/callAiScreen.ts");
+  assert.match(tick, /firstTouchExclusionSql\("ft", "rcx\.client_phone", \(await loadTunables\(db\)\)\.repeatWindowDays\)/, "🔴 джоба не бере вікно з налаштувань");
+  assert.match(scr, /firstTouchExclusionSql\("ft", "rcx\.client_phone", tun\.repeatWindowDays\)/, "🔴 екран не бере вікно з налаштувань — розійдеться з джобою");
+  assert.match(scr, /const until = countingDeadline\(deadline, basis, end, t\);[\s\S]{0,200}promiseState\(mp, end, until,/, "🔴 стан рахується не до терміну зарахування");
+
+  const set = SRC("routes/settings.ts");
+  for (const m of ["get", "put"]) {
+    const at0 = set.indexOf(`settingsRouter.${m}("/first-touch"`); assert.ok(at0 > 0, `🔴 немає ${m} /first-touch`);
+    assert.match(set.slice(at0, at0 + 300), /async \(req, res\) => \{\s*if \(req\.auth!\.roleKey !== "admin"\) \{ res\.status\(403\)/, `🔴 ${m} /first-touch — право не першим або не за ключем ролі`);
+  }
+  assert.match(set, /const parsed = parseTunables\(req\.body\);\s*if \(!parsed\.ok\) \{ res\.status\(400\)[\s\S]{0,300}saveTunables\(/, "🔴 збереження без перевірки вводу");
+});
+
+/**
+ * #868 — НАЛАШТУВАННЯ «ПЕРШОГО ДОТИКУ» · ЖИВА СХЕМА. Порожній журнал = поточна поведінка; чинне — останній рядок;
+ * вікно 30 днів: попередня розмова рівно 30 днів тому — повторна, 30 днів і хвилина — ні (з обох боків межі);
+ * допуск переводить «пізно» у «вчасно» і в списку, і в картці, де видно обидва терміни. CHECK тримає межі в базі.
+ * 🧨 Червоніє, якщо читати не останній рядок, межа вікна зсунеться, допуск піде лише в список чи картку.
+ */
+test("#868 НАЛАШТУВАННЯ ПЕРШОГО ДОТИКУ · ЖИВА СХЕМА: вікно з обох боків межі, допуск у списку й картці, останній рядок чинний", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const { aiCallsList, aiCallCard } = await import("./callAiScreen.js");
+  const { loadTunables, saveTunables, CURRENT_BEHAVIOUR } = await import("./firstTouchTunables.js");
+  const by = { userId: 1, name: "Адмін А" };
+  const put = (o: Record<string, unknown>) => saveTunables(c.db, { ...CURRENT_BEHAVIOUR, ...o }, by, new Date());
+  assert.deepEqual(await loadTunables(c.db), CURRENT_BEHAVIOUR, "🔴 порожній журнал ≠ поточна поведінка");
+  await assert.rejects(c.raw.query("INSERT INTO first_touch_settings_log (callback_grace_min, callback_min_deadline_min, banner_tone) VALUES (500, 0, 'neutral')"), /check/i, "🔴 CHECK меж зник");
+
+  const deal = (id: number, key: string) => c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel,manager_id)
+    VALUES ($1,$2,8921932,1,'2026-09-27 09:00:00+03',$3,'ad',9011)`, [id, `D${String(id)}`, key]);
+  const call = (u: string, at: string, sec: number, phone: string) => c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
+    VALUES ($1,$2,'out','ANSWERED',$3,$4,9011,$5,'https://rec/x')`, [u, at, sec, sec + 5, phone]);
+  await deal(8840, "0508800040"); await call("w30", "2026-09-27 10:00:00+03", 60, "380508800040"); await call("w30p", "2026-08-28 10:00:00+03", 40, "380508800040");
+  await deal(8841, "0508800041"); await call("w31", "2026-09-27 10:00:00+03", 60, "380508800041"); await call("w31p", "2026-08-28 09:59:00+03", 40, "380508800041");
+  const ids = async () => (await aiCallsList(c.db, FAKE_AD, "2026-09-27", "2026-09-27", NOW, {})).rows.map((r) => r.uniqueid).filter((u) => u === "w30" || u === "w31").sort();
+  assert.deepEqual(await ids(), [], "передумова: без обмеження обидві — повторні");
+  await put({ repeatWindowDays: 30 });
+  assert.deepEqual(await ids(), ["w31"], "🔴 межа вікна: рівно 30 днів має лишитись повторною, 30 днів і хвилина — повернутись");
+
+  await deal(8842, "0508800042"); await call("g1", "2026-09-27 10:00:00+03", 60, "380508800042");
+  const tid = (await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
+    VALUES ('g1','elevenlabs','scribe_v2','done','[{"channel":1,"start":0,"end":2,"text":"передзвоню за дві хвилини","lang":"ukr"}]'::jsonb) RETURNING id`)).rows[0].id;
+  const res = { ...RESULT, objections: [], promises: [{ who: "manager", what: "передзвонити", deadline_text: "за дві хвилини", quote: "q", quote_found: true,
+    channel: "call", deadline_kind: "minutes", deadline_minutes: 2, deadline_date: "", conditional: false }] };
+  await c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result) VALUES ($1,'google','gemini-3.8-flash','first-touch-v2','done',$2::jsonb)`, [tid, JSON.stringify(res)]);
+  await call("g1b", "2026-09-27 10:25:00+03", 30, "380508800042");   // кінець розмови 10:01, обіцяно до 10:03, передзвонив о 10:25
+  const st = async () => (await aiCallsList(c.db, FAKE_AD, "2026-09-27", "2026-09-27", NOW, {})).rows.find((r) => r.uniqueid === "g1")?.promiseState;
+  await put({});
+  assert.equal(await st(), "late", "передумова: без допуску — «пізно»");
+  await put({ callbackGraceMin: 10, callbackMinDeadlineMin: 20 });
+  assert.equal(await st(), "kept_talk", "🔴 допуск і мінімум не дійшли до списку");
+  const chk = (await aiCallCard(c.db, "g1", true, {}))?.promiseChecks[0];
+  assert.deepEqual([chk?.state, chk?.deadline, chk?.countUntil], ["kept_talk", "2026-09-27T07:03:00.000Z", "2026-09-27T07:31:00.000Z"],
+    "🔴 картка не показує обидва терміни або рахує інакше, ніж список");
+  await put({});
+  assert.deepEqual(await loadTunables(c.db), CURRENT_BEHAVIOUR, "🔴 чинним узято не останній рядок журналу");
+  assert.equal(await st(), "late", "дзеркало: повернули нулі — знову «пізно»");
 });

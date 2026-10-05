@@ -8,6 +8,7 @@ import {
   fetchTeamOverrides, setTeamOverride, setTeamMoveDate, createDashboardTeam, type TeamOverridesPayload } from "../../../api";
 import { NAV_GROUPS } from "../../../components/Layout";
 import { todayKyiv } from "../periodRules";
+import { FirstTouchSettingsCard } from "./FirstTouchSettingsCard";
 
 // Усі вкладки (ключ+назва) — беремо з реальної навігації, щоб screen_access-редактор
 // точно збігався з тим, що гейтить сервер.
@@ -83,8 +84,10 @@ function Toggle({ on, disabled, onClick }: { on: boolean; disabled?: boolean; on
   );
 }
 
-export default function SettingsSection({ role, teams, syncStatus, syncing, onManualSync }: {
+export default function SettingsSection({ role, roleKey, teams, syncStatus, syncing, onManualSync }: {
   role?: string;
+  /** Ключ ролі (не сумісна `role`: у CEO й опдира вона теж «admin»). Для блоків «лише адмін». */
+  roleKey?: string;
   teams: Team[];
   syncStatus: SyncStatus | null;
   syncing: boolean;
@@ -115,6 +118,7 @@ export default function SettingsSection({ role, teams, syncStatus, syncing, onMa
       </div>
 
       {sub === "Загальні" && <GeneralTab syncStatus={syncStatus} syncing={syncing} onManualSync={onManualSync} canSync={role === "admin" || role === "team_lead"} />}
+      {sub === "Загальні" && roleKey === "admin" && <FirstTouchSettingsCard />}
       {sub === "Користувачі" && <UsersTab teams={teams} isAdminUx={isAdminUx} />}
       {sub === "Команди" && <TeamsTab isAdminUx={isAdminUx} />}
       {sub === "Ролі та доступи" && <RolesTab />}

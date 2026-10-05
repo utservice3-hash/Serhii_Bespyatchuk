@@ -406,7 +406,7 @@ export interface AiCallCardResp {
   result: AiAnalysis | null; turns: AiTurn[] | null; transcriptHidden: boolean;
   managerChannel: number | null; durationSec: number | null; nextOutboundAt: string | null;
   /** Термін і стан кожної обіцянки — у порядку `result.promises`; обіцянки клієнта → `null`. */
-  promiseChecks: ({ deadline: string; basis: string; state: PromiseStateT } | null)[];
+  promiseChecks: ({ deadline: string; countUntil: string; basis: string; state: PromiseStateT } | null)[];
   callsAfter: { at: string; billsec: number; direction: "in" | "out"; managerName: string | null; byPromiser: boolean }[];
   /** Журнал ручних змін типу (від найновішої) і чи може ЦЕЙ користувач змінювати тип. */
   typeHistory: { isCargo: boolean; byName: string | null; at: string }[];
@@ -439,9 +439,27 @@ export interface AiPoolRowT {
 }
 export interface AiTeamReportResp {
   period: { from: string; to: string }; truncated: boolean;
+  /** Колір блоку «дзвінка в телефонії немає» — з «Налаштувань» (адмін). */
+  bannerTone: "neutral" | "alert";
   managers: AiManagerLineT[]; total: AiManagerLineT;
   banner: { total: number; byManager: { managerId: number | null; managerName: string; count: number }[] };
   rows: AiPoolRowT[];
+}
+/** 🎛 Налаштування «Першого дотику» (лише адмін): вікно повторного, допуск і мінімум передзвону, колір блоку. */
+export interface FirstTouchTunablesT { repeatWindowDays: number | null; callbackGraceMin: number; callbackMinDeadlineMin: number; bannerTone: "neutral" | "alert" }
+export interface FirstTouchSettingsResp {
+  current: FirstTouchTunablesT;
+  recommended: { repeatWindowDays: number; callbackGraceMin: number; callbackMinDeadlineMin: number };
+  bounds: Record<"repeatWindowDays" | "callbackGraceMin" | "callbackMinDeadlineMin", { min: number; max: number }>;
+  history: (FirstTouchTunablesT & { setByName: string | null; setAt: string })[];
+}
+export async function fetchFirstTouchSettings(): Promise<FirstTouchSettingsResp> {
+  const { data } = await api.get<FirstTouchSettingsResp>("/settings/first-touch");
+  return data;
+}
+export async function saveFirstTouchSettings(t: FirstTouchTunablesT): Promise<Pick<FirstTouchSettingsResp, "current" | "history">> {
+  const { data } = await api.put<Pick<FirstTouchSettingsResp, "current" | "history">>("/settings/first-touch", t);
+  return data;
 }
 export async function fetchAiTeamReport(params: { from: string; to: string; teamId?: number; managerId?: number }): Promise<AiTeamReportResp> {
   const { data } = await api.get<AiTeamReportResp>("/dashboard/ai-calls/team-report", { params });

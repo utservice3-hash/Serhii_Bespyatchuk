@@ -17,6 +17,7 @@ import { parseKey } from "../core/secretBox.js";
 import { storeDashboardPassword } from "../core/teamVault.js";
 import { recordTeamMove, refreshTeamMoves, redateLastTeamMove } from "../core/teamAt.js";
 import type { Db as SecretsDb } from "../core/secrets.js";
+import { loadTunables, parseTunables, saveTunables, tunablesHistory, RECOMMENDED, TUNABLE_BOUNDS } from "../core/firstTouchTunables.js";
 
 export const settingsRouter = Router();
 settingsRouter.use(requireAuth);
@@ -198,6 +199,25 @@ settingsRouter.put("/", async (req, res) => {
     );
   }
   res.json({ settings: next });
+});
+
+/**
+ * 🎛 «ПЕРШИЙ ДОТИК» — вікно повторного дзвінка, допуск і мінімальний дедлайн передзвону, колір блоку (05.10.2026).
+ * Лише адмін (`roleKey`, не `admin_scope`: CEO й опдир не змінюють — рішення власника «тільки для адміна»).
+ * Окремий журнал, а не `app_settings`: `PUT /` переписує весь обʼєкт і мовчки стер би ці поля.
+ */
+settingsRouter.get("/first-touch", async (req, res) => {
+  if (req.auth!.roleKey !== "admin") { res.status(403).json({ error: "Налаштування «Першого дотику» — лише для адміністратора" }); return; }
+  res.json({ current: await loadTunables(pool), recommended: RECOMMENDED, bounds: TUNABLE_BOUNDS, history: await tunablesHistory(pool) });
+});
+
+settingsRouter.put("/first-touch", async (req, res) => {
+  if (req.auth!.roleKey !== "admin") { res.status(403).json({ error: "Налаштування «Першого дотику» — лише для адміністратора" }); return; }
+  const parsed = parseTunables(req.body);
+  if (!parsed.ok) { res.status(400).json({ error: parsed.error }); return; }
+  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [req.auth!.userId])).rows[0]?.name ?? req.auth!.email ?? null;
+  await saveTunables(pool, parsed.value, { userId: req.auth!.userId ?? null, name: who }, new Date());
+  res.json({ current: await loadTunables(pool), history: await tunablesHistory(pool) });
 });
 
 // --- User & role management (право manage_users) ---

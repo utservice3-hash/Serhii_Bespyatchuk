@@ -71,6 +71,7 @@ import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
 import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType, setCallNote, canWriteNote, fetchCallRecording } from "../core/callAiScreen.js";
 import { teamReport, isAnalysed, noPrice, noPriceNoComment, hasAgreement } from "../core/firstTouchTeamReport.js";
+import { loadTunables } from "../core/firstTouchTunables.js";
 
 import { canEditType } from "../core/callAiType.js";
 import { CARRIER_LISTEN_ROLES, carrierCallCard, carrierCallsList, carrierCallsMeta } from "../core/carrierCallScreen.js";
@@ -10721,8 +10722,9 @@ dashboardRouter.get("/ai-calls/team-report", async (req, res) => {
   const { rows, truncated } = await aiCallsList(pool, { predicate: metrics.adDealSql, adSources }, from, to, new Date(), scope);
   const report = teamReport(rows);
   const inReport = rows.filter((r) => r.inReport);
+  const { bannerTone } = await loadTunables(pool);
   res.json({
-    period: { from, to }, truncated,
+    period: { from, to }, truncated, bannerTone,
     managers: report.managers, total: report.total, banner: report.banner,
     // Явний перелік полів (#17e2).
     rows: inReport.map((r) => ({

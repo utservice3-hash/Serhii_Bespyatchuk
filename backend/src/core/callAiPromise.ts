@@ -99,6 +99,19 @@ export function promiseDeadline(p: Pick<ModelPromise, "deadline_kind" | "deadlin
 }
 
 /**
+ * 🎛 ДО ЯКОЇ МИТІ ПЕРЕДЗВІН ЗАРАХОВУЄТЬСЯ (05.10.2026). Обіцяний термін не змінюється — його показуємо як є; а
+ * зараховуємо до `max(обіцяне, кінець розмови + мінімальний дедлайн) + допуск`. Мінімум — лише для обіцянок у
+ * хвилинах (названих чи «20 хв за замовчуванням»): «сьогодні», «завтра» й умовна і так тягнуться до кінця дня.
+ * Нулі = поточна поведінка: зараховується рівно до обіцяного.
+ */
+export function countingDeadline(deadline: Date, basis: DeadlineBasis, callEnd: Date,
+  t: { callbackGraceMin: number; callbackMinDeadlineMin: number }): Date {
+  const minute = basis === "minutes" || basis === "default_minutes";
+  const floor = minute ? callEnd.getTime() + t.callbackMinDeadlineMin * 60_000 : -Infinity;
+  return new Date(Math.max(deadline.getTime(), floor) + t.callbackGraceMin * 60_000);
+}
+
+/**
  * Стан однієї обіцянки. Порядок важить: месенджер не перевіряється взагалі; вихідний ТОГО, ХТО ОБІЦЯВ, до
  * терміну — виконано; клієнт подзвонив сам — окремий стан, а не «передзвонив»; його ж вихідний після терміну —
  * «запізнився»; далі — чекає строку або не передзвонив.

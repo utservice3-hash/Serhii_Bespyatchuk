@@ -1174,6 +1174,7 @@ export function Dashboard() {
       {section === "settings" && (
         <SettingsSection
           role={auth?.role}
+          roleKey={auth?.roleKey}
           teams={teams}
           syncStatus={syncStatus}
           syncing={syncing}

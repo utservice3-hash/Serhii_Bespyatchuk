@@ -79,7 +79,7 @@ function Analysis({ c }: { c: AiCallCardResp }) {
                     {chk && (
                       <span style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 3 }}>
                         <span title={PROMISE_UI[chk.state].hint}><Chip tone={PROMISE_UI[chk.state].tone}>{PROMISE_UI[chk.state].label}</Chip></span>
-                        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>термін {fmtFull(chk.deadline)} · {deadlineBasisLabel(chk.basis)}</span>
+                        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>обіцяв до {fmtFull(chk.deadline)} · {deadlineBasisLabel(chk.basis)}{chk.countUntil !== chk.deadline && <> · <b>зараховуємо до {fmtFull(chk.countUntil)}</b> (мінімальний дедлайн і допуск з «Налаштувань»)</>}</span>
                       </span>
                     )}
                     {p.who === "client" && <span style={{ fontSize: 12, color: "var(--text-muted)" }}> · обіцянка клієнта — не рахується</span>}
