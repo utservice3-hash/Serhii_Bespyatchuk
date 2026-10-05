@@ -292,7 +292,8 @@ bankRouter.get("/manual", requirePerm("view_cashflow"), async (req, res) => {
 });
 bankRouter.post("/manual", requirePerm("edit_finance"), async (req, res) => {
   try {
-    const out = await manualTx((db) => addManual(db, req.auth!.userId, req.body));
+    // Курс НБУ на дату запису (валюта Сейфу); у гривні — 1.
+    const out = await manualTx((db) => addManual(db, req.auth!.userId, req.body, (ccy, day) => getRate(ccy, new Date(`${day}T12:00:00Z`))));
     await writeAudit({ ...audit(req), action: "bank.manual.add", targetType: "bank_account", targetId: String(req.body?.accountId),
       targetLabel: null, details: { kind: req.body?.kind, date: req.body?.date, ids: out.ids } });
     res.status(201).json(out);

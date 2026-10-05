@@ -4,7 +4,7 @@
  * Разове перенесення (`importFinanceKpiHistory`) повторити не можна (409), а тиждень 28.09 і вересень на момент
  * перенесення були ПРОМІЖНИМИ. Цей інструмент дотягує фінал лише названих періодів, коли Тетяна закрила їх у таблиці
  * (фінал тижня зʼявляється в наступному блоці). Правила — у ядрі `importFmPeriods`, тримає #990: лише до старту
- * автоматики (`FM_AUTO_FROM`), лише незакриті, лише фінальні; період після запису закривається.
+ * автоматики (`FM_AUTO_FROM`), лише незакриті, лише фінальні; період НЕ закривається — місяць закриває Тетяна кнопкою.
  *
  * Файл — той самий JSON, що для разового перенесення (блоки вкладки «ФМ»). У репозиторій НЕ комітиться.
  *
@@ -29,7 +29,7 @@ async function main(): Promise<void> {
   try {
     await client.query("BEGIN");
     for (const p of await importFmPeriods(client as unknown as Db, null, data, targets)) {
-      console.log(`${p.kind} ${p.start}: змінено ${p.changed.length}, період закрито`);
+      console.log(`${p.kind} ${p.start}: змінено ${p.changed.length} (період лишається відкритим)`);
       for (const c of p.changed) console.log(`  · ${c}`);
     }
     await client.query(apply ? "COMMIT" : "ROLLBACK");

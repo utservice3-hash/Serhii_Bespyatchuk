@@ -51,6 +51,8 @@ export const FORBIDDEN_TABLES = [
   "hiring_candidates", "hiring_interviews", "hiring_events", "hiring_daily_manual",
   // 🧑‍💼 Прохід 1a: скриншоти переписки з кандидатами. Дзеркало — REVOKE у схемі. Тримає #526.
   "hiring_files",
+  // 💬 Фото до зворотного звʼязку (05.10.2026): скриншоти з чим завгодно з екрана. REVOKE у схемі. Тримає #496.
+  "feedback_files",
   "employee_secrets",
   "secret_reveal_codes",
   "vault_link_codes",

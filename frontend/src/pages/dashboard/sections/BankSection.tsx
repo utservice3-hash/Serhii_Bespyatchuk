@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchBankAccounts, downloadBankStatement, fetchBankIncoming, fetchBankOutgoing, saveBankAccount, fetchBankBalances, fetchBankRequisites, fetchBankCashflow,
   fetchBankHiddenPayees, addBankHiddenPayee, deleteBankHiddenPayee,
-  fetchBankManual, addBankManual, deleteBankManual, restoreBankManual, type BankManualRow,
+  fetchBankManual, addBankManual, deleteBankManual, restoreBankManual, fetchFinMonth, type BankManualRow,
   type BankAccount, type BankSummary, type BankTx, type BankHiddenPayee, type BankBalance, type BankRequisite, type CashflowMonth,
 } from "../../../api";
 import { getAuthPayload } from "../../../auth";
@@ -698,7 +698,14 @@ function SafeModal({ accounts, canEdit, onClose, onChanged }: { accounts: BankAc
   const [rows, setRows] = useState<BankManualRow[] | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [kind, setKind] = useState<"op" | "week">("op");
-  const [f, setF] = useState({ date: today, direction: "in" as "in" | "out", amount: "", inAmount: "", outAmount: "", purpose: "" });
+  const [f, setF] = useState({ date: today, direction: "in" as "in" | "out", amount: "", inAmount: "", outAmount: "", purpose: "",
+    currency: "UAH" as "UAH" | "USD" | "EUR", itemId: "" });
+  // Категорія — стаття «План/факт» (ті самі, що обирає Сергій); список — зі статей поточного місяця.
+  const [items, setItems] = useState<{ id: number; label: string }[]>([]);
+  useEffect(() => {
+    fetchFinMonth(`${today.slice(0, 7)}-01`).then((m) => setItems(m.tree.flatMap((r) => r.groups.flatMap((g) => g.items.filter((i) => i.active)
+      .map((i) => ({ id: i.id, label: `${g.name} · ${i.name}` })))))).catch(() => setItems([]));
+  }, [today]);
   const [y, m] = month.split("-").map(Number);
   const from = `${month}-01`, to = `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
   const load = useCallback(() => { if (acc) fetchBankManual(acc, from, to).then(setRows).catch((e) => { setRows([]); setMsg(err(e)); }); }, [acc, from, to]);
@@ -706,9 +713,8 @@ function SafeModal({ accounts, canEdit, onClose, onChanged }: { accounts: BankAc
   const done = (text: string) => { setMsg(text); load(); onChanged(); };
   const add = async () => {
     try {
-      await addBankManual(kind === "op"
-        ? { accountId: acc, kind, date: f.date, direction: f.direction, amount: f.amount, purpose: f.purpose }
-        : { accountId: acc, kind, date: f.date, inAmount: f.inAmount, outAmount: f.outAmount, purpose: f.purpose });
+      const common = { accountId: acc, kind, date: f.date, purpose: f.purpose, currency: f.currency, itemId: f.itemId ? Number(f.itemId) : null };
+      await addBankManual(kind === "op" ? { ...common, direction: f.direction, amount: f.amount } : { ...common, inAmount: f.inAmount, outAmount: f.outAmount });
       setF((x) => ({ ...x, amount: "", inAmount: "", outAmount: "", purpose: "" }));
       done("✓ Внесено");
     } catch (e) { setMsg(err(e)); }
@@ -717,7 +723,7 @@ function SafeModal({ accounts, canEdit, onClose, onChanged }: { accounts: BankAc
   const [lastDeleted, setLastDeleted] = useState<number | null>(null);
   const undo = async (id: number) => { try { await restoreBankManual(id); setLastDeleted(null); done("Повернуто"); } catch (e) { setMsg(err(e)); } };
   const live = (rows ?? []).filter((r) => !r.deleted);
-  const sum = (d: "in" | "out") => live.filter((r) => r.direction === d).reduce((a, r) => a + Math.abs(r.amount), 0);
+  const sum = (d: "in" | "out") => live.filter((r) => r.direction === d).reduce((a, r) => a + Math.abs(r.amount_uah), 0);
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: "40px 16px", overflowY: "auto" }}>
       <div onClick={(e) => e.stopPropagation()} className="chart-card" style={{ maxWidth: 760, width: "100%", position: "relative" }}>
@@ -727,7 +733,7 @@ function SafeModal({ accounts, canEdit, onClose, onChanged }: { accounts: BankAc
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
           {accounts.length > 1 && <select value={acc} onChange={(e) => setAcc(Number(e.target.value))} style={inp}>{accounts.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select>}
           <label style={{ fontSize: 13, color: MUTED }}>Місяць <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={inp} /></label>
-          <span style={{ fontSize: 13 }}>прийшло <b>{fmtMoney(sum("in"))}</b> · пішло <b>{fmtMoney(sum("out"))}</b></span>
+          <span style={{ fontSize: 13 }}>прийшло <b>{fmtMoney(sum("in"))} ₴</b> · пішло <b>{fmtMoney(sum("out"))} ₴</b> <span style={{ color: MUTED }}>(валюта — у гривні за курсом НБУ на дату)</span></span>
         </div>
         {canEdit && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end", padding: 10, border: "1px solid var(--border)", borderRadius: 10, marginBottom: 10 }}>
           <select aria-label="Вид запису" value={kind} onChange={(e) => setKind(e.target.value as "op" | "week")} style={inp}><option value="op">+ операція</option><option value="week">+ підсумок тижня</option></select>
@@ -739,18 +745,24 @@ function SafeModal({ accounts, canEdit, onClose, onChanged }: { accounts: BankAc
             <input aria-label="Прийшло за тиждень" inputMode="decimal" placeholder="прийшло ₴" value={f.inAmount} onChange={(e) => setF({ ...f, inAmount: e.target.value })} style={{ ...inp, width: 120 }} />
             <input aria-label="Пішло за тиждень" inputMode="decimal" placeholder="пішло ₴" value={f.outAmount} onChange={(e) => setF({ ...f, outAmount: e.target.value })} style={{ ...inp, width: 120 }} />
           </>}
+          <select aria-label="Валюта" value={f.currency} onChange={(e) => setF({ ...f, currency: e.target.value as "UAH" | "USD" | "EUR" })} style={inp}>
+            <option value="UAH">₴ UAH</option><option value="USD">$ USD</option><option value="EUR">€ EUR</option></select>
+          <select aria-label="Категорія" value={f.itemId} onChange={(e) => setF({ ...f, itemId: e.target.value })} style={{ ...inp, maxWidth: 220 }}>
+            <option value="">категорія (стаття)…</option>{items.map((i) => <option key={i.id} value={i.id}>{i.label}</option>)}</select>
           <input aria-label="Призначення" placeholder="призначення (необовʼязково)" value={f.purpose} onChange={(e) => setF({ ...f, purpose: e.target.value })} style={{ ...inp, flex: 1, minWidth: 160 }} />
           <button onClick={() => void add()} style={{ padding: "8px 14px", borderRadius: 10, border: "none", background: RED, color: "#fff", fontWeight: 700, cursor: "pointer" }}>Внести</button>
         </div>}
         {msg && <p style={{ fontSize: 13, margin: "0 0 8px" }}>{msg}{lastDeleted != null && <> · <button onClick={() => void undo(lastDeleted)} style={{ border: "none", background: "none", color: "#2f6fdb", cursor: "pointer", fontWeight: 700 }}>Повернути</button></>}</p>}
         {rows == null ? <p className="loading-text">Завантаження…</p> : rows.length === 0 ? <p className="loading-text">За цей місяць записів немає.</p> : (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead><tr style={{ color: MUTED, textAlign: "left" }}><th>Дата</th><th>Вид</th><th style={{ textAlign: "right" }}>Сума</th><th>Призначення</th><th>Хто</th><th /></tr></thead>
+            <thead><tr style={{ color: MUTED, textAlign: "left" }}><th>Дата</th><th>Вид</th><th style={{ textAlign: "right" }}>Сума</th><th>Категорія</th><th>Призначення</th><th>Хто</th><th /></tr></thead>
             <tbody>{rows.map((r) => (
               <tr key={r.id} style={{ borderTop: "1px solid var(--border)", opacity: r.deleted ? 0.45 : 1 }}>
                 <td>{r.day.slice(8, 10)}.{r.day.slice(5, 7)}</td>
                 <td>{r.kind === "week" ? "підсумок тижня" : "операція"}</td>
-                <td style={{ textAlign: "right", color: r.direction === "in" ? "#16a34a" : RED, fontWeight: 700 }}>{r.direction === "in" ? "+" : "−"}{fmtMoney(Math.abs(r.amount))}</td>
+                <td style={{ textAlign: "right", color: r.direction === "in" ? "#16a34a" : RED, fontWeight: 700 }}>{r.direction === "in" ? "+" : "−"}{fmtMoney(Math.abs(r.amount))} {r.currency === "UAH" ? "₴" : r.currency}
+                  {r.currency !== "UAH" && <div style={{ fontSize: 11, color: MUTED, fontWeight: 400 }}>≈ {fmtMoney(Math.abs(r.amount_uah))} ₴</div>}</td>
+                <td style={{ color: r.item ? undefined : MUTED }}>{r.item ?? "—"}</td>
                 <td>{r.purpose ?? (r.kind === "week" ? r.name : "—")}</td>
                 <td style={{ color: MUTED }}>{r.entered_by ?? "—"}</td>
                 <td style={{ textAlign: "right" }}>{canEdit && (r.deleted

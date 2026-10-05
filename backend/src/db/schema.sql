@@ -5467,3 +5467,44 @@ CREATE OR REPLACE VIEW ai_bank_transactions AS
    WHERE NOT a.finance_only AND t.deleted_at IS NULL;
 REVOKE ALL ON bank_transactions FROM ai_readonly;
 GRANT SELECT ON ai_bank_transactions TO ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💰 ФІНАНСИ, фікси після зустрічі з Тетяною 05.10.2026.
+--  · `manual_override` — число людини поверх «План/факт» в операційних (і місяць, і тиждень): головне, доки не очищене.
+--  · Сейф: запис у своїй валюті (UAH/USD/EUR, гривня — за курсом НБУ на дату) і з категорією — статтею «План/факт».
+--  · Особисті картки власника ФОП вимкнено (разово): Тетяна мала на увазі робочу картку Саші. Вимкнено, НЕ видалено —
+--    вмикаються в «Налаштуваннях виписки», операції лишаються.
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE fin_kpi_values ADD COLUMN IF NOT EXISTS manual_override BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS fin_item_id INTEGER REFERENCES fin_items(id);
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('cards-off-2026-10-05', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key)
+UPDATE bank_accounts SET is_active = false
+ WHERE bank = 'mono' AND finance_only AND mono_type IN ('black', 'white', 'madeInUkraine') AND EXISTS (SELECT 1 FROM step);
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💬 ЗВОРОТНИЙ ЗВʼЯЗОК: ФОТО І ВИДАЛЕННЯ ЧЕРЕЗ МІСЯЦЬ ПІСЛЯ ЗАКРИТТЯ (05.10.2026, рішення Романа).
+--  · Закрите = «Вирішено» (resolved) або «Відхилено» (rejected). «Схвалено» — ще в роботі.
+--  · `closed_at` ставить роут при переході в закритий стан і знімає при поверненні на розгляд.
+--  · 🔴 ВАРІАНТ А: уже закритим на момент викату лічильник стартує З ДНЯ ВИКАТУ, а не з `updated_at`.
+--    Інакше перша ж ніч видалила б 48 записів (заміряно 05.10: 47 «вирішено» + 1 «відхилено» старші 30 днів).
+--    Разовий крок через `fin_kpi_imports`-подібний ключ не потрібен: `closed_at IS NULL` сам робить UPDATE
+--    ідемпотентним — заповнений рядок він більше не чіпає.
+--  · Видалення БЕЗПОВОРОТНЕ (джоба `purgeFeedback`): рядок, фото в базі й байти на диску. Revert коду його не поверне.
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
+UPDATE feedback SET closed_at = now() WHERE closed_at IS NULL AND status IN ('resolved', 'rejected');
+CREATE INDEX IF NOT EXISTS idx_feedback_closed ON feedback(closed_at) WHERE closed_at IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS feedback_files (
+  id SERIAL PRIMARY KEY,
+  feedback_id INTEGER NOT NULL REFERENCES feedback(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,          -- відображувана назва
+  stored_name TEXT NOT NULL,   -- uuid-імʼя на диску (тека feedback-files поза публічним uploads/)
+  mime TEXT NOT NULL,          -- визначено за байтами, а не за словами клієнта
+  size_bytes BIGINT NOT NULL,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_files_fb ON feedback_files(feedback_id, created_at);
+-- 🔒 Скриншоти можуть містити що завгодно з екрана (клієнтів, суми). Дзеркало — FORBIDDEN_TABLES. Тримає #496.
+REVOKE ALL ON feedback_files FROM ai_readonly;

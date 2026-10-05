@@ -24,7 +24,7 @@ import { settingsRouter } from "./routes/settings.js";
 import { messagesRouter } from "./routes/messages.js";
 import { newsRouter } from "./routes/news.js";
 import { uploadsRouter, UPLOAD_DIR } from "./routes/uploads.js";
-import { feedbackRouter } from "./routes/feedback.js";
+import { feedbackRouter, FEEDBACK_FILES_DIR } from "./routes/feedback.js";
 import { aiWorkRouter } from "./routes/aiWork.js";
 import { reportsRouter } from "./routes/reports.js";
 import { ratesRouter } from "./routes/rates.js";
@@ -102,6 +102,7 @@ import { backupDb } from "./jobs/backupDb.js";
 import { declineSpamForms } from "./jobs/declineSpamForms.js";
 import { catchUpAiChat } from "./ai/respond.js";
 import { pool } from "./db/pool.js";
+import { purgeFeedback } from "./jobs/purgeFeedback.js";
 
 // dist/index.js → ../.. = корінь сайту (dashboard/), де лежить зібраний фронт
 // (index.html + assets/), який деплоїться поряд із backend/.
@@ -611,6 +612,12 @@ cron.schedule("30 7 * * *", () => {
 // (незамаплені статуси, дублі менеджерів, застій синку) і сигналить КВП задачею.
 cron.schedule("30 3 * * *", () => {
   void runJob("runDataReconciliation", () => runDataReconciliation());
+});
+
+// 🗑 Зворотний звʼязок: закриті («вирішено»/«відхилено») понад 30 днів — безповоротно, разом із фото.
+// 02:50 — поза :00/:30 і до нічного бекапу 03:00, тож у копію ночі видалене вже не потрапляє.
+cron.schedule("50 2 * * *", () => {
+  void runJob("purgeFeedback", () => purgeFeedback(pool, FEEDBACK_FILES_DIR));
 });
 
 // Прострочені дедлайни оплати дебіторки → задача менеджеру «отримати оплату».

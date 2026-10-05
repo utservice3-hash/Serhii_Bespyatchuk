@@ -1054,6 +1054,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: [] },
   { method: "PATCH", path: "/api/feedback/:id", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  // 📷 Фото до звернення (05.10.2026): межа — вкладка feedback + «своє або адмін-рівень» у роуті (чуже → 404).
+  { method: "POST", path: "/api/feedback/:id/files", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "GET", path: "/api/feedback/:id/files/:fileId", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+  { method: "DELETE", path: "/api/feedback/:id/files/:fileId", cls: "DELETE-ghost",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "GET", path: "/api/goals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "POST", path: "/api/goals", cls: "deny-only",
