@@ -331,6 +331,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   "ba_equipment_issues",
   "ba_claims", "ba_court_cases", "ba_files", "ba_events", "ba_equipment", "ba_ttn_checks", "ba_migrations",
+  "kommo_declined_forms",
 ];
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
@@ -1217,6 +1218,9 @@ export const MANIFEST_TESTS: string[] = [
   "#467c РОУТИ контактів за canSeeClient, рядок плану несе lastContact, матриця й схема узгоджені",
   "#703 спам-заявки: лише форми без справжнього телефону; SIP/пошта недоторкані",
   "#703b declineSpamForms: лише forms, через shouldDeclineUnsorted, стеля, крон під паузою, у моніторі",
+  "#1362 declinedRowOf: повна заявка → усі поля, гола → null-поля, без uid → null",
+  "#1362b declineSpamForms: заявка лягає в журнал ДО відхилення; не записалась — не відхиляється",
+  "#1362c kommo_declined_forms: REVOKE від ai_readonly після CREATE і GRANT, є у FORBIDDEN_TABLES",
   "#693 stepState/phoneState: межі вчора/сьогодні/завтра, без дати ≠ прострочено, done понад усе",
   "#693b РОУТИ кроку за canSeeClient, новий крок закриває старий, рядок і картка несуть крок і стан номера",
   "#692 фільтри реактивації: межі no_talk / step_overdue / vip_sleeping / debt_hold, менеджер, маржа, повернуто",

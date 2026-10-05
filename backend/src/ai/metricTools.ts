@@ -79,6 +79,8 @@ export const FORBIDDEN_TABLES = [
   "ba_equipment_issues",
   // 🗂 Бізнес-асистент цілком (01.10.2026, рішення Романа «5а»): борги, суди, документи, техніка, ТТН. Тримає #1240.
   "ba_claims", "ba_court_cases", "ba_files", "ba_events", "ba_equipment", "ba_ttn_checks", "ba_migrations",
+  // 🛡 Журнал відхилених спам-заявок (05.10.2026): імена, пошти, IP. REVOKE у схемі. Тримає #1362c.
+  "kommo_declined_forms",
 ];
 
 /**
