@@ -5,6 +5,11 @@ export interface HiddenPayee { pattern: string; match_type: "exact" | "glob" }
 export interface BankFilter {
   from?: string; to?: string; company?: string; account?: number; currency?: string; q?: string;
   cursor?: string; limit?: number; // keyset-пагінація стрічки (нескінченне гортання)
+  /**
+   * Ставить СЕРВЕР за правом `view_cashflow`, ніколи не запит: рахунки «лише фінанси» (особисті картки власника ФОП,
+   * Сейф — прохід 2г, 05.10.2026) видно лише так. Стрічка «Виписки» відкрита всім ролям, тому за замовчуванням — ні.
+   */
+  canSeePrivate?: boolean;
 }
 
 interface Cursor { b: string; id: number } // booked_at ISO + id останнього рядка сторінки
@@ -56,7 +61,9 @@ const stripCursorField = (r: Row): Row => { const { booked_iso: _drop, ...rest }
 // opts.period: застосувати вікно from/to (для ПІДСУМКІВ). Без нього — уся утримана історія (стрічка).
 // opts.cursor: keyset-межа «строго далі за курсором» ((booked_at,id) < курсор) — гортання без OFFSET.
 function whereClause(dir: "in" | "out", f: BankFilter, params: unknown[], opts: { period: boolean; cursor?: Cursor | null }): string {
-  const c = [`t.direction = '${dir}'`, `a.is_active = true`];
+  // Видалений ручний запис (Сейф) не існує ні для кого; рахунки «лише фінанси» — лише з правом (`canSeePrivate`).
+  const c = [`t.direction = '${dir}'`, `a.is_active = true`, `t.deleted_at IS NULL`];
+  if (!f.canSeePrivate) c.push(`NOT a.finance_only`);
   if (dir === "out") c.push(`NOT COALESCE(t.is_bank_fee, false)`); // комісії банку не показуємо у вихідних (ні в списку, ні в Σ)
   if (opts.period && f.from) { params.push(f.from); c.push(`(t.booked_at AT TIME ZONE 'Europe/Kyiv')::date >= $${params.length}`); }
   if (opts.period && f.to) { params.push(f.to); c.push(`(t.booked_at AT TIME ZONE 'Europe/Kyiv')::date <= $${params.length}`); }

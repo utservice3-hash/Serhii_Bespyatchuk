@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchBankAccounts, downloadBankStatement, fetchBankIncoming, fetchBankOutgoing, saveBankAccount, fetchBankBalances, fetchBankRequisites, fetchBankCashflow,
   fetchBankHiddenPayees, addBankHiddenPayee, deleteBankHiddenPayee,
+  fetchBankManual, addBankManual, deleteBankManual, restoreBankManual, type BankManualRow,
   type BankAccount, type BankSummary, type BankTx, type BankHiddenPayee, type BankBalance, type BankRequisite, type CashflowMonth,
 } from "../../../api";
 import { getAuthPayload } from "../../../auth";
@@ -87,7 +88,9 @@ export default function BankSection() {
   const canViewTotals = perms.includes("view_bank_totals"); // косметика; сервер гейтить summary
   const canViewCashflow = perms.includes("view_cashflow");
   const canExportStatement = perms.includes("export_bank_statement"); // косметика; сервер гейтить роут
+  const canEditFinance = perms.includes("edit_finance"); // запис у ручний рахунок «Сейф»; сервер гейтить роут
   const [exportOpen, setExportOpen] = useState(false);
+  const [safeOpen, setSafeOpen] = useState(false);
   const [balancesOpen, setBalancesOpen] = useState(false);
   const [cashflowOpen, setCashflowOpen] = useState(false);
   const [periodOpen, setPeriodOpen] = useState(false); // поповер календаря
@@ -169,7 +172,10 @@ export default function BankSection() {
   // ОДИН чип на компанію (усі валюти під нею). Назва — з UAH-рахунку, інакше label без « · CCY».
   const companies = useMemo(() => {
     const m = new Map<string, string>();
-    for (const a of active) {
+    // Назву компанії беремо з її банківського рахунку, не з «лише фінанси» (картка, Сейф) — інакше чип
+    // «ТОВ ЮТС» міг би назватись «Сейф». Компанія лише з такими рахунками все одно отримає чип.
+    for (const a of [...active].sort((x, y) => Number(!!x.finance_only) - Number(!!y.finance_only))) {
+      if (a.finance_only && m.has(a.company)) continue;
       const clean = a.label.replace(/\s*·\s*[A-Z]{3}$/, "");
       if (!m.has(a.company) || a.currency === "UAH") m.set(a.company, a.currency === "UAH" ? clean : (m.get(a.company) ?? clean));
     }
@@ -186,6 +192,7 @@ export default function BankSection() {
       </div>
       <p style={{ color: MUTED, fontSize: 13.5, lineHeight: 1.5, marginTop: 0, maxWidth: 1000 }}>
         Реальні дані з банківських API компаній (ТОВ ЮТС, ТОВ Автомув, ФОП Беспятчук). <b>Виписку бачать усі.</b> Вхідні — повністю для всіх.
+        Рахунки «лише фінанси» (картки й Сейф) бачать тільки адмін і фінансист.
         Вихідні теж для всіх, ОКРІМ отримувачів зі списку «прихованих» — їхні вихідні платежі бачить <b>лише адмін</b>. Джерело — банк (не CRM), оновлення ~15 хв.
       </p>
 
@@ -215,6 +222,9 @@ export default function BankSection() {
           {canExportStatement && (
             <button onClick={() => setExportOpen(true)} style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>⬇️ Виписка CSV</button>
           )}
+          {canViewCashflow && active.some((a) => a.bank === "manual") && (
+            <button onClick={() => setSafeOpen(true)} style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>🗄 Сейф</button>
+          )}
           {canViewCashflow && (
             <button onClick={() => setCashflowOpen(true)} style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid #2f6fdb", background: "rgba(47,111,219,0.08)", color: "#2f6fdb", fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>📊 Кешфлоу</button>
           )}
@@ -231,6 +241,7 @@ export default function BankSection() {
       {exportOpen && canExportStatement && <StatementExportModal onClose={() => setExportOpen(false)} accounts={accounts} from={range.from} to={range.to} canSeeHidden={canSeeHidden} />}
       {cashflowOpen && canViewCashflow && <CashflowModal onClose={() => setCashflowOpen(false)} onPickMonth={(ym) => { setRangeMonth(ym); setCashflowOpen(false); }} />}
       {requisitesOpen && <RequisitesModal onClose={() => setRequisitesOpen(false)} />}
+      {safeOpen && canViewCashflow && <SafeModal accounts={active.filter((a) => a.bank === "manual")} canEdit={canEditFinance} onClose={() => setSafeOpen(false)} onChanged={loadFirst} />}
 
       {/* Стрип підсумків — ЛИШЕ якщо сервер віддав summary (право view_bank_totals). Немає → картки нема. */}
       {summary && (
@@ -674,6 +685,81 @@ function Stat({ label, value, hint, big }: { label: string; value: string; hint:
     <div>
       <div style={{ fontSize: big ? 22 : 18, fontWeight: 800, color: big ? "#16a34a" : "var(--text)" }}>{value}</div>
       <div style={{ fontSize: 11.5, color: MUTED, display: "inline-flex", alignItems: "center", gap: 3 }}>{label} <InfoHint text={hint} /></div>
+    </div>
+  );
+}
+
+// ─────────────────────────── 🗄 Сейф — ручний рахунок (прохід 2г фінансів) ───────────────────────────
+// Записи — по операції АБО підсумком тижня; тиждень змішати не можна (сервер відмовить 409 і скаже чому).
+function SafeModal({ accounts, canEdit, onClose, onChanged }: { accounts: BankAccount[]; canEdit: boolean; onClose: () => void; onChanged: () => void }) {
+  const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+  const [acc, setAcc] = useState<number>(accounts[0]?.id ?? 0);
+  const [month, setMonth] = useState(today.slice(0, 7));
+  const [rows, setRows] = useState<BankManualRow[] | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [kind, setKind] = useState<"op" | "week">("op");
+  const [f, setF] = useState({ date: today, direction: "in" as "in" | "out", amount: "", inAmount: "", outAmount: "", purpose: "" });
+  const [y, m] = month.split("-").map(Number);
+  const from = `${month}-01`, to = `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
+  const load = useCallback(() => { if (acc) fetchBankManual(acc, from, to).then(setRows).catch((e) => { setRows([]); setMsg(err(e)); }); }, [acc, from, to]);
+  useEffect(() => { load(); }, [load]);
+  const done = (text: string) => { setMsg(text); load(); onChanged(); };
+  const add = async () => {
+    try {
+      await addBankManual(kind === "op"
+        ? { accountId: acc, kind, date: f.date, direction: f.direction, amount: f.amount, purpose: f.purpose }
+        : { accountId: acc, kind, date: f.date, inAmount: f.inAmount, outAmount: f.outAmount, purpose: f.purpose });
+      setF((x) => ({ ...x, amount: "", inAmount: "", outAmount: "", purpose: "" }));
+      done("✓ Внесено");
+    } catch (e) { setMsg(err(e)); }
+  };
+  const del = async (r: BankManualRow) => { try { await deleteBankManual(r.id); setLastDeleted(r.id); done("Видалено"); } catch (e) { setMsg(err(e)); } };
+  const [lastDeleted, setLastDeleted] = useState<number | null>(null);
+  const undo = async (id: number) => { try { await restoreBankManual(id); setLastDeleted(null); done("Повернуто"); } catch (e) { setMsg(err(e)); } };
+  const live = (rows ?? []).filter((r) => !r.deleted);
+  const sum = (d: "in" | "out") => live.filter((r) => r.direction === d).reduce((a, r) => a + Math.abs(r.amount), 0);
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: "40px 16px", overflowY: "auto" }}>
+      <div onClick={(e) => e.stopPropagation()} className="chart-card" style={{ maxWidth: 760, width: "100%", position: "relative" }}>
+        <button onClick={onClose} title="Закрити" style={{ position: "absolute", top: 10, right: 10, border: "1px solid var(--border)", background: "var(--card-bg)", borderRadius: 8, width: 34, height: 34, cursor: "pointer", fontSize: 18, color: MUTED }}>✕</button>
+        <h2 className="chart-title">🗄 Сейф · ручні записи</h2>
+        <p style={{ color: MUTED, fontSize: 13, marginTop: 0 }}>Вносьте <b>або кожну операцію, або підсумок тижня</b> — не обидва в одному тижні (інакше тиждень порахується двічі). Записи йдуть у «Виписку», кешфлоу і «Фінанси → Тиждень і місяць». Видно лише адміну й фінансисту.</p>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+          {accounts.length > 1 && <select value={acc} onChange={(e) => setAcc(Number(e.target.value))} style={inp}>{accounts.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select>}
+          <label style={{ fontSize: 13, color: MUTED }}>Місяць <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={inp} /></label>
+          <span style={{ fontSize: 13 }}>прийшло <b>{fmtMoney(sum("in"))}</b> · пішло <b>{fmtMoney(sum("out"))}</b></span>
+        </div>
+        {canEdit && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end", padding: 10, border: "1px solid var(--border)", borderRadius: 10, marginBottom: 10 }}>
+          <select aria-label="Вид запису" value={kind} onChange={(e) => setKind(e.target.value as "op" | "week")} style={inp}><option value="op">+ операція</option><option value="week">+ підсумок тижня</option></select>
+          <input aria-label={kind === "op" ? "Дата операції" : "Будь-який день тижня"} type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} style={inp} />
+          {kind === "op" ? <>
+            <select aria-label="Напрямок" value={f.direction} onChange={(e) => setF({ ...f, direction: e.target.value as "in" | "out" })} style={inp}><option value="in">прийшло</option><option value="out">пішло</option></select>
+            <input aria-label="Сума" inputMode="decimal" placeholder="сума ₴" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} style={{ ...inp, width: 120 }} />
+          </> : <>
+            <input aria-label="Прийшло за тиждень" inputMode="decimal" placeholder="прийшло ₴" value={f.inAmount} onChange={(e) => setF({ ...f, inAmount: e.target.value })} style={{ ...inp, width: 120 }} />
+            <input aria-label="Пішло за тиждень" inputMode="decimal" placeholder="пішло ₴" value={f.outAmount} onChange={(e) => setF({ ...f, outAmount: e.target.value })} style={{ ...inp, width: 120 }} />
+          </>}
+          <input aria-label="Призначення" placeholder="призначення (необовʼязково)" value={f.purpose} onChange={(e) => setF({ ...f, purpose: e.target.value })} style={{ ...inp, flex: 1, minWidth: 160 }} />
+          <button onClick={() => void add()} style={{ padding: "8px 14px", borderRadius: 10, border: "none", background: RED, color: "#fff", fontWeight: 700, cursor: "pointer" }}>Внести</button>
+        </div>}
+        {msg && <p style={{ fontSize: 13, margin: "0 0 8px" }}>{msg}{lastDeleted != null && <> · <button onClick={() => void undo(lastDeleted)} style={{ border: "none", background: "none", color: "#2f6fdb", cursor: "pointer", fontWeight: 700 }}>Повернути</button></>}</p>}
+        {rows == null ? <p className="loading-text">Завантаження…</p> : rows.length === 0 ? <p className="loading-text">За цей місяць записів немає.</p> : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead><tr style={{ color: MUTED, textAlign: "left" }}><th>Дата</th><th>Вид</th><th style={{ textAlign: "right" }}>Сума</th><th>Призначення</th><th>Хто</th><th /></tr></thead>
+            <tbody>{rows.map((r) => (
+              <tr key={r.id} style={{ borderTop: "1px solid var(--border)", opacity: r.deleted ? 0.45 : 1 }}>
+                <td>{r.day.slice(8, 10)}.{r.day.slice(5, 7)}</td>
+                <td>{r.kind === "week" ? "підсумок тижня" : "операція"}</td>
+                <td style={{ textAlign: "right", color: r.direction === "in" ? "#16a34a" : RED, fontWeight: 700 }}>{r.direction === "in" ? "+" : "−"}{fmtMoney(Math.abs(r.amount))}</td>
+                <td>{r.purpose ?? (r.kind === "week" ? r.name : "—")}</td>
+                <td style={{ color: MUTED }}>{r.entered_by ?? "—"}</td>
+                <td style={{ textAlign: "right" }}>{canEdit && (r.deleted
+                  ? <button onClick={() => void undo(r.id)} style={{ border: "none", background: "none", color: "#2f6fdb", cursor: "pointer" }}>Повернути</button>
+                  : <button aria-label={`Видалити запис ${r.day}`} onClick={() => void del(r)} style={{ border: "none", background: "none", color: RED, cursor: "pointer" }}>🗑</button>)}</td>
+              </tr>))}</tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }

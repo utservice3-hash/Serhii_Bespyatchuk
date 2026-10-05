@@ -1,7 +1,7 @@
 import { finDeliveredByLoadDate, finUnloadedTwoFilters } from "./money.js";
 import { receivablesTotal } from "./metrics.js";
 import { pool } from "../db/pool.js";
-import { periodStart, periodEnd, receivablesSnapshotFits, autoActive, opexMonth, receivablesFxAt, type RefValues } from "./financeKpi.js";
+import { periodStart, periodEnd, receivablesSnapshotFits, autoActive, opexMonth, receivablesFxAt, bankTotals, type RefValues } from "./financeKpi.js";
 import type { Db } from "./finance.js";
 
 /**
@@ -24,5 +24,8 @@ export async function fmRefsFor(kindArg: unknown, dateArg: unknown, opts: { forF
   if (kind === "month") Object.assign(refs, (await opexMonth(db, start)).refs);
   const fx = await receivablesFxAt(db, end, now);
   if (fx) refs.receivables_fx = fx.uah;
+  const b = await bankTotals(db, start, end);
+  refs.bank_in = b.in;
+  refs.bank_out = b.out;
   return refs;
 }
