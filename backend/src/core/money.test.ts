@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { needsDb, HAS_DB } from "../testMode.js";
+import { teamJoinSql } from "./teamAt.js";
 
 /**
  * ⚠️ Імпорти ЛІНИВІ (`await import` у тілі тесту). `db/pool.js` тягне `config.js`,
@@ -126,7 +127,10 @@ test("еталон РПК-Яцика серпень 2025: ядро 651 729 ₴ �
               AND (d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $2 AND $3), 0) AS neg,
             COALESCE(SUM(d.price), 0) AS entered
        FROM ent JOIN deals d ON d.kommo_id = ent.kommo_id
-       JOIN managers m ON m.id = d.manager_id JOIN teams t ON t.id = m.team_id
+       JOIN managers m ON m.id = d.manager_id
+       -- 🔀 Склад команди — на 31.08.2025 (команда на дату, як у ядрі з 05.10.2026), а не поточний: після
+       -- переходу Хомік «без команди» з 01.10 поточна привʼязка викидала її серпень-2025 (−78 тис.) лише тут.
+       JOIN teams t ON ${teamJoinSql("t", "m", "$3::date")}
       WHERE t.name = 'РПК - Яцика Дмитра' AND d.manager_id <> $4`,
     [[8921932, 155304], AUG.from, AUG.to, shId]
   );
