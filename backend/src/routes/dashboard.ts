@@ -10990,16 +10990,18 @@ dashboardRouter.get("/missed-calls", async (req, res) => {
   // Кламп — одне місце на всі роути екрана (`missedScopeFor`); підсумок команди
   // МЕНШИЙ за загальний, бо «без відповідального» не належить жодній команді.
   const scope = missedScopeFor(auth, req.query);
-  const [summary, byManager, teams] = await Promise.all([
+  const [summary, byManager, teams, automation] = await Promise.all([
     missedCalls.missedSummary(from, to, scope),
     missedCalls.missedByManager(from, to, scope),
     missedCalls.missedByTeam(from, to, scope),
+    // Контроль ТЗ 4373: ефект автозакриття за 7 днів — від сьогодні, незалежно від обраного періоду.
+    missedCalls.missedAutomation(kyivToday(), scope),
   ]);
   // `ownerlessInScope` — щоб фронт не малював тімліду «Без відповідального: 0»: у зріз команди
   // такі дзвінки не входять за побудовою, і нуль там був би неправдою (звірка 16.09.2026).
   res.json({
     period: { from, to }, summary, managers: byManager.rows, total: byManager.total,
-    teams, ownerlessInScope: ownerlessInScope(scope),
+    teams, ownerlessInScope: ownerlessInScope(scope), automation,
   });
 });
 

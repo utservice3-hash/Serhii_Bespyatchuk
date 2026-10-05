@@ -17,7 +17,7 @@
  * ⚠️ Уже відкрита сесія живе до кінця токена (до 12 год) — межа `loginEnabledFor`, не наша.
  * Тримають #620–#622.
  */
-import { parseDate, ImportError } from "./employeeImport.js";
+import { parseDate, ImportError, nameKey, shortKey } from "./employeeImport.js";
 import type { Db } from "./secrets.js";
 
 type MwsRow = { state: string; since: string; note: string | null; set_by: number | null; set_at: string } | null;
@@ -57,8 +57,40 @@ async function setMws(db: Db, managerId: number, state: "finishing" | "dismissed
     [managerId, state, note, actorId]);
 }
 
+/**
+ * ⚠️ ЗВІЛЬНЕННЯ, ЯКЕ ВАРТО ПЕРЕПИТАТИ (03.10.2026). 02.10 HR побачив у реєстрі Яцика двічі — «Дмитро Сергійович»
+ * (без прізвища, але ПРИВʼЯЗАНИЙ до менеджера Kommo й логіна) і «Яцик Дмитро Сергійович» (без привʼязки) — і
+ * звільнив «дубль», тобто справжній запис: тімліду закрило вхід і прибрало з плану. 01.10 так само з Дмитруком.
+ * Обидва в Kommo були активні. Тому крок 1 перепитує, коли:
+ *   • людина АКТИВНА в Kommo (звільнений у компанії зазвичай уже вимкнений там);
+ *   • поруч є НЕзвільнений запис, схожий на ту саму людину (повне ПІБ, що закінчується цим, або те саме
+ *     прізвище+імʼя, що в привʼязаного менеджера).
+ * Підтвердження — `confirmRisk: true` у тілі; без нього 409 із `needsConfirm`. Нічого не забороняє.
+ */
+export class DismissRiskError extends ImportError {
+  readonly needsConfirm = true;
+  constructor(message: string) { super(409, message); }
+}
+
+export async function dismissRisks(db: Db, e: { id: number; full_name: string }, managers: number[]): Promise<string[]> {
+  const out: string[] = [];
+  const mgrs = managers.length ? (await db.query<{ name: string; is_active: boolean }>(
+    `SELECT name, is_active FROM managers WHERE id = ANY($1)`, [managers])).rows : [];
+  for (const m of mgrs) if (m.is_active) out.push(`у Kommo «${m.name}» досі активний — звільнений у компанії зазвичай уже вимкнений там`);
+  const me = nameKey(e.full_name), linkedShort = new Set(mgrs.map((m) => shortKey(m.name)));
+  const others = (await db.query<{ id: number; full_name: string }>(
+    `SELECT id, full_name FROM employees WHERE id <> $1 AND status <> 'dismissed'`, [e.id])).rows;
+  for (const o of others) {
+    const k = nameKey(o.full_name);
+    if (k.endsWith(` ${me}`) || me.endsWith(` ${k}`) || linkedShort.has(shortKey(o.full_name))) {
+      out.push(`у реєстрі є ще запис «${o.full_name}» — схоже, це та сама людина; звільняєте саме «${e.full_name}»${managers.length ? ", привʼязаний до менеджера Kommo й входу" : ""}?`);
+    }
+  }
+  return out;
+}
+
 /** Крок 1: «Звільнити…» — останній робочий день і причина обовʼязкові. */
-export async function startDismissal(db: Db, actorId: number, id: number, body: { lastDay?: unknown; reason?: unknown }) {
+export async function startDismissal(db: Db, actorId: number, id: number, body: { lastDay?: unknown; reason?: unknown; confirmRisk?: unknown }) {
   const { e, managers, off } = await load(db, id);
   if (off || e.status !== "active") throw new ImportError(409, e.status === "finishing" || off ? "Звільнення вже розпочато" : "Людина вже звільнена");
   const lastDay = typeof body.lastDay === "string" ? parseDate(body.lastDay) : null;
@@ -66,6 +98,11 @@ export async function startDismissal(db: Db, actorId: number, id: number, body: 
   const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 300) : "";
   if (!reason) throw new ImportError(400, "Вкажіть причину звільнення");
   if (e.user_id != null && e.user_id === actorId) throw new ImportError(400, "Себе звільнити не можна — це робить інший керівник");
+  // Підтвердження — ПІСЛЯ перевірок полів: спершу людина виправляє помилки форми, потім відповідає на питання.
+  if (body.confirmRisk !== true) {
+    const risks = await dismissRisks(db, e, managers);
+    if (risks.length) throw new DismissRiskError(`Перевірте перед звільненням: ${risks.join("; ")}.`);
+  }
   const prev: Prev = { status: e.status, dismissed_at: e.dismissed_at, dismiss_reason: e.dismiss_reason, mws: {}, user: null };
   for (const m of managers) {
     const row = (await db.query<NonNullable<MwsRow>>(

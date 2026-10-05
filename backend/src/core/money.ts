@@ -5,7 +5,7 @@ import { pool } from "../db/pool.js";
 // до першого виклику (request-time), коли обидва модулі вже ініціалізовані.
 import { adDealSql } from "./metrics.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
-import { managerDealClass, type DealState, type ClientSuccess } from "./leadgenHandoffRules.js";
+import { managerDealClass, type DealState, type ClientSuccess, type PendDay } from "./leadgenHandoffRules.js";
 // 💰 Правила класу угоди менеджера з передачі — ОДИН обʼєкт у реєстрі корзин (там і 143
 // «Закрито і не реалізовано», у Кваліфікації — «Не цільові» / «Сміття»). `#683` звіряє його
 // поля з константами цього ядра; друга копія тут розійшлась би мовчки (ревʼю F3/F5).
@@ -1284,6 +1284,25 @@ export async function handoffDealStates(dealIds: readonly number[]): Promise<Map
       WHERE d.kommo_id = ANY($1::bigint[])`,
     [ids, HANDOFF_CLASS_RULES.fcPipelines, HANDOFF_CLASS_RULES.autoWent]
   );
+  // ⏳ Історія зони очікування по днях — для «Очікування» станом на кінець періоду (рішення власника 02.10.2026).
+  // Останній етап КОЖНОГО київського дня; клас — та сама чиста `managerDealClass` над тим самим реєстром, тож
+  // «в зоні очікування» в історії означає рівно те, що й зараз. `closed: false` — успіх у зону не входить.
+  const ev = await pool.query<{ kommo_id: string; day: string; pipeline_id: string; status_id: string }>(
+    `SELECT DISTINCT ON (s.kommo_id, (s.changed_at AT TIME ZONE 'Europe/Kyiv')::date)
+            s.kommo_id, to_char(s.changed_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS day, s.pipeline_id, s.status_id
+       FROM deal_stage_events s
+      WHERE s.kommo_id = ANY($1::bigint[])
+      ORDER BY s.kommo_id, (s.changed_at AT TIME ZONE 'Europe/Kyiv')::date, s.changed_at DESC`, [ids]);
+  const writtenOff = new Map(r.rows.map((x) => [Number(x.kommo_id), x.written_off]));
+  const pend = new Map<number, PendDay[]>();
+  for (const e of ev.rows) {
+    const id = Number(e.kommo_id);
+    const c = managerDealClass({ pipelineId: Number(e.pipeline_id), statusId: Number(e.status_id), closed: false,
+      writtenOff: writtenOff.get(id) === true }, HANDOFF_CLASS_RULES);
+    const xs = pend.get(id) ?? [];
+    xs.push({ day: e.day, pending: c === "paid" || c === "expect" });
+    pend.set(id, xs);
+  }
   for (const x of r.rows) {
     const pipelineId = Number(x.pipeline_id), statusId = Number(x.status_id);
     out.set(Number(x.kommo_id), {
@@ -1291,6 +1310,7 @@ export async function handoffDealStates(dealIds: readonly number[]): Promise<Map
       cls: managerDealClass({ pipelineId, statusId, closed: x.closed, writtenOff: x.written_off }, HANDOFF_CLASS_RULES),
       price: Math.round(Number(x.price ?? 0)),
       closedDay: x.closed_day, autoDay: x.auto_day,
+      pendDays: (pend.get(Number(x.kommo_id)) ?? []).sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0)),
     });
   }
   return out;

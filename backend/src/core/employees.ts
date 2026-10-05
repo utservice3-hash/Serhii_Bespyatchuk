@@ -13,15 +13,21 @@ import { DOC_COUNTS_SQL } from "./employeeDocs.js";
 const MAX_ROWS = 3000, MAX_COLS = 120;
 const NAME = `COALESCE(NULLIF(u.full_name, ''), m.name, u.email)`;
 
-type Annotated = { r: PlainRow; m: Match; duplicate: boolean; isNew: boolean };
+/** `adopt` — наявний запис без прізвища, у який цей рядок допише прізвище замість створити новий (`adoptionsFor`). */
+type Annotated = { r: PlainRow; m: Match; duplicate: boolean; isNew: boolean; adopt: Adoption | null };
+interface Adoption { id: number; fromKey: string; fromName: string }
 type Match = { userId: number | null; account: string | null; how: "email" | "name" | "linked" | "none" | "ambiguous" | "taken" };
 
 async function loadContext(db: Db) {
   const users = (await db.query<{ id: number; email: string; name: string }>(
     `SELECT u.id, lower(u.email) AS email, ${NAME} AS name FROM users u LEFT JOIN managers m ON m.id = u.manager_id
       WHERE COALESCE(u.role_override, u.role) <> 'candidate'`)).rows;
-  const existing = (await db.query<{ id: number; import_key: string; user_id: number | null }>(
-    `SELECT id, import_key, user_id FROM employees`)).rows;
+  const existing = (await db.query<{ id: number; import_key: string; user_id: number | null; full_name: string; linked: string[] }>(
+    // Імена, до яких запис привʼязаний (менеджер Kommo напряму або через акаунт, ім'я акаунта) — доказ для `adoptionsFor`.
+    `SELECT e.id, e.import_key, e.user_id, e.full_name,
+            array_remove(ARRAY[me.name, mu.name, NULLIF(u.full_name, '')], NULL) AS linked
+       FROM employees e LEFT JOIN users u ON u.id = e.user_id
+       LEFT JOIN managers me ON me.id = e.manager_id LEFT JOIN managers mu ON mu.id = u.manager_id`)).rows;
   return { users, existing };
 }
 
@@ -32,8 +38,8 @@ function matcher(ctx: Awaited<ReturnType<typeof loadContext>>) {
   const byKey = new Map(ctx.existing.map((e) => [e.import_key, e]));
   const linkedTo = new Map(ctx.existing.filter((e) => e.user_id != null).map((e) => [e.user_id!, e.import_key]));
   const users = new Map(ctx.users.map((u) => [u.id, u]));
-  return (r: PlainRow, claimed: Map<number, string>): Match => {
-    const own = byKey.get(r.key);
+  return (r: PlainRow, claimed: Map<number, string>, adoptKey?: string): Match => {
+    const own = byKey.get(r.key) ?? (adoptKey ? byKey.get(adoptKey) : undefined);
     if (own?.user_id != null) return { userId: own.user_id, account: users.get(own.user_id)?.name ?? null, how: "linked" };
     let u: { id: number; name: string } | undefined, how: Match["how"] = "none";
     const e = r.fields.email?.toLowerCase();
@@ -55,6 +61,47 @@ const MATCH_NOTE: Record<Match["how"], string> = {
   none: "акаунта в дашборді немає", ambiguous: "кілька акаунтів із таким ПІБ — привʼяжіть вручну",
   taken: "цей акаунт уже привʼязаний до іншої людини",
 };
+
+/**
+ * 🧩 ЗАПИС БЕЗ ПРІЗВИЩА = ТА САМА ЛЮДИНА (03.10.2026). У реєстрі були «Дмитро Сергійович» і «Василь Васильович»
+ * (створені з імені акаунта, прізвища в ньому не було) — привʼязані до менеджерів Kommo й логінів. Імпорт 28.09 шукав
+ * людину за ПОВНИМ ПІБ, не впізнав їх і створив поруч «Яцик Дмитро Сергійович» і «Дмитрук Василь Васильович». HR
+ * вирішив, що короткі записи — сміття, і звільнив їх, тобто справжніх тімлідів.
+ *
+ * Рядок «Прізвище Імʼя По-батькові», для якого в реєстрі ще немає повного запису, ДОПИСУЄ прізвище в наявний запис
+ * «Імʼя По-батькові», якщо це однозначно:
+ *   • ДОКАЗ: короткий запис привʼязаний до менеджера/акаунта з тим самим прізвищем+імʼям, що в рядку;
+ *   • або БЕЗ привʼязки — лише коли збіг єдиний (правило 2): жодного іншого рядка файлу й повного запису реєстру
+ *     з тим самим «імʼя по батькові» (інакше «Дмитро Сергійович» міг би бути й Шморгуном).
+ * Інакше — новий запис, як і було.
+ */
+export function adoptionsFor(
+  rows: { key: string; short: string }[],
+  existing: { id: number; import_key: string; full_name: string; linked: string[] }[],
+): Map<string, Adoption> {
+  const out = new Map<string, Adoption>();
+  const have = new Set(existing.map((e) => e.import_key));
+  const tailOf = (k: string): string | null => { const w = k.split(" "); return w.length >= 3 ? w.slice(1).join(" ") : null; };
+  const fileTails = new Map<string, number>();
+  for (const r of new Map(rows.map((r) => [r.key, r])).values()) { const t = tailOf(r.key); if (t) fileTails.set(t, (fileTails.get(t) ?? 0) + 1); }
+  for (const r of rows) {
+    if (have.has(r.key) || out.has(r.key)) continue;
+    const tail = tailOf(r.key);
+    if (!tail) continue;
+    const short = existing.filter((e) => e.import_key === tail);
+    if (short.length !== 1) continue;
+    const s = short[0];
+    const proven = s.linked.some((n) => shortKey(n) === r.short);
+    const unique = !s.linked.length && (fileTails.get(tail) ?? 0) === 1
+      && !existing.some((e) => e.id !== s.id && e.import_key.endsWith(` ${tail}`));
+    if (proven || unique) out.set(r.key, { id: s.id, fromKey: s.import_key, fromName: s.full_name });
+  }
+  // Один короткий запис — не більше одному рядку.
+  const byId = new Map<number, string[]>();
+  for (const [k, a] of out) byId.set(a.id, [...(byId.get(a.id) ?? []), k]);
+  for (const ks of byId.values()) if (ks.length > 1) for (const k of ks) out.delete(k);
+  return out;
+}
 
 /** Спільний розрахунок для прев'ю й імпорту. */
 async function plan(db: Db, csv: unknown, mapping: unknown, headerRowIn?: unknown) {
@@ -78,7 +125,8 @@ async function plan(db: Db, csv: unknown, mapping: unknown, headerRowIn?: unknow
   let mappingError: string | null = null;
   try { validateMapping(headers, chosen); } catch (e) { if (e instanceof ImportError) mappingError = e.message; else throw e; }
   if (mappingError) return { columns, mappingError, rows: [] as Annotated[], skipped: 0, ...headerInfo };
-  const match = matcher(await loadContext(db));
+  const ctx = await loadContext(db);
+  const match = matcher(ctx);
   const built = buildRows(table, chosen, headerRow);
   const skipped = body.filter((r) => r.some((c) => c.trim() !== "")).length - built.length;
   const seenKeys = new Set<string>(), claimed = new Map<number, string>();
@@ -101,12 +149,14 @@ async function plan(db: Db, csv: unknown, mapping: unknown, headerRowIn?: unknow
     }
     a.problems.push(...b.problems);
   }
+  const adoptions = adoptionsFor(built, ctx.existing);
   function annotate(r: PlainRow): Annotated {
     const duplicate = seenKeys.has(r.key); seenKeys.add(r.key);
     if (duplicate) mergeInto(firstOf.get(r.key)!, r); else firstOf.set(r.key, r);
-    const m = duplicate ? { userId: null, account: null, how: "none" as const } : match(r, claimed);
+    const adopt = duplicate ? null : adoptions.get(r.key) ?? null;
+    const m = duplicate ? { userId: null, account: null, how: "none" as const } : match(r, claimed, adopt?.fromKey);
     if (m.userId != null && !duplicate) claimed.set(m.userId, r.key);
-    return { r, m, duplicate, isNew: !existingKeys.has(r.key) };
+    return { r, m, duplicate, isNew: !existingKeys.has(r.key) && !adopt, adopt };
   }
   return { columns, mappingError, rows: built.map(annotate), skipped, ...headerInfo };
 }
@@ -114,10 +164,12 @@ async function plan(db: Db, csv: unknown, mapping: unknown, headerRowIn?: unknow
 /** Прев'ю: колонки зі здогадом, люди із зіставленням. Значень секретів тут немає. */
 export async function previewImport(db: Db, csv: unknown, mapping: unknown, headerRow?: unknown) {
   const p = await plan(db, csv, mapping, headerRow);
-  const rows = p.rows.map(({ r, m, duplicate, isNew }) => ({
+  const rows = p.rows.map(({ r, m, duplicate, isNew, adopt }) => ({
     line: r.line, name: r.full_name, position: r.fields.position ?? null, team: r.fields.team_label ?? null,
     state: duplicate ? "duplicate" : isNew ? "new" : "update",
-    account: m.account, match: m.how, matchNote: duplicate ? "повтор цієї ж людини — обʼєднано з першим рядком (паролі теж)" : MATCH_NOTE[m.how],
+    account: m.account, match: m.how,
+    matchNote: duplicate ? "повтор цієї ж людини — обʼєднано з першим рядком (паролі теж)"
+      : adopt ? `та сама людина, що «${adopt.fromName}» у реєстрі — допишемо прізвище, нового запису не буде` : MATCH_NOTE[m.how],
     secrets: r.secrets.length, secretsLost: 0, secretsNoAccount: m.userId == null && !duplicate ? r.secrets.length : 0, problems: r.problems,
   }));
   const t = (f: (x: (typeof rows)[number]) => boolean) => rows.filter(f).length;
@@ -155,10 +207,16 @@ export async function commitImport(db: Db, key: Buffer | null, actorId: number, 
   const have = new Set((await db.query<{ k: string }>(
     `SELECT CASE WHEN user_id IS NOT NULL THEN 'u' || user_id ELSE 'e' || employee_id END || '|' || kind || '|' || service || '|' || COALESCE(label, '') AS k
        FROM employee_secrets WHERE superseded_at IS NULL AND deleted_at IS NULL`)).rows.map((r) => r.k));
-  const c = { rows: 0, created: 0, updated: 0, duplicate: 0, linked: 0, secretsCreated: 0, secretsExisting: 0, secretsNoAccount: 0, secretsInvalid: 0 };
-  for (const { r, m, duplicate } of p.rows) {
+  const c = { rows: 0, created: 0, updated: 0, duplicate: 0, adopted: 0, linked: 0, secretsCreated: 0, secretsExisting: 0, secretsNoAccount: 0, secretsInvalid: 0 };
+  for (const { r, m, duplicate, adopt } of p.rows) {
     if (duplicate) { c.duplicate++; continue; }
     c.rows++;
+    // 🧩 Дописати прізвище в наявний короткий запис — тоді upsert нижче знайде САМЕ його за новим ключем.
+    if (adopt) {
+      await db.query(`UPDATE employees SET import_key = $2, full_name = $3, updated_at = now() WHERE id = $1 AND import_key = $4`,
+        [adopt.id, r.key, r.full_name, adopt.fromKey]);
+      c.adopted++;
+    }
     const f = r.fields;
     const st = f.dismissed_at ? "dismissed" : status;
     const up = (await db.query<{ id: number; inserted: boolean; user_id: number | null }>(

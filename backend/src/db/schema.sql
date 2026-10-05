@@ -5276,3 +5276,29 @@ ALTER TABLE fin_kpi_values ADD COLUMN IF NOT EXISTS frozen_at TIMESTAMPTZ;
 WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('auto-2026-10-01', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key)
 UPDATE fin_kpis SET kind = 'auto'
  WHERE kind = 'manual' AND ref_source IS NOT NULL AND EXISTS (SELECT 1 FROM step);
+
+-- 🚚 ЗАДАЧА 4373, БЛОК 1 — «ПЕРЕВІЗНИК» ЗА ІСТОРІЄЮ CRM (ТЗ Юлії 17.09.2026, рішення Романа 02.10.2026; `core/carrierHistory.ts`).
+-- Номер → угоди за НАЗВОЮ: телефонія кладе номер у назву угоди («380686601622»), а не в поле контакту. Без індексу
+-- перевірка проганяла regexp по всіх угодах на кожен номер — 43 с на 85 задач (замір 02.10.2026).
+CREATE INDEX IF NOT EXISTS idx_deals_name_phone ON deals ((regexp_replace(name, '\D', '', 'g')));
+-- Угода етапу «Дзвінки на мобільні», номер якої вже закривали як «Перевізник» (і немає угоди замовника в «Успіх» чи в
+-- роботі), — стан `history`: вердикт без розпізнавання, `history_from` — та закрита угода.
+ALTER TABLE carrier_call_deals ADD COLUMN IF NOT EXISTS history_from BIGINT;
+ALTER TABLE carrier_call_deals DROP CONSTRAINT IF EXISTS carrier_call_deals_state_check;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'carrier_call_deals_state_chk2') THEN
+    ALTER TABLE carrier_call_deals ADD CONSTRAINT carrier_call_deals_state_chk2
+      CHECK (state IN ('waiting','own','reused','no_talk','history'));
+  END IF;
+END $$;
+-- Задача «передзвони», яку НЕ поставили, бо номер — перевізник за історією CRM. Рядок на (менеджер, номер, день) —
+-- щоб тиждень контролю з ТЗ («скільки задач не створилось») рахувався фактом, а не відтворенням заднім числом.
+CREATE TABLE IF NOT EXISTS missed_call_skips (
+  manager_id   INTEGER NOT NULL REFERENCES managers(id),
+  client_phone TEXT NOT NULL,
+  kday         DATE NOT NULL,
+  reason       TEXT NOT NULL CHECK (reason IN ('carrier_history')),
+  carrier_deal BIGINT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (manager_id, client_phone, kday)
+);

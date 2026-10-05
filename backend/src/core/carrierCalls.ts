@@ -11,6 +11,7 @@ import { carrierActiveIds } from "./carrierCallQueue.js";
 import { notifyCapOnce } from "./aiCapAlert.js";
 import { runCarrierClose, type CloseMode, type CloseReport, type KommoCloser } from "./carrierClose.js";
 import { syncCarrierReviewTasks, type ReviewTaskStats } from "./carrierReviewTasks.js";
+import { carrierHistorySql } from "./carrierHistory.js";
 import { CARRIER_BUDGET, CARRIER_KIT_V2, CARRIER_OPS, CARRIER_RUBRIC, CARRIER_RUBRICS, CARRIER_RULE, oldEnough,
   phoneFromDealName } from "./carrierCallRules.js";
 
@@ -72,14 +73,23 @@ const ROLE_OF = (u: string) => `(
    WHERE t.uniqueid = ${u} AND a.rubric_version IN (${RUBRICS_SQL}) AND a.status = 'done'
    ORDER BY a.id DESC LIMIT 1)`;
 
-export interface ResolveReport { reused: number; own: number; noTalk: number; secondTalk: number }
+export interface ResolveReport { history: number; reused: number; own: number; noTalk: number; secondTalk: number }
 
 /**
  * Крок угод: повтор вердикту номера → своя розмова → «розмови не було» → друга спроба.
  * Порядок має значення: спершу повтор, щоб не платити вдруге за номер, який уже слухали.
  */
 export async function resolveCarrierDeals(db: Db, now: Date, noTalkAfterMin: number = CARRIER_RULE.windowAfterHours * 60): Promise<ResolveReport> {
-  const rep: ResolveReport = { reused: 0, own: 0, noTalk: 0, secondTalk: 0 };
+  const rep: ResolveReport = { history: 0, reused: 0, own: 0, noTalk: 0, secondTalk: 0 };
+
+  // ⓪ Номер уже закривали як «Перевізник» у CRM, угоди замовника в «Успіх» чи в роботі немає (ТЗ 17.09, блок 1;
+  //    `core/carrierHistory.ts`) — вердикт без розмови: не слухаємо й не платимо. ПЕРШИМ — раніше за повтор номера.
+  rep.history = (await db.query(
+    `UPDATE carrier_call_deals d SET state = 'history', history_from = h.src, updated_at = $1
+       FROM (SELECT w.kommo_id, ${carrierHistorySql("w.phone", "w.kommo_id")} AS src
+               FROM carrier_call_deals w WHERE w.state = 'waiting') h
+      WHERE h.kommo_id = d.kommo_id AND h.src IS NOT NULL`,
+    [now.toISOString()])).rowCount ?? 0;
 
   // ① Номер слухали за 30 днів (своя розмова іншої угоди, вердикт не «не розібрати») — беремо його вердикт.
   rep.reused = (await db.query(
@@ -180,7 +190,7 @@ export interface CarrierTickEnv {
   /** Задача «розібрати дзвінки на мобільні» в задачнику (лише бойова джоба; гейти вмикають явно). */
   reviewTasks?: boolean;
   /** Закриття в Kommo (перевізники, рішення людей; AI-«Інше» — `otherMode`). Не задано — кроку немає (як `off`). */
-  close?: { mode: CloseMode; otherMode?: CloseMode; kommo: KommoCloser };
+  close?: { mode: CloseMode; otherMode?: CloseMode; historyMode?: CloseMode; kommo: KommoCloser };
 }
 
 export interface CarrierTickReport {
@@ -212,7 +222,8 @@ export async function runCarrierTick(env: CarrierTickEnv): Promise<CarrierTickRe
     sttStoppedBy: null, llmStoppedBy: null, capAlerted: false, closed: null, reviewTasks: null };
   // 🧹 Закриття — ПІСЛЯ вердиктів, по угодах, що стоять на етапі за ЦІЄЮ ж відповіддю Kommo.
   const doClose = async () => env.close
-    ? runCarrierClose(env.db, env.now(), env.close.mode, new Set(leads.map((l) => l.id)), env.close.kommo, env.close.otherMode ?? "dry") : null;
+    ? runCarrierClose(env.db, env.now(), env.close.mode, new Set(leads.map((l) => l.id)), env.close.kommo, env.close.otherMode ?? "dry",
+      env.close.historyMode ?? "dry") : null;
   // 📋 Задачі — ПІСЛЯ закриття: закрита цим проходом угода вже не рахується в «розібрати».
   const doTasks = async () => (env.reviewTasks ? syncCarrierReviewTasks(env.db, env.now(), launchAt) : null);
   if (!ids.length) { out.closed = await doClose(); out.reviewTasks = await doTasks(); return out; }
