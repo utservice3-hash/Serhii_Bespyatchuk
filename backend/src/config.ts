@@ -96,6 +96,10 @@ export const config = {
     // (Роман 30.09.2026: «розмови менш 10 секунд видаляємо не аналізуй їх»). Строк — 4 години (Роман 30.09.2026, після
     // заміру: у 9 із 49 клієнтів вересня перша розмова була пізніше 15 хв; за 4 год — лише в 1): менеджер встигає передзвонити.
     carrierNoTalkCloseMin: Number(process.env.CARRIER_NO_TALK_CLOSE_MIN ?? "240"),
+    // 🛡 Захист «без розмови» від падіння Ringostat (рішення 05.10.2026, `core/carrierNoTalkGuard.ts`): синк дзвінків
+    // старший за SYNC_MAX — угоди без розмови не закриваються, чекають; синку немає довше за SYNC_ALERT — тривога в Telegram.
+    carrierNoTalkSyncMaxMin: Number(process.env.CARRIER_NO_TALK_SYNC_MAX_MIN ?? "30"),
+    carrierNoTalkSyncAlertMin: Number(process.env.CARRIER_NO_TALK_SYNC_ALERT_MIN ?? "60"),
     elevenlabsApiKey: process.env.ELEVENLABS_API_KEY ?? "",
     geminiApiKey: process.env.GEMINI_API_KEY ?? "",
     // Ціни й стелі — БЕЗ значень за замовчуванням: не задано → «не налаштовано», жодної витрати
