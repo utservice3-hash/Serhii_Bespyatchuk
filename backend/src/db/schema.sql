@@ -2241,6 +2241,10 @@ END $$;
 -- ─────────────────────────── Трекер часу (окрема підсистема) ───────────────────────────
 -- Власна авторизація (device-токен), НЕ JWT. Банк/виписку не чіпає.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS tracker_enabled BOOLEAN NOT NULL DEFAULT false;
+-- 🧭 Доступ МЕНЕДЖЕРА до пулу нічийних (05.10.2026, Роман: Пехньо Олександра й Гаркушина Юлія).
+-- Керівникам пул відкритий і без нього; менеджеру — лише з цим прапорцем і лише «взяти собі».
+-- Вмикає й вимикає адмін у Налаштуваннях (як tracker_enabled), разової міграції немає свідомо.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS orphan_pool BOOLEAN NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS tracker_devices (
   id            SERIAL PRIMARY KEY,

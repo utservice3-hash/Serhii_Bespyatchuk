@@ -94,7 +94,7 @@ import { leadgenTeamMembers, leadgenPlanTarget, approvedLeadgenPlans, leadgenFor
   approveLeadgenPlans, returnLeadgenPlan } from "../core/leadgenPlans.js";
 import * as expectSplit from "../core/expectSplit.js";
 import { FUNNEL_STAGE_LABELS, stageName } from "../core/stageNames.js";
-import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL } from "../core/orphanClients.js";
+import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL, orphanPoolAccess, orphanRowOrder, type OrphanPoolAccess } from "../core/orphanClients.js";
 import * as plans from "../core/plans.js";
 import * as forecast from "../core/forecast.js";
 import * as callNorm from "../core/callNorm.js";
@@ -7412,9 +7412,21 @@ dashboardRouter.get("/client-card", async (req, res) => {
  * окремий COUNT-запит із часом розійшовся б зі списком, і ми б довго шукали,
  * чому «27» не сходиться з кількістю рядків.
  */
+/**
+ * 🧭 Доступ до пулу (05.10.2026): керівникам — повний; менеджеру — лише з `users.orphan_pool` і лише
+ * «взяти собі» (`orphanPoolAccess`). Прапорець читаємо з БД на КОЖЕН запит, а не з токена: у токені він
+ * лише косметика вкладки, і вимкнення в Налаштуваннях мусить діяти одразу, а не через 12 год.
+ */
+async function poolAccessOf(auth: NonNullable<import("express").Request["auth"]>): Promise<OrphanPoolAccess> {
+  if (auth.role !== "manager") return orphanPoolAccess({ role: auth.role, orphanPoolFlag: false });
+  const r = await pool.query<{ orphan_pool: boolean }>(`SELECT orphan_pool FROM users WHERE id = $1`, [auth.userId]);
+  return orphanPoolAccess({ role: auth.role, orphanPoolFlag: r.rows[0]?.orphan_pool === true });
+}
+
 dashboardRouter.get("/orphan-clients", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role === "manager") return res.status(403).json({ error: "Пул нічийних доступний керівникам" });
+  const access = await poolAccessOf(auth);
+  if (access === "none") return res.status(403).json({ error: "Пул нічийних доступний керівникам" });
   const all = String(req.query.scope ?? "") === "all";
   const months = all ? 600 : ORPHAN_DEFAULT_MONTHS;
   const rows = await metrics.orphanClients(months);
@@ -7428,15 +7440,19 @@ dashboardRouter.get("/orphan-clients", async (req, res) => {
     groups.set(r.managerId, g);
   }
   const list = [...groups.values()].sort((a, b) => b.sumAll - a.sumAll);
-  for (const g of list) g.clients.sort((a, b) => b.revenueAll - a.revenueAll);
+  // 🏢 У групі спершу «юр/ФОП», потім «фіз» (05.10.2026), усередині виду — за сумою, як було.
+  for (const g of list) g.clients.sort(orphanRowOrder);
   res.json({
     scope: all ? "all" : `${ORPHAN_DEFAULT_MONTHS}m`,
+    // «self» — менеджер із прапорцем: бачить пул, але закріпити може лише за собою.
+    access,
     // Плитки — з тієї самої вибірки, не окремим запитом.
     tiles: {
       clients: rows.length,
       money12: rows.reduce((s, r) => s + r.revenue12, 0),
       regulars: rows.filter((r) => r.isRegular).length,
       vip: rows.filter((r) => r.segment === "ВІП").length,
+      legal: rows.filter((r) => r.kind === "legal").length,
       claimedThisMonth: await metrics.orphanClaimedThisMonth(),
       totalAllTime: await metrics.orphanTotalAllTime(),
     },
@@ -7451,10 +7467,15 @@ dashboardRouter.get("/orphan-clients", async (req, res) => {
  */
 dashboardRouter.post("/orphan-clients/claim", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role === "manager") return res.status(403).json({ error: "Пул нічийних доступний керівникам" });
+  const access = await poolAccessOf(auth);
+  if (access === "none") return res.status(403).json({ error: "Пул нічийних доступний керівникам" });
   const clientKey = String(req.body?.clientKey ?? "").trim();
   const managerId = Number(req.body?.managerId);
   if (!clientKey || !Number.isFinite(managerId)) return res.status(400).json({ error: "clientKey і managerId обовʼязкові" });
+  // Менеджер із прапорцем бере клієнта ЛИШЕ собі: пул для нього — пошук, а не розподіл між іншими.
+  if (access === "self" && managerId !== auth.managerId) {
+    return res.status(403).json({ error: "Менеджер може взяти клієнта лише собі" });
+  }
   // Тімлід призначає ЛИШЕ свою команду; КВП/ОД/адмін — будь-кого.
   if (auth.role === "team_lead") {
     const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);

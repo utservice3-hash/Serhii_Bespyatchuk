@@ -77,6 +77,7 @@ interface LoginUser {
   team_id: number | null;
   is_active: boolean;
   tracker_enabled: boolean;
+  orphan_pool?: boolean;
   work_state: "finishing" | "dismissed" | null;
 }
 
@@ -106,6 +107,8 @@ async function issueLoginToken(user: LoginUser, email: string): Promise<string> 
     // Косметика nav, як `screens` і `perms`: ховає кнопку в тих, кому трекер не вмикали.
     // МЕЖУ тримає сервер (перевірка нижче) — на приховування у FE ми не покладаємось.
     trackerEnabled: user.tracker_enabled,
+    // Те саме для пулу нічийних: вкладка менеджеру з прапорцем; межа — у роуті.
+    orphanPool: user.orphan_pool === true,
   });
   // Перший вхід кандидата запускає строк навчання (найм, прохід 2a). Для решти — нічого.
   if (roleKey === "candidate") {
@@ -146,7 +149,7 @@ authRouter.post("/invite/:token", async (req, res) => {
     const userId = await acceptInvite(client as unknown as Db, req.params.token, req.body?.password);
     await client.query("COMMIT");
     const u = (await pool.query<LoginUser & { email: string }>(
-      `SELECT u.id, u.email, u.password_hash, u.role, u.role_override, u.manager_id, u.team_id, u.is_active, u.tracker_enabled,
+      `SELECT u.id, u.email, u.password_hash, u.role, u.role_override, u.manager_id, u.team_id, u.is_active, u.tracker_enabled, u.orphan_pool,
               NULL::text AS work_state FROM users u WHERE u.id = $1`, [userId])).rows[0];
     res.json({ token: await issueLoginToken(u, u.email.toLowerCase()), login: u.email });
   } catch (e) {

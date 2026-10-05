@@ -14,6 +14,11 @@ import { fetchOrphanClients, claimOrphanClient, type OrphanPool, type OrphanGrou
  * розійшовся б зі списком, і «27» перестало б збігатися з кількістю рядків.
  */
 const money = (n: number) => Math.round(n).toLocaleString("uk-UA").replace(/,/g, " ");
+/** `380501112233` → `+380 50 111 22 33`; інше — як є (номер не вгадуємо). */
+const fmtPhone = (p: string) => /^380\d{9}$/.test(p) ? `+380 ${p.slice(3, 5)} ${p.slice(5, 8)} ${p.slice(8, 10)} ${p.slice(10)}` : p;
+const KIND_WHY: Record<OrphanClientRow["kindWhy"], string> = {
+  cashless: "платив безготівково", code: "у компанії Kommo є ЄДРПОУ/ІПН", name: "форма власності в назві", none: "",
+};
 const PAGE = 50;
 
 const SEG_COLOR: Record<string, { c: string; bg: string }> = {
@@ -78,7 +83,7 @@ export function OrphanPoolSection({ auth, managers }: { auth: AuthPayload | null
     <div>
       <div className="orph-tiles">
         <Tile lab="Клієнтів без власника" val={String(data.tiles.clients)}
-          sub={all ? "усі, за весь час" : `за 18 міс · усього в базі ${data.tiles.totalAllTime}`} />
+          sub={`${all ? "усі, за весь час" : `за 18 міс · усього в базі ${data.tiles.totalAllTime}`} · юр/ФОП ${data.tiles.legal}`} />
         <Tile lab="Гроші за 12 міс" val={money(data.tiles.money12)} unit="₴" sub="що зараз ніхто не веде" />
         {/* Підпис «у показаному зрізі» — свідомий: плитка описує СПИСОК ПІД НЕЮ.
             Показати 27 за весь час над списком із 307 рядків за 18 міс було б тим
@@ -129,11 +134,31 @@ export function OrphanPoolSection({ auth, managers }: { auth: AuthPayload | null
                     <td style={{ textAlign: "right" }}><span className="orph-dim">Σ історія </span><b>{money(g.sumAll)} ₴</b></td>
                     <td />
                   </tr>
-                  {isOpen && g.clients.slice(0, limit).map((c) => (
-                    <tr key={c.clientKey}>
+                  {isOpen && g.clients.slice(0, limit).map((c, i, arr) => (
+                    <Fragmented key={c.clientKey}>
+                    {/* 🏢 Сервер віддає «юр/ФОП» першими (05.10.2026); межу між видами підписуємо рядком,
+                        щоб «фіз» унизу читались як свідомий порядок, а не як хвіст сортування за сумою. */}
+                    {c.kind === "person" && (i === 0 || arr[i - 1].kind === "legal") && (
+                      <tr><td colSpan={7} className="orph-dim" style={{ fontSize: 11.5, paddingTop: 8 }}>Фізичні особи</td></tr>
+                    )}
+                    <tr>
                       <td style={{ textAlign: "left" }}>
                         <b>{c.name}</b>
+                        {c.kind === "legal" && (
+                          <span className="orph-seg" title={KIND_WHY[c.kindWhy]} style={{ marginLeft: 6, color: "var(--info, #1d4ed8)", background: "var(--info-bg, #eff6ff)" }}>юр/ФОП</span>
+                        )}
                         <div className="orph-dim">{c.paymentType ?? "—"} · {c.payments} оплат</div>
+                        <div style={{ fontSize: 12, marginTop: 2 }}>
+                          {c.phones.length === 0
+                            ? <span className="orph-dim">телефону в контактах Kommo немає</span>
+                            : c.phones.map((p) => (
+                              <span key={p} style={{ marginRight: 10, whiteSpace: "nowrap" }}>
+                                ☎ <a href={`tel:+${p.replace(/^\+/, "")}`}>{fmtPhone(p)}</a>
+                                <button className="orph-copy" title="Скопіювати номер" style={{ marginLeft: 4, border: "none", background: "none", cursor: "pointer", color: "var(--text-muted)", padding: 0 }}
+                                  onClick={() => { void navigator.clipboard?.writeText(fmtPhone(p)).catch(() => {}); }}>⧉</button>
+                              </span>
+                            ))}
+                        </div>
                       </td>
                       <td style={{ textAlign: "left" }}>
                         <span className="orph-seg" style={{ color: SEG_COLOR[c.segment]?.c, background: SEG_COLOR[c.segment]?.bg }}>{c.segment}</span>
@@ -148,9 +173,14 @@ export function OrphanPoolSection({ auth, managers }: { auth: AuthPayload | null
                       <td style={{ textAlign: "right" }}>{c.revenue12 ? money(c.revenue12) + " ₴" : "—"}</td>
                       <td style={{ textAlign: "right" }}><b>{money(c.revenueAll)} ₴</b></td>
                       <td style={{ textAlign: "right" }}>
-                        <ClaimButton row={c} busy={claiming === c.clientKey} managers={assignable} onClaim={claim} />
+                        {data.access === "self"
+                          ? (claiming === c.clientKey ? <span className="orph-dim">…</span>
+                            : <button className="orph-take" disabled={auth?.managerId == null}
+                                onClick={() => auth?.managerId != null && claim(c, auth.managerId)}>Взяти собі</button>)
+                          : <ClaimButton row={c} busy={claiming === c.clientKey} managers={assignable} onClaim={claim} />}
                       </td>
                     </tr>
+                    </Fragmented>
                   ))}
                   {isOpen && rest > 0 && (
                     <tr><td colSpan={7} className="orph-more"
@@ -165,8 +195,8 @@ export function OrphanPoolSection({ auth, managers }: { auth: AuthPayload | null
         </table>
       </div>
       <p className="orph-foot">
-        Групи згорнуті за замовчуванням. Взяв у роботу → клієнт закріплюється за виконавцем
-        і <b>зникає з пулу</b>, щоб двоє не дзвонили тому самому.
+        Групи згорнуті за замовчуванням. У кожній групі спершу <b>юр. особи й ФОП</b>, далі фізичні особи.
+        Взяв у роботу → клієнт закріплюється за виконавцем і <b>зникає з пулу</b>, щоб двоє не дзвонили тому самому.
       </p>
     </div>
   );

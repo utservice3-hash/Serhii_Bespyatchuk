@@ -431,6 +431,13 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
     catch (e) { alert(err(e)); }
     finally { setBusy(null); }
   };
+  // 🧭 Пул нічийних для менеджера (05.10.2026) — так само без оптимістичного малювання.
+  const toggleOrphanPool = async (id: number, on: boolean) => {
+    setBusy(id);
+    try { await updateUser(id, { orphanPool: on }); await reload(); }
+    catch (e) { alert(err(e)); }
+    finally { setBusy(null); }
+  };
   /**
    * 👤 СТАН ПРАЦІВНИКА — і він же межа входу (рішення власника 07.09.2026:
    * «звільнений вимикає вхід»). Підтвердження питаємо ЛИШЕ на «звільнений»:
@@ -483,7 +490,7 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
       {newCreds && <OneTimeCred text={newCreds} onClose={() => setNewCreds(null)} />}
 
       <table className="data-table">
-        <thead><tr><th>ПІБ</th><th>E-MAIL</th><th>КОМАНДА</th><th>РОЛЬ</th><th>ПАРОЛЬ</th><th>АКТИВНИЙ</th><th title="Звільнений не заходить у дашборд і не отримує нової роботи, але його результат лишається в сумах команди й компанії.">СТАН</th><th title="Дозвіл трекеру часу збирати дані з машини цієї людини. Знімається так само просто, як ставиться.">⏱ ТРЕКЕР</th><th></th></tr></thead>
+        <thead><tr><th>ПІБ</th><th>E-MAIL</th><th>КОМАНДА</th><th>РОЛЬ</th><th>ПАРОЛЬ</th><th>АКТИВНИЙ</th><th title="Звільнений не заходить у дашборд і не отримує нової роботи, але його результат лишається в сумах команди й компанії.">СТАН</th><th title="Дозвіл трекеру часу збирати дані з машини цієї людини. Знімається так само просто, як ставиться.">⏱ ТРЕКЕР</th><th title="Менеджеру відкрити пул нічийних клієнтів: бачить пул із телефонами й бере клієнта лише собі. Керівникам пул відкритий і без цього. Вкладка зʼявиться після нового входу.">🧭 НІЧИЙНІ</th><th></th></tr></thead>
         <tbody>
           {users.map((u) => (
             <tr key={u.id}>
@@ -545,6 +552,13 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
                   onChange={(e) => toggleTracker(u.id, e.target.checked)}
                   style={{ width: 16, height: 16, cursor: u.is_active ? "pointer" : "not-allowed" }}
                 />
+              </td>
+              <td title={u.role_effective === "manager" ? undefined : "Керівникам пул відкритий і без прапорця"}>
+                {u.role_effective === "manager"
+                  ? <input type="checkbox" checked={u.orphan_pool === true} disabled={!u.is_active || busy === u.id}
+                      onChange={(e) => toggleOrphanPool(u.id, e.target.checked)}
+                      style={{ width: 16, height: 16, cursor: u.is_active ? "pointer" : "not-allowed" }} />
+                  : <span style={{ color: "var(--text-muted)", fontSize: 12 }}>завжди</span>}
               </td>
               <td style={{ whiteSpace: "nowrap" }}>
                 <button onClick={() => reset(u.id)} style={btn}>↺ Пароль</button>

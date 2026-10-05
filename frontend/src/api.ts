@@ -1756,6 +1756,7 @@ export interface DashboardUser {
   is_active: boolean;
   crm_linked: boolean;                        // ідентичність із CRM (ПІБ/команда/синк-роль read-only)
   tracker_enabled: boolean;                   // ⏱ дозвіл трекеру часу збирати дані з машини людини
+  orphan_pool?: boolean;                      // 🧭 менеджеру відкрито пул нічийних («взяти собі»)
   team_name: string | null;
   deactivated_at?: string | null;
   deactivated_reason?: string | null;
@@ -1804,7 +1805,7 @@ export async function resetUserPassword(id: number): Promise<string> {
 
 export async function updateUser(
   id: number,
-  patch: { roleOverride?: string | null; isActive?: boolean; fullName?: string; reason?: string; trackerEnabled?: boolean }
+  patch: { roleOverride?: string | null; isActive?: boolean; fullName?: string; reason?: string; trackerEnabled?: boolean; orphanPool?: boolean }
 ): Promise<void> {
   await api.patch(`/settings/users/${id}`, patch);
 }
@@ -4457,6 +4458,10 @@ export interface OrphanClientRow {
   payments: number; lastPaidAt: string | null; lastCallAt: string | null;
   daysSincePaid: number | null; daysSinceCall: number | null;
   revenue12: number; revenueAll: number; paymentType: string | null;
+  /** 🏢 «юр/ФОП» (безнал / код ЄДРПОУ-ІПН / форма в назві) чи «фіз» — лише порядок і підпис. */
+  kind: "legal" | "person"; kindWhy: "cashless" | "code" | "name" | "none";
+  /** ☎️ До 3 телефонів з контактів Kommo, основний першим. */
+  phones: string[];
 }
 export interface OrphanGroup {
   managerId: number; manager: string; reason: string; reasonLabel: string;
@@ -4464,7 +4469,9 @@ export interface OrphanGroup {
 }
 export interface OrphanPool {
   scope: string;
-  tiles: { clients: number; money12: number; regulars: number; vip: number; claimedThisMonth: number; totalAllTime: number };
+  tiles: { clients: number; money12: number; regulars: number; vip: number; claimedThisMonth: number; totalAllTime: number; legal: number };
+  /** «self» — менеджер із прапорцем «Нічийні клієнти»: бачить пул, бере клієнта лише собі. */
+  access: "full" | "self";
   groups: OrphanGroup[];
 }
 export async function fetchOrphanClients(scope?: "all"): Promise<OrphanPool> {

@@ -157,7 +157,7 @@ export function loginEnabledFor(s: WorkState): boolean {
  */
 export const LOGIN_LOOKUP_SQL = `
   SELECT u.id, u.password_hash, u.role, u.role_override, u.manager_id, u.team_id,
-         u.is_active, u.tracker_enabled, mws.state AS work_state
+         u.is_active, u.tracker_enabled, u.orphan_pool, mws.state AS work_state
     FROM users u
     LEFT JOIN manager_work_state mws ON mws.manager_id = u.manager_id
    WHERE lower(u.email) = $1`;

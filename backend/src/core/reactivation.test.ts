@@ -1075,6 +1075,46 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
       await c.query(`DELETE FROM receivable_manager_override WHERE client_key='δклієнт'`);
       await c.query(`TRUNCATE receivables`); await c.query(`TRUNCATE receivable_invoices`);
     });
+
+    /**
+     * #1368 — ЖИВИЙ SQL ПУЛУ НІЧИЙНИХ (05.10.2026): вид клієнта й телефони беруться окремим запитом
+     * за ключами, і цей SQL компілятор не бачить — тому він виконується тут, на справжній схемі.
+     * Сід свій (ключі `пул-*`, менеджер 9901 звільнений), чужих рядків не чіпає.
+     */
+    await t.test("#1368 ЖИВИЙ SQL ПУЛУ: вид клієнта з безналу/коду/назви, телефони з контактів (основний першим)", async () => {
+      await c.query(`INSERT INTO managers (id,name,team_id,is_active) VALUES (9901,'Звільнений Пул',1,false) ON CONFLICT DO NOTHING`);
+      const deals: [number, string, string, string][] = [
+        [9900001, "пул-тов", "ТОВ Пул", "Наличные"],
+        [9900002, "пул-безнал", "Ковальчук Іван", "Безнал без НДС"],
+        [9900003, "пул-код", "Агро Інвест", "Наличные"],
+        [9900004, "пул-фіз", "Петренко Петро", "Наличные"],
+      ];
+      for (const [id, ck, nm, pt] of deals) {
+        await c.query(`INSERT INTO deals (kommo_id,name,manager_id,pipeline_id,status_id,price,client_key,client_name,payment_type,created_at_kommo,closed_at_kommo)
+                       VALUES ($1,$2,9901,8921932,142,1000,$3,$4,$5, now() - interval '40 days', now() - interval '30 days')`, [id, nm, ck, nm, pt]);
+      }
+      await c.query(`INSERT INTO kommo_companies (company_id,name,edrpou) VALUES (99001,'Агро Інвест','12345678'),(99002,'Петренко Петро',NULL)`);
+      await c.query(`INSERT INTO deal_companies (deal_kommo_id,company_id) VALUES (9900003,99001),(9900004,99002)`);
+      await c.query(`INSERT INTO deal_contacts (deal_kommo_id,contact_id,is_main) VALUES (9900004,77001,true)`);
+      await c.query(`INSERT INTO contact_phones (contact_id,phone,is_main) VALUES (77001,'380671112233',false),(77001,'380501112233',true)`);
+      try {
+        const M = await import("./metrics.js");
+        const by = new Map((await M.orphanClients(18)).filter((r) => r.clientKey.startsWith("пул-")).map((r) => [r.clientKey, r]));
+        assert.equal(by.size, 4, `🔴 пул не повернув засіяних клієнтів — перевіряти нема що: ${[...by.keys()].join(", ")}`);
+        assert.deepEqual([...by.values()].map((r) => [r.clientKey, r.kind, r.kindWhy]).sort(),
+          [["пул-безнал", "legal", "cashless"], ["пул-код", "legal", "code"], ["пул-тов", "legal", "name"], ["пул-фіз", "person", "none"]],
+          "🔴 вид клієнта з живого запиту не той (безнал / код ЄДРПОУ / форма в назві / фіз)");
+        assert.deepEqual(by.get("пул-фіз")?.phones, ["380501112233", "380671112233"], "🔴 телефони не дотягнулись або основний не першим");
+        assert.deepEqual(by.get("пул-тов")?.phones, [], "без контакту — порожній список, а не виняток");
+      } finally {
+        await c.query(`DELETE FROM contact_phones WHERE contact_id = 77001`);
+        await c.query(`DELETE FROM deal_contacts WHERE contact_id = 77001`);
+        await c.query(`DELETE FROM deal_companies WHERE company_id IN (99001,99002)`);
+        await c.query(`DELETE FROM kommo_companies WHERE company_id IN (99001,99002)`);
+        await c.query(`DELETE FROM deals WHERE kommo_id BETWEEN 9900001 AND 9900004`);
+        await c.query(`DELETE FROM managers WHERE id = 9901`);
+      }
+    });
   } finally {
     await pool.end().catch(() => {});
     await c.end();

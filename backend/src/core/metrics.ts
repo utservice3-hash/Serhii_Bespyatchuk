@@ -4,7 +4,7 @@ import { SCOPE_STATUSES, STUCK_MIN_DAYS, stuckBaseConds, stuckSignals, stuckCloc
   stageMoveCte, STAGE_MOVE, ASOF_SQL, ASOF_JOB_SQL,
   asOfStaleAfterMin, LAST_TALK, TALK_ATTRIBUTED, ringostatTalkCte } from "./stuckRule.js";
 import { stageName } from "./stageNames.js";
-import { orphanManagerSql, orphanReason, type OrphanReason } from "./orphanClients.js";
+import { orphanManagerSql, orphanReason, clientKind, type OrphanReason, type ClientKind, type ClientKindWhy } from "./orphanClients.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
 import { monthEndOf, periodNotOver, kyivToday } from "./dates.js";
 // 🔀 Команда в ПЕРІОДНИХ розрізах — на дату рядка (створення / подія / анкер), а не поточна
@@ -3961,6 +3961,10 @@ export interface OrphanClient {
   payments: number; lastPaidAt: string | null; lastCallAt: string | null;
   daysSincePaid: number | null; daysSinceCall: number | null;
   revenue12: number; revenueAll: number; paymentType: string | null;
+  /** 🏢 «юр/ФОП» чи «фіз» і чим доведено — `clientKind` (05.10.2026); лише порядок і підпис у пулі. */
+  kind: ClientKind; kindWhy: ClientKindWhy;
+  /** ☎️ Телефони з контактів Kommo цього клієнта (до 3, основний першим) — щоб не шукати в CRM. */
+  phones: string[];
 }
 
 /**
@@ -3983,6 +3987,7 @@ export async function orphanClients(months: number): Promise<OrphanClient[]> {
        SELECT ck, count(*)::int n, sum(price)::bigint rev_all, max(dt) last_dt,
               COALESCE(sum(price) FILTER (WHERE dt >= now() - interval '12 months'),0)::bigint rev12,
               sum(is_cash)::int cash_n,
+              bool_or(lower(COALESCE(ptype,'')) LIKE '%безнал%') any_cashless,
               (array_agg(nm ORDER BY dt DESC))[1] nm,
               (array_agg(ptype ORDER BY dt DESC))[1] ptype
          FROM pay GROUP BY ck),
@@ -3995,7 +4000,7 @@ export async function orphanClients(months: number): Promise<OrphanClient[]> {
                   FROM pay p) x WHERE g IS NOT NULL GROUP BY ck),
      per AS (SELECT ck, mid, count(*) c, max(dt) mx FROM pay GROUP BY ck, mid),
      prim AS (SELECT DISTINCT ON (ck) ck, mid FROM per ORDER BY ck, c DESC, mx DESC)
-     SELECT a.ck, a.nm, a.n::text, a.rev_all::text, a.rev12::text, a.cash_n::text, a.ptype,
+     SELECT a.ck, a.nm, a.n::text, a.rev_all::text, a.rev12::text, a.cash_n::text, a.ptype, a.any_cashless::text,
             to_char(a.last_dt AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') last_paid,
             EXTRACT(DAY FROM now()-a.last_dt)::int::text days_paid,
             w.two30::text, w.three30::text, g.med::text,
@@ -4013,6 +4018,24 @@ export async function orphanClients(months: number): Promise<OrphanClient[]> {
         AND lo.pinned_manager_id IS NULL
         AND a.last_dt >= now() - ($2 || ' months')::interval`,
     [GENERIC_CLIENT_KEYS, String(months)]);
+  // ☎️🏢 Код компанії й телефони — ОКРЕМИМ запитом за ключами пулу, а не підзапитом у великому:
+  // дешевий фрагмент уже двічі руйнував план великого запиту (правило «заміряй ендпоінт»).
+  const keys = r.rows.map((x) => x.ck!);
+  const extra = new Map<string, { hasCode: boolean; phones: string[] }>();
+  if (keys.length) {
+    const e = await pool.query<{ ck: string; has_code: boolean; phones: string[] | null }>(
+      `WITH k AS (SELECT DISTINCT d.client_key AS ck, d.kommo_id FROM deals d WHERE d.client_key = ANY($1)),
+            co AS (SELECT k.ck, bool_or(kc.edrpou ~ '^[0-9]{8}$' OR kc.edrpou ~ '^[0-9]{10}$' OR kc.ipn ~ '^[0-9]{10}$') AS has_code
+                     FROM k JOIN deal_companies dc ON dc.deal_kommo_id = k.kommo_id
+                     JOIN kommo_companies kc ON kc.company_id = dc.company_id GROUP BY k.ck),
+            ph AS (SELECT k.ck, cp.phone, bool_or(cp.is_main OR x.is_main) AS main, count(*) AS n
+                     FROM k JOIN deal_contacts x ON x.deal_kommo_id = k.kommo_id
+                     JOIN contact_phones cp ON cp.contact_id = x.contact_id GROUP BY k.ck, cp.phone),
+            pr AS (SELECT ck, (array_agg(phone ORDER BY main DESC, n DESC, phone))[1:3] AS phones FROM ph GROUP BY ck)
+       SELECT kk.ck, COALESCE(co.has_code, false) AS has_code, pr.phones
+         FROM (SELECT DISTINCT ck FROM k) kk LEFT JOIN co ON co.ck = kk.ck LEFT JOIN pr ON pr.ck = kk.ck`, [keys]);
+    for (const x of e.rows) extra.set(x.ck, { hasCode: x.has_code === true, phones: x.phones ?? [] });
+  }
   return r.rows.map((x) => {
     const n = Number(x.n), cash = Number(x.cash_n);
     const allCash = cash > 0 && cash === n;
@@ -4031,6 +4054,11 @@ export async function orphanClients(months: number): Promise<OrphanClient[]> {
       daysSinceCall: x.days_call == null ? null : Number(x.days_call),
       revenue12: Number(x.rev12), revenueAll: Number(x.rev_all),
       paymentType: x.ptype,
+      ...(() => {
+        const ex = extra.get(x.ck!);
+        const k = clientKind({ name: x.nm ?? x.ck!, anyCashless: x.any_cashless === "true", hasCode: ex?.hasCode ?? false });
+        return { kind: k.kind, kindWhy: k.why, phones: ex?.phones ?? [] };
+      })(),
     };
   });
 }
