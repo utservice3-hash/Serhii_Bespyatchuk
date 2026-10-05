@@ -54,6 +54,7 @@ const AUTO_STATE: Record<NonNullable<FinKpi["autoState"]>, [string, string]> = {
   frozen: ["авто · зафіксовано", "Число зафіксовано закриттям періоду; джерело могло змінитись після цього — поточне видно в довідці"],
   closed: ["з «ФМ»", "Період закрито; число перенесене з аркуша «ФМ»"],
   saved: ["збережене", "Живого числа для цього періоду немає — показано збережене"],
+  override: ["вручну", "Число внесене руками поверх «План/факт»; щоб повернути автоматичне — очистіть клітинку й збережіть"],
 };
 
 export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
@@ -197,7 +198,8 @@ export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
               <SectionRows key={s.id} s={s} canEdit={data.canEdit && !edit} act={act}>
                 {s.kpis.filter((k) => k.active || k.value != null).map((k) => {
                   const d = k.value != null && k.prevValue != null ? k.value - k.prevValue : null;
-                  const input = edit && k.kind === "manual" && k.active;
+                  // Поле — де сервер дозволяє вносити: ручні рядки й операційні (поверх «План/факт»).
+                  const input = edit && (k.editable ?? k.kind === "manual") && k.active;
                   const cur = draft[k.id] ?? asInput(k.value);
                   return (
                     <tr key={k.id} className={`it ${k.active ? "" : "off"}`} onClick={() => !edit && setCard(k.id)}>

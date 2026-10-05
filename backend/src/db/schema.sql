@@ -5467,3 +5467,16 @@ CREATE OR REPLACE VIEW ai_bank_transactions AS
    WHERE NOT a.finance_only AND t.deleted_at IS NULL;
 REVOKE ALL ON bank_transactions FROM ai_readonly;
 GRANT SELECT ON ai_bank_transactions TO ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💰 ФІНАНСИ, фікси після зустрічі з Тетяною 05.10.2026.
+--  · `manual_override` — число людини поверх «План/факт» в операційних (і місяць, і тиждень): головне, доки не очищене.
+--  · Сейф: запис у своїй валюті (UAH/USD/EUR, гривня — за курсом НБУ на дату) і з категорією — статтею «План/факт».
+--  · Особисті картки власника ФОП вимкнено (разово): Тетяна мала на увазі робочу картку Саші. Вимкнено, НЕ видалено —
+--    вмикаються в «Налаштуваннях виписки», операції лишаються.
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE fin_kpi_values ADD COLUMN IF NOT EXISTS manual_override BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS fin_item_id INTEGER REFERENCES fin_items(id);
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('cards-off-2026-10-05', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key)
+UPDATE bank_accounts SET is_active = false
+ WHERE bank = 'mono' AND finance_only AND mono_type IN ('black', 'white', 'madeInUkraine') AND EXISTS (SELECT 1 FROM step);

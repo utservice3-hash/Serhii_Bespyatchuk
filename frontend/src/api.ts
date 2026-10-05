@@ -3904,12 +3904,14 @@ export interface BankBalance { id: number; label: string; company: string; balan
 export interface BankBalancesResp { balances: BankBalance[]; period?: { from: string; to: string } }
 export interface CashflowMonth { month: string; incoming_uah: number; outgoing_uah: number; net_uah: number }
 // 💰 Ручний рахунок «Сейф» (прохід 2г фінансів): записи по операції або підсумком тижня. Правила — на сервері.
-export interface BankManualRow { id: number; day: string; direction: "in" | "out"; amount: number; kind: "op" | "week"; name: string | null; purpose: string | null; deleted: boolean; entered_by: string | null }
+export interface BankManualRow { id: number; day: string; direction: "in" | "out"; amount: number; currency: string; amount_uah: number; item_id: number | null; item: string | null;
+  kind: "op" | "week"; name: string | null; purpose: string | null; deleted: boolean; entered_by: string | null }
 export async function fetchBankManual(account: number, from: string, to: string): Promise<BankManualRow[]> {
   const { data } = await api.get<{ rows: BankManualRow[] }>("/bank/manual", { params: { account, from, to } });
   return data.rows;
 }
-export async function addBankManual(body: { accountId: number; kind: "op" | "week"; date: string; direction?: "in" | "out"; amount?: string; inAmount?: string; outAmount?: string; purpose?: string }) {
+export async function addBankManual(body: { accountId: number; kind: "op" | "week"; date: string; direction?: "in" | "out"; amount?: string; inAmount?: string; outAmount?: string; purpose?: string;
+  currency?: "UAH" | "USD" | "EUR"; itemId?: number | null }) {
   return (await api.post<{ ids: number[]; monday: string }>("/bank/manual", body)).data;
 }
 export async function deleteBankManual(id: number) { await api.delete(`/bank/manual/${id}`); }
@@ -5508,7 +5510,9 @@ export interface FinKpi {
   savedRef: { value: number; at: string } | null; liveRef: number | null;
   /** Лише для `kind = "auto"` (прохід 2б): live — число ядра зараз; frozen — зафіксоване джобою; closed — із закритого
    *  періоду (перенесене з «ФМ»); saved — живого для періоду немає, показано збережене. */
-  autoState: "live" | "frozen" | "closed" | "saved" | null;
+  autoState: "live" | "frozen" | "override" | "closed" | "saved" | null;
+  /** Вноситься руками: ручний рядок або операційні поверх «План/факт» (сервер вирішує). */
+  editable?: boolean;
 }
 export interface FinKpiPeriod {
   kind: FinPeriodKind; start: string; end: string; prev: string; label: string; prevLabel: string; current: string;

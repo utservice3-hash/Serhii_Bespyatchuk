@@ -231,20 +231,21 @@ test("#1205 ПРОВОДКА: синк пише fm_income і fm_expense щопр
 });
 
 /**
- * #979 — ФРОНТ АВТОМАТИЧНИХ РЯДКІВ: поле вводу — лише в ручних (авто не редагується навіть у режимі внесення);
+ * #1218 — ФРОНТ АВТОМАТИЧНИХ РЯДКІВ: поле вводу — там, де дозволяє СЕРВЕР (`editable`: ручні й операційні поверх
+ * «План/факт», зустріч з Тетяною 05.10.2026); решта авто-рядків не редагується;
  * авто-рядок підписаний станом із сервера (наживо / зафіксовано / з «ФМ» / збережене); підказка називає правило
  * фінансиста, а не «Приход 1». По обидва боки: ручний рядок лишається полем вводу.
  * 🧨 Червоніє, якщо дати поле авто-рядку, прибрати підпис стану або повернути в підказку «Приход 1».
  */
-test("#979 ФРОНТ АВТО-РЯДКІВ: поле лише в ручних, підпис стану з сервера, підказка — правило фінансиста", () => {
+test("#1218 ФРОНТ АВТО-РЯДКІВ: поле — де дозволяє сервер (ручні й операційні), підпис стану, підказка — правило фінансиста", () => {
   const wk = FE("pages/dashboard/sections/FinanceWeekTab.tsx");
-  assert.match(wk, /const input = edit && k\.kind === "manual" && k\.active;/, "🔴 поле вводу не лише в ручних рядках");
+  assert.match(wk, /const input = edit && \(k\.editable \?\? k\.kind === "manual"\) && k\.active;/, "🔴 поле вводу не за дозволом сервера");
   assert.match(wk, /\{input\s*\? <input /, "🔴 ручний рядок перестав бути полем вводу");
   const badge = wk.slice(wk.indexOf('{k.kind === "auto" && <span'), wk.indexOf("</span>}</td>", wk.indexOf('{k.kind === "auto" && <span')));
   assert.ok(badge.length > 0, "🔴 авто-рядок без позначки");
   assert.match(badge, /AUTO_STATE\[k\.autoState\]\[1\]/, "🔴 авто-рядок без підпису стану (підказка)");
   assert.match(badge, /k\.autoState \? AUTO_STATE\[k\.autoState\]\[0\]/, "🔴 авто-рядок без підпису стану (текст)");
-  for (const st of ["live", "frozen", "closed", "saved"]) assert.match(wk, new RegExp(`\\b${st}: \\["`), `🔴 немає підпису стану «${st}»`);
+  for (const st of ["live", "frozen", "override", "closed", "saved"]) assert.match(wk, new RegExp(`\\b${st}: \\["`), `🔴 немає підпису стану «${st}»`);
   const hint = wk.slice(wk.indexOf("export const REF_HINT"), wk.indexOf("};", wk.indexOf("export const REF_HINT")));
   assert.equal((hint.match(/«Приход 1–5»/g) ?? []).length, 2, "🔴 підказка доходу — не Σ «Приход 1–5»");
   assert.equal((hint.match(/крім типу оплати «Оплата на выгрузке»/g) ?? []).length, 2, "🔴 підказка витрат не каже про виключення");
@@ -286,12 +287,12 @@ test("#1204 СТАРТ ЗА ДЖЕРЕЛОМ: фільтри Kommo — з вер
 });
 
 /**
- * #1206 — «БЕКФІЛ ПО ТАБЛИЦІ» (`importFmPeriods`): фінал тижня 28.09 і вересня з аркуша лягає в базу, період
- * закривається, позначка «проміжне» знімається — КРІМ рядків із фільтрів Kommo: їх у цих періодах уже рахує CRM
+ * #1217 — «БЕКФІЛ ПО ТАБЛИЦІ» (`importFmPeriods`): фінал тижня 28.09 і вересня з аркуша лягає в базу, позначка
+ * «проміжне» знімається, а період НЕ закривається (місяць закриває Тетяна кнопкою, зустріч 05.10.2026) — КРІМ рядків із фільтрів Kommo: їх у цих періодах уже рахує CRM
  * (з вересня, #1204), і число з таблиці їх не перекриває. Відмова (нічого не записано): проміжне у файлі, закритий період,
  * період після старту автоматики. 🧨 Червоніє, якщо записати проміжне, переписати закрите чи період, який рахує CRM.
  */
-test("#1206 ПЕРІОДИ З «ФМ»: лише фінал, лише незакриті й до старту; рядки Kommo — з CRM, таблиця їх не перекриває", async (t) => {
+test("#1217 ПЕРІОДИ З «ФМ»: лише фінал, незакриті й до старту; період лишається відкритим; рядки Kommo — з CRM", async (t) => {
   const s = await scratchDb(t);
   if (!s) return;
   const k = await import("./financeKpi.js");
@@ -325,8 +326,10 @@ test("#1206 ПЕРІОДИ З «ФМ»: лише фінал, лише незак
     assert.deepEqual(stored.rows.map((r: any) => r.v), ["5.00"], "🔴 таблиця перекрила рядок Kommo, який з вересня рахує CRM (лишилось проміжне 5 — його ніхто не чіпав)");
     assert.equal(await val("month", "2026-09-01", "Гроші", "Надходження загальні"), 30858596, "🔴 вересень не взяв фінал");
     const p = await k.loadPeriod(db, "week", "2026-09-28");
-    assert.deepEqual([!!p.closed, p.importedInterim], [true, false], "🔴 період не закрито або лишився «проміжним»");
-    await assert.rejects(k.importFmPeriods(db, null, file2, [{ kind: "week", start: "2026-09-28" }]), (e: unknown) => status(e) === 409, "🔴 повтор переписав закритий");
+    assert.deepEqual([!!p.closed, p.importedInterim], [false, false], "🔴 перенесення закрило період (його закриває Тетяна) або лишило «проміжним»");
+    // повтор — не помилка (період відкритий), а «нічого не змінилось»
+    const again = await k.importFmPeriods(db, null, file2, [{ kind: "week", start: "2026-09-28" }]);
+    assert.equal(again[0].changed.length, 0, "🔴 повтор переніс ще раз те саме");
   } finally { await s.dispose(); }
 });
 
@@ -406,7 +409,7 @@ test("#992 ЖИВИЙ SQL: місяць операційних — Σ факту
     assert.deepEqual([oct.value, oct.kind, oct.autoState], [43500.5, "auto", "live"], "🔴 місяць не взяв Σ розділу");
     assert.equal((await row("month", "2026-10-01", o.refs, pay)).kind, "manual", "🔴 «ЗП» без статей заблоковано від ручного внесення");
     assert.deepEqual(await k.saveKpiValues(db, 901, "month", "2026-10-01", [{ kpiId: pay, value: "800000" }], o.refs), { changed: 1 }, "🔴 «ЗП» не вноситься");
-    await assert.rejects(k.saveKpiValues(db, 901, "month", "2026-10-01", [{ kpiId: gen, value: "1" }], o.refs), (e: unknown) => status(e) === 400, "🔴 авто-місяць вноситься руками");
+    // Ручне число поверх «План/факт» — дозволене з 05.10.2026 (зустріч з Тетяною); доводить #1208.
     assert.equal((await row("week", "2026-10-12", o.refs, gen)).kind, "manual", "🔴 тиждень почав рахуватись із помісячного факту");
     assert.deepEqual(await k.saveKpiValues(db, 901, "week", "2026-10-12", [{ kpiId: gen, value: "9000" }], o.refs), { changed: 1 }, "🔴 тиждень не вноситься");
     assert.equal((await row("month", "2026-09-01", o.refs, gen)).kind, "manual", "🔴 вересень (до старту) порахувався з «План/факт»");
@@ -783,6 +786,102 @@ test("#1207 ЖИВИЙ SQL: «минулий» — число джерела з�
     assert.equal((await row({ delivered_income: 4821254 })).prevValue, 4821254, "🔴 «минулий» узяв проміжне з таблиці замість CRM");
     await k.setPeriodClosed(db, 901, "week", "2026-09-28", true, { delivered_income: 4800000 });
     assert.equal((await row({ delivered_income: 4821254 })).prevValue, 4800000, "🔴 зафіксоване закриттям перекрито живим");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1208 — ЖИВИЙ SQL: ОПЕРАЦІЙНІ — РУЧНЕ ЧИСЛО ПОВЕРХ «ПЛАН/ФАКТ» (зустріч з Тетяною 05.10.2026: «дай можливість
+ * коригувати і для місяця, і для тижня; решта нічого не треба редагувати»). Число людини — головне («вручну»); порожнє
+ * повертає «План/факт»; закриття фіксує РУЧНЕ, а не джерело; рядок із Kommo руками як і раніше не вноситься.
+ * 🧨 Червоніє, якщо ручне не перекриває джерело, очищення не повертає «План/факт», закриття фіксує джерело чи
+ * Kommo-рядок стане редагованим.
+ */
+test("#1208 ЖИВИЙ SQL: операційні — ручне поверх «План/факт», порожнє повертає, закриття фіксує ручне; Kommo — ні", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const k = await import("./financeKpi.js");
+  const { db, c } = s;
+  try {
+    const sec = await k.createSection(db, 901, { name: "Операційні витрати" });
+    const gen = await k.createKpi(db, 901, { sectionId: sec, name: "Загальні витрати" });
+    const del = await k.createKpi(db, 901, { sectionId: sec, name: "Поставлені · дохід" });
+    await c.query(`UPDATE fin_kpis SET kind = 'auto', ref_source = 'opex_general' WHERE id = $1`, [gen]);
+    await c.query(`UPDATE fin_kpis SET kind = 'auto', ref_source = 'delivered_income' WHERE id = $1`, [del]);
+    const refs = { opex_general: 43500.5, delivered_income: 9 };
+    const now = new Date("2026-10-20T10:00:00Z");
+    const row = async (r: Record<string, number> = refs) => (await k.loadPeriod(db, "month", "2026-10-01", r, now)).sections[0].kpis.find((x: any) => x.id === gen);
+    assert.deepEqual([(await row()).value, (await row()).autoState, (await row()).editable], [43500.5, "live", true], "🔴 операційні не редагуються поверх «План/факт»");
+    assert.equal((await k.loadPeriod(db, "month", "2026-10-01", refs, now)).sections[0].kpis.find((x: any) => x.id === del).editable, false, "🔴 рядок Kommo став редагованим");
+    assert.deepEqual(await k.saveKpiValues(db, 901, "month", "2026-10-01", [{ kpiId: gen, value: "50 000" }], refs), { changed: 1 });
+    assert.deepEqual([(await row()).value, (await row()).autoState], [50000, "override"], "🔴 ручне число не перекрило «План/факт»");
+    await assert.rejects(k.saveKpiValues(db, 901, "month", "2026-10-01", [{ kpiId: del, value: "1" }], refs), (e: unknown) => status(e) === 400, "🔴 рядок Kommo вноситься руками");
+    await k.saveKpiValues(db, 901, "month", "2026-10-01", [{ kpiId: gen, value: "" }], refs);
+    assert.deepEqual([(await row()).value, (await row()).autoState], [43500.5, "live"], "🔴 очищення не повернуло «План/факт»");
+    await k.saveKpiValues(db, 901, "month", "2026-10-01", [{ kpiId: gen, value: "61 000" }], refs);
+    await k.setPeriodClosed(db, 901, "month", "2026-10-01", true, refs);
+    assert.deepEqual([(await row({ opex_general: 1, delivered_income: 9 })).value, (await row()).autoState], [61000, "frozen"], "🔴 закриття зафіксувало джерело замість ручного");
+    await k.setPeriodClosed(db, 901, "month", "2026-10-01", false);
+    assert.deepEqual([(await row()).value, (await row()).autoState], [61000, "override"], "🔴 відкриття загубило ручне число");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1209 — ЖИВИЙ SQL: СЕЙФ У ВАЛЮТІ Й З КАТЕГОРІЄЮ (зустріч 05.10.2026: «дата, сума, валюта — їх три … важливо, щоб
+ * була категорія»). Сума — у своїй валюті, гривня — за курсом на дату (`rateOf`), і саме гривня йде в суми; валюта
+ * лише UAH/USD/EUR; категорія — лише жива стаття «План/факт». 🧨 Червоніє, якщо USD піде в суми як гривня, прийметься
+ * чужа валюта або видалена стаття.
+ */
+test("#1209 ЖИВИЙ SQL: Сейф — валюта з курсом на дату, гривня в суми; категорія — лише жива стаття", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const bm = await import("./bankManual.js");
+  const k = await import("./financeKpi.js");
+  const { db, c } = s;
+  try {
+    const { safe } = await bankFixture(c);
+    const fin = await import("./finance.js");
+    const r = await fin.createResp(db, 901, { name: "Опер" });
+    const g = await fin.createGroup(db, 901, { respId: r, name: "Пальне" });
+    const item = await fin.createItem(db, 901, { groupId: g, name: "Бензин" });
+    const gone = await fin.createItem(db, 901, { groupId: g, name: "Стара" });
+    await fin.deleteItem(db, 901, gone, true);
+    const days: string[] = [];
+    const rateOf = async (ccy: string, day: string) => { days.push(`${ccy}@${day}`); return ccy === "USD" ? 41.5 : 48; };
+    await bm.addManual(db, 901, { accountId: safe, kind: "op", date: "2026-10-06", direction: "out", amount: "100", currency: "usd", itemId: item }, rateOf);
+    assert.deepEqual(days, ["USD@2026-10-06"], "🔴 курс узято не на дату запису");
+    const row = (await c.query(`SELECT amount::text AS a, currency, amount_uah::text AS u, fin_item_id FROM bank_transactions WHERE account_id = $1`, [safe])).rows[0];
+    assert.deepEqual([Number(row.a), row.currency, Number(row.u), row.fin_item_id], [-100, "USD", -4150, item], "🔴 запис у валюті збережено хибно");
+    assert.deepEqual(await k.bankTotals(db, "2026-10-05", "2026-10-11"), { in: 0, out: 4150, ownIn: 0, ownOut: 0, rows: 1 }, "🔴 у «Витрати загальні» пішли долари, а не гривня");
+    await assert.rejects(bm.addManual(db, 901, { accountId: safe, kind: "op", date: "2026-10-07", direction: "in", amount: "1", currency: "PLN" }, rateOf), (e: unknown) => status(e) === 400, "🔴 прийнято чужу валюту");
+    await assert.rejects(bm.addManual(db, 901, { accountId: safe, kind: "op", date: "2026-10-07", direction: "in", amount: "1", itemId: gone }, rateOf), (e: unknown) => status(e) === 404, "🔴 прийнято видалену статтю");
+    const listed = (await bm.listManual(db, safe, "2026-10-01", "2026-10-31")).rows[0];
+    assert.deepEqual([listed.item, listed.currency, listed.amount_uah], ["Бензин", "USD", -4150], "🔴 список не показує категорію / валюту");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1216 — ЖИВИЙ SQL: ОСОБИСТІ КАРТКИ ФОП ВИМКНЕНО — РАЗОВО. Тетяна мала на увазі робочу картку Саші; три особисті
+ * картки вимикаються (НЕ видаляються — операції лишаються, вмикаються в налаштуваннях), і свідомо ввімкнена назад
+ * повторним прогоном схеми не вимикається; рахунок ФОП не чіпається. 🧨 Червоніє, якщо картку видалити, вимкнути ФОП
+ * чи вимикати щоразу.
+ */
+test("#1216 ЖИВИЙ SQL: особисті картки ФОП вимкнено разово — ФОП не зачеплено, ввімкнену назад не вимикає", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  try {
+    await c.query(`DELETE FROM fin_kpi_imports WHERE key = 'cards-off-2026-10-05'`);
+    await c.query(`DELETE FROM bank_accounts`);
+    await c.query(`INSERT INTO bank_accounts (company, bank, label, currency, finance_only, mono_type, is_active) VALUES
+      ('fop_mono', 'mono', 'ФОП Моно', 'UAH', false, NULL, true), ('fop_mono', 'mono', 'Картка white', 'UAH', true, 'white', true),
+      ('fop_mono', 'mono', 'Картка black', 'UAH', true, 'black', true)`);
+    const schema = readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8");
+    await c.query(schema);
+    const st = async () => (await c.query(`SELECT label, is_active FROM bank_accounts ORDER BY id`)).rows.map((x) => `${x.label}:${x.is_active}`);
+    assert.deepEqual(await st(), ["ФОП Моно:true", "Картка white:false", "Картка black:false"], "🔴 картки не вимкнено або зачеплено ФОП / видалено");
+    await c.query(`UPDATE bank_accounts SET is_active = true WHERE label = 'Картка black'`);
+    await c.query(schema);
+    assert.deepEqual(await st(), ["ФОП Моно:true", "Картка white:false", "Картка black:true"], "🔴 повторний прогін знову вимкнув свідомо ввімкнену картку");
   } finally { await s.dispose(); }
 });
 
