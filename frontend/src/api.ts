@@ -528,6 +528,8 @@ export interface CarrierCallsMetaResp {
   close: { mode: string; otherMode: string; wouldClose: number; closed: number; reverted: number; failed: number; otherWouldClose: number; otherClosed: number };
   agreement: { aiRole: string; decisions: number; agreed: number; byDecision: Record<string, number> }[];
   agreementRows: CarrierAgreementRowT[];
+  /** 🛡 Захист «без розмови» від падіння Ringostat — лише керівництву (інакше `null`). */
+  noTalkGuard: { open: boolean; syncAgeMin: number | null; maxAgeMin: number; lastSyncAt: string | null; noCreatingCall: number } | null;
 }
 /** 🔎 Одна угода за номером (повна картка з «AI проти людини»); у скоупі ролі. */
 export async function fetchCarrierDeal(kommoId: number): Promise<CarrierDealT> {

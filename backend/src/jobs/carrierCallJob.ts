@@ -6,6 +6,7 @@ import { closeModeOf } from "../core/carrierClose.js";
 import { sendAdminAlert } from "../bot/notify.js";
 import { runCarrierTick, type CarrierTickReport } from "../core/carrierCalls.js";
 import { CARRIER_STAGE } from "../core/carrierCallRules.js";
+import { minutesSetting, NO_TALK_GUARD } from "../core/carrierNoTalkGuard.js";
 import { createRunGuard, type GuardSkip } from "./runGuard.js";
 
 /**
@@ -31,6 +32,7 @@ export async function carrierCallJob(): Promise<CarrierTickReport | GuardSkip> {
       launchAt: new Date(config.callAi.carrierLaunchAt),
       reviewTasks: true,
       noTalkAfterMin: config.callAi.carrierNoTalkCloseMin,
+      noTalkSyncMaxMin: minutesSetting(config.callAi.carrierNoTalkSyncMaxMin, NO_TALK_GUARD.defaultMaxAgeMin),
       close: {
         mode: closeModeOf(config.callAi.carrierAutoClose),
         otherMode: closeModeOf(config.callAi.carrierAutoCloseOther),
@@ -50,6 +52,8 @@ export async function carrierCallJob(): Promise<CarrierTickReport | GuardSkip> {
     const sum = (xs: CarrierTickReport["stt"], k: "done" | "failed" | "unavailable") => xs.reduce((s, x) => s + x[k], 0);
     console.log(`carrierCallJob: на етапі ${String(d.onStage)} (молодші за поріг ${String(d.tooYoung)}, без номера ${String(d.noPhone)}), нових ${String(d.inserted)} · `
       + `своя розмова ${String(v.own)}, повтор номера ${String(v.reused)}, без розмови ${String(v.noTalk)}, друга спроба ${String(v.secondTalk)} · `
+      + (v.noTalkGate.open ? "" : `«без розмови» НА ПАУЗІ: синк дзвінків ${v.noTalkGate.syncAgeMin == null ? "невідомо коли" : `${String(v.noTalkGate.syncAgeMin)} хв тому`} (поріг ${String(v.noTalkGate.maxAgeMin)} хв) · `)
+      + (v.noTalkNoCreatingCall ? `без дзвінка-творця в базі (не закриваємо) ${String(v.noTalkNoCreatingCall)} · ` : "")
       + (d.beforeLaunch ? `, до старту ${String(d.beforeLaunch)}` : "") + ` · розпізнано ${String(sum(r.stt, "done"))}, проаналізовано ${String(sum(r.llm, "done"))}`
       + (r.purged ? ` · текст видалено за строком ${String(r.purged)}` : "")
       + (v.history ? ` · історія CRM ${String(v.history)}` : "")
