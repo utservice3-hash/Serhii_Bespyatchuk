@@ -759,6 +759,34 @@ test("#1203 ЖИВИЙ SQL: разовий крок 2г — Сейф і карт
 });
 
 /**
+ * #1207 — ЖИВИЙ SQL: СТОВПЕЦЬ «МИНУЛИЙ» — З ДЖЕРЕЛА. Тижні не фіксуються (#1205), тож минулий незафіксований
+ * авто-рядок мусить показувати число джерела за ТОЙ період (`prevRefs`), а не збережене проміжне з таблиці. Спіймано на
+ * проді 05.10.2026: «минулий тиждень» 2 973 228 (таблиця) замість 4 821 254 (CRM). По обидва боки: без `prevRefs` —
+ * збережене (як було), з ними — джерело; зафіксоване закриттям — завжди зафіксоване. Роут передає `prevRefs`.
+ * 🧨 Червоніє, якщо «минулий» знову бере таблицю чи перекриває зафіксоване живим.
+ */
+test("#1207 ЖИВИЙ SQL: «минулий» — число джерела за той період, зафіксоване — як є, роут передає prevRefs", async (t) => {
+  assert.match(SRC("routes/finance.ts"), /const prevRefs = await refsFor\(cur\.kind, shiftPeriod\(cur\.kind, cur\.start, -1\)\);\s*const p = await loadPeriod\(pool as unknown as Db, req\.query\.kind, req\.query\.p, refs, new Date\(\), prevRefs\);/,
+    "🔴 роут не дає «минулому» чисел джерела");
+  const s = await scratchDb(t);
+  if (!s) return;
+  const k = await import("./financeKpi.js");
+  const { db, c } = s;
+  try {
+    const sec = await k.createSection(db, 901, { name: "Поставлені авто" });
+    const inc = await k.createKpi(db, 901, { sectionId: sec, name: "Дохід" });
+    await c.query(`UPDATE fin_kpis SET kind = 'auto', ref_source = 'delivered_income' WHERE id = $1`, [inc]);
+    await c.query(`INSERT INTO fin_kpi_values (kpi_id, period_kind, period_start, value) VALUES ($1, 'week', '2026-09-28', 2973228)`, [inc]);
+    const now = new Date("2026-10-06T10:00:00Z");
+    const row = async (prev: Record<string, number> | null) => (await k.loadPeriod(db, "week", "2026-10-05", { delivered_income: 654010 }, now, prev)).sections[0].kpis[0];
+    assert.equal((await row(null)).prevValue, 2973228, "🔴 без чисел джерела «минулий» загубив збережене");
+    assert.equal((await row({ delivered_income: 4821254 })).prevValue, 4821254, "🔴 «минулий» узяв проміжне з таблиці замість CRM");
+    await k.setPeriodClosed(db, 901, "week", "2026-09-28", true, { delivered_income: 4800000 });
+    assert.equal((await row({ delivered_income: 4821254 })).prevValue, 4800000, "🔴 зафіксоване закриттям перекрито живим");
+  } finally { await s.dispose(); }
+});
+
+/**
  * #948 — СУМИ ЗА ПРАВИЛОМ ФІНАНСИСТА (`core/fmSums.ts`, підтверджено Тетяною 01.10.2026): дохід = Σ «Приход 1–5»,
  * витрати = Σ «Расход 1–5» КРІМ слотів «Оплата на выгрузке». По обидва боки: той самий слот з іншим типом рахується.
  * Порожнє ≠ нуль. 🧨 Червоніє, якщо брати лише «Приход 1», не виключати «Оплата на выгрузке» чи виключати інші типи.

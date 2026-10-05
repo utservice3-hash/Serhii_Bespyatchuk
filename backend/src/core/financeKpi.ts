@@ -176,7 +176,12 @@ const num = (v: unknown): number | null => (v == null ? null : Number(v));
 /** Довідкові числа, які роут рахує ядром грошей / дебіторки для цього періоду (live). */
 export type RefValues = Partial<Record<RefSource, number | null>>;
 
-export async function loadPeriod(db: Db, kindArg: unknown, dateArg: unknown, refs: RefValues = {}, now: Date = new Date()) {
+/**
+ * `prevRefs` — числа джерел для ПОПЕРЕДНЬОГО періоду (стовпець «минулий»). Без них минулий незафіксований авто-рядок
+ * показав би збережене число з таблиці, а не CRM (спіймано на проді 05.10.2026: «минулий тиждень» 2 973 228 замість
+ * 4 821 254). Тижні тепер не фіксуються, тож без цього стовпець брехав би щотижня.
+ */
+export async function loadPeriod(db: Db, kindArg: unknown, dateArg: unknown, refs: RefValues = {}, now: Date = new Date(), prevRefs: RefValues | null = null) {
   const { kind, start } = periodStart(kindArg, dateArg);
   const prev = shiftPeriod(kind, start, -1);
   const k = await db.query(`
@@ -190,7 +195,8 @@ export async function loadPeriod(db: Db, kindArg: unknown, dateArg: unknown, ref
   const cur = new Map<number, any>(), old = new Map<number, any>();
   for (const x of v.rows) (x.p === start ? cur : old).set(x.kpi_id, x);
   // До старту автоматики авто-рядок — ручний (число з таблиці); `kind` у відповіді — уже з поправкою на період.
-  const kindIn = (x: any, period: string) => (x.kind === "auto" && !isAutoIn(x, kind, period, refs) ? "manual" : x.kind);
+  const refsOf = (period: string): RefValues => (period === start ? refs : prevRefs ?? {});
+  const kindIn = (x: any, period: string) => (x.kind === "auto" && !isAutoIn(x, kind, period, refsOf(period)) ? "manual" : x.kind);
   const defs: KpiDef[] = k.rows.filter((x: any) => x.id != null).map((x: any) => ({
     id: x.id, sectionId: x.section_id, kind: x.kind, argA: x.arg_a, argB: x.arg_b, active: isActiveIn(x.off_from, start) }));
   const prevDefs = defs.map((d) => ({ ...d, active: isActiveIn(k.rows.find((x: any) => x.id === d.id).off_from, prev) }));
@@ -199,17 +205,17 @@ export async function loadPeriod(db: Db, kindArg: unknown, dateArg: unknown, ref
   const kindOf = new Map(k.rows.filter((x: any) => x.id != null).map((x: any) => [x.id, x]));
   // «saved» — живого числа для періоду немає (дебіторка минулого тижня, попередній період), а збережене є: показуємо
   // його, а не порожнечу; підпис на екрані каже, що воно не з ядра зараз.
-  const hasLive = (x: any, live: boolean) => live && x.ref_source in refs;
+  const hasLive = (x: any, period: string) => x.ref_source in refsOf(period);
   const autoSource = (row: any, period: string, liveOk: boolean): "frozen" | "closed" | "saved" | null =>
     row?.frozen_at ? "frozen" : closedSet.has(period) && row?.value != null ? "closed" : !liveOk && row?.value != null ? "saved" : null;
-  const pick = (map: Map<number, any>, period: string, live: boolean) => new Map([...kindOf.keys()].map((id) => {
+  const pick = (map: Map<number, any>, period: string) => new Map([...kindOf.keys()].map((id) => {
     const x: any = kindOf.get(id), row = map.get(id);
     if (kindIn(x, period) !== "auto") return [id, num(row?.value)];
-    if (autoSource(row, period, hasLive(x, live))) return [id, num(row.value)];
-    return [id, hasLive(x, live) ? refs[x.ref_source as RefSource] ?? null : null];
+    if (autoSource(row, period, hasLive(x, period))) return [id, num(row.value)];
+    return [id, hasLive(x, period) ? refsOf(period)[x.ref_source as RefSource] ?? null : null];
   }));
-  const curVals = computeValues(defs, pick(cur, start, true));
-  const prevVals = computeValues(prevDefs, pick(old, prev, false));
+  const curVals = computeValues(defs, pick(cur, start));
+  const prevVals = computeValues(prevDefs, pick(old, prev));
   const sections: { id: number; name: string; kpis: any[] }[] = [];
   for (const x of k.rows) {
     let s = sections[sections.length - 1];
@@ -221,7 +227,7 @@ export async function loadPeriod(db: Db, kindArg: unknown, dateArg: unknown, ref
       offFrom: x.off_from, active: isActiveIn(x.off_from, start),
       value: curVals.get(x.id) ?? null, prevValue: prevVals.get(x.id) ?? null, note: c?.note ?? null,
       savedRef: c?.ref_value != null ? { value: Number(c.ref_value), at: c.ref_at } : null,
-      autoState: kindIn(x, start) === "auto" ? (autoSource(c, start, hasLive(x, true)) ?? (hasLive(x, true) ? "live" : null)) : null,
+      autoState: kindIn(x, start) === "auto" ? (autoSource(c, start, hasLive(x, start)) ?? (hasLive(x, start) ? "live" : null)) : null,
       liveRef: x.ref_source && x.ref_source in refs && !(x.kind === "auto" && !isAutoIn(x, kind, start, refs)) ? refs[x.ref_source as RefSource] ?? null : null,
     });
   }
