@@ -7,7 +7,7 @@ import { PeriodNav, navBtn } from "../PeriodNav";
 import {
   periodOf, periodLabelOf, navBy, monthStart, monthEnd, addMonth, todayKyiv, mondayOf, addDays, dow, spanDays, type PeriodState,
 } from "../periodRules";
-import { ExtraPlanLines,
+import { ExtraPlanLines, PaceLines,
   LeadgenPersonRow, pct1, bucketLabel, convStatus, StatusRing, unitsOf, fillBuckets, BucketNote, dateLbl,
   PlanRing, planLevelColor, factOfPlan, fmtPlan,
 } from "./LeadgenPersonRow";
@@ -683,6 +683,7 @@ function PlanLine({ who, tp, pe, pp, person }: {
     <div style={box}>
       📋 прорахунки <b style={{ color: planLevelColor(pe.level) }}>{factOfPlan(person.quotes, pp.plan.quotes)}</b> · ліди {factOfPlan(person.leads, pp.plan.leads)} · ОПР {factOfPlan(person.opr, pp.plan.opr)}
       <ExtraPlanLines extra={pp.extra} />
+      <PaceLines pace={pp.pace} />
     </div>
   );
 }

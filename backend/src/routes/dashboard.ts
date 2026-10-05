@@ -88,9 +88,10 @@ import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, 
 } from "../core/leadgenStats.js";
 import { handoffMoneyWire, personMoneyWire, bucketMoneyWire, bucketPersonMoneyWire, handoffDealsScope,
   leadgenAuthScope, parseLeadgenGrain, parseTrendMonths, parseManagerIdParam,
-  leadgenViewer, ownLeadgenStatsBody, ownLeadgenTrendBody, type LeadgenAuth } from "../core/leadgenHandoffRules.js";
+  leadgenViewer, ownLeadgenStatsBody, ownLeadgenTrendBody, addDays, type LeadgenAuth } from "../core/leadgenHandoffRules.js";
 import { leadgenRosterView, planView, planMonthOf, parseLeadgenSubmit, leadgenSubmitRefusal, mayEverSubmitLeadgenPlan,
-  mayApproveLeadgenPlan, LEADGEN_PLAN_METRICS, emptyPlanRecord, type RosterRow, type TeamMember } from "../core/leadgenPlanRules.js";
+  mayApproveLeadgenPlan, LEADGEN_PLAN_METRICS, emptyPlanRecord, planPace, isCurrentFullMonth, PACE_METRICS,
+  type RosterRow, type TeamMember } from "../core/leadgenPlanRules.js";
 import { leadgenTeamMembers, leadgenPlanTarget, approvedLeadgenPlans, leadgenFormation, submitLeadgenPlan,
   approveLeadgenPlans, returnLeadgenPlan } from "../core/leadgenPlans.js";
 import * as expectSplit from "../core/expectSplit.js";
@@ -437,6 +438,23 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
   // 💰 Гроші людини для плану по грошах — ТІ САМІ числа, що на картці (`hm`), без другого розрахунку.
   const moneyFact = new Map(hm.byPerson.map((p) => [p.managerId, { earned: p.money.earned.sum, pending: p.money.pending.sum }]));
   const pv = planView(rows, approved, from, to, kyivToday(), moneyFact);
+  // 🏃 «Лишилось до плану» (рішення власника 05.10.2026) — лише на поточний місяць: факт ДО сьогодні й СЬОГОДНІ тим
+  // самим `leadgenStats`, що рядки, тож норма й рядок не можуть рахувати різне. Минулий місяць наздоганяти пізно.
+  const todayK = kyivToday();
+  if (isCurrentFullMonth(from, to, todayK)) {
+    const yest = addDays(todayK, -1);
+    const [beforeS, todayS] = await Promise.all([
+      yest >= from ? leadgenStats(from, yest) : Promise.resolve(null), leadgenStats(todayK, todayK)]);
+    const bM = new Map((beforeS?.rows ?? []).map((r) => [r.managerId, r])), tM = new Map(todayS.rows.map((r) => [r.managerId, r]));
+    for (const p of pv.byPerson) {
+      const b = bM.get(p.managerId), t = tM.get(p.managerId);
+      const one = (k: (typeof PACE_METRICS)[number]) =>
+        planPace({ plan: p.plan[k], before: b?.[k] ?? 0, today: t?.[k] ?? 0, todayDay: todayK, monthEnd: to });
+      const m = moneyFact.get(p.managerId);
+      p.pace = { calls: one("calls"), leads: one("leads"), opr: one("opr"), quotes: one("quotes"),
+        moneyLeft: p.plan.money == null ? null : Math.max(0, p.plan.money - ((m?.earned ?? 0) + (m?.pending ?? 0))) };
+    }
+  }
 
   const body: Record<string, unknown> = {
     from, to,

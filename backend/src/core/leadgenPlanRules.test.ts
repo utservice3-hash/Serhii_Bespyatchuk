@@ -175,3 +175,32 @@ test("#1174 ПЛАН НА ДЗВІНКИ Й ГРОШІ: необовʼязков
   assert.ok(t.moneyTotal.kind === "plan" && t.moneyTotal.fact === 35_000 && t.moneyEarned.kind === "plan" && t.moneyEarned.fact === 25_000,
     "🔴 гроші команди: факт не Σ усіх рядків або два порівняння злиплись");
 });
+
+import { planPace, isCurrentFullMonth } from "./leadgenPlanRules.js";
+
+/**
+ * #1261 — НОРМА З НАЗДОГАНЯННЯМ (рішення власника 05.10.2026). Жовтень 2026 — 22 робочі дні; 15.10 (чт) лишається 12.
+ * План 1 430: зроблено 500 до сьогодні → треба 78 (рівна була б 65); 800 → 53; виконано → «план виконано»; субота →
+ * норма на наступний робочий день; 30.10 (останній робочий) → увесь залишок; 31.10 (сб) → робочих днів немає; плану немає → нічого.
+ * 🧨 САБОТАЖ: у `planPace` `(i.plan - i.before)` → `i.plan` (без віднімання зробленого) → норма не наздоганяє → червоніє.
+ */
+test("#1261 НОРМА З НАЗДОГАНЯННЯМ: відстав — більше, випереджаєш — менше, виконав — ✓; вихідні й кінець місяця", () => {
+  const E = "2026-10-31";
+  const behind = planPace({ plan: 1430, before: 500, today: 30, todayDay: "2026-10-15", monthEnd: E });
+  assert.deepEqual(behind, { kind: "pace", plan: 1430, fact: 530, leftMonth: 900, normToday: 78, doneToday: 30, leftToday: 48, leftWeek: 126, todayIsWorking: true },
+    "🔴 відставання: не 78 на сьогодні / 48 лишилось / 126 на тиждень (15–16.10)");
+  const ahead = planPace({ plan: 1430, before: 800, today: 0, todayDay: "2026-10-15", monthEnd: E });
+  assert.ok(ahead.kind === "pace" && ahead.normToday === 53, "🔴 випередження не зменшує норму нижче рівної 65");
+  assert.equal(planPace({ plan: 1430, before: 1400, today: 40, todayDay: "2026-10-15", monthEnd: E }).kind, "done", "🔴 виконаний план показує норму");
+  const sat = planPace({ plan: 1430, before: 500, today: 0, todayDay: "2026-10-17", monthEnd: E });
+  assert.ok(sat.kind === "pace" && !sat.todayIsWorking && sat.normToday === 93 && sat.leftToday === 93,
+    "🔴 субота: норма не на наступний робочий день (930 ÷ 10 = 93)");
+  const last = planPace({ plan: 1430, before: 1300, today: 10, todayDay: "2026-10-30", monthEnd: E });
+  assert.ok(last.kind === "pace" && last.normToday === 130 && last.leftToday === 120, "🔴 останній робочий день: не весь залишок");
+  const over = planPace({ plan: 1430, before: 1300, today: 0, todayDay: "2026-10-31", monthEnd: E });
+  assert.ok(over.kind === "pace" && over.normToday === null && over.leftMonth === 130, "🔴 після останнього робочого дня вигадана норма");
+  assert.equal(planPace({ plan: null, before: 5, today: 1, todayDay: "2026-10-15", monthEnd: E }).kind, "none");
+  assert.equal(isCurrentFullMonth("2026-10-01", "2026-10-31", "2026-10-15"), true);
+  assert.equal(isCurrentFullMonth("2026-09-01", "2026-09-30", "2026-10-15"), false, "🔴 минулий місяць — є що наздоганяти?");
+  assert.equal(isCurrentFullMonth("2026-10-12", "2026-10-18", "2026-10-15"), false, "🔴 тиждень прийнято за місяць");
+});

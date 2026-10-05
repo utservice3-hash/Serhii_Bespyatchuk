@@ -177,3 +177,16 @@ test("#681b ДЖЕРЕЛО: у ядро йде скоуп із leadgenAuthScope/
   assert.deepEqual(scopeViolations("  // було: leadgenHandoffMoney(from, to, { teamId: null })\n" + planted("scope")), [],
     "🔴 згадка в коментарі читається як виклик");
 });
+
+/**
+ * #1262 — «ЛИШИЛОСЬ ДО ПЛАНУ» РАХУЄТЬСЯ ЛИШЕ НА ПОТОЧНИЙ МІСЯЦЬ І ТИМ САМИМ `leadgenStats`, ЩО Й РЯДКИ (05.10.2026):
+ * факт «до сьогодні» й «сьогодні» — два виклики `leadgenStats`, а не свій SQL; поза поточним місяцем — без норми.
+ * 🧨 САБОТАЖ: прибрати `if (isCurrentFullMonth(from, to, todayK))` → норма й на минулих місяцях → червоніє.
+ */
+test("#1262 /leadgen-stats: норма — лише поточний місяць, факт тим самим leadgenStats", () => {
+  const body = codeOf(handlerBody(DASH, "/leadgen-stats"));
+  assert.match(body, /if \(isCurrentFullMonth\(from, to, todayK\)\) \{/, "🔴 норма рахується не лише на поточний місяць");
+  assert.match(body, /leadgenStats\(from, yest\)/, "🔴 факт «до сьогодні» не з leadgenStats");
+  assert.match(body, /leadgenStats\(todayK, todayK\)/, "🔴 факт «сьогодні» не з leadgenStats");
+  assert.match(body, /planPace\(\{ plan: p\.plan\[k\]/, "🔴 норма не з чистої planPace");
+});

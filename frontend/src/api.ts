@@ -259,7 +259,14 @@ export type LeadgenPlanExec =
   | { kind: "plan"; fact: number; plan: number; pct: number; level: "g" | "a" | "r" };
 /** Дзвінки й гроші (01.10.2026): гроші — ОДИН план, два порівняння — з «Успішні» і з «Успішні + Очікування». */
 export interface LeadgenExtraExec { calls: LeadgenPlanExec; moneyEarned: LeadgenPlanExec; moneyTotal: LeadgenPlanExec }
-export interface LeadgenPersonPlan { managerId: number; plan: LeadgenPeriodPlan; exec: LeadgenPlanExec; extra: LeadgenExtraExec }
+/** «Лишилось до плану» — норма з наздоганянням (рішення 05.10.2026), лише на поточний місяць. */
+export type LeadgenPlanPace =
+  | { kind: "none" }
+  | { kind: "done"; plan: number; fact: number }
+  | { kind: "pace"; plan: number; fact: number; leftMonth: number; normToday: number | null; doneToday: number;
+      leftToday: number | null; leftWeek: number | null; todayIsWorking: boolean };
+export interface LeadgenPersonPace { calls: LeadgenPlanPace; leads: LeadgenPlanPace; opr: LeadgenPlanPace; quotes: LeadgenPlanPace; moneyLeft: number | null }
+export interface LeadgenPersonPlan { managerId: number; plan: LeadgenPeriodPlan; exec: LeadgenPlanExec; extra: LeadgenExtraExec; pace?: LeadgenPersonPace }
 export interface LeadgenTeamPlan { total: number; planned: number; fact: number; plan: number | null; exec: LeadgenPlanExec; extra: LeadgenExtraExec }
 
 /** 📋 Формування плану лідгенів (дзеркало формування плану продажів). */
