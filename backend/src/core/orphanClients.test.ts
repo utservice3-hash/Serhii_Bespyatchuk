@@ -92,3 +92,13 @@ test("#1367b РОУТИ ПУЛУ: межа першою дією в обох; м
     "🔴 менеджер із прапорцем може закріпити клієнта за іншим");
   assert.match(src, /SELECT orphan_pool FROM users WHERE id = \$1/, "🔴 прапорець читається не з БД — вимкнення в Налаштуваннях не діятиме до нового входу");
 });
+
+test("#1369 НАЛАШТУВАННЯ → КОРИСТУВАЧІ: широка таблиця у власному горизонтальному скролі, заголовки не злипаються", () => {
+  const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "SettingsSection.tsx"), "utf8");
+  const head = fe.indexOf("<thead><tr><th style={TH}>ПІБ</th>");
+  assert.ok(head > 0, "🔴 таблицю користувачів не знайдено (або заголовки знову без відступу)");
+  const before = fe.slice(Math.max(0, head - 400), head);
+  assert.match(before, /<div className="settings-users-scroll" style=\{\{ overflowX: "auto"[^}]*\}\}>\s*<table className="data-table"/,
+    "🔴 таблиця користувачів без горизонтального скролу — на великому масштабі кнопки праворуч зрізаються (05.10.2026)");
+  assert.match(fe, /const TH: React\.CSSProperties = \{ whiteSpace: "nowrap", paddingRight: \d+ \}/, "🔴 заголовки без відступу — «АКТИВНИЙСТАН»");
+});

@@ -124,6 +124,9 @@ export default function SettingsSection({ role, teams, syncStatus, syncing, onMa
   );
 }
 
+/** Заголовок широкої таблиці: відступ між колонками й без переносу посеред слова («АКТИВНИЙСТАН»). */
+const TH: React.CSSProperties = { whiteSpace: "nowrap", paddingRight: 14 };
+
 // ─────────────────────────── Команди ────────────────
 /** `YYYY-MM-DD` → `DD.MM.YYYY`. */
 const fmtDay = (ymd: string) => `${ymd.slice(8, 10)}.${ymd.slice(5, 7)}.${ymd.slice(0, 4)}`;
@@ -489,8 +492,12 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
       </div>
       {newCreds && <OneTimeCred text={newCreds} onClose={() => setNewCreds(null)} />}
 
-      <table className="data-table">
-        <thead><tr><th>ПІБ</th><th>E-MAIL</th><th>КОМАНДА</th><th>РОЛЬ</th><th>ПАРОЛЬ</th><th>АКТИВНИЙ</th><th title="Звільнений не заходить у дашборд і не отримує нової роботи, але його результат лишається в сумах команди й компанії.">СТАН</th><th title="Дозвіл трекеру часу збирати дані з машини цієї людини. Знімається так само просто, як ставиться.">⏱ ТРЕКЕР</th><th title="Менеджеру відкрити пул нічийних клієнтів: бачить пул із телефонами й бере клієнта лише собі. Керівникам пул відкритий і без цього. Вкладка зʼявиться після нового входу.">🧭 НІЧИЙНІ</th><th></th></tr></thead>
+      {/* ↔ Широка таблиця (9 колонок) — у власному горизонтальному скролі: на великому масштабі (05.10.2026, скрін Романа)
+          вона вилазила за картку, кнопки праворуч зрізались, а заголовки злипались. Скрол — у контейнері, а не
+          на сторінці: решта Налаштувань лишається на місці. Тримає #1369. */}
+      <div className="settings-users-scroll" style={{ overflowX: "auto", maxWidth: "100%" }}>
+      <table className="data-table" style={{ minWidth: 980 }}>
+        <thead><tr><th style={TH}>ПІБ</th><th style={TH}>E-MAIL</th><th style={TH}>КОМАНДА</th><th style={TH}>РОЛЬ</th><th style={TH}>ПАРОЛЬ</th><th style={TH}>АКТИВНИЙ</th><th style={TH} title="Звільнений не заходить у дашборд і не отримує нової роботи, але його результат лишається в сумах команди й компанії.">СТАН</th><th style={TH} title="Дозвіл трекеру часу збирати дані з машини цієї людини. Знімається так само просто, як ставиться.">⏱ Трекер</th><th style={TH} title="Менеджеру відкрити пул нічийних клієнтів: бачить пул із телефонами й бере клієнта лише собі. Керівникам пул відкритий і без цього. Вкладка зʼявиться після нового входу.">🧭 Пул</th><th style={TH}></th></tr></thead>
         <tbody>
           {users.map((u) => (
             <tr key={u.id}>
@@ -568,6 +575,7 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
           ))}
         </tbody>
       </table>
+      </div>
       {!isAdminUx && <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 8 }}>Ви бачите цей екран, бо сервер надав доступ; керування діє за правом <b>manage_users</b>.</p>}
     </div>
   );
