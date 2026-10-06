@@ -134,7 +134,16 @@ test("#1163 БЕЗ КЛЮЧА: жодного запиту в мережу, ро
     const r = await lookupRegistry(memDb(), "12345678", { doFetch: fakeFetch({ "/v1/usr/": [200, LEGAL] }, calls), now: new Date() });
     assert.equal(r.kind, "unconfigured"); assert.equal(calls.length, 0, "🔴 без ключа пішов запит");
   } finally { if (saved !== undefined) process.env.YOUCONTROL_API_KEY = saved; }
+  // З 06.10.2026 порядок джерел живе в `constructor/onec.resolveRequisites` (1С → довідник → ЄДР), а роут лише
+  // передає її відповідь як є. Тому твердження те саме, а перевіряється там, де тепер рішення, — ВИКОНАННЯМ.
+  const { resolveRequisites } = await import("./onec.js");
+  const deps = (reg: any) => ({ oneC: async () => ({ kind: "notFound" as const }), book: async () => null, registry: async () => reg });
+  const u = await resolveRequisites("12345678", deps({ kind: "unconfigured" }));
+  assert.equal(u.kind, "error"); assert.equal((u as any).status, 404);
+  assert.match((u as any).message, /не налаштовано/, "🔴 без ключа роут не пояснює, чому");
+  const w = await resolveRequisites("12345678", deps({ kind: "updating" }));
+  assert.equal((w as any).status, 202, "🔴 «оновлюється» не віддається як 202");
   const route = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "routes", "constructor.ts"), "utf8");
-  assert.match(route, /r\.kind === "unconfigured"\) throw new HttpError\(404, `[^`]*не налаштовано/, "🔴 без ключа роут не пояснює, чому");
-  assert.match(route, /r\.kind === "updating"\) return void res\.status\(202\)/, "🔴 «оновлюється» не віддається як 202");
+  assert.match(route, /if \(r\.kind === "error"\) throw new HttpError\(r\.status, r\.message\);\s*res\.status\(r\.status\)\.json\(r\.body\);/,
+    "🔴 роут не передає статус і текст функції зведення як є");
 });

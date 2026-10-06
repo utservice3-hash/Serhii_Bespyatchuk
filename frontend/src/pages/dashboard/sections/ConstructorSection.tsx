@@ -22,7 +22,7 @@ import {
   ctorParse, ctorParseOld, ctorPool, ctorPoolStats, ctorPreview, ctorRouteTemplates, ctorSaveCounterparty, ctorSaveRouteTemplate,
   ctorDeleteRouteTemplate, ctorPairZip, ctorConvertToPdf, ctorConvertFromPdf,
   type CtorArchiveRow, type CtorCounterparty, type CtorCounterpartyRow, type CtorEntityKey, type CtorEntityRow, type CtorForm,
-  type CtorParty, type CtorRouteTemplate, type CtorStatDay, type CtorIssue, type CtorRegistryCard,
+  type CtorParty, type CtorRouteTemplate, type CtorStatDay, type CtorIssue, type CtorRegistryCard, type CtorEdrResult,
 } from "../../../api";
 import "./mockFonts.css";
 import "./constructor.css";
@@ -122,7 +122,7 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
   const [bookPick, setBookPick] = useState<number | null>(null);
   const [edrq, setEdrq] = useState("");
   /** Звідки підставлено реквізити за ЄДРПОУ і чи є тривога реєстру (припинення, банкрутство). */
-  const [edrNote, setEdrNote] = useState<{ t: string; warn?: string | null } | null>(null);
+  const [edrNote, setEdrNote] = useState<{ t: string; warn?: string | null; bookIban?: { iban: string; bank: string } | null } | null>(null);
   const edrTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (edrTimer.current) clearTimeout(edrTimer.current); }, []);
   const [raw, setRaw] = useState("");
@@ -232,8 +232,33 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
     if (c.warn) void bad(`Увага: ${c.warn}. Перевірте, чи можна укладати договір.`);
     else ok(`Підставлено з ЄДР: ${c.name}.`);
   };
+  /**
+   * Реквізити з 1С (рахунок, банк, контакти) + директор/назва з ЄДР. Що з рахунком — кажемо словами: у 1С IBAN є
+   * лише в ~4 з 10 клієнтів (замір 06.10.2026), і порожнє поле без підпису читалось би як «ще вантажиться».
+   * `refill` — повтор, коли ЄДР оновлювався: підставляємо лише в ПОРОЖНІ поля, щоб не стерти вже виправлене руками.
+   */
+  const onPick1c = (r: Extract<CtorEdrResult, { source: "1c" }>, refill: boolean) => {
+    const c = r.card;
+    if (!refill) setBookPick(null);
+    applyParsed({ name: c.name, edrpou: c.edrpou, ipn: c.ipn, addr: c.addr, iban: c.iban, bank: c.bank,
+      phone: c.phone, email: c.email, dir: c.dir }, refill);
+    const iban = c.ibanSource === "1c" ? "рахунок і банк — з 1С"
+      : c.ibanSource === "book" ? "у 1С рахунку немає — IBAN з вашого довідника"
+      : c.ibanInvalid1c ? `у 1С рахунок у неправильному форматі (${c.ibanInvalid1c}) — впишіть IBAN вручну`
+      : "у 1С рахунку немає — впишіть IBAN вручну";
+    const reg = r.registry === "ok" ? `директор і назва — з ЄДР${r.cached ? " (кеш)" : ""}`
+      : r.registry === "updating" ? "директора з ЄДР ще немає: реєстр оновлює дані, повторюю за 20 с"
+      : r.registry === "notFound" ? "у ЄДР коду немає — директора впишіть вручну"
+      : "ЄДР зараз недоступний — директора впишіть вручну";
+    setEdrNote({ t: `З 1С (бухгалтерія): ${iban}; ${reg}.`, warn: c.warn, bookIban: c.bookIban });
+    if (c.warn) void bad(`Увага: ${c.warn}. Перевірте, чи можна укладати договір.`);
+    else if (!refill) ok(`Підставлено з 1С: ${c.name}.`);
+  };
+  /** Підпис, коли 1С не змогли спитати: дані з довідника/ЄДР правдиві, але звірки з бухгалтерією не було. */
+  const oneCTail = (r: { oneC?: "notFound" | "failed"; oneCWhy?: string | null }) =>
+    r.oneC === "failed" ? ` ${r.oneCWhy ?? "1С недоступна"} — звірки з 1С не було.` : r.oneC === "notFound" ? " У 1С такого контрагента немає." : "";
   /** 202 — реєстр оновлює дані: повторюємо самі, до трьох разів із паузою 20 с (заміряно: ФОП ожив за ~20 с). */
-  const onEdr = async (attempt = 0) => {
+  const onEdr = async (attempt = 0, refill = false) => {
     if (edrTimer.current) { clearTimeout(edrTimer.current); edrTimer.current = null; }
     setEdrNote(null);
     try {
@@ -244,8 +269,11 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
         edrTimer.current = setTimeout(() => void onEdr(attempt + 1), 20000);
         return;
       }
-      if (r.source === "book") { onPickBook(r.row); setEdrNote({ t: "З вашого довідника контрагентів." }); }
-      else onPickRegistry(r.card, r.cached);
+      if (r.source === "1c") {
+        onPick1c(r, refill);
+        if (r.registry === "updating" && attempt < 3) edrTimer.current = setTimeout(() => void onEdr(attempt + 1, true), 20000);
+      } else if (r.source === "book") { onPickBook(r.row); setEdrNote({ t: `З вашого довідника контрагентів.${oneCTail(r)}` }); }
+      else { onPickRegistry(r.card, r.cached); setEdrNote((n) => n && { ...n, t: n.t + oneCTail(r) }); }
     } catch (e) { await bad(e); }
   };
 
@@ -452,10 +480,16 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                       inputMode="numeric" onKeyDown={(e) => { if (e.key === "Enter") void onEdr(); }}
                       style={{ flex: "0 1 220px", fontFamily: "var(--mono)", letterSpacing: ".08em" }} />
                     <button className="btn pri sm" onClick={() => void onEdr()}>Підтягнути реквізити</button>
-                    <span style={{ fontSize: 11.5, color: "var(--muted)" }}>Спершу — ваш довідник контрагентів, якщо там немає — ЄДР через YouControl.</span>
+                    <span style={{ fontSize: 11.5, color: "var(--muted)" }}>Спершу — 1С (рахунок і контакти), директор — з ЄДР; якщо в 1С немає — ваш довідник, потім ЄДР через YouControl.</span>
                   </div>
                   {edrNote && <div style={{ fontSize: 12, marginTop: 7, color: edrNote.warn ? "var(--bad)" : "var(--muted)" }}>
-                    {edrNote.warn && <b>⚠ {edrNote.warn}. </b>}{edrNote.t}</div>}
+                    {edrNote.warn && <b>⚠ {edrNote.warn}. </b>}{edrNote.t}
+                    {edrNote.bookIban && <div style={{ marginTop: 5, color: "var(--text)" }}>
+                      ⚠ У вашому довіднику інший IBAN: <span style={{ fontFamily: "var(--mono)" }}>{edrNote.bookIban.iban}</span>
+                      {edrNote.bookIban.bank ? ` (${edrNote.bookIban.bank})` : ""}. Підставлено з 1С — саме на нього підуть платежі.{" "}
+                      <button className="btn sm" onClick={() => { const b = edrNote.bookIban!; applyParsed({ iban: b.iban, bank: b.bank } as CtorCounterparty);
+                        setEdrNote((n) => n && { ...n, bookIban: null, t: n.t + " IBAN замінено на довідниковий." }); }}>Взяти з довідника</button>
+                    </div>}</div>}
                 </div>
               )}
               {way === "book" && (

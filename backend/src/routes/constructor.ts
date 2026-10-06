@@ -38,6 +38,7 @@ import { canSeeConstructorDoc, stateFromBody, fileBase, VIEW_ALL_PERM } from "..
 import { DOCS_DIR } from "../jobs/backupDb.js";
 import { MANAGER_CONTACT_SQL, POOL_STATS_SQL } from "../constructor/sql.js";
 import { lookupRegistry } from "../constructor/youscore.js";
+import { lookup1c, resolveRequisites } from "../constructor/onec.js";
 import { validateForm, firstError, type Issue } from "../constructor/validate.js";
 
 /** Підписи й печатки — лише на сервері, поза git (репозиторій публічний). Тека вже в нічному бекапі. */
@@ -137,21 +138,23 @@ constructorRouter.put("/counterparties", h(async (req, res) => {
   res.json(q.rows[0]);
 }));
 
-/* ── Автопідстановка за ЄДРПОУ — поки з власного довідника (живий реєстр — окреме рішення) ── */
+/* ── Автопідстановка за ЄДРПОУ: 1С → (ЄДР для директора) → довідник; у 1С немає — довідник → ЄДР ── */
 constructorRouter.get("/edrpou/:code", h(async (req, res) => {
   const code = req.params.code.replace(/\D/g, "");
   if (!/^\d{8}$|^\d{10}$/.test(code)) throw new HttpError(400, "ЄДРПОУ — 8 цифр (ІПН ФОП — 10).");
-  const q = await pool.query(`SELECT id, edrpou, name, ipn, address, iban, bank, phone, email, director, is_fop, updated_at FROM constructor_counterparties WHERE edrpou = $1`, [code]);
-  if (q.rows[0]) return void res.json({ source: "book", row: q.rows[0] });
-  // Немає у своєму довіднику — ЄДР через YouScore (кеш 30 днів: кожен запит — транзакція тарифу).
-  const r = await lookupRegistry(pool, code, { userId: req.auth!.userId });
-  const manual = "Заповніть реквізити — після формування контрагент збережеться в довіднику.";
-  if (r.kind === "ok") return void res.json({ source: "youscore", card: r.card, cached: r.cached });
-  if (r.kind === "updating") return void res.status(202).json({ updating: true, error: "Реєстр оновлює дані цієї компанії — повторюю за 20 секунд." });
-  if (r.kind === "notFound") throw new HttpError(404, `Коду ${code} немає ні в довіднику, ні в ЄДР. Перевірте цифри. ${manual}`);
-  if (r.kind === "unconfigured") throw new HttpError(404, `У довіднику такого коду немає, а пошук у ЄДР не налаштовано. ${manual}`);
-  console.error("[constructor] ЄДР:", r.why);   // лише причина-статус, без ключа й адреси
-  throw new HttpError(404, `У довіднику такого коду немає, а ЄДР зараз не відповідає (${r.why}). ${manual}`);
+  // Порядок і зведення — `constructor/onec.resolveRequisites` (гейти ганяють рівно його). ЄДР — через YouScore
+  // (кеш 30 днів: кожен запит — транзакція тарифу).
+  const r = await resolveRequisites(code, {
+    oneC: () => lookup1c(code),
+    book: async () => (await pool.query(`SELECT id, edrpou, name, ipn, address, iban, bank, phone, email, director, is_fop, updated_at FROM constructor_counterparties WHERE edrpou = $1`, [code])).rows[0] ?? null,
+    registry: async () => {
+      const x = await lookupRegistry(pool, code, { userId: req.auth!.userId });
+      if (x.kind === "failed") console.error("[constructor] ЄДР:", x.why);   // лише причина-статус, без ключа й адреси
+      return x;
+    },
+  });
+  if (r.kind === "error") throw new HttpError(r.status, r.message);
+  res.status(r.status).json(r.body);
 }));
 
 /* ── Прев'ю без збереження ── */

@@ -5467,10 +5467,25 @@ export interface CtorRegistryCard {
   edrpou: string; name: string; ipn: string; addr: string; dir: string; phone: string; email: string;
   isFop: boolean; actualDate: string | null; status: string | null; warn: string | null;
 }
-/** Пошук за ЄДРПОУ: свій довідник → ЄДР. `updating` — реєстр оновлює дані (HTTP 202), повторити пізніше. */
+/** Реквізити, зведені з 1С (рахунок, банк, контакти) і ЄДР (директор, назва, стан) — `constructor/onec.ts`. */
+export interface CtorOneCCard {
+  edrpou: string; name: string; ipn: string; addr: string; dir: string; phone: string; email: string;
+  iban: string; bank: string; isFop: boolean;
+  /** Звідки IBAN: 1С, довідник (у 1С немає коректного), або ніде — менеджер впише сам. */
+  ibanSource: "1c" | "book" | null;
+  /** У 1С рахунок не у форматі UA+27 цифр — показуємо, але не підставляємо. */
+  ibanInvalid1c: string | null;
+  /** У довіднику інший IBAN, ніж у 1С: підставлено 1С, довідниковий — кнопкою. */
+  bookIban: { iban: string; bank: string } | null;
+  warn: string | null;
+}
+type CtorRegistryKind = "ok" | "updating" | "notFound" | "unconfigured" | "failed";
+/** Пошук за ЄДРПОУ: 1С → ЄДР (директор) → довідник; у 1С немає — довідник → ЄДР. `updating` — реєстр оновлює
+ *  дані (HTTP 202), повторити пізніше. `oneC` — чи шукали в 1С і що вийшло (збій лише підписується). */
 export type CtorEdrResult =
-  | { source: "book"; row: CtorCounterpartyRow }
-  | { source: "youscore"; card: CtorRegistryCard; cached: boolean }
+  | { source: "1c"; card: CtorOneCCard; registry: CtorRegistryKind; cached: boolean; registryWhy: string | null }
+  | { source: "book"; row: CtorCounterpartyRow; oneC?: "notFound" | "failed"; oneCWhy?: string | null }
+  | { source: "youscore"; card: CtorRegistryCard; cached: boolean; oneC?: "notFound" | "failed"; oneCWhy?: string | null }
   | { updating: true; error: string };
 export const ctorByEdrpou = async (code: string) =>
   (await api.get<CtorEdrResult>(`/constructor/edrpou/${encodeURIComponent(code)}`)).data;
