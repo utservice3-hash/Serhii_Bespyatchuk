@@ -507,6 +507,9 @@ CREATE TABLE IF NOT EXISTS receivable_invoice_notes (
 );
 -- Анти-дубль авто-задачі і для КЛІЄНТСЬКОГО дедлайну (receivable_notes.due_date).
 ALTER TABLE receivable_notes ADD COLUMN IF NOT EXISTS task_created_at TIMESTAMPTZ;
+-- 🗓 Домовленість привʼязується до УГОДИ (06.10.2026, `core/receivableAgreement.ts`): запис актуальний,
+-- поки ця угода серед неоплачених рахунків клієнта. NULL — старий запис без угоди (правило за датою).
+ALTER TABLE receivable_notes ADD COLUMN IF NOT EXISTS deal_id BIGINT;
 
 -- 🗓 ІСТОРІЯ ДОМОВЛЕНОСТЕЙ — ДОПИСУВАНА, НІКОЛИ НЕ ЗАТИРАЄТЬСЯ.
 --
@@ -526,6 +529,8 @@ CREATE TABLE IF NOT EXISTS receivable_note_history (
   written_by INTEGER REFERENCES users(id),
   written_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Журнал теж знає, до якої угоди був запис (06.10.2026).
+ALTER TABLE receivable_note_history ADD COLUMN IF NOT EXISTS deal_id BIGINT;
 CREATE INDEX IF NOT EXISTS idx_receivable_note_history_client
   ON receivable_note_history(client_key, written_at DESC);
 

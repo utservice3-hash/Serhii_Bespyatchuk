@@ -106,6 +106,7 @@ import { firstTouchCell, glanceFirstTouch, firstTouchOutsideRoster } from "../co
 import * as receivablesFacts from "../core/receivablesFacts.js";
 import * as receivablesCounterparty from "../core/receivablesCounterparty.js";
 import * as receivableNotePick from "../core/receivableNotePick.js";
+import { agreementActual, defaultAgreementDeal } from "../core/receivableAgreement.js";
 import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
 import { debtAgeDays, CLIENT_DEBT_AGE_SQL } from "../core/receivablesAge.js";
 import * as mergeLimits from "../core/mergeLimits.js";
@@ -2212,7 +2213,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
 
   const clientKeys = rows.map((r) => r.clientKey).filter((k): k is string => k != null);
   const notesRes = clientKeys.length
-    ? await pool.query<{ client_key: string; canon_key: string; comment: string | null; due_date: string | null; updated_at: string | null; hist: number }>(
+    ? await pool.query<{ client_key: string; canon_key: string; comment: string | null; due_date: string | null; updated_at: string | null; hist: number; deal_id: string | null }>(
         // 🗓 `updated_at` їде НА ЕКРАН, бо саме він вирішує, чи домовленість ще
         // актуальна: активним є запис ПІСЛЯ понеділка 00:00 за Києвом. Без нього
         // фронт мусив би вгадувати, і торішній текст читався б як сьогоднішня
@@ -2227,7 +2228,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
         // теж читає канонічний ключ, і лічильник, більший за вміст діалогу, був
         // би двома джерелами одного числа. Розширення журналу — окремий обсяг.
         `SELECT n.client_key, COALESCE(a.canonical_key, n.client_key) AS canon_key,
-                n.comment, to_char(n.due_date, 'YYYY-MM-DD') AS due_date,
+                n.comment, to_char(n.due_date, 'YYYY-MM-DD') AS due_date, n.deal_id::text AS deal_id,
                 -- 🔴 OF ВІДДАЄ ДВОЗНАЧНЕ ЗМІЩЕННЯ (+03), А ECMAScript ВИМАГАЄ +HH:MM.
                 -- new Date("2026-08-26T10:21:50+03") дає Invalid Date, Intl.format
                 -- кидає, і виняток усередині .map по рядках убиває ВСЮ секцію —
@@ -2242,7 +2243,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
           WHERE n.client_key = ANY($1) OR a.canonical_key = ANY($1)`,
         [clientKeys]
       )
-    : { rows: [] as { client_key: string; canon_key: string; comment: string | null; due_date: string | null; updated_at: string | null; hist: number }[] };
+    : { rows: [] as { client_key: string; canon_key: string; comment: string | null; due_date: string | null; updated_at: string | null; hist: number; deal_id: string | null }[] };
   // 🗒 Групуємо ПО КАНОНІЧНОМУ ключу — рядок один, записів у наборі може бути кілька.
   const notesByCanon = new Map<string, typeof notesRes.rows>();
   for (const n of notesRes.rows) {
@@ -2328,6 +2329,8 @@ dashboardRouter.get("/receivables", async (req, res) => {
     limitDays: number | null; limitAmount: number | null; overdueDays: number | null; comment: string | null; dueDate: string | null;
     ownerSource: string; majorityName: string | null;
     noteUpdatedAt: string | null; noteHistoryCount: number;
+    /** 🗓 До якої угоди привʼязаний запис і чи він ще про поточний борг (`core/receivableAgreement`). */
+    noteDealId: number | null; noteActual: boolean;
     /** Юрособа, з ключа якої взято показаний запис; `null` — запис канонічний. */
     noteFrom: string | null;
     /** Назви юросіб решти записів набору — для підпису «ще N». */
@@ -2356,6 +2359,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
       counterpartyName: cf?.counterparty[x.client_key]?.name ?? null,
       comment: x.comment, dueDate: x.due_date, updatedAt: x.updated_at,
       isCanonical: x.client_key === r.clientKey,
+      dealId: x.deal_id == null ? null : Number(x.deal_id),
     }));
     const picked = receivableNotePick.pickRowNote(noteSet);
     const n = picked.primary;
@@ -2398,6 +2402,11 @@ dashboardRouter.get("/receivables", async (req, res) => {
       limitDays: r.limitDays, limitAmount: r.limitAmount, overdueDays: r.overdueDays,
       comment: n?.comment ?? null, dueDate: n?.dueDate ?? null,
       noteUpdatedAt: n?.updatedAt ?? null, noteHistoryCount: canonHist,
+      // 🗓 Запис старий (з попередньої угоди) → екран бере дату з CRM (`facts.crmDueNearest`), а запис
+      // показує сірим. Рішення — тут, одним правилом з джобою задач, а не на фронті.
+      noteDealId: n?.dealId ?? null,
+      noteActual: n ? agreementActual({ noteDealId: n.dealId ?? null, noteUpdatedAt: n.updatedAt,
+        openDealIds: (cf?.deals ?? []).map((d) => d.dealId), newestDealAt: cf?.newestDealAt ?? null }) : true,
       // 🏢 Звідки саме цей запис і скільки їх іще в наборі. Порожній масив —
       // звичайний незлитий клієнт, і рядок виглядає точно як раніше.
       noteFrom: n && !n.isCanonical ? n.counterpartyName ?? n.clientKey : null,
@@ -3148,6 +3157,8 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
         // читається як «нічого немає», а не як «ми не знаємо».
         ourEntity: f?.entity ?? null,
         ourEntityReason: f?.entityReason ?? null,
+        // 🗓 Планова дата оплати з CRM по цьому рахунку (його угоді) — колонка «дата з CRM» у розкритті.
+        crmDue: f?.crmDue ?? null,
         // Чи є за рахунком угода. Мертвий 🔗 у сорока рядках поспіль гірший за
         // чесний підпис «угоди немає»: він обіцяє перехід, якого не буде.
         // 🚚 ПЕРЕВІЗНИК ОПЛАЧЕНИЙ — ПО КОЖНОМУ РАХУНКУ, а не лише в плитці.
@@ -4184,20 +4195,44 @@ dashboardRouter.put("/receivables/note", async (req, res) => {
   const incoming = req.body?.comment != null ? String(req.body.comment) : null;
   const clear = req.body?.clear === true;
   const dueDate = req.body?.dueDate ? String(req.body.dueDate) : null;
+  /**
+   * 🗓 ДОМОВЛЕНІСТЬ — ДО КОНКРЕТНОЇ УГОДИ (06.10.2026). Угода мусить бути серед НЕОПЛАЧЕНИХ рахунків
+   * клієнта (ті самі факти, що живлять екран); не обрали — та, де найраніша дата оплати в CRM. Угод
+   * немає (рахунки з 1С без посилання) — запис лишається клієнтським, як раніше.
+   */
+  const clientDeals = receivablesFacts.foldFacts(await receivablesFacts.loadInvoiceFacts(pool, [clientKey]))
+    .byClient.get(clientKey)?.deals ?? [];
+  let dealId: number | null;
+  if (req.body?.dealId != null && req.body.dealId !== "") {
+    dealId = Number(req.body.dealId);
+    if (!clientDeals.some((d) => d.dealId === dealId)) {
+      return res.status(400).json({ error: "Ця угода не серед неоплачених рахунків клієнта" });
+    }
+  } else {
+    dealId = defaultAgreementDeal(clientDeals);
+  }
   // 🗒 Порожній коментар не затирає текст — див. `core/receivableNoteMerge.ts` (#459).
-  const prev = await pool.query<{ comment: string | null }>(`SELECT comment FROM receivable_notes WHERE client_key = $1`, [clientKey]);
-  const comment = mergeNoteComment(prev.rows[0]?.comment ?? null, incoming, clear);
+  const prev = await pool.query<{ comment: string | null; deal_id: string | null }>(
+    `SELECT comment, deal_id::text AS deal_id FROM receivable_notes WHERE client_key = $1`, [clientKey]);
+  // 🗓 Нова угода — новий запис: порожнє поле НЕ підтягує текст попередньої угоди (06.10.2026), інакше
+  // стара обіцянка тихо переїхала б на нову угоду. Та сама угода — злиття як і раніше (#459).
+  const prevDeal = prev.rows[0]?.deal_id == null ? null : Number(prev.rows[0].deal_id);
+  const sameDeal = prev.rows.length > 0 && prevDeal === dealId;
+  const comment = sameDeal || prev.rows.length === 0
+    ? mergeNoteComment(prev.rows[0]?.comment ?? null, incoming, clear)
+    : mergeNoteComment(null, incoming, clear);
   const commentChanged = (comment ?? "") !== ((prev.rows[0]?.comment ?? "").trim());
   await pool.query(
-    `INSERT INTO receivable_notes (client_key, comment, due_date, updated_by, updated_at)
-     VALUES ($1, $2, $3, $4, now())
+    `INSERT INTO receivable_notes (client_key, comment, due_date, updated_by, updated_at, deal_id)
+     VALUES ($1, $2, $3, $4, now(), $5)
      ON CONFLICT (client_key) DO UPDATE SET
-       comment = EXCLUDED.comment, due_date = EXCLUDED.due_date,
-       -- зміна дедлайну знімає анти-дубль авто-задачі «отримати оплату»
+       comment = EXCLUDED.comment, due_date = EXCLUDED.due_date, deal_id = EXCLUDED.deal_id,
+       -- зміна дедлайну або угоди знімає анти-дубль авто-задачі «отримати оплату»
        task_created_at = CASE WHEN receivable_notes.due_date IS DISTINCT FROM EXCLUDED.due_date
+                                OR receivable_notes.deal_id IS DISTINCT FROM EXCLUDED.deal_id
                               THEN NULL ELSE receivable_notes.task_created_at END,
        updated_by = EXCLUDED.updated_by, updated_at = now()`,
-    [clientKey, comment, dueDate, auth.userId]
+    [clientKey, comment, dueDate, auth.userId, dealId]
   );
   // 🗓 ІСТОРІЯ ДОПИСУЄТЬСЯ, А НЕ ЗАМІНЮЄТЬСЯ. Поле щотижня «порожніє» правилом
   // (`isCurrentWeekNote`), і без цього рядка минулі домовленості справді б
@@ -4206,11 +4241,11 @@ dashboardRouter.put("/receivables/note", async (req, res) => {
   // (збережений злиттям при зміні дати) — теж: інакше журнал повторював би той самий рядок.
   if (comment && comment.trim() && commentChanged) {
     await pool.query(
-      `INSERT INTO receivable_note_history (client_key, comment, written_by) VALUES ($1, $2, $3)`,
-      [clientKey, comment.trim(), auth.userId]
+      `INSERT INTO receivable_note_history (client_key, comment, written_by, deal_id) VALUES ($1, $2, $3, $4)`,
+      [clientKey, comment.trim(), auth.userId, dealId]
     );
   }
-  res.json({ ok: true });
+  res.json({ ok: true, dealId });
 });
 
 /**

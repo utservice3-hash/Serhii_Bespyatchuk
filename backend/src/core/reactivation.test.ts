@@ -1153,6 +1153,45 @@ test("#25 clientStates ВИКОНУЄТЬСЯ проти БД і дає стан
         await c.query(`DELETE FROM deals WHERE kommo_id BETWEEN 9800001 AND 9800005`);
       }
     });
+
+    /**
+     * #1392 — ЖИВИЙ SQL «ДОМОВЛЕНОСТІ» (06.10.2026): дата з CRM — день за Києвом; найраніша серед угод;
+     * правило актуальності в SQL (джоба задач) збігається з чистою функцією.
+     */
+    await t.test("#1392 ЖИВИЙ SQL ДОМОВЛЕНОСТІ: дата з CRM за Києвом, найраніша серед угод; актуальність у SQL == правилу", async () => {
+      const F = await import("./receivablesFacts.js");
+      const AG = await import("./receivableAgreement.js");
+      await c.query(`INSERT INTO deals (kommo_id,name,manager_id,pipeline_id,status_id,price,client_key,client_name,created_at_kommo,planned_payment_at) VALUES
+        (9700001,'дом-1',10,8921932,100274340,100,'дом-кл','ДОМ ТОВ','2026-10-05 09:00+00','2026-10-05 21:00+00'),
+        (9700002,'дом-2',10,8921932,100274340,100,'дом-кл','ДОМ ТОВ','2026-09-20 09:00+00','2026-10-12 21:00+00')`);
+      await c.query(`INSERT INTO receivable_invoices (client_key, client_name, invoice_no, invoice_date, amount, service_url, client_key_raw) VALUES
+        ('дом-кл','ДОМ ТОВ','Д-1','2026-10-05',7000,'https://x.kommo.com/leads/detail/9700001','дом-кл'),
+        ('дом-кл','ДОМ ТОВ','Д-2','2026-09-20',3000,'https://x.kommo.com/leads/detail/9700002','дом-кл')`);
+      try {
+        const facts = await F.loadInvoiceFacts(c, ["дом-кл"]);
+        const byNo = new Map(facts.map((f) => [f.invoiceNo, f]));
+        assert.equal(byNo.get("Д-1")?.crmDue, "2026-10-06", "🔴 21:00 UTC 05.10 не став 06.10 за Києвом");
+        const cf = F.foldFacts(facts).byClient.get("дом-кл")!;
+        assert.equal(cf.crmDueNearest, "2026-10-06", "🔴 найраніша дата з CRM серед угод клієнта не та");
+        assert.equal(cf.deals.length, 2, "🔴 угоди неоплачених рахунків не зібрано");
+        // SQL-правило (джоба) == чиста функція: старий запис 31.08 — ні; привʼязаний до живої угоди — так; до зниклої — ні.
+        const sqlActual = async (dealId: number | null, updatedAt: string) => {
+          await c.query(`INSERT INTO receivable_notes (client_key, due_date, updated_at, deal_id) VALUES ('дом-кл','2026-08-31',$1,$2)
+                         ON CONFLICT (client_key) DO UPDATE SET updated_at = EXCLUDED.updated_at, deal_id = EXCLUDED.deal_id`, [updatedAt, dealId]);
+          return (await c.query<{ v: boolean }>(`SELECT ${AG.agreementActualSql("n")} AS v FROM receivable_notes n WHERE n.client_key = 'дом-кл'`)).rows[0].v;
+        };
+        const ts = (dealId: number | null, updatedAt: string) => AG.agreementActual({ noteDealId: dealId, noteUpdatedAt: updatedAt,
+          openDealIds: cf.deals.map((d) => d.dealId), newestDealAt: cf.newestDealAt });
+        for (const [dealId, upd] of [[null, "2026-08-31T13:04:00Z"], [null, "2026-10-06T08:00:00Z"], [9700002, "2026-08-31T13:04:00Z"], [9699999, "2026-10-06T08:00:00Z"]] as const) {
+          assert.equal(await sqlActual(dealId, upd), ts(dealId, upd), `🔴 SQL і чиста функція розійшлись: угода ${dealId}, запис ${upd}`);
+        }
+        assert.equal(await sqlActual(null, "2026-08-31T13:04:00Z"), false, "🔴 Бінарт-випадок: старий запис актуальний у SQL");
+      } finally {
+        await c.query(`DELETE FROM receivable_notes WHERE client_key = 'дом-кл'`);
+        await c.query(`DELETE FROM receivable_invoices WHERE client_key = 'дом-кл'`);
+        await c.query(`DELETE FROM deals WHERE kommo_id IN (9700001, 9700002)`);
+      }
+    });
   } finally {
     await pool.end().catch(() => {});
     await c.end();

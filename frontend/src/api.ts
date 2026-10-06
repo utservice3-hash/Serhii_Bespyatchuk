@@ -1954,6 +1954,12 @@ export interface ReceivableClientFacts {
   /** 🗑 Списано як безнадійне. У `amount` НЕ входить, але видно підписом. */
   writtenOffN: number;
   writtenOffAmount: number;
+  /** 🗓 Найраніша планова дата оплати з CRM серед неоплачених рахунків (YYYY-MM-DD, Київ). */
+  crmDueNearest?: string | null;
+  /** Коли створено найновішу угоду неоплачених рахунків (ISO UTC). */
+  newestDealAt?: string | null;
+  /** Угоди неоплачених рахунків — для вибору, до якої привʼязати домовленість. */
+  deals?: { dealId: number; invoiceNo: string | null; crmDue: string | null; createdAt: string | null }[];
 }
 
 /** Ті самі числа, що в ярликах рядків, — джерело ПЛИТОК. Вираз один на обох. */
@@ -1991,6 +1997,10 @@ export interface ReceivableClient {
    * Нічого не затирається — змінюється лише те, що вважається активним.
    */
   noteUpdatedAt: string | null;
+  /** 🗓 До якої угоди привʼязано запис (з 06.10.2026); `null` — старий клієнтський запис. */
+  noteDealId?: number | null;
+  /** Чи запис про ПОТОЧНИЙ борг. `false` — він з попередньої угоди: дата береться з CRM. Рішення сервера. */
+  noteActual?: boolean;
   /**
    * Скільки записів у журналі домовленостей. 0 → кнопки «історія» немає.
    * ⚠️ Рахується по КАНОНІЧНОМУ ключу — так само, як їх віддає `/note-history`.
@@ -2193,6 +2203,8 @@ export async function saveReceivableNote(payload: {
   dueDate?: string | null;
   /** Порожній `comment` без цього прапорця НЕ стирає текст на сервері (17.09.2026). */
   clear?: boolean;
+  /** До якої угоди запис (06.10.2026). Не передали — сервер бере угоду з найближчою датою оплати в CRM. */
+  dealId?: number | null;
 }): Promise<void> {
   await api.put("/dashboard/receivables/note", payload);
 }
@@ -2236,6 +2248,8 @@ export interface ReceivableInvoice {
   ourEntity: ReceivableEntity | null;
   /** Чому наша юрособа невідома. «Невідомо» без причини — порожнє місце. */
   ourEntityReason: ReceivableEntityReason | null;
+  /** 🗓 Планова дата оплати з CRM по угоді цього рахунку (YYYY-MM-DD) або `null`. */
+  crmDue?: string | null;
   /**
    * 🚚 Чи оплачений перевізник за цим рахунком. `na` — «не знаємо», і воно
    * ЗАВЖДИ приходить із причиною: відсутність угоди не є фактом неоплати.
