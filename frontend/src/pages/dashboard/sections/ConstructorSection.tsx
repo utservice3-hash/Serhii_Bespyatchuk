@@ -22,7 +22,7 @@ import {
   ctorParse, ctorParseOld, ctorPool, ctorPoolStats, ctorPreview, ctorRouteTemplates, ctorSaveCounterparty, ctorSaveRouteTemplate,
   ctorDeleteRouteTemplate, ctorPairZip, ctorConvertToPdf, ctorConvertFromPdf,
   type CtorArchiveRow, type CtorCounterparty, type CtorCounterpartyRow, type CtorEntityKey, type CtorEntityRow, type CtorForm,
-  type CtorParty, type CtorRouteTemplate, type CtorStatDay, type CtorIssue, type CtorRegistryCard, type CtorEdrResult,
+  type CtorParty, type CtorRouteTemplate, type CtorStatDay, type CtorIssue, type CtorRegistryCard, type CtorEdrResult, type CtorFieldSource,
 } from "../../../api";
 import "./mockFonts.css";
 import "./constructor.css";
@@ -42,6 +42,11 @@ const DOCS: Array<{ k: string; t: string; p: CtorParty; off?: string; fopOff?: b
   { k: "carr", t: "Разовий договір-заявка", p: "carrier" },
   { k: "mainc", t: "Основний договір", p: "carrier", off: "шаблону поки немає — за рішенням від 01.10 пропускаємо" },
 ];
+type EdrKind = "ok" | "warn" | "info" | "bad" | "wait";
+const EDR_ICON: Record<EdrKind, string> = { ok: "✅", warn: "⚠️", info: "ℹ️", bad: "❌", wait: "⏳" };
+const SRC_LABEL: Record<CtorFieldSource, string> = { "1c": "1С", edr: "ЄДР", book: "довідник" };
+const SRC_HINT: Record<CtorFieldSource, string> = {
+  "1c": "Взято з 1С (бухгалтерія)", edr: "Взято з ЄДР (державний реєстр, YouControl)", book: "Взято з вашого довідника контрагентів" };
 const FIELDS: Array<[keyof CtorCounterparty, string]> = [
   ["name", "Назва"], ["edrpou", "ЄДРПОУ"], ["ipn", "ІПН / ПДВ"], ["addr", "Адреса"],
   ["iban", "IBAN"], ["bank", "Банк"], ["phone", "Телефон"], ["email", "Пошта"], ["dir", "Директор"],
@@ -122,7 +127,18 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
   const [bookPick, setBookPick] = useState<number | null>(null);
   const [edrq, setEdrq] = useState("");
   /** Звідки підставлено реквізити за ЄДРПОУ і чи є тривога реєстру (припинення, банкрутство). */
-  const [edrNote, setEdrNote] = useState<{ t: string; warn?: string | null; bookIban?: { iban: string; bank: string } | null } | null>(null);
+  /**
+   * Підсумок пошуку за ЄДРПОУ — КОРОТКИЙ статус (заголовок + пояснення), а не речення дрібним сірим (06.10.2026, Роман:
+   * «не розумію»). `kind` дає значок і колір: ok ✅ · warn ⚠️ · info ℹ️ · bad ❌ · wait ⏳.
+   */
+  const [edrNote, setEdrNote] = useState<{ kind: EdrKind; title: string; detail?: string; warn?: string | null; bookIban?: { iban: string; bank: string } | null } | null>(null);
+  /** Іде запит — кнопка заблокована, під полем «шукаю»: холодна 1С відповідає 3–4 с, і без цього здавалось, що не спрацювало. */
+  const [edrBusy, setEdrBusy] = useState(false);
+  /**
+   * Мітка джерела біля поля: звідки взялось значення. Зберігається РАЗОМ зі значенням (`v`) — мітка показується, лише
+   * поки поле не змінили: правка руками, розбір тексту чи інший контрагент гасять її самі, без окремого прибирання.
+   */
+  const [cpSrc, setCpSrc] = useState<Partial<Record<keyof CtorCounterparty, { from: CtorFieldSource; v: string }>>>({});
   const edrTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (edrTimer.current) clearTimeout(edrTimer.current); }, []);
   const [raw, setRaw] = useState("");
@@ -224,17 +240,25 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
       catch (e) { await bad(e); }
     }
   };
+  /** Мітки «звідки» для набору полів: одне джерело на всі непорожні (довідник, ЄДР) або карта з сервера (1С). */
+  const tagsOf = (cp: CtorCounterparty, from: CtorFieldSource | Partial<Record<keyof CtorCounterparty, CtorFieldSource>>) =>
+    Object.fromEntries((Object.entries(cp) as Array<[keyof CtorCounterparty, string | undefined]>)
+      .map(([k, v]) => [k, typeof from === "string" ? from : from[k], v ?? ""] as const)
+      .filter(([, f, v]) => f && v).map(([k, f, v]) => [k, { from: f!, v }])) as typeof cpSrc;
   const onPickBook = (row: CtorCounterpartyRow) => {
     setBookPick(row.id);
-    replaceCp({ name: row.name, edrpou: row.edrpou || "", ipn: row.ipn || "", addr: row.address || "", iban: row.iban || "",
-      bank: row.bank || "", phone: row.phone || "", email: row.email || "", dir: row.director || "" });
+    const cp = { name: row.name, edrpou: row.edrpou || "", ipn: row.ipn || "", addr: row.address || "", iban: row.iban || "",
+      bank: row.bank || "", phone: row.phone || "", email: row.email || "", dir: row.director || "" };
+    replaceCp(cp); setCpSrc(tagsOf(cp, "book"));
     ok(`Підставлено з довідника: ${row.name}.`);
   };
   const onPickRegistry = (c: CtorRegistryCard, cached: boolean) => {
     setBookPick(null);
-    replaceCp({ name: c.name, edrpou: c.edrpou, ipn: c.ipn, addr: c.addr, iban: "", bank: "", phone: c.phone, email: c.email, dir: c.dir });
+    const cp = { name: c.name, edrpou: c.edrpou, ipn: c.ipn, addr: c.addr, iban: "", bank: "", phone: c.phone, email: c.email, dir: c.dir };
+    replaceCp(cp); setCpSrc(tagsOf(cp, "edr"));
     const at = c.actualDate ? new Date(c.actualDate).toLocaleDateString("uk-UA") : "—";
-    setEdrNote({ t: `З ЄДР (YouControl), станом на ${at}${cached ? " · з кешу" : ""}. IBAN і банк у реєстрі немає — впишіть вручну.`, warn: c.warn });
+    setEdrNote({ kind: "info", title: "У 1С немає — реквізити з ЄДР",
+      detail: `IBAN і банк у реєстрі немає — впишіть вручну · ЄДР станом на ${at}${cached ? " (з кешу)" : ""}`, warn: c.warn });
     if (c.warn) void bad(`Увага: ${c.warn}. Перевірте, чи можна укладати договір.`);
     else ok(`Підставлено з ЄДР: ${c.name}.`);
   };
@@ -243,46 +267,63 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
    * лише в ~4 з 10 клієнтів (замір 06.10.2026), і порожнє поле без підпису читалось би як «ще вантажиться».
    * `refill` — повтор, коли ЄДР оновлювався: підставляємо лише в ПОРОЖНІ поля, щоб не стерти вже виправлене руками.
    */
-  const onPick1c = (r: Extract<CtorEdrResult, { source: "1c" }>, refill: boolean) => {
+  const onPick1c = (r: Extract<CtorEdrResult, { source: "1c" }>, refill: boolean, attempt: number) => {
     const c = r.card;
     if (!refill) setBookPick(null);
     const cp = { name: c.name, edrpou: c.edrpou, ipn: c.ipn, addr: c.addr, iban: c.iban, bank: c.bank,
       phone: c.phone, email: c.email, dir: c.dir };
-    if (refill) applyParsed(cp, true); else replaceCp(cp);
+    // Повтор лише дописує порожнє; мітки ставимо всім — та, чиє поле вже виправили руками, сама не покажеться (v ≠ значення).
+    if (refill) { applyParsed(cp, true); setCpSrc((s) => ({ ...s, ...tagsOf(cp, c.src) })); }
+    else { replaceCp(cp); setCpSrc(tagsOf(cp, c.src)); }
+    const noIban = !c.iban;
+    const title = noIban
+      ? (c.ibanInvalid1c ? "Знайдено в 1С, але рахунок там у неправильному форматі" : "Знайдено в 1С, але рахунку там немає")
+      : "Знайдено в 1С";
     const iban = c.ibanSource === "1c" ? "рахунок і банк — з 1С"
-      : c.ibanSource === "book" ? "у 1С рахунку немає — IBAN з вашого довідника"
-      : c.ibanInvalid1c ? `у 1С рахунок у неправильному форматі (${c.ibanInvalid1c}) — впишіть IBAN вручну`
-      : "у 1С рахунку немає — впишіть IBAN вручну";
-    const reg = r.registry === "ok" ? `директор і назва — з ЄДР${r.cached ? " (кеш)" : ""}`
-      : r.registry === "updating" ? "директора з ЄДР ще немає: реєстр оновлює дані, повторюю за 20 с"
+      : c.ibanSource === "book" ? "рахунку в 1С немає — IBAN з вашого довідника"
+      : c.ibanInvalid1c ? `у 1С записано «${c.ibanInvalid1c}» — впишіть IBAN вручну`
+      : "впишіть IBAN вручну";
+    const regOk = r.registry === "ok";
+    const reg = regOk ? "директор і назва — з ЄДР"
+      : r.registry === "updating" ? (attempt < 3 ? `директора ще шукаю: ЄДР оновлює дані, повторю за 20 с (спроба ${attempt + 1} з 3)` : "ЄДР досі оновлює дані — директора впишіть вручну")
       : r.registry === "notFound" ? "у ЄДР коду немає — директора впишіть вручну"
       : r.registry === "unconfigured" ? "пошук у ЄДР не налаштовано — директора впишіть вручну"
       : `ЄДР зараз недоступний${r.registryWhy ? ` (${r.registryWhy})` : ""} — директора впишіть вручну`;
-    setEdrNote({ t: `З 1С (бухгалтерія): ${iban}; ${reg}.`, warn: c.warn, bookIban: c.bookIban });
+    const kind: EdrKind = r.registry === "updating" && attempt < 3 ? "wait" : noIban || !regOk ? "warn" : "ok";
+    setEdrNote({ kind, title, detail: `${iban} · ${reg}`, warn: c.warn, bookIban: c.bookIban });
     if (c.warn) void bad(`Увага: ${c.warn}. Перевірте, чи можна укладати договір.`);
     else if (!refill) ok(`Підставлено з 1С: ${c.name}.`);
   };
   /** Підпис, коли 1С не змогли спитати: дані з довідника/ЄДР правдиві, але звірки з бухгалтерією не було. */
   const oneCTail = (r: { oneC?: "notFound" | "failed"; oneCWhy?: string | null }) =>
-    r.oneC === "failed" ? ` ${r.oneCWhy ?? "1С недоступна"} — звірки з 1С не було.` : r.oneC === "notFound" ? " У 1С такого контрагента немає." : "";
+    r.oneC === "failed" ? `${r.oneCWhy ?? "1С недоступна"} — звірки з бухгалтерією не було` : r.oneC === "notFound" ? "у 1С такого контрагента немає" : "";
   /** 202 — реєстр оновлює дані: повторюємо самі, до трьох разів із паузою 20 с (заміряно: ФОП ожив за ~20 с). */
   const onEdr = async (attempt = 0, refill = false) => {
     if (edrTimer.current) { clearTimeout(edrTimer.current); edrTimer.current = null; }
-    setEdrNote(null);
+    if (!refill) setEdrNote(null);
+    setEdrBusy(true);
     try {
       const r = await ctorByEdrpou(edrq);
       if ("updating" in r) {
-        if (attempt >= 3) { await bad("Реєстр досі оновлює дані — спробуйте за кілька хвилин або впишіть реквізити вручну."); return; }
-        ok(`${r.error} (спроба ${attempt + 1} з 3)`);
+        if (attempt >= 3) { setEdrNote({ kind: "bad", title: "ЄДР досі оновлює дані", detail: "спробуйте за кілька хвилин або впишіть реквізити вручну" }); return; }
+        setEdrNote({ kind: "wait", title: "ЄДР оновлює дані цієї компанії", detail: `повторю за 20 с (спроба ${attempt + 1} з 3)` });
         edrTimer.current = setTimeout(() => void onEdr(attempt + 1), 20000);
         return;
       }
       if (r.source === "1c") {
-        onPick1c(r, refill);
+        onPick1c(r, refill, attempt);
         if (r.registry === "updating" && attempt < 3) edrTimer.current = setTimeout(() => void onEdr(attempt + 1, true), 20000);
-      } else if (r.source === "book") { onPickBook(r.row); setEdrNote({ t: `З вашого довідника контрагентів.${oneCTail(r)}` }); }
-      else { onPickRegistry(r.card, r.cached); setEdrNote((n) => n && { ...n, t: n.t + oneCTail(r) }); }
-    } catch (e) { await bad(e); }
+      } else if (r.source === "book") {
+        onPickBook(r.row);
+        setEdrNote({ kind: "info", title: "Знайдено у вашому довіднику", detail: oneCTail(r) || undefined });
+      } else {
+        onPickRegistry(r.card, r.cached);
+        const tail = oneCTail(r);
+        if (tail) setEdrNote((n) => n && { ...n, detail: `${n.detail} · ${tail}` });
+      }
+    } catch (e) {
+      setEdrNote({ kind: "bad", title: "Не вдалося підтягнути реквізити", detail: await errOf(e) });
+    } finally { setEdrBusy(false); }
   };
 
   /* ── Сформувати (макет: generate) ── */
@@ -487,16 +528,20 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                     <input type="text" value={edrq} onChange={(e) => setEdrq(e.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="8 цифр коду ЄДРПОУ"
                       inputMode="numeric" onKeyDown={(e) => { if (e.key === "Enter") void onEdr(); }}
                       style={{ flex: "0 1 220px", fontFamily: "var(--mono)", letterSpacing: ".08em" }} />
-                    <button className="btn pri sm" onClick={() => void onEdr()}>Підтягнути реквізити</button>
+                    <button className="btn pri sm" disabled={edrBusy || !/^\d{8}$|^\d{10}$/.test(edrq)} onClick={() => void onEdr()}>
+                      {edrBusy ? "⏳ Шукаю…" : "Підтягнути реквізити"}</button>
                     <span style={{ fontSize: 11.5, color: "var(--muted)" }}>Спершу — 1С (рахунок і контакти), директор — з ЄДР; якщо в 1С немає — ваш довідник, потім ЄДР через YouControl.</span>
                   </div>
-                  {edrNote && <div style={{ fontSize: 12, marginTop: 7, color: edrNote.warn ? "var(--bad)" : "var(--muted)" }}>
-                    {edrNote.warn && <b>⚠ {edrNote.warn}. </b>}{edrNote.t}
-                    {edrNote.bookIban && <div style={{ marginTop: 5, color: "var(--text)" }}>
+                  {edrBusy && <div className="edrstat wait" role="status">⏳ <b>Шукаю в 1С і ЄДР</b> — до 5 секунд…</div>}
+                  {!edrBusy && edrNote && <div className={`edrstat ${edrNote.kind}`} role="status">
+                    {edrNote.warn && <div style={{ color: "var(--bad)", marginBottom: 3 }}><b>⚠ {edrNote.warn}.</b> Перевірте, чи можна укладати договір.</div>}
+                    {EDR_ICON[edrNote.kind]} <b>{edrNote.title}</b>{edrNote.detail ? <span className="d"> — {edrNote.detail}</span> : null}
+                    {edrNote.bookIban && <div style={{ marginTop: 5, color: "var(--ink)" }}>
                       ⚠ У вашому довіднику інший IBAN: <span style={{ fontFamily: "var(--mono)" }}>{edrNote.bookIban.iban}</span>
                       {edrNote.bookIban.bank ? ` (${edrNote.bookIban.bank})` : ""}. Підставлено з 1С — саме на нього підуть платежі.{" "}
                       <button className="btn sm" onClick={() => { const b = edrNote.bookIban!; applyParsed({ iban: b.iban, bank: b.bank } as CtorCounterparty);
-                        setEdrNote((n) => n && { ...n, bookIban: null, t: n.t + " IBAN замінено на довідниковий." }); }}>Взяти з довідника</button>
+                        setCpSrc((s) => ({ ...s, iban: { from: "book", v: b.iban }, ...(b.bank ? { bank: { from: "book" as const, v: b.bank } } : {}) }));
+                        setEdrNote((n) => n && { ...n, bookIban: null, detail: `${n.detail} · IBAN замінено на довідниковий` }); }}>Взяти з довідника</button>
                     </div>}</div>}
                 </div>
               )}
@@ -561,7 +606,8 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                   const st = is ? (is.level === "error" ? "err" : "wrn") : v ? "ok" : optional ? "opt" : "no";
                   return (
                     <div key={k} className={`frow ${v || optional ? "" : "miss"} ${is ? "has-" + st : ""}`}>
-                      <label htmlFor={`f-${k}`}>{l}</label>
+                      <label htmlFor={`f-${k}`}>{l}{cpSrc[k] && cpSrc[k]!.v === v && v
+                        ? <span className={`srctag src-${cpSrc[k]!.from}`} title={SRC_HINT[cpSrc[k]!.from]}>{SRC_LABEL[cpSrc[k]!.from]}</span> : null}</label>
                       <input id={`f-${k}`} value={v} placeholder={optional ? "необовʼязково — перевізник вкаже в рахунку" : "впишіть вручну"} onChange={(e) => setCp(k, e.target.value)} />
                       <span className={`st ${st}`} title={is?.msg ?? (!v && optional ? "Необовʼязкове поле" : undefined)}>{is ? (is.level === "error" ? "✕" : "⚠") : v ? "✓" : optional ? "—" : "!"}</span>
                       {is && <div className={`fmsg ${st}`}>{is.msg}</div>}

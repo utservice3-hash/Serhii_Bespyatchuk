@@ -170,6 +170,46 @@ test("#1398 ВИБІР КОНТРАГЕНТА ЗАМІНЮЄ РЕКВІЗИТИ:
     assert.doesNotMatch(body(name), /\bapplyParsed\(/, `🔴 ${name} доповнює реквізити замість заміни`);
   }
   assert.match(body("onPickRegistry"), /iban: "", bank: ""/, "🔴 ЄДР рахунку не дає — поле має очищатись, а не лишати старе");
-  assert.match(body("onPick1c"), /if \(refill\) applyParsed\(cp, true\); else replaceCp\(cp\);/,
+  assert.match(body("onPick1c"), /if \(refill\) \{ applyParsed\(cp, true\);[\s\S]{0,120}?\}\s*else \{ replaceCp\(cp\);/,
     "🔴 1С: перший вибір мусить замінювати, а повтор за директором — лише дописувати порожнє");
+});
+
+/** #1399 — мітки «1С / ЄДР / довідник» рахує сервер разом із вибором джерела: мітка = звідки РЕАЛЬНО взято значення. */
+test("#1399 МІТКИ ДЖЕРЕЛА: кожне непорожнє поле має джерело, порожнє — ні, запасний IBAN — «довідник»", () => {
+  const m = mergeRequisites(fromOneC("12345678", LEGAL_1C), REG, null);
+  assert.deepEqual(m.src, { edrpou: "1c", name: "edr", ipn: "1c", addr: "1c", dir: "edr", phone: "1c", email: "1c", iban: "1c", bank: "1c" },
+    "🔴 мітка не відповідає джерелу значення");
+  const noReg = mergeRequisites(fromOneC("12345678", { ...LEGAL_1C, phones: null, bank_account: null, bank_name: null }), null, { iban: IBAN_B, bank: "Б", director: "Д" });
+  assert.equal(noReg.src.name, "1c", "без ЄДР назва — з 1С, і мітка мусить це казати");
+  assert.equal(noReg.src.dir, "book"); assert.equal(noReg.src.iban, "book"); assert.equal(noReg.src.bank, "book");
+  assert.equal(noReg.src.phone, undefined, "🔴 порожнє поле з міткою — читалось би як «заповнено з 1С»");
+  const none = mergeRequisites(fromOneC("12345678", { ...LEGAL_1C, bank_account: null, bank_name: null }), REG, null);
+  assert.equal(none.src.iban, undefined); assert.equal(none.src.bank, undefined);
+});
+
+/**
+ * #1399b — стан «шукаю»: вмикається ДО запиту й вимикається в `finally` (і на успіху, і на помилці — інакше кнопка
+ * лишилась би заблокованою назавжди), кнопка заблокована, поки він іде. Межі — тіло `onEdr` від `const` до `const`.
+ */
+test("#1399b ПОШУК ВИДНО: «шукаю» вмикається до запиту, гасне в finally, кнопка заблокована під час пошуку", async () => {
+  const { readFileSync } = await import("node:fs");
+  const path = await import("node:path");
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "ConstructorSection.tsx"), "utf8");
+  const at = src.indexOf("  const onEdr = "); assert.ok(at >= 0, "onEdr зник");
+  const body = src.slice(at, src.indexOf("\n  const ", at + 1));
+  const on = body.indexOf("setEdrBusy(true)"), call = body.indexOf("await ctorByEdrpou("), off = body.search(/finally \{ setEdrBusy\(false\); \}/);
+  assert.ok(on >= 0 && call > on, "🔴 «шукаю» вмикається не ДО запиту — 3–4 с тиші, здається, що не спрацювало");
+  assert.ok(off > call, "🔴 «шукаю» гасне не в finally — на помилці кнопка лишиться заблокованою");
+  assert.match(src, /disabled=\{edrBusy \|\|[^\n]*\} onClick=\{\(\) => void onEdr\(\)\}>\s*\{edrBusy \? "⏳ Шукаю…" : "Підтягнути реквізити"\}/,
+    "🔴 кнопка не блокується або не каже «Шукаю» під час пошуку");
+  assert.match(src, /\{edrBusy && <div className="edrstat wait"/, "🔴 під полем не видно, що йде пошук");
+});
+
+/** #1399c — мітка показується, лише поки значення поля те саме, з яким вона прийшла: правка руками гасить її сама. */
+test("#1399c МІТКА ГАСНЕ ВІД ПРАВКИ: показується лише поки значення поля = значенню, з яким прийшла", async () => {
+  const { readFileSync } = await import("node:fs");
+  const path = await import("node:path");
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "ConstructorSection.tsx"), "utf8");
+  assert.match(src, /\{cpSrc\[k\] && cpSrc\[k\]!\.v === v && v\s*\?\s*<span className=\{`srctag src-\$\{cpSrc\[k\]!\.from\}`\}/,
+    "🔴 мітка не привʼязана до значення — після правки руками поле лишилось би підписаним «1С»");
 });

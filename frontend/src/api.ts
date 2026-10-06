@@ -5478,7 +5478,10 @@ export interface CtorOneCCard {
   /** У довіднику інший IBAN, ніж у 1С: підставлено 1С, довідниковий — кнопкою. */
   bookIban: { iban: string; bank: string } | null;
   warn: string | null;
+  /** Звідки взято кожне непорожнє поле — для міток біля полів форми. */
+  src: Partial<Record<keyof CtorCounterparty, CtorFieldSource>>;
 }
+export type CtorFieldSource = "1c" | "edr" | "book";
 type CtorRegistryKind = "ok" | "updating" | "notFound" | "unconfigured" | "failed";
 /** Пошук за ЄДРПОУ: 1С → ЄДР (директор) → довідник; у 1С немає — довідник → ЄДР. `updating` — реєстр оновлює
  *  дані (HTTP 202), повторити пізніше. `oneC` — чи шукали в 1С і що вийшло (збій лише підписується). */

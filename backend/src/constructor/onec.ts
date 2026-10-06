@@ -90,7 +90,12 @@ export interface MergedCard {
   /** У довіднику ІНШИЙ IBAN, ніж у 1С: підставлено 1С (рішення Романа 06.10), довідниковий — поруч кнопкою. */
   bookIban: { iban: string; bank: string } | null;
   warn: string | null;
+  /** Звідки взято КОЖНЕ непорожнє поле — для міток «1С / ЄДР / довідник» біля полів форми (06.10.2026). Рахується
+   *  тут, поруч із самим вибором джерела: на фронті довелося б угадувати, і мітка розійшлась би з правилом. */
+  src: Partial<Record<CardField, FieldSource>>;
 }
+export type FieldSource = "1c" | "edr" | "book";
+type CardField = "name" | "edrpou" | "ipn" | "addr" | "dir" | "phone" | "email" | "iban" | "bank";
 
 const normIban = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, "").toUpperCase();
 
@@ -107,15 +112,25 @@ export function mergeRequisites(one: OneCCard, reg: RegistryCard | null, book: B
   let conflict: MergedCard["bookIban"] = null;
   if (!iban && bookIban) { iban = bookIban; bank = (book?.bank ?? "").trim(); ibanSource = "book"; }
   else if (iban && bookIban && bookIban !== iban) conflict = { iban: bookIban, bank: (book?.bank ?? "").trim() };
+  const src: MergedCard["src"] = {};
+  /** Перше непорожнє з пар [значення, джерело] — і значення, і його джерело одним рішенням. */
+  const pick = (f: CardField, ...opts: Array<[string | null | undefined, FieldSource]>) => {
+    for (const [v, from] of opts) { const t = (v ?? "").trim(); if (t) { src[f] = from; return t; } }
+    return "";
+  };
+  const out = {
+    edrpou: pick("edrpou", [one.edrpou, "1c"]),
+    name: pick("name", [reg?.name, "edr"], [one.name, "1c"]),
+    ipn: pick("ipn", [one.ipn, "1c"], [reg?.ipn, "edr"]),
+    addr: pick("addr", [one.addr, "1c"], [reg?.addr, "edr"]),
+    dir: pick("dir", [reg?.dir, "edr"], [book?.director, "book"]),
+    phone: pick("phone", [one.phone, "1c"], [reg?.phone, "edr"]),
+    email: pick("email", [one.email, "1c"], [reg?.email, "edr"]),
+  };
+  if (iban && ibanSource) { src.iban = ibanSource; if (bank) src.bank = ibanSource; }
   return {
-    edrpou: one.edrpou,
-    name: reg?.name || one.name,
-    ipn: one.ipn || reg?.ipn || "",
-    addr: one.addr || reg?.addr || "",
-    dir: reg?.dir || (book?.director ?? "").trim(),
-    phone: one.phone || reg?.phone || "",
-    email: one.email || reg?.email || "",
-    iban, bank, isFop: reg?.isFop ?? one.isFop, ibanSource,
+    ...out,
+    iban, bank, isFop: reg?.isFop ?? one.isFop, ibanSource, src,
     ibanInvalid1c: !one.iban && one.ibanRaw ? one.ibanRaw : null,
     bookIban: conflict,
     warn: reg?.warn ?? null,
