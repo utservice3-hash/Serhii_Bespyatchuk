@@ -2,7 +2,7 @@ import { pool } from "../db/pool.js";
 import { kyivToday } from "./dates.js";
 import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING } from "./metrics.js";
 import { LEADGEN_STAGE_IDS, QUALIFICATION_PIPELINES } from "./leadgenStages.js";
-import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery, leadStatusPred,
+import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery, leadStatusPred, oprStatusPred,
   type SqlQuery, type LeadgenBucketGrain } from "./leadgenSql.js";
 import { FC_PIPELINES, handoffDealStates, clientSuccessHistory } from "./money.js";
 import { stageName } from "./stageNames.js";
@@ -53,7 +53,7 @@ export interface LeadgenPersonRow {
   teamId: number | null;
   teamName: string | null;
   isActive: boolean;
-  leads: number;      // входи в «Взято в роботу» АБО «ОПР» (Продзвін) — `leadStatusPred`
+  leads: number;      // «Взято в роботу» / «ОПР» Продзвону АБО «Підігрівається» Реактивації — `leadStatusPred`
   opr: number;        // входи в «Отримано контакти ОПР»
   quotes: number;     // входи в «Кваліфіковано» = передано на прорахунок
   warming: number;    // входи в «Клієнт підігрівається» (Реактивація)
@@ -120,10 +120,10 @@ export async function leadgenStats(from: string, to: string): Promise<LeadgenSta
             COUNT(DISTINCT e.kommo_id) AS leads
        FROM deal_stage_events e
        JOIN deals d ON d.kommo_id = e.kommo_id
-      WHERE e.pipeline_id = ANY($3) AND ${leadStatusPred("e.status_id", "$4", "$5")}
+      WHERE ${leadStatusPred({ pz: "$3", taken: "$4", opr: "$5", react: "$6", warming: "$7" })}
         AND (e.changed_at ${K})::date BETWEEN $1 AND $2
       GROUP BY 1 ORDER BY leads DESC`,
-    [from, to, PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR]
+    [from, to, PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING]
   );
 
   const rows: LeadgenPersonRow[] = stages.rows.map((r) => ({
@@ -232,17 +232,18 @@ export async function leadgenWarmingBacklog(): Promise<number> {
  */
 export interface LeadgenWeekRow { week: string; leads: number; opr: number; quotes: number }
 
+const WEEK_PH = { pz: "$3", taken: "$4", opr: "$5", react: "$6", warming: "$7" };
 export async function leadgenWeekly(from: string, to: string): Promise<LeadgenWeekRow[]> {
   const r = await pool.query<{ week: string; leads: string; opr: string; quotes: string }>(
     `SELECT to_char(date_trunc('week', (e.changed_at ${K})), 'YYYY-MM-DD') AS week,
-            COUNT(DISTINCT e.kommo_id) FILTER (WHERE ${leadStatusPred("e.status_id", "$4", "$5")}) AS leads,
-            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.status_id = $5) AS opr,
-            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.status_id = 142) AS quotes
+            COUNT(DISTINCT e.kommo_id) FILTER (WHERE ${leadStatusPred(WEEK_PH)}) AS leads,
+            COUNT(DISTINCT e.kommo_id) FILTER (WHERE ${oprStatusPred(WEEK_PH)}) AS opr,
+            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = 142) AS quotes
        FROM deal_stage_events e
-      WHERE e.pipeline_id = ANY($3) AND e.status_id IN ($4, $5, 142)
+      WHERE ((e.pipeline_id = ANY($3) AND e.status_id IN ($4, $5, 142)) OR (e.pipeline_id = ANY($6) AND e.status_id = $7))
         AND (e.changed_at ${K})::date BETWEEN $1 AND $2
       GROUP BY 1 ORDER BY 1`,
-    [from, to, PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR]
+    [from, to, PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING]
   );
   return r.rows.map((x) => ({ week: x.week, leads: Number(x.leads), opr: Number(x.opr), quotes: Number(x.quotes) }));
 }
