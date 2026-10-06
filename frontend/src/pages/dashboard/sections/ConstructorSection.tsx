@@ -191,6 +191,12 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
   /* ── Контрагент ── */
   const applyParsed = (cp: CtorCounterparty, onlyEmpty = false) =>
     setForm((f) => ({ ...f, cp: { ...f.cp, ...Object.fromEntries(Object.entries(cp).filter(([k, v]) => v && (!onlyEmpty || !f.cp[k as keyof CtorCounterparty]))) } }));
+  /**
+   * Вибрано ЦІЛОГО контрагента (1С, довідник, ЄДР) — реквізити ЗАМІНЮЮТЬСЯ, а не доповнюються. `applyParsed` пропускає
+   * порожні значення, тож IBAN попередньої компанії лишався в полі нової, у якої рахунку немає (спіймано кліком
+   * 06.10.2026: Фора → «Хелл Енерджі», підпис «у 1С рахунку немає», а в полі — рахунок Фори). Чужий IBAN у договорі.
+   */
+  const replaceCp = (cp: CtorCounterparty) => setForm((f) => ({ ...f, cp: { ...cp } }));
 
   const onParse = async () => {
     try { const r = await ctorParse(raw); applyParsed(r.out); ok(`Розпізнано ${Object.values(r.found).filter(Boolean).length} з 9 — перевірте поля з галочками.`); }
@@ -220,13 +226,13 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
   };
   const onPickBook = (row: CtorCounterpartyRow) => {
     setBookPick(row.id);
-    applyParsed({ name: row.name, edrpou: row.edrpou || "", ipn: row.ipn || "", addr: row.address || "", iban: row.iban || "",
+    replaceCp({ name: row.name, edrpou: row.edrpou || "", ipn: row.ipn || "", addr: row.address || "", iban: row.iban || "",
       bank: row.bank || "", phone: row.phone || "", email: row.email || "", dir: row.director || "" });
     ok(`Підставлено з довідника: ${row.name}.`);
   };
   const onPickRegistry = (c: CtorRegistryCard, cached: boolean) => {
     setBookPick(null);
-    applyParsed({ name: c.name, edrpou: c.edrpou, ipn: c.ipn, addr: c.addr, phone: c.phone, email: c.email, dir: c.dir });
+    replaceCp({ name: c.name, edrpou: c.edrpou, ipn: c.ipn, addr: c.addr, iban: "", bank: "", phone: c.phone, email: c.email, dir: c.dir });
     const at = c.actualDate ? new Date(c.actualDate).toLocaleDateString("uk-UA") : "—";
     setEdrNote({ t: `З ЄДР (YouControl), станом на ${at}${cached ? " · з кешу" : ""}. IBAN і банк у реєстрі немає — впишіть вручну.`, warn: c.warn });
     if (c.warn) void bad(`Увага: ${c.warn}. Перевірте, чи можна укладати договір.`);
@@ -240,8 +246,9 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
   const onPick1c = (r: Extract<CtorEdrResult, { source: "1c" }>, refill: boolean) => {
     const c = r.card;
     if (!refill) setBookPick(null);
-    applyParsed({ name: c.name, edrpou: c.edrpou, ipn: c.ipn, addr: c.addr, iban: c.iban, bank: c.bank,
-      phone: c.phone, email: c.email, dir: c.dir }, refill);
+    const cp = { name: c.name, edrpou: c.edrpou, ipn: c.ipn, addr: c.addr, iban: c.iban, bank: c.bank,
+      phone: c.phone, email: c.email, dir: c.dir };
+    if (refill) applyParsed(cp, true); else replaceCp(cp);
     const iban = c.ibanSource === "1c" ? "рахунок і банк — з 1С"
       : c.ibanSource === "book" ? "у 1С рахунку немає — IBAN з вашого довідника"
       : c.ibanInvalid1c ? `у 1С рахунок у неправильному форматі (${c.ibanInvalid1c}) — впишіть IBAN вручну`

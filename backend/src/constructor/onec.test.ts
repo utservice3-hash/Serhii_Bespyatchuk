@@ -146,3 +146,30 @@ test("#1397 ЖИВА 1С: customerInfo віддає поля, які ми роз
   assert.ok(ok.every((r) => r.card.name), "1С віддала контрагента без назви — поле `name` змінилось");
   assert.ok(ok.some((r) => r.card.iban), `🔴 у жодного з ${ok.length} знайдених IBAN не підставився — поле \`bank_account\` змінилось або формат`);
 });
+
+/**
+ * #1398 — вибір ЦІЛОГО контрагента замінює реквізити, а не доповнює. Спіймано кліком на стенді 06.10.2026:
+ * Фора (IBAN є) → «Хелл Енерджі» (у 1С рахунку немає) — підпис казав «впишіть IBAN вручну», а в полі стояв рахунок
+ * Фори, бо `applyParsed` пропускає порожні значення. Межі — змістові: тіло кожного обробника від його `const` до
+ * наступного `const` того ж рівня.
+ */
+test("#1398 ВИБІР КОНТРАГЕНТА ЗАМІНЮЄ РЕКВІЗИТИ: 1С, довідник і ЄДР не лишають полів попередньої компанії", async () => {
+  const { readFileSync } = await import("node:fs");
+  const path = await import("node:path");
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "ConstructorSection.tsx"), "utf8");
+  const body = (name: string) => {
+    const at = src.indexOf(`  const ${name} = `);
+    assert.ok(at >= 0, `обробник ${name} зник — гейт нема на чому перевіряти`);
+    const next = src.indexOf("\n  const ", at + 1);
+    return src.slice(at, next < 0 ? undefined : next);
+  };
+  assert.match(src, /const replaceCp = \(cp: CtorCounterparty\) => setForm\(\(f\) => \(\{ \.\.\.f, cp: \{ \.\.\.cp \} \}\)\);/,
+    "🔴 replaceCp більше не замінює контрагента цілком");
+  for (const name of ["onPickBook", "onPickRegistry"]) {
+    assert.match(body(name), /\breplaceCp\(/, `🔴 ${name} доповнює реквізити замість заміни — лишиться IBAN попередньої компанії`);
+    assert.doesNotMatch(body(name), /\bapplyParsed\(/, `🔴 ${name} доповнює реквізити замість заміни`);
+  }
+  assert.match(body("onPickRegistry"), /iban: "", bank: ""/, "🔴 ЄДР рахунку не дає — поле має очищатись, а не лишати старе");
+  assert.match(body("onPick1c"), /if \(refill\) applyParsed\(cp, true\); else replaceCp\(cp\);/,
+    "🔴 1С: перший вибір мусить замінювати, а повтор за директором — лише дописувати порожнє");
+});
