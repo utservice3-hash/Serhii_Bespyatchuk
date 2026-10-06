@@ -19,12 +19,13 @@ export interface StatementData {
 }
 
 export async function statementData(
-  accountId: number, from: string, to: string, payees: HiddenPayee[], canSeeHidden: boolean,
+  accountId: number, from: string, to: string, payees: HiddenPayee[], canSeeHidden: boolean, canSeePrivate = false,
 ): Promise<StatementData | null> {
-  const acc = await pool.query<{ bank: string; label: string; iban: string | null }>(
-    `SELECT bank, label, iban FROM bank_accounts WHERE id = $1`, [accountId]);
+  const acc = await pool.query<{ bank: string; label: string; iban: string | null; finance_only: boolean }>(
+    `SELECT bank, label, iban, finance_only FROM bank_accounts WHERE id = $1`, [accountId]);
   const a = acc.rows[0];
-  if (!a || (a.bank !== "privat" && a.bank !== "mono")) return null;
+  // Рахунок «лише фінанси» без права — так само «не знайдено», як на стрічці (не підказуємо, що він існує).
+  if (!a || (a.bank !== "privat" && a.bank !== "mono") || (a.finance_only && !canSeePrivate)) return null;
   const r = await pool.query<{ direction: string; counterparty_name: string | null; raw_json: RawTx | null }>(
     `SELECT t.direction, t.counterparty_name, t.raw_json
        FROM bank_transactions t

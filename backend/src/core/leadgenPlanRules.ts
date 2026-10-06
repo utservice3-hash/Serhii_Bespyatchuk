@@ -182,7 +182,9 @@ export function planExecution(fact: number, plan: number | null, elapsed: number
 export interface ExtraExec { calls: PlanExec; moneyEarned: PlanExec; moneyTotal: PlanExec }
 /** Гроші людини за період — ті самі числа, що на картці («Успішні ₴», «Очікування ₴»). */
 export interface PersonMoneyFact { earned: number; pending: number }
-export interface PersonPlanView { managerId: number; plan: PeriodPlan; exec: PlanExec; extra: ExtraExec }
+/** «Лишилось до плану» людини — лише для поточного місяця (`isCurrentFullMonth`); гроші — лише залишок місяця. */
+export interface PersonPace { calls: PlanPace; leads: PlanPace; opr: PlanPace; quotes: PlanPace; moneyLeft: number | null }
+export interface PersonPlanView { managerId: number; plan: PeriodPlan; exec: PlanExec; extra: ExtraExec; pace?: PersonPace }
 export interface TeamPlanView {
   /** Людей у рядках і скільки з них мають план прорахунків на ВЕСЬ період. */
   total: number; planned: number;
@@ -318,4 +320,54 @@ export function personFormationStatus(statuses: readonly LgFormationStatus[]): L
   if (!statuses.length) return "draft";
   for (const s of ["submitted", "returned", "draft", "approved"] as const) if (statuses.includes(s)) return s;
   return "draft";
+}
+
+// ─────────────────────────── ЛИШИЛОСЬ ДО ПЛАНУ (рішення власника 05.10.2026) ───────────────────────────
+
+/** Пункти, для яких рахується денна норма (гроші — лише залишок місяця: угода закривається не тоді, коли працюють). */
+export const PACE_METRICS = ["calls", "leads", "opr", "quotes"] as const;
+export type PaceMetric = (typeof PACE_METRICS)[number];
+
+export type PlanPace =
+  | { kind: "none" }                                   // плану на пункт немає — рядка немає
+  | { kind: "done"; plan: number; fact: number }       // план місяця виконано
+  | { kind: "pace"; plan: number; fact: number; leftMonth: number;
+      /** Норма на сьогодні (або на наступний робочий день, якщо сьогодні вихідний); `null` — робочих днів не лишилось. */
+      normToday: number | null; doneToday: number; leftToday: number | null; leftWeek: number | null; todayIsWorking: boolean };
+
+/**
+ * 🏃 НОРМА З НАЗДОГАНЯННЯМ (рішення власника 05.10.2026, прохання лідгена «бачити, скільки ще не вистачає до норми на
+ * день/тиждень/місяць»). Норма на сьогодні = (план місяця − факт ДО сьогодні) ÷ робочі дні від сьогодні до кінця місяця
+ * (з сьогоднішнім), угору. Відстав — норма росте; випереджаєш — падає; виконав — «план виконано». Тиждень — норма × робочі
+ * дні від сьогодні до кінця тижня (у межах місяця) мінус уже зроблене сьогодні.
+ * Робочі дні — той самий `workingDaysBetween`, яким екран ділить план на період.
+ */
+export function planPace(i: { plan: number | null; before: number; today: number; todayDay: string; monthEnd: string }): PlanPace {
+  if (i.plan == null || !(i.plan > 0)) return { kind: "none" };
+  const fact = i.before + i.today;
+  if (fact >= i.plan) return { kind: "done", plan: i.plan, fact };
+  const wdLeft = workingDaysBetween(i.todayDay, i.monthEnd);
+  const todayIsWorking = workingDaysBetween(i.todayDay, i.todayDay) === 1;
+  const leftMonth = i.plan - fact;
+  if (wdLeft <= 0) return { kind: "pace", plan: i.plan, fact, leftMonth, normToday: null, doneToday: i.today, leftToday: null, leftWeek: null, todayIsWorking };
+  const normToday = Math.ceil((i.plan - i.before) / wdLeft);
+  const weekEnd = sundayOf(i.todayDay) < i.monthEnd ? sundayOf(i.todayDay) : i.monthEnd;
+  const wdWeek = workingDaysBetween(i.todayDay, weekEnd);
+  return {
+    kind: "pace", plan: i.plan, fact, leftMonth, normToday, doneToday: i.today, todayIsWorking,
+    leftToday: todayIsWorking ? Math.max(0, normToday - i.today) : normToday,
+    leftWeek: Math.max(0, Math.min(leftMonth, normToday * wdWeek - i.today)),
+  };
+}
+
+/** Неділя київського тижня дати `day` ('YYYY-MM-DD'). */
+function sundayOf(day: string): string {
+  const t = Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)));
+  const dow = new Date(t).getUTCDay();
+  return new Date(t + ((7 - dow) % 7) * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** Період — ПОТОЧНИЙ календарний місяць цілком (лише тоді є що наздоганяти). */
+export function isCurrentFullMonth(from: string, to: string, today: string): boolean {
+  return from === today.slice(0, 7) + "-01" && to === monthEndOf(from);
 }

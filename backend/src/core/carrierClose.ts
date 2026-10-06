@@ -1,7 +1,7 @@
 import type { Db } from "./adCallFacts.js";
 import { CARRIER_STAGE, OTHER_TYPE_UA, type OtherType } from "./carrierCallRules.js";
 import { carrierDealRows } from "./carrierDeals.js";
-import { AUTO_CARRIER_TAG, historyCloseNote } from "./carrierHistory.js";
+import { AUTO_CARRIER_TAG, carrierHistorySql, historyCloseNote, HISTORY_GUARD, readHistoryGate } from "./carrierHistory.js";
 
 /**
  * 🧹 ЗАКРИТТЯ В KOMMO (29.09.2026 — перевізники; ТЗ Романа 30.09.2026 — ще й «Інше»).
@@ -137,18 +137,47 @@ export async function closeCandidates(db: Db, onStage: ReadonlySet<number>, now:
 }
 
 export interface CloseReport { mode: CloseMode; otherMode: CloseMode; historyMode: CloseMode; candidates: number; logged: number; closed: number;
-  failed: number; tasksClosed: number; error: string | null }
+  failed: number; tasksClosed: number; error: string | null;
+  /** Угоди «історії CRM», що чекають: синк угод застарів (`readHistoryGate`) — у Kommo не пишемо. */
+  historyPaused: number;
+  /** Угоди «історії CRM», у яких повторна перевірка знайшла угоду замовника, — не закрито, повернуто в чергу. */
+  historyRevoked: number }
 
 /** Чи пише цей кандидат у CRM у ЦЬОМУ проході: основний режим «live» і його власний перемикач «live». */
 export const liveFor = (c: Pick<CloseCandidate, "aiOther" | "history">, mode: CloseMode, otherMode: CloseMode, historyMode: CloseMode): boolean =>
   mode === "live" && (!c.aiOther || otherMode === "live") && (!c.history || historyMode === "live");
 
 export async function runCarrierClose(db: Db, now: Date, mode: CloseMode, onStage: ReadonlySet<number>, kommo: KommoCloser,
-  otherMode: CloseMode = "dry", historyMode: CloseMode = "dry"): Promise<CloseReport> {
-  const rep: CloseReport = { mode, otherMode, historyMode, candidates: 0, logged: 0, closed: 0, failed: 0, tasksClosed: 0, error: null };
+  otherMode: CloseMode = "dry", historyMode: CloseMode = "dry", historySyncMaxMin: number = HISTORY_GUARD.defaultMaxAgeMin): Promise<CloseReport> {
+  const rep: CloseReport = { mode, otherMode, historyMode, candidates: 0, logged: 0, closed: 0, failed: 0, tasksClosed: 0, error: null,
+    historyPaused: 0, historyRevoked: 0 };
   if (mode === "off") return rep;
-  const cands = (await closeCandidates(db, onStage, now))
+  let cands = (await closeCandidates(db, onStage, now))
     .filter((c) => !(c.aiOther && otherMode === "off") && !(c.history && historyMode === "off"));
+  // 🛡 Історія CRM (`carrierHistory.ts`, рішення 05.10.2026). Вердикт ставився раніше й з тих пір НЕ перевірявся, а між
+  // ним і закриттям по номеру могла зʼявитись угода замовника. Тому: синк угод застарів — чекаємо (у CRM не пишемо);
+  // свіжий — перевіряємо виняток ЩЕ РАЗ, і угода, що стала клієнтською, повертається в чергу «Відсіву», а не закривається.
+  let historyOpen = true;
+  const hist = cands.filter((c) => c.history);
+  if (hist.length) {
+    historyOpen = (await readHistoryGate(db, now, historySyncMaxMin)).open;
+    if (!historyOpen) rep.historyPaused = hist.length;
+    else {
+      const revoked = (await db.query<{ k: string }>(
+        `SELECT cd.kommo_id::text AS k FROM carrier_call_deals cd
+          WHERE cd.kommo_id = ANY($1::bigint[]) AND ${carrierHistorySql("cd.phone", "cd.kommo_id")} IS NULL`,
+        [hist.map((c) => c.kommoId)])).rows.map((r) => Number(r.k));
+      if (revoked.length) {
+        await db.query(`UPDATE carrier_call_deals SET state = 'waiting', history_from = NULL, updated_at = $2
+                         WHERE kommo_id = ANY($1::bigint[]) AND state = 'history'`, [revoked, now.toISOString()]);
+        const gone = new Set(revoked);
+        cands = cands.filter((c) => !gone.has(c.kommoId));
+        rep.historyRevoked = revoked.length;
+      }
+    }
+  }
+  /** Пише в CRM у цьому проході: власні перемикачі «live» і, для історії, свіжий синк угод. */
+  const writes = (c: CloseCandidate) => liveFor(c, mode, otherMode, historyMode) && (!c.history || historyOpen);
   rep.candidates = cands.length;
   const fresh = cands.filter((c) => !c.logged);
   if (fresh.length) {
@@ -158,7 +187,7 @@ export async function runCarrierClose(db: Db, now: Date, mode: CloseMode, onStag
          FROM unnest($1::bigint[], $2::text[], $3::numeric[], $4::text[], $6::text[], $7::text[], $8::text[]) AS x(k, u, c, q, m, r, o)
        ON CONFLICT (kommo_id) DO NOTHING`,
       [fresh.map((c) => c.kommoId), fresh.map((c) => c.uniqueid), fresh.map((c) => c.confidence), fresh.map((c) => c.quote),
-        now.toISOString(), fresh.map((c) => (liveFor(c, mode, otherMode, historyMode) ? mode : "dry")),
+        now.toISOString(), fresh.map((c) => (writes(c) ? mode : "dry")),
         fresh.map((c) => c.reason), fresh.map((c) => c.otherType)]);
     rep.logged = ins.rowCount ?? 0;
   }
@@ -171,7 +200,7 @@ export async function runCarrierClose(db: Db, now: Date, mode: CloseMode, onStag
   }
   if (mode !== "live") return rep;
 
-  const live = cands.filter((c) => liveFor(c, mode, otherMode, historyMode)).slice(0, CLOSE_MAX_PER_TICK);
+  const live = cands.filter(writes).slice(0, CLOSE_MAX_PER_TICK);
   const groups: { reason: CloseReason; history: boolean }[] = [
     { reason: "carrier", history: false }, { reason: "carrier", history: true }, { reason: "other", history: false }, { reason: "no_talk", history: false }];
   for (const g of groups) {

@@ -406,6 +406,34 @@ async function checkAppBoot(): Promise<Alert[]> {
   }];
 }
 
+// ─────────────────────── 9. ВІДСІВ: «БЕЗ РОЗМОВИ» НА ПАУЗІ ───────────────────────
+
+/**
+ * 🛡 Захист «без розмови» (рішення 05.10.2026, `core/carrierNoTalkGuard.ts`): поки синк дзвінків Ringostat старий,
+ * угоди без розмови НЕ закриваються «Немає зв'язку» — чекають. Пауза безпечна, але мовчазна: черга росте, а
+ * «Відсів» виглядає живим. Тому синку немає довше за поріг тривоги (типово 60 хв) — критична тривога, яка
+ * каже, ЩО саме стоїть. Сирий «syncCallsFresh мовчить» поруч б'є раніше (6 хв), але про наслідок не каже.
+ * Невідомий вік (рядка `job_runs` немає) — теж тривога: «не знаю» ≠ «добре».
+ */
+async function checkCarrierNoTalk(): Promise<Alert[]> {
+  const { config } = await import("../config.js");
+  const { minutesSetting, noTalkAlertDue, readNoTalkGuard, NO_TALK_GUARD } = await import("../core/carrierNoTalkGuard.js");
+  const maxMin = minutesSetting(config.callAi.carrierNoTalkSyncMaxMin, NO_TALK_GUARD.defaultMaxAgeMin);
+  const alertMin = minutesSetting(config.callAi.carrierNoTalkSyncAlertMin, NO_TALK_GUARD.defaultAlertMin);
+  const g = await readNoTalkGuard(pool, new Date(), config.callAi.carrierNoTalkCloseMin, maxMin);
+  if (!noTalkAlertDue(g.gate, alertMin)) return [];
+  const age = g.gate.syncAgeMin == null ? "невідомо коли (успіхів не записано)" : `${g.gate.syncAgeMin} хв тому`;
+  return [{
+    id: "carrier:no_talk_paused", severity: "critical",
+    title: "Відсів: закриття «без розмови» призупинено — синк дзвінків Ringostat стоїть",
+    detail: `Синк дзвінків (${NO_TALK_GUARD.syncJob}) востаннє вдався ${age}; пауза — після ${maxMin} хв, тривога — після ${alertMin} хв. `
+      + "Угоди «Дзвінків на мобільні» без розмови не закриваються «Немає зв'язку», а чекають: закриються самі, щойно синк оновиться."
+      + (g.noCreatingCall ? ` Крім того, ${g.noCreatingCall} угод не закриваються, бо дзвінка, що їх створив, у базі немає.` : ""),
+    action: "Перевірити доступ до Ringostat (API, ключ) і лог «syncCallsFresh»; угоди руками не закривати.",
+    since: g.gate.lastSyncAt,
+  }];
+}
+
 // ─────────────────────── збірка ───────────────────────
 
 const CHECKS: { id: string; label: string; run: () => Promise<Alert[]> }[] = [
@@ -417,6 +445,7 @@ const CHECKS: { id: string; label: string; run: () => Promise<Alert[]> }[] = [
   { id: "roles", label: "роль-кеш RBAC", run: checkRoleCache },
   { id: "build", label: "збірка на диску vs у процесі", run: checkBuildStale },
   { id: "boot", label: "несподіваний рестарт", run: checkAppBoot },
+  { id: "carrier_no_talk", label: "відсів: закриття «без розмови»", run: checkCarrierNoTalk },
 ];
 
 /** Перелік оголошених джерел банера — щоб тест міг довести, що нове ДОДАНО, а не лише написане. */

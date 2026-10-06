@@ -24,7 +24,7 @@ import { settingsRouter } from "./routes/settings.js";
 import { messagesRouter } from "./routes/messages.js";
 import { newsRouter } from "./routes/news.js";
 import { uploadsRouter, UPLOAD_DIR } from "./routes/uploads.js";
-import { feedbackRouter } from "./routes/feedback.js";
+import { feedbackRouter, FEEDBACK_FILES_DIR } from "./routes/feedback.js";
 import { aiWorkRouter } from "./routes/aiWork.js";
 import { reportsRouter } from "./routes/reports.js";
 import { ratesRouter } from "./routes/rates.js";
@@ -33,7 +33,6 @@ import { telegramRouter } from "./routes/telegram.js";
 import { sendOfferReminders } from "./jobs/offerReminders.js";
 import { runDocLifecycle } from "./jobs/docLifecycle.js";
 import { runFreezeNominations } from "./jobs/freezeNominations.js";
-import { runFreezeFinanceKpis } from "./jobs/freezeFinanceKpis.js";
 import { runDocText } from "./jobs/docText.js";
 import { signBotEnsureWebhook } from "./bot/signBot.js";
 import { vaultBotEnsureWebhook } from "./bot/vaultBot.js";
@@ -103,6 +102,7 @@ import { backupDb } from "./jobs/backupDb.js";
 import { declineSpamForms } from "./jobs/declineSpamForms.js";
 import { catchUpAiChat } from "./ai/respond.js";
 import { pool } from "./db/pool.js";
+import { purgeFeedback } from "./jobs/purgeFeedback.js";
 
 // dist/index.js → ../.. = корінь сайту (dashboard/), де лежить зібраний фронт
 // (index.html + assets/), який деплоїться поряд із backend/.
@@ -583,11 +583,9 @@ cron.schedule("0 15 * * 2", () => {
   void runJob("freezeNominations", () => runFreezeNominations());
 }, { timezone: "Europe/Kyiv" });
 
-// 💰 Фінанси «Тиждень і місяць»: фіксація автоматичних рядків «ФМ» за минулий тиждень і місяць — щодня 00:05 Києва
-// (ідемпотентна: зафіксоване не чіпає, пропущений день доганяє наступний) + догін на старті.
-cron.schedule("5 0 * * *", () => {
-  void runJob("freezeFinanceKpis", () => runFreezeFinanceKpis());
-}, { timezone: "Europe/Kyiv" });
+// 💰 Фінанси «Тиждень і місяць»: НІЧНОЇ фіксації немає (рішення Тетяни на зустрічі 05.10.2026: «тиждень хай
+// змінюється, місяць закриваю я кнопкою»). Число фіксує лише «Закрити» (`setPeriodClosed`). Джоба `freezeFinanceKpis`
+// лишилась у коді для ручного запуску, але не планується й не наглядається.
 
 // 🔎 Текст документів для пошуку: нові файли й нові версії, які не встигло обробити завантаження.
 cron.schedule("20,50 * * * *", () => {
@@ -614,6 +612,12 @@ cron.schedule("30 7 * * *", () => {
 // (незамаплені статуси, дублі менеджерів, застій синку) і сигналить КВП задачею.
 cron.schedule("30 3 * * *", () => {
   void runJob("runDataReconciliation", () => runDataReconciliation());
+});
+
+// 🗑 Зворотний звʼязок: закриті («вирішено»/«відхилено») понад 30 днів — безповоротно, разом із фото.
+// 02:50 — поза :00/:30 і до нічного бекапу 03:00, тож у копію ночі видалене вже не потрапляє.
+cron.schedule("50 2 * * *", () => {
+  void runJob("purgeFeedback", () => purgeFeedback(pool, FEEDBACK_FILES_DIR));
 });
 
 // Прострочені дедлайни оплати дебіторки → задача менеджеру «отримати оплату».
@@ -925,7 +929,6 @@ const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["vaultBotEnsureWebhook", () => vaultBotEnsureWebhook()],
   ["docLifecycle", () => runDocLifecycle()],
   ["freezeNominations", () => runFreezeNominations()],
-  ["freezeFinanceKpis", () => runFreezeFinanceKpis()],
   ["docText", () => runDocText()],
   ["createOneOnOneReminders", () => createOneOnOneReminders()],
   ["createDutyReminders", () => createDutyReminders()],

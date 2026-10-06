@@ -116,6 +116,24 @@ function Verdict({ r }: { r: CarrierDealT }) {
  * `roleKey` — лише для ВИГЛЯДУ (межу тримає сервер): менеджер не бачить службового рядка (витрати, режими), колонки
  * «Менеджер» (там завжди він) і точності AI; тімлід — службового рядка й точності. Рішення Романа 30.09.2026.
  */
+/**
+ * 🛡 «Без розмови» в службовому рядку (05.10.2026): працює чи на паузі через синк дзвінків Ringostat. Пауза — червоним
+ * і словами «угоди чекають»: інакше черга росте мовчки, а відсів виглядає живим.
+ */
+function NoTalkGuardNote({ g }: { g: NonNullable<CarrierCallsMetaResp["noTalkGuard"]> }) {
+  const age = g.syncAgeMin == null ? "невідомо коли" : `${String(g.syncAgeMin)} хв тому`;
+  return (
+    <>
+      {" · "}закриття «без розмови»:{" "}
+      {g.open
+        ? <span title={`Угоди без розмови закриваються, лише поки синк дзвінків Ringostat свіжіший за ${String(g.maxAgeMin)} хв і в базі є дзвінок, що створив угоду.`}>працює (синк дзвінків {age})</span>
+        : <span style={{ color: "var(--danger)" }} title={`Синк дзвінків Ringostat старший за ${String(g.maxAgeMin)} хв: без нього «розмови не було» не доведено. Угоди чекають і закриються самі, щойно синк оновиться.`}>
+            на паузі — синк дзвінків {age}, угоди чекають</span>}
+      {g.noCreatingCall > 0 && <span title="Строк минув, але дзвінка, що створив угоду, у базі немає — телефонію цієї угоди не видно, тож не закриваємо."> · без дзвінка в базі: {String(g.noCreatingCall)}</span>}
+    </>
+  );
+}
+
 export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | null }) {
   const isManager = roleKey === "manager";
   const isLead = roleKey !== "manager" && roleKey !== "team_lead";
@@ -216,6 +234,14 @@ export function CarrierCallsSection({ roleKey = null }: { roleKey?: string | nul
             {" · "}перевізники: {closeModeLabel(meta.close.mode)}{meta.close.mode === "live" ? ` (${String(meta.close.closed)})` : ""}
             {" · "}«Інше» від AI: {otherModeLabel(meta.close.mode, meta.close.otherMode)}
             {meta.close.otherMode !== "live" && meta.close.otherWouldClose > 0 ? ` (у журналі ${String(meta.close.otherWouldClose)})` : ""}
+            {meta.noTalkGuard && <NoTalkGuardNote g={meta.noTalkGuard} />}
+            {meta.taskSweep && meta.taskSweep.mode !== "off" && (
+              <span title="Задачі «Связаться» від Ringostat на угодах етапу, які вже закрито в CRM (фільтром, дашбордом чи людиною): дашборд закриває їх сам, задачі людей не чіпає.">
+                {" · "}задачі на закритих угодах: {meta.taskSweep.mode === "live"
+                  ? `закрито ${String(meta.taskSweep.closedTasks)}`
+                  : `журнал — закрили б ${String(meta.taskSweep.robotTasks)}`}
+              </span>
+            )}
           </p>
         )}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>

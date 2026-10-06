@@ -4,11 +4,11 @@ import { requireAuth } from "../auth/middleware.js";
 import { roleHasTab, roleHasPerm } from "../auth/rbac.js";
 import {
   FinError, type Db, loadMonth, itemCard, createResp, renameResp, deleteResp, createGroup, updateGroup, deleteGroup,
-  createItem, updateItem, setItemOff, deleteItem, restore, saveValues, setNote, setApproval,
+  createItem, updateItem, setItemOff, deleteItem, restore, saveValues, setNote, setApproval, setItemSections,
 } from "../core/finance.js";
 import {
   loadPeriod, kpiCard, saveKpiValues, setKpiNote, setPeriodClosed, createSection, renameSection, deleteSection,
-  createKpi, updateKpi, setKpiOff, deleteKpi, restoreKpiThing,
+  createKpi, updateKpi, setKpiOff, deleteKpi, restoreKpiThing, autoActive, opexMonth, receivablesFxAt, bankTotals, periodStart, shiftPeriod,
 } from "../core/financeKpi.js";
 import { fmRefsFor } from "../core/financeKpiRefs.js";
 
@@ -108,6 +108,9 @@ financeRouter.post("/items", async (req, res) => {
 financeRouter.patch("/items/:id", async (req, res) => {
   try { canEdit(req); const id = idOf(req); await tx((db) => updateItem(db, req.auth!.userId, id, req.body)); res.json({ ok: true }); } catch (e) { fail(res, e); }
 });
+financeRouter.put("/item-sections", async (req, res) => {
+  try { canEdit(req); res.json(await tx((db) => setItemSections(db, req.auth!.userId, req.body?.items))); } catch (e) { fail(res, e); }
+});
 financeRouter.post("/items/:id/off", async (req, res) => {
   try {
     canEdit(req);
@@ -162,8 +165,17 @@ financeRouter.get("/kpi", async (req, res) => {
   try {
     onlyFinance(req);
     const refs = await refsFor(req.query.kind, req.query.p);
-    const p = await loadPeriod(pool as unknown as Db, req.query.kind, req.query.p, refs);
+    // Стовпець «минулий» — теж із джерел (тижні не фіксуються), а не збережене число таблиці.
+    const cur = periodStart(req.query.kind, req.query.p);
+    const prevRefs = await refsFor(cur.kind, shiftPeriod(cur.kind, cur.start, -1));
+    const p = await loadPeriod(pool as unknown as Db, req.query.kind, req.query.p, refs, new Date(), prevRefs);
+    // Друге число до предиката (правило 4): статті без розділу з фактом місяця і деталі валютної дебіторки.
+    const opex = p.kind === "month" && autoActive(p.kind, p.start) ? (await opexMonth(pool as unknown as Db, p.start)).unassigned : null;
+    const fx = autoActive(p.kind, p.start) ? await receivablesFxAt(pool as unknown as Db, p.end, new Date()) : null;
+    // «з них перекази між своїми рахунками» — друге число біля «Надходження / Витрати загальні» (питання відкрите).
+    const bank = autoActive(p.kind, p.start) ? await bankTotals(pool as unknown as Db, p.start, p.end) : null;
     res.json({
+      opexUnassigned: opex, receivablesFx: fx, bankOwn: bank ? { in: bank.ownIn, out: bank.ownOut } : null,
       kind: p.kind, start: p.start, end: p.end, prev: p.prev, label: p.label, prevLabel: p.prevLabel, current: p.current,
       sections: p.sections, closed: p.closed, importedInterim: p.importedInterim, canEdit: roleHasPerm(req.auth!.roleKey, "edit_finance"),
     });
@@ -192,7 +204,9 @@ financeRouter.post("/kpi/close", async (req, res) => {
   try {
     canEdit(req);
     const closed = req.body?.closed !== false;
-    await tx((db) => setPeriodClosed(db, req.auth!.userId, req.body?.kind, req.body?.p, closed));
+    // Закриття фіксує авто-рядки числом на цей момент — тому довідка рахується тут, ядром (#17c).
+    const refs = closed ? await refsFor(req.body?.kind, req.body?.p) : {};
+    await tx((db) => setPeriodClosed(db, req.auth!.userId, req.body?.kind, req.body?.p, closed, refs));
     res.json({ ok: true, closed });
   } catch (e) { fail(res, e); }
 });

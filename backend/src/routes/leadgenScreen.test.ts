@@ -313,3 +313,16 @@ test("#1254 ЕКРАН: 403 — текстом сервера, не «збій �
   const plans = readFileSync(path.join(dir, "LeadgenPlanFormation.tsx"), "utf8");
   assert.match(plans, /r\?\.status === 403 && typeof r\.data\?\.error === "string" \? r\.data\.error/, "🔴 плани: відмову 403 показано як збій");
 });
+
+/**
+ * #1263 — ЕКРАН: «ЛИШИЛОСЬ ДО ПЛАНУ» ВИДНО НА КАРТЦІ ЛІДГЕНА Й У ПЛИТЦІ ЛЮДИНИ (05.10.2026).
+ * 🧨 САБОТАЖ: прибрати `<PaceLines pace={plan.pace} />` з картки → червоніє.
+ */
+test("#1263 ЕКРАН: «лишилось до плану» на картці лідгена й у плитці людини", () => {
+  const dir = path.join(FE, "src", "pages", "dashboard", "sections");
+  const row = readFileSync(path.join(dir, "LeadgenPersonRow.tsx"), "utf8");
+  const sec = readFileSync(path.join(dir, "LeadgenSection.tsx"), "utf8");
+  assert.match(row, /<PaceLines pace=\{plan\.pace\} \/>/, "🔴 картка лідгена не показує «лишилось до плану»");
+  assert.match(sec, /<PaceLines pace=\{pp\.pace\} \/>/, "🔴 плитка людини не показує «лишилось до плану»");
+  assert.match(row, /сьогодні треба \$\{n\(p\.normToday\)\}/, "🔴 немає норми на сьогодні");
+});

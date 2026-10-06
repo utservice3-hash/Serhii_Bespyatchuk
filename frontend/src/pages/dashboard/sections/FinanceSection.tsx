@@ -3,8 +3,8 @@ import { createPortal } from "react-dom";
 import { useToast, type Toast } from "../../../components/Toasts";
 import {
   fetchFinMonth, fetchFinItem, createFin, updateFin, deleteFin, restoreFin, setFinItemOff, saveFinValues, saveFinNote,
-  setFinApproval, finErrorData, hiringError,
-  type FinMonth, type FinItem, type FinGroup, type FinResp, type FinItemCard, type FinKind, type FinCell,
+  setFinApproval, finErrorData, hiringError, setFinItemSections, FIN_SECTIONS,
+  type FinMonth, type FinSection, type FinItem, type FinGroup, type FinResp, type FinItemCard, type FinKind, type FinCell,
 } from "../../../api";
 import { rowVisible, asInput, planFromPrevious } from "./financeView";
 import { FinanceWeekTab } from "./FinanceWeekTab";
@@ -149,10 +149,30 @@ function useStructureActions(data: FinMonth | null, reload: () => void, ask: (d:
               ...(it.offFrom == null ? [{ label: "Вимкнути", tone: "p" as const, run: async () => { const x = await setFinItemOff(it.id, true); reload(); toast(`Статтю вимкнено з ${monthLabel(x.offFrom!).toLowerCase()}`); } }] : [])] });
         }
       },
+      /** Розділ одній статті або всім у групі; «Повернути» — той самий виклик зі старими значеннями. */
+      setSections: async (list: { id: number; section: FinSection | null }[], text: string) => {
+        try {
+          const r = await setFinItemSections(list);
+          reload();
+          toast(text, { action: { label: "Повернути", run: () => { setFinItemSections(r.previous).then(() => { reload(); toast("Повернуто"); }).catch((e) => toast(hiringError(e), { error: true })); } } });
+        } catch (e) { toast(hiringError(e), { error: true }); }
+      },
     };
   }, [data, reload, ask, toast]);
 }
 type Actions = ReturnType<typeof useStructureActions>;
+const SECTION_KEYS = Object.keys(FIN_SECTIONS) as FinSection[];
+const sectionLabel = (v: FinSection | null) => (v ? FIN_SECTIONS[v] : "без розділу");
+/** Вибір розділу: лише чотири значення з сервера-дзеркала + «без розділу». */
+function SectionSelect({ value, label, onPick, placeholder }: { value: FinSection | null | ""; label: string; onPick: (v: FinSection | null) => void; placeholder?: string }) {
+  return (
+    <select className="hr-inp fin-sec" aria-label={label} value={value ?? ""} onChange={(e) => onPick((e.target.value || null) as FinSection | null)}>
+      {placeholder != null && <option value="" disabled hidden>{placeholder}</option>}
+      <option value="">— без розділу</option>
+      {SECTION_KEYS.map((k) => <option key={k} value={k}>{FIN_SECTIONS[k]}</option>)}
+    </select>
+  );
+}
 
 // ── Розділ ───────────────────────────────────────────────────────────────────
 export function FinanceSection() {
@@ -514,8 +534,14 @@ function ArticlesTab({ data, act }: { data: FinMonth; act: Actions }) {
   const [showOff, setShowOff] = useState(false);
   const ql = q.trim().toLowerCase();
   let n = 0;
+  // Друге число до предиката: діючі статті без розділу і їхній факт цього місяця — у «Тиждень і місяць» вони не йдуть.
+  const loose = data.tree.flatMap((r) => r.groups.flatMap((g) => g.items)).filter((i) => i.active && i.section == null);
+  const looseFact = loose.reduce((a, i) => a + (i.fact ?? 0), 0);
   return (
     <div className="hr-card">
+      {loose.length > 0 && <div className="hr-note" style={{ margin: "0 0 10px" }}>
+        Без розділу: <b>{loose.length}</b> {loose.length === 1 ? "стаття" : "статей"}{looseFact ? <> · факт за {monthShort(data.month)} <b>{money(looseFact)}</b></> : null} — у «Тиждень і місяць» вони не потрапляють. Розділ ставиться в колонці «Розділ» або одразу всій групі.
+      </div>}
       <div className="hd">
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
           <label className="hr-muted">Пошук статті<br />
@@ -527,7 +553,7 @@ function ArticlesTab({ data, act }: { data: FinMonth; act: Actions }) {
       </div>
       <div className="hr-tw">
         <table className="hr-table fin-table">
-          <thead><tr><th>Назва</th><th className="num">План · {monthShort(data.month)}</th><th className="num">Факт · {monthShort(data.month)}</th><th>Стан</th><th className="num">{data.canEdit ? "Дії" : ""}</th></tr></thead>
+          <thead><tr><th>Назва</th><th>Розділ</th><th className="num">План · {monthShort(data.month)}</th><th className="num">Факт · {monthShort(data.month)}</th><th>Стан</th><th className="num">{data.canEdit ? "Дії" : ""}</th></tr></thead>
           <tbody>
             {data.tree.map((r) => (
               <ArticleResp key={r.id} r={r} canEdit={data.canEdit} act={act}>
@@ -539,6 +565,9 @@ function ArticlesTab({ data, act }: { data: FinMonth; act: Actions }) {
                     {its.map((i) => (
                       <tr key={i.id} className={i.offFrom ? "off" : ""}>
                         <td className="ind2">{i.name}</td>
+                        <td>{data.canEdit
+                          ? <SectionSelect value={i.section} label={`Розділ: ${i.name}`} onPick={(v) => void act.setSections([{ id: i.id, section: v }], `«${i.name}» → ${sectionLabel(v)}`)} />
+                          : <span className={i.section ? "" : "hr-muted"}>{sectionLabel(i.section)}</span>}</td>
                         <td className="num">{money(i.plan)}</td>
                         <td className="num">{money(i.fact)}</td>
                         <td>{i.offFrom ? <span className="hr-pill gr">вимкнено з {monthShort(i.offFrom)} {i.offFrom.slice(0, 4)}</span> : <span className="hr-pill ok">діє</span>}</td>
@@ -554,13 +583,14 @@ function ArticlesTab({ data, act }: { data: FinMonth; act: Actions }) {
                 })}
               </ArticleResp>
             ))}
-            {!n && ql && <tr><td colSpan={5} className="hr-muted" style={{ padding: 16 }}>Нічого не знайдено.</td></tr>}
-            {!data.tree.length && <tr><td colSpan={5} className="hr-muted" style={{ padding: 16 }}>Статей ще немає. Почніть із «+ Відповідальний».</td></tr>}
+            {!n && ql && <tr><td colSpan={6} className="hr-muted" style={{ padding: 16 }}>Нічого не знайдено.</td></tr>}
+            {!data.tree.length && <tr><td colSpan={6} className="hr-muted" style={{ padding: 16 }}>Статей ще немає. Почніть із «+ Відповідальний».</td></tr>}
           </tbody>
         </table>
       </div>
       <div className="hr-sect hr-muted" style={{ fontSize: 12.5 }}>
         Вимкнена стаття зникає з місяців після своєї останньої цифри — минулі підсумки не змінюються. Видалення можна скасувати кнопкою «Повернути».
+        Розділ статті визначає, у який рядок «Операційних витрат» піде її факт у «Тиждень і місяць» (місяць, з жовтня 2026).
       </div>
     </div>
   );
@@ -569,7 +599,7 @@ function ArticlesTab({ data, act }: { data: FinMonth; act: Actions }) {
 function ArticleResp({ r, canEdit, act, children }: { r: FinResp; canEdit: boolean; act: Actions; children: ReactNode }) {
   return (<>
     <tr className="resp" style={{ cursor: "default" }}>
-      <td colSpan={4}>{r.name} <span className="hr-muted" style={{ fontWeight: 400 }}>· груп: {r.groups.length}</span></td>
+      <td colSpan={5}>{r.name} <span className="hr-muted" style={{ fontWeight: 400 }}>· груп: {r.groups.length}</span></td>
       <td className="num">{canEdit && <span className="acts">
         <button className="hr-btn xs" onClick={() => act.addGroup(r)}>+ група</button>
         <button className="hr-btn xs" onClick={() => act.renameResp(r)} aria-label={`Перейменувати ${r.name}`}>✎</button>
@@ -582,7 +612,10 @@ function ArticleResp({ r, canEdit, act, children }: { r: FinResp; canEdit: boole
 function ArticleGroup({ g, r, canEdit, act, month, children }: { g: FinGroup; r: FinResp; canEdit: boolean; act: Actions; month: string; children: ReactNode }) {
   return (<>
     <tr>
-      <td className="ind1" colSpan={4}><b>{g.name}</b> <span className="hr-muted">· статей: {g.items.length}</span></td>
+      <td className="ind1"><b>{g.name}</b> <span className="hr-muted">· статей: {g.items.length}</span></td>
+      <td>{canEdit && g.items.length > 0 && <SectionSelect value="" placeholder="всім у групі…" label={`Розділ усім статтям групи ${g.name}`}
+        onPick={(v) => void act.setSections(g.items.map((i) => ({ id: i.id, section: v })), `Група «${g.name}»: усім статтям → ${sectionLabel(v)}`)} />}</td>
+      <td colSpan={3} />
       <td className="num">{canEdit && <span className="acts">
         <button className="hr-btn xs" onClick={() => act.addItem(g, month)}>+ стаття</button>
         <button className="hr-btn xs" onClick={() => act.renameGroup(g)} aria-label={`Перейменувати ${g.name}`}>✎</button>

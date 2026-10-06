@@ -1,4 +1,4 @@
-import type { LeadgenPersonRow as Row, LeadgenBucket, LeadgenGrain, LeadgenHandoffMoney, LeadgenPersonPlan, LeadgenPlanExec, LeadgenExtraExec } from "../../../api";
+import type { LeadgenPersonRow as Row, LeadgenBucket, LeadgenGrain, LeadgenHandoffMoney, LeadgenPersonPlan, LeadgenPlanExec, LeadgenExtraExec, LeadgenPersonPace, LeadgenPlanPace } from "../../../api";
 import { formatAmountFull } from "../format";
 import { Donut } from "./ReportPlanSection";
 import { ddmm, addDays, dow, mondayOf } from "../periodRules";
@@ -65,6 +65,25 @@ export function PlanRing({ exec, title }: { exec: Extract<LeadgenPlanExec, { kin
 /** «12 / 40» — факт і план; план дробовий лише в неповному місяці (частка за робочими днями). */
 export const fmtPlan = (plan: number) => plan.toLocaleString("uk-UA", { maximumFractionDigits: 1 });
 export const factOfPlan = (fact: number, plan: number | null) => `${n(fact)} / ${plan == null ? "—" : fmtPlan(plan)}`;
+
+/**
+ * 🏃 ЛИШИЛОСЬ ДО ПЛАНУ — норма з наздоганянням (рішення власника 05.10.2026): скільки ще до плану місяця, скільки
+ * треба сьогодні, щоб встигнути (відстав — більше, випереджаєш — менше), і скільки лишилось на тиждень. Лише поточний місяць.
+ */
+export function PaceLines({ pace }: { pace: LeadgenPersonPace | undefined }) {
+  if (!pace) return null;
+  const items: [string, LeadgenPlanPace][] = [["дзвінки", pace.calls], ["ліди", pace.leads], ["ОПР", pace.opr], ["прорахунки", pace.quotes]];
+  const rows = items.filter(([, p]) => p.kind !== "none").map(([label, p]) => {
+    if (p.kind === "done") return <span key={label} style={{ color: "var(--ok)" }}>{label}: ✓ план виконано ({n(p.fact)} / {n(p.plan)})</span>;
+    if (p.kind !== "pace") return null;
+    const today = p.normToday == null ? "робочих днів не лишилось"
+      : p.todayIsWorking ? `сьогодні треба ${n(p.normToday)}, зроблено ${n(p.doneToday)}, лишилось ${n(p.leftToday ?? 0)}`
+      : `наступного робочого дня треба ${n(p.normToday)}`;
+    return <span key={label}>{label}: лишилось <b>{n(p.leftMonth)}</b> з {n(p.plan)} · {today}{p.leftWeek != null ? ` · на тиждень ~${n(p.leftWeek)}` : ""}</span>;
+  });
+  if (pace.moneyLeft != null) rows.push(<span key="money">гроші: {pace.moneyLeft > 0 ? <>лишилось <b>{Math.round(pace.moneyLeft).toLocaleString("uk-UA")} ₴</b> (від «Успішні + Очікування»)</> : <span style={{ color: "var(--ok)" }}>✓ план виконано</span>}</span>);
+  return rows.length ? <span style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12.5 }} title="Норма з наздоганянням: (план місяця − факт до сьогодні) ÷ робочі дні до кінця місяця">🏃 {rows}</span> : null;
+}
 
 /**
  * 📞💰 ДЗВІНКИ Й ГРОШІ ПРОТИ ПЛАНУ (рішення власника 01.10.2026). Обидва пункти необовʼязкові: немає плану —
@@ -171,6 +190,7 @@ export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, moneyB
               <span><b style={{ fontSize: 16 }}>{factOfPlan(pe.fact, pe.plan)}</b> прорахунки · план</span>
               <span style={{ color: MUTED }}>ліди {factOfPlan(row.leads, plan.plan.leads)} · ОПР {factOfPlan(row.opr, plan.plan.opr)}</span>
               <ExtraPlanLines extra={plan.extra} />
+              <PaceLines pace={plan.pace} />
             </span>
           </span>
         ) : (

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { needsDb } from "../testMode.js";
+import { teamJoinSql } from "./teamAt.js";
 
 /**
  * 🔀 #214c–#214e — Е6: ПʼЯТИЙ ЧИТАЧ РЕЄСТРУ ПЕРЕВЕДЕНО НА ПЕРСИСТЕНТНИЙ СЛІД.
@@ -63,13 +64,19 @@ const TAIL = `,
    COUNT(*) FILTER (WHERE p.won_at IS NOT NULL AND date_trunc('month', (p.won_at ${KY})) = mo.m)::int AS won_in
  FROM months mo LEFT JOIN pop p ON TRUE GROUP BY mo.m ORDER BY mo.m`;
 
-/** ЕТАЛОН — стара, реєстрова редакція. Живе ЛИШЕ тут: у проді її більше немає. */
+/**
+ * ЕТАЛОН — стара, реєстрова редакція. Живе ЛИШЕ тут: у проді її більше немає.
+ * 🔀 Команда — НА ДАТУ ПЕРЕДАЧІ (`teamJoinSql`), як у ядрі з 05.10.2026 (задача 4892). Поки переходів не
+ * було, `t.id = m.team_id` давав те саме; після першого (Хомік «без команди» з 01.10) еталон почав
+ * викидати її минулі передачі, а ядро — ні, і гейт порівнював ДВА РІЗНІ склади (2026-06: 202 проти 212).
+ * Предмет гейта — джерело (реєстр → слід), а не правило команди, тож правило в обох боках одне.
+ */
 const ENT_REGISTRY = `entered AS (
    SELECT d.client_key, MIN(lr.transferred_at) AS entered_at
      FROM leadgen_registry lr
      JOIN deals d ON d.kommo_id = lr.lead_id
      JOIN managers m ON m.id = d.manager_id
-     JOIN teams t ON t.id = m.team_id
+     JOIN teams t ON ${teamJoinSql("t", "m", "(lr.transferred_at AT TIME ZONE 'Europe/Kyiv')::date")}
     WHERE t.name NOT ILIKE '%лідоген%' AND d.client_key IS NOT NULL
     GROUP BY d.client_key)`;
 

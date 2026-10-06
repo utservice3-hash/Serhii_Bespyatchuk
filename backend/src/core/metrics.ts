@@ -4,7 +4,7 @@ import { SCOPE_STATUSES, STUCK_MIN_DAYS, stuckBaseConds, stuckSignals, stuckCloc
   stageMoveCte, STAGE_MOVE, ASOF_SQL, ASOF_JOB_SQL,
   asOfStaleAfterMin, LAST_TALK, TALK_ATTRIBUTED, ringostatTalkCte } from "./stuckRule.js";
 import { stageName } from "./stageNames.js";
-import { orphanManagerSql, orphanReason, type OrphanReason } from "./orphanClients.js";
+import { orphanManagerSql, orphanReason, clientKind, type OrphanReason, type ClientKind, type ClientKindWhy } from "./orphanClients.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
 import { monthEndOf, periodNotOver, kyivToday } from "./dates.js";
 // 🔀 Команда в ПЕРІОДНИХ розрізах — на дату рядка (створення / подія / анкер), а не поточна
@@ -13,6 +13,7 @@ import { monthEndOf, periodNotOver, kyivToday } from "./dates.js";
 import { teamAtSql, teamOnDateSql, teamJoinSql } from "./teamAt.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
 import { dayBucketCase } from "./dayBuckets.js";
+import { FC_PIPELINE_IDS } from "./moneyBuckets.js";
 
 /**
  * ЄДИНЕ місце в проєкті з SQL по НЕ-грошових бізнес-метриках (гроші — `core/money.ts`).
@@ -811,6 +812,40 @@ function createdSplitCte(s: MetricScope, params: unknown[], bucketExpr?: string)
  * рахуються — лише лічильники угод. Σ(new+repeat+undef)=created (партиція);
  * ad/leadgen — ПІДМНОЖИНИ, у created не додаються. Σ менеджерів = команда = відділ.
  */
+/**
+ * 🤝 «ПРИЙНЯТО ЛІДОГЕН» МЕНЕДЖЕРА — угоди, які Kommo СТВОРИЛА йому з передачі лідгена (рішення власника 05.10.2026).
+ *
+ * 🔴 ПРИВІД, ЗАМІРЯНИЙ 05.10.2026 (відгук тімліда Шаврової «кількість взятих лідів від лідгена не вірно
+ * підтягує менеджерам»). Факт рахувався за каналом `lead_channel = 'leadgen'` (рішення 24.08 — замість реєстру
+ * бота). Але канал сліпий: з 451 угоди, яку Kommo у вересні створила менеджерам із кваліфікації в Продзвоні,
+ * каналом «лідоген» мічені 182 (решта — «інше» з джерелами «Реактивація закриті», «Реактивация звонком»,
+ * «Холодная база»; кілька — «реклама»). Пехньо: 7 за каналом проти 30 реальних.
+ *
+ * ✅ Тепер — той самий зв'язок, що екран «Лідогенерація»: примітка Kommo «створено з угоди» (`lead_child_links`)
+ * від угоди Продзвону. Угода менеджера — воронки Кваліфікації й повного циклу; дата — створення, київська,
+ * обидва кінці включно; зараховується поточному відповідальному (активному, як у `createdSplitByManager`).
+ * Канал `lead_channel` НЕ чіпаємо: колонки «зі створених: лідоген» і «Конв. Р+Л» лишаються на ньому — окремий
+ * прохід (варіант «б»). Одне джерело для Звіту й задач KPI (`#1259`), живий SQL — `#1260`.
+ */
+export async function leadgenAcceptedByManager(s: MetricScope): Promise<{ managerId: number; count: number }[]> {
+  const params: unknown[] = [PRODZVIN_PIPELINES, [...QUALIFICATION_PIPELINES, ...FC_PIPELINE_IDS]];
+  const conds: string[] = [];
+  if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
+  const r = await pool.query<{ manager_id: number; n: string }>(
+    `SELECT m.id AS manager_id, COUNT(DISTINCT d.kommo_id) AS n
+       FROM deals d
+       JOIN managers m ON m.id = d.manager_id AND m.is_active
+      WHERE d.pipeline_id = ANY($2::bigint[])
+        AND EXISTS (SELECT 1 FROM lead_child_links l JOIN deals p ON p.kommo_id = l.parent_id
+                     WHERE l.child_id = d.kommo_id AND p.pipeline_id = ANY($1::bigint[]))
+        ${conds.length ? "AND " + conds.join(" AND ") : ""}
+      GROUP BY m.id`, params);
+  return r.rows.map((x) => ({ managerId: x.manager_id, count: Number(x.n) }));
+}
+
 export async function createdSplitByManager(s: MetricScope): Promise<CreatedSplitRow[]> {
   const params: unknown[] = [];
   const cte = createdSplitCte(s, params);
@@ -3961,6 +3996,10 @@ export interface OrphanClient {
   payments: number; lastPaidAt: string | null; lastCallAt: string | null;
   daysSincePaid: number | null; daysSinceCall: number | null;
   revenue12: number; revenueAll: number; paymentType: string | null;
+  /** 🏢 «юр/ФОП» чи «фіз» і чим доведено — `clientKind` (05.10.2026); лише порядок і підпис у пулі. */
+  kind: ClientKind; kindWhy: ClientKindWhy;
+  /** ☎️ Телефони з контактів Kommo цього клієнта (до 3, основний першим) — щоб не шукати в CRM. */
+  phones: string[];
 }
 
 /**
@@ -3983,6 +4022,7 @@ export async function orphanClients(months: number): Promise<OrphanClient[]> {
        SELECT ck, count(*)::int n, sum(price)::bigint rev_all, max(dt) last_dt,
               COALESCE(sum(price) FILTER (WHERE dt >= now() - interval '12 months'),0)::bigint rev12,
               sum(is_cash)::int cash_n,
+              bool_or(lower(COALESCE(ptype,'')) LIKE '%безнал%') any_cashless,
               (array_agg(nm ORDER BY dt DESC))[1] nm,
               (array_agg(ptype ORDER BY dt DESC))[1] ptype
          FROM pay GROUP BY ck),
@@ -3995,7 +4035,7 @@ export async function orphanClients(months: number): Promise<OrphanClient[]> {
                   FROM pay p) x WHERE g IS NOT NULL GROUP BY ck),
      per AS (SELECT ck, mid, count(*) c, max(dt) mx FROM pay GROUP BY ck, mid),
      prim AS (SELECT DISTINCT ON (ck) ck, mid FROM per ORDER BY ck, c DESC, mx DESC)
-     SELECT a.ck, a.nm, a.n::text, a.rev_all::text, a.rev12::text, a.cash_n::text, a.ptype,
+     SELECT a.ck, a.nm, a.n::text, a.rev_all::text, a.rev12::text, a.cash_n::text, a.ptype, a.any_cashless::text,
             to_char(a.last_dt AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') last_paid,
             EXTRACT(DAY FROM now()-a.last_dt)::int::text days_paid,
             w.two30::text, w.three30::text, g.med::text,
@@ -4013,6 +4053,24 @@ export async function orphanClients(months: number): Promise<OrphanClient[]> {
         AND lo.pinned_manager_id IS NULL
         AND a.last_dt >= now() - ($2 || ' months')::interval`,
     [GENERIC_CLIENT_KEYS, String(months)]);
+  // ☎️🏢 Код компанії й телефони — ОКРЕМИМ запитом за ключами пулу, а не підзапитом у великому:
+  // дешевий фрагмент уже двічі руйнував план великого запиту (правило «заміряй ендпоінт»).
+  const keys = r.rows.map((x) => x.ck!);
+  const extra = new Map<string, { hasCode: boolean; phones: string[] }>();
+  if (keys.length) {
+    const e = await pool.query<{ ck: string; has_code: boolean; phones: string[] | null }>(
+      `WITH k AS (SELECT DISTINCT d.client_key AS ck, d.kommo_id FROM deals d WHERE d.client_key = ANY($1)),
+            co AS (SELECT k.ck, bool_or(kc.edrpou ~ '^[0-9]{8}$' OR kc.edrpou ~ '^[0-9]{10}$' OR kc.ipn ~ '^[0-9]{10}$') AS has_code
+                     FROM k JOIN deal_companies dc ON dc.deal_kommo_id = k.kommo_id
+                     JOIN kommo_companies kc ON kc.company_id = dc.company_id GROUP BY k.ck),
+            ph AS (SELECT k.ck, cp.phone, bool_or(cp.is_main OR x.is_main) AS main, count(*) AS n
+                     FROM k JOIN deal_contacts x ON x.deal_kommo_id = k.kommo_id
+                     JOIN contact_phones cp ON cp.contact_id = x.contact_id GROUP BY k.ck, cp.phone),
+            pr AS (SELECT ck, (array_agg(phone ORDER BY main DESC, n DESC, phone))[1:3] AS phones FROM ph GROUP BY ck)
+       SELECT kk.ck, COALESCE(co.has_code, false) AS has_code, pr.phones
+         FROM (SELECT DISTINCT ck FROM k) kk LEFT JOIN co ON co.ck = kk.ck LEFT JOIN pr ON pr.ck = kk.ck`, [keys]);
+    for (const x of e.rows) extra.set(x.ck, { hasCode: x.has_code === true, phones: x.phones ?? [] });
+  }
   return r.rows.map((x) => {
     const n = Number(x.n), cash = Number(x.cash_n);
     const allCash = cash > 0 && cash === n;
@@ -4031,6 +4089,11 @@ export async function orphanClients(months: number): Promise<OrphanClient[]> {
       daysSinceCall: x.days_call == null ? null : Number(x.days_call),
       revenue12: Number(x.rev12), revenueAll: Number(x.rev_all),
       paymentType: x.ptype,
+      ...(() => {
+        const ex = extra.get(x.ck!);
+        const k = clientKind({ name: x.nm ?? x.ck!, anyCashless: x.any_cashless === "true", hasCode: ex?.hasCode ?? false });
+        return { kind: k.kind, kindWhy: k.why, phones: ex?.phones ?? [] };
+      })(),
     };
   });
 }

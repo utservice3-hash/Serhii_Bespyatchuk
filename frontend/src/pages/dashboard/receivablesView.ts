@@ -786,6 +786,59 @@ export function staleNote(comment: string | null, updatedAt: string | null, now:
   return { text, dateText: updatedAt ? formatDateSafe(updatedAt.slice(0, 10), "") : "" };
 }
 
+/**
+ * 🗓 КОЛОНКА «ДОМОВЛЕНІСТЬ» З УРАХУВАННЯМ УГОДИ (06.10.2026).
+ *
+ * Привід: запис жив на клієнті, і нова угода показувала стару дату (Бінарт: 31.08 при угоді від 05.10 з
+ * оплатою 06.10 у CRM). Чи запис ще про поточний борг, вирішує СЕРВЕР (`noteActual`, `core/receivableAgreement`)
+ * — тим самим правилом, що й джоба задач. Тут лише подача:
+ *   • запис актуальний → його дата (немає — дата з CRM) і текст поточного тижня, як і раніше;
+ *   • запис з попередньої угоди → дата з CRM з підписом «дата з CRM», старий запис сірим «з попередньої угоди, дд.мм»;
+ *   • «на цей тиждень ще не записано» — ЛИШЕ коли показана дата вже минула або дати немає ніде.
+ */
+export interface AgreementView {
+  dateText: string;
+  source: "dashboard" | "crm" | "none";
+  /** Текст поточного тижня (лише для актуального запису). */
+  text: string;
+  /** Запис попередньої угоди — сірим, з датою. */
+  prevDeal: { text: string; dateText: string } | null;
+  /** Показати підпис «на цей тиждень ще не записано». */
+  placeholder: boolean;
+  tip: string;
+}
+
+export function agreementView(p: {
+  dueDate: string | null;
+  /** Запис ПОТОЧНОГО тижня — уже звужений `activeNote`, той самий, що отримує поповер. */
+  note: string;
+  /** Повний останній коментар і його дата — лише для підпису «з попередньої угоди». */
+  comment: string | null; noteUpdatedAt: string | null;
+  noteActual: boolean | undefined; crmDue: string | null | undefined; now: Date;
+}): AgreementView {
+  const today = p.now.toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+  const actual = p.noteActual !== false;
+  const noteDue = p.dueDate && formatDateSafe(p.dueDate, "") !== "" ? p.dueDate : null;
+  const crm = p.crmDue && formatDateSafe(p.crmDue, "") !== "" ? p.crmDue : null;
+  const shownIso = actual ? (noteDue ?? crm) : crm;
+  const source: AgreementView["source"] = !shownIso ? "none" : actual && noteDue ? "dashboard" : "crm";
+  const text = actual ? (p.note ?? "").trim() : "";
+  const prevText = (p.comment ?? "").trim();
+  const prevDeal = !actual && (prevText || noteDue)
+    ? { text: prevText, dateText: formatDateSafe((noteDue ?? p.noteUpdatedAt ?? "").slice(0, 10), "") }
+    : null;
+  const passed = !!shownIso && shownIso.slice(0, 10) < today;
+  const placeholder = !text && (!shownIso || passed);
+  const dateText = shownIso ? formatDateSafe(shownIso) : "";
+  const tip = [
+    shownIso ? (source === "crm" ? `Запланована дата оплати з CRM: ${dateText}.` : `Обіцяли ${dateText}.`) : "Дати немає ні в дашборді, ні в CRM.",
+    passed ? "Дата вже минула." : "",
+    prevDeal ? `Попередній запис (з попередньої угоди${prevDeal.dateText ? `, ${prevDeal.dateText}` : ""}): ${prevDeal.text || "без коментаря"}.` : "",
+    "Натисніть, щоб записати домовленість по поточній угоді.",
+  ].filter(Boolean).join(" ");
+  return { dateText, source, text, prevDeal, placeholder, tip };
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    🏢 РОЗКЛАД «ЮРОСОБА → СУМА» У ЗГОРНУТОМУ РЯДКУ
 

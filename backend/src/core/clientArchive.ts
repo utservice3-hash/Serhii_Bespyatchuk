@@ -107,3 +107,61 @@ export function archiveListSql(clamp: string): string {
       WHERE ${archivedSql("o", "ap")} ${clamp}
       ORDER BY o.archived_at DESC`;
 }
+
+import { effectiveManagerSql } from "./effectiveManager.js";
+
+/**
+ * 🚚 «ПЕРЕВІЗНИК» У КОМЕНТАРІ → КАНДИДАТ В АРХІВ (05.10.2026, зворотний звʼязок #104/#69 Дарини).
+ *
+ * Менеджери самі позначають перевізників коментарем, але архівувати не можуть (це право тімліда й
+ * вище), тож список знову й знову засмічується, а тімліди пишуть у «Зворотний звʼязок». Плашка
+ * показує тімліду таких клієнтів його команди й архівує вибраних ОДНИМ кліком — з причиною
+ * «Перевізник», тим самим записом, що й ручна «🗄 в архів» (скасовується «↩ повернути з архіву»).
+ *
+ * 🔴 ВПІЗНАВАННЯ — ЯВНІ ПАРИ ЛІТЕР, А НЕ `~*`/`lower()`: регістр кирилиці залежить від локалі бази
+ * (`--locale=C` його не знає), а пишуть і «Перевiзник» з ЛАТИНСЬКОЮ i (правило 4: предикат по чужому
+ * тексту доводиться покриттям). Корінь «перевіз» ловить «перевізник/-и/-ця», але не «перевозка»,
+ * «перевірити». Хибні збіги («перевізники бачать ціни…») лишаються — тому список з ГАЛОЧКАМИ, а не
+ * автоархів: рішення за тімлідом, текст коментаря видно поруч.
+ * Заміряно 05.10: 25 клієнтів із таким коментарем, 10 уже в архіві, 15 ні.
+ */
+export const CARRIER_COMMENT_SQL_RE = "[Пп][Ее][Рр][Ее][Вв][ІіIi][Зз]";
+const CARRIER_COMMENT_RE = new RegExp(CARRIER_COMMENT_SQL_RE, "u");
+export function carrierCommentHit(text: string | null | undefined): boolean {
+  return CARRIER_COMMENT_RE.test(text ?? "");
+}
+
+/**
+ * Кандидати: клієнти, у яких ОСТАННІЙ коментар зі словом «перевіз…», і які ЗАРАЗ не в архіві
+ * (з автоповерненням: повернутий новою оплатою знову кандидат). `clamp` — `ownerTeamClamp` (тімлід —
+ * лише своя команда), `keysParam` — необовʼязковий фільтр за ключами (для масової дії).
+ */
+export function carrierCandidatesSql(clamp: string, keysParam?: string): string {
+  return `WITH ${LAST_PAID_CTE},${OWNER_TEAM_CTE},
+     cm AS (
+       SELECT DISTINCT ON (c.client_key) c.client_key, c.body, c.created_at, c.author_id
+         FROM client_comments c
+        WHERE c.body ~ '${CARRIER_COMMENT_SQL_RE}'
+        ORDER BY c.client_key, c.created_at DESC
+     )
+     SELECT cm.client_key, nm.client_name, cm.body AS comment,
+            to_char(cm.created_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS commented_at,
+            COALESCE(ua.full_name, ua.email) AS comment_by,
+            mm.name AS manager_name, tt.name AS team_name, ot.team_id
+       FROM cm
+       LEFT JOIN loyalty_overrides o ON o.client_key = cm.client_key
+       LEFT JOIN arch_paid ap ON ap.client_key = cm.client_key
+       LEFT JOIN owner_team ot ON ot.client_key = cm.client_key
+       LEFT JOIN paid_mgr pmx ON pmx.client_key = cm.client_key
+       LEFT JOIN managers mm ON mm.id = ${effectiveManagerSql("o", "pmx")}
+       LEFT JOIN teams tt ON tt.id = ot.team_id
+       LEFT JOIN users ua ON ua.id = cm.author_id
+       LEFT JOIN LATERAL (
+         SELECT d2.client_name FROM deals d2
+          WHERE d2.client_key = cm.client_key AND d2.client_name IS NOT NULL
+          ORDER BY d2.closed_at_kommo DESC NULLS LAST LIMIT 1
+       ) nm ON true
+      WHERE NOT ${archivedSql("o", "ap")} ${clamp}
+        ${keysParam ? `AND cm.client_key = ANY(${keysParam})` : ""}
+      ORDER BY tt.name NULLS LAST, mm.name, nm.client_name`;
+}

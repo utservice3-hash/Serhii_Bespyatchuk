@@ -18,6 +18,8 @@ export interface AuthPayload {
   teamId: number | null;
   /** `users.tracker_enabled` — ЛИШЕ косметика nav (ховає кнопку); межу тримає сервер. */
   trackerEnabled?: boolean;
+  /** `users.orphan_pool` — ЛИШЕ косметика (вкладка «Пул» менеджеру); межу тримає сервер (`orphanPoolAccess`). */
+  orphanPool?: boolean;
 }
 
 export function signToken(payload: AuthPayload): string {

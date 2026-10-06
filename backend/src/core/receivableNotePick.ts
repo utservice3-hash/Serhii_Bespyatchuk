@@ -66,6 +66,8 @@ export interface RowNote {
   /** Канонічний ISO з `Z` — той самий формат, що вже їде на екран. */
   updatedAt: string | null;
   isCanonical: boolean;
+  /** До якої угоди привʼязаний запис (з 06.10.2026); `null` — старий клієнтський запис. */
+  dealId?: number | null;
 }
 
 export interface PickedNote {

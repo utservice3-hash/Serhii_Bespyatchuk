@@ -157,6 +157,13 @@ ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_transfer_at TIMESTAMPTZ;
 -- Used by "stuck deals": a deal with no human activity for a while is stuck.
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS first_activity_at TIMESTAMPTZ; -- перший людський контакт (для «час опрацювання»)
+-- ⏱ «Час опрацювання заявки» (ТЗ Юлії 24.09.2026, `core/leadTake.ts`). Дві з трьох подій «взято в роботу»;
+-- третя — перша зміна етапу, вона вже є в `deal_stage_events`.
+--   taken_field_at      — поле Kommo «Взято в работу» (раніше з «(ппц)» 2097983 і «(пр)» 2098493), пише syncKommo;
+--   first_call_out_at   — перший ВИХІДНИЙ дзвінок по угоді НЕ РАНІШЕ її створення (примітка call_out, яку
+--                         Ringostat кладе в Kommo на контакт; розноситься на угоди через `deal_contacts`).
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS taken_field_at TIMESTAMPTZ;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS first_call_out_at TIMESTAMPTZ;
 -- Дата останнього ДЗВІНКА клієнту (лише call_in/call_out, created_by<>0), окремо від будь-якої активності.
 -- Живить прапорець «метушня без контакту» у «Застряглих»: свіжа нотатка є, але місяць без дзвінка.
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS last_call_at TIMESTAMPTZ;
@@ -500,6 +507,9 @@ CREATE TABLE IF NOT EXISTS receivable_invoice_notes (
 );
 -- Анти-дубль авто-задачі і для КЛІЄНТСЬКОГО дедлайну (receivable_notes.due_date).
 ALTER TABLE receivable_notes ADD COLUMN IF NOT EXISTS task_created_at TIMESTAMPTZ;
+-- 🗓 Домовленість привʼязується до УГОДИ (06.10.2026, `core/receivableAgreement.ts`): запис актуальний,
+-- поки ця угода серед неоплачених рахунків клієнта. NULL — старий запис без угоди (правило за датою).
+ALTER TABLE receivable_notes ADD COLUMN IF NOT EXISTS deal_id BIGINT;
 
 -- 🗓 ІСТОРІЯ ДОМОВЛЕНОСТЕЙ — ДОПИСУВАНА, НІКОЛИ НЕ ЗАТИРАЄТЬСЯ.
 --
@@ -519,6 +529,8 @@ CREATE TABLE IF NOT EXISTS receivable_note_history (
   written_by INTEGER REFERENCES users(id),
   written_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Журнал теж знає, до якої угоди був запис (06.10.2026).
+ALTER TABLE receivable_note_history ADD COLUMN IF NOT EXISTS deal_id BIGINT;
 CREATE INDEX IF NOT EXISTS idx_receivable_note_history_client
   ON receivable_note_history(client_key, written_at DESC);
 
@@ -2234,6 +2246,10 @@ END $$;
 -- ─────────────────────────── Трекер часу (окрема підсистема) ───────────────────────────
 -- Власна авторизація (device-токен), НЕ JWT. Банк/виписку не чіпає.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS tracker_enabled BOOLEAN NOT NULL DEFAULT false;
+-- 🧭 Доступ МЕНЕДЖЕРА до пулу нічийних (05.10.2026, Роман: Пехньо Олександра й Гаркушина Юлія).
+-- Керівникам пул відкритий і без нього; менеджеру — лише з цим прапорцем і лише «взяти собі».
+-- Вмикає й вимикає адмін у Налаштуваннях (як tracker_enabled), разової міграції немає свідомо.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS orphan_pool BOOLEAN NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS tracker_devices (
   id            SERIAL PRIMARY KEY,
@@ -4484,11 +4500,27 @@ CREATE TABLE IF NOT EXISTS ba_ttn_checks (
   UNIQUE (month, manager_id)
 );
 
+-- 🗂 ТТН АВТОМАТИЧНО (05.10.2026, рішення Романа): «прикріплено ТТН» — з поля Kommo «ТТН» (2097291),
+-- яке синк пише в `deals.ttn_files` (NULL = угоду синк ще не бачив після появи колонки — «не
+-- синхронізовано», НЕ 0). «Наявні» = прикріплено − позначені Дашею «маршрут не збігся».
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS ttn_files INTEGER;
+-- Знімок фіксації місяця тепер несе всі три числа; `ttn_present` = прикріплено − не збігся.
+ALTER TABLE ba_ttn_checks ADD COLUMN IF NOT EXISTS ttn_attached INTEGER;
+ALTER TABLE ba_ttn_checks ADD COLUMN IF NOT EXISTS route_mismatch INTEGER;
+-- Угоди, де ТТН прикріплено, але маршрут у ній НЕ збігся з угодою (звіряє людина). Позначка —
+-- на угоді, а не на місяці: угода закривається один раз, і її місяць визначає дата закриття.
+CREATE TABLE IF NOT EXISTS ba_ttn_route_mismatch (
+  kommo_id   BIGINT PRIMARY KEY REFERENCES deals(kommo_id),
+  note       TEXT,
+  marked_by  INTEGER REFERENCES users(id),
+  marked_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- 🔒 Увесь розділ «Бізнес-асистент» закрито від моделі (рішення Романа 01.10.2026 «5а»): борги клієнтів,
 -- судові справи, документи, видача техніки, перевірки ТТН. Після GRANT і після CREATE усіх таблиць блоку;
 -- `ba_equipment_issues` закрита вище. Гейт #1240 бере перелік ЗІ СХЕМИ за префіксом `ba_` — нова таблиця
 -- розділу без REVOKE червоніє сама.
-REVOKE ALL ON ba_claims, ba_court_cases, ba_files, ba_events, ba_equipment, ba_ttn_checks, ba_migrations FROM ai_readonly;
+REVOKE ALL ON ba_claims, ba_court_cases, ba_files, ba_events, ba_equipment, ba_ttn_checks, ba_migrations, ba_ttn_route_mismatch FROM ai_readonly;
 
 -- ▼ AI-АНАЛІЗ ДЗВІНКІВ ПО РЕКЛАМНИХ ЛІДАХ (ТЗ 22.09.2026, прохід A, коміт ②) ▼
 -- Три таблиці з ІСТОРІЄЮ: жодного TRUNCATE, жодного перезапису. Старий шлях (uts-bot → Google-лист →
@@ -4649,6 +4681,19 @@ CREATE TABLE IF NOT EXISTS carrier_review_tasks (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_carrier_review_tasks_open ON carrier_review_tasks(manager_id) WHERE closed_at IS NULL;
 REVOKE ALL ON carrier_review_tasks FROM ai_readonly;
+
+-- 🧽 ЗАДАЧІ НА ЗАКРИТИХ УГОДАХ «ДЗВІНКІВ НА МОБІЛЬНІ» (Роман 05.10.2026: «автоматично закривало також задачу»;
+-- `core/carrierTaskSweep.ts`). Рядок на угоду, яку вже прибрано: коли, у якому режимі (`dry` — лише журнал), скільки
+-- задач робота було й скільки закрито. Без телефонів, але відібрана в `ai_readonly`, як решта таблиць «Відсіву».
+-- ⚠️ revert коду таблицю не прибирає; закриті в Kommo задачі лишаються закритими.
+CREATE TABLE IF NOT EXISTS carrier_task_sweeps (
+  kommo_id     BIGINT PRIMARY KEY,
+  swept_at     TIMESTAMPTZ NOT NULL,
+  mode         TEXT NOT NULL CHECK (mode IN ('dry','live')),
+  robot_tasks  INTEGER NOT NULL DEFAULT 0 CHECK (robot_tasks >= 0),
+  closed_tasks INTEGER NOT NULL DEFAULT 0 CHECK (closed_tasks >= 0)
+);
+REVOKE ALL ON carrier_task_sweeps FROM ai_readonly;
 
 -- 📣 «Стелю досягнуто» — один раз на місяць на межу бюджету (рішення Романа 29.09.2026). Рядок ставиться ДО
 -- відправки в Telegram, тож повтор щоп'ять хвилин неможливий за побудовою.
@@ -5339,3 +5384,146 @@ CREATE TABLE IF NOT EXISTS kommo_declined_forms (
 );
 CREATE INDEX IF NOT EXISTS ix_kommo_declined_forms_at ON kommo_declined_forms (declined_at);
 REVOKE ALL ON kommo_declined_forms FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💰 ФІНАНСИ, прохід 2в (05.10.2026, прохання Тетяни + рішення Романа «роби все»):
+--  · розділ статті «План/факт» → місячні рядки «Операційних витрат» у «Тиждень і місяць» (Σ факту статей розділу);
+--  · «Валютна дебіторка» — з 1С (рахунок 362), журнал підсумків кожного синку (`receivables_fx_totals`).
+-- ⚠️ Revert коду не відкочує цих змін (колонка, показник «ЗП + Податки на ЗП», перейменування, журнал підсумків).
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE fin_items ADD COLUMN IF NOT EXISTS section TEXT;
+ALTER TABLE fin_items DROP CONSTRAINT IF EXISTS fin_items_section_check;
+ALTER TABLE fin_items ADD CONSTRAINT fin_items_section_check CHECK (section IS NULL OR section IN ('commercial','general','admin','payroll'));
+ALTER TABLE fin_kpis DROP CONSTRAINT IF EXISTS fin_kpis_ref_source_check;
+ALTER TABLE fin_kpis ADD CONSTRAINT fin_kpis_ref_source_check CHECK (ref_source IS NULL OR ref_source IN (
+  'delivered_income','delivered_expense','unloaded_income','unloaded_expense','receivables',
+  'opex_commercial','opex_general','opex_admin','opex_payroll','receivables_fx','bank_in','bank_out'));
+-- ⚠️ ЄДИНЕ визначення списку джерел — нове джерело додається СЮДИ. Рядок перевизначається на кожному прогоні схеми:
+-- друга, неповна копія нижче впала б на вже записаних рядках на наступному викаті (спіймав #1203, 05.10.2026).
+-- Разово (позначка в `fin_kpi_imports`): рядки «Операційних витрат» і «Валютна дебіторка» отримують джерело;
+-- «Загальновиробничі витрати» → «Загальні витрати» (назва розділу Тетяни); новий рядок «ЗП + Податки на ЗП».
+-- Рядок шукається за розділом + назвою: якщо його вже перейменували чи видалили — разовий крок його не чіпає.
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('opex-fx-2026-10-05', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key),
+sec AS (SELECT id FROM fin_kpi_sections WHERE name = 'Операційні витрати' AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM step)),
+opex AS (
+  UPDATE fin_kpis f SET kind = 'auto',
+         ref_source = CASE f.name WHEN 'Комерційні витрати' THEN 'opex_commercial' WHEN 'Загальновиробничі витрати' THEN 'opex_general'
+                                  WHEN 'Адміністративні витрати' THEN 'opex_admin' END,
+         name = CASE f.name WHEN 'Загальновиробничі витрати' THEN 'Загальні витрати' ELSE f.name END
+   WHERE f.section_id IN (SELECT id FROM sec) AND f.deleted_at IS NULL AND f.kind = 'manual'
+     AND f.name IN ('Комерційні витрати', 'Загальновиробничі витрати', 'Адміністративні витрати')
+  RETURNING f.id),
+fx AS (
+  UPDATE fin_kpis f SET kind = 'auto', ref_source = 'receivables_fx'
+    FROM fin_kpi_sections s
+   WHERE s.id = f.section_id AND s.name = 'Залишки на дату' AND s.deleted_at IS NULL AND f.name = 'Валютна дебіторка'
+     AND f.kind = 'manual' AND f.deleted_at IS NULL AND EXISTS (SELECT 1 FROM step)
+  RETURNING f.id)
+INSERT INTO fin_kpis (section_id, name, kind, ref_source, sort)
+SELECT s.id, 'ЗП + Податки на ЗП', 'auto', 'opex_payroll', COALESCE((SELECT max(sort) + 1 FROM fin_kpis WHERE section_id = s.id), 0)
+  FROM sec s WHERE NOT EXISTS (SELECT 1 FROM fin_kpis WHERE section_id = s.id AND name = 'ЗП + Податки на ЗП' AND deleted_at IS NULL);
+-- Валютна дебіторка з 1С: ПІДСУМОК кожного синку (не знімок під TRUNCATE) — щоб минулий тиждень мав своє число.
+-- Лише суми й лічильники, без клієнтів і рахунків.
+CREATE TABLE IF NOT EXISTS receivables_fx_totals (
+  id          BIGSERIAL PRIMARY KEY,
+  synced_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  rows        INTEGER NOT NULL,
+  total_uah   NUMERIC(14,2) NOT NULL,          -- Σ гривневого еквівалента (1С `Sum`)
+  total_val   NUMERIC(14,2) NOT NULL,          -- Σ у валюті (1С `SumVal`; валюти рахунку 1С не віддає)
+  zero_uah    INTEGER NOT NULL DEFAULT 0       -- рядків із боргом у валюті, але нульовим гривневим еквівалентом
+);
+CREATE INDEX IF NOT EXISTS ix_receivables_fx_totals_at ON receivables_fx_totals (synced_at);
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💰 ФІНАНСИ, прохід 2г (05.10.2026, рішення Романа «роби і викочуй»): Сейф і картки у «Виписці»,
+-- «Надходження / Витрати загальні» з «Виписки», валютна дебіторка ще й у валюті.
+--  · `bank = 'manual'` — рахунок без банку (Сейф): записи вносить людина — по операції АБО підсумком тижня.
+--  · `finance_only` — рахунок «лише фінанси»: його операції НЕ бачать ролі без `view_cashflow` (стрічка «Виписки»
+--    відкрита всім ролям), не бачить AI і не бере зіставлення оплат з рахунками. Картки моно — ОСОБИСТІ картки власника
+--    ФОП (заміряно 05.10: black, white, madeInUkraine під MONO_TOKEN_FOP), тому лише так.
+-- ⚠️ Revert коду не прибирає рахунків і ручних записів — це дані людини, їх не стираємо.
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE bank_accounts DROP CONSTRAINT IF EXISTS bank_accounts_bank_check;
+ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_bank_check CHECK (bank IN ('mono','privat','manual'));
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS finance_only BOOLEAN NOT NULL DEFAULT false;
+-- Тип рахунку моно під тим самим токеном (fop / black / white / madeInUkraine …). NULL — ФОП, як було.
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS mono_type TEXT;
+ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS manual_kind TEXT;
+ALTER TABLE bank_transactions DROP CONSTRAINT IF EXISTS bank_transactions_manual_kind_check;
+ALTER TABLE bank_transactions ADD CONSTRAINT bank_transactions_manual_kind_check CHECK (manual_kind IS NULL OR manual_kind IN ('op','week'));
+ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS entered_by INTEGER REFERENCES users(id);
+ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS deleted_by INTEGER REFERENCES users(id);
+-- Разово: Сейф і три картки моно (тип — замір 05.10.2026). Позначка в `fin_kpi_imports`: видалений чи вимкнений
+-- рахунок повторний прогін схеми не відроджує.
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('bank-safe-cards-2026-10-05', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key),
+safe AS (
+  INSERT INTO bank_accounts (company, bank, label, currency, finance_only)
+  SELECT 'uts', 'manual', 'Сейф', 'UAH', true WHERE EXISTS (SELECT 1 FROM step)
+  RETURNING id)
+INSERT INTO bank_accounts (company, bank, label, currency, env_key_name, mono_type, finance_only)
+SELECT 'fop_mono', 'mono', 'Картка ' || t.label, 'UAH', f.env_key_name, t.type, true
+  FROM (VALUES ('black', 'black'), ('white', 'white'), ('madeInUkraine', '«Зроблено в Україні»')) AS t(type, label)
+  CROSS JOIN LATERAL (SELECT env_key_name FROM bank_accounts WHERE bank = 'mono' AND mono_type IS NULL AND NOT finance_only
+                       AND env_key_name IS NOT NULL ORDER BY id LIMIT 1) f
+ WHERE EXISTS (SELECT 1 FROM step) AND (SELECT count(*) FROM safe) >= 0;
+-- Джерела 'bank_in'/'bank_out' дозволено вище, в ЄДИНОМУ визначенні `fin_kpis_ref_source_check` (блок 2в).
+-- «Надходження / Витрати загальні» — з «Виписки» (разово; свідома правка після кроку виживає).
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('bank-fm-2026-10-05', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key)
+UPDATE fin_kpis f SET kind = 'auto', ref_source = CASE f.name WHEN 'Надходження загальні' THEN 'bank_in' ELSE 'bank_out' END
+  FROM fin_kpi_sections s
+ WHERE s.id = f.section_id AND s.name = 'Гроші' AND s.deleted_at IS NULL AND f.deleted_at IS NULL AND f.kind = 'manual'
+   AND f.name IN ('Надходження загальні', 'Витрати загальні') AND EXISTS (SELECT 1 FROM step);
+-- Валютна дебіторка ще й у валюті: USD / EUR визначено за курсом рядка 1С (валюти 1С не віддає), невизначене — окремо.
+ALTER TABLE receivables_fx_totals ADD COLUMN IF NOT EXISTS usd NUMERIC(14,2);
+ALTER TABLE receivables_fx_totals ADD COLUMN IF NOT EXISTS eur NUMERIC(14,2);
+ALTER TABLE receivables_fx_totals ADD COLUMN IF NOT EXISTS unknown_val NUMERIC(14,2);
+-- 🔒 AI не бачить операцій рахунків «лише фінанси» (особисті картки, Сейф): сира таблиця — відібрана, натомість вью
+-- без них. Той самий прийом, що `ai_tasks`. Тримає гейт проходу 2г.
+CREATE OR REPLACE VIEW ai_bank_transactions AS
+  SELECT t.id, t.account_id, t.direction, t.booked_at, t.counterparty_name, t.purpose, t.amount, t.currency, t.amount_uah, t.is_bank_fee
+    FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
+   WHERE NOT a.finance_only AND t.deleted_at IS NULL;
+REVOKE ALL ON bank_transactions FROM ai_readonly;
+GRANT SELECT ON ai_bank_transactions TO ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💰 ФІНАНСИ, фікси після зустрічі з Тетяною 05.10.2026.
+--  · `manual_override` — число людини поверх «План/факт» в операційних (і місяць, і тиждень): головне, доки не очищене.
+--  · Сейф: запис у своїй валюті (UAH/USD/EUR, гривня — за курсом НБУ на дату) і з категорією — статтею «План/факт».
+--  · Особисті картки власника ФОП вимкнено (разово): Тетяна мала на увазі робочу картку Саші. Вимкнено, НЕ видалено —
+--    вмикаються в «Налаштуваннях виписки», операції лишаються.
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE fin_kpi_values ADD COLUMN IF NOT EXISTS manual_override BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS fin_item_id INTEGER REFERENCES fin_items(id);
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('cards-off-2026-10-05', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key)
+UPDATE bank_accounts SET is_active = false
+ WHERE bank = 'mono' AND finance_only AND mono_type IN ('black', 'white', 'madeInUkraine') AND EXISTS (SELECT 1 FROM step);
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💬 ЗВОРОТНИЙ ЗВʼЯЗОК: ФОТО І ВИДАЛЕННЯ ЧЕРЕЗ МІСЯЦЬ ПІСЛЯ ЗАКРИТТЯ (05.10.2026, рішення Романа).
+--  · Закрите = «Вирішено» (resolved) або «Відхилено» (rejected). «Схвалено» — ще в роботі.
+--  · `closed_at` ставить роут при переході в закритий стан і знімає при поверненні на розгляд.
+--  · 🔴 ВАРІАНТ А: уже закритим на момент викату лічильник стартує З ДНЯ ВИКАТУ, а не з `updated_at`.
+--    Інакше перша ж ніч видалила б 48 записів (заміряно 05.10: 47 «вирішено» + 1 «відхилено» старші 30 днів).
+--    Разовий крок через `fin_kpi_imports`-подібний ключ не потрібен: `closed_at IS NULL` сам робить UPDATE
+--    ідемпотентним — заповнений рядок він більше не чіпає.
+--  · Видалення БЕЗПОВОРОТНЕ (джоба `purgeFeedback`): рядок, фото в базі й байти на диску. Revert коду його не поверне.
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
+UPDATE feedback SET closed_at = now() WHERE closed_at IS NULL AND status IN ('resolved', 'rejected');
+CREATE INDEX IF NOT EXISTS idx_feedback_closed ON feedback(closed_at) WHERE closed_at IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS feedback_files (
+  id SERIAL PRIMARY KEY,
+  feedback_id INTEGER NOT NULL REFERENCES feedback(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,          -- відображувана назва
+  stored_name TEXT NOT NULL,   -- uuid-імʼя на диску (тека feedback-files поза публічним uploads/)
+  mime TEXT NOT NULL,          -- визначено за байтами, а не за словами клієнта
+  size_bytes BIGINT NOT NULL,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_files_fb ON feedback_files(feedback_id, created_at);
+-- 🔒 Скриншоти можуть містити що завгодно з екрана (клієнтів, суми). Дзеркало — FORBIDDEN_TABLES. Тримає #496.
+REVOKE ALL ON feedback_files FROM ai_readonly;

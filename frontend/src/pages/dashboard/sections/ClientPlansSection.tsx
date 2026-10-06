@@ -10,6 +10,7 @@ import { formatAmountFull } from "../format";
 import { useToast } from "../../../components/Toasts";
 import { SegmentBadge, ForcedBadge, MergedLine } from "./SegmentBadge";
 import { RowComment } from "./RowComment";
+import { CarrierCommentBanner } from "./CarrierCommentBanner";
 import { CreateTaskDialog, CloseTaskDialog, ContactDialog } from "./ReactivationBits";
 import { ClientCardPanel } from "./ClientCardPanel";
 import { ClientContactFileViewer } from "./ClientContactFileViewer";
@@ -645,6 +646,9 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           <button onClick={() => shift(1)} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>→</button>
         </div>
       </div>
+
+      {/* 🚚 Клієнти з коментарем «перевізник» → в архів одним кліком (тімлід і керівництво, 05.10.2026). */}
+      {auth.role !== "manager" && <CarrierCommentBanner onArchived={load} />}
 
       {/* ── ПЛИТКИ */}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>

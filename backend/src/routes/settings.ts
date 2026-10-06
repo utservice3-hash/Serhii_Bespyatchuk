@@ -252,7 +252,7 @@ settingsRouter.get("/users", async (req, res) => {
             u.role AS synced_role, u.role_override,
             COALESCE(u.role_override, u.role) AS role_effective,
             u.is_active, u.deactivated_at, u.deactivated_reason,
-            (u.manager_id IS NOT NULL) AS crm_linked, u.tracker_enabled,
+            (u.manager_id IS NOT NULL) AS crm_linked, u.tracker_enabled, u.orphan_pool,
             /* 👤 Стан менеджера їде РАЗОМ зі списком: він керує і робочими списками, і
                входом (loginEnabledFor), тож окремий запит означав би екран, на якому
                два джерела правди про одну людину розходяться між двома завантаженнями.
@@ -508,13 +508,18 @@ settingsRouter.patch("/users/:id", async (req, res) => {
   if (typeof req.body.trackerEnabled === "boolean") {
     params.push(req.body.trackerEnabled); sets.push(`tracker_enabled = $${params.length}`);
   }
+  // 🧭 Пул нічийних для менеджера (05.10.2026) — вмикання й вимикання однаково просте.
+  if (typeof req.body.orphanPool === "boolean") {
+    params.push(req.body.orphanPool); sets.push(`orphan_pool = $${params.length}`);
+  }
   if (sets.length === 0) return res.json({ ok: true });
   params.push(id);
   await pool.query(`UPDATE users SET ${sets.join(", ")} WHERE id = $${params.length}`, params);
 
   const action = typeof req.body.isActive === "boolean" && !newActive ? "user.deactivate" : (renamed ? "user.rename" : "user.update");
   await writeAudit({ ...audit(req), action, targetType: "user", targetId: String(id), targetLabel: c.email, details: { role_override: newOverride, is_active: newActive, ...(renamed ? { renamed } : {}),
-      ...(typeof req.body.trackerEnabled === "boolean" ? { tracker_enabled: req.body.trackerEnabled } : {}) } });
+      ...(typeof req.body.trackerEnabled === "boolean" ? { tracker_enabled: req.body.trackerEnabled } : {}),
+      ...(typeof req.body.orphanPool === "boolean" ? { orphan_pool: req.body.orphanPool } : {}) } });
   res.json({ ok: true });
 });
 

@@ -264,6 +264,22 @@ function InactiveTeamHint({ people }: { people: { id: number; name: string }[] }
   );
 }
 
+/**
+ * 🔴 ПОРОЖНІЙ СПИСОК ВИКОНАВЦІВ НАЗИВАЄ СЕБЕ (відгук Шаврової 05.10.2026). Німе «—» у
+ * селекті читалось як «мені заборонено ставити задачі», хоча список просто не дійшов.
+ */
+function AssigneeListStatus({ empty, failed, onRetry }: { empty: boolean; failed: boolean; onRetry?: () => void }) {
+  if (!empty) return null;
+  return (
+    <span data-testid="assignee-list-status" style={{ color: failed ? "#b91c1c" : "var(--text-muted)", fontSize: "var(--fs-xs)", lineHeight: 1.35 }}>
+      {failed ? "Список виконавців не завантажився." : "Завантажую список виконавців…"}
+      {failed && onRetry && (
+        <> <button type="button" onClick={onRetry} style={{ border: "none", background: "transparent", color: "#6366f1", cursor: "pointer", padding: 0, fontSize: "inherit", textDecoration: "underline" }}>Повторити</button></>
+      )}
+    </span>
+  );
+}
+
 function AssigneeCell({ value, name, options, myTeamId, onChange }: {
   value: number | null; name: string | null; options: ManagerOption[]; myTeamId: number | null; onChange: (id: number | null) => void;
 }) {
@@ -547,6 +563,8 @@ export function TasksSection({
   tasksLoadFailed = false,
   tasks,
   managerOptions,
+  managerOptionsFailed = false,
+  onReloadManagerOptions,
   patchTaskLocal,
   commitTask,
   handleDeleteTask,
@@ -571,6 +589,9 @@ export function TasksSection({
   tasksLoadFailed?: boolean;
   tasks: Task[];
   managerOptions: ManagerOption[];
+  /** Останнє завантаження списку виконавців упало (отриманий раніше список при цьому лишається). */
+  managerOptionsFailed?: boolean;
+  onReloadManagerOptions?: () => void;
   patchTaskLocal: (id: number, patch: Partial<Task>) => void;
   /** Збереження на сервер із ВИДИМОЮ помилкою: мовчазний 403/500 читався як «збережено». */
   commitTask: (id: number, patch: Partial<Task>) => void;
@@ -636,6 +657,9 @@ export function TasksSection({
   const feedDraftRef = useRef<HTMLTextAreaElement | null>(null);
   const openFeed = (taskId: number) => { setFocusFeed(true); setOpenTaskId(taskId); };
   const openTask = openTaskId != null ? tasks.find((t) => t.id === openTaskId) ?? null : null;
+  // 🔁 Форма чи картка відкрились, а виконавців немає — пробуємо ще раз, а не показуємо «—» (#494).
+  const needAssigneeList = (taskModalOpen || openTaskId != null) && managerOptions.length === 0;
+  useEffect(() => { if (needAssigneeList) onReloadManagerOptions?.(); }, [needAssigneeList]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 🔴 «ОДНЕ ЗАВАНТАЖЕННЯ ВЖЕ ЗАВЕРШИЛОСЬ» — не те саме, що «зараз не вантажимо».
   // `tasksLoading` стартує false і стає true лише коли ефект добіг до запиту, тож на
@@ -1589,6 +1613,7 @@ export function TasksSection({
                       <option value="">— (моя / без виконавця)</option>
                       <AssigneeOptgroups options={managerOptions} myTeamId={myTeamId} />
                     </select>
+                    <AssigneeListStatus empty={managerOptions.length === 0} failed={managerOptionsFailed} onRetry={onReloadManagerOptions} />
                     <InactiveTeamHint people={myTeamInactive} />
                   </F>
                   {/* 👤 ВИКОНАВЕЦЬ-АКАУНТ. Показуємо ЛИШЕ коли менеджера з CRM не
@@ -2082,6 +2107,7 @@ export function TasksSection({
                       <option value="">—</option>
                       <AssigneeOptgroups options={managerOptions} myTeamId={myTeamId} />
                     </select>
+                    <AssigneeListStatus empty={managerOptions.length === 0} failed={managerOptionsFailed} onRetry={onReloadManagerOptions} />
                     <InactiveTeamHint people={myTeamInactive} />
                 </label>
                 {taskForm.taskType === "simple" && (

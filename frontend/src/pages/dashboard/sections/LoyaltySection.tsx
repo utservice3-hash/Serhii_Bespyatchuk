@@ -57,9 +57,10 @@ export function LoyaltySection({ auth }: { auth: AuthPayload | null }) {
   const [pool, setPool] = useState<OrphanPool | null>(null);
   const [managers, setManagers] = useState<ManagerOption[]>([]);
 
-  // Пул бачать лише керівники — менеджеру вкладку не показуємо взагалі
-  // (сервер усе одно віддасть 403; ховаємо, щоб не пропонувати глухий кут).
-  const canSeePool = auth != null && auth.role !== "manager";
+  // Пул бачать керівники, а менеджер — лише з прапорцем «Нічийні клієнти» (05.10.2026). Решті
+  // вкладку не показуємо (сервер усе одно віддасть 403; ховаємо, щоб не пропонувати глухий кут).
+  // ⚠️ Прапорець у токені — лише косметика: щойно увімкнений, він зʼявиться після нового входу.
+  const canSeePool = auth != null && (auth.role !== "manager" || auth.orphanPool === true);
 
   useEffect(() => {
     const u = new URL(window.location.href);

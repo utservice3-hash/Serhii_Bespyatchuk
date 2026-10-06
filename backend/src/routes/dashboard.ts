@@ -58,7 +58,7 @@ import * as reactivationRules from "../core/reactivationRules.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
 import { loadClientSegments, factsFor, keepInReactivation } from "../core/clientSegments.js";
 import { archivedSql, isArchived, LAST_PAID_CTE, LAST_PAID_JOIN, ARCHIVE_REASONS, ARCHIVE_REASON_KEYS,
-         archiveListSql } from "../core/clientArchive.js";
+         archiveListSql, carrierCandidatesSql } from "../core/clientArchive.js";
 import { clientsListSql } from "../core/clientPlansList.js";
 import { logClientAdmin, clientAdminLog } from "../core/clientAdminLog.js";
 import { ownerTeamClamp, assigneeTeamClamp, closedListSql, closeReasonClass,
@@ -76,6 +76,8 @@ import { loadTunables } from "../core/firstTouchTunables.js";
 import { canEditType } from "../core/callAiType.js";
 import { CARRIER_LISTEN_ROLES, carrierCallCard, carrierCallsList, carrierCallsMeta } from "../core/carrierCallScreen.js";
 import { callInScope, carrierAgreementRows, carrierDailyStats, carrierDealRows, carrierReport, filterRemovedByManager } from "../core/carrierDeals.js";
+import { minutesSetting, NO_TALK_GUARD, readNoTalkGuard } from "../core/carrierNoTalkGuard.js";
+import { taskSweepStats } from "../core/carrierTaskSweep.js";
 import { CARRIER_BUDGET, CARRIER_STAGE } from "../core/carrierCallRules.js";
 import { closeModeOf, revertCarrierClose } from "../core/carrierClose.js";
 import { decisionQueue, recordDecision } from "../core/carrierDecisions.js";
@@ -87,14 +89,15 @@ import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, 
 } from "../core/leadgenStats.js";
 import { handoffMoneyWire, personMoneyWire, bucketMoneyWire, bucketPersonMoneyWire, handoffDealsScope,
   leadgenAuthScope, parseLeadgenGrain, parseTrendMonths, parseManagerIdParam,
-  leadgenViewer, ownLeadgenStatsBody, ownLeadgenTrendBody, type LeadgenAuth } from "../core/leadgenHandoffRules.js";
+  leadgenViewer, ownLeadgenStatsBody, ownLeadgenTrendBody, addDays, type LeadgenAuth } from "../core/leadgenHandoffRules.js";
 import { leadgenRosterView, planView, planMonthOf, parseLeadgenSubmit, leadgenSubmitRefusal, mayEverSubmitLeadgenPlan,
-  mayApproveLeadgenPlan, LEADGEN_PLAN_METRICS, emptyPlanRecord, type RosterRow, type TeamMember } from "../core/leadgenPlanRules.js";
+  mayApproveLeadgenPlan, LEADGEN_PLAN_METRICS, emptyPlanRecord, planPace, isCurrentFullMonth, PACE_METRICS,
+  type RosterRow, type TeamMember } from "../core/leadgenPlanRules.js";
 import { leadgenTeamMembers, leadgenPlanTarget, approvedLeadgenPlans, leadgenFormation, submitLeadgenPlan,
   approveLeadgenPlans, returnLeadgenPlan } from "../core/leadgenPlans.js";
 import * as expectSplit from "../core/expectSplit.js";
 import { FUNNEL_STAGE_LABELS, stageName } from "../core/stageNames.js";
-import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL } from "../core/orphanClients.js";
+import { ORPHAN_DEFAULT_MONTHS, ORPHAN_REASON_LABEL, orphanPoolAccess, orphanRowOrder, type OrphanPoolAccess } from "../core/orphanClients.js";
 import * as plans from "../core/plans.js";
 import * as forecast from "../core/forecast.js";
 import * as callNorm from "../core/callNorm.js";
@@ -104,6 +107,7 @@ import { firstTouchCell, glanceFirstTouch, firstTouchOutsideRoster } from "../co
 import * as receivablesFacts from "../core/receivablesFacts.js";
 import * as receivablesCounterparty from "../core/receivablesCounterparty.js";
 import * as receivableNotePick from "../core/receivableNotePick.js";
+import { agreementActual, defaultAgreementDeal } from "../core/receivableAgreement.js";
 import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
 import { debtAgeDays, CLIENT_DEBT_AGE_SQL } from "../core/receivablesAge.js";
 import * as mergeLimits from "../core/mergeLimits.js";
@@ -121,6 +125,9 @@ import { canRequestLimitFor, canAssignTaskToOthers } from "../auth/taskAssignSco
 import { activeManagerSql } from "../core/activeManager.js";
 import * as managerState from "../core/managerState.js";
 import { teamAtSql, inTeamDuringSql, teamOnDateSql, sqlDate, teamJoinSql } from "../core/teamAt.js";
+import * as leadTake from "../core/leadTake.js";
+import * as leadTakeRules from "../core/leadTakeRules.js";
+import { buildXlsx } from "../core/xlsxWrite.js";
 import * as clientCalls from "../core/clientCalls.js";
 import * as planBasis from "../core/planBasis.js";
 import * as clientTabs from "../core/clientTabs.js";
@@ -433,6 +440,23 @@ dashboardRouter.get("/leadgen-stats", async (req, res) => {
   // 💰 Гроші людини для плану по грошах — ТІ САМІ числа, що на картці (`hm`), без другого розрахунку.
   const moneyFact = new Map(hm.byPerson.map((p) => [p.managerId, { earned: p.money.earned.sum, pending: p.money.pending.sum }]));
   const pv = planView(rows, approved, from, to, kyivToday(), moneyFact);
+  // 🏃 «Лишилось до плану» (рішення власника 05.10.2026) — лише на поточний місяць: факт ДО сьогодні й СЬОГОДНІ тим
+  // самим `leadgenStats`, що рядки, тож норма й рядок не можуть рахувати різне. Минулий місяць наздоганяти пізно.
+  const todayK = kyivToday();
+  if (isCurrentFullMonth(from, to, todayK)) {
+    const yest = addDays(todayK, -1);
+    const [beforeS, todayS] = await Promise.all([
+      yest >= from ? leadgenStats(from, yest) : Promise.resolve(null), leadgenStats(todayK, todayK)]);
+    const bM = new Map((beforeS?.rows ?? []).map((r) => [r.managerId, r])), tM = new Map(todayS.rows.map((r) => [r.managerId, r]));
+    for (const p of pv.byPerson) {
+      const b = bM.get(p.managerId), t = tM.get(p.managerId);
+      const one = (k: (typeof PACE_METRICS)[number]) =>
+        planPace({ plan: p.plan[k], before: b?.[k] ?? 0, today: t?.[k] ?? 0, todayDay: todayK, monthEnd: to });
+      const m = moneyFact.get(p.managerId);
+      p.pace = { calls: one("calls"), leads: one("leads"), opr: one("opr"), quotes: one("quotes"),
+        moneyLeft: p.plan.money == null ? null : Math.max(0, p.plan.money - ((m?.earned ?? 0) + (m?.pending ?? 0))) };
+    }
+  }
 
   const body: Record<string, unknown> = {
     from, to,
@@ -2190,7 +2214,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
 
   const clientKeys = rows.map((r) => r.clientKey).filter((k): k is string => k != null);
   const notesRes = clientKeys.length
-    ? await pool.query<{ client_key: string; canon_key: string; comment: string | null; due_date: string | null; updated_at: string | null; hist: number }>(
+    ? await pool.query<{ client_key: string; canon_key: string; comment: string | null; due_date: string | null; updated_at: string | null; hist: number; deal_id: string | null }>(
         // 🗓 `updated_at` їде НА ЕКРАН, бо саме він вирішує, чи домовленість ще
         // актуальна: активним є запис ПІСЛЯ понеділка 00:00 за Києвом. Без нього
         // фронт мусив би вгадувати, і торішній текст читався б як сьогоднішня
@@ -2205,7 +2229,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
         // теж читає канонічний ключ, і лічильник, більший за вміст діалогу, був
         // би двома джерелами одного числа. Розширення журналу — окремий обсяг.
         `SELECT n.client_key, COALESCE(a.canonical_key, n.client_key) AS canon_key,
-                n.comment, to_char(n.due_date, 'YYYY-MM-DD') AS due_date,
+                n.comment, to_char(n.due_date, 'YYYY-MM-DD') AS due_date, n.deal_id::text AS deal_id,
                 -- 🔴 OF ВІДДАЄ ДВОЗНАЧНЕ ЗМІЩЕННЯ (+03), А ECMAScript ВИМАГАЄ +HH:MM.
                 -- new Date("2026-08-26T10:21:50+03") дає Invalid Date, Intl.format
                 -- кидає, і виняток усередині .map по рядках убиває ВСЮ секцію —
@@ -2220,7 +2244,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
           WHERE n.client_key = ANY($1) OR a.canonical_key = ANY($1)`,
         [clientKeys]
       )
-    : { rows: [] as { client_key: string; canon_key: string; comment: string | null; due_date: string | null; updated_at: string | null; hist: number }[] };
+    : { rows: [] as { client_key: string; canon_key: string; comment: string | null; due_date: string | null; updated_at: string | null; hist: number; deal_id: string | null }[] };
   // 🗒 Групуємо ПО КАНОНІЧНОМУ ключу — рядок один, записів у наборі може бути кілька.
   const notesByCanon = new Map<string, typeof notesRes.rows>();
   for (const n of notesRes.rows) {
@@ -2306,6 +2330,8 @@ dashboardRouter.get("/receivables", async (req, res) => {
     limitDays: number | null; limitAmount: number | null; overdueDays: number | null; comment: string | null; dueDate: string | null;
     ownerSource: string; majorityName: string | null;
     noteUpdatedAt: string | null; noteHistoryCount: number;
+    /** 🗓 До якої угоди привʼязаний запис і чи він ще про поточний борг (`core/receivableAgreement`). */
+    noteDealId: number | null; noteActual: boolean;
     /** Юрособа, з ключа якої взято показаний запис; `null` — запис канонічний. */
     noteFrom: string | null;
     /** Назви юросіб решти записів набору — для підпису «ще N». */
@@ -2334,6 +2360,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
       counterpartyName: cf?.counterparty[x.client_key]?.name ?? null,
       comment: x.comment, dueDate: x.due_date, updatedAt: x.updated_at,
       isCanonical: x.client_key === r.clientKey,
+      dealId: x.deal_id == null ? null : Number(x.deal_id),
     }));
     const picked = receivableNotePick.pickRowNote(noteSet);
     const n = picked.primary;
@@ -2376,6 +2403,11 @@ dashboardRouter.get("/receivables", async (req, res) => {
       limitDays: r.limitDays, limitAmount: r.limitAmount, overdueDays: r.overdueDays,
       comment: n?.comment ?? null, dueDate: n?.dueDate ?? null,
       noteUpdatedAt: n?.updatedAt ?? null, noteHistoryCount: canonHist,
+      // 🗓 Запис старий (з попередньої угоди) → екран бере дату з CRM (`facts.crmDueNearest`), а запис
+      // показує сірим. Рішення — тут, одним правилом з джобою задач, а не на фронті.
+      noteDealId: n?.dealId ?? null,
+      noteActual: n ? agreementActual({ noteDealId: n.dealId ?? null, noteUpdatedAt: n.updatedAt,
+        openDealIds: (cf?.deals ?? []).map((d) => d.dealId), newestDealAt: cf?.newestDealAt ?? null }) : true,
       // 🏢 Звідки саме цей запис і скільки їх іще в наборі. Порожній масив —
       // звичайний незлитий клієнт, і рядок виглядає точно як раніше.
       noteFrom: n && !n.isCanonical ? n.counterpartyName ?? n.clientKey : null,
@@ -3126,6 +3158,8 @@ dashboardRouter.get("/receivables/invoices", async (req, res) => {
         // читається як «нічого немає», а не як «ми не знаємо».
         ourEntity: f?.entity ?? null,
         ourEntityReason: f?.entityReason ?? null,
+        // 🗓 Планова дата оплати з CRM по цьому рахунку (його угоді) — колонка «дата з CRM» у розкритті.
+        crmDue: f?.crmDue ?? null,
         // Чи є за рахунком угода. Мертвий 🔗 у сорока рядках поспіль гірший за
         // чесний підпис «угоди немає»: він обіцяє перехід, якого не буде.
         // 🚚 ПЕРЕВІЗНИК ОПЛАЧЕНИЙ — ПО КОЖНОМУ РАХУНКУ, а не лише в плитці.
@@ -3715,6 +3749,71 @@ dashboardRouter.post("/client-archive", async (req, res) => {
   res.json({ ok: true, archived: true });
 });
 
+type CarrierCandidateRow = {
+  client_key: string; client_name: string | null; comment: string; commented_at: string;
+  comment_by: string | null; manager_name: string | null; team_name: string | null; team_id: number | null;
+};
+/**
+ * 🚚 КЛІЄНТИ З КОМЕНТАРЕМ «ПЕРЕВІЗНИК», ЩО ЩЕ НЕ В АРХІВІ (05.10.2026, зворотний звʼязок #104/#69).
+ * Межа та сама, що в архіві: КВП/ОД/адмін — уся компанія, тімлід — лише клієнти своєї команди
+ * (кламп у SQL, `ownerTeamClamp`). Правило впізнавання — `core/clientArchive.carrierCandidatesSql`.
+ */
+dashboardRouter.get("/client-archive/carrier-candidates", async (req, res) => {
+  const auth = req.auth!;
+  if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Лише КВП, ОД, адміністратор або тімлід" });
+  const leadTeamId = isAdminScope(auth) ? null : auth.teamId ?? -1;
+  const params: unknown[] = [];
+  let clamp = "";
+  if (leadTeamId != null) { params.push(leadTeamId); clamp = ownerTeamClamp(leadTeamId, `$${params.length}`); }
+  const r = await pool.query<CarrierCandidateRow>(carrierCandidatesSql(clamp), params);
+  res.json({
+    scope: leadTeamId == null ? "company" : "team",
+    clients: r.rows.map((x) => ({
+      clientKey: x.client_key, clientName: x.client_name ?? x.client_key,
+      comment: x.comment, commentedAt: x.commented_at, commentBy: x.comment_by,
+      managerName: x.manager_name, teamName: x.team_name,
+    })),
+  });
+});
+
+/**
+ * 🚚 АРХІВУВАТИ ВИБРАНИХ ЯК «ПЕРЕВІЗНИК» — тим самим записом, що й ручна «🗄 в архів».
+ * Архівуються ЛИШЕ ключі, які ЗАРАЗ є кандидатами в скоупі того, хто натиснув (той самий запит, що й
+ * список): кнопка не стає обхідним шляхом архівувати будь-кого з причиною «Перевізник» чи чужу
+ * команду. Решта повертається поіменно з причиною відмови — не мовчки.
+ */
+dashboardRouter.post("/client-archive/carriers", async (req, res) => {
+  const auth = req.auth!;
+  if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Лише КВП, ОД, адміністратор або тімлід" });
+  const keys = Array.isArray(req.body?.clientKeys)
+    ? [...new Set((req.body.clientKeys as unknown[]).map((k) => String(k ?? "").trim()).filter(Boolean))] : [];
+  if (keys.length === 0 || keys.length > 300) return res.status(400).json({ error: "clientKeys: від 1 до 300 ключів" });
+  const leadTeamId = isAdminScope(auth) ? null : auth.teamId ?? -1;
+  const params: unknown[] = [];
+  let clamp = "";
+  if (leadTeamId != null) { params.push(leadTeamId); clamp = ownerTeamClamp(leadTeamId, `$${params.length}`); }
+  params.push(keys);
+  const ok = new Map((await pool.query<CarrierCandidateRow>(carrierCandidatesSql(clamp, `$${params.length}`), params))
+    .rows.map((x) => [x.client_key, x]));
+  const archived: string[] = [];
+  for (const k of keys) {
+    const row = ok.get(k);
+    if (!row) continue;
+    await pool.query(
+      `INSERT INTO loyalty_overrides (client_key, archived_at, archive_reason, archived_by, updated_by, updated_at)
+       VALUES ($1, now(), 'carrier', $2, $2, now())
+       ON CONFLICT (client_key) DO UPDATE
+         SET archived_at = now(), archive_reason = 'carrier',
+             archived_by = EXCLUDED.archived_by, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+      [k, auth.userId]);
+    await logClientAdmin("archive", k, auth.userId, { reason: "carrier", via: "carrier_comment", comment: row.comment.slice(0, 200) });
+    archived.push(k);
+  }
+  const skipped = keys.filter((k) => !ok.has(k)).map((k) => ({
+    clientKey: k, why: "уже в архіві, без коментаря «перевізник» або не з вашої команди" }));
+  res.json({ ok: true, archived: archived.length, archivedKeys: archived, skipped });
+});
+
 /**
  * 🗄 СПИСОК АРХІВУ. Показує ЛИШЕ тих, хто в архіві ЗАРАЗ (з автоповерненням), плюс
  * причину, дату й хто поклав — щоб «чому клієнта немає» мало відповідь на екрані,
@@ -3986,6 +4085,67 @@ dashboardRouter.get("/response-time/by-manager", async (req, res) => {
 });
 
 /**
+ * ⏱ ВІКНО «ЧАС ОПРАЦЮВАННЯ ЗАЯВКИ» (ТЗ Юлії 24.09.2026) — таблиця, угоди клітинки, Excel. Усе з одного ядра
+ * `core/leadTake.ts`, тож список угод і файл не можуть розійтись із числами таблиці.
+ * Шлях під `/response-time/` навмисно: межа вкладки «Звіт» (`routeTab` → `pre("/api/dashboard/response-time")`)
+ * накриває їх сама, і тімлід/менеджер звужуються тим самим кламом, що й стара картка.
+ */
+function leadTakeQuery(req: import("express").Request): leadTake.TakeQuery | { error: string } {
+  const auth = req.auth!;
+  const ymd = /^\d{4}-\d{2}-\d{2}$/;
+  const from = String(req.query.from ?? ""), to = String(req.query.to ?? "");
+  if (!ymd.test(from) || !ymd.test(to) || from > to) return { error: "from/to: YYYY-MM-DD, from ≤ to" };
+  const source = String(req.query.source ?? "all") as leadTake.TakeSource;
+  if (!["all", "ad", "site", "leadgen"].includes(source)) return { error: "source: all | ad | site | leadgen" };
+  const time = String(req.query.time ?? "all") as leadTake.TakeTime;
+  if (!["all", "work", "off"].includes(time)) return { error: "time: all | work | off" };
+  const campaign = source === "ad" && typeof req.query.campaign === "string" && req.query.campaign ? req.query.campaign : null;
+  let managerId = req.query.managerId ? Number(req.query.managerId) : null;
+  let teamId = req.query.teamId ? Number(req.query.teamId) : null;
+  if (auth.role === "manager") { managerId = auth.managerId ?? -1; teamId = null; }
+  else if (auth.role === "team_lead") teamId = auth.teamId ?? -1;
+  return { from, to, source, time, campaign, managerId, teamId };
+}
+
+dashboardRouter.get("/response-time/take", async (req, res) => {
+  const q = leadTakeQuery(req);
+  if ("error" in q) return res.status(400).json({ error: q.error });
+  res.json({ ...(await leadTake.leadTakeTable(q)), query: q, norm: leadTakeRules.NORM });
+});
+
+const TAKE_COLUMNS: leadTakeRules.TakeColumn[] = ["all", "m1", "m5", "m30", "m60", "h1", "none", "slowLost"];
+dashboardRouter.get("/response-time/take/deals", async (req, res) => {
+  const q = leadTakeQuery(req);
+  if ("error" in q) return res.status(400).json({ error: q.error });
+  const row = String(req.query.row ?? "dept");
+  const col = String(req.query.col ?? "all") as leadTakeRules.TakeColumn;
+  if (!TAKE_COLUMNS.includes(col)) return res.status(400).json({ error: `col: ${TAKE_COLUMNS.join(" | ")}` });
+  res.json({ deals: await leadTake.leadTakeDeals(q, row, col) });
+});
+
+dashboardRouter.get("/response-time/take/export", async (req, res) => {
+  const q = leadTakeQuery(req);
+  if ("error" in q) return res.status(400).json({ error: q.error });
+  const [t, deals] = await Promise.all([leadTake.leadTakeTable(q), leadTake.leadTakeDeals(q, "dept", "all")]);
+  const pc = (v: number | null) => (v == null ? null : v);
+  const head = ["Менеджер / команда", "Заявок", "до 1 хв, %", "до 5 хв, %", "5-30 хв, %", "30-60 хв, %", "> 1 год, %",
+    "Не взято", "Медіана, хв", "Повільні без результату", "Втрати, ₴"];
+  const table = [head, ...t.rows.map((r) => [
+    r.kind === "manager" ? `  ${r.label}` : r.label, r.n, pc(r.m1Pct), pc(r.m5Pct), pc(r.m30Pct), pc(r.m60Pct), pc(r.h1Pct),
+    r.notTaken, r.medianMin, r.slowLost, r.loss,
+  ]), ["Норматив", null, leadTakeRules.NORM.m1Pct, leadTakeRules.NORM.m5Pct, null, null, null, leadTakeRules.NORM.notTaken]];
+  const kyiv = (iso: string | null) => (iso == null ? null
+    : new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }));
+  const list = [["Угода", "Посилання", "Менеджер", "Група", "Створено", "Взято", "Подія", "Хвилин", "Неробочий час", "Стан", "Причина закриття", "Джерело", "Кампанія"],
+    ...deals.map((d) => [d.name, d.url, d.manager, d.group, kyiv(d.createdAt), kyiv(d.takenAt), d.event ?? "не взято", d.minutes,
+      d.offHours ? "так" : "", d.status === "won" ? "успішна" : d.status === "lost" ? "не реалізовано" : "в роботі", d.rejectReason, d.source, d.campaign])];
+  const buf = buildXlsx([{ name: "Час опрацювання", rows: table }, { name: "Угоди", rows: list }]);
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="lead-take_${q.from}_${q.to}.xlsx"`);
+  res.send(buf);
+});
+
+/**
  * «Очікування» — deals currently sitting at the "Виставлено рахунок" (invoiced)
  * stage: bills issued, payment expected (not yet «Оплата отримана»/won). A live
  * snapshot per manager. Role-scoped. Used in the Managers and Report tabs.
@@ -4036,20 +4196,44 @@ dashboardRouter.put("/receivables/note", async (req, res) => {
   const incoming = req.body?.comment != null ? String(req.body.comment) : null;
   const clear = req.body?.clear === true;
   const dueDate = req.body?.dueDate ? String(req.body.dueDate) : null;
+  /**
+   * 🗓 ДОМОВЛЕНІСТЬ — ДО КОНКРЕТНОЇ УГОДИ (06.10.2026). Угода мусить бути серед НЕОПЛАЧЕНИХ рахунків
+   * клієнта (ті самі факти, що живлять екран); не обрали — та, де найраніша дата оплати в CRM. Угод
+   * немає (рахунки з 1С без посилання) — запис лишається клієнтським, як раніше.
+   */
+  const clientDeals = receivablesFacts.foldFacts(await receivablesFacts.loadInvoiceFacts(pool, [clientKey]))
+    .byClient.get(clientKey)?.deals ?? [];
+  let dealId: number | null;
+  if (req.body?.dealId != null && req.body.dealId !== "") {
+    dealId = Number(req.body.dealId);
+    if (!clientDeals.some((d) => d.dealId === dealId)) {
+      return res.status(400).json({ error: "Ця угода не серед неоплачених рахунків клієнта" });
+    }
+  } else {
+    dealId = defaultAgreementDeal(clientDeals);
+  }
   // 🗒 Порожній коментар не затирає текст — див. `core/receivableNoteMerge.ts` (#459).
-  const prev = await pool.query<{ comment: string | null }>(`SELECT comment FROM receivable_notes WHERE client_key = $1`, [clientKey]);
-  const comment = mergeNoteComment(prev.rows[0]?.comment ?? null, incoming, clear);
+  const prev = await pool.query<{ comment: string | null; deal_id: string | null }>(
+    `SELECT comment, deal_id::text AS deal_id FROM receivable_notes WHERE client_key = $1`, [clientKey]);
+  // 🗓 Нова угода — новий запис: порожнє поле НЕ підтягує текст попередньої угоди (06.10.2026), інакше
+  // стара обіцянка тихо переїхала б на нову угоду. Та сама угода — злиття як і раніше (#459).
+  const prevDeal = prev.rows[0]?.deal_id == null ? null : Number(prev.rows[0].deal_id);
+  const sameDeal = prev.rows.length > 0 && prevDeal === dealId;
+  const comment = sameDeal || prev.rows.length === 0
+    ? mergeNoteComment(prev.rows[0]?.comment ?? null, incoming, clear)
+    : mergeNoteComment(null, incoming, clear);
   const commentChanged = (comment ?? "") !== ((prev.rows[0]?.comment ?? "").trim());
   await pool.query(
-    `INSERT INTO receivable_notes (client_key, comment, due_date, updated_by, updated_at)
-     VALUES ($1, $2, $3, $4, now())
+    `INSERT INTO receivable_notes (client_key, comment, due_date, updated_by, updated_at, deal_id)
+     VALUES ($1, $2, $3, $4, now(), $5)
      ON CONFLICT (client_key) DO UPDATE SET
-       comment = EXCLUDED.comment, due_date = EXCLUDED.due_date,
-       -- зміна дедлайну знімає анти-дубль авто-задачі «отримати оплату»
+       comment = EXCLUDED.comment, due_date = EXCLUDED.due_date, deal_id = EXCLUDED.deal_id,
+       -- зміна дедлайну або угоди знімає анти-дубль авто-задачі «отримати оплату»
        task_created_at = CASE WHEN receivable_notes.due_date IS DISTINCT FROM EXCLUDED.due_date
+                                OR receivable_notes.deal_id IS DISTINCT FROM EXCLUDED.deal_id
                               THEN NULL ELSE receivable_notes.task_created_at END,
        updated_by = EXCLUDED.updated_by, updated_at = now()`,
-    [clientKey, comment, dueDate, auth.userId]
+    [clientKey, comment, dueDate, auth.userId, dealId]
   );
   // 🗓 ІСТОРІЯ ДОПИСУЄТЬСЯ, А НЕ ЗАМІНЮЄТЬСЯ. Поле щотижня «порожніє» правилом
   // (`isCurrentWeekNote`), і без цього рядка минулі домовленості справді б
@@ -4058,11 +4242,11 @@ dashboardRouter.put("/receivables/note", async (req, res) => {
   // (збережений злиттям при зміні дати) — теж: інакше журнал повторював би той самий рядок.
   if (comment && comment.trim() && commentChanged) {
     await pool.query(
-      `INSERT INTO receivable_note_history (client_key, comment, written_by) VALUES ($1, $2, $3)`,
-      [clientKey, comment.trim(), auth.userId]
+      `INSERT INTO receivable_note_history (client_key, comment, written_by, deal_id) VALUES ($1, $2, $3, $4)`,
+      [clientKey, comment.trim(), auth.userId, dealId]
     );
   }
-  res.json({ ok: true });
+  res.json({ ok: true, dealId });
 });
 
 /**
@@ -7348,9 +7532,21 @@ dashboardRouter.get("/client-card", async (req, res) => {
  * окремий COUNT-запит із часом розійшовся б зі списком, і ми б довго шукали,
  * чому «27» не сходиться з кількістю рядків.
  */
+/**
+ * 🧭 Доступ до пулу (05.10.2026): керівникам — повний; менеджеру — лише з `users.orphan_pool` і лише
+ * «взяти собі» (`orphanPoolAccess`). Прапорець читаємо з БД на КОЖЕН запит, а не з токена: у токені він
+ * лише косметика вкладки, і вимкнення в Налаштуваннях мусить діяти одразу, а не через 12 год.
+ */
+async function poolAccessOf(auth: NonNullable<import("express").Request["auth"]>): Promise<OrphanPoolAccess> {
+  if (auth.role !== "manager") return orphanPoolAccess({ role: auth.role, orphanPoolFlag: false });
+  const r = await pool.query<{ orphan_pool: boolean }>(`SELECT orphan_pool FROM users WHERE id = $1`, [auth.userId]);
+  return orphanPoolAccess({ role: auth.role, orphanPoolFlag: r.rows[0]?.orphan_pool === true });
+}
+
 dashboardRouter.get("/orphan-clients", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role === "manager") return res.status(403).json({ error: "Пул нічийних доступний керівникам" });
+  const access = await poolAccessOf(auth);
+  if (access === "none") return res.status(403).json({ error: "Пул нічийних доступний керівникам" });
   const all = String(req.query.scope ?? "") === "all";
   const months = all ? 600 : ORPHAN_DEFAULT_MONTHS;
   const rows = await metrics.orphanClients(months);
@@ -7364,15 +7560,19 @@ dashboardRouter.get("/orphan-clients", async (req, res) => {
     groups.set(r.managerId, g);
   }
   const list = [...groups.values()].sort((a, b) => b.sumAll - a.sumAll);
-  for (const g of list) g.clients.sort((a, b) => b.revenueAll - a.revenueAll);
+  // 🏢 У групі спершу «юр/ФОП», потім «фіз» (05.10.2026), усередині виду — за сумою, як було.
+  for (const g of list) g.clients.sort(orphanRowOrder);
   res.json({
     scope: all ? "all" : `${ORPHAN_DEFAULT_MONTHS}m`,
+    // «self» — менеджер із прапорцем: бачить пул, але закріпити може лише за собою.
+    access,
     // Плитки — з тієї самої вибірки, не окремим запитом.
     tiles: {
       clients: rows.length,
       money12: rows.reduce((s, r) => s + r.revenue12, 0),
       regulars: rows.filter((r) => r.isRegular).length,
       vip: rows.filter((r) => r.segment === "ВІП").length,
+      legal: rows.filter((r) => r.kind === "legal").length,
       claimedThisMonth: await metrics.orphanClaimedThisMonth(),
       totalAllTime: await metrics.orphanTotalAllTime(),
     },
@@ -7387,10 +7587,15 @@ dashboardRouter.get("/orphan-clients", async (req, res) => {
  */
 dashboardRouter.post("/orphan-clients/claim", async (req, res) => {
   const auth = req.auth!;
-  if (auth.role === "manager") return res.status(403).json({ error: "Пул нічийних доступний керівникам" });
+  const access = await poolAccessOf(auth);
+  if (access === "none") return res.status(403).json({ error: "Пул нічийних доступний керівникам" });
   const clientKey = String(req.body?.clientKey ?? "").trim();
   const managerId = Number(req.body?.managerId);
   if (!clientKey || !Number.isFinite(managerId)) return res.status(400).json({ error: "clientKey і managerId обовʼязкові" });
+  // Менеджер із прапорцем бере клієнта ЛИШЕ собі: пул для нього — пошук, а не розподіл між іншими.
+  if (access === "self" && managerId !== auth.managerId) {
+    return res.status(403).json({ error: "Менеджер може взяти клієнта лише собі" });
+  }
   // Тімлід призначає ЛИШЕ свою команду; КВП/ОД/адмін — будь-кого.
   if (auth.role === "team_lead") {
     const chk = await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId]);
@@ -8961,6 +9166,9 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // ФАКТ per-manager з ЯДРА (ті самі функції, що задачник).
   // #4 ср.чек Звіту = пул `reportChain` (угоди ЗАРАЗ у «авто працює→оплата» ⊎ виграні
   // за період) — signed Σ÷count per manager; команда/відділ = Σsum÷Σcount (glance нижче).
+  // 🤝 «Прийнято лідоген» — угоди, які Kommo створила менеджеру з передачі лідгена (рішення 05.10.2026, `#1259`).
+  // Стартує паралельно з рештою запитів; чекаємо там, де він потрібен.
+  const lgAcceptedP = metrics.leadgenAcceptedByManager(scope);
   const [recv, succ, paid, disp, ads, conv, avgc, expZone, split, expDays, convAd, convLg, recvKl, expKl] = await Promise.all([
     money.receivedByMgr(scope), money.successByMgr(scope), money.paidOnlyByMgr(scope),
     metrics.dispatchedByManager(scope),
@@ -9012,6 +9220,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   const jamM = new Map(jamRows.map((r) => [r.managerId, r]));
   const noDateM = new Map(noDateRows.map((r) => [r.managerId, r]));
   const splitM = new Map(split.map((s) => [s.managerId, s]));
+  const lgAcceptedM = new Map((await lgAcceptedP).map((x) => [x.managerId, x.count]));
   // #1 круг оплати: факт(received) = успішно(142) ⊎ оплачено(етап 9). Per manager → Σ==факт.
   const succM = new Map(succ.map((x) => [x.managerId, x])), paidM = new Map(paid.map((x) => [x.managerId, x]));
   // Бакетуємо планові оплати у поточний/наступний календарний місяць (за київським сьогодні).
@@ -9368,7 +9577,9 @@ dashboardRouter.get("/report-plan", async (req, res) => {
          * лип 571→637, сер 166→339. До обвалу канал і реєстр розходились на 7-20%,
          * тож це не нова величина, а та сама без сліпоти. Тримають `#141`/`#141b`.
          */
-        leadgen: { fact: splitM.get(m.id)?.leadgenCount ?? 0, target: Math.round(pl.leadgen_count ?? 0) },
+        // 🤝 ЗМІНЕНО 05.10.2026: не канал, а зв'язок Kommo «створено з угоди Продзвону» — канал губив ~60% угод
+        // (вересень: 182 проти 451). Те саме джерело, що й у задачі KPI (`#1259`).
+        leadgen: { fact: lgAcceptedM.get(m.id) ?? 0, target: Math.round(pl.leadgen_count ?? 0) },
         dispatch: { fact: dispM.get(m.id)?.deals ?? 0, target: Math.round(pl.dispatch_count ?? 0), revenue: Math.round(dispM.get(m.id)?.revenue ?? 0),
           // Розбивка авто за джерелом (постійний / лідоген / реклама / невизн). Σ = fact.
           repeat: dispM.get(m.id)?.repeat ?? 0, leadgen: dispM.get(m.id)?.leadgen ?? 0, ad: dispM.get(m.id)?.ad ?? 0, undef: dispM.get(m.id)?.undef ?? 0 },
@@ -10877,7 +11088,15 @@ dashboardRouter.get("/carrier-calls/meta", async (req, res) => {
   }, { mode: closeModeOf(config.callAi.carrierAutoClose), otherMode: closeModeOf(config.callAi.carrierAutoCloseOther) });
   // «AI проти людини» поіменно (хто вирішив, яка угода) — лише керівництву: це рішення людей з усіх команд.
   const lead = carrierIsLeadership(req.auth!);
+  // 🛡 Захист «без розмови» (05.10.2026): працює / на паузі, вік синку дзвінків, скільки угод без дзвінка-творця — службовий рядок керівництва.
+  const g = lead ? await readNoTalkGuard(pool, new Date(), config.callAi.carrierNoTalkCloseMin,
+    minutesSetting(config.callAi.carrierNoTalkSyncMaxMin, NO_TALK_GUARD.defaultMaxAgeMin)) : null;
+  // 🧽 Задачі робота на закритих угодах (05.10.2026): скільки прибрано — службовий рядок керівництва.
+  const sw = lead ? await taskSweepStats(pool, closeModeOf(config.callAi.carrierTaskSweep)) : null;
   res.json({ job: m.job, transcripts: m.transcripts, analyses: m.analyses, spend: m.spend, caps: m.caps, close: m.close, agreement: m.agreement,
+    noTalkGuard: g ? { open: g.gate.open, syncAgeMin: g.gate.syncAgeMin, maxAgeMin: g.gate.maxAgeMin, lastSyncAt: g.gate.lastSyncAt,
+      noCreatingCall: g.noCreatingCall } : null,
+    taskSweep: sw ? { mode: sw.mode, deals: sw.deals, robotTasks: sw.robotTasks, closedTasks: sw.closedTasks } : null,
     // Явний перелік полів, а не спред (#17e2).
     agreementRows: lead ? (await carrierAgreementRows(pool)).map((r) => ({ kommoId: r.kommoId, url: kommoLeadUrl(r.kommoId), uniqueid: r.uniqueid,
       managerName: r.managerName, aiRole: r.aiRole, aiConfidence: r.aiConfidence, decision: r.decision, otherType: r.otherType, by: r.by,

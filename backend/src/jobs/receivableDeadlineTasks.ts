@@ -1,4 +1,5 @@
 import { pool } from "../db/pool.js";
+import { agreementActualSql } from "../core/receivableAgreement.js";
 
 /**
  * Прострочені дедлайни оплати дебіторки → задача менеджеру «отримати оплату».
@@ -62,7 +63,10 @@ export async function createReceivableDeadlineTasks(): Promise<void> {
      JOIN receivables r ON r.client_key = n.client_key
      JOIN managers m ON m.id = r.manager_id AND m.is_active
      LEFT JOIN teams t ON t.id = m.team_id
-     WHERE n.due_date < $1::date AND n.task_created_at IS NULL AND r.manager_id IS NOT NULL`,
+     WHERE n.due_date < $1::date AND n.task_created_at IS NULL AND r.manager_id IS NOT NULL
+       -- 🗓 Лише АКТУАЛЬНИЙ запис (06.10.2026): дата з попередньої угоди задачі «отримати оплату» не ставить —
+       -- інакше нова угода клієнта отримала б задачу за старою обіцянкою (Бінарт: 31.08 при угоді від 05.10).
+       AND ${agreementActualSql("n")}`,
     [today]
   );
   for (const r of cli.rows) {

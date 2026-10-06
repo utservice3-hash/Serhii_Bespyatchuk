@@ -89,6 +89,12 @@ export const config = {
     // 🚚 Закриття в Kommo за ІСТОРІЄЮ CRM (ТЗ 17.09 «автозакриття пропущених», блок 1). Окремий перемикач, як і «Інше»:
     // будь-що, крім «live», — лише журнал. «live» — лише словом Романа після перевірки вибірки (контроль із ТЗ).
     carrierHistoryClose: process.env.CARRIER_HISTORY_CLOSE ?? "",
+    // 🧽 Задачі робота на закритих угодах «Дзвінків на мобільні» (Роман 05.10.2026, `core/carrierTaskSweep.ts`): «live» —
+    // закриваємо в Kommo; «off» — нічого; решта — журнал «що закрили б».
+    carrierTaskSweep: process.env.CARRIER_TASK_SWEEP ?? "",
+    // 🛡 «Історія CRM» лише при свіжих угодах (рішення 05.10.2026, `core/carrierHistory.ts`): синк Kommo старший за це —
+    // вердикти й закриття за історією на паузі, задача «передзвони» ставиться звичайно.
+    carrierHistorySyncMaxMin: Number(process.env.CARRIER_HISTORY_SYNC_MAX_MIN ?? "60"),
     // 🏁 Точка старту відсіву (Роман 30.09.2026: «працюємо з 0, тільки після деплою починаємо транскрибацію нового»):
     // угоди, створені раніше, не записуються, не слухаються й не показуються. За замовчуванням — старт `b6965f8` на проді.
     carrierLaunchAt: process.env.CARRIER_LAUNCH_AT ?? "2026-09-30T09:48:08Z",
@@ -96,6 +102,10 @@ export const config = {
     // (Роман 30.09.2026: «розмови менш 10 секунд видаляємо не аналізуй їх»). Строк — 4 години (Роман 30.09.2026, після
     // заміру: у 9 із 49 клієнтів вересня перша розмова була пізніше 15 хв; за 4 год — лише в 1): менеджер встигає передзвонити.
     carrierNoTalkCloseMin: Number(process.env.CARRIER_NO_TALK_CLOSE_MIN ?? "240"),
+    // 🛡 Захист «без розмови» від падіння Ringostat (рішення 05.10.2026, `core/carrierNoTalkGuard.ts`): синк дзвінків
+    // старший за SYNC_MAX — угоди без розмови не закриваються, чекають; синку немає довше за SYNC_ALERT — тривога в Telegram.
+    carrierNoTalkSyncMaxMin: Number(process.env.CARRIER_NO_TALK_SYNC_MAX_MIN ?? "30"),
+    carrierNoTalkSyncAlertMin: Number(process.env.CARRIER_NO_TALK_SYNC_ALERT_MIN ?? "60"),
     elevenlabsApiKey: process.env.ELEVENLABS_API_KEY ?? "",
     geminiApiKey: process.env.GEMINI_API_KEY ?? "",
     // Ціни й стелі — БЕЗ значень за замовчуванням: не задано → «не налаштовано», жодної витрати
@@ -115,6 +125,13 @@ export const config = {
   receivables1cUrl:
     process.env.RECEIVABLES_1C_URL ??
     "http://193.200.173.188:8010/rest-bk/hs/service/debit-balance-account-361",
+  // 💱 Валютна дебіторка (рахунок 362) — той самий сервіс 1С, інший рахунок (прохід 2в фінансів, 05.10.2026).
+  receivables1cFxUrl:
+    process.env.RECEIVABLES_1C_FX_URL ??
+    // Перевизначено лише 361 — беремо той самий хост, але ТІЛЬКИ коли URL справді закінчується на -361: інакше
+    // .replace не спрацював би, і «валютна» тягнула б гривневий рахунок, показуючи гривневий борг як валютний.
+    (/-361$/.test(process.env.RECEIVABLES_1C_URL ?? "") ? process.env.RECEIVABLES_1C_URL!.replace(/-361$/, "-362")
+      : "http://193.200.173.188:8010/rest-bk/hs/service/debit-balance-account-362"),
   // ⚠️ Ключа `receivablesSheetUrl` (аркуш «выгрузка») БІЛЬШЕ НЕМАЄ — його ніхто не
   // читає, а мертвий ключ у конфізі читається як живий (урок `expected` у /teams).
   // Аркуш ЛІМІТІВ нижче — читається далі, він з 1С не приходить.
