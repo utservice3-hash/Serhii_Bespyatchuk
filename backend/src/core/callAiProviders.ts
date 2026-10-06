@@ -189,7 +189,10 @@ export const ANALYSIS_SCHEMA = {
     client_request: { type: "string", description: "що клієнт хоче перевезти або замовити; порожньо, якщо не прозвучало" },
     price: {
       type: "object",
-      properties: { discussed: { type: "boolean" }, quote: { type: "string" } },
+      properties: {
+        discussed: { type: "boolean", description: "true — лише якщо МЕНЕДЖЕР назвав клієнту суму чи діапазон за це перевезення (правило 9)" },
+        quote: { type: "string", description: "дослівно, як менеджер назвав ціну; порожньо, якщо не назвав" },
+      },
       required: ["discussed", "quote"],
     },
     objections: {
@@ -248,6 +251,7 @@ export const ANALYSIS_SYSTEM_PROMPT = [
   "   Будь-який тип, крім cargo_request і lead_lost, — ЛИШЕ якщо ознак запиту на перевезення немає зовсім.",
   "   type_confidence — наскільки ти впевнений у типі, від 0 до 1; type_reason — одне речення, чому так.",
   "8. price_value — названа ціна дослівно з валютою; порожньо, якщо конкретної суми не прозвучало.",
+  "9. price.discussed = true ЛИШЕ тоді, коли МЕНЕДЖЕР назвав клієнту суму або діапазон за ЦЕ перевезення («буде 38 тисяч», «20–22 тисячі», «4500»). НЕ є озвученою ціною: бюджет, який назвав клієнт («до десяти», «80–85»); питання менеджера про бюджет; «вкладемось у ваш бюджет»; ціна іншого рейсу як орієнтир («з Нікополя вивозили за сто тисяч»); обіцянка порахувати пізніше. У таких випадках discussed = false, а quote і price_value — порожні.",
 ].join("\n");
 
 const mmss = (sec: number | null): string => {
