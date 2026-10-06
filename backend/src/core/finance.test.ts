@@ -399,7 +399,7 @@ test("#937b ФРОНТ ФІНАНСІВ: план попереднього мі�
 
 // ══ 🔒 ЗАТВЕРДЖЕНИЙ ПЛАН (06.10.2026, зустріч TOP Weekly 05.10) — гейти #1400–#1403b ══════════════════════════════
 // Сергій: «план затверджуємо — і вже ніхто абсолютно не може змінити… реєстр змін окремою кнопкою». Роман: «блокуй
-// лише план»; затверджують поіменно (Сергій, kriptokoval, Роман, Дарʼя), а не роллю.
+// лише план»; затверджують поіменно (Сергій, kriptokoval, Роман, Ступаківський), а не роллю.
 
 /**
  * #1400 — ДОСТУП: вкладка й `edit_finance` — у сиді, матриці й каталозі одним списком (як було), а `approve_finance_plan`
@@ -546,7 +546,7 @@ test("#1401b ЖИВИЙ SQL: затвердження незворотне; ст
 
 /**
  * #1402 — ЖИВИЙ SQL: ЗАТВЕРДЖУЄ ЛИШЕ ЛЮДИНА ЗІ СПИСКУ. Адмін, якого в списку немає, — ні; людина зі списку — так
- * (дзеркало). Сід списку РАЗОВИЙ: прибрану SQL-ом людину повторна міграція не повертає («Дашу потім, якщо що, заберемо»).
+ * (дзеркало). Сід списку РАЗОВИЙ: прибрану SQL-ом людину повторна міграція не повертає («прибрану людину повторна міграція не повертає»).
  * 🧨 Червоніє, якщо затвердження знову піде за роллю, або сід стане постійним (кожен викат повертав би прибраного).
  */
 test("#1402 ЖИВИЙ SQL: затверджує лише людина зі списку; прибрана зі списку не повертається міграцією", async (t) => {
@@ -556,15 +556,15 @@ test("#1402 ЖИВИЙ SQL: затверджує лише людина зі сп
   const { c, db } = s;
   try {
     assert.equal(Number((await c.query(`SELECT count(*) n FROM fin_plan_approvers`)).rows[0].n), 0, "на свіжій базі цих людей немає — список порожній");
-    for (const id of [1, 17, 50, 52])
+    for (const id of [1, 17, 50, 99])
       await c.query(`INSERT INTO users (id, email, password_hash, role, is_active) VALUES ($1, $2, 'x', 'admin', true)`, [id, `u${id}@test`]);
     const schema = readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8");
     await c.query(schema);
     const ids = async () => (await c.query(`SELECT user_id FROM fin_plan_approvers ORDER BY 1`)).rows.map((r) => r.user_id);
-    assert.deepEqual(await ids(), [1, 17, 50, 52], "🔴 сід не дав рішення Романа");
-    assert.equal(await fin.isPlanApprover(db, 52), true, "🔴 людина зі списку не може затвердити");
+    assert.deepEqual(await ids(), [1, 17, 50, 99], "🔴 сід не дав рішення Романа");
+    assert.equal(await fin.isPlanApprover(db, 99), true, "🔴 людина зі списку не може затвердити");
     assert.equal(await fin.isPlanApprover(db, 901), false, "🔴 адмін поза списком може затвердити — затвердження знову за роллю");
-    await c.query(`DELETE FROM fin_plan_approvers WHERE user_id = 52`);
+    await c.query(`DELETE FROM fin_plan_approvers WHERE user_id = 99`);
     await c.query(schema);
     assert.deepEqual(await ids(), [1, 17, 50], "🔴 повторна міграція повернула прибрану людину");
   } finally { await s.dispose(); }

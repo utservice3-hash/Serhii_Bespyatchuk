@@ -4888,14 +4888,14 @@ CREATE TABLE IF NOT EXISTS fin_plan_approvals (
 
 -- 🔑 ХТО ЗАТВЕРДЖУЄ ПЛАН — ПОІМЕННО, А НЕ РОЛЛЮ (06.10.2026). Роль «Адмін» мають і фінансист, і Дарʼя, і ще акаунт,
 -- тож «лише ці люди» роллю не виразити. Склад — рішення Романа 06.10.2026: Беспятчук Сергій (id 1), kriptokoval (17),
--- Роман (50), Дарʼя Протас (52) — «Дашу потім, якщо що, заберемо». Сід — РАЗОВИЙ (лише в порожню таблицю), бо інакше
--- кожен викат повертав би людину, яку прибрали SQL-ом. На свіжій базі цих id немає — таблиця лишається порожньою.
+-- Роман (50), Олександр Ступаківський (99). Сід — РАЗОВИЙ (лише в порожню таблицю), бо інакше кожен викат повертав би
+-- людину, яку прибрали SQL-ом. На свіжій базі цих id немає — таблиця лишається порожньою.
 CREATE TABLE IF NOT EXISTS fin_plan_approvers (
   user_id   INTEGER PRIMARY KEY REFERENCES users(id),
   added_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 INSERT INTO fin_plan_approvers (user_id)
-SELECT id FROM users WHERE id IN (1, 17, 50, 52) AND NOT EXISTS (SELECT 1 FROM fin_plan_approvers);
+SELECT id FROM users WHERE id IN (1, 17, 50, 99) AND NOT EXISTS (SELECT 1 FROM fin_plan_approvers);
 
 -- 🔒 ЗАМОК ПЛАНУ — У БАЗІ, А НЕ ЛИШЕ В КОДІ (06.10.2026). У погодженому місяці `fin_values.plan` не змінюється НІЧИМ:
 -- ні роутом, ні скриптом, ні імпортом, ні «Взяти план попереднього місяця». Факт і коментар — вільні (рішення Романа:
