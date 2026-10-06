@@ -322,7 +322,13 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
         if (tail) setEdrNote((n) => n && { ...n, detail: `${n.detail} · ${tail}` });
       }
     } catch (e) {
-      setEdrNote({ kind: "bad", title: "Не вдалося підтягнути реквізити", detail: await errOf(e) });
+      // 404 = коду немає ніде (1С, довідник, ЄДР): у полях лишились би реквізити ПОПЕРЕДНЬОЇ компанії, і документ
+      // пішов би на чужі дані (Роман 06.10: «очищай поля»). Збій мережі/сервера поля НЕ чіпає — там могли вписати руками.
+      const notFound = (e as { response?: { status?: number } }).response?.status === 404;
+      if (notFound && !refill) { replaceCp({}); setCpSrc({}); setBookPick(null); }
+      setEdrNote(notFound
+        ? { kind: "bad", title: "Не знайдено ніде", detail: `поля очищено, щоб не лишились реквізити попередньої компанії. ${await errOf(e)}` }
+        : { kind: "bad", title: "Не вдалося підтягнути реквізити", detail: await errOf(e) });
     } finally { setEdrBusy(false); }
   };
 
