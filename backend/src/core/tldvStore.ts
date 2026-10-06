@@ -5,11 +5,27 @@
  * 🔴 ПОСИЛАННЯ НА ЗАПИС НЕ ЗАТИРАЄМО. Якщо Іван уже вставив своє посилання руками, воно лишається: наше
  * йде лише в порожнє поле. Інакше автоматика мовчки викидала б ручну роботу.
  * Тримають #802–#803.
+ *
+ * 👤 ЛИШЕ ЗУСТРІЧІ РЕКРУТЕРА (06.10.2026, #890). Ключ tl;dv бачить усі зустрічі свого акаунта — і ті, де його
+ * власник організатор, і ті, куди його запросили. Заміряно на проді: із 52 зустрічей 27 були командними
+ * («5-ти хвилинки», «UTS top weekly», «відділ РНК») — їх організовує інший акаунт, а в «Найм» вони падали
+ * поруч зі співбесідами, разом із поштами учасників. Тепер беремо ЛИШЕ зустрічі, організатор яких — рекрутер
+ * (активний користувач з ефективною роллю HR, тобто той, кому «Найм» дає «edit» без адмін-рівня). Чужі не
+ * зберігаються взагалі; збережені раніше — не показуються. Зміниться рекрутер — фільтр піде за роллю сам.
  */
 import type { Db } from "./secrets.js";
 import { matchMeetings, type SlotRow, type TldvMeeting, type MatchHow } from "./tldv.js";
 
 export class TldvError extends Error { constructor(public status: number, message: string) { super(message); } }
+
+/** Пошти рекрутерів (нижній регістр): активні користувачі з ефективною роллю HR. Порожньо — рекрутера немає. */
+export async function recruiterEmails(db: Db): Promise<string[]> {
+  return (await db.query<{ e: string }>(
+    `SELECT DISTINCT lower(btrim(email)) AS e FROM users
+      WHERE is_active AND COALESCE(role_override, role) = 'hr' AND NULLIF(btrim(email), '') IS NOT NULL`)).rows.map((r) => r.e);
+}
+
+const ownedBy = (emails: string[]) => (m: TldvMeeting) => !!m.organizer && emails.includes(m.organizer.trim().toLowerCase());
 
 /** Рядки графіка, серед яких шукаємо: останні дні, не видалені, з поштою кандидата. */
 export async function slotRows(db: Db, fromDay: string, toDay: string): Promise<SlotRow[]> {
@@ -50,8 +66,10 @@ export async function setIgnored(db: Db, actorId: number | null, meetingId: stri
 }
 
 /** Запамʼятати зустрічі й привʼязати певні збіги. Повторний прогін нічого не дублює. */
-export async function absorb(db: Db, meetings: TldvMeeting[], rows: SlotRow[]) {
-  const out = { seen: meetings.length, linked: 0, pending: 0 };
+export async function absorb(db: Db, all: TldvMeeting[], rows: SlotRow[]) {
+  // 👤 Чужі зустрічі (організатор не рекрутер) не зберігаємо взагалі — лише рахуємо, щоб пропуск був видимим.
+  const meetings = all.filter(ownedBy(await recruiterEmails(db)));
+  const out = { seen: meetings.length, foreign: all.length - meetings.length, linked: 0, pending: 0 };
   const known = new Map((await db.query<{ id: string; state: string }>(
     `SELECT id, state FROM tldv_meetings WHERE id = ANY($1::text[])`, [meetings.map((m) => m.id)])).rows.map((r) => [r.id, r.state]));
   for (const m of matchMeetings(meetings, rows)) {
@@ -75,7 +93,8 @@ export async function pendingList(db: Db, fromDay: string, toDay: string) {
   const rows = await slotRows(db, fromDay, toDay);
   const meets = (await db.query<{ id: string; name: string | null; happened_at: string | null; duration_min: number | null; url: string | null; organizer: string | null; invitees: string[] }>(
     `SELECT id, name, happened_at::text AS happened_at, duration_min, url, organizer, invitees
-       FROM tldv_meetings WHERE state = 'pending' ORDER BY happened_at DESC NULLS LAST LIMIT 50`)).rows;
+       FROM tldv_meetings WHERE state = 'pending' AND lower(btrim(COALESCE(organizer, ''))) = ANY($1::text[])
+      ORDER BY happened_at DESC NULLS LAST LIMIT 50`, [await recruiterEmails(db)])).rows;
   const matched = matchMeetings(meets.map((m) => ({
     id: m.id, name: m.name, happenedAt: m.happened_at, duration: m.duration_min, url: m.url, organizer: m.organizer, invitees: m.invitees ?? [],
   })), rows);

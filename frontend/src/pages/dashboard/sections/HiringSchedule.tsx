@@ -524,7 +524,7 @@ function TldvBlock({ toast, onLinked }: { toast: Toast; onLinked: () => void }) 
         <div><h3>🎥 Записи співбесід{pending.length ? ` · без рядка ${pending.length}` : ""}</h3>
           <div className="hr-muted">
             {!status.configured ? "tl;dv не підключено: ключ не вказано, записи не забираємо."
-              : `Підключено${status.lastRunAt ? ` · остання перевірка ${when(status.lastRunAt)}` : ""} · знайдено ${status.seen}, привʼязано ${status.linked}${status.lastError ? ` · помилка: ${status.lastError}` : ""}`}
+              : `Підключено${status.lastRunAt ? ` · остання перевірка ${when(status.lastRunAt)}` : ""} · знайдено ${status.seen}, привʼязано ${status.linked}${status.foreign ? ` · не рекрутера (пропущено): ${status.foreign}` : ""}${status.lastError ? ` · помилка: ${status.lastError}` : ""}`}
           </div></div>
         {status.configured && <button className="hr-btn" style={{ marginLeft: "auto" }} disabled={busy}
           onClick={() => void act(() => syncTldvNow(), "Перевірено")}>Перевірити зараз</button>}
