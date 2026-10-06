@@ -213,3 +213,21 @@ test("#1399c МІТКА ГАСНЕ ВІД ПРАВКИ: показується �
   assert.match(src, /\{cpSrc\[k\] && cpSrc\[k\]!\.v === v && v\s*\?\s*<span className=\{`srctag src-\$\{cpSrc\[k\]!\.from\}`\}/,
     "🔴 мітка не привʼязана до значення — після правки руками поле лишилось би підписаним «1С»");
 });
+
+/**
+ * #1399d — «не знайдено ніде» (404) очищає поля: інакше статус ❌ стоїть над реквізитами ПОПЕРЕДНЬОЇ компанії, і документ
+ * формується на чужі дані. Дзеркало: збій мережі/сервера поля НЕ чіпає (там могли вписати руками).
+ */
+test("#1399d НЕ ЗНАЙДЕНО — ПОЛЯ ОЧИЩЕНО: 404 стирає реквізити попередньої компанії, збій мережі — ні", async () => {
+  const { readFileSync } = await import("node:fs");
+  const path = await import("node:path");
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "ConstructorSection.tsx"), "utf8");
+  const at = src.indexOf("  const onEdr = "); assert.ok(at >= 0, "onEdr зник");
+  const body = src.slice(at, src.indexOf("\n  const ", at + 1));
+  const c = body.slice(body.indexOf("} catch (e) {"), body.indexOf("} finally {"));
+  assert.ok(c.length > 0, "у onEdr немає catch — гейту нема на чому перевіряти");
+  assert.match(c, /const notFound = [^;]*response\?\.status === 404;/, "🔴 «не знайдено» не відрізняється від збою");
+  assert.match(c, /if \(notFound && !refill\) \{ replaceCp\(\{\}\); setCpSrc\(\{\}\);/,
+    "🔴 на «не знайдено» поля не очищаються — лишаться реквізити попередньої компанії");
+  assert.doesNotMatch(c.replace(/if \(notFound && !refill\) \{[^}]*\}/, ""), /replaceCp\(/, "🔴 поля очищаються й на збої мережі — зітре вписане руками");
+});
