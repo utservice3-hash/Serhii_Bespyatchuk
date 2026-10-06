@@ -4877,13 +4877,68 @@ CREATE TABLE IF NOT EXISTS fin_log (
 CREATE INDEX IF NOT EXISTS idx_fin_log_target ON fin_log (kind, target_id, at DESC);
 CREATE INDEX IF NOT EXISTS idx_fin_log_month ON fin_log (month, at DESC);
 
--- Погодження плану місяця (право `approve_finance_plan`). Знімається тією ж кнопкою.
+-- Погодження плану місяця. З 06.10.2026 — НЕЗВОРОТНЕ (зустріч TOP Weekly 05.10, Сергій: «план затверджуємо — і вже
+-- ніхто абсолютно не може змінити»): зняти його не можна, тригер нижче.
 CREATE TABLE IF NOT EXISTS fin_plan_approvals (
   month        DATE PRIMARY KEY CHECK (month = date_trunc('month', month)::date),
   approved_by  INTEGER REFERENCES users(id),
   approved_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   note         TEXT
 );
+
+-- 🔑 ХТО ЗАТВЕРДЖУЄ ПЛАН — ПОІМЕННО, А НЕ РОЛЛЮ (06.10.2026). Роль «Адмін» мають і фінансист, і Дарʼя, і ще акаунт,
+-- тож «лише ці люди» роллю не виразити. Склад — рішення Романа 06.10.2026: Беспятчук Сергій (id 1), kriptokoval (17),
+-- Роман (50), Дарʼя Протас (52) — «Дашу потім, якщо що, заберемо». Сід — РАЗОВИЙ (лише в порожню таблицю), бо інакше
+-- кожен викат повертав би людину, яку прибрали SQL-ом. На свіжій базі цих id немає — таблиця лишається порожньою.
+CREATE TABLE IF NOT EXISTS fin_plan_approvers (
+  user_id   INTEGER PRIMARY KEY REFERENCES users(id),
+  added_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO fin_plan_approvers (user_id)
+SELECT id FROM users WHERE id IN (1, 17, 50, 52) AND NOT EXISTS (SELECT 1 FROM fin_plan_approvers);
+
+-- 🔒 ЗАМОК ПЛАНУ — У БАЗІ, А НЕ ЛИШЕ В КОДІ (06.10.2026). У погодженому місяці `fin_values.plan` не змінюється НІЧИМ:
+-- ні роутом, ні скриптом, ні імпортом, ні «Взяти план попереднього місяця». Факт і коментар — вільні (рішення Романа:
+-- «блокуй лише план»). Перенесення рядка між місяцями/статтями — як видалення зі старого й вставка в новий.
+CREATE OR REPLACE FUNCTION fin_plan_lock() RETURNS trigger LANGUAGE plpgsql AS $fpl$
+DECLARE
+  hit date;
+BEGIN
+  IF TG_OP IN ('UPDATE', 'DELETE') AND OLD.plan IS NOT NULL
+     AND (TG_OP = 'DELETE' OR NEW.plan IS DISTINCT FROM OLD.plan OR NEW.month <> OLD.month OR NEW.item_id <> OLD.item_id)
+     AND EXISTS (SELECT 1 FROM fin_plan_approvals a WHERE a.month = OLD.month) THEN
+    hit := OLD.month;
+  END IF;
+  IF hit IS NULL AND TG_OP IN ('INSERT', 'UPDATE') AND NEW.plan IS NOT NULL
+     AND (TG_OP = 'INSERT' OR NEW.plan IS DISTINCT FROM OLD.plan OR NEW.month <> OLD.month OR NEW.item_id <> OLD.item_id)
+     AND EXISTS (SELECT 1 FROM fin_plan_approvals a WHERE a.month = NEW.month) THEN
+    hit := NEW.month;
+  END IF;
+  IF hit IS NOT NULL THEN
+    RAISE EXCEPTION 'fin_plan_locked: план %.% погоджено — змінити не можна', to_char(hit, 'MM'), to_char(hit, 'YYYY')
+      USING ERRCODE = 'check_violation';
+  END IF;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
+END $fpl$;
+DROP TRIGGER IF EXISTS fin_values_plan_lock ON fin_values;
+CREATE TRIGGER fin_values_plan_lock BEFORE INSERT OR UPDATE OR DELETE ON fin_values
+  FOR EACH ROW EXECUTE FUNCTION fin_plan_lock();
+
+-- Погодження не знімається й не переписується; TRUNCATE погоджень чи цифр — теж ні (масове «зняти все»).
+CREATE OR REPLACE FUNCTION fin_approval_lock() RETURNS trigger LANGUAGE plpgsql AS $fal$
+BEGIN
+  RAISE EXCEPTION 'fin_approval_locked: погодження плану незворотне' USING ERRCODE = 'check_violation';
+END $fal$;
+DROP TRIGGER IF EXISTS fin_plan_approvals_lock ON fin_plan_approvals;
+CREATE TRIGGER fin_plan_approvals_lock BEFORE UPDATE OR DELETE ON fin_plan_approvals
+  FOR EACH ROW EXECUTE FUNCTION fin_approval_lock();
+DROP TRIGGER IF EXISTS fin_plan_approvals_truncate_lock ON fin_plan_approvals;
+CREATE TRIGGER fin_plan_approvals_truncate_lock BEFORE TRUNCATE ON fin_plan_approvals
+  FOR EACH STATEMENT EXECUTE FUNCTION fin_approval_lock();
+DROP TRIGGER IF EXISTS fin_values_truncate_lock ON fin_values;
+CREATE TRIGGER fin_values_truncate_lock BEFORE TRUNCATE ON fin_values
+  FOR EACH STATEMENT EXECUTE FUNCTION fin_approval_lock();
 
 -- Разове перенесення з Excel (`tools/importFinanceHistory.ts`). Підсумок файлу зберігається поруч
 -- із сумою рядків: де вони розійшлись (лютий, вересень), екран показує обидва числа, а не одне (#935).
@@ -4900,7 +4955,7 @@ CREATE TABLE IF NOT EXISTS fin_import_months (
 
 -- 🔒 Витрати компанії (зокрема фонд оплати праці по статтях) — не для AI-запитів: розділ бачить лише
 -- керівництво. Дзеркало — `FORBIDDEN_TABLES`. Тримає #934.
-REVOKE ALL ON fin_resps, fin_groups, fin_items, fin_values, fin_log, fin_plan_approvals, fin_import_months FROM ai_readonly;
+REVOKE ALL ON fin_resps, fin_groups, fin_items, fin_values, fin_log, fin_plan_approvals, fin_plan_approvers, fin_import_months FROM ai_readonly;
 
 -- Екран «Фінанси»: адмін, СЕО, ОД, КВП, фінансист (рішення 28.09.2026: «вона і все керівництво»).
 -- Бухгалтерія й HR — ні. Ідемпотентно й НЕ перетирає рішень адміна: лише де ключа ще немає.
@@ -4914,10 +4969,9 @@ UPDATE roles SET permissions = permissions || '{"edit_finance": true}'::jsonb
  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp', 'financier');
 UPDATE roles SET permissions = permissions - 'edit_finance'
  WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp', 'financier');
-UPDATE roles SET permissions = permissions || '{"approve_finance_plan": true}'::jsonb
- WHERE key IN ('admin', 'ceo', 'opdir');
-UPDATE roles SET permissions = permissions - 'approve_finance_plan'
- WHERE key NOT IN ('admin', 'ceo', 'opdir');
+-- `approve_finance_plan` ЗНЯТО 06.10.2026: план затверджують поіменно (`fin_plan_approvers`), роль нічого не дає.
+-- Ключ прибирається з усіх ролей, щоб мертве право не читалось у Налаштуваннях як живе.
+UPDATE roles SET permissions = permissions - 'approve_finance_plan' WHERE permissions ? 'approve_finance_plan';
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- 📄 КОНСТРУКТОР ДОКУМЕНТІВ (30.09.2026) — пакет Сергія `roman-package` (migrations/001 + 002),

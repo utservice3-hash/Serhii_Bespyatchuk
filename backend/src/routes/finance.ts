@@ -5,6 +5,7 @@ import { roleHasTab, roleHasPerm } from "../auth/rbac.js";
 import {
   FinError, type Db, loadMonth, itemCard, createResp, renameResp, deleteResp, createGroup, updateGroup, deleteGroup,
   createItem, updateItem, setItemOff, deleteItem, restore, saveValues, setNote, setApproval, setItemSections,
+  isPlanApprover, listLog,
 } from "../core/finance.js";
 import {
   loadPeriod, kpiCard, saveKpiValues, setKpiNote, setPeriodClosed, createSection, renameSection, deleteSection,
@@ -19,7 +20,8 @@ import { fmRefsFor } from "../core/financeKpiRefs.js";
  *  1. tab-гейт `pre("/api/finance")` у `requireAuth` — роль мусить мати вкладку `finance`;
  *  2. ПЕРШИМ оператором кожного обробника — `onlyFinance` (читання) або `canEdit` / `canApprove`
  *     (запис). Друга межа існує, бо перша стоїть у спільній мапі роутів, і правка префікса відкрила б
- *     розділ мовчки. Запис гейтить ПРАВО, а не вкладку: `edit_finance`, погодження — `approve_finance_plan`.
+ *     розділ мовчки. Запис гейтить ПРАВО, а не вкладку: `edit_finance`; погодження — ПОІМЕННИЙ список
+ *     `fin_plan_approvers` (з 06.10.2026; роль «Адмін» мають і фінансист, і ще кілька людей — роллю «лише ці» не виразити).
  * Склад ролей — сид у кінці `schema.sql`; звіряє `#933` + матриця `#11`.
  */
 export const financeRouter = Router();
@@ -32,12 +34,17 @@ function canEdit(req: Request): void {
   onlyFinance(req);
   if (!roleHasPerm(req.auth!.roleKey, "edit_finance")) throw new FinError(403, "Вносити зміни у «Фінанси» ваша роль не може");
 }
-function canApprove(req: Request): void {
+async function canApprove(req: Request): Promise<void> {
   onlyFinance(req);
-  if (!roleHasPerm(req.auth!.roleKey, "approve_finance_plan")) throw new FinError(403, "Погоджувати план ваша роль не може");
+  if (!await isPlanApprover(pool as unknown as Db, req.auth!.userId)) throw new FinError(403, "Затверджувати план можуть лише визначені люди — вас у списку немає");
 }
 function fail(res: Response, e: unknown) {
   if (e instanceof FinError) return res.status(e.status).json({ error: e.message, ...(e.extra ?? {}) });
+  // Другий рубіж — тригери БД (`fin_plan_lock`, `fin_approval_lock`): якщо щось оминуло перевірку ядра, людина бачить
+  // ту саму зрозумілу відмову, а не «Помилка сервера».
+  const pg = e as { code?: string; message?: string };
+  if (pg?.code === "23514" && /fin_(plan|approval)_locked/.test(pg.message ?? ""))
+    return res.status(409).json({ error: (pg.message ?? "").replace(/^fin_(plan|approval)_locked:\s*/, "").replace(/^./, (c) => c.toUpperCase()) });
   console.error("[finance]", e);
   return res.status(500).json({ error: "Помилка сервера" });
 }
@@ -70,8 +77,17 @@ financeRouter.get("/month", async (req, res) => {
     // Поля — явним переліком (#17e2): нове поле ядра не поїде назовні саме.
     res.json({
       month: m.month, currentMonth: m.currentMonth, tree: m.tree, totals: m.totals, approval: m.approval, imported: m.imported,
-      canEdit: roleHasPerm(req.auth!.roleKey, "edit_finance"), canApprove: roleHasPerm(req.auth!.roleKey, "approve_finance_plan"),
+      // canApprove — «можна погодити САМЕ ЦЕЙ місяць»: людина зі списку, і місяць ще не погоджено.
+      canEdit: roleHasPerm(req.auth!.roleKey, "edit_finance"),
+      canApprove: !m.approval && await isPlanApprover(pool as unknown as Db, req.auth!.userId),
     });
+  } catch (e) { fail(res, e); }
+});
+/** 📜 Реєстр змін (зустріч 05.10.2026): `?m=YYYY-MM` — про місяць; без нього — останні 500. */
+financeRouter.get("/log", async (req, res) => {
+  try {
+    onlyFinance(req);
+    res.json({ rows: await listLog(pool as unknown as Db, req.query.m) });
   } catch (e) { fail(res, e); }
 });
 financeRouter.get("/items/:id", async (req, res) => {
@@ -151,7 +167,7 @@ financeRouter.put("/notes", async (req, res) => {
 });
 financeRouter.post("/approval", async (req, res) => {
   try {
-    canApprove(req);
+    await canApprove(req);
     const approved = req.body?.approved !== false;
     await tx((db) => setApproval(db, req.auth!.userId, req.body?.month, approved));
     res.json({ ok: true, approved });

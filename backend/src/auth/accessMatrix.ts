@@ -1450,8 +1450,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "POST", path: "/api/ba/cases/:id/files", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
   /* 💰 Фінанси (29.09.2026): вкладка `finance` — керівництво і фінансист; запис — право `edit_finance` (той самий склад),
-     погодження плану — `approve_finance_plan` (admin, СЕО, ОД): КВП і фінансист розділ бачать, а погодити не можуть. */
+     погодження плану — з 06.10.2026 ПОІМЕННО (`fin_plan_approvers`), роль його не дає взагалі: тож рядок погодження —
+     deny-only (403 тим, хто без вкладки), а «людина зі списку може / інша з тією ж роллю ні» тримає ЖИВИЙ гейт ядра. */
   { method: "GET", path: "/api/finance/month?m=2026-09", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+  /* 📜 Реєстр змін (06.10.2026) — те саме читання, що й місяць. */
+  { method: "GET", path: "/api/finance/log?m=2026-09", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/finance/items/:id?year=2026", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },

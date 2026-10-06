@@ -189,8 +189,7 @@ export async function loadMonth(db: Db, monthArg: unknown, now: Date = new Date(
     grp.items.push(it); all.push(it);
   }
   const ap = await db.query(`
-    SELECT a.approved_at AS at, a.note, ${ACTOR} AS actor,
-           (SELECT count(*) FROM fin_log l WHERE l.kind = 'item' AND l.field = 'plan' AND l.month = a.month AND l.at > a.approved_at)::int AS changed_after
+    SELECT a.approved_at AS at, a.note, ${ACTOR} AS actor
       FROM fin_plan_approvals a LEFT JOIN users u ON u.id = a.approved_by WHERE a.month = $1::date`, [month]);
   const im = await db.query(`SELECT source, file_plan::text AS file_plan, file_fact::text AS file_fact,
       rows_plan::text AS rows_plan, rows_fact::text AS rows_fact FROM fin_import_months WHERE month = $1::date`, [month]);
@@ -198,7 +197,8 @@ export async function loadMonth(db: Db, monthArg: unknown, now: Date = new Date(
   return {
     month, currentMonth: kyivMonth(now), tree,
     totals: monthTotals(all),
-    approval: a ? { at: a.at, by: a.actor ?? null, note: a.note ?? null, changedAfter: a.changed_after } : null,
+    // Погоджено = план замкнений (06.10.2026): «змін після погодження» більше не буває, тож і лічильника немає.
+    approval: a ? { at: a.at, by: a.actor ?? null, note: a.note ?? null } : null,
     imported: i ? { source: i.source, filePlan: num(i.file_plan), fileFact: num(i.file_fact), rowsPlan: num(i.rows_plan), rowsFact: num(i.rows_fact) } : null,
   };
 }
@@ -305,6 +305,7 @@ export async function deleteGroup(db: Db, actor: number, id: number, confirm: bo
       count(*) FILTER (WHERE EXISTS (SELECT 1 FROM fin_values v WHERE v.item_id = i.id AND (COALESCE(v.plan, 0) <> 0 OR COALESCE(v.fact, 0) <> 0)))::int AS with_data
       FROM fin_items i WHERE i.group_id = $1 AND i.deleted_at IS NULL`, [id]);
   const { items, with_data } = c.rows[0];
+  await guardApprovedPlan(db, (await db.query(`SELECT id FROM fin_items WHERE group_id = $1 AND deleted_at IS NULL`, [id])).rows.map((x: any) => x.id), "Видалити групу");
   if (items > 0 && !confirm)
     throw new FinError(409, `У групі статей: ${items}, з цифрами: ${with_data}. Підтвердіть видалення разом зі статтями.`, { items, withData: with_data });
   // Одна мітка на групу й її статті — навіть поза транзакцією (`now()` у кожного оператора своя).
@@ -394,6 +395,7 @@ export async function setItemOff(db: Db, actor: number, id: number, off: boolean
 /** Стаття з цифрами без `confirm` не видаляється: 409 і кількість місяців, які зникнуть із підсумків. */
 export async function deleteItem(db: Db, actor: number, id: number, confirm: boolean) {
   const row = await liveRow(db, "fin_items", id, "Статтю");
+  await guardApprovedPlan(db, [id], "Видалити статтю");
   const c = await db.query(`SELECT count(*)::int AS n FROM fin_values WHERE item_id = $1 AND (COALESCE(plan, 0) <> 0 OR COALESCE(fact, 0) <> 0)`, [id]);
   const months = c.rows[0].n;
   if (months > 0 && !confirm)
@@ -419,6 +421,10 @@ export async function restore(db: Db, actor: number, kindArg: unknown, id: numbe
     const p = await db.query(`SELECT deleted_at FROM fin_groups WHERE id = $1`, [row.group_id]);
     if (p.rows[0]?.deleted_at) throw new FinError(409, "Спершу поверніть групу цієї статті");
   }
+  // Повернення статті з планом у погодженому місяці додало б до погодженої суми те, чого там при погодженні не було.
+  if (kind === "item") await guardApprovedPlan(db, [id], "Повернути статтю");
+  if (kind === "group") await guardApprovedPlan(db, (await db.query(`SELECT id FROM fin_items WHERE group_id = $1 AND deleted_at = $2`,
+    [id, row.deleted_at])).rows.map((x: any) => x.id), "Повернути групу");
   if (kind === "group")
     await uniqueName(db.query(`UPDATE fin_items SET deleted_at = NULL, deleted_by = NULL
       WHERE group_id = $1 AND deleted_at = (SELECT deleted_at FROM fin_groups WHERE id = $1)`, [id]));
@@ -452,6 +458,10 @@ export async function saveValues(db: Db, actor: number, monthArg: unknown, cells
   }
   if (bad.length) throw new FinError(400, `У клітинках (${bad.length}) не число — нічого не збережено`, { bad });
   if (parsed.some((c) => c.field === "fact") && month > kyivMonth(now)) throw new FinError(400, "Факт майбутнього місяця внести не можна");
+  // 🔒 План погодженого місяця не змінює НІХТО (зустріч 05.10.2026). Перевірка тут — щоб відповісти словами й не
+  // записати нічого; другий рубіж — тригер `fin_plan_lock` у БД, який тримає й скрипти, й імпорт.
+  if (parsed.some((c) => c.field === "plan") && await isApproved(db, month))
+    throw new FinError(409, `${PLAN_LOCKED(month)} Факт і коментарі вносяться як і раніше — нічого не збережено.`);
 
   const ids = [...new Set(parsed.map((c) => c.itemId))];
   const it = await db.query(`SELECT id, name, off_from::text AS off_from, deleted_at FROM fin_items WHERE id = ANY($1::int[]) FOR UPDATE`, [ids]);
@@ -495,18 +505,65 @@ export async function setNote(db: Db, actor: number, itemId: number, monthArg: u
     { month, field: "note" });
 }
 
-/** Погодити план місяця або зняти погодження (право `approve_finance_plan` — у роуті). */
+/**
+ * Погодити план місяця. НЕЗВОРОТНО (зустріч TOP Weekly 05.10.2026, Сергій: «план затверджуємо — і вже ніхто абсолютно
+ * не може змінити»): «зняти погодження» більше немає ні тут, ні в БД (тригер `fin_approval_lock`). Хто може — роут
+ * (`isPlanApprover`). `approved: false` — лише щоб старий клієнт отримав зрозумілу відмову, а не мовчазний успіх.
+ */
 export async function setApproval(db: Db, actor: number, monthArg: unknown, approved: boolean) {
   const month = parseMonth(monthArg);
-  if (approved) {
-    const r = await db.query(`INSERT INTO fin_plan_approvals (month, approved_by) VALUES ($1::date, $2) ON CONFLICT (month) DO NOTHING RETURNING month`, [month, actor]);
-    if (!r.rows.length) throw new FinError(409, "План цього місяця вже погоджено");
-    await log(db, actor, "month", null, `План ${month.slice(5, 7)}.${month.slice(0, 4)} погоджено`, { month });
-  } else {
-    const r = await db.query(`DELETE FROM fin_plan_approvals WHERE month = $1::date RETURNING month`, [month]);
-    if (!r.rows.length) throw new FinError(409, "План цього місяця не погоджено");
-    await log(db, actor, "month", null, `Погодження плану ${month.slice(5, 7)}.${month.slice(0, 4)} знято`, { month });
-  }
+  if (!approved) throw new FinError(409, "Погодження плану незворотне — зняти його не можна");
+  const r = await db.query(`INSERT INTO fin_plan_approvals (month, approved_by) VALUES ($1::date, $2) ON CONFLICT (month) DO NOTHING RETURNING month`, [month, actor]);
+  if (!r.rows.length) throw new FinError(409, "План цього місяця вже погоджено");
+  await log(db, actor, "month", null, `План ${month.slice(5, 7)}.${month.slice(0, 4)} погоджено — далі його не змінює ніхто`, { month });
+}
+
+/** Чи може людина затверджувати план — поіменний список `fin_plan_approvers` (рішення Романа 06.10.2026), не роль. */
+export async function isPlanApprover(db: Db, userId: number): Promise<boolean> {
+  return (await db.query(`SELECT 1 FROM fin_plan_approvers WHERE user_id = $1`, [userId])).rows.length > 0;
+}
+
+async function isApproved(db: Db, month: string): Promise<boolean> {
+  return (await db.query(`SELECT 1 FROM fin_plan_approvals WHERE month = $1::date`, [month])).rows.length > 0;
+}
+const PLAN_LOCKED = (month: string) => `План ${month.slice(5, 7)}.${month.slice(0, 4)} погоджено — змінити його не може ніхто.`;
+
+/**
+ * Видалення чи «Повернути» статті з планом у ПОГОДЖЕНОМУ місяці змінило б суму затвердженого плану, не чіпаючи жодної
+ * клітинки (`deleted_at` прибирає рядки з підсумку). Тому — відмова з переліком місяців; вимкнути статтю можна.
+ */
+async function guardApprovedPlan(db: Db, itemIds: number[], doing: string) {
+  if (!itemIds.length) return;
+  const r = await db.query(`SELECT DISTINCT to_char(v.month, 'MM.YYYY') AS m, v.month FROM fin_values v
+      JOIN fin_plan_approvals a ON a.month = v.month
+     WHERE v.item_id = ANY($1::int[]) AND COALESCE(v.plan, 0) <> 0 ORDER BY v.month`, [itemIds]);
+  if (r.rows.length)
+    throw new FinError(409, `${doing} не можна: у погодженому плані (${r.rows.map((x: any) => x.m).join(", ")}) є суми цих статей — погоджений план не змінює ніхто. Статтю можна вимкнути з наступних місяців.`,
+      { lockedMonths: r.rows.map((x: any) => x.m) });
+}
+
+export interface FinLogRow { at: string; actor: string | null; kind: string; target: string | null; field: string | null; old: number | null; new: number | null; what: string; month: string | null }
+
+/**
+ * 📜 РЕЄСТР ЗМІН (зустріч 05.10.2026, Сергій: «реєстр змін окремою кнопкою — якщо якісь зміни, там буде видно
+ * історія»). Місяць — записи ПРО цей місяць (цифри, коментарі, погодження) плюс зміни структури (статті, групи),
+ * зроблені протягом нього за Києвом. Без місяця — останні 500 будь-яких. Нові згори.
+ */
+export async function listLog(db: Db, monthArg: unknown): Promise<FinLogRow[]> {
+  const month = monthArg == null || monthArg === "" ? null : parseMonth(monthArg);
+  const r = await db.query(`
+    SELECT l.at, ${ACTOR} AS actor, l.kind, l.field, l.old_value::float8 AS old, l.new_value::float8 AS new, l.what,
+           to_char(l.month, 'YYYY-MM') AS month,
+           CASE l.kind WHEN 'item' THEN (SELECT name FROM fin_items WHERE id = l.target_id)
+                       WHEN 'group' THEN (SELECT name FROM fin_groups WHERE id = l.target_id)
+                       WHEN 'resp' THEN (SELECT name FROM fin_resps WHERE id = l.target_id) END AS target
+      FROM fin_log l LEFT JOIN users u ON u.id = l.actor_id
+     WHERE $1::date IS NULL OR l.month = $1::date
+        OR (l.month IS NULL AND (l.at AT TIME ZONE 'Europe/Kyiv')::date >= $1::date
+            AND (l.at AT TIME ZONE 'Europe/Kyiv')::date < ($1::date + INTERVAL '1 month')::date)
+     ORDER BY l.at DESC, l.id DESC LIMIT 500`, [month]);
+  return r.rows.map((x: any) => ({ at: x.at, actor: x.actor ?? null, kind: x.kind, target: x.target ?? null, field: x.field ?? null,
+    old: x.old ?? null, new: x.new ?? null, what: x.what, month: x.month ?? null }));
 }
 
 // ── Разове перенесення з Excel ───────────────────────────────────────────────

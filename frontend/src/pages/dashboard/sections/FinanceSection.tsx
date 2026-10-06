@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useToast, type Toast } from "../../../components/Toasts";
 import {
   fetchFinMonth, fetchFinItem, createFin, updateFin, deleteFin, restoreFin, setFinItemOff, saveFinValues, saveFinNote,
-  setFinApproval, finErrorData, hiringError, setFinItemSections, FIN_SECTIONS,
+  setFinApproval, finErrorData, hiringError, setFinItemSections, FIN_SECTIONS, fetchFinLog, type FinLogRow,
   type FinMonth, type FinSection, type FinItem, type FinGroup, type FinResp, type FinItemCard, type FinKind, type FinCell,
 } from "../../../api";
 import { rowVisible, asInput, planFromPrevious } from "./financeView";
@@ -40,6 +40,52 @@ const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } ca
 type Field = { id: string; label: string; value?: string; type?: "text" | "select"; options?: [string, string][]; placeholder?: string };
 type DialogButton = { label: string; tone?: "p" | "dg"; run?: (v: Record<string, string>) => Promise<boolean | void> | boolean | void };
 interface DialogSpec { title: string; text?: string; fields?: Field[]; buttons: DialogButton[] }
+
+/**
+ * 📜 РЕЄСТР ЗМІН (зустріч TOP Weekly 05.10.2026, Сергій: «реєстр змін окремою кнопкою — там буде видно історія»).
+ * Хто, коли, що: цифри (було → стало), коментарі, погодження, зміни статей. Перемикач «цей місяць / усі».
+ */
+function LogModal({ month, onClose }: { month: string; onClose: () => void }) {
+  const [all, setAll] = useState(false);
+  const [rows, setRows] = useState<FinLogRow[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEscape(onClose);
+  useEffect(() => {
+    setRows(null); setErr(null);
+    fetchFinLog(all ? undefined : month.slice(0, 7)).then(setRows).catch((e) => setErr(hiringError(e)));
+  }, [all, month]);
+  return createPortal(
+    <div className="hr-modal-back" onClick={onClose}>
+      <div className="hr-modal" role="dialog" aria-label="Реєстр змін" style={{ maxWidth: 760, width: "calc(100vw - 32px)" }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+          <h3 style={{ margin: 0, fontSize: 16 }}>Реєстр змін</h3>
+          <span style={{ flex: 1 }} />
+          <label className="hr-muted" style={{ fontSize: 13 }}><input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> усі місяці (останні 500)</label>
+          <button className="hr-btn xs" onClick={onClose}>Закрити</button>
+        </div>
+        <p className="hr-muted" style={{ margin: "0 0 10px", fontSize: 12.5 }}>
+          {all ? "Усі зміни у «Фінансах», нові згори." : `Зміни про ${monthLabel(month).toLowerCase()}: цифри, коментарі, погодження, а також статті й групи, змінені цього місяця.`}
+        </p>
+        {err && <div className="hr-note" style={{ background: "var(--danger-bg)", color: "var(--danger)", marginTop: 0 }}>{err}</div>}
+        {!rows && !err && <p className="loading-text">Завантаження…</p>}
+        {rows && !rows.length && <p className="hr-muted">Змін ще не було.</p>}
+        {rows && rows.length > 0 && (
+          <div className="hr-tw" style={{ maxHeight: "60vh", overflow: "auto" }}>
+            <table className="hr-table fin-log">
+              <thead><tr><th>Коли</th><th>Хто</th><th>Що</th><th>Стаття</th></tr></thead>
+              <tbody>{rows.map((r, i) => (
+                <tr key={i}>
+                  <td style={{ whiteSpace: "nowrap" }}>{fmtTs(r.at)}</td>
+                  <td>{r.actor ?? <span className="hr-muted">система</span>}</td>
+                  <td>{r.kind === "month" ? <b>{r.what}</b> : r.what}</td>
+                  <td className="hr-muted">{r.target ?? ""}</td>
+                </tr>))}</tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>, document.body);
+}
 
 function Dialog({ spec, onClose }: { spec: DialogSpec; onClose: () => void }) {
   const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries((spec.fields ?? []).map((f) => [f.id, f.value ?? ""])));
@@ -268,8 +314,11 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
   const [bad, setBad] = useState<Set<string>>(new Set());
   const [closed, setClosed] = useState<Record<number, boolean>>({});
   const [busy, setBusy] = useState(false);
+  const [logOpen, setLogOpen] = useState(false);
 
   const future = month > data.currentMonth;
+  /** 🔒 План погоджено — клітинки плану лише для читання для ВСІХ (сервер і БД однаково відмовлять). */
+  const planLocked = !!data.approval;
   const current = month === data.currentMonth;
   const shownData = data.month === month ? data : null;
   const changedKeys = Object.keys(draft);
@@ -313,11 +362,10 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
       toast(hiringError(e), { error: true });
     } finally { setBusy(false); }
   };
-  const approve = (on: boolean) => ask({
-    title: on ? `Погодити план · ${monthLabel(month).toLowerCase()}` : "Зняти погодження плану?",
-    text: on ? `План ${money(data.totals.plan)} ₴ по ${data.totals.items} статтях. Після погодження план можна змінювати й далі — кожна зміна буде видна поруч із позначкою «погоджено».`
-      : "План знову стане чернеткою. Цифри не зміняться.",
-    buttons: [CANCEL, { label: on ? "Погодити" : "Зняти", tone: "p", run: async () => { await setFinApproval(month.slice(0, 7), on); reload(); toast(on ? "План погоджено" : "Погодження знято"); } }],
+  const approve = () => ask({
+    title: `Затвердити план · ${monthLabel(month).toLowerCase()}`,
+    text: `План ${money(data.totals.plan)} ₴ по ${data.totals.items} статтях. Після затвердження план цього місяця не зможе змінити НІХТО — ні ви, ні інші, і скасувати затвердження теж не можна. Факт і коментарі вноситимуться як і раніше.`,
+    buttons: [CANCEL, { label: "Затвердити назавжди", tone: "p", run: async () => { await setFinApproval(month.slice(0, 7)); reload(); toast("План затверджено — далі його не змінює ніхто"); } }],
   });
 
   if (!shownData) return <p className="loading-text">Завантаження…</p>;
@@ -329,6 +377,7 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
   let shown = 0;
   return (
     <div className="hr-card">
+      {logOpen && <LogModal month={month} onClose={() => setLogOpen(false)} />}
       <div className="hd">
         <div className="hr-daynav" style={{ marginBottom: 0 }}>
           <button className="hr-btn xs" onClick={leave(() => setMonth(addMonths(month, -1)))} aria-label="Попередній місяць">‹</button>
@@ -344,10 +393,11 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {data.approval
-            ? <span className="hr-pill ok" title={fmtTs(data.approval.at)}>план погоджено{data.approval.by ? ` · ${data.approval.by}` : ""}</span>
+            ? <span className="hr-pill ok" title="Затверджений план не змінює ніхто; факт вноситься як і раніше">
+                🔒 план затверджено{data.approval.by ? ` · ${data.approval.by}` : ""} · {fmtTs(data.approval.at)}</span>
             : <span className="hr-pill wn">план — чернетка</span>}
-          {data.approval && data.approval.changedAfter > 0 && <span className="hr-pill dg">змін після погодження: {data.approval.changedAfter}</span>}
-          {data.canApprove && <button className="hr-btn xs" onClick={() => approve(!data.approval)}>{data.approval ? "Зняти погодження" : "Погодити план"}</button>}
+          {data.canApprove && <button className="hr-btn xs" onClick={() => approve()}>Затвердити план</button>}
+          <button className="hr-btn xs" onClick={() => setLogOpen(true)}>📜 Реєстр змін</button>
           {data.canEdit && !edit && <button className="hr-btn p" onClick={() => setEdit(true)}>Вносити план і факт</button>}
         </div>
       </div>
@@ -373,8 +423,10 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
           <b>Внесення · {monthLabel(month).toLowerCase()}</b>
           <span>Змінені клітинки підсвічуються. Порожня клітинка — «не внесено», не нуль.{future ? " Факт майбутнього місяця внести не можна." : ""}</span>
           <span style={{ flex: 1 }} />
-          <button className="hr-btn" disabled={busy} onClick={() => void takePrevPlan()}
-            title={`Підставить у порожні клітинки плану суми за ${monthLabel(addMonths(month, -1)).toLowerCase()}. Записується лише після «Зберегти».`}>Взяти план попереднього місяця</button>
+          {planLocked
+            ? <span className="hr-pill ok">🔒 план затверджено — вноситься лише факт</span>
+            : <button className="hr-btn" disabled={busy} onClick={() => void takePrevPlan()}
+                title={`Підставить у порожні клітинки плану суми за ${monthLabel(addMonths(month, -1)).toLowerCase()}. Записується лише після «Зберегти».`}>Взяти план попереднього місяця</button>}
           <span>змін: {changedKeys.length}</span>
           <button className="hr-btn" disabled={busy} onClick={leave(() => undefined)}>Скасувати</button>
           <button className="hr-btn p" disabled={busy} onClick={() => void save()}>Зберегти</button>
@@ -398,6 +450,7 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
                         const cell = (f: "plan" | "fact") => {
                           const k = `${it.id}:${f}`;
                           if (f === "fact" && future) return <span className="hr-muted">—</span>;
+                          if (f === "plan" && planLocked) return <span title="План затверджено — змінити не може ніхто">🔒 {money(it.plan)}</span>;
                           return <input className={`fin-cell ${draft[k] !== undefined ? "ch" : ""} ${bad.has(k) ? "bad" : ""}`} inputMode="decimal"
                             aria-label={`${f === "plan" ? "План" : "Факт"}: ${it.name}`} value={draft[k] ?? orig(it, f)}
                             onClick={(e) => e.stopPropagation()} onChange={(e) => onCell(it, f, e.target.value)} />;

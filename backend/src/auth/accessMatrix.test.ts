@@ -45,7 +45,7 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/surveys/:id/reopen": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
   "POST /api/surveys/:id/remind": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
   "DELETE /api/surveys/templates/:id": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
-  "POST /api/finance/approval": "approve_finance_plan — лише admin, СЕО, ОД (Фінанси, 29.09.2026); kvp і фінансист розділ бачать, а погодити план не можуть",
+  "POST /api/finance/approval": "погодження плану — поіменний список fin_plan_approvers (06.10.2026), роль його не дає: kvp і фінансист розділ бачать, а погодити план не можуть",
   "PUT /api/one-on-ones/forms/:type": "edit_1x1_forms — СЕО/ОД, HR і КВП (рішення власника 27.08.2026); admin його не має",
   "POST /api/settings/roles": "manage_users — kvp/financier його не мають (рішення власника)",
   "PUT /api/settings/roles/:key": "manage_users — те саме",

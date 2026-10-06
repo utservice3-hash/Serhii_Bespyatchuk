@@ -5359,7 +5359,7 @@ export const createReceivableClaim = async (clientKey: string) =>
 
 // ── 💰 Фінанси, прохід 1 (29.09.2026): план/факт витрат і статті ─────────────────
 // Дзеркало `routes/finance.ts`. Доступ — вкладка `finance`; запис — право `edit_finance`,
-// погодження плану — `approve_finance_plan`. Що дозволено, каже сервер (`canEdit`/`canApprove`).
+// погодження плану — поіменний список на сервері (з 06.10.2026). Що дозволено, каже сервер (`canEdit`/`canApprove`).
 export type FinRowState = "empty" | "noplan" | "nofact" | "over" | "ok";
 /** Розділ статті → місячний рядок «Операційних витрат» у «Тиждень і місяць» (прохід 2в, 05.10.2026). */
 export type FinSection = "commercial" | "general" | "admin" | "payroll";
@@ -5373,7 +5373,8 @@ export interface FinResp { id: number; name: string; groups: FinGroup[] }
 export interface FinMonth {
   month: string; currentMonth: string; tree: FinResp[];
   totals: { plan: number; fact: number; items: number; over: number; noplan: number; overSum: number };
-  approval: { at: string; by: string | null; note: string | null; changedAfter: number } | null;
+  /** Погоджено = план місяця замкнений для всіх (06.10.2026); зняти погодження не можна. */
+  approval: { at: string; by: string | null; note: string | null } | null;
   imported: { source: string; filePlan: number | null; fileFact: number | null; rowsPlan: number; rowsFact: number } | null;
   canEdit: boolean; canApprove: boolean;
 }
@@ -5399,7 +5400,10 @@ export const setFinItemSections = async (items: { id: number; section: FinSectio
 export const setFinItemOff = async (id: number, off: boolean) => (await api.post<{ offFrom: string | null }>(`/finance/items/${id}/off`, { off })).data;
 export const saveFinValues = async (month: string, cells: FinCell[]) => (await api.put<{ changed: number }>("/finance/values", { month, cells })).data;
 export const saveFinNote = async (itemId: number, month: string, text: string) => { await api.put("/finance/notes", { itemId, month, text }); };
-export const setFinApproval = async (month: string, approved: boolean) => { await api.post("/finance/approval", { month, approved }); };
+export const setFinApproval = async (month: string) => { await api.post("/finance/approval", { month, approved: true }); };
+/** 📜 Реєстр змін: записи про місяць (цифри, коментарі, погодження) + зміни статей за цей місяць; нові згори. */
+export interface FinLogRow { at: string; actor: string | null; kind: string; target: string | null; field: string | null; old: number | null; new: number | null; what: string; month: string | null }
+export const fetchFinLog = async (m?: string) => (await api.get<{ rows: FinLogRow[] }>("/finance/log", { params: m ? { m } : {} })).data.rows;
 /** Тіло відповіді з помилкою (409 з кількістю місяців, 400 зі списком поганих клітинок). */
 export const finErrorData = (e: unknown) => (e as { response?: { status?: number; data?: Record<string, unknown> } })?.response;
 

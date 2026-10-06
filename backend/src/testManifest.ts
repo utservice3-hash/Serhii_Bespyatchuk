@@ -332,7 +332,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "call_transcripts", "call_analyses", "ai_spend_ledger", "call_type_overrides", "first_touch_notes", "first_touch_settings_log", "carrier_call_deals", "ai_cap_alerts", "carrier_close_log", "carrier_decisions", "carrier_review_tasks", "carrier_task_sweeps",
   "tldv_meetings",
   "workua_responses",
-  "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_import_months",
+  "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "fin_import_months",
   "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports",
   "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache",
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
@@ -2284,9 +2284,14 @@ export const MANIFEST_TESTS: string[] = [
   "#932b ВИМКНЕННЯ (правило): з місяця після останньої цифри, не раніше поточного; межа — строго",
   "#931 ЖИВИЙ SQL: збереження все-або-нічого, історія було→стало, підсумок = сума рядків",
   "#932 ЖИВИЙ SQL: вимкнення не рухає підсумків, видалення з цифрами — 409, «Повернути» — до копійки",
-  "#933 ДОСТУП ФІНАНСІВ: вкладка, edit_finance і approve_finance_plan — у сиді, матриці й каталозі одним списком",
-  "#933b ДОСТУП ФІНАНСІВ: межа — перший оператор; запис — за правом, погодження — за окремим правом",
   "#933c ЖИВИЙ SQL: фінансист вносить, але не погоджує; бухгалтерія й HR — без вкладки; повторний прогін стабільний",
+  "#1400 ДОСТУП ФІНАНСІВ: вкладка й edit_finance — одним списком; права «погоджувати роллю» більше немає ніде",
+  "#1400b ДОСТУП ФІНАНСІВ: межа — перший оператор; затвердження — за поіменним списком, а не за роллю",
+  "#1401 ЖИВИЙ SQL: затверджений план не змінює ніхто — ядро й тригер БД; факт і коментар — вільні",
+  "#1401b ЖИВИЙ SQL: затвердження незворотне; стаття з затвердженим планом не видаляється й не повертається",
+  "#1402 ЖИВИЙ SQL: затверджує лише людина зі списку; прибрана зі списку не повертається міграцією",
+  "#1403 ЖИВИЙ SQL: реєстр змін — записи місяця з автором, нові згори; затвердження в реєстрі; місяці не змішуються",
+  "#1403b ФРОНТ ФІНАНСІВ: затверджений план — лише читання, «Зняти» немає, є «Реєстр змін»",
   "#934 ФІНАНСИ: кожна fin_* таблиця відібрана в ai_readonly після CREATE і є у FORBIDDEN_TABLES",
   "#935 ЖИВИЙ SQL: перенесення — підсумок = сума рядків, файловий підсумок поруч, повтор — 409",
   "#936 ФРОНТ ФІНАНСІВ: меню після «Статистик (відділи)», статичний імпорт, права — з відповіді сервера, є «Повернути»",
@@ -2548,6 +2553,14 @@ export interface RetiredGate {
 }
 
 export const RETIRED_GATES: RetiredGate[] = [
+  { name: "#933 ДОСТУП ФІНАНСІВ: вкладка, edit_finance і approve_finance_plan — у сиді, матриці й каталозі одним списком",
+    since: "2026-10-06", decidedBy: "Роман 06.10.2026 — «затверджувати план може тільки Беспятчук Сергій, kriptokoval, додай мене, і Дашу» (зустріч TOP Weekly 05.10)",
+    reason: "право ролі `approve_finance_plan` знято: затверджують поіменно, і твердження «approve_finance_plan у сиді, матриці й каталозі» стало хибним. А ДЕ ЦЕ ТЕПЕР: "
+      + "`#1400` — вкладка й edit_finance тим самим списком, а права ролі на затвердження немає ніде; поіменний список — `#1402`." },
+  { name: "#933b ДОСТУП ФІНАНСІВ: межа — перший оператор; запис — за правом, погодження — за окремим правом",
+    since: "2026-10-06", decidedBy: "Роман 06.10.2026 — затвердження плану поіменно (зустріч TOP Weekly 05.10)",
+    reason: "«погодження — за окремим правом» стало хибним: воно тепер за поіменним списком. А ДЕ ЦЕ ТЕПЕР: `#1400b` — та сама межа першим "
+      + "оператором для всіх обробників, а затвердження — `await canApprove`, що питає `isPlanApprover`." },
   { name: "#854 РУБРИКА first-touch-v2: дата розмови в запиті; без полів строку чи без типу розмови — не за схемою; правило «хоч одна ознака — вантаж» у промпті",
     since: "2026-10-05", decidedBy: "власник 05.10.2026 — «1–4 як пропонуєш, розмитнення — так, наша послуга» (тип lead_lost, правило передзвону)",
     reason: "поточна рубрика тепер first-touch-v3 з типом lead_lost, і твердження «рубрика v2, сім типів» стало хибним. А ДЕ ЦЕ ТЕПЕР: "
