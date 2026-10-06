@@ -249,7 +249,8 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
     const reg = r.registry === "ok" ? `директор і назва — з ЄДР${r.cached ? " (кеш)" : ""}`
       : r.registry === "updating" ? "директора з ЄДР ще немає: реєстр оновлює дані, повторюю за 20 с"
       : r.registry === "notFound" ? "у ЄДР коду немає — директора впишіть вручну"
-      : "ЄДР зараз недоступний — директора впишіть вручну";
+      : r.registry === "unconfigured" ? "пошук у ЄДР не налаштовано — директора впишіть вручну"
+      : `ЄДР зараз недоступний${r.registryWhy ? ` (${r.registryWhy})` : ""} — директора впишіть вручну`;
     setEdrNote({ t: `З 1С (бухгалтерія): ${iban}; ${reg}.`, warn: c.warn, bookIban: c.bookIban });
     if (c.warn) void bad(`Увага: ${c.warn}. Перевірте, чи можна укладати договір.`);
     else if (!refill) ok(`Підставлено з 1С: ${c.name}.`);

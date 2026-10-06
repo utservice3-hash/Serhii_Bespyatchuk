@@ -45,7 +45,9 @@ export function fromOneC(code: string, j: any): OneCCard {
   const isFop = !str(j?.edrpou) && /^\d{10}$/.test(str(j?.inn) || code);
   const raw = str(j?.bank_account).replace(/\s+/g, "").toUpperCase();
   const valid = IBAN_RE.test(raw);
-  const full = str(j?.name);
+  // У 1С лапка буває впритул до слова: `КОМПАНІЯ"АРІЯ"` (заміряно на проді 06.10). `toGuillemets` вважає лапку
+  // після літери закривною і дає `КОМПАНІЯ»АРІЯ»`; лапка МІЖ двома літерами може бути лише відкривною — додаємо пробіл.
+  const full = str(j?.name).replace(/(\p{L})"(?=\p{L})/gu, '$1 "');
   return {
     edrpou: str(j?.edrpou) || str(j?.inn) || code,
     name: isFop ? full : toGuillemets(shortOrgName(full)),
