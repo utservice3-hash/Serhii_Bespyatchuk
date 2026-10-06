@@ -203,3 +203,21 @@ test("#1314 ДЖОБА АКТИВНОСТІ: перший вихідний дз�
   assert.equal((await read())?.getTime(), s(T0 + 5 * MIN) * 1000, "🔴 пізніший дзвінок затер перший");
   await x.c.query(`UPDATE deals SET first_call_out_at = NULL WHERE kommo_id = 101`);
 });
+
+/**
+ * #1490 — ВИГЛЯД ВІКНА (06.10.2026, Роман: «це погано виглядає, пофікси»). Червоний ФОН — лише в рядках команди й
+ * відділу; у менеджера порушення — червоним ТЕКСТОМ (інакше «до 1 хв» майже в усіх злипається в рожеві стовпці). Число
+ * клікабельне без постійного підкреслення; норматив — у шапці колонок, а не окремим рядком.
+ * 🧨 Червоніє, якщо повернути фон на всіх рядках, постійний пунктир чи окремий рядок «Норматив».
+ */
+test("#1490 ВИГЛЯД ВІКНА: червоний фон лише в рядках команди й відділу, норматив у шапці, без постійного пунктиру", () => {
+  const src = readFileSync(path.join(ROOT, "frontend", "src", "pages", "dashboard", "sections", "LeadTakeCard.tsx"), "utf8");
+  assert.match(src, /\.lt-tbl tr\.lt-team td\.lt-badbg,\.lt-tbl tr\.lt-dept td\.lt-badbg\{background:\$\{RED_BG\}\}/,
+    "🔴 червоний фон не обмежено рядками команди й відділу");
+  assert.doesNotMatch(src, /background: red \? RED_BG/, "🔴 червоний фон знову на кожній клітинці");
+  assert.doesNotMatch(src, /underline dotted/, "🔴 повернувся постійний пунктир під числами");
+  assert.doesNotMatch(src, /<td>Норматив<\/td>/, "🔴 норматив знову окремим рядком унизу");
+  for (const norm of ["data.norm.m1Pct", "data.norm.m5Pct", "data.norm.notTaken"])
+    assert.ok(src.slice(src.indexOf("<thead>"), src.indexOf("</thead>")).includes(norm), `🔴 у шапці немає ${norm}`);
+  assert.match(src, /className=\{r\.kind === "manager" \? "lt-mgr" : r\.kind === "dept" \? "lt-dept" : "lt-team"\}/, "🔴 рядки не розрізняються за рівнем");
+});

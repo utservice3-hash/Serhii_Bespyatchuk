@@ -13,7 +13,32 @@ import { todayKyiv } from "../periodRules";
  * САМЕ цю цифру (той самий відбір на сервері). Червоне — гірше за норматив: «до 1 хв» < 90%, «до 5 хв» < 100%,
  * «не взято» > 0.
  */
-const RED_BG = "rgba(220,38,38,0.12)", RED_FG = "#b91c1c", MUTED = "var(--text-muted)";
+const RED_BG = "rgba(220,38,38,0.10)", RED_FG = "#dc2626", MUTED = "var(--text-muted)";
+
+/**
+ * 🎨 ВИГЛЯД (06.10.2026, Роман: «це погано виглядає, пофікси»). Було: кожна клітинка гірша за норматив — червоним
+ * ФОНОМ, а «до 1 хв» не досягає 90% майже ні в кого, тож клітинки злипались у суцільні рожеві стовпці й червоне
+ * перестало щось означати; плюс пунктир під кожним числом. Стало: у рядках менеджерів червоне — лише ТЕКСТОМ, фон
+ * лишився тільки в рядках команди й відділу (там він і має кричати); число клікабельне без постійного підкреслення;
+ * нулі сірі; норматив — у шапці колонки, а не окремим рядком унизу. Жодне число не змінилось — лише показ.
+ */
+const LT_CSS = `
+.lt-tbl{font-variant-numeric:tabular-nums}
+.lt-tbl th{text-align:right;white-space:nowrap;vertical-align:bottom;padding-left:14px}
+.lt-tbl td{padding-left:14px;white-space:nowrap}
+.lt-tbl td:first-child{white-space:normal;min-width:170px}
+.lt-tbl th:first-child{text-align:left}
+.lt-tbl .lt-norm{display:block;font-size:10.5px;font-weight:500;color:var(--text-muted);margin-top:1px}
+.lt-tbl td{padding-top:6px;padding-bottom:6px}
+.lt-tbl tr.lt-team td{background:rgba(127,127,127,0.07);font-weight:700;border-top:1px solid var(--border)}
+.lt-tbl tr.lt-dept td{background:rgba(99,102,241,0.09);font-weight:700;border-top:2px solid var(--border)}
+.lt-tbl tr.lt-mgr td:first-child{padding-left:22px}
+.lt-tbl .lt-zero{color:var(--text-muted)}
+.lt-tbl .lt-bad{color:${RED_FG};font-weight:700}
+.lt-tbl tr.lt-team td.lt-badbg,.lt-tbl tr.lt-dept td.lt-badbg{background:${RED_BG}}
+.lt-tbl .lt-link{all:unset;cursor:pointer;border-radius:3px}
+.lt-tbl .lt-link:hover,.lt-tbl .lt-link:focus-visible{text-decoration:underline;color:#2f6fdb}
+`;
 
 function weekOf(ymd: string, offset: number): { from: string; to: string } {
   const d = new Date(`${ymd}T00:00:00Z`);
@@ -68,14 +93,15 @@ export function LeadTakeCard({ from: initFrom, to: initTo, teamId }: { from: str
   const thisW = weekOf(today, 0), lastW = weekOf(today, -1);
   const isW = (w: { from: string; to: string }) => w.from === period.from && w.to === period.to;
 
-  const cell = (row: LeadTakeRow, col: LeadTakeColumn, text: string, red: boolean, what: string, count: number) => (
-    <td style={{ textAlign: "right", background: red ? RED_BG : undefined, color: red ? RED_FG : undefined, fontWeight: red ? 600 : undefined }}>
-      {count > 0 ? (
-        <button onClick={() => open(row, col, what)} title="Показати угоди"
-          style={{ all: "unset", cursor: "pointer", textDecoration: "underline dotted" }}>{text}</button>
-      ) : text}
-    </td>
-  );
+  const cell = (row: LeadTakeRow, col: LeadTakeColumn, text: string, red: boolean, what: string, count: number) => {
+    const zero = !red && (text === "0" || text === "0%");
+    return (
+      <td style={{ textAlign: "right" }} className={[red ? "lt-bad lt-badbg" : "", zero ? "lt-zero" : ""].join(" ").trim() || undefined}
+        title={red ? "Гірше за норматив" : undefined}>
+        {count > 0 ? <button className="lt-link" onClick={() => open(row, col, what)} title="Показати угоди">{text}</button> : text}
+      </td>
+    );
+  };
   const cnt = (r: LeadTakeRow, pct: number | null) => (pct == null ? 0 : Math.round((pct / 100) * r.n));
 
   return (
@@ -113,19 +139,23 @@ export function LeadTakeCard({ from: initFrom, to: initTo, teamId }: { from: str
       {busy && !data && <p className="loading-text">Завантаження…</p>}
       {data && (
         <div style={{ overflowX: "auto", opacity: busy ? 0.6 : 1 }}>
-          <table className="data-table" style={{ width: "100%", fontSize: 12.5 }}>
+          <style>{LT_CSS}</style>
+          <table className="data-table lt-tbl" style={{ width: "100%", fontSize: 12.5 }}>
             <thead>
               <tr>
-                <th style={{ textAlign: "left" }}>Менеджер</th><th>Заявок</th><th>до 1 хв</th><th>до 5 хв</th><th>5–30</th><th>30–60</th>
-                <th>&gt;1 год</th><th>Не взято</th><th>Медіана</th><th>Повільні без рез.</th><th>Втрати, ₴</th>
+                <th>Менеджер</th><th>Заявок</th>
+                <th>до 1 хв<span className="lt-norm">норма ≥ {data.norm.m1Pct}%</span></th>
+                <th>до 5 хв<span className="lt-norm">норма {data.norm.m5Pct}%</span></th>
+                <th>5–30</th><th>30–60</th><th>&gt;1 год</th>
+                <th>Не взято<span className="lt-norm">норма {data.norm.notTaken}</span></th>
+                <th>Медіана</th><th>Повільні<span className="lt-norm">без результату</span></th><th>Втрати, ₴</th>
               </tr>
             </thead>
             <tbody>
               {data.rows.map((r) => {
-                const strong = r.kind !== "manager";
                 return (
-                  <tr key={r.key} style={{ fontWeight: strong ? 700 : undefined, background: r.kind === "dept" ? "rgba(99,102,241,0.08)" : undefined }}>
-                    <td style={{ paddingLeft: r.kind === "manager" ? 18 : undefined }}>{r.label}</td>
+                  <tr key={r.key} className={r.kind === "manager" ? "lt-mgr" : r.kind === "dept" ? "lt-dept" : "lt-team"}>
+                    <td>{r.label}</td>
                     {cell(r, "all", String(r.n), false, "усі заявки", r.n)}
                     {cell(r, "m1", fmtPct(r.m1Pct), r.red.m1, "взято до 1 хв", cnt(r, r.m1Pct))}
                     {cell(r, "m5", fmtPct(r.m5Pct), r.red.m5, "взято до 5 хв", cnt(r, r.m5Pct))}
@@ -139,10 +169,6 @@ export function LeadTakeCard({ from: initFrom, to: initTo, teamId }: { from: str
                   </tr>
                 );
               })}
-              <tr style={{ color: MUTED }}>
-                <td>Норматив</td><td /><td style={{ textAlign: "right" }}>{data.norm.m1Pct}%</td><td style={{ textAlign: "right" }}>{data.norm.m5Pct}%</td>
-                <td /><td /><td /><td style={{ textAlign: "right" }}>{data.norm.notTaken}</td><td /><td /><td />
-              </tr>
             </tbody>
           </table>
           <p style={{ fontSize: 11.5, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
