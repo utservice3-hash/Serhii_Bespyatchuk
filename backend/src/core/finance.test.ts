@@ -403,10 +403,11 @@ test("#937b ФРОНТ ФІНАНСІВ: план попереднього мі�
 
 /**
  * #1450 — ДОСТУП: вкладка й `edit_finance` — у сиді, матриці й каталозі одним списком (як було), а `approve_finance_plan`
- * НІДЕ: ні в каталозі прав, ні в сиді ролей, ні в роуті. Мертвий ключ у Налаштуваннях читався б як живе право.
+ * не видається жодній ролі (сид знімає його з усіх) і не читається роутом. У каталозі він лишається на один викат,
+ * позначений «знято» (гейт `#231d` біжить до міграції).
  * 🧨 Червоніє, якщо повернути видачу права ролі, лишити його в каталозі, або розвести матрицю й сид вкладки.
  */
-test("#1450 ДОСТУП ФІНАНСІВ: вкладка й edit_finance — одним списком; права «погоджувати роллю» більше немає ніде", () => {
+test("#1450 ДОСТУП ФІНАНСІВ: вкладка й edit_finance — одним списком; право «погоджувати роллю» не видається й не читається", () => {
   const sql = SRC("db/schema.sql");
   const list = (s: string) => [...s.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort();
   const row = /path: "\/api\/finance\/month\?m=2026-09", cls: "GET",\s*\n\s*allow: \[([^\]]*)\]/.exec(SRC("auth/accessMatrix.ts"));
@@ -422,7 +423,9 @@ test("#1450 ДОСТУП ФІНАНСІВ: вкладка й edit_finance — о
   assert.ok(g && st, "🔴 видача або зняття edit_finance не знайдені");
   assert.deepEqual(list(g[1]), LEAD); assert.deepEqual(list(st[1]), LEAD);
   assert.match(SRC("auth/permGrant.ts"), /"edit_finance"/);
-  assert.doesNotMatch(SRC("auth/permGrant.ts"), /"approve_finance_plan"/, "🔴 мертве право лишилось у каталозі — адмін бачитиме тумблер, що нічого не дає");
+  // Ключ у каталозі лишено на один викат (двокрокове зняття, див. коментар у `permGrant.ts`): гейт стверджує, що він там
+  // ПОЗНАЧЕНИЙ як знятий, а не живий.
+  assert.match(SRC("auth/permGrant.ts"), /ЗНЯТО 06\.10\.2026 — ДВОКРОКОВО[\s\S]{0,600}?\*\/\s*"approve_finance_plan",/, "🔴 право в каталозі без позначки «знято»");
   assert.doesNotMatch(sql, /permissions \|\| '\{"approve_finance_plan"/, "🔴 право погоджувати знову видається ролі");
   assert.match(sql, /UPDATE roles SET permissions = permissions - 'approve_finance_plan' WHERE permissions \? 'approve_finance_plan';/,
     "🔴 старе право не знімається з ролей");
