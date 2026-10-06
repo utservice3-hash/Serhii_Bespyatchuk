@@ -131,6 +131,35 @@ test("#802 ЖИВИЙ SQL: певний збіг привʼязується са
 });
 
 /**
+ * #890 — ЖИВИЙ SQL: ЛИШЕ ЗУСТРІЧІ РЕКРУТЕРА. Ключ tl;dv бачить і чужі зустрічі (на проді 27 із 52 — командні
+ * «5-ти хвилинки» іншого акаунта). Зустріч, організатор якої не рекрутер (роль HR), не зберігається й не
+ * рахується як «чекає»; рекрутерська — як і раніше; збережена раніше чужа — не показується в списку; рекрутер
+ * перестав бути активним — його зустрічі теж не беремо.
+ * 🧨 Червоніє, якщо фільтр прибрати (командна зустріч лягає в базу й у список) або якщо він ріже рекрутерську.
+ */
+test("#890 ЖИВИЙ SQL: tl;dv бере лише зустрічі рекрутера — командні не зберігаються й не показуються", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  try {
+    const meet = (id: string, organizer: string, at = "2026-09-22T11:30:00+03:00") =>
+      ({ id, name: id, happenedAt: at, duration: 20, url: null, organizer, invitees: ["cand@gmail.com"] });
+    const rows = await s.store.slotRows(s.db, "2026-09-20", "2026-09-23");
+    const r = await s.store.absorb(s.db, [meet("ivan", "Ivan@UTS.ua"), meet("team", "sergii@gmail.com")], rows);
+    assert.deepEqual([r.seen, r.foreign, r.pending], [1, 1, 1], "🔴 не той підсумок: " + JSON.stringify(r));
+    const ids = async () => (await s.c.query(`SELECT id FROM tldv_meetings ORDER BY id`)).rows.map((x) => x.id);
+    assert.deepEqual(await ids(), ["ivan"], "🔴 командна зустріч лягла в базу");
+    // Збережена раніше чужа зустріч (до фільтра) — у списку «чекає» не показується.
+    await s.c.query(`INSERT INTO tldv_meetings (id, name, organizer, invitees, state) VALUES ('old', 'UTS top weekly', 'sergii@gmail.com', '[]', 'pending')`);
+    assert.deepEqual((await s.store.pendingList(s.db, "2026-09-20", "2026-09-23")).map((p) => p.id), ["ivan"], "🔴 чужа зустріч у списку рекрутера");
+    // Рекрутер неактивний — його зустрічі теж не беремо (і список порожній, а не «усе підряд»).
+    await s.c.query(`UPDATE users SET is_active = false WHERE id = $1`, [s.hr]);
+    assert.deepEqual(await s.store.recruiterEmails(s.db), [], "🔴 неактивний рекрутер лишився рекрутером");
+    const r2 = await s.store.absorb(s.db, [meet("ivan2", "ivan@uts.ua")], rows);
+    assert.deepEqual([r2.seen, r2.foreign], [0, 1], "🔴 без рекрутера зустріч узято");
+    assert.equal((await s.store.pendingList(s.db, "2026-09-20", "2026-09-23")).length, 0, "🔴 без рекрутера список не порожній");
+  } finally { await s.done(); }
+});
+
+/**
  * #803 — БЕЗ КЛЮЧА — ЧЕСНИЙ ПРОПУСК, А НЕ ПОРОЖНІЙ СПИСОК; таблиця зустрічей відібрана в ai_readonly і є у
  * FORBIDDEN_TABLES. 🧨 Червоніє, якщо джоба без ключа «успішно» нічого не робить або таблиця відкрита моделі.
  */

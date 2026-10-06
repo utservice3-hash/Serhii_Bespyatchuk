@@ -4800,7 +4800,7 @@ export interface TldvPending {
   suggestions: { interviewId: number; label: string }[];
 }
 export interface TldvState {
-  status: { configured: boolean; lastRunAt: string | null; lastError: string | null; seen: number; linked: number; pending: number };
+  status: { configured: boolean; lastRunAt: string | null; lastError: string | null; seen: number; foreign: number; linked: number; pending: number };
   pending: TldvPending[];
 }
 export const fetchTldv = async () => (await api.get<TldvState>("/hiring/tldv")).data;
