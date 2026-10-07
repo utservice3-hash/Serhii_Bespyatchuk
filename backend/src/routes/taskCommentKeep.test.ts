@@ -175,7 +175,8 @@ test("#139b помилка збереження задачі показуєть�
   const fn = /async function commitTask[\s\S]{0,900}?\n  \}/.exec(dash)?.[0] ?? "";
   assert.ok(fn, "🔴 не знайдено commitTask — немає де ловити помилку");
   assert.match(fn, /catch\s*\(/, "🔴 commitTask не має catch — помилка знову тихо зникає");
-  assert.match(fn, /setToasts/,
+  // 07.10.2026: власний список тостів задачника замінено спільним тостом (стандарт сповіщень, #1233).
+  assert.match(fn, /\btoast\([\s\S]*?error:\s*true/,
     "🔴 помилку спіймали, але нікому не сказали — мовчазний catch гірший за його відсутність");
   assert.match(fn, /await\s+updateTask/,
     "🔴 без await відхилення промісу пройде повз catch — обгортка стане декорацією");
