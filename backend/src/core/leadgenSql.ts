@@ -57,11 +57,29 @@ export function oprStatusPred(p: LeadPlaceholders): string {
 }
 const STAGE_PH: LeadPlaceholders = { pz: "$3", taken: "$4", opr: "$5", react: "$6", warming: "$7" };
 
+/** Скільки хвилин після кваліфікації лідген може її скасувати (рішення власника 07.10.2026, правило Ярослава). */
+export const QUOTE_UNDO_MIN = 15;
+
+/**
+ * ↩️ ПРОРАХУНОК, ЯКИЙ НЕ СКАСУВАЛИ (рішення власника 07.10.2026, правило Ярослава). Вхід угоди Продзвону в
+ * «Кваліфіковано» НЕ рахується, якщо протягом `QUOTE_UNDO_MIN` хвилин ця сама угода перейшла на ІНШИЙ етап
+ * воронок Продзвону (повернули на ОПР / «Взято» або закрили). Хто змінив, Kommo не передає, але угоду Продзвону
+ * після кваліфікації змінює лише лідген — менеджер працює у своїй угоді. Перехід у воронку Кваліфікації (угоду
+ * передали саму) — не скасування. Заміряно 01.08–07.10.2026: 10 таких із 1 236 входів (0,8 %).
+ * `pz` — місце параметра з воронками Продзвону; вхід — псевдонім `e`.
+ */
+export function quoteKeptSql(pz: string): string {
+  return `NOT EXISTS (SELECT 1 FROM deal_stage_events u
+                      WHERE u.kommo_id = e.kommo_id AND u.pipeline_id = ANY(${pz})
+                        AND u.changed_at > e.changed_at AND u.changed_at <= e.changed_at + INTERVAL '${QUOTE_UNDO_MIN} minutes'
+                        AND NOT (u.pipeline_id = e.pipeline_id AND u.status_id = e.status_id))`;
+}
+
 /** Чотири лічильники — ОДИН вираз на всі форми запиту. */
 const STAGE_COUNTS =
   `COUNT(DISTINCT e.kommo_id) FILTER (WHERE ${leadStatusPred(STAGE_PH)}) AS leads,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE ${oprStatusPred(STAGE_PH)}) AS opr,
-            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = $8) AS quotes,
+            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = $8 AND ${quoteKeptSql("$3")}) AS quotes,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($6) AND e.status_id = $7) AS warming`;
 
 /** Чотири стадії, що рахуються, — з місцями параметрів, щоб той самий предикат ставав у різні запити. */
@@ -200,7 +218,7 @@ export function handoffLinkQuery(
           ORDER BY z.prio, z.created_at_kommo, z.kommo_id
           LIMIT 1) x ON TRUE
        LEFT JOIN managers sm ON sm.id = x.manager_id
-      WHERE e.pipeline_id = ANY($3) AND e.status_id = $4
+      WHERE e.pipeline_id = ANY($3) AND e.status_id = $4 AND ${quoteKeptSql("$3")}
         AND (e.changed_at ${K})::date BETWEEN $1 AND $2
       ORDER BY e.changed_at, e.kommo_id`,
     values: [from, to, ids.pz, ids.qualified, ids.managerPipelines],
