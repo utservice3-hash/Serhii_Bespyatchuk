@@ -182,3 +182,24 @@ test("#1494b ЖИВА БАЗА: жодного знімка тижня з пла
     `🔴 ${bad.length} знімк(ів) тижня з місячним планом 0 при заведеному плані (із ${withPlan.size} менеджерів із планом): `
     + bad.slice(0, 8).map((r) => `#${r.manager_id}@${r.week_start}`).join(", "));
 });
+
+/**
+ * #1494c — ПРАВИЛО `shouldFreezeWeek` СПРАВДІ СТОЇТЬ НАД ЗАПИСОМ ЗНІМКА.
+ *
+ * `#1494` доводить саму функцію, але не те, що нею користуються: саботаж «повернути у `weekPlan.ts` стару
+ * умову `w.from <= today`» лишав `#1494` зеленим. Тому тут — ЄДИНЕ місце, де рядок потрапляє в `toInsert`,
+ * мусить бути під `shouldFreezeWeek` із місячним планом ЦЬОГО менеджера, і старої умови поруч бути не має.
+ *
+ * 🧨 Червоніє, якщо: повернути `if (opts.freeze !== false && w.from <= today)`; передати не `monthPlan`;
+ * додати другий `toInsert.push` поза умовою.
+ */
+test("#1494c запис знімка тижня стоїть під shouldFreezeWeek з планом менеджера", async () => {
+  const { readFileSync } = await import("node:fs");
+  const path = await import("node:path");
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "core", "weekPlan.ts"), "utf8")
+    .replace(/^\s*\/\/.*$/gm, " ").replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\s+/g, " ");
+  assert.equal((src.match(/toInsert\.push\(/g) ?? []).length, 1, "🔴 знімок потрапляє в запис більше ніж з одного місця");
+  assert.match(src, /if \(opts\.freeze !== false && shouldFreezeWeek\(\{ weekStart: w\.from, today, monthPlan \}\)\) \{ toInsert\.push\(/,
+    "🔴 запис знімка не охороняється shouldFreezeWeek з планом менеджера — нуль знову застигне");
+  assert.doesNotMatch(src, /w\.from <= today\)/, "🔴 повернулась стара умова фіксації без перевірки плану");
+});
