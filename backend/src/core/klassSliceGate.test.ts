@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { needsDb, emptyPeriodSkip } from "../testMode.js";
+import { needsDb, emptyPeriodSkip, monthStartSkip } from "../testMode.js";
 import { keepByKlass, visibleSlices, KLASS_SLICES, klassOf, SLICE_LABEL, type KlassSlice, type DealKlassState } from "./klassFilter.js";
 import { kyivMonthBounds, monthEndOf } from "./dates.js";
 
@@ -58,6 +58,9 @@ test("#211 зріз: число рядка == склад розкриття пр
    */
   const skipPairs = emptyPeriodSkip("пар (менеджер, день) із ≥3 угодами", days.length, `${from}..${to}`);
   if (skipPairs) return t.skip(skipPairs);
+  // 🗓 01.10.2026 пар було 1 (не нуль) — «замало» на 1-ше число законне лише у вікні 2 робочих днів (`monthStartSkip`).
+  const earlyPairs = monthStartSkip("пар (менеджер, день) із ≥3 угодами", days.length, 3, from.slice(0, 7));
+  if (earlyPairs) return t.skip(earlyPairs);
   assert.ok(days.length >= 3,
     `🔴 знайшлось лише ${days.length} пар (менеджер, день) з ≥3 угодами — перевіряти нема на чому`);
 

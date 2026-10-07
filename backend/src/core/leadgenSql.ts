@@ -22,10 +22,45 @@ export interface LeadgenStageIds {
 
 export interface SqlQuery { text: string; values: unknown[] }
 
+/**
+ * 🧲 ЛІД ЛІДГЕНА — угода Продзвону, що увійшла у «Взято в роботу» АБО в «Отримано контакти ОПР»,
+ * АБО угода Реактивації, що увійшла в «Клієнт підігрівається» (з 06.10.2026, див. нижче).
+ *
+ * Правило Ярослава (розмова 10.09.2026, підтверджено 30.09 у задачі 4668): «вважається лідом все,
+ * що потрапило у взято в роботу і отримала ОПР». Закинута тімлідом угода ще НЕ лід — лише
+ * опрацьована. Угоди, які лідген отримує вже з розмовою (реактивація, повернуте менеджером),
+ * він ставить одразу на ОПР, минаючи «Взято»; до 30.09 ми рахували лише «Взято» і недораховували
+ * їх (Сердюк 21–27.09: 19 замість 63, конверсія «ліди → ОПР» 236 %). Угода, що пройшла обидва
+ * етапи в періоді, — один лід (`COUNT DISTINCT`), тож лідів за період завжди ≥ ОПР.
+ *
+ * ОДИН вираз на всі лічильники лідів — рядки людей і одиниці (тут), тижні й розріз за джерелом
+ * (`leadgenStats.ts`). Друга копія розійшлась би мовчки; `#1090b` жене всі три на тимчасовій базі.
+ */
+/** Місця параметрів для виразів ліда й ОПР — щоб той самий вираз ставав у різні запити. Аліас події — `e`. */
+export interface LeadPlaceholders { pz: string; taken: string; opr: string; react: string; warming: string }
+
+/*
+ * 🔥 ЗМІНЕНО 06.10.2026 (рішення власника, звірка жовтня з таблицями лідгенів): угода Реактивації, поставлена в
+ * «Клієнт підігрівається», — теж ЛІД і теж ОПР. Так рахує сама команда: у таблицях Шевчук 01.10 «реактивація
+ * 19 / 18» — рівно її 19 угод у «Підігріві», Демчук 05.10 «22 / 23» проти 21 «Підігріву» + 3. Рішення 30.09
+ * («підігрів — не лід») скасовано. «Отримано зворотній зв'язок» Реактивації — НЕ лід (не просили).
+ * «Підігрів» лишається окремим числом — скільки з лідів прийшло з реактивації.
+ */
+export function leadStatusPred(p: LeadPlaceholders): string {
+  return `((e.pipeline_id = ANY(${p.pz}) AND e.status_id IN (${p.taken}, ${p.opr}))
+            OR (e.pipeline_id = ANY(${p.react}) AND e.status_id = ${p.warming}))`;
+}
+/** ОПР лідгена: «Отримано контакти ОПР» Продзвону АБО «Клієнт підігрівається» Реактивації (06.10.2026). */
+export function oprStatusPred(p: LeadPlaceholders): string {
+  return `((e.pipeline_id = ANY(${p.pz}) AND e.status_id = ${p.opr})
+            OR (e.pipeline_id = ANY(${p.react}) AND e.status_id = ${p.warming}))`;
+}
+const STAGE_PH: LeadPlaceholders = { pz: "$3", taken: "$4", opr: "$5", react: "$6", warming: "$7" };
+
 /** Чотири лічильники — ОДИН вираз на всі форми запиту. */
 const STAGE_COUNTS =
-  `COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = $4) AS leads,
-            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = $5) AS opr,
+  `COUNT(DISTINCT e.kommo_id) FILTER (WHERE ${leadStatusPred(STAGE_PH)}) AS leads,
+            COUNT(DISTINCT e.kommo_id) FILTER (WHERE ${oprStatusPred(STAGE_PH)}) AS opr,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = $8) AS quotes,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($6) AND e.status_id = $7) AS warming`;
 
@@ -60,7 +95,7 @@ export function bucketKeySql(grain: LeadgenBucketGrain, col: string): string {
 }
 
 /**
- * Лічильники стадій по людях за період: ліди (вхід у «Взято в роботу»), ОПР, прорахунки
+ * Лічильники стадій по людях за період: ліди (вхід у «Взято в роботу» АБО «ОПР» — `leadStatusPred`), ОПР, прорахунки
  * (вхід у «Кваліфіковано»), підігрів (Реактивація). Атрибуція — ПОТОЧНИЙ `deals.manager_id`,
  * `JOIN managers` внутрішній: угода без менеджера в ростер не потрапляє.
  *
@@ -110,6 +145,14 @@ export interface HandoffLinkIds { pz: readonly number[]; qualified: number; mana
 /**
  * 🔗 ПЕРЕДАЧІ ПЕРІОДУ Й УГОДА МЕНЕДЖЕРА ДЛЯ КОЖНОГО ВХОДУ (правила 1–2 власника).
  *
+ * 🔗 УГОДА МЕНЕДЖЕРА — ДВА ШЛЯХИ, У ПОРЯДКУ ДОВІРИ (30.09.2026):
+ *   0) примітка Kommo `lead_auto_created` (`lead_child_links`): CRM сама записала, що цю угоду створено
+ *      з цієї угоди Продзвону. Точний звʼязок, не залежить від заповненості клієнта;
+ *   1) здогад, як до 30.09: той самий НЕпорожній `client_key` — лише коли примітки немає.
+ * Обидва — у тому самому вікні −`beforeSec`…+`afterSec` від входу: примітка звʼязує угоди, а вікно
+ * вирішує, ЯКИЙ вхід у 142 цю угоду породив (угода Продзвону буває кваліфікована кілька разів).
+ * `link_prio` — яким шляхом знайдено (0 — примітка, 1 — здогад), для перевірки й розбору.
+ *
  * Вхід = подія 142 угоди Продзвону в київську дату періоду; предикат і `JOIN managers` —
  * ТІ САМІ, що в «Прорахунків» (`stageCountsQuery`, лічильник `quotes`), тож передачі людини
  * дорівнюють її прорахункам ЗАВЖДИ (`#675b`). Угода менеджера — НАЙРАНІША угода того самого
@@ -126,7 +169,8 @@ export function handoffLinkQuery(
   return {
     text: `SELECT e.kommo_id AS pz_id, d.manager_id AS lg_id, m.team_id AS lg_team_id,
             e.changed_at AS at, to_char((e.changed_at ${K}), 'YYYY-MM-DD') AS day,
-            d.name AS pz_name, d.client_name AS pz_client,
+            d.name AS pz_name, d.client_name AS pz_client, COALESCE(x.client_key, d.client_key) AS client_key,
+            x.prio AS link_prio,
             x.kommo_id AS deal_id, x.name AS deal_name, x.client_name AS deal_client,
             sm.name AS sales_manager, x.reject_reason AS deal_reason,
             to_char((x.closed_at_kommo ${K}), 'YYYY-MM-DD') AS closed_day,
@@ -135,14 +179,25 @@ export function handoffLinkQuery(
        JOIN deals d ON d.kommo_id = e.kommo_id
        JOIN managers m ON m.id = d.manager_id
        LEFT JOIN LATERAL (
-         SELECT q.kommo_id, q.name, q.client_name, q.manager_id, q.reject_reason,
-                q.closed_at_kommo, q.planned_payment_at
-           FROM deals q
-          WHERE d.client_key IS NOT NULL AND q.client_key = d.client_key
-            AND q.pipeline_id = ANY($5)
-            AND q.created_at_kommo BETWEEN e.changed_at - INTERVAL '${before} seconds'
-                                       AND e.changed_at + INTERVAL '${after} seconds'
-          ORDER BY q.created_at_kommo, q.kommo_id
+         SELECT z.* FROM (
+           SELECT 0 AS prio, q.kommo_id, q.name, q.client_name, q.client_key, q.manager_id, q.reject_reason,
+                  q.closed_at_kommo, q.planned_payment_at, q.created_at_kommo
+             FROM lead_child_links l
+             JOIN deals q ON q.kommo_id = l.child_id
+            WHERE l.parent_id = d.kommo_id
+              AND q.pipeline_id = ANY($5)
+              AND q.created_at_kommo BETWEEN e.changed_at - INTERVAL '${before} seconds'
+                                         AND e.changed_at + INTERVAL '${after} seconds'
+           UNION ALL
+           SELECT 1 AS prio, q.kommo_id, q.name, q.client_name, q.client_key, q.manager_id, q.reject_reason,
+                  q.closed_at_kommo, q.planned_payment_at, q.created_at_kommo
+             FROM deals q
+            WHERE d.client_key IS NOT NULL AND q.client_key = d.client_key
+              AND q.pipeline_id = ANY($5)
+              AND q.created_at_kommo BETWEEN e.changed_at - INTERVAL '${before} seconds'
+                                         AND e.changed_at + INTERVAL '${after} seconds'
+         ) z
+          ORDER BY z.prio, z.created_at_kommo, z.kommo_id
           LIMIT 1) x ON TRUE
        LEFT JOIN managers sm ON sm.id = x.manager_id
       WHERE e.pipeline_id = ANY($3) AND e.status_id = $4

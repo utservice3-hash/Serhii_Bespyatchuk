@@ -5,11 +5,17 @@ import { pool } from "../db/pool.js";
 // до першого виклику (request-time), коли обидва модулі вже ініціалізовані.
 import { adDealSql } from "./metrics.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
-import { managerDealClass, type DealState } from "./leadgenHandoffRules.js";
+import { managerDealClass, type DealState, type ClientSuccess, type PendDay } from "./leadgenHandoffRules.js";
 // 💰 Правила класу угоди менеджера з передачі — ОДИН обʼєкт у реєстрі корзин (там і 143
 // «Закрито і не реалізовано», у Кваліфікації — «Не цільові» / «Сміття»). `#683` звіряє його
 // поля з константами цього ядра; друга копія тут розійшлась би мовчки (ревʼю F3/F5).
 import { HANDOFF_CLASS_RULES } from "./moneyBuckets.js";
+// 🔀 Команда — НА ДАТУ АНКЕРА грошей, а не поточна (задача 4892, `core/teamAt.ts`): гроші,
+// зароблені в команді, лишаються в ній після переходу людини. Без переходів — поточна команда.
+// Знімки «станом на зараз» (`snapshotBy`, `awaitingNowSnapshot`) свідомо лишаються на поточній.
+import { teamAtSql, teamOnDateSql, teamJoinSql } from "./teamAt.js";
+const ANCHOR_DAY = "(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date";
+const CLOSED_DAY = "(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv')::date";
 
 /**
  * ЄДИНЕ джерело грошових метрик (MASTER_PLAN КРОК 2, виправлено КРОКОМ 4 — опція Б).
@@ -178,9 +184,9 @@ function scopeClause(s: MoneyScope, p: unknown[], extraSelect: string, groupBy: 
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", ANCHOR_DAY, `$${p.length}`)); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
-  const teamsJoin = /\bt\./.test(extraSelect + groupBy) ? "LEFT JOIN teams t ON t.id = m.team_id" : "";
+  const teamsJoin = /\bt\./.test(extraSelect + groupBy) ? `LEFT JOIN teams t ON ${teamJoinSql("t", "m", ANCHOR_DAY)}` : "";
   return {
     where: conds.length ? "WHERE " + conds.join(" AND ") : "",
     joins: `JOIN managers m ON m.id = src.manager_id ${activeJoin}\n    ${teamsJoin}`,
@@ -332,7 +338,7 @@ export async function receivedDealStatsByMgr(s: MoneyScope): Promise<MgrDealStat
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at ${K})::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at ${K})::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", ANCHOR_DAY, `$${p.length}`)); }
   const ratio = "CASE WHEN dd.carrier_obligation > 0 AND src.price > 0 THEN src.price / dd.carrier_obligation * 100 END";
   const rows = (await pool.query<{ manager_id: number; revenue: string; deals: string; max_deal: string | null; max_deal_id: string | null;
     max_pct: string | null; pct_id: string | null; pct_price: string | null; pct_cost: string | null; no_cost: string }>(
@@ -380,7 +386,7 @@ async function byDealAttr(kind: Kind, s: MoneyScope, expr: string): Promise<DimR
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at ${K})::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at ${K})::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", ANCHOR_DAY, `$${p.length}`)); }
   const rows = (await pool.query<{ k: string; revenue: string; deals: string }>(
     `SELECT ${expr} AS k, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals
        FROM (${src}) src
@@ -410,6 +416,26 @@ export const receivedByClientKey = (s: MoneyScope) => receivedByDealAttr(s, "COA
  * — похідна від `client_key_raw` через реєстр псевдонімів).
  */
 export const successByClientKey = (s: MoneyScope) => byDealAttr("success", s, "COALESCE(dd.client_key, '—')");
+/**
+ * ⏱ ① «УСПІШНО РЕАЛІЗОВАНО» ДЛЯ УГОД ЗІ ЗАДАНИХ ДЖЕРЕЛ (`client_source`) — середній чек рекламної угоди для
+ * «суми втрат» вікна «Час опрацювання заявки» (ТЗ 24.09.2026: «середній чек дашборд бере сам — по рекламних
+ * угодах за вибраний період»). Та сама success-каса й анкер `closed_at`, що `successMoney`; інше лише звуження
+ * за джерелом. Джерела — константи коду, тож у SQL ідуть параметром, а не рядком.
+ */
+export async function successForSources(s: MoneyScope, sources: readonly string[]): Promise<MoneyAgg> {
+  const p: unknown[] = [];
+  const src = sourceSql("success", p);
+  p.push([...sources]); const ref = `$${p.length}`;
+  const conds = [`dd.client_source = ANY(${ref})`];
+  if (s.from) { p.push(s.from); conds.push(`${ANCHOR_DAY} >= $${p.length}`); }
+  if (s.to) { p.push(s.to); conds.push(`${ANCHOR_DAY} <= $${p.length}`); }
+  const r = (await pool.query<{ revenue: string; deals: string }>(
+    `SELECT COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals
+       FROM (${src}) src JOIN deals dd ON dd.kommo_id = src.kommo_id
+      WHERE ${conds.join(" AND ")}`, p)).rows[0];
+  return { revenue: Number(r?.revenue ?? 0), deals: Number(r?.deals ?? 0) };
+}
+
 /** 🧾 Факт екрана клієнтів «з рахунку і далі» — див. `STAGE_FROM_INVOICE`. */
 export const fromInvoiceByClientKey = (s: MoneyScope) => byDealAttr("fromInvoice", s, "COALESCE(dd.client_key, '—')");
 /** Сума «з рахунку і далі» за скоупом — для гейта «Σ по клієнтах == ядру». */
@@ -417,6 +443,30 @@ export const fromInvoiceTotal = async (s: MoneyScope): Promise<MoneyAgg> => {
   const rows = await byDealAttr("fromInvoice", s, "'all'");
   return { revenue: rows.reduce((a, r) => a + r.revenue, 0), deals: rows.reduce((a, r) => a + r.deals, 0) };
 };
+
+/**
+ * 🔁 ДАТА ОСТАННЬОГО РАХУНКУ ПО КЛІЄНТУ (ТЗ Юлі 22.09, блок 4, п.4.1; задача 4313) — за Києвом, `YYYY-MM-DD`.
+ *
+ * «Рахунок виставлено» = той самий анкер, що й факт екрана «з рахунку» (`sourceSql("fromInvoice")`):
+ * перший вхід угоди в «Виставлення рахунку» або будь-який етап після нього; програні — ні. Останній
+ * рахунок клієнта = найпізніший такий анкер серед його угод. Окремої копії правила тут немає — інакше
+ * «без рахунку 3 місяці» і «факт з рахунку» розійшлися б на тих самих угодах.
+ *
+ * Клієнта без жодного рахунку в мапі немає (читач сам вирішує, що означає відсутність).
+ */
+export async function lastInvoiceByClientKey(keys: string[]): Promise<Map<string, string>> {
+  if (!keys.length) return new Map();
+  const p: unknown[] = [];
+  const src = sourceSql("fromInvoice", p);
+  p.push(keys);
+  const rows = (await pool.query<{ ck: string; d: string }>(
+    `SELECT dd.client_key AS ck, to_char(MAX(src.anchor_at AT TIME ZONE 'Europe/Kyiv'), 'YYYY-MM-DD') AS d
+       FROM (${src}) src
+       JOIN deals dd ON dd.kommo_id = src.kommo_id
+      WHERE dd.client_key = ANY($${p.length})
+      GROUP BY 1`, p)).rows;
+  return new Map(rows.map((r) => [r.ck, r.d]));
+}
 
 export interface ClientBucketRow { clientKey: string; bucket: string; revenue: number; deals: number }
 /**
@@ -449,7 +499,7 @@ async function byClientBucket(
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at ${K})::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at ${K})::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", ANCHOR_DAY, `$${p.length}`)); }
   if (onlyClientKey) { p.push(onlyClientKey); conds.push(`dd.client_key = $${p.length}`); }
   const rows = (await pool.query<{ ck: string; b: string; revenue: string; deals: string }>(
     `SELECT COALESCE(dd.client_key, '—') AS ck,
@@ -522,7 +572,7 @@ export async function receivedBySegment(s: MoneyScope): Promise<SegmentAgg> {
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at ${K})::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at ${K})::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", ANCHOR_DAY, `$${p.length}`)); }
   const fromRef = s.from ? (p.push(s.from), `$${p.length}`) : "NULL";
   const rows = (await pool.query<{ seg: string; revenue: string; deals: string }>(
     `WITH firsts AS (
@@ -585,6 +635,21 @@ export async function receivedSegByDay(s: MoneyScope): Promise<SegDayRow[]> {
 export const successMoney = (s: MoneyScope) => agg("success", s);
 export const successByTeam = (s: MoneyScope) => aggByTeam("success", s);
 export const successByMgr = (s: MoneyScope) => aggByMgr("success", s);
+/**
+ * 🔀 ① по (менеджер × команда НА ДАТУ анкера) — для розгорток «команда → її менеджери» (задача 4892).
+ * Той самий `query`, що `successByMgr`; інший лише ключ групування. Хто перейшов посеред періоду, дає
+ * ДВА рядки — по одному в кожній команді, кожен зі своєю частиною; без переходів — рівно `successByMgr`
+ * (підпис `teamId` = поточна команда, бо на будь-яку дату вона та сама). Σ рядків команди == `successByTeam`.
+ */
+export async function successByMgrAtTeam(s: MoneyScope): Promise<MgrRow[]> {
+  const rows = await query<{ manager_id: number; name: string; team_id: number | null; is_active: boolean; revenue: string; deals: string }>(
+    "success", s,
+    `m.id AS manager_id, m.name, ${teamAtSql("m", ANCHOR_DAY)} AS team_id, m.is_active, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals`,
+    "GROUP BY m.id, m.name, 3, m.is_active"
+  );
+  return rows.map((x) => ({ managerId: x.manager_id, name: x.name, teamId: x.team_id,
+    isActive: x.is_active, revenue: Number(x.revenue), deals: Number(x.deals) }));
+}
 export interface MgrAvgCheck { managerId: number; revenue: number; successDeals: number; avgCheck: number | null }
 /**
  * СЕРЕДНІЙ ЧЕК ПО МЕНЕДЖЕРУ (`avg_check_success_only`) — ЄДИНЕ джерело для Звіту й
@@ -824,7 +889,7 @@ export async function receivedByChannel(s: MoneyScope, adSources: string[]): Pro
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", ANCHOR_DAY, `$${p.length}`)); }
   p.push(adSources); const adRef = `$${p.length}`;
   const ad = adDealSql(adRef);
   const r = await pool.query<{ ad_rev: string; ad_deals: string; lg_rev: string; lg_deals: string }>(
@@ -936,7 +1001,7 @@ export async function newBusinessDobir(s: MoneyScope): Promise<number> {
     `(d.closed_at_kommo ${K})::date < date_trunc('month', now() ${K})::date`,
   ];
   if (s.managerId) { p.push(s.managerId); conds.push(`d.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", CLOSED_DAY, `$${p.length}`)); }
   const r = await pool.query<{ ym: string; s: string }>(
     `SELECT to_char((d.closed_at_kommo ${K}),'YYYY-MM') ym, COALESCE(SUM(d.price),0) s
        FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
@@ -961,7 +1026,7 @@ export async function newBusinessDobirByManager(s: MoneyScope): Promise<Map<numb
     `(d.closed_at_kommo ${K})::date >= (date_trunc('month', now() ${K}) - interval '3 months')::date`,
     `(d.closed_at_kommo ${K})::date < date_trunc('month', now() ${K})::date`,
   ];
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", CLOSED_DAY, `$${p.length}`)); }
   const r = await pool.query<{ manager_id: number; ym: string; s: string }>(
     `SELECT d.manager_id, to_char((d.closed_at_kommo ${K}),'YYYY-MM') ym, COALESCE(SUM(d.price),0) s
        FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
@@ -1004,7 +1069,7 @@ export async function dobirByManager(s: MoneyScope): Promise<DobirRow[]> {
   const p: unknown[] = [FC_PIPELINES];
   const sc: string[] = [];
   if (s.managerId) { p.push(s.managerId); sc.push(`AND d.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); sc.push(`AND m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); sc.push(`AND ${teamOnDateSql("m", CLOSED_DAY, `$${p.length}`)}`); }
   const rows = await pool.query<{ manager_id: number; raw: string }>(
     `SELECT d.manager_id, COALESCE(SUM(d.price),0) raw
        FROM deals d LEFT JOIN managers m ON m.id = d.manager_id
@@ -1132,7 +1197,7 @@ export async function receivedByMgrKlass(s: MoneyScope): Promise<MoneyByKlass[]>
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", ANCHOR_DAY, `$${p.length}`)); }
   const r = await pool.query<{ manager_id: number; klass: string; n: string; s: string }>(
     `WITH src AS (${src})
      SELECT src.manager_id, (${dealKlassSql("d")}) AS klass,
@@ -1189,7 +1254,7 @@ export async function receivedUndefDeals(s: MoneyScope): Promise<UndefDealRow[]>
   if (s.from) { p.push(s.from); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date >= $${p.length}`); }
   if (s.to) { p.push(s.to); conds.push(`(src.anchor_at AT TIME ZONE 'Europe/Kyiv')::date <= $${p.length}`); }
   if (s.managerId) { p.push(s.managerId); conds.push(`src.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", ANCHOR_DAY, `$${p.length}`)); }
   const r = await pool.query<{ kommo_id: string; manager_id: number | null; s: string; client_key: string | null; sales_channel: string | null }>(
     `WITH src AS (${src})
      SELECT src.kommo_id, src.manager_id, src.price AS s, d.client_key, d.sales_channel
@@ -1226,21 +1291,116 @@ export async function handoffDealStates(dealIds: readonly number[]): Promise<Map
   const ids = [...new Set(dealIds)];
   if (!ids.length) return out;
   const r = await pool.query<{ kommo_id: string; pipeline_id: string; status_id: string; price: string | null;
-    closed: boolean; written_off: boolean }>(
+    closed: boolean; written_off: boolean; closed_day: string | null; auto_day: string | null }>(
     `SELECT d.kommo_id, d.pipeline_id, d.status_id, d.price,
             (d.closed_at_kommo IS NOT NULL) AS closed,
-            NOT (${DEAL_NOT_WRITTEN_OFF}) AS written_off
+            NOT (${DEAL_NOT_WRITTEN_OFF}) AS written_off,
+            to_char(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS closed_day,
+            (SELECT to_char(min(s.changed_at) AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD')
+               FROM deal_stage_events s
+              WHERE s.kommo_id = d.kommo_id AND s.pipeline_id = ANY($2::bigint[])
+                AND s.status_id = ANY($3::bigint[])) AS auto_day
        FROM deals d
       WHERE d.kommo_id = ANY($1::bigint[])`,
-    [ids]
+    [ids, HANDOFF_CLASS_RULES.fcPipelines, HANDOFF_CLASS_RULES.autoWent]
   );
+  // ⏳ Історія зони очікування по днях — для «Очікування» станом на кінець періоду (рішення власника 02.10.2026).
+  // Останній етап КОЖНОГО київського дня; клас — та сама чиста `managerDealClass` над тим самим реєстром, тож
+  // «в зоні очікування» в історії означає рівно те, що й зараз. `closed: false` — успіх у зону не входить.
+  const ev = await pool.query<{ kommo_id: string; day: string; pipeline_id: string; status_id: string }>(
+    `SELECT DISTINCT ON (s.kommo_id, (s.changed_at AT TIME ZONE 'Europe/Kyiv')::date)
+            s.kommo_id, to_char(s.changed_at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS day, s.pipeline_id, s.status_id
+       FROM deal_stage_events s
+      WHERE s.kommo_id = ANY($1::bigint[])
+      ORDER BY s.kommo_id, (s.changed_at AT TIME ZONE 'Europe/Kyiv')::date, s.changed_at DESC`, [ids]);
+  const writtenOff = new Map(r.rows.map((x) => [Number(x.kommo_id), x.written_off]));
+  const pend = new Map<number, PendDay[]>();
+  for (const e of ev.rows) {
+    const id = Number(e.kommo_id);
+    const c = managerDealClass({ pipelineId: Number(e.pipeline_id), statusId: Number(e.status_id), closed: false,
+      writtenOff: writtenOff.get(id) === true }, HANDOFF_CLASS_RULES);
+    const xs = pend.get(id) ?? [];
+    xs.push({ day: e.day, pending: c === "paid" || c === "expect" });
+    pend.set(id, xs);
+  }
   for (const x of r.rows) {
     const pipelineId = Number(x.pipeline_id), statusId = Number(x.status_id);
     out.set(Number(x.kommo_id), {
       pipelineId, statusId,
       cls: managerDealClass({ pipelineId, statusId, closed: x.closed, writtenOff: x.written_off }, HANDOFF_CLASS_RULES),
       price: Math.round(Number(x.price ?? 0)),
+      closedDay: x.closed_day, autoDay: x.auto_day,
+      pendDays: (pend.get(Number(x.kommo_id)) ?? []).sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0)),
     });
   }
   return out;
+}
+
+/**
+ * 🔁 УСПІХИ КЛІЄНТІВ — вхід правила «постійний клієнт на дату передачі» (`isRegularAt`, задача 4668).
+ *
+ * Успіх — РІВНО той самий предикат, що клас `success` угоди менеджера (`managerDealClass` над
+ * `HANDOFF_CLASS_RULES`): повний цикл, «Успішна угода» і є `closed_at`. Друга копія розійшлась би
+ * мовчки — тому воронки й статуси беруться з того ж реєстру, а не пишуться тут числами.
+ * Мінусові угоди (поле «Мінусова угода») НЕ рахуються: це сторно чи другий рахунок того самого
+ * перевезення, а не ще одне перевезення (`money-core`: «два рахунки на одне перевезення»).
+ * Момент — `closed_at_kommo`; дата — київська, бо межа «3 місяці» рахується київськими днями.
+ */
+export async function clientSuccessHistory(clientKeys: readonly string[]): Promise<Map<string, ClientSuccess[]>> {
+  const out = new Map<string, ClientSuccess[]>();
+  const keys = [...new Set(clientKeys.filter((k) => k))];
+  if (!keys.length) return out;
+  const r = await pool.query<{ client_key: string; at: Date; day: string }>(
+    `SELECT d.client_key, d.closed_at_kommo AS at,
+            to_char(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS day
+       FROM deals d
+      WHERE d.client_key = ANY($1::text[])
+        AND d.pipeline_id = ANY($2::bigint[]) AND d.status_id = ANY($3::bigint[])
+        AND d.closed_at_kommo IS NOT NULL AND NOT d.is_minus`,
+    [keys, HANDOFF_CLASS_RULES.fcPipelines, HANDOFF_CLASS_RULES.success]
+  );
+  for (const x of r.rows) {
+    const xs = out.get(x.client_key) ?? [];
+    xs.push({ at: new Date(x.at).getTime(), day: x.day });
+    out.set(x.client_key, xs);
+  }
+  return out;
+}
+
+
+/**
+ * 💰 РЯДКИ «ФМ» ЗА ФІЛЬТРАМИ ФІНАНСИСТА (прохід 2б, 01.10.2026) — НЕ метрика продажу і НЕ виручка.
+ * Фільтри — рівно ті, що стоять у колонці «Фильтр» аркуша «ФМ» (розшифровано з посилань Kommo 01.10.2026):
+ *   поставлені — воронка «Повний цикл» 8921932, ПОТОЧНИЙ етап ∈ `FM_DELIVERED_STAGES` (8 етапів: Контроль перед
+ *               завантаженням · Виставлення рахунку · Авто працює · Перевезення завершено · Дзвінок після
+ *               розвантаження · Очікуємо оплату · Оплата отримана · Успішна), «Дата загрузки» в періоді;
+ *   вигружені  — СУМА ДВОХ фільтрів: ① етап «Очікуємо оплату» / «Оплата отримана», дата СТВОРЕННЯ в періоді
+ *               (у посиланні тип дати не вказано — це типовий у Kommo); ② «Успішна», дата ЗАКРИТТЯ в періоді.
+ * Суми — `deals.fm_income` / `fm_expense` (правило — `core/fmSums.ts`): звірено до копійки на «Поставлених» 14–20.09.
+ * Період — дати за Києвом, обидва кінці включно. ⚠️ Обидва рядки змінюються заднім числом (заміряно на 12 тижнях:
+ * поставлені ростуть +4…+54%, вигружені меншають −2…−55%), тому число тижня фіксує `freezeFinanceKpis`.
+ * `noIncome` — друге число до предиката (правило 4): угоди множини без жодної суми доходу.
+ * `db` — параметр, щоб гейти ганяли САМУ функцію на scratch-базі.
+ */
+export const FM_DELIVERED_STAGES = [69716260, 100274340, 69716300, 98470988, 69716304, 69716312, 69716460, 142] as const;
+export const FM_UNLOAD_OPEN_STAGES = [69716312, 69716460] as const;
+export interface FinRefSums { deals: number; income: number; expense: number; noIncome: number }
+type Q = { query: typeof pool.query };
+const FM_PIPELINE = 8921932;
+async function fmSums(where: string, params: unknown[], db: Q): Promise<FinRefSums> {
+  const r = await db.query<{ deals: string; income: string; expense: string; no_income: string }>(
+    `SELECT count(*) AS deals, COALESCE(sum(d.fm_income), 0) AS income, COALESCE(sum(d.fm_expense), 0) AS expense,
+            count(*) FILTER (WHERE d.fm_income IS NULL) AS no_income
+       FROM deals d WHERE d.pipeline_id = ${FM_PIPELINE} AND ${where}`, params);
+  const x = r.rows[0];
+  return { deals: Number(x.deals), income: Math.round(Number(x.income) * 100) / 100, expense: Math.round(Number(x.expense) * 100) / 100, noIncome: Number(x.no_income) };
+}
+const kyivIn = (col: string) => `d.${col} IS NOT NULL AND (d.${col} AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1::date AND $2::date`;
+export const finDeliveredByLoadDate = (from: string, to: string, db: Q = pool) =>
+  fmSums(`d.status_id = ANY($3) AND ${kyivIn("load_at")}`, [from, to, FM_DELIVERED_STAGES], db);
+export async function finUnloadedTwoFilters(from: string, to: string, db: Q = pool): Promise<FinRefSums & { open: FinRefSums; closed: FinRefSums }> {
+  const open = await fmSums(`d.status_id = ANY($3) AND ${kyivIn("created_at_kommo")}`, [from, to, FM_UNLOAD_OPEN_STAGES], db);
+  const closed = await fmSums(`d.status_id = 142 AND ${kyivIn("closed_at_kommo")}`, [from, to], db);
+  const add = (a: number, b: number) => Math.round((a + b) * 100) / 100;
+  return { deals: open.deals + closed.deals, income: add(open.income, closed.income), expense: add(open.expense, closed.expense), noIncome: open.noIncome + closed.noIncome, open, closed };
 }

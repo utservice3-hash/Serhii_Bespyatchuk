@@ -103,6 +103,14 @@ export interface RawInvoiceRow {
   /** Скільки МИ ВИННІ перевізнику («Расход 1») — не плутати із заявкою. */
   carrierObligation: number | null;
   ageDays: number | null;       // днів від дати рахунку
+  /**
+   * 🗓 «ЗАПЛАНОВАНА ДАТА ОПЛАТИ» з угоди CRM (поле Kommo `2097273`), день за Києвом, `YYYY-MM-DD`.
+   * `null` — угоди немає або дату в CRM не ставили. Колонка «Домовленість» показує її, коли запис
+   * дашборда старіший за угоду (06.10.2026, «дата з CRM»).
+   */
+  crmDue?: string | null;
+  /** Коли створено угоду рахунку (ISO UTC із Z) — межа «запис з попередньої угоди». */
+  dealCreatedAt?: string | null;
 }
 
 /** Класифікований рахунок — те, з чого фронт складає геть усе на екрані. */
@@ -285,6 +293,14 @@ export interface ClientFacts {
    * обидва числа набираються в одному циклі після того самого `continue`.
    */
   counterparty: Record<string, { name: string | null; n: number; amount: number }>;
+  /**
+   * 🗓 ДЛЯ КОЛОНКИ «ДОМОВЛЕНІСТЬ» (06.10.2026). `crmDueNearest` — найраніша планова дата оплати з CRM
+   * серед неоплачених (несписаних) рахунків клієнта; `newestDealAt` — коли створено найновішу з їхніх
+   * угод; `deals` — угоди цих рахунків (для вибору, до якої угоди привʼязати домовленість).
+   */
+  crmDueNearest: string | null;
+  newestDealAt: string | null;
+  deals: { dealId: number; invoiceNo: string | null; crmDue: string | null; createdAt: string | null }[];
 }
 
 export interface FactTotals {
@@ -310,6 +326,7 @@ const emptyClient = (clientKey: string): ClientFacts => ({
   entityReasons: [], carrierReasons: [], pipelinesOutOfMap: [], oldestAgeDays: null,
   earned: null, clientPay: null, writtenOffN: 0, writtenOffAmount: 0,
   counterparty: {},
+  crmDueNearest: null, newestDealAt: null, deals: [],
 });
 
 /**
@@ -389,6 +406,13 @@ export function foldFacts(facts: InvoiceFact[]): { byClient: Map<string, ClientF
       if (!totals.pipelinesOutOfMap.includes(f.pipelineId)) totals.pipelinesOutOfMap.push(f.pipelineId);
     }
     if (f.ageDays != null && (c.oldestAgeDays == null || f.ageDays > c.oldestAgeDays)) c.oldestAgeDays = f.ageDays;
+
+    // 🗓 Домовленість: найраніша дата з CRM і найновіша угода — лише по НЕСПИСАНИХ рахунках (вище `continue`).
+    if (f.crmDue && (c.crmDueNearest == null || f.crmDue < c.crmDueNearest)) c.crmDueNearest = f.crmDue;
+    if (f.dealCreatedAt && (c.newestDealAt == null || f.dealCreatedAt > c.newestDealAt)) c.newestDealAt = f.dealCreatedAt;
+    if (f.dealId != null && f.dealFound && !c.deals.some((d) => d.dealId === f.dealId)) {
+      c.deals.push({ dealId: f.dealId, invoiceNo: f.invoiceNo, crmDue: f.crmDue ?? null, createdAt: f.dealCreatedAt ?? null });
+    }
   }
   return { byClient, totals };
 }
@@ -423,7 +447,11 @@ const INVOICE_FACTS_SQL = `
          d.carrier_pay_amount, d.carrier_pay_type,
          d.price AS earned, d.client_pay_amount, d.carrier_obligation,
          (psm.pipeline_id IS NOT NULL)          AS stage_mapped,
-         (wo.client_key_raw IS NOT NULL)        AS written_off
+         (wo.client_key_raw IS NOT NULL)        AS written_off,
+         -- 🗓 Планова дата оплати з CRM — ДЕНЬ ЗА КИЄВОМ (05.10 21:00 UTC = 06.10), і час створення угоди.
+         -- Колонками в наявному запиті: стеля #158 — чотири походи.
+         to_char((d.planned_payment_at AT TIME ZONE 'Europe/Kyiv')::date, 'YYYY-MM-DD') AS crm_due,
+         to_char(d.created_at_kommo AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS deal_created_at
     FROM receivable_invoices ri
     CROSS JOIN LATERAL (
       SELECT NULLIF(regexp_replace(COALESCE(ri.service_url, ''), '^.*/', ''), '')::bigint AS deal_id
@@ -457,6 +485,7 @@ export async function loadInvoiceFacts(
     counterparty_key: string | null;
     carrier_pay_amount: string | null; carrier_pay_type: string | null;
     earned: string | null; client_pay_amount: string | null; carrier_obligation: string | null;
+    crm_due: string | null; deal_created_at: string | null;
   }>(INVOICE_FACTS_SQL, [clientKeys]);
   return r.rows.map((x) => classifyInvoice({
     clientKey: x.client_key, clientName: x.client_name, amount: Number(x.amount),
@@ -474,6 +503,7 @@ export async function loadInvoiceFacts(
     earned: x.earned == null ? null : Number(x.earned),
     clientPay: x.client_pay_amount == null ? null : Number(x.client_pay_amount),
     carrierObligation: x.carrier_obligation == null ? null : Number(x.carrier_obligation),
+    crmDue: x.crm_due ?? null, dealCreatedAt: x.deal_created_at ?? null,
   }, resolver));
 }
 

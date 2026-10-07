@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useToast, type Toast } from "../../../components/Toasts";
 import {
   fetchFinMonth, fetchFinItem, createFin, updateFin, deleteFin, restoreFin, setFinItemOff, saveFinValues, saveFinNote,
-  setFinApproval, finErrorData, hiringError,
-  type FinMonth, type FinItem, type FinGroup, type FinResp, type FinItemCard, type FinKind, type FinCell,
+  setFinApproval, finErrorData, hiringError, setFinItemSections, FIN_SECTIONS, fetchFinLog, type FinLogRow,
+  type FinMonth, type FinSection, type FinItem, type FinGroup, type FinResp, type FinItemCard, type FinKind, type FinCell,
 } from "../../../api";
+import { rowVisible, asInput, planFromPrevious } from "./financeView";
+import { FinanceWeekTab } from "./FinanceWeekTab";
 import "./hiring.css";
 import "./finance.css";
 
@@ -17,7 +20,6 @@ import "./finance.css";
  * Стилі — `hiring.css` (`.hr-*`) + `finance.css` (`.fin-*`).
  */
 type Tab = "pf" | "art" | "week" | "cash" | "overview";
-type Toast = (text: string, opts?: { error?: boolean; action?: { label: string; run: () => void } }) => void;
 
 const MONTHS = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
 const monthLabel = (m: string) => `${MONTHS[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`;
@@ -29,7 +31,6 @@ const addMonths = (m: string, n: number) => {
 const kyivMonthNow = () => `${new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" }).slice(0, 7)}-01`;
 const money = (v: number | null | undefined) => (v == null ? "—" : v.toLocaleString("uk-UA", { maximumFractionDigits: 2 }));
 const fmtTs = (ts: string) => new Date(ts).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
-const asInput = (v: number | null) => (v == null ? "" : String(v).replace(".", ","));
 
 const LS_TAB = "fin.tab";
 const lsGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
@@ -39,6 +40,52 @@ const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } ca
 type Field = { id: string; label: string; value?: string; type?: "text" | "select"; options?: [string, string][]; placeholder?: string };
 type DialogButton = { label: string; tone?: "p" | "dg"; run?: (v: Record<string, string>) => Promise<boolean | void> | boolean | void };
 interface DialogSpec { title: string; text?: string; fields?: Field[]; buttons: DialogButton[] }
+
+/**
+ * 📜 РЕЄСТР ЗМІН (зустріч TOP Weekly 05.10.2026, Сергій: «реєстр змін окремою кнопкою — там буде видно історія»).
+ * Хто, коли, що: цифри (було → стало), коментарі, погодження, зміни статей. Перемикач «цей місяць / усі».
+ */
+function LogModal({ month, onClose }: { month: string; onClose: () => void }) {
+  const [all, setAll] = useState(false);
+  const [rows, setRows] = useState<FinLogRow[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEscape(onClose);
+  useEffect(() => {
+    setRows(null); setErr(null);
+    fetchFinLog(all ? undefined : month.slice(0, 7)).then(setRows).catch((e) => setErr(hiringError(e)));
+  }, [all, month]);
+  return createPortal(
+    <div className="hr-modal-back" onClick={onClose}>
+      <div className="hr-modal" role="dialog" aria-label="Реєстр змін" style={{ maxWidth: 760, width: "calc(100vw - 32px)" }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+          <h3 style={{ margin: 0, fontSize: 16 }}>Реєстр змін</h3>
+          <span style={{ flex: 1 }} />
+          <label className="hr-muted" style={{ fontSize: 13 }}><input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> усі місяці (останні 500)</label>
+          <button className="hr-btn xs" onClick={onClose}>Закрити</button>
+        </div>
+        <p className="hr-muted" style={{ margin: "0 0 10px", fontSize: 12.5 }}>
+          {all ? "Усі зміни у «Фінансах», нові згори." : `Зміни про ${monthLabel(month).toLowerCase()}: цифри, коментарі, погодження, а також статті й групи, змінені цього місяця.`}
+        </p>
+        {err && <div className="hr-note" style={{ background: "var(--danger-bg)", color: "var(--danger)", marginTop: 0 }}>{err}</div>}
+        {!rows && !err && <p className="loading-text">Завантаження…</p>}
+        {rows && !rows.length && <p className="hr-muted">Змін ще не було.</p>}
+        {rows && rows.length > 0 && (
+          <div className="hr-tw" style={{ maxHeight: "60vh", overflow: "auto" }}>
+            <table className="hr-table fin-log">
+              <thead><tr><th>Коли</th><th>Хто</th><th>Що</th><th>Стаття</th></tr></thead>
+              <tbody>{rows.map((r, i) => (
+                <tr key={i}>
+                  <td style={{ whiteSpace: "nowrap" }}>{fmtTs(r.at)}</td>
+                  <td>{r.actor ?? <span className="hr-muted">система</span>}</td>
+                  <td>{r.kind === "month" ? <b>{r.what}</b> : r.what}</td>
+                  <td className="hr-muted">{r.target ?? ""}</td>
+                </tr>))}</tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>, document.body);
+}
 
 function Dialog({ spec, onClose }: { spec: DialogSpec; onClose: () => void }) {
   const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries((spec.fields ?? []).map((f) => [f.id, f.value ?? ""])));
@@ -148,10 +195,30 @@ function useStructureActions(data: FinMonth | null, reload: () => void, ask: (d:
               ...(it.offFrom == null ? [{ label: "Вимкнути", tone: "p" as const, run: async () => { const x = await setFinItemOff(it.id, true); reload(); toast(`Статтю вимкнено з ${monthLabel(x.offFrom!).toLowerCase()}`); } }] : [])] });
         }
       },
+      /** Розділ одній статті або всім у групі; «Повернути» — той самий виклик зі старими значеннями. */
+      setSections: async (list: { id: number; section: FinSection | null }[], text: string) => {
+        try {
+          const r = await setFinItemSections(list);
+          reload();
+          toast(text, { action: { label: "Повернути", run: () => { setFinItemSections(r.previous).then(() => { reload(); toast("Повернуто"); }).catch((e) => toast(hiringError(e), { error: true })); } } });
+        } catch (e) { toast(hiringError(e), { error: true }); }
+      },
     };
   }, [data, reload, ask, toast]);
 }
 type Actions = ReturnType<typeof useStructureActions>;
+const SECTION_KEYS = Object.keys(FIN_SECTIONS) as FinSection[];
+const sectionLabel = (v: FinSection | null) => (v ? FIN_SECTIONS[v] : "без розділу");
+/** Вибір розділу: лише чотири значення з сервера-дзеркала + «без розділу». */
+function SectionSelect({ value, label, onPick, placeholder }: { value: FinSection | null | ""; label: string; onPick: (v: FinSection | null) => void; placeholder?: string }) {
+  return (
+    <select className="hr-inp fin-sec" aria-label={label} value={value ?? ""} onChange={(e) => onPick((e.target.value || null) as FinSection | null)}>
+      {placeholder != null && <option value="" disabled hidden>{placeholder}</option>}
+      <option value="">— без розділу</option>
+      {SECTION_KEYS.map((k) => <option key={k} value={k}>{FIN_SECTIONS[k]}</option>)}
+    </select>
+  );
+}
 
 // ── Розділ ───────────────────────────────────────────────────────────────────
 export function FinanceSection() {
@@ -162,7 +229,6 @@ export function FinanceSection() {
   const [nonce, setNonce] = useState(0);
   const [dialog, setDialog] = useState<DialogSpec | null>(null);
   const [sel, setSel] = useState<number | null>(null);
-  const [toastState, setToastState] = useState<{ text: string; error?: boolean; action?: { label: string; run: () => void }; key: number } | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -171,11 +237,8 @@ export function FinanceSection() {
   }, [month, nonce]);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
-  const toast: Toast = useCallback((text, opts) => {
-    const key = Date.now();
-    setToastState({ text, ...opts, key });
-    window.setTimeout(() => setToastState((t) => (t && t.key === key ? null : t)), opts?.action ? 8000 : 4000);
-  }, []);
+  // 🔔 Спільне повідомлення дашборда (`components/Toasts.tsx`) — раніше тут жила своя копія.
+  const toast: Toast = useToast();
   const ask = useCallback((d: DialogSpec) => setDialog(d), []);
   const act = useStructureActions(data, reload, ask, toast);
   const pick = (t: Tab) => { setTab(t); lsSet(LS_TAB, t); };
@@ -183,7 +246,7 @@ export function FinanceSection() {
   if (err && !data) return <div className="chart-card"><b>Розділ «Фінанси» недоступний.</b> <span className="hr-muted">{err}</span></div>;
   if (!data) return <p className="loading-text">Завантаження…</p>;
 
-  const tabs: [Tab, string, boolean][] = [["pf", "План/факт витрат", false], ["art", "Статті", false], ["week", "Тиждень і місяць", true], ["cash", "Каса", true], ["overview", "Огляд", true]];
+  const tabs: [Tab, string, boolean][] = [["pf", "План/факт витрат", false], ["art", "Статті", false], ["week", "Тиждень і місяць", false], ["cash", "Каса", true], ["overview", "Огляд", true]];
   return (
     <div>
       <h1 className="page-title" style={{ marginBottom: 4 }}>Фінанси</h1>
@@ -200,11 +263,7 @@ export function FinanceSection() {
       </div>
       {tab === "pf" && <PlanFactTab data={data} month={month} setMonth={setMonth} act={act} reload={reload} toast={toast} ask={ask} sel={sel} setSel={setSel} />}
       {tab === "art" && <ArticlesTab data={data} act={act} />}
-      {tab === "week" && <PlannedCard title="Тиждень і місяць" will={[
-        "Тижневі й місячні показники з аркуша «ФМ»: надходження, витрати, поставлені авто, по даті вигрузки, операційні витрати, залишки.",
-        "Цифри з CRM підставляються самі; ручні — вносяться тут, з історією змін.",
-        "Показники можна додавати, перейменовувати й вимикати так само, як статті.",
-      ]} waits="Звірки CRM-цифр із таблицею на трьох тижнях: доки не зійдеться, CRM-рядки лишаються ручними, а наше число стоїть поруч." />}
+      {tab === "week" && <FinanceWeekTab ask={ask} toast={toast} />}
       {tab === "cash" && <PlannedCard title="Каса" will={[
         "Рух готівки по місцях зберігання (сейф) і валютах: прихід, видача, обмін — з коментарем.",
         "Залишок на дату рахується з руху, а не вноситься руками.",
@@ -216,11 +275,6 @@ export function FinanceSection() {
 
       {sel != null && <ItemDrawer id={sel} month={month} canEdit={data.canEdit} act={act} data={data} reloadKey={nonce} toast={toast} onChanged={reload} onClose={() => setSel(null)} />}
       {dialog && <Dialog spec={dialog} onClose={() => setDialog(null)} />}
-      {toastState && createPortal(
-        <div className={`hr-toast ${toastState.error ? "err" : ""}`} role="status">
-          <span>{toastState.text}</span>
-          {toastState.action && <button onClick={() => { toastState.action!.run(); setToastState(null); }}>{toastState.action.label}</button>}
-        </div>, document.body)}
     </div>
   );
 }
@@ -260,8 +314,11 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
   const [bad, setBad] = useState<Set<string>>(new Set());
   const [closed, setClosed] = useState<Record<number, boolean>>({});
   const [busy, setBusy] = useState(false);
+  const [logOpen, setLogOpen] = useState(false);
 
   const future = month > data.currentMonth;
+  /** 🔒 План погоджено — клітинки плану лише для читання для ВСІХ (сервер і БД однаково відмовлять). */
+  const planLocked = !!data.approval;
   const current = month === data.currentMonth;
   const shownData = data.month === month ? data : null;
   const changedKeys = Object.keys(draft);
@@ -275,6 +332,21 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
     if (v === orig(it, f)) delete next[k]; else next[k] = v;
     return next;
   });
+  // «Взяти план із попереднього місяця»: лише чернетки в порожні клітинки плану; записує звичайне «Зберегти».
+  const takePrevPlan = async () => {
+    const prev = addMonths(month, -1);
+    setBusy(true);
+    try {
+      const p = await fetchFinMonth(prev.slice(0, 7));
+      const prevPlan = new Map(p.tree.flatMap((r) => r.groups.flatMap((g) => g.items.map((i) => [i.id, i.plan] as [number, number | null]))));
+      const items = data.tree.flatMap((r) => r.groups.flatMap((g) => g.items));
+      const add = planFromPrevious(items, prevPlan, draft);
+      const n = Object.keys(add).length;
+      setDraft((d) => ({ ...d, ...add }));
+      toast(n ? `Підставлено план за ${monthLabel(prev).toLowerCase()}: статей ${n}. Перевірте й натисніть «Зберегти».`
+        : `Нічого підставляти: за ${monthLabel(prev).toLowerCase()} немає плану для порожніх статей`);
+    } catch (e) { toast(hiringError(e), { error: true }); } finally { setBusy(false); }
+  };
   const save = async () => {
     if (!changedKeys.length) { setEdit(false); return; }
     const cells: FinCell[] = changedKeys.map((k) => { const [id, f] = k.split(":"); return { itemId: Number(id), field: f as "plan" | "fact", value: draft[k] }; });
@@ -290,11 +362,10 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
       toast(hiringError(e), { error: true });
     } finally { setBusy(false); }
   };
-  const approve = (on: boolean) => ask({
-    title: on ? `Погодити план · ${monthLabel(month).toLowerCase()}` : "Зняти погодження плану?",
-    text: on ? `План ${money(data.totals.plan)} ₴ по ${data.totals.items} статтях. Після погодження план можна змінювати й далі — кожна зміна буде видна поруч із позначкою «погоджено».`
-      : "План знову стане чернеткою. Цифри не зміняться.",
-    buttons: [CANCEL, { label: on ? "Погодити" : "Зняти", tone: "p", run: async () => { await setFinApproval(month.slice(0, 7), on); reload(); toast(on ? "План погоджено" : "Погодження знято"); } }],
+  const approve = () => ask({
+    title: `Затвердити план · ${monthLabel(month).toLowerCase()}`,
+    text: `План ${money(data.totals.plan)} ₴ по ${data.totals.items} статтях. Після затвердження план цього місяця не зможе змінити НІХТО — ні ви, ні інші, і скасувати затвердження теж не можна. Факт і коментарі вноситимуться як і раніше.`,
+    buttons: [CANCEL, { label: "Затвердити назавжди", tone: "p", run: async () => { await setFinApproval(month.slice(0, 7)); reload(); toast("План затверджено — далі його не змінює ніхто"); } }],
   });
 
   if (!shownData) return <p className="loading-text">Завантаження…</p>;
@@ -302,16 +373,11 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
   const left = t.plan - t.fact;
   const im = data.imported;
   const imDiff = im && ((im.filePlan != null && Math.abs(im.filePlan - im.rowsPlan) >= 0.01) || (im.fileFact != null && Math.abs(im.fileFact - im.rowsFact) >= 0.01));
-  const visible = (it: FinItem) => {
-    if (!it.active) return false;
-    if (edit) return true;
-    if (onlyOver) return it.state === "over" || it.state === "noplan";
-    if (!showEmpty && it.state === "empty" && !future) return false;
-    return true;
-  };
+  const visible = (it: FinItem) => rowVisible(it, { month, currentMonth: data.currentMonth, edit, onlyOver, showEmpty });
   let shown = 0;
   return (
     <div className="hr-card">
+      {logOpen && <LogModal month={month} onClose={() => setLogOpen(false)} />}
       <div className="hd">
         <div className="hr-daynav" style={{ marginBottom: 0 }}>
           <button className="hr-btn xs" onClick={leave(() => setMonth(addMonths(month, -1)))} aria-label="Попередній місяць">‹</button>
@@ -327,10 +393,11 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {data.approval
-            ? <span className="hr-pill ok" title={fmtTs(data.approval.at)}>план погоджено{data.approval.by ? ` · ${data.approval.by}` : ""}</span>
+            ? <span className="hr-pill ok" title="Затверджений план не змінює ніхто; факт вноситься як і раніше">
+                🔒 план затверджено{data.approval.by ? ` · ${data.approval.by}` : ""} · {fmtTs(data.approval.at)}</span>
             : <span className="hr-pill wn">план — чернетка</span>}
-          {data.approval && data.approval.changedAfter > 0 && <span className="hr-pill dg">змін після погодження: {data.approval.changedAfter}</span>}
-          {data.canApprove && <button className="hr-btn xs" onClick={() => approve(!data.approval)}>{data.approval ? "Зняти погодження" : "Погодити план"}</button>}
+          {data.canApprove && <button className="hr-btn xs" onClick={() => approve()}>Затвердити план</button>}
+          <button className="hr-btn xs" onClick={() => setLogOpen(true)}>📜 Реєстр змін</button>
           {data.canEdit && !edit && <button className="hr-btn p" onClick={() => setEdit(true)}>Вносити план і факт</button>}
         </div>
       </div>
@@ -356,6 +423,10 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
           <b>Внесення · {monthLabel(month).toLowerCase()}</b>
           <span>Змінені клітинки підсвічуються. Порожня клітинка — «не внесено», не нуль.{future ? " Факт майбутнього місяця внести не можна." : ""}</span>
           <span style={{ flex: 1 }} />
+          {planLocked
+            ? <span className="hr-pill ok">🔒 план затверджено — вноситься лише факт</span>
+            : <button className="hr-btn" disabled={busy} onClick={() => void takePrevPlan()}
+                title={`Підставить у порожні клітинки плану суми за ${monthLabel(addMonths(month, -1)).toLowerCase()}. Записується лише після «Зберегти».`}>Взяти план попереднього місяця</button>}
           <span>змін: {changedKeys.length}</span>
           <button className="hr-btn" disabled={busy} onClick={leave(() => undefined)}>Скасувати</button>
           <button className="hr-btn p" disabled={busy} onClick={() => void save()}>Зберегти</button>
@@ -379,6 +450,7 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
                         const cell = (f: "plan" | "fact") => {
                           const k = `${it.id}:${f}`;
                           if (f === "fact" && future) return <span className="hr-muted">—</span>;
+                          if (f === "plan" && planLocked) return <span title="План затверджено — змінити не може ніхто">🔒 {money(it.plan)}</span>;
                           return <input className={`fin-cell ${draft[k] !== undefined ? "ch" : ""} ${bad.has(k) ? "bad" : ""}`} inputMode="decimal"
                             aria-label={`${f === "plan" ? "План" : "Факт"}: ${it.name}`} value={draft[k] ?? orig(it, f)}
                             onClick={(e) => e.stopPropagation()} onChange={(e) => onCell(it, f, e.target.value)} />;
@@ -515,8 +587,14 @@ function ArticlesTab({ data, act }: { data: FinMonth; act: Actions }) {
   const [showOff, setShowOff] = useState(false);
   const ql = q.trim().toLowerCase();
   let n = 0;
+  // Друге число до предиката: діючі статті без розділу і їхній факт цього місяця — у «Тиждень і місяць» вони не йдуть.
+  const loose = data.tree.flatMap((r) => r.groups.flatMap((g) => g.items)).filter((i) => i.active && i.section == null);
+  const looseFact = loose.reduce((a, i) => a + (i.fact ?? 0), 0);
   return (
     <div className="hr-card">
+      {loose.length > 0 && <div className="hr-note" style={{ margin: "0 0 10px" }}>
+        Без розділу: <b>{loose.length}</b> {loose.length === 1 ? "стаття" : "статей"}{looseFact ? <> · факт за {monthShort(data.month)} <b>{money(looseFact)}</b></> : null} — у «Тиждень і місяць» вони не потрапляють. Розділ ставиться в колонці «Розділ» або одразу всій групі.
+      </div>}
       <div className="hd">
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
           <label className="hr-muted">Пошук статті<br />
@@ -528,7 +606,7 @@ function ArticlesTab({ data, act }: { data: FinMonth; act: Actions }) {
       </div>
       <div className="hr-tw">
         <table className="hr-table fin-table">
-          <thead><tr><th>Назва</th><th className="num">План · {monthShort(data.month)}</th><th className="num">Факт · {monthShort(data.month)}</th><th>Стан</th><th className="num">{data.canEdit ? "Дії" : ""}</th></tr></thead>
+          <thead><tr><th>Назва</th><th>Розділ</th><th className="num">План · {monthShort(data.month)}</th><th className="num">Факт · {monthShort(data.month)}</th><th>Стан</th><th className="num">{data.canEdit ? "Дії" : ""}</th></tr></thead>
           <tbody>
             {data.tree.map((r) => (
               <ArticleResp key={r.id} r={r} canEdit={data.canEdit} act={act}>
@@ -540,6 +618,9 @@ function ArticlesTab({ data, act }: { data: FinMonth; act: Actions }) {
                     {its.map((i) => (
                       <tr key={i.id} className={i.offFrom ? "off" : ""}>
                         <td className="ind2">{i.name}</td>
+                        <td>{data.canEdit
+                          ? <SectionSelect value={i.section} label={`Розділ: ${i.name}`} onPick={(v) => void act.setSections([{ id: i.id, section: v }], `«${i.name}» → ${sectionLabel(v)}`)} />
+                          : <span className={i.section ? "" : "hr-muted"}>{sectionLabel(i.section)}</span>}</td>
                         <td className="num">{money(i.plan)}</td>
                         <td className="num">{money(i.fact)}</td>
                         <td>{i.offFrom ? <span className="hr-pill gr">вимкнено з {monthShort(i.offFrom)} {i.offFrom.slice(0, 4)}</span> : <span className="hr-pill ok">діє</span>}</td>
@@ -555,13 +636,14 @@ function ArticlesTab({ data, act }: { data: FinMonth; act: Actions }) {
                 })}
               </ArticleResp>
             ))}
-            {!n && ql && <tr><td colSpan={5} className="hr-muted" style={{ padding: 16 }}>Нічого не знайдено.</td></tr>}
-            {!data.tree.length && <tr><td colSpan={5} className="hr-muted" style={{ padding: 16 }}>Статей ще немає. Почніть із «+ Відповідальний».</td></tr>}
+            {!n && ql && <tr><td colSpan={6} className="hr-muted" style={{ padding: 16 }}>Нічого не знайдено.</td></tr>}
+            {!data.tree.length && <tr><td colSpan={6} className="hr-muted" style={{ padding: 16 }}>Статей ще немає. Почніть із «+ Відповідальний».</td></tr>}
           </tbody>
         </table>
       </div>
       <div className="hr-sect hr-muted" style={{ fontSize: 12.5 }}>
         Вимкнена стаття зникає з місяців після своєї останньої цифри — минулі підсумки не змінюються. Видалення можна скасувати кнопкою «Повернути».
+        Розділ статті визначає, у який рядок «Операційних витрат» піде її факт у «Тиждень і місяць» (місяць, з жовтня 2026).
       </div>
     </div>
   );
@@ -570,7 +652,7 @@ function ArticlesTab({ data, act }: { data: FinMonth; act: Actions }) {
 function ArticleResp({ r, canEdit, act, children }: { r: FinResp; canEdit: boolean; act: Actions; children: ReactNode }) {
   return (<>
     <tr className="resp" style={{ cursor: "default" }}>
-      <td colSpan={4}>{r.name} <span className="hr-muted" style={{ fontWeight: 400 }}>· груп: {r.groups.length}</span></td>
+      <td colSpan={5}>{r.name} <span className="hr-muted" style={{ fontWeight: 400 }}>· груп: {r.groups.length}</span></td>
       <td className="num">{canEdit && <span className="acts">
         <button className="hr-btn xs" onClick={() => act.addGroup(r)}>+ група</button>
         <button className="hr-btn xs" onClick={() => act.renameResp(r)} aria-label={`Перейменувати ${r.name}`}>✎</button>
@@ -583,7 +665,10 @@ function ArticleResp({ r, canEdit, act, children }: { r: FinResp; canEdit: boole
 function ArticleGroup({ g, r, canEdit, act, month, children }: { g: FinGroup; r: FinResp; canEdit: boolean; act: Actions; month: string; children: ReactNode }) {
   return (<>
     <tr>
-      <td className="ind1" colSpan={4}><b>{g.name}</b> <span className="hr-muted">· статей: {g.items.length}</span></td>
+      <td className="ind1"><b>{g.name}</b> <span className="hr-muted">· статей: {g.items.length}</span></td>
+      <td>{canEdit && g.items.length > 0 && <SectionSelect value="" placeholder="всім у групі…" label={`Розділ усім статтям групи ${g.name}`}
+        onPick={(v) => void act.setSections(g.items.map((i) => ({ id: i.id, section: v })), `Група «${g.name}»: усім статтям → ${sectionLabel(v)}`)} />}</td>
+      <td colSpan={3} />
       <td className="num">{canEdit && <span className="acts">
         <button className="hr-btn xs" onClick={() => act.addItem(g, month)}>+ стаття</button>
         <button className="hr-btn xs" onClick={() => act.renameGroup(g)} aria-label={`Перейменувати ${g.name}`}>✎</button>

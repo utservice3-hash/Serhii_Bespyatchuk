@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { Logo } from "./Logo";
 import { NavIcon } from "./NavIcon";
 import { CommandPalette } from "./CommandPalette";
-import { heartbeat, trackerSsoUrl } from "../api";
+import { heartbeat, trackerSsoUrl, surveysBadge, type SurveysBadge } from "../api";
 import { usePolling } from "../hooks/usePolling";
 // NAV_GROUPS drives the grouped sidebar; NAV_ITEMS (flattened) is used elsewhere.
 
@@ -28,12 +28,9 @@ export const NAV_GROUPS = [
       // імен, але те саме слово на сусідньому екрані. Без поля `roles`: видимість
       // вирішує `screen_access` із токена (сид — schema.sql, 7 ролей, HR закритий).
       { key: "missed-calls", label: "Пропущені дзвінки", icon: "📵" },
-      // 📣 «Реклама» — НЕ пункт меню, а КЛЮЧ ДОЗВОЛУ (нижче в HIDDEN_NAV).
-      // Рішення власника 08.09.2026: блок живе ВКЛАДКОЮ всередині «Статистик»,
-      // після HR. Але запис тут лишається навмисно: з NAV_GROUPS будується список
-      // тумблерів у Налаштуваннях (SettingsSection.SCREEN_TABS), тож без нього
-      // «хто бачить Рекламу» не можна було б змінити інакше як комітом — рівно
-      // борг 18. Видимість вкладки і межа роута стоять на цьому ж ключі `ads`.
+      // 📣 «Реклама» — ОКРЕМИЙ ПУНКТ МЕНЮ з 02.10.2026 (ТЗ «Статистики» 28.09, блок 4, п.6: «календар — інша
+      // логіка, хай живе окремо»). До того (рішення 08.09) вона була вкладкою всередині «Статистик». Видимість
+      // і межа роута — той самий ключ `ads` у screen_access; список тумблерів Налаштувань будується звідси.
       { key: "ads", label: "Реклама", icon: "📣" },
       { key: "teams", label: "Команди", icon: "👥", roles: ["admin", "team_lead"] },
       { key: "managers", label: "Менеджери", icon: "🧑‍💼", roles: ["admin", "team_lead"] },
@@ -78,6 +75,12 @@ export const NAV_GROUPS = [
       // 🧑‍💼 Найм (17.09.2026): графік співбесід, кандидати, щоденний звіт. Видимість — `screen_access`
       // (сид у schema.sql: admin, ceo, opdir, kvp, hr, team_lead); що саме видно всередині, вирішує сервер.
       { key: "hiring", label: "Найм", icon: "🧑‍💼" },
+      // 📄 Конструктор документів (30.09.2026, пакет Сергія). Без поля `roles`: видимість — `screen_access`
+      // (сид у schema.sql: усі, хто формує заявки, + фінансист); пул усіх заявок — окреме право.
+      { key: "constructor", label: "Конструктор документів", icon: "📄" },
+      // 📋 Опитування команди (30.09.2026, пакет Сергія). Вкладка є в усіх, крім кандидата, але ПУНКТ показується
+      // лише тому, хто керує опитуваннями (`manage_surveys`) або кому хоч одне адресоване — `surveysBadge` нижче.
+      { key: "surveys", label: "Опитування", icon: "📋" },
       { key: "documents", label: "Регламенти та документи", icon: "📁" },
       { key: "training", label: "Навчання", icon: "📚" },
     ],
@@ -112,8 +115,6 @@ export type NavKey = (typeof NAV_GROUPS)[number]["items"][number]["key"];
 // NavKey і блоки рендера) — ховаємо тут, при вибірці.
 export const HIDDEN_NAV: ReadonlySet<string> = new Set<string>([
   "overview", "manager-report", "depstats", "teams", "managers", "reports",
-  // 📣 «Реклама» — вкладка всередині «Статистик», а не окремий пункт меню.
-  "ads",
   // 💬 Месенджер приховано для ВСІХ ролей (рішення Романа 28.09.2026: «прибери зараз для всіх ролей
   // вкладку месенджер»). Тут, а не в ролях: вбудовані ролі через Налаштування не редагуються.
   // Повернути = прибрати цей рядок. Дані й роути месенджера не чіпали.
@@ -194,7 +195,14 @@ export function Layout({
   newsUnread?: number;
 }) {
   const navigate = useNavigate();
-  const navGroups = withTracker(navGroupsForRole(role, screens), trackerEnabled);
+  // 📋 Опитування: пункт меню — лише тим, хто керує або кому є що відповідати; число — ще не відповіли.
+  const [surveys, setSurveys] = useState<SurveysBadge | null>(null);
+  const surveysOn = !screens || screens.includes("surveys");
+  usePolling(() => { surveysBadge().then(setSurveys).catch(() => undefined); }, 300000, { immediate: true, enabled: surveysOn });
+  const showSurveys = !!surveys && (surveys.canManage || surveys.assigned > 0);
+  const navGroups = withTracker(navGroupsForRole(role, screens), trackerEnabled)
+    .map((g) => ({ ...g, items: g.items.filter((it) => it.key !== "surveys" || showSurveys) }))
+    .filter((g) => g.items.length > 0);
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem("sidebarCollapsed") === "1"
   );
@@ -306,13 +314,14 @@ export function Layout({
                 // 🔔 ТОЙ САМИЙ механізм значка, що в месенджера, а не другий поруч:
                 // два різні способи показати «є нове» розійшлись би у вигляді й поведінці.
                 const badge = item.key === "messenger" ? messengerUnread
-                            : item.key === "news" ? newsUnread : 0;
+                            : item.key === "news" ? newsUnread
+                            : item.key === "surveys" ? (surveys?.fresh ?? 0) : 0;
                 return (
                 <button
                   key={item.key}
                   className={`sidebar-nav-item ${item.key === active ? "active" : ""}`}
                   onClick={() => onSelect(item.key as NavKey)}
-                  title={badge ? `${item.label} — ${badge} непрочитаних` : item.label}
+                  title={badge ? `${item.label} — ${badge} ${item.key === "surveys" ? "чекають відповіді" : "непрочитаних"}` : item.label}
                   style={{ position: "relative" }}
                 >
                   <span className="sidebar-nav-icon"><NavIcon k={item.key} /></span>

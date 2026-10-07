@@ -5,10 +5,10 @@ import { pool } from "../db/pool.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import type { AuthPayload } from "../auth/auth.js";
 import * as money from "../core/money.js";
-import { maySubmit, mayEverSubmit, submitRefusal } from "../core/planScope.js";
+import { maySubmit, mayEverSubmit, submitRefusal, commercialPlanRefusal } from "../core/planScope.js";
 import { getSettings } from "./settings.js";
 import * as metrics from "../core/metrics.js";
-import { planRecommendation, baseMonthsFor } from "../core/plans.js";
+import { planRecommendation, baseMonthsFor, formationRoster } from "../core/plans.js";
 import { monthEndOf } from "../core/dates.js";
 
 export const plansRouter = Router();
@@ -36,6 +36,11 @@ plansRouter.post("/", requireRole("admin"), async (req, res) => {
     return res.status(400).json({ error: parsed.error.flatten() });
   }
   const { managerId, planDate, metric, plannedValue } = parsed.data;
+  // 🏢 План продажів — лише комерційним командам (рішення власника 02.10.2026, `commercialPlanRefusal`).
+  const team = (await pool.query<{ team_id: number | null }>(`SELECT team_id FROM managers WHERE id = $1`, [managerId])).rows[0];
+  if (!team) return res.status(404).json({ error: "Менеджера не знайдено" });
+  const notCommercial = commercialPlanRefusal(team.team_id, metrics.NON_COMMERCIAL_TEAM_IDS);
+  if (notCommercial) return res.status(400).json({ error: notCommercial });
 
   await pool.query(
     `INSERT INTO plans (manager_id, plan_date, metric, planned_value)
@@ -86,13 +91,11 @@ plansRouter.get("/formation", async (req, res) => {
   const scopeM: money.MoneyScope = { teamId };
   const scopeMetric: metrics.MetricScope = { teamId };
 
-  // Ростер активних менеджерів у скоупі, згруповано по команді.
-  const roster = (await pool.query<{ id: number; name: string; team_id: number | null; team_name: string | null }>(
-    `SELECT m.id, m.name, m.team_id, t.name AS team_name
-       FROM managers m LEFT JOIN teams t ON t.id = m.team_id
-      WHERE m.is_active ${teamId ? "AND m.team_id = $1" : "AND m.team_id IS NOT NULL"}
-      ORDER BY t.name NULLS LAST, m.name`, teamId ? [teamId] : []
-  )).rows;
+  // Ростер — ті, КОМУ СТАВИМО ПЛАН (`hasPlanSql`, те саме правило, що `core/plans.ts`): «звільнений» і
+  // «завершує» плану не мають. Раніше тут був лише `m.is_active` з Kommo — і звільнений у дашборді
+  // Шевчук Назар (02.10.2026) лишався у формуванні плану, бо в CRM його ще не деактивували. Тримає `#1350`.
+  // І лише КОМЕРЦІЙНІ команди (рішення власника 02.10.2026, `#1255`/`#1256`): лідогенерації й фінансам план продажів не ставиться.
+  const roster = await formationRoster(pool, teamId ?? null, metrics.commercialManagerSql("m"));
 
   // 🔴 ДОВІДКОВО: Σ ЗАТВЕРДЖЕНИХ планів по клієнтах за TARGET-місяць.
   // Рішення власника 03.08.2026: ручне поле «постійні принесуть» ЛИШАЄТЬСЯ, а ця
@@ -260,6 +263,9 @@ plansRouter.post("/formation/submit", async (req, res) => {
     { managerId, teamId: tgt.rows[0].team_id },
   );
   if (refusal) return res.status(403).json({ error: refusal });
+  // 🏢 План продажів — лише комерційним командам (рішення власника 02.10.2026).
+  const notCommercial = commercialPlanRefusal(tgt.rows[0].team_id, metrics.NON_COMMERCIAL_TEAM_IDS);
+  if (notCommercial) return res.status(400).json({ error: notCommercial });
   /**
    * 🔓 МЕЖА БІЛЬШЕ НЕ ЗАБОРОНЯЄ ПОДАННЯ (рішення власника 02.09.2026, дослівно:
    * «логіка така що план не може бути менший 30 тисяч, хочу зняти це обмеження»).
@@ -330,6 +336,7 @@ plansRouter.post("/formation/approve", requireRole("admin"), async (req, res) =>
       `SELECT pf.manager_id, pf.proposed_value
          FROM plan_formation pf JOIN managers m ON m.id = pf.manager_id
         WHERE pf.month = $1 AND pf.metric = 'payment_amount' AND pf.status = 'submitted' ${scopeSql}
+          AND ${metrics.commercialManagerSql("m")}   -- 🏢 некомерційним план продажів не затверджується (02.10.2026)
         FOR UPDATE OF pf`, sel)).rows;
     for (const r of rows) {
       // Сакральний `plans` — ЛИШЕ дозволений metric='payment_amount' (не тиражуємо repeat-баг).

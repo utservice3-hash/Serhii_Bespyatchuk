@@ -14,9 +14,15 @@ const shift = (ym: string, k: number) => {
   const t = Number(ym.slice(0, 4)) * 12 + Number(ym.slice(5, 7)) - 1 + k;
   return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`;
 };
-const METRICS: { k: LgPlanMetric; label: string }[] = [
+/** Пункти плану. Дзвінки й гроші — НЕОБОВʼЯЗКОВІ (рішення власника 01.10.2026): порожнє поле = «не плануємо». */
+const METRICS: { k: LgPlanMetric; label: string; optional?: boolean }[] = [
   { k: "leads", label: "Ліди" }, { k: "opr", label: "ОПР" }, { k: "quotes", label: "Прорахунки" },
+  { k: "calls", label: "Дзвінки", optional: true }, { k: "money", label: "Гроші ₴", optional: true },
 ];
+const fmtV = (k: LgPlanMetric, v: number) => k === "money" ? `${v.toLocaleString("uk-UA")} ₴` : v.toLocaleString("uk-UA");
+/** «діє: …» — лише заповнені пункти затвердженого плану. */
+const liveLine = (a: LgPlanMember["approved"]) =>
+  METRICS.filter(({ k }) => a[k] != null).map(({ k, label }) => `${label.replace(" ₴", "").toLowerCase()} ${fmtV(k, a[k] as number)}`).join(" · ");
 
 /**
  * 📋 ФОРМУВАННЯ ПЛАНУ ЛІДГЕНІВ — ДЗЕРКАЛО «Формування плану» продажів (рішення власника 25.09.2026).
@@ -39,7 +45,12 @@ export function LeadgenPlanFormation({ initialMonth }: { initialMonth: string })
   useEffect(() => {
     if (!open) return;
     let alive = true; setErr(null);
-    fetchLeadgenPlans(month).then((d) => alive && setData(d)).catch(() => alive && setErr("Не вдалося завантажити плани лідгенів."));
+    fetchLeadgenPlans(month).then((d) => alive && setData(d)).catch((e) => {
+      if (!alive) return;
+      // 403 — це відмова з поясненням сервера (менеджер не з команди), а не збій: показуємо її текст.
+      const r = (e as { response?: { status?: number; data?: { error?: unknown } } }).response;
+      setErr(r?.status === 403 && typeof r.data?.error === "string" ? r.data.error : "Не вдалося завантажити плани лідгенів.");
+    });
     return () => { alive = false; };
   }, [month, reload, open]);
   const refresh = () => setReload((x) => x + 1);
@@ -94,16 +105,20 @@ export function LeadgenPlanFormation({ initialMonth }: { initialMonth: string })
 function MemberCard({ m, month, canApprove, onChanged }: { m: LgPlanMember; month: string; canApprove: boolean; onChanged: () => void }) {
   const st = ST[m.status];
   const start = (k: LgPlanMetric) => { const v = m.proposed[k] ?? m.approved[k]; return v == null ? "" : String(v); };
-  const [vals, setVals] = useState<Record<LgPlanMetric, string>>({ leads: start("leads"), opr: start("opr"), quotes: start("quotes") });
-  useEffect(() => { setVals({ leads: start("leads"), opr: start("opr"), quotes: start("quotes") }); // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [m.proposed.leads, m.proposed.opr, m.proposed.quotes, m.approved.leads, m.approved.opr, m.approved.quotes]);
+  const initial = () => Object.fromEntries(METRICS.map(({ k }) => [k, start(k)])) as Record<LgPlanMetric, string>;
+  const [vals, setVals] = useState<Record<LgPlanMetric, string>>(initial);
+  const depKey = METRICS.map(({ k }) => `${m.proposed[k]}/${m.approved[k]}`).join(",");
+  useEffect(() => { setVals(initial()); // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [depKey]);
   const [comment, setComment] = useState("");
   const [returning, setReturning] = useState(false);
   const [retComment, setRetComment] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const num = (k: LgPlanMetric) => Number(vals[k]);
-  const filled = METRICS.every(({ k }) => vals[k].trim() !== "" && Number.isInteger(num(k)) && num(k) >= 0);
+  /** Значення до відправки: порожній необовʼязковий пункт — `null` («не плануємо»). */
+  const val = (k: LgPlanMetric): number | null => vals[k].trim() === "" ? null : num(k);
+  const filled = METRICS.every(({ k, optional }) => (optional && vals[k].trim() === "") || (vals[k].trim() !== "" && Number.isInteger(num(k)) && num(k) >= 0));
   /** Помилка сервера — видимим рядком (урок боргу 15 продажів: німа кнопка читається як поломка). */
   const guard = async (fn: () => Promise<void>) => {
     setBusy(true); setErr(null);
@@ -113,9 +128,10 @@ function MemberCard({ m, month, canApprove, onChanged }: { m: LgPlanMember; mont
       setErr(typeof raw === "string" ? raw : r?.status ? `Сервер відмовив (код ${r.status}).` : "Не вдалося звʼязатися з сервером.");
     } finally { setBusy(false); }
   };
-  const body = () => ({ managerId: m.managerId, month, leads: num("leads"), opr: num("opr"), quotes: num("quotes"), comment: comment || m.comment || undefined });
+  const body = () => ({ managerId: m.managerId, month, leads: num("leads"), opr: num("opr"), quotes: num("quotes"),
+    calls: val("calls"), money: val("money"), comment: comment || m.comment || undefined });
   const doSubmit = () => guard(async () => { await submitLeadgenPlan(body()); });
-  const same = METRICS.every(({ k }) => m.proposed[k] === num(k));
+  const same = METRICS.every(({ k }) => m.proposed[k] === val(k));
   const doApprove = () => guard(async () => {
     if (m.status !== "submitted" || !same) await submitLeadgenPlan(body());
     await approveLeadgenPlan({ managerId: m.managerId, month });
@@ -123,7 +139,7 @@ function MemberCard({ m, month, canApprove, onChanged }: { m: LgPlanMember; mont
   const doReturn = () => guard(async () => { await returnLeadgenPlan(m.managerId, month, retComment || undefined); setReturning(false); });
 
   const btn = (label: string, color: string, onClick: () => void, solid = true, off = false) => (
-    <button onClick={onClick} disabled={busy || off} title={off ? "Заповніть усі три числа (цілі, від 0)" : undefined}
+    <button onClick={onClick} disabled={busy || off} title={off ? "Заповніть ліди, ОПР і прорахунки (цілі, від 0); дзвінки й гроші — за бажанням" : undefined}
       style={{ padding: "8px 13px", borderRadius: 9, border: solid ? "none" : `1px solid ${color}`, cursor: off ? "not-allowed" : "pointer",
         background: off ? "var(--bg)" : solid ? color : "transparent", color: off ? MUTED : solid ? "#fff" : color, fontWeight: 700, fontSize: 13 }}>
       {busy ? "…" : label}
@@ -141,7 +157,7 @@ function MemberCard({ m, month, canApprove, onChanged }: { m: LgPlanMember; mont
           <span>{st.icon}</span>{st.label}
         </span>
         {m.approved.quotes != null && (
-          <span style={{ fontSize: 12, color: GREEN }}>діє: ліди {m.approved.leads} · ОПР {m.approved.opr} · прорахунки {m.approved.quotes}</span>
+          <span style={{ fontSize: 12, color: GREEN }}>діє: {liveLine(m.approved)}</span>
         )}
       </div>
       <div style={{ overflowX: "auto" }}>
@@ -154,16 +170,18 @@ function MemberCard({ m, month, canApprove, onChanged }: { m: LgPlanMember; mont
             </tr>
           </thead>
           <tbody>
-            {METRICS.map(({ k, label }) => (
+            {METRICS.map(({ k, label, optional }) => (
               <tr key={k} style={{ borderTop: "1px solid var(--border)" }}>
-                <td style={{ ...cell, textAlign: "left", fontWeight: 600 }}>{label}</td>
-                {m.history.map((h) => <td key={h.month} style={{ ...cell, color: MUTED }}>{h[k].toLocaleString("uk-UA")}</td>)}
+                <td style={{ ...cell, textAlign: "left", fontWeight: 600 }}>{label}{optional && <span style={{ fontWeight: 400, color: MUTED, fontSize: 11 }}> · необовʼязково</span>}</td>
+                {/* Факт минулих місяців — для грошей не показуємо: їх рахує інше правило (дата успіху), тут лише лічильники. */}
+                {m.history.map((h) => <td key={h.month} style={{ ...cell, color: MUTED }}>{k === "money" ? "—" : h[k].toLocaleString("uk-UA")}</td>)}
                 <td style={cell}>
                   {editable ? (
                     <input value={vals[k]} inputMode="numeric" onChange={(e) => setVals((v) => ({ ...v, [k]: e.target.value.replace(/[^\d]/g, "") }))}
                       aria-label={`${label}: план на ${title(month)}`}
-                      style={{ width: 80, padding: "5px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontWeight: 700, textAlign: "right" }} />
-                  ) : <b>{m.proposed[k] ?? m.approved[k] ?? "—"}</b>}
+                      placeholder={optional ? "—" : undefined}
+                      style={{ width: k === "money" ? 110 : 80, padding: "5px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontWeight: 700, textAlign: "right" }} />
+                  ) : <b>{(() => { const v = m.proposed[k] ?? m.approved[k]; return v == null ? "—" : fmtV(k, v); })()}</b>}
                 </td>
               </tr>
             ))}

@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchLeadgenStats, fetchLeadgenTrend, type LeadgenStatsResp, type LeadgenTrendResp, type LeadgenGrain, type LeadgenPersonRow as PersonRow, type LeadgenHandoffMoney,
   type LeadgenTeamPlan, type LeadgenPersonPlan, type LeadgenPlanExec } from "../../../api";
-import { formatAmount } from "../format";
+import { formatAmountFull } from "../format";
 import { InfoHint } from "../widgets";
 import { PeriodNav, navBtn } from "../PeriodNav";
 import {
   periodOf, periodLabelOf, navBy, monthStart, monthEnd, addMonth, todayKyiv, mondayOf, addDays, dow, spanDays, type PeriodState,
 } from "../periodRules";
-import {
+import { ExtraPlanLines, PaceLines,
   LeadgenPersonRow, pct1, bucketLabel, convStatus, StatusRing, unitsOf, fillBuckets, BucketNote, dateLbl,
   PlanRing, planLevelColor, factOfPlan, fmtPlan,
 } from "./LeadgenPersonRow";
@@ -160,6 +160,8 @@ export function LeadgenSection() {
   const [d, setD] = useState<LeadgenStatsResp | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(false);
+  /** Відмова сервера (403) — текстом сервера: це НЕ збій зʼєднання, і «спробувати знову» тут не допоможе. */
+  const [denied, setDenied] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   const [cmpData, setCmpData] = useState<{ cur: LeadgenStatsResp; prev: LeadgenStatsResp } | null>(null);
   const [cmpErr, setCmpErr] = useState(false);
@@ -174,15 +176,20 @@ export function LeadgenSection() {
   useEffect(() => {
     let cancelled = false;
     if (future) { setLoading(false); setErr(false); return; }
-    setLoading(true); setErr(false);
+    setLoading(true); setErr(false); setDenied(null);
     (async () => {
       for (let i = 0; i < 3; i++) {
         try {
           const r = await fetchLeadgenStats(grain ? { from, to, grain } : { from, to });
           if (!cancelled) { setD(r); setLoading(false); }
           return;
-        } catch {
+        } catch (e) {
           if (cancelled) return;
+          const r = (e as { response?: { status?: number; data?: { error?: unknown } } }).response;
+          if (r?.status === 403) {
+            setDenied(typeof r.data?.error === "string" ? r.data.error : "Немає доступу до цього розділу.");
+            setLoading(false); return;
+          }
           if (i < 2) await new Promise((res) => setTimeout(res, 400 * 2 ** i));
         }
       }
@@ -237,6 +244,8 @@ export function LeadgenSection() {
 
   /** Усі люди відповіді: рядки команди + «Інші». Пошук людини — тут, щоб вибір «іншого» не читався як «без дій». */
   const everyone = useMemo(() => (d ? [...d.rows, ...(d.others ?? [])] : []), [d]);
+  /** Відповідь лідгену (рішення власника 02.10.2026): лише свій рядок + підсумки команди. */
+  const own = d?.viewer === "own";
   const pickWho = (v: string) => {
     if (v === "all") { setWho("all"); return; }
     const id = Number(v);
@@ -262,13 +271,13 @@ export function LeadgenSection() {
         </div>
         {d && (
           <div style={{ fontSize: 12, color: MUTED, background: "var(--card-bg)", border: "1px solid var(--border)", padding: "4px 11px", borderRadius: 20 }}>
-            Ти бачиш: <b style={{ color: "var(--text)" }}>{d.scopedTo != null ? "свою команду" : "весь відділ"}</b>
+            Ти бачиш: <b style={{ color: "var(--text)" }}>{own ? "свої цифри й підсумок команди" : d.scopedTo != null ? "свою команду" : "весь відділ"}</b>
           </div>
         )}
       </div>
 
       <PeriodNav state={nav} onPatch={patchNav} today={today}>
-        <select value={who} onChange={(e) => pickWho(e.target.value)} style={{ ...navBtn, cursor: "pointer" }} aria-label="Лідген">
+        {!own && <select value={who} onChange={(e) => pickWho(e.target.value)} style={{ ...navBtn, cursor: "pointer" }} aria-label="Лідген">
           <option value="all">Усі лідгени{d ? ` (${d.rows.length}${others.length ? ` + ${others.length} не з команди` : ""})` : ""}</option>
           <optgroup label="Команда «Лідогенерація»">
             {(d?.rows ?? []).map((r) => <option key={r.managerId} value={r.managerId}>{r.name}</option>)}
@@ -279,7 +288,7 @@ export function LeadgenSection() {
             </optgroup>
           )}
           {whoAbsent && <option value={who}>{whoName} — без дій у періоді</option>}
-        </select>
+        </select>}
       </PeriodNav>
 
       {/* Смуга одиниць обраного режиму — розмітка дня-strip зі Звіту, одиниці — від режиму */}
@@ -314,6 +323,12 @@ export function LeadgenSection() {
         </div>
       )}
 
+      {denied && (
+        <div style={{ textAlign: "center", padding: 28, color: MUTED }}>
+          <div style={{ fontSize: 30, marginBottom: 6 }}>🔒</div>
+          <div>{denied}</div>
+        </div>
+      )}
       {err && (
         <div style={{ textAlign: "center", padding: 28, color: MUTED }}>
           <div style={{ fontSize: 30, marginBottom: 6 }}>⚠️</div>
@@ -325,8 +340,8 @@ export function LeadgenSection() {
         </div>
       )}
       {future && <div style={{ padding: 20, color: MUTED }}>Період {periodLabel} ще не настав — дій у CRM за нього немає.</div>}
-      {!future && !d && !err && <div style={{ padding: 20, color: MUTED }}>Завантаження…</div>}
-      {!future && d && !err && (
+      {!future && !d && !err && !denied && <div style={{ padding: 20, color: MUTED }}>Завантаження…</div>}
+      {!future && d && !err && !denied && (
         <div style={{ opacity: loading ? 0.55 : 1, transition: "opacity .15s" }}>
           <Glance d={d} cmp={cmp} cmpData={cmpData} cmpErr={cmpErr} who={who} whoName={whoName} whoAbsent={whoAbsent}
             periodLabel={periodLabel} statusful={statusful} />
@@ -337,8 +352,9 @@ export function LeadgenSection() {
           <h3 style={{ margin: "4px 0 10px" }}>👥 Лідгени · {periodLabel} <span style={{ fontSize: 12, fontWeight: 400, color: MUTED }}>· гроші — з лідів, переданих у періоді, стан угод — зараз</span></h3>
           <People d={d} who={who} whoName={whoName} whoAbsent={whoAbsent} grain={grain} period={period} today={today}
             statusful={statusful} open={open} onToggle={toggle} />
-          <Others d={d} who={who} />
-          <Details d={d} grain={grain} period={period} today={today} open={detailsOpen} onToggle={setDetailsOpen} />
+          {/* Лідгену «Інших» і рівня відділу сервер не віддає (білий список) — і блоків під них немає. */}
+          {!own && <Others d={d} who={who} />}
+          {!own && <Details d={d} grain={grain} period={period} today={today} open={detailsOpen} onToggle={setDetailsOpen} />}
         </div>
       )}
       <LeadgenPlanFormation initialMonth={period.from.slice(0, 7)} />
@@ -367,6 +383,7 @@ function People({ d, who, whoName, whoAbsent, grain, period, today, statusful, o
           money={d.handoffMoney?.byPerson.find((x) => x.managerId === r.managerId)}
           dataPeriod={{ from: d.from, to: d.to }}
           buckets={byPerson.filter((w) => w.managerId === r.managerId)} grain={grain}
+          moneyBuckets={(d.handoffMoneyBucketsByPerson ?? []).filter((x) => x.managerId === r.managerId)}
           targets={d.conversions.targets} period={period} statusful={statusful}
           open={open.has(r.managerId)} onToggle={() => onToggle(r.managerId)} />
       ))}
@@ -397,11 +414,15 @@ function Details({ d, grain, period, today, open, onToggle }: {
                 <tr>
                   <th style={{ ...head, textAlign: "left" }}>{grain === "day" ? "День" : "Тиждень"}</th>
                   <th style={head}>Дзвінки</th><th style={head}>Ліди</th><th style={head}>ОПР</th><th style={head}>Прорахунки</th><th style={head}>Підігрів</th>
+                  <th style={head} title="Успішні + очікування одиниці — як «Кількість поставлених машин» у таблицях">Машин</th>
+                  <th style={head} title="Угоди з передач лідгенів, що стали «Успішна угода» в цю одиницю (передача — будь-коли)">Успішні ₴</th>
+                  <th style={head} title="Угоди з передач лідгенів, які на кінець цієї одиниці чекали оплати (авто вже поїхало, «Успішною» ще не стала). Знімок, тож рядки не складаються">Очікування ₴</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((w) => {
-                  const empty = !w.calls && !w.leads && !w.opr && !w.quotes && !w.warming;
+                  const mb = d.handoffMoneyBuckets?.find((x) => x.bucket === w.bucket);
+                  const empty = !w.calls && !w.leads && !w.opr && !w.quotes && !w.warming && !mb?.handoffs;
                   return (
                     <tr key={w.bucket} style={{ borderTop: "1px solid var(--border)", color: empty ? MUTED : undefined }}>
                       <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{bucketLabel(w.bucket, grain, period)}</td>
@@ -410,10 +431,13 @@ function Details({ d, grain, period, today, open, onToggle }: {
                       <td style={cell}>{w.opr.toLocaleString("uk-UA")}</td>
                       <td style={cell}>{w.quotes.toLocaleString("uk-UA")}</td>
                       <td style={cell}>{w.warming.toLocaleString("uk-UA")}</td>
+                      <td style={cell}>{mb ? mb.machines.toLocaleString("uk-UA") : "—"}</td>
+                      <td style={cell}>{mb ? formatAmountFull(mb.earned.sum) : "—"}</td>
+                      <td style={cell}>{mb ? formatAmountFull(mb.pending.sum) : "—"}</td>
                     </tr>
                   );
                 })}
-                {rows.length === 0 && <tr><td colSpan={6} style={{ padding: 14, color: MUTED }}>Період ще не почався.</td></tr>}
+                {rows.length === 0 && <tr><td colSpan={9} style={{ padding: 14, color: MUTED }}>Період ще не почався.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -421,13 +445,15 @@ function Details({ d, grain, period, today, open, onToggle }: {
         </>
       )}
 
+      {d.department && (() => { const dep = d.department; return (<>
       <h3 style={{ margin: "20px 0 4px", display: "flex", alignItems: "center", gap: 8 }}>
-        🚚 Канал «лідоген» загалом <InfoHint text={`${d.department.note} ⚓ ${d.department.anchors}`} />
+        🚚 Канал «лідоген» загалом <InfoHint text={`${dep.note} ⚓ ${dep.anchors}`} />
       </h3>
       <p style={{ margin: "0 0 12px", fontSize: 13, color: MUTED }}>
-        Усі угоди каналу «лідоген» (не лише з передач цього періоду): відправлено {d.department.machines.toLocaleString("uk-UA")} авто на {formatAmount(d.department.machinesRevenue)},
-        отримано {formatAmount(d.department.receivedRevenue)}.
+        Усі угоди каналу «лідоген» (не лише з передач цього періоду): відправлено {dep.machines.toLocaleString("uk-UA")} авто на {formatAmountFull(dep.machinesRevenue)},
+        отримано {formatAmountFull(dep.receivedRevenue)}.
       </p>
+      </>); })()}
 
       {d.scopedTo != null && (
         <p style={{ margin: "14px 0 0", fontSize: 12.5, color: "var(--warn)" }}>⚠ Причини закриття, передані прорахунки й джерела нижче — по всьому відділу, не лише по вашій команді.</p>
@@ -438,7 +464,7 @@ function Details({ d, grain, period, today, open, onToggle }: {
       </h3>
       <p style={{ margin: "0 0 12px", fontSize: 13, color: MUTED }}>
         Разом {d.closures.reduce((a, c) => a + c.deals, 0).toLocaleString("uk-UA")} закриттів ·
-        зараз висить у «Клієнт підігрівається»: <b>{d.warmingNow.toLocaleString("uk-UA")}</b>
+        зараз висить у «Клієнт підігрівається»: <b>{d.warmingNow == null ? "—" : d.warmingNow.toLocaleString("uk-UA")}</b>
       </p>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
         <tbody>
@@ -545,7 +571,7 @@ function Glance({ d, cmp, cmpData, cmpErr, who, whoName, whoAbsent, periodLabel,
           title={st.overfull ? `ОПР (${t.opr}) більше, ніж лідів (${t.leads}) — конверсія цього періоду нічого не каже`
             : st.conv == null ? "Лідів у періоді немає" : !statusful ? "Статус — лише за місяць і довше." : undefined} />}
         <div>
-          <div style={lab}>{title} · {periodLabel} <InfoHint text={d.callRule + " Ліди — входи в «Взято в роботу», ОПР — «Отримано контакти ОПР», прорахунки — «Кваліфіковано», підігрів — воронка Реактивації."} /></div>
+          <div style={lab}>{title} · {periodLabel} <InfoHint text={d.callRule + " Лід — угода, яку лідген опрацював: у Продзвоні перевів у «Взято в роботу» АБО одразу в «Отримано контакти ОПР», а в Реактивації — у «Клієнт підігрівається»; одна угода — один лід. ОПР — «Отримано контакти ОПР» Продзвону АБО «Клієнт підігрівається» Реактивації (з 06.10.2026, як рахує команда в таблицях). Прорахунки — «Кваліфіковано». Підігрів — окремо, скільки з лідів прийшло з реактивації."} /></div>
           <div style={val}>{t.leads.toLocaleString("uk-UA")} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>{plural(t.leads, "лід", "ліди", "лідів")} · {t.quotes.toLocaleString("uk-UA")} {plural(t.quotes, "прорахунок", "прорахунки", "прорахунків")}</small></div>
           <div style={{ fontSize: 11, color: MUTED, marginTop: 3 }}>
             дзвінки {whoAbsent ? "—" : t.calls.toLocaleString("uk-UA")} · ОПР {t.opr.toLocaleString("uk-UA")} · підігрів {t.warming.toLocaleString("uk-UA")}
@@ -605,25 +631,26 @@ function Glance({ d, cmp, cmpData, cmpErr, who, whoName, whoAbsent, periodLabel,
  */
 function HandoffMoneyCol({ m }: { m: LeadgenHandoffMoney | undefined }) {
   const hint = "Передача — угода, яку лідген кваліфікував у Продзвоні. З неї Kommo створює угоду менеджеру (той самий клієнт, у межах 2 хв від передачі). "
-    + "Гроші — за ДАТОЮ ПЕРЕДАЧІ: угоди з лідів, переданих у цьому періоді, в якому б місяці вони не закрились. Тому це НЕ «Дохід лідогену» КВП і не «отримано» в блоці «Канал «лідоген» загалом»: там — отримані кошти (успіх + оплата отримана) угод із каналом «лідоген», за датою оплати. "
+    + "«Успішні» — угоди менеджера, які стали «Успішна угода» В ЦЬОМУ ПЕРІОДІ, з передач будь-якої давності (правило Ярослава: прорахунок могли передати й пів року тому — сума рахується в місяць успіху). «Очікування» — угоди, які НА КІНЕЦЬ ПЕРІОДУ (поточного — зараз) чекали оплати: авто поїхало в цьому чи раніших місяцях, а «Успішною» угода ще не стала (етапи від «Авто працює» до «Оплата отримана»). Не стала успішною до кінця місяця — переходить в «Очікування» наступного (рішення 02.10.2026), тож суми очікувань різних місяців не складаються. Це НЕ «Дохід лідогену» КВП і не «отримано» в блоці «Канал «лідоген» загалом» (там — угоди з каналом «лідоген» за датою оплати). "
     + "Стан угоди — ЗАРАЗ: успішна (142), оплата отримана, у зоні «Очікуємо» Звіту (від виставлення рахунку до очікуємо оплату), ще в роботі (не закрита грошима й не програна — зокрема «Кваліфіковано» у Кваліфікації), програна (143, у Кваліфікації — «Не цільові»/«Сміття», або борг по ній списано). "
-    + `Сума — бюджет (price) угоди менеджера. В успішних цього періоду він проставлений у ${m ? m.success.priced : "—"} з ${m ? m.success.n : "—"}; у програних і тих, що в роботі, здебільшого ні — тому для них головне число — кількість. `
+    + `Сума — бюджет (price) угоди менеджера. В успішних цього періоду він проставлений у ${m ? m.earned.priced : "—"} з ${m ? m.earned.n : "—"}. `
+    + "Рядок унизу — що сталося з передачами САМЕ цього періоду (стан зараз): скільки передано, програно, ще в роботі. "
     + "«Передано» — те саме, що «Прорахунки» (входи в «Кваліфіковано» Продзвону); це не «Передані» КВП (там — реєстр бота). "
-    + "Передачі без угоди менеджера показано окремо: їхні гроші не привʼязати.";
+    + "Передачі без угоди менеджера показано окремо: їхні гроші не привʼязати. "
+    + "«Очікування» — оплата отримана + зона «Очікуємо»: гроші, що вже в дорозі, але ще не успіх. "
+    + "Угоди ПОСТІЙНИХ клієнтів у гроші лідгена не йдуть: на дату передачі в клієнта вже 2+ успішні перевезення, і останнє — менше ніж 3 місяці тому (правило Ярослава). Минуло 3+ місяці — клієнт знову «лідгенів».";
   if (!m) return <div><div style={lab}>💰 Гроші з переданих лідів</div><div style={{ ...val, color: MUTED }}>—</div></div>;
-  const line = (label: string, c: { n: number; sum: number }, color?: string) =>
-    <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{label}: <b style={{ color: color ?? "var(--text)" }}>{formatAmount(c.sum)}</b> · {c.n.toLocaleString("uk-UA")} {plural(c.n, "угода", "угоди", "угод")}</div>;
   return (
     <div>
       <div style={lab}>💰 Гроші з переданих лідів <InfoHint text={hint} /></div>
-      <div style={{ fontSize: 11, color: MUTED, margin: "1px 0 2px" }}>за датою передачі · стан — зараз · не «Дохід лідогену» КВП</div>
-      <div style={val}>{formatAmount(m.success.sum)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>успішні · {m.success.n.toLocaleString("uk-UA")} {plural(m.success.n, "угода", "угоди", "угод")}</small></div>
-      {m.paid.n > 0 && line("оплачено, ще не закрито", m.paid, "var(--info)")}
-      {line("у зоні «Очікуємо»", m.expect, "var(--warn)")}
-      <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>ще в роботі: <b style={{ color: "var(--text)" }}>{m.work.n.toLocaleString("uk-UA")} {plural(m.work.n, "угода", "угоди", "угод")}</b> · бюджет є у {m.work.priced.toLocaleString("uk-UA")}: {formatAmount(m.work.sum)}</div>
+      <div style={{ fontSize: 11, color: MUTED, margin: "1px 0 2px" }}>успішні — за датою успіху · очікування — що чекає оплати на кінець періоду · з передач будь-якого місяця</div>
+      <div style={{ fontSize: 13, fontWeight: 700, margin: "2px 0" }} title="Як «Кількість поставлених машин» у таблицях лідгенів: угоди, по яких авто поїхало й гроші прийшли чи йдуть (успішні + очікування)">🚚 {m.machines.toLocaleString("uk-UA")} {plural(m.machines, "машина", "машини", "машин")}</div>
+      <div style={val}>{formatAmountFull(m.earned.sum)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>успішні · {m.earned.n.toLocaleString("uk-UA")} {plural(m.earned.n, "угода", "угоди", "угод")}</small></div>
+      <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{formatAmountFull(m.pending.sum)} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>очікування · {m.pending.n.toLocaleString("uk-UA")} {plural(m.pending.n, "угода", "угоди", "угод")}</small></div>
       <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>
-        передано (= прорахунки) {m.handoffs.toLocaleString("uk-UA")} · програно {m.lost.toLocaleString("uk-UA")}
+        передачі цього періоду: передано (= прорахунки) {m.handoffs.toLocaleString("uk-UA")} · вже успішні {m.success.n.toLocaleString("uk-UA")} · в роботі {m.work.n.toLocaleString("uk-UA")} · програно {m.lost.toLocaleString("uk-UA")}
         {m.unlinked > 0 && <> · без угоди менеджера {m.unlinked.toLocaleString("uk-UA")}</>}{m.sameDeal > 0 && <> · у ту саму угоду {m.sameDeal}</>}
+        {m.regular.n > 0 && <> · постійні клієнти (не рахуються) {m.regular.n.toLocaleString("uk-UA")} на {formatAmountFull(m.regular.sum)}</>}
       </div>
     </div>
   );
@@ -645,6 +672,7 @@ function PlanLine({ who, tp, pe, pp, person }: {
       <div style={box}>
         📋 команда: прорахунки <b>{factOfPlan(tp.fact, tp.plan)}</b> план
         {tp.planned < tp.total && <span style={{ color: "var(--warn)" }}> · план є у {tp.planned} з {tp.total} — у факт входять і безпланові</span>}
+        <ExtraPlanLines extra={tp.extra} />
       </div>
     );
   }
@@ -654,6 +682,8 @@ function PlanLine({ who, tp, pe, pp, person }: {
   return (
     <div style={box}>
       📋 прорахунки <b style={{ color: planLevelColor(pe.level) }}>{factOfPlan(person.quotes, pp.plan.quotes)}</b> · ліди {factOfPlan(person.leads, pp.plan.leads)} · ОПР {factOfPlan(person.opr, pp.plan.opr)}
+      <ExtraPlanLines extra={pp.extra} />
+      <PaceLines pace={pp.pace} />
     </div>
   );
 }
@@ -703,7 +733,7 @@ function Others({ d, who }: { d: LeadgenStatsResp; who: number | "all" }) {
                   <td style={{ padding: "7px 10px", color: MUTED }}>{r.teamName ?? "поза командою"}</td>
                   <td style={cell}>{nf(r.calls)}</td><td style={cell}>{nf(r.leads)}</td><td style={cell}>{nf(r.opr)}</td>
                   <td style={cell}>{nf(r.quotes)}</td><td style={cell}>{nf(r.warming)}</td>
-                  <td style={cell} title={m ? `передано ${m.handoffs} · успішних ${m.success.n}` : undefined}>{m ? formatAmount(m.success.sum) : "—"}</td>
+                  <td style={cell} title={m ? `успішних за період ${m.earned.n} · передано в періоді ${m.handoffs}` : undefined}>{m ? formatAmountFull(m.earned.sum) : "—"}</td>
                 </tr>
               );
             })}

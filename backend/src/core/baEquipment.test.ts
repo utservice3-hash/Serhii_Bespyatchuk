@@ -73,7 +73,8 @@ async function scratchDb(t: { skip: (m: string) => void }) {
  * #982 — ЖИВИЙ SQL ТТН: підрахунок угод == фільтр Даші, по обидва боки КОЖНОЇ умови. Рахуються
  * лише: воронка 8921932, статус 142, безнал з/без ПДВ, закриття в місяці ЗА КИЄВОМ. Не рахуються:
  * готівка, інша воронка, неуспішна, закрита 31.07 23:30 за Києвом (= 20:30 UTC) і 01.09 00:30 за
- * Києвом (= 31.08 21:30 UTC). Збереження фіксує знімок; наявних більше, ніж угод, — 400.
+ * Києвом (= 31.08 21:30 UTC). Фіксація місяця зберігає знімок (з 05.10.2026 — трьох чисел: угоди,
+ * прикріплено, наявні; «наявні» тепер з `deals.ttn_files`, а не з вводу).
  * ⚠️ На ПРОД-сервері бінарів PostgreSQL немає → `skip` через `skipReason()` і `ALLOWED_PROD_SKIPS`.
  * 🧨 Червоніє, якщо прибрати будь-яку умову фільтра або межу місяця за Києвом.
  */
@@ -85,13 +86,14 @@ test("#982 ЖИВИЙ SQL ТТН: угоди == фільтр Даші, межі 
   try {
     await c.query(`INSERT INTO managers (id, name, kommo_user_id) VALUES (11, 'Андрусенко', 3890083), (12, 'Цалко', 3890084),
       (13, 'Межа-початок', 3890085), (14, 'Межа-кінець', 3890086)`);
-    const deal = (id: number, mgr: number, over: Partial<{ pipe: number; st: number; pay: string; at: string }> = {}) =>
-      c.query(`INSERT INTO deals (kommo_id, manager_id, pipeline_id, status_id, payment_type, closed_at_kommo) VALUES ($1,$2,$3,$4,$5,$6)`,
-        [id, mgr, over.pipe ?? 8921932, over.st ?? 142, over.pay ?? "Безнал с НДС", over.at ?? "2026-08-15 12:00:00+03"]);
-    await deal(1, 11);                                              // рахується
-    await deal(2, 11, { pay: "Безнал без НДС" });                   // рахується
-    await deal(3, 11, { at: "2026-08-31 23:30:00+03" });            // рахується: останній день, пізно ввечері
-    await deal(4, 11, { at: "2026-08-15 09:00:00+03" });            // рахується
+    const deal = (id: number, mgr: number, over: Partial<{ pipe: number; st: number; pay: string; at: string; ttn: number | null }> = {}) =>
+      c.query(`INSERT INTO deals (kommo_id, manager_id, pipeline_id, status_id, payment_type, closed_at_kommo, ttn_files) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [id, mgr, over.pipe ?? 8921932, over.st ?? 142, over.pay ?? "Безнал с НДС", over.at ?? "2026-08-15 12:00:00+03",
+          over.ttn === undefined ? 0 : over.ttn]);
+    await deal(1, 11, { ttn: 2 });                                  // рахується, ТТН є
+    await deal(2, 11, { pay: "Безнал без НДС", ttn: 1 });           // рахується, ТТН є
+    await deal(3, 11, { at: "2026-08-31 23:30:00+03" });            // рахується: останній день, пізно ввечері; ТТН немає
+    await deal(4, 11, { at: "2026-08-15 09:00:00+03", ttn: 1 });    // рахується, ТТН є
     await deal(5, 11, { pay: "Наличные" });                         // ні: готівка
     await deal(6, 11, { pay: "ВАЛЮТА" });                           // ні: валюта
     await deal(7, 11, { pipe: 155304 });                            // ні: інша воронка
@@ -105,18 +107,18 @@ test("#982 ЖИВИЙ SQL ТТН: угоди == фільтр Даші, межі 
     await deal(30, 13, { at: "2026-08-01 00:10:00+03" });           // так: 1 серпня за Києвом (= 31.07 21:10 UTC)
     await deal(31, 14, { at: "2026-09-01 00:30:00+03" });           // ні: 1 вересня за Києвом (= 31.08 21:30 UTC)
     const m = await ttnDealsByManager(db, "2026-08");
-    assert.equal(m.get(13), 1, "🔴 угода 1 серпня 00:10 за Києвом не потрапила в серпень — межа місяця не за Києвом");
+    assert.equal(m.get(13)?.needed, 1, "🔴 угода 1 серпня 00:10 за Києвом не потрапила в серпень — межа місяця не за Києвом");
     assert.equal(m.get(14), undefined, "🔴 угода 1 вересня 00:30 за Києвом потрапила в серпень — межа місяця не за Києвом");
-    assert.equal(m.get(11), 4, `🔴 угод Андрусенка ${m.get(11)} замість 4 — фільтр або межа місяця розійшлись із фільтром Даші`);
-    assert.equal(m.get(12), 1);
+    assert.equal(m.get(11)?.needed, 4, `🔴 угод Андрусенка ${m.get(11)?.needed} замість 4 — фільтр або межа місяця розійшлись із фільтром Даші`);
+    assert.equal(m.get(12)?.needed, 1);
 
-    await assert.rejects(saveTtnCheck(db, 901, "2026-08", 11, { ttnPresent: 5 }), /більше, ніж угод/, "🔴 наявних більше, ніж угод, прийнято");
-    await saveTtnCheck(db, 901, "2026-08", 11, { ttnPresent: 3, note: "маршрут 2 не збігся" });
-    await deal(21, 11);                                             // CRM змінилась після перевірки
+    await saveTtnCheck(db, 901, "2026-08", 11, { note: "серпень перевірено" });
+    await deal(21, 11, { ttn: 1 });                                 // CRM змінилась після перевірки
     const v = await ttnMonth(db, "2026-08", "https://utsercice.kommo.com");
     const a = v.rows.find((r) => r.managerId === 11)!;
     assert.equal(a.saved?.dealsNeeded, 4, "🔴 знімок не зафіксував число угод на момент перевірки");
-    assert.equal(a.dealsNow, 5, "поточне число з CRM — поруч, а не замість знімка");
+    assert.equal(a.saved?.ttnAttached, 3);
+    assert.equal(a.live.needed, 5, "поточне число з CRM — поруч, а не замість знімка");
     assert.equal(a.saved?.pct, 75);
     assert.equal(a.history.length, 6);
     assert.ok(a.kommoUrl?.includes("filter%5Bmain_user%5D%5B%5D=3890083"));
@@ -293,4 +295,126 @@ test("#988 ФРОНТ БА-2: техніка й ТТН — справжні вк
   for (const f of ["BusinessAssistantSection.tsx", "BaShared.tsx", "BaEquipment.tsx", "BaTtn.tsx"])
     assert.doesNotMatch(codeOnly(FE(`pages/dashboard/sections/${f}`)), /window\.open\(/, `🔴 ${f}: window.open — блокувальник гасить вкладку після очікування`);
   assert.match(FE("pages/dashboard/sections/BaTtn.tsx"), /<a className="hr-link" href=\{r\.kommoUrl\} target="_blank" rel="noopener noreferrer">/, "🔴 посилання на Kommo не звичайним <a>");
+});
+
+/**
+ * #1240 — РОЗДІЛ «БІЗНЕС-АСИСТЕНТ» ЦІЛКОМ ЗАКРИТИЙ ВІД МОДЕЛІ (рішення Романа 01.10.2026 «5а»).
+ * Перелік таблиць береться ЗІ СХЕМИ за префіксом `ba_`, а не з рук: нова таблиця розділу без
+ * закриття червоніє сама (правило 12 — множина мусить бути гейтом). Кожна — REVOKE після GRANT і
+ * після свого CREATE, і є у FORBIDDEN_TABLES. Дзеркало: гейт мусить мати що перевіряти (≥ 8 таблиць).
+ * 🧨 Червоніє, якщо прибрати будь-яку таблицю з REVOKE чи з переліку, або завести нову без них.
+ */
+test("#1240 Бізнес-асистент закритий від моделі: кожна таблиця ba_* — REVOKE після GRANT і CREATE, і в FORBIDDEN_TABLES", () => {
+  const sql = SRC("db/schema.sql");
+  const tables = [...sql.matchAll(/CREATE TABLE IF NOT EXISTS (ba_[a-z_]+) \(/g)].map((m) => m[1]);
+  assert.ok(tables.length >= 8, `🔴 у схемі знайдено лише ${tables.length} таблиць ba_* — гейт нічого не перевіряє`);
+  const grantAt = sql.indexOf("GRANT SELECT ON ALL TABLES IN SCHEMA public TO ai_readonly;");
+  const revokes = [...sql.matchAll(/REVOKE ALL ON ([^;]*?) FROM ai_readonly;/g)];
+  const forbidden = /FORBIDDEN_TABLES\s*=\s*\[([\s\S]*?)\]/.exec(SRC("ai/metricTools.ts"))![1];
+  const bad: string[] = [];
+  for (const t of tables) {
+    const createAt = sql.indexOf(`CREATE TABLE IF NOT EXISTS ${t} (`);
+    const ok = revokes.some((m) => new RegExp(`(^|[\\s,])${t}([\\s,]|$)`).test(m[1]) && m.index! > grantAt && m.index! > createAt);
+    if (!ok) bad.push(`${t}: немає REVOKE після GRANT і CREATE`);
+    if (!forbidden.includes(`"${t}"`)) bad.push(`${t}: немає у FORBIDDEN_TABLES`);
+  }
+  assert.deepEqual(bad, [], `🔴 ${bad.join("; ")}`);
+});
+
+/**
+ * #1241 — ФІЛЬТР ЗА ДАТОЮ В «ОБЛІКУ ТЕХНІКИ» (ТЗ: «фільтр за статусом і датою в кожному блоці»;
+ * рішення Романа 01.10.2026 «2а»). Місяць береться з дати ПОТОЧНОЇ видачі; невідома дата — окремим
+ * пунктом, а не губиться. 🧨 Червоніє, якщо прибрати фільтр або фільтрувати не за датою видачі.
+ */
+test("#1241 ФРОНТ: «Облік техніки» фільтрує за місяцем видачі й окремо — «дата невідома»", () => {
+  const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages/dashboard/sections/BaEquipment.tsx"), "utf8");
+  assert.match(fe, /<label className="hr-muted">Видано<br \/>/, "🔴 немає фільтра «Видано»");
+  assert.match(fe, /<option value="unknown">Дата невідома<\/option>/, "🔴 невідома дата видачі не має свого пункту");
+  assert.match(fe, /r\.holder\?\.issuedOn\?\.slice\(0, 7\) !== issued/, "🔴 фільтр не за місяцем дати видачі");
+  assert.match(fe, /\}\), \[rows, filter, kind, loc, q, issued\]\);/, "🔴 фільтр не перераховує список при зміні");
+});
+
+/* ═════════ ТТН АВТОМАТИЧНО (05.10.2026, рішення Романа): гейти #1400–#1403 ═════════
+ * Номери з запасом над #1365 (найвищий у всіх гілках на момент початку); борг 17 — перемірити перед мержем. */
+
+/**
+ * #1400 — ПОЛЕ «ТТН» З KOMMO → ЧИСЛО ФАЙЛІВ. Видалені (`is_deleted`) і значення без файла не
+ * рахуються; поля немає (Kommo так віддає порожнє поле) — 0. «Невідомо» буває лише в базі (NULL),
+ * не тут. Форма значення — заміряна на живій угоді 05.10.2026 (file_uuid, version_uuid, file_name,
+ * file_size, is_deleted). 🧨 Червоніє, якщо рахувати видалені чи значення без файла.
+ */
+test("#1400 ТТН З KOMMO: рахуються лише живі файли поля 2097291; поля немає — 0", async () => {
+  process.env.JWT_SECRET ??= "test"; process.env.KOMMO_BASE_URL ??= "https://x.invalid"; process.env.KOMMO_API_TOKEN ??= "x";
+  process.env.DATABASE_URL ??= "postgres://unused.invalid/x";
+  const { extractTtnFiles, FIELD_TTN } = await import("../kommo/client.js");
+  assert.equal(FIELD_TTN, 2097291);
+  const deal = (values: unknown[] | null) => ({ id: 1, name: "x", price: 0, pipeline_id: 0, status_id: 0, responsible_user_id: 0, created_at: 0, updated_at: 0, closed_at: null,
+    custom_fields_values: values == null ? [] : [{ field_id: 2097291, values: values.map((value) => ({ value })) }] });
+  const f = (n: number, del = false) => ({ file_uuid: `u${n}`, version_uuid: `v${n}`, file_name: `ttn${n}.pdf`, file_size: 100, is_deleted: del });
+  assert.equal(extractTtnFiles(deal([f(1), f(2)])), 2);
+  assert.equal(extractTtnFiles(deal([f(1), f(2, true)])), 1, "🔴 видалений файл ТТН порахований");
+  assert.equal(extractTtnFiles(deal([{ file_name: "без uuid" }, null])), 0, "🔴 значення без файла пораховане");
+  assert.equal(extractTtnFiles(deal(null)), 0, "🔴 угода без поля «ТТН» не дала 0");
+  assert.equal(extractTtnFiles({ ...deal(null), custom_fields_values: null } as never), 0);
+});
+
+/**
+ * #1402 — ЖИВИЙ SQL «НАЯВНИХ»: прикріплено рахується серед ТИХ САМИХ угод, що й «потрібна ТТН»
+ * (ТТН на готівковій угоді — ні); «маршрут не збігся» віднімається лише з прикріплених (на угоді без
+ * ТТН позначку поставити не можна, а підкладена напряму — не віднімається); NULL — «не
+ * синхронізовано» окремим числом і блокує фіксацію; зняття позначки повертає «наявні».
+ * 🧨 Червоніє, якщо прибрати умову «серед тих самих угод», «лише з прикріплених» або рахувати NULL як 0.
+ */
+test("#1402 ЖИВИЙ SQL ТТН: прикріплено серед тих самих угод, «не збігся» лише з прикріплених, NULL — не синхронізовано", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const ttn = await import("./baTtn.js");
+  const { c, db } = s;
+  const status = (e: unknown) => (e as { status?: number }).status;
+  try {
+    await c.query(`INSERT INTO managers (id, name, kommo_user_id) VALUES (21, 'Семенюк', 12163420)`);
+    const deal = (id: number, files: number | null, pay = "Безнал с НДС") =>
+      c.query(`INSERT INTO deals (kommo_id, manager_id, pipeline_id, status_id, payment_type, closed_at_kommo, ttn_files) VALUES ($1,21,8921932,142,$2,'2026-08-10 12:00+03',$3)`, [id, pay, files]);
+    await deal(1, 1); await deal(2, 2); await deal(3, 0); await deal(4, 1); await deal(5, null);
+    await deal(6, 3, "Наличные");                                   // ТТН є, але готівка — не рахується ніде
+    let m = (await ttn.ttnDealsByManager(db, "2026-08")).get(21)!;
+    assert.deepEqual({ ...m }, { needed: 5, attached: 3, mismatched: 0, unsynced: 1, present: 3 }, "🔴 три числа не ті");
+    await assert.rejects(ttn.saveTtnCheck(db, 901, "2026-08", 21, {}), /не синхронізовано/, "🔴 зафіксовано місяць із несинхронізованими угодами");
+
+    await c.query(`UPDATE deals SET ttn_files = 0 WHERE kommo_id = 5`);
+    await assert.rejects(ttn.setRouteMismatch(db, 901, 3, {}), (e) => status(e) === 409, "🔴 «не збігся» поставлено на угоду без ТТН");
+    await c.query(`INSERT INTO ba_ttn_route_mismatch (kommo_id) VALUES (3)`);                       // підкладено напряму
+    await ttn.setRouteMismatch(db, 901, 2, { note: "Київ–Львів проти Київ–Одеса" });
+    m = (await ttn.ttnDealsByManager(db, "2026-08")).get(21)!;
+    assert.equal(m.mismatched, 1, "🔴 позначка на угоді без ТТН віднялась із наявних");
+    assert.equal(m.present, 2);
+
+    const list = await ttn.ttnDealsOf(db, "2026-08", 21, "https://utsercice.kommo.com/");
+    assert.deepEqual(list.map((d) => d.kommoId).slice(0, 2).sort(), [3, 5], "🔴 угоди без ТТН не стоять зверху");
+    assert.equal(list.find((d) => d.kommoId === 2)?.mismatch?.note, "Київ–Львів проти Київ–Одеса");
+    assert.equal(list.find((d) => d.kommoId === 1)?.url, "https://utsercice.kommo.com/leads/detail/1");
+    assert.ok(!list.some((d) => d.kommoId === 6), "🔴 готівкова угода в списку");
+
+    await ttn.saveTtnCheck(db, 901, "2026-08", 21, { note: "" });
+    const v = (await ttn.ttnMonth(db, "2026-08", "https://utsercice.kommo.com")).rows[0];
+    assert.deepEqual([v.saved?.dealsNeeded, v.saved?.ttnAttached, v.saved?.routeMismatch, v.saved?.ttnPresent, v.saved?.pct], [5, 3, 1, 2, 40]);
+    await ttn.clearRouteMismatch(db, 2);
+    assert.equal((await ttn.ttnDealsByManager(db, "2026-08")).get(21)!.present, 3, "🔴 зняття позначки не повернуло наявні");
+    assert.equal(v.history[5].pct, 40, "динаміка — живий % поточного місяця");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1403 — ФРОНТ ТТН: «наявні» не вводяться руками — колонки «Прикріплено», «Маршрут не збігся»,
+ * «Наявні» з сервера, розкриття менеджера з угодами й позначкою, «Зафіксувати місяць».
+ * 🧨 Червоніє, якщо повернути ручне поле «Наявні ТТН» або прибрати розкриття з позначкою.
+ */
+test("#1403 ФРОНТ ТТН: наявні — з сервера, без ручного вводу; розкриття з угодами й «маршрут не збігся»", () => {
+  const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages/dashboard/sections/BaTtn.tsx"), "utf8");
+  assert.doesNotMatch(fe, /aria-label=\{`Наявні ТТН · \$\{r\.name\}`\}/, "🔴 повернувся ручний ввід «Наявні ТТН»");
+  for (const h of ["Прикріплено ТТН", "Маршрут не збігся", "Наявні"]) assert.ok(fe.includes(`<th className="num">${h}</th>`), `🔴 немає колонки «${h}»`);
+  assert.match(fe, /<b>\{r\.live\.present\}<\/b>/, "🔴 «наявні» не з сервера");
+  assert.match(fe, /<TtnDeals month=\{month\} managerId=\{r\.managerId\}/, "🔴 немає розкриття менеджера з угодами");
+  assert.match(fe, />маршрут не збігся<\/button>/, "🔴 немає позначки «маршрут не збігся»");
+  assert.match(fe, /"Зафіксувати місяць"/);
 });

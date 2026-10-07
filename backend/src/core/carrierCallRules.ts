@@ -309,14 +309,14 @@ export type DealCategory = "client" | "carrier" | "other" | "review" | "error" |
 export type CarrierAiState = "not_queued" | "not_enabled" | "queued" | "capped" | "recording_unavailable"
   | "stt_failed" | "no_text" | "llm_pending" | "llm_failed" | "done";
 
-/** Чому AI не впевнений — коротко, для рядка черги. `null` — упевнений. */
+/** Чому AI не впевнений — людськими словами, для рядка вкладки «AI не впевнений» (Роман 30.09.2026). `null` — упевнений. */
 export function whyUncertain(r: Pick<CarrierResult, "caller_role" | "caller_role_confidence" | "quote_check">): string | null {
   const b = carrierBucket(r);
-  if (b === "unclear") return "не чути";
+  if (b === "unclear") return "розмову не розібрати";
   if (b !== "low") return null;
-  if (r.caller_role_confidence < CARRIER_THRESHOLD) return "невпевнено";
-  if (r.quote_check === "manager") return "цитата менеджера";
-  return "цитата не знайдена";
+  if (r.caller_role_confidence < CARRIER_THRESHOLD) return "впевненість нижче 85%";
+  if (r.quote_check === "manager") return "доказ — слова менеджера, а не того, хто дзвонив";
+  return "у розмові немає фрази-доказу";
 }
 
 /** «Помилка» (ТЗ: після N спроб): розпізнати чи проаналізувати не вдалось — вирішує людина. */
@@ -332,8 +332,11 @@ const ERROR_WHY: Partial<Record<CarrierAiState, string>> = {
  * `waiting`, `review` і `error` разом — «не розібрано» у звіті.
  */
 export function dealCategory(x: { human: HumanDecision | null; result: CarrierResult | null; dealState: string; ai: CarrierAiState | null }):
-  { category: DealCategory; source: "human" | "ai" | null; why: string | null } {
+  { category: DealCategory; source: "human" | "ai" | "crm" | null; why: string | null } {
   if (x.human) return { category: x.human, source: "human", why: null };
+  // Номер уже закривали як «Перевізник» у CRM, угоди замовника немає (ТЗ 17.09 «автозакриття пропущених», блок 1;
+  // `core/carrierHistory.ts`). Розмову не слухаємо — вердикт з історії; людина, як і скрізь, сильніша.
+  if (x.dealState === "history") return { category: "carrier", source: "crm", why: "номер уже закривали як «Перевізник» у CRM" };
   if (x.result) {
     const b = carrierBucket(x.result);
     if (b === "carrier" || b === "client" || b === "other") return { category: b, source: "ai", why: null };
@@ -342,7 +345,7 @@ export function dealCategory(x: { human: HumanDecision | null; result: CarrierRe
   // Без розмови від 10 с — не аналізуємо й закриваємо «Немає зв'язку» (Роман 30.09.2026); у вкладки не йде.
   if (x.dealState === "no_talk") return { category: "no_talk", source: null, why: "розмови від 10 с не було" };
   if (x.ai && ERROR_WHY[x.ai]) return { category: "error", source: null, why: ERROR_WHY[x.ai] ?? null };
-  return { category: "waiting", source: null, why: x.dealState === "waiting" ? "чекаємо розмову" : "AI слухає" };
+  return { category: "waiting", source: null, why: x.dealState === "waiting" ? "чекаємо розмову" : "AI ще слухає розмову" };
 }
 
 // ─── Прострочка «На перевірці» (Роман 30.09.2026: «до кінця робочого дня») ────────────────────────

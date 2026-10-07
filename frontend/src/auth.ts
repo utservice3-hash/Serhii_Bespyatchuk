@@ -8,6 +8,7 @@ export interface AuthPayload {
   managerId: number | null;
   teamId: number | null;
   trackerEnabled?: boolean;  // users.tracker_enabled — косметика nav; сервер гейтить
+  orphanPool?: boolean;      // users.orphan_pool — вкладка «Пул» менеджеру; сервер гейтить (читає БД)
 }
 
 export function getAuthPayload(): AuthPayload | null {

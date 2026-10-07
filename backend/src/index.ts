@@ -24,7 +24,7 @@ import { settingsRouter } from "./routes/settings.js";
 import { messagesRouter } from "./routes/messages.js";
 import { newsRouter } from "./routes/news.js";
 import { uploadsRouter, UPLOAD_DIR } from "./routes/uploads.js";
-import { feedbackRouter } from "./routes/feedback.js";
+import { feedbackRouter, FEEDBACK_FILES_DIR } from "./routes/feedback.js";
 import { aiWorkRouter } from "./routes/aiWork.js";
 import { reportsRouter } from "./routes/reports.js";
 import { ratesRouter } from "./routes/rates.js";
@@ -49,6 +49,9 @@ import { candidateTrainingRouter } from "./routes/candidateTraining.js";
 import { hiringRouter } from "./routes/hiring.js";
 import { baRouter } from "./routes/businessAssistant.js";
 import { financeRouter } from "./routes/finance.js";
+import { constructorRouter } from "./routes/constructor.js";
+import { surveysRouter } from "./routes/surveys.js";
+import { tickSurveys } from "./surveys/surveyScheduler.js";
 import { receivablesClaimRouter } from "./routes/receivablesClaims.js";
 import { nominationsRouter } from "./routes/nominations.js";
 import { peopleRouter } from "./routes/people.js";
@@ -61,6 +64,7 @@ import { createReceivableDeadlineTasks } from "./jobs/receivableDeadlineTasks.js
 import { syncKommo } from "./jobs/syncKommo.js";
 import * as reactivation from "./core/reactivation.js";
 import { refreshRoles, rolesCacheSize } from "./auth/rbac.js";
+import { refreshTeamMoves } from "./core/teamAt.js";
 import { seedOneOnOneForms } from "./oneOnOne/catalog.js";
 import { bankRouter } from "./routes/bank.js";
 import { trackerRouter } from "./routes/tracker.js";
@@ -70,6 +74,7 @@ import { checkFreshness, checkAbandonedStages } from "./core/reconcile.js";
 import { isKommoPaused } from "./kommo/pause.js";
 import { syncStageEvents, cleanupOldStageEvents } from "./jobs/syncStageEvents.js";
 import { syncTransfers } from "./jobs/syncTransfers.js";
+import { syncLeadChildLinks } from "./jobs/syncLeadChildLinks.js";
 import { syncDealActivity, syncContactActivity, recomputeActivity } from "./jobs/syncDealActivity.js";
 import { syncAdBudget } from "./jobs/syncAdBudget.js";
 import { syncGa4Ads } from "./jobs/syncGa4Ads.js";
@@ -80,6 +85,7 @@ import { syncFirstTouch } from "./jobs/syncFirstTouch.js";
 import { recomputeStatistics, getStatisticsStatus } from "./jobs/recomputeStatistics.js";
 import { recomputeClientKeys } from "./jobs/recomputeClientKeys.js";
 import { closeExpiredCandidateAccess } from "./jobs/hiringAccess.js";
+import { runReactCycleSweep } from "./jobs/reactCycleSweep.js";
 import { syncRingostatCalls, getRingostatStatus } from "./jobs/syncRingostatCalls.js";
 import { syncTldv } from "./jobs/syncTldv.js";
 import { syncWorkua } from "./jobs/syncWorkua.js";
@@ -96,6 +102,7 @@ import { backupDb } from "./jobs/backupDb.js";
 import { declineSpamForms } from "./jobs/declineSpamForms.js";
 import { catchUpAiChat } from "./ai/respond.js";
 import { pool } from "./db/pool.js";
+import { purgeFeedback } from "./jobs/purgeFeedback.js";
 
 // dist/index.js → ../.. = корінь сайту (dashboard/), де лежить зібраний фронт
 // (index.html + assets/), який деплоїться поряд із backend/.
@@ -169,6 +176,8 @@ app.use("/api/training", trainingRouter);
 app.use("/api/hiring", hiringRouter);
 app.use("/api/ba", baRouter); // 🗂 Бізнес-асистент: претензії й судовий реєстр (задача 4314)
 app.use("/api/finance", financeRouter); // 💰 Фінанси: план/факт витрат і статті (29.09.2026)
+app.use("/api/constructor", constructorRouter); // 📄 Конструктор документів — пакет Сергія (30.09.2026)
+app.use("/api/surveys", surveysRouter); // 📋 Опитування команди — пакет Сергія (30.09.2026)
 app.use("/api/receivables-claims", receivablesClaimRouter); // кнопка «Проблемний клієнт» у дебіторці
 app.use("/api/nominations", nominationsRouter); // 🏆 Номінації тижня (21.09.2026)
 app.use("/api/people", peopleRouter); // 📷 Фото співробітників (22.09.2026)
@@ -428,6 +437,19 @@ cron.schedule("20 4 * * *", () => {
   });
 });
 
+/**
+ * 🔁 Цикл реактивації (ТЗ 22.09, блок 4, п.4.3; задача 4313): щоночі о 00:40 за Києвом — ожилих
+ * клієнтів прибрати з пулу лідгенів; ПЕРЕДАЧА в пул — щопонеділка о 08:00 (рішення 01.10.2026, ≤100 за
+ * тиждень). Нічні прогони вівторка–неділі добирають пропущений понеділок; межа тижнева, тож понад 100 не
+ * віддадуть. everyMin == 1440 у нагляді (нічний прогін — щодоби).
+ */
+cron.schedule("40 0 * * *", () => {
+  void runJob("reactCycleSweep", () => runReactCycleSweep());
+}, { timezone: "Europe/Kyiv" });
+cron.schedule("0 8 * * 1", () => {
+  void runJob("reactCycleSweep", () => runReactCycleSweep());
+}, { timezone: "Europe/Kyiv" });
+
 // КРОК 4 (Звірка) + AUTO-HEAL. ЩОНОЧІ 03:35 — лише ОСТАННІ 2 МІСЯЦІ: швидко/дешево,
 // ловить свіжу дормантність (угода не встигає застаріти непоміченою). Читає Kommo API.
 // ⏰ 03:35 (не 05:00) — о 05:00 сходились syncCarriers + syncKommo(*/30) + звірка, разом
@@ -503,6 +525,14 @@ cron.schedule("20 5 * * *", () => {
   void runJob("syncTransfers", () => syncTransfers());
 });
 
+// 🔗 «З якої угоди створено цю» (примітки Kommo lead_auto_created) — щогодини о :55. Живить точний
+// звʼязок передачі лідгена з угодою менеджера; поки примітка не приїхала, діє старий здогад за клієнтом,
+// тож запізнення тут лише відкладає уточнення, а не ламає гроші. ~1 запит на годину.
+cron.schedule("55 * * * *", () => {
+  if (isKommoPaused()) return;
+  void runJob("syncLeadChildLinks", () => syncLeadChildLinks());
+});
+
 // Ad budget (Google Ads sheet) hourly + on startup — feeds the КВП report.
 cron.schedule("15 * * * *", () => {
   void runJob("syncAdBudget", () => syncAdBudget());
@@ -553,6 +583,10 @@ cron.schedule("0 15 * * 2", () => {
   void runJob("freezeNominations", () => runFreezeNominations());
 }, { timezone: "Europe/Kyiv" });
 
+// 💰 Фінанси «Тиждень і місяць»: НІЧНОЇ фіксації немає (рішення Тетяни на зустрічі 05.10.2026: «тиждень хай
+// змінюється, місяць закриваю я кнопкою»). Число фіксує лише «Закрити» (`setPeriodClosed`). Джоба `freezeFinanceKpis`
+// лишилась у коді для ручного запуску, але не планується й не наглядається.
+
 // 🔎 Текст документів для пошуку: нові файли й нові версії, які не встигло обробити завантаження.
 cron.schedule("20,50 * * * *", () => {
   void runJob("docText", () => runDocText());
@@ -578,6 +612,12 @@ cron.schedule("30 7 * * *", () => {
 // (незамаплені статуси, дублі менеджерів, застій синку) і сигналить КВП задачею.
 cron.schedule("30 3 * * *", () => {
   void runJob("runDataReconciliation", () => runDataReconciliation());
+});
+
+// 🗑 Зворотний звʼязок: закриті («вирішено»/«відхилено») понад 30 днів — безповоротно, разом із фото.
+// 02:50 — поза :00/:30 і до нічного бекапу 03:00, тож у копію ночі видалене вже не потрапляє.
+cron.schedule("50 2 * * *", () => {
+  void runJob("purgeFeedback", () => purgeFeedback(pool, FEEDBACK_FILES_DIR));
 });
 
 // Прострочені дедлайни оплати дебіторки → задача менеджеру «отримати оплату».
@@ -648,15 +688,17 @@ cron.schedule("35 * * * *", () => {
 });
 
 // 🤖 AI-АНАЛІЗ ДЗВІНКІВ ПЕРШОГО ДОТИКУ (ТЗ «AI-аналіз», коміт ④, рішення Романа 28.09.2026).
-// Щогодини о :45 — за 10 хв після годинного `syncCalls` (:35), не на :00/:30 із syncKommo.
-// Тік обмежений часом (8 + 4 хв), тож не наздоганяє наступний. Без ключів — «не ввімкнено»,
+// Раз на 10 хв (ТЗ «звіт тімліда» 30.09.2026, «черга раз на 10 хв») о :05, :15 … :55 — не на :00/:30 із
+// syncKommo. ⚠️ Хвилини — ЯВНИМ СПИСКОМ: node-cron читає «5-59/10» як 5 пострілів, а не 6 (спіймав #853).
+// Тік обмежений часом (5 + 3 хв), тож не наздоганяє наступний. Без ключів — «не ввімкнено»,
 // назовні нуль запитів. Під наглядом (`monitoredJobs.ts`), everyMin == крону — тримає гейт.
-cron.schedule("45 * * * *", () => {
+cron.schedule("5,15,25,35,45,55 * * * *", () => {
   void runJob("callAiJob", () => callAiJob());
 });
 
 // 🚚 ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ (ТЗ 29.09.2026, рішення Романа: «зразу після фільтра», не щогодини).
-// Раз на 5 хв, за 2 хв після свіжого вікна дзвінків (`syncCallsFresh` :02, :07 …) — розмова вже в базі.
+// Раз на 5 хв. Свіже вікно дзвінків (`syncCallsFresh`) з 02.10.2026 іде кожні 3 хв (:01, :04 …), тож на момент
+// цього тіку розмова в базі не старша за 3 хв.
 // Хвилини :04, :09 … не збігаються з :00/:30 `syncKommo`. Kommo — один запит лише на читання. Тік обмежений
 // часом (150 + 60 с), охоронець не дає накластись. Під наглядом (`monitoredJobs.ts`), everyMin == крону.
 // ⚠️ ПЕРЕЛІКОМ, а не «4-59/5» — той самий node-cron, що читає крок у діапазоні інакше (див. syncCallsFresh).
@@ -797,7 +839,10 @@ async function loadRolesOrDie(): Promise<void> {
   }
 }
 
-loadRolesOrDie().then(() => {
+loadRolesOrDie().then(async () => {
+  // 🔀 Знімок переходів між командами (`core/teamAt.ts`) — ДО першого запиту: без нього звіти
+  // підуть повільною запасною формою. Збій не валить старт — запасна форма правильна.
+  await refreshTeamMoves(pool).catch((e) => console.error("refreshTeamMoves at boot failed:", e));
   // 1×1 форми: гарантуємо наявність version 1 (A/Б/В) — ідемпотентно, не блокує старт.
   seedOneOnOneForms(pool).catch((e) => console.error("seedOneOnOneForms at boot failed:", e));
   // 🔌 ЖУРНАЛ СТАРТІВ. Пишемо ОДРАЗУ, до першого тіку поштаря: інакше «несподіваний
@@ -813,6 +858,10 @@ loadRolesOrDie().then(() => {
 // (один SELECT по 8 рядках) і робить стан самовідновним.
 cron.schedule("*/10 * * * *", () => {
   refreshRoles().catch((e) => console.error("periodic refreshRoles failed:", e));
+});
+// 🔀 Страховка знімка переходів: писарі оновлюють його самі, крон — на випадок запису з іншого процесу.
+cron.schedule("*/10 * * * *", () => {
+  refreshTeamMoves(pool).catch((e) => console.error("periodic refreshTeamMoves failed:", e));
 });
 
 // 📮 ПОШТАР ТРИВОГ — раз на 5 хвилин. Не детектор: кличе ТОЙ САМИЙ `collectAlerts()`,
@@ -837,9 +886,12 @@ cron.schedule("*/5 * * * *", () => {
 
 // 📵 ПРОПУЩЕНІ → ЗАДАЧА МЕНЕДЖЕРУ ЗА 5 ХВ (ТЗ-1, прохід 3, рішення власника 16.09.2026).
 // Годинний синк лишає дзвінки в базі до години старими — для порога 5 хв це не сигнал.
-// Тому щопʼять хвилин: спершу свіже вікно дзвінків (1 год, звʼязування ЛИШЕ в ньому),
+// Тому часто: спершу свіже вікно дзвінків (1 год, звʼязування ЛИШЕ в ньому),
 // ПОТІМ сигнал — по тих самих щойно привезених даних.
-// ⚠️ Хвилини :02, :07 … :57 — не на :00/:30 із syncKommo і не разом із поштарем.
+// ⏱ КОЖНІ 3 ХВ з 02.10.2026 (ТЗ Юлії 17.09 «синхронізація з Ringostat — не рідше ніж раз на 2-3 хвилини»,
+// задача 4373). Заміряно перед зміною: свіже вікно — ~0,9 с, сигнал — ~0,4 с, тож утричі частіше це копійки.
+// ⚠️ Хвилини :01, :04 … :58 — не на :00/:30 із syncKommo. З поштарем (*/5) збігаються на :10/:25/:40/:55 —
+// неминуче при кроках 3 і 5, і безпечно: поштар лише читає стан.
 // 🔴 ПЕРЕЛІКОМ, А НЕ «2-59/5»: node-cron 3.0.3 читає крок у діапазоні як «кратні 5 у межах
 // 2–59», тобто :05, :10 … — рівно разом із поштарем, а :00 пропускає. Заміряно його ж
 // матчером 16.09.2026; `#458` тому бере хвилини з бібліотеки, а не з тексту розкладу.
@@ -847,12 +899,20 @@ cron.schedule("*/5 * * * *", () => {
 // Годинний і частий синки ділять одного охоронця — одночасно по `ringostat_calls` пише
 // один прохід (`#455`). Сигнал біжить і після пропуску синку: задачі по вже наявних даних
 // коректні, лише свіжість гірша. Обидві під наглядом (`monitoredJobs.ts`), тримає `#458`.
-cron.schedule("2,7,12,17,22,27,32,37,42,47,52,57 * * * *", () => {
+cron.schedule("1,4,7,10,13,16,19,22,25,28,31,34,37,40,43,46,49,52,55,58 * * * *", () => {
   void (async () => {
     await runJob("syncCallsFresh", () => syncCalls(1, { boundLink: true }));
     await runJob("missedCallTasks", () => missedCallTasks());
   })();
 });
+
+// 📋 ОПИТУВАННЯ (30.09.2026, пакет Сергія): автозакриття по дедлайну + підсумок, запуск запланованих випусків,
+// нагадування. Раз на 5 хв ПЕРЕЛІКОМ хвилин (:03, :08 …) — не на :00/:30 із syncKommo і не разом із поштарем;
+// «3-59/5» node-cron читає інакше (див. коментар про missedCallTasks нижче). Функція ідемпотентна.
+cron.schedule("3,8,13,18,23,28,33,38,43,48,53,58 * * * *", () => {
+  void runJob("tickSurveys", async () => { await tickSurveys(pool); });
+});
+
 
 // 🔴 СТАРТ БЕЗ СПЛЕСКУ ПАМʼЯТІ (2 ГБ shared-акаунт adm.tools, crash-loop 15.07.2026).
 // Раніше вся батарея синків стартувала СИНХРОННО на буті → пік памʼяті → хостинг
@@ -876,6 +936,7 @@ const deferredStartup: Array<[string, () => Promise<unknown>]> = [
   ["recomputeStatistics", () => recomputeStatistics()],
   ["recomputeClientKeys", () => recomputeClientKeys()],
   ["hiringAccess", () => closeExpiredCandidateAccess()],
+  ["reactCycleSweep", () => runReactCycleSweep()],
   ["syncReceivables", () => syncReceivables()],
   ["syncLeadgenRegistry", () => syncLeadgenRegistry()],
   ["syncFirstTouch", () => syncFirstTouch()],

@@ -1,6 +1,8 @@
 import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { fetchKvpReport, fetchKvpPlan, saveKvpPlan, fetchManagerDetail, type KvpReport, type KvpPlans, type KvpTeam, type KvpManager, type KvpManagerDetail, type KvpWeek, type CreatedSplit } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
+import { useToast } from "../../../components/Toasts";
+import { commitOptimistic, failureReason } from "../../../actionFeedback";
 import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
 import { LeadgenRegularsCard } from "./LeadgenRegularsCard";
@@ -267,6 +269,7 @@ function anchorFor(preset: string, monthSel: string): string {
 }
 
 export function KvpReportSection() {
+  const toast = useToast();
   const [preset, setPreset] = useState<string>(() => localStorage.getItem("kvpDPreset") || "month");
   const [monthSel, setMonthSel] = useState<string>(() => localStorage.getItem("kvpDMonth") || curMonth());
   const [range, setRange] = useState<{ from: string; to: string }>(() => { try { return JSON.parse(localStorage.getItem("kvpDRange") || "null") || { from: "", to: "" }; } catch { return { from: "", to: "" }; } });
@@ -559,7 +562,16 @@ export function KvpReportSection() {
           {/* ── ПОВНА ТАБЛИЦЯ (під катом) ── */}
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <h2 className="chart-title" style={{ cursor: "pointer" }} onClick={() => setShowFull(!showFull)}>{showFull ? "▾" : "▸"} 📋 Повна таблиця</h2>
-            {showFull && <FullTable rep={rep} plans={plans} onSave={(k, val) => { setPlans((p) => { const n = { ...p }; if (val == null) delete n[k]; else n[k] = val; return n; }); saveKvpPlan(monthSel, { [k]: val }).catch(() => {}); }} />}
+            {showFull && <FullTable rep={rep} plans={plans} onSave={(k, val) => {
+              // ↩ При помилці клітинка повертається до збереженого, а не бреше (30.09.2026, `#1102`).
+              const before = plans;
+              void commitOptimistic({
+                apply: () => setPlans((p) => { const n = { ...p }; if (val == null) delete n[k]; else n[k] = val; return n; }),
+                save: () => saveKvpPlan(monthSel, { [k]: val }),
+                revert: () => setPlans(before),
+                onError: (e) => toast(`План не збережено — ${failureReason(e, "помилка сервера")}. Повернуто попереднє значення.`, { error: true }),
+              });
+            }} />}
           </div>
 
           {/* ── 🚚 ЛОГІСТИКА (під катом) ── */}

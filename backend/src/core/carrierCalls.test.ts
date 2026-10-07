@@ -111,6 +111,12 @@ async function carrierDeal(c: Raw, id: number, ph: string, created: Date, state 
   await c.raw.query(`INSERT INTO carrier_call_deals(kommo_id,phone,deal_created_at,seen_at,state,uniqueid,first_uniqueid,talk_no)
     VALUES ($1,$2,$3,$4,$5,$6,$6,$7)`, [id, ph, created.toISOString(), NOW.toISOString(), state, uniqueid, talkNo]);
 }
+/** 🛡 Синк дзвінків «щойно вдався» (хвилину тому) — без нього «без розмови» на паузі (`carrierNoTalkGuard.ts`). */
+async function syncedAt(c: Raw, at: Date | null = new Date(NOW.getTime() - 60_000)) {
+  if (!at) { await c.raw.query("DELETE FROM job_runs WHERE name = 'syncCallsFresh'"); return; }
+  await c.raw.query(`INSERT INTO job_runs(name, last_success_at) VALUES ('syncCallsFresh', $1)
+    ON CONFLICT (name) DO UPDATE SET last_success_at = EXCLUDED.last_success_at`, [at.toISOString()]);
+}
 async function analysed(c: Raw, u: string, role: string, conf = 0.9, tStatus = "done") {
   const t = await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
     VALUES ($1,'elevenlabs','scribe_v2',$2,'[{"channel":0,"start":0,"end":1,"text":"алло","lang":"ukr"}]'::jsonb) RETURNING id`, [u, tStatus]);
@@ -190,6 +196,8 @@ test("#951 РОЗМОВА · ЖИВА СХЕМА: ≥10 с із записом �
   await call(c, "931-10s", new Date(created.getTime() + 5 * 60_000), 10, P);
   await carrierDeal(c, 93102, phone(93100, 2), min(60));
   await carrierDeal(c, 93103, phone(93100, 3), min(25 * 60));
+  await call(c, "931-3s", min(25 * 60), 3, phone(93100, 3));     // дзвінок, що створив угоду, — короткий
+  await syncedAt(c);
   await resolveCarrierDeals(c.db, NOW);
   assert.deepEqual({ ...(await row(c, 93101)) }, { state: "own", uniqueid: "931-10s", talk_no: 1, reused_from: null, first_uniqueid: "931-10s" },
     "🔴 узято не першу розмову ≥10 с із записом у вікні");
@@ -477,7 +485,7 @@ test("#961 КАРТКА · ЖИВА СХЕМА: лише дзвінки мобі
 });
 
 interface CarrierView {
-  CARRIER_TABS: readonly { key: string; label: string }[];
+  CARRIER_TABS: readonly { key: string; label: string; hint: string }[];
   tabOf: (c: string) => string | null;
   CATEGORY_UI: Record<string, { label: string }>;
   OTHER_TYPE_UI: Record<string, string>;
@@ -708,7 +716,7 @@ test("#1040 ЧЕРГА · ЖИВА СХЕМА: лише невпевнені н�
   const B = 98000; await seedDecide(c, B);
   const q1 = await decisionQueue(c.db, NOW);
   assert.deepEqual(q1.pending.map((x) => x.kommoId).sort(), [B + 1, B + 2, B + 3], "🔴 черга — не рівно невпевнені на етапі");
-  assert.deepEqual(q1.pending.map((x) => x.why).sort(), ["невпевнено", "не чути", "цитата менеджера"].sort());
+  assert.deepEqual(q1.pending.map((x) => x.why).sort(), ["впевненість нижче 85%", "розмову не розібрати", "доказ — слова менеджера, а не того, хто дзвонив"].sort());
   assert.equal((await recordDecision(c.db, B + 1, "client", null, "", lead(7), NOW)).ok, true);
   const q2 = await decisionQueue(c.db, NOW);
   assert.ok(!q2.pending.some((x) => x.kommoId === B + 1), "🔴 вирішена угода лишилась у черзі");
@@ -767,10 +775,10 @@ test("#1043 ЧОМУ НЕ ВПЕВНЕНИЙ: чотири різні причи
   const { whyUncertain } = await import("./carrierDecisions.js");
   const w = (role: CarrierResult["caller_role"], conf: number, qc: CarrierResult["quote_check"]) =>
     whyUncertain({ caller_role: role, caller_role_confidence: conf, quote_check: qc });
-  assert.equal(w("carrier", 0.8, "counterpart"), "невпевнено");
-  assert.equal(w("carrier", 0.95, "manager"), "цитата менеджера");
-  assert.equal(w("client", 0.95, "absent"), "цитата не знайдена");
-  assert.equal(w("unclear", 0.3, "empty"), "не чути");
+  assert.equal(w("carrier", 0.8, "counterpart"), "впевненість нижче 85%");
+  assert.equal(w("carrier", 0.95, "manager"), "доказ — слова менеджера, а не того, хто дзвонив");
+  assert.equal(w("client", 0.95, "absent"), "у розмові немає фрази-доказу");
+  assert.equal(w("unclear", 0.3, "empty"), "розмову не розібрати");
   assert.equal(w("carrier", 0.95, "counterpart"), null, "🔴 упевнений вердикт отримав причину — потрапить у чергу");
   assert.equal(w("other", 0.9, "empty"), null);
 });
@@ -831,7 +839,8 @@ test("#1060 РУБРИКА v2 · ЖИВА СХЕМА: нове — лише carr
   assert.deepEqual(await rubrics("1060-new"), ["carrier-v2"], "🔴 новий мобільний дзвінок слухається не рубрикою v2");
   assert.deepEqual(await rubrics("1060-old"), ["carrier-v1"], "🔴 розібраний v1 дзвінок переслухали й оплатили вдруге");
   assert.equal(net.hits.geminiCarrier, 1, "🔴 модель кликали не рівно для одного нового дзвінка");
-  assert.deepEqual(await rubrics("1060-ad"), ["first-touch-v1"], "🔴 рекламний дзвінок отримав рубрику перевізників");
+  // Рубрика «Першого дотику» — з константи: вона змінюється разом із ТЗ (30.09.2026 — first-touch-v2).
+  assert.deepEqual(await rubrics("1060-ad"), [(await import("./callAiProviders.js")).RUBRIC_CURRENT], "🔴 рекламний дзвінок отримав рубрику перевізників");
   const res = (await c.raw.query<{ result: CarrierResult }>(`SELECT a.result FROM call_analyses a JOIN call_transcripts t ON t.id=a.transcript_id
     WHERE t.uniqueid='1060-new'`)).rows[0].result;
   assert.deepEqual([res.caller_role, res.other_type, res.quote_check, carrierBucket(res)], ["carrier", null, "counterpart", "carrier"]);
@@ -1151,7 +1160,8 @@ test("#1069 ПРОВОДКА ФРОНТУ: вкладки ТЗ, картка у�
     assert.ok(api.includes(p), `🔴 api не ходить на ${p}`);
   assert.match(api, /\/audio`, \{ responseType: "blob" \}/, "🔴 запис не йде байтами з нашого сервера");
   const V = await loadCarrierView();
-  assert.deepEqual(V.CARRIER_TABS.map((x) => x.label), ["Клієнти", "Перевізники", "Інше", "На перевірці"], "🔴 вкладки ≠ ТЗ");
+  assert.deepEqual(V.CARRIER_TABS.map((x) => x.label), ["Клієнти", "Перевізники", "Інше", "AI не впевнений"], "🔴 вкладки ≠ ТЗ (четверта — «AI не впевнений», Роман 30.09.2026)");
+  assert.ok(V.CARRIER_TABS.every((x) => x.hint.length > 20), "🔴 у вкладки немає пояснення під ⓘ");
   assert.deepEqual(["client", "carrier", "other", "review", "error", "waiting", "no_talk"].map(V.tabOf), ["client", "carrier", "other", "review", "review", "review", null],
     "🔴 нерозсортоване (помилка, AI слухає) загубилось з вкладок або «без розмови» потрапило у вкладку");
   assert.deepEqual(Object.keys(V.CATEGORY_UI).sort(), ["carrier", "client", "error", "no_talk", "other", "review", "waiting"]);
@@ -1285,7 +1295,7 @@ test("#1073 ТОЧКА СТАРТУ · ЖИВА СХЕМА: до старту �
   assert.deepEqual(shown, [107302], "🔴 угода до старту потрапила у вкладки/звіт");
   const route = SRC("routes/dashboard.ts");
   assert.match(route, /const CARRIER_SINCE = \(\) => config\.callAi\.carrierLaunchAt;/);
-  assert.equal((route.match(/CARRIER_SINCE\(\)/g) ?? []).length, 4, "🔴 не всі роути вкладки й звіту беруть точку старту");
+  assert.equal((route.match(/CARRIER_SINCE\(\)/g) ?? []).length, 6, "🔴 не всі роути вкладки, звіту, динаміки й однієї угоди беруть точку старту");
   assert.match(SRC("jobs/carrierCallJob.ts"), /launchAt: new Date\(config\.callAi\.carrierLaunchAt\)/, "🔴 джоба слухає без точки старту");
   assert.match(SRC("config.ts"), /carrierLaunchAt: process\.env\.CARRIER_LAUNCH_AT \?\? "2026-09-30T09:48:08Z"/, "🔴 точка старту ≠ рішенню 30.09.2026");
 });
@@ -1361,6 +1371,9 @@ test("#1076 ЗАДАЧНИК · ЖИВА СХЕМА: одна відкрита �
     await call(c, u, came, 40, P);
     await carrierDeal(c, 107600 + n, P, came, "own", u, 1); await owner(c, 107600 + n, user);
     await carrierAnalysedV2(c, u, role, conf, "counterpart");
+    // Час вердикту — фіксований, а не «зараз»: інакше після 18:00 за Києвом строк переїжджає на завтра, і гейт червоніє
+    // за годинником, а не за дефектом (спіймано 30.09.2026 о 18:0x).
+    await c.raw.query(`UPDATE call_analyses a SET updated_at = $2 FROM call_transcripts t WHERE t.id = a.transcript_id AND t.uniqueid = $1`, [u, came.toISOString()]);
   };
   await mk(1, 10601, "carrier", 0.6); await mk(2, 10601, "unclear", 0.3); await mk(3, 10602, "client", 0.95);
   const tasks = async () => (await c.raw.query<{ id: number; assignee_id: number; title: string; status: string; deadline: string; close_reason: string | null }>(
@@ -1441,6 +1454,7 @@ test("#1078 БЕЗ РОЗМОВИ · ЖИВА СХЕМА: після строк�
   await call(c, "1078-talk", min(40), 40, P);                    // номер P: перша угода з розмовою
   await carrierDeal(c, B + 2, P, min(40));
   await carrierDeal(c, B + 3, P, min(20));                       // друга угода того ж номера — повторить вердикт
+  await syncedAt(c);
   const r1 = await resolveCarrierDeals(c.db, NOW, 0);
   const st = async (id: number) => (await row(c, id)).state;
   assert.equal(await st(B + 1), "no_talk", "🔴 угода без розмови чекає добу замість закриття одразу");
@@ -1476,9 +1490,412 @@ test("#1079 ЕКРАН МЕНЕДЖЕРА: без службового рядк�
   assert.match(sec, /const isManager = roleKey === "manager";/);
   assert.match(sec, /const isLead = roleKey !== "manager" && roleKey !== "team_lead";/, "🔴 керівництво визначено не як «не менеджер і не тімлід»");
   assert.match(sec, /\{meta && isLead && \(\s*<p/, "🔴 службовий рядок бачить не лише керівництво");
-  assert.match(sec, /\{!isManager && <th style=\{cell\}>Менеджер<\/th>\}/, "🔴 колонка «Менеджер» є в менеджера");
-  assert.match(sec, /\{meta && isLead && meta\.agreement\.length > 0 && \(/, "🔴 точність AI бачить не лише керівництво");
+  assert.match(sec, /\{!isManager && <th style=\{cell\}><Hd t="Менеджер" /, "🔴 колонка «Менеджер» є в менеджера");
+  assert.match(sec, /\{meta && isLead && meta\.agreementRows\.length > 0 && <AgreementCard/, "🔴 точність AI бачить не лише керівництво");
   assert.match(readFileSync(FE("pages/Dashboard.tsx"), "utf8"), /<CarrierCallsSection roleKey=\{auth\?\.roleKey \?\? null\} \/>/, "🔴 роль не передано в секцію");
   const card = readFileSync(FE("pages/dashboard/sections/CarrierReportCard.tsx"), "utf8");
   assert.match(card, /\{rep\.managers\.length > 1 && <tr/, "🔴 звіт з одним менеджером повторює його рядок «разом»");
+});
+
+/**
+ * #1140 — ДИНАМІКА ЗА ПЕРІОД (Роман 30.09.2026: «графіки … скільки відсіяно, пропущено, скільки грошей»): кожен день
+ * періоду є (порожній — нулем); сума стовпчиків за категоріями = числам звіту з тих самих рядків; «відсіяв фільтр» —
+ * лише угоди, яких ми після фільтра не бачили; витрати — лише коли дозволено (керівництво), інакше `null`.
+ * 🧨 Червоніє, якщо загубити порожній день, рахувати графік інакше, ніж звіт, чи віддати витрати менеджеру.
+ */
+test("#1140 ДИНАМІКА · ЖИВА СХЕМА: усі дні, графік = звіт, фільтр — без наших угод, витрати лише керівництву", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  await c.raw.query("DELETE FROM deals WHERE kommo_id BETWEEN 114000 AND 114099");
+  await c.raw.query("TRUNCATE ai_spend_ledger");
+  const { carrierDailyStats, carrierDealRows, carrierReport } = await import("./carrierDeals.js");
+  const d1 = new Date("2026-08-10T08:00:00Z"), d3 = new Date("2026-08-12T08:00:00Z");
+  const mk = async (n: number, at: Date, role: string | null, conf = 0.95, state = "own") => {
+    const P = phone(11400, n), u = `1140-${String(n)}`;
+    if (state === "own") await call(c, u, at, 40, P);
+    await carrierDeal(c, 114000 + n, P, at, state, state === "own" ? u : null, state === "own" ? 1 : 0);
+    if (role) await carrierAnalysedV2(c, u, role, conf, "counterpart", role === "other" ? "spam" : null);
+  };
+  await mk(1, d1, "client"); await mk(2, d1, "carrier"); await mk(3, d3, "other"); await mk(4, d3, "carrier", 0.5); await mk(5, d3, null, 0, "no_talk");
+  await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,reject_reason,created_at_kommo) VALUES
+    (114090,'380500114090',8921928,143,'Перевізник','2026-08-10 10:00:00+03'),
+    (114002,'380500114002',8921928,143,'Перевізник','2026-08-10 10:00:00+03')`);   // друга — наша, не фільтр
+  await c.raw.query(`INSERT INTO ai_spend_ledger(at,provider,operation,units,unit,unit_price_usd) VALUES
+    ('2026-08-10T09:00:00Z','elevenlabs','carrier_stt',10,'audio_sec',0.01), ('2026-08-10T09:00:00Z','elevenlabs','stt',10,'audio_sec',1)`);
+  // Дати свідомо поза вереснем: база спільна для гейтів, а в інших фікстурах на 24–26.09 лежать «відсіяні фільтром».
+  const days = await carrierDailyStats(c.db, "2026-08-10", "2026-08-12", {}, null, 8921928, true);
+  assert.deepEqual(days.map((d) => d.day), ["2026-08-10", "2026-08-11", "2026-08-12"], "🔴 порожній день загубився з осі");
+  assert.deepEqual(days.map((d) => [d.filtered, d.noTalk, d.clients, d.carriers, d.other, d.unsorted]),
+    [[1, 0, 1, 1, 0, 0], [0, 0, 0, 0, 0, 0], [0, 1, 0, 0, 1, 1]], "🔴 стовпчики ≠ категоріям угод по днях");
+  const rep = carrierReport(await carrierDealRows(c.db, { period: { from: "2026-08-10", to: "2026-08-12" }, scope: {} }));
+  const sum = (k: "clients" | "carriers" | "other" | "unsorted" | "noTalk") => days.reduce((s, d) => s + d[k], 0);
+  assert.deepEqual([sum("clients"), sum("carriers"), sum("other"), sum("unsorted"), sum("noTalk")],
+    [rep.total.clients, rep.total.carriersAuto + rep.total.carriersManual, rep.total.otherAuto + rep.total.otherManual, rep.total.unsorted, rep.total.noTalk],
+    "🔴 графік рахує інакше, ніж звіт");
+  assert.equal(days[0].spendUsd, 0.1, "🔴 витрати мобільних змішано з чужими або загублено");
+  assert.ok((await carrierDailyStats(c.db, "2026-08-10", "2026-08-12", {}, null, 8921928, false)).every((d) => d.spendUsd === null),
+    "🔴 витрати віддано тому, кому не можна");
+  const route = SRC("routes/dashboard.ts");
+  const at = route.indexOf('dashboardRouter.get("/carrier-calls/stats"');
+  assert.ok(at > 0 && at < route.indexOf('dashboardRouter.get("/carrier-calls/:uniqueid"'), "🔴 /stats після /:uniqueid — піде як номер дзвінка");
+  assert.match(route.slice(at, route.indexOf("dashboardRouter.", at + 10)), /carrierDailyStats\(pool, from, to, carrierScope\(req\), CARRIER_SINCE\(\), CARRIER_STAGE\.pipelineId, carrierIsLeadership\(req\.auth!\)\)/,
+    "🔴 графік без скоупу ролі, точки старту чи межі витрат");
+  const row = ACCESS_MATRIX.find((r) => r.method === "GET" && r.path === "/api/dashboard/carrier-calls/stats");
+  assert.ok(row && row.deny.includes("hr" as never) && row.deny.includes("financier" as never), "🔴 /stats не в матриці або відкритий HR/фінансисту");
+});
+
+/**
+ * #1141 — «AI ПРОТИ ЛЮДИНИ» ПОІМЕННО: рядок — ОСТАННЄ рішення по угоді, де AI мав вердикт (хто, роль, коли, чий менеджер,
+ * збіг); угоди без вердикту AI не йдуть; список — лише керівництву (менеджер і тімлід отримують порожній).
+ * 🧨 Червоніє, якщо брати не останнє рішення, домішати угоди без вердикту чи віддати список менеджеру.
+ */
+test("#1141 AI ПРОТИ ЛЮДИНИ ПОІМЕННО · ЖИВА СХЕМА: останнє рішення, хто й чия угода; лише керівництву", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  await seedTeams(c);
+  const { carrierAgreementRows } = await import("./carrierDeals.js");
+  await carrierDeal(c, 114101, phone(11410, 1), min(100)); await owner(c, 114101, 10601);
+  await c.raw.query(`INSERT INTO carrier_decisions(kommo_id,decision,decided_by,decider_role,ai_role,ai_confidence,decided_at) VALUES
+    (114101,'client',1,'manager','carrier',0.6,$1), (114101,'carrier',1,'team_lead','carrier',0.6,$2),
+    (114102,'other',1,'kvp','client',0.7,$1),
+    (114103,'client',1,'manager',NULL,NULL,$1)`, [min(50).toISOString(), min(40).toISOString()]);
+  const rows = await carrierAgreementRows(c.db);
+  assert.deepEqual(rows.map((r) => [r.kommoId, r.decision, r.byRole, r.agreed]), [[114101, "carrier", "team_lead", true], [114102, "other", "kvp", false]],
+    "🔴 не останнє рішення, не той порядок або домішано угоду без вердикту AI");
+  assert.equal(rows[0].managerName, "Менеджер 1", "🔴 не видно, чия це угода");
+  const route = SRC("routes/dashboard.ts");
+  const at = route.indexOf('dashboardRouter.get("/carrier-calls/meta"');
+  assert.match(route.slice(at, route.indexOf("dashboardRouter.", at + 10)), /agreementRows: lead \? \(await carrierAgreementRows\(pool\)\)/, "🔴 поіменний список віддається не лише керівництву");
+  assert.match(route, /const carrierIsLeadership = \(auth: AuthPayload\) => auth\.roleKey !== "manager" && auth\.roleKey !== "team_lead";/);
+});
+
+/**
+ * #1142 — АНАЛІТИКА — ОКРЕМА СТОРІНКА (Роман 30.09.2026: «мав залишитися інтерфейс як і до цього … а графіки і
+ * аналітика на іншій вкладці цієї сторінки»): «Угоди» — угоди за період по категоріях, без графіків; графіки й
+ * «AI проти людини» — лише на «Аналітиці». Перемикач — у шапці, період спільний.
+ * 🧨 Червоніє, якщо графік чи «AI проти людини» повернуться на сторінку угод або зникне перемикач.
+ */
+test("#1142 АНАЛІТИКА — ОКРЕМА СТОРІНКА: «Угоди» без графіків, графіки й «AI проти людини» — лише на «Аналітиці»", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8");
+  assert.match(sec, /\[\["deals", "Угоди"\], \["analytics", "Аналітика"\]\]/, "🔴 перемикача «Угоди / Аналітика» немає");
+  const a = sec.indexOf('if (page === "analytics") return (');
+  assert.ok(a > 0, "🔴 сторінки «Аналітика» немає");
+  const analytics = sec.slice(a, sec.indexOf("\n  );\n", a));
+  assert.match(analytics, /<CarrierStatsCard from=\{from\} to=\{to\}/, "🔴 графіків немає на «Аналітиці»");
+  assert.match(analytics, /<AgreementCard meta=\{meta\}/, "🔴 «AI проти людини» немає на «Аналітиці»");
+  const rest = sec.slice(0, a) + sec.slice(a + analytics.length);
+  const body = rest.slice(rest.indexOf("export function CarrierCallsSection"));
+  assert.doesNotMatch(body, /<CarrierStatsCard /, "🔴 графік повернувся на сторінку угод");
+  assert.doesNotMatch(body, /<AgreementCard /, "🔴 «AI проти людини» повернулось на сторінку угод");
+});
+
+/**
+ * #1143 — УГОДА З «AI ПРОТИ ЛЮДИНИ» ВІДКРИВАЄТЬСЯ ПОВНІСТЮ (Роман 30.09.2026: «щоб можна було повністю відкрити
+ * транскрипт»): клік по рядку — повна картка угоди (запис, текст, вердикт, журнал, кнопки) через `/carrier-calls/deal/:id`;
+ * роут — у скоупі ролі й з точкою старту (чужа угода — 404), до `/:uniqueid`, у матриці; відповідь — тим самим переліком
+ * полів, що й список.
+ * 🧨 Червоніє, якщо зняти скоуп з роуту, віддати іншим переліком полів чи рядок перестане відкривати картку.
+ */
+test("#1143 УГОДА З «AI ПРОТИ ЛЮДИНИ»: повна картка, роут у скоупі ролі, до /:uniqueid, у матриці, той самий перелік полів", async () => {
+  const route = SRC("routes/dashboard.ts");
+  const at = route.indexOf('dashboardRouter.get("/carrier-calls/deal/:kommoId"');
+  assert.ok(at > 0 && at < route.indexOf('dashboardRouter.get("/carrier-calls/:uniqueid"'), "🔴 роуту однієї угоди немає або він після /:uniqueid");
+  const body = route.slice(at, route.indexOf("dashboardRouter.", at + 10));
+  assert.match(body, /carrierDealRows\(pool, \{ period: null, scope: carrierScope\(req\), ids: \[id\], since: CARRIER_SINCE\(\) \}\)/, "🔴 угода за номером без скоупу ролі чи точки старту");
+  assert.match(body, /res\.status\(404\)/, "🔴 чужа угода не 404");
+  assert.match(body, /res\.json\(carrierDealJson\(r\)\)/, "🔴 одна угода віддається іншим переліком полів, ніж список");
+  assert.match(route, /rows: rows\.map\(carrierDealJson\)/, "🔴 список і одна угода розійшлись у переліку полів");
+  const row = ACCESS_MATRIX.find((r) => r.method === "GET" && r.path === "/api/dashboard/carrier-calls/deal/:kommoId");
+  assert.ok(row && row.deny.includes("hr" as never) && row.deny.includes("financier" as never), "🔴 роут однієї угоди не в матриці або відкритий HR/фінансисту");
+  const sec = readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8");
+  assert.match(sec, /<CarrierDealById kommoId=\{r\.kommoId\}/, "🔴 рядок «AI проти людини» не відкриває картку угоди");
+  const panel = readFileSync(FE("pages/dashboard/sections/CarrierDealPanel.tsx"), "utf8");
+  // Межа — тіло самої функції (правило 9: змістова, а не за довжиною).
+  const byId = panel.slice(panel.indexOf("export function CarrierDealById"), panel.indexOf("export function CarrierDealPanel"));
+  assert.ok(byId.length > 0, "🔴 CarrierDealById не знайдено");
+  assert.match(byId, /fetchCarrierDeal\(kommoId\)/, "🔴 картка за номером вантажить не угоду за номером");
+  assert.match(byId, /<CarrierDealPanel deal=\{deal\}/, "🔴 картка за номером — не та сама повна картка угоди");
+});
+
+/**
+ * #1144 — «ЩО З УГОДОЮ В CRM» ОДНИМ РЯДКОМ (Роман 30.09.2026: «скажи які угоди пішли в crm, які видалені, щоб розуміти»):
+ * клієнт — лишилась; закрита дашбордом — прибрана з причиною; вирішено, але ще не закрито — буде прибрана; невирішена —
+ * чекає рішення; повернута — повернута; закрита не нами (фільтр/людина в Kommo) — закрита в CRM; переведена далі — пішла
+ * далі. Факт у CRM сильніший за наш намір.
+ * 🧨 Червоніє, якщо переплутати причину, показати «лишилась» для прибраної чи намір замість факту.
+ */
+test("#1144 ЩО З УГОДОЮ В CRM: лишилась / прибрана з причиною / буде прибрана / чекає / повернута; факт CRM сильніший", async () => {
+  const ts = (await import("typescript")).default;
+  const js = ts.transpileModule(readFileSync(FE("pages/dashboard/carrierCallsView.ts"), "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const V = await import(`data:text/javascript,${encodeURIComponent(js)}`) as { crmOutcome: (r: unknown) => { icon: string; label: string } };
+  const o = (category: string, close: unknown, statusId: number | null = 70419108, rejectReason: string | null = null) =>
+    V.crmOutcome({ category, close, crm: { statusId, rejectReason } }).label;
+  const closed = (reason: string) => ({ state: "closed", at: "2026-09-30T12:00:00Z", reason });
+  assert.equal(o("client", null), "лишилась у CRM");
+  assert.equal(o("carrier", closed("carrier"), 143, "Перевізник"), "прибрана: «Перевізник»");
+  assert.equal(o("other", closed("other"), 143), "прибрана: «Нецільове звернення»", "🔴 причину «Інше» переплутано");
+  assert.equal(o("no_talk", closed("no_talk"), 143), "прибрана: «Немає зв'язку»");
+  assert.equal(o("carrier", null), "буде прибрана: «Перевізник»", "🔴 вирішену, але ще не закриту угоду показано як прибрану або як таку, що лишилась");
+  assert.equal(o("review", null), "чекає рішення");
+  assert.equal(o("carrier", { state: "reverted", at: "x", reason: "carrier" }), "повернута на етап");
+  assert.equal(o("client", null, 143, "Дубль"), "закрита в CRM: «Дубль»", "🔴 факт CRM (закрита) переважила наш намір «лишилась»");
+  assert.equal(o("client", null, 142), "успішна угода");
+  assert.equal(o("review", null, 69693668), "пішла далі по воронці");
+  const card = readFileSync(FE("pages/dashboard/sections/CarrierStatsCard.tsx"), "utf8");
+  assert.match(card, /title: "Лишились у CRM", n: totals\.clients/, "🔴 «лишились у CRM» рахує не клієнтів");
+  assert.match(card, /title: "Прибрано з CRM", n: totals\.filtered \+ totals\.carriers \+ totals\.other \+ totals\.noTalk/, "🔴 «прибрано з CRM» рахує не всі закриття");
+  assert.match(readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8"), /const o = crmOutcome\(r\)/, "🔴 рядок угоди не показує, що з нею в CRM");
+});
+
+/**
+ * #1145 — ЗАХИСТ «БЕЗ РОЗМОВИ» ВІД ПАДІННЯ RINGOSTAT, ПЕРЕВІРКА ① (рішення 05.10.2026): синк дзвінків старший за поріг
+ * (30 хв) або невідомий — крок «без розмови» не виконується, угода ЧЕКАЄ; синк оновився — закривається тим самим проходом,
+ * що й завжди. Бойова джоба бере поріг із налаштувань.
+ * 🧨 Червоніє, якщо прибрати перевірку свіжості в кроці ③ (`!guard.gate.open`), рахувати «немає рядка» свіжим чи загубити поріг у джобі.
+ */
+test("#1145 СИНК ДЗВІНКІВ СТАРИЙ · ЖИВА СХЕМА: «без розмови» на паузі, угода чекає; синк свіжий — закривається", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  const { resolveCarrierDeals } = await import("./carrierCalls.js");
+  const B = 114500, P = phone(B, 1);
+  await carrierDeal(c, B + 1, P, min(300));
+  await call(c, "1145-short", min(300), 4, P);                   // дзвінок-творець є, розмови від 10 с немає
+  await syncedAt(c, min(31));
+  const r1 = await resolveCarrierDeals(c.db, NOW, 0, 30);
+  assert.equal((await row(c, B + 1)).state, "waiting", "🔴 синк дзвінків 31 хв тому, а угоду закрито «без розмови»");
+  assert.deepEqual([r1.noTalk, r1.noTalkGate.open, r1.noTalkGate.syncAgeMin], [0, false, 31]);
+  await syncedAt(c, null);
+  const r2 = await resolveCarrierDeals(c.db, NOW, 0, 30);
+  assert.equal((await row(c, B + 1)).state, "waiting", "🔴 вік синку невідомий (рядка немає), а «без розмови» поставлено — «не знаю» прочитано як «добре»");
+  assert.deepEqual([r2.noTalkGate.open, r2.noTalkGate.syncAgeMin], [false, null]);
+  await syncedAt(c, min(30));
+  const r3 = await resolveCarrierDeals(c.db, NOW, 0, 30);
+  assert.equal((await row(c, B + 1)).state, "no_talk", "дзеркало: синк рівно 30 хв тому — свіжий, угода закривається як завжди");
+  assert.deepEqual([r3.noTalk, r3.noTalkGate.open], [1, true]);
+  assert.match(SRC("jobs/carrierCallJob.ts"), /noTalkSyncMaxMin: minutesSetting\(config\.callAi\.carrierNoTalkSyncMaxMin, NO_TALK_GUARD\.defaultMaxAgeMin\)/,
+    "🔴 бойова джоба не бере поріг свіжості синку з налаштувань");
+});
+
+/**
+ * #1146 — ЗАХИСТ «БЕЗ РОЗМОВИ», ПЕРЕВІРКА ② (рішення 05.10.2026): Ringostat створює угоду на кожен дзвінок, тож дзвінок, що
+ * її створив, мусить бути в базі. Немає — телефонію цієї угоди не видно (синк «успішний», а Ringostat віддав порожньо), і
+ * угода чекає навіть при свіжому синку. Вікно −10…+10 хв від створення, з обох боків межі.
+ * 🧨 Червоніє, якщо прибрати умову дзвінка-творця з кроку ③ або розширити/звузити вікно.
+ */
+test("#1146 НЕМАЄ ДЗВІНКА, ЩО СТВОРИВ УГОДУ · ЖИВА СХЕМА: свіжий синк, але дзвінка в базі немає — не закриваємо", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  const { resolveCarrierDeals } = await import("./carrierCalls.js");
+  const B = 114600, created = min(300), at = (m: number) => new Date(created.getTime() + m * 60_000);
+  const [pNone, pIn, pEarly, pLate, pEdge] = [1, 2, 3, 4, 5].map((n) => phone(B, n));
+  await carrierDeal(c, B + 1, pNone, created);                   // жодного дзвінка номера
+  await carrierDeal(c, B + 2, pIn, created); await call(c, "1146-in", at(1), 0, pIn);          // недодзвон через хвилину
+  await carrierDeal(c, B + 3, pEarly, created); await call(c, "1146-early", at(-11), 5, pEarly); // за 11 хв до — поза вікном
+  await carrierDeal(c, B + 4, pLate, created); await call(c, "1146-late", at(11), 5, pLate);     // через 11 хв — поза вікном
+  await carrierDeal(c, B + 5, pEdge, created); await call(c, "1146-edge", at(-10), 5, pEdge);    // рівно за 10 хв — у вікні
+  await syncedAt(c);
+  const r = await resolveCarrierDeals(c.db, NOW, 0, 30);
+  const st = async (id: number) => (await row(c, id)).state;
+  assert.equal(await st(B + 1), "waiting", "🔴 дзвінка, що створив угоду, у базі немає, а її закрито «без розмови»");
+  assert.equal(await st(B + 2), "no_talk", "дзеркало: дзвінок-творець є (недодзвон), розмови немає — закривається");
+  assert.deepEqual([await st(B + 3), await st(B + 4)], ["waiting", "waiting"], "🔴 вікно дзвінка-творця ширше за ±10 хв");
+  assert.equal(await st(B + 5), "no_talk", "🔴 вікно дзвінка-творця вужче за 10 хв");
+  assert.deepEqual([r.noTalk, r.noTalkNoCreatingCall], [2, 3], "🔴 звіт кроку не каже, скільки угод тримає відсутній дзвінок-творець");
+});
+
+/**
+ * #1147 — ПОРОГИ ЗАХИСТУ — З НАЛАШТУВАНЬ (рішення 05.10.2026: «поріг винеси в налаштування»): пауза — 30 хв, тривога — 60 хв
+ * за замовчуванням, змінюються змінними оточення; сміття в налаштуванні — типове значення, а не NaN (з NaN пауза й тривога
+ * мовчали б назавжди). Межа паузи — включно: 30 хв ще свіжий, 31 — ні. Без бази.
+ * 🧨 Червоніє, якщо зашити число в код, змінити типові пороги чи пропустити NaN.
+ */
+test("#1147 ПОРОГИ З НАЛАШТУВАНЬ: пауза 30 хв, тривога 60 хв, сміття — типове; межа включно", async () => {
+  const G = await import("./carrierNoTalkGuard.js");
+  const at = (m: number) => new Date(NOW.getTime() - m * 60_000);
+  assert.equal(G.noTalkGate(at(30), NOW, 30).open, true, "🔴 рівно 30 хв — уже пауза");
+  assert.equal(G.noTalkGate(at(31), NOW, 30).open, false, "🔴 31 хв — ще закриваємо");
+  assert.equal(G.noTalkGate(at(31), NOW, 45).open, true, "🔴 поріг не береться з параметра");
+  assert.deepEqual(G.noTalkGate(null, NOW, 30), { open: false, syncAgeMin: null, maxAgeMin: 30, lastSyncAt: null });
+  assert.deepEqual([G.minutesSetting(Number("abc"), 30), G.minutesSetting(0, 30), G.minutesSetting(-5, 30), G.minutesSetting(45, 30)], [30, 30, 30, 45],
+    "🔴 сміття в налаштуванні пройшло як поріг");
+  assert.deepEqual([G.NO_TALK_GUARD.defaultMaxAgeMin, G.NO_TALK_GUARD.defaultAlertMin], [30, 60], "🔴 типові пороги ≠ рішенню 05.10.2026");
+  const cfg = SRC("config.ts");
+  assert.match(cfg, /carrierNoTalkSyncMaxMin: Number\(process\.env\.CARRIER_NO_TALK_SYNC_MAX_MIN \?\? "30"\)/, "🔴 поріг паузи не в налаштуваннях");
+  assert.match(cfg, /carrierNoTalkSyncAlertMin: Number\(process\.env\.CARRIER_NO_TALK_SYNC_ALERT_MIN \?\? "60"\)/, "🔴 поріг тривоги не в налаштуваннях");
+});
+
+/**
+ * #1148 — ТРИВОГА: СИНКУ НЕМАЄ ДОВШЕ ГОДИНИ (рішення 05.10.2026): понад поріг тривоги (60 хв) або невідомо — тривога; рівно
+ * 60 — ще ні. Перевірка ЗАРЕЄСТРОВАНА в сигналізації (а не лише написана) і бере поріг із налаштувань — тоді поштар
+ * (`alertPush`) донесе її в Telegram і скаже «відновилось», коли синк оживе.
+ * 🧨 Червоніє, якщо зсунути межу, мовчати на невідомому, не зареєструвати перевірку чи зашити поріг.
+ */
+test("#1148 ТРИВОГА: понад 60 хв чи невідомо — тривога; перевірка в сигналізації, поріг із налаштувань", async () => {
+  const G = await import("./carrierNoTalkGuard.js");
+  const at = (m: number) => new Date(NOW.getTime() - m * 60_000);
+  assert.equal(G.noTalkAlertDue(G.noTalkGate(at(61), NOW, 30), 60), true, "🔴 синку немає 61 хв — тривоги немає");
+  assert.equal(G.noTalkAlertDue(G.noTalkGate(at(60), NOW, 30), 60), false, "🔴 рівно 60 хв — уже тривога");
+  assert.equal(G.noTalkAlertDue(G.noTalkGate(at(45), NOW, 30), 60), false, "дзеркало: пауза без тривоги між 30 і 60 хв");
+  assert.equal(G.noTalkAlertDue(G.noTalkGate(null, NOW, 30), 60), true, "🔴 вік синку невідомий — тривога мовчить");
+  const alerts = SRC("health/alerts.ts");
+  assert.match(alerts, /\{\s*id:\s*"carrier_no_talk",[^}]*run:\s*checkCarrierNoTalk\s*\}/, "🔴 перевірку не додано в CHECKS — тривога написана, але не викликається");
+  assert.match(alerts, /minutesSetting\(config\.callAi\.carrierNoTalkSyncAlertMin, NO_TALK_GUARD\.defaultAlertMin\)/, "🔴 поріг тривоги не з налаштувань");
+  assert.match(alerts, /noTalkAlertDue\(g\.gate, alertMin\)/, "🔴 тривога не через спільну функцію рішення");
+});
+
+/**
+ * #1149 — СЛУЖБОВИЙ РЯДОК (рішення 05.10.2026): `/carrier-calls/meta` віддає стан захисту лише керівництву (тим самим
+ * читанням, що й джоба), явним переліком полів; екран каже паузу СЛОВАМИ й червоним, а не мовчить.
+ * 🧨 Червоніє, якщо віддати стан не керівництву, читати його інакше, ніж джоба, чи прибрати паузу з рядка.
+ */
+test("#1149 СЛУЖБОВИЙ РЯДОК: стан захисту лише керівництву, тим самим читанням; пауза — словами й червоним", async () => {
+  const r = SRC("routes/dashboard.ts");
+  const i = r.indexOf('dashboardRouter.get("/carrier-calls/meta"'); assert.ok(i > 0, "роут /carrier-calls/meta не знайдено");
+  const body = r.slice(i, r.indexOf("dashboardRouter.", i + 10));
+  assert.match(body, /const g = lead \? await readNoTalkGuard\(pool, new Date\(\), config\.callAi\.carrierNoTalkCloseMin,/, "🔴 стан захисту не лише керівництву або не тим читанням");
+  assert.match(body, /noTalkGuard: g \? \{ open: g\.gate\.open, syncAgeMin: g\.gate\.syncAgeMin, maxAgeMin: g\.gate\.maxAgeMin, lastSyncAt: g\.gate\.lastSyncAt,\s*noCreatingCall: g\.noCreatingCall \} : null/,
+    "🔴 стан захисту віддається не явним переліком полів");
+  const sec = readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8");
+  assert.match(sec, /\{meta\.noTalkGuard && <NoTalkGuardNote g=\{meta\.noTalkGuard\} \/>\}/, "🔴 стан захисту не виведено в службовий рядок");
+  assert.match(sec, /color: "var\(--danger\)" \}[^>]*>\s*на паузі — синк дзвінків \{age\}, угоди чекають/, "🔴 пауза не сказана словами й червоним");
+});
+
+/** Kommo для прибирання задач: статуси угод і відкриті задачі з фікстури, запис закриття — у журнал викликів. */
+function fakeSweepKommo(statuses: Record<number, number>, tasks: { id: number; leadId: number; createdBy: number; completed: boolean }[], failClose = false) {
+  const calls: { statuses: number[][]; tasks: number[][]; close: { ids: number[]; text: string }[] } = { statuses: [], tasks: [], close: [] };
+  return { calls, kommo: {
+    leadStatuses: async (ids: readonly number[]) => { calls.statuses.push([...ids]); return ids.map((id) => ({ id, statusId: statuses[id] ?? 143 })); },
+    openTasks: async (ids: readonly number[]) => { calls.tasks.push([...ids]); return tasks.filter((t) => ids.includes(t.leadId)); },
+    closeTasks: async (ids: readonly number[], text: string) => { calls.close.push({ ids: [...ids], text }); if (failClose) throw new Error("Kommo API error 502"); return {}; },
+  } };
+}
+
+/**
+ * #1150 — ЯКІ ЗАДАЧІ ЗАКРИВАЄМО (Роман 05.10.2026: «треба щоб автоматично закривало також задачу»): лише ВІДКРИТУ задачу
+ * РОБОТА (`created_by = 0`, «Связаться» від Ringostat) на угоді, яка в Kommo ЗАРАЗ закрита. Задача людини, уже виконана
+ * задача й задача на повернутій у роботу угоді — лишаються. Межі — технічні (90 днів, 10 хв, 80 угод за прохід). Без бази.
+ * 🧨 Червоніє, якщо закривати задачі людей, задачі на відкритих угодах чи зсунути межі.
+ */
+test("#1150 ЯКІ ЗАДАЧІ: лише відкрита задача робота на угоді, закритій у Kommo зараз; людей не чіпаємо", async () => {
+  const S = await import("./carrierTaskSweep.js");
+  const t = (id: number, leadId: number, createdBy: number, completed = false) => ({ id, leadId, createdBy, completed });
+  const picked = S.robotTasksToClose([t(1, 10, 0), t(2, 10, 77), t(3, 10, 0, true), t(4, 20, 0)], new Set([10]));
+  assert.deepEqual(picked.map((x) => x.id), [1], "🔴 закрито не лише відкриту задачу робота на закритій угоді");
+  assert.deepEqual([S.TASK_SWEEP.horizonDays, S.TASK_SWEEP.settleMin, S.TASK_SWEEP.maxPerTick], [90, 10, 80], "🔴 межі прибирання зсунуто");
+  const { closeModeOf } = await import("./carrierClose.js");
+  assert.deepEqual([closeModeOf(""), closeModeOf("live"), closeModeOf("off"), closeModeOf("Live")], ["dry", "live", "off", "dry"],
+    "🔴 описка в налаштуванні вмикає запис у CRM");
+});
+
+/**
+ * #1151 — ПРОХІД · ЖИВА СХЕМА: кандидати — угоди етапу, закриті 10 хв … 90 днів тому, ще не прибрані в цьому режимі;
+ * свіжий статус у Kommo — повернуту угоду не чіпаємо й не позначаємо; журнал (`dry`) нічого не пише в Kommo й не заважає
+ * бойовому (`live` бере і ті, що бачив журнал); прибрана в `live` угода вдруге не береться; збій запису — угода лишається
+ * кандидатом. Підсумок для службового рядка — з тієї самої таблиці.
+ * 🧨 Червоніє, якщо брати угоди поза вікном / інших воронок, довіряти статусу з `deals`, писати в Kommo в журналі, чи
+ * позначати угоду прибраною, коли запис не вдався.
+ */
+test("#1151 ПРИБИРАННЯ · ЖИВА СХЕМА: вікно, свіжий статус, журнал проти бою, повтор і збій", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const S = await import("./carrierTaskSweep.js");
+  const B = 115100, ins = async (id: number, pipeline: number, status: number, closedMinAgo: number | null) => c.raw.query(
+    "INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,closed_at_kommo) VALUES ($1,'380500000000',$2,$3,$4,$5)",
+    [id, pipeline, status, min(2000).toISOString(), closedMinAgo == null ? null : min(closedMinAgo).toISOString()]);
+  await c.raw.query("DELETE FROM carrier_task_sweeps WHERE kommo_id BETWEEN $1 AND $2", [B, B + 99]);
+  await ins(B + 1, 8921928, 143, 30);            // закрита 30 хв тому — кандидат
+  await ins(B + 2, 8921928, 143, 5);             // щойно — ще ні (10 хв)
+  await ins(B + 3, 8921928, 143, 100 * 24 * 60); // 100 днів тому — поза вікном
+  await ins(B + 4, 7341740, 143, 30);            // інша воронка
+  await ins(B + 5, 8921928, 143, 40);            // у `deals` закрита, а в Kommo вже повернута
+  await ins(B + 6, 8921928, 70419108, null);     // відкрита на етапі
+  const tasks = [{ id: 9001, leadId: B + 1, createdBy: 0, completed: false }, { id: 9002, leadId: B + 1, createdBy: 77, completed: false },
+    { id: 9003, leadId: B + 1, createdBy: 0, completed: true }, { id: 9005, leadId: B + 5, createdBy: 0, completed: false }];
+  const ours = (k: { calls: { statuses: number[][] } }) => k.calls.statuses.flat().filter((id) => id > B && id < B + 100).sort();
+  const row = async (id: number) => (await c.raw.query<{ mode: string; robot_tasks: number; closed_tasks: number }>(
+    "SELECT mode, robot_tasks, closed_tasks FROM carrier_task_sweeps WHERE kommo_id = $1", [id])).rows[0] ?? null;
+
+  const k1 = fakeSweepKommo({ [B + 5]: 70419108 }, tasks);
+  const r1 = await S.runTaskSweep(c.db, NOW, "dry", k1.kommo);
+  assert.deepEqual(ours(k1), [B + 1, B + 5], "🔴 кандидати не ті: вікно 10 хв … 90 днів і лише воронка етапу");
+  assert.equal(k1.calls.close.length, 0, "🔴 журнальний прохід написав у Kommo");
+  assert.deepEqual([r1.robotTasks, r1.closedTasks, r1.peopleTasks, r1.reopened], [1, 0, 1, 1]);
+  assert.deepEqual(await row(B + 1), { mode: "dry", robot_tasks: 1, closed_tasks: 0 });
+  assert.equal(await row(B + 5), null, "🔴 повернуту в роботу угоду позначено прибраною");
+  assert.ok(!k1.calls.tasks.flat().includes(B + 5), "🔴 задачі повернутої угоди взагалі запитано");
+
+  const k2 = fakeSweepKommo({ [B + 5]: 70419108 }, tasks);
+  await S.runTaskSweep(c.db, NOW, "dry", k2.kommo);
+  assert.deepEqual(ours(k2), [B + 5], "🔴 журнал удруге бере вже прибрану в журналі угоду");
+
+  const k3 = fakeSweepKommo({ [B + 5]: 70419108 }, tasks);
+  const r3 = await S.runTaskSweep(c.db, NOW, "live", k3.kommo);
+  assert.deepEqual(ours(k3), [B + 1, B + 5], "🔴 бойовий прохід пропустив угоду, яку бачив лише журнал");
+  assert.deepEqual(k3.calls.close, [{ ids: [9001], text: S.TASK_SWEEP_TEXT }], "🔴 закрито не рівно задачу робота на закритій угоді");
+  assert.equal(r3.closedTasks, 1);
+  assert.deepEqual(await row(B + 1), { mode: "live", robot_tasks: 1, closed_tasks: 1 });
+
+  const k4 = fakeSweepKommo({ [B + 5]: 70419108 }, tasks);
+  await S.runTaskSweep(c.db, NOW, "live", k4.kommo);
+  assert.deepEqual([ours(k4), k4.calls.close.length], [[B + 5], 0], "🔴 прибрану угоду взято вдруге");
+
+  await ins(B + 7, 8921928, 143, 50);
+  const bad = fakeSweepKommo({ [B + 5]: 70419108 }, [{ id: 9007, leadId: B + 7, createdBy: 0, completed: false }], true);
+  const r5 = await S.runTaskSweep(c.db, NOW, "live", bad.kommo);
+  assert.match(r5.error ?? "", /502/, "🔴 збій Kommo проковтнуто");
+  assert.equal(await row(B + 7), null, "🔴 запис не вдався, а угоду позначено прибраною — задача висітиме вічно");
+  const good = fakeSweepKommo({ [B + 5]: 70419108 }, [{ id: 9007, leadId: B + 7, createdBy: 0, completed: false }]);
+  await S.runTaskSweep(c.db, NOW, "live", good.kommo);
+  assert.deepEqual(good.calls.close.map((x) => x.ids), [[9007]], "дзеркало: наступним проходом угоду після збою прибрано");
+
+  const off = fakeSweepKommo({}, tasks);
+  const r6 = await S.runTaskSweep(c.db, NOW, "off", off.kommo);
+  assert.deepEqual([r6.candidates, off.calls.statuses.length], [0, 0], "🔴 вимкнений режим ходить у Kommo");
+  const st = await S.taskSweepStats(c.db, "live");
+  assert.ok(st.closedTasks >= 2 && st.deals >= 2, "🔴 підсумок службового рядка не з таблиці прибирання");
+});
+
+/**
+ * #1152 — ПРОВОДКА: прохід «Відсіву» прибирає задачі НАВІТЬ коли слухати нічого (ранній вихід тіку), збій прибирання
+ * червонить джобу; бойова джоба бере режим із `CARRIER_TASK_SWEEP` (типово — журнал), статус угоди — свіжий із Kommo.
+ * 🧨 Червоніє, якщо загубити прибирання в ранньому виході, проковтнути збій чи зашити режим.
+ */
+test("#1152 ПРОВОДКА: тік прибирає й без розмов, збій червоний; режим — з налаштувань", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  const { runCarrierTick } = await import("./carrierCalls.js");
+  const B = 115200;
+  await c.raw.query("INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,closed_at_kommo) VALUES ($1,'380500000000',8921928,143,$2,$3)",
+    [B + 1, min(500).toISOString(), min(60).toISOString()]);
+  const net = fakeNet();
+  const tick = { http: net.http, keys: { elevenlabs: "k", gemini: "g" }, prices: PRICES, now: () => NOW, stageLeads: async () => [], alert: async () => {} };
+  const k = fakeSweepKommo({}, [{ id: 9101, leadId: B + 1, createdBy: 0, completed: false }]);
+  const r = await runCarrierTick({ db: c.db, ...tick, taskSweep: { mode: "live", kommo: k.kommo } });
+  assert.ok(r.taskSweep, "🔴 тік без розмов пропустив прибирання задач");
+  assert.ok(k.calls.close.some((x) => x.ids.includes(9101)), "🔴 задачу робота на закритій угоді не закрито");
+  await c.raw.query("INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,closed_at_kommo) VALUES ($1,'380500000000',8921928,143,$2,$3)",
+    [B + 2, min(500).toISOString(), min(60).toISOString()]);
+  const bad = fakeSweepKommo({}, [{ id: 9102, leadId: B + 2, createdBy: 0, completed: false }], true);
+  await assert.rejects(runCarrierTick({ db: c.db, ...tick, taskSweep: { mode: "live", kommo: bad.kommo } }), /задачі на закритих угодах/,
+    "🔴 збій прибирання проковтнуто — джоба зелена, задачі висять");
+  const job = SRC("jobs/carrierCallJob.ts");
+  assert.match(job, /taskSweep: \{\s*mode: closeModeOf\(config\.callAi\.carrierTaskSweep\),/, "🔴 бойова джоба не бере режим прибирання з налаштувань");
+  assert.match(job, /leadStatuses: async \(ids\) => \{[\s\S]*?kommoGet<[^>]*status_id[\s\S]*?\/api\/v4\/leads\?/, "🔴 статус угоди не зі свіжої відповіді Kommo");
+  assert.match(SRC("config.ts"), /carrierTaskSweep: process\.env\.CARRIER_TASK_SWEEP \?\? "",/, "🔴 режим прибирання не в налаштуваннях");
+});
+
+/**
+ * #1153 — СЛУЖБОВИЙ РЯДОК: `/carrier-calls/meta` віддає підсумок прибирання лише керівництву явними полями; екран
+ * каже, скільки задач закрито (або «журнал — закрили б»), щоб увімкнення було видно без логів.
+ * 🧨 Червоніє, якщо віддати не керівництву або прибрати рядок з екрана.
+ */
+test("#1153 СЛУЖБОВИЙ РЯДОК: підсумок прибирання — лише керівництву; на екрані закрито / журнал", async () => {
+  const r = SRC("routes/dashboard.ts");
+  const i = r.indexOf('dashboardRouter.get("/carrier-calls/meta"'); assert.ok(i > 0);
+  const body = r.slice(i, r.indexOf("dashboardRouter.", i + 10));
+  assert.match(body, /const sw = lead \? await taskSweepStats\(pool, closeModeOf\(config\.callAi\.carrierTaskSweep\)\) : null;/, "🔴 підсумок не лише керівництву");
+  assert.match(body, /taskSweep: sw \? \{ mode: sw\.mode, deals: sw\.deals, robotTasks: sw\.robotTasks, closedTasks: sw\.closedTasks \} : null,/, "🔴 не явний перелік полів");
+  const sec = readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8");
+  assert.match(sec, /задачі на закритих угодах: \{meta\.taskSweep\.mode === "live"\s*\? `закрито \$\{String\(meta\.taskSweep\.closedTasks\)\}`\s*: `журнал — закрили б/,
+    "🔴 підсумок прибирання не виведено в службовий рядок");
 });

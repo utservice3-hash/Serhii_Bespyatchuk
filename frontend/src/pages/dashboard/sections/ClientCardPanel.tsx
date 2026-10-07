@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Cell } from "recharts";
 import { fetchClientCard, archiveClient, saveLoyaltyOverride, contactChannelLabel, saveClientNextStep, doneClientNextStep, pinPlanBasis, clearPlanBasis, type ClientCard } from "../../../api";
 import { ClientContactFileViewer } from "./ClientContactFileViewer";
+import { ReactCycleStatus, ReactCycleButtons } from "./ReactivationCycle";
 import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
 import { formatAmountFull } from "../format";
 
@@ -39,6 +40,8 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
   const [rate, setRate] = useState<1 | 1.5 | 2>(1);
   const [card, setCard] = useState<ClientCard | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  /** Відмова кнопки циклу реактивації — окремо від `err`, щоб не сховати всю картку. */
+  const [cycleErr, setCycleErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [reason, setReason] = useState("");
   const [forceNote, setForceNote] = useState("");
@@ -211,6 +214,19 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
               у «Обʼєднання · роз'єднання · передача» і вимагала заново шукати клієнта, чия картка вже
               відкрита, а список менеджерів показував усю компанію — вибір чужого давав 403. Для Юлі це
               виглядало як «доступ забрали», хоча сервер пускав тімліда з 14.09.2026. */}
+          {/* 🔁 ЦИКЛ РЕАКТИВАЦІЇ (ТЗ 22.09, блок 4) — ті самі стан і кнопки, що в рядку списку; з сервера. */}
+          {card.reactCycle && (
+            <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "#f5f3ff", border: "1px solid #ddd6fe" }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#6d28d9", marginBottom: 2 }}>
+                🔁 Реактивація · 3 повні місяці без рахунку
+                <span style={{ fontWeight: 400, color: "#6b7280" }}> · останній рахунок {card.reactCycle.lastInvoice ? card.reactCycle.lastInvoice.split("-").reverse().join(".") : "— рахунків не було"}</span>
+              </div>
+              <ReactCycleStatus cycle={card.reactCycle} />
+              <ReactCycleButtons clientKey={card.clientKey} cycle={card.reactCycle}
+                onDone={() => { setCycleErr(null); load(); onChanged?.(); }} onError={setCycleErr} />
+              {cycleErr && <div role="alert" style={{ fontSize: 12, color: "#b91c1c", marginTop: 4, fontWeight: 600 }}>⚠️ {cycleErr}</div>}
+            </div>
+          )}
           {card.canAssign && (
             <div style={{ marginTop: 10 }}>
               <button type="button" onClick={() => setAssigning((v) => !v)} aria-expanded={assigning}

@@ -20,11 +20,26 @@ import { monthsInRange, monthEndOf, workingDaysBetween } from "./dates.js";
  *     «плану немає», а НЕ фальшиві 0 %.
  */
 
-/** Три лічильники, на які ставиться план, — РІВНО ті поля рядка людини, що на екрані. */
-export const LEADGEN_PLAN_METRICS = ["leads", "opr", "quotes"] as const;
+/**
+ * Пункти плану — РІВНО ті числа, що на екрані. Перші три — з 25.09.2026, обовʼязкові.
+ * 📞 `calls` і 💰 `money` — прохання Ярослава 01.10.2026, рішення власника того ж дня: НЕОБОВʼЯЗКОВІ
+ * (план можна подати без них). Дзвінки — факт «Дзвінки» рядка (вихідні, розмова > 8 с); гроші — у
+ * гривнях, ОДИН план, який екран порівнює ДВІЧІ: з «Успішні ₴» і з «Успішні + Очікування ₴».
+ */
+export const LEADGEN_PLAN_METRICS = ["leads", "opr", "quotes", "calls", "money"] as const;
 export type LeadgenPlanMetric = (typeof LEADGEN_PLAN_METRICS)[number];
+/** Без цих план не подається. Решта (`calls`, `money`) — порожня = «не плануємо». */
+export const REQUIRED_PLAN_METRICS: readonly LeadgenPlanMetric[] = ["leads", "opr", "quotes"];
+/** Стеля значення — своя на пункт: гроші в гривнях, решта — штуки. */
+export const LEADGEN_PLAN_MAX_OF: Record<LeadgenPlanMetric, number> = {
+  leads: 100_000, opr: 100_000, quotes: 100_000, calls: 100_000, money: 10_000_000,
+};
+/** Порожній план — усі пункти `null`. Одне місце, щоб новий пункт не забули в жодній копії. */
+export function emptyPlanRecord(): Record<LeadgenPlanMetric, number | null> {
+  return { leads: null, opr: null, quotes: null, calls: null, money: null };
+}
 /** Головний показник вердикту (рішення 4): прорахунки. */
-export const PRIMARY_PLAN_METRIC: LeadgenPlanMetric = "quotes";
+export const PRIMARY_PLAN_METRIC = "quotes" as const satisfies LeadgenPlanMetric;
 
 /** Рядок людини — форма `leadgenStats.LeadgenPersonRow` (структурно, без імпорту ядра). */
 export interface RosterRow {
@@ -112,7 +127,7 @@ export type PeriodPlan = Record<LeadgenPlanMetric, number | null>;
  * інакше факт усього періоду ділився б на план його частини, і відсоток брехав би вгору.
  */
 export function planForPeriod(approved: ApprovedByMonth, from: string, to: string): PeriodPlan {
-  const out: PeriodPlan = { leads: 0, opr: 0, quotes: 0 };
+  const out: PeriodPlan = { leads: 0, opr: 0, quotes: 0, calls: 0, money: 0 };
   for (const mo of monthsInRange(from, to)) {
     const me = monthEndOf(mo);
     const wdMonth = workingDaysBetween(mo, me);
@@ -160,12 +175,36 @@ export function planExecution(fact: number, plan: number | null, elapsed: number
   return { kind: "plan", fact, plan, pct: Math.round((fact / plan) * 100), level: r >= 1 ? "g" : r >= 0.7 ? "a" : "r" };
 }
 
-export interface PersonPlanView { managerId: number; plan: PeriodPlan; exec: PlanExec }
+/**
+ * Виконання другорядних пунктів. Гроші — ДВА порівняння одного плану (рішення власника 01.10.2026):
+ * `moneyEarned` — з «Успішні ₴», `moneyTotal` — з «Успішні + Очікування ₴».
+ */
+export interface ExtraExec { calls: PlanExec; moneyEarned: PlanExec; moneyTotal: PlanExec }
+/** Гроші людини за період — ті самі числа, що на картці («Успішні ₴», «Очікування ₴»). */
+export interface PersonMoneyFact { earned: number; pending: number }
+/** «Лишилось до плану» людини — лише для поточного місяця (`isCurrentFullMonth`); гроші — лише залишок місяця. */
+export interface PersonPace { calls: PlanPace; leads: PlanPace; opr: PlanPace; quotes: PlanPace; moneyLeft: number | null }
+export interface PersonPlanView { managerId: number; plan: PeriodPlan; exec: PlanExec; extra: ExtraExec; pace?: PersonPace }
 export interface TeamPlanView {
   /** Людей у рядках і скільки з них мають план прорахунків на ВЕСЬ період. */
   total: number; planned: number;
   /** Факт прорахунків УСІХ рядків команди (з безплановими — як у Звіті продажів) і Σ планів. */
   fact: number; plan: number | null; exec: PlanExec;
+  /** Дзвінки й гроші команди — те саме правило: Σ планів тих, у кого він є; факт — усіх рядків. */
+  extra: ExtraExec;
+}
+
+/** Σ плану пункту серед тих, у кого він є; `null` — ні в кого немає. */
+function sumPlan(byPerson: readonly PersonPlanView[], k: LeadgenPlanMetric): number | null {
+  const w = byPerson.filter((p) => p.plan[k] != null);
+  return w.length ? Math.round(w.reduce((s, p) => s + (p.plan[k] as number), 0) * 10) / 10 : null;
+}
+function extraExec(calls: number, m: PersonMoneyFact, plan: PeriodPlan | { calls: number | null; money: number | null }, elapsed: number): ExtraExec {
+  return {
+    calls: planExecution(calls, plan.calls, elapsed),
+    moneyEarned: planExecution(m.earned, plan.money, elapsed),
+    moneyTotal: planExecution(m.earned + m.pending, plan.money, elapsed),
+  };
 }
 
 /**
@@ -176,18 +215,25 @@ export interface TeamPlanView {
 export function planView(
   rows: readonly RosterRow[], approved: ReadonlyMap<number, ApprovedByMonth>,
   from: string, to: string, today: string,
+  money: ReadonlyMap<number, PersonMoneyFact> = new Map(),
 ): { elapsed: number; byPerson: PersonPlanView[]; team: TeamPlanView } {
   const elapsed = periodElapsed(from, to, today);
+  const zero: PersonMoneyFact = { earned: 0, pending: 0 };
   const byPerson = rows.map((r): PersonPlanView => {
     const plan = planForPeriod(approved.get(r.managerId) ?? new Map(), from, to);
-    return { managerId: r.managerId, plan, exec: planExecution(r[PRIMARY_PLAN_METRIC], plan[PRIMARY_PLAN_METRIC], elapsed) };
+    return { managerId: r.managerId, plan, exec: planExecution(r[PRIMARY_PLAN_METRIC], plan[PRIMARY_PLAN_METRIC], elapsed),
+      extra: extraExec(r.calls, money.get(r.managerId) ?? zero, plan, elapsed) };
   });
   const withPlan = byPerson.filter((p) => p.plan[PRIMARY_PLAN_METRIC] != null);
   const fact = rows.reduce((s, r) => s + r[PRIMARY_PLAN_METRIC], 0);
   const plan = withPlan.length ? Math.round(withPlan.reduce((s, p) => s + (p.plan[PRIMARY_PLAN_METRIC] as number), 0) * 10) / 10 : null;
   return {
     elapsed, byPerson,
-    team: { total: rows.length, planned: withPlan.length, fact, plan, exec: planExecution(fact, plan, elapsed) },
+    team: { total: rows.length, planned: withPlan.length, fact, plan, exec: planExecution(fact, plan, elapsed),
+      extra: extraExec(
+        rows.reduce((s, r) => s + r.calls, 0),
+        rows.reduce((s, r) => { const m = money.get(r.managerId) ?? zero; return { earned: s.earned + m.earned, pending: s.pending + m.pending }; }, zero),
+        { calls: sumPlan(byPerson, "calls"), money: sumPlan(byPerson, "money") }, elapsed) },
   };
 }
 
@@ -225,8 +271,10 @@ export function leadgenSubmitRefusal(a: LgPlanActor, t: LgPlanTarget): string | 
 
 // ─────────────────────────── ТІЛО ПОДАННЯ ───────────────────────────
 
-export const LEADGEN_PLAN_MAX = 100_000;
-export type LeadgenPlanValues = Record<LeadgenPlanMetric, number>;
+/** Стеля штук (ліди, ОПР, прорахунки, дзвінки). Гроші — `LEADGEN_PLAN_MAX_OF.money`. */
+export const LEADGEN_PLAN_MAX = LEADGEN_PLAN_MAX_OF.leads;
+/** `null` — лише в необовʼязкових пунктах: «не плануємо». */
+export type LeadgenPlanValues = Record<LeadgenPlanMetric, number | null>;
 export type ParsedSubmit =
   | { ok: true; managerId: number; month: string; values: LeadgenPlanValues; comment: string | null }
   | { ok: false; error: string };
@@ -237,7 +285,10 @@ export function planMonthOf(v: unknown): string | null {
   return v.slice(0, 7) + "-01";
 }
 
-/** Тіло `POST /leadgen-plans/submit`: людина, місяць і ВСІ три значення — цілі, від 0 до стелі. */
+/**
+ * Тіло `POST /leadgen-plans/submit`: людина, місяць, обовʼязкові три значення й, за бажанням, дзвінки
+ * та гроші — цілі, від 0 до стелі СВОГО пункту. Відсутній / `null` / порожній необовʼязковий = `null`.
+ */
 export function parseLeadgenSubmit(body: unknown): ParsedSubmit {
   const b = (body ?? {}) as Record<string, unknown>;
   const managerId = b.managerId;
@@ -247,8 +298,11 @@ export function parseLeadgenSubmit(body: unknown): ParsedSubmit {
   const values = {} as LeadgenPlanValues;
   for (const k of LEADGEN_PLAN_METRICS) {
     const v = b[k];
-    if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > LEADGEN_PLAN_MAX) {
-      return { ok: false, error: `${k} — ціле від 0 до ${LEADGEN_PLAN_MAX}` };
+    const optional = !REQUIRED_PLAN_METRICS.includes(k);
+    if (optional && (v == null || v === "")) { values[k] = null; continue; }
+    const max = LEADGEN_PLAN_MAX_OF[k];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > max) {
+      return { ok: false, error: `${k} — ціле від 0 до ${max}${optional ? " або порожньо" : ""}` };
     }
     values[k] = v;
   }
@@ -266,4 +320,54 @@ export function personFormationStatus(statuses: readonly LgFormationStatus[]): L
   if (!statuses.length) return "draft";
   for (const s of ["submitted", "returned", "draft", "approved"] as const) if (statuses.includes(s)) return s;
   return "draft";
+}
+
+// ─────────────────────────── ЛИШИЛОСЬ ДО ПЛАНУ (рішення власника 05.10.2026) ───────────────────────────
+
+/** Пункти, для яких рахується денна норма (гроші — лише залишок місяця: угода закривається не тоді, коли працюють). */
+export const PACE_METRICS = ["calls", "leads", "opr", "quotes"] as const;
+export type PaceMetric = (typeof PACE_METRICS)[number];
+
+export type PlanPace =
+  | { kind: "none" }                                   // плану на пункт немає — рядка немає
+  | { kind: "done"; plan: number; fact: number }       // план місяця виконано
+  | { kind: "pace"; plan: number; fact: number; leftMonth: number;
+      /** Норма на сьогодні (або на наступний робочий день, якщо сьогодні вихідний); `null` — робочих днів не лишилось. */
+      normToday: number | null; doneToday: number; leftToday: number | null; leftWeek: number | null; todayIsWorking: boolean };
+
+/**
+ * 🏃 НОРМА З НАЗДОГАНЯННЯМ (рішення власника 05.10.2026, прохання лідгена «бачити, скільки ще не вистачає до норми на
+ * день/тиждень/місяць»). Норма на сьогодні = (план місяця − факт ДО сьогодні) ÷ робочі дні від сьогодні до кінця місяця
+ * (з сьогоднішнім), угору. Відстав — норма росте; випереджаєш — падає; виконав — «план виконано». Тиждень — норма × робочі
+ * дні від сьогодні до кінця тижня (у межах місяця) мінус уже зроблене сьогодні.
+ * Робочі дні — той самий `workingDaysBetween`, яким екран ділить план на період.
+ */
+export function planPace(i: { plan: number | null; before: number; today: number; todayDay: string; monthEnd: string }): PlanPace {
+  if (i.plan == null || !(i.plan > 0)) return { kind: "none" };
+  const fact = i.before + i.today;
+  if (fact >= i.plan) return { kind: "done", plan: i.plan, fact };
+  const wdLeft = workingDaysBetween(i.todayDay, i.monthEnd);
+  const todayIsWorking = workingDaysBetween(i.todayDay, i.todayDay) === 1;
+  const leftMonth = i.plan - fact;
+  if (wdLeft <= 0) return { kind: "pace", plan: i.plan, fact, leftMonth, normToday: null, doneToday: i.today, leftToday: null, leftWeek: null, todayIsWorking };
+  const normToday = Math.ceil((i.plan - i.before) / wdLeft);
+  const weekEnd = sundayOf(i.todayDay) < i.monthEnd ? sundayOf(i.todayDay) : i.monthEnd;
+  const wdWeek = workingDaysBetween(i.todayDay, weekEnd);
+  return {
+    kind: "pace", plan: i.plan, fact, leftMonth, normToday, doneToday: i.today, todayIsWorking,
+    leftToday: todayIsWorking ? Math.max(0, normToday - i.today) : normToday,
+    leftWeek: Math.max(0, Math.min(leftMonth, normToday * wdWeek - i.today)),
+  };
+}
+
+/** Неділя київського тижня дати `day` ('YYYY-MM-DD'). */
+function sundayOf(day: string): string {
+  const t = Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)));
+  const dow = new Date(t).getUTCDay();
+  return new Date(t + ((7 - dow) % 7) * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** Період — ПОТОЧНИЙ календарний місяць цілком (лише тоді є що наздоганяти). */
+export function isCurrentFullMonth(from: string, to: string, today: string): boolean {
+  return from === today.slice(0, 7) + "-01" && to === monthEndOf(from);
 }

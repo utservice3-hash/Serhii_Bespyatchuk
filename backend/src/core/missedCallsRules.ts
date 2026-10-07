@@ -1,5 +1,6 @@
 import { mergedLagGapExpr, mergedLagFirst } from "./callMerge.js";
 import { dayBucketCase, dayBucketParts } from "./dayBuckets.js";
+import { teamAtSql, teamOnDateSql } from "./teamAt.js";
 
 /**
  * 📵 ПРОПУЩЕНІ ВХІДНІ — ОЗНАЧЕННЯ Й ФОРМА ЗАПИТУ. ТЗ-1 від 14.09.2026.
@@ -15,6 +16,15 @@ import { dayBucketCase, dayBucketParts } from "./dayBuckets.js";
 
 /** Вікно передзвону. Рішення власника 15.09.2026 (РІШЕННЯ 2 у ТЗ): рівно доба. */
 export const CALLBACK_WINDOW = "24 hours";
+
+/**
+ * 🔴 ПЕРЕДЗВІН — ЦЕ РОЗМОВА ВІД 10 С, а не будь-який вихідний (ТЗ Юлії 17.09.2026 «автозакриття
+ * пропущених», блок 2; задача 4373; рішення Романа 02.10.2026 «робимо як в ТЗ»). «Не закривати, якщо
+ * вихідний без з'єднання або коротший 10 секунд». Заміряно 02.10.2026: із 19 524 вихідних за 30 днів
+ * 7 006 (36%) — нульові; рахувати їх передзвоном означало закривати задачі по клієнтах, до яких не додзвонились.
+ * Одна константа на ВСЕ: норматив на вкладці, сигнал «передзвони» і його автозакриття.
+ */
+export const CALLBACK_MIN_TALK_SEC = 10;
 
 /**
  * 🔴 BUSY — ЦЕ ПРОПУЩЕНИЙ (рішення власника 15.09.2026). Лінія зайнята означає, що
@@ -138,10 +148,11 @@ function baseCte(from: string, to: string, s: MissedScope): { cte: string; param
     "rc.billsec = 0",
   ];
   if (s.managerId) { p.push(s.managerId); conds.push(`rc.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", "(rc.calldate AT TIME ZONE 'Europe/Kyiv')::date", `$${p.length}`)); }
   const cte = `
     WITH base AS (
       SELECT rc.uniqueid, rc.manager_id, rc.client_phone, rc.client_key, rc.calldate, rc.billsec, rc.disposition,
+             ${teamAtSql("m", "(rc.calldate AT TIME ZONE 'Europe/Kyiv')::date")} AS team_at,
              ${dayBucketParts("rc.calldate")}
         FROM ringostat_calls rc
         LEFT JOIN managers m ON m.id = rc.manager_id
@@ -151,16 +162,27 @@ function baseCte(from: string, to: string, s: MissedScope): { cte: string; param
     legs AS (SELECT *, ${dayBucketCase()} AS bucket FROM marked WHERE ${mergedLagFirst()}),
     withNext AS (
       SELECT f.*, cb.calldate AS cb_at, cb.billsec AS cb_billsec, cb.manager_id AS cb_manager,
-             cs.calldate AS cs_at
+             ca.calldate AS ca_at, cs.calldate AS cs_at
         FROM legs f
         LEFT JOIN LATERAL (
           SELECT o.calldate, o.billsec, o.manager_id
             FROM ringostat_calls o
            WHERE o.client_phone = f.client_phone
              AND o.call_type IN (${list(OUTBOUND_TYPES)})
+             AND o.billsec >= ${String(CALLBACK_MIN_TALK_SEC)}
              AND o.calldate >  f.calldate
              AND o.calldate <= f.calldate + interval '${CALLBACK_WINDOW}'
            ORDER BY o.calldate, o.uniqueid LIMIT 1) cb ON TRUE
+        -- Спроба: перший вихідний БУДЬ-ЯКОЇ довжини. Передзвоном не є (це cb), але видима окремо —
+        -- щоб «не передзвонили» не ховало тих, кому набирали й не додзвонились.
+        LEFT JOIN LATERAL (
+          SELECT o.calldate
+            FROM ringostat_calls o
+           WHERE o.client_phone = f.client_phone
+             AND o.call_type IN (${list(OUTBOUND_TYPES)})
+             AND o.calldate >  f.calldate
+             AND o.calldate <= f.calldate + interval '${CALLBACK_WINDOW}'
+           ORDER BY o.calldate, o.uniqueid LIMIT 1) ca ON TRUE
         LEFT JOIN LATERAL (
           SELECT i.calldate
             FROM ringostat_calls i
@@ -193,7 +215,7 @@ export function missedSummarySql(from: string, to: string, s: MissedScope): { sq
            COUNT(*) FILTER (WHERE disposition IS NULL OR NOT (${m}))::int AS excluded,
            COUNT(*) FILTER (WHERE ${m} AND manager_id IS NULL)::int AS ownerless,
            COUNT(*) FILTER (WHERE ${m} AND cb_at IS NOT NULL)::int AS callback,
-           COUNT(*) FILTER (WHERE ${m} AND cb_at IS NOT NULL AND cb_billsec > 0)::int AS callback_talked,
+           COUNT(*) FILTER (WHERE ${m} AND cb_at IS NULL AND ca_at IS NOT NULL)::int AS callback_attempt,
            COUNT(*) FILTER (WHERE ${m} AND cb_at IS NOT NULL AND (${SELF_CALLBACK_SQL}))::int AS callback_self,
            COUNT(*) FILTER (WHERE ${m} AND cb_at IS NOT NULL AND NOT (${SELF_CALLBACK_SQL}))::int AS callback_colleague,
            COUNT(*) FILTER (WHERE ${m} AND cs_at IS NOT NULL)::int AS client_self,
@@ -233,9 +255,9 @@ export function missedByManagerSql(from: string, to: string, s: MissedScope): { 
  * над рядками, а не над медіанами людей. Та сама причина, чому медіана «всього» береться з
  * підсумку, а не з таблиці.
  *
- * ⚠️ КОМАНДА — ПОТОЧНА (`managers.team_id`), не на момент дзвінка. Це те саме правило, за
- * яким скоуп тімліда відбирає дзвінки в `baseCte` (`m.team_id = $N`): інакше рядок команди
- * в адміна і вся таблиця тімліда тієї ж команди розійшлися б на людях, що змінили команду.
+ * ⚠️ КОМАНДА — НА ДЕНЬ ДЗВІНКА (`team_at` з `baseCte`, задача 4892, `core/teamAt.ts`), за тим самим
+ * правилом, за яким скоуп тімліда відбирає дзвінки в `baseCte`: інакше рядок команди в адміна і вся
+ * таблиця тімліда тієї ж команди розійшлися б на людях, що змінили команду. Без переходів — поточна.
  *
  * «Без відповідального» сюди НЕ входить — він не належить жодній команді (РІШЕННЯ 3) і
  * лишається своїм рядком. Менеджер без команди — чесне «Поза командами», а не пропуск.
@@ -244,7 +266,7 @@ export function missedByTeamSql(from: string, to: string, s: MissedScope): { sql
   const { cte, params } = baseCte(from, to, s);
   const m = missedDispSql();
   const sql = `${cte}
-    SELECT mg.team_id, MAX(t.name) AS team_name,
+    SELECT w.team_at AS team_id, MAX(t.name) AS team_name,
            COUNT(*)::int AS missed,
            COUNT(*) FILTER (WHERE cb_at IS NOT NULL AND (${SELF_CALLBACK_SQL}))::int AS callback_self,
            COUNT(*) FILTER (WHERE cb_at IS NOT NULL AND NOT (${SELF_CALLBACK_SQL}))::int AS callback_colleague,
@@ -252,9 +274,9 @@ export function missedByTeamSql(from: string, to: string, s: MissedScope): { sql
            ${MEDIAN_MIN_SQL} AS median_min
       FROM withNext w
       JOIN managers mg ON mg.id = w.manager_id
-      LEFT JOIN teams t ON t.id = mg.team_id
+      LEFT JOIN teams t ON t.id = w.team_at
      WHERE ${m}
-     GROUP BY mg.team_id`;
+     GROUP BY w.team_at`;
   return { sql, params };
 }
 
@@ -272,7 +294,7 @@ export type SeriesGranularity = (typeof SERIES_GRANULARITIES)[number];
  *
  * Серії: `total` (увесь зріз), кожна команда (`team:<id>`), «Поза командами» (`noteam`) і «Без
  * відповідального» (`ownerless`) — ОДНИМ запитом через GROUPING SETS, тож Σ серій == `total` у кожній
- * точці за побудовою. Команда — ПОТОЧНА, як у скоупі тімліда. Тиждень починається з понеділка,
+ * точці за побудовою. Команда — на день дзвінка, як у скоупі тімліда (задача 4892). Тиждень починається з понеділка,
  * межі — за Києвом.
  */
 export function missedSeriesSql(granularity: SeriesGranularity, from: string, to: string, s: MissedScope): { sql: string; params: unknown[] } {
@@ -283,15 +305,15 @@ export function missedSeriesSql(granularity: SeriesGranularity, from: string, to
     r AS (
       SELECT to_char(date_trunc('${granularity}', (w.calldate AT TIME ZONE 'Europe/Kyiv')), 'YYYY-MM-DD') AS period,
              CASE WHEN w.manager_id IS NULL THEN 'ownerless'
-                  WHEN mg.team_id IS NULL THEN 'noteam'
-                  ELSE 'team:' || mg.team_id::text END AS skey,
+                  WHEN w.team_at IS NULL THEN 'noteam'
+                  ELSE 'team:' || w.team_at::text END AS skey,
              CASE WHEN w.manager_id IS NULL THEN '${OWNERLESS_LABEL}'
-                  WHEN mg.team_id IS NULL THEN '${NO_TEAM_LABEL}'
-                  ELSE COALESCE(t.name, 'Команда #' || mg.team_id::text) END AS sname,
+                  WHEN w.team_at IS NULL THEN '${NO_TEAM_LABEL}'
+                  ELSE COALESCE(t.name, 'Команда #' || w.team_at::text) END AS sname,
              w.calldate, w.cb_at, w.cs_at
         FROM withNext w
         LEFT JOIN managers mg ON mg.id = w.manager_id
-        LEFT JOIN teams t ON t.id = mg.team_id
+        LEFT JOIN teams t ON t.id = w.team_at
        WHERE ${m}
     )
     SELECT period,
@@ -498,8 +520,8 @@ export function missedListSql(day: string, s: MissedScope, onlyNoCallback = fals
     SELECT w.uniqueid,
            to_char(w.calldate AT TIME ZONE 'Europe/Kyiv', 'HH24:MI') AS at,
            w.client_phone, w.client_key, w.manager_id, mg.name AS manager_name, w.bucket,
-           EXTRACT(EPOCH FROM (w.cb_at - w.calldate))/60.0 AS cb_min,
-           (w.cb_billsec > 0) AS cb_talked,
+           EXTRACT(EPOCH FROM (COALESCE(w.cb_at, w.ca_at) - w.calldate))/60.0 AS cb_min,
+           (w.cb_at IS NOT NULL) AS cb_talked,
            EXTRACT(EPOCH FROM (w.cs_at - w.calldate))/60.0 AS cs_min,
            dl.kommo_id AS deal_id
       FROM withNext w
@@ -573,7 +595,7 @@ function answeredCte(from: string, to: string, s: MissedScope): { cte: string; p
     "rc.billsec > 0",
   ];
   if (s.managerId) { p.push(s.managerId); conds.push(`rc.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(`m.team_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", "(rc.calldate AT TIME ZONE 'Europe/Kyiv')::date", `$${p.length}`)); }
   const cte = `
     WITH base AS (
       SELECT rc.uniqueid, rc.manager_id, rc.client_phone, rc.client_key, rc.calldate, rc.billsec
@@ -618,4 +640,36 @@ export function noDealListSql(from: string, to: string, s: MissedScope, state: N
      ORDER BY c.calldate DESC, c.uniqueid
      LIMIT ${MISSED_LIST_LIMIT + 1}`;
   return { sql, params };
+}
+
+/* ─────────────── Контроль ТЗ «автозакриття пропущених» (задача 4373): ефект за 7 днів ─────────────── */
+
+/** Префікси причин автозакриття — контракт із `missedCallSignal.autoCloseReason` і `carrierHistory.carrierTaskCloseReason`. */
+export const AUTO_CLOSE_CALLBACK_PREFIX = "Закрито автоматично: передзвонив";
+export const AUTO_CLOSE_CARRIER_PREFIX = "Закрито автоматично: номер у CRM";
+export const AUTOMATION_DAYS = 7;
+
+/**
+ * ТЗ, «Контроль»: «ефект: скільки задач не створилось і скільки закрилось автоматом за тиждень». Сім київських днів
+ * до `today` включно, у скоупі глядача (той самий кламп, що й решта екрана). Угоди Kommo, закриті за історією, —
+ * лише без скоупу: угода етапу фільтра менеджеру ще не належить.
+ */
+export function missedAutomationSql(today: string, s: MissedScope): { sql: string; params: unknown[] } {
+  const scope = `($2::int IS NULL OR m.id = $2::int) AND ($3::int IS NULL OR m.team_id = $3::int)`;
+  const closedIn = (prefix: string) => `(SELECT count(*) FROM missed_call_tasks l JOIN tasks t ON t.id = l.task_id
+        LEFT JOIN managers m ON m.id = l.manager_id
+       WHERE t.status = 'done' AND t.close_reason LIKE '${prefix}%' AND ${scope}
+         AND (t.closed_at AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1::date - ${String(AUTOMATION_DAYS - 1)} AND $1::date)::int`;
+  const sql = `
+    SELECT (SELECT count(*) FROM missed_call_skips k LEFT JOIN managers m ON m.id = k.manager_id
+             WHERE k.kday BETWEEN $1::date - ${String(AUTOMATION_DAYS - 1)} AND $1::date AND ${scope})::int AS skipped_carrier,
+           ${closedIn(AUTO_CLOSE_CALLBACK_PREFIX)} AS closed_callback,
+           ${closedIn(AUTO_CLOSE_CARRIER_PREFIX)} AS closed_carrier,
+           (SELECT count(*) FROM missed_call_tasks l JOIN tasks t ON t.id = l.task_id LEFT JOIN managers m ON m.id = l.manager_id
+             WHERE t.status <> 'done' AND ${scope})::int AS open_now,
+           CASE WHEN $2::int IS NULL AND $3::int IS NULL THEN (
+             SELECT count(*) FROM carrier_close_log cl JOIN carrier_call_deals d ON d.kommo_id = cl.kommo_id
+              WHERE d.state = 'history' AND (cl.decided_at AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1::date - ${String(AUTOMATION_DAYS - 1)} AND $1::date
+           )::int END AS deals_history`;
+  return { sql, params: [today, s.managerId ?? null, s.teamId ?? null] };
 }

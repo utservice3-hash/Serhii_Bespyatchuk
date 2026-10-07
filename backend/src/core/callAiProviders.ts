@@ -155,7 +155,31 @@ export const RUBRIC_PILOT_V0 = "pilot-v0";
  */
 export const RUBRIC_FIRST_TOUCH_V1 = "first-touch-v1";
 /** Рубрика, яку зараз ганяє джоба і показує екран. */
-export const RUBRIC_CURRENT = RUBRIC_FIRST_TOUCH_V1;
+/**
+ * Рубрика з ТИПОМ РОЗМОВИ (ТЗ «звіт тімліда» 30.09.2026): модель каже, чи це запит на перевезення, чи сміття
+ * (перевізник, продавець, пошук роботи, помилка номером, розмови немає, інше), з упевненістю й причиною. Решта
+ * полів — як у v1. Рішення «у звіт чи у Виключені» — не модель, а `core/callAiType.ts`.
+ */
+export const RUBRIC_FIRST_TOUCH_V2 = "first-touch-v2";
+/**
+ * Рубрика з ВТРАЧЕНИМ ЛІДОМ (рішення власника 05.10.2026 після перегляду «Виключених»): новий тип `lead_lost` —
+ * клієнт звертався по перевезення, але запит уже неактуальний (вирішив сам, пішов до інших). Він у звіті, окремою
+ * колонкою. Ще два правила: домовленість передзвонити чи підтверджена актуальність — це запит, навіть без деталей;
+ * розмитнення — наша послуга, тобто запит. Решта полів — як у v2.
+ */
+export const RUBRIC_FIRST_TOUCH_V3 = "first-touch-v3";
+export const RUBRIC_CURRENT = RUBRIC_FIRST_TOUCH_V3;
+/** Усі версії рубрики «Першого дотику» — «дзвінок має рекламний розбір» не залежить від того, чи вже переаналізовано. */
+export const FIRST_TOUCH_RUBRICS: readonly string[] = [RUBRIC_PILOT_V0, RUBRIC_FIRST_TOUCH_V1, RUBRIC_FIRST_TOUCH_V2, RUBRIC_FIRST_TOUCH_V3];
+/**
+ * Що показувати, поки розмову не переаналізовано новою рубрикою: поточна, а якщо її ще немає — попередня з типом
+ * розмови (v2). Без цього після зміни рубрики список годину показував би «у черзі» замість наявного розбору.
+ */
+export const FIRST_TOUCH_SHOWN_RUBRICS: readonly string[] = [RUBRIC_FIRST_TOUCH_V3, RUBRIC_FIRST_TOUCH_V2];
+
+/** Типи розмови (ТЗ 30.09.2026; `lead_lost` — 05.10.2026). У звіт ідуть `cargo_request` і `lead_lost`; решта — у «Виключені». */
+export const CONVERSATION_TYPES = ["cargo_request", "lead_lost", "carrier", "vendor", "job_seeker", "wrong_number", "no_dialog", "other"] as const;
+export type ConversationType = typeof CONVERSATION_TYPES[number];
 
 export const ANALYSIS_SCHEMA = {
   type: "object",
@@ -165,7 +189,10 @@ export const ANALYSIS_SCHEMA = {
     client_request: { type: "string", description: "що клієнт хоче перевезти або замовити; порожньо, якщо не прозвучало" },
     price: {
       type: "object",
-      properties: { discussed: { type: "boolean" }, quote: { type: "string" } },
+      properties: {
+        discussed: { type: "boolean", description: "true — лише якщо МЕНЕДЖЕР назвав клієнту суму чи діапазон за це перевезення (правило 9)" },
+        quote: { type: "string", description: "дослівно, як менеджер назвав ціну; порожньо, якщо не назвав" },
+      },
       required: ["discussed", "quote"],
     },
     objections: {
@@ -191,8 +218,13 @@ export const ANALYSIS_SCHEMA = {
       },
     },
     next_step: { type: "string" },
+    conversation_type: { type: "string", enum: [...CONVERSATION_TYPES], description: "тип розмови за правилом 7" },
+    type_confidence: { type: "number", description: "упевненість у типі від 0 до 1" },
+    type_reason: { type: "string", description: "одне речення: чому саме цей тип" },
+    price_value: { type: "string", description: "названа ціна дослівно з валютою («18000 грн»); порожньо, якщо суми не прозвучало" },
   },
-  required: ["summary", "manager_channel", "client_request", "price", "objections", "promises", "next_step"],
+  required: ["summary", "manager_channel", "client_request", "price", "objections", "promises", "next_step",
+    "conversation_type", "type_confidence", "type_reason", "price_value"],
 } as const;
 
 export const ANALYSIS_SYSTEM_PROMPT = [
@@ -211,6 +243,15 @@ export const ANALYSIS_SYSTEM_PROMPT = [
   "   deadline_minutes: для minutes — скільки хвилин від кінця розмови (для «о 15:00» — від часу розмови до 15:00); інакше 0.",
   "   deadline_date: для day — дата YYYY-MM-DD, обчислена від дати розмови з першого рядка; інакше порожній рядок.",
   "   conditional: true, якщо виконання залежить від події, а не від часу.",
+  "7. conversation_type — тип розмови:",
+  "   cargo_request — людина хоче перевезти вантаж. Став його, якщо є ХОЧА Б ОДНА ознака запиту на перевезення: маршрут (звідки-куди), опис вантажу, вага чи обсяг, дата відвантаження, тип авто, питання «скільки коштує перевезти» — навіть якщо клієнт лише уточнював і нічого не домовились. Запит на розмитнення чи митне оформлення вантажу — теж cargo_request: це послуга компанії.",
+  "   cargo_request також тоді, коли менеджер домовився передзвонити клієнту або клієнт підтвердив, що його запит актуальний, — навіть без жодних деталей вантажу (крім випадків, коли це явно перевізник, продавець, пошук роботи чи помилка номером).",
+  "   lead_lost — клієнт звертався по перевезення (заявка, дзвінок), але тепер каже, що запит уже неактуальний: вирішив сам, знайшов інших, перевезення більше не потрібне. Став lead_lost, навіть якщо менеджер пообіцяв перевірити пізніше.",
+  "   carrier — перевізник пропонує машину або шукає вантаж; vendor — нам щось продають (акумулятори, пальне, рекламу, послуги); job_seeker — питання про роботу чи вакансію; wrong_number — помилились номером, шукали іншу компанію; no_dialog — автовідповідач, тиша, обрив, розмови по суті немає; other — щось інше, не про перевезення вантажу клієнта.",
+  "   Будь-який тип, крім cargo_request і lead_lost, — ЛИШЕ якщо ознак запиту на перевезення немає зовсім.",
+  "   type_confidence — наскільки ти впевнений у типі, від 0 до 1; type_reason — одне речення, чому так.",
+  "8. price_value — названа ціна дослівно з валютою; порожньо, якщо конкретної суми не прозвучало.",
+  "9. price.discussed = true ЛИШЕ тоді, коли МЕНЕДЖЕР назвав клієнту суму або діапазон за ЦЕ перевезення («буде 38 тисяч», «20–22 тисячі», «4500»). НЕ є озвученою ціною: бюджет, який назвав клієнт («до десяти», «80–85»); питання менеджера про бюджет; «вкладемось у ваш бюджет»; ціна іншого рейсу як орієнтир («з Нікополя вивозили за сто тисяч»); обіцянка порахувати пізніше. У таких випадках discussed = false, а quote і price_value — порожні.",
 ].join("\n");
 
 const mmss = (sec: number | null): string => {
@@ -295,6 +336,8 @@ export async function geminiGenerate(deps: HttpDeps, apiKey: string, model: stri
 // ─── Результат аналізу: перевірка форми і цитат ─────────────────────────────
 
 export interface AnalysisResult {
+  /** Поля рубрики `first-touch-v2`; у рядках v1 і `pilot-v0` їх немає. */
+  conversation_type?: ConversationType; type_confidence?: number; type_reason?: string; price_value?: string;
   summary: string;
   manager_channel: "0" | "1" | "unknown";
   client_request: string;
@@ -326,6 +369,9 @@ export function validateAnalysis(x: unknown): { ok: true; value: AnalysisResult 
   if (!o.promises.every((i) => ["call", "message", "other"].includes(i.channel) && ["minutes", "day", "none"].includes(i.deadline_kind)
     && typeof i.deadline_minutes === "number" && isStr(i.deadline_date) && typeof i.conditional === "boolean"))
     return { ok: false, why: "promises без полів строку (рубрика first-touch-v1)" };
+  if (!(CONVERSATION_TYPES as readonly string[]).includes(o.conversation_type as string)) return { ok: false, why: "conversation_type поза переліком (рубрика first-touch-v2/v3)" };
+  if (typeof o.type_confidence !== "number" || !(o.type_confidence >= 0 && o.type_confidence <= 1)) return { ok: false, why: "type_confidence не число 0..1" };
+  if (!isStr(o.type_reason) || !isStr(o.price_value)) return { ok: false, why: "type_reason або price_value не рядок" };
   return { ok: true, value: o as unknown as AnalysisResult };
 }
 

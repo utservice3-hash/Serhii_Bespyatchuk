@@ -1,5 +1,5 @@
-import type { LeadgenPersonRow as Row, LeadgenBucket, LeadgenGrain, LeadgenHandoffMoney, LeadgenPersonPlan, LeadgenPlanExec } from "../../../api";
-import { formatAmount } from "../format";
+import type { LeadgenPersonRow as Row, LeadgenBucket, LeadgenGrain, LeadgenHandoffMoney, LeadgenPersonPlan, LeadgenPlanExec, LeadgenExtraExec, LeadgenPersonPace, LeadgenPlanPace } from "../../../api";
+import { formatAmountFull } from "../format";
 import { Donut } from "./ReportPlanSection";
 import { ddmm, addDays, dow, mondayOf } from "../periodRules";
 import { LeadgenMoneyDetails } from "./LeadgenMoneyDetails";
@@ -67,6 +67,46 @@ export const fmtPlan = (plan: number) => plan.toLocaleString("uk-UA", { maximumF
 export const factOfPlan = (fact: number, plan: number | null) => `${n(fact)} / ${plan == null ? "—" : fmtPlan(plan)}`;
 
 /**
+ * 🏃 ЛИШИЛОСЬ ДО ПЛАНУ — норма з наздоганянням (рішення власника 05.10.2026): скільки ще до плану місяця, скільки
+ * треба сьогодні, щоб встигнути (відстав — більше, випереджаєш — менше), і скільки лишилось на тиждень. Лише поточний місяць.
+ */
+export function PaceLines({ pace }: { pace: LeadgenPersonPace | undefined }) {
+  if (!pace) return null;
+  const items: [string, LeadgenPlanPace][] = [["дзвінки", pace.calls], ["ліди", pace.leads], ["ОПР", pace.opr], ["прорахунки", pace.quotes]];
+  const rows = items.filter(([, p]) => p.kind !== "none").map(([label, p]) => {
+    if (p.kind === "done") return <span key={label} style={{ color: "var(--ok)" }}>{label}: ✓ план виконано ({n(p.fact)} / {n(p.plan)})</span>;
+    if (p.kind !== "pace") return null;
+    const today = p.normToday == null ? "робочих днів не лишилось"
+      : p.todayIsWorking ? `сьогодні треба ${n(p.normToday)}, зроблено ${n(p.doneToday)}, лишилось ${n(p.leftToday ?? 0)}`
+      : `наступного робочого дня треба ${n(p.normToday)}`;
+    return <span key={label}>{label}: лишилось <b>{n(p.leftMonth)}</b> з {n(p.plan)} · {today}{p.leftWeek != null ? ` · на тиждень ~${n(p.leftWeek)}` : ""}</span>;
+  });
+  if (pace.moneyLeft != null) rows.push(<span key="money">гроші: {pace.moneyLeft > 0 ? <>лишилось <b>{Math.round(pace.moneyLeft).toLocaleString("uk-UA")} ₴</b> (від «Успішні + Очікування»)</> : <span style={{ color: "var(--ok)" }}>✓ план виконано</span>}</span>);
+  return rows.length ? <span style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12.5 }} title="Норма з наздоганянням: (план місяця − факт до сьогодні) ÷ робочі дні до кінця місяця">🏃 {rows}</span> : null;
+}
+
+/**
+ * 📞💰 ДЗВІНКИ Й ГРОШІ ПРОТИ ПЛАНУ (рішення власника 01.10.2026). Обидва пункти необовʼязкові: немає плану —
+ * рядка немає. Гроші — ОДИН план і ДВА рядки, підписані явно: проти «Успішні» і проти «Успішні + Очікування».
+ */
+export function ExtraPlanLines({ extra }: { extra: LeadgenExtraExec | undefined }) {
+  if (!extra) return null;
+  const uah = (v: number) => `${Math.round(v).toLocaleString("uk-UA")} ₴`;
+  const line = (label: string, e: LeadgenPlanExec, money: boolean, key: string) => {
+    if (e.kind === "none") return null;
+    if (e.kind === "zero") return <span key={key} style={{ color: MUTED }}>{label}: план 0 — не оцінюємо</span>;
+    const f = money ? uah : n, p = money ? uah : fmtPlan;
+    return <span key={key}>{label} <b style={{ color: planLevelColor(e.level) }}>{f(e.fact)} / {p(e.plan)}</b> · {e.pct}%</span>;
+  };
+  const rows = [
+    line("дзвінки", extra.calls, false, "c"),
+    line("гроші · успішні", extra.moneyEarned, true, "e"),
+    line("гроші · успішні + очікування", extra.moneyTotal, true, "t"),
+  ].filter(Boolean);
+  return rows.length ? <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>{rows}</span> : null;
+}
+
+/**
  * 📅 ОДИНИЦІ РОЗБИВКИ — З КАЛЕНДАРЯ, А НЕ З ДАНИХ. Бекенд віддає лише бакети, де були
  * дії; день чи тиждень без жодної дії інакше просто зник би з таблиці, і «у вівторок
  * нуль» читалося б як «вівторка в періоді немає». Тому список будуємо за календарем
@@ -103,7 +143,7 @@ export function bucketLabel(b: string, grain: LeadgenGrain, period: { from: stri
  * кільце, головні числа; клік розгортає розбивку на одиницю нижче обраного періоду
  * (місяць/довгий період — тижні, тиждень/короткий період — дні, день — без розбивки).
  */
-export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, grain, units, targets, period, statusful, open, onToggle }: {
+export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, moneyBuckets, grain, units, targets, period, statusful, open, onToggle }: {
   row: Row;
   /** План і виконання на період (лише учасникам команди). Немає або `none` — «плану немає», кільце — конверсія, як було. */
   plan?: LeadgenPersonPlan;
@@ -113,6 +153,8 @@ export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, grain,
    *  обраний `period`: інакше під час перезавантаження список нового періоду звірявся б зі старим рядком. */
   dataPeriod: { from: string; to: string };
   buckets: LeadgenBucket[];
+  /** Гроші з передач цієї людини по тих самих одиницях (лише з `grain`). */
+  moneyBuckets?: (LeadgenHandoffMoney & { bucket: string })[];
   grain: LeadgenGrain | null;
   units: string[];
   targets: { oprOfLeads: number; quotesOfOpr: number };
@@ -147,6 +189,8 @@ export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, grain,
             <span style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 13 }}>
               <span><b style={{ fontSize: 16 }}>{factOfPlan(pe.fact, pe.plan)}</b> прорахунки · план</span>
               <span style={{ color: MUTED }}>ліди {factOfPlan(row.leads, plan.plan.leads)} · ОПР {factOfPlan(row.opr, plan.plan.opr)}</span>
+              <ExtraPlanLines extra={plan.extra} />
+              <PaceLines pace={plan.pace} />
             </span>
           </span>
         ) : (
@@ -168,9 +212,14 @@ export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, grain,
           <Stat v={row.opr} l="ОПР" />
           <Stat v={row.quotes} l="Прорахунки" />
           <Stat v={row.warming} l="Підігрів" />
-          <span style={{ textAlign: "center", minWidth: 64 }} title="Сума успішних угод з лідів, переданих у цьому періоді (стан — зараз)">
-            <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.success.sum ? "var(--ok)" : MUTED }}>{money ? formatAmount(money.success.sum) : "—"}</span>
+          <Stat v={money?.machines ?? 0} l="Машин" />
+          <span style={{ textAlign: "center", minWidth: 64 }} title="Угоди з передач цього лідгена (будь-коли), що стали «Успішна угода» в цьому періоді; без постійних клієнтів">
+            <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.earned.sum ? "var(--ok)" : MUTED }}>{money ? formatAmountFull(money.earned.sum) : "—"}</span>
             <span style={{ display: "block", fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>Успішні з передач ₴</span>
+          </span>
+          <span style={{ textAlign: "center", minWidth: 64 }} title="Угоди з передач цього лідгена, які на кінець періоду (поточного — зараз) чекали оплати: авто поїхало в цьому чи раніших місяцях, «Успішною» угода ще не стала. Переносяться з місяця в місяць, тож суми різних місяців не складаються">
+            <span style={{ display: "block", fontWeight: 750, fontSize: 16, fontVariantNumeric: "tabular-nums", lineHeight: 1.1, color: money?.pending.sum ? "var(--warn)" : MUTED }}>{money ? formatAmountFull(money.pending.sum) : "—"}</span>
+            <span style={{ display: "block", fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: ".3px", marginTop: 2 }}>Очікування ₴</span>
           </span>
         </span>
         <span aria-hidden="true" style={{ color: MUTED, fontSize: 14, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
@@ -185,7 +234,7 @@ export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, grain,
             {st.overfull && <span style={{ color: "var(--warn)", flexBasis: "100%", fontSize: 12.5 }}>⚠ {overfullWhy}</span>}
           </div>
           <LeadgenMoneyDetails period={dataPeriod} managerId={row.managerId} summary={money} />
-          {grain ? <Buckets row={row} rows={fillBuckets(units, buckets)} grain={grain} period={period} />
+          {grain ? <Buckets row={row} rows={fillBuckets(units, buckets)} money={moneyBuckets ?? []} grain={grain} period={period} />
             : <p style={{ margin: "8px 0 0", fontSize: 12.5, color: MUTED }}>За один день розбивки немає — оберіть тиждень чи місяць.</p>}
         </div>
       )}
@@ -218,7 +267,9 @@ export function BucketNote({ total, rows, grain, period }: { total: Record<F, nu
   );
 }
 
-function Buckets({ row, rows, grain, period }: { row: Row; rows: LeadgenBucket[]; grain: LeadgenGrain; period: { from: string; to: string } }) {
+function Buckets({ row, rows, money, grain, period }: {
+  row: Row; rows: LeadgenBucket[]; money: (LeadgenHandoffMoney & { bucket: string })[]; grain: LeadgenGrain; period: { from: string; to: string };
+}) {
   const cell: React.CSSProperties = { padding: "7px 10px", textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" };
   const head: React.CSSProperties = { ...cell, fontWeight: 600, fontSize: 12.5, color: MUTED };
   if (rows.length === 0) return <p style={{ margin: 0, fontSize: 13, color: MUTED }}>Період ще не почався.</p>;
@@ -230,18 +281,23 @@ function Buckets({ row, rows, grain, period }: { row: Row; rows: LeadgenBucket[]
             <th style={{ ...head, textAlign: "left" }}>{grain === "day" ? "День" : "Тиждень"}</th>
             <th style={head}>Дзвінки</th><th style={head}>Ліди</th><th style={head}>ОПР</th>
             <th style={head}>Прорахунки</th><th style={head}>Підігрів</th><th style={head}>Ліди → ОПР</th>
+            <th style={head}>Машин</th><th style={head}>Успішні ₴</th><th style={head}>Очікування ₴</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((w) => {
             const c = ratio(w.opr, w.leads);
-            const empty = !w.calls && !w.leads && !w.opr && !w.quotes && !w.warming;
+            const mb = money.find((x) => x.bucket === w.bucket);
+            const empty = !w.calls && !w.leads && !w.opr && !w.quotes && !w.warming && !mb?.handoffs;
             return (
               <tr key={w.bucket} style={{ borderTop: "1px solid var(--border)", color: empty ? MUTED : undefined }}>
                 <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>{bucketLabel(w.bucket, grain, period)}</td>
                 <td style={cell}>{n(w.calls)}</td><td style={cell}>{n(w.leads)}</td><td style={cell}>{n(w.opr)}</td>
                 <td style={cell}>{n(w.quotes)}</td><td style={cell}>{n(w.warming)}</td>
                 <td style={cell}>{c == null ? "—" : c > 100 ? `${pct1(c)} ⚠` : pct1(c)}</td>
+                <td style={cell}>{mb ? n(mb.machines) : "—"}</td>
+                <td style={cell}>{mb ? formatAmountFull(mb.earned.sum) : "—"}</td>
+                <td style={cell}>{mb ? formatAmountFull(mb.pending.sum) : "—"}</td>
               </tr>
             );
           })}

@@ -8,6 +8,7 @@ import {
   extractUnloadDate,
   extractLoadDate,
   extractPlannedPaymentDate,
+  extractTakenInWork,
   extractIsMinus,
   extractRejectReason,
   extractRequestType,
@@ -19,6 +20,9 @@ import {
   extractCarrierPayment,
   extractClientPayment,
   extractCarrierObligation,
+  extractFmIncome,
+  extractFmExpense,
+  extractTtnFiles,
   extractCarrierName,
   extractCarrierEdrpou,
   extractSourceDealId,
@@ -39,6 +43,8 @@ import { jobSkip, type JobSkip } from "./jobRuns.js";
 import { guardDecision, MAX_RUN_MS } from "./syncGuardRule.js";
 import { getSettings } from "../routes/settings.js";
 import { effectiveTeamId, type TeamOverride } from "../core/teamOverride.js";
+import { recordTeamMove, refreshTeamMoves } from "../core/teamAt.js";
+import { kyivToday } from "../core/dates.js";
 
 function toTimestamp(unixSeconds: number | null): Date | null {
   return unixSeconds ? new Date(unixSeconds * 1000) : null;
@@ -124,6 +130,7 @@ export async function syncManagers(): Promise<number> {
     prevRows.rows.map((r) => [String(r.kommo_user_id), { id: r.id, teamId: r.team_id }])
   );
 
+  let teamMoved = false;
   for (const user of users) {
     const group = user._embedded?.groups?.[0];
     // Перевизначення бʼє групу з CRM — core/teamOverride.effectiveTeamId.
@@ -133,7 +140,7 @@ export async function syncManagers(): Promise<number> {
     const isTeamLead = role.toLowerCase().includes("тимл") || TEAM_LEAD_OVERRIDES.has(String(user.id));
     const displayName = NAME_OVERRIDES[String(user.id)] ?? user.name;
 
-    const up = await pool.query<{ id: number }>(
+    const upsertSql =
       `INSERT INTO managers (name, kommo_user_id, team_id, is_team_lead, is_active, email)
        VALUES ($1, $2, $3, $4, true, $5)
        ON CONFLICT (kommo_user_id) DO UPDATE SET
@@ -142,21 +149,51 @@ export async function syncManagers(): Promise<number> {
          is_team_lead = EXCLUDED.is_team_lead,
          is_active = true,
          email = COALESCE(EXCLUDED.email, managers.email)
-       RETURNING id`,
-      [displayName, user.id, teamId, isTeamLead, user.email ?? null]
-    );
+       RETURNING id`;
+    const upsertArgs = [displayName, user.id, teamId, isTeamLead, user.email ?? null];
+    const prev = prevByUser.get(String(user.id));
+
+    if (prev && prev.teamId !== teamId) {
+      /**
+       * 🔀 ЗМІНА КОМАНДИ = ПЕРЕХІД З ДАТОЮ (задача 4892, `core/teamAt.ts`). Із сьогоднішнього дня
+       * людина в новій команді, а все, що було до, лишається в старій. Дата — київське сьогодні:
+       * синк бачить зміну групи в Kommo не пізніше ніж за 30 хв, а точнішої дати Kommo не дає.
+       * Команду й перехід пише ОДНА транзакція: команда без переходу переписала б минуле
+       * (так було до 02.10.2026), перехід без команди розірвав би ланцюг.
+       */
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(upsertSql, upsertArgs);
+        const mv = await recordTeamMove(client, { managerId: prev.id, fromTeamId: prev.teamId, toTeamId: teamId,
+          effectiveFrom: kyivToday(), source: "kommo" });
+        if (mv.kind === "rejected") console.warn(`syncKommo: перехід менеджера ${prev.id} не записано — ${mv.reason}`);
+        else if (mv.kind !== "none") teamMoved = true;
+        await client.query(`INSERT INTO manager_team_history (manager_id, team_id) VALUES ($1, $2)`, [prev.id, teamId]);
+        await client.query("COMMIT");
+      } catch (e) {
+        await client.query("ROLLBACK");
+        throw e;
+      } finally {
+        client.release();
+      }
+      continue;
+    }
+
+    const up = await pool.query<{ id: number }>(upsertSql, upsertArgs);
     const managerId = up.rows[0].id;
 
-    // Снапшот у manager_team_history: новий менеджер (немає prev) АБО team_id змінився.
-    // null!==null → false (без зайвого рядка); зміна null↔команда → рядок переходу.
-    const prev = prevByUser.get(String(user.id));
-    if (!prev || prev.teamId !== teamId) {
+    // Снапшот у manager_team_history: новий менеджер (немає prev). Зміну команди пише гілка вище.
+    if (!prev) {
       await pool.query(
         `INSERT INTO manager_team_history (manager_id, team_id) VALUES ($1, $2)`,
         [managerId, teamId]
       );
     }
   }
+
+  // Знімок переходів (`core/teamAt.ts`) — одразу, щоб звіти не чекали крона.
+  if (teamMoved) await refreshTeamMoves(pool);
 
   const activeKommoIds = users.map((user) => user.id);
   await pool.query(
@@ -679,14 +716,15 @@ export async function upsertDeal(
          client_name, client_key_raw, client_key, utm_source, lead_generator, client_source, lead_channel, payment_type,
          unload_at, load_at, utm_campaign, adv_camp, traf_src, traf_type, utm_medium, planned_payment_at, is_minus, reject_reason,
          request_type, sales_channel, carrier_pay_type, carrier_pay_amount,
-         client_pay_amount, carrier_obligation, carrier_name, carrier_edrpou, source_deal_id, source_responsible
+         client_pay_amount, carrier_obligation, carrier_name, carrier_edrpou, source_deal_id, source_responsible,
+         fm_income, fm_expense, ttn_files, taken_field_at
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11, $12,
                  -- 🔴 КАНОНІЧНИЙ КЛЮЧ РАХУЄМО ТУТ, а не пишемо сирий. Інакше синк при
                  -- наступному оновленні угоди ЗАТЕР би канонічний ключ сирим, і аліас
                  -- тихо перестав би діяти — рівно для тих угод, що змінюються найчастіше.
                  COALESCE((SELECT a.canonical_key FROM client_key_alias a
                             WHERE a.alias_key = $12 AND a.revoked_at IS NULL), $12),
-                 $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37)
+                 $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41)
        ON CONFLICT (kommo_id) DO UPDATE SET
          name = EXCLUDED.name,
          manager_id = EXCLUDED.manager_id,
@@ -729,7 +767,14 @@ export async function upsertDeal(
          carrier_name = EXCLUDED.carrier_name,
          carrier_edrpou = EXCLUDED.carrier_edrpou,
          source_deal_id = EXCLUDED.source_deal_id,
-         source_responsible = EXCLUDED.source_responsible`,
+         source_responsible = EXCLUDED.source_responsible,
+         -- 💰 Суми за правилом фінансиста («ФМ»): Σ Приход 1–5 і Σ Расход 1–5 без «Оплата на выгрузке».
+         fm_income = EXCLUDED.fm_income,
+         fm_expense = EXCLUDED.fm_expense,
+         -- 🗂 Кількість файлів у полі «ТТН» — ТТН-моніторинг Бізнес-асистента (05.10.2026).
+         ttn_files = EXCLUDED.ttn_files,
+         -- ⏱ «Взято в работу» (раніше з двох полів) — вікно «Час опрацювання заявки».
+         taken_field_at = EXCLUDED.taken_field_at`,
       [
         deal.id,
         deal.name,
@@ -768,6 +813,10 @@ export async function upsertDeal(
         extractCarrierEdrpou(deal),
         extractSourceDealId(deal),
         extractSourceResponsible(deal),
+        extractFmIncome(deal),
+        extractFmExpense(deal),
+        extractTtnFiles(deal),
+        extractTakenInWork(deal),
       ]
     );
 }

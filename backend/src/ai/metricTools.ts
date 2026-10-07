@@ -51,6 +51,8 @@ export const FORBIDDEN_TABLES = [
   "hiring_candidates", "hiring_interviews", "hiring_events", "hiring_daily_manual",
   // 🧑‍💼 Прохід 1a: скриншоти переписки з кандидатами. Дзеркало — REVOKE у схемі. Тримає #526.
   "hiring_files",
+  // 💬 Фото до зворотного звʼязку (05.10.2026): скриншоти з чим завгодно з екрана. REVOKE у схемі. Тримає #496.
+  "feedback_files",
   "employee_secrets",
   "secret_reveal_codes",
   "vault_link_codes",
@@ -62,15 +64,25 @@ export const FORBIDDEN_TABLES = [
   // 🚪 Звільнення (21.09.2026): причини й хто звільняв. REVOKE у схемі. Тримає #624.
   "employee_offboarding",
   // 🎙 AI-аналіз дзвінків (22.09.2026): тексти розмов клієнтів, аналізи й витрати. REVOKE у схемі. Тримає #653.
-  "call_transcripts", "call_analyses", "ai_spend_ledger", "carrier_call_deals", "ai_cap_alerts", "carrier_close_log", "carrier_decisions", "carrier_review_tasks",
+  "call_transcripts", "call_analyses", "ai_spend_ledger", "call_type_overrides", "first_touch_notes", "first_touch_settings_log", "carrier_call_deals", "ai_cap_alerts", "carrier_close_log", "carrier_decisions", "carrier_review_tasks", "carrier_task_sweeps",
   // 🎥 Зустрічі tl;dv (23.09.2026): пошта й імена учасників. REVOKE у схемі. Тримає #803.
   "tldv_meetings",
   // 💼 Відгуки work.ua (28.09.2026): памʼять відгуків кандидатів. REVOKE у схемі. Тримає #807.
   "workua_responses",
   // 💰 Фінанси (29.09.2026): витрати компанії по статтях, зокрема фонд оплати праці. REVOKE у схемі. Тримає #934.
-  "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_import_months",
+  "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "fin_import_months",
+  // 💰 Фінанси · «Тиждень і місяць» (прохід 2а, 01.10.2026). REVOKE у схемі. Тримає #934.
+  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports",
+  // 📄 Конструктор документів (30.09.2026): реквізити контрагентів і суми заявок. REVOKE у схемі.
+  "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache",
+  // 📋 Опитування (30.09.2026): відповіді людей, зокрема анонімні. REVOKE у схемі.
+  "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   // 🗂 Бізнес-асистент (29.09.2026): кому видано техніку — імена людей, як `employees`. REVOKE у схемі. Тримає #986.
   "ba_equipment_issues",
+  // 🗂 Бізнес-асистент цілком (01.10.2026, рішення Романа «5а»): борги, суди, документи, техніка, ТТН. Тримає #1240.
+  "ba_claims", "ba_court_cases", "ba_files", "ba_events", "ba_equipment", "ba_ttn_checks", "ba_migrations", "ba_ttn_route_mismatch",
+  // 🛡 Журнал відхилених спам-заявок (05.10.2026): імена, пошти, IP. REVOKE у схемі. Тримає #1362c.
+  "kommo_declined_forms",
 ];
 
 /**

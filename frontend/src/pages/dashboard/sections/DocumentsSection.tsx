@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useToast } from "../../../components/Toasts";
 import {
   fetchDocTree, fetchDocCard, fetchDocViewers, fetchDocPeople, createDocFolder, renameDocFolder, deleteDocFolder,
   uploadDocFile, uploadDocVersion, updateDocFile, archiveDocFile, restoreDocFile, activateDocFile, deleteDocFile, fetchDocTrash, undeleteDocFile, ackDocFile, fetchDocAcks, remindDocAcks, signDocFile, fetchSigEvidenceBlobUrl, approveDocSignature, rejectDocSignature,
@@ -135,7 +136,11 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
   const [inTrash, setInTrash] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [accessFolder, setAccessFolder] = useState<DocFolder | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  // 🔔 Спільне повідомлення дашборда (30.09.2026). Було своє — ЗЕЛЕНЕ і для успіху, і для помилки, тож
+  // «Не вдалося…» читалось як підтвердження. Помилки тепер ідуть лише через `failToast` (червоне, висить).
+  const say = useToast();
+  const setToast = useCallback((msg: string, opts?: Parameters<typeof say>[1]) => say(msg, opts), [say]);
+  const failToast = useCallback((e: unknown, fallback: string) => say(errOf(e, fallback), { error: true }), [say]);
   // Відкрите в цій сесії гасить «нове» одразу, не чекаючи перечитування дерева (сервер уже записав перегляд).
   const [seenLocal, setSeenLocal] = useState<Set<string>>(() => new Set());
   // ☑ Вибір кількох документів (керівництво): перенести в папку або відмітити офери «підписано раніше».
@@ -148,7 +153,6 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
   const [drag, setDrag] = useState<{ kind: "d" | "f"; ids: number[] } | null>(null);
   const [dropOn, setDropOn] = useState<string | null>(null);
   const [rightsFile, setRightsFile] = useState<DocFile | null>(null);
-  const [undoFn, setUndoFn] = useState<(() => void) | null>(null);
   const versionInput = useRef<HTMLInputElement | null>(null);
   const versionFor = useRef<number | null>(null);
   useEffect(() => {
@@ -181,7 +185,6 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
   useEffect(() => { void load(); }, []);
   const loadTrash = () => fetchDocTrash().then(setTrash).catch(() => setTrash(null));
   useEffect(() => { if (tree?.viewer.isManagement) void loadTrash(); }, [tree?.viewer.isManagement]);
-  useEffect(() => { if (!toast) return; const t = setTimeout(() => { setToast(null); setUndoFn(null); }, undoFn ? 6000 : 4000); return () => clearTimeout(t); }, [toast, undoFn]);
 
   const viewer = tree?.viewer;
   const folderName = (id: number | null) => id == null ? "Без папки" : (tree?.folders.find((x) => x.id === id)?.name ?? `Папка #${id}`);
@@ -269,23 +272,23 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
     const sibs = kidsOf(f.parentId ?? null); const i = sibs.findIndex((x) => x.id === f.id); const j = i + dir;
     if (i < 0 || j < 0 || j >= sibs.length) return;
     const ids = sibs.map((x) => x.id); [ids[i], ids[j]] = [ids[j], ids[i]];
-    void orderDocFolders(f.parentId ?? null, ids).then(load).catch((e) => setToast(errOf(e, "Порядок не змінено")));
+    void orderDocFolders(f.parentId ?? null, ids).then(load).catch((e) => failToast(e, "Порядок не змінено"));
   };
   const runBulk = async (ids: number[], one: (id: number) => Promise<void>, done: (ok: number) => string) => {
     setBulkBusy(true); let ok = 0; const errs: string[] = [];
     for (const id of ids) { try { await one(id); ok++; } catch (e) { errs.push(errOf(e, "помилка")); } }
     setBulkBusy(false); setPicked(new Set()); setPicking(false);
-    setToast(done(ok) + (errs.length ? ` Не вдалося: ${errs.length} (${[...new Set(errs)].join("; ")}).` : ""));
+    setToast(done(ok) + (errs.length ? ` Не вдалося: ${errs.length} (${[...new Set(errs)].join("; ")}).` : ""), { error: errs.length > 0 });
     await load();
   };
   // ── Дії для меню правої кнопки й перетягування ─────────────────────────
   const mgmt = viewer.isManagement;
-  const download = async (f: DocFile) => { try { const url = await fetchDocFileBlobUrl(f.id); const a = document.createElement("a"); a.href = url; a.download = f.name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 60_000); } catch (e) { setToast(errOf(e, "Не вдалося завантажити")); } };
+  const download = async (f: DocFile) => { try { const url = await fetchDocFileBlobUrl(f.id); const a = document.createElement("a"); a.href = url; a.download = f.name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 60_000); } catch (e) { failToast(e, "Не вдалося завантажити"); } };
   const copyLink = (f: DocFile) => { const url = `${window.location.origin}${window.location.pathname}?doc=${f.id}`; void navigator.clipboard?.writeText(url).then(() => setToast("Посилання скопійовано"), () => setToast(url)); };
-  const renameFile = (f: DocFile) => { const n = window.prompt("Нова назва:", f.name)?.trim(); if (n && n !== f.name) void updateDocFile(f.id, { name: n }).then(load).catch((e) => setToast(errOf(e, "Не перейменовано"))); };
-  const renameFolder = (f: DocFolder) => { const n = window.prompt("Нова назва папки:", f.name)?.trim(); if (n && n !== f.name) void renameDocFolder(f.id, n).then(load).catch((e) => setToast(errOf(e, "Не перейменовано"))); };
-  const newSubfolder = (f: DocFolder) => { const n = window.prompt(`Назва підпапки в «${f.name}»:`)?.trim(); if (n) void createDocFolder(n, f.id).then(load).catch((e) => setToast(errOf(e, "Не вдалося створити підпапку"))); };
-  const deleteFolder = (f: DocFolder) => { if (window.confirm(`Прибрати папку «${f.name}»? Видаляється лише порожня папка: документи й підпапки спершу перенесіть.`)) void deleteDocFolder(f.id).then(() => { if (folderFilter === f.id) setFolderFilter("all"); return load(); }).catch((e) => setToast(errOf(e, "Не вдалося"))); };
+  const renameFile = (f: DocFile) => { const n = window.prompt("Нова назва:", f.name)?.trim(); if (n && n !== f.name) void updateDocFile(f.id, { name: n }).then(load).catch((e) => failToast(e, "Не перейменовано")); };
+  const renameFolder = (f: DocFolder) => { const n = window.prompt("Нова назва папки:", f.name)?.trim(); if (n && n !== f.name) void renameDocFolder(f.id, n).then(load).catch((e) => failToast(e, "Не перейменовано")); };
+  const newSubfolder = (f: DocFolder) => { const n = window.prompt(`Назва підпапки в «${f.name}»:`)?.trim(); if (n) void createDocFolder(n, f.id).then(load).catch((e) => failToast(e, "Не вдалося створити підпапку")); };
+  const deleteFolder = (f: DocFolder) => { if (window.confirm(`Прибрати папку «${f.name}»? Видаляється лише порожня папка: документи й підпапки спершу перенесіть.`)) void deleteDocFolder(f.id).then(() => { if (folderFilter === f.id) setFolderFilter("all"); return load(); }).catch((e) => failToast(e, "Не вдалося")); };
   const presignFiles = (fs: DocFile[]) => {
     const open = fs.filter((f) => f.section === "offer" && !f.archivedAt && !f.inactiveAt && sigKindOpen(f.signature.kind)); if (!open.length) return;
     const d = window.prompt(`Позначити ${open.length} ${plural(open.length, "офер", "офери", "оферів")} підписаними раніше на папері? Людям нічого не надсилається, нагадування припиняться.\n\nДата підпису РРРР-ММ-ДД або порожньо, якщо невідомо:`, "");
@@ -295,9 +298,9 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
   const pickVersion = (f: DocFile) => { versionFor.current = f.id; versionInput.current?.click(); };
   const onVersionFile = (fl: FileList | null) => {
     const f = fl?.[0]; const id = versionFor.current; if (!f || id == null) return;
-    if (f.size > MAX_MB * 1024 * 1024) { setToast(`Файл більше ${MAX_MB} МБ`); return; }
+    if (f.size > MAX_MB * 1024 * 1024) { setToast(`Файл більше ${MAX_MB} МБ`, { error: true }); return; }
     readAsDataUrl(f).then((dataBase64) => uploadDocVersion(id, { filename: f.name, mime: f.type || null, dataBase64 }))
-      .then(async (r) => { setToast(`Нова версія v${r.version}`); await load(); }).catch((e) => setToast(errOf(e, "Нову версію не вдалося зберегти")));
+      .then(async (r) => { setToast(`Нова версія v${r.version}`); await load(); }).catch((e) => failToast(e, "Нову версію не вдалося зберегти"));
   };
   /** Перенести документи чи папки в папку (`null` — без папки) з «Скасувати» в повідомленні. */
   const moveTo = (kind: "d" | "f", ids: number[], to: number | null) => {
@@ -310,30 +313,31 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
       for (const f of docs) await updateDocFile(f.id, { folderId: to }).catch((e) => { errs.push(errOf(e, "помилка")); });
       for (const f of flds) await moveDocFolder(f.id, to).catch((e) => { errs.push(errOf(e, "помилка")); });
       setPicked(new Set());
-      setToast(`Перенесено ${n} ${plural(n, "елемент", "елементи", "елементів")} у «${to == null ? "Без папки" : folderName(to)}».${errs.length ? ` Не вдалося: ${[...new Set(errs)].join("; ")}` : ""}`);
-      setUndoFn(() => () => { void (async () => { for (const [id, f] of prevD) await updateDocFile(id, { folderId: f }).catch(() => {}); for (const [id, p] of prevF) await moveDocFolder(id, p).catch(() => {}); setToast("Перенесення скасовано"); setUndoFn(null); await load(); })(); });
+      const undo = () => { void (async () => { for (const [id, f] of prevD) await updateDocFile(id, { folderId: f }).catch(() => {}); for (const [id, p] of prevF) await moveDocFolder(id, p).catch(() => {}); setToast("Перенесення скасовано"); await load(); })(); };
+      setToast(`Перенесено ${n} ${plural(n, "елемент", "елементи", "елементів")} у «${to == null ? "Без папки" : folderName(to)}».${errs.length ? ` Не вдалося: ${[...new Set(errs)].join("; ")}` : ""}`,
+        { error: errs.length > 0, action: { label: "Скасувати", run: undo } });
       await load();
     })();
   };
   const docMenu = (f: DocFile): CtxItem[] => {
     const off = f.section === "offer";
     if (f.archivedAt) return [{ icon: "↗", label: "Відкрити", run: () => setSelected(f.id) }, { icon: "⤓", label: "Завантажити", run: () => void download(f) },
-      ...(mgmt ? ["-" as const, { icon: "↩", label: "Повернути з архіву", run: () => void restoreDocFile(f.id).then(async () => { setToast("Повернуто з архіву"); await load(); }).catch((e) => setToast(errOf(e, "Не вдалося"))) }] : [])];
+      ...(mgmt ? ["-" as const, { icon: "↩", label: "Повернути з архіву", run: () => void restoreDocFile(f.id).then(async () => { setToast("Повернуто з архіву"); await load(); }).catch((e) => failToast(e, "Не вдалося")) }] : [])];
     return [
       { icon: "↗", label: "Відкрити", run: () => setSelected(f.id) },
       { icon: "⤓", label: "Завантажити", run: () => void download(f) },
       { icon: "🔗", label: "Копіювати посилання", run: () => copyLink(f) },
-      ...(f.ack.required && f.ack.mine === "pending" ? [{ icon: "📖", label: "Ознайомився", run: () => void ackDocFile(f.id).then(async () => { setToast("Ознайомлення зафіксовано для цієї версії"); await load(); }).catch((e) => setToast(errOf(e, "Не вдалося"))) }] : []),
+      ...(f.ack.required && f.ack.mine === "pending" ? [{ icon: "📖", label: "Ознайомився", run: () => void ackDocFile(f.id).then(async () => { setToast("Ознайомлення зафіксовано для цієї версії"); await load(); }).catch((e) => failToast(e, "Не вдалося")) }] : []),
       ...(f.canSign ? [{ icon: "🔏", label: "Підписати…", run: () => setSelected(f.id) }] : []),
       ...(f.canEdit || mgmt ? ["-" as const] : []),
       ...(mgmt && off && !f.inactiveAt && sigKindOpen(f.signature.kind) ? [{ icon: "✍", label: "Позначити «підписано раніше»…", run: () => presignFiles([f]) }] : []),
-      ...(mgmt && f.signature.earlier ? [{ icon: "↺", label: "Зняти «підписано раніше»", run: () => { if (window.confirm("Зняти позначку «підписано раніше»? Офер знову чекатиме підпису, нагадування відновляться.")) void undoPresignDocFile(f.id).then(load).catch((e) => setToast(errOf(e, "Не вдалося"))); } }] : []),
+      ...(mgmt && f.signature.earlier ? [{ icon: "↺", label: "Зняти «підписано раніше»", run: () => { if (window.confirm("Зняти позначку «підписано раніше»? Офер знову чекатиме підпису, нагадування відновляться.")) void undoPresignDocFile(f.id).then(load).catch((e) => failToast(e, "Не вдалося")); } }] : []),
       ...(f.canEdit ? [{ icon: "✎", label: "Перейменувати", run: () => renameFile(f) }, { icon: "⬆", label: "Нова версія…", run: () => pickVersion(f) }] : []),
       ...(mgmt && f.section === "general" ? [{ icon: "📂", label: "Перенести в…", run: () => setMoveDlg({ kind: "files", ids: [f.id] }) }, { icon: "🔐", label: "Права документа…", run: () => setRightsFile(f) }] : []),
-      ...(mgmt && f.inactiveAt ? [{ icon: "✓", label: "Активувати", run: () => void activateDocFile(f.id).then(load).catch((e) => setToast(errOf(e, "Не вдалося"))) }] : []),
+      ...(mgmt && f.inactiveAt ? [{ icon: "✓", label: "Активувати", run: () => void activateDocFile(f.id).then(load).catch((e) => failToast(e, "Не вдалося")) }] : []),
       ...(mgmt ? ["-" as const,
-        { icon: "🗄", label: "В архів", run: () => { if (window.confirm(`Прибрати «${f.name}» в архів? Файл лишається.`)) void archiveDocFile(f.id).then(async () => { setToast("Перенесено в архів"); if (selected === f.id) setSelected(null); await load(); }).catch((e) => setToast(errOf(e, "Не вдалося"))); } },
-        { icon: "✕", label: "Видалити…", danger: true, run: () => { if (window.confirm(`Видалити «${f.name}»? Документ піде в кошик; файл, версії й підписи в системі лишаються.`)) void deleteDocFile(f.id).then(async () => { setToast("Документ видалено"); if (selected === f.id) setSelected(null); await load(); await loadTrash(); }).catch((e) => setToast(errOf(e, "Не вдалося видалити"))); } }] : []),
+        { icon: "🗄", label: "В архів", run: () => { if (window.confirm(`Прибрати «${f.name}» в архів? Файл лишається.`)) void archiveDocFile(f.id).then(async () => { setToast("Перенесено в архів"); if (selected === f.id) setSelected(null); await load(); }).catch((e) => failToast(e, "Не вдалося")); } },
+        { icon: "✕", label: "Видалити…", danger: true, run: () => { if (window.confirm(`Видалити «${f.name}»? Документ піде в кошик; файл, версії й підписи в системі лишаються.`)) void deleteDocFile(f.id).then(async () => { setToast("Документ видалено"); if (selected === f.id) setSelected(null); await load(); await loadTrash(); }).catch((e) => failToast(e, "Не вдалося видалити")); } }] : []),
     ];
   };
   const folderMenu = (f: DocFolder): CtxItem[] => {
@@ -367,13 +371,12 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
 
   return (
     <div>
-      {toast && <div className="chart-card" role="status" style={{ position: "fixed", top: 16, right: 16, zIndex: 80, background: "var(--ok-bg)", color: "var(--ok)", fontWeight: 600, padding: "10px 14px", display: "flex", gap: 12, alignItems: "center" }}>{toast}{undoFn && <button style={{ ...btn(), fontSize: 12, padding: "3px 10px" }} onClick={() => undoFn()}>Скасувати</button>}</div>}
       <input ref={versionInput} type="file" hidden onChange={(e) => { onVersionFile(e.target.files); e.currentTarget.value = ""; }} />
       <div className="page-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <h1 className="page-title">📁 Регламенти та документи</h1>
         <div className="page-filters">
           <TelegramChip onToast={setToast} />
-          {viewer.isManagement && <button style={btn()} onClick={() => { const n = window.prompt("Назва нової папки:")?.trim(); if (n) void createDocFolder(n, null).then(load).catch((e) => setToast(errOf(e, "Не вдалося створити папку"))); }}>➕ Папка</button>}
+          {viewer.isManagement && <button style={btn()} onClick={() => { const n = window.prompt("Назва нової папки:")?.trim(); if (n) void createDocFolder(n, null).then(load).catch((e) => failToast(e, "Не вдалося створити папку")); }}>➕ Папка</button>}
           {canUploadHere && <button className="btn-primary" onClick={() => setUploadOpen(true)}>+ Завантажити</button>}
         </div>
       </div>
@@ -433,7 +436,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
                         <div className="orph-dim">{f.section === "offer" ? "🔒 Офер" : f.section === "personal" ? "Особистий" : folderName(f.folderId)}{f.addressee ? ` · ${f.addressee}` : ""} · v{f.version}</div>
                         <div className="orph-dim">видалив {f.deletedBy ?? "невідомо"} · {fmtDate(f.deletedAt)}</div>
                       </span>
-                      <button style={btn()} onClick={() => void undeleteDocFile(f.id).then(async () => { setToast(`«${f.name}» повернуто`); await Promise.all([load(), loadTrash()]); }).catch((e) => setToast(errOf(e, "Не вдалося повернути")))}>↩ Повернути</button>
+                      <button style={btn()} onClick={() => void undeleteDocFile(f.id).then(async () => { setToast(`«${f.name}» повернуто`); await Promise.all([load(), loadTrash()]); }).catch((e) => failToast(e, "Не вдалося повернути"))}>↩ Повернути</button>
                     </div>); })}
               </div>
             </>
@@ -456,12 +459,12 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
                   {activeFolder && viewer.canManageAccess && shelf !== "mine" && shelf !== "archive" && (
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
                       <button style={small} onClick={() => setAccessFolder(activeFolder)}>⚙ Доступи</button>
-                      <button style={small} onClick={() => { const nn = window.prompt("Нова назва папки:", activeFolder.name)?.trim(); if (nn && nn !== activeFolder.name) void renameDocFolder(activeFolder.id, nn).then(load).catch((e) => setToast(errOf(e, "Не перейменовано"))); }}>✎ Перейменувати</button>
+                      <button style={small} onClick={() => { const nn = window.prompt("Нова назва папки:", activeFolder.name)?.trim(); if (nn && nn !== activeFolder.name) void renameDocFolder(activeFolder.id, nn).then(load).catch((e) => failToast(e, "Не перейменовано")); }}>✎ Перейменувати</button>
                       <button style={small} title="Вище серед сусідніх папок" onClick={() => moveFolderStep(activeFolder, -1)}>↑</button>
                       <button style={small} title="Нижче серед сусідніх папок" onClick={() => moveFolderStep(activeFolder, 1)}>↓</button>
                       <button style={small} onClick={() => setMoveDlg({ kind: "folder", folder: activeFolder })}>📂 Перенести</button>
-                      <button style={small} onClick={() => { const n = window.prompt(`Назва підпапки в «${activeFolder.name}»:`)?.trim(); if (n) void createDocFolder(n, activeFolder.id).then(load).catch((e) => setToast(errOf(e, "Не вдалося створити підпапку"))); }}>➕ Підпапка</button>
-                      <button style={small} onClick={() => { if (window.confirm(`Прибрати папку «${activeFolder.name}»? Видаляється лише порожня папка: документи й підпапки спершу перенесіть.`)) void deleteDocFolder(activeFolder.id).then(() => { setFolderFilter("all"); return load(); }).catch((e) => setToast(errOf(e, "Не вдалося"))); }}>✕ Прибрати папку</button>
+                      <button style={small} onClick={() => { const n = window.prompt(`Назва підпапки в «${activeFolder.name}»:`)?.trim(); if (n) void createDocFolder(n, activeFolder.id).then(load).catch((e) => failToast(e, "Не вдалося створити підпапку")); }}>➕ Підпапка</button>
+                      <button style={small} onClick={() => { if (window.confirm(`Прибрати папку «${activeFolder.name}»? Видаляється лише порожня папка: документи й підпапки спершу перенесіть.`)) void deleteDocFolder(activeFolder.id).then(() => { setFolderFilter("all"); return load(); }).catch((e) => failToast(e, "Не вдалося")); }}>✕ Прибрати папку</button>
                     </div>
                   )}
                 </div>
@@ -562,7 +565,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
         note={moveDlg.kind === "folder" ? "Папка без власних прав отримає права нової батьківської. Власні права папки й документів лишаються." : "Документ отримає права нової папки. Власні права документа лишаються."}
         onClose={() => setMoveDlg(null)}
         onPick={(to) => { const d = moveDlg; setMoveDlg(null);
-          if (d.kind === "folder") void moveDocFolder(d.folder.id, to).then(() => { setToast("Папку перенесено, зміну записано в журнал"); return load(); }).catch((e) => setToast(errOf(e, "Папку не перенесено")));
+          if (d.kind === "folder") void moveDocFolder(d.folder.id, to).then(() => { setToast("Папку перенесено, зміну записано в журнал"); return load(); }).catch((e) => failToast(e, "Папку не перенесено"));
           else void runBulk(d.ids, (id) => updateDocFile(id, { folderId: to }), (ok) => `Перенесено документів: ${ok}.`); }} />}
       {cm && createPortal(
         <div role="menu" onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}
@@ -647,7 +650,7 @@ function StateBlock({ icon, title, text, action, inline }: { icon: string; title
 }
 
 /* ── Картка документа ───────────────────────────────────────────────────── */
-function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: { file: DocFile; tree: DocTree; onChanged: () => Promise<void>; onClose: () => void; onToast: (s: string) => void; folderName: (id: number | null) => string }) {
+function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: { file: DocFile; tree: DocTree; onChanged: () => Promise<void>; onClose: () => void; onToast: (s: string, opts?: { error?: boolean }) => void; folderName: (id: number | null) => string }) {
   const [cardData, setCardData] = useState<DocCard | null>(null);
   const [viewers, setViewers] = useState<{ who: { label: string; note: string }[]; exceptions: { name: string; until: string | null }[] } | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
@@ -892,13 +895,13 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
 }
 
 /** 📖 Блок ознайомлення: людині — кнопка «Ознайомився»; керівництву — хто прочитав, хто ні, «Нагадати в Telegram». */
-function AckBlock({ file, mgmt, onChanged, onToast }: { file: DocFile; mgmt: boolean; onChanged: () => Promise<void>; onToast: (s: string) => void }) {
+function AckBlock({ file, mgmt, onChanged, onToast }: { file: DocFile; mgmt: boolean; onChanged: () => Promise<void>; onToast: (s: string, opts?: { error?: boolean }) => void }) {
   const [list, setList] = useState<{ people: { userId: number; name: string; ackedAt: string | null; hasTelegram: boolean }[]; done: number; total: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
   useEffect(() => { if (mgmt) fetchDocAcks(file.id).then(setList).catch(() => setList(null)); }, [mgmt, file.id, file.version, file.ack.done]);
-  const ack = async () => { setBusy(true); try { await ackDocFile(file.id); onToast("Ознайомлення зафіксовано для цієї версії"); await onChanged(); } finally { setBusy(false); } };
-  const remind = async () => { setBusy(true); try { const r = await remindDocAcks(file.id); onToast(`Нагадано в Telegram: ${r.sent}${r.noTelegram ? `, без Telegram: ${r.noTelegram}` : ""}`); } catch (e) { onToast(errOf(e, "Не вдалося нагадати")); } finally { setBusy(false); } };
+  const ack = async () => { setBusy(true); try { await ackDocFile(file.id); onToast("Ознайомлення зафіксовано для цієї версії"); await onChanged(); } catch (e) { onToast(errOf(e, "Ознайомлення не зафіксовано"), { error: true }); } finally { setBusy(false); } };
+  const remind = async () => { setBusy(true); try { const r = await remindDocAcks(file.id); onToast(`Нагадано в Telegram: ${r.sent}${r.noTelegram ? `, без Telegram: ${r.noTelegram}` : ""}`); } catch (e) { onToast(errOf(e, "Не вдалося нагадати"), { error: true }); } finally { setBusy(false); } };
   const missing = list?.people.filter((p) => !p.ackedAt) ?? [];
   return (
     <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r-lg)", padding: 12 }}>
@@ -1102,7 +1105,7 @@ function SignDialog({ file, onClose, onDone }: { file: DocFile; onClose: () => v
 }
 
 /** 🤖 Чип у шапці: привʼязано / привʼязати Telegram. Потрібен усім, не лише підписантам — сюди йдуть нагадування. */
-function TelegramChip({ onToast }: { onToast: (t: string) => void }) {
+function TelegramChip({ onToast }: { onToast: (t: string, opts?: { error?: boolean }) => void }) {
   const [tg, setTg] = useState<TelegramStatus | null>(null);
   const [waiting, setWaiting] = useState(false);
   const [linkCode, setLinkCode] = useState<{ code: string; bot: string } | null>(null);
@@ -1122,7 +1125,7 @@ function TelegramChip({ onToast }: { onToast: (t: string) => void }) {
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
       <button title="Привʼязати Telegram для підпису й нагадувань" style={{ ...btn(), fontSize: 12, padding: "5px 10px" }}
-        onClick={() => { createTelegramLink().then((r) => { setLinkCode({ code: r.code, bot: r.botUsername }); window.open(r.url, "_blank", "noopener"); setWaiting(true); }).catch(() => onToast("Не вдалося створити код")); }}>
+        onClick={() => { createTelegramLink().then((r) => { setLinkCode({ code: r.code, bot: r.botUsername }); window.open(r.url, "_blank", "noopener"); setWaiting(true); }).catch(() => onToast("Не вдалося створити код", { error: true })); }}>
         {waiting ? "🤖 чекаю код у боті…" : "🤖 Привʼязати Telegram"}</button>
       {waiting && linkCode && <span style={{ fontSize: 12 }}>надішліть боту <b>@{linkCode.bot}</b> код <b style={{ fontSize: 15, letterSpacing: 2 }}>{linkCode.code}</b></span>}
     </span>

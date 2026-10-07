@@ -18,27 +18,36 @@ const S = {
            boxSizing: "border-box" } as const,
 };
 
-export function Modal({ title, children }: { title: string; children: ReactNode }) {
+/**
+ * `error` — відмова сервера ВСЕРЕДИНІ вікна (30.09.2026). Раніше вона йшла в банер сторінки ПІД
+ * напівпрозорим тлом, тож людина бачила вікно, що «нічого не зробило».
+ */
+export function Modal({ title, children, error }: { title: string; children: ReactNode; error?: string | null }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.45)", display: "flex",
                   alignItems: "center", justifyContent: "center", zIndex: 60 }}>
       <div style={{ ...S.card, width: 460, maxWidth: "92vw", boxShadow: "0 18px 48px rgba(0,0,0,.22)" }}>
         <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 10 }}>{title}</div>
         {children}
+        {error && (
+          <div role="alert" style={{ marginTop: 12, padding: "8px 10px", borderRadius: 8, background: "#fee2e2", color: "#991b1b", fontSize: 12.5, lineHeight: 1.4 }}>
+            {error}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-export function CreateTaskDialog({ client, busy, onCancel, onSubmit }: {
-  client: { clientKey: string; name: string }; busy: boolean;
+export function CreateTaskDialog({ client, busy, error, onCancel, onSubmit }: {
+  client: { clientKey: string; name: string }; busy: boolean; error?: string | null;
   onCancel: () => void; onSubmit: (deadline: string, comment: string) => void;
 }) {
   const inWeek = (() => { const d = new Date(); d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); })();
   const [deadline, setDeadline] = useState(inWeek);
   const [comment, setComment] = useState("");
   return (
-    <Modal title={`＋ Задача реактивації · ${client.name}`}>
+    <Modal title={`＋ Задача реактивації · ${client.name}`} error={error}>
       <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10, lineHeight: 1.5 }}>
         Одна задача = один клієнт. Виконавець — основний менеджер цього клієнта.
         Закрити її буде можна лише з причиною.
@@ -56,9 +65,9 @@ export function CreateTaskDialog({ client, busy, onCancel, onSubmit }: {
   );
 }
 
-export function CloseTaskDialog({ task, reasons, busy, onCancel, onSubmit }: {
+export function CloseTaskDialog({ task, reasons, busy, error, onCancel, onSubmit }: {
   task: { taskId: number; name: string }; reasons: { key: string; label: string }[];
-  busy: boolean; onCancel: () => void; onSubmit: (reason: string, note: string) => void;
+  busy: boolean; error?: string | null; onCancel: () => void; onSubmit: (reason: string, note: string) => void;
 }) {
   const [reason, setReason] = useState("");
   const [note, setNote] = useState("");
@@ -66,7 +75,7 @@ export function CloseTaskDialog({ task, reasons, busy, onCancel, onSubmit }: {
   const needNote = reason === "other";
   const ready = reason !== "" && (!needNote || note.trim() !== "");
   return (
-    <Modal title={`Закрити задачу · ${task.name}`}>
+    <Modal title={`Закрити задачу · ${task.name}`} error={error}>
       <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10, lineHeight: 1.5 }}>
         Причина обовʼязкова. Це єдине джерело даних про те, ЧОМУ клієнт не повернувся —
         без неї через півроку список покаже тих самих людей, і ніхто не згадає, чим скінчилась розмова.
@@ -93,8 +102,8 @@ export function CloseTaskDialog({ task, reasons, busy, onCancel, onSubmit }: {
  * Telegram, і Ringostat цього не бачить. Тут: канал, що домовились, скрин переписки (≤ 5 МБ,
  * лише зображення). Порожній запис без тексту і скрина сервер відхиляє.
  */
-export function ContactDialog({ client, busy, onCancel, onSubmit }: {
-  client: { clientKey: string; name: string }; busy: boolean;
+export function ContactDialog({ client, busy, error, onCancel, onSubmit }: {
+  client: { clientKey: string; name: string }; busy: boolean; error?: string | null;
   onCancel: () => void; onSubmit: (channel: string, note: string, file: File | null) => void;
 }) {
   const [channel, setChannel] = useState("viber");
@@ -109,7 +118,7 @@ export function ContactDialog({ client, busy, onCancel, onSubmit }: {
     setFile(f);
   };
   return (
-    <Modal title={`📱 Контакт · ${client.name}`}>
+    <Modal title={`📱 Контакт · ${client.name}`} error={error}>
       <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10, lineHeight: 1.5 }}>
         Для контактів поза дзвінком: Viber, Telegram, email. Запис рахується як спроба
         реактивації нарівні з дзвінком і видимий тімліду й керівництву.

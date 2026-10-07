@@ -7,7 +7,7 @@ import {
   fetchTaskGroups, createTaskGroup, deleteTaskGroup,
   fetchTaskComments, createTaskComment, fetchTaskHistory,
   fetchTaskFiles, uploadTaskFile, deleteTaskFile, fetchTaskFileBlobUrl,
-  markTaskSeen, fetchTaskAssignees,
+  markTaskSeen, fetchTaskAssignees, fetchMyTeamInactive,
   TASK_FILE_MAX_BYTES, TASK_FILES_PER_TASK,
   type ManagerOption,
   type ReactivationManager,
@@ -22,6 +22,7 @@ import {
   type TaskAssignee,
 } from "../../../api";
 import { PRIORITY_LABELS } from "../constants";
+import { teamGroups } from "../assigneeGroups";
 import { CommentField } from "../../../components/CommentField";
 
 /** Підзадачі задачі — довільний чекліст, кожен пункт трекається виконано/ні.
@@ -241,8 +242,47 @@ function EditableDate({ value, onChange }: { value: string | null; onChange: (v:
 }
 
 // Виконавець: аватар-ініціали + скорочене прізвище; редагування по кліку (select).
-function AssigneeCell({ value, name, options, onChange }: {
-  value: number | null; name: string | null; options: ManagerOption[]; onChange: (id: number | null) => void;
+function AssigneeOptgroups({ options, myTeamId, skipId }: { options: ManagerOption[]; myTeamId: number | null; skipId?: number | "" }) {
+  return <>{teamGroups(options, myTeamId, skipId).map(([team, mgrs]) => (
+    <optgroup key={team} label={team}>
+      {mgrs.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+    </optgroup>
+  ))}</>;
+}
+
+/**
+ * 👁 НЕАКТИВНІ З МОЄЇ КОМАНДИ — СЛОВАМИ, А НЕ ЗНИКНЕННЯМ. Людина, вимкнена в Kommo,
+ * у селект не потрапляє, і без цього рядка її відсутність читалась як заборона
+ * задачника («не можу ставити менеджера з команди», Шаврова 05.10.2026).
+ */
+function InactiveTeamHint({ people }: { people: { id: number; name: string }[] }) {
+  if (!people.length) return null;
+  return (
+    <span data-testid="inactive-team-hint" style={{ color: "var(--text-muted)", fontSize: "var(--fs-xs)", lineHeight: 1.35 }}
+      title={people.map((p) => p.name).join("\n")}>
+      Ще {people.length} з вашої команди немає в списку — вони неактивні в Kommo: {people.map((p) => p.name.split(" ").slice(0, 2).join(" ")).join(", ")}
+    </span>
+  );
+}
+
+/**
+ * 🔴 ПОРОЖНІЙ СПИСОК ВИКОНАВЦІВ НАЗИВАЄ СЕБЕ (відгук Шаврової 05.10.2026). Німе «—» у
+ * селекті читалось як «мені заборонено ставити задачі», хоча список просто не дійшов.
+ */
+function AssigneeListStatus({ empty, failed, onRetry }: { empty: boolean; failed: boolean; onRetry?: () => void }) {
+  if (!empty) return null;
+  return (
+    <span data-testid="assignee-list-status" style={{ color: failed ? "#b91c1c" : "var(--text-muted)", fontSize: "var(--fs-xs)", lineHeight: 1.35 }}>
+      {failed ? "Список виконавців не завантажився." : "Завантажую список виконавців…"}
+      {failed && onRetry && (
+        <> <button type="button" onClick={onRetry} style={{ border: "none", background: "transparent", color: "#6366f1", cursor: "pointer", padding: 0, fontSize: "inherit", textDecoration: "underline" }}>Повторити</button></>
+      )}
+    </span>
+  );
+}
+
+function AssigneeCell({ value, name, options, myTeamId, onChange }: {
+  value: number | null; name: string | null; options: ManagerOption[]; myTeamId: number | null; onChange: (id: number | null) => void;
 }) {
   const [editing, setEditing] = useState(false);
   if (editing) {
@@ -250,7 +290,7 @@ function AssigneeCell({ value, name, options, onChange }: {
       <select autoFocus value={value ?? ""} onChange={(e) => { onChange(e.target.value ? Number(e.target.value) : null); setEditing(false); }}
         onBlur={() => setEditing(false)} style={{ width: "100%", fontSize: 12, minWidth: 0 }}>
         <option value="">—</option>
-        {options.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+        <AssigneeOptgroups options={options} myTeamId={myTeamId} />
       </select>
     );
   }
@@ -524,6 +564,8 @@ export function TasksSection({
   tasksLoadFailed = false,
   tasks,
   managerOptions,
+  managerOptionsFailed = false,
+  onReloadManagerOptions,
   patchTaskLocal,
   commitTask,
   handleDeleteTask,
@@ -548,6 +590,9 @@ export function TasksSection({
   tasksLoadFailed?: boolean;
   tasks: Task[];
   managerOptions: ManagerOption[];
+  /** Останнє завантаження списку виконавців упало (отриманий раніше список при цьому лишається). */
+  managerOptionsFailed?: boolean;
+  onReloadManagerOptions?: () => void;
   patchTaskLocal: (id: number, patch: Partial<Task>) => void;
   /** Збереження на сервер із ВИДИМОЮ помилкою: мовчазний 403/500 читався як «збережено». */
   commitTask: (id: number, patch: Partial<Task>) => void;
@@ -567,6 +612,10 @@ export function TasksSection({
   // Department dropdown = fixed відділи + all team names, de-duplicated.
   const deptOptions = Array.from(new Set([...DEPARTMENTS, ...(teams ?? []).map((t) => t.name)]));
   const [adminTab, setAdminTab] = useState<"mine" | "shared" | "all" | "review">("mine");
+  // 👥 Моя команда — першою в селектах виконавця; неактивні з неї — підписом під селектом.
+  const myTeamId = managerOptions.find((m) => m.id === currentManagerId)?.teamId ?? null;
+  const [myTeamInactive, setMyTeamInactive] = useState<{ id: number; name: string }[]>([]);
+  useEffect(() => { fetchMyTeamInactive().then(setMyTeamInactive).catch(() => setMyTeamInactive([])); }, []);
   // 👁 Яку задачу переглядаємо у вкладеннях (id) — модалка поверх списку.
   const [filesViewer, setFilesViewer] = useState<number | null>(null);
   /** 🤝 Форму відкрито зі «Спільних» — виконавець не підставляється, і без нього не створити. */
@@ -609,6 +658,9 @@ export function TasksSection({
   const feedDraftRef = useRef<HTMLTextAreaElement | null>(null);
   const openFeed = (taskId: number) => { setFocusFeed(true); setOpenTaskId(taskId); };
   const openTask = openTaskId != null ? tasks.find((t) => t.id === openTaskId) ?? null : null;
+  // 🔁 Форма чи картка відкрились, а виконавців немає — пробуємо ще раз, а не показуємо «—» (#494).
+  const needAssigneeList = (taskModalOpen || openTaskId != null) && managerOptions.length === 0;
+  useEffect(() => { if (needAssigneeList) onReloadManagerOptions?.(); }, [needAssigneeList]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 🔴 «ОДНЕ ЗАВАНТАЖЕННЯ ВЖЕ ЗАВЕРШИЛОСЬ» — не те саме, що «зараз не вантажимо».
   // `tasksLoading` стартує false і стає true лише коли ефект добіг до запиту, тож на
@@ -1454,7 +1506,7 @@ export function TasksSection({
                       <EditableDate value={task.deadline} onChange={(deadline) => { patchTaskLocal(task.id, { deadline }); commitTask(task.id, { deadline }); }} />
                     </td>
                     <td>
-                      <AssigneeCell value={task.assigneeId} name={task.assigneeName} options={managerOptions}
+                      <AssigneeCell value={task.assigneeId} name={task.assigneeName} options={managerOptions} myTeamId={myTeamId}
                         onChange={(assigneeId) => { const assigneeName = managerOptions.find((m) => m.id === assigneeId)?.name ?? null; patchTaskLocal(task.id, { assigneeId, assigneeName }); commitTask(task.id, { assigneeId }); }} />
                     </td>
                     <td>
@@ -1611,8 +1663,10 @@ export function TasksSection({
                   <F icon="👤" label="Виконавець">
                     <select value={openTask.assigneeId ?? ""} onChange={(e) => { const assigneeId = e.target.value ? Number(e.target.value) : null; const assigneeName = managerOptions.find((m) => m.id === assigneeId)?.name ?? null; patchTaskLocal(openTask.id, { assigneeId, assigneeName }); commitTask(openTask.id, { assigneeId }); }} style={{ width: "100%" }}>
                       <option value="">— (моя / без виконавця)</option>
-                      {managerOptions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                      <AssigneeOptgroups options={managerOptions} myTeamId={myTeamId} />
                     </select>
+                    <AssigneeListStatus empty={managerOptions.length === 0} failed={managerOptionsFailed} onRetry={onReloadManagerOptions} />
+                    <InactiveTeamHint people={myTeamInactive} />
                   </F>
                   {/* 👤 ВИКОНАВЕЦЬ-АКАУНТ. Показуємо ЛИШЕ коли менеджера з CRM не
                       обрано: виконавець один (CHECK `tasks_one_assignee`), і два
@@ -2110,21 +2164,10 @@ export function TasksSection({
                       }
                     >
                       <option value="">—</option>
-                      {(() => {
-                        // Group managers by team: team names as <optgroup>, managers under.
-                        const byTeam = new Map<string, typeof managerOptions>();
-                        for (const m of managerOptions) {
-                          const key = m.teamName ?? "Без команди";
-                          if (!byTeam.has(key)) byTeam.set(key, []);
-                          byTeam.get(key)!.push(m);
-                        }
-                        return [...byTeam.entries()].map(([team, mgrs]) => (
-                          <optgroup key={team} label={team}>
-                            {mgrs.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                          </optgroup>
-                        ));
-                      })()}
+                      <AssigneeOptgroups options={managerOptions} myTeamId={myTeamId} />
                     </select>
+                    <AssigneeListStatus empty={managerOptions.length === 0} failed={managerOptionsFailed} onRetry={onReloadManagerOptions} />
+                    <InactiveTeamHint people={myTeamInactive} />
                 </label>
                 {taskForm.taskType === "simple" && (
                   <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: 1, minWidth: 150 }}>
@@ -2171,20 +2214,7 @@ export function TasksSection({
                       title="Задача одразу для двох менеджерів — створиться копія кожному"
                     >
                       <option value="">— (одному)</option>
-                      {(() => {
-                        const byTeam = new Map<string, typeof managerOptions>();
-                        for (const m of managerOptions) {
-                          if (m.id === taskForm.assigneeId) continue;
-                          const key = m.teamName ?? "Без команди";
-                          if (!byTeam.has(key)) byTeam.set(key, []);
-                          byTeam.get(key)!.push(m);
-                        }
-                        return [...byTeam.entries()].map(([team, mgrs]) => (
-                          <optgroup key={team} label={team}>
-                            {mgrs.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                          </optgroup>
-                        ));
-                      })()}
+                      <AssigneeOptgroups options={managerOptions} myTeamId={myTeamId} skipId={taskForm.assigneeId} />
                     </select>
                   </label>
                 )}

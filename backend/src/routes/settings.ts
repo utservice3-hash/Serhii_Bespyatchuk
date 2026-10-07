@@ -5,7 +5,7 @@ import { CALLS_NORM_BOUNDS } from "../core/callNorm.js";
 import bcrypt from "bcryptjs";
 import { pool } from "../db/pool.js";
 import { setAdPlan } from "../core/adBudget.js";
-import { monthStartOf } from "../core/dates.js";
+import { monthStartOf, kyivToday } from "../core/dates.js";
 import { requireAuth } from "../auth/middleware.js";
 import { provisionUsers, resetPassword, generatePassword } from "../db/userProvisioning.js";
 import { roleHasPerm, getRoleDef, refreshRoles, isAdminScope, isAdminOrLead } from "../auth/rbac.js";
@@ -15,7 +15,9 @@ import { loginEnabledFor } from "../core/managerState.js";
 import { writeAudit } from "../db/audit.js";
 import { parseKey } from "../core/secretBox.js";
 import { storeDashboardPassword } from "../core/teamVault.js";
+import { recordTeamMove, refreshTeamMoves, redateLastTeamMove } from "../core/teamAt.js";
 import type { Db as SecretsDb } from "../core/secrets.js";
+import { loadTunables, parseTunables, saveTunables, tunablesHistory, RECOMMENDED, TUNABLE_BOUNDS } from "../core/firstTouchTunables.js";
 
 export const settingsRouter = Router();
 settingsRouter.use(requireAuth);
@@ -199,6 +201,25 @@ settingsRouter.put("/", async (req, res) => {
   res.json({ settings: next });
 });
 
+/**
+ * 🎛 «ПЕРШИЙ ДОТИК» — вікно повторного дзвінка, допуск і мінімальний дедлайн передзвону, колір блоку (05.10.2026).
+ * Лише адмін (`roleKey`, не `admin_scope`: CEO й опдир не змінюють — рішення власника «тільки для адміна»).
+ * Окремий журнал, а не `app_settings`: `PUT /` переписує весь обʼєкт і мовчки стер би ці поля.
+ */
+settingsRouter.get("/first-touch", async (req, res) => {
+  if (req.auth!.roleKey !== "admin") { res.status(403).json({ error: "Налаштування «Першого дотику» — лише для адміністратора" }); return; }
+  res.json({ current: await loadTunables(pool), recommended: RECOMMENDED, bounds: TUNABLE_BOUNDS, history: await tunablesHistory(pool) });
+});
+
+settingsRouter.put("/first-touch", async (req, res) => {
+  if (req.auth!.roleKey !== "admin") { res.status(403).json({ error: "Налаштування «Першого дотику» — лише для адміністратора" }); return; }
+  const parsed = parseTunables(req.body);
+  if (!parsed.ok) { res.status(400).json({ error: parsed.error }); return; }
+  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [req.auth!.userId])).rows[0]?.name ?? req.auth!.email ?? null;
+  await saveTunables(pool, parsed.value, { userId: req.auth!.userId ?? null, name: who }, new Date());
+  res.json({ current: await loadTunables(pool), history: await tunablesHistory(pool) });
+});
+
 // --- User & role management (право manage_users) ---
 // Гейт вкладки «Налаштування» вже відсіює чужі ролі (requireAuth tab-gate); тут додатково
 // вимагаємо право manage_users, щоб кастомна роль без нього не керувала людьми.
@@ -231,7 +252,7 @@ settingsRouter.get("/users", async (req, res) => {
             u.role AS synced_role, u.role_override,
             COALESCE(u.role_override, u.role) AS role_effective,
             u.is_active, u.deactivated_at, u.deactivated_reason,
-            (u.manager_id IS NOT NULL) AS crm_linked, u.tracker_enabled,
+            (u.manager_id IS NOT NULL) AS crm_linked, u.tracker_enabled, u.orphan_pool,
             /* 👤 Стан менеджера їде РАЗОМ зі списком: він керує і робочими списками, і
                входом (loginEnabledFor), тож окремий запит означав би екран, на якому
                два джерела правди про одну людину розходяться між двома завантаженнями.
@@ -487,13 +508,18 @@ settingsRouter.patch("/users/:id", async (req, res) => {
   if (typeof req.body.trackerEnabled === "boolean") {
     params.push(req.body.trackerEnabled); sets.push(`tracker_enabled = $${params.length}`);
   }
+  // 🧭 Пул нічийних для менеджера (05.10.2026) — вмикання й вимикання однаково просте.
+  if (typeof req.body.orphanPool === "boolean") {
+    params.push(req.body.orphanPool); sets.push(`orphan_pool = $${params.length}`);
+  }
   if (sets.length === 0) return res.json({ ok: true });
   params.push(id);
   await pool.query(`UPDATE users SET ${sets.join(", ")} WHERE id = $${params.length}`, params);
 
   const action = typeof req.body.isActive === "boolean" && !newActive ? "user.deactivate" : (renamed ? "user.rename" : "user.update");
   await writeAudit({ ...audit(req), action, targetType: "user", targetId: String(id), targetLabel: c.email, details: { role_override: newOverride, is_active: newActive, ...(renamed ? { renamed } : {}),
-      ...(typeof req.body.trackerEnabled === "boolean" ? { tracker_enabled: req.body.trackerEnabled } : {}) } });
+      ...(typeof req.body.trackerEnabled === "boolean" ? { tracker_enabled: req.body.trackerEnabled } : {}),
+      ...(typeof req.body.orphanPool === "boolean" ? { orphan_pool: req.body.orphanPool } : {}) } });
   res.json({ ok: true });
 });
 
@@ -638,10 +664,15 @@ settingsRouter.get("/team-overrides", async (req, res) => {
               (SELECT COUNT(*) FROM managers m WHERE m.team_id = t.id AND m.is_active) AS active
          FROM teams t ORDER BY t.name`),
     pool.query<{ id: number; name: string; kommo_user_id: string; team_id: number | null;
-                 ov_team_id: number | null; ov_note: string | null; has_ov: boolean }>(
+                 ov_team_id: number | null; ov_note: string | null; has_ov: boolean;
+                 mv_from: string | null; mv_from_team: number | null; mv_to_team: number | null }>(
+      // 🔀 Останній перехід із датою (задача 4892) — щоб на екрані було видно, з якого дня діє зміна.
       `SELECT m.id, m.name, m.kommo_user_id, m.team_id,
-              o.team_id AS ov_team_id, o.note AS ov_note, (o.kommo_user_id IS NOT NULL) AS has_ov
+              o.team_id AS ov_team_id, o.note AS ov_note, (o.kommo_user_id IS NOT NULL) AS has_ov,
+              to_char(mv.effective_from, 'YYYY-MM-DD') AS mv_from, mv.from_team_id AS mv_from_team, mv.to_team_id AS mv_to_team
          FROM managers m LEFT JOIN manager_team_overrides o ON o.kommo_user_id = m.kommo_user_id
+         LEFT JOIN LATERAL (SELECT effective_from, from_team_id, to_team_id FROM manager_team_moves
+                             WHERE manager_id = m.id ORDER BY effective_from DESC LIMIT 1) mv ON true
         WHERE m.is_active AND m.kommo_user_id IS NOT NULL
         ORDER BY m.name`),
   ]);
@@ -651,6 +682,7 @@ settingsRouter.get("/team-overrides", async (req, res) => {
       managerId: m.id, name: m.name, kommoUserId: String(m.kommo_user_id),
       teamId: m.team_id,
       override: m.has_ov ? { teamId: m.ov_team_id, note: m.ov_note } : null,
+      lastMove: m.mv_from ? { effectiveFrom: m.mv_from, fromTeamId: m.mv_from_team, toTeamId: m.mv_to_team } : null,
     })),
   });
 });
@@ -661,6 +693,10 @@ settingsRouter.get("/team-overrides", async (req, res) => {
  * без команди. Застосовується ОДРАЗУ (managers.team_id + історія), не чекаючи тіка синку.
  * ⚠️ При `crm` негайно повернути групу ми не можемо (її знає лише Kommo) — команда
  * повернеться наступним тіком; відповідь це називає.
+ *
+ * 🔀 `effectiveFrom` (`YYYY-MM-DD`, не пізніше сьогодні; за замовчуванням сьогодні) — з якого
+ * дня людина в новій команді (задача 4892, `core/teamAt.ts`). Усе до цієї дати лишається в
+ * старій команді. Для `crm` дату не приймаємо: перехід запише синк, коли побачить групу.
  */
 settingsRouter.put("/team-overrides/:kommoUserId", async (req, res) => {
   if (!requireManageUsers(req, res)) return;
@@ -674,6 +710,15 @@ settingsRouter.put("/team-overrides/:kommoUserId", async (req, res) => {
     `SELECT id, name, team_id FROM managers WHERE kommo_user_id = $1`, [kommoUserId])).rows[0];
   if (!mgr) return res.status(404).json({ error: "Менеджера з таким kommo_user_id немає" });
   const note = typeof req.body?.note === "string" && req.body.note.trim() ? req.body.note.trim() : null;
+  const today = kyivToday();
+  const effectiveFrom = req.body?.effectiveFrom == null || req.body.effectiveFrom === "" ? today : String(req.body.effectiveFrom);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom) || Number.isNaN(Date.parse(effectiveFrom + "T00:00:00Z"))) {
+    return res.status(400).json({ error: "effectiveFrom: дата YYYY-MM-DD" });
+  }
+  if (effectiveFrom > today) return res.status(400).json({ error: "effectiveFrom: не пізніше сьогодні" });
+  if (mode === "crm" && effectiveFrom !== today) {
+    return res.status(400).json({ error: "Для «з CRM» дату не задаємо: перехід запише синк, коли побачить групу в Kommo" });
+  }
 
   let teamId: number | null = null;
   let label = "з CRM (повернеться наступним тіком синку)";
@@ -699,6 +744,13 @@ settingsRouter.put("/team-overrides/:kommoUserId", async (req, res) => {
            team_id = EXCLUDED.team_id, note = EXCLUDED.note, set_by = EXCLUDED.set_by, set_at = now()`,
         [kommoUserId, teamId, note, req.auth?.userId ?? null]);
       if (mgr.team_id !== teamId) {
+        // Перехід — ДО зміни команди: `from` береться з поточної (ланцюг сходиться).
+        const mv = await recordTeamMove(client, { managerId: mgr.id, toTeamId: teamId, effectiveFrom,
+          source: "settings", setBy: req.auth?.userId ?? null, note });
+        if (mv.kind === "rejected") {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ error: `Перехід не записано: ${mv.reason}` });
+        }
         await client.query(`UPDATE managers SET team_id = $2 WHERE id = $1`, [mgr.id, teamId]);
         await client.query(`INSERT INTO manager_team_history (manager_id, team_id) VALUES ($1, $2)`, [mgr.id, teamId]);
       }
@@ -710,9 +762,10 @@ settingsRouter.put("/team-overrides/:kommoUserId", async (req, res) => {
   } finally {
     client.release();
   }
+  await refreshTeamMoves(pool); // звіти мусять побачити перехід одразу, а не через 10 хв
   await writeAudit({ ...audit(req), action: "manager.team_override", targetType: "manager",
-    targetId: String(mgr.id), targetLabel: `${mgr.name} → ${label}` });
-  res.json({ ok: true, mode, teamId, appliedNow: mode !== "crm" });
+    targetId: String(mgr.id), targetLabel: `${mgr.name} → ${label}${mode !== "crm" ? ` з ${effectiveFrom}` : ""}` });
+  res.json({ ok: true, mode, teamId, appliedNow: mode !== "crm", effectiveFrom: mode !== "crm" ? effectiveFrom : null });
 });
 
 /** Команда лише в дашборді (без Kommo-групи). Існує через перевизначення; синк її не чіпає. */
@@ -725,6 +778,44 @@ settingsRouter.post("/teams", async (req, res) => {
   const r = await pool.query<{ id: number }>(`INSERT INTO teams (name, kommo_group_id) VALUES ($1, NULL) RETURNING id`, [name]);
   await writeAudit({ ...audit(req), action: "team.create", targetType: "team", targetId: String(r.rows[0].id), targetLabel: name });
   res.status(201).json({ id: r.rows[0].id, name });
+});
+
+/**
+ * 🗓 Виправити дату ОСТАННЬОГО переходу менеджера між командами (05.10.2026). Інакше помилкову дату
+ * не поправити ніяк: той самий вибір команди переходу не пише, а «з CRM» віддає людину синку.
+ * Правила — `core/teamAt.redateLastTeamMove`. Стоїть ПІСЛЯ `post("/teams")` свідомо: `#709c` читає
+ * обробник PUT зрізом до `post("/teams")`, і чужий `UPDATE` у тому зрізі послабив би гейт.
+ */
+settingsRouter.patch("/team-moves/:managerId/last", async (req, res) => {
+  if (!requireManageUsers(req, res)) return;
+  const managerId = Number(req.params.managerId);
+  if (!Number.isInteger(managerId) || managerId <= 0) return res.status(400).json({ error: "managerId: число" });
+  const effectiveFrom = String(req.body?.effectiveFrom ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom) || Number.isNaN(Date.parse(effectiveFrom + "T00:00:00Z"))) {
+    return res.status(400).json({ error: "effectiveFrom: дата YYYY-MM-DD" });
+  }
+  const mgr = (await pool.query<{ name: string }>(`SELECT name FROM managers WHERE id = $1`, [managerId])).rows[0];
+  if (!mgr) return res.status(404).json({ error: "Менеджера немає" });
+  const client = await pool.connect();
+  let r: Awaited<ReturnType<typeof redateLastTeamMove>>;
+  try {
+    await client.query("BEGIN");
+    r = await redateLastTeamMove(client, { managerId, effectiveFrom, today: kyivToday(), setBy: req.auth?.userId ?? null });
+    await client.query(r.kind === "updated" ? "COMMIT" : "ROLLBACK");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+  if (r.kind === "rejected") return res.status(400).json({ error: `Дату не змінено: ${r.reason}` });
+  if (r.kind === "same") return res.json({ ok: true, changed: false, effectiveFrom });
+  await refreshTeamMoves(pool); // звіти мусять побачити нову дату одразу
+  const tn = async (id: number | null) => id == null ? "без команди"
+    : ((await pool.query<{ name: string }>(`SELECT name FROM teams WHERE id = $1`, [id])).rows[0]?.name ?? `Команда #${id}`);
+  await writeAudit({ ...audit(req), action: "manager.team_move_redate", targetType: "manager",
+    targetId: String(managerId), targetLabel: `${mgr.name}: перехід ${await tn(r.fromTeamId)} → ${await tn(r.toTeamId)} — дата ${r.oldFrom} → ${r.effectiveFrom}` });
+  res.json({ ok: true, changed: true, oldFrom: r.oldFrom, effectiveFrom: r.effectiveFrom });
 });
 
 settingsRouter.get("/audit", async (req, res) => {

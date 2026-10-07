@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { clientTabGroup, tabOf, TAB_GROUP_RANK, YELLOW_DAYS } from "./clientTabs.js";
 import { assignTeamIdFor, assignAllowed } from "../auth/mergeScope.js";
 import { monthCell, CALLS_BY_MONTH_SQL } from "./clientCalls.js";
 import { basisTarget, basisMonth, BASIS_BELONGS_SQL, BASIS_UPSERT_SQL, BASIS_CLEAR_SQL, BASIS_FOR_MONTH_SQL, shapeBasis } from "./planBasis.js";
@@ -17,36 +16,9 @@ const SECTIONS = "frontend/src/pages/dashboard/sections";
  * колонки таблиці, згорнуті тижні, передача клієнта тімлідом.
  */
 
-test("#810 clientTabGroup: активний до/після 30 днів, сплячий і втрачений — реактивація; порядок постійні → жовті → реактивація", () => {
-  // По обидва боки межі «жовтого» (правило 11).
-  assert.equal(clientTabGroup("active", YELLOW_DAYS - 1), "regular", "🔴 29 днів уже «жовтий»");
-  assert.equal(clientTabGroup("active", YELLOW_DAYS), "yellow", "🔴 30 днів ще не «жовтий» — розійдеться з фоном рядка");
-  assert.equal(clientTabGroup("active", null), "regular", "🔴 клієнт без дати замовлення став «жовтим»");
-  // Реактивація — за СТАНОМ, а не за днями: сплячий на 10-му дні теж у реактивації.
-  assert.equal(clientTabGroup("sleeping", 10), "react", "🔴 сплячий потрапив у «Постійні»");
-  assert.equal(clientTabGroup("lost", 400), "react");
-  assert.equal(clientTabGroup("sleeping", null), "react");
-  // Вкладка: «жовтий» — у «Постійних», реактивація — лише в «Реактивації».
-  assert.equal(tabOf("regular"), "regular");
-  assert.equal(tabOf("yellow"), "regular", "🔴 «жовтий» випав із «Постійних»");
-  assert.equal(tabOf("react"), "react");
-  assert.ok(TAB_GROUP_RANK.regular < TAB_GROUP_RANK.yellow && TAB_GROUP_RANK.yellow < TAB_GROUP_RANK.react,
-    "🔴 порядок у «Всі» не «постійні → жовті → реактивація»");
-});
+// #810 знято 30.09.2026: вкладку «Реактивація» тепер визначає рахунок (блок 4), а не стан — див. #840.
 
-test("#810b ФРОНТ НЕ МАЄ ВЛАСНОГО ПРАВИЛА ВКЛАДОК: фільтр, порядок і жовтий фон — з поля сервера", () => {
-  const list = read(`${SECTIONS}/ClientPlansSection.tsx`);
-  assert.match(list, /tab === "regular" && c\.tabGroup === "react"\) return false/, "🔴 вкладка «Постійні» фільтрує не за групою сервера");
-  assert.match(list, /tab === "react" && c\.tabGroup !== "react"\) return false/, "🔴 вкладка «Реактивація» фільтрує не за групою сервера");
-  assert.match(list, /data\.tabGroupRank\[a\.tabGroup\] - data\.tabGroupRank\[b\.tabGroup\]/, "🔴 порядок «Всі» не з рангів сервера");
-  assert.match(list, /const risk = c\.tabGroup === "yellow";/, "🔴 жовтий фон рядка рахується не тією групою, що вкладки");
-  assert.doesNotMatch(list, /const risk = [^;]*lastOrderDays/, "🔴 у фронті знову власний поріг «жовтого» — друга редакція правила");
-  assert.doesNotMatch(list, /stateFilter/, "🔴 повернувся ряд «Стан:» поруч із вкладками — дві осі на одне питання");
-  const dash = read("backend/src/routes/dashboard.ts");
-  assert.match(dash, /tabGroup: clientTabs\.clientTabGroup\(stateOf\(c\.client_key\), dayOf\(c\.last_paid\)\)/,
-    "🔴 рядок /client-plans не несе групи з ядра — або група рахується не від того стану, що чип");
-  assert.match(dash, /tabGroupRank: clientTabs\.TAB_GROUP_RANK,/, "🔴 ранги груп не приходять із сервера");
-});
+// #810b знято 30.09.2026: група вкладки рахується від рахунку (блок 4) — див. #840c.
 
 /**
  * #811 — КОЛОНКИ ТАБЛИЦІ СХОДЯТЬСЯ. До блоку 3 у шапці було 9 колонок, а підсумок і розгорнута

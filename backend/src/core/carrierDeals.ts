@@ -54,7 +54,9 @@ export interface DealRow {
   /** Усі рішення людей по угоді, старі — теж (ТЗ: «попередні рішення зберігаються»); останнє — чинне. */
   journal: JournalEntry[];
   category: DealCategory;
-  source: "human" | "ai" | null;
+  source: "human" | "ai" | "crm" | null;
+  /** Стан `history`: угода номера, закрита як «Перевізник», з якої взято вердикт. */
+  historyFrom: number | null;
   why: string | null;
   /**
    * «На перевірці» / «Помилка»: з якого моменту чекає людину, до коли її треба розібрати (кінець робочого дня,
@@ -74,6 +76,7 @@ export interface JournalEntry { by: string; role: string | null; decision: Human
 
 interface Raw {
   kommo_id: string; phone: string; deal_created_at: Date; state: string; reused: boolean; talk_no: number; u: string | null;
+  history_from: string | null;
   manager_id: number | null; manager_name: string | null; team_id: number | null; team_name: string | null;
   calldate: Date | null; billsec: number | null; call_type: string | null;
   stt_status: string | null; stt_failure: string | null; text_empty: boolean | null;
@@ -116,7 +119,7 @@ export const CARRIER_ANALYSIS_LATERAL = (t: string, rubricsParam: string) => `LE
 
 export async function carrierDealRows(db: Db, q: DealQuery): Promise<DealRow[]> {
   const r = await db.query<Raw>(`
-    SELECT d.kommo_id::text, d.phone, d.deal_created_at, d.state, (d.reused_from IS NOT NULL) AS reused,
+    SELECT d.kommo_id::text, d.phone, d.deal_created_at, d.state, (d.reused_from IS NOT NULL) AS reused, d.history_from::text,
            COALESCE(src.talk_no, d.talk_no) AS talk_no, COALESCE(src.uniqueid, d.uniqueid) AS u,
            m.id AS manager_id, m.name AS manager_name, m.team_id, tm.name AS team_name,
            rc.calldate, rc.billsec, rc.call_type,
@@ -188,6 +191,7 @@ function toRow(x: Raw, now: Date): DealRow {
       quoteCheck: result?.quote_check ?? null, summary: result?.summary || null, bucket: result ? carrierBucket(result) : null,
     },
     human, journal: [], category: cat.category, source: cat.source, why: cat.why,
+    historyFrom: x.history_from == null ? null : Number(x.history_from),
     reviewSince: sinceAt ? iso(sinceAt) : null, reviewDeadline: deadline ? deadline.toISOString() : null,
     overdue: deadline != null && now.getTime() > deadline.getTime(),
     otherType: cat.category !== "other" ? null : cat.source === "human" ? (human?.otherType ?? null) : aiOther,
@@ -272,4 +276,78 @@ export async function callInScope(db: Db, uniqueid: string, scope: CarrierScope)
        AND ($2::int IS NULL OR m.id = $2::int) AND ($3::int IS NULL OR m.team_id = $3::int)
      LIMIT 1`, [uniqueid, scope.managerId ?? null, scope.teamId ?? null]);
   return (r.rowCount ?? 0) > 0;
+}
+
+// ─── Динаміка за період (прохання Романа 30.09.2026: «графіки … скільки відсіяно, пропущено, скільки грошей») ─────
+
+export interface DayStat { day: string; filtered: number; noTalk: number; clients: number; carriers: number; other: number; unsorted: number; spendUsd: number | null }
+
+const kyivDay = (iso: string) => new Date(iso).toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+
+/** Усі дні [from; to] (Київ), щоб порожній день був нулем, а не пропуском на осі. */
+export function daysBetween(from: string, to: string): string[] {
+  const out: string[] = [];
+  for (let d = new Date(`${from}T12:00:00Z`); d.toISOString().slice(0, 10) <= to && out.length < 400; d = new Date(d.getTime() + 86_400_000))
+    out.push(d.toISOString().slice(0, 10));
+  return out;
+}
+
+/**
+ * День за днем: скільки угод відсіяв фільтр CRM, скільки без розмови, як AI/людина розсортували решту — з ТИХ САМИХ
+ * рядків, що вкладки (`carrierDealRows`), тож сума стовпчиків дорівнює числам вкладок і звіту. Витрати AI мобільних
+ * (`carrier_*`) — по компанії, лише коли `withSpend` (керівництво); інакше `null`.
+ */
+export async function carrierDailyStats(db: Db, from: string, to: string, scope: CarrierScope, since: string | null,
+  pipelineId: number, withSpend: boolean): Promise<DayStat[]> {
+  const days = new Map(daysBetween(from, to).map((d) => [d, { day: d, filtered: 0, noTalk: 0, clients: 0, carriers: 0, other: 0, unsorted: 0,
+    spendUsd: withSpend ? 0 : null } as DayStat]));
+  for (const r of await carrierDealRows(db, { period: { from, to }, scope, since })) {
+    const x = days.get(kyivDay(r.createdAt)); if (!x) continue;
+    if (r.category === "no_talk") x.noTalk++;
+    else if (r.category === "client") x.clients++;
+    else if (r.category === "carrier") x.carriers++;
+    else if (r.category === "other") x.other++;
+    else x.unsorted++;
+  }
+  const f = await db.query<{ day: string; n: number }>(`
+    SELECT to_char(dd.created_at_kommo AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS day, count(*)::int AS n
+      FROM deals dd LEFT JOIN managers m ON m.id = dd.manager_id
+     WHERE dd.pipeline_id = $3 AND dd.status_id = 143 AND dd.reject_reason = 'Перевізник' AND dd.name ~ '^380[0-9]{9}$'
+       AND (dd.created_at_kommo AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1::date AND $2::date
+       AND NOT EXISTS (SELECT 1 FROM carrier_call_deals x WHERE x.kommo_id = dd.kommo_id)
+       AND ($4::int IS NULL OR m.id = $4::int) AND ($5::int IS NULL OR m.team_id = $5::int)
+       AND ($6::timestamptz IS NULL OR dd.created_at_kommo >= $6::timestamptz)
+     GROUP BY 1`, [from, to, pipelineId, scope.managerId ?? null, scope.teamId ?? null, since]);
+  for (const x of f.rows) { const d = days.get(x.day); if (d) d.filtered = Number(x.n); }
+  if (withSpend) {
+    const s = await db.query<{ day: string; usd: number }>(`
+      SELECT to_char(at AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS day, COALESCE(SUM(usd), 0)::float8 AS usd FROM ai_spend_ledger
+       WHERE left(operation, length('carrier_')) = 'carrier_' AND (at AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $1::date AND $2::date
+       GROUP BY 1`, [from, to]);
+    for (const x of s.rows) { const d = days.get(x.day); if (d) d.spendUsd = Math.round(Number(x.usd) * 100) / 100; }
+  }
+  return [...days.values()];
+}
+
+/** «AI проти людини» поіменно: останнє рішення по угоді, де AI мав вердикт, — хто, коли, яка угода, чий менеджер. */
+export interface AgreementRow { kommoId: number; uniqueid: string | null; managerName: string | null; aiRole: string; aiConfidence: number | null;
+  decision: HumanDecision; otherType: OtherType | null; by: string; byRole: string | null; at: string; agreed: boolean }
+
+export async function carrierAgreementRows(db: Db, limit = 300): Promise<AgreementRow[]> {
+  const r = await db.query<{ kommo_id: string; u: string | null; manager_name: string | null; ai_role: string; ai_confidence: string | null;
+    decision: HumanDecision; other_type: OtherType | null; by: string | null; decider_role: string | null; decided_at: Date }>(`
+    SELECT * FROM (
+      SELECT DISTINCT ON (x.kommo_id) x.kommo_id::text, COALESCE(src.uniqueid, d.uniqueid) AS u, m.name AS manager_name,
+             x.ai_role, x.ai_confidence::text, x.decision, x.other_type, COALESCE(um.name, uu.email) AS by, x.decider_role, x.decided_at
+        FROM carrier_decisions x
+        LEFT JOIN carrier_call_deals d ON d.kommo_id = x.kommo_id
+        LEFT JOIN carrier_call_deals src ON src.kommo_id = d.reused_from
+        LEFT JOIN managers m ON m.kommo_user_id = d.responsible_user_id
+        LEFT JOIN users uu ON uu.id = x.decided_by LEFT JOIN managers um ON um.id = uu.manager_id
+       ORDER BY x.kommo_id, x.id DESC) z
+     WHERE z.ai_role IS NOT NULL
+     ORDER BY z.decided_at DESC LIMIT $1`, [limit]);
+  return r.rows.map((x) => ({ kommoId: Number(x.kommo_id), uniqueid: x.u, managerName: x.manager_name, aiRole: x.ai_role,
+    aiConfidence: x.ai_confidence == null ? null : Number(x.ai_confidence), decision: x.decision, otherType: x.other_type,
+    by: x.by ?? "невідомо", byRole: x.decider_role, at: iso(x.decided_at), agreed: x.ai_role === x.decision }));
 }

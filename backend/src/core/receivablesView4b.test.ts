@@ -3066,7 +3066,9 @@ test("#199bl2 рядок і поповер беруть ОДИН вираз до
   // виглядали б правдоподібно, і жодне не було б помилковим окремо — рівно та
   // форма, що дала чипи «новий/постійний» і два «очікуємо».
   const sec = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesSection.tsx"), "utf8"));
-  assert.match(sec, /const agree = agreementLine\(c\.dueDate \?\? null, noteNow\);/,
+  // 06.10.2026: рядок будується через `agreementView` (дата з CRM для запису з попередньої угоди), але
+  // текст поточного тижня — ТОЙ САМИЙ `noteNow`, що й у поповера. Твердження не змінилось.
+  assert.match(sec, /const view = agreementView\(\{[^}]*\bnote: noteNow,/,
     "🔴 згорнутий рядок будується не з `noteNow` — тижнева межа існує двічі");
   assert.match(sec, /<AgreementEditor client=\{c\} note=\{noteNow\}/,
     "🔴 поповер отримує не `noteNow` — він правитиме не той запис, що показано в рядку");

@@ -4,11 +4,16 @@ import { SCOPE_STATUSES, STUCK_MIN_DAYS, stuckBaseConds, stuckSignals, stuckCloc
   stageMoveCte, STAGE_MOVE, ASOF_SQL, ASOF_JOB_SQL,
   asOfStaleAfterMin, LAST_TALK, TALK_ATTRIBUTED, ringostatTalkCte } from "./stuckRule.js";
 import { stageName } from "./stageNames.js";
-import { orphanManagerSql, orphanReason, type OrphanReason } from "./orphanClients.js";
+import { orphanManagerSql, orphanReason, clientKind, type OrphanReason, type ClientKind, type ClientKindWhy } from "./orphanClients.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
-import { monthEndOf } from "./dates.js";
+import { monthEndOf, periodNotOver, kyivToday } from "./dates.js";
+// 🔀 Команда в ПЕРІОДНИХ розрізах — на дату рядка (створення / подія / анкер), а не поточна
+// (задача 4892, `core/teamAt.ts`). Знімки «станом на зараз» (очікування, дебіторка, застряглі,
+// прострочені) лишаються на поточній команді; когортні воронки — окремим проходом.
+import { teamAtSql, teamOnDateSql, teamJoinSql } from "./teamAt.js";
 import { DEAL_NOT_WRITTEN_OFF } from "./writeoffScope.js";
 import { dayBucketCase } from "./dayBuckets.js";
+import { FC_PIPELINE_IDS } from "./moneyBuckets.js";
 
 /**
  * ЄДИНЕ місце в проєкті з SQL по НЕ-грошових бізнес-метриках (гроші — `core/money.ts`).
@@ -57,6 +62,9 @@ export interface SnapshotScope {
 /** Команда «Лідогенерація», заведена лише в дашборді (сид у schema.sql, id фіксований). Тримає #740. */
 export const LEADGEN_DASH_TEAM_ID = 50011;
 export const NON_COMMERCIAL_TEAM_IDS = [11, 12, LEADGEN_DASH_TEAM_ID];
+/** Та сама умова над БУДЬ-ЯКИМ виразом команди (поточна, на дату, `to_team_id` переходу). */
+const commercialTeamSql = (teamExpr: string) =>
+  `(${teamExpr} IS NOT NULL AND NOT (${teamExpr} = ANY(ARRAY[${NON_COMMERCIAL_TEAM_IDS.join(", ")}]::int[])))`;
 /**
  * SQL-предикат «КОМЕРЦІЙНИЙ менеджер» (рішення власника 24.07, Опція 2 — строго):
  * має команду І команда не лідген/фінанси. Ловить усі три класи не-комерц: team NULL
@@ -64,8 +72,17 @@ export const NON_COMMERCIAL_TEAM_IDS = [11, 12, LEADGEN_DASH_TEAM_ID];
  * ЄДИНЕ джерело для обох поверхонь (/report roster + stuckDealsGrouped) — не дублювати SQL.
  * `alias` — аліас таблиці managers у запиті (дефолт "m").
  */
-export const commercialManagerSql = (alias = "m") =>
-  `(${alias}.team_id IS NOT NULL AND NOT (${alias}.team_id = ANY(ARRAY[${NON_COMMERCIAL_TEAM_IDS.join(", ")}]::int[])))`;
+export const commercialManagerSql = (alias = "m") => commercialTeamSql(`${alias}.team_id`);
+/**
+ * 🔀 «Комерційний хоч один день періоду» — для РОСТЕРІВ періоду (задача 4892, `core/teamAt.ts`).
+ * Хомік з 01.10 без команди: у вересневому Звіті вона продажна (була в Яцика), у жовтневому — ні.
+ * Без переходів збігається з `commercialManagerSql` (команда на дату = поточна).
+ */
+export const commercialDuringSql = (alias: string, fromRef: string, toRef: string) =>
+  `(${commercialTeamSql(teamAtSql(alias, `${fromRef}::date`))}`
+  + ` OR EXISTS (SELECT 1 FROM manager_team_moves mv3 WHERE mv3.manager_id = ${alias}.id`
+  + ` AND mv3.effective_from > ${fromRef}::date AND mv3.effective_from <= ${toRef}::date`
+  + ` AND ${commercialTeamSql("mv3.to_team_id")}))`;
 
 // Команди РНК (рекламний напрям, тімліди Безпамʼятний/Михальчевська). Джерело правди
 // (== RNK_TEAM_IDS у routes/dashboard.ts, який тепер імпортує звідси — не дублювати число).
@@ -192,7 +209,7 @@ function cohortScope(s: MetricScope): { where: string; params: unknown[]; active
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   return { where: conds.join(" AND "), params, activeJoin: s.activeOnly ? "AND m.is_active" : "" };
 }
 
@@ -252,7 +269,7 @@ export async function funnelByStage(s: MetricScope): Promise<StageRow[]> {
   const params: unknown[] = [];
   const conds: string[] = [];
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
@@ -377,7 +394,7 @@ export async function funnelWeekly(s: MetricScope, granularity: "day" | "week" |
   if (s.from) { params.push(s.from); conds.push(`(dse.changed_at ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(dse.changed_at ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(dse.changed_at ${KYIV})::date`, `$${params.length}`)); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
   const chanSel = byChannel ? `, COALESCE(d.lead_channel, 'other') AS channel` : "";
   const chanGrp = byChannel ? `, COALESCE(d.lead_channel, 'other')` : "";
@@ -422,7 +439,7 @@ export async function funnelWeeklyByManager(s: MetricScope, granularity: "day" |
   if (s.from) { params.push(s.from); conds.push(`(dse.changed_at ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(dse.changed_at ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(dse.changed_at ${KYIV})::date`, `$${params.length}`)); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
   const chanSel = byChannel ? `, COALESCE(d.lead_channel, 'other') AS channel` : "";
   const chanGrp = byChannel ? `, COALESCE(d.lead_channel, 'other')` : "";
@@ -461,7 +478,7 @@ export async function leadsTakenByBucket(s: MetricScope, granularity: "day" | "w
   if (s.to) { params.push(s.to); winConds.push(`(dse.changed_at ${KYIV})::date <= $${params.length}`); }
   const scopeConds: string[] = [];
   if (s.managerId) { params.push(s.managerId); scopeConds.push(`d2.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scopeConds.push(teamOnDateSql("m", `(f.anchor_at ${KYIV})::date`, `$${params.length}`)); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
   const chanSel = byChannel ? `, COALESCE(d2.lead_channel, 'other') AS channel` : "";
   const chanGrp = byChannel ? `, COALESCE(d2.lead_channel, 'other')` : "";
@@ -750,7 +767,7 @@ function classifyCte(
   if (s.from) { params.push(s.from); conds.push(`(${windowCol} ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(${windowCol} ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(${windowCol} ${KYIV})::date`, `$${params.length}`)); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
   const bcol = opts.bucketExpr ? `, ${opts.bucketExpr} AS bucket` : "";
   const bcarry = opts.bucketExpr ? ", bucket" : "";
@@ -795,6 +812,40 @@ function createdSplitCte(s: MetricScope, params: unknown[], bucketExpr?: string)
  * рахуються — лише лічильники угод. Σ(new+repeat+undef)=created (партиція);
  * ad/leadgen — ПІДМНОЖИНИ, у created не додаються. Σ менеджерів = команда = відділ.
  */
+/**
+ * 🤝 «ПРИЙНЯТО ЛІДОГЕН» МЕНЕДЖЕРА — угоди, які Kommo СТВОРИЛА йому з передачі лідгена (рішення власника 05.10.2026).
+ *
+ * 🔴 ПРИВІД, ЗАМІРЯНИЙ 05.10.2026 (відгук тімліда Шаврової «кількість взятих лідів від лідгена не вірно
+ * підтягує менеджерам»). Факт рахувався за каналом `lead_channel = 'leadgen'` (рішення 24.08 — замість реєстру
+ * бота). Але канал сліпий: з 451 угоди, яку Kommo у вересні створила менеджерам із кваліфікації в Продзвоні,
+ * каналом «лідоген» мічені 182 (решта — «інше» з джерелами «Реактивація закриті», «Реактивация звонком»,
+ * «Холодная база»; кілька — «реклама»). Пехньо: 7 за каналом проти 30 реальних.
+ *
+ * ✅ Тепер — той самий зв'язок, що екран «Лідогенерація»: примітка Kommo «створено з угоди» (`lead_child_links`)
+ * від угоди Продзвону. Угода менеджера — воронки Кваліфікації й повного циклу; дата — створення, київська,
+ * обидва кінці включно; зараховується поточному відповідальному (активному, як у `createdSplitByManager`).
+ * Канал `lead_channel` НЕ чіпаємо: колонки «зі створених: лідоген» і «Конв. Р+Л» лишаються на ньому — окремий
+ * прохід (варіант «б»). Одне джерело для Звіту й задач KPI (`#1259`), живий SQL — `#1260`.
+ */
+export async function leadgenAcceptedByManager(s: MetricScope): Promise<{ managerId: number; count: number }[]> {
+  const params: unknown[] = [PRODZVIN_PIPELINES, [...QUALIFICATION_PIPELINES, ...FC_PIPELINE_IDS]];
+  const conds: string[] = [];
+  if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
+  if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
+  if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
+  const r = await pool.query<{ manager_id: number; n: string }>(
+    `SELECT m.id AS manager_id, COUNT(DISTINCT d.kommo_id) AS n
+       FROM deals d
+       JOIN managers m ON m.id = d.manager_id AND m.is_active
+      WHERE d.pipeline_id = ANY($2::bigint[])
+        AND EXISTS (SELECT 1 FROM lead_child_links l JOIN deals p ON p.kommo_id = l.parent_id
+                     WHERE l.child_id = d.kommo_id AND p.pipeline_id = ANY($1::bigint[]))
+        ${conds.length ? "AND " + conds.join(" AND ") : ""}
+      GROUP BY m.id`, params);
+  return r.rows.map((x) => ({ managerId: x.manager_id, count: Number(x.n) }));
+}
+
 export async function createdSplitByManager(s: MetricScope): Promise<CreatedSplitRow[]> {
   const params: unknown[] = [];
   const cte = createdSplitCte(s, params);
@@ -933,7 +984,7 @@ function wonScopeConds(s: MetricScope, params: unknown[]): string {
   if (s.from) { params.push(s.from); conds.push(`(dd.closed_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(dd.closed_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`dd.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(dd.closed_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   return conds.join(" AND ");
 }
 
@@ -1057,7 +1108,7 @@ export async function createdByBucket(s: MetricScope, granularity: "day" | "week
   if (s.from) { params.push(s.from); conds.push(`${col}::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`${col}::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `${col}::date`, `$${params.length}`)); }
   const activeJoin = s.activeOnly ? "AND m.is_active" : "";
   const r = await pool.query<{ bucket: string; deals: string }>(
     `SELECT to_char(${bucket}, 'YYYY-MM-DD') AS bucket, COUNT(*) AS deals
@@ -1106,7 +1157,7 @@ function adsScope(s: MetricScope, adSources: string[]): { where: string; params:
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   params.push(adSources);
   conds.push(adDealSql(`$${params.length}`));
   return { where: conds.join(" AND "), params, activeJoin: s.activeOnly ? "AND m.is_active" : "" };
@@ -1199,7 +1250,7 @@ export async function nonTargetLeads(s: MetricScope, adSources: string[]): Promi
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   const r = await pool.query<{ n: string }>(
     `SELECT COUNT(*)::int AS n FROM deals d ${join} WHERE ${conds.join(" AND ")}`, params);
   return Number(r.rows[0]?.n ?? 0);
@@ -1244,7 +1295,7 @@ async function newRepeatRows(s: MetricScope, by: "manager" | "team" | null): Pro
   if (s.from) { params.push(s.from); scope.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); scope.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); scope.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); scope.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scope.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   const fromRef = s.from ? (params.push(s.from), `$${params.length}`) : "NULL";
   const idSel = by === "team" ? "pc.team_id AS id, t.name, NULL::int AS team_id"
              : by === "manager" ? "pc.manager_id AS id, mm.name, pc.team_id AS team_id"
@@ -1259,7 +1310,7 @@ async function newRepeatRows(s: MetricScope, by: "manager" | "team" | null): Pro
 
   const r = await pool.query<{ id: number; name: string; team_id: number | null; new_clients: string; new_revenue: string; repeat_clients: string; repeat_revenue: string }>(
     `WITH paid AS (
-       SELECT d.client_key, d.manager_id, m.team_id, d.price, d.created_at_kommo
+       SELECT d.client_key, d.manager_id, ${teamAtSql("m", `(d.created_at_kommo ${KYIV})::date`)} AS team_id, d.price, d.created_at_kommo
          FROM deals d
          JOIN managers m ON m.id = d.manager_id
          JOIN pipeline_stage_map psm ON psm.pipeline_id = d.pipeline_id AND psm.status_id = d.status_id
@@ -1346,7 +1397,7 @@ export async function dispatchedByLoadMonth(s: MetricScope, channel?: "leadgen" 
   const conds = ["d.pipeline_id = ANY($1)", "d.load_at IS NOT NULL"];
   if (channel) { params.push(channel); conds.push(`d.lead_channel = $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.load_at ${KYIV})::date`, `$${params.length}`)); }
   // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
   // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
   const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
@@ -1434,7 +1485,7 @@ export async function dispatchedByManagerDay(s: MetricScope): Promise<MgrDayN[]>
   const conds = ["d.pipeline_id = ANY($1)", "d.load_at IS NOT NULL"];
   if (s.from) { params.push(s.from); conds.push(`(d.load_at ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.load_at ${KYIV})::date <= $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.load_at ${KYIV})::date`, `$${params.length}`)); }
   // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
   // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
   const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
@@ -1453,7 +1504,7 @@ export async function leadsByManagerDay(s: MetricScope): Promise<MgrDayLeads[]> 
   if (s.from) { params.push(s.from); winConds.push(`(dse.changed_at ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); winConds.push(`(dse.changed_at ${KYIV})::date <= $${params.length}`); }
   // Active-only: INNER JOIN managers + m.is_active (неактивний зникає з агрегату).
-  const teamCond = s.teamId ? (params.push(s.teamId), `AND m.team_id = $${params.length}`) : "";
+  const teamCond = s.teamId ? (params.push(s.teamId), `AND ${teamOnDateSql("m", `(f.anchor_at ${KYIV})::date`, `$${params.length}`)}`) : "";
   const r = await pool.query<{ manager_id: number; bkt: string; ad: string; leadgen: string }>(
     `WITH first_lt AS (
        SELECT dse.kommo_id, MIN(dse.changed_at) AS anchor_at
@@ -1587,7 +1638,7 @@ export async function conversionByManager(s: MetricScope, channel?: "ad" | "lead
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
   // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
   const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
@@ -1683,7 +1734,7 @@ export async function avgDealCycleDays(s: MetricScope): Promise<number | null> {
   const conds = ["d.pipeline_id = ANY($1)", "d.status_id = 142", "d.created_at_kommo IS NOT NULL", "d.closed_at_kommo IS NOT NULL", "d.closed_at_kommo >= d.created_at_kommo"];
   if (s.from) { params.push(s.from); conds.push(`(d.closed_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.closed_at_kommo ${KYIV})::date <= $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.closed_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
   // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
   const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
@@ -1700,7 +1751,7 @@ export async function lostDeals(s: MetricScope): Promise<{ count: number; sum: n
   const conds = ["d.pipeline_id = ANY($1)", "d.status_id = 143", "d.closed_at_kommo IS NOT NULL"];
   if (s.from) { params.push(s.from); conds.push(`(d.closed_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.closed_at_kommo ${KYIV})::date <= $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.closed_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   // Active-only скрізь (рішення власника 22.07): неактивний менеджер зникає з усіх
   // агрегатів. INNER JOIN + m.is_active у ON — консистентно з money-core (activeOnly).
   const join = "JOIN managers m ON m.id = d.manager_id AND m.is_active";
@@ -1874,7 +1925,7 @@ export async function expectedPastMonthsByScope(s: SnapshotScope, by: "team" | "
 function paidScopeConds(s: MetricScope, params: unknown[], needTeamJoin = false): { conds: string[]; join: string } {
   const conds = ["psm.funnel_stage = 'paid'", "d.client_key IS NOT NULL"];
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   const join = (needTeamJoin || s.teamId) ? "JOIN managers m ON m.id = d.manager_id" : "";
   return { conds, join };
 }
@@ -2148,7 +2199,7 @@ function dealCohortCte(entryRef: string, srcRef: string, scopeWhere: string): st
             рахують COUNT, а не вибирають усі колонки.
             ⚠️ БЕЗ ЗВОРОТНИХ ЛАПОК: цей коментар живе ВСЕРЕДИНІ шаблонного літерала,
             і будь-яка з них закрила б рядок (TS1005). */
-         SELECT a.entered_at, w.won_at, d.manager_id, m.team_id, d.request_type,
+         SELECT a.entered_at, w.won_at, d.manager_id, ${teamAtSql("m", `(a.entered_at ${KYIV})::date`)} AS team_id, d.request_type,
                 d.kommo_id, d.name, d.price, d.status_id
            FROM adzone a
            JOIN deals d ON d.kommo_id = a.kommo_id
@@ -2183,7 +2234,7 @@ async function conversionByCohort(s: MetricScope, entry: CohortEntry): Promise<C
     const srcRef = `$${params.length}`;
     const scopeConds: string[] = [];
     if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
-    if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+    if (s.teamId) { params.push(s.teamId); scopeConds.push(teamOnDateSql("m", `(a.entered_at ${KYIV})::date`, `$${params.length}`)); }
     const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
     cte = dealCohortCte(entryRef, srcRef, scopeWhere); // спільне ядро deal-grain (реклама)
   } else if (entry.kind === "stage") {
@@ -2193,7 +2244,7 @@ async function conversionByCohort(s: MetricScope, entry: CohortEntry): Promise<C
     const entryPipeRef = `$${params.length}`;
     const scopeConds: string[] = [];
     if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
-    if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+    if (s.teamId) { params.push(s.teamId); scopeConds.push(teamOnDateSql("m", `(e.changed_at ${KYIV})::date`, `$${params.length}`)); }
     const scopeJoin = s.teamId ? "LEFT JOIN managers m ON m.id = d.manager_id" : "";
     const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
     cte = `entered AS (
@@ -2265,14 +2316,14 @@ async function conversionByCohort(s: MetricScope, entry: CohortEntry): Promise<C
     // доводить, що дві редакції справді різні. Не «спрощувати» цей каст.
     const scopeConds: string[] = ["t.name NOT ILIKE '%лідоген%'", "d.client_key IS NOT NULL"];
     if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
-    if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+    if (s.teamId) { params.push(s.teamId); scopeConds.push(teamOnDateSql("m", "lt.transfer_date::date", `$${params.length}`)); }
     const scopeWhere = scopeConds.join(" AND ");
     cte = `entered AS (
          SELECT d.client_key, MIN(lt.transfer_date)::timestamp ${KYIV} AS entered_at
            FROM leadgen_touch lt
            JOIN deals d ON d.kommo_id = lt.lead_kommo_id
            JOIN managers m ON m.id = d.manager_id
-           JOIN teams t ON t.id = m.team_id
+           JOIN teams t ON ${teamJoinSql("t", "m", "lt.transfer_date::date")}
           WHERE ${scopeWhere}
           GROUP BY d.client_key
        ),
@@ -2365,30 +2416,42 @@ export interface MgrConversion {
  * самий kommo_id). Стеля ≤100% (won ⊆ entered). entered<10 → cohortPct=null.
  */
 export async function conversionAdsByManager(s: MetricScope, adSources: string[]): Promise<MgrConversion[]> {
+  const byMgr = new Map<number, MgrConversion>();
+  for (const x of await adsConvRows(s, adSources)) {
+    const e = byMgr.get(x.managerId) ?? { managerId: x.managerId, name: x.name, teamId: x.teamId, entered: 0, won: 0, cohortPct: null };
+    e.entered += x.entered; e.won += x.won; byMgr.set(x.managerId, e);
+  }
+  return [...byMgr.values()].map((e) => ({ ...e, cohortPct: e.entered >= 10 ? Math.round((e.won / e.entered) * 1000) / 10 : null }));
+}
+
+/**
+ * 🔀 Рекламна когорта ПО (менеджер × команда НА ДАТУ ВХОДУ) — задача 4892, `core/teamAt.ts`. Один запит
+ * на обидва розрізи: по менеджеру рядки зливаються в один (підпис — поточна команда, як було), по команді
+ * — групуються за командою на дату, тож вересневі ліди того, хто з 01.10 перейшов, лишаються у вересневій
+ * команді. Без переходів кожен менеджер дає рівно один рядок — числа як до зміни.
+ */
+async function adsConvRows(s: MetricScope, adSources: string[]): Promise<(MgrConversion & { atTeam: number | null })[]> {
   // $1 MONEY_ZONE (won), $2 FC, $3 ADZONE (вхід), $4 adSources — контракт dealCohortCte.
   const params: unknown[] = [MONEY_ZONE, FC_PIPELINES, ADZONE_TAKEN, adSources];
   const scopeConds: string[] = [];
   if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scopeConds.push(teamOnDateSql("m", `(a.entered_at ${KYIV})::date`, `$${params.length}`)); }
   const fromRef = (params.push(s.from ?? null), `$${params.length}`);
   const toRef = (params.push(s.to ?? null), `$${params.length}`);
   const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
 
-  const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; entered: string; won: string }>(
+  const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; at_team: number | null; entered: string; won: string }>(
     `WITH ${dealCohortCte("$3", "$4", scopeWhere)}
-     SELECT mm.id AS manager_id, mm.name, mm.team_id,
+     SELECT mm.id AS manager_id, mm.name, mm.team_id, pop.team_id AS at_team,
             COUNT(*)::int AS entered, COUNT(*) FILTER (WHERE pop.won_at IS NOT NULL)::int AS won
        FROM pop JOIN managers mm ON mm.id = pop.manager_id
       WHERE ((${fromRef})::date IS NULL OR (pop.entered_at ${KYIV})::date >= (${fromRef})::date)
         AND ((${toRef})::date IS NULL OR (pop.entered_at ${KYIV})::date <= (${toRef})::date)
-      GROUP BY mm.id, mm.name, mm.team_id`,
+      GROUP BY mm.id, mm.name, mm.team_id, pop.team_id`,
     params
   );
-  return r.rows.map((x) => {
-    const entered = Number(x.entered), won = Number(x.won);
-    return { managerId: x.manager_id, name: x.name, teamId: x.team_id, entered, won,
-      cohortPct: entered >= 10 ? Math.round((won / entered) * 1000) / 10 : null };
-  });
+  return r.rows.map((x) => ({ managerId: x.manager_id, name: x.name, teamId: x.team_id, atTeam: x.at_team,
+    entered: Number(x.entered), won: Number(x.won), cohortPct: null }));
 }
 
 /**
@@ -2456,7 +2519,7 @@ export async function conversionAdsByDay(s: MetricScope, adSources: string[]): P
   const params: unknown[] = [MONEY_ZONE, FC_PIPELINES, ADZONE_TAKEN, adSources];
   const scopeConds: string[] = [];
   if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scopeConds.push(teamOnDateSql("m", `(a.entered_at ${KYIV})::date`, `$${params.length}`)); }
   const fromRef = (params.push(s.from ?? null), `$${params.length}`);
   const toRef = (params.push(s.to ?? null), `$${params.length}`);
   const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
@@ -2530,11 +2593,12 @@ export interface TeamConversion { teamId: number | null; entered: number; won: n
  * entered<10 → null. Additive: Σ команд = відділ (бо Σ мгр = відділ, доведено Крок В).
  */
 export async function conversionAdsByTeam(s: MetricScope, adSources: string[]): Promise<TeamConversion[]> {
-  const mgrs = await conversionAdsByManager(s, adSources);
+  // 🔀 Ті самі рядки, що в `conversionAdsByManager`, лише за командою НА ДАТУ ВХОДУ (задача 4892).
+  const mgrs = await adsConvRows(s, adSources);
   const byTeam = new Map<number | null, { entered: number; won: number }>();
   for (const r of mgrs) {
-    const e = byTeam.get(r.teamId) ?? { entered: 0, won: 0 };
-    e.entered += r.entered; e.won += r.won; byTeam.set(r.teamId, e);
+    const e = byTeam.get(r.atTeam) ?? { entered: 0, won: 0 };
+    e.entered += r.entered; e.won += r.won; byTeam.set(r.atTeam, e);
   }
   return [...byTeam.entries()].map(([teamId, v]) => ({
     teamId, entered: v.entered, won: v.won,
@@ -2589,7 +2653,7 @@ async function handoffByMonth(
   const params: unknown[] = [cfg.entryPipelines, cfg.entryStatus, STATUS_142];
   const scopeConds: string[] = [];
   if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scopeConds.push(teamOnDateSql("m", `(e.changed_at ${KYIV})::date`, `$${params.length}`)); }
   const scopeJoin = s.teamId ? "LEFT JOIN managers m ON m.id = d.manager_id" : "";
   const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
 
@@ -2724,7 +2788,7 @@ export async function funnelCohortHonest(
   const params: unknown[] = [FC_PIPELINES];
   const scopeConds: string[] = [];
   if (s.managerId) { params.push(s.managerId); scopeConds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); scopeConds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); scopeConds.push(teamOnDateSql("m", `(ev.changed_at ${KYIV})::date`, `$${params.length}`)); }
   const fromRef = (params.push(s.from ?? null), `$${params.length}`);
   const toRef = (params.push(s.to ?? null), `$${params.length}`);
   const scopeWhere = scopeConds.length ? "AND " + scopeConds.join(" AND ") : "";
@@ -3193,7 +3257,7 @@ function responseScope(s: MetricScope): { conds: string[]; params: unknown[] } {
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KY})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KY})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KY})::date`, `$${params.length}`)); }
   return { conds, params };
 }
 
@@ -3494,7 +3558,7 @@ export async function conversionLeadgenByManager(s: MetricScope): Promise<MgrCon
   if (s.from) { params.push(s.from); conds.push(`(d.created_at_kommo ${KYIV})::date >= $${params.length}`); }
   if (s.to) { params.push(s.to); conds.push(`(d.created_at_kommo ${KYIV})::date <= $${params.length}`); }
   if (s.managerId) { params.push(s.managerId); conds.push(`d.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(teamOnDateSql("m", `(d.created_at_kommo ${KYIV})::date`, `$${params.length}`)); }
   const r = await pool.query<{ manager_id: number; name: string; team_id: number | null; entered: string; won: string }>(
     `SELECT d.manager_id, m.name, m.team_id,
             COUNT(*) AS entered,
@@ -3897,7 +3961,8 @@ export async function buildProjection(s: ProjectionScope, plan?: number | null):
   ]);
   const fact = proj.fact;
   const gran = s.granularity ?? "month";
-  const monthInProgress = gran === "month" && proj.elapsedWorkingDays < proj.totalWorkingDays;
+  // Межа — календарна (`periodNotOver`), не «робочих днів минуло < усього»: див. її доккоментар.
+  const monthInProgress = gran === "month" && periodNotOver(s.to ?? kyivToday());
   const zoneFull = monthInProgress ? expected.total.sum : 0;
   const zoneDeals = monthInProgress ? expected.total.deals : 0;
   const dobir = monthInProgress ? await newBusinessDobir({ managerId: s.managerId, teamId: s.teamId }) : 0;
@@ -3931,6 +3996,10 @@ export interface OrphanClient {
   payments: number; lastPaidAt: string | null; lastCallAt: string | null;
   daysSincePaid: number | null; daysSinceCall: number | null;
   revenue12: number; revenueAll: number; paymentType: string | null;
+  /** 🏢 «юр/ФОП» чи «фіз» і чим доведено — `clientKind` (05.10.2026); лише порядок і підпис у пулі. */
+  kind: ClientKind; kindWhy: ClientKindWhy;
+  /** ☎️ Телефони з контактів Kommo цього клієнта (до 3, основний першим) — щоб не шукати в CRM. */
+  phones: string[];
 }
 
 /**
@@ -3953,6 +4022,7 @@ export async function orphanClients(months: number): Promise<OrphanClient[]> {
        SELECT ck, count(*)::int n, sum(price)::bigint rev_all, max(dt) last_dt,
               COALESCE(sum(price) FILTER (WHERE dt >= now() - interval '12 months'),0)::bigint rev12,
               sum(is_cash)::int cash_n,
+              bool_or(lower(COALESCE(ptype,'')) LIKE '%безнал%') any_cashless,
               (array_agg(nm ORDER BY dt DESC))[1] nm,
               (array_agg(ptype ORDER BY dt DESC))[1] ptype
          FROM pay GROUP BY ck),
@@ -3965,7 +4035,7 @@ export async function orphanClients(months: number): Promise<OrphanClient[]> {
                   FROM pay p) x WHERE g IS NOT NULL GROUP BY ck),
      per AS (SELECT ck, mid, count(*) c, max(dt) mx FROM pay GROUP BY ck, mid),
      prim AS (SELECT DISTINCT ON (ck) ck, mid FROM per ORDER BY ck, c DESC, mx DESC)
-     SELECT a.ck, a.nm, a.n::text, a.rev_all::text, a.rev12::text, a.cash_n::text, a.ptype,
+     SELECT a.ck, a.nm, a.n::text, a.rev_all::text, a.rev12::text, a.cash_n::text, a.ptype, a.any_cashless::text,
             to_char(a.last_dt AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') last_paid,
             EXTRACT(DAY FROM now()-a.last_dt)::int::text days_paid,
             w.two30::text, w.three30::text, g.med::text,
@@ -3983,6 +4053,24 @@ export async function orphanClients(months: number): Promise<OrphanClient[]> {
         AND lo.pinned_manager_id IS NULL
         AND a.last_dt >= now() - ($2 || ' months')::interval`,
     [GENERIC_CLIENT_KEYS, String(months)]);
+  // ☎️🏢 Код компанії й телефони — ОКРЕМИМ запитом за ключами пулу, а не підзапитом у великому:
+  // дешевий фрагмент уже двічі руйнував план великого запиту (правило «заміряй ендпоінт»).
+  const keys = r.rows.map((x) => x.ck!);
+  const extra = new Map<string, { hasCode: boolean; phones: string[] }>();
+  if (keys.length) {
+    const e = await pool.query<{ ck: string; has_code: boolean; phones: string[] | null }>(
+      `WITH k AS (SELECT DISTINCT d.client_key AS ck, d.kommo_id FROM deals d WHERE d.client_key = ANY($1)),
+            co AS (SELECT k.ck, bool_or(kc.edrpou ~ '^[0-9]{8}$' OR kc.edrpou ~ '^[0-9]{10}$' OR kc.ipn ~ '^[0-9]{10}$') AS has_code
+                     FROM k JOIN deal_companies dc ON dc.deal_kommo_id = k.kommo_id
+                     JOIN kommo_companies kc ON kc.company_id = dc.company_id GROUP BY k.ck),
+            ph AS (SELECT k.ck, cp.phone, bool_or(cp.is_main OR x.is_main) AS main, count(*) AS n
+                     FROM k JOIN deal_contacts x ON x.deal_kommo_id = k.kommo_id
+                     JOIN contact_phones cp ON cp.contact_id = x.contact_id GROUP BY k.ck, cp.phone),
+            pr AS (SELECT ck, (array_agg(phone ORDER BY main DESC, n DESC, phone))[1:3] AS phones FROM ph GROUP BY ck)
+       SELECT kk.ck, COALESCE(co.has_code, false) AS has_code, pr.phones
+         FROM (SELECT DISTINCT ck FROM k) kk LEFT JOIN co ON co.ck = kk.ck LEFT JOIN pr ON pr.ck = kk.ck`, [keys]);
+    for (const x of e.rows) extra.set(x.ck, { hasCode: x.has_code === true, phones: x.phones ?? [] });
+  }
   return r.rows.map((x) => {
     const n = Number(x.n), cash = Number(x.cash_n);
     const allCash = cash > 0 && cash === n;
@@ -4001,6 +4089,11 @@ export async function orphanClients(months: number): Promise<OrphanClient[]> {
       daysSinceCall: x.days_call == null ? null : Number(x.days_call),
       revenue12: Number(x.rev12), revenueAll: Number(x.rev_all),
       paymentType: x.ptype,
+      ...(() => {
+        const ex = extra.get(x.ck!);
+        const k = clientKind({ name: x.nm ?? x.ck!, anyCashless: x.any_cashless === "true", hasCode: ex?.hasCode ?? false });
+        return { kind: k.kind, kindWhy: k.why, phones: ex?.phones ?? [] };
+      })(),
     };
   });
 }

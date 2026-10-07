@@ -35,7 +35,8 @@ const sender = () => (vaultBotConfigured() ? vaultBotSend : null);
 
 function fail(res: Response, e: unknown) {
   if (e instanceof SecretKeyMissing) return res.status(503).json({ error: e.message });
-  if (e instanceof ImportError) return res.status(e.status).json({ error: e.message, ...("existingId" in e ? { existingId: (e as { existingId?: number }).existingId } : {}) });
+  if (e instanceof ImportError) return res.status(e.status).json({ error: e.message, ...("existingId" in e ? { existingId: (e as { existingId?: number }).existingId } : {}),
+    ...("needsConfirm" in e ? { needsConfirm: true } : {}) });
   if (e instanceof ChurnError) return res.status(e.status).json({ error: e.message });
   if (e instanceof SecretError) return res.status(e.status).json({ error: e.message, ...(e.extra ?? {}) });
   // 🔴 Тіло помилки НЕ логуємо: у запиті може бути пароль.

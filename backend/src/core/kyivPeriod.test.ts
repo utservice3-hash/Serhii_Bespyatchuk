@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { kyivMonthBounds, withinPlanGrace, monthEndOf } from "./dates.js";
-import { emptyPeriodSkip, planGraceSkip, smallSampleSkip } from "../testMode.js";
+import { emptyPeriodSkip, planGraceSkip, smallSampleSkip, monthStartSkip } from "../testMode.js";
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { EMPTY_PERIOD_MARK, EMPTY_PERIOD_SKIPS } from "../testRunGate.js";
 import { responseViolations, NEED_LEADS, type RtRow } from "../routes/responseSlice.js";
 
@@ -136,4 +138,54 @@ test("#238c ВИРОК НЕ СКІПАЄТЬСЯ: джерельні гейти 
   // 🪞 Дзеркало: перевірка не вироджена — дзеркала в реєстрі БУТИ мають.
   assert.ok(named.some((n) => n.startsWith("#58b ")), "🔴 живе дзеркало #58b не в реєстрі — тоді воно й далі падатиме");
   assert.ok(named.length >= 14, `🔴 у реєстрі лише ${named.length} записів — перевірка дивиться не туди`);
+});
+
+/**
+ * #775 — ПОЧАТОК МІСЯЦЯ: «ЗАМАЛО» СКІПАЄТЬСЯ ЛИШЕ В ПЕРШІ 2 РОБОЧІ ДНІ ПОТОЧНОГО МІСЯЦЯ (01.10.2026, рішення Романа).
+ * Межа підставляється аргументом, тож обидва боки відтворювані в будь-який день (правило 11).
+ * 🧨 Червоніє, якщо скіп спрацює після вікна, на минулому місяці чи при достатніх даних — тобто почне ковтати дефект.
+ */
+test("#775 ПОЧАТОК МІСЯЦЯ: скіп «замало» лише у вікні 2 робочих днів і лише для поточного місяця", () => {
+  const sk = monthStartSkip("менеджерів із планом", 2, 3, "2026-10", "2026-10-01");
+  assert.ok(sk && sk.includes(EMPTY_PERIOD_MARK), "🔴 1-ше число з недобором не скіпнулось із маркером порожнього періоду");
+  assert.match(sk!, /= 2.*треба 3/, "🔴 причина не називає скільки є і скільки треба");
+  assert.ok(monthStartSkip("x", 0, 1, "2026-10", "2026-10-02"), "🔴 другий робочий день — ще вікно");
+  assert.equal(monthStartSkip("x", 3, 3, "2026-10", "2026-10-01"), null, "🔴 даних досить, а гейт скіпнувся");
+  assert.equal(monthStartSkip("x", 0, 1, "2026-09", "2026-10-01"), null, "🔴 порожній МИНУЛИЙ місяць сховано скіпом — це аварія");
+  assert.equal(monthStartSkip("x", 0, 1, "2026-10", "2026-10-05"), null, "🔴 вікно минуло, а недобір усе ще скіпається");
+  // Вихідні не їдять вікно: 01.08.2026 — субота, тож 04.08 (вівторок) — лише другий робочий день.
+  assert.ok(monthStartSkip("x", 0, 1, "2026-08", "2026-08-04"), "🔴 вихідні з’їли вікно заведення");
+});
+
+/**
+ * #775b — КОЖЕН ГЕЙТ, ЩО КЛИЧЕ `monthStartSkip`, НАЗВАНИЙ У `EMPTY_PERIOD_SKIPS`. Без запису його скіп у test:prod
+ * рахується ПАДІННЯМ (`testRunGate.ts`), тобто помічник тихо не працював би. Перелік — від предмета (правило 12):
+ * усі тест-файли з викликом, а не «файли, які я пам'ятаю».
+ * 🧨 Червоніє, якщо підключити `monthStartSkip` у новий гейт і забути реєстр.
+ */
+test("#775b ПОЧАТОК МІСЯЦЯ: кожен гейт із monthStartSkip — у реєстрі порожнього періоду", () => {
+  const SRC = path.join(import.meta.dirname, "..", "..", "src");
+  const callers: string[] = [];
+  const walk = (d: string) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith(".test.ts") && e.name !== "kyivPeriod.test.ts") {
+        const src = readFileSync(p, "utf8");
+        let at = src.indexOf("monthStartSkip(");
+        while (at >= 0) {
+          const head = src.slice(0, at);
+          const m = [...head.matchAll(/\btest\("([^"]+)"/g)].at(-1);
+          assert.ok(m, `🔴 ${path.relative(SRC, p)}: виклик monthStartSkip поза тестом`);
+          callers.push(m![1]);
+          at = src.indexOf("monthStartSkip(", at + 1);
+        }
+      }
+    }
+  };
+  walk(SRC);
+  const named = new Set(EMPTY_PERIOD_SKIPS.map((x) => x.name));
+  const uniq = [...new Set(callers)];
+  assert.ok(uniq.length >= 8, `🔴 гейтів із monthStartSkip знайдено ${uniq.length} — підключено вісім, перелік осліп`);
+  assert.deepEqual(uniq.filter((n) => !named.has(n)), [], "🔴 гейт кличе monthStartSkip, але не названий у EMPTY_PERIOD_SKIPS");
 });

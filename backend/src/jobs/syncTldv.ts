@@ -8,11 +8,11 @@
  */
 import type { JobSkip } from "./jobRuns.js";
 import { TLDV_BASE, parseMeetings } from "../core/tldv.js";
-import { absorb, slotRows } from "../core/tldvStore.js";
+import { absorb, slotRows, recruiterEmails } from "../core/tldvStore.js";
 import type { Db } from "../core/secrets.js";
 
-export interface TldvStatus { configured: boolean; lastRunAt: string | null; lastError: string | null; seen: number; linked: number; pending: number }
-const status: TldvStatus = { configured: false, lastRunAt: null, lastError: null, seen: 0, linked: 0, pending: 0 };
+export interface TldvStatus { configured: boolean; lastRunAt: string | null; lastError: string | null; seen: number; foreign: number; linked: number; pending: number }
+const status: TldvStatus = { configured: false, lastRunAt: null, lastError: null, seen: 0, foreign: 0, linked: 0, pending: 0 };
 export const getTldvStatus = (): TldvStatus => ({ ...status, configured: !!process.env.TLDV_API_KEY });
 
 const kyivDay = (shiftDays = 0) =>
@@ -39,6 +39,8 @@ export async function syncTldv(days = LOOKBACK_DAYS) {
   // імпорти в БД-тестах).
   const { pool } = await import("../db/pool.js");
   const db = pool as unknown as Db;
+  // 👤 Немає рекрутера — не знаємо, чиї зустрічі співбесіди. Це пропуск із причиною, а не «нуль зустрічей» (#890).
+  if (!(await recruiterEmails(db)).length) return { skipped: true, reason: "немає активного рекрутера (роль HR) — не знаємо, чиї зустрічі брати" } satisfies JobSkip;
   const out = await absorb(db, meetings, await slotRows(db, from, to));
   Object.assign(status, { lastRunAt: new Date().toISOString(), lastError: null, ...out });
   return out;

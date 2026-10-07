@@ -43,9 +43,15 @@ export function AgreementEditor({ client, note, lastComment, lastAt, onPatch, on
   onDone: () => void;
   onClose: () => void;
 }) {
-  const [dueDate, setDueDate] = useState(client.dueDate ?? "");
-  const stalePrefill = !note && !!(lastComment ?? "").trim();
-  const [comment, setComment] = useState(note || (lastComment ?? "").trim());
+  // 🗓 ЗАПИС З ПОПЕРЕДНЬОЇ УГОДИ (06.10.2026) НЕ ПІДСТАВЛЯЄТЬСЯ: інакше «Зберегти» без змін тихо
+  // привʼязало б стару обіцянку до нової угоди. Старий запис видно підписом нижче.
+  const actual = client.noteActual !== false;
+  const deals = client.facts?.deals ?? [];
+  const [dealId, setDealId] = useState<string>(
+    actual && client.noteDealId != null && deals.some((d) => d.dealId === client.noteDealId) ? String(client.noteDealId) : "");
+  const [dueDate, setDueDate] = useState(actual ? client.dueDate ?? "" : "");
+  const stalePrefill = actual && !note && !!(lastComment ?? "").trim();
+  const [comment, setComment] = useState(actual ? note || (lastComment ?? "").trim() : "");
   const [clear, setClear] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -85,14 +91,18 @@ export function AgreementEditor({ client, note, lastComment, lastAt, onPatch, on
     const next = comment.trim();
     const nextDate = dueDate || null;
     // 🗒 Порожнє поле без «очистити» = лишити текст як є (сервер робить те саме, #459).
-    const effective = next || (clear ? "" : (lastComment ?? "").trim());
+    const effective = next || (clear || !actual ? "" : (lastComment ?? "").trim());
     try {
       // Оптимістичне оновлення — те саме, що робив рядок: сервер відповідає
       // порожнім тілом, тож без нього значення повернулось би лише на рефреші.
       onPatch({ comment: effective, dueDate: nextDate });
-      await saveReceivableNote({ clientKey: client.clientKey, comment: next, dueDate: nextDate, clear });
+      await saveReceivableNote({ clientKey: client.clientKey, comment: next, dueDate: nextDate, clear,
+        dealId: dealId ? Number(dealId) : null });
       onDone();
     } catch (e) {
+      // ↩ Рядок таблиці вже показував нове — повертаємо збережене, інакше за вікном лишалась би
+      // домовленість, якої в базі немає (30.09.2026). Порожній рядок і null на екрані читаються однаково.
+      onPatch({ comment: client.comment ?? "", dueDate: client.dueDate ?? null });
       const r = e as { response?: { data?: { error?: string } } };
       setErr(r?.response?.data?.error ?? "Не вдалось зберегти");
       setBusy(false);
@@ -118,7 +128,7 @@ export function AgreementEditor({ client, note, lastComment, lastAt, onPatch, on
     cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
   });
 
-  const line = agreementLine(client.dueDate ?? null, note);
+  const line = agreementLine(actual ? client.dueDate ?? null : null, actual ? note : "");
 
   return (
     <>
@@ -137,6 +147,30 @@ export function AgreementEditor({ client, note, lastComment, lastAt, onPatch, on
             Правиться запис ПОТОЧНОГО тижня (від понеділка 00:00 за Києвом). Попередні лишаються в історії.
           </div>
         </div>
+
+        {!actual && (
+          <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginBottom: 8, lineHeight: 1.4 }}>
+            Попередній запис — з попередньої угоди
+            {client.dueDate ? ` (дата ${formatDateSafe(client.dueDate)})` : ""}{lastComment?.trim() ? `: «${lastComment.trim()}»` : ""}.
+            Новий запис привʼяжеться до поточної угоди.
+          </div>
+        )}
+        {deals.length > 0 && (
+          <>
+            <label style={{ display: "block", fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginBottom: 3 }}>
+              До якої угоди
+            </label>
+            <select value={dealId} disabled={busy} aria-label={`Угода домовленості ${client.clientName}`}
+              onChange={(e) => setDealId(e.target.value)} style={{ ...field, marginBottom: 8 }}>
+              <option value="">{deals.length === 1 ? `угода ${deals[0].dealId}` : "автоматично — з найближчою датою оплати в CRM"}</option>
+              {deals.length > 1 && deals.map((d) => (
+                <option key={d.dealId} value={String(d.dealId)}>
+                  {`угода ${d.dealId}${d.invoiceNo ? ` · рах. ${d.invoiceNo}` : ""}${d.crmDue ? ` · у CRM ${formatDateSafe(d.crmDue)}` : ""}`}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
 
         <label style={{ display: "block", fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginBottom: 3 }}>
           Обіцяна дата оплати
@@ -173,7 +207,7 @@ export function AgreementEditor({ client, note, lastComment, lastAt, onPatch, on
             onClick={onClose}>Скасувати</button>
         </div>
 
-        {client.dueDate && (
+        {actual && client.dueDate && (
           <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginTop: 8 }}>
             Поточна обіцяна дата: {formatDateSafe(client.dueDate)}
           </div>

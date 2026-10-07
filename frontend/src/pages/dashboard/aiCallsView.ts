@@ -13,9 +13,9 @@ export type Tone = "ok" | "wait" | "warn" | "bad" | "muted";
 
 export const STATE_UI: Readonly<Record<AiCallState, { label: string; tone: Tone; hint: string }>> = {
   done: { label: "Проаналізовано", tone: "ok", hint: "Є розшифровка й витяг моделі." },
-  llm_pending: { label: "Аналіз у черзі", tone: "wait", hint: "Розшифровка готова, витяг моделі — наступним тіком (щогодини о :45)." },
+  llm_pending: { label: "Аналіз у черзі", tone: "wait", hint: "Розшифровка готова, витяг моделі — наступним тіком (раз на 10 хв)." },
   queued: { label: "У черзі", tone: "wait", hint: "Дзвінок узято в роботу; розпізнається найближчим тіком." },
-  not_queued: { label: "Ще не в черзі", tone: "muted", hint: "Джоба бере угоди, створені з 20.09.2026 і не старші за 30 днів, щогодини о :45; найновіші — першими. Раніші угоди не аналізуються." },
+  not_queued: { label: "Ще не в черзі", tone: "muted", hint: "Джоба бере угоди, створені з 20.09.2026 і не старші за 30 днів, раз на 10 хв; найновіші — першими. Раніші угоди, лідген і повторні контакти не аналізуються." },
   not_enabled: { label: "Не ввімкнено", tone: "muted", hint: "Ключа постачальника на сервері немає — назовні нічого не надсилається." },
   capped: { label: "Стеля місяця", tone: "warn", hint: "Бюджет місяця вичерпано; дзвінок розбереться, щойно з’явиться бюджет (з 1-го числа або після підняття стелі)." },
   recording_unavailable: { label: "Запису немає", tone: "muted", hint: "Ringostat не віддав запис розмови — аналізувати нічого." },
@@ -36,7 +36,7 @@ export type AiFilter = "all" | "done" | "broken" | "price" | "objection" | "noDe
 export const FILTERS: readonly { key: AiFilter; label: string }[] = [
   { key: "all", label: "Усі" },
   { key: "done", label: "Проаналізовано" },
-  { key: "broken", label: "Не передзвонив" },
+  { key: "broken", label: "Немає дзвінка в телефонії" },
   { key: "price", label: "Обговорили ціну" },
   { key: "objection", label: "Є заперечення" },
   { key: "noDeadline", label: "Обіцянка без строку" },
@@ -140,20 +140,25 @@ export function promisesLabel(promises: number, withDeadline: number): string {
 }
 
 /** Стан обіцянки менеджера — дзеркало `PromiseState` у `core/callAiPromise.ts`. */
-export type PromiseStateT = "kept_talk" | "kept_attempt_only" | "client_called" | "late" | "pending" | "broken" | "unverifiable";
+export type PromiseStateT = "kept_talk" | "kept_attempt_only" | "kept_offline" | "client_called" | "late" | "pending" | "broken" | "unverifiable";
 export type PipelineGroupT = "full" | "qualification" | "other";
 
 /**
  * Підписи станів обіцянки (П6-Б, рішення Романа 29.09.2026). «Не перевіряється» — обіцянка в месенджер:
  * Ringostat Viber/Telegram не бачить, тож прапорця на ній немає.
+ *
+ * 📞 01.10.2026: «Не передзвонив» → «Немає дзвінка в телефонії», без червоного. Звірка 30 таких розмов з Ringostat
+ * напряму: у 25 нашого дзвінка в телефонії немає зовсім, а керівники знайшли передзвони з мобільного чи в месенджер.
+ * Система бачить лише Ringostat — тож це стан даних, а не вирок, доки людина не перевірила.
  */
 export const PROMISE_UI: Readonly<Record<PromiseStateT, { label: string; tone: Tone; hint: string }>> = {
-  broken: { label: "Не передзвонив", tone: "bad", hint: "Ні до терміну, ні протягом 2 год після нього на номер не було жодного нашого вихідного — ні від менеджера, ні від колег." },
-  late: { label: "Запізнився", tone: "warn", hint: "Наш дзвінок був, але після терміну — у межах 2 год після нього." },
-  pending: { label: "Чекає", tone: "wait", hint: "Термін (або 2 год запізнення після нього) ще не минули, або дзвінки Ringostat за цей час ще не синхронізовано." },
-  kept_attempt_only: { label: "Лише спроби", tone: "warn", hint: "До терміну ми дзвонили, але розмови не було." },
+  broken: { label: "Немає дзвінка в телефонії", tone: "warn", hint: "Термін минув, а в Ringostat немає дзвінка менеджера, що обіцяв (дзвінки колег не рахуються). Передзвін з мобільного, у месенджер чи з іншого номера система не бачить — перевірте й позначте в картці розмови." },
+  late: { label: "Запізнився", tone: "warn", hint: "Менеджер, що обіцяв, передзвонив, але пізніше терміну." },
+  pending: { label: "Чекає", tone: "wait", hint: "Термін ще не минув, або дзвінки Ringostat за цей час ще не синхронізовано." },
+  kept_attempt_only: { label: "Лише спроби", tone: "warn", hint: "До терміну менеджер, що обіцяв, дзвонив, але розмови не було." },
   client_called: { label: "Клієнт подзвонив сам", tone: "wait", hint: "До терміну клієнт подзвонив нам і поговорив; нашого вихідного не було." },
-  kept_talk: { label: "Передзвонив", tone: "ok", hint: "До терміну був наш вихідний із розмовою (колега теж рахується)." },
+  kept_offline: { label: "Передзвонив поза телефонією", tone: "ok", hint: "Позначено вручну в картці: передзвін з мобільного, у месенджер чи з іншого номера. Рахується виконаним." },
+  kept_talk: { label: "Передзвонив", tone: "ok", hint: "До терміну менеджер, що обіцяв, набрав клієнта й поговорив." },
   unverifiable: { label: "Не перевіряється", tone: "muted", hint: "Обіцянка в месенджер або інша дія — Ringostat цього не бачить, прапорця немає." },
 };
 
@@ -177,4 +182,31 @@ export function applyListFilter<T extends ListFilterRow>(rows: readonly T[], f: 
 export function deadlineBasisLabel(basis: string): string {
   return basis === "minutes" ? "як пообіцяв" : basis === "day" ? "до кінця названого дня"
     : basis === "conditional_next_workday" ? "умовна — до кінця наступного робочого дня" : "часу не названо — 20 хв";
+}
+
+/** Тип розмови — дзеркало `CONVERSATION_TYPES` у `core/callAiProviders.ts` (ТЗ 30.09.2026). */
+export type ConversationTypeT = "cargo_request" | "lead_lost" | "carrier" | "vendor" | "job_seeker" | "wrong_number" | "no_dialog" | "other";
+export const TYPE_LABEL: Readonly<Record<ConversationTypeT, string>> = {
+  cargo_request: "Запит на перевезення",
+  lead_lost: "Втрачений лід (запит неактуальний)",
+  carrier: "Перевізник",
+  vendor: "Нам щось продають",
+  job_seeker: "Пошук роботи",
+  wrong_number: "Помилились номером",
+  no_dialog: "Розмови немає",
+  other: "Інше",
+};
+
+/** Хвилини реакції коротко: «45 хв», «3 год 10 хв», «2 дн 3 год». */
+export function fmtMinutes(m: number): string {
+  if (m < 60) return `${String(m)} хв`;
+  if (m < 1440) return `${String(Math.floor(m / 60))} год${m % 60 ? ` ${String(m % 60)} хв` : ""}`;
+  return `${String(Math.floor(m / 1440))} дн${Math.floor((m % 1440) / 60) ? ` ${String(Math.floor((m % 1440) / 60))} год` : ""}`;
+}
+
+export type ListTab = "report" | "excluded";
+/** Рядок у вкладці: «Звіт» — `inReport`, «Виключені» — решта. Фільтр за типом — лише у «Виключених». */
+export function tabRows<T extends { inReport: boolean; conversationType: ConversationTypeT | null }>(rows: readonly T[], tab: ListTab,
+  type: ConversationTypeT | "all" = "all"): T[] {
+  return rows.filter((r) => (tab === "report" ? r.inReport : !r.inReport) && (tab === "report" || type === "all" || r.conversationType === type));
 }

@@ -31,9 +31,10 @@ test("#459b РОУТ нотатки: SELECT попереднього → mergeNo
   const start = src.indexOf('dashboardRouter.put("/receivables/note"');
   assert.ok(start > 0, "роут не знайдено");
   const body = src.slice(start, src.indexOf("\n});", start));
-  assert.match(body, /SELECT comment FROM receivable_notes WHERE client_key = \$1/, "попередній коментар не читається");
+  // 06.10.2026: разом із коментарем читається й угода запису (`deal_id`) — твердження те саме.
+  assert.match(body, /SELECT comment(, [^\n`]*)? FROM receivable_notes WHERE client_key = \$1/, "попередній коментар не читається");
   assert.match(body, /\bmergeNoteComment\(/, "злиття не викликається");
   assert.match(body, /req\.body\?\.clear === true/, "прапорець clear не читається");
-  const sel = body.indexOf("SELECT comment FROM receivable_notes"), ins = body.indexOf("INSERT INTO receivable_notes");
+  const sel = body.search(/SELECT comment(, [^\n`]*)? FROM receivable_notes/), ins = body.indexOf("INSERT INTO receivable_notes");
   assert.ok(sel > 0 && ins > sel, "SELECT попереднього мусить стояти ДО upsert");
 });

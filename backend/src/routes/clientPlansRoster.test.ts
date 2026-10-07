@@ -20,7 +20,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { needsApi, API_BASE } from "../testMode.js";
+import { needsApi, API_BASE, monthStartSkip } from "../testMode.js";
 import {
   isPlannableClientKey, rosterWithPlans, splitUnattached, NOT_PLANNABLE_MSG,
 } from "./clientPlanRules.js";
@@ -189,7 +189,7 @@ test("#107 Σ показаних планів місяця == Σ у БД за ц
  *
  * 🧨 САБОТАЖ: підставити місяць БЕЗ планів → гейт червоніє «порожньо».
  */
-test("#360 дзеркало: у місяці Є план на клієнті, який у ростері не активний", needsApi(), async () => {
+test("#360 дзеркало: у місяці Є план на клієнті, який у ростері не активний", needsApi(), async (t) => {
   const m = await monthWithPlans();
   assert.ok(m, "🔴 планів немає взагалі");
   const token = await adminToken();
@@ -198,6 +198,9 @@ test("#360 дзеркало: у місяці Є план на клієнті, я
 
   const notActiveWithPlan = b.clients.filter((c) => c.inRoster !== "active" && c.plan > 0);
   const total = notActiveWithPlan.length + b.totals.unattached.count;
+  // 🗓 На початку місяця планів ще мало — гучний скіп лише в перші 2 робочі дні поточного місяця (`monthStartSkip`).
+  const early = monthStartSkip("планів на клієнтах поза активним ростером", total, 1, m.month);
+  if (early) return t.skip(early);
   assert.ok(total > 0,
     `🔴 у ${m.month} НЕМАЄ жодного плану на клієнті, який у ростері не активний — #107 `
     + "зеленів би, нічого не перевіряючи. Порожній результат це ПРОВАЛ, а не успіх");
@@ -223,7 +226,7 @@ test("#360 дзеркало: у місяці Є план на клієнті, я
  * 🧨 САБОТАЖ (виконано): лишити старий фільтр у `/client-plans` → 196 000 проти
  * 486 570, гейт червоніє з обома числами.
  */
-test("#107c goesToManagerPlan == Σ approved у «Формуванні плану» (Δ0)", needsApi(), async () => {
+test("#107c goesToManagerPlan == Σ approved у «Формуванні плану» (Δ0)", needsApi(), async (t) => {
   const m = await monthWithPlans();
   assert.ok(m, "🔴 планів немає взагалі");
   const token = await adminToken();
@@ -239,6 +242,9 @@ test("#107c goesToManagerPlan == Σ approved у «Формуванні план�
   assert.ok(formMgrs.length > 0, "🔴 «Формування плану» не віддало жодного менеджера");
 
   const formApproved = formMgrs.reduce((s, x) => s + (x.repeatClients?.approved ?? 0), 0);
+  const early = monthStartSkip("менеджерів із затвердженими планами у «Формуванні»",
+    formMgrs.filter((x) => (x.repeatClients?.approved ?? 0) > 0).length, 1, m.month);
+  if (early) return t.skip(early);
   assert.ok(formApproved > 0,
     "🔴 у «Формуванні» Σ затверджених = 0 — звіряти нема з чим (порожнеча ≠ збіг)");
   assert.equal(Math.round(plansScreen.totals.goesToManagerPlan), Math.round(formApproved),
@@ -570,7 +576,7 @@ test("#107 · підказка «минулого місяця» приходи�
  *
  * 🧨 САБОТАЖ: створити план від тімліда на клієнті без резолву — гейт назве його поіменно.
  */
-test("#359 ЖИВИЙ: жодного затвердженого плану без менеджера", needsApi(), async () => {
+test("#359 ЖИВИЙ: жодного затвердженого плану без менеджера", needsApi(), async (t) => {
   const m = await monthWithPlans();
   assert.ok(m, "🔴 планів немає взагалі — гейту нема що перевіряти");
   const { pool } = await import("../db/pool.js");
@@ -587,6 +593,8 @@ test("#359 ЖИВИЙ: жодного затвердженого плану бе
 
   // 🪞 ПОПУЛЯЦІЯ ДРУКУЄТЬСЯ ТИМ САМИМ ЗАПИТОМ. Нуль затверджених означав би, що
   //    рівність нижче тримається на порожнечі — у цьому проєкті це ПРОВАЛ, не успіх.
+  const early = monthStartSkip("затверджених планів", Number(approved), 1, m.month);
+  if (early) return t.skip(early);
   assert.ok(Number(approved) > 0,
     `🔴 у ${m.month} немає жодного ЗАТВЕРДЖЕНОГО плану — гейт зеленів би, нічого не перевіряючи`);
   assert.equal(Number(orphans), 0,
@@ -678,23 +686,28 @@ test("#359d 🪞 наявний власник виграє, менеджер л
 });
 
 /**
- * #810c — ЖИВИЙ: група вкладки кожного рядка рахується тим самим правилом, що в ядрі, від тих
- * самих полів, що бачить екран (`state`, `lastOrderDays`), а три групи разом дають увесь ростер.
- * Рівність, а не «≥N»: істинна й тоді, коли жовтих сьогодні нуль (правило про календарні гейти).
+ * #840b — ЖИВИЙ: група вкладки кожного рядка рахується тим самим правилом ядра від полів, що бачить
+ * екран (`lastInvoice` → 3 повні місяці без рахунку; `lastOrderDays` → «жовтий»), цикл є рівно в
+ * рядків реактивації, а три групи разом дають увесь ростер. Рівність, а не «≥N» (календарні гейти).
  */
-test("#810c ЖИВИЙ: tabGroup кожного рядка == clientTabGroup(state, lastOrderDays); Постійні + Реактивація == Всі", needsApi(), async () => {
+test("#840b ЖИВИЙ: tabGroup кожного рядка == правилу рахунку; цикл рівно в реактивації; Постійні + Реактивація == Всі", needsApi(), async () => {
   const { clientTabGroup, tabOf } = await import("../core/clientTabs.js");
+  const { inReact } = await import("../core/reactCycleRules.js");
   const m = await monthWithPlans();
   assert.ok(m, "🔴 планів немає взагалі");
   const token = await adminToken();
   const b = await (await get(`/api/dashboard/client-plans?month=${m.month}`, token)).json() as {
-    clients: { clientKey: string; state: string; lastOrderDays: number | null; tabGroup?: string }[];
+    clients: { clientKey: string; lastInvoice?: string | null; lastOrderDays: number | null; tabGroup?: string; reactCycle?: unknown }[];
     tabGroupRank?: Record<string, number>;
   };
   assert.ok(b.clients.length > 0, "🔴 ростер порожній — гейт нічого не перевіряє");
-  const wrong = b.clients.filter((c) => c.tabGroup !== clientTabGroup(c.state, c.lastOrderDays));
-  assert.deepEqual(wrong.slice(0, 5).map((c) => `${c.clientKey}: ${c.tabGroup} при ${c.state}/${c.lastOrderDays}`), [],
-    `🔴 ${wrong.length} рядків мають групу вкладки не за правилом ядра`);
+  assert.ok(b.clients.every((c) => "lastInvoice" in c), "🔴 рядок не несе дати останнього рахунку — правило не перевірити");
+  const nowYm = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" }).slice(0, 7);
+  const wrong = b.clients.filter((c) => c.tabGroup !== clientTabGroup(inReact(c.lastInvoice ?? null, nowYm), c.lastOrderDays));
+  assert.deepEqual(wrong.slice(0, 5).map((c) => `${c.clientKey}: ${c.tabGroup} при рахунку ${c.lastInvoice}/${c.lastOrderDays}`), [],
+    `🔴 ${wrong.length} рядків мають групу вкладки не за правилом рахунку`);
+  const cycleMismatch = b.clients.filter((c) => (c.tabGroup === "react") !== (c.reactCycle != null));
+  assert.equal(cycleMismatch.length, 0, "🔴 цикл реактивації є поза вкладкою або відсутній у ній — кнопки не там");
   const regular = b.clients.filter((c) => tabOf(c.tabGroup as "regular" | "yellow" | "react") === "regular").length;
   const react = b.clients.filter((c) => c.tabGroup === "react").length;
   assert.equal(regular + react, b.clients.length, "🔴 клієнт випав з обох вкладок або потрапив в обидві");

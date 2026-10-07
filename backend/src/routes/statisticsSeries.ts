@@ -9,9 +9,14 @@ import { clientOwnersFor } from "../core/clientOwner.js";
 import { kyivToday } from "../core/dates.js";
 import { dispatchedByLoadBucket, leadsTakenByBucket, repeatClientsByBucket, type MetricScope } from "../core/metrics.js";
 import { SALES_TEAM_LEAD } from "../statistics/catalog.js";
+import { teamAtSql } from "../core/teamAt.js";
+import { leadgenBuckets, sumBuckets } from "../core/leadgenStats.js";
 import {
   STATS_SEAM, isCrmAble, LIVE_TEAMS, DEPSTATS_DEPT, DEPSTATS_METRIC_MAP, hasDepstats,
 } from "../statistics/seriesCatalog.js";
+import { sheetWeekToMonday, clipPlanToToday, clipPointsToToday } from "../statistics/statsCompare.js";
+import { anomaliesFor, applyCorrections } from "../statistics/anomalies.js";
+import { buildSummary, planSeries, dispatchPlanSeries, ARCHIVED_TEAM_IDS } from "../statistics/statsSummary.js";
 
 /**
  * Вкладка «Статистики» (діаграми). Зшивка на серію: sheet (stats_series, <шов) +
@@ -24,7 +29,7 @@ statsSeriesRouter.use(requireAuth);
 
 type Gran = "day" | "week" | "month";
 interface Point { period: string; value: number; source: "sheet" | "crm" | "manual" }
-interface Series { scopeType: string; scopeKey: string; scopeName: string; points: Point[]; benchmark?: boolean }
+interface Series { scopeType: string; scopeKey: string; scopeName: string; points: Point[]; benchmark?: boolean; archived?: boolean }
 interface ScopeSpec { scopeType: string; scopeKey: string; scopeName: string; teamId: number | null; managerId: number | null; benchmark?: boolean }
 
 // ── LIVE-обчислювачі (реюз ядра). period='YYYY-MM-DD', source='crm'. Метрики без запису
@@ -57,46 +62,17 @@ const COMPUTERS: Record<string, Computer> = {
       if (r.channel === "ad") agg.set(r.bucket, (agg.get(r.bucket) ?? 0) + Number(r.deals));
     return [...agg].map(([period, v]) => P(period, v));
   },
-  // Прорахунки лідгенів — ПЕРЕДАЧІ ліда, COUNT(DISTINCT lead). Company-level.
+  // Прорахунки лідгенів — ТІЄЮ САМОЮ функцією, що екран «Лідогенерація» (`leadgenBuckets` → входи угод у
+  // «Кваліфіковано»). Company-level.
   //
-  // 🔴 ДЖЕРЕЛО ЗМІНЕНО 24.08.2026: `leadgen_registry` → `leadgen_touch`. МЕТРИКА ТА
-  // САМА (передані ліди за датою передачі) — змінилась лише таблиця, з якої вона
-  // читається, і саме тому це правка, а не нова метрика.
-  //   • `leadgen_registry` — дзеркало Google-аркуша бота, і `syncLeadgenRegistry`
-  //     робить йому `TRUNCATE` щосинку. Тобто ряд обрізаний до того, що зараз
-  //     лежить в аркуші (заміряно 24.08: найраніший запис 15.06.2026), а екран
-  //     «Статистики» малює місяці й роки. Усе, що старше, читалось як НУЛЬ —
-  //     тобто як «лідген нічого не передавав», а не як «ми туди не дивились».
-  //   • `leadgen_touch` — той самий факт передачі, персистований append-only
-  //     (`ON CONFLICT DO NOTHING`, пише `syncKommo` з того ж реєстру + бекфіл із
-  //     `lead_transfer_events`). Ряд лише зростає.
-  // 📐 Сьогодні обидві таблиці дають ІДЕНТИЧНИЙ ряд (15.06-24.08, 999 лідів) — тож
-  // ця правка НЕ рухає жодного числа на екрані зараз; вона прибирає майбутню
-  // обрізку. Записано навмисно: «нуль розбіжностей» тут — очікуваний результат,
-  // а не доказ, що правка нічого не робить (тримає `#172`).
-  //
-  // ⚠️ ЩО СВІДОМО НЕ ЗРОБЛЕНО: цей ряд НЕ переведено на `lead_channel='leadgen'`,
-  // як три сусідні лідген-місця. Він міряє ПЕРЕДАЧІ (дію лідоген-бота), а не
-  // угоди з лідоген-каналом; підмінивши джерело на канал, ми зробили б назву
-  // «Прорахунки лідгенів» неправдою і, головне, СХОВАЛИ б операційний обвал
-  // передач (з ~130/тиждень до 11/20/1 з 10.08.2026) за рівним каналом. Розбіжність
-  // із формулюванням задачі названа вголос у звіті проходу, а не залатана мовчки.
+  // 🔴 ДЖЕРЕЛО ЗМІНЕНО 02.10.2026 (рішення Романа, варіант А): було `leadgen_touch` — передачі через бот.
+  // Бот із серпня майже не пише (вересень — 2 передачі), і графік «Прорахунки лідгенів» показував
+  // 2–186, коли «Лідогенерація» під тією самою назвою — десятки на тиждень у кожного лідгена. Два числа
+  // під однією назвою на двох екранах — та сама поломка, яку лікує ТЗ Статистик. Обвал БОТА видно й далі —
+  // у таблиці передач на екрані «Лідогенерація»; тут показник про роботу лідгенів, а не про бота.
   lg_transfers: async (g, from, to, teamId, managerId) => {
     if (teamId != null || managerId != null) return []; // per-team поки не розрізаємо (лише компанія)
-    const r = await pool.query<{ period: string; v: string }>(
-      // ⚠️ БЕЗ `AT TIME ZONE`: `leadgen_touch.transfer_date` — це вже DATE, зведений
-      // до Києва НА ЗАПИСІ (`syncKommo.upsertLeadgenTouch`). Друга конверсія над
-      // готовою датою зсунула б ряд на добу — той самий клас, що «дати завжди
-      // по-київськи», лише в інший бік: тут TZ уже застосована, і застосувати її
-      // вдруге означає збрехати рівно на один день.
-      `SELECT to_char(date_trunc($1, transfer_date::timestamp)::date, 'YYYY-MM-DD') AS period,
-              COUNT(DISTINCT lead_kommo_id) AS v
-         FROM leadgen_touch
-        WHERE transfer_date BETWEEN $2 AND $3
-        GROUP BY 1 ORDER BY 1`,
-      [g, from, to]
-    );
-    return r.rows.map((x) => P(x.period, Number(x.v)));
+    return sumBuckets(await leadgenBuckets(from, to, g, false)).map((x) => P(x.bucket, x.quotes));
   },
   // Логістика: усі поставлені авто (=dispatched total).
   cars_delivered_all: async (g, from, to, teamId, managerId) =>
@@ -118,7 +94,7 @@ const COMPUTERS: Record<string, Computer> = {
     const params: unknown[] = [from, to];
     let scope = "";
     if (managerId != null) { params.push(managerId); scope = `AND p.manager_id = $${params.length}`; }
-    else if (teamId != null) { params.push(teamId); scope = `AND m.team_id = $${params.length}`; }
+    else if (teamId != null) { params.push(teamId); scope = `AND ${teamAtSql("m", "date_trunc('month', p.plan_date)::date")} = $${params.length}`; } // 🔀 команда на місяць плану (4892)
     const pl = await pool.query<{ period: string; plan: string }>(
       `SELECT to_char(date_trunc('month', p.plan_date), 'YYYY-MM-DD') period, SUM(p.planned_value)::float plan
          FROM plans p JOIN managers m ON m.id = p.manager_id
@@ -162,6 +138,14 @@ async function depstatsRead(block: string, metric: string, g: Gran, from: string
   return r.rows.map((x) => ({ period: x.period, value: Number(x.v), source: "crm" as const }));
 }
 
+/**
+ * 🗓 ТИЖДЕНЬ — ПОНЕДІЛКОМ (4367: «тиждень пн–нд»). Тижні з ручної таблиці датовані НЕДІЛЕЮ (кінцем), а
+ * CRM — понеділком (`date_trunc('week')`). На одній осі вони стояли зі зсувом у 6 днів, і точка
+ * «тиждень 18.01» насправді означала 12–18.01, а сусідня CRM-точка — тиждень, що ПОЧИНАЄТЬСЯ з дати.
+ * Зводимо тижні таблиці до понеділка — лише підпис періоду, значення не змінюється.
+ */
+const weekLabel = (g: Gran, period: string) => (g === "week" ? sheetWeekToMonday(period) : period);
+
 // ── sheet/manual точки однієї серії з stats_series ──
 async function storedPoints(metric: string, g: Gran, scopeType: string, scopeKey: string, source: "sheet" | "manual"): Promise<Point[]> {
   const r = await pool.query<{ period: string; value: string }>(
@@ -170,7 +154,7 @@ async function storedPoints(metric: string, g: Gran, scopeType: string, scopeKey
       ORDER BY period_date`,
     [metric, g, scopeType, scopeKey, source]
   );
-  return r.rows.map((x) => ({ period: x.period, value: Number(x.value), source }));
+  return r.rows.map((x) => ({ period: weekLabel(g, x.period), value: Number(x.value), source }));
 }
 
 // ── company sheet-історія для SALES (похідна: Σ team_leads; avg = Σrev÷Σcars) ──
@@ -183,13 +167,13 @@ async function companySalesSheet(metric: string, g: Gran): Promise<Point[]> {
           AND car.scope_type='team_lead' AND car.scope_key=rev.scope_key AND car.period_date=rev.period_date AND car.source='sheet'
         WHERE rev.metric_key='revenue_success' AND rev.granularity=$1 AND rev.scope_type='team_lead' AND rev.source='sheet'
         GROUP BY rev.period_date ORDER BY rev.period_date`, [g]);
-    return r.rows.filter((x) => x.v != null).map((x) => ({ period: x.period, value: Number(x.v), source: "sheet" as const }));
+    return r.rows.filter((x) => x.v != null).map((x) => ({ period: weekLabel(g, x.period), value: Number(x.v), source: "sheet" as const }));
   }
   const r = await pool.query<{ period: string; v: string }>(
     `SELECT to_char(period_date,'YYYY-MM-DD') period, SUM(value)::float v
        FROM stats_series WHERE metric_key=$1 AND granularity=$2 AND scope_type='team_lead' AND source='sheet'
       GROUP BY period_date ORDER BY period_date`, [metric, g]);
-  return r.rows.map((x) => ({ period: x.period, value: Number(x.v), source: "sheet" as const }));
+  return r.rows.map((x) => ({ period: weekLabel(g, x.period), value: Number(x.v), source: "sheet" as const }));
 }
 
 // ── зшивка однієї серії ──
@@ -199,6 +183,8 @@ async function stitch(block: string, metric: string, g: Gran, from: string, to: 
     ? await companySalesSheet(metric, g)
     : await storedPoints(metric, g, sc.scopeType, sc.scopeKey, "sheet");
   if (crmAble) sheet = sheet.filter((p) => p.period < STATS_SEAM);
+  // ✏️ Відомі помилки ручної таблиці — замінені числами CRM (реєстр `statistics/anomalies.ts`, рішення Романа 02.10).
+  sheet = applyCorrections(metric, g, sc.scopeKey, sheet);
 
   let crm: Point[] = [];
   const liveScope = sc.scopeType === "company" || sc.teamId != null || sc.managerId != null;
@@ -214,7 +200,8 @@ async function stitch(block: string, metric: string, g: Gran, from: string, to: 
   for (const p of sheet) byPeriod.set(p.period, p);
   for (const p of crm) byPeriod.set(p.period, p);
   const points = [...byPeriod.values()].filter((p) => p.period >= from && p.period <= to).sort((a, b) => a.period.localeCompare(b.period));
-  return { scopeType: sc.scopeType, scopeKey: sc.scopeKey, scopeName: sc.scopeName, points, ...(sc.benchmark ? { benchmark: true } : {}) };
+  return { scopeType: sc.scopeType, scopeKey: sc.scopeKey, scopeName: sc.scopeName, points, ...(sc.benchmark ? { benchmark: true } : {}),
+    ...(sc.teamId != null && ARCHIVED_TEAM_IDS.has(sc.teamId) ? { archived: true } : {}) };
 }
 
 // 🔒 СЕРВЕРНИЙ КЛАМП роль-скоупу. Тімлід бачить свою команду + її менеджерів ПЛЮС компанію
@@ -255,8 +242,39 @@ statsSeriesRouter.get("/series", async (req, res) => {
   if (!metric) return res.status(400).json({ error: "metric обовʼязковий" });
   const unit = req.query.unit ? String(req.query.unit) : null; // напрямок (unit-scope)
   const set = await seriesSet({ role: auth.role, roleKey: auth.roleKey, teamId: auth.teamId ?? null, managerId: auth.managerId ?? null }, unit);
+  const today = kyivToday();
   const series = await Promise.all(set.map((s) => stitch(block, metric, g, from, to, s)));
-  res.json({ block, metric, granularity: g, seam: STATS_SEAM, crmAble: isCrmAble(block, metric), live: hasLive(block, metric), series });
+  for (const s of series) s.points = clipPointsToToday(s.points, today); // обчислений обʼєкт stitch, не рядок БД
+  // ⚠️ Аномалії — з реєстру з доказом CRM (ТЗ 28.09, блок 1, п.3); фронт позначає точку, а не мовчки тягне лінію.
+  // 📈 План — там, де він є в CRM-дзеркалі, і лише в скоупі глядача (тімлід — своя команда, менеджер — нічого):
+  //    ② — план грошей Звіту; «Поставлені» (= плитка «Відправлені авто») — KPI-цілі задачника, від шва.
+  let plan: Awaited<ReturnType<typeof planSeries>> = [];
+  const keys = new Set(set.map((s) => s.scopeKey));
+  const inScope = (p: { scopeKey: string }) => keys.has(p.scopeKey) && !(set.find((s) => s.scopeKey === p.scopeKey)?.benchmark);
+  if (metric === "payment_received" && block === "sales") plan = (await planSeries(g, from, to)).filter(inScope);
+  else if (metric === "cars_delivered" && block === "sales") plan = (await dispatchPlanSeries(g, from > STATS_SEAM ? from : STATS_SEAM, to)).filter(inScope);
+  plan = clipPlanToToday(plan, today);
+  res.json({ block, metric, granularity: g, seam: STATS_SEAM, crmAble: isCrmAble(block, metric), live: hasLive(block, metric), series,
+    anomalies: anomaliesFor(metric, g), plan });
+});
+
+/**
+ * 📊 GET /api/statistics/summary?gran=week|month&anchor=YYYY-MM-DD — плитки й таблиця команд (ТЗ 28.09, блоки 1–3).
+ * Скоуп — той самий, що в серіях: адмін-рівень бачить компанію й усі команди; тімлід — свою команду
+ * (компанія йому лише бенчмарком у серіях, тут — не віддається); менеджер — себе.
+ * `anchor` за замовчуванням — сьогодні за Києвом; майбутнє клампиться до сьогодні.
+ */
+statsSeriesRouter.get("/summary", async (req, res) => {
+  const auth = req.auth!;
+  const gran = req.query.gran === "month" ? "month" : "week";
+  const today = kyivToday();
+  const raw = String(req.query.anchor ?? "");
+  const anchor = /^\d{4}-\d{2}-\d{2}$/.test(raw) && raw <= today ? raw : today;
+  const allTeams = isAdminScope(auth);
+  const viewer = allTeams ? { allTeams: true, teamId: null, managerId: null }
+    : auth.role === "team_lead" ? { allTeams: false, teamId: auth.teamId ?? -1, managerId: null }
+    : { allTeams: false, teamId: null, managerId: auth.managerId ?? -1 };
+  res.json(await buildSummary(gran, anchor, viewer));
 });
 
 /**

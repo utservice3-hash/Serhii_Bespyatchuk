@@ -15,6 +15,7 @@ import { pool } from "../db/pool.js";
 import * as money from "./money.js";
 import * as metrics from "./metrics.js";
 import { activeManagerSql } from "./activeManager.js";
+import { teamAtSql } from "./teamAt.js";
 import * as managerState from "./managerState.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
 import { leadgenStats } from "./leadgenStats.js";
@@ -35,14 +36,21 @@ export const LEADGEN_TEAM_ID = 11;
 
 export interface RosterRow { id: number; name: string; teamId: number; teamName: string; dept: "rpk" | "rnk" }
 
-/** Учасники заліку. Відділ — за `metrics.RNK_TEAM_IDS` (джерело правди, як у звіті КВП), решта комерційних — ВРПК. */
-export async function nominationRoster(teamId: number | null = null): Promise<RosterRow[]> {
+/**
+ * Учасники заліку. Відділ — за `metrics.RNK_TEAM_IDS` (джерело правди, як у звіті КВП), решта комерційних — ВРПК.
+ * 🔀 `asOf` (понеділок тижня) — команда НА ЦЕЙ ДЕНЬ (задача 4892): хто перейшов, змагається за тиждень у тій
+ * команді, де тиждень почав. Без `asOf` і без переходів — поточна команда, як було.
+ */
+export async function nominationRoster(teamId: number | null = null, asOf: string | null = null): Promise<RosterRow[]> {
   const p: unknown[] = [];
-  const conds = [managerState.hasPlanSql("m", activeManagerSql("m")), metrics.commercialManagerSql("m")];
-  if (teamId != null) { p.push(teamId); conds.push(`m.team_id = $${p.length}`); }
+  let team = "m.team_id";
+  let commercial = metrics.commercialManagerSql("m");
+  if (asOf) { p.push(asOf); team = teamAtSql("m", `$${p.length}::date`); commercial = metrics.commercialDuringSql("m", `$${p.length}`, `$${p.length}`); }
+  const conds = [managerState.hasPlanSql("m", activeManagerSql("m")), commercial];
+  if (teamId != null) { p.push(teamId); conds.push(`${team} = $${p.length}`); }
   const rows = (await pool.query<{ id: number; name: string; team_id: number; team_name: string | null }>(
-    `SELECT m.id, m.name, m.team_id, t.name AS team_name FROM managers m
-       LEFT JOIN teams t ON t.id = m.team_id ${managerState.stateJoinSql("m")}
+    `SELECT m.id, m.name, ${team} AS team_id, t.name AS team_name FROM managers m
+       LEFT JOIN teams t ON t.id = ${team} ${managerState.stateJoinSql("m")}
       WHERE ${conds.join(" AND ")} ORDER BY m.name`, p)).rows;
   const rnk = new Set(metrics.RNK_TEAM_IDS);
   return rows.map((r) => ({ id: r.id, name: r.name, teamId: r.team_id, teamName: r.team_name ?? `Команда #${r.team_id}`, dept: rnk.has(r.team_id) ? "rnk" : "rpk" }));
@@ -136,7 +144,7 @@ function leadgenWeek(stats: Awaited<ReturnType<typeof leadgenStats>>, reviews: M
  * (`metrics.rnkConvAsKommo`), свого SQL по угодах немає.
  */
 export async function rnkConvWeek(from: string, to: string, rosterIn?: RosterRow[]): Promise<RnkConv> {
-  const roster = (rosterIn ?? await nominationRoster()).filter((r) => r.dept === "rnk");
+  const roster = (rosterIn ?? await nominationRoster(null, from)).filter((r) => r.dept === "rnk");
   const [conv, edits] = await Promise.all([
     metrics.rnkConvAsKommo({ from, to }, roster.map((r) => r.id)),
     pool.query<{ manager_id: number | null; action: ConvEdit["action"]; taken: number | null; won: number | null; on_slide: boolean | null; comment: string | null; by_name: string | null; created_at: Date }>(
@@ -173,7 +181,7 @@ const depts = (teams: TeamWeek[]): DeptWinner[] => {
 export async function draftWeek(weekFrom: string, teamId: number | null = null): Promise<WeekView> {
   const { from, to } = weekOf(weekFrom);
   // Скоуп звужує відповідь, а не розрахунок (правило 1): переможців відділу рахуємо по ВСІХ командах.
-  const roster = await nominationRoster();
+  const roster = await nominationRoster(null, from);
   // Лідогенератори й конверсія РНК — у тій самій паралелі, що й числа номінацій (ревʼю 22.09: не послідовно).
   const [values, reviews, leads, lgStats, rnkConv] = await Promise.all([
     nominationValues(from, to), latestReviews(from), teamLeads(), leadgenStats(from, to), rnkConvWeek(from, to, roster)]);

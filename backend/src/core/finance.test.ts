@@ -150,12 +150,7 @@ test("#931 ЖИВИЙ SQL: збереження все-або-нічого, іс
     await fin.setNote(db, 901, a, "2026-09", "");
     assert.equal((await fin.loadMonth(db, "2026-09", now)).tree[0].groups[0].items.find((x) => x.id === a)!.note, null, "🔴 коментар не прибирається");
 
-    await fin.setApproval(db, 901, "2026-10", true);
-    await assert.rejects(fin.setApproval(db, 901, "2026-10", true), (e: unknown) => status(e) === 409);
-    await fin.saveValues(db, 901, "2026-10", [{ itemId: b, field: "plan", value: 500 }], now);
-    assert.equal((await fin.loadMonth(db, "2026-10", now)).approval?.changedAfter, 1, "🔴 зміну плану після погодження не видно");
-    await fin.setApproval(db, 901, "2026-10", false);
-    assert.equal((await fin.loadMonth(db, "2026-10", now)).approval, null, "🔴 погодження не знімається тією ж кнопкою");
+    // Погодження з 06.10.2026 — замок плану й незворотне: його тримають `#1451`/`#1451b`, а не цей гейт.
   } finally { await s.dispose(); }
 });
 
@@ -224,55 +219,6 @@ test("#932 ЖИВИЙ SQL: вимкнення не рухає підсумків
 });
 
 /**
- * #933 — ДОСТУП: сид вкладки, матриця й права — один список. Вкладка й `edit_finance` — admin, СЕО, ОД,
- * КВП, фінансист (рішення 28.09.2026: «вона і все керівництво»); `approve_finance_plan` — admin, СЕО, ОД.
- * 🧨 Червоніє, якщо дописати роль лише в матрицю чи лише в сид, дати вкладку бухгалтерії чи HR,
- * або прибрати пару «видати / зняття».
- */
-test("#933 ДОСТУП ФІНАНСІВ: вкладка, edit_finance і approve_finance_plan — у сиді, матриці й каталозі одним списком", () => {
-  const sql = SRC("db/schema.sql");
-  const list = (s: string) => [...s.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort();
-  const row = /path: "\/api\/finance\/month\?m=2026-09", cls: "GET",\s*\n\s*allow: \[([^\]]*)\]/.exec(SRC("auth/accessMatrix.ts"));
-  assert.ok(row, "🔴 рядок матриці для /api/finance/month не знайдено");
-  const inMatrix = [...row[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
-  const seed = /screen_access \|\| '\{"finance":true\}'::jsonb\s*\n\s*WHERE key IN \(([^)]*)\)/.exec(sql);
-  assert.ok(seed, "🔴 сид вкладки `finance` не знайдено");
-  assert.deepEqual(inMatrix, list(seed[1]), "🔴 матриця й сид вкладки розійшлись");
-  const LEAD = ["admin", "ceo", "financier", "kvp", "opdir"];
-  assert.deepEqual(list(seed[1]), LEAD, "🔴 склад вкладки розійшовся з рішенням (бухгалтерія й HR — ні)");
-  for (const [perm, want] of [["edit_finance", LEAD], ["approve_finance_plan", ["admin", "ceo", "opdir"]]] as const) {
-    const g = new RegExp(`permissions \\|\\| '\\{"${perm}": true\\}'::jsonb\\s*\\n\\s*WHERE key IN \\(([^)]*)\\)`).exec(sql);
-    const st = new RegExp(`permissions - '${perm}'\\s*\\n\\s*WHERE key NOT IN \\(([^)]*)\\)`).exec(sql);
-    assert.ok(g && st, `🔴 видача або зняття ${perm} не знайдені`);
-    assert.deepEqual(list(g[1]), [...want], `🔴 ${perm} отримав не той склад`);
-    assert.deepEqual(list(st[1]), list(g[1]), `🔴 видача й зняття ${perm} розійшлись`);
-    assert.match(SRC("auth/permGrant.ts"), new RegExp(`"${perm}"`), `🔴 ${perm} не в каталозі — адмін не зможе ним керувати`);
-    assert.ok(sql.lastIndexOf(`permissions - '${perm}'`) > sql.lastIndexOf("screen_access = (SELECT screen_access FROM roles WHERE key='admin')"),
-      `🔴 зняття ${perm} стоїть ВИЩЕ за синк фінансиста — право розтечеться`);
-  }
-  assert.match(SRC("auth/routeTab.ts"), /pre\("\/api\/finance"\), tabs: \["finance"\]/, "🔴 /api/finance не під вкладкою finance");
-});
-
-/**
- * #933b — МЕЖА ПЕРШИМ ОПЕРАТОРОМ. На ній стоїть безпека проб `deny-only`: роль без права мусить
- * отримати 403 ДО запису. Читання — `onlyFinance(req)`, запис — `canEdit(req)`, погодження — `canApprove(req)`.
- * 🧨 Червоніє, якщо переставити межу нижче, пустити запис під `onlyFinance` або погодження під `canEdit`.
- */
-test("#933b ДОСТУП ФІНАНСІВ: межа — перший оператор; запис — за правом, погодження — за окремим правом", () => {
-  const src = SRC("routes/finance.ts");
-  const all = [...src.matchAll(/financeRouter\.(get|post|patch|put|delete)\(/g)];
-  const parsed = [...src.matchAll(/financeRouter\.(get|post|patch|put|delete)\("([^"]+)", async \(req, res\) => \{\s*try \{\s*([^\n;]+);/g)];
-  assert.equal(parsed.length, all.length, `🔴 розпізнано ${parsed.length} із ${all.length} обробників`);
-  assert.ok(all.length >= 15, `🔴 знайдено лише ${all.length} обробників — гейт нічого не перевіряє`);
-  for (const [, m, p, first] of parsed) {
-    const want = m === "get" ? "onlyFinance(req)" : p === "/approval" ? "canApprove(req)" : "canEdit(req)";
-    assert.equal(first.trim(), want, `🔴 ${m.toUpperCase()} ${p}: першим стоїть «${first.trim()}»`);
-  }
-  assert.match(src, /function canEdit\(req: Request\): void \{\s*onlyFinance\(req\);\s*if \(!roleHasPerm\(req\.auth!\.roleKey, "edit_finance"\)\)/, "🔴 canEdit не перевіряє вкладку або право");
-  assert.match(src, /function canApprove\(req: Request\): void \{\s*onlyFinance\(req\);\s*if \(!roleHasPerm\(req\.auth!\.roleKey, "approve_finance_plan"\)\)/, "🔴 canApprove не перевіряє вкладку або право");
-});
-
-/**
  * #933c — ЖИВИЙ SQL: ПІСЛЯ СХЕМИ З НУЛЯ фінансист МАЄ вкладку й право вносити, але НЕ погоджує
  * (синк «фінансист = права адміна» стоїть вище й копіює `approve_finance_plan`; зняття — нижче).
  * Бухгалтерія й HR вкладки не мають. Повторний прогін схеми нічого не змінює.
@@ -288,7 +234,8 @@ test("#933c ЖИВИЙ SQL: фінансист вносить, але не по�
     const rows = await q();
     const by = Object.fromEntries(rows.map((r) => [r.key, [r.tab ?? false, r.edit, r.appr]]));
     assert.deepEqual(by.financier, [true, true, false], "🔴 фінансист не вносить або погоджує");
-    assert.deepEqual(by.admin, [true, true, true]);
+    // З 06.10.2026 право ролі не дає затвердження НІКОМУ (поіменний список, `#1452`) — і адміну теж.
+    assert.deepEqual(by.admin, [true, true, false], "🔴 роль адміна знову дає затвердження плану");
     assert.deepEqual(by.kvp, [true, true, false]);
     for (const k of ["hr", "manager", "team_lead", "____________"])
       if (by[k]) assert.deepEqual(by[k], [false, false, false], `🔴 роль ${k} отримала «Фінанси»`);
@@ -306,13 +253,15 @@ test("#934 ФІНАНСИ: кожна fin_* таблиця відібрана в
   const sql = SRC("db/schema.sql");
   const tables = [...sql.matchAll(/CREATE TABLE IF NOT EXISTS (fin_[a-z_]+)/g)].map((m) => m[1]);
   assert.ok(tables.length >= 7, `🔴 знайдено лише ${tables.length} таблиць fin_* — гейт нічого не перевіряє`);
-  const rev = /REVOKE ALL ON ((?:fin_[a-z_]+(?:, )?)+) FROM ai_readonly;/.exec(sql);
-  assert.ok(rev, "🔴 REVOKE для таблиць фінансів не знайдено");
-  const revoked = rev[1].split(", ");
+  // Усі REVOKE з таблицями fin_* (проходи додають свої рядки) — кожна таблиця мусить бути в якомусь із них, ПІСЛЯ свого CREATE.
+  const revs = [...sql.matchAll(/REVOKE ALL ON ((?:fin_[a-z_]+(?:, )?)+) FROM ai_readonly;/g)];
+  assert.ok(revs.length >= 1, "🔴 REVOKE для таблиць фінансів не знайдено");
+  const revokedAt = new Map<string, number>();
+  for (const r of revs) for (const tb of r[1].split(", ")) revokedAt.set(tb, r.index!);
   const forbidden = SRC("ai/metricTools.ts");
   for (const tb of tables) {
-    assert.ok(revoked.includes(tb), `🔴 ${tb} не відібрана в ai_readonly`);
-    assert.ok(sql.indexOf(`CREATE TABLE IF NOT EXISTS ${tb}`) < rev.index, `🔴 REVOKE стоїть вище CREATE ${tb} — з нуля схема впаде`);
+    assert.ok(revokedAt.has(tb), `🔴 ${tb} не відібрана в ai_readonly`);
+    assert.ok(sql.indexOf(`CREATE TABLE IF NOT EXISTS ${tb}`) < revokedAt.get(tb)!, `🔴 REVOKE стоїть вище CREATE ${tb} — з нуля схема впаде`);
     assert.match(forbidden, new RegExp(`"${tb}"`), `🔴 ${tb} немає у FORBIDDEN_TABLES`);
   }
 });
@@ -391,3 +340,284 @@ test("#936 ФРОНТ ФІНАНСІВ: меню після «Статистик
   for (const k of ["resp", "group", "item"])
     assert.match(sec, new RegExp(`await deleteFin\\("${k}", [a-z]+\\.id(?:, confirm)?\\); reload\\(\\); undo\\("${k}", `), `🔴 видалення «${k}» без «Повернути»`);
 });
+
+/**
+ * #937 — ПОРОЖНЯ СТАТТЯ ВИДНА В ПОТОЧНОМУ Й МАЙБУТНІХ МІСЯЦЯХ, ховається лише в минулих. 01.10.2026 жовтень став
+ * поточним без жодної цифри, і стара умова («ховати порожнє, якщо місяць не майбутній») показала самі назви груп:
+ * 69 статей «зникли» (скрін Романа). Перевіряється САМА функція фронту `rowVisible`, транспільована, а не регулярка.
+ * 🧨 Червоніє, якщо повернути `!future`, ховати порожнє в поточному місяці, або показувати вимкнену статтю.
+ */
+test("#937 ФРОНТ ФІНАНСІВ: порожня стаття видна в поточному й майбутніх місяцях, схована лише в минулих", async () => {
+  const ts = (await import("typescript")).default;
+  const js = ts.transpileModule(FE("pages/dashboard/sections/financeView.ts"), {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const { rowVisible } = await import(`data:text/javascript,${encodeURIComponent(js)}`) as {
+    rowVisible: (it: { active: boolean; state: string }, o: { month: string; currentMonth: string; edit: boolean; onlyOver: boolean; showEmpty: boolean }) => boolean;
+  };
+  const base = { currentMonth: "2026-10-01", edit: false, onlyOver: false, showEmpty: false };
+  const empty = { active: true, state: "empty" as const };
+  assert.equal(rowVisible(empty, { ...base, month: "2026-10-01" }), true, "🔴 порожня стаття схована в ПОТОЧНОМУ місяці — жовтень знову покаже самі групи");
+  assert.equal(rowVisible(empty, { ...base, month: "2026-11-01" }), true, "🔴 порожня стаття схована в майбутньому місяці");
+  assert.equal(rowVisible(empty, { ...base, month: "2026-09-01" }), false, "🔴 у минулому місяці порожні рядки не сховані");
+  assert.equal(rowVisible(empty, { ...base, month: "2026-09-01", showEmpty: true }), true, "🔴 «показати порожні» не працює");
+  assert.equal(rowVisible({ active: false, state: "ok" }, { ...base, month: "2026-10-01", edit: true }), false, "🔴 вимкнена стаття видна");
+  assert.equal(rowVisible(empty, { ...base, month: "2026-09-01", edit: true }), true, "🔴 у режимі внесення порожня стаття схована");
+  assert.equal(rowVisible(empty, { ...base, month: "2026-10-01", onlyOver: true }), false, "🔴 «лише понад план» показує порожні");
+  assert.match(FE("pages/dashboard/sections/FinanceSection.tsx"), /const visible = \(it: FinItem\) => rowVisible\(it, \{ month, currentMonth: data\.currentMonth,/,
+    "🔴 екран не користується rowVisible — гейт перевіряє не те, що показується");
+});
+
+/**
+ * #937b — «ВЗЯТИ ПЛАН ПОПЕРЕДНЬОГО МІСЯЦЯ» (рішення Романа 01.10.2026: кнопкою, не автоматично). Заповнює ЛИШЕ порожні
+ * клітинки плану діючих статей і нічого не записує сама: результат — чернетки, які йдуть у звичайне «Зберегти».
+ * 🧨 Червоніє, якщо перезатерти внесений план або вже виправлену чернетку, підставити у вимкнену статтю,
+ * чи поставити «0» там, де в попередньому місяці плану не було.
+ */
+test("#937b ФРОНТ ФІНАНСІВ: план попереднього місяця — лише в порожні клітинки, внесене й правлене не чіпає", async () => {
+  const ts = (await import("typescript")).default;
+  const js = ts.transpileModule(FE("pages/dashboard/sections/financeView.ts"), {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const { planFromPrevious } = await import(`data:text/javascript,${encodeURIComponent(js)}`) as {
+    planFromPrevious: (items: { id: number; active: boolean; plan: number | null }[], prev: Map<number, number | null>, drafts: Record<string, string>) => Record<string, string>;
+  };
+  const items = [
+    { id: 1, active: true, plan: null },   // порожня → бере 2 400
+    { id: 2, active: true, plan: 900 },    // уже внесено → не чіпати
+    { id: 3, active: true, plan: null },   // уже правлена чернетка → не чіпати
+    { id: 4, active: false, plan: null },  // вимкнена → не чіпати
+    { id: 5, active: true, plan: null },   // у попередньому місяці плану не було → не чіпати
+    { id: 6, active: true, plan: null },   // план був 1234.5 → «1234,5»
+  ];
+  const prev = new Map<number, number | null>([[1, 2400], [2, 15000], [3, 700], [4, 100], [5, null], [6, 1234.5]]);
+  const out = planFromPrevious(items, prev, { "3:plan": "650" });
+  assert.deepEqual(out, { "1:plan": "2400", "6:plan": "1234,5" }, "🔴 підставлено не рівно в порожні клітинки діючих статей");
+  assert.match(FE("pages/dashboard/sections/FinanceSection.tsx"), /const add = planFromPrevious\(items, prevPlan, draft\);[\s\S]{0,120}setDraft\(\(d\) => \(\{ \.\.\.d, \.\.\.add \}\)\)/,
+    "🔴 кнопка не кладе результат у чернетки (або пише в базу сама)");
+});
+
+// ══ 🔒 ЗАТВЕРДЖЕНИЙ ПЛАН (06.10.2026, зустріч TOP Weekly 05.10) — гейти #1450–#1453b ══════════════════════════════
+// Сергій: «план затверджуємо — і вже ніхто абсолютно не може змінити… реєстр змін окремою кнопкою». Роман: «блокуй
+// лише план»; затверджують поіменно (Сергій, kriptokoval, Роман, Ступаківський), а не роллю.
+
+/**
+ * #1450 — ДОСТУП: вкладка й `edit_finance` — у сиді, матриці й каталозі одним списком (як було), а `approve_finance_plan`
+ * не видається жодній ролі (сид знімає його з усіх) і не читається роутом. У каталозі він лишається на один викат,
+ * позначений «знято» (гейт `#231d` біжить до міграції).
+ * 🧨 Червоніє, якщо повернути видачу права ролі, лишити його в каталозі, або розвести матрицю й сид вкладки.
+ */
+test("#1450 ДОСТУП ФІНАНСІВ: вкладка й edit_finance — одним списком; право «погоджувати роллю» не видається й не читається", () => {
+  const sql = SRC("db/schema.sql");
+  const list = (s: string) => [...s.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort();
+  const row = /path: "\/api\/finance\/month\?m=2026-09", cls: "GET",\s*\n\s*allow: \[([^\]]*)\]/.exec(SRC("auth/accessMatrix.ts"));
+  assert.ok(row, "🔴 рядок матриці для /api/finance/month не знайдено");
+  const inMatrix = [...row[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
+  const seed = /screen_access \|\| '\{"finance":true\}'::jsonb\s*\n\s*WHERE key IN \(([^)]*)\)/.exec(sql);
+  assert.ok(seed, "🔴 сид вкладки `finance` не знайдено");
+  const LEAD = ["admin", "ceo", "financier", "kvp", "opdir"];
+  assert.deepEqual(inMatrix, list(seed[1]), "🔴 матриця й сид вкладки розійшлись");
+  assert.deepEqual(list(seed[1]), LEAD, "🔴 склад вкладки розійшовся з рішенням (бухгалтерія й HR — ні)");
+  const g = /permissions \|\| '\{"edit_finance": true\}'::jsonb\s*\n\s*WHERE key IN \(([^)]*)\)/.exec(sql);
+  const st = /permissions - 'edit_finance'\s*\n\s*WHERE key NOT IN \(([^)]*)\)/.exec(sql);
+  assert.ok(g && st, "🔴 видача або зняття edit_finance не знайдені");
+  assert.deepEqual(list(g[1]), LEAD); assert.deepEqual(list(st[1]), LEAD);
+  assert.match(SRC("auth/permGrant.ts"), /"edit_finance"/);
+  // Ключ у каталозі лишено на один викат (двокрокове зняття, див. коментар у `permGrant.ts`): гейт стверджує, що він там
+  // ПОЗНАЧЕНИЙ як знятий, а не живий.
+  assert.match(SRC("auth/permGrant.ts"), /ЗНЯТО 06\.10\.2026 — ДВОКРОКОВО[\s\S]{0,600}?\*\/\s*"approve_finance_plan",/, "🔴 право в каталозі без позначки «знято»");
+  assert.doesNotMatch(sql, /permissions \|\| '\{"approve_finance_plan"/, "🔴 право погоджувати знову видається ролі");
+  assert.match(sql, /UPDATE roles SET permissions = permissions - 'approve_finance_plan' WHERE permissions \? 'approve_finance_plan';/,
+    "🔴 старе право не знімається з ролей");
+  assert.ok(sql.lastIndexOf("permissions - 'approve_finance_plan'") > sql.lastIndexOf("screen_access = (SELECT screen_access FROM roles WHERE key='admin')"),
+    "🔴 зняття стоїть ВИЩЕ за синк фінансиста — право повернеться копією від адміна");
+  assert.doesNotMatch(SRC("routes/finance.ts"), /approve_finance_plan/, "🔴 роут досі питає право ролі");
+  assert.match(SRC("auth/routeTab.ts"), /pre\("\/api\/finance"\), tabs: \["finance"\]/, "🔴 /api/finance не під вкладкою finance");
+});
+
+/**
+ * #1450b — МЕЖА ПЕРШИМ ОПЕРАТОРОМ: читання — `onlyFinance`, запис — `canEdit`, затвердження — `await canApprove`, а
+ * `canApprove` питає ПОІМЕННИЙ список (`isPlanApprover`), не роль. `canApprove` у відповіді місяця — «можна саме цей»:
+ * людина зі списку І місяць ще не затверджено.
+ * 🧨 Червоніє, якщо межа опуститься нижче, затвердження піде під `canEdit` чи право ролі, або кнопка лишиться на
+ * затвердженому місяці.
+ */
+test("#1450b ДОСТУП ФІНАНСІВ: межа — перший оператор; затвердження — за поіменним списком, а не за роллю", () => {
+  const src = SRC("routes/finance.ts");
+  const all = [...src.matchAll(/financeRouter\.(get|post|patch|put|delete)\(/g)];
+  const parsed = [...src.matchAll(/financeRouter\.(get|post|patch|put|delete)\("([^"]+)", async \(req, res\) => \{\s*try \{\s*([^\n;]+);/g)];
+  assert.equal(parsed.length, all.length, `🔴 розпізнано ${parsed.length} із ${all.length} обробників`);
+  assert.ok(all.length >= 16, `🔴 знайдено лише ${all.length} обробників — гейт нічого не перевіряє`);
+  for (const [, m, p, first] of parsed) {
+    const want = m === "get" ? "onlyFinance(req)" : p === "/approval" ? "await canApprove(req)" : "canEdit(req)";
+    assert.equal(first.trim(), want, `🔴 ${m.toUpperCase()} ${p}: першим стоїть «${first.trim()}»`);
+  }
+  assert.match(src, /async function canApprove\(req: Request\): Promise<void> \{\s*onlyFinance\(req\);\s*if \(!await isPlanApprover\(pool as unknown as Db, req\.auth!\.userId\)\)/,
+    "🔴 canApprove не перевіряє вкладку або поіменний список");
+  assert.match(src, /canApprove: !m\.approval && await isPlanApprover\(/, "🔴 кнопка «Затвердити» лишається на затвердженому місяці або видається не зі списку");
+});
+
+/**
+ * #1451 — ЖИВИЙ SQL: ПЛАН ЗАТВЕРДЖЕНОГО МІСЯЦЯ НЕ ЗМІНЮЄ НІХТО — ні ядро (409, нічого не записано), ні прямий SQL
+ * (тригер `fin_plan_lock`: UPDATE, INSERT, DELETE, перенесення рядка в інший місяць). Дзеркало: факт і коментар того
+ * самого місяця вносяться; план НЕзатвердженого місяця — теж.
+ * 🧨 Червоніє, якщо прибрати тригер або перевірку в `saveValues`, чи замкнути весь місяць разом із фактом.
+ */
+test("#1451 ЖИВИЙ SQL: затверджений план не змінює ніхто — ядро й тригер БД; факт і коментар — вільні", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const fin = await import("./finance.js");
+  const { c, db } = s;
+  const now = new Date("2026-10-10T10:00:00Z");
+  try {
+    const { a, b } = await seedTree(fin, db);
+    await fin.saveValues(db, 901, "2026-10", [{ itemId: a, field: "plan", value: 3000 }, { itemId: b, field: "plan", value: 1000 }], now);
+    await fin.setApproval(db, 901, "2026-10", true);
+    const before = (await c.query(`SELECT item_id, plan::float8 AS p FROM fin_values WHERE month = '2026-10-01' ORDER BY item_id`)).rows;
+
+    await assert.rejects(fin.saveValues(db, 901, "2026-10", [{ itemId: a, field: "fact", value: 100 }, { itemId: a, field: "plan", value: 9999 }], now),
+      (e: unknown) => status(e) === 409 && /погоджено — змінити його не може ніхто/.test((e as Error).message), "🔴 ядро прийняло зміну затвердженого плану");
+    assert.equal(Number((await c.query(`SELECT count(*) n FROM fin_values WHERE fact IS NOT NULL`)).rows[0].n), 0, "🔴 разом із відмовою записався факт");
+
+    const sqlTries: [string, string][] = [
+      ["UPDATE", `UPDATE fin_values SET plan = 1 WHERE item_id = ${a} AND month = '2026-10-01'`],
+      ["DELETE", `DELETE FROM fin_values WHERE item_id = ${b} AND month = '2026-10-01'`],
+      ["перенос", `UPDATE fin_values SET month = '2026-11-01' WHERE item_id = ${a} AND month = '2026-10-01'`],
+      ["TRUNCATE", `TRUNCATE fin_values`],
+    ];
+    for (const [what, q] of sqlTries)
+      await assert.rejects(c.query(q), (e: unknown) => /fin_(plan|approval)_locked/.test((e as Error).message), `🔴 БД пропустила ${what} затвердженого плану`);
+    const c2 = await fin.createItem(db, 901, { groupId: (await c.query(`SELECT group_id FROM fin_items WHERE id = $1`, [a])).rows[0].group_id, name: "Нова стаття" });
+    await assert.rejects(c.query(`INSERT INTO fin_values (item_id, month, plan) VALUES (${c2}, '2026-10-01', 500)`),
+      (e: unknown) => /fin_plan_locked/.test((e as Error).message), "🔴 БД пропустила новий рядок у затверджений план");
+    assert.deepEqual((await c.query(`SELECT item_id, plan::float8 AS p FROM fin_values WHERE month = '2026-10-01' ORDER BY item_id`)).rows, before,
+      "🔴 затверджений план змінився");
+
+    // Дзеркало: факт, коментар, і план іншого місяця — вільні (інакше «замок» означав би мертвий розділ).
+    assert.deepEqual(await fin.saveValues(db, 901, "2026-10", [{ itemId: a, field: "fact", value: 2500 }, { itemId: c2, field: "fact", value: 10 }], now), { changed: 2 });
+    await fin.setNote(db, 901, a, "2026-10", "перевитрат немає");
+    assert.deepEqual(await fin.saveValues(db, 901, "2026-11", [{ itemId: a, field: "plan", value: 3100 }], now), { changed: 1 }, "🔴 замкнувся не той місяць");
+    await c.query(`UPDATE fin_values SET fact = 2600 WHERE item_id = ${a} AND month = '2026-10-01'`);
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1451b — ЖИВИЙ SQL: ЗАТВЕРДЖЕННЯ НЕЗВОРОТНЕ, і сума затвердженого плану не рухається через статті. «Зняти» — 409 у ядрі
+ * й заборона в БД (DELETE/UPDATE/TRUNCATE); видалити чи «Повернути» статтю (групу) з планом у затвердженому місяці — 409;
+ * стаття без плану там — видаляється, як і раніше (дзеркало).
+ * 🧨 Червоніє, якщо повернути «Зняти погодження», прибрати тригер на погодженнях або охорону видалення.
+ */
+test("#1451b ЖИВИЙ SQL: затвердження незворотне; стаття з затвердженим планом не видаляється й не повертається", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const fin = await import("./finance.js");
+  const { c, db } = s;
+  const now = new Date("2026-10-10T10:00:00Z");
+  try {
+    const { g, a, b } = await seedTree(fin, db);
+    const free = await fin.createItem(db, 901, { groupId: g, name: "Без плану" });
+    await fin.saveValues(db, 901, "2026-10", [{ itemId: a, field: "plan", value: 3000 }], now);
+    await fin.deleteItem(db, 901, b, false);   // видалена ДО затвердження — у сумі її немає
+    await fin.saveValues(db, 901, "2026-09", [{ itemId: a, field: "plan", value: 1 }], now);
+    await fin.setApproval(db, 901, "2026-10", true);
+    const total = async () => (await fin.loadMonth(db, "2026-10", now)).totals.plan;
+    const t0 = await total();
+
+    await assert.rejects(fin.setApproval(db, 901, "2026-10", false), (e: unknown) => status(e) === 409, "🔴 затвердження знімається");
+    await assert.rejects(fin.setApproval(db, 901, "2026-10", true), (e: unknown) => status(e) === 409, "🔴 повторне затвердження перезаписало автора");
+    for (const q of [`DELETE FROM fin_plan_approvals`, `UPDATE fin_plan_approvals SET approved_by = NULL`, `TRUNCATE fin_plan_approvals`])
+      await assert.rejects(c.query(q), (e: unknown) => /fin_approval_locked/.test((e as Error).message), `🔴 БД дозволила: ${q}`);
+    assert.ok((await fin.loadMonth(db, "2026-10", now)).approval, "🔴 затвердження зникло");
+
+    await assert.rejects(fin.deleteItem(db, 901, a, true), (e: unknown) => status(e) === 409 && /10\.2026/.test((e as Error).message),
+      "🔴 стаття з затвердженим планом видаляється");
+    await assert.rejects(fin.deleteGroup(db, 901, g, true), (e: unknown) => status(e) === 409, "🔴 група зі статтею затвердженого плану видаляється");
+    // Дзеркало: стаття, видалена до затвердження й БЕЗ плану в затвердженому місяці, повертається як і раніше.
+    await fin.restore(db, 901, "item", b);
+    await fin.deleteItem(db, 901, free, false);   // дзеркало: без плану в затвердженому місяці — можна
+    assert.equal(await total(), t0, "🔴 сума затвердженого плану змінилась через статті");
+
+    // Стаття з планом саме в затвердженому місяці, видалена до затвердження: «Повернути» — 409.
+    const late = await fin.createItem(db, 901, { groupId: g, name: "Пізня" });
+    await c.query(`ALTER TABLE fin_values DISABLE TRIGGER fin_values_plan_lock`);   // фікстура: план «заднім числом»
+    await c.query(`INSERT INTO fin_values (item_id, month, plan) VALUES (${late}, '2026-10-01', 777)`);
+    await c.query(`ALTER TABLE fin_values ENABLE TRIGGER fin_values_plan_lock`);
+    await c.query(`UPDATE fin_items SET deleted_at = now() WHERE id = ${late}`);
+    await assert.rejects(fin.restore(db, 901, "item", late), (e: unknown) => status(e) === 409, "🔴 «Повернути» додало суму до затвердженого плану");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1452 — ЖИВИЙ SQL: ЗАТВЕРДЖУЄ ЛИШЕ ЛЮДИНА ЗІ СПИСКУ. Адмін, якого в списку немає, — ні; людина зі списку — так
+ * (дзеркало). Сід списку РАЗОВИЙ: прибрану SQL-ом людину повторна міграція не повертає («прибрану людину повторна міграція не повертає»).
+ * 🧨 Червоніє, якщо затвердження знову піде за роллю, або сід стане постійним (кожен викат повертав би прибраного).
+ */
+test("#1452 ЖИВИЙ SQL: затверджує лише людина зі списку; прибрана зі списку не повертається міграцією", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const fin = await import("./finance.js");
+  const { c, db } = s;
+  try {
+    assert.equal(Number((await c.query(`SELECT count(*) n FROM fin_plan_approvers`)).rows[0].n), 0, "на свіжій базі цих людей немає — список порожній");
+    for (const id of [1, 17, 50, 99])
+      await c.query(`INSERT INTO users (id, email, password_hash, role, is_active) VALUES ($1, $2, 'x', 'admin', true)`, [id, `u${id}@test`]);
+    const schema = readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8");
+    await c.query(schema);
+    const ids = async () => (await c.query(`SELECT user_id FROM fin_plan_approvers ORDER BY 1`)).rows.map((r) => r.user_id);
+    assert.deepEqual(await ids(), [1, 17, 50, 99], "🔴 сід не дав рішення Романа");
+    assert.equal(await fin.isPlanApprover(db, 99), true, "🔴 людина зі списку не може затвердити");
+    assert.equal(await fin.isPlanApprover(db, 901), false, "🔴 адмін поза списком може затвердити — затвердження знову за роллю");
+    await c.query(`DELETE FROM fin_plan_approvers WHERE user_id = 99`);
+    await c.query(schema);
+    assert.deepEqual(await ids(), [1, 17, 50], "🔴 повторна міграція повернула прибрану людину");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1453 — ЖИВИЙ SQL: РЕЄСТР ЗМІН. За місяць — записи про нього (цифри «було → стало», коментар, затвердження) і зміни
+ * статей, зроблені протягом нього; нові згори, з автором. «Усі» — і інші місяці. Записи іншого місяця в місячний не течуть.
+ * 🧨 Червоніє, якщо загубити затвердження чи автора, переплутати порядок або змішати місяці.
+ */
+test("#1453 ЖИВИЙ SQL: реєстр змін — записи місяця з автором, нові згори; затвердження в реєстрі; місяці не змішуються", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const fin = await import("./finance.js");
+  const { c, db } = s;
+  const now = new Date("2026-10-10T10:00:00Z");
+  try {
+    await c.query(`UPDATE users SET full_name = 'Тест Автор' WHERE id = 901`);
+    const { a } = await seedTree(fin, db);
+    await fin.saveValues(db, 901, "2026-10", [{ itemId: a, field: "plan", value: 3000 }], now);
+    await fin.saveValues(db, 901, "2026-09", [{ itemId: a, field: "plan", value: 1 }], now);
+    await fin.setApproval(db, 901, "2026-10", true);
+    await fin.saveValues(db, 901, "2026-10", [{ itemId: a, field: "fact", value: 100 }], now);
+    const oct = await fin.listLog(db, "2026-10");
+    assert.ok(oct.length >= 3, `🔴 у реєстрі місяця ${oct.length} записів`);
+    assert.match(oct[0].what, /^Факт 10\.2026: — → 100/, "🔴 найновіший запис не перший");
+    assert.ok(oct.some((r) => r.kind === "month" && /погоджено/.test(r.what)), "🔴 затвердження не видно в реєстрі");
+    assert.ok(oct.every((r) => r.actor === "Тест Автор"), "🔴 у записі немає автора");
+    assert.ok(oct.filter((r) => r.month).every((r) => r.month === "2026-10"), "🔴 у реєстр жовтня потрапив інший місяць");
+    assert.equal(oct.find((r) => r.field === "plan")?.target, "Team Building", "🔴 у записі не видно, яка стаття");
+    const all = await fin.listLog(db, null);
+    assert.ok(all.some((r) => r.month === "2026-09"), "🔴 «усі» не показують інших місяців");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1453b — ФРОНТ: клітинка плану затвердженого місяця — лише читання; «Взяти план попереднього місяця» сховано;
+ * «Зняти погодження» немає взагалі; кнопка «Реєстр змін» відкриває реєстр, що питає сервер.
+ * 🧨 Червоніє, якщо повернути поле вводу плану на затвердженому місяці, кнопку «Зняти» або прибрати реєстр.
+ */
+test("#1453b ФРОНТ ФІНАНСІВ: затверджений план — лише читання, «Зняти» немає, є «Реєстр змін»", () => {
+  const sec = FE("pages/dashboard/sections/FinanceSection.tsx");
+  assert.match(sec, /if \(f === "plan" && planLocked\) return <span/, "🔴 поле плану редагується на затвердженому місяці");
+  assert.match(sec, /const planLocked = !!data\.approval;/);
+  assert.match(sec, /\{planLocked\s*\?\s*<span[^>]*>🔒 план затверджено — вноситься лише факт<\/span>\s*:\s*<button[^>]*onClick=\{\(\) => void takePrevPlan\(\)\}/,
+    "🔴 «Взяти план попереднього місяця» доступне на затвердженому місяці");
+  assert.doesNotMatch(sec, /Зняти погодження|setFinApproval\([^)]*,\s*(false|on)\)/, "🔴 повернулось «Зняти погодження»");
+  assert.match(sec, /onClick=\{\(\) => setLogOpen\(true\)\}>📜 Реєстр змін<\/button>/, "🔴 немає кнопки «Реєстр змін»");
+  assert.match(sec, /\{logOpen && <LogModal month=\{month\}/, "🔴 реєстр не відкривається");
+  assert.match(sec, /fetchFinLog\(all \? undefined : month\.slice\(0, 7\)\)/, "🔴 реєстр не питає сервер");
+  assert.match(FE("api.ts"), /api\.get<\{ rows: FinLogRow\[\] \}>\("\/finance\/log"/);
+});
+

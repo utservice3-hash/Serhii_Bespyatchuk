@@ -59,6 +59,7 @@ import { getAuthPayload } from "../auth";
 import { currentMonth, formatAmount, formatAmountFull, previousRange, getRank, presence } from "./dashboard/format";
 import { STAGE_LABELS, STAGE_ORDER } from "./dashboard/constants";
 import StatisticsChartsSection from "./dashboard/sections/StatisticsChartsSection";
+import AdsPage from "./dashboard/sections/AdsPage";
 import SettingsSection from "./dashboard/sections/SettingsSection";
 import { LeadgenSection } from "./dashboard/sections/LeadgenSection";
 import { MissedCallsSection } from "./dashboard/sections/MissedCallsSection";
@@ -67,6 +68,8 @@ import { CarrierCallsSection } from "./dashboard/sections/CarrierCallsSection";
 import { HiringSection } from "./dashboard/sections/HiringSection";
 import { BusinessAssistantSection } from "./dashboard/sections/BusinessAssistantSection";
 import { FinanceSection } from "./dashboard/sections/FinanceSection";
+import { ConstructorSection } from "./dashboard/sections/ConstructorSection";
+import { SurveysSection } from "./dashboard/sections/SurveysSection";
 import { NominationsSection } from "./dashboard/sections/NominationsSection";
 import BankSection from "./dashboard/sections/BankSection";
 import { emptyTaskForm } from "./dashboard/taskForm";
@@ -204,6 +207,19 @@ export function Dashboard() {
   const mountedAt = useRef(Date.now());
   const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
   const [managerOptions, setManagerOptions] = useState<ManagerOption[]>([]);
+  /**
+   * 🔴 ПОМИЛКА НЕ СТИРАЄ СПИСОК (відгук Шаврової 05.10.2026: селект виконавця — лише «—»).
+   * Список тягнуть ДВА ефекти паралельно, і кожен мав `.catch(() => setManagerOptions([]))`:
+   * упав будь-який — і він затирав порожнечею те, що інший щойно приніс. Тепер помилка
+   * лише піднімає прапорець (форма каже це словами й дає «Повторити»), а отриманий список
+   * лишається. Тримає `#494`.
+   */
+  const [managerOptionsFailed, setManagerOptionsFailed] = useState(false);
+  const loadManagerOptions = useCallback(() => {
+    fetchManagerOptions()
+      .then((m) => { setManagerOptions(m); setManagerOptionsFailed(false); })
+      .catch(() => setManagerOptionsFailed(true));
+  }, []);
   const [taskSearch, setTaskSearch] = useState("");
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [taskForm, setTaskForm] = useState(emptyTaskForm);
@@ -327,8 +343,8 @@ export function Dashboard() {
     // dropdown populated (used by task assignment and other sections).
     // 🔓 Гард `role === "manager" → return` знято 16.09.2026: саме він лишав
     // менеджера з порожнім селектом виконавця (сервер тепер віддає список усім).
-    fetchManagerOptions().then(setManagerOptions).catch(() => setManagerOptions([]));
-  }, [auth, refreshNonce]);
+    loadManagerOptions();
+  }, [auth, refreshNonce, loadManagerOptions]);
 
   useEffect(() => {
     if (section !== "tasks") return;
@@ -337,8 +353,8 @@ export function Dashboard() {
       .then((t) => { setTasks(t); setTasksLoadFailed(false); })
       .catch(() => { setTasks([]); setTasksLoadFailed(true); })
       .finally(() => setTasksLoading(false));
-    fetchManagerOptions().then(setManagerOptions).catch(() => setManagerOptions([]));
-  }, [section]);
+    loadManagerOptions();
+  }, [section, loadManagerOptions]);
 
   // Ask for notification permission once, and poll tasks in the background (any
   // section) so status-change alerts still fire when you're elsewhere.
@@ -1065,15 +1081,11 @@ export function Dashboard() {
 
       {section === "dataquality" && (auth?.role === "admin" || auth?.role === "team_lead") && <DataQualitySection />}
 
-      {section === "statistics" && (
-        /* 📣 Вкладка «Реклама» всередині Статистик тримає ВЛАСНИЙ період, як Звіт, —
-           тому спільний `dateRange` сюди більше не їде взагалі, і це рішення, а не
-           спрощення. Саме спільний період і зламав екран: його ставлять на Звіті чи
-           Огляді, він переживає перезавантаження в `localStorage`, і «Реклама»
-           відкривалась із 14.07–14.07, привезеним із чужого екрана (заміряно на проді:
-           у смузі днів був рівно один день). Видимість вкладки — ключ `ads` зі `screens`. */
-        <StatisticsChartsSection role={auth?.role} screens={screens} />
-      )}
+      {section === "statistics" && <StatisticsChartsSection role={auth?.role} />}
+      {/* 📣 «Реклама» — окремий розділ меню (ТЗ Статистик 28.09, блок 4, п.6). Період ВЛАСНИЙ (усередині
+          AdsPage), спільний `dateRange` сюди не їде: саме він колись відкривав екран із 14.07–14.07.
+          Видимість — ключ `ads` у screen_access, як і була. */}
+      {section === "ads" && <AdsPage role={auth?.role} />}
       {section === "bank" && <BankSection />}
 
       {section === "teams" && auth?.role !== "manager" && (
@@ -1140,6 +1152,10 @@ export function Dashboard() {
          */
         <FinanceSection />
       )}
+
+      {/* 📄 Конструктор документів (30.09.2026, пакет Сергія). Статичний імпорт — гейт #225. Доступ вирішує сервер. */}
+      {section === "constructor" && <ConstructorSection />}
+      {section === "surveys" && <SurveysSection />}
 
       {section === "ba" && (
         /**
@@ -1215,6 +1231,7 @@ export function Dashboard() {
       {section === "settings" && (
         <SettingsSection
           role={auth?.role}
+          roleKey={auth?.roleKey}
           teams={teams}
           syncStatus={syncStatus}
           syncing={syncing}
@@ -1532,6 +1549,8 @@ export function Dashboard() {
           tasksLoadFailed={tasksLoadFailed}
           tasks={tasks}
           managerOptions={managerOptions}
+          managerOptionsFailed={managerOptionsFailed}
+          onReloadManagerOptions={loadManagerOptions}
           patchTaskLocal={patchTaskLocal}
           commitTask={commitTask}
           handleDeleteTask={handleDeleteTask}

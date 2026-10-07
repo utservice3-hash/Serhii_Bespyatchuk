@@ -21,7 +21,13 @@ import { OUTBOUND_TYPES_FOR_PROMISE, promiseOutcome, type OutboundCall } from ".
  * межах 2 год після терміну — «запізнився» (жовтий), а «не передзвонив» — лише коли до терміну + 2 год
  * нашого дзвінка не було зовсім.
  * 🔄 СИНК RINGOSTAT ІДЕ РАЗ НА ~30 ХВ: дзвінок 10 хв тому ще може не лежати в базі. Тож «не передзвонив» —
- * лише коли дзвінки вже синхронізовано за межу `термін + 2 год` (`knownUntil`), інакше — «чекає».
+ * лише коли дзвінки вже синхронізовано за межу терміну (`knownUntil`), інакше — «чекає».
+ *
+ * 🔁 ТЗ «ЗВІТ ТІМЛІДА» 30.09.2026 (відповіді Романа) ЗАМІНИЛО ДВА ПРАВИЛА ВИЩЕ:
+ *   ① виконання — лише дзвінок ТОГО, ХТО ОБІЦЯВ (варіант А; П6-Б «колега рахується» скасовано). Замір 30.09:
+ *     117 із 126 перших передзвонів — той самий менеджер, 6 — інша команда, 2 — колега з команди;
+ *   ② «запізнився» — БЕЗ МЕЖІ: дзвінок того, хто обіцяв, будь-коли після терміну; «не передзвонив» — поки такого
+ *     дзвінка немає зовсім (межу 2 год знято).
  */
 
 export type PromiseChannel = "call" | "message" | "other";
@@ -93,38 +99,62 @@ export function promiseDeadline(p: Pick<ModelPromise, "deadline_kind" | "deadlin
 }
 
 /**
- * Стан однієї обіцянки. Порядок важить: месенджер не перевіряється взагалі; наш вихідний до терміну —
- * виконано (колега теж рахується); клієнт подзвонив сам — окремий стан, а не «передзвонив»; далі —
- * чекає строку або не передзвонив.
+ * 🎛 ДО ЯКОЇ МИТІ ПЕРЕДЗВІН ЗАРАХОВУЄТЬСЯ (05.10.2026). Обіцяний термін не змінюється — його показуємо як є; а
+ * зараховуємо до `max(обіцяне, кінець розмови + мінімальний дедлайн) + допуск`. Мінімум — лише для обіцянок у
+ * хвилинах (названих чи «20 хв за замовчуванням»): «сьогодні», «завтра» й умовна і так тягнуться до кінця дня.
+ * Нулі = поточна поведінка: зараховується рівно до обіцяного.
  */
-export type PromiseState = "kept_talk" | "kept_attempt_only" | "client_called" | "late" | "pending" | "broken" | "unverifiable";
+export function countingDeadline(deadline: Date, basis: DeadlineBasis, callEnd: Date,
+  t: { callbackGraceMin: number; callbackMinDeadlineMin: number }): Date {
+  const minute = basis === "minutes" || basis === "default_minutes";
+  const floor = minute ? callEnd.getTime() + t.callbackMinDeadlineMin * 60_000 : -Infinity;
+  return new Date(Math.max(deadline.getTime(), floor) + t.callbackGraceMin * 60_000);
+}
 
-/** Скільки після терміну наш дзвінок ще «запізнився», а не «не передзвонив» (Роман 29.09.2026). */
-export const LATE_GRACE_MIN = 120;
+/**
+ * Стан однієї обіцянки. Порядок важить: месенджер не перевіряється взагалі; вихідний ТОГО, ХТО ОБІЦЯВ, до
+ * терміну — виконано; клієнт подзвонив сам — окремий стан, а не «передзвонив»; його ж вихідний після терміну —
+ * «запізнився»; далі — чекає строку або не передзвонив.
+ */
+export type PromiseState = "kept_talk" | "kept_attempt_only" | "kept_offline" | "client_called" | "late" | "pending" | "broken" | "unverifiable";
 
-export interface CallFact { at: Date; billsec: number; callType: string }
+/** Хто дзвонив — менеджер Ringostat (`null` — лінія без привʼязаного менеджера). */
+export interface CallFact { at: Date; billsec: number; callType: string; managerId?: number | null }
 
 const IN_TYPES = new Set(["in", "transitin"]);
 
 /**
  * `knownUntil` — до якої миті дзвінки Ringostat уже є в базі: пізніше з «зараз» і останнього успішного синку.
- * Поки він не перейшов межу `термін + 2 год`, відсутність дзвінка ще нічого не доводить.
+ * Поки він не перейшов термін, відсутність дзвінка ще нічого не доводить.
+ * `promiserId` — менеджер, що обіцяв: рахуються лише ЙОГО вихідні (рішення 30.09.2026). Невідомий менеджер
+ * (`null`) — приписати дзвінок нікому не можна, тож рахується будь-який наш вихідний.
  */
-export function promiseState(p: Pick<ModelPromise, "channel">, madeAt: Date, deadline: Date, calls: readonly CallFact[], knownUntil: Date): PromiseState {
+export function promiseState(p: Pick<ModelPromise, "channel">, madeAt: Date, deadline: Date, calls: readonly CallFact[], knownUntil: Date,
+  promiserId: number | null = null): PromiseState {
   if (p.channel !== "call") return "unverifiable";
-  const outbound: OutboundCall[] = calls.filter((c) => (OUTBOUND_TYPES_FOR_PROMISE as readonly string[]).includes(c.callType));
+  const outbound: OutboundCall[] = calls.filter((c) => (OUTBOUND_TYPES_FOR_PROMISE as readonly string[]).includes(c.callType)
+    && (promiserId == null || c.managerId === promiserId));
   const ours = promiseOutcome({ madeAt, deadline }, outbound, knownUntil);
   if (ours === "kept_talk" || ours === "kept_attempt_only") return ours;
   const clientTalk = calls.some((c) => IN_TYPES.has(c.callType) && c.billsec > 0
     && c.at.getTime() > madeAt.getTime() && c.at.getTime() <= deadline.getTime());
   if (clientTalk) return "client_called";
-  const graceEnd = deadline.getTime() + LATE_GRACE_MIN * 60_000;
-  if (outbound.some((c) => c.at.getTime() > deadline.getTime() && c.at.getTime() <= graceEnd)) return "late";
-  return knownUntil.getTime() < graceEnd ? "pending" : "broken";
+  if (outbound.some((c) => c.at.getTime() > deadline.getTime() && c.at.getTime() <= knownUntil.getTime())) return "late";
+  return knownUntil.getTime() < deadline.getTime() ? "pending" : "broken";
+}
+
+/**
+ * 📞 ПЕРЕДЗВОНИВ ПОЗА ТЕЛЕФОНІЄЮ (01.10.2026). Ringostat бачить лише свої лінії; передзвін з мобільного чи в месенджер
+ * для нього не існує. Ручна позначка (менеджер свої, тімлід, адмін) переводить «немає дзвінка» й «запізнився» у
+ * виконане. На «передзвонив» (уже з телефонії) та «не перевіряється» не впливає — там нічого виправляти.
+ */
+export function withOfflineMark(state: PromiseState | null, offlineMarked: boolean): PromiseState | null {
+  if (!offlineMarked || state == null) return state;
+  return state === "broken" || state === "late" || state === "pending" ? "kept_offline" : state;
 }
 
 /** Стан рядка — найгірший серед обіцянок менеджера. `null` — обіцянок менеджера немає. */
-const RANK: PromiseState[] = ["broken", "late", "pending", "kept_attempt_only", "client_called", "kept_talk", "unverifiable"];
+const RANK: PromiseState[] = ["broken", "late", "pending", "kept_attempt_only", "client_called", "kept_offline", "kept_talk", "unverifiable"];
 export function worstPromiseState(states: readonly PromiseState[]): PromiseState | null {
   for (const s of RANK) if (states.includes(s)) return s;
   return null;

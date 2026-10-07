@@ -5,8 +5,10 @@ import {
   fetchRoles, createRole, updateRole, deleteRole, type RoleDef,
   fetchAudit, type AuditEntry,
   type Team, type SyncStatus, setWorkState,
-  fetchTeamOverrides, setTeamOverride, createDashboardTeam, type TeamOverridesPayload } from "../../../api";
+  fetchTeamOverrides, setTeamOverride, setTeamMoveDate, createDashboardTeam, type TeamOverridesPayload } from "../../../api";
 import { NAV_GROUPS } from "../../../components/Layout";
+import { todayKyiv } from "../periodRules";
+import { FirstTouchSettingsCard } from "./FirstTouchSettingsCard";
 
 // Усі вкладки (ключ+назва) — беремо з реальної навігації, щоб screen_access-редактор
 // точно збігався з тим, що гейтить сервер.
@@ -82,8 +84,10 @@ function Toggle({ on, disabled, onClick }: { on: boolean; disabled?: boolean; on
   );
 }
 
-export default function SettingsSection({ role, teams, syncStatus, syncing, onManualSync }: {
+export default function SettingsSection({ role, roleKey, teams, syncStatus, syncing, onManualSync }: {
   role?: string;
+  /** Ключ ролі (не сумісна `role`: у CEO й опдира вона теж «admin»). Для блоків «лише адмін». */
+  roleKey?: string;
   teams: Team[];
   syncStatus: SyncStatus | null;
   syncing: boolean;
@@ -114,6 +118,7 @@ export default function SettingsSection({ role, teams, syncStatus, syncing, onMa
       </div>
 
       {sub === "Загальні" && <GeneralTab syncStatus={syncStatus} syncing={syncing} onManualSync={onManualSync} canSync={role === "admin" || role === "team_lead"} />}
+      {sub === "Загальні" && roleKey === "admin" && <FirstTouchSettingsCard />}
       {sub === "Користувачі" && <UsersTab teams={teams} isAdminUx={isAdminUx} />}
       {sub === "Команди" && <TeamsTab isAdminUx={isAdminUx} />}
       {sub === "Ролі та доступи" && <RolesTab />}
@@ -123,15 +128,32 @@ export default function SettingsSection({ role, teams, syncStatus, syncing, onMa
   );
 }
 
+/** Заголовок широкої таблиці: відступ між колонками й без переносу посеред слова («АКТИВНИЙСТАН»). */
+const TH: React.CSSProperties = { whiteSpace: "nowrap", paddingRight: 14 };
+
 // ─────────────────────────── Команди ────────────────
+/** `YYYY-MM-DD` → `DD.MM.YYYY`. */
+const fmtDay = (ymd: string) => `${ymd.slice(8, 10)}.${ymd.slice(5, 7)}.${ymd.slice(0, 4)}`;
 /**
  * 🧭 Команда менеджера в дашборді = Kommo-група, і синк переписує її кожні 30 хв.
  * Тут — перевизначення, яке синк читає (core/teamOverride.ts): «з CRM» / конкретна
  * команда / примусово без команди. Так «архівується» група: її люди виходять із неї,
  * порожня команда зникає зі списків сама. Скасовується тим самим перемикачем.
+ *
+ * 🔀 «Діє з» (задача 4892): зміна команди рахується з цієї дати; усе, що людина зробила
+ * до неї, лишається в старій команді — у звітах, планах і статистиках.
+ *
+ * 🗓 ДАТА — У ВІКОНЦІ, А НЕ НАД ТАБЛИЦЕЮ (05.10.2026). Було: окреме поле «діє з» над таблицею й
+ * миттєве збереження на виборі в рядку — тож записувалось «сьогодні», хто б що не мав на увазі
+ * (так Хомік стала «без команди з 05.10» замість 01.10). Тепер вибір у рядку лише ВІДКРИВАЄ
+ * віконце з датою; зберігає тільки кнопка. Помилкову дату останнього переходу виправляє
+ * «змінити дату» в колонці «Перехід».
  */
+type OverrideRow = TeamOverridesPayload["managers"][number];
+type PendingChange = { r: OverrideRow; kind: "move"; value: string } | { r: OverrideRow; kind: "redate" };
 function TeamsTab({ isAdminUx }: { isAdminUx: boolean }) {
   const [data, setData] = useState<TeamOverridesPayload | null>(null);
+  const [pending, setPending] = useState<PendingChange | null>(null);
   const [newTeam, setNewTeam] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -139,16 +161,30 @@ function TeamsTab({ isAdminUx }: { isAdminUx: boolean }) {
   useEffect(() => { reload(); }, []);
   if (!data) return <p className="loading-text">{msg ?? "Завантаження…"}</p>;
   const teamName = (id: number | null) => id == null ? "без команди" : (data.teams.find((t) => t.id === id)?.name ?? `Команда #${id}`);
-  const valueOf = (r: TeamOverridesPayload["managers"][number]) =>
+  const valueOf = (r: OverrideRow) =>
     r.override == null ? "crm" : r.override.teamId == null ? "none" : `team:${r.override.teamId}`;
-  const change = async (r: TeamOverridesPayload["managers"][number], v: string) => {
+  const valueLabel = (v: string) => v === "crm" ? "з CRM" : v === "none" ? "без команди" : teamName(Number(v.slice(5)));
+  /** Зберегти з віконця. Помилку кидає далі — віконце показує її в собі й лишається відкритим. */
+  const save = async (p: PendingChange, day: string, note: string) => {
+    const r = p.r;
     setBusy(r.kommoUserId); setMsg(null);
     try {
-      const body = v === "crm" ? { mode: "crm" as const } : v === "none" ? { mode: "none" as const } : { mode: "team" as const, teamId: Number(v.slice(5)) };
-      const res = await setTeamOverride(r.kommoUserId, body);
-      setMsg(res.appliedNow ? `${r.name}: застосовано одразу` : `${r.name}: група з CRM повернеться наступним тіком синку (до 30 хв)`);
+      if (p.kind === "redate") {
+        const res = await setTeamMoveDate(r.managerId, day);
+        setMsg(res.changed ? `${r.name}: дату переходу змінено ${fmtDay(res.oldFrom ?? day)} → ${fmtDay(res.effectiveFrom)}` : `${r.name}: дата та сама — нічого не змінено`);
+      } else {
+        const v = p.value;
+        const body = v === "crm" ? { mode: "crm" as const }
+          : v === "none" ? { mode: "none" as const, effectiveFrom: day, note: note || undefined }
+          : { mode: "team" as const, teamId: Number(v.slice(5)), effectiveFrom: day, note: note || undefined };
+        const res = await setTeamOverride(r.kommoUserId, body);
+        setMsg(res.appliedNow
+          ? `${r.name}: застосовано з ${fmtDay(res.effectiveFrom ?? day)} — до цієї дати результати лишаються в попередній команді`
+          : `${r.name}: група з CRM повернеться наступним тіком синку (до 30 хв), перехід — з дня, коли синк її побачить`);
+      }
+      setPending(null);
       await reload();
-    } catch (e) { setMsg(err(e)); } finally { setBusy(null); }
+    } finally { setBusy(null); }
   };
   const addTeam = async () => {
     const name = newTeam.trim(); if (!name) return;
@@ -187,27 +223,103 @@ function TeamsTab({ isAdminUx }: { isAdminUx: boolean }) {
         <h2 className="chart-title">Команда менеджера в дашборді</h2>
         <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 0 }}>
           «з CRM» — як у Kommo-групі. Інше значення <b>бʼє</b> групу з CRM і переживає синк. Перевизначено зараз: <b>{overridden.length}</b>.
+          Зміна команди діє <b>з дати</b>, яку ви оберете у віконці після вибору: усе, що людина зробила раніше, лишається в попередній команді (звіти, плани, статистики).
         </p>
         {msg && <p style={{ fontSize: 12.5, color: "#2f6fdb" }}>{msg}</p>}
         <table className="data-table">
-          <thead><tr><th>ПІБ</th><th>КОМАНДА ЗАРАЗ</th><th>У ДАШБОРДІ</th><th>ПРИМІТКА</th></tr></thead>
+          <thead><tr><th>ПІБ</th><th>КОМАНДА ЗАРАЗ</th><th>У ДАШБОРДІ</th><th>ПЕРЕХІД</th><th>ПРИМІТКА</th></tr></thead>
           <tbody>
             {data.managers.map((r) => (
               <tr key={r.kommoUserId} style={r.override ? { background: "rgba(47,111,219,0.06)" } : undefined}>
                 <td>{r.name}</td>
                 <td>{teamName(r.teamId)}</td>
                 <td>
-                  <select value={valueOf(r)} disabled={!isAdminUx || busy === r.kommoUserId} onChange={(e) => change(r, e.target.value)}>
+                  <select value={valueOf(r)} disabled={!isAdminUx || busy === r.kommoUserId}
+                    onChange={(e) => { if (e.target.value !== valueOf(r)) setPending({ r, kind: "move", value: e.target.value }); }}>
                     <option value="crm">з CRM</option>
                     <option value="none">без команди (примусово)</option>
                     {data.teams.map((t) => <option key={t.id} value={`team:${t.id}`}>{t.name}</option>)}
                   </select>
+                </td>
+                <td style={{ fontSize: 12 }}>
+                  {r.lastMove ? `з ${fmtDay(r.lastMove.effectiveFrom)}: ${teamName(r.lastMove.fromTeamId)} → ${teamName(r.lastMove.toTeamId)}` : "—"}
+                  {r.lastMove && isAdminUx && (
+                    <button className="btn" style={{ marginLeft: 8, padding: "1px 8px", fontSize: 11.5 }} disabled={busy === r.kommoUserId}
+                      onClick={() => setPending({ r, kind: "redate" })}>змінити дату</button>
+                  )}
                 </td>
                 <td style={{ fontSize: 12, color: "var(--text-muted)" }}>{r.override?.note ?? ""}</td>
               </tr>
             ))}
           </tbody>
         </table>
+      </div>
+      {pending && <TeamMoveDialog p={pending} teamName={teamName} valueLabel={valueLabel} onClose={() => setPending(null)} onSave={save} />}
+    </div>
+  );
+}
+
+/**
+ * Віконце зміни команди / дати переходу. Дата за замовчуванням — сьогодні (для «змінити дату» —
+ * поточна дата переходу), але її видно й треба підтвердити кнопкою: миттєвого збереження немає.
+ */
+function TeamMoveDialog({ p, teamName, valueLabel, onClose, onSave }: {
+  p: PendingChange; teamName: (id: number | null) => string; valueLabel: (v: string) => string;
+  onClose: () => void; onSave: (p: PendingChange, day: string, note: string) => Promise<void>;
+}) {
+  const today = todayKyiv();
+  const last = p.r.lastMove;
+  const [day, setDay] = useState(p.kind === "redate" && last ? last.effectiveFrom : today);
+  const [note, setNote] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const isCrm = p.kind === "move" && p.value === "crm";
+  const submit = async () => {
+    if (!isCrm && (!day || day > today)) { setError("Оберіть дату не пізніше сьогодні"); return; }
+    setSaving(true); setError(null);
+    try { await onSave(p, day, note.trim()); } catch (e) { setError(err(e)); } finally { setSaving(false); }
+  };
+  const title = p.kind === "redate" ? `Дата переходу · ${p.r.name}` : `Змінити команду · ${p.r.name}`;
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2700, padding: 16 }} onClick={onClose}>
+      <div role="dialog" aria-label={title} onClick={(e) => e.stopPropagation()}
+        style={{ background: "var(--card-bg, var(--bg, #fff))", color: "var(--text)", borderRadius: 12, padding: 18, width: "min(460px, 100%)", boxShadow: "0 10px 40px rgba(0,0,0,.3)" }}>
+        <h3 style={{ margin: "0 0 10px", fontSize: 16 }}>{title}</h3>
+        {p.kind === "redate" && last ? (
+          <p style={{ fontSize: 13, margin: "0 0 10px" }}>
+            Перехід <b>{teamName(last.fromTeamId)} → {teamName(last.toTeamId)}</b>, зараз діє з <b>{fmtDay(last.effectiveFrom)}</b>.
+            До нової дати людина рахуватиметься в «{teamName(last.fromTeamId)}».
+          </p>
+        ) : (
+          <p style={{ fontSize: 13, margin: "0 0 10px" }}>
+            <b>{teamName(p.r.teamId)}</b> → <b>{p.kind === "move" ? valueLabel(p.value) : ""}</b>
+          </p>
+        )}
+        {isCrm ? (
+          <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "0 0 10px" }}>
+            «з CRM» прибирає ручне значення: команду знову визначає група в Kommo (до 30 хв). Якщо в Kommo людина в старій
+            команді — щойно записаний перехід цього дня скасується; якщо в іншій — перехід запишеться з дня, коли синк її побачить.
+          </p>
+        ) : (
+          <>
+            <L label={p.kind === "redate" ? "ПЕРЕХІД ДІЄ З" : "ЗМІНА КОМАНДИ ДІЄ З"}>
+              <input type="date" value={day} max={today} min={p.kind === "move" && last ? last.effectiveFrom : undefined}
+                onChange={(e) => setDay(e.target.value)} autoFocus />
+            </L>
+            <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "6px 0 10px" }}>
+              Усе, що людина зробила до цієї дати, лишається в «{p.kind === "redate" && last ? teamName(last.fromTeamId) : teamName(p.r.teamId)}».
+              Не пізніше сьогодні.
+            </p>
+            {p.kind === "move" && (
+              <L label="ПРИМІТКА (НЕОБОВʼЯЗКОВО)"><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="напр. перейшла на лідогенерацію" /></L>
+            )}
+          </>
+        )}
+        {error && <div style={{ color: "var(--danger, #c8102e)", fontSize: 12.5, marginTop: 8 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+          <button className="btn" onClick={onClose} disabled={saving}>Скасувати</button>
+          <button className="btn btn-primary" onClick={() => void submit()} disabled={saving}>{saving ? "Зберігаю…" : "Зберегти"}</button>
+        </div>
       </div>
     </div>
   );
@@ -326,6 +438,13 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
     catch (e) { alert(err(e)); }
     finally { setBusy(null); }
   };
+  // 🧭 Пул нічийних для менеджера (05.10.2026) — так само без оптимістичного малювання.
+  const toggleOrphanPool = async (id: number, on: boolean) => {
+    setBusy(id);
+    try { await updateUser(id, { orphanPool: on }); await reload(); }
+    catch (e) { alert(err(e)); }
+    finally { setBusy(null); }
+  };
   /**
    * 👤 СТАН ПРАЦІВНИКА — і він же межа входу (рішення власника 07.09.2026:
    * «звільнений вимикає вхід»). Підтвердження питаємо ЛИШЕ на «звільнений»:
@@ -377,8 +496,12 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
       </div>
       {newCreds && <OneTimeCred text={newCreds} onClose={() => setNewCreds(null)} />}
 
-      <table className="data-table">
-        <thead><tr><th>ПІБ</th><th>E-MAIL</th><th>КОМАНДА</th><th>РОЛЬ</th><th>ПАРОЛЬ</th><th>АКТИВНИЙ</th><th title="Звільнений не заходить у дашборд і не отримує нової роботи, але його результат лишається в сумах команди й компанії.">СТАН</th><th title="Дозвіл трекеру часу збирати дані з машини цієї людини. Знімається так само просто, як ставиться.">⏱ ТРЕКЕР</th><th></th></tr></thead>
+      {/* ↔ Широка таблиця (9 колонок) — у власному горизонтальному скролі: на великому масштабі (05.10.2026, скрін Романа)
+          вона вилазила за картку, кнопки праворуч зрізались, а заголовки злипались. Скрол — у контейнері, а не
+          на сторінці: решта Налаштувань лишається на місці. Тримає #1369. */}
+      <div className="settings-users-scroll" style={{ overflowX: "auto", maxWidth: "100%" }}>
+      <table className="data-table" style={{ minWidth: 980 }}>
+        <thead><tr><th style={TH}>ПІБ</th><th style={TH}>E-MAIL</th><th style={TH}>КОМАНДА</th><th style={TH}>РОЛЬ</th><th style={TH}>ПАРОЛЬ</th><th style={TH}>АКТИВНИЙ</th><th style={TH} title="Звільнений не заходить у дашборд і не отримує нової роботи, але його результат лишається в сумах команди й компанії.">СТАН</th><th style={TH} title="Дозвіл трекеру часу збирати дані з машини цієї людини. Знімається так само просто, як ставиться.">⏱ Трекер</th><th style={TH} title="Менеджеру відкрити пул нічийних клієнтів: бачить пул із телефонами й бере клієнта лише собі. Керівникам пул відкритий і без цього. Вкладка зʼявиться після нового входу.">🧭 Пул</th><th style={TH}></th></tr></thead>
         <tbody>
           {users.map((u) => (
             <tr key={u.id}>
@@ -441,6 +564,13 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
                   style={{ width: 16, height: 16, cursor: u.is_active ? "pointer" : "not-allowed" }}
                 />
               </td>
+              <td title={u.role_effective === "manager" ? undefined : "Керівникам пул відкритий і без прапорця"}>
+                {u.role_effective === "manager"
+                  ? <input type="checkbox" checked={u.orphan_pool === true} disabled={!u.is_active || busy === u.id}
+                      onChange={(e) => toggleOrphanPool(u.id, e.target.checked)}
+                      style={{ width: 16, height: 16, cursor: u.is_active ? "pointer" : "not-allowed" }} />
+                  : <span style={{ color: "var(--text-muted)", fontSize: 12 }}>завжди</span>}
+              </td>
               <td style={{ whiteSpace: "nowrap" }}>
                 <button onClick={() => reset(u.id)} style={btn}>↺ Пароль</button>
                 <button onClick={() => deactivate(u)} style={{ ...btn, color: "#dc2626" }}>Деактивувати</button>
@@ -449,6 +579,7 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
           ))}
         </tbody>
       </table>
+      </div>
       {!isAdminUx && <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 8 }}>Ви бачите цей екран, бо сервер надав доступ; керування діє за правом <b>manage_users</b>.</p>}
     </div>
   );

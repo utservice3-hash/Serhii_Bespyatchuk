@@ -165,6 +165,63 @@ before(async () => {
     const d = await deal({ manager: m, pipeline: PZ, ck: null });
     await ev(d, PZ, st, utc(when));
   }
+
+  // ── #1090/#1090b (задача 4668, 30.09.2026): СІЧЕНЬ 2025 — поза вікнами всіх гейтів вище (тренд
+  // тягнеться з 2025-10, плани — березень 2025). Людина 70, тиждень 13–19.01.2025, по угоді на випадок:
+  // A — «Взято» і ОПР (один лід) · B — лише ОПР (лід: так лідген ставить реактивацію й повернуте
+  // менеджером) · C — лише «Кваліфіковано» (не лід) · D — лише «Взято» · E — статус ОПР у воронці
+  // Реактивації (не лід: чужа воронка) · F — «Підігрівається» (з 06.10.2026 — лід і ОПР). Джерела різні.
+  await client.query(`INSERT INTO managers (id, name, team_id) VALUES (70,'Лідген Лід',1)`);
+  const lg = async (src: string, pipeline: number, evs: [number, string][]) => {
+    const d = await deal({ manager: 70, pipeline, ck: null });
+    await client!.query(`UPDATE deals SET client_source = $2 WHERE kommo_id = $1`, [d, src]);
+    for (const [st, when] of evs) await ev(d, pipeline, st, utc(when));
+  };
+  const RE = LEADGEN_STAGE_IDS.react[0];
+  await lg("Холодная база", PZ, [[LEADGEN_STAGE_IDS.taken, "2025-01-13T08:00:00"], [LEADGEN_STAGE_IDS.opr, "2025-01-14T08:00:00"]]);
+  await lg("Реактивація закриті", PZ, [[LEADGEN_STAGE_IDS.opr, "2025-01-15T08:00:00"]]);
+  await lg("Холодная база", PZ, [[Q, "2025-01-15T09:00:00"]]);
+  await lg("Реактивація наша база", PZ, [[LEADGEN_STAGE_IDS.taken, "2025-01-16T08:00:00"]]);
+  await lg("Реактивація наша база", RE, [[LEADGEN_STAGE_IDS.opr, "2025-01-16T09:00:00"]]);
+  await lg("Реактивація наша база", RE, [[LEADGEN_STAGE_IDS.warming, "2025-01-17T08:00:00"]]);
+  // 06.10.2026 (#1264): G — одна угода пройшла «Взято» Продзвону, потім «Підігрів» Реактивації (один лід);
+  // H — «Отримано зворотній зв'язок» Реактивації (69693744) — НЕ лід.
+  {
+    const g = await deal({ manager: 70, pipeline: RE, ck: null });
+    await client.query(`UPDATE deals SET client_source = 'Холодная база' WHERE kommo_id = $1`, [g]);
+    await ev(g, PZ, LEADGEN_STAGE_IDS.taken, utc("2025-01-17T09:00:00"));
+    await ev(g, RE, LEADGEN_STAGE_IDS.warming, utc("2025-01-17T10:00:00"));
+    await lg("Реактивація закриті", RE, [[69693744, "2025-01-17T11:00:00"]]);
+  }
+
+  // ── #1094b (30.09.2026): ЧЕРВЕНЬ 2025 — звʼязок за приміткою Kommo `lead_child_links`. Поза вікнами решти.
+  const T2 = utc("2025-06-10T09:00:00");
+  const note = async (parent: number, child: number) =>
+    client!.query(`INSERT INTO lead_child_links (parent_id, child_id, created_at) VALUES ($1, $2, now())`, [parent, child]);
+  { // a) клієнта в Продзвоні немає, примітка є → угода з примітки
+    const pz = await deal({ manager: 1, pipeline: PZ, ck: null }); await ev(pz, PZ, Q, T2);
+    const a = await deal({ manager: 3, pipeline: FC[0], ck: "n-a", created: sec(T2, 1) }); await note(pz, a);
+    fx["n-nokey"] = { pz, want: a };
+  }
+  { // b) здогад знаходить B, примітка каже C → C (примітка точніша)
+    const at = sec(T2, 600);
+    const pz = await deal({ manager: 1, pipeline: PZ, ck: "n-c" }); await ev(pz, PZ, Q, at);
+    await deal({ manager: 3, pipeline: FC[0], ck: "n-c", created: sec(at, 5) });
+    const c = await deal({ manager: 3, pipeline: FC[0], ck: "n-other", created: sec(at, 20) }); await note(pz, c);
+    fx["n-conflict"] = { pz, want: c };
+  }
+  { // c) дочірня з примітки поза вікном цього входу → лишається здогад E
+    const at = sec(T2, 1200);
+    const pz = await deal({ manager: 1, pipeline: PZ, ck: "n-o" }); await ev(pz, PZ, Q, at);
+    const dd = await deal({ manager: 3, pipeline: FC[0], ck: "n-d", created: sec(at, 300) }); await note(pz, dd);
+    const ee = await deal({ manager: 3, pipeline: FC[0], ck: "n-o", created: sec(at, 3) });
+    fx["n-outside"] = { pz, want: ee };
+  }
+  { // d) ні клієнта, ні примітки → без угоди, як і було
+    const pz = await deal({ manager: 1, pipeline: PZ, ck: null }); await ev(pz, PZ, Q, sec(T2, 1800));
+    await deal({ manager: 3, pipeline: FC[0], ck: "n-z", created: sec(T2, 1801) });
+    fx["n-none"] = { pz, want: null };
+  }
 });
 
 after(async () => {
@@ -351,8 +408,8 @@ test("#683b ЖИВИЙ SQL: стан угоди менеджера — успі�
  * `leadgenHandoffMoney` того місяця, у відділі й у команді. Фікстура тримає обидві пастки ревʼю:
  * людина 4 дзвонить у травні без жодної події стадій у травні; угоду менеджера привели передачі
  * 30.04 23:59:30 і 01.05 00:00:30 за Києвом (різні місяці, одне вікно звʼязку).
- * 🧨 САБОТАЖ: в `assembleTrend` ростер на все вікно (`true` → `false`) → червоніє; дедуп над
- * передачами всього вікна → червоніє; у `leadgenTrend` передачі лише за місяць `to` → червоніє.
+ * 🧨 САБОТАЖ: в `assembleTrend` ростер на все вікно (`true` → `false`) → червоніє; у `leadgenTrend` передачі
+ * лише за місяць `to` → червоніє. Дедуп угоди менеджера з 30.09.2026 — над УСІМ доменом (`#1095`).
  */
 test("#682b ЖИВИЙ SQL: місяць тренду == /leadgen-stats і гроші з передач того місяця — з дзвінками, у відділі й команді", async (t) => {
   if (!client) return t.skip(skip ?? "кластер не піднявся");
@@ -409,7 +466,11 @@ test("#682b ЖИВИЙ SQL: місяць тренду == /leadgen-stats і гр�
     assert.ok(!may.rows.some((r) => r.managerId === 4), "фікстура: у травні людина 4 без подій");
     const money = (ms: string) => trend.money.find((b) => b.bucket === ms)!.totals;
     assert.equal(money("2026-04-01").success.n, 1, "фікстура: квітнева передача веде в успішну угоду");
-    assert.equal(money("2026-05-01").success.n, 1, "🔴 травнева передача в ту саму угоду стала «тією самою» — дедуп вийшов за місяць");
+    // З 30.09.2026 (правило Ярослава, `#1095`): угода належить ПЕРШІЙ передачі — квітневій; травнева — «та сама»,
+    // а «Успішні» рахуються в місяць успіху (20.05), не в місяць передачі.
+    assert.equal(money("2026-05-01").sameDeal, 1, "🔴 травнева передача в угоду квітневої не стала «тією самою»");
+    assert.equal(money("2026-04-01").earned.n, 0, "🔴 успіх 20.05 потрапив у квітень (місяць передачі)");
+    assert.equal(money("2026-05-01").earned.n, 1, "🔴 успіх 20.05 не потрапив у травень (місяць успіху)");
   }
   assert.ok(compared >= 5, "фікстура вироджена — порівнювати нема чого");
   const jun = (await stats.leadgenTrend("2026-06-30", 3, { teamId: null, managerId: null })).money[2].totals;
@@ -484,7 +545,8 @@ test("#748 ЖИВИЙ SQL: ростер — активні учасники 5001
   assert.deepEqual(v.others.map((r) => r.managerId).sort(), [62, 63], "🔴 «інші» — не всі, хто з подіями поза командою");
   assert.deepEqual(v.totals, st.totals, "🔴 підсумок відділу змінився");
   assert.deepEqual(rosterInvariantBreaks(v), []);
-  assert.equal(st.totals.leads, 4, "фікстура: 4 ліди в березні 2025 — інакше перевіряти нічого");
+  // 5, а не 4: у людини 60 окрема угода лише з ОПР — з 30.09.2026 це теж лід (`leadStatusPred`, задача 4668).
+  assert.equal(st.totals.leads, 5, "фікстура: 5 лідів у березні 2025 — інакше перевіряти нічого");
   const lead = leadgenRosterView(st.rows, members, 50011, zero);
   assert.deepEqual(lead.rows.map((r) => r.managerId).sort(), [60, 61, 63, 64], "🔴 тімлід 50011 бачить не свою команду");
   assert.deepEqual(lead.others, []);
@@ -502,18 +564,18 @@ test("#749 ЖИВИЙ SQL: подання → затвердження → по�
   const count = async () => (await client!.query(`SELECT (SELECT COUNT(*) FROM plans) + (SELECT COUNT(*) FROM plan_formation) AS n`)).rows[0].n;
   const sales0 = await count();
   const M = "2025-04-01";
-  await lgPlans.submitLeadgenPlan(60, M, { leads: 200, opr: 80, quotes: 40 }, "перший", 901);
+  await lgPlans.submitLeadgenPlan(60, M, { leads: 200, opr: 80, quotes: 40, calls: null, money: null }, "перший", 901);
   let f = (await lgPlans.leadgenFormation(M, [60])).get(60)!;
   assert.equal(f.status, "submitted");
-  assert.deepEqual(f.approved, { leads: null, opr: null, quotes: null }, "🔴 план став живим до затвердження");
+  assert.deepEqual(f.approved, { leads: null, opr: null, quotes: null, calls: null, money: null }, "🔴 план став живим до затвердження");
   assert.equal(await lgPlans.approveLeadgenPlans(M, null, 902), 1);
   const ap1 = await lgPlans.approvedLeadgenPlans([60], "2025-04-01", "2025-04-30");
   assert.deepEqual(ap1.get(60)?.get(M), { leads: 200, opr: 80, quotes: 40 });
-  await lgPlans.submitLeadgenPlan(60, M, { leads: 250, opr: 90, quotes: 50 }, "другий", 901);
-  assert.equal(await lgPlans.returnLeadgenPlan(M, 60, "замало", 902), 3, "🔴 повернуто не всі три метрики");
+  await lgPlans.submitLeadgenPlan(60, M, { leads: 250, opr: 90, quotes: 50, calls: null, money: null }, "другий", 901);
+  assert.equal(await lgPlans.returnLeadgenPlan(M, 60, "замало", 902), 5, "🔴 повернуто не всі пʼять пунктів (рядок на кожен, і на «не плануємо» теж)");
   f = (await lgPlans.leadgenFormation(M, [60])).get(60)!;
   assert.equal(f.status, "returned");
-  assert.deepEqual(f.proposed, { leads: 250, opr: 90, quotes: 50 });
+  assert.deepEqual(f.proposed, { leads: 250, opr: 90, quotes: 50, calls: null, money: null });
   assert.equal(f.returnComment, "замало");
   const ap2 = await lgPlans.approvedLeadgenPlans([60], "2025-04-01", "2025-04-30");
   assert.deepEqual(ap2.get(60)?.get(M), { leads: 200, opr: 80, quotes: 40 }, "🔴 повернення стерло попередній затверджений план");
@@ -526,4 +588,225 @@ test("#749 ЖИВИЙ SQL: подання → затвердження → по�
     "🔴 місяць не з першого числа прийнято");
   await assert.rejects(client!.query(`INSERT INTO plans (manager_id, plan_date, metric, planned_value) VALUES (61, '2025-04-01', 'quotes', 1)`), /check/i,
     "🔴 продажний plans приймає лідоген-метрику");
+});
+
+/**
+ * #1264 — ЛІД = «ВЗЯТО» АБО «ОПР» ПРОДЗВОНУ АБО «ПІДІГРІВАЄТЬСЯ» РЕАКТИВАЦІЇ; ОПР = «ОПР» АБО «ПІДІГРІВАЄТЬСЯ»
+ * (рішення власника 06.10.2026, звірка жовтня з таблицями лідгенів; наступник `#1090`). По обидва боки: A «Взято»+«ОПР»
+ * (один лід), B лише ОПР (лід), C лише «Кваліфіковано» (ні), D лише «Взято» (лід), E статус ОПР у воронці Реактивації
+ * (ні), F «Підігрівається» (лід і ОПР), G «Взято» Продзвону + «Підігрів» Реактивації однією угодою (ОДИН лід),
+ * H «Отримано зворотній зв'язок» Реактивації (ні). Плюс інваріант: лідів ≥ ОПР у кожного за будь-який період.
+ * 🧨 САБОТАЖ: в `oprStatusPred` прибрати гілку Реактивації → ОПР людини 70 стає 2 замість 4 → червоніє.
+ */
+test("#1264 ЖИВИЙ SQL: лід — «Взято»/«ОПР» Продзвону або «Підігрів» Реактивації; ОПР — «ОПР» або «Підігрів»", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const wk = await run<{ manager_id: number; leads: string; opr: string; quotes: string; warming: string }>(
+    stageCountsQuery("2025-01-13", "2025-01-19", LEADGEN_STAGE_IDS));
+  const r70 = wk.find((r) => r.manager_id === 70);
+  assert.ok(r70, "фікстура вироджена — людини 70 у тижні немає");
+  assert.deepEqual([Number(r70.leads), Number(r70.opr), Number(r70.quotes), Number(r70.warming)], [5, 4, 1, 2],
+    "🔴 ліди/ОПР/прорахунки/підігрів людини 70 не 5/4/1/2: «Підігрів» не став лідом і ОПР, угода G порахована двічі або «зворотній зв'язок» прийнято за лід");
+  const all = await run<{ manager_id: number; leads: string; opr: string }>(stageCountsQuery("2025-01-01", "2026-12-31", LEADGEN_STAGE_IDS));
+  assert.ok(all.length >= 4, "фікстура вироджена — людей замало");
+  for (const r of all) assert.ok(Number(r.leads) >= Number(r.opr), `🔴 людина ${r.manager_id}: лідів ${r.leads} < ОПР ${r.opr}`);
+});
+
+/**
+ * #1090b — ТРИ ЛІЧИЛЬНИКИ ЛІДІВ, ОДНЕ ПРАВИЛО: рядок людини (`leadgenStats().rows`), розріз за джерелом
+ * (`bySource`) і тижні (`leadgenWeekly`) — справжнє ядро на тимчасовій базі. Друга копія предиката в
+ * будь-якому з них розійшлась би мовчки: екран показав би 3 ліди в рядку й 2 у «Звідки ліди».
+ * 🧨 САБОТАЖ: у запиті `bySource` (`leadgenStats.ts`) у плейсхолдерах `leadStatusPred` замінити `warming: "$7"` на `warming: "$4"` (лишається ВАЛІДНИМ) → червоніє саме розріз. Стара примітка: замінити `"$5"` на `"$4"` і дописати
+ * `AND $5::bigint > 0` (запит лишається ВАЛІДНИМ, змінюється лише зміст) → червоніє саме розріз. Просто прибрати `$5`
+ * не можна: Postgres упаде на невизначеному типі параметра, і червоне доведе аварію, а не гейт (♾ правило 6).
+ */
+test("#1090b ЖИВИЙ SQL: рядок, джерела й тижні рахують ліди одним правилом", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { stats } = await core();
+  const st = await stats.leadgenStats("2025-01-13", "2025-01-19");
+  const row = st.rows.find((r) => r.managerId === 70);
+  assert.equal(row?.leads, 5, "🔴 рядок людини рахує ліди не за правилом");
+  assert.deepEqual(st.bySource.map((s) => [s.source, s.leads]).sort(), [["Холодная база", 2], ["Реактивація закриті", 1], ["Реактивація наша база", 2]].sort(),
+    "🔴 розріз за джерелом рахує ліди іншим правилом, ніж рядок");
+  const weeks = await stats.leadgenWeekly("2025-01-13", "2025-01-19");
+  assert.deepEqual(weeks.map((w) => [w.week, w.leads, w.opr]), [["2025-01-13", 5, 4]], "🔴 тижні рахують ліди іншим правилом, ніж рядок");
+});
+
+/**
+ * #1091c — ПОСТІЙНИЙ КЛІЄНТ НАСКРІЗЬ: справжні `money.clientSuccessHistory` і `leadgenHandoffMoney` на
+ * тимчасовій базі (задача 4668, п.5). Успіх клієнта — рівно клас `success`: повний цикл, 142, є
+ * `closed_at`, не мінусова. Поруч — усе, що схоже, але НЕ успіх: 142 без `closed_at`, 142 Кваліфікації,
+ * «Оплата отримана», мінусова 142. Дві передачі одного дня: клієнта з 2 успіхами до передачі — `regular`
+ * (поза грошима), клієнта з 1 успіхом — у «Успішних». Лютий 2025 — поза вікнами решти гейтів.
+ * 🧨 САБОТАЖ: у `clientSuccessHistory` прибрати `AND NOT d.is_minus` → у «k-one» стає 2 успіхи → червоніє.
+ */
+test("#1091c ЖИВИЙ SQL: історія успіхів — лише FC-142 з closed_at без мінусових; передача постійного — поза грошима", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { money, stats } = await core();
+  await client!.query(`INSERT INTO managers (id, name, team_id) VALUES (71,'Лідген Постійні',1) ON CONFLICT DO NOTHING`);
+  const hist = async (ck: string, pipeline: number, status: number, closed: string | null, minus = false) => {
+    const id = await deal({ manager: 3, pipeline, status, ck, created: utc("2024-12-01T08:00:00") });
+    await client!.query(`UPDATE deals SET closed_at_kommo = $2, is_minus = $3, price = 1000 WHERE kommo_id = $1`,
+      [id, closed == null ? null : utc(closed), minus]);
+  };
+  const PAID = 69716460;
+  await hist("k-reg", FC[0], Q, "2025-01-10T10:00:00");
+  await hist("k-reg", FC[1], Q, "2025-02-01T10:00:00");
+  await hist("k-one", FC[0], Q, "2025-01-20T10:00:00");
+  await hist("k-one", FC[0], Q, null);                              // 142 без closed_at — не успіх
+  await hist("k-one", QUAL, Q, "2025-01-21T10:00:00");               // 142 Кваліфікації — не успіх
+  await hist("k-one", FC[0], PAID, "2025-01-22T10:00:00");           // «Оплата отримана» — не успіх
+  await hist("k-one", FC[0], Q, "2025-01-23T10:00:00", true);        // мінусова — не перевезення
+  const handoff = async (ck: string) => {
+    const pz = await deal({ manager: 71, pipeline: PZ, ck });
+    const at = utc("2025-02-10T09:00:00");
+    await ev(pz, PZ, Q, at);
+    const md = await deal({ manager: 3, pipeline: FC[0], status: Q, ck, created: sec(at, 30) });
+    await client!.query(`UPDATE deals SET closed_at_kommo = $2, price = 5000 WHERE kommo_id = $1`, [md, utc("2025-02-20T10:00:00")]);
+    return pz;
+  };
+  const pzReg = await handoff("k-reg"), pzOne = await handoff("k-one");
+  const h = await money.clientSuccessHistory(["k-reg", "k-one"]);
+  assert.deepEqual((h.get("k-reg") ?? []).map((x) => x.day).sort(), ["2025-01-10", "2025-02-01", "2025-02-20"],
+    "🔴 історія постійного клієнта не та (успіх — FC-142 з closed_at, обидві FC-воронки)");
+  assert.deepEqual((h.get("k-one") ?? []).map((x) => x.day).sort(), ["2025-01-20", "2025-02-20"],
+    "🔴 в історію потрапило те, що не є успішним перевезенням (без closed_at / Кваліфікація / оплата / мінусова)");
+  const hm = await stats.leadgenHandoffMoney("2025-02-10", "2025-02-10", { teamId: null, managerId: null });
+  const cls = new Map(hm.deals.map((d) => [d.pzId, d.cls]));
+  assert.equal(cls.get(pzReg), "regular", "🔴 передача клієнта з 2 успіхами ДО неї не визнана постійною");
+  assert.equal(cls.get(pzOne), "success", "🔴 клієнт з одним успіхом до передачі визнаний постійним");
+  assert.deepEqual([hm.totals.success.n, hm.totals.success.sum, hm.totals.regular.n, hm.totals.regular.sum], [1, 5000, 1, 5000],
+    "🔴 гроші лідгена не без постійного, або постійного не названо числом");
+});
+
+/**
+ * #1093 — МЕЖА «УСПІШНОГО ДЗВІНКА» НЕВКЛЮЧНА: розмова ДОВША за 8 с, як фільтр Ringostat «тривалість
+ * більше 00:08», яким рахує Ярослав (30.09.2026: з `>= 8` Сердюк мав 1 106 проти 1 102 у Ringostat — рівно
+ * 4 дзвінки по 8 с). Справжній `leadgenStats` на тимчасовій базі; фікстура — по обидва боки межі:
+ * 7 і 8 с — ні, 9 і 60 с — так; вхідний 60 с — ні (напрямок).
+ * 🧨 САБОТАЖ: у `callsQuery` (`leadgenStats.ts`) `c.billsec > $4` → `c.billsec >= $4` → червоніє.
+ */
+test("#1093 ЖИВИЙ SQL: успішний дзвінок — вихідний, розмова ДОВША за 8 с (8 с — ні, 9 с — так)", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { stats } = await core();
+  let k = 0;
+  for (const [type, sec] of [["out", 7], ["out", 8], ["out", 9], ["out", 60], ["in", 60]] as [string, number][]) {
+    await client!.query(`INSERT INTO ringostat_calls (uniqueid, calldate, call_type, billsec, manager_id) VALUES ($1, $2, $3, $4, 70)`,
+      [`gt8-${k++}`, utc("2025-01-14T10:00:00"), type, sec]);
+  }
+  const st = await stats.leadgenStats("2025-01-13", "2025-01-19");
+  const row = st.rows.find((r) => r.managerId === 70);
+  assert.ok(row, "фікстура вироджена — людини 70 у тижні немає");
+  assert.equal(row.calls, 2, "🔴 успішні дзвінки не ті: рахуються лише вихідні, ДОВШІ за 8 с (як фільтр Ringostat «більше 00:08»)");
+});
+
+/**
+ * #1094b — УГОДА МЕНЕДЖЕРА ЗА ПРИМІТКОЮ KOMMO, А НЕ ЗДОГАДОМ (30.09.2026, угода 62668945). Кожен бік:
+ * без клієнта, але з приміткою — звʼязано (раніше — «без угоди»); примітка проти здогаду — примітка;
+ * дочірня з примітки поза вікном цього входу — здогад; ні того, ні іншого — без угоди.
+ * 🧨 САБОТАЖ: у `handoffLinkQuery` поміняти пріоритети (`0 AS prio` ↔ `1 AS prio`) → червоніє «n-conflict»;
+ * прибрати вікно з гілки примітки → червоніє «n-outside».
+ */
+test("#1094b ЖИВИЙ SQL: угода менеджера — спершу за приміткою Kommo, здогад за клієнтом — лише без неї", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const rows = await run<{ pz_id: string; deal_id: string | null; link_prio: number | null }>(linkQ("2025-06-10", "2025-06-10"));
+  const got = new Map(rows.map((r) => [Number(r.pz_id), r]));
+  for (const [k, prio] of [["n-nokey", 0], ["n-conflict", 0], ["n-outside", 1], ["n-none", null]] as [string, number | null][]) {
+    const r = got.get(fx[k].pz);
+    assert.ok(r, `🔴 передача ${k} зникла з результату`);
+    assert.equal(r.deal_id == null ? null : Number(r.deal_id), fx[k].want, `🔴 ${k}: угода менеджера ${r.deal_id} замість ${fx[k].want}`);
+    assert.equal(r.link_prio == null ? null : Number(r.link_prio), prio, `🔴 ${k}: звʼязано не тим шляхом`);
+  }
+  assert.equal(rows.length, 4, "🔴 гілки звʼязку розмножили передачі");
+});
+
+/**
+ * #1095b — ДАТИ ГРОШЕЙ НА ЖИВОМУ SQL: справжній `money.handoffDealStates` дає дату закриття й дату «авто
+ * поїхало» = ПЕРШИЙ вхід у «Авто працює» чи далі (обидві воронки повного циклу), без «фантомного» 142 на
+ * початку шляху й без етапів ДО авто («Виставлення рахунку»). Наскрізь: передача липня 2025, успіх
+ * серпня → «Успішні» серпня, не липня.
+ * 🧨 САБОТАЖ: у `HANDOFF_CLASS_RULES.autoWent` додати 142 → дата авто зсувається на фантомний 142 → червоніє.
+ */
+test("#1095b ЖИВИЙ SQL: дата успіху й дата авто для грошей; передача липня з успіхом серпня — у серпні", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { money, stats } = await core();
+  await client!.query(`INSERT INTO managers (id, name, team_id) VALUES (72,'Лідген Гроші',1) ON CONFLICT DO NOTHING`);
+  const at = utc("2025-07-07T09:00:00");
+  const pz = await deal({ manager: 72, pipeline: PZ, ck: "m-1" }); await ev(pz, PZ, Q, at);
+  const md = await deal({ manager: 3, pipeline: FC[0], status: Q, ck: "m-1", created: sec(at, 20) });
+  await client!.query(`UPDATE deals SET closed_at_kommo = $2, price = 8000 WHERE kommo_id = $1`, [md, utc("2025-08-20T10:00:00")]);
+  await ev(md, FC[0], Q, utc("2025-07-08T08:00:00"));            // фантомний 142 на початку шляху
+  await ev(md, FC[0], 100274340, utc("2025-07-20T08:00:00"));    // «Виставлення рахунку» — ще не авто
+  await ev(md, FC[0], 69716300, utc("2025-08-05T08:00:00"));     // «Авто працює» — дата авто
+  await ev(md, FC[0], Q, utc("2025-08-20T10:00:00"));
+  const st = (await money.handoffDealStates([md])).get(md);
+  assert.equal(st?.closedDay, "2025-08-20", "🔴 дата успіху не з closed_at за Києвом");
+  assert.equal(st?.autoDay, "2025-08-05", "🔴 дата авто — не перший вхід у «Авто працює» чи далі (фантомний 142 / рахунок?)");
+  const aug = await stats.leadgenHandoffMoney("2025-08-01", "2025-08-31", { teamId: null, managerId: 72 });
+  const jul = await stats.leadgenHandoffMoney("2025-07-01", "2025-07-31", { teamId: null, managerId: 72 });
+  assert.deepEqual([aug.totals.earned.n, aug.totals.earned.sum], [1, 8000], "🔴 успіх серпня з липневої передачі не в серпні");
+  assert.equal(jul.totals.earned.n, 0, "🔴 успіх серпня потрапив у липень (місяць передачі)");
+  assert.equal(jul.totals.handoffs, 1, "фікстура: передача — у липні");
+  assert.equal(aug.deals.find((d) => d.pzId === pz)?.inPeriod, false, "🔴 у списку серпня угода не позначена «передано раніше»");
+});
+/**
+ * #1173 — ДЗВІНКИ Й ГРОШІ В ПЛАНІ, НЕОБОВʼЯЗКОВІ (Ярослав, рішення власника 01.10.2026), на живому SQL.
+ * Подання з дзвінками й грошима → затвердження → обидва живі; повторне подання БЕЗ грошей → після
+ * затвердження грошей у плані НЕМАЄ (а не «лишились з минулого подання»). База приймає `calls`/`money`
+ * і відмовляє невідомому пункту.
+ * 🧨 САБОТАЖ: у `submitLeadgenPlan` пропускати пункти зі значенням `null` → гроші з першого подання
+ * лишаються живими після другого → червоніє.
+ */
+test("#1173 ЖИВИЙ SQL: план на дзвінки й гроші — необовʼязковий; пропущений пункт після затвердження зникає", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { lgPlans } = await core();
+  const M = "2025-03-01";
+  await lgPlans.submitLeadgenPlan(60, M, { leads: 10, opr: 5, quotes: 3, calls: 1200, money: 150000 }, null, 901);
+  await lgPlans.approveLeadgenPlans(M, 60, 902);
+  let ap = (await lgPlans.approvedLeadgenPlans([60], M, "2025-03-31")).get(60)?.get(M);
+  assert.deepEqual(ap, { leads: 10, opr: 5, quotes: 3, calls: 1200, money: 150000 }, "🔴 дзвінки чи гроші не стали живим планом");
+  await lgPlans.submitLeadgenPlan(60, M, { leads: 11, opr: 5, quotes: 3, calls: 1300, money: null }, null, 901);
+  const f = (await lgPlans.leadgenFormation(M, [60])).get(60)!;
+  assert.equal(f.proposed.money, null, "🔴 «не плануємо» прочиталось як число");
+  assert.equal(f.approved.money, 150000, "🔴 до затвердження нового живий план мусить лишатись попереднім");
+  await lgPlans.approveLeadgenPlans(M, 60, 902);
+  ap = (await lgPlans.approvedLeadgenPlans([60], M, "2025-03-31")).get(60)?.get(M);
+  assert.deepEqual(ap, { leads: 11, opr: 5, quotes: 3, calls: 1300 },
+    "🔴 гроші з ПОПЕРЕДНЬОГО подання лишились живими, хоча нове подання їх не планувало");
+  // База: новий пункт приймається, невідомий — ні.
+  await assert.rejects(client!.query(
+    `INSERT INTO leadgen_plans (manager_id, month, metric, proposed_value) VALUES (60, '2025-02-01', 'revenue', 1)`),
+    /leadgen_plans_metric_check/, "🔴 база прийняла пункт, якого немає в переліку");
+  await client!.query(`INSERT INTO leadgen_plans (manager_id, month, metric, proposed_value) VALUES (60, '2025-02-01', 'money', 1)`);
+});
+
+/**
+ * #1260 — «ПРИЙНЯТО ЛІДОГЕН» НА ЖИВОМУ SQL (рішення власника 05.10.2026): угода менеджера, яку Kommo створила з
+ * угоди Продзвону (`lead_child_links`), — рахується; угода з каналом «лідоген», але без звʼязку, — ні; створена
+ * поза періодом — ні; створена з угоди НЕ з Продзвону — ні; угода в чужій воронці (не Кваліфікація/повний цикл) — ні.
+ * 🧨 САБОТАЖ: у `leadgenAcceptedByManager` прибрати `AND p.pipeline_id = ANY($1::bigint[])` → звʼязок з не-Продзвону
+ * рахується → червоніє.
+ */
+test("#1260 ЖИВИЙ SQL: прийнято лідоген — лише угоди, створені Kommo з передачі Продзвону, у періоді", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const metrics = await import("./metrics.js");
+  await client!.query(`INSERT INTO managers (id, name, team_id, is_active) VALUES (80,'Продажі Прийм',1,true) ON CONFLICT (id) DO NOTHING`);
+  const mk = async (id: number, pipeline: number, created: string, channel: string | null = null) =>
+    client!.query(`INSERT INTO deals (kommo_id, name, manager_id, pipeline_id, status_id, created_at_kommo, lead_channel) VALUES ($1,$2,80,$3,1,$4,$5)`,
+      [id, `угода ${id}`, pipeline, created, channel]);
+  const link = (parent: number, child: number) => client!.query(`INSERT INTO lead_child_links (parent_id, child_id, created_at) VALUES ($1,$2,now())`, [parent, child]);
+  await mk(810001, PZ, "2025-02-01T09:00:00Z");                    // угода Продзвону (батько)
+  await mk(810002, 9999999, "2025-02-01T09:00:00Z");               // батько НЕ з Продзвону
+  await mk(810011, FC[0], "2025-02-10T09:00:00Z"); await link(810001, 810011);          // ✅ рахується
+  await mk(810012, QUAL, "2025-02-11T09:00:00Z"); await link(810001, 810012);           // ✅ рахується (Кваліфікація)
+  await mk(810013, FC[0], "2025-02-12T09:00:00Z", "leadgen");                          // ❌ канал є, звʼязку немає
+  await mk(810014, FC[0], "2025-03-01T09:00:00Z"); await link(810001, 810014);          // ❌ поза періодом
+  await mk(810015, FC[0], "2025-02-13T09:00:00Z"); await link(810002, 810015);          // ❌ батько не з Продзвону
+  await mk(810016, 9999999, "2025-02-14T09:00:00Z"); await link(810001, 810016);        // ❌ не воронка менеджера
+  const rows = await metrics.leadgenAcceptedByManager({ from: "2025-02-01", to: "2025-02-28", managerId: 80 });
+  assert.deepEqual(rows, [{ managerId: 80, count: 2 }],
+    "🔴 «прийнято лідоген» не рівно 2: рахує канал без звʼязку, угоду поза періодом, звʼязок не з Продзвону чи чужу воронку");
+  // 🪞 Межа періоду включно, по-київськи: 28.02 23:30 Київ (21:30 UTC) — ще лютий.
+  await mk(810017, FC[0], "2025-02-28T21:30:00Z"); await link(810001, 810017);
+  const r2 = await metrics.leadgenAcceptedByManager({ from: "2025-02-01", to: "2025-02-28", managerId: 80 });
+  assert.equal(r2[0]?.count, 3, "🔴 угода, створена 28.02 о 23:30 за Києвом, випала з лютого — межа не київська або не включна");
 });

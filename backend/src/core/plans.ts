@@ -3,6 +3,7 @@ import { workingDaysBetween, monthEndOf, fixedWeekBlocks } from "./dates.js";
 import { weekPlansForMonth } from "./weekPlan.js";
 import { receivedByMgr } from "./money.js";
 import { hasPlanSql, stateJoinSql } from "./managerState.js";
+import { teamAtSql, sqlDate } from "./teamAt.js";
 
 /**
  * ЄДИНЕ ДЖЕРЕЛО «плану на менеджера для ДИСПЛЕЮ» (цеглина 1 міграції, рішення власника).
@@ -40,7 +41,10 @@ export interface ManagerPlanResult {
 
 export async function managerPlan(s: PlanScope): Promise<ManagerPlanResult> {
   const params: unknown[] = [s.month];
-  const teamCond = s.teamId ? `AND m.team_id = $2` : "";
+  // 🔀 Команда — на 1-ше число місяця плану (задача 4892, `core/teamAt.ts`): вересневий план
+  // того, хто з 01.10 перейшов, лишається у вересневій команді. Без переходів — поточна.
+  const TEAM = teamAtSql("m", sqlDate(s.month.slice(0, 10)));
+  const teamCond = s.teamId ? `AND ${TEAM} = $2` : "";
   if (s.teamId) params.push(s.teamId);
 
   /**
@@ -64,20 +68,20 @@ export async function managerPlan(s: PlanScope): Promise<ManagerPlanResult> {
         GROUP BY p.manager_id`, params),
     // по команді: Σ планів тих, кому план БІЛЬШЕ НЕ СТАВИТЬСЯ + к-сть тих, кому ставиться
     pool.query<{ team_id: number; deact: string; nactive: string }>(
-      `SELECT m.team_id,
+      `SELECT ${TEAM} AS team_id,
               COALESCE(SUM(p.planned_value) FILTER (WHERE NOT ${PLANNED}),0) deact,
               COUNT(DISTINCT m.id) FILTER (WHERE ${PLANNED}) nactive
          FROM managers m ${stateJoinSql("m")}
          LEFT JOIN plans p ON p.manager_id = m.id AND p.metric='payment_amount'
                           AND date_trunc('month',p.plan_date) = $1::date
-        WHERE m.team_id IS NOT NULL ${teamCond}
-        GROUP BY m.team_id`, params),
+        WHERE ${TEAM} IS NOT NULL ${teamCond}
+        GROUP BY 1`, params),
     // ростер тих, кому план ставиться — ORDER BY id, щоб залишок ішов першому по id (як fix #3)
     pool.query<{ id: number; name: string; team_id: number | null }>(
       s.teamId
-        ? `SELECT m.id, m.name, m.team_id FROM managers m ${stateJoinSql("m")}
-            WHERE ${PLANNED} AND m.team_id = $1 ORDER BY m.id`
-        : `SELECT m.id, m.name, m.team_id FROM managers m ${stateJoinSql("m")}
+        ? `SELECT m.id, m.name, ${TEAM} AS team_id FROM managers m ${stateJoinSql("m")}
+            WHERE ${PLANNED} AND ${TEAM} = $1 ORDER BY m.id`
+        : `SELECT m.id, m.name, ${TEAM} AS team_id FROM managers m ${stateJoinSql("m")}
             WHERE ${PLANNED} ORDER BY m.id`,
       s.teamId ? [s.teamId] : []),
   ]);
@@ -130,7 +134,7 @@ export async function planPerWorkingDay(s: { managerId?: number | null; teamId?:
   const params: unknown[] = [month];
   const conds = ["p.metric='payment_amount'", "date_trunc('month',p.plan_date) = $1::date"];
   if (s.managerId) { params.push(s.managerId); conds.push(`p.manager_id = $${params.length}`); }
-  if (s.teamId) { params.push(s.teamId); conds.push(`m.team_id = $${params.length}`); }
+  if (s.teamId) { params.push(s.teamId); conds.push(`${teamAtSql("m", "$1::date")} = $${params.length}`); }
   const r = await pool.query<{ s: string }>(
     `SELECT COALESCE(SUM(p.planned_value),0) s
        FROM plans p JOIN managers m ON m.id = p.manager_id
@@ -294,6 +298,32 @@ export interface EffWeekTarget {
   workingDaysWeek: number;
 }
 /**
+ * Ручна ціль тижня (гроші) на день `day`: тижнева KPI-задача задачника, що покриває цей день; при кількох —
+ * НАЙСВІЖІША (ORDER BY period_start, id — виграє остання). Ключ — `assignee_id` (= менеджер).
+ * Винесено з `effectiveWeekTargets` без змін (02.10.2026), щоб Статистики будували план тижня ТИМ САМИМ правилом.
+ * ⚠️ FAIL-CLOSED: рядки без `period_kind = 'week'` не беруться (див. коментар у `effectiveWeekTargets`).
+ */
+export async function manualWeekTargetsOn(day: string): Promise<Map<number, number>> {
+  return new Map([...(await manualWeekTasksOn(day))].map(([mid, t]) => [mid, t.target]));
+}
+
+/**
+ * Те саме, що `manualWeekTargetsOn`, плюс id задачі-переможниці. Потрібно тому, хто складає ціль ДЕКІЛЬКОХ днів:
+ * одна задача на тиждень через межу місяця має рахуватись раз, а дві задачі (по частині місяця) — обидві.
+ */
+export async function manualWeekTasksOn(day: string): Promise<Map<number, { target: number; taskId: number }>> {
+  const mw = await pool.query<{ id: number; assignee_id: number; metrics_json: { metric: string; target: number | string }[] | null }>(
+    `SELECT id, assignee_id, metrics_json FROM tasks
+      WHERE auto AND task_type = 'kpi_period' AND assignee_id IS NOT NULL AND metrics_json IS NOT NULL
+        AND period_kind = 'week'
+        AND period_start <= $1 AND COALESCE(period_end, period_start) >= $1
+      ORDER BY period_start ASC, id ASC`, [day]);
+  const manual = new Map<number, { target: number; taskId: number }>();
+  for (const r of mw.rows) { const pa = (r.metrics_json ?? []).find((x) => x.metric === "payment_amount"); if (pa) manual.set(r.assignee_id, { target: Number(pa.target) || 0, taskId: r.id }); }
+  return manual;
+}
+
+/**
  * ЄДИНИЙ ВИРАЗ «тижневої цілі» для ВСІХ трьох екранів (Variant A — одна цифра скрізь):
  *   target = manualWeekTarget ?? dynamicTarget.week
  * manualWeekTarget = payment_amount з kpi_period-парасольки Задачника, що ПОКРИВАЄ сьогодні
@@ -344,14 +374,7 @@ export async function effectiveWeekTargets(scope: DynScope, kyivToday: string): 
    * у ручну ціль НЕ потрапляють — краще показати динамічний план, ніж чужу
    * цифру з підписом «задано вручну».
    */
-  const mw = await pool.query<{ assignee_id: number; metrics_json: { metric: string; target: number | string }[] | null }>(
-    `SELECT assignee_id, metrics_json FROM tasks
-      WHERE auto AND task_type = 'kpi_period' AND assignee_id IS NOT NULL AND metrics_json IS NOT NULL
-        AND period_kind = 'week'
-        AND period_start <= $1 AND COALESCE(period_end, period_start) >= $1
-      ORDER BY period_start ASC, id ASC`, [kyivToday]);
-  const manual = new Map<number, number>();
-  for (const r of mw.rows) { const pa = (r.metrics_json ?? []).find((x) => x.metric === "payment_amount"); if (pa) manual.set(r.assignee_id, Number(pa.target) || 0); }
+  const manual = await manualWeekTargetsOn(kyivToday);
   const out = new Map<number, EffWeekTarget>();
   for (const d of dyn) {
     const man = manual.get(d.managerId) ?? null;
@@ -397,4 +420,22 @@ export async function dynamicTarget(scope: DynScope, granularity: "month" | "wee
     const dec = decomposeTarget({ monthPlan: r.plan, factMonth, factWeek, weeksLeft, presentDaysLeftWeek: pdl });
     return { managerId: r.managerId, name: r.name, teamId: r.teamId, monthPlan: Math.round(r.plan), factMonth, factWeek, weeksLeft, presentDaysLeftWeek: pdl, ...dec, target: pick(dec) };
   });
+}
+
+/**
+ * 👥 СКЛАД «ФОРМУВАННЯ ПЛАНУ» — ті, кому ставимо план (`hasPlanSql`): «звільнений» і «завершує» плану не
+ * мають, як у Звіті й Номінаціях. Раніше роут брав лише `m.is_active` з Kommo — і звільнений у дашборді
+ * Шевчук Назар (02.10.2026) лишався у формуванні, бо в CRM його ще не деактивували. Тримає `#1350`.
+ * `db` — явно: гейт ганяє запит на тимчасовому кластері.
+ */
+export async function formationRoster(
+  db: { query: <R>(sql: string, params?: unknown[]) => Promise<{ rows: R[] }> }, teamId: number | null,
+  /** Додаткова умова складу (`metrics.commercialManagerSql`): параметром, бо `core/plans` не тягне `metrics`. */
+  extraCond = "TRUE",
+): Promise<{ id: number; name: string; team_id: number | null; team_name: string | null }[]> {
+  return (await db.query<{ id: number; name: string; team_id: number | null; team_name: string | null }>(
+    `SELECT m.id, m.name, m.team_id, t.name AS team_name
+       FROM managers m LEFT JOIN teams t ON t.id = m.team_id ${stateJoinSql("m")}
+      WHERE ${hasPlanSql("m", "m.is_active")} ${teamId ? "AND m.team_id = $1" : "AND m.team_id IS NOT NULL"} AND ${extraCond}
+      ORDER BY t.name NULLS LAST, m.name`, teamId ? [teamId] : [])).rows;
 }

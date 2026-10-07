@@ -7,11 +7,14 @@ import {
   type ClientPlansResp, type ClientPlanRow, type ClientComment, type ManagerOption,
 } from "../../../api";
 import { formatAmountFull } from "../format";
+import { useToast } from "../../../components/Toasts";
 import { SegmentBadge, ForcedBadge, MergedLine } from "./SegmentBadge";
 import { RowComment } from "./RowComment";
+import { CarrierCommentBanner } from "./CarrierCommentBanner";
 import { CreateTaskDialog, CloseTaskDialog, ContactDialog } from "./ReactivationBits";
 import { ClientCardPanel } from "./ClientCardPanel";
 import { ClientContactFileViewer } from "./ClientContactFileViewer";
+import { ReactCycleStatus, ReactCycleButtons, LeadgenPoolPanel } from "./ReactivationCycle";
 
 /**
  * ФАЗА A · «ПОСТІЙНІ КЛІЄНТИ · ПЛАН МІСЯЦЯ» (макет 1).
@@ -201,8 +204,10 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
    * клієнт не додається й не зникає, група рядка приходить із сервера (`tabGroup`, `core/clientTabs.ts`).
    * Усередині «Реактивації» — підфільтр сплячі / втрачені, бо це різні пороги й різна робота.
    */
-  const [tab, setTab] = useState<"all" | "regular" | "react">(fromReact ? "react" : "all");
+  const [tab, setTab] = useState<"all" | "regular" | "react" | "pool">(fromReact ? "react" : "all");
   const [reactSub, setReactSub] = useState<"all" | "sleeping" | "lost">("all");
+  /** 🔁 Рішення по циклу реактивації (ТЗ 22.09, блок 4): чекають · реактивую сам · у пулі. Стан — з сервера. */
+  const [cycleSub, setCycleSub] = useState<"all" | "waiting" | "self" | "pool">("all");
   /** 📅 Тижні згорнуті за замовчуванням (п.3.5): у 663 з 873 рядків вони порожні. Вибір памʼятає браузер. */
   const [weeksOpen, setWeeksOpen] = useState<boolean>(() => {
     try { return window.localStorage.getItem("clientPlans.weeksOpen") === "1"; } catch { return false; }
@@ -266,6 +271,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
    * для збою завантаження, але для відмови дії це сховало б таблицю разом із помилкою.
    */
   const [actErr, setActErr] = useState<string | null>(null);
+  const toast = useToast();
   const explain = (e: unknown): string => {
     const r = (e as { response?: { status?: number; data?: { error?: unknown } } }).response;
     const raw = r?.data?.error;
@@ -295,6 +301,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
     if (tab === "regular" && c.tabGroup === "react") return false;
     if (tab === "react" && c.tabGroup !== "react") return false;
     if (tab === "react" && reactSub !== "all" && c.state !== reactSub) return false;
+    if (tab === "react" && cycleSub !== "all" && c.reactCycle?.status !== cycleSub) return false;
     if (mgrFilter !== "" && c.managerId !== mgrFilter) return false;
     if (reactFilter === "no_talk" && c.lastTalk != null) return false;
     if (reactFilter === "step_overdue" && c.nextStep?.state !== "overdue") return false;
@@ -468,6 +475,13 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           </div>
         </td>
         <td style={S.td}>
+          {/* 🔁 ЦИКЛ РЕАКТИВАЦІЇ (ТЗ 22.09, блок 4, п.4.2–4.3): стан, строк і кнопки — з сервера. */}
+          {c.reactCycle && (
+            <div style={{ marginBottom: 6 }}>
+              <ReactCycleStatus cycle={c.reactCycle} />
+              <ReactCycleButtons clientKey={c.clientKey} cycle={c.reactCycle} onDone={load} onError={setActErr} />
+            </div>
+          )}
           {/* 🔁 Перенесено з вкладки «Реактивація» дослівно. Єдина додана межа —
               активним кнопки НЕМАЄ: задача реактивації ставиться тому, хто перестав
               замовляти, і до злиття вкладок активний клієнт у цьому списку не бував
@@ -633,6 +647,9 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         </div>
       </div>
 
+      {/* 🚚 Клієнти з коментарем «перевізник» → в архів одним кліком (тімлід і керівництво, 05.10.2026). */}
+      {auth.role !== "manager" && <CarrierCommentBanner onArchived={load} />}
+
       {/* ── ПЛИТКИ */}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         {/* 🔴 ПІДПИС РОЗВЕДЕНО НА ДВІ ВЕЛИЧИНИ. «Заповнено N із M» тепер брехало б:
@@ -726,6 +743,15 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
             {label} <span style={{ fontSize: 12, padding: "1px 7px", borderRadius: 999, background: "#f3f4f6", color: "#374151" }}>{tabCounts[k]}</span>
           </button>
         ))}
+        {/* 🎯 Пул лідгенів (ТЗ 22.09, п.4.2–4.4) — вкладку бачить лише той, кому сервер відкрив пул. */}
+        {data.leadgenPool?.canSee && (
+          <button role="tab" aria-selected={tab === "pool"} onClick={() => setTab("pool")}
+            style={{ padding: "9px 16px", border: "none", borderBottom: `3px solid ${tab === "pool" ? "#6d28d9" : "transparent"}`,
+                     marginBottom: -1, background: "transparent", cursor: "pointer", fontSize: 14,
+                     fontWeight: tab === "pool" ? 700 : 500, color: tab === "pool" ? "#111827" : "#6b7280" }}>
+            🎯 Пул лідгенів
+          </button>
+        )}
       </div>
 
       {/* ── ФІЛЬТРИ + ДІЇ ЦИКЛУ */}
@@ -748,6 +774,17 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         ))}
         {tab === "react" && (
           <>
+            <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}
+              title="Стан рішення по клієнту в поточному циклі реактивації — з сервера">Рішення:</span>
+            {([["all", "усі"], ["waiting", "чекають рішення"], ["self", "реактивую сам"], ["pool", "у пулі лідгенів"]] as const).map(([k, label]) => (
+              <button key={k} onClick={() => setCycleSub(k)}
+                style={{ fontSize: 12, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
+                         border: `1px solid ${cycleSub === k ? "#6d28d9" : "#d1d5db"}`,
+                         background: cycleSub === k ? "#f5f3ff" : "#fff",
+                         color: cycleSub === k ? "#6d28d9" : "#374151" }}>
+                {label}{k !== "all" ? ` · ${data.clients.filter((c) => c.reactCycle?.status === k).length}` : ""}
+              </button>
+            ))}
             <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 6 }}>Реактивація:</span>
             {([["all", "усі"], ["sleeping", "сплячі"], ["lost", "втрачені"]] as const).map(([k, label]) => (
               <button key={k} onClick={() => setReactSub(k)}
@@ -845,6 +882,17 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
             style={{ border: "none", background: "transparent", cursor: "pointer", color: "#b91c1c", fontSize: 15 }}>×</button>
         </div>
       )}
+      {tab === "react" && data.reactRules && (
+        <div style={{ ...S.card, marginBottom: 8, fontSize: 12.5, color: "#4b5563", lineHeight: 1.55, borderLeft: "3px solid #6d28d9" }}>
+          <b>Реактивація</b> — клієнти без виставленого рахунку {data.reactRules.quietMonths} повні календарні місяці
+          (з 4-го місяця). Натисніть «🙋 Реактивую сам» або «🎯 Передати лідгенам». Без рахунку й без рішення
+          за {Math.round(data.reactRules.decisionDays / 7)} тижні клієнт іде в пул лідгенів автоматично; після «Реактивую сам» —
+          через {Math.round(data.reactRules.selfGraceDays / 7)} тижні без рахунку. Передача — щопонеділка о {data.reactRules.transferHour}:00, не більше{" "}
+          {data.reactRules.weeklyCap} клієнтів на тиждень, першими — з найсвіжішим рахунком. Ті, хто вже був у реактивації,
+          ідуть порціями з понеділка {data.reactRules.launchRelease.slice(8, 10)}.{data.reactRules.launchRelease.slice(5, 7)}.
+        </div>
+      )}
+      {tab === "pool" ? <LeadgenPoolPanel onTaken={load} /> : (
       <div style={{ ...S.card, padding: 0, overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1180 }}>
           <thead>
@@ -910,19 +958,20 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           )}
         </table>
       </div>
+      )}
 
       {/* 🌉 МІСТОК. Сплячі й втрачені з екрана ЗНИКЛИ (жорсткий поділ) — без цього
           рядка вони зникли б МОВЧКИ, і це читалось би як «клієнти загубились».
           У Σ «постійні принесуть» місток НЕ входить: це не план, а вказівник. */}
-      {t.inReactivation > 0 && (
+      {/* 🔁 З блоку 4 (30.09.2026) число містка — РІВНО лічильник вкладки «Реактивація» (3 повні місяці без
+          рахунку). Доти тут стояло `t.inReactivation` за станом (сплячі + втрачені): 677 поруч із вкладкою 501 —
+          два джерела одного показника на одному екрані. Стан лишився підфільтром усередині вкладки. */}
+      {tab !== "react" && tab !== "pool" && tabCounts.react > 0 && (
         <div style={{ ...S.card, borderLeft: "3px solid #b45309", display: "flex",
                       alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <span style={{ fontSize: 13 }}>
-            🌉 Ще <b>{t.inReactivation}</b> постійних зараз у <b>реактивації</b>
-            <span style={{ color: "#6b7280" }}>
-              {" "}(сплячих {t.inReactivationSleeping} · втрачених {t.inReactivationLost})
-            </span>
-            <span style={{ color: "#6b7280" }}> — вони не в плані й у суму не входять.</span>
+            🌉 Ще <b>{tabCounts.react}</b> постійних зараз у <b>реактивації</b>
+            <span style={{ color: "#6b7280" }}> — без виставленого рахунку {data.reactRules?.quietMonths ?? 3} повні місяці.</span>
           </span>
           <button type="button" onClick={() => setTab("react")}
             style={{ fontSize: 12, color: "#b45309", border: "none", background: "transparent", cursor: "pointer", padding: 0, textDecoration: "underline" }}>
@@ -959,11 +1008,12 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
       </div>
 
       {creating && (
-        <CreateTaskDialog client={creating} busy={busy}
-          onCancel={() => setCreating(null)}
+        <CreateTaskDialog client={creating} busy={busy} error={actErr}
+          onCancel={() => { setCreating(null); setActErr(null); }}
           onSubmit={(deadline, comment) => act(async () => {
-            await createClientReactivationTask({ clientKey: creating.clientKey, deadline, comment });
+            const r = await createClientReactivationTask({ clientKey: creating.clientKey, deadline, comment });
             setCreating(null);
+            toast(`«${r.clientName || creating.name}». Виконавець — основний менеджер клієнта, задача в його Задачнику.`, { head: "Задачу реактивації створено" });
           })} />
       )}
       {viewingFiles && (
@@ -971,19 +1021,21 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           initialId={viewingFiles.initialId ?? null} onClose={() => setViewingFiles(null)} />
       )}
       {contacting && (
-        <ContactDialog client={contacting} busy={busy}
-          onCancel={() => setContacting(null)}
+        <ContactDialog client={contacting} busy={busy} error={actErr}
+          onCancel={() => { setContacting(null); setActErr(null); }}
           onSubmit={(channel, note, file) => act(async () => {
             await addClientContact({ clientKey: contacting.clientKey, channel, note, file });
             setContacting(null);
+            toast(`Контакт записано: «${contacting.name}»`);
           })} />
       )}
       {closing && data.closeReasons && (
-        <CloseTaskDialog task={closing} reasons={data.closeReasons} busy={busy}
-          onCancel={() => setClosing(null)}
+        <CloseTaskDialog task={closing} reasons={data.closeReasons} busy={busy} error={actErr}
+          onCancel={() => { setClosing(null); setActErr(null); }}
           onSubmit={(reason, note) => act(async () => {
             await closeReactivationTask({ taskId: closing.taskId, reason, note });
             setClosing(null);
+            toast(`Задачу закрито: «${closing.name}»`);
           })} />
       )}
     </div>

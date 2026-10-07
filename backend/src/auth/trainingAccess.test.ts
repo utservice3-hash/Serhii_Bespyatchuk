@@ -22,7 +22,8 @@ import { tabsForPath } from "./routeTab.js";
 
 const SCHEMA = readFileSync(fileURLToPath(new URL("../db/schema.sql", import.meta.url)), "utf8");
 /** Роль, якій власник видав право 14.09.2026 — дослівно: «admin, ceo, opdir, kvp». */
-const GRANTED = ["admin", "ceo", "opdir", "kvp"];
+/** Склад — рішення Романа: 14.09.2026 «admin, ceo, opdir, kvp»; 01.10.2026 + HR («так, дай hr редагування навчання»). */
+const GRANTED = ["admin", "ceo", "opdir", "kvp", "hr"];
 
 test("#443 КАНДИДАТ: рівно дві вкладки — навчання і документи (щоб підписати офер до підвищення), роль оголошена найвужчим обсягом", () => {
   // Замінив #410 («єдиний екран — навчання»): рішення власника 15.09.2026 (вечір) — кандидат
@@ -59,7 +60,8 @@ test("#443 КАНДИДАТ: рівно дві вкладки — навчанн
     "🔴 `/api/documents` більше не належить вкладці `documents` — сід кандидата вказує в порожнечу");
 });
 
-test("#411 ПРАВО `manage_training` ІСНУЄ, ЛЕЖИТЬ У КАТАЛОЗІ Й ВИДАНЕ РІВНО ЧОТИРЬОМ", () => {
+/* #411b — заміна `#411` («РІВНО ЧОТИРЬОМ»): 01.10.2026 твердження змінилось, тож новий номер (правило 13). */
+test("#411b ПРАВО `manage_training` ІСНУЄ, ЛЕЖИТЬ У КАТАЛОЗІ Й ВИДАНЕ РІВНО ПʼЯТЬОМ — З HR", () => {
   assert.ok((PERMISSION_CATALOG as readonly string[]).includes("manage_training"),
     "🔴 права немає в PERMISSION_CATALOG — видати його через Налаштування стане неможливо, "
     + "і `permGrantGate` відхилятиме ключ як невідомий");
@@ -71,8 +73,11 @@ test("#411 ПРАВО `manage_training` ІСНУЄ, ЛЕЖИТЬ У КАТАЛО
   assert.ok(give, "🔴 у schema.sql немає видачі `manage_training` — право оголошене, але нікому не належить");
   const got = give[1].split(",").map((x) => x.trim().replace(/'/g, "")).sort();
   assert.deepEqual(got, [...GRANTED].sort(),
-    `🔴 право видано не тим ролям: ${got.join(", ")}. Склад — рішення власника 14.09.2026, `
+    `🔴 право видано не тим ролям: ${got.join(", ")}. Склад — рішення власника (14.09 і 01.10.2026), `
     + "і міняти його можна лише його ж словом");
+  // 🪞 Дзеркало: розширення на HR не має розтектись далі — тімлід, менеджер і фінансист редагувати не можуть.
+  for (const no of ["team_lead", "manager", "financier", "candidate"])
+    assert.ok(!got.includes(no), `🔴 право manage_training дістав «${no}» — цього ніхто не вирішував`);
 
   assert.match(SCHEMA, /permissions - 'manage_training'\s*\n\s*WHERE key NOT IN/,
     "🔴 зникло ЯВНЕ зняття права в решти ролей — синк ролей поверне його фінансисту на "
@@ -86,8 +91,12 @@ test("#412 🪞 ЗЛІПОК ЗНАЄ ПРО ЗВУЖЕННЯ: фінансис�
      фінансист має право проходити курс так само, як менеджер. Вимагати його в `deny` там
      означало б стверджувати неправду — а гейт, що стверджує неправду, ми вже двічі
      ловили цього тижня (`#30n`, `#111b`). */
+  /* ➕ 01.10.2026 `/questions` теж поза гейтом, з тієї самої причини, що й прогрес: це питання КАНДИДАТА тімліду
+     (`routes/hiringQuestions.ts`, монтується під `/api/training/questions`), право `manage_training` там не
+     перевіряється — не-кандидату відмовляє `askQuestion`. Поки редактори були admin-рівня й не стояли в його deny,
+     розбіжність не проявлялась; HR-редактор (01.10.2026) стоїть там по ділу — ставити питання він не має. */
   const write = ACCESS_MATRIX.filter((r) => r.path.startsWith("/api/training")
-    && r.method !== "GET" && !r.path.includes("/progress/"));
+    && r.method !== "GET" && !r.path.includes("/progress/") && r.path !== "/api/training/questions");
   assert.ok(write.length >= 7,
     `🔴 у зліпку лише ${write.length} роутів запису навчання — заміряно 7 станом на 14.09.2026; покриття впало`);
 

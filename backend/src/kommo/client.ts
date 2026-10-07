@@ -205,6 +205,7 @@ import {
   carrierObligationFrom, clientPaymentFrom,
 } from "../core/carrierPayment.js";
 export { LEADS_BY_IDS_MAX };
+import { fmIncomeFrom, fmExpenseFrom } from "../core/fmSums.js";
 
 const FIELD_UTM_SOURCE = 481993;
 const FIELD_LEAD_GENERATOR = 2098037; // "Лидогенератор"
@@ -262,6 +263,21 @@ export function extractUnloadDate(deal: KommoDeal): Date | null {
 /** «Запланована дата оплати» (2097273) — обіцяна клієнтом дата оплати (Р2). */
 export function extractPlannedPaymentDate(deal: KommoDeal): Date | null {
   return fieldDate(deal, FIELD_PLANNED_PAYMENT);
+}
+
+/**
+ * ⏱ «Взято в работу» — два date_time-поля Kommo: «(ппц)» 2097983 і «(пр)» 2098493 (`docs/CRM_SCHEMA.md`).
+ * Третя з трьох подій «взято в роботу» вікна «Час опрацювання заявки» (ТЗ Юлії 24.09.2026). Беремо РАНІШЕ
+ * з двох: поле означає момент, коли людина взялась за заявку, і пізніше заповнене друге його не скасовує.
+ */
+export const FIELDS_TAKEN_IN_WORK = [2097983, 2098493] as const;
+export function extractTakenInWork(deal: KommoDeal): Date | null {
+  let best: Date | null = null;
+  for (const f of FIELDS_TAKEN_IN_WORK) {
+    const d = fieldDate(deal, f);
+    if (d && (!best || d < best)) best = d;
+  }
+  return best;
 }
 
 /** «Дата загрузки» — операційна дата початку перевезення. */
@@ -326,6 +342,17 @@ export function extractClientPayment(deal: KommoDeal): number | null {
  * нуль, бо нуль-знаменник маржі все одно непридатний. Тобто сторожа там нема —
  * є побічний ефект іншої вимоги, і копіювати його як зразок не можна.
  */
+/**
+ * 💰 Дохід і витрати угоди за правилом фінансиста (аркуш «ФМ»): Σ «Приход 1–5» і Σ «Расход 1–5» без «Оплата на
+ * выгрузке». Правило — у чистому `core/fmSums.ts` (звірено до копійки, 01.10.2026).
+ */
+export function extractFmIncome(deal: KommoDeal): number | null {
+  return fmIncomeFrom((id) => fieldText(deal, id));
+}
+export function extractFmExpense(deal: KommoDeal): number | null {
+  return fmExpenseFrom((id) => fieldText(deal, id));
+}
+
 export function extractCarrierObligation(deal: KommoDeal): number | null {
   return carrierObligationFrom(fieldText(deal, CARRIER_OBLIGATION_FIELD));
 }
@@ -353,6 +380,21 @@ export function extractSourceResponsible(deal: KommoDeal): string | null {
 export function extractCarrierEdrpou(deal: KommoDeal): string | null {
   const v = (fieldText(deal, CARRIER_PARTY_FIELDS.edrpou) ?? "").trim();
   return v || null;
+}
+
+/**
+ * 🗂 Поле «ТТН» (2097291, тип «файл»): скільки файлів ТТН прикріплено до угоди. Видалені
+ * (`is_deleted`) не рахуються. Поля немає в угоді — Kommo так віддає ПОРОЖНЄ поле, тож це 0, а
+ * не «невідомо»: «невідомо» (NULL у `deals.ttn_files`) — лише угода, яку синк ще не бачив після
+ * появи колонки. Живить ТТН-моніторинг Бізнес-асистента (05.10.2026).
+ */
+export const FIELD_TTN = 2097291;
+export function extractTtnFiles(deal: KommoDeal): number {
+  const f = deal.custom_fields_values?.find((v) => v.field_id === FIELD_TTN);
+  return (f?.values ?? []).filter((v) => {
+    const file = v.value as { file_uuid?: unknown; is_deleted?: unknown } | null | undefined;
+    return !!file && typeof file === "object" && !!file.file_uuid && file.is_deleted !== true;
+  }).length;
 }
 
 /** Payment form of the deal ("форма расчета"), e.g. "Безнал с НДС". */
@@ -772,6 +814,37 @@ export async function forEachResponsibleChangeEventPage(
       total += events.length;
     }
     if (raw.length < limit || !data._links?.next) break;
+    page += 1;
+  }
+  return total;
+}
+
+/**
+ * 🔗 Потік системних приміток `lead_auto_created` угод за [fromUnix, toUnix] — сторінками по 250.
+ * Сира форма приміток; пару «батьківська → дочірня» дістає чиста `parseLeadChildLink`. Фільтр за
+ * `updated_at`: такі примітки не редагуються, тож він дорівнює моменту створення.
+ */
+export async function forEachLeadAutoCreatedNotePage(
+  fromUnix: number,
+  toUnix: number,
+  onPage: (notes: Record<string, unknown>[]) => Promise<void>
+): Promise<number> {
+  const limit = 250;
+  let page = 1;
+  let total = 0;
+  for (;;) {
+    const data = await kommoRequest<KommoListResponse<Record<string, unknown>> | null>(
+      `/api/v4/leads/notes?limit=${limit}&page=${page}` +
+        `&${encodeURIComponent("filter[note_type]")}=lead_auto_created` +
+        `&${encodeURIComponent("filter[updated_at][from]")}=${fromUnix}` +
+        `&${encodeURIComponent("filter[updated_at][to]")}=${toUnix}`
+    );
+    const raw = (data?._embedded as { notes?: Record<string, unknown>[] } | undefined)?.notes ?? [];
+    if (raw.length) {
+      await onPage(raw);
+      total += raw.length;
+    }
+    if (raw.length < limit || !data?._links?.next) break;
     page += 1;
   }
   return total;

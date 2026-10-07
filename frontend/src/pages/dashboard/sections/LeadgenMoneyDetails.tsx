@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchLeadgenHandoffDeals } from "../../../api";
 import type { LeadgenHandoffDeal, LeadgenHandoffDealsResp, LeadgenHandoffMoney, LeadgenDealClass } from "../../../api";
-import { formatAmount, formatAmountFull } from "../format";
+import { formatAmountFull } from "../format";
 import { plural } from "../receivablesView";
 import { ddmm } from "../periodRules";
 
@@ -25,6 +25,8 @@ const CLS: { k: LeadgenDealClass; tab: string; color: string; hint: string }[] =
     hint: "Угода менеджера закрита без реалізації (143, у Кваліфікації — «Не цільові»/«Сміття») або борг по ній списано" },
   { k: "none", tab: "Без угоди менеджера", color: MUTED, hint: "Угоди менеджера (той самий клієнт, створена в межах 2 хв від передачі) не знайшлося — гроші не прив'язати" },
   { k: "same", tab: "Та сама угода", color: MUTED, hint: "Ця передача привела в угоду, вже пораховану іншою передачею: гроші не двоїмо" },
+  { k: "regular", tab: "Постійний клієнт", color: MUTED,
+    hint: "На дату передачі клієнт уже мав 2+ успішні перевезення, і останнє — менше ніж 3 місяці тому: такі гроші лідгену не зараховуються (правило Ярослава, задача 4668). Якщо з останнього успіху минуло 3+ місяці — клієнт знову «лідгенів»" },
 ];
 const ORDER = Object.fromEntries(CLS.map((c, i) => [c.k, i])) as Record<LeadgenDealClass, number>;
 const META = Object.fromEntries(CLS.map((c) => [c.k, c])) as Record<LeadgenDealClass, (typeof CLS)[number]>;
@@ -35,6 +37,8 @@ type Field = [string, (m: LeadgenHandoffMoney) => number];
 /** Поля підсумку, які мусять збігтися з числами рядка — УСІ, а не лише передачі й успіх. */
 const FIELDS: Field[] = [
   ["передач", (m) => m.handoffs], ["без угоди менеджера", (m) => m.unlinked], ["програно", (m) => m.lost], ["у ту саму угоду", (m) => m.sameDeal],
+  ["постійних клієнтів", (m) => m.regular.n], ["Очікування: сума", (m) => m.waiting.sum],
+  ["Успішні за період: сума", (m) => m.earned.sum], ["Очікування за період: сума", (m) => m.pending.sum], ["машин", (m) => m.machines],
   ...(["success", "paid", "expect", "work"] as const).flatMap((k): Field[] => [
     [`${META[k].tab}: угод`, (m) => m[k].n],
     [`${META[k].tab}: сума`, (m) => m[k].sum],
@@ -159,8 +163,8 @@ export function LeadgenMoneyDetails({ period, managerId, summary }: {
         <Pill on={tab === "all"} onClick={() => { setTab("all"); setShown(PAGE); }} color="var(--text)">Усі · {n(scoped.length)}</Pill>
         {tabs.map((c) => {
           const xs = of(c.k), s = xs.reduce((a, d) => a + d.price, 0), priced = xs.filter((d) => d.price).length;
-          const money = c.k === "work" ? (s > 0 ? ` · бюджет у ${n(priced)}: ${formatAmount(s)}` : "")
-            : c.k === "success" || c.k === "paid" || c.k === "expect" ? (s > 0 ? ` · ${formatAmount(s)}` : "") : "";
+          const money = c.k === "work" ? (s > 0 ? ` · бюджет у ${n(priced)}: ${formatAmountFull(s)}` : "")
+            : c.k === "success" || c.k === "paid" || c.k === "expect" ? (s > 0 ? ` · ${formatAmountFull(s)}` : "") : "";
           return (
             <Pill key={c.k} on={tab === c.k} onClick={() => { setTab(c.k); setShown(PAGE); }} color={c.color} title={c.hint}>
               {c.tab} · {n(xs.length)}{money}
@@ -230,8 +234,8 @@ export function LeadgenMoneyDetails({ period, managerId, summary }: {
                         </button>
                       </td>
                       <td style={td}>{n(x.n)}</td>
-                      <td style={{ ...td, color: x.success ? "var(--ok)" : MUTED }}>{x.success ? `${n(x.success)} · ${formatAmount(x.successSum)}` : "—"}</td>
-                      <td className="lg-opt" style={{ ...td, color: x.pipe ? "var(--warn)" : MUTED }}>{x.pipe ? `${n(x.pipe)} · ${formatAmount(x.pipeSum)}` : "—"}</td>
+                      <td style={{ ...td, color: x.success ? "var(--ok)" : MUTED }}>{x.success ? `${n(x.success)} · ${formatAmountFull(x.successSum)}` : "—"}</td>
+                      <td className="lg-opt" style={{ ...td, color: x.pipe ? "var(--warn)" : MUTED }}>{x.pipe ? `${n(x.pipe)} · ${formatAmountFull(x.pipeSum)}` : "—"}</td>
                       <td className="lg-opt" style={td}>{x.work ? n(x.work) : "—"}</td>
                       <td className="lg-opt" style={td}>{x.lost ? n(x.lost) : "—"}</td>
                       <td className="lg-opt" style={td}>{x.name === NO_SALES ? "—" : `${Math.round((x.success / x.n) * 100)} %`}</td>
@@ -251,16 +255,21 @@ function DealRow({ d, period }: { d: LeadgenHandoffDeal; period: { from: string;
   const m = META[d.cls];
   const detail =
     d.cls === "success" ? (d.closedDay ? `закрито ${dayLbl(d.closedDay, period)}` : "")
-    : d.cls === "expect" || d.cls === "paid" ? (d.planPayDay ? `план оплати ${dayLbl(d.planPayDay, period)}` : "")
+    : d.cls === "expect" || d.cls === "paid" ? [d.autoDay ? `авто ${dayLbl(d.autoDay, period)}` : "авто ще не поїхало", d.planPayDay ? `план оплати ${dayLbl(d.planPayDay, period)}` : ""].filter(Boolean).join(" · ")
     : d.cls === "lost" ? `${d.reason ?? "причину не вказано"}${d.closedDay ? ` · ${dayLbl(d.closedDay, period)}` : ""}`
     : d.cls === "none" ? "посилання — на угоду лідгена в Продзвоні"
     : d.cls === "same" ? "гроші пораховано в іншій передачі"
+    : d.cls === "regular" ? "постійний клієнт — у гроші лідгена не йде"
     : "";
-  const hasMoney = d.cls !== "none" && d.cls !== "same" && d.cls !== "lost";
+  const hasMoney = d.cls !== "none" && d.cls !== "same" && d.cls !== "lost" && d.cls !== "regular";
   const title = d.route ?? "угода без назви";
   return (
     <tr style={{ borderTop: "1px solid var(--border)" }}>
-      <td style={{ ...td, textAlign: "left" }}>{dayLbl(d.day, period)}</td>
+      <td style={{ ...td, textAlign: "left", color: d.inPeriod ? undefined : MUTED }}
+        title={d.inPeriod ? "Дата передачі" : "Передано раніше за період — у період потрапили гроші (успіх чи авто)"}>
+        {dayLbl(d.day, period)}{!d.inPeriod && <div style={{ fontSize: 11 }}>передано раніше</div>}
+        {d.carried && <div style={{ fontSize: 11, color: "var(--warn)" }} title="Авто поїхало раніше, а на кінець цього періоду угода ще не стала «Успішною» — тому вона в «Очікуванні» і тут">⏳ перенесено з минулого</div>}
+      </td>
       <td style={{ ...td, textAlign: "left", whiteSpace: "normal", overflowWrap: "anywhere", minWidth: 160, maxWidth: 280 }}>
         {d.url
           ? <a href={d.url} target="_blank" rel="noreferrer" style={{ fontWeight: 600, color: LINK }}

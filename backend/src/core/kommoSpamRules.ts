@@ -40,3 +40,29 @@ export function phonesOfUnsorted(raw: { _embedded?: { contacts?: { custom_fields
       if (f.field_code === "PHONE") for (const v of f.values ?? []) if (v.value != null) out.push(String(v.value));
   return out;
 }
+
+/** Рядок журналу `kommo_declined_forms` — що лишиться від заявки, яку Kommo видалить безповоротно. */
+export interface DeclinedRow {
+  uid: string; receivedAt: Date | null; formName: string | null; formPage: string | null;
+  ip: string | null; contactName: string | null; email: string | null;
+}
+type UnsortedRaw = {
+  uid?: unknown; created_at?: unknown;
+  metadata?: { form_name?: unknown; form_page?: unknown; ip?: unknown } | null;
+  _embedded?: { contacts?: { name?: unknown; custom_fields_values?: { field_code?: string | null; values?: { value?: unknown }[] }[] | null }[] };
+};
+const txt = (v: unknown): string | null => { const t = v == null ? "" : String(v).trim(); return t ? t : null; };
+
+/** Дістає з заявки `/leads/unsorted` форму, сторінку, IP, імʼя й пошту; без uid — null (писати нікуди). */
+export function declinedRowOf(raw: UnsortedRaw | null | undefined): DeclinedRow | null {
+  const uid = txt(raw?.uid);
+  if (!raw || !uid) return null;
+  const sec = Number(raw.created_at);
+  const c = raw._embedded?.contacts?.[0];
+  const email = (c?.custom_fields_values ?? []).find((f) => f.field_code === "EMAIL")?.values?.[0]?.value;
+  return {
+    uid, receivedAt: Number.isFinite(sec) && sec > 0 ? new Date(sec * 1000) : null,
+    formName: txt(raw.metadata?.form_name), formPage: txt(raw.metadata?.form_page), ip: txt(raw.metadata?.ip),
+    contactName: txt(c?.name), email: txt(email),
+  };
+}

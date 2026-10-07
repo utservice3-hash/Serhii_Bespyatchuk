@@ -1,5 +1,5 @@
 import axios from "axios";
-import type { AiCallState, PromiseStateT, PipelineGroupT } from "./pages/dashboard/aiCallsView";
+import type { AiCallState, PromiseStateT, PipelineGroupT, ConversationTypeT } from "./pages/dashboard/aiCallsView";
 import type { CarrierBucketT } from "./pages/dashboard/carrierCallsView";
 
 export const api = axios.create({
@@ -178,10 +178,20 @@ export interface LeadgenHandoffMoney {
   /** Передачі, що вели в угоду, вже пораховану іншою передачею (гроші не двоїмо). */
   sameDeal: number;
   success: LeadgenMoneyCell; paid: LeadgenMoneyCell; expect: LeadgenMoneyCell; work: LeadgenMoneyCell;
+  /** Передачі в угоди ПОСТІЙНИХ клієнтів (2+ успіхи до передачі, останній свіжіший за 3 міс.) — поза грошима лідгена. */
+  regular: LeadgenMoneyCell;
+  /** «Очікування» = оплачено + зона «Очікуємо» (похідне, у тотожність передач не входить). */
+  waiting: LeadgenMoneyCell;
+  /** «Успішні» за правилом Ярослава: угоди, що стали «Успішна угода» В ПЕРІОДІ, з передач будь-якої давності. */
+  earned: LeadgenMoneyCell;
+  /** «Очікування» за правилом Ярослава: авто поїхало В ПЕРІОДІ, зараз «Оплата отримана» / зона «Очікуємо». */
+  pending: LeadgenMoneyCell;
+  /** «Машин» — як колонка «Кількість поставлених машин» таблиць лідгенів: `earned.n + pending.n` (рахує бекенд). */
+  machines: number;
 }
 /** Стан угоди менеджера з передачі — ЗАРАЗ. `none` — угоди менеджера не знайшлося; `same` — ця передача
- *  привела в угоду, вже пораховану іншою передачею (гроші не двоїмо). */
-export type LeadgenDealClass = "success" | "paid" | "expect" | "work" | "lost" | "none" | "same";
+ *  привела в угоду, вже пораховану іншою передачею (гроші не двоїмо); `regular` — угода постійного клієнта. */
+export type LeadgenDealClass = "success" | "paid" | "expect" | "work" | "lost" | "none" | "same" | "regular";
 /** Одна передача лідгена й угода менеджера, що з неї виросла. Для `none` поля угоди — з угоди Продзвону. */
 export interface LeadgenHandoffDeal {
   day: string; lgId: number; pzId: number; dealId: number | null;
@@ -189,6 +199,10 @@ export interface LeadgenHandoffDeal {
   cls: LeadgenDealClass; price: number; closedDay: string | null; planPayDay: string | null;
   /** Причина відмови — лише для програних (у решті поле буває заповнене залишком з угоди Продзвону). */
   reason: string | null; url: string | null;
+  /** Дата «авто поїхало»; `inPeriod: false` — передано раніше за період, у період потрапили гроші. */
+  autoDay: string | null; inPeriod: boolean;
+  /** «Очікування», перенесене з минулого періоду: авто поїхало раніше, на кінець періоду угода ще чекала (02.10.2026). */
+  carried?: boolean;
 }
 /** Розкривний список «Гроші з передач»: ті самі правила, що `handoffMoney` у /leadgen-stats; `totals` мусять із ним збігатися. */
 export interface LeadgenHandoffDealsResp { from: string; to: string; managerId: number | null; deals: LeadgenHandoffDeal[]; totals: LeadgenHandoffMoney }
@@ -205,12 +219,13 @@ export interface LeadgenStatsResp {
     oprOfLeads: number | null; quotesOfOpr: number | null;
     targets: { oprOfLeads: number; quotesOfOpr: number; machinesOfQuotes: number };
   };
+  /** `null` — для лідгена (рівень відділу йому не показується, рішення 02.10.2026). */
   department: {
     machines: number; machinesRevenue: number; receivedRevenue: number; receivedDeals: number;
     note: string; anchors: string;
     /** Покриття поля «Лидогенератор» у періоді — межа розрізу по особах. */
     leadGeneratorFill: { withPerson: number; total: number };
-  };
+  } | null;
   weeks: { week: string; leads: number; opr: number; quotes: number }[];
   /** Розбивка за `grain` (якщо його передали): відділ і кожна людина — ті самі предикати й атрибуція, що в `rows`;
    *  тімлід отримує лише свою команду. Відділ = сума людей (як `totals`). */
@@ -218,12 +233,18 @@ export interface LeadgenStatsResp {
   buckets?: LeadgenBucket[];
   bucketsByPerson?: LeadgenPersonBucket[];
   handoffMoney?: { totals: LeadgenHandoffMoney; byPerson: (LeadgenHandoffMoney & { managerId: number })[] };
+  /** Гроші з передач по тих самих одиницях, що `buckets` (лише з `grain`); Σ одиниць == `handoffMoney`. */
+  handoffMoneyBuckets?: (LeadgenHandoffMoney & { bucket: string })[];
+  handoffMoneyBucketsByPerson?: (LeadgenHandoffMoney & { bucket: string; managerId: number })[];
   closures: { reason: string; deals: number }[];
   handoffs: { kommoId: number; day: string; name: string | null; manager: string | null; url: string }[];
   handoffsLimit: number;
-  warmingNow: number;
+  warmingNow: number | null;
   callRule: string;
   scopedTo: number | null;
+  /** «own» — відповідь лідгену: лише свій рядок + підсумки команди (рішення власника 02.10.2026). */
+  viewer?: "own";
+  selfId?: number;
   /** Люди з подіями поза командою «Лідогенерація» — лише рівню компанії (тімліду порожньо). */
   others?: LeadgenPersonRow[];
   othersTotals?: { leads: number; opr: number; quotes: number; warming: number; calls: number };
@@ -232,15 +253,24 @@ export interface LeadgenStatsResp {
   plans?: { elapsed: number; byPerson: LeadgenPersonPlan[]; team: LeadgenTeamPlan };
 }
 /** План на обраний період (місячний, поділений за робочими днями, як у Звіті); `null` — затвердженого плану немає. */
-export interface LeadgenPeriodPlan { leads: number | null; opr: number | null; quotes: number | null }
+export interface LeadgenPeriodPlan { leads: number | null; opr: number | null; quotes: number | null; calls: number | null; money: number | null }
 export type LeadgenPlanExec =
   | { kind: "none" } | { kind: "zero" }
   | { kind: "plan"; fact: number; plan: number; pct: number; level: "g" | "a" | "r" };
-export interface LeadgenPersonPlan { managerId: number; plan: LeadgenPeriodPlan; exec: LeadgenPlanExec }
-export interface LeadgenTeamPlan { total: number; planned: number; fact: number; plan: number | null; exec: LeadgenPlanExec }
+/** Дзвінки й гроші (01.10.2026): гроші — ОДИН план, два порівняння — з «Успішні» і з «Успішні + Очікування». */
+export interface LeadgenExtraExec { calls: LeadgenPlanExec; moneyEarned: LeadgenPlanExec; moneyTotal: LeadgenPlanExec }
+/** «Лишилось до плану» — норма з наздоганянням (рішення 05.10.2026), лише на поточний місяць. */
+export type LeadgenPlanPace =
+  | { kind: "none" }
+  | { kind: "done"; plan: number; fact: number }
+  | { kind: "pace"; plan: number; fact: number; leftMonth: number; normToday: number | null; doneToday: number;
+      leftToday: number | null; leftWeek: number | null; todayIsWorking: boolean };
+export interface LeadgenPersonPace { calls: LeadgenPlanPace; leads: LeadgenPlanPace; opr: LeadgenPlanPace; quotes: LeadgenPlanPace; moneyLeft: number | null }
+export interface LeadgenPersonPlan { managerId: number; plan: LeadgenPeriodPlan; exec: LeadgenPlanExec; extra: LeadgenExtraExec; pace?: LeadgenPersonPace }
+export interface LeadgenTeamPlan { total: number; planned: number; fact: number; plan: number | null; exec: LeadgenPlanExec; extra: LeadgenExtraExec }
 
 /** 📋 Формування плану лідгенів (дзеркало формування плану продажів). */
-export type LgPlanMetric = "leads" | "opr" | "quotes";
+export type LgPlanMetric = "leads" | "opr" | "quotes" | "calls" | "money";
 export type LgPlanValues = Record<LgPlanMetric, number | null>;
 export interface LgPlanMember {
   managerId: number; name: string; canSubmit: boolean;
@@ -248,7 +278,7 @@ export interface LgPlanMember {
   proposed: LgPlanValues; approved: LgPlanValues;
   comment: string | null; returnComment: string | null;
   submittedBy: string | null; submittedAt: string | null; decidedBy: string | null; decidedAt: string | null;
-  history: { month: string; leads: number; opr: number; quotes: number }[];
+  history: { month: string; leads: number; opr: number; quotes: number; calls: number }[];
 }
 export interface LgPlanFormation {
   month: string; role: string; canApprove: boolean; scopedTo: number | null;
@@ -258,7 +288,7 @@ export async function fetchLeadgenPlans(month: string): Promise<LgPlanFormation>
   const { data } = await api.get<LgPlanFormation>("/dashboard/leadgen-plans", { params: { month } });
   return data;
 }
-export async function submitLeadgenPlan(body: { managerId: number; month: string; leads: number; opr: number; quotes: number; comment?: string }): Promise<void> {
+export async function submitLeadgenPlan(body: { managerId: number; month: string; leads: number; opr: number; quotes: number; calls: number | null; money: number | null; comment?: string }): Promise<void> {
   await api.post("/dashboard/leadgen-plans/submit", body);
 }
 export async function approveLeadgenPlan(body: { managerId?: number; month: string }): Promise<{ approved: number }> {
@@ -292,7 +322,7 @@ export async function fetchLeadgenStats(params: { from: string; to: string; grai
 export type MissedDayBucket = "work" | "evening" | "weekend" | "night";
 export interface MissedSummary {
   missed: number; excluded: number; ownerless: number;
-  callback: number; callbackTalked: number; callbackSelf: number; callbackColleague: number;
+  callback: number; callbackAttempt: number; callbackSelf: number; callbackColleague: number;
   clientSelf: number;
   /** `null` — передзвонів за період не було, тобто медіану нема з чого рахувати. */
   medianMin: number | null;
@@ -326,6 +356,11 @@ export interface MissedCallsResp {
   teams: MissedTeamRow[];
   /** `false` у зрізі команди чи менеджера: «без відповідального» туди не входить за побудовою. */
   ownerlessInScope: boolean;
+  /** Контроль ТЗ «автозакриття пропущених» (задача 4373): ефект за 7 днів від сьогодні. */
+  automation?: MissedAutomation;
+}
+export interface MissedAutomation {
+  days: number; skippedCarrier: number; closedCallback: number; closedCarrier: number; openNow: number; dealsHistory: number | null;
 }
 export async function fetchMissedCalls(params: { from: string; to: string }): Promise<MissedCallsResp> {
   const { data } = await api.get<MissedCallsResp>("/dashboard/missed-calls", { params });
@@ -345,9 +380,17 @@ export interface AiCallRowT {
   promiseState: PromiseStateT | null; managerPromises: number;
   /** П3 «тиша перед закриттям»; на екрані — лише з дати оголошення норми (`silence.normFrom`). */
   silentBeforeClose: boolean | null;
+  /** Тип розмови (рубрика v2, ТЗ 30.09.2026) і куди вона йде: звіт чи «Виключені». */
+  conversationType: ConversationTypeT | null; typeConfidence: number | null; typeReason: string | null; priceValue: string | null;
+  inReport: boolean; typeCheck: boolean; typeOverride: { isCargo: boolean; byName: string | null; at: string } | null;
+  /** «Чому не озвучено ціну» і «Опрацьовано» (ТЗ 30.09.2026). */
+  priceNote: AiNoteT | null; missedNote: AiNoteT | null; offlineNote: AiNoteT | null;
 }
+export interface AiNoteT { text: string; byName: string | null; at: string }
 export interface AiCallsResp {
   period: { from: string; to: string }; truncated: boolean; rows: AiCallRowT[];
+  /** Менеджер «Виключених» не бачить (ТЗ 30.09.2026 п.7) — сервер їх і не віддає. */
+  canSeeExcluded: boolean;
   silence: { minGapHours: number; normFrom: string | null };
 }
 export async function fetchAiCalls(params: { from: string; to: string }): Promise<AiCallsResp> {
@@ -370,8 +413,71 @@ export interface AiCallCardResp {
   result: AiAnalysis | null; turns: AiTurn[] | null; transcriptHidden: boolean;
   managerChannel: number | null; durationSec: number | null; nextOutboundAt: string | null;
   /** Термін і стан кожної обіцянки — у порядку `result.promises`; обіцянки клієнта → `null`. */
-  promiseChecks: ({ deadline: string; basis: string; state: PromiseStateT } | null)[];
-  callsAfter: { at: string; billsec: number; direction: "in" | "out" }[];
+  promiseChecks: ({ deadline: string; countUntil: string; basis: string; state: PromiseStateT } | null)[];
+  callsAfter: { at: string; billsec: number; direction: "in" | "out"; managerName: string | null; byPromiser: boolean }[];
+  /** Журнал ручних змін типу (від найновішої) і чи може ЦЕЙ користувач змінювати тип. */
+  typeHistory: { isCargo: boolean; byName: string | null; at: string }[];
+  canEditType: boolean;
+  /** Хто що може писати й чи можна слухати запис — вирішує сервер. */
+  noteRights: { price: boolean; missed: boolean; offline: boolean };
+  canListen: boolean;
+}
+/** Коментар: `price` — «Чому не озвучено ціну», `missed` — «Опрацьовано». Порожній текст прибирає. */
+export async function putAiCallNote(uniqueid: string, kind: "price" | "missed" | "offline", text: string): Promise<void> {
+  await api.put(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/note`, { kind, text });
+}
+/** Запис розмови — байтами через наш сервер (з авторизацією), а не прямим посиланням Ringostat. */
+export async function fetchAiCallRecording(uniqueid: string): Promise<Blob> {
+  const { data } = await api.get<Blob>(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/recording`, { responseType: "blob" });
+  return data;
+}
+/** 📊 Звіт тімліда «Перший дотик» (ТЗ 30.09.2026 п.6). */
+export interface AiManagerLineT {
+  managerId: number | null; managerName: string; teamName: string | null;
+  accepted: number; analysed: number; priceVoiced: number; pricePct: number | null; noPriceNoComment: number;
+  agreements: number; done: number; late: number; missed: number;
+  /** Втрачені ліди (тип `lead_lost`) і медіана хвилин від заявки до першого нашого вихідного по них. */
+  lost: number; lostReactionMedianMin: number | null;
+}
+export interface AiPoolRowT {
+  uniqueid: string; calledAt: string; managerId: number | null; managerName: string | null; teamName: string | null;
+  clientPhone: string | null; kommoIds: number[]; state: AiCallState; summary: string | null;
+  priceDiscussed: boolean | null; priceValue: string | null; priceNote: AiNoteT | null; missedNote: AiNoteT | null; offlineNote: AiNoteT | null;
+  promiseState: PromiseStateT | null; objections: number; typeCheck: boolean;
+  conversationType: ConversationTypeT | null; reactionMin: number | null; reactionOffHours: boolean;
+  flags: { analysed: boolean; noPrice: boolean; noComment: boolean; missed: boolean; banner: boolean; lost: boolean };
+}
+export interface AiTeamReportResp {
+  period: { from: string; to: string }; truncated: boolean;
+  /** Колір блоку «дзвінка в телефонії немає» — з «Налаштувань» (адмін). */
+  bannerTone: "neutral" | "alert";
+  managers: AiManagerLineT[]; total: AiManagerLineT;
+  banner: { total: number; byManager: { managerId: number | null; managerName: string; count: number }[] };
+  rows: AiPoolRowT[];
+}
+/** 🎛 Налаштування «Першого дотику» (лише адмін): вікно повторного, допуск і мінімум передзвону, колір блоку. */
+export interface FirstTouchTunablesT { repeatWindowDays: number | null; callbackGraceMin: number; callbackMinDeadlineMin: number; bannerTone: "neutral" | "alert" }
+export interface FirstTouchSettingsResp {
+  current: FirstTouchTunablesT;
+  recommended: { repeatWindowDays: number; callbackGraceMin: number; callbackMinDeadlineMin: number };
+  bounds: Record<"repeatWindowDays" | "callbackGraceMin" | "callbackMinDeadlineMin", { min: number; max: number }>;
+  history: (FirstTouchTunablesT & { setByName: string | null; setAt: string })[];
+}
+export async function fetchFirstTouchSettings(): Promise<FirstTouchSettingsResp> {
+  const { data } = await api.get<FirstTouchSettingsResp>("/settings/first-touch");
+  return data;
+}
+export async function saveFirstTouchSettings(t: FirstTouchTunablesT): Promise<Pick<FirstTouchSettingsResp, "current" | "history">> {
+  const { data } = await api.put<Pick<FirstTouchSettingsResp, "current" | "history">>("/settings/first-touch", t);
+  return data;
+}
+export async function fetchAiTeamReport(params: { from: string; to: string; teamId?: number; managerId?: number }): Promise<AiTeamReportResp> {
+  const { data } = await api.get<AiTeamReportResp>("/dashboard/ai-calls/team-report", { params });
+  return data;
+}
+/** «Це вантаж» / «Це не вантаж» — ручний тип розмови (тімлід своєї команди, адмін). */
+export async function setAiCallType(uniqueid: string, isCargo: boolean): Promise<void> {
+  await api.post(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/type`, { isCargo });
 }
 export async function fetchAiCallCard(uniqueid: string): Promise<AiCallCardResp> {
   const { data } = await api.get<AiCallCardResp>(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}`);
@@ -405,7 +511,7 @@ export interface CarrierDealT {
     bucket: CarrierBucketT | null };
   human: { decision: CarrierDecisionT; otherType: CarrierOtherTypeT | null; note: string | null; by: string; role: string | null; at: string } | null;
   journal: CarrierJournalT[];
-  category: CarrierCategoryT; source: "human" | "ai" | null; why: string | null; otherType: CarrierOtherTypeT | null;
+  category: CarrierCategoryT; source: "human" | "ai" | "crm" | null; historyFrom?: number | null; why: string | null; otherType: CarrierOtherTypeT | null;
   /** «На перевірці»: до коли розібрати (кінець робочого дня) і чи вже прострочено. */
   reviewSince: string | null; reviewDeadline: string | null; overdue: boolean;
   close: CarrierCloseT | null; crm: { statusId: number | null; rejectReason: string | null };
@@ -449,7 +555,26 @@ export interface CarrierCallsMetaResp {
   caps: { carrier: number; stt: number | null; analysis: number | null };
   close: { mode: string; otherMode: string; wouldClose: number; closed: number; reverted: number; failed: number; otherWouldClose: number; otherClosed: number };
   agreement: { aiRole: string; decisions: number; agreed: number; byDecision: Record<string, number> }[];
+  agreementRows: CarrierAgreementRowT[];
+  /** 🛡 Захист «без розмови» від падіння Ringostat — лише керівництву (інакше `null`). */
+  noTalkGuard: { open: boolean; syncAgeMin: number | null; maxAgeMin: number; lastSyncAt: string | null; noCreatingCall: number } | null;
+  /** 🧽 Задачі робота на закритих угодах етапу — лише керівництву (інакше `null`). */
+  taskSweep: { mode: string; deals: number; robotTasks: number; closedTasks: number } | null;
 }
+/** 🔎 Одна угода за номером (повна картка з «AI проти людини»); у скоупі ролі. */
+export async function fetchCarrierDeal(kommoId: number): Promise<CarrierDealT> {
+  const { data } = await api.get<CarrierDealT>(`/dashboard/carrier-calls/deal/${String(kommoId)}`);
+  return data;
+}
+/** 📈 Динаміка за період: по днях — відсіяно, без розмови, категорії; витрати — лише керівництву (інакше `null`). */
+export interface CarrierDayStatT { day: string; filtered: number; noTalk: number; clients: number; carriers: number; other: number; unsorted: number; spendUsd: number | null }
+export async function fetchCarrierStats(params: { from: string; to: string }): Promise<{ period: { from: string; to: string }; days: CarrierDayStatT[]; spendCapUsd: number }> {
+  const { data } = await api.get<{ period: { from: string; to: string }; days: CarrierDayStatT[]; spendCapUsd: number }>("/dashboard/carrier-calls/stats", { params });
+  return data;
+}
+/** «AI проти людини» поіменно (лише керівництву). */
+export interface CarrierAgreementRowT { kommoId: number; url: string; uniqueid: string | null; managerName: string | null; aiRole: string; aiConfidence: number | null;
+  decision: CarrierDecisionT; otherType: CarrierOtherTypeT | null; by: string; byRole: string | null; at: string; agreed: boolean }
 /** 🙋 «На перевірці» на етапі (без періоду) і вирішені за 30 днів — у скоупі ролі. */
 export interface CarrierPendingT { kommoId: number; url: string; uniqueid: string | null; phone: string; createdAt: string; calledAt: string | null;
   billsec: number | null; managerName: string | null; teamName: string | null; category: CarrierCategoryT; why: string | null; dealState: string;
@@ -1335,6 +1460,45 @@ export interface ResponseTime {
   taken15minPct: number;
   neglectedOver24h: number;
 }
+/* ⏱ Вікно «Час опрацювання заявки» (ТЗ Юлії 24.09.2026) — бекенд `core/leadTake.ts`. */
+export type LeadTakeSource = "all" | "ad" | "site" | "leadgen";
+export type LeadTakeTime = "all" | "work" | "off";
+export type LeadTakeColumn = "all" | "m1" | "m5" | "m30" | "m60" | "h1" | "none" | "slowLost";
+export interface LeadTakeParams { from: string; to: string; source: LeadTakeSource; time: LeadTakeTime; campaign?: string; teamId?: number }
+export interface LeadTakeRow {
+  kind: "manager" | "group" | "dept"; key: string; label: string; group?: string;
+  n: number; m1Pct: number | null; m5Pct: number | null; m30Pct: number | null; m60Pct: number | null; h1Pct: number | null;
+  notTaken: number; medianMin: number | null; slowLost: number; loss: number | null;
+  red: { m1: boolean; m5: boolean; notTaken: boolean };
+}
+export interface LeadTakeTable {
+  rows: LeadTakeRow[]; avgCheck: number | null; avgCheckDeals: number;
+  campaigns: { campaign: string; n: number }[];
+  norm: { m1Pct: number; m5Pct: number; notTaken: number };
+}
+export interface LeadTakeDeal {
+  kommoId: number; name: string; url: string; manager: string | null; group: string;
+  createdAt: string; takenAt: string | null; event: string | null; minutes: number | null;
+  offHours: boolean; status: "open" | "won" | "lost"; rejectReason: string | null; source: string | null; campaign: string;
+}
+export async function fetchLeadTake(params: LeadTakeParams): Promise<LeadTakeTable> {
+  const { data } = await api.get<LeadTakeTable>("/dashboard/response-time/take", { params });
+  return data;
+}
+export async function fetchLeadTakeDeals(params: LeadTakeParams & { row: string; col: LeadTakeColumn }): Promise<LeadTakeDeal[]> {
+  const { data } = await api.get<{ deals: LeadTakeDeal[] }>("/dashboard/response-time/take/deals", { params });
+  return data.deals ?? [];
+}
+/** Excel формує сервер (без бібліотеки у фронті); тут лише зберегти файл. */
+export async function downloadLeadTakeXlsx(params: LeadTakeParams): Promise<void> {
+  const { data } = await api.get<Blob>("/dashboard/response-time/take/export", { params, responseType: "blob" });
+  const url = URL.createObjectURL(data);
+  const a = document.createElement("a");
+  a.href = url; a.download = `chas-opracyuvannya_${params.from}_${params.to}.xlsx`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export async function fetchResponseTime(params: {
   from?: string;
   to?: string;
@@ -1440,6 +1604,12 @@ export interface ManagerOption {
 export async function fetchManagerOptions(teamId?: number): Promise<ManagerOption[]> {
   const { data } = await api.get<{ managers: ManagerOption[] }>("/teams/managers", { params: teamId ? { teamId } : undefined });
   return data.managers;
+}
+
+/** Неактивні (вимкнені в Kommo) менеджери з МОЄЇ команди — їх немає в селекті виконавця. */
+export async function fetchMyTeamInactive(): Promise<{ id: number; name: string }[]> {
+  const { data } = await api.get<{ myTeamInactive?: { id: number; name: string }[] }>("/teams/managers");
+  return data.myTeamInactive ?? [];
 }
 
 export interface ManagerWeekRow {
@@ -1616,6 +1786,7 @@ export interface DashboardUser {
   is_active: boolean;
   crm_linked: boolean;                        // ідентичність із CRM (ПІБ/команда/синк-роль read-only)
   tracker_enabled: boolean;                   // ⏱ дозвіл трекеру часу збирати дані з машини людини
+  orphan_pool?: boolean;                      // 🧭 менеджеру відкрито пул нічийних («взяти собі»)
   team_name: string | null;
   deactivated_at?: string | null;
   deactivated_reason?: string | null;
@@ -1664,7 +1835,7 @@ export async function resetUserPassword(id: number): Promise<string> {
 
 export async function updateUser(
   id: number,
-  patch: { roleOverride?: string | null; isActive?: boolean; fullName?: string; reason?: string; trackerEnabled?: boolean }
+  patch: { roleOverride?: string | null; isActive?: boolean; fullName?: string; reason?: string; trackerEnabled?: boolean; orphanPool?: boolean }
 ): Promise<void> {
   await api.patch(`/settings/users/${id}`, patch);
 }
@@ -1804,6 +1975,12 @@ export interface ReceivableClientFacts {
   /** 🗑 Списано як безнадійне. У `amount` НЕ входить, але видно підписом. */
   writtenOffN: number;
   writtenOffAmount: number;
+  /** 🗓 Найраніша планова дата оплати з CRM серед неоплачених рахунків (YYYY-MM-DD, Київ). */
+  crmDueNearest?: string | null;
+  /** Коли створено найновішу угоду неоплачених рахунків (ISO UTC). */
+  newestDealAt?: string | null;
+  /** Угоди неоплачених рахунків — для вибору, до якої привʼязати домовленість. */
+  deals?: { dealId: number; invoiceNo: string | null; crmDue: string | null; createdAt: string | null }[];
 }
 
 /** Ті самі числа, що в ярликах рядків, — джерело ПЛИТОК. Вираз один на обох. */
@@ -1841,6 +2018,10 @@ export interface ReceivableClient {
    * Нічого не затирається — змінюється лише те, що вважається активним.
    */
   noteUpdatedAt: string | null;
+  /** 🗓 До якої угоди привʼязано запис (з 06.10.2026); `null` — старий клієнтський запис. */
+  noteDealId?: number | null;
+  /** Чи запис про ПОТОЧНИЙ борг. `false` — він з попередньої угоди: дата береться з CRM. Рішення сервера. */
+  noteActual?: boolean;
   /**
    * Скільки записів у журналі домовленостей. 0 → кнопки «історія» немає.
    * ⚠️ Рахується по КАНОНІЧНОМУ ключу — так само, як їх віддає `/note-history`.
@@ -2043,6 +2224,8 @@ export async function saveReceivableNote(payload: {
   dueDate?: string | null;
   /** Порожній `comment` без цього прапорця НЕ стирає текст на сервері (17.09.2026). */
   clear?: boolean;
+  /** До якої угоди запис (06.10.2026). Не передали — сервер бере угоду з найближчою датою оплати в CRM. */
+  dealId?: number | null;
 }): Promise<void> {
   await api.put("/dashboard/receivables/note", payload);
 }
@@ -2086,6 +2269,8 @@ export interface ReceivableInvoice {
   ourEntity: ReceivableEntity | null;
   /** Чому наша юрособа невідома. «Невідомо» без причини — порожнє місце. */
   ourEntityReason: ReceivableEntityReason | null;
+  /** 🗓 Планова дата оплати з CRM по угоді цього рахунку (YYYY-MM-DD) або `null`. */
+  crmDue?: string | null;
   /**
    * 🚚 Чи оплачений перевізник за цим рахунком. `na` — «не знаємо», і воно
    * ЗАВЖДИ приходить із причиною: відсутність угоди не є фактом неоплати.
@@ -2501,6 +2686,32 @@ export interface FeedbackItem {
   updatedAt: string;
   authorUserId: number;
   authorName: string;
+  /** Коли закрили («вирішено»/«відхилено»); null — відкрите або повернуте на розгляд. */
+  closedAt: string | null;
+  /** Коли звернення разом із фото буде безповоротно видалене (closedAt + 30 днів). */
+  purgeAt: string | null;
+  files: FeedbackFile[];
+}
+export interface FeedbackFile { id: number; name: string; mime: string; sizeBytes: number; createdById: number | null }
+/** Ліміти — дзеркало `core/feedbackRetention.ts`; сервер однаково перевіряє сам. */
+export const FEEDBACK_FILE_MAX_BYTES = 5 * 1024 * 1024;
+export const FEEDBACK_FILES_PER_ITEM = 5;
+export async function uploadFeedbackFile(feedbackId: number, file: File): Promise<FeedbackFile> {
+  const dataBase64 = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  const { data } = await api.post<FeedbackFile>(`/feedback/${feedbackId}/files`, { filename: file.name, dataBase64 });
+  return data;
+}
+export async function deleteFeedbackFile(feedbackId: number, fileId: number): Promise<void> {
+  await api.delete(`/feedback/${feedbackId}/files/${fileId}`);
+}
+export async function fetchFeedbackFileBlobUrl(feedbackId: number, fileId: number): Promise<string> {
+  const { data } = await api.get(`/feedback/${feedbackId}/files/${fileId}`, { responseType: "blob" });
+  return URL.createObjectURL(data as Blob);
 }
 export async function fetchFeedback(): Promise<FeedbackItem[]> {
   const { data } = await api.get<{ feedback: FeedbackItem[] }>("/feedback");
@@ -2650,8 +2861,34 @@ export async function fetchStuckGrouped(params: { teamId?: number; managerId?: n
 
 // ── Статистики (діаграми) ──
 export interface StatsPoint { period: string; value: number; source: "sheet" | "crm" | "manual" }
-export interface StatsSeries { scopeType: string; scopeKey: string; scopeName: string; points: StatsPoint[]; benchmark?: boolean }
-export interface StatsSeriesResp { block: string; metric: string; granularity: "day" | "week" | "month"; seam: string; crmAble: boolean; live: boolean; series: StatsSeries[] }
+export interface StatsSeries { scopeType: string; scopeKey: string; scopeName: string; points: StatsPoint[]; benchmark?: boolean;
+  /** Розформована команда — історія є, у дефолтному вигляді її немає (ТЗ 28.09, блок 3). */
+  archived?: boolean }
+/** ⚠️ Відома аномалія точки з доказом CRM (ТЗ 28.09, блок 1, п.3) — реєстр `statistics/anomalies.ts`. */
+export interface StatsAnomaly { metric: string; granularity: string; scopeKey: string; period: string; kind: "real" | "data_error" | "corrected"; note: string; crm: string }
+export interface StatsSeriesResp { block: string; metric: string; granularity: "day" | "week" | "month"; seam: string; crmAble: boolean; live: boolean; series: StatsSeries[];
+  anomalies?: StatsAnomaly[];
+  /** 📈 Сходинки плану — лише для «Оплата отримана» (②). */
+  plan?: { scopeKey: string; points: { period: string; value: number }[] }[] }
+/** 📊 Плитки й таблиця команд (ТЗ 28.09, блоки 1–3). Числа рахує сервер; фронт лише показує. */
+export interface StatsTile {
+  key: "revenue" | "dispatched" | "calls" | "transfers"; label: string; unit: "₴" | "шт";
+  now: number; prev: number; deltaPct: number | null; plan: number | null; planPct: number | null;
+  sub: { label: string; value: number } | null; planNote: string | null; formula: string;
+  /** Тиждень через межу місяців: план = сума частин (по одній на місяць). */
+  planParts?: { from: string; to: string; plan: number; kind: "auto" | "manual" }[];
+}
+export interface StatsTeamRow { teamId: number; name: string; archived: boolean; fact: number; prev: number;
+  deltaPct: number | null; plan: number | null; pct: number | null; rank: number }
+export interface StatsSummaryResp {
+  gran: "week" | "month"; asOf: string; complete: boolean;
+  period: { from: string; to: string }; cur: { from: string; to: string }; prev: { from: string; to: string };
+  tiles: StatsTile[]; teams: StatsTeamRow[];
+}
+export async function fetchStatsSummary(params: { gran: "week" | "month"; anchor?: string }): Promise<StatsSummaryResp> {
+  const { data } = await api.get<StatsSummaryResp>("/statistics/summary", { params });
+  return data;
+}
 export async function fetchStatsSeries(params: { block: string; metric: string; granularity: string; from?: string; to?: string; unit?: string }): Promise<StatsSeriesResp> {
   const { data } = await api.get<StatsSeriesResp>("/statistics/series", { params });
   return data;
@@ -3687,7 +3924,9 @@ export async function fetchManagerReport(params: {
 
 // ─────────────────────────── Виписка (банк) ───────────────────────────
 export interface BankAccount {
-  id: number; company: string; bank: "mono" | "privat"; label: string; currency: string;
+  id: number; company: string; bank: "mono" | "privat" | "manual"; label: string; currency: string;
+  /** Рахунок «лише фінанси» (особисті картки власника ФОП, Сейф): сервер віддає його лише ролям із `view_cashflow`. */
+  finance_only?: boolean;
   external_account_id: string | null; is_active: boolean;
   legal_name: string | null; edrpou_ipn: string | null; iban: string | null;
   key_card?: string | null; // ключ-карта ФОП (звичайні реквізити, як IBAN)
@@ -3749,6 +3988,19 @@ export async function saveBankAccount(id: number | null, patch: Partial<BankAcco
 export interface BankBalance { id: number; label: string; company: string; balance_amount: string | null; balance_currency: string | null; balance_updated_at: string | null; balance_uah?: number | null; fx_gain_period?: number | null }
 export interface BankBalancesResp { balances: BankBalance[]; period?: { from: string; to: string } }
 export interface CashflowMonth { month: string; incoming_uah: number; outgoing_uah: number; net_uah: number }
+// 💰 Ручний рахунок «Сейф» (прохід 2г фінансів): записи по операції або підсумком тижня. Правила — на сервері.
+export interface BankManualRow { id: number; day: string; direction: "in" | "out"; amount: number; currency: string; amount_uah: number; item_id: number | null; item: string | null;
+  kind: "op" | "week"; name: string | null; purpose: string | null; deleted: boolean; entered_by: string | null }
+export async function fetchBankManual(account: number, from: string, to: string): Promise<BankManualRow[]> {
+  const { data } = await api.get<{ rows: BankManualRow[] }>("/bank/manual", { params: { account, from, to } });
+  return data.rows;
+}
+export async function addBankManual(body: { accountId: number; kind: "op" | "week"; date: string; direction?: "in" | "out"; amount?: string; inAmount?: string; outAmount?: string; purpose?: string;
+  currency?: "UAH" | "USD" | "EUR"; itemId?: number | null }) {
+  return (await api.post<{ ids: number[]; monday: string }>("/bank/manual", body)).data;
+}
+export async function deleteBankManual(id: number) { await api.delete(`/bank/manual/${id}`); }
+export async function restoreBankManual(id: number) { await api.post(`/bank/manual/${id}/restore`, {}); }
 export async function fetchBankCashflow(months = 12): Promise<CashflowMonth[]> {
   const { data } = await api.get<{ cashflow: CashflowMonth[] }>("/bank/cashflow", { params: { months } });
   return data.cashflow;
@@ -3863,6 +4115,10 @@ export interface ClientPlanRow {
   history: number[]; plan: number; planStatus: "draft" | "pending" | "approved" | "none";
   /** 🗂 Вкладка й порядок «Всі» (ТЗ 22.09, п.3.1) — з сервера (`core/clientTabs.ts`), фронт не рахує. */
   tabGroup: "regular" | "yellow" | "react";
+  /** 🧾 Останній виставлений рахунок (київська дата) — основа вкладки «Реактивація» з блоку 4. */
+  lastInvoice?: string | null;
+  /** 🔁 Цикл реактивації (ТЗ 22.09, блок 4) — лише у вкладці «Реактивація», решті `null`. */
+  reactCycle?: ReactCycleView | null;
   reviewNote: string | null; weeks: ClientPlanWeek[];
   /** 🧾 Факт «з рахунку і далі» (ТЗ 22.09, п.2.1) — не «успішно реалізовано». */
   fact: number; pct: number | null;
@@ -3932,6 +4188,10 @@ export interface ClientPlansResp {
   month: string; historyMonths: string[];
   /** Порядок груп у вкладці «Всі» — з сервера, щоб фронт не тримав копії. */
   tabGroupRank: Record<"regular" | "yellow" | "react", number>;
+  /** 🔁 Пул лідгенів (ТЗ 22.09, блок 4): хто бачить вкладку пулу і хто бере — вирішує сервер. */
+  leadgenPool?: { canSee: boolean; canTake: boolean };
+  /** 🔁 Числа правила реактивації з ядра — для підпису, фронт їх не рахує. */
+  reactRules?: { quietMonths: number; decisionDays: number; selfGraceDays: number; weeklyCap: number; launchRelease: string; transferHour: number };
   weeks: { label: string; from: string; to: string; status: "past" | "current" | "future"; workingDays: number }[];
   /** Довідники дій, що переїхали з вкладки «Реактивація». Приходять із ядра. */
   closeReasons?: { key: string; label: string }[];
@@ -3950,7 +4210,7 @@ export interface ClientPlansResp {
     /** Скільки рядків у списку — ЛИШЕ через план (клієнт уже не активний). */
     planOnlyClients: number;
     /** 🔢 Три цифри реактивації (ТЗ 3989): у роботі · повернуто за місяць · Σ повернутої маржі; gapDays — поріг «повернуто». */
-    react?: { inWork: number; returnedMonth: number; returnedMargin: number; gapDays: number };
+    react?: { inWork: number; inPool?: number; returnedMonth: number; returnedMargin: number; gapDays: number };
     rosterClients: number;
     byState: { active: number; reactivation: number; planOnly: number };
     /** 🕳 Плани без клієнтського рядка. `canSee` вирішує СЕРВЕР (isAdminScope). */
@@ -4059,7 +4319,43 @@ export async function fetchContactFileBlobUrl(id: number): Promise<string> {
   return URL.createObjectURL(data as Blob);
 }
 
+/**
+ * 🔁 ЦИКЛ РЕАКТИВАЦІЇ (ТЗ 22.09, блок 4; `core/reactCycleRules.ts`). Стан і дозволені кнопки рахує сервер.
+ * waiting — рішення ще немає · self — «реактивую сам» · pool — у пулі лідгенів · taken — взяв лідген.
+ */
+export interface ReactCycleView {
+  cycleMonth: string;
+  lastInvoice: string | null;
+  status: "waiting" | "self" | "pool" | "taken";
+  poolReason: "manager" | "auto" | "self_expired" | null;
+  /** Понеділок (`YYYY-MM-DD`), з якого клієнт до передачі лідгенам; черга по 100 на тиждень може відсунути. null — строку немає. */
+  deadline: string | null;
+  daysLeft: number | null;
+  allowed: ("self" | "leadgen")[];
+}
+export async function reactDecision(p: { clientKey: string; decision: "self" | "leadgen" }): Promise<ReactCycleView> {
+  const { data } = await api.post<{ reactCycle: ReactCycleView }>("/dashboard/react-decision", p);
+  return data.reactCycle;
+}
+export interface LeadgenPoolRow {
+  clientKey: string; clientName: string; pooledAt: string;
+  poolReason: "manager" | "auto" | "self_expired";
+  fromManagerName: string | null; lastInvoice: string | null;
+  /** ① за весь час — щоб лідген бачив, кого брати першим. */
+  successRevenue: number; successDeals: number;
+}
+export async function fetchLeadgenPool(): Promise<{ canTake: boolean; rows: LeadgenPoolRow[]; revivedClosed: number }> {
+  const { data } = await api.get<{ canTake: boolean; rows: LeadgenPoolRow[]; revivedClosed: number }>("/dashboard/leadgen-pool");
+  return data;
+}
+export async function takeFromLeadgenPool(clientKey: string): Promise<void> {
+  await api.post("/dashboard/leadgen-pool/take", { clientKey });
+}
+
 export interface ClientCard {
+  /** 🔁 Цикл реактивації — те саме, що в рядку списку; `null` — клієнт не в реактивації. */
+  reactCycle?: ReactCycleView | null;
+  lastInvoice?: string | null;
   /** 🔗 Приєднані записи CRM — ТЗ 22.09, п.2.3. */
   merged?: AliasName[];
   /** 📱 Контакти з клієнтом поза дзвінками (Viber/Telegram/…), зі скринами. */
@@ -4138,6 +4434,18 @@ export const fetchClientArchive = () =>
 /** `reason` обовʼязковий при архівації; при поверненні передається `restore: true`. */
 export const archiveClient = (body: { clientKey: string; reason?: string; restore?: boolean }) =>
   api.post("/dashboard/client-archive", body).then((r) => r.data);
+
+/** 🚚 Клієнти з коментарем «перевізник», що ще не в архіві (тімлід — своя команда, керівництво — усі). */
+export interface CarrierCandidate {
+  clientKey: string; clientName: string; comment: string; commentedAt: string; commentBy: string | null;
+  managerName: string | null; teamName: string | null;
+}
+export const fetchCarrierCandidates = () =>
+  api.get<{ scope: "company" | "team"; clients: CarrierCandidate[] }>("/dashboard/client-archive/carrier-candidates").then((r) => r.data);
+/** Архівувати вибраних з причиною «Перевізник». Сервер бере лише тих, хто ЗАРАЗ кандидат у вашому скоупі. */
+export const archiveCarriers = (clientKeys: string[]) =>
+  api.post<{ ok: true; archived: number; archivedKeys: string[]; skipped: { clientKey: string; why: string }[] }>(
+    "/dashboard/client-archive/carriers", { clientKeys }).then((r) => r.data);
 
 // ── ФАЗА B · Реактивація · обʼєднання · відповідальний ───────────────────────
 export type ClientState = "active" | "sleeping" | "lost";
@@ -4264,6 +4572,10 @@ export interface OrphanClientRow {
   payments: number; lastPaidAt: string | null; lastCallAt: string | null;
   daysSincePaid: number | null; daysSinceCall: number | null;
   revenue12: number; revenueAll: number; paymentType: string | null;
+  /** 🏢 «юр/ФОП» (безнал / код ЄДРПОУ-ІПН / форма в назві) чи «фіз» — лише порядок і підпис. */
+  kind: "legal" | "person"; kindWhy: "cashless" | "code" | "name" | "none";
+  /** ☎️ До 3 телефонів з контактів Kommo, основний першим. */
+  phones: string[];
 }
 export interface OrphanGroup {
   managerId: number; manager: string; reason: string; reasonLabel: string;
@@ -4271,7 +4583,9 @@ export interface OrphanGroup {
 }
 export interface OrphanPool {
   scope: string;
-  tiles: { clients: number; money12: number; regulars: number; vip: number; claimedThisMonth: number; totalAllTime: number };
+  tiles: { clients: number; money12: number; regulars: number; vip: number; claimedThisMonth: number; totalAllTime: number; legal: number };
+  /** «self» — менеджер із прапорцем «Нічийні клієнти»: бачить пул, бере клієнта лише собі. */
+  access: "full" | "self";
   groups: OrphanGroup[];
 }
 export async function fetchOrphanClients(scope?: "all"): Promise<OrphanPool> {
@@ -4503,7 +4817,7 @@ export interface TldvPending {
   suggestions: { interviewId: number; label: string }[];
 }
 export interface TldvState {
-  status: { configured: boolean; lastRunAt: string | null; lastError: string | null; seen: number; linked: number; pending: number };
+  status: { configured: boolean; lastRunAt: string | null; lastError: string | null; seen: number; foreign: number; linked: number; pending: number };
   pending: TldvPending[];
 }
 export const fetchTldv = async () => (await api.get<TldvState>("/hiring/tldv")).data;
@@ -4790,8 +5104,11 @@ export const fetchEmployees = async () => (await api.get<{ rows: EmployeeRow[]; 
 export type EmployeePatch = Partial<Pick<EmployeeRow, "full_name" | "position" | "team_label" | "phone" | "email" | "telegram" | "birth_date" | "hired_at" | "dismissed_at" | "dismiss_reason" | "note" | "status">>;
 export const updateEmployee = async (id: number, b: EmployeePatch) => (await api.patch<{ ok: true; changed: string[] }>(`/secrets/employees/${id}`, b)).data.changed;
 // 🚪 Звільнення у два кроки (21.09.2026) — `backend/src/core/offboarding.ts`.
-export const startDismissal = async (id: number, lastDay: string, reason: string) =>
-  (await api.post<{ status: "finishing"; managers: number }>(`/secrets/employees/${id}/dismiss`, { lastDay, reason })).data;
+// ⚠️ 409 з `needsConfirm` — сервер перепитує (людина активна в Kommo або поруч схожий запис); повтор з `confirmRisk`.
+export const startDismissal = async (id: number, lastDay: string, reason: string, confirmRisk = false) =>
+  (await api.post<{ status: "finishing"; managers: number }>(`/secrets/employees/${id}/dismiss`, { lastDay, reason, confirmRisk })).data;
+export const dismissNeedsConfirm = (e: unknown): boolean =>
+  !!(e as { response?: { status?: number; data?: { needsConfirm?: boolean } } })?.response?.data?.needsConfirm;
 export const finishDismissal = async (id: number) =>
   (await api.post<{ status: "dismissed"; accountOff: boolean }>(`/secrets/employees/${id}/dismiss/finish`)).data;
 export const revertDismissal = async (id: number) =>
@@ -4937,6 +5254,8 @@ export function employeePhotoUrl(p: PhotoRef): Promise<string | null> {
 export interface TeamOverrideRow {
   managerId: number; name: string; kommoUserId: string; teamId: number | null;
   override: { teamId: number | null; note: string | null } | null;
+  /** Останній перехід із датою: до `effectiveFrom` людина рахується в `fromTeamId` (задача 4892). */
+  lastMove: { effectiveFrom: string; fromTeamId: number | null; toTeamId: number | null } | null;
 }
 export interface TeamOverridesPayload {
   teams: { id: number; name: string; dashboardOnly: boolean; active: number }[];
@@ -4946,8 +5265,14 @@ export async function fetchTeamOverrides(): Promise<TeamOverridesPayload> {
   const { data } = await api.get<TeamOverridesPayload>("/settings/team-overrides");
   return data;
 }
-export async function setTeamOverride(kommoUserId: string, body: { mode: "crm" | "team" | "none"; teamId?: number; note?: string }) {
-  const { data } = await api.put<{ ok: true; appliedNow: boolean }>(`/settings/team-overrides/${kommoUserId}`, body);
+export async function setTeamOverride(kommoUserId: string, body: { mode: "crm" | "team" | "none"; teamId?: number; note?: string; effectiveFrom?: string }) {
+  const { data } = await api.put<{ ok: true; appliedNow: boolean; effectiveFrom: string | null }>(`/settings/team-overrides/${kommoUserId}`, body);
+  return data;
+}
+/** Виправити дату ОСТАННЬОГО переходу між командами (05.10.2026). `changed:false` — дата та сама. */
+export async function setTeamMoveDate(managerId: number, effectiveFrom: string) {
+  const { data } = await api.patch<{ ok: true; changed: boolean; oldFrom?: string; effectiveFrom: string }>(
+    `/settings/team-moves/${managerId}/last`, { effectiveFrom });
   return data;
 }
 export async function createDashboardTeam(name: string): Promise<{ id: number; name: string }> {
@@ -5029,13 +5354,19 @@ export const archiveBaEquipment = async (id: number, archived: boolean) => { awa
 export const issueBaEquipment = async (id: number, p: { employeeId: number; issuedOn: string }) => (await api.post<{ issueId: number }>(`/ba/equipment/${id}/issue`, p)).data.issueId;
 export const returnBaIssue = async (issueId: number, returnedOn: string) => { await api.post(`/ba/issues/${issueId}/return`, { returnedOn }); };
 export const undoReturnBaIssue = async (issueId: number) => { await api.post(`/ba/issues/${issueId}/undo-return`); };
+export interface BaTtnCounts { needed: number; attached: number; mismatched: number; unsynced: number; present: number; pct: number | null }
 export interface BaTtnRow {
-  managerId: number; name: string; active: boolean; dealsNow: number; kommoUrl: string | null;
-  saved: { dealsNeeded: number; ttnPresent: number; note: string; pct: number | null; checkedAt: string; checkedBy: string | null } | null;
+  managerId: number; name: string; active: boolean; live: BaTtnCounts; kommoUrl: string | null;
+  saved: { dealsNeeded: number; ttnAttached: number | null; routeMismatch: number | null; ttnPresent: number; note: string; pct: number | null; checkedAt: string; checkedBy: string | null } | null;
   history: { month: string; pct: number | null }[];
 }
+export interface BaTtnDeal { kommoId: number; name: string; client: string; closedOn: string; ttnFiles: number | null; mismatch: { note: string } | null; url: string }
 export const fetchBaTtn = async (month: string) => (await api.get<{ month: string; rows: BaTtnRow[] }>("/ba/ttn", { params: { month } })).data;
-export const saveBaTtn = async (month: string, managerId: number, p: { ttnPresent: number; note: string }) => { await api.put(`/ba/ttn/${month}/${managerId}`, p); };
+export const fetchBaTtnDeals = async (month: string, managerId: number) => (await api.get<{ deals: BaTtnDeal[] }>(`/ba/ttn/${month}/${managerId}/deals`)).data.deals;
+export const setBaTtnMismatch = async (kommoId: number, note: string) => { await api.put(`/ba/ttn/deals/${kommoId}/mismatch`, { note }); };
+export const clearBaTtnMismatch = async (kommoId: number) => { await api.delete(`/ba/ttn/deals/${kommoId}/mismatch`); };
+/** «Зафіксувати місяць»: знімок трьох чисел цієї миті (05.10.2026 — «наявні» вже не вводяться руками). */
+export const saveBaTtn = async (month: string, managerId: number, p: { note: string }) => { await api.put(`/ba/ttn/${month}/${managerId}`, p); };
 
 /** Кнопка «Проблемний клієнт»: хто може створити / відкрити і де претензія вже є. */
 export interface ReceivableClaimsState { canCreate: boolean; canOpen: boolean; open: { clientKey: string; claimId: number }[] }
@@ -5045,10 +5376,13 @@ export const createReceivableClaim = async (clientKey: string) =>
 
 // ── 💰 Фінанси, прохід 1 (29.09.2026): план/факт витрат і статті ─────────────────
 // Дзеркало `routes/finance.ts`. Доступ — вкладка `finance`; запис — право `edit_finance`,
-// погодження плану — `approve_finance_plan`. Що дозволено, каже сервер (`canEdit`/`canApprove`).
+// погодження плану — поіменний список на сервері (з 06.10.2026). Що дозволено, каже сервер (`canEdit`/`canApprove`).
 export type FinRowState = "empty" | "noplan" | "nofact" | "over" | "ok";
+/** Розділ статті → місячний рядок «Операційних витрат» у «Тиждень і місяць» (прохід 2в, 05.10.2026). */
+export type FinSection = "commercial" | "general" | "admin" | "payroll";
+export const FIN_SECTIONS: Record<FinSection, string> = { commercial: "Комерційні", general: "Загальні", admin: "Адміністративні", payroll: "ЗП + Податки на ЗП" };
 export interface FinItem {
-  id: number; name: string; offFrom: string | null; active: boolean;
+  id: number; name: string; section: FinSection | null; offFrom: string | null; active: boolean;
   plan: number | null; fact: number | null; note: string | null; state: FinRowState; dataMonths: number;
 }
 export interface FinGroup { id: number; name: string; items: FinItem[] }
@@ -5056,7 +5390,8 @@ export interface FinResp { id: number; name: string; groups: FinGroup[] }
 export interface FinMonth {
   month: string; currentMonth: string; tree: FinResp[];
   totals: { plan: number; fact: number; items: number; over: number; noplan: number; overSum: number };
-  approval: { at: string; by: string | null; note: string | null; changedAfter: number } | null;
+  /** Погоджено = план місяця замкнений для всіх (06.10.2026); зняти погодження не можна. */
+  approval: { at: string; by: string | null; note: string | null } | null;
   imported: { source: string; filePlan: number | null; fileFact: number | null; rowsPlan: number; rowsFact: number } | null;
   canEdit: boolean; canApprove: boolean;
 }
@@ -5076,9 +5411,254 @@ export const createFin = async (kind: FinKind, body: Record<string, unknown>) =>
 export const updateFin = async (kind: FinKind, id: number, body: Record<string, unknown>) => { await api.patch(`/finance/${kind}s/${id}`, body); };
 export const deleteFin = async (kind: FinKind, id: number, confirm = false) => { await api.delete(`/finance/${kind}s/${id}`, { params: confirm ? { confirm: 1 } : {} }); };
 export const restoreFin = async (kind: FinKind, id: number) => { await api.post("/finance/restore", { kind, id }); };
+/** Розділ кільком статтям одразу; відповідь — що було (для «Повернути»). */
+export const setFinItemSections = async (items: { id: number; section: FinSection | null }[]) =>
+  (await api.put<{ previous: { id: number; section: FinSection | null }[] }>("/finance/item-sections", { items })).data;
 export const setFinItemOff = async (id: number, off: boolean) => (await api.post<{ offFrom: string | null }>(`/finance/items/${id}/off`, { off })).data;
 export const saveFinValues = async (month: string, cells: FinCell[]) => (await api.put<{ changed: number }>("/finance/values", { month, cells })).data;
 export const saveFinNote = async (itemId: number, month: string, text: string) => { await api.put("/finance/notes", { itemId, month, text }); };
-export const setFinApproval = async (month: string, approved: boolean) => { await api.post("/finance/approval", { month, approved }); };
+export const setFinApproval = async (month: string) => { await api.post("/finance/approval", { month, approved: true }); };
+/** 📜 Реєстр змін: записи про місяць (цифри, коментарі, погодження) + зміни статей за цей місяць; нові згори. */
+export interface FinLogRow { at: string; actor: string | null; kind: string; target: string | null; field: string | null; old: number | null; new: number | null; what: string; month: string | null }
+export const fetchFinLog = async (m?: string) => (await api.get<{ rows: FinLogRow[] }>("/finance/log", { params: m ? { m } : {} })).data.rows;
 /** Тіло відповіді з помилкою (409 з кількістю місяців, 400 зі списком поганих клітинок). */
 export const finErrorData = (e: unknown) => (e as { response?: { status?: number; data?: Record<string, unknown> } })?.response;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 📄 КОНСТРУКТОР ДОКУМЕНТІВ (30.09.2026) — клієнт пакета Сергія (`client/api.ts` + `types.ts`), переведений
+// з голого fetch на наш `api`: вхід у дашборді — заголовком із токеном, не кукою, тож `<a href="/api/…">`
+// на Word/PDF повертав би 401. Файли — blob через `api`, як скрини клієнтів.
+// ═══════════════════════════════════════════════════════════════════════════
+export type CtorEntityKey = "uts" | "avm" | "fop";
+export type CtorDocKind = "once" | "main" | "carr";
+export type CtorParty = "client" | "carrier";
+export interface CtorCounterparty {
+  name?: string; edrpou?: string; ipn?: string; addr?: string;
+  iban?: string; bank?: string; phone?: string; email?: string; dir?: string;
+}
+export interface CtorPay { sum: string; cur: string; form: string; order: string }
+/** Стан форми — це і є payload POST /documents та /preview. */
+export interface CtorForm {
+  ent: CtorEntityKey; doc: CtorDocKind; party: CtorParty; intl: boolean; stamp: boolean; fopAcc: number;
+  cp: CtorCounterparty; trip: Record<string, string>; pay: CtorPay;
+  dealNo: string; docDate: string; mainNo: string; mainDate: string;
+  /** «Діє до» основного договору (ДД.ММ.РРРР); порожньо = 31 грудня року дати договору. */
+  mainUntil: string;
+}
+export const CTOR_EMPTY_FORM: CtorForm = {
+  ent: "uts", doc: "once", party: "client", intl: false, stamp: true, fopAcc: 0,
+  cp: {}, trip: {}, pay: { sum: "", cur: "грн", form: "б/г без ПДВ", order: "по отриманні документів" },
+  dealNo: "", docDate: "", mainNo: "", mainDate: "", mainUntil: "",
+};
+export interface CtorEntityRow {
+  key: CtorEntityKey; code: string; name: string; full_name: string; edrpou: string; ipn: string | null;
+  vat_label: string; tax_line: string; address: string | null; phone: string; email: string;
+  director: string; director_short: string; accounts: Array<{ bank: string; iban: string }>;
+  fines: { rows?: Array<[string, string]>; note?: string } | null; dwell_default: string;
+}
+export interface CtorCounterpartyRow {
+  id: number; edrpou: string | null; name: string; ipn: string | null; address: string | null; iban: string | null;
+  bank: string | null; phone: string | null; email: string | null; director: string | null; is_fop: boolean; updated_at: string;
+  /** Коли востаннє формували документ із цим ЄДРПОУ (рядок довідника в макеті K-04). */
+  last_doc_at: string | null;
+}
+export interface CtorArchiveRow {
+  id: number; deal_no: string; doc_kind: CtorDocKind; party: CtorParty; entity_key: CtorEntityKey; version: number;
+  doc_date: string | null; contractor_name: string | null; route: string | null; sum: string | null;
+  created_by: number; created_at: string; author?: string | null;
+}
+export interface CtorRouteTemplate { id: number; owner_id: number | null; name: string; fields: Record<string, string>; intl: boolean; created_at: string }
+export interface CtorOldDoc {
+  dealNo?: string; party: CtorParty; ent: string | null; cp: CtorCounterparty; trip: Record<string, string>;
+  pay?: { sum: string; cur: string; form: string }; intl?: boolean;
+}
+export interface CtorStatDay { day: string; docs: number; authors: number; once: number; carr: number; main: number }
+
+export const ctorMe = async () =>
+  (await api.get<{ manager: { name: string; phone: string }; canSeeAll: boolean }>("/constructor/me")).data;
+export const ctorEntities = async () => (await api.get<CtorEntityRow[]>("/constructor/entities")).data;
+export const ctorParse = async (text: string) =>
+  (await api.post<{ out: CtorCounterparty; found: Record<string, boolean> }>("/constructor/parse", { text })).data;
+export const ctorParseOld = async (text: string) => (await api.post<CtorOldDoc>("/constructor/parse-old", { text })).data;
+export const ctorCounterparties = async (q = "") =>
+  (await api.get<CtorCounterpartyRow[]>("/constructor/counterparties", { params: { q } })).data;
+export const ctorSaveCounterparty = async (c: CtorCounterparty) => (await api.put<CtorCounterpartyRow>("/constructor/counterparties", c)).data;
+/** Картка з ЄДР (YouScore) — поля форми + стан і дата актуальності реєстру. */
+export interface CtorRegistryCard {
+  edrpou: string; name: string; ipn: string; addr: string; dir: string; phone: string; email: string;
+  isFop: boolean; actualDate: string | null; status: string | null; warn: string | null;
+}
+/** Реквізити, зведені з 1С (рахунок, банк, контакти) і ЄДР (директор, назва, стан) — `constructor/onec.ts`. */
+export interface CtorOneCCard {
+  edrpou: string; name: string; ipn: string; addr: string; dir: string; phone: string; email: string;
+  iban: string; bank: string; isFop: boolean;
+  /** Звідки IBAN: 1С, довідник (у 1С немає коректного), або ніде — менеджер впише сам. */
+  ibanSource: "1c" | "book" | null;
+  /** У 1С рахунок не у форматі UA+27 цифр — показуємо, але не підставляємо. */
+  ibanInvalid1c: string | null;
+  /** У довіднику інший IBAN, ніж у 1С: підставлено 1С, довідниковий — кнопкою. */
+  bookIban: { iban: string; bank: string } | null;
+  warn: string | null;
+  /** Звідки взято кожне непорожнє поле — для міток біля полів форми. */
+  src: Partial<Record<keyof CtorCounterparty, CtorFieldSource>>;
+}
+export type CtorFieldSource = "1c" | "edr" | "book";
+type CtorRegistryKind = "ok" | "updating" | "notFound" | "unconfigured" | "failed";
+/** Пошук за ЄДРПОУ: 1С → ЄДР (директор) → довідник; у 1С немає — довідник → ЄДР. `updating` — реєстр оновлює
+ *  дані (HTTP 202), повторити пізніше. `oneC` — чи шукали в 1С і що вийшло (збій лише підписується). */
+export type CtorEdrResult =
+  | { source: "1c"; card: CtorOneCCard; registry: CtorRegistryKind; cached: boolean; registryWhy: string | null }
+  | { source: "book"; row: CtorCounterpartyRow; oneC?: "notFound" | "failed"; oneCWhy?: string | null }
+  | { source: "youscore"; card: CtorRegistryCard; cached: boolean; oneC?: "notFound" | "failed"; oneCWhy?: string | null }
+  | { updating: true; error: string };
+export const ctorByEdrpou = async (code: string) =>
+  (await api.get<CtorEdrResult>(`/constructor/edrpou/${encodeURIComponent(code)}`)).data;
+/** ✅ Перевірка поля (сервер, `constructor/validate.ts`): error — блокує формування, warn — лише попереджає. */
+export interface CtorIssue { field: string; level: "error" | "warn"; msg: string }
+export const ctorPreview = async (state: CtorForm) =>
+  (await api.post<{ html: string; fragment: string; blockers: string | null; issues?: CtorIssue[]; assetsNote: string | null }>("/constructor/preview", { state })).data;
+export const ctorCreate = async (state: CtorForm) =>
+  (await api.post<{ id: number; version: number; num: string; createdAt: string;
+    /** Автопідгонка PDF (v2): скільки сторінок, яка щільність, чи не влізло в 3. */
+    pages: number | null; dens: string | null; overflow: boolean }>("/constructor/documents", { state })).data;
+export const ctorArchive = async (q = "", deal = "") =>
+  (await api.get<CtorArchiveRow[]>("/constructor/documents", { params: { q, deal } })).data;
+export const ctorDocument = async (id: number) => (await api.get<Record<string, unknown>>(`/constructor/documents/${id}`)).data;
+export const ctorPool = async (q = "") => (await api.get<CtorArchiveRow[]>("/constructor/pool", { params: { q } })).data;
+export const ctorPoolStats = async (days = 30) =>
+  (await api.get<{ days: number; rows: CtorStatDay[] }>("/constructor/pool/stats", { params: { days } })).data;
+export const ctorRouteTemplates = async () => (await api.get<CtorRouteTemplate[]>("/constructor/route-templates")).data;
+export const ctorSaveRouteTemplate = async (t: { name: string; fields: Record<string, string>; intl: boolean; shared?: boolean }) =>
+  (await api.post<CtorRouteTemplate>("/constructor/route-templates", t)).data;
+export const ctorDeleteRouteTemplate = async (id: number) => (await api.delete(`/constructor/route-templates/${id}`)).data;
+/** Word/PDF документа — blob із токеном. `inline` лише для PDF «відкрити у вкладці». */
+export async function ctorFile(id: number, kind: "docx" | "pdf", inline = false): Promise<Blob> {
+  const { data } = await api.get<Blob>(`/constructor/documents/${id}/${kind}`, { responseType: "blob", params: { view: inline ? 1 : undefined } });
+  return data;
+}
+/** 📦 Пакет угоди: обидва PDF (клієнт і перевізник з тим самим № угоди) одним zip. */
+export async function ctorPairZip(id: number): Promise<Blob> {
+  const { data } = await api.get<Blob>(`/constructor/documents/${id}/pair.zip`, { responseType: "blob" });
+  return data;
+}
+/** 🔁 Конвертер: файл (base64) → PDF, або PDF → Word/текст. У базу нічого не пишеться. */
+export async function ctorConvertToPdf(name: string, data: string): Promise<Blob> {
+  return (await api.post<Blob>("/constructor/convert/to-pdf", { name, data }, { responseType: "blob" })).data;
+}
+export async function ctorConvertFromPdf(name: string, data: string, target: "docx" | "txt"): Promise<Blob> {
+  return (await api.post<Blob>("/constructor/convert/from-pdf", { name, data, target }, { responseType: "blob" })).data;
+}
+
+/* ── 📋 ОПИТУВАННЯ КОМАНДИ (/api/surveys, 30.09.2026, пакет Сергія) ── */
+export type SvQType = "single" | "multi" | "scale" | "enps" | "matrix" | "rank" | "text";
+export type SvStatus = "draft" | "scheduled" | "active" | "closed";
+export interface SvQuestion {
+  id?: number | string; text: string; type: SvQType; options: string[]; rows: string[];
+  image?: string | null; required: boolean; hint?: string; min: number; max: number; unsure?: string;
+}
+export interface SvAudience { kind: "all" | "leads" | "managers" | "team" | "custom"; team?: string; ids?: number[] }
+export interface SvRemind { on: boolean; days: number; time: string; dayOf: boolean }
+export interface SvRecur { on: boolean; per: "week" | "2week" | "month"; day: number; time: string; days: number }
+export interface SvDraft {
+  id?: number; title: string; desc: string; questions: SvQuestion[]; audience: SvAudience;
+  anon: boolean; due: string; remind: SvRemind; allowEdit: boolean; recur: SvRecur;
+}
+export type SvAnswer = string | number | string[] | Record<string, number>;
+export interface SvListRow {
+  id: number; title: string; description?: string | null; status: SvStatus; anon: boolean; due: string; closed_at: string | null;
+  created_at?: string; q_count: number; assigned?: number; responded?: number; recur?: SvRecur; issue?: number; series_id?: number;
+  audience?: SvAudience; responded_at?: string | null; allow_edit?: boolean;
+}
+export interface SvFull extends SvListRow {
+  questions: SvQuestion[]; remind?: SvRemind; closed_by?: string | null; created_by?: number | null; author?: string | null;
+  mine?: { answers: Record<string, SvAnswer>; at: string } | null;
+}
+export type SvQResult =
+  | { type: "choice"; n: number; bars: Array<{ label: string; count: number; pct: number }> }
+  | { type: "scale"; n: number; avg: number | null; bins: Array<{ value: number; count: number }> }
+  | { type: "enps"; n: number; avg: number | null; score: number | null; p: number; n0: number; d: number; bins: Array<{ value: number; count: number }> }
+  | { type: "matrix"; n: number; rows: Array<{ label: string; avg: number | null; n: number }> }
+  | { type: "rank"; n: number; order: Array<{ label: string; avgPos: number | null; n: number }> }
+  | { type: "text"; n: number; items: Array<{ text: string; userId: string | null; at: string }> };
+export interface SvResults {
+  survey: SvFull; slice: string; n: number; teams: string[]; sliceCounts: Record<string, number>;
+  results: Array<{ questionId: number } & SvQResult>;
+  enps: { score: number | null; p: number; n0: number; d: number; n: number } | null;
+  participation: { assigned: number; responded: number; respondedList: Array<{ id: number; name: string; at: string }>; notResponded: Array<{ id: number; name: string }> };
+  trend: { participation: Array<{ issue: number; pct: number; responded: number; assigned: number; closedAt?: string | null; status?: string }>;
+           rows: Array<{ questionId: number | string; text: string; lbl: string; cells: Array<{ v: number; out: string; delta: number | null; deltaOut: string | null } | null> }> } | null;
+}
+export interface SvPerson { id: number; name: string; role: string; team: string | null; teamId: number | null; isAdmin: boolean }
+export interface SvTemplate { id: number; name: string; questions: SvQuestion[]; anon: boolean; owner_id: number | null }
+export interface SvNotification { id: number; survey_id: number; kind: string; text: string; created_at: string; read_at: string | null }
+export interface SurveysBadge { canManage: boolean; assigned: number; unread: number; fresh: number }
+
+export const surveysBadge = async () => (await api.get<SurveysBadge>("/surveys/badge")).data;
+export const svParse = async (text: string) => (await api.post<{ title: string; desc: string; questions: SvQuestion[] }>("/surveys/parse", { text })).data;
+export const svList = async (mine = false) => (await api.get<SvListRow[]>("/surveys", { params: mine ? { mine: 1 } : {} })).data;
+export const svGet = async (id: number) => (await api.get<SvFull>(`/surveys/${id}`)).data;
+export const svCreate = async (d: SvDraft) => (await api.post<{ id: number }>("/surveys", d)).data;
+export const svUpdate = async (id: number, d: SvDraft) => (await api.put<{ id: number }>(`/surveys/${id}`, d)).data;
+export const svLaunch = async (id: number) => (await api.post<{ ok: true; assigned: number }>(`/surveys/${id}/launch`)).data;
+export const svClose = async (id: number) => (await api.post<{ ok: true }>(`/surveys/${id}/close`)).data;
+export const svReopen = async (id: number) => (await api.post<{ ok: true; due: string }>(`/surveys/${id}/reopen`)).data;
+export const svRemind = async (id: number, userIds?: number[]) =>
+  (await api.post<{ sent: number }>(`/surveys/${id}/remind`, userIds ? { userIds } : {})).data;
+export const svRespond = async (id: number, answers: Record<string, SvAnswer>) => (await api.post<{ ok: true }>(`/surveys/${id}/respond`, { answers })).data;
+export const svResults = async (id: number, slice = "all") => (await api.get<SvResults>(`/surveys/${id}/results`, { params: { slice } })).data;
+export const svPeople = async () => (await api.get<{ people: SvPerson[]; teams: Array<{ id: number; name: string }> }>("/surveys/people")).data;
+export const svTemplates = async () => (await api.get<SvTemplate[]>("/surveys/templates")).data;
+export const svSaveTemplate = async (t: { name: string; questions: SvQuestion[]; anon: boolean; shared?: boolean }) =>
+  (await api.post<SvTemplate>("/surveys/templates", t)).data;
+export const svDeleteTemplate = async (id: number) => (await api.delete(`/surveys/templates/${id}`)).data;
+export const svNotifications = async () => (await api.get<SvNotification[]>("/surveys/notifications")).data;
+export const svMarkRead = async (id: number) => (await api.post(`/surveys/notifications/${id}/read`)).data;
+/** CSV — blob із токеном: голе посилання пішло б без заголовка авторизації й отримало 401. */
+export async function svExportCsv(id: number): Promise<Blob> {
+  return (await api.get<Blob>(`/surveys/${id}/export.csv`, { responseType: "blob" })).data;
+}
+
+// ── 💰 Фінанси · «Тиждень і місяць» (прохід 2а, 01.10.2026) ─────────────────────
+export type FinPeriodKind = "week" | "month";
+export type FinKpiRefSource = "delivered_income" | "delivered_expense" | "unloaded_income" | "unloaded_expense" | "receivables"
+  | "opex_commercial" | "opex_general" | "opex_admin" | "opex_payroll" | "receivables_fx" | "bank_in" | "bank_out";
+export interface FinKpi {
+  id: number; name: string; unit: "UAH" | "USD" | "EUR"; kind: "manual" | "sum" | "diff" | "auto"; argA: number | null; argB: number | null;
+  refSource: FinKpiRefSource | null; offFrom: string | null; active: boolean;
+  value: number | null; prevValue: number | null; note: string | null;
+  savedRef: { value: number; at: string } | null; liveRef: number | null;
+  /** Лише для `kind = "auto"` (прохід 2б): live — число ядра зараз; frozen — зафіксоване джобою; closed — із закритого
+   *  періоду (перенесене з «ФМ»); saved — живого для періоду немає, показано збережене. */
+  autoState: "live" | "frozen" | "override" | "closed" | "saved" | null;
+  /** Вноситься руками: ручний рядок або операційні поверх «План/факт» (сервер вирішує). */
+  editable?: boolean;
+}
+export interface FinKpiPeriod {
+  kind: FinPeriodKind; start: string; end: string; prev: string; label: string; prevLabel: string; current: string;
+  sections: { id: number; name: string; kpis: FinKpi[] }[];
+  closed: { at: string; by: string | null; note: string | null } | null; importedInterim: boolean; canEdit: boolean;
+  /** Місяць: статті «План/факт» без розділу, що мають факт цього місяця, — їхні гроші не в жодному рядку. */
+  opexUnassigned: { items: number; fact: number } | null;
+  /** Валютна дебіторка з 1С на кінець періоду: Σ у гривні, Σ у валюті (різні валюти разом), рядки з нульовим ₴. */
+  receivablesFx: { uah: number; val: number; zeroUah: number; at: string; usd: number | null; eur: number | null; unknownVal: number | null } | null;
+  /** «З них перекази між нашими рахунками» біля «Надходження / Витрати загальні» (чи виключати — відкрите питання). */
+  bankOwn: { in: number; out: number } | null;
+}
+export interface FinKpiCard {
+  id: number; name: string; unit: string; kind: string; refSource: string | null; offFrom: string | null; deleted: boolean; section: string;
+  periods: { start: string; value: number | null; note: string | null; ref: number | null }[];
+  log: { at: string; what: string; actor: string | null }[];
+}
+export type FinKpiThing = "section" | "kpi";
+const kpiPath = (k: FinKpiThing) => (k === "section" ? "sections" : "items");
+export const fetchFinKpiPeriod = async (kind: FinPeriodKind, p: string) => (await api.get<FinKpiPeriod>("/finance/kpi", { params: { kind, p } })).data;
+export const fetchFinKpiCard = async (id: number, kind: FinPeriodKind) => (await api.get<FinKpiCard>(`/finance/kpi/items/${id}`, { params: { kind } })).data;
+export const saveFinKpiValues = async (kind: FinPeriodKind, p: string, cells: { kpiId: number; value: string }[]) =>
+  (await api.put<{ changed: number }>("/finance/kpi/values", { kind, p, cells })).data;
+export const saveFinKpiNote = async (kpiId: number, kind: FinPeriodKind, p: string, text: string) => { await api.put("/finance/kpi/notes", { kpiId, kind, p, text }); };
+export const setFinKpiClosed = async (kind: FinPeriodKind, p: string, closed: boolean) => { await api.post("/finance/kpi/close", { kind, p, closed }); };
+export const createFinKpi = async (k: FinKpiThing, body: Record<string, unknown>) => (await api.post<{ id: number }>(`/finance/kpi/${kpiPath(k)}`, body)).data.id;
+export const updateFinKpi = async (k: FinKpiThing, id: number, body: Record<string, unknown>) => { await api.patch(`/finance/kpi/${kpiPath(k)}/${id}`, body); };
+export const deleteFinKpi = async (k: FinKpiThing, id: number, confirm = false) => { await api.delete(`/finance/kpi/${kpiPath(k)}/${id}`, { params: confirm ? { confirm: 1 } : {} }); };
+export const restoreFinKpi = async (k: FinKpiThing, id: number) => { await api.post("/finance/kpi/restore", { kind: k, id }); };
+export const setFinKpiOff = async (id: number, off: boolean) => (await api.post<{ offFrom: string | null }>(`/finance/kpi/items/${id}/off`, { off })).data;

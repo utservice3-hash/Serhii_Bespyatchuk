@@ -73,6 +73,9 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/dashboard/client-next-step"), tabs: ["loyalty"] },
     // 📌 Обґрунтування плану (ТЗ 22.09, п.3.3) — окремий роут: `pre("…/client-plan")` сусіда через дефіс НЕ накриває.
     { test: pre("/api/dashboard/client-plan-basis"), tabs: ["loyalty"] },
+    // 🔁 Цикл реактивації і пул лідгенів (ТЗ 22.09, блок 4) — той самий екран клієнтів.
+    { test: pre("/api/dashboard/react-decision"), tabs: ["loyalty"] },
+    { test: pre("/api/dashboard/leadgen-pool"), tabs: ["loyalty"] },
     { test: pre("/api/dashboard/client-search"), tabs: ["loyalty"] },
     // 🔴 ДОДАНО 04.08.2026, КОЛИ `requirePerm` ПІШОВ. Обʼєднання відкрилось тімліду
     // (у межах команди), тож єдиною межею роутів лишився кламп усередині — а це
@@ -137,6 +140,7 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     // /api/statistics — series* → statistics; інше → depstats
     { test: pre("/api/statistics/series"), tabs: ["statistics"] },
     { test: pre("/api/statistics/lapsed-clients"), tabs: ["statistics"] },
+    { test: pre("/api/statistics/summary"), tabs: ["statistics"] },
     { test: pre("/api/statistics"), tabs: ["depstats"] },
     // виділені роутери
     { test: pre("/api/plans"), tabs: ["plans"] },
@@ -164,6 +168,12 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/ba"), tabs: ["ba"] },
     // 💰 Фінанси (29.09.2026). Вкладка — перша межа; друга — `onlyFinance`/`canEdit`/`canApprove` першим оператором.
     { test: pre("/api/finance"), tabs: ["finance"] },
+    // 📄 Конструктор документів (30.09.2026). Вкладка — перша межа; друга — «лише свої» (`canSeeConstructorDoc`)
+    // і право `view_all_constructor_docs` для пулу.
+    { test: pre("/api/constructor"), tabs: ["constructor"] },
+    // 📋 Опитування (30.09.2026). Вкладка — у всіх, крім кандидата; керування й відповіді — право `manage_surveys`,
+    // решта — лише адресовані їм опитування (межа всередині роуту).
+    { test: pre("/api/surveys"), tabs: ["surveys"] },
     // Кнопка «Проблемний клієнт» живе в ДЕБІТОРЦІ: вкладка `receivables`, а дію гейтить право
     // `create_claim` — фінансист розділу не бачить, але кнопку натискає.
     { test: pre("/api/receivables-claims"), tabs: ["receivables"] },

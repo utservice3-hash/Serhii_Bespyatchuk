@@ -206,7 +206,8 @@ function ManagerPanel({ clients, onDone, preset, teamId }: {
   const [managers, setManagers] = useState<ManagerOption[]>([]);
   const [history, setHistory] = useState<ManagerHistoryRow[]>([]);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  // Відмова мусить бути ЧЕРВОНОЮ: «Не передано» зеленим читалось як успіх (30.09.2026).
+  const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
   /* Тімліду — лише його команда: сервер однаково відхилить чужого менеджера (403), а список
      на всю компанію робив цю відмову несподіванкою — «доступ забрали» (ТЗ 22.09, п.3.2). */
   useEffect(() => {
@@ -281,17 +282,17 @@ function ManagerPanel({ clients, onDone, preset, teamId }: {
         клієнт буде позначений розбіжністю. Ми показуємо конфлікт, а не ховаємо його.
       </div>
 
-      {msg && <div style={{ marginTop: 8, fontSize: 12, color: "#166534" }}>{msg}</div>}
+      {msg && <div role={msg.error ? "alert" : "status"} style={{ marginTop: 8, fontSize: 12, color: msg.error ? "var(--danger)" : "#166534" }}>{msg.text}</div>}
 
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
         <button style={S.btn(true, busy || !clientKey || !managerId || !reason.trim())} disabled={busy || !clientKey || !managerId || !reason.trim()}
           onClick={async () => { setBusy(true);
             try { const r = await assignClientManager({ clientKey, managerId: Number(managerId), reason: reason.trim(), kind });
-                  setMsg(`Передано. Діє з ${r.effectiveFrom}. ${r.note}`); setReason("");
+                  setMsg({ text: `Передано. Діє з ${r.effectiveFrom}. ${r.note}`, error: false }); setReason("");
                   setHistory(await fetchClientManagerHistory(clientKey)); onDone(); }
             catch (e) { /* 403 поза командою мусить бути ВИДИМИМ, а не мовчазним «нічого не сталось» */
               const err = e as { response?: { data?: { error?: string } }; message?: string };
-              setMsg(`Не передано: ${err.response?.data?.error ?? err.message ?? "помилка"}`); }
+              setMsg({ text: `Не передано: ${err.response?.data?.error ?? err.message ?? "помилка"}`, error: true }); }
             finally { setBusy(false); } }}>Передати</button>
         <button style={S.btn()} disabled={busy} onClick={() => { setSel(preset ?? null); setManagerId(""); setReason(""); setMsg(null); }}>Скасувати</button>
         {(!clientKey || !managerId || !reason.trim()) && !busy && (

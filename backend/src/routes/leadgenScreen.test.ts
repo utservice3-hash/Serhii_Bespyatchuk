@@ -251,3 +251,78 @@ test("#688b 🪞 ДЗЕРКАЛО: index.html макета й переймено
   assert.deepEqual(scriptProblems("<script src='/src/main.tsx' type=\"module\"></script>"), [], "🔴 переставлені атрибути оголошено дефектом");
   assert.deepEqual(scriptProblems(`<!-- <script src="./maket.js"></script> -->\n${entry}`), [], "🔴 закоментований скрипт прийнято за живий");
 });
+
+/**
+ * #1172 — ЕКРАН ЛІДОГЕНЕРАЦІЇ ПОКАЗУЄ ГРОШІ ПОВНОЮ СУМОЮ, БЕЗ «тис».
+ * Привід (01.10.2026): Сердюк звіряв 34 530 ₴ зі своїм фільтром у Kommo, а картка показувала «35тис ₴» —
+ * округлення на 470 ₴ читалось як розбіжність. Множина файлів — від предмета: УСІ `Leadgen*.tsx` секції,
+ * крім картки постійних (живе у Звіті КВП, не на цьому екрані) і графіків (там лише шкала осі; підказки — вже повні).
+ * 🧨 САБОТАЖ: повернути один `formatAmountFull(` → `formatAmount(` у `LeadgenPersonRow.tsx` → червоніє.
+ */
+test("#1172 ЕКРАН ЛІДОГЕНЕРАЦІЇ: гроші повною сумою, жодного скорочення до «тис»", () => {
+  const dir = path.join(FE, "src", "pages", "dashboard", "sections");
+  const EXEMPT = new Set(["LeadgenRegularsCard.tsx", "LeadgenCharts.tsx"]);
+  const files = readdirSync(dir).filter((f) => /^Leadgen.*\.tsx$/.test(f) && !EXEMPT.has(f));
+  assert.ok(files.length >= 4, `🔴 файлів екрана ${files.length} — маска нічого не знайшла, гейту нема що перевіряти`);
+  for (const f of files) {
+    const s = readFileSync(path.join(dir, f), "utf8");
+    assert.ok(!/\bformatAmount\(/.test(s), `🔴 ${f} скорочує гроші до «тис» (formatAmount) — лідген не звірить до гривні`);
+  }
+  // 🪞 Дзеркало: гроші на екрані Є і йдуть повною сумою — інакше «нуль formatAmount» пройшов би й без грошей.
+  const full = files.filter((f) => /\bformatAmountFull\(/.test(readFileSync(path.join(dir, f), "utf8")));
+  for (const must of ["LeadgenSection.tsx", "LeadgenPersonRow.tsx", "LeadgenMoneyDetails.tsx"]) {
+    assert.ok(full.includes(must), `🔴 ${must} більше не показує гроші повною сумою — зник предмет гейта`);
+  }
+});
+
+/**
+ * #1175 — ПЛАН НА ДЗВІНКИ Й ГРОШІ ВИДНО НА ЕКРАНІ (рішення власника 01.10.2026): форма має обидва пункти
+ * як необовʼязкові; гроші — ДВА підписані рядки (проти «Успішні» і проти «Успішні + Очікування») і в
+ * картці людини, і в рядку плану плитки (людина й команда).
+ * 🧨 САБОТАЖ: прибрати рядок `line("гроші · успішні + очікування", …)` з `ExtraPlanLines` → червоніє.
+ */
+test("#1175 ЕКРАН: план на дзвінки й гроші — у формі необовʼязково, гроші — двома підписаними рядками", () => {
+  const dir = path.join(FE, "src", "pages", "dashboard", "sections");
+  const form = readFileSync(path.join(dir, "LeadgenPlanFormation.tsx"), "utf8");
+  assert.match(form, /\{ k: "calls", label: "Дзвінки", optional: true \}/, "🔴 у формі плану немає необовʼязкових «Дзвінки»");
+  assert.match(form, /\{ k: "money", label: "Гроші ₴", optional: true \}/, "🔴 у формі плану немає необовʼязкових «Гроші ₴»");
+  const row = readFileSync(path.join(dir, "LeadgenPersonRow.tsx"), "utf8");
+  assert.match(row, /line\("гроші · успішні", extra\.moneyEarned, true/, "🔴 зник рядок «гроші · успішні»");
+  assert.match(row, /line\("гроші · успішні \+ очікування", extra\.moneyTotal, true/, "🔴 зник рядок «гроші · успішні + очікування»");
+  assert.match(row, /line\("дзвінки", extra\.calls, false/, "🔴 зник рядок «дзвінки»");
+  assert.match(row, /<ExtraPlanLines extra=\{plan\.extra\} \/>/, "🔴 картка людини не показує дзвінки й гроші проти плану");
+  const sec = readFileSync(path.join(dir, "LeadgenSection.tsx"), "utf8");
+  assert.match(sec, /<ExtraPlanLines extra=\{tp\.extra\} \/>/, "🔴 плитка команди не показує дзвінки й гроші проти плану");
+  assert.match(sec, /<ExtraPlanLines extra=\{pp\.extra\} \/>/, "🔴 плитка людини не показує дзвінки й гроші проти плану");
+});
+
+/**
+ * #1254 — ЕКРАН ДЛЯ ЛІДГЕНА Й ДЛЯ МЕНЕДЖЕРА ПРОДАЖУ (рішення власника 02.10.2026): відмова 403 показується
+ * ТЕКСТОМ СЕРВЕРА (не «тимчасовий збій зʼєднання» з кнопкою повтору) і на статистиці, і в планах; лідгену
+ * не малюються блоки, яких сервер йому не віддає («Інші», «Деталі» з рівнем відділу), і немає вибору людини.
+ * 🧨 САБОТАЖ: прибрати `if (r?.status === 403)` з циклу завантаження → червоніє.
+ */
+test("#1254 ЕКРАН: 403 — текстом сервера, не «збій зʼєднання»; лідгену без «Інших», «Деталей» і вибору людини", () => {
+  const dir = path.join(FE, "src", "pages", "dashboard", "sections");
+  const sec = readFileSync(path.join(dir, "LeadgenSection.tsx"), "utf8");
+  assert.match(sec, /if \(r\?\.status === 403\) \{\s*setDenied\(/, "🔴 статистика: відмову 403 читає як збій зʼєднання");
+  assert.match(sec, /const own = d\?\.viewer === "own";/, "🔴 екран не розпізнає відповідь лідгену");
+  assert.match(sec, /\{!own && <Others /, "🔴 лідгену малюється блок «Інші»");
+  assert.match(sec, /\{!own && <Details /, "🔴 лідгену малюються «Деталі» з рівнем відділу");
+  assert.match(sec, /\{!own && <select value=\{who\}/, "🔴 лідгену показується вибір людини");
+  const plans = readFileSync(path.join(dir, "LeadgenPlanFormation.tsx"), "utf8");
+  assert.match(plans, /r\?\.status === 403 && typeof r\.data\?\.error === "string" \? r\.data\.error/, "🔴 плани: відмову 403 показано як збій");
+});
+
+/**
+ * #1263 — ЕКРАН: «ЛИШИЛОСЬ ДО ПЛАНУ» ВИДНО НА КАРТЦІ ЛІДГЕНА Й У ПЛИТЦІ ЛЮДИНИ (05.10.2026).
+ * 🧨 САБОТАЖ: прибрати `<PaceLines pace={plan.pace} />` з картки → червоніє.
+ */
+test("#1263 ЕКРАН: «лишилось до плану» на картці лідгена й у плитці людини", () => {
+  const dir = path.join(FE, "src", "pages", "dashboard", "sections");
+  const row = readFileSync(path.join(dir, "LeadgenPersonRow.tsx"), "utf8");
+  const sec = readFileSync(path.join(dir, "LeadgenSection.tsx"), "utf8");
+  assert.match(row, /<PaceLines pace=\{plan\.pace\} \/>/, "🔴 картка лідгена не показує «лишилось до плану»");
+  assert.match(sec, /<PaceLines pace=\{pp\.pace\} \/>/, "🔴 плитка людини не показує «лишилось до плану»");
+  assert.match(row, /сьогодні треба \$\{n\(p\.normToday\)\}/, "🔴 немає норми на сьогодні");
+});

@@ -25,13 +25,7 @@ function handlerBody(src: string, route: string): string {
   return src.slice(i, end);
 }
 
-/** Перший оператор тіла — без коментарів і порожніх рядків. */
-function firstStatement(body: string): string {
-  const inner = body.slice(body.indexOf("=> {") + 4).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-  return inner.split("\n").map((l) => l.trim()).find((l) => l.length > 0) ?? "";
-}
 
-const MANAGER_FIRST = /^if \(req\.auth!\.role === "manager"\) return res\.status\(403\)/;
 
 /**
  * #677 — ЧИСЛО В РЯДКУ І СПИСОК БЕРУТЬ ГРОШІ З ОДНІЄЇ ФУНКЦІЇ ЯДРА.
@@ -85,19 +79,37 @@ test("#678 ДОСТУП: нові роути — рядки матриці й в
 });
 
 /**
- * #678b — ПЕРШИЙ ОПЕРАТОР НОВОГО ОБРОБНИКА — ВІДМОВА МЕНЕДЖЕРУ (403 раніше за будь-який 400).
- * Інакше менеджер, що прийшов без параметрів, дізнавався б про існування й форму роуту з 400.
- * 🧨 САБОТАЖ: переставити `const auth = req.auth!;` вище перевірки → червоніє.
+ * #1252 — ПЕРШИЙ ОПЕРАТОР ЧОТИРЬОХ GET-РОУТІВ ЕКРАНА: хто дивиться — і відмова НЕ-лідгену — ДО будь-якого 400.
+ * Рішення власника 02.10.2026: лідген (роль «менеджер», учасник команди) бачить свою картку й підсумок
+ * команди; менеджер продажу — 403 з поясненням. Тому вже не «менеджер — 403», а `leadgenViewerAuth` →
+ * `leadgenViewer` → відмова `deny`, і ЛИШЕ потім розбір параметрів (інакше не-лідген дізнавався б форму
+ * роуту з 400). Плюс: статистика й тренд для лідгена віддаються ЛИШЕ через білий список `ownLeadgen*Body`.
+ * 🧨 САБОТАЖ: у `/leadgen-trend` перенести `const to = dateParam(…)` вище відмови → червоніє;
+ * у `/leadgen-stats` віддати `res.json(body)` без `ownLeadgenStatsBody` → червоніє.
  */
-test("#678b ПЕРШИЙ ОПЕРАТОР нового обробника — відмова менеджеру (403 раніше за 400)", () => {
-  for (const route of ["/leadgen-trend", "/leadgen-handoff-deals"]) {
-    const first = firstStatement(handlerBody(DASH, route));
-    assert.match(first, MANAGER_FIRST, `🔴 ${route}: перший оператор — «${first}», а не відмова менеджеру`);
+const VIEWER_FIRST = [
+  /^const auth = await leadgenViewerAuth\(req\.auth!\);$/,
+  /^const viewer = leadgenViewer\(auth\);$/,
+  /^if \(viewer\.kind === "deny"\) return res\.status\(403\)\.json\(\{ error: viewer\.error \}\);$/,
+];
+function firstStatements(body: string, n: number): string[] {
+  const inner = body.slice(body.indexOf("=> {") + 4).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  return inner.split("\n").map((l) => l.trim()).filter((l) => l.length > 0).slice(0, n);
+}
+test("#1252 ПЕРШІ ОПЕРАТОРИ: хто дивиться → відмова не-лідгену раніше за 400; лідгену — лише білий список", () => {
+  for (const route of ["/leadgen-stats", "/leadgen-trend", "/leadgen-handoff-deals", "/leadgen-plans"]) {
+    const first = firstStatements(handlerBody(DASH, route), 3);
+    VIEWER_FIRST.forEach((re, i) => assert.match(first[i] ?? "", re, `🔴 ${route}: оператор ${i + 1} — «${first[i]}»`));
   }
+  assert.match(handlerBody(DASH, "/leadgen-stats"), /res\.json\(viewer\.kind === "own" \? ownLeadgenStatsBody\(body, viewer\.selfId\) : body\)/,
+    "🔴 /leadgen-stats віддає лідгену повну відповідь — рядки, гроші й передачі колег");
+  assert.match(handlerBody(DASH, "/leadgen-trend"), /res\.json\(viewer\.kind === "own" \? ownLeadgenTrendBody\(trend, viewer\.selfId\) : trend\)/,
+    "🔴 /leadgen-trend віддає лідгену рядки колег");
+  assert.doesNotMatch(codeOf(handlerBody(DASH, "/leadgen-stats")), /\bres\.json\(body\)/, "🔴 у /leadgen-stats є обхід білого списку");
   // 🪞 Дзеркало: детектор бачить неправильний порядок, а не зеленіє на все.
-  const bad = 'dashboardRouter.get("/x", async (req, res) => {\n  // коментар\n  const to = dateParam(req.query.to);\n'
-    + '  if (req.auth!.role === "manager") return res.status(403).json({});\n});';
-  assert.doesNotMatch(firstStatement(bad), MANAGER_FIRST, "🔴 детектор першого оператора не бачить порядку");
+  const bad = 'dashboardRouter.get("/x", async (req, res) => {\n  const to = dateParam(req.query.to);\n'
+    + '  const auth = await leadgenViewerAuth(req.auth!);\n  const viewer = leadgenViewer(auth);\n});';
+  assert.doesNotMatch(firstStatements(bad, 1)[0], VIEWER_FIRST[0], "🔴 детектор першого оператора не бачить порядку");
 });
 
 /** Код без коментарів — щоб згадка виклику в коментарі не рахувалась ні «за», ні «проти». */
@@ -115,9 +127,10 @@ function scopeViolations(body: string): string[] {
   const out: string[] = [];
   if (!calls.length) out.push("жодного виклику ядра з грошима/трендом");
   for (const c of calls) {
-    if (!/^\s*[\w.]+\s*,\s*[\w.]+\s*,\s*(scope|clamp\.scope)\s*$/.test(c[2])) out.push(`${c[1]}(${c[2].trim()})`);
+    // Скоуп — ТРЕТІЙ аргумент; після нього дозволено лише одиницю розбивки `grain` (задача 4668, гроші по тижнях).
+    if (!/^\s*[\w.]+\s*,\s*[\w.]+\s*,\s*(scope|clamp\.scope)\s*(,\s*grain\s*)?$/.test(c[2])) out.push(`${c[1]}(${c[2].trim()})`);
   }
-  if (calls.some((c) => /,\s*scope\s*$/.test(c[2])) && !/\bconst scope = leadgenAuthScope\(auth\);/.test(code)) {
+  if (calls.some((c) => /,\s*scope\s*(,\s*grain\s*)?$/.test(c[2])) && !/\bconst scope = leadgenAuthScope\(auth\);/.test(code)) {
     out.push("`scope` не з leadgenAuthScope(auth)");
   }
   if (calls.some((c) => /,\s*clamp\.scope\s*$/.test(c[2])) && !/\bconst clamp = handoffDealsScope\(/.test(code)) {
@@ -156,6 +169,24 @@ test("#681b ДЖЕРЕЛО: у ядро йде скоуп із leadgenAuthScope/
   assert.notDeepEqual(scopeViolations(planted("scope") + '  const teamId = auth.role === "team_lead" ? 1 : null;\n'), [],
     "🔴 детектор не бачить власного клампу тімліда");
   assert.deepEqual(scopeViolations(planted("scope")), [], "🔴 детектор червоніє і на правильному виклику — беззубий навпаки");
+  // Четвертий аргумент `grain` (задача 4668) не відкриває шпарини: літерал перед ним ловиться, помічник — чистий.
+  assert.deepEqual(scopeViolations(planted("scope, grain")), [], "🔴 детектор червоніє на правильному виклику з `grain`");
+  assert.notDeepEqual(scopeViolations(planted("{ teamId: null, managerId: null }, grain")), [],
+    "🔴 детектор не бачить літерала, захованого перед `grain`");
+  assert.notDeepEqual(scopeViolations(planted("scope, { teamId: null }")), [], "🔴 після скоупу пропущено щось, крім `grain`");
   assert.deepEqual(scopeViolations("  // було: leadgenHandoffMoney(from, to, { teamId: null })\n" + planted("scope")), [],
     "🔴 згадка в коментарі читається як виклик");
+});
+
+/**
+ * #1262 — «ЛИШИЛОСЬ ДО ПЛАНУ» РАХУЄТЬСЯ ЛИШЕ НА ПОТОЧНИЙ МІСЯЦЬ І ТИМ САМИМ `leadgenStats`, ЩО Й РЯДКИ (05.10.2026):
+ * факт «до сьогодні» й «сьогодні» — два виклики `leadgenStats`, а не свій SQL; поза поточним місяцем — без норми.
+ * 🧨 САБОТАЖ: прибрати `if (isCurrentFullMonth(from, to, todayK))` → норма й на минулих місяцях → червоніє.
+ */
+test("#1262 /leadgen-stats: норма — лише поточний місяць, факт тим самим leadgenStats", () => {
+  const body = codeOf(handlerBody(DASH, "/leadgen-stats"));
+  assert.match(body, /if \(isCurrentFullMonth\(from, to, todayK\)\) \{/, "🔴 норма рахується не лише на поточний місяць");
+  assert.match(body, /leadgenStats\(from, yest\)/, "🔴 факт «до сьогодні» не з leadgenStats");
+  assert.match(body, /leadgenStats\(todayK, todayK\)/, "🔴 факт «сьогодні» не з leadgenStats");
+  assert.match(body, /planPace\(\{ plan: p\.plan\[k\]/, "🔴 норма не з чистої planPace");
 });

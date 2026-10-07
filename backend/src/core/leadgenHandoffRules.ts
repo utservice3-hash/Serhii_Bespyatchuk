@@ -17,13 +17,40 @@
 
 /** Стан угоди менеджера ЗАРАЗ — з грошового ядра (`money.handoffDealStates`). */
 export type ManagerDealClass = "success" | "paid" | "expect" | "work" | "lost";
-/** Клас рядка списку: `none` — угоди менеджера немає; `same` — угоду вже пораховано іншою передачею. */
-export type LeadgenDealClass = ManagerDealClass | "none" | "same";
+/**
+ * Клас рядка списку: `none` — угоди менеджера немає; `same` — угоду вже пораховано іншою передачею;
+ * `regular` — угода ПОСТІЙНОГО клієнта (`isRegularAt`): у гроші лідгена не йде (задача 4668, п.5).
+ */
+export type LeadgenDealClass = ManagerDealClass | "none" | "same" | "regular";
 
 export interface LeadgenMoneyCell { n: number; sum: number; priced: number }
 export interface LeadgenHandoffMoney {
   handoffs: number; unlinked: number; lost: number; sameDeal: number;
   success: LeadgenMoneyCell; paid: LeadgenMoneyCell; expect: LeadgenMoneyCell; work: LeadgenMoneyCell;
+  /** Передачі в угоди постійних клієнтів — поза грошима лідгена, але НАЗВАНІ числом (невидиме читається як «таких немає»). */
+  regular: LeadgenMoneyCell;
+  /**
+   * «Очікування» — друге головне число поруч з «Успішними» (задача 4668, п.6): оплата отримана +
+   * зона «Очікуємо», тобто `paid ∪ expect`. ПОХІДНЕ, у тотожність передач не входить (не двоїти).
+   */
+  waiting: LeadgenMoneyCell;
+  /**
+   * 💰 ГРОШІ ЗА ПРАВИЛОМ ЯРОСЛАВА (30.09.2026) — головні два числа екрана:
+   *  • `earned` («Успішні») — угоди менеджера, що стали «Успішна угода» В ПЕРІОДІ (дата закриття), з передач
+   *    БУДЬ-ЯКОЇ давності: «прорахунок могли передати хоч пів року тому — сума рахується в місяць успіху»;
+   *  • `pending` («Очікування») — угоди, у яких АВТО ПОЇХАЛО в періоді (перший вхід у «Авто працює» чи далі),
+   *    а зараз вони «Оплата отримана» або в зоні «Очікуємо».
+   * Решта полів — КОГОРТА передач періоду («що сталося з переданим цього періоду»); у тотожність когорти
+   * `earned`/`pending` не входять. Постійні клієнти й «та сама угода» — поза грошима, як і в когорті.
+   */
+  earned: LeadgenMoneyCell;
+  pending: LeadgenMoneyCell;
+  /**
+   * 🚚 «Машин» — як колонка «Кількість поставлених машин» у таблицях лідгенів: угоди, по яких авто поїхало
+   * й гроші прийшли чи йдуть = `earned.n + pending.n`. ПОХІДНЕ — рахується ЛИШЕ в `withAnchored`, щоб
+   * рядок, відділ і тижні не мали трьох різних «машин». Звірка вересня: Шевчук 9 + 2 = 11 = її таблиця.
+   */
+  machines: number;
 }
 
 /**
@@ -42,6 +69,8 @@ export interface HandoffEntry {
   at: number;                // момент входу, мс — порядок передач
   day: string;               // київська дата входу, 'YYYY-MM-DD'
   dealId: number | null;     // угода менеджера для ЦЬОГО входу
+  /** `client_key` угоди МЕНЕДЖЕРА, а без неї — угоди Продзвону (правило «постійний клієнт»). Немає — постійним не буде. */
+  clientKey?: string | null;
 }
 
 const byTime = (a: HandoffEntry, b: HandoffEntry) => a.at - b.at || a.pzId - b.pzId;
@@ -64,31 +93,110 @@ export function pickHandoffs<T extends HandoffEntry>(entries: readonly T[]): T[]
   return [...first.keys()].map((pz) => linked.get(pz) ?? first.get(pz)!).sort(byTime);
 }
 
+/**
+ * 🔁 ПОСТІЙНИЙ КЛІЄНТ НА ДАТУ ПЕРЕДАЧІ (правило Ярослава, задача 4668, п.5; 30.09.2026).
+ *
+ * «Клієнт вважається постійним, якщо було 2+ успішних перевезень» — рахуються успіхи, закриті ДО
+ * моменту передачі. Виняток: «якщо від останнього успішного пройшло 3 місяці, угода знову
+ * потрапляє до лідгена, і успіх зараховується йому» — тож постійний лише той, у кого останній
+ * успіх СВІЖІШИЙ за 3 місяці до дати передачі. Рівно 3 місяці тому — «пройшло», вже не постійний.
+ *
+ * Чому «до передачі», а не «за всю історію»: друга угода, що виросла з САМОЇ передачі, робила б
+ * клієнта постійним заднім числом — і вчорашні гроші лідгена зникали б. Заодно це закриває другий
+ * виняток Ярослава (прорахунок на 2 авто → менеджер створює другу угоду): угоди з цієї передачі
+ * закриваються ПІСЛЯ неї й постійним клієнта не роблять.
+ *
+ * `successes` — успіхи клієнта (`money.clientSuccessHistory`): момент закриття, мс, і його київська дата.
+ */
+export const REGULAR_MIN_SUCCESSES = 2;
+export const REGULAR_FRESH_MONTHS = 3;
+export interface ClientSuccess { at: number; day: string }
+
+/**
+ * Київська дата на `n` календарних місяців раніше, день обрізано до довжини місяця (31.05 − 3 = 28.02).
+ * Цілими місяцями (рік×12 + місяць), а НЕ `setUTCMonth`: той від 31-го перескакує місяць (борг 19 кореня).
+ */
+export function monthsBackDay(day: string, n: number): string {
+  const y = Number(day.slice(0, 4)), m = Number(day.slice(5, 7)), d = Number(day.slice(8, 10));
+  const t = y * 12 + (m - 1) - n;
+  const ty = Math.floor(t / 12), tm = (t % 12) + 1;
+  const last = new Date(Date.UTC(ty, tm, 0)).getUTCDate();
+  return `${ty}-${String(tm).padStart(2, "0")}-${String(Math.min(d, last)).padStart(2, "0")}`;
+}
+
+export function isRegularAt(successes: readonly ClientSuccess[], h: { at: number; day: string }): boolean {
+  const before = successes.filter((s) => s.at < h.at);
+  if (before.length < REGULAR_MIN_SUCCESSES) return false;
+  const lastDay = before.reduce((a, s) => (s.day > a ? s.day : a), before[0].day);
+  return lastDay > monthsBackDay(h.day, REGULAR_FRESH_MONTHS);
+}
+
+/** Історія успіхів по `client_key` — вхід класифікації. Порожня — постійних немає (не «невідомо»). */
+export type ClientHistory = ReadonlyMap<string, readonly ClientSuccess[]>;
+const NO_HISTORY: ClientHistory = new Map();
+
 /** Стан угоди менеджера й її бюджет — те, що віддає грошове ядро. */
-export interface DealState { cls: ManagerDealClass; price: number }
-export type ClassifiedHandoff<T extends HandoffEntry> = T & { cls: LeadgenDealClass; price: number };
+export interface DealState {
+  cls: ManagerDealClass; price: number;
+  /** Київська дата закриття угоди менеджера (для «Успішних» — дата успіху). */
+  closedDay?: string | null;
+  /** Київська дата першого входу в етап «авто поїхало» (`ClassRules.autoWent`). */
+  autoDay?: string | null;
+  /**
+   * Історія «чи була угода в зоні очікування» по київських днях (останній стан дня), за зростанням.
+   * Будує `money.handoffDealStates` з журналу етапів. Потрібна для правила «очікування — станом на кінець
+   * періоду» (рішення власника 02.10.2026). Після останнього запису діє ПОТОЧНИЙ клас (`cls`).
+   */
+  pendDays?: readonly PendDay[];
+}
+/** Стан дня угоди менеджера для «Очікування»: `pending` — у зоні «оплачено / очікуємо» на кінець дня. */
+export interface PendDay { day: string; pending: boolean }
+/**
+ * Класифікована передача. `successDay`/`autoDay` — якорі грошей: заповнені лише там, де гроші ЦІЄЇ передачі
+ * можуть рахуватись (успіх / оплачено-очікуємо); у `none`/`same`/`regular` — `null`, щоб не двоїти й не рахувати
+ * виключене. `inPeriod` ставить `handoffView`: чи сама передача в періоді (когорта), а не лише її гроші.
+ */
+export type ClassifiedHandoff<T extends HandoffEntry> = T & {
+  cls: LeadgenDealClass; price: number; successDay: string | null; autoDay: string | null; inPeriod?: boolean;
+  /** Історія зони очікування угоди (з `DealState.pendDays`); є лише там, де гроші цієї передачі рахуються. */
+  pendDays?: readonly PendDay[];
+  /** Гроші періоду — «Очікування», перенесене з минулого періоду (авто поїхало ДО початку). Ставить `handoffView`. */
+  carried?: boolean;
+};
 
 /**
  * 📌 ПРАВИЛО 3 + 4: КЛАС КОЖНОЇ ОБРАНОЇ ПЕРЕДАЧІ.
  *
  * Угода менеджера рахується РАЗ: друга передача в ту саму угоду — `same` (гроші не двоїмо),
- * перша за часом її забирає. Передача без угоди — `none`. Решта — стан угоди ЗАРАЗ.
+ * перша за часом її забирає. Передача без угоди — `none`. Угода постійного клієнта на дату
+ * передачі — `regular` (поза грошима, `isRegularAt`). Решта — стан угоди ЗАРАЗ.
  *
  * 🔴 Угода без стану — це ДЕФЕКТ, а не «в роботі». Угоди з `deals` не видаляються, тож стан
  * є в кожної знайденої; якщо ні — хтось розвʼязав два запити. Мовчазний фолбек у «в роботі»
  * вигадав би стан, якого CRM не казала, тому тут голосна помилка з id.
  */
 export function classifyHandoffs<T extends HandoffEntry>(
-  picked: readonly T[], states: ReadonlyMap<number, DealState>,
+  picked: readonly T[], states: ReadonlyMap<number, DealState>, history: ClientHistory = NO_HISTORY,
+  ownedEarlier: ReadonlySet<number> = new Set(),
 ): ClassifiedHandoff<T>[] {
-  const seen = new Set<number>();
+  // Угоди, які забрали передачі РАНІШЕ за період, — для когорти вже «та сама угода» (гроші в них рахуються там).
+  const seen = new Set<number>(ownedEarlier);
   return picked.map((h) => {
-    if (h.dealId == null) return Object.assign({}, h, { cls: "none" as const, price: 0 });
+    const noAnchor = { successDay: null, autoDay: null };
+    if (h.dealId == null) return Object.assign({}, h, { cls: "none" as const, price: 0 }, noAnchor);
     const st = states.get(h.dealId);
     if (!st) throw new Error(`угода менеджера ${h.dealId} (передача ${h.pzId}) без стану з грошового ядра`);
-    if (seen.has(h.dealId)) return Object.assign({}, h, { cls: "same" as const, price: st.price });
+    if (h.clientKey && isRegularAt(history.get(h.clientKey) ?? [], h)) return Object.assign({}, h, { cls: "regular" as const, price: st.price }, noAnchor);
+    if (seen.has(h.dealId)) return Object.assign({}, h, { cls: "same" as const, price: st.price }, noAnchor);
     seen.add(h.dealId);
-    return Object.assign({}, h, { cls: st.cls, price: st.price });
+    return Object.assign({}, h, {
+      cls: st.cls, price: st.price,
+      successDay: st.cls === "success" ? st.closedDay ?? null : null,
+      // Дата авто — для БУДЬ-ЯКОГО поточного класу: угода, що зараз «успішна» чи «програна», могла висіти
+      // в очікуванні на кінець минулого періоду (`pendingIn`). Сама по собі ця дата грошей не дає.
+      autoDay: st.autoDay ?? null,
+      pendDays: st.pendDays ?? [],
+    });
   });
 }
 
@@ -96,12 +204,14 @@ const cell = (): LeadgenMoneyCell => ({ n: 0, sum: 0, priced: 0 });
 
 /** Порожній підсумок — для місяця чи людини без передач (нуль, який СКАЗАЛИ дані). */
 export function emptyHandoffMoney(): LeadgenHandoffMoney {
-  return { handoffs: 0, unlinked: 0, lost: 0, sameDeal: 0, success: cell(), paid: cell(), expect: cell(), work: cell() };
+  return { handoffs: 0, unlinked: 0, lost: 0, sameDeal: 0, success: cell(), paid: cell(), expect: cell(), work: cell(),
+    regular: cell(), waiting: cell(), earned: cell(), pending: cell(), machines: 0 };
 }
 
 /**
  * Підсумок над УЖЕ класифікованими передачами. Тотожність, яку тримає гейт:
- * `handoffs = unlinked + sameDeal + lost + Σ n(success, paid, expect, work)`.
+ * `handoffs = unlinked + sameDeal + lost + regular.n + Σ n(success, paid, expect, work)`;
+ * `waiting` — похідне `paid + expect`, у тотожність не входить.
  * `priced` — скільки з `n` мають бюджет ≠ 0 (у «в роботі» його здебільшого ще немає).
  */
 export function aggregateHandoffMoney(rows: readonly { cls: LeadgenDealClass; price: number }[]): LeadgenHandoffMoney {
@@ -111,8 +221,9 @@ export function aggregateHandoffMoney(rows: readonly { cls: LeadgenDealClass; pr
     if (r.cls === "none") { out.unlinked++; continue; }
     if (r.cls === "same") { out.sameDeal++; continue; }
     if (r.cls === "lost") { out.lost++; continue; }
-    const c = out[r.cls];
-    c.n++; c.sum += r.price; if (r.price !== 0) c.priced++;
+    const add = (c: LeadgenMoneyCell) => { c.n++; c.sum += r.price; if (r.price !== 0) c.priced++; };
+    add(out[r.cls]);
+    if (r.cls === "paid" || r.cls === "expect") add(out.waiting);
   }
   return out;
 }
@@ -138,15 +249,93 @@ export interface HandoffView<T extends HandoffEntry> {
  * `domain` — УСІ входи періоду, не звужені. Звузити їх ДО виклику — рівно та помилка.
  */
 export function handoffView<T extends HandoffEntry>(
-  domain: readonly T[], states: ReadonlyMap<number, DealState>, scope: HandoffScope,
+  domain: readonly T[], states: ReadonlyMap<number, DealState>, scope: HandoffScope, history: ClientHistory = NO_HISTORY,
+  period?: DayIn,
 ): HandoffView<T> {
-  const all = classifyHandoffs(pickHandoffs(domain), states);
-  const rows = all.filter((h) => inScope(scope, h.lgTeamId, h.lgId));
-  const per = new Map<number, ClassifiedHandoff<T>[]>();
-  for (const h of rows) { const xs = per.get(h.lgId) ?? []; xs.push(h); per.set(h.lgId, xs); }
-  const byPerson = [...per.entries()].sort((a, b) => a[0] - b[0])
-    .map(([managerId, xs]) => ({ managerId, money: aggregateHandoffMoney(xs) }));
-  return { rows, totals: aggregateHandoffMoney(rows), byPerson };
+  const inP: DayIn = period ?? (() => true);
+  // Когорта: передачі періоду, одна на угоду Продзвону. «Та сама угода» — і щодо передач РАНІШЕ за період:
+  // угода менеджера належить першій передачі, що до неї привела, в якому б місяці та не була.
+  const inDomain = domain.filter((h) => inP(h.day));
+  const firstAt = inDomain.reduce((a, h) => Math.min(a, h.at), Infinity);
+  const ownedEarlier = new Set(domain.filter((h) => !inP(h.day) && h.at < firstAt && h.dealId != null).map((h) => h.dealId!));
+  const cohort = classifyHandoffs(pickHandoffs(inDomain), states, history, ownedEarlier)
+    .filter((h) => inScope(scope, h.lgTeamId, h.lgId)).map((h) => Object.assign(h, { inPeriod: true }));
+  // Гроші — з УСІХ передач домену (будь-якої давності): угода менеджера належить першій передачі, що до неї
+  // привела; «Успішні» — за датою успіху в періоді, «Очікування» — за датою авто в періоді.
+  const money = anchoredRows(domain, states, history, inP).filter((h) => inScope(scope, h.lgTeamId, h.lgId));
+  const key = (h: { pzId: number; dealId: number | null }) => `${h.pzId}|${h.dealId}`;
+  const inCohort = new Set(cohort.map(key));
+  const rows = [...cohort, ...money.filter((h) => !inCohort.has(key(h))).map((h) => Object.assign(h, { inPeriod: false }))];
+  // «Перенесено»: гроші періоду — «Очікування», а авто поїхало ДО його початку (видно в списку угод).
+  for (const h of rows) h.carried = inP.start != null && h.autoDay != null && h.autoDay < inP.start && pendingIn(h, inP);
+  const persons = [...new Set(rows.map((h) => h.lgId))].sort((a, b) => a - b);
+  const byPerson = persons.map((managerId) => ({
+    managerId,
+    money: withAnchored(aggregateHandoffMoney(cohort.filter((h) => h.lgId === managerId)), money.filter((h) => h.lgId === managerId), inP),
+  }));
+  return { rows, totals: withAnchored(aggregateHandoffMoney(cohort), money, inP), byPerson };
+}
+
+/** Предикат «київська дата в періоді» — одна форма на період, місяць тренду й одиницю розбивки. */
+export type DayIn = ((day: string) => boolean) & { start?: string; end?: string };
+export const dayInRange = (from: string, to: string): DayIn => Object.assign((d: string) => d >= from && d <= to, { start: from, end: to });
+/** Календарний місяць `ym` ('YYYY-MM') як період — з відомими межами (для «Очікування» станом на кінець). */
+export function monthIn(ym: string): DayIn {
+  const y = Number(ym.slice(0, 4)), m = Number(ym.slice(5, 7));
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return dayInRange(`${ym}-01`, `${ym}-${String(last).padStart(2, "0")}`);
+}
+
+const isWaitingCls = (c: LeadgenDealClass) => c === "paid" || c === "expect";
+
+/**
+ * ⏳ «ОЧІКУВАННЯ» ПЕРІОДУ — СТАНОМ НА КІНЕЦЬ ПЕРІОДУ (рішення власника 02.10.2026: «якщо не перейшло в успіх у
+ * минулому місяці — переходить в очікування в цей»). Угода в «Очікуванні» періоду, якщо авто поїхало ДО кінця
+ * періоду (у ньому чи раніше) і на кінець періоду вона стояла в зоні «оплачено / очікуємо». Минулий період —
+ * станом на його останній день з журналу етапів; поточний — станом зараз (після останнього запису — поточний клас).
+ * Тож угода тягнеться з місяця в місяць, поки не стане «Успішною» чи не закриється, і суми очікувань різних
+ * місяців НЕ складаються. Період без відомого кінця (старі виклики) — як було: авто поїхало в періоді, клас зараз.
+ */
+export function pendingIn(r: { cls: LeadgenDealClass; autoDay: string | null; pendDays?: readonly PendDay[] }, inP: DayIn): boolean {
+  if (r.autoDay == null) return false;
+  const end = inP.end;
+  if (end == null) return isWaitingCls(r.cls) && inP(r.autoDay);
+  if (r.autoDay > end) return false;
+  const days = r.pendDays ?? [];
+  if (!days.length || end >= days[days.length - 1].day) return isWaitingCls(r.cls);
+  let at = false;
+  for (const x of days) { if (x.day <= end) at = x.pending; else break; }
+  return at;
+}
+
+/**
+ * Передачі домену, чиї ГРОШІ потрапляють у період: класифікація над УСІМ доменом у порядку часу (перша
+ * передача забирає угоду менеджера, решта — `same`), без вибору «одна на угоду Продзвону» — повторна
+ * кваліфікація веде до ІНШОЇ угоди менеджера і має свої гроші.
+ */
+export function anchoredRows<T extends HandoffEntry>(
+  domain: readonly T[], states: ReadonlyMap<number, DealState>, history: ClientHistory, inP: DayIn,
+): ClassifiedHandoff<T>[] {
+  const sorted = domain.filter((h) => h.dealId != null).sort(byTime);
+  return classifyHandoffs(sorted, states, history)
+    .filter((h) => (h.successDay != null && inP(h.successDay)) || pendingIn(h, inP));
+}
+
+/** «Успішні» й «Очікування» периоду над класифікованими передачами (`anchoredRows`). */
+export function anchoredMoney(rows: readonly { cls: LeadgenDealClass; price: number; successDay: string | null; autoDay: string | null; pendDays?: readonly PendDay[] }[], inP: DayIn):
+  { earned: LeadgenMoneyCell; pending: LeadgenMoneyCell } {
+  const earned = cell(), pending = cell();
+  const add = (c: LeadgenMoneyCell, price: number) => { c.n++; c.sum += price; if (price !== 0) c.priced++; };
+  for (const r of rows) {
+    if (r.cls === "success" && r.successDay != null && inP(r.successDay)) add(earned, r.price);
+    else if (pendingIn(r, inP)) add(pending, r.price);
+  }
+  return { earned, pending };
+}
+
+function withAnchored(m: LeadgenHandoffMoney, anchored: readonly ClassifiedHandoff<HandoffEntry>[], inP: DayIn): LeadgenHandoffMoney {
+  const a = anchoredMoney(anchored, inP);
+  return Object.assign(m, { earned: a.earned, pending: a.pending, machines: a.earned.n + a.pending.n });
 }
 
 /**
@@ -157,6 +346,8 @@ export function handoffView<T extends HandoffEntry>(
 export interface ClassRules {
   fcPipelines: readonly number[]; success: readonly number[]; paid: readonly number[];
   expectZone: readonly number[]; lostStatus: number;
+  /** Етапи «авто поїхало» (від «Авто працює» далі, без 142) — дата машини для «Очікування». */
+  autoWent: readonly number[];
 }
 
 /**
@@ -189,6 +380,8 @@ export function handoffMoneyWire(m: LeadgenHandoffMoney): LeadgenHandoffMoney {
   return {
     handoffs: m.handoffs, unlinked: m.unlinked, lost: m.lost, sameDeal: m.sameDeal,
     success: cellWire(m.success), paid: cellWire(m.paid), expect: cellWire(m.expect), work: cellWire(m.work),
+    regular: cellWire(m.regular), waiting: cellWire(m.waiting), earned: cellWire(m.earned), pending: cellWire(m.pending),
+    machines: m.machines,
   };
 }
 
@@ -196,7 +389,8 @@ export function personMoneyWire(managerId: number, m: LeadgenHandoffMoney): Lead
   const w = handoffMoneyWire(m);
   return {
     managerId, handoffs: w.handoffs, unlinked: w.unlinked, lost: w.lost, sameDeal: w.sameDeal,
-    success: w.success, paid: w.paid, expect: w.expect, work: w.work,
+    success: w.success, paid: w.paid, expect: w.expect, work: w.work, regular: w.regular, waiting: w.waiting,
+    earned: w.earned, pending: w.pending, machines: w.machines,
   };
 }
 
@@ -204,7 +398,8 @@ export function bucketMoneyWire(bucket: string, m: LeadgenHandoffMoney): Leadgen
   const w = handoffMoneyWire(m);
   return {
     bucket, handoffs: w.handoffs, unlinked: w.unlinked, lost: w.lost, sameDeal: w.sameDeal,
-    success: w.success, paid: w.paid, expect: w.expect, work: w.work,
+    success: w.success, paid: w.paid, expect: w.expect, work: w.work, regular: w.regular, waiting: w.waiting,
+    earned: w.earned, pending: w.pending, machines: w.machines,
   };
 }
 
@@ -213,7 +408,8 @@ export function bucketPersonMoneyWire(bucket: string, managerId: number, m: Lead
   const w = handoffMoneyWire(m);
   return {
     bucket, managerId, handoffs: w.handoffs, unlinked: w.unlinked, lost: w.lost, sameDeal: w.sameDeal,
-    success: w.success, paid: w.paid, expect: w.expect, work: w.work,
+    success: w.success, paid: w.paid, expect: w.expect, work: w.work, regular: w.regular, waiting: w.waiting,
+    earned: w.earned, pending: w.pending, machines: w.machines,
   };
 }
 
@@ -232,6 +428,12 @@ export interface LeadgenHandoffDeal {
   route: string | null; client: string | null; salesManager: string | null; stage: string | null;
   cls: LeadgenDealClass; price: number; closedDay: string | null; planPayDay: string | null;
   reason: string | null; url: string | null;
+  /** Дата «авто поїхало» (для «Очікування»); `null` — ще не поїхало або не про гроші. */
+  autoDay: string | null;
+  /** Передача — у вибраному періоді; `false` — передано раніше, а в період потрапили її ГРОШІ. */
+  inPeriod: boolean;
+  /** «Очікування», перенесене з минулого періоду: авто поїхало раніше, а на кінець періоду угода ще чекала. */
+  carried: boolean;
 }
 
 /** Порожній або з самих пробілів текст CRM — «не заповнено», а не порожній підпис. */
@@ -278,18 +480,92 @@ export function handoffDealRow(
     planPayDay: linked ? h.planPayDay : null,
     reason: h.cls === "lost" ? blankToNull(h.dealReason) : null,
     url: deps.leadUrl(h.dealId ?? h.pzId),
+    autoDay: h.autoDay, inPeriod: h.inPeriod !== false, carried: h.carried === true,
   };
 }
 
 // ─────────────────────── МЕЖА ТІМЛІДА — ОДИН ПОМІЧНИК НА ТРИ РОУТИ ЕКРАНА ───────────────────────
 
 /**
+ * Автор запиту для меж екрана. `leadgenTeamId` — команда «Лідогенерація», якщо автор ЗАРАЗ її
+ * активний учасник (заповнює роут одним запитом, `leadgenViewerAuth`); інакше `null`/відсутнє.
+ */
+export interface LeadgenAuth {
+  role: string; teamId: number | null | undefined; managerId?: number | null; leadgenTeamId?: number | null;
+}
+
+/** Текст відмови менеджеру, який не в команді «Лідогенерація» (рішення власника 02.10.2026). */
+export const NOT_LEADGEN_TEXT = "Розділ для команди «Лідогенерація» — для вашої ролі тут даних немає.";
+
+/**
+ * 👁 ХТО ДИВИТЬСЯ ЕКРАН (рішення власника 02.10.2026, ТЗ 07.09: «лідген бачить свій рядок і підсумок
+ * команди»). Лідгени ходять роллю «менеджер», а нею ж — менеджери продажу, тож роль сама нічого не
+ * каже; вирішує ЧЛЕНСТВО в команді:
+ *  • не менеджер (тімлід, адмін-рівень…) — `all`: як було, межі тімліда тримає `leadgenAuthScope`;
+ *  • менеджер — активний учасник «Лідогенерації» — `own`: свій рядок, свої угоди й гроші, свій план,
+ *    підсумок команди; рядків, угод і грошей колег — НІ;
+ *  • менеджер поза командою (продажі) — `deny` з поясненням, без жодних цифр.
+ * `managerId` без значення чи ≤ 0 — `deny`: «свої дані» без «себе» не існують (♾ правило 7).
+ */
+export type LeadgenViewer = { kind: "all" } | { kind: "own"; selfId: number } | { kind: "deny"; error: string };
+export function leadgenViewer(auth: LeadgenAuth): LeadgenViewer {
+  if (auth.role !== "manager") return { kind: "all" };
+  if (auth.leadgenTeamId != null && auth.managerId != null && auth.managerId > 0) return { kind: "own", selfId: auth.managerId };
+  return { kind: "deny", error: NOT_LEADGEN_TEXT };
+}
+
+/** Лише «свої» елементи масиву з полем `managerId`. Не масив — порожньо (fail-closed). */
+function onlySelf(v: unknown, selfId: number): unknown[] {
+  return Array.isArray(v) ? v.filter((x) => (x as { managerId?: unknown })?.managerId === selfId) : [];
+}
+
+/**
+ * ✂️ ВІДПОВІДЬ `/leadgen-stats` ДЛЯ ЛІДГЕНА — БІЛИЙ СПИСОК, а не «прибрати зайве»: поле, яке хтось
+ * додасть у відповідь завтра, лідгену НЕ піде, доки його свідомо не внесуть сюди.
+ * Лишається: свій рядок, підсумки КОМАНДИ (totals, конверсії, розбивка команди, план команди), свої
+ * гроші й розбивка. Порожніми (форма та сама, щоб екран не падав) — «Інші», джерела, тижні відділу,
+ * закриття, журнал передач з іменами, рівень відділу.
+ */
+export function ownLeadgenStatsBody(body: Record<string, unknown>, selfId: number): Record<string, unknown> {
+  const plans = body.plans as { elapsed?: unknown; byPerson?: unknown; team?: unknown } | undefined;
+  const hm = body.handoffMoney as { totals?: unknown; byPerson?: unknown } | undefined;
+  const out: Record<string, unknown> = {
+    viewer: "own", selfId,
+    from: body.from, to: body.to, totals: body.totals, conversions: body.conversions, callRule: body.callRule,
+    scopedTo: body.scopedTo,
+    rows: onlySelf(body.rows, selfId), teamMembers: onlySelf(body.teamMembers, selfId),
+    plans: plans ? { elapsed: plans.elapsed, byPerson: onlySelf(plans.byPerson, selfId), team: plans.team } : undefined,
+    handoffMoney: hm ? { totals: hm.totals, byPerson: onlySelf(hm.byPerson, selfId) } : undefined,
+    others: [], othersTotals: null, bySource: [], weeks: [], closures: [], handoffs: [], handoffsLimit: 0,
+    warmingNow: null, department: null,
+  };
+  if (body.grain) {
+    out.grain = body.grain;
+    out.buckets = body.buckets;
+    out.bucketsByPerson = onlySelf(body.bucketsByPerson, selfId);
+    out.handoffMoneyBuckets = body.handoffMoneyBuckets;
+    out.handoffMoneyBucketsByPerson = onlySelf(body.handoffMoneyBucketsByPerson, selfId);
+  }
+  return out;
+}
+
+/** ✂️ Тренд для лідгена — той самий білий список: підсумки команди + лише свій рядок і свої гроші. */
+export function ownLeadgenTrendBody(body: Record<string, unknown>, selfId: number): Record<string, unknown> {
+  return {
+    viewer: "own", selfId, months: body.months, to: body.to, buckets: body.buckets, handoffMoney: body.handoffMoney,
+    bucketsByPerson: onlySelf(body.bucketsByPerson, selfId),
+    handoffMoneyByPerson: onlySelf(body.handoffMoneyByPerson, selfId),
+  };
+}
+
+/**
  * 🔒 СКОУП ВІДПОВІДІ З РОЛІ — ЄДИНЕ МІСЦЕ, ДЕ ВІН ОБЧИСЛЮЄТЬСЯ для `/leadgen-stats`,
  * `/leadgen-trend` і `/leadgen-handoff-deals` (рішення власника 22.09.2026, правило 7).
  *  • тімлід — лише своя команда; без команди — `-1` (жодної), а НЕ `null` (весь відділ):
  *    порожній скоуп не можна виражати значенням, що означає «без обмеження» (♾ правило 7);
- *  • менеджер — ніщо (`-1`/`-1`). Роут відмовляє йому першим оператором; тут — друга лінія,
- *    щоб помилковий виклик дав порожнечу, а не чужі гроші;
+ *  • менеджер-лідген (`leadgenViewer` → `own`) — скоуп команди «Лідогенерація» (підсумок команди),
+ *    рядки колег ріже `ownLeadgen*Body`; будь-який інший менеджер — ніщо (`-1`/`-1`): роут відмовляє
+ *    йому першим, тут — друга лінія, щоб помилковий виклик дав порожнечу, а не чужі гроші;
  *  • решта (адмін-рівень, фінансист, КВП…) — весь відділ.
  *
  * 🔴 НАВІЩО ОКРЕМОЮ ФУНКЦІЄЮ (ревʼю F1). Скоуп писався в кожному обробнику літералом, і жоден
@@ -297,8 +573,13 @@ export function handoffDealRow(
  * всього відділу при повністю зеленому наборі. Тепер роут не складає скоуп сам — `#681b`
  * вимагає, щоб у ядро йшов саме результат цієї функції (або `clamp.scope`, що з неї ж).
  */
-export function leadgenAuthScope(auth: { role: string; teamId: number | null | undefined }): HandoffScope {
-  if (auth.role === "manager") return { teamId: -1, managerId: -1 };
+export function leadgenAuthScope(auth: LeadgenAuth): HandoffScope {
+  // Лідген (роль «менеджер», активний учасник команди) — скоуп КОМАНДИ: підсумок команди йому
+  // показується (рішення власника 02.10.2026). Чужі рядки ріже вже `ownLeadgen*Body`, а не скоуп.
+  if (auth.role === "manager") {
+    const v = leadgenViewer(auth);
+    return v.kind === "own" ? { teamId: auth.leadgenTeamId as number, managerId: null } : { teamId: -1, managerId: -1 };
+  }
   if (auth.role === "team_lead") return { teamId: auth.teamId ?? -1, managerId: null };
   return { teamId: null, managerId: null };
 }
@@ -308,17 +589,22 @@ export type HandoffDealsScope = { ok: true; scope: HandoffScope } | { ok: false;
 /**
  * 🔒 ХТО ЯКИЙ СПИСОК ПЕРЕДАЧ БАЧИТЬ — та сама межа, що в рядків `/leadgen-stats`
  * (`leadgenAuthScope`), плюс одна людина:
- *  • менеджер — 403 (роут перевіряє це першим оператором; тут — друга лінія);
+ *  • менеджер — лише лідген і лише СВОЇ угоди (рішення власника 02.10.2026); решта менеджерів — 403;
  *  • тімлід — лише своя команда; `managerId` людини з ЧУЖОЇ команди (або невідомої) — 403,
  *    а не порожній список: порожнеча читалась би як «у неї нуль передач»;
  *  • решта — будь-кого, або весь відділ.
  * `managerTeamId` — команда запитаної людини (`undefined` — такої людини немає).
  */
 export function handoffDealsScope(
-  auth: { role: string; teamId: number | null | undefined },
+  auth: LeadgenAuth,
   managerId: number | null, managerTeamId: number | null | undefined,
 ): HandoffDealsScope {
-  if (auth.role === "manager") return { ok: false, status: 403 };
+  if (auth.role === "manager") {
+    // Лідген — лише СВОЇ угоди: чужий `managerId` — 403 (а не «тихо свої»), без нього — свої.
+    const v = leadgenViewer(auth);
+    if (v.kind !== "own" || (managerId != null && managerId !== v.selfId)) return { ok: false, status: 403 };
+    return { ok: true, scope: { teamId: auth.leadgenTeamId as number, managerId: v.selfId } };
+  }
   const base = leadgenAuthScope(auth);
   if (base.teamId != null && managerId != null && managerTeamId !== base.teamId) return { ok: false, status: 403 };
   return { ok: true, scope: { teamId: base.teamId, managerId } };
@@ -437,16 +723,81 @@ export interface TrendAssembly { monthStarts: string[]; byPerson: LeadgenPersonB
 export function assembleTrend<T extends HandoffEntry>(input: {
   monthStarts: readonly string[]; stages: readonly StageBucketRow[]; calls: readonly CallBucketRow[];
   links: readonly T[]; states: ReadonlyMap<number, DealState>; firstDay: string | null; scope: HandoffScope;
+  history?: ClientHistory;
+  /** Київське «сьогодні»: кінець поточного місяця обрізається ним (очікування — станом на кінець, майбутнього немає). */
+  today?: string;
 }): TrendAssembly {
   const { firstDay, scope } = input;
   const monthStarts = firstDay == null ? [] : input.monthStarts.filter((m) => m.slice(0, 7) >= firstDay.slice(0, 7));
   const byPerson = mergeBucketRows(input.stages, input.calls, true).filter((r) => inScope(scope, r.teamId, r.managerId));
   const money = monthStarts.map((ms): TrendMoneyBucket => {
     const ym = ms.slice(0, 7);
-    const v = handoffView(input.links.filter((l) => l.day.slice(0, 7) === ym), input.states, scope);
+    // Той самий `handoffView`, що й `/leadgen-stats` місяця: когорта — передачі місяця, гроші — з усього домену.
+    const mi = monthIn(ym);
+    const period = input.today != null && mi.end != null && input.today < mi.end ? dayInRange(mi.start as string, input.today) : mi;
+    const v = handoffView(input.links, input.states, scope, input.history, period);
     return { bucket: ms, totals: v.totals, byPerson: v.byPerson };
   });
   return { monthStarts, byPerson, money };
+}
+
+// ─────────────────────── ГРОШІ ПО ТИЖНЯХ І ДНЯХ ПЕРІОДУ (задача 4668, п.6) ───────────────────────
+
+/** Понеділок тижня київської дати `day` ('YYYY-MM-DD') — той самий ключ, що `bucketKeySql("week")`. */
+/** Київська дата + `n` днів ('YYYY-MM-DD'). */
+export function addDays(day: string, n: number): string {
+  return new Date(Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)) + n)).toISOString().slice(0, 10);
+}
+
+export function mondayOf(day: string): string {
+  const t = Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)));
+  const dow = new Date(t).getUTCDay();
+  return new Date(t - ((dow + 6) % 7) * 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * 📅 ГРОШІ З ПЕРЕДАЧ ПО ОДИНИЦЯХ ПЕРІОДУ — розклад ТИХ САМИХ класифікованих передач, що й підсумок
+ * періоду, за днем передачі (день або понеділок тижня). Одна передача й «та сама угода» вирішені над
+ * періодом (`handoffView`), тож Σ одиниць == підсумку періоду ЗАВЖДИ (`#1092`) — на відміну від
+ * лічильників стадій, де угода з двома входами в різні тижні рахується в кожному.
+ * Вхід — `rows` уже звуженого скоупу (межа тімліда з того самого `handoffView`).
+ */
+export function handoffMoneyBuckets<T extends HandoffEntry>(
+  rows: readonly ClassifiedHandoff<T>[], grain: "day" | "week", period: DayIn = () => true,
+): TrendMoneyBucket[] {
+  // Три якорі — три розклади: когорта за днем передачі, «Успішні» — за днем успіху, «Очікування» — за днем авто.
+  const k = (d: string) => (grain === "day" ? d : mondayOf(d));
+  const cohort = new Map<string, ClassifiedHandoff<T>[]>(), money = new Map<string, ClassifiedHandoff<T>[]>();
+  const put = (m: Map<string, ClassifiedHandoff<T>[]>, b: string, r: ClassifiedHandoff<T>) => { const xs = m.get(b) ?? []; xs.push(r); m.set(b, xs); };
+  // Одиниця як період зі своїми межами — «Очікування» одиниці станом на її кінець (`pendingIn`).
+  const unitOf = (b: string): DayIn => {
+    const bEnd = grain === "day" ? b : addDays(b, 6);
+    const start = period.start != null && period.start > b ? period.start : b;
+    const end = period.end != null && period.end < bEnd ? period.end : bEnd;
+    return Object.assign((d: string) => k(d) === b && period(d), { start, end });
+  };
+  // Одиниці періоду: коли межі відомі — УСІ (угода, що висить в очікуванні, є в кожній, на кінець якої висіла).
+  const units = new Set<string>();
+  if (period.start != null && period.end != null) for (let d = period.start; d <= period.end; d = addDays(d, 1)) units.add(k(d));
+  for (const r of rows) {
+    if (r.inPeriod !== false && period(r.day)) put(cohort, k(r.day), r);
+    if (r.cls === "success" && r.successDay != null && period(r.successDay)) put(money, k(r.successDay), r);
+    else if (r.autoDay != null) {
+      if (period.end == null) { if (pendingIn(r, period)) put(money, k(r.autoDay), r); }
+      else for (const b of units) if (pendingIn(r, unitOf(b))) put(money, b, r);
+    }
+  }
+  const buckets = [...new Set([...cohort.keys(), ...money.keys()])].sort();
+  return buckets.map((bucket): TrendMoneyBucket => {
+    const cs = cohort.get(bucket) ?? [], ms = money.get(bucket) ?? [];
+    const inB: DayIn = unitOf(bucket);
+    const persons = [...new Set([...cs, ...ms].map((h) => h.lgId))].sort((a, b) => a - b);
+    return {
+      bucket, totals: withAnchored(aggregateHandoffMoney(cs), ms, inB),
+      byPerson: persons.map((managerId) => ({ managerId,
+        money: withAnchored(aggregateHandoffMoney(cs.filter((h) => h.lgId === managerId)), ms.filter((h) => h.lgId === managerId), inB) })),
+    };
+  });
 }
 
 // ─────────────────────── ПАРАМЕТРИ ЗАПИТІВ ЕКРАНА ЛІДОГЕНУ ───────────────────────

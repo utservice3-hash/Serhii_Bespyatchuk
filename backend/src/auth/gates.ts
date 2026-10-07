@@ -448,6 +448,20 @@ export const ROW_SPREAD_EXEMPTIONS: SpreadExemption[] = [
   // дописуються права глядача на статус, обчислені `core/taskStatusRights.ts`.
   { file: "routes/tasks.ts", frag: "return { ...r, statusRights",
     why: "`r` — рядок `GET /tasks` з явним переліком колонок; `statusRights` — права глядача, обчислені ядром (`statusRights`/`canChangeReviewer`)." },
+  // 📋 Опитування (30.09.2026): `s` — рядок `SELECT ${SURVEY_COLS}` (явний перелік, `surveys/surveyScheduler.ts`);
+  // решта — обчислені обʼєкти (питання з тіла запиту, результат `trend()` ядра опитувань).
+  { file: "routes/surveys.ts", frag: "({ ...x, image: cleanImage",
+    why: "`x` — питання з тіла запиту шаблону; картинку чистить `cleanImage`, у БД кладеться JSON, у відповідь не йде." },
+  { file: "routes/surveys.ts", frag: "res.json({ ...s, questions: qs, author",
+    why: "`s` — рядок `SELECT ${SURVEY_COLS}` (явні колонки); гілка лише для носія `manage_surveys`." },
+  { file: "routes/surveys.ts", frag: "validateSurvey({ ...s, desc",
+    why: "`s` — рядок `SELECT ${SURVEY_COLS}`; передається у чисту перевірку, у відповідь не йде." },
+  { file: "routes/surveys.ts", frag: "survey: { ...s, questions: qs }",
+    why: "`s` — рядок `SELECT ${SURVEY_COLS}` (явні колонки); результати бачить лише носій `manage_surveys`." },
+  { file: "routes/surveys.ts", frag: "return { ...t, participation",
+    why: "`t` — обчислений результат `trend()` ядра опитувань, не рядок БД." },
+  { file: "routes/surveys.ts", frag: "({ ...p, status: by.get",
+    why: "`p` — елемент обчисленої участі з `trend()`; дописуються статус і дата закриття випуску." },
   // 💼 Вакансії (22.09.2026): рядок `listVacancies` — ЯВНИЙ SELECT (id, назва, статус, need, дати, candidates,
   // days_open; жодних персональних полів), до нього дописується обчислена воронка `vacancyFunnels`.
   { file: "routes/hiring.ts", frag: "({ ...v, funnel",

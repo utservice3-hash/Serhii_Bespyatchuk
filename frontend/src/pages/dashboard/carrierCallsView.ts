@@ -29,29 +29,33 @@ export const BUCKET_UI: Readonly<Record<CarrierBucketT, { label: string; tone: T
  */
 export type CarrierCategoryT = "client" | "carrier" | "other" | "review" | "error" | "waiting" | "no_talk";
 export type CarrierTab = "client" | "carrier" | "other" | "review";
-export const CARRIER_TABS: readonly { key: CarrierTab; label: string }[] = [
-  { key: "client", label: "Клієнти" },
-  { key: "carrier", label: "Перевізники" },
-  { key: "other", label: "Інше" },
-  { key: "review", label: "На перевірці" },
+export const CARRIER_TABS: readonly { key: CarrierTab; label: string; hint: string }[] = [
+  { key: "client", label: "Клієнти", hint: "Людина, якій треба щось перевезти. Угода лишається на етапі — працюйте з нею як завжди." },
+  { key: "carrier", label: "Перевізники", hint: "Має свій транспорт і шукає вантаж. Дашборд сам закриває такі угоди в CRM з причиною «Перевізник»." },
+  { key: "other", label: "Інше", hint: "Не клієнт і не перевізник: спам, постачальник, шукає роботу, особисте, помилка номера. Закривається в CRM як «Нецільове звернення»." },
+  { key: "review", label: "AI не впевнений", hint: "AI не зміг твердо визначити, хто дзвонив, — вирішуєте ви: послухайте запис і натисніть «Клієнт», «Перевізник» чи «Інше». Тут же дзвінки з помилкою обробки і ті, які AI ще слухає. Розібрати — до 18:00 того ж робочого дня." },
 ];
 /** «Без розмови» (закрито «Немає зв'язку», не аналізуємо — Роман 30.09.2026) — у жодну вкладку: `null`. */
 export function tabOf(c: CarrierCategoryT): CarrierTab | null {
   if (c === "no_talk") return null;
   return c === "client" || c === "carrier" || c === "other" ? c : "review";
 }
-export const CATEGORY_UI: Readonly<Record<CarrierCategoryT, { label: string; tone: Tone }>> = {
-  client: { label: "клієнт", tone: "ok" },
-  carrier: { label: "перевізник", tone: "warn" },
-  other: { label: "інше", tone: "info" },
-  review: { label: "на перевірці", tone: "muted" },
-  error: { label: "помилка", tone: "bad" },
-  waiting: { label: "AI слухає", tone: "muted" },
-  no_talk: { label: "без розмови", tone: "muted" },
+export const CATEGORY_UI: Readonly<Record<CarrierCategoryT, { label: string; tone: Tone; hint: string }>> = {
+  client: { label: "клієнт", tone: "ok", hint: "Треба щось перевезти — угода лишається на етапі." },
+  carrier: { label: "перевізник", tone: "warn", hint: "Має транспорт і шукає вантаж — закривається в CRM як «Перевізник»." },
+  other: { label: "інше", tone: "info", hint: "Не клієнт і не перевізник — закривається в CRM як «Нецільове звернення»." },
+  review: { label: "AI не впевнений", tone: "muted", hint: "AI не зміг твердо визначити, хто дзвонив. Рішення за вами." },
+  error: { label: "помилка обробки", tone: "bad", hint: "Запис недоступний, у ньому немає мови або AI не відповів після трьох спроб. Послухайте й вирішіть самі." },
+  waiting: { label: "AI ще слухає", tone: "muted", hint: "Розмову ще розпізнають і аналізують — зазвичай 20–30 хв після дзвінка." },
+  no_talk: { label: "без розмови", tone: "muted", hint: "Розмови від 10 с не було: не аналізуємо, через 4 год закривається як «Немає зв'язку»." },
 };
+
+/** Впевненість AI — відсотками, бо «0,78» людина не читає як «на 78% певен». */
+export const pctLabel = (c: number | null): string => (c == null ? "—" : `${String(Math.round(c * 100))}%`);
 
 /** Підтипи «Інше» — ті самі ключі й підписи, що `OTHER_TYPE_UA` бекенду (звіряє гейт). */
 export type CarrierOtherTypeT = "spam" | "supplier" | "job_seeker" | "personal" | "wrong_number" | "other";
+export const OTHER_TYPES_HINT = "Спам / реклама — продаж послуг, опитування, автодзвінки · Постачальник — продає щось самій компанії (пальне, запчастини, банк, зв'язок) · Шукає роботу — кандидат, не на своїй машині · Особисте — знайомі, родина · Помилка номера — шукали іншу людину чи компанію · Інше — решта.";
 export const OTHER_TYPE_UI: Readonly<Record<CarrierOtherTypeT, string>> = {
   spam: "спам / реклама", supplier: "постачальник", job_seeker: "шукає роботу", personal: "особисте",
   wrong_number: "помилка номера", other: "інше",
@@ -90,6 +94,26 @@ export function dealsWord(n: number): string {
   if (m10 === 1 && m100 !== 11) return "угода";
   if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return "угоди";
   return "угод";
+}
+
+/**
+ * Що сталося з угодою в CRM — ОДНИМ рядком, щоб менеджер розумів (Роман 30.09.2026: «скажи які угоди пішли в crm, які
+ * видалені»). «Прибрана» = закрита «Не цільовою» (Kommo угод не видаляє); «лишилась» = працює далі.
+ * Порядок має значення: що вже сталося в CRM (закрито / повернуто / пішла далі) — сильніше за наш намір.
+ */
+export const CLOSE_REASON_UI: Readonly<Record<string, string>> = { carrier: "«Перевізник»", other: "«Нецільове звернення»", no_talk: "«Немає зв'язку»" };
+export function crmOutcome(r: { category: string; close: { state: string; reason?: string } | null; crm: { statusId: number | null; rejectReason: string | null } }):
+  { icon: string; label: string; tone: Tone; hint: string } {
+  const reasonOf = (x: string | undefined) => CLOSE_REASON_UI[x ?? ""] ?? "";
+  if (r.close?.state === "reverted") return { icon: "↩️", label: "повернута на етап", tone: "info", hint: "Людина повернула угоду на етап — вона знову в роботі, автоматика її більше не закриває." };
+  if (r.close?.state === "closed") return { icon: "🗑", label: `прибрана: ${reasonOf(r.close.reason)}`, tone: "muted", hint: "Дашборд закрив угоду в CRM як «Не цільова» з цією причиною. Помилка — «Повернути на етап» у картці." };
+  if (r.crm.statusId === 142) return { icon: "✅", label: "успішна угода", tone: "ok", hint: "Угода в CRM уже успішна." };
+  if (r.crm.statusId === 143) return { icon: "🗑", label: `закрита в CRM${r.crm.rejectReason ? `: «${r.crm.rejectReason}»` : ""}`, tone: "muted", hint: "Угоду закрили в CRM — людина чи фільтр, не дашборд." };
+  if (r.crm.statusId != null && r.crm.statusId !== CARRIER_STAGE_STATUS) return { icon: "✅", label: "пішла далі по воронці", tone: "ok", hint: "Угоду перевели з етапу «Дзвінки на мобільні» далі — з нею працюють." };
+  if (r.category === "client") return { icon: "✅", label: "лишилась у CRM", tone: "ok", hint: "Клієнт — угода лишається на етапі, працюйте з нею як завжди." };
+  if (r.category === "carrier" || r.category === "other" || r.category === "no_talk")
+    return { icon: "⏳", label: `буде прибрана: ${reasonOf(r.category)}`, tone: "warn", hint: "Рішення вже є — дашборд закриє угоду в CRM найближчим проходом (кожні 5 хв; без розмови — через 4 год після дзвінка)." };
+  return { icon: "⏳", label: "чекає рішення", tone: "muted", hint: "AI не впевнений або ще слухає — угода лишається в CRM, доки не вирішите." };
 }
 
 /** Стан закриття угоди в CRM — словами. `null` — автоматика угоду не чіпала. */

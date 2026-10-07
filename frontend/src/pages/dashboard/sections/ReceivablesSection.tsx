@@ -1,5 +1,7 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import type { AuthPayload } from "../../../auth";
+import { useToast } from "../../../components/Toasts";
+import { commitOptimistic, failureReason } from "../../../actionFeedback";
 import {
   saveReceivableInvoiceNote, fetchReceivableInvoices, triggerReceivablesSync,
   fetchManagerOptions, type ManagerOption,
@@ -24,7 +26,7 @@ import {
   isAncientDebt, isOverdue, foldEntity, foldCarrier, activeNote, NOTE_EMPTY_PLACEHOLDER,
   breakdownLine, noteOthersLabel,
   invoiceEntityShown, invoiceEntityLabel,
-  formatDateSafe, parseDateSafe, agreementLine, AGREEMENT_EMPTY_LABEL, staleNote,
+  formatDateSafe, parseDateSafe, AGREEMENT_EMPTY_LABEL, staleNote, agreementView,
   sortClients, nextSort, sortMark, ariaSort, DEFAULT_SORT, type SortState,
   limitHint, limitLabel, limitState, originBadges, ownerState, passesFilters,
   amountLimitHint, amountLimitLabel, amountLimitState, isOverAmount,
@@ -177,6 +179,7 @@ export function ReceivablesSection({
   onEditorsChange?: (n: number) => void;
   onRefresh?: () => void;
 }) {
+  const toast = useToast();
   const [syncing, setSyncing] = useState(false);
   const refreshFrom1c = async () => {
     setSyncing(true);
@@ -222,30 +225,30 @@ export function ReceivablesSection({
     /**
      * Оптимістично оновлюємо кеш і зберігаємо на бекенді.
      *
-     * 🧾 БОРГ, НАЗВАНИЙ ЧЕСНО: перечитування ПІСЛЯ збереження тут НЕМАЄ. Раніше цей
-     * коментар обіцяв «потім тихо перечитуємо» — у коді такого не було жодного разу,
-     * тобто коментар описував намір, а не поведінку. Наслідок: якщо збереження впало
-     * (`.catch(() => {})` ковтає помилку), екран і далі показує оптимістичне значення,
-     * і людина вважає зміну збереженою.
-     * ⚠️ УМОВА ПОВЕРНЕННЯ: щойно зʼявиться скарга «зміна не збереглась» — дописуємо
-     * перечитування. Робити це зараз означало б змінити поведінку в проході, який
-     * лагодить втрату чернетки, а не поведінку збереження.
+     * ✅ БОРГ ЗАКРИТО 30.09.2026 (`#1102`): раніше `.catch(() => {})` ковтав помилку, і екран показував
+     * незбережене значення як збережене. Тепер при помилці рядок повертається до того, що було, а причина
+     * відмови — червоним повідомленням. Перечитування після УСПІХУ досі немає: сервер пише рівно те, що ми
+     * показали, тож розійтись їм нема з чого.
      */
-    setInvCache((c) => {
-      const list = c[clientKey];
-      if (!Array.isArray(list)) return c;
-      return {
-        ...c,
-        [clientKey]: list.map((x) => ((x.invoiceNo ?? "") === invoiceNo ? { ...x, ...("dueDate" in patch ? { dueDate: patch.dueDate ?? null } : {}), ...("comment" in patch ? { comment: patch.comment ?? null } : {}) } : x)),
-      };
-    });
     const cur = invCache[clientKey];
     const row = Array.isArray(cur) ? cur.find((x) => (x.invoiceNo ?? "") === invoiceNo) : undefined;
-    saveReceivableInvoiceNote({
-      clientKey, invoiceNo,
-      dueDate: "dueDate" in patch ? patch.dueDate ?? null : row?.dueDate ?? null,
-      comment: "comment" in patch ? patch.comment ?? null : row?.comment ?? null,
-    }).catch(() => {});
+    void commitOptimistic({
+      apply: () => setInvCache((c) => {
+        const list = c[clientKey];
+        if (!Array.isArray(list)) return c;
+        return {
+          ...c,
+          [clientKey]: list.map((x) => ((x.invoiceNo ?? "") === invoiceNo ? { ...x, ...("dueDate" in patch ? { dueDate: patch.dueDate ?? null } : {}), ...("comment" in patch ? { comment: patch.comment ?? null } : {}) } : x)),
+        };
+      }),
+      save: () => saveReceivableInvoiceNote({
+        clientKey, invoiceNo,
+        dueDate: "dueDate" in patch ? patch.dueDate ?? null : row?.dueDate ?? null,
+        comment: "comment" in patch ? patch.comment ?? null : row?.comment ?? null,
+      }),
+      revert: () => setInvCache((c) => ({ ...c, [clientKey]: cur })),
+      onError: (e) => toast(`Рахунок ${invoiceNo}: не збережено — ${failureReason(e, "помилка сервера")}. Повернуто попереднє значення.`, { error: true }),
+    });
   };
 
   const today = new Date().toISOString().slice(0, 10);
@@ -436,6 +439,12 @@ export function ReceivablesSection({
                   aria-label={`Дедлайн оплати рахунка ${no}`}
                   onChange={(e) => patchInvoice(clientKey, no, { dueDate: e.target.value || null })}
                   style={{ ...inputStyle, ...(overdue ? { borderColor: "#dc2626" } : {}) }} />
+                {/* 🗓 Дата оплати з CRM по угоді ЦЬОГО рахунку (06.10.2026) — щоб при кількох угодах
+                    було видно дату кожної, а не одну спільну. */}
+                <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginTop: 2 }}
+                  title="Запланована дата оплати з угоди CRM">
+                  {x.crmDue ? `у CRM ${formatDateSafe(x.crmDue)}` : "у CRM дати немає"}
+                </div>
               </td>
               {/* Домовленість → коментар до рахунка */}
               <td className="recv-num" style={{ ...cell, textAlign: "right", whiteSpace: "nowrap",
@@ -729,13 +738,13 @@ export function ReceivablesSection({
                     // 🗓 Активним є ЛИШЕ запис поточного тижня. Нічого не
                     // затирається — змінюється те, що вважається актуальним.
                     const noteNow = activeNote(c.comment, c.noteUpdatedAt ?? null, now);
-                    // 🔴 РЯДОК І ПОПОВЕР БЕРУТЬ ОДНЕ Й ТЕ САМЕ `noteNow`. Якби
-                    // згорнутий рядок читав `c.comment`, а редактор — звужений
-                    // запис (чи навпаки), людина бачила б торішню обіцянку й
-                    // правила б цьоготижневу. Тижнева межа лишається однією.
-                    const agree = agreementLine(c.dueDate ?? null, noteNow);
-                    // 🗒 Запис минулих тижнів — приглушено з датою, а не «записів немає».
-                    const stale = noteNow ? null : staleNote(c.comment, c.noteUpdatedAt ?? null, now);
+                    // 🗓 КОЛОНКА З УРАХУВАННЯМ УГОДИ (06.10.2026): запис з попередньої угоди → дата з CRM,
+                    // а старий запис сірим. Актуальність вирішує сервер (`noteActual`).
+                    // 🔴 РЯДОК І ПОПОВЕР БЕРУТЬ ОДНЕ Й ТЕ САМЕ `noteNow` — тижнева межа лишається однією (#199bl2).
+                    const view = agreementView({ dueDate: c.dueDate ?? null, note: noteNow, comment: c.comment, noteUpdatedAt: c.noteUpdatedAt ?? null,
+                      noteActual: c.noteActual, crmDue: c.facts?.crmDueNearest ?? null, now });
+                    // 🗒 Запис минулих тижнів ТІЄЇ САМОЇ угоди — приглушено з датою, як і раніше.
+                    const stale = c.noteActual === false || view.text ? null : staleNote(c.comment, c.noteUpdatedAt ?? null, now);
                     return (
                       /* 🛡 МЕЖА НА РІВНІ РЯДКА (26.08.2026). Одна нерозбірна дата
                          вбила всю секцію — 75 справних рядків загинули з одним.
@@ -892,23 +901,21 @@ export function ReceivablesSection({
                                   що менеджер без права не бачить навіть того, про що
                                   домовились: право керує ДІЄЮ, а не видимістю факту. */}
                               <button type="button" className="recv-agree-open"
-                                title={agree.tip}
+                                title={view.tip}
                                 aria-label={`Домовленість: ${c.clientName}`}
                                 disabled={!canEditReceivables}
                                 onClick={() => setAgreeFor(agreeFor === c.clientKey ? null : c.clientKey)}
                                 style={{ display: "block", width: "100%", textAlign: "left" }}>
-                                {agree.empty && !stale ? (
+                                {view.source === "none" && !view.text && !view.prevDeal && !stale ? (
                                   <span className="recv-agree-empty">{AGREEMENT_EMPTY_LABEL}</span>
-                                ) : agree.empty && stale ? (
-                                  <span className="recv-agree-stale" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", whiteSpace: "normal", fontSize: "var(--fs-sm)", lineHeight: 1.35, color: "var(--text-muted)" }}
-                                    title="Запис минулого тижня. Цього тижня ще нічого не записано — натисніть, щоб оновити.">
-                                    {stale.dateText ? `${stale.dateText}: ` : ""}{stale.text}
-                                  </span>
                                 ) : (
                                   <>
                                     <span className="recv-agree-date recv-num"
                                       style={{ display: "block", fontVariantNumeric: "tabular-nums" }}>
-                                      {agree.dateText || "—"}
+                                      {view.dateText || "—"}
+                                      {view.source === "crm" && (
+                                        <span style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginLeft: 6, fontVariantNumeric: "normal" }}>дата з CRM</span>
+                                      )}
                                     </span>
                                     {/* 📖 ДВА РЯДКИ НА ПОВНУ ШИРИНУ. `-webkit-line-clamp`
                                         обрізає ПІСЛЯ другого рядка, а не після 9 символів. */}
@@ -917,10 +924,16 @@ export function ReceivablesSection({
                                                WebkitBoxOrient: "vertical", overflow: "hidden",
                                                whiteSpace: "normal", marginTop: 2,
                                                fontSize: "var(--fs-sm)", lineHeight: 1.35 }}>
-                                      {agree.text || (stale
+                                      {view.text || (stale
                                         ? <span style={{ color: "var(--text-muted)" }} title="Запис минулого тижня">{stale.dateText ? `${stale.dateText}: ` : ""}{stale.text}</span>
-                                        : NOTE_EMPTY_PLACEHOLDER)}
+                                        : view.placeholder ? NOTE_EMPTY_PLACEHOLDER : null)}
                                     </span>
+                                    {view.prevDeal && (
+                                      <span className="recv-agree-prev" title="Запис з попередньої угоди — не про поточний борг"
+                                        style={{ display: "block", marginTop: 2, fontSize: "var(--fs-xs)", color: "var(--text-muted)", lineHeight: 1.35 }}>
+                                        з попередньої угоди{view.prevDeal.dateText ? `, ${view.prevDeal.dateText}` : ""}{view.prevDeal.text ? `: ${view.prevDeal.text}` : ""}
+                                      </span>
+                                    )}
                                   </>
                                 )}
                               </button>

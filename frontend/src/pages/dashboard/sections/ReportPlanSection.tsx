@@ -1,4 +1,5 @@
 import { CarrierReportCard } from "./CarrierReportCard";
+import { FirstTouchReportCard } from "./FirstTouchReportCard";
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   fetchReportPlan, fetchManagerDetail, fetchStuckGrouped, saveDealNote, fetchDayItems,
@@ -13,7 +14,7 @@ import {
   periodOf, periodLabelOf, type PeriodMode, type PeriodState,
 } from "../periodRules";
 import { InfoHint } from "../widgets";
-import { ResponseTimeCard } from "./ResponseTimeCard";
+import { LeadTakeCard } from "./LeadTakeCard";
 import { ReportTableSection } from "./ReportTableSection";
 import { mergeReportPlans } from "../reportScope";
 import { firstTouchLabel, firstTouchStale } from "../reportTableCols";
@@ -405,8 +406,8 @@ export function ReportPlanSection({ auth, teams }: {
           {/* Блоки як у КВП — ВГОРУ, перед списком менеджерів (на видноті). Роль-скоуп на
               бекенді за токеном; teamId впливає лише на admin (manager/team_lead форсяться роллю). */}
           <StuckBlock teamId={teamId ? Number(teamId) : undefined} />
-          {/* Час реакції — за ОБРАНИМ періодом (був прибитий до місяця). */}
-          <ResponseTimeCard from={selectedPeriod.from} to={selectedPeriod.to} teamId={teamId ? Number(teamId) : undefined} />
+          {/* ⏱ «Час опрацювання заявки» (ТЗ 24.09.2026) — стартує з ОБРАНОГО періоду, далі має власні кнопки тижня. */}
+          <LeadTakeCard from={selectedPeriod.from} to={selectedPeriod.to} teamId={teamId ? Number(teamId) : undefined} />
           {view === "table" ? (
             <ReportTableSection
               data={data} teams={teams} auth={auth}
@@ -476,6 +477,12 @@ export function ReportPlanSection({ auth, teams }: {
       {/* 🚚 Дзвінки на мобільні — хто це виявився (ТЗ Романа 30.09.2026). Окремий блок із НОВИМИ числами (жодне не
           дублює карток вище); той самий період і та сама команда, що й звіт; рядки — ті самі, що вкладка «Перевізники».
           Ролі без вкладки блок не бачать (сервер 403 → блок ховається). */}
+      {/* 🎧 Перший дотик · звіт по менеджерах (ТЗ «звіт тімліда» 30.09.2026): ціна, домовленості, «не передзвонив» —
+          той самий період і та сама команда, що й звіт; рядки — ті самі, що вкладка «Перший дотик». Нових чисел, що
+          дублювали б картки вище, тут немає. Ролі без вкладки блок не бачать (403 → ховається). */}
+      <div style={{ marginTop: 18 }}>
+        <FirstTouchReportCard from={selectedPeriod.from} to={selectedPeriod.to} teamId={teamIds.length === 1 ? teamIds[0] : undefined} />
+      </div>
       <div style={{ marginTop: 18 }}>
         <CarrierReportCard from={selectedPeriod.from} to={selectedPeriod.to} teamId={teamIds.length === 1 ? teamIds[0] : undefined} />
       </div>
