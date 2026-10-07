@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { skipReason } from "../db/scratchDb.js";
 import {
-  takeOf, bucketOf, statsOf, clockStart, kyivAt, weekRange, inColumn, NORM,
+  takeOf, bucketOf, statsOf, clockStart, kyivAt, weekRange, inColumn, NORM, isDuplicateLost,
   type DealTake, type TakeRowInput,
 } from "./leadTakeRules.js";
 import { buildXlsx } from "./xlsxWrite.js";
@@ -220,4 +220,28 @@ test("#1490 ВИГЛЯД ВІКНА: червоний фон лише в ряд�
   for (const norm of ["data.norm.m1Pct", "data.norm.m5Pct", "data.norm.notTaken"])
     assert.ok(src.slice(src.indexOf("<thead>"), src.indexOf("</thead>")).includes(norm), `🔴 у шапці немає ${norm}`);
   assert.match(src, /className=\{r\.kind === "manager" \? "lt-mgr" : r\.kind === "dept" \? "lt-dept" : "lt-team"\}/, "🔴 рядки не розрізняються за рівнем");
+});
+
+/**
+ * #1491 — «ДУБЛЬ» — ЛИШЕ ДЗВІНОК АБО ПОЛЕ (рішення 07.10.2026, варіант «Б»). Закрита з причиною «Дубль» угода, у якої
+ * етап змінився за 11 с і дзвінка не було, — «не взято», а не «до 1 хв». Дзеркала: «Дубль» із дзвінком — «взято» за
+ * дзвінком; ЗВИЧАЙНА угода зі зміною етапу — «взято» за етапом, як у ТЗ; «Дубль» — лише точна причина й лише закрита (143).
+ * 🧨 Червоніє, якщо правило зачепить не-«Дублі» або «Дубль» знову візьметься за зміною етапу.
+ */
+test("#1491 «ДУБЛЬ» ЛИШЕ ДЗВІНОК АБО ПОЛЕ: етап за 11 с — «не взято»; звичайна угода — за етапом, як і раніше", () => {
+  const c = kyivAt(2026, 9, 2, 11, 55);
+  const stage = c + 11_000, call = c + 40 * 60_000;
+  assert.equal(takeOf({ createdAt: c, stageAt: stage, callAt: null, fieldAt: null, duplicate: true }).bucket, "none",
+    "🔴 «Дубль» без дзвінка й поля взявся за автоматичною зміною етапу");
+  const withCall = takeOf({ createdAt: c, stageAt: stage, callAt: call, fieldAt: null, duplicate: true });
+  assert.equal(withCall.event, "call"); assert.equal(withCall.bucket, "m60", "«Дубль» із дзвінком — за дзвінком");
+  const normal = takeOf({ createdAt: c, stageAt: stage, callAt: call, fieldAt: null });
+  assert.equal(normal.event, "stage"); assert.equal(normal.bucket, "m1", "🔴 правило «Дубля» зачепило звичайну угоду");
+  assert.equal(isDuplicateLost("143", "Дубль"), true);
+  assert.equal(isDuplicateLost(143, " Дубль "), true);
+  assert.equal(isDuplicateLost("142", "Дубль"), false, "успішна угода не «Дубль»-відмова");
+  assert.equal(isDuplicateLost("143", "Немає зв'язку"), false, "🔴 правило зачепило іншу причину відмови");
+  assert.equal(isDuplicateLost("143", null), false);
+  const core = readFileSync(path.join(ROOT, "backend", "src", "core", "leadTake.ts"), "utf8");
+  assert.match(core, /duplicate: isDuplicateLost\(x\.status_id, x\.reject_reason\)/, "🔴 вікно не передає ознаку «Дубля» в ядро");
 });

@@ -5,7 +5,7 @@ import { RNK_TEAM_IDS, NON_COMMERCIAL_TEAM_IDS } from "./metrics.js";
 import { teamAtSql } from "./teamAt.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
 import {
-  takeOf, statsOf, inColumn, isWorkTime, TAKE_EVENT_LABEL,
+  takeOf, statsOf, inColumn, isWorkTime, TAKE_EVENT_LABEL, isDuplicateLost,
   type DealTake, type TakeRowInput, type TakeStats, type TakeColumn,
 } from "./leadTakeRules.js";
 
@@ -102,7 +102,8 @@ async function loadRows(q: TakeQuery): Promise<Row[]> {
     const created = x.created.getTime();
     if (q.time === "work" && !isWorkTime(created)) continue;
     if (q.time === "off" && isWorkTime(created)) continue;
-    const take = takeOf({ createdAt: created, stageAt: ms(x.stage_at), callAt: ms(x.call_at), fieldAt: ms(x.field_at) });
+    const take = takeOf({ createdAt: created, stageAt: ms(x.stage_at), callAt: ms(x.call_at), fieldAt: ms(x.field_at),
+      duplicate: isDuplicateLost(x.status_id, x.reject_reason) });
     const status = x.status_id === "142" ? "won" : x.status_id === "143" ? "lost" : "open";
     const group = x.team_id != null && rnk.has(x.team_id) ? (x.team ?? `Команда #${x.team_id}`)
       : x.team_id != null && !nonCom.has(x.team_id) ? "РПК" : "Інші";
