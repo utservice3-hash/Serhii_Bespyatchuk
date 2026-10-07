@@ -236,3 +236,99 @@ test("#211e кешуються лише періодонезалежні вик�
     "🔴 `buildProjection` обгорнули в кеш — вона приймає `planMonthTotal`, залежний від `to`, "
     + "тож її ключ порушив би інваріант «набір ключів однаковий для будь-яких двох періодів»");
 });
+
+/** Обробник `/report` у процесі — той самий прийом, що `overviewHandler`. */
+const reportHandler = async () => {
+  const { dashboardRouter } = await import("../routes/dashboard.js");
+  const layer = (dashboardRouter as unknown as { stack: { route?: { path: string; methods: Record<string, boolean>;
+    stack: { handle: (req: unknown, res: unknown, next: (e?: unknown) => void) => void }[] } }[] })
+    .stack.find((l) => l.route?.path === "/report" && l.route.methods.get);
+  assert.ok(layer?.route, "🔴 роут /report не знайдено — гейт втратив предмет");
+  const handle = layer!.route!.stack[layer!.route!.stack.length - 1].handle;
+  return (auth: Record<string, unknown>, from: string, to: string): Promise<Res> =>
+    new Promise((done, fail) => {
+      let body: Res | null = null;
+      handle({ auth, query: { from, to }, params: {} },
+        { json(b: Res) { body = b; done(b); }, status() { return this; },
+          send() { done(body ?? {}); }, setHeader() {} },
+        (e?: unknown) => fail(e ?? new Error("роут пішов у next() без відповіді")));
+    });
+};
+
+/**
+ * #1237 — КЕШ `/report` (07.10.2026): ЧУЖИЙ ТЕПЛИЙ КЕШ НЕ МІНЯЄ ВІДПОВІДІ ЖОДНОГО СКОУПУ.
+ * Те саме твердження й той самий захист від живого дрейфу, що `#211c`, — для `/report`.
+ * 🧨 Червоніє, якщо ключ кешу перестане розрізняти скоупи (тімлід побачить числа іншого).
+ */
+test("#1237 КЕШ /report: чужий теплий кеш не міняє відповіді жодного скоупу (жива БД)", needsDb(), async () => {
+  const { overviewCache } = await import("./lazyCache.js");
+  const call = await reportHandler();
+  const FROM = "2026-09-01", TO = "2026-09-30";
+  const J = (x: Res) => JSON.stringify(x, (k, v) => (k === "projected" || k === "projectedPct" ? undefined : v));
+  const clean = async (auth: Record<string, unknown>) => { overviewCache.clear(); return J(await call(auth, FROM, TO)); };
+  const afterWarm = async (warmer: Record<string, unknown>, auth: Record<string, unknown>) => {
+    overviewCache.clear(); await call(warmer, FROM, TO); return J(await call(auth, FROM, TO));
+  };
+  const settle = async (warmer: Record<string, unknown>, auth: Record<string, unknown>, first: string): Promise<[string, string]> => {
+    let warmed = await afterWarm(warmer, auth);
+    if (warmed === first) return [warmed, first];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const fresh = await clean(auth);
+      if (warmed === fresh) return [warmed, fresh];
+      warmed = await afterWarm(warmer, auth);
+      if (warmed === fresh) return [warmed, fresh];
+    }
+    return [warmed, await clean(auth)];
+  };
+  const [cA, cB, cAdm] = [await clean(asLead(TEAM_A)), await clean(asLead(TEAM_B)), await clean(ADMIN)];
+  assert.ok(cA.length > 200, "🔴 /report віддав майже порожнє тіло — порівнювати нема чого");
+  assert.notEqual(cA, cB, "🔴 дві команди дають ОДНАКОВИЙ /report — гейт не має що розрізняти");
+  assert.notEqual(cA, cAdm, "🔴 тімлід і адмін дають однаковий /report — скоуп ніде не проявляється");
+  const [wB, rB] = await settle(asLead(TEAM_A), asLead(TEAM_B), cB);
+  const [wA, rA] = await settle(ADMIN, asLead(TEAM_A), cA);
+  const [wAdm, rAdm] = await settle(asLead(TEAM_A), ADMIN, cAdm);
+  assert.equal(wB, rB, `🔴 /report: команда ${TEAM_B} на кеші, прогрітому командою ${TEAM_A}, отримала ІНШУ відповідь`);
+  assert.equal(wA, rA, `🔴 /report: команда ${TEAM_A} після прогріву адміном зіпсувалась`);
+  assert.equal(wAdm, rAdm, "🔴 /report: адмін після прогріву тімлідом бачить звужені числа");
+});
+
+/**
+ * #1237b — У `/report` КЕШУЮТЬСЯ РІВНО СТАЛІ ВИКЛИКИ: набір ключів однаковий для двох різних
+ * періодів (як `#211e`), і в ньому є всі п'ять заміряних сталих складників.
+ * 🧨 Червоніє, якщо закешувати період-залежний виклик (з'явиться ключ із датою) або загубити сталий.
+ */
+test("#1237b КЕШ /report: кешуються рівно сталі виклики — набір ключів не залежить від періоду (жива БД)", needsDb(), async () => {
+  const { overviewCache } = await import("./lazyCache.js");
+  const call = await reportHandler();
+  overviewCache.clear(); const rSep = await call(ADMIN, "2026-09-01", "2026-09-30"); const kSep = overviewCache.liveKeys();
+  overviewCache.clear(); const rJun = await call(ADMIN, "2026-06-01", "2026-06-30"); const kJun = overviewCache.liveKeys();
+  assert.deepEqual(kJun, kSep, "🔴 набір ключів кешу /report різний для вересня й червня — закешовано щось періодозалежне");
+  assert.notEqual(JSON.stringify(rSep), JSON.stringify(rJun), "🔴 відповіді за два періоди ідентичні — рівність ключів нічого не доводить");
+  const names = [...new Set(kSep.map((k) => k.split("|")[0]))].sort();
+  for (const n of ["dobirByManager", "expectedZoneByScope:manager", "getSettings", "receivablesTotal"]) {
+    assert.ok(names.includes(n), `🔴 сталий виклик «${n}» вже не йде через кеш /report`);
+  }
+  assert.ok(names.includes("expectedPaymentsByPlanned"), "🔴 прогноз /report не отримав кеш — 3 сталі запити знову щоразу");
+  assert.ok(kSep.every((k) => !/20\d\d-\d\d-\d\d/.test(k)), "🔴 у ключі кешу є дата — закешовано періодозалежний виклик");
+});
+
+/**
+ * #1237c — ПРОГНОЗ З КЕШЕМ == ПРОГНОЗ БЕЗ КЕШУ на тих самих даних (формула не змінилась).
+ * Порівнюємо підряд, поки живі дані не зрушили; дрейф — повтором, як у `#211c`.
+ * 🧨 Червоніє, якщо кеш у `buildProjection` поверне чужий скоуп чи інший складник.
+ */
+test("#1237c ПРОГНОЗ: buildProjection з кешем дає те саме, що без кешу (жива БД)", needsDb(), async () => {
+  const metrics = await import("./metrics.js");
+  const S = { from: "2026-10-01", to: "2026-10-31", granularity: "month" as const };
+  for (const scope of [{ ...S }, { ...S, teamId: TEAM_A }, { ...S, teamId: TEAM_B }]) {
+    let same = false, a = "", b = "";
+    for (let attempt = 0; attempt < 3 && !same; attempt++) {
+      const c = new LazyCache();
+      await metrics.buildProjection({ ...S, teamId: TEAM_B }, null, c); // прогрів чужим скоупом
+      a = JSON.stringify(await metrics.buildProjection(scope, null, c));
+      b = JSON.stringify(await metrics.buildProjection(scope, null));
+      same = a === b;
+    }
+    assert.equal(a, b, `🔴 прогноз із кешем (${a.slice(0, 120)}…) ≠ без кешу (${b.slice(0, 120)}…) для скоупу ${JSON.stringify(scope)}`);
+  }
+});
