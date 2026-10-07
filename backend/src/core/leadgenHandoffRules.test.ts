@@ -9,7 +9,7 @@ import {
   type StageBucketRow, type CallBucketRow, type HandoffLinkInfo, type HandoffRowDeps, type LeadgenDealClass, type HandoffEntry, type DealState, type LeadgenHandoffMoney,
 } from "./leadgenHandoffRules.js";
 import { HANDOFF_CLASS_RULES } from "./moneyBuckets.js";
-import { isRegularAt, monthsBackDay, REGULAR_MIN_SUCCESSES, REGULAR_FRESH_MONTHS, handoffMoneyBuckets, mondayOf, dayInRange, pendingIn, type ClientSuccess } from "./leadgenHandoffRules.js";
+import { isRegularAt, monthsBackDay, REGULAR_MIN_SUCCESSES, REGULAR_FRESH_MONTHS, handoffMoneyBuckets, mondayOf, dayInRange, pendingIn, leadgenPeriod, type ClientSuccess } from "./leadgenHandoffRules.js";
 
 /**
  * #670…#674, #680 — ГРОШІ З ПЕРЕДАНИХ ЛІДІВ: чисті правила (рішення власника 22.09.2026).
@@ -606,48 +606,71 @@ test("#1251 ВІДПОВІДЬ ЛІДГЕНУ: лише своє + підсум�
 });
 
 /**
- * #1257 — «ОЧІКУВАННЯ» СТАНОМ НА КІНЕЦЬ ПЕРІОДУ (рішення власника 02.10.2026: «якщо не перейшло в успіх у
- * минулому місяці — переходить в очікування в цей»; минулі місяці — станом на ЇХНІЙ кінець). По обидва боки:
- * авто серпня, досі чекає → і серпень, і вересень (перенесено); успіх 05.10 → вересень у «Очікуванні», жовтень
- * у «Успішних», а не в «Очікуванні»; програно 25.09 → не вересень; авто 02.10 → не вересень, жовтень так; авто ще
- * не поїхало → ніде. «Успішні» — як були, за датою успіху. Тижні — станом на кінець тижня.
- * 🧨 САБОТАЖ: у `pendingIn` замість історії брати поточний клас (`return isWaitingCls(r.cls)` одразу після межі
- * авто) → угода, що стала успішною 05.10, зникає з «Очікування» вересня → червоніє.
+ * #1501 — «ОЧІКУВАННЯ»: МІСЯЦЬ — СТАНОМ НА КІНЕЦЬ З ПЕРЕНЕСЕНИМ, ТИЖДЕНЬ/ДЕНЬ/ДОВІЛЬНІ ДАТИ — ЛИШЕ НОВІ (рішення власника
+ * 02.10.2026 для місяця; 07.10.2026 для тижня, прохання Ярослава: «за тиждень — очікування саме за цей тиждень»).
+ * Наступник `#1257`: місячні твердження — ті самі; тижні — тепер лише угоди, що пішли в очікування в тижні.
+ * 🧨 САБОТАЖ: у `pendingIn` прибрати умову `inP.flow && … r.autoDay < inP.start` → тиждень показує перенесене → червоніє.
  */
-test("#1257 ОЧІКУВАННЯ — станом на кінець періоду: переноситься, поки не успіх; минуле — з історії", () => {
+test("#1501 ОЧІКУВАННЯ: місяць — станом на кінець з перенесеним; тиждень і довільні дати — лише нові за період", () => {
   const E = (pz: number, day: string, deal: number): HandoffEntry =>
     ({ pzId: pz, lgId: 7, lgTeamId: 1, at: Date.parse(day + "T09:00:00Z") + pz, day, dealId: deal });
   const S = (cls: DealState["cls"], price: number, closedDay: string | null, autoDay: string | null, pend: [string, boolean][]): DealState =>
     ({ cls, price, closedDay, autoDay, pendDays: pend.map(([day, pending]) => ({ day, pending })) });
   const states = new Map<number, DealState>([
-    [9501, S("expect", 1_000, null, "2026-08-28", [["2026-08-28", true]])],                          // досі чекає
+    [9501, S("expect", 1_000, null, "2026-08-28", [["2026-08-28", true]])],                          // досі чекає (з серпня)
     [9502, S("success", 2_000, "2026-10-05", "2026-09-20", [["2026-09-20", true], ["2026-10-05", false]])], // успіх 05.10
     [9503, S("lost", 4_000, null, "2026-09-10", [["2026-09-10", true], ["2026-09-25", false]])],    // програно 25.09
     [9504, S("paid", 8_000, null, "2026-10-02", [["2026-10-02", true]])],                            // авто в жовтні
     [9505, S("expect", 16_000, null, null, [])],                                                    // авто не поїхало
     [9506, S("success", 32_000, "2026-09-12", "2026-09-05", [["2026-09-05", true], ["2026-09-12", false]])], // успіх вересня
+    [9507, S("success", 64_000, "2026-09-11", "2026-09-08", [["2026-09-08", true], ["2026-09-11", false]])], // авто й успіх одного тижня
   ]);
   const domain = [E(1, "2026-08-20", 9501), E(2, "2026-09-15", 9502), E(3, "2026-09-01", 9503), E(4, "2026-09-25", 9504),
-    E(5, "2026-09-03", 9505), E(6, "2026-09-02", 9506)];
-  const view = (from: string, to: string) => handoffView(domain, states, { teamId: null, managerId: null }, new Map(), dayInRange(from, to));
+    E(5, "2026-09-03", 9505), E(6, "2026-09-02", 9506), E(7, "2026-09-07", 9507)];
+  const TODAY = "2026-10-07";
+  const view = (from: string, to: string) => handoffView(domain, states, { teamId: null, managerId: null }, new Map(), leadgenPeriod(from, to, TODAY));
+  // Місяць — як і було (`#1257`): станом на кінець, з перенесеним.
   const aug = view("2026-08-01", "2026-08-31"), sept = view("2026-09-01", "2026-09-30"), oct = view("2026-10-01", "2026-10-31");
   assert.deepEqual([aug.totals.pending.n, aug.totals.pending.sum], [1, 1_000], "🔴 серпень: авто 28.08, на 31.08 чекала — не в очікуванні");
   assert.deepEqual([sept.totals.pending.n, sept.totals.pending.sum], [2, 3_000],
-    "🔴 вересень: не «перенесена з серпня 1 000 + на 30.09 ще чекала, а 05.10 стала успішною 2 000» (програна 25.09 — не входить)");
-  assert.deepEqual([oct.totals.pending.n, oct.totals.pending.sum], [2, 9_000],
-    "🔴 жовтень: не «досі чекає 1 000 + авто 02.10 8 000» (успішна 05.10 — вже не очікування)");
+    "🔴 вересень: не «перенесена з серпня 1 000 + на 30.09 ще чекала, а 05.10 стала успішною 2 000»");
+  assert.deepEqual([oct.totals.pending.n, oct.totals.pending.sum], [2, 9_000], "🔴 жовтень (місяць, кінець обрізано сьогодні): перенесене зникло");
   assert.deepEqual([oct.totals.earned.n, oct.totals.earned.sum], [1, 2_000], "🔴 успіх 05.10 не в «Успішних» жовтня");
-  assert.deepEqual([sept.totals.earned.n, sept.totals.earned.sum], [1, 32_000], "🔴 «Успішні» вересня змінились — правило їх не чіпає");
+  assert.deepEqual([sept.totals.earned.n, sept.totals.earned.sum], [2, 96_000], "🔴 «Успішні» вересня змінились — правило їх не чіпає");
   assert.equal(sept.rows.find((r) => r.pzId === 1)?.carried, true, "🔴 перенесена з серпня угода не позначена «перенесено»");
-  assert.equal(sept.rows.find((r) => r.pzId === 2)?.carried, false, "🔴 авто вересня позначене як перенесене");
-  // Тижні — станом на кінець тижня: на 13.09 чекали перенесена й 9503 (програна лише 25.09), 9506 вже успішна (12.09);
-  // на 30.09 — перенесена й 9502, а 9503 вже програна.
-  const weeks = handoffMoneyBuckets(sept.rows, "week", dayInRange("2026-09-01", "2026-09-30"));
-  assert.equal(weeks.find((b) => b.bucket === "2026-09-07")?.totals.pending.n, 2, "🔴 тиждень 07.09: очікування не станом на кінець тижня");
-  assert.equal(weeks.find((b) => b.bucket === "2026-09-28")?.totals.pending.n, 2, "🔴 тиждень 28.09: очікування не станом на кінець тижня");
-  // Період без меж (старий виклик) — як було: клас зараз + авто в періоді.
-  assert.equal(pendingIn({ cls: "expect", autoDay: "2026-08-28" }, () => true), true);
-  assert.equal(pendingIn({ cls: "success", autoDay: "2026-08-28" }, () => true), false);
+  // Тиждень і довільні дати — лише нові: перенесене з серпня (9501) та з вересня (9502) сюди не входить.
+  const w0907 = view("2026-09-07", "2026-09-13");
+  assert.deepEqual([w0907.totals.pending.n, w0907.totals.pending.sum], [1, 4_000],
+    "🔴 тиждень 07.09: не лише «авто 10.09, на 13.09 чекала» — перенесене з серпня просочилось або нове зникло");
+  assert.deepEqual([w0907.totals.earned.n, w0907.totals.earned.sum], [2, 96_000], "🔴 тиждень 07.09: авто й успіх в одному тижні — не в «Успішних»");
+  assert.equal(w0907.totals.machines, 3, "🔴 тиждень 07.09: машин ≠ успішні тижня + нові в очікуванні");
+  const oct1to7 = view("2026-10-01", "2026-10-07");
+  assert.deepEqual([oct1to7.totals.pending.n, oct1to7.totals.pending.sum], [1, 8_000],
+    "🔴 01–07.10 (не цілий місяць): не лише «авто 02.10» — перенесене з серпня просочилось");
+  // Графік по тижнях — за тим самим правилом: тиждень 07.09 == тижню як періоду.
+  const weeks = handoffMoneyBuckets(sept.rows, "week", leadgenPeriod("2026-09-01", "2026-09-30", TODAY));
+  assert.equal(weeks.find((b) => b.bucket === "2026-09-07")?.totals.pending.n, 1, "🔴 тиждень 07.09 у графіку показує перенесене");
+  assert.equal(weeks.find((b) => b.bucket === "2026-09-28")?.totals.pending.n ?? 0, 0, "🔴 тиждень 28.09 у графіку показує угоди, що пішли в очікування раніше");
+  assert.equal(weeks.find((b) => b.bucket === "2026-09-14")?.totals.pending.n, 1, "🔴 тиждень 14.09: нова в очікуванні (авто 20.09) зникла");
+});
+
+/**
+ * #1501b — ЩО Є «МІСЯЦЕМ» (рішення власника 07.10.2026): лише цілі календарні місяці — з 1-го до останнього числа.
+ * Обидва боки: 01–31.10, 01.09–31.10 — місяць; 01–07.10, 05–11.10, 02–31.10, 01–30.10 — лише нові. Кінець — не пізніше сьогодні.
+ * 🧨 САБОТАЖ: у `leadgenPeriod` `flow: !wholeMonths` → `flow: false` → червоніє.
+ */
+test("#1501b ПЕРІОД ГРОШЕЙ: місяць — лише з 1-го до останнього числа; решта — «лише нові»; кінець — не пізніше сьогодні", () => {
+  const T = "2026-10-07";
+  const f = (a: string, b: string) => leadgenPeriod(a, b, T).flow;
+  assert.equal(f("2026-10-01", "2026-10-31"), false, "🔴 жовтень цілком — не місяць");
+  assert.equal(f("2026-09-01", "2026-10-31"), false, "🔴 два цілі місяці — не місяць");
+  assert.equal(f("2026-02-01", "2026-02-28"), false, "🔴 лютий до 28-го — не місяць");
+  assert.equal(f("2026-10-01", "2026-10-07"), true, "🔴 01–07.10 вважається місяцем");
+  assert.equal(f("2026-10-05", "2026-10-11"), true, "🔴 тиждень вважається місяцем");
+  assert.equal(f("2026-10-02", "2026-10-31"), true, "🔴 з 2-го числа вважається місяцем");
+  assert.equal(f("2026-10-01", "2026-10-30"), true, "🔴 до передостаннього числа вважається місяцем");
+  const p = leadgenPeriod("2026-10-01", "2026-10-31", T);
+  assert.deepEqual([p.start, p.end], ["2026-10-01", T], "🔴 кінець поточного місяця не обрізано сьогоднішнім днем");
 });
 
 /**

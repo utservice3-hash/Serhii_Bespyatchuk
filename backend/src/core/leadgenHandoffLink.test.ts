@@ -810,3 +810,34 @@ test("#1260 ЖИВИЙ SQL: прийнято лідоген — лише уго�
   const r2 = await metrics.leadgenAcceptedByManager({ from: "2025-02-01", to: "2025-02-28", managerId: 80 });
   assert.equal(r2[0]?.count, 3, "🔴 угода, створена 28.02 о 23:30 за Києвом, випала з лютого — межа не київська або не включна");
 });
+
+/**
+ * #1502 — СКАСОВАНИЙ ПРОРАХУНОК НЕ РАХУЄТЬСЯ (рішення власника 07.10.2026, правило Ярослава): вхід у «Кваліфіковано»,
+ * після якого ця сама угода протягом 15 хв перейшла на інший етап Продзвону (закрили / повернули), — не прорахунок.
+ * Обидва боки межі: 5 с і 8 хв — скасовано; 21 хв — ні; перехід у воронку Кваліфікації — не скасування; повторна
+ * кваліфікація після скасування — рахується. Чотири читачі одним правилом: лічильник людини, передачі, список, тижні.
+ * 🧨 САБОТАЖ: у `quoteKeptSql` `INTERVAL '${QUOTE_UNDO_MIN} minutes'` → `INTERVAL '0 minutes'` → червоніє.
+ */
+test("#1502 ЖИВИЙ SQL: прорахунок, скасований протягом 15 хв, не рахується — у лічильнику, передачах, списку й тижнях", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { stats } = await core();
+  const T = (hm: string) => utc(`2025-04-08T${hm}`);
+  const mk = async () => deal({ manager: 1, pipeline: PZ, ck: null });
+  const a = await mk(); await ev(a, PZ, Q, T("07:00:00")); await ev(a, PZ, 143, T("07:00:05"));               // закрила за 5 с
+  const b = await mk(); await ev(b, PZ, Q, T("08:00:00")); await ev(b, PZ, LEADGEN_STAGE_IDS.opr, T("08:08:00")); // повернула за 8 хв
+  const c = await mk(); await ev(c, PZ, Q, T("09:00:00")); await ev(c, PZ, LEADGEN_STAGE_IDS.opr, T("09:21:00")); // через 21 хв — рахується
+  const d = await mk(); await ev(d, PZ, Q, T("10:00:00")); await ev(d, QUAL, 69693648, T("10:01:00"));          // у Кваліфікацію — рахується
+  const e = await mk(); await ev(e, PZ, Q, T("11:00:00")); await ev(e, PZ, LEADGEN_STAGE_IDS.opr, T("11:01:00"));
+  await ev(e, PZ, Q, T("11:02:00"));                                                                            // перекваліфікувала — рахується раз
+  const f = await mk(); await ev(f, PZ, Q, T("12:00:00"));                                                      // звичайний
+  const kept = [c, d, e, f].sort(), day = "2025-04-08";
+  const row = (await run<{ manager_id: number; quotes: string }>(stageCountsQuery(day, day, LEADGEN_STAGE_IDS))).find((r) => r.manager_id === 1);
+  assert.equal(Number(row?.quotes), 4, "🔴 лічильник людини: скасований прорахунок порахований або справжній загублений");
+  const links = await run<{ pz_id: string; at: Date }>(linkQ(day, day));
+  assert.deepEqual(links.map((l) => Number(l.pz_id)).sort(), kept, "🔴 передачі: скасований вхід став передачею");
+  assert.equal(links.find((l) => Number(l.pz_id) === e)?.at.toISOString(), T("11:02:00").toISOString(), "🔴 після перекваліфікації рахується не другий вхід");
+  const list = await stats.leadgenHandoffs(day, day);
+  assert.deepEqual(list.map((x) => x.kommoId).sort(), kept, "🔴 список переданих прорахунків показує скасовані");
+  const wk = await stats.leadgenWeekly(day, day);
+  assert.equal(wk[0]?.quotes, 4, "🔴 тижні рахують скасовані прорахунки");
+});
