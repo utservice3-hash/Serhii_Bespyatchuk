@@ -18,6 +18,7 @@ const ACC_COLOR: Record<string, { bg: string; fg: string; short: string }> = {
   automuv: { bg: "rgba(124,58,237,0.14)", fg: "#7c3aed", short: "АМ" },
   fop_privat: { bg: "rgba(22,163,74,0.14)", fg: "#16a34a", short: "ФОП·П" },
   fop_mono: { bg: "rgba(217,119,6,0.14)", fg: "#d97706", short: "ФОП·М" },
+  staff: { bg: "rgba(13,148,136,0.14)", fg: "#0d9488", short: "Картка" },
 };
 // детерміноване групування пробілом (без locale/.replace(/,/g) — там була помилка з комою)
 const fmtUah = (n: number) => {
@@ -310,7 +311,7 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
   const [msg, setMsg] = useState("");
   const startEdit = (a: BankAccount) => { setEditId(a.id); setDraft({ ...a }); };
   const save = async () => {
-    try { await saveBankAccount(editId, { legalName: draft.legal_name ?? undefined, edrpouIpn: draft.edrpou_ipn ?? undefined, vatIpn: draft.vat_ipn ?? undefined, iban: draft.iban ?? undefined, keyCard: draft.key_card ?? undefined, bankName: draft.bank_name ?? undefined, mfo: draft.mfo ?? undefined, bankEdrpou: draft.bank_edrpou ?? undefined, legalAddress: draft.legal_address ?? undefined, director: draft.director ?? undefined, purpose: draft.purpose ?? undefined } as never); setEditId(null); await onChange(); setMsg("✓ Збережено"); }
+    try { await saveBankAccount(editId, { legalName: draft.legal_name ?? undefined, edrpouIpn: draft.edrpou_ipn ?? undefined, vatIpn: draft.vat_ipn ?? undefined, iban: draft.iban ?? undefined, keyCard: draft.key_card ?? undefined, bankName: draft.bank_name ?? undefined, mfo: draft.mfo ?? undefined, bankEdrpou: draft.bank_edrpou ?? undefined, legalAddress: draft.legal_address ?? undefined, director: draft.director ?? undefined, purpose: draft.purpose ?? undefined, ...(draft.bank === "mono" ? { monoPanLast4: draft.mono_pan_last4 ?? "" } : {}) } as never); setEditId(null); await onChange(); setMsg("✓ Збережено"); }
     catch (e) { setMsg("✗ " + err(e)); }
   };
   const toggleActive = async (a: BankAccount) => { try { await saveBankAccount(a.id, { isActive: !a.is_active } as never); await onChange(); } catch (e) { alert(err(e)); } };
@@ -334,6 +335,7 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
                 {([["legal_name", "Юр. назва"], ["edrpou_ipn", "ЄДРПОУ"], ["vat_ipn", "ІПН (ПДВ)"], ["iban", "IBAN"], ["key_card", "Ключ-карта"], ["bank_name", "Банк"], ["mfo", "МФО"], ["bank_edrpou", "ЄДРПОУ банку"], ["legal_address", "Юр. адреса"], ["director", "Директор"], ["purpose", "Призначення"]] as const).map(([k, lbl]) => (
                   <label key={k} style={{ fontSize: 12 }}>{lbl}<input value={(draft[k] as string) ?? ""} onChange={(e) => setDraft({ ...draft, [k]: e.target.value })} style={{ ...inp, width: "100%", boxSizing: "border-box", marginTop: 2 }} /></label>
                 ))}
+                {a.bank === "mono" && <label style={{ fontSize: 12 }}>Останні 4 цифри картки (моно){a.company === "staff" ? " — обовʼязково" : ""}<input inputMode="numeric" maxLength={4} placeholder="1234" value={draft.mono_pan_last4 ?? ""} onChange={(e) => setDraft({ ...draft, mono_pan_last4: e.target.value.replace(/\D/g, "") })} style={{ ...inp, width: "100%", boxSizing: "border-box", marginTop: 2 }} /></label>}
                 <div style={{ display: "flex", gap: 8 }}>
                   <button onClick={save} style={{ padding: "7px 14px", borderRadius: 8, border: "none", background: "#16a34a", color: "#fff", fontWeight: 700, cursor: "pointer" }}>Зберегти</button>
                   <button onClick={() => setEditId(null)} style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: MUTED, cursor: "pointer" }}>Скасувати</button>
@@ -342,6 +344,7 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
             ) : (
               <div style={{ fontSize: 13, lineHeight: 1.9 }}>
                 <Req label="ЄДРПОУ" v={a.edrpou_ipn} /><Req label="ІПН (ПДВ)" v={a.vat_ipn ?? null} /><Req label="IBAN" v={a.iban} /><Req label="Ключ-карта" v={a.key_card ?? null} /><Req label="Банк · МФО" v={a.bank_name ? `${a.bank_name}${a.mfo ? " · " + a.mfo : ""}${a.bank_edrpou ? " · ЄДРПОУ банку " + a.bank_edrpou : ""}` : null} /><Req label="Юр. адреса" v={a.legal_address ?? null} /><Req label="Директор" v={a.director ?? null} /><Req label="Призначення" v={a.purpose} />
+                {a.bank === "mono" && <Req label="Картка (моно)" v={a.mono_pan_last4 ? `•••• ${a.mono_pan_last4}` : a.company === "staff" ? "цифри не вказано — картку не буде привʼязано" : null} />}
                 <button onClick={() => startEdit(a)} style={{ marginTop: 8, padding: "5px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "#2f6fdb", cursor: "pointer", fontSize: 12.5 }}>✎ Редагувати</button>
               </div>
             )}

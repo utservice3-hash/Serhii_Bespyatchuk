@@ -9,6 +9,7 @@ import { statementData } from "../core/bankStatement.js";
 import { statementFile } from "../core/bankStatementCsv.js";
 import { addManual, setManualDeleted, listManual } from "../core/bankManual.js";
 import { FinError, type Db } from "../core/finance.js";
+import { normLast4 } from "../bankSources/mono.js";
 
 export const bankRouter = Router();
 bankRouter.use(requireAuth); // tab-гейт «bank» — усі ролі (screen_access); + auto-asyncH через lib/asyncRoutes
@@ -192,7 +193,7 @@ bankRouter.get("/accounts", async (req, res) => {
   const r = await pool.query(
     `SELECT id, company, bank, label, currency, external_account_id, is_active,
             legal_name, edrpou_ipn, vat_ipn, iban, key_card, bank_name, mfo, bank_edrpou,
-            legal_address, director, purpose, env_key_name, finance_only
+            legal_address, director, purpose, env_key_name, finance_only, mono_pan_last4
        FROM bank_accounts WHERE $1::boolean OR NOT finance_only ORDER BY is_active DESC, label`, [canSeePrivate]);
   const accounts = r.rows.map((a) => {
     const out: Record<string, unknown> = {
@@ -202,7 +203,7 @@ bankRouter.get("/accounts", async (req, res) => {
     for (const f of ACCOUNT_PUBLIC_FIELDS) out[f] = a[f];
     if (canSeeFinance) for (const f of ACCOUNT_FINANCE_FIELDS) out[f] = a[f];
     // Назва env-змінної — лише для панелі керування. ЗНАЧЕННЯ ключа — ніколи й нікому.
-    if (canManage) out.env_key_name = a.env_key_name;
+    if (canManage) { out.env_key_name = a.env_key_name; out.mono_pan_last4 = a.mono_pan_last4; }
     return out;
   });
   res.json({ accounts });
@@ -211,7 +212,7 @@ bankRouter.get("/accounts", async (req, res) => {
 // --- Мутації реквізитів (право manage_bank_accounts) ---
 bankRouter.post("/accounts", requirePerm("manage_bank_accounts"), async (req, res) => {
   const b = req.body ?? {};
-  if (!["uts", "automuv", "fop_privat", "fop_mono"].includes(b.company)) return res.status(400).json({ error: "Невірна company" });
+  if (!["uts", "automuv", "fop_privat", "fop_mono", "staff"].includes(b.company)) return res.status(400).json({ error: "Невірна company" });
   if (!["mono", "privat"].includes(b.bank)) return res.status(400).json({ error: "Невірний bank" });
   if (!String(b.label ?? "").trim()) return res.status(400).json({ error: "Потрібна назва (label)" });
   const ins = await pool.query<{ id: number }>(
@@ -231,6 +232,15 @@ bankRouter.patch("/accounts/:id", requirePerm("manage_bank_accounts"), async (re
     vatIpn: "vat_ipn", legalAddress: "legal_address", director: "director", bankEdrpou: "bank_edrpou", keyCard: "key_card" };
   const sets: string[] = []; const params: unknown[] = [];
   for (const [k, col] of Object.entries(map)) if (k in b) { params.push(b[k]); sets.push(`${col} = $${params.length}`); }
+  // Останні 4 цифри картки (моно): рівно 4 цифри або порожньо. Змінились — привʼязку до рахунку скидаємо, щоб синк
+  // знайшов картку наново, а не тягнув стару (картка працівника, 07.10.2026).
+  if ("monoPanLast4" in b) {
+    const raw = String(b.monoPanLast4 ?? "").trim();
+    const last4 = normLast4(raw);
+    if (raw && !last4) return res.status(400).json({ error: "Останні цифри картки — рівно 4 цифри" });
+    params.push(last4); sets.push(`mono_pan_last4 = $${params.length}`);
+    sets.push(`external_account_id = CASE WHEN mono_pan_last4 IS DISTINCT FROM $${params.length} THEN NULL ELSE external_account_id END`);
+  }
   if (!sets.length) return res.json({ ok: true });
   params.push(id);
   const r = await pool.query(`UPDATE bank_accounts SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING label`, params);

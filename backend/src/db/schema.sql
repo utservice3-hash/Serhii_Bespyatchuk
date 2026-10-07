@@ -5595,3 +5595,21 @@ CREATE TABLE IF NOT EXISTS feedback_files (
 CREATE INDEX IF NOT EXISTS idx_feedback_files_fb ON feedback_files(feedback_id, created_at);
 -- 🔒 Скриншоти можуть містити що завгодно з екрана (клієнтів, суми). Дзеркало — FORBIDDEN_TABLES. Тримає #496.
 REVOKE ALL ON feedback_files FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💳 КАРТКА ПРАЦІВНИКА У «ВИПИСЦІ» (робоча картка Олександра Ступаківського, Роман 07.10.2026).
+--  · `company = 'staff'` — картка людини, не одна з наших компаній: у підсумок «ФОП Беспятчук» вона не йде.
+--  · `mono_pan_last4` — останні 4 цифри: картку працівника привʼязуємо ЛИШЕ за ними (під його токеном лежать і особисті
+--    рахунки). Вписується в «Налаштуваннях виписки».
+--  · Рахунок створюється ВИМКНЕНИМ і «лише фінанси»: вмикається, коли токен `MONO_TOKEN_SASHA` уже на сервері.
+--  · Разово (позначка в `fin_kpi_imports`): видалений чи перейменований рахунок повторний прогін схеми не відроджує.
+--  · Revert коду рядок не прибере — вимкнений рахунок нічого не синкає й ніде не рахується.
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE bank_accounts DROP CONSTRAINT IF EXISTS bank_accounts_company_check;
+ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_company_check CHECK (company IN ('uts','automuv','fop_privat','fop_mono','staff'));
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS mono_pan_last4 TEXT;
+ALTER TABLE bank_accounts DROP CONSTRAINT IF EXISTS bank_accounts_mono_pan_last4_check;
+ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_mono_pan_last4_check CHECK (mono_pan_last4 IS NULL OR mono_pan_last4 ~ '^[0-9]{4}$');
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('card-staff-sasha-2026-10-07', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key)
+INSERT INTO bank_accounts (company, bank, label, currency, env_key_name, finance_only, is_active)
+SELECT 'staff', 'mono', 'Картка Олександра Ступаківського', 'UAH', 'MONO_TOKEN_SASHA', true, false WHERE EXISTS (SELECT 1 FROM step);

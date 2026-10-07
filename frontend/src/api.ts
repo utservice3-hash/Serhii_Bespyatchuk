@@ -3927,6 +3927,8 @@ export interface BankAccount {
   id: number; company: string; bank: "mono" | "privat" | "manual"; label: string; currency: string;
   /** Рахунок «лише фінанси» (особисті картки власника ФОП, Сейф): сервер віддає його лише ролям із `view_cashflow`. */
   finance_only?: boolean;
+  /** Моно: останні 4 цифри картки — за ними синк обирає рахунок під токеном (лише для панелі керування). */
+  mono_pan_last4?: string | null;
   external_account_id: string | null; is_active: boolean;
   legal_name: string | null; edrpou_ipn: string | null; iban: string | null;
   key_card?: string | null; // ключ-карта ФОП (звичайні реквізити, як IBAN)

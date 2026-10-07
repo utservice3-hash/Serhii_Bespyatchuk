@@ -218,7 +218,7 @@ test("#1205 ПРОВОДКА: синк пише fm_income і fm_expense щопр
   assert.doesNotMatch(idx, /runJob\("freezeFinanceKpis"|runFreezeFinanceKpis\(\)/, "🔴 нічна фіксація знову в розкладі — тижні замерзнуть без Тетяни");
   const { MONITORED_JOBS } = await import("../jobs/monitoredJobs.js");
   assert.equal(MONITORED_JOBS.some((j) => j.name === "freezeFinanceKpis"), false, "🔴 нагляд чекає джобу, якої немає в розкладі — тривога «мовчить»");
-  // а ДЕ ЦЕ ТЕПЕР: фіксує закриття (`setPeriodClosed` з refs) — доведено в #993 / #1201
+  // а ДЕ ЦЕ ТЕПЕР: фіксує закриття (`setPeriodClosed` з refs) — доведено в #993 / #1221 (раніше #1201)
   assert.match(SRC("routes/finance.ts"), /const refs = closed \? await refsFor\(req\.body\?\.kind, req\.body\?\.p\) : \{\};/, "🔴 закриття не отримує числа для фіксації");
 
   const { receivablesSnapshotFits: fits } = await import("./financeKpi.js");
@@ -665,13 +665,14 @@ test("#1200 КАРТКИ МОНО: без типу — ФОП, з типом —
 });
 
 /**
- * #1201 — ЖИВИЙ SQL: «НАДХОДЖЕННЯ / ВИТРАТИ ЗАГАЛЬНІ» З «ВИПИСКИ» (`bankTotals`). Усі активні рахунки разом із
- * картками й Сейфом, без видалених записів; витрати — без комісій банку; дати — за Києвом, обидва кінці; перекази між
- * нашими рахунками — ОКРЕМИМ числом (у суму входять — питання відкрите). Рядок «Гроші» — авто й тиждень, і місяць;
- * вночі НЕ фіксується (Сейф вносять після тижня), фіксує закриття. 🧨 Червоніє, якщо загубити Сейф, взяти комісію,
- * зрізати день на межі чи зафіксувати тиждень уночі.
+ * #1221 — ЖИВИЙ SQL: «НАДХОДЖЕННЯ / ВИТРАТИ ЗАГАЛЬНІ» З «ВИПИСКИ» (`bankTotals`), рішення Романа 07.10.2026 «усі, без
+ * виключення» + «комісії теж включай». Усі активні рахунки разом із картками й Сейфом, без видалених записів; витрати —
+ * РАЗОМ із комісіями банку; дати — за Києвом, обидва кінці; перекази між нашими рахунками входять у суму, а окремим
+ * числом — лише довідкою. Рядок «Гроші» — авто й тиждень, і місяць; вночі НЕ фіксується, фіксує закриття.
+ * 🧨 Червоніє, якщо загубити Сейф, знову відкинути комісію, вирахувати свої перекази, зрізати день на межі чи
+ * зафіксувати тиждень уночі.
  */
-test("#1201 ЖИВИЙ SQL: надходження / витрати загальні — уся «Виписка» за Києвом, свої перекази окремо, фіксує лише закриття", async (t) => {
+test("#1221 ЖИВИЙ SQL: надходження / витрати загальні — уся «Виписка» з комісіями за Києвом, свої перекази в сумі й довідкою, фіксує лише закриття", async (t) => {
   const s = await scratchDb(t);
   if (!s) return;
   const k = await import("./financeKpi.js");
@@ -681,13 +682,13 @@ test("#1201 ЖИВИЙ SQL: надходження / витрати загаль
     await tx(uts, 1000, "2026-10-04T21:30:00Z");                                   // пн 05.10 00:30 Київ — у тижні
     await tx(am, 200, "2026-10-11T20:30:00Z", { iban: "UA000000000000000000000000001" }); // нд 23:30 Київ, переказ від ЮТС — свій
     await tx(card, -70, "2026-10-08T10:00:00Z"); await tx(safe, -30, "2026-10-08T10:00:00Z");
-    await tx(uts, -5, "2026-10-08T10:00:00Z", { fee: true });                       // комісія — не витрата
+    await tx(uts, -5, "2026-10-08T10:00:00Z", { fee: true });                       // комісія — теж витрата (07.10.2026)
     await tx(uts, -200, "2026-10-08T10:00:00Z", { iban: "UA000000000000000000000000002" }); // переказ на Автомув — свій
     await tx(uts, 777, "2026-10-04T20:30:00Z");                                    // нд 04.10 23:30 Київ — минулий тиждень
     await tx(safe, 9999, "2026-10-06T10:00:00Z");
     await c.query(`UPDATE bank_transactions SET deleted_at = now(), manual_kind = 'op' WHERE amount = 9999`);
     const b = await k.bankTotals(db, "2026-10-05", "2026-10-11");
-    assert.deepEqual(b, { in: 1200, out: 300, ownIn: 200, ownOut: 200, rows: 6 }, "🔴 надходження / витрати з «Виписки» пораховано хибно");
+    assert.deepEqual(b, { in: 1200, out: 305, ownIn: 200, ownOut: 200, rows: 6 }, "🔴 надходження / витрати з «Виписки» пораховано хибно (комісія чи свій переказ випали)");
 
     const sec = await k.createSection(db, 901, { name: "Гроші" });
     const inc = await k.createKpi(db, 901, { sectionId: sec, name: "Надходження загальні" });
@@ -700,6 +701,82 @@ test("#1201 ЖИВИЙ SQL: надходження / витрати загаль
     await k.setPeriodClosed(db, 901, "week", "2026-10-05", true, refs);
     assert.deepEqual([(await row("week", "2026-10-05")).value, (await row("week", "2026-10-05")).autoState], [1200, "frozen"], "🔴 закриття не зафіксувало");
   } finally { await s.dispose(); }
+});
+
+/**
+ * #1222 — КАРТКА ПРАЦІВНИКА ЗА ЦИФРАМИ (`accountFor` / `pickAccount`, картка Олександра 07.10.2026). Останні 4 цифри
+ * обирають рівно ту картку, навіть коли під токеном дві одного типу; картка працівника (`staff`) без цифр — НЕ
+ * привʼязується (вгадувати під чужим токеном не можна); ФОП-рядок без цифр — як був. `normLast4` — рівно 4 цифри.
+ * 🧨 Червоніє, якщо цифри ігнорувати (взяти першу black), привʼязати картку працівника без цифр або пустити «12345».
+ */
+test("#1222 КАРТКА ЗА ЦИФРАМИ: дві black — береться та, що з цифрами; працівник без цифр — не привʼязується; ФОП як був", async () => {
+  const m = await import("../bankSources/mono.js");
+  const info = { accounts: [
+    { id: "f", type: "fop", currencyCode: 980, maskedPan: ["537541******0001"] },
+    { id: "b1", type: "black", currencyCode: 980, maskedPan: ["537541******1111"] },
+    { id: "b2", type: "black", currencyCode: 980, maskedPan: ["444111******2222"] },
+    { id: "w", type: "white", currencyCode: 980, maskedPan: ["537541******3333"] },
+  ] };
+  const row = (x: Record<string, unknown>) => ({ id: 1, bank: "mono" as const, label: "т", currency: "UAH", external_account_id: null, iban: null, env_key_name: "T", company: "fop_mono", ...x });
+  assert.equal(m.accountFor(info, row({ company: "staff", mono_pan_last4: "2222" }))?.id, "b2", "🔴 цифри проігноровано — узято першу black");
+  assert.equal(m.accountFor(info, row({ company: "staff", mono_pan_last4: null })), null, "🔴 картку працівника привʼязано без цифр");
+  assert.equal(m.accountFor(info, row({ company: "staff", mono_pan_last4: "9999" })), null, "🔴 неіснуючі цифри підмінено іншою карткою");
+  assert.equal(m.accountFor(info, row({ company: "fop_mono" }))?.id, "f", "🔴 ФОП-рядок без цифр більше не бере ФОП");
+  assert.equal(m.accountFor(info, row({ company: "fop_mono", mono_type: "black" }))?.id, "b1", "🔴 вибір за типом зламано");
+  assert.deepEqual(["1234", " 1234 ", "12345", "**** 1234", "", null, "12a4"].map(m.normLast4), ["1234", "1234", null, null, null, null, null],
+    "🔴 «останні 4 цифри» пускають не 4 цифри");
+});
+
+/**
+ * #1223 — ЖИВИЙ SQL: РАЗОВИЙ КРОК КАРТКИ ПРАЦІВНИКА. Схема створює рівно один рахунок «Картка Олександра Ступаківського»:
+ * `staff`, моно, токен `MONO_TOKEN_SASHA`, «лише фінанси», ВИМКНЕНИЙ, без цифр; повторний прогін не дублює; видалений не
+ * відроджується; база не пускає «12a4» у цифри. Вимкнена картка в «Надходження / Витрати» не йде, увімкнена — йде.
+ * 🧨 Червоніє, якщо рахунок увімкнено одразу, видно не лише фінансам, крок повторюється або воскресає.
+ */
+test("#1223 ЖИВИЙ SQL: картка працівника — один рахунок, вимкнений, «лише фінанси»; не дублюється й не воскресає", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const k = await import("./financeKpi.js");
+  const { db, c } = s;
+  const schema = readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8");
+  try {
+    const card = async () => (await c.query(`SELECT id, company, bank, env_key_name, finance_only, is_active, mono_pan_last4 FROM bank_accounts WHERE company = 'staff'`)).rows;
+    const one = await card();
+    assert.equal(one.length, 1, "🔴 рахунку картки працівника немає або їх кілька");
+    assert.deepEqual({ ...one[0], id: 0 }, { id: 0, company: "staff", bank: "mono", env_key_name: "MONO_TOKEN_SASHA", finance_only: true, is_active: false, mono_pan_last4: null },
+      "🔴 картка не вимкнена, не «лише фінанси» або не з тим токеном");
+    await c.query(schema);
+    assert.equal((await card()).length, 1, "🔴 повторний прогін схеми задвоїв картку");
+    await c.query(`INSERT INTO bank_transactions (account_id, direction, external_tx_id, booked_at, counterparty_name, amount, currency, fx_rate, amount_uah)
+      VALUES ($1, 'out', 'card:1', '2026-10-08T10:00:00Z', 'АЗС', -400, 'UAH', 1, -400)`, [one[0].id]);
+    assert.equal((await k.bankTotals(db, "2026-10-05", "2026-10-11")).out, 0, "🔴 вимкнена картка потрапила у «Витрати загальні»");
+    await c.query(`UPDATE bank_accounts SET is_active = true, mono_pan_last4 = '1234' WHERE id = $1`, [one[0].id]);
+    assert.equal((await k.bankTotals(db, "2026-10-05", "2026-10-11")).out, 400, "🔴 увімкнена картка не потрапила у «Витрати загальні»");
+    await assert.rejects(c.query(`UPDATE bank_accounts SET mono_pan_last4 = '12a4' WHERE id = $1`, [one[0].id]), "🔴 база пустила не цифри");
+    await c.query(`DELETE FROM bank_transactions WHERE account_id = $1`, [one[0].id]);
+    await c.query(`DELETE FROM bank_accounts WHERE id = $1`, [one[0].id]);
+    await c.query(schema);
+    assert.equal((await card()).length, 0, "🔴 видалену картку відроджено повторним прогоном схеми");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1223b — ПРОВОДКА КАРТКИ: цифри пише лише роут керування рахунками (рівно 4 цифри, зміна скидає привʼязку); синк читає
+ * цифри і дописує IBAN лише в порожнє поле; адаптер моно обирає рахунок через `accountFor` скрізь (привʼязка, баланс);
+ * панель показує поле цифр для моно; «Витрати загальні» на екрані підписані «включно з комісіями».
+ * 🧨 Червоніє, якщо синк не передає цифри, IBAN перетирає правку адміна, баланс бере рахунок повз цифри чи підказка бреше.
+ */
+test("#1223b ПРОВОДКА КАРТКИ: роут, синк, адаптер і панель — цифри скрізь, IBAN лише в порожнє, підказка з комісіями", () => {
+  const route = SRC("routes/bank.ts"), sync = SRC("jobs/syncBank.ts"), mono = SRC("bankSources/mono.ts");
+  assert.match(route, /const last4 = normLast4\(raw\);\n\s+if \(raw && !last4\) return res\.status\(400\)/, "🔴 роут пускає не 4 цифри");
+  assert.match(route, /external_account_id = CASE WHEN mono_pan_last4 IS DISTINCT FROM/, "🔴 зміна цифр не скидає привʼязку — синк тягне стару картку");
+  assert.match(sync, /env_key_name, mono_type, mono_pan_last4\n/, "🔴 синк не читає цифри картки");
+  assert.match(sync, /UPDATE bank_accounts SET iban=\$1 WHERE id=\$2 AND iban IS NULL/, "🔴 IBAN перетирає правку адміна");
+  assert.equal((mono.match(/accountFor\(await fetchClientInfo\(token\), account\)/g) ?? []).length, 3, "🔴 привʼязка, IBAN і баланс обирають рахунок не через accountFor");
+  assert.doesNotMatch(mono, /pickAccount\(await fetchClientInfo/, "🔴 десь лишився вибір рахунку повз цифри");
+  const fe = FE("pages/dashboard/sections/BankSection.tsx");
+  assert.match(fe, /\{a\.bank === "mono" && <label style=\{\{ fontSize: 12 \}\}>Останні 4 цифри картки \(моно\)/, "🔴 у панелі немає поля цифр картки");
+  assert.match(FE("pages/dashboard/sections/FinanceWeekTab.tsx"), /bank_out: "«Виписка»: усі рахунки разом із картками й Сейфом, включно з банківськими комісіями/, "🔴 підказка «Витрат загальних» каже не те, що рахує ядро");
 });
 
 /**
