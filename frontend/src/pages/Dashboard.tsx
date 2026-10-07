@@ -91,33 +91,14 @@ import { ReceivablesSection } from "./dashboard/sections/ReceivablesSection";
 import { TasksSection } from "./dashboard/sections/TasksSection";
 import { GoalsSection } from "./dashboard/sections/GoalsSection";
 import { ErrorBoundary } from "../components/ErrorBoundary";
+import { useToast } from "../components/Toasts";
+import { playNotifySound } from "../components/notifySound";
+import { askNotifyPermissionOnFirstClick, notifyBrowser } from "../components/browserNotify";
 import { ReportPlanSection } from "./dashboard/sections/ReportPlanSection";
 import { KvpReportSection } from "./dashboard/sections/KvpReportSection";
 import { PlansTabs } from "./dashboard/sections/PlansTabs";
 import { DataQualitySection } from "./dashboard/sections/DataQualitySection";
 
-/** Short pleasant beep via Web Audio (no asset needed, CSP-safe). Double for "done". */
-function beep(success: boolean) {
-  try {
-    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    if (!Ctx) return;
-    const ctx = new Ctx();
-    const tone = (freq: number, at: number) => {
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.connect(g); g.connect(ctx.destination);
-      o.type = "sine";
-      o.frequency.value = freq;
-      g.gain.setValueAtTime(0.0001, ctx.currentTime + at);
-      g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + at + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + at + 0.32);
-      o.start(ctx.currentTime + at);
-      o.stop(ctx.currentTime + at + 0.34);
-    };
-    tone(success ? 880 : 620, 0);
-    if (success) tone(1180, 0.18);
-  } catch { /* audio not available — ignore */ }
-}
 
 /**
  * 🗣 ПРИЧИНА ВІДМОВИ — З ТІЛА ВІДПОВІДІ СЕРВЕРА, А НЕ З AXIOS. `err.message` — це
@@ -205,7 +186,23 @@ export function Dashboard() {
   const signalKnown = useRef<Map<number, KnownTask> | null>(null);
   /** Момент відкриття сторінки: до першого опитування дзвонимо лише задачами, створеними ПІСЛЯ нього. */
   const mountedAt = useRef(Date.now());
-  const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
+  /**
+   * 🔔 СПОВІЩЕННЯ — СПІЛЬНИЙ ТОСТ (стандарт «Еволюція бренду UTS», 07.10.2026). Доти тут жив власний
+   * список тостів: угорі праворуч, найстаріший зникав кожні 7 с — разом із помилками збереження й
+   * подією «чекає вашого прийняття». Тепер помилки висять до закриття, а події — 15 с із паузою.
+   */
+  const toast = useToast();
+  /** Пропущені дзвінки, про які вже сказали, але тост ще на екрані: нові ДОЛУЧАЮТЬСЯ до нього, а не дають другий. */
+  const missedPending = useRef<string[]>([]);
+  const notifyEvent = (o: {
+    key: string; tone: "ok" | "info" | "warn"; src: string; head?: string; text: string;
+    plain: string; success: boolean; go: NavKey; label: string; onDismiss?: () => void;
+  }) => {
+    toast(o.text, { event: true, tone: o.tone, key: o.key, src: o.src, head: o.head, onDismiss: o.onDismiss,
+      action: { label: o.label, run: () => navigateTo(o.go) } });
+    playNotifySound(o.success);
+    notifyBrowser(o.plain, o.key);
+  };
   const [managerOptions, setManagerOptions] = useState<ManagerOption[]>([]);
   /**
    * 🔴 ПОМИЛКА НЕ СТИРАЄ СПИСОК (відгук Шаврової 05.10.2026: селект виконавця — лише «—»).
@@ -358,11 +355,8 @@ export function Dashboard() {
 
   // Ask for notification permission once, and poll tasks in the background (any
   // section) so status-change alerts still fire when you're elsewhere.
-  useEffect(() => {
-    if (typeof Notification !== "undefined" && Notification.permission === "default") {
-      Notification.requestPermission().catch(() => {});
-    }
-  }, []);
+  // Дозвіл на сповіщення браузера — після першого кліку людини, а не одразу при відкритті сторінки.
+  useEffect(() => { askNotifyPermissionOnFirstClick(); }, []);
   // Фоновий рефетч ЗЛИВАЄТЬСЯ з незбереженими правками, а не замінює їх:
   // `setTasks` навпростець стирав текст, який людина ще набирає.
   //
@@ -372,13 +366,15 @@ export function Dashboard() {
   // старими задачами. Тут базова лінія — ПЕРШЕ опитування: воно лише запамʼятовує, що є.
   const notifySignalTasks = (fresh: Task[]) => {
     const known = signalKnown.current;
-    const text = signalAlertText(fresh.filter((t) => isSignalAlert(t, known, auth?.managerId, mountedAt.current)).map((t) => t.title));
-    if (text) {
-      setToasts((cur) => [...cur, { id: Date.now(), text }]);
-      beep(false);
-      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-        try { new Notification("UTS Dashboard", { body: text }); } catch { /* ignore */ }
-      }
+    const titles = fresh.filter((t) => isSignalAlert(t, known, auth?.managerId, mountedAt.current)).map((t) => t.title);
+    if (titles.length) {
+      // Серія: нові дзвінки долучаються до тосту, що вже висить, — один тост «N пропущених дзвінків».
+      missedPending.current = [...missedPending.current, ...titles];
+      const text = signalAlertText(missedPending.current);
+      if (text) notifyEvent({
+        key: "missed-calls", tone: "warn", src: "Пропущені дзвінки", text: text.replace(/^📵\s*/u, ""), plain: text,
+        success: false, go: "tasks", label: "До задач", onDismiss: () => { missedPending.current = []; },
+      });
     }
     signalKnown.current = new Map(fresh.map((t) => [t.id, knownOf(t)]));
   };
@@ -402,11 +398,8 @@ export function Dashboard() {
         setChatUnread(n);
         if (prev !== null && n > prev && section !== "messenger") {
           const text = `Нове повідомлення 💬 (${n} непрочитан${n === 1 ? "е" : n < 5 ? "і" : "их"})`;
-          setToasts((cur) => [...cur, { id: Date.now(), text }]);
-          beep(false);
-          if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-            try { new Notification("UTS Dashboard", { body: text }); } catch { /* ignore */ }
-          }
+          notifyEvent({ key: "chat-unread", tone: "info", src: "Месенджер", head: "Нове повідомлення",
+            text: `${n} непрочитан${n === 1 ? "е" : n < 5 ? "і" : "их"}`, plain: text, success: false, go: "messenger", label: "Відкрити" });
         }
         prevChatUnread.current = n;
       })
@@ -431,20 +424,15 @@ export function Dashboard() {
         if (mine && was && was !== t.status && (t.status === "in_progress" || t.status === "done")) {
           const who = t.assigneeName ? ` — ${t.assigneeName}` : "";
           const text = `Задача ${t.status === "done" ? "виконана ✅" : "взята в роботу ▶️"}${who}: ${t.title.slice(0, 90)}`;
-          setToasts((cur) => [...cur, { id: Date.now() + t.id, text }]);
-          beep(t.status === "done");
-          if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-            try { new Notification("UTS Dashboard", { body: text }); } catch { /* ignore */ }
-          }
+          notifyEvent({ key: `task-${t.id}`, tone: t.status === "done" ? "ok" : "info",
+            src: `Задачник${t.assigneeName ? ` · ${t.assigneeName}` : ""}`, head: t.status === "done" ? "Задачу виконано" : "Задачу взято в роботу",
+            text: t.title.slice(0, 90), plain: text, success: t.status === "done", go: "tasks", label: "До задачника" });
         }
         // ✅ «Приймає»: задача перейшла на затвердження — чекає мого прийняття (тримає #1080h).
         if (isAcceptanceAlert(t, was, { userId: auth?.userId, managerId: auth?.managerId })) {
           const text = acceptanceAlertText(t.title, t.assigneeName);
-          setToasts((cur) => [...cur, { id: Date.now() + t.id + 0.5, text }]);
-          beep(true);
-          if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-            try { new Notification("UTS Dashboard", { body: text }); } catch { /* ignore */ }
-          }
+          notifyEvent({ key: `accept-${t.id}`, tone: "ok", src: `Задачник${t.assigneeName ? ` · ${t.assigneeName}` : ""}`,
+            head: "Чекає вашого прийняття", text: t.title.slice(0, 90), plain: text, success: true, go: "tasks", label: "До задачника" });
         }
       }
     }
@@ -453,13 +441,6 @@ export function Dashboard() {
     prevTaskStatus.current = next;
     notifInit.current = true;
   }, [tasks, auth]);
-
-  // Auto-dismiss the oldest toast after a few seconds.
-  useEffect(() => {
-    if (toasts.length === 0) return;
-    const t = setTimeout(() => setToasts((cur) => cur.slice(1)), 7000);
-    return () => clearTimeout(t);
-  }, [toasts]);
 
   // 🔴 ПОЗНАЧКА «РЕДАГУЄТЬСЯ» — інакше фоновий рефетч затирає незбережене.
   // Правка живе в локальному стані до `onBlur`, а поллер замінював увесь масив
@@ -483,10 +464,8 @@ export function Dashboard() {
       const what = Object.keys(patch)[0] ?? "поле";
       const reason = serverReason(err);
       if (patch.status !== undefined) { await rejectStatus(id, reason); return; }
-      setToasts((cur) => [...cur, {
-        id: Date.now() + id,
-        text: `⚠️ Не вдалося зберегти «${what}» задачі #${id}${reason ? ` (${reason})` : ""}. Текст на екрані НЕ втрачено — спробуйте ще раз.`,
-      }]);
+      toast(`Не вдалося зберегти «${what}» задачі #${id}${reason ? ` (${reason})` : ""}. Текст на екрані НЕ втрачено — спробуйте ще раз.`,
+        { error: true, head: "Не збережено", key: `save-${id}-${what}` });
     }
   }
 
@@ -498,7 +477,7 @@ export function Dashboard() {
    */
   async function rejectStatus(id: number, reason: string) {
     dirtyTaskFields.current.get(id)?.delete("status");
-    setToasts((cur) => [...cur, { id: Date.now() + id, text: `⚠️ Статус задачі #${id} не змінено${reason ? `: ${reason}` : ""}` }]);
+    toast(`Статус задачі #${id} не змінено${reason ? `: ${reason}` : ""}`, { error: true, head: "Не збережено", key: `status-${id}` });
     try {
       const fresh = await fetchTasks();
       setTasks((prev) => mergeTasksPreservingEdits(prev, fresh, dirtyTaskFields.current));
@@ -1009,16 +988,6 @@ export function Dashboard() {
 
   return (
     <>
-    {toasts.length > 0 && (
-      <div style={{ position: "fixed", top: 16, right: 16, zIndex: 9999, display: "flex", flexDirection: "column", gap: 8, maxWidth: 360 }}>
-        {toasts.map((t) => (
-          <div key={t.id} onClick={() => setToasts((cur) => cur.filter((x) => x.id !== t.id))}
-            style={{ background: "var(--card-bg, #fff)", color: "var(--text)", border: "1px solid var(--border)", borderLeft: "4px solid #c8102e", borderRadius: 10, padding: "10px 14px", boxShadow: "0 8px 24px rgba(0,0,0,0.18)", fontSize: 13, cursor: "pointer" }}>
-            🔔 {t.text}
-          </div>
-        ))}
-      </div>
-    )}
     <Layout
       active={section}
       onSelect={navigateTo}
