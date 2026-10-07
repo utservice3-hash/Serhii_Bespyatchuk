@@ -4714,7 +4714,11 @@ dashboardRouter.get("/report", async (req, res) => {
 
   // КРОК 9: борг = core/metrics.receivablesTotal (LEFT JOIN — повна сума; скоуп по
   // менеджеру/команді виключає null-рядки, тож роль-скоуп звіту не змінюється).
-  const receivablesTotalValue = await metrics.receivablesTotal({ managerId, teamId });
+  // ⏱ КЕШ `/report` (07.10.2026): сталі (не залежні від періоду) виклики цього роуту йдуть через ТОЙ САМИЙ
+  // лінивий кеш, що й `/overview` (TTL 60 с, ключ з аргументів — чужий скоуп чужих чисел не отримає).
+  // Заміряно на проді в процесі: 7 із 22 запитів сталі (501 мс); з кешем поодинці 1 331-2 382 → 915-1 019 мс,
+  // ×4 медіана 2 735 → 1 552 мс. Період-залежні виклики НЕ кешуються. Тримають `#1237`/`#1237b`.
+  const receivablesTotalValue = await overviewCache.call("receivablesTotal", metrics.receivablesTotal, { managerId, teamId });
 
   const successRevenue = reportSuccess.revenue;
   const successDeals = reportSuccess.deals;
@@ -4723,7 +4727,7 @@ dashboardRouter.get("/report", async (req, res) => {
   const revenue = reportReceived.revenue;
   const deals = reportReceived.deals;
   // Full per-manager scorecard (the metrics from the manual Excel report).
-  const { adSources: reportAdSources } = await getSettings();
+  const { adSources: reportAdSources } = await overviewCache.call("getSettings", getSettings);
   const actP: unknown[] = [[8921932, 155304]];
   const actConds = ["d.pipeline_id = ANY($1)", ...scopeSql(actP, `(d.created_at_kommo ${KYIV})::date`), ...dateSql("created_at_kommo", actP)];
   actP.push(reportAdSources);
@@ -4808,9 +4812,9 @@ dashboardRouter.get("/report", async (req, res) => {
   const [succByMgrAgg, paidByMgrAgg, zoneByMgr, dobirByMgr, scopeProj] = await Promise.all([
     money.successByMgr(reportScope),
     money.paidOnlyByMgr(reportScope),
-    metrics.expectedZoneByScope({ managerId, teamId }, "manager"),
-    money.dobirByManager({ managerId, teamId }),
-    metrics.buildProjection({ from, to, managerId, teamId, granularity }),
+    overviewCache.call("expectedZoneByScope:manager", metrics.expectedZoneByScope, { managerId, teamId }, "manager"),
+    overviewCache.call("dobirByManager", money.dobirByManager, { managerId, teamId }),
+    metrics.buildProjection({ from, to, managerId, teamId, granularity }, undefined, overviewCache),
   ]);
   const zoneMap = new Map(zoneByMgr.map((r) => [r.id, r.sum]));
   const dobirMap = new Map(dobirByMgr.map((r) => [r.managerId, r.dobir]));

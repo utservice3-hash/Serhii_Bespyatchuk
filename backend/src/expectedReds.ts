@@ -95,7 +95,31 @@ export const EXPECTED_REDS: ExpectedRed[] = [
  * Його червоне означає СПРАВЖНЮ деградацію часу відповіді `/overview`. Замовчати його
  * реєстром — зробити собі глушник рівно там, де сигнал і потрібен. 02.09 він, до речі,
  * виконався зеленим за 26.2 с.
+ *
+ * ⚠️ 07.10.2026 — РІШЕННЯ РОМАНА: `#36` переходить у `WARN_ONLY_GATES` (нижче). Це НЕ запис
+ * у цей реєстр і не глушник: падіння друкується в КОЖНОМУ звіті викату рядком «⚠️», тобто
+ * сигнал про деградацію лишається видимим, лише перестає зупиняти ланцюг. Привід, заміряний
+ * того ж дня: два викати поспіль (`a126eb2`, `7c5203e`) і раніше `49df1ba` зупинялись на
+ * `#36` при незмінному бекенді — гейт міряв навантаження Neon, а не код (правило 14 кореня).
+ * Лікування причини — кеш `/overview`, окремим проходом; після нього `#36` повертається
+ * в обовʼязкові (умова зняття — у самому записі).
  */
+
+/**
+ * ⚠️ ЛИШЕ ПОПЕРЕДЖЕННЯ — гейти, що міряють АБСОЛЮТНИЙ ЧАС по живому сайту. Їхнє падіння
+ * друкується у звіті, але приймання не зупиняє; їхній прохід — норма, а не «глушник»
+ * (на відміну від `EXPECTED_REDS`, де пройдений запис — дефект). Перелік вузький і
+ * поіменний: потрапити сюди може лише гейт часу, і склад стереже `#1236b` як lock-файл.
+ */
+export const WARN_ONLY_GATES: ExpectedRed[] = [
+  {
+    name: "#36 ЧАС ВІДПОВІДІ: /overview і /report тримаються під навантаженням",
+    since: "2026-10-07", decidedBy: "Роман",
+    reason: "Міряє час відповіді через HTTP, тобто навантаження Neon у мить прогону, а не код: "
+      + "на незмінному бекенді за добу ×4 = 2894…6464 мс. Три викати поспіль зупинились на ньому "
+      + "без жодного регресу. УМОВА ЗНЯТТЯ: кеш `/overview` викочено — тоді назад в обовʼязкові.",
+  },
+];
 
 export interface RedsVerdict {
   ok: boolean;
@@ -105,6 +129,8 @@ export interface RedsVerdict {
   registryProblems: string[];
   /** Рядки для звіту: коротко й поіменно. */
   lines: string[];
+  /** Падіння гейтів із `WARN_ONLY_GATES`: друкуються, але не роблять приймання червоним. */
+  warnings: string[];
 }
 
 /**
@@ -122,6 +148,7 @@ export function acceptExpectedReds(
   failed: readonly string[],
   passed: readonly string[],
   registry: readonly ExpectedRed[] = EXPECTED_REDS,
+  warnOnly: readonly ExpectedRed[] = WARN_ONLY_GATES,
 ): RedsVerdict {
   const failedSet = new Set(failed);
   const passedSet = new Set(passed);
@@ -151,7 +178,22 @@ export function acceptExpectedReds(
     allowed.add(r.name);
   }
 
-  const uncovered = failed.filter((n) => !allowed.has(n));
+  // ⚠️ Гейти «лише попередження»: падіння — рядок у звіті, прохід — норма. Запис без
+  // причини/дати/автора чи той самий гейт ще й у реєстрі червоних — дефект, як і там.
+  const warnNames = new Set<string>();
+  for (const w of warnOnly) {
+    if (!w.name.trim() || !w.reason.trim() || !w.since.trim() || !w.decidedBy.trim()) {
+      registryProblems.push(`🔴 «${w.name || "?"}» у переліку попереджень без імені, причини, дати чи автора`);
+      continue;
+    }
+    if (registry.some((r) => r.name === w.name)) {
+      registryProblems.push(`🔴 «${w.name}» водночас і в очікуваних червоних, і в попередженнях — оберіть одне`);
+      continue;
+    }
+    warnNames.add(w.name);
+  }
+  const warnings = failed.filter((n) => warnNames.has(n) && !allowed.has(n));
+  const uncovered = failed.filter((n) => !allowed.has(n) && !warnNames.has(n));
   const ok = uncovered.length === 0 && registryProblems.length === 0;
 
   const lines: string[] = [];
@@ -162,7 +204,11 @@ export function acceptExpectedReds(
   for (const p of registryProblems) lines.push(`   ${p}`);
   if (ok && failed.length) {
     lines.push(`✅ падінь ${failed.length}, усі очікувані поіменно:`);
-    for (const n of failed) lines.push(`   ﹣ ${n}`);
+    for (const n of failed.filter((x) => !warnNames.has(x))) lines.push(`   ﹣ ${n}`);
   }
-  return { ok, uncovered, registryProblems, lines };
+  if (warnings.length) {
+    lines.push(`⚠️ ПОПЕРЕДЖЕННЯ (${warnings.length}) — не зупиняє ланцюг, але це справжній сигнал:`);
+    for (const n of warnings) lines.push(`   ⚠️ ${n}`);
+  }
+  return { ok, uncovered, registryProblems, lines, warnings };
 }

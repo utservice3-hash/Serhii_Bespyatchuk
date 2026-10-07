@@ -3,7 +3,6 @@ import { HealthBanner } from "./HealthBanner";
 import { VersionBanner } from "./VersionBanner";
 import { useNavigate } from "react-router-dom";
 import { Logo } from "./Logo";
-import { soundEnabled, setSoundEnabled } from "./notifySound";
 import { NavIcon } from "./NavIcon";
 import { CommandPalette } from "./CommandPalette";
 import { heartbeat, trackerSsoUrl, surveysBadge, type SurveysBadge } from "../api";
@@ -363,7 +362,6 @@ export function Layout({
         {/* 🔒 «Вийти» — дія АКАУНТА, не «екран». НАВМИСНО поза <nav>/NAV_GROUPS і поза
             фільтром screens[] — рендериться ЗАВЖДИ, для будь-якої ролі (вбудованої чи
             кастомної), незалежно від screen_access/permissions. НЕ переносити в NAV_GROUP. */}
-        <SoundToggle collapsed={collapsed} />
         <button className="sidebar-logout" onClick={logout} title="Вийти">
           {collapsed ? "⎋" : "Вийти"}
         </button>
@@ -459,17 +457,5 @@ export function Layout({
         {children}
       </main>
     </div>
-  );
-}
-
-/** 🔊 Звук сповіщень — увімкнений за замовчуванням (рішення Романа 07.10.2026); вибір живе в браузері людини. */
-function SoundToggle({ collapsed }: { collapsed: boolean }) {
-  const [on, setOn] = useState(soundEnabled);
-  const label = on ? "Звук сповіщень увімкнено" : "Звук сповіщень вимкнено";
-  return (
-    <button type="button" className="sidebar-logout" aria-pressed={on} title={label}
-      onClick={() => { setSoundEnabled(!on); setOn(!on); }}>
-      {collapsed ? (on ? "🔔" : "🔕") : (on ? "🔔 Звук увімкнено" : "🔕 Звук вимкнено")}
-    </button>
   );
 }

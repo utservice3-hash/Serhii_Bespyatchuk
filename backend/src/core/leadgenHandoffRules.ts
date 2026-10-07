@@ -277,13 +277,28 @@ export function handoffView<T extends HandoffEntry>(
 }
 
 /** Предикат «київська дата в періоді» — одна форма на період, місяць тренду й одиницю розбивки. */
-export type DayIn = ((day: string) => boolean) & { start?: string; end?: string };
+/**
+ * Період грошей. `flow` — «лише нові» (рішення власника 07.10.2026, прохання Ярослава): «Очікування» тижня/дня/довільних
+ * дат — угоди, що ПІШЛИ в очікування в межах періоду (і на кінець ще чекають); без `flow` (цілі місяці) — усе, що на кінець
+ * чекає, з перенесеним. Будує `leadgenPeriod`.
+ */
+export type DayIn = ((day: string) => boolean) & { start?: string; end?: string; flow?: boolean };
 export const dayInRange = (from: string, to: string): DayIn => Object.assign((d: string) => d >= from && d <= to, { start: from, end: to });
 /** Календарний місяць `ym` ('YYYY-MM') як період — з відомими межами (для «Очікування» станом на кінець). */
 export function monthIn(ym: string): DayIn {
   const y = Number(ym.slice(0, 4)), m = Number(ym.slice(5, 7));
   const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
   return dayInRange(`${ym}-01`, `${ym}-${String(last).padStart(2, "0")}`);
+}
+
+/**
+ * 📅 ПЕРІОД ГРОШЕЙ ЛІДГЕНА з вибраних дат (рішення власника 07.10.2026). Цілі календарні місяці (`from` — 1-ше число,
+ * `to` — останнє число свого місяця) — «Очікування» станом на кінець з перенесеним; будь-що інше (тиждень, день,
+ * 05–11.10, 01–07.10) — лише нові за період (`flow`). Кінець обрізається сьогоднішнім днем: майбутніх днів ще немає.
+ */
+export function leadgenPeriod(from: string, to: string, today: string): DayIn {
+  const wholeMonths = from.slice(8) === "01" && monthIn(to.slice(0, 7)).end === to && from <= to;
+  return Object.assign(dayInRange(from, to < today ? to : today), { flow: !wholeMonths });
 }
 
 const isWaitingCls = (c: LeadgenDealClass) => c === "paid" || c === "expect";
@@ -301,6 +316,8 @@ export function pendingIn(r: { cls: LeadgenDealClass; autoDay: string | null; pe
   const end = inP.end;
   if (end == null) return isWaitingCls(r.cls) && inP(r.autoDay);
   if (r.autoDay > end) return false;
+  // Тиждень/день/довільні дати — лише ті, що пішли в очікування В ПЕРІОДІ; перенесене — лише в місячному вигляді.
+  if (inP.flow && inP.start != null && r.autoDay < inP.start) return false;
   const days = r.pendDays ?? [];
   if (!days.length || end >= days[days.length - 1].day) return isWaitingCls(r.cls);
   let at = false;
@@ -774,7 +791,7 @@ export function handoffMoneyBuckets<T extends HandoffEntry>(
     const bEnd = grain === "day" ? b : addDays(b, 6);
     const start = period.start != null && period.start > b ? period.start : b;
     const end = period.end != null && period.end < bEnd ? period.end : bEnd;
-    return Object.assign((d: string) => k(d) === b && period(d), { start, end });
+    return Object.assign((d: string) => k(d) === b && period(d), { start, end, flow: true });
   };
   // Одиниці періоду: коли межі відомі — УСІ (угода, що висить в очікуванні, є в кожній, на кінець якої висіла).
   const units = new Set<string>();
