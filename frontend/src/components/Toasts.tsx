@@ -144,7 +144,7 @@ function ToastView({ it, docHidden, onClose }: { it: Item; docHidden: boolean; o
       <div className="app-toast-body">
         {it.src && <span className="app-toast-src">{it.src}</span>}
         {it.head && <b>{it.head}</b>}
-        <span>{it.text}{it.count && it.count > 1 ? ` · ×${it.count}` : ""}</span>
+        <span>{it.text}</span>
       </div>
       {it.action && (
         <button type="button" className="app-toast-act" onClick={() => { it.action!.run(); onClose(); }}>{it.action.label}</button>
