@@ -251,6 +251,17 @@ function AssigneeOptgroups({ options, myTeamId, skipId }: { options: ManagerOpti
 }
 
 /**
+ * 👤 ПОТОЧНИЙ ВИКОНАВЕЦЬ, ЯКОГО НЕМАЄ СЕРЕД ВАРІАНТІВ (07.10.2026). Список бере лише активних менеджерів, тож задача на
+ * неактивному (вимкненому в Kommo) показувала в картці ПОРОЖНЄ поле «Виконавець», хоча в рядку списку ім'я є —
+ * Роман: «там в задачах немає мене як виконавця». Задача при цьому його, і «Свої задачі» її рахують. Тепер поточний
+ * виконавець лишається вибраним з позначкою «(неактивний)»; новим його так само не призначити — варіантом він не стає.
+ */
+function CurrentInactiveOption({ id, name, options }: { id: number | null; name: string | null; options: ManagerOption[] }) {
+  if (id == null || options.some((m) => m.id === id)) return null;
+  return <option value={id}>{(name ?? `#${id}`) + " (неактивний)"}</option>;
+}
+
+/**
  * 👁 НЕАКТИВНІ З МОЄЇ КОМАНДИ — СЛОВАМИ, А НЕ ЗНИКНЕННЯМ. Людина, вимкнена в Kommo,
  * у селект не потрапляє, і без цього рядка її відсутність читалась як заборона
  * задачника («не можу ставити менеджера з команди», Шаврова 05.10.2026).
@@ -290,6 +301,7 @@ function AssigneeCell({ value, name, options, myTeamId, onChange }: {
       <select autoFocus value={value ?? ""} onChange={(e) => { onChange(e.target.value ? Number(e.target.value) : null); setEditing(false); }}
         onBlur={() => setEditing(false)} style={{ width: "100%", fontSize: 12, minWidth: 0 }}>
         <option value="">—</option>
+        <CurrentInactiveOption id={value} name={name} options={options} />
         <AssigneeOptgroups options={options} myTeamId={myTeamId} />
       </select>
     );
@@ -1663,6 +1675,7 @@ export function TasksSection({
                   <F icon="👤" label="Виконавець">
                     <select value={openTask.assigneeId ?? ""} onChange={(e) => { const assigneeId = e.target.value ? Number(e.target.value) : null; const assigneeName = managerOptions.find((m) => m.id === assigneeId)?.name ?? null; patchTaskLocal(openTask.id, { assigneeId, assigneeName }); commitTask(openTask.id, { assigneeId }); }} style={{ width: "100%" }}>
                       <option value="">— (моя / без виконавця)</option>
+                      <CurrentInactiveOption id={openTask.assigneeId ?? null} name={openTask.assigneeName ?? null} options={managerOptions} />
                       <AssigneeOptgroups options={managerOptions} myTeamId={myTeamId} />
                     </select>
                     <AssigneeListStatus empty={managerOptions.length === 0} failed={managerOptionsFailed} onRetry={onReloadManagerOptions} />
