@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { weekPlanOf, weekWorkingDays } from "./weekPlanMath.js";
+import { weekPlanOf, weekWorkingDays, shouldFreezeWeek } from "./weekPlanMath.js";
 import { fixedWeekBlocks, workingDaysBetween, monthEndOf } from "./dates.js";
-import { needsDb, needsDbWritable } from "../testMode.js";
+import { needsDb, needsDbWritable, needsBackendEnv, planGraceSkip } from "../testMode.js";
 
 /** Серпень 2026 — місяць власника з прикладу: 1-ше субота, 31-ше понеділок-одинак. */
 const AUG = "2026-08-01";
@@ -130,4 +130,55 @@ test("#48e знімок плану тижня не переписується", 
   } finally {
     await pool.query(`DELETE FROM weekly_plan_snapshots WHERE month_start = $1`, [MONTH]);
   }
+});
+
+/**
+ * #1494 — ТИЖДЕНЬ БЕЗ МІСЯЧНОГО ПЛАНУ НЕ ФІКСУЄТЬСЯ (задача 5202, 07.10.2026).
+ *
+ * Знімок незмінний, тож нуль, зафіксований до заведення планів, жив цілий тиждень: T2 команди Дмитрука
+ * показував 21 тис при місячному 900 тис. Фікстура по ОБИДВА боки кожної межі: план 0 / план > 0,
+ * тиждень почався / ще ні / починається сьогодні.
+ *
+ * 🧨 Червоніє, якщо: прибрати умову `monthPlan > 0` (нуль знову фіксується) або умову дати (фіксується
+ * майбутній тиждень).
+ */
+test("#1494 тиждень фіксується лише коли він почався І місячний план уже заведено", () => {
+  const today = "2026-10-05";
+  assert.equal(shouldFreezeWeek({ weekStart: "2026-10-05", today, monthPlan: 0 }), false,
+    "🔴 тиждень без місячного плану заморожено — нуль стане ціллю на весь тиждень");
+  assert.equal(shouldFreezeWeek({ weekStart: "2026-10-01", today, monthPlan: 0 }), false,
+    "🔴 минулий тиждень без плану заморожено нулем");
+  assert.equal(shouldFreezeWeek({ weekStart: "2026-10-05", today, monthPlan: 900_000 }), true,
+    "🔴 тиждень, що почався сьогодні, з планом — не фіксується (ціль повзтиме)");
+  assert.equal(shouldFreezeWeek({ weekStart: "2026-10-01", today, monthPlan: 1 }), true,
+    "🔴 минулий тиждень із планом не фіксується");
+  assert.equal(shouldFreezeWeek({ weekStart: "2026-10-12", today, monthPlan: 900_000 }), false,
+    "🔴 заморожено майбутній тиждень — ціль за даними, яких ще немає");
+});
+
+/**
+ * #1494b — ЖИВА БАЗА: у поточному місяці немає знімка з місячним планом 0 у менеджера, чий план заведено.
+ *
+ * Це саме той стан, який бачила людина (5202). Нуль порушників рахується ЛИШЕ разом із числом менеджерів
+ * із планом: якщо планів ще немає, перевіряти нічого — і це вікно заведення планів, а не «зелено».
+ *
+ * 🧨 Червоніє, якщо: знову фіксувати нуль до заведення планів (на проді 07.10.2026 до чистки — 39 рядків).
+ */
+test("#1494b ЖИВА БАЗА: жодного знімка тижня з планом 0 у менеджера з місячним планом", needsBackendEnv(), async (t) => {
+  const { pool } = await import("../db/pool.js");
+  const { dynamicTarget } = await import("./plans.js");
+  const ym = (await pool.query<{ m: string }>(`SELECT to_char((now() AT TIME ZONE 'Europe/Kyiv')::date,'YYYY-MM') AS m`)).rows[0].m;
+  const monthStart = `${ym}-01`;
+  const withPlan = new Map((await dynamicTarget({ month: monthStart }, "month"))
+    .filter((d) => d.monthPlan > 0).map((d) => [d.managerId, d.monthPlan]));
+  const skip = planGraceSkip("менеджерів із місячним планом", withPlan.size);
+  if (skip) return t.skip(skip);
+  assert.ok(withPlan.size > 0, `🔴 жодного менеджера з планом на ${ym} — перевіряти нічого, це не «зелено»`);
+  const zero = (await pool.query<{ manager_id: number; week_start: string }>(
+    `SELECT manager_id, to_char(week_start,'YYYY-MM-DD') AS week_start
+       FROM weekly_plan_snapshots WHERE month_start = $1 AND month_plan = 0`, [monthStart])).rows;
+  const bad = zero.filter((r) => withPlan.has(r.manager_id));
+  assert.equal(bad.length, 0,
+    `🔴 ${bad.length} знімк(ів) тижня з місячним планом 0 при заведеному плані (із ${withPlan.size} менеджерів із планом): `
+    + bad.slice(0, 8).map((r) => `#${r.manager_id}@${r.week_start}`).join(", "));
 });
