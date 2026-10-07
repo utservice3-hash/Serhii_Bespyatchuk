@@ -1,5 +1,6 @@
 import axios from "axios";
 import type { AiCallState, PromiseStateT, PipelineGroupT, ConversationTypeT } from "./pages/dashboard/aiCallsView";
+import { blobErrorBody } from "./pages/dashboard/aiCallsView";
 import type { CarrierBucketT } from "./pages/dashboard/carrierCallsView";
 
 export const api = axios.create({
@@ -428,8 +429,14 @@ export async function putAiCallNote(uniqueid: string, kind: "price" | "missed" |
 }
 /** Запис розмови — байтами через наш сервер (з авторизацією), а не прямим посиланням Ringostat. */
 export async function fetchAiCallRecording(uniqueid: string): Promise<Blob> {
-  const { data } = await api.get<Blob>(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/recording`, { responseType: "blob" });
-  return data;
+  try {
+    const { data } = await api.get<Blob>(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/recording`, { responseType: "blob" });
+    return data;
+  } catch (e) {
+    const res = (e as { response?: { data?: unknown } }).response;
+    if (res) res.data = await blobErrorBody(res.data);
+    throw e;
+  }
 }
 /** 📊 Звіт тімліда «Перший дотик» (ТЗ 30.09.2026 п.6). */
 export interface AiManagerLineT {

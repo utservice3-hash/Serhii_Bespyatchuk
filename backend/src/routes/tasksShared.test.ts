@@ -991,3 +991,18 @@ test("#494 СПИСОК ВИКОНАВЦІВ: помилка не стирає �
   assert.match(src, /const needAssigneeList = \(taskModalOpen \|\| openTaskId != null\) && managerOptions\.length === 0;/, "🔴 умова повтору змінилась");
   assert.match(src, /useEffect\(\(\) => \{ if \(needAssigneeList\) onReloadManagerOptions\?\.\(\); \}, \[needAssigneeList\]\)/, "🔴 відкриття форми не повторює завантаження");
 });
+
+/**
+ * #1492 — ПОТОЧНИЙ НЕАКТИВНИЙ ВИКОНАВЕЦЬ ВИДНО В КАРТЦІ (07.10.2026). Список варіантів — лише активні менеджери, тож
+ * задача на вимкненому в Kommo показувала порожнє «Виконавець» (Роман: «там в задачах немає мене як виконавця»).
+ * Поточний виконавець мусить лишатись вибраним з позначкою «(неактивний)» — і в картці, і в рядку списку.
+ * 🧨 Червоніє, якщо прибрати цей варіант із будь-якого з двох селектів або дозволити його й для активного.
+ */
+test("#1492 НЕАКТИВНИЙ ВИКОНАВЕЦЬ: картка й рядок показують поточного виконавця з позначкою, а не порожньо", () => {
+  const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "TasksSection.tsx"), "utf8");
+  assert.match(fe, /function CurrentInactiveOption\(\{ id, name, options \}[^)]*\) \{\s*if \(id == null \|\| options\.some\(\(m\) => m\.id === id\)\) return null;/,
+    "🔴 варіант «неактивний» не обмежено випадком, коли виконавця немає серед активних");
+  assert.match(fe, /" \(неактивний\)"/, "🔴 немає позначки «(неактивний)»");
+  assert.match(fe, /<option value="">— \(моя \/ без виконавця\)<\/option>\s*<CurrentInactiveOption id=\{openTask\.assigneeId \?\? null\}/, "🔴 картка задачі показує порожнє поле для неактивного виконавця");
+  assert.match(fe, /<option value="">—<\/option>\s*<CurrentInactiveOption id=\{value\} name=\{name\} options=\{options\} \/>/, "🔴 рядок списку при редагуванні губить неактивного виконавця");
+});
