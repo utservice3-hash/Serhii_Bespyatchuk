@@ -839,8 +839,8 @@ function SafeRow({ r, canEdit, onDelete, onUndo }: { r: BankManualRow; canEdit: 
           <span style={{ flexShrink: 0, fontSize: 11.5, whiteSpace: "nowrap" }}>{who}</span>
         </div>
       </div>
-      <div style={{ width: 70, flexShrink: 0, textAlign: "right" }}>{canEdit && (r.deleted
-        ? <button onClick={onUndo} style={{ border: "none", background: "none", color: "#2f6fdb", cursor: "pointer", fontSize: 12.5, fontWeight: 700 }}>Повернути</button>
+      <div style={{ minWidth: 34, flexShrink: 0, textAlign: "right" }}>{canEdit && (r.deleted
+        ? <button onClick={onUndo} style={{ border: "none", background: "none", color: "#2f6fdb", cursor: "pointer", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", padding: "0 2px" }}>Повернути</button>
         : <button aria-label={`Видалити запис ${r.day}`} title="Видалити" onClick={onDelete} style={{ border: "none", background: "none", color: RED, cursor: "pointer", fontSize: 15 }}>🗑</button>)}</div>
     </div>
   );
