@@ -97,7 +97,8 @@ export function FirstTouchReportCard({ from, to, teamId }: { from: string; to: s
         <div style={{ background: alert ? "var(--danger-bg, #fde8e8)" : "var(--surface-2, #f4f5f7)", border: `1px solid ${alert ? "var(--danger, #b3261e)" : "var(--border)"}`,
           borderRadius: 8, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ fontWeight: 700, fontSize: 15, color: alert ? "var(--danger, #b3261e)" : undefined }}>Обіцяв передзвонити — дзвінка в телефонії немає · {rep.banner.total}</div>
-          <div style={{ fontSize: 13, ...muted }}>За даними Ringostat. Передзвін з мобільного, у месенджер чи з іншого номера система не бачить — <b>перевіряється, не для розборів</b>.</div>
+          {/* ТЗ п.5.4 (07.10.2026): у червоному режимі дані вже звірено людьми — застереження про перевірку зникає, заголовок той самий. */}
+          {!alert && <div style={{ fontSize: 13, ...muted }}>За даними Ringostat. Передзвін з мобільного, у месенджер чи з іншого номера система не бачить — <b>перевіряється, не для розборів</b>.</div>}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
             {rep.banner.byManager.map((m) => <span key={String(m.managerId)}>{chip(alert ? "bad" : "muted", `${m.managerName} · ${String(m.count)}`)}</span>)}
           </div>
