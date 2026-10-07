@@ -101,14 +101,14 @@ export function VersionBanner() {
    */
   return (
     <div role="status" aria-live="polite" style={{ position: "fixed", right: 16, bottom: 16, zIndex: Z, width: "min(400px, calc(100vw - 32px))" }}>
-      <div className="app-toast" style={{ borderLeft: "4px solid #3b82f6" }}>
-        <span className="app-toast-icon" style={{ background: "#3b82f6", color: "#fff" }} aria-hidden>⟳</span>
+      <div className="app-toast ev t-info">
+        <span className="app-toast-icon" aria-hidden>⟳</span>
         <div className="app-toast-body">
-          <span style={{ fontSize: 11, opacity: 0.75 }}>Дашборд</span>
+          <span className="app-toast-src">Дашборд</span>
           <b style={{ fontSize: 13.5 }}>Вийшла нова версія</b>
           <span style={{ fontSize: 12.5, opacity: 0.9 }}>Оновіть сторінку, щоб працювати з актуальними цифрами й кнопками. Незбережений текст — спершу збережіть.</span>
         </div>
-        <button className="app-toast-act" onClick={() => location.reload()} style={{ background: "#fff", color: "#111", borderColor: "#fff", fontWeight: 600 }}>
+        <button className="app-toast-act" onClick={() => location.reload()}>
           Оновити
         </button>
         <button className="app-toast-x" onClick={() => dismiss()} title="Закрити до наступної версії" aria-label="Закрити до наступної версії">×</button>
