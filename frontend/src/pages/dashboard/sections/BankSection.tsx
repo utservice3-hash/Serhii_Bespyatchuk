@@ -365,13 +365,13 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
 // вимкненою: вмикається перемикачем, коли в її картці вже «API ✓». Правила полів — на сервері (`core/bankAccounts.ts`).
 const CARD_OWNERS: [string, string][] = [["staff", "Картка працівника"], ["uts", "ТОВ ЮТС"], ["automuv", "ТОВ Автомув"], ["fop_mono", "ФОП Беспятчук"]];
 function AddCardForm({ onAdded }: { onAdded: (text: string) => void | Promise<void> }) {
-  const empty = { label: "", company: "staff", currency: "UAH", last4: "", env: "MONO_TOKEN_", financeOnly: true };
+  const empty = { label: "", company: "staff", currency: "UAH", last4: "", iban: "", env: "MONO_TOKEN_", financeOnly: true };
   const [open, setOpen] = useState(false);
   const [f, setF] = useState(empty);
   const [msg, setMsg] = useState<string | null>(null);
   const add = async () => {
     try {
-      await saveBankAccount(null, { company: f.company, bank: "mono", label: f.label, currency: f.currency, envKeyName: f.env, monoPanLast4: f.last4, financeOnly: f.financeOnly } as never);
+      await saveBankAccount(null, { company: f.company, bank: "mono", label: f.label, currency: f.currency, envKeyName: f.env, monoPanLast4: f.last4, iban: f.iban, financeOnly: f.financeOnly } as never);
       setF(empty); setOpen(false); setMsg(null);
       await onAdded(`✓ Картку «${f.label}» додано вимкненою. Далі: 1) у серверному .env рядок ${f.env}=<токен>; 2) дочекайтесь «API ✓» у її картці; 3) увімкніть її.`);
     } catch (e) { setMsg("✗ " + err(e)); }
@@ -387,6 +387,7 @@ function AddCardForm({ onAdded }: { onAdded: (text: string) => void | Promise<vo
         {field("Чия", <select aria-label="Чия картка" value={f.company} onChange={(e) => setF({ ...f, company: e.target.value })} style={inp}>{CARD_OWNERS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>)}
         {field("Валюта", <select aria-label="Валюта картки" value={f.currency} onChange={(e) => setF({ ...f, currency: e.target.value })} style={inp}><option>UAH</option><option>USD</option><option>EUR</option></select>)}
         {field("Останні 4 цифри", <input aria-label="Останні 4 цифри" inputMode="numeric" maxLength={4} placeholder="1234" value={f.last4} onChange={(e) => setF({ ...f, last4: e.target.value.replace(/\D/g, "") })} style={{ ...inp, width: 90 }} />)}
+        {field("IBAN рахунку (надійніше за цифри)", <input aria-label="IBAN рахунку" placeholder="UA…" value={f.iban} onChange={(e) => setF({ ...f, iban: e.target.value })} style={{ ...inp, width: 260, fontFamily: "monospace" }} />)}
         {field("Змінна з токеном у .env", <input aria-label="Змінна з токеном" value={f.env} onChange={(e) => setF({ ...f, env: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "") })} style={{ ...inp, width: 200, fontFamily: "monospace" }} />)}
       </div>
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>

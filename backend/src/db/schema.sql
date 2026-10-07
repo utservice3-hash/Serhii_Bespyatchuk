@@ -5609,3 +5609,14 @@ ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_company_check CHECK (comp
 ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS mono_pan_last4 TEXT;
 ALTER TABLE bank_accounts DROP CONSTRAINT IF EXISTS bank_accounts_mono_pan_last4_check;
 ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_mono_pan_last4_check CHECK (mono_pan_last4 IS NULL OR mono_pan_last4 ~ '^[0-9]{4}$');
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💱 МОНО: ВАЛЮТА ОПЕРАЦІЇ = ВАЛЮТА РАХУНКУ (07.10.2026, #1228b).
+--  `amount` у виписці моно — у валюті РАХУНКУ, а `currencyCode` — валюта ПОКУПКИ. Розбір брав валюту покупки, тож
+--  гривнева сума ставала «доларами» й ще раз множилась на курс (заміряно: картка black, 20.08.2026, 492,24 ₴ → 22 003 ₴).
+--  Лагодимо записи гривневих моно-рахунків: гривня = сума як є. Повтор нічого не міняє (умова вже не виконується).
+--  Revert коду записи не повертає — і не має: повернення означало б знову роздуті суми.
+-- ══════════════════════════════════════════════════════════════════════════
+UPDATE bank_transactions t SET currency = a.currency, fx_rate = 1, amount_uah = t.amount
+  FROM bank_accounts a
+ WHERE a.id = t.account_id AND a.bank = 'mono' AND a.currency = 'UAH' AND t.currency <> 'UAH';

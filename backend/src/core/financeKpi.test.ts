@@ -782,7 +782,7 @@ test("#1224 ПОЛЯ РАХУНКУ: ключ лише свого банку, к
   const bad = (f: () => unknown, why: string) => assert.throws(f, (e: unknown) => (e as { status?: number }).status === 400, why);
   const card = { company: "staff", bank: "mono", label: "Картка Олександра", currency: "UAH", envKeyName: "MONO_TOKEN_SASHA", monoPanLast4: "1234" };
   assert.deepEqual(v.validateNewAccount(card), { company: "staff", bank: "mono", label: "Картка Олександра", currency: "UAH", envKeyName: "MONO_TOKEN_SASHA",
-    monoPanLast4: "1234", financeOnly: true, isActive: false }, "🔴 правильну картку не прийнято або створено увімкненою / видимою всім");
+    monoPanLast4: "1234", iban: null, financeOnly: true, isActive: false }, "🔴 правильну картку не прийнято або створено увімкненою / видимою всім");
   for (const name of ["JWT_SECRET", "KOMMO_API_TOKEN", "DATABASE_URL", "PRIVAT_TOKEN_UTS", "mono_token_x", "MONO_TOKEN_", "MONO_TOKEN_A-B"])
     bad(() => v.validateNewAccount({ ...card, envKeyName: name }), `🔴 «${name}» прийнято як ключ monobank — сервер відправив би його в банк`);
   bad(() => v.checkEnvKeyName("privat", "MONO_TOKEN_FOP"), "🔴 ключ моно прийнято для Привату");
@@ -859,9 +859,84 @@ test("#1227 «+ КАРТКА»: форма лише в керуванні рах
   assert.match(block, /<AddCardForm onAdded=/, "🔴 «+ Картка» не в блоці керування рахунками");
   assert.equal((fe.match(/<AddCardForm /g) ?? []).length, 1, "🔴 «+ Картка» рендериться ще десь — поза правом керування");
   assert.match(fe, /\{canAccounts && <AccountsBlock /, "🔴 блок керування рахунками не за правом");
-  assert.match(fe, /saveBankAccount\(null, \{ company: f\.company, bank: "mono", label: f\.label, currency: f\.currency, envKeyName: f\.env, monoPanLast4: f\.last4, financeOnly: f\.financeOnly \}/,
+  assert.match(fe, /saveBankAccount\(null, \{ company: f\.company, bank: "mono", label: f\.label, currency: f\.currency, envKeyName: f\.env, monoPanLast4: f\.last4, iban: f\.iban, financeOnly: f\.financeOnly \}/,
     "🔴 форма не шле моно, змінну, цифри чи «лише фінанси»");
   assert.match(block, /у серверному \.env ще немає — додайте рядок/, "🔴 картка без ключа мовчить, що робити");
+});
+
+/**
+ * #1228 — МОНО: ВАЛЮТА ОПЕРАЦІЇ = ВАЛЮТА РАХУНКУ (`normalizeMono`). `amount` у виписці — у валюті РАХУНКУ, `currencyCode` —
+ * валюта ПОКУПКИ. Фікстура — заміряна 07.10.2026 операція картки працівника (гривнева white, $39: amount −176279,
+ * operationAmount −3900, currencyCode 840) і по другий бік межі — звичайна гривнева покупка та валютний рахунок.
+ * 🧨 Червоніє, якщо валюту знову брати з покупки: 1 762,79 ₴ стали б «$1 762,79» і ще раз ×курс.
+ */
+test("#1228 МОНО ВАЛЮТА: гривнева картка з покупкою в доларах — сума в гривні, долари лише в призначенні", async () => {
+  const { normalizeMono } = await import("../bankSources/mono.js");
+  const usdBuy = normalizeMono({ id: "a", time: 1791000000, description: "V_pdfhouse", amount: -176279, operationAmount: -3900, currencyCode: 840 }, "UAH");
+  assert.deepEqual([usdBuy.amount, usdBuy.currency, usdBuy.direction, usdBuy.purpose], [-1762.79, "UAH", "out", "V_pdfhouse · 39.00 USD"],
+    "🔴 гривнева сума записана як долари (буде ×курс)");
+  const uah = normalizeMono({ id: "b", time: 1791000000, description: "АЗС", amount: -40000, operationAmount: -40000, currencyCode: 980 }, "UAH");
+  assert.deepEqual([uah.amount, uah.currency, uah.purpose], [-400, "UAH", "АЗС"], "🔴 звичайна гривнева покупка зіпсована");
+  const usdAcc = normalizeMono({ id: "c", time: 1791000000, description: "Магазин", amount: -1000, operationAmount: -41300, currencyCode: 980 }, "USD");
+  assert.deepEqual([usdAcc.amount, usdAcc.currency], [-10, "USD"], "🔴 доларовий рахунок з гривневою покупкою записано в гривні");
+});
+
+/**
+ * #1228b — ЖИВИЙ SQL: РАЗОВЕ ВИПРАВЛЕННЯ РОЗДУТИХ ЗАПИСІВ. Схема переписує записи гривневих моно-рахунків, позначені
+ * чужою валютою: гривня = сума як є, курс 1. Чужих рахунків (Приват, Сейф) і правильних записів не чіпає; повтор — без змін.
+ * Число — заміряне на проді 07.10.2026 (картка black: 492,24 ₴ записано як 22 003,42 ₴). 🧨 Червоніє, якщо крок
+ * зачепить Приват/валютний запис Сейфу або лишить роздуту суму.
+ */
+test("#1228b ЖИВИЙ SQL: роздуті записи гривневих моно-рахунків — гривня = сума; Приват і Сейф не зачеплено", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  const schema = readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8");
+  try {
+    const { uts, card, safe } = await bankFixture(c);
+    const ins = (acc: number, ext: string, amount: number, ccy: string, rate: number) => c.query(`INSERT INTO bank_transactions (account_id, direction, external_tx_id, booked_at, counterparty_name, amount, currency, fx_rate, amount_uah)
+      VALUES ($1, 'out', $2, '2026-08-20T10:00:00Z', 'х', $3, $4, $5, $6)`, [acc, ext, amount, ccy, rate, amount * rate]);
+    await ins(card, "mono:bad", -492.24, "USD", 44.7);          // роздутий: гривня, підписана доларом
+    await ins(card, "mono:ok", -100, "UAH", 1);
+    await ins(uts, "privat:usd", -10, "USD", 41.3);             // Приват — інша семантика, не чіпати
+    await ins(safe, "safe:usd", -20, "USD", 41.3);              // Сейф у валюті — справжні долари
+    await c.query(schema);
+    const row = async (ext: string) => (await c.query(`SELECT currency, fx_rate::float8 AS r, amount_uah::float8 AS u FROM bank_transactions WHERE external_tx_id = $1`, [ext])).rows[0];
+    assert.deepEqual(await row("mono:bad"), { currency: "UAH", r: 1, u: -492.24 }, "🔴 роздутий запис моно не виправлено");
+    assert.deepEqual(await row("mono:ok"), { currency: "UAH", r: 1, u: -100 });
+    assert.deepEqual(await row("privat:usd"), { currency: "USD", r: 41.3, u: -413 }, "🔴 зачеплено запис Привату");
+    assert.deepEqual(await row("safe:usd"), { currency: "USD", r: 41.3, u: -826 }, "🔴 зачеплено валютний запис Сейфу");
+    await c.query(schema);
+    assert.deepEqual(await row("mono:bad"), { currency: "UAH", r: 1, u: -492.24 }, "🔴 повторний прогін щось змінив");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1229 — КАРТКА ПРАЦІВНИКА ЗА IBAN (Роман 07.10.2026: «номер карти 1100, а айбан можна збоку»). Із IBAN рахунок
+ * обирається за ним — навіть коли 4 цифри картки не збіглися (картку перевипустили / це ФОП); IBAN не знайдено — null, без
+ * підміни; рахунок компанії правило IBAN не зачіпає (його IBAN — реквізити); форма приймає IBAN замість цифр, сміття — ні.
+ * 🧨 Червоніє, якщо IBAN ігнорувати, підмінити рахунок за цифрами чи пустити «UA12» як IBAN.
+ */
+test("#1229 КАРТКА ЗА IBAN: IBAN головніший за цифри, не знайдено — нічого; рахунки компаній — як були", async () => {
+  const m = await import("../bankSources/mono.js");
+  const v = await import("./bankAccounts.js");
+  const W = "UA443220010000026204346265292", F = "UA113220010000026000000002937";
+  const info = { accounts: [
+    { id: "w", type: "white", currencyCode: 980, maskedPan: ["487407******5507"], iban: W },
+    { id: "f", type: "fop", currencyCode: 980, maskedPan: [], iban: F },
+    { id: "b", type: "black", currencyCode: 980, maskedPan: ["444111******1100"], iban: "UA000000000000000000000000001" },
+  ] };
+  const row = (x: Record<string, unknown>) => ({ id: 1, bank: "mono" as const, label: "т", currency: "UAH", external_account_id: null, iban: null, env_key_name: "T", company: "staff", ...x });
+  assert.equal(m.accountFor(info, row({ mono_pan_last4: "1100", iban: "ua44 3220 0100 0002 6204 3462 6529 2" }))?.id, "w", "🔴 IBAN проігноровано — узято картку за цифрами");
+  assert.equal(m.accountFor(info, row({ mono_pan_last4: null, iban: F }))?.id, "f", "🔴 ФОП-рахунок (без номера картки) не знайдено за IBAN");
+  assert.equal(m.accountFor(info, row({ mono_pan_last4: "1100", iban: "UA999999999999999999999999999" })), null, "🔴 IBAN не знайдено, а рахунок підмінено");
+  assert.equal(m.accountFor(info, row({ mono_pan_last4: "1100" }))?.id, "b", "🔴 без IBAN цифри більше не працюють");
+  assert.equal(m.accountFor({ accounts: [{ id: "fop", type: "fop", currencyCode: 980, iban: F }] }, row({ company: "fop_mono", iban: "UA000000000000000000000000077" }))?.id, "fop",
+    "🔴 IBAN-реквізит рахунку компанії зламав вибір ФОП");
+  assert.equal(v.validateNewAccount({ company: "staff", bank: "mono", label: "к", envKeyName: "MONO_TOKEN_X", iban: W }).iban, W, "🔴 картку з IBAN без цифр не прийнято");
+  assert.throws(() => v.validateNewAccount({ company: "staff", bank: "mono", label: "к", envKeyName: "MONO_TOKEN_X", iban: "UA12" }), "🔴 сміття прийнято як IBAN");
+  assert.throws(() => v.validateNewAccount({ company: "staff", bank: "mono", label: "к", envKeyName: "MONO_TOKEN_X" }), "🔴 картку без цифр і без IBAN прийнято");
+  assert.match(SRC("routes/bank.ts"), /external_account_id = CASE WHEN iban IS DISTINCT FROM \$\$\{ibanParam\}/, "🔴 зміна IBAN картки не скидає привʼязку");
 });
 
 /**

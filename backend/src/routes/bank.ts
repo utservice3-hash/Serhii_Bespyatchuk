@@ -9,7 +9,7 @@ import { statementData } from "../core/bankStatement.js";
 import { statementFile } from "../core/bankStatementCsv.js";
 import { addManual, setManualDeleted, listManual } from "../core/bankManual.js";
 import { FinError, type Db } from "../core/finance.js";
-import { normLast4 } from "../bankSources/mono.js";
+import { normLast4, normIban } from "../bankSources/mono.js";
 import { tokenFor } from "../bankSources/token.js";
 import { validateNewAccount, checkEnvKeyName } from "../core/bankAccounts.js";
 
@@ -221,7 +221,7 @@ bankRouter.post("/accounts", requirePerm("manage_bank_accounts"), async (req, re
   const ins = await pool.query<{ id: number }>(
     `INSERT INTO bank_accounts (company,bank,label,currency,external_account_id,is_active,legal_name,edrpou_ipn,iban,bank_name,mfo,purpose,env_key_name,finance_only,mono_pan_last4)
      VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
-    [v.company, v.bank, v.label, v.currency, v.isActive, b.legalName ?? null, b.edrpouIpn ?? null, b.iban ?? null, b.bankName ?? null,
+    [v.company, v.bank, v.label, v.currency, v.isActive, b.legalName ?? null, b.edrpouIpn ?? null, v.iban ?? b.iban ?? null, b.bankName ?? null,
      b.mfo ?? null, b.purpose ?? null, v.envKeyName, v.financeOnly, v.monoPanLast4]);
   await writeAudit({ ...audit(req), action: "bank.account.create", targetType: "bank_account", targetId: String(ins.rows[0].id), targetLabel: v.label,
     details: { company: v.company, bank: v.bank, envKeyName: v.envKeyName, financeOnly: v.financeOnly } });
@@ -241,8 +241,21 @@ bankRouter.patch("/accounts/:id", requirePerm("manage_bank_accounts"), async (re
     try { b.envKeyName = checkEnvKeyName(cur.rows[0].bank, b.envKeyName); }
     catch (e) { if (e instanceof FinError) return res.status(e.status).json({ error: e.message }); throw e; }
   }
+  // IBAN картки працівника — ключ вибору рахунку в моно (`accountFor`): лише справжній IBAN, а зміна скидає привʼязку.
+  let staffIban = false;
+  if ("iban" in b) {
+    const cur = await pool.query<{ company: string }>(`SELECT company FROM bank_accounts WHERE id = $1`, [id]);
+    if (cur.rows[0]?.company === "staff") {
+      const raw = String(b.iban ?? "").trim();
+      const iban = raw ? normIban(raw) : null;
+      if (raw && !iban) return res.status(400).json({ error: "IBAN — UA і 27 цифр (пробіли можна)" });
+      b.iban = iban; staffIban = true;
+    }
+  }
   const sets: string[] = []; const params: unknown[] = [];
-  for (const [k, col] of Object.entries(map)) if (k in b) { params.push(b[k]); sets.push(`${col} = $${params.length}`); }
+  let ibanParam = 0;
+  for (const [k, col] of Object.entries(map)) if (k in b) { params.push(b[k]); sets.push(`${col} = $${params.length}`); if (k === "iban") ibanParam = params.length; }
+  if (staffIban) sets.push(`external_account_id = CASE WHEN iban IS DISTINCT FROM $${ibanParam} THEN NULL ELSE external_account_id END`);
   // Останні 4 цифри картки (моно): рівно 4 цифри або порожньо. Змінились — привʼязку до рахунку скидаємо, щоб синк
   // знайшов картку наново, а не тягнув стару (картка працівника, 07.10.2026).
   if ("monoPanLast4" in b) {
