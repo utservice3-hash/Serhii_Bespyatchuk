@@ -1,6 +1,7 @@
-// monobank Personal API. Токен — process.env[account.env_key_name] (напр. MONO_TOKEN_FOP).
+// monobank Personal API. Токен — `tokenFor(account.env_key_name)` (лише `MONO_TOKEN_…`, напр. MONO_TOKEN_FOP; див. token.ts).
 // GET /personal/statement/{account}/{from}/{to} (unix сек, ≤31 день/запит), заголовок X-Token.
 import type { AccountBalance, BankAccountRow, NormalizedTx } from "./types.js";
+import { tokenFor } from "./token.js";
 
 const BASE = "https://api.monobank.ua";
 const CCY: Record<string, string> = { "980": "UAH", "840": "USD", "978": "EUR" };
@@ -81,7 +82,7 @@ async function fetchClientInfo(token: string): Promise<MonoClientInfo> {
  *  перший. Повертає id або null. Викликається ЛИШЕ поки external_account_id не збережено —
  *  щоб не бити ліміт mono «1 запит / 60с» client-info щоциклу. */
 export async function resolveAccountId(account: BankAccountRow): Promise<string | null> {
-  const token = account.env_key_name ? process.env[account.env_key_name] : undefined;
+  const token = tokenFor(account.env_key_name);
   if (!token) throw new Error(`monobank: немає env ${account.env_key_name}`);
   return accountFor(await fetchClientInfo(token), account)?.id ?? null;
 }
@@ -89,14 +90,14 @@ export async function resolveAccountId(account: BankAccountRow): Promise<string 
 /** IBAN привʼязаного рахунку з того самого `client-info` (кеш 5 хв — без зайвого запиту). Потрібен, щоб поповнення
  *  картки з наших рахунків впізнавались як «між своїми» (`bankTotals`). null — банк не дав. */
 export async function resolveIban(account: BankAccountRow): Promise<string | null> {
-  const token = account.env_key_name ? process.env[account.env_key_name] : undefined;
+  const token = tokenFor(account.env_key_name);
   if (!token) return null;
   return accountFor(await fetchClientInfo(token), account)?.iban ?? null;
 }
 
 /** Залишок ФОП-рахунку з client-info (balance — у копійках). null → «—» (нема ключа / нема ФОП). */
 export async function fetchBalance(account: BankAccountRow): Promise<AccountBalance | null> {
-  const token = account.env_key_name ? process.env[account.env_key_name] : undefined;
+  const token = tokenFor(account.env_key_name);
   if (!token) return null;
   const fop = accountFor(await fetchClientInfo(token), account);
   if (!fop) return null;
@@ -136,7 +137,7 @@ async function fetchWindow(acc: string, token: string, from: number, to: number,
 }
 
 export async function fetchTransactions(account: BankAccountRow, since: Date): Promise<NormalizedTx[]> {
-  const token = account.env_key_name ? process.env[account.env_key_name] : undefined;
+  const token = tokenFor(account.env_key_name);
   if (!token) throw new Error(`monobank: немає env ${account.env_key_name}`);
   // ⚠️ НІКОЛИ не '0' (дефолт = особиста картка власника, її бачили б усі ролі). Синкаємо лише
   // явний рахунок рядка: збережений external_account_id або резолв через client-info (ФОП чи картка

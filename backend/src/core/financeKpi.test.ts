@@ -728,35 +728,26 @@ test("#1222 КАРТКА ЗА ЦИФРАМИ: дві black — береться 
 });
 
 /**
- * #1223 — ЖИВИЙ SQL: РАЗОВИЙ КРОК КАРТКИ ПРАЦІВНИКА. Схема створює рівно один рахунок «Картка Олександра Ступаківського»:
- * `staff`, моно, токен `MONO_TOKEN_SASHA`, «лише фінанси», ВИМКНЕНИЙ, без цифр; повторний прогін не дублює; видалений не
- * відроджується; база не пускає «12a4» у цифри. Вимкнена картка в «Надходження / Витрати» не йде, увімкнена — йде.
- * 🧨 Червоніє, якщо рахунок увімкнено одразу, видно не лише фінансам, крок повторюється або воскресає.
+ * #1223 — ЖИВИЙ SQL: КАРТКИ У СХЕМІ. База пускає «картку працівника» (`staff`) і рівно 4 цифри (не «12a4»); самих карток
+ * схема НЕ створює (їх додає людина кнопкою, #1224); вимкнена картка у «Надходження / Витрати» не йде, увімкнена — йде.
+ * 🧨 Червоніє, якщо схема знову зашиє картку, база пустить не цифри або вимкнена картка потрапить у суми.
  */
-test("#1223 ЖИВИЙ SQL: картка працівника — один рахунок, вимкнений, «лише фінанси»; не дублюється й не воскресає", async (t) => {
+test("#1223 ЖИВИЙ SQL: картки — схема пускає staff і рівно 4 цифри, сама карток не створює; вимкнена — не в сумах", async (t) => {
   const s = await scratchDb(t);
   if (!s) return;
   const k = await import("./financeKpi.js");
   const { db, c } = s;
-  const schema = readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8");
   try {
-    const card = async () => (await c.query(`SELECT id, company, bank, env_key_name, finance_only, is_active, mono_pan_last4 FROM bank_accounts WHERE company = 'staff'`)).rows;
-    const one = await card();
-    assert.equal(one.length, 1, "🔴 рахунку картки працівника немає або їх кілька");
-    assert.deepEqual({ ...one[0], id: 0 }, { id: 0, company: "staff", bank: "mono", env_key_name: "MONO_TOKEN_SASHA", finance_only: true, is_active: false, mono_pan_last4: null },
-      "🔴 картка не вимкнена, не «лише фінанси» або не з тим токеном");
-    await c.query(schema);
-    assert.equal((await card()).length, 1, "🔴 повторний прогін схеми задвоїв картку");
+    assert.equal((await c.query(`SELECT count(*)::int AS n FROM bank_accounts WHERE company = 'staff'`)).rows[0].n, 0, "🔴 схема сама створила картку");
+    const id = (await c.query(`INSERT INTO bank_accounts (company, bank, label, currency, env_key_name, finance_only, is_active, mono_pan_last4)
+      VALUES ('staff', 'mono', 'Картка · тест', 'UAH', 'MONO_TOKEN_T', true, false, '1234') RETURNING id`)).rows[0].id;
     await c.query(`INSERT INTO bank_transactions (account_id, direction, external_tx_id, booked_at, counterparty_name, amount, currency, fx_rate, amount_uah)
-      VALUES ($1, 'out', 'card:1', '2026-10-08T10:00:00Z', 'АЗС', -400, 'UAH', 1, -400)`, [one[0].id]);
+      VALUES ($1, 'out', 'card:1', '2026-10-08T10:00:00Z', 'АЗС', -400, 'UAH', 1, -400)`, [id]);
     assert.equal((await k.bankTotals(db, "2026-10-05", "2026-10-11")).out, 0, "🔴 вимкнена картка потрапила у «Витрати загальні»");
-    await c.query(`UPDATE bank_accounts SET is_active = true, mono_pan_last4 = '1234' WHERE id = $1`, [one[0].id]);
+    await c.query(`UPDATE bank_accounts SET is_active = true WHERE id = $1`, [id]);
     assert.equal((await k.bankTotals(db, "2026-10-05", "2026-10-11")).out, 400, "🔴 увімкнена картка не потрапила у «Витрати загальні»");
-    await assert.rejects(c.query(`UPDATE bank_accounts SET mono_pan_last4 = '12a4' WHERE id = $1`, [one[0].id]), "🔴 база пустила не цифри");
-    await c.query(`DELETE FROM bank_transactions WHERE account_id = $1`, [one[0].id]);
-    await c.query(`DELETE FROM bank_accounts WHERE id = $1`, [one[0].id]);
-    await c.query(schema);
-    assert.equal((await card()).length, 0, "🔴 видалену картку відроджено повторним прогоном схеми");
+    await assert.rejects(c.query(`UPDATE bank_accounts SET mono_pan_last4 = '12a4' WHERE id = $1`, [id]), "🔴 база пустила не цифри");
+    await assert.rejects(c.query(`UPDATE bank_accounts SET company = 'nobody' WHERE id = $1`, [id]), "🔴 база пустила невідому компанію");
   } finally { await s.dispose(); }
 });
 
@@ -777,6 +768,100 @@ test("#1223b ПРОВОДКА КАРТКИ: роут, синк, адаптер �
   const fe = FE("pages/dashboard/sections/BankSection.tsx");
   assert.match(fe, /\{a\.bank === "mono" && <label style=\{\{ fontSize: 12 \}\}>Останні 4 цифри картки \(моно\)/, "🔴 у панелі немає поля цифр картки");
   assert.match(FE("pages/dashboard/sections/FinanceWeekTab.tsx"), /bank_out: "«Виписка»: усі рахунки разом із картками й Сейфом, включно з банківськими комісіями/, "🔴 підказка «Витрат загальних» каже не те, що рахує ядро");
+});
+
+/**
+ * #1224 — ПОЛЯ РАХУНКУ, ЯКІ ПИШЕ ЛЮДИНА (`core/bankAccounts.ts`, «+ Картка» без програміста). Назва змінної ключа —
+ * лише шаблон СВОГО банку: `JWT_SECRET`, `KOMMO_API_TOKEN`, `PRIVAT_TOKEN_X` для моно — відмова (інакше сервер сам
+ * відправив би чужий секрет у банк); картка працівника — лише моно і лише з 4 цифрами; новий рахунок — ЗАВЖДИ вимкнений;
+ * «лише фінанси» для картки працівника — за замовчуванням так. По обидва боки межі.
+ * 🧨 Червоніє, якщо пустити чужу назву, картку без цифр чи створити рахунок увімкненим.
+ */
+test("#1224 ПОЛЯ РАХУНКУ: ключ лише свого банку, картка працівника — моно з 4 цифрами, новий рахунок вимкнений", async () => {
+  const v = await import("./bankAccounts.js");
+  const bad = (f: () => unknown, why: string) => assert.throws(f, (e: unknown) => (e as { status?: number }).status === 400, why);
+  const card = { company: "staff", bank: "mono", label: "Картка Олександра", currency: "UAH", envKeyName: "MONO_TOKEN_SASHA", monoPanLast4: "1234" };
+  assert.deepEqual(v.validateNewAccount(card), { company: "staff", bank: "mono", label: "Картка Олександра", currency: "UAH", envKeyName: "MONO_TOKEN_SASHA",
+    monoPanLast4: "1234", financeOnly: true, isActive: false }, "🔴 правильну картку не прийнято або створено увімкненою / видимою всім");
+  for (const name of ["JWT_SECRET", "KOMMO_API_TOKEN", "DATABASE_URL", "PRIVAT_TOKEN_UTS", "mono_token_x", "MONO_TOKEN_", "MONO_TOKEN_A-B"])
+    bad(() => v.validateNewAccount({ ...card, envKeyName: name }), `🔴 «${name}» прийнято як ключ monobank — сервер відправив би його в банк`);
+  bad(() => v.checkEnvKeyName("privat", "MONO_TOKEN_FOP"), "🔴 ключ моно прийнято для Привату");
+  bad(() => v.checkEnvKeyName("manual", "MONO_TOKEN_X"), "🔴 ключ дописано рахунку без банку");
+  assert.equal(v.checkEnvKeyName("privat", "PRIVAT_TOKEN_UTS"), "PRIVAT_TOKEN_UTS", "🔴 наявну назву Привату відкинуто — зламало б редагування");
+  assert.equal(v.checkEnvKeyName("mono", "  "), null, "🔴 порожня назва — не «без ключа»");
+  bad(() => v.validateNewAccount({ ...card, monoPanLast4: "" }), "🔴 картку працівника прийнято без цифр");
+  bad(() => v.validateNewAccount({ ...card, monoPanLast4: "12345" }), "🔴 прийнято не 4 цифри");
+  bad(() => v.validateNewAccount({ ...card, bank: "privat", envKeyName: "PRIVAT_TOKEN_X" }), "🔴 картку працівника прийнято в Приват (API для фізосіб немає)");
+  bad(() => v.validateNewAccount({ ...card, company: "nobody" }), "🔴 прийнято невідому компанію");
+  bad(() => v.validateNewAccount({ ...card, currency: "PLN" }), "🔴 прийнято невідому валюту");
+  assert.equal(v.validateNewAccount({ ...card, isActive: true }).isActive, false, "🔴 рахунок створено увімкненим на прохання клієнта");
+  assert.equal(v.validateNewAccount({ ...card, company: "fop_mono", monoPanLast4: "" }).financeOnly, false, "🔴 рахунок компанії сховано від усіх без прохання");
+});
+
+/**
+ * #1225 — ТОКЕН БЕЗ РЕСТАРТУ І ЛИШЕ БАНКІВСЬКИЙ (`bankSources/token.ts`). Дописаний у .env `MONO_TOKEN_…` видно одразу,
+ * заміна в файлі діє без перезапуску; `JWT_SECRET` / `KOMMO_API_TOKEN` з того ж файлу й навіть з `process.env` —
+ * НЕ ключ банку; `PRIVAT_TOKEN_…_ID` (merchant id Привату) — ключ. 🧨 Червоніє, якщо читати весь .env або кешувати назавжди.
+ */
+test("#1225 ТОКЕН: .env перечитується без рестарту, з нього береться лише MONO_/PRIVAT_TOKEN_", async () => {
+  const { tokenFor } = await import("../bankSources/token.js");
+  const { mkdtempSync, writeFileSync, utimesSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(path.join(tmpdir(), "uts-env-"));
+  const f = path.join(dir, ".env");
+  try {
+    writeFileSync(f, "JWT_SECRET=секрет\nKOMMO_API_TOKEN=kommo\nPRIVAT_TOKEN_UTS_ID=42\n");
+    assert.equal(tokenFor("MONO_TOKEN_T1225", f), undefined, "🔴 ключ знайдено там, де його немає");
+    writeFileSync(f, "JWT_SECRET=секрет\nKOMMO_API_TOKEN=kommo\nPRIVAT_TOKEN_UTS_ID=42\nMONO_TOKEN_T1225=перший\n");
+    utimesSync(f, new Date(), new Date(Date.now() + 5_000));
+    assert.equal(tokenFor("MONO_TOKEN_T1225", f), "перший", "🔴 дописаний у .env токен не видно без рестарту");
+    writeFileSync(f, "MONO_TOKEN_T1225=другий\n");
+    utimesSync(f, new Date(), new Date(Date.now() + 10_000));
+    assert.equal(tokenFor("MONO_TOKEN_T1225", f), "другий", "🔴 заміну токена в .env не видно без рестарту");
+    assert.equal(tokenFor("PRIVAT_TOKEN_UTS_ID", path.join(dir, "немає")), process.env.PRIVAT_TOKEN_UTS_ID, "🔴 без файлу не впали на process.env");
+    writeFileSync(f, "JWT_SECRET=секрет\nKOMMO_API_TOKEN=kommo\nPRIVAT_TOKEN_UTS_ID=42\n");
+    utimesSync(f, new Date(), new Date(Date.now() + 15_000));
+    assert.equal(tokenFor("PRIVAT_TOKEN_UTS_ID", f), "42", "🔴 merchant id Привату не прочитано");
+    for (const name of ["JWT_SECRET", "KOMMO_API_TOKEN"]) assert.equal(tokenFor(name, f), undefined, `🔴 «${name}» віддано як ключ банку`);
+    const prev = process.env.JWT_SECRET; process.env.JWT_SECRET = prev ?? "x";
+    assert.equal(tokenFor("JWT_SECRET", f), undefined, "🔴 JWT_SECRET із process.env віддано як ключ банку");
+    if (prev === undefined) delete process.env.JWT_SECRET;
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+/**
+ * #1226 — КЛЮЧ БАНКУ ЧИТАЄТЬСЯ ЛИШЕ ЧЕРЕЗ `tokenFor`. Перелік від ПРЕДМЕТА (правило 12): усі файли `backend/src`, де ключ
+ * береться за `env_key_name`, — жоден не звертається до `process.env[…env_key_name…]` напряму; адаптери, синк і роут
+ * кличуть `tokenFor`. 🧨 Червоніє, якщо будь-де повернути прямий `process.env[account.env_key_name]` — обхід білого списку.
+ */
+test("#1226 КЛЮЧ БАНКУ: жодного прямого process.env[…env_key_name…] у коді; адаптери, синк і роут — через tokenFor", async () => {
+  const { readdirSync, statSync: st } = await import("node:fs");
+  const root = path.join(import.meta.dirname, "..", "..", "src");
+  const files: string[] = [];
+  const walk = (d: string) => { for (const n of readdirSync(d)) { const p = path.join(d, n); if (st(p).isDirectory()) walk(p); else if (n.endsWith(".ts") && !n.endsWith(".test.ts")) files.push(p); } };
+  walk(root);
+  assert.ok(files.length > 100, `🔴 обхід знайшов лише ${files.length} файлів — гейту нічого перевіряти`);
+  const direct = files.filter((f) => /process\.env\[\s*[`$\{\w.]*env_key_name/.test(readFileSync(f, "utf8"))).map((f) => path.relative(root, f));
+  assert.deepEqual(direct, [], "🔴 ключ банку читається повз tokenFor (білий список обійдено)");
+  for (const f of ["bankSources/mono.ts", "bankSources/privat.ts", "jobs/syncBank.ts", "routes/bank.ts", "tools/rekeyPrivat.ts"])
+    assert.match(SRC(f), /tokenFor\((account|acc|a)\.env_key_name\)/, `🔴 ${f} не бере ключ через tokenFor`);
+});
+
+/**
+ * #1227 — «+ КАРТКА» У ПАНЕЛІ. Форма живе в блоці керування рахунками (його бачить лише `manage_bank_accounts`), шле
+ * моно + назву змінної + 4 цифри + «лише фінанси»; у картці рахунку без ключа — пояснення «рядок у .env, рестарт не
+ * потрібен». 🧨 Червоніє, якщо форму винести з блоку керування, перестати слати цифри чи прибрати пояснення.
+ */
+test("#1227 «+ КАРТКА»: форма лише в керуванні рахунками, шле моно з цифрами й змінною; без ключа — пояснення", () => {
+  const fe = FE("pages/dashboard/sections/BankSection.tsx");
+  const block = fe.slice(fe.indexOf("function AccountsBlock("), fe.indexOf("function HiddenBlock("));
+  assert.ok(block.length > 0, "🔴 блок керування рахунками не знайдено");
+  assert.match(block, /<AddCardForm onAdded=/, "🔴 «+ Картка» не в блоці керування рахунками");
+  assert.equal((fe.match(/<AddCardForm /g) ?? []).length, 1, "🔴 «+ Картка» рендериться ще десь — поза правом керування");
+  assert.match(fe, /\{canAccounts && <AccountsBlock /, "🔴 блок керування рахунками не за правом");
+  assert.match(fe, /saveBankAccount\(null, \{ company: f\.company, bank: "mono", label: f\.label, currency: f\.currency, envKeyName: f\.env, monoPanLast4: f\.last4, financeOnly: f\.financeOnly \}/,
+    "🔴 форма не шле моно, змінну, цифри чи «лише фінанси»");
+  assert.match(block, /у серверному \.env ще немає — додайте рядок/, "🔴 картка без ключа мовчить, що робити");
 });
 
 /**

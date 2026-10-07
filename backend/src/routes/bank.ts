@@ -10,6 +10,8 @@ import { statementFile } from "../core/bankStatementCsv.js";
 import { addManual, setManualDeleted, listManual } from "../core/bankManual.js";
 import { FinError, type Db } from "../core/finance.js";
 import { normLast4 } from "../bankSources/mono.js";
+import { tokenFor } from "../bankSources/token.js";
+import { validateNewAccount, checkEnvKeyName } from "../core/bankAccounts.js";
 
 export const bankRouter = Router();
 bankRouter.use(requireAuth); // tab-гейт «bank» — усі ролі (screen_access); + auto-asyncH через lib/asyncRoutes
@@ -197,7 +199,7 @@ bankRouter.get("/accounts", async (req, res) => {
        FROM bank_accounts WHERE $1::boolean OR NOT finance_only ORDER BY is_active DESC, label`, [canSeePrivate]);
   const accounts = r.rows.map((a) => {
     const out: Record<string, unknown> = {
-      api_connected: a.bank === "manual" || !!(a.env_key_name && process.env[a.env_key_name]),
+      api_connected: a.bank === "manual" || !!tokenFor(a.env_key_name),
       finance_only: a.finance_only,
     };
     for (const f of ACCOUNT_PUBLIC_FIELDS) out[f] = a[f];
@@ -212,15 +214,17 @@ bankRouter.get("/accounts", async (req, res) => {
 // --- Мутації реквізитів (право manage_bank_accounts) ---
 bankRouter.post("/accounts", requirePerm("manage_bank_accounts"), async (req, res) => {
   const b = req.body ?? {};
-  if (!["uts", "automuv", "fop_privat", "fop_mono", "staff"].includes(b.company)) return res.status(400).json({ error: "Невірна company" });
-  if (!["mono", "privat"].includes(b.bank)) return res.status(400).json({ error: "Невірний bank" });
-  if (!String(b.label ?? "").trim()) return res.status(400).json({ error: "Потрібна назва (label)" });
+  // Правила полів — в одному місці для «створити» і «змінити» (`core/bankAccounts.ts`, #1224): ключ лише свого банку,
+  // картка працівника — моно + 4 цифри, новий рахунок завжди вимкнений (вмикає людина, коли токен уже в .env).
+  let v;
+  try { v = validateNewAccount(b); } catch (e) { if (e instanceof FinError) return res.status(e.status).json({ error: e.message }); throw e; }
   const ins = await pool.query<{ id: number }>(
-    `INSERT INTO bank_accounts (company,bank,label,currency,external_account_id,is_active,legal_name,edrpou_ipn,iban,bank_name,mfo,purpose,env_key_name)
-     VALUES ($1,$2,$3,COALESCE($4,'UAH'),$5,COALESCE($6,true),$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
-    [b.company, b.bank, String(b.label).trim(), b.currency, b.externalAccountId ?? null, b.isActive,
-     b.legalName ?? null, b.edrpouIpn ?? null, b.iban ?? null, b.bankName ?? null, b.mfo ?? null, b.purpose ?? null, b.envKeyName ?? null]);
-  await writeAudit({ ...audit(req), action: "bank.account.create", targetType: "bank_account", targetId: String(ins.rows[0].id), targetLabel: String(b.label) });
+    `INSERT INTO bank_accounts (company,bank,label,currency,external_account_id,is_active,legal_name,edrpou_ipn,iban,bank_name,mfo,purpose,env_key_name,finance_only,mono_pan_last4)
+     VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+    [v.company, v.bank, v.label, v.currency, v.isActive, b.legalName ?? null, b.edrpouIpn ?? null, b.iban ?? null, b.bankName ?? null,
+     b.mfo ?? null, b.purpose ?? null, v.envKeyName, v.financeOnly, v.monoPanLast4]);
+  await writeAudit({ ...audit(req), action: "bank.account.create", targetType: "bank_account", targetId: String(ins.rows[0].id), targetLabel: v.label,
+    details: { company: v.company, bank: v.bank, envKeyName: v.envKeyName, financeOnly: v.financeOnly } });
   res.json({ ok: true, id: ins.rows[0].id });
 });
 
@@ -230,6 +234,13 @@ bankRouter.patch("/accounts/:id", requirePerm("manage_bank_accounts"), async (re
   const map: Record<string, string> = { label: "label", currency: "currency", externalAccountId: "external_account_id",
     isActive: "is_active", legalName: "legal_name", edrpouIpn: "edrpou_ipn", iban: "iban", bankName: "bank_name", mfo: "mfo", purpose: "purpose", envKeyName: "env_key_name",
     vatIpn: "vat_ipn", legalAddress: "legal_address", director: "director", bankEdrpou: "bank_edrpou", keyCard: "key_card" };
+  // Назва змінної ключа — лише шаблон банку ЦЬОГО рахунку (`checkEnvKeyName`): інакше сюди можна вписати чужий секрет.
+  if ("envKeyName" in b) {
+    const cur = await pool.query<{ bank: string }>(`SELECT bank FROM bank_accounts WHERE id = $1`, [id]);
+    if (!cur.rows[0]) return res.status(404).json({ error: "Рахунок не знайдено" });
+    try { b.envKeyName = checkEnvKeyName(cur.rows[0].bank, b.envKeyName); }
+    catch (e) { if (e instanceof FinError) return res.status(e.status).json({ error: e.message }); throw e; }
+  }
   const sets: string[] = []; const params: unknown[] = [];
   for (const [k, col] of Object.entries(map)) if (k in b) { params.push(b[k]); sets.push(`${col} = $${params.length}`); }
   // Останні 4 цифри картки (моно): рівно 4 цифри або порожньо. Змінились — привʼязку до рахунку скидаємо, щоб синк

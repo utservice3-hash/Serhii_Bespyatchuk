@@ -4,6 +4,7 @@ import { pool } from "../db/pool.js";
 import { isBankFee } from "../core/bankReport.js";
 import { toUah } from "../bankSources/fx.js";
 import * as mono from "../bankSources/mono.js";
+import { tokenFor } from "../bankSources/token.js";
 import * as privat from "../bankSources/privat.js";
 import type { BankAccountRow, NormalizedTx, BankAdapter } from "../bankSources/types.js";
 import { syncBankOutcome } from "./syncBankOutcome.js";
@@ -47,7 +48,7 @@ export async function syncBank(): Promise<{ synced: number; inserted: number; sk
   // джоби — див. `syncBankOutcome.ts`, чому «рядок у лозі» тут не рахується за сигнал.
   const failed: { label: string; error: string }[] = [];
   for (const acc of accounts.rows) {
-    const token = acc.env_key_name ? process.env[acc.env_key_name] : undefined;
+    const token = tokenFor(acc.env_key_name);
     if (!token) { skipped.push(acc.label); console.warn(`syncBank: рахунок «${acc.label}» пропущено — немає env ${acc.env_key_name}`); continue; }
     const adapter = ADAPTERS[acc.bank];
     if (!adapter) { skipped.push(acc.label); continue; }
