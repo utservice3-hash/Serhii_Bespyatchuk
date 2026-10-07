@@ -7,7 +7,7 @@ import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery,
 import { FC_PIPELINES, handoffDealStates, clientSuccessHistory } from "./money.js";
 import { stageName } from "./stageNames.js";
 import {
-  handoffView, trendWindow, mergeBucketRows, assembleTrend, handoffDealRow, handoffMoneyBuckets, dayInRange, LINK_BEFORE_SEC, LINK_AFTER_SEC,
+  handoffView, trendWindow, mergeBucketRows, assembleTrend, handoffDealRow, handoffMoneyBuckets, leadgenPeriod, LINK_BEFORE_SEC, LINK_AFTER_SEC,
   type HandoffScope, type LeadgenHandoffMoney, type HandoffLinkInfo, type LeadgenHandoffDeal, type HandoffRowDeps,
   type LeadgenPersonBucketRow, type StageBucketRow, type CallBucketRow, type TrendMoneyBucket,
 } from "./leadgenHandoffRules.js";
@@ -359,9 +359,8 @@ export async function leadgenHandoffMoney(
   const links = await handoffLinks((await firstStageEventDay()) ?? from, to);
   const [states, history] = await Promise.all([
     handoffDealStates(links.flatMap((l) => (l.dealId == null ? [] : [l.dealId]))), historyFor(links)]);
-  // Кінець періоду — не пізніше сьогодні: «Очікування» рахується станом на кінець, а майбутніх днів ще немає.
-  const today = kyivToday();
-  const inP = dayInRange(from, to < today ? to : today);
+  // Кінець періоду — не пізніше сьогодні; цілі місяці — очікування з перенесеним, решта — лише нові (`leadgenPeriod`).
+  const inP = leadgenPeriod(from, to, kyivToday());
   const view = handoffView(links, states, scope, history, inP);
   const deals = view.rows.map((h) =>
     handoffDealRow(h, h.dealId == null ? undefined : states.get(h.dealId), HANDOFF_ROW_DEPS));
