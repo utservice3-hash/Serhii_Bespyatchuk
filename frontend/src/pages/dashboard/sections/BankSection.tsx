@@ -18,6 +18,7 @@ const ACC_COLOR: Record<string, { bg: string; fg: string; short: string }> = {
   automuv: { bg: "rgba(124,58,237,0.14)", fg: "#7c3aed", short: "АМ" },
   fop_privat: { bg: "rgba(22,163,74,0.14)", fg: "#16a34a", short: "ФОП·П" },
   fop_mono: { bg: "rgba(217,119,6,0.14)", fg: "#d97706", short: "ФОП·М" },
+  staff: { bg: "rgba(13,148,136,0.14)", fg: "#0d9488", short: "Картка" },
 };
 // детерміноване групування пробілом (без locale/.replace(/,/g) — там була помилка з комою)
 const fmtUah = (n: number) => {
@@ -310,7 +311,7 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
   const [msg, setMsg] = useState("");
   const startEdit = (a: BankAccount) => { setEditId(a.id); setDraft({ ...a }); };
   const save = async () => {
-    try { await saveBankAccount(editId, { legalName: draft.legal_name ?? undefined, edrpouIpn: draft.edrpou_ipn ?? undefined, vatIpn: draft.vat_ipn ?? undefined, iban: draft.iban ?? undefined, keyCard: draft.key_card ?? undefined, bankName: draft.bank_name ?? undefined, mfo: draft.mfo ?? undefined, bankEdrpou: draft.bank_edrpou ?? undefined, legalAddress: draft.legal_address ?? undefined, director: draft.director ?? undefined, purpose: draft.purpose ?? undefined } as never); setEditId(null); await onChange(); setMsg("✓ Збережено"); }
+    try { await saveBankAccount(editId, { legalName: draft.legal_name ?? undefined, edrpouIpn: draft.edrpou_ipn ?? undefined, vatIpn: draft.vat_ipn ?? undefined, iban: draft.iban ?? undefined, keyCard: draft.key_card ?? undefined, bankName: draft.bank_name ?? undefined, mfo: draft.mfo ?? undefined, bankEdrpou: draft.bank_edrpou ?? undefined, legalAddress: draft.legal_address ?? undefined, director: draft.director ?? undefined, purpose: draft.purpose ?? undefined, ...(draft.bank === "mono" ? { monoPanLast4: draft.mono_pan_last4 ?? "" } : {}) } as never); setEditId(null); await onChange(); setMsg("✓ Збережено"); }
     catch (e) { setMsg("✗ " + err(e)); }
   };
   const toggleActive = async (a: BankAccount) => { try { await saveBankAccount(a.id, { isActive: !a.is_active } as never); await onChange(); } catch (e) { alert(err(e)); } };
@@ -318,6 +319,7 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
     <div className="chart-card" style={{ marginTop: 16 }}>
       <h2 className="chart-title">⚙️ Налаштування виписки · Реквізити компаній</h2>
       <p style={{ fontSize: 12.5, color: MUTED, marginTop: -4 }}>Активні реквізити — які компанії/рахунки підключені. 🔑 API-ключ кожного рахунку зберігається лише в серверному env (не в базі й не в інтерфейсі) — тут видно лише, підключений він (API ✓) чи ні. «Вимкнути» ховає рахунок з виписки, історію лишає.</p>
+      <AddCardForm onAdded={async (text) => { await onChange(); setMsg(text); }} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: 14 }}>
         {accounts.map((a) => (
           <div key={a.id} style={{ border: "1px solid var(--border)", borderRadius: 14, padding: 16, opacity: a.is_active ? 1 : 0.6 }}>
@@ -329,11 +331,15 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
                 <input type="checkbox" checked={a.is_active} onChange={() => toggleActive(a)} /> {a.is_active ? "активна" : "вимкнена"}
               </label>
             </div>
+            {a.bank !== "manual" && !a.api_connected && <div style={{ fontSize: 12, color: "#b45309", background: "rgba(217,119,6,0.1)", borderRadius: 8, padding: "6px 10px", marginBottom: 8 }}>
+              🔑 {a.env_key_name ? <>Токена <code>{a.env_key_name}</code> у серверному .env ще немає — додайте рядок <code>{a.env_key_name}=…</code>; рестарт не потрібен, стан оновиться за хвилину.</> : <>Назву змінної з ключем не задано.</>}
+            </div>}
             {editId === a.id ? (
               <div style={{ display: "grid", gap: 8 }}>
                 {([["legal_name", "Юр. назва"], ["edrpou_ipn", "ЄДРПОУ"], ["vat_ipn", "ІПН (ПДВ)"], ["iban", "IBAN"], ["key_card", "Ключ-карта"], ["bank_name", "Банк"], ["mfo", "МФО"], ["bank_edrpou", "ЄДРПОУ банку"], ["legal_address", "Юр. адреса"], ["director", "Директор"], ["purpose", "Призначення"]] as const).map(([k, lbl]) => (
                   <label key={k} style={{ fontSize: 12 }}>{lbl}<input value={(draft[k] as string) ?? ""} onChange={(e) => setDraft({ ...draft, [k]: e.target.value })} style={{ ...inp, width: "100%", boxSizing: "border-box", marginTop: 2 }} /></label>
                 ))}
+                {a.bank === "mono" && <label style={{ fontSize: 12 }}>Останні 4 цифри картки (моно){a.company === "staff" ? " — обовʼязково" : ""}<input inputMode="numeric" maxLength={4} placeholder="1234" value={draft.mono_pan_last4 ?? ""} onChange={(e) => setDraft({ ...draft, mono_pan_last4: e.target.value.replace(/\D/g, "") })} style={{ ...inp, width: "100%", boxSizing: "border-box", marginTop: 2 }} /></label>}
                 <div style={{ display: "flex", gap: 8 }}>
                   <button onClick={save} style={{ padding: "7px 14px", borderRadius: 8, border: "none", background: "#16a34a", color: "#fff", fontWeight: 700, cursor: "pointer" }}>Зберегти</button>
                   <button onClick={() => setEditId(null)} style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: MUTED, cursor: "pointer" }}>Скасувати</button>
@@ -342,6 +348,7 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
             ) : (
               <div style={{ fontSize: 13, lineHeight: 1.9 }}>
                 <Req label="ЄДРПОУ" v={a.edrpou_ipn} /><Req label="ІПН (ПДВ)" v={a.vat_ipn ?? null} /><Req label="IBAN" v={a.iban} /><Req label="Ключ-карта" v={a.key_card ?? null} /><Req label="Банк · МФО" v={a.bank_name ? `${a.bank_name}${a.mfo ? " · " + a.mfo : ""}${a.bank_edrpou ? " · ЄДРПОУ банку " + a.bank_edrpou : ""}` : null} /><Req label="Юр. адреса" v={a.legal_address ?? null} /><Req label="Директор" v={a.director ?? null} /><Req label="Призначення" v={a.purpose} />
+                {a.bank === "mono" && <Req label="Картка (моно)" v={a.mono_pan_last4 ? `•••• ${a.mono_pan_last4}` : a.company === "staff" ? "цифри не вказано — картку не буде привʼязано" : null} />}
                 <button onClick={() => startEdit(a)} style={{ marginTop: 8, padding: "5px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "#2f6fdb", cursor: "pointer", fontSize: 12.5 }}>✎ Редагувати</button>
               </div>
             )}
@@ -350,6 +357,44 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
       </div>
       {msg && <div style={{ fontSize: 13, marginTop: 10, color: msg.startsWith("✓") ? "#16a34a" : "#dc2626" }}>{msg}</div>}
       <p style={{ fontSize: 12, color: MUTED, marginTop: 12 }}>🔑 Щоб додати рахунок — задай назву env-змінної з ключем (напр. <code>PRIVAT_TOKEN_UTS</code>) у серверному оточенні; поля для самого ключа тут навмисно немає.</p>
+    </div>
+  );
+}
+// ─────────── «+ Картка»: будь-яка картка monobank без програміста (Роман 07.10.2026) ───────────
+// Токен — лише рядком у серверному .env (`MONO_TOKEN_…`); сервер бачить його без рестарту. Картка створюється
+// вимкненою: вмикається перемикачем, коли в її картці вже «API ✓». Правила полів — на сервері (`core/bankAccounts.ts`).
+const CARD_OWNERS: [string, string][] = [["staff", "Картка працівника"], ["uts", "ТОВ ЮТС"], ["automuv", "ТОВ Автомув"], ["fop_mono", "ФОП Беспятчук"]];
+function AddCardForm({ onAdded }: { onAdded: (text: string) => void | Promise<void> }) {
+  const empty = { label: "", company: "staff", currency: "UAH", last4: "", env: "MONO_TOKEN_", financeOnly: true };
+  const [open, setOpen] = useState(false);
+  const [f, setF] = useState(empty);
+  const [msg, setMsg] = useState<string | null>(null);
+  const add = async () => {
+    try {
+      await saveBankAccount(null, { company: f.company, bank: "mono", label: f.label, currency: f.currency, envKeyName: f.env, monoPanLast4: f.last4, financeOnly: f.financeOnly } as never);
+      setF(empty); setOpen(false); setMsg(null);
+      await onAdded(`✓ Картку «${f.label}» додано вимкненою. Далі: 1) у серверному .env рядок ${f.env}=<токен>; 2) дочекайтесь «API ✓» у її картці; 3) увімкніть її.`);
+    } catch (e) { setMsg("✗ " + err(e)); }
+  };
+  if (!open) return <button onClick={() => setOpen(true)} style={{ margin: "0 0 12px", padding: "7px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "#2f6fdb", fontWeight: 700, cursor: "pointer" }}>+ Картка monobank</button>;
+  const field = (label: string, el: React.ReactNode, grow = false) => <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11.5, color: MUTED, fontWeight: 600, flex: grow ? "1 1 220px" : undefined }}>{label}{el}</label>;
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 12, padding: "12px 14px", marginBottom: 14, background: "var(--hover-bg)" }}>
+      <b style={{ fontSize: 14 }}>+ Картка monobank</b>
+      <p style={{ fontSize: 12, color: MUTED, margin: "4px 0 10px" }}>Токен власник картки бере на api.monobank.ua і передає особисто — його дописують рядком у серверний .env. Тут лише назва цієї змінної. Особисті картки Привату підключити не можна: у Привату для фізосіб API немає.</p>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+        {field("Назва", <input aria-label="Назва картки" placeholder="Картка Олександра" value={f.label} onChange={(e) => setF({ ...f, label: e.target.value })} style={{ ...inp, width: "100%", boxSizing: "border-box" }} />, true)}
+        {field("Чия", <select aria-label="Чия картка" value={f.company} onChange={(e) => setF({ ...f, company: e.target.value })} style={inp}>{CARD_OWNERS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>)}
+        {field("Валюта", <select aria-label="Валюта картки" value={f.currency} onChange={(e) => setF({ ...f, currency: e.target.value })} style={inp}><option>UAH</option><option>USD</option><option>EUR</option></select>)}
+        {field("Останні 4 цифри", <input aria-label="Останні 4 цифри" inputMode="numeric" maxLength={4} placeholder="1234" value={f.last4} onChange={(e) => setF({ ...f, last4: e.target.value.replace(/\D/g, "") })} style={{ ...inp, width: 90 }} />)}
+        {field("Змінна з токеном у .env", <input aria-label="Змінна з токеном" value={f.env} onChange={(e) => setF({ ...f, env: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "") })} style={{ ...inp, width: 200, fontFamily: "monospace" }} />)}
+      </div>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
+        <label style={{ fontSize: 12.5, display: "inline-flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={f.financeOnly} onChange={(e) => setF({ ...f, financeOnly: e.target.checked })} /> 🔒 лише фінанси (менеджери й тімліди не бачать)</label>
+        <button onClick={() => void add()} style={{ marginLeft: "auto", padding: "7px 16px", borderRadius: 10, border: "none", background: RED, color: "#fff", fontWeight: 700, cursor: "pointer" }}>Додати</button>
+        <button onClick={() => { setOpen(false); setMsg(null); }} style={{ padding: "7px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: MUTED, cursor: "pointer" }}>Скасувати</button>
+      </div>
+      {msg && <div style={{ fontSize: 13, marginTop: 8, color: "#dc2626" }}>{msg}</div>}
     </div>
   );
 }
