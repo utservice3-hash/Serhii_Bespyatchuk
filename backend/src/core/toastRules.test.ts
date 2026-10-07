@@ -105,3 +105,71 @@ test("#1233 СПОВІЩЕННЯ: один тост — у фронті нема
     assert.match(readFileSync(path.join(root, rel), "utf8"), /=\s*useToast\(\)/, `🔴 ${rel} не користується спільним тостом`);
   }
 });
+
+const feSpec = (rel: string) => fileURLToPath(new URL(`../../../frontend/src/${rel}`, import.meta.url).href.replace("/dist/", "/src/"));
+
+/**
+ * #1234 — ЗВУК: ОДИН АУДІОКОНТЕКСТ НА СТОРІНКУ, І ВИМИКАЧ ПРАЦЮЄ. Доти кожен сигнал створював новий
+ * `AudioContext` і не закривав його — після кількох десятків подій звук зникав. Виконуємо модуль із
+ * заглушкою аудіо: п'ять сигналів — один контекст; вимкнено — жодного тону; за замовчуванням — увімкнено.
+ * 🧨 Червоніє, якщо створювати контекст на кожен сигнал або ігнорувати вимикач.
+ */
+test("#1234 СПОВІЩЕННЯ: звук — один аудіоконтекст на сторінку, вимикач вимикає, за замовчуванням увімкнено", async () => {
+  let made = 0, tones = 0;
+  const store = new Map<string, string>();
+  class FakeCtx {
+    state = "running"; currentTime = 0; destination = {};
+    constructor() { made++; }
+    resume() { return Promise.resolve(); }
+    createOscillator() { tones++; return { connect() {}, frequency: { value: 0 }, type: "", start() {}, stop() {} }; }
+    createGain() { return { connect() {}, gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} } }; }
+  }
+  const g = globalThis as Record<string, unknown>;
+  g.window = { AudioContext: FakeCtx };
+  g.localStorage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } };
+  try {
+    const S = await import(feSpec("components/notifySound.ts") + "?t=1") as { playNotifySound: (s: boolean) => void; soundEnabled: () => boolean; setSoundEnabled: (b: boolean) => void };
+    assert.equal(S.soundEnabled(), true, "🔴 звук вимкнений за замовчуванням");
+    for (let i = 0; i < 5; i++) S.playNotifySound(i % 2 === 0);
+    assert.equal(made, 1, `🔴 ${made} аудіоконтекстів на 5 сигналів — кожен сигнал створює свій`);
+    assert.equal(tones, 3 * 2 + 2 * 1, "🔴 «добре» має два тони, нейтральний — один");
+    S.setSoundEnabled(false);
+    const before = tones;
+    S.playNotifySound(true);
+    assert.equal(tones, before, "🔴 вимкнений звук однаково звучить");
+  } finally { delete g.window; delete g.localStorage; }
+});
+
+/**
+ * #1235 — СПОВІЩЕННЯ БРАУЗЕРА: лише на ПРИХОВАНІЙ вкладці, з `tag`; дозвіл — після першого кліку,
+ * а не при відкритті сторінки. Фікстура по обидва боки: видима вкладка — нічого; прихована — одне
+ * сповіщення з тегом; до кліку запиту дозволу немає, після кліку — рівно один.
+ * 🧨 Червоніє, якщо сповіщати й на видимій вкладці (дубль поруч із тостом) чи питати дозвіл одразу.
+ */
+test("#1235 СПОВІЩЕННЯ: браузер — лише прихована вкладка з тегом; дозвіл — після першого кліку", async () => {
+  const shown: { body: string; tag: string }[] = [];
+  let asked = 0;
+  const listeners: Array<() => void> = [];
+  class FakeNotification {
+    static permission = "default";
+    static requestPermission() { asked++; return Promise.resolve("granted"); }
+    constructor(_t: string, o: { body: string; tag: string }) { shown.push(o); }
+  }
+  const g = globalThis as Record<string, unknown>;
+  const doc = { hidden: false, addEventListener: (_e: string, f: () => void) => listeners.push(f), removeEventListener: () => {} };
+  g.Notification = FakeNotification; g.document = doc;
+  try {
+    const B = await import(feSpec("components/browserNotify.ts") + "?t=1") as { askNotifyPermissionOnFirstClick: () => void; notifyBrowser: (b: string, t: string) => void };
+    B.askNotifyPermissionOnFirstClick();
+    assert.equal(asked, 0, "🔴 дозвіл питають одразу, без дії людини");
+    assert.equal(listeners.length, 1, "🔴 немає очікування першого кліку");
+    listeners[0]();
+    assert.equal(asked, 1, "🔴 після кліку дозвіл так і не попросили");
+    FakeNotification.permission = "granted";
+    B.notifyBrowser("видима", "k1");
+    assert.equal(shown.length, 0, "🔴 сповіщення на ВИДИМІЙ вкладці — дубль поруч із тостом");
+    doc.hidden = true;
+    B.notifyBrowser("Чекає вашого прийняття", "accept-5");
+    assert.deepEqual(shown, [{ body: "Чекає вашого прийняття", tag: "accept-5" }], "🔴 на прихованій вкладці сповіщення немає або без тегу");
+  } finally { delete g.Notification; delete g.document; }
+});

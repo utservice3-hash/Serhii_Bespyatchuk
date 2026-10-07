@@ -92,33 +92,13 @@ import { TasksSection } from "./dashboard/sections/TasksSection";
 import { GoalsSection } from "./dashboard/sections/GoalsSection";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { useToast } from "../components/Toasts";
+import { playNotifySound } from "../components/notifySound";
+import { askNotifyPermissionOnFirstClick, notifyBrowser } from "../components/browserNotify";
 import { ReportPlanSection } from "./dashboard/sections/ReportPlanSection";
 import { KvpReportSection } from "./dashboard/sections/KvpReportSection";
 import { PlansTabs } from "./dashboard/sections/PlansTabs";
 import { DataQualitySection } from "./dashboard/sections/DataQualitySection";
 
-/** Short pleasant beep via Web Audio (no asset needed, CSP-safe). Double for "done". */
-function beep(success: boolean) {
-  try {
-    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    if (!Ctx) return;
-    const ctx = new Ctx();
-    const tone = (freq: number, at: number) => {
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.connect(g); g.connect(ctx.destination);
-      o.type = "sine";
-      o.frequency.value = freq;
-      g.gain.setValueAtTime(0.0001, ctx.currentTime + at);
-      g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + at + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + at + 0.32);
-      o.start(ctx.currentTime + at);
-      o.stop(ctx.currentTime + at + 0.34);
-    };
-    tone(success ? 880 : 620, 0);
-    if (success) tone(1180, 0.18);
-  } catch { /* audio not available — ignore */ }
-}
 
 /**
  * 🗣 ПРИЧИНА ВІДМОВИ — З ТІЛА ВІДПОВІДІ СЕРВЕРА, А НЕ З AXIOS. `err.message` — це
@@ -220,10 +200,8 @@ export function Dashboard() {
   }) => {
     toast(o.text, { event: true, tone: o.tone, key: o.key, src: o.src, head: o.head, onDismiss: o.onDismiss,
       action: { label: o.label, run: () => navigateTo(o.go) } });
-    beep(o.success);
-    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-      try { new Notification("UTS Dashboard", { body: o.plain }); } catch { /* ignore */ }
-    }
+    playNotifySound(o.success);
+    notifyBrowser(o.plain, o.key);
   };
   const [managerOptions, setManagerOptions] = useState<ManagerOption[]>([]);
   /**
@@ -377,11 +355,8 @@ export function Dashboard() {
 
   // Ask for notification permission once, and poll tasks in the background (any
   // section) so status-change alerts still fire when you're elsewhere.
-  useEffect(() => {
-    if (typeof Notification !== "undefined" && Notification.permission === "default") {
-      Notification.requestPermission().catch(() => {});
-    }
-  }, []);
+  // Дозвіл на сповіщення браузера — після першого кліку людини, а не одразу при відкритті сторінки.
+  useEffect(() => { askNotifyPermissionOnFirstClick(); }, []);
   // Фоновий рефетч ЗЛИВАЄТЬСЯ з незбереженими правками, а не замінює їх:
   // `setTasks` навпростець стирав текст, який людина ще набирає.
   //
