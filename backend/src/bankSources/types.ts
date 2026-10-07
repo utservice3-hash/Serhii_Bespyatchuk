@@ -10,6 +10,8 @@ export interface BankAccountRow {
   env_key_name: string | null;
   /** Моно: тип рахунку під тим самим токеном (black / white / madeInUkraine …); null — ФОП, як було. */
   mono_type?: string | null;
+  /** Моно: останні 4 цифри картки — точний вибір рахунку під токеном (обовʼязково для картки працівника `staff`). */
+  mono_pan_last4?: string | null;
 }
 
 export interface NormalizedTx {
@@ -33,6 +35,8 @@ export interface BankAdapter {
   /** Опційно: резолвить банківський id рахунку (напр. mono ФОП-рахунок через client-info),
    *  коли external_account_id ще не збережено. Повертає id або null (не знайдено). */
   resolveAccountId?(account: BankAccountRow): Promise<string | null>;
+  /** Опційно: IBAN привʼязаного рахунку (mono client-info), щоб перекази між нашими рахунками впізнавались. */
+  resolveIban?(account: BankAccountRow): Promise<string | null>;
   /** Опційно: поточний залишок рахунку (mono client-info / privat closing-balance).
    *  Повертає null, якщо недоступно (нема ключа / 403 / банк не дав) — тоді «—», без крашу. */
   fetchBalance?(account: BankAccountRow): Promise<AccountBalance | null>;

@@ -5595,3 +5595,17 @@ CREATE TABLE IF NOT EXISTS feedback_files (
 CREATE INDEX IF NOT EXISTS idx_feedback_files_fb ON feedback_files(feedback_id, created_at);
 -- 🔒 Скриншоти можуть містити що завгодно з екрана (клієнтів, суми). Дзеркало — FORBIDDEN_TABLES. Тримає #496.
 REVOKE ALL ON feedback_files FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💳 КАРТКИ У «ВИПИСЦІ» БЕЗ ПРОГРАМІСТА (Роман 07.10.2026; перша — робоча картка Олександра Ступаківського).
+--  · `company = 'staff'` — картка людини, не одна з наших компаній: у підсумок «ФОП Беспятчук» вона не йде.
+--  · `mono_pan_last4` — останні 4 цифри: картку працівника привʼязуємо ЛИШЕ за ними (під його токеном лежать і особисті
+--    рахунки).
+--  · Самих карток схема НЕ створює: їх додає людина кнопкою «+ Картка» в «Налаштуваннях виписки» (створюється
+--    вимкненою; токен — рядком `MONO_TOKEN_…` у .env, сервер бачить його без рестарту, `bankSources/token.ts`).
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE bank_accounts DROP CONSTRAINT IF EXISTS bank_accounts_company_check;
+ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_company_check CHECK (company IN ('uts','automuv','fop_privat','fop_mono','staff'));
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS mono_pan_last4 TEXT;
+ALTER TABLE bank_accounts DROP CONSTRAINT IF EXISTS bank_accounts_mono_pan_last4_check;
+ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_mono_pan_last4_check CHECK (mono_pan_last4 IS NULL OR mono_pan_last4 ~ '^[0-9]{4}$');

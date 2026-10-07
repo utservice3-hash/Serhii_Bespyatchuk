@@ -1,8 +1,9 @@
 // PrivatBank «Приват24 для бізнесу» Autoclient — statements/transactions.
-// Токен — process.env[account.env_key_name] (напр. PRIVAT_TOKEN_UTS); опційно merchant id
-// у process.env[<env>_ID] (PRIVAT_TOKEN_UTS → PRIVAT_TOKEN_UTS_ID) або окремій PRIVAT_ID_*.
+// Токен — `tokenFor(account.env_key_name)` (лише `PRIVAT_TOKEN_…`, напр. PRIVAT_TOKEN_UTS); опційно merchant id
+// у `<env>_ID` (PRIVAT_TOKEN_UTS → PRIVAT_TOKEN_UTS_ID), теж через `tokenFor` (див. token.ts).
 // Заголовки: token (+ id, якщо є). Параметри: acc (IBAN), startDate=dd-mm-yyyy.
 import type { AccountBalance, BankAccountRow, NormalizedTx } from "./types.js";
+import { tokenFor } from "./token.js";
 
 const BASE = "https://acp.privatbank.ua/api/statements/transactions";
 const BALANCE_URL = "https://acp.privatbank.ua/api/statements/balance";
@@ -101,9 +102,9 @@ export function normalizePrivat(it: PrivatItem, accountCurrency: string): Normal
 }
 
 export async function fetchTransactions(account: BankAccountRow, since: Date): Promise<NormalizedTx[]> {
-  const token = account.env_key_name ? process.env[account.env_key_name] : undefined;
+  const token = tokenFor(account.env_key_name);
   if (!token) throw new Error(`privat: немає env ${account.env_key_name}`);
-  const id = (account.env_key_name && process.env[`${account.env_key_name}_ID`]) || undefined;
+  const id = (account.env_key_name && tokenFor(`${account.env_key_name}_ID`)) || undefined;
   const acc = account.external_account_id ?? account.iban;
   if (!acc) throw new Error(`privat: немає IBAN/рахунку для ${account.label}`);
   const p = (n: number) => String(n).padStart(2, "0");
@@ -134,9 +135,9 @@ interface PrivatBalance { balanceOut?: string | number; balanceOutEq?: string | 
 
 /** Closing-balance рахунку (Autoclient /statements/balance). 403/помилка → null («—»). */
 export async function fetchBalance(account: BankAccountRow): Promise<AccountBalance | null> {
-  const token = account.env_key_name ? process.env[account.env_key_name] : undefined;
+  const token = tokenFor(account.env_key_name);
   if (!token) return null;
-  const id = (account.env_key_name && process.env[`${account.env_key_name}_ID`]) || undefined;
+  const id = (account.env_key_name && tokenFor(`${account.env_key_name}_ID`)) || undefined;
   const acc = account.external_account_id ?? account.iban;
   if (!acc) return null;
   const p = (n: number) => String(n).padStart(2, "0");
