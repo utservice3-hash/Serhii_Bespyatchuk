@@ -1024,7 +1024,7 @@ async function nestedRouteRegistrations(file: string, src: string): Promise<stri
  * читає КОЖЕН файл `routes/*.ts` деревом TypeScript, а не регуляркою.
  * 🧨 Червоніє, якщо будь-яку реєстрацію роуту поставити всередину іншого обробника чи функції.
  */
-test("#894 РОУТ НА ВЕРХНЬОМУ РІВНІ: жодна реєстрація роуту в routes/*.ts не вкладена в обробник", async () => {
+test("#896 РОУТ НА ВЕРХНЬОМУ РІВНІ: жодна реєстрація роуту в теці routes не вкладена в обробник", async () => {
   const fixture = 'import { Router } from "express";\nexport const r = Router();\nr.get("/a", (q, s) => { if (!q) { s.end();\nr.put("/b", () => {}); return; } s.end(); });\n';
   assert.deepEqual(await nestedRouteRegistrations("fixture.ts", fixture), ['fixture.ts:4 r.put("/b")'], "фікстура: вкладену реєстрацію не помічено");
   assert.deepEqual(await nestedRouteRegistrations("ok.ts", 'import { Router } from "express";\nexport const r = Router();\nr.get("/a", (q, s) => { s.end(); });\n'), [], "дзеркало: верхній рівень не скаржиться");
