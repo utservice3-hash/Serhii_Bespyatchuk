@@ -82,3 +82,26 @@ test("#1232 СПОВІЩЕННЯ: однаковий ключ замінює т�
   xs = R.upsertToast(xs, { id: 7, tone: "ok" });
   assert.equal(xs.length, 4, "🔴 тости без ключа злились — різні дії людини загубились");
 });
+
+/**
+ * #1233 — ТОСТ ОДИН НА ВЕСЬ ДАШБОРД. До 07.10.2026 їх було три: спільний (внизу праворуч), задачника
+ * й месенджера (угорі праворуч, 7 с) і Опитувань (внизу по центру, 3,2 с). Критерій — від предмета:
+ * у БУДЬ-ЯКОМУ файлі фронта, крім `Toasts.tsx`, не може бути власного стану тостів; задачник,
+ * месенджер (`Dashboard.tsx`) і Опитування кличуть `useToast()`.
+ * 🧨 Червоніє, якщо повернути `const [toasts, setToasts] = useState` чи `toastMsg` у будь-який екран.
+ */
+test("#1233 СПОВІЩЕННЯ: один тост — у фронті немає власного стану тостів поза Toasts.tsx", async () => {
+  const { readdirSync, readFileSync, statSync } = await import("node:fs");
+  const path = await import("node:path");
+  const root = fileURLToPath(new URL("../../../frontend/src", import.meta.url).href.replace("/dist/", "/src/"));
+  const files: string[] = [];
+  const walk = (d: string) => { for (const n of readdirSync(d)) { const p = path.join(d, n); if (statSync(p).isDirectory()) walk(p); else if (/\.tsx?$/.test(n)) files.push(p); } };
+  walk(root);
+  assert.ok(files.length > 100, `🔴 обхід фронта знайшов лише ${files.length} файлів — гейт нічого не перевіряє`);
+  const own = /\[\s*\w*[tT]oasts?(Msg)?\w*\s*,\s*set\w+\s*\]\s*=\s*useState/;
+  const offenders = files.filter((f) => !f.endsWith(path.join("components", "Toasts.tsx")) && own.test(readFileSync(f, "utf8"))).map((f) => path.relative(root, f));
+  assert.deepEqual(offenders, [], "🔴 власний тост поза Toasts.tsx: " + offenders.join(", "));
+  for (const rel of ["pages/Dashboard.tsx", "pages/dashboard/sections/SurveysSection.tsx"]) {
+    assert.match(readFileSync(path.join(root, rel), "utf8"), /=\s*useToast\(\)/, `🔴 ${rel} не користується спільним тостом`);
+  }
+});
