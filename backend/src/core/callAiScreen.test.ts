@@ -197,6 +197,7 @@ interface ViewMod {
   drawerTabs: (transcriptHidden: boolean, turns: number | null) => string[];
   promisesLabel: (promises: number, withDeadline: number) => string;
   blobErrorBody: (data: unknown) => Promise<unknown>;
+  quoteTurnIndex: (turns: readonly { text: string }[] | null, quote: string) => number;
 }
 async function transpile(rel: string, deps: Record<string, string> = {}): Promise<string> {
   const ts = (await import("typescript")).default;
@@ -353,7 +354,7 @@ test("#838 КАРТКА ДЗВІНКА: рядок відкриває панел
   assert.match(sec, /useState<string \| null>\(\(\) => parseCallParam\(window\.location\.search\)\)/, "🔴 ?call= не відкриває картку при завантаженні");
   const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
   assert.match(drw, /const tabs = c \? drawerTabs\(c\.transcriptHidden, c\.turns\?\.length \?\? null\) : \[\];/, "🔴 вкладки картки не з правила drawerTabs");
-  assert.match(drw, /tab === "transcript" && tabs\.includes\("transcript"\)/, "🔴 розшифровка показується без перевірки права");
+  assert.match(drw, /const turns = c && tabs\.includes\("transcript"\) \? c\.turns : null;/, "🔴 розшифровка показується без перевірки права");
 });
 
 /**
@@ -625,7 +626,8 @@ test("#864 ЗВІТ ТІМЛІДА НА ЕКРАНІ: блок у «Звіті»
   assert.ok(!/priceDiscussed === false|promiseState === "broken"/.test(card), "🔴 предикат звіту переписано на фронті — друга копія правила");
   assert.match(card, /fetchAiTeamReport\(\{ from, to, teamId \}\)/);
   const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
-  assert.match(drw, /\{c\.canListen && c\.durationSec != null && <RecordingPlayer/, "🔴 запис показується без дозволу сервера");
+  assert.match(drw, /const listen = c != null && c\.canListen && c\.durationSec != null;/, "🔴 запис показується без дозволу сервера");
+  assert.match(drw, /\{listen && \([\s\S]{0,600}?<CallConversation /, "🔴 плеєр не за дозволом listen");
   assert.match(drw, /const can = c\.noteRights\[kind\];/, "🔴 право писати коментар — не з сервера");
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
   assert.match(sec, /\{d\.canSeeExcluded && <button type="button" role="tab"/, "🔴 менеджер бачить вкладку «Виключені»");
@@ -1035,4 +1037,28 @@ test("#894 РОУТ НА ВЕРХНЬОМУ РІВНІ: жодна реєстр�
   const dash = readFileSync(path.join(dir, "dashboard.ts"), "utf8");
   for (const route of ['dashboardRouter.post("/ai-calls/:uniqueid/type"', 'dashboardRouter.put("/ai-calls/:uniqueid/note"', 'dashboardRouter.get("/ai-calls/:uniqueid/recording"'])
     assert.ok(dash.includes("\n" + route), `дзеркало: ${route} існує і починає рядок`);
+});
+
+/**
+ * #895 — РОЗМОВА ЯК У «ПЕРЕВІЗНИКАХ» (Роман 07.10.2026): у картці «Першого дотику» плеєр і репліки — одна система з
+ * «Перевізниками за розмовою»: ▶, смуга з перемоткою, швидкість, клік по репліці перемотує, жовтим — фрази з розбору,
+ * а цитата в розборі має «▶ час». Цитата шукається в репліках ДОСЛІВНО (без регістру й пробілів); не знайдена — −1,
+ * і тоді ні підсвітки, ні перемотки: не вгадуємо місце.
+ * 🧨 Червоніє, якщо вгадувати репліку для не знайденої цитати, прибрати перемотку кліком чи вантажити запис не нашим роутом.
+ */
+test("#895 РОЗМОВА ЯК У «ПЕРЕВІЗНИКАХ»: плеєр і репліки разом, клік перемотує, цитата з розбору — лише дослівна", async () => {
+  const V = await loadView();
+  const turns = [{ text: "Транспортна компанія UTS, добрий день" }, { text: "Маємо 8 тонн труб у Дніпрі" }, { text: "Ціна буде   38 тисяч гривень." }];
+  assert.equal(V.quoteTurnIndex(turns, "ціна буде 38 тисяч"), 2, "🔴 дослівна цитата (інший регістр, інші пробіли) не знайдена");
+  assert.equal(V.quoteTurnIndex(turns, "ціна буде 40 тисяч"), -1, "🔴 не знайдену цитату прив’язано до випадкової репліки");
+  assert.equal(V.quoteTurnIndex(turns, ""), -1, "порожня цитата — без місця");
+  assert.equal(V.quoteTurnIndex(null, "ціна"), -1, "без тексту — без місця");
+  const conv = readFileSync(FE("pages/dashboard/sections/CallConversation.tsx"), "utf8");
+  assert.match(conv, /onClick=\{\(\) => \{ if \(t\.start != null\) seekRef\.current\?\.\(t\.start\); \}\}/, "🔴 клік по репліці не перемотує");
+  assert.match(conv, /setSpeed\(speed === 1 \? 1\.5 : speed === 1\.5 \? 2 : 1\)/, "🔴 немає перемикача швидкості");
+  assert.match(conv, /quoted\.has\(i\) \? <mark/, "🔴 фрази з розбору не підсвічено");
+  const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
+  assert.match(drw, /<CallConversation load=\{\(\) => fetchAiCallRecording\(c\.row\.uniqueid\)\}/, "🔴 запис вантажиться не через наш роут");
+  assert.match(drw, /<QuoteSeek\.Provider value=\{listen && turns \? seekQuote : null\}>/, "🔴 «▶ час» біля цитати без запису чи тексту");
+  assert.ok(!/function RecordingPlayer|<audio controls/.test(drw), "🔴 повернувся старий плеєр браузера");
 });

@@ -223,3 +223,14 @@ export async function blobErrorBody(data: unknown): Promise<unknown> {
     return typeof (body as { error?: unknown } | null)?.error === "string" ? body : data;
   } catch { return data; }
 }
+
+/**
+ * Репліка, у якій прозвучала цитата з розбору: перша, чий текст містить цитату (без регістру й зайвих пробілів).
+ * −1 — цитати немає або вона не знайдена дослівно (тоді в картці не перемотуємо і не підсвічуємо — не вгадуємо).
+ */
+export function quoteTurnIndex(turns: readonly { text: string }[] | null, quote: string): number {
+  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+  const q = norm(quote);
+  if (!turns || q.length < 3) return -1;
+  return turns.findIndex((t) => norm(t.text).includes(q));
+}
