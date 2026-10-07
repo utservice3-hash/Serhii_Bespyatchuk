@@ -724,54 +724,124 @@ function SafeModal({ accounts, canEdit, onClose, onChanged }: { accounts: BankAc
   const undo = async (id: number) => { try { await restoreBankManual(id); setLastDeleted(null); done("Повернуто"); } catch (e) { setMsg(err(e)); } };
   const live = (rows ?? []).filter((r) => !r.deleted);
   const sum = (d: "in" | "out") => live.filter((r) => r.direction === d).reduce((a, r) => a + Math.abs(r.amount_uah), 0);
+  const days = useMemo(() => {
+    const m = new Map<string, BankManualRow[]>();
+    for (const r of rows ?? []) m.set(r.day, [...(m.get(r.day) ?? []), r]);
+    return [...m.entries()];
+  }, [rows]);
+  const net = sum("in") - sum("out");
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: "40px 16px", overflowY: "auto" }}>
-      <div onClick={(e) => e.stopPropagation()} className="chart-card" style={{ maxWidth: 760, width: "100%", position: "relative" }}>
+      <div onClick={(e) => e.stopPropagation()} className="chart-card" style={{ maxWidth: 900, width: "100%", position: "relative" }}>
         <button onClick={onClose} title="Закрити" style={{ position: "absolute", top: 10, right: 10, border: "1px solid var(--border)", background: "var(--card-bg)", borderRadius: 8, width: 34, height: 34, cursor: "pointer", fontSize: 18, color: MUTED }}>✕</button>
-        <h2 className="chart-title">🗄 Сейф · ручні записи</h2>
-        <p style={{ color: MUTED, fontSize: 13, marginTop: 0 }}>Вносьте <b>або кожну операцію, або підсумок тижня</b> — не обидва в одному тижні (інакше тиждень порахується двічі). Записи йдуть у «Виписку», кешфлоу і «Фінанси → Тиждень і місяць». Видно лише адміну й фінансисту.</p>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
-          {accounts.length > 1 && <select value={acc} onChange={(e) => setAcc(Number(e.target.value))} style={inp}>{accounts.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select>}
-          <label style={{ fontSize: 13, color: MUTED }}>Місяць <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={inp} /></label>
-          <span style={{ fontSize: 13 }}>прийшло <b>{fmtMoney(sum("in"))} ₴</b> · пішло <b>{fmtMoney(sum("out"))} ₴</b> <span style={{ color: MUTED }}>(валюта — у гривні за курсом НБУ на дату)</span></span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", paddingRight: 44 }}>
+          <h2 className="chart-title" style={{ marginBottom: 0 }}>🗄 Сейф · ручні записи</h2>
+          <span style={{ fontSize: 11.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: "rgba(217,119,6,0.14)", color: "#b45309", whiteSpace: "nowrap" }}>🔒 лише фінанси</span>
         </div>
-        {canEdit && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end", padding: 10, border: "1px solid var(--border)", borderRadius: 10, marginBottom: 10 }}>
-          <select aria-label="Вид запису" value={kind} onChange={(e) => setKind(e.target.value as "op" | "week")} style={inp}><option value="op">+ операція</option><option value="week">+ підсумок тижня</option></select>
-          <input aria-label={kind === "op" ? "Дата операції" : "Будь-який день тижня"} type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} style={inp} />
-          {kind === "op" ? <>
-            <select aria-label="Напрямок" value={f.direction} onChange={(e) => setF({ ...f, direction: e.target.value as "in" | "out" })} style={inp}><option value="in">прийшло</option><option value="out">пішло</option></select>
-            <input aria-label="Сума" inputMode="decimal" placeholder="сума ₴" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} style={{ ...inp, width: 120 }} />
-          </> : <>
-            <input aria-label="Прийшло за тиждень" inputMode="decimal" placeholder="прийшло ₴" value={f.inAmount} onChange={(e) => setF({ ...f, inAmount: e.target.value })} style={{ ...inp, width: 120 }} />
-            <input aria-label="Пішло за тиждень" inputMode="decimal" placeholder="пішло ₴" value={f.outAmount} onChange={(e) => setF({ ...f, outAmount: e.target.value })} style={{ ...inp, width: 120 }} />
-          </>}
-          <select aria-label="Валюта" value={f.currency} onChange={(e) => setF({ ...f, currency: e.target.value as "UAH" | "USD" | "EUR" })} style={inp}>
-            <option value="UAH">₴ UAH</option><option value="USD">$ USD</option><option value="EUR">€ EUR</option></select>
-          <select aria-label="Категорія" value={f.itemId} onChange={(e) => setF({ ...f, itemId: e.target.value })} style={{ ...inp, maxWidth: 220 }}>
-            <option value="">категорія (стаття)…</option>{items.map((i) => <option key={i.id} value={i.id}>{i.label}</option>)}</select>
-          <input aria-label="Призначення" placeholder="призначення (необовʼязково)" value={f.purpose} onChange={(e) => setF({ ...f, purpose: e.target.value })} style={{ ...inp, flex: 1, minWidth: 160 }} />
-          <button onClick={() => void add()} style={{ padding: "8px 14px", borderRadius: 10, border: "none", background: RED, color: "#fff", fontWeight: 700, cursor: "pointer" }}>Внести</button>
+        <p style={{ color: MUTED, fontSize: 12.5, margin: "6px 0 14px" }}>Вносьте <b>або кожну операцію, або підсумок тижня</b> — не обидва в одному тижні (інакше тиждень порахується двічі). Записи йдуть у «Виписку», кешфлоу і «Фінанси → Тиждень і місяць». Видно ролям із правом бачити рух грошей (адмін, СЕО, операційний директор, КВП, бухгалтерія); менеджери й тімліди Сейфу не бачать.</p>
+
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+          {accounts.length > 1 && <select aria-label="Рахунок" value={acc} onChange={(e) => setAcc(Number(e.target.value))} style={inp}>{accounts.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select>}
+          <label style={{ fontSize: 13, color: MUTED, display: "inline-flex", alignItems: "center", gap: 8 }}>Місяць <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={inp} /></label>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 14 }}>
+          <SafeTile label="прийшло за місяць" value={`+${fmtUah(sum("in"))}`} color="#16a34a" />
+          <SafeTile label="пішло за місяць" value={`−${fmtUah(sum("out"))}`} color="#dc2626" />
+          <SafeTile label="сальдо" value={`${net < 0 ? "−" : net > 0 ? "+" : ""}${fmtUah(net)}`} color={net < 0 ? "#dc2626" : "var(--text)"} />
+          <SafeTile label="записів" value={String(live.length)} hint="валюта — у гривні за курсом НБУ на дату" />
+        </div>
+
+        {canEdit && <div style={{ padding: "12px 14px", border: "1px solid var(--border)", borderRadius: 12, marginBottom: 12, background: "var(--hover-bg)" }}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <SafeField label="Вид"><select aria-label="Вид запису" value={kind} onChange={(e) => setKind(e.target.value as "op" | "week")} style={inp}><option value="op">операція</option><option value="week">підсумок тижня</option></select></SafeField>
+            <SafeField label={kind === "op" ? "Дата" : "Будь-який день тижня"}><input aria-label={kind === "op" ? "Дата операції" : "Будь-який день тижня"} type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} style={inp} /></SafeField>
+            {kind === "op" ? <>
+              <SafeField label="Напрямок"><select aria-label="Напрямок" value={f.direction} onChange={(e) => setF({ ...f, direction: e.target.value as "in" | "out" })} style={inp}><option value="in">прийшло</option><option value="out">пішло</option></select></SafeField>
+              <SafeField label="Сума"><input aria-label="Сума" inputMode="decimal" placeholder="0" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} style={{ ...inp, width: 130 }} /></SafeField>
+            </> : <>
+              <SafeField label="Прийшло за тиждень"><input aria-label="Прийшло за тиждень" inputMode="decimal" placeholder="0" value={f.inAmount} onChange={(e) => setF({ ...f, inAmount: e.target.value })} style={{ ...inp, width: 130 }} /></SafeField>
+              <SafeField label="Пішло за тиждень"><input aria-label="Пішло за тиждень" inputMode="decimal" placeholder="0" value={f.outAmount} onChange={(e) => setF({ ...f, outAmount: e.target.value })} style={{ ...inp, width: 130 }} /></SafeField>
+            </>}
+            <SafeField label="Валюта"><select aria-label="Валюта" value={f.currency} onChange={(e) => setF({ ...f, currency: e.target.value as "UAH" | "USD" | "EUR" })} style={inp}>
+              <option value="UAH">₴ UAH</option><option value="USD">$ USD</option><option value="EUR">€ EUR</option></select></SafeField>
+          </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginTop: 10 }}>
+            <SafeField label="Категорія (стаття «План/факт»)" grow={1}><select aria-label="Категорія" value={f.itemId} onChange={(e) => setF({ ...f, itemId: e.target.value })} style={{ ...inp, width: "100%" }}>
+              <option value="">без категорії</option>{items.map((i) => <option key={i.id} value={i.id}>{i.label}</option>)}</select></SafeField>
+            <SafeField label="Призначення" grow={2}><input aria-label="Призначення" placeholder="необовʼязково" value={f.purpose} onChange={(e) => setF({ ...f, purpose: e.target.value })} style={{ ...inp, width: "100%", boxSizing: "border-box" }} /></SafeField>
+            <button onClick={() => void add()} style={{ padding: "8px 18px", borderRadius: 10, border: "none", background: RED, color: "#fff", fontWeight: 700, cursor: "pointer", height: 34 }}>Внести</button>
+          </div>
         </div>}
         {msg && <p style={{ fontSize: 13, margin: "0 0 8px" }}>{msg}{lastDeleted != null && <> · <button onClick={() => void undo(lastDeleted)} style={{ border: "none", background: "none", color: "#2f6fdb", cursor: "pointer", fontWeight: 700 }}>Повернути</button></>}</p>}
-        {rows == null ? <p className="loading-text">Завантаження…</p> : rows.length === 0 ? <p className="loading-text">За цей місяць записів немає.</p> : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead><tr style={{ color: MUTED, textAlign: "left" }}><th>Дата</th><th>Вид</th><th style={{ textAlign: "right" }}>Сума</th><th>Категорія</th><th>Призначення</th><th>Хто</th><th /></tr></thead>
-            <tbody>{rows.map((r) => (
-              <tr key={r.id} style={{ borderTop: "1px solid var(--border)", opacity: r.deleted ? 0.45 : 1 }}>
-                <td>{r.day.slice(8, 10)}.{r.day.slice(5, 7)}</td>
-                <td>{r.kind === "week" ? "підсумок тижня" : "операція"}</td>
-                <td style={{ textAlign: "right", color: r.direction === "in" ? "#16a34a" : RED, fontWeight: 700 }}>{r.direction === "in" ? "+" : "−"}{fmtMoney(Math.abs(r.amount))} {r.currency === "UAH" ? "₴" : r.currency}
-                  {r.currency !== "UAH" && <div style={{ fontSize: 11, color: MUTED, fontWeight: 400 }}>≈ {fmtMoney(Math.abs(r.amount_uah))} ₴</div>}</td>
-                <td style={{ color: r.item ? undefined : MUTED }}>{r.item ?? "—"}</td>
-                <td>{r.purpose ?? (r.kind === "week" ? r.name : "—")}</td>
-                <td style={{ color: MUTED }}>{r.entered_by ?? "—"}</td>
-                <td style={{ textAlign: "right" }}>{canEdit && (r.deleted
-                  ? <button onClick={() => void undo(r.id)} style={{ border: "none", background: "none", color: "#2f6fdb", cursor: "pointer" }}>Повернути</button>
-                  : <button aria-label={`Видалити запис ${r.day}`} onClick={() => void del(r)} style={{ border: "none", background: "none", color: RED, cursor: "pointer" }}>🗑</button>)}</td>
-              </tr>))}</tbody>
-          </table>
-        )}
+
+        {rows == null ? <p className="loading-text">Завантаження…</p> : rows.length === 0 ? <p className="loading-text">За цей місяць записів немає.</p> : days.map(([day, list]) => {
+          const alive = list.filter((r) => !r.deleted);
+          const dIn = alive.filter((r) => r.direction === "in").reduce((a, r) => a + Math.abs(r.amount_uah), 0);
+          const dOut = alive.filter((r) => r.direction === "out").reduce((a, r) => a + Math.abs(r.amount_uah), 0);
+          return (
+            <div key={day} style={{ marginBottom: 6 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, padding: "10px 4px 4px", borderBottom: "1px solid var(--border)", fontSize: 12.5 }}>
+                <b>{safeDayLabel(day)}</b>
+                <span style={{ color: MUTED, whiteSpace: "nowrap" }}>{dIn > 0 && <span style={{ color: "#16a34a", fontWeight: 700 }}>+{fmtUah(dIn)}</span>}{dIn > 0 && dOut > 0 && " · "}{dOut > 0 && <span style={{ color: "#dc2626", fontWeight: 700 }}>−{fmtUah(dOut)}</span>}</span>
+              </div>
+              {list.map((r) => <SafeRow key={r.id} r={r} canEdit={canEdit} onDelete={() => void del(r)} onUndo={() => void undo(r.id)} />)}
+            </div>
+          );
+        })}
       </div>
+    </div>
+  );
+}
+
+const WEEKDAY = ["неділя", "понеділок", "вівторок", "середа", "четвер", "пʼятниця", "субота"];
+function safeDayLabel(day: string): string {
+  const [y, m, d] = day.split("-").map(Number);
+  return `${String(d).padStart(2, "0")}.${String(m).padStart(2, "0")} · ${WEEKDAY[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]}`;
+}
+function SafeTile({ label, value, color, hint }: { label: string; value: string; color?: string; hint?: string }) {
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 12, padding: "10px 14px" }}>
+      <div style={{ fontSize: 18, fontWeight: 800, color: color ?? "var(--text)", whiteSpace: "nowrap" }}>{value}</div>
+      <div style={{ fontSize: 11.5, color: MUTED, display: "inline-flex", alignItems: "center", gap: 3 }}>{label}{hint && <InfoHint text={hint} />}</div>
+    </div>
+  );
+}
+function SafeField({ label, grow, children }: { label: string; grow?: number; children: React.ReactNode }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11.5, color: MUTED, fontWeight: 600, flex: grow ? `${grow} 1 200px` : undefined, minWidth: 0 }}>
+      {label}{children}
+    </label>
+  );
+}
+// Запис Сейфу — у тому ж двоповерховому вигляді, що й рядок «Виписки» (`TxRow`): згори категорія + сума, знизу
+// призначення й хто вніс. Невідоме — словами: «без категорії», «з таблиці Сейфу» (перенесене 05.10.2026), «невідомо хто».
+function SafeRow({ r, canEdit, onDelete, onUndo }: { r: BankManualRow; canEdit: boolean; onDelete: () => void; onUndo: () => void }) {
+  const inDir = r.direction === "in";
+  const sign = inDir ? "+" : "−";
+  const isUah = r.currency === "UAH";
+  const title = r.kind === "week" ? "Підсумок тижня" : r.item;
+  const who = r.imported ? "з таблиці Сейфу" : r.entered_by ?? "невідомо хто";
+  const purpose = r.purpose ?? (r.kind === "week" ? r.name : null);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "9px 4px", borderBottom: "1px solid var(--border)", opacity: r.deleted ? 0.45 : 1 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+          <span style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: title ? "var(--text)" : MUTED, fontStyle: title ? undefined : "italic" }}>
+            {title ?? "без категорії"}{r.deleted && <span style={{ fontWeight: 400, fontStyle: "normal", fontSize: 12, color: MUTED }}> · видалено</span>}
+          </span>
+          <div style={{ flexShrink: 0, textAlign: "right" }}>
+            <div style={{ fontWeight: 800, fontSize: 14.5, color: inDir ? "#16a34a" : "#dc2626", whiteSpace: "nowrap", textDecoration: r.deleted ? "line-through" : undefined }}>{sign}{fmtMoney(Math.abs(r.amount), !isUah)} {isUah ? "₴" : r.currency}</div>
+            {!isUah && <div style={{ fontSize: 11, color: MUTED, whiteSpace: "nowrap" }}>≈ {sign}{fmtMoney(Math.abs(r.amount_uah))} ₴</div>}
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 3, minWidth: 0, fontSize: 12.5, color: MUTED }}>
+          <span title={purpose ?? ""} style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{purpose ?? "без призначення"}</span>
+          <span style={{ flexShrink: 0, fontSize: 11.5, whiteSpace: "nowrap" }}>{who}</span>
+        </div>
+      </div>
+      <div style={{ minWidth: 34, flexShrink: 0, textAlign: "right" }}>{canEdit && (r.deleted
+        ? <button onClick={onUndo} style={{ border: "none", background: "none", color: "#2f6fdb", cursor: "pointer", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", padding: "0 2px" }}>Повернути</button>
+        : <button aria-label={`Видалити запис ${r.day}`} title="Видалити" onClick={onDelete} style={{ border: "none", background: "none", color: RED, cursor: "pointer", fontSize: 15 }}>🗑</button>)}</div>
     </div>
   );
 }

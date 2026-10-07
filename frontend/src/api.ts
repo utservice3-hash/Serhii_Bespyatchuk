@@ -3990,7 +3990,9 @@ export interface BankBalancesResp { balances: BankBalance[]; period?: { from: st
 export interface CashflowMonth { month: string; incoming_uah: number; outgoing_uah: number; net_uah: number }
 // 💰 Ручний рахунок «Сейф» (прохід 2г фінансів): записи по операції або підсумком тижня. Правила — на сервері.
 export interface BankManualRow { id: number; day: string; direction: "in" | "out"; amount: number; currency: string; amount_uah: number; item_id: number | null; item: string | null;
-  kind: "op" | "week"; name: string | null; purpose: string | null; deleted: boolean; entered_by: string | null }
+  kind: "op" | "week"; name: string | null; purpose: string | null; deleted: boolean; entered_by: string | null;
+  /** перенесено з таблиці «Сейф» (а не внесено в дашборді) — тоді «хто» пишемо словами */
+  imported: boolean }
 export async function fetchBankManual(account: number, from: string, to: string): Promise<BankManualRow[]> {
   const { data } = await api.get<{ rows: BankManualRow[] }>("/bank/manual", { params: { account, from, to } });
   return data.rows;
