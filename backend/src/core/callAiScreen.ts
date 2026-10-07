@@ -479,7 +479,11 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
   const { kommoId: _k, dealCreatedAt: _d, ...rest } = row;
   const mc = done && raw.result ? raw.result.manager_channel : null;
   return {
-    row: { ...rest, kommoIds: deals },
+    // 🩹 07.10.2026: стан рядка картки — той самий, що в списку (найгірша обіцянка + позначка «поза телефонією»).
+    // Без нього `row.promiseState` лишався null з `foldRow`, і в картці НІКОЛИ не зʼявлялись поля «Передзвонив поза
+    // телефонією» й «Опрацьовано» (вони показуються за цим станом) — за 6 днів на проді жодної такої позначки.
+    row: { ...rest, kommoIds: deals,
+      promiseState: withOfflineMark(worstPromiseState(promiseChecks.filter((c): c is PromiseCheck => c != null).map((c) => c.state)), row.offlineNote != null) },
     result: done ? raw.result : null,
     turns: allowed && raw.segments ? raw.segments : null,
     transcriptHidden: !allowed,

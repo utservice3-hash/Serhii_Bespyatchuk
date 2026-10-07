@@ -909,3 +909,32 @@ test("#887 ВТРАЧЕНІ ЛІДИ НА ЕКРАНІ: колонка з мед
   const at0 = rep.indexOf('dashboardRouter.get("/ai-calls/team-report"'), nx = rep.indexOf("dashboardRouter.", at0 + 10);
   assert.match(rep.slice(at0, nx), /reactionMin: r\.reactionMin, reactionOffHours: r\.reactionOffHours,[\s\S]*lost: isLost\(r\)/, "🔴 роут не віддає хвилини чи прапорець «втрачений»");
 });
+
+/**
+ * #888 — КАРТКА ЗНАЄ СТАН ОБІЦЯНКИ (знайдено 06.10.2026 на демо-стенді): `aiCallCard` мусить віддавати в `row.promiseState`
+ * той самий стан, що й список (найгірша обіцянка + позначка «поза телефонією»). Саме за ним картка показує поля
+ * «Передзвонив поза телефонією» й «Опрацьовано»; поки він був null, полів не бачив ніхто, і за 6 днів на проді не
+ * зʼявилось жодної такої позначки.
+ * 🧨 Червоніє, якщо картка знову віддасть null, порахує стан інакше, ніж список, чи забуде позначку «поза телефонією».
+ */
+test("#888 КАРТКА ЗНАЄ СТАН ОБІЦЯНКИ: row.promiseState картки = стан у списку, з позначкою «поза телефонією»", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const { aiCallsList, aiCallCard, setCallNote } = await import("./callAiScreen.js");
+  await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel,manager_id)
+    VALUES (8860,'D8860',8921932,1,'2026-09-25 09:00:00+03','0508800060','ad',9011)`);
+  await c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
+    VALUES ('cs1','2026-09-25 10:00:00+03','out','ANSWERED',60,65,9011,'380508800060','https://rec/x')`);
+  const tid = (await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
+    VALUES ('cs1','elevenlabs','scribe_v2','done','[{"channel":1,"start":0,"end":2,"text":"наберу за пів години","lang":"ukr"}]'::jsonb) RETURNING id`)).rows[0].id;
+  const res = { ...RESULT, objections: [], promises: [{ who: "manager", what: "передзвонити", deadline_text: "за пів години", quote: "q", quote_found: true,
+    channel: "call", deadline_kind: "minutes", deadline_minutes: 30, deadline_date: "", conditional: false }] };
+  await c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result) VALUES ($1,'google','gemini-3.8-flash','first-touch-v3','done',$2::jsonb)`,
+    [tid, JSON.stringify(res)]);
+  const both = async () => [(await aiCallsList(c.db, FAKE_AD, "2026-09-25", "2026-09-25", NOW, {})).rows.find((r) => r.uniqueid === "cs1")?.promiseState,
+    (await aiCallCard(c.db, "cs1", true, {}))?.row.promiseState];
+  assert.deepEqual(await both(), ["broken", "broken"], "🔴 картка не знає «немає дзвінка» — поля «поза телефонією» й «Опрацьовано» не зʼявляться");
+  await setCallNote(c.db, "cs1", "offline", "з мобільного", { userId: 1, name: "Олена Т1" }, new Date("2026-09-25T09:00:00Z"));
+  assert.deepEqual(await both(), ["kept_offline", "kept_offline"], "🔴 картка й список розходяться після позначки «поза телефонією»");
+  const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
+  assert.match(drw, /const needMissed = c\.row\.promiseState === "broken";/, "🔴 картка показує «Опрацьовано» не за станом рядка");
+});
