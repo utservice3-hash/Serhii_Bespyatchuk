@@ -5,7 +5,10 @@ import path from "node:path";
 import { skipReason } from "../db/scratchDb.js";
 
 /**
- * #1080f — «ЗАКРИВАЄ ТОЙ, ХТО ПРИЙМАЄ» НА РОУТІ: обробники виконуються проти бази з нуля.
+ * #1080f — ПРАВА НА СТАТУС НА РОУТІ: обробники виконуються проти бази з нуля.
+ *
+ * 🔓 07.10.2026 Роман: «будь хто може ставити готово». Заборону «закриває лише той,
+ * хто приймає» знято до викату; тут доводиться, що роут її справді не застосовує.
  *
  * `#1080`…`#1080e` перевіряють ПРАВИЛО (чиста функція). Тут — що роут справді його
  * застосовує, і що видача віддає ті самі права, за якими фронт малює меню. Кличемо
@@ -17,11 +20,11 @@ import { skipReason } from "../db/scratchDb.js";
  * ⚠️ «Приймає» тут НЕ адмін навмисно. У проді Юлія — КВП з `admin_scope` і пройшла б
  * як адмін, тобто перевірка не торкнулась би гілки «Приймає» взагалі.
  *
- * 🧨 Червоніє, якщо: дати виконавцю `done` у PATCH; не пустити «Приймає» (він не
+ * 🧨 Червоніє, якщо: повернути виконавцю чи тімліду 403 на `done`; не пустити «Приймає» (він не
  * учасник за `canTouchTask`); віддати у видачі права, що розходяться з PATCH;
  * розповзтись правилом на інші типи задач чи системну задачу без автора.
  */
-test("#1080f РОУТ: виконавець не закриває (403 з іменем), «Приймає» закриває, стороння людина — нічого, видача дзеркалить PATCH", async (t) => {
+test("#1080f РОУТ: виконавець, тімлід і «Приймає» ставлять «Готово», стороння людина — нічого, видача дзеркалить PATCH", async (t) => {
   const { provisionScratch } = await import("../db/scratchDb.js");
   const scratch = provisionScratch();
   if ("unavailable" in scratch) return t.skip(skipReason(scratch));
@@ -94,16 +97,16 @@ test("#1080f РОУТ: виконавець не закриває (403 з іме
     assert.ok(yRow, "🔴 «Приймає» не бачить задачу у своєму списку — закрити її він не зможе");
     assert.equal(yRow!.reviewerName, "Юлія Приймає");
 
-    // ── 3. ВИКОНАВЕЦЬ: рухає до «на затвердження», але не закриває ──
+    // ── 3. ВИКОНАВЕЦЬ І ТІМЛІД: рухають і ставлять «Готово» ──
     assert.equal((await patch("exec", id, { status: "in_progress" })).code, 204);
     assert.equal((await patch("exec", id, { status: "ready_for_approval" })).code, 204,
       "🔴 виконавець не може поставити «Готово на затвердження»");
-    const denied = await patch("exec", id, { status: "done" });
-    assert.equal(denied.code, 403, `🔴 ВИКОНАВЕЦЬ ЗАКРИВ ЗАДАЧУ САМ (код ${denied.code})`);
-    assert.match(String(denied.payload.error), /Юлія Приймає/, "🔴 відмова не називає, хто може закрити");
-    assert.equal(await statusOf(id), "ready_for_approval", "🔴 після 403 статус у базі змінився");
-    // Тімлід виконавця — як виконавець: рухає, не закриває.
-    assert.equal((await patch("lead", id, { status: "done" })).code, 403, "🔴 тімлід закрив задачу замість «Приймає»");
+    const execDone = await patch("exec", id, { status: "done" });
+    assert.equal(execDone.code, 204, `🔴 ВИКОНАВЕЦЬ НЕ МОЖЕ ПОСТАВИТИ «ГОТОВО» — заборона повернулась (код ${execDone.code})`);
+    assert.equal(await statusOf(id), "done");
+    await c.query(`UPDATE tasks SET status='ready_for_approval' WHERE id=$1`, [id]);
+    assert.equal((await patch("lead", id, { status: "done" })).code, 204, "🔴 тімлід виконавця не може поставити «Готово»");
+    await c.query(`UPDATE tasks SET status='ready_for_approval' WHERE id=$1`, [id]);
     // Виконавець не призначає приймати себе.
     assert.equal((await patch("exec", id, { reviewerId: 4 })).code, 403,
       "🔴 виконавець переписав «Приймає» на себе — правило обходиться одним PATCH");
@@ -129,8 +132,9 @@ test("#1080f РОУТ: виконавець не закриває (403 з іме
     const hist = ((await call("GET", "/:id/history", { params: { id: String(id) } })).payload as unknown as
       { history: { toStatus: string; actorRole: string | null; changedByName: string }[] }).history;
     const accepted = hist.filter((h) => h.toStatus === "done");
-    assert.deepEqual(accepted.map((h) => [h.actorRole, h.changedByName]), [["reviewer", "Юлія Приймає"]],
+    assert.ok(accepted.some((h) => h.actorRole === "reviewer" && h.changedByName === "Юлія Приймає"),
       "🔴 історія не відмічає, хто прийняв");
+    assert.ok(accepted.some((h) => h.actorRole === "executor"), "🔴 «Готово» від виконавця не записалось в історію з його роллю");
     assert.ok(hist.some((h) => h.actorRole === "executor"), "роль виконавця не записалась");
 
     // ── 6. АДМІН: усе ──
@@ -149,20 +153,18 @@ test("#1080f РОУТ: виконавець не закриває (403 з іме
     }
     assert.deepEqual(mismatches, [], "🔴 сірий пункт у меню і 403 розійшлись:\n  " + mismatches.join("\n  "));
 
-    // ── 7b. ВИПАДОК 4172/4310/4312: автор = виконавець, приймає інша людина ──
+    // ── 7b. Автор = виконавець, приймає інша людина: «Приймає» не переписує, але закрити може ──
     const own = (await call("POST", "/", { who: "exec", body: { title: "Роман за ТЗ Юлії", assigneeId: 40, reviewerId: 6 } })).payload as unknown as { id: number };
-    assert.equal((await patch("exec", own.id, { status: "ready_for_approval" })).code, 204);
-    assert.equal((await patch("exec", own.id, { status: "done" })).code, 403,
-      "🔴 АВТОР-ВИКОНАВЕЦЬ ЗАКРИВ ЗАДАЧУ, ЯКУ ПРИЙМАЄ ЮЛІЯ — правило не діє там, заради чого писалось");
     assert.equal((await patch("exec", own.id, { reviewerId: 4 })).code, 403,
-      "🔴 АВТОР-ВИКОНАВЕЦЬ ПЕРЕПИСАВ «ПРИЙМАЄ» НА СЕБЕ — правило обходиться одним PATCH");
-    assert.equal((await patch("yulia", own.id, { status: "done" })).code, 204);
+      "🔴 автор-виконавець переписав «Приймає» на себе — хто перевіряє, вирішує автор-не-виконавець, «Приймає» або адмін");
+    assert.equal((await patch("exec", own.id, { status: "done" })).code, 204, "🔴 автор-виконавець не може поставити «Готово»");
 
     // ── 8. ЗАМОВЧУВАННЯ: «Приймає» не обрано — приймає автор ──
     const plain = (await call("POST", "/", { who: "lead", body: { title: "Без приймаючого", assigneeId: 40 } })).payload as unknown as { id: number };
     const plainRow = (await listOf("lead")).find((r) => r.id === plain.id)!;
     assert.equal(plainRow.reviewerId, 3, "🔴 без «Приймає» видача не показала автора");
-    assert.equal((await patch("exec", plain.id, { status: "done" })).code, 403);
+    assert.equal((await patch("exec", plain.id, { status: "done" })).code, 204, "🔴 виконавець не може закрити задачу без «Приймає»");
+    await c.query(`UPDATE tasks SET status='in_progress' WHERE id=$1`, [plain.id]);
     assert.equal((await patch("lead", plain.id, { status: "done" })).code, 204, "🔴 автор не може закрити задачу без «Приймає»");
 
     // ── 9. ПРАВИЛО НЕ РОЗПОВЗЛОСЬ: задача іншого типу і системна задача ──

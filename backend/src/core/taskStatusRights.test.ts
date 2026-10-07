@@ -28,26 +28,25 @@ const row = (o: Partial<StatusRightsRow>): StatusRightsRow => ({
 const REVIEWED = row({ assigneeId: 40, assigneeTeamId: 7, createdBy: AUTHOR.userId, reviewerId: REVIEWER.userId });
 
 /**
- * #1080 — ЗАКРИВАЄ ТОЙ, ХТО ПРИЙМАЄ: таблиця прав по ОБИДВА боки межі.
+ * #1080 — «ГОТОВО» СТАВИТЬ КОЖЕН, ХТО РУХАЄ СТАТУС (рішення Романа 07.10.2026:
+ * «будь хто може ставити готово»). Таблиця прав по ОБИДВА боки межі.
  *
  * | хто | рухає | закриває |
- * | адмін, «Приймає», автор | ✅ | ✅ |
- * | виконавець, тімлід його команди | ✅ | ❌ |
+ * | адмін, «Приймає», автор, виконавець, тімлід його команди | ✅ | ✅ |
  * | стороння людина | ❌ | ❌ |
  *
- * 🧨 Червоніє, якщо дати виконавцю `done` (прибрати перевірку типу актора) або
- * забрати в «Приймає» право закривати — тобто повернути рівно ту поломку, через
- * яку Юлія не могла прийняти 4172/4310/4312.
+ * 🧨 Червоніє, якщо повернути заборону «закриває лише той, хто приймає» (виконавець
+ * чи тімлід отримають `—` у колонці «закриває») або пустити сторонню людину.
  */
-test("#1080 ЗАКРИВАЄ ТОЙ, ХТО ПРИЙМАЄ: виконавець і тімлід рухають, але не закривають; «Приймає», автор і адмін — закривають", () => {
+test("#1080 ГОТОВО СТАВИТЬ КОЖЕН, ХТО РУХАЄ СТАТУС: виконавець і тімлід теж; «Приймає» — учасник; стороння людина — нічого", () => {
   const got = Object.fromEntries(VIEWERS.map((v) => {
     const r = statusRights(v, REVIEWED);
     return [`${v.role}#${v.userId}`, `${r.canChange ? "рухає" : "—"}/${r.canDone ? "закриває" : "—"}/${r.actor ?? "—"}`];
   }));
   assert.deepEqual(got, {
     "admin#1": "рухає/закриває/admin",
-    "team_lead#3": "рухає/—/team_lead",
-    "manager#4": "рухає/—/executor",
+    "team_lead#3": "рухає/закриває/team_lead",
+    "manager#4": "рухає/закриває/executor",
     "manager#5": "—/—/—",
     "manager#6": "рухає/закриває/reviewer",
     "manager#7": "рухає/закриває/author",
@@ -57,30 +56,30 @@ test("#1080 ЗАКРИВАЄ ТОЙ, ХТО ПРИЙМАЄ: виконавець
   const byDefault = row({ assigneeId: 40, assigneeTeamId: 7, createdBy: AUTHOR.userId });
   assert.equal(effectiveReviewer(byDefault), AUTHOR.userId);
   assert.equal(statusRights(AUTHOR, byDefault).canDone, true, "🔴 без призначеного «Приймає» автор не може закрити");
-  assert.equal(statusRights(EXEC, byDefault).canDone, false, "🔴 без «Приймає» виконавець закрив сам");
+  assert.equal(statusRights(EXEC, byDefault).canDone, true, "🔴 виконавець не може поставити «Готово» — заборона повернулась");
   assert.equal(statusRights(REVIEWER, byDefault).canChange, false,
     "🔴 людина, яку НЕ призначено приймати, отримала права на статус");
 
   // Одна людина — автор, виконавець і «Приймає» одночасно: закриває (вимога ТЗ).
   const allInOne = row({ assigneeId: 40, assigneeTeamId: 7, createdBy: EXEC.userId });
   assert.equal(statusRights(EXEC, allInOne).canDone, true, "🔴 автор-виконавець не може закрити власну задачу");
-  // 🪞 ВИПАДОК 4172/4310/4312: автор = виконавець, а приймає ІНША людина. Закрити
-  // він не може — інакше правило не діяло б саме там, заради чого його писали.
+  // Автор = виконавець, а приймає ІНША людина: закривають обидва.
   const authorExec = { ...allInOne, reviewerId: REVIEWER.userId };
-  assert.deepEqual([statusRights(EXEC, authorExec).canDone, statusRights(EXEC, authorExec).actor], [false, "executor"],
-    "🔴 АВТОР-ВИКОНАВЕЦЬ ЗАКРИВ ЗАДАЧУ, ЯКУ ПРИЙМАЄ ІНША ЛЮДИНА");
+  assert.deepEqual([statusRights(EXEC, authorExec).canDone, statusRights(EXEC, authorExec).actor], [true, "executor"]);
   assert.equal(statusRights(REVIEWER, authorExec).canDone, true);
+  // 🪞 Стороння людина — нічого, навіть на задачі без «Приймає».
+  assert.deepEqual([statusRights(OUTSIDER, byDefault).canChange, statusRights(OUTSIDER, byDefault).canDone], [false, false],
+    "🔴 стороння людина отримала права на статус");
 });
 
 /**
- * #1080b — ПРАВИЛО ТІЛЬКИ ДЛЯ ЗВИЧАЙНИХ ЗАДАЧ (рішення Романа 30.09.2026).
+ * #1080b — «ПРИЙМАЄ» ЛИШЕ У ЗВИЧАЙНИХ ЗАДАЧ (рішення Романа 30.09.2026).
  *
- * 🔴 ЗАМІРЯНИЙ РИЗИК: менеджер відмічає клієнтів пачки реактивації чекбоксом —
- * це `PATCH {status:'done'}` дочірньої `reactivation_client`, де він виконавець.
- * Розповзлось правило на всі типи — менеджер більше не закриває клієнтів.
- * 🧨 Червоніє, якщо прибрати перевірку `REVIEWED_TASK_TYPES`.
+ * Поза ними «Приймає» не учасник: інакше людина, призначена приймати, отримала б
+ * права на клієнта реактивації чи KPI-день. Виконавець там закриває, як і було.
+ * 🧨 Червоніє, якщо прибрати перевірку `REVIEWED_TASK_TYPES` у `statusActor`.
  */
-test("#1080b ТІЛЬКИ ЗВИЧАЙНІ ЗАДАЧІ: виконавець і далі закриває клієнта реактивації, KPI і решту типів", () => {
+test("#1080b «ПРИЙМАЄ» ЛИШЕ У ЗВИЧАЙНИХ ЗАДАЧ: поза ними він не учасник, виконавець закриває як і було", () => {
   assert.deepEqual([...REVIEWED_TASK_TYPES], ["simple"], "склад типів під правилом змінився — це рішення власника, не правка");
   for (const taskType of ["reactivation_client", "reactivation", "daily_kpi", "kpi_period", "credit_limit_request"]) {
     const t = row({ ...REVIEWED, taskType });
@@ -88,8 +87,8 @@ test("#1080b ТІЛЬКИ ЗВИЧАЙНІ ЗАДАЧІ: виконавець і
     // Поза звичайними «Приймає» не діє: інакше видача обіцяла б права, яких PATCH не дає.
     assert.equal(statusRights(REVIEWER, t).canChange, false, `🔴 «Приймає» діє на ${taskType}`);
   }
-  // 🪞 Дзеркало: та сама задача звичайного типу — виконавець НЕ закриває.
-  assert.equal(statusRights(EXEC, REVIEWED).canDone, false);
+  // 🪞 Дзеркало: та сама задача звичайного типу — «Приймає» учасник.
+  assert.equal(statusRights(REVIEWER, REVIEWED).canChange, true, "🔴 «Приймає» не учасник навіть у звичайній задачі");
 });
 
 /**
@@ -103,8 +102,6 @@ test("#1080b ТІЛЬКИ ЗВИЧАЙНІ ЗАДАЧІ: виконавець і
 test("#1080c СИСТЕМНА ЗАДАЧА БЕЗ АВТОРА: виконавець закриває, як і до правила", () => {
   const system = row({ assigneeId: 40, assigneeTeamId: 7, createdBy: null });
   assert.equal(statusRights(EXEC, system).canDone, true, "🔴 менеджер не може закрити системну задачу (пропущений дзвінок тощо)");
-  // 🪞 Та сама задача, але з автором — уже приймає автор.
-  assert.equal(statusRights(EXEC, { ...system, createdBy: AUTHOR.userId }).canDone, false);
   // І стороння людина на системній задачі — нічого.
   assert.equal(statusRights(OUTSIDER, system).canChange, false);
 });

@@ -582,16 +582,6 @@ async function activeUserExists(userId: number): Promise<boolean> {
   return (r.rowCount ?? 0) > 0;
 }
 
-/** Імʼя «Приймає» для тексту відмови — тим самим виразом, що й у видачі. */
-async function reviewerNameOf(t: TaskMeta): Promise<string> {
-  const id = effectiveReviewer(t);
-  if (id == null) return "адмін";
-  const r = await pool.query<{ name: string }>(
-    `SELECT COALESCE(NULLIF(btrim(u.full_name), ''), NULLIF(btrim(m.name), ''), split_part(u.email, '@', 1)) AS name
-       FROM users u LEFT JOIN managers m ON m.id = u.manager_id WHERE u.id = $1`, [id]);
-  return r.rows[0]?.name ?? "адмін";
-}
-
 /**
  * Чи може цей акаунт ЗМІНИТИ задачу. Правило — у `core/taskVisibility.ts`
  * (`canTouchTask`), тут лише завантаження рядка.
@@ -712,20 +702,13 @@ tasksRouter.patch("/:id", async (req, res) => {
     }
   }
   /**
-   * ✅ СТАТУС ЗВИЧАЙНОЇ ЗАДАЧІ — ЗА ПРАВИЛОМ «ЗАКРИВАЄ ТОЙ, ХТО ПРИЙМАЄ»
-   * (`core/taskStatusRights.ts`). Відмова НАЗИВАЄ, хто може закрити: без імені
-   * людина бачить «не можна» і не знає, кого просити.
-   * ⚠️ `done` відмовляємо й тоді, коли задача вже `done`: прямий PATCH від
-   * виконавця мусить бути 403, а не «тихо прийнято, нічого не змінилось».
+   * ✅ СТАТУС ЗВИЧАЙНОЇ ЗАДАЧІ — за `core/taskStatusRights.ts`. «Готово» ставить
+   * кожен, хто рухає статус (рішення Романа 07.10.2026: «будь хто може ставити
+   * готово»); «Приймає» сюди пускається як учасник, хоч і не автор/виконавець.
    */
   if (reviewed && parsed.data.status !== undefined) {
     if (!rights.canChange) {
       return res.status(403).json({ error: "Статус цієї задачі змінюють виконавець, «Приймає» або адмін" });
-    }
-    if (parsed.data.status === "done" && !rights.canDone) {
-      return res.status(403).json({
-        error: `Закрити задачу може «Приймає»: ${await reviewerNameOf(before)}. Поставте «Готово на затвердження».`,
-      });
     }
   }
   // ✅ «Приймає» міняють автор, сам «Приймає» і адмін — не виконавець (інакше він
