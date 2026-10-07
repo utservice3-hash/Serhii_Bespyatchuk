@@ -196,6 +196,7 @@ interface ViewMod {
   withCallParam: (href: string, uniqueid: string | null) => string;
   drawerTabs: (transcriptHidden: boolean, turns: number | null) => string[];
   promisesLabel: (promises: number, withDeadline: number) => string;
+  blobErrorBody: (data: unknown) => Promise<unknown>;
 }
 async function transpile(rel: string, deps: Record<string, string> = {}): Promise<string> {
   const ts = (await import("typescript")).default;
@@ -950,4 +951,38 @@ test("#889 ЧЕРВОНИЙ РЕЖИМ БЕЗ «НЕ ДЛЯ РОЗБОРІВ»: 
   assert.match(card, /\{!alert && <div style=\{\{ fontSize: 13, \.\.\.muted \}\}>За даними Ringostat\.[^\n]*перевіряється, не для розборів/, "🔴 застереження «не для розборів» не залежить від режиму");
   assert.equal((card.match(/не для розборів/g) ?? []).length, 1, "🔴 застереження продубльоване поза перемикачем");
   assert.equal((card.match(/Обіцяв передзвонити — дзвінка в телефонії немає/g) ?? []).length, 1, "дзеркало: заголовок один для обох режимів");
+});
+
+/**
+ * #893 — ПОМИЛКА ЗАПИСУ ВИДНА НА ЕКРАНІ (Роман 07.10.2026): запис тягнеться як Blob, і серверний `{ error }` приходив
+ * у Blob — кнопка «Прослухати запис» показувала безлике «Request failed with status code 404». Blob з JSON-помилкою
+ * мусить стати обʼєктом із текстом; Blob не-JSON і JSON без `error` лишаються як були (запасний текст), не-Blob — теж.
+ * 🧨 Червоніє, якщо прибрати читання Blob або підставляти розібране без перевірки, що там є текст `error`.
+ */
+test("#893 ПОМИЛКА ЗАПИСУ ВИДНА: Blob із серверним JSON стає текстом помилки, решта лишається як була", async () => {
+  const v = await loadView();
+  const json = new Blob([JSON.stringify({ error: "Запис недоступний: Ringostat не віддав запис (не знайдено)" })], { type: "application/json" });
+  assert.deepEqual(await v.blobErrorBody(json), { error: "Запис недоступний: Ringostat не віддав запис (не знайдено)" }, "🔴 серверний текст із Blob не дістається");
+  const html = new Blob(["<html>404</html>"], { type: "text/html" });
+  assert.equal(await v.blobErrorBody(html), html, "дзеркало: не-JSON лишається Blob-ом — тоді спрацює запасний текст");
+  const noError = new Blob([JSON.stringify({ ok: false })]);
+  assert.equal(await v.blobErrorBody(noError), noError, "🔴 JSON без тексту error підставлено як помилку");
+  const plain = { error: "вже обʼєкт" };
+  assert.equal(await v.blobErrorBody(plain), plain, "дзеркало: звичайне тіло не чіпається");
+  const api = readFileSync(FE("api.ts"), "utf8");
+  assert.match(api, /export async function fetchAiCallRecording[\s\S]{0,400}?res\.data = await blobErrorBody\(res\.data\);\s*throw e;/, "🔴 fetchAiCallRecording не розбирає тіло помилки");
+});
+
+/**
+ * #893b — СЕРВЕР НАЗИВАЄ ПРИЧИНУ (Роман 07.10.2026): відмова Ringostat віддавалась однією фразою «Запису в Ringostat
+ * немає» на всі шість причин; тепер текст — із словника `RECORDING_UNAVAILABLE_UA` за самою причиною.
+ * 🧨 Червоніє, якщо повернути одну фразу на всі випадки.
+ */
+test("#893b ЗАПИС · СЕРВЕР НАЗИВАЄ ПРИЧИНУ: 404 запису несе причину зі словника, а не одну фразу", () => {
+  const routes = readFileSync(fileURLToPath(new URL("../../src/routes/dashboard.ts", import.meta.url)), "utf8");
+  const at = routes.indexOf('dashboardRouter.get("/ai-calls/:uniqueid/recording"');
+  assert.ok(at > 0, "🔴 роут запису не знайдено");
+  const body = routes.slice(at, routes.indexOf("\n});", at)); // кінець обробника — рядок, що починається з «});»
+  assert.match(body, /if \(!d\.ok\) \{ res\.status\(404\)\.json\(\{ error: `Запис недоступний: \$\{RECORDING_UNAVAILABLE_UA\[d\.unavailable\]\}` \}\)/, "🔴 причина відмови не передається");
+  assert.doesNotMatch(body, /Запису в Ringostat немає/, "🔴 повернулась одна фраза на всі причини");
 });

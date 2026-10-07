@@ -70,6 +70,7 @@ import { ga4Configured } from "../ga4/client.js";
 import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
 import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType, setCallNote, canWriteNote, fetchCallRecording } from "../core/callAiScreen.js";
+import { RECORDING_UNAVAILABLE_UA } from "../core/ringostatRecording.js";
 import { teamReport, isAnalysed, isLost, noPrice, noPriceNoComment, hasAgreement } from "../core/firstTouchTeamReport.js";
 import { loadTunables } from "../core/firstTouchTunables.js";
 
@@ -11012,7 +11013,7 @@ dashboardRouter.get("/ai-calls/:uniqueid/recording", async (req, res) => {
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
   const url = (await pool.query<{ recording: string | null }>("SELECT recording FROM ringostat_calls WHERE uniqueid = $1", [uniqueid])).rows[0]?.recording ?? null;
   const d = await fetchCallRecording(url);
-  if (!d.ok) { res.status(404).json({ error: "Запису в Ringostat немає" }); return; }
+  if (!d.ok) { res.status(404).json({ error: `Запис недоступний: ${RECORDING_UNAVAILABLE_UA[d.unavailable]}` }); return; }
   res.setHeader("Content-Type", "audio/wav");
   res.setHeader("Cache-Control", "private, no-store");
   res.end(Buffer.from(d.bytes));

@@ -210,3 +210,16 @@ export function tabRows<T extends { inReport: boolean; conversationType: Convers
   type: ConversationTypeT | "all" = "all"): T[] {
   return rows.filter((r) => (tab === "report" ? r.inReport : !r.inReport) && (tab === "report" || type === "all" || r.conversationType === type));
 }
+
+/**
+ * Тіло помилки запиту з `responseType: "blob"`: axios кладе серверний JSON `{ error }` у Blob, і `hiringError` його не
+ * бачить — на екрані лишалось безлике «Request failed with status code 404». Тут Blob читається й розбирається; що не є
+ * JSON з текстом `error`, повертається як було (тоді працює загальний запасний текст).
+ */
+export async function blobErrorBody(data: unknown): Promise<unknown> {
+  if (typeof (data as { text?: unknown } | null)?.text !== "function") return data;
+  try {
+    const body = JSON.parse(await (data as Blob).text()) as unknown;
+    return typeof (body as { error?: unknown } | null)?.error === "string" ? body : data;
+  } catch { return data; }
+}
