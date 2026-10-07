@@ -1,6 +1,6 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Db } from "./adCallFacts.js";
@@ -985,4 +985,54 @@ test("#893b ЗАПИС · СЕРВЕР НАЗИВАЄ ПРИЧИНУ: 404 зап
   const body = routes.slice(at, routes.indexOf("\n});", at)); // кінець обробника — рядок, що починається з «});»
   assert.match(body, /if \(!d\.ok\) \{ res\.status\(404\)\.json\(\{ error: `Запис недоступний: \$\{RECORDING_UNAVAILABLE_UA\[d\.unavailable\]\}` \}\)/, "🔴 причина відмови не передається");
   assert.doesNotMatch(body, /Запису в Ringostat немає/, "🔴 повернулась одна фраза на всі причини");
+});
+
+/**
+ * Реєстрації роутів (`<router>.get/post/put/patch/delete/all/use(...)`), що стоять НЕ на верхньому рівні файла. Роутер —
+ * змінна, ініціалізована `Router()`. Вкладена реєстрація виконується лише тоді, коли спрацьовує обгортка, — і до того
+ * Express відповідає «Cannot GET».
+ */
+async function nestedRouteRegistrations(file: string, src: string): Promise<string[]> {
+  const ts = (await import("typescript")).default;
+  const sf = ts.createSourceFile(file, src, ts.ScriptTarget.ES2022, true);
+  const routers = new Set<string>();
+  const out: string[] = [];
+  const visit = (n: import("typescript").Node): void => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && ts.isCallExpression(n.initializer)
+      && /(^|\.)Router$/.test(n.initializer.expression.getText(sf))) routers.add(n.name.text);
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  const find = (n: import("typescript").Node): void => {
+    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && ts.isIdentifier(n.expression.expression)
+      && routers.has(n.expression.expression.text) && /^(get|post|put|patch|delete|all|use)$/.test(n.expression.name.text)) {
+      const top = ts.isExpressionStatement(n.parent) && n.parent.parent === sf;
+      if (!top) out.push(`${file}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1} ${n.expression.getText(sf)}(${n.arguments[0]?.getText(sf) ?? ""})`);
+    }
+    ts.forEachChild(n, find);
+  };
+  find(sf);
+  return out;
+}
+
+/**
+ * #894 — РОУТ РЕЄСТРУЄТЬСЯ НА ВЕРХНЬОМУ РІВНІ (Роман 07.10.2026, «нажимаю — нічого»): коміт f2dbef98 (30.09) вклав три
+ * роути — тип розмови, коментар, запис — усередину гілки `if (!card)` обробника картки. Express їх не знав, доки хтось не
+ * відкрив чужу/неіснуючу картку («Cannot GET …/recording»), а потім реєстрував повторно на кожній такій події. Гейт
+ * читає КОЖЕН файл `routes/*.ts` деревом TypeScript, а не регуляркою.
+ * 🧨 Червоніє, якщо будь-яку реєстрацію роуту поставити всередину іншого обробника чи функції.
+ */
+test("#894 РОУТ НА ВЕРХНЬОМУ РІВНІ: жодна реєстрація роуту в routes/*.ts не вкладена в обробник", async () => {
+  const fixture = 'import { Router } from "express";\nexport const r = Router();\nr.get("/a", (q, s) => { if (!q) { s.end();\nr.put("/b", () => {}); return; } s.end(); });\n';
+  assert.deepEqual(await nestedRouteRegistrations("fixture.ts", fixture), ['fixture.ts:4 r.put("/b")'], "фікстура: вкладену реєстрацію не помічено");
+  assert.deepEqual(await nestedRouteRegistrations("ok.ts", 'import { Router } from "express";\nexport const r = Router();\nr.get("/a", (q, s) => { s.end(); });\n'), [], "дзеркало: верхній рівень не скаржиться");
+  const dir = fileURLToPath(new URL("../../src/routes/", import.meta.url));
+  const files = readdirSync(dir).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"));
+  assert.ok(files.length >= 30, `перелік файлів роутів підозріло малий: ${files.length}`);
+  const nested: string[] = [];
+  for (const f of files) nested.push(...await nestedRouteRegistrations(f, readFileSync(path.join(dir, f), "utf8")));
+  assert.deepEqual(nested, [], "🔴 реєстрація роуту вкладена в інший код — Express її не знає до спрацювання обгортки");
+  const dash = readFileSync(path.join(dir, "dashboard.ts"), "utf8");
+  for (const route of ['dashboardRouter.post("/ai-calls/:uniqueid/type"', 'dashboardRouter.put("/ai-calls/:uniqueid/note"', 'dashboardRouter.get("/ai-calls/:uniqueid/recording"'])
+    assert.ok(dash.includes("\n" + route), `дзеркало: ${route} існує і починає рядок`);
 });

@@ -10962,7 +10962,17 @@ dashboardRouter.get("/ai-calls/meta", async (_req, res) => {
 dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
   const auth = req.auth!;
   const card = await aiCallCard(pool, String(req.params.uniqueid), transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES), missedScopeFor(auth, {}));
-  if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" });
+  if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
+  res.json({
+    row: card.row, dealUrls: card.row.kommoIds.map((id) => ({ kommoId: id, url: kommoLeadUrl(id) })),
+    result: card.result, turns: card.turns, transcriptHidden: card.transcriptHidden,
+    managerChannel: card.managerChannel, durationSec: card.durationSec, nextOutboundAt: card.nextOutboundAt,
+    promiseChecks: card.promiseChecks, callsAfter: card.callsAfter,
+    typeHistory: card.typeHistory, canEditType: canEditType(auth.roleKey),
+    noteRights: { price: canWriteNote(auth.roleKey, "price"), missed: canWriteNote(auth.roleKey, "missed"), offline: canWriteNote(auth.roleKey, "offline") },
+    canListen: transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES),
+  });
+});
 
 /**
  * 🗂 Ручний тип розмови (ТЗ «звіт тімліда» 30.09.2026): «Це вантаж» / «Це не вантаж». Право — ПЕРШИМ оператором
@@ -11017,16 +11027,6 @@ dashboardRouter.get("/ai-calls/:uniqueid/recording", async (req, res) => {
   res.setHeader("Content-Type", "audio/wav");
   res.setHeader("Cache-Control", "private, no-store");
   res.end(Buffer.from(d.bytes));
-}); return; }
-  res.json({
-    row: card.row, dealUrls: card.row.kommoIds.map((id) => ({ kommoId: id, url: kommoLeadUrl(id) })),
-    result: card.result, turns: card.turns, transcriptHidden: card.transcriptHidden,
-    managerChannel: card.managerChannel, durationSec: card.durationSec, nextOutboundAt: card.nextOutboundAt,
-    promiseChecks: card.promiseChecks, callsAfter: card.callsAfter,
-    typeHistory: card.typeHistory, canEditType: canEditType(auth.roleKey),
-    noteRights: { price: canWriteNote(auth.roleKey, "price"), missed: canWriteNote(auth.roleKey, "missed"), offline: canWriteNote(auth.roleKey, "offline") },
-    canListen: transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES),
-  });
 });
 
 /**

@@ -24,6 +24,7 @@ import { pool } from "../db/pool.js";
 import { isBankFee } from "../core/bankReport.js";
 import { toUah } from "../bankSources/fx.js";
 import { fetchTransactions } from "../bankSources/privat.js";
+import { tokenFor } from "../bankSources/token.js";
 import type { BankAccountRow } from "../bankSources/types.js";
 
 const WRITE = process.argv.includes("--write");
@@ -33,7 +34,7 @@ async function main(): Promise<void> {
     `SELECT id, company, bank, label, currency, external_account_id, iban, env_key_name
        FROM bank_accounts WHERE is_active = true AND bank = 'privat' ORDER BY id`);
   for (const acc of accounts.rows) {
-    if (!acc.env_key_name || !process.env[acc.env_key_name]) { console.log(`— «${acc.label}»: немає токена, пропущено`); continue; }
+    if (!tokenFor(acc.env_key_name)) { console.log(`— «${acc.label}»: немає токена, пропущено`); continue; }
     const { rows: [b] } = await pool.query<{ mn: Date | null; n: number; old: number }>(
       `SELECT min(booked_at) AS mn, count(*)::int AS n,
               count(*) FILTER (WHERE external_tx_id = 'privat:' || (raw_json->>'REF')

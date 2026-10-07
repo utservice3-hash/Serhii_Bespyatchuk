@@ -804,17 +804,18 @@ export async function receivablesFxAt(db: Db, end: string, now: Date): Promise<{
 
 /**
  * «Надходження / Витрати загальні» з «Виписки» за період (прохід 2г, 05.10.2026): усі АКТИВНІ рахунки, разом із
- * рахунками «лише фінанси» (картки, Сейф), без видалених ручних записів; дати — за Києвом, обидва кінці. Витрати —
- * без банківських комісій (так само, як кешфлоу). Перекази між НАШИМИ рахунками — окремим числом (`ownIn`/`ownOut`):
- * чи виключати їх, ВІДКРИТЕ ПИТАННЯ до Тетяни (рішення Романа 05.10.2026 «залиш відкрите»), тож рахуємо все й
- * показуємо, скільки з цього — свої. «Свій» = IBAN контрагента збігається з IBAN нашого рахунку.
+ * рахунками «лише фінанси» (картки, Сейф), без видалених ручних записів; дати — за Києвом, обидва кінці.
+ * 📌 РІШЕННЯ Романа 07.10.2026: «усі, без виключення в тиждень/місяць» + «комісії теж включай» (Тетяна того ж дня:
+ * «по усіх виписках рахуємо надходження і витрати»). Тобто в суму йде ВСЕ: і перекази між нашими рахунками, і
+ * банківські комісії (кешфлоу їх і далі виключає — це інший екран). Свої перекази — лише ДОВІДКОЮ (`ownIn`/`ownOut`),
+ * щоб було видно, скільки з суми — гроші, що перейшли з кишені в кишеню. «Свій» = IBAN контрагента = IBAN нашого рахунку.
  */
 export async function bankTotals(db: Db, from: string, to: string): Promise<{ in: number; out: number; ownIn: number; ownOut: number; rows: number }> {
   const r = await db.query(`SELECT
       COALESCE(sum(abs(t.amount_uah)) FILTER (WHERE t.direction = 'in'), 0)::text AS inc,
-      COALESCE(sum(abs(t.amount_uah)) FILTER (WHERE t.direction = 'out' AND NOT COALESCE(t.is_bank_fee, false)), 0)::text AS outg,
+      COALESCE(sum(abs(t.amount_uah)) FILTER (WHERE t.direction = 'out'), 0)::text AS outg,
       COALESCE(sum(abs(t.amount_uah)) FILTER (WHERE t.direction = 'in' AND own.iban IS NOT NULL), 0)::text AS own_in,
-      COALESCE(sum(abs(t.amount_uah)) FILTER (WHERE t.direction = 'out' AND NOT COALESCE(t.is_bank_fee, false) AND own.iban IS NOT NULL), 0)::text AS own_out,
+      COALESCE(sum(abs(t.amount_uah)) FILTER (WHERE t.direction = 'out' AND own.iban IS NOT NULL), 0)::text AS own_out,
       count(*)::int AS rows
       FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
       LEFT JOIN LATERAL (SELECT b.iban FROM bank_accounts b WHERE b.iban IS NOT NULL AND b.iban = t.counterparty_iban LIMIT 1) own ON true

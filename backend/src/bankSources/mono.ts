@@ -1,6 +1,7 @@
-// monobank Personal API. Токен — process.env[account.env_key_name] (напр. MONO_TOKEN_FOP).
+// monobank Personal API. Токен — `tokenFor(account.env_key_name)` (лише `MONO_TOKEN_…`, напр. MONO_TOKEN_FOP; див. token.ts).
 // GET /personal/statement/{account}/{from}/{to} (unix сек, ≤31 день/запит), заголовок X-Token.
 import type { AccountBalance, BankAccountRow, NormalizedTx } from "./types.js";
+import { tokenFor } from "./token.js";
 
 const BASE = "https://api.monobank.ua";
 const CCY: Record<string, string> = { "980": "UAH", "840": "USD", "978": "EUR" };
@@ -15,18 +16,37 @@ interface MonoItem {
 // (black/white/platinum/iron/yellow…) і банки-jars. Рахунок рядка `bank_accounts` обирається ЯВНО:
 // `mono_type` IS NULL → ФОП (type='fop'), інакше — картка цього типу (прохід 2г фінансів, 05.10.2026; такі
 // рядки мають `finance_only`, тож їх операції не бачать ролі без `view_cashflow`). Банки-jars не беремо ніколи.
-interface MonoAccount { id: string; type?: string; currencyCode?: number; iban?: string; balance?: number }
+interface MonoAccount { id: string; type?: string; currencyCode?: number; iban?: string; balance?: number; maskedPan?: string[] }
 interface MonoClientInfo { accounts?: MonoAccount[]; jars?: unknown[] }
 
 /**
  * Обирає рахунок рядка під валюту: ФОП (`mono_type` порожній) або картку свого типу. Кілька однакових
  * (мультивалюта) → той, що збігається з валютою, інакше перший. Спільна логіка резолву й балансу.
  */
-export function pickAccount(info: MonoClientInfo, currency: string, monoType: string | null | undefined = null): MonoAccount | null {
-  const want = monoType ?? "fop";
-  const same = (info.accounts ?? []).filter((a) => a.type === want);
+export function pickAccount(info: MonoClientInfo, currency: string, monoType: string | null | undefined = null,
+  panLast4: string | null | undefined = null): MonoAccount | null {
+  // Останні 4 цифри картки (картка працівника, 07.10.2026) точніші за тип: під одним токеном буває дві black.
+  const same = panLast4
+    ? (info.accounts ?? []).filter((a) => (a.maskedPan ?? []).some((p) => p.endsWith(panLast4)))
+    : (info.accounts ?? []).filter((a) => a.type === (monoType ?? "fop"));
   if (same.length === 0) return null;
   return same.find((a) => CCY[String(a.currencyCode)] === currency) ?? same[0];
+}
+
+/** Рівно 4 цифри або нічого: «1234» → «1234», «**** 1234»/«12345»/«» → null. Спільне для роута й адаптера. */
+export function normLast4(v: unknown): string | null {
+  const s = String(v ?? "").trim();
+  return /^\d{4}$/.test(s) ? s : null;
+}
+
+/**
+ * Рахунок рядка під токеном. Картка працівника (`company = 'staff'`) — ЛИШЕ за останніми 4 цифрами: без них під його
+ * токеном лежать і особисті рахунки, і «перший ФОП чи black» був би вгадуванням. Тоді null — рядок не привʼязується.
+ */
+export function accountFor(info: MonoClientInfo, account: BankAccountRow): MonoAccount | null {
+  const last4 = normLast4(account.mono_pan_last4);
+  if (account.company === "staff" && !last4) return null;
+  return pickAccount(info, account.currency, account.mono_type, last4);
 }
 
 // 🕐 Ліміт моно — «1 запит / 60 с» НА ТОКЕН. Під одним токеном тепер кілька рахунків (ФОП + картки), тож запити
@@ -62,16 +82,24 @@ async function fetchClientInfo(token: string): Promise<MonoClientInfo> {
  *  перший. Повертає id або null. Викликається ЛИШЕ поки external_account_id не збережено —
  *  щоб не бити ліміт mono «1 запит / 60с» client-info щоциклу. */
 export async function resolveAccountId(account: BankAccountRow): Promise<string | null> {
-  const token = account.env_key_name ? process.env[account.env_key_name] : undefined;
+  const token = tokenFor(account.env_key_name);
   if (!token) throw new Error(`monobank: немає env ${account.env_key_name}`);
-  return pickAccount(await fetchClientInfo(token), account.currency, account.mono_type)?.id ?? null;
+  return accountFor(await fetchClientInfo(token), account)?.id ?? null;
+}
+
+/** IBAN привʼязаного рахунку з того самого `client-info` (кеш 5 хв — без зайвого запиту). Потрібен, щоб поповнення
+ *  картки з наших рахунків впізнавались як «між своїми» (`bankTotals`). null — банк не дав. */
+export async function resolveIban(account: BankAccountRow): Promise<string | null> {
+  const token = tokenFor(account.env_key_name);
+  if (!token) return null;
+  return accountFor(await fetchClientInfo(token), account)?.iban ?? null;
 }
 
 /** Залишок ФОП-рахунку з client-info (balance — у копійках). null → «—» (нема ключа / нема ФОП). */
 export async function fetchBalance(account: BankAccountRow): Promise<AccountBalance | null> {
-  const token = account.env_key_name ? process.env[account.env_key_name] : undefined;
+  const token = tokenFor(account.env_key_name);
   if (!token) return null;
-  const fop = pickAccount(await fetchClientInfo(token), account.currency, account.mono_type);
+  const fop = accountFor(await fetchClientInfo(token), account);
   if (!fop) return null;
   return { amount: (fop.balance ?? 0) / 100, currency: CCY[String(fop.currencyCode)] ?? account.currency };
 }
@@ -109,7 +137,7 @@ async function fetchWindow(acc: string, token: string, from: number, to: number,
 }
 
 export async function fetchTransactions(account: BankAccountRow, since: Date): Promise<NormalizedTx[]> {
-  const token = account.env_key_name ? process.env[account.env_key_name] : undefined;
+  const token = tokenFor(account.env_key_name);
   if (!token) throw new Error(`monobank: немає env ${account.env_key_name}`);
   // ⚠️ НІКОЛИ не '0' (дефолт = особиста картка власника, її бачили б усі ролі). Синкаємо лише
   // явний рахунок рядка: збережений external_account_id або резолв через client-info (ФОП чи картка
