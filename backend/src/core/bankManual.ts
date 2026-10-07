@@ -131,7 +131,7 @@ export async function listManual(db: Db, accountArg: unknown, from: string, to: 
   if (!isDay(from) || !isDay(to) || from > to) throw new FinError(400, "Період — РРРР-ММ-ДД, від ≤ до");
   const r = await db.query(`SELECT t.id, (t.booked_at AT TIME ZONE 'Europe/Kyiv')::date::text AS day, t.direction, t.amount::text AS amount,
       t.currency, t.amount_uah::text AS amount_uah, t.fin_item_id AS item_id,
-      COALESCE(i.name, CASE WHEN t.external_tx_id LIKE 'safe-import:%' THEN t.counterparty_name END) AS item,
+      COALESCE(i.name, CASE WHEN t.external_tx_id LIKE 'safe-import:%' THEN NULLIF(t.counterparty_name, 'Сейф') END) AS item, -- «Сейф» = категорії в таблиці не було (importSafe)
       t.manual_kind AS kind, t.counterparty_name AS name, t.purpose, t.deleted_at IS NOT NULL AS deleted,
       COALESCE(t.external_tx_id LIKE 'safe-import:%', false) AS imported,
       COALESCE(NULLIF(btrim(u.full_name), ''), split_part(u.email, '@', 1)) AS entered_by
