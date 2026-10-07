@@ -19,20 +19,22 @@ type Mod = {
 const load = async () => (await import(spec)) as Mod;
 
 /**
- * #1230 — СКІЛЬКИ ВИСИТЬ: лише успіх чи інформація без кнопки зникають самі (5 с); помилка, кнопка
- * дії, подія й незавершена операція — до закриття (WCAG 2.2.1; Carbon, Atlassian, Primer, Material 3).
- * 🧨 Червоніє, якщо помилці, тосту з «Відновити» чи події «чекає вашого прийняття» дати таймер —
- * рівно та вада, що була в задачнику (7 с) і Опитуваннях (3,2 с).
+ * #1230 — СКІЛЬКИ ВИСИТЬ: успіх без кнопки — 5 с; подія «вам щось прийшло» — 15 с (рішення Романа
+ * 07.10.2026), навіть із кнопкою; помилка, «Зберігаю…» і тост із кнопкою поза подією — до закриття
+ * (WCAG 2.2.1; Carbon, Atlassian, Primer, Material 3).
+ * 🧨 Червоніє, якщо помилці чи «Відновити» дати таймер (вада задачника — 7 с, Опитувань — 3,2 с)
+ * або якщо подія перестане зникати чи зникатиме не за 15 с.
  */
-test("#1230 СПОВІЩЕННЯ: зникає сам лише тост без кнопки й без помилки; помилка, дія, подія — до закриття", async () => {
+test("#1230 СПОВІЩЕННЯ: успіх зникає за 5 с, подія — за 15 с; помилка, «Зберігаю…» і кнопка поза подією — до закриття", async () => {
   const R = await load();
   assert.equal(R.TOAST_PLAIN_MS, 5000);
   assert.equal(R.toastLifetime({ tone: "ok" }), 5000, "🔴 звичайний успіх не зникає сам");
   assert.equal(R.toastLifetime({ tone: "info" }), 5000);
   assert.equal(R.toastLifetime({ tone: "err" }), null, "🔴 ПОМИЛКА ЗНИКАЄ САМА");
   assert.equal(R.toastLifetime({ tone: "ok", hasAction: true }), null, "🔴 тост із «Відновити» зникає раніше, ніж людина встигне натиснути");
-  assert.equal(R.toastLifetime({ tone: "ok", event: true }), null, "🔴 подія «чекає вашого прийняття» зникає сама");
-  assert.equal(R.toastLifetime({ tone: "warn", event: true }), null, "🔴 пропущений дзвінок зникає сам");
+  assert.equal(R.toastLifetime({ tone: "ok", event: true, hasAction: true }), 15000, "🔴 подія «чекає вашого прийняття» не зникає за 15 с");
+  assert.equal(R.toastLifetime({ tone: "warn", event: true }), 15000, "🔴 пропущений дзвінок не зникає за 15 с");
+  assert.equal(R.toastLifetime({ tone: "err", event: true }), null, "🔴 помилка-подія зникає сама");
   assert.equal(R.toastLifetime({ tone: "info", loading: true }), null, "🔴 «Зберігаю…» зникає до результату");
 });
 
