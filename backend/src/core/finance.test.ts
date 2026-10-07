@@ -425,7 +425,7 @@ test("#1450 ДОСТУП ФІНАНСІВ: вкладка й edit_finance — о
   assert.match(SRC("auth/permGrant.ts"), /"edit_finance"/);
   // Ключ у каталозі лишено на один викат (двокрокове зняття, див. коментар у `permGrant.ts`): гейт стверджує, що він там
   // ПОЗНАЧЕНИЙ як знятий, а не живий.
-  assert.doesNotMatch(SRC("auth/permGrant.ts"), /^\s*"approve_finance_plan",/m, "🔴 мертве право повернулось у каталог — адмін бачитиме тумблер, що нічого не дає");
+  assert.doesNotMatch(SRC("auth/permGrant.ts"), /"approve_finance_plan"/, "🔴 мертве право повернулось у каталог — адмін бачитиме тумблер, що нічого не дає");
   assert.doesNotMatch(sql, /permissions \|\| '\{"approve_finance_plan"/, "🔴 право погоджувати знову видається ролі");
   assert.match(sql, /UPDATE roles SET permissions = permissions - 'approve_finance_plan' WHERE permissions \? 'approve_finance_plan';/,
     "🔴 старе право не знімається з ролей");
