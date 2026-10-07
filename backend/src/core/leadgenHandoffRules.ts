@@ -138,6 +138,8 @@ const NO_HISTORY: ClientHistory = new Map();
 /** Стан угоди менеджера й її бюджет — те, що віддає грошове ядро. */
 export interface DealState {
   cls: ManagerDealClass; price: number;
+  /** Угода позначена в Kommo полем «Мінусова угода» (`deals.is_minus`, `price` тоді відʼємний). */
+  minus?: boolean;
   /** Київська дата закриття угоди менеджера (для «Успішних» — дата успіху). */
   closedDay?: string | null;
   /** Київська дата першого входу в етап «авто поїхало» (`ClassRules.autoWent`). */
@@ -162,7 +164,17 @@ export type ClassifiedHandoff<T extends HandoffEntry> = T & {
   pendDays?: readonly PendDay[];
   /** Гроші періоду — «Очікування», перенесене з минулого періоду (авто поїхало ДО початку). Ставить `handoffView`. */
   carried?: boolean;
+  /** Угода менеджера мінусова: машина рахується, сума — 0 (`leadgenPrice`). */
+  minus?: boolean;
 };
+
+/**
+ * ➖ СУМА УГОДИ ДЛЯ ЛІДГЕНА (рішення власника 07.10.2026). Мінусова угода (поле «Мінусова угода» = «Мінус»)
+ * — це розщеплення перевезення в ПРОДАЖАХ (мінус на старій угоді + окрема плюсова), а плюсова половина з
+ * передачею лідгена не повʼязана. Тож лідгену мінус не рахуємо: машина лишається, сума — 0.
+ * Продажі (`core/money.ts`) і далі віднімають мінус із виручки — правило живе ЛИШЕ тут.
+ */
+export const leadgenPrice = (st: Pick<DealState, "price" | "minus">): number => (st.minus ? 0 : st.price);
 
 /**
  * 📌 ПРАВИЛО 3 + 4: КЛАС КОЖНОЇ ОБРАНОЇ ПЕРЕДАЧІ.
@@ -186,11 +198,12 @@ export function classifyHandoffs<T extends HandoffEntry>(
     if (h.dealId == null) return Object.assign({}, h, { cls: "none" as const, price: 0 }, noAnchor);
     const st = states.get(h.dealId);
     if (!st) throw new Error(`угода менеджера ${h.dealId} (передача ${h.pzId}) без стану з грошового ядра`);
-    if (h.clientKey && isRegularAt(history.get(h.clientKey) ?? [], h)) return Object.assign({}, h, { cls: "regular" as const, price: st.price }, noAnchor);
-    if (seen.has(h.dealId)) return Object.assign({}, h, { cls: "same" as const, price: st.price }, noAnchor);
+    const price = leadgenPrice(st), minus = st.minus === true;
+    if (h.clientKey && isRegularAt(history.get(h.clientKey) ?? [], h)) return Object.assign({}, h, { cls: "regular" as const, price, minus }, noAnchor);
+    if (seen.has(h.dealId)) return Object.assign({}, h, { cls: "same" as const, price, minus }, noAnchor);
     seen.add(h.dealId);
     return Object.assign({}, h, {
-      cls: st.cls, price: st.price,
+      cls: st.cls, price, minus,
       successDay: st.cls === "success" ? st.closedDay ?? null : null,
       // Дата авто — для БУДЬ-ЯКОГО поточного класу: угода, що зараз «успішна» чи «програна», могла висіти
       // в очікуванні на кінець минулого періоду (`pendingIn`). Сама по собі ця дата грошей не дає.
@@ -434,6 +447,8 @@ export interface LeadgenHandoffDeal {
   inPeriod: boolean;
   /** «Очікування», перенесене з минулого періоду: авто поїхало раніше, а на кінець періоду угода ще чекала. */
   carried: boolean;
+  /** Угода менеджера мінусова: сума лідгену не рахується (`leadgenPrice`), машина — так. */
+  minus: boolean;
 }
 
 /** Порожній або з самих пробілів текст CRM — «не заповнено», а не порожній підпис. */
@@ -480,7 +495,7 @@ export function handoffDealRow(
     planPayDay: linked ? h.planPayDay : null,
     reason: h.cls === "lost" ? blankToNull(h.dealReason) : null,
     url: deps.leadUrl(h.dealId ?? h.pzId),
-    autoDay: h.autoDay, inPeriod: h.inPeriod !== false, carried: h.carried === true,
+    autoDay: h.autoDay, inPeriod: h.inPeriod !== false, carried: h.carried === true, minus: h.minus === true,
   };
 }
 

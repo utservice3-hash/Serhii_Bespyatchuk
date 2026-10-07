@@ -673,3 +673,37 @@ test("#1258 МАШИН = успішні + очікування періоду (�
   assert.equal(v.byPerson.reduce((a, p) => a + p.money.machines, 0), v.totals.machines, "🔴 Σ людей ≠ відділ");
   assert.equal(personMoneyWire(8, v.totals).machines, 2, "🔴 машини не доїхали у відповідь");
 });
+
+/**
+ * #1500 — МІНУСОВА УГОДА В ГРОШАХ ЛІДГЕНА (рішення власника 07.10.2026). Угода з полем «Мінусова угода»
+ * лишається машиною (успіх / очікування), але її сума лідгену — 0: мінус — розщеплення перевезення в продажах,
+ * плюсова половина з передачею не повʼязана (62630491 Крупник: −4 948 + окрема +7 188). Фікстура по обидва
+ * боки: та сама угода без позначки дає свою суму, з позначкою — машину й 0; рядок списку несе `minus`.
+ * 🧨 САБОТАЖ: у `leadgenPrice` `st.minus ? 0 : st.price` → `st.price` → червоніє (сума −4 948).
+ */
+test("#1500 МІНУСОВА УГОДА: лідгену — машина і 0 ₴; без позначки — своя сума", () => {
+  const E = (pz: number, deal: number): HandoffEntry =>
+    ({ pzId: pz, lgId: 7, lgTeamId: 1, at: Date.parse("2026-09-10T09:00:00Z") + pz, day: "2026-09-10", dealId: deal });
+  const S = (cls: DealState["cls"], price: number, minus: boolean): DealState =>
+    ({ cls, price, minus, closedDay: cls === "success" ? "2026-09-20" : null, autoDay: "2026-09-15",
+      pendDays: [{ day: "2026-09-15", pending: cls !== "success" }, ...(cls === "success" ? [{ day: "2026-09-20", pending: false }] : [])] });
+  const states = new Map<number, DealState>([
+    [9601, S("expect", 2_448, false)],   // плюсова в очікуванні
+    [9602, S("expect", -4_948, true)],   // мінусова в очікуванні
+    [9603, S("success", 3_000, false)],  // плюсова успішна
+    [9604, S("success", -1_100, true)],  // мінусова успішна
+  ]);
+  const v = handoffView([E(1, 9601), E(2, 9602), E(3, 9603), E(4, 9604)], states, { teamId: null, managerId: null }, new Map(),
+    dayInRange("2026-09-01", "2026-09-30"));
+  assert.deepEqual([v.totals.pending.n, v.totals.pending.sum], [2, 2_448], "🔴 очікування: мінусова угода не машина або її −4 948 у сумі");
+  assert.deepEqual([v.totals.earned.n, v.totals.earned.sum], [2, 3_000], "🔴 успішні: мінусова угода не машина або її −1 100 у сумі");
+  assert.equal(v.totals.machines, 4, "🔴 мінусові угоди випали з «Машин»");
+  const row = (pz: number) => v.rows.find((r) => r.pzId === pz)!;
+  assert.deepEqual([row(2).price, row(2).minus], [0, true], "🔴 рядок мінусової угоди: сума не 0 або без позначки");
+  assert.deepEqual([row(1).price, row(1).minus], [2_448, false], "🔴 плюсова угода втратила суму або позначена мінусовою");
+  const deps: HandoffRowDeps = { stageName: () => "етап", qualificationPipelines: [], leadUrl: (id) => `u/${id}` };
+  const info = (h: (typeof v.rows)[number]): HandoffLinkInfo & typeof h =>
+    Object.assign({}, h, { pzName: null, pzClient: null, dealName: null, dealClient: null, salesManager: null, dealReason: null, closedDay: null, planPayDay: null });
+  assert.equal(handoffDealRow(info(row(2)), { pipelineId: 1, statusId: 1 }, deps).minus, true, "🔴 список «Гроші з передач» не знає, що угода мінусова");
+  assert.equal(handoffDealRow(info(row(1)), { pipelineId: 1, statusId: 1 }, deps).minus, false, "🔴 плюсова угода в списку позначена мінусовою");
+});

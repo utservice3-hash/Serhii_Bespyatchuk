@@ -285,7 +285,8 @@ function DealRow({ d, period }: { d: LeadgenHandoffDeal; period: { from: string;
           : d.stage}
       </td>
       <td style={{ ...td, fontWeight: hasMoney && d.price ? 700 : 400, color: hasMoney && d.price ? undefined : MUTED }}>
-        {d.price ? formatAmountFull(d.price) : hasMoney ? "не проставлено" : "—"}
+        {d.minus ? <span title="У продажах угоду позначено «Мінусова угода»: перевезення розбито на мінус і окрему плюсову угоду, а плюсова з передачею лідгена не повʼязана. Машина рахується, сума — ні">мінусова · 0</span>
+          : d.price ? formatAmountFull(d.price) : hasMoney ? "не проставлено" : "—"}
       </td>
       <td style={{ ...td, textAlign: "left", color: MUTED, whiteSpace: "normal", minWidth: 110, maxWidth: 220 }}>{detail}</td>
     </tr>

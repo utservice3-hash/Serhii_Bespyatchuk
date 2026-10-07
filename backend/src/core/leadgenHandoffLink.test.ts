@@ -400,6 +400,29 @@ test("#683b ЖИВИЙ SQL: стан угоди менеджера — успі�
 });
 
 /**
+ * #1500b — ЯДРО ВІДДАЄ ПОЗНАЧКУ «МІНУСОВА УГОДА», А СУМУ НЕ ЧІПАЄ (рішення власника 07.10.2026).
+ * `handoffDealStates` читає `deals.is_minus` → `minus`; бюджет лишається зі знаком (продажі й далі віднімають мінус —
+ * нуль ставить лише `leadgenPrice` лідгена). Обидва боки: мінусова з прапорцем, плюсова без.
+ * 🧨 САБОТАЖ: у `handoffDealStates` `minus: x.is_minus === true` → `minus: false` → червоніє.
+ */
+test("#1500b ЖИВИЙ SQL: стан угоди несе позначку «Мінус», бюджет — зі знаком", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { money } = await core();
+  const at = utc("2026-03-02T10:00:00");
+  const mk = async (price: number, minus: boolean) => {
+    const id = nextId++;
+    await client!.query(
+      `INSERT INTO deals (kommo_id, name, manager_id, pipeline_id, status_id, price, is_minus, created_at_kommo, client_key, client_name)
+       VALUES ($1, 'гейт #1500b', 3, $2, 69716460, $3, $4, $5, NULL, NULL)`, [id, FC[0], price, minus, at]);
+    return id;
+  };
+  const neg = await mk(-4_948, true), pos = await mk(2_448, false);
+  const got = await money.handoffDealStates([neg, pos]);
+  assert.deepEqual([got.get(neg)?.minus, got.get(neg)?.price], [true, -4_948], "🔴 мінусова угода: ядро загубило позначку або змінило бюджет");
+  assert.deepEqual([got.get(pos)?.minus, got.get(pos)?.price], [false, 2_448], "🔴 плюсова угода позначена мінусовою або змінила бюджет");
+});
+
+/**
  * #682b — МІСЯЦЬ ТРЕНДУ == `/leadgen-stats` + ГРОШІ ТОГО МІСЯЦЯ, НА ЖИВОМУ SQL (ревʼю F2).
  *
  * `#676b` звіряв лише чотири лічильники стадій двома формами одного запиту. Тут — СПРАВЖНІ
