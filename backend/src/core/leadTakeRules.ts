@@ -42,7 +42,20 @@ export interface DealTakeInput {
   stageAt: number | null;         // перша зміна етапу (не в закриття), ms
   callAt: number | null;          // перший вихідний дзвінок, ms
   fieldAt: number | null;         // поле «Взято в работу», ms
+  /** Закрита з причиною «Дубль» — зміна етапу для неї НЕ «взято» (див. `isDuplicateLost`). */
+  duplicate?: boolean;
 }
+
+/**
+ * 🔁 «ДУБЛЬ» — ЛИШЕ ДЗВІНОК АБО ПОЛЕ (рішення Юлі/Романа 07.10.2026, варіант «Б»). Замір 01–23.09, реклама: у 19 з 84
+ * «Дублів» етап змінювався через 10–15 с після створення — швидше, ніж людина встигає щось зробити (схоже, автоматика
+ * Kommo), і вікно ставило їх у «до 1 хв», хоча менеджер міг так і не подзвонити. Хто зрушив етап, Kommo не передає,
+ * тож для «Дубля» рахуємо лише вихідний дзвінок або поле «Взято в работу». Правило — ЛИШЕ для «Дубля»: у решти угод
+ * зміна етапу лишається «взято», як у ТЗ.
+ */
+export const DUPLICATE_REASON = "Дубль";
+export const isDuplicateLost = (statusId: string | number, rejectReason: string | null | undefined): boolean =>
+  String(statusId) === "143" && (rejectReason ?? "").trim() === DUPLICATE_REASON;
 export interface DealTake {
   takenAt: number | null;
   event: TakeEvent | null;
@@ -103,7 +116,7 @@ export function bucketOf(minutes: number | null): TakeBucket {
 
 /** Перша з трьох подій (не раніше створення) і час до неї. */
 export function takeOf(x: DealTakeInput): DealTake {
-  const cands: [TakeEvent, number | null][] = [["stage", x.stageAt], ["call", x.callAt], ["field", x.fieldAt]];
+  const cands: [TakeEvent, number | null][] = [["stage", x.duplicate ? null : x.stageAt], ["call", x.callAt], ["field", x.fieldAt]];
   let best: [TakeEvent, number] | null = null;
   for (const [ev, at] of cands) {
     if (at == null || at < x.createdAt) continue;
