@@ -201,6 +201,7 @@ interface ViewMod {
   managerChecklist: (rows: readonly unknown[]) => { name: string; calls: number; score: number | null; request: number | null; price: number | null; promise: number | null }[];
   avgScore3: (s: readonly ({ yes: number; total: number } | null)[]) => number | null;
   markPct: (cls: readonly (Record<string, string> | null)[], key: string) => number | null;
+  aiDefaultPeriod: (today: string) => { mode: string; anchor: string };
   avgScorePct: (s: readonly ({ yes: number; total: number } | null)[]) => number | null;
   tileStats: (rows: readonly unknown[]) => { noCall: { n: number; of: number }; price: { yes: number; of: number; pct: number | null }; objection: { handled: number; of: number; pct: number | null }; lost: number; success: { n: number; of: number } };
   TILE_MATCH: Record<string, (r: unknown) => boolean>;
@@ -1391,9 +1392,62 @@ test("#911 ЗГОРТАННЯ І СКЕЛЕТ: шеврон з aria, плавн�
   assert.match(sec, /className=\{`ftd-collapse\$\{mgrCollapsed \? " is-collapsed" : ""\}`\} aria-expanded=\{!mgrCollapsed\} aria-controls="ftd-mgr-body"/, "🔴 немає кнопки-шеврона з aria-expanded");
   assert.ok(!/Згорнути ▴|Розгорнути ▾/.test(sec), "🔴 повернулась текстова кнопка «Згорнути ▴»");
   assert.match(sec, /<div id="ftd-mgr-body" className=\{`ftd-collapsible\$\{mgrCollapsed \? " is-collapsed" : ""\}`\}/, "🔴 блок згортається умовним рендером — анімувати нічого");
-  assert.match(sec, /if \(!d\) return <FirstTouchSkeleton navBar=\{navBar\} drawer=\{drawer\} \/>;/, "🔴 замість скелета — напис «Завантаження…»");
+  assert.match(sec, /if \(!d\) return <FirstTouchSkeleton header=\{header\} drawer=\{drawer\} \/>;/, "🔴 замість скелета — напис «Завантаження…»");
   assert.match(sec, /: "розбираються для розмов від 09\.10",/, "🔴 «0 з 0 заперечень» замість пояснення");
   const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
   assert.match(css, /\.ftd-collapsible\.is-collapsed \{ grid-template-rows: 0fr; opacity: 0; \}/, "🔴 немає плавної висоти");
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.ftd-collapse svg, \.ftd-collapsible, \.ftd-fade \{ transition: none; \}\s*\.ftd-sk \{ animation: none; \}/, "🔴 анімація не вимикається для «зменшення руху»");
+});
+
+/**
+ * #912 — ПОТОЧНИЙ МІСЯЦЬ І ПЛАВНІ ЧИСЛА (Роман 08.10.2026: «плавне оновлення цифр при зміні команди, і по дефолту щоб
+ * відкривався цей місяць»). Екран відкривається на місяці сьогоднішньої дати; числа на плитках перетікають від старого
+ * значення до нового, перший показ — без анімації, «зменшення руху» — одразу нове значення.
+ * 🧨 Червоніє, якщо за замовчуванням знову діапазон «30 днів», плитки показують сирий текст, або анімація ігнорує
+ * «зменшення руху».
+ */
+test("#912 МІСЯЦЬ І ПЛАВНІ ЧИСЛА: за замовчуванням поточний місяць, плитки перетікають, без руху — одразу", async () => {
+  const V = await loadView();
+  const p = V.aiDefaultPeriod("2026-10-08");
+  assert.deepEqual([p.mode, p.anchor], ["month", "2026-10-08"], "🔴 за замовчуванням не поточний місяць");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  for (const v of ["ts.noCall.n", "ts.price.pct", "ts.objection.pct", "lost.length", "ts.success.n"])
+    assert.ok(sec.includes(`<AnimatedNumber value={${v}}`), `🔴 плитка ${v} без плавного числа`);
+  const an = readFileSync(FE("pages/dashboard/sections/AnimatedNumber.tsx"), "utf8");
+  assert.match(an, /if \(value == null \|\| start == null \|\| start === value \|\| reducedMotion\(\)\) \{ from\.current = value; setShown\(value\); return; \}/, "🔴 «зменшення руху» чи перший показ анімуються");
+  assert.match(an, /matchMedia\?\.\("\(prefers-reduced-motion: reduce\)"\)/, "🔴 не питає систему про «зменшення руху»");
+});
+
+/**
+ * #913 — НОВИЙ ПЕРІОД НЕ СКИДАЄ ЦИФРИ (Роман 08.10.2026: «зроби щоб і при зміні періоду цифри перетікали»). Поки
+ * вантажиться новий період, старі дані лишаються (приглушені, «Оновлюю…»), тож плитки перетікають від старого числа
+ * до нового; скелет — лише на першому відкритті. Помилка знімає приглушення.
+ * 🧨 Червоніє, якщо новий період знову обнуляє дані (тоді перетікати нема з чого) або «Оновлюю…» зникає.
+ */
+test("#913 ПЕРІОД ПЕРЕТІКАЄ: новий період лишає старі цифри приглушеними, поки не прийдуть нові", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /if \(periodKey\.current !== `\$\{from\}\|\$\{to\}`\) \{ setStale\(true\); periodKey\.current = `\$\{from\}\|\$\{to\}`; \}/, "🔴 новий період обнуляє дані — перетікати нема з чого");
+  assert.ok(!/setD\(null\)/.test(sec), "🔴 дані знову скидаються в null");
+  assert.match(sec, /\.then\(\(x\) => \{ if \(alive\) \{ setD\(x\); setStale\(false\); \} \}\)/, "🔴 нові дані не знімають приглушення");
+  assert.match(sec, /\{stale && <span className="ftd-updating" role="status">Оновлюю…<\/span>\}/, "🔴 не видно, що цифри оновлюються");
+  const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
+  assert.match(css, /\.ftd-over\.is-stale \.ftd-kpis, \.ftd-over\.is-stale \.ftd-card, \.ftd-over\.is-stale \.ftd-strip \{ opacity: \.55;/, "🔴 старі цифри не приглушено — читаються як нові");
+});
+
+/**
+ * #914 — ОДНА ШАПКА ДЛЯ СКЕЛЕТА Й ЕКРАНА (Роман 08.10.2026: «на preview і фактичній картинці різне місцеположення
+ * періодів… це обʼєкт, який може завжди відображатися»). Шапка (заголовок, конвеєр, період, «Команда») будується ОДИН раз
+ * і вставляється і в скелет, і в екран; розкладка — колонкою, тож період не стрибає між рядками залежно від довжини
+ * рядка конвеєра.
+ * 🧨 Червоніє, якщо скелет знову малює власну шапку чи шапка повертається в рядок «заголовок ↔ період».
+ */
+test("#914 ОДНА ШАПКА: скелет і екран вставляють ту саму шапку, період завжди окремим рядком", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.equal((sec.match(/className="ftd-head"/g) ?? []).length, 1, "🔴 шапка намальована більше ніж раз — скелет і екран розійдуться");
+  assert.match(sec, /function FirstTouchSkeleton\(\{ header, drawer \}/, "🔴 скелет не приймає спільну шапку");
+  assert.match(sec, /aria-label="Завантаження «Першого дотику»">\n\s*\{header\}/, "🔴 скелет без спільної шапки");
+  assert.match(sec, /if \(err\) return <div className="ftd">\{header\}/, "🔴 екран помилки без спільної шапки");
+  assert.match(sec, /aria-busy=\{stale\}>\n\s*\{header\}/, "🔴 екран без спільної шапки");
+  const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
+  assert.match(css, /\.ftd-head \{ display: flex; flex-direction: column; align-items: stretch; gap: 14px; \}/, "🔴 шапка знову в рядок — період стрибає");
 });

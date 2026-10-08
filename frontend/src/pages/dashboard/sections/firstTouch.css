@@ -6,7 +6,8 @@
   transition: opacity 420ms ease, transform 520ms cubic-bezier(.2,.8,.2,1), filter 420ms ease; }
 .ftd-over.is-dim { opacity: .35; transform: scale(.97); filter: blur(2px); pointer-events: none; }
 
-.ftd-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; }
+/* Шапка в колонку: заголовок і конвеєр, під ними завжди окремим рядком період і «Команда» — однаково в скелеті й на екрані. */
+.ftd-head { display: flex; flex-direction: column; align-items: stretch; gap: 14px; }
 .ftd-kicker { font-size: 12px; color: var(--text-muted); }
 .ftd-title { margin: 2px 0 0; font-size: 26px; font-weight: 800; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; }
 .ftd-meta { margin: 4px 0 0; font-size: 12px; color: var(--text-muted); }
@@ -144,3 +145,10 @@
   .ftd-collapse svg, .ftd-collapsible, .ftd-fade { transition: none; }
   .ftd-sk { animation: none; }
 }
+
+/* Новий період вантажиться: старі цифри видно, але приглушено; блоки, що не залежать від чисел, лишаються чіткими. */
+.ftd-over.is-stale .ftd-kpis, .ftd-over.is-stale .ftd-card, .ftd-over.is-stale .ftd-strip { opacity: .55; transition: opacity .2s ease; }
+.ftd-over .ftd-kpis, .ftd-over .ftd-card, .ftd-over .ftd-strip { transition: opacity .25s ease; }
+.ftd-updating { font-size: 12px; font-weight: 600; color: var(--text-muted); background: var(--card-bg); border: 1px solid var(--border);
+  border-radius: 999px; padding: 2px 10px; letter-spacing: 0; }
+@media (prefers-reduced-motion: reduce) { .ftd-over .ftd-kpis, .ftd-over .ftd-card, .ftd-over .ftd-strip { transition: none; } }
