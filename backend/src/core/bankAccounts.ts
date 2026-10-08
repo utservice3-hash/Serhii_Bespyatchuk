@@ -11,7 +11,7 @@
  */
 import { FinError } from "./finance.js";
 import { TOKEN_NAME } from "../bankSources/token.js";
-import { normLast4 } from "../bankSources/mono.js";
+import { normLast4, normIban } from "../bankSources/mono.js";
 
 export const COMPANIES = ["uts", "automuv", "fop_privat", "fop_mono", "staff"] as const;
 export const CURRENCIES = ["UAH", "USD", "EUR"] as const;
@@ -31,7 +31,7 @@ export function checkEnvKeyName(bank: string, raw: unknown): string | null {
 
 export interface NewAccount {
   company: string; bank: Bank; label: string; currency: string; envKeyName: string | null;
-  monoPanLast4: string | null; financeOnly: boolean; isActive: false;
+  monoPanLast4: string | null; iban: string | null; financeOnly: boolean; isActive: false;
 }
 
 /** Перевірка нового рахунку. Картка працівника: моно + 4 цифри; «лише фінанси» для неї — за замовчуванням так. */
@@ -50,7 +50,11 @@ export function validateNewAccount(b: Record<string, unknown>): NewAccount {
   if (rawLast4 && !monoPanLast4) throw new FinError(400, "Останні цифри картки — рівно 4 цифри");
   if (monoPanLast4 && bank !== "mono") throw new FinError(400, "Останні 4 цифри картки — лише для monobank");
   if (company === "staff" && bank !== "mono") throw new FinError(400, "Картку працівника підключаємо лише з monobank (у Привату для фізосіб API немає)");
-  if (company === "staff" && !monoPanLast4) throw new FinError(400, "Для картки працівника потрібні останні 4 цифри");
+  const rawIban = String(b.iban ?? "").trim();
+  const iban = rawIban ? normIban(rawIban) : null;
+  if (rawIban && !iban) throw new FinError(400, "IBAN — UA і 27 цифр (пробіли можна)");
+  // Картку працівника знаходимо за IBAN (надійніше: не міняється при перевипуску) або за 4 цифрами картки.
+  if (company === "staff" && !monoPanLast4 && !iban) throw new FinError(400, "Для картки працівника потрібні останні 4 цифри картки або IBAN рахунку");
   const financeOnly = b.financeOnly == null ? company === "staff" : b.financeOnly === true;
-  return { company, bank, label, currency, envKeyName, monoPanLast4, financeOnly, isActive: false };
+  return { company, bank, label, currency, envKeyName, monoPanLast4, iban, financeOnly, isActive: false };
 }
