@@ -58,3 +58,40 @@ export function validateNewAccount(b: Record<string, unknown>): NewAccount {
   const financeOnly = b.financeOnly == null ? company === "staff" : b.financeOnly === true;
   return { company, bank, label, currency, envKeyName, monoPanLast4, iban, financeOnly, isActive: false };
 }
+
+/** Поля, які панель керування може змінити: ключ запиту → колонка. Решта ключів ігнорується. */
+const UPDATABLE: Record<string, string> = { label: "label", currency: "currency", externalAccountId: "external_account_id",
+  isActive: "is_active", legalName: "legal_name", edrpouIpn: "edrpou_ipn", iban: "iban", bankName: "bank_name", mfo: "mfo", purpose: "purpose",
+  envKeyName: "env_key_name", vatIpn: "vat_ipn", legalAddress: "legal_address", director: "director", bankEdrpou: "bank_edrpou", keyCard: "key_card" };
+
+/**
+ * `SET`-частина оновлення рахунку (#1239). Правила ті самі, що при створенні: ключ — лише свого банку; у картки
+ * працівника IBAN — справжній; цифри картки — рівно 4. Зміна цифр чи IBAN картки скидає привʼязку до рахунку моно —
+ * ОДНИМ виразом: 08.10.2026 панель слала цифри й IBAN разом, і два окремі `external_account_id = …` Postgres відкидав
+ * («multiple assignments»), тож «Зберегти» мовчки не зберігало нічого.
+ */
+export function buildAccountUpdate(b: Record<string, unknown>, cur: { bank: string; company: string }): { sets: string[]; params: unknown[] } {
+  const v: Record<string, unknown> = { ...b };
+  if ("envKeyName" in v) v.envKeyName = checkEnvKeyName(cur.bank, v.envKeyName);
+  if ("iban" in v && cur.company === "staff") {
+    const raw = String(v.iban ?? "").trim();
+    const iban = raw ? normIban(raw) : null;
+    if (raw && !iban) throw new FinError(400, "IBAN — UA і 27 цифр (пробіли можна)");
+    v.iban = iban;
+  }
+  const sets: string[] = []; const params: unknown[] = []; const rebind: string[] = [];
+  for (const [k, col] of Object.entries(UPDATABLE)) if (k in v) {
+    params.push(v[k]); sets.push(`${col} = $${params.length}`);
+    if (k === "iban" && cur.company === "staff") rebind.push(`iban IS DISTINCT FROM $${params.length}`);
+  }
+  if ("monoPanLast4" in v) {
+    const raw = String(v.monoPanLast4 ?? "").trim();
+    const last4 = normLast4(raw);
+    if (raw && !last4) throw new FinError(400, "Останні цифри картки — рівно 4 цифри");
+    params.push(last4); sets.push(`mono_pan_last4 = $${params.length}`);
+    rebind.push(`mono_pan_last4 IS DISTINCT FROM $${params.length}`);
+  }
+  if (rebind.length && !("externalAccountId" in v))
+    sets.push(`external_account_id = CASE WHEN ${rebind.join(" OR ")} THEN NULL ELSE external_account_id END`);
+  return { sets, params };
+}
