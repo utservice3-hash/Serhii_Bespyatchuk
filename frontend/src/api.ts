@@ -4583,7 +4583,9 @@ export async function fetchMergeJournal(): Promise<MergeJournalRow[]> {
   const { data } = await api.get<MergeJournalRow[]>("/dashboard/client-merge/journal");
   return data;
 }
-export async function assignClientManager(body: { clientKey: string; managerId: number; reason: string; kind: "fix" | "transfer" }): Promise<{ effectiveFrom: string; kind: "fix" | "transfer"; note: string }> {
+/** 📝 Задача новому менеджеру при передачі клієнта (08.10.2026): при «передачі» обовʼязкова, при «виправленні» — за бажанням. */
+export interface TransferTaskBody { text: string; deadline: string; priority: "low" | "medium" | "high"; details: string }
+export async function assignClientManager(body: { clientKey: string; managerId: number; reason: string; kind: "fix" | "transfer"; task?: TransferTaskBody }): Promise<{ effectiveFrom: string; kind: "fix" | "transfer"; note: string; taskId: number | null }> {
   const { data } = await api.post("/dashboard/client-manager", body);
   return data;
 }

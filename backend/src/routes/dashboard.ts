@@ -123,6 +123,8 @@ import {
   LIMIT_REQUEST_TASK_TYPE,
 } from "../core/creditLimits.js";
 import { canRequestLimitFor, canAssignTaskToOthers } from "../auth/taskAssignScope.js";
+import { transferTaskVerdict } from "../core/transferTask.js";
+import { applyClientTransfer } from "../core/clientTransfer.js";
 import { activeManagerSql } from "../core/activeManager.js";
 import * as managerState from "../core/managerState.js";
 import { teamAtSql, inTeamDuringSql, teamOnDateSql, sqlDate, teamJoinSql } from "../core/teamAt.js";
@@ -8206,6 +8208,9 @@ dashboardRouter.post("/client-manager", async (req, res) => {
   // клієнта посеред місяця нічим не пояснити.
   if (!TRANSFER_KINDS.includes(kind)) return res.status(400).json({ error: "kind: fix або transfer" });
   if (!reason) return res.status(400).json({ error: "Причина обовʼязкова: вона лишається в історії клієнта" });
+  // 📝 Задача новому менеджеру (08.10.2026): при «передачі» обовʼязкова, при «виправленні» — за бажанням.
+  const tv = transferTaskVerdict(req.body?.task, kind, kyivToday());
+  if (!tv.ok) return res.status(400).json({ error: tv.error });
 
   const chk = await pool.query<{ id: number; team_id: number | null }>(`SELECT id, team_id FROM managers WHERE id = $1 AND is_active`, [toManagerId]);
   if (!chk.rowCount) return res.status(400).json({ error: "Менеджер не знайдений або деактивований" });
@@ -8217,29 +8222,27 @@ dashboardRouter.post("/client-manager", async (req, res) => {
     if (!assignAllowed(scope)) return res.status(403).json({ error: assignDenyReason(scope) });
   }
 
-  const cur = await pool.query<{ pinned_manager_id: number | null }>(
-    `SELECT pinned_manager_id FROM loyalty_overrides WHERE client_key = $1`, [clientKey]);
-  const from = cur.rows[0]?.pinned_manager_id ?? null;
-
   // Дата дії — з одного правила з читачами (`core/effectiveManager.ts`).
   const effectiveFrom = effectiveFromFor(kind, kyivToday());
 
-  await pool.query(
-    `INSERT INTO loyalty_overrides (client_key, pinned_manager_id, pinned_from_month, updated_by, updated_at)
-     VALUES ($1,$2,$3,$4, now())
-     ON CONFLICT (client_key) DO UPDATE SET pinned_manager_id = EXCLUDED.pinned_manager_id,
-       pinned_from_month = EXCLUDED.pinned_from_month, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-    [clientKey, toManagerId, effectiveFrom, auth.userId]);
-  await pool.query(
-    `INSERT INTO client_manager_history (client_key, from_manager_id, to_manager_id, effective_from, reason, changed_by, kind)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)`, [clientKey, from, toManagerId, effectiveFrom, reason, auth.userId, kind]);
+  /**
+   * 🔒 ОДНА ТРАНЗАКЦІЯ: закріплення, історія передачі й задача новому менеджеру — разом або нічого (08.10.2026).
+   * Інакше впала вставка задачі — а клієнт уже переїхав, і новий менеджер отримав його без жодної дії; рівно те,
+   * від чого задача й захищає. Журнал (`logClientAdmin`) — слід дії, пишеться ПІСЛЯ коміту.
+   */
+  const db = await pool.connect();
+  let applied: { from: number | null; taskId: number | null };
+  try {
+    applied = await applyClientTransfer(db, { clientKey, toManagerId, reason, kind, effectiveFrom, userId: auth.userId, task: tv.task });
+  } finally { db.release(); }
+  const { from, taskId } = applied;
   // 🔴 Два записи, і вони НЕ дублікати: `client_manager_history` — ДІЮЧИЙ стан передачі
   // (з якого місяця чий клієнт), його читає логіка ростерів. Журнал — слід дії, його не
   // читає ніхто, крім людини. Злиття зробило б із розрахункової таблиці смітник подій.
   await logClientAdmin("manager_change", clientKey, auth.userId,
-    { fromManagerId: from, toManagerId, effectiveFrom, reason, kind });
+    { fromManagerId: from, toManagerId, effectiveFrom, reason, kind, taskId });
 
-  res.json({ ok: true, effectiveFrom, kind,
+  res.json({ ok: true, effectiveFrom, kind, taskId,
     note: kind === "fix" ? "Виправлення привʼязки: діє одразу, з початку поточного місяця"
                          : "Передача: поточний місяць лишається за попереднім менеджером" });
 });
