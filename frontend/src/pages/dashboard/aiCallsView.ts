@@ -91,9 +91,11 @@ export const AI_START_DATE = "2026-09-20";
 
 /** Типовий період — вікно, яке бере джоба: від пізнішого з дати старту й «сьогодні − 29 днів». */
 export function aiDefaultPeriod(today: string): PeriodState {
+  // 08.10.2026 (Роман): за замовчуванням — ПОТОЧНИЙ МІСЯЦЬ. Діапазон лишається на випадок перемикання в «Період»:
+  // останні 30 днів, але не раніше старту аналізу.
   const rolling = addDays(today, -29);
   const from = rolling > AI_START_DATE ? rolling : AI_START_DATE;
-  return { mode: "range", anchor: today, focusDay: today, rangeFrom: from, rangeTo: today };
+  return { mode: "month", anchor: today, focusDay: today, rangeFrom: from, rangeTo: today };
 }
 
 /**
