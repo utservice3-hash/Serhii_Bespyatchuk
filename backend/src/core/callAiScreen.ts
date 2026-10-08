@@ -2,6 +2,8 @@ import type { Db } from "./adCallFacts.js";
 import { adDealFirstTalksSql } from "./adCallFactsRules.js";
 import { OUTBOUND_TYPES } from "./missedCallsRules.js";
 import type { MissedScope } from "./missedCallsRules.js";
+import { RUBRIC_OBJECTION_V1, type ObjectionResult } from "./callAiObjection.js";
+import { dealOutcomes, outcomeOfCall, type DealOutcome } from "./firstTouchOutcome.js";
 import { ELEVENLABS_STT_MODEL, GEMINI_MODEL, FIRST_TOUCH_SHOWN_RUBRICS, FIRST_TOUCH_RUBRICS, type AnalysisResult, type Turn } from "./callAiProviders.js";
 import { LLM_PROVIDER, STT_PROVIDER, RINGOSTAT_POLICY, RECORDING_MAX_BYTES, type AdPredicate } from "./callAiPilot.js";
 import { downloadRecording, type DownloadOutcome } from "./ringostatRecording.js";
@@ -73,7 +75,10 @@ export const FIRST_TOUCH_TRANSCRIPT_ROLES: ReadonlySet<string> = new Set(["admin
  * «Опрацьовано» до невиконаної домовленості — лише тімлід і адмін. Скоуп — у роуті через картку.
  */
 export function canWriteNote(roleKey: string | null | undefined, kind: string): boolean {
-  if (kind === "price" || kind === "offline") return roleKey === "admin" || roleKey === "team_lead" || roleKey === "manager";
+  if (kind === "price") return roleKey === "admin" || roleKey === "team_lead" || roleKey === "manager";
+  // «Передзвонив поза телефонією» — менеджеру вимкнено (рішення 08.10.2026, ТЗ «фінальні доробки»: без редагування,
+  // спершу фідбек тімлідів); тімлід і адмін ставлять.
+  if (kind === "offline") return roleKey === "admin" || roleKey === "team_lead";
   if (kind === "missed" || kind === "review") return roleKey === "admin" || roleKey === "team_lead";
   return false;
 }
@@ -166,6 +171,10 @@ export interface AiCallRow {
   reviewNote: CallNote | null;
   /** Модель витягла запит клієнта (що й куди везти) — пункт «Запит» чек-листа; `false` і до аналізу. */
   hasRequest: boolean;
+  /** 🛡 Заперечення (окрема рубрика `first-touch-objection-v1`, ТЗ 08.10.2026); `null` — ще не розібрано цією рубрикою. */
+  objection: ObjectionResult | null;
+  /** 🏁 Успіх угоди з Kommo — ЗАРАЗ (`core/firstTouchOutcome.ts`); `null`, поки не пораховано. */
+  dealOutcome: DealOutcome | null;
   /** Номер клієнта (для пулу заявок тімліда, ТЗ п.6.2) — `null`, якщо Ringostat його не дав. */
   clientPhone: string | null;
   /** ⏱ Перший наш вихідний на номер після створення угоди (`core/leadReaction.ts`); `null` — не дзвонили / невідомо. */
@@ -191,6 +200,7 @@ interface RawRow {
   mn_text?: string | null; mn_by?: string | null; mn_at?: Date | null;
   on_text?: string | null; on_by?: string | null; on_at?: Date | null;
   rv_text?: string | null; rv_by?: string | null; rv_at?: Date | null;
+  obj_result?: ObjectionResult | null;
   first_out_at?: Date | null;
 }
 
@@ -226,6 +236,8 @@ export function foldRow(r: RawRow): AiCallRow {
     offlineNote: r.on_text ? { text: r.on_text, byName: r.on_by ?? null, at: r.on_at ? new Date(r.on_at).toISOString() : "" } : null,
     reviewNote: r.rv_text ? { text: r.rv_text, byName: r.rv_by ?? null, at: r.rv_at ? new Date(r.rv_at).toISOString() : "" } : null,
     hasRequest: (res?.client_request ?? "").trim() !== "",
+    objection: state === "done" ? r.obj_result ?? null : null,
+    dealOutcome: null,
     clientPhone: r.client_phone ?? null,
     firstOutboundAt: r.first_out_at ? new Date(r.first_out_at).toISOString() : null,
     reactionMin: null,
@@ -355,7 +367,7 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
     SELECT ft.kommo_id, ft.uniqueid, ft.calldate, ft.call_type, ft.billsec, ft.created_at,
            ft.manager_id, m.name AS manager_name, m.team_id, tm.name AS team_name,
            t.status AS stt_status, t.failure AS stt_failure,
-           a.status AS llm_status, a.failure AS llm_failure, a.result,
+           a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result,
            rcx.client_phone, d.pipeline_id, d.reject_reason,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
            ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS},
@@ -372,6 +384,9 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
       LEFT JOIN LATERAL (SELECT ax.status, ax.failure, ax.result FROM call_analyses ax
                   WHERE ax.transcript_id = t.id AND ax.provider = $10 AND ax.model = $11 AND ax.rubric_version = ANY($12::text[])
                   ORDER BY (ax.status = 'done') DESC, array_position($12::text[], ax.rubric_version) LIMIT 1) a ON true
+      LEFT JOIN LATERAL (SELECT ox.result AS obj_result FROM call_analyses ox
+                  WHERE ox.transcript_id = t.id AND ox.rubric_version = '${RUBRIC_OBJECTION_V1}' AND ox.status = 'done'
+                  ORDER BY ox.id DESC LIMIT 1) ob ON true
      WHERE ($13::int IS NULL OR ft.manager_id = $13)
        AND ($14::int IS NULL OR m.team_id = $14)
        AND ${firstTouchExclusionSql("ft", "rcx.client_phone", tun.repeatWindowDays)}
@@ -406,6 +421,9 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
   }
   const out = collapseByCall(rows);
   for (const r of out) { r.reactionMin = reactionMinutes(r.dealCreatedAt, r.firstOutboundAt); r.reactionOffHours = offHours(r.dealCreatedAt); }
+  // 🏁 Успіх угоди — стан Kommo ЗАРАЗ; розмова з кількома угодами — `outcomeOfCall`.
+  const outcomes = await dealOutcomes(db, [...new Set(out.flatMap((r) => r.kommoIds))]);
+  for (const r of out) r.dealOutcome = outcomeOfCall(r.kommoIds.map((id) => outcomes.get(id)).filter((x): x is DealOutcome => x != null));
   return { rows: out, truncated: raw.length >= SCREEN_LIMIT };
 }
 
@@ -452,7 +470,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
            t.status AS stt_status, t.failure AS stt_failure, t.segments, t.duration_sec, t.channels AS audio_channels,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
            ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS},
-           a.status AS llm_status, a.failure AS llm_failure, a.result
+           a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result
       FROM ringostat_calls rc
       ${overrideJoin("rc")}
       ${notesJoin("rc")}
@@ -462,6 +480,9 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
       LEFT JOIN LATERAL (SELECT ax.status, ax.failure, ax.result FROM call_analyses ax
                   WHERE ax.transcript_id = t.id AND ax.provider = $4 AND ax.model = $5 AND ax.rubric_version = ANY($6::text[])
                   ORDER BY (ax.status = 'done') DESC, array_position($6::text[], ax.rubric_version) LIMIT 1) a ON true
+      LEFT JOIN LATERAL (SELECT ox.result AS obj_result FROM call_analyses ox
+                  WHERE ox.transcript_id = t.id AND ox.rubric_version = '${RUBRIC_OBJECTION_V1}' AND ox.status = 'done'
+                  ORDER BY ox.id DESC LIMIT 1) ob ON true
      WHERE rc.uniqueid = $1
        AND ($7::int IS NULL OR rc.manager_id = $7)
        AND ($8::int IS NULL OR m.team_id = $8)
@@ -499,6 +520,8 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
       managerName: c.managerName, byPromiser: row.managerId != null && c.managerId === row.managerId }));
   const { kommoId: _k, dealCreatedAt: _d, ...rest } = row;
   const mc = done && raw.result ? raw.result.manager_channel : null;
+  const outc = await dealOutcomes(db, deals);
+  rest.dealOutcome = outcomeOfCall(deals.map((id) => outc.get(id)).filter((x): x is DealOutcome => x != null));
   return {
     // 🩹 07.10.2026: стан рядка картки — той самий, що в списку (найгірша обіцянка + позначка «поза телефонією»).
     // Без нього `row.promiseState` лишався null з `foldRow`, і в картці НІКОЛИ не зʼявлялись поля «Передзвонив поза

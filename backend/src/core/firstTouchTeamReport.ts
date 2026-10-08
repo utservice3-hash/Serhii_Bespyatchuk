@@ -38,6 +38,8 @@ export interface ReportRowIn {
   /** Екран D (08.10.2026): чи витягла модель запит клієнта, і чи розібрав розмову тімлід. */
   hasRequest?: boolean;
   reviewNote?: { text: string } | null;
+  /** Заперечення з окремої рубрики (ТЗ 08.10.2026); `null`/відсутнє — ще не розібрано цією рубрикою. */
+  objection?: { present: boolean; handled: string } | null;
 }
 
 export interface ManagerLine {
@@ -132,12 +134,14 @@ export function poolRows<T extends ReportRowIn>(rows: readonly T[], managerId: n
  *              відмовився, розпитувати нема про що — рішення Романа 08.10.2026, як і для ціни);
  *   ціна     — ціну назвали; `n` — не назвали; `o` — втрачений лід (називати нікому, правило 05.10);
  *   обіцянка — передзвонив (з розмовою чи лише спробами), «поза телефонією», клієнт сам подзвонив → `y`; запізнився чи
- *              дзвінка немає → `n`; обіцянки передзвонити не було або термін ще не настав → `o`.
+ *              дзвінка немає → `n`; обіцянки передзвонити не було або термін ще не настав → `o`;
+ *   заперечення — (ТЗ 08.10.2026, критерій 4) було й опрацьоване → `y`; було й не опрацьоване → `n`; не було або рубрика
+ *              заперечень ще не пройшла → `o` (не рахується — «не знаємо» не читається як «ні»).
  * Пункти «заперечення» й «наступний крок» свідомо НЕ тут: модель не каже, чи відпрацьовано заперечення і чий крок.
  * Нерозібрана розмова чек-листа не має (`null`) — «ще не знаємо» не читається як «ні».
  */
 export type CheckMark = "y" | "n" | "o";
-export interface Checklist { request: CheckMark; price: CheckMark; promise: CheckMark }
+export interface Checklist { request: CheckMark; price: CheckMark; promise: CheckMark; objection: CheckMark }
 
 const PROMISE_YES: ReadonlySet<PromiseState> = new Set(["kept_talk", "kept_attempt_only", "kept_offline", "client_called"]);
 const PROMISE_NO: ReadonlySet<PromiseState> = new Set(["late", "broken"]);
@@ -149,13 +153,14 @@ export function checklist(r: ReportRowIn): Checklist | null {
     request: isLost(r) ? "o" : r.hasRequest ? "y" : "n",
     price: isLost(r) ? "o" : r.priceDiscussed === true ? "y" : "n",
     promise: ps != null && PROMISE_YES.has(ps) ? "y" : ps != null && PROMISE_NO.has(ps) ? "n" : "o",
+    objection: !r.objection?.present ? "o" : r.objection.handled === "handled" ? "y" : r.objection.handled === "not_handled" ? "n" : "o",
   };
 }
 
 /** Бал = виконані ÷ ті, що рахуються. `null` — розмову не розібрано. */
 export function checklistScore(c: Checklist | null): { yes: number; total: number } | null {
   if (!c) return null;
-  const m = [c.request, c.price, c.promise];
+  const m = [c.request, c.price, c.promise, c.objection];
   return { yes: m.filter((x) => x === "y").length, total: m.filter((x) => x !== "o").length };
 }
 

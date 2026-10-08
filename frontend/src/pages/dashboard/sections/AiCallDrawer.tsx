@@ -300,6 +300,13 @@ export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: strin
               {r && (r.objections.length > 0 ? <Chip tone="bad">заперечень: {r.objections.length}</Chip> : <Chip tone="muted">заперечень немає</Chip>)}
               {r && <Chip tone={c.row.promises > c.row.promisesWithDeadline ? "warn" : "muted"}>{promisesLabel(c.row.promises, c.row.promisesWithDeadline)}</Chip>}
               <Chip tone="wait">{afterLabel(c.row.calledAt, c.nextOutboundAt)}</Chip>
+              {c.row.dealOutcome && (
+                <span title={c.row.dealOutcome.lossReason ? `Причина відмови в CRM: ${c.row.dealOutcome.lossReason}` : "Стан угоди в Kommo зараз"}>
+                  <Chip tone={c.row.dealOutcome.state === "success" ? "ok" : c.row.dealOutcome.state === "lost" ? "muted" : "wait"}>
+                    угода: {c.row.dealOutcome.state === "success" ? "успіх" : c.row.dealOutcome.state === "lost" ? `відмова${c.row.dealOutcome.lossReason ? ` · ${c.row.dealOutcome.lossReason}` : ""}` : "у роботі"}
+                  </Chip>
+                </span>
+              )}
               {c.durationSec != null && <Chip tone="muted">запис {mmss(c.durationSec)}</Chip>}
               {c.dealUrls.map((d) => (
                 <a key={d.kommoId} href={d.url} target="_blank" rel="noreferrer"

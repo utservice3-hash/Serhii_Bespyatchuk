@@ -10,7 +10,8 @@ import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, mmss, aiDefaultPeriod, jo
   PROMISE_UI, GROUP_LABEL, applyListFilter, type ListFilter, type PipelineGroupT,
   TYPE_LABEL, tabRows, type ListTab, type ConversationTypeT,
   type AiFilter, type AiCallState,
-  CHECK_ITEMS, CHECK_MARK_UI, managerChecklist, avgScore3, markPct, queueRows, scoreLabel, medianMin, fmtMinutes } from "../aiCallsView";
+  CHECK_ITEMS, CHECK_MARK_UI, managerChecklist, queueRows, scoreLabel, medianMin, fmtMinutes,
+  TILE_MATCH, tileStats, priceSuccessSplit, SUCCESS_MIN_FOR_PCT, type TileKey } from "../aiCallsView";
 
 /**
  * 🎧 «ПЕРШИЙ ДОТИК · AI» — прохід 1, лише перегляд (рішення Романа 28.09.2026, макет — на ньому).
@@ -64,7 +65,8 @@ export function AiCallsSection() {
   const topRef = useRef<HTMLDivElement | null>(null);
   const [queueSel, setQueueSel] = useState<string | null>(null);
   const [glow, setGlow] = useState(false);
-  const [preset, setPreset] = useState<"all" | "noPrice" | "noCall" | "lost" | "low">("all");
+  const [preset, setPreset] = useState<"all" | TileKey>("all");
+  const tableRef = useRef<HTMLElement | null>(null);
   const [view, setView] = useState<"all" | "todo">("all");
   const [q, setQ] = useState("");
   // Згортання блоку «Менеджери за чек-листом» — пам'ятаємо в браузері (лише зручність, не дані).
@@ -112,17 +114,12 @@ export function AiCallsSection() {
   const byState = new Map<AiCallState, number>();
   for (const r of rows) byState.set(r.state, (byState.get(r.state) ?? 0) + 1);
 
-  // Пʼять чисел екрана D — з тих самих рядків звіту, стани пунктів — від сервера.
-  const cls = done.map((r) => r.checklist);
-  const promiseMarks = cls.filter((c) => c != null && c.promise !== "o");
-  const late = done.filter((r) => r.promiseState === "late").length;
-  const noCall = done.filter((r) => r.promiseState === "broken").length;
-  const keptN = done.filter((r) => r.checklist?.promise === "y").length;
-  const lost = done.filter((r) => r.conversationType === "lead_lost");
+  // Плитки (ТЗ 08.10.2026): число і список після кліку — одне правило `TILE_MATCH`; стани й знаменники — від сервера.
+  const ts = tileStats(rows);
+  const split = priceSuccessSplit(rows);
+  const target = d.priceTargetPct;
+  const lost = rows.filter(TILE_MATCH.lost);
   const lostReact = medianMin(lost.map((r) => r.reactionMin));
-  const pricePct = markPct(cls, "price");
-  const promisePct = markPct(cls, "promise");
-  const avg = avgScore3(done.map((r) => r.checkScore));
   // Блок менеджерів — по всій команді, без фільтра «менеджер»: інакше після кліку лишався один рядок і повернутись було нікуди.
   const lines = managerChecklist(tabRows(applyListFilter(d.rows, { ...lf, managerId: null }), "report"));
   const pickedName = lf.managerId != null ? (lines.find((l) => l.managerId === lf.managerId)?.name ?? managers.find(([id]) => id === lf.managerId)?.[1] ?? "менеджер") : null;
@@ -140,23 +137,23 @@ export function AiCallsSection() {
   const closeQueue = () => { setQueueOpen(false); setGlow(true); window.setTimeout(() => setGlow(false), 900); };
   const teamTitle = lf.teamId != null ? (teams.find(([id]) => id === lf.teamId)?.[1] ?? "команда") : "усі команди";
 
-  const presetOk = (r: (typeof rows)[number]) => preset === "all"
-    || (preset === "noPrice" && r.checklist?.price === "n") || (preset === "noCall" && r.promiseState === "broken")
-    || (preset === "lost" && r.conversationType === "lead_lost") || (preset === "low" && r.checkScore != null && r.checkScore.yes <= 1);
+  const presetOk = (r: (typeof rows)[number]) => preset === "all" || TILE_MATCH[preset](r);
   const needle = q.trim().toLowerCase();
   const shownD = shown.filter((r) => (view === "all" || r.needsReview) && presetOk(r)
     && (!needle || `${r.summary ?? ""} ${r.managerName ?? ""} ${r.priceValue ?? ""}`.toLowerCase().includes(needle)));
-  const presetN = (p: typeof preset) => scoped.filter((r) => p === "noPrice" ? r.checklist?.price === "n" : p === "noCall" ? r.promiseState === "broken"
-    : p === "lost" ? r.conversationType === "lead_lost" : p === "low" ? r.checkScore != null && r.checkScore.yes <= 1 : true).length;
-  const kpi = (label: string, value: string, sub: string, hint: string) => (
-    <div className="ftd-kpi">
-      <div className="ftd-kpi-l">{label}<InfoHint text={hint} /></div>
-      <div className="ftd-kpi-v">{value}</div>
-      <div className="ftd-kpi-s">{sub}</div>
-    </div>
+  const pickTile = (k: TileKey) => { setPreset(preset === k ? "all" : k); setTab("report"); setView("all"); tableRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }); };
+  const goodBad = (ok: boolean | null) => (ok == null ? "" : ok ? " is-ok" : " is-bad");
+  const kpi = (k: TileKey, label: string, value: string, sub: string, hint: string, tone = "") => (
+    <button type="button" className={`ftd-kpi ftd-tile${tone}${preset === k ? " on" : ""}`} aria-pressed={preset === k} onClick={() => pickTile(k)}>
+      <span className="ftd-kpi-l">{label}<InfoHint text={hint} /></span>
+      <span className="ftd-kpi-v">{value}</span>
+      <span className="ftd-kpi-s">{sub}</span>
+    </button>
   );
-  const bar = (v: number | null) => (
-    <div className="ftd-bar"><i style={{ width: `${String(v ?? 0)}%` }} /><span>{v == null ? "—" : `${String(v)}%`}</span></div>
+  const bar = (v: number | null, goal: number | null = null) => (
+    <div className={`ftd-bar${goal == null || v == null ? "" : v >= goal ? " is-ok" : " is-bad"}`}>
+      <i style={{ width: `${String(v ?? 0)}%` }} />{goal != null && <b className="ftd-goal" style={{ left: `${String(goal)}%` }} title={`ціль ${String(goal)} %`} />}
+      <span>{v == null ? "—" : `${String(v)}%`}</span></div>
   );
   const cell: React.CSSProperties = {};
 
@@ -208,16 +205,18 @@ export function AiCallsSection() {
           )}
 
           <section aria-label="Головні числа" className="ftd-kpis">
-            {kpi("Перших розмов", rows.length.toLocaleString("uk-UA"), done.length < rows.length ? `проаналізовано ${String(done.length)}` : "усі проаналізовано",
-              "Перші розмови рекламних угод, створених у періоді, у межах вашого доступу. Лише звіт — без «Виключених».")}
-            {kpi("Середній бал чек-листа", avg == null ? "—" : `${avg.toLocaleString("uk-UA")} / 3`, `по ${String(done.filter((r) => r.checkScore && r.checkScore.total > 0).length)} розібраних`,
-              "Три пункти: запит, ціна, обіцянка. Бал розмови = виконані ÷ ті, що рахуються (втрачений лід — без ціни; без обіцянки — без пункту «обіцянка»), приведено до 3.")}
-            {kpi("Назвали ціну", pricePct == null ? "—" : `${String(pricePct)}%`, `${String(cls.filter((c) => c?.price === "y").length)} з ${String(cls.filter((c) => c != null && c.price !== "o").length)}`,
-              "Серед розібраних, крім втрачених лідів: там називати ціну нікому.")}
-            {kpi("Обіцянки виконано", promisePct == null ? "—" : `${String(promisePct)}%`, `вчасно ${String(keptN)} · пізно ${String(late)} · немає ${String(noCall)}`,
-              `Обіцянки передзвонити, термін яких настав: виконано (з розмовою, лише спроби, поза телефонією) — з ${String(promiseMarks.length)}.`)}
-            {kpi("Втрачені ліди", lost.length.toLocaleString("uk-UA"), lostReact == null ? "реакція — немає даних" : `реакція (медіана) ${fmtMinutes(lostReact)}`,
+            {kpi("noCall", "Обіцяли — дзвінка в телефонії немає", ts.noCall.n.toLocaleString("uk-UA"),
+              `${ts.noCall.of ? `${String(Math.round((ts.noCall.n / ts.noCall.of) * 100))}% від ` : "з "}${String(ts.noCall.of)} обіцянок`,
+              "Менеджер пообіцяв передзвонити, а в телефонії його дзвінка немає. Ringostat не бачить особистого мобільного й месенджерів — тому «в телефонії».")}
+            {kpi("noPrice", "Ціна озвучена", ts.price.pct == null ? "—" : `${String(ts.price.pct)}%`, `${String(ts.price.yes)} з ${String(ts.price.of)} · ціль ${String(target)}%`,
+              "Серед розібраних, крім втрачених лідів. Клік — розмови, де ціну НЕ назвали. Ціль змінює адмін у «Налаштуваннях».", goodBad(ts.price.pct == null ? null : ts.price.pct >= target))}
+            {kpi("objNotHandled", "Заперечення опрацьовано", ts.objection.pct == null ? "—" : `${String(ts.objection.pct)}%`, `${String(ts.objection.handled)} з ${String(ts.objection.of)} заперечень`,
+              "Клієнт сказав «дорого», «подумаю», «порівняю» — і менеджер зʼясував причину, аргументував, запропонував альтернативу чи домовився про крок. Клік — неопрацьовані.")}
+            {kpi("lost", "Втрачені ліди", lost.length.toLocaleString("uk-UA"), lostReact == null ? "реакція — немає даних" : `реакція (медіана) ${fmtMinutes(lostReact)}`,
               "Клієнт уже вирішив без нас. Реакція — від створення заявки до нашого першого вихідного дзвінка.")}
+            {kpi("success", "Успіх", `${String(ts.success.n)} з ${String(ts.success.of)}`,
+              ts.success.n >= SUCCESS_MIN_FOR_PCT ? `${String(Math.round((ts.success.n / Math.max(1, ts.success.of)) * 100))}% угод` : "замало угод для відсотка",
+              "Угода з цієї розмови ЗАРАЗ в етапі «Успішно реалізовано» (для кваліфікації — її дочірня угода). Оновлюється з Kommo щопівгодини.")}
           </section>
 
           <section aria-label="Менеджери за чек-листом" className="ftd-card ftd-card-pad">
@@ -229,18 +228,21 @@ export function AiCallsSection() {
               </span>
             </div>
             {mgrCollapsed
-              ? <div className="ftd-sub">{lines.length} менеджерів{weakest ? ` · найслабший бал — ${weakest.name} (${weakest.score!.toLocaleString("uk-UA")})` : ""}{pickedName ? ` · вибрано: ${pickedName}` : ""}</div>
+              ? <div className="ftd-sub">{lines.length} менеджерів{weakest ? ` · найслабший бал — ${weakest.name} (${String(weakest.score)}%)` : ""}{pickedName ? ` · вибрано: ${pickedName}` : ""}</div>
               : (
             <div style={{ overflowX: "auto" }}>
               <div className="ftd-mgr">
                 <div className="ftd-mgr-h">Менеджер</div><div className="ftd-mgr-h">Бал</div>
-                {CHECK_ITEMS.map((it) => <div key={it.key} className="ftd-mgr-h">{it.label}</div>)}
+                {CHECK_ITEMS.map((it) => <div key={it.key} className="ftd-mgr-h">{it.key === "price" ? `Ціна · ціль ${String(target)}%` : it.key === "objection" ? "Заперечення (опрац. / було)" : it.label}</div>)}
+                <div className="ftd-mgr-h">Успіх</div>
                 {lines.map((l) => (
                   <div key={String(l.managerId)} style={{ display: "contents" }}>
                     <button type="button" className={`ftd-mgr-name${lf.managerId === l.managerId ? " on" : ""}`} aria-pressed={lf.managerId === l.managerId}
                       onClick={() => setLf({ ...lf, managerId: lf.managerId === l.managerId ? null : l.managerId })}>{l.name} <span>· {l.calls}</span></button>
-                    <div style={{ fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{l.score == null ? "—" : l.score.toLocaleString("uk-UA")}</div>
-                    {bar(l.request)}{bar(l.price)}{bar(l.promise)}
+                    <div style={{ fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{l.score == null ? "—" : `${String(l.score)}%`}</div>
+                    {bar(l.request)}{bar(l.price, target)}{bar(l.promise)}
+                    <div title={`${String(l.objectionsHandled)} опрацьовано з ${String(l.objections)}`}>{bar(l.objection)}<span className="ftd-sub">{l.objectionsHandled} / {l.objections}</span></div>
+                    <div style={{ fontVariantNumeric: "tabular-nums" }}>{l.success} з {l.calls}</div>
                   </div>
                 ))}
               </div>
@@ -249,7 +251,7 @@ export function AiCallsSection() {
               )}
           </section>
 
-          <section aria-label="Розмови" className="ftd-card">
+          <section aria-label="Розмови" className="ftd-card" ref={tableRef}>
             <div className="ftd-toolbar">
               <div className="ftd-seg" role="tablist" aria-label="Режим списку">
                 <button type="button" role="tab" aria-selected={tab === "report" && view === "all"} className={tab === "report" && view === "all" ? "on" : ""}
@@ -262,9 +264,9 @@ export function AiCallsSection() {
               {pickedName && (
                 <button type="button" className="ftd-pill on" onClick={() => setLf({ ...lf, managerId: null })} aria-label={`Зняти фільтр: ${pickedName}`}>Менеджер: {pickedName} ✕</button>
               )}
-              {([["noPrice", "Ціни не було"], ["noCall", "Обіцяв — дзвінка немає"], ["lost", "Втрачені"], ["low", "Бал ≤ 1"]] as const).map(([k, label]) => (
+              {([["noCall", "Обіцяв — дзвінка немає"], ["noPrice", "Ціни не було"], ["objNotHandled", "Заперечення не опрацьоване"], ["lost", "Втрачені"], ["success", "Успіх"]] as const).map(([k, label]) => (
                 <button key={k} type="button" className={`ftd-pill${preset === k ? " on" : ""}`} aria-pressed={preset === k}
-                  onClick={() => setPreset(preset === k ? "all" : k)}>{label} <b>{presetN(k)}</b></button>
+                  onClick={() => setPreset(preset === k ? "all" : k)}>{label} <b>{scoped.filter(TILE_MATCH[k]).length}</b></button>
               ))}
               <div style={{ flex: 1 }} />
               <label htmlFor="ai-search" style={{ position: "absolute", left: -9999 }}>Пошук у розмовах</label>
@@ -318,7 +320,7 @@ export function AiCallsSection() {
                     <thead>
                       <tr>
                         <th style={cell}>Розмова</th><th style={cell}>Менеджер</th><th style={cell}>Про що (AI)</th><th style={cell}>Чек-лист</th>
-                        <th style={cell}>Обіцянка</th><th style={cell}>Реакція</th><th style={cell}>Розбір</th>
+                        <th style={cell}>Обіцянка</th><th style={cell}>Успіх</th><th style={cell}>Реакція</th><th style={cell}>Розбір</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -347,6 +349,11 @@ export function AiCallsSection() {
                           <td>{r.state !== "done" ? "—" : r.promiseState
                             ? <span className="ftd-chip" title={PROMISE_UI[r.promiseState].hint} style={{ background: TONE_COLOR[PROMISE_UI[r.promiseState].tone].bg, color: TONE_COLOR[PROMISE_UI[r.promiseState].tone].fg }}>{PROMISE_UI[r.promiseState].label}</span>
                             : <span className="ftd-sub">немає</span>}</td>
+                          <td style={{ whiteSpace: "nowrap" }}>{!r.dealOutcome ? "—"
+                            : <span className="ftd-chip" title={r.dealOutcome.lossReason ? `Причина відмови в CRM: ${r.dealOutcome.lossReason}` : undefined}
+                                style={{ background: TONE_COLOR[r.dealOutcome.state === "success" ? "ok" : r.dealOutcome.state === "lost" ? "muted" : "wait"].bg,
+                                  color: TONE_COLOR[r.dealOutcome.state === "success" ? "ok" : r.dealOutcome.state === "lost" ? "muted" : "wait"].fg }}>
+                                {r.dealOutcome.state === "success" ? "успіх" : r.dealOutcome.state === "lost" ? "відмова" : "у роботі"}</span>}</td>
                           <td style={{ whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{r.reactionMin == null ? "—" : fmtMinutes(r.reactionMin)}{r.reactionOffHours ? <div className="ftd-sub">поза роб. часом</div> : null}</td>
                           <td style={{ whiteSpace: "nowrap" }}>{r.reviewNote
                             ? <span style={{ color: "var(--ok, #166534)" }}>{r.reviewNote.byName ?? "розібрано"} · {new Date(r.reviewNote.at).toLocaleDateString("uk-UA", { day: "2-digit", month: "2-digit", timeZone: "Europe/Kyiv" })}</span>
@@ -359,7 +366,12 @@ export function AiCallsSection() {
                   </table>
                 )}
             </div>
-            <div className="ftd-foot">Квадрати чек-листа: запит · ціна · обіцянка (зелений — так, червоний — ні, сірий — не рахується). Клік по рядку — картка розмови; розбір черги — кнопкою «Почати розбір» у смузі.</div>
+            <div className="ftd-foot">
+              <div><b>Ціна названа → успіх:</b> {split.named.n} з {split.named.of}{split.enough ? ` (${String(Math.round((split.named.n / Math.max(1, split.named.of)) * 100))}%)` : ""}
+                {" · "}<b>не названа → успіх:</b> {split.notNamed.n} з {split.notNamed.of}{split.enough ? ` (${String(Math.round((split.notNamed.n / Math.max(1, split.notNamed.of)) * 100))}%)` : ""}
+                {!split.enough && <span> — замало угод для висновку: відсотки зʼявляться, коли в кожній групі буде від {SUCCESS_MIN_FOR_PCT} успішних.</span>}</div>
+              <div>Квадрати чек-листа: запит · ціна · обіцянка · заперечення (зелений — так, червоний — ні, сірий — не рахується). Клік по рядку — картка розмови; розбір черги — кнопкою «Почати розбір» у смузі.</div>
+            </div>
           </section>
         </div>
 

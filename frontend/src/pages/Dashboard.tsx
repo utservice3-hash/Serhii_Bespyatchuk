@@ -587,7 +587,7 @@ export function Dashboard() {
       try { await uploadTaskFile(id, file); }
       catch (err) { failed.push(err instanceof Error ? err.message : `задача ${id}`); }
     }
-    if (failed.length) alert(`Задачу створено, але файл не прикріпився: ${failed.join("; ")}`);
+    if (failed.length) toast(`Задачу створено, але файл не прикріпився: ${failed.join("; ")}`, { error: true });
     /**
      * 🔴 ПЕРЕЧИТАТИ СПИСОК ОБОВʼЯЗКОВО. Гілка одного виконавця вставляє рядок
      * ОПТИМІСТИЧНО і `fileCount` у ньому не задає взагалі, тож нова колонка
@@ -652,12 +652,12 @@ export function Dashboard() {
       // 🔓 14.09.2026: план ставить будь-хто будь-кому; порожній вибір у менеджера = собі.
       const planAssignee = taskForm.assigneeId === "" ? (auth?.role === "manager" ? auth.managerId : null) : Number(taskForm.assigneeId);
       if (planAssignee == null) {
-        alert("Оберіть виконавця (менеджера) для плану");
+        toast("Оберіть виконавця (менеджера) для плану", { error: true });
         return;
       }
       const days = buildPlanDays();
       if (days.length === 0) {
-        alert("Оберіть дату початку та хоча б один робочий день");
+        toast("Оберіть дату початку та хоча б один робочий день", { error: true });
         return;
       }
       await createTaskPlan({

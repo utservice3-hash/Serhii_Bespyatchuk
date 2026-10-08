@@ -4774,6 +4774,9 @@ CREATE TABLE IF NOT EXISTS first_touch_settings_log (
   set_at                    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 REVOKE ALL ON first_touch_settings_log FROM ai_readonly;
+-- 🎯 Ціль «ціну озвучено», % (ТЗ «фінальні доробки» 08.10.2026: 50 %). NULL у старих рядках = 50 (`PRICE_TARGET_DEFAULT`).
+ALTER TABLE first_touch_settings_log ADD COLUMN IF NOT EXISTS price_target_pct INTEGER
+  CHECK (price_target_pct IS NULL OR price_target_pct BETWEEN 1 AND 100);
 -- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
 
 -- 🎧 ВКЛАДКА «ПЕРШИЙ ДОТИК · AI» (рішення Романа 28.09.2026). Без цього рядка вкладку не побачив би

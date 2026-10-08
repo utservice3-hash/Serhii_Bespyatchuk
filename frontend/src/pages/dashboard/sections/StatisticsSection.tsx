@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useToast } from "../../../components/Toasts";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
@@ -62,6 +63,7 @@ const SOURCE_BADGE: Record<string, { t: string; c: string }> = {
 };
 
 export default function StatisticsSection({ role }: { role?: string }) {
+  const toast = useToast();
   const isAdmin = role === "admin";
   const [catalog, setCatalog] = useState<StatCatalog | null>(null);
   const [dept, setDept] = useState<string>("sales");
@@ -206,7 +208,7 @@ export default function StatisticsSection({ role }: { role?: string }) {
         department: department.key, period_type: ptype, period_start: editing.ps,
         team_lead: editing.lead, values: { [editing.key]: value },
       });
-    } catch { setRows(prev); alert("Не вдалося зберегти значення"); }
+    } catch { setRows(prev); toast("Не вдалося зберегти значення", { error: true }); }
   }
 
   const chartData = useMemo(() => {
