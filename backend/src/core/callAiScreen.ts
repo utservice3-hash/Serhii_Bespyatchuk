@@ -409,6 +409,11 @@ export interface AiCallCard {
   transcriptHidden: boolean;
   managerChannel: number | null;
   durationSec: number | null;
+  /**
+   * Запис ОДНИМ каналом (Роман 08.10.2026): `mixed` — голоси не розділено (уся розмова однією реплікою, підпис
+   * «Менеджер» був би неправдою); `voices` — розділено за ГОЛОСОМ (може плутати, хто є хто); `null` — стерео.
+   */
+  mono: MonoKind | null;
   /** Перший наш ВИХІДНИЙ дзвінок на цей номер після розмови — факт Ringostat, не оцінка моделі. */
   nextOutboundAt: string | null;
   /** Термін і стан кожної обіцянки — у порядку `result.promises`; обіцянки клієнта → `null`. */
@@ -424,11 +429,19 @@ export interface AiCallCard {
  * повертає `null` (роут віддасть 404), а не порожню картку — інакше існування чужої розмови
  * просочувалось би відповіддю.
  */
+export type MonoKind = "mixed" | "voices";
+
+/** Моно-запис: скільки «каналів» у репліках — 1 → голоси змішані, ≥2 → розділені за голосом. Стерео чи невідомо → null. */
+export function monoKind(audioChannels: number | null, segments: readonly { channel: number }[] | null): MonoKind | null {
+  if (audioChannels !== 1) return null;
+  return new Set((segments ?? []).map((s) => s.channel)).size >= 2 ? "voices" : "mixed";
+}
+
 export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boolean, scope: MissedScope): Promise<AiCallCard | null> {
-  const r = await db.query<RawRow & { segments: Turn[] | null; duration_sec: string | null; client_phone: string | null }>(`
+  const r = await db.query<RawRow & { segments: Turn[] | null; duration_sec: string | null; client_phone: string | null; audio_channels: number | null }>(`
     SELECT rc.uniqueid, rc.calldate, rc.call_type, rc.billsec, rc.calldate AS created_at, 0 AS kommo_id,
            rc.manager_id, m.name AS manager_name, m.team_id, tm.name AS team_name, rc.client_phone,
-           t.status AS stt_status, t.failure AS stt_failure, t.segments, t.duration_sec,
+           t.status AS stt_status, t.failure AS stt_failure, t.segments, t.duration_sec, t.channels AS audio_channels,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
            ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS},
            a.status AS llm_status, a.failure AS llm_failure, a.result
@@ -489,6 +502,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
     transcriptHidden: !allowed,
     managerChannel: mc === "0" ? 0 : mc === "1" ? 1 : null,
     durationSec: raw.duration_sec == null ? null : Number(raw.duration_sec),
+    mono: monoKind(raw.audio_channels, raw.segments),
     nextOutboundAt: next ? new Date(next).toISOString() : null,
     promiseChecks,
     callsAfter,

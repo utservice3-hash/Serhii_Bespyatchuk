@@ -38,6 +38,27 @@ export const STT_FORM_FIELDS: Readonly<Record<string, string>> = {
   tag_audio_events: "false",
 };
 
+/**
+ * 🎙 МОНО-ЗАПИС (Роман 08.10.2026, «чому тут немає каналів»): ~5% записів Ringostat віддає ОДНИМ каналом — обидва
+ * голоси змішані, і `use_multi_channel` повертав усю розмову однією реплікою. Для такого файла — розділення за
+ * ГОЛОСОМ (`diarize`, рівно два мовці): мовець стає «каналом» 0/1, а хто з них менеджер — модель визначає зі змісту,
+ * як і для стерео. Голос плутається частіше за канал, тому екран підписує такий запис окремо.
+ */
+export const STT_MONO_FORM_FIELDS: Readonly<Record<string, string>> = {
+  model_id: ELEVENLABS_STT_MODEL,
+  use_multi_channel: "false",
+  diarize: "true",
+  num_speakers: "2",
+  timestamps_granularity: "word",
+  tag_audio_events: "false",
+};
+
+/** `speaker_3` → 3; що інше — null. */
+function speakerIndex(v: unknown): number | null {
+  const m = typeof v === "string" ? /^speaker_(\d+)$/.exec(v) : null;
+  return m ? Number(m[1]) : null;
+}
+
 export interface SttWord { start: number | null; end: number | null; text: string; channel: number }
 export interface SttChannel { index: number; language: string | null; words: SttWord[] }
 export interface SttResult {
@@ -72,7 +93,7 @@ export function parseSttResponse(json: unknown): SttResult {
       if (type && type !== "word") continue; // spacing / audio_event — не слова
       const text = str(w?.text)?.trim();
       if (!text) continue;
-      const channel = num(w.channel_index) ?? fallback;
+      const channel = num(w.channel_index) ?? speakerIndex(w.speaker_id) ?? fallback;
       let ch = byChannel.get(channel);
       if (!ch) { ch = { index: channel, language: lang, words: [] }; byChannel.set(channel, ch); }
       ch.words.push({ start: num(w.start), end: num(w.end), text, channel });
@@ -120,10 +141,12 @@ export function toTurns(r: SttResult): Turn[] {
 
 export interface SttAudio { bytes: Uint8Array; contentType: string }
 
-export async function elevenLabsTranscribe(deps: HttpDeps, apiKey: string, audio: SttAudio, policy: RetryPolicy): Promise<SttResult> {
+export async function elevenLabsTranscribe(deps: HttpDeps, apiKey: string, audio: SttAudio, policy: RetryPolicy,
+  opts: { mono?: boolean } = {}): Promise<SttResult> {
+  const fields = opts.mono ? STT_MONO_FORM_FIELDS : STT_FORM_FIELDS;
   const init = (): RequestInit => {
     const fd = new FormData();
-    for (const [k, v] of Object.entries(STT_FORM_FIELDS)) fd.set(k, v);
+    for (const [k, v] of Object.entries(fields)) fd.set(k, v);
     fd.set("file", new Blob([audio.bytes.slice()], { type: audio.contentType }), "call.wav");
     return { method: "POST", headers: { "xi-api-key": apiKey }, body: fd };
   };
