@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useToast } from "../../../components/Toasts";
 import {
   fetchSettings, saveSettings, type AppSettings,
   fetchUsers, createUser, provisionUsers, resetUserPassword, updateUser, reactivateUser, type DashboardUser,
@@ -394,6 +395,7 @@ function GeneralTab({ syncStatus, syncing, onManualSync, canSync }: { syncStatus
 
 // ─────────────────────────── Користувачі ───────────────────────────
 function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
+  const toast = useToast();
   const [users, setUsers] = useState<DashboardUser[]>([]);
   const [roles, setRoles] = useState<RoleDef[]>([]);
   const [issued, setIssued] = useState<Record<number, string>>({}); // показаний-раз пароль (reset)
@@ -415,10 +417,10 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
       await reload();
     } catch (e) { setNewCreds("✗ " + err(e)); }
   };
-  const reset = async (id: number) => { try { const pw = await resetUserPassword(id); setIssued((s) => ({ ...s, [id]: pw })); } catch (e) { alert(err(e)); } };
+  const reset = async (id: number) => { try { const pw = await resetUserPassword(id); setIssued((s) => ({ ...s, [id]: pw })); } catch (e) { toast(err(e), { error: true }); } };
   const setOverride = async (u: DashboardUser, val: string) => {
     const roleOverride = val === "__synced__" ? null : val;
-    try { await updateUser(u.id, { roleOverride }); await reload(); } catch (e) { alert(err(e)); }
+    try { await updateUser(u.id, { roleOverride }); await reload(); } catch (e) { toast(err(e), { error: true }); }
   };
   const [busy, setBusy] = useState<number | null>(null);
   // ⏱ Перемикач трекера. Оптимістично НЕ малюємо: спостереження за людиною —
@@ -426,14 +428,14 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
   const toggleTracker = async (id: number, on: boolean) => {
     setBusy(id);
     try { await updateUser(id, { trackerEnabled: on }); await reload(); }
-    catch (e) { alert(err(e)); }
+    catch (e) { toast(err(e), { error: true }); }
     finally { setBusy(null); }
   };
   // 🧭 Пул нічийних для менеджера (05.10.2026) — так само без оптимістичного малювання.
   const toggleOrphanPool = async (id: number, on: boolean) => {
     setBusy(id);
     try { await updateUser(id, { orphanPool: on }); await reload(); }
-    catch (e) { alert(err(e)); }
+    catch (e) { toast(err(e), { error: true }); }
     finally { setBusy(null); }
   };
   /**
@@ -453,16 +455,16 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
     if (!u.manager_id) return;
     setBusy(u.id);
     try { await setWorkState(u.manager_id, st); await reload(); }
-    catch (e) { alert(err(e)); }
+    catch (e) { toast(err(e), { error: true }); }
     finally { setBusy(null); }
   };
-  const deactivate = async (u: DashboardUser) => { if (!window.confirm(`Деактивувати ${u.email}?`)) return; try { await updateUser(u.id, { isActive: false }); await reload(); } catch (e) { alert(err(e)); } };
+  const deactivate = async (u: DashboardUser) => { if (!window.confirm(`Деактивувати ${u.email}?`)) return; try { await updateUser(u.id, { isActive: false }); await reload(); } catch (e) { toast(err(e), { error: true }); } };
   const provision = async () => { try { const c = await provisionUsers(); setProvMsg(c.length ? `Створено логінів: ${c.length}` : "Нових немає — усі вже створені"); await reload(); } catch (e) { setProvMsg("✗ " + err(e)); } };
   const saveName = async (u: DashboardUser) => {
     if (!editName || editName.id !== u.id) return;
     const v = editName.value.trim();
-    if (!v) { alert("Ім'я не може бути порожнім"); return; }
-    try { await updateUser(u.id, { fullName: v }); setEditName(null); await reload(); } catch (e) { alert(err(e)); }
+    if (!v) { toast("Ім'я не може бути порожнім", { error: true }); return; }
+    try { await updateUser(u.id, { fullName: v }); setEditName(null); await reload(); } catch (e) { toast(err(e), { error: true }); }
   };
 
   return (
@@ -578,6 +580,7 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
 
 // ─────────────────────────── Ролі та доступи ───────────────────────────
 function RolesTab() {
+  const toast = useToast();
   const [roles, setRoles] = useState<RoleDef[]>([]);
   const [sel, setSel] = useState<string | null>(null);
   const [draft, setDraft] = useState<RoleDef | null>(null);
@@ -603,7 +606,7 @@ function RolesTab() {
     const key = window.prompt("Ключ (латиниця/цифри/_):", name.toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 24));
     if (!key) return;
     try { await createRole({ key, name, cloneFrom: draft.key }); await reload(); setSel(key.replace(/[^a-z0-9_]/g, "")); }
-    catch (e) { alert(err(e)); }
+    catch (e) { toast(err(e), { error: true }); }
   };
   const newRole = async () => {
     const name = window.prompt("Назва нової ролі:"); if (!name) return;
@@ -620,14 +623,14 @@ function RolesTab() {
     const picked = SCOPES[Number(scope) - 1];
     // 🔴 БЕЗ ПЕРЕДЗАПОВНЕННЯ: попередня редакція підставляла "1" (= «свої»), тобто Enter
     // без читання знову давав найвужчий обсяг мовчки — рівно те, від чого ми й ішли.
-    if (!picked) { alert("Обсяг не обрано — роль не створено. Введіть 1, 2 або 3."); return; }
+    if (!picked) { toast("Обсяг не обрано — роль не створено. Введіть 1, 2 або 3.", { error: true }); return; }
     try { await createRole({ key, name, dataScope: picked.key, screenAccess: {}, permissions: {} }); await reload(); setSel(key.replace(/[^a-z0-9_]/g, "")); }
-    catch (e) { alert(err(e)); }
+    catch (e) { toast(err(e), { error: true }); }
   };
   const del = async () => {
     if (!draft || builtIn) return;
     if (!window.confirm(`Видалити роль «${draft.name}»?`)) return;
-    try { await deleteRole(draft.key); setSel(null); await reload(); } catch (e) { alert(err(e)); }
+    try { await deleteRole(draft.key); setSel(null); await reload(); } catch (e) { toast(err(e), { error: true }); }
   };
 
   return (
@@ -710,10 +713,11 @@ function RolesTab() {
 
 // ─────────────────────────── Архів ───────────────────────────
 function ArchiveTab() {
+  const toast = useToast();
   const [users, setUsers] = useState<DashboardUser[]>([]);
   const reload = () => fetchUsers(true).then(setUsers).catch(() => setUsers([]));
   useEffect(() => { reload(); }, []);
-  const restore = async (id: number) => { try { await reactivateUser(id); await reload(); } catch (e) { alert(err(e)); } };
+  const restore = async (id: number) => { try { await reactivateUser(id); await reload(); } catch (e) { toast(err(e), { error: true }); } };
   return (
     <div className="chart-card">
       <h2 className="chart-title">Архів (деактивовані)</h2>

@@ -407,12 +407,13 @@ function AddCardForm({ onAdded }: { onAdded: (text: string) => void | Promise<vo
 function Req({ label, v }: { label: string; v: string | null }) { return <div><span style={{ color: MUTED, display: "inline-block", minWidth: 110 }}>{label}</span><b>{v ?? "—"}</b></div>; }
 
 function HiddenBlock() {
+  const toast = useToast();
   const [payees, setPayees] = useState<BankHiddenPayee[]>([]);
   const [pattern, setPattern] = useState(""), [mt, setMt] = useState<"exact" | "glob">("exact");
   const load = () => fetchBankHiddenPayees().then(setPayees).catch(() => setPayees([]));
   useEffect(() => { load(); }, []);
-  const add = async () => { if (!pattern.trim()) return; try { await addBankHiddenPayee(pattern.trim(), mt); setPattern(""); await load(); } catch (e) { alert(err(e)); } };
-  const del = async (id: number) => { try { await deleteBankHiddenPayee(id); await load(); } catch (e) { alert(err(e)); } };
+  const add = async () => { if (!pattern.trim()) return; try { await addBankHiddenPayee(pattern.trim(), mt); setPattern(""); await load(); } catch (e) { toast(err(e), { error: true }); } };
+  const del = async (id: number) => { try { await deleteBankHiddenPayee(id); await load(); } catch (e) { toast(err(e), { error: true }); } };
   return (
     <div className="chart-card" style={{ marginTop: 16 }}>
       <h2 className="chart-title">🙈 Приховані отримувачі <span style={{ fontSize: 12, fontWeight: 400, color: MUTED }}>(їхні вихідні бачить лише адмін)</span></h2>
