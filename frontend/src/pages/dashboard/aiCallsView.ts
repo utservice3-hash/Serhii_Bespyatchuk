@@ -240,11 +240,11 @@ export function quoteTurnIndex(turns: readonly { text: string }[] | null, quote:
 // складання по менеджерах (частки й середні), без жодного другого правила.
 
 export type CheckMarkT = "y" | "n" | "o";
-export interface ChecklistT { request: CheckMarkT; price: CheckMarkT; promise: CheckMarkT }
+export interface ChecklistT { request: CheckMarkT; price: CheckMarkT; promise: CheckMarkT; objection: CheckMarkT }
 export type ReviewReasonT = "noCall" | "late" | "noPrice" | "lost";
 
 export const CHECK_ITEMS: readonly { key: keyof ChecklistT; label: string }[] = [
-  { key: "request", label: "Запит" }, { key: "price", label: "Ціна" }, { key: "promise", label: "Обіцянка" },
+  { key: "request", label: "Запит" }, { key: "price", label: "Ціна" }, { key: "promise", label: "Обіцянка" }, { key: "objection", label: "Заперечення" },
 ];
 export const CHECK_MARK_UI: Record<CheckMarkT, { label: string; color: string }> = {
   y: { label: "так", color: "#4ade80" }, n: { label: "ні", color: "#f87171" }, o: { label: "не рахується", color: "#d1d5db" },
@@ -262,10 +262,10 @@ export function scoreLabel(s: { yes: number; total: number } | null): string | n
   return s && s.total > 0 ? `${String(s.yes)}/${String(s.total)}` : null;
 }
 
-/** Середній бал по розмовах із балом, у масштабі «з 3»; `null` — немає жодної. */
-export function avgScore3(scores: readonly ({ yes: number; total: number } | null)[]): number | null {
+/** Середній бал по розмовах із балом, у % (ТЗ 08.10.2026: пунктів 2–4, тож «з N» між розмовами не порівнюється); `null` — немає жодної. */
+export function avgScorePct(scores: readonly ({ yes: number; total: number } | null)[]): number | null {
   const xs = scores.filter((s): s is { yes: number; total: number } => s != null && s.total > 0).map((s) => s.yes / s.total);
-  return xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 3 * 10) / 10 : null;
+  return xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 100) : null;
 }
 
 /** Частка «так» серед «так + ні» по одному пункту; `null` — пункт ніде не рахувався. */
@@ -275,10 +275,15 @@ export function markPct(cls: readonly (ChecklistT | null)[], key: keyof Checklis
 }
 
 export interface ChecklistLine { managerId: number | null; name: string; calls: number; score: number | null;
-  request: number | null; price: number | null; promise: number | null }
+  request: number | null; price: number | null; promise: number | null; objection: number | null;
+  /** Заперечень було / з них опрацьовано. */
+  objections: number; objectionsHandled: number;
+  /** Успіх угоди: успішних із розібраних. */
+  success: number }
 /** Рядок на менеджера: розібрані розмови звіту, середній бал і частка по кожному пункту. Найслабші — згори. */
 export function managerChecklist<T extends { inReport: boolean; managerId: number | null; managerName: string | null;
-  checklist: ChecklistT | null; checkScore: { yes: number; total: number } | null }>(rows: readonly T[]): ChecklistLine[] {
+  checklist: ChecklistT | null; checkScore: { yes: number; total: number } | null;
+  dealOutcome?: { state: string } | null }>(rows: readonly T[]): ChecklistLine[] {
   const by = new Map<string, T[]>();
   for (const r of rows) if (r.inReport && r.checklist) {
     const k = r.managerId == null ? "none" : String(r.managerId);
@@ -286,9 +291,11 @@ export function managerChecklist<T extends { inReport: boolean; managerId: numbe
   }
   return [...by.values()].map((g) => ({
     managerId: g[0].managerId, name: g[0].managerName ?? "Менеджер невідомий", calls: g.length,
-    score: avgScore3(g.map((r) => r.checkScore)),
+    score: avgScorePct(g.map((r) => r.checkScore)),
     request: markPct(g.map((r) => r.checklist), "request"), price: markPct(g.map((r) => r.checklist), "price"),
-    promise: markPct(g.map((r) => r.checklist), "promise"),
+    promise: markPct(g.map((r) => r.checklist), "promise"), objection: markPct(g.map((r) => r.checklist), "objection"),
+    objections: g.filter((r) => r.checklist!.objection !== "o").length, objectionsHandled: g.filter((r) => r.checklist!.objection === "y").length,
+    success: g.filter((r) => r.dealOutcome?.state === "success").length,
   })).sort((a, b) => (a.score ?? 99) - (b.score ?? 99) || a.name.localeCompare(b.name, "uk"));
 }
 
@@ -304,4 +311,50 @@ export function medianMin(xs: readonly (number | null | undefined)[]): number | 
   if (!v.length) return null;
   const m = Math.floor(v.length / 2);
   return v.length % 2 ? v[m] : Math.round((v[m - 1] + v[m]) / 2);
+}
+
+// ─── Плитки (ТЗ «фінальні доробки» 08.10.2026, пункт 3) ─────────────────────────────────────────────────────────
+// ОДНЕ правило на плитку: і число, і список після кліку беруть `TILE_MATCH[k]` — тож вони не можуть розійтися.
+// Стани й знаменники — від сервера (`checklist`, `flags`, `dealOutcome`); фронт лише рахує.
+
+export type TileKey = "noCall" | "noPrice" | "objNotHandled" | "lost" | "success";
+export interface TileRow {
+  promiseState: PromiseStateT | null; checklist: ChecklistT | null; conversationType: ConversationTypeT | null;
+  dealOutcome: { state: string } | null; flags: { analysed: boolean; priceable: boolean; agreement: boolean; lost: boolean };
+}
+export const TILE_MATCH: Record<TileKey, (r: TileRow) => boolean> = {
+  noCall: (r) => r.flags.agreement && r.promiseState === "broken",
+  noPrice: (r) => r.checklist?.price === "n",
+  objNotHandled: (r) => r.checklist?.objection === "n",
+  lost: (r) => r.flags.lost,
+  success: (r) => r.flags.analysed && r.dealOutcome?.state === "success",
+};
+/** Скільки успіхів треба в КОЖНІЙ групі, щоб показувати відсоток, а не лише «X з N» (рішення Романа 08.10.2026). */
+export const SUCCESS_MIN_FOR_PCT = 30;
+
+export interface TileStats {
+  noCall: { n: number; of: number }; price: { yes: number; of: number; pct: number | null };
+  objection: { handled: number; of: number; pct: number | null }; lost: number; success: { n: number; of: number };
+}
+export function tileStats(rows: readonly TileRow[]): TileStats {
+  const pct = (a: number, b: number) => (b ? Math.round((a / b) * 100) : null);
+  const priced = rows.filter((r) => r.checklist && r.checklist.price !== "o");
+  const objs = rows.filter((r) => r.checklist && r.checklist.objection !== "o");
+  const priceYes = priced.filter((r) => r.checklist!.price === "y").length;
+  const handled = objs.filter((r) => r.checklist!.objection === "y").length;
+  return {
+    noCall: { n: rows.filter(TILE_MATCH.noCall).length, of: rows.filter((r) => r.flags.agreement).length },
+    price: { yes: priceYes, of: priced.length, pct: pct(priceYes, priced.length) },
+    objection: { handled, of: objs.length, pct: pct(handled, objs.length) },
+    lost: rows.filter(TILE_MATCH.lost).length,
+    success: { n: rows.filter(TILE_MATCH.success).length, of: rows.filter((r) => r.flags.analysed).length },
+  };
+}
+
+/** «Ціна названа → успіх» і «не названа → успіх»: числами; відсоток — лише коли в обох групах ≥ `SUCCESS_MIN_FOR_PCT`. */
+export function priceSuccessSplit(rows: readonly TileRow[]): { named: { n: number; of: number }; notNamed: { n: number; of: number }; enough: boolean } {
+  const win = (r: TileRow) => r.dealOutcome?.state === "success";
+  const named = rows.filter((r) => r.checklist?.price === "y"), notNamed = rows.filter((r) => r.checklist?.price === "n");
+  const a = { n: named.filter(win).length, of: named.length }, b = { n: notNamed.filter(win).length, of: notNamed.length };
+  return { named: a, notNamed: b, enough: a.n >= SUCCESS_MIN_FOR_PCT && b.n >= SUCCESS_MIN_FOR_PCT };
 }

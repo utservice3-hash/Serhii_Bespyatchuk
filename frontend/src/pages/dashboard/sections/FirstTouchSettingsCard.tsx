@@ -10,7 +10,7 @@ const inp = { display: "block", marginTop: 4, padding: "8px 10px", borderRadius:
 const hint = { display: "block", marginTop: 4, fontSize: 11, fontWeight: 400, color: "var(--text-muted)" } as const;
 const fmt = (iso: string) => new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const describe = (t: FirstTouchTunablesT) =>
-  `вікно ${t.repeatWindowDays == null ? "без обмеження" : `${String(t.repeatWindowDays)} дн.`} · допуск ${String(t.callbackGraceMin)} хв · мінімум ${String(t.callbackMinDeadlineMin)} хв · блок ${t.bannerTone === "alert" ? "червоний" : "сірий"}`;
+  `вікно ${t.repeatWindowDays == null ? "без обмеження" : `${String(t.repeatWindowDays)} дн.`} · допуск ${String(t.callbackGraceMin)} хв · мінімум ${String(t.callbackMinDeadlineMin)} хв · блок ${t.bannerTone === "alert" ? "червоний" : "сірий"} · ціль ціни ${String(t.priceTargetPct)} %`;
 
 export function FirstTouchSettingsCard() {
   const [d, setD] = useState<FirstTouchSettingsResp | null>(null);
@@ -57,6 +57,11 @@ export function FirstTouchSettingsCard() {
             <option value="alert">червоний</option>
           </select>
           <span style={hint}>Змінюється лише колір, заголовок той самий. Червоний — коли хибні «не передзвонив» розібрано.</span>
+        </label>
+        <label htmlFor="ft-price-target" style={{ fontSize: 13, fontWeight: 600 }}>Ціль «ціну озвучено», %
+          <input id="ft-price-target" type="number" min={d.bounds.priceTargetPct.min} max={d.bounds.priceTargetPct.max}
+            value={Number.isFinite(form.priceTargetPct) ? form.priceTargetPct : ""} onChange={(e) => setForm({ ...form, priceTargetPct: num(e.target.value) })} style={inp} />
+          <span style={hint}>Плитка «Ціна озвучена» і смуги менеджерів нижче цілі — червоні, від цілі — зелені. За ТЗ 08.10 — 50.</span>
         </label>
       </div>
       <div style={{ marginTop: 16, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>

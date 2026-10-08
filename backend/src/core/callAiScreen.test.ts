@@ -201,6 +201,10 @@ interface ViewMod {
   managerChecklist: (rows: readonly unknown[]) => { name: string; calls: number; score: number | null; request: number | null; price: number | null; promise: number | null }[];
   avgScore3: (s: readonly ({ yes: number; total: number } | null)[]) => number | null;
   markPct: (cls: readonly (Record<string, string> | null)[], key: string) => number | null;
+  avgScorePct: (s: readonly ({ yes: number; total: number } | null)[]) => number | null;
+  tileStats: (rows: readonly unknown[]) => { noCall: { n: number; of: number }; price: { yes: number; of: number; pct: number | null }; objection: { handled: number; of: number; pct: number | null }; lost: number; success: { n: number; of: number } };
+  TILE_MATCH: Record<string, (r: unknown) => boolean>;
+  priceSuccessSplit: (rows: readonly unknown[]) => { named: { n: number; of: number }; notNamed: { n: number; of: number }; enough: boolean };
   queueRows: (rows: readonly { needsReview: boolean; reviewReason: string | null; calledAt: string; uniqueid?: string }[]) => { uniqueid?: string }[];
 }
 async function transpile(rel: string, deps: Record<string, string> = {}): Promise<string> {
@@ -1062,53 +1066,7 @@ test("#897 МОНО-ЗАПИС ЧЕСНО: моно — розділення з�
 });
 
 
-/**
- * #898b — ЕКРАН D НА ФРОНТІ СКЛАДАЄ, А НЕ ВИРІШУЄ (08.10.2026): частки й бал по менеджерах — середнє по станах від сервера
- * («не рахується» — поза знаменником), черга — лише рядки з прапорцем `needsReview`, «немає дзвінка» першими.
- * 🧨 Червоніє, якщо «не рахується» потрапить у знаменник, або черга почне відбирати рядки власним правилом.
- */
-test("#898b ЕКРАН D: частки й бал по менеджерах — зі станів сервера, черга — з прапорця сервера", async () => {
-  const V = await loadView();
-  assert.equal(V.markPct([{ request: "y", price: "o", promise: "n" }, { request: "y", price: "y", promise: "o" }, null], "price"), 100, "🔴 «не рахується» у знаменнику ціни");
-  assert.equal(V.markPct([{ request: "y", price: "o", promise: "o" }], "promise"), null, "дзеркало: пункт ніде не рахувався — «—», а не 0%");
-  assert.equal(V.avgScore3([{ yes: 1, total: 2 }, { yes: 3, total: 3 }, null, { yes: 0, total: 0 }]), 2.3, "🔴 бал «з 3»: (0,5 + 1) / 2 × 3");
-  const lines = V.managerChecklist([
-    { inReport: true, managerId: 1, managerName: "А", checklist: { request: "y", price: "n", promise: "o" }, checkScore: { yes: 1, total: 2 } },
-    { inReport: true, managerId: 1, managerName: "А", checklist: null, checkScore: null },
-    { inReport: true, managerId: 2, managerName: "Б", checklist: { request: "y", price: "y", promise: "y" }, checkScore: { yes: 3, total: 3 } },
-    { inReport: false, managerId: 2, managerName: "Б", checklist: { request: "n", price: "n", promise: "n" }, checkScore: { yes: 0, total: 3 } },
-  ]);
-  assert.deepEqual(lines.map((l) => [l.name, l.calls, l.score]), [["А", 1, 1.5], ["Б", 1, 3]], "🔴 менеджери: лише розібрані зі звіту, найслабший згори");
-  const q = V.queueRows([
-    { uniqueid: "a", needsReview: true, reviewReason: "noPrice", calledAt: "2026-10-05T10:00:00Z" },
-    { uniqueid: "b", needsReview: false, reviewReason: "noCall", calledAt: "2026-10-05T11:00:00Z" },
-    { uniqueid: "c", needsReview: true, reviewReason: "noCall", calledAt: "2026-10-01T10:00:00Z" },
-  ]);
-  assert.deepEqual(q.map((x) => x.uniqueid), ["c", "a"], "🔴 черга: розібране всередині або «немає дзвінка» не першим");
-});
 
-/**
- * #898c — ЕКРАН D ЗІБРАНО ЯК У МАКЕТІ (Роман 08.10.2026 «дизайн як на макеті майже 1 в 1»): колонки таблиці — Розмова ·
- * Менеджер · Про що (AI) · Чек-лист · Обіцянка · Реакція · Розбір; смуга черги й сама черга — лише тому, хто може
- * «Розібрано» (`canReview` від сервера); стан нерозібраної розмови видно в колонці чек-листа; черга згортається класом
- * `is-closed`, а при «зменшенні руху» — без анімації. Замінює `#796` (стара таблиця з колонкою «Стан»).
- * 🧨 Червоніє, якщо переставити колонки, показати чергу менеджеру, сховати стан «У черзі» чи прибрати анімацію/її вимкнення.
- */
-test("#898c ЕКРАН D: колонки як у макеті, черга лише для тімліда й адміна, згортання в смугу", () => {
-  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
-  const heads = [...sec.matchAll(/<th style=\{cell\}>([^<]+)<\/th>/g)].map((m) => m[1]);
-  assert.deepEqual(heads, ["Розмова", "Менеджер", "Про що (AI)", "Чек-лист", "Обіцянка", "Реакція", "Розбір"], `🔴 колонки: ${heads.join(" · ")}`);
-  assert.match(sec, /\{d\.canReview && \(\s*<section aria-label="Черга розбору"/, "🔴 смуга черги без перевірки права");
-  assert.match(sec, /\{d\.canReview && \(\s*<FirstTouchQueue rows=\{queue\} open=\{queueOpen\}/, "🔴 черга без перевірки права");
-  assert.match(sec, /const queue = queueRows\(rows\);/, "🔴 черга не з прапорця сервера");
-  assert.match(sec, /: r\.state === "done" \? null : <StateChip state=\{r\.state\} \/>\}<\/td>/, "🔴 стан нерозібраної розмови сховано");
-  const qx = readFileSync(FE("pages/dashboard/sections/FirstTouchQueue.tsx"), "utf8");
-  assert.match(qx, /className=\{`ftd-queue\$\{open \? "" : " is-closed"\}`\}/, "🔴 черга не згортається класом");
-  assert.match(qx, /putAiCallNote\(cur\.uniqueid, "review", note\.trim\(\) \|\| "Розібрано"\)/, "🔴 «Опрацьовано · наступна» не ставить «Розібрано»");
-  const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
-  assert.match(css, /\.ftd-queue\.is-closed \{ transform: translateY\(-20px\) scale\(\.42, \.12\); opacity: 0;/, "🔴 немає анімації згортання в смугу");
-  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.ftd-over, \.ftd-queue, \.ftd-strip, \.ftd-progress > i \{ transition: none; \}/, "🔴 анімацію не вимкнено для «зменшення руху»");
-});
 
 /**
  * #899 — ЕКРАН D ПІСЛЯ ПЕРШОГО ДНЯ (Роман 08.10.2026, список зауважень): (1) блок менеджерів рахується по всій команді,
@@ -1334,4 +1292,89 @@ test("#907 ЦІЛЬ ЦІНИ: 50 % за замовчуванням, 1…100, з 
   const routes = readFileSync(fileURLToPath(new URL("../../src/routes/dashboard.ts", import.meta.url)), "utf8");
   assert.match(routes, /priceTargetPct: \(await loadTunables\(pool\)\)\.priceTargetPct,/, "🔴 список не віддає ціль");
   assert.match(routes, /flags: \{ analysed: isAnalysed\(r\), priceable: isPriceable\(r\), agreement: hasAgreement\(r\), lost: isLost\(r\) \},/, "🔴 знаменники плиток не від ядра");
+});
+
+/**
+ * #909 — ЕКРАН D ЗІБРАНО ЯК У МАКЕТІ (Роман 08.10.2026 «дизайн як на макеті майже 1 в 1»): колонки таблиці — Розмова ·
+ * Менеджер · Про що (AI) · Чек-лист · Обіцянка · Реакція · Розбір; смуга черги й сама черга — лише тому, хто може
+ * «Розібрано» (`canReview` від сервера); стан нерозібраної розмови видно в колонці чек-листа; черга згортається класом
+ * `is-closed`, а при «зменшенні руху» — без анімації. Замінює `#796` (стара таблиця з колонкою «Стан»).
+ * 08.10.2026 (ТЗ «фінальні доробки»): додано колонку «Успіх» (стан угоди в Kommo). Замінює `#898c`.
+ * 🧨 Червоніє, якщо переставити колонки, показати чергу менеджеру, сховати стан «У черзі» чи прибрати анімацію/її вимкнення.
+ */
+test("#909 ЕКРАН D: колонки з «Успіх», черга лише для тімліда й адміна, згортання в смугу", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  const heads = [...sec.matchAll(/<th style=\{cell\}>([^<]+)<\/th>/g)].map((m) => m[1]);
+  assert.deepEqual(heads, ["Розмова", "Менеджер", "Про що (AI)", "Чек-лист", "Обіцянка", "Успіх", "Реакція", "Розбір"], `🔴 колонки: ${heads.join(" · ")}`);
+  assert.match(sec, /\{d\.canReview && \(\s*<section aria-label="Черга розбору"/, "🔴 смуга черги без перевірки права");
+  assert.match(sec, /\{d\.canReview && \(\s*<FirstTouchQueue rows=\{queue\} open=\{queueOpen\}/, "🔴 черга без перевірки права");
+  assert.match(sec, /const queue = queueRows\(rows\);/, "🔴 черга не з прапорця сервера");
+  assert.match(sec, /: r\.state === "done" \? null : <StateChip state=\{r\.state\} \/>\}<\/td>/, "🔴 стан нерозібраної розмови сховано");
+  const qx = readFileSync(FE("pages/dashboard/sections/FirstTouchQueue.tsx"), "utf8");
+  assert.match(qx, /className=\{`ftd-queue\$\{open \? "" : " is-closed"\}`\}/, "🔴 черга не згортається класом");
+  assert.match(qx, /putAiCallNote\(cur\.uniqueid, "review", note\.trim\(\) \|\| "Розібрано"\)/, "🔴 «Опрацьовано · наступна» не ставить «Розібрано»");
+  const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
+  assert.match(css, /\.ftd-queue\.is-closed \{ transform: translateY\(-20px\) scale\(\.42, \.12\); opacity: 0;/, "🔴 немає анімації згортання в смугу");
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.ftd-over, \.ftd-queue, \.ftd-strip, \.ftd-progress > i \{ transition: none; \}/, "🔴 анімацію не вимкнено для «зменшення руху»");
+});
+
+/**
+ * #908 — ПЛИТКА = СПИСОК ПІСЛЯ КЛІКУ (ТЗ 08.10.2026, критерій готовності «число на кожній плитці збігається з кількістю
+ * рядків у пулі після кліку»). І число, і фільтр — одне правило `TILE_MATCH`; знаменники — прапорці сервера; «успіх» —
+ * числами, відсоток лише коли в обох групах «ціна → успіх» від 30 успішних.
+ * 🧨 Червоніє, якщо плитка рахує одним правилом, а фільтр — іншим, «не рахується» потрапить у знаменник, або відсоток
+ * «ціна → успіх» зʼявиться на кількох угодах.
+ */
+test("#908 ПЛИТКИ: число = рядки після кліку (одне правило), знаменники від сервера, успіх числами до 30", async () => {
+  const V = await loadView();
+  const f = { analysed: true, priceable: true, agreement: false, lost: false };
+  const row = (o: Record<string, unknown>) => ({ promiseState: null, conversationType: "cargo_request", dealOutcome: { state: "open" }, flags: f,
+    checklist: { request: "y", price: "y", promise: "o", objection: "o" }, ...o });
+  const rows = [
+    row({ promiseState: "broken", flags: { ...f, agreement: true }, checklist: { request: "y", price: "n", promise: "n", objection: "n" } }),
+    row({ promiseState: "kept_talk", flags: { ...f, agreement: true }, checklist: { request: "y", price: "y", promise: "y", objection: "y" }, dealOutcome: { state: "success" } }),
+    row({ conversationType: "lead_lost", flags: { ...f, priceable: false, lost: true }, checklist: { request: "o", price: "o", promise: "o", objection: "o" } }),
+    row({ flags: { ...f, analysed: false }, checklist: null, dealOutcome: null }),
+  ];
+  const st = V.tileStats(rows);
+  assert.deepEqual(st.noCall, { n: 1, of: 2 }, "🔴 «немає дзвінка» не з тих, хто обіцяв");
+  assert.deepEqual([st.price.yes, st.price.of], [1, 2], "🔴 втрачений лід або нерозібране — у знаменнику ціни");
+  assert.deepEqual([st.objection.handled, st.objection.of], [1, 2], "🔴 «заперечення не було» у знаменнику");
+  assert.equal(st.lost, 1);
+  assert.deepEqual(st.success, { n: 1, of: 3 }, "🔴 нерозібране у знаменнику успіху");
+  for (const k of ["noCall", "noPrice", "objNotHandled", "lost", "success"]) {
+    const n = rows.filter(V.TILE_MATCH[k]).length;
+    assert.ok(n >= 0);
+  }
+  assert.equal(rows.filter(V.TILE_MATCH.noCall).length, st.noCall.n, "🔴 плитка й фільтр «немає дзвінка» розійшлись");
+  assert.equal(rows.filter(V.TILE_MATCH.lost).length, st.lost, "🔴 плитка й фільтр «втрачені» розійшлись");
+  assert.equal(rows.filter(V.TILE_MATCH.success).length, st.success.n, "🔴 плитка й фільтр «успіх» розійшлись");
+  const sp = V.priceSuccessSplit(rows);
+  assert.deepEqual([sp.named, sp.notNamed, sp.enough], [{ n: 1, of: 1 }, { n: 0, of: 1 }, false], "🔴 відсоток «ціна → успіх» на одиничних угодах");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /const presetOk = \(r: \(typeof rows\)\[number\]\) => preset === "all" \|\| TILE_MATCH\[preset\]\(r\);/, "🔴 фільтр після кліку — не те правило, що плитка");
+  assert.match(sec, /const ts = tileStats\(rows\);/, "🔴 плитки рахуються не спільними правилами");
+  assert.match(sec, /<b>\{scoped\.filter\(TILE_MATCH\[k\]\)\.length\}<\/b>/, "🔴 лічильник у пігулці — не те правило");
+  assert.match(sec, /goodBad\(ts\.price\.pct == null \? null : ts\.price\.pct >= target\)/, "🔴 колір плитки ціни не від цілі з налаштувань");
+  assert.match(sec, /const target = d\.priceTargetPct;/, "🔴 ціль не з відповіді сервера");
+});
+
+/**
+ * #910 — МЕНЕДЖЕРИ ЗА ЧЕК-ЛИСТОМ У % (ТЗ 08.10.2026): пунктів тепер 2–4 на розмову, тож бал — у відсотках, а не «з 3»;
+ * у рядку менеджера — частка опрацьованих заперечень («не було» поза знаменником) і успіх «X з N». Замінює `#898b`.
+ * 🧨 Червоніє, якщо бал знову масштабувати «з 3», «не було» потрапить у знаменник заперечень, або нерозібране — у рядок.
+ */
+test("#910 МЕНЕДЖЕРИ: бал у %, заперечення «опрац. / було», успіх X з N; лише розібрані зі звіту", async () => {
+  const V = await loadView();
+  assert.equal(V.avgScorePct([{ yes: 1, total: 2 }, { yes: 3, total: 3 }, null, { yes: 0, total: 0 }]), 75, "🔴 бал не у % ((0,5 + 1) / 2)");
+  const lines = V.managerChecklist([
+    { inReport: true, managerId: 1, managerName: "А", checklist: { request: "y", price: "n", promise: "o", objection: "n" }, checkScore: { yes: 1, total: 3 }, dealOutcome: { state: "lost" } },
+    { inReport: true, managerId: 1, managerName: "А", checklist: { request: "y", price: "y", promise: "o", objection: "o" }, checkScore: { yes: 2, total: 2 }, dealOutcome: { state: "success" } },
+    { inReport: true, managerId: 1, managerName: "А", checklist: null, checkScore: null, dealOutcome: null },
+    { inReport: false, managerId: 2, managerName: "Б", checklist: { request: "n", price: "n", promise: "n", objection: "n" }, checkScore: { yes: 0, total: 4 }, dealOutcome: null },
+  ]) as unknown as { name: string; calls: number; score: number | null; objection: number | null; objections: number; objectionsHandled: number; success: number }[];
+  assert.deepEqual(lines.map((l) => [l.name, l.calls, l.score, l.objection, l.objections, l.objectionsHandled, l.success]),
+    [["А", 2, 67, 0, 1, 0, 1]], "🔴 рядок менеджера: нерозібране, «не було» чи виключене пролізли в частки");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.ok(!/avgScore3|\/ 3`/.test(sec), "🔴 бал знову «з 3»");
 });

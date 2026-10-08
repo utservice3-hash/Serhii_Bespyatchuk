@@ -390,9 +390,17 @@ export interface AiCallRowT {
   /** Екран D (08.10.2026): чек-лист з 3 пунктів і черга розбору — стани рахує сервер (`core/firstTouchTeamReport.ts`). */
   checklist: AiChecklistT | null; checkScore: { yes: number; total: number } | null;
   reviewReason: AiReviewReasonT | null; needsReview: boolean; reviewNote: AiNoteT | null;
+  objection: AiObjectionT | null; dealOutcome: AiDealOutcomeT | null;
+  /** Знаменники плиток — від ядра (`firstTouchTeamReport.ts`), фронт їх не вирішує. */
+  flags: { analysed: boolean; priceable: boolean; agreement: boolean; lost: boolean };
 }
 export type AiCheckMarkT = "y" | "n" | "o";
-export interface AiChecklistT { request: AiCheckMarkT; price: AiCheckMarkT; promise: AiCheckMarkT }
+export interface AiChecklistT { request: AiCheckMarkT; price: AiCheckMarkT; promise: AiCheckMarkT; objection: AiCheckMarkT }
+/** Заперечення (окрема рубрика, ТЗ 08.10.2026). */
+export interface AiObjectionT { present: boolean; type: "price" | "think" | "competitor" | "not_now" | "other" | "none";
+  client_quote: string; handled: "handled" | "not_handled" | "n/a"; manager_action: string; quote_found?: boolean | null }
+/** Успіх угоди з Kommo — стан ЗАРАЗ. */
+export interface AiDealOutcomeT { state: "success" | "lost" | "open"; lossReason: string | null }
 export type AiReviewReasonT = "noCall" | "late" | "noPrice" | "lost";
 export interface AiNoteT { text: string; byName: string | null; at: string }
 export interface AiCallsResp {
@@ -401,6 +409,8 @@ export interface AiCallsResp {
   canSeeExcluded: boolean;
   /** Чи може цей користувач ставити «Розібрано» (тімлід і адмін) — тоді є черга розбору. */
   canReview: boolean;
+  /** Ціль «ціну озвучено», % — з «Налаштувань» (адмін), за замовчуванням 50. */
+  priceTargetPct: number;
   silence: { minGapHours: number; normFrom: string | null };
 }
 export async function fetchAiCalls(params: { from: string; to: string }): Promise<AiCallsResp> {
@@ -477,11 +487,13 @@ export interface AiTeamReportResp {
   rows: AiPoolRowT[];
 }
 /** 🎛 Налаштування «Першого дотику» (лише адмін): вікно повторного, допуск і мінімум передзвону, колір блоку. */
-export interface FirstTouchTunablesT { repeatWindowDays: number | null; callbackGraceMin: number; callbackMinDeadlineMin: number; bannerTone: "neutral" | "alert" }
+export interface FirstTouchTunablesT { repeatWindowDays: number | null; callbackGraceMin: number; callbackMinDeadlineMin: number; bannerTone: "neutral" | "alert";
+  /** Ціль «ціну озвучено», % (ТЗ 08.10.2026). */
+  priceTargetPct: number }
 export interface FirstTouchSettingsResp {
   current: FirstTouchTunablesT;
   recommended: { repeatWindowDays: number; callbackGraceMin: number; callbackMinDeadlineMin: number };
-  bounds: Record<"repeatWindowDays" | "callbackGraceMin" | "callbackMinDeadlineMin", { min: number; max: number }>;
+  bounds: Record<"repeatWindowDays" | "callbackGraceMin" | "callbackMinDeadlineMin" | "priceTargetPct", { min: number; max: number }>;
   history: (FirstTouchTunablesT & { setByName: string | null; setAt: string })[];
 }
 export async function fetchFirstTouchSettings(): Promise<FirstTouchSettingsResp> {

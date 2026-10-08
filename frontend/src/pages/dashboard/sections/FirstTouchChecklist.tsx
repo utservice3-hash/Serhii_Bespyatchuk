@@ -7,6 +7,8 @@ import { CHECK_ITEMS, CHECK_MARK_UI, PROMISE_UI, mmss, quoteTurnIndex, type Prom
  * текст-доказ і «▶ час і цитата» (лише дослівна цитата: не знайдена в репліках — без перемотки, не вгадуємо).
  */
 
+const OBJ_TYPE_UA: Record<string, string> = { price: "дорого", think: "подумаю / передзвоню сам", competitor: "порівнює, є інший перевізник", not_now: "не зараз", other: "інше" };
+
 const DOT: Record<"y" | "n" | "o", { mark: string; bg: string }> = { y: { mark: "✓", bg: "#166534" }, n: { mark: "✕", bg: "#b91c1c" }, o: { mark: "–", bg: "#9ca3af" } };
 
 export function ChecklistBlock({ c, checklist, promiseState, conversationType, onSeek }: {
@@ -25,7 +27,8 @@ export function ChecklistBlock({ c, checklist, promiseState, conversationType, o
   // Обіцянка написати (Viber, Telegram) — Ringostat месенджерів не бачить: пункт «не рахується», але сказати «не було» — неправда.
   const msgPromise = !promise ? r.promises.find((p) => p.who === "manager" && p.channel !== "call") ?? null : null;
   const lost = conversationType === "lead_lost";
-  const evidence: Record<"request" | "price" | "promise", { text: string; quote?: string }> = {
+  const ob = c.row.objection;
+  const evidence: Record<"request" | "price" | "promise" | "objection", { text: string; quote?: string }> = {
     request: { text: lost ? "втрачений лід — клієнт уже відмовився, розпитувати нема про що" : r.client_request?.trim() || "запиту клієнта модель не виділила" },
     price: { text: r.price.discussed ? "ціну назвали" : lost ? "втрачений лід — називати нікому" : "ціни не прозвучало", quote: r.price.quote },
     promise: promise
@@ -33,6 +36,10 @@ export function ChecklistBlock({ c, checklist, promiseState, conversationType, o
       : msgPromise
         ? { text: `обіцянка написати: ${msgPromise.what} — перевірити нічим, Ringostat месенджерів не бачить`, quote: msgPromise.quote }
         : { text: "обіцянки передзвонити чи написати не було" },
+    // Заперечення (ТЗ 08.10.2026): окрема рубрика; до неї розмову ще не дійшли — чесно «ще не розібрано», не «не було».
+    objection: !ob ? { text: "ще не розібрано: заперечення аналізуються для розмов від 09.10" }
+      : !ob.present ? { text: "заперечення не було" }
+      : { text: `${OBJ_TYPE_UA[ob.type] ?? ob.type} · ${ob.handled === "handled" ? "менеджер опрацював" : "менеджер не опрацював"}${ob.manager_action ? `: ${ob.manager_action}` : ""}`, quote: ob.client_quote },
   };
   return (
     <div className="ftd-checklist">
