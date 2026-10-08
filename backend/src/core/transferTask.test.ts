@@ -2,6 +2,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { transferTaskVerdict, transferTaskRow, transferTaskRequired, TRANSFER_TASK_PREFIX } from "./transferTask.js";
 
 const SRC = (rel: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "src", rel), "utf8");
@@ -102,4 +103,65 @@ test("#1499b ЖИВА СХЕМА: передача клієнта й задач�
   assert.equal(f.taskId, null);
   assert.equal(f.from, 99012, "🔴 «від кого» в історії не той");
   assert.deepEqual(await counts(), { o: 1, h: 2, t: 1 }, "🔴 виправлення без задачі створило задачу або не записало історію");
+});
+
+const FE = (rel: string): string => fileURLToPath(new URL(`../../../frontend/src/${rel}`, import.meta.url));
+interface KnownT { status: string; closeReason: string | null }
+interface ClientNotifyMod {
+  CLIENT_TASK_PREFIX: string; SIGNAL_CLOCK_SKEW_MS: number;
+  isClientTaskAlert: (t: { id: number; title: string; status: string; assigneeId?: number | null; createdAt?: string | null },
+    known: ReadonlyMap<number, KnownT> | null, me: number | null | undefined, mountedAtMs: number) => boolean;
+  clientTaskAlertText: (titles: string[]) => string | null;
+}
+async function loadFe<T>(rel: string): Promise<T> {
+  const ts = (await import("typescript")).default;
+  const js = ts.transpileModule(readFileSync(FE(rel), "utf8"), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  return await import(`data:text/javascript,${encodeURIComponent(js)}`) as T;
+}
+
+/**
+ * #1499c — МЕНЕДЖЕР БАЧИТЬ НОВУ ЗАДАЧУ ПО КЛІЄНТУ ОДРАЗУ. Звичайна нова задача приходить мовчки; задача при передачі —
+ * сповіщенням. Префікс фронту == бекенду (інакше сповіщення замовкне тихо), і правило по обидва боки:
+ * нова моя — так; уже відома, чужа, закрита, без префікса, адміну без менеджера — ні; до першого опитування — лише свіжі.
+ * 🧨 Червоніє, якщо розвести префікси або дзвонити на кожному опитуванні.
+ */
+test("#1499c сповіщення про нову задачу по переданому клієнту: префікс фронту == бекенду, лише нова й своя", async () => {
+  const N = await loadFe<ClientNotifyMod>("pages/dashboard/signalTaskNotify.ts");
+  assert.equal(N.CLIENT_TASK_PREFIX, TRANSFER_TASK_PREFIX, "🔴 префікс фронту розійшовся з бекендом — сповіщення замовкне тихо");
+  const MOUNT = Date.parse("2026-10-08T10:00:00Z");
+  const t = (id: number, over: Partial<{ title: string; status: string; assigneeId: number | null; createdAt: string }> = {}) =>
+    ({ id, title: `${TRANSFER_TASK_PREFIX} ТОВ Агро: Подзвонити`, status: "not_started", assigneeId: 7, createdAt: "2026-10-08T09:00:00Z", ...over });
+  const known = new Map<number, KnownT>([[1, { status: "not_started", closeReason: null }]]);
+  assert.equal(N.isClientTaskAlert(t(9), known, 7, MOUNT), true, "🔴 нова задача по клієнту прийшла мовчки");
+  assert.equal(N.isClientTaskAlert(t(1), known, 7, MOUNT), false, "🔴 відома задача дзвонить на кожному опитуванні");
+  assert.equal(N.isClientTaskAlert(t(9), known, 8, MOUNT), false, "🔴 дзвонить чужому менеджеру");
+  assert.equal(N.isClientTaskAlert(t(9), known, null, MOUNT), false, "🔴 дзвонить акаунту без менеджера");
+  assert.equal(N.isClientTaskAlert(t(9, { status: "done" }), known, 7, MOUNT), false, "🔴 дзвонить закрита задача");
+  assert.equal(N.isClientTaskAlert(t(9, { title: "Звичайна задача" }), known, 7, MOUNT), false, "🔴 дзвонить будь-яка нова задача");
+  assert.equal(N.isClientTaskAlert(t(9, { createdAt: "2026-10-08T10:05:00Z" }), null, 7, MOUNT), true, "🔴 свіжа задача до першого опитування — мовчки");
+  assert.equal(N.isClientTaskAlert(t(9, { createdAt: "2026-10-08T07:00:00Z" }), null, 7, MOUNT), false, "🔴 кожне відкриття сторінки дзвонить старими задачами");
+  assert.equal(N.clientTaskAlertText([`${TRANSFER_TASK_PREFIX} ТОВ Агро: Подзвонити`]), "ТОВ Агро: Подзвонити — задача в Задачнику.");
+  assert.match(N.clientTaskAlertText(["a", "b"]) ?? "", /^2 нові задачі/);
+  const dash = readFileSync(FE("pages/Dashboard.tsx"), "utf8");
+  assert.match(dash, /fresh\.filter\(\(t\) => isClientTaskAlert\(t, known, auth\?\.managerId, mountedAt\.current\)\)/, "🔴 Dashboard не кличе правило сповіщення");
+  assert.ok(dash.indexOf("isClientTaskAlert(t, known") < dash.indexOf("signalKnown.current = new Map(fresh"), "🔴 базову лінію оновлено ДО перевірки — нова задача вже «відома» і мовчить");
+});
+
+/**
+ * #1499d — ФОРМА ПЕРЕДАЧІ: при «передачі» блок задачі завжди, при «виправленні» — галочкою; текст уже заповнений готовим
+ * (Роман 08.10: «дефолтний текст, якщо тімлід не хоче міняти»), дедлайн — наступний робочий день; кнопка неактивна без тексту
+ * чи дедлайну; задача їде в тому самому запиті, що й передача.
+ * 🧨 Червоніє, якщо прибрати обовʼязковість на «передачі», зняти блокування кнопки чи готовий текст.
+ */
+test("#1499d форма передачі: задача з готовим текстом, обовʼязкова при «передачі», кнопка без тексту чи дедлайну неактивна", () => {
+  const f = readFileSync(FE("pages/dashboard/sections/ClientAdminPanels.tsx"), "utf8");
+  assert.match(f, /const taskOn = kind === "transfer" \|\| taskWanted;/, "🔴 при «передачі» блок задачі не обовʼязковий");
+  assert.match(f, /useState\(\(\) => defaultTransferTaskText\(clientName\)\)/, "🔴 текст задачі не заповнений готовим");
+  assert.match(f, /useState\(\(\) => nextWorkingDay\(\)\)/, "🔴 дедлайн за замовчуванням не наступний робочий день");
+  assert.match(f, /const taskMissing = taskOn && \(!taskText\.trim\(\) \|\| !taskDeadline\);/, "🔴 немає перевірки тексту й дедлайну");
+  assert.match(f, /disabled=\{busy \|\| !clientKey \|\| !managerId \|\| !reason\.trim\(\) \|\| taskMissing\}/, "🔴 кнопка активна без задачі");
+  assert.match(f, /\.\.\.\(taskOn \? \{ task: \{ text: taskText\.trim\(\), deadline: taskDeadline, priority: taskPriority, details: taskDetails\.trim\(\) \} \} : \{\}\)/,
+    "🔴 задача не їде в тому самому запиті, що й передача");
+  const def = f.match(/`Звʼязатися з клієнтом \$\{clientName\}: ([^`]+)`/);
+  assert.ok(def && /узгодити наступний крок/.test(f), "🔴 готовий текст не дія з результатом");
 });

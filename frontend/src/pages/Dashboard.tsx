@@ -53,7 +53,7 @@ import {
 } from "../api";
 import { Layout, NAV_ITEMS, HIDDEN_NAV, type NavKey } from "../components/Layout";
 import { getDateRange } from "../components/DateRangeFilter";
-import { isSignalAlert, signalAlertText, knownOf, type KnownTask } from "./dashboard/signalTaskNotify";
+import { isSignalAlert, signalAlertText, knownOf, isClientTaskAlert, clientTaskAlertText, type KnownTask } from "./dashboard/signalTaskNotify";
 import { isAcceptanceAlert, acceptanceAlertText } from "./dashboard/acceptanceNotify";
 import { getAuthPayload } from "../auth";
 import { currentMonth, formatAmount, formatAmountFull, previousRange, getRank, presence } from "./dashboard/format";
@@ -376,6 +376,13 @@ export function Dashboard() {
         success: false, go: "tasks", label: "До задач", onDismiss: () => { missedPending.current = []; },
       });
     }
+    // 👤 Нова задача по переданому клієнту (08.10.2026) — тією самою базовою лінією, ДО оновлення `signalKnown`.
+    const clientTitles = fresh.filter((t) => isClientTaskAlert(t, known, auth?.managerId, mountedAt.current)).map((t) => t.title);
+    const clientText = clientTaskAlertText(clientTitles);
+    if (clientText) notifyEvent({
+      key: "client-tasks", tone: "info", src: "Задачник · переданий клієнт", text: clientText, plain: `👤 ${clientText}`,
+      success: false, go: "tasks", label: "До задач",
+    });
     signalKnown.current = new Map(fresh.map((t) => [t.id, knownOf(t)]));
   };
   usePolling(() => {
