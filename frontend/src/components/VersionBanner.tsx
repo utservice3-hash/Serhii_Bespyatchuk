@@ -87,87 +87,31 @@ export function VersionBanner() {
   }, []);
   const dismiss = () => setDismissedSha(serverSha);
 
-  /**
-   * Esc закриває — те саме, що «Закрити».
-   *
-   * 🔴 ФАЗА ЗАХОПЛЕННЯ + `stopImmediatePropagation`, І ЦЕ НЕ ПРИДИРКА. У фронті вже
-   * висять ЧОТИРИ таких самих слухачі на `window` (`CommandPalette`, `MergeDialog`,
-   * `OwnerEditor`, `AgreementEditor`), і кожен на Escape закриває СВОЄ вікно. Без
-   * перехоплення один натиск Esc закрив би і це вікно, і діалог під ним — разом із
-   * набраним у ньому текстом (у `MergeDialog` це причина обʼєднання, у `OwnerEditor`
-   * — причина передачі). Тобто вікно, що прийшло непроханим, стирало б чужу роботу
-   * одним натиском. Ми найвищі на екрані — отже Esc адресований нам, і далі він не йде.
-   */
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.stopImmediatePropagation();
-      dismiss();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [open]);
-
   if (!open) return null;
 
   /**
-   * 🔴 КЛІК ПО ПІДКЛАДЦІ НЕ ЗАКРИВАЄ — свідомий відступ від решти діалогів проєкту.
-   * Там вікно відкриває САМА людина, знає про нього і закриває його теж свідомо.
-   * Це приходить непрохано, посеред роботи, під курсором — і закриття тут
-   * НЕЗВОРОТНЕ: після нього опитування вже спинене, тож сигнал зникає до кінця дня.
-   * Випадковий клік повз картку коштував би людині всього попередження. Закрити
-   * можна кнопкою або Esc — обидва потребують наміру.
+   * 🔔 СПОВІЩЕННЯ, А НЕ ВІКНО НА ВЕСЬ ЕКРАН (07.10.2026, Роман: «хочеться його взагалі прибрати, щоб він був як
+   * сповіщення», за зразком нової системи сповіщень). Вікно на весь екран (рішення 05.09) перекривало роботу на кожному
+   * викаті — а їх буває по 8 на день. Тепер — картка внизу праворуч у стилі решти сповіщень (`app-toast`):
+   *  · НЕ ПЕРЕКРИВАЄ роботу (немає підкладки й `aria-modal`), тож і Esc не перехоплюємо — він лишається відкритим діалогам;
+   *  · САМА НЕ ЗНИКАЄ (немає таймера) — пропустити її важче, ніж смужку, від якої відмовились 05.09;
+   *  · ✕ — мовчить до НАСТУПНОГО викату (`dismissedSha`, `#414`), «Оновити» — перезавантаження.
+   * Без `autoFocus` — з тієї самої причини, що й раніше: монтує картку таймер опитування, посеред набору тексту, і
+   * фокус на «Оновити» перезавантажив би сторінку наступним пробілом.
    */
   return (
-    <div
-      role="dialog" aria-modal="true" aria-labelledby="version-modal-title"
-      style={{
-        position: "fixed", inset: 0, zIndex: Z, background: "rgba(15,23,42,.55)",
-        display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 16px",
-      }}
-    >
-      <div style={{
-        background: "#fff", borderRadius: 16, padding: "26px 26px 22px",
-        maxWidth: 460, width: "100%", boxShadow: "0 18px 48px rgba(15,23,42,.28)",
-        color: "#0f172a", lineHeight: 1.55,
-        // Низький вьюпорт (ноутбук із відкритою консоллю, телефон лежачи): без цього
-        // ряд кнопок їде за край екрана, і закрити вікно стає нічим.
-        maxHeight: "calc(100vh - 48px)", overflowY: "auto",
-      }}>
-        <div id="version-modal-title" style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>
-          Вийшла нова версія дашборда
+    <div role="status" aria-live="polite" style={{ position: "fixed", right: 16, bottom: 16, zIndex: Z, width: "min(400px, calc(100vw - 32px))" }}>
+      <div className="app-toast ev t-info">
+        <span className="app-toast-icon" aria-hidden>⟳</span>
+        <div className="app-toast-body">
+          <span className="app-toast-src">Дашборд</span>
+          <b style={{ fontSize: 13.5 }}>Вийшла нова версія</b>
+          <span style={{ fontSize: 12.5, opacity: 0.9 }}>Оновіть сторінку, щоб працювати з актуальними цифрами й кнопками. Незбережений текст — спершу збережіть.</span>
         </div>
-        <div style={{ fontSize: 14, color: "#475467" }}>
-          Ви працюєте зі старою — частина виправлень у ній ще відсутня, і кнопки можуть
-          поводитись не так, як мають. Оновіть сторінку, щоб перейти на актуальну версію.
-        </div>
-        <div style={{ fontSize: 12.5, color: "#667085", marginTop: 10 }}>
-          Якщо в полях є незбережений текст — закрийте це вікно, збережіть і оновіть самі.
-        </div>
-
-        <div style={{ display: "flex", gap: 10, marginTop: 20, justifyContent: "flex-end", flexWrap: "wrap" }}>
-          <button onClick={() => dismiss()} style={{
-            border: "1px solid #d0d5dd", background: "#fff", color: "#344054",
-            borderRadius: 9, padding: "9px 18px", cursor: "pointer", fontSize: 14,
-          }}>
-            Закрити
-          </button>
-          {/**
-            * 🔴 БЕЗ `autoFocus`, І ЦЕ ГОЛОВНА ПРАВКА ЦЬОГО ПРОХОДУ. React ставить фокус
-            * імперативно В МИТЬ МОНТУВАННЯ, а монтує вікно ТАЙМЕР опитування — тобто
-            * довільна мить, зокрема посеред набору тексту. Фокус переїхав би на
-            * «Оновити», і наступний пробіл або Enter перезавантажив би сторінку,
-            * стерши недописане. Це рівно те, від чого ми відмовились, коли свідомо не
-            * робили автоперезавантаження — тільки чужими руками й непомітно.
-            */}
-          <button onClick={() => location.reload()} style={{
-            border: "none", background: "#1d4ed8", color: "#fff", borderRadius: 9,
-            padding: "9px 22px", cursor: "pointer", fontSize: 14, fontWeight: 600,
-          }}>
-            Оновити
-          </button>
-        </div>
+        <button className="app-toast-act" onClick={() => location.reload()}>
+          Оновити
+        </button>
+        <button className="app-toast-x" onClick={() => dismiss()} title="Закрити до наступної версії" aria-label="Закрити до наступної версії">×</button>
       </div>
     </div>
   );
