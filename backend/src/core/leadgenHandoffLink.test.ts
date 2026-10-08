@@ -34,6 +34,8 @@ const SCHEMA = path.join(import.meta.dirname, "..", "db", "schema.sql");
 const FC = [8921932, 155304];   // воронки повного циклу у фікстурі; у ядрі — `money.FC_PIPELINES`
 const PZ = LEADGEN_STAGE_IDS.pz[0], QUAL = QUALIFICATION_PIPELINES[0], OTHER = 9999999;
 const Q = LEADGEN_STAGE_IDS.qualified;
+/** Заглушки клієнта — ті самі, що передає ядро (`metrics.GENERIC_CLIENT_KEYS`); звіряє `#1503b`. */
+const GENERIC = ["названиенеуказано", "companynamenotspecified", ""];
 
 type C = import("pg").Client;
 let client: C | null = null;
@@ -54,7 +56,7 @@ async function run<T>(q: SqlQuery): Promise<T[]> {
   return (await client!.query(q.text, q.values)).rows as T[];
 }
 const linkQ = (from: string, to: string) => handoffLinkQuery(from, to,
-  { pz: LEADGEN_STAGE_IDS.pz, qualified: Q, managerPipelines: [...QUALIFICATION_PIPELINES, ...FC] },
+  { pz: LEADGEN_STAGE_IDS.pz, qualified: Q, managerPipelines: [...QUALIFICATION_PIPELINES, ...FC], genericClientKeys: GENERIC },
   { beforeSec: LINK_BEFORE_SEC, afterSec: LINK_AFTER_SEC });
 
 let nextId = 700000;
@@ -840,4 +842,45 @@ test("#1502 ЖИВИЙ SQL: прорахунок, скасований прот�
   assert.deepEqual(list.map((x) => x.kommoId).sort(), kept, "🔴 список переданих прорахунків показує скасовані");
   const wk = await stats.leadgenWeekly(day, day);
   assert.equal(wk[0]?.quotes, 4, "🔴 тижні рахують скасовані прорахунки");
+});
+
+/**
+ * #1503 — ЗАГЛУШКА ЗАМІСТЬ КЛІЄНТА НЕ РОБИТЬ УГОДУ «ПОСТІЙНОГО КЛІЄНТА» І НЕ СКЛЕЮЄ ПЕРЕДАЧУ (07.10.2026, рішення власника).
+ * 62747557: в угоді менеджера компанія «Название не указано» — під цим ключем 1 383 успіхи різних клієнтів, і угоду
+ * нового клієнта визнано «постійною» (гроші лідгену зникли). Обидва боки: справжній клієнт із 2 свіжими успіхами —
+ * постійний; заглушка в угоді менеджера → клієнт з угоди Продзвону (без успіхів) → НЕ постійний; заглушка в обох → НЕ
+ * постійний; заглушка в Продзвоні без примітки Kommo — не «здогадується» до чужої угоди з тим самим ключем.
+ * 🧨 САБОТАЖ: у `handoffLinkQuery` `x.client_key = ANY($6::text[])` → `x.client_key = ANY('{}'::text[])` → червоніє.
+ */
+test("#1503 ЖИВИЙ SQL: заглушка «Название не указано» — не клієнт: не робить угоду постійною й не склеює передачу", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { stats } = await core();
+  const metrics = await import("./metrics.js");
+  assert.deepEqual([...GENERIC].sort(), [...metrics.GENERIC_CLIENT_KEYS].sort(), "🔴 фікстура тримає не ті заглушки, що ядро");
+  const G = "названиенеуказано", day = "2025-05-12", T = utc(`${day}T09:00:00`);
+  // Історія успіхів: справжній постійний клієнт і заглушка — по 2 свіжі успіхи повного циклу.
+  for (const ck of ["k-reg1503", G]) for (const d of ["2025-04-20T10:00:00", "2025-05-02T10:00:00"]) {
+    const id = await deal({ manager: 3, pipeline: FC[0], status: 142, ck, created: utc(d) });
+    await client!.query(`UPDATE deals SET closed_at_kommo = $2 WHERE kommo_id = $1`, [id, utc(d)]);
+  }
+  const handoff = async (pzKey: string, childKey: string | null, minute: number) => {
+    const at = sec(T, minute * 60);
+    const pz = await deal({ manager: 1, pipeline: PZ, ck: pzKey, created: utc("2025-01-01T00:00:00") });
+    await ev(pz, PZ, Q, at);
+    if (childKey === null) return { pz, child: null };
+    const child = await deal({ manager: 3, pipeline: FC[0], status: 69716460, ck: childKey, created: sec(at, 30) });
+    await client!.query(`INSERT INTO lead_child_links (parent_id, child_id, created_at) VALUES ($1, $2, now())`, [pz, child]);
+    return { pz, child };
+  };
+  const reg = await handoff("k-reg1503", "k-reg1503", 0);          // справжній постійний
+  const gen = await handoff("k-new1503", G, 10);                    // 62747557: заглушка в угоді менеджера
+  const both = await handoff(G, G, 20);                             // заглушка в обох
+  const guess = await handoff(G, null, 30);                         // без примітки Kommo
+  await deal({ manager: 3, pipeline: FC[0], status: 69716460, ck: G, created: sec(T, 30 * 60 + 20) }); // чужа з тим самим ключем у вікні
+  const m = await stats.leadgenHandoffMoney(day, day, { teamId: null, managerId: null });
+  const row = (pz: number) => m.deals.find((x) => x.pzId === pz);
+  assert.equal(row(reg.pz)?.cls, "regular", "🔴 справжній клієнт із 2 свіжими успіхами не визнаний постійним (зламано саме правило)");
+  assert.equal(row(gen.pz)?.cls, "paid", "🔴 угода з компанією «Название не указано» визнана постійною — гроші лідгену зникли");
+  assert.equal(row(both.pz)?.cls, "paid", "🔴 заглушка в обох угодах дала «постійного клієнта»");
+  assert.equal(row(guess.pz)?.dealId, null, "🔴 передачу з ключем-заглушкою «здогадано» до чужої угоди");
 });

@@ -1,6 +1,6 @@
 import { pool } from "../db/pool.js";
 import { kyivToday } from "./dates.js";
-import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING } from "./metrics.js";
+import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING, GENERIC_CLIENT_KEYS } from "./metrics.js";
 import { LEADGEN_STAGE_IDS, QUALIFICATION_PIPELINES } from "./leadgenStages.js";
 import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery, leadStatusPred, oprStatusPred, quoteKeptSql,
   type SqlQuery, type LeadgenBucketGrain } from "./leadgenSql.js";
@@ -303,14 +303,16 @@ export async function leadgenBuckets(
 
 /** Історія успіхів клієнтів цих передач — для правила «постійний клієнт» (`isRegularAt`). */
 function historyFor(links: readonly HandoffLinkInfo[]) {
-  return clientSuccessHistory(links.flatMap((l) => (l.dealId != null && l.clientKey ? [l.clientKey] : [])));
+  // Заглушка замість клієнта — не клієнт: історії не шукаємо (запит уже повертає її як null; тут — другий запобіжник).
+  return clientSuccessHistory(links.flatMap((l) =>
+    (l.dealId != null && l.clientKey && !GENERIC_CLIENT_KEYS.includes(l.clientKey) ? [l.clientKey] : [])));
 }
 
 /** Входи в 142 періоду з угодою менеджера й описом обох угод — усе, крім грошей (їх дає `money.ts`). */
 async function handoffLinks(from: string, to: string): Promise<HandoffLinkInfo[]> {
   const q = handoffLinkQuery(from, to,
     { pz: LEADGEN_STAGE_IDS.pz, qualified: LEADGEN_STAGE_IDS.qualified,
-      managerPipelines: [...QUALIFICATION_PIPELINES, ...FC_PIPELINES] },
+      managerPipelines: [...QUALIFICATION_PIPELINES, ...FC_PIPELINES], genericClientKeys: GENERIC_CLIENT_KEYS },
     { beforeSec: LINK_BEFORE_SEC, afterSec: LINK_AFTER_SEC });
   const r = await pool.query<{ pz_id: string; lg_id: number; lg_team_id: number | null; at: Date; day: string;
     pz_name: string | null; pz_client: string | null; client_key: string | null; deal_id: string | null; deal_name: string | null;
