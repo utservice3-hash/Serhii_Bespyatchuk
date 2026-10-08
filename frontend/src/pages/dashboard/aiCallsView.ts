@@ -234,3 +234,74 @@ export function quoteTurnIndex(turns: readonly { text: string }[] | null, quote:
   if (!turns || q.length < 3) return -1;
   return turns.findIndex((t) => norm(t.text).includes(q));
 }
+
+// ─── Екран D (08.10.2026): чек-лист і черга розбору ─────────────────────────────────────────────────────────────
+// Стани пунктів і «потребує розбору» приходять із сервера (`core/firstTouchTeamReport.ts`); тут — лише підписи й
+// складання по менеджерах (частки й середні), без жодного другого правила.
+
+export type CheckMarkT = "y" | "n" | "o";
+export interface ChecklistT { request: CheckMarkT; price: CheckMarkT; promise: CheckMarkT }
+export type ReviewReasonT = "noCall" | "late" | "noPrice" | "lost";
+
+export const CHECK_ITEMS: readonly { key: keyof ChecklistT; label: string }[] = [
+  { key: "request", label: "Запит" }, { key: "price", label: "Ціна" }, { key: "promise", label: "Обіцянка" },
+];
+export const CHECK_MARK_UI: Record<CheckMarkT, { label: string; color: string }> = {
+  y: { label: "так", color: "#4ade80" }, n: { label: "ні", color: "#f87171" }, o: { label: "не рахується", color: "#d1d5db" },
+};
+export const REVIEW_REASON_UI: Record<ReviewReasonT, { label: string; tone: Tone }> = {
+  noCall: { label: "Немає дзвінка", tone: "bad" },
+  late: { label: "Запізнився", tone: "warn" },
+  noPrice: { label: "Без ціни", tone: "warn" },
+  lost: { label: "Втрачений лід", tone: "muted" },
+};
+const REASON_ORDER: Record<ReviewReasonT, number> = { noCall: 0, late: 1, noPrice: 2, lost: 3 };
+
+/** «2/3» — виконано з тих, що рахуються; `null` — ще не розібрано. */
+export function scoreLabel(s: { yes: number; total: number } | null): string | null {
+  return s && s.total > 0 ? `${String(s.yes)}/${String(s.total)}` : null;
+}
+
+/** Середній бал по розмовах із балом, у масштабі «з 3»; `null` — немає жодної. */
+export function avgScore3(scores: readonly ({ yes: number; total: number } | null)[]): number | null {
+  const xs = scores.filter((s): s is { yes: number; total: number } => s != null && s.total > 0).map((s) => s.yes / s.total);
+  return xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 3 * 10) / 10 : null;
+}
+
+/** Частка «так» серед «так + ні» по одному пункту; `null` — пункт ніде не рахувався. */
+export function markPct(cls: readonly (ChecklistT | null)[], key: keyof ChecklistT): number | null {
+  const ms = cls.filter((c): c is ChecklistT => c != null).map((c) => c[key]).filter((m) => m !== "o");
+  return ms.length ? Math.round((ms.filter((m) => m === "y").length / ms.length) * 100) : null;
+}
+
+export interface ChecklistLine { managerId: number | null; name: string; calls: number; score: number | null;
+  request: number | null; price: number | null; promise: number | null }
+/** Рядок на менеджера: розібрані розмови звіту, середній бал і частка по кожному пункту. Найслабші — згори. */
+export function managerChecklist<T extends { inReport: boolean; managerId: number | null; managerName: string | null;
+  checklist: ChecklistT | null; checkScore: { yes: number; total: number } | null }>(rows: readonly T[]): ChecklistLine[] {
+  const by = new Map<string, T[]>();
+  for (const r of rows) if (r.inReport && r.checklist) {
+    const k = r.managerId == null ? "none" : String(r.managerId);
+    by.set(k, [...(by.get(k) ?? []), r]);
+  }
+  return [...by.values()].map((g) => ({
+    managerId: g[0].managerId, name: g[0].managerName ?? "Менеджер невідомий", calls: g.length,
+    score: avgScore3(g.map((r) => r.checkScore)),
+    request: markPct(g.map((r) => r.checklist), "request"), price: markPct(g.map((r) => r.checklist), "price"),
+    promise: markPct(g.map((r) => r.checklist), "promise"),
+  })).sort((a, b) => (a.score ?? 99) - (b.score ?? 99) || a.name.localeCompare(b.name, "uk"));
+}
+
+/** Черга розбору: лише ті, що потребують розбору (прапорець сервера); спершу «немає дзвінка», далі новіші. */
+export function queueRows<T extends { needsReview: boolean; reviewReason: ReviewReasonT | null; calledAt: string }>(rows: readonly T[]): T[] {
+  return rows.filter((r) => r.needsReview && r.reviewReason)
+    .sort((a, b) => REASON_ORDER[a.reviewReason!] - REASON_ORDER[b.reviewReason!] || b.calledAt.localeCompare(a.calledAt));
+}
+
+/** Медіана хвилин (реакція по втрачених) — `null`, якщо даних немає. */
+export function medianMin(xs: readonly (number | null | undefined)[]): number | null {
+  const v = xs.filter((x): x is number => typeof x === "number").sort((a, b) => a - b);
+  if (!v.length) return null;
+  const m = Math.floor(v.length / 2);
+  return v.length % 2 ? v[m] : Math.round((v[m - 1] + v[m]) / 2);
+}

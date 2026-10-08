@@ -74,7 +74,7 @@ export const FIRST_TOUCH_TRANSCRIPT_ROLES: ReadonlySet<string> = new Set(["admin
  */
 export function canWriteNote(roleKey: string | null | undefined, kind: string): boolean {
   if (kind === "price" || kind === "offline") return roleKey === "admin" || roleKey === "team_lead" || roleKey === "manager";
-  if (kind === "missed") return roleKey === "admin" || roleKey === "team_lead";
+  if (kind === "missed" || kind === "review") return roleKey === "admin" || roleKey === "team_lead";
   return false;
 }
 
@@ -162,6 +162,10 @@ export interface AiCallRow {
   missedNote: CallNote | null;
   /** «Передзвонив поза телефонією» (01.10.2026) — `null`, якщо не позначали. */
   offlineNote: CallNote | null;
+  /** «Розібрано» тімлідом з черги розбору (екран D, 08.10.2026) — `null`, якщо не розбирали. */
+  reviewNote: CallNote | null;
+  /** Модель витягла запит клієнта (що й куди везти) — пункт «Запит» чек-листа; `false` і до аналізу. */
+  hasRequest: boolean;
   /** Номер клієнта (для пулу заявок тімліда, ТЗ п.6.2) — `null`, якщо Ringostat його не дав. */
   clientPhone: string | null;
   /** ⏱ Перший наш вихідний на номер після створення угоди (`core/leadReaction.ts`); `null` — не дзвонили / невідомо. */
@@ -186,6 +190,7 @@ interface RawRow {
   pn_text?: string | null; pn_by?: string | null; pn_at?: Date | null;
   mn_text?: string | null; mn_by?: string | null; mn_at?: Date | null;
   on_text?: string | null; on_by?: string | null; on_at?: Date | null;
+  rv_text?: string | null; rv_by?: string | null; rv_at?: Date | null;
   first_out_at?: Date | null;
 }
 
@@ -219,6 +224,8 @@ export function foldRow(r: RawRow): AiCallRow {
     priceNote: r.pn_text ? { text: r.pn_text, byName: r.pn_by ?? null, at: r.pn_at ? new Date(r.pn_at).toISOString() : "" } : null,
     missedNote: r.mn_text ? { text: r.mn_text, byName: r.mn_by ?? null, at: r.mn_at ? new Date(r.mn_at).toISOString() : "" } : null,
     offlineNote: r.on_text ? { text: r.on_text, byName: r.on_by ?? null, at: r.on_at ? new Date(r.on_at).toISOString() : "" } : null,
+    reviewNote: r.rv_text ? { text: r.rv_text, byName: r.rv_by ?? null, at: r.rv_at ? new Date(r.rv_at).toISOString() : "" } : null,
+    hasRequest: (res?.client_request ?? "").trim() !== "",
     clientPhone: r.client_phone ?? null,
     firstOutboundAt: r.first_out_at ? new Date(r.first_out_at).toISOString() : null,
     reactionMin: null,
@@ -229,9 +236,10 @@ export function foldRow(r: RawRow): AiCallRow {
 /** Коментарі «ціна» і «опрацьовано» — по одному на розмову (`alias` — таблиця з `uniqueid`). */
 const notesJoin = (alias: string): string => `LEFT JOIN first_touch_notes pn ON pn.uniqueid = ${alias}.uniqueid AND pn.kind = 'price'
       LEFT JOIN first_touch_notes mn ON mn.uniqueid = ${alias}.uniqueid AND mn.kind = 'missed'
-      LEFT JOIN first_touch_notes onx ON onx.uniqueid = ${alias}.uniqueid AND onx.kind = 'offline'`;
+      LEFT JOIN first_touch_notes onx ON onx.uniqueid = ${alias}.uniqueid AND onx.kind = 'offline'
+      LEFT JOIN first_touch_notes rvx ON rvx.uniqueid = ${alias}.uniqueid AND rvx.kind = 'review'`;
 const NOTE_COLS = "pn.note AS pn_text, pn.set_by_name AS pn_by, pn.set_at AS pn_at, mn.note AS mn_text, mn.set_by_name AS mn_by, mn.set_at AS mn_at, "
-  + "onx.note AS on_text, onx.set_by_name AS on_by, onx.set_at AS on_at";
+  + "onx.note AS on_text, onx.set_by_name AS on_by, onx.set_at AS on_at, rvx.note AS rv_text, rvx.set_by_name AS rv_by, rvx.set_at AS rv_at";
 
 function typeFields(res: AnalysisResult | null, r: RawRow): Pick<AiCallRow, "conversationType" | "typeConfidence" | "typeReason" | "priceValue" | "inReport" | "typeCheck" | "typeOverride"> {
   const override: TypeOverride | null = r.ov_is_cargo == null ? null
@@ -549,7 +557,7 @@ export async function setCallType(db: Db, uniqueid: string, isCargo: boolean, by
     [uniqueid, isCargo, by.userId, by.name, at.toISOString()]);
 }
 
-export type NoteKind = "price" | "missed" | "offline";
+export type NoteKind = "price" | "missed" | "offline" | "review";
 /** Записати (або замінити) коментар виду `kind`. Порожній текст — прибрати коментар. Право й скоуп — у роуті. */
 export async function setCallNote(db: Db, uniqueid: string, kind: NoteKind, text: string, by: { userId: number | null; name: string | null }, at: Date): Promise<void> {
   const t = text.trim();

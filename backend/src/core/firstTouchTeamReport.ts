@@ -35,6 +35,9 @@ export interface ReportRowIn {
   missedNote: { text: string } | null;
   conversationType?: string | null;
   reactionMin?: number | null;
+  /** Екран D (08.10.2026): чи витягла модель запит клієнта, і чи розібрав розмову тімлід. */
+  hasRequest?: boolean;
+  reviewNote?: { text: string } | null;
 }
 
 export interface ManagerLine {
@@ -120,4 +123,64 @@ export function poolRows<T extends ReportRowIn>(rows: readonly T[], managerId: n
   return rows.filter((r) => r.inReport && (managerId === "all" || r.managerId === managerId)
     && (f === "all" || (f === "noPrice" && noPrice(r)) || (f === "noComment" && noPriceNoComment(r))
       || (f === "missed" && hasAgreement(r) && r.promiseState === "broken") || (f === "typeCheck" && r.typeCheck) || (f === "lost" && isLost(r))));
+}
+
+/**
+ * ✅ ЧЕК-ЛИСТ ПЕРШОГО ДОТИКУ (екран D, рішення Романа 08.10.2026 «роби D з 3 пунктів»). Три пункти, кожен — `y` виконано,
+ * `n` ні, `o` не рахується (і не йде в знаменник балу):
+ *   запит    — модель витягла запит клієнта (що й куди везти); `n`, якщо не витягла;
+ *   ціна     — ціну назвали; `n` — не назвали; `o` — втрачений лід (називати нікому, правило 05.10);
+ *   обіцянка — передзвонив (з розмовою чи лише спробами), «поза телефонією», клієнт сам подзвонив → `y`; запізнився чи
+ *              дзвінка немає → `n`; обіцянки передзвонити не було або термін ще не настав → `o`.
+ * Пункти «заперечення» й «наступний крок» свідомо НЕ тут: модель не каже, чи відпрацьовано заперечення і чий крок.
+ * Нерозібрана розмова чек-листа не має (`null`) — «ще не знаємо» не читається як «ні».
+ */
+export type CheckMark = "y" | "n" | "o";
+export interface Checklist { request: CheckMark; price: CheckMark; promise: CheckMark }
+
+const PROMISE_YES: ReadonlySet<PromiseState> = new Set(["kept_talk", "kept_attempt_only", "kept_offline", "client_called"]);
+const PROMISE_NO: ReadonlySet<PromiseState> = new Set(["late", "broken"]);
+
+export function checklist(r: ReportRowIn): Checklist | null {
+  if (!isAnalysed(r)) return null;
+  const ps = r.promiseState;
+  return {
+    request: r.hasRequest ? "y" : "n",
+    price: isLost(r) ? "o" : r.priceDiscussed === true ? "y" : "n",
+    promise: ps != null && PROMISE_YES.has(ps) ? "y" : ps != null && PROMISE_NO.has(ps) ? "n" : "o",
+  };
+}
+
+/** Бал = виконані ÷ ті, що рахуються. `null` — розмову не розібрано. */
+export function checklistScore(c: Checklist | null): { yes: number; total: number } | null {
+  if (!c) return null;
+  const m = [c.request, c.price, c.promise];
+  return { yes: m.filter((x) => x === "y").length, total: m.filter((x) => x !== "o").length };
+}
+
+/**
+ * Черга розбору тімліда: розмова у звіті, розібрана, і з неї є що сказати менеджеру — ціни не було, обіцянку
+ * прострочено чи не виконано, або лід втрачено. Виходить з черги, щойно тімлід поставив «Розібрано» або вже написав
+ * «Опрацьовано» (той самий розбір, лише для невиконаної обіцянки).
+ */
+export type ReviewReason = "noCall" | "late" | "noPrice" | "lost";
+export function reviewReason(r: ReportRowIn): ReviewReason | null {
+  if (!isAnalysed(r)) return null;
+  if (r.promiseState === "broken") return "noCall";
+  if (isLost(r)) return "lost";
+  if (noPrice(r)) return "noPrice";
+  if (r.promiseState === "late") return "late";
+  return null;
+}
+export const isReviewed = (r: ReportRowIn): boolean => r.reviewNote != null || r.missedNote != null;
+export const needsReview = (r: ReportRowIn): boolean => reviewReason(r) != null && !isReviewed(r);
+
+export interface ReviewQueue { total: number; reviewed: number; left: number; byReason: Record<ReviewReason, number> }
+/** Лічильники смуги «Черга розбору»: `total` — усі, що потребують розбору; `left` — ще не розібрані. */
+export function reviewQueue(rows: readonly ReportRowIn[]): ReviewQueue {
+  const due = rows.filter((r) => reviewReason(r) != null);
+  const left = due.filter((r) => !isReviewed(r));
+  const byReason: Record<ReviewReason, number> = { noCall: 0, late: 0, noPrice: 0, lost: 0 };
+  for (const r of left) byReason[reviewReason(r)!]++;
+  return { total: due.length, reviewed: due.length - left.length, left: left.length, byReason };
 }
