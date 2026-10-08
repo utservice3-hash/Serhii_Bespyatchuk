@@ -1300,9 +1300,11 @@ tr.recv-row:focus-visible { outline: 2px solid var(--accent, #c5141c); outline-o
 .app-toast-x { flex-shrink: 0; width: 26px; height: 26px; border: none; border-radius: var(--r-md); background: rgba(255, 255, 255, .14); color: #fff; cursor: pointer; font-size: 17px; line-height: 1; padding: 0; }
 .app-toast-act:focus-visible, .app-toast-x:focus-visible, .app-toast-more:focus-visible { outline: 2px solid var(--n-info); outline-offset: 2px; }
 .app-toast-more { pointer-events: auto; background: var(--card-bg); color: var(--text); border: 1px solid var(--border-strong); border-radius: var(--r-pill); padding: 4px 12px; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; box-shadow: var(--shadow); }
+.app-toast.leaving { animation: app-toast-out .2s ease-in forwards; pointer-events: none; }
 @keyframes app-toast-in { from { transform: translateY(8px); opacity: 0; } }
+@keyframes app-toast-out { to { transform: translateX(16px); opacity: 0; } }
 @keyframes app-toast-rot { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .app-toast { animation: none; } .app-toast-spin { animation-duration: 3s; } }
+@media (prefers-reduced-motion: reduce) { .app-toast, .app-toast.leaving { animation: none; } .app-toast-spin { animation-duration: 3s; } }
 
 /* 📈 «Дзвінки на мобільні» — кольори категорій на графіках (30.09.2026). Шість слотів перевіреного категоріального ряду
    (dataviz validate_palette: світла й темна тема — усі перевірки PASS у цьому порядку стосу). Колір іде за КАТЕГОРІЄЮ,

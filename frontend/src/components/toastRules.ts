@@ -29,10 +29,18 @@ export interface ToastRuleItem {
   count?: number;
 }
 
-/** Успіх чи інформація без кнопки — 5 с. */
-export const TOAST_PLAIN_MS = 5000;
-/** Подія «вам щось прийшло» — 15 с (рішення Романа 07.10.2026). */
-export const TOAST_EVENT_MS = 15000;
+/** Успіх чи інформація без кнопки — 3 с (рішення Романа 08.10.2026, варіант А; було 5 с). */
+export const TOAST_PLAIN_MS = 3000;
+/** Подія «вам щось прийшло» — 8 с (рішення Романа 08.10.2026, варіант А; було 15 с). */
+export const TOAST_EVENT_MS = 8000;
+/**
+ * Плавне зникнення: тост гасне й відʼїжджає за цей час, і лише потім іде з екрана (сусіди стуляються
+ * без стрибка). Хто вимкнув анімації в системі, — тост іде одразу. Тримає `#1239b`.
+ */
+export const TOAST_EXIT_MS = 200;
+export function exitDelay(reducedMotion: boolean): number {
+  return reducedMotion ? 0 : TOAST_EXIT_MS;
+}
 /** Скільки тостів видно одночасно; решта — під кнопкою «Ще N». */
 export const TOAST_MAX_SHOWN = 3;
 

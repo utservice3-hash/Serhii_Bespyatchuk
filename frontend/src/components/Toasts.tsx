@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { mutationFailureText } from "../actionFeedback";
-import { toastLifetime, upsertToast, visibleToasts, type ToastTone } from "./toastRules";
+import { exitDelay, toastLifetime, upsertToast, visibleToasts, type ToastTone } from "./toastRules";
 
 /**
  * 🔔 ОДНЕ ПОВІДОМЛЕННЯ НА ВЕСЬ ДАШБОРД — стандарт «Еволюція бренду UTS» (Роман, 07.10.2026).
@@ -15,12 +15,12 @@ import { toastLifetime, upsertToast, visibleToasts, type ToastTone } from "./toa
  * - `tone` — ok / info / warn / err (за замовчуванням ok, з `error: true` — err);
  * - `key` — тост із тим самим ключем ЗАМІНЮЄ попередній («Зберігаю…» → «Збережено»; серія подій);
  * - `src` — рядок джерела над заголовком («Задачник · Олена Коваль»);
- * - `event` — подія ззовні: зникає за 15 с (пауза під курсором і на прихованій вкладці);
+ * - `event` — подія ззовні: зникає за 8 с (пауза під курсором і на прихованій вкладці);
  * - `loading` — триває операція, крутилка замість іконки, закрити не можна;
  * - `onDismiss` — коли тост пішов з екрана (закрили, дія, таймер).
  *
- * Скільки висить — `toastRules.ts` (одне правило й для показу, і для гейтів `#1230`–`#1232`):
- * успіх без кнопки 5 с, подія 15 с — обидва з паузою, поки курсор чи фокус на тості або вкладка
+ * Скільки висить — `toastRules.ts` (одне правило й для показу, і для гейтів `#1239`, `#1231`, `#1232`):
+ * успіх без кнопки 3 с, подія 8 с (08.10.2026) — обидва з паузою, поки курсор чи фокус на тості або вкладка
  * прихована; помилка й кнопка дії — до закриття. Видно до трьох; решта під «Ще N», помилки ховаються останніми.
  * Іконки чотирьох форм (коло, квадрат, трикутник, восьмикутник), щоб тон читався без кольору.
  *
@@ -45,6 +45,8 @@ type Item = {
   id: number; rev: number; text: string; tone: ToastTone; head?: string; src?: string;
   action?: ToastAction; key?: string; event?: boolean; loading?: boolean; hasAction?: boolean;
   count?: number; onDismiss?: () => void;
+  /** Тост зникає (програється анімація); з масиву його прибере таймер `exitDelay`. */
+  leaving?: boolean;
 };
 
 const ToastContext = createContext<Toast | null>(null);
@@ -57,10 +59,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const itemsRef = useRef<Item[]>([]);
   itemsRef.current = items;
 
+  /**
+   * Зникнення у ДВА кроки (08.10.2026): спершу тост позначається `leaving` і програє анімацію, потім
+   * таймер прибирає його з масиву — але лише якщо він досі `leaving`: той самий ключ міг тим часом
+   * принести новий вміст («Зберігаю…» → «Збережено»), і тоді тост лишається. Тримає `#1239b`.
+   */
   const dismiss = useCallback((id: number) => {
     const gone = itemsRef.current.find((x) => x.id === id);
-    setItems((xs) => xs.filter((x) => x.id !== id));
-    gone?.onDismiss?.();
+    if (!gone || gone.leaving) return;
+    setItems((xs) => xs.map((x) => (x.id === id ? { ...x, leaving: true } : x)));
+    gone.onDismiss?.();
+    const reduce = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    window.setTimeout(() => setItems((xs) => xs.filter((x) => !(x.id === id && x.leaving))), exitDelay(!!reduce));
   }, []);
 
   const toast: Toast = useCallback((text, opts) => {
@@ -87,7 +97,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     return () => document.removeEventListener("visibilitychange", onVis);
   }, []);
 
-  const { shown, hidden } = expanded ? { shown: items, hidden: 0 } : visibleToasts(items);
+  // Тост, що зникає, у «Ще N» не рахується, але домальовує свою анімацію на місці.
+  const live = items.filter((x) => !x.leaving);
+  const vis = expanded ? { shown: live, hidden: 0 } : visibleToasts(live);
+  const keep = new Set(vis.shown.map((x) => x.id));
+  const shown = items.filter((x) => keep.has(x.id) || x.leaving);
+  const hidden = vis.hidden;
   useEffect(() => { if (items.length <= 3 && expanded) setExpanded(false); }, [items.length, expanded]);
 
   return (
@@ -133,7 +148,7 @@ function ToastView({ it, docHidden, onClose }: { it: Item; docHidden: boolean; o
   const err = it.tone === "err";
   return (
     <div
-      className={`app-toast t-${it.tone}${it.event ? " ev" : ""}`}
+      className={`app-toast t-${it.tone}${it.event ? " ev" : ""}${it.leaving ? " leaving" : ""}`}
       role={err ? "alert" : "status"}
       tabIndex={-1}
       onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
