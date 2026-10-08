@@ -53,6 +53,7 @@ export const MANIFEST_FILES: string[] = [
   "core/zoneRates.test.js",
   "core/activeManager.test.js",
   "core/weekPlan.test.js",
+  "core/transferTask.test.js",
   "core/sumInvariants.test.js",
   "core/periodNesting.test.js",
   "routes/trackerSso.test.js",
@@ -1435,6 +1436,9 @@ export const MANIFEST_TESTS: string[] = [
   "#1494 тиждень фіксується лише коли він почався І місячний план уже заведено",
   "#1494b ЖИВА БАЗА: жодного знімка тижня з планом 0 у менеджера з місячним планом",
   "#1494c запис знімка тижня стоїть під shouldFreezeWeek з планом менеджера",
+  // core/transferTask.test.ts — задача новому менеджеру при передачі клієнта (08.10.2026)
+  "#1499 задача при передачі: обовʼязкова при «передачі», за бажанням при «виправленні»; текст і дедлайн — обовʼязкові",
+  "#1499b ЖИВА СХЕМА: передача клієнта й задача новому менеджеру — разом або нічого",
   // core/sumInvariants.test.ts — Σ(менеджери) == команда == компанія
   "#49 добір: Σ по менеджерах == добір відділу",
   "#49b саботаж: повторне усереднення розходиться з відділом",
