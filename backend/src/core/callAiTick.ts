@@ -4,6 +4,7 @@ import { adDealFirstTalksSql, type AdFlag, type FirstTalkRow } from "./adCallFac
 import { createMinInterval, type HttpDeps } from "./callAiHttp.js";
 import { downloadRecording } from "./ringostatRecording.js";
 import { ELEVENLABS_STT_MODEL, elevenLabsTranscribe, GEMINI_MODEL, geminiGenerate, RUBRIC_CURRENT } from "./callAiProviders.js";
+import { OBJECTION_FROM, OBJECTION_KIT, RUBRIC_OBJECTION_V1 } from "./callAiObjection.js";
 import { carrierActiveIds } from "./carrierCallQueue.js";
 import { notifyCapOnce } from "./aiCapAlert.js";
 import { dequeueOutside, enqueueAnalyses, enqueueTranscripts, runAnalysisPortion, runSttPortion, type PortionReport } from "./callAiPipeline.js";
@@ -52,9 +53,28 @@ export const TICK_MAX_ATTEMPTS = 3;
 /** Час на розпізнавання й на аналіз в одному тіку. Разом менше за 10 хв між тіками (ТЗ 30.09.2026) і за `MAX_RUN_MS`. */
 export const STT_BUDGET_MS = 5 * 60_000;
 export const LLM_BUDGET_MS = 3 * 60_000;
+/** Частина `LLM_BUDGET_MS` для рубрики заперечень (ТЗ 08.10.2026): відповідь коротка, тож 30 с вистачає на порцію. */
+export const OBJ_BUDGET_MS = 30_000;
 /** Між тіками — 10 хв; сума бюджетів мусить лишати запас на вибірку й останню порцію. */
 export const TICK_EVERY_MIN = 10;
 export const MAX_OUTPUT_TOKENS = 2048;
+/** Відповідь рубрики заперечень — пʼять коротких полів. */
+export const OBJ_MAX_OUTPUT_TOKENS = 512;
+
+/**
+ * Розмови для рубрики заперечень: основний розбір готовий, дзвінок не раніше `from` (київська дата), і тип не з тих,
+ * що впевнено йдуть у «Виключені». Повертає `uniqueid`; черга сама пропустить уже розібрані (`ON CONFLICT`).
+ */
+export async function objectionCandidates(db: Db, from: string): Promise<string[]> {
+  const r = await db.query<{ uniqueid: string }>(
+    `SELECT DISTINCT t.uniqueid FROM call_transcripts t
+       JOIN call_analyses a ON a.transcript_id = t.id AND a.rubric_version = $1 AND a.status = 'done'
+       JOIN ringostat_calls rc ON rc.uniqueid = t.uniqueid
+      WHERE (rc.calldate AT TIME ZONE 'Europe/Kyiv')::date >= $2::date
+        AND COALESCE(a.result->>'conversation_type', '') NOT IN ('carrier', 'vendor', 'job_seeker', 'wrong_number')`,
+    [RUBRIC_CURRENT, from]);
+  return r.rows.map((x) => x.uniqueid);
+}
 
 /** Київська дата моменту — `sv-SE` дає рівно YYYY-MM-DD (як `kyivToday`, але для заданого «зараз»). */
 export const kyivDateOf = (d: Date): string => d.toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
@@ -183,13 +203,29 @@ export async function runCallAiTick(env: TickEnv): Promise<TickReport> {
     maxOutputTokens: MAX_OUTPUT_TOKENS,
     usdPerInputToken: env.prices.llmUsdPerMtokIn == null ? null : env.prices.llmUsdPerMtokIn / 1e6,
     usdPerOutputToken: env.prices.llmUsdPerMtokOut == null ? null : env.prices.llmUsdPerMtokOut / 1e6,
-  }), LLM_BUDGET_MS, env.http.nowMs, out.llm);
+  }), LLM_BUDGET_MS - OBJ_BUDGET_MS, env.http.nowMs, out.llm);
   out.llmStoppedBy = llm.stoppedBy;
+
+  // 🛡 Заперечення (ТЗ 08.10.2026): окрема рубрика поверх УЖЕ розібраних розмов, лише від дня викату — старші тільки
+  // окремим запуском після згоди власника. Виключені типи (перевізник, продавець, пошук роботи, помилка номером) — ні.
+  const op = { ...ap, rubricVersion: RUBRIC_OBJECTION_V1 };
+  const objIds = await objectionCandidates(env.db, OBJECTION_FROM);
+  if (objIds.length) await enqueueAnalyses(env.db, { ...op, now: env.now() }, objIds, carrierOnly);
+  const obj = await drainWithBudget(() => runAnalysisPortion(env.db, {
+    apiKey: env.keys.gemini, kit: OBJECTION_KIT,
+    generate: (key, model, body) => geminiGenerate(env.http, key, model, body, LLM_POLICY),
+  }, {
+    ...common, ...op, now: env.now(), operation: "analysis", monthCapUsd: env.prices.llmMonthCapUsd,
+    maxOutputTokens: OBJ_MAX_OUTPUT_TOKENS,
+    usdPerInputToken: env.prices.llmUsdPerMtokIn == null ? null : env.prices.llmUsdPerMtokIn / 1e6,
+    usdPerOutputToken: env.prices.llmUsdPerMtokOut == null ? null : env.prices.llmUsdPerMtokOut / 1e6,
+  }), OBJ_BUDGET_MS, env.http.nowMs, out.llm);
+  if (!out.llmStoppedBy) out.llmStoppedBy = obj.stoppedBy;
 
   const capped = [...out.stt, ...out.llm].find((x) => x.state === "capped");
   if (capped && env.alert) await notifyCapOnce(env.db, "first_touch", capped.stoppedBy ?? "стеля вичерпана", env.now(), env.alert);
 
-  const errs = [stt.error, llm.error].filter((e): e is Error => e != null);
+  const errs = [stt.error, llm.error, obj.error].filter((e): e is Error => e != null);
   if (errs.length) throw new Error(errs.map((e) => e.message).join(" · "));
   return out;
 }

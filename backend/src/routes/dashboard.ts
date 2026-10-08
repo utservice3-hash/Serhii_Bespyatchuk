@@ -71,7 +71,7 @@ import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
 import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType, setCallNote, canWriteNote, fetchCallRecording, type NoteKind } from "../core/callAiScreen.js";
 import { RECORDING_UNAVAILABLE_UA } from "../core/ringostatRecording.js";
-import { teamReport, isAnalysed, isLost, noPrice, noPriceNoComment, hasAgreement, checklist, checklistScore, reviewReason, needsReview } from "../core/firstTouchTeamReport.js";
+import { teamReport, isAnalysed, isLost, isPriceable, noPrice, noPriceNoComment, hasAgreement, checklist, checklistScore, reviewReason, needsReview } from "../core/firstTouchTeamReport.js";
 import { loadTunables } from "../core/firstTouchTunables.js";
 
 import { canEditType } from "../core/callAiType.js";
@@ -10923,7 +10923,12 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
       reactionMin: r.reactionMin, reactionOffHours: r.reactionOffHours,
       // Екран D (08.10.2026): чек-лист і черга розбору — стани від ядра, фронт їх лише складає.
       checklist: checklist(r), checkScore: checklistScore(checklist(r)), reviewReason: reviewReason(r), needsReview: needsReview(r), reviewNote: r.reviewNote,
+      // ТЗ «фінальні доробки» 08.10.2026: заперечення (окрема рубрика), успіх угоди з Kommo і знаменники плиток — від ядра.
+      objection: r.objection, dealOutcome: r.dealOutcome,
+      flags: { analysed: isAnalysed(r), priceable: isPriceable(r), agreement: hasAgreement(r), lost: isLost(r) },
     })),
+    // Ціль «ціну озвучено» — бачать усі ролі вкладки (колір плитки), змінює лише адмін у «Налаштуваннях».
+    priceTargetPct: (await loadTunables(pool)).priceTargetPct,
     silence: { minGapHours: SILENCE_RULE.minGapHours, normFrom: SILENCE_RULE.normFrom },
   });
 });
