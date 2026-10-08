@@ -40,6 +40,10 @@
 .ftd-mgr-h { color: var(--text-muted); font-size: 12px; }
 .ftd-mgr-name { font-weight: 600; background: none; border: 0; padding: 0; font: inherit; color: var(--text); text-align: left; cursor: pointer; }
 .ftd-mgr-name span { font-weight: 400; color: var(--text-muted); }
+.ftd-mgr-name.on { color: var(--brand); text-decoration: underline; text-underline-offset: 3px; }
+.ftd-link { border: 0; background: none; padding: 0; font: inherit; font-size: 12.5px; color: var(--info); cursor: pointer; }
+.ftd-team { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-muted); }
+.ftd-team select { height: 40px; min-width: 180px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card-bg); color: var(--text); font: inherit; }
 .ftd-bar { position: relative; height: 18px; background: var(--bg); border-radius: 4px; }
 .ftd-bar > i { display: block; height: 100%; background: #cbd5e1; border-radius: 4px; }
 .ftd-bar > span { position: absolute; right: 6px; top: 0; font-size: 12px; font-variant-numeric: tabular-nums; line-height: 18px; }
@@ -93,3 +97,13 @@
 @media (prefers-reduced-motion: reduce) {
   .ftd-over, .ftd-queue, .ftd-strip, .ftd-progress > i { transition: none; }
 }
+
+/* Період і «Команда» — один рядок: у спільного PeriodNav є нижній відступ 14px (інші екрани на нього спираються), тут він зайвий. */
+.ftd-nav { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.ftd-nav > div:first-child { margin-bottom: 0 !important; }
+
+/* Картка черги: заголовок в один рядок (повний запит — у пункті «Запит»), під чек-листом — розмова і розбір AI. */
+.ftd-q-title { font-size: 19px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ftd-q-cols { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; border-top: 1px solid var(--border); padding-top: 14px; }
+.ftd-q-sec { flex: 1 1 360px; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.ftd-q-sec h3 { margin: 0; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); }

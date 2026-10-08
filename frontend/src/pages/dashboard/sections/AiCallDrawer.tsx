@@ -28,7 +28,7 @@ function StateChip({ state }: { state: AiCallState }) {
 }
 
 /** Перемотка запису до цитати з розбору: є лише тоді, коли запис можна слухати й цитату знайдено в репліках. */
-const QuoteSeek = createContext<((quote: string, go?: boolean) => number | null) | null>(null);
+export const QuoteSeek = createContext<((quote: string, go?: boolean) => number | null) | null>(null);
 
 function Quote({ q }: { q: AiQuoted }) {
   const at = useContext(QuoteSeek);
@@ -48,7 +48,7 @@ function Quote({ q }: { q: AiQuoted }) {
 const row: React.CSSProperties = { display: "grid", gridTemplateColumns: "140px minmax(0, 1fr)", gap: 12, padding: "5px 0", fontSize: 13.5, lineHeight: 1.45 };
 const key: React.CSSProperties = { fontSize: 12.5, color: "var(--text-muted)", fontWeight: 600 };
 
-function Analysis({ c }: { c: AiCallCardResp }) {
+export function Analysis({ c }: { c: AiCallCardResp }) {
   const r = c.result;
   if (!r) {
     const ui = STATE_UI[c.row.state];

@@ -1128,6 +1128,7 @@ test("#898 ЧЕК-ЛИСТ D: 3 пункти й бал від ядра, черг
   assert.deepEqual(R.checklistScore(R.checklist({ ...base })), { yes: 2, total: 2 });
   const lost = R.checklist({ ...base, conversationType: "lead_lost", priceDiscussed: false });
   assert.equal(lost?.price, "o", "🔴 втрачений лід рахується як «ціну не назвали»");
+  assert.equal(lost?.request, "o", "🔴 втрачений лід рахується як «запит не зʼясовано» (рішення Романа 08.10.2026)");
   assert.equal(R.checklist({ ...base, priceDiscussed: false })?.price, "n", "дзеркало: звичайна розмова без ціни — «ні»");
   assert.equal(R.checklist({ ...base, hasRequest: false })?.request, "n", "дзеркало: запиту немає — «ні»");
   for (const st of ["kept_talk", "kept_attempt_only", "kept_offline", "client_called"] as const) assert.equal(R.checklist({ ...base, promiseState: st })?.promise, "y", `🔴 ${st} — не «виконано»`);
@@ -1199,4 +1200,31 @@ test("#898c ЕКРАН D: колонки як у макеті, черга лиш
   const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
   assert.match(css, /\.ftd-queue\.is-closed \{ transform: translateY\(-20px\) scale\(\.42, \.12\); opacity: 0;/, "🔴 немає анімації згортання в смугу");
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.ftd-over, \.ftd-queue, \.ftd-strip, \.ftd-progress > i \{ transition: none; \}/, "🔴 анімацію не вимкнено для «зменшення руху»");
+});
+
+/**
+ * #899 — ЕКРАН D ПІСЛЯ ПЕРШОГО ДНЯ (Роман 08.10.2026, список зауважень): (1) блок менеджерів рахується по всій команді,
+ * без фільтра «менеджер», — після кліку по менеджеру решта не зникає, повторний клік чи чіп «✕» знімають вибір;
+ * (2) блок згортається й памʼятає це; (3) запис тягнеться одразу при відкритті картки, а грає лише після ▶; один плеєр
+ * за раз; згорнута черга ставить запис на паузу, кожна розмова — свій плеєр; (4) у черзі — розбір AI і текст розмови тим
+ * самим компонентом, що в боковій картці; (5) обіцянка написати в месенджер не підписується «не було».
+ * 🧨 Червоніє, якщо блок менеджерів знову фільтрувати за вибраним, прибрати паузу згорнутої черги чи попереднє
+ * завантаження, повернути в чергу лише підсумок або писати «не було» при обіцянці у Viber.
+ */
+test("#899 ЕКРАН D: менеджери не зникають і вибір знімається, плеєр не грає у фоні, у черзі є розбір і розмова", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /const lines = managerChecklist\(tabRows\(applyListFilter\(d\.rows, \{ \.\.\.lf, managerId: null \}\), "report"\)\);/, "🔴 блок менеджерів фільтрується за вибраним менеджером");
+  assert.match(sec, /managerId: lf\.managerId === l\.managerId \? null : l\.managerId/, "🔴 повторний клік не знімає вибір менеджера");
+  assert.match(sec, /onClick=\{\(\) => setLf\(\{ \.\.\.lf, managerId: null \}\)\} aria-label=\{`Зняти фільтр: \$\{pickedName\}`\}/, "🔴 немає чіпа, що знімає вибір менеджера");
+  assert.match(sec, /localStorage\.getItem\("ftd\.mgrCollapsed"\)/, "🔴 блок менеджерів не згортається або не памʼятає цього");
+  const conv = readFileSync(FE("pages/dashboard/sections/CallConversation.tsx"), "utf8");
+  assert.match(conv, /useEffect\(\(\) => \{ if \(preload && state === "idle"\) void start\(\); \}, \[\]\);/, "🔴 запис не тягнеться одразу при відкритті");
+  assert.match(conv, /useEffect\(\(\) => \{ if \(!active\) \{ want\(false\); audio\.current\?\.pause\(\); \} \}, \[active\]\);/, "🔴 схований плеєр грає далі");
+  assert.match(conv, /if \(\(e as CustomEvent<number>\)\.detail !== myId\.current\) audio\.current\?\.pause\(\);/, "🔴 два записи можуть грати одночасно");
+  assert.match(conv, /if \(state === "ready" && audio\.current && wantPlay\.current\)/, "🔴 попередньо завантажений запис грає сам, без ▶");
+  const qx = readFileSync(FE("pages/dashboard/sections/FirstTouchQueue.tsx"), "utf8");
+  assert.match(qx, /<CallConversation key=\{c\.row\.uniqueid\}[\s\S]{0,400}?active=\{open\} \/>/, "🔴 черга: старий запис грає після переходу чи закриття");
+  assert.match(qx, /<Analysis c=\{c\} \/>/, "🔴 у черзі немає розбору AI");
+  assert.match(qx, /import \{ Analysis, QuoteSeek \} from "\.\/AiCallDrawer";/, "🔴 розбір у черзі — копія, а не той самий компонент");
+  assert.match(qx, /обіцянка написати: \$\{msgPromise\.what\} — перевірити нічим, Ringostat месенджерів не бачить/, "🔴 обіцянка у Viber підписана «не було»");
 });
