@@ -7,7 +7,8 @@ import {
 } from "../../../api";
 import { getAuthPayload } from "../../../auth";
 import { usePolling } from "../../../hooks/usePolling";
-import { InfoHint } from "../widgets";
+import { InfoHint, Toggle } from "../widgets";
+import { useToast } from "../../../components/Toasts";
 
 const RED = "#c8102e", MUTED = "var(--text-muted)";
 const err = (e: unknown) => (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Помилка";
@@ -308,28 +309,33 @@ function SettingsBlock({ accounts, canAccounts, canHidden, onAccountsChange }: {
 function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChange: () => void }) {
   const [editId, setEditId] = useState<number | null>(null);
   const [draft, setDraft] = useState<Partial<BankAccount>>({});
-  const [msg, setMsg] = useState("");
+  // Підтвердження й помилки — спільними повідомленнями дашборду (Роман 08.10.2026: «не зрозуміло, чи зберіглось»).
+  const toast = useToast();
   const startEdit = (a: BankAccount) => { setEditId(a.id); setDraft({ ...a }); };
   const save = async () => {
-    try { await saveBankAccount(editId, { legalName: draft.legal_name ?? undefined, edrpouIpn: draft.edrpou_ipn ?? undefined, vatIpn: draft.vat_ipn ?? undefined, iban: draft.iban ?? undefined, keyCard: draft.key_card ?? undefined, bankName: draft.bank_name ?? undefined, mfo: draft.mfo ?? undefined, bankEdrpou: draft.bank_edrpou ?? undefined, legalAddress: draft.legal_address ?? undefined, director: draft.director ?? undefined, purpose: draft.purpose ?? undefined, ...(draft.bank === "mono" ? { monoPanLast4: draft.mono_pan_last4 ?? "" } : {}) } as never); setEditId(null); await onChange(); setMsg("✓ Збережено"); }
-    catch (e) { setMsg("✗ " + err(e)); }
+    try { await saveBankAccount(editId, { legalName: draft.legal_name ?? undefined, edrpouIpn: draft.edrpou_ipn ?? undefined, vatIpn: draft.vat_ipn ?? undefined, iban: draft.iban ?? undefined, keyCard: draft.key_card ?? undefined, bankName: draft.bank_name ?? undefined, mfo: draft.mfo ?? undefined, bankEdrpou: draft.bank_edrpou ?? undefined, legalAddress: draft.legal_address ?? undefined, director: draft.director ?? undefined, purpose: draft.purpose ?? undefined, ...(draft.bank === "mono" ? { monoPanLast4: draft.mono_pan_last4 ?? "" } : {}) } as never); setEditId(null); await onChange(); toast(`Збережено: «${draft.label ?? "рахунок"}»`, { tone: "ok" }); }
+    catch (e) { toast(`Не збережено: ${err(e)}`, { error: true }); }
   };
-  const toggleActive = async (a: BankAccount) => { try { await saveBankAccount(a.id, { isActive: !a.is_active } as never); await onChange(); } catch (e) { alert(err(e)); } };
+  const toggleActive = async (a: BankAccount) => {
+    try { await saveBankAccount(a.id, { isActive: !a.is_active } as never); await onChange(); toast(`«${a.label}» ${a.is_active ? "вимкнено" : "увімкнено"}`, { tone: "ok" }); }
+    catch (e) { toast(`Не перемкнуто: ${err(e)}`, { error: true }); }
+  };
   return (
     <div className="chart-card" style={{ marginTop: 16 }}>
       <h2 className="chart-title">⚙️ Налаштування виписки · Реквізити компаній</h2>
       <p style={{ fontSize: 12.5, color: MUTED, marginTop: -4 }}>Активні реквізити — які компанії/рахунки підключені. 🔑 API-ключ кожного рахунку зберігається лише в серверному env (не в базі й не в інтерфейсі) — тут видно лише, підключений він (API ✓) чи ні. «Вимкнути» ховає рахунок з виписки, історію лишає.</p>
-      <AddCardForm onAdded={async (text) => { await onChange(); setMsg(text); }} />
+      <AddCardForm onAdded={async (text) => { await onChange(); toast(text, { tone: "ok", event: true }); }} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(340px,1fr))", gap: 14 }}>
         {accounts.map((a) => (
-          <div key={a.id} style={{ border: "1px solid var(--border)", borderRadius: 14, padding: 16, opacity: a.is_active ? 1 : 0.6 }}>
+          <div key={a.id} style={{ border: a.is_active ? "1px solid var(--border)" : "1px dashed var(--border)", borderRadius: 14, padding: 16 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
               <AccBadge company={a.company} />
               <b style={{ fontSize: 15 }}>{a.legal_name ?? a.label}</b>
               <span style={{ fontSize: 11.5, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: a.api_connected ? "rgba(22,163,74,0.14)" : "rgba(220,38,38,0.12)", color: a.api_connected ? "#16a34a" : "#dc2626" }}>API {a.api_connected ? "✓" : "✗"}</span>
-              <label style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
-                <input type="checkbox" checked={a.is_active} onChange={() => toggleActive(a)} /> {a.is_active ? "активна" : "вимкнена"}
-              </label>
+              <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12.5, color: a.is_active ? "#16a34a" : MUTED, fontWeight: 600 }}>
+                {a.is_active ? "увімкнено" : "вимкнено"}
+                <Toggle on={a.is_active} onClick={() => void toggleActive(a)} label={`${a.label}: ${a.is_active ? "вимкнути" : "увімкнути"}`} />
+              </span>
             </div>
             {a.bank !== "manual" && !a.api_connected && <div style={{ fontSize: 12, color: "#b45309", background: "rgba(217,119,6,0.1)", borderRadius: 8, padding: "6px 10px", marginBottom: 8 }}>
               🔑 {a.env_key_name ? <>Токена <code>{a.env_key_name}</code> у серверному .env ще немає — додайте рядок <code>{a.env_key_name}=…</code>; рестарт не потрібен, стан оновиться за хвилину.</> : <>Назву змінної з ключем не задано.</>}
@@ -355,7 +361,6 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
           </div>
         ))}
       </div>
-      {msg && <div style={{ fontSize: 13, marginTop: 10, color: msg.startsWith("✓") ? "#16a34a" : "#dc2626" }}>{msg}</div>}
       <p style={{ fontSize: 12, color: MUTED, marginTop: 12 }}>🔑 Щоб додати рахунок — задай назву env-змінної з ключем (напр. <code>PRIVAT_TOKEN_UTS</code>) у серверному оточенні; поля для самого ключа тут навмисно немає.</p>
     </div>
   );

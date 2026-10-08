@@ -35,7 +35,7 @@ export const TOAST_PLAIN_MS = 3000;
 export const TOAST_EVENT_MS = 8000;
 /**
  * Плавне зникнення: тост гасне й відʼїжджає за цей час, і лише потім іде з екрана (сусіди стуляються
- * без стрибка). Хто вимкнув анімації в системі, — тост іде одразу. Тримає `#1239b`.
+ * без стрибка). Хто вимкнув анімації в системі, — тост іде одразу. Тримає `#1290b`.
  */
 export const TOAST_EXIT_MS = 200;
 export function exitDelay(reducedMotion: boolean): number {
