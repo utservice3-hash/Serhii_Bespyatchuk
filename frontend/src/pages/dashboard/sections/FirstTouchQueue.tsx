@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchAiCallCard, fetchAiCallRecording, putAiCallNote, hiringError, type AiCallCardResp, type AiCallRowT } from "../../../api";
-import { CHECK_ITEMS, CHECK_MARK_UI, REVIEW_REASON_UI, PROMISE_UI, TONE_COLOR, TYPE_LABEL, mmss, quoteTurnIndex, scoreLabel } from "../aiCallsView";
+import { REVIEW_REASON_UI, TONE_COLOR, TYPE_LABEL, mmss, quoteTurnIndex, scoreLabel } from "../aiCallsView";
 import { CallConversation, type SeekFn } from "./CallConversation";
+import { Analysis, QuoteSeek } from "./AiCallDrawer";
+import { ChecklistBlock } from "./FirstTouchChecklist";
 
 /**
  * 🗂 ЧЕРГА РОЗБОРУ ТІМЛІДА (екран D, розкладка B — Роман 08.10.2026). Зліва — розмови, що потребують розбору (прапорець
@@ -16,7 +18,6 @@ const fmtFull = (iso: string) => new Date(iso).toLocaleString("uk-UA", {
 const fmtShort = (iso: string) => new Date(iso).toLocaleString("uk-UA", {
   timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
 });
-const DOT: Record<"y" | "n" | "o", { mark: string; bg: string }> = { y: { mark: "✓", bg: "#166534" }, n: { mark: "✕", bg: "#b91c1c" }, o: { mark: "–", bg: "#9ca3af" } };
 
 export function FirstTouchQueue({ rows, open, selected, onSelect, onClose, onReviewed, onOpenCard, title }: {
   rows: AiCallRowT[]; open: boolean; selected: string | null; onSelect: (uniqueid: string) => void; onClose: () => void;
@@ -44,12 +45,9 @@ export function FirstTouchQueue({ rows, open, selected, onSelect, onClose, onRev
     return i >= 0 ? turns?.[i]?.start ?? null : null;
   };
   const r = c?.result ?? null;
-  const promise = r?.promises.find((p) => p.who === "manager" && p.channel === "call") ?? null;
-  const evidence: Record<"request" | "price" | "promise", { text: string; quote?: string }> = {
-    request: { text: r?.client_request?.trim() || "запиту клієнта модель не виділила" },
-    price: { text: r ? (r.price.discussed ? "ціну назвали" : cur?.conversationType === "lead_lost" ? "втрачений лід — називати нікому" : "ціни не прозвучало") : "", quote: r?.price.quote },
-    promise: { text: promise ? `${promise.what}${cur?.promiseState ? ` · ${PROMISE_UI[cur.promiseState].label.toLowerCase()}` : ""}` : "обіцянки передзвонити не було", quote: promise?.quote },
-  };
+  // Фрази-докази в тексті (жовтим) і «▶ час» у розборі — ті самі правила, що в боковій картці: лише дослівна цитата.
+  const quotedIdx = new Set(r && c?.mono !== "mixed" ? [r.price, ...r.objections, ...r.promises].map((x) => quoteTurnIndex(turns, x.quote)).filter((i) => i >= 0) : []);
+  const seekQuote = (quote: string, go = false): number | null => { const t = at(quote); if (go && t != null) seekRef.current?.(t); return t; };
 
   const next = () => {
     const i = rows.findIndex((x) => x.uniqueid === cur?.uniqueid);
@@ -104,14 +102,14 @@ export function FirstTouchQueue({ rows, open, selected, onSelect, onClose, onRev
 
             <section aria-label="Розмова з доказами" className="ftd-q-card">
               {cur && (
-                <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 12 }}>
-                  <div>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start" }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
                     <div className="ftd-sub">{fmtFull(cur.calledAt)} · {cur.direction === "in" ? "вхідний" : "вихідний"} · {mmss(cur.billsec)}
                       {c?.dealUrls.map((d) => <span key={d.kommoId}> · <a href={d.url} target="_blank" rel="noreferrer">угода {d.kommoId} ↗</a></span>)}</div>
-                    <div style={{ fontSize: 19, fontWeight: 800 }}>{cur.managerName ?? "Менеджер невідомий"}{r?.client_request ? ` · ${r.client_request}` : ""}</div>
+                    <div className="ftd-q-title" title={r?.client_request ?? undefined}>{cur.managerName ?? "Менеджер невідомий"}{r?.client_request ? ` · ${r.client_request}` : ""}</div>
                     {cur.conversationType && <div className="ftd-sub">{TYPE_LABEL[cur.conversationType]}{cur.typeConfidence != null ? ` · ${String(Math.round(cur.typeConfidence * 100))}%` : ""}</div>}
                   </div>
-                  <div style={{ textAlign: "right" }}>
+                  <div style={{ textAlign: "right", flex: "none" }}>
                     <div className="ftd-sub">Чек-лист</div>
                     <div style={{ fontSize: 26, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{scoreLabel(cur.checkScore)?.replace("/", " / ") ?? "—"}</div>
                   </div>
@@ -122,34 +120,8 @@ export function FirstTouchQueue({ rows, open, selected, onSelect, onClose, onRev
               {c && (
                 <>
                   {r?.summary && <p style={{ margin: 0, fontSize: 15, lineHeight: 1.55 }}>{r.summary}</p>}
-                  {c.canListen && c.durationSec != null && (
-                    <div style={{ background: "var(--bg)", borderRadius: 10, padding: "10px 12px" }}>
-                      {c.mono && <p style={{ margin: "0 0 6px", fontSize: 12.5, color: "var(--text-muted)" }}>{c.mono === "mixed"
-                        ? "Запис моно: голоси не розділені — доріжок і перемотки по фразах немає."
-                        : "Запис моно: голоси розділено за звучанням — підпис «Менеджер / Клієнт» може помилятись."}</p>}
-                      <CallConversation load={() => fetchAiCallRecording(c.row.uniqueid)} turns={turns} managerChannel={c.managerChannel}
-                        quoted={new Set()} seekRef={seekRef} mixed={c.mono === "mixed"} durationSec={c.durationSec} showTurns={false} />
-                    </div>
-                  )}
-                  <div>
-                    {CHECK_ITEMS.map((it) => {
-                      const m = cur?.checklist?.[it.key] ?? "o";
-                      const ev = evidence[it.key];
-                      const t = at(ev.quote);
-                      return (
-                        <div key={it.key} className="ftd-check">
-                          <span aria-hidden="true" className="ftd-check-dot" style={{ background: DOT[m].bg }}>{DOT[m].mark}</span>
-                          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                            <div><b>{it.label}</b> <span style={{ fontSize: 13, color: DOT[m].bg, fontWeight: 600 }}>· {CHECK_MARK_UI[m].label}</span></div>
-                            <div style={{ fontSize: 13, color: "var(--text-muted)" }}>{ev.text}</div>
-                            {ev.quote?.trim() && (t != null
-                              ? <button type="button" className="ftd-quote" onClick={() => seekRef.current?.(t)}>▶ <b>{mmss(t)}</b> «{ev.quote}»</button>
-                              : <span className="ftd-quote" style={{ cursor: "default" }}>«{ev.quote}»</span>)}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                  <ChecklistBlock c={c} checklist={cur?.checklist ?? null} promiseState={cur?.promiseState ?? null} conversationType={cur?.conversationType ?? null}
+                    onSeek={(t) => seekRef.current?.(t)} />
                   <label htmlFor="ftd-review-note" style={{ fontSize: 13, fontWeight: 600 }}>Коментар менеджеру <span className="ftd-sub">· необовʼязково</span></label>
                   <textarea id="ftd-review-note" value={note} maxLength={2000} onChange={(e) => setNote(e.target.value)}
                     placeholder={`Що сказати ${cur?.managerName ?? "менеджеру"} по цій розмові`}
@@ -159,7 +131,25 @@ export function FirstTouchQueue({ rows, open, selected, onSelect, onClose, onRev
                     {cur?.reviewReason === "noCall" && c.noteRights.offline && (
                       <button type="button" className="ftd-btn" disabled={busy} onClick={() => void offline()}>Передзвонив поза телефонією</button>
                     )}
-                    <button type="button" className="ftd-btn" onClick={() => cur && onOpenCard(cur.uniqueid)}>Повна картка і розмова</button>
+                    <button type="button" className="ftd-btn" onClick={() => cur && onOpenCard(cur.uniqueid)}>Повна картка</button>
+                  </div>
+                  <div className="ftd-q-cols">
+                    <section aria-label="Розмова" className="ftd-q-sec">
+                      <h3>Розмова{turns ? ` · ${String(turns.length)} реплік` : ""}</h3>
+                      {c.mono && <p className="ftd-sub" style={{ margin: "0 0 6px" }}>{c.mono === "mixed"
+                        ? "Запис моно: голоси не розділені — доріжок і перемотки по фразах немає."
+                        : "Запис моно: голоси розділено за звучанням — підпис «Менеджер / Клієнт» може помилятись."}</p>}
+                      {c.canListen && c.durationSec != null
+                        ? <CallConversation key={c.row.uniqueid} load={() => fetchAiCallRecording(c.row.uniqueid)} turns={turns} managerChannel={c.managerChannel}
+                            quoted={quotedIdx} seekRef={seekRef} mixed={c.mono === "mixed"} durationSec={c.durationSec} active={open} />
+                        : <p className="ftd-sub" style={{ margin: 0 }}>Запису чи тексту цієї розмови вам не видно.</p>}
+                    </section>
+                    <section aria-label="Розбір AI" className="ftd-q-sec">
+                      <h3>Розбір AI</h3>
+                      <QuoteSeek.Provider value={turns && c.mono !== "mixed" ? seekQuote : null}>
+                        <Analysis c={c} />
+                      </QuoteSeek.Provider>
+                    </section>
                   </div>
                 </>
               )}

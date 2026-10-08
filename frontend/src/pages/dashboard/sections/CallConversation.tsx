@@ -15,8 +15,20 @@ export type SeekFn = (t: number) => void;
 /** Доріжка мовця під смугою: коли він говорив (з часу реплік), як у «Перевізниках» і макеті D. */
 export interface Lane { label: string; color: string; spans: { start: number; end: number }[] }
 
-function Player({ load, marks, onTime, seekRef, lanes = [], durHint = null }: { load: () => Promise<Blob>; marks: number[]; onTime: (t: number) => void;
-  seekRef: React.MutableRefObject<SeekFn | null>; lanes?: Lane[]; durHint?: number | null }) {
+/** Одночасно грає лише один плеєр: той, що стартував, сповіщає решту, і вони стають на паузу. */
+const PLAY_EVENT = "ft-audio-play";
+let playerSeq = 0;
+
+function Player({ load, marks, onTime, seekRef, lanes = [], durHint = null, preload = true, active = true }: { load: () => Promise<Blob>; marks: number[]; onTime: (t: number) => void;
+  seekRef: React.MutableRefObject<SeekFn | null>; lanes?: Lane[]; durHint?: number | null;
+  /** Почати тягнути запис одразу при відкритті картки — тоді ▶ грає без очікування (Роман 08.10.2026). */
+  preload?: boolean;
+  /** `false` — плеєр сховано (згорнута черга): запис стає на паузу, а не грає у фоні. */
+  active?: boolean }) {
+  const myId = useRef(++playerSeq);
+  const wantPlay = useRef(false);
+  const [queued, setQueued] = useState(false);
+  const want = (v: boolean) => { wantPlay.current = v; setQueued(v); };
   const audio = useRef<HTMLAudioElement | null>(null);
   const [src, setSrc] = useState<string | null>(null);
   const [state, setState] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -30,32 +42,44 @@ function Player({ load, marks, onTime, seekRef, lanes = [], durHint = null }: { 
     catch (e) { setErr(hiringError(e)); setState("error"); }
   };
   const toggle = () => {
-    if (state === "idle" || state === "error") { void start(); return; }
+    if (state === "idle" || state === "error") { want(true); void start(); return; }
+    // Запис ще тягнеться (попереднє завантаження) — заграє, щойно прийде.
+    if (state === "loading") { want(true); return; }
     const a = audio.current; if (!a) return;
     if (a.paused) void a.play(); else a.pause();
   };
-  useEffect(() => { if (state === "ready" && audio.current) void audio.current.play(); }, [state]);
+  // Попереднє завантаження: тягнемо запис одразу, але НЕ граємо, поки не натиснули ▶.
+  useEffect(() => { if (preload && state === "idle") void start(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (state === "ready" && audio.current && wantPlay.current) { want(false); void audio.current.play(); } }, [state]);
+  // Сховали (черга згорнута) — пауза.
+  useEffect(() => { if (!active) { want(false); audio.current?.pause(); } }, [active]);
+  // Інший плеєр стартував — пауза тут.
+  useEffect(() => {
+    const onOther = (e: Event) => { if ((e as CustomEvent<number>).detail !== myId.current) audio.current?.pause(); };
+    window.addEventListener(PLAY_EVENT, onOther);
+    return () => { window.removeEventListener(PLAY_EVENT, onOther); audio.current?.pause(); };
+  }, []);
   useEffect(() => { if (audio.current) audio.current.playbackRate = speed; }, [speed, src]);
   const seek = (t: number) => {
     if (!Number.isFinite(t)) return;
     const a = audio.current;
     // Клік по репліці до першого ▶: спершу вантажимо запис, перемотаємо, щойно знатимемо тривалість.
-    if (!a) { pending.current = t; if (state === "idle" || state === "error") void start(); return; }
+    if (!a) { pending.current = t; want(true); if (state === "idle" || state === "error") void start(); return; }
     a.currentTime = t; setPos(t); if (a.paused) void a.play();
   };
   useEffect(() => { seekRef.current = seek; return () => { seekRef.current = null; }; });
   return (
     <div>
-      {src && <audio ref={audio} src={src} preload="auto" onPlay={() => setPlay(true)} onPause={() => setPlay(false)} onEnded={() => setPlay(false)}
+      {src && <audio ref={audio} src={src} preload="auto" onPlay={() => { setPlay(true); window.dispatchEvent(new CustomEvent(PLAY_EVENT, { detail: myId.current })); }} onPause={() => setPlay(false)} onEnded={() => setPlay(false)}
         onLoadedMetadata={(e) => {
           const a = e.currentTarget; setDur(a.duration);
-          if (pending.current != null) { a.currentTime = pending.current; setPos(pending.current); pending.current = null; }
+          if (pending.current != null) { a.currentTime = pending.current; setPos(pending.current); pending.current = null; if (wantPlay.current) { want(false); void a.play(); } }
         }}
         onTimeUpdate={(e) => { setPos(e.currentTarget.currentTime); onTime(e.currentTarget.currentTime); }} />}
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <button type="button" className="cq-play" onClick={toggle} aria-label={play ? "Пауза" : "Слухати"} disabled={state === "loading"}
+        <button type="button" className="cq-play" onClick={toggle} aria-label={play ? "Пауза" : "Слухати"} aria-busy={state === "loading"}
           style={{ width: 34, height: 34, borderRadius: "50%", border: 0, background: "var(--brand)", color: "#fff", cursor: "pointer", flex: "none" }}>
-          {state === "loading" ? "…" : play ? "❚❚" : "▶"}</button>
+          {state === "loading" && queued ? "…" : play ? "❚❚" : "▶"}</button>
         <div style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: lanes.length ? "64px minmax(0, 1fr)" : "minmax(0, 1fr)", gap: "5px 8px", alignItems: "center" }}>
           {lanes.length > 0 && <span />}
           <div onClick={(e) => { if (!dur) return; const b = e.currentTarget.getBoundingClientRect(); seek((e.clientX - b.left) / b.width * dur); }}
@@ -90,7 +114,7 @@ function Player({ load, marks, onTime, seekRef, lanes = [], durHint = null }: { 
  * Плеєр і репліки разом. `turns` — null, коли тексту цій ролі не віддали (тоді лише плеєр); `quoted` — індекси
  * реплік, на які спирається розбір (`quoteTurnIndex`).
  */
-export function CallConversation({ load, turns, managerChannel, quoted, seekRef, mixed = false, durationSec = null, showTurns = true }: {
+export function CallConversation({ load, turns, managerChannel, quoted, seekRef, mixed = false, durationSec = null, showTurns = true, active = true }: {
   load: () => Promise<Blob>; turns: AiTurn[] | null; managerChannel: number | null; quoted: ReadonlySet<number>;
   seekRef: React.MutableRefObject<SeekFn | null>;
   /** Моно без розділення голосів: підпис «Обидва голоси», а не «Менеджер» — інакше підпис бреше. */
@@ -99,6 +123,8 @@ export function CallConversation({ load, turns, managerChannel, quoted, seekRef,
   durationSec?: number | null;
   /** `false` — лише плеєр із доріжками (черга розбору показує текст окремо). */
   showTurns?: boolean;
+  /** `false` — сховано (згорнута черга): пауза. */
+  active?: boolean;
 }) {
   const [now, setNow] = useState(0);
   const list = turns ?? [];
@@ -110,7 +136,7 @@ export function CallConversation({ load, turns, managerChannel, quoted, seekRef,
   ] : [];
   return (
     <>
-      <Player load={load} marks={marks} onTime={setNow} seekRef={seekRef} lanes={lanes} durHint={durationSec} />
+      <Player load={load} marks={marks} onTime={setNow} seekRef={seekRef} lanes={lanes} durHint={durationSec} active={active} />
       {showTurns && list.length > 0 && (
         <div style={{ marginTop: 10, maxHeight: 280, overflowY: "auto" }}>
           {list.map((t, i) => {

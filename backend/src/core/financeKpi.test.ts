@@ -757,10 +757,13 @@ test("#1223 ЖИВИЙ SQL: картки — схема пускає staff і р
  * панель показує поле цифр для моно; «Витрати загальні» на екрані підписані «включно з комісіями».
  * 🧨 Червоніє, якщо синк не передає цифри, IBAN перетирає правку адміна, баланс бере рахунок повз цифри чи підказка бреше.
  */
-test("#1223b ПРОВОДКА КАРТКИ: роут, синк, адаптер і панель — цифри скрізь, IBAN лише в порожнє, підказка з комісіями", () => {
+test("#1223b ПРОВОДКА КАРТКИ: роут, синк, адаптер і панель — цифри скрізь, IBAN лише в порожнє, підказка з комісіями", async () => {
+  const { buildAccountUpdate } = await import("./bankAccounts.js");
   const route = SRC("routes/bank.ts"), sync = SRC("jobs/syncBank.ts"), mono = SRC("bankSources/mono.ts");
-  assert.match(route, /const last4 = normLast4\(raw\);\n\s+if \(raw && !last4\) return res\.status\(400\)/, "🔴 роут пускає не 4 цифри");
-  assert.match(route, /external_account_id = CASE WHEN mono_pan_last4 IS DISTINCT FROM/, "🔴 зміна цифр не скидає привʼязку — синк тягне стару картку");
+  assert.match(route, /upd = buildAccountUpdate\(b, cur\.rows\[0\]\)/, "🔴 роут змінює рахунок повз спільні правила");
+  assert.throws(() => buildAccountUpdate({ monoPanLast4: "12345" }, { bank: "mono", company: "staff" }), "🔴 роут пускає не 4 цифри");
+  assert.ok(buildAccountUpdate({ monoPanLast4: "1234" }, { bank: "mono", company: "staff" }).sets.some((x) => /^external_account_id = CASE WHEN mono_pan_last4 IS DISTINCT FROM/.test(x)),
+    "🔴 зміна цифр не скидає привʼязку — синк тягне стару картку");
   assert.match(sync, /env_key_name, mono_type, mono_pan_last4\n/, "🔴 синк не читає цифри картки");
   assert.match(sync, /UPDATE bank_accounts SET iban=\$1 WHERE id=\$2 AND iban IS NULL/, "🔴 IBAN перетирає правку адміна");
   assert.equal((mono.match(/accountFor\(await fetchClientInfo\(token\), account\)/g) ?? []).length, 3, "🔴 привʼязка, IBAN і баланс обирають рахунок не через accountFor");
@@ -936,7 +939,54 @@ test("#1229 КАРТКА ЗА IBAN: IBAN головніший за цифри, �
   assert.equal(v.validateNewAccount({ company: "staff", bank: "mono", label: "к", envKeyName: "MONO_TOKEN_X", iban: W }).iban, W, "🔴 картку з IBAN без цифр не прийнято");
   assert.throws(() => v.validateNewAccount({ company: "staff", bank: "mono", label: "к", envKeyName: "MONO_TOKEN_X", iban: "UA12" }), "🔴 сміття прийнято як IBAN");
   assert.throws(() => v.validateNewAccount({ company: "staff", bank: "mono", label: "к", envKeyName: "MONO_TOKEN_X" }), "🔴 картку без цифр і без IBAN прийнято");
-  assert.match(SRC("routes/bank.ts"), /external_account_id = CASE WHEN iban IS DISTINCT FROM \$\$\{ibanParam\}/, "🔴 зміна IBAN картки не скидає привʼязку");
+  const { buildAccountUpdate } = await import("./bankAccounts.js");
+  assert.ok(buildAccountUpdate({ iban: W }, { bank: "mono", company: "staff" }).sets.some((x) => /^external_account_id = CASE WHEN iban IS DISTINCT FROM/.test(x)), "🔴 зміна IBAN картки не скидає привʼязку");
+  assert.equal(buildAccountUpdate({ iban: "UA00 будь-що" }, { bank: "privat", company: "uts" }).sets.some((x) => x.startsWith("external_account_id")), false, "🔴 IBAN-реквізит компанії скидає привʼязку");
+});
+
+/**
+ * #1239 — ЖИВИЙ SQL: «ЗБЕРЕГТИ» КАРТКИ ПРАЦІВНИКА ЗБЕРІГАЄ. 08.10.2026 панель слала цифри й IBAN разом, сервер ставив
+ * ДВА `external_account_id = …`, і Postgres відкидав увесь запит — нічого не зберігалось. Тепер `buildAccountUpdate`
+ * складає один вираз; гейт виконує справжній UPDATE: цифри + IBAN разом проходять, зміна скидає привʼязку, повтор тих
+ * самих значень — ні; сміття в IBAN / цифрах / ключі — 400 ДО бази. 🧨 Червоніє, якщо знову дати два присвоєння.
+ */
+test("#1239 ЖИВИЙ SQL: цифри й IBAN картки зберігаються разом; зміна скидає привʼязку, повтор — ні; сміття — 400", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { buildAccountUpdate } = await import("./bankAccounts.js");
+  const { c } = s;
+  const W = "UA443220010000026204346265292";
+  try {
+    const id = (await c.query(`INSERT INTO bank_accounts (company, bank, label, currency, env_key_name, finance_only, is_active, mono_pan_last4, external_account_id)
+      VALUES ('staff', 'mono', 'Картка · тест', 'UAH', 'MONO_TOKEN_T', true, false, '1100', 'old-acc') RETURNING id`)).rows[0].id;
+    const save = async (body: Record<string, unknown>) => {
+      const u = buildAccountUpdate(body, { bank: "mono", company: "staff" });
+      await c.query(`UPDATE bank_accounts SET ${u.sets.join(", ")} WHERE id = $${u.params.length + 1}`, [...u.params, id]);
+      return (await c.query(`SELECT mono_pan_last4, iban, external_account_id FROM bank_accounts WHERE id = $1`, [id])).rows[0];
+    };
+    assert.deepEqual(await save({ label: "Картка · тест", iban: "UA44 3220 0100 0002 6204 3462 6529 2", monoPanLast4: "1100" }),
+      { mono_pan_last4: "1100", iban: W, external_account_id: null }, "🔴 цифри + IBAN разом не зберегли (два присвоєння?) або привʼязка не скинулась");
+    await c.query(`UPDATE bank_accounts SET external_account_id = 'new-acc' WHERE id = $1`, [id]);
+    assert.equal((await save({ iban: W, monoPanLast4: "1100", legalName: null })).external_account_id, "new-acc", "🔴 збереження тих самих значень скинуло привʼязку");
+    for (const [body, why] of [[{ iban: "UA12" }, "сміття в IBAN"], [{ monoPanLast4: "11a0" }, "не цифри"], [{ envKeyName: "JWT_SECRET" }, "чужий ключ"]] as const)
+      assert.throws(() => buildAccountUpdate(body, { bank: "mono", company: "staff" }), (e: unknown) => (e as { status?: number }).status === 400, `🔴 ${why} пропущено до бази`);
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1239b — ПАНЕЛЬ РАХУНКІВ ГОВОРИТЬ, ЩО СТАЛОСЬ. «Зберегти» й перемикач показують підтвердження й помилку спільними
+ * повідомленнями дашборду (а не рядком унизу, якого не видно, і не `alert`); стан — перемикач дашборду замість галочки;
+ * вимкнена картка не бліда (її кнопки читаються). 🧨 Червоніє, якщо збереження знову мовчить чи повернеться галочка.
+ */
+test("#1239b ПАНЕЛЬ РАХУНКІВ: «Збережено» / «Не збережено» повідомленням, перемикач замість галочки, вимкнена не бліда", () => {
+  const fe = FE("pages/dashboard/sections/BankSection.tsx");
+  const block = fe.slice(fe.indexOf("function AccountsBlock("), fe.indexOf("function AddCardForm("));
+  assert.ok(block.length > 0, "🔴 блок керування рахунками не знайдено");
+  assert.match(block, /toast\(`Збережено: «\$\{draft\.label \?\? "рахунок"\}»`, \{ tone: "ok" \}\)/, "🔴 успішне збереження мовчить");
+  assert.match(block, /toast\(`Не збережено: \$\{err\(e\)\}`, \{ error: true \}\)/, "🔴 помилка збереження не показана");
+  assert.match(block, /toast\(`Не перемкнуто: \$\{err\(e\)\}`, \{ error: true \}\)/, "🔴 помилка перемикача не показана");
+  assert.match(block, /<Toggle on=\{a\.is_active\} onClick=\{\(\) => void toggleActive\(a\)\}/, "🔴 стан рахунку — не перемикач");
+  assert.doesNotMatch(block, /type="checkbox" checked=\{a\.is_active\}|alert\(|opacity: a\.is_active \? 1 : 0\.6/, "🔴 повернулась галочка, alert чи бліда вимкнена картка");
 });
 
 /**

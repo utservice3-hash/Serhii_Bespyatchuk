@@ -19,23 +19,45 @@ type Mod = {
 const load = async () => (await import(spec)) as Mod;
 
 /**
- * #1230 — СКІЛЬКИ ВИСИТЬ: успіх без кнопки — 5 с; подія «вам щось прийшло» — 15 с (рішення Романа
- * 07.10.2026), навіть із кнопкою; помилка, «Зберігаю…» і тост із кнопкою поза подією — до закриття
- * (WCAG 2.2.1; Carbon, Atlassian, Primer, Material 3).
- * 🧨 Червоніє, якщо помилці чи «Відновити» дати таймер (вада задачника — 7 с, Опитувань — 3,2 с)
- * або якщо подія перестане зникати чи зникатиме не за 15 с.
+ * #1290 — СКІЛЬКИ ВИСИТЬ (08.10.2026, рішення Романа, варіант А; наступник `#1230`): успіх без кнопки —
+ * 3 с; подія «вам щось прийшло» — 8 с, навіть із кнопкою; помилка, «Зберігаю…» і тост із кнопкою поза
+ * подією — до закриття (WCAG 2.2.1; Carbon, Atlassian, Primer, Material 3).
+ * 🧨 Червоніє, якщо помилці чи «Відновити» дати таймер, або якщо тривалості розійдуться з затвердженими.
  */
-test("#1230 СПОВІЩЕННЯ: успіх зникає за 5 с, подія — за 15 с; помилка, «Зберігаю…» і кнопка поза подією — до закриття", async () => {
+test("#1290 СПОВІЩЕННЯ: успіх зникає за 3 с, подія — за 8 с; помилка, «Зберігаю…» і кнопка поза подією — до закриття", async () => {
   const R = await load();
-  assert.equal(R.TOAST_PLAIN_MS, 5000);
-  assert.equal(R.toastLifetime({ tone: "ok" }), 5000, "🔴 звичайний успіх не зникає сам");
-  assert.equal(R.toastLifetime({ tone: "info" }), 5000);
+  assert.equal(R.TOAST_PLAIN_MS, 3000);
+  assert.equal(R.toastLifetime({ tone: "ok" }), 3000, "🔴 звичайний успіх не зникає за 3 с");
+  assert.equal(R.toastLifetime({ tone: "info" }), 3000);
   assert.equal(R.toastLifetime({ tone: "err" }), null, "🔴 ПОМИЛКА ЗНИКАЄ САМА");
   assert.equal(R.toastLifetime({ tone: "ok", hasAction: true }), null, "🔴 тост із «Відновити» зникає раніше, ніж людина встигне натиснути");
-  assert.equal(R.toastLifetime({ tone: "ok", event: true, hasAction: true }), 15000, "🔴 подія «чекає вашого прийняття» не зникає за 15 с");
-  assert.equal(R.toastLifetime({ tone: "warn", event: true }), 15000, "🔴 пропущений дзвінок не зникає за 15 с");
+  assert.equal(R.toastLifetime({ tone: "ok", event: true, hasAction: true }), 8000, "🔴 подія «чекає вашого прийняття» не зникає за 8 с");
+  assert.equal(R.toastLifetime({ tone: "warn", event: true }), 8000, "🔴 пропущений дзвінок не зникає за 8 с");
   assert.equal(R.toastLifetime({ tone: "err", event: true }), null, "🔴 помилка-подія зникає сама");
   assert.equal(R.toastLifetime({ tone: "info", loading: true }), null, "🔴 «Зберігаю…» зникає до результату");
+});
+
+/**
+ * #1290b — ПЛАВНЕ ЗНИКНЕННЯ (08.10.2026): закриття у дві фази — позначка `leaving` і анімація 0,2 с,
+ * потім прибирання; хто вимкнув анімації — одразу. Прибирання знімає ЛИШЕ тост, що досі зникає:
+ * той самий ключ міг принести новий вміст («Зберігаю…» → «Збережено»), і тоді тост лишається.
+ * 🧨 Червоніє, якщо прибирати без анімації, ігнорувати «вимкнені анімації», чи знести тост,
+ * який за цей час отримав новий вміст.
+ */
+test("#1290b СПОВІЩЕННЯ: зникнення плавне у дві фази, вимкнені анімації — одразу, оновлений тост не зноситься", async () => {
+  const R = await load() as unknown as { exitDelay: (r: boolean) => number; TOAST_EXIT_MS: number };
+  assert.equal(R.exitDelay(false), R.TOAST_EXIT_MS);
+  assert.ok(R.TOAST_EXIT_MS >= 150 && R.TOAST_EXIT_MS <= 400, "🔴 зникнення або миттєве, або затягнуте");
+  assert.equal(R.exitDelay(true), 0, "🔴 анімація лишилась для того, хто вимкнув її в системі");
+  const { readFileSync } = await import("node:fs");
+  const fe = (rel: string) => readFileSync(fileURLToPath(new URL(`../../../frontend/src/${rel}`, import.meta.url).href.replace("/dist/", "/src/")), "utf8");
+  const t = fe("components/Toasts.tsx");
+  assert.match(t, /leaving: true/, "🔴 закриття не позначає тост «зникає» — він іде з екрана без анімації");
+  assert.match(t, /xs\.filter\(\(x\) => !\(x\.id === id && x\.leaving\)\)/, "🔴 прибирання зносить і тост, що за цей час отримав новий вміст");
+  assert.match(t, /exitDelay\(/, "🔴 пауза перед прибиранням не з правила");
+  const css = fe("index.css");
+  assert.match(css, /\.app-toast\.leaving \{ animation: app-toast-out/, "🔴 немає анімації зникнення");
+  assert.match(css, /prefers-reduced-motion: reduce\) \{ \.app-toast, \.app-toast\.leaving \{ animation: none/, "🔴 анімація зникнення не вимикається для тих, кому вона заважає");
 });
 
 /**

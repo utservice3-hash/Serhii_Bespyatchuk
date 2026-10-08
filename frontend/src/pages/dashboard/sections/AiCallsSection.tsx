@@ -67,6 +67,9 @@ export function AiCallsSection() {
   const [preset, setPreset] = useState<"all" | "noPrice" | "noCall" | "lost" | "low">("all");
   const [view, setView] = useState<"all" | "todo">("all");
   const [q, setQ] = useState("");
+  // Згортання блоку «Менеджери за чек-листом» — пам'ятаємо в браузері (лише зручність, не дані).
+  const [mgrCollapsed, setMgrCollapsed] = useState<boolean>(() => { try { return localStorage.getItem("ftd.mgrCollapsed") === "1"; } catch { return false; } });
+  const toggleMgr = () => setMgrCollapsed((v) => { try { localStorage.setItem("ftd.mgrCollapsed", v ? "0" : "1"); } catch { /* приватне вікно */ } return !v; });
 
   useEffect(() => {
     if (!from || !to) return;
@@ -120,7 +123,10 @@ export function AiCallsSection() {
   const pricePct = markPct(cls, "price");
   const promisePct = markPct(cls, "promise");
   const avg = avgScore3(done.map((r) => r.checkScore));
-  const lines = managerChecklist(rows);
+  // Блок менеджерів — по всій команді, без фільтра «менеджер»: інакше після кліку лишався один рядок і повернутись було нікуди.
+  const lines = managerChecklist(tabRows(applyListFilter(d.rows, { ...lf, managerId: null }), "report"));
+  const pickedName = lf.managerId != null ? (lines.find((l) => l.managerId === lf.managerId)?.name ?? managers.find(([id]) => id === lf.managerId)?.[1] ?? "менеджер") : null;
+  const weakest = lines.find((l) => l.score != null) ?? null;
 
   // Черга розбору: прапорець сервера; лічильник «розібрано N з M» — серед тих, що потребували розбору.
   const queue = queueRows(rows);
@@ -174,9 +180,9 @@ export function AiCallsSection() {
                 </p>
               )}
             </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+            <div className="ftd-nav">
               {navBar}
-              <label style={{ fontSize: 13, display: "flex", gap: 4, alignItems: "center" }}>Команда
+              <label className="ftd-team">Команда
                 <select id="ai-team" value={lf.teamId ?? ""} onChange={(e) => setLf({ ...lf, teamId: e.target.value ? Number(e.target.value) : null, managerId: null })}>
                   <option value="">усі</option>
                   {teams.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
@@ -217,15 +223,22 @@ export function AiCallsSection() {
           <section aria-label="Менеджери за чек-листом" className="ftd-card ftd-card-pad">
             <div className="ftd-card-h">
               <h2>Менеджери за чек-листом першого дотику</h2>
-              <span>частка розмов, де пункт виконано · найслабші — згори · клік по менеджеру фільтрує таблицю</span>
+              <span style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                {!mgrCollapsed && "частка розмов, де пункт виконано · найслабші — згори · клік по менеджеру фільтрує таблицю, ще клік — знімає"}
+                <button type="button" className="ftd-link" aria-expanded={!mgrCollapsed} onClick={toggleMgr}>{mgrCollapsed ? "Розгорнути ▾" : "Згорнути ▴"}</button>
+              </span>
             </div>
+            {mgrCollapsed
+              ? <div className="ftd-sub">{lines.length} менеджерів{weakest ? ` · найслабший бал — ${weakest.name} (${weakest.score!.toLocaleString("uk-UA")})` : ""}{pickedName ? ` · вибрано: ${pickedName}` : ""}</div>
+              : (
             <div style={{ overflowX: "auto" }}>
               <div className="ftd-mgr">
                 <div className="ftd-mgr-h">Менеджер</div><div className="ftd-mgr-h">Бал</div>
                 {CHECK_ITEMS.map((it) => <div key={it.key} className="ftd-mgr-h">{it.label}</div>)}
                 {lines.map((l) => (
                   <div key={String(l.managerId)} style={{ display: "contents" }}>
-                    <button type="button" className="ftd-mgr-name" onClick={() => setLf({ ...lf, managerId: l.managerId })}>{l.name} <span>· {l.calls}</span></button>
+                    <button type="button" className={`ftd-mgr-name${lf.managerId === l.managerId ? " on" : ""}`} aria-pressed={lf.managerId === l.managerId}
+                      onClick={() => setLf({ ...lf, managerId: lf.managerId === l.managerId ? null : l.managerId })}>{l.name} <span>· {l.calls}</span></button>
                     <div style={{ fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{l.score == null ? "—" : l.score.toLocaleString("uk-UA")}</div>
                     {bar(l.request)}{bar(l.price)}{bar(l.promise)}
                   </div>
@@ -233,6 +246,7 @@ export function AiCallsSection() {
               </div>
               {lines.length === 0 && <p className="ftd-sub" style={{ margin: 0 }}>Розібраних розмов у періоді ще немає.</p>}
             </div>
+              )}
           </section>
 
           <section aria-label="Розмови" className="ftd-card">
@@ -245,6 +259,9 @@ export function AiCallsSection() {
                 {d.canSeeExcluded && <button type="button" role="tab" aria-selected={tab === "excluded"} className={tab === "excluded" ? "on" : ""} onClick={() => { setTab("excluded"); setView("all"); }}
                   title="Розмови, які модель упевнено визнала не запитом на перевезення: перевізники, продавці, пошук роботи, помилка номером.">Виключені · {excludedCount}</button>}
               </div>
+              {pickedName && (
+                <button type="button" className="ftd-pill on" onClick={() => setLf({ ...lf, managerId: null })} aria-label={`Зняти фільтр: ${pickedName}`}>Менеджер: {pickedName} ✕</button>
+              )}
               {([["noPrice", "Ціни не було"], ["noCall", "Обіцяв — дзвінка немає"], ["lost", "Втрачені"], ["low", "Бал ≤ 1"]] as const).map(([k, label]) => (
                 <button key={k} type="button" className={`ftd-pill${preset === k ? " on" : ""}`} aria-pressed={preset === k}
                   onClick={() => setPreset(preset === k ? "all" : k)}>{label} <b>{presetN(k)}</b></button>
@@ -307,8 +324,7 @@ export function AiCallsSection() {
                     <tbody>
                       {shownD.map((r) => (
                         <tr key={r.uniqueid} className="ftd-row" tabIndex={0} aria-label={`Відкрити розмову ${fmtTime(r.calledAt)}`}
-                          onClick={() => (d.canReview && r.needsReview ? openQueue(r.uniqueid) : setOpen(r.uniqueid))}
-                          onKeyDown={(e) => { if (e.key === "Enter") { if (d.canReview && r.needsReview) openQueue(r.uniqueid); else setOpen(r.uniqueid); } }}>
+                          onClick={() => setOpen(r.uniqueid)} onKeyDown={(e) => { if (e.key === "Enter") setOpen(r.uniqueid); }}>
                           <td style={{ whiteSpace: "nowrap" }}><b>{fmtTime(r.calledAt)}</b><div className="ftd-sub">{r.direction === "in" ? "вхідний" : "вихідний"} · {mmss(r.billsec)}</div></td>
                           <td style={{ whiteSpace: "nowrap" }}>{r.managerName ?? "невідомий"}<div className="ftd-sub">{r.teamName ?? ""}</div></td>
                           <td style={{ maxWidth: 380 }}>
@@ -343,7 +359,7 @@ export function AiCallsSection() {
                   </table>
                 )}
             </div>
-            <div className="ftd-foot">Квадрати чек-листа: запит · ціна · обіцянка (зелений — так, червоний — ні, сірий — не рахується). Клік по рядку з черги відкриває розбір, по іншому — картку.</div>
+            <div className="ftd-foot">Квадрати чек-листа: запит · ціна · обіцянка (зелений — так, червоний — ні, сірий — не рахується). Клік по рядку — картка розмови; розбір черги — кнопкою «Почати розбір» у смузі.</div>
           </section>
         </div>
 

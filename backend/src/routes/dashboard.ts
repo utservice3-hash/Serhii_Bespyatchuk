@@ -11005,6 +11005,9 @@ dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
     typeHistory: card.typeHistory, canEditType: canEditType(auth.roleKey),
     noteRights: { price: canWriteNote(auth.roleKey, "price"), missed: canWriteNote(auth.roleKey, "missed"), offline: canWriteNote(auth.roleKey, "offline") },
     canListen: transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES),
+    // Екран D (08.10.2026): той самий чек-лист і стан розбору, що в рядку списку, — картка однакова з будь-якого входу.
+    checklist: checklist(card.row), checkScore: checklistScore(checklist(card.row)), reviewReason: reviewReason(card.row),
+    needsReview: needsReview(card.row), canReview: canWriteNote(auth.roleKey, "review"),
   });
 });
 

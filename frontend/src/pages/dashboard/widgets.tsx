@@ -202,3 +202,15 @@ export function ForecastBadge({ forecast }: { forecast?: { status: string; proje
     </span>
   );
 }
+
+/** Перемикач «увімкнено / вимкнено» у стилі дашборду (зелений повзунок). Спільний для «Ролей та доступів» і
+ *  «Налаштувань виписки»; `label` — для читачів екрана, бо візуально стан передає лише колір і положення. */
+export function Toggle({ on, disabled, onClick, label }: { on: boolean; disabled?: boolean; onClick?: () => void; label?: string }) {
+  return (
+    <button onClick={disabled ? undefined : onClick} disabled={disabled} role="switch" aria-checked={on} aria-label={label}
+      style={{ width: 40, height: 22, borderRadius: 999, border: "none", position: "relative", flexShrink: 0,
+        cursor: disabled ? "default" : "pointer", background: on ? "#16a34a" : "#cbd5e1", opacity: disabled ? 0.55 : 1, transition: "background .15s" }}>
+      <span style={{ position: "absolute", top: 2, left: on ? 20 : 2, width: 18, height: 18, borderRadius: "50%", background: "#fff", transition: "left .15s" }} />
+    </button>
+  );
+}
