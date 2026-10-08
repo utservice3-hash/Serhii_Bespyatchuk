@@ -158,7 +158,15 @@ export function stageCountsQuery(
 }
 
 /** Id для запиту передач: воронки Продзвону, «Кваліфіковано» і воронки угод менеджера. */
-export interface HandoffLinkIds { pz: readonly number[]; qualified: number; managerPipelines: readonly number[] }
+export interface HandoffLinkIds {
+  pz: readonly number[]; qualified: number; managerPipelines: readonly number[];
+  /**
+   * Заглушки замість клієнта («названиенеуказано», порожній — `metrics.GENERIC_CLIENT_KEYS`). Ключ-заглушка = клієнт
+   * НЕВІДОМИЙ: він не склеює передачу з чужою угодою (здогад) і не робить угоду «постійного клієнта» (07.10.2026,
+   * 62747557: компанія «Название не указано» = 1 383 успіхи різних клієнтів). Параметром — модуль без імпортів (`#407`).
+   */
+  genericClientKeys: readonly string[];
+}
 
 /**
  * 🔗 ПЕРЕДАЧІ ПЕРІОДУ Й УГОДА МЕНЕДЖЕРА ДЛЯ КОЖНОГО ВХОДУ (правила 1–2 власника).
@@ -178,7 +186,8 @@ export interface HandoffLinkIds { pz: readonly number[]; qualified: number; mana
  * −`beforeSec` до +`afterSec` секунд від входу. Автоугоди НЕ ховаються (правило 5).
  * Грошей тут немає: бюджет і клас угоди читає лише `money.ts`.
  *
- * Параметри: $1 from · $2 to · $3 воронки Продзвону · $4 «Кваліфіковано» · $5 воронки угод менеджера.
+ * Параметри: $1 from · $2 to · $3 воронки Продзвону · $4 «Кваліфіковано» · $5 воронки угод менеджера ·
+ * $6 ключі-заглушки клієнта (`genericClientKeys`).
  */
 export function handoffLinkQuery(
   from: string, to: string, ids: HandoffLinkIds, win: { beforeSec: number; afterSec: number },
@@ -187,7 +196,9 @@ export function handoffLinkQuery(
   return {
     text: `SELECT e.kommo_id AS pz_id, d.manager_id AS lg_id, m.team_id AS lg_team_id,
             e.changed_at AS at, to_char((e.changed_at ${K}), 'YYYY-MM-DD') AS day,
-            d.name AS pz_name, d.client_name AS pz_client, COALESCE(x.client_key, d.client_key) AS client_key,
+            d.name AS pz_name, d.client_name AS pz_client,
+            COALESCE(CASE WHEN x.client_key = ANY($6::text[]) THEN NULL ELSE x.client_key END,
+                     CASE WHEN d.client_key = ANY($6::text[]) THEN NULL ELSE d.client_key END) AS client_key,
             x.prio AS link_prio,
             x.kommo_id AS deal_id, x.name AS deal_name, x.client_name AS deal_client,
             sm.name AS sales_manager, x.reject_reason AS deal_reason,
@@ -210,7 +221,7 @@ export function handoffLinkQuery(
            SELECT 1 AS prio, q.kommo_id, q.name, q.client_name, q.client_key, q.manager_id, q.reject_reason,
                   q.closed_at_kommo, q.planned_payment_at, q.created_at_kommo
              FROM deals q
-            WHERE d.client_key IS NOT NULL AND q.client_key = d.client_key
+            WHERE d.client_key IS NOT NULL AND NOT (d.client_key = ANY($6::text[])) AND q.client_key = d.client_key
               AND q.pipeline_id = ANY($5)
               AND q.created_at_kommo BETWEEN e.changed_at - INTERVAL '${before} seconds'
                                          AND e.changed_at + INTERVAL '${after} seconds'
@@ -221,7 +232,7 @@ export function handoffLinkQuery(
       WHERE e.pipeline_id = ANY($3) AND e.status_id = $4 AND ${quoteKeptSql("$3")}
         AND (e.changed_at ${K})::date BETWEEN $1 AND $2
       ORDER BY e.changed_at, e.kommo_id`,
-    values: [from, to, ids.pz, ids.qualified, ids.managerPipelines],
+    values: [from, to, ids.pz, ids.qualified, ids.managerPipelines, ids.genericClientKeys],
   };
 }
 
