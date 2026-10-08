@@ -96,6 +96,9 @@ export function AiCallsSection() {
   // Черга розбору (розкладка B) — поверх огляду; закриття згортає її в смугу (`.ftd-queue.is-closed`).
   const [queueOpen, setQueueOpen] = useState(false);
   const periodKey = useRef("");
+  // Новий період: старі цифри лишаються (напівпрозорі, «Оновлюю…»), а щойно прийдуть нові — плитки перетікають до них.
+  // Скелет — лише на першому відкритті, коли показати ще нічого (Роман 08.10.2026).
+  const [stale, setStale] = useState(false);
   const topRef = useRef<HTMLDivElement | null>(null);
   const [queueSel, setQueueSel] = useState<string | null>(null);
   const [glow, setGlow] = useState(false);
@@ -111,11 +114,11 @@ export function AiCallsSection() {
     if (!from || !to) return;
     let alive = true;
     // Перечитування після розбору (`reload`) оновлює дані на місці: інакше «Завантаження…» знімало б чергу посеред роботи.
-    if (periodKey.current !== `${from}|${to}`) { setD(null); periodKey.current = `${from}|${to}`; }
+    if (periodKey.current !== `${from}|${to}`) { setStale(true); periodKey.current = `${from}|${to}`; }
     setErr(null);
     fetchAiCalls({ from, to })
-      .then((x) => { if (alive) setD(x); })
-      .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
+      .then((x) => { if (alive) { setD(x); setStale(false); } })
+      .catch((e) => { if (alive) { setStale(false); setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); } });
     return () => { alive = false; };
   }, [from, to, reload]);
   useEffect(() => { fetchAiCallsMeta().then(setMeta).catch(() => setMeta(null)); }, []);
@@ -194,11 +197,12 @@ export function AiCallsSection() {
   return (
     <>
       <div className="ftd" ref={topRef}>
-        <div className={`ftd-over${queueOpen ? " is-dim" : ""}`} aria-hidden={queueOpen}>
+        <div className={`ftd-over${queueOpen ? " is-dim" : ""}${stale ? " is-stale" : ""}`} aria-hidden={queueOpen} aria-busy={stale}>
           <div className="ftd-head">
             <div>
               <div className="ftd-kicker">Продаж · перші розмови з реклами</div>
               <h1 className="ftd-title">Перший дотик · AI
+                {stale && <span className="ftd-updating" role="status">Оновлюю…</span>}
                 <InfoHint text="Перша розмова кожної рекламної угоди (будь-який напрямок, від 20 с), розпізнана по двох каналах і розібрана моделлю: ціна, заперечення, обіцянки й наступний крок із дослівними цитатами. Оцінки менеджера тут немає. Період — за датою створення угоди." />
               </h1>
               {meta && (

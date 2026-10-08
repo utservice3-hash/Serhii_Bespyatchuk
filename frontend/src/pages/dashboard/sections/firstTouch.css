@@ -144,3 +144,10 @@
   .ftd-collapse svg, .ftd-collapsible, .ftd-fade { transition: none; }
   .ftd-sk { animation: none; }
 }
+
+/* Новий період вантажиться: старі цифри видно, але приглушено; блоки, що не залежать від чисел, лишаються чіткими. */
+.ftd-over.is-stale .ftd-kpis, .ftd-over.is-stale .ftd-card, .ftd-over.is-stale .ftd-strip { opacity: .55; transition: opacity .2s ease; }
+.ftd-over .ftd-kpis, .ftd-over .ftd-card, .ftd-over .ftd-strip { transition: opacity .25s ease; }
+.ftd-updating { font-size: 12px; font-weight: 600; color: var(--text-muted); background: var(--card-bg); border: 1px solid var(--border);
+  border-radius: 999px; padding: 2px 10px; letter-spacing: 0; }
+@media (prefers-reduced-motion: reduce) { .ftd-over .ftd-kpis, .ftd-over .ftd-card, .ftd-over .ftd-strip { transition: none; } }

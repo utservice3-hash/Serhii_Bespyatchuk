@@ -1417,3 +1417,19 @@ test("#912 МІСЯЦЬ І ПЛАВНІ ЧИСЛА: за замовчуванн�
   assert.match(an, /if \(value == null \|\| start == null \|\| start === value \|\| reducedMotion\(\)\) \{ from\.current = value; setShown\(value\); return; \}/, "🔴 «зменшення руху» чи перший показ анімуються");
   assert.match(an, /matchMedia\?\.\("\(prefers-reduced-motion: reduce\)"\)/, "🔴 не питає систему про «зменшення руху»");
 });
+
+/**
+ * #913 — НОВИЙ ПЕРІОД НЕ СКИДАЄ ЦИФРИ (Роман 08.10.2026: «зроби щоб і при зміні періоду цифри перетікали»). Поки
+ * вантажиться новий період, старі дані лишаються (приглушені, «Оновлюю…»), тож плитки перетікають від старого числа
+ * до нового; скелет — лише на першому відкритті. Помилка знімає приглушення.
+ * 🧨 Червоніє, якщо новий період знову обнуляє дані (тоді перетікати нема з чого) або «Оновлюю…» зникає.
+ */
+test("#913 ПЕРІОД ПЕРЕТІКАЄ: новий період лишає старі цифри приглушеними, поки не прийдуть нові", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /if \(periodKey\.current !== `\$\{from\}\|\$\{to\}`\) \{ setStale\(true\); periodKey\.current = `\$\{from\}\|\$\{to\}`; \}/, "🔴 новий період обнуляє дані — перетікати нема з чого");
+  assert.ok(!/setD\(null\)/.test(sec), "🔴 дані знову скидаються в null");
+  assert.match(sec, /\.then\(\(x\) => \{ if \(alive\) \{ setD\(x\); setStale\(false\); \} \}\)/, "🔴 нові дані не знімають приглушення");
+  assert.match(sec, /\{stale && <span className="ftd-updating" role="status">Оновлюю…<\/span>\}/, "🔴 не видно, що цифри оновлюються");
+  const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
+  assert.match(css, /\.ftd-over\.is-stale \.ftd-kpis, \.ftd-over\.is-stale \.ftd-card, \.ftd-over\.is-stale \.ftd-strip \{ opacity: \.55;/, "🔴 старі цифри не приглушено — читаються як нові");
+});
