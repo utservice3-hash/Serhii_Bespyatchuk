@@ -1392,7 +1392,7 @@ test("#911 ЗГОРТАННЯ І СКЕЛЕТ: шеврон з aria, плавн�
   assert.match(sec, /className=\{`ftd-collapse\$\{mgrCollapsed \? " is-collapsed" : ""\}`\} aria-expanded=\{!mgrCollapsed\} aria-controls="ftd-mgr-body"/, "🔴 немає кнопки-шеврона з aria-expanded");
   assert.ok(!/Згорнути ▴|Розгорнути ▾/.test(sec), "🔴 повернулась текстова кнопка «Згорнути ▴»");
   assert.match(sec, /<div id="ftd-mgr-body" className=\{`ftd-collapsible\$\{mgrCollapsed \? " is-collapsed" : ""\}`\}/, "🔴 блок згортається умовним рендером — анімувати нічого");
-  assert.match(sec, /if \(!d\) return <FirstTouchSkeleton navBar=\{navBar\} drawer=\{drawer\} \/>;/, "🔴 замість скелета — напис «Завантаження…»");
+  assert.match(sec, /if \(!d\) return <FirstTouchSkeleton header=\{header\} drawer=\{drawer\} \/>;/, "🔴 замість скелета — напис «Завантаження…»");
   assert.match(sec, /: "розбираються для розмов від 09\.10",/, "🔴 «0 з 0 заперечень» замість пояснення");
   const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
   assert.match(css, /\.ftd-collapsible\.is-collapsed \{ grid-template-rows: 0fr; opacity: 0; \}/, "🔴 немає плавної висоти");
@@ -1432,4 +1432,22 @@ test("#913 ПЕРІОД ПЕРЕТІКАЄ: новий період лишає �
   assert.match(sec, /\{stale && <span className="ftd-updating" role="status">Оновлюю…<\/span>\}/, "🔴 не видно, що цифри оновлюються");
   const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
   assert.match(css, /\.ftd-over\.is-stale \.ftd-kpis, \.ftd-over\.is-stale \.ftd-card, \.ftd-over\.is-stale \.ftd-strip \{ opacity: \.55;/, "🔴 старі цифри не приглушено — читаються як нові");
+});
+
+/**
+ * #914 — ОДНА ШАПКА ДЛЯ СКЕЛЕТА Й ЕКРАНА (Роман 08.10.2026: «на preview і фактичній картинці різне місцеположення
+ * періодів… це обʼєкт, який може завжди відображатися»). Шапка (заголовок, конвеєр, період, «Команда») будується ОДИН раз
+ * і вставляється і в скелет, і в екран; розкладка — колонкою, тож період не стрибає між рядками залежно від довжини
+ * рядка конвеєра.
+ * 🧨 Червоніє, якщо скелет знову малює власну шапку чи шапка повертається в рядок «заголовок ↔ період».
+ */
+test("#914 ОДНА ШАПКА: скелет і екран вставляють ту саму шапку, період завжди окремим рядком", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.equal((sec.match(/className="ftd-head"/g) ?? []).length, 1, "🔴 шапка намальована більше ніж раз — скелет і екран розійдуться");
+  assert.match(sec, /function FirstTouchSkeleton\(\{ header, drawer \}/, "🔴 скелет не приймає спільну шапку");
+  assert.match(sec, /aria-label="Завантаження «Першого дотику»">\n\s*\{header\}/, "🔴 скелет без спільної шапки");
+  assert.match(sec, /if \(err\) return <div className="ftd">\{header\}/, "🔴 екран помилки без спільної шапки");
+  assert.match(sec, /aria-busy=\{stale\}>\n\s*\{header\}/, "🔴 екран без спільної шапки");
+  const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
+  assert.match(css, /\.ftd-head \{ display: flex; flex-direction: column; align-items: stretch; gap: 14px; \}/, "🔴 шапка знову в рядок — період стрибає");
 });

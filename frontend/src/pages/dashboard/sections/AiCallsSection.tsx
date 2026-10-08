@@ -41,18 +41,11 @@ function StateChip({ state }: { state: AiCallState }) {
 }
 
 /** Скелет на час завантаження — та сама розкладка, що й екран (смуга, пʼять плиток, менеджери, таблиця), щоб нічого не стрибало. */
-function FirstTouchSkeleton({ navBar, drawer }: { navBar: React.ReactNode; drawer: React.ReactNode }) {
+function FirstTouchSkeleton({ header, drawer }: { header: React.ReactNode; drawer: React.ReactNode }) {
   const sk = (w: string | number, h: number, extra: React.CSSProperties = {}) => <span className="ftd-sk" style={{ width: w, height: h, ...extra }} />;
   return (
     <div className="ftd" aria-busy="true" aria-label="Завантаження «Першого дотику»">
-      <div className="ftd-head">
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <div className="ftd-kicker">Продаж · перші розмови з реклами</div>
-          <h1 className="ftd-title">Перший дотик · AI</h1>
-          {sk(420, 12)}
-        </div>
-        <div className="ftd-nav">{navBar}</div>
-      </div>
+      {header}
       <div className="ftd-strip" aria-hidden="true">{sk("40%", 22, { background: "#2c2e36" })}<span style={{ flex: 1 }} />{sk(160, 44, { background: "#2c2e36", borderRadius: 8 })}</div>
       <div className="ftd-kpis" aria-hidden="true">
         {[0, 1, 2, 3, 4].map((i) => <div key={i} className="ftd-kpi">{sk("70%", 12)}{sk("45%", 28, { margin: "6px 0" })}{sk("60%", 12)}</div>)}
@@ -135,8 +128,42 @@ export function AiCallsSection() {
 
   const navBar = <PeriodNav state={nav} onPatch={(patch) => setNav((st) => ({ ...st, ...patch }))} today={today} />;
   const drawer = open ? <AiCallDrawer uniqueid={open} onClose={closeCard} onChanged={() => setReload((x) => x + 1)} /> : null;
-  if (err) return <div className="chart-card">{navBar}<p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>{drawer}</div>;
-  if (!d) return <FirstTouchSkeleton navBar={navBar} drawer={drawer} />;
+  // 🧭 ШАПКА — ОДНА для скелета й екрана (Роман 08.10.2026: «вибір періоду не потребує рендера після отримання даних»):
+  // заголовок, рядок конвеєра, під ними завжди окремим рядком період і «Команда». Даних ще немає — команди «усі».
+  const headTeams = d ? [...new Map(d.rows.filter((r) => r.teamId != null).map((r) => [r.teamId!, r.teamName ?? `Команда #${String(r.teamId)}`])).entries()]
+    .sort((a, b) => a[1].localeCompare(b[1], "uk")) : [];
+  const header = (
+      <div className="ftd-head">
+        <div>
+          <div className="ftd-kicker">Продаж · перші розмови з реклами</div>
+          <h1 className="ftd-title">Перший дотик · AI
+            {stale && <span className="ftd-updating" role="status">Оновлюю…</span>}
+            <InfoHint text="Перша розмова кожної рекламної угоди (будь-який напрямок, від 20 с), розпізнана по двох каналах і розібрана моделлю: ціна, заперечення, обіцянки й наступний крок із дослівними цитатами. Оцінки менеджера тут немає. Період — за датою створення угоди." />
+          </h1>
+          {meta && (
+            <p className="ftd-meta">
+              Конвеєр: {meta.job?.lastSuccessAt ? `останній успішний запуск ${fmtTime(meta.job.lastSuccessAt)}` : "успішних запусків ще не було"}
+              {meta.job?.lastError && (jobErrorIsCurrent(meta.job)
+                ? <span style={{ color: "var(--danger, #b3261e)" }}> · остання помилка {meta.job.lastErrorAt ? fmtTime(meta.job.lastErrorAt) : ""}: {meta.job.lastError}</span>
+                : <span title={meta.job.lastError}> · остання помилка була {meta.job.lastErrorAt ? fmtTime(meta.job.lastErrorAt) : ""}, після неї — успішні запуски</span>)}
+              {" · "}витрати місяця: розпізнавання {usd(meta.spend.stt)}{meta.caps.stt != null ? ` з ${usd(meta.caps.stt)}` : ""}, аналіз {usd(meta.spend.analysis)}{meta.caps.analysis != null ? ` з ${usd(meta.caps.analysis)}` : ""}
+            </p>
+          )}
+          {!meta && <span className="ftd-sk" style={{ width: 420, height: 12, marginTop: 6 }} />}
+        </div>
+        <div className="ftd-nav">
+          {navBar}
+          <label className="ftd-team">Команда
+            <select id="ai-team" disabled={!d} value={lf.teamId ?? ""} onChange={(e) => setLf({ ...lf, teamId: e.target.value ? Number(e.target.value) : null, managerId: null })}>
+              <option value="">усі</option>
+              {headTeams.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
+          </label>
+        </div>
+      </div>
+  );
+  if (err) return <div className="ftd">{header}<p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>{drawer}</div>;
+  if (!d) return <FirstTouchSkeleton header={header} drawer={drawer} />;
 
   // Плитки й підсумки рахуються лише по ЗВІТУ: виключене сміття не розмиває відсотки (ТЗ 30.09.2026).
   const rows = tabRows(scopedAll, "report");
@@ -198,33 +225,7 @@ export function AiCallsSection() {
     <>
       <div className="ftd" ref={topRef}>
         <div className={`ftd-over${queueOpen ? " is-dim" : ""}${stale ? " is-stale" : ""}`} aria-hidden={queueOpen} aria-busy={stale}>
-          <div className="ftd-head">
-            <div>
-              <div className="ftd-kicker">Продаж · перші розмови з реклами</div>
-              <h1 className="ftd-title">Перший дотик · AI
-                {stale && <span className="ftd-updating" role="status">Оновлюю…</span>}
-                <InfoHint text="Перша розмова кожної рекламної угоди (будь-який напрямок, від 20 с), розпізнана по двох каналах і розібрана моделлю: ціна, заперечення, обіцянки й наступний крок із дослівними цитатами. Оцінки менеджера тут немає. Період — за датою створення угоди." />
-              </h1>
-              {meta && (
-                <p className="ftd-meta">
-                  Конвеєр: {meta.job?.lastSuccessAt ? `останній успішний запуск ${fmtTime(meta.job.lastSuccessAt)}` : "успішних запусків ще не було"}
-                  {meta.job?.lastError && (jobErrorIsCurrent(meta.job)
-                    ? <span style={{ color: "var(--danger, #b3261e)" }}> · остання помилка {meta.job.lastErrorAt ? fmtTime(meta.job.lastErrorAt) : ""}: {meta.job.lastError}</span>
-                    : <span title={meta.job.lastError}> · остання помилка була {meta.job.lastErrorAt ? fmtTime(meta.job.lastErrorAt) : ""}, після неї — успішні запуски</span>)}
-                  {" · "}витрати місяця: розпізнавання {usd(meta.spend.stt)}{meta.caps.stt != null ? ` з ${usd(meta.caps.stt)}` : ""}, аналіз {usd(meta.spend.analysis)}{meta.caps.analysis != null ? ` з ${usd(meta.caps.analysis)}` : ""}
-                </p>
-              )}
-            </div>
-            <div className="ftd-nav">
-              {navBar}
-              <label className="ftd-team">Команда
-                <select id="ai-team" value={lf.teamId ?? ""} onChange={(e) => setLf({ ...lf, teamId: e.target.value ? Number(e.target.value) : null, managerId: null })}>
-                  <option value="">усі</option>
-                  {teams.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-                </select>
-              </label>
-            </div>
-          </div>
+          {header}
 
           {d.canReview && (
             <section aria-label="Черга розбору" className={`ftd-strip${glow ? " is-glow" : ""}`}>
