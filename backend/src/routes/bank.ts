@@ -9,9 +9,8 @@ import { statementData } from "../core/bankStatement.js";
 import { statementFile } from "../core/bankStatementCsv.js";
 import { addManual, setManualDeleted, listManual } from "../core/bankManual.js";
 import { FinError, type Db } from "../core/finance.js";
-import { normLast4, normIban } from "../bankSources/mono.js";
 import { tokenFor } from "../bankSources/token.js";
-import { validateNewAccount, checkEnvKeyName } from "../core/bankAccounts.js";
+import { validateNewAccount, buildAccountUpdate } from "../core/bankAccounts.js";
 
 export const bankRouter = Router();
 bankRouter.use(requireAuth); // tab-гейт «bank» — усі ролі (screen_access); + auto-asyncH через lib/asyncRoutes
@@ -231,46 +230,18 @@ bankRouter.post("/accounts", requirePerm("manage_bank_accounts"), async (req, re
 bankRouter.patch("/accounts/:id", requirePerm("manage_bank_accounts"), async (req, res) => {
   const id = Number(req.params.id);
   const b = req.body ?? {};
-  const map: Record<string, string> = { label: "label", currency: "currency", externalAccountId: "external_account_id",
-    isActive: "is_active", legalName: "legal_name", edrpouIpn: "edrpou_ipn", iban: "iban", bankName: "bank_name", mfo: "mfo", purpose: "purpose", envKeyName: "env_key_name",
-    vatIpn: "vat_ipn", legalAddress: "legal_address", director: "director", bankEdrpou: "bank_edrpou", keyCard: "key_card" };
-  // Назва змінної ключа — лише шаблон банку ЦЬОГО рахунку (`checkEnvKeyName`): інакше сюди можна вписати чужий секрет.
-  if ("envKeyName" in b) {
-    const cur = await pool.query<{ bank: string }>(`SELECT bank FROM bank_accounts WHERE id = $1`, [id]);
-    if (!cur.rows[0]) return res.status(404).json({ error: "Рахунок не знайдено" });
-    try { b.envKeyName = checkEnvKeyName(cur.rows[0].bank, b.envKeyName); }
-    catch (e) { if (e instanceof FinError) return res.status(e.status).json({ error: e.message }); throw e; }
-  }
-  // IBAN картки працівника — ключ вибору рахунку в моно (`accountFor`): лише справжній IBAN, а зміна скидає привʼязку.
-  let staffIban = false;
-  if ("iban" in b) {
-    const cur = await pool.query<{ company: string }>(`SELECT company FROM bank_accounts WHERE id = $1`, [id]);
-    if (cur.rows[0]?.company === "staff") {
-      const raw = String(b.iban ?? "").trim();
-      const iban = raw ? normIban(raw) : null;
-      if (raw && !iban) return res.status(400).json({ error: "IBAN — UA і 27 цифр (пробіли можна)" });
-      b.iban = iban; staffIban = true;
-    }
-  }
-  const sets: string[] = []; const params: unknown[] = [];
-  let ibanParam = 0;
-  for (const [k, col] of Object.entries(map)) if (k in b) { params.push(b[k]); sets.push(`${col} = $${params.length}`); if (k === "iban") ibanParam = params.length; }
-  if (staffIban) sets.push(`external_account_id = CASE WHEN iban IS DISTINCT FROM $${ibanParam} THEN NULL ELSE external_account_id END`);
-  // Останні 4 цифри картки (моно): рівно 4 цифри або порожньо. Змінились — привʼязку до рахунку скидаємо, щоб синк
-  // знайшов картку наново, а не тягнув стару (картка працівника, 07.10.2026).
-  if ("monoPanLast4" in b) {
-    const raw = String(b.monoPanLast4 ?? "").trim();
-    const last4 = normLast4(raw);
-    if (raw && !last4) return res.status(400).json({ error: "Останні цифри картки — рівно 4 цифри" });
-    params.push(last4); sets.push(`mono_pan_last4 = $${params.length}`);
-    sets.push(`external_account_id = CASE WHEN mono_pan_last4 IS DISTINCT FROM $${params.length} THEN NULL ELSE external_account_id END`);
-  }
-  if (!sets.length) return res.json({ ok: true });
-  params.push(id);
-  const r = await pool.query(`UPDATE bank_accounts SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING label`, params);
+  const cur = await pool.query<{ bank: string; company: string }>(`SELECT bank, company FROM bank_accounts WHERE id = $1`, [id]);
+  if (!cur.rows[0]) return res.status(404).json({ error: "Рахунок не знайдено" });
+  // Правила полів і скидання привʼязки — в одному місці (`buildAccountUpdate`, #1239): ключ лише свого банку, IBAN і
+  // 4 цифри картки — справжні, зміна будь-якого з них скидає привʼязку ОДНИМ виразом.
+  let upd;
+  try { upd = buildAccountUpdate(b, cur.rows[0]); } catch (e) { if (e instanceof FinError) return res.status(e.status).json({ error: e.message }); throw e; }
+  if (!upd.sets.length) return res.json({ ok: true });
+  const params = [...upd.params, id];
+  const r = await pool.query(`UPDATE bank_accounts SET ${upd.sets.join(", ")} WHERE id = $${params.length} RETURNING label`, params);
   if (!r.rows[0]) return res.status(404).json({ error: "Рахунок не знайдено" });
   await writeAudit({ ...audit(req), action: "bank.account.update", targetType: "bank_account", targetId: String(id), targetLabel: r.rows[0].label, details: { fields: Object.keys(b) } });
-  res.json({ ok: true });
+  res.json({ ok: true, label: r.rows[0].label });
 });
 
 bankRouter.delete("/accounts/:id", requirePerm("manage_bank_accounts"), async (req, res) => {
