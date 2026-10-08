@@ -1,7 +1,7 @@
 import { pool } from "../db/pool.js";
 import { isInsufficientPrivilege } from "../db/pgErrors.js";
 import { fixedWeekBlocks, workingDaysBetween, monthEndOf } from "./dates.js";
-import { weekPlanOf, weekWorkingDays } from "./weekPlanMath.js";
+import { weekPlanOf, weekWorkingDays, shouldFreezeWeek } from "./weekPlanMath.js";
 import { receivedByMgr } from "./money.js";
 
 /**
@@ -47,7 +47,7 @@ import { receivedByMgr } from "./money.js";
 // Формула живе в `weekPlanMath.ts` (чистий модуль, без БД) — і ре-експортується
 // звідси, щоб споживачі мали ОДНУ точку входу, а гейти могли перевіряти арифметику
 // без `DATABASE_URL`. Див. коментар там: розділення не косметичне.
-export { weekPlanOf, weekWorkingDays } from "./weekPlanMath.js";
+export { weekPlanOf, weekWorkingDays, shouldFreezeWeek } from "./weekPlanMath.js";
 export type { WeekPlanInput, WeekPlanResult } from "./weekPlanMath.js";
 
 export interface WeekPlanRow {
@@ -161,7 +161,10 @@ export async function weekPlansForMonth(
       // у четвер зафіксує залишок станом на ПОНЕДІЛОК, а не на момент відкриття
       // екрана. Різниця з тодішнім станом можлива лише там, де угода відтоді
       // переїхала між стадіями (реоупен) — і саме про це попереджає `backfill`.
-      if (opts.freeze !== false && w.from <= today) {
+      //
+      // 🧊 І ЛИШЕ КОЛИ МІСЯЧНИЙ ПЛАН УЖЕ ЗАВЕДЕНО (`shouldFreezeWeek`, задача 5202): інакше незмінний знімок
+      // зафіксує нуль «плану ще немає» як ціль на весь тиждень.
+      if (opts.freeze !== false && shouldFreezeWeek({ weekStart: w.from, today, monthPlan })) {
         toInsert.push({ ...row, source: w.from === today ? "live" : "backfill" });
       }
     }

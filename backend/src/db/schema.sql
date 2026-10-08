@@ -4901,15 +4901,15 @@ CREATE TABLE IF NOT EXISTS fin_plan_approvals (
 );
 
 -- 🔑 ХТО ЗАТВЕРДЖУЄ ПЛАН — ПОІМЕННО, А НЕ РОЛЛЮ (06.10.2026). Роль «Адмін» мають і фінансист, і Дарʼя, і ще акаунт,
--- тож «лише ці люди» роллю не виразити. Склад — рішення Романа 06.10.2026: Беспятчук Сергій (id 1), kriptokoval (17),
--- Роман (50), Олександр Ступаківський (99). Сід — РАЗОВИЙ (лише в порожню таблицю), бо інакше кожен викат повертав би
--- людину, яку прибрали SQL-ом. На свіжій базі цих id немає — таблиця лишається порожньою.
+-- тож «лише ці люди» роллю не виразити. Склад — рішення Сергія 07.10.2026 («на зустрічі внесли корективи, тільки мій
+-- акаунт може затвердити»): лише Беспятчук Сергій (id 1). Сід — РАЗОВИЙ (лише в порожню таблицю), бо інакше кожен викат
+-- повертав би людину, яку прибрали SQL-ом. На свіжій базі цього id немає — таблиця лишається порожньою.
 CREATE TABLE IF NOT EXISTS fin_plan_approvers (
   user_id   INTEGER PRIMARY KEY REFERENCES users(id),
   added_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 INSERT INTO fin_plan_approvers (user_id)
-SELECT id FROM users WHERE id IN (1, 17, 50, 99) AND NOT EXISTS (SELECT 1 FROM fin_plan_approvers);
+SELECT id FROM users WHERE id = 1 AND NOT EXISTS (SELECT 1 FROM fin_plan_approvers);
 
 -- 🔒 ЗАМОК ПЛАНУ — У БАЗІ, А НЕ ЛИШЕ В КОДІ (06.10.2026). У погодженому місяці `fin_values.plan` не змінюється НІЧИМ:
 -- ні роутом, ні скриптом, ні імпортом, ні «Взяти план попереднього місяця». Факт і коментар — вільні (рішення Романа:
@@ -5609,3 +5609,14 @@ ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_company_check CHECK (comp
 ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS mono_pan_last4 TEXT;
 ALTER TABLE bank_accounts DROP CONSTRAINT IF EXISTS bank_accounts_mono_pan_last4_check;
 ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_mono_pan_last4_check CHECK (mono_pan_last4 IS NULL OR mono_pan_last4 ~ '^[0-9]{4}$');
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💱 МОНО: ВАЛЮТА ОПЕРАЦІЇ = ВАЛЮТА РАХУНКУ (07.10.2026, #1228b).
+--  `amount` у виписці моно — у валюті РАХУНКУ, а `currencyCode` — валюта ПОКУПКИ. Розбір брав валюту покупки, тож
+--  гривнева сума ставала «доларами» й ще раз множилась на курс (заміряно: картка black, 20.08.2026, 492,24 ₴ → 22 003 ₴).
+--  Лагодимо записи гривневих моно-рахунків: гривня = сума як є. Повтор нічого не міняє (умова вже не виконується).
+--  Revert коду записи не повертає — і не має: повернення означало б знову роздуті суми.
+-- ══════════════════════════════════════════════════════════════════════════
+UPDATE bank_transactions t SET currency = a.currency, fx_rate = 1, amount_uah = t.amount
+  FROM bank_accounts a
+ WHERE a.id = t.account_id AND a.bank = 'mono' AND a.currency = 'UAH' AND t.currency <> 'UAH';

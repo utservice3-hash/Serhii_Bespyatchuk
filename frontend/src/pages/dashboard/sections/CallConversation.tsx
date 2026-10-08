@@ -1,0 +1,105 @@
+import { useEffect, useRef, useState } from "react";
+import type { AiTurn } from "../../../api";
+import { hiringError } from "../../../api";
+import { mmss, speakerOf } from "../aiCallsView";
+
+/**
+ * 🎧 РОЗМОВА В КАРТЦІ «ПЕРШОГО ДОТИКУ» — та сама система, що в «Перевізниках за розмовою» (прохання Романа 07.10.2026):
+ * кругла кнопка ▶, смуга з перемоткою кліком, час, швидкість 1× / 1.5× / 2×, під нею — репліки: клік перемотує,
+ * поточна підсвічується, жовтим — фрази, на які спирається розбір (мітки на смузі там само). Запис тягнеться лише
+ * після першого ▶ — байти через наш сервер, права вирішує він.
+ */
+
+export type SeekFn = (t: number) => void;
+
+function Player({ load, marks, onTime, seekRef }: { load: () => Promise<Blob>; marks: number[]; onTime: (t: number) => void;
+  seekRef: React.MutableRefObject<SeekFn | null> }) {
+  const audio = useRef<HTMLAudioElement | null>(null);
+  const [src, setSrc] = useState<string | null>(null);
+  const [state, setState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [err, setErr] = useState<string | null>(null);
+  const [pos, setPos] = useState(0); const [dur, setDur] = useState(0); const [play, setPlay] = useState(false); const [speed, setSpeed] = useState(1);
+  const pending = useRef<number | null>(null);
+  useEffect(() => () => { if (src) URL.revokeObjectURL(src); }, [src]);
+  const start = async (): Promise<void> => {
+    setState("loading"); setErr(null);
+    try { const b = await load(); setSrc(URL.createObjectURL(b)); setState("ready"); }
+    catch (e) { setErr(hiringError(e)); setState("error"); }
+  };
+  const toggle = () => {
+    if (state === "idle" || state === "error") { void start(); return; }
+    const a = audio.current; if (!a) return;
+    if (a.paused) void a.play(); else a.pause();
+  };
+  useEffect(() => { if (state === "ready" && audio.current) void audio.current.play(); }, [state]);
+  useEffect(() => { if (audio.current) audio.current.playbackRate = speed; }, [speed, src]);
+  const seek = (t: number) => {
+    if (!Number.isFinite(t)) return;
+    const a = audio.current;
+    // Клік по репліці до першого ▶: спершу вантажимо запис, перемотаємо, щойно знатимемо тривалість.
+    if (!a) { pending.current = t; if (state === "idle" || state === "error") void start(); return; }
+    a.currentTime = t; setPos(t); if (a.paused) void a.play();
+  };
+  useEffect(() => { seekRef.current = seek; return () => { seekRef.current = null; }; });
+  return (
+    <div>
+      {src && <audio ref={audio} src={src} preload="auto" onPlay={() => setPlay(true)} onPause={() => setPlay(false)} onEnded={() => setPlay(false)}
+        onLoadedMetadata={(e) => {
+          const a = e.currentTarget; setDur(a.duration);
+          if (pending.current != null) { a.currentTime = pending.current; setPos(pending.current); pending.current = null; }
+        }}
+        onTimeUpdate={(e) => { setPos(e.currentTarget.currentTime); onTime(e.currentTarget.currentTime); }} />}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button type="button" className="cq-play" onClick={toggle} aria-label={play ? "Пауза" : "Слухати"} disabled={state === "loading"}
+          style={{ width: 34, height: 34, borderRadius: "50%", border: 0, background: "var(--brand)", color: "#fff", cursor: "pointer", flex: "none" }}>
+          {state === "loading" ? "…" : play ? "❚❚" : "▶"}</button>
+        <div onClick={(e) => { if (!dur) return; const b = e.currentTarget.getBoundingClientRect(); seek((e.clientX - b.left) / b.width * dur); }}
+          style={{ flex: 1, height: 6, borderRadius: 3, background: "var(--border)", position: "relative", cursor: dur ? "pointer" : "default" }}>
+          <i className="cq-bar" style={{ position: "absolute", inset: "0 auto 0 0", width: `${String(dur ? pos / dur * 100 : 0)}%`, background: "var(--brand)", borderRadius: 3 }} />
+          {dur > 0 && marks.map((m, i) => (
+            <span key={i} title="Тут фраза з розбору" style={{ position: "absolute", top: -4, left: `${String(Math.min(100, m / dur * 100))}%`, width: 3, height: 14, background: "var(--warn)", borderRadius: 2 }} />
+          ))}
+        </div>
+        <span style={{ fontSize: 12, color: "var(--text-muted)", fontVariantNumeric: "tabular-nums" }}>{mmss(pos)} / {dur ? mmss(dur) : "—"}</span>
+        <button type="button" onClick={() => setSpeed(speed === 1 ? 1.5 : speed === 1.5 ? 2 : 1)}
+          style={{ fontSize: 12, border: "1px solid var(--border)", background: "transparent", color: "var(--text)", borderRadius: 6, padding: "2px 6px", cursor: "pointer" }}>{speed}×</button>
+      </div>
+      {err && <p style={{ margin: "6px 0 0", fontSize: 12.5, color: "var(--danger)" }}>{err}</p>}
+    </div>
+  );
+}
+
+/**
+ * Плеєр і репліки разом. `turns` — null, коли тексту цій ролі не віддали (тоді лише плеєр); `quoted` — індекси
+ * реплік, на які спирається розбір (`quoteTurnIndex`).
+ */
+export function CallConversation({ load, turns, managerChannel, quoted, seekRef }: {
+  load: () => Promise<Blob>; turns: AiTurn[] | null; managerChannel: number | null; quoted: ReadonlySet<number>;
+  seekRef: React.MutableRefObject<SeekFn | null>;
+}) {
+  const [now, setNow] = useState(0);
+  const list = turns ?? [];
+  const marks = [...quoted].map((i) => list[i]?.start).filter((s): s is number => s != null);
+  return (
+    <>
+      <Player load={load} marks={marks} onTime={setNow} seekRef={seekRef} />
+      {list.length > 0 && (
+        <div style={{ marginTop: 10, maxHeight: 280, overflowY: "auto" }}>
+          {list.map((t, i) => {
+            const next = list[i + 1];
+            const cur = t.start != null && now > 0 && now >= t.start && (!next || next.start == null || now < next.start);
+            const who = speakerOf(t.channel, managerChannel);
+            return (
+              <p key={i} className="cq-line" title="Перемотати сюди" onClick={() => { if (t.start != null) seekRef.current?.(t.start); }}
+                style={{ margin: "1px 0", fontSize: 13, padding: "3px 6px", borderRadius: 6, cursor: "pointer", background: cur ? "var(--info-bg)" : undefined }}>
+                <span style={{ color: "var(--text-muted)", fontVariantNumeric: "tabular-nums", marginRight: 6, fontSize: 12 }}>{mmss(t.start)}</span>
+                <span style={{ fontWeight: 600, marginRight: 6, color: who === "Клієнт" ? "var(--warn)" : "var(--text-muted)" }}>{who}</span>
+                {quoted.has(i) ? <mark style={{ background: "var(--warn-bg)", color: "inherit", borderRadius: 3 }}>{t.text}</mark> : t.text}
+              </p>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+}

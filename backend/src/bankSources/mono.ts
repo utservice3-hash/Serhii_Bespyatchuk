@@ -44,9 +44,20 @@ export function normLast4(v: unknown): string | null {
  * токеном лежать і особисті рахунки, і «перший ФОП чи black» був би вгадуванням. Тоді null — рядок не привʼязується.
  */
 export function accountFor(info: MonoClientInfo, account: BankAccountRow): MonoAccount | null {
+  // Картка працівника з IBAN — рахунок обирається ЗА IBAN і лише за ним (Роман 07.10.2026: «номер карти 1100, а айбан
+  // можна збоку»): номер картки міняється при перевипуску, а в ФОП-рахунків моно його не віддає взагалі. Не знайшовся
+  // IBAN — null, без підміни іншим рахунком. Рахунків компаній це не стосується: їхній IBAN — реквізити для клієнтів.
+  const iban = normIban(account.iban);
+  if (account.company === "staff" && iban) return (info.accounts ?? []).find((a) => normIban(a.iban) === iban) ?? null;
   const last4 = normLast4(account.mono_pan_last4);
   if (account.company === "staff" && !last4) return null;
   return pickAccount(info, account.currency, account.mono_type, last4);
+}
+
+/** IBAN без пробілів, великими: «ua44 3220 …» → «UA443220…». Не схоже на український IBAN → null. */
+export function normIban(v: unknown): string | null {
+  const s = String(v ?? "").replace(/\s+/g, "").toUpperCase();
+  return /^UA\d{27}$/.test(s) ? s : null;
 }
 
 // 🕐 Ліміт моно — «1 запит / 60 с» НА ТОКЕН. Під одним токеном тепер кілька рахунків (ФОП + картки), тож запити
@@ -106,8 +117,15 @@ export async function fetchBalance(account: BankAccountRow): Promise<AccountBala
 
 /** Чистий нормалізатор (тестується без мережі). amount monobank — у копійках, signed. */
 export function normalizeMono(it: MonoItem, accountCurrency: string): NormalizedTx {
+  // 🔴 `amount` — сума У ВАЛЮТІ РАХУНКУ, а `currencyCode` — валюта ПОКУПКИ (заміряно 07.10.2026 на картці працівника:
+  // гривнева white, покупка $39 → amount −176279, operationAmount −3900, currencyCode 840). Тож валюта операції =
+  // валюта рахунку. Раніше бралась `currencyCode`, і гривнева сума ставала «доларами», а потім ще раз ×курс:
+  // 492,24 ₴ на картці black записались як 22 003 ₴ (#1228). Сума в валюті покупки — лише довідкою в призначенні.
   const amount = (it.amount ?? 0) / 100; // копійки → одиниці, знак зберігається
-  const currency = it.currencyCode != null ? (CCY[String(it.currencyCode)] ?? accountCurrency) : accountCurrency;
+  const opCcy = it.currencyCode != null ? CCY[String(it.currencyCode)] ?? String(it.currencyCode) : null;
+  const foreign = opCcy && opCcy !== accountCurrency && it.operationAmount != null
+    ? `${(Math.abs(it.operationAmount) / 100).toFixed(2)} ${opCcy}` : null;
+  const base = it.comment ?? it.description ?? null;
   const when = new Date((it.time ?? 0) * 1000);
   return {
     externalTxId: `mono:${it.id}`,
@@ -116,10 +134,10 @@ export function normalizeMono(it: MonoItem, accountCurrency: string): Normalized
     processedAt: when,
     counterpartyName: it.counterName ?? it.description ?? null,
     counterpartyIban: it.counterIban ?? null,
-    purpose: it.comment ?? it.description ?? null,
+    purpose: foreign ? `${base ?? "покупка"} · ${foreign}` : base,
     amount, // signed, у валюті рахунку
-    currency,
-    fxRate: null, // Personal API дає суму у валюті рахунку без UAH-крос → фолбек НБУ
+    currency: accountCurrency,
+    fxRate: null, // гривневий рахунок → курс 1; валютний → НБУ на дату
     raw: it,
   };
 }
