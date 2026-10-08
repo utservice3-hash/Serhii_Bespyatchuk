@@ -3,6 +3,7 @@ import "./firstTouch.css";
 import { fetchAiCalls, fetchAiCallsMeta, type AiCallsResp, type AiCallsMetaResp } from "../../../api";
 import { AiCallDrawer } from "./AiCallDrawer";
 import { FirstTouchQueue } from "./FirstTouchQueue";
+import { AnimatedNumber } from "./AnimatedNumber";
 import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
@@ -176,7 +177,7 @@ export function AiCallsSection() {
     && (!needle || `${r.summary ?? ""} ${r.managerName ?? ""} ${r.priceValue ?? ""}`.toLowerCase().includes(needle)));
   const pickTile = (k: TileKey) => { setPreset(preset === k ? "all" : k); setTab("report"); setView("all"); tableRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }); };
   const goodBad = (ok: boolean | null) => (ok == null ? "" : ok ? " is-ok" : " is-bad");
-  const kpi = (k: TileKey, label: string, value: string, sub: string, hint: string, tone = "") => (
+  const kpi = (k: TileKey, label: string, value: React.ReactNode, sub: string, hint: string, tone = "") => (
     <button type="button" className={`ftd-kpi ftd-tile${tone}${preset === k ? " on" : ""}`} aria-pressed={preset === k} onClick={() => pickTile(k)}>
       <span className="ftd-kpi-l">{label}<InfoHint text={hint} /></span>
       <span className="ftd-kpi-v">{value}</span>
@@ -238,16 +239,16 @@ export function AiCallsSection() {
           )}
 
           <section aria-label="Головні числа" className="ftd-kpis">
-            {kpi("noCall", "Обіцяли — дзвінка в телефонії немає", ts.noCall.n.toLocaleString("uk-UA"),
+            {kpi("noCall", "Обіцяли — дзвінка в телефонії немає", <AnimatedNumber value={ts.noCall.n} />,
               `${ts.noCall.of ? `${String(Math.round((ts.noCall.n / ts.noCall.of) * 100))}% від ` : "з "}${String(ts.noCall.of)} обіцянок`,
               "Менеджер пообіцяв передзвонити, а в телефонії його дзвінка немає. Ringostat не бачить особистого мобільного й месенджерів — тому «в телефонії».")}
-            {kpi("noPrice", "Ціна озвучена", ts.price.pct == null ? "—" : `${String(ts.price.pct)}%`, `${String(ts.price.yes)} з ${String(ts.price.of)} · ціль ${String(target)}%`,
+            {kpi("noPrice", "Ціна озвучена", <AnimatedNumber value={ts.price.pct} suffix="%" />, `${String(ts.price.yes)} з ${String(ts.price.of)} · ціль ${String(target)}%`,
               "Серед розібраних, крім втрачених лідів. Клік — розмови, де ціну НЕ назвали. Ціль змінює адмін у «Налаштуваннях».", goodBad(ts.price.pct == null ? null : ts.price.pct >= target))}
-            {kpi("objNotHandled", "Заперечення опрацьовано", ts.objection.pct == null ? "—" : `${String(ts.objection.pct)}%`, ts.objection.of ? `${String(ts.objection.handled)} з ${String(ts.objection.of)} заперечень` : "розбираються для розмов від 09.10",
+            {kpi("objNotHandled", "Заперечення опрацьовано", <AnimatedNumber value={ts.objection.pct} suffix="%" />, ts.objection.of ? `${String(ts.objection.handled)} з ${String(ts.objection.of)} заперечень` : "розбираються для розмов від 09.10",
               "Клієнт сказав «дорого», «подумаю», «порівняю» — і менеджер зʼясував причину, аргументував, запропонував альтернативу чи домовився про крок. Клік — неопрацьовані.")}
-            {kpi("lost", "Втрачені ліди", lost.length.toLocaleString("uk-UA"), lostReact == null ? "реакція — немає даних" : `реакція (медіана) ${fmtMinutes(lostReact)}`,
+            {kpi("lost", "Втрачені ліди", <AnimatedNumber value={lost.length} />, lostReact == null ? "реакція — немає даних" : `реакція (медіана) ${fmtMinutes(lostReact)}`,
               "Клієнт уже вирішив без нас. Реакція — від створення заявки до нашого першого вихідного дзвінка.")}
-            {kpi("success", "Успіх", `${String(ts.success.n)} з ${String(ts.success.of)}`,
+            {kpi("success", "Успіх", <><AnimatedNumber value={ts.success.n} /> з <AnimatedNumber value={ts.success.of} /></>,
               ts.success.n >= SUCCESS_MIN_FOR_PCT ? `${String(Math.round((ts.success.n / Math.max(1, ts.success.of)) * 100))}% угод` : "замало угод для відсотка",
               "Угода з цієї розмови ЗАРАЗ в етапі «Успішно реалізовано» (для кваліфікації — її дочірня угода). Оновлюється з Kommo щопівгодини.")}
           </section>

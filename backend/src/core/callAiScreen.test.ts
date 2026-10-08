@@ -201,6 +201,7 @@ interface ViewMod {
   managerChecklist: (rows: readonly unknown[]) => { name: string; calls: number; score: number | null; request: number | null; price: number | null; promise: number | null }[];
   avgScore3: (s: readonly ({ yes: number; total: number } | null)[]) => number | null;
   markPct: (cls: readonly (Record<string, string> | null)[], key: string) => number | null;
+  aiDefaultPeriod: (today: string) => { mode: string; anchor: string };
   avgScorePct: (s: readonly ({ yes: number; total: number } | null)[]) => number | null;
   tileStats: (rows: readonly unknown[]) => { noCall: { n: number; of: number }; price: { yes: number; of: number; pct: number | null }; objection: { handled: number; of: number; pct: number | null }; lost: number; success: { n: number; of: number } };
   TILE_MATCH: Record<string, (r: unknown) => boolean>;
@@ -1396,4 +1397,23 @@ test("#911 ЗГОРТАННЯ І СКЕЛЕТ: шеврон з aria, плавн�
   const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
   assert.match(css, /\.ftd-collapsible\.is-collapsed \{ grid-template-rows: 0fr; opacity: 0; \}/, "🔴 немає плавної висоти");
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.ftd-collapse svg, \.ftd-collapsible, \.ftd-fade \{ transition: none; \}\s*\.ftd-sk \{ animation: none; \}/, "🔴 анімація не вимикається для «зменшення руху»");
+});
+
+/**
+ * #912 — ПОТОЧНИЙ МІСЯЦЬ І ПЛАВНІ ЧИСЛА (Роман 08.10.2026: «плавне оновлення цифр при зміні команди, і по дефолту щоб
+ * відкривався цей місяць»). Екран відкривається на місяці сьогоднішньої дати; числа на плитках перетікають від старого
+ * значення до нового, перший показ — без анімації, «зменшення руху» — одразу нове значення.
+ * 🧨 Червоніє, якщо за замовчуванням знову діапазон «30 днів», плитки показують сирий текст, або анімація ігнорує
+ * «зменшення руху».
+ */
+test("#912 МІСЯЦЬ І ПЛАВНІ ЧИСЛА: за замовчуванням поточний місяць, плитки перетікають, без руху — одразу", async () => {
+  const V = await loadView();
+  const p = V.aiDefaultPeriod("2026-10-08");
+  assert.deepEqual([p.mode, p.anchor], ["month", "2026-10-08"], "🔴 за замовчуванням не поточний місяць");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  for (const v of ["ts.noCall.n", "ts.price.pct", "ts.objection.pct", "lost.length", "ts.success.n"])
+    assert.ok(sec.includes(`<AnimatedNumber value={${v}}`), `🔴 плитка ${v} без плавного числа`);
+  const an = readFileSync(FE("pages/dashboard/sections/AnimatedNumber.tsx"), "utf8");
+  assert.match(an, /if \(value == null \|\| start == null \|\| start === value \|\| reducedMotion\(\)\) \{ from\.current = value; setShown\(value\); return; \}/, "🔴 «зменшення руху» чи перший показ анімуються");
+  assert.match(an, /matchMedia\?\.\("\(prefers-reduced-motion: reduce\)"\)/, "🔴 не питає систему про «зменшення руху»");
 });
