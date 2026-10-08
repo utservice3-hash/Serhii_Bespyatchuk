@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { AiTurn } from "../../../api";
 import { hiringError } from "../../../api";
 import { mmss, speakerOf } from "../aiCallsView";
@@ -12,8 +12,11 @@ import { mmss, speakerOf } from "../aiCallsView";
 
 export type SeekFn = (t: number) => void;
 
-function Player({ load, marks, onTime, seekRef }: { load: () => Promise<Blob>; marks: number[]; onTime: (t: number) => void;
-  seekRef: React.MutableRefObject<SeekFn | null> }) {
+/** Доріжка мовця під смугою: коли він говорив (з часу реплік), як у «Перевізниках» і макеті D. */
+export interface Lane { label: string; color: string; spans: { start: number; end: number }[] }
+
+function Player({ load, marks, onTime, seekRef, lanes = [], durHint = null }: { load: () => Promise<Blob>; marks: number[]; onTime: (t: number) => void;
+  seekRef: React.MutableRefObject<SeekFn | null>; lanes?: Lane[]; durHint?: number | null }) {
   const audio = useRef<HTMLAudioElement | null>(null);
   const [src, setSrc] = useState<string | null>(null);
   const [state, setState] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -53,11 +56,25 @@ function Player({ load, marks, onTime, seekRef }: { load: () => Promise<Blob>; m
         <button type="button" className="cq-play" onClick={toggle} aria-label={play ? "Пауза" : "Слухати"} disabled={state === "loading"}
           style={{ width: 34, height: 34, borderRadius: "50%", border: 0, background: "var(--brand)", color: "#fff", cursor: "pointer", flex: "none" }}>
           {state === "loading" ? "…" : play ? "❚❚" : "▶"}</button>
-        <div onClick={(e) => { if (!dur) return; const b = e.currentTarget.getBoundingClientRect(); seek((e.clientX - b.left) / b.width * dur); }}
-          style={{ flex: 1, height: 6, borderRadius: 3, background: "var(--border)", position: "relative", cursor: dur ? "pointer" : "default" }}>
-          <i className="cq-bar" style={{ position: "absolute", inset: "0 auto 0 0", width: `${String(dur ? pos / dur * 100 : 0)}%`, background: "var(--brand)", borderRadius: 3 }} />
-          {dur > 0 && marks.map((m, i) => (
-            <span key={i} title="Тут фраза з розбору" style={{ position: "absolute", top: -4, left: `${String(Math.min(100, m / dur * 100))}%`, width: 3, height: 14, background: "var(--warn)", borderRadius: 2 }} />
+        <div style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: lanes.length ? "64px minmax(0, 1fr)" : "minmax(0, 1fr)", gap: "5px 8px", alignItems: "center" }}>
+          {lanes.length > 0 && <span />}
+          <div onClick={(e) => { if (!dur) return; const b = e.currentTarget.getBoundingClientRect(); seek((e.clientX - b.left) / b.width * dur); }}
+            style={{ height: 6, borderRadius: 3, background: "var(--border)", position: "relative", cursor: dur ? "pointer" : "default" }}>
+            <i className="cq-bar" style={{ position: "absolute", inset: "0 auto 0 0", width: `${String(dur ? pos / dur * 100 : 0)}%`, background: "var(--brand)", borderRadius: 3 }} />
+            {(dur || durHint) ? marks.map((m, i) => (
+              <span key={i} title="Тут фраза з розбору" style={{ position: "absolute", top: -4, left: `${String(Math.min(100, m / (dur || durHint || 1) * 100))}%`, width: 3, height: 14, background: "var(--warn)", borderRadius: 2 }} />
+            )) : null}
+          </div>
+          {lanes.map((l) => (
+            <Fragment key={l.label}>
+              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{l.label}</span>
+              <div className="ft-lane" aria-hidden="true" style={{ position: "relative", height: 8, background: "var(--bg, #f4f3f1)", borderRadius: 2 }}>
+                {(dur || durHint) ? l.spans.map((s, i) => (
+                  <span key={i} style={{ position: "absolute", top: 0, bottom: 0, left: `${String(Math.min(100, s.start / (dur || durHint || 1) * 100))}%`,
+                    width: `${String(Math.max(0.6, (s.end - s.start) / (dur || durHint || 1) * 100))}%`, background: l.color, borderRadius: 2 }} />
+                )) : null}
+              </div>
+            </Fragment>
           ))}
         </div>
         <span style={{ fontSize: 12, color: "var(--text-muted)", fontVariantNumeric: "tabular-nums" }}>{mmss(pos)} / {dur ? mmss(dur) : "—"}</span>
@@ -73,19 +90,28 @@ function Player({ load, marks, onTime, seekRef }: { load: () => Promise<Blob>; m
  * Плеєр і репліки разом. `turns` — null, коли тексту цій ролі не віддали (тоді лише плеєр); `quoted` — індекси
  * реплік, на які спирається розбір (`quoteTurnIndex`).
  */
-export function CallConversation({ load, turns, managerChannel, quoted, seekRef, mixed = false }: {
+export function CallConversation({ load, turns, managerChannel, quoted, seekRef, mixed = false, durationSec = null, showTurns = true }: {
   load: () => Promise<Blob>; turns: AiTurn[] | null; managerChannel: number | null; quoted: ReadonlySet<number>;
   seekRef: React.MutableRefObject<SeekFn | null>;
   /** Моно без розділення голосів: підпис «Обидва голоси», а не «Менеджер» — інакше підпис бреше. */
   mixed?: boolean;
+  /** Тривалість запису з розшифровки — щоб доріжки й мітки стояли на місці ще до завантаження. */
+  durationSec?: number | null;
+  /** `false` — лише плеєр із доріжками (черга розбору показує текст окремо). */
+  showTurns?: boolean;
 }) {
   const [now, setNow] = useState(0);
   const list = turns ?? [];
   const marks = [...quoted].map((i) => list[i]?.start).filter((s): s is number => s != null);
+  // Доріжки — лише коли відомо, хто менеджер, і голоси розділені: інакше смуга «Менеджер» брехала б.
+  const lanes: Lane[] = !mixed && managerChannel != null && list.length > 0 ? [
+    { label: "Менеджер", color: "var(--rpt-ink, #16181d)", spans: list.filter((t) => t.channel === managerChannel && t.start != null).map((t) => ({ start: t.start!, end: t.end ?? t.start! + 1 })) },
+    { label: "Клієнт", color: "#b45309", spans: list.filter((t) => t.channel !== managerChannel && t.start != null).map((t) => ({ start: t.start!, end: t.end ?? t.start! + 1 })) },
+  ] : [];
   return (
     <>
-      <Player load={load} marks={marks} onTime={setNow} seekRef={seekRef} />
-      {list.length > 0 && (
+      <Player load={load} marks={marks} onTime={setNow} seekRef={seekRef} lanes={lanes} durHint={durationSec} />
+      {showTurns && list.length > 0 && (
         <div style={{ marginTop: 10, maxHeight: 280, overflowY: "auto" }}>
           {list.map((t, i) => {
             const next = list[i + 1];

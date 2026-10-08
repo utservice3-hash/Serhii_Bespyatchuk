@@ -69,9 +69,9 @@ import * as metrics from "../core/metrics.js";
 import { ga4Configured } from "../ga4/client.js";
 import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
-import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType, setCallNote, canWriteNote, fetchCallRecording } from "../core/callAiScreen.js";
+import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType, setCallNote, canWriteNote, fetchCallRecording, type NoteKind } from "../core/callAiScreen.js";
 import { RECORDING_UNAVAILABLE_UA } from "../core/ringostatRecording.js";
-import { teamReport, isAnalysed, isLost, noPrice, noPriceNoComment, hasAgreement } from "../core/firstTouchTeamReport.js";
+import { teamReport, isAnalysed, isLost, noPrice, noPriceNoComment, hasAgreement, checklist, checklistScore, reviewReason, needsReview } from "../core/firstTouchTeamReport.js";
 import { loadTunables } from "../core/firstTouchTunables.js";
 
 import { canEditType } from "../core/callAiType.js";
@@ -10932,7 +10932,7 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
   const rows = canSeeExcluded ? all.rows : all.rows.filter((r) => r.inReport);
   const truncated = all.truncated;
   res.json({
-    period: { from, to }, truncated, canSeeExcluded,
+    period: { from, to }, truncated, canSeeExcluded, canReview: canWriteNote(req.auth!.roleKey, "review"),
     // Явний перелік полів, а не спред (#17e2).
     rows: rows.map((r) => ({
       kommoIds: r.kommoIds, uniqueid: r.uniqueid, calledAt: r.calledAt,
@@ -10949,6 +10949,8 @@ dashboardRouter.get("/ai-calls", async (req, res) => {
       inReport: r.inReport, typeCheck: r.typeCheck, typeOverride: r.typeOverride,
       priceNote: r.priceNote, missedNote: r.missedNote, offlineNote: r.offlineNote,
       reactionMin: r.reactionMin, reactionOffHours: r.reactionOffHours,
+      // Екран D (08.10.2026): чек-лист і черга розбору — стани від ядра, фронт їх лише складає.
+      checklist: checklist(r), checkScore: checklistScore(checklist(r)), reviewReason: reviewReason(r), needsReview: needsReview(r), reviewNote: r.reviewNote,
     })),
     silence: { minGapHours: SILENCE_RULE.minGapHours, normFrom: SILENCE_RULE.normFrom },
   });
@@ -11032,14 +11034,14 @@ dashboardRouter.post("/ai-calls/:uniqueid/type", async (req, res) => {
 dashboardRouter.put("/ai-calls/:uniqueid/note", async (req, res) => {
   const auth = req.auth!;
   const kind = String(req.body?.kind ?? "");
-  if (!canWriteNote(auth.roleKey, kind)) { res.status(403).json({ error: kind === "missed" ? "«Опрацьовано» пишуть тімлід і адмін" : kind === "offline" ? "«Передзвонив поза телефонією» позначають менеджер (свої), тімлід (команда) і адмін" : "Коментар до ціни пишуть менеджер (свої), тімлід (команда) і адмін" }); return; }
+  if (!canWriteNote(auth.roleKey, kind)) { res.status(403).json({ error: kind === "missed" ? "«Опрацьовано» пишуть тімлід і адмін" : kind === "review" ? "«Розібрано» ставлять тімлід (своя команда) і адмін" : kind === "offline" ? "«Передзвонив поза телефонією» позначають менеджер (свої), тімлід (команда) і адмін" : "Коментар до ціни пишуть менеджер (свої), тімлід (команда) і адмін" }); return; }
   const text = req.body?.text;
   if (typeof text !== "string" || text.length > 2000) { res.status(400).json({ error: "text — рядок до 2000 символів" }); return; }
   const uniqueid = String(req.params.uniqueid);
   const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
   if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
   const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? null;
-  await setCallNote(pool, uniqueid, kind as "price" | "missed" | "offline", text, { userId: auth.userId ?? null, name: who }, new Date());
+  await setCallNote(pool, uniqueid, kind as NoteKind, text, { userId: auth.userId ?? null, name: who }, new Date());
   res.json({ ok: true });
 });
 

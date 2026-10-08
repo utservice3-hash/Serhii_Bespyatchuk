@@ -198,6 +198,10 @@ interface ViewMod {
   promisesLabel: (promises: number, withDeadline: number) => string;
   blobErrorBody: (data: unknown) => Promise<unknown>;
   quoteTurnIndex: (turns: readonly { text: string }[] | null, quote: string) => number;
+  managerChecklist: (rows: readonly unknown[]) => { name: string; calls: number; score: number | null; request: number | null; price: number | null; promise: number | null }[];
+  avgScore3: (s: readonly ({ yes: number; total: number } | null)[]) => number | null;
+  markPct: (cls: readonly (Record<string, string> | null)[], key: string) => number | null;
+  queueRows: (rows: readonly { needsReview: boolean; reviewReason: string | null; calledAt: string; uniqueid?: string }[]) => { uniqueid?: string }[];
 }
 async function transpile(rel: string, deps: Record<string, string> = {}): Promise<string> {
   const ts = (await import("typescript")).default;
@@ -280,7 +284,7 @@ test("#836 ОДИН ДЗВІНОК = ОДИН РЯДОК: розмова, пер
     priceDiscussed: null, objections: 0, promises: 0, promisesWithDeadline: 0, unverifiedQuotes: 0,
     pipelineGroup: "full" as const, rejectReason: null, promiseState: null, managerPromises: 0, silentBeforeClose: null,
     conversationType: null, typeConfidence: null, typeReason: null, priceValue: null, inReport: true, typeCheck: false, typeOverride: null,
-    priceNote: null, missedNote: null, offlineNote: null, clientPhone: null, firstOutboundAt: null, reactionMin: null, reactionOffHours: false };
+    priceNote: null, missedNote: null, offlineNote: null, reviewNote: null, hasRequest: false, clientPhone: null, firstOutboundAt: null, reactionMin: null, reactionOffHours: false };
   const got = collapseByCall([
     { ...base, kommoId: 9, dealCreatedAt: "2026-09-23T07:00:00.000Z" },
     { ...base, kommoId: 5, dealCreatedAt: "2026-09-22T07:00:00.000Z" },
@@ -348,7 +352,7 @@ test("#838 КАРТКА ДЗВІНКА: рядок відкриває панел
   assert.equal(V.promisesLabel(0, 0), "обіцянок немає");
 
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
-  assert.match(sec, /onClick=\{\(\) => setOpen\(r\.uniqueid\)\}/, "🔴 клік по рядку не відкриває картку цього дзвінка");
+  assert.match(sec, /onClick=\{\(\) => \(d\.canReview && r\.needsReview \? openQueue\(r\.uniqueid\) : setOpen\(r\.uniqueid\)\)\}/, "🔴 клік по рядку не відкриває картку (чи розбір) цього дзвінка");
   assert.match(sec, /<AiCallDrawer uniqueid=\{open\} onClose=\{closeCard\}[\s\S]{0,120}?\/>/, "🔴 секція не малює панель картки");
   assert.ok(!/colSpan=\{7\}/.test(sec), "🔴 повернулось розгортання рядка замість панелі");
   assert.match(sec, /useState<string \| null>\(\(\) => parseCallParam\(window\.location\.search\)\)/, "🔴 ?call= не відкриває картку при завантаженні");
@@ -451,18 +455,6 @@ test("#793 ОБІЦЯНКИ НА ЕКРАНІ: підписи станів, фі
   assert.match(drw, /c\.promiseChecks\[i\]/, "🔴 картка не показує термін і стан обіцянки");
 });
 
-/**
- * #796 — ПОРЯДОК КОЛОНОК (прохання Романа 29.09.2026): «Обіцянка» — третя, одразу за менеджером; «Стан» — у
- * кінці й порожній для проаналізованих («Проаналізовано» — норма, а не новина). Інші стани лишаються видимими:
- * «У черзі», «Запису немає» — це причина, чому розбору немає.
- * 🧨 Червоніє, якщо повернути «Стан» третьою колонкою чи знову показувати «Проаналізовано» в рядку.
- */
-test("#796 ТАБЛИЦЯ: «Обіцянка» третя, «Стан» у кінці й порожній для проаналізованих", () => {
-  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
-  const heads = [...sec.matchAll(/<th style=\{cell\}>([^<]+)<\/th>/g)].map((m) => m[1]);
-  assert.deepEqual(heads, ["Розмова", "Менеджер", "Обіцянка", "Про що", "Ціна", "Заперечення", "Стан"], `🔴 порядок колонок: ${heads.join(" · ")}`);
-  assert.match(sec, /<td style=\{cell\}>\{r\.state === "done" \? null : <StateChip state=\{r\.state\} \/>\}<\/td>/, "🔴 «Проаналізовано» знову видно в рядку або стан інших рядків сховано");
-});
 
 /**
  * #855 — «У ЗВІТ ЧИ У ВИКЛЮЧЕНІ» (ТЗ «звіт тімліда» 30.09.2026, п.2): запит на перевезення — у звіті; інший тип з
@@ -1117,4 +1109,94 @@ test("#897 МОНО-ЗАПИС ЧЕСНО: моно — розділення з�
   assert.match(conv, /const who = mixed \? "Обидва голоси" : speakerOf\(t\.channel, managerChannel\);/, "🔴 змішаний текст підписано «Менеджером»");
   const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
   assert.match(drw, /const all = r && !mixed \? \[r\.price, \.\.\.r\.objections, \.\.\.r\.promises\] : \[\];/, "🔴 змішаний моно весь підсвічено");
+});
+
+/**
+ * #898 — ЧЕК-ЛИСТ З 3 ПУНКТІВ І ЧЕРГА РОЗБОРУ (екран D, Роман 08.10.2026 «роби D з 3 пунктів»). Ядро вирішує стан
+ * кожного пункту: запит (є/немає), ціна (втрачений лід — не рахується), обіцянка (виконано · запізнився/немає дзвінка ·
+ * не було/ще не час — не рахується); бал = виконані ÷ ті, що рахуються; нерозібрана розмова чек-листа НЕ має. Черга:
+ * немає дзвінка → втрачений → без ціни → запізнився; «Розібрано» чи «Опрацьовано» виводять з черги.
+ * 🧨 Червоніє, якщо втрачений лід рахувати як «ціну не назвали», «обіцянки не було» — як «ні», нерозібране — як нуль,
+ * чи лишати розібране в черзі. Право «Розібрано» — лише тімлід і адмін.
+ */
+test("#898 ЧЕК-ЛИСТ D: 3 пункти й бал від ядра, черга розбору, розібране виходить з черги", async () => {
+  const R = await import("./firstTouchTeamReport.js");
+  const S = await import("./callAiScreen.js");
+  const base = { uniqueid: "u", calledAt: "2026-10-05T10:00:00.000Z", managerId: 1, managerName: "М", teamName: "Т", inReport: true, state: "done",
+    priceDiscussed: true, promiseState: null, typeCheck: false, priceNote: null, missedNote: null, conversationType: "cargo_request", hasRequest: true, reviewNote: null };
+  assert.deepEqual(R.checklist({ ...base }), { request: "y", price: "y", promise: "o" }, "🔴 без обіцянки пункт мусить не рахуватись");
+  assert.deepEqual(R.checklistScore(R.checklist({ ...base })), { yes: 2, total: 2 });
+  const lost = R.checklist({ ...base, conversationType: "lead_lost", priceDiscussed: false });
+  assert.equal(lost?.price, "o", "🔴 втрачений лід рахується як «ціну не назвали»");
+  assert.equal(R.checklist({ ...base, priceDiscussed: false })?.price, "n", "дзеркало: звичайна розмова без ціни — «ні»");
+  assert.equal(R.checklist({ ...base, hasRequest: false })?.request, "n", "дзеркало: запиту немає — «ні»");
+  for (const st of ["kept_talk", "kept_attempt_only", "kept_offline", "client_called"] as const) assert.equal(R.checklist({ ...base, promiseState: st })?.promise, "y", `🔴 ${st} — не «виконано»`);
+  for (const st of ["late", "broken"] as const) assert.equal(R.checklist({ ...base, promiseState: st })?.promise, "n", `🔴 ${st} — не «ні»`);
+  assert.equal(R.checklist({ ...base, promiseState: "pending" })?.promise, "o", "🔴 термін ще не настав, а пункт уже «ні»");
+  assert.equal(R.checklist({ ...base, state: "queued" }), null, "🔴 нерозібрана розмова отримала чек-лист (нуль замість «не знаємо»)");
+  assert.equal(R.checklistScore(null), null);
+  // Черга
+  assert.equal(R.reviewReason({ ...base, promiseState: "broken", priceDiscussed: false }), "noCall", "🔴 «немає дзвінка» не перша причина");
+  assert.equal(R.reviewReason({ ...base, conversationType: "lead_lost" }), "lost");
+  assert.equal(R.reviewReason({ ...base, priceDiscussed: false }), "noPrice");
+  assert.equal(R.reviewReason({ ...base, promiseState: "late" }), "late");
+  assert.equal(R.reviewReason({ ...base, promiseState: "kept_talk" }), null, "дзеркало: усе виконано — у черзі нема що робити");
+  assert.equal(R.needsReview({ ...base, priceDiscussed: false }), true);
+  assert.equal(R.needsReview({ ...base, priceDiscussed: false, reviewNote: { text: "Розібрано" } }), false, "🔴 розібране лишилось у черзі");
+  assert.equal(R.needsReview({ ...base, promiseState: "broken", missedNote: { text: "ок" } }), false, "🔴 «Опрацьовано» не виводить з черги");
+  const q = R.reviewQueue([{ ...base, priceDiscussed: false }, { ...base, uniqueid: "v", priceDiscussed: false, reviewNote: { text: "x" } }, { ...base, uniqueid: "w" }]);
+  assert.deepEqual(q, { total: 2, reviewed: 1, left: 1, byReason: { noCall: 0, late: 0, noPrice: 1, lost: 0 } }, "🔴 лічильник смуги черги");
+  assert.equal(S.canWriteNote("manager", "review"), false, "🔴 менеджер ставить собі «Розібрано»");
+  assert.equal(S.canWriteNote("team_lead", "review"), true, "дзеркало: тімлід розбирає");
+  assert.equal(S.canWriteNote("admin", "review"), true);
+  const schema = readFileSync(fileURLToPath(new URL("../../src/db/schema.sql", import.meta.url)), "utf8");
+  assert.match(schema, /first_touch_notes_kind_check CHECK \(kind IN \('price', 'missed', 'offline', 'review'\)\);/, "🔴 база не приймає позначку «Розібрано»");
+});
+
+/**
+ * #898b — ЕКРАН D НА ФРОНТІ СКЛАДАЄ, А НЕ ВИРІШУЄ (08.10.2026): частки й бал по менеджерах — середнє по станах від сервера
+ * («не рахується» — поза знаменником), черга — лише рядки з прапорцем `needsReview`, «немає дзвінка» першими.
+ * 🧨 Червоніє, якщо «не рахується» потрапить у знаменник, або черга почне відбирати рядки власним правилом.
+ */
+test("#898b ЕКРАН D: частки й бал по менеджерах — зі станів сервера, черга — з прапорця сервера", async () => {
+  const V = await loadView();
+  assert.equal(V.markPct([{ request: "y", price: "o", promise: "n" }, { request: "y", price: "y", promise: "o" }, null], "price"), 100, "🔴 «не рахується» у знаменнику ціни");
+  assert.equal(V.markPct([{ request: "y", price: "o", promise: "o" }], "promise"), null, "дзеркало: пункт ніде не рахувався — «—», а не 0%");
+  assert.equal(V.avgScore3([{ yes: 1, total: 2 }, { yes: 3, total: 3 }, null, { yes: 0, total: 0 }]), 2.3, "🔴 бал «з 3»: (0,5 + 1) / 2 × 3");
+  const lines = V.managerChecklist([
+    { inReport: true, managerId: 1, managerName: "А", checklist: { request: "y", price: "n", promise: "o" }, checkScore: { yes: 1, total: 2 } },
+    { inReport: true, managerId: 1, managerName: "А", checklist: null, checkScore: null },
+    { inReport: true, managerId: 2, managerName: "Б", checklist: { request: "y", price: "y", promise: "y" }, checkScore: { yes: 3, total: 3 } },
+    { inReport: false, managerId: 2, managerName: "Б", checklist: { request: "n", price: "n", promise: "n" }, checkScore: { yes: 0, total: 3 } },
+  ]);
+  assert.deepEqual(lines.map((l) => [l.name, l.calls, l.score]), [["А", 1, 1.5], ["Б", 1, 3]], "🔴 менеджери: лише розібрані зі звіту, найслабший згори");
+  const q = V.queueRows([
+    { uniqueid: "a", needsReview: true, reviewReason: "noPrice", calledAt: "2026-10-05T10:00:00Z" },
+    { uniqueid: "b", needsReview: false, reviewReason: "noCall", calledAt: "2026-10-05T11:00:00Z" },
+    { uniqueid: "c", needsReview: true, reviewReason: "noCall", calledAt: "2026-10-01T10:00:00Z" },
+  ]);
+  assert.deepEqual(q.map((x) => x.uniqueid), ["c", "a"], "🔴 черга: розібране всередині або «немає дзвінка» не першим");
+});
+
+/**
+ * #898c — ЕКРАН D ЗІБРАНО ЯК У МАКЕТІ (Роман 08.10.2026 «дизайн як на макеті майже 1 в 1»): колонки таблиці — Розмова ·
+ * Менеджер · Про що (AI) · Чек-лист · Обіцянка · Реакція · Розбір; смуга черги й сама черга — лише тому, хто може
+ * «Розібрано» (`canReview` від сервера); стан нерозібраної розмови видно в колонці чек-листа; черга згортається класом
+ * `is-closed`, а при «зменшенні руху» — без анімації. Замінює `#796` (стара таблиця з колонкою «Стан»).
+ * 🧨 Червоніє, якщо переставити колонки, показати чергу менеджеру, сховати стан «У черзі» чи прибрати анімацію/її вимкнення.
+ */
+test("#898c ЕКРАН D: колонки як у макеті, черга лише для тімліда й адміна, згортання в смугу", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  const heads = [...sec.matchAll(/<th style=\{cell\}>([^<]+)<\/th>/g)].map((m) => m[1]);
+  assert.deepEqual(heads, ["Розмова", "Менеджер", "Про що (AI)", "Чек-лист", "Обіцянка", "Реакція", "Розбір"], `🔴 колонки: ${heads.join(" · ")}`);
+  assert.match(sec, /\{d\.canReview && \(\s*<section aria-label="Черга розбору"/, "🔴 смуга черги без перевірки права");
+  assert.match(sec, /\{d\.canReview && \(\s*<FirstTouchQueue rows=\{queue\} open=\{queueOpen\}/, "🔴 черга без перевірки права");
+  assert.match(sec, /const queue = queueRows\(rows\);/, "🔴 черга не з прапорця сервера");
+  assert.match(sec, /: r\.state === "done" \? null : <StateChip state=\{r\.state\} \/>\}<\/td>/, "🔴 стан нерозібраної розмови сховано");
+  const qx = readFileSync(FE("pages/dashboard/sections/FirstTouchQueue.tsx"), "utf8");
+  assert.match(qx, /className=\{`ftd-queue\$\{open \? "" : " is-closed"\}`\}/, "🔴 черга не згортається класом");
+  assert.match(qx, /putAiCallNote\(cur\.uniqueid, "review", note\.trim\(\) \|\| "Розібрано"\)/, "🔴 «Опрацьовано · наступна» не ставить «Розібрано»");
+  const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
+  assert.match(css, /\.ftd-queue\.is-closed \{ transform: translateY\(-20px\) scale\(\.42, \.12\); opacity: 0;/, "🔴 немає анімації згортання в смугу");
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.ftd-over, \.ftd-queue, \.ftd-strip, \.ftd-progress > i \{ transition: none; \}/, "🔴 анімацію не вимкнено для «зменшення руху»");
 });

@@ -4756,6 +4756,10 @@ REVOKE ALL ON first_touch_notes FROM ai_readonly;
 -- Таку позначку ставлять менеджер (свої), тімлід (команда), адмін — і обіцянка рахується виконаною.
 ALTER TABLE first_touch_notes DROP CONSTRAINT IF EXISTS first_touch_notes_kind_check;
 ALTER TABLE first_touch_notes ADD CONSTRAINT first_touch_notes_kind_check CHECK (kind IN ('price', 'missed', 'offline'));
+-- ✅ «Розібрано» (`review`, 08.10.2026, екран D): тімлід переглянув розмову з черги розбору — вона виходить з черги.
+-- Ставлять тімлід (своя команда) і адмін. Текст — коментар менеджеру або «Розібрано», якщо коментаря немає.
+ALTER TABLE first_touch_notes DROP CONSTRAINT IF EXISTS first_touch_notes_kind_check;
+ALTER TABLE first_touch_notes ADD CONSTRAINT first_touch_notes_kind_check CHECK (kind IN ('price', 'missed', 'offline', 'review'));
 -- 🎛 НАЛАШТУВАННЯ «ПЕРШОГО ДОТИКУ» (05.10.2026): вікно повторного дзвінка, допуск і мінімальний дедлайн передзвону,
 -- колір блоку «дзвінка в телефонії немає». Журнал: кожна зміна — новий рядок з автором, чинне — останній рядок,
 -- порожньо — поточна поведінка (`core/firstTouchTunables.ts`). Змінює лише адмін у «Налаштуваннях».
