@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchAiCallCard, fetchAiCallRecording, putAiCallNote, hiringError, type AiCallCardResp, type AiCallRowT } from "../../../api";
-import { CHECK_ITEMS, CHECK_MARK_UI, REVIEW_REASON_UI, PROMISE_UI, TONE_COLOR, TYPE_LABEL, mmss, quoteTurnIndex, scoreLabel } from "../aiCallsView";
+import { REVIEW_REASON_UI, TONE_COLOR, TYPE_LABEL, mmss, quoteTurnIndex, scoreLabel } from "../aiCallsView";
 import { CallConversation, type SeekFn } from "./CallConversation";
 import { Analysis, QuoteSeek } from "./AiCallDrawer";
+import { ChecklistBlock } from "./FirstTouchChecklist";
 
 /**
  * 🗂 ЧЕРГА РОЗБОРУ ТІМЛІДА (екран D, розкладка B — Роман 08.10.2026). Зліва — розмови, що потребують розбору (прапорець
@@ -17,7 +18,6 @@ const fmtFull = (iso: string) => new Date(iso).toLocaleString("uk-UA", {
 const fmtShort = (iso: string) => new Date(iso).toLocaleString("uk-UA", {
   timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
 });
-const DOT: Record<"y" | "n" | "o", { mark: string; bg: string }> = { y: { mark: "✓", bg: "#166534" }, n: { mark: "✕", bg: "#b91c1c" }, o: { mark: "–", bg: "#9ca3af" } };
 
 export function FirstTouchQueue({ rows, open, selected, onSelect, onClose, onReviewed, onOpenCard, title }: {
   rows: AiCallRowT[]; open: boolean; selected: string | null; onSelect: (uniqueid: string) => void; onClose: () => void;
@@ -48,18 +48,6 @@ export function FirstTouchQueue({ rows, open, selected, onSelect, onClose, onRev
   // Фрази-докази в тексті (жовтим) і «▶ час» у розборі — ті самі правила, що в боковій картці: лише дослівна цитата.
   const quotedIdx = new Set(r && c?.mono !== "mixed" ? [r.price, ...r.objections, ...r.promises].map((x) => quoteTurnIndex(turns, x.quote)).filter((i) => i >= 0) : []);
   const seekQuote = (quote: string, go = false): number | null => { const t = at(quote); if (go && t != null) seekRef.current?.(t); return t; };
-  const promise = r?.promises.find((p) => p.who === "manager" && p.channel === "call") ?? null;
-  // Обіцянка написати (Viber, Telegram) — Ringostat месенджерів не бачить: пункт «не рахується», але сказати «не було» — неправда.
-  const msgPromise = !promise ? r?.promises.find((p) => p.who === "manager" && p.channel !== "call") ?? null : null;
-  const evidence: Record<"request" | "price" | "promise", { text: string; quote?: string }> = {
-    request: { text: r?.client_request?.trim() || "запиту клієнта модель не виділила" },
-    price: { text: r ? (r.price.discussed ? "ціну назвали" : cur?.conversationType === "lead_lost" ? "втрачений лід — називати нікому" : "ціни не прозвучало") : "", quote: r?.price.quote },
-    promise: promise
-      ? { text: `${promise.what}${cur?.promiseState ? ` · ${PROMISE_UI[cur.promiseState].label.toLowerCase()}` : ""}`, quote: promise.quote }
-      : msgPromise
-        ? { text: `обіцянка написати: ${msgPromise.what} — перевірити нічим, Ringostat месенджерів не бачить`, quote: msgPromise.quote }
-        : { text: "обіцянки передзвонити чи написати не було" },
-  };
 
   const next = () => {
     const i = rows.findIndex((x) => x.uniqueid === cur?.uniqueid);
@@ -132,25 +120,8 @@ export function FirstTouchQueue({ rows, open, selected, onSelect, onClose, onRev
               {c && (
                 <>
                   {r?.summary && <p style={{ margin: 0, fontSize: 15, lineHeight: 1.55 }}>{r.summary}</p>}
-                  <div>
-                    {CHECK_ITEMS.map((it) => {
-                      const m = cur?.checklist?.[it.key] ?? "o";
-                      const ev = evidence[it.key];
-                      const t = at(ev.quote);
-                      return (
-                        <div key={it.key} className="ftd-check">
-                          <span aria-hidden="true" className="ftd-check-dot" style={{ background: DOT[m].bg }}>{DOT[m].mark}</span>
-                          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                            <div><b>{it.label}</b> <span style={{ fontSize: 13, color: DOT[m].bg, fontWeight: 600 }}>· {CHECK_MARK_UI[m].label}</span></div>
-                            <div style={{ fontSize: 13, color: "var(--text-muted)" }}>{ev.text}</div>
-                            {ev.quote?.trim() && (t != null
-                              ? <button type="button" className="ftd-quote" onClick={() => seekRef.current?.(t)}>▶ <b>{mmss(t)}</b> «{ev.quote}»</button>
-                              : <span className="ftd-quote" style={{ cursor: "default" }}>«{ev.quote}»</span>)}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                  <ChecklistBlock c={c} checklist={cur?.checklist ?? null} promiseState={cur?.promiseState ?? null} conversationType={cur?.conversationType ?? null}
+                    onSeek={(t) => seekRef.current?.(t)} />
                   <label htmlFor="ftd-review-note" style={{ fontSize: 13, fontWeight: 600 }}>Коментар менеджеру <span className="ftd-sub">· необовʼязково</span></label>
                   <textarea id="ftd-review-note" value={note} maxLength={2000} onChange={(e) => setNote(e.target.value)}
                     placeholder={`Що сказати ${cur?.managerName ?? "менеджеру"} по цій розмові`}

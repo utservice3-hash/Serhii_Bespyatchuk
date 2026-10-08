@@ -1,8 +1,9 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { fetchAiCallCard, setAiCallType, putAiCallNote, fetchAiCallRecording, hiringError, type AiCallCardResp, type AiQuoted } from "../../../api";
-import { STATE_UI, TONE_COLOR, PROMISE_UI, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, quoteTurnIndex, TYPE_LABEL, type AiCallState, type Tone } from "../aiCallsView";
+import { STATE_UI, TONE_COLOR, PROMISE_UI, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, quoteTurnIndex, scoreLabel, REVIEW_REASON_UI, TYPE_LABEL, type AiCallState, type Tone } from "../aiCallsView";
 import { CallConversation, type SeekFn } from "./CallConversation";
+import { ChecklistBlock } from "./FirstTouchChecklist";
 import "./hiring.css";
 
 /**
@@ -206,6 +207,30 @@ function NotesBlock({ c, onSaved }: { c: AiCallCardResp; onSaved: () => void }) 
 }
 
 
+/**
+ * ✅ «Розібрано» з бічної картки (08.10.2026): розмову з черги можна розібрати й тут, не заходячи в режим черги.
+ * Кнопка — лише коли сервер каже, що розмова потребує розбору і цей користувач може її розібрати.
+ */
+function ReviewBar({ c, onDone }: { c: AiCallCardResp; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const rn = c.row.reviewNote;
+  if (rn) return <div style={{ fontSize: 12.5, color: "var(--ok, #166534)", marginTop: 6 }}>Розібрано · {rn.byName ?? "—"} · {fmtFull(rn.at)}{rn.text !== "Розібрано" ? ` · «${rn.text}»` : ""}</div>;
+  if (!c.needsReview || !c.canReview) return null;
+  const go = async () => {
+    setBusy(true); setMsg(null);
+    try { await putAiCallNote(c.row.uniqueid, "review", "Розібрано"); onDone(); } catch (e) { setMsg(hiringError(e)); }
+    setBusy(false);
+  };
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
+      <button type="button" className="hr-btn" disabled={busy} onClick={() => void go()}>{busy ? "Зберігаю…" : "Розібрано"}</button>
+      {c.reviewReason && <span style={{ fontSize: 12.5, color: "var(--text-muted)" }}>у черзі розбору: {REVIEW_REASON_UI[c.reviewReason].label.toLowerCase()}</span>}
+      {msg && <span style={{ fontSize: 12.5, color: "var(--danger)" }}>{msg}</span>}
+    </div>
+  );
+}
+
 export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: string; onClose: () => void; onChanged?: () => void }) {
   const [c, setC] = useState<AiCallCardResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -283,6 +308,16 @@ export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: strin
             </div>
 
             <TypeBlock c={c} onChanged={() => { setRev((x) => x + 1); onChanged?.(); }} />
+            {c.checklist && (
+              <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <div style={{ fontSize: 11.5, color: "var(--text-muted)", fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase" }}>Чек-лист першого дотику</div>
+                  <b style={{ fontVariantNumeric: "tabular-nums" }}>{scoreLabel(c.checkScore)?.replace("/", " / ") ?? "—"}</b>
+                </div>
+                <ChecklistBlock c={c} checklist={c.checklist} promiseState={c.row.promiseState} conversationType={c.row.conversationType} onSeek={(t) => seekRef.current?.(t)} />
+                <ReviewBar c={c} onDone={() => { setRev((x) => x + 1); onChanged?.(); }} />
+              </div>
+            )}
             <NotesBlock c={c} onSaved={() => { setRev((x) => x + 1); onChanged?.(); }} />
             {listen && (
               <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12 }}>

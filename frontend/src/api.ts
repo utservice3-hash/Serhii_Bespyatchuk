@@ -432,6 +432,9 @@ export interface AiCallCardResp {
   canEditType: boolean;
   /** Хто що може писати й чи можна слухати запис — вирішує сервер. */
   noteRights: { price: boolean; missed: boolean; offline: boolean };
+  /** Екран D: чек-лист і стан розбору — ті самі, що в рядку списку; `canReview` — тімлід і адмін. */
+  checklist: AiChecklistT | null; checkScore: { yes: number; total: number } | null;
+  reviewReason: AiReviewReasonT | null; needsReview: boolean; canReview: boolean;
   canListen: boolean;
 }
 /** Коментар: `price` — «Чому не озвучено ціну», `missed` — «Опрацьовано». Порожній текст прибирає. */

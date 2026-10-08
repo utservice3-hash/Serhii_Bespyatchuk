@@ -324,8 +324,7 @@ export function AiCallsSection() {
                     <tbody>
                       {shownD.map((r) => (
                         <tr key={r.uniqueid} className="ftd-row" tabIndex={0} aria-label={`Відкрити розмову ${fmtTime(r.calledAt)}`}
-                          onClick={() => (d.canReview && r.needsReview ? openQueue(r.uniqueid) : setOpen(r.uniqueid))}
-                          onKeyDown={(e) => { if (e.key === "Enter") { if (d.canReview && r.needsReview) openQueue(r.uniqueid); else setOpen(r.uniqueid); } }}>
+                          onClick={() => setOpen(r.uniqueid)} onKeyDown={(e) => { if (e.key === "Enter") setOpen(r.uniqueid); }}>
                           <td style={{ whiteSpace: "nowrap" }}><b>{fmtTime(r.calledAt)}</b><div className="ftd-sub">{r.direction === "in" ? "вхідний" : "вихідний"} · {mmss(r.billsec)}</div></td>
                           <td style={{ whiteSpace: "nowrap" }}>{r.managerName ?? "невідомий"}<div className="ftd-sub">{r.teamName ?? ""}</div></td>
                           <td style={{ maxWidth: 380 }}>
@@ -360,7 +359,7 @@ export function AiCallsSection() {
                   </table>
                 )}
             </div>
-            <div className="ftd-foot">Квадрати чек-листа: запит · ціна · обіцянка (зелений — так, червоний — ні, сірий — не рахується). Клік по рядку з черги відкриває розбір, по іншому — картку.</div>
+            <div className="ftd-foot">Квадрати чек-листа: запит · ціна · обіцянка (зелений — так, червоний — ні, сірий — не рахується). Клік по рядку — картка розмови; розбір черги — кнопкою «Почати розбір» у смузі.</div>
           </section>
         </div>
 
