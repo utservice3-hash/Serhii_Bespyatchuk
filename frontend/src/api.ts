@@ -1112,6 +1112,8 @@ export interface KvpManager {
   avgCheckAwaiting: number | null; awaitingDeals: number; expectedThisMonth: number; expectedNextMonth: number; expectedPastMonths: number;
   createdSplit: CreatedSplit;
   daily: KvpDay[]; weeks: KvpWeek[];
+  /** План місяця − факт з 1-го числа; лише коли звіт = один повний місяць, інакше null. Відʼємний = понад план. */
+  remainingToPlan?: number | null;
 }
 export interface KvpExpBucket { deals: number; sum: number }
 // Крок Д фінал A — детальний дрил менеджера weeks→days (лінивий фетч)
@@ -1154,6 +1156,8 @@ export interface KvpTeam {
   // #4 два чеки команди: «успішно» (success за місяць) + «в очікуванні» (chainInflight знімок).
   avgCheckSuccess: number | null; avgCheckAwaiting: number | null;
   expectedThisMonth: number; expectedNextMonth: number; expectedPastMonths: number; weeks: KvpWeek[];
+  /** План місяця − факт з 1-го числа; лише коли звіт = один повний місяць, інакше null. Відʼємний = понад план. */
+  remainingToPlan?: number | null;
 }
 export interface KvpSignal { severity: "critical" | "serious" | "warning" | "info"; icon: string; title: string; detail: string; action: string; expectedThisMonth?: number; expectedNextMonth?: number }
 export interface KvpSeriesRow { ym: string; [k: string]: number | string | boolean }

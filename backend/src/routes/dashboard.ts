@@ -137,7 +137,7 @@ import * as reactCycleRules from "../core/reactCycleRules.js";
 import * as clientAliasNames from "../core/clientAliasNames.js";
 import * as categoryRules from "../core/categoryRules.js";
 import { monthsInRange, fixedWeekBlocks, weekBlocksForRange, workingDaysBetween, monthEndOf, kyivToday, isRealDate, periodNotOver } from "../core/dates.js";
-import { weekPlansForMonth } from "../core/weekPlan.js";
+import { weekPlansForMonth, futureWeekPlan, type WeekPlanRow } from "../core/weekPlan.js";
 import { sumDaysIntoBlocks } from "../core/weekFacts.js";
 import { syncReceivables } from "../jobs/syncReceivables.js";
 import { recomputeOwners } from "../core/receivablesOwnerStore.js";
@@ -9960,8 +9960,8 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   const mgrDailyMap = new Map<number, { bucket: string; revenue: number; deals: number }[]>();
   for (const r of mgrDaily) { const a = mgrDailyMap.get(r.managerId) ?? []; a.push({ bucket: r.bucket, revenue: r.revenue, deals: r.deals }); mgrDailyMap.set(r.managerId, a); }
 
-  // Крок Д фінал #2: тижневий розріз Т1–Т5 (лише одномісячний скоуп). План тижня =
-  // місячний план × (робочі дні тижня ÷ робочі дні місяця) → Σ тижнів план == місяць.
+  // Крок Д фінал #2: тижневий розріз Т1–Т5 (лише одномісячний скоуп). План тижня — динамічний
+  // (див. `weeksForMgr` нижче, ТЗ Юлі 05.10.2026); рівна частка `план × wd ÷ wdMonth` — лише фолбек.
   // Факт тижня = received за датою оплати в тижні → Σ тижнів факт == місяць. RAW (без
   // округлення) — щоб Σ звірялось точно; FE округлює на показ.
   const weekBlocks = months.length === 1 ? fixedWeekBlocks(months[0]) : [];
@@ -9978,7 +9978,24 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
   // /manager-report): effectiveWeekTargets (manual ?? dynamicTarget.week). Замінює власний
   // fixedWeekBlocks-розрахунок для ПОТОЧНОГО тижня (минулі/майбутні лишаються апортованими
   // для показу Т1–Т5). Місяць = months[0] (KVP — одномісячний скоуп для тижневого розрізу).
-  const effWeekKvp = weekBlocks.length ? await plans.effectiveWeekTargets({ month: months[0] }, kyivTodayW) : new Map<number, plans.EffWeekTarget>();
+  const wpSinkKvp: { rows?: WeekPlanRow[] } = {};
+  const effWeekKvp = weekBlocks.length ? await plans.effectiveWeekTargets({ month: months[0] }, kyivTodayW, wpSinkKvp) : new Map<number, plans.EffWeekTarget>();
+  /**
+   * 📅 ТИЖНІ Т1–Т5 — ДИНАМІЧНИЙ ПЛАН (ТЗ Юлі 05.10.2026, «невиконане переноситься на тижні, що залишились»).
+   *  · МИНУЛИЙ тиждень — план, зафіксований на його початок (знімок; нульовий при заведеному плані
+   *    відновлюється від залишку — `snapshotUsable`). Заднім числом не перераховується.
+   *  · ПОТОЧНИЙ — єдина ціль `effectiveWeekTargets` (ручна ?? динамічна), як і було.
+   *  · МАЙБУТНІЙ — залишок на початок ПОТОЧНОГО тижня × дні тижня ÷ дні до кінця місяця (`futureWeekPlan`):
+   *    стабільний до понеділка. Місяць, що ще не почався, — від повного плану, тобто рівна частка.
+   * ⚠️ Σ тижнів ≠ план місяця, і це за побудовою: минулі плани лишаються, а недобір іде зверху на наступні.
+   * Сходиться з місячним планом «залишок до плану місяця» (`remainingToPlan`), а не Σ тижнів.
+   */
+  // Звіт рівно за один повний місяць (той самий вираз, що `monthAligned` нижче) — лише тоді `plan`/`revenue`
+  // рядка означають «план місяця» і «факт з 1-го числа», і їхня різниця є залишком до плану.
+  const kvpWholeMonth = months.length === 1 && /-01$/.test(from)
+    && to === new Date(Date.UTC(Number(to.slice(0, 4)), Number(to.slice(5, 7)), 0)).toISOString().slice(0, 10);
+  const wpByKey = new Map((wpSinkKvp.rows ?? []).map((r) => [`${r.managerId}:${r.weekStart}`, r]));
+  const curBlockKvp = weekBlocks.find((w) => w.from <= kyivTodayW && kyivTodayW <= w.to) ?? null;
   // #2 pace поточного тижня = минулі робочі дні тижня ÷ усі робочі дні тижня.
   const paceOf = (w: { from: string; to: string }, isCurrent: boolean): number | null => {
     if (!isCurrent) return null;
@@ -9990,7 +10007,14 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
     const wd = workingDaysBetween(w.from, w.to);
     const isCur = w.from <= kyivTodayW && kyivTodayW <= w.to;
     // Поточний тиждень — ЄДИНА ціль (manual ?? dynamic); інші — статичний апорт для Т1–Т5.
-    const plan = isCur && effWeekKvp.has(mid) ? effWeekKvp.get(mid)!.target : (wdMonth > 0 ? monthPlan * wd / wdMonth : 0);
+    const equalShare = wdMonth > 0 ? monthPlan * wd / wdMonth : 0;
+    const past = wpByKey.get(`${mid}:${w.from}`);
+    const base = curBlockKvp ? wpByKey.get(`${mid}:${curBlockKvp.from}`) : undefined;
+    const plan = isCur
+      ? (effWeekKvp.get(mid)?.target ?? equalShare)
+      : w.to < kyivTodayW
+        ? (past ? past.plan : equalShare)
+        : (base ? futureWeekPlan(base, wd) : equalShare);
     const fact = (mgrDailyMap.get(mid) ?? []).filter((d) => d.bucket >= w.from && d.bucket <= w.to).reduce((a, d) => a + d.revenue, 0);
     const expected = (mgrDayExpMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.sum, 0);
     const auto = (mgrDayDispMap.get(mid) ?? []).filter((d) => d.day >= w.from && d.day <= w.to).reduce((a, d) => a + d.deals, 0);
@@ -10119,6 +10143,9 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       avgCheckAwaiting: ciMgrMap.get(mid)?.avgCheck ?? null, awaitingDeals: ciMgrMap.get(mid)?.deals ?? 0,
       // ONE-NUMBER тижнева ціль (effectiveWeekTargets — байт-в-байт зі Звітом).
       weekTarget: effWeekKvp.get(mid)?.target ?? 0,
+      // 🎯 Залишок до плану місяця (ТЗ Юлі 05.10.2026) — лише коли звіт = рівно один повний місяць: тоді `plan`
+      // і `revenue` — місяць і факт із 1-го числа. Відʼємний = понад план. Інакше `null` (план частковий).
+      remainingToPlan: kvpWholeMonth ? mp.plan - rev : null,
       conversion: cv && cv.entered >= 10 ? cv.cohortPct : null, convEntered: cv?.entered ?? 0,
       expected: expByMgr.get(mid)?.sum ?? 0,
       // #2 очікування за плановою датою оплати (цей / наступний календарний місяць).
@@ -10161,6 +10188,7 @@ dashboardRouter.get("/kvp-report", async (req, res) => {
       expectedThisMonth: expTeamThisMap.get(t.teamId) ?? 0, expectedNextMonth: expTeamNextMap.get(t.teamId) ?? 0,
       expectedPastMonths: expTeamPastMap.get(t.teamId) ?? 0,
       weeks: teamWeeks,
+      remainingToPlan: kvpWholeMonth ? t.plan - t.revenue : null,
       managers: t.managers.sort((a, b) => (Number(a.pct) || 0) - (Number(b.pct) || 0)),
     };
   }).sort((a, b) => b.revenue - a.revenue);

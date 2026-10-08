@@ -1,6 +1,6 @@
 import { pool } from "../db/pool.js";
 import { workingDaysBetween, monthEndOf, fixedWeekBlocks } from "./dates.js";
-import { weekPlansForMonth } from "./weekPlan.js";
+import { weekPlansForMonth, type WeekPlanRow } from "./weekPlan.js";
 import { receivedByMgr } from "./money.js";
 import { hasPlanSql, stateJoinSql } from "./managerState.js";
 import { teamAtSql, sqlDate } from "./teamAt.js";
@@ -331,7 +331,16 @@ export async function manualWeekTasksOn(day: string): Promise<Map<number, { targ
  * /manager-report кличуть ЦЮ функцію з тим самим (month, kyivToday, managerId) — тижнева
  * ціль байт-в-байт однакова. `scope.month` — місяць перегляду; `kyivToday` — київське сьогодні.
  */
-export async function effectiveWeekTargets(scope: DynScope, kyivToday: string): Promise<Map<number, EffWeekTarget>> {
+export async function effectiveWeekTargets(
+  scope: DynScope, kyivToday: string,
+  /**
+   * Куди віддати ВСІ тижні місяця (минулі — знімки, майбутні — наживо), якщо вони потрібні викликачу.
+   * Звіт КВП малює Т1–Т5 саме з них (ТЗ Юлі 05.10: минулі — план на початок тижня, майбутні — від залишку),
+   * і окремий виклик `weekPlansForMonth` подвоїв би запити та — гірше — міг би заморозити тиждень іншим
+   * місячним планом, ніж цей. Тому рядки беруться з того самого обчислення, що й ціль поточного тижня.
+   */
+  sink?: { rows?: WeekPlanRow[] },
+): Promise<Map<number, EffWeekTarget>> {
   const dyn = await dynamicTarget(scope, "week");
   /**
    * 🗓 БАЗИС ТИЖНЕВОЇ ЦІЛІ — РОБОЧІ ДНІ + ЗАМОРОЖЕННЯ (рішення власника 06.08.2026).
@@ -352,6 +361,7 @@ export async function effectiveWeekTargets(scope: DynScope, kyivToday: string): 
   const monthStart = (scope.month ?? kyivToday).slice(0, 7) + "-01";
   const planByMgr = new Map(dyn.map((d) => [d.managerId, d.monthPlan]));
   const wpRows = await weekPlansForMonth({ managerId: scope.managerId, teamId: scope.teamId }, monthStart, planByMgr);
+  if (sink) sink.rows = wpRows;
   const curWeekStart = fixedWeekBlocks(monthStart).find((w) => kyivToday >= w.from && kyivToday <= w.to)?.from ?? null;
   const wpByMgr = new Map(wpRows.filter((r) => r.weekStart === curWeekStart).map((r) => [r.managerId, r]));
   /**
