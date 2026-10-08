@@ -164,7 +164,7 @@ export async function runCallAiTick(env: TickEnv): Promise<TickReport> {
   const stt = await drainWithBudget(() => runSttPortion(env.db, {
     apiKey: env.keys.elevenlabs,
     download: async (url) => { await throttle(); return downloadRecording(env.http, url, { ...RINGOSTAT_POLICY, maxBytes: RECORDING_MAX_BYTES }); },
-    transcribe: (key, audio) => elevenLabsTranscribe(env.http, key, audio, STT_POLICY),
+    transcribe: (key, audio, opts) => elevenLabsTranscribe(env.http, key, audio, STT_POLICY, opts),
   }, {
     ...common, now: env.now(), operation: "stt", provider: STT_PROVIDER, model: ELEVENLABS_STT_MODEL,
     monthCapUsd: env.prices.sttMonthCapUsd,

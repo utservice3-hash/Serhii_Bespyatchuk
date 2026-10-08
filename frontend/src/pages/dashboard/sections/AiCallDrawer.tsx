@@ -234,10 +234,13 @@ export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: strin
   // Текст реплік — лише коли сервер його віддав (`drawerTabs`); без нього — тільки плеєр.
   const turns = c && tabs.includes("transcript") ? c.turns : null;
   const listen = c != null && c.canListen && c.durationSec != null;
+  // Моно без розділення: уся розмова — одна репліка, тож «місце цитати» = весь текст і час 0:00. Не підсвічуємо й не
+  // перемотуємо — це вдавало б точність, якої немає.
+  const mixed = c?.mono === "mixed";
   const quoted = useMemo(() => {
-    const all = r ? [r.price, ...r.objections, ...r.promises] : [];
+    const all = r && !mixed ? [r.price, ...r.objections, ...r.promises] : [];
     return new Set(all.map((q) => quoteTurnIndex(turns, q.quote)).filter((i) => i >= 0));
-  }, [r, turns]);
+  }, [r, turns, mixed]);
   const seekQuote = (quote: string, go = false): number | null => {
     const i = quoteTurnIndex(turns, quote); const t = i >= 0 ? turns?.[i]?.start ?? null : null;
     if (go && t != null) seekRef.current?.(t);
@@ -286,12 +289,19 @@ export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: strin
                 <div style={{ fontSize: 11.5, color: "var(--text-muted)", fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase", marginBottom: 8 }}>
                   Розмова{turns ? ` · ${String(turns.length)} реплік` : ""}
                 </div>
-                <CallConversation load={() => fetchAiCallRecording(c.row.uniqueid)} turns={turns} managerChannel={c.managerChannel} quoted={quoted} seekRef={seekRef} />
+                {c.mono && (
+                  <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "var(--text-muted)" }}>
+                    {c.mono === "mixed"
+                      ? "Запис моно: обидва голоси в одному каналі й не розділені — текст іде одним шматком, перемотки по репліках немає."
+                      : "Запис моно: голоси розділено за звучанням, а не за каналом — підпис «Менеджер / Клієнт» може помилятись."}
+                  </p>
+                )}
+                <CallConversation load={() => fetchAiCallRecording(c.row.uniqueid)} turns={turns} managerChannel={c.managerChannel} quoted={quoted} seekRef={seekRef} mixed={mixed} />
               </div>
             )}
 
             <div style={{ fontSize: 11.5, color: "var(--text-muted)", fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase" }}>Розбір</div>
-            <QuoteSeek.Provider value={listen && turns ? seekQuote : null}>
+            <QuoteSeek.Provider value={listen && turns && !mixed ? seekQuote : null}>
               <Analysis c={c} />
             </QuoteSeek.Provider>
           </>

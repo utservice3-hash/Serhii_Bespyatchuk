@@ -73,9 +73,11 @@ function Player({ load, marks, onTime, seekRef }: { load: () => Promise<Blob>; m
  * Плеєр і репліки разом. `turns` — null, коли тексту цій ролі не віддали (тоді лише плеєр); `quoted` — індекси
  * реплік, на які спирається розбір (`quoteTurnIndex`).
  */
-export function CallConversation({ load, turns, managerChannel, quoted, seekRef }: {
+export function CallConversation({ load, turns, managerChannel, quoted, seekRef, mixed = false }: {
   load: () => Promise<Blob>; turns: AiTurn[] | null; managerChannel: number | null; quoted: ReadonlySet<number>;
   seekRef: React.MutableRefObject<SeekFn | null>;
+  /** Моно без розділення голосів: підпис «Обидва голоси», а не «Менеджер» — інакше підпис бреше. */
+  mixed?: boolean;
 }) {
   const [now, setNow] = useState(0);
   const list = turns ?? [];
@@ -88,7 +90,7 @@ export function CallConversation({ load, turns, managerChannel, quoted, seekRef 
           {list.map((t, i) => {
             const next = list[i + 1];
             const cur = t.start != null && now > 0 && now >= t.start && (!next || next.start == null || now < next.start);
-            const who = speakerOf(t.channel, managerChannel);
+            const who = mixed ? "Обидва голоси" : speakerOf(t.channel, managerChannel);
             return (
               <p key={i} className="cq-line" title="Перемотати сюди" onClick={() => { if (t.start != null) seekRef.current?.(t.start); }}
                 style={{ margin: "1px 0", fontSize: 13, padding: "3px 6px", borderRadius: 6, cursor: "pointer", background: cur ? "var(--info-bg)" : undefined }}>

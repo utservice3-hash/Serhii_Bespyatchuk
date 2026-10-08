@@ -413,6 +413,8 @@ export interface AiCallCardResp {
   dealUrls: { kommoId: number; url: string }[];
   result: AiAnalysis | null; turns: AiTurn[] | null; transcriptHidden: boolean;
   managerChannel: number | null; durationSec: number | null; nextOutboundAt: string | null;
+  /** Запис одним каналом: `mixed` — голоси не розділено, `voices` — розділено за голосом; `null` — стерео. */
+  mono: "mixed" | "voices" | null;
   /** Термін і стан кожної обіцянки — у порядку `result.promises`; обіцянки клієнта → `null`. */
   promiseChecks: ({ deadline: string; countUntil: string; basis: string; state: PromiseStateT } | null)[];
   callsAfter: { at: string; billsec: number; direction: "in" | "out"; managerName: string | null; byPromiser: boolean }[];

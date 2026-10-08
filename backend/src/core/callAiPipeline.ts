@@ -322,7 +322,8 @@ export interface SttParams extends QueueParams {
 export interface SttWorker {
   apiKey: string;
   download: (recordingUrl: string | null) => Promise<DownloadOutcome>;
-  transcribe: (apiKey: string, audio: SttAudio) => Promise<SttResult>;
+  /** `mono` — у файлі один канал: голоси розділяються за звучанням (`STT_MONO_FORM_FIELDS`). */
+  transcribe: (apiKey: string, audio: SttAudio, opts?: { mono?: boolean }) => Promise<SttResult>;
 }
 
 /** Поставити дзвінки в чергу розпізнавання. Повтор нічого не дублює (`UNIQUE` + `DO NOTHING`). */
@@ -389,7 +390,7 @@ export async function runSttPortion(db: Db, w: SttWorker, p: SttParams): Promise
         r.stoppedBy = why;
         break;
       }
-      const stt = await w.transcribe(w.apiKey, { bytes: got.bytes, contentType: "audio/wav" });
+      const stt = await w.transcribe(w.apiKey, { bytes: got.bytes, contentType: "audio/wav" }, { mono: got.info.channels === 1 });
       const turns = toTurns(stt);
       const done = await db.query<{ updated: number }>(
         `WITH l AS (
