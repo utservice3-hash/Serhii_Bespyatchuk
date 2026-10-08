@@ -627,7 +627,9 @@ test("#864 ЗВІТ ТІМЛІДА НА ЕКРАНІ: блок у «Звіті»
   assert.match(card, /fetchAiTeamReport\(\{ from, to, teamId \}\)/);
   const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
   assert.match(drw, /const listen = c != null && c\.canListen && c\.durationSec != null;/, "🔴 запис показується без дозволу сервера");
-  assert.match(drw, /\{listen && \([\s\S]{0,600}?<CallConversation /, "🔴 плеєр не за дозволом listen");
+  const lAt = drw.indexOf("{listen && (");
+  const listenBlock = lAt < 0 ? "" : drw.slice(lAt, drw.indexOf("\n            )}", lAt)); // до закриття саме цього блоку
+  assert.ok(listenBlock.includes("<CallConversation "), "🔴 плеєр не за дозволом listen");
   assert.match(drw, /const can = c\.noteRights\[kind\];/, "🔴 право писати коментар — не з сервера");
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
   assert.match(sec, /\{d\.canSeeExcluded && <button type="button" role="tab"/, "🔴 менеджер бачить вкладку «Виключені»");
@@ -1059,6 +1061,60 @@ test("#895 РОЗМОВА ЯК У «ПЕРЕВІЗНИКАХ»: плеєр і р
   assert.match(conv, /quoted\.has\(i\) \? <mark/, "🔴 фрази з розбору не підсвічено");
   const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
   assert.match(drw, /<CallConversation load=\{\(\) => fetchAiCallRecording\(c\.row\.uniqueid\)\}/, "🔴 запис вантажиться не через наш роут");
-  assert.match(drw, /<QuoteSeek\.Provider value=\{listen && turns \? seekQuote : null\}>/, "🔴 «▶ час» біля цитати без запису чи тексту");
+  assert.match(drw, /<QuoteSeek\.Provider value=\{listen && turns && !mixed \? seekQuote : null\}>/, "🔴 «▶ час» біля цитати без запису чи тексту");
   assert.ok(!/function RecordingPlayer|<audio controls/.test(drw), "🔴 повернувся старий плеєр браузера");
+});
+
+/**
+ * #897 — МОНО-ЗАПИС ЧЕСНО (Роман 08.10.2026, «чому тут немає каналів»): ~5% записів Ringostat — один канал, і вся
+ * розмова приходила однією реплікою з підписом «Менеджер», повністю жовта й без перемотки. Тепер: (1) моно-файл
+ * розпізнається з розділенням за ГОЛОСОМ (два мовці), стерео — як і було, по каналах; (2) картка називає стан:
+ * `mixed` — не розділено (підпис «Обидва голоси», без підсвітки й «▶ час»), `voices` — розділено за звучанням.
+ * 🧨 Червоніє, якщо слати моно-файл по каналах, змінити поля стерео, читати `speaker_id` поверх `channel_index`, чи
+ * підписувати змішаний текст «Менеджером».
+ */
+test("#897 МОНО-ЗАПИС ЧЕСНО: моно — розділення за голосом, стерео без змін; картка називає «не розділено» / «за голосом»", async () => {
+  const P = await import("./callAiProviders.js");
+  assert.deepEqual({ ...P.STT_MONO_FORM_FIELDS }, { model_id: "scribe_v2", use_multi_channel: "false", diarize: "true", num_speakers: "2",
+    timestamps_granularity: "word", tag_audio_events: "false" }, "🔴 моно не розділяється за голосом");
+  assert.equal(P.STT_FORM_FIELDS.use_multi_channel, "true", "дзеркало: стерео — по каналах, як і було");
+  assert.equal(P.STT_FORM_FIELDS.diarize, "false", "дзеркало: стерео без розділення за голосом");
+  // Розділена за голосом відповідь — плоска форма, мовець у `speaker_id`.
+  const flat = P.parseSttResponse({ words: [
+    { type: "word", text: "Добрий", start: 0, end: 0.4, speaker_id: "speaker_0" },
+    { type: "word", text: "день", start: 0.4, end: 0.7, speaker_id: "speaker_0" },
+    { type: "word", text: "Вітаю", start: 1.0, end: 1.4, speaker_id: "speaker_1" },
+  ] });
+  assert.deepEqual(P.toTurns(flat).map((t) => [t.channel, t.text]), [[0, "Добрий день"], [1, "Вітаю"]], "🔴 мовці не стали репліками");
+  // Стерео: канал із `channel_index` сильніший за випадковий `speaker_id`.
+  const stereo = P.parseSttResponse({ transcripts: [
+    { channel_index: 0, words: [{ type: "word", text: "Алло", start: 0, end: 0.3, channel_index: 0, speaker_id: "speaker_1" }] },
+    { channel_index: 1, words: [{ type: "word", text: "Так", start: 0.5, end: 0.7, channel_index: 1, speaker_id: "speaker_0" }] },
+  ] });
+  assert.deepEqual(P.toTurns(stereo).map((t) => t.channel), [0, 1], "🔴 speaker_id перебив канал стерео");
+  // Виклик: моно-файл їде полями моно, стерео — полями стерео.
+  const sent: Record<string, string>[] = [];
+  const deps = { sleep: async () => {}, nowMs: () => 0,
+    fetch: (async (_u: string, init: RequestInit) => { const fd = init.body as FormData; const o: Record<string, string> = {};
+      for (const [k, v] of fd.entries()) if (typeof v === "string") o[k] = v; sent.push(o);
+      return new Response(JSON.stringify({ words: [] }), { status: 200, headers: { "content-type": "application/json" } }); }) as unknown as typeof fetch };
+  const pol = { maxRetries: 0, baseDelayMs: 0, maxDelayMs: 0, timeoutMs: 1000 };
+  await P.elevenLabsTranscribe(deps, "k", { bytes: new Uint8Array([1]), contentType: "audio/wav" }, pol, { mono: true });
+  await P.elevenLabsTranscribe(deps, "k", { bytes: new Uint8Array([1]), contentType: "audio/wav" }, pol);
+  assert.equal(sent[0].diarize, "true", "🔴 моно-файл пішов без розділення за голосом");
+  assert.equal(sent[1].use_multi_channel, "true", "дзеркало: без прапорця — по каналах");
+  const pipe = readFileSync(fileURLToPath(new URL("../../src/core/callAiPipeline.ts", import.meta.url)), "utf8");
+  assert.match(pipe, /w\.transcribe\(w\.apiKey, \{ bytes: got\.bytes, contentType: "audio\/wav" \}, \{ mono: got\.info\.channels === 1 \}\)/, "🔴 конвеєр не каже, що файл моно");
+  const tick = readFileSync(fileURLToPath(new URL("../../src/core/callAiTick.ts", import.meta.url)), "utf8");
+  assert.match(tick, /transcribe: \(key, audio, opts\) => elevenLabsTranscribe\(env\.http, key, audio, STT_POLICY, opts\)/, "🔴 «Перший дотик» не передає моно далі");
+  // Картка: стан моно.
+  const S = await import("./callAiScreen.js");
+  assert.equal(S.monoKind(1, [{ channel: 0 }]), "mixed", "🔴 нерозділений моно не названо");
+  assert.equal(S.monoKind(1, [{ channel: 0 }, { channel: 1 }]), "voices", "🔴 розділений за голосом не названо");
+  assert.equal(S.monoKind(2, [{ channel: 0 }]), null, "дзеркало: стерео — не моно");
+  assert.equal(S.monoKind(null, null), null, "невідомо — не моно");
+  const conv = readFileSync(FE("pages/dashboard/sections/CallConversation.tsx"), "utf8");
+  assert.match(conv, /const who = mixed \? "Обидва голоси" : speakerOf\(t\.channel, managerChannel\);/, "🔴 змішаний текст підписано «Менеджером»");
+  const drw = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
+  assert.match(drw, /const all = r && !mixed \? \[r\.price, \.\.\.r\.objections, \.\.\.r\.promises\] : \[\];/, "🔴 змішаний моно весь підсвічено");
 });

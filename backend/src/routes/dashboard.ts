@@ -10970,7 +10970,7 @@ dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
   res.json({
     row: card.row, dealUrls: card.row.kommoIds.map((id) => ({ kommoId: id, url: kommoLeadUrl(id) })),
     result: card.result, turns: card.turns, transcriptHidden: card.transcriptHidden,
-    managerChannel: card.managerChannel, durationSec: card.durationSec, nextOutboundAt: card.nextOutboundAt,
+    managerChannel: card.managerChannel, durationSec: card.durationSec, mono: card.mono, nextOutboundAt: card.nextOutboundAt,
     promiseChecks: card.promiseChecks, callsAfter: card.callsAfter,
     typeHistory: card.typeHistory, canEditType: canEditType(auth.roleKey),
     noteRights: { price: canWriteNote(auth.roleKey, "price"), missed: canWriteNote(auth.roleKey, "missed"), offline: canWriteNote(auth.roleKey, "offline") },
