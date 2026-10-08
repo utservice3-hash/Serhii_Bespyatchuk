@@ -386,12 +386,21 @@ export interface AiCallRowT {
   inReport: boolean; typeCheck: boolean; typeOverride: { isCargo: boolean; byName: string | null; at: string } | null;
   /** «Чому не озвучено ціну» і «Опрацьовано» (ТЗ 30.09.2026). */
   priceNote: AiNoteT | null; missedNote: AiNoteT | null; offlineNote: AiNoteT | null;
+  reactionMin?: number | null; reactionOffHours?: boolean;
+  /** Екран D (08.10.2026): чек-лист з 3 пунктів і черга розбору — стани рахує сервер (`core/firstTouchTeamReport.ts`). */
+  checklist: AiChecklistT | null; checkScore: { yes: number; total: number } | null;
+  reviewReason: AiReviewReasonT | null; needsReview: boolean; reviewNote: AiNoteT | null;
 }
+export type AiCheckMarkT = "y" | "n" | "o";
+export interface AiChecklistT { request: AiCheckMarkT; price: AiCheckMarkT; promise: AiCheckMarkT }
+export type AiReviewReasonT = "noCall" | "late" | "noPrice" | "lost";
 export interface AiNoteT { text: string; byName: string | null; at: string }
 export interface AiCallsResp {
   period: { from: string; to: string }; truncated: boolean; rows: AiCallRowT[];
   /** Менеджер «Виключених» не бачить (ТЗ 30.09.2026 п.7) — сервер їх і не віддає. */
   canSeeExcluded: boolean;
+  /** Чи може цей користувач ставити «Розібрано» (тімлід і адмін) — тоді є черга розбору. */
+  canReview: boolean;
   silence: { minGapHours: number; normFrom: string | null };
 }
 export async function fetchAiCalls(params: { from: string; to: string }): Promise<AiCallsResp> {
@@ -426,7 +435,7 @@ export interface AiCallCardResp {
   canListen: boolean;
 }
 /** Коментар: `price` — «Чому не озвучено ціну», `missed` — «Опрацьовано». Порожній текст прибирає. */
-export async function putAiCallNote(uniqueid: string, kind: "price" | "missed" | "offline", text: string): Promise<void> {
+export async function putAiCallNote(uniqueid: string, kind: "price" | "missed" | "offline" | "review", text: string): Promise<void> {
   await api.put(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/note`, { kind, text });
 }
 /** Запис розмови — байтами через наш сервер (з авторизацією), а не прямим посиланням Ringostat. */

@@ -296,7 +296,7 @@ export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: strin
                       : "Запис моно: голоси розділено за звучанням, а не за каналом — підпис «Менеджер / Клієнт» може помилятись."}
                   </p>
                 )}
-                <CallConversation load={() => fetchAiCallRecording(c.row.uniqueid)} turns={turns} managerChannel={c.managerChannel} quoted={quoted} seekRef={seekRef} mixed={mixed} />
+                <CallConversation load={() => fetchAiCallRecording(c.row.uniqueid)} turns={turns} managerChannel={c.managerChannel} quoted={quoted} seekRef={seekRef} mixed={mixed} durationSec={c.durationSec} />
               </div>
             )}
 
