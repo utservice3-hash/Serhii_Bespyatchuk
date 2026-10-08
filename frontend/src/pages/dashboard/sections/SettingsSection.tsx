@@ -9,6 +9,7 @@ import {
 import { NAV_GROUPS } from "../../../components/Layout";
 import { todayKyiv } from "../periodRules";
 import { FirstTouchSettingsCard } from "./FirstTouchSettingsCard";
+import { Toggle } from "../widgets";
 
 // Усі вкладки (ключ+назва) — беремо з реальної навігації, щоб screen_access-редактор
 // точно збігався з тим, що гейтить сервер.
@@ -73,16 +74,6 @@ type Sub = (typeof SUBTABS)[number];
 
 const RED = "#c8102e";
 const err = (e: unknown) => (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Помилка";
-
-function Toggle({ on, disabled, onClick }: { on: boolean; disabled?: boolean; onClick?: () => void }) {
-  return (
-    <button onClick={disabled ? undefined : onClick} disabled={disabled}
-      style={{ width: 40, height: 22, borderRadius: 999, border: "none", position: "relative", flexShrink: 0,
-        cursor: disabled ? "default" : "pointer", background: on ? "#16a34a" : "#cbd5e1", opacity: disabled ? 0.55 : 1, transition: "background .15s" }}>
-      <span style={{ position: "absolute", top: 2, left: on ? 20 : 2, width: 18, height: 18, borderRadius: "50%", background: "#fff", transition: "left .15s" }} />
-    </button>
-  );
-}
 
 export default function SettingsSection({ role, roleKey, teams, syncStatus, syncing, onManualSync }: {
   role?: string;
