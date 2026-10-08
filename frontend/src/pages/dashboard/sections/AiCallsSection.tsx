@@ -39,6 +39,39 @@ function StateChip({ state }: { state: AiCallState }) {
   return <span title={ui.hint} style={{ background: c.bg, color: c.fg, borderRadius: 999, padding: "1px 8px", fontSize: 12, whiteSpace: "nowrap" }}>{ui.label}</span>;
 }
 
+/** Скелет на час завантаження — та сама розкладка, що й екран (смуга, пʼять плиток, менеджери, таблиця), щоб нічого не стрибало. */
+function FirstTouchSkeleton({ navBar, drawer }: { navBar: React.ReactNode; drawer: React.ReactNode }) {
+  const sk = (w: string | number, h: number, extra: React.CSSProperties = {}) => <span className="ftd-sk" style={{ width: w, height: h, ...extra }} />;
+  return (
+    <div className="ftd" aria-busy="true" aria-label="Завантаження «Першого дотику»">
+      <div className="ftd-head">
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div className="ftd-kicker">Продаж · перші розмови з реклами</div>
+          <h1 className="ftd-title">Перший дотик · AI</h1>
+          {sk(420, 12)}
+        </div>
+        <div className="ftd-nav">{navBar}</div>
+      </div>
+      <div className="ftd-strip" aria-hidden="true">{sk("40%", 22, { background: "#2c2e36" })}<span style={{ flex: 1 }} />{sk(160, 44, { background: "#2c2e36", borderRadius: 8 })}</div>
+      <div className="ftd-kpis" aria-hidden="true">
+        {[0, 1, 2, 3, 4].map((i) => <div key={i} className="ftd-kpi">{sk("70%", 12)}{sk("45%", 28, { margin: "6px 0" })}{sk("60%", 12)}</div>)}
+      </div>
+      <div className="ftd-card ftd-card-pad" aria-hidden="true">
+        {sk(320, 16)}
+        {[0, 1, 2, 3].map((i) => <div key={i} style={{ display: "grid", gridTemplateColumns: "210px 64px repeat(4, minmax(80px, 1fr)) 80px", gap: 14 }}>
+          {sk("80%", 14)}{sk(36, 14)}{sk("100%", 18)}{sk("100%", 18)}{sk("100%", 18)}{sk("100%", 18)}{sk(40, 14)}</div>)}
+      </div>
+      <div className="ftd-card" aria-hidden="true">
+        <div className="ftd-toolbar">{sk(260, 30, { borderRadius: 8 })}{sk(120, 28, { borderRadius: 999 })}{sk(120, 28, { borderRadius: 999 })}</div>
+        {[0, 1, 2, 3, 4, 5].map((i) => <div key={i} style={{ display: "grid", gridTemplateColumns: "110px 150px minmax(0, 1fr) 90px 110px 80px 70px 90px", gap: 12, padding: "14px 16px", borderTop: "1px solid var(--border)" }}>
+          {sk("90%", 14)}{sk("80%", 14)}{sk("95%", 14)}{sk(70, 14)}{sk(90, 18, { borderRadius: 999 })}{sk(60, 18, { borderRadius: 999 })}{sk(40, 14)}{sk(70, 14)}</div>)}
+      </div>
+      <span className="ftd-sr">Завантаження…</span>
+      {drawer}
+    </div>
+  );
+}
+
 export function AiCallsSection() {
   const today = todayKyiv();
   const [nav, setNav] = useState<PeriodState>(() => aiDefaultPeriod(today));
@@ -99,7 +132,7 @@ export function AiCallsSection() {
   const navBar = <PeriodNav state={nav} onPatch={(patch) => setNav((st) => ({ ...st, ...patch }))} today={today} />;
   const drawer = open ? <AiCallDrawer uniqueid={open} onClose={closeCard} onChanged={() => setReload((x) => x + 1)} /> : null;
   if (err) return <div className="chart-card">{navBar}<p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>{drawer}</div>;
-  if (!d) return <div className="chart-card">{navBar}<p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>{drawer}</div>;
+  if (!d) return <FirstTouchSkeleton navBar={navBar} drawer={drawer} />;
 
   // Плитки й підсумки рахуються лише по ЗВІТУ: виключене сміття не розмиває відсотки (ТЗ 30.09.2026).
   const rows = tabRows(scopedAll, "report");
@@ -210,7 +243,7 @@ export function AiCallsSection() {
               "Менеджер пообіцяв передзвонити, а в телефонії його дзвінка немає. Ringostat не бачить особистого мобільного й месенджерів — тому «в телефонії».")}
             {kpi("noPrice", "Ціна озвучена", ts.price.pct == null ? "—" : `${String(ts.price.pct)}%`, `${String(ts.price.yes)} з ${String(ts.price.of)} · ціль ${String(target)}%`,
               "Серед розібраних, крім втрачених лідів. Клік — розмови, де ціну НЕ назвали. Ціль змінює адмін у «Налаштуваннях».", goodBad(ts.price.pct == null ? null : ts.price.pct >= target))}
-            {kpi("objNotHandled", "Заперечення опрацьовано", ts.objection.pct == null ? "—" : `${String(ts.objection.pct)}%`, `${String(ts.objection.handled)} з ${String(ts.objection.of)} заперечень`,
+            {kpi("objNotHandled", "Заперечення опрацьовано", ts.objection.pct == null ? "—" : `${String(ts.objection.pct)}%`, ts.objection.of ? `${String(ts.objection.handled)} з ${String(ts.objection.of)} заперечень` : "розбираються для розмов від 09.10",
               "Клієнт сказав «дорого», «подумаю», «порівняю» — і менеджер зʼясував причину, аргументував, запропонував альтернативу чи домовився про крок. Клік — неопрацьовані.")}
             {kpi("lost", "Втрачені ліди", lost.length.toLocaleString("uk-UA"), lostReact == null ? "реакція — немає даних" : `реакція (медіана) ${fmtMinutes(lostReact)}`,
               "Клієнт уже вирішив без нас. Реакція — від створення заявки до нашого першого вихідного дзвінка.")}
@@ -223,13 +256,16 @@ export function AiCallsSection() {
             <div className="ftd-card-h">
               <h2>Менеджери за чек-листом першого дотику</h2>
               <span style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                {!mgrCollapsed && "частка розмов, де пункт виконано · найслабші — згори · клік по менеджеру фільтрує таблицю, ще клік — знімає"}
-                <button type="button" className="ftd-link" aria-expanded={!mgrCollapsed} onClick={toggleMgr}>{mgrCollapsed ? "Розгорнути ▾" : "Згорнути ▴"}</button>
+                <span className={`ftd-fade${mgrCollapsed ? " is-hidden" : ""}`}>частка розмов, де пункт виконано · найслабші — згори · клік по менеджеру фільтрує таблицю, ще клік — знімає</span>
+                <button type="button" className={`ftd-collapse${mgrCollapsed ? " is-collapsed" : ""}`} aria-expanded={!mgrCollapsed} aria-controls="ftd-mgr-body"
+                  aria-label={mgrCollapsed ? "Розгорнути блок менеджерів" : "Згорнути блок менеджерів"} title={mgrCollapsed ? "Розгорнути" : "Згорнути"} onClick={toggleMgr}>
+                  <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                </button>
               </span>
             </div>
-            {mgrCollapsed
-              ? <div className="ftd-sub">{lines.length} менеджерів{weakest ? ` · найслабший бал — ${weakest.name} (${String(weakest.score)}%)` : ""}{pickedName ? ` · вибрано: ${pickedName}` : ""}</div>
-              : (
+            <div className={`ftd-sub ftd-fade${mgrCollapsed ? "" : " is-hidden is-gone"}`}>{lines.length} менеджерів{weakest ? ` · найслабший бал — ${weakest.name} (${String(weakest.score)}%)` : ""}{pickedName ? ` · вибрано: ${pickedName}` : ""}</div>
+            <div id="ftd-mgr-body" className={`ftd-collapsible${mgrCollapsed ? " is-collapsed" : ""}`} aria-hidden={mgrCollapsed}>
+            <div className="ftd-collapsible-in">
             <div style={{ overflowX: "auto" }}>
               <div className="ftd-mgr">
                 <div className="ftd-mgr-h">Менеджер</div><div className="ftd-mgr-h">Бал</div>
@@ -241,14 +277,17 @@ export function AiCallsSection() {
                       onClick={() => setLf({ ...lf, managerId: lf.managerId === l.managerId ? null : l.managerId })}>{l.name} <span>· {l.calls}</span></button>
                     <div style={{ fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{l.score == null ? "—" : `${String(l.score)}%`}</div>
                     {bar(l.request)}{bar(l.price, target)}{bar(l.promise)}
-                    <div title={`${String(l.objectionsHandled)} опрацьовано з ${String(l.objections)}`}>{bar(l.objection)}<span className="ftd-sub">{l.objectionsHandled} / {l.objections}</span></div>
+                    {l.objections === 0
+                      ? <div className="ftd-sub" title="Заперечення розбираються для розмов від 09.10; у цих розмовах їх не було або ще не розібрано">—</div>
+                      : <div className="ftd-obj" title={`${String(l.objectionsHandled)} опрацьовано з ${String(l.objections)}`}>{bar(l.objection)}<span className="ftd-sub">{l.objectionsHandled}/{l.objections}</span></div>}
                     <div style={{ fontVariantNumeric: "tabular-nums" }}>{l.success} з {l.calls}</div>
                   </div>
                 ))}
               </div>
               {lines.length === 0 && <p className="ftd-sub" style={{ margin: 0 }}>Розібраних розмов у періоді ще немає.</p>}
             </div>
-              )}
+            </div>
+            </div>
           </section>
 
           <section aria-label="Розмови" className="ftd-card" ref={tableRef}>

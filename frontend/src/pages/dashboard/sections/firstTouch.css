@@ -118,3 +118,29 @@
 .ftd-bar.is-bad > i { background: #f3a3a6; }
 .ftd-goal { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--text); }
 .ftd-foot { display: flex; flex-direction: column; gap: 4px; }
+
+/* Кнопка згортання — іконка-шеврон (як у GitHub / Linear / Notion), поворот на 180° і плавна висота блоку. */
+.ftd-collapse { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--card-bg); color: var(--text-muted); cursor: pointer; transition: background-color .15s ease, color .15s ease, border-color .15s ease; }
+.ftd-collapse:hover { background: var(--bg); color: var(--text); border-color: var(--border-strong); }
+.ftd-collapse:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.ftd-collapse svg { transition: transform .28s cubic-bezier(.2,.8,.2,1); transform: rotate(180deg); }
+.ftd-collapse.is-collapsed svg { transform: rotate(0deg); }
+.ftd-collapsible { display: grid; grid-template-rows: 1fr; transition: grid-template-rows .32s cubic-bezier(.2,.8,.2,1), opacity .24s ease; }
+.ftd-collapsible.is-collapsed { grid-template-rows: 0fr; opacity: 0; }
+.ftd-collapsible-in { min-height: 0; overflow: hidden; }
+.ftd-fade { transition: opacity .2s ease; }
+.ftd-fade.is-hidden { opacity: 0; pointer-events: none; }
+.ftd-fade.is-gone { display: none; }
+.ftd-obj { display: flex; flex-direction: column; gap: 2px; }
+
+/* Скелет завантаження: ті самі блоки, що й екран; м'який «відблиск», без руху при «зменшенні руху». */
+.ftd-sk { display: block; border-radius: 6px; background: linear-gradient(90deg, var(--bg) 0%, var(--border) 50%, var(--bg) 100%); background-size: 200% 100%;
+  animation: ftd-shimmer 1.2s ease-in-out infinite; }
+@keyframes ftd-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.ftd-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ftd-collapse svg, .ftd-collapsible, .ftd-fade { transition: none; }
+  .ftd-sk { animation: none; }
+}

@@ -1378,3 +1378,22 @@ test("#910 МЕНЕДЖЕРИ: бал у %, заперечення «опрац.
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
   assert.ok(!/avgScore3|\/ 3`/.test(sec), "🔴 бал знову «з 3»");
 });
+
+/**
+ * #911 — ЗГОРТАННЯ І СКЕЛЕТ (Роман 08.10.2026: «кнопка згорнути дуже грусна… плавна анімація», «preload згідно макету»).
+ * Блок менеджерів згортається іконкою-шевроном з `aria-expanded`/`aria-label` і плавною висотою (клас, а не умовний
+ * рендер — інакше анімувати нічого), при «зменшенні руху» — без анімації. Поки дані вантажаться, видно скелет тієї самої
+ * розкладки, а не напис «Завантаження…». Заперечень ще немає — «—» і «розбираються від 09.10», а не «0 / 0».
+ * 🧨 Червоніє, якщо повернути текстову кнопку чи умовний рендер, прибрати вимкнення анімації або скелет.
+ */
+test("#911 ЗГОРТАННЯ І СКЕЛЕТ: шеврон з aria, плавна висота класом, без руху при «зменшенні руху», скелет замість тексту", () => {
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /className=\{`ftd-collapse\$\{mgrCollapsed \? " is-collapsed" : ""\}`\} aria-expanded=\{!mgrCollapsed\} aria-controls="ftd-mgr-body"/, "🔴 немає кнопки-шеврона з aria-expanded");
+  assert.ok(!/Згорнути ▴|Розгорнути ▾/.test(sec), "🔴 повернулась текстова кнопка «Згорнути ▴»");
+  assert.match(sec, /<div id="ftd-mgr-body" className=\{`ftd-collapsible\$\{mgrCollapsed \? " is-collapsed" : ""\}`\}/, "🔴 блок згортається умовним рендером — анімувати нічого");
+  assert.match(sec, /if \(!d\) return <FirstTouchSkeleton navBar=\{navBar\} drawer=\{drawer\} \/>;/, "🔴 замість скелета — напис «Завантаження…»");
+  assert.match(sec, /: "розбираються для розмов від 09\.10",/, "🔴 «0 з 0 заперечень» замість пояснення");
+  const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
+  assert.match(css, /\.ftd-collapsible\.is-collapsed \{ grid-template-rows: 0fr; opacity: 0; \}/, "🔴 немає плавної висоти");
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.ftd-collapse svg, \.ftd-collapsible, \.ftd-fade \{ transition: none; \}\s*\.ftd-sk \{ animation: none; \}/, "🔴 анімація не вимикається для «зменшення руху»");
+});
