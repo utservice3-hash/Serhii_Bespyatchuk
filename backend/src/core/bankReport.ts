@@ -6,8 +6,9 @@ export interface BankFilter {
   from?: string; to?: string; company?: string; account?: number; currency?: string; q?: string;
   cursor?: string; limit?: number; // keyset-пагінація стрічки (нескінченне гортання)
   /**
-   * Ставить СЕРВЕР за правом `view_cashflow`, ніколи не запит: рахунки «лише фінанси» (особисті картки власника ФОП,
-   * Сейф — прохід 2г, 05.10.2026) видно лише так. Стрічка «Виписки» відкрита всім ролям, тому за замовчуванням — ні.
+   * Ставить СЕРВЕР за правом `view_private_finance`, ніколи не запит: рахунки «лише фінанси» (Сейф) і ВИТРАТИ рахунків
+   * `out_private` (робочі картки) видно лише так (Таня 08.10.2026). Стрічка «Виписки» відкрита всім ролям, тому за
+   * замовчуванням — ні.
    */
   canSeePrivate?: boolean;
 }
@@ -64,6 +65,8 @@ function whereClause(dir: "in" | "out", f: BankFilter, params: unknown[], opts: 
   // Видалений ручний запис (Сейф) не існує ні для кого; рахунки «лише фінанси» — лише з правом (`canSeePrivate`).
   const c = [`t.direction = '${dir}'`, `a.is_active = true`, `t.deleted_at IS NULL`];
   if (!f.canSeePrivate) c.push(`NOT a.finance_only`);
+  // Робоча картка: надходження бачать усі, витрати — лише з правом (і в списку, і в Σ — одна умова на обидва).
+  if (!f.canSeePrivate && dir === "out") c.push(`NOT a.out_private`);
   if (dir === "out") c.push(`NOT COALESCE(t.is_bank_fee, false)`); // комісії банку не показуємо у вихідних (ні в списку, ні в Σ)
   if (opts.period && f.from) { params.push(f.from); c.push(`(t.booked_at AT TIME ZONE 'Europe/Kyiv')::date >= $${params.length}`); }
   if (opts.period && f.to) { params.push(f.to); c.push(`(t.booked_at AT TIME ZONE 'Europe/Kyiv')::date <= $${params.length}`); }

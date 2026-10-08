@@ -90,7 +90,10 @@ export default function BankSection() {
   const canViewTotals = perms.includes("view_bank_totals"); // косметика; сервер гейтить summary
   const canViewCashflow = perms.includes("view_cashflow");
   const canExportStatement = perms.includes("export_bank_statement"); // косметика; сервер гейтить роут
-  const canEditFinance = perms.includes("edit_finance"); // запис у ручний рахунок «Сейф»; сервер гейтить роут
+  // Сейф (Таня 08.10.2026): бачить і вносить — `view_private_finance` (Адмін, фінансист); лише вносить — `enter_safe`
+  // (операційний директор). Косметика; сервер гейтить роути.
+  const canViewPrivate = perms.includes("view_private_finance");
+  const canEnterSafe = canViewPrivate || perms.includes("enter_safe");
   const [exportOpen, setExportOpen] = useState(false);
   const [safeOpen, setSafeOpen] = useState(false);
   const [balancesOpen, setBalancesOpen] = useState(false);
@@ -224,7 +227,7 @@ export default function BankSection() {
           {canExportStatement && (
             <button onClick={() => setExportOpen(true)} style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>⬇️ Виписка CSV</button>
           )}
-          {canViewCashflow && active.some((a) => a.bank === "manual") && (
+          {canEnterSafe && active.some((a) => a.bank === "manual") && (
             <button onClick={() => setSafeOpen(true)} style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>🗄 Сейф</button>
           )}
           {canViewCashflow && (
@@ -243,7 +246,7 @@ export default function BankSection() {
       {exportOpen && canExportStatement && <StatementExportModal onClose={() => setExportOpen(false)} accounts={accounts} from={range.from} to={range.to} canSeeHidden={canSeeHidden} />}
       {cashflowOpen && canViewCashflow && <CashflowModal onClose={() => setCashflowOpen(false)} onPickMonth={(ym) => { setRangeMonth(ym); setCashflowOpen(false); }} />}
       {requisitesOpen && <RequisitesModal onClose={() => setRequisitesOpen(false)} />}
-      {safeOpen && canViewCashflow && <SafeModal accounts={active.filter((a) => a.bank === "manual")} canEdit={canEditFinance} onClose={() => setSafeOpen(false)} onChanged={loadFirst} />}
+      {safeOpen && canEnterSafe && <SafeModal accounts={active.filter((a) => a.bank === "manual")} canEdit={canEnterSafe} viewList={canViewPrivate} onClose={() => setSafeOpen(false)} onChanged={loadFirst} />}
 
       {/* Стрип підсумків — ЛИШЕ якщо сервер віддав summary (право view_bank_totals). Немає → картки нема. */}
       {summary && (
@@ -370,13 +373,13 @@ function AccountsBlock({ accounts, onChange }: { accounts: BankAccount[]; onChan
 // вимкненою: вмикається перемикачем, коли в її картці вже «API ✓». Правила полів — на сервері (`core/bankAccounts.ts`).
 const CARD_OWNERS: [string, string][] = [["staff", "Картка працівника"], ["uts", "ТОВ ЮТС"], ["automuv", "ТОВ Автомув"], ["fop_mono", "ФОП Беспятчук"]];
 function AddCardForm({ onAdded }: { onAdded: (text: string) => void | Promise<void> }) {
-  const empty = { label: "", company: "staff", currency: "UAH", last4: "", iban: "", env: "MONO_TOKEN_", financeOnly: true };
+  const empty = { label: "", company: "staff", currency: "UAH", last4: "", iban: "", env: "MONO_TOKEN_", outPrivate: true };
   const [open, setOpen] = useState(false);
   const [f, setF] = useState(empty);
   const [msg, setMsg] = useState<string | null>(null);
   const add = async () => {
     try {
-      await saveBankAccount(null, { company: f.company, bank: "mono", label: f.label, currency: f.currency, envKeyName: f.env, monoPanLast4: f.last4, iban: f.iban, financeOnly: f.financeOnly } as never);
+      await saveBankAccount(null, { company: f.company, bank: "mono", label: f.label, currency: f.currency, envKeyName: f.env, monoPanLast4: f.last4, iban: f.iban, outPrivate: f.outPrivate } as never);
       setF(empty); setOpen(false); setMsg(null);
       await onAdded(`✓ Картку «${f.label}» додано вимкненою. Далі: 1) у серверному .env рядок ${f.env}=<токен>; 2) дочекайтесь «API ✓» у її картці; 3) увімкніть її.`);
     } catch (e) { setMsg("✗ " + err(e)); }
@@ -396,7 +399,7 @@ function AddCardForm({ onAdded }: { onAdded: (text: string) => void | Promise<vo
         {field("Змінна з токеном у .env", <input aria-label="Змінна з токеном" value={f.env} onChange={(e) => setF({ ...f, env: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "") })} style={{ ...inp, width: 200, fontFamily: "monospace" }} />)}
       </div>
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
-        <label style={{ fontSize: 12.5, display: "inline-flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={f.financeOnly} onChange={(e) => setF({ ...f, financeOnly: e.target.checked })} /> 🔒 лише фінанси (менеджери й тімліди не бачать)</label>
+        <label style={{ fontSize: 12.5, display: "inline-flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={f.outPrivate} onChange={(e) => setF({ ...f, outPrivate: e.target.checked })} /> 🔒 витрати бачить лише Адмін і фінансист (надходження — усі, хто бачить «Виписку»)</label>
         <button onClick={() => void add()} style={{ marginLeft: "auto", padding: "7px 16px", borderRadius: 10, border: "none", background: RED, color: "#fff", fontWeight: 700, cursor: "pointer" }}>Додати</button>
         <button onClick={() => { setOpen(false); setMsg(null); }} style={{ padding: "7px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: MUTED, cursor: "pointer" }}>Скасувати</button>
       </div>
@@ -742,7 +745,8 @@ function Stat({ label, value, hint, big }: { label: string; value: string; hint:
 
 // ─────────────────────────── 🗄 Сейф — ручний рахунок (прохід 2г фінансів) ───────────────────────────
 // Записи — по операції АБО підсумком тижня; тиждень змішати не можна (сервер відмовить 409 і скаже чому).
-function SafeModal({ accounts, canEdit, onClose, onChanged }: { accounts: BankAccount[]; canEdit: boolean; onClose: () => void; onChanged: () => void }) {
+function SafeModal({ accounts, canEdit, viewList, onClose, onChanged }: { accounts: BankAccount[]; canEdit: boolean; viewList: boolean; onClose: () => void; onChanged: () => void }) {
+  const toast = useToast();
   const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
   const [acc, setAcc] = useState<number>(accounts[0]?.id ?? 0);
   const [month, setMonth] = useState(today.slice(0, 7));
@@ -759,16 +763,22 @@ function SafeModal({ accounts, canEdit, onClose, onChanged }: { accounts: BankAc
   }, [today]);
   const [y, m] = month.split("-").map(Number);
   const from = `${month}-01`, to = `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
-  const load = useCallback(() => { if (acc) fetchBankManual(acc, from, to).then(setRows).catch((e) => { setRows([]); setMsg(err(e)); }); }, [acc, from, to]);
+  // Хто лише вносить, списку не бачить — і не питає його (сервер однаково відповів би 403).
+  const load = useCallback(() => { if (acc && viewList) fetchBankManual(acc, from, to).then(setRows).catch((e) => { setRows([]); setMsg(err(e)); }); }, [acc, from, to, viewList]);
   useEffect(() => { load(); }, [load]);
   const done = (text: string) => { setMsg(text); load(); onChanged(); };
   const add = async () => {
     try {
       const common = { accountId: acc, kind, date: f.date, purpose: f.purpose, currency: f.currency, itemId: f.itemId ? Number(f.itemId) : null };
-      await addBankManual(kind === "op" ? { ...common, direction: f.direction, amount: f.amount } : { ...common, inAmount: f.inAmount, outAmount: f.outAmount });
+      const out = await addBankManual(kind === "op" ? { ...common, direction: f.direction, amount: f.amount } : { ...common, inAmount: f.inAmount, outAmount: f.outAmount });
       setF((x) => ({ ...x, amount: "", inAmount: "", outAmount: "", purpose: "" }));
-      done("✓ Внесено");
-    } catch (e) { setMsg(err(e)); }
+      // Підтвердження — спільним повідомленням; «Скасувати» прибирає щойно внесене (свій запис можна й без перегляду).
+      toast("Внесено в Сейф", { tone: "ok", action: { label: "Скасувати", run: () => {
+        Promise.all(out.ids.map((id) => deleteBankManual(id))).then(() => { toast("Запис скасовано", { tone: "ok" }); load(); onChanged(); })
+          .catch((e) => toast(`Не скасовано: ${err(e)}`, { error: true }));
+      } } });
+      setMsg(null); load(); onChanged();
+    } catch (e) { toast(`Не внесено: ${err(e)}`, { error: true }); }
   };
   const del = async (r: BankManualRow) => { try { await deleteBankManual(r.id); setLastDeleted(r.id); done("Видалено"); } catch (e) { setMsg(err(e)); } };
   const [lastDeleted, setLastDeleted] = useState<number | null>(null);
@@ -789,8 +799,9 @@ function SafeModal({ accounts, canEdit, onClose, onChanged }: { accounts: BankAc
           <h2 className="chart-title" style={{ marginBottom: 0 }}>🗄 Сейф · ручні записи</h2>
           <span style={{ fontSize: 11.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: "rgba(217,119,6,0.14)", color: "#b45309", whiteSpace: "nowrap" }}>🔒 лише фінанси</span>
         </div>
-        <p style={{ color: MUTED, fontSize: 12.5, margin: "6px 0 14px" }}>Вносьте <b>або кожну операцію, або підсумок тижня</b> — не обидва в одному тижні (інакше тиждень порахується двічі). Записи йдуть у «Виписку», кешфлоу і «Фінанси → Тиждень і місяць». Видно ролям із правом бачити рух грошей (адмін, СЕО, операційний директор, КВП, бухгалтерія); менеджери й тімліди Сейфу не бачать.</p>
+        <p style={{ color: MUTED, fontSize: 12.5, margin: "6px 0 14px" }}>Вносьте <b>або кожну операцію, або підсумок тижня</b> — не обидва в одному тижні (інакше тиждень порахується двічі). Записи йдуть у «Виписку», кешфлоу і «Фінанси → Тиждень і місяць». Бачать лише Адмін і фінансист; операційний директор лише вносить; решта Сейфу не бачить.</p>
 
+        {viewList && <>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
           {accounts.length > 1 && <select aria-label="Рахунок" value={acc} onChange={(e) => setAcc(Number(e.target.value))} style={inp}>{accounts.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select>}
           <label style={{ fontSize: 13, color: MUTED, display: "inline-flex", alignItems: "center", gap: 8 }}>Місяць <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={inp} /></label>
@@ -801,6 +812,7 @@ function SafeModal({ accounts, canEdit, onClose, onChanged }: { accounts: BankAc
           <SafeTile label="сальдо" value={`${net < 0 ? "−" : net > 0 ? "+" : ""}${fmtUah(net)}`} color={net < 0 ? "#dc2626" : "var(--text)"} />
           <SafeTile label="записів" value={String(live.length)} hint="валюта — у гривні за курсом НБУ на дату" />
         </div>
+        </>}
 
         {canEdit && <div style={{ padding: "12px 14px", border: "1px solid var(--border)", borderRadius: 12, marginBottom: 12, background: "var(--hover-bg)" }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
@@ -825,7 +837,8 @@ function SafeModal({ accounts, canEdit, onClose, onChanged }: { accounts: BankAc
         </div>}
         {msg && <p style={{ fontSize: 13, margin: "0 0 8px" }}>{msg}{lastDeleted != null && <> · <button onClick={() => void undo(lastDeleted)} style={{ border: "none", background: "none", color: "#2f6fdb", cursor: "pointer", fontWeight: 700 }}>Повернути</button></>}</p>}
 
-        {rows == null ? <p className="loading-text">Завантаження…</p> : rows.length === 0 ? <p className="loading-text">За цей місяць записів немає.</p> : days.map(([day, list]) => {
+        {!viewList ? <p style={{ fontSize: 12.5, color: MUTED, margin: 0 }}>Ви можете вносити записи; список і залишок Сейфу бачать лише Адмін і фінансист. Помилковий запис скасовується кнопкою «Скасувати» у повідомленні одразу після внесення.</p>
+          : rows == null ? <p className="loading-text">Завантаження…</p> : rows.length === 0 ? <p className="loading-text">За цей місяць записів немає.</p> : days.map(([day, list]) => {
           const alive = list.filter((r) => !r.deleted);
           const dIn = alive.filter((r) => r.direction === "in").reduce((a, r) => a + Math.abs(r.amount_uah), 0);
           const dOut = alive.filter((r) => r.direction === "out").reduce((a, r) => a + Math.abs(r.amount_uah), 0);

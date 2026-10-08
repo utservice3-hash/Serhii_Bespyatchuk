@@ -106,13 +106,14 @@ export async function addManual(db: Db, actor: number, body: any, rateOf: RateOf
 }
 
 /** Видалити / повернути ручний запис. Повернення знову перевіряє «тиждень — або операції, або підсумок». */
-export async function setManualDeleted(db: Db, actor: number, idArg: unknown, deleted: boolean): Promise<void> {
+export async function setManualDeleted(db: Db, actor: number, idArg: unknown, deleted: boolean, ownOnly = false): Promise<void> {
   const id = Number(idArg);
   if (!Number.isInteger(id) || id <= 0) throw new FinError(400, "Некоректний запис");
-  const r = await db.query(`SELECT t.id, t.account_id, t.manual_kind, t.deleted_at, (t.booked_at AT TIME ZONE 'Europe/Kyiv')::date::text AS day
+  const r = await db.query(`SELECT t.id, t.account_id, t.manual_kind, t.deleted_at, t.entered_by, (t.booked_at AT TIME ZONE 'Europe/Kyiv')::date::text AS day
       FROM bank_transactions t WHERE t.id = $1 FOR UPDATE`, [id]);
   const x = r.rows[0];
-  if (!x || !x.manual_kind) throw new FinError(404, "Ручний запис не знайдено");
+  // Хто лише вносить (`enter_safe`), скасовує тільки СВІЙ запис; чужий для нього — «не знайдено» (не підказуємо, що є).
+  if (!x || !x.manual_kind || (ownOnly && x.entered_by !== actor)) throw new FinError(404, "Ручний запис не знайдено");
   if (deleted === (x.deleted_at != null)) throw new FinError(409, deleted ? "Уже видалено" : "Уже на місці");
   if (!deleted) {
     const monday = weekStart(x.day);
@@ -217,3 +218,21 @@ export async function importSafe(db: Db, accountArg: unknown, rows: readonly Saf
   }
   return { inserted, existing, conflicts };
 }
+
+/**
+ * 🗄 ЗАЛИШОК РУЧНОГО РАХУНКУ (Сейф) по валютах (#1244, Таня 08.10.2026): початковий залишок на кінець дня `as_of`
+ * + усі невидалені записи ПІСЛЯ нього (дата за Києвом), у валюті запису. Валюти без початкового залишку теж є, якщо
+ * були записи. Нічого не згладжує: мінус показується мінусом.
+ */
+export async function manualBalances(db: Db, accountId: number): Promise<{ currency: string; amount: number; asOf: string | null }[]> {
+  const r = await db.query(`
+    WITH o AS (SELECT currency, as_of, amount FROM bank_opening_balances WHERE account_id = $1),
+    t AS (SELECT t.currency, t.amount FROM bank_transactions t
+           WHERE t.account_id = $1 AND t.deleted_at IS NULL
+             AND (t.booked_at AT TIME ZONE 'Europe/Kyiv')::date > COALESCE((SELECT as_of FROM o WHERE o.currency = t.currency), DATE '1900-01-01'))
+    SELECT c.currency, (COALESCE((SELECT amount FROM o WHERE o.currency = c.currency), 0) + COALESCE((SELECT sum(amount) FROM t WHERE t.currency = c.currency), 0))::text AS amount,
+           (SELECT as_of::text FROM o WHERE o.currency = c.currency) AS as_of
+      FROM (SELECT currency FROM o UNION SELECT currency FROM t) c ORDER BY c.currency = 'UAH' DESC, c.currency`, [accountId]);
+  return r.rows.map((x: any) => ({ currency: x.currency, amount: Math.round(Number(x.amount) * 100) / 100, asOf: x.as_of }));
+}
+

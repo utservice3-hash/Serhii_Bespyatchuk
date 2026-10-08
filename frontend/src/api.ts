@@ -3945,6 +3945,8 @@ export interface BankAccount {
   id: number; company: string; bank: "mono" | "privat" | "manual"; label: string; currency: string;
   /** Рахунок «лише фінанси» (особисті картки власника ФОП, Сейф): сервер віддає його лише ролям із `view_cashflow`. */
   finance_only?: boolean;
+  /** Витрати рахунку бачить лише `view_private_finance` (робочі картки, Таня 08.10.2026); надходження — усі. */
+  out_private?: boolean;
   /** Моно: останні 4 цифри картки — за ними синк обирає рахунок під токеном (лише для панелі керування). */
   mono_pan_last4?: string | null;
   external_account_id: string | null; is_active: boolean;

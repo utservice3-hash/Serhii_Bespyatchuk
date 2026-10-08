@@ -132,7 +132,15 @@ const CANDIDATE_401 = "Роман 21.09.2026 («так»): кандидат на
   + "лишилась, змінився лише код; матриця ж рахує «дозволеним» усе, що не 403. Тому роль знято з deny цих "
   + "рядків (у allow deny-only рядків її вписати не можна — проба виконала б запис). Що кандидату закрито все, "
   + "крім його двох вкладок, стереже #443 через ROUTE_TAB";
+const SAFE_PRIVATE = "Таня 08.10.2026: «сейф — лише адмін та я»; Роман: «роби, Сергію лише вносити». Перегляд Сейфу — "
+  + "лише право `view_private_finance` (Адмін, фінансист); операційний директор лише вносить (`enter_safe`), без списку";
 export const ACCEPTED_MATRIX_SHIFTS: MatrixShift[] = [
+  { method: "GET", path: "/api/bank/manual?account=1&from=2026-10-01&to=2026-10-31", role: "ceo", to: "deny",
+    decidedOn: "2026-10-08", decidedBy: "Таня й Роман", why: SAFE_PRIVATE },
+  { method: "GET", path: "/api/bank/manual?account=1&from=2026-10-01&to=2026-10-31", role: "opdir", to: "deny",
+    decidedOn: "2026-10-08", decidedBy: "Таня й Роман", why: SAFE_PRIVATE },
+  { method: "GET", path: "/api/bank/manual?account=1&from=2026-10-01&to=2026-10-31", role: "kvp", to: "deny",
+    decidedOn: "2026-10-08", decidedBy: "Таня й Роман", why: SAFE_PRIVATE },
   { method: "POST", path: "/api/training/folder", role: "candidate", to: "dropped",
     decidedOn: "2026-09-21", decidedBy: "Роман", why: CANDIDATE_401 },
   { method: "DELETE", path: "/api/training/folder/:id", role: "candidate", to: "allow",
@@ -260,15 +268,16 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/bank/cashflow", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
-  // 💰 Ручний рахунок «Сейф» (прохід 2г фінансів, 05.10.2026): перегляд — `view_cashflow`, запис — `edit_finance`.
+  // 💰 Ручний рахунок «Сейф» (прохід 2г фінансів, 05.10.2026; доступ звужено 08.10.2026, див. SAFE_PRIVATE):
+  // перегляд — `view_private_finance` (Адмін, фінансист); запис — воно ж або `enter_safe` (операційний директор).
   { method: "GET", path: "/api/bank/manual?account=1&from=2026-10-01&to=2026-10-31", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+    allow: ["admin", "financier"], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/bank/manual", cls: "deny-only",
-    allow: [], deny: ["hr", "team_lead", "manager"] },
+    allow: [], deny: ["ceo", "kvp", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/bank/manual/:id/restore", cls: "deny-only",
-    allow: [], deny: ["hr", "team_lead", "manager"] },
+    allow: [], deny: ["ceo", "kvp", "hr", "team_lead", "manager"] },
   { method: "DELETE", path: "/api/bank/manual/:id", cls: "DELETE-ghost",
-    allow: [], deny: ["hr", "team_lead", "manager"] },
+    allow: [], deny: ["ceo", "kvp", "hr", "team_lead", "manager"] },
   // 🏦 Виписка у форматі банку (21.09.2026): право `export_bank_statement` — бухгалтерія,
   // фінансист, керівництво. КВП свідомо в deny: файл несе реквізити всіх контрагентів, а КВП
   // це продажі. Проба бере один день, щоб дозволені ролі не тягнули місяць операцій.

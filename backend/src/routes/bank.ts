@@ -1,13 +1,13 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
-import { requireAuth, requirePerm } from "../auth/middleware.js";
+import { requireAuth, requirePerm, requireAnyPerm } from "../auth/middleware.js";
 import { roleHasPerm } from "../auth/rbac.js";
 import { writeAudit } from "../db/audit.js";
 import { feedPage, periodSummary, getHiddenPayees, type BankFilter } from "../core/bankReport.js";
 import { toUah, getRate } from "../bankSources/fx.js";
 import { statementData } from "../core/bankStatement.js";
 import { statementFile } from "../core/bankStatementCsv.js";
-import { addManual, setManualDeleted, listManual } from "../core/bankManual.js";
+import { addManual, setManualDeleted, listManual, manualBalances } from "../core/bankManual.js";
 import { FinError, type Db } from "../core/finance.js";
 import { tokenFor } from "../bankSources/token.js";
 import { validateNewAccount, buildAccountUpdate } from "../core/bankAccounts.js";
@@ -30,7 +30,7 @@ const audit = (req: import("express").Request) => ({ actorUserId: req.auth!.user
 // Вхідні — усі ролі. Стрічка гортається по всій історії (keyset); ПІДСУМКИ (агрегати) — лише за
 // правом view_bank_totals і лише на 1-й сторінці. Без права блок summary у payload ВІДСУТНІЙ узагалі.
 bankRouter.get("/incoming", async (req, res) => {
-  const f = { ...filterFrom(req.query as Record<string, unknown>), canSeePrivate: roleHasPerm(req.auth!.roleKey, "view_cashflow") };
+  const f = { ...filterFrom(req.query as Record<string, unknown>), canSeePrivate: roleHasPerm(req.auth!.roleKey, "view_private_finance") };
   const page = await feedPage("in", f, [], true);
   const body: Record<string, unknown> = { rows: page.rows, nextCursor: page.nextCursor };
   if (!f.cursor && roleHasPerm(req.auth!.roleKey, "view_bank_totals")) body.summary = await periodSummary("in", f, [], true);
@@ -42,7 +42,7 @@ bankRouter.get("/incoming", async (req, res) => {
 bankRouter.get("/outgoing", async (req, res) => {
   const canSeeHidden = roleHasPerm(req.auth!.roleKey, "view_hidden_payments");
   const payees = await getHiddenPayees();
-  const f = { ...filterFrom(req.query as Record<string, unknown>), canSeePrivate: roleHasPerm(req.auth!.roleKey, "view_cashflow") };
+  const f = { ...filterFrom(req.query as Record<string, unknown>), canSeePrivate: roleHasPerm(req.auth!.roleKey, "view_private_finance") };
   const page = await feedPage("out", f, payees, canSeeHidden);
   const body: Record<string, unknown> = { rows: page.rows, nextCursor: page.nextCursor, canSeeHidden };
   if (!f.cursor && roleHasPerm(req.auth!.roleKey, "view_bank_totals")) body.summary = await periodSummary("out", f, payees, canSeeHidden);
@@ -63,7 +63,7 @@ bankRouter.get("/statement.csv", requirePerm("export_bank_statement"), async (re
   if (!Number.isInteger(account) || account <= 0) return res.status(400).json({ error: "account: id рахунку" });
   if (!isDay(from) || !isDay(to) || from > to) return res.status(400).json({ error: "from і to: YYYY-MM-DD, from ≤ to" });
   const canSeeHidden = roleHasPerm(req.auth!.roleKey, "view_hidden_payments");
-  const data = await statementData(account, from, to, await getHiddenPayees(), canSeeHidden, roleHasPerm(req.auth!.roleKey, "view_cashflow"));
+  const data = await statementData(account, from, to, await getHiddenPayees(), canSeeHidden, roleHasPerm(req.auth!.roleKey, "view_private_finance"));
   if (!data) return res.status(404).json({ error: "Рахунок не знайдено або банк без формату виписки" });
   const file = statementFile(data.bank, data.rows);
   await writeAudit({ ...audit(req), action: "bank.statement.export", targetType: "bank_account", targetId: String(account),
@@ -85,12 +85,22 @@ bankRouter.get("/balances", requirePerm("view_balances"), async (req, res) => {
   const to = q.to ? String(q.to) : new Date().toISOString().slice(0, 10);
   const from = q.from ? String(q.from) : new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString().slice(0, 10);
   const now = new Date();
+  // Сейф і робочі картки (`out_private`: залишок = надходження − витрати) — лише з `view_private_finance` (Таня 08.10.2026).
+  // Сейф банк не рахує: його залишок — початковий на 30.09 + записи після (`manualBalances`), окремим рядком на валюту.
+  const canSeePrivate = roleHasPerm(req.auth!.roleKey, "view_private_finance");
   const r = await pool.query(
-    `SELECT id, label, company, balance_amount, balance_currency, balance_updated_at
-       FROM bank_accounts WHERE is_active = true ORDER BY label`);
+    `SELECT id, label, company, bank, balance_amount, balance_currency, balance_updated_at
+       FROM bank_accounts WHERE is_active = true AND ($1::boolean OR (NOT finance_only AND NOT out_private)) ORDER BY label`, [canSeePrivate]);
+  const rows: typeof r.rows = [];
+  for (const b of r.rows) {
+    if (b.bank !== "manual") { rows.push(b); continue; }
+    for (const x of await manualBalances(pool as unknown as Db, b.id))
+      rows.push({ id: b.id, company: b.company, bank: b.bank, label: `${b.label} · ${x.currency}`, balance_amount: String(x.amount),
+        balance_currency: x.currency, balance_updated_at: now, opening_as_of: x.asOf });
+  }
   // Для валютних (≠UAH): ≈UAH (курс на дату оновлення) + курсова різниця за період (Варіант Б).
   // Ключів/секретів — нема.
-  const balances = await Promise.all(r.rows.map(async (b) => {
+  const balances = await Promise.all(rows.map(async (b) => {
     let balance_uah: number | null = null, fx_gain_period: number | null = null;
     if (b.balance_amount != null && b.balance_currency && b.balance_currency !== "UAH") {
       const { amountUah } = await toUah(Number(b.balance_amount), b.balance_currency, null, b.balance_updated_at ?? now);
@@ -116,7 +126,7 @@ bankRouter.get("/balances", requirePerm("view_balances"), async (req, res) => {
 bankRouter.get("/requisites", async (_req, res) => {
   const r = await pool.query(
     `SELECT id, label, company, currency, legal_name, edrpou_ipn, vat_ipn, iban, key_card, bank_name, mfo, bank_edrpou, legal_address, director
-       FROM bank_accounts WHERE is_active = true AND NOT finance_only ORDER BY id, currency`);
+       FROM bank_accounts WHERE is_active = true AND NOT finance_only AND company <> 'staff' ORDER BY id, currency`);
   res.json({ requisites: r.rows });
 });
 
@@ -190,16 +200,18 @@ bankRouter.get("/accounts", async (req, res) => {
   const canManage = roleHasPerm(req.auth!.roleKey, "manage_bank_accounts");
   const canSeeFinance = canManage || roleHasPerm(req.auth!.roleKey, "view_balances");
   // Рахунки «лише фінанси» (особисті картки власника ФОП, Сейф) — лише тим, хто бачить їхні операції, і керуючим.
-  const canSeePrivate = canManage || roleHasPerm(req.auth!.roleKey, "view_cashflow");
+  // Рахунок Сейфу потрібен і тому, хто лише вносить (`enter_safe`): без id рахунку запис не зробити.
+  const canSeePrivate = canManage || roleHasPerm(req.auth!.roleKey, "view_private_finance") || roleHasPerm(req.auth!.roleKey, "enter_safe");
   const r = await pool.query(
     `SELECT id, company, bank, label, currency, external_account_id, is_active,
             legal_name, edrpou_ipn, vat_ipn, iban, key_card, bank_name, mfo, bank_edrpou,
-            legal_address, director, purpose, env_key_name, finance_only, mono_pan_last4
+            legal_address, director, purpose, env_key_name, finance_only, out_private, mono_pan_last4
        FROM bank_accounts WHERE $1::boolean OR NOT finance_only ORDER BY is_active DESC, label`, [canSeePrivate]);
   const accounts = r.rows.map((a) => {
     const out: Record<string, unknown> = {
       api_connected: a.bank === "manual" || !!tokenFor(a.env_key_name),
       finance_only: a.finance_only,
+      out_private: a.out_private,
     };
     for (const f of ACCOUNT_PUBLIC_FIELDS) out[f] = a[f];
     if (canSeeFinance) for (const f of ACCOUNT_FINANCE_FIELDS) out[f] = a[f];
@@ -218,12 +230,12 @@ bankRouter.post("/accounts", requirePerm("manage_bank_accounts"), async (req, re
   let v;
   try { v = validateNewAccount(b); } catch (e) { if (e instanceof FinError) return res.status(e.status).json({ error: e.message }); throw e; }
   const ins = await pool.query<{ id: number }>(
-    `INSERT INTO bank_accounts (company,bank,label,currency,external_account_id,is_active,legal_name,edrpou_ipn,iban,bank_name,mfo,purpose,env_key_name,finance_only,mono_pan_last4)
-     VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+    `INSERT INTO bank_accounts (company,bank,label,currency,external_account_id,is_active,legal_name,edrpou_ipn,iban,bank_name,mfo,purpose,env_key_name,finance_only,mono_pan_last4,out_private)
+     VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
     [v.company, v.bank, v.label, v.currency, v.isActive, b.legalName ?? null, b.edrpouIpn ?? null, v.iban ?? b.iban ?? null, b.bankName ?? null,
-     b.mfo ?? null, b.purpose ?? null, v.envKeyName, v.financeOnly, v.monoPanLast4]);
+     b.mfo ?? null, b.purpose ?? null, v.envKeyName, v.financeOnly, v.monoPanLast4, v.outPrivate]);
   await writeAudit({ ...audit(req), action: "bank.account.create", targetType: "bank_account", targetId: String(ins.rows[0].id), targetLabel: v.label,
-    details: { company: v.company, bank: v.bank, envKeyName: v.envKeyName, financeOnly: v.financeOnly } });
+    details: { company: v.company, bank: v.bank, envKeyName: v.envKeyName, financeOnly: v.financeOnly, outPrivate: v.outPrivate } });
   res.json({ ok: true, id: ins.rows[0].id });
 });
 
@@ -280,7 +292,8 @@ bankRouter.delete("/hidden-payees/:id", requirePerm("manage_bank_hidden"), async
 });
 
 // ── 💰 Ручний рахунок «Сейф» (прохід 2г фінансів, 05.10.2026) ────────────────────────────────────────
-// Перегляд — право `view_cashflow` (ті ж, хто бачить рахунки «лише фінанси»); запис — `edit_finance`.
+// Перегляд — право `view_private_finance` (Таня 08.10.2026: «сейф — лише адмін та я»); запис — воно ж або `enter_safe`
+// («Сергію лише вносити»): той, хто лише вносить, не бачить списку й скасовує тільки свій запис.
 // Правила — у ядрі `core/bankManual.ts`; роут лише кличе в одній транзакції.
 async function manualTx<T>(fn: (db: Db) => Promise<T>): Promise<T> {
   const c = await pool.connect();
@@ -291,11 +304,11 @@ const manualFail = (res: import("express").Response, e: unknown) => {
   if (e instanceof FinError) return res.status(e.status).json({ error: e.message });
   throw e;
 };
-bankRouter.get("/manual", requirePerm("view_cashflow"), async (req, res) => {
+bankRouter.get("/manual", requirePerm("view_private_finance"), async (req, res) => {
   try { res.json(await listManual(pool as unknown as Db, req.query.account, String(req.query.from ?? ""), String(req.query.to ?? ""))); }
   catch (e) { manualFail(res, e); }
 });
-bankRouter.post("/manual", requirePerm("edit_finance"), async (req, res) => {
+bankRouter.post("/manual", requireAnyPerm("view_private_finance", "enter_safe"), async (req, res) => {
   try {
     // Курс НБУ на дату запису (валюта Сейфу); у гривні — 1.
     const out = await manualTx((db) => addManual(db, req.auth!.userId, req.body, (ccy, day) => getRate(ccy, new Date(`${day}T12:00:00Z`))));
@@ -304,16 +317,17 @@ bankRouter.post("/manual", requirePerm("edit_finance"), async (req, res) => {
     res.status(201).json(out);
   } catch (e) { manualFail(res, e); }
 });
-bankRouter.delete("/manual/:id", requirePerm("edit_finance"), async (req, res) => {
+const ownOnly = (req: import("express").Request) => !roleHasPerm(req.auth!.roleKey, "view_private_finance");
+bankRouter.delete("/manual/:id", requireAnyPerm("view_private_finance", "enter_safe"), async (req, res) => {
   try {
-    await manualTx((db) => setManualDeleted(db, req.auth!.userId, req.params.id, true));
+    await manualTx((db) => setManualDeleted(db, req.auth!.userId, req.params.id, true, ownOnly(req)));
     await writeAudit({ ...audit(req), action: "bank.manual.delete", targetType: "bank_account", targetId: String(req.params.id), targetLabel: "ручний запис (id операції)", details: {} });
     res.json({ ok: true, undo: { id: Number(req.params.id) } });
   } catch (e) { manualFail(res, e); }
 });
-bankRouter.post("/manual/:id/restore", requirePerm("edit_finance"), async (req, res) => {
+bankRouter.post("/manual/:id/restore", requireAnyPerm("view_private_finance", "enter_safe"), async (req, res) => {
   try {
-    await manualTx((db) => setManualDeleted(db, req.auth!.userId, req.params.id, false));
+    await manualTx((db) => setManualDeleted(db, req.auth!.userId, req.params.id, false, ownOnly(req)));
     await writeAudit({ ...audit(req), action: "bank.manual.restore", targetType: "bank_account", targetId: String(req.params.id), targetLabel: "ручний запис (id операції)", details: {} });
     res.json({ ok: true });
   } catch (e) { manualFail(res, e); }

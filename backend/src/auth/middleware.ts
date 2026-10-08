@@ -77,6 +77,16 @@ export function requirePerm(perm: string) {
   };
 }
 
+/** Те саме, що `requirePerm`, але досить БУДЬ-ЯКОГО з прав (напр. Сейф: переглядати-й-вносити АБО лише вносити). */
+export function requireAnyPerm(...perms: string[]) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.auth || !perms.some((p) => roleHasPerm(req.auth!.roleKey, p))) {
+      return res.status(403).json({ error: "Недостатньо прав для цієї дії" });
+    }
+    next();
+  };
+}
+
 export function requireRole(...roles: Role[]) {
   return (req: Request, res: Response, next: NextFunction) => {
     // auth.role — scope-compat (може бути 'company' для company-scope не-admin ролей);

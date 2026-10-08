@@ -296,7 +296,7 @@ export function invoicePaymentsSql(paramIdx: number): string {
     JOIN bank_accounts a ON a.id = t.account_id
    WHERE t.direction = 'in' AND NOT t.is_bank_fee
      -- Сейф і особисті картки («лише фінанси», прохід 2г) — не оплати клієнтів; видалений ручний запис — ніщо.
-     AND NOT a.finance_only AND t.deleted_at IS NULL
+     AND NOT a.finance_only AND a.company <> 'staff' AND t.deleted_at IS NULL
      AND t.booked_at >= now() - ($${paramIdx} || ' days')::interval
    ORDER BY t.booked_at DESC`;
 }

@@ -21,8 +21,8 @@ export interface StatementData {
 export async function statementData(
   accountId: number, from: string, to: string, payees: HiddenPayee[], canSeeHidden: boolean, canSeePrivate = false,
 ): Promise<StatementData | null> {
-  const acc = await pool.query<{ bank: string; label: string; iban: string | null; finance_only: boolean }>(
-    `SELECT bank, label, iban, finance_only FROM bank_accounts WHERE id = $1`, [accountId]);
+  const acc = await pool.query<{ bank: string; label: string; iban: string | null; finance_only: boolean; out_private: boolean }>(
+    `SELECT bank, label, iban, finance_only, out_private FROM bank_accounts WHERE id = $1`, [accountId]);
   const a = acc.rows[0];
   // Рахунок «лише фінанси» без права — так само «не знайдено», як на стрічці (не підказуємо, що він існує).
   if (!a || (a.bank !== "privat" && a.bank !== "mono") || (a.finance_only && !canSeePrivate)) return null;
@@ -33,5 +33,7 @@ export async function statementData(
         AND (t.booked_at AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $2 AND $3`,
     [accountId, from, to]);
   const { visible, hiddenExcluded } = excludeHidden(r.rows, (n) => isHidden(n, payees), canSeeHidden);
-  return { bank: a.bank, label: a.label, iban: a.iban, rows: visible.map((x) => x.raw_json ?? {}), hiddenExcluded };
+  // Витрати робочої картки без права — як приховані отримувачі: у файл не йдуть, але їх кількість названа.
+  const shown = a.out_private && !canSeePrivate ? visible.filter((x) => x.direction !== "out") : visible;
+  return { bank: a.bank, label: a.label, iban: a.iban, rows: shown.map((x) => x.raw_json ?? {}), hiddenExcluded: hiddenExcluded + (visible.length - shown.length) };
 }

@@ -5624,3 +5624,54 @@ ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_mono_pan_last4_check CHEC
 UPDATE bank_transactions t SET currency = a.currency, fx_rate = 1, amount_uah = t.amount
   FROM bank_accounts a
  WHERE a.id = t.account_id AND a.bank = 'mono' AND a.currency = 'UAH' AND t.currency <> 'UAH';
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🗄 СЕЙФ І РОБОЧІ КАРТКИ: ДОСТУП І ПОЧАТКОВИЙ ЗАЛИШОК (Таня 08.10.2026, Роман: «роби, Сергію лише вносити»).
+--  · `view_private_finance` — Сейф і ВИТРАТИ робочих карток: Адмін і фінансист. `enter_safe` — лише вносити в Сейф:
+--    операційний директор. Разово (позначка в `fin_kpi_imports`): подальші правки ролей в інтерфейсі не перетираються.
+--  · `out_private` — витрати рахунку бачить лише `view_private_finance`; надходження — усі, хто бачить «Виписку».
+--    Робочі картки (`staff`) стають такими: не «лише фінанси», а «витрати приватні».
+--  · `bank_opening_balances` — залишок на кінець дня `as_of` по валюті; поточний = він + операції ПІСЛЯ.
+--    Сейф на 30.09.2026: UAH 98 278, USD 50 (дані Тані; з операціями жовтня дає −71 ₴ — як у шапці таблиці «Сейф»).
+--  · Операційні — лише вручну (Таня: «прибери щоб поки взагалі не брало з план/факт»): рядки стають ручними, джерело
+--    лишається записаним — повернути автомат = `kind = 'auto'`. Числа Тані за жовтень (manual_override) не рухаються.
+--  · Revert коду ці дані не повертає.
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS out_private BOOLEAN NOT NULL DEFAULT false;
+CREATE TABLE IF NOT EXISTS bank_opening_balances (
+  account_id  INTEGER NOT NULL REFERENCES bank_accounts(id) ON DELETE CASCADE, -- залишок належить рахунку
+  currency    TEXT NOT NULL CHECK (currency IN ('UAH','USD','EUR')),
+  as_of       DATE NOT NULL,
+  amount      NUMERIC(14,2) NOT NULL,
+  set_by      INTEGER REFERENCES users(id),
+  set_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (account_id, currency)
+);
+REVOKE ALL ON bank_opening_balances FROM ai_readonly;
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('safe-card-access-2026-10-08', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key),
+perm_view AS (UPDATE roles SET permissions = permissions || '{"view_private_finance": true}'::jsonb
+               WHERE key IN ('admin', 'financier') AND EXISTS (SELECT 1 FROM step) RETURNING key),
+perm_enter AS (UPDATE roles SET permissions = permissions || '{"enter_safe": true}'::jsonb
+               WHERE key = 'opdir' AND EXISTS (SELECT 1 FROM step) RETURNING key),
+cards AS (UPDATE bank_accounts SET finance_only = false, out_private = true
+           WHERE company = 'staff' AND EXISTS (SELECT 1 FROM step) RETURNING id)
+INSERT INTO bank_opening_balances (account_id, currency, as_of, amount)
+SELECT a.id, v.ccy, DATE '2026-09-30', v.amount
+  FROM bank_accounts a CROSS JOIN (VALUES ('UAH', 98278.00), ('USD', 50.00)) AS v(ccy, amount)
+ WHERE a.bank = 'manual' AND a.label = 'Сейф' AND EXISTS (SELECT 1 FROM step)
+   AND (SELECT count(*) FROM perm_view) + (SELECT count(*) FROM perm_enter) + (SELECT count(*) FROM cards) >= 0
+ON CONFLICT (account_id, currency) DO NOTHING;
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('opex-manual-2026-10-08', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key)
+UPDATE fin_kpis SET kind = 'manual'
+ WHERE ref_source LIKE 'opex_%' AND kind = 'auto' AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM step);
+-- 🔴 ПРАВА СЕЙФУ — НА КОЖНОМУ ПРОГОНІ, І САМЕ ТУТ, ПІСЛЯ СИНКІВ РОЛЕЙ. Синки вище (ceo/opdir, kvp, financier) щоразу
+-- копіюють УСІ права адміна — тож `view_private_finance` адміна розтеклося б на СЕО, ОД і КВП (спіймав #1246 до
+-- прода; той самий клас, що `merge_clients` 03.08). Знімаємо явно, а «лише вносити» ОД повертаємо: синк його стирає.
+-- Фінансист отримує `view_private_finance` якраз синком — так і задумано (рівень адміна).
+UPDATE roles SET permissions = permissions - 'view_private_finance' WHERE key IN ('ceo', 'opdir', 'kvp');
+UPDATE roles SET permissions = permissions || '{"enter_safe": true}'::jsonb WHERE key = 'opdir';
+-- 🔒 AI: без Сейфу й «лише фінанси» (як було) і БЕЗ витрат робочих карток — надходження лишаються.
+CREATE OR REPLACE VIEW ai_bank_transactions AS
+  SELECT t.id, t.account_id, t.direction, t.booked_at, t.counterparty_name, t.purpose, t.amount, t.currency, t.amount_uah, t.is_bank_fee
+    FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
+   WHERE NOT a.finance_only AND NOT (a.out_private AND t.direction = 'out') AND t.deleted_at IS NULL;

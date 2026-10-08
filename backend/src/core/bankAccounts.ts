@@ -31,7 +31,7 @@ export function checkEnvKeyName(bank: string, raw: unknown): string | null {
 
 export interface NewAccount {
   company: string; bank: Bank; label: string; currency: string; envKeyName: string | null;
-  monoPanLast4: string | null; iban: string | null; financeOnly: boolean; isActive: false;
+  monoPanLast4: string | null; iban: string | null; financeOnly: boolean; outPrivate: boolean; isActive: false;
 }
 
 /** Перевірка нового рахунку. Картка працівника: моно + 4 цифри; «лише фінанси» для неї — за замовчуванням так. */
@@ -55,8 +55,11 @@ export function validateNewAccount(b: Record<string, unknown>): NewAccount {
   if (rawIban && !iban) throw new FinError(400, "IBAN — UA і 27 цифр (пробіли можна)");
   // Картку працівника знаходимо за IBAN (надійніше: не міняється при перевипуску) або за 4 цифрами картки.
   if (company === "staff" && !monoPanLast4 && !iban) throw new FinError(400, "Для картки працівника потрібні останні 4 цифри картки або IBAN рахунку");
-  const financeOnly = b.financeOnly == null ? company === "staff" : b.financeOnly === true;
-  return { company, bank, label, currency, envKeyName, monoPanLast4, iban, financeOnly, isActive: false };
+  // Робоча картка (Таня 08.10.2026): надходження бачать усі, витрати — лише `view_private_finance`. Тому за замовчуванням
+  // НЕ «лише фінанси», а «витрати приватні»; «лише фінанси» (весь рахунок прихований) — лише на прохання.
+  const financeOnly = b.financeOnly === true;
+  const outPrivate = b.outPrivate == null ? company === "staff" : b.outPrivate === true;
+  return { company, bank, label, currency, envKeyName, monoPanLast4, iban, financeOnly, outPrivate, isActive: false };
 }
 
 /** Поля, які панель керування може змінити: ключ запиту → колонка. Решта ключів ігнорується. */
