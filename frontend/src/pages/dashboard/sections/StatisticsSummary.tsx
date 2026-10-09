@@ -82,7 +82,7 @@ function TileCard({ t, cmpLabel }: { t: StatsTile; cmpLabel: string }) {
       <div style={{ fontSize: 12.5, marginTop: 3 }}>
         <Delta v={t.deltaPct} /> <span style={{ color: MUTED }}>до {cmpLabel} ({fmtV(t.prev, t.unit)})</span>
       </div>
-      {t.sub && <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{t.sub.label}: <b style={{ color: "var(--text)" }}>{fmtV(t.sub.value, t.unit)}</b></div>}
+      {t.sub && <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{t.sub.label}: <b style={{ color: "var(--text)" }}>{fmtV(t.sub.value, t.sub.unit ?? t.unit)}</b></div>}
     </div>
   );
 }

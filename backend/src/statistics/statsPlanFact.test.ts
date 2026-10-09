@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { skipReason } from "../db/scratchDb.js";
 import { needsDb } from "../testMode.js";
-import { rangeWindows, compareWindows, compareLabel, sameDayPrevMonth, planFactLine, spreadWeekCellsToDays, foldWeek, type WeekPlanCell } from "./statsCompare.js";
+import { rangeWindows, compareWindows, compareLabel, sameDayPrevMonth, planFactLine, spreadWeekCellsToDays, foldWeek, homeTeamOf, type WeekPlanCell } from "./statsCompare.js";
 import { avgCheckBase, avgCheckTargetOf, AVG_CHECK_MIN_DEALS } from "../core/avgCheckTargetRules.js";
 import { effectiveNorm, callsNormVerdict, canSetCallsNorm } from "../core/callsNormRules.js";
 
@@ -219,4 +219,18 @@ test("#1540f ПЛАН НА ДЕНЬ: Σ днів тижня = план тижн�
   assert.equal(Math.round(weekSum("2026-09-28", "2026-10-04")), tileWeek(["2026-09-28", "2026-10-01"]), "🔴 тиждень через межу місяців: Σ днів ≠ план плитки");
   assert.equal(Math.round(weekSum("2026-10-05", "2026-10-11")), tileWeek(["2026-10-05"]), "🔴 ручна ціль на два тижні загубилась у другому тижні");
   assert.equal([...days.keys()].filter((d) => ["2026-10-03", "2026-10-04", "2026-10-10"].includes(d)).length, 0, "🔴 план на вихідний");
+});
+
+test("#1540g ЧЕК І ДЗВІНКИ НЕ ЗНИКАЮТЬ У ТОГО, ХТО ПЕРЕЙШОВ: поточна команда, а без її рядка — рядок із планом / більшим фактом", () => {
+  // Хомік: з 01.10 у «Самостійних» (36283), вересень — у Яцика (5) з планом. Рядка «Самостійних» у вересні немає.
+  const sep = homeTeamOf([{ managerId: 7, teamId: 5, plan: 130_000, fact: 139_156 }], () => 36283);
+  assert.equal(sep.get(7), 5, "🔴 у вересні чек і дзвінки Хомік нікуди не потрапили");
+  // Жовтень: обидва рядки є — поточна команда перемагає, навіть без плану.
+  const oct = homeTeamOf([{ managerId: 7, teamId: 5, plan: 130_000, fact: 10_000 }, { managerId: 7, teamId: 36283, plan: null, fact: 500 }], () => 36283);
+  assert.equal(oct.get(7), 36283, "🔴 при наявному рядку поточної команди числа пішли в стару");
+  // Обидва рядки чужі поточній: з планом перемагає, далі — більший факт.
+  const two = homeTeamOf([{ managerId: 8, teamId: 1, plan: null, fact: 9_000 }, { managerId: 8, teamId: 2, plan: 50_000, fact: 100 }], () => 3);
+  assert.equal(two.get(8), 2);
+  const two2 = homeTeamOf([{ managerId: 9, teamId: 1, plan: null, fact: 100 }, { managerId: 9, teamId: 2, plan: null, fact: 9_000 }], () => 3);
+  assert.equal(two2.get(9), 2);
 });

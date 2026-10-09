@@ -244,3 +244,25 @@ export function spreadWeekCellsToDays(cells: readonly WeekPlanCell[], scopesOf: 
   }
   return out;
 }
+
+/**
+ * 🏠 Рядок (команда), куди йдуть сер. чек, дзвінки й очікування людини у «План-факт»: її ПОТОЧНОЇ команди; якщо такого
+ * рядка в періоді немає (перейшла пізніше), то рядок із планом, а за рівних — із більшим фактом. 📐 Перша редакція
+ * брала лише поточну команду, і в Хомік за вересень (з 01.10 у «Самостійних») чек і дзвінки показувались «—». `#1540g`.
+ */
+export function homeTeamOf(rows: readonly { managerId: number; teamId: number | null; plan: number | null; fact: number }[],
+    currentTeam: (managerId: number) => number | null): Map<number, number | null> {
+  const out = new Map<number, number | null>();
+  const better = (a: { teamId: number | null; plan: number | null; fact: number }, b: { teamId: number | null; plan: number | null; fact: number }, cur: number | null) => {
+    if ((a.teamId === cur) !== (b.teamId === cur)) return a.teamId === cur;
+    if ((a.plan != null) !== (b.plan != null)) return a.plan != null;
+    return a.fact > b.fact;
+  };
+  for (const r of rows) {
+    const prevTeam = out.get(r.managerId);
+    if (prevTeam === undefined) { out.set(r.managerId, r.teamId); continue; }
+    const prev = rows.find((x) => x.managerId === r.managerId && x.teamId === prevTeam)!;
+    if (better(r, prev, currentTeam(r.managerId))) out.set(r.managerId, r.teamId);
+  }
+  return out;
+}

@@ -29,7 +29,7 @@ import * as metrics from "../core/metrics.js";
 import { loadKpiTargets } from "../core/kpiTargetsDb.js";
 import { leadgenTeamMembers, approvedLeadgenPlans } from "../core/leadgenPlans.js";
 import { planForPeriod } from "../core/leadgenPlanRules.js";
-import { planFactLine, spreadWeekCellsToDays, workdaysOf, type PlanFactLine } from "./statsCompare.js";
+import { planFactLine, spreadWeekCellsToDays, workdaysOf, homeTeamOf, type PlanFactLine } from "./statsCompare.js";
 export { planFactLine, type PlanFactLine } from "./statsCompare.js";
 import { compareWindows, rangeWindows, compareLabel, deltaPct, planPct, rankByPlan, foldWeek, weekOf, type Gran, type Window, type WeekPlanCell, type CompareWindows } from "./statsCompare.js";
 import { kyivToday, workingDaysBetween } from "../core/dates.js";
@@ -54,7 +54,8 @@ export interface Tile {
   planPct: number | null;
   /** Підрядок: для грошей — ① успішно реалізовано за ті самі дати. НЕ «з них»: ① і ② анкеряться на різні дати
    *  входу в етап, тож ① буває більшим за ② (серпень 2026: 2 550 073 проти 2 543 993). */
-  sub: { label: string; value: number } | null;
+  /** `unit` — коли підрядок у інших одиницях, ніж плитка (сер. чек ₴ → угоди шт). */
+  sub: { label: string; value: number; unit?: "₴" | "шт" } | null;
   /** Чому плану немає — словами, а не порожнечею. */
   planNote: string | null;
   /** Колір за нормою — лише «у нормі / нижче» (Юля 10.10: «зелений — у нормі, червоний — нижче»), без жовтого. */
@@ -396,7 +397,7 @@ export async function buildSummary(gran: Gran, anchor: string, viewer: Viewer, r
     { key: "avgCheck", label: "Середній чек", unit: "₴", now: avgNow ?? 0, prev: avgPrev ?? 0,
       deltaPct: avgNow != null && avgPrev != null ? deltaPct(avgNow, avgPrev) : null,
       plan: tgt?.target ?? null, planPct: avgNow != null ? planPct(avgNow, tgt?.target ?? null) : null, binary: true,
-      sub: { label: "успішних угод за ці дати", value: succNow.deals },
+      sub: { label: "успішних угод за ці дати", value: succNow.deals, unit: "шт" },
       planNote: viewer.allTeams ? "ціль ставиться по командах — у таблиці нижче"
         : tgt == null ? "ціль команди не знайдено"
         : tgt.target == null ? `ціль не ставиться: у команди ${tgt.deals} успішних угод за ${tgt.base.from.slice(5, 7)}–${tgt.base.to.slice(5, 7)}.${tgt.base.to.slice(0, 4)} (потрібно від 30)` : null,
@@ -541,6 +542,9 @@ export async function buildPlanFact(gran: Gran, anchor: string, viewer: Viewer, 
   const visibleTeam = (t: number | null) => viewer.allTeams || (viewer.teamId != null && t === viewer.teamId);
   const ownRow = (r: Raw) => viewer.allTeams || viewer.teamId != null ? visibleTeam(r.teamId) : r.managerId === viewer.managerId;
   const rows = [...raw.values()].filter(ownRow);
+  // Рядок, куди йдуть сер. чек, дзвінки й очікування людини: її ПОТОЧНОЇ команди, а якщо такого рядка в періоді немає
+  // (перейшла пізніше — Хомік у вересні), то рядок із планом або з найбільшим фактом. Інакше її числа зникали б.
+  const homeTeam = homeTeamOf(rows, (m) => names.get(m)?.team_id ?? null);
   // Сер. чек і дзвінки — властивість людини за відрізок, а не рядка-команди: у того, хто перейшов, вони йдуть у рядок
   // ПОТОЧНОЇ команди, щоб не подвоювались.
   const lineOf = (rs: Raw[]) => {
@@ -548,7 +552,7 @@ export async function buildPlanFact(gran: Gran, anchor: string, viewer: Viewer, 
     for (const r of rs) {
       if (r.plan != null) plan = (plan ?? 0) + r.plan;
       fact += r.fact;
-      const home = (names.get(r.managerId)?.team_id ?? null) === r.teamId;
+      const home = homeTeam.get(r.managerId) === r.teamId;
       if (home) {
         expect += expBy.get(r.managerId) ?? 0;
         const a = avgBy.get(r.managerId); if (a) { avgRevenue += a.revenue; successDeals += a.successDeals; }

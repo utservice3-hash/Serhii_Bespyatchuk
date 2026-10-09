@@ -2974,7 +2974,7 @@ export interface StatsSeriesResp { block: string; metric: string; granularity: "
 export interface StatsTile {
   key: "revenue" | "dispatched" | "calls" | "transfers" | "avgCheck"; label: string; unit: "₴" | "шт";
   now: number; prev: number; deltaPct: number | null; plan: number | null; planPct: number | null;
-  sub: { label: string; value: number } | null; planNote: string | null; formula: string;
+  sub: { label: string; value: number; unit?: "₴" | "шт" } | null; planNote: string | null; formula: string;
   /** Тиждень через межу місяців: план = сума частин (по одній на місяць). */
   planParts?: { from: string; to: string; plan: number; kind: "auto" | "manual" }[];
   /** Як рахується план цього періоду (тиждень — динамічний, узгоджено в задачі 5146). */
