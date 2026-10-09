@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { saveReceivableNote, type ReceivableClient } from "../../../api";
-import { usePopoverClamp } from "../usePopoverClamp";
+import { ReceivableCallDrawer } from "./ReceivableCallDrawer";
 import { NOTE_MAX, agreementLine, formatDateSafe, callWhen, talkLength } from "../receivablesView";
 
 /**
@@ -29,8 +29,11 @@ import { NOTE_MAX, agreementLine, formatDateSafe, callWhen, talkLength } from ".
  * наступний `Tab` починає обхід таблиці спочатку. Це той самий дефект, що
  * `#193` упіймав у діалозі обʼєднання, лише в інший бік.
  */
-export function AgreementEditor({ client, note, lastComment, lastAt, onPatch, onDone, onClose }: {
+export function AgreementEditor({ client, note, lastComment, lastAt, onPatch, onDone, onClose, view = "agree", canListen = false }: {
   client: ReceivableClient;
+  /** 📞 4631: з якого місця відкрили панель (домовленість / розмова / історія) і чи можна слухати. */
+  view?: "agree" | "call" | "history";
+  canListen?: boolean;
   /** Запис ПОТОЧНОГО тижня — уже звужений `activeNote`, не `client.comment`. */
   note: string;
   /** Останній записаний коментар (будь-якого тижня) і його дата — щоб поле не відкривалось
@@ -62,19 +65,12 @@ export function AgreementEditor({ client, note, lastComment, lastAt, onPatch, on
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Той самий затискач, що в `LimitEditor`/`OwnerEditor`: поповер, який не
-  // вміщається у вікні, ховає власні кнопки — заміряно 300×561 при вікні 736.
-  const narrow = typeof window !== "undefined" && window.innerWidth < 900;
-  const clamp = usePopoverClamp(320);
-
-  // ⌨️ ФОКУС УСЕРЕДИНУ — І ЛИШЕ КОЛИ ПОПОВЕР УЖЕ ВИДИМИЙ.
-  // 🔴 Перша редакція фокусувала на монтуванні, і це НЕ ПРАЦЮВАЛО: до заміру
-  // затискач тримає `visibility: hidden`, а `focus()` на прихованому елементі
-  // браузер мовчки ігнорує. Гейт бачив виклик у джерелі й був зелений; спіймала
-  // ДІЯ (Tab → Enter → `document.activeElement` лишався кнопкою, що відкрила).
-  // Той самий клас, що «успіх за 0 мс»: виклик є, роботи немає.
+  // 🗂 БІЧНА ПАНЕЛЬ, А НЕ ПОПОВЕР (Роман 09.10.2026: «щоб відкривалося як в AI-аналізі»). Поповер жив у клітинці
+  // таблиці, закривався лише кнопкою й не мав місця для розмови. Панель видима одразу (без затискача з
+  // `visibility: hidden`), тож фокус ставиться на монтуванні — і лише коли відкрили саме домовленість: з «▶ розмова»
+  // чи «переносили» людина прийшла читати, а не писати.
   const firstRef = useRef<HTMLInputElement | null>(null);
-  useEffect(() => { if (narrow || clamp.ready) firstRef.current?.focus(); }, [narrow, clamp.ready]);
+  useEffect(() => { if (view === "agree") firstRef.current?.focus(); }, [view]);
 
   // ⌨️ І ФОКУС ПОВЕРТАЄТЬСЯ ТУДИ, ЗВІДКИ ПРИЙШОВ. Без цього клавіатурний шлях
   // обривається на виході: поповер зник, фокус на `body`, і наступний `Tab`
@@ -116,14 +112,7 @@ export function AgreementEditor({ client, note, lastComment, lastAt, onPatch, on
     }
   };
 
-  const box: React.CSSProperties = narrow
-    ? { position: "fixed", zIndex: 60, left: "50%", top: "50%", transform: "translate(-50%, -50%)",
-        width: "min(360px, calc(100vw - 32px))", maxHeight: "calc(100dvh - 32px)", overflowY: "auto",
-        padding: 14, background: "var(--card-bg)", border: "1px solid var(--border)",
-        borderRadius: 12, boxShadow: "0 18px 50px rgba(0,0,0,0.45)", textAlign: "left" }
-    : { ...clamp.style, padding: 12,
-        background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 10,
-        boxShadow: "0 8px 24px rgba(0,0,0,0.18)", textAlign: "left" };
+  const box: React.CSSProperties = { border: "1px solid var(--border)", borderRadius: 8, padding: "10px 12px", textAlign: "left" };
 
   const field: React.CSSProperties = {
     font: "inherit", fontSize: "var(--fs-13)", padding: "5px 8px", borderRadius: 8, width: "100%",
@@ -137,13 +126,8 @@ export function AgreementEditor({ client, note, lastComment, lastAt, onPatch, on
 
   const line = agreementLine(actual ? client.dueDate ?? null : null, actual ? note : "");
 
-  return (
-    <>
-      {narrow && (
-        <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 59, background: "rgba(0,0,0,0.45)" }} />
-      )}
-      <div className="recv-pop" ref={narrow ? undefined : clamp.ref} style={box} role="dialog"
-           aria-label={`Домовленість: ${client.clientName}`}>
+  const form = (
+      <div style={box} aria-label={`Домовленість: ${client.clientName}`}>
         <div style={{ fontSize: "var(--fs-13)", fontWeight: 700, marginBottom: 2 }}>Домовленість з клієнтом</div>
         {/* 🔴 ЩО САМЕ ПРАВИМО — СКАЗАНО ВГОЛОС. Поле показує запис поточного
             тижня; без цього підпису людина вирішить, що бачить «останній
@@ -244,6 +228,7 @@ export function AgreementEditor({ client, note, lastComment, lastAt, onPatch, on
           </div>
         )}
       </div>
-    </>
   );
+
+  return <ReceivableCallDrawer client={client} view={view} canListen={canListen} editor={form} onClose={onClose} />;
 }

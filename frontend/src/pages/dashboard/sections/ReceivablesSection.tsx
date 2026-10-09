@@ -590,8 +590,8 @@ export function ReceivablesSection({
   const [limitFor, setLimitFor] = useState<string | null>(null);
   /** Який клієнт зараз редагує домовленість — редактор переїхав у поповер (прохід B). */
   const [agreeFor, setAgreeFor] = useState<string | null>(null);
-  // 📞 4631: картка розмови біля дати — клієнт і з якої вкладки відкрили.
-  const [callFor, setCallFor] = useState<{ clientKey: string; view: "call" | "history" } | null>(null);
+  // 📞 4631: панель домовленості відкривається і з «▶ розмова» чи «переносили» — тоді вона гортає до свого блоку.
+  const [agreeView, setAgreeView] = useState<"agree" | "call" | "history">("agree");
   const [limitReqFor, setLimitReqFor] = useState<string | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
   // 🔓 Яку злиту групу зараз розʼєднують (ключ канонічного) — null поки жодну.
@@ -603,10 +603,10 @@ export function ReceivablesSection({
    * захистить себе мовчки — і це видно на першому ж саботажі, а не через місяць.
    */
   useEffect(() => {
-    const open = [ownerFor, limitFor, agreeFor, limitReqFor, historyFor, writeoffFor, unmergeFor, callFor]
+    const open = [ownerFor, limitFor, agreeFor, limitReqFor, historyFor, writeoffFor, unmergeFor]
       .filter((x) => x != null).length;
     onEditorsChange?.(open);
-  }, [ownerFor, limitFor, agreeFor, limitReqFor, historyFor, writeoffFor, unmergeFor, callFor, onEditorsChange]);
+  }, [ownerFor, limitFor, agreeFor, limitReqFor, historyFor, writeoffFor, unmergeFor, onEditorsChange]);
   const [mgrOptions, setMgrOptions] = useState<ManagerOption[]>([]);
   useEffect(() => {
     // Список тягнемо ОДИН раз і лише тим, хто має право призначати: інакше це
@@ -963,8 +963,7 @@ export function ReceivablesSection({
                               <button type="button" className="recv-agree-open"
                                 title={view.tip}
                                 aria-label={`Домовленість: ${c.clientName}`}
-                                disabled={!canEditAgreement}
-                                onClick={() => setAgreeFor(agreeFor === c.clientKey ? null : c.clientKey)}
+                                onClick={() => { setAgreeView("agree"); setAgreeFor(agreeFor === c.clientKey ? null : c.clientKey); }}
                                 style={{ display: "block", width: "100%", textAlign: "left" }}>
                                 {view.source === "none" && !view.text && !view.prevDeal && !stale ? (
                                   <span className="recv-agree-empty">{AGREEMENT_EMPTY_LABEL}</span>
@@ -1021,10 +1020,15 @@ export function ReceivablesSection({
                             </div>
                             {/* 📞 4631: РОЗМОВА БІЛЯ ДАТИ. Стан рахує сервер; тут лише подача. «none» — нічого. */}
                             <CallLine c={c} canEdit={canEditAgreement}
-                              onOpen={(view) => setCallFor({ clientKey: c.clientKey, view })}
-                              onAdd={() => setAgreeFor(c.clientKey)} />
-                            {agreeFor === c.clientKey && (
+                              onOpen={(view) => { setAgreeView(view); setAgreeFor(c.clientKey); }}
+                              onAdd={() => { setAgreeView("agree"); setAgreeFor(c.clientKey); }} />
+                            {/* 🗂 Роль без права писати бачить ту саму панель — без форми: право керує ДІЄЮ, не видимістю. */}
+                            {agreeFor === c.clientKey && !canEditAgreement && (
+                              <ReceivableCallDrawer client={c} view={agreeView} canListen={canListenCalls} onClose={() => setAgreeFor(null)} />
+                            )}
+                            {agreeFor === c.clientKey && canEditAgreement && (
                               <AgreementEditor client={c} note={noteNow} lastComment={c.comment ?? null} lastAt={c.noteUpdatedAt ?? null}
+                                view={agreeView} canListen={canListenCalls}
                                 onPatch={(patch) => patchReceivableNote(c.clientKey, patch)}
                                 onClose={() => setAgreeFor(null)}
                                 onDone={() => { setAgreeFor(null); onRefresh?.(); }} />
@@ -1255,16 +1259,6 @@ export function ReceivablesSection({
 
           {/* 🔓 Розʼєднання злитої групи — превʼю наслідків ДО дії. Кнопка стоїть
               у рядку самої групи, тож діалог знає, кого саме розʼєднують. */}
-          {/* 📞 4631: картка розмови біля дати — та сама бічна панель, що в першому дотику. */}
-          {callFor && (() => {
-            const cc = all.find((x) => x.clientKey === callFor.clientKey);
-            return cc ? (
-              <ReceivableCallDrawer client={cc} view={callFor.view} canListen={canListenCalls}
-                canEdit={canEditAgreement}
-                onEdit={() => { setCallFor(null); setAgreeFor(cc.clientKey); }}
-                onClose={() => setCallFor(null)} />
-            ) : null;
-          })()}
           {unmergeFor && (
             <UnmergeDialog canonical={unmergeFor.key} canonicalName={unmergeFor.name}
               onClose={() => setUnmergeFor(null)} onDone={() => { setUnmergeFor(null); onRefresh?.(); }} />

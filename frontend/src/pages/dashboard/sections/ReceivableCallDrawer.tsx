@@ -22,12 +22,15 @@ import "./hiring.css";
  */
 const kyivDay = (iso: string | null) => (iso ? formatDateSafe(iso, "").slice(0, 5) : "—");
 
-export function ReceivableCallDrawer({ client, view, canListen, canEdit, onEdit, onClose }: {
+export function ReceivableCallDrawer({ client, view, canListen, editor, onClose }: {
   client: ReceivableClient;
-  view: "call" | "history";
+  view: "agree" | "call" | "history";
   canListen: boolean;
-  canEdit: boolean;
-  onEdit: () => void;
+  /**
+   * Форма домовленості (09.10.2026, Роман: «щоб відкривалося як в AI-аналізі, бічною панеллю»). Є — стоїть замість
+   * блоку «Домовленість по боргу» нагорі; немає (роль без права писати) — панель лише показує.
+   */
+  editor?: React.ReactNode;
   onClose: () => void;
 }) {
   const cl = client.callLink ?? { state: "none" as const, uniqueid: null, call: null };
@@ -63,8 +66,10 @@ export function ReceivableCallDrawer({ client, view, canListen, canEdit, onEdit,
     return () => { alive = false; };
   }, [client.clientKey]);
 
+  const callRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (view === "history" && log) historyRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    if (view === "call") callRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
   }, [view, log]);
 
   useEffect(() => {
@@ -83,7 +88,9 @@ export function ReceivableCallDrawer({ client, view, canListen, canEdit, onEdit,
   const key: React.CSSProperties = { fontSize: 12.5, color: "var(--text-muted)", fontWeight: 600 };
 
   return createPortal(
-    <div className="hr-overlay" onClick={onClose}>
+    // 🖱 Клік поза панеллю закриває її — і ДАЛІ НЕ ЙДЕ: події порталу React піднімаються деревом компонентів, а панель
+    // живе всередині рядка таблиці; без `stopPropagation` той самий клік ще й розгорнув би рахунки клієнта.
+    <div className="hr-overlay" onClick={(e) => { e.stopPropagation(); onClose(); }}>
       <div className="hr-drawer" role="dialog" aria-label={`Розмова про борг: ${client.clientName}`}
         onClick={(e) => e.stopPropagation()} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
@@ -91,7 +98,7 @@ export function ReceivableCallDrawer({ client, view, canListen, canEdit, onEdit,
             {call && (
               <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>{callWhen(call.calledAt, true)} · {talkLength(call.billsec)}</div>
             )}
-            <div style={{ fontSize: 18, fontWeight: 700 }}>{client.clientName} · розмова про борг</div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>{client.clientName}</div>
             <div style={{ fontSize: 13, color: "var(--text-muted)" }}>{call?.managerName ?? "дзвінка не прикріплено"}</div>
           </div>
           <button type="button" className="hr-btn" onClick={onClose}>Закрити</button>
@@ -100,13 +107,10 @@ export function ReceivableCallDrawer({ client, view, canListen, canEdit, onEdit,
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
           {ui && <span className={`recv-call-pill ${ui.tone}`} title={ui.hint}>{ui.label}</span>}
           {resched && <span className="recv-call-pill muted">{resched}</span>}
-          {canEdit && (
-            <button type="button" className="hr-btn" onClick={onEdit} style={{ marginLeft: "auto" }}>Змінити дату / розмову</button>
-          )}
         </div>
         {ui && cl.state !== "ok" && <div style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: -6 }}>{ui.hint}</div>}
 
-        <div style={box}>
+        {editor ?? <div style={box}>
           <div style={head}>Домовленість по боргу</div>
           <div style={row}><span style={key}>Борг зараз</span><span>{formatAmountFull(client.amount)}{client.overdueDays != null ? ` · найстаріший рахунок ${client.overdueDays} дн.` : ""}</span></div>
           <div style={row}><span style={key}>Дата оплати</span>
@@ -114,9 +118,9 @@ export function ReceivableCallDrawer({ client, view, canListen, canEdit, onEdit,
           {client.noteActual !== false && client.comment?.trim() && (
             <div style={row}><span style={key}>Коментар</span><span>{client.comment.trim()}</span></div>
           )}
-        </div>
+        </div>}
 
-        <div style={box}>
+        <div ref={callRef} style={box}>
           <div style={head}>Розмова</div>
           {!playing ? (
             <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>

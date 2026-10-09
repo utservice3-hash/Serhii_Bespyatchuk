@@ -219,7 +219,7 @@ test("#1530f ФРОНТ: фільтр і лічильник чипа берут�
   assert.match(sec, /className="recv-row" data-call=\{c\.callLink\?\.state \?\? "none"\}/, "🔴 рядок не несе стан розмови — жовтому нема за що вчепитись");
   const css = FE("index.css");
   assert.match(css, /tr\.recv-row\[data-call="no_call"\] > td \{ background:/, "🔴 жовтий рядок не привʼязаний до стану «дата без розмови»");
-  assert.match(sec, /disabled=\{!canEditAgreement\}/, "🔴 кнопка домовленості знову за правом тімліда — менеджер не може записати");
+  assert.match(sec, /agreeFor === c\.clientKey && canEditAgreement && \(\s*<AgreementEditor/, "🔴 форма домовленості не за правом писати — менеджер не може записати або пише той, кому не можна");
   const dash = FE("pages/Dashboard.tsx");
   assert.match(dash, /canEditAgreement=\{receivablesPerms\.canEditAgreement\}/, "🔴 право писати домовленість не доходить із сервера");
 });
@@ -230,7 +230,8 @@ test("#1531 РУБРИКА БОРГУ: відповідь перевіряєть
     remainder: "до 16-го", who: "Олена", delay_reason: "", next_step: "", quote: "500 тисяч у четвер" };
   const ok = validateDebt(base);
   assert.ok(ok.ok, "🔴 правильна відповідь відхилена");
-  if (ok.ok) assert.equal(debtLine(ok.value), "обіцяли 500 000 ₴ до 09.10 · частина боргу");
+  if (ok.ok) assert.equal(debtLine(ok.value), "обіцяли 500 000 ₴ до 09.10 · частина боргу · Олена", "🔴 у рядку «AI:» немає, з ким домовлялись (вимога ТЗ)");
+  if (ok.ok) assert.equal(debtLine({ ...ok.value, who: "" }), "обіцяли 500 000 ₴ до 09.10 · частина боргу", "🔴 невідоме «з ким» вигадано або лишило хвіст");
   const none = validateDebt({ ...base, promised: false, amount_uah: 0, pay_date: "", quote: "", partial: false });
   assert.ok(none.ok);
   if (none.ok) {
@@ -262,4 +263,21 @@ test("#1531c КАРТКА РОЗМОВИ: текст — ролі першого
   assert.match(dr, /if \(!playing \|\| !canListen\) \{ setCard\(null\); return; \}/, "🔴 картка питає текст розмови в ролі, якій слухати не можна");
   const sec = FE("pages/dashboard/sections/ReceivablesSection.tsx");
   assert.match(sec, /\{call\?\.ai && \(/, "🔴 рядок «AI:» зник зі списку");
+});
+
+test("#1532 ДОМОВЛЕНІСТЬ — БІЧНА ПАНЕЛЬ, ЯК В AI-АНАЛІЗІ: форма в панелі з розмовою; закривається кліком поза нею й Esc, клік не йде в рядок", () => {
+  const ed = FE("pages/dashboard/sections/AgreementEditor.tsx");
+  assert.match(ed, /return <ReceivableCallDrawer client=\{client\} view=\{view\} canListen=\{canListen\} editor=\{form\} onClose=\{onClose\} \/>;/,
+    "🔴 домовленість знову відкривається поповером у клітинці, а не бічною панеллю");
+  assert.ok(!/usePopoverClamp\(/.test(ed), "🔴 у панелі лишився затискач поповера");
+  const dr = FE("pages/dashboard/sections/ReceivableCallDrawer.tsx");
+  assert.match(dr, /<div className="hr-overlay" onClick=\{\(e\) => \{ e\.stopPropagation\(\); onClose\(\); \}\}>/,
+    "🔴 клік поза панеллю її не закриває — або ще й розгортає рахунки клієнта (подія порталу пішла в рядок)");
+  assert.match(dr, /onClick=\{\(e\) => e\.stopPropagation\(\)\}/, "🔴 клік усередині панелі закриває її або розгортає рядок");
+  assert.match(dr, /if \(e\.key === "Escape"\) onClose\(\);/, "🔴 Esc не закриває панель");
+  assert.match(dr, /\{editor \?\? <div style=\{box\}>/, "🔴 форма не стоїть у панелі (або роль без права бачить порожнечу замість домовленості)");
+  // ДЗЕРКАЛО: роль без права писати теж відкриває панель — бачить домовленість і розмову, лише без форми.
+  const sec = FE("pages/dashboard/sections/ReceivablesSection.tsx");
+  assert.match(sec, /agreeFor === c\.clientKey && !canEditAgreement && \(\s*<ReceivableCallDrawer client=\{c\}/,
+    "🔴 роль без права писати більше не бачить панелі — право мало б керувати дією, а не видимістю");
 });

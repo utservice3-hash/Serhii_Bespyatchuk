@@ -3023,7 +3023,8 @@ test("#199bl домовленість відкриває ВСЯ ділянка, 
   // було нічого. Гейт дивиться на ДІЮ, не на значок.
   const sec = strip(readFileSync(FE("pages/dashboard/sections/ReceivablesSection.tsx"), "utf8"));
   const row = sec.slice(sec.indexOf('className="recv-row"'), sec.indexOf("{renderInvoices(c.clientKey"));
-  assert.match(row, /className="recv-agree-open"[\s\S]{0,400}onClick=\{\(\) => setAgreeFor\(/,
+  // 09.10.2026 (4631): клік ще й каже панелі, з чого її відкрили (`setAgreeView`) — тригер той самий.
+  assert.match(row, /className="recv-agree-open"[\s\S]{0,400}onClick=\{\(\) => \{?[^}]{0,60}setAgreeFor\(/,
     "🔴 ділянка «дата + коментар» більше не відкриває редактор — або зникла, або її знову замінили олівцем");
   assert.match(row, /<AgreementEditor client=\{c\} note=\{noteNow\}/,
     "🔴 поповер домовленості не викликається з рядка");
@@ -3047,16 +3048,15 @@ test("#199bl домовленість відкриває ВСЯ ділянка, 
   // був, гейт зеленів, а в браузері фокус лишався на кнопці, що відкрила.
   // Спіймала ДІЯ (Tab → Enter → `document.activeElement`), не гейт — тож гейт
   // тепер стереже саме УМОВУ, а не наявність виклику.
-  assert.match(ed, /useEffect\(\(\) => \{ if \(narrow \|\| clamp\.ready\) firstRef\.current\?\.focus\(\); \}, \[narrow, clamp\.ready\]\);/,
-    "🔴 фокус не привʼязаний до видимості поповера — `focus()` на `visibility: hidden` нічого не робить");
+  // 09.10.2026 (4631): поповер став БІЧНОЮ ПАНЕЛЛЮ — вона видима одразу (затискача з `visibility: hidden` немає),
+  // тож умова «чекати видимості» зникла разом із поповером. Твердження те саме: фокус потрапляє в поле.
+  assert.match(ed, /useEffect\(\(\) => \{ if \(view === "agree"\) firstRef\.current\?\.focus\(\); \}, \[view\]\);/,
+    "🔴 фокус не ставиться в поле, коли відкрили домовленість — клавіатурний шлях обривається на вході");
   // 🔴 І ПОВЕРТАЄТЬСЯ. Без цього шлях обривається на ВИХОДІ: поповер зник,
   // фокус на `body`, наступний `Tab` починає обхід таблиці спочатку — людина з
   // сорокового рядка повертається на перший. Теж спіймано дією, не читанням.
   assert.match(ed, /const opener = document\.activeElement[\s\S]{0,120}return \(\) => opener\?\.focus\?\.\(\);/,
     "🔴 фокус не повертається на кнопку, що відкрила — клавіатурний шлях обривається на виході");
-  const hook = strip(readFileSync(FE("pages/dashboard/usePopoverClamp.ts"), "utf8"));
-  assert.match(hook, /ready:\s*pos != null/,
-    "🔴 затискач більше не каже, чи він видимий — умова фокуса стала завжди-істинною або завжди-хибною");
 });
 
 test("#199bl2 рядок і поповер беруть ОДИН вираз домовленості — тижнева межа не роздвоїлась", async () => {
@@ -3193,7 +3193,8 @@ test("#199cc КОЖЕН споживач затискача приєднує й�
   // Перевірялась НАЯВНІСТЬ механізму, а не те, що він працює. Той самий клас, що
   // «успіх за 0 мс» і «папка бекапу є, копії немає».
   const dir = "pages/dashboard/sections/";
-  const users = ["LimitEditor.tsx", "OwnerEditor.tsx", "AgreementEditor.tsx"];
+  // 09.10.2026 (4631): `AgreementEditor` — уже не поповер, а бічна панель (`ReceivableCallDrawer`), затискача не бере.
+  const users = ["LimitEditor.tsx", "OwnerEditor.tsx"];
   let checked = 0;
   for (const f of users) {
     const c = strip(readFileSync(FE(dir + f), "utf8"));
