@@ -359,14 +359,14 @@ function GeneralTab({ syncStatus, syncing, onManualSync, canSync }: { syncStatus
                   style={{ display: "block", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", width: 140, background: "var(--card-bg)", color: "var(--text)" }} />
               </label>
             ))}
-            {/* 📞 НОРМА ДЗВІНКІВ НА ДЕНЬ (ТЗ 23.09.2026, п.2). Ті самі три стани, що в межі плану:
-                порожнє поле = «не задано» (колонка Звіту так і каже), а не нуль. */}
-            <label style={{ fontSize: 13, fontWeight: 600 }}>Норма дзвінків на день (розмови + спроби)
-              <input type="number" value={form.callsDailyNorm ?? ""} placeholder="не задано" min={1} max={500}
-                onChange={(e) => setForm({ ...form, callsDailyNorm: e.target.value.trim() === "" ? null : Number(e.target.value) })}
-                style={{ display: "block", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", width: 140, background: "var(--card-bg)", color: "var(--text)" }} />
-              <div style={{ fontSize: 11, fontWeight: 400, color: "var(--text-muted)", marginTop: 3 }}>Звіт → таблиця → колонка «Днів з нормою». Порожньо = норми немає.</div>
-            </label>
+            {/* 📞 НОРМА ДЗВІНКІВ НА ДЕНЬ — ПЕРЕЇХАЛА В «ПЛАНИ» (4632, Роман 10.10.2026: «в Планах», «КВП сама ставить»).
+                Тут — лише ДЗЕРКАЛО чинної норми, для читання: друге поле вводу означало б друге джерело норми. */}
+            <div style={{ fontSize: 13, fontWeight: 600 }}>Норма дзвінків на день (розмови + спроби)
+              <div style={{ marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px dashed var(--border)", width: 140, color: "var(--text)" }}>
+                {form.callsDailyNorm ?? <span style={{ color: "var(--text-muted)" }}>не задано</span>}
+              </div>
+              <div style={{ fontSize: 11, fontWeight: 400, color: "var(--text-muted)", marginTop: 3 }}>Змінюється в «Планах» → «Норма дзвінків» (ставить КВП). Звіт → колонка «Днів з нормою».</div>
+            </div>
             {/* 🔌 МЕЖА ПЛАНУ — ОКРЕМО ВІД `NUMS`, І ЦЕ НЕ ПРИКРАСА.
                 Загальний рендер робить `Number(e.target.value)`, а `Number("")` це **0**.
                 Для решти полів нуль безглуздий і шкоди не робить; тут він ЗАКОННЕ значення

@@ -2972,22 +2972,66 @@ export interface StatsSeriesResp { block: string; metric: string; granularity: "
   plan?: { scopeKey: string; points: { period: string; value: number }[] }[] }
 /** 📊 Плитки й таблиця команд (ТЗ 28.09, блоки 1–3). Числа рахує сервер; фронт лише показує. */
 export interface StatsTile {
-  key: "revenue" | "dispatched" | "calls" | "transfers"; label: string; unit: "₴" | "шт";
+  key: "revenue" | "dispatched" | "calls" | "transfers" | "avgCheck"; label: string; unit: "₴" | "шт";
   now: number; prev: number; deltaPct: number | null; plan: number | null; planPct: number | null;
   sub: { label: string; value: number } | null; planNote: string | null; formula: string;
   /** Тиждень через межу місяців: план = сума частин (по одній на місяць). */
   planParts?: { from: string; to: string; plan: number; kind: "auto" | "manual" }[];
+  /** Як рахується план цього періоду (тиждень — динамічний, узгоджено в задачі 5146). */
+  planRule?: string;
+  /** Колір лише «у нормі / нижче» (сер. чек проти цілі, 4632). */
+  binary?: boolean;
+  /** 📞 Дзвінки (розмови + спроби) на менеджера за робочий день проти норми з «Планів». */
+  callsNorm?: { perDay: number | null; norm: number | null; managers: number; workDays: number };
 }
 export interface StatsTeamRow { teamId: number; name: string; archived: boolean; fact: number; prev: number;
-  deltaPct: number | null; plan: number | null; pct: number | null; rank: number }
+  deltaPct: number | null; plan: number | null; pct: number | null; rank: number;
+  /** 🎯 Сер. чек команди за період і ціль на місяць; ціль null — менше 30 угод за базу. */
+  avgCheck: number | null; avgCheckTarget: number | null; avgCheckBaseDeals: number }
+export type StatsGran = "week" | "month" | "range";
 export interface StatsSummaryResp {
-  gran: "week" | "month"; asOf: string; complete: boolean;
+  gran: StatsGran; asOf: string; complete: boolean;
   period: { from: string; to: string }; cur: { from: string; to: string }; prev: { from: string; to: string };
+  /** З чим порівняння — датами («минулого тижня (29.09–05.10)»), без «до» на початку. */
+  cmpLabel: string;
   tiles: StatsTile[]; teams: StatsTeamRow[];
 }
-export async function fetchStatsSummary(params: { gran: "week" | "month"; anchor?: string }): Promise<StatsSummaryResp> {
+export async function fetchStatsSummary(params: { gran: StatsGran; anchor?: string; from?: string; to?: string }): Promise<StatsSummaryResp> {
   const { data } = await api.get<StatsSummaryResp>("/statistics/summary", { params });
   return data;
+}
+
+/** 📋 Вкладка «План-факт» (4632). Дзеркало `PlanFactLine` у `statistics/statsSummary.ts`. */
+export interface PlanFactLine {
+  plan: number | null; fact: number; pct: number | null; remaining: number | null; expect: number; needPerDay: number | null;
+  avgCheck: number | null; successDeals: number; callsPerDay: number | null;
+}
+export interface PlanFactManager extends PlanFactLine { managerId: number; name: string; isActive: boolean }
+export interface PlanFactTeam extends PlanFactLine {
+  teamId: number | null; name: string; archived: boolean; avgCheckTarget: number | null; avgCheckBaseDeals: number;
+  managers: PlanFactManager[];
+}
+export interface PlanFactResp {
+  gran: StatsGran; period: { from: string; to: string }; cur: { from: string; to: string }; complete: boolean; today: string;
+  workDaysLeft: number; planRule: string; callsNorm: number | null; avgCheckRule: string;
+  company: PlanFactLine | null; teams: PlanFactTeam[];
+}
+export async function fetchStatsPlanFact(params: { gran: StatsGran; anchor?: string; from?: string; to?: string }): Promise<PlanFactResp> {
+  const { data } = await api.get<PlanFactResp>("/statistics/plan-fact", { params });
+  return data;
+}
+
+/** 📞 Норма дзвінків на день у «Планах» (4632): ставить КВП, діє з місяця й до наступної зміни. */
+export interface CallsNormResp {
+  current: number | null; month: string; canEdit: boolean;
+  history: { fromMonth: string; norm: number; setBy: string | null; setAt: string }[];
+}
+export async function fetchCallsNorm(): Promise<CallsNormResp> {
+  const { data } = await api.get<CallsNormResp>("/plans/calls-norm");
+  return data;
+}
+export async function saveCallsNorm(body: { norm: number; fromMonth: string }): Promise<void> {
+  await api.post("/plans/calls-norm", body);
 }
 export async function fetchStatsSeries(params: { block: string; metric: string; granularity: string; from?: string; to?: string; unit?: string }): Promise<StatsSeriesResp> {
   const { data } = await api.get<StatsSeriesResp>("/statistics/series", { params });

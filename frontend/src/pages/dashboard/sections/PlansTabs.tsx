@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Team } from "../../../api";
 import { PlansSection } from "./PlansSection";
 import { PlanFormationSection } from "./PlanFormationSection";
+import { CallsNormCard } from "./CallsNormCard";
 
 /**
  * Обгортка розділу «Плани»: перемикач між НОВИМ «Формування плану» (двоетапне
@@ -21,6 +22,8 @@ export function PlansTabs({ auth, teams }: {
   );
   return (
     <>
+      {/* 📞 Норма дзвінків (4632): одна на всіх менеджерів, ставить КВП, діє до наступної зміни. */}
+      <CallsNormCard />
       <div style={{ display: "inline-flex", gap: 4, background: "var(--bg)", padding: 4, borderRadius: 11, marginBottom: 14 }}>
         {tab("formation", "💼 Формування плану")}
         {tab("grid", "📊 Редактор (грід)")}
