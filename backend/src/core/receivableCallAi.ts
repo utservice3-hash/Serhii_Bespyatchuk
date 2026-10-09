@@ -158,10 +158,14 @@ export async function receivableLinkedCallIds(db: Db): Promise<string[]> {
   return r.rows.map((x) => x.uniqueid);
 }
 
-/** Короткий рядок для списку: «обіцяли 500 000 ₴ до 09.10 · частина» / «без обіцянки: …». */
-export function debtLine(r: Pick<DebtResult, "promised" | "amount_uah" | "pay_date" | "partial" | "summary">): string {
-  if (!r.promised) return `без обіцянки оплати${r.summary ? `: ${r.summary}` : ""}`;
-  const sum = r.amount_uah != null ? `${Math.round(r.amount_uah).toLocaleString("uk-UA").replace(/ /g, " ")} ₴` : "суму не назвали";
+/**
+ * Короткий рядок для списку: «обіцяли 500 000 ₴ до 09.10 · частина боргу · Олена, бухгалтер» / «без обіцянки: …».
+ * «З ким» — пряма вимога ТЗ Юлі (AI-вижимка: «сума, дата, з ким»); невідомо — не пишемо нічого, а не вигадуємо.
+ */
+export function debtLine(r: Pick<DebtResult, "promised" | "amount_uah" | "pay_date" | "partial" | "summary" | "who">): string {
+  const who = r.who?.trim() ? ` · ${r.who.trim()}` : "";
+  if (!r.promised) return `без обіцянки оплати${r.summary ? `: ${r.summary}` : ""}${who}`;
+  const sum = r.amount_uah != null ? `${Math.round(r.amount_uah).toLocaleString("uk-UA").replace(/[  ]/g, " ")} ₴` : "суму не назвали";
   const d = r.pay_date ? `${r.pay_date.slice(8, 10)}.${r.pay_date.slice(5, 7)}` : "";
-  return `обіцяли ${sum}${d ? ` до ${d}` : ""}${r.partial ? " · частина боргу" : ""}`;
+  return `обіцяли ${sum}${d ? ` до ${d}` : ""}${r.partial ? " · частина боргу" : ""}${who}`;
 }
