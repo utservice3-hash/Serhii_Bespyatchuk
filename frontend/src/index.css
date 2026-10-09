@@ -814,8 +814,8 @@ tr.recv-row:hover > td { background: var(--surface-2, rgba(127, 127, 127, 0.06))
 tr.recv-row:focus-visible { outline: 2px solid var(--accent, #c5141c); outline-offset: -2px; }
 
 /* 📞 4631: ДАТА БЕЗ РОЗМОВИ — ЖОВТИЙ РЯДОК. Напівпрозоро, щоб наведення й інші підсвітки лишались видимими. */
-tr.recv-row.recv-nocall > td { background: color-mix(in srgb, var(--warn-bg) 55%, transparent); }
-tr.recv-row.recv-nocall:hover > td { background: var(--warn-bg); }
+tr.recv-row[data-call="no_call"] > td { background: color-mix(in srgb, var(--warn-bg) 55%, transparent); }
+tr.recv-row[data-call="no_call"]:hover > td { background: var(--warn-bg); }
 .recv-call { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border, #e3e6ec); font-size: var(--fs-xs); line-height: 1.45; }
 .recv-call-pill { display: inline-block; border-radius: 999px; padding: 1px 8px; font-weight: 700; font-size: var(--fs-xs); }
 .recv-call-pill.ok { background: var(--ok-bg, #dcfce7); color: var(--ok, #166534); }

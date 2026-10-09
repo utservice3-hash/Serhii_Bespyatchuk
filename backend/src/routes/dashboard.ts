@@ -4278,8 +4278,7 @@ dashboardRouter.put("/receivables/note", async (req, res) => {
   }
   // 🗒 Порожній коментар не затирає текст — див. `core/receivableNoteMerge.ts` (#459).
   const prev = await pool.query<{ comment: string | null; deal_id: string | null; due_date: string | null; call_uniqueid: string | null; call_url: string | null }>(
-    `SELECT comment, deal_id::text AS deal_id, to_char(due_date, 'YYYY-MM-DD') AS due_date, call_uniqueid, call_url
-       FROM receivable_notes WHERE client_key = $1`, [clientKey]);
+    `SELECT comment, deal_id::text AS deal_id, to_char(due_date, 'YYYY-MM-DD') AS due_date, call_uniqueid, call_url FROM receivable_notes WHERE client_key = $1`, [clientKey]);
   // 🗓 Нова угода — новий запис: порожнє поле НЕ підтягує текст попередньої угоди (06.10.2026), інакше
   // стара обіцянка тихо переїхала б на нову угоду. Та сама угода — злиття як і раніше (#459).
   const prevDeal = prev.rows[0]?.deal_id == null ? null : Number(prev.rows[0].deal_id);
@@ -4298,18 +4297,20 @@ dashboardRouter.put("/receivables/note", async (req, res) => {
   try {
     await db.query("BEGIN");
     await db.query(
-      `INSERT INTO receivable_notes (client_key, comment, due_date, updated_by, updated_at, deal_id, call_uniqueid, call_url)
-       VALUES ($1, $2, $3, $4, now(), $5, $6, $7)
+      `INSERT INTO receivable_notes (client_key, comment, due_date, updated_by, updated_at, deal_id)
+       VALUES ($1, $2, $3, $4, now(), $5)
        ON CONFLICT (client_key) DO UPDATE SET
          comment = EXCLUDED.comment, due_date = EXCLUDED.due_date, deal_id = EXCLUDED.deal_id,
-         call_uniqueid = EXCLUDED.call_uniqueid, call_url = EXCLUDED.call_url,
          -- зміна дедлайну або угоди знімає анти-дубль авто-задачі «отримати оплату»
          task_created_at = CASE WHEN receivable_notes.due_date IS DISTINCT FROM EXCLUDED.due_date
                                   OR receivable_notes.deal_id IS DISTINCT FROM EXCLUDED.deal_id
                                 THEN NULL ELSE receivable_notes.task_created_at END,
          updated_by = EXCLUDED.updated_by, updated_at = now()`,
-      [clientKey, comment, dueDate, auth.userId, dealId, plan.call?.uniqueid ?? null, plan.call?.url ?? null]
+      [clientKey, comment, dueDate, auth.userId, dealId]
     );
+    // 📞 Розмова — окремим оператором у тій самій транзакції (рішення ядра `planAgreementChange`).
+    await db.query(`UPDATE receivable_notes SET call_uniqueid = $2, call_url = $3 WHERE client_key = $1`,
+      [clientKey, plan.call?.uniqueid ?? null, plan.call?.url ?? null]);
     // 🗓 ІСТОРІЯ ДОПИСУЄТЬСЯ, А НЕ ЗАМІНЮЄТЬСЯ. Поле щотижня «порожніє» правилом
     // (`isCurrentWeekNote`), і без цього рядка минулі домовленості справді б
     // зникали — тобто «очищення» стало б тим, чого власник прямо не хоче.

@@ -806,7 +806,7 @@ export function ReceivablesSection({
                             згортає — інакше кожен дотик до input/textarea закривав
                             би клієнта просто в момент редагування. */}
                         <tr role="button" tabIndex={0} aria-expanded={openKey === c.clientKey}
-                          className={c.callLink?.state === "no_call" ? "recv-row recv-nocall" : "recv-row"}
+                          className="recv-row" data-call={c.callLink?.state ?? "none"}
                           onClick={(e) => {
                             if ((e.target as HTMLElement).closest("input, textarea, button, select, a")) return;
                             toggleClient(c.clientKey);

@@ -212,7 +212,9 @@ test("#1530f ФРОНТ: фільтр і лічильник чипа берут�
   assert.equal(V.rescheduleLabel(3), "переносили 3 рази");
   assert.equal(V.rescheduleLabel(12), "переносили 12 разів");
   const sec = FE("pages/dashboard/sections/ReceivablesSection.tsx");
-  assert.match(sec, /callLink\?\.state === "no_call" \? "recv-row recv-nocall"/, "🔴 жовтий рядок не привʼязаний до стану «дата без розмови»");
+  assert.match(sec, /className="recv-row" data-call=\{c\.callLink\?\.state \?\? "none"\}/, "🔴 рядок не несе стан розмови — жовтому нема за що вчепитись");
+  const css = FE("index.css");
+  assert.match(css, /tr\.recv-row\[data-call="no_call"\] > td \{ background:/, "🔴 жовтий рядок не привʼязаний до стану «дата без розмови»");
   assert.match(sec, /disabled=\{!canEditAgreement\}/, "🔴 кнопка домовленості знову за правом тімліда — менеджер не може записати");
   const dash = FE("pages/Dashboard.tsx");
   assert.match(dash, /canEditAgreement=\{receivablesPerms\.canEditAgreement\}/, "🔴 право писати домовленість не доходить із сервера");
