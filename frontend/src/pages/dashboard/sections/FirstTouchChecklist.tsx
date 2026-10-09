@@ -27,10 +27,14 @@ export function ChecklistBlock({ c, checklist, promiseState, conversationType, o
   // Обіцянка написати (Viber, Telegram) — Ringostat месенджерів не бачить: пункт «не рахується», але сказати «не було» — неправда.
   const msgPromise = !promise ? r.promises.find((p) => p.who === "manager" && p.channel !== "call") ?? null : null;
   const lost = conversationType === "lead_lost";
+  // 09.10.2026: клієнтові було незручно говорити — запиту й ціни не було кому чути; передзвін рахується як обіцянка.
+  const later = conversationType === "call_later";
   const ob = c.row.objection;
   const evidence: Record<"request" | "price" | "promise" | "objection", { text: string; quote?: string }> = {
-    request: { text: lost ? "втрачений лід — клієнт уже відмовився, розпитувати нема про що" : r.client_request?.trim() || "запиту клієнта модель не виділила" },
-    price: { text: r.price.discussed ? "ціну назвали" : lost ? "втрачений лід — називати нікому" : "ціни не прозвучало", quote: r.price.quote },
+    request: { text: lost ? "втрачений лід — клієнт уже відмовився, розпитувати нема про що"
+      : later ? "клієнтові було незручно говорити — просив передзвонити, розпитати ще не було коли" : r.client_request?.trim() || "запиту клієнта модель не виділила" },
+    price: { text: r.price.discussed ? "ціну назвали" : lost ? "втрачений лід — називати нікому"
+      : later ? "клієнтові було незручно говорити — ціну назвати не було коли" : "ціни не прозвучало", quote: r.price.quote },
     promise: promise
       ? { text: `${promise.what}${promiseState ? ` · ${PROMISE_UI[promiseState].label.toLowerCase()}` : ""}`, quote: promise.quote }
       : msgPromise

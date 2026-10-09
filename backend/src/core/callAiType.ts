@@ -32,7 +32,8 @@ export function typeVerdict(type: ConversationType | null | undefined, confidenc
   override: TypeOverride | null, callbackPromised = false): TypeVerdict {
   if (override) return { inReport: override.isCargo, typeCheck: false, source: "manual" };
   if (!type) return { inReport: true, typeCheck: false, source: "none" };
-  if (type === "cargo_request" || type === "lead_lost") return { inReport: true, typeCheck: false, source: "model" };
+  // `call_later` (09.10.2026) — клієнт просив передзвонити: це клієнт, і передзвін рахується як обіцянка — у звіті.
+  if (type === "cargo_request" || type === "lead_lost" || type === "call_later") return { inReport: true, typeCheck: false, source: "model" };
   if (callbackPromised && CALLBACK_RESCUES.has(type)) return { inReport: true, typeCheck: false, source: "rule" };
   const sure = typeof confidence === "number" && confidence >= TYPE_CONFIDENCE_MIN;
   return sure ? { inReport: false, typeCheck: false, source: "model" } : { inReport: true, typeCheck: true, source: "model" };

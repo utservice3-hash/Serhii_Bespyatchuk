@@ -183,14 +183,16 @@ export function applyListFilter<T extends ListFilterRow>(rows: readonly T[], f: 
 /** Людський підпис терміну обіцянки в картці. */
 export function deadlineBasisLabel(basis: string): string {
   return basis === "minutes" ? "як пообіцяв" : basis === "day" ? "до кінця названого дня"
-    : basis === "conditional_next_workday" ? "умовна — до кінця наступного робочого дня" : "часу не названо — 20 хв";
+    : basis === "conditional_next_workday" ? "умовна — до кінця наступного робочого дня"
+    : basis === "client_asked_next_workday" ? "клієнт просив передзвонити — до кінця наступного робочого дня" : "часу не названо — 20 хв";
 }
 
 /** Тип розмови — дзеркало `CONVERSATION_TYPES` у `core/callAiProviders.ts` (ТЗ 30.09.2026). */
-export type ConversationTypeT = "cargo_request" | "lead_lost" | "carrier" | "vendor" | "job_seeker" | "wrong_number" | "no_dialog" | "other";
+export type ConversationTypeT = "cargo_request" | "lead_lost" | "call_later" | "carrier" | "vendor" | "job_seeker" | "wrong_number" | "no_dialog" | "other";
 export const TYPE_LABEL: Readonly<Record<ConversationTypeT, string>> = {
   cargo_request: "Запит на перевезення",
   lead_lost: "Втрачений лід (запит неактуальний)",
+  call_later: "Незручно говорити — просив передзвонити",
   carrier: "Перевізник",
   vendor: "Нам щось продають",
   job_seeker: "Пошук роботи",

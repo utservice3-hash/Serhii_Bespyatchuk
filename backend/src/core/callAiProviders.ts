@@ -191,17 +191,28 @@ export const RUBRIC_FIRST_TOUCH_V2 = "first-touch-v2";
  * розмитнення — наша послуга, тобто запит. Решта полів — як у v2.
  */
 export const RUBRIC_FIRST_TOUCH_V3 = "first-touch-v3";
-export const RUBRIC_CURRENT = RUBRIC_FIRST_TOUCH_V3;
+/**
+ * Рубрика «НЕЗРУЧНО ГОВОРИТИ — ПРОСИВ ПЕРЕДЗВОНИТИ» (рішення Романа 09.10.2026): тип `call_later` і поле
+ * `callback_request` — клієнт сам попросив передзвонити пізніше. Прохання стає обовʼязком менеджера (строк — названий
+ * клієнтом або кінець наступного робочого дня, `core/callAiPromise.ts`), а запит і ціна в такій розмові не рахуються.
+ * 🔴 ЛИШЕ ДЛЯ НОВИХ РОЗМОВ: джоба ставить v4 у чергу тільки тим розшифровкам, яких v2/v3 ще не розібрали
+ * (`transcriptsWithoutShown`), — старі розбори не переписуються, і старі цифри не зсуваються. Окремі старі розмови —
+ * лише явним запуском (`tools/firstTouchReanalyze`).
+ */
+export const RUBRIC_FIRST_TOUCH_V4 = "first-touch-v4";
+export const RUBRIC_CURRENT = RUBRIC_FIRST_TOUCH_V4;
+/** Попередні рубрики з типом розмови: розмова, вже розібрана будь-якою з них, автоматично v4 не отримує. */
+export const FIRST_TOUCH_LEGACY_TYPED: readonly string[] = [RUBRIC_FIRST_TOUCH_V3, RUBRIC_FIRST_TOUCH_V2];
 /** Усі версії рубрики «Першого дотику» — «дзвінок має рекламний розбір» не залежить від того, чи вже переаналізовано. */
-export const FIRST_TOUCH_RUBRICS: readonly string[] = [RUBRIC_PILOT_V0, RUBRIC_FIRST_TOUCH_V1, RUBRIC_FIRST_TOUCH_V2, RUBRIC_FIRST_TOUCH_V3];
+export const FIRST_TOUCH_RUBRICS: readonly string[] = [RUBRIC_PILOT_V0, RUBRIC_FIRST_TOUCH_V1, RUBRIC_FIRST_TOUCH_V2, RUBRIC_FIRST_TOUCH_V3, RUBRIC_FIRST_TOUCH_V4];
 /**
  * Що показувати, поки розмову не переаналізовано новою рубрикою: поточна, а якщо її ще немає — попередня з типом
  * розмови (v2). Без цього після зміни рубрики список годину показував би «у черзі» замість наявного розбору.
  */
-export const FIRST_TOUCH_SHOWN_RUBRICS: readonly string[] = [RUBRIC_FIRST_TOUCH_V3, RUBRIC_FIRST_TOUCH_V2];
+export const FIRST_TOUCH_SHOWN_RUBRICS: readonly string[] = [RUBRIC_FIRST_TOUCH_V4, RUBRIC_FIRST_TOUCH_V3, RUBRIC_FIRST_TOUCH_V2];
 
 /** Типи розмови (ТЗ 30.09.2026; `lead_lost` — 05.10.2026). У звіт ідуть `cargo_request` і `lead_lost`; решта — у «Виключені». */
-export const CONVERSATION_TYPES = ["cargo_request", "lead_lost", "carrier", "vendor", "job_seeker", "wrong_number", "no_dialog", "other"] as const;
+export const CONVERSATION_TYPES = ["cargo_request", "lead_lost", "call_later", "carrier", "vendor", "job_seeker", "wrong_number", "no_dialog", "other"] as const;
 export type ConversationType = typeof CONVERSATION_TYPES[number];
 
 export const ANALYSIS_SCHEMA = {
@@ -245,9 +256,22 @@ export const ANALYSIS_SCHEMA = {
     type_confidence: { type: "number", description: "упевненість у типі від 0 до 1" },
     type_reason: { type: "string", description: "одне речення: чому саме цей тип" },
     price_value: { type: "string", description: "названа ціна дослівно з валютою («18000 грн»); порожньо, якщо суми не прозвучало" },
+    callback_request: {
+      type: "object",
+      description: "правило 10: клієнт сам попросив передзвонити йому пізніше",
+      properties: {
+        asked: { type: "boolean", description: "true — клієнт попросив передзвонити пізніше («зараз незручно», «потім наберіть», «я на роботі»)" },
+        quote: { type: "string", description: "дослівні слова клієнта; порожньо, якщо прохання не було" },
+        deadline_text: { type: "string", description: "час, який назвав клієнт, дослівно; порожньо, якщо не назвав" },
+        deadline_kind: { type: "string", enum: ["minutes", "day", "none"], description: "як у правилі 6; none — час не названо («пізніше», «потім»)" },
+        deadline_minutes: { type: "integer", description: "для minutes — хвилин від кінця розмови; інакше 0" },
+        deadline_date: { type: "string", description: "для day — дата YYYY-MM-DD від дати розмови; інакше порожньо" },
+      },
+      required: ["asked", "quote", "deadline_text", "deadline_kind", "deadline_minutes", "deadline_date"],
+    },
   },
   required: ["summary", "manager_channel", "client_request", "price", "objections", "promises", "next_step",
-    "conversation_type", "type_confidence", "type_reason", "price_value"],
+    "conversation_type", "type_confidence", "type_reason", "price_value", "callback_request"],
 } as const;
 
 export const ANALYSIS_SYSTEM_PROMPT = [
@@ -270,11 +294,13 @@ export const ANALYSIS_SYSTEM_PROMPT = [
   "   cargo_request — людина хоче перевезти вантаж. Став його, якщо є ХОЧА Б ОДНА ознака запиту на перевезення: маршрут (звідки-куди), опис вантажу, вага чи обсяг, дата відвантаження, тип авто, питання «скільки коштує перевезти» — навіть якщо клієнт лише уточнював і нічого не домовились. Запит на розмитнення чи митне оформлення вантажу — теж cargo_request: це послуга компанії.",
   "   cargo_request також тоді, коли менеджер домовився передзвонити клієнту або клієнт підтвердив, що його запит актуальний, — навіть без жодних деталей вантажу (крім випадків, коли це явно перевізник, продавець, пошук роботи чи помилка номером).",
   "   lead_lost — клієнт звертався по перевезення (заявка, дзвінок), але тепер каже, що запит уже неактуальний: вирішив сам, знайшов інших, перевезення більше не потрібне. Став lead_lost, навіть якщо менеджер пообіцяв перевірити пізніше.",
+  "   call_later — клієнтові зараз незручно говорити, і він просить передзвонити пізніше («я на роботі», «за кермом», «потім наберіть»), а про сам вантаж у розмові нічого не сказано. Якщо клієнт встиг назвати маршрут, вантаж чи дату — це cargo_request, навіть коли він теж попросив передзвонити.",
   "   carrier — перевізник пропонує машину або шукає вантаж; vendor — нам щось продають (акумулятори, пальне, рекламу, послуги); job_seeker — питання про роботу чи вакансію; wrong_number — помилились номером, шукали іншу компанію; no_dialog — автовідповідач, тиша, обрив, розмови по суті немає; other — щось інше, не про перевезення вантажу клієнта.",
-  "   Будь-який тип, крім cargo_request і lead_lost, — ЛИШЕ якщо ознак запиту на перевезення немає зовсім.",
+  "   Будь-який тип, крім cargo_request, lead_lost і call_later, — ЛИШЕ якщо ознак запиту на перевезення немає зовсім.",
   "   type_confidence — наскільки ти впевнений у типі, від 0 до 1; type_reason — одне речення, чому так.",
   "8. price_value — названа ціна дослівно з валютою; порожньо, якщо конкретної суми не прозвучало.",
   "9. price.discussed = true ЛИШЕ тоді, коли МЕНЕДЖЕР назвав клієнту суму або діапазон за ЦЕ перевезення («буде 38 тисяч», «20–22 тисячі», «4500»). НЕ є озвученою ціною: бюджет, який назвав клієнт («до десяти», «80–85»); питання менеджера про бюджет; «вкладемось у ваш бюджет»; ціна іншого рейсу як орієнтир («з Нікополя вивозили за сто тисяч»); обіцянка порахувати пізніше. У таких випадках discussed = false, а quote і price_value — порожні.",
+  "10. callback_request — чи попросив КЛІЄНТ передзвонити йому пізніше. asked = true лише на прохання клієнта («передзвоніть пізніше», «зараз незручно, наберіть потім», «я на роботі, давайте ввечері»); обіцянка менеджера передзвонити — це правило 6, а не 10. quote — дослівні слова клієнта. Час, якщо клієнт його назвав, — у deadline_text, deadline_kind, deadline_minutes і deadline_date за тими самими правилами, що в правилі 6; не назвав — deadline_kind = none. Прохання не було: asked = false, рядки порожні, deadline_kind = none, deadline_minutes = 0.",
 ].join("\n");
 
 const mmss = (sec: number | null): string => {
@@ -361,6 +387,8 @@ export async function geminiGenerate(deps: HttpDeps, apiKey: string, model: stri
 export interface AnalysisResult {
   /** Поля рубрики `first-touch-v2`; у рядках v1 і `pilot-v0` їх немає. */
   conversation_type?: ConversationType; type_confidence?: number; type_reason?: string; price_value?: string;
+  /** Рубрика `first-touch-v4`: клієнт сам попросив передзвонити. У старіших рядках поля немає. */
+  callback_request?: CallbackRequest;
   summary: string;
   manager_channel: "0" | "1" | "unknown";
   client_request: string;
@@ -373,6 +401,11 @@ export interface AnalysisResult {
     deadline_minutes?: number; deadline_date?: string; conditional?: boolean;
   }[];
   next_step: string;
+}
+
+export interface CallbackRequest {
+  asked: boolean; quote: string; quote_found?: boolean | null; deadline_text: string;
+  deadline_kind: "minutes" | "day" | "none"; deadline_minutes: number; deadline_date: string;
 }
 
 const isStr = (v: unknown): v is string => typeof v === "string";
@@ -395,6 +428,12 @@ export function validateAnalysis(x: unknown): { ok: true; value: AnalysisResult 
   if (!(CONVERSATION_TYPES as readonly string[]).includes(o.conversation_type as string)) return { ok: false, why: "conversation_type поза переліком (рубрика first-touch-v2/v3)" };
   if (typeof o.type_confidence !== "number" || !(o.type_confidence >= 0 && o.type_confidence <= 1)) return { ok: false, why: "type_confidence не число 0..1" };
   if (!isStr(o.type_reason) || !isStr(o.price_value)) return { ok: false, why: "type_reason або price_value не рядок" };
+  // v4: прохання клієнта передзвонити. Поле обовʼязкове в схемі, тож без нього відповідь — не тієї форми.
+  const cb = o.callback_request as Record<string, unknown> | undefined;
+  if (!cb || typeof cb.asked !== "boolean" || !isStr(cb.quote) || !isStr(cb.deadline_text) || !["minutes", "day", "none"].includes(cb.deadline_kind as string)
+    || typeof cb.deadline_minutes !== "number" || !isStr(cb.deadline_date)) return { ok: false, why: "callback_request не тієї форми (рубрика first-touch-v4)" };
+  // Суперечність не виправляємо мовчки: «просив передзвонити» без прохання — модель помилилась в одному з двох полів.
+  if (o.conversation_type === "call_later" && !cb.asked) return { ok: false, why: "тип call_later, а прохання передзвонити немає" };
   return { ok: true, value: o as unknown as AnalysisResult };
 }
 
@@ -427,6 +466,7 @@ export function verifyQuotes(r: AnalysisResult, turns: readonly Turn[]): Analysi
     price: { ...r.price, quote_found: found(r.price.quote) },
     objections: r.objections.map((i) => ({ ...i, quote_found: found(i.quote) })),
     promises: r.promises.map((i) => ({ ...i, quote_found: found(i.quote) })),
+    ...(r.callback_request ? { callback_request: { ...r.callback_request, quote_found: found(r.callback_request.quote) } } : {}),
   };
 }
 

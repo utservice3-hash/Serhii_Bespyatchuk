@@ -3,7 +3,7 @@ import { loadTunables } from "./firstTouchTunables.js";
 import { adDealFirstTalksSql, type AdFlag, type FirstTalkRow } from "./adCallFactsRules.js";
 import { createMinInterval, type HttpDeps } from "./callAiHttp.js";
 import { downloadRecording } from "./ringostatRecording.js";
-import { ELEVENLABS_STT_MODEL, elevenLabsTranscribe, GEMINI_MODEL, geminiGenerate, RUBRIC_CURRENT } from "./callAiProviders.js";
+import { ELEVENLABS_STT_MODEL, elevenLabsTranscribe, FIRST_TOUCH_LEGACY_TYPED, GEMINI_MODEL, geminiGenerate, RUBRIC_CURRENT } from "./callAiProviders.js";
 import { OBJECTION_FROM, OBJECTION_KIT, RUBRIC_OBJECTION_V1 } from "./callAiObjection.js";
 import { carrierActiveIds } from "./carrierCallQueue.js";
 import { notifyCapOnce } from "./aiCapAlert.js";
@@ -68,11 +68,45 @@ export const OBJ_MAX_OUTPUT_TOKENS = 512;
 export async function objectionCandidates(db: Db, from: string): Promise<string[]> {
   const r = await db.query<{ uniqueid: string }>(
     `SELECT DISTINCT t.uniqueid FROM call_transcripts t
-       JOIN call_analyses a ON a.transcript_id = t.id AND a.rubric_version = $1 AND a.status = 'done'
+       JOIN call_analyses a ON a.transcript_id = t.id AND a.rubric_version = ANY($1::text[]) AND a.status = 'done'
        JOIN ringostat_calls rc ON rc.uniqueid = t.uniqueid
       WHERE (rc.calldate AT TIME ZONE 'Europe/Kyiv')::date >= $2::date
         AND COALESCE(a.result->>'conversation_type', '') NOT IN ('carrier', 'vendor', 'job_seeker', 'wrong_number')`,
-    [RUBRIC_CURRENT, from]);
+    [[RUBRIC_CURRENT, ...FIRST_TOUCH_LEGACY_TYPED], from]);
+  return r.rows.map((x) => x.uniqueid);
+}
+
+/**
+ * Кому ставити поточну рубрику автоматично: розшифровки, яких ще не розібрала жодна попередня рубрика з типом (v2/v3).
+ * Нова рубрика (v4, 09.10.2026) НЕ переписує вже розібрані розмови — інакше її поява переаналізувала б усе й зсунула
+ * старі цифри. Старі — лише явним запуском (`tools/firstTouchReanalyze`).
+ */
+export async function transcriptsWithoutLegacy(db: Db): Promise<string[]> {
+  const r = await db.query<{ uniqueid: string }>(
+    `SELECT t.uniqueid FROM call_transcripts t
+      WHERE t.status = 'done'
+        AND NOT EXISTS (SELECT 1 FROM call_analyses a WHERE a.transcript_id = t.id AND a.rubric_version = ANY($1::text[]) AND a.status = 'done')`,
+    [[...FIRST_TOUCH_LEGACY_TYPED]]);
+  return r.rows.map((x) => x.uniqueid);
+}
+
+/**
+ * Кандидати на переаналіз рубрикою v4 (рішення Романа 09.10.2026, «переаналіз кандидатів — так»): уже розібрані v2/v3,
+ * розмова коротша за хвилину, запиту й обіцянок немає, а в описі моделі — «пізніше / незручно / на роботі / передзвонити».
+ * Свідомо широке сито: зайвий кандидат коштує центи й лише дістане чесніший тип; v4, уже готовий, — пропускається.
+ */
+export const CALL_LATER_HINT = "(пізніше|незручн|на роботі|за кермом|зайнят|передзвон|перетелефон|набер)";
+export async function callLaterCandidates(db: Db): Promise<string[]> {
+  const r = await db.query<{ uniqueid: string }>(
+    `SELECT DISTINCT t.uniqueid FROM call_transcripts t
+       JOIN call_analyses a ON a.transcript_id = t.id AND a.rubric_version = ANY($1::text[]) AND a.status = 'done'
+       JOIN ringostat_calls rc ON rc.uniqueid = t.uniqueid
+      WHERE rc.billsec < 60
+        AND COALESCE(a.result->>'client_request', '') = ''
+        AND jsonb_array_length(COALESCE(a.result->'promises', '[]'::jsonb)) = 0
+        AND lower(COALESCE(a.result->>'summary', '') || ' ' || COALESCE(a.result->>'next_step', '') || ' ' || COALESCE(a.result->>'type_reason', '')) ~ $2
+        AND NOT EXISTS (SELECT 1 FROM call_analyses v WHERE v.transcript_id = t.id AND v.rubric_version = $3 AND v.status = 'done')`,
+    [[...FIRST_TOUCH_LEGACY_TYPED], CALL_LATER_HINT, RUBRIC_CURRENT]);
   return r.rows.map((x) => x.uniqueid);
 }
 
@@ -194,7 +228,8 @@ export async function runCallAiTick(env: TickEnv): Promise<TickReport> {
 
   const ap = { provider: LLM_PROVIDER, model: GEMINI_MODEL, rubricVersion: RUBRIC_CURRENT,
     sttProvider: STT_PROVIDER, sttModel: ELEVENLABS_STT_MODEL };
-  await enqueueAnalyses(env.db, { ...ap, now: env.now() }, null, carrierOnly);
+  const fresh = await transcriptsWithoutLegacy(env.db);
+  if (fresh.length) await enqueueAnalyses(env.db, { ...ap, now: env.now() }, fresh, carrierOnly);
   const llm = await drainWithBudget(() => runAnalysisPortion(env.db, {
     apiKey: env.keys.gemini,
     generate: (key, model, body) => geminiGenerate(env.http, key, model, body, LLM_POLICY),

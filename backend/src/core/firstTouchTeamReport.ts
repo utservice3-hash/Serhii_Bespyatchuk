@@ -66,7 +66,9 @@ const CALL_PROMISE: ReadonlySet<PromiseState> = new Set(["kept_talk", "kept_atte
 export const isAnalysed = (r: ReportRowIn): boolean => r.inReport && r.state === "done";
 export const isLost = (r: ReportRowIn): boolean => isAnalysed(r) && r.conversationType === "lead_lost";
 /** Де ціну мали назвати: розібрано й це не втрачений лід. */
-export const isPriceable = (r: ReportRowIn): boolean => isAnalysed(r) && !isLost(r);
+/** Клієнтові було незручно говорити, просив передзвонити (рубрика v4, 09.10.2026): запиту й ціни не було кому чути. */
+export const isCallLater = (r: ReportRowIn): boolean => isAnalysed(r) && r.conversationType === "call_later";
+export const isPriceable = (r: ReportRowIn): boolean => isAnalysed(r) && !isLost(r) && !isCallLater(r);
 export const noPrice = (r: ReportRowIn): boolean => isPriceable(r) && r.priceDiscussed === false;
 export const noPriceNoComment = (r: ReportRowIn): boolean => noPrice(r) && !r.priceNote;
 export const hasAgreement = (r: ReportRowIn): boolean => isAnalysed(r) && r.promiseState != null && CALL_PROMISE.has(r.promiseState);
@@ -150,8 +152,8 @@ export function checklist(r: ReportRowIn): Checklist | null {
   if (!isAnalysed(r)) return null;
   const ps = r.promiseState;
   return {
-    request: isLost(r) ? "o" : r.hasRequest ? "y" : "n",
-    price: isLost(r) ? "o" : r.priceDiscussed === true ? "y" : "n",
+    request: isLost(r) || isCallLater(r) ? "o" : r.hasRequest ? "y" : "n",
+    price: isLost(r) || isCallLater(r) ? "o" : r.priceDiscussed === true ? "y" : "n",
     promise: ps != null && PROMISE_YES.has(ps) ? "y" : ps != null && PROMISE_NO.has(ps) ? "n" : "o",
     objection: !r.objection?.present ? "o" : r.objection.handled === "handled" ? "y" : r.objection.handled === "not_handled" ? "n" : "o",
   };

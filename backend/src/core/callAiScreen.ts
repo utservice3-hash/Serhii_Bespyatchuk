@@ -273,7 +273,29 @@ const overrideJoin = (alias: string): string => `LEFT JOIN LATERAL (SELECT o.is_
 function managerPromisesOf(res: AnalysisResult): ModelPromise[] {
   return res.promises.filter((p) => p.who === "manager" && p.channel && p.deadline_kind)
     .map((p) => ({ who: "manager", what: p.what, deadline_text: p.deadline_text, channel: p.channel!, deadline_kind: p.deadline_kind!,
-      deadline_minutes: p.deadline_minutes ?? 0, deadline_date: p.deadline_date ?? "", conditional: p.conditional === true }));
+      deadline_minutes: p.deadline_minutes ?? 0, deadline_date: p.deadline_date ?? "", conditional: p.conditional === true,
+      client_asked: (p as { client_asked?: boolean }).client_asked === true }));
+}
+
+/** Підпис обіцянки, що виросла з прохання клієнта, — його бачить чек-лист і картка. */
+export const CLIENT_CALLBACK_WHAT = "Передзвонити — клієнт просив";
+
+/**
+ * 📞 ПРОХАННЯ КЛІЄНТА ПЕРЕДЗВОНИТИ = ОБІЦЯНКА МЕНЕДЖЕРА (рубрика v4, рішення Романа 09.10.2026). Додаємо його в
+ * `promises` як дзвінок від менеджера розмови — далі працює той самий механізм: плитка «Обіцяли — дзвінка немає», черга
+ * тімліда, «поза телефонією». Строк — названий клієнтом час або кінець наступного робочого дня (`client_asked`).
+ * Якщо менеджер і сам пообіцяв ПЕРЕДЗВОНИТИ — друга обіцянка не додається: один передзвін не рахується двічі.
+ * Рядки старих рубрик (без поля) повертаються як є.
+ */
+export function withClientCallback(res: AnalysisResult): AnalysisResult {
+  const cb = res.callback_request;
+  if (!cb?.asked) return res;
+  if (res.promises.some((p) => p.who === "manager" && p.channel === "call")) return res;
+  return { ...res, promises: [...res.promises, {
+    who: "manager", what: CLIENT_CALLBACK_WHAT, deadline_text: cb.deadline_text, quote: cb.quote, quote_found: cb.quote_found ?? null,
+    channel: "call", deadline_kind: cb.deadline_kind, deadline_minutes: cb.deadline_minutes, deadline_date: cb.deadline_date,
+    conditional: false, client_asked: true,
+  } as AnalysisResult["promises"][number]] };
 }
 
 /** Кінець розмови: початок + розмова. Від нього рахується термін і шукаються наші дзвінки. */
@@ -394,6 +416,7 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
   const params = [...q.params, STT_PROVIDER, ELEVENLABS_STT_MODEL, LLM_PROVIDER, GEMINI_MODEL, [...FIRST_TOUCH_SHOWN_RUBRICS],
     scope.managerId ?? null, scope.teamId ?? null, [...OUTBOUND_TYPES]];
   const raw = (await db.query<RawRow>(sql, params)).rows;
+  for (const x of raw) if (x.result) x.result = withClientCallback(x.result);
   const rows = raw.map(foldRow);
 
   // П4–П7: стан обіцянок — з дзвінків Ringostat на номер після розмови.
@@ -496,6 +519,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
     scope.managerId ?? null, scope.teamId ?? null, [...FIRST_TOUCH_RUBRICS]]);
   const raw = r.rows[0];
   if (!raw) return null;
+  if (raw.result) raw.result = withClientCallback(raw.result);
   const row = foldRow(raw);
   const deals = raw.client_phone
     ? (await db.query<{ kommo_id: string }>(

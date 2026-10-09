@@ -1494,3 +1494,83 @@ test("#921 СОРТУВАННЯ МЕНЕДЖЕРІВ: клік по колонц
   assert.match(sec, /localStorage\.setItem\("ftd\.mgrSort"/, "🔴 вибір сортування не памʼятається");
 });
 
+/**
+ * #923 — СТРОК ПРОХАННЯ КЛІЄНТА ПЕРЕДЗВОНИТИ (рішення Романа 09.10.2026): клієнт не назвав часу — до кінця НАСТУПНОГО
+ * РОБОЧОГО дня за Києвом (пт → пн), а не «20 хв за замовчуванням»; назвав — названий час. Прохання стає обіцянкою
+ * менеджера-дзвінком (`withClientCallback`), але НЕ дублюється, якщо менеджер і сам пообіцяв передзвонити; без прохання
+ * і в старих рядках — результат той самий.
+ * 🧨 Червоніє, якщо строк рахувати не до кінця наступного робочого дня, ігнорувати названий клієнтом час, губити
+ * прохання або рахувати один передзвін двічі.
+ */
+test("#923 ПРОХАННЯ ПЕРЕДЗВОНИТИ: строк — кінець наступного робочого дня (пт → пн) або названий час; стає обіцянкою менеджера, не дублюється", async () => {
+  const P = await import("./callAiPromise.js");
+  const S = await import("./callAiScreen.js");
+  const fri = new Date("2026-10-09T05:57:10Z"); // пт 09.10, 08:57 за Києвом
+  const d = (o: Record<string, unknown>) => P.promiseDeadline({ deadline_kind: "none", deadline_minutes: 0, deadline_date: "", conditional: false, ...o } as never, fri);
+  assert.deepEqual([d({ client_asked: true }).deadline.toISOString(), d({ client_asked: true }).basis], ["2026-10-12T20:59:59.000Z", "client_asked_next_workday"], "🔴 строк прохання — не кінець понеділка 12.10");
+  assert.equal(d({}).basis, "default_minutes", "дзеркало: обіцянка менеджера без часу — і далі 20 хв");
+  assert.equal(d({ client_asked: true, deadline_kind: "minutes", deadline_minutes: 120 }).deadline.toISOString(), "2026-10-09T07:57:10.000Z", "🔴 названий клієнтом час проігноровано");
+  const tue = P.promiseDeadline({ deadline_kind: "none", deadline_minutes: 0, deadline_date: "", conditional: false, client_asked: true } as never, new Date("2026-10-06T10:00:00Z"));
+  assert.equal(tue.deadline.toISOString(), "2026-10-07T20:59:59.000Z", "🔴 вівторок → не кінець середи");
+  const base = { summary: "", manager_channel: "1", client_request: "", next_step: "", price: { discussed: false, quote: "" }, objections: [], promises: [] as never[],
+    conversation_type: "call_later", type_confidence: 0.9, type_reason: "", price_value: "" } as const;
+  const cb = { asked: true, quote: "Потом позвоните", deadline_text: "", deadline_kind: "none", deadline_minutes: 0, deadline_date: "" } as const;
+  const got = S.withClientCallback({ ...base, callback_request: cb } as never);
+  assert.equal(got.promises.length, 1, "🔴 прохання клієнта не стало обіцянкою");
+  assert.equal(got.promises[0].who, "manager");
+  assert.equal(got.promises[0].channel, "call");
+  assert.equal((got.promises[0] as { client_asked?: boolean }).client_asked, true, "🔴 обіцянку з прохання не позначено — строк стане 20 хв");
+  assert.equal(got.promises[0].quote, "Потом позвоните", "🔴 цитата клієнта загубилась");
+  const own = { who: "manager", what: "передзвоню", deadline_text: "", quote: "наберу", channel: "call", deadline_kind: "none", deadline_minutes: 0, deadline_date: "", conditional: false };
+  assert.equal(S.withClientCallback({ ...base, promises: [own], callback_request: cb } as never).promises.length, 1, "🔴 один передзвін пораховано двічі");
+  const msg = { ...own, channel: "message" };
+  assert.equal(S.withClientCallback({ ...base, promises: [msg], callback_request: cb } as never).promises.length, 2, "дзеркало: обіцянка написати не замінює передзвону");
+  assert.equal(S.withClientCallback({ ...base, callback_request: { ...cb, asked: false } } as never).promises.length, 0, "🔴 обіцянку вигадано без прохання");
+  const v3 = { ...base, conversation_type: "cargo_request" };
+  assert.equal(S.withClientCallback(v3 as never), v3, "🔴 старий рядок (без поля) змінено");
+});
+
+/**
+ * #924 — «НЕЗРУЧНО ГОВОРИТИ» У ЧЕК-ЛИСТІ Й ЦИФРАХ (рішення Романа 09.10.2026): тип `call_later` — у звіті; запит і ціна
+ * «не рахуються»; розмова поза знаменником «Ціна озвучена» і не стоїть у черзі «Без ціни»; обіцянка (з прохання) — як
+ * звичайна. Фронт: підпис типу, строку й пояснення в чек-листі.
+ * 🧨 Червоніє, якщо `call_later` піде у «Виключені», якщо ціна чи запит стануть «ні», або розмова лишиться в знаменнику ціни.
+ */
+test("#924 НЕЗРУЧНО ГОВОРИТИ: у звіті; запит і ціна «не рахуються»; поза знаменником ціни й чергою «Без ціни»; підписи на фронті", async () => {
+  const T = await import("./callAiType.js");
+  const R = await import("./firstTouchTeamReport.js");
+  assert.equal(T.typeVerdict("call_later" as never, 0.95, null).inReport, true, "🔴 «незручно говорити» пішло у Виключені");
+  assert.equal(T.typeVerdict("carrier" as never, 0.95, null).inReport, false, "дзеркало: перевізник і далі у Виключених");
+  const row = { calledAt: "2026-10-09T05:56:54Z", managerId: 1, managerName: "М", teamName: null, inReport: true, state: "done", priceDiscussed: false,
+    promiseState: "broken" as const, typeCheck: false, priceNote: null, missedNote: null, conversationType: "call_later", hasRequest: false, reviewNote: null, objection: null } as unknown as Parameters<typeof R.checklist>[0];
+  assert.deepEqual(R.checklist(row), { request: "o", price: "o", promise: "n", objection: "o" }, "🔴 запит чи ціна «ні» в розмові, де говорити було незручно");
+  assert.equal(R.isPriceable(row), false, "🔴 «незручно говорити» тягне вниз «Ціна озвучена»");
+  assert.equal(R.reviewReason(row), "noCall", "🔴 непередзвонене прохання не потрапило в чергу як «Немає дзвінка»");
+  assert.equal(R.reviewReason({ ...row, promiseState: "pending" }), null, "🔴 розмова в черзі «Без ціни», хоч ціну назвати не було коли");
+  const cargo: typeof row = { ...row, conversationType: "cargo_request" };
+  assert.deepEqual([R.checklist(cargo)?.request, R.checklist(cargo)?.price, R.isPriceable(cargo)], ["n", "n", true], "дзеркало: звичайний запит без ціни — і далі «ні»");
+  const V = await loadView() as unknown as { TYPE_LABEL: Record<string, string>; deadlineBasisLabel: (b: string) => string };
+  assert.match(V.TYPE_LABEL.call_later ?? "", /Незручно говорити/, "🔴 тип без підпису на екрані");
+  assert.match(V.deadlineBasisLabel("client_asked_next_workday"), /клієнт просив передзвонити — до кінця наступного робочого дня/);
+  const ck = readFileSync(FE("pages/dashboard/sections/FirstTouchChecklist.tsx"), "utf8");
+  assert.match(ck, /later \? "клієнтові було незручно говорити — просив передзвонити/, "🔴 у чек-листі немає пояснення, чому запит не рахується");
+});
+
+/**
+ * #925 — ДЕ ЦЕ ПРАЦЮЄ І ЧОГО НЕ ЧІПАЄ (09.10.2026): прохання клієнта додається до обіцянок і в СПИСКУ, і в КАРТЦІ (інакше
+ * плитка й картка розійдуться); джоба ставить v4 лише розмовам, яких v2/v3 ще не розібрали (`transcriptsWithoutLegacy`),
+ * — а не всім підряд, бо інакше поява v4 переаналізувала б усе й зсунула старі цифри; заперечення беруть і v3, і v4.
+ * 🧨 Червоніє, якщо повернути `enqueueAnalyses(…, null, …)` для поточної рубрики, забути прохання в списку чи картці або
+ * звузити кандидатів заперечень до самої v4.
+ */
+test("#925 ПРОХАННЯ ПЕРЕДЗВОНИТИ — У СПИСКУ Й КАРТЦІ; v4 АВТОМАТИЧНО ЛИШЕ НОВИМ РОЗМОВАМ; заперечення — з v3 і v4", () => {
+  const scr = SRC("core/callAiScreen.ts");
+  assert.match(scr, /const raw = \(await db\.query<RawRow>\(sql, params\)\)\.rows;\n  for \(const x of raw\) if \(x\.result\) x\.result = withClientCallback\(x\.result\);\n  const rows = raw\.map\(foldRow\);/, "🔴 список не бачить прохання клієнта");
+  assert.match(scr, /if \(!raw\) return null;\n  if \(raw\.result\) raw\.result = withClientCallback\(raw\.result\);\n  const row = foldRow\(raw\);/, "🔴 картка не бачить прохання клієнта");
+  const tick = SRC("core/callAiTick.ts");
+  assert.match(tick, /const fresh = await transcriptsWithoutLegacy\(env\.db\);\n  if \(fresh\.length\) await enqueueAnalyses\(env\.db, \{ \.\.\.ap, now: env\.now\(\) \}, fresh, carrierOnly\);/, "🔴 джоба ставить v4 не лише новим розмовам");
+  assert.doesNotMatch(tick, /enqueueAnalyses\(env\.db, \{ \.\.\.ap, now: env\.now\(\) \}, null/, "🔴 v4 у черзі для ВСІХ розшифровок — старі цифри зсунуться");
+  assert.match(tick, /a\.rubric_version = ANY\(\$1::text\[\]\) AND a\.status = 'done'\)`,\n    \[\[\.\.\.FIRST_TOUCH_LEGACY_TYPED\]\]\);/, "🔴 «ще не розібрані» визначено не через v2/v3");
+  assert.match(tick, /\[\[RUBRIC_CURRENT, \.\.\.FIRST_TOUCH_LEGACY_TYPED\], from\]/, "🔴 заперечення не беруть розмови, розібрані v3");
+});
+
