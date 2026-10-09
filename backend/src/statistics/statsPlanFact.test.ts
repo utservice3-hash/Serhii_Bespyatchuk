@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { skipReason } from "../db/scratchDb.js";
 import { needsDb } from "../testMode.js";
-import { rangeWindows, compareWindows, compareLabel, sameDayPrevMonth, planFactLine } from "./statsCompare.js";
+import { rangeWindows, compareWindows, compareLabel, sameDayPrevMonth, planFactLine, spreadWeekCellsToDays, foldWeek, type WeekPlanCell } from "./statsCompare.js";
 import { avgCheckBase, avgCheckTargetOf, AVG_CHECK_MIN_DEALS } from "../core/avgCheckTargetRules.js";
 import { effectiveNorm, callsNormVerdict, canSetCallsNorm } from "../core/callsNormRules.js";
 
@@ -200,4 +200,23 @@ test("#1542d КОЛОНКА ЗВІТУ «ДНІВ З НОРМОЮ»: денні 
   const table = FE("pages/dashboard/sections/ReportTableSection.tsx");
   assert.match(table, /case "normDays":[\s\S]{0,300}норму не задано/, "🔴 клітинка без норми не називає стан — покаже порожнє або 0");
   assert.match(table, /case "normDays":[\s\S]{0,600}c\.workDays/, "🔴 знаменник (робочі дні) зник із клітинки");
+});
+
+test("#1540f ПЛАН НА ДЕНЬ: Σ днів тижня = план тижня плитки (`foldWeek`), і з ручною ціллю на два тижні, і на межі місяців", () => {
+  // Менеджер 1: автоплан; менеджер 2: ручна ціль задачі 77 на 28.09–11.10 (два тижні; вересень і жовтень окремими частинами).
+  const cells: WeekPlanCell[] = [
+    { managerId: 1, teamId: 5, blockFrom: "2026-09-28", blockTo: "2026-09-30", auto: 30_000, manual: null, manualTaskId: null },
+    { managerId: 1, teamId: 5, blockFrom: "2026-10-01", blockTo: "2026-10-04", auto: 20_000, manual: null, manualTaskId: null },
+    { managerId: 1, teamId: 5, blockFrom: "2026-10-05", blockTo: "2026-10-11", auto: 50_000, manual: null, manualTaskId: null },
+    { managerId: 2, teamId: 5, blockFrom: "2026-09-28", blockTo: "2026-09-30", auto: 9, manual: 40_000, manualTaskId: 77 },
+    { managerId: 2, teamId: 5, blockFrom: "2026-10-01", blockTo: "2026-10-04", auto: 9, manual: 40_000, manualTaskId: 77 },
+    { managerId: 2, teamId: 5, blockFrom: "2026-10-05", blockTo: "2026-10-11", auto: 9, manual: 40_000, manualTaskId: 77 },
+  ];
+  const days = spreadWeekCellsToDays(cells, () => ["company"], "2026-09-28", "2026-10-11").get("company")!;
+  const weekSum = (from: string, to: string) => [...days].filter(([d]) => d >= from && d <= to).reduce((a, [, v]) => a + v, 0);
+  const tileWeek = (starts: string[]) => [...foldWeek(cells.filter((c) => starts.includes(c.blockFrom)), starts).values()]
+    .reduce((a, p) => a + p.autoPerBlock.reduce((x, v) => x + v, 0) + p.manual, 0);
+  assert.equal(Math.round(weekSum("2026-09-28", "2026-10-04")), tileWeek(["2026-09-28", "2026-10-01"]), "🔴 тиждень через межу місяців: Σ днів ≠ план плитки");
+  assert.equal(Math.round(weekSum("2026-10-05", "2026-10-11")), tileWeek(["2026-10-05"]), "🔴 ручна ціль на два тижні загубилась у другому тижні");
+  assert.equal([...days.keys()].filter((d) => ["2026-10-03", "2026-10-04", "2026-10-10"].includes(d)).length, 0, "🔴 план на вихідний");
 });

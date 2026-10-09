@@ -208,3 +208,39 @@ export function planFactLine(x: { plan: number | null; fact: number; expect: num
   };
 }
 
+
+/** Робочі дні (Пн–Пт) відрізка — тим самим календарем, що план тижня (`workingDaysBetween`). */
+export function workdaysOf(from: string, to: string): string[] {
+  const out: string[] = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) { const w = isoDow(d); if (w !== 6 && w !== 7) out.push(d); }
+  return out;
+}
+
+/**
+ * 📈 ПЛАН НА ДЕНЬ (4632 п.2.1): ті самі клітинки плану тижня, що в плитці, — по робочих днях. Автоплан частини — по
+ * робочих днях своєї частини; ручна ціль — раз на ЗАДАЧУ В МЕЖАХ ТИЖНЯ (як `foldWeek`) по робочих днях усього тижня.
+ * Тож Σ днів тижня == план тижня плитки. 📐 Перша редакція рахувала ручну ціль раз на весь графік і губила 30 000 ₴
+ * тижня 28.09 (задача на два тижні); тримає `#1540f`.
+ */
+export function spreadWeekCellsToDays(cells: readonly WeekPlanCell[], scopesOf: (c: WeekPlanCell) => string[], from: string, to: string):
+    Map<string, Map<string, number>> {
+  const out = new Map<string, Map<string, number>>();
+  const add = (scope: string, day: string, v: number) => {
+    if (day < from || day > to) return;
+    const m = out.get(scope) ?? new Map<string, number>(); m.set(day, (m.get(day) ?? 0) + v); out.set(scope, m);
+  };
+  const counted = new Set<string>();
+  for (const c of cells) {
+    if (c.manual != null && c.manualTaskId != null) {
+      const wk = weekOf(c.blockFrom), once = `${c.manualTaskId}:${wk.from}`;
+      if (counted.has(once)) continue;
+      counted.add(once);
+      const days = workdaysOf(wk.from, wk.to);
+      for (const d of days) for (const sc of scopesOf(c)) add(sc, d, c.manual / days.length);
+    } else {
+      const days = workdaysOf(c.blockFrom, c.blockTo);
+      for (const d of days) for (const sc of scopesOf(c)) add(sc, d, c.auto / days.length);
+    }
+  }
+  return out;
+}

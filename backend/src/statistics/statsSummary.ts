@@ -29,7 +29,7 @@ import * as metrics from "../core/metrics.js";
 import { loadKpiTargets } from "../core/kpiTargetsDb.js";
 import { leadgenTeamMembers, approvedLeadgenPlans } from "../core/leadgenPlans.js";
 import { planForPeriod } from "../core/leadgenPlanRules.js";
-import { planFactLine, type PlanFactLine } from "./statsCompare.js";
+import { planFactLine, spreadWeekCellsToDays, workdaysOf, type PlanFactLine } from "./statsCompare.js";
 export { planFactLine, type PlanFactLine } from "./statsCompare.js";
 import { compareWindows, rangeWindows, compareLabel, deltaPct, planPct, rankByPlan, foldWeek, weekOf, type Gran, type Window, type WeekPlanCell, type CompareWindows } from "./statsCompare.js";
 import { kyivToday, workingDaysBetween } from "../core/dates.js";
@@ -179,13 +179,6 @@ async function planCellsForMonths(months: readonly string[]): Promise<WeekPlanCe
   return out;
 }
 
-/** Робочі дні (Пн–Пт) відрізка — тим самим календарем, що план тижня (`workingDaysBetween`). */
-export function workdaysOf(from: string, to: string): string[] {
-  const out: string[] = [];
-  for (let d = from; d <= to; d = addDaysIso(d, 1)) { const w = new Date(`${d}T00:00:00Z`).getUTCDay(); if (w !== 0 && w !== 6) out.push(d); }
-  return out;
-}
-
 /**
  * План на день: Σ по днях == план тижня (до копійки до округлення), тож графік «день» і плитка «тиждень» не
  * розходяться. Компанія + живі команди, як інші лінії плану.
@@ -200,22 +193,9 @@ async function dayPlanSeries(from: string, to: string): Promise<{ scopeKey: stri
     if (day < from || day > to) return;
     const m = byScope.get(scope) ?? new Map<string, number>(); m.set(day, (m.get(day) ?? 0) + v); byScope.set(scope, m);
   };
-  // Ручна ціль — раз на ЗАДАЧУ на весь прохід: тиждень через межу місяців інакше порахував би її двічі (як `foldWeek`).
-  const counted = new Set<number>();
-  {
-    const cells = await planCellsForMonths(ms.rows.map((r) => r.m));
-    for (const c of cells) {
-      const scopes = ["company", ...(c.teamId != null && live.has(c.teamId) ? [String(c.teamId)] : [])];
-      if (c.manual != null && c.manualTaskId != null) {
-        if (counted.has(c.manualTaskId)) continue;
-        counted.add(c.manualTaskId);
-        const wk = weekOf(c.blockFrom), days = workdaysOf(wk.from, wk.to);
-        for (const d of days) for (const sc of scopes) add(sc, d, c.manual / days.length);
-      } else {
-        const days = workdaysOf(c.blockFrom, c.blockTo);
-        for (const d of days) for (const sc of scopes) add(sc, d, c.auto / days.length);
-      }
-    }
+  const cells = await planCellsForMonths(ms.rows.map((r) => r.m));
+  for (const [scope, days] of spreadWeekCellsToDays(cells, (c) => ["company", ...(c.teamId != null && live.has(c.teamId) ? [String(c.teamId)] : [])], from, to)) {
+    for (const [d, v] of days) add(scope, d, v);
   }
   return [...byScope].map(([scopeKey, m]) => ({ scopeKey,
     points: [...m].sort(([a], [b]) => a.localeCompare(b)).map(([period, value]) => ({ period, value: Math.round(value) })) }));
