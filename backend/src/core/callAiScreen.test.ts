@@ -1254,7 +1254,8 @@ test("#905 ЗАПЕРЕЧЕННЯ: окрема рубрика, лише нес�
   assert.match(tick, /apiKey: env\.keys\.gemini, kit: OBJECTION_KIT,/, "🔴 порція заперечень іде без своєї рубрики");
   const T = await import("./callAiTick.js");
   assert.ok(T.OBJ_BUDGET_MS > 0 && T.OBJ_BUDGET_MS < T.LLM_BUDGET_MS, "🔴 бюджет заперечень поза бюджетом розбору");
-  assert.match(tick, /LLM_BUDGET_MS - OBJ_BUDGET_MS, env\.http\.nowMs, out\.llm\)/, "🔴 заперечення додали час до тіку замість частки розбору");
+  // 4631 (09.10.2026): розбір розмов про борг теж бере ЧАСТКУ того самого бюджету — твердження те саме.
+  assert.match(tick, /LLM_BUDGET_MS - OBJ_BUDGET_MS(?: - DEBT_BUDGET_MS)?, env\.http\.nowMs, out\.llm\)/, "🔴 заперечення додали час до тіку замість частки розбору");
 });
 
 /**
@@ -1568,7 +1569,8 @@ test("#925 ПРОХАННЯ ПЕРЕДЗВОНИТИ — У СПИСКУ Й КА
   assert.match(scr, /const raw = \(await db\.query<RawRow>\(sql, params\)\)\.rows;\n  for \(const x of raw\) if \(x\.result\) x\.result = withClientCallback\(x\.result\);\n  const rows = raw\.map\(foldRow\);/, "🔴 список не бачить прохання клієнта");
   assert.match(scr, /if \(!raw\) return null;\n  if \(raw\.result\) raw\.result = withClientCallback\(raw\.result\);\n  const row = foldRow\(raw\);/, "🔴 картка не бачить прохання клієнта");
   const tick = SRC("core/callAiTick.ts");
-  assert.match(tick, /const fresh = await transcriptsWithoutLegacy\(env\.db\);\n  if \(fresh\.length\) await enqueueAnalyses\(env\.db, \{ \.\.\.ap, now: env\.now\(\) \}, fresh, carrierOnly\);/, "🔴 джоба ставить v4 не лише новим розмовам");
+  // 4631 (09.10.2026): виняток — не лише перевізники, а й розмови про борг (`notAd`): у них своя рубрика.
+  assert.match(tick, /const fresh = await transcriptsWithoutLegacy\(env\.db\);\n  if \(fresh\.length\) await enqueueAnalyses\(env\.db, \{ \.\.\.ap, now: env\.now\(\) \}, fresh, (?:carrierOnly|notAd)\);/, "🔴 джоба ставить v4 не лише новим розмовам");
   assert.doesNotMatch(tick, /enqueueAnalyses\(env\.db, \{ \.\.\.ap, now: env\.now\(\) \}, null/, "🔴 v4 у черзі для ВСІХ розшифровок — старі цифри зсунуться");
   assert.match(tick, /a\.rubric_version = ANY\(\$1::text\[\]\) AND a\.status = 'done'\)`,\n    \[\[\.\.\.FIRST_TOUCH_LEGACY_TYPED\]\]\);/, "🔴 «ще не розібрані» визначено не через v2/v3");
   assert.match(tick, /\[\[RUBRIC_CURRENT, \.\.\.FIRST_TOUCH_LEGACY_TYPED\], from\]/, "🔴 заперечення не беруть розмови, розібрані v3");
