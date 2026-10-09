@@ -1195,8 +1195,10 @@ export const ACCESS_MATRIX: AccessRow[] = [
   //    (`canSetCallsNorm`), тож решта ролей вкладки отримує 403 ДО запису — проба безпечна.
   { method: "GET", path: "/api/plans/calls-norm", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  //    ⚠️ CEO/опдир/фінансист теж отримують 403 (норму ставить КВП), але в deny їх не пишемо: проба рядків адмін-рівня
+  //    вимагає права в ADMIN_DENIED_BY_PERM, а тут межа — роль, не право. Їх 403 стереже `#1542` (`canSetCallsNorm`).
   { method: "POST", path: "/api/plans/calls-norm", cls: "deny-only",
-    allow: [], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/plans/formation/approve", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/plans/formation/repeat-clients", cls: "GET",

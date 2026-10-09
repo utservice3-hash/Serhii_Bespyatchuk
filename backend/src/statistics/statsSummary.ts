@@ -172,6 +172,13 @@ export async function planByManager(gran: Gran, full: Window): Promise<{
   return { blocks, byMgr: foldWeek(cells, blocks.map((b) => b.from)) };
 }
 
+/** Клітинки плану тижня за кілька місяців — ОДИН шлях для лінії «тиждень» і «день» на графіку (той самий, що плитка). */
+async function planCellsForMonths(months: readonly string[]): Promise<WeekPlanCell[]> {
+  const out: WeekPlanCell[] = [];
+  for (const m of months) out.push(...await monthWeekPlanCells(m));
+  return out;
+}
+
 /** Робочі дні (Пн–Пт) відрізка — тим самим календарем, що план тижня (`workingDaysBetween`). */
 export function workdaysOf(from: string, to: string): string[] {
   const out: string[] = [];
@@ -195,8 +202,8 @@ async function dayPlanSeries(from: string, to: string): Promise<{ scopeKey: stri
   };
   // Ручна ціль — раз на ЗАДАЧУ на весь прохід: тиждень через межу місяців інакше порахував би її двічі (як `foldWeek`).
   const counted = new Set<number>();
-  for (const { m } of ms.rows) {
-    const cells = await monthWeekPlanCells(m);
+  {
+    const cells = await planCellsForMonths(ms.rows.map((r) => r.m));
     for (const c of cells) {
       const scopes = ["company", ...(c.teamId != null && live.has(c.teamId) ? [String(c.teamId)] : [])];
       if (c.manual != null && c.manualTaskId != null) {
@@ -476,8 +483,7 @@ export async function planSeries(g: "day" | "week" | "month", from: string, to: 
     const ms = await pool.query<{ m: string }>(
       `SELECT DISTINCT to_char(date_trunc('month', plan_date),'YYYY-MM-DD') AS m FROM plans
         WHERE metric='payment_amount' AND plan_date BETWEEN date_trunc('month', $1::date - 6) AND $2::date ORDER BY 1`, [from, to]);
-    const cells: WeekPlanCell[] = [];
-    for (const { m } of ms.rows) cells.push(...await monthWeekPlanCells(m));
+    const cells = await planCellsForMonths(ms.rows.map((r) => r.m));
     const mon = (d: string) => { const x = new Date(`${d}T00:00:00Z`); const w = x.getUTCDay(); x.setUTCDate(x.getUTCDate() - ((w + 6) % 7)); return x.toISOString().slice(0, 10); };
     const weeks = [...new Set(cells.map((c) => mon(c.blockFrom)))];
     for (const wk of weeks) {

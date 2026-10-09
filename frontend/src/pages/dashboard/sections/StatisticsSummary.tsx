@@ -179,7 +179,8 @@ export function StatisticsSummary({ today, onPickTeam, pickedTeam }: { today: st
   const paramsKey = JSON.stringify(params);
   useEffect(() => {
     let alive = true; setLoading(true); setErr(null);
-    const req = view === "summary" ? fetchStatsSummary(params).then((d) => { if (alive) setData(d); })
+    const req = view === "summary"
+      ? (gran === "range" ? fetchStatsSummary({ gran, from: range.from, to: range.to }) : fetchStatsSummary({ gran, anchor })).then((d) => { if (alive) setData(d); })
       : fetchStatsPlanFact(params).then((d) => { if (alive) setPf(d); });
     req.then(() => { if (alive) setLoading(false); })
       .catch((e) => { if (alive) { setLoading(false); setErr(e?.response?.data?.error ?? (e?.response?.status ? `сервер відповів ${e.response.status}` : "немає звʼязку з сервером")); } });

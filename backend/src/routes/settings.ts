@@ -129,7 +129,8 @@ export async function getSettings(): Promise<AppSettings> {
 settingsRouter.get("/", async (_req, res) => {
   // 📞 Норма дзвінків переїхала в «Плани» (4632, Роман 10.10.2026): тут — лише ДЗЕРКАЛО чинної норми, для читання.
   const s = await getSettings();
-  res.json({ settings: { ...s, callsDailyNorm: await callsNormFor(kyivToday()) }, callsNormIn: "plans" });
+  s.callsDailyNorm = await callsNormFor(kyivToday());
+  res.json({ settings: s, callsNormIn: "plans" });
 });
 
 settingsRouter.put("/", async (req, res) => {

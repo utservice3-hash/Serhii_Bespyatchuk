@@ -172,7 +172,7 @@ test("#1542b ОДНЕ ДЖЕРЕЛО НОРМИ: Звіт, Статистики 
   assert.match(ss, /const normNow = await callsNormFor\(win\.cur\.to\);/, "🔴 плитка дзвінків читає норму не з «Планів»");
   const st = SRC("routes/settings.ts");
   assert.match(st, /callsDailyNorm: current\.callsDailyNorm,/, "🔴 «Налаштування» знову приймають норму з тіла — друге джерело");
-  assert.match(st, /callsDailyNorm: await callsNormFor\(kyivToday\(\)\)/, "🔴 «Налаштування» показують не чинну норму");
+  assert.match(st, /s\.callsDailyNorm = await callsNormFor\(kyivToday\(\)\);/, "🔴 «Налаштування» показують не чинну норму");
 });
 
 test("#1542c РОУТ НОРМИ: право — ПЕРШОЮ дією, до розбору тіла; межа вкладки «Плани»", () => {
