@@ -162,6 +162,7 @@ test("#1499d форма передачі: задача з готовим тек�
   assert.match(f, /disabled=\{busy \|\| !clientKey \|\| !managerId \|\| !reason\.trim\(\) \|\| taskMissing\}/, "🔴 кнопка активна без задачі");
   assert.match(f, /\.\.\.\(taskOn \? \{ task: \{ text: taskText\.trim\(\), deadline: taskDeadline, priority: taskPriority, details: taskDetails\.trim\(\) \} \} : \{\}\)/,
     "🔴 задача не їде в тому самому запиті, що й передача");
-  const def = f.match(/`Звʼязатися з клієнтом \$\{clientName\}: ([^`]+)`/);
-  assert.ok(def && /узгодити наступний крок/.test(f), "🔴 готовий текст не дія з результатом");
+  assert.match(f, /`Звʼязатися з клієнтом\$\{clientName\.trim\(\) \? ` \$\{clientName\.trim\(\)\}` : ""\}: /,
+    "🔴 без обраного клієнта готовий текст має порожнє місце «з клієнтом :»");
+  assert.ok(/узгодити наступний крок/.test(f), "🔴 готовий текст не дія з результатом");
 });
