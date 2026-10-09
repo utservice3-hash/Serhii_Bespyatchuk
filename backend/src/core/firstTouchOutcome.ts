@@ -1,13 +1,16 @@
 import type { Db } from "./adCallFacts.js";
+import { AUTO_WENT_STATUSES, FC_PIPELINE_IDS } from "./moneyBuckets.js";
 
 /**
  * 🏁 «УСПІХ УГОДИ» ПЕРШОГО ДОТИКУ (ТЗ «фінальні доробки після показу 08.10», критерій 5). Не AI, а статус угоди в Kommo
  * ЗАРАЗ — синк угод іде щопівгодини, тож окремого поля й годинного перерахунку не треба: стан читається на льоту.
  *
- *   успіх   — угода ЗАРАЗ в етапі «Успішно реалізовано» (`142`) — визначення зі словника метрик («результат менеджера =
- *             виключно 142», §0①);
+ *   успіх   — угода ЗАРАЗ в «Авто працює» або далі (`AUTO_WENT_STATUSES`), включно з «Успішно реалізовано» (`142`):
+ *             машина поїхала. Рішення Романа 09.10.2026 (задача з TOP Weekly 08.10: «щоб видно було, де успіх, де
+ *             поїхало»): лише 142 давало 0 для заявок поточного місяця, бо 142 ставлять після оплати. Це правило ЛИШЕ
+ *             цього екрана — результат менеджера в грошах і далі виключно 142 (словник §0①);
  *   відмова — ЗАРАЗ «Не реалізовано» (`143`), з причиною відмови з CRM;
- *   у роботі — решта.
+ *   у роботі — решта, зокрема етапи ДО «Авто працює» (умови, документи, рахунок).
  *
  * 🔴 ВОРОНКА КВАЛІФІКАЦІЇ (`8921928`, `7336928`): там `142` означає «Кваліфіковано», а не продаж. Успіх такої угоди —
  * стан її ДОЧІРНЬОЇ угоди (звʼязок Kommo `lead_child_links`). Без дочірньої: `143` — відмова, решта — у роботі
@@ -19,12 +22,22 @@ export interface DealOutcome { state: OutcomeState; lossReason: string | null }
 
 export const QUALIFICATION_PIPELINES: ReadonlySet<number> = new Set([8921928, 7336928]);
 const WON = 142, LOST = 143;
+const AUTO_WENT: ReadonlySet<number> = new Set(AUTO_WENT_STATUSES);
+const FC: ReadonlySet<number> = new Set(FC_PIPELINE_IDS);
+/**
+ * Машина поїхала: «Авто працює» і далі (етапи повного циклу) або 142 — але 142 лише в ПОВНОМУ ЦИКЛІ. У Продзвоні 142 —
+ * «Відправлено у відділ продажів», у кваліфікації — «Кваліфіковано»: це передача, а не поїздка.
+ */
+export function carWent(x: Pick<OutcomeDeal, "pipelineId" | "statusId">): boolean {
+  if (x.statusId == null) return false;
+  return AUTO_WENT.has(x.statusId) || (x.statusId === WON && x.pipelineId != null && FC.has(x.pipelineId));
+}
 
 export interface OutcomeDeal { kommoId: number; pipelineId: number | null; statusId: number | null; rejectReason: string | null }
 
 /** Стан однієї угоди; `children` — її дочірні угоди (лише для кваліфікації). */
 export function outcomeOfDeal(d: OutcomeDeal, children: readonly OutcomeDeal[]): DealOutcome {
-  const plain = (x: OutcomeDeal): DealOutcome => x.statusId === WON ? { state: "success", lossReason: null }
+  const plain = (x: OutcomeDeal): DealOutcome => carWent(x) ? { state: "success", lossReason: null }
     : x.statusId === LOST ? { state: "lost", lossReason: x.rejectReason } : { state: "open", lossReason: null };
   if (d.pipelineId == null || !QUALIFICATION_PIPELINES.has(d.pipelineId)) return plain(d);
   if (children.length) return outcomeOfCall(children.map(plain));

@@ -255,7 +255,7 @@ export function AiCallsSection() {
               "Клієнт уже вирішив без нас. Реакція — від створення заявки до нашого першого вихідного дзвінка.")}
             {kpi("success", "Успіх", <><AnimatedNumber value={ts.success.n} /> з <AnimatedNumber value={ts.success.of} /></>,
               ts.success.n >= SUCCESS_MIN_FOR_PCT ? `${String(Math.round((ts.success.n / Math.max(1, ts.success.of)) * 100))}% угод` : "замало угод для відсотка",
-              "Угода з цієї розмови ЗАРАЗ в етапі «Успішно реалізовано» (для кваліфікації — її дочірня угода). Оновлюється з Kommo щопівгодини.")}
+              "Машина поїхала: угода з цієї розмови ЗАРАЗ в етапі «Авто працює» або далі, включно з «Успішно реалізовано» (для кваліфікації — її дочірня угода). Оновлюється з Kommo щопівгодини.")}
           </section>
 
           <section aria-label="Менеджери за чек-листом" className="ftd-card ftd-card-pad">

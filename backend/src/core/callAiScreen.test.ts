@@ -1254,24 +1254,32 @@ test("#905 ЗАПЕРЕЧЕННЯ: окрема рубрика, лише нес�
 });
 
 /**
- * #906 — УСПІХ УГОДИ З KOMMO (ТЗ 08.10.2026, критерій 5). Успіх = ЗАРАЗ «Успішно реалізовано» (142, словник §0①);
- * у кваліфікації 142 = «Кваліфіковано», тож успіх — стан ДОЧІРНЬОЇ угоди; кваліфікована без дочірньої — «у роботі».
- * Розмова з кількома угодами: успіх, якщо успішна хоч одна; відмова — лише коли відмовили всі.
- * 🧨 Червоніє, якщо «Кваліфіковано» читається як продаж або одна відмова з двох угод ховає успіх.
+ * #920 — УСПІХ УГОДИ = МАШИНА ПОЇХАЛА (рішення Романа 09.10.2026, задача з TOP Weekly 08.10). Успіх = ЗАРАЗ «Авто працює»
+ * або далі в повному циклі (`AUTO_WENT_STATUSES`), включно з 142; 142 — лише в повному циклі (у кваліфікації це
+ * «Кваліфіковано», у Продзвоні — «Відправлено у відділ продажів»). Кваліфікація — за дочірньою угодою; розмова з кількома
+ * угодами — успіх, якщо поїхала хоч одна; відмова — лише коли відмовили всі.
+ * 🧨 Червоніє, якщо успіх знову рахується лише від 142, якщо етап до «Авто працює» (рахунок) читається як поїздка, або якщо
+ * передача з кваліфікації чи Продзвону читається як продаж.
  */
-test("#906 УСПІХ УГОДИ: 142 повного циклу — успіх; кваліфікація — за дочірньою угодою; розмова — успіх, якщо хоч одна", async () => {
+test("#920 УСПІХ = МАШИНА ПОЇХАЛА: «Авто працює» і далі в повному циклі; рахунок — ще ні; 142 лише повного циклу; кваліфікація — за дочірньою", async () => {
   const U = await import("./firstTouchOutcome.js");
   const d = (statusId: number, pipelineId = 8921932) => ({ kommoId: 1, pipelineId, statusId, rejectReason: statusId === 143 ? "дорого" : null });
+  assert.deepEqual(U.outcomeOfDeal(d(69716300), []), { state: "success", lossReason: null }, "🔴 «Авто працює» не рахується успіхом — знову лише 142");
+  assert.equal(U.outcomeOfDeal(d(10937178, 155304), []).state, "success", "🔴 «Авто працює» старої воронки повного циклу не рахується");
+  assert.equal(U.outcomeOfDeal(d(69716460), []).state, "success", "оплата отримана — машина давно поїхала");
   assert.deepEqual(U.outcomeOfDeal(d(142), []), { state: "success", lossReason: null });
+  assert.equal(U.outcomeOfDeal(d(100274340), []).state, "open", "🔴 «Виставлення рахунку» (до «Авто працює») прочитано як поїздку");
   assert.deepEqual(U.outcomeOfDeal(d(143), []), { state: "lost", lossReason: "дорого" });
-  assert.equal(U.outcomeOfDeal(d(69716460), []).state, "open", "дзеркало: оплачена, але не реалізована — ще в роботі");
+  assert.equal(U.outcomeOfDeal(d(142, 8921936), []).state, "open", "🔴 «Відправлено у відділ продажів» у Продзвоні прочитано як продаж");
   assert.equal(U.outcomeOfDeal(d(142, 8921928), []).state, "open", "🔴 «Кваліфіковано» без дочірньої угоди прочитано як продаж");
-  assert.equal(U.outcomeOfDeal(d(142, 8921928), [d(142)]).state, "success", "🔴 успіх дочірньої угоди не дійшов до кваліфікації");
+  assert.equal(U.outcomeOfDeal(d(142, 8921928), [d(69716300)]).state, "success", "🔴 поїздка дочірньої угоди не дійшла до кваліфікації");
   assert.equal(U.outcomeOfDeal(d(142, 8921928), [d(143)]).state, "lost");
   assert.equal(U.outcomeOfDeal(d(143, 7336928), []).state, "lost", "дзеркало: відмова в кваліфікації без дочірньої — відмова");
   assert.equal(U.outcomeOfCall([{ state: "lost", lossReason: "x" }, { state: "success", lossReason: null }]).state, "success", "🔴 відмова однієї угоди сховала успіх іншої");
   assert.equal(U.outcomeOfCall([{ state: "lost", lossReason: "x" }, { state: "open", lossReason: null }]).state, "open", "🔴 відмова, хоча друга угода ще в роботі");
   assert.equal(U.outcomeOfCall([]).state, "open", "угод не знайдено — не «відмова»");
+  const { AUTO_WENT_STATUSES } = await import("./moneyBuckets.js");
+  for (const s of AUTO_WENT_STATUSES) assert.ok(U.carWent({ pipelineId: null, statusId: s }), `🔴 етап ${String(s)} «авто поїхало» не дає успіху`);
   const scr = SRC("core/callAiScreen.ts");
   assert.match(scr, /const outcomes = await dealOutcomes\(db, \[\.\.\.new Set\(out\.flatMap\(\(r\) => r\.kommoIds\)\)\]\);/, "🔴 список не рахує успіх угоди");
 });
