@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  fetchReceivableCallRecording, fetchReceivableDateLog, hiringError,
-  type ReceivableClient, type ReceivableDateLogEntry,
+  fetchReceivableCallCard, fetchReceivableCallRecording, fetchReceivableDateLog, hiringError,
+  type ReceivableCallCard, type ReceivableClient, type ReceivableDateLogEntry,
 } from "../../../api";
+import { mmss, quoteTurnIndex } from "../aiCallsView";
 import { CallConversation, type SeekFn } from "./CallConversation";
 import { CALL_STATE_UI, agreementView, callWhen, formatDateSafe, rescheduleLabel, talkLength } from "../receivablesView";
 import { formatAmountFull } from "../format";
@@ -13,8 +14,8 @@ import "./hiring.css";
  * 📞 КАРТКА РОЗМОВИ БІЛЯ ДАТИ ДОМОВЛЕНОСТІ (4631, Роман 09.10.2026: «щоб так само відкривалося, як в AI-аналізі»).
  * Та сама бічна панель (`hr-overlay`/`hr-drawer`) і той самий плеєр (`CallConversation`), що в картці першого дотику.
  *
- * Прохід 1 — плеєр і журнал перенесень. Тексту розмови й розбору тут ще немає: вони приїдуть другим проходом у ЦЮ Ж
- * картку, тому місце під них підписане, а не порожнє.
+ * Прохід 1 — плеєр і журнал перенесень; прохід 2 — текст розмови по репліках і розбір рубрикою боргу
+ * (`/receivables/call-card`): що пообіцяли, скільки, коли, хто і чому затримка — з цитатою, звіреною з розшифровкою.
  *
  * Слухати — ролі першого дотику (`canListen` віддає сервер тим виразом, що гейтить `/receivables/call-recording`).
  * Журнал бачить кожен, хто бачить клієнта.
@@ -37,6 +38,21 @@ export function ReceivableCallDrawer({ client, view, canListen, canEdit, onEdit,
   const [playing, setPlaying] = useState<{ uniqueid: string; billsec: number } | null>(
     cl.uniqueid && cl.call ? { uniqueid: cl.uniqueid, billsec: cl.call.billsec } : null);
   const seekRef = useRef<SeekFn | null>(null);
+  // 💬 Текст і розбір дзвінка в плеєрі — тим самим допуском, що й запис.
+  const [card, setCard] = useState<ReceivableCallCard | null>(null);
+  const [cardErr, setCardErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (!playing || !canListen) { setCard(null); return; }
+    let alive = true;
+    setCard(null); setCardErr(null);
+    fetchReceivableCallCard(client.clientKey, playing.uniqueid)
+      .then((x) => { if (alive) setCard(x); })
+      .catch((e) => { if (alive) setCardErr(hiringError(e)); });
+    return () => { alive = false; };
+  }, [client.clientKey, playing, canListen]);
+  const turns = card?.turns && card.turns.length > 0 ? card.turns : null;
+  const mixed = card?.mono === "mixed";
+  const quoteIdx = useMemo(() => (card?.analysis?.quote && turns && !mixed ? quoteTurnIndex(turns, card.analysis.quote) : -1), [card, turns, mixed]);
   const historyRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -110,11 +126,73 @@ export function ReceivableCallDrawer({ client, view, canListen, canEdit, onEdit,
           ) : !canListen ? (
             <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>Слухати записи розмов ваша роль не може.</p>
           ) : (
-            <CallConversation key={playing.uniqueid} load={() => fetchReceivableCallRecording(client.clientKey, playing.uniqueid)}
-              turns={null} managerChannel={null} quoted={new Set()} seekRef={seekRef} durationSec={playing.billsec || null} />
+            <>
+              {card?.mono && (
+                <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "var(--text-muted)" }}>
+                  {mixed ? "Запис моно: обидва голоси в одному каналі — текст іде одним шматком."
+                    : "Запис моно: голоси розділено за звучанням — підпис «Менеджер / Клієнт» може помилятись."}
+                </p>
+              )}
+              <CallConversation key={playing.uniqueid} load={() => fetchReceivableCallRecording(client.clientKey, playing.uniqueid)}
+                turns={turns} managerChannel={card?.managerChannel ?? null} quoted={new Set(quoteIdx >= 0 ? [quoteIdx] : [])}
+                seekRef={seekRef} mixed={mixed} durationSec={card?.durationSec ?? (playing.billsec || null)} />
+              {!turns && (
+                <p style={{ margin: "8px 0 0", fontSize: 12.5, color: "var(--text-muted)" }}>
+                  {cardErr ? cardErr
+                    : !card ? "Завантаження тексту…"
+                    : card.sttStatus === "recording_unavailable" || card.sttStatus === "failed" ? `Розпізнати не вдалось: ${card.sttFailure ?? "запис недоступний"}`
+                    : card.sttStatus ? "Розмову розпізнають — текст зʼявиться протягом 10–20 хвилин."
+                    : playing.billsec < 15 ? "Розмова коротша за 15 с — її не розпізнаємо."
+                    : "Розмову поставлять у розпізнавання з найближчим тіком (до 10 хв)."}
+                </p>
+              )}
+            </>
           )}
-          <p style={{ margin: "8px 0 0", fontSize: 12, color: "var(--text-muted)" }}>Текст розмови й розбір у цій картці ще не підключені.</p>
         </div>
+
+        {playing && canListen && (
+          <div style={box}>
+            <div style={head}>Розбір розмови</div>
+            {!card?.analysis ? (
+              <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>
+                {card?.analysisStatus === "failed" ? `Розібрати не вдалось: ${card.analysisFailure ?? ""}`
+                  : turns ? "Розбір готується — зʼявиться з наступним тіком (до 10 хв)." : "Розбір зʼявиться після розпізнавання."}
+              </p>
+            ) : (() => {
+              const a = card.analysis;
+              const at = quoteIdx >= 0 ? turns?.[quoteIdx]?.start ?? null : null;
+              return (
+                <>
+                  <div style={row}><span style={key}>Про що</span><span>{a.summary}</span></div>
+                  <div style={row}><span style={key}>Обіцянка</span>
+                    <span>
+                      {a.promised
+                        ? <>{a.amount_uah != null ? formatAmountFull(a.amount_uah) : "суму не назвали"}{a.pay_date ? ` до ${kyivDay(a.pay_date)}` : ""}{a.partial ? " · частина боргу" : ""}</>
+                        : <span style={{ color: "var(--warn)" }}>оплату не пообіцяли</span>}
+                      {a.quote && (
+                        <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 2 }}>
+                          <q>{a.quote}</q>{" "}
+                          {at != null && <button type="button" className="recv-call-link" onClick={() => seekRef.current?.(at)}>▶ {mmss(at)}</button>}{" "}
+                          {a.quote_found === true && <span style={{ color: "var(--ok)", fontSize: 12 }}>✓ звірено з розшифровкою</span>}
+                          {a.quote_found === false && <span style={{ color: "var(--danger)", fontSize: 12 }}>✗ такої фрази в розмові немає</span>}
+                        </div>
+                      )}
+                      {a.promised && a.pay_date && agree.source === "dashboard" && client.dueDate && a.pay_date !== client.dueDate && (
+                        <div style={{ fontSize: 12.5, color: "var(--warn)", marginTop: 2 }}>
+                          ⚠ у розмові {kyivDay(a.pay_date)}, а в «Домовленості» {kyivDay(client.dueDate)}
+                        </div>
+                      )}
+                    </span>
+                  </div>
+                  {a.remainder && <div style={row}><span style={key}>Решта боргу</span><span>{a.remainder}</span></div>}
+                  {a.who && <div style={row}><span style={key}>Хто обіцяв</span><span>{a.who}</span></div>}
+                  {a.delay_reason && <div style={row}><span style={key}>Причина затримки</span><span>{a.delay_reason}</span></div>}
+                  {a.next_step && <div style={row}><span style={key}>Наступний крок</span><span>{a.next_step}</span></div>}
+                </>
+              );
+            })()}
+          </div>
+        )}
 
         <div ref={historyRef} style={box}>
           <div style={head}>Історія дати</div>

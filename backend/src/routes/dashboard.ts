@@ -69,7 +69,7 @@ import * as metrics from "../core/metrics.js";
 import { ga4Configured } from "../ga4/client.js";
 import { mergeAdDays } from "../ga4/report.js";
 import { dateParam } from "../core/queryParams.js";
-import { aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType, setCallNote, canWriteNote, fetchCallRecording, type NoteKind } from "../core/callAiScreen.js";
+import { monoKind, aiCallsList, aiCallCard, aiCallsMeta, transcriptAllowed, SILENCE_RULE, FIRST_TOUCH_TRANSCRIPT_ROLES, setCallType, setCallNote, canWriteNote, fetchCallRecording, type NoteKind } from "../core/callAiScreen.js";
 import { RECORDING_UNAVAILABLE_UA } from "../core/ringostatRecording.js";
 import { teamReport, isAnalysed, isLost, isPriceable, noPrice, noPriceNoComment, hasAgreement, checklist, checklistScore, reviewReason, needsReview } from "../core/firstTouchTeamReport.js";
 import { loadTunables } from "../core/firstTouchTunables.js";
@@ -110,6 +110,7 @@ import * as receivablesCounterparty from "../core/receivablesCounterparty.js";
 import * as receivableNotePick from "../core/receivableNotePick.js";
 import { agreementActual, defaultAgreementDeal } from "../core/receivableAgreement.js";
 import * as callLink from "../core/receivableCallLink.js";
+import { RUBRIC_DEBT_V1, type DebtResult } from "../core/receivableCallAi.js";
 import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
 import { debtAgeDays, CLIENT_DEBT_AGE_SQL } from "../core/receivablesAge.js";
 import * as mergeLimits from "../core/mergeLimits.js";
@@ -2223,6 +2224,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
     // 📞 4631: прикріплена розмова і скільки разів переносили — тим самим походом (стеля `#158`).
     call_uniqueid: string | null; reschedules: number;
     call_found: string | null; call_at: string | null; call_billsec: number | null; call_manager: string | null; call_same_client: boolean | null;
+    call_ai: DebtResult | null; call_stt: string | null;
   };
   const notesRes = clientKeys.length
     ? await pool.query<NoteRow>(
@@ -2250,7 +2252,7 @@ dashboardRouter.get("/receivables", async (req, res) => {
                 to_char(n.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at,
                 (SELECT count(*)::int FROM receivable_note_history h WHERE h.client_key = n.client_key) AS hist,
                 n.call_uniqueid, ${callLink.rescheduleCountSql("n")} AS reschedules,
-                cf.call_found, cf.call_at, cf.call_billsec, cf.call_manager, cf.call_same_client
+                cf.call_found, cf.call_at, cf.call_billsec, cf.call_manager, cf.call_same_client, cf.call_ai, cf.call_stt
            FROM receivable_notes n
            LEFT JOIN client_key_alias a
                   ON a.alias_key = n.client_key AND a.revoked_at IS NULL
@@ -4353,11 +4355,12 @@ dashboardRouter.get("/receivables/date-log", async (req, res) => {
   const r = await pool.query<{
     at: string; old_date: string | null; new_date: string | null; deal_id: string | null; call_uniqueid: string | null; author: string | null;
     call_found: string | null; call_at: string | null; call_billsec: number | null; call_manager: string | null; call_same_client: boolean | null;
+    call_ai: DebtResult | null; call_stt: string | null;
   }>(
     `SELECT to_char(l.changed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at,
             to_char(l.old_date, 'YYYY-MM-DD') AS old_date, to_char(l.new_date, 'YYYY-MM-DD') AS new_date,
             l.deal_id::text AS deal_id, l.call_uniqueid, COALESCE(u.full_name, u.email) AS author,
-            cf.call_found, cf.call_at, cf.call_billsec, cf.call_manager, cf.call_same_client
+            cf.call_found, cf.call_at, cf.call_billsec, cf.call_manager, cf.call_same_client, cf.call_ai, cf.call_stt
        FROM receivable_date_log l
        LEFT JOIN users u ON u.id = l.changed_by
        LEFT JOIN LATERAL (${callLink.callFactsLateral("l", "l.client_key")}) cf ON true
@@ -4375,6 +4378,61 @@ dashboardRouter.get("/receivables/date-log", async (req, res) => {
 });
 
 /**
+ * Дзвінок прикріплений саме до цього клієнта — зараз (запис домовленості, з псевдонімами) або в журналі перенесень.
+ * Межа і для запису, і для картки: інакше роути стали б програвачем і читалкою будь-якого дзвінка.
+ */
+async function receivableLinkedCall(clientKey: string, uniqueid: string): Promise<{ recording: string | null } | null> {
+  const r = await pool.query<{ recording: string | null }>(
+    `SELECT rc.recording FROM ringostat_calls rc
+      WHERE rc.uniqueid = $2
+        AND (EXISTS (SELECT 1 FROM receivable_notes n
+                       LEFT JOIN client_key_alias a ON a.alias_key = n.client_key AND a.revoked_at IS NULL
+                      WHERE n.call_uniqueid = $2 AND (n.client_key = $1 OR a.canonical_key = $1))
+          OR EXISTS (SELECT 1 FROM receivable_date_log l WHERE l.client_key = $1 AND l.call_uniqueid = $2))`,
+    [clientKey, uniqueid]);
+  return r.rows[0] ?? null;
+}
+
+/**
+ * 💬 КАРТКА РОЗМОВИ ПРО БОРГ (4631, прохід 2): розшифровка по репліках і розбір рубрикою боргу. Межі ті самі, що в
+ * запису: ролі першого дотику → скоуп клієнта → дзвінок прикріплений до нього.
+ */
+dashboardRouter.get("/receivables/call-card", async (req, res) => {
+  const auth = req.auth!;
+  if (!transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES)) return res.status(403).json({ error: "Текст розмови цій ролі недоступний" });
+  const clientKey = String(req.query.clientKey ?? "").trim();
+  const uniqueid = String(req.query.uniqueid ?? "").trim();
+  if (!clientKey || !uniqueid) return res.status(400).json({ error: "clientKey і uniqueid обовʼязкові" });
+  const inScope = await receivableInScope(auth, clientKey);
+  if (!inScope.ok) return res.status(inScope.status).json({ error: inScope.error });
+  if (!(await receivableLinkedCall(clientKey, uniqueid))) return res.status(404).json({ error: "Цей дзвінок не прикріплений до домовленості клієнта" });
+  const r = await pool.query<{
+    stt_status: string | null; stt_failure: string | null; segments: { channel: number; start: number | null; end: number | null; text: string }[] | null;
+    duration_sec: string | null; audio_channels: number | null; a_status: string | null; a_failure: string | null; result: DebtResult | null;
+  }>(
+    `SELECT t.status AS stt_status, t.failure AS stt_failure, t.segments, t.duration_sec, t.channels AS audio_channels,
+            a.status AS a_status, a.failure AS a_failure, a.result
+       FROM ringostat_calls rc
+       LEFT JOIN call_transcripts t ON t.uniqueid = rc.uniqueid
+       LEFT JOIN LATERAL (SELECT ax.status, ax.failure, ax.result FROM call_analyses ax
+                           WHERE ax.transcript_id = t.id AND ax.rubric_version = $2 ORDER BY ax.id DESC LIMIT 1) a ON true
+      WHERE rc.uniqueid = $1
+      ORDER BY t.id DESC NULLS LAST LIMIT 1`,
+    [uniqueid, RUBRIC_DEBT_V1]);
+  const x = r.rows[0];
+  const mc = x?.result?.manager_channel;
+  res.json({
+    sttStatus: x?.stt_status ?? null, sttFailure: x?.stt_failure ?? null,
+    analysisStatus: x?.a_status ?? null, analysisFailure: x?.a_failure ?? null,
+    turns: x?.segments ?? null,
+    managerChannel: mc === "0" ? 0 : mc === "1" ? 1 : null,
+    durationSec: x?.duration_sec == null ? null : Number(x.duration_sec),
+    mono: monoKind(x?.audio_channels ?? null, x?.segments ?? null),
+    analysis: x?.result ?? null,
+  });
+});
+
+/**
  * 🎧 ЗАПИС РОЗМОВИ, ПРИКРІПЛЕНОЇ ДО ДОМОВЛЕНОСТІ (4631). Допуск — як у першому дотику (Роман 09.10.2026):
  * ролі `FIRST_TOUCH_TRANSCRIPT_ROLES`, скоуп — клієнт у видимості глядача. І третя межа: дзвінок мусить бути
  * прикріплений саме до цього клієнта (зараз або в журналі) — інакше роут став би програвачем будь-якого дзвінка.
@@ -4388,16 +4446,9 @@ dashboardRouter.get("/receivables/call-recording", async (req, res) => {
   if (!clientKey || !uniqueid) return res.status(400).json({ error: "clientKey і uniqueid обовʼязкові" });
   const inScope = await receivableInScope(auth, clientKey);
   if (!inScope.ok) return res.status(inScope.status).json({ error: inScope.error });
-  const linked = await pool.query<{ recording: string | null }>(
-    `SELECT rc.recording FROM ringostat_calls rc
-      WHERE rc.uniqueid = $2
-        AND (EXISTS (SELECT 1 FROM receivable_notes n
-                       LEFT JOIN client_key_alias a ON a.alias_key = n.client_key AND a.revoked_at IS NULL
-                      WHERE n.call_uniqueid = $2 AND (n.client_key = $1 OR a.canonical_key = $1))
-          OR EXISTS (SELECT 1 FROM receivable_date_log l WHERE l.client_key = $1 AND l.call_uniqueid = $2))`,
-    [clientKey, uniqueid]);
-  if (linked.rows.length === 0) return res.status(404).json({ error: "Цей дзвінок не прикріплений до домовленості клієнта" });
-  const d = await fetchCallRecording(linked.rows[0].recording);
+  const linked = await receivableLinkedCall(clientKey, uniqueid);
+  if (!linked) return res.status(404).json({ error: "Цей дзвінок не прикріплений до домовленості клієнта" });
+  const d = await fetchCallRecording(linked.recording);
   if (!d.ok) return res.status(404).json({ error: `Запис недоступний: ${RECORDING_UNAVAILABLE_UA[d.unavailable]}` });
   res.setHeader("Content-Type", "audio/wav");
   res.setHeader("Cache-Control", "private, no-store");

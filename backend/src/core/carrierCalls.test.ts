@@ -63,12 +63,16 @@ const CARRIER_JSON = JSON.stringify({ summary: "перевізник шукає 
 /** Відповідь рубрики `carrier-v2` — ключі з ТЗ 30.09.2026. */
 const CARRIER_JSON_V2 = JSON.stringify({ summary: "перевізник шукає вантаж", manager_channel: "1", verdict: "carrier", other_type: "",
   confidence: 0.95, reason: "має свою фуру й шукає вантаж", quote: "своя фура шукаю вантаж" });
+/** 💬 Відповідь рубрики боргу (4631, прохід 2). Цитата — зі слів каналу 0 фейкового розпізнавання. */
+const DEBT_JSON = JSON.stringify({ summary: "клієнт обіцяє частину до четверга", manager_channel: "1", promised: true, amount_uah: 500000,
+  pay_date: "2026-10-01", partial: true, remainder: "наступного тижня", who: "Олена", delay_reason: "чекають оплату", next_step: "платіжка на пошту",
+  quote: "своя фура" });
 const FIRST_TOUCH_JSON = JSON.stringify({ summary: "s", manager_channel: "1", client_request: "тент", next_step: "",
   price: { discussed: false, quote: "" }, objections: [], promises: [] });
 
 /** Мережа: Gemini відповідає за РУБРИКОЮ запиту (схема з `other_type` — перевізники v2, з `caller_role` — v1, інакше — перший дотик). */
 function fakeNet() {
-  const hits = { ringostat: 0, elevenlabs: 0, gemini: 0, geminiCarrier: 0, other: 0 };
+  const hits = { ringostat: 0, elevenlabs: 0, gemini: 0, geminiCarrier: 0, geminiDebt: 0, other: 0 };
   const http: HttpDeps = {
     fetch: (async (u: string | URL | Request, init?: RequestInit) => {
       const url = String(u);
@@ -88,8 +92,10 @@ function fakeNet() {
         hits.gemini++;
         const body = String(init?.body ?? "");
         const v2 = body.includes("other_type"), carrier = v2 || body.includes("caller_role");
+        const debt = body.includes("delay_reason");
         if (carrier) hits.geminiCarrier++;
-        return Response.json({ candidates: [{ content: { parts: [{ text: v2 ? CARRIER_JSON_V2 : carrier ? CARRIER_JSON : FIRST_TOUCH_JSON }] }, finishReason: "STOP" }],
+        if (debt) hits.geminiDebt++;
+        return Response.json({ candidates: [{ content: { parts: [{ text: debt ? DEBT_JSON : v2 ? CARRIER_JSON_V2 : carrier ? CARRIER_JSON : FIRST_TOUCH_JSON }] }, finishReason: "STOP" }],
           usageMetadata: { promptTokenCount: 700, candidatesTokenCount: 90, thoughtsTokenCount: 40 } });
       }
       hits.other++;
@@ -1898,4 +1904,39 @@ test("#1153 СЛУЖБОВИЙ РЯДОК: підсумок прибирання
   const sec = readFileSync(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), "utf8");
   assert.match(sec, /задачі на закритих угодах: \{meta\.taskSweep\.mode === "live"\s*\? `закрито \$\{String\(meta\.taskSweep\.closedTasks\)\}`\s*: `журнал — закрили б/,
     "🔴 підсумок прибирання не виведено в службовий рядок");
+});
+
+/**
+ * #1531b — РОЗМОВА ПРО БОРГ (4631, прохід 2): прикріплений до домовленості дзвінок розпізнається тією самою чергою,
+ * НЕ прибирається з неї як «випалий з рекламної вибірки» і розбирається рубрикою боргу — а не рубрикою першого дотику.
+ * 🧨 Червоніє, якщо забути дзвінок у списку «тримати» (`dequeueOutside` прибере його до розпізнавання), поставити на
+ * нього рекламну рубрику або не ставити рубрику боргу.
+ */
+test("#1531b ДЗВІНОК ПРО БОРГ: розпізнається спільною чергою, не прибирається з неї, розбирається лише рубрикою боргу", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await reset(c);
+  await c.raw.query("TRUNCATE receivable_notes, receivable_date_log");
+  const { runCallAiTick } = await import("./callAiTick.js");
+  const { RUBRIC_CURRENT } = await import("./callAiProviders.js");
+  const { RUBRIC_DEBT_V1 } = await import("./receivableCallAi.js");
+  await call(c, "1531-debt", min(30), 40, phone(15310, 1));
+  await c.raw.query("INSERT INTO receivable_notes (client_key, due_date, call_uniqueid) VALUES ('боржник1531', '2026-10-01', '1531-debt')");
+  // Рекламний дзвінок — щоб вибірка була непорожня і `dequeueOutside` справді відпрацював.
+  await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel)
+    VALUES (153199,'D',8921932,1,'2026-09-26 10:00:00+03','0999153199','ad')`);
+  await call(c, "1531-ad", new Date("2026-09-26T07:30:00Z"), 35, "380999153199");
+  const net = fakeNet();
+  await runCallAiTick({ db: c.db, http: net.http, keys: { elevenlabs: "k", gemini: "g" }, prices: PRICES, now: () => NOW,
+    ad: { predicate: (r: string) => `(d.client_source = ANY(${r}))`, adSources: ["uts.ua"] } });
+  const rubrics = async (u: string) => (await c.raw.query<{ r: string; s: string }>(`SELECT a.rubric_version r, a.status s FROM call_analyses a
+    JOIN call_transcripts t ON t.id=a.transcript_id WHERE t.uniqueid=$1 ORDER BY 1`, [u])).rows.map((x) => `${x.r}:${x.s}`);
+  const stt = (await c.raw.query<{ status: string }>("SELECT status FROM call_transcripts WHERE uniqueid='1531-debt'")).rows[0]?.status;
+  assert.equal(stt, "done", "🔴 дзвінок про борг не розпізнано (прибраний із черги або не поставлений)");
+  assert.deepEqual(await rubrics("1531-debt"), [`${RUBRIC_DEBT_V1}:done`], "🔴 дзвінок про борг розібрано не рубрикою боргу (або й рекламною)");
+  // Статус рекламного розбору тут не предмет (фейкова відповідь першого дотику — як у #1060): лише ЯКА рубрика.
+  assert.deepEqual((await rubrics("1531-ad")).map((x) => x.split(":")[0]), [RUBRIC_CURRENT], "дзеркало: рекламний дзвінок — своєю рубрикою, без рубрики боргу");
+  assert.equal(net.hits.geminiDebt, 1, "🔴 рубрику боргу кликали не рівно для одного дзвінка");
+  const res = (await c.raw.query<{ result: { promised: boolean; amount_uah: number; quote_found: boolean } }>(`SELECT a.result FROM call_analyses a
+    JOIN call_transcripts t ON t.id=a.transcript_id WHERE t.uniqueid='1531-debt'`)).rows[0].result;
+  assert.deepEqual([res.promised, res.amount_uah, res.quote_found], [true, 500000, true]);
 });

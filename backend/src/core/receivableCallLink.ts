@@ -15,6 +15,8 @@
  * як у першому дотику.
  */
 
+import { RUBRIC_DEBT_V1, debtLine, type DebtResult } from "./receivableCallAi.js";
+
 /**
  * 📐 ФОРМА ПОСИЛАННЯ — ЗАМІРЯНА, А НЕ ВГАДАНА (прод 09.10.2026): у всіх 283 765 записів `recording` має вигляд
  * `https://app.ringostat.com/recordings/<uniqueid>.wav?token=…`, і `<uniqueid>` збігається з `ringostat_calls.uniqueid`
@@ -79,7 +81,12 @@ export const callFactsLateral = (owner: string, canon: string): string =>
             SELECT 1 FROM contact_phones cp
               JOIN deal_contacts dc ON dc.contact_id = cp.contact_id
               JOIN deals d ON d.kommo_id = dc.deal_kommo_id
-             WHERE cp.phone = rc.client_phone AND d.client_key = ${canon}) AS call_same_client
+             WHERE cp.phone = rc.client_phone AND d.client_key = ${canon}) AS call_same_client,
+          -- 💬 прохід 2: розбір розмови рубрикою боргу і стан розпізнавання
+          (SELECT a.result FROM call_transcripts t
+             JOIN call_analyses a ON a.transcript_id = t.id AND a.rubric_version = '${RUBRIC_DEBT_V1}' AND a.status = 'done'
+            WHERE t.uniqueid = rc.uniqueid ORDER BY a.id DESC LIMIT 1) AS call_ai,
+          (SELECT t.status FROM call_transcripts t WHERE t.uniqueid = rc.uniqueid ORDER BY t.id DESC LIMIT 1) AS call_stt
      FROM ringostat_calls rc
      LEFT JOIN managers m ON m.id = rc.manager_id
     WHERE rc.uniqueid = ${owner}.call_uniqueid`;
@@ -89,15 +96,23 @@ export interface CallFacts {
   billsec: number;
   managerName: string | null;
   sameClient: boolean;
+  /** 💬 Розбір розмови: короткий рядок для списку й підсумок. `null` — розбору ще немає. */
+  ai: { line: string; summary: string } | null;
+  /** Розмову розбирають: розпізнавання або розбір ще в черзі. Коротка розмова (<15 с) не розбирається — `false`. */
+  aiPending: boolean;
 }
 
 /** Рядок `callFactsLateral` → факти; дзвінка в базі немає — `null`. */
 export function toCallFacts(r: {
   call_found: string | null; call_at: string | null; call_billsec: number | string | null;
   call_manager: string | null; call_same_client: boolean | null;
+  call_ai?: DebtResult | null; call_stt?: string | null;
 }): CallFacts | null {
   if (!r.call_found || !r.call_at) return null;
-  return { calledAt: r.call_at, billsec: Number(r.call_billsec ?? 0), managerName: r.call_manager, sameClient: r.call_same_client === true };
+  const ai = r.call_ai ? { line: debtLine(r.call_ai), summary: r.call_ai.summary } : null;
+  const pending = !ai && (r.call_stt === "queued" || r.call_stt === "working" || r.call_stt === "done");
+  return { calledAt: r.call_at, billsec: Number(r.call_billsec ?? 0), managerName: r.call_manager, sameClient: r.call_same_client === true,
+    ai, aiPending: pending };
 }
 
 /**

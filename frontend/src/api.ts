@@ -2224,7 +2224,28 @@ export interface ReceivableNoteEntry { comment: string; author: string | null; a
 
 /** 📞 4631. Стани — дзеркало `CallLinkState` у `core/receivableCallLink.ts`. */
 export type ReceivableCallState = "none" | "crm" | "no_call" | "pending" | "no_talk" | "other_number" | "ok";
-export interface ReceivableCallFacts { calledAt: string; billsec: number; managerName: string | null; sameClient: boolean }
+export interface ReceivableCallFacts {
+  calledAt: string; billsec: number; managerName: string | null; sameClient: boolean;
+  /** 💬 Розбір розмови (прохід 2): рядок для списку й підсумок; `null` — розбору ще немає. */
+  ai?: { line: string; summary: string } | null;
+  /** Розмову ще розпізнають або розбирають. */
+  aiPending?: boolean;
+}
+/** Розбір розмови про борг — дзеркало `DebtResult` у `core/receivableCallAi.ts`. */
+export interface ReceivableDebtAnalysis {
+  summary: string; manager_channel: "0" | "1" | "unknown"; promised: boolean; amount_uah: number | null; pay_date: string | null;
+  partial: boolean; remainder: string; who: string; delay_reason: string; next_step: string; quote: string; quote_found?: boolean | null;
+}
+export interface ReceivableCallCard {
+  sttStatus: string | null; sttFailure: string | null; analysisStatus: string | null; analysisFailure: string | null;
+  turns: AiTurn[] | null; managerChannel: number | null; durationSec: number | null; mono: "voices" | "mixed" | null;
+  analysis: ReceivableDebtAnalysis | null;
+}
+/** 💬 Картка розмови про борг: текст по репліках і розбір (ролі першого дотику, лише прикріплений дзвінок). */
+export async function fetchReceivableCallCard(clientKey: string, uniqueid: string): Promise<ReceivableCallCard> {
+  const { data } = await api.get<ReceivableCallCard>("/dashboard/receivables/call-card", { params: { clientKey, uniqueid } });
+  return data;
+}
 export interface ReceivableCallLink { state: ReceivableCallState; uniqueid: string | null; call: ReceivableCallFacts | null }
 export interface ReceivableDateLogEntry {
   at: string; oldDate: string | null; newDate: string | null; dealId: number | null;

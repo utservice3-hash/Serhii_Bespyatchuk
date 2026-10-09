@@ -6,6 +6,7 @@ import { downloadRecording } from "./ringostatRecording.js";
 import { ELEVENLABS_STT_MODEL, elevenLabsTranscribe, FIRST_TOUCH_LEGACY_TYPED, GEMINI_MODEL, geminiGenerate, RUBRIC_CURRENT } from "./callAiProviders.js";
 import { OBJECTION_FROM, OBJECTION_KIT, RUBRIC_OBJECTION_V1 } from "./callAiObjection.js";
 import { carrierActiveIds } from "./carrierCallQueue.js";
+import { DEBT_KIT, RUBRIC_DEBT_V1, receivableLinkedCallIds } from "./receivableCallAi.js";
 import { notifyCapOnce } from "./aiCapAlert.js";
 import { dequeueOutside, enqueueAnalyses, enqueueTranscripts, runAnalysisPortion, runSttPortion, type PortionReport } from "./callAiPipeline.js";
 import { LLM_POLICY, LLM_PROVIDER, RECORDING_MAX_BYTES, RINGOSTAT_MIN_INTERVAL_MS, RINGOSTAT_POLICY, STT_POLICY,
@@ -55,11 +56,15 @@ export const STT_BUDGET_MS = 5 * 60_000;
 export const LLM_BUDGET_MS = 3 * 60_000;
 /** Частина `LLM_BUDGET_MS` для рубрики заперечень (ТЗ 08.10.2026): відповідь коротка, тож 30 с вистачає на порцію. */
 export const OBJ_BUDGET_MS = 30_000;
+/** Частина `LLM_BUDGET_MS` для розбору розмов про борг (4631, 09.10.2026): одиниці на день, відповідь коротка. */
+export const DEBT_BUDGET_MS = 20_000;
 /** Між тіками — 10 хв; сума бюджетів мусить лишати запас на вибірку й останню порцію. */
 export const TICK_EVERY_MIN = 10;
 export const MAX_OUTPUT_TOKENS = 2048;
 /** Відповідь рубрики заперечень — пʼять коротких полів. */
 export const OBJ_MAX_OUTPUT_TOKENS = 512;
+/** Відповідь рубрики боргу — одинадцять коротких полів. */
+export const DEBT_MAX_OUTPUT_TOKENS = 768;
 
 /**
  * Розмови для рубрики заперечень: основний розбір готовий, дзвінок не раніше `from` (київська дата), і тип не з тих,
@@ -209,8 +214,15 @@ export async function runCallAiTick(env: TickEnv): Promise<TickReport> {
   const carrier = await carrierActiveIds(env.db, t0);
   const adSet = new Set(ids);
   const carrierOnly = carrier.filter((u) => !adSet.has(u));
-  const dequeued = ids.length ? await dequeueOutside(env.db, [...ids, ...carrierOnly], STT_PROVIDER, ELEVENLABS_STT_MODEL) : 0;
-  const out: TickReport = { selected: ids.length, enqueued, dequeued, stt: [], llm: [], sttStoppedBy: null, llmStoppedBy: null };
+  // 💬 Розмови, прикріплені до дати домовленості в «Дебіторці» (4631): та сама черга розпізнавання, але НЕ рекламна
+  // рубрика — у них своя (`RUBRIC_DEBT_V1`). Тримаємо їх у черзі (інакше `dequeueOutside` прибрав би їх, як випалих).
+  const debt = await receivableLinkedCallIds(env.db);
+  const known = new Set([...ids, ...carrier]);
+  const debtOnly = debt.filter((u) => !known.has(u));
+  const debtEnqueued = await enqueueTranscripts(env.db, debtOnly, STT_PROVIDER, ELEVENLABS_STT_MODEL, t0);
+  const notAd = [...carrierOnly, ...debtOnly];
+  const dequeued = ids.length ? await dequeueOutside(env.db, [...ids, ...carrierOnly, ...debtOnly], STT_PROVIDER, ELEVENLABS_STT_MODEL) : 0;
+  const out: TickReport = { selected: ids.length, enqueued: enqueued + debtEnqueued, dequeued, stt: [], llm: [], sttStoppedBy: null, llmStoppedBy: null };
   const throttle = createMinInterval(RINGOSTAT_MIN_INTERVAL_MS, env.http);
   const common = { limit: TICK_PORTION, maxAttempts: TICK_MAX_ATTEMPTS, stuckAfterMin: STUCK_AFTER_MIN,
     calls: { except: carrierOnly } };
@@ -229,7 +241,7 @@ export async function runCallAiTick(env: TickEnv): Promise<TickReport> {
   const ap = { provider: LLM_PROVIDER, model: GEMINI_MODEL, rubricVersion: RUBRIC_CURRENT,
     sttProvider: STT_PROVIDER, sttModel: ELEVENLABS_STT_MODEL };
   const fresh = await transcriptsWithoutLegacy(env.db);
-  if (fresh.length) await enqueueAnalyses(env.db, { ...ap, now: env.now() }, fresh, carrierOnly);
+  if (fresh.length) await enqueueAnalyses(env.db, { ...ap, now: env.now() }, fresh, notAd);
   const llm = await drainWithBudget(() => runAnalysisPortion(env.db, {
     apiKey: env.keys.gemini,
     generate: (key, model, body) => geminiGenerate(env.http, key, model, body, LLM_POLICY),
@@ -238,14 +250,14 @@ export async function runCallAiTick(env: TickEnv): Promise<TickReport> {
     maxOutputTokens: MAX_OUTPUT_TOKENS,
     usdPerInputToken: env.prices.llmUsdPerMtokIn == null ? null : env.prices.llmUsdPerMtokIn / 1e6,
     usdPerOutputToken: env.prices.llmUsdPerMtokOut == null ? null : env.prices.llmUsdPerMtokOut / 1e6,
-  }), LLM_BUDGET_MS - OBJ_BUDGET_MS, env.http.nowMs, out.llm);
+  }), LLM_BUDGET_MS - OBJ_BUDGET_MS - DEBT_BUDGET_MS, env.http.nowMs, out.llm);
   out.llmStoppedBy = llm.stoppedBy;
 
   // 🛡 Заперечення (ТЗ 08.10.2026): окрема рубрика поверх УЖЕ розібраних розмов, лише від дня викату — старші тільки
   // окремим запуском після згоди власника. Виключені типи (перевізник, продавець, пошук роботи, помилка номером) — ні.
   const op = { ...ap, rubricVersion: RUBRIC_OBJECTION_V1 };
   const objIds = await objectionCandidates(env.db, OBJECTION_FROM);
-  if (objIds.length) await enqueueAnalyses(env.db, { ...op, now: env.now() }, objIds, carrierOnly);
+  if (objIds.length) await enqueueAnalyses(env.db, { ...op, now: env.now() }, objIds, notAd);
   const obj = await drainWithBudget(() => runAnalysisPortion(env.db, {
     apiKey: env.keys.gemini, kit: OBJECTION_KIT,
     generate: (key, model, body) => geminiGenerate(env.http, key, model, body, LLM_POLICY),
@@ -257,10 +269,24 @@ export async function runCallAiTick(env: TickEnv): Promise<TickReport> {
   }), OBJ_BUDGET_MS, env.http.nowMs, out.llm);
   if (!out.llmStoppedBy) out.llmStoppedBy = obj.stoppedBy;
 
+  // 💬 Розбір розмов про борг (4631) — своя рубрика, лише для прикріплених до домовленості дзвінків.
+  const dp = { ...ap, rubricVersion: RUBRIC_DEBT_V1 };
+  if (debt.length) await enqueueAnalyses(env.db, { ...dp, now: env.now() }, debt);
+  const dbt = await drainWithBudget(() => runAnalysisPortion(env.db, {
+    apiKey: env.keys.gemini, kit: DEBT_KIT,
+    generate: (key, model, body) => geminiGenerate(env.http, key, model, body, LLM_POLICY),
+  }, {
+    ...common, ...dp, now: env.now(), operation: "analysis", monthCapUsd: env.prices.llmMonthCapUsd,
+    maxOutputTokens: DEBT_MAX_OUTPUT_TOKENS,
+    usdPerInputToken: env.prices.llmUsdPerMtokIn == null ? null : env.prices.llmUsdPerMtokIn / 1e6,
+    usdPerOutputToken: env.prices.llmUsdPerMtokOut == null ? null : env.prices.llmUsdPerMtokOut / 1e6,
+  }), DEBT_BUDGET_MS, env.http.nowMs, out.llm);
+  if (!out.llmStoppedBy) out.llmStoppedBy = dbt.stoppedBy;
+
   const capped = [...out.stt, ...out.llm].find((x) => x.state === "capped");
   if (capped && env.alert) await notifyCapOnce(env.db, "first_touch", capped.stoppedBy ?? "стеля вичерпана", env.now(), env.alert);
 
-  const errs = [stt.error, llm.error, obj.error].filter((e): e is Error => e != null);
+  const errs = [stt.error, llm.error, obj.error, dbt.error].filter((e): e is Error => e != null);
   if (errs.length) throw new Error(errs.map((e) => e.message).join(" · "));
   return out;
 }

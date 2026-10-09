@@ -857,6 +857,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
   //    («не прикріплений»), а не 403 — матриця рахує це дозволом.
   { method: "GET", path: "/api/dashboard/receivables/call-recording?clientKey=zzz&uniqueid=x", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
+  // 💬 4631 прохід 2: картка з текстом розмови — ті самі межі, що в запису.
+  { method: "GET", path: "/api/dashboard/receivables/call-card?clientKey=zzz&uniqueid=x", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
   // 👤 Ручне призначення відповідального за борг — `isAdminScope` (рішення власника
   // 22.08.2026). Тімлід і менеджер відмовляються: борг клієнта переприв'язує той,
   // хто бачить картину цілком.

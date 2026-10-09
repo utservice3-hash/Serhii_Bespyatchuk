@@ -102,10 +102,14 @@ test("#1530c МЕЖІ: запис домовленості — роль перш
   const rec = handlerBody(src, "get", "/receivables/call-recording");
   const rGate = rec.indexOf("transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES)");
   const rScope = rec.indexOf("receivableInScope(auth, clientKey)");
-  const rLinked = rec.indexOf("receivable_date_log");
+  const rLinked = rec.indexOf("receivableLinkedCall(clientKey, uniqueid)");
   const rFetch = rec.indexOf("fetchCallRecording(");
   assert.ok(rGate >= 0 && rScope > rGate && rLinked > rScope && rFetch > rLinked,
     "🔴 /receivables/call-recording віддає байти без перевірки ролі, скоупу або привʼязки дзвінка до клієнта");
+  // Сама привʼязка: зараз (запис домовленості) АБО в журналі — обидві гілки в спільній функції.
+  const helper = src.slice(src.indexOf("async function receivableLinkedCall"), src.indexOf("async function receivableLinkedCall") + 900);
+  assert.match(helper, /WHERE n\.call_uniqueid = \$2/, "🔴 привʼязка не перевіряє поточний запис домовленості");
+  assert.match(helper, /FROM receivable_date_log l WHERE l\.client_key = \$1 AND l\.call_uniqueid = \$2/, "🔴 привʼязка не перевіряє журнал перенесень");
   const log = handlerBody(src, "get", "/receivables/date-log");
   assert.ok(log.indexOf("receivableInScope(auth, clientKey)") >= 0 && log.indexOf("receivableInScope") < log.indexOf("FROM receivable_date_log"),
     "🔴 журнал перенесень читається без скоупу");
@@ -173,7 +177,7 @@ test("#1530e СТАН КОЛОНКИ: «звідки дата» збігаєть
   const V = (await import(VIEW)) as {
     agreementView: (p: Record<string, unknown>) => { source: "dashboard" | "crm" | "none" };
   };
-  const call = { calledAt: "2026-10-08T08:42:00Z", billsec: 134, managerName: "Семенюк", sameClient: true };
+  const call = { calledAt: "2026-10-08T08:42:00Z", billsec: 134, managerName: "Семенюк", sameClient: true, ai: null, aiPending: false };
   const now = new Date("2026-10-09T09:00:00Z");
   const cases: { noteActual: boolean; noteDue: string | null; crmDue: string | null }[] = [];
   for (const noteActual of [true, false]) for (const noteDue of ["2026-10-14", null]) for (const crmDue of ["2026-10-20", null]) cases.push({ noteActual, noteDue, crmDue });
@@ -218,4 +222,44 @@ test("#1530f ФРОНТ: фільтр і лічильник чипа берут�
   assert.match(sec, /disabled=\{!canEditAgreement\}/, "🔴 кнопка домовленості знову за правом тімліда — менеджер не може записати");
   const dash = FE("pages/Dashboard.tsx");
   assert.match(dash, /canEditAgreement=\{receivablesPerms\.canEditAgreement\}/, "🔴 право писати домовленість не доходить із сервера");
+});
+
+test("#1531 РУБРИКА БОРГУ: відповідь перевіряється суворо — обіцянка без строку чи цитата без обіцянки не приймаються; нуль і порожнє стають null", async () => {
+  const { validateDebt, debtLine, verifyDebtQuote } = await import("./receivableCallAi.js");
+  const base = { summary: "s", manager_channel: "1", promised: true, amount_uah: 500000, pay_date: "2026-10-09", partial: true,
+    remainder: "до 16-го", who: "Олена", delay_reason: "", next_step: "", quote: "500 тисяч у четвер" };
+  const ok = validateDebt(base);
+  assert.ok(ok.ok, "🔴 правильна відповідь відхилена");
+  if (ok.ok) assert.equal(debtLine(ok.value), "обіцяли 500 000 ₴ до 09.10 · частина боргу");
+  const none = validateDebt({ ...base, promised: false, amount_uah: 0, pay_date: "", quote: "", partial: false });
+  assert.ok(none.ok);
+  if (none.ok) {
+    assert.equal(none.value.amount_uah, null, "🔴 «не назвали» (0) прочитано як суму");
+    assert.equal(none.value.pay_date, null, "🔴 порожня дата прочитана як дата");
+    assert.match(debtLine(none.value), /^без обіцянки оплати/);
+  }
+  assert.equal(validateDebt({ ...base, pay_date: "" }).ok, false, "🔴 «обіцяли» без строку прийнято");
+  assert.equal(validateDebt({ ...base, promised: false }).ok, false, "🔴 цитата обіцянки без обіцянки прийнята");
+  assert.equal(validateDebt({ ...base, pay_date: "09.10.2026" }).ok, false, "🔴 дата не в форматі YYYY-MM-DD прийнята");
+  assert.equal(validateDebt({ ...base, amount_uah: -5 }).ok, false, "🔴 відʼємна сума прийнята");
+  assert.equal(validateDebt({ ...base, manager_channel: "2" }).ok, false);
+  const turns = [{ channel: 0, start: 0, end: 1, text: "500 тисяч у четвер", lang: null }, { channel: 1, start: 1, end: 2, text: "добре фіксую", lang: null }];
+  if (ok.ok) {
+    assert.equal(verifyDebtQuote(ok.value, turns).quote_found, true);
+    assert.equal(verifyDebtQuote({ ...ok.value, quote: "у четвер добре фіксую" }, turns).quote_found, false, "🔴 цитата зі склейки двох каналів прийнята");
+  }
+});
+
+test("#1531c КАРТКА РОЗМОВИ: текст — ролі першого дотику → скоуп → лише прикріплений дзвінок; фронт питає текст лише коли можна слухати", () => {
+  const src = SRC("routes/dashboard.ts");
+  const card = handlerBody(src, "get", "/receivables/call-card");
+  const g = card.indexOf("transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES)");
+  const sc = card.indexOf("receivableInScope(auth, clientKey)");
+  const ln = card.indexOf("receivableLinkedCall(clientKey, uniqueid)");
+  const q = card.indexOf("FROM ringostat_calls rc");
+  assert.ok(g >= 0 && sc > g && ln > sc && q > ln, "🔴 /receivables/call-card віддає текст без ролі, скоупу або привʼязки дзвінка до клієнта");
+  const dr = FE("pages/dashboard/sections/ReceivableCallDrawer.tsx");
+  assert.match(dr, /if \(!playing \|\| !canListen\) \{ setCard\(null\); return; \}/, "🔴 картка питає текст розмови в ролі, якій слухати не можна");
+  const sec = FE("pages/dashboard/sections/ReceivablesSection.tsx");
+  assert.match(sec, /\{call\?\.ai && \(/, "🔴 рядок «AI:» зник зі списку");
 });

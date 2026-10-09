@@ -142,6 +142,15 @@ function CallLine({ c, canEdit, onOpen, onAdd }: {
           <button type="button" className="recv-call-link" onClick={() => onOpen("call")}>▶ відкрити розмову</button>
         </div>
       )}
+      {call?.ai && (
+        <div title={call.ai.summary} style={{ marginTop: 3, color: "var(--text)", background: "var(--surface-2, rgba(127,127,127,0.06))",
+               borderLeft: "3px solid var(--text-muted)", borderRadius: 3, padding: "2px 6px", maxWidth: 280 }}>
+          <b style={{ color: "var(--text-muted)" }}>AI:</b> {call.ai.line}
+        </div>
+      )}
+      {call && !call.ai && call.aiPending && (
+        <div style={{ marginTop: 3, color: "var(--text-muted)" }}>AI: розбір готується…</div>
+      )}
       {canEdit && (st === "no_call" || st === "crm") && (
         <div style={{ marginTop: 3 }}>
           <button type="button" className="recv-call-link" onClick={onAdd}>
