@@ -110,6 +110,7 @@ import * as receivablesCounterparty from "../core/receivablesCounterparty.js";
 import * as receivableNotePick from "../core/receivableNotePick.js";
 import { agreementActual, defaultAgreementDeal } from "../core/receivableAgreement.js";
 import * as callLink from "../core/receivableCallLink.js";
+import { callsNormFor } from "../core/callsNormPlan.js";
 import { RUBRIC_DEBT_V1, type DebtResult } from "../core/receivableCallAi.js";
 import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
 import { debtAgeDays, CLIENT_DEBT_AGE_SQL } from "../core/receivablesAge.js";
@@ -9415,6 +9416,7 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // 📊 Розрізи макета 06.08.2026: дзвінки (розмови/спроби), затор на «Виставленні
   // рахунку», очікування БЕЗ планової дати. Усі — лічильні або знімок однієї стадії;
   // грошей періоду тут не рахує ніхто, це й далі робота `core/money.ts`.
+  const callsNormNow = await callsNormFor(to);
   const [callsRows, callDays, appSettings, jamRows, noDateRows, ft] = await Promise.all([
     reportCuts.callsByManager(from, to, { managerId, teamId }),
     // 📞 Дні з нормою (ТЗ 23.09.2026, п.2): ті самі денні комірки, що в розгортці рядка.
@@ -9693,7 +9695,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
       // 📞 Розмови й спроби — ДВІ цифри, складати заборонено (рішення власника 04.08).
       talks: callsM.get(m.id)?.talks ?? 0, attempts: callsM.get(m.id)?.attempts ?? 0,
       // 📞 Днів з нормою дзвінків / робочих днів; норма — з Налаштувань, `null` = не задано.
-      callNorm: callNorm.callNormCell(callDaysM.get(m.id) ?? [], appSettings.callsDailyNorm, from, to, kyivToday),
+      // 📞 Норма — з «Планів» (4632, Роман 10.10.2026): чинна на місяць кінця періоду, та сама, що на Статистиках.
+      callNorm: callNorm.callNormCell(callDaysM.get(m.id) ?? [], callsNormNow, from, to, kyivToday),
       // 🎯 «Ціну названо в перший дотик»: стан + лічильники; відсоток рахує фронт із лічильників.
       firstTouch: firstTouchCell(ft.byManager.get(m.id), m.team_id, ft.coveredTeamIds),
       // ⏳ Очікування БЕЗ планової дати — в жодну суму не входить, тому окремо.

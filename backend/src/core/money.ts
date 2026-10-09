@@ -650,6 +650,20 @@ export async function successByMgrAtTeam(s: MoneyScope): Promise<MgrRow[]> {
   return rows.map((x) => ({ managerId: x.manager_id, name: x.name, teamId: x.team_id,
     isActive: x.is_active, revenue: Number(x.revenue), deals: Number(x.deals) }));
 }
+/**
+ * ② «Отримані кошти» ПО (менеджер × команда на дату анкера) — той самий запит, що `successByMgrAtTeam`, по ②.
+ * Для вкладки «План-факт» Статистик (4632): Σ рядків команди == `receivedByTeam`, тож команда у вкладці збігається
+ * з таблицею команд на плитках; хто перейшов посеред періоду, дає два рядки — кожен у своїй команді.
+ */
+export async function receivedByMgrAtTeam(s: MoneyScope): Promise<MgrRow[]> {
+  const rows = await query<{ manager_id: number; name: string; team_id: number | null; is_active: boolean; revenue: string; deals: string }>(
+    "received", s,
+    `m.id AS manager_id, m.name, ${teamAtSql("m", ANCHOR_DAY)} AS team_id, m.is_active, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals`,
+    "GROUP BY m.id, m.name, 3, m.is_active"
+  );
+  return rows.map((x) => ({ managerId: x.manager_id, name: x.name, teamId: x.team_id,
+    isActive: x.is_active, revenue: Number(x.revenue), deals: Number(x.deals) }));
+}
 export interface MgrAvgCheck { managerId: number; revenue: number; successDeals: number; avgCheck: number | null }
 /**
  * СЕРЕДНІЙ ЧЕК ПО МЕНЕДЖЕРУ (`avg_check_success_only`) — ЄДИНЕ джерело для Звіту й

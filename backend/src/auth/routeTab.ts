@@ -141,6 +141,7 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/statistics/series"), tabs: ["statistics"] },
     { test: pre("/api/statistics/lapsed-clients"), tabs: ["statistics"] },
     { test: pre("/api/statistics/summary"), tabs: ["statistics"] },
+    { test: pre("/api/statistics/plan-fact"), tabs: ["statistics"] },  // 4632: вкладка «План-факт»
     { test: pre("/api/statistics"), tabs: ["depstats"] },
     // виділені роутери
     { test: pre("/api/plans"), tabs: ["plans"] },

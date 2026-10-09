@@ -29,7 +29,12 @@ import * as metrics from "../core/metrics.js";
 import { loadKpiTargets } from "../core/kpiTargetsDb.js";
 import { leadgenTeamMembers, approvedLeadgenPlans } from "../core/leadgenPlans.js";
 import { planForPeriod } from "../core/leadgenPlanRules.js";
-import { compareWindows, deltaPct, planPct, rankByPlan, foldWeek, weekOf, type Gran, type Window, type WeekPlanCell } from "./statsCompare.js";
+import { compareWindows, rangeWindows, compareLabel, deltaPct, planPct, rankByPlan, foldWeek, weekOf, type Gran, type Window, type WeekPlanCell, type CompareWindows } from "./statsCompare.js";
+import { kyivToday, workingDaysBetween } from "../core/dates.js";
+import { teamAvgCheckTargets } from "../core/avgCheckTarget.js";
+import { callsNormFor } from "../core/callsNormPlan.js";
+import { callsByManagerDay } from "../core/reportCuts.js";
+import { activeManagerSql } from "../core/activeManager.js";
 
 /** Розформовані команди — історія лишається, у дефолтному вигляді їх немає (рішення Романа 02.10, питання 4). */
 export const ARCHIVED_TEAM_IDS = new Set<number>([36283]);
@@ -37,7 +42,7 @@ export const ARCHIVED_TEAM_IDS = new Set<number>([36283]);
 export interface Viewer { allTeams: boolean; teamId: number | null; managerId: number | null }
 
 export interface Tile {
-  key: "revenue" | "dispatched" | "calls" | "transfers";
+  key: "revenue" | "dispatched" | "calls" | "transfers" | "avgCheck";
   label: string;
   unit: "₴" | "шт";
   now: number;
@@ -50,6 +55,12 @@ export interface Tile {
   sub: { label: string; value: number } | null;
   /** Чому плану немає — словами, а не порожнечею. */
   planNote: string | null;
+  /** Колір за нормою — лише «у нормі / нижче» (Юля 10.10: «зелений — у нормі, червоний — нижче»), без жовтого. */
+  binary?: boolean;
+  /** 📞 Дзвінки на менеджера за робочий день (розмови + спроби) проти норми з «Планів» (4632). */
+  callsNorm?: { perDay: number | null; norm: number | null; managers: number; workDays: number };
+  /** Як рахується план цього періоду — словами (4632: тиждень динамічний, узгоджено в задачі 5146). */
+  planRule?: string;
   /** Тиждень через межу місяців: план = сума частин (рішення Романа 02.10 — показувати розбивку). */
   planParts?: { from: string; to: string; plan: number; kind: "auto" | "manual" }[];
   formula: string;
@@ -57,6 +68,8 @@ export interface Tile {
 export interface TeamRow {
   teamId: number; name: string; archived: boolean;
   fact: number; prev: number; deltaPct: number | null; plan: number | null; pct: number | null; rank: number;
+  /** 🎯 Сер. чек команди за період і її ціль на місяць (4632). `avgCheckTarget` null — менше 30 угод за базу. */
+  avgCheck: number | null; avgCheckTarget: number | null; avgCheckBaseDeals: number;
 }
 
 /**
@@ -133,6 +146,13 @@ export async function monthWeekPlanCells(monthStart: string): Promise<WeekPlanCe
 export async function planByManager(gran: Gran, full: Window): Promise<{
   blocks: Window[]; byMgr: Map<number, { teamId: number | null; autoPerBlock: number[]; manual: number }>;
 }> {
+  if (gran === "range") {
+    /* «З – по» — місячний план, розкладений по робочих днях: ТОЙ САМИЙ вираз, що Звіт за ті самі дати (4632). */
+    const teamOf = new Map((await pool.query<{ id: number; team_id: number | null }>(`SELECT id, team_id FROM managers`)).rows.map((x) => [x.id, x.team_id]));
+    const byMgr = new Map<number, { teamId: number | null; autoPerBlock: number[]; manual: number }>();
+    for (const [mid, v] of await plans.proratedMonthPlanByManager(full.from, full.to, null)) byMgr.set(mid, { teamId: teamOf.get(mid) ?? null, autoPerBlock: [v], manual: 0 });
+    return { blocks: [full], byMgr };
+  }
   if (gran === "month") {
     const byMgr = new Map<number, { teamId: number | null; autoPerBlock: number[]; manual: number }>();
     for (const d of await plans.dynamicTarget({ month: full.from }, "month")) byMgr.set(d.managerId, { teamId: d.teamId, autoPerBlock: [d.monthPlan], manual: 0 });
@@ -148,6 +168,48 @@ export async function planByManager(gran: Gran, full: Window): Promise<{
     cells.push(...(await monthWeekPlanCells(`${ym}-01`)).filter((c) => c.blockFrom === block.from));
   }
   return { blocks, byMgr: foldWeek(cells, blocks.map((b) => b.from)) };
+}
+
+/** Робочі дні (Пн–Пт) відрізка — тим самим календарем, що план тижня (`workingDaysBetween`). */
+export function workdaysOf(from: string, to: string): string[] {
+  const out: string[] = [];
+  for (let d = from; d <= to; d = addDaysIso(d, 1)) { const w = new Date(`${d}T00:00:00Z`).getUTCDay(); if (w !== 0 && w !== 6) out.push(d); }
+  return out;
+}
+
+/**
+ * План на день: Σ по днях == план тижня (до копійки до округлення), тож графік «день» і плитка «тиждень» не
+ * розходяться. Компанія + живі команди, як інші лінії плану.
+ */
+async function dayPlanSeries(from: string, to: string): Promise<{ scopeKey: string; points: { period: string; value: number }[] }[]> {
+  const ms = await pool.query<{ m: string }>(
+    `SELECT DISTINCT to_char(date_trunc('month', plan_date),'YYYY-MM-DD') AS m FROM plans
+      WHERE metric='payment_amount' AND plan_date BETWEEN date_trunc('month', $1::date) AND $2::date ORDER BY 1`, [from, to]);
+  const live = new Set(LIVE_TEAMS.map((t) => t.id));
+  const byScope = new Map<string, Map<string, number>>();
+  const add = (scope: string, day: string, v: number) => {
+    if (day < from || day > to) return;
+    const m = byScope.get(scope) ?? new Map<string, number>(); m.set(day, (m.get(day) ?? 0) + v); byScope.set(scope, m);
+  };
+  // Ручна ціль — раз на ЗАДАЧУ на весь прохід: тиждень через межу місяців інакше порахував би її двічі (як `foldWeek`).
+  const counted = new Set<number>();
+  for (const { m } of ms.rows) {
+    const cells = await monthWeekPlanCells(m);
+    for (const c of cells) {
+      const scopes = ["company", ...(c.teamId != null && live.has(c.teamId) ? [String(c.teamId)] : [])];
+      if (c.manual != null && c.manualTaskId != null) {
+        if (counted.has(c.manualTaskId)) continue;
+        counted.add(c.manualTaskId);
+        const wk = weekOf(c.blockFrom), days = workdaysOf(wk.from, wk.to);
+        for (const d of days) for (const sc of scopes) add(sc, d, c.manual / days.length);
+      } else {
+        const days = workdaysOf(c.blockFrom, c.blockTo);
+        for (const d of days) for (const sc of scopes) add(sc, d, c.auto / days.length);
+      }
+    }
+  }
+  return [...byScope].map(([scopeKey, m]) => ({ scopeKey,
+    points: [...m].sort(([a], [b]) => a.localeCompare(b)).map(([period, value]) => ({ period, value: Math.round(value) })) }));
 }
 
 /** Відправлені авто (за датою завантаження) у скоупі глядача — та сама функція, що факт KPI «Авто» на Звіті. */
@@ -187,9 +249,12 @@ async function dispatchPlan(full: Window, viewer: Viewer, teamOfMgr: Map<number,
  */
 export async function dispatchPlanSeries(g: "day" | "week" | "month", seamFrom: string, to: string):
     Promise<{ scopeKey: string; points: { period: string; value: number }[] }[]> {
-  if (g === "day" || seamFrom > to) return [];
+  if (seamFrom > to) return [];
   const windows: Window[] = [];
-  if (g === "week") {
+  if (g === "day") {
+    /* 4632 п.2.1: план авто на день — ціль тижня, рівно по робочих днях тижня (ті самі `dispatchTargets`). */
+    for (let w = weekOf(seamFrom); w.from <= to; w = weekOf(addDaysIso(w.to, 1))) windows.push(w);
+  } else if (g === "week") {
     for (let w = weekOf(seamFrom); w.from <= to; w = weekOf(addDaysIso(w.to, 1))) windows.push(w);
   } else {
     for (let m = `${seamFrom.slice(0, 7)}-01`; m <= to; m = addMonthIso(m)) windows.push({ from: m, to: monthEndIso(m) });
@@ -205,6 +270,12 @@ export async function dispatchPlanSeries(g: "day" | "week" | "month", seamFrom: 
     const team = new Map<number, number>();
     let company = 0;
     for (const [aid, v] of t) { company += v; const tid = teamOf.get(aid); if (tid != null && live.has(tid)) team.set(tid, (team.get(tid) ?? 0) + v); }
+    if (g === "day") {
+      const days = workdaysOf(w.from, w.to).filter((d) => d >= seamFrom && d <= to);
+      const all5 = workdaysOf(w.from, w.to).length || 1;
+      for (const d of days) { push("company", d, company / all5); for (const [tid, v] of team) push(String(tid), d, v / all5); }
+      return;
+    }
     push("company", w.from, company);
     for (const [tid, v] of team) push(String(tid), w.from, v);
   });
@@ -227,8 +298,19 @@ async function quotesPlan(full: Window): Promise<number | null> {
   return any ? Math.round(sum) : null;
 }
 
-export async function buildSummary(gran: Gran, anchor: string, viewer: Viewer) {
-  const win = compareWindows(gran, anchor);
+/**
+ * 🏷 ПРАВИЛО ПЛАНУ СЛОВАМИ. Тиждень — динамічний: ТЗ 4632 (28.09) казав «місячний ÷ робочі тижні», але пізніше ТЗ 5146
+ * (05.10) Юлі ввів динамічний план тижня, і Роман 10.10.2026 підтвердив його для Статистик — з підписом на екрані.
+ */
+export const PLAN_RULE: Record<Gran, string> = {
+  week: "план тижня динамічний: невиконане переноситься на решту місяця, фіксується в понеділок (узгоджено в задачі 5146)",
+  month: "план місяця з «Планів»",
+  range: "місячний план, розкладений по робочих днях періоду — як Звіт за ті самі дати",
+};
+
+export async function buildSummary(gran: Gran, anchor: string, viewer: Viewer, range?: Window) {
+  const win: CompareWindows = gran === "range" && range ? rangeWindows(range.from, range.to, kyivToday())
+    : compareWindows(gran === "range" ? "week" : gran, anchor);
   const liveTeams = viewer.allTeams ? LIVE_TEAMS
     : viewer.teamId != null ? LIVE_TEAMS.filter((t) => t.id === viewer.teamId) : [];
   const teamIds = liveTeams.map((t) => t.id);
@@ -281,11 +363,33 @@ export async function buildSummary(gran: Gran, anchor: string, viewer: Viewer) {
   }
   const [trNow, trPrev] = viewer.allTeams ? await Promise.all([transfers(win.cur), transfers(win.prev)]) : [0, 0];
 
+  // 🎯 Сер. чек (4632): ① за ті самі дати; ціль — команди глядача на місяць кінця відрізка. Компанії ціль не ставиться.
+  const targetMonth = `${win.cur.to.slice(0, 7)}-01`;
+  const targets = await teamAvgCheckTargets(targetMonth, LIVE_TEAMS.map((t) => t.id));
+  const viewerTeam = viewer.allTeams ? null : viewer.teamId ?? (viewer.managerId != null ? mgrTeams.get(viewer.managerId) ?? null : null);
+  const tgt = viewerTeam != null ? targets.get(viewerTeam) ?? null : null;
+  const avgOf = (a: { revenue: number; deals: number }) => (a.deals > 0 ? Math.round(a.revenue / a.deals) : null);
+  const avgNow = avgOf(succNow), avgPrev = avgOf(succPrev);
+  // 📞 Норма дзвінків (4632): розмови + спроби на менеджера за робочий день — ТІ САМІ денні комірки, що колонка Звіту
+  // «Днів з нормою»; норма — з «Планів». Менеджери — активні в скоупі (у кого нуль дзвінків, теж тягне середнє).
+  const normTeams = viewer.allTeams ? LIVE_TEAMS.map((t) => t.id) : viewerTeam != null ? [viewerTeam] : [];
+  const mgrIds = viewer.allTeams || viewer.teamId != null
+    ? (await pool.query<{ id: number }>(`SELECT m.id FROM managers m WHERE ${activeManagerSql("m")} AND m.team_id = ANY($1::int[])`, [normTeams])).rows.map((x) => x.id)
+    : viewer.managerId != null ? [viewer.managerId] : [];
+  const mgrSet = new Set(mgrIds);
+  const dayRows = mgrIds.length ? await callsByManagerDay(win.cur.from, win.cur.to, {}) : [];
+  const callsSum = dayRows.filter((r) => mgrSet.has(r.managerId)).reduce((a, r) => a + r.talks + r.attempts, 0);
+  const workDays = workingDaysBetween(win.cur.from, win.cur.to);
+  const normNow = await callsNormFor(win.cur.to);
+  const callsNorm = { perDay: mgrIds.length && workDays > 0 ? Math.round((callsSum / (mgrIds.length * workDays)) * 10) / 10 : null,
+    norm: normNow, managers: mgrIds.length, workDays };
+
   const tiles: Tile[] = [
     { key: "revenue", label: "Отримані кошти", unit: "₴", now: Math.round(recvNow.revenue), prev: Math.round(recvPrev.revenue),
       deltaPct: deltaPct(recvNow.revenue, recvPrev.revenue), plan, planPct: planPct(recvNow.revenue, plan),
       sub: { label: "успішно реалізовано за ці дати", value: Math.round(succNow.revenue) },
       planNote: plan == null ? "план на цей період ще не заведено" : null, ...(planParts ? { planParts } : {}),
+      planRule: PLAN_RULE[gran],
       formula: "оплата отримана ∪ успішно реалізовано (без подвоєння) — як план і факт на Звіті" },
     /* 🚚 «Відправлені авто» з планом KPI (рішення Романа 02.10): план у задачнику ставиться саме на відправлені
        (`dispatch_count`, за датою завантаження) — тож і факт той самий, що в KPI «Авто» на Звіті. Закриті в
@@ -297,19 +401,33 @@ export async function buildSummary(gran: Gran, anchor: string, viewer: Viewer) {
       formula: "авто за датою завантаження; план — KPI-цілі задачника («відправлено авто»), як на Звіті" },
     { key: "calls", label: "Результативні дзвінки", unit: "шт", now: callsNow, prev: callsPrev,
       deltaPct: deltaPct(callsNow, callsPrev), plan: null, planPct: null, sub: null,
-      planNote: "плану на розмови немає (денна норма в налаштуваннях рахує розмови разом зі спробами — інше число)", formula: "дзвінки Ringostat із розмовою > 0 с; співробітник → команда за ПІБ, як у депстаті" },
+      planNote: "плану на розмови немає — норма нижче рахує розмови разом зі спробами (інше число)", formula: "дзвінки Ringostat із розмовою > 0 с; співробітник → команда за ПІБ, як у депстаті",
+      callsNorm },
+    /* 🎯 Сер. чек (4632, Юля 10.10.2026): ціль — по командах, автоматично; колір лише «у нормі / нижче». */
+    { key: "avgCheck", label: "Середній чек", unit: "₴", now: avgNow ?? 0, prev: avgPrev ?? 0,
+      deltaPct: avgNow != null && avgPrev != null ? deltaPct(avgNow, avgPrev) : null,
+      plan: tgt?.target ?? null, planPct: avgNow != null ? planPct(avgNow, tgt?.target ?? null) : null, binary: true,
+      sub: { label: "успішних угод за ці дати", value: succNow.deals },
+      planNote: viewer.allTeams ? "ціль ставиться по командах — у таблиці нижче"
+        : tgt == null ? "ціль команди не знайдено"
+        : tgt.target == null ? `ціль не ставиться: у команди ${tgt.deals} успішних угод за ${tgt.base.from.slice(5, 7)}–${tgt.base.to.slice(5, 7)}.${tgt.base.to.slice(0, 4)} (потрібно від 30)` : null,
+      planRule: tgt?.target != null ? `ціль = чек команди за ${tgt.base.from.slice(8, 10)}.${tgt.base.from.slice(5, 7)}–${tgt.base.to.slice(8, 10)}.${tgt.base.to.slice(5, 7)} (${tgt.deals} угод) + 5%, фіксується на місяць${tgt.reconstructed ? " · розраховано заднім числом" : ""}` : undefined,
+      formula: "маржа угод «Успішно реалізовано» за ці дати ÷ їх кількість (мінусові віднімаються) — як на Звіті" },
   ];
   if (viewer.allTeams) tiles.push({ key: "transfers", label: "Прорахунки лідгенів", unit: "шт", now: trNow, prev: trPrev,
     deltaPct: deltaPct(trNow, trPrev), plan: trPlan, planPct: planPct(trNow, trPlan), sub: null,
     planNote: trPlan == null ? "затверджених планів лідгенів на цей період немає" : null, formula: "входи угод у «Кваліфіковано» — як на екрані «Лідогенерація»" });
 
+  const avgTeam = new Map((teamIds.length ? await money.avgCheckByTeam("success", { from: win.cur.from, to: win.cur.to }) : [])
+    .map((t) => [t.teamId, t.avgCheck]));
   const rnow = new Map(recvTeamNow.map((t) => [t.teamId, t.revenue]));
   const rprev = new Map(recvTeamPrev.map((t) => [t.teamId, t.revenue]));
   const rowOf = (t: { id: number; name: string }) => {
     const fact = Math.round(rnow.get(t.id) ?? 0), prev = Math.round(rprev.get(t.id) ?? 0);
     const p = planTeam.get(t.id); const pl = p && p > 0 ? Math.round(p) : null;
     return { teamId: t.id, name: t.name, archived: ARCHIVED_TEAM_IDS.has(t.id), fact, prev,
-      deltaPct: deltaPct(fact, prev), plan: pl, pct: planPct(fact, pl) };
+      deltaPct: deltaPct(fact, prev), plan: pl, pct: planPct(fact, pl),
+      avgCheck: avgTeam.get(t.id) ?? null, avgCheckTarget: targets.get(t.id)?.target ?? null, avgCheckBaseDeals: targets.get(t.id)?.deals ?? 0 };
   };
   // Ранг — лише серед живих команд; архівна не займає місце в рейтингу (rank 0 = «поза рейтингом»).
   const teams: TeamRow[] = [
@@ -317,7 +435,8 @@ export async function buildSummary(gran: Gran, anchor: string, viewer: Viewer) {
     ...liveTeams.filter((t) => ARCHIVED_TEAM_IDS.has(t.id)).map((t) => ({ ...rowOf(t), rank: 0 })),
   ];
 
-  return { gran, asOf: anchor, complete: win.complete, period: win.full, cur: win.cur, prev: win.prev, tiles, teams };
+  return { gran, asOf: win.cur.to, complete: win.complete, period: win.full, cur: win.cur, prev: win.prev,
+    cmpLabel: compareLabel(win), tiles, teams };
 }
 
 /**
@@ -326,11 +445,12 @@ export async function buildSummary(gran: Gran, anchor: string, viewer: Viewer) {
  * знімки тижневого плану (`weekly_plan_snapshots`), зведені до понеділка календарного тижня (блок, що
  * починається 1-го числа посеред тижня, додається до свого тижня). Ручні цілі задачника на графіку НЕ
  * враховано — це підписано на екрані; на плитці й у таблиці вони є (там `effectiveWeekTargets`).
- * День — плану немає.
+ * День (4632 п.2.1, «місяць → тиждень → день»): ТОЙ САМИЙ план тижня, рівно розкладений по робочих днях (Пн–Пт)
+ * свого блоку; ручна ціль тижня — по робочих днях усього тижня. Вихідні точки не мають (плану на вихідний немає).
  */
 export async function planSeries(g: "day" | "week" | "month", from: string, to: string):
     Promise<{ scopeKey: string; points: { period: string; value: number }[] }[]> {
-  if (g === "day") return [];
+  if (g === "day") return dayPlanSeries(from, to);
   const byScope = new Map<string, Map<string, number>>();
   const add = (scope: string, period: string, v: number) => {
     const m = byScope.get(scope) ?? new Map<string, number>(); m.set(period, (m.get(period) ?? 0) + v); byScope.set(scope, m);
@@ -371,4 +491,131 @@ export async function planSeries(g: "day" | "week" | "month", from: string, to: 
   return [...byScope].map(([scopeKey, m]) => ({ scopeKey,
     points: [...m].filter(([p]) => p >= from.slice(0, 10) || g === "month").sort(([a], [b]) => a.localeCompare(b))
       .map(([period, value]) => ({ period, value: Math.round(value) })) }));
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+   📋 ВКЛАДКА «ПЛАН-ФАКТ» (ТЗ 4632 п.2.2): помісячно / потижнево / «з – по», компанія → команда → менеджер.
+   Колонки: план, факт, %, залишок, очікування, треба на день; плюс сер. чек проти цілі команди і дзвінки на день
+   проти норми (п.2.5). Нічого не рахує сам: гроші — ядро (`receivedByMgrAtTeam`, ②, як Звіт і плитка), план — той
+   самий `planByManager`, що плитка, сер. чек — `avgCheckByManager`, дзвінки — денні комірки Звіту.
+   ═══════════════════════════════════════════════════════════════════════════════════════════════════════ */
+
+export interface PlanFactLine {
+  plan: number | null; fact: number; pct: number | null;
+  /** План − факт, не менше нуля; `null` без плану. */
+  remaining: number | null;
+  /** Очікується за плановою датою оплати від сьогодні до кінця періоду (минулий період — 0). */
+  expect: number;
+  /** Скільки треба на робочий день до кінця періоду, щоб закрити залишок; минулий період або без плану — `null`. */
+  needPerDay: number | null;
+  avgCheck: number | null; successDeals: number;
+  /** Розмови + спроби на менеджера за робочий день відрізка. */
+  callsPerDay: number | null;
+}
+export interface PlanFactManager extends PlanFactLine { managerId: number; name: string; isActive: boolean }
+export interface PlanFactTeam extends PlanFactLine {
+  teamId: number | null; name: string; archived: boolean;
+  avgCheckTarget: number | null; avgCheckBaseDeals: number;
+  managers: PlanFactManager[];
+}
+
+/** Рядок із чисел: % і залишок рахуються тут, один раз, для менеджера, команди й компанії однаково. */
+export function planFactLine(x: { plan: number | null; fact: number; expect: number; avgRevenue: number; successDeals: number;
+  calls: number; managerDays: number; workDaysLeft: number; complete: boolean }): PlanFactLine {
+  const plan = x.plan != null && x.plan > 0 ? Math.round(x.plan) : null;
+  const remaining = plan != null ? Math.max(0, plan - Math.round(x.fact)) : null;
+  return {
+    plan, fact: Math.round(x.fact), pct: planPct(x.fact, plan), remaining, expect: Math.round(x.expect),
+    needPerDay: !x.complete && remaining != null && x.workDaysLeft > 0 ? Math.round(remaining / x.workDaysLeft) : null,
+    avgCheck: x.successDeals > 0 ? Math.round(x.avgRevenue / x.successDeals) : null, successDeals: x.successDeals,
+    callsPerDay: x.managerDays > 0 ? Math.round((x.calls / x.managerDays) * 10) / 10 : null,
+  };
+}
+
+export async function buildPlanFact(gran: Gran, anchor: string, viewer: Viewer, range?: Window) {
+  const today = kyivToday();
+  const win: CompareWindows = gran === "range" && range ? rangeWindows(range.from, range.to, today)
+    : compareWindows(gran === "range" ? "week" : gran, anchor);
+  const cur = win.cur;
+  const workDaysElapsed = workingDaysBetween(cur.from, cur.to);
+  const leftFrom = today > win.full.from ? today : win.full.from;
+  const workDaysLeft = win.complete ? 0 : workingDaysBetween(leftFrom, win.full.to);
+
+  const [factRows, planMgr, avgRows, dayRows, expRows, names] = await Promise.all([
+    money.receivedByMgrAtTeam({ from: cur.from, to: cur.to }),
+    planByManager(gran, win.full),
+    money.avgCheckByManager({ from: cur.from, to: cur.to }),
+    callsByManagerDay(cur.from, cur.to, {}),
+    win.complete ? Promise.resolve([] as Awaited<ReturnType<typeof metrics.expectedByManagerDay>>) : metrics.expectedByManagerDay({}),
+    pool.query<{ id: number; name: string; team_id: number | null; active: boolean }>(
+      `SELECT m.id, m.name, m.team_id, ${activeManagerSql("m")} AS active FROM managers m`).then((r) => new Map(r.rows.map((x) => [x.id, x]))),
+  ]);
+  const targets = await teamAvgCheckTargets(`${cur.to.slice(0, 7)}-01`, LIVE_TEAMS.map((t) => t.id));
+  const avgBy = new Map(avgRows.map((r) => [r.managerId, r]));
+  const callsBy = new Map<number, number>();
+  for (const r of dayRows) callsBy.set(r.managerId, (callsBy.get(r.managerId) ?? 0) + r.talks + r.attempts);
+  const expBy = new Map<number, number>();
+  for (const r of expRows) if (r.day >= leftFrom && r.day <= win.full.to) expBy.set(r.managerId, (expBy.get(r.managerId) ?? 0) + r.sum);
+
+  // Рядки (менеджер × команда): факт — за командою на дату анкера; план — у рядок поточної команди людини.
+  type Raw = { managerId: number; teamId: number | null; plan: number | null; fact: number };
+  const raw = new Map<string, Raw>();
+  const key = (m: number, t: number | null) => `${m}:${t ?? "-"}`;
+  for (const f of factRows) raw.set(key(f.managerId, f.teamId), { managerId: f.managerId, teamId: f.teamId, plan: null, fact: f.revenue });
+  for (const [mid, p] of planMgr.byMgr) {
+    const total = p.autoPerBlock.reduce((a, v) => a + v, 0) + p.manual;
+    if (total <= 0) continue;
+    const k = key(mid, p.teamId);
+    const r = raw.get(k) ?? { managerId: mid, teamId: p.teamId, plan: null, fact: 0 };
+    r.plan = total; raw.set(k, r);
+  }
+  // Активний менеджер без плану й без грошей теж лишається — його дзвінки й нуль видно, а не зникають.
+  for (const [mid, n] of names) {
+    if (!n.active || n.team_id == null || [...raw.values()].some((r) => r.managerId === mid)) continue;
+    if ((callsBy.get(mid) ?? 0) > 0) raw.set(key(mid, n.team_id), { managerId: mid, teamId: n.team_id, plan: null, fact: 0 });
+  }
+
+  const visibleTeam = (t: number | null) => viewer.allTeams || (viewer.teamId != null && t === viewer.teamId);
+  const ownRow = (r: Raw) => viewer.allTeams || viewer.teamId != null ? visibleTeam(r.teamId) : r.managerId === viewer.managerId;
+  const rows = [...raw.values()].filter(ownRow);
+  // Сер. чек і дзвінки — властивість людини за відрізок, а не рядка-команди: у того, хто перейшов, вони йдуть у рядок
+  // ПОТОЧНОЇ команди, щоб не подвоювались.
+  const lineOf = (rs: Raw[]) => {
+    let plan: number | null = null, fact = 0, expect = 0, avgRevenue = 0, successDeals = 0, calls = 0, managerDays = 0;
+    for (const r of rs) {
+      if (r.plan != null) plan = (plan ?? 0) + r.plan;
+      fact += r.fact;
+      const home = (names.get(r.managerId)?.team_id ?? null) === r.teamId;
+      if (home) {
+        expect += expBy.get(r.managerId) ?? 0;
+        const a = avgBy.get(r.managerId); if (a) { avgRevenue += a.revenue; successDeals += a.successDeals; }
+        if (names.get(r.managerId)?.active) { calls += callsBy.get(r.managerId) ?? 0; managerDays += workDaysElapsed; }
+      }
+    }
+    return planFactLine({ plan, fact, expect, avgRevenue, successDeals, calls, managerDays, workDaysLeft, complete: win.complete });
+  };
+  const teamName = new Map<number, string>([
+    ...(await pool.query<{ id: number; name: string }>(`SELECT id, name FROM teams`)).rows.map((t) => [t.id, t.name] as [number, string]),
+    ...LIVE_TEAMS.map((t) => [t.id, t.name] as [number, string]),
+  ]);
+  const teamIds = [...new Set(rows.map((r) => r.teamId))];
+  const teams: PlanFactTeam[] = teamIds.map((tid) => {
+    const rs = rows.filter((r) => r.teamId === tid);
+    const tg = tid != null ? targets.get(tid) : undefined;
+    return {
+      teamId: tid, name: tid == null ? "Поза командами" : teamName.get(tid) ?? `Команда #${tid}`,
+      archived: tid != null && ARCHIVED_TEAM_IDS.has(tid),
+      avgCheckTarget: tg?.target ?? null, avgCheckBaseDeals: tg?.deals ?? 0,
+      ...lineOf(rs),
+      managers: rs.map((r) => ({ managerId: r.managerId, name: names.get(r.managerId)?.name ?? `#${r.managerId}`,
+        isActive: names.get(r.managerId)?.active ?? false, ...lineOf([r]) }))
+        .sort((a, b) => (a.pct ?? -1) - (b.pct ?? -1) || b.fact - a.fact),
+    };
+  }).sort((a, b) => (a.teamId == null ? 1 : 0) - (b.teamId == null ? 1 : 0) || (a.pct ?? -1) - (b.pct ?? -1));
+  const company = viewer.allTeams ? lineOf(rows) : null;
+  return {
+    gran, period: win.full, cur, complete: win.complete, today, workDaysLeft, planRule: PLAN_RULE[gran],
+    callsNorm: await callsNormFor(cur.to), avgCheckRule: "ціль сер. чека = чек команди за 3 повні місяці + 5%, фіксується на місяць; менше 30 угод — без цілі",
+    company, teams,
+  };
 }

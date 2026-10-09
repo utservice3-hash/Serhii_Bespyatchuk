@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { parseDataScope, SCOPE_REQUIRED_CREATE, SCOPE_REQUIRED_UPDATE } from "../auth/roleScopeInput.js";
 import { wireValue, wireState, DEFAULT_PLAN_MIN, PLAN_MIN_BOUNDS } from "../core/settingWire.js";
-import { CALLS_NORM_BOUNDS } from "../core/callNorm.js";
+import { callsNormFor } from "../core/callsNormPlan.js";
 import bcrypt from "bcryptjs";
 import { pool } from "../db/pool.js";
 import { setAdPlan } from "../core/adBudget.js";
@@ -127,7 +127,9 @@ export async function getSettings(): Promise<AppSettings> {
 }
 
 settingsRouter.get("/", async (_req, res) => {
-  res.json({ settings: await getSettings() });
+  // 📞 Норма дзвінків переїхала в «Плани» (4632, Роман 10.10.2026): тут — лише ДЗЕРКАЛО чинної норми, для читання.
+  const s = await getSettings();
+  res.json({ settings: { ...s, callsDailyNorm: await callsNormFor(kyivToday()) }, callsNormIn: "plans" });
 });
 
 settingsRouter.put("/", async (req, res) => {
@@ -161,10 +163,9 @@ settingsRouter.put("/", async (req, res) => {
      */
     planMinPerManager: wireValue(body.planMinPerManager, PLAN_MIN_BOUNDS,
       current.planMinPerManager, DEFAULT_PLAN_MIN),
-    // 📞 Ті самі три стани: немає поля → лишити current; `null`/"" → «не задано»; число → 1..500.
-    callsDailyNorm: wireState(body.callsDailyNorm) === "absent" ? current.callsDailyNorm
-      : wireState(body.callsDailyNorm) === "reset" ? null
-      : Math.min(CALLS_NORM_BOUNDS.max, Math.max(CALLS_NORM_BOUNDS.min, Math.round(Number(body.callsDailyNorm)))),
+    // 📞 Норму дзвінків тут більше НЕ пишуть (4632, Роман 10.10.2026: «в Планах», «КВП сама ставить»): поле
+    // лишається в JSON як було, а чинне значення читається з `calls_norm_plan`. Прийняти тут число — завести друге джерело.
+    callsDailyNorm: current.callsDailyNorm,
     // ⏱ Трекер: кожне поле клампиться окремо, а не приймається як є — конфіг їде на
     // 38 машин і поганим значенням (heartbeat раз на секунду) можна покласти сервер.
     // Відсутнє поле = лишається поточне, тому часткове збереження безпечне.

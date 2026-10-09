@@ -534,6 +534,30 @@ ALTER TABLE receivable_note_history ADD COLUMN IF NOT EXISTS deal_id BIGINT;
 CREATE INDEX IF NOT EXISTS idx_receivable_note_history_client
   ON receivable_note_history(client_key, written_at DESC);
 
+-- 📞 НОРМА ДЗВІНКІВ НА ДЕНЬ — У «ПЛАНАХ» (4632, 10.10.2026; `core/callsNormPlan.ts`). Ставить КВП, діє з місяця
+-- й до наступної зміни; кожна зміна — новий рядок, історія не затирається.
+CREATE TABLE IF NOT EXISTS calls_norm_plan (
+  id         SERIAL PRIMARY KEY,
+  from_month DATE NOT NULL CHECK (from_month = date_trunc('month', from_month)::date),
+  norm       INTEGER NOT NULL CHECK (norm BETWEEN 1 AND 500),
+  set_by     INTEGER REFERENCES users(id),
+  set_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 🎯 ЦІЛЬ СЕРЕДНЬОГО ЧЕКА КОМАНДИ НА МІСЯЦЬ (4632, Юля 10.10.2026; `core/avgCheckTarget.ts`). Записується першим
+-- зверненням у місяці й до кінця місяця не рухається. `target` NULL — у команди за 3 місяці менше 30 успішних угод.
+CREATE TABLE IF NOT EXISTS avg_check_targets (
+  month       DATE NOT NULL,
+  team_id     INTEGER NOT NULL,
+  base_from   DATE NOT NULL,
+  base_to     DATE NOT NULL,
+  revenue     NUMERIC NOT NULL,
+  deals       INTEGER NOT NULL,
+  target      NUMERIC,
+  computed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (month, team_id)
+);
+
 -- 📞 РОЗМОВА БІЛЯ ДАТИ ДОМОВЛЕНОСТІ (задача 4631, 09.10.2026; `core/receivableCallLink.ts`).
 -- Поточне посилання лежить на записі домовленості: `call_uniqueid` — ключ дзвінка в `ringostat_calls`,
 -- `call_url` — що людина вставила (як є, для довідки). Нова дата без нового посилання знімає старе.

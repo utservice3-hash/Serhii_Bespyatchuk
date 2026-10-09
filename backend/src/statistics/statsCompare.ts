@@ -17,7 +17,8 @@
  * Тиждень — календарний Пн–Нд (4367: «тиждень не захоплює понеділок наступного»).
  */
 
-export type Gran = "week" | "month";
+/** `range` — довільний період «з – по» (ТЗ 4632 п.2.3): порівнюється з тими самими датами минулого місяця. */
+export type Gran = "week" | "month" | "range";
 export interface Window { from: string; to: string }
 export interface CompareWindows {
   gran: Gran;
@@ -48,7 +49,7 @@ export function sheetWeekToMonday(period: string): string {
   return isoDow(period) === 7 ? addDays(period, -6) : period;
 }
 
-export function compareWindows(gran: Gran, anchor: string): CompareWindows {
+export function compareWindows(gran: Exclude<Gran, "range">, anchor: string): CompareWindows {
   if (gran === "week") {
     const w = weekOf(anchor);
     return {
@@ -70,6 +71,41 @@ export function compareWindows(gran: Gran, anchor: string): CompareWindows {
     prev: { from: pFrom, to: `${pFrom.slice(0, 7)}-${String(pDay).padStart(2, "0")}` },
     complete,
   };
+}
+
+/** Та сама дата місяцем раніше, з обрізкою кінця місяця (31.10 → 30.09, 31.03 → 28/29.02). */
+export function sameDayPrevMonth(date: string): string {
+  const y = Number(date.slice(0, 4)), m0 = Number(date.slice(5, 7)) - 1, day = Number(date.slice(8, 10));
+  const py = m0 === 0 ? y - 1 : y, pm0 = m0 === 0 ? 11 : m0 - 1;
+  return `${py}-${String(pm0 + 1).padStart(2, "0")}-${String(Math.min(day, dim(py, pm0))).padStart(2, "0")}`;
+}
+
+/**
+ * 📅 ДОВІЛЬНИЙ ПЕРІОД «З – ПО» (ТЗ 4632 п.2.3–2.4, Юля 28.09: «до того ж періоду минулого місяця»).
+ * Поточний відрізок — від `from` до `to`, але не далі сьогодні; попередній — ТІ САМІ дати місяцем раніше.
+ * 23–25.09 → 23–25.08; період, що ще триває (23.09–05.10 на 01.10), порівнюється з 23.08–01.09 — ТІЄЇ САМОЇ довжини.
+ */
+export function rangeWindows(from: string, to: string, today: string): CompareWindows {
+  const curTo = to < today ? to : today < from ? from : today;
+  return {
+    gran: "range", full: { from, to }, cur: { from, to: curTo },
+    prev: { from: sameDayPrevMonth(from), to: sameDayPrevMonth(curTo) },
+    complete: to <= today,
+  };
+}
+
+const MONTH_GEN = ["січня", "лютого", "березня", "квітня", "травня", "червня", "липня", "серпня", "вересня", "жовтня", "листопада", "грудня"];
+const dmy = (s: string) => `${s.slice(8, 10)}.${s.slice(5, 7)}`;
+
+/**
+ * 🏷 З ЧИМ ПОРІВНЯННЯ — ДАТАМИ, А НЕ «ДО ПОПЕРЕДНЬОГО» (ТЗ 4632 п.2.4: «підписати прямо, з чим порівняння»).
+ * Без «до» на початку — екран сам ставить «до …». Одне правило для плиток і заголовка таблиці команд.
+ */
+export function compareLabel(w: CompareWindows): string {
+  const span = `${dmy(w.prev.from)}–${dmy(w.prev.to)}`;
+  if (w.gran === "week") return w.complete ? `минулого тижня (${span})` : `${span} (той самий відрізок минулого тижня)`;
+  if (w.gran === "month") return w.complete ? `${MONTH_GEN[Number(w.prev.from.slice(5, 7)) - 1]} (${span})` : `${span} (ті самі дні минулого місяця)`;
+  return `${span} (ті самі дати минулого місяця)`;
 }
 
 /** Δ у відсотках; `null`, коли порівнювати нема з чим (попередній нуль) — а не ±∞ чи «▼100%». */

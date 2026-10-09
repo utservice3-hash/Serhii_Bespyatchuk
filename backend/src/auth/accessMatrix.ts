@@ -1191,6 +1191,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/plans/formation", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  // 📞 4632: норма дзвінків у «Планах». Читати — усім із вкладкою «Плани»; ставити — лише КВП і адмін
+  //    (`canSetCallsNorm`), тож решта ролей вкладки отримує 403 ДО запису — проба безпечна.
+  { method: "GET", path: "/api/plans/calls-norm", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  { method: "POST", path: "/api/plans/calls-norm", cls: "deny-only",
+    allow: [], deny: ["ceo", "opdir", "financier", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/plans/formation/approve", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/plans/formation/repeat-clients", cls: "GET",
@@ -1290,6 +1296,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "team_lead", "manager"] },
   // 📊 Плитки й таблиця команд Статистик (ТЗ 28.09, 02.10.2026) — та сама межа, що серії; скоуп клампиться всередині.
   { method: "GET", path: "/api/statistics/summary?gran=week", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  // 📋 4632: вкладка «План-факт» — та сама межа (вкладка statistics) і той самий скоуп, що плитки.
+  { method: "GET", path: "/api/statistics/plan-fact?gran=week", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/tasks", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
