@@ -181,3 +181,30 @@ export function clipPlanToToday<T extends { points: { period: string }[] }>(plan
 export function clipPointsToToday<P extends { period: string }>(points: P[], today: string): P[] {
   return points.filter((x) => x.period <= today);
 }
+
+/* 📋 «План-факт» (4632): рядок із чисел — чистий, щоб гейт перевіряв його без бази. */
+export interface PlanFactLine {
+  plan: number | null; fact: number; pct: number | null;
+  /** План − факт, не менше нуля; `null` без плану. */
+  remaining: number | null;
+  /** Очікується за плановою датою оплати від сьогодні до кінця періоду (минулий період — 0). */
+  expect: number;
+  /** Скільки треба на робочий день до кінця періоду, щоб закрити залишок; минулий період або без плану — `null`. */
+  needPerDay: number | null;
+  avgCheck: number | null; successDeals: number;
+  /** Розмови + спроби на менеджера за робочий день відрізка. */
+  callsPerDay: number | null;
+}
+/** Рядок із чисел: % і залишок рахуються тут, один раз, для менеджера, команди й компанії однаково. */
+export function planFactLine(x: { plan: number | null; fact: number; expect: number; avgRevenue: number; successDeals: number;
+  calls: number; managerDays: number; workDaysLeft: number; complete: boolean }): PlanFactLine {
+  const plan = x.plan != null && x.plan > 0 ? Math.round(x.plan) : null;
+  const remaining = plan != null ? Math.max(0, plan - Math.round(x.fact)) : null;
+  return {
+    plan, fact: Math.round(x.fact), pct: planPct(x.fact, plan), remaining, expect: Math.round(x.expect),
+    needPerDay: !x.complete && remaining != null && x.workDaysLeft > 0 ? Math.round(remaining / x.workDaysLeft) : null,
+    avgCheck: x.successDeals > 0 ? Math.round(x.avgRevenue / x.successDeals) : null, successDeals: x.successDeals,
+    callsPerDay: x.managerDays > 0 ? Math.round((x.calls / x.managerDays) * 10) / 10 : null,
+  };
+}
+

@@ -29,6 +29,8 @@ import * as metrics from "../core/metrics.js";
 import { loadKpiTargets } from "../core/kpiTargetsDb.js";
 import { leadgenTeamMembers, approvedLeadgenPlans } from "../core/leadgenPlans.js";
 import { planForPeriod } from "../core/leadgenPlanRules.js";
+import { planFactLine, type PlanFactLine } from "./statsCompare.js";
+export { planFactLine, type PlanFactLine } from "./statsCompare.js";
 import { compareWindows, rangeWindows, compareLabel, deltaPct, planPct, rankByPlan, foldWeek, weekOf, type Gran, type Window, type WeekPlanCell, type CompareWindows } from "./statsCompare.js";
 import { kyivToday, workingDaysBetween } from "../core/dates.js";
 import { teamAvgCheckTargets } from "../core/avgCheckTarget.js";
@@ -500,36 +502,11 @@ export async function planSeries(g: "day" | "week" | "month", from: string, to: 
    самий `planByManager`, що плитка, сер. чек — `avgCheckByManager`, дзвінки — денні комірки Звіту.
    ═══════════════════════════════════════════════════════════════════════════════════════════════════════ */
 
-export interface PlanFactLine {
-  plan: number | null; fact: number; pct: number | null;
-  /** План − факт, не менше нуля; `null` без плану. */
-  remaining: number | null;
-  /** Очікується за плановою датою оплати від сьогодні до кінця періоду (минулий період — 0). */
-  expect: number;
-  /** Скільки треба на робочий день до кінця періоду, щоб закрити залишок; минулий період або без плану — `null`. */
-  needPerDay: number | null;
-  avgCheck: number | null; successDeals: number;
-  /** Розмови + спроби на менеджера за робочий день відрізка. */
-  callsPerDay: number | null;
-}
 export interface PlanFactManager extends PlanFactLine { managerId: number; name: string; isActive: boolean }
 export interface PlanFactTeam extends PlanFactLine {
   teamId: number | null; name: string; archived: boolean;
   avgCheckTarget: number | null; avgCheckBaseDeals: number;
   managers: PlanFactManager[];
-}
-
-/** Рядок із чисел: % і залишок рахуються тут, один раз, для менеджера, команди й компанії однаково. */
-export function planFactLine(x: { plan: number | null; fact: number; expect: number; avgRevenue: number; successDeals: number;
-  calls: number; managerDays: number; workDaysLeft: number; complete: boolean }): PlanFactLine {
-  const plan = x.plan != null && x.plan > 0 ? Math.round(x.plan) : null;
-  const remaining = plan != null ? Math.max(0, plan - Math.round(x.fact)) : null;
-  return {
-    plan, fact: Math.round(x.fact), pct: planPct(x.fact, plan), remaining, expect: Math.round(x.expect),
-    needPerDay: !x.complete && remaining != null && x.workDaysLeft > 0 ? Math.round(remaining / x.workDaysLeft) : null,
-    avgCheck: x.successDeals > 0 ? Math.round(x.avgRevenue / x.successDeals) : null, successDeals: x.successDeals,
-    callsPerDay: x.managerDays > 0 ? Math.round((x.calls / x.managerDays) * 10) / 10 : null,
-  };
 }
 
 export async function buildPlanFact(gran: Gran, anchor: string, viewer: Viewer, range?: Window) {

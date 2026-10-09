@@ -16,24 +16,8 @@ import { avgCheckByManager } from "./money.js";
  * Місяці до запуску (до жовтня 2026) не записуються — рахуються на льоту й позначені `reconstructed`.
  */
 
-export const AVG_CHECK_MIN_DEALS = 30;
-export const AVG_CHECK_UPLIFT = 1.05;
-const pad = (n: number) => String(n).padStart(2, "0");
-
-/** Три повні місяці перед місяцем `month` (YYYY-MM-01): жовтень → липень–вересень, січень → жовтень–грудень. */
-export function avgCheckBase(month: string): { from: string; to: string } {
-  const y = Number(month.slice(0, 4)), m0 = Number(month.slice(5, 7)) - 1;
-  const start = new Date(Date.UTC(y, m0 - 3, 1));
-  const end = new Date(Date.UTC(y, m0, 0));
-  return { from: `${start.getUTCFullYear()}-${pad(start.getUTCMonth() + 1)}-01`,
-    to: `${end.getUTCFullYear()}-${pad(end.getUTCMonth() + 1)}-${pad(end.getUTCDate())}` };
-}
-
-/** Ціль за базою: менше 30 угод — `null` (лише факт), інакше чек бази + 5%, округлено до гривні. */
-export function avgCheckTargetOf(revenue: number, deals: number): number | null {
-  if (deals < AVG_CHECK_MIN_DEALS || deals <= 0) return null;
-  return Math.round((revenue / deals) * AVG_CHECK_UPLIFT);
-}
+import { avgCheckBase, avgCheckTargetOf } from "./avgCheckTargetRules.js";
+export { avgCheckBase, avgCheckTargetOf, AVG_CHECK_MIN_DEALS, AVG_CHECK_UPLIFT } from "./avgCheckTargetRules.js";
 
 /** Відповідь: ціль `null` поруч із `deals` пояснює себе — «менше 30 угод за 3 місяці». */
 export interface TeamAvgCheckTarget { teamId: number; deals: number; revenue: number; target: number | null; base: { from: string; to: string };
