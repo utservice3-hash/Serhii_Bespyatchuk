@@ -22,7 +22,7 @@ import type { Alert } from "../health/alerts.js";
 import { sendAdminAlert } from "../bot/notify.js";
 import {
   REPEAT_AFTER_MIN, repeatAfterMin, isPointEvent, humanDuration, formatAlert, formatResolved,
-  suppressedByGrace, hasDeployGrace, DEPLOY_GRACE_MIN,
+  suppressedByGrace, hasDeployGrace, DEPLOY_GRACE_MIN, isWatchId, WATCH_PREFIX,
 } from "./alertRules.js";
 // Ре-експорт, щоб споживачам не треба було знати про поділ «правила / зʼєднання».
 export { REPEAT_AFTER_MIN, repeatAfterMin, isPointEvent, humanDuration, formatAlert, formatResolved,
@@ -66,12 +66,32 @@ export async function alertPush(deps?: Partial<PushDeps>): Promise<PushResult> {
   });
 
   const state = await collect();
-  const now = state.alerts;
+  // Банер не знає про епізоди вартових (`watch:…`) — їх закривають самі вартові (`reportWatch`).
+  const res = await applyEpisodes(state.alerts, (id) => !isWatchId(id), { send, query });
+  if (res.sent || res.repeated || res.resolved) {
+    console.log(`alertPush: нових ${res.sent}, повторів ${res.repeated}, відбоїв ${res.resolved}`
+      + `, чинних ${res.open} (перевірок ${state.checksRan}/${state.checksDeclared}).`);
+  }
+  return res;
+}
+
+/**
+ * 🔁 ЕПІЗОДИ ТРИВОГ — ОДНЕ ПРАВИЛО ДЛЯ ВСІХ ДЖЕРЕЛ (09.10.2026, прохід «Telegram — один механізм»).
+ * Перше повідомлення (з форою, якщо вона є), нагадування раз на `repeatAfterMin`, «✅ Відновилось» — і все це
+ * через `alert_state`, тож рестарт процесу дублів не дає. `inScope` — які рядки таблиці це джерело має право
+ * ЗАКРИВАТИ: банер — усе, крім `watch:…`; вартовий — лише своє.
+ */
+export async function applyEpisodes(
+  now: Alert[], inScope: (id: string) => boolean,
+  deps: Pick<PushDeps, "send" | "query">,
+): Promise<PushResult> {
+  const { send, query } = deps;
   const byId = new Map(now.map((a) => [a.id, a]));
 
   const rows = (await query<{ id: string; title: string; first_seen_at: Date;
     last_sent_at: Date | null; sent_count: number; resolved_at: Date | null }>(
-    `SELECT id, title, first_seen_at, last_sent_at, sent_count, resolved_at FROM alert_state`)).rows;
+    `SELECT id, title, first_seen_at, last_sent_at, sent_count, resolved_at FROM alert_state`)).rows
+    .filter((r) => inScope(r.id));
   const known = new Map(rows.map((r) => [r.id, r]));
 
   const res: PushResult = { sent: 0, repeated: 0, resolved: 0, open: now.length };
@@ -150,9 +170,28 @@ export async function alertPush(deps?: Partial<PushDeps>): Promise<PushResult> {
     res.resolved++;
   }
 
+  return res;
+}
+
+/**
+ * 🛰 ВАРТОВИЙ ЗВІТУЄ СВІЙ СТАН — замість прямого `sendAdminAlert` і памʼятного `Set` (09.10.2026).
+ * `alerts` — ПОВНИЙ поточний набір проблем цього джерела (порожній = усе гаразд): чого в ньому немає, те
+ * закривається з «✅ Відновилось». Id кожної тривоги мусить починатися з `watch:<source>:`.
+ * ⚠️ Не вдалося перевірити — НЕ кликати з порожнім набором: «не знаю» ≠ «добре», інакше вартовий сам закрив би
+ * чинну аварію.
+ */
+export async function reportWatch(source: string, alerts: Alert[], deps?: Partial<Pick<PushDeps, "send" | "query">>): Promise<PushResult> {
+  const prefix = `${WATCH_PREFIX}${source}:`;
+  const bad = alerts.find((a) => !a.id.startsWith(prefix));
+  if (bad) throw new Error(`reportWatch(${source}): id «${bad.id}» поза своїм простором ${prefix}`);
+  const send = deps?.send ?? sendAdminAlert;
+  const query: PushDeps["query"] = deps?.query ?? (async <T>(sql: string, params?: unknown[]) => {
+    const { pool } = await import("../db/pool.js");
+    return await pool.query(sql, params) as unknown as { rows: T[] };
+  });
+  const res = await applyEpisodes(alerts, (id) => id.startsWith(prefix), { send, query });
   if (res.sent || res.repeated || res.resolved) {
-    console.log(`alertPush: нових ${res.sent}, повторів ${res.repeated}, відбоїв ${res.resolved}`
-      + `, чинних ${res.open} (перевірок ${state.checksRan}/${state.checksDeclared}).`);
+    console.log(`reportWatch(${source}): нових ${res.sent}, повторів ${res.repeated}, відбоїв ${res.resolved}, чинних ${res.open}.`);
   }
   return res;
 }
