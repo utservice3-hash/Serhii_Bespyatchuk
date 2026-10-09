@@ -1,5 +1,5 @@
 import { pool } from "../db/pool.js";
-import { workingDaysBetween, monthEndOf, fixedWeekBlocks } from "./dates.js";
+import { workingDaysBetween, monthEndOf, fixedWeekBlocks, monthsInRange } from "./dates.js";
 import { weekPlansForMonth, type WeekPlanRow } from "./weekPlan.js";
 import { receivedByMgr } from "./money.js";
 import { hasPlanSql, stateJoinSql } from "./managerState.js";
@@ -448,4 +448,26 @@ export async function formationRoster(
        FROM managers m LEFT JOIN teams t ON t.id = m.team_id ${stateJoinSql("m")}
       WHERE ${hasPlanSql("m", "m.is_active")} ${teamId ? "AND m.team_id = $1" : "AND m.team_id IS NOT NULL"} AND ${extraCond}
       ORDER BY t.name NULLS LAST, m.name`, teamId ? [teamId] : [])).rows;
+}
+
+/**
+ * 💰 МІСЯЧНИЙ ГРОШОВИЙ ПЛАН, РОЗКЛАДЕНИЙ НА ДОВІЛЬНИЙ ПЕРІОД — рівномірно по робочих днях (рішення власника 22.07:
+ * day = week = month сходяться). Перенесено з `/report-plan` без зміни (4632, 10.10.2026): «з – по» на Статистиках
+ * мусить брати ТОЙ САМИЙ план, що Звіт за ті самі дати. Період через межу місяців — сума часток кожного місяця.
+ */
+export async function proratedMonthPlanByManager(from: string, to: string, teamId: number | null): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  for (const mo of monthsInRange(from, to)) {
+    const wdMonth = workingDaysBetween(mo, monthEndOf(mo));
+    if (wdMonth <= 0) continue;
+    const oF = mo > from ? mo : from;                 // перетин [місяць ∩ період]
+    const meEnd = monthEndOf(mo);
+    const oT = meEnd < to ? meEnd : to;
+    if (oF > oT) continue;
+    const frac = workingDaysBetween(oF, oT) / wdMonth;
+    if (frac <= 0) continue;
+    const mp = await managerPlan(teamId ? { month: mo, teamId } : { month: mo });
+    for (const row of mp.rows) out.set(row.managerId, (out.get(row.managerId) ?? 0) + row.plan * frac);
+  }
+  return out;
 }

@@ -9514,19 +9514,8 @@ dashboardRouter.get("/report-plan", async (req, res) => {
   // реалістичний %. Місячний план апортується РІВНОМІРНО по робочих днях у обраний період
   // (day=week=month сходяться). KPI-під-цілі (реклама/лідоген/авто/чек/конв) лишаються з
   // задачника (planByMgr вище) — це активнісні таргети, не гроші.
-  const moneyPlanByMgr = new Map<number, number>();
-  for (const mo of monthsInRange(from, to)) {
-    const wdMonth = workingDaysBetween(mo, monthEndOf(mo));
-    if (wdMonth <= 0) continue;
-    const oF = mo > from ? mo : from;                 // перетин [місяць ∩ період]
-    const meEnd = monthEndOf(mo);
-    const oT = meEnd < to ? meEnd : to;
-    if (oF > oT) continue;
-    const frac = workingDaysBetween(oF, oT) / wdMonth;
-    if (frac <= 0) continue;
-    const mp = await plans.managerPlan(teamId ? { month: mo, teamId } : { month: mo });
-    for (const row of mp.rows) moneyPlanByMgr.set(row.managerId, (moneyPlanByMgr.get(row.managerId) ?? 0) + row.plan * frac);
-  }
+  // Розклад — у ядрі (`plans.proratedMonthPlanByManager`), щоб «з – по» на Статистиках брав той самий вираз (4632).
+  const moneyPlanByMgr = await plans.proratedMonthPlanByManager(from, to, teamId);
 
   // Темп: частка робочих днів періоду, що минули (для статусу g/a/r як у макеті).
   const wdTotal = workingDaysBetween(from, to);
