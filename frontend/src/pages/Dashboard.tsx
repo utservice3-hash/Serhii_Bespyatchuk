@@ -234,7 +234,8 @@ export function Dashboard() {
   // 🔴 Права на дії віддає СЕРВЕР тими самими виразами, що гейтять роути.
   // Дефолт `false`: поки відповіді немає, кнопок немає — «закрито, поки не
   // сказано інакше» безпечніше за зворотне.
-  const [receivablesPerms, setReceivablesPerms] = useState({ canSetOwner: false, canMerge: false, canSetLimit: false, canWriteOff: false, canRequestLimit: false });
+  const [receivablesPerms, setReceivablesPerms] = useState({ canSetOwner: false, canMerge: false, canSetLimit: false, canWriteOff: false, canRequestLimit: false,
+    canEditAgreement: false, canListenCalls: false });
   // 🔗 Реєстр псевдонімів (канонічний → скільки вже приймає). Знає лише БД.
   const [receivablesCanonicalOf, setReceivablesCanonicalOf] = useState<Record<string, number>>({});
   const [receivablesLoading, setReceivablesLoading] = useState(false);
@@ -729,18 +730,20 @@ export function Dashboard() {
     const managerIdToUse = auth?.role === "manager" ? auth.managerId ?? undefined : undefined;
     setReceivablesLoading(true);
     fetchReceivables({ teamId: teamIdToUse || undefined, managerId: managerIdToUse })
-      .then(({ syncedAt, managers, totals, canSetOwner, canMerge, canSetLimit, canWriteOff, canRequestLimit, canonicalOf }) => {
+      .then(({ syncedAt, managers, totals, canSetOwner, canMerge, canSetLimit, canWriteOff, canRequestLimit, canonicalOf, canEditAgreement, canListenCalls }) => {
         setReceivablesData(managers);
         setReceivablesSyncedAt(syncedAt);
         setReceivablesTotals(totals ?? null);
         setReceivablesPerms({ canSetOwner: !!canSetOwner, canMerge: !!canMerge, canSetLimit: !!canSetLimit,
-                              canWriteOff: !!canWriteOff, canRequestLimit: !!canRequestLimit });
+                              canWriteOff: !!canWriteOff, canRequestLimit: !!canRequestLimit,
+                              // 📞 4631: старий сервер поля не віддає — тоді як було: домовленість пишуть тімлід/адмін.
+                              canEditAgreement: canEditAgreement ?? canEditReceivables, canListenCalls: !!canListenCalls });
         setReceivablesCanonicalOf(canonicalOf ?? {});
       })
       .catch(() => { setReceivablesData([]); setReceivablesTotals(null);
                      setReceivablesCanonicalOf({});
                      setReceivablesPerms({ canSetOwner: false, canMerge: false, canSetLimit: false,
-                                           canWriteOff: false, canRequestLimit: false }); })
+                                           canWriteOff: false, canRequestLimit: false, canEditAgreement: false, canListenCalls: false }); })
       .finally(() => setReceivablesLoading(false));
   }, [section, receivablesTeamId, teams, auth, refreshNonce]);
 
@@ -1181,6 +1184,8 @@ export function Dashboard() {
           canMerge={receivablesPerms.canMerge}
           canonicalOf={receivablesCanonicalOf}
           canEditReceivables={canEditReceivables}
+          canEditAgreement={receivablesPerms.canEditAgreement}
+          canListenCalls={receivablesPerms.canListenCalls}
           patchReceivableNote={patchReceivableNote}
           onRefresh={() => setRefreshNonce((n) => n + 1)}
         />

@@ -534,6 +534,30 @@ ALTER TABLE receivable_note_history ADD COLUMN IF NOT EXISTS deal_id BIGINT;
 CREATE INDEX IF NOT EXISTS idx_receivable_note_history_client
   ON receivable_note_history(client_key, written_at DESC);
 
+-- 📞 РОЗМОВА БІЛЯ ДАТИ ДОМОВЛЕНОСТІ (задача 4631, 09.10.2026; `core/receivableCallLink.ts`).
+-- Поточне посилання лежить на записі домовленості: `call_uniqueid` — ключ дзвінка в `ringostat_calls`,
+-- `call_url` — що людина вставила (як є, для довідки). Нова дата без нового посилання знімає старе.
+ALTER TABLE receivable_notes ADD COLUMN IF NOT EXISTS call_uniqueid TEXT;
+ALTER TABLE receivable_notes ADD COLUMN IF NOT EXISTS call_url TEXT;
+
+-- 🗓 ЖУРНАЛ ЗМІН ДАТИ ДОМОВЛЕНОСТІ — дописуваний, як `receivable_note_history`. `receivable_notes` тримає ОДИН
+-- рядок на клієнта, тож попередня дата затирається; без журналу «переносили N разів» не було б звідки взяти.
+-- Рядок — кожна зміна дати або розмови: стара й нова дата, розмова на мить запису, хто й коли. Перенесенням
+-- рахується лише «була дата → стала інша» (`reschedulePred`). Почався з дня викату: старих перенесень
+-- відновити нема з чого.
+CREATE TABLE IF NOT EXISTS receivable_date_log (
+  id            SERIAL PRIMARY KEY,
+  client_key    TEXT NOT NULL,
+  deal_id       BIGINT,
+  old_date      DATE,
+  new_date      DATE,
+  call_uniqueid TEXT,
+  changed_by    INTEGER REFERENCES users(id),
+  changed_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_receivable_date_log_client
+  ON receivable_date_log(client_key, changed_at DESC);
+
 -- 🔴 БЕКФІЛ ЖУРНАЛУ З НАЯВНИХ КОМЕНТАРІВ — УМОВА КОРЕКТНОСТІ, А НЕ ЗРУЧНІСТЬ.
 --
 -- Заміряно на проді 26.08.2026 одразу після викату: з 77 заповнених коментарів

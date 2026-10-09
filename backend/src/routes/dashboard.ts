@@ -109,6 +109,7 @@ import * as receivablesFacts from "../core/receivablesFacts.js";
 import * as receivablesCounterparty from "../core/receivablesCounterparty.js";
 import * as receivableNotePick from "../core/receivableNotePick.js";
 import { agreementActual, defaultAgreementDeal } from "../core/receivableAgreement.js";
+import * as callLink from "../core/receivableCallLink.js";
 import { WRITE_OFF_PERM, noteIsValid, WRITEOFF_TARGETS_SQL } from "../core/receivablesWriteoff.js";
 import { debtAgeDays, CLIENT_DEBT_AGE_SQL } from "../core/receivablesAge.js";
 import * as mergeLimits from "../core/mergeLimits.js";
@@ -2216,8 +2217,15 @@ dashboardRouter.get("/receivables", async (req, res) => {
   const rows = await metrics.receivablesByClient({ managerId, teamId });
 
   const clientKeys = rows.map((r) => r.clientKey).filter((k): k is string => k != null);
+  type NoteRow = {
+    client_key: string; canon_key: string; comment: string | null; due_date: string | null; updated_at: string | null;
+    hist: number; deal_id: string | null;
+    // 📞 4631: прикріплена розмова і скільки разів переносили — тим самим походом (стеля `#158`).
+    call_uniqueid: string | null; reschedules: number;
+    call_found: string | null; call_at: string | null; call_billsec: number | null; call_manager: string | null; call_same_client: boolean | null;
+  };
   const notesRes = clientKeys.length
-    ? await pool.query<{ client_key: string; canon_key: string; comment: string | null; due_date: string | null; updated_at: string | null; hist: number; deal_id: string | null }>(
+    ? await pool.query<NoteRow>(
         // 🗓 `updated_at` їде НА ЕКРАН, бо саме він вирішує, чи домовленість ще
         // актуальна: активним є запис ПІСЛЯ понеділка 00:00 за Києвом. Без нього
         // фронт мусив би вгадувати, і торішній текст читався б як сьогоднішня
@@ -2240,14 +2248,17 @@ dashboardRouter.get("/receivables", async (req, res) => {
                 -- єдиний формат, який усі рушії читають однаково.
                 -- (зворотні лапки тут заборонені — це тіло шаблонного рядка)
                 to_char(n.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at,
-                (SELECT count(*)::int FROM receivable_note_history h WHERE h.client_key = n.client_key) AS hist
+                (SELECT count(*)::int FROM receivable_note_history h WHERE h.client_key = n.client_key) AS hist,
+                n.call_uniqueid, ${callLink.rescheduleCountSql("n")} AS reschedules,
+                cf.call_found, cf.call_at, cf.call_billsec, cf.call_manager, cf.call_same_client
            FROM receivable_notes n
            LEFT JOIN client_key_alias a
                   ON a.alias_key = n.client_key AND a.revoked_at IS NULL
+           LEFT JOIN LATERAL (${callLink.callFactsLateral("n", "COALESCE(a.canonical_key, n.client_key)")}) cf ON true
           WHERE n.client_key = ANY($1) OR a.canonical_key = ANY($1)`,
         [clientKeys]
       )
-    : { rows: [] as { client_key: string; canon_key: string; comment: string | null; due_date: string | null; updated_at: string | null; hist: number; deal_id: string | null }[] };
+    : { rows: [] as NoteRow[] };
   // 🗒 Групуємо ПО КАНОНІЧНОМУ ключу — рядок один, записів у наборі може бути кілька.
   const notesByCanon = new Map<string, typeof notesRes.rows>();
   for (const n of notesRes.rows) {
@@ -2335,6 +2346,10 @@ dashboardRouter.get("/receivables", async (req, res) => {
     noteUpdatedAt: string | null; noteHistoryCount: number;
     /** 🗓 До якої угоди привʼязаний запис і чи він ще про поточний борг (`core/receivableAgreement`). */
     noteDealId: number | null; noteActual: boolean;
+    /** 📞 Розмова біля дати домовленості (4631). */
+    callLink: { state: callLink.CallLinkState; uniqueid: string | null; call: callLink.CallFacts | null };
+    /** Скільки разів переносили дату поточної домовленості (журнал — з дня викату 4631). */
+    rescheduleCount: number;
     /** Юрособа, з ключа якої взято показаний запис; `null` — запис канонічний. */
     noteFrom: string | null;
     /** Назви юросіб решти записів набору — для підпису «ще N». */
@@ -2371,6 +2386,15 @@ dashboardRouter.get("/receivables", async (req, res) => {
     const canonHist = r.clientKey
       ? notesRes.rows.find((x) => x.client_key === r.clientKey)?.hist ?? 0
       : 0;
+    const noteActual = n ? agreementActual({ noteDealId: n.dealId ?? null, noteUpdatedAt: n.updatedAt,
+      openDealIds: (cf?.deals ?? []).map((d) => d.dealId), newestDealAt: cf?.newestDealAt ?? null }) : true;
+    // 📞 Розмова — з ТОГО САМОГО запису, що займає рядок. Запис з попередньої угоди своєї розмови не дає:
+    // вона підкріплювала дату іншого боргу.
+    const nRow = n && r.clientKey ? (notesByCanon.get(r.clientKey) ?? []).find((x) => x.client_key === n.clientKey) ?? null : null;
+    const ownCall = noteActual && nRow?.call_uniqueid ? nRow.call_uniqueid : null;
+    const callFacts = ownCall && nRow ? callLink.toCallFacts(nRow) : null;
+    const callState = callLink.callLinkState({ noteActual, noteDue: n?.dueDate ?? null, crmDue: cf?.crmDueNearest ?? null,
+      callUniqueid: ownCall, call: callFacts });
     // 🔴 СПИСАНЕ ВІДНІМАЄТЬСЯ І ВІД РЯДКА, А НЕ ЛИШЕ ВІД ПЛИТКИ.
     //
     // Борг рядка приходить із `receivables` (ядро `metrics.receivablesByClient`),
@@ -2409,8 +2433,10 @@ dashboardRouter.get("/receivables", async (req, res) => {
       // 🗓 Запис старий (з попередньої угоди) → екран бере дату з CRM (`facts.crmDueNearest`), а запис
       // показує сірим. Рішення — тут, одним правилом з джобою задач, а не на фронті.
       noteDealId: n?.dealId ?? null,
-      noteActual: n ? agreementActual({ noteDealId: n.dealId ?? null, noteUpdatedAt: n.updatedAt,
-        openDealIds: (cf?.deals ?? []).map((d) => d.dealId), newestDealAt: cf?.newestDealAt ?? null }) : true,
+      noteActual,
+      // 📞 4631: стан розмови біля дати — рахує сервер одним правилом (`callLinkState`), фронт лише малює.
+      callLink: { state: callState, uniqueid: ownCall, call: callFacts },
+      rescheduleCount: noteActual ? nRow?.reschedules ?? 0 : 0,
       // 🏢 Звідки саме цей запис і скільки їх іще в наборі. Порожній масив —
       // звичайний незлитий клієнт, і рядок виглядає точно як раніше.
       noteFrom: n && !n.isCanonical ? n.counterpartyName ?? n.clientKey : null,
@@ -2485,6 +2511,9 @@ dashboardRouter.get("/receivables", async (req, res) => {
      * показувати кнопку взагалі» — менеджеру її не видно ніде.
      */
     canRequestLimit: canAssignTaskToOthers({ role: auth.role, teamId: auth.teamId }),
+    // 📞 4631: ті самі вирази, що гейтять `PUT /receivables/note` і `/receivables/call-recording`.
+    canEditAgreement: canWriteAgreement(auth),
+    canListenCalls: transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES),
   });
 });
 
@@ -4187,15 +4216,47 @@ dashboardRouter.get("/expected-deals", async (req, res) => {
   res.json({ deals, total: deals.reduce((s, d) => s + d.amount, 0) });
 });
 
-// Team-lead / admin: save a comment + planned payment date for a receivable
-// client (keyed by client_key so it survives sheet re-syncs).
+/**
+ * Хто пише домовленість по боргу. До 09.10.2026 — лише тімлід і вище; з 4631 (рішення Юлі 09.10.2026, «так») —
+ * і менеджер, по СВОЇХ клієнтах. Межа даних — `receivablesScope` у самому роуті, тут лише роль.
+ */
+function canWriteAgreement(auth: AuthPayload): boolean {
+  return isAdminOrLead(auth) || auth.role === "manager";
+}
+
+/**
+ * Клієнт у скоупі глядача — той самий вираз, що будує список (`receivablesByClient`). Менеджер — свої, тімлід —
+ * команда, вище — усі. До 09.10.2026 запис домовленості скоупу не мав зовсім: тімлід міг записати чужій команді.
+ */
+async function receivableInScope(auth: AuthPayload, clientKey: string): Promise<{ ok: true } | { ok: false; status: 403; error: string }> {
+  const sc = receivablesScope(auth, {});
+  if (!sc.ok) return sc;
+  if (sc.managerId == null && sc.teamId == null) return { ok: true };
+  const mine = await metrics.receivablesByClient(sc);
+  return mine.some((r) => r.clientKey === clientKey) ? { ok: true } : { ok: false, status: 403, error: "Клієнт поза вашим скоупом" };
+}
+
+// Save a comment + planned payment date (+ 4631: a Ringostat call link) for a receivable client
+// (keyed by client_key so it survives sheet re-syncs).
 dashboardRouter.put("/receivables/note", async (req, res) => {
   const auth = req.auth!;
-  if (!isAdminOrLead(auth)) {
-    return res.status(403).json({ error: "Лише тімлід або адміністратор" });
+  if (!canWriteAgreement(auth)) {
+    return res.status(403).json({ error: "Домовленість пишуть менеджер (свої клієнти), тімлід і адміністратор" });
   }
   const clientKey = String(req.body?.clientKey ?? "").trim();
   if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  const inScope = await receivableInScope(auth, clientKey);
+  if (!inScope.ok) return res.status(inScope.status).json({ error: inScope.error });
+  // 📞 Посилання на розмову: не прислали — `undefined` (правило «нова дата — нова розмова» вирішує ядро),
+  // порожнє — прибрати, інакше — лише посилання на запис Ringostat.
+  let callIn: callLink.CallRef | null | undefined;
+  if (req.body?.callUrl === undefined) callIn = undefined;
+  else if (req.body.callUrl === null || String(req.body.callUrl).trim() === "") callIn = null;
+  else {
+    const p = callLink.parseRingostatLink(String(req.body.callUrl));
+    if (!p.ok) return res.status(400).json({ error: p.error });
+    callIn = { uniqueid: p.uniqueid, url: String(req.body.callUrl).trim() };
+  }
   const incoming = req.body?.comment != null ? String(req.body.comment) : null;
   const clear = req.body?.clear === true;
   const dueDate = req.body?.dueDate ? String(req.body.dueDate) : null;
@@ -4216,8 +4277,9 @@ dashboardRouter.put("/receivables/note", async (req, res) => {
     dealId = defaultAgreementDeal(clientDeals);
   }
   // 🗒 Порожній коментар не затирає текст — див. `core/receivableNoteMerge.ts` (#459).
-  const prev = await pool.query<{ comment: string | null; deal_id: string | null }>(
-    `SELECT comment, deal_id::text AS deal_id FROM receivable_notes WHERE client_key = $1`, [clientKey]);
+  const prev = await pool.query<{ comment: string | null; deal_id: string | null; due_date: string | null; call_uniqueid: string | null; call_url: string | null }>(
+    `SELECT comment, deal_id::text AS deal_id, to_char(due_date, 'YYYY-MM-DD') AS due_date, call_uniqueid, call_url
+       FROM receivable_notes WHERE client_key = $1`, [clientKey]);
   // 🗓 Нова угода — новий запис: порожнє поле НЕ підтягує текст попередньої угоди (06.10.2026), інакше
   // стара обіцянка тихо переїхала б на нову угоду. Та сама угода — злиття як і раніше (#459).
   const prevDeal = prev.rows[0]?.deal_id == null ? null : Number(prev.rows[0].deal_id);
@@ -4226,30 +4288,119 @@ dashboardRouter.put("/receivables/note", async (req, res) => {
     ? mergeNoteComment(prev.rows[0]?.comment ?? null, incoming, clear)
     : mergeNoteComment(null, incoming, clear);
   const commentChanged = (comment ?? "") !== ((prev.rows[0]?.comment ?? "").trim());
-  await pool.query(
-    `INSERT INTO receivable_notes (client_key, comment, due_date, updated_by, updated_at, deal_id)
-     VALUES ($1, $2, $3, $4, now(), $5)
-     ON CONFLICT (client_key) DO UPDATE SET
-       comment = EXCLUDED.comment, due_date = EXCLUDED.due_date, deal_id = EXCLUDED.deal_id,
-       -- зміна дедлайну або угоди знімає анти-дубль авто-задачі «отримати оплату»
-       task_created_at = CASE WHEN receivable_notes.due_date IS DISTINCT FROM EXCLUDED.due_date
-                                OR receivable_notes.deal_id IS DISTINCT FROM EXCLUDED.deal_id
-                              THEN NULL ELSE receivable_notes.task_created_at END,
-       updated_by = EXCLUDED.updated_by, updated_at = now()`,
-    [clientKey, comment, dueDate, auth.userId, dealId]
-  );
-  // 🗓 ІСТОРІЯ ДОПИСУЄТЬСЯ, А НЕ ЗАМІНЮЄТЬСЯ. Поле щотижня «порожніє» правилом
-  // (`isCurrentWeekNote`), і без цього рядка минулі домовленості справді б
-  // зникали — тобто «очищення» стало б тим, чого власник прямо не хоче.
-  // Порожній коментар у журнал не пишемо: «стер текст» не є домовленістю. Незмінений
-  // (збережений злиттям при зміні дати) — теж: інакше журнал повторював би той самий рядок.
-  if (comment && comment.trim() && commentChanged) {
-    await pool.query(
-      `INSERT INTO receivable_note_history (client_key, comment, written_by, deal_id) VALUES ($1, $2, $3, $4)`,
-      [clientKey, comment.trim(), auth.userId, dealId]
+  const p0 = prev.rows[0];
+  const plan = callLink.planAgreementChange(
+    { exists: prev.rows.length > 0, dealId: prevDeal, dueDate: p0?.due_date ?? null,
+      call: p0?.call_uniqueid ? { uniqueid: p0.call_uniqueid, url: p0.call_url } : null },
+    { dealId, dueDate, call: callIn });
+  // 🔒 Запис і журнал — ОДНІЄЮ транзакцією: дата без рядка в журналі занизила б «переносили N разів» назавжди.
+  const db = await pool.connect();
+  try {
+    await db.query("BEGIN");
+    await db.query(
+      `INSERT INTO receivable_notes (client_key, comment, due_date, updated_by, updated_at, deal_id, call_uniqueid, call_url)
+       VALUES ($1, $2, $3, $4, now(), $5, $6, $7)
+       ON CONFLICT (client_key) DO UPDATE SET
+         comment = EXCLUDED.comment, due_date = EXCLUDED.due_date, deal_id = EXCLUDED.deal_id,
+         call_uniqueid = EXCLUDED.call_uniqueid, call_url = EXCLUDED.call_url,
+         -- зміна дедлайну або угоди знімає анти-дубль авто-задачі «отримати оплату»
+         task_created_at = CASE WHEN receivable_notes.due_date IS DISTINCT FROM EXCLUDED.due_date
+                                  OR receivable_notes.deal_id IS DISTINCT FROM EXCLUDED.deal_id
+                                THEN NULL ELSE receivable_notes.task_created_at END,
+         updated_by = EXCLUDED.updated_by, updated_at = now()`,
+      [clientKey, comment, dueDate, auth.userId, dealId, plan.call?.uniqueid ?? null, plan.call?.url ?? null]
     );
+    // 🗓 ІСТОРІЯ ДОПИСУЄТЬСЯ, А НЕ ЗАМІНЮЄТЬСЯ. Поле щотижня «порожніє» правилом
+    // (`isCurrentWeekNote`), і без цього рядка минулі домовленості справді б
+    // зникали — тобто «очищення» стало б тим, чого власник прямо не хоче.
+    // Порожній коментар у журнал не пишемо: «стер текст» не є домовленістю. Незмінений
+    // (збережений злиттям при зміні дати) — теж: інакше журнал повторював би той самий рядок.
+    if (comment && comment.trim() && commentChanged) {
+      await db.query(
+        `INSERT INTO receivable_note_history (client_key, comment, written_by, deal_id) VALUES ($1, $2, $3, $4)`,
+        [clientKey, comment.trim(), auth.userId, dealId]
+      );
+    }
+    // 📞 4631: зміна дати або розмови — рядок журналу перенесень.
+    if (plan.log) {
+      await db.query(
+        `INSERT INTO receivable_date_log (client_key, deal_id, old_date, new_date, call_uniqueid, changed_by)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [clientKey, dealId, plan.log.oldDate, plan.log.newDate, plan.log.callUniqueid, auth.userId]
+      );
+    }
+    await db.query("COMMIT");
+  } catch (e) {
+    await db.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    db.release();
   }
   res.json({ ok: true, dealId });
+});
+
+/**
+ * 🗓 ЖУРНАЛ ПЕРЕНЕСЕНЬ ДАТИ ДОМОВЛЕНОСТІ (4631) — по клієнту, з розмовою кожного кроку. Межа — як у `/note-history`:
+ * вкладка `receivables` (ROUTE_TAB) + чужий клієнт → 403.
+ */
+dashboardRouter.get("/receivables/date-log", async (req, res) => {
+  const auth = req.auth!;
+  const clientKey = String(req.query.clientKey ?? "").trim();
+  if (!clientKey) return res.status(400).json({ error: "clientKey обовʼязковий" });
+  const inScope = await receivableInScope(auth, clientKey);
+  if (!inScope.ok) return res.status(inScope.status).json({ error: inScope.error });
+  const r = await pool.query<{
+    at: string; old_date: string | null; new_date: string | null; deal_id: string | null; call_uniqueid: string | null; author: string | null;
+    call_found: string | null; call_at: string | null; call_billsec: number | null; call_manager: string | null; call_same_client: boolean | null;
+  }>(
+    `SELECT to_char(l.changed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at,
+            to_char(l.old_date, 'YYYY-MM-DD') AS old_date, to_char(l.new_date, 'YYYY-MM-DD') AS new_date,
+            l.deal_id::text AS deal_id, l.call_uniqueid, COALESCE(u.full_name, u.email) AS author,
+            cf.call_found, cf.call_at, cf.call_billsec, cf.call_manager, cf.call_same_client
+       FROM receivable_date_log l
+       LEFT JOIN users u ON u.id = l.changed_by
+       LEFT JOIN LATERAL (${callLink.callFactsLateral("l", "l.client_key")}) cf ON true
+      WHERE l.client_key = $1
+      ORDER BY l.changed_at DESC, l.id DESC LIMIT 100`,
+    [clientKey]
+  );
+  res.json({
+    entries: r.rows.map((x) => ({
+      at: x.at, oldDate: x.old_date, newDate: x.new_date, dealId: x.deal_id == null ? null : Number(x.deal_id),
+      reschedule: callLink.isReschedule(x.old_date, x.new_date), author: x.author,
+      callUniqueid: x.call_uniqueid, call: callLink.toCallFacts(x),
+    })),
+  });
+});
+
+/**
+ * 🎧 ЗАПИС РОЗМОВИ, ПРИКРІПЛЕНОЇ ДО ДОМОВЛЕНОСТІ (4631). Допуск — як у першому дотику (Роман 09.10.2026):
+ * ролі `FIRST_TOUCH_TRANSCRIPT_ROLES`, скоуп — клієнт у видимості глядача. І третя межа: дзвінок мусить бути
+ * прикріплений саме до цього клієнта (зараз або в журналі) — інакше роут став би програвачем будь-якого дзвінка.
+ * Байти віддає сервер, як у `/ai-calls/:uniqueid/recording`.
+ */
+dashboardRouter.get("/receivables/call-recording", async (req, res) => {
+  const auth = req.auth!;
+  if (!transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES)) return res.status(403).json({ error: "Запис розмови цій ролі недоступний" });
+  const clientKey = String(req.query.clientKey ?? "").trim();
+  const uniqueid = String(req.query.uniqueid ?? "").trim();
+  if (!clientKey || !uniqueid) return res.status(400).json({ error: "clientKey і uniqueid обовʼязкові" });
+  const inScope = await receivableInScope(auth, clientKey);
+  if (!inScope.ok) return res.status(inScope.status).json({ error: inScope.error });
+  const linked = await pool.query<{ recording: string | null }>(
+    `SELECT rc.recording FROM ringostat_calls rc
+      WHERE rc.uniqueid = $2
+        AND (EXISTS (SELECT 1 FROM receivable_notes n
+                       LEFT JOIN client_key_alias a ON a.alias_key = n.client_key AND a.revoked_at IS NULL
+                      WHERE n.call_uniqueid = $2 AND (n.client_key = $1 OR a.canonical_key = $1))
+          OR EXISTS (SELECT 1 FROM receivable_date_log l WHERE l.client_key = $1 AND l.call_uniqueid = $2))`,
+    [clientKey, uniqueid]);
+  if (linked.rows.length === 0) return res.status(404).json({ error: "Цей дзвінок не прикріплений до домовленості клієнта" });
+  const d = await fetchCallRecording(linked.rows[0].recording);
+  if (!d.ok) return res.status(404).json({ error: `Запис недоступний: ${RECORDING_UNAVAILABLE_UA[d.unavailable]}` });
+  res.setHeader("Content-Type", "audio/wav");
+  res.setHeader("Cache-Control", "private, no-store");
+  res.end(Buffer.from(d.bytes));
 });
 
 /**

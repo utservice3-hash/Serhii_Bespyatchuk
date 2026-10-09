@@ -2057,6 +2057,10 @@ export interface ReceivableClient {
   noteUpdatedAt: string | null;
   /** 🗓 До якої угоди привʼязано запис (з 06.10.2026); `null` — старий клієнтський запис. */
   noteDealId?: number | null;
+  /** 📞 4631: розмова біля дати домовленості. Стан рахує сервер (`core/receivableCallLink.callLinkState`). */
+  callLink?: ReceivableCallLink;
+  /** Скільки разів переносили дату поточної домовленості (журнал — з дня викату 4631). */
+  rescheduleCount?: number;
   /** Чи запис про ПОТОЧНИЙ борг. `false` — він з попередньої угоди: дата береться з CRM. Рішення сервера. */
   noteActual?: boolean;
   /**
@@ -2218,6 +2222,36 @@ export async function fetchUnmergePreview(canonical: string): Promise<UnmergePre
 /** Один запис журналу домовленостей — із датою й автором. */
 export interface ReceivableNoteEntry { comment: string; author: string | null; at: string }
 
+/** 📞 4631. Стани — дзеркало `CallLinkState` у `core/receivableCallLink.ts`. */
+export type ReceivableCallState = "none" | "crm" | "no_call" | "pending" | "no_talk" | "other_number" | "ok";
+export interface ReceivableCallFacts { calledAt: string; billsec: number; managerName: string | null; sameClient: boolean }
+export interface ReceivableCallLink { state: ReceivableCallState; uniqueid: string | null; call: ReceivableCallFacts | null }
+export interface ReceivableDateLogEntry {
+  at: string; oldDate: string | null; newDate: string | null; dealId: number | null;
+  /** Була дата → стала інша. Перша дата, зняття дати чи нова угода — ні. */
+  reschedule: boolean;
+  author: string | null; callUniqueid: string | null; call: ReceivableCallFacts | null;
+}
+
+/** 🗓 Журнал змін дати домовленості (4631): кожен крок із розмовою, якою його підкріпили. */
+export async function fetchReceivableDateLog(clientKey: string): Promise<ReceivableDateLogEntry[]> {
+  const { data } = await api.get<{ entries: ReceivableDateLogEntry[] }>(
+    "/dashboard/receivables/date-log", { params: { clientKey } });
+  return data.entries;
+}
+
+/** 🎧 Запис розмови, прикріпленої до домовленості клієнта (байти віддає сервер, як у першому дотику). */
+export async function fetchReceivableCallRecording(clientKey: string, uniqueid: string): Promise<Blob> {
+  try {
+    const { data } = await api.get<Blob>("/dashboard/receivables/call-recording", { params: { clientKey, uniqueid }, responseType: "blob" });
+    return data;
+  } catch (e) {
+    const res = (e as { response?: { data?: unknown } }).response;
+    if (res) res.data = await blobErrorBody(res.data);
+    throw e;
+  }
+}
+
 /**
  * 🗓 Історія домовленостей по клієнту. Поле на екрані показує лише поточний
  * тиждень; усе старіше живе тут і НЕ гине — тому «очищення» безпечне.
@@ -2263,6 +2297,11 @@ export async function saveReceivableNote(payload: {
   clear?: boolean;
   /** До якої угоди запис (06.10.2026). Не передали — сервер бере угоду з найближчою датою оплати в CRM. */
   dealId?: number | null;
+  /**
+   * 📞 4631: посилання на запис розмови в Ringostat. Не передали — сервер сам вирішує (нова дата знімає стару
+   * розмову, та сама — лишає); порожнє — прибрати.
+   */
+  callUrl?: string | null;
 }): Promise<void> {
   await api.put("/dashboard/receivables/note", payload);
 }
@@ -2521,6 +2560,9 @@ export interface ReceivablesResponse {
    * клієнту. Схована кнопка правом не є.
    */
   canRequestLimit?: boolean;
+  /** 📞 4631: чи може писати домовленість (менеджер — свої клієнти) і чи може слухати прикріплені розмови. */
+  canEditAgreement?: boolean;
+  canListenCalls?: boolean;
   /**
    * 🔗 Скільки псевдонімів уже зібрано під кожним канонічним ключем. Діалог
    * обʼєднання читає це, щоб не пропонувати приречену дію: ключ, який уже є

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { saveReceivableNote, type ReceivableClient } from "../../../api";
 import { usePopoverClamp } from "../usePopoverClamp";
-import { NOTE_MAX, agreementLine, formatDateSafe } from "../receivablesView";
+import { NOTE_MAX, agreementLine, formatDateSafe, callWhen, talkLength } from "../receivablesView";
 
 /**
  * 🗓 РЕДАКТОР ДОМОВЛЕНОСТІ (макет v6.1, прохід B).
@@ -53,6 +53,12 @@ export function AgreementEditor({ client, note, lastComment, lastAt, onPatch, on
   const stalePrefill = actual && !note && !!(lastComment ?? "").trim();
   const [comment, setComment] = useState(actual ? note || (lastComment ?? "").trim() : "");
   const [clear, setClear] = useState(false);
+  // 📞 4631: нове посилання на розмову; «прибрати» — зняти прикріплену. Поле порожнє й «прибрати» не стоїть —
+  // посилання не надсилається, і сервер сам вирішує: дата та сама — розмова лишається, нова — знімається.
+  const cur = actual && client.callLink?.uniqueid ? client.callLink : null;
+  const [callUrl, setCallUrl] = useState("");
+  const [dropCall, setDropCall] = useState(false);
+  const dateMoved = (dueDate || null) !== (actual ? client.dueDate ?? null : null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -97,7 +103,8 @@ export function AgreementEditor({ client, note, lastComment, lastAt, onPatch, on
       // порожнім тілом, тож без нього значення повернулось би лише на рефреші.
       onPatch({ comment: effective, dueDate: nextDate });
       await saveReceivableNote({ clientKey: client.clientKey, comment: next, dueDate: nextDate, clear,
-        dealId: dealId ? Number(dealId) : null });
+        dealId: dealId ? Number(dealId) : null,
+        ...(callUrl.trim() ? { callUrl: callUrl.trim() } : dropCall ? { callUrl: "" } : {}) });
       onDone();
     } catch (e) {
       // ↩ Рядок таблиці вже показував нове — повертаємо збережене, інакше за вікном лишалась би
@@ -179,6 +186,30 @@ export function AgreementEditor({ client, note, lastComment, lastAt, onPatch, on
           aria-label={`Обіцяна дата ${client.clientName}`}
           onChange={(e) => setDueDate(e.target.value)}
           style={{ ...field, marginBottom: 8 }} />
+
+        {/* 📞 4631: РОЗМОВА, ЯКОЮ ДАТУ ПІДТВЕРДИЛИ. Без неї зберегти можна — рядок тоді жовтий «дата без розмови». */}
+        <label style={{ display: "block", fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginBottom: 3 }}>
+          Розмова — посилання на запис у Ringostat
+        </label>
+        {cur && !dropCall && !(dateMoved && !callUrl.trim()) && (
+          <div style={{ fontSize: "var(--fs-xs)", marginBottom: 4 }}>
+            Прикріплено: 📞 {cur.call ? `${callWhen(cur.call.calledAt)} · ${cur.call.managerName ?? "менеджер невідомий"} · ${talkLength(cur.call.billsec)}` : "дзвінок ще не підтягнувся"}
+            {" "}<button type="button" className="recv-call-link" disabled={busy} onClick={() => setDropCall(true)}>прибрати</button>
+          </div>
+        )}
+        {cur && dateMoved && !callUrl.trim() && !dropCall && (
+          <div style={{ fontSize: "var(--fs-xs)", color: "var(--warn)", marginBottom: 4 }}>
+            Нова дата — потрібна нова розмова: прикріплена зніметься, якщо не вставити посилання.
+          </div>
+        )}
+        <input type="url" value={callUrl} disabled={busy} inputMode="url"
+          aria-label={`Посилання на розмову ${client.clientName}`}
+          placeholder="https://app.ringostat.com/recordings/…"
+          onChange={(e) => { setCallUrl(e.target.value); if (e.target.value.trim()) setDropCall(false); }}
+          style={{ ...field, marginBottom: 2 }} />
+        <div style={{ fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginBottom: 8, lineHeight: 1.4 }}>
+          У Ringostat: дзвінок → «посилання на запис». Без посилання дата збережеться, але рядок буде жовтим.
+        </div>
 
         <label style={{ display: "block", fontSize: "var(--fs-xs)", color: "var(--text-muted)", marginBottom: 3 }}>
           Суть домовленості
