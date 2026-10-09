@@ -187,6 +187,10 @@ test("#861 ДОСТУП: матриця читання = сид вкладки (
 });
 
 interface ViewMod {
+  sortManagerLines: (ls: readonly Record<string, unknown>[], s: { key: string; dir: string }) => { name: string }[];
+  nextMgrSort: (cur: { key: string; dir: string }, key: string) => { key: string; dir: string };
+  parseMgrSort: (raw: string | null) => { key: string; dir: string };
+  MGR_SORT_DEFAULT: { key: string; dir: string };
   STATE_UI: Record<string, { label: string; tone: string; hint: string }>;
   matchesFilter: (r: { state: string; priceDiscussed: boolean | null; objections: number; promises: number; promisesWithDeadline: number }, f: string) => boolean;
   speakerOf: (channel: number, managerChannel: number | null) => string;
@@ -1459,3 +1463,34 @@ test("#914 ОДНА ШАПКА: скелет і екран вставляють 
   const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
   assert.match(css, /\.ftd-head \{ display: flex; flex-direction: column; align-items: stretch; gap: 14px; \}/, "🔴 шапка знову в рядок — період стрибає");
 });
+
+/**
+ * #921 — СОРТУВАННЯ БЛОКУ МЕНЕДЖЕРІВ (прохання Романа 09.10.2026): клік по назві колонки сортує, повторний — навпаки;
+ * перший клік — найслабші згори; «—» завжди внизу в обидва боки; успіх — за часткою, при рівній — за кількістю;
+ * екран малює ВІДСОРТОВАНІ рядки, а вибір памʼятає браузер.
+ * 🧨 Червоніє, якщо порожнеча вилізе нагору, повторний клік не перевертає порядок, або екран малює несортований список.
+ */
+test("#921 СОРТУВАННЯ МЕНЕДЖЕРІВ: клік по колонці, ще клік — навпаки; «—» завжди внизу; успіх за часткою; екран малює відсортоване", async () => {
+  const V = await loadView();
+  const L = (name: string, price: number | null, objections: number, handled: number, success: number, calls: number) => ({
+    managerId: name.charCodeAt(0), name, calls, score: price, request: 100, price, promise: null, objection: objections ? Math.round(handled / objections * 100) : null,
+    objections, objectionsHandled: handled, success });
+  const ls = [L("Б", 40, 2, 1, 1, 4), L("А", null, 0, 0, 0, 2), L("В", 70, 1, 1, 2, 8), L("Г", 10, 0, 0, 1, 4)];
+  const names = (s: { key: string; dir: string }) => V.sortManagerLines(ls, s).map((l) => l.name).join("");
+  assert.equal(names({ key: "price", dir: "asc" }), "ГБВА", "найслабші згори, «—» внизу");
+  assert.equal(names({ key: "price", dir: "desc" }), "ВБГА", "🔴 «—» вилізло нагору при зворотному порядку");
+  assert.equal(names({ key: "objection", dir: "asc" }), "БВАГ", "заперечення — за часткою опрацьованих, «не було» внизу");
+  assert.equal(names({ key: "success", dir: "desc" }), "ВБГА", "🔴 успіх: 2/8 = 1/4 = 1/4 — при рівній частці вище той, у кого більше успіхів");
+  assert.equal(names({ key: "name", dir: "asc" }), "АБВГ");
+  assert.equal(names({ key: "name", dir: "desc" }), "ГВБА");
+  assert.deepEqual(V.nextMgrSort({ key: "price", dir: "asc" }, "price"), { key: "price", dir: "desc" }, "🔴 повторний клік не перевертає порядок");
+  assert.deepEqual(V.nextMgrSort({ key: "price", dir: "desc" }, "promise"), { key: "promise", dir: "asc" }, "нова колонка — найслабші згори");
+  assert.deepEqual(V.parseMgrSort("price:desc"), { key: "price", dir: "desc" });
+  assert.deepEqual(V.parseMgrSort("сміття"), V.MGR_SORT_DEFAULT, "зіпсований запис у браузері — порядок за замовчуванням");
+  assert.deepEqual(V.MGR_SORT_DEFAULT, { key: "score", dir: "asc" }, "за замовчуванням — як було: бал, найслабші згори");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /const shownLines = sortManagerLines\(lines, mgrSort\);/);
+  assert.match(sec, /\{shownLines\.map\(\(l\) => \(/, "🔴 екран малює несортований список");
+  assert.match(sec, /localStorage\.setItem\("ftd\.mgrSort"/, "🔴 вибір сортування не памʼятається");
+});
+

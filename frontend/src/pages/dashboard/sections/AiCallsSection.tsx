@@ -12,7 +12,8 @@ import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, mmss, aiDefaultPeriod, jo
   TYPE_LABEL, tabRows, type ListTab, type ConversationTypeT,
   type AiFilter, type AiCallState,
   CHECK_ITEMS, CHECK_MARK_UI, managerChecklist, queueRows, scoreLabel, medianMin, fmtMinutes,
-  TILE_MATCH, tileStats, priceSuccessSplit, SUCCESS_MIN_FOR_PCT, type TileKey } from "../aiCallsView";
+  TILE_MATCH, tileStats, priceSuccessSplit, SUCCESS_MIN_FOR_PCT, type TileKey,
+  sortManagerLines, nextMgrSort, parseMgrSort, type MgrSort, type MgrSortKey } from "../aiCallsView";
 
 /**
  * 🎧 «ПЕРШИЙ ДОТИК · AI» — прохід 1, лише перегляд (рішення Романа 28.09.2026, макет — на ньому).
@@ -102,6 +103,9 @@ export function AiCallsSection() {
   // Згортання блоку «Менеджери за чек-листом» — пам'ятаємо в браузері (лише зручність, не дані).
   const [mgrCollapsed, setMgrCollapsed] = useState<boolean>(() => { try { return localStorage.getItem("ftd.mgrCollapsed") === "1"; } catch { return false; } });
   const toggleMgr = () => setMgrCollapsed((v) => { try { localStorage.setItem("ftd.mgrCollapsed", v ? "0" : "1"); } catch { /* приватне вікно */ } return !v; });
+  // Сортування блоку менеджерів кліком по назві колонки (09.10.2026); вибір памʼятає браузер, як і згортання.
+  const [mgrSort, setMgrSort] = useState<MgrSort>(() => { try { return parseMgrSort(localStorage.getItem("ftd.mgrSort")); } catch { return parseMgrSort(null); } });
+  const pickSort = (k: MgrSortKey) => setMgrSort((cur) => { const n = nextMgrSort(cur, k); try { localStorage.setItem("ftd.mgrSort", `${n.key}:${n.dir}`); } catch { /* приватне вікно */ } return n; });
 
   useEffect(() => {
     if (!from || !to) return;
@@ -188,6 +192,14 @@ export function AiCallsSection() {
   const lines = managerChecklist(tabRows(applyListFilter(d.rows, { ...lf, managerId: null }), "report"));
   const pickedName = lf.managerId != null ? (lines.find((l) => l.managerId === lf.managerId)?.name ?? managers.find(([id]) => id === lf.managerId)?.[1] ?? "менеджер") : null;
   const weakest = lines.find((l) => l.score != null) ?? null;
+  const shownLines = sortManagerLines(lines, mgrSort);
+  const sortHead = (k: MgrSortKey, label: string) => (
+    <div className="ftd-mgr-h" aria-sort={mgrSort.key === k ? (mgrSort.dir === "asc" ? "ascending" : "descending") : "none"}>
+      <button type="button" className={`ftd-mgr-sort${mgrSort.key === k ? " on" : ""}`} onClick={() => pickSort(k)}
+        title={mgrSort.key === k ? "Ще клік — у зворотному порядку" : "Сортувати за цією колонкою"}>
+        {label}<span aria-hidden="true">{mgrSort.key === k ? (mgrSort.dir === "asc" ? " ↑" : " ↓") : ""}</span>
+      </button>
+    </div>);
 
   // Черга розбору: прапорець сервера; лічильник «розібрано N з M» — серед тих, що потребували розбору.
   const queue = queueRows(rows);
@@ -262,7 +274,7 @@ export function AiCallsSection() {
             <div className="ftd-card-h">
               <h2>Менеджери за чек-листом першого дотику</h2>
               <span style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                <span className={`ftd-fade${mgrCollapsed ? " is-hidden" : ""}`}>частка розмов, де пункт виконано · найслабші — згори · клік по менеджеру фільтрує таблицю, ще клік — знімає</span>
+                <span className={`ftd-fade${mgrCollapsed ? " is-hidden" : ""}`}>частка розмов, де пункт виконано · клік по назві колонки — сортування · клік по менеджеру фільтрує таблицю, ще клік — знімає</span>
                 <button type="button" className={`ftd-collapse${mgrCollapsed ? " is-collapsed" : ""}`} aria-expanded={!mgrCollapsed} aria-controls="ftd-mgr-body"
                   aria-label={mgrCollapsed ? "Розгорнути блок менеджерів" : "Згорнути блок менеджерів"} title={mgrCollapsed ? "Розгорнути" : "Згорнути"} onClick={toggleMgr}>
                   <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -274,10 +286,10 @@ export function AiCallsSection() {
             <div className="ftd-collapsible-in">
             <div style={{ overflowX: "auto" }}>
               <div className="ftd-mgr">
-                <div className="ftd-mgr-h">Менеджер</div><div className="ftd-mgr-h">Бал</div>
-                {CHECK_ITEMS.map((it) => <div key={it.key} className="ftd-mgr-h">{it.key === "price" ? `Ціна · ціль ${String(target)}%` : it.key === "objection" ? "Заперечення (опрац. / було)" : it.label}</div>)}
-                <div className="ftd-mgr-h">Успіх</div>
-                {lines.map((l) => (
+                {sortHead("name", "Менеджер")}{sortHead("score", "Бал")}
+                {CHECK_ITEMS.map((it) => <div key={it.key} style={{ display: "contents" }}>{sortHead(it.key, it.key === "price" ? `Ціна · ціль ${String(target)}%` : it.key === "objection" ? "Заперечення (опрац. / було)" : it.label)}</div>)}
+                {sortHead("success", "Успіх")}
+                {shownLines.map((l) => (
                   <div key={String(l.managerId)} style={{ display: "contents" }}>
                     <button type="button" className={`ftd-mgr-name${lf.managerId === l.managerId ? " on" : ""}`} aria-pressed={lf.managerId === l.managerId}
                       onClick={() => setLf({ ...lf, managerId: lf.managerId === l.managerId ? null : l.managerId })}>{l.name} <span>· {l.calls}</span></button>

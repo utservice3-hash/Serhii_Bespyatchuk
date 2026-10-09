@@ -39,6 +39,9 @@
 
 .ftd-mgr { display: grid; grid-template-columns: 210px 64px repeat(4, minmax(110px, 1fr)) 80px; gap: 10px 14px; align-items: center; font-size: 13px; min-width: 880px; }
 .ftd-mgr-h { color: var(--text-muted); font-size: 12px; }
+.ftd-mgr-sort { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+.ftd-mgr-sort:hover, .ftd-mgr-sort.on { color: var(--text); }
+.ftd-mgr-sort:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 3px; }
 .ftd-mgr-name { font-weight: 600; background: none; border: 0; padding: 0; font: inherit; color: var(--text); text-align: left; cursor: pointer; }
 .ftd-mgr-name span { font-weight: 400; color: var(--text-muted); }
 .ftd-mgr-name.on { color: var(--brand); text-decoration: underline; text-underline-offset: 3px; }

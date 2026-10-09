@@ -301,6 +301,39 @@ export function managerChecklist<T extends { inReport: boolean; managerId: numbe
   })).sort((a, b) => (a.score ?? 99) - (b.score ?? 99) || a.name.localeCompare(b.name, "uk"));
 }
 
+/**
+ * Сортування блоку менеджерів кліком по назві колонки (прохання Романа 09.10.2026). Перший клік по колонці з
+ * цифрами — найслабші згори (блок для того, щоб знайти, хто просідає), повторний — навпаки. «—» (пункт ніде не
+ * рахувався) — ЗАВЖДИ внизу, в обидва боки: інакше порожнеча вилазить угору як найгірший результат.
+ */
+export type MgrSortKey = "name" | "score" | "request" | "price" | "promise" | "objection" | "success";
+export interface MgrSort { key: MgrSortKey; dir: "asc" | "desc" }
+export const MGR_SORT_DEFAULT: MgrSort = { key: "score", dir: "asc" };
+export const MGR_SORT_KEYS: readonly MgrSortKey[] = ["name", "score", "request", "price", "promise", "objection", "success"];
+export function nextMgrSort(cur: MgrSort, key: MgrSortKey): MgrSort {
+  return cur.key === key ? { key, dir: cur.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" };
+}
+const mgrValue = (l: ChecklistLine, k: Exclude<MgrSortKey, "name">): number | null =>
+  k === "objection" ? (l.objections ? l.objectionsHandled / l.objections : null)
+    : k === "success" ? (l.calls ? l.success / l.calls : null)
+    : l[k];
+export function sortManagerLines(lines: readonly ChecklistLine[], s: MgrSort): ChecklistLine[] {
+  const sign = s.dir === "asc" ? 1 : -1;
+  const byName = (a: ChecklistLine, b: ChecklistLine) => a.name.localeCompare(b.name, "uk");
+  if (s.key === "name") return [...lines].sort((a, b) => sign * byName(a, b));
+  const k = s.key;
+  return [...lines].sort((a, b) => {
+    const va = mgrValue(a, k), vb = mgrValue(b, k);
+    if (va == null || vb == null) return va == null && vb == null ? byName(a, b) : va == null ? 1 : -1;
+    return sign * (va - vb) || (k === "success" ? sign * (a.success - b.success) : 0) || byName(a, b);
+  });
+}
+/** Збережений вибір із браузера; сміття чи порожнеча — порядок за замовчуванням. */
+export function parseMgrSort(raw: string | null): MgrSort {
+  const [key, dir] = (raw ?? "").split(":");
+  return (MGR_SORT_KEYS as readonly string[]).includes(key) && (dir === "asc" || dir === "desc") ? { key: key as MgrSortKey, dir } : MGR_SORT_DEFAULT;
+}
+
 /** Черга розбору: лише ті, що потребують розбору (прапорець сервера); спершу «немає дзвінка», далі новіші. */
 export function queueRows<T extends { needsReview: boolean; reviewReason: ReviewReasonT | null; calledAt: string }>(rows: readonly T[]): T[] {
   return rows.filter((r) => r.needsReview && r.reviewReason)
