@@ -9,7 +9,8 @@ import { maySubmit, mayEverSubmit, submitRefusal, commercialPlanRefusal } from "
 import { getSettings } from "./settings.js";
 import * as metrics from "../core/metrics.js";
 import { planRecommendation, baseMonthsFor, formationRoster } from "../core/plans.js";
-import { monthEndOf } from "../core/dates.js";
+import { monthEndOf, kyivToday } from "../core/dates.js";
+import { callsNormHistory, callsNormVerdict, canSetCallsNorm, effectiveNorm, setCallsNorm } from "../core/callsNormPlan.js";
 
 export const plansRouter = Router();
 plansRouter.use(requireAuth);
@@ -376,4 +377,23 @@ plansRouter.post("/formation/return", requireRole("admin"), async (req, res) => 
   );
   if (r.rowCount === 0) return res.status(409).json({ error: "Немає поданого плану для повернення" });
   res.json({ ok: true, status: "returned" });
+});
+
+/**
+ * 📞 НОРМА ДЗВІНКІВ НА ДЕНЬ (4632, Роман 10.10.2026: «в Планах», «КВП сама ставить», «до наступної зміни»).
+ * Читати — усім із вкладкою «Плани» (межа — ROUTE_TAB); ставити — КВП і адмін (`canSetCallsNorm`), ПЕРШОЮ дією.
+ */
+plansRouter.get("/calls-norm", async (req, res) => {
+  const month = `${kyivToday().slice(0, 7)}-01`;
+  const history = await callsNormHistory();
+  res.json({ current: effectiveNorm(history, month), month, history, canEdit: canSetCallsNorm(req.auth!) });
+});
+
+plansRouter.post("/calls-norm", async (req, res) => {
+  const auth = req.auth!;
+  if (!canSetCallsNorm(auth)) return res.status(403).json({ error: "Норму дзвінків ставить КВП" });
+  const v = callsNormVerdict(req.body, `${kyivToday().slice(0, 7)}-01`);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  await setCallsNorm(v.norm, v.fromMonth, auth.userId ?? null);
+  res.json({ ok: true });
 });

@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { weekPlanOf, weekWorkingDays } from "./weekPlanMath.js";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { weekPlanOf, weekWorkingDays, shouldFreezeWeek, snapshotUsable, futureWeekPlan } from "./weekPlanMath.js";
 import { fixedWeekBlocks, workingDaysBetween, monthEndOf } from "./dates.js";
-import { needsDb, needsDbWritable } from "../testMode.js";
+import { needsDb, needsDbWritable, needsBackendEnv, needsApi, API_BASE, planGraceSkip } from "../testMode.js";
 
 /** Серпень 2026 — місяць власника з прикладу: 1-ше субота, 31-ше понеділок-одинак. */
 const AUG = "2026-08-01";
@@ -130,4 +132,170 @@ test("#48e знімок плану тижня не переписується", 
   } finally {
     await pool.query(`DELETE FROM weekly_plan_snapshots WHERE month_start = $1`, [MONTH]);
   }
+});
+
+/**
+ * #1494 — ТИЖДЕНЬ БЕЗ МІСЯЧНОГО ПЛАНУ НЕ ФІКСУЄТЬСЯ (задача 5202, 07.10.2026).
+ *
+ * Знімок незмінний, тож нуль, зафіксований до заведення планів, жив цілий тиждень: T2 команди Дмитрука
+ * показував 21 тис при місячному 900 тис. Фікстура по ОБИДВА боки кожної межі: план 0 / план > 0,
+ * тиждень почався / ще ні / починається сьогодні.
+ *
+ * 🧨 Червоніє, якщо: прибрати умову `monthPlan > 0` (нуль знову фіксується) або умову дати (фіксується
+ * майбутній тиждень).
+ */
+test("#1494 тиждень фіксується лише коли він почався І місячний план уже заведено", () => {
+  const today = "2026-10-05";
+  assert.equal(shouldFreezeWeek({ weekStart: "2026-10-05", today, monthPlan: 0 }), false,
+    "🔴 тиждень без місячного плану заморожено — нуль стане ціллю на весь тиждень");
+  assert.equal(shouldFreezeWeek({ weekStart: "2026-10-01", today, monthPlan: 0 }), false,
+    "🔴 минулий тиждень без плану заморожено нулем");
+  assert.equal(shouldFreezeWeek({ weekStart: "2026-10-05", today, monthPlan: 900_000 }), true,
+    "🔴 тиждень, що почався сьогодні, з планом — не фіксується (ціль повзтиме)");
+  assert.equal(shouldFreezeWeek({ weekStart: "2026-10-01", today, monthPlan: 1 }), true,
+    "🔴 минулий тиждень із планом не фіксується");
+  assert.equal(shouldFreezeWeek({ weekStart: "2026-10-12", today, monthPlan: 900_000 }), false,
+    "🔴 заморожено майбутній тиждень — ціль за даними, яких ще немає");
+});
+
+/**
+ * #1494b — ЖИВА БАЗА: у поточному місяці немає знімка з місячним планом 0 у менеджера, чий план заведено.
+ *
+ * Це саме той стан, який бачила людина (5202). Нуль порушників рахується ЛИШЕ разом із числом менеджерів
+ * із планом: якщо планів ще немає, перевіряти нічого — і це вікно заведення планів, а не «зелено».
+ *
+ * 🧨 Червоніє, якщо: знову фіксувати нуль до заведення планів (на проді 07.10.2026 до чистки — 39 рядків).
+ */
+test("#1494b ЖИВА БАЗА: жодного знімка тижня з планом 0 у менеджера з місячним планом", needsBackendEnv(), async (t) => {
+  const { pool } = await import("../db/pool.js");
+  const { dynamicTarget } = await import("./plans.js");
+  const ym = (await pool.query<{ m: string }>(`SELECT to_char((now() AT TIME ZONE 'Europe/Kyiv')::date,'YYYY-MM') AS m`)).rows[0].m;
+  const monthStart = `${ym}-01`;
+  const withPlan = new Map((await dynamicTarget({ month: monthStart }, "month"))
+    .filter((d) => d.monthPlan > 0).map((d) => [d.managerId, d.monthPlan]));
+  const skip = planGraceSkip("менеджерів із місячним планом", withPlan.size);
+  if (skip) return t.skip(skip);
+  assert.ok(withPlan.size > 0, `🔴 жодного менеджера з планом на ${ym} — перевіряти нічого, це не «зелено»`);
+  const zero = (await pool.query<{ manager_id: number; week_start: string }>(
+    `SELECT manager_id, to_char(week_start,'YYYY-MM-DD') AS week_start
+       FROM weekly_plan_snapshots WHERE month_start = $1 AND month_plan = 0`, [monthStart])).rows;
+  const bad = zero.filter((r) => withPlan.has(r.manager_id));
+  assert.equal(bad.length, 0,
+    `🔴 ${bad.length} знімк(ів) тижня з місячним планом 0 при заведеному плані (із ${withPlan.size} менеджерів із планом): `
+    + bad.slice(0, 8).map((r) => `#${r.manager_id}@${r.week_start}`).join(", "));
+});
+
+/**
+ * #1494c — ПРАВИЛО `shouldFreezeWeek` СПРАВДІ СТОЇТЬ НАД ЗАПИСОМ ЗНІМКА.
+ *
+ * `#1494` доводить саму функцію, але не те, що нею користуються: саботаж «повернути у `weekPlan.ts` стару
+ * умову `w.from <= today`» лишав `#1494` зеленим. Тому тут — ЄДИНЕ місце, де рядок потрапляє в `toInsert`,
+ * мусить бути під `shouldFreezeWeek` із місячним планом ЦЬОГО менеджера, і старої умови поруч бути не має.
+ *
+ * 🧨 Червоніє, якщо: повернути `if (opts.freeze !== false && w.from <= today)`; передати не `monthPlan`;
+ * додати другий `toInsert.push` поза умовою.
+ */
+test("#1494c запис знімка тижня стоїть під shouldFreezeWeek з планом менеджера", async () => {
+  const { readFileSync } = await import("node:fs");
+  const path = await import("node:path");
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "core", "weekPlan.ts"), "utf8")
+    .replace(/^\s*\/\/.*$/gm, " ").replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\s+/g, " ");
+  assert.equal((src.match(/toInsert\.push\(/g) ?? []).length, 1, "🔴 знімок потрапляє в запис більше ніж з одного місця");
+  assert.match(src, /if \(opts\.freeze !== false && shouldFreezeWeek\(\{ weekStart: w\.from, today, monthPlan \}\)\) \{ toInsert\.push\(/,
+    "🔴 запис знімка не охороняється shouldFreezeWeek з планом менеджера — нуль знову застигне");
+  assert.doesNotMatch(src, /w\.from <= today\)/, "🔴 повернулась стара умова фіксації без перевірки плану");
+});
+
+/**
+ * #1496 — МАЙБУТНІ ТИЖНІ: НЕВИКОНАНЕ ПЕРЕНОСИТЬСЯ (ТЗ Юлі 05.10.2026, Звіт КВП). Приклад із ТЗ дослівно:
+ * план 400 000, T1 факт 30 000 → залишок 370 000 на 15 днів → T2 = T3 = T4 = 123 333.
+ *
+ * 🧨 Червоніє, якщо: повернути рівну частку (100 000) або рахувати майбутні від повного плану.
+ */
+test("#1496 майбутній тиждень = залишок на початок поточного × дні тижня ÷ дні до кінця місяця (приклад ТЗ)", () => {
+  const cur = { monthPlan: 400_000, factBefore: 30_000, wdRest: 15 };
+  assert.equal(futureWeekPlan(cur, 5), 123_333, "🔴 невиконане не перенеслось на наступні тижні");
+  assert.notEqual(futureWeekPlan(cur, 5), 100_000, "🔴 майбутній тиждень знову рівна частка місяця");
+  assert.equal(futureWeekPlan(cur, 1), 24_667, "🔴 обрізаний тиждень не отримав свою частку днів");
+  // дзеркало: перевиконали — план наступних тижнів зменшується, до нуля
+  assert.equal(futureWeekPlan({ monthPlan: 400_000, factBefore: 160_000, wdRest: 15 }, 5), 80_000, "🔴 перевиконання не зменшило план наступних");
+  assert.equal(futureWeekPlan({ monthPlan: 400_000, factBefore: 450_000, wdRest: 15 }, 5), 0, "🔴 понад план — план тижня має бути 0");
+});
+
+/**
+ * #1496b — НУЛЬОВИЙ ЗНІМОК ПРИ ЗАВЕДЕНОМУ ПЛАНІ — НЕ ПЛАН МИНУЛОГО ТИЖНЯ. По обидва боки межі.
+ *
+ * 🧨 Червоніє, якщо: показувати нуль «плану тоді ще не було» як ціль, або навпаки — відкидати знімок, коли
+ * план просто змінився після фіксації (правило 06.08: зміна плану знімок не рухає).
+ */
+test("#1496b знімок із планом 0 при заведеному плані відкидається; змінений після фіксації план — ні", () => {
+  assert.equal(snapshotUsable(0, 900_000), false, "🔴 нуль «плану ще не було» показано як план минулого тижня");
+  assert.equal(snapshotUsable(0, 0), true, "🔴 менеджер без плану — знімок 0 правдивий");
+  assert.equal(snapshotUsable(850_000, 900_000), true, "🔴 план змінили після фіксації — знімок має лишитись");
+  assert.equal(snapshotUsable(900_000, 900_000), true);
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "core", "weekPlan.ts"), "utf8");
+  assert.match(src, /if \(snap && snapshotUsable\(Number\(snap\.month_plan\), monthPlan\)\) \{/,
+    "🔴 weekPlansForMonth знову бере будь-який знімок, навіть нульовий при заведеному плані");
+});
+
+/**
+ * #1496c — ЗВІТ КВП БЕРЕ ПЛАН ТИЖНЯ ЗА ТРЬОМА ПРАВИЛАМИ, А НЕ РІВНОЮ ЧАСТКОЮ.
+ *
+ * 🧨 Червоніє, якщо: повернути `monthPlan * wd / wdMonth` для минулих/майбутніх тижнів; брати минулий тиждень
+ * не зі знімка; рахувати майбутній не від бази поточного тижня.
+ */
+test("#1496c Звіт КВП: минулий — знімок, поточний — єдина ціль, майбутній — від залишку поточного", () => {
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "routes", "dashboard.ts"), "utf8")
+    .replace(/^\s*\/\/.*$/gm, " ").replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\s+/g, " ");
+  const body = src.split("const weeksForMgr = (mid: number, monthPlan: number) =>")[1]?.split("const expTeamPastMap")[0] ?? "";
+  assert.ok(body.length > 0, "🔴 weeksForMgr не знайдено — гейт нема до чого прикласти");
+  assert.match(body, /const plan = isCur \? \(effWeekKvp\.get\(mid\)\?\.target \?\? equalShare\) : w\.to < kyivTodayW \? \(past \? past\.plan : equalShare\) : \(base \? futureWeekPlan\(base, wd\) : equalShare\);/,
+    "🔴 план тижня в КВП більше не обирається за правилом минулий/поточний/майбутній");
+  assert.match(body, /const past = wpByKey\.get\(`\$\{mid\}:\$\{w\.from\}`\);/, "🔴 минулий тиждень не зі знімка свого тижня");
+  assert.match(body, /const base = curBlockKvp \? wpByKey\.get\(`\$\{mid\}:\$\{curBlockKvp\.from\}`\) : undefined;/, "🔴 майбутній тиждень не від бази поточного");
+  assert.match(src, /plans\.effectiveWeekTargets\(\{ month: months\[0\] \}, kyivTodayW, wpSinkKvp\)/, "🔴 рядки тижнів беруться не з того самого обчислення, що ціль поточного");
+});
+
+/**
+ * #1496d — ЖИВИЙ API: Звіт КВП поточного місяця по кожному менеджеру віддає минулі тижні == знімку (де він
+ * чесний), майбутні == залишок поточного тижня, а «залишок до плану» == план − факт.
+ *
+ * 🧨 Червоніє, якщо екран розійдеться з таблицею знімків або з формулою ТЗ.
+ */
+test("#1496d ЖИВИЙ: Звіт КВП — минулі тижні == знімкам, майбутні == від залишку поточного, залишок == план − факт", needsApi(), async (t) => {
+  const { signToken } = await import("../auth/auth.js");
+  const { pool } = await import("../db/pool.js");
+  const H = { Authorization: `Bearer ${signToken({ userId: 0, role: "admin", roleKey: "admin", managerId: null, teamId: null })}` };
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+  const from = `${today.slice(0, 7)}-01`, to = monthEndOf(from);
+  const r = await fetch(`${API_BASE}/api/dashboard/kvp-report?from=${from}&to=${to}`, { headers: H });
+  assert.equal(r.status, 200, `🔴 /kvp-report віддав ${r.status}`);
+  type W = { from: string; to: string; plan: number; isCurrent: boolean };
+  const b = await r.json() as { teams: { plan: number; revenue: number; remainingToPlan: number | null; managers: { managerId: number; plan: number; revenue: number; remainingToPlan: number | null; weeks: W[] }[] }[] };
+  const mgrs = b.teams.flatMap((x) => x.managers).filter((m) => m.plan > 0);
+  const skip = planGraceSkip("менеджерів із планом у Звіті КВП", mgrs.length);
+  if (skip) return t.skip(skip);
+  assert.ok(mgrs.length > 0, "🔴 жодного менеджера з планом — перевіряти нічого");
+  for (const x of b.teams) assert.equal(x.remainingToPlan, x.plan - x.revenue, "🔴 залишок команди ≠ план − факт");
+  const snaps = new Map((await pool.query<{ manager_id: number; week_start: string; plan: string; month_plan: string; fact_before: string; working_days_rest: number }>(
+    `SELECT manager_id, to_char(week_start,'YYYY-MM-DD') AS week_start, plan, month_plan, fact_before, working_days_rest
+       FROM weekly_plan_snapshots WHERE month_start = $1`, [from])).rows.map((s) => [`${s.manager_id}:${s.week_start}`, s]));
+  let past = 0, future = 0;
+  for (const m of mgrs) {
+    assert.equal(m.remainingToPlan, m.plan - m.revenue, `🔴 залишок менеджера #${m.managerId} ≠ план − факт`);
+    const cur = m.weeks.find((w) => w.isCurrent);
+    for (const w of m.weeks) {
+      const s = snaps.get(`${m.managerId}:${w.from}`);
+      if (w.to < today && s && snapshotUsable(Number(s.month_plan), m.plan)) {
+        past++; assert.equal(Math.round(w.plan), Math.round(Number(s.plan)), `🔴 #${m.managerId} ${w.from}: минулий тиждень ${w.plan} ≠ знімок ${s.plan}`);
+      }
+      const base = cur ? snaps.get(`${m.managerId}:${cur.from}`) : undefined;
+      if (w.from > today && base && snapshotUsable(Number(base.month_plan), m.plan)) {
+        future++;
+        const want = futureWeekPlan({ monthPlan: Number(base.month_plan), factBefore: Number(base.fact_before), wdRest: base.working_days_rest }, workingDaysBetween(w.from, w.to));
+        assert.equal(Math.round(w.plan), want, `🔴 #${m.managerId} ${w.from}: майбутній ${w.plan} ≠ від залишку поточного ${want}`);
+      }
+    }
+  }
+  assert.ok(past + future > 0, `🔴 не перевірено жодного минулого чи майбутнього тижня (${mgrs.length} менеджерів) — гейт нічого не довів`);
 });

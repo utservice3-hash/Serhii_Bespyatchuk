@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import { createPortal } from "react-dom";
 import {
   fetchFinKpiPeriod, fetchFinKpiCard, saveFinKpiValues, saveFinKpiNote, setFinKpiClosed, createFinKpi, updateFinKpi, deleteFinKpi,
@@ -43,7 +44,7 @@ export const REF_HINT: Record<FinKpiRefSource, string> = {
   opex_payroll: "Місяць: Σ факту статей «План/факт» з розділом «ЗП + Податки на ЗП»; поки таких статей немає — вручну",
   receivables_fx: "1С, рахунок 362: гривневий еквівалент валютних рахунків на кінець періоду (журнал кожного синку)",
   bank_in: "«Виписка»: усі рахунки разом із картками й Сейфом, дати за Києвом. Перекази між нашими рахунками входять — їхню суму видно під таблицею",
-  bank_out: "«Виписка»: усі рахунки разом із картками й Сейфом, без банківських комісій. Перекази між нашими рахунками входять — їхню суму видно під таблицею",
+  bank_out: "«Виписка»: усі рахунки разом із картками й Сейфом, включно з банківськими комісіями. Перекази між нашими рахунками входять — їхню суму видно під таблицею",
 };
 /** Звідки авто-рядок бере число — підпис на позначці й у довідці. */
 const SOURCE_OF = (r: FinKpiRefSource | null) => (r?.startsWith("opex_") ? "План/факт" : r?.startsWith("bank_") ? "Виписка" : r === "receivables_fx" ? "1С" : r === "receivables" ? "дебіторка" : "фільтр Kommo");
@@ -58,6 +59,7 @@ const AUTO_STATE: Record<NonNullable<FinKpi["autoState"]>, [string, string]> = {
 };
 
 export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
+  const dlg = useDialogs();
   const [kind, setKind] = useState<FinPeriodKind>("week");
   const [p, setP] = useState(kyivToday);
   const [data, setData] = useState<FinKpiPeriod | null>(null);
@@ -76,8 +78,8 @@ export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
   }, [kind, p, nonce]);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
   const changed = Object.keys(draft);
-  const leave = (fn: () => void) => () => {
-    if (edit && changed.length && !window.confirm("Є незбережені зміни. Вийти без збереження?")) return;
+  const leave = (fn: () => void) => async () => {
+    if (edit && changed.length && !(await dlg.confirm("Є незбережені зміни. Вийти без збереження?"))) return;
     setEdit(false); setDraft({}); setBad(new Set()); fn();
   };
   const undo = (k: FinKpiThing, id: number, text: string) =>

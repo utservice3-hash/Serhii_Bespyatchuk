@@ -9,6 +9,8 @@ import { statementData } from "../core/bankStatement.js";
 import { statementFile } from "../core/bankStatementCsv.js";
 import { addManual, setManualDeleted, listManual } from "../core/bankManual.js";
 import { FinError, type Db } from "../core/finance.js";
+import { tokenFor } from "../bankSources/token.js";
+import { validateNewAccount, buildAccountUpdate } from "../core/bankAccounts.js";
 
 export const bankRouter = Router();
 bankRouter.use(requireAuth); // tab-гейт «bank» — усі ролі (screen_access); + auto-asyncH через lib/asyncRoutes
@@ -192,17 +194,17 @@ bankRouter.get("/accounts", async (req, res) => {
   const r = await pool.query(
     `SELECT id, company, bank, label, currency, external_account_id, is_active,
             legal_name, edrpou_ipn, vat_ipn, iban, key_card, bank_name, mfo, bank_edrpou,
-            legal_address, director, purpose, env_key_name, finance_only
+            legal_address, director, purpose, env_key_name, finance_only, mono_pan_last4
        FROM bank_accounts WHERE $1::boolean OR NOT finance_only ORDER BY is_active DESC, label`, [canSeePrivate]);
   const accounts = r.rows.map((a) => {
     const out: Record<string, unknown> = {
-      api_connected: a.bank === "manual" || !!(a.env_key_name && process.env[a.env_key_name]),
+      api_connected: a.bank === "manual" || !!tokenFor(a.env_key_name),
       finance_only: a.finance_only,
     };
     for (const f of ACCOUNT_PUBLIC_FIELDS) out[f] = a[f];
     if (canSeeFinance) for (const f of ACCOUNT_FINANCE_FIELDS) out[f] = a[f];
     // Назва env-змінної — лише для панелі керування. ЗНАЧЕННЯ ключа — ніколи й нікому.
-    if (canManage) out.env_key_name = a.env_key_name;
+    if (canManage) { out.env_key_name = a.env_key_name; out.mono_pan_last4 = a.mono_pan_last4; }
     return out;
   });
   res.json({ accounts });
@@ -211,32 +213,35 @@ bankRouter.get("/accounts", async (req, res) => {
 // --- Мутації реквізитів (право manage_bank_accounts) ---
 bankRouter.post("/accounts", requirePerm("manage_bank_accounts"), async (req, res) => {
   const b = req.body ?? {};
-  if (!["uts", "automuv", "fop_privat", "fop_mono"].includes(b.company)) return res.status(400).json({ error: "Невірна company" });
-  if (!["mono", "privat"].includes(b.bank)) return res.status(400).json({ error: "Невірний bank" });
-  if (!String(b.label ?? "").trim()) return res.status(400).json({ error: "Потрібна назва (label)" });
+  // Правила полів — в одному місці для «створити» і «змінити» (`core/bankAccounts.ts`, #1224): ключ лише свого банку,
+  // картка працівника — моно + 4 цифри, новий рахунок завжди вимкнений (вмикає людина, коли токен уже в .env).
+  let v;
+  try { v = validateNewAccount(b); } catch (e) { if (e instanceof FinError) return res.status(e.status).json({ error: e.message }); throw e; }
   const ins = await pool.query<{ id: number }>(
-    `INSERT INTO bank_accounts (company,bank,label,currency,external_account_id,is_active,legal_name,edrpou_ipn,iban,bank_name,mfo,purpose,env_key_name)
-     VALUES ($1,$2,$3,COALESCE($4,'UAH'),$5,COALESCE($6,true),$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
-    [b.company, b.bank, String(b.label).trim(), b.currency, b.externalAccountId ?? null, b.isActive,
-     b.legalName ?? null, b.edrpouIpn ?? null, b.iban ?? null, b.bankName ?? null, b.mfo ?? null, b.purpose ?? null, b.envKeyName ?? null]);
-  await writeAudit({ ...audit(req), action: "bank.account.create", targetType: "bank_account", targetId: String(ins.rows[0].id), targetLabel: String(b.label) });
+    `INSERT INTO bank_accounts (company,bank,label,currency,external_account_id,is_active,legal_name,edrpou_ipn,iban,bank_name,mfo,purpose,env_key_name,finance_only,mono_pan_last4)
+     VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+    [v.company, v.bank, v.label, v.currency, v.isActive, b.legalName ?? null, b.edrpouIpn ?? null, v.iban ?? b.iban ?? null, b.bankName ?? null,
+     b.mfo ?? null, b.purpose ?? null, v.envKeyName, v.financeOnly, v.monoPanLast4]);
+  await writeAudit({ ...audit(req), action: "bank.account.create", targetType: "bank_account", targetId: String(ins.rows[0].id), targetLabel: v.label,
+    details: { company: v.company, bank: v.bank, envKeyName: v.envKeyName, financeOnly: v.financeOnly } });
   res.json({ ok: true, id: ins.rows[0].id });
 });
 
 bankRouter.patch("/accounts/:id", requirePerm("manage_bank_accounts"), async (req, res) => {
   const id = Number(req.params.id);
   const b = req.body ?? {};
-  const map: Record<string, string> = { label: "label", currency: "currency", externalAccountId: "external_account_id",
-    isActive: "is_active", legalName: "legal_name", edrpouIpn: "edrpou_ipn", iban: "iban", bankName: "bank_name", mfo: "mfo", purpose: "purpose", envKeyName: "env_key_name",
-    vatIpn: "vat_ipn", legalAddress: "legal_address", director: "director", bankEdrpou: "bank_edrpou", keyCard: "key_card" };
-  const sets: string[] = []; const params: unknown[] = [];
-  for (const [k, col] of Object.entries(map)) if (k in b) { params.push(b[k]); sets.push(`${col} = $${params.length}`); }
-  if (!sets.length) return res.json({ ok: true });
-  params.push(id);
-  const r = await pool.query(`UPDATE bank_accounts SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING label`, params);
+  const cur = await pool.query<{ bank: string; company: string }>(`SELECT bank, company FROM bank_accounts WHERE id = $1`, [id]);
+  if (!cur.rows[0]) return res.status(404).json({ error: "Рахунок не знайдено" });
+  // Правила полів і скидання привʼязки — в одному місці (`buildAccountUpdate`, #1239): ключ лише свого банку, IBAN і
+  // 4 цифри картки — справжні, зміна будь-якого з них скидає привʼязку ОДНИМ виразом.
+  let upd;
+  try { upd = buildAccountUpdate(b, cur.rows[0]); } catch (e) { if (e instanceof FinError) return res.status(e.status).json({ error: e.message }); throw e; }
+  if (!upd.sets.length) return res.json({ ok: true });
+  const params = [...upd.params, id];
+  const r = await pool.query(`UPDATE bank_accounts SET ${upd.sets.join(", ")} WHERE id = $${params.length} RETURNING label`, params);
   if (!r.rows[0]) return res.status(404).json({ error: "Рахунок не знайдено" });
   await writeAudit({ ...audit(req), action: "bank.account.update", targetType: "bank_account", targetId: String(id), targetLabel: r.rows[0].label, details: { fields: Object.keys(b) } });
-  res.json({ ok: true });
+  res.json({ ok: true, label: r.rows[0].label });
 });
 
 bankRouter.delete("/accounts/:id", requirePerm("manage_bank_accounts"), async (req, res) => {

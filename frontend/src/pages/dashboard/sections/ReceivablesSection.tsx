@@ -35,7 +35,9 @@ import {
   nPlural, seenCell, seenRollLabel,
   type Filters, type MergeSide,
   receivableRowKey,
+  callCounts, CALL_STATE_UI, rescheduleLabel, talkLength, callWhen,
 } from "../receivablesView";
+import { ReceivableCallDrawer } from "./ReceivableCallDrawer";
 import { formatAmount, formatAmountFull } from "../format";
 import { teamOptions } from "../teamColors";
 import { CommentField } from "../../../components/CommentField";
@@ -118,6 +120,54 @@ const inputStyle: React.CSSProperties = {
 };
 
 /**
+ * 📞 РОЗМОВА БІЛЯ ДАТИ (4631) — рядок під «Домовленістю»: стан, дзвінок, «відкрити розмову», «переносили N».
+ * Стан рахує сервер (`callLinkState`); «none» — нічого не малюємо. Порожнє місце тут чесне: дати немає ніде.
+ */
+function CallLine({ c, canEdit, onOpen, onAdd }: {
+  c: ReceivableClient; canEdit: boolean;
+  onOpen: (view: "call" | "history") => void; onAdd: () => void;
+}) {
+  const st = c.callLink?.state ?? "none";
+  const ui = CALL_STATE_UI[st];
+  const resched = rescheduleLabel(c.rescheduleCount);
+  if (!ui && !resched) return null;
+  const call = c.callLink?.call ?? null;
+  const when = call ? callWhen(call.calledAt) : "";
+  return (
+    <div className="recv-call">
+      {ui && <span className={`recv-call-pill ${ui.tone}`} title={ui.hint}>{ui.label}</span>}
+      {call && (
+        <div style={{ marginTop: 3, color: "var(--text)" }}>
+          📞 {when} · {call.managerName ?? "менеджер невідомий"} · {talkLength(call.billsec)}{" "}
+          <button type="button" className="recv-call-link" onClick={() => onOpen("call")}>▶ відкрити розмову</button>
+        </div>
+      )}
+      {call?.ai && (
+        <div title={call.ai.summary} style={{ marginTop: 3, color: "var(--text)", background: "var(--surface-2, rgba(127,127,127,0.06))",
+               borderLeft: "3px solid var(--text-muted)", borderRadius: 3, padding: "2px 6px", maxWidth: 280 }}>
+          <b style={{ color: "var(--text-muted)" }}>AI:</b> {call.ai.line}
+        </div>
+      )}
+      {call && !call.ai && call.aiPending && (
+        <div style={{ marginTop: 3, color: "var(--text-muted)" }}>AI: розбір готується…</div>
+      )}
+      {canEdit && (st === "no_call" || st === "crm") && (
+        <div style={{ marginTop: 3 }}>
+          <button type="button" className="recv-call-link" onClick={onAdd}>
+            {st === "crm" ? "+ підтвердити дату й додати розмову" : "+ додати посилання на розмову"}
+          </button>
+        </div>
+      )}
+      {resched && (
+        <div style={{ marginTop: 3 }}>
+          <button type="button" className="recv-call-link" onClick={() => onOpen("history")}>{resched} ▾</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * Дебіторська заборгованість: KPI-зведення → єдина таблиця боржників (клік по
  * клієнту → неоплачені рахунки з дедлайном і коментарем до КОЖНОГО рахунку) →
  * підсумок по менеджерах. Прострочений дедлайн → авто-задача менеджеру
@@ -140,6 +190,8 @@ export function ReceivablesSection({
   canRequestLimit,
   canWriteOff,
   canEditReceivables,
+  canEditAgreement = canEditReceivables,
+  canListenCalls = false,
   patchReceivableNote,
   onRefresh,
 }: {
@@ -170,6 +222,12 @@ export function ReceivablesSection({
    */
   canonicalOf: Record<string, number>;
   canEditReceivables: boolean;
+  /**
+   * 📞 4631: домовленість пише й менеджер (свої клієнти) — тому окреме право, а не `canEditReceivables`, яке
+   * гейтить ще й нотатки рахунків і «Оновити з 1С». Обидва віддає СЕРВЕР тими виразами, що гейтять роути.
+   */
+  canEditAgreement?: boolean;
+  canListenCalls?: boolean;
   patchReceivableNote: (clientKey: string, patch: { comment?: string; dueDate?: string | null }) => void;
   /**
    * 🛑 Скільки редакторів відкрито ЗАРАЗ — щоб фоновий рефетч не смикав екран
@@ -532,6 +590,8 @@ export function ReceivablesSection({
   const [limitFor, setLimitFor] = useState<string | null>(null);
   /** Який клієнт зараз редагує домовленість — редактор переїхав у поповер (прохід B). */
   const [agreeFor, setAgreeFor] = useState<string | null>(null);
+  // 📞 4631: панель домовленості відкривається і з «▶ розмова» чи «переносили» — тоді вона гортає до свого блоку.
+  const [agreeView, setAgreeView] = useState<"agree" | "call" | "history">("agree");
   const [limitReqFor, setLimitReqFor] = useState<string | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
   // 🔓 Яку злиту групу зараз розʼєднують (ключ канонічного) — null поки жодну.
@@ -651,7 +711,7 @@ export function ReceivablesSection({
             <p style={{ fontSize: "var(--fs-sm)", color: "var(--text-muted)", margin: "0 0 10px" }}>
               Клік по клієнту — неоплачені рахунки з дедлайном і коментарем до кожного. Червоні дні — прострочка понад ліміт.
             </p>
-            <ReceivablesFilters filters={filters} setFilters={setFilters} shown={shown.length} totalRows={all.length} />
+            <ReceivablesFilters filters={filters} setFilters={setFilters} shown={shown.length} totalRows={all.length} callCounts={callCounts(all)} />
             {/* Кнопки НЕМАЄ ВЗАГАЛІ без права — не «є, але дає 403». Право рахує
                 сервер тим самим виразом, що гейтить роут. */}
             {canMerge && (
@@ -755,7 +815,7 @@ export function ReceivablesSection({
                             згортає — інакше кожен дотик до input/textarea закривав
                             би клієнта просто в момент редагування. */}
                         <tr role="button" tabIndex={0} aria-expanded={openKey === c.clientKey}
-                          className="recv-row"
+                          className="recv-row" data-call={c.callLink?.state ?? "none"}
                           onClick={(e) => {
                             if ((e.target as HTMLElement).closest("input, textarea, button, select, a")) return;
                             toggleClient(c.clientKey);
@@ -903,8 +963,7 @@ export function ReceivablesSection({
                               <button type="button" className="recv-agree-open"
                                 title={view.tip}
                                 aria-label={`Домовленість: ${c.clientName}`}
-                                disabled={!canEditReceivables}
-                                onClick={() => setAgreeFor(agreeFor === c.clientKey ? null : c.clientKey)}
+                                onClick={() => { setAgreeView("agree"); setAgreeFor(agreeFor === c.clientKey ? null : c.clientKey); }}
                                 style={{ display: "block", width: "100%", textAlign: "left" }}>
                                 {view.source === "none" && !view.text && !view.prevDeal && !stale ? (
                                   <span className="recv-agree-empty">{AGREEMENT_EMPTY_LABEL}</span>
@@ -959,8 +1018,17 @@ export function ReceivablesSection({
                                 </div>
                               )}
                             </div>
-                            {agreeFor === c.clientKey && (
+                            {/* 📞 4631: РОЗМОВА БІЛЯ ДАТИ. Стан рахує сервер; тут лише подача. «none» — нічого. */}
+                            <CallLine c={c} canEdit={canEditAgreement}
+                              onOpen={(view) => { setAgreeView(view); setAgreeFor(c.clientKey); }}
+                              onAdd={() => { setAgreeView("agree"); setAgreeFor(c.clientKey); }} />
+                            {/* 🗂 Роль без права писати бачить ту саму панель — без форми: право керує ДІЄЮ, не видимістю. */}
+                            {agreeFor === c.clientKey && !canEditAgreement && (
+                              <ReceivableCallDrawer client={c} view={agreeView} canListen={canListenCalls} onClose={() => setAgreeFor(null)} />
+                            )}
+                            {agreeFor === c.clientKey && canEditAgreement && (
                               <AgreementEditor client={c} note={noteNow} lastComment={c.comment ?? null} lastAt={c.noteUpdatedAt ?? null}
+                                view={agreeView} canListen={canListenCalls}
                                 onPatch={(patch) => patchReceivableNote(c.clientKey, patch)}
                                 onClose={() => setAgreeFor(null)}
                                 onDone={() => { setAgreeFor(null); onRefresh?.(); }} />

@@ -188,6 +188,10 @@ export const ACCEPTED_MATRIX_SHIFTS: MatrixShift[] = [
     decidedOn: "2026-09-02", decidedBy: "власник", why: NO_ENPS },
   { method: "GET", path: "/api/one-on-ones/stats/scores", role: "financier", to: "deny",
     decidedOn: "2026-09-02", decidedBy: "власник", why: NO_ENPS },
+  { method: "PUT", path: "/api/dashboard/receivables/note", role: "manager", to: "dropped",
+    decidedOn: "2026-10-09", decidedBy: "Юля (ТЗ 4631) через Романа",
+    why: "задача 4631: менеджер сам ставить дату домовленості й посилання на розмову по СВОЇХ клієнтах; "
+      + "чужий клієнт — 403 у роуті (receivableInScope), стереже #1530c" },
 ];
 
 /**
@@ -842,8 +846,20 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/dashboard/receivables/payment-requests", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  // 🔓 `manager` ПРИБРАНО З deny 09.10.2026 (4631, рішення Юлі) — зсув у ACCEPTED_MATRIX_SHIFTS. Менеджер пише
+  //    домовленість лише по СВОЇХ клієнтах: межа даних — `receivableInScope` у роуті, стереже `#1530c`.
   { method: "PUT", path: "/api/dashboard/receivables/note", cls: "deny-only",
-    allow: [], deny: ["hr", "manager"] },
+    allow: [], deny: ["hr"] },
+  // 📞 4631. Тімлід і менеджер дозволені за роллю й звужуються в роуті до своїх клієнтів — `zzz` поза скоупом → 403.
+  { method: "GET", path: "/api/dashboard/receivables/date-log?clientKey=zzz", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+  // 🎧 Слухати — ролі першого дотику (Роман 09.10.2026); фінансиста серед них немає. Дозволені отримують 404
+  //    («не прикріплений»), а не 403 — матриця рахує це дозволом.
+  { method: "GET", path: "/api/dashboard/receivables/call-recording?clientKey=zzz&uniqueid=x", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
+  // 💬 4631 прохід 2: картка з текстом розмови — ті самі межі, що в запису.
+  { method: "GET", path: "/api/dashboard/receivables/call-card?clientKey=zzz&uniqueid=x", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
   // 👤 Ручне призначення відповідального за борг — `isAdminScope` (рішення власника
   // 22.08.2026). Тімлід і менеджер відмовляються: борг клієнта переприв'язує той,
   // хто бачить картину цілком.
@@ -1175,6 +1191,14 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/plans/formation", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  // 📞 4632: норма дзвінків у «Планах». Читати — усім із вкладкою «Плани»; ставити — лише КВП і адмін
+  //    (`canSetCallsNorm`), тож решта ролей вкладки отримує 403 ДО запису — проба безпечна.
+  { method: "GET", path: "/api/plans/calls-norm", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  //    ⚠️ CEO/опдир/фінансист теж отримують 403 (норму ставить КВП), але в deny їх не пишемо: проба рядків адмін-рівня
+  //    вимагає права в ADMIN_DENIED_BY_PERM, а тут межа — роль, не право. Їх 403 стереже `#1542` (`canSetCallsNorm`).
+  { method: "POST", path: "/api/plans/calls-norm", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/plans/formation/approve", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/plans/formation/repeat-clients", cls: "GET",
@@ -1274,6 +1298,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "team_lead", "manager"] },
   // 📊 Плитки й таблиця команд Статистик (ТЗ 28.09, 02.10.2026) — та сама межа, що серії; скоуп клампиться всередині.
   { method: "GET", path: "/api/statistics/summary?gran=week", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  // 📋 4632: вкладка «План-факт» — та сама межа (вкладка statistics) і той самий скоуп, що плитки.
+  { method: "GET", path: "/api/statistics/plan-fact?gran=week", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/tasks", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },

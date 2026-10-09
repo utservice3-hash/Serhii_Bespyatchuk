@@ -1,0 +1,157 @@
+/* 🎧 «ПЕРШИЙ ДОТИК · AI», екран D (макет «D · Огляд + черга розбору», Роман 08.10.2026 — «майже 1 в 1»).
+   Кольори — токени дашборда; темна смуга черги однакова в обох темах. */
+
+.ftd { position: relative; display: flex; flex-direction: column; gap: 20px; }
+.ftd-over { display: flex; flex-direction: column; gap: 20px; transform-origin: 50% 0;
+  transition: opacity 420ms ease, transform 520ms cubic-bezier(.2,.8,.2,1), filter 420ms ease; }
+.ftd-over.is-dim { opacity: .35; transform: scale(.97); filter: blur(2px); pointer-events: none; }
+
+/* Шапка в колонку: заголовок і конвеєр, під ними завжди окремим рядком період і «Команда» — однаково в скелеті й на екрані. */
+.ftd-head { display: flex; flex-direction: column; align-items: stretch; gap: 14px; }
+.ftd-kicker { font-size: 12px; color: var(--text-muted); }
+.ftd-title { margin: 2px 0 0; font-size: 26px; font-weight: 800; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; }
+.ftd-meta { margin: 4px 0 0; font-size: 12px; color: var(--text-muted); }
+
+.ftd-strip { background: #16181d; color: #fff; border-radius: 10px; padding: 16px 20px; display: flex; flex-wrap: wrap; gap: 18px;
+  align-items: center; transition: box-shadow 700ms ease; box-shadow: 0 0 0 0 rgba(197,20,28,0); }
+.ftd-strip.is-glow { box-shadow: 0 0 0 4px rgba(197,20,28,.35); }
+.ftd-strip-k { font-size: 12px; color: #9ea3ad; letter-spacing: .04em; text-transform: uppercase; }
+.ftd-strip-h { font-size: 20px; font-weight: 800; }
+.ftd-strip-h b { color: #f87171; font-variant-numeric: tabular-nums; }
+.ftd-progress { margin-top: 8px; max-width: 420px; height: 6px; background: #2c2e36; border-radius: 3px; }
+.ftd-progress > i { display: block; height: 100%; background: #fff; border-radius: 3px; transition: width 600ms ease; }
+.ftd-strip-chips { display: flex; flex-wrap: wrap; gap: 8px; font-size: 13px; }
+.ftd-strip-chips span { border-radius: 999px; padding: 4px 11px; }
+.ftd-go { height: 44px; border: 0; background: var(--brand); color: #fff; border-radius: 8px; padding: 0 18px; font: inherit; font-weight: 700; cursor: pointer; }
+.ftd-go:hover { background: var(--brand-dark); }
+
+.ftd-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.ftd-kpi { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
+.ftd-kpi-l { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; }
+.ftd-kpi-v { font-size: 28px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.ftd-kpi-s { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+.ftd-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; }
+.ftd-card-pad { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+.ftd-card-h { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: baseline; }
+.ftd-card-h h2 { margin: 0; font-size: 15px; font-weight: 700; }
+.ftd-card-h span { font-size: 12px; color: var(--text-muted); }
+
+.ftd-mgr { display: grid; grid-template-columns: 210px 64px repeat(4, minmax(110px, 1fr)) 80px; gap: 10px 14px; align-items: center; font-size: 13px; min-width: 880px; }
+.ftd-mgr-h { color: var(--text-muted); font-size: 12px; }
+.ftd-mgr-sort { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+.ftd-mgr-sort:hover, .ftd-mgr-sort.on { color: var(--text); }
+.ftd-mgr-sort:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 3px; }
+.ftd-mgr-name { font-weight: 600; background: none; border: 0; padding: 0; font: inherit; color: var(--text); text-align: left; cursor: pointer; }
+.ftd-mgr-name span { font-weight: 400; color: var(--text-muted); }
+.ftd-mgr-name.on { color: var(--brand); text-decoration: underline; text-underline-offset: 3px; }
+.ftd-link { border: 0; background: none; padding: 0; font: inherit; font-size: 12.5px; color: var(--info); cursor: pointer; }
+.ftd-team { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-muted); }
+.ftd-team select { height: 40px; min-width: 180px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card-bg); color: var(--text); font: inherit; }
+.ftd-bar { position: relative; height: 18px; background: var(--bg); border-radius: 4px; }
+.ftd-bar > i { display: block; height: 100%; background: #cbd5e1; border-radius: 4px; }
+.ftd-bar > span { position: absolute; right: 6px; top: 0; font-size: 12px; font-variant-numeric: tabular-nums; line-height: 18px; }
+
+.ftd-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.ftd-seg { display: flex; background: var(--bg); border-radius: 8px; padding: 3px; }
+.ftd-seg button { border: 0; background: transparent; padding: 5px 12px; border-radius: 6px; font: inherit; font-size: 13px; color: var(--text); cursor: pointer; }
+.ftd-seg button.on { background: var(--card-bg); box-shadow: var(--shadow); font-weight: 600; }
+.ftd-pill { border: 1px solid var(--border); background: var(--card-bg); color: var(--text); padding: 5px 12px; border-radius: 999px; font: inherit; font-size: 13px; cursor: pointer; }
+.ftd-pill.on { background: #16181d; border-color: #16181d; color: #fff; }
+.ftd-pill b { font-variant-numeric: tabular-nums; }
+.ftd-search { width: 260px; max-width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font: inherit; background: var(--card-bg); color: var(--text); }
+.ftd-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: 12.5px; color: var(--text-muted); }
+
+.ftd-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 1000px; }
+.ftd-table th { text-align: left; color: var(--text-muted); font-size: 12px; font-weight: 600; padding: 10px 8px; }
+.ftd-table th:first-child, .ftd-table td:first-child { padding-left: 16px; }
+.ftd-table th:last-child, .ftd-table td:last-child { padding-right: 16px; }
+.ftd-table td { padding: 11px 8px; border-top: 1px solid var(--border); vertical-align: top; }
+.ftd-table tr.ftd-row { cursor: pointer; }
+.ftd-table tr.ftd-row:hover td { background: var(--bg); }
+.ftd-table tr.ftd-row:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.ftd-sub { color: var(--text-muted); font-size: 12px; }
+.ftd-dots { display: flex; gap: 3px; align-items: center; white-space: nowrap; }
+.ftd-dots i { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
+.ftd-dots b { margin-left: 6px; font-variant-numeric: tabular-nums; }
+.ftd-chip { border-radius: 999px; padding: 2px 9px; font-size: 12px; white-space: nowrap; }
+.ftd-foot { padding: 10px 16px; font-size: 12px; color: var(--text-muted); border-top: 1px solid var(--border); }
+
+/* Черга розбору — розкладка B поверх огляду; закриття стискає її в смугу черги. */
+.ftd-queue { position: absolute; inset: 0; z-index: 5; background: var(--bg); display: flex; flex-direction: column; gap: 14px; padding: 2px;
+  transform-origin: 50% 150px; transition: transform 520ms cubic-bezier(.2,.8,.2,1), opacity 380ms ease, border-radius 520ms ease; }
+.ftd-queue.is-closed { transform: translateY(-20px) scale(.42, .12); opacity: 0; pointer-events: none; border-radius: 40px; }
+.ftd-q-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
+.ftd-q-body { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.ftd-q-list { flex: 1 1 320px; max-width: 380px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; max-height: 78vh; overflow-y: auto; }
+.ftd-q-item { display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left; padding: 12px 14px; border: 0; border-bottom: 1px solid var(--border);
+  border-left: 3px solid transparent; background: var(--card-bg); font: inherit; color: var(--text); cursor: pointer; }
+.ftd-q-item.on { background: #fff7f7; border-left-color: var(--brand); }
+:root[data-theme="dark"] .ftd-q-item.on { background: #2a1416; }
+.ftd-q-card { flex: 999 1 560px; min-width: 0; background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px;
+  display: flex; flex-direction: column; gap: 14px; }
+.ftd-check { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.ftd-check-dot { width: 22px; height: 22px; border-radius: 50%; color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.ftd-quote { align-self: flex-start; border: 0; background: var(--bg); border-radius: 6px; padding: 3px 8px; font: inherit; font-size: 12.5px; color: var(--text); text-align: left; cursor: pointer; }
+.ftd-btn { height: 44px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text); border-radius: 8px; padding: 0 14px; font: inherit; cursor: pointer; }
+.ftd-btn.dark { border: 0; background: #16181d; color: #fff; font-weight: 700; padding: 0 18px; }
+.ftd-btn:disabled { opacity: .55; cursor: default; }
+
+@media (max-width: 1100px) { .ftd-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (prefers-reduced-motion: reduce) {
+  .ftd-over, .ftd-queue, .ftd-strip, .ftd-progress > i { transition: none; }
+}
+
+/* Період і «Команда» — один рядок: у спільного PeriodNav є нижній відступ 14px (інші екрани на нього спираються), тут він зайвий. */
+.ftd-nav { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.ftd-nav > div:first-child { margin-bottom: 0 !important; }
+
+/* Картка черги: заголовок в один рядок (повний запит — у пункті «Запит»), під чек-листом — розмова і розбір AI. */
+.ftd-q-title { font-size: 19px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ftd-q-cols { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; border-top: 1px solid var(--border); padding-top: 14px; }
+.ftd-q-sec { flex: 1 1 360px; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.ftd-q-sec h3 { margin: 0; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); }
+
+/* Плитки ТЗ 08.10.2026: клікабельні, ціль ціни фарбує зеленим / червоним. */
+.ftd-tile { text-align: left; font: inherit; color: var(--text); cursor: pointer; }
+.ftd-tile:hover { border-color: var(--border-strong); }
+.ftd-tile.on { outline: 2px solid #16181d; outline-offset: -2px; }
+.ftd-tile.is-ok .ftd-kpi-v { color: var(--ok, #166534); }
+.ftd-tile.is-bad .ftd-kpi-v { color: var(--danger, #b91c1c); }
+.ftd-bar.is-ok > i { background: #86d6a0; }
+.ftd-bar.is-bad > i { background: #f3a3a6; }
+.ftd-goal { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--text); }
+.ftd-foot { display: flex; flex-direction: column; gap: 4px; }
+
+/* Кнопка згортання — іконка-шеврон (як у GitHub / Linear / Notion), поворот на 180° і плавна висота блоку. */
+.ftd-collapse { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--card-bg); color: var(--text-muted); cursor: pointer; transition: background-color .15s ease, color .15s ease, border-color .15s ease; }
+.ftd-collapse:hover { background: var(--bg); color: var(--text); border-color: var(--border-strong); }
+.ftd-collapse:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.ftd-collapse svg { transition: transform .28s cubic-bezier(.2,.8,.2,1); transform: rotate(180deg); }
+.ftd-collapse.is-collapsed svg { transform: rotate(0deg); }
+.ftd-collapsible { display: grid; grid-template-rows: 1fr; transition: grid-template-rows .32s cubic-bezier(.2,.8,.2,1), opacity .24s ease; }
+.ftd-collapsible.is-collapsed { grid-template-rows: 0fr; opacity: 0; }
+.ftd-collapsible-in { min-height: 0; overflow: hidden; }
+.ftd-fade { transition: opacity .2s ease; }
+.ftd-fade.is-hidden { opacity: 0; pointer-events: none; }
+.ftd-fade.is-gone { display: none; }
+.ftd-obj { display: flex; flex-direction: column; gap: 2px; }
+
+/* Скелет завантаження: ті самі блоки, що й екран; м'який «відблиск», без руху при «зменшенні руху». */
+.ftd-sk { display: block; border-radius: 6px; background: linear-gradient(90deg, var(--bg) 0%, var(--border) 50%, var(--bg) 100%); background-size: 200% 100%;
+  animation: ftd-shimmer 1.2s ease-in-out infinite; }
+@keyframes ftd-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.ftd-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ftd-collapse svg, .ftd-collapsible, .ftd-fade { transition: none; }
+  .ftd-sk { animation: none; }
+}
+
+/* Новий період вантажиться: старі цифри видно, але приглушено; блоки, що не залежать від чисел, лишаються чіткими. */
+.ftd-over.is-stale .ftd-kpis, .ftd-over.is-stale .ftd-card, .ftd-over.is-stale .ftd-strip { opacity: .55; transition: opacity .2s ease; }
+.ftd-over .ftd-kpis, .ftd-over .ftd-card, .ftd-over .ftd-strip { transition: opacity .25s ease; }
+.ftd-updating { font-size: 12px; font-weight: 600; color: var(--text-muted); background: var(--card-bg); border: 1px solid var(--border);
+  border-radius: 999px; padding: 2px 10px; letter-spacing: 0; }
+@media (prefers-reduced-motion: reduce) { .ftd-over .ftd-kpis, .ftd-over .ftd-card, .ftd-over .ftd-strip { transition: none; } }

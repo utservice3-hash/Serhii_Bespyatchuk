@@ -27,7 +27,7 @@ import { needsApi, API_BASE } from "../testMode.js";
 // так він і впав на першому прогоні.
 import {
   formatAlert, formatResolved, repeatAfterMin, isPointEvent, humanDuration, REPEAT_AFTER_MIN,
-  classifyBoot, hasDeployGrace, DEPLOY_GRACE_MIN,
+  classifyBoot, hasDeployGrace, DEPLOY_GRACE_MIN, suppressedByGrace, hasErrorGrace, ERROR_GRACE_MIN, isWatchId,
   summarizeRestarts, BOOT_LOOP_MIN, DEPLOY_INTENT_MIN,
 } from "./alertRules.js";
 import type { Alert } from "../health/alerts.js";
@@ -603,4 +603,118 @@ test("#112c інтервал повтору береться з правила, 
   assert.equal(repeatAfterMin("build:stale"), 30,
     "🔴 build:stale повторюється раз на 6 год — нагадування прийшло б після того, як вікно викату минуло");
   assert.ok(repeatAfterMin("build:stale") < REPEAT_AFTER_MIN);
+});
+
+/**
+ * #1520 — ВІКНО ТИШІ 50 ХВ ДЛЯ РАЗОВОЇ ПОМИЛКИ ДЖОБИ (Роман 09.10.2026). По обидва боки межі й обох реєстрів:
+ * «джоба падала» і «синк падає поспіль» мовчать до 50 хв і шлють після; критичні («мовчить», «синк стоїть»,
+ * пропуски) шлють одразу; фора викату лишилась 10 хв і лише для своїх двох подій.
+ * 🧨 Червоніє, якщо вікно накриє критичні тривоги або перестане відкладати разову помилку.
+ */
+test("#1520 вікно тиші 50 хв: «джоба падала» мовчить до 50 хв, критичні — одразу", () => {
+  assert.equal(ERROR_GRACE_MIN, 50, "🔴 вікно тиші не 50 хв — рішення Романа 09.10");
+  assert.equal(suppressedByGrace("job:syncBank:error", 49), true, "🔴 разова помилка джоби пішла в канал до 50 хв");
+  assert.equal(suppressedByGrace("job:syncBank:error", 50), false, "🔴 помилка, що триває 50 хв, досі мовчить — вікно скасувало тривогу");
+  assert.equal(suppressedByGrace("sync:failing", 10), true, "🔴 парна «синк падає поспіль» пішла окремо від вікна");
+  for (const id of ["job:syncBank:stale", "job:syncKommo:skips", "sync:stale", "job:syncBank:never", "roles:empty"]) {
+    assert.equal(suppressedByGrace(id, 1), false, `🔴 критична «${id}» чекає вікна тиші — аварію почуємо на 50 хв пізніше`);
+    assert.equal(hasErrorGrace(id), false);
+  }
+  assert.equal(suppressedByGrace("build:stale", 9), true, "🔴 зламалась фора викату");
+  assert.equal(suppressedByGrace("build:stale", 11), false, "🔴 фора викату розтяглась до вікна помилок");
+});
+
+/**
+ * #1520b — ЖИВА СХЕМА: разова помилка, що минула за вікно, НЕ дає жодного повідомлення — ні тривоги, ні «відбою»;
+ * стійка (пережила 50 хв) — приходить першим повідомленням, не «ВСЕ ЩЕ».
+ * 🧨 Червоніє, якщо разова помилка знову даватиме пару «тривога + відновилось».
+ */
+test("#1520b разова помилка джоби, що минула за 50 хв, — тиша; стійка — одне повідомлення", async (t) => {
+  await withScratch(t, async (query) => {
+    const { alertPush } = await import("./alertPush.js");
+    const sent: string[] = [];
+    const err = A({ id: "job:syncBank:error", severity: "warning", title: "Джоба «syncBank» падала після останнього успіху" });
+    let alerts: Alert[] = [err];
+    const deps = { collect: async () => ({ alerts, checksRan: 9, checksDeclared: 9 }), send: async (x: string) => { sent.push(x); }, query } as never;
+    await alertPush(deps);
+    assert.equal(sent.length, 0, "🔴 разова помилка пішла в канал одразу");
+    alerts = [];
+    await alertPush(deps);
+    assert.equal(sent.length, 0, "🔴 про помилку, якої людина не бачила, прийшло «✅ Відновилось»");
+    // стійка: та сама помилка, що триває довше вікна
+    alerts = [err];
+    await alertPush(deps);
+    await query(`UPDATE alert_state SET first_seen_at = now() - interval '55 minutes' WHERE id = 'job:syncBank:error'`);
+    await alertPush(deps);
+    assert.equal(sent.length, 1, "🔴 помилка, що пережила 50 хв, так і не прийшла");
+    assert.doesNotMatch(sent[0], /ВСЕ ЩЕ/, "🔴 перша фраза про подію — «ВСЕ ЩЕ»");
+  });
+});
+
+/**
+ * #1520c — ЖИВА СХЕМА: ВАРТОВИЙ НА ТОМУ САМОМУ МЕХАНІЗМІ. `reportWatch`: перший звіт — одне повідомлення; повтор
+ * того самого — тиша; «рестарт» (свіжий модуль) — тиша (дедуп у БД, а не в `Set`); порожній звіт — «✅ Відновилось».
+ * І межа: поштар банера НЕ закриває епізоди вартових (інакше кожні 5 хв «відновлював» би, а щогодини відкривав знову).
+ * 🧨 Червоніє, якщо повернути памʼятний дедуп або дати поштарю закривати чужі `watch:…`.
+ */
+test("#1520c вартовий через reportWatch: дедуп у БД, рестарт без повтору, «відновилось», банер не закриває чужого", async (t) => {
+  await withScratch(t, async (query) => {
+    const sent: string[] = [];
+    const send = async (x: string) => { sent.push(x); };
+    const fresh = A({ id: "watch:fresh:events", severity: "critical", title: "Несвіжі дані — вотермарк застряг: події стадій" });
+    const m1 = await import("./alertPush.js");
+    await m1.reportWatch("fresh", [fresh], { send, query });
+    assert.equal(sent.length, 1, "🔴 перший звіт вартового не дійшов");
+    await m1.reportWatch("fresh", [fresh], { send, query });
+    assert.equal(sent.length, 1, "🔴 вартовий повторив те саме за годину");
+    // поштар банера тікає без цього id — і мусить НЕ закрити чужий епізод
+    await m1.alertPush({ collect: async () => ({ alerts: [], checksRan: 9, checksDeclared: 9 }), send, query } as never);
+    assert.equal(sent.length, 1, "🔴 поштар банера закрив епізод вартового («відновилось» про те, що не минуло)");
+    const reborn = await import(`./alertPush.js?restart=${Date.now()}`) as typeof m1;
+    await reborn.reportWatch("fresh", [fresh], { send, query });
+    assert.equal(sent.length, 1, "🔴 після рестарту вартовий повторив тривогу — дедуп знову в памʼяті");
+    await reborn.reportWatch("fresh", [], { send, query });
+    assert.equal(sent.length, 2, "🔴 коли вотермарк відновився, «відновилось» не прийшло");
+    assert.match(sent[1], /Відновилось/);
+    await assert.rejects(reborn.reportWatch("fresh", [A({ id: "sync:stale" })], { send, query }), /поза своїм простором/,
+      "🔴 вартовий записав тривогу в чужий простір — закривав би банерні епізоди");
+    assert.equal(isWatchId("watch:fresh:events"), true);
+    assert.equal(isWatchId("sync:stale"), false);
+  });
+});
+
+/**
+ * #1520d — ЖОДЕН ВАРТОВИЙ НЕ ШЛЕ В TELEGRAM НАПРЯМУ. Перелік файлів, що імпортують `sendAdminAlert`, — УВЕСЬ
+ * `backend/src` (критерій від предмета), і кожен має названу причину; вартові свіжості/етапів/розбіжності й `runJob`
+ * у ньому бути не мають. Пропуски поспіль — у банері (`job:<name>:skips`).
+ * 🧨 Червоніє, якщо будь-який новий файл почне слати напряму або вартовий повернеться до `sendAdminAlert`/`Set`.
+ */
+test("#1520d прямий sendAdminAlert — лише в названих місцях; вартові й runJob — через епізоди", async () => {
+  const { readdirSync, statSync } = await import("node:fs");
+  const root = path.join(import.meta.dirname, "..", "..", "src");
+  const files: string[] = [];
+  const walk = (d: string) => { for (const n of readdirSync(d)) { const f = path.join(d, n); if (statSync(f).isDirectory()) walk(f); else if (/\.ts$/.test(n) && !/\.test\.ts$/.test(n)) files.push(f); } };
+  walk(root);
+  assert.ok(files.length > 100, `🔴 у backend/src лише ${files.length} файлів — перевіряти нема чого`);
+  const ALLOWED: Record<string, string> = {
+    "bot/notify.ts": "сам відправник",
+    "jobs/alertPush.ts": "поштар: епізоди в alert_state (банер і вартові)",
+    "jobs/callAiJob.ts": "стеля AI — раз на місяць через ai_cap_alerts",
+    "jobs/carrierCallJob.ts": "стеля AI відсіву — раз на місяць через ai_cap_alerts",
+    "jobs/reconcileNightly.ts": "нічна звірка — раз на добу за розкладом",
+    "jobs/syncKommo.ts": "перехоплення завислого проходу — разова подія",
+    "tools/deploy.ts": "зупинка викату із взятим замком — разова подія",
+  };
+  // Імпорт або виклик — а не згадка в тексті чи в регулярці (`/sendAdminAlert(: TG/` у deployPlan).
+  const calls = (src: string) => /import\s*\{[^}]*\bsendAdminAlert\b[^}]*\}\s*from|\(\{\s*sendAdminAlert\s*\}\)|(^|[\s.({])sendAdminAlert\s*\(/m
+    .test(src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1"));
+  const senders = files.filter((f) => calls(readFileSync(f, "utf8")))
+    .map((f) => path.relative(root, f).replace(/\\/g, "/")).sort();
+  assert.deepEqual(senders, Object.keys(ALLOWED).sort(), `🔴 прямий sendAdminAlert не там, де названо: ${senders.join(", ")}`);
+  const fw = readSrc("src/jobs/freshnessWatch.ts").replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.doesNotMatch(fw, /new Set<string>\(\)|divergenceAlerted|abandonAlerted/, "🔴 у вартових повернувся памʼятний дедуп");
+  for (const src of ["fresh", "divergence", "abandoned"]) assert.match(fw, new RegExp(`reportWatch\\("${src}"`), `🔴 вартовий «${src}» не звітує в епізоди`);
+  const alertsSrc = readSrc("src/health/alerts.ts");
+  assert.match(alertsSrc, /id: `job:\$\{r\.name\}:skips`, severity: "critical"/, "🔴 пропуски поспіль не стали тривогою банера");
+  assert.match(alertsSrc, /if \(n < SKIP_ALERT_THRESHOLD\) continue;/, "🔴 поріг пропусків не з SKIP_ALERT_THRESHOLD");
 });

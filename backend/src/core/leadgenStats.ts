@@ -1,13 +1,13 @@
 import { pool } from "../db/pool.js";
 import { kyivToday } from "./dates.js";
-import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING } from "./metrics.js";
+import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING, GENERIC_CLIENT_KEYS } from "./metrics.js";
 import { LEADGEN_STAGE_IDS, QUALIFICATION_PIPELINES } from "./leadgenStages.js";
-import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery, leadStatusPred, oprStatusPred,
+import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery, leadStatusPred, oprStatusPred, quoteKeptSql,
   type SqlQuery, type LeadgenBucketGrain } from "./leadgenSql.js";
 import { FC_PIPELINES, handoffDealStates, clientSuccessHistory } from "./money.js";
 import { stageName } from "./stageNames.js";
 import {
-  handoffView, trendWindow, mergeBucketRows, assembleTrend, handoffDealRow, handoffMoneyBuckets, dayInRange, LINK_BEFORE_SEC, LINK_AFTER_SEC,
+  handoffView, trendWindow, mergeBucketRows, assembleTrend, handoffDealRow, handoffMoneyBuckets, leadgenPeriod, LINK_BEFORE_SEC, LINK_AFTER_SEC,
   type HandoffScope, type LeadgenHandoffMoney, type HandoffLinkInfo, type LeadgenHandoffDeal, type HandoffRowDeps,
   type LeadgenPersonBucketRow, type StageBucketRow, type CallBucketRow, type TrendMoneyBucket,
 } from "./leadgenHandoffRules.js";
@@ -199,7 +199,7 @@ export async function leadgenHandoffs(from: string, to: string, limit = 500): Pr
        FROM deal_stage_events e
        JOIN deals d ON d.kommo_id = e.kommo_id
        LEFT JOIN managers m ON m.id = d.manager_id
-      WHERE e.pipeline_id = ANY($3) AND e.status_id = 142
+      WHERE e.pipeline_id = ANY($3) AND e.status_id = 142 AND ${quoteKeptSql("$3")}
         AND (e.changed_at ${K})::date BETWEEN $1 AND $2
       GROUP BY e.kommo_id
       ORDER BY day DESC, e.kommo_id DESC
@@ -238,7 +238,7 @@ export async function leadgenWeekly(from: string, to: string): Promise<LeadgenWe
     `SELECT to_char(date_trunc('week', (e.changed_at ${K})), 'YYYY-MM-DD') AS week,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE ${leadStatusPred(WEEK_PH)}) AS leads,
             COUNT(DISTINCT e.kommo_id) FILTER (WHERE ${oprStatusPred(WEEK_PH)}) AS opr,
-            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = 142) AS quotes
+            COUNT(DISTINCT e.kommo_id) FILTER (WHERE e.pipeline_id = ANY($3) AND e.status_id = 142 AND ${quoteKeptSql("$3")}) AS quotes
        FROM deal_stage_events e
       WHERE ((e.pipeline_id = ANY($3) AND e.status_id IN ($4, $5, 142)) OR (e.pipeline_id = ANY($6) AND e.status_id = $7))
         AND (e.changed_at ${K})::date BETWEEN $1 AND $2
@@ -303,14 +303,16 @@ export async function leadgenBuckets(
 
 /** Історія успіхів клієнтів цих передач — для правила «постійний клієнт» (`isRegularAt`). */
 function historyFor(links: readonly HandoffLinkInfo[]) {
-  return clientSuccessHistory(links.flatMap((l) => (l.dealId != null && l.clientKey ? [l.clientKey] : [])));
+  // Заглушка замість клієнта — не клієнт: історії не шукаємо (запит уже повертає її як null; тут — другий запобіжник).
+  return clientSuccessHistory(links.flatMap((l) =>
+    (l.dealId != null && l.clientKey && !GENERIC_CLIENT_KEYS.includes(l.clientKey) ? [l.clientKey] : [])));
 }
 
 /** Входи в 142 періоду з угодою менеджера й описом обох угод — усе, крім грошей (їх дає `money.ts`). */
 async function handoffLinks(from: string, to: string): Promise<HandoffLinkInfo[]> {
   const q = handoffLinkQuery(from, to,
     { pz: LEADGEN_STAGE_IDS.pz, qualified: LEADGEN_STAGE_IDS.qualified,
-      managerPipelines: [...QUALIFICATION_PIPELINES, ...FC_PIPELINES] },
+      managerPipelines: [...QUALIFICATION_PIPELINES, ...FC_PIPELINES], genericClientKeys: GENERIC_CLIENT_KEYS },
     { beforeSec: LINK_BEFORE_SEC, afterSec: LINK_AFTER_SEC });
   const r = await pool.query<{ pz_id: string; lg_id: number; lg_team_id: number | null; at: Date; day: string;
     pz_name: string | null; pz_client: string | null; client_key: string | null; deal_id: string | null; deal_name: string | null;
@@ -359,9 +361,8 @@ export async function leadgenHandoffMoney(
   const links = await handoffLinks((await firstStageEventDay()) ?? from, to);
   const [states, history] = await Promise.all([
     handoffDealStates(links.flatMap((l) => (l.dealId == null ? [] : [l.dealId]))), historyFor(links)]);
-  // Кінець періоду — не пізніше сьогодні: «Очікування» рахується станом на кінець, а майбутніх днів ще немає.
-  const today = kyivToday();
-  const inP = dayInRange(from, to < today ? to : today);
+  // Кінець періоду — не пізніше сьогодні; цілі місяці — очікування з перенесеним, решта — лише нові (`leadgenPeriod`).
+  const inP = leadgenPeriod(from, to, kyivToday());
   const view = handoffView(links, states, scope, history, inP);
   const deals = view.rows.map((h) =>
     handoffDealRow(h, h.dealId == null ? undefined : states.get(h.dealId), HANDOFF_ROW_DEPS));

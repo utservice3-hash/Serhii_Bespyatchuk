@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import { useNavigate } from "react-router-dom";
 import { fetchReceivableClaims, createReceivableClaim, hiringError, type ReceivableClaimsState } from "../../../api";
 
@@ -27,6 +28,7 @@ export function ProblemClientButton({ clientKey, clientName, state, onOpened }: 
   clientKey: string; clientName: string; state: ReceivableClaimsState | null;
   onOpened: (clientKey: string, claimId: number) => void;
 }) {
+  const dlg = useDialogs();
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -41,7 +43,7 @@ export function ProblemClientButton({ clientKey, clientName, state, onOpened }: 
   }
   if (!state.canCreate) return null;
   const create = async () => {
-    if (!window.confirm(`Створити претензію «Проблемний клієнт» для «${clientName}»?\nСума боргу й дні прострочення візьмуться з дебіторки на цю мить.`)) return;
+    if (!(await dlg.confirm(`Створити претензію «Проблемний клієнт» для «${clientName}»?\nСума боргу й дні прострочення візьмуться з дебіторки на цю мить.`))) return;
     setBusy(true); setErr(null);
     try {
       const r = await createReceivableClaim(clientKey);

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchStatsSummary, type StatsSummaryResp, type StatsTile, type StatsTeamRow } from "../../../api";
+import { fetchStatsSummary, fetchStatsPlanFact, type StatsSummaryResp, type StatsTile, type StatsTeamRow, type PlanFactResp, type StatsGran } from "../../../api";
+import { StatisticsPlanFact } from "./StatisticsPlanFact";
 import { addDays, sundayOf, mondayOf, monthEnd, addMonth, ddmm } from "../periodRules";
 import { TilesSkeleton, TableSkeleton } from "../Skeleton";
 
@@ -24,9 +25,14 @@ const MONTHS = ["січень", "лютий", "березень", "квітен�
    починали збігатись одна з одною, а не з правилом (гейт #395b). Тиждень — Пн–Нд. */
 const shiftMonth = addMonth;
 
-/** Колір від % ПЛАНУ, а не від Δ (ТЗ, блок 2, п.1). Без плану — нейтральний. */
-export function planTone(pct: number | null): { bg: string; border: string; fg: string } {
+/**
+ * Колір від % ПЛАНУ, а не від Δ (ТЗ, блок 2, п.1). Без плану — нейтральний. `binary` — для норм (сер. чек, дзвінки):
+ * лише «у нормі» (зелений) або «нижче» (червоний), як просила Юля 10.10.2026, без жовтого проміжку.
+ */
+export function planTone(pct: number | null, binary = false): { bg: string; border: string; fg: string } {
   if (pct == null) return { bg: "var(--card-bg)", border: "var(--border)", fg: "var(--text)" };
+  if (binary) return pct >= 100 ? { bg: "rgba(22,163,74,0.07)", border: "rgba(22,163,74,0.45)", fg: "#15803d" }
+    : { bg: "rgba(220,38,38,0.06)", border: "rgba(220,38,38,0.4)", fg: "#b91c1c" };
   if (pct >= 100) return { bg: "rgba(22,163,74,0.07)", border: "rgba(22,163,74,0.45)", fg: "#15803d" };
   if (pct >= 80) return { bg: "rgba(217,119,6,0.07)", border: "rgba(217,119,6,0.45)", fg: "#b45309" };
   return { bg: "rgba(220,38,38,0.06)", border: "rgba(220,38,38,0.4)", fg: "#b91c1c" };
@@ -38,7 +44,9 @@ function Delta({ v }: { v: number | null }) {
 }
 
 function TileCard({ t, cmpLabel }: { t: StatsTile; cmpLabel: string }) {
-  const tone = planTone(t.planPct);
+  const tone = planTone(t.planPct, t.binary);
+  const cn = t.callsNorm;
+  const cnPct = cn && cn.perDay != null && cn.norm ? (cn.perDay / cn.norm) * 100 : null;
   return (
     <div style={{ background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 14, padding: "13px 15px" }}>
       <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: 0.3, textTransform: "uppercase", color: MUTED }}>{t.label}</div>
@@ -47,7 +55,7 @@ function TileCard({ t, cmpLabel }: { t: StatsTile; cmpLabel: string }) {
       <div style={{ fontSize: 26, fontWeight: 800, margin: "6px 0 2px" }}>{fmtV(t.now, t.unit)}</div>
       {t.plan != null ? (
         <div style={{ fontSize: 13 }}>
-          план <b>{fmtV(t.plan, t.unit)}</b> · <b style={{ color: tone.fg }}>{t.planPct}%</b>
+          {t.binary ? "ціль" : "план"} <b>{fmtV(t.plan, t.unit)}</b> · <b style={{ color: tone.fg }}>{t.binary ? (t.planPct! >= 100 ? "у нормі" : "нижче цілі") + ` (${t.planPct}%)` : `${t.planPct}%`}</b>
           {/* 📅 Тиждень через межу місяців (рішення Романа 02.10): план складається з двох місячних частин — видно, звідки
               число й чому воно інше, ніж «план тижня» на Звіті (там показана лише частина поточного місяця). */}
           {t.planParts && t.planParts.length > 1 && (
@@ -60,6 +68,17 @@ function TileCard({ t, cmpLabel }: { t: StatsTile; cmpLabel: string }) {
           )}
         </div>
       ) : <div style={{ fontSize: 12.5, color: MUTED }}>{t.planNote}</div>}
+      {/* 🏷 Як рахується план — словами (тиждень динамічний, узгоджено в задачі 5146; ціль чека — 3 міс + 5%). */}
+      {t.planRule && <div style={{ fontSize: 11, color: MUTED, marginTop: 2, lineHeight: 1.35 }}>{t.planRule}</div>}
+      {/* 📞 Норма дзвінків (4632): розмови + спроби на менеджера за робочий день — інше число, ніж головне вгорі. */}
+      {cn && (
+        <div style={{ fontSize: 12.5, marginTop: 4, padding: "4px 7px", borderRadius: 8, background: planTone(cnPct, true).bg, border: `1px solid ${planTone(cnPct, true).border}` }}
+          title={`Розмови + спроби, як у мотивації з 01.10. Менеджерів: ${cn.managers}, робочих днів: ${cn.workDays}. Норма — з «Планів».`}>
+          на менеджера за роб. день: <b>{cn.perDay ?? "—"}</b> (розмови + спроби) ·{" "}
+          {cn.norm != null ? <>норма <b>{cn.norm}</b> · <b style={{ color: planTone(cnPct, true).fg }}>{cnPct == null ? "—" : cnPct >= 100 ? "у нормі" : "нижче норми"}</b></>
+            : <span style={{ color: MUTED }}>норму не задано (Плани → Норма дзвінків)</span>}
+        </div>
+      )}
       <div style={{ fontSize: 12.5, marginTop: 3 }}>
         <Delta v={t.deltaPct} /> <span style={{ color: MUTED }}>до {cmpLabel} ({fmtV(t.prev, t.unit)})</span>
       </div>
@@ -68,9 +87,17 @@ function TileCard({ t, cmpLabel }: { t: StatsTile; cmpLabel: string }) {
   );
 }
 
+/** 🎯 Сер. чек проти цілі команди: зелений — у нормі, червоний — нижче; без цілі — словами, чому. */
+export function AvgCheckCell({ value, target, baseDeals }: { value: number | null; target: number | null; baseDeals: number }) {
+  if (value == null) return <span style={{ color: MUTED }}>—</span>;
+  if (target == null) return <span title={`ціль не ставиться: ${baseDeals} успішних угод за 3 місяці (потрібно від 30)`}>{fmtN(value)} ₴ <span style={{ color: MUTED }}>· без цілі</span></span>;
+  const tone = planTone((value / target) * 100, true);
+  return <span><b style={{ color: tone.fg }}>{fmtN(value)} ₴</b> <span style={{ color: MUTED }}>· {fmtN(target)} ₴</span></span>;
+}
+
 type SortKey = "rank" | "name" | "fact" | "plan" | "pct" | "deltaPct";
 
-function TeamsTable({ rows, onPick, picked }: { rows: StatsTeamRow[]; onPick: (teamId: number) => void; picked: number | null }) {
+function TeamsTable({ rows, onPick, picked, prevSpan }: { rows: StatsTeamRow[]; onPick: (teamId: number) => void; picked: number | null; prevSpan: string }) {
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "rank", dir: 1 });
   const [showArchived, setShowArchived] = useState(false);
   const archivedCount = rows.filter((r) => r.archived).length;
@@ -104,7 +131,8 @@ function TeamsTable({ rows, onPick, picked }: { rows: StatsTeamRow[]; onPick: (t
         </span>
       </div>
       <table className="data-table" style={{ width: "100%", fontSize: 13 }}>
-        <thead><tr>{th("rank", "Ранг")}{th("name", "Команда")}{th("fact", "Факт", true)}{th("plan", "План", true)}{th("pct", "% плану", true)}{th("deltaPct", "Δ до попер.", true)}</tr></thead>
+        <thead><tr>{th("rank", "Ранг")}{th("name", "Команда")}{th("fact", "Факт", true)}{th("plan", "План", true)}{th("pct", "% плану", true)}{th("deltaPct", `Δ до ${prevSpan}`, true)}
+          <th style={{ textAlign: "right", whiteSpace: "nowrap" }} title="Сер. чек команди за ці дати проти її цілі на місяць: чек за 3 повні місяці + 5%, менше 30 угод — без цілі">Сер. чек · ціль</th></tr></thead>
         <tbody>
           {sorted.map((r) => {
             const tone = planTone(r.pct);
@@ -117,6 +145,9 @@ function TeamsTable({ rows, onPick, picked }: { rows: StatsTeamRow[]; onPick: (t
                 <td style={{ textAlign: "right" }}>{r.plan != null ? `${fmtN(r.plan)} ₴` : <span style={{ color: MUTED }}>плану немає</span>}</td>
                 <td style={{ textAlign: "right", fontWeight: 800, color: tone.fg }}>{r.pct != null ? `${r.pct}%` : "—"}</td>
                 <td style={{ textAlign: "right" }}><Delta v={r.deltaPct} /></td>
+                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                  <AvgCheckCell value={r.avgCheck} target={r.avgCheckTarget} baseDeals={r.avgCheckBaseDeals} />
+                </td>
               </tr>
             );
           })}
@@ -130,25 +161,37 @@ export function StatisticsSummary({ today, onPickTeam, pickedTeam }: { today: st
   /* ⏳ ПІД ЧАС ПЕРЕМИКАННЯ ПЕРІОДУ БЛОК НЕ ЗНИКАЄ (прохання Романа 02.10): попередні цифри лишаються
      приглушеними, поки вантажаться нові; назва періоду рахується з ВИБОРУ, а не з відповіді сервера. */
   const [loading, setLoading] = useState(true);
-  const [gran, setGran] = useState<"week" | "month">("week");
+  const [gran, setGran] = useState<StatsGran>("week");
   /** Кінець обраного періоду (неділя / останній день місяця); поточний клампиться до сьогодні сервером. */
   const [end, setEnd] = useState<string>(() => sundayOf(today));
+  /** 📅 «З – по» (4632 п.2.3): чернетка в полях і застосований період — щоб не смикати сервер на кожну цифру. */
+  const [rangeDraft, setRangeDraft] = useState<{ from: string; to: string }>(() => ({ from: mondayOf(today), to: today }));
+  const [range, setRange] = useState<{ from: string; to: string }>(() => ({ from: mondayOf(today), to: today }));
+  /** 📋 Вид: плитки й команди чи «План-факт» (4632 п.2.2). Період — спільний. */
+  const [view, setView] = useState<"summary" | "planFact">("summary");
   const [data, setData] = useState<StatsSummaryResp | null>(null);
+  const [pf, setPf] = useState<PlanFactResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
 
   const anchor = end > today ? today : end;
+  const params = gran === "range" ? { gran, from: range.from, to: range.to } : { gran, anchor };
+  const paramsKey = JSON.stringify(params);
   useEffect(() => {
     let alive = true; setLoading(true); setErr(null);
-    fetchStatsSummary({ gran, anchor })
-      .then((d) => { if (alive) { setData(d); setLoading(false); } })
+    const req = view === "summary"
+      ? (gran === "range" ? fetchStatsSummary({ gran, from: range.from, to: range.to }) : fetchStatsSummary({ gran, anchor })).then((d) => { if (alive) setData(d); })
+      : fetchStatsPlanFact(params).then((d) => { if (alive) setPf(d); });
+    req.then(() => { if (alive) setLoading(false); })
       .catch((e) => { if (alive) { setLoading(false); setErr(e?.response?.data?.error ?? (e?.response?.status ? `сервер відповів ${e.response.status}` : "немає звʼязку з сервером")); } });
     return () => { alive = false; };
-  }, [gran, anchor, nonce]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paramsKey, view, nonce]);
 
-  const setGranKeep = (g: "week" | "month") => { setGran(g); setEnd(g === "week" ? sundayOf(today) : monthEnd(today)); };
+  const setGranKeep = (g: StatsGran) => { setGran(g); if (g !== "range") setEnd(g === "week" ? sundayOf(today) : monthEnd(today)); };
   const shift = (n: number) => setEnd((e) => (gran === "week" ? addDays(e, 7 * n) : monthEnd(shiftMonth(e, n))));
   const isCurrent = gran === "week" ? end === sundayOf(today) : end === monthEnd(today);
+  const rangeBad = !rangeDraft.from || !rangeDraft.to || rangeDraft.from > rangeDraft.to || rangeDraft.from > today;
 
   /** Список періодів для вибору: 26 тижнів Пн–Нд або 18 місяців, найсвіжіший зверху. */
   const periodOptions = useMemo(() => {
@@ -161,43 +204,63 @@ export function StatisticsSummary({ today, onPickTeam, pickedTeam }: { today: st
     if (!out.some((o) => o.end === end)) out.push({ end, label: gran === "week" ? `${dm(mondayOf(end))}–${dm(end)}` : `${MONTHS[Number(end.slice(5, 7)) - 1]} ${end.slice(0, 4)}` });
     return out;
   }, [gran, today, end]);
-  const title = gran === "week"
-    ? `Тиждень ${dm(mondayOf(end))}–${dm(end)}`
+  const title = gran === "range" ? `${dm(range.from)}–${dm(range.to)}`
+    : gran === "week" ? `Тиждень ${dm(mondayOf(end))}–${dm(end)}`
     : `${MONTHS[Number(end.slice(5, 7)) - 1]} ${end.slice(0, 4)}`;
-  const cmpLabel = data ? (data.complete
-    ? (gran === "week" ? `минулого тижня` : `минулого місяця`)
-    : `${dm(data.prev.from)}–${dm(data.prev.to)}`) : "";
+  // 🏷 З чим порівняння — ДАТАМИ, і підпис збирає сервер (4632 п.2.4): одне правило для плиток і таблиці.
+  const cmpLabel = data?.cmpLabel ?? "";
+  const prevSpan = data ? `${dm(data.prev.from)}–${dm(data.prev.to)}` : "";
 
   const btn = (on: boolean) => ({ fontSize: 12.5, fontWeight: 700, padding: "6px 12px", cursor: "pointer", border: "none",
     background: on ? "#1f2330" : "var(--card-bg)", color: on ? "#fff" : "var(--text)" } as const);
   const pill = { fontSize: 12.5, fontWeight: 700, padding: "6px 11px", borderRadius: 8, cursor: "pointer", border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" } as const;
+  const dateIn = { padding: "5px 6px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontSize: 13 } as const;
 
   return (
     <div>
+      {/* 📋 ВИД (4632 п.2.2): «План-факт» — окрема вкладка; період нижче спільний для обох видів. */}
+      <div style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 9, overflow: "hidden", marginBottom: 10 }}>
+        <button style={btn(view === "summary")} onClick={() => setView("summary")}>Показники</button>
+        <button style={btn(view === "planFact")} onClick={() => setView("planFact")}>📋 План-факт</button>
+      </div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
         <span style={{ fontSize: 12.5, color: MUTED, fontWeight: 700 }}>Період:</span>
         <div style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 9, overflow: "hidden" }}>
           <button style={btn(gran === "week")} onClick={() => setGranKeep("week")}>Тиждень</button>
           <button style={btn(gran === "month")} onClick={() => setGranKeep("month")}>Місяць</button>
+          <button style={btn(gran === "range")} onClick={() => setGranKeep("range")}>З – по</button>
         </div>
-        <button style={pill} onClick={() => setEnd(gran === "week" ? sundayOf(today) : monthEnd(today))} disabled={isCurrent}>{gran === "week" ? "Цей тиждень" : "Цей місяць"}</button>
-        <button style={pill} onClick={() => setEnd(gran === "week" ? addDays(sundayOf(today), -7) : monthEnd(shiftMonth(today, -1)))}>{gran === "week" ? "Минулий" : "Минулий"}</button>
-        <button style={pill} onClick={() => shift(-1)} aria-label="попередній">‹</button>
-        <b style={{ fontSize: 14, minWidth: 150, textAlign: "center" }}>{title}</b>
-        <button style={pill} onClick={() => shift(1)} disabled={isCurrent} aria-label="наступний">›</button>
-        {/* 4367 (ТЗ Юлії): «можна вибрати будь-який тиждень зі списку: 14.09–20.09, 07.09–13.09…» — список Пн–Нд
-            (півроку тижнів) або місяців (півтора року), значення — кінець періоду. */}
-        <label style={{ fontSize: 12.5, color: MUTED }}>
-          {gran === "week" ? "тиждень:" : "місяць:"}{" "}
-          <select value={end} onChange={(e) => setEnd(e.target.value)}
-            style={{ padding: "5px 6px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontSize: 13 }}>
-            {periodOptions.map((o) => <option key={o.end} value={o.end}>{o.label}</option>)}
-          </select>
-        </label>
-        {loading && data && <span style={{ fontSize: 12.5, color: MUTED }}>⏳ оновлюємо…</span>}
-        {!loading && data && !data.complete && (
-          <span style={{ fontSize: 12.5, fontWeight: 700, color: "#b45309" }}>
-            станом на {dm(data.asOf)} ({dow(data.asOf)}) · порівняння з {dm(data.prev.from)}–{dm(data.prev.to)}
+        {gran === "range" ? (
+          <>
+            <label style={{ fontSize: 12.5, color: MUTED }}>з <input type="date" value={rangeDraft.from} max={today} style={dateIn}
+              onChange={(e) => setRangeDraft((r) => ({ ...r, from: e.target.value }))} /></label>
+            <label style={{ fontSize: 12.5, color: MUTED }}>по <input type="date" value={rangeDraft.to} style={dateIn}
+              onChange={(e) => setRangeDraft((r) => ({ ...r, to: e.target.value }))} /></label>
+            <button style={pill} disabled={rangeBad} onClick={() => setRange(rangeDraft)}
+              title={rangeBad ? "«з» має бути не пізніше «по» й не в майбутньому" : "Показати за цей період"}>Показати</button>
+            <b style={{ fontSize: 14 }}>{title}</b>
+          </>
+        ) : (
+          <>
+            <button style={pill} onClick={() => setEnd(gran === "week" ? sundayOf(today) : monthEnd(today))} disabled={isCurrent}>{gran === "week" ? "Цей тиждень" : "Цей місяць"}</button>
+            <button style={pill} onClick={() => setEnd(gran === "week" ? addDays(sundayOf(today), -7) : monthEnd(shiftMonth(today, -1)))}>Минулий</button>
+            <button style={pill} onClick={() => shift(-1)} aria-label="попередній">‹</button>
+            <b style={{ fontSize: 14, minWidth: 150, textAlign: "center" }}>{title}</b>
+            <button style={pill} onClick={() => shift(1)} disabled={isCurrent} aria-label="наступний">›</button>
+            {/* 4367 (ТЗ Юлії): «можна вибрати будь-який тиждень зі списку: 14.09–20.09, 07.09–13.09…» — список Пн–Нд
+                (півроку тижнів) або місяців (півтора року), значення — кінець періоду. */}
+            <label style={{ fontSize: 12.5, color: MUTED }}>
+              {gran === "week" ? "тиждень:" : "місяць:"}{" "}
+              <select value={end} onChange={(e) => setEnd(e.target.value)} style={dateIn}>
+                {periodOptions.map((o) => <option key={o.end} value={o.end}>{o.label}</option>)}
+              </select>
+            </label>
+          </>
+        )}
+        {loading && (data || pf) && <span style={{ fontSize: 12.5, color: MUTED }}>⏳ оновлюємо…</span>}
+        {view === "summary" && !loading && data && (
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: data.complete ? MUTED : "#b45309" }}>
+            {!data.complete && <>станом на {dm(data.asOf)} ({dow(data.asOf)}) · </>}порівняння: до {cmpLabel}
           </span>
         )}
       </div>
@@ -207,21 +270,28 @@ export function StatisticsSummary({ today, onPickTeam, pickedTeam }: { today: st
           ⚠️ Не вдалося порахувати цифри: {err}. <button style={pill} onClick={() => setNonce((n) => n + 1)}>Повторити</button>
         </div>
       )}
-      {!data && !err && (
+      {view === "planFact" ? (
+        pf ? <div className={loading ? "is-refreshing" : undefined} aria-busy={loading}><StatisticsPlanFact data={pf} /></div>
+          : !err && <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, padding: "12px 14px" }}><TableSkeleton rows={6} /></div>
+      ) : (
         <>
-          <TilesSkeleton n={4} />
-          <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, padding: "12px 14px", marginTop: 14 }}>
-            <TableSkeleton rows={5} />
-          </div>
+          {!data && !err && (
+            <>
+              <TilesSkeleton n={5} />
+              <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 14, padding: "12px 14px", marginTop: 14 }}>
+                <TableSkeleton rows={5} />
+              </div>
+            </>
+          )}
+          {data && (
+            <div className={loading ? "is-refreshing" : undefined} aria-busy={loading}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: 12 }}>
+                {data.tiles.map((t) => <TileCard key={t.key} t={t} cmpLabel={cmpLabel} />)}
+              </div>
+              {data.teams.length > 0 && <TeamsTable rows={data.teams} onPick={onPickTeam} picked={pickedTeam} prevSpan={prevSpan} />}
+            </div>
+          )}
         </>
-      )}
-      {data && (
-        <div className={loading ? "is-refreshing" : undefined} aria-busy={loading}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: 12 }}>
-            {data.tiles.map((t) => <TileCard key={t.key} t={t} cmpLabel={cmpLabel} />)}
-          </div>
-          {data.teams.length > 0 && <TeamsTable rows={data.teams} onPick={onPickTeam} picked={pickedTeam} />}
-        </div>
       )}
     </div>
   );

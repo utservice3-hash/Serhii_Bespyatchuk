@@ -534,6 +534,54 @@ ALTER TABLE receivable_note_history ADD COLUMN IF NOT EXISTS deal_id BIGINT;
 CREATE INDEX IF NOT EXISTS idx_receivable_note_history_client
   ON receivable_note_history(client_key, written_at DESC);
 
+-- 📞 НОРМА ДЗВІНКІВ НА ДЕНЬ — У «ПЛАНАХ» (4632, 10.10.2026; `core/callsNormPlan.ts`). Ставить КВП, діє з місяця
+-- й до наступної зміни; кожна зміна — новий рядок, історія не затирається.
+CREATE TABLE IF NOT EXISTS calls_norm_plan (
+  id         SERIAL PRIMARY KEY,
+  from_month DATE NOT NULL CHECK (from_month = date_trunc('month', from_month)::date),
+  norm       INTEGER NOT NULL CHECK (norm BETWEEN 1 AND 500),
+  set_by     INTEGER REFERENCES users(id),
+  set_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 🎯 ЦІЛЬ СЕРЕДНЬОГО ЧЕКА КОМАНДИ НА МІСЯЦЬ (4632, Юля 10.10.2026; `core/avgCheckTarget.ts`). Записується першим
+-- зверненням у місяці й до кінця місяця не рухається. `target` NULL — у команди за 3 місяці менше 30 успішних угод.
+CREATE TABLE IF NOT EXISTS avg_check_targets (
+  month       DATE NOT NULL,
+  team_id     INTEGER NOT NULL,
+  base_from   DATE NOT NULL,
+  base_to     DATE NOT NULL,
+  revenue     NUMERIC NOT NULL,
+  deals       INTEGER NOT NULL,
+  target      NUMERIC,
+  computed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (month, team_id)
+);
+
+-- 📞 РОЗМОВА БІЛЯ ДАТИ ДОМОВЛЕНОСТІ (задача 4631, 09.10.2026; `core/receivableCallLink.ts`).
+-- Поточне посилання лежить на записі домовленості: `call_uniqueid` — ключ дзвінка в `ringostat_calls`,
+-- `call_url` — що людина вставила (як є, для довідки). Нова дата без нового посилання знімає старе.
+ALTER TABLE receivable_notes ADD COLUMN IF NOT EXISTS call_uniqueid TEXT;
+ALTER TABLE receivable_notes ADD COLUMN IF NOT EXISTS call_url TEXT;
+
+-- 🗓 ЖУРНАЛ ЗМІН ДАТИ ДОМОВЛЕНОСТІ — дописуваний, як `receivable_note_history`. `receivable_notes` тримає ОДИН
+-- рядок на клієнта, тож попередня дата затирається; без журналу «переносили N разів» не було б звідки взяти.
+-- Рядок — кожна зміна дати або розмови: стара й нова дата, розмова на мить запису, хто й коли. Перенесенням
+-- рахується лише «була дата → стала інша» (`reschedulePred`). Почався з дня викату: старих перенесень
+-- відновити нема з чого.
+CREATE TABLE IF NOT EXISTS receivable_date_log (
+  id            SERIAL PRIMARY KEY,
+  client_key    TEXT NOT NULL,
+  deal_id       BIGINT,
+  old_date      DATE,
+  new_date      DATE,
+  call_uniqueid TEXT,
+  changed_by    INTEGER REFERENCES users(id),
+  changed_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_receivable_date_log_client
+  ON receivable_date_log(client_key, changed_at DESC);
+
 -- 🔴 БЕКФІЛ ЖУРНАЛУ З НАЯВНИХ КОМЕНТАРІВ — УМОВА КОРЕКТНОСТІ, А НЕ ЗРУЧНІСТЬ.
 --
 -- Заміряно на проді 26.08.2026 одразу після викату: з 77 заповнених коментарів
@@ -4756,6 +4804,10 @@ REVOKE ALL ON first_touch_notes FROM ai_readonly;
 -- Таку позначку ставлять менеджер (свої), тімлід (команда), адмін — і обіцянка рахується виконаною.
 ALTER TABLE first_touch_notes DROP CONSTRAINT IF EXISTS first_touch_notes_kind_check;
 ALTER TABLE first_touch_notes ADD CONSTRAINT first_touch_notes_kind_check CHECK (kind IN ('price', 'missed', 'offline'));
+-- ✅ «Розібрано» (`review`, 08.10.2026, екран D): тімлід переглянув розмову з черги розбору — вона виходить з черги.
+-- Ставлять тімлід (своя команда) і адмін. Текст — коментар менеджеру або «Розібрано», якщо коментаря немає.
+ALTER TABLE first_touch_notes DROP CONSTRAINT IF EXISTS first_touch_notes_kind_check;
+ALTER TABLE first_touch_notes ADD CONSTRAINT first_touch_notes_kind_check CHECK (kind IN ('price', 'missed', 'offline', 'review'));
 -- 🎛 НАЛАШТУВАННЯ «ПЕРШОГО ДОТИКУ» (05.10.2026): вікно повторного дзвінка, допуск і мінімальний дедлайн передзвону,
 -- колір блоку «дзвінка в телефонії немає». Журнал: кожна зміна — новий рядок з автором, чинне — останній рядок,
 -- порожньо — поточна поведінка (`core/firstTouchTunables.ts`). Змінює лише адмін у «Налаштуваннях».
@@ -4770,6 +4822,9 @@ CREATE TABLE IF NOT EXISTS first_touch_settings_log (
   set_at                    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 REVOKE ALL ON first_touch_settings_log FROM ai_readonly;
+-- 🎯 Ціль «ціну озвучено», % (ТЗ «фінальні доробки» 08.10.2026: 50 %). NULL у старих рядках = 50 (`PRICE_TARGET_DEFAULT`).
+ALTER TABLE first_touch_settings_log ADD COLUMN IF NOT EXISTS price_target_pct INTEGER
+  CHECK (price_target_pct IS NULL OR price_target_pct BETWEEN 1 AND 100);
 -- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
 
 -- 🎧 ВКЛАДКА «ПЕРШИЙ ДОТИК · AI» (рішення Романа 28.09.2026). Без цього рядка вкладку не побачив би
@@ -4901,15 +4956,15 @@ CREATE TABLE IF NOT EXISTS fin_plan_approvals (
 );
 
 -- 🔑 ХТО ЗАТВЕРДЖУЄ ПЛАН — ПОІМЕННО, А НЕ РОЛЛЮ (06.10.2026). Роль «Адмін» мають і фінансист, і Дарʼя, і ще акаунт,
--- тож «лише ці люди» роллю не виразити. Склад — рішення Романа 06.10.2026: Беспятчук Сергій (id 1), kriptokoval (17),
--- Роман (50), Олександр Ступаківський (99). Сід — РАЗОВИЙ (лише в порожню таблицю), бо інакше кожен викат повертав би
--- людину, яку прибрали SQL-ом. На свіжій базі цих id немає — таблиця лишається порожньою.
+-- тож «лише ці люди» роллю не виразити. Склад — рішення Сергія 07.10.2026 («на зустрічі внесли корективи, тільки мій
+-- акаунт може затвердити»): лише Беспятчук Сергій (id 1). Сід — РАЗОВИЙ (лише в порожню таблицю), бо інакше кожен викат
+-- повертав би людину, яку прибрали SQL-ом. На свіжій базі цього id немає — таблиця лишається порожньою.
 CREATE TABLE IF NOT EXISTS fin_plan_approvers (
   user_id   INTEGER PRIMARY KEY REFERENCES users(id),
   added_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 INSERT INTO fin_plan_approvers (user_id)
-SELECT id FROM users WHERE id IN (1, 17, 50, 99) AND NOT EXISTS (SELECT 1 FROM fin_plan_approvers);
+SELECT id FROM users WHERE id = 1 AND NOT EXISTS (SELECT 1 FROM fin_plan_approvers);
 
 -- 🔒 ЗАМОК ПЛАНУ — У БАЗІ, А НЕ ЛИШЕ В КОДІ (06.10.2026). У погодженому місяці `fin_values.plan` не змінюється НІЧИМ:
 -- ні роутом, ні скриптом, ні імпортом, ні «Взяти план попереднього місяця». Факт і коментар — вільні (рішення Романа:
@@ -5595,3 +5650,28 @@ CREATE TABLE IF NOT EXISTS feedback_files (
 CREATE INDEX IF NOT EXISTS idx_feedback_files_fb ON feedback_files(feedback_id, created_at);
 -- 🔒 Скриншоти можуть містити що завгодно з екрана (клієнтів, суми). Дзеркало — FORBIDDEN_TABLES. Тримає #496.
 REVOKE ALL ON feedback_files FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💳 КАРТКИ У «ВИПИСЦІ» БЕЗ ПРОГРАМІСТА (Роман 07.10.2026; перша — робоча картка Олександра Ступаківського).
+--  · `company = 'staff'` — картка людини, не одна з наших компаній: у підсумок «ФОП Беспятчук» вона не йде.
+--  · `mono_pan_last4` — останні 4 цифри: картку працівника привʼязуємо ЛИШЕ за ними (під його токеном лежать і особисті
+--    рахунки).
+--  · Самих карток схема НЕ створює: їх додає людина кнопкою «+ Картка» в «Налаштуваннях виписки» (створюється
+--    вимкненою; токен — рядком `MONO_TOKEN_…` у .env, сервер бачить його без рестарту, `bankSources/token.ts`).
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE bank_accounts DROP CONSTRAINT IF EXISTS bank_accounts_company_check;
+ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_company_check CHECK (company IN ('uts','automuv','fop_privat','fop_mono','staff'));
+ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS mono_pan_last4 TEXT;
+ALTER TABLE bank_accounts DROP CONSTRAINT IF EXISTS bank_accounts_mono_pan_last4_check;
+ALTER TABLE bank_accounts ADD CONSTRAINT bank_accounts_mono_pan_last4_check CHECK (mono_pan_last4 IS NULL OR mono_pan_last4 ~ '^[0-9]{4}$');
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💱 МОНО: ВАЛЮТА ОПЕРАЦІЇ = ВАЛЮТА РАХУНКУ (07.10.2026, #1228b).
+--  `amount` у виписці моно — у валюті РАХУНКУ, а `currencyCode` — валюта ПОКУПКИ. Розбір брав валюту покупки, тож
+--  гривнева сума ставала «доларами» й ще раз множилась на курс (заміряно: картка black, 20.08.2026, 492,24 ₴ → 22 003 ₴).
+--  Лагодимо записи гривневих моно-рахунків: гривня = сума як є. Повтор нічого не міняє (умова вже не виконується).
+--  Revert коду записи не повертає — і не має: повернення означало б знову роздуті суми.
+-- ══════════════════════════════════════════════════════════════════════════
+UPDATE bank_transactions t SET currency = a.currency, fx_rate = 1, amount_uah = t.amount
+  FROM bank_accounts a
+ WHERE a.id = t.account_id AND a.bank = 'mono' AND a.currency = 'UAH' AND t.currency <> 'UAH';

@@ -91,9 +91,11 @@ export const AI_START_DATE = "2026-09-20";
 
 /** Типовий період — вікно, яке бере джоба: від пізнішого з дати старту й «сьогодні − 29 днів». */
 export function aiDefaultPeriod(today: string): PeriodState {
+  // 08.10.2026 (Роман): за замовчуванням — ПОТОЧНИЙ МІСЯЦЬ. Діапазон лишається на випадок перемикання в «Період»:
+  // останні 30 днів, але не раніше старту аналізу.
   const rolling = addDays(today, -29);
   const from = rolling > AI_START_DATE ? rolling : AI_START_DATE;
-  return { mode: "range", anchor: today, focusDay: today, rangeFrom: from, rangeTo: today };
+  return { mode: "month", anchor: today, focusDay: today, rangeFrom: from, rangeTo: today };
 }
 
 /**
@@ -181,14 +183,16 @@ export function applyListFilter<T extends ListFilterRow>(rows: readonly T[], f: 
 /** Людський підпис терміну обіцянки в картці. */
 export function deadlineBasisLabel(basis: string): string {
   return basis === "minutes" ? "як пообіцяв" : basis === "day" ? "до кінця названого дня"
-    : basis === "conditional_next_workday" ? "умовна — до кінця наступного робочого дня" : "часу не названо — 20 хв";
+    : basis === "conditional_next_workday" ? "умовна — до кінця наступного робочого дня"
+    : basis === "client_asked_next_workday" ? "клієнт просив передзвонити — до кінця наступного робочого дня" : "часу не названо — 20 хв";
 }
 
 /** Тип розмови — дзеркало `CONVERSATION_TYPES` у `core/callAiProviders.ts` (ТЗ 30.09.2026). */
-export type ConversationTypeT = "cargo_request" | "lead_lost" | "carrier" | "vendor" | "job_seeker" | "wrong_number" | "no_dialog" | "other";
+export type ConversationTypeT = "cargo_request" | "lead_lost" | "call_later" | "carrier" | "vendor" | "job_seeker" | "wrong_number" | "no_dialog" | "other";
 export const TYPE_LABEL: Readonly<Record<ConversationTypeT, string>> = {
   cargo_request: "Запит на перевезення",
   lead_lost: "Втрачений лід (запит неактуальний)",
+  call_later: "Незручно говорити — просив передзвонити",
   carrier: "Перевізник",
   vendor: "Нам щось продають",
   job_seeker: "Пошук роботи",
@@ -222,4 +226,172 @@ export async function blobErrorBody(data: unknown): Promise<unknown> {
     const body = JSON.parse(await (data as Blob).text()) as unknown;
     return typeof (body as { error?: unknown } | null)?.error === "string" ? body : data;
   } catch { return data; }
+}
+
+/**
+ * Репліка, у якій прозвучала цитата з розбору: перша, чий текст містить цитату (без регістру й зайвих пробілів).
+ * −1 — цитати немає або вона не знайдена дослівно (тоді в картці не перемотуємо і не підсвічуємо — не вгадуємо).
+ */
+export function quoteTurnIndex(turns: readonly { text: string }[] | null, quote: string): number {
+  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+  const q = norm(quote);
+  if (!turns || q.length < 3) return -1;
+  return turns.findIndex((t) => norm(t.text).includes(q));
+}
+
+// ─── Екран D (08.10.2026): чек-лист і черга розбору ─────────────────────────────────────────────────────────────
+// Стани пунктів і «потребує розбору» приходять із сервера (`core/firstTouchTeamReport.ts`); тут — лише підписи й
+// складання по менеджерах (частки й середні), без жодного другого правила.
+
+export type CheckMarkT = "y" | "n" | "o";
+export interface ChecklistT { request: CheckMarkT; price: CheckMarkT; promise: CheckMarkT; objection: CheckMarkT }
+export type ReviewReasonT = "noCall" | "late" | "noPrice" | "lost";
+
+export const CHECK_ITEMS: readonly { key: keyof ChecklistT; label: string }[] = [
+  { key: "request", label: "Запит" }, { key: "price", label: "Ціна" }, { key: "promise", label: "Обіцянка" }, { key: "objection", label: "Заперечення" },
+];
+export const CHECK_MARK_UI: Record<CheckMarkT, { label: string; color: string }> = {
+  y: { label: "так", color: "#4ade80" }, n: { label: "ні", color: "#f87171" }, o: { label: "не рахується", color: "#d1d5db" },
+};
+export const REVIEW_REASON_UI: Record<ReviewReasonT, { label: string; tone: Tone }> = {
+  noCall: { label: "Немає дзвінка", tone: "bad" },
+  late: { label: "Запізнився", tone: "warn" },
+  noPrice: { label: "Без ціни", tone: "warn" },
+  lost: { label: "Втрачений лід", tone: "muted" },
+};
+const REASON_ORDER: Record<ReviewReasonT, number> = { noCall: 0, late: 1, noPrice: 2, lost: 3 };
+
+/** «2/3» — виконано з тих, що рахуються; `null` — ще не розібрано. */
+export function scoreLabel(s: { yes: number; total: number } | null): string | null {
+  return s && s.total > 0 ? `${String(s.yes)}/${String(s.total)}` : null;
+}
+
+/** Середній бал по розмовах із балом, у % (ТЗ 08.10.2026: пунктів 2–4, тож «з N» між розмовами не порівнюється); `null` — немає жодної. */
+export function avgScorePct(scores: readonly ({ yes: number; total: number } | null)[]): number | null {
+  const xs = scores.filter((s): s is { yes: number; total: number } => s != null && s.total > 0).map((s) => s.yes / s.total);
+  return xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 100) : null;
+}
+
+/** Частка «так» серед «так + ні» по одному пункту; `null` — пункт ніде не рахувався. */
+export function markPct(cls: readonly (ChecklistT | null)[], key: keyof ChecklistT): number | null {
+  const ms = cls.filter((c): c is ChecklistT => c != null).map((c) => c[key]).filter((m) => m !== "o");
+  return ms.length ? Math.round((ms.filter((m) => m === "y").length / ms.length) * 100) : null;
+}
+
+export interface ChecklistLine { managerId: number | null; name: string; calls: number; score: number | null;
+  request: number | null; price: number | null; promise: number | null; objection: number | null;
+  /** Заперечень було / з них опрацьовано. */
+  objections: number; objectionsHandled: number;
+  /** Успіх угоди: успішних із розібраних. */
+  success: number }
+/** Рядок на менеджера: розібрані розмови звіту, середній бал і частка по кожному пункту. Найслабші — згори. */
+export function managerChecklist<T extends { inReport: boolean; managerId: number | null; managerName: string | null;
+  checklist: ChecklistT | null; checkScore: { yes: number; total: number } | null;
+  dealOutcome?: { state: string } | null }>(rows: readonly T[]): ChecklistLine[] {
+  const by = new Map<string, T[]>();
+  for (const r of rows) if (r.inReport && r.checklist) {
+    const k = r.managerId == null ? "none" : String(r.managerId);
+    by.set(k, [...(by.get(k) ?? []), r]);
+  }
+  return [...by.values()].map((g) => ({
+    managerId: g[0].managerId, name: g[0].managerName ?? "Менеджер невідомий", calls: g.length,
+    score: avgScorePct(g.map((r) => r.checkScore)),
+    request: markPct(g.map((r) => r.checklist), "request"), price: markPct(g.map((r) => r.checklist), "price"),
+    promise: markPct(g.map((r) => r.checklist), "promise"), objection: markPct(g.map((r) => r.checklist), "objection"),
+    objections: g.filter((r) => r.checklist!.objection !== "o").length, objectionsHandled: g.filter((r) => r.checklist!.objection === "y").length,
+    success: g.filter((r) => r.dealOutcome?.state === "success").length,
+  })).sort((a, b) => (a.score ?? 99) - (b.score ?? 99) || a.name.localeCompare(b.name, "uk"));
+}
+
+/**
+ * Сортування блоку менеджерів кліком по назві колонки (прохання Романа 09.10.2026). Перший клік по колонці з
+ * цифрами — найслабші згори (блок для того, щоб знайти, хто просідає), повторний — навпаки. «—» (пункт ніде не
+ * рахувався) — ЗАВЖДИ внизу, в обидва боки: інакше порожнеча вилазить угору як найгірший результат.
+ */
+export type MgrSortKey = "name" | "score" | "request" | "price" | "promise" | "objection" | "success";
+export interface MgrSort { key: MgrSortKey; dir: "asc" | "desc" }
+export const MGR_SORT_DEFAULT: MgrSort = { key: "score", dir: "asc" };
+export const MGR_SORT_KEYS: readonly MgrSortKey[] = ["name", "score", "request", "price", "promise", "objection", "success"];
+export function nextMgrSort(cur: MgrSort, key: MgrSortKey): MgrSort {
+  return cur.key === key ? { key, dir: cur.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" };
+}
+const mgrValue = (l: ChecklistLine, k: Exclude<MgrSortKey, "name">): number | null =>
+  k === "objection" ? (l.objections ? l.objectionsHandled / l.objections : null)
+    : k === "success" ? (l.calls ? l.success / l.calls : null)
+    : l[k];
+export function sortManagerLines(lines: readonly ChecklistLine[], s: MgrSort): ChecklistLine[] {
+  const sign = s.dir === "asc" ? 1 : -1;
+  const byName = (a: ChecklistLine, b: ChecklistLine) => a.name.localeCompare(b.name, "uk");
+  if (s.key === "name") return [...lines].sort((a, b) => sign * byName(a, b));
+  const k = s.key;
+  return [...lines].sort((a, b) => {
+    const va = mgrValue(a, k), vb = mgrValue(b, k);
+    if (va == null || vb == null) return va == null && vb == null ? byName(a, b) : va == null ? 1 : -1;
+    return sign * (va - vb) || (k === "success" ? sign * (a.success - b.success) : 0) || byName(a, b);
+  });
+}
+/** Збережений вибір із браузера; сміття чи порожнеча — порядок за замовчуванням. */
+export function parseMgrSort(raw: string | null): MgrSort {
+  const [key, dir] = (raw ?? "").split(":");
+  return (MGR_SORT_KEYS as readonly string[]).includes(key) && (dir === "asc" || dir === "desc") ? { key: key as MgrSortKey, dir } : MGR_SORT_DEFAULT;
+}
+
+/** Черга розбору: лише ті, що потребують розбору (прапорець сервера); спершу «немає дзвінка», далі новіші. */
+export function queueRows<T extends { needsReview: boolean; reviewReason: ReviewReasonT | null; calledAt: string }>(rows: readonly T[]): T[] {
+  return rows.filter((r) => r.needsReview && r.reviewReason)
+    .sort((a, b) => REASON_ORDER[a.reviewReason!] - REASON_ORDER[b.reviewReason!] || b.calledAt.localeCompare(a.calledAt));
+}
+
+/** Медіана хвилин (реакція по втрачених) — `null`, якщо даних немає. */
+export function medianMin(xs: readonly (number | null | undefined)[]): number | null {
+  const v = xs.filter((x): x is number => typeof x === "number").sort((a, b) => a - b);
+  if (!v.length) return null;
+  const m = Math.floor(v.length / 2);
+  return v.length % 2 ? v[m] : Math.round((v[m - 1] + v[m]) / 2);
+}
+
+// ─── Плитки (ТЗ «фінальні доробки» 08.10.2026, пункт 3) ─────────────────────────────────────────────────────────
+// ОДНЕ правило на плитку: і число, і список після кліку беруть `TILE_MATCH[k]` — тож вони не можуть розійтися.
+// Стани й знаменники — від сервера (`checklist`, `flags`, `dealOutcome`); фронт лише рахує.
+
+export type TileKey = "noCall" | "noPrice" | "objNotHandled" | "lost" | "success";
+export interface TileRow {
+  promiseState: PromiseStateT | null; checklist: ChecklistT | null; conversationType: ConversationTypeT | null;
+  dealOutcome: { state: string } | null; flags: { analysed: boolean; priceable: boolean; agreement: boolean; lost: boolean };
+}
+export const TILE_MATCH: Record<TileKey, (r: TileRow) => boolean> = {
+  noCall: (r) => r.flags.agreement && r.promiseState === "broken",
+  noPrice: (r) => r.checklist?.price === "n",
+  objNotHandled: (r) => r.checklist?.objection === "n",
+  lost: (r) => r.flags.lost,
+  success: (r) => r.flags.analysed && r.dealOutcome?.state === "success",
+};
+/** Скільки успіхів треба в КОЖНІЙ групі, щоб показувати відсоток, а не лише «X з N» (рішення Романа 08.10.2026). */
+export const SUCCESS_MIN_FOR_PCT = 30;
+
+export interface TileStats {
+  noCall: { n: number; of: number }; price: { yes: number; of: number; pct: number | null };
+  objection: { handled: number; of: number; pct: number | null }; lost: number; success: { n: number; of: number };
+}
+export function tileStats(rows: readonly TileRow[]): TileStats {
+  const pct = (a: number, b: number) => (b ? Math.round((a / b) * 100) : null);
+  const priced = rows.filter((r) => r.checklist && r.checklist.price !== "o");
+  const objs = rows.filter((r) => r.checklist && r.checklist.objection !== "o");
+  const priceYes = priced.filter((r) => r.checklist!.price === "y").length;
+  const handled = objs.filter((r) => r.checklist!.objection === "y").length;
+  return {
+    noCall: { n: rows.filter(TILE_MATCH.noCall).length, of: rows.filter((r) => r.flags.agreement).length },
+    price: { yes: priceYes, of: priced.length, pct: pct(priceYes, priced.length) },
+    objection: { handled, of: objs.length, pct: pct(handled, objs.length) },
+    lost: rows.filter(TILE_MATCH.lost).length,
+    success: { n: rows.filter(TILE_MATCH.success).length, of: rows.filter((r) => r.flags.analysed).length },
+  };
+}
+
+/** «Ціна названа → успіх» і «не названа → успіх»: числами; відсоток — лише коли в обох групах ≥ `SUCCESS_MIN_FOR_PCT`. */
+export function priceSuccessSplit(rows: readonly TileRow[]): { named: { n: number; of: number }; notNamed: { n: number; of: number }; enough: boolean } {
+  const win = (r: TileRow) => r.dealOutcome?.state === "success";
+  const named = rows.filter((r) => r.checklist?.price === "y"), notNamed = rows.filter((r) => r.checklist?.price === "n");
+  const a = { n: named.filter(win).length, of: named.length }, b = { n: notNamed.filter(win).length, of: notNamed.length };
+  return { named: a, notNamed: b, enough: a.n >= SUCCESS_MIN_FOR_PCT && b.n >= SUCCESS_MIN_FOR_PCT };
 }

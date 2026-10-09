@@ -4,6 +4,7 @@ import { pool } from "../db/pool.js";
 import { isBankFee } from "../core/bankReport.js";
 import { toUah } from "../bankSources/fx.js";
 import * as mono from "../bankSources/mono.js";
+import { tokenFor } from "../bankSources/token.js";
 import * as privat from "../bankSources/privat.js";
 import type { BankAccountRow, NormalizedTx, BankAdapter } from "../bankSources/types.js";
 import { syncBankOutcome } from "./syncBankOutcome.js";
@@ -38,7 +39,7 @@ export async function upsertTx(accountId: number, tx: NormalizedTx, unmatched = 
 export async function syncBank(): Promise<{ synced: number; inserted: number; skipped: string[] }> {
   const accounts = await pool.query<BankAccountRow>(
     // `manual` (Сейф) — без банку: записи вносить людина (`core/bankManual.ts`), синкати нічого.
-    `SELECT id, company, bank, label, currency, external_account_id, iban, env_key_name, mono_type
+    `SELECT id, company, bank, label, currency, external_account_id, iban, env_key_name, mono_type, mono_pan_last4
        FROM bank_accounts WHERE is_active = true AND bank <> 'manual'`
   );
   let inserted = 0, synced = 0;
@@ -47,7 +48,7 @@ export async function syncBank(): Promise<{ synced: number; inserted: number; sk
   // джоби — див. `syncBankOutcome.ts`, чому «рядок у лозі» тут не рахується за сигнал.
   const failed: { label: string; error: string }[] = [];
   for (const acc of accounts.rows) {
-    const token = acc.env_key_name ? process.env[acc.env_key_name] : undefined;
+    const token = tokenFor(acc.env_key_name);
     if (!token) { skipped.push(acc.label); console.warn(`syncBank: рахунок «${acc.label}» пропущено — немає env ${acc.env_key_name}`); continue; }
     const adapter = ADAPTERS[acc.bank];
     if (!adapter) { skipped.push(acc.label); continue; }
@@ -60,6 +61,12 @@ export async function syncBank(): Promise<{ synced: number; inserted: number; sk
         if (!rid) { skipped.push(acc.label); console.warn(`syncBank: «${acc.label}» — не знайдено рахунок для привʼязки`); continue; }
         await pool.query(`UPDATE bank_accounts SET external_account_id=$1 WHERE id=$2`, [rid, acc.id]);
         acc.external_account_id = rid;
+        // IBAN — лише коли порожній (правку адміна не перетираємо): без нього поповнення картки з наших рахунків
+        // не впізнається як переказ між своїми (картка Олександра, 07.10.2026).
+        if (!acc.iban && typeof adapter.resolveIban === "function") {
+          const iban = await adapter.resolveIban(acc).catch(() => null);
+          if (iban) await pool.query(`UPDATE bank_accounts SET iban=$1 WHERE id=$2 AND iban IS NULL`, [iban, acc.id]);
+        }
         console.warn(`syncBank: «${acc.label}» привʼязано рахунок; виписку тягне наступний цикл`);
         continue;
       }

@@ -388,12 +388,31 @@ export interface AiCallRowT {
   inReport: boolean; typeCheck: boolean; typeOverride: { isCargo: boolean; byName: string | null; at: string } | null;
   /** «Чому не озвучено ціну» і «Опрацьовано» (ТЗ 30.09.2026). */
   priceNote: AiNoteT | null; missedNote: AiNoteT | null; offlineNote: AiNoteT | null;
+  reactionMin?: number | null; reactionOffHours?: boolean;
+  /** Екран D (08.10.2026): чек-лист з 3 пунктів і черга розбору — стани рахує сервер (`core/firstTouchTeamReport.ts`). */
+  checklist: AiChecklistT | null; checkScore: { yes: number; total: number } | null;
+  reviewReason: AiReviewReasonT | null; needsReview: boolean; reviewNote: AiNoteT | null;
+  objection: AiObjectionT | null; dealOutcome: AiDealOutcomeT | null;
+  /** Знаменники плиток — від ядра (`firstTouchTeamReport.ts`), фронт їх не вирішує. */
+  flags: { analysed: boolean; priceable: boolean; agreement: boolean; lost: boolean };
 }
+export type AiCheckMarkT = "y" | "n" | "o";
+export interface AiChecklistT { request: AiCheckMarkT; price: AiCheckMarkT; promise: AiCheckMarkT; objection: AiCheckMarkT }
+/** Заперечення (окрема рубрика, ТЗ 08.10.2026). */
+export interface AiObjectionT { present: boolean; type: "price" | "think" | "competitor" | "not_now" | "other" | "none";
+  client_quote: string; handled: "handled" | "not_handled" | "n/a"; manager_action: string; quote_found?: boolean | null }
+/** Успіх угоди з Kommo — стан ЗАРАЗ. */
+export interface AiDealOutcomeT { state: "success" | "lost" | "open"; lossReason: string | null }
+export type AiReviewReasonT = "noCall" | "late" | "noPrice" | "lost";
 export interface AiNoteT { text: string; byName: string | null; at: string }
 export interface AiCallsResp {
   period: { from: string; to: string }; truncated: boolean; rows: AiCallRowT[];
   /** Менеджер «Виключених» не бачить (ТЗ 30.09.2026 п.7) — сервер їх і не віддає. */
   canSeeExcluded: boolean;
+  /** Чи може цей користувач ставити «Розібрано» (тімлід і адмін) — тоді є черга розбору. */
+  canReview: boolean;
+  /** Ціль «ціну озвучено», % — з «Налаштувань» (адмін), за замовчуванням 50. */
+  priceTargetPct: number;
   silence: { minGapHours: number; normFrom: string | null };
 }
 export async function fetchAiCalls(params: { from: string; to: string }): Promise<AiCallsResp> {
@@ -415,6 +434,8 @@ export interface AiCallCardResp {
   dealUrls: { kommoId: number; url: string }[];
   result: AiAnalysis | null; turns: AiTurn[] | null; transcriptHidden: boolean;
   managerChannel: number | null; durationSec: number | null; nextOutboundAt: string | null;
+  /** Запис одним каналом: `mixed` — голоси не розділено, `voices` — розділено за голосом; `null` — стерео. */
+  mono: "mixed" | "voices" | null;
   /** Термін і стан кожної обіцянки — у порядку `result.promises`; обіцянки клієнта → `null`. */
   promiseChecks: ({ deadline: string; countUntil: string; basis: string; state: PromiseStateT } | null)[];
   callsAfter: { at: string; billsec: number; direction: "in" | "out"; managerName: string | null; byPromiser: boolean }[];
@@ -423,10 +444,13 @@ export interface AiCallCardResp {
   canEditType: boolean;
   /** Хто що може писати й чи можна слухати запис — вирішує сервер. */
   noteRights: { price: boolean; missed: boolean; offline: boolean };
+  /** Екран D: чек-лист і стан розбору — ті самі, що в рядку списку; `canReview` — тімлід і адмін. */
+  checklist: AiChecklistT | null; checkScore: { yes: number; total: number } | null;
+  reviewReason: AiReviewReasonT | null; needsReview: boolean; canReview: boolean;
   canListen: boolean;
 }
 /** Коментар: `price` — «Чому не озвучено ціну», `missed` — «Опрацьовано». Порожній текст прибирає. */
-export async function putAiCallNote(uniqueid: string, kind: "price" | "missed" | "offline", text: string): Promise<void> {
+export async function putAiCallNote(uniqueid: string, kind: "price" | "missed" | "offline" | "review", text: string): Promise<void> {
   await api.put(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/note`, { kind, text });
 }
 /** Запис розмови — байтами через наш сервер (з авторизацією), а не прямим посиланням Ringostat. */
@@ -465,11 +489,13 @@ export interface AiTeamReportResp {
   rows: AiPoolRowT[];
 }
 /** 🎛 Налаштування «Першого дотику» (лише адмін): вікно повторного, допуск і мінімум передзвону, колір блоку. */
-export interface FirstTouchTunablesT { repeatWindowDays: number | null; callbackGraceMin: number; callbackMinDeadlineMin: number; bannerTone: "neutral" | "alert" }
+export interface FirstTouchTunablesT { repeatWindowDays: number | null; callbackGraceMin: number; callbackMinDeadlineMin: number; bannerTone: "neutral" | "alert";
+  /** Ціль «ціну озвучено», % (ТЗ 08.10.2026). */
+  priceTargetPct: number }
 export interface FirstTouchSettingsResp {
   current: FirstTouchTunablesT;
   recommended: { repeatWindowDays: number; callbackGraceMin: number; callbackMinDeadlineMin: number };
-  bounds: Record<"repeatWindowDays" | "callbackGraceMin" | "callbackMinDeadlineMin", { min: number; max: number }>;
+  bounds: Record<"repeatWindowDays" | "callbackGraceMin" | "callbackMinDeadlineMin" | "priceTargetPct", { min: number; max: number }>;
   history: (FirstTouchTunablesT & { setByName: string | null; setAt: string })[];
 }
 export async function fetchFirstTouchSettings(): Promise<FirstTouchSettingsResp> {
@@ -1114,6 +1140,8 @@ export interface KvpManager {
   avgCheckAwaiting: number | null; awaitingDeals: number; expectedThisMonth: number; expectedNextMonth: number; expectedPastMonths: number;
   createdSplit: CreatedSplit;
   daily: KvpDay[]; weeks: KvpWeek[];
+  /** План місяця − факт з 1-го числа; лише коли звіт = один повний місяць, інакше null. Відʼємний = понад план. */
+  remainingToPlan?: number | null;
 }
 export interface KvpExpBucket { deals: number; sum: number }
 // Крок Д фінал A — детальний дрил менеджера weeks→days (лінивий фетч)
@@ -1156,6 +1184,8 @@ export interface KvpTeam {
   // #4 два чеки команди: «успішно» (success за місяць) + «в очікуванні» (chainInflight знімок).
   avgCheckSuccess: number | null; avgCheckAwaiting: number | null;
   expectedThisMonth: number; expectedNextMonth: number; expectedPastMonths: number; weeks: KvpWeek[];
+  /** План місяця − факт з 1-го числа; лише коли звіт = один повний місяць, інакше null. Відʼємний = понад план. */
+  remainingToPlan?: number | null;
 }
 export interface KvpSignal { severity: "critical" | "serious" | "warning" | "info"; icon: string; title: string; detail: string; action: string; expectedThisMonth?: number; expectedNextMonth?: number }
 export interface KvpSeriesRow { ym: string; [k: string]: number | string | boolean }
@@ -2029,6 +2059,10 @@ export interface ReceivableClient {
   noteUpdatedAt: string | null;
   /** 🗓 До якої угоди привʼязано запис (з 06.10.2026); `null` — старий клієнтський запис. */
   noteDealId?: number | null;
+  /** 📞 4631: розмова біля дати домовленості. Стан рахує сервер (`core/receivableCallLink.callLinkState`). */
+  callLink?: ReceivableCallLink;
+  /** Скільки разів переносили дату поточної домовленості (журнал — з дня викату 4631). */
+  rescheduleCount?: number;
   /** Чи запис про ПОТОЧНИЙ борг. `false` — він з попередньої угоди: дата береться з CRM. Рішення сервера. */
   noteActual?: boolean;
   /**
@@ -2190,6 +2224,57 @@ export async function fetchUnmergePreview(canonical: string): Promise<UnmergePre
 /** Один запис журналу домовленостей — із датою й автором. */
 export interface ReceivableNoteEntry { comment: string; author: string | null; at: string }
 
+/** 📞 4631. Стани — дзеркало `CallLinkState` у `core/receivableCallLink.ts`. */
+export type ReceivableCallState = "none" | "crm" | "no_call" | "pending" | "no_talk" | "other_number" | "ok";
+export interface ReceivableCallFacts {
+  calledAt: string; billsec: number; managerName: string | null; sameClient: boolean;
+  /** 💬 Розбір розмови (прохід 2): рядок для списку й підсумок; `null` — розбору ще немає. */
+  ai?: { line: string; summary: string } | null;
+  /** Розмову ще розпізнають або розбирають. */
+  aiPending?: boolean;
+}
+/** Розбір розмови про борг — дзеркало `DebtResult` у `core/receivableCallAi.ts`. */
+export interface ReceivableDebtAnalysis {
+  summary: string; manager_channel: "0" | "1" | "unknown"; promised: boolean; amount_uah: number | null; pay_date: string | null;
+  partial: boolean; remainder: string; who: string; delay_reason: string; next_step: string; quote: string; quote_found?: boolean | null;
+}
+export interface ReceivableCallCard {
+  sttStatus: string | null; sttFailure: string | null; analysisStatus: string | null; analysisFailure: string | null;
+  turns: AiTurn[] | null; managerChannel: number | null; durationSec: number | null; mono: "voices" | "mixed" | null;
+  analysis: ReceivableDebtAnalysis | null;
+}
+/** 💬 Картка розмови про борг: текст по репліках і розбір (ролі першого дотику, лише прикріплений дзвінок). */
+export async function fetchReceivableCallCard(clientKey: string, uniqueid: string): Promise<ReceivableCallCard> {
+  const { data } = await api.get<ReceivableCallCard>("/dashboard/receivables/call-card", { params: { clientKey, uniqueid } });
+  return data;
+}
+export interface ReceivableCallLink { state: ReceivableCallState; uniqueid: string | null; call: ReceivableCallFacts | null }
+export interface ReceivableDateLogEntry {
+  at: string; oldDate: string | null; newDate: string | null; dealId: number | null;
+  /** Була дата → стала інша. Перша дата, зняття дати чи нова угода — ні. */
+  reschedule: boolean;
+  author: string | null; callUniqueid: string | null; call: ReceivableCallFacts | null;
+}
+
+/** 🗓 Журнал змін дати домовленості (4631): кожен крок із розмовою, якою його підкріпили. */
+export async function fetchReceivableDateLog(clientKey: string): Promise<ReceivableDateLogEntry[]> {
+  const { data } = await api.get<{ entries: ReceivableDateLogEntry[] }>(
+    "/dashboard/receivables/date-log", { params: { clientKey } });
+  return data.entries;
+}
+
+/** 🎧 Запис розмови, прикріпленої до домовленості клієнта (байти віддає сервер, як у першому дотику). */
+export async function fetchReceivableCallRecording(clientKey: string, uniqueid: string): Promise<Blob> {
+  try {
+    const { data } = await api.get<Blob>("/dashboard/receivables/call-recording", { params: { clientKey, uniqueid }, responseType: "blob" });
+    return data;
+  } catch (e) {
+    const res = (e as { response?: { data?: unknown } }).response;
+    if (res) res.data = await blobErrorBody(res.data);
+    throw e;
+  }
+}
+
 /**
  * 🗓 Історія домовленостей по клієнту. Поле на екрані показує лише поточний
  * тиждень; усе старіше живе тут і НЕ гине — тому «очищення» безпечне.
@@ -2235,6 +2320,11 @@ export async function saveReceivableNote(payload: {
   clear?: boolean;
   /** До якої угоди запис (06.10.2026). Не передали — сервер бере угоду з найближчою датою оплати в CRM. */
   dealId?: number | null;
+  /**
+   * 📞 4631: посилання на запис розмови в Ringostat. Не передали — сервер сам вирішує (нова дата знімає стару
+   * розмову, та сама — лишає); порожнє — прибрати.
+   */
+  callUrl?: string | null;
 }): Promise<void> {
   await api.put("/dashboard/receivables/note", payload);
 }
@@ -2493,6 +2583,9 @@ export interface ReceivablesResponse {
    * клієнту. Схована кнопка правом не є.
    */
   canRequestLimit?: boolean;
+  /** 📞 4631: чи може писати домовленість (менеджер — свої клієнти) і чи може слухати прикріплені розмови. */
+  canEditAgreement?: boolean;
+  canListenCalls?: boolean;
   /**
    * 🔗 Скільки псевдонімів уже зібрано під кожним канонічним ключем. Діалог
    * обʼєднання читає це, щоб не пропонувати приречену дію: ключ, який уже є
@@ -2881,22 +2974,66 @@ export interface StatsSeriesResp { block: string; metric: string; granularity: "
   plan?: { scopeKey: string; points: { period: string; value: number }[] }[] }
 /** 📊 Плитки й таблиця команд (ТЗ 28.09, блоки 1–3). Числа рахує сервер; фронт лише показує. */
 export interface StatsTile {
-  key: "revenue" | "dispatched" | "calls" | "transfers"; label: string; unit: "₴" | "шт";
+  key: "revenue" | "dispatched" | "calls" | "transfers" | "avgCheck"; label: string; unit: "₴" | "шт";
   now: number; prev: number; deltaPct: number | null; plan: number | null; planPct: number | null;
   sub: { label: string; value: number } | null; planNote: string | null; formula: string;
   /** Тиждень через межу місяців: план = сума частин (по одній на місяць). */
   planParts?: { from: string; to: string; plan: number; kind: "auto" | "manual" }[];
+  /** Як рахується план цього періоду (тиждень — динамічний, узгоджено в задачі 5146). */
+  planRule?: string;
+  /** Колір лише «у нормі / нижче» (сер. чек проти цілі, 4632). */
+  binary?: boolean;
+  /** 📞 Дзвінки (розмови + спроби) на менеджера за робочий день проти норми з «Планів». */
+  callsNorm?: { perDay: number | null; norm: number | null; managers: number; workDays: number };
 }
 export interface StatsTeamRow { teamId: number; name: string; archived: boolean; fact: number; prev: number;
-  deltaPct: number | null; plan: number | null; pct: number | null; rank: number }
+  deltaPct: number | null; plan: number | null; pct: number | null; rank: number;
+  /** 🎯 Сер. чек команди за період і ціль на місяць; ціль null — менше 30 угод за базу. */
+  avgCheck: number | null; avgCheckTarget: number | null; avgCheckBaseDeals: number }
+export type StatsGran = "week" | "month" | "range";
 export interface StatsSummaryResp {
-  gran: "week" | "month"; asOf: string; complete: boolean;
+  gran: StatsGran; asOf: string; complete: boolean;
   period: { from: string; to: string }; cur: { from: string; to: string }; prev: { from: string; to: string };
+  /** З чим порівняння — датами («минулого тижня (29.09–05.10)»), без «до» на початку. */
+  cmpLabel: string;
   tiles: StatsTile[]; teams: StatsTeamRow[];
 }
-export async function fetchStatsSummary(params: { gran: "week" | "month"; anchor?: string }): Promise<StatsSummaryResp> {
+export async function fetchStatsSummary(params: { gran: StatsGran; anchor?: string; from?: string; to?: string }): Promise<StatsSummaryResp> {
   const { data } = await api.get<StatsSummaryResp>("/statistics/summary", { params });
   return data;
+}
+
+/** 📋 Вкладка «План-факт» (4632). Дзеркало `PlanFactLine` у `statistics/statsSummary.ts`. */
+export interface PlanFactLine {
+  plan: number | null; fact: number; pct: number | null; remaining: number | null; expect: number; needPerDay: number | null;
+  avgCheck: number | null; successDeals: number; callsPerDay: number | null;
+}
+export interface PlanFactManager extends PlanFactLine { managerId: number; name: string; isActive: boolean }
+export interface PlanFactTeam extends PlanFactLine {
+  teamId: number | null; name: string; archived: boolean; avgCheckTarget: number | null; avgCheckBaseDeals: number;
+  managers: PlanFactManager[];
+}
+export interface PlanFactResp {
+  gran: StatsGran; period: { from: string; to: string }; cur: { from: string; to: string }; complete: boolean; today: string;
+  workDaysLeft: number; planRule: string; callsNorm: number | null; avgCheckRule: string;
+  company: PlanFactLine | null; teams: PlanFactTeam[];
+}
+export async function fetchStatsPlanFact(params: { gran: StatsGran; anchor?: string; from?: string; to?: string }): Promise<PlanFactResp> {
+  const { data } = await api.get<PlanFactResp>("/statistics/plan-fact", { params });
+  return data;
+}
+
+/** 📞 Норма дзвінків на день у «Планах» (4632): ставить КВП, діє з місяця й до наступної зміни. */
+export interface CallsNormResp {
+  current: number | null; month: string; canEdit: boolean;
+  history: { fromMonth: string; norm: number; setBy: string | null; setAt: string }[];
+}
+export async function fetchCallsNorm(): Promise<CallsNormResp> {
+  const { data } = await api.get<CallsNormResp>("/plans/calls-norm");
+  return data;
+}
+export async function saveCallsNorm(body: { norm: number; fromMonth: string }): Promise<void> {
+  await api.post("/plans/calls-norm", body);
 }
 export async function fetchStatsSeries(params: { block: string; metric: string; granularity: string; from?: string; to?: string; unit?: string }): Promise<StatsSeriesResp> {
   const { data } = await api.get<StatsSeriesResp>("/statistics/series", { params });
@@ -3936,6 +4073,8 @@ export interface BankAccount {
   id: number; company: string; bank: "mono" | "privat" | "manual"; label: string; currency: string;
   /** Рахунок «лише фінанси» (особисті картки власника ФОП, Сейф): сервер віддає його лише ролям із `view_cashflow`. */
   finance_only?: boolean;
+  /** Моно: останні 4 цифри картки — за ними синк обирає рахунок під токеном (лише для панелі керування). */
+  mono_pan_last4?: string | null;
   external_account_id: string | null; is_active: boolean;
   legal_name: string | null; edrpou_ipn: string | null; iban: string | null;
   key_card?: string | null; // ключ-карта ФОП (звичайні реквізити, як IBAN)
@@ -4553,7 +4692,9 @@ export async function fetchMergeJournal(): Promise<MergeJournalRow[]> {
   const { data } = await api.get<MergeJournalRow[]>("/dashboard/client-merge/journal");
   return data;
 }
-export async function assignClientManager(body: { clientKey: string; managerId: number; reason: string; kind: "fix" | "transfer" }): Promise<{ effectiveFrom: string; kind: "fix" | "transfer"; note: string }> {
+/** 📝 Задача новому менеджеру при передачі клієнта (08.10.2026): при «передачі» обовʼязкова, при «виправленні» — за бажанням. */
+export interface TransferTaskBody { text: string; deadline: string; priority: "low" | "medium" | "high"; details: string }
+export async function assignClientManager(body: { clientKey: string; managerId: number; reason: string; kind: "fix" | "transfer"; task?: TransferTaskBody }): Promise<{ effectiveFrom: string; kind: "fix" | "transfer"; note: string; taskId: number | null }> {
   const { data } = await api.post("/dashboard/client-manager", body);
   return data;
 }

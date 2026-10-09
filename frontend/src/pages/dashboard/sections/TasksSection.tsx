@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, useEffect, type CSSProperties, type Dispatch, type SetStateAction } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import { parseTaskIdParam, deepLinkState } from "../taskDeepLink";
 import { awaitsMyAcceptance } from "../acceptanceNotify";
 import {
@@ -618,6 +619,7 @@ export function TasksSection({
   accountEmail?: string;
   teams?: Team[];
 }) {
+  const dlg = useDialogs();
   const isAdmin = role === "admin";
   // Підпис «чия сторінка»: імʼя менеджера (якщо акаунт привʼязаний) або email акаунта.
   const accountName = managerOptions.find((m) => m.id === currentManagerId)?.name || accountEmail || "мій акаунт";
@@ -1073,7 +1075,7 @@ export function TasksSection({
             <button
               title="Прибрати групу (задачі лишаються, повертаються в «Без групи»)"
               onClick={async () => {
-                if (!confirm(`Прибрати групу «${g.name}»? Задачі НЕ видаляються — повернуться в «Без групи».`)) return;
+                if (!(await dlg.confirm(`Прибрати групу «${g.name}»? Задачі НЕ видаляються — повернуться в «Без групи».`))) return;
                 await deleteTaskGroup(g.id).catch(() => {});
                 if (groupFilter === g.id) setGroupFilter("all");
                 reloadGroups(); refreshTasks?.();
@@ -1819,7 +1821,7 @@ export function TasksSection({
                   onFile={(f) => { uploadTargetRef.current = openTask.id; void attachPickedFile(f); }}
                   onOpen={() => setFilesViewer(openTask.id)}
                   onRemove={async (zf) => {
-                    if (!confirm(`Прибрати «${zf.name}»?`)) return;
+                    if (!(await dlg.confirm(`Прибрати «${zf.name}»?`))) return;
                     try {
                       await deleteTaskFile(openTask.id, Number(zf.key));
                       setFiles((cur) => (cur ?? []).filter((x) => x.id !== Number(zf.key)));

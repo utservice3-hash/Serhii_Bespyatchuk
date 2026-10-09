@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import { createPortal } from "react-dom";
 import { useToast } from "../../../components/Toasts";
 import {
@@ -106,6 +107,7 @@ function SigBadge({ f }: { f: DocFile }) {
 }
 
 export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean }) {
+  const dlg = useDialogs();
   const [tree, setTree] = useState<DocTree | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -285,13 +287,13 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
   const mgmt = viewer.isManagement;
   const download = async (f: DocFile) => { try { const url = await fetchDocFileBlobUrl(f.id); const a = document.createElement("a"); a.href = url; a.download = f.name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 60_000); } catch (e) { failToast(e, "Не вдалося завантажити"); } };
   const copyLink = (f: DocFile) => { const url = `${window.location.origin}${window.location.pathname}?doc=${f.id}`; void navigator.clipboard?.writeText(url).then(() => setToast("Посилання скопійовано"), () => setToast(url)); };
-  const renameFile = (f: DocFile) => { const n = window.prompt("Нова назва:", f.name)?.trim(); if (n && n !== f.name) void updateDocFile(f.id, { name: n }).then(load).catch((e) => failToast(e, "Не перейменовано")); };
-  const renameFolder = (f: DocFolder) => { const n = window.prompt("Нова назва папки:", f.name)?.trim(); if (n && n !== f.name) void renameDocFolder(f.id, n).then(load).catch((e) => failToast(e, "Не перейменовано")); };
-  const newSubfolder = (f: DocFolder) => { const n = window.prompt(`Назва підпапки в «${f.name}»:`)?.trim(); if (n) void createDocFolder(n, f.id).then(load).catch((e) => failToast(e, "Не вдалося створити підпапку")); };
-  const deleteFolder = (f: DocFolder) => { if (window.confirm(`Прибрати папку «${f.name}»? Видаляється лише порожня папка: документи й підпапки спершу перенесіть.`)) void deleteDocFolder(f.id).then(() => { if (folderFilter === f.id) setFolderFilter("all"); return load(); }).catch((e) => failToast(e, "Не вдалося")); };
-  const presignFiles = (fs: DocFile[]) => {
+  const renameFile = async (f: DocFile) => { const n = (await dlg.prompt("Нова назва:", f.name))?.trim(); if (n && n !== f.name) void updateDocFile(f.id, { name: n }).then(load).catch((e) => failToast(e, "Не перейменовано")); };
+  const renameFolder = async (f: DocFolder) => { const n = (await dlg.prompt("Нова назва папки:", f.name))?.trim(); if (n && n !== f.name) void renameDocFolder(f.id, n).then(load).catch((e) => failToast(e, "Не перейменовано")); };
+  const newSubfolder = async (f: DocFolder) => { const n = (await dlg.prompt(`Назва підпапки в «${f.name}»:`))?.trim(); if (n) void createDocFolder(n, f.id).then(load).catch((e) => failToast(e, "Не вдалося створити підпапку")); };
+  const deleteFolder = async (f: DocFolder) => { if ((await dlg.confirm(`Прибрати папку «${f.name}»? Видаляється лише порожня папка: документи й підпапки спершу перенесіть.`))) void deleteDocFolder(f.id).then(() => { if (folderFilter === f.id) setFolderFilter("all"); return load(); }).catch((e) => failToast(e, "Не вдалося")); };
+  const presignFiles = async (fs: DocFile[]) => {
     const open = fs.filter((f) => f.section === "offer" && !f.archivedAt && !f.inactiveAt && sigKindOpen(f.signature.kind)); if (!open.length) return;
-    const d = window.prompt(`Позначити ${open.length} ${plural(open.length, "офер", "офери", "оферів")} підписаними раніше на папері? Людям нічого не надсилається, нагадування припиняться.\n\nДата підпису РРРР-ММ-ДД або порожньо, якщо невідомо:`, "");
+    const d = (await dlg.prompt(`Позначити ${open.length} ${plural(open.length, "офер", "офери", "оферів")} підписаними раніше на папері? Людям нічого не надсилається, нагадування припиняться.\n\nДата підпису РРРР-ММ-ДД або порожньо, якщо невідомо:`, ""));
     if (d == null) return;
     void runBulk(open.map((f) => f.id), (id) => presignDocFile(id, d.trim() || null), (ok) => `Позначено «підписано раніше»: ${ok}.`);
   };
@@ -331,13 +333,13 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
       ...(f.canSign ? [{ icon: "🔏", label: "Підписати…", run: () => setSelected(f.id) }] : []),
       ...(f.canEdit || mgmt ? ["-" as const] : []),
       ...(mgmt && off && !f.inactiveAt && sigKindOpen(f.signature.kind) ? [{ icon: "✍", label: "Позначити «підписано раніше»…", run: () => presignFiles([f]) }] : []),
-      ...(mgmt && f.signature.earlier ? [{ icon: "↺", label: "Зняти «підписано раніше»", run: () => { if (window.confirm("Зняти позначку «підписано раніше»? Офер знову чекатиме підпису, нагадування відновляться.")) void undoPresignDocFile(f.id).then(load).catch((e) => failToast(e, "Не вдалося")); } }] : []),
+      ...(mgmt && f.signature.earlier ? [{ icon: "↺", label: "Зняти «підписано раніше»", run: async () => { if ((await dlg.confirm("Зняти позначку «підписано раніше»? Офер знову чекатиме підпису, нагадування відновляться."))) void undoPresignDocFile(f.id).then(load).catch((e) => failToast(e, "Не вдалося")); } }] : []),
       ...(f.canEdit ? [{ icon: "✎", label: "Перейменувати", run: () => renameFile(f) }, { icon: "⬆", label: "Нова версія…", run: () => pickVersion(f) }] : []),
       ...(mgmt && f.section === "general" ? [{ icon: "📂", label: "Перенести в…", run: () => setMoveDlg({ kind: "files", ids: [f.id] }) }, { icon: "🔐", label: "Права документа…", run: () => setRightsFile(f) }] : []),
       ...(mgmt && f.inactiveAt ? [{ icon: "✓", label: "Активувати", run: () => void activateDocFile(f.id).then(load).catch((e) => failToast(e, "Не вдалося")) }] : []),
       ...(mgmt ? ["-" as const,
-        { icon: "🗄", label: "В архів", run: () => { if (window.confirm(`Прибрати «${f.name}» в архів? Файл лишається.`)) void archiveDocFile(f.id).then(async () => { setToast("Перенесено в архів"); if (selected === f.id) setSelected(null); await load(); }).catch((e) => failToast(e, "Не вдалося")); } },
-        { icon: "✕", label: "Видалити…", danger: true, run: () => { if (window.confirm(`Видалити «${f.name}»? Документ піде в кошик; файл, версії й підписи в системі лишаються.`)) void deleteDocFile(f.id).then(async () => { setToast("Документ видалено"); if (selected === f.id) setSelected(null); await load(); await loadTrash(); }).catch((e) => failToast(e, "Не вдалося видалити")); } }] : []),
+        { icon: "🗄", label: "В архів", run: async () => { if ((await dlg.confirm(`Прибрати «${f.name}» в архів? Файл лишається.`))) void archiveDocFile(f.id).then(async () => { setToast("Перенесено в архів"); if (selected === f.id) setSelected(null); await load(); }).catch((e) => failToast(e, "Не вдалося")); } },
+        { icon: "✕", label: "Видалити…", danger: true, run: async () => { if ((await dlg.confirm(`Видалити «${f.name}»? Документ піде в кошик; файл, версії й підписи в системі лишаються.`))) void deleteDocFile(f.id).then(async () => { setToast("Документ видалено"); if (selected === f.id) setSelected(null); await load(); await loadTrash(); }).catch((e) => failToast(e, "Не вдалося видалити")); } }] : []),
     ];
   };
   const folderMenu = (f: DocFolder): CtxItem[] => {
@@ -376,7 +378,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
         <h1 className="page-title">📁 Регламенти та документи</h1>
         <div className="page-filters">
           <TelegramChip onToast={setToast} />
-          {viewer.isManagement && <button style={btn()} onClick={() => { const n = window.prompt("Назва нової папки:")?.trim(); if (n) void createDocFolder(n, null).then(load).catch((e) => failToast(e, "Не вдалося створити папку")); }}>➕ Папка</button>}
+          {viewer.isManagement && <button style={btn()} onClick={async () => { const n = (await dlg.prompt("Назва нової папки:"))?.trim(); if (n) void createDocFolder(n, null).then(load).catch((e) => failToast(e, "Не вдалося створити папку")); }}>➕ Папка</button>}
           {canUploadHere && <button className="btn-primary" onClick={() => setUploadOpen(true)}>+ Завантажити</button>}
         </div>
       </div>
@@ -459,12 +461,12 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
                   {activeFolder && viewer.canManageAccess && shelf !== "mine" && shelf !== "archive" && (
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
                       <button style={small} onClick={() => setAccessFolder(activeFolder)}>⚙ Доступи</button>
-                      <button style={small} onClick={() => { const nn = window.prompt("Нова назва папки:", activeFolder.name)?.trim(); if (nn && nn !== activeFolder.name) void renameDocFolder(activeFolder.id, nn).then(load).catch((e) => failToast(e, "Не перейменовано")); }}>✎ Перейменувати</button>
+                      <button style={small} onClick={async () => { const nn = (await dlg.prompt("Нова назва папки:", activeFolder.name))?.trim(); if (nn && nn !== activeFolder.name) void renameDocFolder(activeFolder.id, nn).then(load).catch((e) => failToast(e, "Не перейменовано")); }}>✎ Перейменувати</button>
                       <button style={small} title="Вище серед сусідніх папок" onClick={() => moveFolderStep(activeFolder, -1)}>↑</button>
                       <button style={small} title="Нижче серед сусідніх папок" onClick={() => moveFolderStep(activeFolder, 1)}>↓</button>
                       <button style={small} onClick={() => setMoveDlg({ kind: "folder", folder: activeFolder })}>📂 Перенести</button>
-                      <button style={small} onClick={() => { const n = window.prompt(`Назва підпапки в «${activeFolder.name}»:`)?.trim(); if (n) void createDocFolder(n, activeFolder.id).then(load).catch((e) => failToast(e, "Не вдалося створити підпапку")); }}>➕ Підпапка</button>
-                      <button style={small} onClick={() => { if (window.confirm(`Прибрати папку «${activeFolder.name}»? Видаляється лише порожня папка: документи й підпапки спершу перенесіть.`)) void deleteDocFolder(activeFolder.id).then(() => { setFolderFilter("all"); return load(); }).catch((e) => failToast(e, "Не вдалося")); }}>✕ Прибрати папку</button>
+                      <button style={small} onClick={async () => { const n = (await dlg.prompt(`Назва підпапки в «${activeFolder.name}»:`))?.trim(); if (n) void createDocFolder(n, activeFolder.id).then(load).catch((e) => failToast(e, "Не вдалося створити підпапку")); }}>➕ Підпапка</button>
+                      <button style={small} onClick={async () => { if ((await dlg.confirm(`Прибрати папку «${activeFolder.name}»? Видаляється лише порожня папка: документи й підпапки спершу перенесіть.`))) void deleteDocFolder(activeFolder.id).then(() => { setFolderFilter("all"); return load(); }).catch((e) => failToast(e, "Не вдалося")); }}>✕ Прибрати папку</button>
                     </div>
                   )}
                 </div>
@@ -481,7 +483,7 @@ export function DocumentsSection({ isAdmin: _legacyIsAdmin }: { isAdmin: boolean
                   {picking && <button style={small} onClick={() => setPicked(new Set(picked.size === listFiles.length ? [] : listFiles.map((f) => f.id)))}>{picked.size === listFiles.length ? "Зняти всі" : `Усі ${listFiles.length}`}</button>}
                   {picking && shelf !== "mine" && <button style={small} disabled={!movable.length || bulkBusy} onClick={() => setMoveDlg({ kind: "files", ids: movable.map((f) => f.id) })}>📂 Перенести {movable.length || ""}</button>}
                   {picking && shelf === "mine" && section === "offer" && <button style={small} disabled={!presignable.length || bulkBusy}
-                    onClick={() => { if (window.confirm(`Відмітити ${presignable.length} ${plural(presignable.length, "офер", "офери", "оферів")} як підписані раніше на папері? Людям нічого не надсилається, нагадування припиняться.`)) void runBulk(presignable.map((f) => f.id), (id) => presignDocFile(id), (ok) => `Відмічено «підписано раніше»: ${ok}.`); }}>✍ Підписано раніше {presignable.length || ""}</button>}
+                    onClick={async () => { if ((await dlg.confirm(`Відмітити ${presignable.length} ${plural(presignable.length, "офер", "офери", "оферів")} як підписані раніше на папері? Людям нічого не надсилається, нагадування припиняться.`))) void runBulk(presignable.map((f) => f.id), (id) => presignDocFile(id), (ok) => `Відмічено «підписано раніше»: ${ok}.`); }}>✍ Підписано раніше {presignable.length || ""}</button>}
                   {picking && sel.length > 0 && shelf === "mine" && section === "offer" && sel.length !== presignable.length && <span className="orph-dim" style={{ fontSize: 11.5 }}>{sel.length - presignable.length} з вибраних уже підписані або на підтвердженні</span>}
                 </div>
               );
@@ -651,6 +653,7 @@ function StateBlock({ icon, title, text, action, inline }: { icon: string; title
 
 /* ── Картка документа ───────────────────────────────────────────────────── */
 function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: { file: DocFile; tree: DocTree; onChanged: () => Promise<void>; onClose: () => void; onToast: (s: string, opts?: { error?: boolean }) => void; folderName: (id: number | null) => string }) {
+  const dlg = useDialogs();
   const [cardData, setCardData] = useState<DocCard | null>(null);
   const [viewers, setViewers] = useState<{ who: { label: string; note: string }[]; exceptions: { name: string; until: string | null }[] } | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
@@ -701,18 +704,18 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
       .then(async (r) => { onToast(`Нова версія v${r.version}${file.section === "offer" ? " — офер знову потребує підпису" : ""}`); await onChanged(); })
       .catch((e) => setErr(errOf(e, "Нову версію не вдалося зберегти"))).finally(() => setBusy(false));
   };
-  const rename = () => { const n = window.prompt("Нова назва:", file.name)?.trim(); if (n && n !== file.name) void updateDocFile(file.id, { name: n }).then(onChanged).catch((e) => setErr(errOf(e, "Не перейменовано"))); };
+  const rename = async () => { const n = (await dlg.prompt("Нова назва:", file.name))?.trim(); if (n && n !== file.name) void updateDocFile(file.id, { name: n }).then(onChanged).catch((e) => setErr(errOf(e, "Не перейменовано"))); };
   const changeType = (category: string) => void updateDocFile(file.id, { category }).then(onChanged).catch((e) => setErr(errOf(e, "Тип не змінено")));
-  const editDescription = () => { const d = window.prompt("Опис документа:", file.description ?? ""); if (d != null) void updateDocFile(file.id, { description: d }).then(onChanged).catch((e) => setErr(errOf(e, "Опис не збережено"))); };
-  const archive = () => { if (window.confirm(`Прибрати «${file.name}» з екрана в архів? Файл лишається, видалення не існує.`)) void archiveDocFile(file.id).then(async () => { onToast("Перенесено в архів"); await onChanged(); onClose(); }).catch((e) => setErr(errOf(e, "Не вдалося"))); };
+  const editDescription = async () => { const d = (await dlg.prompt("Опис документа:", file.description ?? "")); if (d != null) void updateDocFile(file.id, { description: d }).then(onChanged).catch((e) => setErr(errOf(e, "Опис не збережено"))); };
+  const archive = async () => { if ((await dlg.confirm(`Прибрати «${file.name}» з екрана в архів? Файл лишається, видалення не існує.`))) void archiveDocFile(file.id).then(async () => { onToast("Перенесено в архів"); await onChanged(); onClose(); }).catch((e) => setErr(errOf(e, "Не вдалося"))); };
   const activate = () => void activateDocFile(file.id).then(async () => { onToast("Документ активовано"); await onChanged(); }).catch((e) => setErr(errOf(e, "Не вдалося")));
-  const remove = () => { if (window.confirm(`Видалити «${file.name}»? Документ зникне з усіх розділів, включно з архівом. Файл, версії й підписи в системі лишаються.`)) void deleteDocFile(file.id).then(async () => { onToast("Документ видалено"); await onChanged(); onClose(); }).catch((e) => setErr(errOf(e, "Не вдалося видалити"))); };
-  const presign = () => {
-    const d = window.prompt("Коли офер підписано на папері? Дата РРРР-ММ-ДД, або лишіть порожнім, якщо невідомо.", "");
+  const remove = async () => { if ((await dlg.confirm(`Видалити «${file.name}»? Документ зникне з усіх розділів, включно з архівом. Файл, версії й підписи в системі лишаються.`))) void deleteDocFile(file.id).then(async () => { onToast("Документ видалено"); await onChanged(); onClose(); }).catch((e) => setErr(errOf(e, "Не вдалося видалити"))); };
+  const presign = async () => {
+    const d = (await dlg.prompt("Коли офер підписано на папері? Дата РРРР-ММ-ДД, або лишіть порожнім, якщо невідомо.", ""));
     if (d == null) return;
     void presignDocFile(file.id, d.trim() || null).then(async () => { onToast("Відмічено «підписано раніше» — офер більше не чекає підпису"); await onChanged(); }).catch((e) => setErr(errOf(e, "Не вдалося відмітити")));
   };
-  const undoPresign = () => { if (window.confirm("Зняти позначку «підписано раніше»? Офер знову чекатиме підпису, нагадування відновляться.")) void undoPresignDocFile(file.id).then(async () => { onToast("Позначку знято"); await onChanged(); }).catch((e) => setErr(errOf(e, "Не вдалося"))); };
+  const undoPresign = async () => { if ((await dlg.confirm("Зняти позначку «підписано раніше»? Офер знову чекатиме підпису, нагадування відновляться."))) void undoPresignDocFile(file.id).then(async () => { onToast("Позначку знято"); await onChanged(); }).catch((e) => setErr(errOf(e, "Не вдалося"))); };
   const restore = () => void restoreDocFile(file.id).then(async () => { onToast("Повернуто з архіву"); await onChanged(); }).catch((e) => setErr(errOf(e, "Не вдалося")));
 
   if (noAccess) return (
@@ -837,7 +840,7 @@ function DocCardPanel({ file, tree, onChanged, onClose, onToast, folderName }: {
             const showEvidence = async (sid: number) => { const win = window.open("about:blank", "_blank"); try { const u = await fetchSigEvidenceBlobUrl(file.id, sid); if (win) win.location.href = u; } catch (e) { win?.close(); setErr(errOf(e, "Фото не відкрилось")); } };
             const decide = async (approve: boolean) => {
               if (!cur) return;
-              const reason = approve ? "" : (window.prompt("Причина відхилення (побачить підписант):") ?? "").trim();
+              const reason = approve ? "" : ((await dlg.prompt("Причина відхилення (побачить підписант):")) ?? "").trim();
               if (!approve && !reason) return;
               setBusy(true);
               try { if (approve) await approveDocSignature(file.id, cur.id); else await rejectDocSignature(file.id, cur.id, reason); onToast(approve ? "Підпис підтверджено" : "Підпис відхилено, підписанту повідомлено"); await onChanged(); }
@@ -1106,6 +1109,7 @@ function SignDialog({ file, onClose, onDone }: { file: DocFile; onClose: () => v
 
 /** 🤖 Чип у шапці: привʼязано / привʼязати Telegram. Потрібен усім, не лише підписантам — сюди йдуть нагадування. */
 function TelegramChip({ onToast }: { onToast: (t: string, opts?: { error?: boolean }) => void }) {
+  const dlg = useDialogs();
   const [tg, setTg] = useState<TelegramStatus | null>(null);
   const [waiting, setWaiting] = useState(false);
   const [linkCode, setLinkCode] = useState<{ code: string; bot: string } | null>(null);
@@ -1120,7 +1124,7 @@ function TelegramChip({ onToast }: { onToast: (t: string, opts?: { error?: boole
   if (!tg || !tg.configured) return null;
   if (tg.linked) {
     return <button title="Telegram привʼязано. Натисніть, щоб відвʼязати" style={{ ...btn(), fontSize: 12, padding: "5px 10px", color: "var(--ok)" }}
-      onClick={() => { if (window.confirm("Відвʼязати Telegram? Коди підпису й нагадування перестануть приходити.")) void unlinkTelegram().then(load); }}>🤖 Telegram ✓</button>;
+      onClick={async () => { if ((await dlg.confirm("Відвʼязати Telegram? Коди підпису й нагадування перестануть приходити."))) void unlinkTelegram().then(load); }}>🤖 Telegram ✓</button>;
   }
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>

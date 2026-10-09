@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
+import { useToast } from "../../../components/Toasts";
 import {
   fetchSettings, saveSettings, type AppSettings,
   fetchUsers, createUser, provisionUsers, resetUserPassword, updateUser, reactivateUser, type DashboardUser,
@@ -9,6 +11,7 @@ import {
 import { NAV_GROUPS } from "../../../components/Layout";
 import { todayKyiv } from "../periodRules";
 import { FirstTouchSettingsCard } from "./FirstTouchSettingsCard";
+import { Toggle } from "../widgets";
 
 // Усі вкладки (ключ+назва) — беремо з реальної навігації, щоб screen_access-редактор
 // точно збігався з тим, що гейтить сервер.
@@ -73,16 +76,6 @@ type Sub = (typeof SUBTABS)[number];
 
 const RED = "#c8102e";
 const err = (e: unknown) => (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Помилка";
-
-function Toggle({ on, disabled, onClick }: { on: boolean; disabled?: boolean; onClick?: () => void }) {
-  return (
-    <button onClick={disabled ? undefined : onClick} disabled={disabled}
-      style={{ width: 40, height: 22, borderRadius: 999, border: "none", position: "relative", flexShrink: 0,
-        cursor: disabled ? "default" : "pointer", background: on ? "#16a34a" : "#cbd5e1", opacity: disabled ? 0.55 : 1, transition: "background .15s" }}>
-      <span style={{ position: "absolute", top: 2, left: on ? 20 : 2, width: 18, height: 18, borderRadius: "50%", background: "#fff", transition: "left .15s" }} />
-    </button>
-  );
-}
 
 export default function SettingsSection({ role, roleKey, teams, syncStatus, syncing, onManualSync }: {
   role?: string;
@@ -366,14 +359,14 @@ function GeneralTab({ syncStatus, syncing, onManualSync, canSync }: { syncStatus
                   style={{ display: "block", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", width: 140, background: "var(--card-bg)", color: "var(--text)" }} />
               </label>
             ))}
-            {/* 📞 НОРМА ДЗВІНКІВ НА ДЕНЬ (ТЗ 23.09.2026, п.2). Ті самі три стани, що в межі плану:
-                порожнє поле = «не задано» (колонка Звіту так і каже), а не нуль. */}
-            <label style={{ fontSize: 13, fontWeight: 600 }}>Норма дзвінків на день (розмови + спроби)
-              <input type="number" value={form.callsDailyNorm ?? ""} placeholder="не задано" min={1} max={500}
-                onChange={(e) => setForm({ ...form, callsDailyNorm: e.target.value.trim() === "" ? null : Number(e.target.value) })}
-                style={{ display: "block", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", width: 140, background: "var(--card-bg)", color: "var(--text)" }} />
-              <div style={{ fontSize: 11, fontWeight: 400, color: "var(--text-muted)", marginTop: 3 }}>Звіт → таблиця → колонка «Днів з нормою». Порожньо = норми немає.</div>
-            </label>
+            {/* 📞 НОРМА ДЗВІНКІВ НА ДЕНЬ — ПЕРЕЇХАЛА В «ПЛАНИ» (4632, Роман 10.10.2026: «в Планах», «КВП сама ставить»).
+                Тут — лише ДЗЕРКАЛО чинної норми, для читання: друге поле вводу означало б друге джерело норми. */}
+            <div style={{ fontSize: 13, fontWeight: 600 }}>Норма дзвінків на день (розмови + спроби)
+              <div style={{ marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px dashed var(--border)", width: 140, color: "var(--text)" }}>
+                {form.callsDailyNorm ?? <span style={{ color: "var(--text-muted)" }}>не задано</span>}
+              </div>
+              <div style={{ fontSize: 11, fontWeight: 400, color: "var(--text-muted)", marginTop: 3 }}>Змінюється в «Планах» → «Норма дзвінків» (ставить КВП). Звіт → колонка «Днів з нормою».</div>
+            </div>
             {/* 🔌 МЕЖА ПЛАНУ — ОКРЕМО ВІД `NUMS`, І ЦЕ НЕ ПРИКРАСА.
                 Загальний рендер робить `Number(e.target.value)`, а `Number("")` це **0**.
                 Для решти полів нуль безглуздий і шкоди не робить; тут він ЗАКОННЕ значення
@@ -403,6 +396,8 @@ function GeneralTab({ syncStatus, syncing, onManualSync, canSync }: { syncStatus
 
 // ─────────────────────────── Користувачі ───────────────────────────
 function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
+  const dlg = useDialogs();
+  const toast = useToast();
   const [users, setUsers] = useState<DashboardUser[]>([]);
   const [roles, setRoles] = useState<RoleDef[]>([]);
   const [issued, setIssued] = useState<Record<number, string>>({}); // показаний-раз пароль (reset)
@@ -424,10 +419,10 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
       await reload();
     } catch (e) { setNewCreds("✗ " + err(e)); }
   };
-  const reset = async (id: number) => { try { const pw = await resetUserPassword(id); setIssued((s) => ({ ...s, [id]: pw })); } catch (e) { alert(err(e)); } };
+  const reset = async (id: number) => { try { const pw = await resetUserPassword(id); setIssued((s) => ({ ...s, [id]: pw })); } catch (e) { toast(err(e), { error: true }); } };
   const setOverride = async (u: DashboardUser, val: string) => {
     const roleOverride = val === "__synced__" ? null : val;
-    try { await updateUser(u.id, { roleOverride }); await reload(); } catch (e) { alert(err(e)); }
+    try { await updateUser(u.id, { roleOverride }); await reload(); } catch (e) { toast(err(e), { error: true }); }
   };
   const [busy, setBusy] = useState<number | null>(null);
   // ⏱ Перемикач трекера. Оптимістично НЕ малюємо: спостереження за людиною —
@@ -435,14 +430,14 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
   const toggleTracker = async (id: number, on: boolean) => {
     setBusy(id);
     try { await updateUser(id, { trackerEnabled: on }); await reload(); }
-    catch (e) { alert(err(e)); }
+    catch (e) { toast(err(e), { error: true }); }
     finally { setBusy(null); }
   };
   // 🧭 Пул нічийних для менеджера (05.10.2026) — так само без оптимістичного малювання.
   const toggleOrphanPool = async (id: number, on: boolean) => {
     setBusy(id);
     try { await updateUser(id, { orphanPool: on }); await reload(); }
-    catch (e) { alert(err(e)); }
+    catch (e) { toast(err(e), { error: true }); }
     finally { setBusy(null); }
   };
   /**
@@ -453,25 +448,24 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
    */
   const changeState = async (u: DashboardUser, v: string) => {
     const st = v === "__active__" ? null : (v as "finishing" | "dismissed");
-    if (st === "dismissed" && !window.confirm(
-      `Позначити ${u.name ?? u.email} звільненим?\n\n` +
+    if (st === "dismissed" && !(await dlg.confirm(`Позначити ${u.name ?? u.email} звільненим?\n\n` +
       "• вхід у дашборд закриється\n" +
       "• нової роботи не отримує, плану не має\n" +
       "• результат і гроші ЛИШАЮТЬСЯ в сумах команди й компанії\n\n" +
-      "Скасовується цим самим списком — повернення в «активний» відкриває вхід назад.")) return;
+      "Скасовується цим самим списком — повернення в «активний» відкриває вхід назад."))) return;
     if (!u.manager_id) return;
     setBusy(u.id);
     try { await setWorkState(u.manager_id, st); await reload(); }
-    catch (e) { alert(err(e)); }
+    catch (e) { toast(err(e), { error: true }); }
     finally { setBusy(null); }
   };
-  const deactivate = async (u: DashboardUser) => { if (!window.confirm(`Деактивувати ${u.email}?`)) return; try { await updateUser(u.id, { isActive: false }); await reload(); } catch (e) { alert(err(e)); } };
+  const deactivate = async (u: DashboardUser) => { if (!(await dlg.confirm(`Деактивувати ${u.email}?`))) return; try { await updateUser(u.id, { isActive: false }); await reload(); } catch (e) { toast(err(e), { error: true }); } };
   const provision = async () => { try { const c = await provisionUsers(); setProvMsg(c.length ? `Створено логінів: ${c.length}` : "Нових немає — усі вже створені"); await reload(); } catch (e) { setProvMsg("✗ " + err(e)); } };
   const saveName = async (u: DashboardUser) => {
     if (!editName || editName.id !== u.id) return;
     const v = editName.value.trim();
-    if (!v) { alert("Ім'я не може бути порожнім"); return; }
-    try { await updateUser(u.id, { fullName: v }); setEditName(null); await reload(); } catch (e) { alert(err(e)); }
+    if (!v) { toast("Ім'я не може бути порожнім", { error: true }); return; }
+    try { await updateUser(u.id, { fullName: v }); setEditName(null); await reload(); } catch (e) { toast(err(e), { error: true }); }
   };
 
   return (
@@ -587,6 +581,8 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
 
 // ─────────────────────────── Ролі та доступи ───────────────────────────
 function RolesTab() {
+  const dlg = useDialogs();
+  const toast = useToast();
   const [roles, setRoles] = useState<RoleDef[]>([]);
   const [sel, setSel] = useState<string | null>(null);
   const [draft, setDraft] = useState<RoleDef | null>(null);
@@ -605,38 +601,43 @@ function RolesTab() {
     try { await updateRole(draft.key, { name: draft.name, dataScope: draft.data_scope, screenAccess: draft.screen_access, permissions: draft.permissions }); setMsg("✓ Збережено"); await reload(); }
     catch (e) { setMsg("✗ " + err(e)); }
   };
+  // 🪟 Ключ ролі з назви — пропозиція, яку видно й можна виправити в тій самій формі (раніше — другим вікном браузера).
+  const keyFrom = (name: string) => name.toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 24);
   const clone = async () => {
     if (!draft) return;
-    const name = window.prompt("Назва нової ролі (клон з «" + draft.name + "»):", draft.name + " (копія)");
-    if (!name) return;
-    const key = window.prompt("Ключ (латиниця/цифри/_):", name.toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 24));
-    if (!key) return;
+    const r = await dlg.form({ title: `Нова роль — клон з «${draft.name}»`, fields: [
+      { key: "name", label: "Назва нової ролі", initial: draft.name + " (копія)", required: true },
+      { key: "key", label: "Ключ (латиниця/цифри/_)", initial: keyFrom(draft.name + "_copy"), required: true },
+    ], okLabel: "Створити" });
+    if (!r) return;
+    const { name, key } = r;
     try { await createRole({ key, name, cloneFrom: draft.key }); await reload(); setSel(key.replace(/[^a-z0-9_]/g, "")); }
-    catch (e) { alert(err(e)); }
+    catch (e) { toast(err(e), { error: true }); }
   };
   const newRole = async () => {
-    const name = window.prompt("Назва нової ролі:"); if (!name) return;
-    const key = window.prompt("Ключ (латиниця/цифри/_):", name.toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 24)); if (!key) return;
     // 🔴 ОБСЯГ ПИТАЄМО ТУТ, А НЕ «ПОТІМ У РЕДАГУВАННІ» (04.09.2026). Тут стояло зашите
     // `dataScope: "own"`: роль народжувалась найвужчою, і людина, яка роздала їй екрани,
     // про друге рішення навіть не дізнавалась. Заміряно на проді: «Бухгалтерія» з
     // екранами дебіторки й виписки бачила НУЛЬ рядків, бо обсяг лишився «свої».
-    const scope = window.prompt(
-      "Обсяг даних — чиї показники бачить роль?\n"
-        + SCOPES.map((s2, i) => `${i + 1} — ${s2.label} (${s2.sub})`).join("\n"),
-      "");
-    if (!scope) return;
-    const picked = SCOPES[Number(scope) - 1];
-    // 🔴 БЕЗ ПЕРЕДЗАПОВНЕННЯ: попередня редакція підставляла "1" (= «свої»), тобто Enter
-    // без читання знову давав найвужчий обсяг мовчки — рівно те, від чого ми й ішли.
-    if (!picked) { alert("Обсяг не обрано — роль не створено. Введіть 1, 2 або 3."); return; }
+    // 🔴 БЕЗ ПЕРЕДЗАПОВНЕННЯ ОБСЯГУ: вибір зі списку обовʼязковий, «Створити» неактивна, поки його не зроблено, —
+    // Enter без читання не дасть найвужчий обсяг мовчки (раніше це трималось на «введіть 1, 2 або 3»).
+    const r = await dlg.form({ title: "Нова роль", fields: [
+      { key: "name", label: "Назва нової ролі", required: true },
+      { key: "key", label: "Ключ (латиниця/цифри/_) — якщо порожньо, візьметься з назви", placeholder: "напр. accounting" },
+      { key: "scope", label: "Обсяг даних — чиї показники бачить роль?", required: true,
+        options: SCOPES.map((s2) => ({ value: s2.key, label: s2.label, hint: s2.sub })) },
+    ], okLabel: "Створити" });
+    if (!r) return;
+    const name = r.name, key = r.key || keyFrom(r.name);
+    const picked = SCOPES.find((s2) => s2.key === r.scope);
+    if (!picked || !key) { toast("Обсяг або ключ не задано — роль не створено.", { error: true }); return; }
     try { await createRole({ key, name, dataScope: picked.key, screenAccess: {}, permissions: {} }); await reload(); setSel(key.replace(/[^a-z0-9_]/g, "")); }
-    catch (e) { alert(err(e)); }
+    catch (e) { toast(err(e), { error: true }); }
   };
   const del = async () => {
     if (!draft || builtIn) return;
-    if (!window.confirm(`Видалити роль «${draft.name}»?`)) return;
-    try { await deleteRole(draft.key); setSel(null); await reload(); } catch (e) { alert(err(e)); }
+    if (!(await dlg.confirm(`Видалити роль «${draft.name}»?`))) return;
+    try { await deleteRole(draft.key); setSel(null); await reload(); } catch (e) { toast(err(e), { error: true }); }
   };
 
   return (
@@ -719,10 +720,11 @@ function RolesTab() {
 
 // ─────────────────────────── Архів ───────────────────────────
 function ArchiveTab() {
+  const toast = useToast();
   const [users, setUsers] = useState<DashboardUser[]>([]);
   const reload = () => fetchUsers(true).then(setUsers).catch(() => setUsers([]));
   useEffect(() => { reload(); }, []);
-  const restore = async (id: number) => { try { await reactivateUser(id); await reload(); } catch (e) { alert(err(e)); } };
+  const restore = async (id: number) => { try { await reactivateUser(id); await reload(); } catch (e) { toast(err(e), { error: true }); } };
   return (
     <div className="chart-card">
       <h2 className="chart-title">Архів (деактивовані)</h2>

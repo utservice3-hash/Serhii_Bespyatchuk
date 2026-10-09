@@ -34,6 +34,8 @@ const SCHEMA = path.join(import.meta.dirname, "..", "db", "schema.sql");
 const FC = [8921932, 155304];   // воронки повного циклу у фікстурі; у ядрі — `money.FC_PIPELINES`
 const PZ = LEADGEN_STAGE_IDS.pz[0], QUAL = QUALIFICATION_PIPELINES[0], OTHER = 9999999;
 const Q = LEADGEN_STAGE_IDS.qualified;
+/** Заглушки клієнта — ті самі, що передає ядро (`metrics.GENERIC_CLIENT_KEYS`); звіряє `#1503b`. */
+const GENERIC = ["названиенеуказано", "companynamenotspecified", ""];
 
 type C = import("pg").Client;
 let client: C | null = null;
@@ -54,7 +56,7 @@ async function run<T>(q: SqlQuery): Promise<T[]> {
   return (await client!.query(q.text, q.values)).rows as T[];
 }
 const linkQ = (from: string, to: string) => handoffLinkQuery(from, to,
-  { pz: LEADGEN_STAGE_IDS.pz, qualified: Q, managerPipelines: [...QUALIFICATION_PIPELINES, ...FC] },
+  { pz: LEADGEN_STAGE_IDS.pz, qualified: Q, managerPipelines: [...QUALIFICATION_PIPELINES, ...FC], genericClientKeys: GENERIC },
   { beforeSec: LINK_BEFORE_SEC, afterSec: LINK_AFTER_SEC });
 
 let nextId = 700000;
@@ -832,4 +834,79 @@ test("#1260 ЖИВИЙ SQL: прийнято лідоген — лише уго�
   await mk(810017, FC[0], "2025-02-28T21:30:00Z"); await link(810001, 810017);
   const r2 = await metrics.leadgenAcceptedByManager({ from: "2025-02-01", to: "2025-02-28", managerId: 80 });
   assert.equal(r2[0]?.count, 3, "🔴 угода, створена 28.02 о 23:30 за Києвом, випала з лютого — межа не київська або не включна");
+});
+
+/**
+ * #1502 — СКАСОВАНИЙ ПРОРАХУНОК НЕ РАХУЄТЬСЯ (рішення власника 07.10.2026, правило Ярослава): вхід у «Кваліфіковано»,
+ * після якого ця сама угода протягом 15 хв перейшла на інший етап Продзвону (закрили / повернули), — не прорахунок.
+ * Обидва боки межі: 5 с і 8 хв — скасовано; 21 хв — ні; перехід у воронку Кваліфікації — не скасування; повторна
+ * кваліфікація після скасування — рахується. Чотири читачі одним правилом: лічильник людини, передачі, список, тижні.
+ * 🧨 САБОТАЖ: у `quoteKeptSql` `INTERVAL '${QUOTE_UNDO_MIN} minutes'` → `INTERVAL '0 minutes'` → червоніє.
+ */
+test("#1502 ЖИВИЙ SQL: прорахунок, скасований протягом 15 хв, не рахується — у лічильнику, передачах, списку й тижнях", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { stats } = await core();
+  const T = (hm: string) => utc(`2025-04-08T${hm}`);
+  const mk = async () => deal({ manager: 1, pipeline: PZ, ck: null });
+  const a = await mk(); await ev(a, PZ, Q, T("07:00:00")); await ev(a, PZ, 143, T("07:00:05"));               // закрила за 5 с
+  const b = await mk(); await ev(b, PZ, Q, T("08:00:00")); await ev(b, PZ, LEADGEN_STAGE_IDS.opr, T("08:08:00")); // повернула за 8 хв
+  const c = await mk(); await ev(c, PZ, Q, T("09:00:00")); await ev(c, PZ, LEADGEN_STAGE_IDS.opr, T("09:21:00")); // через 21 хв — рахується
+  const d = await mk(); await ev(d, PZ, Q, T("10:00:00")); await ev(d, QUAL, 69693648, T("10:01:00"));          // у Кваліфікацію — рахується
+  const e = await mk(); await ev(e, PZ, Q, T("11:00:00")); await ev(e, PZ, LEADGEN_STAGE_IDS.opr, T("11:01:00"));
+  await ev(e, PZ, Q, T("11:02:00"));                                                                            // перекваліфікувала — рахується раз
+  const f = await mk(); await ev(f, PZ, Q, T("12:00:00"));                                                      // звичайний
+  const kept = [c, d, e, f].sort(), day = "2025-04-08";
+  const row = (await run<{ manager_id: number; quotes: string }>(stageCountsQuery(day, day, LEADGEN_STAGE_IDS))).find((r) => r.manager_id === 1);
+  assert.equal(Number(row?.quotes), 4, "🔴 лічильник людини: скасований прорахунок порахований або справжній загублений");
+  const links = await run<{ pz_id: string; at: Date }>(linkQ(day, day));
+  assert.deepEqual(links.map((l) => Number(l.pz_id)).sort(), kept, "🔴 передачі: скасований вхід став передачею");
+  assert.equal(links.find((l) => Number(l.pz_id) === e)?.at.toISOString(), T("11:02:00").toISOString(), "🔴 після перекваліфікації рахується не другий вхід");
+  const list = await stats.leadgenHandoffs(day, day);
+  assert.deepEqual(list.map((x) => x.kommoId).sort(), kept, "🔴 список переданих прорахунків показує скасовані");
+  const wk = await stats.leadgenWeekly(day, day);
+  assert.equal(wk[0]?.quotes, 4, "🔴 тижні рахують скасовані прорахунки");
+});
+
+/**
+ * #1503 — ЗАГЛУШКА ЗАМІСТЬ КЛІЄНТА НЕ РОБИТЬ УГОДУ «ПОСТІЙНОГО КЛІЄНТА» І НЕ СКЛЕЮЄ ПЕРЕДАЧУ (07.10.2026, рішення власника).
+ * 62747557: в угоді менеджера компанія «Название не указано» — під цим ключем 1 383 успіхи різних клієнтів, і угоду
+ * нового клієнта визнано «постійною» (гроші лідгену зникли). Обидва боки: справжній клієнт із 2 свіжими успіхами —
+ * постійний; заглушка в угоді менеджера → клієнт з угоди Продзвону (без успіхів) → НЕ постійний; заглушка в обох → НЕ
+ * постійний; заглушка в менеджера, а в Продзвоні справжній постійний клієнт → постійний (клієнт береться з Продзвону);
+ * заглушка в Продзвоні без примітки Kommo — не «здогадується» до чужої угоди з тим самим ключем.
+ * 🧨 САБОТАЖ: у `handoffLinkQuery` `x.client_key = ANY($6::text[])` → `x.client_key = ANY('{}'::text[])` → червоніє.
+ */
+test("#1503 ЖИВИЙ SQL: заглушка «Название не указано» — не клієнт: не робить угоду постійною й не склеює передачу", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { stats } = await core();
+  const metrics = await import("./metrics.js");
+  assert.deepEqual([...GENERIC].sort(), [...metrics.GENERIC_CLIENT_KEYS].sort(), "🔴 фікстура тримає не ті заглушки, що ядро");
+  const G = "названиенеуказано", day = "2025-05-12", T = utc(`${day}T09:00:00`);
+  // Історія успіхів: справжній постійний клієнт і заглушка — по 2 свіжі успіхи повного циклу.
+  for (const ck of ["k-reg1503", G]) for (const d of ["2025-04-20T10:00:00", "2025-05-02T10:00:00"]) {
+    const id = await deal({ manager: 3, pipeline: FC[0], status: 142, ck, created: utc(d) });
+    await client!.query(`UPDATE deals SET closed_at_kommo = $2 WHERE kommo_id = $1`, [id, utc(d)]);
+  }
+  const handoff = async (pzKey: string, childKey: string | null, minute: number) => {
+    const at = sec(T, minute * 60);
+    const pz = await deal({ manager: 1, pipeline: PZ, ck: pzKey, created: utc("2025-01-01T00:00:00") });
+    await ev(pz, PZ, Q, at);
+    if (childKey === null) return { pz, child: null };
+    const child = await deal({ manager: 3, pipeline: FC[0], status: 69716460, ck: childKey, created: sec(at, 30) });
+    await client!.query(`INSERT INTO lead_child_links (parent_id, child_id, created_at) VALUES ($1, $2, now())`, [pz, child]);
+    return { pz, child };
+  };
+  const reg = await handoff("k-reg1503", "k-reg1503", 0);          // справжній постійний
+  const gen = await handoff("k-new1503", G, 10);                    // 62747557: заглушка в угоді менеджера
+  const both = await handoff(G, G, 20);                             // заглушка в обох
+  const viaPz = await handoff("k-reg1503", G, 40);                  // заглушка в менеджера, у Продзвоні — справжній постійний
+  const guess = await handoff(G, null, 30);                         // без примітки Kommo
+  await deal({ manager: 3, pipeline: FC[0], status: 69716460, ck: G, created: sec(T, 30 * 60 + 20) }); // чужа з тим самим ключем у вікні
+  const m = await stats.leadgenHandoffMoney(day, day, { teamId: null, managerId: null });
+  const row = (pz: number) => m.deals.find((x) => x.pzId === pz);
+  assert.equal(row(reg.pz)?.cls, "regular", "🔴 справжній клієнт із 2 свіжими успіхами не визнаний постійним (зламано саме правило)");
+  assert.equal(row(gen.pz)?.cls, "paid", "🔴 угода з компанією «Название не указано» визнана постійною — гроші лідгену зникли");
+  assert.equal(row(both.pz)?.cls, "paid", "🔴 заглушка в обох угодах дала «постійного клієнта»");
+  assert.equal(row(viaPz.pz)?.cls, "regular", "🔴 заглушка в угоді менеджера не замінилась клієнтом з угоди Продзвону");
+  assert.equal(row(guess.pz)?.dealId, null, "🔴 передачу з ключем-заглушкою «здогадано» до чужої угоди");
 });

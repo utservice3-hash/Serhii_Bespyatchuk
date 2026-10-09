@@ -425,7 +425,7 @@ test("#1450 ДОСТУП ФІНАНСІВ: вкладка й edit_finance — о
   assert.match(SRC("auth/permGrant.ts"), /"edit_finance"/);
   // Ключ у каталозі лишено на один викат (двокрокове зняття, див. коментар у `permGrant.ts`): гейт стверджує, що він там
   // ПОЗНАЧЕНИЙ як знятий, а не живий.
-  assert.match(SRC("auth/permGrant.ts"), /ЗНЯТО 06\.10\.2026 — ДВОКРОКОВО[\s\S]{0,600}?\*\/\s*"approve_finance_plan",/, "🔴 право в каталозі без позначки «знято»");
+  assert.doesNotMatch(SRC("auth/permGrant.ts"), /"approve_finance_plan"/, "🔴 мертве право повернулось у каталог — адмін бачитиме тумблер, що нічого не дає");
   assert.doesNotMatch(sql, /permissions \|\| '\{"approve_finance_plan"/, "🔴 право погоджувати знову видається ролі");
   assert.match(sql, /UPDATE roles SET permissions = permissions - 'approve_finance_plan' WHERE permissions \? 'approve_finance_plan';/,
     "🔴 старе право не знімається з ролей");
@@ -564,12 +564,14 @@ test("#1452 ЖИВИЙ SQL: затверджує лише людина зі сп
     const schema = readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8");
     await c.query(schema);
     const ids = async () => (await c.query(`SELECT user_id FROM fin_plan_approvers ORDER BY 1`)).rows.map((r) => r.user_id);
-    assert.deepEqual(await ids(), [1, 17, 50, 99], "🔴 сід не дав рішення Романа");
-    assert.equal(await fin.isPlanApprover(db, 99), true, "🔴 людина зі списку не може затвердити");
-    assert.equal(await fin.isPlanApprover(db, 901), false, "🔴 адмін поза списком може затвердити — затвердження знову за роллю");
-    await c.query(`DELETE FROM fin_plan_approvers WHERE user_id = 99`);
+    assert.deepEqual(await ids(), [1], "🔴 сід не дав рішення Сергія 07.10 (лише його акаунт)");
+    assert.equal(await fin.isPlanApprover(db, 1), true, "🔴 людина зі списку не може затвердити");
+    assert.equal(await fin.isPlanApprover(db, 99), false, "🔴 адмін поза списком може затвердити — затвердження знову за роллю");
+    assert.equal(await fin.isPlanApprover(db, 901), false);
+    await c.query(`INSERT INTO fin_plan_approvers (user_id) VALUES (99)`);
+    await c.query(`DELETE FROM fin_plan_approvers WHERE user_id = 1`);
     await c.query(schema);
-    assert.deepEqual(await ids(), [1, 17, 50], "🔴 повторна міграція повернула прибрану людину");
+    assert.deepEqual(await ids(), [99], "🔴 повторна міграція повернула прибрану людину");
   } finally { await s.dispose(); }
 });
 

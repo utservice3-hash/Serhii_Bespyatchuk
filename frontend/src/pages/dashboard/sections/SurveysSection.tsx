@@ -15,12 +15,14 @@
  * повтор за розкладом ВИМКНЕНО за замовчуванням; після запуску питання заморожені (дублюйте як нове).
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import {
   surveysBadge, svClose, svCreate, svDeleteTemplate, svExportCsv, svGet, svLaunch, svList, svMarkRead, svNotifications,
   svParse, svPeople, svReopen, svRemind, svRespond, svResults, svSaveTemplate, svTemplates, svUpdate,
   type SurveysBadge, type SvAnswer, type SvAudience, type SvDraft, type SvFull, type SvListRow, type SvNotification,
   type SvPerson, type SvQType, type SvQuestion, type SvRecur, type SvRemind, type SvResults, type SvTemplate,
 } from "../../../api";
+import { useToast } from "../../../components/Toasts";
 import "./mockFonts.css";
 import "./surveys.css";
 
@@ -198,16 +200,13 @@ export function SurveysSection() {
   const [notifs, setNotifs] = useState<SvNotification[]>([]);
   const [bellOpen, setBellOpen] = useState(false);
   const [C, setC] = useState<CState>(blankC);
-  const [toastMsg, setToastMsg] = useState<{ m: string; bad?: boolean; k: number } | null>(null);
   const bellRef = useRef<HTMLDivElement>(null);
   const admin = !!badge?.canManage;
 
-  const toast = useCallback((m: string, bad?: boolean) => setToastMsg({ m, bad, k: Date.now() }), []);
-  useEffect(() => {
-    if (!toastMsg) return;
-    const t = setTimeout(() => setToastMsg(null), 3200);
-    return () => clearTimeout(t);
-  }, [toastMsg]);
+  // 🔔 Спільний тост дашборда (стандарт 07.10.2026). Доти тут був свій — унизу по центру, 3,2 с,
+  // і помилка зникала так само швидко, як «Збережено».
+  const showToast = useToast();
+  const toast = useCallback((m: string, bad?: boolean) => showToast(m, { error: !!bad }), [showToast]);
 
   const reload = useCallback(async () => {
     const b = await surveysBadge();
@@ -318,7 +317,6 @@ export function SurveysSection() {
       {view.v === "mine" && <MineView list={admin ? mine : list} open={(id) => go({ v: "fill", id })} />}
       {view.v === "fill" && <FillView id={view.id} toast={toast} onBack={() => go({ v: "mine" })} onDone={async () => { await reload(); go({ v: "mine" }); }} />}
 
-      <div className={`toast ${toastMsg ? "show" : ""} ${toastMsg?.bad ? "bad" : ""}`}>{toastMsg?.m}</div>
     </div>
   );
 }
@@ -412,6 +410,7 @@ function CreateView({ C, setC, people, teams, toast, onCancel, onSaved, onTempla
   C: CState; setC: (f: (c: CState) => CState) => void; people: SvPerson[]; teams: Array<{ id: number; name: string }>;
   toast: (m: string, bad?: boolean) => void; onCancel: () => void; onSaved: (id: number, launched: boolean) => void; onTemplateSaved: () => void;
 }) {
+  const dlg = useDialogs();
   const [err, setErr] = useState(""); const [busy, setBusy] = useState(false); const [over, setOver] = useState(false);
   const [who, setWho] = useState("");
   const imgTarget = useRef(-1); const imgInput = useRef<HTMLInputElement>(null); const fileInput = useRef<HTMLInputElement>(null);
@@ -423,7 +422,7 @@ function CreateView({ C, setC, people, teams, toast, onCancel, onSaved, onTempla
   const doParse = async (text: string) => {
     try {
       const p = await svParse(text);
-      const replace = !C.questions.length || window.confirm("Замінити поточні питання розібраними?");
+      const replace = !C.questions.length || (await dlg.confirm("Замінити поточні питання розібраними?"));
       const byType: Record<string, number> = {}; p.questions.forEach((q) => { byType[q.type] = (byType[q.type] || 0) + 1; });
       const unsure = p.questions.filter((q) => q.unsure).length;
       const sum = p.questions.length

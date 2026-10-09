@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { fetchAiCallCard, setAiCallType, putAiCallNote, fetchAiCallRecording, hiringError, type AiCallCardResp, type AiQuoted } from "../../../api";
-import { STATE_UI, TONE_COLOR, PROMISE_UI, speakerOf, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, TYPE_LABEL, type AiCallState, type DrawerTab, type Tone } from "../aiCallsView";
+import { STATE_UI, TONE_COLOR, PROMISE_UI, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, quoteTurnIndex, scoreLabel, REVIEW_REASON_UI, TYPE_LABEL, type AiCallState, type Tone } from "../aiCallsView";
+import { CallConversation, type SeekFn } from "./CallConversation";
+import { ChecklistBlock } from "./FirstTouchChecklist";
 import "./hiring.css";
 
 /**
@@ -26,11 +28,18 @@ function StateChip({ state }: { state: AiCallState }) {
   return <span title={ui.hint}><Chip tone={ui.tone}>{ui.label}</Chip></span>;
 }
 
+/** Перемотка запису до цитати з розбору: є лише тоді, коли запис можна слухати й цитату знайдено в репліках. */
+export const QuoteSeek = createContext<((quote: string, go?: boolean) => number | null) | null>(null);
+
 function Quote({ q }: { q: AiQuoted }) {
+  const at = useContext(QuoteSeek);
   if (!q.quote.trim()) return null;
+  const t = at ? at(q.quote) : null;
   return (
     <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 2 }}>
       <q>{q.quote}</q>{" "}
+      {t != null && <button type="button" className="hr-linkbtn" title="Послухати це місце" onClick={() => { at?.(q.quote, true); }}
+        style={{ border: 0, background: "none", padding: 0, color: "var(--info)", cursor: "pointer", fontSize: 12, fontVariantNumeric: "tabular-nums" }}>▶ {mmss(t)}</button>}{" "}
       {q.quote_found === true && <span style={{ color: "var(--ok-fg, #1d6b3a)", fontSize: 12 }}>✓ звірено з розшифровкою</span>}
       {q.quote_found === false && <span style={{ color: "var(--danger, #b3261e)", fontSize: 12 }}>✗ такої фрази в розмові немає</span>}
     </div>
@@ -40,7 +49,7 @@ function Quote({ q }: { q: AiQuoted }) {
 const row: React.CSSProperties = { display: "grid", gridTemplateColumns: "140px minmax(0, 1fr)", gap: 12, padding: "5px 0", fontSize: 13.5, lineHeight: 1.45 };
 const key: React.CSSProperties = { fontSize: 12.5, color: "var(--text-muted)", fontWeight: 600 };
 
-function Analysis({ c }: { c: AiCallCardResp }) {
+export function Analysis({ c }: { c: AiCallCardResp }) {
   const r = c.result;
   if (!r) {
     const ui = STATE_UI[c.row.state];
@@ -109,23 +118,6 @@ function Analysis({ c }: { c: AiCallCardResp }) {
   );
 }
 
-function Transcript({ c }: { c: AiCallCardResp }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-      {(c.turns ?? []).map((t, i) => {
-        const who = speakerOf(t.channel, c.managerChannel);
-        return (
-          <div key={i} style={{ display: "grid", gridTemplateColumns: "44px 84px minmax(0, 1fr)", gap: 8, fontSize: 13.5, padding: "4px 8px", borderRadius: 6,
-            background: who === "Менеджер" ? "var(--ok-bg, #eef6ea)" : "var(--muted-bg, #f6f3ea)" }}>
-            <span style={{ color: "var(--text-muted)", fontVariantNumeric: "tabular-nums" }}>{mmss(t.start)}</span>
-            <b style={{ fontSize: 12.5 }}>{who}</b>
-            <span>{t.text}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 /**
  * 🗂 Тип розмови (ТЗ 30.09.2026): що сказала модель, чи це ручна позначка, і кнопки «Це вантаж» / «Це не вантаж»
@@ -214,36 +206,41 @@ function NotesBlock({ c, onSaved }: { c: AiCallCardResp; onSaved: () => void }) 
   );
 }
 
-/** 🎧 Запис розмови — байтами через наш сервер; слухати можуть ті, кому видно текст (у своєму скоупі). */
-function RecordingPlayer({ uniqueid }: { uniqueid: string }) {
-  const [src, setSrc] = useState<string | null>(null);
+
+/**
+ * ✅ «Розібрано» з бічної картки (08.10.2026): розмову з черги можна розібрати й тут, не заходячи в режим черги.
+ * Кнопка — лише коли сервер каже, що розмова потребує розбору і цей користувач може її розібрати.
+ */
+function ReviewBar({ c, onDone }: { c: AiCallCardResp; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-  useEffect(() => () => { if (src) URL.revokeObjectURL(src); }, [src]);
-  const load = async () => {
+  const rn = c.row.reviewNote;
+  if (rn) return <div style={{ fontSize: 12.5, color: "var(--ok, #166534)", marginTop: 6 }}>Розібрано · {rn.byName ?? "—"} · {fmtFull(rn.at)}{rn.text !== "Розібрано" ? ` · «${rn.text}»` : ""}</div>;
+  if (!c.needsReview || !c.canReview) return null;
+  const go = async () => {
     setBusy(true); setMsg(null);
-    try { setSrc(URL.createObjectURL(await fetchAiCallRecording(uniqueid))); } catch (e) { setMsg(hiringError(e)); }
+    try { await putAiCallNote(c.row.uniqueid, "review", "Розібрано"); onDone(); } catch (e) { setMsg(hiringError(e)); }
     setBusy(false);
   };
-  return src ? <audio controls src={src} style={{ width: "100%" }} />
-    : (
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <button type="button" className="hr-btn" disabled={busy} onClick={() => void load()}>{busy ? "Завантажую запис…" : "▶ Прослухати запис"}</button>
-        {msg && <span style={{ color: "var(--danger, #b3261e)", fontSize: 13 }}>{msg}</span>}
-      </div>
-    );
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
+      <button type="button" className="hr-btn" disabled={busy} onClick={() => void go()}>{busy ? "Зберігаю…" : "Розібрано"}</button>
+      {c.reviewReason && <span style={{ fontSize: 12.5, color: "var(--text-muted)" }}>у черзі розбору: {REVIEW_REASON_UI[c.reviewReason].label.toLowerCase()}</span>}
+      {msg && <span style={{ fontSize: 12.5, color: "var(--danger)" }}>{msg}</span>}
+    </div>
+  );
 }
 
 export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: string; onClose: () => void; onChanged?: () => void }) {
   const [c, setC] = useState<AiCallCardResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [tab, setTab] = useState<DrawerTab>("analysis");
+  const seekRef = useRef<SeekFn | null>(null);
   const [rev, setRev] = useState(0);
 
   useEffect(() => {
     let alive = true;
     setErr(null);
-    if (rev === 0) { setC(null); setTab("analysis"); }
+    if (rev === 0) setC(null);
     fetchAiCallCard(uniqueid)
       .then((x) => { if (alive) setC(x); })
       .catch((e) => { if (alive) setErr(hiringError(e)); });
@@ -259,6 +256,21 @@ export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: strin
 
   const tabs = c ? drawerTabs(c.transcriptHidden, c.turns?.length ?? null) : [];
   const r = c?.result ?? null;
+  // Текст реплік — лише коли сервер його віддав (`drawerTabs`); без нього — тільки плеєр.
+  const turns = c && tabs.includes("transcript") ? c.turns : null;
+  const listen = c != null && c.canListen && c.durationSec != null;
+  // Моно без розділення: уся розмова — одна репліка, тож «місце цитати» = весь текст і час 0:00. Не підсвічуємо й не
+  // перемотуємо — це вдавало б точність, якої немає.
+  const mixed = c?.mono === "mixed";
+  const quoted = useMemo(() => {
+    const all = r && !mixed ? [r.price, ...r.objections, ...r.promises] : [];
+    return new Set(all.map((q) => quoteTurnIndex(turns, q.quote)).filter((i) => i >= 0));
+  }, [r, turns, mixed]);
+  const seekQuote = (quote: string, go = false): number | null => {
+    const i = quoteTurnIndex(turns, quote); const t = i >= 0 ? turns?.[i]?.start ?? null : null;
+    if (go && t != null) seekRef.current?.(t);
+    return t;
+  };
 
   return createPortal(
     <div className="hr-overlay" onClick={onClose}>
@@ -288,6 +300,13 @@ export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: strin
               {r && (r.objections.length > 0 ? <Chip tone="bad">заперечень: {r.objections.length}</Chip> : <Chip tone="muted">заперечень немає</Chip>)}
               {r && <Chip tone={c.row.promises > c.row.promisesWithDeadline ? "warn" : "muted"}>{promisesLabel(c.row.promises, c.row.promisesWithDeadline)}</Chip>}
               <Chip tone="wait">{afterLabel(c.row.calledAt, c.nextOutboundAt)}</Chip>
+              {c.row.dealOutcome && (
+                <span title={c.row.dealOutcome.lossReason ? `Причина відмови в CRM: ${c.row.dealOutcome.lossReason}` : "Стан угоди в Kommo зараз"}>
+                  <Chip tone={c.row.dealOutcome.state === "success" ? "ok" : c.row.dealOutcome.state === "lost" ? "muted" : "wait"}>
+                    угода: {c.row.dealOutcome.state === "success" ? "успіх" : c.row.dealOutcome.state === "lost" ? `відмова${c.row.dealOutcome.lossReason ? ` · ${c.row.dealOutcome.lossReason}` : ""}` : "у роботі"}
+                  </Chip>
+                </span>
+              )}
               {c.durationSec != null && <Chip tone="muted">запис {mmss(c.durationSec)}</Chip>}
               {c.dealUrls.map((d) => (
                 <a key={d.kommoId} href={d.url} target="_blank" rel="noreferrer"
@@ -296,19 +315,37 @@ export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: strin
             </div>
 
             <TypeBlock c={c} onChanged={() => { setRev((x) => x + 1); onChanged?.(); }} />
+            {c.checklist && (
+              <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <div style={{ fontSize: 11.5, color: "var(--text-muted)", fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase" }}>Чек-лист першого дотику</div>
+                  <b style={{ fontVariantNumeric: "tabular-nums" }}>{scoreLabel(c.checkScore)?.replace("/", " / ") ?? "—"}</b>
+                </div>
+                <ChecklistBlock c={c} checklist={c.checklist} promiseState={c.row.promiseState} conversationType={c.row.conversationType} onSeek={(t) => seekRef.current?.(t)} />
+                <ReviewBar c={c} onDone={() => { setRev((x) => x + 1); onChanged?.(); }} />
+              </div>
+            )}
             <NotesBlock c={c} onSaved={() => { setRev((x) => x + 1); onChanged?.(); }} />
-            {c.canListen && c.durationSec != null && <RecordingPlayer uniqueid={c.row.uniqueid} />}
-
-            {tabs.length > 1 && (
-              <div className="hr-seg2" role="tablist" aria-label="Розділи картки" style={{ alignSelf: "flex-start" }}>
-                <button type="button" role="tab" aria-selected={tab === "analysis"} className={tab === "analysis" ? "on" : ""} onClick={() => setTab("analysis")}>Розбір</button>
-                <button type="button" role="tab" aria-selected={tab === "transcript"} className={tab === "transcript" ? "on" : ""} onClick={() => setTab("transcript")}>
-                  Розшифровка · {c.turns?.length ?? 0} реплік
-                </button>
+            {listen && (
+              <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12 }}>
+                <div style={{ fontSize: 11.5, color: "var(--text-muted)", fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase", marginBottom: 8 }}>
+                  Розмова{turns ? ` · ${String(turns.length)} реплік` : ""}
+                </div>
+                {c.mono && (
+                  <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "var(--text-muted)" }}>
+                    {c.mono === "mixed"
+                      ? "Запис моно: обидва голоси в одному каналі й не розділені — текст іде одним шматком, перемотки по репліках немає."
+                      : "Запис моно: голоси розділено за звучанням, а не за каналом — підпис «Менеджер / Клієнт» може помилятись."}
+                  </p>
+                )}
+                <CallConversation load={() => fetchAiCallRecording(c.row.uniqueid)} turns={turns} managerChannel={c.managerChannel} quoted={quoted} seekRef={seekRef} mixed={mixed} durationSec={c.durationSec} />
               </div>
             )}
 
-            {tab === "transcript" && tabs.includes("transcript") ? <Transcript c={c} /> : <Analysis c={c} />}
+            <div style={{ fontSize: 11.5, color: "var(--text-muted)", fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase" }}>Розбір</div>
+            <QuoteSeek.Provider value={listen && turns && !mixed ? seekQuote : null}>
+              <Analysis c={c} />
+            </QuoteSeek.Provider>
           </>
         )}
       </div>

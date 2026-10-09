@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import {
   fetchTrainingCourses, fetchTrainingCourse, fetchTrainingMaterial, openTrainingMaterial, doneTrainingMaterial,
   createTrainingCourse, patchTrainingCourse, createTrainingFolder, updateTrainingFolder, deleteTrainingFolder,
@@ -161,6 +162,7 @@ function NewCourse({ onClose, onDone }: { onClose: () => void; onDone: (id: numb
 
 /** Курс: ліворуч теми з кроками, праворуч крок. Той самий вигляд для читача й для редактора. */
 function CourseView({ id, canEdit, onBack }: { id: number; canEdit: boolean; onBack: () => void }) {
+  const dlg = useDialogs();
   const [d, setD] = useState<TrainingCourseDetail | null>(null);
   const [curId, setCurId] = useState<number | null>(null);
   const [edit, setEdit] = useState(false);
@@ -287,9 +289,9 @@ function CourseView({ id, canEdit, onBack }: { id: number; canEdit: boolean; onB
                     <button className="hr-btn xs" title="Тему нижче" disabled={busy || mi === d.modules.length - 1}
                       onClick={() => void act(() => moveTraining("folders", m.id, 1))}>↓</button>
                     <button className="hr-btn xs" title="Перейменувати тему" disabled={busy}
-                      onClick={() => { const n = window.prompt("Назва теми:", m.name)?.trim(); if (n && n !== m.name) void act(() => updateTrainingFolder(m.id, { name: n })); }}>✏️</button>
+                      onClick={async () => { const n = (await dlg.prompt("Назва теми:", m.name))?.trim(); if (n && n !== m.name) void act(() => updateTrainingFolder(m.id, { name: n })); }}>✏️</button>
                     <button className="hr-btn xs" title="Прибрати тему з курсу (матеріали лишаються)" disabled={busy}
-                      onClick={() => { if (window.confirm(`Прибрати тему «${m.name}» з курсу? Матеріали лишаться в бібліотеці.`)) void act(() => updateTrainingFolder(m.id, { courseId: null })); }}>↩</button>
+                      onClick={async () => { if ((await dlg.confirm(`Прибрати тему «${m.name}» з курсу? Матеріали лишаться в бібліотеці.`))) void act(() => updateTrainingFolder(m.id, { courseId: null })); }}>↩</button>
                     {/* 📎 Крок додається ТУТ, у своїй темі: доти шлях був кружний — піти в «Бібліотеку»,
                         створити там матеріал, повернутись і причепити тему. Саме тому з екрана й читалось,
                         що фото чи відео додати не можна. */}
@@ -319,7 +321,7 @@ function CourseView({ id, canEdit, onBack }: { id: number; canEdit: boolean; onB
                       <button className="hr-btn xs" title={s.required ? "Зробити необовʼязковим" : "Зробити обовʼязковим"} disabled={busy}
                         onClick={() => void act(() => updateTrainingMaterial(s.id, { required: !s.required }))}>{s.required ? "★" : "☆"}</button>
                       <button className="hr-btn xs" title="Видалити крок" disabled={busy}
-                        onClick={() => { if (window.confirm(`Видалити крок «${s.title}»? Прогрес людей по ньому теж зникне.`)) void act(() => deleteTrainingMaterial(s.id)); }}>🗑</button>
+                        onClick={async () => { if ((await dlg.confirm(`Видалити крок «${s.title}»? Прогрес людей по ньому теж зникне.`))) void act(() => deleteTrainingMaterial(s.id)); }}>🗑</button>
                     </span>
                   )}
                 </div>
@@ -330,7 +332,7 @@ function CourseView({ id, canEdit, onBack }: { id: number; canEdit: boolean; onB
           {canEdit && edit && (
             <div className="tr-mod">
               <button className="hr-btn xs" disabled={busy}
-                onClick={() => { const n = window.prompt("Назва нової теми:")?.trim(); if (n) void act(async () => { const f = await createTrainingFolder(n, null); await updateTrainingFolder(f.id, { courseId: id }); }); }}>+ Тема</button>
+                onClick={async () => { const n = (await dlg.prompt("Назва нової теми:"))?.trim(); if (n) void act(async () => { const f = await createTrainingFolder(n, null); await updateTrainingFolder(f.id, { courseId: id }); }); }}>+ Тема</button>
               {free.length > 0 && (
                 <select className="hr-inp" style={{ marginLeft: 6 }} value="" disabled={busy}
                   onChange={(e) => { const fid = Number(e.target.value); if (fid) void act(() => updateTrainingFolder(fid, { courseId: id })); }}>
@@ -340,7 +342,7 @@ function CourseView({ id, canEdit, onBack }: { id: number; canEdit: boolean; onB
               )}
               {d.modules.length > 0 && (
                 <button className="hr-btn xs" style={{ marginLeft: 6 }} disabled={busy}
-                  onClick={() => { if (window.confirm("Видалити ПОРОЖНЮ тему? Тема з матеріалами не видаляється — спершу перенесіть їх.")) {
+                  onClick={async () => { if ((await dlg.confirm("Видалити ПОРОЖНЮ тему? Тема з матеріалами не видаляється — спершу перенесіть їх."))) {
                     const empty = d.modules.find((m) => m.materials.length === 0);
                     if (empty) void act(() => deleteTrainingFolder(empty.id)); else setErr("Порожніх тем немає — видаляти нічого.");
                   } }}>🗑 Порожню тему</button>
@@ -615,6 +617,7 @@ function StepPane({ step, edit, busy, onChanged, onNext, nextTitle, upload, modu
   edit: boolean; busy: boolean; onChanged: () => void; onNext: () => void; nextTitle: string | null;
   upload: TrainingUploadRules | null; modules: { id: number; name: string }[]; onAddPart: (t: AddTarget) => void;
 }) {
+  const dlg = useDialogs();
   const [m, setM] = useState<TrainingMaterialContent | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -706,7 +709,7 @@ function StepPane({ step, edit, busy, onChanged, onNext, nextTitle, upload, modu
                 <button className="hr-btn xs" title="Нижче" disabled={pi === all.length - 1} onClick={() => save(() => moveTraining("materials", p.id, 1))}>↓</button>
                 {p.kind === "file" && <ReplaceFile id={p.id} upload={upload} label="Замінити" onDone={() => setVer((v) => v + 1)} onErr={setErr} />}
                 <button className="hr-btn xs" title="Видалити частину"
-                  onClick={() => { if (window.confirm(`Видалити «${p.title}» з уроку?`)) save(() => deleteTrainingMaterial(p.id)); }}>🗑</button>
+                  onClick={async () => { if ((await dlg.confirm(`Видалити «${p.title}» з уроку?`))) save(() => deleteTrainingMaterial(p.id)); }}>🗑</button>
               </div>
             ))}
           </div>

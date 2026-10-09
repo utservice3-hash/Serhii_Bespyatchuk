@@ -42,6 +42,11 @@ export interface ModelPromise {
   deadline_minutes: number;
   deadline_date: string;
   conditional: boolean;
+  /**
+   * Не обіцянка менеджера, а ПРОХАННЯ КЛІЄНТА передзвонити (рубрика v4, рішення Романа 09.10.2026), яке стає обовʼязком
+   * менеджера розмови. Без названого клієнтом часу — до кінця наступного робочого дня, а не «20 хв за замовчуванням».
+   */
+  client_asked?: boolean;
 }
 
 /** Часу не названо — 20 хвилин (Роман 29.09.2026: «зазвичай це 20 хвилин після дзвінку»). */
@@ -79,13 +84,13 @@ export function nextWorkingDay(at: Date): string {
   }
 }
 
-export type DeadlineBasis = "minutes" | "day" | "default_minutes" | "conditional_next_workday";
+export type DeadlineBasis = "minutes" | "day" | "default_minutes" | "conditional_next_workday" | "client_asked_next_workday";
 
 /**
  * Термін обіцянки від кінця розмови. Прочитане моделлю, але неправдоподібне (хвилин 0 чи понад тиждень,
  * дата в минулому чи далі за 60 днів) не береться на віру — падає в правило «часу не названо».
  */
-export function promiseDeadline(p: Pick<ModelPromise, "deadline_kind" | "deadline_minutes" | "deadline_date" | "conditional">, callEnd: Date):
+export function promiseDeadline(p: Pick<ModelPromise, "deadline_kind" | "deadline_minutes" | "deadline_date" | "conditional" | "client_asked">, callEnd: Date):
   { deadline: Date; basis: DeadlineBasis } {
   if (p.deadline_kind === "minutes" && Number.isFinite(p.deadline_minutes) && p.deadline_minutes > 0 && p.deadline_minutes <= MAX_MINUTES)
     return { deadline: new Date(callEnd.getTime() + Math.round(p.deadline_minutes) * 60_000), basis: "minutes" };
@@ -94,6 +99,7 @@ export function promiseDeadline(p: Pick<ModelPromise, "deadline_kind" | "deadlin
     if (p.deadline_date >= today && p.deadline_date <= addDays(today, MAX_DAYS_AHEAD))
       return { deadline: endOfKyivDay(p.deadline_date), basis: "day" };
   }
+  if (p.client_asked) return { deadline: endOfKyivDay(nextWorkingDay(callEnd)), basis: "client_asked_next_workday" };
   if (p.conditional) return { deadline: endOfKyivDay(nextWorkingDay(callEnd)), basis: "conditional_next_workday" };
   return { deadline: new Date(callEnd.getTime() + DEFAULT_PROMISE_MINUTES * 60_000), basis: "default_minutes" };
 }

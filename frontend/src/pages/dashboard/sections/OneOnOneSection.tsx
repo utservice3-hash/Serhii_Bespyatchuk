@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import {
   fetchOneOnOneSubjects, fetchOneOnOne, saveOneOnOne, fetchOneOnOneStats, fetchO2OForm, fetchO2OEnps, fetchO2OConductTypes,
   fetchO2OAnalytics, type O2OAnalytics, type O2OSignalKey,
@@ -122,6 +123,7 @@ function Pill({ active, onClick, children, title }: { active: boolean; onClick: 
 }
 
 export function OneOnOneSection() {
+  const dlg = useDialogs();
   const toast = useToast();
   // Доступні для проведення типи + прапорці беремо з СЕРВЕРА (живий roleKey/права),
   // а не зі scope-clamped auth.role/знімку токена — тож працює за будь-якого data_scope.
@@ -291,10 +293,10 @@ export function OneOnOneSection() {
   /** Єдиний замок переходу. Мовчить, коли втрачати нічого (див. `draftKey`: порядок
    *  ключів і порожній текст правкою НЕ вважаються — інакше попередження стало б шумом,
    *  а шум прощіпують не читаючи). */
-  const leaveGuard = () => !dirty || window.confirm(UNSAVED_PROMPT);
-  const pickSubject = (id: number) => { if (leaveGuard()) setSelId(id); };
-  const pickDate = (v: string) => { if (leaveGuard()) setDateSel(v); };
-  const pickType = (t: O2OType) => { if (!leaveGuard()) return; setType(t); setSelId(null); };
+  const leaveGuard = async () => !dirty || (await dlg.confirm(UNSAVED_PROMPT));
+  const pickSubject = async (id: number) => { if (await leaveGuard()) setSelId(id); };
+  const pickDate = async (v: string) => { if (await leaveGuard()) setDateSel(v); };
+  const pickType = async (t: O2OType) => { if (!(await leaveGuard())) return; setType(t); setSelId(null); };
 
   // Закриття вкладки/перезавантаження — теж вихід. Вішаємо ЛИШЕ поки є що втрачати.
   useEffect(() => {
@@ -330,7 +332,7 @@ export function OneOnOneSection() {
     finally { setSaving(false); }
   };
 
-  const pickMonth = (v: string) => { if (!v || v > curMonthStr()) return; if (!leaveGuard()) return; setMonthSel(v); localStorage.setItem("o2oMonth", v); setSelId(null); };
+  const pickMonth = async (v: string) => { if (!v || v > curMonthStr()) return; if (!(await leaveGuard())) return; setMonthSel(v); localStorage.setItem("o2oMonth", v); setSelId(null); };
   const selected = subjects.find((s) => s.id === selId);
   const isV = type === "V";
   // «нова зустріч» = на цю дату запису ще немає (журнал не містить її)

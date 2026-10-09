@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import {
   fetchMergePreview, mergeClients, revokeMerge, fetchMergeJournal,
   assignClientManager, fetchClientManagerHistory, fetchManagerOptions,
@@ -7,6 +8,7 @@ import {
 } from "../../../api";
 import { formatAmountFull } from "../format";
 import { ClientPicker, type ClientPickerValue } from "../ClientPicker";
+import { DatePicker } from "../../../components/DatePicker";
 
 /**
  * 🛠 ПАНЕЛІ КЕРУВАННЯ КЛІЄНТОМ — ОДНЕ ОГОЛОШЕННЯ НА ВСІ ЕКРАНИ.
@@ -40,6 +42,7 @@ const S = {
 
 export /** 🔗 Обʼєднання клієнтів — UI поверх client_key_alias. Механіка вже на проді. */
 function MergePanel({ onDone, teamOnly }: { onDone: () => void; teamOnly?: boolean }) {
+  const dlg = useDialogs();
   // 🔴 Тепер це ВИБІР зі списку, а не два поля вільного тексту: канонічний ключ
   // (`вкавтострада`) дізнатись із екрана було нізвідки, тож формою не могли
   // скористатись. Ключ підставляє пошук, людина шукає за назвою або номером.
@@ -171,7 +174,7 @@ function MergePanel({ onDone, teamOnly }: { onDone: () => void; teamOnly?: boole
               ? <span style={S.chip("#f3f4f6", "#6b7280")}>роз'єднано {j.revokedAt}</span>
               : <button style={{ border: "none", background: "transparent", color: "#2563eb", cursor: "pointer", fontSize: 12 }}
                   disabled={busy}
-                  onClick={async () => { if (!confirm(`Роз'єднати ${j.aliasKey} від ${j.canonicalKey}?`)) return;
+                  onClick={async () => { if (!(await dlg.confirm(`Роз'єднати ${j.aliasKey} від ${j.canonicalKey}?`))) return;
                     setBusy(true); setRevokeErr(null);
                     try { await revokeMerge(j.aliasKey, j.canonicalKey); reloadJournal(); onDone(); }
                     /* 🔴 Без цього `catch` 403 «злиття зроблене в дебіторці» і 409
@@ -188,6 +191,24 @@ function MergePanel({ onDone, teamOnly }: { onDone: () => void; teamOnly?: boole
     </div>
   );
 }
+
+/**
+ * 📝 ГОТОВИЙ ТЕКСТ ЗАДАЧІ (Роман 08.10.2026: «додай дефолтний текст, якщо тімлід не хоче міняти»). Це ДІЯ з результатом,
+ * а не «дізнатись, чи є вантажі» (Андрій Безпамʼятний: тімлід має ставити чітку задачу): представитись, зʼясувати
+ * перевезення, узгодити наступний крок і записати його. Тімлід лишає як є або правує під клієнта.
+ */
+export const defaultTransferTaskText = (clientName: string) =>
+  // Клієнта ще не обрано (форма вгорі розділу) — без порожнього місця «з клієнтом :»; обрали — назва підставляється сама.
+  `Звʼязатися з клієнтом${clientName.trim() ? ` ${clientName.trim()}` : ""}: представитись новим відповідальним менеджером, `
+  + "зʼясувати поточні й найближчі перевезення, узгодити наступний крок і записати його в картку клієнта.";
+
+/** Наступний робочий день (Пн–Пт) від сьогодні — дефолтний дедлайн задачі. */
+export function nextWorkingDay(from: Date = new Date()): string {
+  const d = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  do d.setDate(d.getDate() + 1); while (d.getDay() === 0 || d.getDay() === 6);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+const PRIORITY_UI = [["low", "Низький"], ["medium", "Звичайний"], ["high", "Високий"]] as const;
 
 export /** 👤 Відповідальний менеджер — межа місяця, історія, розбіжність із CRM. */
 function ManagerPanel({ clients, onDone, preset, teamId }: {
@@ -223,6 +244,19 @@ function ManagerPanel({ clients, onDone, preset, teamId }: {
   // 👤 Вид зміни (рішення Романа 15.09.2026): виправлення привʼязки діє одразу, передача — з
   // наступного місяця. Дефолт — виправлення: саме за цим найчастіше приходять тімліди.
   const [kind, setKind] = useState<"fix" | "transfer">("fix");
+  /* 📝 Задача новому менеджеру: при «передачі» — завжди (обовʼязкова), при «виправленні» — галочкою. Текст уже
+     заповнений готовим (тімлід може не міняти); поки його не правили — він іде за обраним клієнтом. */
+  const [taskWanted, setTaskWanted] = useState(false);
+  const taskOn = kind === "transfer" || taskWanted;
+  const clientName = sel?.clientName ?? preset?.clientName ?? "";
+  const [taskText, setTaskText] = useState(() => defaultTransferTaskText(clientName));
+  const [taskEdited, setTaskEdited] = useState(false);
+  useEffect(() => { if (!taskEdited) setTaskText(defaultTransferTaskText(clientName)); }, [clientName, taskEdited]);
+  const [taskDeadline, setTaskDeadline] = useState(() => nextWorkingDay());
+  const [taskPriority, setTaskPriority] = useState<"low" | "medium" | "high">("medium");
+  const [taskDetails, setTaskDetails] = useState("");
+  const taskMissing = taskOn && (!taskText.trim() || !taskDeadline);
+  const resetTask = () => { setTaskWanted(false); setTaskEdited(false); setTaskText(defaultTransferTaskText(clientName)); setTaskDeadline(nextWorkingDay()); setTaskPriority("medium"); setTaskDetails(""); };
   const monthName = (shift: number) => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() + shift); return d.toLocaleDateString("uk-UA", { month: "long", year: "numeric" }); };
   const thisMonth = monthName(0), nextMonth = monthName(1);
   const newName = managers.find((m) => m.id === managerId)?.name ?? "новий менеджер";
@@ -277,6 +311,42 @@ function ManagerPanel({ clients, onDone, preset, teamId }: {
             <b>Діє з {nextMonth}.</b> {thisMonth} лишається за {oldName}: план і факт не рухаються посеред місяця. {newName} побачить клієнта з 1-го числа наступного місяця.
           </div>}
 
+      {kind === "fix" && (
+        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, marginTop: 10, border: "1px dashed #d1d5db", borderRadius: 8, padding: "8px 10px", cursor: "pointer" }}>
+          <input type="checkbox" checked={taskWanted} onChange={(e) => setTaskWanted(e.target.checked)} disabled={busy} />
+          Поставити задачу {managerId ? newName : "новому менеджеру"}
+          <span style={{ fontSize: 11, color: "#9ca3af" }}>— при виправленні зазвичай не потрібно: менеджер уже веде клієнта</span>
+        </label>
+      )}
+      {taskOn && (
+        <div style={{ marginTop: 10, border: "1px solid #c7d2fe", background: "#f8faff", borderRadius: 10, padding: "10px 12px" }}>
+          <b style={{ fontSize: 13 }}>📝 Задача для {managerId ? newName : "нового менеджера"}</b>
+          <div style={{ fontSize: 11.5, color: "#6b7280" }}>Створиться в його Задачнику разом із передачею. Текст уже заповнений — лишіть або допишіть під клієнта.</div>
+          <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", margin: "10px 0 4px" }}>Що зробити (обовʼязково)</div>
+          <textarea value={taskText} onChange={(e) => { setTaskText(e.target.value); setTaskEdited(true); }} disabled={busy}
+            placeholder="Що зробити, з ким говорити, який результат потрібен" style={{ ...S.input, minHeight: 72, resize: "vertical", fontFamily: "inherit" }} />
+          {taskEdited && (
+            <button type="button" onClick={() => { setTaskEdited(false); setTaskText(defaultTransferTaskText(clientName)); }} disabled={busy}
+              style={{ fontSize: 11, color: "#1d4ed8", background: "none", border: "none", padding: "2px 0", cursor: "pointer" }}>↺ повернути готовий текст</button>
+          )}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+            <div>
+              <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 4 }}>Дедлайн (обовʼязково)</div>
+              <DatePicker value={taskDeadline} onChange={setTaskDeadline} />
+            </div>
+            <div>
+              <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", marginBottom: 4 }}>Пріоритет · за потреби</div>
+              <select value={taskPriority} onChange={(e) => setTaskPriority(e.target.value as "low" | "medium" | "high")} disabled={busy} style={{ ...S.input, cursor: "pointer", width: 150 }}>
+                {PRIORITY_UI.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ fontSize: 10, letterSpacing: .4, textTransform: "uppercase", color: "#6b7280", margin: "10px 0 4px" }}>Додатково для менеджера · за потреби</div>
+          <textarea value={taskDetails} onChange={(e) => setTaskDetails(e.target.value)} disabled={busy}
+            placeholder="контакти, домовленості, на що звернути увагу" style={{ ...S.input, minHeight: 48, resize: "vertical", fontFamily: "inherit" }} />
+        </div>
+      )}
+
       <div style={{ marginTop: 8, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 10px", fontSize: 12, color: "#78350f", lineHeight: 1.55 }}>
         ⚠️ Якщо нові угоди в CRM прийдуть з іншим відповідальним, ніж призначений тут, —
         клієнт буде позначений розбіжністю. Ми показуємо конфлікт, а не ховаємо його.
@@ -285,18 +355,19 @@ function ManagerPanel({ clients, onDone, preset, teamId }: {
       {msg && <div role={msg.error ? "alert" : "status"} style={{ marginTop: 8, fontSize: 12, color: msg.error ? "var(--danger)" : "#166534" }}>{msg.text}</div>}
 
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <button style={S.btn(true, busy || !clientKey || !managerId || !reason.trim())} disabled={busy || !clientKey || !managerId || !reason.trim()}
+        <button style={S.btn(true, busy || !clientKey || !managerId || !reason.trim() || taskMissing)} disabled={busy || !clientKey || !managerId || !reason.trim() || taskMissing}
           onClick={async () => { setBusy(true);
-            try { const r = await assignClientManager({ clientKey, managerId: Number(managerId), reason: reason.trim(), kind });
-                  setMsg({ text: `Передано. Діє з ${r.effectiveFrom}. ${r.note}`, error: false }); setReason("");
+            try { const r = await assignClientManager({ clientKey, managerId: Number(managerId), reason: reason.trim(), kind,
+                    ...(taskOn ? { task: { text: taskText.trim(), deadline: taskDeadline, priority: taskPriority, details: taskDetails.trim() } } : {}) });
+                  setMsg({ text: `Передано. Діє з ${r.effectiveFrom}. ${r.note}${r.taskId ? ` Задачу ${newName} поставлено.` : ""}`, error: false }); setReason(""); resetTask();
                   setHistory(await fetchClientManagerHistory(clientKey)); onDone(); }
             catch (e) { /* 403 поза командою мусить бути ВИДИМИМ, а не мовчазним «нічого не сталось» */
               const err = e as { response?: { data?: { error?: string } }; message?: string };
               setMsg({ text: `Не передано: ${err.response?.data?.error ?? err.message ?? "помилка"}`, error: true }); }
-            finally { setBusy(false); } }}>Передати</button>
-        <button style={S.btn()} disabled={busy} onClick={() => { setSel(preset ?? null); setManagerId(""); setReason(""); setMsg(null); }}>Скасувати</button>
-        {(!clientKey || !managerId || !reason.trim()) && !busy && (
-          <span style={{ fontSize: 11, color: "#9ca3af" }}>{!clientKey ? "оберіть клієнта" : !managerId ? "оберіть менеджера" : "введіть причину"}</span>)}
+            finally { setBusy(false); } }}>{taskOn ? "Передати й поставити задачу" : "Передати"}</button>
+        <button style={S.btn()} disabled={busy} onClick={() => { setSel(preset ?? null); setManagerId(""); setReason(""); setMsg(null); resetTask(); }}>Скасувати</button>
+        {(!clientKey || !managerId || !reason.trim() || taskMissing) && !busy && (
+          <span style={{ fontSize: 11, color: "#9ca3af" }}>{!clientKey ? "оберіть клієнта" : !managerId ? "оберіть менеджера" : !reason.trim() ? "введіть причину" : !taskText.trim() ? "напишіть, що зробити" : "вкажіть дедлайн"}</span>)}
       </div>
 
       {history.length > 0 && (

@@ -7,6 +7,7 @@ import { stageName } from "./stageNames.js";
 import { orphanManagerSql, orphanReason, clientKind, type OrphanReason, type ClientKind, type ClientKindWhy } from "./orphanClients.js";
 import { revenueProjection, newBusinessDobir, type MoneyScope } from "./money.js";
 import { monthEndOf, periodNotOver, kyivToday } from "./dates.js";
+import type { LazyCache } from "./lazyCache.js";
 // 🔀 Команда в ПЕРІОДНИХ розрізах — на дату рядка (створення / подія / анкер), а не поточна
 // (задача 4892, `core/teamAt.ts`). Знімки «станом на зараз» (очікування, дебіторка, застряглі,
 // прострочені) лишаються на поточній команді; когортні воронки — окремим проходом.
@@ -3952,12 +3953,21 @@ export interface Projection {
  * ЛИШЕ для поточного місяця, що ТРИВАЄ (місячна гранулярність, elapsed<total); минулий/
  * завершений/тиждень → прогноз = факт. Бектест: зміщення −3.9%, MAE 4.6% (D давала −46%).
  * ⚠️ Легасі inline-D (successMTD×k+paidOnly) з роутів ВИДАЛЕНО — прогноз рахується ЛИШЕ тут.
+ *
+ * ⏱ `cache` (07.10.2026, кеш `/report`): ДВА складники прогнозу — зона з плановою датою й добір —
+ * залежать лише від СКОУПУ, не від періоду (заміряно: 3 із 7 сталих запитів `/report`, 322 мс).
+ * Роут може передати свій лінивий кеш, і тоді саме вони йдуть через нього; формула не змінюється
+ * ні на символ. Без `cache` — рівно як було, тож джоби, AI-інструменти й решта роутів не зачеплені.
+ * Ключ — з аргументів (`LazyCache.call`), тож чужий скоуп чужих чисел не отримає. Тримає `#1237c`.
  */
-export async function buildProjection(s: ProjectionScope, plan?: number | null): Promise<Projection> {
+export async function buildProjection(s: ProjectionScope, plan?: number | null, cache?: LazyCache): Promise<Projection> {
   const scope: MoneyScope = { from: s.from, to: s.to, managerId: s.managerId, teamId: s.teamId };
+  const staticScope = { managerId: s.managerId ?? null, teamId: s.teamId ?? null };
   const [proj, expected] = await Promise.all([
     revenueProjection(scope),
-    expectedPaymentsByPlanned({ managerId: s.managerId, teamId: s.teamId }),
+    cache
+      ? cache.call("expectedPaymentsByPlanned", expectedPaymentsByPlanned, staticScope)
+      : expectedPaymentsByPlanned({ managerId: s.managerId, teamId: s.teamId }),
   ]);
   const fact = proj.fact;
   const gran = s.granularity ?? "month";
@@ -3965,7 +3975,9 @@ export async function buildProjection(s: ProjectionScope, plan?: number | null):
   const monthInProgress = gran === "month" && periodNotOver(s.to ?? kyivToday());
   const zoneFull = monthInProgress ? expected.total.sum : 0;
   const zoneDeals = monthInProgress ? expected.total.deals : 0;
-  const dobir = monthInProgress ? await newBusinessDobir({ managerId: s.managerId, teamId: s.teamId }) : 0;
+  const dobir = !monthInProgress ? 0
+    : cache ? await cache.call("newBusinessDobir", newBusinessDobir, staticScope)
+    : await newBusinessDobir({ managerId: s.managerId, teamId: s.teamId });
   const projected = fact + zoneFull + dobir;
   return {
     expectedZone: expected,
