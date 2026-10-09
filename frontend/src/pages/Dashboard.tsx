@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDialogs } from "../components/Dialogs";
 import { usePolling } from "../hooks/usePolling";
 import { mergeTasksPreservingEdits, type TaskDirtyFields } from "./dashboard/taskMerge";
 import { isBusy, shouldApplyRefresh } from "./dashboard/refreshGate";
@@ -112,6 +113,7 @@ function serverReason(err: unknown): string {
 }
 
 export function Dashboard() {
+  const dlg = useDialogs();
   const auth = useMemo(() => getAuthPayload(), []);
   // Розділ живе в URL (/report, /kvp, …) — посилання, «назад/вперед», закладки
   // працюють, а F5 лишає тебе на місці. «/» = Звіт (лендинг для всіх ролей).
@@ -1475,7 +1477,7 @@ export function Dashboard() {
                            всієї компанії. Текст питання називає обидва факти — для кого і
                            чи зворотно. */
                         onClick={async () => {
-                          if (!confirm(`Видалити новину «${n.title}»?\n\nВона зникне В УСІХ, не лише у вас. Запис зберігається, і адміністратор може повернути його через базу.`)) return;
+                          if (!(await dlg.confirm(`Видалити новину «${n.title}»?\n\nВона зникне В УСІХ, не лише у вас. Запис зберігається, і адміністратор може повернути його через базу.`))) return;
                           await deleteNews(n.id);
                           setNewsItems(await fetchNews(newsCategory));
                         }}

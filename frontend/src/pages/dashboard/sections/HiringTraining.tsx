@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import { createPortal } from "react-dom";
 import {
   fetchHiringTraining, fetchHiringTrainingDetail, createHiringInvite, extendHiringAccess, restoreHiringAccess,
@@ -178,11 +179,12 @@ export function HiringTraining({ meta, toast, onChanged }: { meta: HiringMeta; t
  * запасним: кандидат сам ставить пароль. Нова видача будь-яким способом гасить попередню.
  */
 function InviteBox({ id, toast, onChanged, disabled }: { id: number; toast: Toast; onChanged: () => void; disabled: string | null }) {
+  const dlg = useDialogs();
   const [link, setLink] = useState<{ url: string; expiresAt: string; login: string } | null>(null);
   const [cred, setCred] = useState<{ login: string; password: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const makePassword = async () => {
-    if (cred && !window.confirm("Видати новий пароль? Попередній перестане працювати.")) return;
+    if (cred && !(await dlg.confirm("Видати новий пароль? Попередній перестане працювати."))) return;
     setBusy(true);
     try { setCred(await issueHiringPassword(id)); setLink(null); onChanged(); }
     catch (e) { toast(hiringError(e), { error: true }); }

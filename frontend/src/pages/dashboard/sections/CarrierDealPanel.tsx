@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import { useToast } from "../../../components/Toasts";
 import { fetchCarrierAudio, fetchCarrierCallCard, fetchCarrierDeal, postCarrierDecision, revertCarrierClose,
   type CarrierCallCardResp, type CarrierDealT, type CarrierOtherTypeT } from "../../../api";
@@ -118,6 +119,7 @@ export function CarrierDealById({ kommoId, onChanged }: { kommoId: number; onCha
 
 /** Панель однієї угоди: ліворуч — розмова, праворуч — вердикт, рішення, журнал. `onDecided` — після запису рішення. */
 export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: CarrierDealT; onDecided: () => void; onChanged: () => void }) {
+  const dlg = useDialogs();
   const toast = useToast();
   const [card, setCard] = useState<CarrierCallCardResp | null>(null);
   const [cardErr, setCardErr] = useState<string | null>(null);
@@ -144,7 +146,7 @@ export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: Carrier
     finally { setBusy(false); }
   };
   const revert = async () => {
-    if (!window.confirm(`Повернути угоду № ${String(deal.kommoId)} на етап «Дзвінки на мобільні» і зняти причину? Автоматика її більше не закриватиме.`)) return;
+    if (!(await dlg.confirm(`Повернути угоду № ${String(deal.kommoId)} на етап «Дзвінки на мобільні» і зняти причину? Автоматика її більше не закриватиме.`))) return;
     setBusy(true);
     try { await revertCarrierClose(deal.kommoId); onChanged(); }
     catch (e) { toast(`Не повернуто: ${errText(e)}`, { error: true }); }

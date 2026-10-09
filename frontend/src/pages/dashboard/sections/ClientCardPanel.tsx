@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import { useToast } from "../../../components/Toasts";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Cell } from "recharts";
 import { fetchClientCard, archiveClient, saveLoyaltyOverride, contactChannelLabel, saveClientNextStep, doneClientNextStep, pinPlanBasis, clearPlanBasis, type ClientCard } from "../../../api";
@@ -31,6 +32,7 @@ const ADMIN_ACTION_LABEL: Record<string, string> = {
  * плану (ТЗ 22.09, п.3.3). Без нього (екран пропущених дзвінків) сервер бере поточний місяць.
  */
 export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: string; onChanged?: () => void; month?: string }) {
+  const dlg = useDialogs();
   const toast = useToast();
   /** 📞 Показати всі розмови, а не лише останні 10 (п.3.4: статистику по роках прибрано, список лишився). */
   const [allCalls, setAllCalls] = useState(false);
@@ -136,7 +138,7 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
                 <>
                   <button disabled={busy} style={BTN("#166534")}
                     onClick={async () => {
-                      if (!confirm(`Повернути «${card.clientName}» з архіву?`)) return;
+                      if (!(await dlg.confirm(`Повернути «${card.clientName}» з архіву?`))) return;
                       setBusy(true);
                       try { await archiveClient({ clientKey, restore: true }); load(); onChanged?.(); }
                       finally { setBusy(false); }
@@ -155,7 +157,7 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
                   </select>
                   <button disabled={busy || !reason} style={BTN("#b91c1c")}
                     onClick={async () => {
-                      if (!confirm(`Прибрати «${card.clientName}» в архів?\n\nКлієнт зникне з планування й реактивації. Дія зворотна.`)) return;
+                      if (!(await dlg.confirm(`Прибрати «${card.clientName}» в архів?\n\nКлієнт зникне з планування й реактивації. Дія зворотна.`))) return;
                       setBusy(true);
                       try { await archiveClient({ clientKey, reason }); setReason(""); load(); onChanged?.(); }
                       finally { setBusy(false); }
@@ -182,7 +184,7 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
                 <>
                   <button disabled={busy} style={BTN("#6b7280")}
                     onClick={async () => {
-                      if (!confirm(`Скинути ручну правку для «${card.clientName}»?\n\nКлієнт повернеться під загальне правило кваліфікації.`)) return;
+                      if (!(await dlg.confirm(`Скинути ручну правку для «${card.clientName}»?\n\nКлієнт повернеться під загальне правило кваліфікації.`))) return;
                       setBusy(true);
                       try { await saveLoyaltyOverride({ clientKey, forceRegular: false }); load(); onChanged?.(); }
                       finally { setBusy(false); }

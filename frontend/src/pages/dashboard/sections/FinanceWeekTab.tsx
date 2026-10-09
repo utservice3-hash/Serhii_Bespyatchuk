@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import { createPortal } from "react-dom";
 import {
   fetchFinKpiPeriod, fetchFinKpiCard, saveFinKpiValues, saveFinKpiNote, setFinKpiClosed, createFinKpi, updateFinKpi, deleteFinKpi,
@@ -58,6 +59,7 @@ const AUTO_STATE: Record<NonNullable<FinKpi["autoState"]>, [string, string]> = {
 };
 
 export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
+  const dlg = useDialogs();
   const [kind, setKind] = useState<FinPeriodKind>("week");
   const [p, setP] = useState(kyivToday);
   const [data, setData] = useState<FinKpiPeriod | null>(null);
@@ -76,8 +78,8 @@ export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
   }, [kind, p, nonce]);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
   const changed = Object.keys(draft);
-  const leave = (fn: () => void) => () => {
-    if (edit && changed.length && !window.confirm("Є незбережені зміни. Вийти без збереження?")) return;
+  const leave = (fn: () => void) => async () => {
+    if (edit && changed.length && !(await dlg.confirm("Є незбережені зміни. Вийти без збереження?"))) return;
     setEdit(false); setDraft({}); setBad(new Set()); fn();
   };
   const undo = (k: FinKpiThing, id: number, text: string) =>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import { fetchReceivableArchive, revokeReceivableWriteoff, type ReceivableArchive } from "../../../api";
 import { formatAmount, formatAmountFull } from "../format";
 import { formatDateSafe, nPlural, parseDateSafe } from "../receivablesView";
@@ -18,6 +19,7 @@ import { Hint, Tip } from "../../../components/Hint";
  * підказує, що ті угоди треба закрити і в Kommo.
  */
 export function ReceivablesArchive({ onRestored }: { onRestored?: () => void }) {
+  const dlg = useDialogs();
   const [d, setD] = useState<ReceivableArchive | "loading" | "error">("loading");
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -28,9 +30,8 @@ export function ReceivablesArchive({ onRestored }: { onRestored?: () => void }) 
   if (d === "error") return <div style={{ color: "var(--danger)" }}>Не вдалося завантажити архів</div>;
 
   const restore = async (w: { clientKeyRaw: string; invoiceNo: string; clientName: string | null }) => {
-    const note = window.prompt(
-      `Повернути рахунок № ${w.invoiceNo} (${w.clientName ?? w.clientKeyRaw}) в активні.\n\n`
-      + "Причина обовʼязкова — журнал мусить пояснювати обидві дії:");
+    const note = (await dlg.prompt(`Повернути рахунок № ${w.invoiceNo} (${w.clientName ?? w.clientKeyRaw}) в активні.\n\n`
+      + "Причина обовʼязкова — журнал мусить пояснювати обидві дії:"));
     if (note == null) return;
     if (!note.trim()) { setErr("Причина обовʼязкова — без неї повернення не відрізнити від помилки"); return; }
     setBusy(w.invoiceNo); setErr(null);

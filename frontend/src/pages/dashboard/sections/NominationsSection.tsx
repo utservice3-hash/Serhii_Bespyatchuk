@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import { useToast } from "../../../components/Toasts";
 import {
   fetchNominationWeek, reviewNomination, confirmNominationsBulk, fetchDayItems, saveRnkConv,
@@ -49,6 +50,7 @@ function errorOf(e: unknown): string {
 type Drill = { managerId: number; name: string; nomination: NominationKey; kind: "received" | "dispatched"; value: number | null; unit: "uah" | "count" | "pct" };
 
 export function NominationsSection() {
+  const dlg = useDialogs();
   const toast = useToast();
   const firstWeek = useMemo(() => parseWeekParam(window.location.search) ?? undefined, []);
   const [data, setData] = useState<NominationWeek | null>(null);
@@ -101,7 +103,7 @@ export function NominationsSection() {
 
   // 🔒 Остаточна фіксація незворотна — тому підтвердження словами, а не лише кліком.
   const lockWeek = async () => {
-    if (!window.confirm(`Зафіксувати тиждень ${dm(data.weekFrom)}–${dm(data.weekTo)} остаточно? Після цього ніхто — ні тімліди, ні ви — не зможе змінити жодного числа, зокрема лідогенерацію й конверсію РНК.`)) return;
+    if (!(await dlg.confirm(`Зафіксувати тиждень ${dm(data.weekFrom)}–${dm(data.weekTo)} остаточно? Після цього ніхто — ні тімліди, ні ви — не зможе змінити жодного числа, зокрема лідогенерацію й конверсію РНК.`))) return;
     setLocking(true);
     try { applyData(await lockNominationWeek(data.weekFrom)); }
     catch (e) { toast(errorOf(e), { error: true }); }

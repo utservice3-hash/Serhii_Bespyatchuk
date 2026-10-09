@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import {
   fetchMergePreview, mergeClients, revokeMerge, fetchMergeJournal,
   assignClientManager, fetchClientManagerHistory, fetchManagerOptions,
@@ -41,6 +42,7 @@ const S = {
 
 export /** 🔗 Обʼєднання клієнтів — UI поверх client_key_alias. Механіка вже на проді. */
 function MergePanel({ onDone, teamOnly }: { onDone: () => void; teamOnly?: boolean }) {
+  const dlg = useDialogs();
   // 🔴 Тепер це ВИБІР зі списку, а не два поля вільного тексту: канонічний ключ
   // (`вкавтострада`) дізнатись із екрана було нізвідки, тож формою не могли
   // скористатись. Ключ підставляє пошук, людина шукає за назвою або номером.
@@ -172,7 +174,7 @@ function MergePanel({ onDone, teamOnly }: { onDone: () => void; teamOnly?: boole
               ? <span style={S.chip("#f3f4f6", "#6b7280")}>роз'єднано {j.revokedAt}</span>
               : <button style={{ border: "none", background: "transparent", color: "#2563eb", cursor: "pointer", fontSize: 12 }}
                   disabled={busy}
-                  onClick={async () => { if (!confirm(`Роз'єднати ${j.aliasKey} від ${j.canonicalKey}?`)) return;
+                  onClick={async () => { if (!(await dlg.confirm(`Роз'єднати ${j.aliasKey} від ${j.canonicalKey}?`))) return;
                     setBusy(true); setRevokeErr(null);
                     try { await revokeMerge(j.aliasKey, j.canonicalKey); reloadJournal(); onDone(); }
                     /* 🔴 Без цього `catch` 403 «злиття зроблене в дебіторці» і 409

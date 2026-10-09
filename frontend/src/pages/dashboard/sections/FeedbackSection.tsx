@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import { rejectNote, failureReason } from "../../../actionFeedback";
 import {
   fetchFeedback,
@@ -98,6 +99,7 @@ function StatusBadge({ status }: { status: FeedbackStatus }) {
 }
 
 export function FeedbackSection({ isAdmin }: { isAdmin: boolean }) {
+  const dlg = useDialogs();
   const [items, setItems] = useState<FeedbackItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -131,7 +133,7 @@ export function FeedbackSection({ isAdmin }: { isAdmin: boolean }) {
   }
 
   async function removeFile(itemId: number, fileId: number) {
-    if (!window.confirm("Прибрати це фото?")) return;
+    if (!(await dlg.confirm("Прибрати це фото?"))) return;
     try {
       await deleteFeedbackFile(itemId, fileId);
       setItems((prev) => prev.map((x) => (x.id === itemId ? { ...x, files: x.files.filter((f) => f.id !== fileId) } : x)));
@@ -172,7 +174,7 @@ export function FeedbackSection({ isAdmin }: { isAdmin: boolean }) {
     // ВІДХИЛЯЛО звернення (30.09.2026, `#1103`).
     let note: string | undefined;
     if (status === "rejected") {
-      const r = rejectNote(window.prompt("Коментар (необовʼязково):"));
+      const r = rejectNote((await dlg.prompt("Коментар (необовʼязково):")));
       if (!r.reject) return;
       note = r.note;
     }

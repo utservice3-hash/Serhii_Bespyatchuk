@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import { createPortal } from "react-dom";
 import {
   createSecretsLink, unlinkSecretsBot, fetchSecretPerson, createSecret, updateSecret,
@@ -31,6 +32,7 @@ const titleOf = (i: Pick<SecretItem, "kind" | "service" | "label" | "last4">) =>
 /** Двері привʼязки: за замовчуванням — сейф HR (`/secrets`), тімлід передає свої (`/team-vault`). */
 export interface LinkApi { link: typeof createSecretsLink; unlink: typeof unlinkSecretsBot }
 export function StatusBar({ status, onChanged, toast, api }: { status: SecretsStatus; onChanged: () => void; toast: Toast; api?: LinkApi }) {
+  const dlg = useDialogs();
   const linkApi: LinkApi = api ?? { link: createSecretsLink, unlink: unlinkSecretsBot };
   const [link, setLink] = useState<{ code: string; url: string | null; bot: string | null } | null>(null);
   const poll = useRef<number | null>(null);
@@ -52,7 +54,7 @@ export function StatusBar({ status, onChanged, toast, api }: { status: SecretsSt
   if (status.linked) return (
     <div className="hr-note" style={{ margin: "0 0 12px", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
       <span>✅ Ваш Telegram привʼязано до «UTS Сейф»{status.botUsername ? ` (@${status.botUsername})` : ""} з {kyiv(status.linkedAt)} — коди приходитимуть туди.</span>
-      <button className="hr-btn xs" onClick={() => { if (window.confirm("Відвʼязати Telegram від «UTS Сейф»? Без нього «Показати» не працюватиме.")) void linkApi.unlink().then(onChanged); }}>Відвʼязати</button>
+      <button className="hr-btn xs" onClick={async () => { if ((await dlg.confirm("Відвʼязати Telegram від «UTS Сейф»? Без нього «Показати» не працюватиме."))) void linkApi.unlink().then(onChanged); }}>Відвʼязати</button>
     </div>
   );
   return (

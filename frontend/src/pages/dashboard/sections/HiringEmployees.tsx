@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import { createPortal } from "react-dom";
 import {
   fetchEmployees, previewEmployeeImport, commitEmployeeImport, updateEmployee, fetchSecretsStatus, linkEmployeesKommo, hiringError,
@@ -362,6 +363,7 @@ function DismissDialog({ row, onClose, onDone }: { row: EmployeeRow; onClose: ()
 
 /** Смуга стану звільнення в картці: крок 2 і «Повернути». Обидві дії — з підтвердженням, бо чіпають вхід. */
 function OffboardingBar({ row, toast, onDone }: { row: EmployeeRow; toast: Toast; onDone: () => void }) {
+  const dlg = useDialogs();
   const [busy, setBusy] = useState(false);
   const act = async (fn: () => Promise<unknown>, ok: string) => {
     setBusy(true);
@@ -380,11 +382,11 @@ function OffboardingBar({ row, toast, onDone }: { row: EmployeeRow; toast: Toast
       </span>
       {finishing && (
         <button className="hr-btn p" disabled={busy} title="Крок 2 із 2"
-          onClick={() => { if (window.confirm(`Завершити звільнення: ${row.full_name}?${hasLogin ? " Вхід у дашборд буде закрито." : ""}`)) void act(() => finishDismissal(row.id), `${row.full_name}: звільнено${hasLogin ? ", вхід закрито" : ""}`); }}>
+          onClick={async () => { if ((await dlg.confirm(`Завершити звільнення: ${row.full_name}?${hasLogin ? " Вхід у дашборд буде закрито." : ""}`))) void act(() => finishDismissal(row.id), `${row.full_name}: звільнено${hasLogin ? ", вхід закрито" : ""}`); }}>
           Завершити звільнення</button>
       )}
       <button className="hr-btn" disabled={busy}
-        onClick={() => { if (window.confirm(`Повернути ${row.full_name} у «працює»? Стан у Звіті й вхід повернуться як були до звільнення.`)) void act(() => revertDismissal(row.id), `${row.full_name}: повернуто`); }}>
+        onClick={async () => { if ((await dlg.confirm(`Повернути ${row.full_name} у «працює»? Стан у Звіті й вхід повернуться як були до звільнення.`))) void act(() => revertDismissal(row.id), `${row.full_name}: повернуто`); }}>
         Повернути</button>
     </div>
   );
