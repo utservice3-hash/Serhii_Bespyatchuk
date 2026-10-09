@@ -204,6 +204,8 @@ export interface LeadgenHandoffDeal {
   autoDay: string | null; inPeriod: boolean;
   /** «Очікування», перенесене з минулого періоду: авто поїхало раніше, на кінець періоду угода ще чекала (02.10.2026). */
   carried?: boolean;
+  /** Угода менеджера мінусова (поле «Мінусова угода»): машина рахується, сума лідгену — 0 (07.10.2026). */
+  minus?: boolean;
 }
 /** Розкривний список «Гроші з передач»: ті самі правила, що `handoffMoney` у /leadgen-stats; `totals` мусять із ним збігатися. */
 export interface LeadgenHandoffDealsResp { from: string; to: string; managerId: number | null; deals: LeadgenHandoffDeal[]; totals: LeadgenHandoffMoney }
