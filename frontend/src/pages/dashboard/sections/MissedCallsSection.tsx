@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Brush } from "recharts";
 import {
-  fetchMissedCalls, fetchMissedList, fetchNoDeal, fetchNoDealList, fetchMissedSeries,
+  fetchMissedCalls, fetchMissedList, fetchNoDeal, fetchNoDealList, fetchMissedSeries, fetchLeadResponse,
+  type ResponseTimeResp, type ResponseLineT, type ResponseTeamT,
   type MissedSeriesGranularity, type MissedSeriesResp,
   type MissedCallsResp, type MissedDayBucket, type MissedManagerRow, type MissedListResp,
   type MissedNextStep, type NoDealCounts, type NoDealState, type NoDealListRow, type MissedTeamRow,
@@ -175,6 +176,8 @@ export function MissedCallsSection({ canOpenClient }: { canOpenClient: boolean }
 
       {/* 🔝 «Дзвінок був, а угоди немає» — ОДРАЗУ ПІД ПІДСУМКОМ (прохання власника 17.09.2026): унизу
           його не було видно за довгою таблицею й списком дзвінків. Далі — динаміка, як на Статистиках. */}
+      {/* 📞 5148: «один екран по швидкості реакції» — відповідь на заявку поруч із передзвоном на пропущені. */}
+      <ResponseTimeBlock from={d.period.from} to={d.period.to} />
       <NoDealBlock from={d.period.from} to={d.period.to} />
       <MissedDynamicsBlock />
 
@@ -684,6 +687,97 @@ function NoDealBlock({ from, to }: { from: string; to: string }) {
               )}
             </div>
           )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 📞 «ВІДПОВІДЬ НА ЗАЯВКУ» (задача 5148, ТЗ Юлі 05.10.2026; рішення Романа 12.10.2026). Від створення заявки до
+ * ПЕРШОГО НАБОРУ менеджера — медіана; нічна заявка рахується від 08:15. Відділ = реклама + сайт, лідгени — окремо й у
+ * медіану відділу не входять. «Не взяв трубку» — перший набір тривав 0 с. Числа рахує сервер (`core/leadResponse.ts`).
+ */
+function ResponseTimeBlock({ from, to }: { from: string; to: string }) {
+  const [r, setR] = useState<ResponseTimeResp | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let alive = true;
+    setR(null); setErr(null);
+    fetchLeadResponse({ from, to })
+      .then((x) => { if (alive) setR(x); })
+      .catch((e) => { if (alive) setErr(String((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? e)); });
+    return () => { alive = false; };
+  }, [from, to]);
+  const toggle = (k: string) => setOpen((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+  const cell: React.CSSProperties = { padding: "7px 10px", textAlign: "right", whiteSpace: "nowrap" };
+  const head: React.CSSProperties = { ...cell, fontWeight: 600, fontSize: 12.5, color: "var(--text-muted)" };
+  const n = (v: number | null) => (v == null ? "—" : v.toLocaleString("uk-UA"));
+  const noAns = (x: ResponseLineT) => (x.answerUnknown > 0 && x.answerUnknown === x.dialed ? "невідомо"
+    : `${n(x.noAnswer)}${x.answerUnknown > 0 ? ` (+${n(x.answerUnknown)} невідомо)` : ""}`);
+  const Row = ({ x, bold = false, indent = 0, onClick, openMark }: { x: ResponseLineT; bold?: boolean; indent?: number; onClick?: () => void; openMark?: boolean }) => (
+    <tr onClick={onClick} style={{ borderBottom: "1px solid var(--border)", cursor: onClick ? "pointer" : "default", fontWeight: bold ? 600 : 400,
+      background: bold ? "var(--bg)" : undefined }}>
+      <td style={{ ...cell, textAlign: "left", paddingLeft: 10 + indent * 18 }}>{openMark != null ? (openMark ? "▾ " : "▸ ") : ""}{x.label}</td>
+      <td style={cell}>{n(x.n)}</td>
+      <td style={cell}>{n(x.dialed)}</td>
+      <td style={{ ...cell, color: x.notDialed > 0 ? "var(--danger, #c8102e)" : undefined }}>{n(x.notDialed)}</td>
+      <td style={{ ...cell, fontWeight: 600 }}>{x.medianMin == null ? "—" : `${x.medianMin} хв`}</td>
+      <td style={cell}>{x.m5Pct == null ? "—" : `${x.m5Pct}%`}</td>
+      <td style={cell}>{noAns(x)}</td>
+    </tr>
+  );
+  const team = (t: ResponseTeamT, bold: boolean) => (
+    <Fragment key={t.key}>
+      <Row x={t} bold={bold} onClick={() => toggle(t.key)} openMark={open.has(t.key)} />
+      {open.has(t.key) && t.managers.map((m) => <Row key={m.key} x={m} indent={1} />)}
+    </Fragment>
+  );
+  return (
+    <div className="chart-card" style={{ marginTop: 16 }}>
+      <h3 style={{ margin: "0 0 4px", display: "flex", alignItems: "center", gap: 8 }}>
+        Відповідь на заявку
+        <InfoHint text="Від створення заявки до ПЕРШОГО набору менеджера, навіть якщо клієнт не взяв трубку. Медіана, а не середнє: кілька заявок, яким передзвонили через дні, тягнуть середнє в десятки разів угору. Заявка, створена в неробочий час, рахується від 08:15 найближчого робочого дня — як у вікні «Час опрацювання заявки». Заявки — реклама (uts.ua) і сайт (yalogist); лідгени — окремим рядком і в медіану відділу не входять." />
+      </h3>
+      <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text-muted)" }}>Період: {from} — {to} · за датою створення заявки · команда — на дату створення</p>
+      {err && <p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>}
+      {!r && !err && <p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>}
+      {r && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 14 }}>
+            <Tile label="Медіана відповіді" value={r.dept.medianMin == null ? "—" : `${r.dept.medianMin} хв`} sub={`${n(r.dept.dialed)} із ${n(r.dept.n)} заявок`}
+              hint="Від створення заявки до першого набору менеджера, медіана по відділу (реклама + сайт)." />
+            <Tile label="Набрали за 5 хв" value={r.dept.m5Pct == null ? "—" : `${r.dept.m5Pct}%`} sub="від усіх заявок відділу"
+              hint="Частка ВСІХ заявок відділу, яким менеджер набрав не пізніше 5 хв від створення (нічні — від 08:15)." />
+            <Tile label="Без набору" value={n(r.dept.notDialed)} sub="заявок відділу"
+              hint="Заявки, по яких вихідного дзвінка не знайдено ні в Kommo, ні в Ringostat." />
+            <Tile label="Не взяв трубку з першого разу" value={noAns(r.dept)} sub="перший набір 0 с"
+              hint="Менеджер набрав, а клієнт не відповів (тривалість першого дзвінка 0 с). «Невідомо» — тривалість не збережена (історія до 12.10.2026)." />
+            <Tile label="Лідгени (окремо)" value={r.leadgen.medianMin == null ? "—" : `${r.leadgen.medianMin} хв`} sub={`${n(r.leadgen.dialed)} із ${n(r.leadgen.n)} заявок`}
+              hint="Передані з відділу лідгенерації. Рахуються окремо й у медіану відділу не входять." />
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                  <th style={{ ...head, textAlign: "left" }}>Команда / менеджер</th>
+                  <th style={head}>Заявок</th>
+                  <th style={head}>З набором</th>
+                  <th style={head}>Без набору</th>
+                  <th style={head}>Медіана</th>
+                  <th style={head}>До 5 хв</th>
+                  <th style={head}>Не взяв трубку</th>
+                </tr>
+              </thead>
+              <tbody>
+                {r.teams.map((t) => team(t, false))}
+                <Row x={r.dept} bold />
+                {r.leadgen.n > 0 && team(r.leadgen, true)}
+              </tbody>
+            </table>
+          </div>
+          <p style={{ margin: "8px 0 0", fontSize: 12, color: "var(--text-muted)" }}>Клік по команді — її менеджери. Медіани не додаються: рядок відділу рахується по всіх його заявках.</p>
         </>
       )}
     </div>

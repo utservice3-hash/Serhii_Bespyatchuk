@@ -119,7 +119,8 @@ test("#463 ПЕРІОД: дефолт «вчора» за Києвом, наві
   const dash = stripComments(readFileSync(FE("pages/Dashboard.tsx"), "utf8"));
   // Гонка: пізня відповідь за СТАРИЙ період не перезаписує новий — у всіх чотирьох запитах вкладки.
   // Від предмета, а не від числа: кожен запит вкладки має свій захист від гонки.
-  const fetches = (sec.match(/\bfetch(MissedCalls|MissedList|NoDeal|NoDealList|MissedSeries)\(/g) ?? []).length;
+  // 5148: + «Відповідь на заявку» (`fetchLeadResponse`) — теж запит вкладки за періодом, теж зі своїм захистом.
+  const fetches = (sec.match(/\bfetch(MissedCalls|MissedList|NoDeal|NoDealList|MissedSeries|LeadResponse)\(/g) ?? []).length;
   assert.ok(fetches >= 5, `🔴 знайдено лише ${String(fetches)} запитів вкладки — розбір зламався`);
   assert.equal((sec.match(/return \(\) => \{ alive = false; \};/g) ?? []).length, fetches,
     "🔴 запит вкладки без захисту від гонки: відповідь за старий період перезапише новий");

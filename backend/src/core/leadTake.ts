@@ -58,7 +58,12 @@ export interface TakeDeal {
 
 interface Row extends TakeRowInput { d: TakeDeal }
 
-async function loadRows(q: TakeQuery): Promise<Row[]> {
+/**
+ * 🧩 ЩО ТАКЕ «ЗАЯВКА» — ОДНЕ МІСЦЕ на вікно «Час опрацювання» і «Відповідь на заявку» (5148): воронки, період за
+ * датою створення, джерела, кампанія, межа ролі, команда на дату створення. Друга копія цих умов розійшлась би з
+ * першою мовчки — і два екрани «швидкості реакції» рахували б різні множини заявок.
+ */
+export function leadSelection(q: Pick<TakeQuery, "from" | "to" | "source" | "campaign" | "managerId" | "teamId">): { conds: string[]; params: unknown[]; teamSql: string } {
   const K = "AT TIME ZONE 'Europe/Kyiv'";
   const p: unknown[] = [[...QUALIFICATION_PIPELINES, ...FC_PIPELINES], q.from, q.to];
   const conds = ["d.pipeline_id = ANY($1)", `(d.created_at_kommo ${K})::date BETWEEN $2::date AND $3::date`];
@@ -74,6 +79,11 @@ async function loadRows(q: TakeQuery): Promise<Row[]> {
   const TEAM = teamAtSql("m", `(d.created_at_kommo ${K})::date`);
   if (q.managerId) conds.push(`d.manager_id = ${add(q.managerId)}`);
   if (q.teamId) conds.push(`${TEAM} IS NOT DISTINCT FROM ${add(q.teamId)}`);
+  return { conds, params: p, teamSql: TEAM };
+}
+
+async function loadRows(q: TakeQuery): Promise<Row[]> {
+  const { conds, params: p, teamSql: TEAM } = leadSelection(q);
   const r = await pool.query<{
     kommo_id: string; name: string | null; manager_id: number | null; manager: string | null; team_id: number | null; team: string | null;
     created: Date; stage_at: Date | null; call_at: Date | null; field_at: Date | null;

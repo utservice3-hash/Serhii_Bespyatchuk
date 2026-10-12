@@ -644,6 +644,18 @@ export interface MissedSeriesResp {
   granularity: MissedSeriesGranularity; from: string; to: string; ownerlessInScope: boolean;
   series: { key: string; name: string | null; points: MissedSeriesPoint[] }[];
 }
+/** 📞 «Відповідь на заявку» (5148) — дзеркало `ResponseLine` у `core/leadResponse.ts`. */
+export interface ResponseLineT {
+  key: string; label: string; n: number; dialed: number; notDialed: number; medianMin: number | null;
+  m5Pct: number | null; noAnswer: number; answerUnknown: number;
+}
+export interface ResponseTeamT extends ResponseLineT { managers: ResponseLineT[] }
+export interface ResponseTimeResp { period: { from: string; to: string }; dept: ResponseLineT; teams: ResponseTeamT[]; leadgen: ResponseTeamT }
+export async function fetchLeadResponse(params: { from: string; to: string }): Promise<ResponseTimeResp> {
+  const { data } = await api.get<ResponseTimeResp>("/dashboard/missed-calls/response-time", { params });
+  return data;
+}
+
 export async function fetchMissedSeries(params: { granularity: MissedSeriesGranularity }): Promise<MissedSeriesResp> {
   const { data } = await api.get<MissedSeriesResp>("/dashboard/missed-calls/series", { params });
   return data;

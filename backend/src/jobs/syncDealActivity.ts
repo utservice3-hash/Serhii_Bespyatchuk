@@ -1,4 +1,5 @@
 import { pool } from "../db/pool.js";
+import { FIRST_CALL_UPDATE_SQL } from "../core/leadResponseRules.js";
 import {
   forEachLeadNotePage, forEachLeadNotePageByIds,
   forEachContactNotePage, forEachContactNotePageByIds, type KommoLeadNote,
@@ -74,11 +75,12 @@ export async function applyNotes(notes: KommoLeadNote[]): Promise<void> {
   const latestCall = new Map<number, number>(); // останній ДЗВІНОК (call_in/call_out) per lead
   // ⏱ Найраніший ВИХІДНИЙ дзвінок (вікно «Час опрацювання заявки», ТЗ 24.09.2026). Будь-який `call_out`, і на
   // 0 с, і від системного автора: за ТЗ «взято в роботу» — це сам факт, що менеджер набрав, а не розмова.
-  const firstOut = new Map<number, number>();
+  // 📞 5148: разом із часом — тривалість цього ж дзвінка (0 с = клієнт не взяв трубку).
+  const firstOut = new Map<number, { at: number; sec: number | null }>();
   for (const n of notes) {
     if (n.noteType === "call_out") {
       const f = firstOut.get(n.entityId);
-      if (f == null || n.createdAt < f) firstOut.set(n.entityId, n.createdAt);
+      if (f == null || n.createdAt < f.at) firstOut.set(n.entityId, { at: n.createdAt, sec: n.durationSec });
     }
     if (isHumanCall(n)) {
       const c = latestCall.get(n.entityId) ?? 0;
@@ -94,11 +96,9 @@ export async function applyNotes(notes: KommoLeadNote[]): Promise<void> {
     // Лише дзвінки НЕ РАНІШЕ створення угоди: контактна нотатка розноситься на всі угоди контакта, і
     // дзвінок по старій угоді не має «взяти» нову. LEAST — рухаємося лише назад, як `first_activity_at`.
     const ids = [...firstOut.keys()];
-    await pool.query(
-      `UPDATE deals d SET first_call_out_at = LEAST(d.first_call_out_at, v.co)
-         FROM (SELECT UNNEST($1::bigint[]) AS kommo_id, UNNEST($2::timestamptz[]) AS co) v
-        WHERE d.kommo_id = v.kommo_id AND v.co >= d.created_at_kommo`,
-      [ids, ids.map((id) => new Date(firstOut.get(id)! * 1000))]);
+    // 📞 5148: тривалість їде за ЧАСОМ — правило й текст у `FIRST_CALL_UPDATE_SQL` (гейт проганяє саме його).
+    await pool.query(FIRST_CALL_UPDATE_SQL,
+      [ids, ids.map((id) => new Date(firstOut.get(id)!.at * 1000)), ids.map((id) => firstOut.get(id)!.sec)]);
   }
   if (latest.size === 0 && latestCall.size === 0) return;
 
