@@ -77,7 +77,7 @@ import { emptyTaskForm } from "./dashboard/taskForm";
 import { OverviewSection, type Kpi } from "./dashboard/sections/OverviewSection";
 import { ManagerReportSection } from "./dashboard/sections/ManagerReportSection";
 import { FeedbackSection } from "./dashboard/sections/FeedbackSection";
-import { RatesSection } from "./dashboard/sections/RatesSection";
+import { RatesAndCargoSection } from "./dashboard/sections/RatesAndCargoSection";
 import { AiWorkSection } from "./dashboard/sections/AiWorkSection";
 import { ReportsSection } from "./dashboard/sections/ReportsSection";
 import { DocumentsSection } from "./dashboard/sections/DocumentsSection";
@@ -1193,7 +1193,7 @@ export function Dashboard() {
 
       {section === "feedback" && <FeedbackSection isAdmin={auth?.role === "admin"} />}
 
-      {section === "rates" && <RatesSection />}
+      {section === "rates" && <RatesAndCargoSection />}
 
       {section === "aiwork" && <AiWorkSection lastSection={lastVisitedSection} />}
 

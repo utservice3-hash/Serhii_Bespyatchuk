@@ -68,7 +68,7 @@ export const NAV_GROUPS = [
       { key: "duty", label: "Календар команди", icon: "🗓" },
       { key: "bank", label: "Виписка", icon: "💳" },
       { key: "oneonone", label: "Ван-ту-ван", icon: "🤝", roles: ["admin", "team_lead"] },
-      { key: "rates", label: "Калькулятор ставок", icon: "🧮" },
+      { key: "rates", label: "Калькулятор ставок та вантажу", icon: "🧮" },
       { key: "goals", label: "Місячні цілі", icon: "🎯", roles: ["admin", "team_lead"] },
       { key: "messenger", label: "Месенджер", icon: "💬" },
       { key: "news", label: "Новини", icon: "📰" },

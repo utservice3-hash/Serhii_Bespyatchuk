@@ -206,3 +206,58 @@ test("#1615 THREE.JS r128: вендорний файл = npm three@0.128.0, ро
   assert.equal(createHash("sha256").update(buf).digest("hex"), "9274bbcec8d96168626c732b5d31c775aa8cfb7eaa0599bec0c175908a2c1ce2", "🔴 three.js — не r128 з npm");
   assert.match(buf.subarray(0, 200).toString("utf8"), /Copyright .* Three\.js Authors[\s\S]*MIT/, "🔴 без MIT-шапки");
 });
+
+const FRONT = (p: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", p), "utf8");
+
+/**
+ * #1616 — ФРОНТ КОНФІГУРАТОРА (ТЗ §0, §5):
+ *  - спільний код (рушій, довідник, стан, формат) у фронті — БАЙТ У БАЙТ бекендівський: паритет #1610 доведено на
+ *    бекенд-копії, тож інакше він нічого не казав би про те, що бачить менеджер;
+ *  - меню й заголовок — «Калькулятор ставок та вантажу»; маршрут rates рендерить екран із двома вкладками, «Розрахунок
+ *    ставки» — наявний `RatesSection` за замовчуванням; `?tab=cargo` відкриває конфігуратор;
+ *  - жодного `lazy(`/`import(` (#225 — один чанк) і жодного пакета `three`: 3D тягнеться з `/cargo/three.js`;
+ *  - стилі — лише під `.cargo-cfg` / `.rates-cargo`; вкладка відкривається з авто «10 т» (рішення 12.10).
+ * 🧨 Червоніє, якщо розвести копію рушія, повернути `lazy`/`import('three')`, залишити старий підпис меню чи
+ * написати глобальний селектор.
+ */
+test("#1616 ФРОНТ КОНФІГУРАТОРА: рушій = бекенд байт у байт, меню й вкладки, ?tab=cargo, один чанк, three з сервера, CSS ізольовано", () => {
+  for (const f of ["cargoEngine", "cargoDefaults", "cargoState", "cargoFormat"]) {
+    assert.equal(FRONT(`cargo/shared/${f}.ts`), SRC(`cargo/${f}.ts`), `🔴 ${f}.ts у фронті розійшовся з бекендом`);
+  }
+  const layout = FRONT("components/Layout.tsx"), dash = FRONT("pages/Dashboard.tsx"), sec = FRONT("pages/dashboard/sections/RatesAndCargoSection.tsx");
+  assert.match(layout, /\{ key: "rates", label: "Калькулятор ставок та вантажу",/, "🔴 пункт меню не перейменовано");
+  assert.match(sec, /export const PAGE_TITLE = "Калькулятор ставок та вантажу";/);
+  assert.match(dash, /\{section === "rates" && <RatesAndCargoSection \/>\}/, "🔴 маршрут rates не рендерить екран із вкладками");
+  assert.match(sec, /hidden=\{tab !== "rate"\}><RatesSection \/><\/div>/, "🔴 «Розрахунок ставки» — не наявний RatesSection");
+  assert.match(sec, /params\.get\("tab"\) === "cargo" \? "cargo" : "rate"/, "🔴 ?tab=cargo не відкриває конфігуратор / не rate за замовчуванням");
+  const files = ["cargo/client/cargo/configurator.ts", "cargo/client/cargo/topView.ts", "cargo/client/cargo/view3d.ts", "cargo/client/cargo/schemePng.ts",
+    "cargo/client/cargo/api.ts", "cargo/client/cargo/CargoConfiguratorTab.tsx", "pages/dashboard/sections/RatesAndCargoSection.tsx"];
+  for (const f of files) {
+    // код без коментарів: пакет згадує `import('three')` у doc-коментарі як спосіб для інших застосунків
+    const s = FRONT(f).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "$1");
+    assert.ok(!/\blazy\(|\bimport\(/.test(s), `🔴 ${f}: динамічний імпорт — другий чанк (#225)`);
+    assert.ok(!/from ['"]three['"]/.test(s), `🔴 ${f}: пакет three у бандлі`);
+  }
+  const api = FRONT("cargo/client/cargo/api.ts");
+  assert.match(api, /api\.get\('\/cargo\/three\.js'/, "🔴 three.js тягнеться не з нашого сервера");
+  assert.match(FRONT("cargo/client/cargo/CargoConfiguratorTab.tsx"), /user, api: cargoApi, loadThree,/);
+  assert.match(FRONT("cargo/shared/cargoDefaults.ts"), /export const DEFAULT_VEHICLE_ID = 't10';/, "🔴 вкладка відкривається не з «10 т»");
+  for (const [f, root] of [["cargo/client/cargo/configurator.css", ".cargo-cfg"], ["cargo/client/ratesAndCargoPage.css", ".rates-cargo"]] as const) {
+    const css = FRONT(f).replace(/\/\*[\s\S]*?\*\//g, "");
+    const sels: string[] = []; let buf = "";
+    for (const ch of css) { if (ch === "{") { sels.push(buf.trim()); buf = ""; } else if (ch === "}") buf = ""; else buf += ch; }
+    assert.ok(sels.length > 5, `🔴 ${f}: селекторів не знайдено — перевірці нічого перевіряти`);
+    const global = sels.filter((s) => s && !s.startsWith("@") && !/^(from|to|\d+%)$/.test(s))
+      .flatMap((s) => s.split(",")).map((s) => s.trim()).filter((s) => !s.includes(root));
+    assert.deepEqual(global, [], `🔴 ${f}: глобальні селектори — чіпають стилі дашборда`);
+  }
+});
+
+/**
+ * #1617 — СХЕМА ЗВЕРХУ (те, що бачить перевізник на PNG і менеджер на екрані): тести пакета `topView.test.ts`
+ * дослівно, проти ДЖЕРЕЛА ФРОНТУ (`testkit/frontTopView.ts` транспілює його на льоту).
+ * 🧨 Червоніє, якщо зламати підписи «є», вільну довжину чи номери з розшифровкою на схемі.
+ */
+test("#1617 СХЕМА ЗВЕРХУ: тести пакета проти джерела фронту — підписи, вільна довжина, номери з розшифровкою", async () => {
+  await cases(() => import("./testkit/topView.cases.js"), 6, "схема зверху");
+});

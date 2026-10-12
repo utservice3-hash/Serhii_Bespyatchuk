@@ -1,0 +1,14 @@
+/* Екран «Калькулятор ставок та вантажу»: заголовок і вкладки — як у макеті. Якщо в дашборді є свій компонент вкладок — беріть його. */
+.rates-cargo{
+  --pg-ink:#1c1e26; --pg-muted:#7c8090; --pg-line:#e6e0da; --pg-surface:#fff; --pg-brand:#c5141c;
+  --pg-disp:"Unbounded", "Golos Text", system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+  color:var(--pg-ink);font-family:"Golos Text", system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .rates-cargo{--pg-ink:#f1efed; --pg-muted:#8b909c; --pg-line:#2c3038; --pg-surface:#1a1c21; --pg-brand:#ef4444}}
+:root[data-theme="dark"] .rates-cargo{--pg-ink:#f1efed; --pg-muted:#8b909c; --pg-line:#2c3038; --pg-surface:#1a1c21; --pg-brand:#ef4444}
+.rates-cargo h1{font-family:var(--pg-disp);font-weight:500;font-size:19px;letter-spacing:-.01em;margin:0 0 12px;text-wrap:balance}
+.rates-cargo .screentabs{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}
+.rates-cargo .screentabs button{padding:9px 15px;border-radius:11px;border:1px solid var(--pg-line);background:var(--pg-surface);color:var(--pg-ink);font:inherit;font-weight:600;font-size:13px;cursor:pointer}
+.rates-cargo .screentabs button[aria-selected="true"]{background:var(--pg-ink);border-color:var(--pg-ink);color:var(--pg-surface)}
+.rates-cargo .screentabs button:focus-visible{outline:2px solid var(--pg-brand);outline-offset:2px}
+.rates-cargo [role="tabpanel"][hidden]{display:none}

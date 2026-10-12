@@ -1,0 +1,212 @@
+/*
+ * Конфігуратор вантажу в авто — стилі. Усе під .cargo-cfg, нічого глобального: модуль не чіпає стилі дашборда.
+ * Токени — ті самі, що в макетах конструктора й опитувань (Golos Text / Unbounded / JetBrains Mono, червоний UTS).
+ * Темна тема: за системою (prefers-color-scheme) і за data-theme="dark" на <html>. Якщо в дашборді тема
+ * перемикається інакше (клас тощо) — поправити ДВА селектори нижче, решта стилів бере лише змінні.
+ * Розкладка підлаштовується під ширину вкладки (container queries), а не вікна — бо поруч бокове меню дашборда.
+ */
+.cargo-cfg{
+  --bg:#f4f1ee; --surface:#fff; --surface-2:#faf8f6; --surface-3:#f0ece8;
+  --ink:#1c1e26; --ink-2:#464b58; --muted:#7c8090;
+  --line:#e6e0da; --line-2:#efeae5;
+  --brand:#c5141c; --ok:#15803d; --warn:#b45309; --bad:#b91c1c;
+  --floor:#fbfaf8; --wall:#5d6270; --exist:#9096a3; --arch:#3b3f4a; --grid:#ece6df;
+  --c1:#2a78d6; --c2:#eb6834; --c3:#1baf7a; --c4:#eda100; --c5:#e87ba4; --c6:#008300; --c7:#6250d6; --c8:#e34948;
+  --shadow:0 1px 2px rgba(28,30,38,.05), 0 10px 30px -18px rgba(28,30,38,.35);
+  --shadow-lg:0 2px 4px rgba(28,30,38,.06), 0 24px 60px -24px rgba(28,30,38,.45);
+  --sans:"Golos Text", system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+  --disp:"Unbounded", var(--sans);
+  --mono:"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .cargo-cfg{
+  --bg:#121317; --surface:#1a1c21; --surface-2:#202329; --surface-3:#272b32;
+  --ink:#f1efed; --ink-2:#c5c9d1; --muted:#8b909c; --line:#2c3038; --line-2:#242830;
+  --brand:#ef4444; --ok:#4ade80; --warn:#fbbf24; --bad:#f87171;
+  --floor:#1f2228; --wall:#a3a9b6; --exist:#737987; --arch:#c3c8d2; --grid:#2a2e36;
+  --c1:#3987e5; --c2:#d95926; --c3:#199e70; --c4:#c98500; --c5:#d55181; --c6:#008300; --c7:#9085e9; --c8:#e66767;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -18px rgba(0,0,0,.8);
+  --shadow-lg:0 2px 4px rgba(0,0,0,.5), 0 24px 60px -24px rgba(0,0,0,.9);
+  color-scheme:dark;
+}}
+:root[data-theme="dark"] .cargo-cfg{
+  --bg:#121317; --surface:#1a1c21; --surface-2:#202329; --surface-3:#272b32;
+  --ink:#f1efed; --ink-2:#c5c9d1; --muted:#8b909c; --line:#2c3038; --line-2:#242830;
+  --brand:#ef4444; --ok:#4ade80; --warn:#fbbf24; --bad:#f87171;
+  --floor:#1f2228; --wall:#a3a9b6; --exist:#737987; --arch:#c3c8d2; --grid:#2a2e36;
+  --c1:#3987e5; --c2:#d95926; --c3:#199e70; --c4:#c98500; --c5:#d55181; --c6:#008300; --c7:#9085e9; --c8:#e66767;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -18px rgba(0,0,0,.8);
+  --shadow-lg:0 2px 4px rgba(0,0,0,.5), 0 24px 60px -24px rgba(0,0,0,.9);
+  color-scheme:dark;
+}
+.cargo-cfg,.cargo-cfg *{box-sizing:border-box}
+.cargo-cfg [hidden]{display:none!important}
+.cargo-cfg button,.cargo-cfg input,.cargo-cfg select,.cargo-cfg textarea{font:inherit;color:inherit}
+.cargo-cfg button{cursor:pointer;background:none;border:0;padding:0}
+.cargo-cfg :focus-visible{outline:2px solid var(--brand);outline-offset:2px;border-radius:6px}
+.cargo-cfg .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.cargo-cfg .tag{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:2px 7px;border-radius:999px;background:var(--surface-3);color:var(--muted);white-space:nowrap}
+.cargo-cfg .tag.warn{background:color-mix(in srgb, var(--warn) 14%, transparent);color:var(--warn)}
+
+.cargo-cfg .cfgq{container-type:inline-size}
+.cargo-cfg .cfg{display:grid;grid-template-columns:360px minmax(0,1fr);gap:14px;align-items:start}
+.cargo-cfg .mainc{display:flex;flex-direction:column;gap:14px;min-width:0}
+.cargo-cfg .resrow{display:grid;grid-template-columns:minmax(0,1fr) 290px;gap:14px;align-items:start}
+.cargo-cfg .card{background:var(--surface);border:1px solid var(--line);border-radius:13px;box-shadow:var(--shadow);min-width:0}
+.cargo-cfg .sec{padding:14px 16px;border-bottom:1px solid var(--line-2)}
+.cargo-cfg .sec:last-child{border-bottom:0}
+.cargo-cfg .sec h3{margin:0 0 10px;font-size:14px;font-weight:700;display:flex;align-items:center;gap:9px}
+.cargo-cfg .sec h3 .n{width:21px;height:21px;border-radius:7px;background:var(--brand);color:#fff;display:grid;place-items:center;font-size:11.5px;font-weight:800;flex:none}
+.cargo-cfg .sec h3 .aside{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:var(--muted)}
+
+.cargo-cfg label.f{display:flex;flex-direction:column;gap:3px;font-size:11px;font-weight:600;color:var(--muted);min-width:0}
+.cargo-cfg input.in,.cargo-cfg select.in{width:100%;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);padding:7px 9px;font-size:13px;color:var(--ink);min-width:0}
+.cargo-cfg input.in{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.cargo-cfg input.in.txt{font-family:var(--sans)}
+.cargo-cfg input.in::placeholder{color:var(--muted)}
+.cargo-cfg input.in:focus,.cargo-cfg select.in:focus{border-color:color-mix(in srgb, var(--brand) 50%, var(--line));outline:0;box-shadow:0 0 0 3px color-mix(in srgb, var(--brand) 12%, transparent)}
+.cargo-cfg input.in.need{border-color:color-mix(in srgb, var(--warn) 60%, var(--line))}
+.cargo-cfg .row{display:grid;gap:8px}
+.cargo-cfg .r2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.cargo-cfg .r3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.cargo-cfg .r4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.cargo-cfg .vrow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px}
+.cargo-cfg .vrow.tr{grid-template-columns:54px repeat(3,minmax(0,1fr));align-items:end}
+.cargo-cfg .vrow .bn{font-size:11.5px;font-weight:600;color:var(--ink-2);padding-bottom:8px}
+.cargo-cfg .kgrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end;margin-top:8px}
+.cargo-cfg .range{display:flex;align-items:center;gap:6px}
+.cargo-cfg .range span{color:var(--muted)}
+.cargo-cfg .linkbtn{font-size:12px;font-weight:600;color:var(--brand)}
+.cargo-cfg .linkbtn:hover{text-decoration:underline;text-underline-offset:2px}
+
+.cargo-cfg .ways{display:flex;gap:2px;background:var(--surface-3);border-radius:10px;padding:3px;width:fit-content;max-width:100%;flex-wrap:wrap}
+.cargo-cfg .ways button{padding:5px 10px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--muted)}
+.cargo-cfg .ways button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.07)}
+.cargo-cfg .ways.sm button{padding:4px 9px;font-size:12px}
+.cargo-cfg .ways .y{color:var(--ok)} .cargo-cfg .ways .x{color:var(--bad)}
+.cargo-cfg .stack{display:flex;flex-direction:column;gap:9px}
+.cargo-cfg .inline{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+.cargo-cfg .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:8px 13px;border-radius:10px;border:1px solid var(--line);background:var(--surface);font-weight:600;font-size:13px;white-space:nowrap}
+.cargo-cfg .btn:hover{background:var(--surface-2)}
+.cargo-cfg .btn.pri{background:var(--brand);border-color:var(--brand);color:#fff}
+.cargo-cfg .btn.pri:hover{filter:brightness(1.08)}
+.cargo-cfg .btn.sm{padding:5px 10px;font-size:12px;border-radius:9px}
+.cargo-cfg .btn:disabled{opacity:.45;cursor:not-allowed}
+.cargo-cfg .btn svg{width:15px;height:15px;flex:none}
+.cargo-cfg .toggle{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--ink-2);cursor:pointer;border:1px solid var(--line);border-radius:999px;padding:3px 10px 3px 6px;background:var(--surface)}
+.cargo-cfg .toggle input{width:14px;height:14px;accent-color:var(--brand);margin:0}
+
+/* позиції вантажу */
+.cargo-cfg .items{display:flex;flex-direction:column;gap:9px}
+.cargo-cfg .item{border:1px solid var(--line);border-radius:11px;padding:9px 10px 10px 12px;background:var(--surface);position:relative;display:grid;gap:8px}
+.cargo-cfg .item::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:0 3px 3px 0;background:var(--ic)}
+.cargo-cfg .item .head{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:7px;align-items:center}
+.cargo-cfg .no{width:22px;height:22px;border-radius:7px;display:grid;place-items:center;font-size:11.5px;font-weight:800;background:color-mix(in srgb, var(--ic) 22%, var(--surface));color:var(--ink);border:1.5px solid var(--ic);flex:none}
+.cargo-cfg .item .name{border:0;background:transparent;font-weight:600;font-size:13.5px;padding:3px 4px;border-radius:6px;min-width:0;width:100%}
+.cargo-cfg .item .name:hover,.cargo-cfg .item .name:focus{background:var(--surface-2);outline:0}
+.cargo-cfg .qty{display:flex;align-items:center;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--surface-2)}
+.cargo-cfg .qty button{width:26px;height:28px;font-size:15px;font-weight:600;color:var(--ink-2)}
+.cargo-cfg .qty button:hover{background:var(--surface-3)}
+.cargo-cfg .qty input{width:42px;border:0;background:transparent;text-align:center;font-family:var(--mono);font-size:13px;padding:0}
+.cargo-cfg .qty input:focus{outline:0}
+.cargo-cfg .del{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;color:var(--muted)}
+.cargo-cfg .del:hover{background:var(--surface-3);color:var(--bad)}
+.cargo-cfg .chk{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-2);cursor:pointer}
+.cargo-cfg .chk input{width:15px;height:15px;accent-color:var(--brand);margin:0}
+.cargo-cfg .stoprow{display:grid;grid-template-columns:78px minmax(0,1fr);gap:8px}
+.cargo-cfg .flag{font-size:12px;font-weight:600}
+.cargo-cfg .flag.bad{color:var(--bad)} .cargo-cfg .flag.warn{color:var(--warn)}
+.cargo-cfg .addwrap{position:relative;margin-top:10px}
+.cargo-cfg .addmenu{position:absolute;left:0;top:calc(100% + 6px);z-index:20;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-lg);padding:6px;min-width:220px;display:grid}
+.cargo-cfg .addmenu button{display:flex;gap:10px;align-items:center;padding:7px 10px;border-radius:8px;text-align:left;font-size:13px;font-weight:600}
+.cargo-cfg .addmenu button:hover{background:var(--surface-2)}
+.cargo-cfg .ico{width:26px;height:26px;border-radius:7px;background:var(--surface-3);display:grid;place-items:center;flex:none;color:var(--ink-2)}
+.cargo-cfg .ico svg{width:16px;height:16px}
+
+/* схема */
+.cargo-cfg .view{overflow:hidden}
+.cargo-cfg .vbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:11px 14px;border-bottom:1px solid var(--line-2)}
+.cargo-cfg .vbar .grow{flex:1}
+.cargo-cfg .vbar .seltip{font-size:12px;color:var(--ink-2);min-width:0}
+.cargo-cfg .gapf{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);font-weight:600}
+.cargo-cfg .gapf input{width:52px;padding:4px 7px}
+.cargo-cfg .stops{display:flex;gap:6px 14px;flex-wrap:wrap;padding:10px 14px 0;font-size:12.5px;color:var(--ink-2)}
+.cargo-cfg .stops span{display:inline-flex;align-items:center;gap:6px}
+.cargo-cfg .sb{display:inline-grid;place-items:center;min-width:18px;height:18px;border-radius:999px;background:var(--ink);color:var(--surface);font-size:10.5px;font-weight:800;padding:0 4px}
+.cargo-cfg .stage{position:relative;padding:12px 14px 10px;min-height:170px;background:var(--surface)}
+.cargo-cfg .stage svg{display:block;width:100%;height:auto;user-select:none;-webkit-user-select:none;touch-action:none}
+.cargo-cfg .stage svg .u{cursor:grab}
+.cargo-cfg .stage svg .lane{cursor:ns-resize}
+.cargo-cfg .stage svg.dragging .u{cursor:grabbing}
+.cargo-cfg .stage3d{position:relative;height:440px;border-radius:10px;overflow:hidden;background:var(--surface-2);touch-action:none}
+.cargo-cfg .stage3d canvas{display:block;width:100%;height:100%}
+.cargo-cfg .stage3d .msg{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:var(--muted);font-size:13px;padding:20px}
+.cargo-cfg .stage3d .help{position:absolute;left:10px;bottom:10px;width:24px;height:24px;border-radius:999px;display:grid;place-items:center;font-size:12px;font-weight:700;color:var(--muted);background:var(--surface);border:1px solid var(--line);cursor:help}
+.cargo-cfg .tray{display:flex;gap:7px;align-items:center;flex-wrap:wrap;padding:10px 14px 12px;border-top:1px dashed var(--line);font-size:12.5px}
+.cargo-cfg .tray .t{font-weight:700;color:var(--bad)}
+.cargo-cfg .tray .pill{display:inline-flex;align-items:center;gap:6px;border:1px solid color-mix(in srgb, var(--bad) 40%, var(--line));border-radius:999px;padding:3px 9px;background:color-mix(in srgb, var(--bad) 6%, var(--surface))}
+.cargo-cfg .dot{width:10px;height:10px;border-radius:3px;background:var(--ic);flex:none}
+
+/* результат */
+.cargo-cfg .rtop{display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid var(--line-2)}
+.cargo-cfg .verdict{display:flex;gap:11px;align-items:center;flex:1;min-width:220px}
+.cargo-cfg .verdict .vi{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;flex:none;color:#fff;font-weight:800;font-size:17px}
+.cargo-cfg .verdict.ok .vi{background:var(--ok)} .cargo-cfg .verdict.bad .vi{background:var(--bad)} .cargo-cfg .verdict.warn .vi{background:var(--warn)} .cargo-cfg .verdict.none .vi{background:var(--muted)}
+.cargo-cfg .verdict .vt{font-family:var(--disp);font-weight:500;font-size:17px;line-height:1.2}
+.cargo-cfg .verdict.ok .vt{color:var(--ok)} .cargo-cfg .verdict.bad .vt{color:var(--bad)} .cargo-cfg .verdict.warn .vt{color:var(--warn)}
+.cargo-cfg .verdict .vs{font-size:12.5px;color:var(--ink-2);margin-top:2px;line-height:1.4}
+.cargo-cfg .acts{display:flex;gap:8px;flex-wrap:wrap}
+.cargo-cfg .kv{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) minmax(0,.8fr) minmax(0,1.1fr);gap:14px 22px;padding:14px 16px}
+.cargo-cfg .kv .k{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:6px;min-height:22px}
+.cargo-cfg .kv .k select{border:0;background:var(--surface-2);border-radius:7px;padding:2px 5px;font-size:11.5px;font-weight:600;letter-spacing:0;text-transform:none;color:var(--ink-2)}
+.cargo-cfg .kv .v{font-size:15px;font-weight:600;margin-top:3px;line-height:1.35}
+.cargo-cfg .kv .big{font-family:var(--mono);font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
+.cargo-cfg .kv .sides{display:grid;grid-template-columns:auto 1fr;gap:1px 10px;font-size:13.5px;align-items:baseline;margin-top:3px}
+.cargo-cfg .kv .sides .num{font-weight:600}
+.cargo-cfg .pp{display:grid;grid-template-columns:auto auto;justify-content:start;gap:2px 18px;margin-top:2px}
+.cargo-cfg .pp small{font-size:11.5px;color:var(--muted);font-weight:500}
+.cargo-cfg .wbar{position:relative;height:8px;border-radius:999px;background:var(--surface-3);overflow:hidden;margin-top:8px}
+.cargo-cfg .wbar .z{position:absolute;top:0;bottom:0;background:color-mix(in srgb, var(--warn) 30%, transparent)}
+.cargo-cfg .wbar i{position:absolute;left:0;top:0;bottom:0;border-radius:999px;background:var(--ok)}
+.cargo-cfg .wbar i.warn{background:var(--warn)} .cargo-cfg .wbar i.bad{background:var(--bad)}
+.cargo-cfg .wnote{font-size:12px;font-weight:600;margin-top:5px}
+.cargo-cfg .wnote.warn{color:var(--warn)} .cargo-cfg .wnote.bad{color:var(--bad)}
+.cargo-cfg .hist{padding:14px 16px}
+.cargo-cfg .hist h4{margin:0 0 8px;font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);display:flex;justify-content:space-between;gap:8px}
+.cargo-cfg .hist ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.cargo-cfg .hist li button{width:100%;text-align:left;border:1px solid var(--line);border-radius:10px;padding:7px 10px;background:var(--surface-2);display:grid;gap:1px}
+.cargo-cfg .hist li button:hover{border-color:color-mix(in srgb, var(--ink) 25%, var(--line))}
+.cargo-cfg .hist .h1{font-size:12.5px;font-weight:600;display:flex;justify-content:space-between;gap:8px}
+.cargo-cfg .hist .h2{font-size:11.5px;color:var(--muted)}
+.cargo-cfg .hist .empty{font-size:12px;color:var(--muted)}
+.cargo-cfg .pillok{color:var(--ok)} .cargo-cfg .pillbad{color:var(--bad)}
+
+.cargo-cfg .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:var(--surface);padding:10px 16px;border-radius:11px;font-size:13px;font-weight:600;box-shadow:var(--shadow-lg);z-index:950;max-width:min(560px,calc(100vw - 32px));text-align:center}
+.cargo-cfg .toast.bad{background:var(--bad);color:#fff}
+
+/* довідник (адмін) */
+.cargo-cfg .modal{position:fixed;inset:0;background:rgba(18,19,23,.45);display:grid;place-items:center;z-index:900;padding:16px}
+.cargo-cfg .mbox{background:var(--surface);border-radius:14px;box-shadow:var(--shadow-lg);width:min(1220px,100%);max-height:calc(100vh - 32px);display:flex;flex-direction:column;border:1px solid var(--line)}
+.cargo-cfg .mhead{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line-2);flex-wrap:wrap}
+.cargo-cfg .mhead h2{margin:0;font-size:16px;font-weight:700}
+.cargo-cfg .mhead .grow{flex:1}
+.cargo-cfg .mbody{overflow:auto;padding:4px 18px 16px}
+.cargo-cfg .mbody h5{margin:16px 0 4px;font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.cargo-cfg .reft{width:100%;border-collapse:collapse;font-size:12.5px;min-width:1040px}
+.cargo-cfg .reft.small{min-width:420px;width:auto}
+.cargo-cfg .reft th{text-align:left;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:10px 6px 6px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--surface)}
+.cargo-cfg .reft td{padding:4px 6px;border-bottom:1px solid var(--line-2);vertical-align:middle}
+.cargo-cfg .reft input{width:100%;border:1px solid transparent;border-radius:7px;background:transparent;padding:4px 6px;font-size:12.5px;font-family:var(--mono)}
+.cargo-cfg .reft input.txt{font-family:var(--sans)}
+.cargo-cfg .reft input:hover{border-color:var(--line)}
+.cargo-cfg .reft input:focus{border-color:var(--line);background:var(--surface-2);outline:0}
+.cargo-cfg .reft .grp td{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);background:var(--surface-2)}
+.cargo-cfg .reft .src{font-size:11.5px;color:var(--muted);font-family:var(--sans)}
+.cargo-cfg .reft .q{color:var(--warn);font-weight:600}
+
+/* ширина вкладки, а не вікна (у макеті це ті самі точки, що були у v2: 1240 / 920 / 520 px вікна) */
+@container (max-width:1196px){ .cargo-cfg .resrow{grid-template-columns:minmax(0,1fr)} .cargo-cfg .kv{grid-template-columns:repeat(2,minmax(0,1fr))} .cargo-cfg .cfg{grid-template-columns:330px minmax(0,1fr)} }
+@container (max-width:888px){ .cargo-cfg .cfg{grid-template-columns:minmax(0,1fr)} .cargo-cfg .stage3d{height:340px} }
+@container (max-width:488px){ .cargo-cfg .kv{grid-template-columns:minmax(0,1fr)} }
+@media (prefers-reduced-motion:no-preference){ .cargo-cfg .toast{animation:cc-tin .18s ease-out} @keyframes cc-tin{from{opacity:0;transform:translate(-50%,6px)}} }
