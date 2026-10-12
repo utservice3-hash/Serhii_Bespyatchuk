@@ -134,7 +134,14 @@ const CANDIDATE_401 = "Роман 21.09.2026 («так»): кандидат на
   + "крім його двох вкладок, стереже #443 через ROUTE_TAB";
 const SAFE_PRIVATE = "Таня 08.10.2026: «сейф — лише адмін та я». Перегляд Сейфу — лише право `view_private_finance` "
   + "(Адмін, фінансист); вносити в дашборді не можна — Сейф дзеркало Google-таблиці (Роман 12.10.2026)";
+const HR_GOALS = "Роман 12.10.2026 («роби»): Іван (HR) бачив вкладку «Місячні цілі» (screen_access.goals = true), а "
+  + "збереження давало 403 — роут пускав лише admin|team_lead. Межа цілей тепер — вкладка ролі; кожен бачить і править "
+  + "свої цілі, «Цілі команд» — лише адмін-рівень. Стереже #1630";
 export const ACCEPTED_MATRIX_SHIFTS: MatrixShift[] = [
+  { method: "GET", path: "/api/goals", role: "hr", to: "allow", decidedOn: "2026-10-12", decidedBy: "Роман", why: HR_GOALS },
+  { method: "POST", path: "/api/goals", role: "hr", to: "dropped", decidedOn: "2026-10-12", decidedBy: "Роман", why: HR_GOALS },
+  { method: "PATCH", path: "/api/goals/:id", role: "hr", to: "dropped", decidedOn: "2026-10-12", decidedBy: "Роман", why: HR_GOALS },
+  { method: "DELETE", path: "/api/goals/:id", role: "hr", to: "allow", decidedOn: "2026-10-12", decidedBy: "Роман", why: HR_GOALS },
   { method: "GET", path: "/api/bank/manual?account=1&from=2026-10-01&to=2026-10-31", role: "ceo", to: "deny",
     decidedOn: "2026-10-08", decidedBy: "Таня й Роман", why: SAFE_PRIVATE },
   { method: "GET", path: "/api/bank/manual?account=1&from=2026-10-01&to=2026-10-31", role: "opdir", to: "deny",
@@ -1097,14 +1104,15 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "DELETE", path: "/api/feedback/:id/files/:fileId", cls: "DELETE-ghost",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+  // 🎯 12.10.2026: HR відкрито (вкладка «Місячні цілі» в ролі ввімкнена) — зсуви в ACCEPTED_MATRIX_SHIFTS, стереже #1630.
   { method: "GET", path: "/api/goals", cls: "GET",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead"], deny: ["manager"] },
   { method: "POST", path: "/api/goals", cls: "deny-only",
-    allow: [], deny: ["hr", "manager"] },
+    allow: [], deny: ["manager"] },
   { method: "DELETE", path: "/api/goals/:id", cls: "DELETE-ghost",
-    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead"], deny: ["manager"] },
   { method: "PATCH", path: "/api/goals/:id", cls: "deny-only",
-    allow: [], deny: ["hr", "manager"] },
+    allow: [], deny: ["manager"] },
   // ── ТРИ РОУТИ /api/health ДОДАНО 02.09.2026. Їх знайшов #280 після того, як навчився
   // читати index.ts: вони оголошені прямо на `app`, тобто не належать жодному модулю з
   // MOUNTS, і тому не потрапляли у зліпок ЖОДНОГО разу з моменту його створення.
