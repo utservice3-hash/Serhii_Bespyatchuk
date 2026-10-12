@@ -434,7 +434,7 @@ export function CandidateDrawer({ meta, id, toast, onClose, onChanged, onMetaSta
           </>
         )}
         {to && c && (
-          <StatusDialog meta={meta} candidateId={id} from={c.status} to={to} teamId={c.team_id} toast={toast}
+          <StatusDialog meta={meta} candidateId={id} from={c.status} to={to} teamId={c.team_id} email={c.email} toast={toast}
             onClose={() => setTo(null)} onDone={() => { setTo(null); load(); onChanged(); }} />
         )}
         {refusing && c && (

@@ -121,11 +121,12 @@ async function scratchDb(t: { skip: (m: string) => void }) {
   return { c, db: c as unknown as import("./hiring.js").Db, done: async () => { await c.end(); scratch.dispose(); } };
 }
 
-/** Кандидат, доведений до «кандидат + команда» тімлідом команди 1 — рівно шлях макета. */
+/** Кандидат, доведений до «кандидат + команда» тімлідом команди 1 — рівно шлях макета.
+ *  Без пошти акаунт не створюється (#1620), тож фікстура без явної пошти бере `c<телефон>@gmail.com`. */
 async function toCandidate(db: import("./hiring.js").Db, name: string, phone: string, email: string | null = null) {
   const h = await import("./hiring.js");
   const vac = await h.createVacancy(db, null, { title: `Сейлз ${phone}` });
-  const id = await h.createCandidate(db, null, { fullName: name, phone, email, vacancyId: vac });
+  const id = await h.createCandidate(db, null, { fullName: name, phone, email: email ?? `c${phone}@gmail.com`, vacancyId: vac });
   for (const to of ["planned", "done"]) await h.changeStatus(db, null, id, { to, comment: "так" }, "edit", null);
   await h.changeStatus(db, null, id, { to: "lead", comment: "до тімліда", teamId: 1 }, "edit", null);
   await h.changeStatus(db, null, id, { to: "candidate", comment: "беремо" }, "lead", 1);
@@ -214,7 +215,7 @@ test("#534 ЖИВИЙ SQL: «менеджер» після всіх кроків
 
     const id = await toCandidate(s.db, "Гнатюк Анастасія", "0980000202");
     const uid = (await s.c.query("SELECT user_id FROM hiring_candidates WHERE id=$1", [id])).rows[0].user_id as number;
-    assert.equal((await s.c.query("SELECT email FROM users WHERE id=$1", [uid])).rows[0].email, `candidate-${id}@hiring.uts.local`, "🔴 без пошти логін не службовий");
+    assert.equal((await s.c.query("SELECT email FROM users WHERE id=$1", [uid])).rows[0].email, "c0980000202@gmail.com", "🔴 логін не пошта з картки");
     await tr.noteCandidateLogin(s.db, uid);
     await s.c.query("INSERT INTO training_progress (user_id, material_id, status, finished_at) VALUES ($1,$2,'done',now())", [uid, m1]);
 
@@ -390,4 +391,148 @@ test("#572 ЖИВИЙ SQL: привʼязка наявного акаунта �
     const board = await tr.trainingBoard(s.db, "edit", null);
     assert.ok(board.some((row) => (row as { id: number }).id === a), "🔴 після привʼязки кандидата немає на дошці навчання");
   } finally { await s.done(); }
+});
+
+/** Кандидат на етапі «з тімлідом» команди 1, з поштою або без — для гейтів 12.10.2026. */
+async function toLead(db: import("./hiring.js").Db, name: string, phone: string, email: string | null) {
+  const h = await import("./hiring.js");
+  const vac = await h.createVacancy(db, null, { title: `Сейлз ${phone}` });
+  const id = await h.createCandidate(db, null, { fullName: name, phone, email, vacancyId: vac });
+  for (const to of ["planned", "done"]) await h.changeStatus(db, null, id, { to, comment: "так" }, "edit", null);
+  await h.changeStatus(db, null, id, { to: "lead", comment: "до тімліда", teamId: 1 }, "edit", null);
+  return id;
+}
+
+/**
+ * #1620 — ЖИВИЙ SQL: АКАУНТ КАНДИДАТА — З ПОШТОЮ І ОДРАЗУ З ВХОДОМ. Заміряно на проді 12.10.2026: з 15 акаунтів
+ * 13 мали службовий логін `candidate-N@hiring.uts.local`, видано 0 паролів, жоден кандидат не увійшов, 14 закрились
+ * «не зайшов за 48 год». Тепер: без пошти перехід у «кандидат + команда» — 400 ДО зміни статусу (статус і акаунт
+ * не чіпаються); пошта з діалогу (тімлід, який картку не редагує) стає логіном; перехід, що створив акаунт,
+ * повертає логін і пароль, і пароль справжній (bcrypt), а в історії його немає; повторний перехід при вже
+ * наявному акаунті пароль НЕ перевидає.
+ * 🧨 Червоніє, якщо повернути службовий логін для картки без пошти або не віддати вхід при створенні акаунта.
+ */
+test("#1620 ЖИВИЙ SQL: «кандидат + команда» без пошти — 400; з поштою — логін = пошта, вхід видається одразу", async (t) => {
+  const s = await scratchDb(t); if (!s) return;
+  const h = await import("./hiring.js");
+  const bcrypt = (await import("bcryptjs")).default;
+  try {
+    const id = await toLead(s.db, "Сичевський Павло", "0970001620", null);
+    await assert.rejects(h.changeStatus(s.db, null, id, { to: "candidate", comment: "беремо" }, "lead", 1), code(400), "🔴 акаунт без пошти створився");
+    const still = (await s.c.query("SELECT status, user_id FROM hiring_candidates WHERE id=$1", [id])).rows[0];
+    assert.deepEqual([still.status, still.user_id], ["lead", null], "🔴 відмова без пошти лишила напівзроблений перехід");
+    assert.equal((await s.c.query("SELECT count(*)::int n FROM users WHERE email LIKE '%hiring.uts.local'")).rows[0].n, 0, "🔴 створено службовий логін");
+
+    const cred = await h.changeStatus(s.db, null, id, { to: "candidate", comment: "беремо", email: " Pavlo.S@Gmail.com " }, "lead", 1);
+    assert.ok(cred, "🔴 перехід, що створив акаунт, не віддав вхід");
+    assert.equal(cred!.login, "pavlo.s@gmail.com", "🔴 логін не пошта з діалогу");
+    const u = (await s.c.query("SELECT u.email, u.password_hash FROM hiring_candidates c JOIN users u ON u.id = c.user_id WHERE c.id=$1", [id])).rows[0];
+    assert.equal(u.email, "pavlo.s@gmail.com");
+    assert.ok(await bcrypt.compare(cred!.password, u.password_hash), "🔴 виданий пароль не той, що в акаунті");
+    const hist = (await s.c.query("SELECT string_agg(comment, ' | ') AS t FROM hiring_events WHERE candidate_id=$1", [id])).rows[0].t as string;
+    assert.ok(!hist.includes(cred!.password), "🔴 пароль потрапив в історію");
+    assert.match(hist, /видано логін і пароль/, "🔴 видача входу не лишила сліду");
+
+    // Повторний перехід при наявному акаунті — без нового пароля (повернення з «на навчанні» і назад).
+    await h.changeStatus(s.db, null, id, { to: "training", comment: "на навчання" }, "lead", 1);
+    await h.changeStatus(s.db, null, id, { to: "candidate", comment: "помилковий клік" }, "lead", 1);
+    const again = await h.changeStatus(s.db, null, id, { to: "training", comment: "знову" }, "lead", 1);
+    assert.equal(again, null);
+    assert.ok(await bcrypt.compare(cred!.password, (await s.c.query("SELECT u.password_hash FROM hiring_candidates c JOIN users u ON u.id=c.user_id WHERE c.id=$1", [id])).rows[0].password_hash),
+      "🔴 повернення статусу перевидало пароль");
+  } finally { await s.done(); }
+});
+
+/**
+ * #1621 — ЖИВИЙ SQL: ЛОГІН ЙДЕ ЗА ПОШТОЮ КАРТКИ. Службовий логін (так на проді 13 акаунтів) лікується тим, що в
+ * картку вносять пошту; зміна пошти — новий логін; пошта, зайнята іншим користувачем, — 409 і нічого не змінено;
+ * акаунт, що вже став менеджером, логін за карткою не міняє.
+ * 🧨 Червоніє, якщо логін не синхронізується або перезаписує чужу пошту.
+ */
+test("#1621 ЖИВИЙ SQL: пошта в картці міняє логін кандидата; зайнята — 409; менеджера не чіпає", async (t) => {
+  const s = await scratchDb(t); if (!s) return;
+  const h = await import("./hiring.js");
+  try {
+    const id = await toCandidate(s.db, "Гузь Павло", "0970001621");
+    const uid = (await s.c.query("SELECT user_id FROM hiring_candidates WHERE id=$1", [id])).rows[0].user_id as number;
+    await s.c.query("UPDATE users SET email = $1 WHERE id = $2", [`candidate-${id}@hiring.uts.local`, uid]); // як на проді
+    const login = async () => (await s.c.query("SELECT email FROM users WHERE id=$1", [uid])).rows[0].email as string;
+    await h.updateCandidateFields(s.db, null, id, { email: "Pavlo.Guz@gmail.com" });
+    assert.equal(await login(), "pavlo.guz@gmail.com", "🔴 службовий логін не замінився поштою картки");
+    await s.c.query("INSERT INTO users (email, password_hash, role) VALUES ('busy@gmail.com','x','manager')");
+    await assert.rejects(h.updateCandidateFields(s.db, null, id, { email: "busy@gmail.com" }), code(409), "🔴 логін перезаписав чужу пошту");
+    assert.equal(await login(), "pavlo.guz@gmail.com");
+    await h.updateCandidateFields(s.db, null, id, { phone: "0970001699" }); // інше поле — логін не чіпається
+    assert.equal(await login(), "pavlo.guz@gmail.com");
+    await s.c.query("UPDATE users SET role_override = 'manager' WHERE id=$1", [uid]);
+    await h.updateCandidateFields(s.db, null, id, { email: "new.one@gmail.com" });
+    assert.equal(await login(), "pavlo.guz@gmail.com", "🔴 логін менеджера змінився з картки кандидата");
+  } finally { await s.done(); }
+});
+
+/**
+ * #1622 — ЖИВИЙ SQL: «ВИЙШОВ НА РОБОТУ» БЕЗ НАВЧАННЯ (варіант А, рішення Романа 12.10.2026). Лише HR/керівництво,
+ * лише з «кандидат + команда» / «на навчанні», з коментарем. Результат: статус «менеджер», щоденний звіт рахує
+ * «Вийшли на роботу», людина в реєстрі співробітників, акаунт кандидата ВИМКНЕНО (роль лишається «Кандидат»).
+ * «Повернути останню зміну» повертає все; «Відновити доступ» менеджеру — 409; уже закритий доступ (48 год) —
+ * лише причина стає «вийшов на роботу».
+ * 🧨 Червоніє, якщо дати це тімліду, вимагати навчання, лишити акаунт кандидата активним або не рахувати у звіті.
+ */
+test("#1622 ЖИВИЙ SQL: «Вийшов на роботу» — HR, статус «менеджер», звіт, реєстр, акаунт вимкнено, скасовно", async (t) => {
+  const s = await scratchDb(t); if (!s) return;
+  const h = await import("./hiring.js");
+  const tr = await import("./hiringTraining.js");
+  try {
+    const id = await toCandidate(s.db, "Сичевський Павло", "0970001622");
+    await assert.rejects(tr.markStartedWork(s.db, null, id, "вийшов", "lead"), code(403), "🔴 тімлід відмітив вихід на роботу");
+    await assert.rejects(tr.markStartedWork(s.db, null, id, "  ", "edit"), code(400), "🔴 без коментаря");
+    const early = await toLead(s.db, "Рано Ще", "0970001623", "rano@gmail.com");
+    await assert.rejects(tr.markStartedWork(s.db, null, early, "вийшов", "edit"), code(409), "🔴 вихід на роботу з етапу «з тімлідом»");
+
+    await tr.markStartedWork(s.db, null, id, "вийшов 06.10 у РПК", "edit");
+    const r = (await s.c.query(`SELECT c.status, c.access_closed_reason, u.is_active, u.role_override FROM hiring_candidates c JOIN users u ON u.id=c.user_id WHERE c.id=$1`, [id])).rows[0];
+    assert.deepEqual([r.status, r.access_closed_reason, r.is_active, r.role_override], ["manager", "started", false, "candidate"], "🔴 не той стан після «вийшов на роботу»");
+    const day = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+    assert.equal((await h.dailyReport(s.db, day, day))[0].toManager, 1, "🔴 «Вийшли на роботу» не порахувало");
+    assert.equal((await s.c.query("SELECT count(*)::int n FROM employees WHERE candidate_id=$1", [id])).rows[0].n, 1, "🔴 людини немає в реєстрі");
+    assert.equal((await tr.trainingBoard(s.db, "edit", null)).find((x) => x.id === id)?.health, "manager", "🔴 дошка не показує «став менеджером»");
+    await assert.rejects(tr.restoreAccess(s.db, null, id), code(409), "🔴 «Відновити доступ» увімкнув акаунт кандидата менеджеру");
+
+    await h.changeStatus(s.db, null, id, { to: "candidate", comment: "помилково" }, "edit", null);
+    const back = (await s.c.query(`SELECT c.status, c.access_closed_reason, u.is_active FROM hiring_candidates c JOIN users u ON u.id=c.user_id WHERE c.id=$1`, [id])).rows[0];
+    assert.deepEqual([back.status, back.access_closed_reason, back.is_active], ["candidate", null, true], "🔴 повернення не скасувало вихід на роботу");
+    assert.equal((await s.c.query("SELECT count(*)::int n FROM employees WHERE candidate_id=$1", [id])).rows[0].n, 0, "🔴 повернення лишило людину в реєстрі");
+
+    // Доступ уже закрито «не зайшов за 48 год» (так 14 із 15 на проді) — вихід на роботу все одно відмічається.
+    const closed = await toCandidate(s.db, "Закритий Доступ", "0970001624");
+    await tr.closeCandidateAccess(s.db, closed, "no_login", null);
+    await tr.markStartedWork(s.db, null, closed, "вийшов", "edit");
+    const cl = (await s.c.query(`SELECT c.status, c.access_closed_reason, u.is_active FROM hiring_candidates c JOIN users u ON u.id=c.user_id WHERE c.id=$1`, [closed])).rows[0];
+    assert.deepEqual([cl.status, cl.access_closed_reason, cl.is_active], ["manager", "started", false]);
+  } finally { await s.done(); }
+});
+
+/**
+ * #1623 — СТАРТОВА ВКЛАДКА ЗА РОЛЛЮ. Корінь «/» вів у «Звіт» усіх, хоча «Звіт» закритий Кандидату, HR, Бухгалтерії
+ * й Бізнес-асистенту. Функцію фронту ВИКОНУЄМО (транспіляція), а не читаємо очима; і перевіряємо, що Dashboard її кличе.
+ * По обидва боки: ролі зі «Звітом» лишаються на «Звіті»; без «Звіту» — своя або перша дозволена.
+ * 🧨 Червоніє, якщо повернути «report» усім або прибрати виклик із Dashboard.
+ */
+test("#1623 СТАРТОВА ВКЛАДКА: кандидат → «Навчання», HR → «Найм», без «Звіту» — перша дозволена; решта — «Звіт»", async () => {
+  const ts = (await import("typescript")).default;
+  const FE = path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages");
+  const js = ts.transpileModule(readFileSync(path.join(FE, "dashboard", "homeSection.ts"), "utf8"),
+    { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const { homeSection } = await import(`data:text/javascript,${encodeURIComponent(js)}`);
+  const nav = ["report", "kvp", "receivables", "tasks", "hiring", "training", "documents", "ba", "bank"];
+  assert.equal(homeSection({ roleKey: "candidate", screens: ["documents", "training"], navKeys: nav }), "training", "🔴 кандидат не на «Навчанні»");
+  assert.equal(homeSection({ roleKey: "hr", screens: ["documents", "hiring", "tasks", "training"], navKeys: nav }), "hiring", "🔴 HR не на «Наймі»");
+  assert.equal(homeSection({ roleKey: "____________", screens: ["bank", "receivables", "tasks"], navKeys: nav }), "receivables", "🔴 без «Звіту» — не перша дозволена в порядку меню");
+  assert.equal(homeSection({ roleKey: "manager", screens: ["report", "tasks", "training"], navKeys: nav }), "report", "дзеркало: менеджер лишається на «Звіті»");
+  assert.equal(homeSection({ roleKey: "admin", screens: ["report", "hiring"], navKeys: nav }), "report", "дзеркало: адмін лишається на «Звіті»");
+  assert.equal(homeSection({ roleKey: "candidate", screens: ["documents"], navKeys: nav }), "documents", "🔴 вкладки ролі немає — треба першу дозволену");
+  assert.equal(homeSection({ roleKey: "hr", navKeys: nav }), "report", "старий токен без вкладок — «Звіт», як було");
+  const dash = readFileSync(path.join(FE, "Dashboard.tsx"), "utf8");
+  assert.match(dash, /homeSection\(\{ roleKey: auth\?\.roleKey, screens: auth\?\.screens/, "🔴 Dashboard не кличе homeSection");
+  assert.match(dash, /if \(!rawSection && home !== "report"\) navigate\(`\/\$\{home\}`/, "🔴 корінь «/» не веде на стартову вкладку ролі");
 });

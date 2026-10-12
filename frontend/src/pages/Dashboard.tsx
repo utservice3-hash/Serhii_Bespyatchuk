@@ -53,6 +53,7 @@ import {
   fetchNewsUnread, markNewsSeen, fetchLiveScreens,
 } from "../api";
 import { Layout, NAV_ITEMS, HIDDEN_NAV, type NavKey } from "../components/Layout";
+import { homeSection } from "./dashboard/homeSection";
 import { getDateRange } from "../components/DateRangeFilter";
 import { isSignalAlert, signalAlertText, knownOf, isClientTaskAlert, clientTaskAlertText, type KnownTask } from "./dashboard/signalTaskNotify";
 import { isAcceptanceAlert, acceptanceAlertText } from "./dashboard/acceptanceNotify";
@@ -122,8 +123,14 @@ export function Dashboard() {
   const { section: rawSection } = useParams<{ section?: string }>();
   // Прибрані вкладки (HIDDEN_NAV: «Огляд»/«Звіт 2.0») уже не в NAV_ITEMS → невідомий
   // або прихований роут падає у дефолт «report». «report» — корінь «/».
+  // 🏠 Корінь «/» — стартова вкладка РОЛІ (#1623): кандидат → «Навчання», HR → «Найм», решта — «Звіт»,
+  // якщо він дозволений, інакше перша дозволена вкладка. Прямий розділ в адресі лишається, як був.
+  const home = useMemo(() => homeSection({ roleKey: auth?.roleKey, screens: auth?.screens, navKeys: NAV_ITEMS.map((i) => i.key) }) as NavKey, [auth]);
   const section: NavKey =
-    rawSection && NAV_ITEMS.some((i) => i.key === rawSection) ? (rawSection as NavKey) : "report";
+    rawSection && NAV_ITEMS.some((i) => i.key === rawSection) ? (rawSection as NavKey) : home;
+  useEffect(() => {
+    if (!rawSection && home !== "report") navigate(`/${home}`, { replace: true });
+  }, [rawSection, home, navigate]);
   // Останній НЕ-АІ розділ: їде в «Роботу з АІ» як контекст, щоб «поясни цей блок»
   // працювало без уточнень (АІ інакше не знає, звідки прийшов користувач).
   const lastNonAiRef = useRef<NavKey>("report");
