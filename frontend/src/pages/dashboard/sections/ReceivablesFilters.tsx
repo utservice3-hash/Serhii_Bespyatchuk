@@ -26,11 +26,20 @@ const TABS: { key: Tab; label: string; hint: string }[] = [
 
 const sel: React.CSSProperties = { font: "inherit", fontSize: "var(--fs-13)", padding: "4px 8px", borderRadius: 8 };
 
-export function ReceivablesFilters({ filters, setFilters, shown, totalRows }: {
+/** 📞 4631: чипи «розмова біля дати». Числа — над усім скоупом, як і плитки; клік — вмикає/вимикає зріз. */
+const CALL_CHIPS: { key: "no_call" | "crm"; label: string; hint: string; on: React.CSSProperties }[] = [
+  { key: "no_call", label: "⚠ Дата без розмови", hint: "Дату поставили в дашборді, а посилання на розмову з клієнтом немає",
+    on: { background: "var(--warn-bg, #fffbeb)", color: "var(--warn, #b45309)", borderColor: "var(--warn, #f59e0b)" } },
+  { key: "crm", label: "Дата лише з CRM", hint: "Дата прийшла з угоди в CRM — у дашборді її не ставили й не підтверджували",
+    on: { background: "var(--bg-subtle, #f1f5f9)", color: "var(--text)", borderColor: "var(--text-muted)" } },
+];
+
+export function ReceivablesFilters({ filters, setFilters, shown, totalRows, callCounts }: {
   filters: Filters;
   setFilters: (f: Filters) => void;
   shown: number;
   totalRows: number;
+  callCounts?: { no_call: number; crm: number };
 }) {
   const set = <K extends keyof Filters>(k: K, v: Filters[K]) => setFilters({ ...filters, [k]: v });
   return (
@@ -49,6 +58,19 @@ export function ReceivablesFilters({ filters, setFilters, shown, totalRows }: {
           </button>
         ))}
       </div>
+
+      {callCounts && CALL_CHIPS.map((ch) => {
+        const active = filters.call === ch.key;
+        return (
+          <button key={ch.key} type="button" aria-pressed={active} title={ch.hint}
+            onClick={() => set("call", active ? "" : ch.key)}
+            style={{ font: "inherit", fontSize: "var(--fs-13)", fontWeight: active ? 700 : 600, padding: "4px 10px",
+                     borderRadius: 8, cursor: "pointer", border: "1px solid var(--border)", background: "var(--card-bg)",
+                     color: "var(--text-muted)", ...(active ? ch.on : {}) }}>
+            {ch.label} · {callCounts[ch.key]}
+          </button>
+        );
+      })}
 
       <select style={sel} value={filters.entity} onChange={(e) => set("entity", e.target.value as ReceivableEntity | "")}
         title="Наша юрособа, від якої виставлено рахунок (з «форми оплати» Kommo)">

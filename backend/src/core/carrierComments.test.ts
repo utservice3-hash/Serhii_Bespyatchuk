@@ -40,5 +40,6 @@ test("#1380c ФРОНТ: плашка лише керівникам, галоч�
   assert.match(sec, /\{auth\.role !== "manager" && <CarrierCommentBanner onArchived=\{load\} \/>\}/, "🔴 плашки немає або її бачить менеджер");
   const ban = readFileSync(path.join(ROOT, "frontend/src/pages/dashboard/sections/CarrierCommentBanner.tsx"), "utf8");
   assert.match(ban, /setPicked\(new Set\(d\.clients\.map\(\(c\) => c\.clientKey\)\)\)/, "🔴 галочки вже не увімкнені за замовчуванням (рішення Романа 05.10)");
-  assert.match(ban, /window\.confirm\(/, "🔴 масова архівація без підтвердження");
+  // Підтвердження — діалогом дашборда з 09.10.2026 (прохід B, `#1510`); твердження те саме: без «так» не архівуємо.
+  assert.match(ban, /if \(!\(await dlg\.confirm\(/, "🔴 масова архівація без підтвердження");
 });

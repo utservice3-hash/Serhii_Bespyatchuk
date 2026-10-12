@@ -534,6 +534,54 @@ ALTER TABLE receivable_note_history ADD COLUMN IF NOT EXISTS deal_id BIGINT;
 CREATE INDEX IF NOT EXISTS idx_receivable_note_history_client
   ON receivable_note_history(client_key, written_at DESC);
 
+-- 📞 НОРМА ДЗВІНКІВ НА ДЕНЬ — У «ПЛАНАХ» (4632, 10.10.2026; `core/callsNormPlan.ts`). Ставить КВП, діє з місяця
+-- й до наступної зміни; кожна зміна — новий рядок, історія не затирається.
+CREATE TABLE IF NOT EXISTS calls_norm_plan (
+  id         SERIAL PRIMARY KEY,
+  from_month DATE NOT NULL CHECK (from_month = date_trunc('month', from_month)::date),
+  norm       INTEGER NOT NULL CHECK (norm BETWEEN 1 AND 500),
+  set_by     INTEGER REFERENCES users(id),
+  set_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 🎯 ЦІЛЬ СЕРЕДНЬОГО ЧЕКА КОМАНДИ НА МІСЯЦЬ (4632, Юля 10.10.2026; `core/avgCheckTarget.ts`). Записується першим
+-- зверненням у місяці й до кінця місяця не рухається. `target` NULL — у команди за 3 місяці менше 30 успішних угод.
+CREATE TABLE IF NOT EXISTS avg_check_targets (
+  month       DATE NOT NULL,
+  team_id     INTEGER NOT NULL,
+  base_from   DATE NOT NULL,
+  base_to     DATE NOT NULL,
+  revenue     NUMERIC NOT NULL,
+  deals       INTEGER NOT NULL,
+  target      NUMERIC,
+  computed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (month, team_id)
+);
+
+-- 📞 РОЗМОВА БІЛЯ ДАТИ ДОМОВЛЕНОСТІ (задача 4631, 09.10.2026; `core/receivableCallLink.ts`).
+-- Поточне посилання лежить на записі домовленості: `call_uniqueid` — ключ дзвінка в `ringostat_calls`,
+-- `call_url` — що людина вставила (як є, для довідки). Нова дата без нового посилання знімає старе.
+ALTER TABLE receivable_notes ADD COLUMN IF NOT EXISTS call_uniqueid TEXT;
+ALTER TABLE receivable_notes ADD COLUMN IF NOT EXISTS call_url TEXT;
+
+-- 🗓 ЖУРНАЛ ЗМІН ДАТИ ДОМОВЛЕНОСТІ — дописуваний, як `receivable_note_history`. `receivable_notes` тримає ОДИН
+-- рядок на клієнта, тож попередня дата затирається; без журналу «переносили N разів» не було б звідки взяти.
+-- Рядок — кожна зміна дати або розмови: стара й нова дата, розмова на мить запису, хто й коли. Перенесенням
+-- рахується лише «була дата → стала інша» (`reschedulePred`). Почався з дня викату: старих перенесень
+-- відновити нема з чого.
+CREATE TABLE IF NOT EXISTS receivable_date_log (
+  id            SERIAL PRIMARY KEY,
+  client_key    TEXT NOT NULL,
+  deal_id       BIGINT,
+  old_date      DATE,
+  new_date      DATE,
+  call_uniqueid TEXT,
+  changed_by    INTEGER REFERENCES users(id),
+  changed_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_receivable_date_log_client
+  ON receivable_date_log(client_key, changed_at DESC);
+
 -- 🔴 БЕКФІЛ ЖУРНАЛУ З НАЯВНИХ КОМЕНТАРІВ — УМОВА КОРЕКТНОСТІ, А НЕ ЗРУЧНІСТЬ.
 --
 -- Заміряно на проді 26.08.2026 одразу після викату: з 77 заповнених коментарів
@@ -4774,6 +4822,9 @@ CREATE TABLE IF NOT EXISTS first_touch_settings_log (
   set_at                    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 REVOKE ALL ON first_touch_settings_log FROM ai_readonly;
+-- 🎯 Ціль «ціну озвучено», % (ТЗ «фінальні доробки» 08.10.2026: 50 %). NULL у старих рядках = 50 (`PRICE_TARGET_DEFAULT`).
+ALTER TABLE first_touch_settings_log ADD COLUMN IF NOT EXISTS price_target_pct INTEGER
+  CHECK (price_target_pct IS NULL OR price_target_pct BETWEEN 1 AND 100);
 -- ▲ AI-АНАЛІЗ ДЗВІНКІВ ▲
 
 -- 🎧 ВКЛАДКА «ПЕРШИЙ ДОТИК · AI» (рішення Романа 28.09.2026). Без цього рядка вкладку не побачив би

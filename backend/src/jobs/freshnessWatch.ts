@@ -1,5 +1,6 @@
 import { checkFreshness, checkAbandonedStages, type FreshnessRow, type AbandonedStageRow } from "../core/reconcile.js";
-import { sendAdminAlert } from "../bot/notify.js";
+import type { Alert } from "../health/alerts.js";
+import { reportWatch } from "./alertPush.js";
 
 /**
  * Ч.2 — щогодинний вартовий СВІЖОСТІ вотермарків. Застряглий вотермарк ТИХО ламає
@@ -7,12 +8,10 @@ import { sendAdminAlert } from "../bot/notify.js";
  * нічна звірка цього не бачила: поточний місяць виключено з pass/fail). Тому окремий
  * ЧАСТИЙ (щогодини) дешевий чек (лише читання sync_state, БЕЗ Kommo), що БУДИТЬ.
  *
- * Дедуп: алертимо ОДИН раз на епізод (ключ додається в `alerted`), повторно — лише
- * коли вотермарк відновився і застряг знову. In-memory (скидається на рестарті —
- * після рестарту повторний алерт по досі-застряглому прийнятний). Так вартовий не
- * спамить щогодини, поки проблема тримається.
+ * Дедуп — У БД, через `reportWatch` (09.10.2026): перше повідомлення, нагадування раз на 6 год, «✅ Відновилось».
+ * Доти тут стояв памʼятний `Set`, що порожнів на кожному рестарті, — а їх ~10 на день (145 за 25.09–09.10), тож
+ * перша ж справжня аварія приходила б повтором після кожного викату.
  */
-const alerted = new Set<string>();
 
 /**
  * 🔴 РОЗБІЖНІСТЬ «ДЖОБА КАЖЕ УСПІХ — ДАНІ СТОЯТЬ» (додано 10.08.2026).
@@ -34,22 +33,22 @@ async function watchSyncDivergence(): Promise<void> {
       WHERE jr.name = 'syncKommo' AND ss.id = 1`
   ).catch(() => null);
   const x = r?.rows[0];
+  // Не вдалося прочитати — «не знаю», а не «добре»: стан епізоду не чіпаємо.
   if (!x || !x.job_ok || !x.state_ok) return;
   const gapMin = Math.round((x.job_ok.getTime() - x.state_ok.getTime()) / 60000);
-  if (gapMin < 90) { divergenceAlerted = false; return; }
-  if (divergenceAlerted) return;           // один алерт на епізод, як і решта тут
-  divergenceAlerted = true;
-  await sendAdminAlert(
-    `🚨 <b>syncKommo: успіх є, даних немає</b>\n`
-    + `job_runs каже «успіх» ${x.job_ok.toISOString()}, а sync_state стоїть на ${x.state_ok.toISOString()} `
-    + `— розрив <b>${gapMin} хв</b>.\n`
-    + `Остання тривалість: ${x.dur} мс${x.dur === 0 ? " (0 мс = прохід не робив роботи)" : ""}. `
-    + `Пропусків поспіль: ${x.skips}.\n`
-    + `Це підпис аварії 10.08.2026 — джоба виходить рано, а звітує успіхом.`
-  ).catch(() => {});
-  console.error(`freshnessWatch: РОЗБІЖНІСТЬ job_runs↔sync_state ${gapMin} хв.`);
+  const alerts: Alert[] = gapMin < 90 ? [] : [{
+    id: "watch:divergence:syncKommo", severity: "critical",
+    title: "syncKommo: успіх є, даних немає",
+    detail: `job_runs каже «успіх» ${x.job_ok.toISOString()}, а sync_state стоїть на ${x.state_ok.toISOString()} `
+      + `— розрив ${gapMin} хв. Остання тривалість: ${x.dur} мс${x.dur === 0 ? " (0 мс = прохід не робив роботи)" : ""}. `
+      + `Пропусків поспіль: ${x.skips}. Це підпис аварії 10.08.2026 — джоба виходить рано, а звітує успіхом.`,
+    action: "Перевірити job_locks і завислий прохід syncKommo; лог — до моменту, коли sync_state зупинився.",
+    since: x.state_ok.toISOString(),
+  }];
+  await reportWatch("divergence", alerts).catch((e) => console.error("reportWatch(divergence) failed:", e));
+  if (alerts.length) console.error(`freshnessWatch: РОЗБІЖНІСТЬ job_runs↔sync_state ${gapMin} хв.`);
 }
-let divergenceAlerted = false;
+
 
 export async function freshnessWatch(): Promise<void> {
   await watchSyncDivergence().catch((e) => console.error("watchSyncDivergence failed:", e));
@@ -61,27 +60,17 @@ export async function freshnessWatch(): Promise<void> {
     return;
   }
   const stale = fresh.filter((f) => f.stale);
-  const staleKeys = new Set(stale.map((f) => f.key));
-
-  // Зняти з «вже алертнутих» ті, що відновились (щоб наступний застій знову розбудив).
-  for (const k of [...alerted]) if (!staleKeys.has(k)) alerted.delete(k);
-
-  const fresh_stale = stale.filter((f) => !alerted.has(f.key)); // нові застої цього епізоду
-  if (fresh_stale.length === 0) {
-    console.log(`freshnessWatch: ok (stale=${stale.length}, вже-алертнуто=${alerted.size}).`);
-    return;
-  }
-  for (const f of fresh_stale) alerted.add(f.key);
-
   const line = (f: FreshnessRow) =>
-    `${f.critical ? "🔴💰 " : "• "}${f.label}: ${f.ageMin == null ? "НІКОЛИ" : f.ageMin + " хв тому"} (поріг ${f.thresholdMin} хв)`;
-  await sendAdminAlert(
-    `🕰 <b>Несвіжі дані — вотермарк застряг</b>\n` +
-      `Застряглий вотермарк ТИХО ламає метрики (💰 = живить core/money.ts):\n` +
-      fresh_stale.map(line).join("\n") +
-      `\nПеревір джобу; свіжість — у /api/health/reconciliation.`
-  ).catch(() => {});
-  console.warn(`freshnessWatch: АЛЕРТ по ${fresh_stale.map((f) => f.key).join(", ")}.`);
+    `${f.label}: ${f.ageMin == null ? "НІКОЛИ" : f.ageMin + " хв тому"} (поріг ${f.thresholdMin} хв)`;
+  const alerts: Alert[] = stale.map((f) => ({
+    id: `watch:fresh:${f.key}`, severity: f.critical ? "critical" : "warning",
+    title: `Несвіжі дані — вотермарк застряг: ${f.label}`,
+    detail: `${line(f)}. Застряглий вотермарк ТИХО ламає метрики${f.critical ? " — цей живить core/money.ts (гроші)" : ""}.`,
+    action: "Перевірити джобу, що рухає цей вотермарк; свіжість — у /api/health/reconciliation.",
+    since: null,
+  }));
+  const r = await reportWatch("fresh", alerts).catch((e) => { console.error("reportWatch(fresh) failed:", e); return null; });
+  console.log(`freshnessWatch: застряглих ${stale.length}` + (r ? ` · нових ${r.sent}, повторів ${r.repeated}, відбоїв ${r.resolved}.` : "."));
 }
 
 /**
@@ -89,7 +78,7 @@ export async function freshnessWatch(): Promise<void> {
  * але ловить ЗЛАМАНИЙ ПРОЦЕС: стадію перестали проставляти → метрика тихо ~0.
  * Дедуп по епізоду (окремий Set, префікс `abandon:`), як у вотермарків.
  */
-const abandonAlerted = new Set<string>();
+
 
 export async function abandonedStagesWatch(): Promise<void> {
   let rows: AbandonedStageRow[];
@@ -100,21 +89,14 @@ export async function abandonedStagesWatch(): Promise<void> {
     return;
   }
   const abandoned = rows.filter((r) => r.abandoned);
-  const keys = new Set(abandoned.map((r) => r.key));
-  for (const k of [...abandonAlerted]) if (!keys.has(k)) abandonAlerted.delete(k); // відновилось → скинути
-  const fresh = abandoned.filter((r) => !abandonAlerted.has(r.key));
-  if (fresh.length === 0) {
-    console.log(`abandonedStagesWatch: ok (abandoned=${abandoned.length}, вже-алертнуто=${abandonAlerted.size}).`);
-    return;
-  }
-  for (const r of fresh) abandonAlerted.add(r.key);
-  const line = (r: AbandonedStageRow) =>
-    `• ${r.label}: ${r.month} = ${r.current} (медіана 3 міс ${r.medianPrev3}, −${r.dropPct}%)`;
-  await sendAdminAlert(
-    `📉 <b>Покинута стадія — процес зламався, метрика мовчить</b>\n` +
-      `Обсяг подій стадії, що живить метрику, впав >80% від медіани 3 міс — це той самий клас, що застряглий вотермарк:\n` +
-      fresh.map(line).join("\n") +
-      `\nПеревір, чи стадію ще проставляють у CRM. Деталі — /api/health/reconciliation.`
-  ).catch(() => {});
-  console.warn(`abandonedStagesWatch: АЛЕРТ по ${fresh.map((r) => r.key).join(", ")}.`);
+  const alerts: Alert[] = abandoned.map((r) => ({
+    id: `watch:abandoned:${r.key}`, severity: "warning",
+    title: `Покинута стадія — процес зламався, метрика мовчить: ${r.label}`,
+    detail: `${r.label}: ${r.month} = ${r.current} (медіана 3 міс ${r.medianPrev3}, −${r.dropPct}%). Обсяг подій стадії, `
+      + "що живить метрику, впав >80% від медіани 3 міс — той самий клас, що застряглий вотермарк.",
+    action: "Перевірити, чи стадію ще проставляють у CRM. Деталі — /api/health/reconciliation.",
+    since: null,
+  }));
+  const res = await reportWatch("abandoned", alerts).catch((e) => { console.error("reportWatch(abandoned) failed:", e); return null; });
+  console.log(`abandonedStagesWatch: покинутих ${abandoned.length}` + (res ? ` · нових ${res.sent}, відбоїв ${res.resolved}.` : "."));
 }

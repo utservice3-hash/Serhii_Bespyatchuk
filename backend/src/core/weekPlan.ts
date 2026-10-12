@@ -1,7 +1,7 @@
 import { pool } from "../db/pool.js";
 import { isInsufficientPrivilege } from "../db/pgErrors.js";
 import { fixedWeekBlocks, workingDaysBetween, monthEndOf } from "./dates.js";
-import { weekPlanOf, weekWorkingDays, shouldFreezeWeek } from "./weekPlanMath.js";
+import { weekPlanOf, weekWorkingDays, shouldFreezeWeek, snapshotUsable } from "./weekPlanMath.js";
 import { receivedByMgr } from "./money.js";
 
 /**
@@ -47,7 +47,7 @@ import { receivedByMgr } from "./money.js";
 // Формула живе в `weekPlanMath.ts` (чистий модуль, без БД) — і ре-експортується
 // звідси, щоб споживачі мали ОДНУ точку входу, а гейти могли перевіряти арифметику
 // без `DATABASE_URL`. Див. коментар там: розділення не косметичне.
-export { weekPlanOf, weekWorkingDays, shouldFreezeWeek } from "./weekPlanMath.js";
+export { weekPlanOf, weekWorkingDays, shouldFreezeWeek, snapshotUsable, futureWeekPlan } from "./weekPlanMath.js";
 export type { WeekPlanInput, WeekPlanResult } from "./weekPlanMath.js";
 
 export interface WeekPlanRow {
@@ -127,7 +127,10 @@ export async function weekPlansForMonth(
     for (const w of weeks) {
       const key = `${id}:${w.from}`;
       const snap = snaps.get(key);
-      if (snap) {
+      // 🧊 Нульовий знімок при заведеному плані — «плану тоді ще не було», а не ціль 0 (`snapshotUsable`).
+      // Такий тиждень рахується нижче від залишку на свій початок; повторна фіксація його не перезапише
+      // (`ON CONFLICT DO NOTHING`), тож рядок у базі лишається як свідок, а на екрані — чесне число.
+      if (snap && snapshotUsable(Number(snap.month_plan), monthPlan)) {
         out.push({
           managerId: id, weekStart: w.from, plan: Number(snap.plan),
           overPlan: Math.max(0, Number(snap.fact_before) - Number(snap.month_plan)),

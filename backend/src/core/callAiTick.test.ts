@@ -54,7 +54,7 @@ function wav(sec: number): Uint8Array<ArrayBuffer> {
   return b;
 }
 
-const ANALYSIS = JSON.stringify({ summary: "s", manager_channel: "1", client_request: "тент", next_step: "", conversation_type: "cargo_request", type_confidence: 0.95, type_reason: "клієнт питає ціну перевезення", price_value: "",
+const ANALYSIS = JSON.stringify({ callback_request: { asked: false, quote: "", deadline_text: "", deadline_kind: "none", deadline_minutes: 0, deadline_date: "" }, summary: "s", manager_channel: "1", client_request: "тент", next_step: "", conversation_type: "cargo_request", type_confidence: 0.95, type_reason: "клієнт питає ціну перевезення", price_value: "",
   price: { discussed: true, quote: "скільки коштує" }, objections: [], promises: [] });
 
 /** Мережа за адресою: скільки запитів пішло до кожного постачальника. */

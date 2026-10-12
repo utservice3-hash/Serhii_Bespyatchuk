@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import { fetchCarrierCandidates, archiveCarriers, type CarrierCandidate } from "../../../api";
 
 /**
@@ -11,6 +12,7 @@ import { fetchCarrierCandidates, archiveCarriers, type CarrierCandidate } from "
  * Немає кандидатів або немає права — плашки немає зовсім (сервер віддає 403 менеджеру й HR).
  */
 export function CarrierCommentBanner({ onArchived }: { onArchived: () => void }) {
+  const dlg = useDialogs();
   const [rows, setRows] = useState<CarrierCandidate[] | null>(null);
   const [open, setOpen] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
@@ -28,7 +30,7 @@ export function CarrierCommentBanner({ onArchived }: { onArchived: () => void })
   const allOn = rows.length > 0 && picked.size === rows.length;
   const submit = async () => {
     if (picked.size === 0) return;
-    if (!window.confirm(`Архівувати ${picked.size} клієнт(ів) з причиною «Перевізник»?\nПовернути можна в «Архіві» кнопкою «↩ повернути з архіву».`)) return;
+    if (!(await dlg.confirm(`Архівувати ${picked.size} клієнт(ів) з причиною «Перевізник»?\nПовернути можна в «Архіві» кнопкою «↩ повернути з архіву».`))) return;
     setBusy(true); setMsg(null);
     try {
       const r = await archiveCarriers([...picked]);

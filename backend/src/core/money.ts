@@ -650,6 +650,20 @@ export async function successByMgrAtTeam(s: MoneyScope): Promise<MgrRow[]> {
   return rows.map((x) => ({ managerId: x.manager_id, name: x.name, teamId: x.team_id,
     isActive: x.is_active, revenue: Number(x.revenue), deals: Number(x.deals) }));
 }
+/**
+ * ② «Отримані кошти» ПО (менеджер × команда на дату анкера) — той самий запит, що `successByMgrAtTeam`, по ②.
+ * Для вкладки «План-факт» Статистик (4632): Σ рядків команди == `receivedByTeam`, тож команда у вкладці збігається
+ * з таблицею команд на плитках; хто перейшов посеред періоду, дає два рядки — кожен у своїй команді.
+ */
+export async function receivedByMgrAtTeam(s: MoneyScope): Promise<MgrRow[]> {
+  const rows = await query<{ manager_id: number; name: string; team_id: number | null; is_active: boolean; revenue: string; deals: string }>(
+    "received", s,
+    `m.id AS manager_id, m.name, ${teamAtSql("m", ANCHOR_DAY)} AS team_id, m.is_active, COALESCE(SUM(src.price),0) AS revenue, COUNT(*) AS deals`,
+    "GROUP BY m.id, m.name, 3, m.is_active"
+  );
+  return rows.map((x) => ({ managerId: x.manager_id, name: x.name, teamId: x.team_id,
+    isActive: x.is_active, revenue: Number(x.revenue), deals: Number(x.deals) }));
+}
 export interface MgrAvgCheck { managerId: number; revenue: number; successDeals: number; avgCheck: number | null }
 /**
  * СЕРЕДНІЙ ЧЕК ПО МЕНЕДЖЕРУ (`avg_check_success_only`) — ЄДИНЕ джерело для Звіту й
@@ -1291,8 +1305,8 @@ export async function handoffDealStates(dealIds: readonly number[]): Promise<Map
   const ids = [...new Set(dealIds)];
   if (!ids.length) return out;
   const r = await pool.query<{ kommo_id: string; pipeline_id: string; status_id: string; price: string | null;
-    closed: boolean; written_off: boolean; closed_day: string | null; auto_day: string | null }>(
-    `SELECT d.kommo_id, d.pipeline_id, d.status_id, d.price,
+    is_minus: boolean | null; closed: boolean; written_off: boolean; closed_day: string | null; auto_day: string | null }>(
+    `SELECT d.kommo_id, d.pipeline_id, d.status_id, d.price, d.is_minus,
             (d.closed_at_kommo IS NOT NULL) AS closed,
             NOT (${DEAL_NOT_WRITTEN_OFF}) AS written_off,
             to_char(d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS closed_day,
@@ -1328,7 +1342,7 @@ export async function handoffDealStates(dealIds: readonly number[]): Promise<Map
     out.set(Number(x.kommo_id), {
       pipelineId, statusId,
       cls: managerDealClass({ pipelineId, statusId, closed: x.closed, writtenOff: x.written_off }, HANDOFF_CLASS_RULES),
-      price: Math.round(Number(x.price ?? 0)),
+      price: Math.round(Number(x.price ?? 0)), minus: x.is_minus === true,
       closedDay: x.closed_day, autoDay: x.auto_day,
       pendDays: (pend.get(Number(x.kommo_id)) ?? []).sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0)),
     });

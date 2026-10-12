@@ -218,6 +218,16 @@ function LogisticsSection({ rep }: { rep: KvpReport }) {
  * ⚠️ Другий сегмент НЕ малюється, коли очікування нема: смуга нульової ширини —
  * це не «нуль очікувань», це артефакт. Порожнє місце має лишатись порожнім.
  */
+/**
+ * 🎯 Залишок до плану місяця (ТЗ Юлі 05.10.2026). Саме він сходиться з місячним планом — на відміну від Σ тижнів,
+ * яка за динамічного плану більша за місяць, коли минулі тижні недовиконано. `null` — звіт не за повний місяць.
+ */
+function RemainingLine({ v }: { v: number | null | undefined }) {
+  if (v == null) return null;
+  return v > 0
+    ? <div style={{ fontSize: 10, color: MUTED, fontWeight: 400 }} title="План місяця − факт з 1-го числа">залишок {fmtMoney(v)}</div>
+    : <div style={{ fontSize: 10, color: GREEN, fontWeight: 400 }} title="Факт з 1-го числа вже перевищив план місяця">понад план +{fmtMoney(-v)}</div>;
+}
 function PlanBar({ factPct, forecastPct, color, h = 8 }:
   { factPct: number | null; forecastPct: number | null; color?: string; h?: number }) {
   const f = Math.max(0, Math.min(100, factPct ?? 0));
@@ -481,7 +491,7 @@ export function KvpReportSection() {
           {/* ── КОМАНДИ → менеджери drill ── */}
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-              <h2 className="chart-title" style={{ margin: 0 }}>🏅 Команди — план / факт {rep.weekBlocks.length > 0 && <span style={{ fontSize: 12, color: MUTED }}>(+ тижні Т1–Т{rep.weekBlocks.length}) </span>}<InfoHint text="Клік по команді → менеджери → клік менеджера → денний дрил. Клік по клітинці тижня → менеджери саме цього тижня → денний дрил тижня. Т1–Т5 = фіксовані блоки місяця (1-7/8-14/15-21/22-28/29-кінець). Тижневий факт = отримано за датою оплати; ✓/✗ = факт ≥ план тижня; майбутні тижні = план+очікування (у виконання НЕ входить). Вертикальна риска на смузі = темп (де мали б бути на сьогодні)." /></h2>
+              <h2 className="chart-title" style={{ margin: 0 }}>🏅 Команди — план / факт {rep.weekBlocks.length > 0 && <span style={{ fontSize: 12, color: MUTED }}>(+ тижні Т1–Т{rep.weekBlocks.length}) </span>}<InfoHint text="Клік по команді → менеджери → клік менеджера → денний дрил. Клік по клітинці тижня → менеджери саме цього тижня → денний дрил тижня. Т1–Т5 = фіксовані блоки місяця (1-7/8-14/15-21/22-28/29-кінець). План тижня — ДИНАМІЧНИЙ: минулий тиждень — план, зафіксований на його початок; поточний — (план місяця − факт на початок тижня) ÷ робочі дні до кінця місяця × дні тижня (ручна ціль тімліда перемагає); майбутні — той самий залишок і темп, оновлюються в понеділок. Тому Σ тижнів більша за план місяця, коли минулі тижні недовиконано, — з планом сходиться «залишок» під фактом. Тижневий факт = отримано за датою оплати; ✓/✗ = факт ≥ план тижня; майбутні тижні = план+очікування (у виконання НЕ входить). Вертикальна риска на смузі = темп (де мали б бути на сьогодні)." /></h2>
               {rep.weekBlocks.length > 0 && (
                 <div style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", fontSize: 12 }}>
                   {([["money", "💰 Гроші"], ["activity", "⚙️ Активність"]] as const).map(([k, lbl]) => (
@@ -509,7 +519,7 @@ export function KvpReportSection() {
                       <tr onClick={() => setOpenTeam(openTeam === t.teamId ? null : t.teamId)} style={{ cursor: "pointer" }}>
                         <td style={clip}>{openTeam === t.teamId ? "▾" : "▸"} <b>{t.name}</b> <span style={{ fontSize: 11, color: MUTED }}>{teamKindLabel[t.kind]}{t.kind === "leadgen" && <InfoHint text="Відділ лідогенерації — показано у списку команд, але його метрики продажів рахуються окремою логікою (задача на потім, не плутати з РПК/повним циклом)." />}</span></td>
                         <td style={{ textAlign: "right" }}>{fmtMoney(t.plan)}</td>
-                        <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(t.revenue)}</td>
+                        <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(t.revenue)}<RemainingLine v={t.remainingToPlan} /></td>
                         <td><div style={{ display: "flex", alignItems: "center", gap: 6 }} title={`Факт ${fmtPct(t.pct)} · з очікуванням за плановою датою ${fmtPct(t.forecastPct)}`}><PlanBar factPct={t.pct} forecastPct={t.forecastPct} color={pctColor(t.pct)} /><span style={{ color: pctColor(t.pct), fontWeight: 600, minWidth: 38, textAlign: "right" }}>{fmtPct(t.pct)}</span></div></td>
                         <td style={{ textAlign: "right", color: MUTED }} title={`Очікування за ПЛАНОВОЮ датою оплати. Цей міс: ${fmtMoney(t.expectedThisMonth)} · наступний: ${fmtMoney(t.expectedNextMonth)} · з МИНУЛИХ місяців: ${fmtMoney(t.expectedPastMonths)} (у прогноз не входить; це не «прострочено» з плитки вгорі — там межа «сьогодні»). Ср.чек команди — успішно: ${t.avgCheckSuccess == null ? "—" : fmtMoney(t.avgCheckSuccess)} · в очікуванні: ${t.avgCheckAwaiting == null ? "—" : fmtMoney(t.avgCheckAwaiting)}.`}>{fmtMoney(t.expectedThisMonth)}<div style={{ fontSize: 9.5, color: MUTED }}>наст {fmtMoney(t.expectedNextMonth)}</div>{t.expectedPastMonths !== 0 && <div style={{ fontSize: 9.5, color: RED }}>мин {fmtMoney(t.expectedPastMonths)}</div>}</td>
                         <td style={{ textAlign: "right" }} title={`Лайфтайм (весь час): ${t.convLifetime.num} / ${t.convLifetime.den}${t.kind === "rnk" ? " (реклама)" : t.kind === "rpk" ? " (лідген)" : ""}`}>{t.kind === "rnk" || t.kind === "rpk" ? fmtPct(t.convLifetime.pct) : "—"}</td>
@@ -806,7 +816,7 @@ function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam
                 <span style={clip}><span style={{ color: MUTED, fontSize: 10 }}>{open ? "▾" : "▸"}</span> {m.name}</span>
                 <MgrFactLine cs={m.createdSplit} />
               </span>
-              <span style={{ textAlign: "right", color: MUTED }}>{fmtMoney(m.plan)}</span>
+              <span style={{ textAlign: "right", color: MUTED }}>{fmtMoney(m.plan)}<RemainingLine v={m.remainingToPlan} /></span>
               <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}><span style={{ width: 40, height: 6, background: "var(--bg)", borderRadius: 4, overflow: "hidden" }}><span style={{ display: "block", height: "100%", width: `${Math.min(100, m.pct ?? 0)}%`, background: zero ? "var(--border)" : pctColr, borderRadius: 4 }} /></span><b>{fmtMoney(m.revenue)}</b></span>
               <span style={{ textAlign: "right", fontWeight: 700, color: pctColr }}>{m.plan > 0 ? `${m.pct ?? 0}%` : "—"}</span>
               <span style={{ textAlign: "right", color: m.expectedThisMonth > 0 ? AMBER : MUTED }} title={`За плановою датою оплати — цей міс: ${fmtMoney(m.expectedThisMonth)} · наступний: ${fmtMoney(m.expectedNextMonth)} · з МИНУЛИХ місяців: ${fmtMoney(m.expectedPastMonths)}`}>{m.expectedThisMonth > 0 ? fmtMoney(m.expectedThisMonth) : "—"}</span>

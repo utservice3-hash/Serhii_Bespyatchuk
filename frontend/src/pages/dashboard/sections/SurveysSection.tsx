@@ -15,6 +15,7 @@
  * повтор за розкладом ВИМКНЕНО за замовчуванням; після запуску питання заморожені (дублюйте як нове).
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import {
   surveysBadge, svClose, svCreate, svDeleteTemplate, svExportCsv, svGet, svLaunch, svList, svMarkRead, svNotifications,
   svParse, svPeople, svReopen, svRemind, svRespond, svResults, svSaveTemplate, svTemplates, svUpdate,
@@ -409,6 +410,7 @@ function CreateView({ C, setC, people, teams, toast, onCancel, onSaved, onTempla
   C: CState; setC: (f: (c: CState) => CState) => void; people: SvPerson[]; teams: Array<{ id: number; name: string }>;
   toast: (m: string, bad?: boolean) => void; onCancel: () => void; onSaved: (id: number, launched: boolean) => void; onTemplateSaved: () => void;
 }) {
+  const dlg = useDialogs();
   const [err, setErr] = useState(""); const [busy, setBusy] = useState(false); const [over, setOver] = useState(false);
   const [who, setWho] = useState("");
   const imgTarget = useRef(-1); const imgInput = useRef<HTMLInputElement>(null); const fileInput = useRef<HTMLInputElement>(null);
@@ -420,7 +422,7 @@ function CreateView({ C, setC, people, teams, toast, onCancel, onSaved, onTempla
   const doParse = async (text: string) => {
     try {
       const p = await svParse(text);
-      const replace = !C.questions.length || window.confirm("Замінити поточні питання розібраними?");
+      const replace = !C.questions.length || (await dlg.confirm("Замінити поточні питання розібраними?"));
       const byType: Record<string, number> = {}; p.questions.forEach((q) => { byType[q.type] = (byType[q.type] || 0) + 1; });
       const unsure = p.questions.filter((q) => q.unsure).length;
       const sum = p.questions.length

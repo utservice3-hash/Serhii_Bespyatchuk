@@ -59,13 +59,9 @@ export async function runJob(name: string, fn: () => Promise<unknown>): Promise<
       );
       const n = r.rows[0]?.consecutive_skips ?? 1;
       console.warn(`${name}: ПРОПУСК #${n} — ${res.reason}`);
-      if (n === SKIP_ALERT_THRESHOLD || (n > SKIP_ALERT_THRESHOLD && n % 10 === 0)) {
-        const { sendAdminAlert } = await import("../bot/notify.js");
-        await sendAdminAlert(
-          `🚨 <b>${name}: ${n} пропусків поспіль</b>\nПричина: ${res.reason}\n`
-          + `Джоба НЕ працює, хоч і не падає. Саме так минув простій 14 год 52 хв 10.08.2026.`
-        ).catch(() => {});
-      }
+      // 📮 Тривога «N пропусків поспіль» — у банері й поштарі (`health/alerts.ts` → `job:<name>:skips`), а не прямим
+      // повідомленням звідси (09.10.2026): там вона має дедуп у БД, нагадування й «✅ Відновилось», коли джоба
+      // знову відпрацює. Доти тут ішов прямий `sendAdminAlert` на 3-му й кожному 10-му пропуску, без відбою.
       return;
     }
     await pool.query(

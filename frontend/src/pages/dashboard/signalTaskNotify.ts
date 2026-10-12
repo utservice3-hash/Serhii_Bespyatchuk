@@ -57,3 +57,28 @@ export function signalAlertText(titles: string[]): string | null {
   if (titles.length === 1) return `📵 Пропущений дзвінок без передзвону — ${titles[0].slice(SIGNAL_TITLE_PREFIX.length).replace(/^:\s*/, "")}. Задача в Задачнику.`;
   return `📵 ${String(titles.length)} пропущених дзвінків без передзвону — задачі в Задачнику.`;
 }
+
+/**
+ * 👤 НОВА ЗАДАЧА ПО КЛІЄНТУ ПІСЛЯ ПЕРЕДАЧІ (08.10.2026). Звичайна нова задача приходить мовчки — менеджер бачить її,
+ * лише відкривши Задачник; а задача при передачі клієнта — саме та, яку треба побачити одразу.
+ * ⚠️ ПРЕФІКС МУСИТЬ ДОРІВНЮВАТИ БЕКЕНДУ (`core/transferTask.ts`, `TRANSFER_TASK_PREFIX`) — тримає `#1499c`.
+ * Базова лінія та сама, що в сигналу: до першого опитування — лише створені після відкриття сторінки.
+ */
+export const CLIENT_TASK_PREFIX = "👤 Клієнт";
+
+export function isClientTaskAlert(t: TaskLike, known: ReadonlyMap<number, KnownTask> | null, myManagerId: number | null | undefined, mountedAtMs: number): boolean {
+  if (myManagerId == null || t.assigneeId !== myManagerId) return false;
+  if (!t.title.startsWith(CLIENT_TASK_PREFIX) || t.status === "done") return false;
+  if (known === null) {
+    const created = t.createdAt ? Date.parse(t.createdAt) : NaN;
+    return Number.isFinite(created) && created >= mountedAtMs - SIGNAL_CLOCK_SKEW_MS;
+  }
+  return !known.has(t.id);
+}
+
+/** Один тост на опитування: кілька нових задач по клієнтах — одним рядком. */
+export function clientTaskAlertText(titles: string[]): string | null {
+  if (titles.length === 0) return null;
+  if (titles.length === 1) return `${titles[0].slice(CLIENT_TASK_PREFIX.length).trim()} — задача в Задачнику.`;
+  return `${String(titles.length)} нові задачі по переданих вам клієнтах — у Задачнику.`;
+}

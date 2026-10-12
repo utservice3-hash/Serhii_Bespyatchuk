@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import type { AuthPayload } from "../../../auth";
 import {
   fetchClientPlans, saveClientPlan, submitClientPlans, approveClientPlans, returnClientPlan,
@@ -190,6 +191,7 @@ function GroupRow({ level, title, sub, open, onToggle, totals, weeksOpen }: {
 }
 
 export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; managers?: ManagerOption[]; fromReact?: boolean }) {
+  const dlg = useDialogs();
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [data, setData] = useState<ClientPlansResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -603,7 +605,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           </button>
           {isLead && c.planStatus !== "draft" && c.planStatus !== "none" && (
             <button disabled={busy}
-              onClick={() => { const n = prompt("Коментар до повернення (обовʼязково):"); if (n && n.trim()) act(() => returnClientPlan({ clientKey: c.clientKey, month, note: n.trim() })); }}
+              onClick={async () => { const n = (await dlg.prompt({ label: "Коментар до повернення", required: true, multiline: true, okLabel: "Повернути" })); if (n && n.trim()) act(() => returnClientPlan({ clientKey: c.clientKey, month, note: n.trim() })); }}
               title="Повернути план на доопрацювання"
               style={{ marginLeft: 6, border: "none", background: "transparent", cursor: "pointer", fontSize: 13, color: "#b45309" }}>↩</button>
           )}

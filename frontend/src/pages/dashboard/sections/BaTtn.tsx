@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import {
   fetchBaTtn, fetchBaTtnDeals, setBaTtnMismatch, clearBaTtnMismatch, saveBaTtn, hiringError,
   type BaMeta, type BaTtnRow, type BaTtnDeal,
@@ -115,6 +116,7 @@ export function BaTtn({ meta, toast }: { meta: BaMeta; toast: Toast }) {
 }
 
 function TtnDeals({ month, managerId, toast, onChanged }: { month: string; managerId: number; toast: Toast; onChanged: () => void }) {
+  const dlg = useDialogs();
   const [deals, setDeals] = useState<BaTtnDeal[] | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
   const [nonce, setNonce] = useState(0);
@@ -122,7 +124,7 @@ function TtnDeals({ month, managerId, toast, onChanged }: { month: string; manag
   const toggle = async (d: BaTtnDeal) => {
     let note = "";
     if (!d.mismatch) {
-      const v = window.prompt(`Маршрут у ТТН не збігся з угодою «${d.name || d.kommoId}». Коментар (необовʼязково):`, "");
+      const v = (await dlg.prompt(`Маршрут у ТТН не збігся з угодою «${d.name || d.kommoId}». Коментар (необовʼязково):`, ""));
       if (v === null) return;
       note = v;
     }

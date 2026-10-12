@@ -323,3 +323,50 @@ test("#882b ЖИВИЙ: план авто на графіку за закрит�
   assert.ok(pt, "🔴 на графіку «Поставлені» немає точки плану за цей тиждень");
   assert.equal(pt.value, tilePlan, "🔴 графік і плитка показують різний план авто того самого тижня");
 });
+
+/**
+ * #1495 — ПОВНИЙ МІСЯЦЬ ПОРІВНЮЄТЬСЯ З ПОВНИМ ПОПЕРЕДНІМ (задача Юлі 05.10.2026, «+79%» у Статистиках).
+ *
+ * Повний вересень (30 днів) брав серпень лише по 30.08 — 31.08 (879 520 ₴ закриттів) випадав, і плитка
+ * показувала +79,9% замість +17,7%. Фікстура по обидва боки межі «повний / неповний»: `#870` мав лише 31.03,
+ * де кламп випадково давав повний лютий, — тому дефект і проходив.
+ *
+ * 🧨 Червоніє, якщо: повернути «до того самого числа» для повного місяця, або навпаки — розтягнути неповний
+ * місяць на повний попередній.
+ */
+test("#1495 ПОВНИЙ МІСЯЦЬ — ПРОТИ ПОВНОГО ПОПЕРЕДНЬОГО: вересень проти 01–31.08, неповний — той самий відрізок", () => {
+  const sep = compareWindows("month", "2026-09-30");
+  assert.equal(sep.complete, true);
+  assert.deepEqual(sep.prev, { from: "2026-08-01", to: "2026-08-31" }, "🔴 повний вересень порівнюється з серпнем без 31.08 — «+79%»");
+  assert.deepEqual(compareWindows("month", "2026-04-30").prev, { from: "2026-03-01", to: "2026-03-31" }, "🔴 повний квітень — без 31.03");
+  assert.deepEqual(compareWindows("month", "2026-02-28").prev, { from: "2026-01-01", to: "2026-01-31" }, "🔴 повний лютий — проти 01–28.01");
+  assert.deepEqual(compareWindows("month", "2026-03-31").prev, { from: "2026-02-01", to: "2026-02-28" }, "🔴 повний березень — не проти повного лютого");
+  // дзеркало: неповний місяць — той самий відрізок, а не повний попередній
+  assert.deepEqual(compareWindows("month", "2026-10-08").prev, { from: "2026-09-01", to: "2026-09-08" }, "🔴 неповний жовтень порівнюється з повним вереснем");
+  assert.deepEqual(compareWindows("month", "2026-10-30").prev, { from: "2026-09-01", to: "2026-09-30" }, "🔴 30.10 (неповний) — не до 30.09");
+  assert.equal(compareWindows("month", "2026-10-30").complete, false);
+});
+
+/**
+ * #1495b — ЖИВИЙ API: плитка «Отримані кошти» за ПОВНИЙ минулий місяць порівнюється з ядром грошей за ПОВНИЙ
+ * позаминулий. Саме той екран і та сама цифра, які бачила Юля.
+ *
+ * 🧨 Червоніє, якщо: вікно порівняння знову обріже попередній місяць (вересень проти 01–30.08 дав 1 664 473
+ * проти 2 543 993 у ядрі).
+ */
+test("#1495b ЖИВИЙ: «Отримані кошти» за повний місяць — попередній == ядро за повний попередній місяць", needsApi(), async () => {
+  const H = { Authorization: `Bearer ${await adminToken()}` };
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+  const lastOfPrev = new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 1, 0)).toISOString().slice(0, 10);
+  const win = compareWindows("month", lastOfPrev);
+  assert.equal(win.complete, true, `🔴 ${lastOfPrev} мав бути останнім днем місяця`);
+  const r = await fetch(`${API_BASE}/api/statistics/summary?gran=month&anchor=${lastOfPrev}`, { headers: H });
+  assert.equal(r.status, 200, `🔴 /api/statistics/summary віддав ${r.status}`);
+  const tile = ((await r.json()) as { tiles: { key: string; prev: number }[] }).tiles.find((t) => t.key === "revenue");
+  assert.ok(tile, "🔴 плитки «Отримані кошти» немає");
+  const money = await import("../core/money.js");
+  const core = Math.round((await money.receivedMoney({ from: win.prev.from, to: win.prev.to })).revenue);
+  assert.equal(win.prev.to.slice(8), String(new Date(Date.UTC(Number(win.prev.from.slice(0, 4)), Number(win.prev.from.slice(5, 7)), 0)).getUTCDate()),
+    "🔴 попередній відрізок не до кінця місяця");
+  assert.equal(tile.prev, core, `🔴 плитка порівнює з ${tile.prev}, а ядро за повний ${win.prev.from.slice(0, 7)} — ${core}`);
+});

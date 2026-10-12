@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDialogs } from "../components/Dialogs";
 import { usePolling } from "../hooks/usePolling";
 import { mergeTasksPreservingEdits, type TaskDirtyFields } from "./dashboard/taskMerge";
 import { isBusy, shouldApplyRefresh } from "./dashboard/refreshGate";
@@ -53,7 +54,7 @@ import {
 } from "../api";
 import { Layout, NAV_ITEMS, HIDDEN_NAV, type NavKey } from "../components/Layout";
 import { getDateRange } from "../components/DateRangeFilter";
-import { isSignalAlert, signalAlertText, knownOf, type KnownTask } from "./dashboard/signalTaskNotify";
+import { isSignalAlert, signalAlertText, knownOf, isClientTaskAlert, clientTaskAlertText, type KnownTask } from "./dashboard/signalTaskNotify";
 import { isAcceptanceAlert, acceptanceAlertText } from "./dashboard/acceptanceNotify";
 import { getAuthPayload } from "../auth";
 import { currentMonth, formatAmount, formatAmountFull, previousRange, getRank, presence } from "./dashboard/format";
@@ -112,6 +113,7 @@ function serverReason(err: unknown): string {
 }
 
 export function Dashboard() {
+  const dlg = useDialogs();
   const auth = useMemo(() => getAuthPayload(), []);
   // Розділ живе в URL (/report, /kvp, …) — посилання, «назад/вперед», закладки
   // працюють, а F5 лишає тебе на місці. «/» = Звіт (лендинг для всіх ролей).
@@ -232,7 +234,8 @@ export function Dashboard() {
   // 🔴 Права на дії віддає СЕРВЕР тими самими виразами, що гейтять роути.
   // Дефолт `false`: поки відповіді немає, кнопок немає — «закрито, поки не
   // сказано інакше» безпечніше за зворотне.
-  const [receivablesPerms, setReceivablesPerms] = useState({ canSetOwner: false, canMerge: false, canSetLimit: false, canWriteOff: false, canRequestLimit: false });
+  const [receivablesPerms, setReceivablesPerms] = useState({ canSetOwner: false, canMerge: false, canSetLimit: false, canWriteOff: false, canRequestLimit: false,
+    canEditAgreement: false, canListenCalls: false });
   // 🔗 Реєстр псевдонімів (канонічний → скільки вже приймає). Знає лише БД.
   const [receivablesCanonicalOf, setReceivablesCanonicalOf] = useState<Record<string, number>>({});
   const [receivablesLoading, setReceivablesLoading] = useState(false);
@@ -376,6 +379,13 @@ export function Dashboard() {
         success: false, go: "tasks", label: "До задач", onDismiss: () => { missedPending.current = []; },
       });
     }
+    // 👤 Нова задача по переданому клієнту (08.10.2026) — тією самою базовою лінією, ДО оновлення `signalKnown`.
+    const clientTitles = fresh.filter((t) => isClientTaskAlert(t, known, auth?.managerId, mountedAt.current)).map((t) => t.title);
+    const clientText = clientTaskAlertText(clientTitles);
+    if (clientText) notifyEvent({
+      key: "client-tasks", tone: "info", src: "Задачник · переданий клієнт", text: clientText, plain: `👤 ${clientText}`,
+      success: false, go: "tasks", label: "До задач",
+    });
     signalKnown.current = new Map(fresh.map((t) => [t.id, knownOf(t)]));
   };
   usePolling(() => {
@@ -587,7 +597,7 @@ export function Dashboard() {
       try { await uploadTaskFile(id, file); }
       catch (err) { failed.push(err instanceof Error ? err.message : `задача ${id}`); }
     }
-    if (failed.length) alert(`Задачу створено, але файл не прикріпився: ${failed.join("; ")}`);
+    if (failed.length) toast(`Задачу створено, але файл не прикріпився: ${failed.join("; ")}`, { error: true });
     /**
      * 🔴 ПЕРЕЧИТАТИ СПИСОК ОБОВʼЯЗКОВО. Гілка одного виконавця вставляє рядок
      * ОПТИМІСТИЧНО і `fileCount` у ньому не задає взагалі, тож нова колонка
@@ -652,12 +662,12 @@ export function Dashboard() {
       // 🔓 14.09.2026: план ставить будь-хто будь-кому; порожній вибір у менеджера = собі.
       const planAssignee = taskForm.assigneeId === "" ? (auth?.role === "manager" ? auth.managerId : null) : Number(taskForm.assigneeId);
       if (planAssignee == null) {
-        alert("Оберіть виконавця (менеджера) для плану");
+        toast("Оберіть виконавця (менеджера) для плану", { error: true });
         return;
       }
       const days = buildPlanDays();
       if (days.length === 0) {
-        alert("Оберіть дату початку та хоча б один робочий день");
+        toast("Оберіть дату початку та хоча б один робочий день", { error: true });
         return;
       }
       await createTaskPlan({
@@ -720,18 +730,20 @@ export function Dashboard() {
     const managerIdToUse = auth?.role === "manager" ? auth.managerId ?? undefined : undefined;
     setReceivablesLoading(true);
     fetchReceivables({ teamId: teamIdToUse || undefined, managerId: managerIdToUse })
-      .then(({ syncedAt, managers, totals, canSetOwner, canMerge, canSetLimit, canWriteOff, canRequestLimit, canonicalOf }) => {
+      .then(({ syncedAt, managers, totals, canSetOwner, canMerge, canSetLimit, canWriteOff, canRequestLimit, canonicalOf, canEditAgreement, canListenCalls }) => {
         setReceivablesData(managers);
         setReceivablesSyncedAt(syncedAt);
         setReceivablesTotals(totals ?? null);
         setReceivablesPerms({ canSetOwner: !!canSetOwner, canMerge: !!canMerge, canSetLimit: !!canSetLimit,
-                              canWriteOff: !!canWriteOff, canRequestLimit: !!canRequestLimit });
+                              canWriteOff: !!canWriteOff, canRequestLimit: !!canRequestLimit,
+                              // 📞 4631: старий сервер поля не віддає — тоді як було: домовленість пишуть тімлід/адмін.
+                              canEditAgreement: canEditAgreement ?? canEditReceivables, canListenCalls: !!canListenCalls });
         setReceivablesCanonicalOf(canonicalOf ?? {});
       })
       .catch(() => { setReceivablesData([]); setReceivablesTotals(null);
                      setReceivablesCanonicalOf({});
                      setReceivablesPerms({ canSetOwner: false, canMerge: false, canSetLimit: false,
-                                           canWriteOff: false, canRequestLimit: false }); })
+                                           canWriteOff: false, canRequestLimit: false, canEditAgreement: false, canListenCalls: false }); })
       .finally(() => setReceivablesLoading(false));
   }, [section, receivablesTeamId, teams, auth, refreshNonce]);
 
@@ -1172,6 +1184,8 @@ export function Dashboard() {
           canMerge={receivablesPerms.canMerge}
           canonicalOf={receivablesCanonicalOf}
           canEditReceivables={canEditReceivables}
+          canEditAgreement={receivablesPerms.canEditAgreement}
+          canListenCalls={receivablesPerms.canListenCalls}
           patchReceivableNote={patchReceivableNote}
           onRefresh={() => setRefreshNonce((n) => n + 1)}
         />
@@ -1468,7 +1482,7 @@ export function Dashboard() {
                            всієї компанії. Текст питання називає обидва факти — для кого і
                            чи зворотно. */
                         onClick={async () => {
-                          if (!confirm(`Видалити новину «${n.title}»?\n\nВона зникне В УСІХ, не лише у вас. Запис зберігається, і адміністратор може повернути його через базу.`)) return;
+                          if (!(await dlg.confirm(`Видалити новину «${n.title}»?\n\nВона зникне В УСІХ, не лише у вас. Запис зберігається, і адміністратор може повернути його через базу.`))) return;
                           await deleteNews(n.id);
                           setNewsItems(await fetchNews(newsCategory));
                         }}

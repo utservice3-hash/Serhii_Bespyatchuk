@@ -4,12 +4,15 @@ import { BrowserRouter } from 'react-router-dom'
 import './index.css'
 import App from './App.tsx'
 import { ToastProvider } from './components/Toasts'
+import { DialogProvider } from './components/Dialogs'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
       <ToastProvider>
-        <App />
+        <DialogProvider>
+          <App />
+        </DialogProvider>
       </ToastProvider>
     </BrowserRouter>
   </StrictMode>,

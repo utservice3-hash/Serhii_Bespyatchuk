@@ -1,7 +1,7 @@
 import type {
   ReceivableAging, ReceivableCarrierPaid, ReceivableCarrierReason, ReceivableClient,
   ReceivableClientFacts, ReceivableEntity, ReceivableEntityReason, ReceivableMargin,
-  ReceivableMarginUnknown, ReceivableTally,
+  ReceivableMarginUnknown, ReceivableTally, ReceivableCallState,
 } from "../../api";
 
 /**
@@ -157,9 +157,14 @@ export interface Filters {
    */
   carrier: ReceivableCarrierPaid | "na_fixable" | "";
   aging: ReceivableAging | "";
+  /**
+   * 📞 4631: зріз за розмовою біля дати. `no_call` — дату поставили в дашборді без розмови (жовті рядки);
+   * `crm` — дата лише з CRM, менеджер її не підтверджував (сірі). Стан рахує сервер — фільтр його лише читає.
+   */
+  call: "" | "no_call" | "crm";
 }
 
-export const EMPTY_FILTERS: Filters = { tab: "all", entity: "", carrier: "", aging: "" };
+export const EMPTY_FILTERS: Filters = { tab: "all", entity: "", carrier: "", aging: "", call: "" };
 
 /**
  * Прострочка. ЄДИНИЙ вираз на весь екран — плитка, червоний рядок, фільтр
@@ -249,11 +254,71 @@ export function passesFilters(c: ReceivableClient & { facts: ReceivableClientFac
     if (!why.includes("broken_link") && !why.includes("out_of_map")) return false;
   } else if (f.carrier && t(c.facts?.carrier[f.carrier]).n === 0) return false;
   if (f.aging && t(c.facts?.aging[f.aging]).n === 0) return false;
+  if (f.call && callState(c) !== f.call) return false;
   return true;
 }
 
 export const hasActiveFilters = (f: Filters) =>
-  f.tab !== "all" || f.entity !== "" || f.carrier !== "" || f.aging !== "";
+  f.tab !== "all" || f.entity !== "" || f.carrier !== "" || f.aging !== "" || f.call !== "";
+
+// ───────────────────────────── 📞 РОЗМОВА БІЛЯ ДАТИ (4631) ─────────────────────────────
+
+/** Стан із відповіді сервера; старий сервер (поля немає) — «none», а не вигаданий стан. */
+export const callState = (c: Pick<ReceivableClient, "callLink">): ReceivableCallState => c.callLink?.state ?? "none";
+
+/**
+ * Підписи станів. Тон: `ok` — зелений; `warn` — жовтий рядок (дата без розмови); `bad` — червоний (розмова є, але
+ * не та); `muted` — сірий (не підтверджено / ще не підтягнулось). «none» нічого не малює.
+ */
+export const CALL_STATE_UI: Record<ReceivableCallState, { label: string; tone: "ok" | "warn" | "bad" | "muted"; hint: string } | null> = {
+  none: null,
+  crm: { label: "дата з CRM · не підтверджено менеджером", tone: "muted",
+    hint: "Дату взято з угоди в CRM — у дашборді її ніхто не ставив і розмовою не підтверджував." },
+  no_call: { label: "⚠ дата без розмови", tone: "warn",
+    hint: "Дату поставили в дашборді, але посилання на розмову з клієнтом немає." },
+  pending: { label: "дзвінок ще не підтягнувся", tone: "muted",
+    hint: "Посилання прийнято, але дзвінка ще немає в нашій базі — синк Ringostat іде із запізненням. Перевірте за годину." },
+  no_talk: { label: "⚠ дзвінок без розмови", tone: "bad",
+    hint: "Прикріплений дзвінок не відбувся (0 секунд розмови) — дату він не підтверджує." },
+  other_number: { label: "⚠ інший номер", tone: "bad",
+    hint: "Розмова була з номером, якого немає в контактах цього клієнта. Перевірте, з ким саме говорили." },
+  ok: { label: "✓ є розмова", tone: "ok", hint: "Розмова з номером клієнта прикріплена до дати." },
+};
+
+/**
+ * Час дзвінка за КИЄВОМ: «08.10» або «08.10.2026, 11:42». Сервер віддає UTC із `Z`, тож зріз рядка дав би
+ * вчорашню дату для дзвінків після 21:00 за Києвом. Нерозбірне — порожньо, а не виняток (урок 26.08.2026).
+ */
+export function callWhen(iso: string, full = false): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("uk-UA", full
+    ? { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }
+    : { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit" });
+}
+
+/** «2 хв 14 с» / «45 с». */
+export function talkLength(sec: number): string {
+  const s = Math.max(0, Math.round(sec));
+  const m = Math.floor(s / 60);
+  return m > 0 ? `${m} хв ${String(s % 60).padStart(2, "0")} с` : `${s} с`;
+}
+
+/** «переносили 2 рази» — з правильним відмінком; 0 → null (підпису немає). */
+export function rescheduleLabel(n: number | undefined): string | null {
+  const k = n ?? 0;
+  if (k <= 0) return null;
+  const last = k % 10, last2 = k % 100;
+  const word = last === 1 && last2 !== 11 ? "раз" : last >= 2 && last <= 4 && (last2 < 12 || last2 > 14) ? "рази" : "разів";
+  return `переносили ${k} ${word}`;
+}
+
+/** Лічильники для чипів фільтра — над УСІМ скоупом, а не над видимими рядками (як і плитки). */
+export function callCounts(all: Pick<ReceivableClient, "callLink">[]): { no_call: number; crm: number } {
+  let no_call = 0, crm = 0;
+  for (const c of all) { const st = callState(c); if (st === "no_call") no_call++; else if (st === "crm") crm++; }
+  return { no_call, crm };
+}
 
 // ───────────────────────────── ЯРЛИКИ РЯДКА ─────────────────────────────
 

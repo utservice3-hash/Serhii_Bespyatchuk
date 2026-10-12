@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
+import { useToast } from "../../../components/Toasts";
 import { fetchCarrierAudio, fetchCarrierCallCard, fetchCarrierDeal, postCarrierDecision, revertCarrierClose,
   type CarrierCallCardResp, type CarrierDealT, type CarrierOtherTypeT } from "../../../api";
 import { mmss } from "../aiCallsView";
@@ -117,6 +119,8 @@ export function CarrierDealById({ kommoId, onChanged }: { kommoId: number; onCha
 
 /** Панель однієї угоди: ліворуч — розмова, праворуч — вердикт, рішення, журнал. `onDecided` — після запису рішення. */
 export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: CarrierDealT; onDecided: () => void; onChanged: () => void }) {
+  const dlg = useDialogs();
+  const toast = useToast();
   const [card, setCard] = useState<CarrierCallCardResp | null>(null);
   const [cardErr, setCardErr] = useState<string | null>(null);
   const [note, setNote] = useState(""); const [noteOpen, setNoteOpen] = useState(false); const [busy, setBusy] = useState(false);
@@ -138,14 +142,14 @@ export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: Carrier
   const decide = async (d: HumanDecisionT, other: CarrierOtherTypeT | null = null) => {
     setBusy(true);
     try { await postCarrierDecision(deal.kommoId, d, note, other); setNote(""); setNoteOpen(false); setPickOther(false); setReload((n) => n + 1); onDecided(); }
-    catch (e) { window.alert(`Рішення не записано: ${errText(e)}`); }
+    catch (e) { toast(`Рішення не записано: ${errText(e)}`, { error: true }); }
     finally { setBusy(false); }
   };
   const revert = async () => {
-    if (!window.confirm(`Повернути угоду № ${String(deal.kommoId)} на етап «Дзвінки на мобільні» і зняти причину? Автоматика її більше не закриватиме.`)) return;
+    if (!(await dlg.confirm(`Повернути угоду № ${String(deal.kommoId)} на етап «Дзвінки на мобільні» і зняти причину? Автоматика її більше не закриватиме.`))) return;
     setBusy(true);
     try { await revertCarrierClose(deal.kommoId); onChanged(); }
-    catch (e) { window.alert(`Не повернуто: ${errText(e)}`); }
+    catch (e) { toast(`Не повернуто: ${errText(e)}`, { error: true }); }
     finally { setBusy(false); }
   };
 

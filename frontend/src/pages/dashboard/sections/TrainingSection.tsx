@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import { embedUrl, trainingViewFor } from "../trainingView";
 import { CandidateTraining } from "./CandidateTraining";
 import { TrainingCourses } from "./TrainingCourses";
@@ -209,6 +210,7 @@ export function TrainingSection({ isAdmin, roleKey }: { isAdmin: boolean; roleKe
 }
 
 function TrainingLibrary({ isAdmin }: { isAdmin: boolean }) {
+  const dlg = useDialogs();
   const [folders, setFolders] = useState<TrainingFolder[]>([]);
   const [materials, setMaterials] = useState<TrainingMaterial[]>([]);
   const [upload, setUpload] = useState<TrainingUploadRules | null>(null);
@@ -258,11 +260,11 @@ function TrainingLibrary({ isAdmin }: { isAdmin: boolean }) {
     finally { setBusy(false); }
   };
 
-  const onNewFolder = () => { const name = window.prompt("Назва нової папки:")?.trim(); if (name) void guard(() => createTrainingFolder(name, cwd)); };
-  const onRenameFolder = (f: TrainingFolder) => { const name = window.prompt("Нова назва папки:", f.name)?.trim(); if (name && name !== f.name) void guard(() => updateTrainingFolder(f.id, { name })); };
-  const onDeleteFolder = (f: TrainingFolder) => { if (window.confirm(`Видалити папку «${f.name}» з усім вмістом?`)) void guard(() => deleteTrainingFolder(f.id)); };
-  const onRenameMaterial = (m: TrainingMaterial) => { const title = window.prompt("Нова назва:", m.title)?.trim(); if (title && title !== m.title) void guard(() => updateTrainingMaterial(m.id, { title })); };
-  const onDeleteMaterial = (m: TrainingMaterial) => { if (window.confirm(`Видалити «${m.title}»?`)) void guard(() => deleteTrainingMaterial(m.id)); };
+  const onNewFolder = async () => { const name = (await dlg.prompt("Назва нової папки:"))?.trim(); if (name) void guard(() => createTrainingFolder(name, cwd)); };
+  const onRenameFolder = async (f: TrainingFolder) => { const name = (await dlg.prompt("Нова назва папки:", f.name))?.trim(); if (name && name !== f.name) void guard(() => updateTrainingFolder(f.id, { name })); };
+  const onDeleteFolder = async (f: TrainingFolder) => { if ((await dlg.confirm(`Видалити папку «${f.name}» з усім вмістом?`))) void guard(() => deleteTrainingFolder(f.id)); };
+  const onRenameMaterial = async (m: TrainingMaterial) => { const title = (await dlg.prompt("Нова назва:", m.title))?.trim(); if (title && title !== m.title) void guard(() => updateTrainingMaterial(m.id, { title })); };
+  const onDeleteMaterial = async (m: TrainingMaterial) => { if ((await dlg.confirm(`Видалити «${m.title}»?`))) void guard(() => deleteTrainingMaterial(m.id)); };
 
   return (
     <div>

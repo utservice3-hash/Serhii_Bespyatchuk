@@ -16,7 +16,8 @@ import {
 } from "../statistics/seriesCatalog.js";
 import { sheetWeekToMonday, clipPlanToToday, clipPointsToToday } from "../statistics/statsCompare.js";
 import { anomaliesFor, applyCorrections } from "../statistics/anomalies.js";
-import { buildSummary, planSeries, dispatchPlanSeries, ARCHIVED_TEAM_IDS } from "../statistics/statsSummary.js";
+import { buildSummary, buildPlanFact, planSeries, dispatchPlanSeries, ARCHIVED_TEAM_IDS } from "../statistics/statsSummary.js";
+import type { AuthPayload } from "../auth/auth.js";
 
 /**
  * Вкладка «Статистики» (діаграми). Зшивка на серію: sheet (stats_series, <шов) +
@@ -264,17 +265,46 @@ statsSeriesRouter.get("/series", async (req, res) => {
  * (компанія йому лише бенчмарком у серіях, тут — не віддається); менеджер — себе.
  * `anchor` за замовчуванням — сьогодні за Києвом; майбутнє клампиться до сьогодні.
  */
-statsSeriesRouter.get("/summary", async (req, res) => {
+/**
+ * Період плиток і «План-факт»: тиждень / місяць (якір ≤ сьогодні) або «з – по» (4632 п.2.3). Погані дати — 400 з
+ * поясненням, а не тихий тиждень. Скоуп глядача — той самий для обох роутів.
+ */
+function statsPeriod(req: { query: Record<string, unknown>; auth?: AuthPayload }, res: { status: (c: number) => { json: (b: unknown) => unknown } }) {
   const auth = req.auth!;
-  const gran = req.query.gran === "month" ? "month" : "week";
   const today = kyivToday();
+  const isDay = (v: unknown) => /^\d{4}-\d{2}-\d{2}$/.test(String(v ?? ""));
+  if (req.query.gran === "range") {
+    const from = String(req.query.from ?? ""), to = String(req.query.to ?? "");
+    if (!isDay(from) || !isDay(to) || from > to) { res.status(400).json({ error: "з – по: потрібні дві дати YYYY-MM-DD, «з» не пізніше «по»" }); return null; }
+    if (from > today) { res.status(400).json({ error: "період ще не почався" }); return null; }
+    if ((Date.parse(to) - Date.parse(from)) / 86_400_000 > 366) { res.status(400).json({ error: "період довший за рік" }); return null; }
+  }
+  const gran = req.query.gran === "month" ? "month" as const : req.query.gran === "range" ? "range" as const : "week" as const;
   const raw = String(req.query.anchor ?? "");
-  const anchor = /^\d{4}-\d{2}-\d{2}$/.test(raw) && raw <= today ? raw : today;
+  const anchor = isDay(raw) && raw <= today ? raw : today;
   const allTeams = isAdminScope(auth);
   const viewer = allTeams ? { allTeams: true, teamId: null, managerId: null }
     : auth.role === "team_lead" ? { allTeams: false, teamId: auth.teamId ?? -1, managerId: null }
     : { allTeams: false, teamId: null, managerId: auth.managerId ?? -1 };
-  res.json(await buildSummary(gran, anchor, viewer));
+  const range = gran === "range" ? { from: String(req.query.from), to: String(req.query.to) } : undefined;
+  return { gran, anchor, viewer, range };
+}
+
+statsSeriesRouter.get("/summary", async (req, res) => {
+  const p = statsPeriod(req, res);
+  if (!p) return;
+  res.json(await buildSummary(p.gran, p.anchor, p.viewer, p.range));
+});
+
+/**
+ * 📋 GET /api/statistics/plan-fact?gran=week|month|range&anchor|from&to — вкладка «План-факт» (ТЗ 4632 п.2.2).
+ * Межа — вкладка `statistics` (ROUTE_TAB), скоуп — той самий, що в плиток: адмін-рівень — компанія й усі команди,
+ * тімлід — своя команда, менеджер — свій рядок.
+ */
+statsSeriesRouter.get("/plan-fact", async (req, res) => {
+  const p = statsPeriod(req, res);
+  if (!p) return;
+  res.json(await buildPlanFact(p.gran, p.anchor, p.viewer, p.range));
 });
 
 /**

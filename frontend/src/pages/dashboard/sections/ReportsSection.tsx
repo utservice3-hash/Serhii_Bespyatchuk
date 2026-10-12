@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, Legend, CartesianGrid, ResponsiveContainer,
 } from "recharts";
@@ -102,6 +103,7 @@ function WidgetView({ w, onDelete, canDelete }: { w: ReportWidget; onDelete: (id
 }
 
 export function ReportsSection({ canDelete }: { canDelete: boolean }) {
+  const dlg = useDialogs();
   const [widgets, setWidgets] = useState<ReportWidget[]>([]);
   const [loading, setLoading] = useState(true);
   const [prompt, setPrompt] = useState("");
@@ -112,7 +114,7 @@ export function ReportsSection({ canDelete }: { canDelete: boolean }) {
   useEffect(load, []);
 
   async function onDelete(id: number) {
-    if (!confirm("Видалити цей віджет?")) return;
+    if (!(await dlg.confirm("Видалити цей віджет?"))) return;
     await deleteReport(id);
     setWidgets((p) => p.filter((w) => w.id !== id));
   }

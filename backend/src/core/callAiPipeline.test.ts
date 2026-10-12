@@ -290,7 +290,7 @@ test("#767 АНАЛІЗ · ЖИВА СХЕМА: черга лише з непо�
   assert.equal(await c.pl.enqueueAnalyses(c.db, ap, null), 3, "🔴 у чергу аналізу потрапили порожні, провалені чи чужі розшифровки");
   assert.equal(await c.pl.enqueueAnalyses(c.db, ap, null), 0);
 
-  const good = JSON.stringify({ summary: "s", manager_channel: "0", client_request: "", price: { discussed: false, quote: "" }, conversation_type: "cargo_request", type_confidence: 0.95, type_reason: "клієнт питає ціну перевезення", price_value: "",
+  const good = JSON.stringify({ callback_request: { asked: false, quote: "", deadline_text: "", deadline_kind: "none", deadline_minutes: 0, deadline_date: "" }, summary: "s", manager_channel: "0", client_request: "", price: { discussed: false, quote: "" }, conversation_type: "cargo_request", type_confidence: 0.95, type_reason: "клієнт питає ціну перевезення", price_value: "",
     objections: [], promises: [{ who: "manager", what: "передзвонити", deadline_text: "завтра", quote: "передзвоню завтра", channel: "call", deadline_kind: "day", deadline_minutes: 0, deadline_date: "2026-09-21", conditional: false }], next_step: "" });
   const answers: GeminiOutcome[] = [
     { text: good, finishReason: "STOP", blockReason: null, usage: { input: 800, output: 350, thoughts: 250 } },
@@ -431,7 +431,10 @@ test("#788 ЧЕРГА: нові дзвінки першими, а не в пор
 });
 
 /**
- * #884 — РУБРИКА first-touch-v3 (замінює #854; рішення власника 05.10.2026): модель отримує ДАТУ розмови першим
+ * #922 — РУБРИКА first-touch-v4 (замінює #884; рішення Романа 09.10.2026 — «незручно говорити, просив передзвонити»).
+ * Усе, що стверджував #884 про v3, лишається правдою (переліковано нижче), плюс: тип `call_later`; поле `callback_request`
+ * обовʼязкове; «call_later без прохання» — суперечність, не приймається; правило 10 у промпті. Екран показує v4, поки
+ * її немає — v3, далі v2. Попередній опис #884 (v3, 05.10.2026): модель отримує ДАТУ розмови першим
  * рядком; відповідь без полів строку обіцянки або без ТИПУ розмови — не за схемою, а не «тип невідомий». Тип
  * `lead_lost` (запит став неактуальним) — у переліку; у промпті чотири правила: «хоч одна ознака запиту → вантаж»,
  * «домовленість передзвонити чи підтверджена актуальність → вантаж» (крім перевізника, продавця, роботи, помилки
@@ -441,10 +444,13 @@ test("#788 ЧЕРГА: нові дзвінки першими, а не в пор
  * 🧨 Червоніє, якщо не передати час розмови, пропустити відповідь без типу, прибрати будь-яке з правил з промпту,
  * забути v3 у переліку для «Перевізників» чи показувати під час переаналізу порожнечу.
  */
-test("#884 РУБРИКА first-touch-v3: дата в запиті; без полів строку чи типу — не за схемою; у промпті «хоч одна ознака», «втрачений лід», «домовленість передзвонити», розмитнення і «ціна — лише названа менеджером»", async (t) => {
+test("#922 РУБРИКА first-touch-v4: «незручно говорити» і прохання клієнта передзвонити; правила v3 на місці; без поля прохання чи з суперечністю — не за схемою", async (t) => {
   const pr = await import("./callAiProviders.js");
-  assert.equal(pr.RUBRIC_CURRENT, "first-touch-v3");
-  assert.deepEqual([...pr.CONVERSATION_TYPES], ["cargo_request", "lead_lost", "carrier", "vendor", "job_seeker", "wrong_number", "no_dialog", "other"]);
+  assert.equal(pr.RUBRIC_CURRENT, "first-touch-v4");
+  assert.deepEqual([...pr.CONVERSATION_TYPES], ["cargo_request", "lead_lost", "call_later", "carrier", "vendor", "job_seeker", "wrong_number", "no_dialog", "other"]);
+  assert.match(pr.ANALYSIS_SYSTEM_PROMPT, /call_later — клієнтові зараз незручно говорити[^\n]*Якщо клієнт встиг назвати маршрут, вантаж чи дату — це cargo_request/, "🔴 визначення «незручно говорити» чи його межа з запитом зникли");
+  assert.match(pr.ANALYSIS_SYSTEM_PROMPT, /10\. callback_request — чи попросив КЛІЄНТ передзвонити[^\n]*обіцянка менеджера передзвонити — це правило 6, а не 10/, "🔴 правило «прохання клієнта ≠ обіцянка менеджера» зникло");
+  assert.ok((pr.ANALYSIS_SCHEMA.required as readonly string[]).includes("callback_request"), "🔴 поле прохання необовʼязкове — модель мовчки його пропустить");
   assert.match(pr.ANALYSIS_SYSTEM_PROMPT, /ХОЧА Б ОДНА ознака запиту на перевезення/, "🔴 правила «хоч одна ознака — вантаж» у промпті немає");
   assert.match(pr.ANALYSIS_SYSTEM_PROMPT, /домовився передзвонити клієнту або клієнт підтвердив, що його запит актуальний/, "🔴 правила «домовленість передзвонити → вантаж» немає");
   assert.match(pr.ANALYSIS_SYSTEM_PROMPT, /крім випадків, коли це явно перевізник, продавець, пошук роботи чи помилка номером/, "🔴 правило передзвону без винятку — затягне перевізників у звіт");
@@ -453,8 +459,8 @@ test("#884 РУБРИКА first-touch-v3: дата в запиті; без по�
   // 06.10.2026: розмітка 61 розмови — модель рахувала бюджет клієнта й чужий орієнтир озвученою ціною (5 із 12 «так» хибні).
   assert.match(pr.ANALYSIS_SYSTEM_PROMPT, /price\.discussed = true ЛИШЕ тоді, коли МЕНЕДЖЕР назвав клієнту суму або діапазон/, "🔴 правило «ціна — лише названа менеджером» зникло");
   assert.match(pr.ANALYSIS_SYSTEM_PROMPT, /НЕ є озвученою ціною: бюджет, який назвав клієнт[^\n]*ціна іншого рейсу як орієнтир/, "🔴 винятки правила ціни (бюджет клієнта, чужий орієнтир) зникли");
-  assert.deepEqual([...pr.FIRST_TOUCH_SHOWN_RUBRICS], ["first-touch-v3", "first-touch-v2"], "🔴 під час переаналізу екран не матиме що показати");
-  assert.ok(pr.FIRST_TOUCH_RUBRICS.includes("first-touch-v3"), "🔴 «Перевізники» не відкриють картку дзвінка, переаналізованого v3 (#961)");
+  assert.deepEqual([...pr.FIRST_TOUCH_SHOWN_RUBRICS], ["first-touch-v4", "first-touch-v3", "first-touch-v2"], "🔴 старі розмови без v4 залишаться без розбору на екрані");
+  assert.ok(pr.FIRST_TOUCH_RUBRICS.includes("first-touch-v3") && pr.FIRST_TOUCH_RUBRICS.includes("first-touch-v4"), "🔴 «Перевізники» не відкриють картку дзвінка, розібраного v3/v4 (#961)");
   const txt = (b: Record<string, unknown>) => JSON.stringify(b);
   assert.match(txt(pr.buildAnalysisRequest([], 100, new Date("2026-09-29T05:56:00Z"))), /Розмова почалась 2026-09-29 о 08:56 за Києвом, вівторок/);
   const base = { summary: "", manager_channel: "1", client_request: "", next_step: "", price: { discussed: false, quote: "" }, objections: [] };
@@ -462,8 +468,14 @@ test("#884 РУБРИКА first-touch-v3: дата в запиті; без по�
   assert.equal(pr.validateAnalysis(old).ok, false, "🔴 обіцянку без каналу й строку прийнято");
   const v1only = { ...base, promises: [{ who: "manager", what: "x", deadline_text: "", quote: "q", channel: "call", deadline_kind: "none", deadline_minutes: 0, deadline_date: "", conditional: true }] };
   assert.equal(pr.validateAnalysis(v1only).ok, false, "🔴 відповідь без типу розмови прийнято — тип став би «невідомий» мовчки");
-  const v1 = { ...v1only, conversation_type: "cargo_request", type_confidence: 0.9, type_reason: "питає ціну", price_value: "" };
-  assert.equal(pr.validateAnalysis(v1).ok, true, "дзеркало: повна відповідь v2 проходить");
+  const noCb = { asked: false, quote: "", deadline_text: "", deadline_kind: "none", deadline_minutes: 0, deadline_date: "" };
+  const v1 = { ...v1only, conversation_type: "cargo_request", type_confidence: 0.9, type_reason: "питає ціну", price_value: "", callback_request: noCb };
+  assert.equal(pr.validateAnalysis(v1).ok, true, "дзеркало: повна відповідь v4 проходить");
+  const { callback_request: _drop, ...noField } = v1;
+  assert.equal(pr.validateAnalysis(noField).ok, false, "🔴 відповідь без поля прохання прийнято — «просив передзвонити» загубилось би мовчки");
+  assert.equal(pr.validateAnalysis({ ...v1, conversation_type: "call_later" }).ok, false, "🔴 «незручно говорити» без прохання прийнято — суперечність не помічено");
+  const asked = { ...noCb, asked: true, quote: "Потом позвоните" };
+  assert.equal(pr.validateAnalysis({ ...v1, conversation_type: "call_later", callback_request: asked }).ok, true, "🔴 справжнє «незручно говорити» не проходить схему");
   assert.equal(pr.validateAnalysis({ ...v1, conversation_type: "spam" }).ok, false, "🔴 тип поза списком ТЗ прийнято");
   assert.equal(pr.validateAnalysis({ ...v1, conversation_type: "lead_lost" }).ok, true, "🔴 втрачений лід не проходить схему");
   assert.equal(pr.validateAnalysis({ ...v1, type_confidence: 1.4 }).ok, false, "🔴 упевненість поза 0..1 прийнято");

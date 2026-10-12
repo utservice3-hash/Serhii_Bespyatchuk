@@ -75,3 +75,29 @@ export function weekWorkingDays(w: { from: string; to: string }): number {
 export function shouldFreezeWeek(i: { weekStart: string; today: string; monthPlan: number }): boolean {
   return i.weekStart <= i.today && i.monthPlan > 0;
 }
+
+/**
+ * 🧊 ЧИ ВІРИТИ ЗНІМКУ (ТЗ Юлі 05.10.2026, «минулі тижні — план, який був на початку тижня»).
+ *
+ * Знімок із місячним планом 0 у менеджера, чий план ТЕПЕР заведено, — це не «ціль була 0», а «плану ще не
+ * завели, коли тиждень зафіксувався» (так застигли T1/T2 жовтня, задача 5202; в історії таких рядків сотні).
+ * Показувати його як план минулого тижня означало б намалювати нуль, якого ніхто не ставив. Тоді план тижня
+ * відновлюється тією самою формулою від залишку на початок того тижня — і рядок позначений «відновлено».
+ */
+export function snapshotUsable(snapMonthPlan: number, monthPlan: number): boolean {
+  return !(snapMonthPlan === 0 && monthPlan > 0);
+}
+
+/**
+ * 📅 ПЛАН МАЙБУТНЬОГО ТИЖНЯ — НЕВИКОНАНЕ ПЕРЕНОСИТЬСЯ (ТЗ Юлі 05.10.2026, Звіт КВП).
+ *
+ * Той самий залишок і той самий денний темп, що в ПОТОЧНОГО тижня: `залишок на початок поточного тижня ×
+ * дні цього тижня ÷ дні від початку поточного тижня до кінця місяця`. Тобто майбутні тижні не повзуть
+ * усередині тижня (база зафіксована знімком поточного) і оновлюються в понеділок, коли новий тиждень стає
+ * поточним і бере свіжий залишок.
+ *
+ * Приклад з ТЗ: план 400 000, T1 (5 дн) факт 30 000 → у T2 залишок 370 000 на 15 днів → T2 = T3 = T4 = 123 333.
+ */
+export function futureWeekPlan(cur: { monthPlan: number; factBefore: number; wdRest: number }, wdWeek: number): number {
+  return weekPlanOf({ monthPlan: cur.monthPlan, factBefore: cur.factBefore, wdWeek, wdRest: cur.wdRest }).plan;
+}

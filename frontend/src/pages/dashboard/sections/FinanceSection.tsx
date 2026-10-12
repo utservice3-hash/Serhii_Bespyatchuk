@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import { createPortal } from "react-dom";
 import { useToast, type Toast } from "../../../components/Toasts";
 import {
@@ -306,6 +307,7 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
   data: FinMonth; month: string; setMonth: (m: string) => void; act: Actions; reload: () => void; toast: Toast;
   ask: (d: DialogSpec) => void; sel: number | null; setSel: (id: number | null) => void;
 }) {
+  const dlg = useDialogs();
   const [resp, setResp] = useState<number | "all">("all");
   const [onlyOver, setOnlyOver] = useState(false);
   const [showEmpty, setShowEmpty] = useState(false);
@@ -322,8 +324,8 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
   const current = month === data.currentMonth;
   const shownData = data.month === month ? data : null;
   const changedKeys = Object.keys(draft);
-  const leave = (fn: () => void) => () => {
-    if (edit && changedKeys.length && !window.confirm("Є незбережені зміни. Вийти без збереження?")) return;
+  const leave = (fn: () => void) => async () => {
+    if (edit && changedKeys.length && !(await dlg.confirm("Є незбережені зміни. Вийти без збереження?"))) return;
     setEdit(false); setDraft({}); setBad(new Set()); fn();
   };
   const orig = (it: FinItem, f: "plan" | "fact") => asInput(it[f]);

@@ -145,11 +145,13 @@ test("#140b перехід між датою/людиною/типом не ви
   const guard = bodyOf(src, "leaveGuard");
   assert.ok(guard, "🔴 не знайдено leaveGuard — гейт втратив предмет");
   assert.match(guard, /!dirty/, "🔴 замок не дивиться на наявність незбереженого");
-  assert.match(guard, /window\.confirm\(/, "🔴 замок нічого не питає — перехід тихий, як був");
+  // Питає діалог дашборда з 09.10.2026 (прохід B, `#1510`); твердження те саме — замок когось питає.
+  assert.match(guard, /await dlg\.confirm\(/, "🔴 замок нічого не питає — перехід тихий, як був");
 
   // 5. Усі ЧОТИРИ виходи з анкети йдуть через замок.
   for (const fn of ["pickSubject", "pickDate", "pickType", "pickMonth"]) {
-    assert.match(bodyOf(src, fn), /leaveGuard\(\)/, `🔴 ${fn} міняє екран повз замок`);
+    // З `await`: замок тепер повертає обіцянку, і без нього `if (!leaveGuard())` пропускав би перехід мовчки (`#1510b`).
+    assert.match(bodyOf(src, fn), /await leaveGuard\(\)/, `🔴 ${fn} міняє екран повз замок (або кличе його без await)`);
   }
 
   // 6. 🔴 І САМІ ОБРОБНИКИ МУСЯТЬ КЛИКАТИ pick*, А НЕ СЕТЕР НАВПРОСТЕЦЬ. Правильна

@@ -6,6 +6,7 @@ import { rolesCacheState } from "../auth/rbac.js";
 import { buildVersion, buildIsStale, onDiskVersion } from "../version.js";
 import { runReadOnly } from "../ai/readQuery.js";
 import { MONITORED_JOBS } from "../jobs/monitoredJobs.js";
+import { SKIP_ALERT_THRESHOLD } from "../jobs/jobRuns.js";
 import { actionWithAdvice } from "./jobErrorKind.js";
 
 /**
@@ -183,8 +184,9 @@ async function checkSync(): Promise<Alert[]> {
 // ─────────────────────── 4. ДЖОБИ ───────────────────────
 
 async function checkJobs(): Promise<Alert[]> {
-  const rows = (await pool.query<{ name: string; last_success_at: Date | null; last_error: string | null; last_error_at: Date | null }>(
-    `SELECT name, last_success_at, last_error, last_error_at FROM job_runs`)).rows;
+  const rows = (await pool.query<{ name: string; last_success_at: Date | null; last_error: string | null; last_error_at: Date | null;
+    consecutive_skips: number | null; last_skip_reason: string | null; last_skip_at: Date | null }>(
+    `SELECT name, last_success_at, last_error, last_error_at, consecutive_skips, last_skip_reason, last_skip_at FROM job_runs`)).rows;
   const byName = new Map(rows.map((r) => [r.name, r]));
   const uptimeMin = process.uptime() / 60;
   const out: Alert[] = [];
@@ -244,6 +246,23 @@ async function checkJobs(): Promise<Alert[]> {
         since: ISO(rec.last_error_at),
       });
     }
+  }
+  /**
+   * 🔁 ПРОПУСКИ ПОСПІЛЬ (переїхало з `runJob` 09.10.2026). Джоба, що раз у раз виходить «попередній прохід ще
+   * біжить», не падає й не мовчить — вона просто нічого не робить (простій 14 год 52 хв 10.08.2026). По ВСІХ рядках
+   * `job_runs`, а не лише моніторених: доти пряме повідомлення з `runJob` ішло для будь-якої джоби. Відбій — коли
+   * джоба відпрацює й лічильник обнулиться.
+   */
+  for (const r of rows) {
+    const n = Number(r.consecutive_skips ?? 0);
+    if (n < SKIP_ALERT_THRESHOLD) continue;
+    out.push({
+      id: `job:${r.name}:skips`, severity: "critical",
+      title: `Джоба «${r.name}»: ${n} пропусків поспіль`,
+      detail: `Причина: ${r.last_skip_reason ?? "—"}. Джоба НЕ працює, хоч і не падає — саме так минув простій 14 год 52 хв 10.08.2026.`,
+      action: "Перевірити job_locks і завислий попередній прохід; лог — до першого пропуску.",
+      since: ISO(r.last_skip_at),
+    });
   }
   return out;
 }

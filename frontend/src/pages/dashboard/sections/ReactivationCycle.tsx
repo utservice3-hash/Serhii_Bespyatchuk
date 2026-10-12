@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import {
   reactDecision, fetchLeadgenPool, takeFromLeadgenPool,
   type ReactCycleView, type LeadgenPoolRow,
@@ -54,10 +55,11 @@ export function ReactCycleStatus({ cycle }: { cycle: ReactCycleView }) {
 export function ReactCycleButtons({ clientKey, cycle, onDone, onError }: {
   clientKey: string; cycle: ReactCycleView; onDone: () => void; onError: (msg: string) => void;
 }) {
+  const dlg = useDialogs();
   const [busy, setBusy] = useState(false);
   if (!cycle.allowed.length) return null;
   const go = async (decision: "self" | "leadgen") => {
-    if (decision === "leadgen" && !window.confirm("Передати клієнта в пул лідгенів? Відповідальним він лишиться, доки лідген його не візьме.")) return;
+    if (decision === "leadgen" && !(await dlg.confirm("Передати клієнта в пул лідгенів? Відповідальним він лишиться, доки лідген його не візьме."))) return;
     setBusy(true);
     try { await reactDecision({ clientKey, decision }); onDone(); }
     catch (e) {
