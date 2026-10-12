@@ -1546,6 +1546,29 @@ test("#1247 ФРОНТ СЕЙФУ: лише перегляд — «станом 
 });
 
 /**
+ * #1265 — КАСА = СЕЙФ (Роман 12.10.2026: «перенеси сейф туди», кнопка у «Виписці» лишається). Одна `SafeView` на два
+ * входи: вікно «Виписки» і вкладка «Фінанси → Каса» рендерять ТУ САМУ функцію, другої копії екрана немає. Вкладку
+ * «Фінанси» бачать і СЕО / ОД / КВП — Сейф у «Касі» лише з `view_private_finance`, без нього пояснення словами.
+ * 🧨 Червоніє, якщо «Каса» знову заглушка, рендерить Сейф без права, мовчить без права або вікно «Виписки» тримає свою копію.
+ */
+test("#1265 КАСА = СЕЙФ: вкладка «Каса» показує ту саму SafeView, що й вікно «Виписки», лише з view_private_finance; без права — словами", () => {
+  const bank = FE("pages/dashboard/sections/BankSection.tsx");
+  const fin = FE("pages/dashboard/sections/FinanceSection.tsx");
+  const modal = bank.slice(bank.indexOf("function SafeModal("), bank.indexOf("export function SafeView("));
+  assert.ok(modal.length > 0, "🔴 вікно або SafeView не знайдено — гейту нічого перевіряти");
+  assert.match(modal, /<SafeView accounts=\{accounts\} \/>/, "🔴 вікно «Виписки» не рендерить SafeView");
+  assert.doesNotMatch(modal, /useState|fetchBankManual/, "🔴 вікно «Виписки» тримає власну копію Сейфу");
+  assert.match(fin, /^import \{ SafeView \} from "\.\/BankSection";$/m, "🔴 «Каса» не бере SafeView з «Виписки»");
+  assert.match(fin, /\{tab === "cash" && <CashTab \/>\}/, "🔴 «Каса» не рендерить Сейф");
+  assert.match(fin, /\["cash", "Каса", false\]/, "🔴 «Каса» досі позначена «скоро»");
+  const tab = fin.slice(fin.indexOf("function CashTab("), fin.indexOf("function PlannedCard("));
+  assert.match(tab, /const canView = \(getAuthPayload\(\)\?\.perms \?\? \[\]\)\.includes\("view_private_finance"\);/, "🔴 «Каса» не за view_private_finance");
+  assert.match(tab, /if \(!canView\) return [^\n]*Сейф бачать лише Адмін і фінансист/, "🔴 без права «Каса» мовчить або показує Сейф");
+  assert.match(tab, /a\.filter\(\(x\) => x\.is_active && x\.bank === "manual"\)/, "🔴 «Каса» бере не рахунок Сейфу");
+  assert.ok(tab.indexOf("if (!canView)") < tab.indexOf("<SafeView"), "🔴 Сейф рендериться ДО перевірки права");
+});
+
+/**
  * #948 — СУМИ ЗА ПРАВИЛОМ ФІНАНСИСТА (`core/fmSums.ts`, підтверджено Тетяною 01.10.2026): дохід = Σ «Приход 1–5»,
  * витрати = Σ «Расход 1–5» КРІМ слотів «Оплата на выгрузке». По обидва боки: той самий слот з іншим типом рахується.
  * Порожнє ≠ нуль. 🧨 Червоніє, якщо брати лише «Приход 1», не виключати «Оплата на выгрузке» чи виключати інші типи.

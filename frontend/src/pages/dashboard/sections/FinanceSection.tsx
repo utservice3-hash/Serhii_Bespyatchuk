@@ -5,10 +5,13 @@ import { useToast, type Toast } from "../../../components/Toasts";
 import {
   fetchFinMonth, fetchFinItem, createFin, updateFin, deleteFin, restoreFin, setFinItemOff, saveFinValues, saveFinNote,
   setFinApproval, finErrorData, hiringError, setFinItemSections, FIN_SECTIONS, fetchFinLog, type FinLogRow,
+  fetchBankAccounts, type BankAccount,
   type FinMonth, type FinSection, type FinItem, type FinGroup, type FinResp, type FinItemCard, type FinKind, type FinCell,
 } from "../../../api";
 import { rowVisible, asInput, planFromPrevious } from "./financeView";
 import { FinanceWeekTab } from "./FinanceWeekTab";
+import { SafeView } from "./BankSection";
+import { getAuthPayload } from "../../../auth";
 import "./hiring.css";
 import "./finance.css";
 
@@ -16,8 +19,8 @@ import "./finance.css";
  * 💰 «ФІНАНСИ», прохід 1 (29.09.2026): «План/факт витрат» і «Статті».
  * Те, що фінансист вела в Excel-таблиці «Витрати План/Факт», вноситься тут. Макет затверджено 28.09.2026
  * (artifact TjMcb2LTWjpGjojH1sAMwv). Що дозволено — вирішує СЕРВЕР (`canEdit`/`canApprove` у відповіді),
- * тут лише рендер. «Тиждень і місяць», «Каса» й «Огляд» — наступні проходи; до того їхні вкладки
- * пояснюють, що буде (той самий прийом, що в «Бізнес-асистенті»).
+ * тут лише рендер. «Каса» — Сейф (та сама `SafeView`, що у «Виписці», 12.10.2026). «Огляд» — наступний прохід;
+ * до того вкладка пояснює, що буде (той самий прийом, що в «Бізнес-асистенті»).
  * Стилі — `hiring.css` (`.hr-*`) + `finance.css` (`.fin-*`).
  */
 type Tab = "pf" | "art" | "week" | "cash" | "overview";
@@ -247,7 +250,7 @@ export function FinanceSection() {
   if (err && !data) return <div className="chart-card"><b>Розділ «Фінанси» недоступний.</b> <span className="hr-muted">{err}</span></div>;
   if (!data) return <p className="loading-text">Завантаження…</p>;
 
-  const tabs: [Tab, string, boolean][] = [["pf", "План/факт витрат", false], ["art", "Статті", false], ["week", "Тиждень і місяць", false], ["cash", "Каса", true], ["overview", "Огляд", true]];
+  const tabs: [Tab, string, boolean][] = [["pf", "План/факт витрат", false], ["art", "Статті", false], ["week", "Тиждень і місяць", false], ["cash", "Каса", false], ["overview", "Огляд", true]];
   return (
     <div>
       <h1 className="page-title" style={{ marginBottom: 4 }}>Фінанси</h1>
@@ -265,10 +268,7 @@ export function FinanceSection() {
       {tab === "pf" && <PlanFactTab data={data} month={month} setMonth={setMonth} act={act} reload={reload} toast={toast} ask={ask} sel={sel} setSel={setSel} />}
       {tab === "art" && <ArticlesTab data={data} act={act} />}
       {tab === "week" && <FinanceWeekTab ask={ask} toast={toast} />}
-      {tab === "cash" && <PlannedCard title="Каса" will={[
-        "Рух готівки по місцях зберігання (сейф) і валютах: прихід, видача, обмін — з коментарем.",
-        "Залишок на дату рахується з руху, а не вноситься руками.",
-      ]} waits="Проходу 3 — після «Тижня і місяця»." />}
+      {tab === "cash" && <CashTab />}
       {tab === "overview" && <PlannedCard title="Огляд" will={[
         "Головні числа місяця на одному екрані: план/факт витрат, надходження, маржа, залишки.",
         "Графік за рік і статті, що найбільше вийшли за план.",
@@ -278,6 +278,23 @@ export function FinanceSection() {
       {dialog && <Dialog spec={dialog} onClose={() => setDialog(null)} />}
     </div>
   );
+}
+
+/**
+ * «Каса» = Сейф (Роман 12.10.2026: «перенеси сейф туди», кнопка у «Виписці» лишається). Одна `SafeView` на два входи.
+ * Вкладку «Фінанси» бачать і СЕО / ОД / КВП, а Сейф — лише `view_private_finance` (Адмін, фінансист): їм — пояснення
+ * словами, не порожнеча. Право тут — косметика; сервер гейтить `/bank/manual` і `/bank/safe/*` сам.
+ */
+function CashTab() {
+  const canView = (getAuthPayload()?.perms ?? []).includes("view_private_finance");
+  const [accs, setAccs] = useState<BankAccount[] | null>(null);
+  useEffect(() => {
+    if (canView) fetchBankAccounts().then((a) => setAccs(a.filter((x) => x.is_active && x.bank === "manual"))).catch(() => setAccs([]));
+  }, [canView]);
+  if (!canView) return <div className="chart-card"><b>Каса · Сейф</b> <span className="hr-muted">Сейф бачать лише Адмін і фінансист.</span></div>;
+  if (accs == null) return <p className="loading-text">Завантаження…</p>;
+  if (!accs.length) return <div className="chart-card"><b>Каса · Сейф</b> <span className="hr-muted">Активного рахунку «Сейф» у «Виписці» немає.</span></div>;
+  return <div className="chart-card"><SafeView accounts={accs} /></div>;
 }
 
 function PlannedCard({ title, will, waits }: { title: string; will: string[]; waits: string }) {

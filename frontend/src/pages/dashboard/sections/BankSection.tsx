@@ -743,9 +743,21 @@ function Stat({ label, value, hint, big }: { label: string; value: string; hint:
   );
 }
 
-// ─────────────────────────── 🗄 Сейф — ручний рахунок (прохід 2г фінансів) ───────────────────────────
-// Записи — по операції АБО підсумком тижня; тиждень змішати не можна (сервер відмовить 409 і скаже чому).
+// ─────────────────────────── 🗄 Сейф — дзеркало Google-таблиці (12.10.2026) ───────────────────────────
+// Вікно «Виписки» — та сама `SafeView`, що й вкладка «Фінанси → Каса» (Роман 12.10.2026: «хай буде і там, і там»).
 function SafeModal({ accounts, onClose }: { accounts: BankAccount[]; onClose: () => void }) {
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: "40px 16px", overflowY: "auto" }}>
+      <div onClick={(e) => e.stopPropagation()} className="chart-card" style={{ maxWidth: 900, width: "100%", position: "relative" }}>
+        <button onClick={onClose} title="Закрити" style={{ position: "absolute", top: 10, right: 10, border: "1px solid var(--border)", background: "var(--card-bg)", borderRadius: 8, width: 34, height: 34, cursor: "pointer", fontSize: 18, color: MUTED }}>✕</button>
+        <SafeView accounts={accounts} />
+      </div>
+    </div>
+  );
+}
+
+// Сейф — дзеркало таблиці, лише перегляд. Одна копія на два входи: вікно «Виписки» і вкладка «Фінанси → Каса».
+export function SafeView({ accounts }: { accounts: BankAccount[] }) {
   const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
   const toast = useToast();
   const [acc, setAcc] = useState<number>(accounts[0]?.id ?? 0);
@@ -782,52 +794,49 @@ function SafeModal({ accounts, onClose }: { accounts: BankAccount[]; onClose: ()
     return [...mm.entries()];
   }, [shown]);
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: "40px 16px", overflowY: "auto" }}>
-      <div onClick={(e) => e.stopPropagation()} className="chart-card" style={{ maxWidth: 900, width: "100%", position: "relative" }}>
-        <button onClick={onClose} title="Закрити" style={{ position: "absolute", top: 10, right: 10, border: "1px solid var(--border)", background: "var(--card-bg)", borderRadius: 8, width: 34, height: 34, cursor: "pointer", fontSize: 18, color: MUTED }}>✕</button>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", paddingRight: 44 }}>
-          <h2 className="chart-title" style={{ marginBottom: 0 }}>🗄 Сейф</h2>
-          <span style={{ fontSize: 11.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: "rgba(217,119,6,0.14)", color: "#b45309", whiteSpace: "nowrap" }}>🔒 лише Адмін і фінансист</span>
-        </div>
-        <p style={{ color: MUTED, fontSize: 12.5, margin: "6px 0 10px" }}>Дзеркало таблиці «Сейф» (Google Sheets): вносять рухи <b>у таблицю</b>, дашборд підтягує їх сам кожні 30 хвилин. Тут лише перегляд. Записи йдуть у «Виписку», кешфлоу і «Фінанси → Тиждень і місяць».</p>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12.5, marginBottom: 10 }}>
-          <span>Дані станом на <b>{hhmm(status?.lastOkAt ?? null)}</b></span>
-          <button onClick={() => void refresh()} disabled={syncing} style={{ padding: "5px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "#2f6fdb", fontWeight: 700, cursor: syncing ? "default" : "pointer", fontSize: 12.5 }}>{syncing ? "Оновлюю…" : "↻ Оновити зараз"}</button>
-        </div>
-        {status && !status.configured && <div style={{ fontSize: 12.5, color: "#b45309", background: "rgba(217,119,6,0.1)", borderRadius: 8, padding: "8px 12px", marginBottom: 10 }}>Синк із таблицею на сервері не налаштовано — показано останні збережені дані.</div>}
-        {failing && <div style={{ fontSize: 12.5, color: "#b45309", background: "rgba(217,119,6,0.1)", borderRadius: 8, padding: "8px 12px", marginBottom: 10 }}>⚠ Таблицю не вдалося прочитати {hhmm(status!.lastErrorAt)}: {status!.lastError}. Показано дані станом на {hhmm(status!.lastOkAt)}.</div>}
-        {!!status?.mismatch.length && <div style={{ fontSize: 12.5, color: "#dc2626", background: "rgba(220,38,38,0.08)", borderRadius: 8, padding: "8px 12px", marginBottom: 10 }}>Залишок не збігається з шапкою таблиці: {status.mismatch.map((x) => `${x.currency} — у таблиці ${fmtMoney(x.sheet)}, у дашборді ${fmtMoney(x.dashboard)}`).join("; ")}.</div>}
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 14 }}>
-          {(status?.dashBalances ?? []).map((b) => <SafeTile key={b.currency} label={`залишок · ${b.currency}`} value={`${b.amount < 0 ? "−" : ""}${fmtMoney(Math.abs(b.amount))} ${b.currency === "UAH" ? "₴" : b.currency}`} color={b.amount < 0 ? "#dc2626" : "var(--text)"} hint={b.asOf ? `початковий залишок на ${b.asOf.slice(8, 10)}.${b.asOf.slice(5, 7)} + усі рухи після` : "сума всіх рухів"} />)}
-          <SafeTile label="прийшло за місяць" value={`+${fmtUah(sum("in"))}`} color="#16a34a" />
-          <SafeTile label="пішло за місяць" value={`−${fmtUah(sum("out"))}`} color="#dc2626" />
-        </div>
-
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
-          {accounts.length > 1 && <select aria-label="Рахунок" value={acc} onChange={(e) => setAcc(Number(e.target.value))} style={inp}>{accounts.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select>}
-          <label style={{ fontSize: 13, color: MUTED, display: "inline-flex", alignItems: "center", gap: 8 }}>Місяць <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={inp} /></label>
-          <select aria-label="Прихід чи розхід" value={dir} onChange={(e) => setDir(e.target.value as "" | "in" | "out")} style={inp}><option value="">прихід і розхід</option><option value="in">лише прихід</option><option value="out">лише розхід</option></select>
-          <select aria-label="Категорія" value={cat} onChange={(e) => setCat(e.target.value)} style={inp}><option value="">усі категорії</option>{cats.map((c) => <option key={c} value={c}>{c}</option>)}</select>
-        </div>
-
-        {rows == null ? <p className="loading-text">Завантаження…</p> : shown.length === 0 ? <p className="loading-text">За цей місяць записів немає.</p> : days.map(([day, list]) => {
-          const alive = list.filter((r) => !r.deleted);
-          const dIn = alive.filter((r) => r.direction === "in").reduce((a, r) => a + Math.abs(r.amount_uah), 0);
-          const dOut = alive.filter((r) => r.direction === "out").reduce((a, r) => a + Math.abs(r.amount_uah), 0);
-          return (
-            <div key={day} style={{ marginBottom: 6 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, padding: "10px 4px 4px", borderBottom: "1px solid var(--border)", fontSize: 12.5 }}>
-                <b>{safeDayLabel(day)}</b>
-                <span style={{ color: MUTED, whiteSpace: "nowrap" }}>{dIn > 0 && <span style={{ color: "#16a34a", fontWeight: 700 }}>+{fmtUah(dIn)}</span>}{dIn > 0 && dOut > 0 && " · "}{dOut > 0 && <span style={{ color: "#dc2626", fontWeight: 700 }}>−{fmtUah(dOut)}</span>}</span>
-              </div>
-              {list.map((r) => <SafeRow key={r.id} r={r} />)}
-            </div>
-          );
-        })}
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", paddingRight: 44 }}>
+        <h2 className="chart-title" style={{ marginBottom: 0 }}>🗄 Сейф</h2>
+        <span style={{ fontSize: 11.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: "rgba(217,119,6,0.14)", color: "#b45309", whiteSpace: "nowrap" }}>🔒 лише Адмін і фінансист</span>
       </div>
-    </div>
+      <p style={{ color: MUTED, fontSize: 12.5, margin: "6px 0 10px" }}>Дзеркало таблиці «Сейф» (Google Sheets): вносять рухи <b>у таблицю</b>, дашборд підтягує їх сам кожні 30 хвилин. Тут лише перегляд. Записи йдуть у «Виписку», кешфлоу і «Фінанси → Тиждень і місяць».</p>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12.5, marginBottom: 10 }}>
+        <span>Дані станом на <b>{hhmm(status?.lastOkAt ?? null)}</b></span>
+        <button onClick={() => void refresh()} disabled={syncing} style={{ padding: "5px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "#2f6fdb", fontWeight: 700, cursor: syncing ? "default" : "pointer", fontSize: 12.5 }}>{syncing ? "Оновлюю…" : "↻ Оновити зараз"}</button>
+      </div>
+      {status && !status.configured && <div style={{ fontSize: 12.5, color: "#b45309", background: "rgba(217,119,6,0.1)", borderRadius: 8, padding: "8px 12px", marginBottom: 10 }}>Синк із таблицею на сервері не налаштовано — показано останні збережені дані.</div>}
+      {failing && <div style={{ fontSize: 12.5, color: "#b45309", background: "rgba(217,119,6,0.1)", borderRadius: 8, padding: "8px 12px", marginBottom: 10 }}>⚠ Таблицю не вдалося прочитати {hhmm(status!.lastErrorAt)}: {status!.lastError}. Показано дані станом на {hhmm(status!.lastOkAt)}.</div>}
+      {!!status?.mismatch.length && <div style={{ fontSize: 12.5, color: "#dc2626", background: "rgba(220,38,38,0.08)", borderRadius: 8, padding: "8px 12px", marginBottom: 10 }}>Залишок не збігається з шапкою таблиці: {status.mismatch.map((x) => `${x.currency} — у таблиці ${fmtMoney(x.sheet)}, у дашборді ${fmtMoney(x.dashboard)}`).join("; ")}.</div>}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 14 }}>
+        {(status?.dashBalances ?? []).map((b) => <SafeTile key={b.currency} label={`залишок · ${b.currency}`} value={`${b.amount < 0 ? "−" : ""}${fmtMoney(Math.abs(b.amount))} ${b.currency === "UAH" ? "₴" : b.currency}`} color={b.amount < 0 ? "#dc2626" : "var(--text)"} hint={b.asOf ? `початковий залишок на ${b.asOf.slice(8, 10)}.${b.asOf.slice(5, 7)} + усі рухи після` : "сума всіх рухів"} />)}
+        <SafeTile label="прийшло за місяць" value={`+${fmtUah(sum("in"))}`} color="#16a34a" />
+        <SafeTile label="пішло за місяць" value={`−${fmtUah(sum("out"))}`} color="#dc2626" />
+      </div>
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+        {accounts.length > 1 && <select aria-label="Рахунок" value={acc} onChange={(e) => setAcc(Number(e.target.value))} style={inp}>{accounts.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select>}
+        <label style={{ fontSize: 13, color: MUTED, display: "inline-flex", alignItems: "center", gap: 8 }}>Місяць <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={inp} /></label>
+        <select aria-label="Прихід чи розхід" value={dir} onChange={(e) => setDir(e.target.value as "" | "in" | "out")} style={inp}><option value="">прихід і розхід</option><option value="in">лише прихід</option><option value="out">лише розхід</option></select>
+        <select aria-label="Категорія" value={cat} onChange={(e) => setCat(e.target.value)} style={inp}><option value="">усі категорії</option>{cats.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+      </div>
+
+      {rows == null ? <p className="loading-text">Завантаження…</p> : shown.length === 0 ? <p className="loading-text">За цей місяць записів немає.</p> : days.map(([day, list]) => {
+        const alive = list.filter((r) => !r.deleted);
+        const dIn = alive.filter((r) => r.direction === "in").reduce((a, r) => a + Math.abs(r.amount_uah), 0);
+        const dOut = alive.filter((r) => r.direction === "out").reduce((a, r) => a + Math.abs(r.amount_uah), 0);
+        return (
+          <div key={day} style={{ marginBottom: 6 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, padding: "10px 4px 4px", borderBottom: "1px solid var(--border)", fontSize: 12.5 }}>
+              <b>{safeDayLabel(day)}</b>
+              <span style={{ color: MUTED, whiteSpace: "nowrap" }}>{dIn > 0 && <span style={{ color: "#16a34a", fontWeight: 700 }}>+{fmtUah(dIn)}</span>}{dIn > 0 && dOut > 0 && " · "}{dOut > 0 && <span style={{ color: "#dc2626", fontWeight: 700 }}>−{fmtUah(dOut)}</span>}</span>
+            </div>
+            {list.map((r) => <SafeRow key={r.id} r={r} />)}
+          </div>
+        );
+      })}
+    </>
   );
 }
 
