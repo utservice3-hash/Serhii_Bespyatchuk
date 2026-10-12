@@ -315,7 +315,7 @@ export function RatesSection() {
   return (
     <>
       <div className="page-header">
-        <h1 className="page-title">⚡ Ставки за напрямком</h1>
+        {/* Заголовок екрана — «Калькулятор ставок та вантажу» над вкладками (RatesAndCargoSection); свій прибрано 12.10.2026 — рішення Романа */}
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button onClick={() => { setView("route"); setShowStats(false); }}
             style={{ padding: "7px 14px", borderRadius: 10, border: "1px solid var(--border)", cursor: "pointer", fontWeight: 700, fontSize: 13,

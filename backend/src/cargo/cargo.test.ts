@@ -229,6 +229,7 @@ test("#1616 ФРОНТ КОНФІГУРАТОРА: рушій = бекенд б�
   assert.match(sec, /export const PAGE_TITLE = "Калькулятор ставок та вантажу";/);
   assert.match(dash, /\{section === "rates" && <RatesAndCargoSection \/>\}/, "🔴 маршрут rates не рендерить екран із вкладками");
   assert.match(sec, /hidden=\{tab !== "rate"\}><RatesSection \/><\/div>/, "🔴 «Розрахунок ставки» — не наявний RatesSection");
+  assert.ok(!/<h1\b/.test(FRONT("pages/dashboard/sections/RatesSection.tsx")), "🔴 у вкладці «Розрахунок ставки» знову свій заголовок — два заголовки поспіль (рішення 12.10)");
   assert.match(sec, /params\.get\("tab"\) === "cargo" \? "cargo" : "rate"/, "🔴 ?tab=cargo не відкриває конфігуратор / не rate за замовчуванням");
   const files = ["cargo/client/cargo/configurator.ts", "cargo/client/cargo/topView.ts", "cargo/client/cargo/view3d.ts", "cargo/client/cargo/schemePng.ts",
     "cargo/client/cargo/api.ts", "cargo/client/cargo/CargoConfiguratorTab.tsx", "pages/dashboard/sections/RatesAndCargoSection.tsx"];
