@@ -9,6 +9,8 @@ import { recomputeOwners } from "../core/receivablesOwnerStore.js";
 import { getRate } from "../bankSources/fx.js";
 import { RECOMPUTE_RECEIVABLES_SQL } from "./clientKeySql.js";
 import { CLIENT_DEBT_AGE_SQL } from "../core/receivablesAge.js";
+import { journalReceivablesTotal } from "../core/financeKpi.js";
+import type { Db } from "../core/finance.js";
 
 // Cash ("готівка") clients tracked directly from CRM rather than the accounting
 // sheet: they pay cash, so their debt isn't in the безнал receivables file. We
@@ -368,6 +370,8 @@ export async function syncReceivables(): Promise<void> {
 
     // Відповідальний — ОДНИМ проходом, тим самим кодом, що й адмін-кнопка.
     const owners = await recomputeOwners(client);
+    // 🧾 Підсумок знімка — у журнал, у ЦІЙ САМІЙ транзакції: минулий тиждень «Тиждень і місяць» бере його (#1266).
+    const journal = await journalReceivablesTotal(client as unknown as Db);
     await client.query("COMMIT");
     // 🟢 ОБСЯГ У ЛОЗІ, А НЕ ЛИШЕ «відпрацювала»: для джоби-імпортера «успіх» без
     // числа привезеного нічого не означає (правило з CLAUDE.md, урок `syncCalls`).
@@ -377,7 +381,7 @@ export async function syncReceivables(): Promise<void> {
       `(злито псевдонімами ${merged.rowCount ?? 0} рах.; менеджер рахунку: за угодою ${byDeal}, без менеджера ${priced.filter((p) => p.managerId == null).length}; ` +
       `відповідальний: вручну ${owners.bySource.override}, мажоритар ${owners.bySource["auto-majority"]}, ` +
       `тімлід ${owners.bySource["auto-teamlead"]}, готівка ${owners.bySource["cash-invoice"]}, ` +
-      `немає ${owners.bySource.none}).`
+      `немає ${owners.bySource.none}); журнал: Σ ${journal.total} по ${journal.rows} рядках.`
     );
     return;
   } catch (err) {

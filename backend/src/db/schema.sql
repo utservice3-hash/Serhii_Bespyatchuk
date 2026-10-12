@@ -5756,3 +5756,18 @@ UPDATE bank_transactions t SET deleted_at = now(), deleted_reason = 'внесе�
   FROM bank_accounts a
  WHERE a.id = t.account_id AND a.bank = 'manual' AND t.external_tx_id NOT LIKE 'safe-import:%' AND t.deleted_at IS NULL
    AND EXISTS (SELECT 1 FROM step);
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🧾 ДЕБІТОРКА: ЖУРНАЛ ПІДСУМКІВ КОЖНОГО СИНКУ (12.10.2026, Роман «роби і викочуй»).
+-- `receivables` — TRUNCATE-знімок «зараз», тож «Дебіторка 1С» у «Тиждень і місяць» мала число лише для ПОТОЧНОГО
+-- періоду: тиждень минав — і клітинка ставала порожньою назавжди (тижні ніхто не закриває). Тепер кожен успішний
+-- синк дописує сюди Σ знімка (у тій самій транзакції), і минулий період бере підсумок на свій кінець — як валютна
+-- (`receivables_fx_totals`). Історія — з дня викату: тиждень 05.10 і вересень відновити нема з чого.
+-- Лише суми й лічильник, без клієнтів і рахунків.
+CREATE TABLE IF NOT EXISTS receivables_totals (
+  id         BIGSERIAL PRIMARY KEY,
+  synced_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  rows       INTEGER NOT NULL,
+  total      NUMERIC(14,2) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_receivables_totals_at ON receivables_totals (synced_at);

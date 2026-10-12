@@ -1569,6 +1569,59 @@ test("#1265 КАСА = СЕЙФ: вкладка «Каса» показує ту
 });
 
 /**
+ * #1266 — ЖУРНАЛ ДЕБІТОРКИ (Роман 12.10.2026: «чому не відображаються минулі»). `receivables` — знімок «зараз», тож
+ * минулий тиждень «Дебіторки 1С» був порожнім назавжди. Тепер синк пише Σ знімка в `receivables_totals`, а минулий
+ * період бере ОСТАННІЙ підсумок не пізніше свого кінця (Нд 24:00 за Києвом). По обидва боки кожної межі: підсумок
+ * у неділю 23:30 береться, у понеділок 00:30 — ні (він уже наступного тижня); підсумок, старший за добу від кінця, —
+ * не число; поточний тиждень — живий знімок, а не журнал; немає журналу — порожньо, а не сьогоднішній борг.
+ * 🧨 Червоніє, якщо журнал рахує не весь знімок, минулий тиждень бере сьогоднішнє число чи чужий день, або старе
+ * число видається за свіже.
+ */
+test("#1266 ЖИВИЙ SQL: журнал дебіторки — Σ знімка; минулий тиждень — підсумок на свій кінець, поточний — живий, без журналу — порожньо", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const k = await import("./financeKpi.js");
+  const { db, c } = s;
+  try {
+    await c.query(`INSERT INTO receivables (client_key, client_name, amount) VALUES ('a', 'А', 100), ('b', 'Б', 250.5), ('cash', 'Готівка', 49.5)`);
+    assert.deepEqual(await k.journalReceivablesTotal(db), { rows: 3, total: 400 }, "🔴 журнал записав не Σ усього знімка");
+    await c.query(`TRUNCATE receivables_totals`);
+    await c.query(`INSERT INTO receivables_totals (synced_at, rows, total) VALUES
+      ('2026-10-11 20:30+00', 5, 1000),   -- Нд 23:30 Києва — кінець тижня 05.10
+      ('2026-10-11 21:30+00', 5, 2000),   -- Пн 00:30 Києва — це вже тиждень 12.10
+      ('2026-10-03 10:00+00', 5, 500)     -- тиждень 28.09: понад добу до кінця (Нд 04.10 24:00)`);
+    const now = new Date("2026-10-13T10:00:00Z");
+    const live = async () => 99;
+    assert.equal(await k.receivablesRef(db, "week", "2026-10-05", now, false, live), 1000, "🔴 минулий тиждень узяв не підсумок на свій кінець");
+    assert.equal(await k.receivablesRef(db, "week", "2026-10-12", now, false, live), 99, "🔴 поточний тиждень узяв журнал, а не живий знімок");
+    assert.equal(await k.receivablesRef(db, "week", "2026-09-28", now, false, live), undefined, "🔴 підсумок, старший за добу від кінця, видано за число тижня");
+    assert.equal(await k.receivablesRef(db, "week", "2026-09-21", now, false, live), undefined, "🔴 тиждень без журналу отримав число");
+    assert.equal(await k.receivablesRef(db, "month", "2026-09-01", now, false, live), undefined, "🔴 вересень без журналу отримав число");
+    assert.equal(await k.receivablesRef(db, "month", "2026-10-01", now, false, live), 99, "🔴 поточний місяць узяв журнал");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1266b — ПРОВОДКА ЖУРНАЛУ. Синк пише підсумок ПІСЛЯ останнього кроку знімка (`recomputeOwners`) і ДО `COMMIT` — тобто
+ * в тій самій транзакції: відкочений синк не лишає підсумку, а підсумок — завжди знімка, що зберігся. Числа «Тижня
+ * і місяця» беруть дебіторку через `receivablesRef`, а не напряму з «зараз»; підказка рядка каже, звідки минуле.
+ * 🧨 Червоніє, якщо журнал пишеться поза транзакцією чи до кінця знімка, або екран знову бере лише «зараз».
+ */
+test("#1266b ПРОВОДКА ЖУРНАЛУ: синк пише підсумок у тій самій транзакції, «Тиждень і місяць» бере дебіторку через журнал", () => {
+  const sync = SRC("jobs/syncReceivables.ts").replace(/\/\/[^\n]*/g, "");
+  const tx = sync.slice(sync.indexOf(`await client.query("BEGIN");`), sync.indexOf(`await client.query("COMMIT");`));
+  assert.ok(tx.length > 0, "🔴 транзакцію синку не знайдено — гейту нічого перевіряти");
+  const owners = tx.indexOf("await recomputeOwners(client)"), journal = tx.indexOf("await journalReceivablesTotal(client");
+  assert.ok(owners > 0 && journal > owners, "🔴 журнал пишеться не в транзакції синку або до кінця знімка");
+  const refs = SRC("core/financeKpiRefs.ts").replace(/\/\/[^\n]*/g, "");
+  assert.match(refs, /const deb = await receivablesRef\(db, kind, start, now, opts\.forFreeze === true, \(\) => receivablesTotal\(\{ managerId: null, teamId: null \}\)\);/,
+    "🔴 «Тиждень і місяць» бере дебіторку не через журнал");
+  assert.doesNotMatch(refs, /receivablesSnapshotFits\(/, "🔴 екран знову вирішує сам — минулий тиждень лишиться порожнім");
+  assert.match(FE("pages/dashboard/sections/FinanceWeekTab.tsx"), /receivables: "Поточний період — дебіторка в дашборді ЗАРАЗ; минулий — підсумок на його останній день/,
+    "🔴 підказка рядка й далі каже «знімок без історії»");
+});
+
+/**
  * #948 — СУМИ ЗА ПРАВИЛОМ ФІНАНСИСТА (`core/fmSums.ts`, підтверджено Тетяною 01.10.2026): дохід = Σ «Приход 1–5»,
  * витрати = Σ «Расход 1–5» КРІМ слотів «Оплата на выгрузке». По обидва боки: той самий слот з іншим типом рахується.
  * Порожнє ≠ нуль. 🧨 Червоніє, якщо брати лише «Приход 1», не виключати «Оплата на выгрузке» чи виключати інші типи.
