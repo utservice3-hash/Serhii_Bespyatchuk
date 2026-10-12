@@ -1641,6 +1641,24 @@ export const ACCESS_MATRIX: AccessRow[] = [
   /* 📋 ОПИТУВАННЯ (30.09.2026, пакет Сергія): вкладка `surveys` — усім, крім кандидата. Керування й відповіді людей —
      право `manage_surveys` (admin, СЕО, ОД, HR) першим оператором; решта бачить лише адресовані їй (чуже — 404/403
      всередині роуту). Відповісти й позначити сповіщення може кожен із вкладкою — deny-only лише кандидату. */
+  // 🚚 Конфігуратор вантажу (12.10.2026): вкладка «rates» — ті самі ролі, що калькулятор ставок; довідник змінює лише
+  // право `manage_cargo` (admin, СЕО, ОД — рішення Романа 12.10.2026).
+  { method: "GET", path: "/api/cargo/three.js", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/cargo/reference", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  { method: "PUT", path: "/api/cargo/reference/vehicles", cls: "deny-only",
+    allow: [], deny: ["kvp", "financier", "team_lead", "manager", "hr"] },
+  { method: "PUT", path: "/api/cargo/reference/pallets", cls: "deny-only",
+    allow: [], deny: ["kvp", "financier", "team_lead", "manager", "hr"] },
+  { method: "POST", path: "/api/cargo/reference/reset", cls: "deny-only",
+    allow: [], deny: ["kvp", "financier", "team_lead", "manager", "hr"] },
+  { method: "GET", path: "/api/cargo/history", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/cargo/history/:id", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  { method: "POST", path: "/api/cargo/history", cls: "deny-only",
+    allow: [], deny: ["hr"] },
   { method: "GET", path: "/api/surveys/badge", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: ["candidate"] },
   { method: "GET", path: "/api/surveys", cls: "GET",

@@ -5756,3 +5756,89 @@ UPDATE bank_transactions t SET deleted_at = now(), deleted_reason = 'внесе�
   FROM bank_accounts a
  WHERE a.id = t.account_id AND a.bank = 'manual' AND t.external_tx_id NOT LIKE 'safe-import:%' AND t.deleted_at IS NULL
    AND EXISTS (SELECT 1 FROM step);
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 🚚 КОНФІГУРАТОР ВАНТАЖУ В АВТО (12.10.2026) — пакет Сергія `roman-package-konfigurator` (migrations/001, макет v3),
+-- перенесений як є; змінено лише тип авторів: наш INTEGER `users.id` (у пакеті text). Вкладка екрана
+-- «Калькулятор ставок та вантажу» (доступ — вкладка `rates`). Роут — routes/cargo.ts, гейти — cargo/*.test.ts.
+-- Довідник авто. Веде адмін (вкладка → «Довідник»). Розміри — цілі мм, вантажопідйомність — кг (kg — від, kg_max — до).
+CREATE TABLE IF NOT EXISTS cargo_vehicles (
+  id          text PRIMARY KEY CHECK (id ~ '^[A-Za-z0-9_-]{1,40}$'),
+  grp         text NOT NULL,                                   -- Буси / Вантажівки / Фури / Контейнери / Свої
+  name        text NOT NULL,
+  bodies      jsonb NOT NULL CHECK (jsonb_typeof(bodies) = 'array' AND jsonb_array_length(bodies) BETWEEN 1 AND 2),  -- [{L,W,H}], у зчіпки 2
+  kg          integer CHECK (kg BETWEEN 0 AND 100000),
+  kg_max      integer CHECK (kg_max BETWEEN 0 AND 100000),
+  load_sides  text NOT NULL DEFAULT '',                        -- «ззаду, збоку, зверху» — лише позначка
+  arch        jsonb,                                           -- колісні арки {between,len,x,h}, мм; NULL — немає
+  src         text NOT NULL DEFAULT '',                        -- звідки цифри
+  note        text,                                            -- що ще уточнити («арки орієнтовно»)
+  sort        integer NOT NULL DEFAULT 0,
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  updated_by  INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- Палети. Ключі (euro, amer, finn, half, square) незмінні — на них посилаються позиції в історії.
+CREATE TABLE IF NOT EXISTS cargo_pallets (
+  key         text PRIMARY KEY,
+  name        text NOT NULL,
+  l           integer NOT NULL CHECK (l BETWEEN 100 AND 5000),
+  w           integer NOT NULL CHECK (w BETWEEN 100 AND 5000),
+  sort        integer NOT NULL DEFAULT 0,
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  updated_by  INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- Історія розрахунків. Адмін бачить усю, менеджер і тім-лід — свою (фільтр у роутері).
+CREATE TABLE IF NOT EXISTS cargo_calculations (
+  id              bigserial PRIMARY KEY,
+  created_by      INTEGER NOT NULL,                            -- users.id (наш INTEGER; без FK — історія переживає видалення акаунта)
+  created_by_name text NOT NULL,                               -- ПІБ на момент збереження (для списку адміна)
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  vehicle         text NOT NULL,                               -- підпис у списку: «Тент 13,6 м» або «7,20 × 2,40 × 2,40 м»
+  items           text NOT NULL,                               -- «5 × палети євро, гофра 12,0 м³»
+  fit             boolean,                                     -- влазить / ні; NULL — без нашого вантажу
+  state           jsonb NOT NULL,                              -- вхідні дані (shared/cargoState.ts: CalcState)
+  layout          jsonb                                        -- розкладка: ручні пересування, наявний на схемі, режим точок
+);
+CREATE INDEX IF NOT EXISTS idx_cargo_calc_user ON cargo_calculations (created_by, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cargo_calc_created ON cargo_calculations (created_at DESC);
+
+-- BEGIN SEED (= cargo/cargoDefaults.ts через cargoSeed.seedSql(); розбіжність ловить гейт #1612 — руками не правити)
+-- Авто — лише в порожню таблицю: якщо адмін уже прибрав/змінив авто, повторний запуск міграції їх не поверне.
+INSERT INTO cargo_vehicles (id, grp, name, bodies, kg, kg_max, load_sides, arch, src, note, sort)
+SELECT * FROM (VALUES
+  ('spr-l3', 'Буси', 'Mercedes Sprinter L3 H2', '[{"L":4307,"W":1787,"H":1974}]'::jsonb, 2000, 2500, 'ззаду, збоку', '{"between":1350,"len":1000,"x":2270,"h":300}'::jsonb, 'vanguide.co.uk; т — Сергій', 'арки орієнтовно', 1),
+  ('spr-l4', 'Буси', 'Mercedes Sprinter L4 H2', '[{"L":4707,"W":1787,"H":1974}]'::jsonb, 2000, 2500, 'ззаду, збоку', '{"between":1350,"len":1000,"x":2270,"h":300}'::jsonb, 'vanguide.co.uk; т — Сергій', 'арки орієнтовно', 2),
+  ('master', 'Буси', 'Renault Master L3H2', '[{"L":3855,"W":1789,"H":1885}]'::jsonb, 930, 1290, 'ззаду, збоку', '{"between":1380,"len":1000,"x":2250,"h":300}'::jsonb, 'листівка Renault UA', 'арки орієнтовно', 3),
+  ('master-tent', 'Буси', 'Renault Master бус-тент', '[{"L":4800,"W":2200,"H":2500}]'::jsonb, 2000, 2500, 'ззаду, збоку, зверху', NULL::jsonb, 'Сергій', NULL, 4),
+  ('t3', 'Вантажівки', '3 т', '[{"L":4200,"W":2200,"H":2200}]'::jsonb, 3000, NULL, 'ззаду, збоку', NULL::jsonb, 'Lardi-Trans', NULL, 5),
+  ('t5', 'Вантажівки', '5 т', '[{"L":6200,"W":2450,"H":2400}]'::jsonb, 5000, NULL, 'ззаду, збоку', NULL::jsonb, 'Lardi-Trans', NULL, 6),
+  ('t10', 'Вантажівки', '10 т', '[{"L":7200,"W":2450,"H":2500}]'::jsonb, 10000, NULL, 'ззаду, збоку, зверху', NULL::jsonb, 'Lardi-Trans, cargolinked', NULL, 7),
+  ('tent', 'Фури', 'Тент 13,6 м', '[{"L":13600,"W":2450,"H":2700}]'::jsonb, 20000, NULL, 'ззаду, збоку, зверху', NULL::jsonb, 'Lardi-Trans, DHL, Samskip', NULL, 8),
+  ('mega', 'Фури', 'Мега 13,6 м', '[{"L":13600,"W":2450,"H":3000}]'::jsonb, 22000, NULL, 'ззаду, збоку, зверху', NULL::jsonb, 'cargolinked, DHL; т — Сергій', NULL, 9),
+  ('ref', 'Фури', 'Реф 13,3 м', '[{"L":13300,"W":2450,"H":2600}]'::jsonb, 22000, NULL, 'ззаду', NULL::jsonb, 'cargolinked, DHL; т — Сергій', NULL, 10),
+  ('jumbo', 'Фури', 'Зчіпка 7,7 + 7,7 м', '[{"L":7700,"W":2450,"H":3000},{"L":7700,"W":2450,"H":3000}]'::jsonb, 22000, NULL, 'ззаду, збоку, зверху', NULL::jsonb, 'Lardi-Trans; т — Сергій', 'довжини кузовів', 11),
+  ('c20', 'Контейнери', 'Контейнер 20''', '[{"L":5902,"W":2352,"H":2385}]'::jsonb, 25000, NULL, 'ззаду', NULL::jsonb, 'containerexchanger', NULL, 12),
+  ('c40', 'Контейнери', 'Контейнер 40''', '[{"L":11960,"W":2350,"H":2390}]'::jsonb, 26600, NULL, 'ззаду', NULL::jsonb, 'containerexchanger', NULL, 13)
+) AS v(id, grp, name, bodies, kg, kg_max, load_sides, arch, src, note, sort)
+WHERE NOT EXISTS (SELECT 1 FROM cargo_vehicles);
+-- Палети — ключі незмінні; назви й розміри адміна не перезаписуються.
+INSERT INTO cargo_pallets (key, name, l, w, sort) VALUES
+  ('euro', 'Євро 1,2×0,8', 1200, 800, 1),
+  ('amer', 'Американка 1,2×1,2', 1200, 1200, 2),
+  ('finn', 'Фінська 1,2×1,0', 1200, 1000, 3),
+  ('half', 'Напівпалета 0,8×0,6', 800, 600, 4),
+  ('square', 'Квадратна 1,0×1,0', 1000, 1000, 5)
+ON CONFLICT (key) DO NOTHING;
+-- END SEED
+
+-- Довідник веде й усю історію бачить «адмін» конфігуратора = право `manage_cargo`: admin, СЕО, ОД (рішення Романа
+-- 12.10.2026). Склад фіксований кодом, парою «видати / зняти» (як `view_all_constructor_docs`).
+UPDATE roles SET permissions = permissions || '{"manage_cargo": true}'::jsonb
+ WHERE key IN ('admin', 'ceo', 'opdir');
+UPDATE roles SET permissions = permissions - 'manage_cargo'
+ WHERE key NOT IN ('admin', 'ceo', 'opdir');
+
+-- 🔒 Розрахунки менеджерів і довідник — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`.
+REVOKE ALL ON cargo_vehicles, cargo_pallets, cargo_calculations FROM ai_readonly;

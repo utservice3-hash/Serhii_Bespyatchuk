@@ -51,6 +51,7 @@ import { baRouter } from "./routes/businessAssistant.js";
 import { financeRouter } from "./routes/finance.js";
 import { constructorRouter } from "./routes/constructor.js";
 import { surveysRouter } from "./routes/surveys.js";
+import { cargoRouter } from "./routes/cargo.js";
 import { tickSurveys } from "./surveys/surveyScheduler.js";
 import { receivablesClaimRouter } from "./routes/receivablesClaims.js";
 import { nominationsRouter } from "./routes/nominations.js";
@@ -179,6 +180,7 @@ app.use("/api/ba", baRouter); // 🗂 Бізнес-асистент: прете�
 app.use("/api/finance", financeRouter); // 💰 Фінанси: план/факт витрат і статті (29.09.2026)
 app.use("/api/constructor", constructorRouter); // 📄 Конструктор документів — пакет Сергія (30.09.2026)
 app.use("/api/surveys", surveysRouter); // 📋 Опитування команди — пакет Сергія (30.09.2026)
+app.use("/api/cargo", cargoRouter); // 🚚 Конфігуратор вантажу — пакет Сергія (12.10.2026), вкладка «Калькулятора ставок та вантажу»
 app.use("/api/receivables-claims", receivablesClaimRouter); // кнопка «Проблемний клієнт» у дебіторці
 app.use("/api/nominations", nominationsRouter); // 🏆 Номінації тижня (21.09.2026)
 app.use("/api/people", peopleRouter); // 📷 Фото співробітників (22.09.2026)

@@ -34,6 +34,10 @@ const ADMIN_LEVEL_ROLES = new Set(["admin", "ceo", "opdir", "kvp", "financier"])
  * інакше це знову «непробована роль у deny», з якої й почався інцидент.
  */
 const ADMIN_DENIED_BY_PERM: Record<string, string> = {
+  // 🚚 Конфігуратор вантажу (12.10.2026): довідник змінює лише право `manage_cargo` (admin, СЕО, ОД).
+  "PUT /api/cargo/reference/vehicles": "manage_cargo — kvp/financier його не мають (рішення Романа 12.10.2026: admin, СЕО, ОД)",
+  "PUT /api/cargo/reference/pallets": "manage_cargo — kvp/financier його не мають (рішення Романа 12.10.2026: admin, СЕО, ОД)",
+  "POST /api/cargo/reference/reset": "manage_cargo — kvp/financier його не мають (рішення Романа 12.10.2026: admin, СЕО, ОД)",
   // 📋 Опитування (30.09.2026): керувати — лише право `manage_surveys` (admin, СЕО, ОД, HR — рішення Романа
   // 30.09.2026); kvp і фінансист вкладку бачать і відповідають на адресоване, а створювати й запускати не можуть.
   "POST /api/surveys/parse": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",

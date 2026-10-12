@@ -46,6 +46,8 @@ export const PERMISSION_CATALOG = [
   "view_all_constructor_docs",
   /** 📋 Опитування: створювати, запускати, бачити відповіді й підсумки (рішення Романа 30.09.2026) — admin, СЕО, ОД, HR. */
   "manage_surveys",
+  /** 🚚 Конфігуратор вантажу: довідник авто й палет і вся історія розрахунків (рішення Романа 12.10.2026) — admin, СЕО, ОД. */
+  "manage_cargo",
   "manage_bank_accounts",
   "manage_bank_hidden",
   "manage_credit_limits",

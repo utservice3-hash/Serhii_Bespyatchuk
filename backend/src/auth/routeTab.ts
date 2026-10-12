@@ -159,6 +159,8 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/ai-work"), tabs: ["aiwork"] },
     { test: pre("/api/reports"), tabs: ["reports"] },
     { test: pre("/api/rates"), tabs: ["rates"] },
+    // 🚚 Конфігуратор вантажу — вкладка того самого екрана «Калькулятор ставок та вантажу» (12.10.2026)
+    { test: pre("/api/cargo"), tabs: ["rates"] },
     { test: pre("/api/documents"), tabs: ["documents"] },
     { test: pre("/api/one-on-ones"), tabs: ["oneonone"] },
     { test: pre("/api/duty"), tabs: ["duty"] },
