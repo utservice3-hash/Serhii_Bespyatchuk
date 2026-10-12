@@ -3692,7 +3692,7 @@ ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS access_closed_at     TIME
 ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS access_closed_reason TEXT;
 ALTER TABLE hiring_candidates DROP CONSTRAINT IF EXISTS hiring_candidates_access_reason_check;
 ALTER TABLE hiring_candidates ADD CONSTRAINT hiring_candidates_access_reason_check CHECK
-  (access_closed_reason IS NULL OR access_closed_reason IN ('no_login','expired','refused','manager'));
+  (access_closed_reason IS NULL OR access_closed_reason IN ('no_login','expired','refused','manager','started'));
 -- Один акаунт — одна картка: інакше джоба закрила б доступ за чужим строком.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_hiring_candidates_user ON hiring_candidates(user_id) WHERE user_id IS NOT NULL;
 
@@ -5757,6 +5757,20 @@ UPDATE bank_transactions t SET deleted_at = now(), deleted_reason = 'внесе�
  WHERE a.id = t.account_id AND a.bank = 'manual' AND t.external_tx_id NOT LIKE 'safe-import:%' AND t.deleted_at IS NULL
    AND EXISTS (SELECT 1 FROM step);
 
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🧾 ДЕБІТОРКА: ЖУРНАЛ ПІДСУМКІВ КОЖНОГО СИНКУ (12.10.2026, Роман «роби і викочуй»).
+-- `receivables` — TRUNCATE-знімок «зараз», тож «Дебіторка 1С» у «Тиждень і місяць» мала число лише для ПОТОЧНОГО
+-- періоду: тиждень минав — і клітинка ставала порожньою назавжди (тижні ніхто не закриває). Тепер кожен успішний
+-- синк дописує сюди Σ знімка (у тій самій транзакції), і минулий період бере підсумок на свій кінець — як валютна
+-- (`receivables_fx_totals`). Історія — з дня викату: тиждень 05.10 і вересень відновити нема з чого.
+-- Лише суми й лічильник, без клієнтів і рахунків.
+CREATE TABLE IF NOT EXISTS receivables_totals (
+  id         BIGSERIAL PRIMARY KEY,
+  synced_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  rows       INTEGER NOT NULL,
+  total      NUMERIC(14,2) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_receivables_totals_at ON receivables_totals (synced_at);
 -- ═══════════════════════════════════════════════════════════════════════════
 -- 🚚 КОНФІГУРАТОР ВАНТАЖУ В АВТО (12.10.2026) — пакет Сергія `roman-package-konfigurator` (migrations/001, макет v3),
 -- перенесений як є; змінено лише тип авторів: наш INTEGER `users.id` (у пакеті text). Вкладка екрана

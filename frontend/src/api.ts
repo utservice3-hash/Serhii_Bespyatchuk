@@ -5012,7 +5012,9 @@ export const fetchHiringCandidates = async (params: {
 export const createHiringCandidate = async (p: Record<string, unknown>) => (await api.post<{ id: number }>("/hiring/candidates", p)).data.id;
 export const fetchHiringCard = async (id: number) => (await api.get<HiringCard>(`/hiring/candidates/${id}`)).data;
 export const patchHiringCandidate = async (id: number, patch: Record<string, unknown>) => { await api.patch(`/hiring/candidates/${id}`, patch); };
-export const setHiringStatus = async (id: number, p: { to: HiringStatus; comment: string; teamId?: number | null }) => { await api.post(`/hiring/candidates/${id}/status`, p); };
+/** Логін і пароль приходять, лише коли цим переходом створено акаунт кандидата (#1620) — показати один раз. */
+export const setHiringStatus = async (id: number, p: { to: HiringStatus; comment: string; teamId?: number | null; email?: string }) =>
+  (await api.post<{ ok: true; credentials: { login: string; password: string } | null }>(`/hiring/candidates/${id}/status`, p)).data;
 export const addHiringComment = async (id: number, comment: string) => { await api.post(`/hiring/candidates/${id}/comment`, { comment }); };
 
 export const fetchHiringDaily = async (from: string, to: string) =>
@@ -5105,7 +5107,7 @@ export const patchTrainingCourse = async (id: number, patch: { title?: string; d
 };
 
 // 🎓 НАЙМ, прохід 2a (17.09.2026): акаунт кандидата, запрошення, доступ, прогрес. Дзеркало `core/hiringTraining.ts`.
-export type HiringCloseReason = "no_login" | "expired" | "refused" | "manager";
+export type HiringCloseReason = "no_login" | "expired" | "refused" | "manager" | "started";
 export type HiringTrainingHealth = "manager" | "closed" | "done" | "no_login" | "stuck" | "ok" | "no_account";
 export interface HiringTrainingRow {
   id: number; full_name: string | null; phone: string | null; telegram: string | null; status: HiringStatus;
@@ -5143,6 +5145,8 @@ export const linkCandidateAccount = async (id: number, userId: number) =>
   (await api.post<{ login: string }>(`/hiring/candidates/${id}/account/link`, { userId })).data;
 export const restoreHiringAccess = async (id: number) => { await api.post(`/hiring/candidates/${id}/access/restore`); };
 export const promoteHiringCandidate = async (id: number, comment: string) => { await api.post(`/hiring/candidates/${id}/promote`, { comment }); };
+/** «Вийшов на роботу» без навчання (#1622) — лише HR і керівництво. */
+export const markHiringStartedWork = async (id: number, comment: string) => { await api.post(`/hiring/candidates/${id}/started-work`, { comment }); };
 export const answerHiringQuestion = async (id: number, questionId: number, answer: string) => {
   await api.post(`/hiring/candidates/${id}/questions/${questionId}/answer`, { answer });
 };

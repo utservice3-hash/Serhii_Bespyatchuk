@@ -53,13 +53,22 @@ export function accessDeadline(p: AccessInput): Date {
   return kyivMidnightAfter(p.firstLoginAt, CANDIDATE_ACCESS.trainingDays + ext);
 }
 
-export type CloseReason = "no_login" | "expired" | "refused" | "manager";
+export type CloseReason = "no_login" | "expired" | "refused" | "manager" | "started";
 export const CLOSE_REASON_LABEL: Record<CloseReason, string> = {
   no_login: "не зайшов за 48 год",
   expired: "навчання не завершено вчасно",
   refused: "відмова",
   manager: "став менеджером",
+  // 12.10.2026 (#1622): HR відмічає вихід на роботу, поки навчання не працює. Акаунт кандидата вимикається.
+  started: "вийшов на роботу без навчання",
 };
+
+/** Пошта в картці кандидата: формат name@domain.tld; порожньо — null. Одна перевірка на картку й діалог статусу. */
+export function cleanCandidateEmail(v: unknown): { ok: true; email: string | null } | { ok: false } {
+  const e = typeof v === "string" && v.trim() ? v.trim().toLowerCase() : null;
+  if (e !== null && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return { ok: false };
+  return { ok: true, email: e };
+}
 
 /** Що зробити з доступом ЗАРАЗ. `null` — нічого. Закритий доступ джоба не чіпає. */
 export function accessToClose(p: AccessInput & { closedAt: Date | null; now: Date }): CloseReason | null {
@@ -94,7 +103,7 @@ export function trainingHealth(p: {
   closedReason: CloseReason | null; firstLoginAt: Date | null; lastActivityAt: Date | null;
   done: number; total: number; now: Date;
 }): TrainingHealth {
-  if (p.closedReason === "manager") return "manager";
+  if (p.closedReason === "manager" || p.closedReason === "started") return "manager";
   if (p.closedReason) return "closed";
   if (p.total > 0 && p.done >= p.total) return "done";
   if (!p.firstLoginAt) return "no_login";

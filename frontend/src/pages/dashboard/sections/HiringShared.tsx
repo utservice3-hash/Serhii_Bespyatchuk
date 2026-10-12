@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { hiringError, setHiringStatus, refuseHiringCandidate, addHiringRefusalReason, type HiringMeta, type HiringStatus, type HiringRefusalSide } from "../../../api";
+import { hiringError, setHiringStatus, fetchHiringCard, refuseHiringCandidate, addHiringRefusalReason, type HiringMeta, type HiringStatus, type HiringRefusalSide } from "../../../api";
 import { NEEDS_TEAM, STATUS_TONE } from "../hiringView";
 
 /** Спливаюче повідомлення розділу; `action` — наприклад, «Відновити» після видалення рядка. */
@@ -18,11 +18,24 @@ export function StatusPill({ meta, status }: { meta: HiringMeta; status: HiringS
  * її вимагає. Помилку сервера показуємо текстом: мовчазний 400/403 — це «нічого не сталось»
  * для людини (борг 15 у CLAUDE.md).
  */
-export function StatusDialog({ meta, candidateId, from, to, teamId, onClose, onDone, toast }: {
+export function StatusDialog({ meta, candidateId, from, to, teamId, email, onClose, onDone, toast }: {
   meta: HiringMeta; candidateId: number; from: HiringStatus; to: HiringStatus; teamId: number | null;
+  /** Пошта з картки — для переходу в «кандидат + команда» вона стає логіном (#1620). */
+  email?: string | null;
   onClose: () => void; onDone: () => void; toast: Toast;
 }) {
   const [comment, setComment] = useState("");
+  const [mail, setMail] = useState(email ?? "");
+  // Логін і пароль нового акаунта: показуємо тут же ОДИН раз, закрити можна лише після копіювання/«Готово».
+  const [cred, setCred] = useState<{ login: string; password: string } | null>(null);
+  const needsEmail = to === "candidate";
+  // З графіка пошта не приходить — підтягуємо з картки, щоб не просити ввести наявну ще раз.
+  useEffect(() => {
+    if (!needsEmail || email !== undefined) return;
+    let alive = true;
+    fetchHiringCard(candidateId).then((c) => { if (alive && c.candidate.email) setMail((m) => m || c.candidate.email || ""); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [needsEmail, email, candidateId]);
   const [team, setTeam] = useState<string>(teamId ? String(teamId) : meta.access === "lead" && meta.teamId ? String(meta.teamId) : "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -31,13 +44,35 @@ export function StatusDialog({ meta, candidateId, from, to, teamId, onClose, onD
   const submit = async () => {
     if (!comment.trim()) { setErr("Введіть коментар"); return; }
     if (needsTeam && !team) { setErr("Оберіть команду"); return; }
+    if (needsEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail.trim())) { setErr("Пошта кандидата в форматі name@gmail.com — вона стане логіном"); return; }
     setBusy(true); setErr(null);
     try {
-      await setHiringStatus(candidateId, { to, comment: comment.trim(), teamId: team ? Number(team) : null });
+      const r = await setHiringStatus(candidateId, { to, comment: comment.trim(), teamId: team ? Number(team) : null, ...(needsEmail ? { email: mail.trim() } : {}) });
       toast(`Статус: «${label(to)}»`);
-      onDone();
+      if (r.credentials) setCred(r.credentials); else onDone();
     } catch (e) { setErr(hiringError(e)); } finally { setBusy(false); }
   };
+  const copyCred = async () => {
+    if (!cred) return;
+    try { await navigator.clipboard.writeText(`Логін: ${cred.login}\nПароль: ${cred.password}\nВхід: ${window.location.origin}/login`); toast("Логін і пароль скопійовано — надішліть кандидату"); }
+    catch { toast("Не вдалося скопіювати — виділіть і скопіюйте вручну"); }
+  };
+  if (cred) return createPortal(
+    <div className="hr-modal-back">
+      <div className="hr-modal" role="dialog" aria-label="Вхід кандидата" onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: "0 0 4px", fontSize: 16 }}>Акаунт кандидата створено</h3>
+        <p className="hr-muted" style={{ margin: "0 0 12px" }}>Надішліть кандидату ці дані. Пароль показано один раз — загубили, то «Новий пароль» на вкладці «На навчанні». Без входу за 48 год доступ закриється сам.</p>
+        <div style={{ display: "grid", gap: 4, fontSize: 14 }}>
+          <div><span className="hr-muted">Логін</span> <b>{cred.login}</b></div>
+          <div><span className="hr-muted">Пароль</span> <b style={{ fontFamily: "monospace" }}>{cred.password}</b></div>
+          <div><span className="hr-muted">Вхід</span> {window.location.origin}/login</div>
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+          <button className="hr-btn" onClick={() => void copyCred()}>Копіювати</button>
+          <button className="hr-btn p" onClick={onDone}>Готово</button>
+        </div>
+      </div>
+    </div>, document.body);
   return createPortal(
     <div className="hr-modal-back" onClick={onClose}>
       <div className="hr-modal" role="dialog" aria-label="Зміна статусу" onClick={(e) => e.stopPropagation()}>
@@ -49,6 +84,11 @@ export function StatusDialog({ meta, candidateId, from, to, teamId, onClose, onD
               <option value="">— оберіть —</option>
               {meta.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
+          </label>
+        )}
+        {needsEmail && (
+          <label style={{ display: "block", marginBottom: 10, fontSize: 12, color: "var(--text-muted)" }}>Пошта кандидата — стане логіном у дашборд
+            <input className="hr-inp" type="email" style={{ width: "100%", marginTop: 4, boxSizing: "border-box" }} placeholder="name@gmail.com" value={mail} onChange={(e) => setMail(e.target.value)} />
           </label>
         )}
         <textarea className="hr-inp" autoFocus rows={3} style={{ width: "100%", boxSizing: "border-box" }} placeholder="Коментар (обовʼязково)"

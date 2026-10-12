@@ -77,7 +77,7 @@ async function scratch(t: { skip: (m: string) => void }) {
   const id = await h.createCandidate(db, null, { fullName: "Коваленко Олена", phone: "0970000401", vacancyId: vac });
   for (const to of ["planned", "done"]) await h.changeStatus(db, null, id, { to, comment: "так" }, "edit", null);
   await h.changeStatus(db, null, id, { to: "lead", comment: "до тімліда", teamId: 1 }, "edit", null);
-  await h.changeStatus(db, null, id, { to: "candidate", comment: "беремо" }, "lead", 1);
+  await h.changeStatus(db, null, id, { to: "candidate", comment: "беремо", email: "olena.kovalenko@gmail.com" }, "lead", 1); // пошта — логін (#1620)
   const dir = mkdtempSync(path.join(tmpdir(), "uts-offer-"));
   const store = async (display: string, buf: Buffer) => {
     const storedName = `${createHash("sha1").update(buf).update(display).update(String(Math.random())).digest("hex")}.docx`;

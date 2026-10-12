@@ -3,7 +3,7 @@ import { useDialogs } from "../../../components/Dialogs";
 import { createPortal } from "react-dom";
 import {
   fetchHiringTraining, fetchHiringTrainingDetail, createHiringInvite, extendHiringAccess, restoreHiringAccess,
-  promoteHiringCandidate, answerHiringQuestion, inviteUrl, hiringError, issueHiringPassword, fetchFreeCandidateAccounts, linkCandidateAccount, fetchOfferStates, type OfferStateKind,
+  promoteHiringCandidate, markHiringStartedWork, answerHiringQuestion, inviteUrl, hiringError, issueHiringPassword, fetchFreeCandidateAccounts, linkCandidateAccount, fetchOfferStates, type OfferStateKind,
   type HiringMeta, type HiringTrainingRow, type HiringTrainingRules, type HiringTrainingDetail, type HiringTrainingHealth, type HiringCloseReason,
 } from "../../../api";
 import { RefusalDialog, StatusPill, type Toast } from "./HiringShared";
@@ -30,6 +30,7 @@ const CLOSED: Record<HiringCloseReason, string> = {
   expired: "навчання не завершено вчасно",
   refused: "відмова",
   manager: "став менеджером",
+  started: "вийшов на роботу без навчання",
 };
 
 const HOUR = 3_600_000;
@@ -318,6 +319,7 @@ export function TrainingDrawer({ meta, id, toast, onClose, onChanged }: {
   const [d, setD] = useState<HiringTrainingDetail | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [promoting, setPromoting] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [refusing, setRefusing] = useState(false);
   const [answers, setAnswers] = useState<Record<number, string>>({});
 
@@ -383,6 +385,17 @@ export function TrainingDrawer({ meta, id, toast, onClose, onChanged }: {
 
             <div className="hr-sect" style={{ padding: "14px 0 0", marginTop: 14 }}>
               <h4>Рішення</h4>
+              {/* 🧑‍💼 Поки навчання не працює (#1622): HR/керівництво відмічає вихід на роботу без умови курсу —
+                  і тоді, коли доступ уже закрився «не зайшов за 48 год». */}
+              {d.canRestore && (r.status === "candidate" || r.status === "training") && (
+                <div className="hr-note" style={{ marginTop: 0, marginBottom: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={{ flex: "1 1 260px" }}>Людина вже працює, а навчання ще не пройдено? Відмітьте вихід на роботу — статус «менеджер», акаунт кандидата вимкнеться.</span>
+                  <button className="hr-btn ok" onClick={() => setStarting(true)}>Вийшов на роботу…</button>
+                </div>
+              )}
+              {r.access_closed_reason === "started" && (
+                <div className="hr-note" style={{ marginTop: 0, background: "var(--ok-bg)", color: "var(--ok)" }}>Відмічено: вийшов на роботу без навчання. Скасувати — «↩ Повернути останню зміну» в картці кандидата.</div>
+              )}
               {r.access_closed_reason === "manager" ? <div className="hr-note" style={{ marginTop: 0, background: "var(--ok-bg)", color: "var(--ok)" }}>Переведено в менеджери. Скасувати — «↩ Повернути» в картці кандидата.</div>
                 : !open ? <div className="hr-muted">Доступ закрито — рішення недоступне.</div>
                 : !d.canDecide ? <div className="hr-muted">Рішення «менеджер» чи відмова — за тімлідом команди.{canPromote ? " Навчання пройдено: тімлід бачить це на своїй дошці." : ""}</div>
@@ -453,6 +466,8 @@ export function TrainingDrawer({ meta, id, toast, onClose, onChanged }: {
             </div>
           </>
         )}
+        {starting && r && <PromoteDialog name={r.full_name ?? ""} done={r.done} total={r.total} started onClose={() => setStarting(false)}
+          onSubmit={(c) => run(() => markHiringStartedWork(id, c), `${r.full_name ?? "Кандидат"} — вийшов на роботу`).then(() => setStarting(false))} />}
         {promoting && r && <PromoteDialog name={r.full_name ?? ""} done={r.done} total={r.total} onClose={() => setPromoting(false)}
           onSubmit={(c) => run(() => promoteHiringCandidate(id, c), `${r.full_name ?? "Кандидат"} — менеджер. Роль акаунта змінено`).then(() => setPromoting(false))} />}
         {refusing && r && <RefusalDialog meta={meta} candidateId={id} candidateName={r.full_name ?? ""} from={r.status}
@@ -463,23 +478,25 @@ export function TrainingDrawer({ meta, id, toast, onClose, onChanged }: {
   );
 }
 
-function PromoteDialog({ name, done, total, onClose, onSubmit }: { name: string; done: number; total: number; onClose: () => void; onSubmit: (comment: string) => Promise<void> }) {
+function PromoteDialog({ name, done, total, started, onClose, onSubmit }: { name: string; done: number; total: number; started?: boolean; onClose: () => void; onSubmit: (comment: string) => Promise<void> }) {
   const [comment, setComment] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   return createPortal(
     <div className="hr-modal-back" onClick={onClose}>
-      <div className="hr-modal" role="dialog" aria-label="Перевести в менеджери" onClick={(e) => e.stopPropagation()}>
-        <h3 style={{ margin: "0 0 6px" }}>Перевести в менеджери</h3>
-        <p className="hr-muted" style={{ fontSize: 13 }}>{name} пройшов(ла) {done} із {total} кроків. Акаунт отримає роль «Менеджер» і доступ до дашборда своєї команди. Скасувати можна з картки кандидата.</p>
-        <textarea className="hr-inp" rows={3} style={{ width: "100%", boxSizing: "border-box" }} placeholder="Коментар (обовʼязково): чому готовий(а) до роботи" value={comment} onChange={(e) => setComment(e.target.value)} />
+      <div className="hr-modal" role="dialog" aria-label={started ? "Вийшов на роботу" : "Перевести в менеджери"} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: "0 0 6px" }}>{started ? "Вийшов на роботу" : "Перевести в менеджери"}</h3>
+        <p className="hr-muted" style={{ fontSize: 13 }}>{started
+          ? <>{name} — статус «менеджер», людина зʼявиться в реєстрі співробітників і в плитці «Вийшли на роботу». Навчання не перевіряється (пройдено {done} із {total}). Акаунт кандидата вимкнеться — у роботі людина входить своїм акаунтом. Скасувати можна з картки кандидата.</>
+          : <>{name} пройшов(ла) {done} із {total} кроків. Акаунт отримає роль «Менеджер» і доступ до дашборда своєї команди. Скасувати можна з картки кандидата.</>}</p>
+        <textarea className="hr-inp" rows={3} style={{ width: "100%", boxSizing: "border-box" }} placeholder={started ? "Коментар (обовʼязково): коли вийшов(ла), у яку команду" : "Коментар (обовʼязково): чому готовий(а) до роботи"} value={comment} onChange={(e) => setComment(e.target.value)} />
         {err && <div style={{ color: "var(--danger)", fontSize: 12, marginTop: 4 }}>{err}</div>}
         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 10 }}>
           <button className="hr-btn" onClick={onClose}>Скасувати</button>
           <button className="hr-btn ok" disabled={busy} onClick={() => {
             if (!comment.trim()) { setErr("Напишіть коментар"); return; }
             setBusy(true); void onSubmit(comment.trim()).finally(() => setBusy(false));
-          }}>Перевести</button>
+          }}>{started ? "Відмітити" : "Перевести"}</button>
         </div>
       </div>
     </div>,

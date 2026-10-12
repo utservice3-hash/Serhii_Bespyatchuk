@@ -8,7 +8,8 @@
  *     ручних показників розділу. Порожнє ≠ нуль: якщо доданків немає взагалі — результат «не внесено».
  *  3. **Закритий період незмінний** (#942): 409 на будь-який запис; відкривається тією ж кнопкою, з історією.
  *  4. **Довідка CRM / 1С лише ПОРУЧ** (#943): число Тетяни не підміняється; при збереженні довідка
- *     запамʼятовується, бо дебіторка в дашборді — знімок без історії.
+ *     запамʼятовується. Дебіторка в дашборді — знімок «зараз»; минулий період бере підсумок із журналу
+ *     `receivables_totals` на свій кінець (з 12.10.2026, #1266).
  *  5. **Перенесення з аркуша — разове** (#946): тиждень бере ФІНАЛЬНЕ значення (колонка «минулого тижня»
  *     наступного блоку), а якщо його немає — проміжне з власного блоку, і це видно.
  */
@@ -784,6 +785,38 @@ export async function opexMonth(db: Db, month: string): Promise<{ refs: RefValue
     refs[OPEX_REF[x.section as OpexSection]] = x.facts ? Math.round(Number(x.fact) * 100) / 100 : null;
   }
   return { refs, unassigned };
+}
+
+/**
+ * 🧾 Журнал дебіторки (12.10.2026, #1266): Σ знімка `receivables` — одним рядком у `receivables_totals`. Кличе синк у
+ * ТІЙ САМІЙ транзакції, що й переписує знімок, тож підсумок завжди відповідає збереженому знімку (ні частковому, ні
+ * відкоченому). Той самий всесвіт, що `receivablesTotal` без скоупу: уся таблиця, з готівковими рядками.
+ */
+export async function journalReceivablesTotal(db: Db): Promise<{ rows: number; total: number }> {
+  const r = await db.query(`INSERT INTO receivables_totals (rows, total) SELECT count(*), COALESCE(sum(amount), 0) FROM receivables
+    RETURNING rows, total::text AS total`);
+  return { rows: r.rows[0].rows, total: Number(r.rows[0].total) };
+}
+
+/**
+ * Дебіторка на КІНЕЦЬ періоду з журналу: останній підсумок не пізніше кінця останнього дня (або «зараз», якщо період
+ * ще йде). Старший за добу від цієї межі — немає числа (синк мовчав або журналу ще не було), а не старе число.
+ */
+export async function receivablesAt(db: Db, end: string, now: Date): Promise<{ total: number; at: string } | null> {
+  const r = await db.query(`WITH cut AS (SELECT LEAST($2::timestamptz, (($1::date + 1)::timestamp AT TIME ZONE 'Europe/Kyiv')) AS t)
+    SELECT total::text AS total, synced_at FROM receivables_totals, cut
+     WHERE synced_at <= cut.t AND synced_at > cut.t - interval '1 day' ORDER BY synced_at DESC, id DESC LIMIT 1`, [end, now.toISOString()]);
+  const x = r.rows[0];
+  return x ? { total: Number(x.total), at: new Date(x.synced_at).toISOString() } : null;
+}
+
+/**
+ * Число рядка «Дебіторка 1С» за період: поточний (і фіксація в добу після кінця) — живий знімок, як і раніше;
+ * минулий — підсумок журналу на кінець періоду. Немає підсумку — немає числа (порожньо), а не сьогоднішній борг.
+ */
+export async function receivablesRef(db: Db, kind: PeriodKind, start: string, now: Date, forFreeze: boolean, live: () => Promise<number>): Promise<number | undefined> {
+  if (receivablesSnapshotFits(kind, start, now, forFreeze)) return live();
+  return (await receivablesAt(db, periodEnd(kind, start), now))?.total;
 }
 
 /**

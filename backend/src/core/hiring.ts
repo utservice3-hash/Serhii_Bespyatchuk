@@ -12,7 +12,8 @@ import {
   canTransition, isHiringStatus, isIsoDate, isTime, normalizePhone, cleanUrl, NEEDS_TEAM, STATUS_LABEL,
   refusalVerdict, messengerLinks, vacancyCloseStatus, VACANCY_STATUSES, REFUSAL_SIDES, type RefusalSide, type VacancyStatus,
 } from "./hiringRules.js";
-import { ensureCandidateAccount, closeCandidateAccess, undoPromotion, hasAccount } from "./hiringTraining.js";
+import { ensureCandidateAccount, closeCandidateAccess, undoPromotion, hasAccount, issueCandidatePassword, syncCandidateLogin } from "./hiringTraining.js";
+import { cleanCandidateEmail } from "./hiringTrainingRules.js";
 import { ensureEmployeeFromCandidate, undoEmployeeFromCandidate } from "./employeeAdd.js";
 
 export interface Db {
@@ -185,8 +186,9 @@ export async function updateCandidateFields(
     } else if (k === "fullName") {
       v = typeof patch[k] === "string" ? (patch[k] as string).trim() : "";
     } else if (k === "email") {
-      v = str(patch[k]);
-      if (v !== null && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v as string)) throw new HiringError(400, "Пошта у форматі name@gmail.com");
+      const e = cleanCandidateEmail(patch[k]);
+      if (!e.ok) throw new HiringError(400, "Пошта у форматі name@gmail.com");
+      v = e.email;
     } else v = str(patch[k]);
     params.push(v); sets.push(`${col} = $${params.length}`);
     if (k === "phone") {
@@ -202,6 +204,7 @@ export async function updateCandidateFields(
   params.push(id);
   await db.query(`UPDATE hiring_candidates SET ${sets.join(", ")}, updated_at = now() WHERE id = $${params.length}`, params);
   await logEvent(db, { candidateId: id, kind: "edit", comment: Object.keys(patch).filter((k) => k in CAND_FIELDS).join(", "), actorId });
+  if ("email" in patch) await syncCandidateLogin(db, actorId, id); // логін кандидата йде за поштою (#1621)
 }
 
 export interface InterviewPatchResult { candidateId: number | null; repeat?: { id: number; full_name: string; status: HiringStatus } }
@@ -430,11 +433,16 @@ export async function createCandidate(db: Db, actorId: number | null, p: Record<
 }
 
 /** Зміна статусу з картки чи графіка. Коментар обовʼязковий (затверджений макет). */
+/**
+ * Зміна статусу. Повертає логін і пароль, якщо цим переходом створено акаунт кандидата (#1620): їх
+ * показують ОДИН раз у тому самому діалозі, щоб видачу входу не можна було пропустити. Пошту можна
+ * передати тут же (`email`) — тімлід, що веде кандидата в «кандидат + команда», картку не редагує.
+ */
 export async function changeStatus(
   db: Db, actorId: number | null, id: number,
-  p: { to: unknown; comment: unknown; teamId?: unknown },
+  p: { to: unknown; comment: unknown; teamId?: unknown; email?: unknown },
   access: HiringAccess, leadTeamId: number | null,
-): Promise<void> {
+): Promise<{ login: string; password: string } | null> {
   if (!isHiringStatus(p.to)) throw new HiringError(400, "Невідомий статус");
   const comment = str(p.comment);
   if (!comment) throw new HiringError(400, "Коментар обовʼязковий");
@@ -458,6 +466,18 @@ export async function changeStatus(
     teamId = t;
   }
   if (NEEDS_TEAM.includes(p.to) && !teamId) throw new HiringError(400, "Оберіть команду, до якої йде кандидат");
+  // 📧 Пошта з діалогу «кандидат + команда» (#1620): стає логіном акаунта, тож пишемо її ДО створення акаунта.
+  if (p.to === "candidate" && p.email !== undefined && p.email !== null && p.email !== "") {
+    const e = cleanCandidateEmail(p.email);
+    if (!e.ok) throw new HiringError(400, "Пошта у форматі name@gmail.com");
+    await db.query(`UPDATE hiring_candidates SET email = $1, updated_at = now() WHERE id = $2`, [e.email, id]);
+    await logEvent(db, { candidateId: id, kind: "edit", comment: "email", actorId });
+    await syncCandidateLogin(db, actorId, id);
+  }
+  // Без пошти акаунт не створиться — кажемо це ДО зміни статусу, а не відкатом посеред переходу.
+  if (p.to === "candidate" && !(await hasAccount(db, id))
+      && !(await db.query(`SELECT 1 FROM hiring_candidates WHERE id = $1 AND NULLIF(btrim(email), '') IS NOT NULL`, [id])).rowCount)
+    throw new HiringError(400, "Внесіть пошту кандидата — вона стане його логіном у дашборд");
   // Акаунт кандидата (прохід 2a): «менеджер» міняє роль акаунта, тож веде туди лише дія з умовою навчання.
   if (p.to === "manager" && await hasAccount(db, id))
     throw new HiringError(409, "У кандидата є акаунт навчання — «Перевести в менеджери» на вкладці «На навчанні»");
@@ -468,11 +488,18 @@ export async function changeStatus(
        ${leavingRefusal ? ", refusal_side = NULL, refusal_reason_id = NULL, refusal_note = NULL, refused_at = NULL" : ""}
      WHERE id = $3`, [p.to, teamId, id]);
   await logEvent(db, { candidateId: id, kind: "status", from: c.status, to: p.to, comment, actorId });
-  if (p.to === "candidate") await ensureCandidateAccount(db, actorId, id);
+  let credentials: { login: string; password: string } | null = null;
+  if (p.to === "candidate") {
+    const had = await hasAccount(db, id);
+    await ensureCandidateAccount(db, actorId, id);
+    // Новий акаунт — одразу вхід: інакше пароль ніхто не знає, і за 48 год доступ закривається сам (#1620).
+    if (!had) credentials = await issueCandidatePassword(db, actorId, id, access, leadTeamId);
+  }
   if (c.status === "manager") await undoPromotion(db, id, actorId);
   // 👤 «Менеджер» = людина в реєстрі співробітників (22.09.2026); повернення прибирає лише щойно створений запис (#647).
   if (p.to === "manager") await ensureEmployeeFromCandidate(db, actorId, id);
   if (c.status === "manager") await undoEmployeeFromCandidate(db, actorId, id);
+  return credentials;
 }
 
 export async function addComment(db: Db, actorId: number | null, id: number, comment: unknown, access: HiringAccess, leadTeamId: number | null) {

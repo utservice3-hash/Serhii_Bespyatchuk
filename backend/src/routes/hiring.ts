@@ -18,7 +18,7 @@ import {
   insertFile, fileForDownload, setFileDeleted,
 } from "../core/hiring.js";
 import {
-  trainingBoard, trainingDetail, issueInvite, issueCandidatePassword, linkCandidateAccount, freeCandidateAccounts, extendAccess, restoreAccess, promoteCandidate, answerQuestion,
+  trainingBoard, trainingDetail, issueInvite, issueCandidatePassword, linkCandidateAccount, freeCandidateAccounts, extendAccess, restoreAccess, promoteCandidate, markStartedWork, answerQuestion,
 } from "../core/hiringTraining.js";
 import { CANDIDATE_ACCESS, canDecideTraining } from "../core/hiringTrainingRules.js";
 import { hiringSummary, vacancyFunnels } from "../core/hiringFunnel.js";
@@ -269,8 +269,8 @@ hiringRouter.post("/candidates/:id/status", async (req, res) => {
   try {
     const access = anyAccess(req);
     const id = idOf(req);
-    await tx((db) => changeStatus(db, req.auth!.userId, id, req.body ?? {}, access, req.auth!.teamId));
-    res.json({ ok: true });
+    const credentials = await tx((db) => changeStatus(db, req.auth!.userId, id, req.body ?? {}, access, req.auth!.teamId));
+    res.json({ ok: true, credentials });
   } catch (e) { fail(res, e); }
 });
 
@@ -563,6 +563,16 @@ hiringRouter.post("/candidates/:id/access/restore", async (req, res) => {
     onlyEdit(req);
     const id = idOf(req);
     await tx((db) => restoreAccess(db, req.auth!.userId, id));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+// 🧑‍💼 «Вийшов на роботу» без навчання (#1622) — лише HR і керівництво.
+hiringRouter.post("/candidates/:id/started-work", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const id = idOf(req);
+    await tx((db) => markStartedWork(db, req.auth!.userId, id, req.body?.comment, "edit"));
     res.json({ ok: true });
   } catch (e) { fail(res, e); }
 });
