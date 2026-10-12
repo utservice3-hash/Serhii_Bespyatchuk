@@ -68,6 +68,12 @@ export const config = {
     propertyId: process.env.GA4_PROPERTY_ID ?? "",
     serviceAccountJsonPath: process.env.GA4_SERVICE_ACCOUNT_JSON ?? "",
   },
+  // 🗄 Сейф — дзеркало Google-таблиці (12.10.2026): книга «UTS Сделки Сводка», вкладка «Сейф». Читає сервісний акаунт
+  // GA4 (вище), таблиця не публікується. id не секрет — це адреса книги, доступ дає лише «Поділитися».
+  safeSheet: {
+    spreadsheetId: process.env.SAFE_SHEET_ID ?? "1diCxU7t4tZP33NIvcwzueY5YADudzS4oo8df22nkqC0",
+    tab: process.env.SAFE_SHEET_TAB ?? "Сейф",
+  },
   ringostat: {
     // Auth-key з Ringostat («Налаштування» → «Інтеграції» → «Ringostat API»).
     // СЕКРЕТ — лише з env, у репо не тримати. Порожньо → джоба дзвінків спить.

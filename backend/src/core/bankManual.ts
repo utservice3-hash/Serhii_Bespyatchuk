@@ -106,14 +106,13 @@ export async function addManual(db: Db, actor: number, body: any, rateOf: RateOf
 }
 
 /** Видалити / повернути ручний запис. Повернення знову перевіряє «тиждень — або операції, або підсумок». */
-export async function setManualDeleted(db: Db, actor: number, idArg: unknown, deleted: boolean, ownOnly = false): Promise<void> {
+export async function setManualDeleted(db: Db, actor: number, idArg: unknown, deleted: boolean): Promise<void> {
   const id = Number(idArg);
   if (!Number.isInteger(id) || id <= 0) throw new FinError(400, "Некоректний запис");
   const r = await db.query(`SELECT t.id, t.account_id, t.manual_kind, t.deleted_at, t.entered_by, (t.booked_at AT TIME ZONE 'Europe/Kyiv')::date::text AS day
       FROM bank_transactions t WHERE t.id = $1 FOR UPDATE`, [id]);
   const x = r.rows[0];
-  // Хто лише вносить (`enter_safe`), скасовує тільки СВІЙ запис; чужий для нього — «не знайдено» (не підказуємо, що є).
-  if (!x || !x.manual_kind || (ownOnly && x.entered_by !== actor)) throw new FinError(404, "Ручний запис не знайдено");
+  if (!x || !x.manual_kind) throw new FinError(404, "Ручний запис не знайдено");
   if (deleted === (x.deleted_at != null)) throw new FinError(409, deleted ? "Уже видалено" : "Уже на місці");
   if (!deleted) {
     const monday = weekStart(x.day);
@@ -127,7 +126,7 @@ export async function setManualDeleted(db: Db, actor: number, idArg: unknown, de
 }
 
 /** Записи ручного рахунку за період (живі й видалені — видалені для «Повернути»). */
-export async function listManual(db: Db, accountArg: unknown, from: string, to: string) {
+export async function listManual(db: Db, accountArg: unknown, from: string, to: string, dealUrl: (kommoId: number) => string | null = () => null) {
   const acc = await manualAccount(db, accountArg);
   if (!isDay(from) || !isDay(to) || from > to) throw new FinError(400, "Період — РРРР-ММ-ДД, від ≤ до");
   const r = await db.query(`SELECT t.id, (t.booked_at AT TIME ZONE 'Europe/Kyiv')::date::text AS day, t.direction, t.amount::text AS amount,
@@ -135,16 +134,22 @@ export async function listManual(db: Db, accountArg: unknown, from: string, to: 
       COALESCE(i.name, CASE WHEN t.external_tx_id LIKE 'safe-import:%' THEN NULLIF(t.counterparty_name, 'Сейф') END) AS item, -- «Сейф» = категорії в таблиці не було (importSafe)
       t.manual_kind AS kind, t.counterparty_name AS name, t.purpose, t.deleted_at IS NOT NULL AS deleted,
       COALESCE(t.external_tx_id LIKE 'safe-import:%', false) AS imported,
+      t.deal_ref, t.deal_kommo_id::text AS deal_kommo_id, t.fin_checked, t.deleted_reason,
       COALESCE(NULLIF(btrim(u.full_name), ''), split_part(u.email, '@', 1)) AS entered_by
       FROM bank_transactions t LEFT JOIN users u ON u.id = t.entered_by LEFT JOIN fin_items i ON i.id = t.fin_item_id
      WHERE t.account_id = $1 AND (t.booked_at AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $2::date AND $3::date
      ORDER BY t.booked_at DESC, t.id DESC`, [acc.id, from, to]);
-  return { account: acc, rows: r.rows.map((x: any) => ({ ...x, amount: Number(x.amount), amount_uah: Number(x.amount_uah) })) };
+  return { account: acc, rows: r.rows.map((x: any) => ({ ...x, amount: Number(x.amount), amount_uah: Number(x.amount_uah),
+    deal_url: x.deal_kommo_id ? dealUrl(Number(x.deal_kommo_id)) : null })) };
 }
 
 // ── Перенесення таблиці «Сейф» (вкладка «Сейф» книги «UTS Сделки Сводка»; Роман 05.10.2026: «роби, переносимо як є») ──
 
-export interface SafeRow { day: string; amount: number; currency: string; uah: number | null; rate: number | null; purpose: string; deal: string; category: string; key: string }
+export interface SafeRow { day: string; amount: number; currency: string; uah: number | null; rate: number | null; purpose: string; deal: string; category: string; key: string;
+  /** Колонка «Фінансист» (TRUE / FALSE); немає колонки чи значення — null. До ключа НЕ входить: позначка не робить рядок новим. */
+  fin?: boolean | null;
+  /** Ключ за формулою перенесення 05.10 (з КАТЕГОРІЄЮ) — лише щоб синк один раз переключив старі записи на `key` (#1248b). */
+  legacyKey?: string }
 
 const num = (v: string): number | null => {
   const s = (v ?? "").replace(/[\s  ]/g, "").replace(",", ".");
@@ -183,10 +188,20 @@ export function parseSafeCsv(rows: readonly string[][], from: string): { rows: S
     const rateCol = num(r[3]);
     const uah = currency === "UAH" ? amount : grn != null ? Math.sign(amount) * Math.abs(grn) : rateCol != null ? Math.round(amount * rateCol * 100) / 100 : null;
     const deal = (r[6] ?? "").trim(), category = (r[7] ?? "").trim();
-    const base = [day, amount, currency, purpose, deal, category].join("|");
+    // 🔑 Категорія до ключа НЕ входить (12.10.2026): Таня зводить категорії в одну систему, і перейменування «ЗП» →
+    // «ЗП - Комерційні» мусить ОНОВИТИ запис, а не «зникнути» й зʼявитись знову (сухий прогін на живій таблиці: 10 з 10
+    // «зниклих» були саме такими). `legacyKey` — формула 05.10, з категорією: за ним синк впізнає перенесені записи.
+    const base = ["v2", day, amount, currency, purpose, deal].join("|");
     const n = (seen.get(base) ?? 0) + 1;
     seen.set(base, n);
-    out.push({ day, amount, currency, uah, rate: currency === "UAH" ? 1 : rateCol, purpose, deal, category, key: `safe-import:${createHash("sha1").update(`${base}|#${n}`).digest("hex")}` });
+    const legacyBase = [day, amount, currency, purpose, deal, category].join("|");
+    const ln = (seen.get(`L|${legacyBase}`) ?? 0) + 1;
+    seen.set(`L|${legacyBase}`, ln);
+    const finRaw = (r[9] ?? "").trim().toUpperCase();
+    const fin = finRaw === "TRUE" ? true : finRaw === "FALSE" ? false : null;
+    out.push({ day, amount, currency, uah, rate: currency === "UAH" ? 1 : rateCol, purpose, deal, category, fin,
+      key: `safe-import:${createHash("sha1").update(`${base}|#${n}`).digest("hex")}`,
+      legacyKey: `safe-import:${createHash("sha1").update(`${legacyBase}|#${ln}`).digest("hex")}` });
   }
   return { rows: out, skipped };
 }

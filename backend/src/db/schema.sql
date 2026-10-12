@@ -5678,8 +5678,8 @@ UPDATE bank_transactions t SET currency = a.currency, fx_rate = 1, amount_uah = 
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 🗄 СЕЙФ І РОБОЧІ КАРТКИ: ДОСТУП І ПОЧАТКОВИЙ ЗАЛИШОК (Таня 08.10.2026, Роман: «роби, Сергію лише вносити»).
---  · `view_private_finance` — Сейф і ВИТРАТИ робочих карток: Адмін і фінансист. `enter_safe` — лише вносити в Сейф:
---    операційний директор. Разово (позначка в `fin_kpi_imports`): подальші правки ролей в інтерфейсі не перетираються.
+--  · `view_private_finance` — Сейф і ВИТРАТИ робочих карток: Адмін і фінансист (разово, позначка в `fin_kpi_imports`).
+--    Вносити в Сейф із дашборду не можна: він — дзеркало Google-таблиці (Роман 12.10.2026, нижче блок синку).
 --  · `out_private` — витрати рахунку бачить лише `view_private_finance`; надходження — усі, хто бачить «Виписку».
 --    Робочі картки (`staff`) стають такими: не «лише фінанси», а «витрати приватні».
 --  · `bank_opening_balances` — залишок на кінець дня `as_of` по валюті; поточний = він + операції ПІСЛЯ.
@@ -5702,27 +5702,54 @@ REVOKE ALL ON bank_opening_balances FROM ai_readonly;
 WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('safe-card-access-2026-10-08', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key),
 perm_view AS (UPDATE roles SET permissions = permissions || '{"view_private_finance": true}'::jsonb
                WHERE key IN ('admin', 'financier') AND EXISTS (SELECT 1 FROM step) RETURNING key),
-perm_enter AS (UPDATE roles SET permissions = permissions || '{"enter_safe": true}'::jsonb
-               WHERE key = 'opdir' AND EXISTS (SELECT 1 FROM step) RETURNING key),
 cards AS (UPDATE bank_accounts SET finance_only = false, out_private = true
            WHERE company = 'staff' AND EXISTS (SELECT 1 FROM step) RETURNING id)
 INSERT INTO bank_opening_balances (account_id, currency, as_of, amount)
 SELECT a.id, v.ccy, DATE '2026-09-30', v.amount
   FROM bank_accounts a CROSS JOIN (VALUES ('UAH', 98278.00), ('USD', 50.00)) AS v(ccy, amount)
  WHERE a.bank = 'manual' AND a.label = 'Сейф' AND EXISTS (SELECT 1 FROM step)
-   AND (SELECT count(*) FROM perm_view) + (SELECT count(*) FROM perm_enter) + (SELECT count(*) FROM cards) >= 0
+   AND (SELECT count(*) FROM perm_view) + (SELECT count(*) FROM cards) >= 0
 ON CONFLICT (account_id, currency) DO NOTHING;
 WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('opex-manual-2026-10-08', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key)
 UPDATE fin_kpis SET kind = 'manual'
  WHERE ref_source LIKE 'opex_%' AND kind = 'auto' AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM step);
 -- 🔴 ПРАВА СЕЙФУ — НА КОЖНОМУ ПРОГОНІ, І САМЕ ТУТ, ПІСЛЯ СИНКІВ РОЛЕЙ. Синки вище (ceo/opdir, kvp, financier) щоразу
 -- копіюють УСІ права адміна — тож `view_private_finance` адміна розтеклося б на СЕО, ОД і КВП (спіймав #1246 до
--- прода; той самий клас, що `merge_clients` 03.08). Знімаємо явно, а «лише вносити» ОД повертаємо: синк його стирає.
+-- прода; той самий клас, що `merge_clients` 03.08). Знімаємо явно.
 -- Фінансист отримує `view_private_finance` якраз синком — так і задумано (рівень адміна).
 UPDATE roles SET permissions = permissions - 'view_private_finance' WHERE key IN ('ceo', 'opdir', 'kvp');
-UPDATE roles SET permissions = permissions || '{"enter_safe": true}'::jsonb WHERE key = 'opdir';
 -- 🔒 AI: без Сейфу й «лише фінанси» (як було) і БЕЗ витрат робочих карток — надходження лишаються.
 CREATE OR REPLACE VIEW ai_bank_transactions AS
   SELECT t.id, t.account_id, t.direction, t.booked_at, t.counterparty_name, t.purpose, t.amount, t.currency, t.amount_uah, t.is_bank_fee
     FROM bank_transactions t JOIN bank_accounts a ON a.id = t.account_id
    WHERE NOT a.finance_only AND NOT (a.out_private AND t.direction = 'out') AND t.deleted_at IS NULL;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🔄 СЕЙФ — ДЗЕРКАЛО GOOGLE-ТАБЛИЦІ (Роман 12.10.2026: «Сергій більше не вносить у дашборд, тільки в таблицю»).
+--  · `deal_ref` — «Кому (ID)» як у таблиці; `deal_kommo_id` — 8-значний номер угоди Kommo з нього (для майбутнього
+--    перерахунку угод); `fin_checked` — колонка «Фінансист» (TRUE / FALSE); `deleted_reason` — чому запис прихований
+--    («зник із таблиці» повертається синком сам, щойно рядок зʼявиться знову).
+--  · `safe_sync_state` — один рядок: коли синк востаннє вдався / падав і чому, залишки з шапки таблиці.
+--  · Разово: записи Сейфу, внесені колись у дашборді (не з таблиці), — дублі тих самих рухів таблиці (замір 12.10.2026:
+--    рівно 2, обидва Тані 06.10, обидва є в таблиці). Позначаються видаленими з причиною, НЕ стираються.
+--  · Revert коду ці позначки не знімає; повернути — `deleted_at = NULL`.
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS deal_ref TEXT;
+ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS deal_kommo_id BIGINT;
+ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS fin_checked BOOLEAN;
+ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS deleted_reason TEXT;
+CREATE TABLE IF NOT EXISTS safe_sync_state (
+  id             INTEGER PRIMARY KEY CHECK (id = 1),
+  last_try_at    TIMESTAMPTZ,
+  last_ok_at     TIMESTAMPTZ,
+  last_error     TEXT,
+  last_error_at  TIMESTAMPTZ,
+  result         JSONB,
+  sheet_balances JSONB
+);
+REVOKE ALL ON safe_sync_state FROM ai_readonly;
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('safe-mirror-2026-10-12', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key)
+UPDATE bank_transactions t SET deleted_at = now(), deleted_reason = 'внесено в дашборді — дубль таблиці (Сейф тепер дзеркало таблиці, 12.10.2026)'
+  FROM bank_accounts a
+ WHERE a.id = t.account_id AND a.bank = 'manual' AND t.external_tx_id NOT LIKE 'safe-import:%' AND t.deleted_at IS NULL
+   AND EXISTS (SELECT 1 FROM step);

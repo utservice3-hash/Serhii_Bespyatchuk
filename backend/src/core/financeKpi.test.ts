@@ -1076,21 +1076,20 @@ test("#1245 КАРТКА: надходження — усім, витрати �
 });
 
 /**
- * #1246 — ЖИВИЙ SQL: СЕЙФ — ХТО БАЧИТЬ І ХТО ЛИШЕ ВНОСИТЬ. Разовий крок: `view_private_finance` — Адмін і фінансист,
- * `enter_safe` — операційний директор, у решти — нічого; робочі картки — не «лише фінанси», а «витрати приватні»;
- * залишок Сейфу на 30.09 — UAH 98 278, USD 50; повтор не перетирає правок ролей. Роути: перегляд — лише
- * `view_private_finance`, запис — воно або `enter_safe`; хто лише вносить, скасовує тільки СВІЙ запис (чужий — 404).
- * 🧨 Червоніє, якщо Сейф відкриється СЕО/КВП, ОД побачить список чи скасує чужий запис.
+ * #1246 — ЖИВИЙ SQL: ХТО БАЧИТЬ СЕЙФ І ВИТРАТИ КАРТОК. Разовий крок: `view_private_finance` — Адмін і фінансист, у решти —
+ * нічого; права «лише вносити» більше немає (Сейф — дзеркало таблиці, 12.10.2026); робочі картки — «витрати приватні»;
+ * залишок Сейфу на 30.09 — UAH 98 278, USD 50. Повторний прогін (кожен викат) синками ролей копіює права адміна — право не
+ * має розтектися на СЕО/ОД/КВП; зняте з адміна — не повертається. Роути: перегляд — лише `view_private_finance`,
+ * маршрутів запису в Сейф немає. 🧨 Червоніє, якщо Сейф відкриється СЕО/КВП/ОД чи зʼявиться запис із дашборду.
  */
-test("#1246 ЖИВИЙ SQL: Сейф — бачать Адмін і фінансист, ОД лише вносить і скасовує лише своє; картки — витрати приватні", async (t) => {
+test("#1246 ЖИВИЙ SQL: Сейф і витрати карток — лише Адмін і фінансист, синк ролей не розтікає; картки — витрати приватні; залишок 30.09", async (t) => {
   const route = SRC("routes/bank.ts");
   assert.match(route, /bankRouter\.get\("\/manual", requirePerm\("view_private_finance"\)/, "🔴 список Сейфу не за view_private_finance");
-  for (const r of [/bankRouter\.post\("\/manual", requireAnyPerm\("view_private_finance", "enter_safe"\)/, /bankRouter\.delete\("\/manual\/:id", requireAnyPerm\("view_private_finance", "enter_safe"\)/,
-    /bankRouter\.post\("\/manual\/:id\/restore", requireAnyPerm\("view_private_finance", "enter_safe"\)/]) assert.match(route, r, "🔴 запис у Сейф не за правами Сейфу");
+  assert.doesNotMatch(route, /bankRouter\.(post|delete|patch|put)\("\/manual/, "🔴 у дашборді знову можна писати в Сейф — друге джерело тих самих грошей");
+  assert.doesNotMatch(SRC("auth/permGrant.ts"), /"enter_safe"/, "🔴 право «лише вносити» повернулось у каталог");
   const s = await scratchDb(t);
   if (!s) return;
-  const bm = await import("./bankManual.js");
-  const { db, c } = s;
+  const { c } = s;
   const schema = readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8");
   try {
     const { safe } = await bankFixture(c);
@@ -1098,27 +1097,170 @@ test("#1246 ЖИВИЙ SQL: Сейф — бачать Адмін і фінанс
     await c.query(`DELETE FROM fin_kpi_imports WHERE key = 'safe-card-access-2026-10-08'`);
     await c.query(`DELETE FROM bank_opening_balances`);
     await c.query(schema);
-    const perms = (await c.query(`SELECT key, permissions FROM roles WHERE key IN ('admin','financier','opdir','ceo','kvp','manager') ORDER BY key`)).rows
+    const perms = async () => (await c.query(`SELECT key, permissions FROM roles WHERE key IN ('admin','financier','opdir','ceo','kvp','manager') ORDER BY key`)).rows
       .map((r: any) => [r.key, !!r.permissions?.view_private_finance, !!r.permissions?.enter_safe]);
-    assert.deepEqual(perms, [["admin", true, false], ["ceo", false, false], ["financier", true, false], ["kvp", false, false], ["manager", false, false], ["opdir", false, true]],
-      "🔴 права Сейфу видано не тим ролям");
+    const want = [["admin", true, false], ["ceo", false, false], ["financier", true, false], ["kvp", false, false], ["manager", false, false], ["opdir", false, false]];
+    assert.deepEqual(await perms(), want, "🔴 права Сейфу видано не тим ролям");
     assert.deepEqual((await c.query(`SELECT finance_only, out_private FROM bank_accounts WHERE id = $1`, [card])).rows[0], { finance_only: false, out_private: true }, "🔴 робоча картка не «витрати приватні»");
     assert.deepEqual((await c.query(`SELECT currency, as_of::text AS d, amount::float8 AS a FROM bank_opening_balances WHERE account_id = $1 ORDER BY currency`, [safe])).rows,
       [{ currency: "UAH", d: "2026-09-30", a: 98278 }, { currency: "USD", d: "2026-09-30", a: 50 }], "🔴 початковий залишок Сейфу не той");
-    // Другий прогін (кожен викат): синки ролей знову копіюють права адміна — Сейф не має розтектися на СЕО/КВП/ОД.
     await c.query(schema);
-    const again = (await c.query(`SELECT key, permissions FROM roles WHERE key IN ('admin','financier','opdir','ceo','kvp','manager') ORDER BY key`)).rows
-      .map((r: any) => [r.key, !!r.permissions?.view_private_finance, !!r.permissions?.enter_safe]);
-    assert.deepEqual(again, perms, "🔴 після повторного прогону схеми право Сейфу розтеклося синком ролей");
+    assert.deepEqual(await perms(), want, "🔴 після повторного прогону схеми право Сейфу розтеклося синком ролей");
     await c.query(`UPDATE roles SET permissions = permissions - 'view_private_finance' WHERE key = 'admin'`);
     await c.query(schema);
     assert.equal((await c.query(`SELECT permissions ? 'view_private_finance' AS x FROM roles WHERE key = 'admin'`)).rows[0].x, false, "🔴 повтор схеми повернув адміну зняте право");
-    await c.query(`INSERT INTO users (id, email, password_hash, role) VALUES (902, 't902@uts.test', 'x', 'admin') ON CONFLICT DO NOTHING`);
-    const mine = (await bm.addManual(db, 902, { accountId: safe, kind: "op", date: "2026-10-07", direction: "out", amount: "100" })).ids[0];
-    await assert.rejects(bm.setManualDeleted(db, 901, mine, true, true), (e: unknown) => (e as { status?: number }).status === 404, "🔴 хто лише вносить, скасував ЧУЖИЙ запис");
-    await bm.setManualDeleted(db, 902, mine, true, true);
-    assert.ok((await c.query(`SELECT deleted_at FROM bank_transactions WHERE id = $1`, [mine])).rows[0].deleted_at, "🔴 свій запис не скасувався");
   } finally { await s.dispose(); }
+});
+
+/** Вкладка «Сейф» для гейтів синку: шапка й залишки як у живій таблиці (замір 12.10.2026) + рядки. */
+const SAFE_HEAD = ["Дата", "Сумма", "Валюта", "Текущий курс", "Сумма в грн", "На що", "Кому (ID)", "Категория", "", "Фінансист"];
+const safeSheet = (rows: string[][]): string[][] => [["9", "", "", "", "12.10.2026"], ["", "EUR", "0"], ["", "USD", "50", "", "", "19000"], ["", "UAH", "148746"], [],
+  SAFE_HEAD, ["01.02.2024", "102550", "UAH", "", "", "Текущий остаток грн"], ...rows];
+const safeRow = (i: number, x: { fin?: string; amount?: string; deal?: string } = {}): string[] =>
+  [`${String(1 + (i % 28)).padStart(2, "0")}.10.2026`, x.amount ?? String(-(100 + i)), "UAH", "", "", `Рух ${i}`, x.deal ?? "", "ЗП", "", x.fin ?? "FALSE"];
+
+/**
+ * #1248 — РОЗБІР ВКЛАДКИ «СЕЙФ» (`parseSafeSheet`). Шапка — рівно на своїх місцях, інакше відмова «структура» (по обидва
+ * боки: та сама шапка — ок; переставлені / зниклі колонки — відмова); залишки шапки таблиці (UAH / USD / EUR) читаються
+ * для звірки; рядки залишків і до 2026 — не операції; «Фінансист» TRUE / FALSE — у рядку, але НЕ в ключі; 8 цифр
+ * «Кому (ID)» — номер угоди; таблиця без операцій — відмова «порожньо», а не «0 нових».
+ * 🧨 Червоніє, якщо змінена шапка пройде, «Фінансист» змінить ключ чи порожнє читання стане успіхом.
+ */
+test("#1248 РОЗБІР СЕЙФУ: шапка на місці або відмова, залишки шапки, «Фінансист» і категорія поза ключем, порожньо — відмова", async () => {
+  const ss = await import("./safeSync.js");
+  const kind = (f: () => unknown) => { try { f(); return "ok"; } catch (e) { return (e as { kind?: string }).kind ?? "інше"; } };
+  const p = ss.parseSafeSheet(safeSheet([safeRow(1, { fin: "TRUE", deal: "62467001" }), safeRow(2, { deal: "Іванов" })]));
+  assert.deepEqual(p.sheetBalances, { EUR: 0, USD: 50, UAH: 148746 }, "🔴 залишки шапки таблиці не прочитано");
+  assert.deepEqual(p.rows.map((r) => [r.day, r.amount, r.fin, ss.dealKommoId(r.deal)]), [["2026-10-02", -101, true, 62467001], ["2026-10-03", -102, false, null]],
+    "🔴 рядки, «Фінансист» чи номер угоди розібрано хибно (або залишок 2024 став операцією)");
+  const flipped = ss.parseSafeSheet(safeSheet([safeRow(1, { fin: "FALSE", deal: "62467001" })]));
+  assert.equal(flipped.rows[0].key, p.rows[0].key, "🔴 позначка «Фінансист» змінила ключ — кожна галочка Тані плодила б новий запис");
+  const renamed = ss.parseSafeSheet(safeSheet([safeRow(1, { fin: "TRUE", deal: "62467001" }).map((v, i) => (i === 7 ? "ЗП - Комерційні" : v))]));
+  assert.equal(renamed.rows[0].key, p.rows[0].key, "🔴 перейменування категорії змінило ключ — масове перейменування заблокувало б синк");
+  assert.notEqual(renamed.rows[0].legacyKey, p.rows[0].legacyKey, "🔴 старий ключ (формула 05.10) не залежить від категорії — перенесені записи не впізнаються");
+  const swapped = [...SAFE_HEAD]; [swapped[5], swapped[7]] = [swapped[7], swapped[5]];
+  assert.equal(kind(() => ss.parseSafeSheet([swapped, safeRow(1)])), "structure", "🔴 переставлені колонки пройшли — синк писав би сміття");
+  assert.equal(kind(() => ss.parseSafeSheet([SAFE_HEAD.slice(0, 9), safeRow(1)])), "structure", "🔴 зникла колонка «Фінансист» — і синк пройшов");
+  assert.equal(kind(() => ss.parseSafeSheet([["Сума", "Дата"], safeRow(1)])), "structure", "🔴 без шапки «Дата» синк пройшов");
+  assert.equal(kind(() => ss.parseSafeSheet(safeSheet([]))), "empty", "🔴 порожнє читання таблиці стало «0 нових»");
+});
+
+/**
+ * #1248b — ЖИВИЙ SQL: ЗВІРКА ТАБЛИЦІ З СЕЙФОМ (`reconcileSafe`). Нове — додано; зниклий рядок — «зник із таблиці» (не
+ * стерто); повернений — відновлено; галочка «Фінансист» — ОНОВЛЕННЯ того самого запису; повтор без змін — нуль змін;
+ * записи, перенесені 05.10 (`importSafe`), впізнаються тим самим ключем — без задвоєння; запис, внесений колись у
+ * дашборді, звірка не чіпає. 🧨 Червоніє, якщо зникле стирається, галочка плодить запис чи перенесене задвоюється.
+ */
+test("#1248b ЖИВИЙ SQL: звірка Сейфу — нове додано, зникле приховано й повертається, галочка — оновлення, повтор — нуль", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const ss = await import("./safeSync.js");
+  const bm = await import("./bankManual.js");
+  const { db, c } = s;
+  try {
+    const { safe } = await bankFixture(c);
+    const rate = async () => 41;
+    const base = Array.from({ length: 12 }, (_, i) => safeRow(i));
+    // Перенесення 05.10 писало ключ за СТАРОЮ формулою (з категорією) — так і лежить на проді.
+    const legacy = bm.parseSafeCsv(safeSheet([base[0]]), "2026-01-01").rows.map((r) => ({ ...r, key: r.legacyKey! }));
+    await bm.importSafe(db, safe, legacy, rate);
+    await c.query(`INSERT INTO bank_transactions (account_id, direction, external_tx_id, booked_at, counterparty_name, amount, currency, fx_rate, amount_uah, manual_kind)
+      VALUES ($1, 'out', 'manual:x', '2026-10-06T10:00:00Z', 'Сейф', -5, 'UAH', 1, -5, 'op')`, [safe]);
+    const run = (rows: string[][]) => ss.reconcileSafe(db, safe, ss.parseSafeSheet(safeSheet(rows)), rate);
+    const r1 = await run(base);
+    // Перенесений 05.10 рядок впізнано за старим ключем і переключено на новий — це ОНОВЛЕННЯ, не вставка.
+    assert.deepEqual([r1.inserted, r1.vanished, r1.restored, r1.updated], [11, 0, 0, 1], "🔴 перенесений рядок не впізнано (задвоєно) або щось зайве");
+    assert.equal((await c.query(`SELECT count(*)::int AS n FROM bank_transactions WHERE external_tx_id = $1`, [legacy[0].key])).rows[0].n, 0, "🔴 перенесений запис лишився зі старим ключем");
+    const r2 = await run(base);
+    assert.deepEqual([r2.inserted, r2.vanished, r2.restored, r2.updated], [0, 0, 0, 0], "🔴 повтор без змін у таблиці щось змінив");
+    const recat = base[1].map((v, i) => (i === 7 ? "ЗП - Адміністративні" : v));
+    const next = [safeRow(0, { fin: "TRUE" }), recat, ...base.slice(2, 11), safeRow(40)];                       // галочка, нова категорія, рядок 11 зник, 40 новий
+    const r3 = await run(next);
+    assert.deepEqual([r3.inserted, r3.vanished, r3.restored, r3.updated], [1, 1, 0, 2], "🔴 галочка, категорія, зникнення чи новий рядок оброблені хибно");
+    assert.equal((await c.query(`SELECT counterparty_name AS c FROM bank_transactions WHERE purpose = 'Рух 1'`)).rows[0].c, "ЗП - Адміністративні", "🔴 нову категорію не оновлено");
+    const gone = (await c.query(`SELECT deleted_at IS NOT NULL AS d, deleted_reason AS r FROM bank_transactions WHERE purpose = 'Рух 11'`)).rows[0];
+    assert.deepEqual(gone, { d: true, r: ss.VANISHED }, "🔴 зниклий рядок стерто або позначено не тим");
+    const r4 = await run([...next, base[11]]);
+    assert.deepEqual([r4.inserted, r4.restored], [0, 1], "🔴 повернений у таблицю рядок не відновлено (чи задвоєно)");
+    assert.equal((await c.query(`SELECT count(*)::int AS n FROM bank_transactions WHERE account_id = $1 AND purpose = 'Рух 0'`, [safe])).rows[0].n, 1, "🔴 перенесений рядок задвоєно");
+    assert.equal((await c.query(`SELECT fin_checked FROM bank_transactions WHERE purpose = 'Рух 0'`)).rows[0].fin_checked, true, "🔴 галочку «Фінансист» не оновлено");
+    assert.equal((await c.query(`SELECT deleted_at FROM bank_transactions WHERE external_tx_id = 'manual:x'`)).rows[0].deleted_at, null, "🔴 звірка зачепила запис, внесений у дашборді");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1248c — ЖИВИЙ SQL: ЗАХИСТ ВІД МАСОВОГО ЗНИКНЕННЯ (поріг 10%, Роман 12.10.2026). З 12 живих рядків зникає 1 (8%) —
+ * звірка проходить; зникає 2 (17%) — відмова «масове зникнення», і НІЧОГО не записано. По обидва боки межі.
+ * 🧨 Червоніє, якщо неповне читання таблиці «видалить» Сейф або поріг стане ковдрою.
+ */
+test("#1248c ЖИВИЙ SQL: зникло понад 10% — відмова й нуль змін; до 10% — звірка йде", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const ss = await import("./safeSync.js");
+  const { db, c } = s;
+  try {
+    const { safe } = await bankFixture(c);
+    const base = Array.from({ length: 12 }, (_, i) => safeRow(i));
+    const run = (rows: string[][]) => ss.reconcileSafe(db, safe, ss.parseSafeSheet(safeSheet(rows)), async () => 41);
+    await run(base);
+    const live = async () => (await c.query(`SELECT count(*)::int AS n FROM bank_transactions WHERE account_id = $1 AND deleted_at IS NULL`, [safe])).rows[0].n;
+    await assert.rejects(run(base.slice(2)), (e: unknown) => (e as { kind?: string }).kind === "mass-vanish", "🔴 зникнення 2 з 12 пройшло — захист не спрацював");
+    assert.equal(await live(), 12, "🔴 відмова захисту все ж щось приховала");
+    assert.equal((await run(base.slice(1))).vanished, 1, "🔴 зникнення 1 з 12 (до 10%) заблоковано — поріг став ковдрою");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1249 — ЖИВИЙ SQL: РАЗОВИЙ КРОК «ДЗЕРКАЛО» І ПРОВОДКА ДЖОБИ. Записи Сейфу, внесені колись у дашборді, позначаються
+ * «внесено в дашборді — дубль таблиці» (не стираються), записи з таблиці — ні; повтор нічого не міняє, повернений вручну
+ * — не приховується знову. Джоба: крон «25,55» (не :00/:30), нагляд `syncSafe` = 30 хв; пропуск — `jobSkip`, а не успіх;
+ * прапорець «уже йде» має стелю; відмова пише стан помилки ДО того, як упасти. Читання таблиці — лише `readonly`.
+ * 🧨 Червоніє, якщо дубль лишиться в сумах, крок повториться, пропуск стане успіхом чи код навчиться писати в таблицю.
+ */
+test("#1249 ЖИВИЙ SQL: дублі з дашборду приховано разово; синк — крон :25/:55 під наглядом, пропуск ≠ успіх, лише читання", async (t) => {
+  const idx = SRC("index.ts"), job = SRC("jobs/syncSafe.ts"), gs = SRC("bankSources/googleSheets.ts");
+  assert.match(idx, /cron\.schedule\("25,55 \* \* \* \*", \(\) => \{\s*void runJob\("syncSafe", \(\) => syncSafe\(\)\);/, "🔴 синк Сейфу не за розкладом :25/:55");
+  const { MONITORED_JOBS } = await import("../jobs/monitoredJobs.js");
+  assert.equal(MONITORED_JOBS.find((j) => j.name === "syncSafe")?.everyMin, 30, "🔴 мовчання синку Сейфу ніхто не помітить");
+  assert.match(job, /if \(!sheetsConfigured\(\)\) return jobSkip\(/, "🔴 «не налаштовано» записується успіхом");
+  assert.match(job, /if \(running && Date\.now\(\) - running < CEILING_MS\) return jobSkip\(/, "🔴 «уже йде» без стелі або записується успіхом");
+  assert.match(job, /await saveSafeSyncState\(pool as unknown as Db, \{ error: \(e as Error\)\.message \}\)/, "🔴 відмова не лишає сліду для плашки «станом на»");
+  assert.match(gs, /const SCOPE = "https:\/\/www\.googleapis\.com\/auth\/spreadsheets\.readonly";/, "🔴 доступ до таблиці ширший за читання");
+  assert.doesNotMatch(gs, /method: "(PUT|PATCH)"|:append|:batchUpdate/, "🔴 код навчився писати в таблицю — зворотного напрямку не домовлялись");
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  const schema = readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8");
+  try {
+    const { safe } = await bankFixture(c);
+    const ins = (ext: string) => c.query(`INSERT INTO bank_transactions (account_id, direction, external_tx_id, booked_at, counterparty_name, amount, currency, fx_rate, amount_uah, manual_kind)
+      VALUES ($1, 'out', $2, '2026-10-06T10:00:00Z', 'Сейф', -50000, 'UAH', 1, -50000, 'op') RETURNING id`, [safe, ext]);
+    const dash = (await ins("manual:dash")).rows[0].id, sheet = (await ins("safe-import:abc")).rows[0].id;
+    await c.query(`DELETE FROM fin_kpi_imports WHERE key = 'safe-mirror-2026-10-12'`);
+    await c.query(schema);
+    const st = async (id: number) => (await c.query(`SELECT deleted_at IS NOT NULL AS d, deleted_reason AS r FROM bank_transactions WHERE id = $1`, [id])).rows[0];
+    assert.equal((await st(dash)).d, true, "🔴 запис, внесений у дашборді, лишився в сумах — дубль таблиці");
+    assert.match((await st(dash)).r, /внесено в дашборді — дубль таблиці/, "🔴 приховано без причини");
+    assert.deepEqual(await st(sheet), { d: false, r: null }, "🔴 разовий крок зачепив запис із таблиці");
+    await c.query(`UPDATE bank_transactions SET deleted_at = NULL, deleted_reason = NULL WHERE id = $1`, [dash]);
+    await c.query(schema);
+    assert.equal((await st(dash)).d, false, "🔴 повтор схеми знову приховав повернений вручну запис");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1249b — МЕЖА СИНКУ СЕЙФУ. «Стан» і «Оновити зараз» — лише `view_private_finance`; обидва в матриці доступу;
+ * «Оновити зараз» — deny-only (проба дозволеної ролі запустила б синк на проді).
+ * 🧨 Червоніє, якщо «Оновити зараз» відкриється ширше чи вийде з матриці.
+ */
+test("#1249b МЕЖА СИНКУ СЕЙФУ: стан і «Оновити зараз» — лише view_private_finance, обидва в матриці", async () => {
+  const route = SRC("routes/bank.ts");
+  assert.match(route, /bankRouter\.get\("\/safe\/status", requirePerm\("view_private_finance"\)/, "🔴 стан синку Сейфу відкрито ширше");
+  assert.match(route, /bankRouter\.post\("\/safe\/sync", requirePerm\("view_private_finance"\)/, "🔴 «Оновити зараз» відкрито ширше");
+  const { ACCESS_MATRIX } = await import("../auth/accessMatrix.js");
+  const row = (m: string, p: string) => ACCESS_MATRIX.find((r) => r.method === m && r.path === p);
+  assert.deepEqual(row("GET", "/api/bank/safe/status")?.allow, ["admin", "financier"], "🔴 стан синку не в матриці або відкритий ширше");
+  assert.equal(row("POST", "/api/bank/safe/sync")?.cls, "deny-only", "🔴 «Оновити зараз» не deny-only — проба запустила б синк");
 });
 
 /**
@@ -1149,8 +1291,8 @@ test("#1202 ВАЛЮТА ЗА КУРСОМ: 42→USD, 50→EUR, далекий �
  */
 test("#1203 ЖИВИЙ SQL: разовий крок 2г — Сейф і картки один раз, «лише фінанси»; фронт Сейфу — за правами", async (t) => {
   const fe = FE("pages/dashboard/sections/BankSection.tsx");
-  assert.match(fe, /\{canEnterSafe && active\.some\(\(a\) => a\.bank === "manual"\) && \(/, "🔴 кнопка «Сейф» не за правом Сейфу");
-  assert.match(fe, /\{safeOpen && canEnterSafe && <SafeModal accounts=\{active\.filter\(\(a\) => a\.bank === "manual"\)\} canEdit=\{canEnterSafe\} viewList=\{canViewPrivate\}/, "🔴 запис / перегляд Сейфу не за правами");
+  assert.match(fe, /\{canViewPrivate && active\.some\(\(a\) => a\.bank === "manual"\) && \(/, "🔴 кнопка «Сейф» не за правом Сейфу");
+  assert.match(fe, /\{safeOpen && canViewPrivate && <SafeModal accounts=\{active\.filter\(\(a\) => a\.bank === "manual"\)\}/, "🔴 перегляд Сейфу не за правом");
   assert.match(fe, /if \(a\.finance_only && m\.has\(a\.company\)\) continue;/, "🔴 чип компанії може назватись «Сейф» / «Картка»");
 
   const s = await scratchDb(t);
@@ -1378,23 +1520,29 @@ test("#1220 ЖИВИЙ SQL: Сейф — «з таблиці» лише на п�
 });
 
 /**
- * #1247 — ВІКНО СЕЙФУ ЗА НОВИМИ ПРАВАМИ (Таня 08.10.2026; Роман: «Сергію лише вносити»). Перенесене підписане «з таблиці
- * Сейфу», невідоме — словами (як було в #1220b); підзаголовок — ПРАВДА нового доступу: бачать Адмін і фінансист,
- * операційний директор лише вносить. Хто лише вносить, списку не питає й не бачить; «Внесено» — повідомленням зі
- * «Скасувати» (свій запис). 🧨 Червоніє, якщо список питати без права, підзаголовок збреше чи внесення мовчить.
+ * #1247 — ВІКНО СЕЙФУ — ДЗЕРКАЛО ТАБЛИЦІ (Роман 12.10.2026). Лише перегляд: форми внесення немає; «Дані станом на» —
+ * час останнього успішного синку; «Оновити зараз»; плашка, коли таблицю не вдалося прочитати (дані — останні збережені);
+ * плашка розбіжності залишку з шапкою таблиці; фільтри прихід/розхід і категорія; номер угоди — посиланням; позначка
+ * «Фінансист». Перенесене — «з таблиці Сейфу», невідоме — словами. Вікно — лише з `view_private_finance`.
+ * 🧨 Червоніє, якщо повернеться форма внесення, зникне «станом на» чи плашка відмови.
  */
-test("#1247 ФРОНТ СЕЙФУ: список лише з правом перегляду, «Внесено» зі «Скасувати», підзаголовок — хто бачить і хто лише вносить", () => {
+test("#1247 ФРОНТ СЕЙФУ: лише перегляд — «станом на», «Оновити зараз», плашка відмови, фільтри, угода й «Фінансист»", () => {
   const fe = FE("pages/dashboard/sections/BankSection.tsx");
-  const modal = fe.slice(fe.indexOf("function SafeModal("), fe.indexOf("function SafeRow("));
+  const modal = fe.slice(fe.indexOf("function SafeModal("), fe.indexOf("const WEEKDAY = ["));
   const row = fe.slice(fe.indexOf("function SafeRow("));
   assert.ok(modal.length > 0 && row.length > 0, "🔴 вікно чи рядок Сейфу не знайдено — гейту нічого перевіряти");
-  assert.match(row, /const who = r\.imported \? "з таблиці Сейфу" : r\.entered_by \?\? "невідомо хто";/, "🔴 «хто» не за ознакою перенесення");
+  assert.match(fe, /\{safeOpen && canViewPrivate && <SafeModal /, "🔴 вікно Сейфу не за view_private_finance");
+  assert.doesNotMatch(modal + row, /addBankManual|deleteBankManual|restoreBankManual|Внести/, "🔴 у вікні знову можна вносити чи видаляти");
+  assert.match(modal, /Дані станом на <b>\{hhmm\(status\?\.lastOkAt \?\? null\)\}<\/b>/, "🔴 немає «станом на»");
+  assert.match(modal, /↻ Оновити зараз/, "🔴 немає «Оновити зараз»");
+  assert.match(modal, /⚠ Таблицю не вдалося прочитати/, "🔴 відмова таблиці мовчить");
+  assert.match(modal, /Залишок не збігається з шапкою таблиці/, "🔴 розбіжність залишку мовчить");
+  assert.match(modal, /aria-label="Прихід чи розхід"/, "🔴 немає фільтра прихід / розхід");
+  assert.match(modal, /aria-label="Категорія"/, "🔴 немає фільтра категорії");
+  assert.match(row, /угода \{r\.deal_ref\}/, "🔴 номер угоди не показано");
+  assert.match(row, /✓ фінансист/, "🔴 позначку «Фінансист» не показано");
+  assert.match(row, /const who = r\.imported \? "з таблиці Сейфу" : r\.entered_by \?\? "невідомо хто";/, "🔴 «хто» не за ознакою");
   assert.match(row, /\{title \?\? "без категорії"\}/, "🔴 запис без категорії знову порожній");
-  assert.match(modal, /Бачать лише Адмін і фінансист; операційний директор лише вносить; решта Сейфу не бачить\./, "🔴 підзаголовок не каже, хто бачить і хто лише вносить");
-  assert.match(modal, /if \(acc && viewList\) fetchBankManual\(/, "🔴 список питають і без права перегляду");
-  assert.match(modal, /\{viewList && <>/, "🔴 плитки й місяць видно без права перегляду");
-  assert.match(modal, /toast\("Внесено в Сейф", \{ tone: "ok", action: \{ label: "Скасувати"/, "🔴 внесення мовчить або без «Скасувати»");
-  assert.match(modal, /toast\(`Не внесено: \$\{err\(e\)\}`, \{ error: true \}\)/, "🔴 помилка внесення не показана");
 });
 
 /**

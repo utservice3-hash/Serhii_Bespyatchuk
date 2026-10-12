@@ -4138,21 +4138,30 @@ export async function saveBankAccount(id: number | null, patch: Partial<BankAcco
 export interface BankBalance { id: number; label: string; company: string; balance_amount: string | null; balance_currency: string | null; balance_updated_at: string | null; balance_uah?: number | null; fx_gain_period?: number | null }
 export interface BankBalancesResp { balances: BankBalance[]; period?: { from: string; to: string } }
 export interface CashflowMonth { month: string; incoming_uah: number; outgoing_uah: number; net_uah: number }
-// 💰 Ручний рахунок «Сейф» (прохід 2г фінансів): записи по операції або підсумком тижня. Правила — на сервері.
+// 🗄 Сейф — дзеркало Google-таблиці (12.10.2026): лише перегляд; вносять у таблицю, дашборд підтягує сам.
 export interface BankManualRow { id: number; day: string; direction: "in" | "out"; amount: number; currency: string; amount_uah: number; item_id: number | null; item: string | null;
   kind: "op" | "week"; name: string | null; purpose: string | null; deleted: boolean; entered_by: string | null;
-  /** перенесено з таблиці «Сейф» (а не внесено в дашборді) — тоді «хто» пишемо словами */
-  imported: boolean }
+  /** з таблиці «Сейф» (а не внесено колись у дашборді) — тоді «хто» пишемо словами */
+  imported: boolean;
+  /** «Кому (ID)» як у таблиці; посилання — лише коли це 8-значний номер угоди Kommo */
+  deal_ref: string | null; deal_url: string | null;
+  /** колонка «Фінансист» таблиці: true / false; null — не заповнено */
+  fin_checked: boolean | null;
+  /** чому запис прихований («зник із таблиці», «внесено в дашборді — дубль таблиці») */
+  deleted_reason: string | null }
 export async function fetchBankManual(account: number, from: string, to: string): Promise<BankManualRow[]> {
   const { data } = await api.get<{ rows: BankManualRow[] }>("/bank/manual", { params: { account, from, to } });
   return data.rows;
 }
-export async function addBankManual(body: { accountId: number; kind: "op" | "week"; date: string; direction?: "in" | "out"; amount?: string; inAmount?: string; outAmount?: string; purpose?: string;
-  currency?: "UAH" | "USD" | "EUR"; itemId?: number | null }) {
-  return (await api.post<{ ids: number[]; monday: string }>("/bank/manual", body)).data;
+export interface SafeSyncStatus {
+  configured: boolean; lastOkAt: string | null; lastTryAt: string | null; lastError: string | null; lastErrorAt: string | null;
+  result: { seen: number; inserted: number; vanished: number; restored: number; updated: number; live: number } | null;
+  sheetBalances: Record<string, number> | null;
+  dashBalances: { currency: string; amount: number; asOf: string | null }[];
+  mismatch: { currency: string; sheet: number; dashboard: number }[];
 }
-export async function deleteBankManual(id: number) { await api.delete(`/bank/manual/${id}`); }
-export async function restoreBankManual(id: number) { await api.post(`/bank/manual/${id}/restore`, {}); }
+export const fetchSafeStatus = async () => (await api.get<SafeSyncStatus>("/bank/safe/status")).data;
+export const syncSafeNow = async () => (await api.post<{ ok: boolean; error?: string }>("/bank/safe/sync", {})).data;
 export async function fetchBankCashflow(months = 12): Promise<CashflowMonth[]> {
   const { data } = await api.get<{ cashflow: CashflowMonth[] }>("/bank/cashflow", { params: { months } });
   return data.cashflow;

@@ -1,13 +1,17 @@
 import { Router } from "express";
 import { pool } from "../db/pool.js";
-import { requireAuth, requirePerm, requireAnyPerm } from "../auth/middleware.js";
+import { requireAuth, requirePerm } from "../auth/middleware.js";
 import { roleHasPerm } from "../auth/rbac.js";
 import { writeAudit } from "../db/audit.js";
 import { feedPage, periodSummary, getHiddenPayees, type BankFilter } from "../core/bankReport.js";
 import { toUah, getRate } from "../bankSources/fx.js";
 import { statementData } from "../core/bankStatement.js";
 import { statementFile } from "../core/bankStatementCsv.js";
-import { addManual, setManualDeleted, listManual, manualBalances } from "../core/bankManual.js";
+import { listManual, manualBalances } from "../core/bankManual.js";
+import { safeSyncStatus } from "../core/safeSync.js";
+import { kommoLeadUrl } from "../core/kommoLinks.js";
+import { runSafeSyncNow } from "../jobs/syncSafe.js";
+import { sheetsConfigured } from "../bankSources/googleSheets.js";
 import { FinError, type Db } from "../core/finance.js";
 import { tokenFor } from "../bankSources/token.js";
 import { validateNewAccount, buildAccountUpdate } from "../core/bankAccounts.js";
@@ -200,8 +204,7 @@ bankRouter.get("/accounts", async (req, res) => {
   const canManage = roleHasPerm(req.auth!.roleKey, "manage_bank_accounts");
   const canSeeFinance = canManage || roleHasPerm(req.auth!.roleKey, "view_balances");
   // Рахунки «лише фінанси» (особисті картки власника ФОП, Сейф) — лише тим, хто бачить їхні операції, і керуючим.
-  // Рахунок Сейфу потрібен і тому, хто лише вносить (`enter_safe`): без id рахунку запис не зробити.
-  const canSeePrivate = canManage || roleHasPerm(req.auth!.roleKey, "view_private_finance") || roleHasPerm(req.auth!.roleKey, "enter_safe");
+  const canSeePrivate = canManage || roleHasPerm(req.auth!.roleKey, "view_private_finance");
   const r = await pool.query(
     `SELECT id, company, bank, label, currency, external_account_id, is_active,
             legal_name, edrpou_ipn, vat_ipn, iban, key_card, bank_name, mfo, bank_edrpou,
@@ -292,8 +295,7 @@ bankRouter.delete("/hidden-payees/:id", requirePerm("manage_bank_hidden"), async
 });
 
 // ── 💰 Ручний рахунок «Сейф» (прохід 2г фінансів, 05.10.2026) ────────────────────────────────────────
-// Перегляд — право `view_private_finance` (Таня 08.10.2026: «сейф — лише адмін та я»); запис — воно ж або `enter_safe`
-// («Сергію лише вносити»): той, хто лише вносить, не бачить списку й скасовує тільки свій запис.
+// Перегляд — право `view_private_finance` (Таня 08.10.2026: «сейф — лише адмін та я»). Запису з дашборду немає — див. нижче.
 // Правила — у ядрі `core/bankManual.ts`; роут лише кличе в одній транзакції.
 async function manualTx<T>(fn: (db: Db) => Promise<T>): Promise<T> {
   const c = await pool.connect();
@@ -305,30 +307,18 @@ const manualFail = (res: import("express").Response, e: unknown) => {
   throw e;
 };
 bankRouter.get("/manual", requirePerm("view_private_finance"), async (req, res) => {
-  try { res.json(await listManual(pool as unknown as Db, req.query.account, String(req.query.from ?? ""), String(req.query.to ?? ""))); }
+  // Номер угоди з таблиці («Кому (ID)») — посиланням у Kommo, тим самим способом, що решта дашборду.
+  try { res.json(await listManual(pool as unknown as Db, req.query.account, String(req.query.from ?? ""), String(req.query.to ?? ""), kommoLeadUrl)); }
   catch (e) { manualFail(res, e); }
 });
-bankRouter.post("/manual", requireAnyPerm("view_private_finance", "enter_safe"), async (req, res) => {
-  try {
-    // Курс НБУ на дату запису (валюта Сейфу); у гривні — 1.
-    const out = await manualTx((db) => addManual(db, req.auth!.userId, req.body, (ccy, day) => getRate(ccy, new Date(`${day}T12:00:00Z`))));
-    await writeAudit({ ...audit(req), action: "bank.manual.add", targetType: "bank_account", targetId: String(req.body?.accountId),
-      targetLabel: null, details: { kind: req.body?.kind, date: req.body?.date, ids: out.ids } });
-    res.status(201).json(out);
-  } catch (e) { manualFail(res, e); }
+// 🔄 Сейф — ДЗЕРКАЛО Google-таблиці (Роман 12.10.2026: «Сергій більше не вносить у дашборд, тільки в таблицю»).
+// Писати в Сейф із дашборду не можна: маршрути запису прибрано, щоб не було другого джерела тих самих грошей.
+// Стан синку («дані станом на …», остання помилка) і «Оновити зараз» — лише `view_private_finance`.
+bankRouter.get("/safe/status", requirePerm("view_private_finance"), async (_req, res) => {
+  res.json(await safeSyncStatus(pool as unknown as Db, sheetsConfigured()));
 });
-const ownOnly = (req: import("express").Request) => !roleHasPerm(req.auth!.roleKey, "view_private_finance");
-bankRouter.delete("/manual/:id", requireAnyPerm("view_private_finance", "enter_safe"), async (req, res) => {
-  try {
-    await manualTx((db) => setManualDeleted(db, req.auth!.userId, req.params.id, true, ownOnly(req)));
-    await writeAudit({ ...audit(req), action: "bank.manual.delete", targetType: "bank_account", targetId: String(req.params.id), targetLabel: "ручний запис (id операції)", details: {} });
-    res.json({ ok: true, undo: { id: Number(req.params.id) } });
-  } catch (e) { manualFail(res, e); }
-});
-bankRouter.post("/manual/:id/restore", requireAnyPerm("view_private_finance", "enter_safe"), async (req, res) => {
-  try {
-    await manualTx((db) => setManualDeleted(db, req.auth!.userId, req.params.id, false, ownOnly(req)));
-    await writeAudit({ ...audit(req), action: "bank.manual.restore", targetType: "bank_account", targetId: String(req.params.id), targetLabel: "ручний запис (id операції)", details: {} });
-    res.json({ ok: true });
-  } catch (e) { manualFail(res, e); }
+bankRouter.post("/safe/sync", requirePerm("view_private_finance"), async (req, res) => {
+  const out = await runSafeSyncNow();
+  await writeAudit({ ...audit(req), action: "bank.safe.sync", targetType: "bank_account", targetId: "safe", targetLabel: "Сейф ← таблиця", details: out });
+  res.status(out.ok ? 200 : out.busy ? 409 : 502).json(out);
 });

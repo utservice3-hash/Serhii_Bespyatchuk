@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchBankAccounts, downloadBankStatement, fetchBankIncoming, fetchBankOutgoing, saveBankAccount, fetchBankBalances, fetchBankRequisites, fetchBankCashflow,
   fetchBankHiddenPayees, addBankHiddenPayee, deleteBankHiddenPayee,
-  fetchBankManual, addBankManual, deleteBankManual, restoreBankManual, fetchFinMonth, type BankManualRow,
+  fetchBankManual, fetchSafeStatus, syncSafeNow, type BankManualRow, type SafeSyncStatus,
   type BankAccount, type BankSummary, type BankTx, type BankHiddenPayee, type BankBalance, type BankRequisite, type CashflowMonth,
 } from "../../../api";
 import { getAuthPayload } from "../../../auth";
@@ -90,10 +90,9 @@ export default function BankSection() {
   const canViewTotals = perms.includes("view_bank_totals"); // косметика; сервер гейтить summary
   const canViewCashflow = perms.includes("view_cashflow");
   const canExportStatement = perms.includes("export_bank_statement"); // косметика; сервер гейтить роут
-  // Сейф (Таня 08.10.2026): бачить і вносить — `view_private_finance` (Адмін, фінансист); лише вносить — `enter_safe`
-  // (операційний директор). Косметика; сервер гейтить роути.
+  // Сейф (Таня 08.10.2026): бачить лише `view_private_finance` (Адмін, фінансист); вносять у Google-таблицю (12.10.2026).
+  // Косметика; сервер гейтить роути.
   const canViewPrivate = perms.includes("view_private_finance");
-  const canEnterSafe = canViewPrivate || perms.includes("enter_safe");
   const [exportOpen, setExportOpen] = useState(false);
   const [safeOpen, setSafeOpen] = useState(false);
   const [balancesOpen, setBalancesOpen] = useState(false);
@@ -227,7 +226,7 @@ export default function BankSection() {
           {canExportStatement && (
             <button onClick={() => setExportOpen(true)} style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>⬇️ Виписка CSV</button>
           )}
-          {canEnterSafe && active.some((a) => a.bank === "manual") && (
+          {canViewPrivate && active.some((a) => a.bank === "manual") && (
             <button onClick={() => setSafeOpen(true)} style={{ padding: "8px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>🗄 Сейф</button>
           )}
           {canViewCashflow && (
@@ -246,7 +245,7 @@ export default function BankSection() {
       {exportOpen && canExportStatement && <StatementExportModal onClose={() => setExportOpen(false)} accounts={accounts} from={range.from} to={range.to} canSeeHidden={canSeeHidden} />}
       {cashflowOpen && canViewCashflow && <CashflowModal onClose={() => setCashflowOpen(false)} onPickMonth={(ym) => { setRangeMonth(ym); setCashflowOpen(false); }} />}
       {requisitesOpen && <RequisitesModal onClose={() => setRequisitesOpen(false)} />}
-      {safeOpen && canEnterSafe && <SafeModal accounts={active.filter((a) => a.bank === "manual")} canEdit={canEnterSafe} viewList={canViewPrivate} onClose={() => setSafeOpen(false)} onChanged={loadFirst} />}
+      {safeOpen && canViewPrivate && <SafeModal accounts={active.filter((a) => a.bank === "manual")} onClose={() => { setSafeOpen(false); loadFirst(); }} />}
 
       {/* Стрип підсумків — ЛИШЕ якщо сервер віддав summary (право view_bank_totals). Немає → картки нема. */}
       {summary && (
@@ -746,100 +745,74 @@ function Stat({ label, value, hint, big }: { label: string; value: string; hint:
 
 // ─────────────────────────── 🗄 Сейф — ручний рахунок (прохід 2г фінансів) ───────────────────────────
 // Записи — по операції АБО підсумком тижня; тиждень змішати не можна (сервер відмовить 409 і скаже чому).
-function SafeModal({ accounts, canEdit, viewList, onClose, onChanged }: { accounts: BankAccount[]; canEdit: boolean; viewList: boolean; onClose: () => void; onChanged: () => void }) {
-  const toast = useToast();
+function SafeModal({ accounts, onClose }: { accounts: BankAccount[]; onClose: () => void }) {
   const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+  const toast = useToast();
   const [acc, setAcc] = useState<number>(accounts[0]?.id ?? 0);
   const [month, setMonth] = useState(today.slice(0, 7));
   const [rows, setRows] = useState<BankManualRow[] | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [kind, setKind] = useState<"op" | "week">("op");
-  const [f, setF] = useState({ date: today, direction: "in" as "in" | "out", amount: "", inAmount: "", outAmount: "", purpose: "",
-    currency: "UAH" as "UAH" | "USD" | "EUR", itemId: "" });
-  // Категорія — стаття «План/факт» (ті самі, що обирає Сергій); список — зі статей поточного місяця.
-  const [items, setItems] = useState<{ id: number; label: string }[]>([]);
-  useEffect(() => {
-    fetchFinMonth(`${today.slice(0, 7)}-01`).then((m) => setItems(m.tree.flatMap((r) => r.groups.flatMap((g) => g.items.filter((i) => i.active)
-      .map((i) => ({ id: i.id, label: `${g.name} · ${i.name}` })))))).catch(() => setItems([]));
-  }, [today]);
+  const [status, setStatus] = useState<SafeSyncStatus | null>(null);
+  const [dir, setDir] = useState<"" | "in" | "out">("");
+  const [cat, setCat] = useState("");
+  const [syncing, setSyncing] = useState(false);
   const [y, m] = month.split("-").map(Number);
   const from = `${month}-01`, to = `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
-  // Хто лише вносить, списку не бачить — і не питає його (сервер однаково відповів би 403).
-  const load = useCallback(() => { if (acc && viewList) fetchBankManual(acc, from, to).then(setRows).catch((e) => { setRows([]); setMsg(err(e)); }); }, [acc, from, to, viewList]);
+  const load = useCallback(() => {
+    if (acc) fetchBankManual(acc, from, to).then(setRows).catch((e) => { setRows([]); toast(`Не завантажено: ${err(e)}`, { error: true }); });
+    fetchSafeStatus().then(setStatus).catch(() => setStatus(null));
+  }, [acc, from, to, toast]);
   useEffect(() => { load(); }, [load]);
-  const done = (text: string) => { setMsg(text); load(); onChanged(); };
-  const add = async () => {
+  const refresh = async () => {
+    setSyncing(true);
     try {
-      const common = { accountId: acc, kind, date: f.date, purpose: f.purpose, currency: f.currency, itemId: f.itemId ? Number(f.itemId) : null };
-      const out = await addBankManual(kind === "op" ? { ...common, direction: f.direction, amount: f.amount } : { ...common, inAmount: f.inAmount, outAmount: f.outAmount });
-      setF((x) => ({ ...x, amount: "", inAmount: "", outAmount: "", purpose: "" }));
-      // Підтвердження — спільним повідомленням; «Скасувати» прибирає щойно внесене (свій запис можна й без перегляду).
-      toast("Внесено в Сейф", { tone: "ok", action: { label: "Скасувати", run: () => {
-        Promise.all(out.ids.map((id) => deleteBankManual(id))).then(() => { toast("Запис скасовано", { tone: "ok" }); load(); onChanged(); })
-          .catch((e) => toast(`Не скасовано: ${err(e)}`, { error: true }));
-      } } });
-      setMsg(null); load(); onChanged();
-    } catch (e) { toast(`Не внесено: ${err(e)}`, { error: true }); }
+      const out = await syncSafeNow();
+      if (out.ok) toast("Сейф оновлено з таблиці", { tone: "ok" }); else toast(`Не оновлено: ${out.error ?? "помилка"}`, { error: true });
+    } catch (e) { toast(`Не оновлено: ${err(e)}`, { error: true }); }
+    finally { setSyncing(false); load(); }
   };
-  const del = async (r: BankManualRow) => { try { await deleteBankManual(r.id); setLastDeleted(r.id); done("Видалено"); } catch (e) { setMsg(err(e)); } };
-  const [lastDeleted, setLastDeleted] = useState<number | null>(null);
-  const undo = async (id: number) => { try { await restoreBankManual(id); setLastDeleted(null); done("Повернуто"); } catch (e) { setMsg(err(e)); } };
-  const live = (rows ?? []).filter((r) => !r.deleted);
+  const hhmm = (iso: string | null) => (iso ? new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
+  const failing = !!(status?.lastErrorAt && (!status.lastOkAt || status.lastErrorAt > status.lastOkAt));
+  const cats = useMemo(() => [...new Set((rows ?? []).map((r) => r.item ?? "без категорії"))].sort((a, b) => a.localeCompare(b, "uk")), [rows]);
+  const shown = (rows ?? []).filter((r) => (!dir || r.direction === dir) && (!cat || (r.item ?? "без категорії") === cat));
+  const live = shown.filter((r) => !r.deleted);
   const sum = (d: "in" | "out") => live.filter((r) => r.direction === d).reduce((a, r) => a + Math.abs(r.amount_uah), 0);
   const days = useMemo(() => {
-    const m = new Map<string, BankManualRow[]>();
-    for (const r of rows ?? []) m.set(r.day, [...(m.get(r.day) ?? []), r]);
-    return [...m.entries()];
-  }, [rows]);
-  const net = sum("in") - sum("out");
+    const mm = new Map<string, BankManualRow[]>();
+    for (const r of shown) mm.set(r.day, [...(mm.get(r.day) ?? []), r]);
+    return [...mm.entries()];
+  }, [shown]);
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 1000, padding: "40px 16px", overflowY: "auto" }}>
       <div onClick={(e) => e.stopPropagation()} className="chart-card" style={{ maxWidth: 900, width: "100%", position: "relative" }}>
         <button onClick={onClose} title="Закрити" style={{ position: "absolute", top: 10, right: 10, border: "1px solid var(--border)", background: "var(--card-bg)", borderRadius: 8, width: 34, height: 34, cursor: "pointer", fontSize: 18, color: MUTED }}>✕</button>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", paddingRight: 44 }}>
-          <h2 className="chart-title" style={{ marginBottom: 0 }}>🗄 Сейф · ручні записи</h2>
-          <span style={{ fontSize: 11.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: "rgba(217,119,6,0.14)", color: "#b45309", whiteSpace: "nowrap" }}>🔒 лише фінанси</span>
+          <h2 className="chart-title" style={{ marginBottom: 0 }}>🗄 Сейф</h2>
+          <span style={{ fontSize: 11.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: "rgba(217,119,6,0.14)", color: "#b45309", whiteSpace: "nowrap" }}>🔒 лише Адмін і фінансист</span>
         </div>
-        <p style={{ color: MUTED, fontSize: 12.5, margin: "6px 0 14px" }}>Вносьте <b>або кожну операцію, або підсумок тижня</b> — не обидва в одному тижні (інакше тиждень порахується двічі). Записи йдуть у «Виписку», кешфлоу і «Фінанси → Тиждень і місяць». Бачать лише Адмін і фінансист; операційний директор лише вносить; решта Сейфу не бачить.</p>
+        <p style={{ color: MUTED, fontSize: 12.5, margin: "6px 0 10px" }}>Дзеркало таблиці «Сейф» (Google Sheets): вносять рухи <b>у таблицю</b>, дашборд підтягує їх сам кожні 30 хвилин. Тут лише перегляд. Записи йдуть у «Виписку», кешфлоу і «Фінанси → Тиждень і місяць».</p>
 
-        {viewList && <>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
-          {accounts.length > 1 && <select aria-label="Рахунок" value={acc} onChange={(e) => setAcc(Number(e.target.value))} style={inp}>{accounts.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select>}
-          <label style={{ fontSize: 13, color: MUTED, display: "inline-flex", alignItems: "center", gap: 8 }}>Місяць <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={inp} /></label>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12.5, marginBottom: 10 }}>
+          <span>Дані станом на <b>{hhmm(status?.lastOkAt ?? null)}</b></span>
+          <button onClick={() => void refresh()} disabled={syncing} style={{ padding: "5px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "#2f6fdb", fontWeight: 700, cursor: syncing ? "default" : "pointer", fontSize: 12.5 }}>{syncing ? "Оновлюю…" : "↻ Оновити зараз"}</button>
         </div>
+        {status && !status.configured && <div style={{ fontSize: 12.5, color: "#b45309", background: "rgba(217,119,6,0.1)", borderRadius: 8, padding: "8px 12px", marginBottom: 10 }}>Синк із таблицею на сервері не налаштовано — показано останні збережені дані.</div>}
+        {failing && <div style={{ fontSize: 12.5, color: "#b45309", background: "rgba(217,119,6,0.1)", borderRadius: 8, padding: "8px 12px", marginBottom: 10 }}>⚠ Таблицю не вдалося прочитати {hhmm(status!.lastErrorAt)}: {status!.lastError}. Показано дані станом на {hhmm(status!.lastOkAt)}.</div>}
+        {!!status?.mismatch.length && <div style={{ fontSize: 12.5, color: "#dc2626", background: "rgba(220,38,38,0.08)", borderRadius: 8, padding: "8px 12px", marginBottom: 10 }}>Залишок не збігається з шапкою таблиці: {status.mismatch.map((x) => `${x.currency} — у таблиці ${fmtMoney(x.sheet)}, у дашборді ${fmtMoney(x.dashboard)}`).join("; ")}.</div>}
+
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 14 }}>
+          {(status?.dashBalances ?? []).map((b) => <SafeTile key={b.currency} label={`залишок · ${b.currency}`} value={`${b.amount < 0 ? "−" : ""}${fmtMoney(Math.abs(b.amount))} ${b.currency === "UAH" ? "₴" : b.currency}`} color={b.amount < 0 ? "#dc2626" : "var(--text)"} hint={b.asOf ? `початковий залишок на ${b.asOf.slice(8, 10)}.${b.asOf.slice(5, 7)} + усі рухи після` : "сума всіх рухів"} />)}
           <SafeTile label="прийшло за місяць" value={`+${fmtUah(sum("in"))}`} color="#16a34a" />
           <SafeTile label="пішло за місяць" value={`−${fmtUah(sum("out"))}`} color="#dc2626" />
-          <SafeTile label="сальдо" value={`${net < 0 ? "−" : net > 0 ? "+" : ""}${fmtUah(net)}`} color={net < 0 ? "#dc2626" : "var(--text)"} />
-          <SafeTile label="записів" value={String(live.length)} hint="валюта — у гривні за курсом НБУ на дату" />
         </div>
-        </>}
 
-        {canEdit && <div style={{ padding: "12px 14px", border: "1px solid var(--border)", borderRadius: 12, marginBottom: 12, background: "var(--hover-bg)" }}>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
-            <SafeField label="Вид"><select aria-label="Вид запису" value={kind} onChange={(e) => setKind(e.target.value as "op" | "week")} style={inp}><option value="op">операція</option><option value="week">підсумок тижня</option></select></SafeField>
-            <SafeField label={kind === "op" ? "Дата" : "Будь-який день тижня"}><input aria-label={kind === "op" ? "Дата операції" : "Будь-який день тижня"} type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} style={inp} /></SafeField>
-            {kind === "op" ? <>
-              <SafeField label="Напрямок"><select aria-label="Напрямок" value={f.direction} onChange={(e) => setF({ ...f, direction: e.target.value as "in" | "out" })} style={inp}><option value="in">прийшло</option><option value="out">пішло</option></select></SafeField>
-              <SafeField label="Сума"><input aria-label="Сума" inputMode="decimal" placeholder="0" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} style={{ ...inp, width: 130 }} /></SafeField>
-            </> : <>
-              <SafeField label="Прийшло за тиждень"><input aria-label="Прийшло за тиждень" inputMode="decimal" placeholder="0" value={f.inAmount} onChange={(e) => setF({ ...f, inAmount: e.target.value })} style={{ ...inp, width: 130 }} /></SafeField>
-              <SafeField label="Пішло за тиждень"><input aria-label="Пішло за тиждень" inputMode="decimal" placeholder="0" value={f.outAmount} onChange={(e) => setF({ ...f, outAmount: e.target.value })} style={{ ...inp, width: 130 }} /></SafeField>
-            </>}
-            <SafeField label="Валюта"><select aria-label="Валюта" value={f.currency} onChange={(e) => setF({ ...f, currency: e.target.value as "UAH" | "USD" | "EUR" })} style={inp}>
-              <option value="UAH">₴ UAH</option><option value="USD">$ USD</option><option value="EUR">€ EUR</option></select></SafeField>
-          </div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginTop: 10 }}>
-            <SafeField label="Категорія (стаття «План/факт»)" grow={1}><select aria-label="Категорія" value={f.itemId} onChange={(e) => setF({ ...f, itemId: e.target.value })} style={{ ...inp, width: "100%" }}>
-              <option value="">без категорії</option>{items.map((i) => <option key={i.id} value={i.id}>{i.label}</option>)}</select></SafeField>
-            <SafeField label="Призначення" grow={2}><input aria-label="Призначення" placeholder="необовʼязково" value={f.purpose} onChange={(e) => setF({ ...f, purpose: e.target.value })} style={{ ...inp, width: "100%", boxSizing: "border-box" }} /></SafeField>
-            <button onClick={() => void add()} style={{ padding: "8px 18px", borderRadius: 10, border: "none", background: RED, color: "#fff", fontWeight: 700, cursor: "pointer", height: 34 }}>Внести</button>
-          </div>
-        </div>}
-        {msg && <p style={{ fontSize: 13, margin: "0 0 8px" }}>{msg}{lastDeleted != null && <> · <button onClick={() => void undo(lastDeleted)} style={{ border: "none", background: "none", color: "#2f6fdb", cursor: "pointer", fontWeight: 700 }}>Повернути</button></>}</p>}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+          {accounts.length > 1 && <select aria-label="Рахунок" value={acc} onChange={(e) => setAcc(Number(e.target.value))} style={inp}>{accounts.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select>}
+          <label style={{ fontSize: 13, color: MUTED, display: "inline-flex", alignItems: "center", gap: 8 }}>Місяць <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={inp} /></label>
+          <select aria-label="Прихід чи розхід" value={dir} onChange={(e) => setDir(e.target.value as "" | "in" | "out")} style={inp}><option value="">прихід і розхід</option><option value="in">лише прихід</option><option value="out">лише розхід</option></select>
+          <select aria-label="Категорія" value={cat} onChange={(e) => setCat(e.target.value)} style={inp}><option value="">усі категорії</option>{cats.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+        </div>
 
-        {!viewList ? <p style={{ fontSize: 12.5, color: MUTED, margin: 0 }}>Ви можете вносити записи; список і залишок Сейфу бачать лише Адмін і фінансист. Помилковий запис скасовується кнопкою «Скасувати» у повідомленні одразу після внесення.</p>
-          : rows == null ? <p className="loading-text">Завантаження…</p> : rows.length === 0 ? <p className="loading-text">За цей місяць записів немає.</p> : days.map(([day, list]) => {
+        {rows == null ? <p className="loading-text">Завантаження…</p> : shown.length === 0 ? <p className="loading-text">За цей місяць записів немає.</p> : days.map(([day, list]) => {
           const alive = list.filter((r) => !r.deleted);
           const dIn = alive.filter((r) => r.direction === "in").reduce((a, r) => a + Math.abs(r.amount_uah), 0);
           const dOut = alive.filter((r) => r.direction === "out").reduce((a, r) => a + Math.abs(r.amount_uah), 0);
@@ -849,7 +822,7 @@ function SafeModal({ accounts, canEdit, viewList, onClose, onChanged }: { accoun
                 <b>{safeDayLabel(day)}</b>
                 <span style={{ color: MUTED, whiteSpace: "nowrap" }}>{dIn > 0 && <span style={{ color: "#16a34a", fontWeight: 700 }}>+{fmtUah(dIn)}</span>}{dIn > 0 && dOut > 0 && " · "}{dOut > 0 && <span style={{ color: "#dc2626", fontWeight: 700 }}>−{fmtUah(dOut)}</span>}</span>
               </div>
-              {list.map((r) => <SafeRow key={r.id} r={r} canEdit={canEdit} onDelete={() => void del(r)} onUndo={() => void undo(r.id)} />)}
+              {list.map((r) => <SafeRow key={r.id} r={r} />)}
             </div>
           );
         })}
@@ -871,16 +844,9 @@ function SafeTile({ label, value, color, hint }: { label: string; value: string;
     </div>
   );
 }
-function SafeField({ label, grow, children }: { label: string; grow?: number; children: React.ReactNode }) {
-  return (
-    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11.5, color: MUTED, fontWeight: 600, flex: grow ? `${grow} 1 200px` : undefined, minWidth: 0 }}>
-      {label}{children}
-    </label>
-  );
-}
 // Запис Сейфу — у тому ж двоповерховому вигляді, що й рядок «Виписки» (`TxRow`): згори категорія + сума, знизу
 // призначення й хто вніс. Невідоме — словами: «без категорії», «з таблиці Сейфу» (перенесене 05.10.2026), «невідомо хто».
-function SafeRow({ r, canEdit, onDelete, onUndo }: { r: BankManualRow; canEdit: boolean; onDelete: () => void; onUndo: () => void }) {
+function SafeRow({ r }: { r: BankManualRow }) {
   const inDir = r.direction === "in";
   const sign = inDir ? "+" : "−";
   const isUah = r.currency === "UAH";
@@ -892,7 +858,9 @@ function SafeRow({ r, canEdit, onDelete, onUndo }: { r: BankManualRow; canEdit: 
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
           <span style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: title ? "var(--text)" : MUTED, fontStyle: title ? undefined : "italic" }}>
-            {title ?? "без категорії"}{r.deleted && <span style={{ fontWeight: 400, fontStyle: "normal", fontSize: 12, color: MUTED }}> · видалено</span>}
+            {title ?? "без категорії"}
+            {r.fin_checked === true && <span title="у таблиці позначено «Фінансист»" style={{ marginLeft: 8, fontStyle: "normal", fontSize: 11, fontWeight: 700, padding: "1px 7px", borderRadius: 999, background: "rgba(22,163,74,0.14)", color: "#16a34a" }}>✓ фінансист</span>}
+            {r.deleted && <span style={{ fontWeight: 400, fontStyle: "normal", fontSize: 12, color: MUTED }}> · {r.deleted_reason ?? "видалено"}</span>}
           </span>
           <div style={{ flexShrink: 0, textAlign: "right" }}>
             <div style={{ fontWeight: 800, fontSize: 14.5, color: inDir ? "#16a34a" : "#dc2626", whiteSpace: "nowrap", textDecoration: r.deleted ? "line-through" : undefined }}>{sign}{fmtMoney(Math.abs(r.amount), !isUah)} {isUah ? "₴" : r.currency}</div>
@@ -901,12 +869,12 @@ function SafeRow({ r, canEdit, onDelete, onUndo }: { r: BankManualRow; canEdit: 
         </div>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 3, minWidth: 0, fontSize: 12.5, color: MUTED }}>
           <span title={purpose ?? ""} style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{purpose ?? "без призначення"}</span>
+          {r.deal_ref && (r.deal_url
+            ? <a href={r.deal_url} target="_blank" rel="noreferrer" style={{ flexShrink: 0, fontSize: 11.5, color: "#2f6fdb", whiteSpace: "nowrap" }}>угода {r.deal_ref}</a>
+            : <span style={{ flexShrink: 0, fontSize: 11.5, whiteSpace: "nowrap" }}>кому: {r.deal_ref}</span>)}
           <span style={{ flexShrink: 0, fontSize: 11.5, whiteSpace: "nowrap" }}>{who}</span>
         </div>
       </div>
-      <div style={{ minWidth: 34, flexShrink: 0, textAlign: "right" }}>{canEdit && (r.deleted
-        ? <button onClick={onUndo} style={{ border: "none", background: "none", color: "#2f6fdb", cursor: "pointer", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", padding: "0 2px" }}>Повернути</button>
-        : <button aria-label={`Видалити запис ${r.day}`} title="Видалити" onClick={onDelete} style={{ border: "none", background: "none", color: RED, cursor: "pointer", fontSize: 15 }}>🗑</button>)}</div>
     </div>
   );
 }

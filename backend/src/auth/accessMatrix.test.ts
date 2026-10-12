@@ -45,11 +45,9 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/surveys/:id/reopen": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
   "POST /api/surveys/:id/remind": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
   "DELETE /api/surveys/templates/:id": "manage_surveys — kvp/financier його не мають (рішення Романа 30.09.2026)",
-  // 🗄 Сейф (08.10.2026, Таня й Роман): вносити — `view_private_finance` (Адмін, фінансист) або `enter_safe` (ОД);
-  // СЕО й КВП адмін-рівня жодного з них не мають → 403 по ПРАВУ.
-  "POST /api/bank/manual": "view_private_finance / enter_safe — СЕО й КВП їх не мають (Таня: «сейф — лише адмін та я», 08.10.2026)",
-  "POST /api/bank/manual/:id/restore": "view_private_finance / enter_safe — те саме",
-  "DELETE /api/bank/manual/:id": "view_private_finance / enter_safe — те саме",
+  // 🗄 Сейф (Таня 08.10.2026: «сейф — лише адмін та я»): «Оновити зараз» — `view_private_finance` (Адмін, фінансист);
+  // СЕО, ОД і КВП адмін-рівня його не мають → 403 по ПРАВУ.
+  "POST /api/bank/safe/sync": "view_private_finance — СЕО, ОД і КВП його не мають (Таня: «сейф — лише адмін та я», 08.10.2026)",
   "POST /api/finance/approval": "погодження плану — поіменний список fin_plan_approvers (06.10.2026), роль його не дає: kvp і фінансист розділ бачать, а погодити план не можуть",
   "PUT /api/one-on-ones/forms/:type": "edit_1x1_forms — СЕО/ОД, HR і КВП (рішення власника 27.08.2026); admin його не має",
   "POST /api/settings/roles": "manage_users — kvp/financier його не мають (рішення власника)",

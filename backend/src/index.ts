@@ -69,6 +69,7 @@ import { seedOneOnOneForms } from "./oneOnOne/catalog.js";
 import { bankRouter } from "./routes/bank.js";
 import { trackerRouter } from "./routes/tracker.js";
 import { syncBank } from "./jobs/syncBank.js";
+import { syncSafe } from "./jobs/syncSafe.js";
 import { kommoCircuitState } from "./kommo/client.js";
 import { checkFreshness, checkAbandonedStages } from "./core/reconcile.js";
 import { isKommoPaused } from "./kommo/pause.js";
@@ -557,6 +558,12 @@ void runJob("syncAdBudget", () => syncAdBudget());
  */
 cron.schedule("0 6 * * *", () => {
   void runJob("syncGa4Ads", () => syncGa4Ads());
+}, { timezone: "Europe/Kyiv" });
+
+// 🗄 Сейф — дзеркало Google-таблиці (12.10.2026): кожні 30 хв о :25 і :55 — не :00/:30, де сходиться більшість
+// розкладів і синк Kommo (правило зони jobs-sync). Нагляд — MONITORED_JOBS (everyMin == крону).
+cron.schedule("25,55 * * * *", () => {
+  void runJob("syncSafe", () => syncSafe());
 }, { timezone: "Europe/Kyiv" });
 
 // Prune stage events older than 24 months daily at 04:30 (bounded storage).
