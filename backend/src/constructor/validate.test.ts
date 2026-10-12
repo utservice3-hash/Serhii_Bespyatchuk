@@ -15,7 +15,7 @@ const base = (): DocumentState => ({
   cp: { name: "ТОВ «Тест Логістик»", edrpou: "39404434", ipn: "394044326590", addr: "м. Київ, вул. Тестова, 1", iban: "UA693052990000026009035008866",
         bank: "АТ КБ «ПриватБанк», МФО 305299", phone: "+380 67 000 00 00", email: "test@example.com", dir: "Тестенко Остап Петрович" },
   trip: { loadDate: "15.01.2026, 08:00", unloadDate: "16.01.2026, 09:00" },
-  pay: { sum: "13 000", cur: "грн", form: "б/г без ПДВ", order: "" },
+  pay: { sum: "13 000", cur: "грн", form: "б/г без ПДВ", order: "по отриманні документів" },
   dealNo: "61575919", docDate: "2026-10-02", mainNo: "", mainDate: "", mainUntil: "", manager: { name: "", phone: "" },
 } as unknown as DocumentState);
 const run = (patch: (s: DocumentState) => void, ctx = {}) => { const s = base(); patch(s); return validateForm(s, { today: "2026-10-02", ...ctx }); };
@@ -79,4 +79,10 @@ test("#1199 ПЕРЕВІРКА ПІДКЛЮЧЕНА: формування бло
   assert.match(ui, /setIssues\(r\.issues \?\? \[\]\)/, "🔴 екран не бере перевірки з прев'ю");
   assert.match(ui, /<IssueSummary issues=\{issues\} \/>/, "🔴 немає підсумку біля «Сформувати»");
   for (const f of ["pay.sum", "dealNo", "docDate"]) assert.ok(ui.includes(`<FieldMsg is={iss("${f}")} />`), `🔴 під полем ${f} немає пояснення`);
+});
+
+test("#1633 ПОРЯДОК ОПЛАТИ: «Інше…» без тексту блокує формування; з текстом — ні", () => {
+  assert.equal(on(run((s) => { s.pay.order = ""; }), "pay.order")?.level, "error", "🔴 порожнє «Інше…» не блокує формування");
+  assert.equal(on(run((s) => { s.pay.order = "50% передоплата, 50% після розвантаження"; }), "pay.order"), undefined, "🔴 власний текст оплати вважається помилкою");
+  assert.deepEqual(run((s) => { s.doc = "main"; s.pay.order = ""; }).filter((i) => i.field === "pay.order"), [], "🔴 основний договір вимагає порядок оплати");
 });

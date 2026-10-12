@@ -370,3 +370,5 @@
 .ctorx .docsm.doc-b p.dcl b.dno{min-width:26px}
 .ctorx .docsm .orig-mini{margin:6px 14px 0;padding:3px 6px;font-size:7px}
 .ctorx .docsm td.v2{font-size:8px}
+/* Міжнародні — лише АвтоМув (задача 5462): інші юрособи при галочці «Міжнародне» недоступні */
+.ctorx .ent:disabled{opacity:.42;cursor:not-allowed;filter:grayscale(.6)}

@@ -127,6 +127,10 @@ export function validateForm(s: DocumentState, ctx: ValidateCtx = {}): Issue[] {
     if (!sumRaw) add('pay.sum', 'error', 'Вкажіть суму — обовʼязкова.');
     else if (!Number.isFinite(sum) || sum <= 0) add('pay.sum', 'error', 'Сума — число більше нуля (напр. 13 000 або 13000,50).');
 
+    if (!(s.pay?.order || '').trim()) add('pay.order', 'error', 'Оберіть порядок оплати або впишіть свій («Інше…»).');
+    // Міжнародні перевезення — ЛИШЕ від ТОВ «АвтоМув» (задача 5462, рішення Сергія 12.10.2026)
+    if (s.intl && s.ent !== 'avm') add('ent', 'error', 'Міжнародні перевезення оформлюються лише від ТОВ «АвтоМув».');
+
     const load = dateOf(s.trip?.loadDate || ''), unload = dateOf(s.trip?.unloadDate || '');
     if (load && unload && unload < load) add('trip.unloadDate', 'warn', 'Дата доставки раніша за дату завантаження.');
   }

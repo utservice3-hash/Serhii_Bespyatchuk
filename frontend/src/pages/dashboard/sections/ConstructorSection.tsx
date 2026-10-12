@@ -73,6 +73,8 @@ const PAY_ORDERS = [
 ];
 const PAY_ORDER_FOP = "оплата за реквізитами, наданими Експедитором";
 const PAY_FORMS = ["б/г з ПДВ", "б/г без ПДВ", "готівка"];
+/** Значення пункту «Інше…» у списку порядку оплати (сам текст менеджера лежить у `pay.order`). */
+const OTHER = "__other__";
 
 type Way = "edr" | "book" | "text" | "file";
 type FileChip = { name: string; st: string };
@@ -174,6 +176,9 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
   const entRow = (k: CtorEntityKey) => entities.find((e) => e.key === k);
   const E = entRow(form.ent);
   const fop = form.ent === "fop";
+  // «Інше…» (задача 5453, 12.10.2026; і для ФОП — Сергій «так, це можна»): текст не з готового списку = власний
+  const orderPresets = fop ? [PAY_ORDER_FOP, ...PAY_ORDERS] : PAY_ORDERS;
+  const orderOther = !orderPresets.includes(form.pay.order);
   const fopConflict = fop && form.party === "client" && !!form.cp.name && !/^ФОП/i.test(form.cp.name);
   const isMain = form.doc === "main";
 
@@ -483,6 +488,7 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
             const e = entRow(k); const ui = ENT_UI[k];
             return (
               <button key={k} className="ent" style={{ "--ec": `var(${ui.c})` } as CSSProperties} aria-pressed={form.ent === k}
+                disabled={form.intl && k !== "avm"} title={form.intl && k !== "avm" ? "Міжнародні перевезення — лише від ТОВ «АвтоМув». Зніміть галочку «Міжнародне перевезення», щоб обрати іншу юрособу." : undefined}
                 onClick={() => setForm((f) => ({ ...f, ent: k, doc: k === "fop" && f.doc === "main" ? "once" : f.doc }))}>
                 <span className="nm">{e?.name ?? ui.fallback}</span>
                 <span className="vat">{e?.vat_label ?? ""}</span>
@@ -648,8 +654,8 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                 <p className="hint">Те, що потрапляє в таблицю заявки. Порожні поля залишаться прочерками — документ сформується, але покаже, чого бракує.</p>
                 <div className="g2">
                   <label className="fld full" style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 12px", border: "1px dashed var(--line)", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>
-                    <input type="checkbox" checked={form.intl} onChange={(e) => set("intl", e.target.checked)} style={{ width: 16, height: 16, accentColor: "var(--ent)" }} />
-                    Міжнародне перевезення <span style={{ color: "var(--muted)" }}>— додає замитнення, кордон і розмитнення</span></label>
+                    <input type="checkbox" checked={form.intl} onChange={(e) => { const on = e.target.checked; setForm((f) => ({ ...f, intl: on, ent: on ? "avm" : f.ent })); }} style={{ width: 16, height: 16, accentColor: "var(--ent)" }} />
+                    Міжнародне перевезення <span style={{ color: "var(--muted)" }}>— додає замитнення, кордон і розмитнення; оформлюється лише від ТОВ «АвтоМув»</span></label>
                   {TRIP.filter(([k]) => form.intl || !INTL_KEYS.includes(k)).map(([k, l, req]) => (
                     <div key={k} className={`fld ${FULL.has(k) ? "full" : ""}`}>
                       <label htmlFor={`t-${k}`}>{k === "otherResp" ? (form.party === "carrier" ? "Відповідальна особа Перевізника, телефон" : "Відповідальна особа Замовника, телефон") : l}
@@ -664,11 +670,13 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                     <FieldMsg is={iss("pay.sum")} />
                     {margin !== null && <span style={{ display: "block", fontSize: 11.5, color: margin >= 0 ? "var(--ok)" : "var(--bad)", fontWeight: 600, marginTop: 3 }}>маржа {margin.toLocaleString("uk-UA")}</span>}</div>
                   <div className="fld"><label htmlFor="paycur">Валюта</label><select id="paycur" value={form.pay.cur} onChange={(e) => setPay("cur", e.target.value)}>
-                    <option>грн</option><option>€ по курсу НБУ на день завантаження</option></select></div>
+                    <option>грн</option><option>€ по курсу НБУ на день завантаження</option><option>€ по курсу НБУ на день розвантаження</option></select></div>
                   <div className="fld"><label htmlFor="payform">Форма</label><select id="payform" value={form.pay.form} disabled={fop} onChange={(e) => setPay("form", e.target.value)}>
                     {(fop ? ["СОФТ платіж"] : PAY_FORMS).map((o) => <option key={o}>{o}</option>)}</select></div>
-                  <div className="fld"><label htmlFor="payorder">Порядок і строки оплати</label><select id="payorder" value={form.pay.order} onChange={(e) => setPay("order", e.target.value)}>
-                    {(fop ? [PAY_ORDER_FOP, ...PAY_ORDERS] : PAY_ORDERS).concat(PAY_ORDERS.includes(form.pay.order) || form.pay.order === PAY_ORDER_FOP || !form.pay.order ? [] : [form.pay.order]).map((o) => <option key={o}>{o}</option>)}</select></div>
+                  <div className="fld"><label htmlFor="payorder">Порядок і строки оплати</label><select id="payorder" value={orderOther ? OTHER : form.pay.order} onChange={(e) => setPay("order", e.target.value === OTHER ? "" : e.target.value)}>
+                    {orderPresets.map((o) => <option key={o}>{o}</option>)}<option value={OTHER}>Інше…</option></select>
+                    {orderOther && <input type="text" value={form.pay.order} onChange={(e) => setPay("order", e.target.value)} placeholder="напр. 50% передоплата, 50% після розвантаження" style={{ marginTop: 6 }} />}
+                    <FieldMsg is={iss("pay.order")} /></div>
                 </div>
                 <div className="g2" style={{ marginTop: 10 }}>
                   <div className="fld full"><label>Відповідальна особа Експедитора <span style={{ color: "var(--ok)", fontWeight: 700 }}>· авто з профілю</span></label>

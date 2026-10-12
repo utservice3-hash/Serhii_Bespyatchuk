@@ -541,3 +541,63 @@ test("#1196 ЕКРАН: IBAN і банк перевізника позначен
   assert.match(src, /optional \? "—" : "!"/, "🔴 зникла позначка «!» для решти порожніх полів");
   assert.doesNotMatch(src, /Без IBAN перевізника заявку не сформувати/, "🔴 на екрані знову заборона без IBAN");
 });
+
+/**
+ * #1630 — ПОРОЖНІ НЕОБОВʼЯЗКОВІ РЯДКИ НЕ ДРУКУЮТЬСЯ (задача 5460, рішення Сергія 12.10.2026: і у внутрішній, і в
+ * міжнародній заявці — «у заявці не критично»). Обовʼязкові лишаються навіть порожніми — з «—». Word і HTML однаково.
+ * 🧨 Червоніє, якщо повернути «—» для порожніх необовʼязкових або сховати порожній обовʼязковий рядок.
+ */
+test("#1630 ТАБЛИЦЯ УМОВ: порожні необовʼязкові рядки прибрано (внутр. і міжнар.), обовʼязкові лишаються з «—»", () => {
+  const a = fakeAssets();
+  try {
+    for (const [name, intl] of [["once-client-uts", false], ["carr-uts", false], ["once-client-avm", true], ["carr-avm", true]] as const) {
+      const base = ref[name].state;
+      const s = { ...base, intl, trip: { ...base.trip, places: "", special: "", shipperC: "", consigneeC: "", reqs: "", truck: "", driver: "", otherResp: "", extra: "", custAddr: "", border: "", decustAddr: "", loadDate: "" } };
+      const html = printHTML(s, s.num, {});
+      const xml = new TextDecoder().decode(unzipStored(buildDocx(s, s.num, loadDocImages(a.dir, s.ent, s.stamp))).get("word/document.xml")!);
+      for (const label of ["Дані водія", "Додаткові умови", "Пункт переходу кордону", "Транспортний засіб: марка"]) {
+        assert.ok(!html.includes(label), `🔴 «${name}»: порожній необовʼязковий рядок «${label}» надруковано в PDF`);
+        assert.ok(!xml.includes(label), `🔴 «${name}»: порожній необовʼязковий рядок «${label}» надруковано у Word`);
+      }
+      assert.match(html, /Дата, час навантаження<\/td><td class="v2">—</, `🔴 «${name}»: порожній ОБОВʼЯЗКОВИЙ рядок зник`);
+      assert.ok(html.includes("Маршрут перевезення") && html.includes("Нормативний простій"), `🔴 «${name}»: зникли обовʼязкові рядки`);
+    }
+    const filled = printHTML(ref["once-client-uts"].state, "1", {});
+    assert.ok(filled.includes("Дані водія"), "🔴 заповнений необовʼязковий рядок зник разом із порожніми");
+  } finally { a.dispose(); }
+});
+
+/**
+ * #1631 — ВАЛЮТА «на день розвантаження», «ІНШЕ…» В ОПЛАТІ, ПРОСТІЙ АВТОМУВ 24 ГОД (задачі 5452, 5453, fb105; 12.10.2026).
+ * Власний текст оплати друкується дослівно; простій АвтоМув — 24 год і в коді, і в сиді юросіб (схема).
+ */
+test("#1631 ОПЛАТА: € на день розвантаження і власний текст друкуються дослівно; простій АвтоМув — 24 год", () => {
+  const base = ref["once-client-avm"].state;
+  const s = { ...base, pay: { ...base.pay, sum: "1 200", cur: "€ по курсу НБУ на день розвантаження", order: "50% передоплата, 50% після розвантаження" } };
+  const html = printHTML(s, s.num, {});
+  assert.ok(html.includes("1 200 € по курсу НБУ на день розвантаження"), "🔴 нова валюта не друкується в ціні");
+  assert.ok(html.includes("50% передоплата, 50% після розвантаження"), "🔴 власний текст оплати не надруковано");
+  assert.match(html, /Нормативний простій<\/td><td class="v2">24 години/, "🔴 простій АвтоМув не 24 год");
+  assert.match(SRC("db/schema.sql"), /\('avm', 'AVM'[^\n]*'24 години на завантаження\/розвантаження \(внутрішні\)/, "🔴 у сиді юросіб простій АвтоМув лишився 4 год");
+  const ui = readFileSync(path.join(REPO, "frontend", "src", "pages", "dashboard", "sections", "ConstructorSection.tsx"), "utf8");
+  assert.ok(ui.includes("<option>€ по курсу НБУ на день розвантаження</option>"), "🔴 на екрані немає варіанта валюти «на день розвантаження»");
+  assert.match(ui, /<option value=\{OTHER\}>Інше…<\/option>/, "🔴 на екрані немає «Інше…» в порядку оплати");
+});
+
+/**
+ * #1632 — МІЖНАРОДНІ ЛИШЕ ВІД АВТОМУВ (задача 5462, рішення Сергія 12.10.2026: «тільки автомув»): галочка ставить
+ * АвтоМув, інші юрособи недоступні, а сервер не дасть сформувати міжнародну від ЮТС чи ФОП навіть в обхід екрана.
+ */
+test("#1632 МІЖНАРОДНІ — ЛИШЕ АВТОМУВ: галочка ставить АвтоМув, інші юрособи вимкнено, сервер блокує ЮТС/ФОП", async () => {
+  const { validateForm } = await import("./validate.js");
+  const s = ref["once-client-uts"].state;
+  for (const ent of ["uts", "fop"] as const) {
+    const xs = validateForm({ ...s, ent, intl: true }, { today: "2026-10-12" });
+    assert.ok(xs.some((i) => i.field === "ent" && i.level === "error"), `🔴 міжнародну від ${ent} не заблоковано`);
+  }
+  assert.ok(!validateForm({ ...s, ent: "avm", intl: true }, { today: "2026-10-12" }).some((i) => i.field === "ent"), "🔴 міжнародну від АвтоМув заблоковано");
+  assert.ok(!validateForm({ ...s, ent: "uts", intl: false }, { today: "2026-10-12" }).some((i) => i.field === "ent"), "🔴 внутрішню від ЮТС заблоковано");
+  const ui = readFileSync(path.join(REPO, "frontend", "src", "pages", "dashboard", "sections", "ConstructorSection.tsx"), "utf8");
+  assert.match(ui, /intl: on, ent: on \? "avm" : f\.ent/, "🔴 галочка «Міжнародне» не ставить АвтоМув");
+  assert.match(ui, /disabled=\{form\.intl && k !== "avm"\}/, "🔴 при міжнародному можна обрати ЮТС чи ФОП");
+});
