@@ -164,6 +164,9 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS first_activity_at TIMESTAMPTZ; -- п�
 --                         Ringostat кладе в Kommo на контакт; розноситься на угоди через `deal_contacts`).
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS taken_field_at TIMESTAMPTZ;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS first_call_out_at TIMESTAMPTZ;
+-- 📞 Тривалість ЦЬОГО Ж першого вихідного дзвінка, с (задача 5148, «Відповідь на заявку»): 0 — набрав, клієнт не
+-- взяв трубку; NULL — невідомо (історія до 12.10.2026 без дозаповнення). Пишеться РАЗОМ із `first_call_out_at`.
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS first_call_out_sec INTEGER;
 -- Дата останнього ДЗВІНКА клієнту (лише call_in/call_out, created_by<>0), окремо від будь-якої активності.
 -- Живить прапорець «метушня без контакту» у «Застряглих»: свіжа нотатка є, але місяць без дзвінка.
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS last_call_at TIMESTAMPTZ;

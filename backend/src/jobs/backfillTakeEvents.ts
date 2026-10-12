@@ -44,15 +44,16 @@ async function run(opts: { since: string; dry?: boolean }): Promise<{ deals: num
     }
 
     // 2) Перший вихідний дзвінок — нотатки угоди й контактів.
-    const firstOut = new Map<number, number>();
-    const take = (dealId: number, at: number, type: string): void => {
+    // 📞 5148: разом із часом — тривалість цього ж дзвінка (0 с = клієнт не взяв трубку).
+    const firstOut = new Map<number, { at: number; sec: number | null }>();
+    const take = (dealId: number, at: number, type: string, sec: number | null): void => {
       const c = created.get(dealId);
       if (type !== "call_out" || c == null || at < c) return;
       const f = firstOut.get(dealId);
-      if (f == null || at < f) firstOut.set(dealId, at);
+      if (f == null || at < f.at) firstOut.set(dealId, { at, sec });
     };
     for (let i = 0; i < ids.length; i += BATCH_NOTES)
-      await forEachLeadNotePageByIds(ids.slice(i, i + BATCH_NOTES), async (ns) => { for (const n of ns) take(n.entityId, n.createdAt, n.noteType); });
+      await forEachLeadNotePageByIds(ids.slice(i, i + BATCH_NOTES), async (ns) => { for (const n of ns) take(n.entityId, n.createdAt, n.noteType, n.durationSec); });
     const link = (await pool.query<{ contact_id: string; deal_kommo_id: string }>(
       `SELECT contact_id, deal_kommo_id FROM deal_contacts WHERE deal_kommo_id = ANY($1::bigint[])`, [ids])).rows;
     const byContact = new Map<number, number[]>();
@@ -60,7 +61,7 @@ async function run(opts: { since: string; dry?: boolean }): Promise<{ deals: num
     const contacts = [...byContact.keys()];
     for (let i = 0; i < contacts.length; i += BATCH_NOTES)
       await forEachContactNotePageByIds(contacts.slice(i, i + BATCH_NOTES), async (ns) => {
-        for (const n of ns) for (const d of byContact.get(n.entityId) ?? []) take(d, n.createdAt, n.noteType);
+        for (const n of ns) for (const d of byContact.get(n.entityId) ?? []) take(d, n.createdAt, n.noteType, n.durationSec);
       });
 
     const fieldN = [...field.values()].filter(Boolean).length;
@@ -69,10 +70,12 @@ async function run(opts: { since: string; dry?: boolean }): Promise<{ deals: num
       for (let i = 0; i < ids.length; i += 1000) {
         const part = ids.slice(i, i + 1000);
         await pool.query(
-          `UPDATE deals d SET taken_field_at = v.f, first_call_out_at = v.co
-             FROM (SELECT UNNEST($1::bigint[]) AS kommo_id, UNNEST($2::timestamptz[]) AS f, UNNEST($3::timestamptz[]) AS co) v
+          `UPDATE deals d SET taken_field_at = v.f, first_call_out_at = v.co, first_call_out_sec = v.sec
+             FROM (SELECT UNNEST($1::bigint[]) AS kommo_id, UNNEST($2::timestamptz[]) AS f, UNNEST($3::timestamptz[]) AS co,
+                          UNNEST($4::int[]) AS sec) v
             WHERE d.kommo_id = v.kommo_id`,
-          [part, part.map((id) => field.get(id) ?? null), part.map((id) => (firstOut.has(id) ? new Date(firstOut.get(id)! * 1000) : null))]);
+          [part, part.map((id) => field.get(id) ?? null), part.map((id) => (firstOut.has(id) ? new Date(firstOut.get(id)!.at * 1000) : null)),
+           part.map((id) => firstOut.get(id)?.sec ?? null)]);
       }
     }
     if (opts.dry) {
@@ -80,7 +83,7 @@ async function run(opts: { since: string; dry?: boolean }): Promise<{ deals: num
       const site = (await pool.query<{ kommo_id: string }>(
         `SELECT kommo_id FROM deals WHERE kommo_id = ANY($1::bigint[])
             AND client_source IN ('Дзвінок з uts.ua','uts.ua','Callback з uts.ua')`, [ids])).rows.map((r) => Number(r.kommo_id));
-      console.log(`  з них рекламних (uts.ua): ${site.length}; поле: ${site.filter((id) => field.get(id)).length}; дзвінок: ${site.filter((id) => firstOut.has(id)).length}`);
+      console.log(`  з них рекламних (uts.ua): ${site.length}; поле: ${site.filter((id) => field.get(id)).length}; дзвінок: ${site.filter((id) => firstOut.has(id)).length}; перший набір без відповіді (0 с): ${site.filter((id) => firstOut.get(id)?.sec === 0).length}`);
     }
     return { deals: ids.length, field: fieldN, calls: firstOut.size };
   }
