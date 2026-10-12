@@ -132,6 +132,7 @@ import { activeManagerSql } from "../core/activeManager.js";
 import * as managerState from "../core/managerState.js";
 import { teamAtSql, inTeamDuringSql, teamOnDateSql, sqlDate, teamJoinSql } from "../core/teamAt.js";
 import * as leadTake from "../core/leadTake.js";
+import { leadResponseTable, type ResponseLine } from "../core/leadResponse.js";
 import * as leadTakeRules from "../core/leadTakeRules.js";
 import { buildXlsx } from "../core/xlsxWrite.js";
 import * as clientCalls from "../core/clientCalls.js";
@@ -11527,6 +11528,28 @@ dashboardRouter.get("/missed-calls/series", async (req, res) => {
       key: s.key, name: s.name,
       points: s.points.map((p) => ({ period: p.period, missed: p.missed, callback: p.callback, clientSelf: p.clientSelf, medianMin: p.medianMin })),
     })),
+  });
+});
+
+/**
+ * 📞 «ВІДПОВІДЬ НА ЗАЯВКУ» (задача 5148): від створення заявки до першого набору менеджера — медіана, по відділу
+ * (реклама + сайт), командах і менеджерах; лідгени окремо. Межа — той самий tab-гейт `pre("/api/dashboard/missed-calls")`,
+ * кламп — той самий `missedScopeFor`, період — той самий `missedPeriod`, що в решти екрана.
+ */
+dashboardRouter.get("/missed-calls/response-time", async (req, res) => {
+  const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
+  const scope = missedScopeFor(req.auth!, req.query);
+  const t = await leadResponseTable({ from, to, managerId: scope.managerId, teamId: scope.teamId });
+  // Явний перелік полів, а не спред рядка (#17e2).
+  const line = (x: ResponseLine) => ({
+    key: x.key, label: x.label, n: x.n, dialed: x.dialed, notDialed: x.notDialed, medianMin: x.medianMin,
+    m5Pct: x.m5Pct, noAnswer: x.noAnswer, answerUnknown: x.answerUnknown,
+  });
+  res.json({
+    period: { from, to },
+    dept: line(t.dept),
+    teams: t.teams.map((x) => ({ ...line(x), managers: x.managers.map(line) })),
+    leadgen: { ...line(t.leadgen), managers: t.leadgen.managers.map(line) },
   });
 });
 
