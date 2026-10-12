@@ -91,7 +91,7 @@ test("#546 ЖИВИЙ SQL: «моє навчання» кандидата == р�
     const id = await h.createCandidate(s.db, null, { fullName: "Білик Яна", phone: "0970000301", vacancyId: vac });
     for (const to of ["planned", "done"]) await h.changeStatus(s.db, null, id, { to, comment: "так" }, "edit", null);
     await h.changeStatus(s.db, null, id, { to: "lead", comment: "до тімліда", teamId: 1 }, "edit", null);
-    await h.changeStatus(s.db, null, id, { to: "candidate", comment: "беремо" }, "lead", 1);
+    await h.changeStatus(s.db, null, id, { to: "candidate", comment: "беремо", email: "yana.bilyk@gmail.com" }, "lead", 1); // пошта — логін (#1620)
     const uid = (await s.c.query(`SELECT user_id FROM hiring_candidates WHERE id=$1`, [id])).rows[0].user_id as number;
     await tr.noteCandidateLogin(s.db, uid);
     await s.c.query(`INSERT INTO training_progress (user_id, material_id, status, finished_at) VALUES ($1,$2,'done',now())`, [uid, s.m1]);

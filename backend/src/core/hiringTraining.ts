@@ -48,13 +48,20 @@ async function lockAccount(db: Db, id: number, access: HiringAccess, leadTeamId:
 
 /**
  * Акаунт із роллю «Кандидат». Кличеться при переході в «кандидат + команда» тією самою
- * транзакцією. Пароль — випадковий і нікому не відомий: увійти можна лише через запрошення.
+ * транзакцією. Пароль — випадковий і нікому не відомий: вхід видає `issueCandidatePassword`
+ * (при переході в «кандидат + команда» — одразу, `changeStatus`) або запрошення.
+ *
+ * 📧 БЕЗ ПОШТИ АКАУНТ НЕ СТВОРЮЄТЬСЯ (12.10.2026, #1620). Раніше картка без пошти діставала службовий
+ * логін `candidate-N@hiring.uts.local`, якого кандидат не знає і не вгадає. Заміряно на проді: з 15
+ * акаунтів 13 мали такий логін, жоден кандидат ні разу не увійшов, 14 закрились «не зайшов за 48 год».
+ * Службовий логін лишився лише на випадок, коли пошту вже зайнято іншим користувачем.
  */
 export async function ensureCandidateAccount(db: Db, actorId: number | null, candidateId: number): Promise<number> {
   const c = (await db.query<AccountRow>(`SELECT ${ACCOUNT_COLS} FROM hiring_candidates c WHERE c.id = $1 FOR UPDATE`, [candidateId])).rows[0];
   if (!c) throw new HiringError(404, "Кандидата не знайдено");
   if (c.user_id) return c.user_id;
   const email = str(c.email)?.toLowerCase() ?? null;
+  if (!email) throw new HiringError(400, "Внесіть пошту кандидата — вона стане його логіном у дашборд");
   const taken = email ? ((await db.query(`SELECT 1 FROM users WHERE lower(email) = $1`, [email])).rowCount ?? 0) > 0 : false;
   const login = candidateLogin({ email, candidateId, emailTaken: taken });
   const clash = await db.query(`SELECT 1 FROM users WHERE lower(email) = $1`, [login]);
@@ -90,6 +97,13 @@ export async function closeCandidateAccess(db: Db, candidateId: number, reason: 
  */
 export async function undoPromotion(db: Db, candidateId: number, actorId: number | null): Promise<void> {
   const c = (await db.query<AccountRow>(`SELECT ${ACCOUNT_COLS} FROM hiring_candidates c WHERE c.id = $1`, [candidateId])).rows[0];
+  // «Вийшов на роботу» (#1622) вимкнув акаунт — повернення вмикає його назад, як було до кліку.
+  if (c?.user_id && c.access_closed_reason === "started") {
+    await db.query(`UPDATE users SET is_active = true, deactivated_at = NULL, deactivated_reason = NULL WHERE id = $1`, [c.user_id]);
+    await db.query(`UPDATE hiring_candidates SET access_closed_at = NULL, access_closed_reason = NULL WHERE id = $1`, [candidateId]);
+    await event(db, candidateId, "access", "вихід на роботу скасовано · доступ до навчання повернуто", actorId);
+    return;
+  }
   if (!c?.user_id || c.access_closed_reason !== "manager") return;
   await db.query(`UPDATE users SET role_override = 'candidate' WHERE id = $1`, [c.user_id]);
   await db.query(`UPDATE hiring_candidates SET access_closed_at = NULL, access_closed_reason = NULL WHERE id = $1`, [candidateId]);
@@ -132,6 +146,54 @@ export async function freeCandidateAccounts(db: Db) {
 
 export async function hasAccount(db: Db, candidateId: number): Promise<boolean> {
   return ((await db.query(`SELECT 1 FROM hiring_candidates WHERE id = $1 AND user_id IS NOT NULL`, [candidateId])).rowCount ?? 0) > 0;
+}
+
+/**
+ * 📧 ЛОГІН ЙДЕ ЗА ПОШТОЮ КАРТКИ (12.10.2026, #1621). Поки акаунт має роль «Кандидат», зміна пошти в картці
+ * міняє й логін — так 13 службових логінів `candidate-N@hiring.uts.local` лікуються тим, що Іван вносить пошту.
+ * Пошта, зайнята іншим користувачем, — 409 (зміна картки відкочується разом), а не тихий службовий логін.
+ * Порожня пошта логін не чіпає: без логіна людина не увійде взагалі.
+ */
+export async function syncCandidateLogin(db: Db, actorId: number | null, candidateId: number): Promise<void> {
+  const r = (await db.query<{ email: string | null; user_id: number | null; login: string | null; role: string | null }>(
+    `SELECT c.email, c.user_id, u.email AS login, COALESCE(u.role_override, u.role) AS role
+       FROM hiring_candidates c LEFT JOIN users u ON u.id = c.user_id WHERE c.id = $1`, [candidateId])).rows[0];
+  if (!r?.user_id || r.role !== "candidate") return;
+  const email = str(r.email)?.toLowerCase() ?? null;
+  if (!email || email === (r.login ?? "").toLowerCase()) return;
+  if ((await db.query(`SELECT 1 FROM users WHERE lower(email) = $1 AND id <> $2`, [email, r.user_id])).rowCount)
+    throw new HiringError(409, `Пошта ${email} уже зайнята іншим користувачем — логін кандидата лишився ${r.login}`);
+  await db.query(`UPDATE users SET email = $1 WHERE id = $2`, [email, r.user_id]);
+  await event(db, candidateId, "access", `логін змінено на ${email}`, actorId);
+}
+
+/**
+ * 🧑‍💼 «ВИЙШОВ НА РОБОТУ» БЕЗ НАВЧАННЯ (12.10.2026, #1622; рішення Романа, варіант А). Поки навчання не
+ * працює, кандидата з акаунтом у «менеджера» не перевести: `promoteCandidate` вимагає всіх кроків курсу, а
+ * загальний перехід закритий. Через це плитка «Вийшли на роботу» й конверсії стояли на нулі, хоча люди
+ * виходили. Дія — лише «редагування» (HR, керівництво), лише з «кандидат + команда» / «на навчанні», з
+ * коментарем. Статус «менеджер» + реєстр співробітників — як після навчання; акаунт кандидата ВИМИКАЄТЬСЯ
+ * (свій вхід менеджер отримує з CRM), а не перетворюється на менеджерський. «Повернути останню зміну»
+ * скасовує все (`undoPromotion`).
+ */
+export async function markStartedWork(db: Db, actorId: number | null, id: number, comment: unknown, access: HiringAccess) {
+  if (access !== "edit") throw new HiringError(403, "Відмічає вихід на роботу лише HR або керівництво");
+  const text = str(comment);
+  if (!text) throw new HiringError(400, "Коментар обовʼязковий");
+  const c = await lockAccount(db, id, access, null);
+  if (c.status !== "candidate" && c.status !== "training")
+    throw new HiringError(409, "Вихід на роботу відмічається зі статусу «кандидат + команда» або «на навчанні»");
+  await db.query(`UPDATE hiring_candidates SET status = 'manager', updated_at = now() WHERE id = $1`, [id]);
+  await event(db, id, "status", `вийшов на роботу (без навчання) · ${text}`, actorId, c.status, "manager");
+  if (c.user_id && !c.access_closed_at) await closeCandidateAccess(db, id, "started", actorId);
+  // Доступ уже закрито (напр., «не зайшов за 48 год» — так 14 із 15 на 12.10): акаунт і так вимкнено, міняємо
+  // лише причину, щоб дошка показала «вийшов на роботу». Повернення ввімкне доступ, а джоба закриє його знову
+  // за тим самим строком — тобто стан повернеться сам.
+  else if (c.user_id) {
+    await db.query(`UPDATE hiring_candidates SET access_closed_reason = 'started' WHERE id = $1`, [id]);
+    await event(db, id, "access", `причина закриття доступу: ${CLOSE_REASON_LABEL.started}`, actorId);
+  }
+  await ensureEmployeeFromCandidate(db, actorId, id);
 }
 
 /** Нове запрошення. Попереднє невикористане гаситься. Токен повертається ОДИН раз. */
@@ -240,6 +302,7 @@ export async function restoreAccess(db: Db, actorId: number | null, id: number) 
   const c = await lockAccount(db, id, "edit", null);
   if (!c.user_id || !c.access_closed_at) throw new HiringError(409, "Доступ не закрито");
   if (c.access_closed_reason === "manager") throw new HiringError(409, "Кандидат уже менеджер");
+  if (c.access_closed_reason === "started" || c.status === "manager") throw new HiringError(409, "Кандидат уже вийшов на роботу");
   if (c.status === "refused" || c.status === "black")
     throw new HiringError(409, "Кандидат у відмові — спершу поверніть статус");
   const now = new Date();

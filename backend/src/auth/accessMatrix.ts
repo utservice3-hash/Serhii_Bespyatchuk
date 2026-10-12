@@ -578,6 +578,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["team_lead", "manager"] },
   { method: "POST", path: "/api/hiring/candidates/:id/promote", cls: "deny-only",
     allow: [], deny: ["manager"] },
+  // «Вийшов на роботу» без навчання (12.10.2026, #1622) — лише «редагування» Найму; тімлід не відмічає.
+  { method: "POST", path: "/api/hiring/candidates/:id/started-work", cls: "deny-only",
+    allow: [], deny: ["team_lead", "manager"] },
   { method: "POST", path: "/api/hiring/candidates/:id/questions/:questionId/answer", cls: "deny-only",
     allow: [], deny: ["manager"] },
   /* 🔐 СЕЙФ ДОСТУПІВ (18.09.2026). Вкладка `hiring` + право `view_employee_secrets` на рівні роутера:

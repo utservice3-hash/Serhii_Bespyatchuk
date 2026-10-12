@@ -167,7 +167,7 @@ test("#503 ЖИВИЙ SQL: графік, дублі, явка за Києвом,
     assert.equal((await h.listCandidates(db, {}, "edit", null)).total, 2, "🔴 рекрутер бачить не всіх");
     await assert.rejects(h.candidateCard(db, other, "lead", 1), /не знайдено/, "🔴 тімлід відкрив картку до свого етапу");
 
-    await h.changeStatus(db, null, id, { to: "candidate", comment: "беремо" }, "lead", 1);
+    await h.changeStatus(db, null, id, { to: "candidate", comment: "беремо", email: "kandydat.lead@gmail.com" }, "lead", 1); // пошта — логін (#1620)
     await h.changeStatus(db, null, id, { to: "training", comment: "на навчання" }, "lead", 1);
     const rep2 = await h.dailyReport(db, trainDay, trainDay);
     assert.equal(rep2[0].toTraining, 1, "🔴 перехід «на навчанні» не зарахований у день переходу");

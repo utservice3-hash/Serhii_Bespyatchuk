@@ -3689,7 +3689,7 @@ ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS access_closed_at     TIME
 ALTER TABLE hiring_candidates ADD COLUMN IF NOT EXISTS access_closed_reason TEXT;
 ALTER TABLE hiring_candidates DROP CONSTRAINT IF EXISTS hiring_candidates_access_reason_check;
 ALTER TABLE hiring_candidates ADD CONSTRAINT hiring_candidates_access_reason_check CHECK
-  (access_closed_reason IS NULL OR access_closed_reason IN ('no_login','expired','refused','manager'));
+  (access_closed_reason IS NULL OR access_closed_reason IN ('no_login','expired','refused','manager','started'));
 -- Один акаунт — одна картка: інакше джоба закрила б доступ за чужим строком.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_hiring_candidates_user ON hiring_candidates(user_id) WHERE user_id IS NOT NULL;
 
