@@ -71,7 +71,8 @@ test("#737c РЕДАКТОР: порядок рухом, заміна файлу
   assert.ok(uses >= 2, `🔴 «Замінити файл» є в ${uses} місцях — треба і в уроці, і в частині`);
   assert.match(src, /replaceTrainingFile\(/, "🔴 заміна файлу не кличе сервер");
   assert.match(src, /lesson:\s*\{\s*id:\s*step\.id/, "🔴 «+ Частина» не передає урок");
-  assert.match(src, /if \(!edit && x\.status == null\) void openTrainingMaterial/, "🔴 редагування уроку ставить йому «відкрито»");
+  // 13.10.2026: умова доповнена «крім тесту» (тест «відкриває» сама спроба) — гейт стверджує той самий предмет: без `!edit` не відкриваємо.
+  assert.match(src, /if \(!edit && x\.status == null[^)]*\) void openTrainingMaterial/, "🔴 редагування уроку ставить йому «відкрито»");
   assert.match(src, /<LessonBody key=\{ver\} m=\{m\} \/>/, "🔴 після заміни файлу перегляд під редактором лишає стару презентацію (id той самий)");
 });
 

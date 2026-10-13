@@ -54,8 +54,11 @@ function statsObj(offers: RateOffer[]) {
   };
 }
 
+// Текст відмови Lardi приходить мовою запиту: з 13.10.2026 це українська («Розширений доступ до API»), раніше — російська.
 const lardiOff = (side?: RateSide) =>
-  !!side?.error && /403/.test(side.error) && /Расширен|доступ к API/i.test(side.detail || "");
+  !!side?.error && /403/.test(side.error) && /Розширен|Расширен|доступ (?:к|до) API/i.test(side.detail || "");
+/** Дата пропозиції «YYYY-MM-DD» (сервер, `lardi/offerDate.ts`) → «13.10»; невідома — порожньо. */
+const offerDay = (d?: string | null) => (d && /^\d{4}-\d{2}-\d{2}/.test(d) ? `${d.slice(8, 10)}.${d.slice(5, 7)}` : "");
 
 export function RatesSection() {
   const [frm, setFrm] = useState<Town | null>(null);
@@ -670,7 +673,7 @@ function OfferRows({ items }: { items: RateOffer[] }) {
               <td>{s.per_ton ? fmt(s.per_ton) : "—"}</td>
               <td>{s.per_km ? fmt(s.per_km) : "—"}</td>
               <td style={{ color: "var(--text-muted)" }}>{(s.bodies || []).join(", ")}</td>
-              <td style={{ color: "var(--text-muted)" }}>{s.date || ""}</td>
+              <td style={{ color: "var(--text-muted)" }}>{offerDay(s.date)}</td>
             </tr>
           ))}
         </tbody>

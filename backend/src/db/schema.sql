@@ -5856,3 +5856,65 @@ UPDATE roles SET permissions = permissions - 'manage_cargo'
 
 -- 🔒 Розрахунки менеджерів і довідник — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`.
 REVOKE ALL ON cargo_vehicles, cargo_pallets, cargo_calculations FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 📝 ТЕСТИ ПІСЛЯ ТЕМИ (13.10.2026, Роман: «тести після кожного модуля», план «Тести в навчанні»)
+-- ══════════════════════════════════════════════════════════════════════════
+-- Тест — це урок `kind = 'quiz'` останнім кроком теми. Зараховується ЛИШЕ перевіркою відповідей
+-- (`POST /api/training/quiz/:id/submit`); «Опрацював» на ньому — 400 (так було й до цього проходу).
+-- Правила перевірки — `core/trainingQuiz.ts`. Таблиці — лише нові, наявні дані не чіпаються.
+
+-- Налаштування тесту на уроці: поріг, скільки питань показувати (NULL — усі), скільки спроб.
+CREATE TABLE IF NOT EXISTS training_quizzes (
+  material_id  INTEGER PRIMARY KEY REFERENCES training_materials(id) ON DELETE CASCADE,
+  pass_pct     INTEGER NOT NULL DEFAULT 80 CHECK (pass_pct BETWEEN 1 AND 100),
+  show_count   INTEGER CHECK (show_count IS NULL OR show_count > 0),
+  max_attempts INTEGER NOT NULL DEFAULT 3 CHECK (max_attempts > 0)
+);
+
+-- Питання. Правильна відповідь живе ТУТ і назовні кандидату не віддається жодним роутом.
+-- `external_key` — для повторного імпорту без дублів (`tools/importQuiz.ts`).
+CREATE TABLE IF NOT EXISTS training_quiz_questions (
+  id           SERIAL PRIMARY KEY,
+  material_id  INTEGER NOT NULL REFERENCES training_materials(id) ON DELETE CASCADE,
+  position     INTEGER NOT NULL DEFAULT 0,
+  kind         TEXT NOT NULL CHECK (kind IN ('one', 'multi', 'number')),
+  text         TEXT NOT NULL,
+  options      JSONB,
+  correct      JSONB NOT NULL,
+  explanation  TEXT,
+  source_title TEXT,
+  external_key TEXT UNIQUE,
+  CHECK (kind = 'number' OR jsonb_typeof(options) = 'array')
+);
+CREATE INDEX IF NOT EXISTS idx_training_quiz_questions_material ON training_quiz_questions(material_id, position, id);
+
+-- Спроба: що випало (питання й порядок варіантів), відповіді, бал. Відкрита — `submitted_at IS NULL`.
+CREATE TABLE IF NOT EXISTS training_quiz_attempts (
+  id           SERIAL PRIMARY KEY,
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  material_id  INTEGER NOT NULL REFERENCES training_materials(id) ON DELETE CASCADE,
+  plan         JSONB NOT NULL,
+  answers      JSONB,
+  right_count  INTEGER,
+  total        INTEGER,
+  pct          INTEGER,
+  passed       BOOLEAN,
+  started_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  submitted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_training_quiz_attempts_user ON training_quiz_attempts(user_id, material_id);
+
+-- «Ще одна спроба» від тімліда чи HR — кожна видача окремим рядком, з автором і причиною.
+CREATE TABLE IF NOT EXISTS training_quiz_grants (
+  id          SERIAL PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  material_id INTEGER NOT NULL REFERENCES training_materials(id) ON DELETE CASCADE,
+  granted_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  comment     TEXT,
+  granted_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_training_quiz_grants_user ON training_quiz_grants(user_id, material_id);
+
+-- 🔒 Результати людей — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`.
+REVOKE ALL ON training_quiz_attempts, training_quiz_grants FROM ai_readonly;

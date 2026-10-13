@@ -61,6 +61,8 @@ export const FORBIDDEN_TABLES = [
   "exit_interviews",
   "hiring_invites",
   "hiring_training_questions",
+  // 📝 Тести в навчанні (13.10.2026): спроби й бали кандидатів, видані спроби. REVOKE у схемі.
+  "training_quiz_attempts", "training_quiz_grants",
   // 🚪 Звільнення (21.09.2026): причини й хто звільняв. REVOKE у схемі. Тримає #624.
   "employee_offboarding",
   // 🎙 AI-аналіз дзвінків (22.09.2026): тексти розмов клієнтів, аналізи й витрати. REVOKE у схемі. Тримає #653.
