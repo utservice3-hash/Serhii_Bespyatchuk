@@ -40,6 +40,7 @@ import { MANAGER_CONTACT_SQL, POOL_STATS_SQL } from "../constructor/sql.js";
 import { lookupRegistry } from "../constructor/youscore.js";
 import { lookup1c, resolveRequisites } from "../constructor/onec.js";
 import { validateForm, firstError, type Issue } from "../constructor/validate.js";
+import { resolveDirector } from "../constructor/services/names.js";
 
 /** Підписи й печатки — лише на сервері, поза git (репозиторій публічний). Тека вже в нічному бекапі. */
 export const CONSTRUCTOR_ASSETS_DIR = process.env.CONSTRUCTOR_ASSETS_DIR ?? path.join(DOCS_DIR, "constructor-assets");
@@ -162,9 +163,11 @@ constructorRouter.post("/preview", h(async (req, res) => {
   const s = await stateOrFail(req);
   const img = safeImages(s.ent, s.stamp);   // логотип є завжди; перемикач прибирає лише підпис і печатку (v2)
   const num = currentNum(s) || (s.doc === "main" ? "______" : "______ (ID угоди)"); // заглушка — як у макеті
-  const issues = await checkFields(s);
+  const dir = await resolveDirector(s);   // 🖋 5461: родовий і рід директора — до рендера
+  const issues = [...await checkFields(s), ...dir.issues];
   res.json({ html: fullPageHTML(s, num, img.uris), fragment: printHTML(s, num, img.uris),
-    blockers: blockers(s) ?? firstError(issues), issues, assetsNote: img.note ?? null });
+    blockers: blockers(s) ?? firstError(issues), issues, assetsNote: img.note ?? null,
+    director: s.cp.dirGen || s.cp.dirFem ? { gen: s.cp.dirGen ?? null, fem: s.cp.dirFem === '1', how: dir.how } : null });
   // `html` — повна сторінка з CSS «Б» (iframe srcDoc, як у пакеті v2); `fragment` лишено для сумісності.
 }));
 
@@ -191,6 +194,7 @@ function safeImages(ent: EntityKey, stampOn: boolean): { uris: { logo?: string; 
 /* ── Сформувати: перевірити гейти, записати версію в архів ── */
 constructorRouter.post("/documents", h(async (req, res) => {
   const s = await stateOrFail(req);
+  await resolveDirector(s);               // 🖋 5461: `dirGen`/`dirFem` їдуть в архів разом зі станом
   const block = blockers(s) ?? firstError(await checkFields(s));
   if (block) throw new HttpError(422, block);
   const num = currentNum(s);

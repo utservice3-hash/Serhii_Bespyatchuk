@@ -23,6 +23,7 @@ import {
   ctorDeleteRouteTemplate, ctorPairZip, ctorConvertToPdf, ctorConvertFromPdf,
   type CtorArchiveRow, type CtorCounterparty, type CtorCounterpartyRow, type CtorEntityKey, type CtorEntityRow, type CtorForm,
   type CtorParty, type CtorRouteTemplate, type CtorStatDay, type CtorIssue, type CtorRegistryCard, type CtorEdrResult, type CtorFieldSource,
+  type CtorDirector,
 } from "../../../api";
 import "./mockFonts.css";
 import "./constructor.css";
@@ -117,6 +118,9 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
   const [issues, setIssues] = useState<CtorIssue[]>([]);
   const iss = (field: string) => issues.find((i) => i.field === field && i.level === "error") ?? issues.find((i) => i.field === field);
   const [assetsNote, setAssetsNote] = useState<string | null>(null);
+  /** 🖋 5461: як сервер прочитав директора — родовий для «в особі директора …» і рід. */
+  const [director, setDirector] = useState<CtorDirector | null>(null);
+  const [dirHandOpen, setDirHandOpen] = useState(false);
   const [msg, setMsg] = useState<{ t: string; bad?: boolean }>({ t: "" });
   const [busy, setBusy] = useState(false);
   const [made, setMade] = useState<{ id: number; version: number; num: string; party: CtorParty } | null>(null);
@@ -170,7 +174,10 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
 
   const set = useCallback(<K extends keyof CtorForm>(k: K, v: CtorForm[K]) => setForm((f) => ({ ...f, [k]: v })), []);
   const setTrip = (k: string, v: string) => setForm((f) => ({ ...f, trip: { ...f.trip, [k]: v } }));
-  const setCp = (k: keyof CtorCounterparty, v: string) => setForm((f) => ({ ...f, cp: { ...f.cp, [k]: v } }));
+  // Зміна ПІБ директора (чи назви ФОП) скидає вибраний рід і ручну правку відмінка — вони стосувались іншого імені (5461).
+  const setCp = (k: keyof CtorCounterparty, v: string) => setForm((f) => ({
+    ...f, cp: { ...f.cp, [k]: v, ...(k === "dir" || k === "name" ? { dirGender: "", dirGenHand: "" } : {}) },
+  }));
   const setPay = (k: keyof CtorForm["pay"], v: string) => setForm((f) => ({ ...f, pay: { ...f.pay, [k]: v } }));
 
   const entRow = (k: CtorEntityKey) => entities.find((e) => e.key === k);
@@ -198,7 +205,7 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
     if (view !== "make") return;
     clearTimeout(timer.current);
     timer.current = setTimeout(async () => {
-      try { const r = await ctorPreview(form); setFragment(r.fragment); setBlocker(r.blockers); setIssues(r.issues ?? []); setAssetsNote(r.assetsNote); }
+      try { const r = await ctorPreview(form); setFragment(r.fragment); setBlocker(r.blockers); setIssues(r.issues ?? []); setAssetsNote(r.assetsNote); setDirector(r.director ?? null); }
       catch (e) { setBlocker(await errOf(e)); }
     }, 350);
     return () => clearTimeout(timer.current);
@@ -623,6 +630,7 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                       <input id={`f-${k}`} value={v} placeholder={optional ? "необовʼязково — перевізник вкаже в рахунку" : "впишіть вручну"} onChange={(e) => setCp(k, e.target.value)} />
                       <span className={`st ${st}`} title={is?.msg ?? (!v && optional ? "Необовʼязкове поле" : undefined)}>{is ? (is.level === "error" ? "✕" : "⚠") : v ? "✓" : optional ? "—" : "!"}</span>
                       {is && <div className={`fmsg ${st}`}>{is.msg}</div>}
+                      {k === "dir" && director && <DirectorHint d={director} form={form} open={dirHandOpen} setOpen={setDirHandOpen} setCp={setCp} />}
                     </div>
                   );
                 })}
@@ -925,6 +933,35 @@ async function docxText(buf: ArrayBuffer): Promise<string> {
 }
 
 /** Пояснення під полем — текст із серверної перевірки (🔴 червоний, 🟡 жовтий). */
+/**
+ * 🖋 Під полем «Директор» (задача 5461): як ПІБ стане в документі — «в особі директора <родовий>, який/яка діє».
+ * Рід не визначився (ініціали тощо) — перемикач Ч/Ж; «виправити» — ручний родовий, понад автоматичний.
+ */
+function DirectorHint({ d, form, open, setOpen, setCp }: {
+  d: CtorDirector; form: CtorForm; open: boolean; setOpen: (v: boolean) => void;
+  setCp: (k: keyof CtorCounterparty, v: string) => void;
+}) {
+  const fop = /^(ФОП|ФІЗИЧНА\s+ОСОБА)/i.test((form.cp.name || "").trim());
+  const g = form.cp.dirGender || "";
+  const pickG = (v: string) => setCp("dirGender", g === v ? "" : v);   // повторний клік — назад до «визначити самому»
+  return (
+    <div className="dirhint">
+      <span className="soft">У документі: </span>
+      {fop ? <b>{form.cp.name}, {d.fem ? "яка" : "який"} діє…</b> : <b>в особі директора {d.gen}, {d.fem ? "яка" : "який"} діє…</b>}
+      {(d.how === "guess" || d.how === "chosen") && (
+        <span className="dirg" role="group" aria-label="Рід">
+          <button type="button" className={g === "m" ? "on" : ""} onClick={() => pickG("m")}>Ч</button>
+          <button type="button" className={g === "f" ? "on" : ""} onClick={() => pickG("f")}>Ж</button>
+        </span>
+      )}
+      {!fop && (open || form.cp.dirGenHand
+        ? <input className="dirhand" value={form.cp.dirGenHand || ""} placeholder="у родовому: Іваненко Марії Петрівни"
+            onChange={(e) => setCp("dirGenHand", e.target.value)} onBlur={() => { if (!form.cp.dirGenHand) setOpen(false); }} />
+        : <button type="button" className="linkbtn" onClick={() => setOpen(true)}>виправити</button>)}
+    </div>
+  );
+}
+
 function FieldMsg({ is }: { is?: CtorIssue }) {
   if (!is) return null;
   return <div className={`fmsg ${is.level === "error" ? "err" : "wrn"}`}>{is.level === "error" ? "✕ " : "⚠ "}{is.msg}</div>;
