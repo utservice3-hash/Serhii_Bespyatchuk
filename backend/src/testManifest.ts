@@ -338,6 +338,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "exit_interviews",
   "hiring_invites",
   "hiring_training_questions",
+  "training_quiz_attempts", "training_quiz_grants",
   "employee_offboarding",
   "call_transcripts", "call_analyses", "ai_spend_ledger", "call_type_overrides", "first_touch_notes", "first_touch_settings_log", "carrier_call_deals", "ai_cap_alerts", "carrier_close_log", "carrier_decisions", "carrier_review_tasks", "carrier_task_sweeps",
   "tldv_meetings",
