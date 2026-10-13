@@ -191,6 +191,7 @@ interface ViewMod {
   nextMgrSort: (cur: { key: string; dir: string }, key: string) => { key: string; dir: string };
   parseMgrSort: (raw: string | null) => { key: string; dir: string };
   MGR_SORT_DEFAULT: { key: string; dir: string };
+  DECISION_UI: Record<string, { label: string; tone: string; mark: string; hint: string }>;
   STATE_UI: Record<string, { label: string; tone: string; hint: string }>;
   matchesFilter: (r: { state: string; priceDiscussed: boolean | null; objections: number; promises: number; promisesWithDeadline: number }, f: string) => boolean;
   speakerOf: (channel: number, managerChannel: number | null) => string;
@@ -1715,4 +1716,32 @@ test("#929 ЗГОДА ПІСЛЯ ЦІНИ: тік лише з 13.10, роут в
   const ck = readFileSync(FE("pages/dashboard/sections/FirstTouchChecklist.tsx"), "utf8");
   assert.match(ck, /<DecisionLine c=\{c\} checklist=\{checklist\} at=\{at\} onSeek=\{onSeek\} \/>/, "🔴 картка не показує «Після ціни»");
   assert.match(ck, /у бал не входить/, "🔴 картка не каже, що згода поза балом");
+});
+
+/**
+ * #938 — ЗГОДА ПІСЛЯ ЦІНИ ПОМІТНА І ШУКАЄТЬСЯ (Роман 13.10.2026: «щоб це було більш помітно, можливо теж якусь галочку» і
+ * «швидкий фільтр, щоб шукати успішні або неуспішні розмови»). Швидкі фільтри: «погодився» і «не погодився» = думає +
+ * відмовив; «не визначено» — ні в той, ні в інший; число на кнопці = рядки після кліку (те саме правило `TILE_MATCH`).
+ * Значок рішення — і в картці (квадрат, не кружок пункту балу), і в чипі таблиці.
+ * 🧨 Червоніє, якщо «не визначено» потрапить у «не погодився», «думає» випаде з нього, кнопка рахуватиме не тим правилом,
+ * або значок зникне з картки чи таблиці.
+ */
+test("#938 ЗГОДА ПОМІТНА І ШУКАЄТЬСЯ: значок у картці й таблиці; фільтри «погодився» / «не погодився» (думає + відмовив), «не визначено» — ні", async () => {
+  const V = await loadView();
+  const row = (value: string | null) => ({ promiseState: null, conversationType: "cargo_request", dealOutcome: { state: "open" },
+    flags: { analysed: true, priceable: true, agreement: false, lost: false }, checklist: { request: "y", price: "y", promise: "o", objection: "o" },
+    clientDecision: value ? { value, quote: "х", quoteFound: true } : null });
+  const rows = ["agreed", "agreed", "thinking", "declined", "unclear", null].map(row);
+  const pick = (k: string) => rows.filter(V.TILE_MATCH[k]).map((r) => r.clientDecision?.value ?? null);
+  assert.deepEqual(pick("agreed"), ["agreed", "agreed"], "🔴 «погодився» бере не лише згоду");
+  assert.deepEqual(pick("notAgreed"), ["thinking", "declined"], "🔴 «не погодився» — не рівно «думає» + «відмовив» («не визначено» не має туди потрапляти)");
+  assert.deepEqual(["agreed", "thinking", "declined", "unclear"].map((k) => V.DECISION_UI[k].mark), ["✓", "?", "✕", "–"], "🔴 у рішення немає значка");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /\["agreed", "Погодився після ціни"\], \["notAgreed", "Не погодився"\]/, "🔴 немає швидких фільтрів згоди");
+  assert.match(sec, /onClick=\{\(\) => setPreset\(preset === k \? "all" : k\)\}>\{label\} <b>\{scoped\.filter\(TILE_MATCH\[k\]\)\.length\}<\/b>/, "🔴 число на кнопці рахується не тим правилом, що список");
+  assert.match(sec, /<b aria-hidden="true">\{DECISION_UI\[r\.clientDecision\.value\]\.mark\}<\/b>/, "🔴 у таблиці немає значка рішення");
+  const ck = readFileSync(FE("pages/dashboard/sections/FirstTouchChecklist.tsx"), "utf8");
+  assert.match(ck, /className="ftd-decision-mark" style=\{\{ background: tone\.fg \}\}>\{ui\?\.mark \?\? "–"\}<\/span>/, "🔴 у картці немає значка рішення");
+  const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
+  assert.match(css, /\.ftd-decision-mark \{[^}]*border-radius: 6px;/, "🔴 значок згоди круглий — читатиметься як пункт балу");
 });

@@ -326,7 +326,7 @@ export function AiCallsSection() {
               {pickedName && (
                 <button type="button" className="ftd-pill on" onClick={() => setLf({ ...lf, managerId: null })} aria-label={`Зняти фільтр: ${pickedName}`}>Менеджер: {pickedName} ✕</button>
               )}
-              {([["noCall", "Обіцяв — дзвінка немає"], ["noPrice", "Ціни не було"], ["objNotHandled", "Заперечення не опрацьоване"], ["lost", "Втрачені"], ["success", "Успіх"], ["agreedLost", "Погодився, а в Kommo втрачено"]] as const).map(([k, label]) => (
+              {([["noCall", "Обіцяв — дзвінка немає"], ["noPrice", "Ціни не було"], ["objNotHandled", "Заперечення не опрацьоване"], ["lost", "Втрачені"], ["success", "Успіх"], ["agreed", "Погодився після ціни"], ["notAgreed", "Не погодився"], ["agreedLost", "Погодився, а в Kommo втрачено"]] as const).map(([k, label]) => (
                 <button key={k} type="button" className={`ftd-pill${preset === k ? " on" : ""}`} aria-pressed={preset === k}
                   onClick={() => setPreset(preset === k ? "all" : k)}>{label} <b>{scoped.filter(TILE_MATCH[k]).length}</b></button>
               ))}
@@ -411,7 +411,8 @@ export function AiCallsSection() {
                             : r.state === "done" ? null : <StateChip state={r.state} />}</td>
                           <td style={{ whiteSpace: "nowrap" }}>{r.clientDecision
                             ? <span className="ftd-chip" title={`${DECISION_UI[r.clientDecision.value].hint}${r.clientDecision.quote ? ` Клієнт: «${r.clientDecision.quote}»` : ""}`}
-                                style={{ background: TONE_COLOR[DECISION_UI[r.clientDecision.value].tone].bg, color: TONE_COLOR[DECISION_UI[r.clientDecision.value].tone].fg }}>{DECISION_UI[r.clientDecision.value].label}</span>
+                                style={{ background: TONE_COLOR[DECISION_UI[r.clientDecision.value].tone].bg, color: TONE_COLOR[DECISION_UI[r.clientDecision.value].tone].fg }}>
+                                <b aria-hidden="true">{DECISION_UI[r.clientDecision.value].mark}</b> {DECISION_UI[r.clientDecision.value].label}</span>
                             : r.checklist?.price === "y"
                               ? <span className="ftd-sub" title="Згода після ціни розбирається для розмов від 13.10.2026">не розбиралось</span>
                               : <span className="ftd-sub" title="Ціну в розмові не назвали — згоди питати нема про що">—</span>}</td>

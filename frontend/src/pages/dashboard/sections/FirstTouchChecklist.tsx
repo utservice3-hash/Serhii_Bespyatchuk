@@ -80,16 +80,20 @@ function DecisionLine({ c, checklist, at, onSeek }: {
   const d = c.clientDecision;
   const ui = d ? DECISION_UI[d.value] : null;
   const t = d ? at(d.quote) : null;
+  const tone = TONE_COLOR[ui?.tone ?? "muted"];
   return (
-    <div className="ftd-decision">
-      <div><b>Після ціни</b>{" "}
-        {ui
-          ? <span className="ftd-chip" title={ui.hint} style={{ background: TONE_COLOR[ui.tone].bg, color: TONE_COLOR[ui.tone].fg }}>{ui.label}</span>
-          : <span style={{ fontSize: 13, color: "var(--text-muted)" }}>не розбиралось — згода після ціни аналізується для розмов від 13.10</span>}
-        <span style={{ fontSize: 12, color: "var(--text-muted)" }}> · у бал не входить</span></div>
+    <div className="ftd-decision" style={{ background: tone.bg, borderColor: tone.fg }} title={ui?.hint}>
+      <span aria-hidden="true" className="ftd-decision-mark" style={{ background: tone.fg }}>{ui?.mark ?? "–"}</span>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+        <div><span style={{ fontWeight: 600 }}>Після ціни:</span>{" "}
+          {ui
+            ? <b style={{ color: tone.fg, fontSize: 15 }}>{ui.label}</b>
+            : <span style={{ fontSize: 13, color: "var(--text-muted)" }}>не розбиралось — згода після ціни аналізується для розмов від 13.10</span>}
+          <span style={{ fontSize: 12, color: "var(--text-muted)" }}> · окремо від чек-листа, у бал не входить</span></div>
       {d?.quote.trim() && (t != null
         ? <button type="button" className="ftd-quote" onClick={() => onSeek(t)}>▶ <b>{mmss(t)}</b> «{d.quote}»</button>
         : <span className="ftd-quote" style={{ cursor: "default" }}>«{d.quote}»</span>)}
+      </div>
     </div>
   );
 }

@@ -283,11 +283,11 @@ export function markPct(cls: readonly (ChecklistT | null)[], key: keyof Checklis
  * показувати (лише коли ціну назвали), — від сервера (`firstTouchTeamReport.clientDecision`); тут лише підписи й підрахунок.
  */
 export type ClientDecisionValueT = "agreed" | "thinking" | "declined" | "unclear";
-export const DECISION_UI: Readonly<Record<ClientDecisionValueT, { label: string; tone: Tone; hint: string }>> = {
-  agreed: { label: "погодився", tone: "ok", hint: "Після ціни клієнт погодився на наступний крок: оформити, чекати рахунок, ставити машину." },
-  thinking: { label: "думає", tone: "wait", hint: "Після ціни клієнт не вирішив: «подумаю», «узгоджу», «порівняю»." },
-  declined: { label: "відмовив", tone: "bad", hint: "Після ціни клієнт відмовився: «дорого», «вже знайшли», «не треба»." },
-  unclear: { label: "не визначено", tone: "muted", hint: "Ціну назвали, але AI не визначив, чим закінчилась розмова." },
+export const DECISION_UI: Readonly<Record<ClientDecisionValueT, { label: string; tone: Tone; mark: string; hint: string }>> = {
+  agreed: { label: "погодився", tone: "ok", mark: "✓", hint: "Після ціни клієнт погодився на наступний крок: оформити, чекати рахунок, ставити машину." },
+  thinking: { label: "думає", tone: "wait", mark: "?", hint: "Після ціни клієнт не вирішив: «подумаю», «узгоджу», «порівняю»." },
+  declined: { label: "відмовив", tone: "bad", mark: "✕", hint: "Після ціни клієнт відмовився: «дорого», «вже знайшли», «не треба»." },
+  unclear: { label: "не визначено", tone: "muted", mark: "–", hint: "Ціну назвали, але AI не визначив, чим закінчилась розмова." },
 };
 /** Скільки розмов рахуються в «згоду»: відоме рішення (погодився / думає / відмовив); «не визначено» — ні. */
 export const decisionKnown = (d: { value: ClientDecisionValueT } | null | undefined): boolean => d != null && d.value !== "unclear";
@@ -372,7 +372,7 @@ export function medianMin(xs: readonly (number | null | undefined)[]): number | 
 // ОДНЕ правило на плитку: і число, і список після кліку беруть `TILE_MATCH[k]` — тож вони не можуть розійтися.
 // Стани й знаменники — від сервера (`checklist`, `flags`, `dealOutcome`); фронт лише рахує.
 
-export type TileKey = "noCall" | "noPrice" | "objNotHandled" | "lost" | "success" | "agreedLost";
+export type TileKey = "noCall" | "noPrice" | "objNotHandled" | "lost" | "success" | "agreed" | "notAgreed" | "agreedLost";
 export interface TileRow {
   promiseState: PromiseStateT | null; checklist: ChecklistT | null; conversationType: ConversationTypeT | null;
   dealOutcome: { state: string } | null; flags: { analysed: boolean; priceable: boolean; agreement: boolean; lost: boolean };
@@ -384,6 +384,9 @@ export const TILE_MATCH: Record<TileKey, (r: TileRow) => boolean> = {
   objNotHandled: (r) => r.checklist?.objection === "n",
   lost: (r) => r.flags.lost,
   success: (r) => r.flags.analysed && r.dealOutcome?.state === "success",
+  // 🤝 Швидкі фільтри згоди після ціни (Роман 13.10.2026): «погодився» і «не погодився» = думає + відмовив; «не визначено» — ні туди, ні туди.
+  agreed: (r) => r.clientDecision?.value === "agreed",
+  notAgreed: (r) => r.clientDecision?.value === "thinking" || r.clientDecision?.value === "declined",
   // 🤝 Рішення Романа 13.10.2026: у розмові погодився, а угода в Kommo закрита як втрачена — що сталось ПІСЛЯ дзвінка.
   agreedLost: (r) => r.clientDecision?.value === "agreed" && r.dealOutcome?.state === "lost",
 };
