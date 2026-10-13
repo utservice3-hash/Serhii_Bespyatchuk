@@ -3,6 +3,7 @@ import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { requireAuth } from "../auth/middleware.js";
 import { lardiGet, lardiPost, LANG, hasLardiToken } from "../lardi/client.js";
 import { recordRoute, recordOffers, recordUsage, history, usageStats, learnedStats } from "../lardi/history.js";
+import { offerDate } from "../lardi/offerDate.js";
 
 // «Калькулятор ставок» — точний порт Python-сервісу lardiweb у наш бекенд
 // (прод — shared cPanel без Python 3.10+). Формат відповіді збережено 1:1 з
@@ -125,7 +126,7 @@ export function toOffer(it: Any, routeKm: number | null) {
     from: waypoint(it, "waypointListSource"),
     to: waypoint(it, "waypointListTarget"),
     dist_km: dist ? Math.round(dist) : null,
-    date: String((first(it, "dateFrom", "date") as string) || "").slice(0, 10),
+    date: offerDate(first(it, "dateFrom", "date")),
     note: String(it.note || "").trim().slice(0, 160),
   };
 }
