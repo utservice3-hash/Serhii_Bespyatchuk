@@ -13,6 +13,7 @@ import { SegmentBadge, ForcedBadge, MergedLine } from "./SegmentBadge";
 import { RowComment } from "./RowComment";
 import { CarrierCommentBanner } from "./CarrierCommentBanner";
 import { CreateTaskDialog, CloseTaskDialog, ContactDialog } from "./ReactivationBits";
+import { RecordingPlayer } from "./RecordingPlayer";
 import { ClientCardPanel } from "./ClientCardPanel";
 import { ClientContactFileViewer } from "./ClientContactFileViewer";
 import { ReactCycleStatus, ReactCycleButtons, LeadgenPoolPanel } from "./ReactivationCycle";
@@ -380,6 +381,12 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
   const isOpen = open === c.clientKey;
   /** Жовтий фон — рівно група «жовті» з сервера (активні, 30+ днів без замовлення); реактивацію підписує чип стану. */
   const risk = c.tabGroup === "yellow";
+  const ddmmOf = (iso: string | null | undefined) => (iso ?? "").slice(5, 10).split("-").reverse().join(".");
+  const rec = playing === `talk:${c.clientKey}` && c.lastTalkRecording
+    ? { src: c.lastTalkRecording, label: `розмова ${ddmmOf(c.lastTalk)}${c.lastTalkBy ? ` · ${c.lastTalkBy}` : ""}` }
+    : playing === `basis:${c.clientKey}` && c.planBasis?.recording
+      ? { src: c.planBasis.recording, label: `обґрунтування плану · розмова ${ddmmOf(c.planBasis.at)}` }
+      : null;
   return (
     <Fragment key={c.clientKey}>
       <tr style={{ background: risk ? "#fffbeb" : undefined }}>
@@ -431,9 +438,6 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
                 </button>
                 <span>розмова {c.lastTalk.slice(5).split("-").reverse().join(".")} · {fmtSec(c.lastTalkSec)}{c.lastTalkBy ? ` · ${c.lastTalkBy}` : ""}</span>
               </div>
-            )}
-            {playing === `talk:${c.clientKey}` && c.lastTalkRecording && (
-              <audio src={c.lastTalkRecording} controls autoPlay preload="none" style={{ height: 28, width: 230, margin: "3px 0" }} />
             )}
             {/* 📞 Дзвінків за ОБРАНИЙ місяць (п.3.3): розмови й усі дзвінки — два числа, не сума. */}
             <div style={{ color: "#374151" }} title="розмови (з відповіддю) / усі дзвінки за місяць екрана; ядро core/clientCalls.ts">
@@ -564,9 +568,6 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           ) : c.plan > 0 ? (
             <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }} title="Закріпити розмову або скрин можна в картці клієнта (▼)">📌 обґрунтування не закріплене</div>
           ) : null}
-          {playing === `basis:${c.clientKey}` && c.planBasis?.recording && (
-            <audio src={c.planBasis.recording} controls autoPlay preload="none" style={{ height: 28, width: 200, marginTop: 3 }} />
-          )}
         </td>
         {weeksOpen && (
           <td style={S.td}>
@@ -611,6 +612,16 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           )}
         </td>
       </tr>
+      {/* 🎧 ЗАПИС — ОКРЕМИМ РЯДКОМ НА ВСЮ ШИРИНУ ТАБЛИЦІ (задача 13.10.2026): у клітинці «Контакт» плеєр мав 230 px і
+          смугу перемотки в кілька пікселів. Один плеєр на три місця — `RecordingPlayer`, як і в картці клієнта. */}
+      {rec && (
+        <tr>
+          <td colSpan={colCount} style={{ padding: "6px 16px 10px", background: "#f8fafc", borderBottom: "1px solid #e5e7eb" }}>
+            <div style={{ fontSize: 12, color: "#374151", fontWeight: 600 }}>🎧 {c.clientName} · {rec.label}</div>
+            <RecordingPlayer key={rec.src} src={rec.src} />
+          </td>
+        </tr>
+      )}
       {isOpen && (
         <tr>
           <td colSpan={colCount} style={{ padding: "14px 16px", background: "#fbfdff", borderBottom: "1px solid #e5e7eb" }}>

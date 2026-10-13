@@ -7,6 +7,7 @@ import { ClientContactFileViewer } from "./ClientContactFileViewer";
 import { ReactCycleStatus, ReactCycleButtons } from "./ReactivationCycle";
 import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
 import { formatAmountFull } from "../format";
+import { RecordingPlayer } from "./RecordingPlayer";
 
 /**
  * 💳 КАРТКА КЛІЄНТА — «як він платив».
@@ -41,7 +42,6 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
      аудіо одночасно — це не прослуховування, а шум. Ключ — момент дзвінка + індекс,
      бо у списку немає власного id. Швидкість — стан плеєра, не запису. */
   const [openCall, setOpenCall] = useState<string | null>(null);
-  const [rate, setRate] = useState<1 | 1.5 | 2>(1);
   const [card, setCard] = useState<ClientCard | null>(null);
   const [err, setErr] = useState<string | null>(null);
   /** Відмова кнопки циклу реактивації — окремо від `err`, щоб не сховати всю картку. */
@@ -372,21 +372,8 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
                               title="Закріпити цю розмову як обґрунтування плану"
                               style={{ fontSize: 11, padding: "1px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>📌</button>}
                       </div>
-                      {open && c.recording && (
-                        <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "4px 0 2px" }}>
-                          <audio src={c.recording} controls autoPlay preload="none"
-                                 ref={(el) => { if (el) el.playbackRate = rate; }}
-                                 style={{ height: 30, flex: 1, minWidth: 0 }} />
-                          {([1, 1.5, 2] as const).map((r) => (
-                            <button key={r} type="button" onClick={() => setRate(r)}
-                                    style={{ fontSize: 11, padding: "1px 6px", borderRadius: 4, cursor: "pointer",
-                                             border: "1px solid #d1d5db", background: rate === r ? "#111827" : "#fff",
-                                             color: rate === r ? "#fff" : "#374151" }}>
-                              {r}×
-                            </button>
-                          ))}
-                        </div>
-                      )}
+                      {/* 🎧 Той самий плеєр, що в рядку клієнта й «обґрунтуванні плану» (задача 13.10.2026): ±10 с і швидкість. */}
+                      {open && c.recording && <RecordingPlayer key={c.recording} src={c.recording} />}
                     </div>
                     );
             })}

@@ -108,3 +108,30 @@ test("#1690c ПРОВОДКА: екран AI і блок КВП беруть Т�
   assert.match(FE_SRC("pages/Dashboard.tsx"), /<KvpReportSection canSeeFirstTouch=\{!!screens\?\.includes\("ai-calls"\)\} \/>/, "🔴 блок бачить роль без вкладки «Перший дотик · AI» (фінансист отримав би 403)");
   assert.match(FE_SRC("pages/dashboard/sections/KvpReportSection.tsx"), /\{canSeeFirstTouch && <KvpFirstTouchBlock from=\{rep\.scope\.from\} to=\{rep\.scope\.to\} \/>\}/, "🔴 блок не стоїть у Звіті КВП або бере інший період");
 });
+
+// ─── 🎧 Плеєр записів на екрані «Клієнти» (задача 13.10.2026) ────────────────────────────────────────────────
+test("#1691 ПЛЕЄР ЗАПИСІВ: ±10 с не виходить за межі запису, смуга перемотує точно; у рядку, обґрунтуванні й картці — один плеєр на всю ширину, вузьких <audio> немає", async () => {
+  const r = await import(await transpile("pages/dashboard/sections/recordingPlayerRules.ts")) as {
+    seekBy: (pos: number, d: number, dur: number) => number; seekAt: (x: number, w: number, dur: number) => number; PLAYER_RATES: readonly number[] };
+  assert.equal(r.seekBy(4, -10, 180), 0, "🔴 −10 с на 4-й секунді пішло в мінус");
+  assert.equal(r.seekBy(175, 10, 180), 180, "🔴 +10 с вийшло за кінець запису");
+  assert.equal(r.seekBy(60, 10, 180), 70); assert.equal(r.seekBy(60, -10, 180), 50);
+  assert.equal(r.seekBy(3, 10, 0), 13, "🔴 поки тривалість невідома, +10 с не працює");
+  assert.equal(r.seekAt(300, 600, 180), 90, "🔴 клік посередині смуги — не середина запису");
+  assert.equal(r.seekAt(-20, 600, 180), 0); assert.equal(r.seekAt(900, 600, 180), 180, "🔴 перетягування за край смуги виходить за запис");
+  assert.equal(r.seekAt(300, 0, 180), 0);
+  assert.deepEqual([...r.PLAYER_RATES], [1, 1.5, 2]);
+  const player = FE_SRC("pages/dashboard/sections/RecordingPlayer.tsx");
+  assert.match(player, /go\(seekBy\(pos, -10, dur\)\)[\s\S]*−10 с/, "🔴 немає кнопки −10 с");
+  assert.match(player, /go\(seekBy\(pos, 10, dur\)\)[\s\S]*\+10 с/, "🔴 немає кнопки +10 с");
+  assert.match(player, /PLAYER_RATES\.map/, "🔴 немає швидкості 1× / 1,5× / 2×");
+  assert.match(player, /const PLAY_EVENT = "ft-audio-play";/, "🔴 два плеєри можуть грати одночасно (подія не та, що в «Першому дотику»)");
+  const list = FE_SRC("pages/dashboard/sections/ClientPlansSection.tsx");
+  const card = FE_SRC("pages/dashboard/sections/ClientCardPanel.tsx");
+  for (const [name, src] of [["рядок / обґрунтування", list], ["картка", card]] as const) {
+    assert.doesNotMatch(src, /<audio\b/, `🔴 ${name}: повернувся вузький вбудований плеєр`);
+    assert.match(src, /<RecordingPlayer\b/, `🔴 ${name}: немає спільного плеєра`);
+  }
+  assert.match(list, /\{ src: c\.planBasis\.recording, label: `обґрунтування плану/, "🔴 «обґрунтування плану» грає не спільним плеєром");
+  assert.match(list, /\{rec && \(\s*<tr>\s*<td colSpan=\{colCount\}/, "🔴 плеєр у рядку клієнта не на всю ширину таблиці");
+});
