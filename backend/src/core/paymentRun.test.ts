@@ -91,7 +91,7 @@ test("#1267b ФОРМАТ ФАЙЛУ: картка 0000 0000 0000 0000, влас
  * нагляд — 60 хв, як у кроні.
  * 🧨 Червоніє, якщо з'явиться запис у Kommo, номер картки потрапить у базу або розклад розійдеться з наглядом.
  */
-test("#1268 ПРОВОДКА ФАЙЛУ НА ОПЛАТУ: Танин фільтр, у Kommo не пише, картки не в базі, крон :40 + 16:55 під наглядом", async () => {
+test("#1268 ПРОВОДКА ФАЙЛУ НА ОПЛАТУ: Танин фільтр, у Kommo не пише, картки не в базі, писар окремо від Сейфу, крон :40 + 16:55 під наглядом", async () => {
   assert.deepEqual([PAY_PIPELINE, [...PAY_STATUSES], PAY_RESPONSIBLE, PAY_URGENCY], [7341740, [60434920, 60434924, 60436036], 10081384, "Стандартная"],
     "🔴 фільтр розійшовся з Таниним");
   const job = SRC("jobs/buildPaymentFile.ts"), core = SRC("core/paymentRun.ts");
@@ -101,6 +101,10 @@ test("#1268 ПРОВОДКА ФАЙЛУ НА ОПЛАТУ: Танин фільт
   assert.ok(state.length > 0, "🔴 запис стану не знайдено — гейту нічого перевіряти");
   const rowIface = job.slice(job.indexOf("export interface RunRow"), job.indexOf("export interface RunResult"));
   assert.doesNotMatch(rowIface, /card|recipient|phone|bank/, "🔴 у стані прогону (база) опинились реквізити картки");
+  // Запис у Google — окремий модуль; модуль Сейфу (читання) писати не вміє, і Сейф писаря не імпортує (#1249 — про Сейф).
+  assert.match(job, /^import \{ writeSheetTab \} from "\.\.\/bankSources\/googleSheetsWrite\.js";$/m, "🔴 файл на оплату пише не через окремого писаря");
+  assert.doesNotMatch(SRC("jobs/syncSafe.ts") + SRC("core/safeSync.ts"), /googleSheetsWrite/, "🔴 шлях Сейфу отримав право запису в таблицю");
+  assert.doesNotMatch(SRC("bankSources/googleSheets.ts"), /writeSheetTab|method: "(PUT|PATCH)"|:clear|:batchUpdate|auth\/spreadsheets"/, "🔴 модуль читання Сейфу навчився писати");
   const idx = SRC("index.ts");
   assert.match(idx, /cron\.schedule\("40 \* \* \* \*", \(\) => \{ void runJob\("buildPaymentFile", \(\) => buildPaymentFile\(\)\); \}/, "🔴 немає щогодинного :40");
   assert.match(idx, /cron\.schedule\("55 16 \* \* 1-5", \(\) => \{ void runJob\("buildPaymentFile", \(\) => buildPaymentFile\(\)\); \}/, "🔴 немає фінального 16:55");

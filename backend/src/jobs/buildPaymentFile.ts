@@ -13,7 +13,7 @@
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
 import { kommoRequest, fetchLeadsByIds, type KommoDeal } from "../kommo/client.js";
-import { writeSheetTab } from "../bankSources/googleSheets.js";
+import { writeSheetTab } from "../bankSources/googleSheetsWrite.js";
 import { invoicePaymentsSql, toPayments, OPEN_UNIVERSE_SQL, toUniverse, matchAll, PAYMENT_LOOKBACK_DAYS, type OpenInvoice } from "../core/paymentMatch.js";
 import {
   PAY_PIPELINE, PAY_STATUSES, PAY_RESPONSIBLE, PAY_URGENCY, REQ_FIELDS, MAIN_FIELDS,
