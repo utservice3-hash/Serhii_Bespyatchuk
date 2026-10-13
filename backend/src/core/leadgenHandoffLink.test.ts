@@ -56,7 +56,7 @@ async function run<T>(q: SqlQuery): Promise<T[]> {
   return (await client!.query(q.text, q.values)).rows as T[];
 }
 const linkQ = (from: string, to: string) => handoffLinkQuery(from, to,
-  { pz: LEADGEN_STAGE_IDS.pz, qualified: Q, managerPipelines: [...QUALIFICATION_PIPELINES, ...FC], genericClientKeys: GENERIC },
+  { pz: LEADGEN_STAGE_IDS.pz, qualified: Q, managerPipelines: [...QUALIFICATION_PIPELINES, ...FC], genericClientKeys: GENERIC, duplicateReason: "Дубль" },
   { beforeSec: LINK_BEFORE_SEC, afterSec: LINK_AFTER_SEC, noteAfterSec: LINK_NOTE_AFTER_SEC });
 
 let nextId = 700000;
@@ -924,4 +924,29 @@ test("#1503 ЖИВИЙ SQL: заглушка «Название не указа�
   assert.equal(row(both.pz)?.cls, "paid", "🔴 заглушка в обох угодах дала «постійного клієнта»");
   assert.equal(row(viaPz.pz)?.cls, "regular", "🔴 заглушка в угоді менеджера не замінилась клієнтом з угоди Продзвону");
   assert.equal(row(guess.pz)?.dealId, null, "🔴 передачу з ключем-заглушкою «здогадано» до чужої угоди");
+});
+
+/**
+ * #1505 — З ОДНОГО ВХОДУ KOMMO СТВОРИВ КІЛЬКА УГОД МЕНЕДЖЕРА: «ДУБЛЬ» ПОСТУПАЄТЬСЯ (13.10.2026, 62363343 — першою
+ * створилась 62363309, закрита як «Дубль»; справжня — друга, 4 000 ₴). Обидва боки: перша закрита як «Дубль» → друга;
+ * перша закрита з ІНШОЇ причини → як і було, найраніша.
+ * 🧨 САБОТАЖ: у `handoffLinkQuery` прибрати пріоритет «Дубля» з `ORDER BY` → червоніє «dup».
+ */
+test("#1505 ЖИВИЙ SQL: з одного входу кілька угод за приміткою — закрита як «Дубль» поступається іншій", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const day = "2025-07-14", T = utc(`${day}T09:00:00`);
+  const mk = async (minute: number, firstReason: string) => {
+    const at = sec(T, minute * 60);
+    const pz = await deal({ manager: 1, pipeline: PZ, ck: null }); await ev(pz, PZ, Q, at);
+    const first = await deal({ manager: 3, pipeline: QUALIFICATION_PIPELINES[0], status: 143, ck: null, created: sec(at, 60) });
+    await client!.query(`UPDATE deals SET closed_at_kommo = $2, reject_reason = $3 WHERE kommo_id = $1`, [first, sec(at, 3600), firstReason]);
+    const second = await deal({ manager: 3, pipeline: FC[0], ck: null, created: sec(at, 540) });
+    for (const ch of [first, second]) await client!.query(`INSERT INTO lead_child_links (parent_id, child_id, created_at) VALUES ($1, $2, now())`, [pz, ch]);
+    return { pz, first, second };
+  };
+  const dup = await mk(0, "Дубль"), other = await mk(60, "Відмова ОПР: дорого");
+  const rows = await run<{ pz_id: string; deal_id: string | null }>(linkQ(day, day));
+  const deal1 = (pz: number) => { const r = rows.find((x) => Number(x.pz_id) === pz); return r?.deal_id == null ? null : Number(r.deal_id); };
+  assert.equal(deal1(dup.pz), dup.second, "🔴 dup: передачі дісталась угода-«Дубль», а не справжня");
+  assert.equal(deal1(other.pz), other.first, "🔴 other: закрита з іншої причини втратила першість — правило зачепило не лише «Дубль»");
 });

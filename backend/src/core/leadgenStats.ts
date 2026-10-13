@@ -13,6 +13,7 @@ import {
 } from "./leadgenHandoffRules.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
 import { LEADGEN_CALL_MIN_SEC } from "./leadgenRules.js";
+import { DUPLICATE_REASON } from "./leadTakeRules.js";
 // 📐 Правила лідогену живуть у ЧИСТОМУ `leadgenRules.ts` (нуль імпортів) — звідси
 // лише реекспорт, щоб зовнішній читач не помітив різниці, а гейти могли дістати
 // їх без `config`. Див. доккоментар того файла: там записано, ЧОМУ так.
@@ -312,7 +313,7 @@ function historyFor(links: readonly HandoffLinkInfo[]) {
 async function handoffLinks(from: string, to: string): Promise<HandoffLinkInfo[]> {
   const q = handoffLinkQuery(from, to,
     { pz: LEADGEN_STAGE_IDS.pz, qualified: LEADGEN_STAGE_IDS.qualified,
-      managerPipelines: [...QUALIFICATION_PIPELINES, ...FC_PIPELINES], genericClientKeys: GENERIC_CLIENT_KEYS },
+      managerPipelines: [...QUALIFICATION_PIPELINES, ...FC_PIPELINES], genericClientKeys: GENERIC_CLIENT_KEYS, duplicateReason: DUPLICATE_REASON },
     { beforeSec: LINK_BEFORE_SEC, afterSec: LINK_AFTER_SEC, noteAfterSec: LINK_NOTE_AFTER_SEC });
   const r = await pool.query<{ pz_id: string; lg_id: number; lg_team_id: number | null; at: Date; day: string;
     pz_name: string | null; pz_client: string | null; client_key: string | null; deal_id: string | null; deal_name: string | null;

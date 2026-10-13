@@ -166,6 +166,12 @@ export interface HandoffLinkIds {
    * 62747557: компанія «Название не указано» = 1 383 успіхи різних клієнтів). Параметром — модуль без імпортів (`#407`).
    */
   genericClientKeys: readonly string[];
+  /**
+   * Причина відмови «Дубль» (`leadTakeRules.DUPLICATE_REASON`). Коли з одного входу в 142 Kommo створив КІЛЬКА угод
+   * менеджера, угода, закрита як «Дубль», поступається іншій (13.10.2026, 62363343: першою створилась 62363309 —
+   * дубль у Кваліфікації, справжня — друга). За 05–10.2026 таких входів 8 із 2 621.
+   */
+  duplicateReason: string;
 }
 
 /**
@@ -187,7 +193,7 @@ export interface HandoffLinkIds {
  * Грошей тут немає: бюджет і клас угоди читає лише `money.ts`.
  *
  * Параметри: $1 from · $2 to · $3 воронки Продзвону · $4 «Кваліфіковано» · $5 воронки угод менеджера ·
- * $6 ключі-заглушки клієнта (`genericClientKeys`).
+ * $6 ключі-заглушки клієнта (`genericClientKeys`) · $7 причина «Дубль» (`duplicateReason`).
  */
 export function handoffLinkQuery(
   from: string, to: string, ids: HandoffLinkIds, win: { beforeSec: number; afterSec: number; noteAfterSec: number },
@@ -232,13 +238,13 @@ export function handoffLinkQuery(
               AND q.created_at_kommo BETWEEN e.changed_at - INTERVAL '${before} seconds'
                                          AND e.changed_at + INTERVAL '${after} seconds'
          ) z
-          ORDER BY z.prio, z.created_at_kommo, z.kommo_id
+          ORDER BY z.prio, (z.closed_at_kommo IS NOT NULL AND btrim(COALESCE(z.reject_reason, '')) = $7), z.created_at_kommo, z.kommo_id
           LIMIT 1) x ON TRUE
        LEFT JOIN managers sm ON sm.id = x.manager_id
       WHERE e.pipeline_id = ANY($3) AND e.status_id = $4 AND ${quoteKeptSql("$3")}
         AND (e.changed_at ${K})::date BETWEEN $1 AND $2
       ORDER BY e.changed_at, e.kommo_id`,
-    values: [from, to, ids.pz, ids.qualified, ids.managerPipelines, ids.genericClientKeys],
+    values: [from, to, ids.pz, ids.qualified, ids.managerPipelines, ids.genericClientKeys, ids.duplicateReason],
   };
 }
 
