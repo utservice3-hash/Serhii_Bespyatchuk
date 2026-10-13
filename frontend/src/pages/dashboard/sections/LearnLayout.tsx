@@ -89,7 +89,8 @@ export function CourseHeader({ title, percent, modules, onContinue, badge }: {
         </div>
       )}
       <div className="lr-meta">
-        <span><Ic n="book" size={16} /> {lessonsCount(st.lessons)}</span>
+        {/* 📝 Тести — окремим лічильником нижче, тож «уроків» рахує лише уроки (13.10.2026). */}
+        <span><Ic n="book" size={16} /> {lessonsCount(st.lessons - quizzes.length)}</span>
         <span><Ic n="layers" size={16} /> {st.modules} {st.modules === 1 ? "тема" : st.modules >= 2 && st.modules <= 4 ? "теми" : "тем"}</span>
         <span><Ic n="check" size={16} /> {st.done} пройдено</span>
         {/* 📝 Тести тем (13.10.2026): скільки складено з усіх — тест складено = крок «пройдено». */}
@@ -175,6 +176,9 @@ export function LessonPage({ title, done, modules, currentId, percent, onBack, o
   onBack: () => void; onOpen: (id: number) => void; children: ReactNode; footer?: ReactNode;
 }) {
   const st = programStat(modules);
+  /* 📝 Тест теми — «Тест», а не «Урок»; і якщо в курсі є тести, лічильник рахує кроки, бо тест — теж крок (13.10.2026). */
+  const isQuiz = modules.some((m) => m.materials.some((x) => x.id === currentId && x.kind === "quiz"));
+  const hasQuiz = modules.some((m) => m.materials.some((x) => x.kind === "quiz"));
   const next = lessonAfter(modules, currentId);
   const nextLocked = next?.state === "locked";
   return (
@@ -182,13 +186,13 @@ export function LessonPage({ title, done, modules, currentId, percent, onBack, o
       <div className="lr-main">
         <div className="lr-crumbs">
           <button type="button" className="lr-backlink" onClick={onBack}><Ic n="back" size={16} /> Назад до курсу</button>
-          <span className="lr-chip">Урок</span>
+          <span className="lr-chip">{isQuiz ? "Тест" : "Урок"}</span>
         </div>
         <h1 className="lr-h1">{title}</h1>
         {done && (
           <div className="lr-done">
             <span className="lr-done-ic"><Ic n="check" size={20} /></span>
-            <div><b>Урок завершено ✓</b><span>Ви вже пройшли цей урок</span></div>
+            <div><b>{isQuiz ? "Тест складено ✓" : "Урок завершено ✓"}</b><span>{isQuiz ? "Наступну тему відкрито" : "Ви вже пройшли цей урок"}</span></div>
           </div>
         )}
         {children}
@@ -201,7 +205,7 @@ export function LessonPage({ title, done, modules, currentId, percent, onBack, o
           Наступний <Ic n="next" size={16} />
         </button>
         <div className="lr-sprog">
-          <div className="lr-sprog-row"><b>{st.done} з {st.lessons} {lessonsWord(st.lessons)}</b><span>{percent}%</span></div>
+          <div className="lr-sprog-row"><b>{st.done} з {st.lessons} {hasQuiz ? "кроків" : lessonsWord(st.lessons)}</b><span>{percent}%</span></div>
           <span className="lr-bar"><i style={{ width: `${percent}%` }} /></span>
         </div>
         <ProgramAccordion key={currentId} modules={modules} currentId={currentId} onOpen={onOpen} side />

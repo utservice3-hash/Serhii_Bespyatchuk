@@ -663,7 +663,7 @@ function StepPane({ step, edit, busy, onChanged, onNext, nextTitle, upload, modu
       {edit && m && (
         <div className="tr-edit">
           <div className="tr-erow">
-            <label style={{ flex: "2 1 240px" }}><span>Назва уроку</span>
+            <label style={{ flex: "2 1 240px" }}><span>{m.kind === "quiz" ? "Назва тесту" : "Назва уроку"}</span>
               <input key={m.title} className="hr-inp" defaultValue={m.title}
                 onBlur={(e) => { const t = e.target.value.trim(); if (t && t !== m.title) save(() => updateTrainingMaterial(step.id, { title: t })); }} />
             </label>

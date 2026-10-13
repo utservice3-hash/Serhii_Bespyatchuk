@@ -155,7 +155,7 @@ export function HiringTraining({ meta, toast, onChanged }: { meta: HiringMeta; t
                         <span style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                           {r.quizzes.map((q) => { const [t, tone] = quizLine(q); return (
                             <span key={q.materialId} className={`hr-pill ${tone}`} title={`${q.title}: ${q.passed ? "складено" : q.used ? `не складено, спроб ${q.used} з ${q.maxAttempts + q.grants}` : "ще не проходив"}`}>
-                              {quizShort(q.title).slice(0, 12)} {t}</span>); })}
+                              {quizShort(q.title).split(" ")[0]} {t}</span>); })}
                         </span>)}</td>
                       <td>{r.health === "no_account" ? <span className="hr-muted">—</span> : r.current_step ?? <span className="hr-muted">{r.total ? "усі кроки пройдено" : "кроків немає"}</span>}</td>
                       <td>{seen ? <>{kyiv(seen)} <span className="hr-muted">· {hoursAgo(seen)} год тому</span></> : <span className="hr-muted">не заходив(ла)</span>}</td>
