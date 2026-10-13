@@ -552,7 +552,9 @@ export interface CarrierDealT {
     bucket: CarrierBucketT | null };
   human: { decision: CarrierDecisionT; otherType: CarrierOtherTypeT | null; note: string | null; by: string; role: string | null; at: string } | null;
   journal: CarrierJournalT[];
-  category: CarrierCategoryT; source: "human" | "ai" | "crm" | null; historyFrom?: number | null; why: string | null; otherType: CarrierOtherTypeT | null;
+  category: CarrierCategoryT; source: "human" | "ai" | "crm" | "lardi" | null; historyFrom?: number | null;
+  /** Вердикт за Lardi (13.10.2026): компанія й маршрут пропозиції машини. */
+  lardiNote?: string | null; why: string | null; otherType: CarrierOtherTypeT | null;
   /** «На перевірці»: до коли розібрати (кінець робочого дня) і чи вже прострочено. */
   reviewSince: string | null; reviewDeadline: string | null; overdue: boolean;
   close: CarrierCloseT | null; crm: { statusId: number | null; rejectReason: string | null };

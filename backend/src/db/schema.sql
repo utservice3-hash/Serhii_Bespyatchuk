@@ -5918,3 +5918,14 @@ CREATE INDEX IF NOT EXISTS idx_training_quiz_grants_user ON training_quiz_grants
 
 -- 🔒 Результати людей — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`.
 REVOKE ALL ON training_quiz_attempts, training_quiz_grants FROM ai_readonly;
+
+-- 🚚 «ПЕРЕВІЗНИК» ЗА LARDI (рішення Романа 13.10.2026; `core/carrierLardi.ts`): номер угоди «Дзвінки на мобільні» є серед
+-- пропозицій МАШИН в архіві Lardi — стан `lardi`, вердикт без розпізнавання; `lardi_note` — компанія й маршрут пропозиції.
+ALTER TABLE carrier_call_deals ADD COLUMN IF NOT EXISTS lardi_note TEXT;
+ALTER TABLE carrier_call_deals DROP CONSTRAINT IF EXISTS carrier_call_deals_state_chk2;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'carrier_call_deals_state_chk3') THEN
+    ALTER TABLE carrier_call_deals ADD CONSTRAINT carrier_call_deals_state_chk3
+      CHECK (state IN ('waiting','own','reused','no_talk','history','lardi'));
+  END IF;
+END $$;

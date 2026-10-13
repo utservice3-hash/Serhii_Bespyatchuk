@@ -304,3 +304,103 @@ test("#1373 ДЗЕРКАЛО ЗАХИСТУ: свіжий синк і жодно
   assert.deepEqual([r.closed, r.historyPaused, r.historyRevoked, n], [1, 0, 0, 1], "🔴 захист заблокував законне закриття");
   assert.equal((await c.query<{ mode: string }>("SELECT mode FROM carrier_close_log WHERE kommo_id = 13732")).rows[0]?.mode, "live");
 });
+
+/**
+ * #1700 — «ПЕРЕВІЗНИК» ЗА LARDI · ЖИВА СХЕМА (рішення Романа 13.10.2026: «ларді 100% розпізнає перевізника, на рівні
+ * відсіву історії crm», «без запобіжника»). Номер угоди «Дзвінки на мобільні» є серед пропозицій МАШИН Lardi (звірка за
+ * останніми 9 цифрами: «+380…» ↔ «380…») → стан `lardi`, на розпізнавання не йде, підпис — компанія й маршрут. Дзеркала:
+ * номер лише серед ВАНТАЖІВ — ні; історія CRM — першою (вона називає угоду-джерело); угода замовника в роботі — НЕ рятує.
+ * 🧨 Червоніє, якщо брати й вантажі, звіряти номер «як є» (формат не зійдеться), поставити Lardi раніше за історію,
+ * повернути запобіжник або відправити такий дзвінок на розпізнавання.
+ */
+test("#1700 LARDI · ЖИВА СХЕМА: номер серед машин Lardi — вердикт без розмови; вантажі — ні; історія CRM першою; запобіжника немає", async (t) => {
+  const c = await db(); if (typeof c === "string") return t.skip(c);
+  const { resolveCarrierDeals } = await import("./carrierCalls.js");
+  const NOW = new Date(`${D} 12:00:00+03`);
+  const offer = (id: number, side: string, phone: string, company: string) => c.query(`INSERT INTO lardi_offers(side,offer_id,from_id,to_id,company,frm,tox,phones,first_seen)
+    VALUES ($1,$2,1,2,$3,'Київ','Львів',$4::jsonb,$5)`, [side, id, company, JSON.stringify([{ n: phone, m: [] }]), `${D} 08:00:00+03`]);
+  const waiting = (id: number, phone: string) => c.query(`INSERT INTO carrier_call_deals(kommo_id,phone,deal_created_at,seen_at,state) VALUES ($1,$2,$3,$3,'waiting')`,
+    [id, phone, `${D} 11:50:00+03`]);
+  await offer(1700001, "lorry", "+380671700001", "ФОП Тест-перевізник");
+  await offer(1700002, "cargo", "+380671700002", "ТОВ Вантаж");
+  await offer(1700003, "lorry", "+380671700003", "ФОП Двічі");
+  await offer(1700004, "lorry", "+380671700004", "ФОП Замовник теж");
+  await waiting(9701, "380671700001");   // машини Lardi → lardi
+  await waiting(9702, "380671700002");   // лише вантажі → чекає далі
+  await deal(c, 9790, "380671700003", STAGE.p, 143, "Перевізник");
+  await waiting(9703, "380671700003");   // і в історії CRM, і в Lardi → історія першою
+  await deal(c, 9791, "380671700004", 8921932, 61234567);
+  await waiting(9704, "380671700004");   // угода замовника в роботі — Lardi однаково (без запобіжника)
+  await syncAt(c, `${D} 11:55:00+03`);
+  const rep = await resolveCarrierDeals(c, NOW);
+  const st = async (id: number) => (await c.query<{ state: string; lardi_note: string | null; uniqueid: string | null }>(
+    "SELECT state, lardi_note, uniqueid FROM carrier_call_deals WHERE kommo_id = $1", [id])).rows[0];
+  assert.deepEqual(await st(9701), { state: "lardi", lardi_note: "ФОП Тест-перевізник · Київ → Львів", uniqueid: null },
+    "🔴 номер серед машин Lardi не отримав вердикт «Lardi» (або пішов на розпізнавання, або без підпису)");
+  assert.notEqual((await st(9702)).state, "lardi", "🔴 номер лише серед ВАНТАЖІВ Lardi закрито як перевізника");
+  assert.equal((await st(9703)).state, "history", "🔴 Lardi перебив історію CRM — загубилась угода-джерело");
+  assert.equal((await st(9704)).state, "lardi", "🔴 угода замовника врятувала номер від Lardi — Роман вирішив без запобіжника");
+  assert.equal(rep.lardi, 2, "🔴 звіт кроку не рахує угоди за Lardi");
+});
+
+/**
+ * #1701 — ЗАКРИТТЯ ЗА LARDI «НА РІВНІ ІСТОРІЇ CRM»: той самий перемикач (`CARRIER_HISTORY_CLOSE`) — «лише журнал» нічого
+ * не пише в Kommo; «наживо» — задачі першими, тег «авто-перевізник», примітка «джерело: Lardi» з компанією й маршрутом;
+ * повторної перевірки «чи з'явилась угода замовника» немає.
+ * 🧨 Червоніє, якщо Lardi піде під основний перемикач (закриватиме без слова про історію), примітка скаже «історія CRM»
+ * чи тег не стане.
+ */
+test("#1701 LARDI · ЗАКРИТТЯ: перемикач історії CRM; журнал — нічого в Kommo; наживо — тег і примітка «джерело: Lardi»", async (t) => {
+  const c = await db(); if (typeof c === "string") return t.skip(c);
+  const { runCarrierClose } = await import("./carrierClose.js");
+  const NOW = new Date(`${D} 12:10:00+03`);
+  const patches: unknown[][] = [], notes: string[] = [];
+  const kommo = {
+    patchLeads: async (b: unknown[]) => { patches.push(b); return {}; },
+    addNotes: async (n: unknown[]) => { notes.push(...(n as { params: { text: string } }[]).map((x) => x.params.text)); return {}; },
+    openTaskIds: async () => [], closeTasks: async () => ({}),
+  };
+  const onStage = new Set([9704]);
+  const dry = await runCarrierClose(c, NOW, "live", onStage, kommo, "dry", "dry");
+  assert.equal(dry.closed, 0, "🔴 Lardi закрито при «лише журнал» для історії — пішов під основний перемикач");
+  assert.equal(patches.length, 0);
+  const live = await runCarrierClose(c, NOW, "live", onStage, kommo, "dry", "live");
+  assert.equal(live.closed, 1, "🔴 угоду за Lardi не закрито при «наживо» (або її зняла перевірка замовника, якої бути не має)");
+  const body = patches[0][0] as Record<string, unknown>;
+  assert.deepEqual(body.tags_to_add, [{ name: AUTO_CARRIER_TAG }], "🔴 тег «авто-перевізник» не поставлено");
+  assert.match(notes[0] ?? "", /джерело: Lardi/, "🔴 примітка не каже, що джерело — Lardi");
+  assert.match(notes[0] ?? "", /ФОП Замовник теж · Київ → Львів/, "🔴 примітка без компанії й маршруту з Lardi");
+});
+
+/**
+ * #1702 — LARDI · ПРАВИЛА: категорія «перевізник» із джерелом `lardi` (людина, як і скрізь, сильніша); закриття — лише
+ * коли «наживо» і основний перемикач, і перемикач історії; у SQL — лише машини і звірка за 9 цифрами обох боків.
+ * 🧨 Червоніє, якщо Lardi стане «AI»-вердиктом, закриватиметься при «лише журнал» історії або візьме вантажі.
+ */
+test("#1702 LARDI · ПРАВИЛА: категорія з джерелом lardi, людина сильніша; закриття — під перемикачем історії; лише машини, 9 цифр", async () => {
+  const R = await import("./carrierCallRules.js");
+  const C = await import("./carrierClose.js");
+  const L = await import("./carrierLardi.js");
+  assert.deepEqual(R.dealCategory({ human: null, result: null, dealState: "lardi", ai: null }),
+    { category: "carrier", source: "lardi", why: "номер є на Lardi серед пропозицій машин" }, "🔴 стан lardi — не «перевізник із Lardi»");
+  assert.equal(R.dealCategory({ human: "client", result: null, dealState: "lardi", ai: null }).source, "human", "🔴 Lardi сильніший за людину");
+  const c = { aiOther: false, history: false, lardi: true };
+  assert.equal(C.liveFor(c, "live", "dry", "dry"), false, "🔴 Lardi закривається при «лише журнал» для історії");
+  assert.equal(C.liveFor(c, "live", "dry", "live"), true, "дзеркало: обидва «наживо» — закривається");
+  assert.equal(C.liveFor(c, "dry", "dry", "live"), false, "🔴 Lardi закривається при основному «лише журнал»");
+  assert.match(L.LARDI_MATCH_SQL, /WHERE o\.side = 'lorry'/, "🔴 Lardi бере не лише машини");
+  assert.equal((L.LARDI_MATCH_SQL.match(/right\(regexp_replace\(/g) ?? []).length, 2, "🔴 номер звіряється не за 9 цифрами з обох боків");
+});
+
+/**
+ * #1703 — LARDI НА ЕКРАНІ: таблиця й панель угоди називають джерело «Lardi» з компанією й маршрутом; перелік станів у
+ * схемі знає `lardi` (інакше перший же запис кроку впав би на обмеженні).
+ * 🧨 Червоніє, якщо підпис зникне чи стан не дописати в обмеження.
+ */
+test("#1703 LARDI НА ЕКРАНІ І В СХЕМІ: підпис «Lardi» з компанією й маршрутом; обмеження станів знає lardi", () => {
+  const FE = (rel: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", rel), "utf8");
+  assert.match(FE("pages/dashboard/sections/CarrierCallsSection.tsx"), /r\.source === "lardi" \? "Lardi: машини"/, "🔴 у таблиці немає джерела «Lardi»");
+  assert.match(FE("pages/dashboard/sections/CarrierDealPanel.tsx"), /deal\.source === "lardi" \? `Lardi: номер серед пропозицій машин\$\{deal\.lardiNote/, "🔴 у панелі угоди немає джерела «Lardi» з компанією");
+  const schema = readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8");
+  assert.match(schema, /CHECK \(state IN \('waiting','own','reused','no_talk','history','lardi'\)\)/, "🔴 обмеження станів не знає lardi");
+});
