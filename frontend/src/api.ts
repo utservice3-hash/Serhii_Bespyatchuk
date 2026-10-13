@@ -393,6 +393,8 @@ export interface AiCallRowT {
   checklist: AiChecklistT | null; checkScore: { yes: number; total: number } | null;
   reviewReason: AiReviewReasonT | null; needsReview: boolean; reviewNote: AiNoteT | null;
   objection: AiObjectionT | null; dealOutcome: AiDealOutcomeT | null;
+  /** 🤝 Згода після ціни (13.10.2026): лише для розмов з ціною, у бал не входить; `null` — ціни не було чи не розбирали. */
+  clientDecision: AiClientDecisionT | null;
   /** Знаменники плиток — від ядра (`firstTouchTeamReport.ts`), фронт їх не вирішує. */
   flags: { analysed: boolean; priceable: boolean; agreement: boolean; lost: boolean };
 }
@@ -401,6 +403,8 @@ export interface AiChecklistT { request: AiCheckMarkT; price: AiCheckMarkT; prom
 /** Заперечення (окрема рубрика, ТЗ 08.10.2026). */
 export interface AiObjectionT { present: boolean; type: "price" | "think" | "competitor" | "not_now" | "other" | "none";
   client_quote: string; handled: "handled" | "not_handled" | "n/a"; manager_action: string; quote_found?: boolean | null }
+/** Згода після ціни: `unclear` — ціну назвали, а AI рішення не визначив. */
+export interface AiClientDecisionT { value: "agreed" | "thinking" | "declined" | "unclear"; quote: string; quoteFound: boolean | null }
 /** Успіх угоди з Kommo — стан ЗАРАЗ. */
 export interface AiDealOutcomeT { state: "success" | "lost" | "open"; lossReason: string | null }
 export type AiReviewReasonT = "noCall" | "late" | "noPrice" | "lost";
@@ -448,6 +452,8 @@ export interface AiCallCardResp {
   checklist: AiChecklistT | null; checkScore: { yes: number; total: number } | null;
   reviewReason: AiReviewReasonT | null; needsReview: boolean; canReview: boolean;
   canListen: boolean;
+  /** Та сама згода після ціни, що в рядку списку. */
+  clientDecision: AiClientDecisionT | null;
 }
 /** Коментар: `price` — «Чому не озвучено ціну», `missed` — «Опрацьовано». Порожній текст прибирає. */
 export async function putAiCallNote(uniqueid: string, kind: "price" | "missed" | "offline" | "review", text: string): Promise<void> {

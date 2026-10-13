@@ -11,7 +11,7 @@ import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, mmss, aiDefaultPeriod, jo
   PROMISE_UI, GROUP_LABEL, applyListFilter, type ListFilter, type PipelineGroupT,
   TYPE_LABEL, tabRows, type ListTab, type ConversationTypeT,
   type AiFilter, type AiCallState,
-  CHECK_ITEMS, CHECK_MARK_UI, managerChecklist, queueRows, scoreLabel, medianMin, fmtMinutes,
+  CHECK_ITEMS, CHECK_MARK_UI, managerChecklist, queueRows, scoreLabel, medianMin, fmtMinutes, DECISION_UI,
   TILE_MATCH, tileStats, priceSuccessSplit, SUCCESS_MIN_FOR_PCT, type TileKey,
   sortManagerLines, nextMgrSort, parseMgrSort, type MgrSort, type MgrSortKey } from "../aiCallsView";
 
@@ -288,6 +288,7 @@ export function AiCallsSection() {
               <div className="ftd-mgr">
                 {sortHead("name", "Менеджер")}{sortHead("score", "Бал")}
                 {CHECK_ITEMS.map((it) => <div key={it.key} style={{ display: "contents" }}>{sortHead(it.key, it.key === "price" ? `Ціна · ціль ${String(target)}%` : it.key === "objection" ? "Заперечення (опрац. / було)" : it.label)}</div>)}
+                {sortHead("decision", "Згода після ціни")}
                 {sortHead("success", "Успіх")}
                 {shownLines.map((l) => (
                   <div key={String(l.managerId)} style={{ display: "contents" }}>
@@ -298,6 +299,10 @@ export function AiCallsSection() {
                     {l.objections === 0
                       ? <div className="ftd-sub" title="Заперечення розбираються для розмов від 09.10; у цих розмовах їх не було або ще не розібрано">—</div>
                       : <div className="ftd-obj" title={`${String(l.objectionsHandled)} опрацьовано з ${String(l.objections)}`}>{bar(l.objection)}<span className="ftd-sub">{l.objectionsHandled}/{l.objections}</span></div>}
+                    {l.decided === 0
+                      ? <div className="ftd-sub" title="Згода після ціни розбирається для розмов від 13.10 і лише там, де ціну назвали">—</div>
+                      : <div className="ftd-obj ftd-dec" title={`Погодився в ${String(l.agreed)} з ${String(l.decided)} розмов, де назвали ціну. У бал не входить.`}>
+                          {bar(Math.round((l.agreed / l.decided) * 100))}<span className="ftd-sub">{l.agreed}/{l.decided}</span></div>}
                     <div style={{ fontVariantNumeric: "tabular-nums" }}>{l.success} з {l.calls}</div>
                   </div>
                 ))}
@@ -321,7 +326,7 @@ export function AiCallsSection() {
               {pickedName && (
                 <button type="button" className="ftd-pill on" onClick={() => setLf({ ...lf, managerId: null })} aria-label={`Зняти фільтр: ${pickedName}`}>Менеджер: {pickedName} ✕</button>
               )}
-              {([["noCall", "Обіцяв — дзвінка немає"], ["noPrice", "Ціни не було"], ["objNotHandled", "Заперечення не опрацьоване"], ["lost", "Втрачені"], ["success", "Успіх"]] as const).map(([k, label]) => (
+              {([["noCall", "Обіцяв — дзвінка немає"], ["noPrice", "Ціни не було"], ["objNotHandled", "Заперечення не опрацьоване"], ["lost", "Втрачені"], ["success", "Успіх"], ["agreedLost", "Погодився, а в Kommo втрачено"]] as const).map(([k, label]) => (
                 <button key={k} type="button" className={`ftd-pill${preset === k ? " on" : ""}`} aria-pressed={preset === k}
                   onClick={() => setPreset(preset === k ? "all" : k)}>{label} <b>{scoped.filter(TILE_MATCH[k]).length}</b></button>
               ))}
@@ -377,6 +382,7 @@ export function AiCallsSection() {
                     <thead>
                       <tr>
                         <th style={cell}>Розмова</th><th style={cell}>Менеджер</th><th style={cell}>Про що (AI)</th><th style={cell}>Чек-лист</th>
+                        <th style={cell} title="Чим закінчилась розмова після названої ціни. Окрема інформація — у бал не входить.">Після ціни</th>
                         <th style={cell}>Обіцянка</th><th style={cell}>Успіх</th><th style={cell}>Реакція</th><th style={cell}>Розбір</th>
                       </tr>
                     </thead>
@@ -403,6 +409,12 @@ export function AiCallsSection() {
                                 <b>{scoreLabel(r.checkScore) ?? "—"}</b>
                               </span>
                             : r.state === "done" ? null : <StateChip state={r.state} />}</td>
+                          <td style={{ whiteSpace: "nowrap" }}>{r.clientDecision
+                            ? <span className="ftd-chip" title={`${DECISION_UI[r.clientDecision.value].hint}${r.clientDecision.quote ? ` Клієнт: «${r.clientDecision.quote}»` : ""}`}
+                                style={{ background: TONE_COLOR[DECISION_UI[r.clientDecision.value].tone].bg, color: TONE_COLOR[DECISION_UI[r.clientDecision.value].tone].fg }}>{DECISION_UI[r.clientDecision.value].label}</span>
+                            : r.checklist?.price === "y"
+                              ? <span className="ftd-sub" title="Згода після ціни розбирається для розмов від 13.10.2026">не розбиралось</span>
+                              : <span className="ftd-sub" title="Ціну в розмові не назвали — згоди питати нема про що">—</span>}</td>
                           <td>{r.state !== "done" ? "—" : r.promiseState
                             ? <span className="ftd-chip" title={PROMISE_UI[r.promiseState].hint} style={{ background: TONE_COLOR[PROMISE_UI[r.promiseState].tone].bg, color: TONE_COLOR[PROMISE_UI[r.promiseState].tone].fg }}>{PROMISE_UI[r.promiseState].label}</span>
                             : <span className="ftd-sub">немає</span>}</td>

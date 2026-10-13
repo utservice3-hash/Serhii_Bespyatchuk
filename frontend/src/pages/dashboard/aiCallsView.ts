@@ -278,16 +278,32 @@ export function markPct(cls: readonly (ChecklistT | null)[], key: keyof Checklis
   return ms.length ? Math.round((ms.filter((m) => m === "y").length / ms.length) * 100) : null;
 }
 
+/**
+ * 🤝 ЗГОДА ПІСЛЯ ЦІНИ (рішення Романа 13.10.2026): окрема інформація, у бал і чек-лист НЕ входить. Значення й те, чи
+ * показувати (лише коли ціну назвали), — від сервера (`firstTouchTeamReport.clientDecision`); тут лише підписи й підрахунок.
+ */
+export type ClientDecisionValueT = "agreed" | "thinking" | "declined" | "unclear";
+export const DECISION_UI: Readonly<Record<ClientDecisionValueT, { label: string; tone: Tone; hint: string }>> = {
+  agreed: { label: "погодився", tone: "ok", hint: "Після ціни клієнт погодився на наступний крок: оформити, чекати рахунок, ставити машину." },
+  thinking: { label: "думає", tone: "wait", hint: "Після ціни клієнт не вирішив: «подумаю», «узгоджу», «порівняю»." },
+  declined: { label: "відмовив", tone: "bad", hint: "Після ціни клієнт відмовився: «дорого», «вже знайшли», «не треба»." },
+  unclear: { label: "не визначено", tone: "muted", hint: "Ціну назвали, але AI не визначив, чим закінчилась розмова." },
+};
+/** Скільки розмов рахуються в «згоду»: відоме рішення (погодився / думає / відмовив); «не визначено» — ні. */
+export const decisionKnown = (d: { value: ClientDecisionValueT } | null | undefined): boolean => d != null && d.value !== "unclear";
+
 export interface ChecklistLine { managerId: number | null; name: string; calls: number; score: number | null;
   request: number | null; price: number | null; promise: number | null; objection: number | null;
   /** Заперечень було / з них опрацьовано. */
   objections: number; objectionsHandled: number;
+  /** 🤝 Згода після ціни: розмов з відомим рішенням / з них «погодився». У бал НЕ входить. */
+  decided: number; agreed: number;
   /** Успіх угоди: успішних із розібраних. */
   success: number }
 /** Рядок на менеджера: розібрані розмови звіту, середній бал і частка по кожному пункту. Найслабші — згори. */
 export function managerChecklist<T extends { inReport: boolean; managerId: number | null; managerName: string | null;
   checklist: ChecklistT | null; checkScore: { yes: number; total: number } | null;
-  dealOutcome?: { state: string } | null }>(rows: readonly T[]): ChecklistLine[] {
+  dealOutcome?: { state: string } | null; clientDecision?: { value: ClientDecisionValueT } | null }>(rows: readonly T[]): ChecklistLine[] {
   const by = new Map<string, T[]>();
   for (const r of rows) if (r.inReport && r.checklist) {
     const k = r.managerId == null ? "none" : String(r.managerId);
@@ -299,6 +315,7 @@ export function managerChecklist<T extends { inReport: boolean; managerId: numbe
     request: markPct(g.map((r) => r.checklist), "request"), price: markPct(g.map((r) => r.checklist), "price"),
     promise: markPct(g.map((r) => r.checklist), "promise"), objection: markPct(g.map((r) => r.checklist), "objection"),
     objections: g.filter((r) => r.checklist!.objection !== "o").length, objectionsHandled: g.filter((r) => r.checklist!.objection === "y").length,
+    decided: g.filter((r) => decisionKnown(r.clientDecision)).length, agreed: g.filter((r) => r.clientDecision?.value === "agreed").length,
     success: g.filter((r) => r.dealOutcome?.state === "success").length,
   })).sort((a, b) => (a.score ?? 99) - (b.score ?? 99) || a.name.localeCompare(b.name, "uk"));
 }
@@ -308,15 +325,16 @@ export function managerChecklist<T extends { inReport: boolean; managerId: numbe
  * цифрами — найслабші згори (блок для того, щоб знайти, хто просідає), повторний — навпаки. «—» (пункт ніде не
  * рахувався) — ЗАВЖДИ внизу, в обидва боки: інакше порожнеча вилазить угору як найгірший результат.
  */
-export type MgrSortKey = "name" | "score" | "request" | "price" | "promise" | "objection" | "success";
+export type MgrSortKey = "name" | "score" | "request" | "price" | "promise" | "objection" | "decision" | "success";
 export interface MgrSort { key: MgrSortKey; dir: "asc" | "desc" }
 export const MGR_SORT_DEFAULT: MgrSort = { key: "score", dir: "asc" };
-export const MGR_SORT_KEYS: readonly MgrSortKey[] = ["name", "score", "request", "price", "promise", "objection", "success"];
+export const MGR_SORT_KEYS: readonly MgrSortKey[] = ["name", "score", "request", "price", "promise", "objection", "decision", "success"];
 export function nextMgrSort(cur: MgrSort, key: MgrSortKey): MgrSort {
   return cur.key === key ? { key, dir: cur.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" };
 }
 const mgrValue = (l: ChecklistLine, k: Exclude<MgrSortKey, "name">): number | null =>
   k === "objection" ? (l.objections ? l.objectionsHandled / l.objections : null)
+    : k === "decision" ? (l.decided ? l.agreed / l.decided : null)
     : k === "success" ? (l.calls ? l.success / l.calls : null)
     : l[k];
 export function sortManagerLines(lines: readonly ChecklistLine[], s: MgrSort): ChecklistLine[] {
@@ -354,10 +372,11 @@ export function medianMin(xs: readonly (number | null | undefined)[]): number | 
 // ОДНЕ правило на плитку: і число, і список після кліку беруть `TILE_MATCH[k]` — тож вони не можуть розійтися.
 // Стани й знаменники — від сервера (`checklist`, `flags`, `dealOutcome`); фронт лише рахує.
 
-export type TileKey = "noCall" | "noPrice" | "objNotHandled" | "lost" | "success";
+export type TileKey = "noCall" | "noPrice" | "objNotHandled" | "lost" | "success" | "agreedLost";
 export interface TileRow {
   promiseState: PromiseStateT | null; checklist: ChecklistT | null; conversationType: ConversationTypeT | null;
   dealOutcome: { state: string } | null; flags: { analysed: boolean; priceable: boolean; agreement: boolean; lost: boolean };
+  clientDecision?: { value: ClientDecisionValueT } | null;
 }
 export const TILE_MATCH: Record<TileKey, (r: TileRow) => boolean> = {
   noCall: (r) => r.flags.agreement && r.promiseState === "broken",
@@ -365,6 +384,8 @@ export const TILE_MATCH: Record<TileKey, (r: TileRow) => boolean> = {
   objNotHandled: (r) => r.checklist?.objection === "n",
   lost: (r) => r.flags.lost,
   success: (r) => r.flags.analysed && r.dealOutcome?.state === "success",
+  // 🤝 Рішення Романа 13.10.2026: у розмові погодився, а угода в Kommo закрита як втрачена — що сталось ПІСЛЯ дзвінка.
+  agreedLost: (r) => r.clientDecision?.value === "agreed" && r.dealOutcome?.state === "lost",
 };
 /** Скільки успіхів треба в КОЖНІЙ групі, щоб показувати відсоток, а не лише «X з N» (рішення Романа 08.10.2026). */
 export const SUCCESS_MIN_FOR_PCT = 30;

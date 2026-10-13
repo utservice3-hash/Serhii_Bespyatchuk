@@ -37,7 +37,9 @@
 .ftd-card-h h2 { margin: 0; font-size: 15px; font-weight: 700; }
 .ftd-card-h span { font-size: 12px; color: var(--text-muted); }
 
-.ftd-mgr { display: grid; grid-template-columns: 210px 64px repeat(4, minmax(110px, 1fr)) 80px; gap: 10px 14px; align-items: center; font-size: 13px; min-width: 880px; }
+.ftd-mgr { display: grid; grid-template-columns: 210px 64px repeat(5, minmax(110px, 1fr)) 80px; gap: 10px 14px; align-items: center; font-size: 13px; min-width: 1000px; }
+/* 🤝 Згода після ціни — окремо від чек-листа: пунктир зліва, щоб не читалась як п'ятий пункт балу. */
+.ftd-dec { border-left: 1px dashed var(--border); padding-left: 10px; }
 .ftd-mgr-h { color: var(--text-muted); font-size: 12px; }
 .ftd-mgr-sort { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
 .ftd-mgr-sort:hover, .ftd-mgr-sort.on { color: var(--text); }
@@ -155,3 +157,6 @@
 .ftd-updating { font-size: 12px; font-weight: 600; color: var(--text-muted); background: var(--card-bg); border: 1px solid var(--border);
   border-radius: 999px; padding: 2px 10px; letter-spacing: 0; }
 @media (prefers-reduced-motion: reduce) { .ftd-over .ftd-kpis, .ftd-over .ftd-card, .ftd-over .ftd-strip { transition: none; } }
+
+/* 🤝 Рядок «Після ціни» під чек-листом: без кружка й з відступом — не пʼятий пункт балу. */
+.ftd-decision { display: flex; flex-direction: column; gap: 4px; padding: 10px 0 2px 36px; }

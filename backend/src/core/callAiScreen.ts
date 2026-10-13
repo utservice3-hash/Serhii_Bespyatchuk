@@ -2,7 +2,7 @@ import type { Db } from "./adCallFacts.js";
 import { adDealFirstTalksSql } from "./adCallFactsRules.js";
 import { OUTBOUND_TYPES } from "./missedCallsRules.js";
 import type { MissedScope } from "./missedCallsRules.js";
-import { RUBRIC_OBJECTION_V1, type ObjectionResult } from "./callAiObjection.js";
+import { OBJECTION_RUBRICS, RUBRIC_OBJECTION_V2, type ClientDecision, type ObjectionResult } from "./callAiObjection.js";
 import { dealOutcomes, outcomeOfCall, type DealOutcome } from "./firstTouchOutcome.js";
 import { ELEVENLABS_STT_MODEL, GEMINI_MODEL, FIRST_TOUCH_SHOWN_RUBRICS, FIRST_TOUCH_RUBRICS, type AnalysisResult, type Turn } from "./callAiProviders.js";
 import { LLM_PROVIDER, STT_PROVIDER, RINGOSTAT_POLICY, RECORDING_MAX_BYTES, type AdPredicate } from "./callAiPilot.js";
@@ -171,8 +171,13 @@ export interface AiCallRow {
   reviewNote: CallNote | null;
   /** Модель витягла запит клієнта (що й куди везти) — пункт «Запит» чек-листа; `false` і до аналізу. */
   hasRequest: boolean;
-  /** 🛡 Заперечення (окрема рубрика `first-touch-objection-v1`, ТЗ 08.10.2026); `null` — ще не розібрано цією рубрикою. */
+  /** 🛡 Заперечення (окрема рубрика `first-touch-objection-v1`/`-v2`, ТЗ 08.10.2026); `null` — ще не розібрано цією рубрикою. */
   objection: ObjectionResult | null;
+  /**
+   * 🤝 Відповідь моделі «чим закінчилось після ціни» (рубрика v2, з 13.10.2026) — СИРА: чи показувати її, вирішує ядро
+   * (`firstTouchTeamReport.clientDecision`, лише коли ціну назвали). `null` — рубрика v2 цю розмову не розбирала.
+   */
+  decision: { value: ClientDecision; quote: string; quoteFound: boolean | null } | null;
   /** 🏁 Успіх угоди з Kommo — ЗАРАЗ (`core/firstTouchOutcome.ts`); `null`, поки не пораховано. */
   dealOutcome: DealOutcome | null;
   /** Номер клієнта (для пулу заявок тімліда, ТЗ п.6.2) — `null`, якщо Ringostat його не дав. */
@@ -201,8 +206,20 @@ interface RawRow {
   on_text?: string | null; on_by?: string | null; on_at?: Date | null;
   rv_text?: string | null; rv_by?: string | null; rv_at?: Date | null;
   obj_result?: ObjectionResult | null;
+  dec_result?: ObjectionResult | null;
   first_out_at?: Date | null;
 }
+
+/**
+ * Заперечення — з першої за `OBJECTION_RUBRICS` готової рубрики (v1 раніше v2: поява v2 не зсуває вже показане);
+ * згода після ціни — лише з v2. Одна константа для списку й картки, щоб вони не розійшлися.
+ */
+const OBJECTION_JOINS = `LEFT JOIN LATERAL (SELECT ox.result AS obj_result FROM call_analyses ox
+                  WHERE ox.transcript_id = t.id AND ox.rubric_version = ANY(ARRAY[${OBJECTION_RUBRICS.map((v) => `'${v}'`).join(", ")}]) AND ox.status = 'done'
+                  ORDER BY array_position(ARRAY[${OBJECTION_RUBRICS.map((v) => `'${v}'`).join(", ")}], ox.rubric_version), ox.id DESC LIMIT 1) ob ON true
+      LEFT JOIN LATERAL (SELECT dx.result AS dec_result FROM call_analyses dx
+                  WHERE dx.transcript_id = t.id AND dx.rubric_version = '${RUBRIC_OBJECTION_V2}' AND dx.status = 'done'
+                  ORDER BY dx.id DESC LIMIT 1) dc ON true`;
 
 const IN_TYPES = new Set(["in", "transitin"]);
 
@@ -237,6 +254,9 @@ export function foldRow(r: RawRow): AiCallRow {
     reviewNote: r.rv_text ? { text: r.rv_text, byName: r.rv_by ?? null, at: r.rv_at ? new Date(r.rv_at).toISOString() : "" } : null,
     hasRequest: (res?.client_request ?? "").trim() !== "",
     objection: state === "done" ? r.obj_result ?? null : null,
+    decision: state === "done" && r.dec_result?.client_decision
+      ? { value: r.dec_result.client_decision, quote: r.dec_result.decision_quote ?? "", quoteFound: r.dec_result.decision_quote_found ?? null }
+      : null,
     dealOutcome: null,
     clientPhone: r.client_phone ?? null,
     firstOutboundAt: r.first_out_at ? new Date(r.first_out_at).toISOString() : null,
@@ -389,7 +409,7 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
     SELECT ft.kommo_id, ft.uniqueid, ft.calldate, ft.call_type, ft.billsec, ft.created_at,
            ft.manager_id, m.name AS manager_name, m.team_id, tm.name AS team_name,
            t.status AS stt_status, t.failure AS stt_failure,
-           a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result,
+           a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result, dc.dec_result,
            rcx.client_phone, d.pipeline_id, d.reject_reason,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
            ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS},
@@ -406,9 +426,7 @@ export async function aiCallsList(db: Db, ad: AdPredicate, from: string, to: str
       LEFT JOIN LATERAL (SELECT ax.status, ax.failure, ax.result FROM call_analyses ax
                   WHERE ax.transcript_id = t.id AND ax.provider = $10 AND ax.model = $11 AND ax.rubric_version = ANY($12::text[])
                   ORDER BY (ax.status = 'done') DESC, array_position($12::text[], ax.rubric_version) LIMIT 1) a ON true
-      LEFT JOIN LATERAL (SELECT ox.result AS obj_result FROM call_analyses ox
-                  WHERE ox.transcript_id = t.id AND ox.rubric_version = '${RUBRIC_OBJECTION_V1}' AND ox.status = 'done'
-                  ORDER BY ox.id DESC LIMIT 1) ob ON true
+      ${OBJECTION_JOINS}
      WHERE ($13::int IS NULL OR ft.manager_id = $13)
        AND ($14::int IS NULL OR m.team_id = $14)
        AND ${firstTouchExclusionSql("ft", "rcx.client_phone", tun.repeatWindowDays)}
@@ -493,7 +511,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
            t.status AS stt_status, t.failure AS stt_failure, t.segments, t.duration_sec, t.channels AS audio_channels,
            (t.status = 'done' AND jsonb_array_length(COALESCE(t.segments, '[]'::jsonb)) = 0) AS stt_empty,
            ov.ov_is_cargo, ov.ov_by, ov.ov_at, ${NOTE_COLS},
-           a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result
+           a.status AS llm_status, a.failure AS llm_failure, a.result, ob.obj_result, dc.dec_result
       FROM ringostat_calls rc
       ${overrideJoin("rc")}
       ${notesJoin("rc")}
@@ -503,9 +521,7 @@ export async function aiCallCard(db: Db, uniqueid: string, canSeeTranscript: boo
       LEFT JOIN LATERAL (SELECT ax.status, ax.failure, ax.result FROM call_analyses ax
                   WHERE ax.transcript_id = t.id AND ax.provider = $4 AND ax.model = $5 AND ax.rubric_version = ANY($6::text[])
                   ORDER BY (ax.status = 'done') DESC, array_position($6::text[], ax.rubric_version) LIMIT 1) a ON true
-      LEFT JOIN LATERAL (SELECT ox.result AS obj_result FROM call_analyses ox
-                  WHERE ox.transcript_id = t.id AND ox.rubric_version = '${RUBRIC_OBJECTION_V1}' AND ox.status = 'done'
-                  ORDER BY ox.id DESC LIMIT 1) ob ON true
+      ${OBJECTION_JOINS}
      WHERE rc.uniqueid = $1
        AND ($7::int IS NULL OR rc.manager_id = $7)
        AND ($8::int IS NULL OR m.team_id = $8)

@@ -4,7 +4,7 @@ import { adDealFirstTalksSql, type AdFlag, type FirstTalkRow } from "./adCallFac
 import { createMinInterval, type HttpDeps } from "./callAiHttp.js";
 import { downloadRecording } from "./ringostatRecording.js";
 import { ELEVENLABS_STT_MODEL, elevenLabsTranscribe, FIRST_TOUCH_LEGACY_TYPED, GEMINI_MODEL, geminiGenerate, RUBRIC_CURRENT } from "./callAiProviders.js";
-import { OBJECTION_FROM, OBJECTION_KIT, RUBRIC_OBJECTION_V1 } from "./callAiObjection.js";
+import { DECISION_FROM, OBJECTION_FROM, OBJECTION_KIT, OBJECTION_KIT_V2, RUBRIC_OBJECTION_V1, RUBRIC_OBJECTION_V2 } from "./callAiObjection.js";
 import { carrierActiveIds } from "./carrierCallQueue.js";
 import { DEBT_KIT, RUBRIC_DEBT_V1, receivableLinkedCallIds } from "./receivableCallAi.js";
 import { notifyCapOnce } from "./aiCapAlert.js";
@@ -56,6 +56,11 @@ export const STT_BUDGET_MS = 5 * 60_000;
 export const LLM_BUDGET_MS = 3 * 60_000;
 /** Частина `LLM_BUDGET_MS` для рубрики заперечень (ТЗ 08.10.2026): відповідь коротка, тож 30 с вистачає на порцію. */
 export const OBJ_BUDGET_MS = 30_000;
+/**
+ * Частина `OBJ_BUDGET_MS` для хвоста рубрики v1 (дзвінки 09–12.10, чия розшифровка запізнилась). Порожня черга
+ * повертається одразу, тож у звичайний тік ці секунди дістаються v2.
+ */
+export const OBJ_V1_TAIL_MS = 8_000;
 /** Частина `LLM_BUDGET_MS` для розбору розмов про борг (4631, 09.10.2026): одиниці на день, відповідь коротка. */
 export const DEBT_BUDGET_MS = 20_000;
 /** Між тіками — 10 хв; сума бюджетів мусить лишати запас на вибірку й останню порцію. */
@@ -67,17 +72,19 @@ export const OBJ_MAX_OUTPUT_TOKENS = 512;
 export const DEBT_MAX_OUTPUT_TOKENS = 768;
 
 /**
- * Розмови для рубрики заперечень: основний розбір готовий, дзвінок не раніше `from` (київська дата), і тип не з тих,
- * що впевнено йдуть у «Виключені». Повертає `uniqueid`; черга сама пропустить уже розібрані (`ON CONFLICT`).
+ * Розмови для рубрики заперечень: основний розбір готовий, дзвінок у `[from, before)` (київські дати; `before` = null —
+ * без верхньої межі), і тип не з тих, що впевнено йдуть у «Виключені». Повертає `uniqueid`; черга сама пропустить уже
+ * розібрані (`ON CONFLICT`).
  */
-export async function objectionCandidates(db: Db, from: string): Promise<string[]> {
+export async function objectionCandidates(db: Db, from: string, before: string | null = null): Promise<string[]> {
   const r = await db.query<{ uniqueid: string }>(
     `SELECT DISTINCT t.uniqueid FROM call_transcripts t
        JOIN call_analyses a ON a.transcript_id = t.id AND a.rubric_version = ANY($1::text[]) AND a.status = 'done'
        JOIN ringostat_calls rc ON rc.uniqueid = t.uniqueid
       WHERE (rc.calldate AT TIME ZONE 'Europe/Kyiv')::date >= $2::date
+        AND ($3::date IS NULL OR (rc.calldate AT TIME ZONE 'Europe/Kyiv')::date < $3::date)
         AND COALESCE(a.result->>'conversation_type', '') NOT IN ('carrier', 'vendor', 'job_seeker', 'wrong_number')`,
-    [[RUBRIC_CURRENT, ...FIRST_TOUCH_LEGACY_TYPED], from]);
+    [[RUBRIC_CURRENT, ...FIRST_TOUCH_LEGACY_TYPED], from, before]);
   return r.rows.map((x) => x.uniqueid);
 }
 
@@ -255,19 +262,25 @@ export async function runCallAiTick(env: TickEnv): Promise<TickReport> {
 
   // 🛡 Заперечення (ТЗ 08.10.2026): окрема рубрика поверх УЖЕ розібраних розмов, лише від дня викату — старші тільки
   // окремим запуском після згоди власника. Виключені типи (перевізник, продавець, пошук роботи, помилка номером) — ні.
-  const op = { ...ap, rubricVersion: RUBRIC_OBJECTION_V1 };
-  const objIds = await objectionCandidates(env.db, OBJECTION_FROM);
-  if (objIds.length) await enqueueAnalyses(env.db, { ...op, now: env.now() }, objIds, notAd);
-  const obj = await drainWithBudget(() => runAnalysisPortion(env.db, {
-    apiKey: env.keys.gemini, kit: OBJECTION_KIT,
-    generate: (key, model, body) => geminiGenerate(env.http, key, model, body, LLM_POLICY),
-  }, {
-    ...common, ...op, now: env.now(), operation: "analysis", monthCapUsd: env.prices.llmMonthCapUsd,
-    maxOutputTokens: OBJ_MAX_OUTPUT_TOKENS,
-    usdPerInputToken: env.prices.llmUsdPerMtokIn == null ? null : env.prices.llmUsdPerMtokIn / 1e6,
-    usdPerOutputToken: env.prices.llmUsdPerMtokOut == null ? null : env.prices.llmUsdPerMtokOut / 1e6,
-  }), OBJ_BUDGET_MS, env.http.nowMs, out.llm);
-  if (!out.llmStoppedBy) out.llmStoppedBy = obj.stoppedBy;
+  // 🤝 З 13.10.2026 — рубрика v2 (заперечення + «згода після ціни»), лише для дзвінків від `DECISION_FROM`; v1 лишається
+  // для хвоста 09–12.10 (розшифровка могла запізнитись). Дзвінки 13.10, розібрані v1 ще до викату, отримують і v2 —
+  // заради згоди; заперечення екран і далі бере з v1 (`OBJECTION_RUBRICS`), тож показане вранці не зсувається.
+  const runObjection = async (rubricVersion: string, kit: typeof OBJECTION_KIT, ids: string[], budgetMs: number) => {
+    const op = { ...ap, rubricVersion };
+    if (ids.length) await enqueueAnalyses(env.db, { ...op, now: env.now() }, ids, notAd);
+    return drainWithBudget(() => runAnalysisPortion(env.db, {
+      apiKey: env.keys.gemini, kit,
+      generate: (key, model, body) => geminiGenerate(env.http, key, model, body, LLM_POLICY),
+    }, {
+      ...common, ...op, now: env.now(), operation: "analysis", monthCapUsd: env.prices.llmMonthCapUsd,
+      maxOutputTokens: OBJ_MAX_OUTPUT_TOKENS,
+      usdPerInputToken: env.prices.llmUsdPerMtokIn == null ? null : env.prices.llmUsdPerMtokIn / 1e6,
+      usdPerOutputToken: env.prices.llmUsdPerMtokOut == null ? null : env.prices.llmUsdPerMtokOut / 1e6,
+    }), budgetMs, env.http.nowMs, out.llm);
+  };
+  const objTail = await runObjection(RUBRIC_OBJECTION_V1, OBJECTION_KIT, await objectionCandidates(env.db, OBJECTION_FROM, DECISION_FROM), OBJ_V1_TAIL_MS);
+  const obj = await runObjection(RUBRIC_OBJECTION_V2, OBJECTION_KIT_V2, await objectionCandidates(env.db, DECISION_FROM), OBJ_BUDGET_MS - OBJ_V1_TAIL_MS);
+  if (!out.llmStoppedBy) out.llmStoppedBy = objTail.stoppedBy ?? obj.stoppedBy;
 
   // 💬 Розбір розмов про борг (4631) — своя рубрика, лише для прикріплених до домовленості дзвінків.
   const dp = { ...ap, rubricVersion: RUBRIC_DEBT_V1 };
@@ -286,7 +299,7 @@ export async function runCallAiTick(env: TickEnv): Promise<TickReport> {
   const capped = [...out.stt, ...out.llm].find((x) => x.state === "capped");
   if (capped && env.alert) await notifyCapOnce(env.db, "first_touch", capped.stoppedBy ?? "стеля вичерпана", env.now(), env.alert);
 
-  const errs = [stt.error, llm.error, obj.error, dbt.error].filter((e): e is Error => e != null);
+  const errs = [stt.error, llm.error, objTail.error, obj.error, dbt.error].filter((e): e is Error => e != null);
   if (errs.length) throw new Error(errs.map((e) => e.message).join(" · "));
   return out;
 }

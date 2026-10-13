@@ -293,7 +293,7 @@ test("#836 ОДИН ДЗВІНОК = ОДИН РЯДОК: розмова, пер
     priceDiscussed: null, objections: 0, promises: 0, promisesWithDeadline: 0, unverifiedQuotes: 0,
     pipelineGroup: "full" as const, rejectReason: null, promiseState: null, managerPromises: 0, silentBeforeClose: null,
     conversationType: null, typeConfidence: null, typeReason: null, priceValue: null, inReport: true, typeCheck: false, typeOverride: null,
-    priceNote: null, missedNote: null, offlineNote: null, reviewNote: null, hasRequest: false, objection: null, dealOutcome: null, clientPhone: null, firstOutboundAt: null, reactionMin: null, reactionOffHours: false };
+    priceNote: null, missedNote: null, offlineNote: null, reviewNote: null, hasRequest: false, objection: null, decision: null, dealOutcome: null, clientPhone: null, firstOutboundAt: null, reactionMin: null, reactionOffHours: false };
   const got = collapseByCall([
     { ...base, kommoId: 9, dealCreatedAt: "2026-09-23T07:00:00.000Z" },
     { ...base, kommoId: 5, dealCreatedAt: "2026-09-22T07:00:00.000Z" },
@@ -1249,9 +1249,12 @@ test("#905 ЗАПЕРЕЧЕННЯ: окрема рубрика, лише нес�
   for (const rule of ["зʼясував причину", "аргументував цінність", "запропонував альтернативу", "наступний крок із часом", "«добре, думайте»"])
     assert.ok(O.OBJECTION_SYSTEM_PROMPT.includes(rule), `🔴 у промпті немає правила ТЗ: ${rule}`);
   const tick = SRC("core/callAiTick.ts");
-  assert.match(tick, /const objIds = await objectionCandidates\(env\.db, OBJECTION_FROM\);/, "🔴 рубрика заперечень бере не лише нові розмови");
+  // 13.10.2026: рубрика v2 (згода після ціни) — від DECISION_FROM, v1 — лише хвіст [OBJECTION_FROM, DECISION_FROM). Твердження те саме.
+  assert.match(tick, /objectionCandidates\(env\.db, OBJECTION_FROM, DECISION_FROM\)/, "🔴 рубрика заперечень v1 бере не лише свої дні");
+  assert.match(tick, /objectionCandidates\(env\.db, DECISION_FROM\)/, "🔴 рубрика заперечень v2 бере не лише нові розмови");
   assert.match(tick, /WHERE \(rc\.calldate AT TIME ZONE 'Europe\/Kyiv'\)::date >= \$2::date/, "🔴 межа дати не за Києвом");
-  assert.match(tick, /apiKey: env\.keys\.gemini, kit: OBJECTION_KIT,/, "🔴 порція заперечень іде без своєї рубрики");
+  assert.match(tick, /runObjection\(RUBRIC_OBJECTION_V1, OBJECTION_KIT,/, "🔴 порція заперечень v1 іде без своєї рубрики");
+  assert.match(tick, /runObjection\(RUBRIC_OBJECTION_V2, OBJECTION_KIT_V2,/, "🔴 порція заперечень v2 іде без своєї рубрики");
   const T = await import("./callAiTick.js");
   assert.ok(T.OBJ_BUDGET_MS > 0 && T.OBJ_BUDGET_MS < T.LLM_BUDGET_MS, "🔴 бюджет заперечень поза бюджетом розбору");
   // 4631 (09.10.2026): розбір розмов про борг теж бере ЧАСТКУ того самого бюджету — твердження те саме.
@@ -1573,6 +1576,143 @@ test("#925 ПРОХАННЯ ПЕРЕДЗВОНИТИ — У СПИСКУ Й КА
   assert.match(tick, /const fresh = await transcriptsWithoutLegacy\(env\.db\);\n  if \(fresh\.length\) await enqueueAnalyses\(env\.db, \{ \.\.\.ap, now: env\.now\(\) \}, fresh, (?:carrierOnly|notAd)\);/, "🔴 джоба ставить v4 не лише новим розмовам");
   assert.doesNotMatch(tick, /enqueueAnalyses\(env\.db, \{ \.\.\.ap, now: env\.now\(\) \}, null/, "🔴 v4 у черзі для ВСІХ розшифровок — старі цифри зсунуться");
   assert.match(tick, /a\.rubric_version = ANY\(\$1::text\[\]\) AND a\.status = 'done'\)`,\n    \[\[\.\.\.FIRST_TOUCH_LEGACY_TYPED\]\]\);/, "🔴 «ще не розібрані» визначено не через v2/v3");
-  assert.match(tick, /\[\[RUBRIC_CURRENT, \.\.\.FIRST_TOUCH_LEGACY_TYPED\], from\]/, "🔴 заперечення не беруть розмови, розібрані v3");
+  assert.match(tick, /\[\[RUBRIC_CURRENT, \.\.\.FIRST_TOUCH_LEGACY_TYPED\], from, before\]/, "🔴 заперечення не беруть розмови, розібрані v3");
 });
 
+
+/**
+ * #926 — РУБРИКА ЗАПЕРЕЧЕНЬ v2: «ЗГОДА ПІСЛЯ ЦІНИ» (рішення Романа 13.10.2026). Друге питання в тому самому виклику моделі.
+ * Відповідь приймається лише несуперечлива: «думає» чи «відмовив» без заперечення — відмова з причиною (за правилом 1 це
+ * завжди заперечення); рішення без цитати клієнта — відмова; «ціни не було» з цитатою — відмова. Цитату рішення звіряємо з
+ * ОДНИМ каналом. Рубрика v1 не змінилась ні на байт: її розбори 09–12.10 лишаються чинними.
+ * 🧨 Червоніє, якщо приймати «думає» без заперечення, рішення без цитати, склейку двох каналів, або якщо правка v2 зачепить
+ * промпт v1.
+ */
+test("#926 ЗГОДА ПІСЛЯ ЦІНИ · РУБРИКА: лише несуперечлива відповідь, цитата рішення з одного каналу, v1 без змін", async () => {
+  const O = await import("./callAiObjection.js");
+  const obj = { present: true, type: "think" as const, client_quote: "я подумаю", handled: "not_handled" as const, manager_action: "попрощався" };
+  const none = { present: false, type: "none" as const, client_quote: "", handled: "n/a" as const, manager_action: "" };
+  const v = (x: unknown) => O.validateObjectionV2(x);
+  assert.equal(v({ ...obj, client_decision: "thinking", decision_quote: "я подумаю" }).ok, true, "дзеркало: «думає» із запереченням приймається");
+  assert.equal(v({ ...none, client_decision: "agreed", decision_quote: "оформлюйте" }).ok, true, "дзеркало: «погодився» без заперечення приймається");
+  assert.equal(v({ ...obj, type: "price", client_decision: "agreed", decision_quote: "добре, давайте" }).ok, true, "дзеркало: заперечив, а потім погодився — приймається");
+  assert.equal(v({ ...none, client_decision: "no_price", decision_quote: "" }).ok, true, "дзеркало: «ціни не було» приймається");
+  assert.equal(v({ ...none, client_decision: "thinking", decision_quote: "я подумаю" }).ok, false, "🔴 «думає» без заперечення — прийнято");
+  assert.equal(v({ ...none, client_decision: "declined", decision_quote: "дорого" }).ok, false, "🔴 «відмовив» без заперечення — прийнято");
+  assert.equal(v({ ...none, client_decision: "agreed", decision_quote: "  " }).ok, false, "🔴 рішення без цитати клієнта — прийнято");
+  assert.equal(v({ ...none, client_decision: "no_price", decision_quote: "оформлюйте" }).ok, false, "🔴 «ціни не було» з цитатою рішення — прийнято");
+  assert.equal(v({ ...none, client_decision: "maybe", decision_quote: "х" }).ok, false, "🔴 рішення поза переліком — прийнято");
+  assert.equal(v({ ...none }).ok, false, "🔴 відповідь без поля рішення — прийнято");
+  const turns = [{ channel: 0, start: 0, end: 2, text: "Дванадцять тисяч", lang: null }, { channel: 1, start: 2, end: 4, text: "Добре, оформлюйте", lang: null }];
+  const r = O.verifyObjectionQuote({ ...none, client_decision: "agreed", decision_quote: "оформлюйте" }, turns);
+  assert.equal(r.decision_quote_found, true, "🔴 справжня цитата рішення не знайдена");
+  assert.equal(O.verifyObjectionQuote({ ...none, client_decision: "agreed", decision_quote: "тисяч добре" }, turns).decision_quote_found, false, "🔴 склейка з двох каналів прийнята як цитата рішення");
+  assert.equal("decision_quote_found" in O.verifyObjectionQuote(none, turns), false, "🔴 відповідь v1 отримала поле згоди");
+  for (const rule of ["«чекаю рахунок»", "«узгоджу з керівником»", "«вже знайшли»", "орієнтир з іншого рейсу", "thinking і declined — це завжди заперечення"])
+    assert.ok(O.OBJECTION_SYSTEM_PROMPT_V2.includes(rule), `🔴 у промпті v2 немає правила: ${rule}`);
+  assert.ok(O.OBJECTION_SYSTEM_PROMPT_V2.includes("Відповідай на два питання"), "🔴 промпт v2 досі питає лише про заперечення");
+  assert.ok(!O.OBJECTION_SYSTEM_PROMPT.includes("client_decision") && O.OBJECTION_SYSTEM_PROMPT.includes("Відповідай лише на одне питання"), "🔴 правка v2 зачепила промпт v1");
+  assert.deepEqual(O.OBJECTION_SCHEMA.required, ["present", "type", "client_quote", "handled", "manager_action"], "🔴 схема v1 змінилась");
+  assert.deepEqual([...O.OBJECTION_SCHEMA_V2.required].slice(-2), ["client_decision", "decision_quote"], "🔴 схема v2 не вимагає рішення й цитати");
+});
+
+/**
+ * #927 — ЗГОДА ПІСЛЯ ЦІНИ · ЯДРО (рішення Романа 13.10.2026: «окрема інформація для розмов, в яких назвали ціну; не
+ * впливає на оцінку»). Показується лише коли пункт «ціна» = так; ціни не було, лід втрачено, незручно говорити, не
+ * розібрано — `null`. Модель каже «ціни не було», а основний розбір — що була: чесне «не визначено», не вгадуємо.
+ * Бал і чек-лист від згоди не залежать узагалі.
+ * 🧨 Червоніє, якщо прибрати умову ціни, мовчки перетворити «ціни не було» на відповідь, або якщо згода потрапить у бал.
+ */
+test("#927 ЗГОДА ПІСЛЯ ЦІНИ · ЯДРО: лише там, де назвали ціну; розбіжність — «не визначено»; бал не змінюється", async () => {
+  const R = await import("./firstTouchTeamReport.js");
+  type Row = Parameters<typeof R.clientDecision>[0];
+  const base = { inReport: true, state: "done", priceDiscussed: true, promiseState: null, typeCheck: false, priceNote: null, missedNote: null,
+    conversationType: "cargo_request", hasRequest: true, objection: null } as unknown as Row;
+  const dec = (value: string, quote = "оформлюйте") => ({ value, quote, quoteFound: true });
+  assert.deepEqual(R.clientDecision({ ...base, decision: dec("agreed") })?.value, "agreed", "дзеркало: ціну назвали — згоду видно");
+  assert.deepEqual(R.clientDecision({ ...base, decision: dec("declined", "дорого") })?.value, "declined", "дзеркало: відмову видно");
+  assert.equal(R.clientDecision({ ...base, priceDiscussed: false, decision: dec("agreed") }), null, "🔴 ціни не було, а згоду показано");
+  assert.equal(R.clientDecision({ ...base, conversationType: "lead_lost", decision: dec("agreed") }), null, "🔴 втрачений лід — згоду показано");
+  assert.equal(R.clientDecision({ ...base, conversationType: "call_later", decision: dec("agreed") }), null, "🔴 «незручно говорити» — згоду показано");
+  assert.equal(R.clientDecision({ ...base, state: "llm_failed", decision: dec("agreed") }), null, "🔴 нерозібрана розмова — згоду показано");
+  assert.equal(R.clientDecision({ ...base, decision: null }), null, "🔴 рубрика v2 не розбирала, а згоду вигадано");
+  assert.deepEqual(R.clientDecision({ ...base, decision: dec("no_price", "") }), { value: "unclear", quote: "", quoteFound: null },
+    "🔴 ціну назвали, а модель каже «не було» — не «не визначено»");
+  for (const d of [null, dec("agreed"), dec("declined", "дорого"), dec("thinking", "подумаю")]) {
+    const row = { ...base, decision: d } as Row;
+    assert.deepEqual(R.checklist(row), R.checklist(base), "🔴 згода змінила чек-лист");
+    assert.deepEqual(R.checklistScore(R.checklist(row)), R.checklistScore(R.checklist(base)), "🔴 згода змінила бал");
+  }
+});
+
+/**
+ * #928 — ЗГОДА ПІСЛЯ ЦІНИ · ЖИВА СХЕМА. Заперечення береться з v1, якщо вона є (поява v2 не зсуває вже показані цифри
+ * дзвінків 13.10, розібраних до викату), інакше — з v2; згода — лише з v2. Список і картка дають те саме.
+ * 🧨 Червоніє, якщо переставити порядок рубрик (заперечення v1 перепишеться відповіддю v2), брати згоду з будь-якої рубрики
+ * чи розвести список і картку.
+ */
+test("#928 ЗГОДА ПІСЛЯ ЦІНИ · ЖИВА СХЕМА: заперечення — v1 раніше v2, згода — лише v2, список = картка", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const { aiCallsList, aiCallCard } = await import("./callAiScreen.js");
+  await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel,manager_id)
+    VALUES (8860,'D8860',8921932,1,'2026-10-13 10:00:00+03','0508800060','ad',9011),(8861,'D8861',8921932,1,'2026-10-13 11:00:00+03','0508800061','ad',9011)`);
+  const call = (u: string, at: string, phone: string) => c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
+    VALUES ($1,$2,'out','ANSWERED',60,65,9011,$3,'https://rec/x')`, [u, at, phone]);
+  await call("dc1", "2026-10-13 10:10:00+03", "380508800060");
+  await call("dc2", "2026-10-13 11:10:00+03", "380508800061");
+  const tr = async (u: string) => (await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
+    VALUES ($1,'elevenlabs','scribe_v2','done','[{"channel":1,"start":0,"end":2,"text":"добре, оформлюйте","lang":"ukr"}]'::jsonb) RETURNING id`, [u])).rows[0].id;
+  const an = (tid: string, rubric: string, result: unknown) => c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result)
+    VALUES ($1,'google','gemini-3.8-flash',$2,'done',$3::jsonb)`, [tid, rubric, JSON.stringify(result)]);
+  const v1 = { present: true, type: "price", client_quote: "дорого", handled: "handled", manager_action: "запропонував догруз", quote_found: true };
+  const v2 = { present: false, type: "none", client_quote: "", handled: "n/a", manager_action: "", quote_found: null,
+    client_decision: "agreed", decision_quote: "добре, оформлюйте", decision_quote_found: true };
+  const t1 = await tr("dc1"); await an(t1, "first-touch-v4", RESULT); await an(t1, "first-touch-objection-v1", v1); await an(t1, "first-touch-objection-v2", v2);
+  const t2 = await tr("dc2"); await an(t2, "first-touch-v4", RESULT); await an(t2, "first-touch-objection-v2", v2);
+  const rows = (await aiCallsList(c.db, FAKE_AD, "2026-10-13", "2026-10-13", new Date("2026-10-13T15:00:00Z"), {})).rows;
+  const a = rows.find((r) => r.uniqueid === "dc1"), b = rows.find((r) => r.uniqueid === "dc2");
+  assert.ok(a && b, "🔴 розмов 13.10 немає в списку — гейту нема що перевіряти");
+  assert.deepEqual([a.objection?.present, a.objection?.type], [true, "price"], "🔴 заперечення v1 переписане відповіддю v2");
+  assert.deepEqual(a.decision, { value: "agreed", quote: "добре, оформлюйте", quoteFound: true }, "🔴 згоду не взято з v2");
+  assert.deepEqual([b.objection?.present, b.decision?.value], [false, "agreed"], "🔴 без v1 заперечення не взято з v2");
+  const card = await aiCallCard(c.db, "dc1", true, {});
+  assert.deepEqual([card?.row.objection?.type, card?.row.decision?.value], ["price", "agreed"], "🔴 картка розійшлась зі списком");
+});
+
+/**
+ * #929 — ЗГОДА ПІСЛЯ ЦІНИ НА ЕКРАНІ І В ТІКУ. Тік: v2 — лише від `DECISION_FROM` (Роман: «тільки з сьогоднішнього дня»),
+ * v1 — лише хвіст до нього, обидві беруть частку бюджету заперечень. Роут віддає згоду від ядра в списку й картці. Фронт:
+ * колонка «Після ціни», колонка менеджерів із сортуванням, фільтр «Погодився, а в Kommo втрачено»; у чек-лист і бал згода
+ * НЕ входить; ціну назвали до 13.10 — «не розбиралось», а не порожньо.
+ * 🧨 Червоніє, якщо v2 піде на старі розмови, згода з'явиться серед пунктів чек-листа, фронт почне вирішувати сам, чи її
+ * показувати, або зникне колонка чи фільтр.
+ */
+test("#929 ЗГОДА ПІСЛЯ ЦІНИ: тік лише з 13.10, роут від ядра, колонки й фільтр на екрані, у бал не входить", async () => {
+  const O = await import("./callAiObjection.js");
+  const T = await import("./callAiTick.js");
+  assert.equal(O.DECISION_FROM, "2026-10-13", "🔴 згода після ціни аналізується не з 13.10");
+  assert.ok(O.DECISION_FROM > O.OBJECTION_FROM, "🔴 v2 стартує не після v1");
+  assert.deepEqual([...O.OBJECTION_RUBRICS], [O.RUBRIC_OBJECTION_V1, O.RUBRIC_OBJECTION_V2], "🔴 заперечення беруться не з v1 раніше v2");
+  assert.ok(T.OBJ_V1_TAIL_MS > 0 && T.OBJ_V1_TAIL_MS < T.OBJ_BUDGET_MS, "🔴 хвіст v1 не є часткою бюджету заперечень");
+  const tick = SRC("core/callAiTick.ts");
+  assert.match(tick, /OBJECTION_KIT, await objectionCandidates\(env\.db, OBJECTION_FROM, DECISION_FROM\), OBJ_V1_TAIL_MS\)/, "🔴 v1 бере не свій хвіст чи не свій бюджет");
+  assert.match(tick, /OBJECTION_KIT_V2, await objectionCandidates\(env\.db, DECISION_FROM\), OBJ_BUDGET_MS - OBJ_V1_TAIL_MS\)/, "🔴 v2 бере не лише нові розмови чи понад бюджет");
+  assert.match(tick, /AND \(\$3::date IS NULL OR \(rc\.calldate AT TIME ZONE 'Europe\/Kyiv'\)::date < \$3::date\)/, "🔴 верхня межа дат не за Києвом");
+  const route = SRC("routes/dashboard.ts");
+  assert.equal((route.match(/clientDecision: clientDecision\((?:r|card\.row)\)/g) ?? []).length, 2, "🔴 роут віддає згоду не від ядра в списку й картці");
+  const view = readFileSync(FE("pages/dashboard/aiCallsView.ts"), "utf8");
+  assert.match(view, /\{ key: "request", label: "Запит" \}, \{ key: "price", label: "Ціна" \}, \{ key: "promise", label: "Обіцянка" \}, \{ key: "objection", label: "Заперечення" \},\n\];/,
+    "🔴 склад чек-листа змінився — згода не має бути пунктом балу");
+  assert.match(view, /agreedLost: \(r\) => r\.clientDecision\?\.value === "agreed" && r\.dealOutcome\?\.state === "lost",/, "🔴 фільтр «погодився, а в Kommo втрачено» рахує не те");
+  assert.match(view, /: k === "decision" \? \(l\.decided \? l\.agreed \/ l\.decided : null\)/, "🔴 сортування за згодою не за часткою");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /\{sortHead\("decision", "Згода після ціни"\)\}/, "🔴 у блоці менеджерів немає колонки згоди");
+  assert.match(sec, /\["agreedLost", "Погодився, а в Kommo втрачено"\]/, "🔴 немає фільтра «погодився, а в Kommo втрачено»");
+  assert.match(sec, />Після ціни<\/th>/, "🔴 у таблиці немає колонки «Після ціни»");
+  assert.match(sec, /r\.checklist\?\.price === "y"\n\s+\? <span className="ftd-sub" title="Згода після ціни розбирається для розмов від 13\.10\.2026">не розбиралось<\/span>/,
+    "🔴 ціну назвали до 13.10 — показано порожнечу замість «не розбиралось»");
+  assert.doesNotMatch(sec, /clientDecision[^\n]*priceDiscussed|priceDiscussed[^\n]*clientDecision/, "🔴 фронт сам вирішує, чи показувати згоду");
+  const ck = readFileSync(FE("pages/dashboard/sections/FirstTouchChecklist.tsx"), "utf8");
+  assert.match(ck, /<DecisionLine c=\{c\} checklist=\{checklist\} at=\{at\} onSeek=\{onSeek\} \/>/, "🔴 картка не показує «Після ціни»");
+  assert.match(ck, /у бал не входить/, "🔴 картка не каже, що згода поза балом");
+});

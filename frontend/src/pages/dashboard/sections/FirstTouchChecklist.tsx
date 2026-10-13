@@ -1,5 +1,5 @@
 import type { AiCallCardResp, AiChecklistT } from "../../../api";
-import { CHECK_ITEMS, CHECK_MARK_UI, PROMISE_UI, mmss, quoteTurnIndex, type PromiseStateT, type ConversationTypeT } from "../aiCallsView";
+import { CHECK_ITEMS, CHECK_MARK_UI, DECISION_UI, PROMISE_UI, TONE_COLOR, mmss, quoteTurnIndex, type PromiseStateT, type ConversationTypeT } from "../aiCallsView";
 
 /**
  * ✅ ЧЕК-ЛИСТ ПЕРШОГО ДОТИКУ з доказами — ОДИН компонент для черги розбору й бічної картки (Роман 08.10.2026: «коли
@@ -64,6 +64,32 @@ export function ChecklistBlock({ c, checklist, promiseState, conversationType, o
           </div>
         );
       })}
+      <DecisionLine c={c} checklist={checklist} at={at} onSeek={onSeek} />
+    </div>
+  );
+}
+
+/**
+ * 🤝 «Після ціни» (рішення Романа 13.10.2026) — ПІД чек-листом і без кружка: це рішення клієнта, а не пункт балу.
+ * Ціни не було — рядка немає зовсім; ціну назвали, а розмова до 13.10 — чесно «не розбиралось».
+ */
+function DecisionLine({ c, checklist, at, onSeek }: {
+  c: AiCallCardResp; checklist: AiChecklistT; at: (q: string | undefined) => number | null; onSeek: (t: number) => void;
+}) {
+  if (checklist.price !== "y") return null;
+  const d = c.clientDecision;
+  const ui = d ? DECISION_UI[d.value] : null;
+  const t = d ? at(d.quote) : null;
+  return (
+    <div className="ftd-decision">
+      <div><b>Після ціни</b>{" "}
+        {ui
+          ? <span className="ftd-chip" title={ui.hint} style={{ background: TONE_COLOR[ui.tone].bg, color: TONE_COLOR[ui.tone].fg }}>{ui.label}</span>
+          : <span style={{ fontSize: 13, color: "var(--text-muted)" }}>не розбиралось — згода після ціни аналізується для розмов від 13.10</span>}
+        <span style={{ fontSize: 12, color: "var(--text-muted)" }}> · у бал не входить</span></div>
+      {d?.quote.trim() && (t != null
+        ? <button type="button" className="ftd-quote" onClick={() => onSeek(t)}>▶ <b>{mmss(t)}</b> «{d.quote}»</button>
+        : <span className="ftd-quote" style={{ cursor: "default" }}>«{d.quote}»</span>)}
     </div>
   );
 }

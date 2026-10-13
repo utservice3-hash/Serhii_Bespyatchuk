@@ -40,6 +40,8 @@ export interface ReportRowIn {
   reviewNote?: { text: string } | null;
   /** Заперечення з окремої рубрики (ТЗ 08.10.2026); `null`/відсутнє — ще не розібрано цією рубрикою. */
   objection?: { present: boolean; handled: string } | null;
+  /** Сира відповідь моделі «чим закінчилось після ціни» (рубрика заперечень v2, з 13.10.2026). */
+  decision?: { value: string; quote: string; quoteFound: boolean | null } | null;
 }
 
 export interface ManagerLine {
@@ -157,6 +159,21 @@ export function checklist(r: ReportRowIn): Checklist | null {
     promise: ps != null && PROMISE_YES.has(ps) ? "y" : ps != null && PROMISE_NO.has(ps) ? "n" : "o",
     objection: !r.objection?.present ? "o" : r.objection.handled === "handled" ? "y" : r.objection.handled === "not_handled" ? "n" : "o",
   };
+}
+
+/**
+ * 🤝 ЗГОДА ПІСЛЯ ЦІНИ (рішення Романа 13.10.2026): ОКРЕМА інформація лише для розмов, де ціну назвали (пункт «ціна» = `y`),
+ * і в бал НЕ входить — це рішення клієнта, а не дія менеджера; бал карав би за дорогий рейс.
+ *   `agreed` / `thinking` / `declined` — відповідь моделі; `unclear` — ціну назвали, а модель каже «ціни не було»
+ *   (основний розбір і рубрика заперечень розійшлись: чесне «не визначено», не вгадуємо котрий правий);
+ *   `null` — ціни не було, розмову не розібрано, або рубрика v2 її не розбирала (дзвінки до 13.10).
+ */
+export type ClientDecisionView = { value: "agreed" | "thinking" | "declined" | "unclear"; quote: string; quoteFound: boolean | null };
+export function clientDecision(r: ReportRowIn): ClientDecisionView | null {
+  if (checklist(r)?.price !== "y" || !r.decision) return null;
+  const v = r.decision.value;
+  if (v === "agreed" || v === "thinking" || v === "declined") return { value: v, quote: r.decision.quote, quoteFound: r.decision.quoteFound };
+  return { value: "unclear", quote: "", quoteFound: null };
 }
 
 /** Бал = виконані ÷ ті, що рахуються. `null` — розмову не розібрано. */
