@@ -5,7 +5,7 @@ import path from "node:path";
 import { skipReason } from "../db/scratchDb.js";
 import { stageCountsQuery, handoffLinkQuery, bucketKeySql, type SqlQuery } from "./leadgenSql.js";
 import { LEADGEN_STAGE_IDS, QUALIFICATION_PIPELINES } from "./leadgenStages.js";
-import { pickHandoffs, LINK_BEFORE_SEC, LINK_AFTER_SEC, type HandoffEntry } from "./leadgenHandoffRules.js";
+import { pickHandoffs, LINK_BEFORE_SEC, LINK_AFTER_SEC, LINK_NOTE_AFTER_SEC, type HandoffEntry } from "./leadgenHandoffRules.js";
 
 /**
  * #675…#676b — ЖИВИЙ SQL ЛІДОГЕНУ НА ТИМЧАСОВІЙ БАЗІ: вікно звʼязку передачі з угодою
@@ -57,7 +57,7 @@ async function run<T>(q: SqlQuery): Promise<T[]> {
 }
 const linkQ = (from: string, to: string) => handoffLinkQuery(from, to,
   { pz: LEADGEN_STAGE_IDS.pz, qualified: Q, managerPipelines: [...QUALIFICATION_PIPELINES, ...FC], genericClientKeys: GENERIC },
-  { beforeSec: LINK_BEFORE_SEC, afterSec: LINK_AFTER_SEC });
+  { beforeSec: LINK_BEFORE_SEC, afterSec: LINK_AFTER_SEC, noteAfterSec: LINK_NOTE_AFTER_SEC });
 
 let nextId = 700000;
 async function deal(p: { manager: number | null; pipeline: number; status?: number; ck: string | null;
@@ -212,12 +212,25 @@ before(async () => {
     const c = await deal({ manager: 3, pipeline: FC[0], ck: "n-other", created: sec(at, 20) }); await note(pz, c);
     fx["n-conflict"] = { pz, want: c };
   }
-  { // c) дочірня з примітки поза вікном цього входу → лишається здогад E
+  { // c) дочірня з примітки через 5 хв (поза 2 хв, у межах 30) → примітка, не здогад E (08.10.2026, 62363343)
     const at = sec(T2, 1200);
     const pz = await deal({ manager: 1, pipeline: PZ, ck: "n-o" }); await ev(pz, PZ, Q, at);
     const dd = await deal({ manager: 3, pipeline: FC[0], ck: "n-d", created: sec(at, 300) }); await note(pz, dd);
-    const ee = await deal({ manager: 3, pipeline: FC[0], ck: "n-o", created: sec(at, 3) });
-    fx["n-outside"] = { pz, want: ee };
+    await deal({ manager: 3, pipeline: FC[0], ck: "n-o", created: sec(at, 3) });
+    fx["n-late"] = { pz, want: dd };
+  }
+  { // e) два входи в 142 (10:00 і 10:20), дочірня з примітки о 10:25 → належить ДРУГОМУ, перший — без угоди
+    const pz = await deal({ manager: 1, pipeline: PZ, ck: null });
+    await ev(pz, PZ, Q, sec(T2, 3600)); await ev(pz, PZ, Q, sec(T2, 4800));
+    const k = await deal({ manager: 3, pipeline: FC[0], ck: "n-two", created: sec(T2, 5100) }); await note(pz, k);
+    fx["n-two-first"] = { pz, want: null }; fx["n-two-second"] = { pz, want: k };
+  }
+  { // f) дочірня з примітки через 31+ хв → поза вікном, лишається здогад
+    const at = sec(T2, 7200);
+    const pz = await deal({ manager: 1, pipeline: PZ, ck: "n-f" }); await ev(pz, PZ, Q, at);
+    const far = await deal({ manager: 3, pipeline: FC[0], ck: "n-far", created: sec(at, 1900) }); await note(pz, far);
+    const g = await deal({ manager: 3, pipeline: FC[0], ck: "n-f", created: sec(at, 3) });
+    fx["n-outside"] = { pz, want: g };
   }
   { // d) ні клієнта, ні примітки → без угоди, як і було
     const pz = await deal({ manager: 1, pipeline: PZ, ck: null }); await ev(pz, PZ, Q, sec(T2, 1800));
@@ -725,23 +738,25 @@ test("#1093 ЖИВИЙ SQL: успішний дзвінок — вихідний
 });
 
 /**
- * #1094b — УГОДА МЕНЕДЖЕРА ЗА ПРИМІТКОЮ KOMMO, А НЕ ЗДОГАДОМ (30.09.2026, угода 62668945). Кожен бік:
- * без клієнта, але з приміткою — звʼязано (раніше — «без угоди»); примітка проти здогаду — примітка;
- * дочірня з примітки поза вікном цього входу — здогад; ні того, ні іншого — без угоди.
- * 🧨 САБОТАЖ: у `handoffLinkQuery` поміняти пріоритети (`0 AS prio` ↔ `1 AS prio`) → червоніє «n-conflict»;
- * прибрати вікно з гілки примітки → червоніє «n-outside».
+ * #1504 — УГОДА МЕНЕДЖЕРА ЗА ПРИМІТКОЮ KOMMO: ОСТАННІЙ ВХІД У 142 ПЕРЕД ЇЇ СТВОРЕННЯМ, ДО 30 ХВ (08.10.2026, 62363343 —
+ * угоду створено через 9 хв після кваліфікації; наступник `#1094b`, де примітка жила у вікні 2 хв). Кожен бік: без клієнта,
+ * але з приміткою — звʼязано; примітка проти здогаду — примітка; примітка через 5 хв — примітка (було: здогад); два входи —
+ * угода другому, перший без угоди; примітка через 31+ хв — здогад; ні того, ні іншого — без угоди.
+ * 🧨 САБОТАЖ: `LINK_NOTE_AFTER_SEC = 120` → червоніє «n-late»; прибрати `NOT EXISTS` пізнішого входу → червоніє «n-two-first».
  */
-test("#1094b ЖИВИЙ SQL: угода менеджера — спершу за приміткою Kommo, здогад за клієнтом — лише без неї", async (t) => {
+test("#1504 ЖИВИЙ SQL: угода за приміткою Kommo — останньому входу в 142 перед її створенням, до 30 хв; здогад — лише без неї", async (t) => {
   if (!client) return t.skip(skip ?? "кластер не піднявся");
-  const rows = await run<{ pz_id: string; deal_id: string | null; link_prio: number | null }>(linkQ("2025-06-10", "2025-06-10"));
-  const got = new Map(rows.map((r) => [Number(r.pz_id), r]));
-  for (const [k, prio] of [["n-nokey", 0], ["n-conflict", 0], ["n-outside", 1], ["n-none", null]] as [string, number | null][]) {
-    const r = got.get(fx[k].pz);
+  const rows = await run<{ pz_id: string; at: Date; deal_id: string | null; link_prio: number | null }>(linkQ("2025-06-10", "2025-06-10"));
+  const one = (pz: number) => rows.filter((r) => Number(r.pz_id) === pz).sort((a, b) => +new Date(a.at) - +new Date(b.at));
+  const cases: [string, number | null, number][] = [["n-nokey", 0, 0], ["n-conflict", 0, 0], ["n-late", 0, 0], ["n-two-first", null, 0],
+    ["n-two-second", 0, 1], ["n-outside", 1, 0], ["n-none", null, 0]];
+  for (const [k, prio, idx] of cases) {
+    const r = one(fx[k].pz)[idx];
     assert.ok(r, `🔴 передача ${k} зникла з результату`);
     assert.equal(r.deal_id == null ? null : Number(r.deal_id), fx[k].want, `🔴 ${k}: угода менеджера ${r.deal_id} замість ${fx[k].want}`);
     assert.equal(r.link_prio == null ? null : Number(r.link_prio), prio, `🔴 ${k}: звʼязано не тим шляхом`);
   }
-  assert.equal(rows.length, 4, "🔴 гілки звʼязку розмножили передачі");
+  assert.equal(rows.length, 7, "🔴 гілки звʼязку розмножили передачі");
 });
 
 /**

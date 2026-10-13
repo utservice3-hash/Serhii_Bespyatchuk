@@ -7,7 +7,7 @@ import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery,
 import { FC_PIPELINES, handoffDealStates, clientSuccessHistory } from "./money.js";
 import { stageName } from "./stageNames.js";
 import {
-  handoffView, trendWindow, mergeBucketRows, assembleTrend, handoffDealRow, handoffMoneyBuckets, leadgenPeriod, LINK_BEFORE_SEC, LINK_AFTER_SEC,
+  handoffView, trendWindow, mergeBucketRows, assembleTrend, handoffDealRow, handoffMoneyBuckets, leadgenPeriod, LINK_BEFORE_SEC, LINK_AFTER_SEC, LINK_NOTE_AFTER_SEC,
   type HandoffScope, type LeadgenHandoffMoney, type HandoffLinkInfo, type LeadgenHandoffDeal, type HandoffRowDeps,
   type LeadgenPersonBucketRow, type StageBucketRow, type CallBucketRow, type TrendMoneyBucket,
 } from "./leadgenHandoffRules.js";
@@ -313,7 +313,7 @@ async function handoffLinks(from: string, to: string): Promise<HandoffLinkInfo[]
   const q = handoffLinkQuery(from, to,
     { pz: LEADGEN_STAGE_IDS.pz, qualified: LEADGEN_STAGE_IDS.qualified,
       managerPipelines: [...QUALIFICATION_PIPELINES, ...FC_PIPELINES], genericClientKeys: GENERIC_CLIENT_KEYS },
-    { beforeSec: LINK_BEFORE_SEC, afterSec: LINK_AFTER_SEC });
+    { beforeSec: LINK_BEFORE_SEC, afterSec: LINK_AFTER_SEC, noteAfterSec: LINK_NOTE_AFTER_SEC });
   const r = await pool.query<{ pz_id: string; lg_id: number; lg_team_id: number | null; at: Date; day: string;
     pz_name: string | null; pz_client: string | null; client_key: string | null; deal_id: string | null; deal_name: string | null;
     deal_client: string | null; sales_manager: string | null; deal_reason: string | null;
