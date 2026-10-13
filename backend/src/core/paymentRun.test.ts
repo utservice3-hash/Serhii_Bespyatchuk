@@ -114,8 +114,11 @@ test("#1268 ПРОВОДКА ФАЙЛУ НА ОПЛАТУ: Танин фільт
  * 🧨 Червоніє, якщо обрив валитиме прогін або 403 почне повторюватись.
  */
 test("#1268b ОБРИВ KOMMO: мережевий обрив — один повтор, відмова з кодом — без повтору", () => {
-  const drop = Object.assign(new TypeError("terminated"), { cause: { code: "UND_ERR_SOCKET" } });
-  assert.equal(isNetworkDrop(drop), true, "🔴 обрив з'єднання не повторюється");
+  // Кожен вид обриву — окремо: одна фікстура з кількома ознаками лишала гейт зеленим, коли правило губило ознаку.
+  assert.equal(isNetworkDrop(new TypeError("terminated")), true, "🔴 «terminated» (undici) не повторюється");
+  assert.equal(isNetworkDrop({ message: "x", cause: { code: "UND_ERR_CONNECT_TIMEOUT" } }), true, "🔴 код UND_ERR_* не повторюється");
+  assert.equal(isNetworkDrop(new Error("other side closed")), true, "🔴 «other side closed» не повторюється");
+  assert.equal(isNetworkDrop(new Error("read ECONNRESET")), true, "🔴 ECONNRESET не повторюється");
   assert.equal(isNetworkDrop(new Error("Kommo 403 Forbidden")), false, "🔴 відмову з кодом повторюємо");
   const job = SRC("jobs/buildPaymentFile.ts");
   assert.match(job, /const queue = await once\(fetchQueue\);/, "🔴 черга без повтору");
