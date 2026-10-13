@@ -6,6 +6,7 @@ import { commitOptimistic, failureReason } from "../../../actionFeedback";
 import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
 import { LeadgenRegularsCard } from "./LeadgenRegularsCard";
+import { KvpFirstTouchBlock } from "./KvpFirstTouchBlock";
 
 // ── Статус-палітра (зарезервована, НЕ дата-серія): good/warning/serious/critical ──
 const GREEN = "#16a34a", AMBER = "#d97706", RED = "#dc2626", BLUE = "#2563eb", MUTED = "var(--text-muted)";
@@ -278,7 +279,8 @@ function anchorFor(preset: string, monthSel: string): string {
   return today.slice(0, 7) === monthSel ? today : monthSel + "-01";
 }
 
-export function KvpReportSection() {
+/** `canSeeFirstTouch` — у ролі є вкладка «Перший дотик · AI»; без неї блок не показується (фінансист: Звіт КВП є, AI — ні). */
+export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouch?: boolean } = {}) {
   const toast = useToast();
   const [preset, setPreset] = useState<string>(() => localStorage.getItem("kvpDPreset") || "month");
   const [monthSel, setMonthSel] = useState<string>(() => localStorage.getItem("kvpDMonth") || curMonth());
@@ -404,6 +406,9 @@ export function KvpReportSection() {
               ))}
             </div>
           </div>
+
+          {/* ── 🎧 ПЕРШИЙ ДОТИК (задача 5314): одразу під «де ми зараз», як у макеті «Звіт КВП - ядро». ── */}
+          {canSeeFirstTouch && <KvpFirstTouchBlock from={rep.scope.from} to={rep.scope.to} />}
 
           {/* ── СИГНАЛИ ── */}
           {rep.signals.length > 0 && (

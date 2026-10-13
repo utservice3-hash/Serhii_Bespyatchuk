@@ -1,4 +1,4 @@
-import { addDays, type PeriodState } from "./periodRules";
+import { addDays, monthStart, monthEnd, type PeriodState } from "./periodRules";
 
 /**
  * 🎧 «ПЕРШИЙ ДОТИК · AI» — чисті правила вигляду, без React (їх виконує гейт бекенду `#833`).
@@ -173,6 +173,9 @@ export interface ListFilterRow { pipelineGroup: PipelineGroupT; teamId: number |
  * Фільтри списку, окрім кнопок стану (П8-Б): воронка, команда, менеджер; нецільові («Дубль», «Перевізник»)
  * сховані за замовчуванням, а їх кількість видно в перемикачі — «прибрано: N», а не мовчки.
  */
+/** Фільтри екрана при відкритті. Той самий обʼєкт бере блок «Перший дотик» у Звіті КВП — тож склад розмов однаковий. */
+export const DEFAULT_LIST_FILTER: ListFilter = { group: "all", teamId: null, managerId: null, showNonTarget: false };
+
 export function applyListFilter<T extends ListFilterRow>(rows: readonly T[], f: ListFilter): T[] {
   return rows.filter((r) => (f.group === "all" || r.pipelineGroup === f.group)
     && (f.teamId == null || r.teamId === f.teamId)
@@ -418,4 +421,64 @@ export function priceSuccessSplit(rows: readonly TileRow[]): { named: { n: numbe
   const named = rows.filter((r) => r.checklist?.price === "y"), notNamed = rows.filter((r) => r.checklist?.price === "n");
   const a = { n: named.filter(win).length, of: named.length }, b = { n: notNamed.filter(win).length, of: notNamed.length };
   return { named: a, notNamed: b, enough: a.n >= SUCCESS_MIN_FOR_PCT && b.n >= SUCCESS_MIN_FOR_PCT };
+}
+
+// ─── «Перший дотик» у Звіті КВП (задача 5314, 13.10.2026) ──────────────────────────────────────────────────────
+// Звіт КВП НЕ рахує нічого свого: ті самі рядки `/ai-calls` за той самий період, той самий фільтр при відкритті
+// (`DEFAULT_LIST_FILTER`), та сама вкладка «Звіт» і ті самі `tileStats` / `managerChecklist`. Тому цифри дорівнюють
+// екрану «Перший дотик · AI» за побудовою, а рядок команди — рівно тому, що екран показує з вибраною цією командою.
+
+type SummaryRow = ListFilterRow & TileRow & { inReport: boolean; managerName: string | null; teamName?: string | null;
+  checkScore: { yes: number; total: number } | null };
+export interface FirstTouchSummary<T> { rows: T[]; tiles: TileStats; lines: ChecklistLine[]; total: ChecklistLine | null }
+export function firstTouchSummary<T extends SummaryRow>(all: readonly T[], teamId: number | null = null): FirstTouchSummary<T> {
+  const rows = tabRows(applyListFilter(all, { ...DEFAULT_LIST_FILTER, teamId }), "report");
+  // Підсумковий рядок — ТА САМА `managerChecklist`, лише всі розмови під одним ключем: жодної другої формули.
+  const total = managerChecklist(rows.map((r) => ({ ...r, managerId: null, managerName: "Разом" })))[0] ?? null;
+  return { rows, tiles: tileStats(rows), lines: managerChecklist(rows), total };
+}
+
+/** Команди, що трапились у рядках (за назвою); розмови без команди — окремим вузлом, а не зникають. */
+export function summaryTeams(rows: readonly { teamId: number | null; teamName?: string | null }[]): { id: number | null; name: string }[] {
+  const m = new Map<number | null, string>();
+  for (const r of rows) if (!m.has(r.teamId)) m.set(r.teamId, r.teamId == null ? "Без команди" : r.teamName ?? `Команда #${String(r.teamId)}`);
+  return [...m].map(([id, name]) => ({ id, name })).sort((a, b) => (a.id == null ? 1 : b.id == null ? -1 : a.name.localeCompare(b.name, "uk")));
+}
+
+const TILE_KEYS: readonly TileKey[] = ["noCall", "noPrice", "objNotHandled", "lost", "success"];
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const LINK_PARAMS = ["from", "to", "tile", "team", "manager"] as const;
+
+/** Посилання з Звіту КВП на «Перший дотик · AI»: той самий період, плитка (фільтр списку), команда чи менеджер. */
+export function aiCallsHref(p: { from: string; to: string; tile?: TileKey | null; teamId?: number | null; managerId?: number | null }): string {
+  const q = new URLSearchParams({ from: p.from, to: p.to });
+  if (p.tile) q.set("tile", p.tile);
+  if (p.teamId != null) q.set("team", String(p.teamId));
+  if (p.managerId != null) q.set("manager", String(p.managerId));
+  return `/ai-calls?${q.toString()}`;
+}
+
+/**
+ * Розбір такого посилання на екрані AI. Повний календарний місяць — режим «Місяць» (як за замовчуванням), інакше —
+ * «Період». Сміття в параметрі — параметра ніби й немає (екран відкривається як зазвичай), а не помилка.
+ */
+export function parseAiLink(search: string): { nav: PeriodState | null; tile: TileKey | null; teamId: number | null; managerId: number | null; any: boolean } {
+  const q = new URLSearchParams(search);
+  const from = q.get("from") ?? "", to = q.get("to") ?? "";
+  const okPeriod = ISO_DAY.test(from) && ISO_DAY.test(to) && from <= to;
+  const nav: PeriodState | null = !okPeriod ? null
+    : from === monthStart(from) && to === monthEnd(from)
+      ? { mode: "month", anchor: from, focusDay: from, rangeFrom: from, rangeTo: to }
+      : { mode: "range", anchor: to, focusDay: to, rangeFrom: from, rangeTo: to };
+  const tileRaw = q.get("tile");
+  const tile = tileRaw && (TILE_KEYS as readonly string[]).includes(tileRaw) ? tileRaw as TileKey : null;
+  const int = (k: string) => { const v = q.get(k); return v != null && /^\d{1,9}$/.test(v) ? Number(v) : null; };
+  return { nav, tile, teamId: int("team"), managerId: int("manager"), any: LINK_PARAMS.some((k) => q.has(k)) };
+}
+
+/** Адреса без параметрів посилання: після відкриття екран живе своїм станом, а перезавантаження не повертає старий фільтр. */
+export function withoutAiLinkParams(href: string): string {
+  const u = new URL(href);
+  for (const k of LINK_PARAMS) u.searchParams.delete(k);
+  return u.pathname + u.search + u.hash;
 }

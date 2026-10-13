@@ -13,7 +13,8 @@ import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, mmss, aiDefaultPeriod, jo
   type AiFilter, type AiCallState,
   CHECK_ITEMS, CHECK_MARK_UI, managerChecklist, queueRows, scoreLabel, medianMin, fmtMinutes, DECISION_UI,
   TILE_MATCH, tileStats, priceSuccessSplit, SUCCESS_MIN_FOR_PCT, type TileKey,
-  sortManagerLines, nextMgrSort, parseMgrSort, type MgrSort, type MgrSortKey } from "../aiCallsView";
+  sortManagerLines, nextMgrSort, parseMgrSort, type MgrSort, type MgrSortKey,
+  DEFAULT_LIST_FILTER, parseAiLink, withoutAiLinkParams } from "../aiCallsView";
 
 /**
  * 🎧 «ПЕРШИЙ ДОТИК · AI» — прохід 1, лише перегляд (рішення Романа 28.09.2026, макет — на ньому).
@@ -69,7 +70,9 @@ function FirstTouchSkeleton({ header, drawer }: { header: React.ReactNode; drawe
 
 export function AiCallsSection() {
   const today = todayKyiv();
-  const [nav, setNav] = useState<PeriodState>(() => aiDefaultPeriod(today));
+  // 🔗 Перехід зі Звіту КВП (задача 5314): період, плитка, команда чи менеджер — з адреси, один раз при відкритті.
+  const link = useMemo(() => parseAiLink(window.location.search), []);
+  const [nav, setNav] = useState<PeriodState>(() => link.nav ?? aiDefaultPeriod(today));
   const { from, to } = periodOf(nav);
   const [d, setD] = useState<AiCallsResp | null>(null);
   const [meta, setMeta] = useState<AiCallsMetaResp | null>(null);
@@ -78,7 +81,7 @@ export function AiCallsSection() {
   const [reload, setReload] = useState(0);
   const [filter, setFilter] = useState<AiFilter>("all");
   // П8-Б: воронка, команда, менеджер; нецільові («Дубль», «Перевізник») сховані, їх число — у перемикачі.
-  const [lf, setLf] = useState<ListFilter>({ group: "all", teamId: null, managerId: null, showNonTarget: false });
+  const [lf, setLf] = useState<ListFilter>(() => ({ ...DEFAULT_LIST_FILTER, teamId: link.teamId, managerId: link.managerId }));
   const [silenceOnly, setSilenceOnly] = useState(false);
   // Відкрита картка живе в адресі (`?call=`): посилання можна переслати, і воно відкриє ту саму картку.
   const [open, setOpenState] = useState<string | null>(() => parseCallParam(window.location.search));
@@ -96,8 +99,14 @@ export function AiCallsSection() {
   const topRef = useRef<HTMLDivElement | null>(null);
   const [queueSel, setQueueSel] = useState<string | null>(null);
   const [glow, setGlow] = useState(false);
-  const [preset, setPreset] = useState<"all" | TileKey>("all");
+  const [preset, setPreset] = useState<"all" | TileKey>(link.tile ?? "all");
+  useEffect(() => { if (link.any) window.history.replaceState(window.history.state, "", withoutAiLinkParams(window.location.href)); }, [link]);
   const tableRef = useRef<HTMLElement | null>(null);
+  // Прийшли з картки Звіту КВП — одразу до списку розмов цієї плитки («натиснув — висвітлилось, які саме»).
+  const linkScrolled = useRef(false);
+  useEffect(() => {
+    if (d && link.tile && !linkScrolled.current) { linkScrolled.current = true; tableRef.current?.scrollIntoView({ block: "start" }); }
+  }, [d, link.tile]);
   const [view, setView] = useState<"all" | "todo">("all");
   const [q, setQ] = useState("");
   // Згортання блоку «Менеджери за чек-листом» — пам'ятаємо в браузері (лише зручність, не дані).
