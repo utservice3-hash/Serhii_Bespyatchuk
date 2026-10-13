@@ -28,7 +28,8 @@ test("#726 УРОКИ: кожен список кроків у бекенді б
       if (e.isDirectory()) walk(p);
       else if (e.name.endsWith(".ts") && !e.name.endsWith(".test.ts")) {
         const src = readFileSync(p, "utf8");
-        for (const m of src.matchAll(/FROM training_materials\s+WHERE status = 'published'[^`]*/g)) hits.push({ file: path.relative(BE, p), sql: m[0] });
+        // 13.10.2026: склад курсу редактору віддає й чернетки — `WHERE (status = 'published' OR $1)`; це той самий список кроків.
+        for (const m of src.matchAll(/FROM training_materials\s+WHERE \(?status = 'published'[^`]*/g)) hits.push({ file: path.relative(BE, p), sql: m[0] });
       }
     }
   };
