@@ -1655,11 +1655,11 @@ test("#928 ЗГОДА ПІСЛЯ ЦІНИ · ЖИВА СХЕМА: запереч
   const c = await ctx(t); if (!c) return;
   const { aiCallsList, aiCallCard } = await import("./callAiScreen.js");
   await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id,created_at_kommo,client_key,lead_channel,manager_id)
-    VALUES (8860,'D8860',8921932,1,'2026-10-13 10:00:00+03','0508800060','ad',9011),(8861,'D8861',8921932,1,'2026-10-13 11:00:00+03','0508800061','ad',9011)`);
+    VALUES (8928,'D8928',8921932,1,'2026-10-13 10:00:00+03','0508809280','ad',9011),(8929,'D8929',8921932,1,'2026-10-13 11:00:00+03','0508809281','ad',9011)`);
   const call = (u: string, at: string, phone: string) => c.raw.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,duration,manager_id,client_phone,recording)
     VALUES ($1,$2,'out','ANSWERED',60,65,9011,$3,'https://rec/x')`, [u, at, phone]);
-  await call("dc1", "2026-10-13 10:10:00+03", "380508800060");
-  await call("dc2", "2026-10-13 11:10:00+03", "380508800061");
+  await call("ag1", "2026-10-13 10:10:00+03", "380508809280");
+  await call("ag2", "2026-10-13 11:10:00+03", "380508809281");
   const tr = async (u: string) => (await c.raw.query<{ id: string }>(`INSERT INTO call_transcripts(uniqueid,provider,model,status,segments)
     VALUES ($1,'elevenlabs','scribe_v2','done','[{"channel":1,"start":0,"end":2,"text":"добре, оформлюйте","lang":"ukr"}]'::jsonb) RETURNING id`, [u])).rows[0].id;
   const an = (tid: string, rubric: string, result: unknown) => c.raw.query(`INSERT INTO call_analyses(transcript_id,provider,model,rubric_version,status,result)
@@ -1667,15 +1667,15 @@ test("#928 ЗГОДА ПІСЛЯ ЦІНИ · ЖИВА СХЕМА: запереч
   const v1 = { present: true, type: "price", client_quote: "дорого", handled: "handled", manager_action: "запропонував догруз", quote_found: true };
   const v2 = { present: false, type: "none", client_quote: "", handled: "n/a", manager_action: "", quote_found: null,
     client_decision: "agreed", decision_quote: "добре, оформлюйте", decision_quote_found: true };
-  const t1 = await tr("dc1"); await an(t1, "first-touch-v4", RESULT); await an(t1, "first-touch-objection-v1", v1); await an(t1, "first-touch-objection-v2", v2);
-  const t2 = await tr("dc2"); await an(t2, "first-touch-v4", RESULT); await an(t2, "first-touch-objection-v2", v2);
+  const t1 = await tr("ag1"); await an(t1, "first-touch-v4", RESULT); await an(t1, "first-touch-objection-v1", v1); await an(t1, "first-touch-objection-v2", v2);
+  const t2 = await tr("ag2"); await an(t2, "first-touch-v4", RESULT); await an(t2, "first-touch-objection-v2", v2);
   const rows = (await aiCallsList(c.db, FAKE_AD, "2026-10-13", "2026-10-13", new Date("2026-10-13T15:00:00Z"), {})).rows;
-  const a = rows.find((r) => r.uniqueid === "dc1"), b = rows.find((r) => r.uniqueid === "dc2");
+  const a = rows.find((r) => r.uniqueid === "ag1"), b = rows.find((r) => r.uniqueid === "ag2");
   assert.ok(a && b, "🔴 розмов 13.10 немає в списку — гейту нема що перевіряти");
   assert.deepEqual([a.objection?.present, a.objection?.type], [true, "price"], "🔴 заперечення v1 переписане відповіддю v2");
   assert.deepEqual(a.decision, { value: "agreed", quote: "добре, оформлюйте", quoteFound: true }, "🔴 згоду не взято з v2");
   assert.deepEqual([b.objection?.present, b.decision?.value], [false, "agreed"], "🔴 без v1 заперечення не взято з v2");
-  const card = await aiCallCard(c.db, "dc1", true, {});
+  const card = await aiCallCard(c.db, "ag1", true, {});
   assert.deepEqual([card?.row.objection?.type, card?.row.decision?.value], ["price", "agreed"], "🔴 картка розійшлась зі списком");
 });
 
