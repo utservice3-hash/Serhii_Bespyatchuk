@@ -3775,7 +3775,8 @@ export async function fetchDocFileBlobUrl(id: number, opts: { inline?: boolean; 
 export interface TrainingFolder {
   id: number; parent_id: number | null; name: string; position: number; created_at: string; course_id?: number | null;
 }
-export type TrainingKind = "video_embed" | "file" | "link" | "text";
+/** `quiz` — тест після теми (13.10.2026): створюється імпортом, зараховується перевіркою відповідей. */
+export type TrainingKind = "video_embed" | "file" | "link" | "text" | "quiz";
 export interface TrainingMaterial {
   id: number; folder_id: number | null; title: string; kind: TrainingKind;
   url: string | null; mime: string | null; size_bytes: string | number | null;
@@ -5118,7 +5119,10 @@ export interface HiringTrainingRow {
   done: number; total: number; percent: number; current_step: string | null; open_questions: number;
   invite: { expires_at: string; used_at: string | null; revoked_at: string | null } | null;
   password_issued_at: string | null;
+  /** 📝 Тести курсу в порядку курсу (13.10.2026). */
+  quizzes?: QuizSummary[];
 }
+export interface QuizSummary { materialId: number; title: string; used: number; grants: number; maxAttempts: number; left: number; passed: boolean; bestPct: number | null; lastPct: number | null }
 export interface HiringTrainingRules { inviteHours: number; noLoginHours: number; trainingDays: number; stuckHours: number }
 export interface HiringTrainingDetail {
   row: HiringTrainingRow;
@@ -5145,6 +5149,10 @@ export const linkCandidateAccount = async (id: number, userId: number) =>
   (await api.post<{ login: string }>(`/hiring/candidates/${id}/account/link`, { userId })).data;
 export const restoreHiringAccess = async (id: number) => { await api.post(`/hiring/candidates/${id}/access/restore`); };
 export const promoteHiringCandidate = async (id: number, comment: string) => { await api.post(`/hiring/candidates/${id}/promote`, { comment }); };
+/** 📝 «Ще одна спроба» тесту — тімлід або HR, коли власні спроби вичерпано (13.10.2026). */
+export const grantQuizAttempt = async (id: number, materialId: number, comment: string) => {
+  await api.post(`/hiring/candidates/${id}/quiz/${materialId}/grant`, { comment });
+};
 /** «Вийшов на роботу» без навчання (#1622) — лише HR і керівництво. */
 export const markHiringStartedWork = async (id: number, comment: string) => { await api.post(`/hiring/candidates/${id}/started-work`, { comment }); };
 export const answerHiringQuestion = async (id: number, questionId: number, answer: string) => {
@@ -5165,6 +5173,8 @@ export interface TrainingCourseDetail {
   percent: number;
   modules: { id: number; name: string; index: number; percent: number;
     materials: { id: number; title: string; kind: TrainingKind; required: boolean; state: TrainingStepState;
+      /** Чернетку сервер віддає лише редактору навчання (13.10.2026); у знаменник і замки вона не входить. */
+      status?: "draft" | "published";
       blockedBy: { materialId: number; title: string } | null }[] }[];
 }
 /** 📘 Частина уроку: «main» показується в тілі уроку (pdf, відео), «attachment» — у блоці «Вкладення». */
@@ -5190,6 +5200,27 @@ export const fetchTrainingMaterial = async (id: number) => (await api.get<Traini
 export const openTrainingMaterial = async (id: number) => { await api.post(`/training/progress/${id}/open`); };
 export const doneTrainingMaterial = async (id: number) => { await api.post(`/training/progress/${id}/done`); };
 export const fetchCandidateMe = async () => (await api.get<CandidateMe>("/training/candidate/me")).data;
+// 📝 ТЕСТ ПІСЛЯ ТЕМИ (13.10.2026). Правильних відповідей кандидат не отримує ніде — лише редактор (`fetchQuizEditor`).
+export interface MyQuiz {
+  materialId: number; title: string; passPct: number; questionCount: number; poolSize: number; maxAttempts: number;
+  used: number; grants: number; left: number; passed: boolean; bestPct: number | null; hasOpenAttempt: boolean;
+  attempts: { right: number; total: number; pct: number; passed: boolean; submittedAt: string }[];
+}
+export type QuizKind = "one" | "multi" | "number";
+export interface QuizPublicQuestion { id: number; kind: QuizKind; text: string; options: { i: number; text: string }[] | null }
+export type QuizAnswerValue = number | number[] | string;
+export interface QuizResult { right: number; total: number; pct: number; passed: boolean; left: number;
+  results: { id: number; text: string; ok: boolean; explanation: string | null; source: string | null }[] }
+export interface QuizEditorView {
+  settings: { materialId: number; title: string; status: string; passPct: number; showCount: number | null; maxAttempts: number };
+  questions: { id: number; kind: QuizKind; text: string; options: string[] | null; correct: number[] | { value: number; tol: number }; explanation: string | null; sourceTitle: string | null }[];
+}
+export const fetchMyQuiz = async (id: number) => (await api.get<MyQuiz>(`/training/quiz/${id}/me`)).data;
+export const startQuiz = async (id: number) =>
+  (await api.post<{ attemptId: number; passPct: number; questions: QuizPublicQuestion[] }>(`/training/quiz/${id}/start`)).data;
+export const submitQuiz = async (id: number, attemptId: number, answers: Record<number, QuizAnswerValue>) =>
+  (await api.post<QuizResult>(`/training/quiz/${id}/submit`, { attemptId, answers })).data;
+export const fetchQuizEditor = async (id: number) => (await api.get<QuizEditorView>(`/training/quiz/${id}/editor`)).data;
 export const fetchMyTrainingQuestions = async () => (await api.get<{ rows: MyTrainingQuestion[] }>("/training/questions")).data.rows;
 export const askTrainingQuestion = async (question: string, materialId: number | null) =>
   (await api.post<{ id: number }>("/training/questions", { question, materialId })).data.id;

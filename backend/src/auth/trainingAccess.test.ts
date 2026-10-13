@@ -96,7 +96,9 @@ test("#412 🪞 ЗЛІПОК ЗНАЄ ПРО ЗВУЖЕННЯ: фінансис�
      перевіряється — не-кандидату відмовляє `askQuestion`. Поки редактори були admin-рівня й не стояли в його deny,
      розбіжність не проявлялась; HR-редактор (01.10.2026) стоїть там по ділу — ставити питання він не має. */
   const write = ACCESS_MATRIX.filter((r) => r.path.startsWith("/api/training")
-    && r.method !== "GET" && !r.path.includes("/progress/") && r.path !== "/api/training/questions");
+    && r.method !== "GET" && !r.path.includes("/progress/") && r.path !== "/api/training/questions"
+    // 📝 13.10.2026: тест після теми — дія УЧНЯ, як прогрес («почати», «завершити»), а не редагування курсу.
+    && !r.path.startsWith("/api/training/quiz/"));
   assert.ok(write.length >= 7,
     `🔴 у зліпку лише ${write.length} роутів запису навчання — заміряно 7 станом на 14.09.2026; покриття впало`);
 

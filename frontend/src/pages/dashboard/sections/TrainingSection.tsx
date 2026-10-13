@@ -17,6 +17,7 @@ const KIND_META: Record<TrainingKind, { icon: string; label: string }> = {
   file: { icon: "📄", label: "Файл" },
   link: { icon: "🔗", label: "Посилання" },
   text: { icon: "📝", label: "Текст" },
+  quiz: { icon: "✎", label: "Тест" },
 };
 
 function fmtBytes(n: string | number | null): string {

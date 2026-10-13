@@ -17,6 +17,7 @@ import {
 } from "./hiringTrainingRules.js";
 import { orderedMaterials, materialStates, coursePercent, type ProgressMap } from "./trainingProgress.js";
 import { LESSON_ONLY } from "./trainingLesson.js";
+import { quizSummaries, grantAttempt, QuizError, type QuizDb, type QuizSummary } from "./trainingQuizStore.js";
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
 const d = (v: unknown): Date | null => (v == null ? null : new Date(v as string));
@@ -371,6 +372,8 @@ export interface TrainingRow {
   invite: { expires_at: string; used_at: string | null; revoked_at: string | null } | null;
   /** Коли Іван востаннє бачив логін і пароль (сам пароль не зберігається ніде). */
   password_issued_at: string | null;
+  /** 📝 Тести курсу в порядку курсу: спроби, найкращий бал, чи складено (13.10.2026). */
+  quizzes: QuizSummary[];
 }
 
 /** Дошка «На навчанні»: картки з акаунтом або в статусах «кандидат + команда» / «на навчанні». */
@@ -398,6 +401,9 @@ export async function trainingBoard(db: Db, access: HiringAccess, leadTeamId: nu
   const prog = userIds.length
     ? (await db.query<{ user_id: number; material_id: number; status: "opened" | "done" }>(
         `SELECT user_id, material_id, status FROM training_progress WHERE user_id = ANY($1::int[])`, [userIds])).rows : [];
+  // 📝 Тести — кроки курсу типу `quiz`, у порядку курсу. Бал і спроби — з `trainingQuizStore`, тим самим, що бачить кандидат.
+  const quizIds = course.ordered.filter((m) => course.materials.find((x) => x.id === m.id)?.kind === "quiz").map((m) => m.id);
+  const quizBy = await quizSummaries(db as unknown as QuizDb, userIds, quizIds);
   return rows.map((r) => {
     const map: ProgressMap = new Map(prog.filter((p) => p.user_id === r.user_id).map((p) => [p.material_id, p.status]));
     const pr = progressOf(course, map);
@@ -409,7 +415,8 @@ export async function trainingBoard(db: Db, access: HiringAccess, leadTeamId: nu
       : { deadline: null, day: 0, health: "no_account" as const };
     const { user_id: _uid, ...row } = r;
     return { ...row, ...base, days: CANDIDATE_ACCESS.trainingDays + r.access_extended_days,
-      done: pr.done, total: pr.total, percent: pr.percent, current_step: pr.current };
+      done: pr.done, total: pr.total, percent: pr.percent, current_step: pr.current,
+      quizzes: r.user_id ? quizBy.get(r.user_id) ?? [] : [] };
   });
 }
 
@@ -445,6 +452,26 @@ export async function trainingDetail(db: Db, id: number, access: HiringAccess, l
       WHERE e.candidate_id = $1 AND (e.kind IN ('access','question') OR (e.kind = 'status' AND e.to_status IN ('candidate','training','manager','refused','black')))
       ORDER BY e.at DESC, e.id DESC`, [id])).rows;
   return { row, steps, questions, events };
+}
+
+/**
+ * 📝 «Ще одна спроба» тесту (13.10.2026): тімлід команди або HR («редагування» Найму). Лише коли тест не складено
+ * й власні спроби вичерпано — правило в `trainingQuizStore.grantAttempt`. Слід — у журналі доступу кандидата.
+ */
+export async function grantQuizAttempt(db: Db, actorId: number | null, id: number, materialId: number, comment: unknown,
+  canDecide: boolean, access: HiringAccess, leadTeamId: number | null) {
+  if (!canDecide && access !== "edit") throw new HiringError(403, "Додаткову спробу дає тімлід або HR");
+  const c = await lockAccount(db, id, access, leadTeamId);
+  if (!c.user_id) throw new HiringError(409, "У кандидата немає акаунта");
+  const title = (await db.query<{ title: string }>(`SELECT title FROM training_materials WHERE id = $1 AND kind = 'quiz'`, [materialId])).rows[0]?.title;
+  if (!title) throw new HiringError(404, "Тест не знайдено");
+  try {
+    await grantAttempt(db as unknown as QuizDb, actorId, c.user_id, materialId, str(comment) || null);
+  } catch (e) {
+    if (e instanceof QuizError) throw new HiringError(e.status, e.message);
+    throw e;
+  }
+  await event(db, id, "access", `ще одна спроба: ${title}${str(comment) ? ` · ${str(comment)}` : ""}`, actorId);
 }
 
 /** «Перевести в менеджери»: роль акаунта → «Менеджер», статус → «менеджер». */
