@@ -372,3 +372,12 @@
 .ctorx .docsm td.v2{font-size:8px}
 /* Міжнародні — лише АвтоМув (задача 5462): інші юрособи при галочці «Міжнародне» недоступні */
 .ctorx .ent:disabled{opacity:.42;cursor:not-allowed;filter:grayscale(.6)}
+/* 🖋 5461: як директор стане в документі («в особі директора <родовий>, який/яка діє») */
+.ctorx .frow .dirhint{grid-column:2 / 4;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-size:12px;line-height:1.4;margin-top:-2px}
+.ctorx .frow .dirhint .soft{color:var(--muted)}
+.ctorx .frow .dirhint b{font-weight:600}
+.ctorx .frow .dirhint .dirg{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.ctorx .frow .dirhint .dirg button{border:0;background:transparent;padding:2px 9px;font-size:11.5px;font-weight:700;cursor:pointer;color:var(--muted)}
+.ctorx .frow .dirhint .dirg button.on{background:var(--ent);color:#fff}
+.ctorx .frow .dirhint .linkbtn{border:0;background:none;padding:0;font-size:12px;color:var(--ent);cursor:pointer;text-decoration:underline dotted}
+.ctorx .frow .dirhint input.dirhand{flex:1 1 220px;font-size:12.5px;border-bottom:1px dashed var(--line)}

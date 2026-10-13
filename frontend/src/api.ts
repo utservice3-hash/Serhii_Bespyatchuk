@@ -5645,7 +5645,13 @@ export type CtorParty = "client" | "carrier";
 export interface CtorCounterparty {
   name?: string; edrpou?: string; ipn?: string; addr?: string;
   iban?: string; bank?: string; phone?: string; email?: string; dir?: string;
+  /** рід директора з перемикача: 'm' / 'f' / '' — визначити автоматично (задача 5461) */
+  dirGender?: string;
+  /** ручна правка «в особі директора …» у родовому */
+  dirGenHand?: string;
 }
+/** Як сервер прочитав директора: родовий для «в особі директора …» і рід (`how`: auto / chosen / guess). */
+export interface CtorDirector { gen: string | null; fem: boolean; how: "auto" | "chosen" | "guess" | null }
 export interface CtorPay { sum: string; cur: string; form: string; order: string }
 /** Стан форми — це і є payload POST /documents та /preview. */
 export interface CtorForm {
@@ -5726,7 +5732,7 @@ export const ctorByEdrpou = async (code: string) =>
 /** ✅ Перевірка поля (сервер, `constructor/validate.ts`): error — блокує формування, warn — лише попереджає. */
 export interface CtorIssue { field: string; level: "error" | "warn"; msg: string }
 export const ctorPreview = async (state: CtorForm) =>
-  (await api.post<{ html: string; fragment: string; blockers: string | null; issues?: CtorIssue[]; assetsNote: string | null }>("/constructor/preview", { state })).data;
+  (await api.post<{ html: string; fragment: string; blockers: string | null; issues?: CtorIssue[]; assetsNote: string | null; director?: CtorDirector | null }>("/constructor/preview", { state })).data;
 export const ctorCreate = async (state: CtorForm) =>
   (await api.post<{ id: number; version: number; num: string; createdAt: string;
     /** Автопідгонка PDF (v2): скільки сторінок, яка щільність, чи не влізло в 3. */

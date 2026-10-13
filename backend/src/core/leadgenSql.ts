@@ -190,9 +190,9 @@ export interface HandoffLinkIds {
  * $6 ключі-заглушки клієнта (`genericClientKeys`).
  */
 export function handoffLinkQuery(
-  from: string, to: string, ids: HandoffLinkIds, win: { beforeSec: number; afterSec: number },
+  from: string, to: string, ids: HandoffLinkIds, win: { beforeSec: number; afterSec: number; noteAfterSec: number },
 ): SqlQuery {
-  const before = Math.trunc(win.beforeSec), after = Math.trunc(win.afterSec);
+  const before = Math.trunc(win.beforeSec), after = Math.trunc(win.afterSec), noteAfter = Math.trunc(win.noteAfterSec);
   return {
     text: `SELECT e.kommo_id AS pz_id, d.manager_id AS lg_id, m.team_id AS lg_team_id,
             e.changed_at AS at, to_char((e.changed_at ${K}), 'YYYY-MM-DD') AS day,
@@ -216,7 +216,13 @@ export function handoffLinkQuery(
             WHERE l.parent_id = d.kommo_id
               AND q.pipeline_id = ANY($5)
               AND q.created_at_kommo BETWEEN e.changed_at - INTERVAL '${before} seconds'
-                                         AND e.changed_at + INTERVAL '${after} seconds'
+                                         AND e.changed_at + INTERVAL '${noteAfter} seconds'
+              -- Примітка Kommo каже, ЩО угоду створено з цієї угоди Продзвону; ЯКИЙ вхід її породив — останній
+              -- вхід у 142 перед її створенням (08.10.2026, 62363343: угоду створено через 9 хв після кваліфікації).
+              AND NOT EXISTS (SELECT 1 FROM deal_stage_events e2
+                               WHERE e2.kommo_id = e.kommo_id AND e2.pipeline_id = ANY($3) AND e2.status_id = $4
+                                 AND e2.changed_at > e.changed_at
+                                 AND e2.changed_at <= q.created_at_kommo + INTERVAL '${before} seconds')
            UNION ALL
            SELECT 1 AS prio, q.kommo_id, q.name, q.client_name, q.client_key, q.manager_id, q.reject_reason,
                   q.closed_at_kommo, q.planned_payment_at, q.created_at_kommo

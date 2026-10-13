@@ -4,7 +4,9 @@ import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildDocx, expandOrgName, shortOrgName, mainUntilText, blockers, type DocumentState } from "./services/docgen.js";
+import { buildDocx, expandOrgName, shortOrgName, mainUntilText, blockers, preambleSegs, type DocumentState } from "./services/docgen.js";
+import { genitiveName, resolveDirector } from "./services/names.js";
+import { ENTITIES } from "./data/entities.js";
 import { loadDocImages, docImageDataUris, AssetsMissing } from "./services/docAssets.js";
 import { printHTML, fullPageHTML } from "./services/printTemplate.js";
 import { normPhone, findPhone, parseRequisites, parseOldDoc } from "./services/requisitesParser.js";
@@ -600,4 +602,104 @@ test("#1642 МІЖНАРОДНІ — ЛИШЕ АВТОМУВ: галочка с�
   const ui = readFileSync(path.join(REPO, "frontend", "src", "pages", "dashboard", "sections", "ConstructorSection.tsx"), "utf8");
   assert.match(ui, /intl: on, ent: on \? "avm" : f\.ent/, "🔴 галочка «Міжнародне» не ставить АвтоМув");
   assert.match(ui, /disabled=\{form\.intl && k !== "avm"\}/, "🔴 при міжнародному можна обрати ЮТС чи ФОП");
+});
+
+/* ══════════════ 🖋 «В ОСОБІ ДИРЕКТОРА …» У РОДОВОМУ, «ЯКИЙ/ЯКА ДІЄ» ЗА РОДОМ (задача 5461, 13.10.2026) ══════════════ */
+
+const withCp = (cp: DocumentState["cp"], ent: DocumentState["ent"] = "uts"): DocumentState =>
+  ({ ...ref["once-client-uts"].state, ent, cp: { name: "ТОВ «Альфа»", ...cp } });
+const preamble = (s: DocumentState) => preambleSegs(s).map((x) => x.t).join("");
+
+/**
+ * #1680 — ВІДМІНЮВАННЯ ПО ОБИДВА БОКИ МЕЖІ РОДУ (правило 11): чоловічі й жіночі прізвища тих типів, що ламаються
+ * по-різному (-ук, -енко, -ець, -ий/-а, -ар, подвійне), і обидва — у тій самій функції. 🧨 Прибрати відмінювання
+ * (повернути вхід) — червоніє на кожному рядку; переплутати рід — на кожній парі.
+ */
+test("#1680 ПІБ У РОДОВОМУ: чоловічі й жіночі прізвища різних типів відмінюються правильно", async () => {
+  for (const [nom, gen] of [
+    ["Беспятчук Сергій Степанович", "Беспятчука Сергія Степановича"],
+    ["Ковтонюк Тетяна Миколаївна", "Ковтонюк Тетяни Миколаївни"],
+    ["Шевченко Тарас Григорович", "Шевченка Тараса Григоровича"],
+    ["Кравець Микола Олексійович", "Кравця Миколи Олексійовича"],
+    ["Довгий Ігор Петрович", "Довгого Ігоря Петровича"],
+    ["Біла Інна Сергіївна", "Білої Інни Сергіївни"],
+    ["Бондар Наталія Іванівна", "Бондар Наталії Іванівни"],
+    ["Косач-Квітка Лариса Петрівна", "Косач-Квітки Лариси Петрівни"],
+  ]) assert.equal((await genitiveName(nom)).gen, gen, `🔴 «${nom}» у родовому`);
+  // наші директори в довіднику юросіб — те саме, що дає бібліотека (статичне значення не розійдеться мовчки)
+  for (const k of ["uts", "avm", "fop"] as const) {
+    const e = ENTITIES[k];
+    const r = await genitiveName(e.dir);
+    assert.equal(e.dirGen, r.gen, `🔴 ${k}: dirGen у довіднику ≠ відмінюванню`);
+    assert.equal(e.dirFem, r.fem, `🔴 ${k}: dirFem у довіднику ≠ роду`);
+  }
+});
+
+/**
+ * #1681 — «ЯКИЙ/ЯКА ДІЄ» ЗА РОДОМ ДЛЯ ОБОХ СТОРІН І ДЛЯ ФОП. Було: «в особі директора Ковтонюк Тетяна Миколаївна,
+ * який діє» в КОЖНОМУ документі від АвтоМув. 🧨 Поставити «який» усім — червоніє на АвтоМув і на жінці-контрагенті;
+ * «яка» усім — на ЮТС і на чоловіку.
+ */
+test("#1681 ПРЕАМБУЛА: «в особі директора <родовий>, який/яка діє» за родом — наша сторона, контрагент, ФОП", async () => {
+  const fem = withCp({ dir: "Бондар Наталія Іванівна" }, "avm");
+  await resolveDirector(fem);
+  const p1 = preamble(fem);
+  assert.ok(p1.includes("в особі директора Бондар Наталії Іванівни, яка діє на підставі Статуту"), "🔴 контрагент-жінка: " + p1);
+  assert.ok(p1.includes("в особі директора Ковтонюк Тетяни Миколаївни, яка діє на підставі Статуту"), "🔴 АвтоМув: " + p1);
+  const male = withCp({ dir: "Кравець Микола Олексійович" }, "uts");
+  await resolveDirector(male);
+  const p2 = preamble(male);
+  assert.ok(p2.includes("в особі директора Кравця Миколи Олексійовича, який діє"), "🔴 контрагент-чоловік: " + p2);
+  assert.ok(p2.includes("в особі директора Беспятчука Сергія Степановича, який діє"), "🔴 ЮТС: " + p2);
+  const fop = withCp({ name: "ФОП Коваль Ольга Вікторівна" }, "uts");
+  await resolveDirector(fop);
+  assert.ok(preamble(fop).includes("Коваль Ольга Вікторівна, далі — Замовник, яка діє на підставі виписки"), "🔴 ФОП-жінка: " + preamble(fop));
+  // Word бере ту саму преамбулу, PDF — теж: перевіряємо, що дійшло до обох
+  const html = printHTML(fem, "1", {});
+  assert.ok(html.includes("Бондар Наталії Іванівни"), "🔴 PDF без родового відмінка");
+});
+
+/**
+ * #1682 — ІНІЦІАЛИ: рід невідомий → 🟡 і чоловічий до вибору; вибрано Ж → жіночий відмінок. 🧨 Ігнорувати вибраний
+ * рід — червоніє на «Іванової»; мовчки вгадувати без 🟡 — на попередженні.
+ */
+test("#1682 ІНІЦІАЛИ: без роду — 🟡 і «Іванова І. І.», з вибраним Ж — «Іванової І. І., яка діє»", async () => {
+  const guess = withCp({ dir: "Іванова І. І." });
+  const r1 = await resolveDirector(guess);
+  assert.equal(r1.how, "guess");
+  assert.ok(r1.issues.some((i) => i.field === "cp.dir" && i.level === "warn" && /рід/.test(i.msg)), "🔴 немає 🟡 «оберіть рід»");
+  const chosen = withCp({ dir: "Іванова І. І.", dirGender: "f" });
+  const r2 = await resolveDirector(chosen);
+  assert.equal(r2.how, "chosen");
+  assert.equal(r2.issues.length, 0, "🔴 рід вибрано, а 🟡 лишилось");
+  assert.ok(preamble(chosen).includes("в особі директора Іванової І. І., яка діє"), "🔴 вибраний рід проігноровано: " + preamble(chosen));
+});
+
+/**
+ * #1683 — РУЧНА ПРАВКА ПОНАД АВТОМАТИЧНУ, А `dirGen` З КЛІЄНТА НЕ ДОВІРЯЄТЬСЯ. 🧨 Ігнорувати `dirGenHand` — червоніє;
+ * взяти `dirGen` з тіла запиту як є — червоніє на «підробці».
+ */
+test("#1683 РУЧНИЙ РОДОВИЙ перекриває автоматичний; `dirGen` із клієнта перераховується", async () => {
+  const hand = withCp({ dir: "Огли Рустам Огли", dirGenHand: "Огли Рустама Огли-огли" });
+  await resolveDirector(hand);
+  assert.ok(preamble(hand).includes("в особі директора Огли Рустама Огли-огли,"), "🔴 ручну правку проігноровано");
+  const forged = withCp({ dir: "Бондар Наталія Іванівна", dirGen: "підробка", dirFem: "" });
+  await resolveDirector(forged);
+  assert.equal(forged.cp.dirGen, "Бондар Наталії Іванівни", "🔴 `dirGen` із клієнта пройшов у документ");
+  assert.equal(forged.cp.dirFem, "1");
+});
+
+/**
+ * #1684 — ПІБ, ВПИСАНЕ ВЖЕ В РОДОВОМУ («Ковтонюк Тетяни Миколаївни» з тексту старого договору), не відмінюється вдруге
+ * і дає 🟡. Заміряно 13.10.2026: таких 9 із 237 записів. 🧨 Прибрати перевірку — вийде «…Миколаївниї», червоніє.
+ * І старий архівний запис БЕЗ `dirGen` рендериться так, як його видали — у називному (правило «архів не переписується»).
+ */
+test("#1684 ПІБ У РОДОВОМУ НА ВХОДІ — без подвійного відмінювання й з 🟡; архівний запис без `dirGen` — як був", async () => {
+  const s = withCp({ dir: "Ковтонюк Тетяни Миколаївни" });
+  const r = await resolveDirector(s);
+  assert.equal(s.cp.dirGen, "Ковтонюк Тетяни Миколаївни", "🔴 відмінено вдруге: " + s.cp.dirGen);
+  assert.equal(s.cp.dirFem, "1");
+  assert.ok(r.issues.some((i) => /родовому/.test(i.msg)), "🔴 немає 🟡 «впишіть у називному»");
+  const old = withCp({ dir: "Бондар Наталія Іванівна" });   // resolveDirector НЕ кликали — як запис з архіву
+  assert.ok(preamble(old).includes("в особі директора Бондар Наталія Іванівна,"), "🔴 архівний запис переписано: " + preamble(old));
 });
