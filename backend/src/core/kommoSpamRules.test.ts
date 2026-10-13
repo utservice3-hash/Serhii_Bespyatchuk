@@ -23,23 +23,17 @@ test("#703 спам-заявки: лише форми без справжньо�
 });
 
 /**
- * #703b — ПРОВОДКА: джоба читає ЛИШЕ category=forms, відхиляє через чисте правило, має стелю на тік
- * і повертає числа; крон кожні 3 хв (1-59/3) під паузою Kommo; джоба в MONITORED_JOBS з everyMin 3.
- * Червоніє, якщо прибрати фільтр форм із запиту, обійти правило або зняти з монітора.
+ * #1644 — ДЖОБУ ВИМКНЕНО (13.10.2026): `declineSpamForms` не кличеться з `index.ts` і не стоїть у `MONITORED_JOBS`.
+ * Вона відхиляла всі заявки з форми: список «Нерозібраного» віддає контакт без телефону. Червоніє, якщо повернути
+ * виклик у розклад, не прибравши цього гейта свідомо разом із фіксом підтягування контакту.
  */
-test("#703b declineSpamForms: лише forms, через shouldDeclineUnsorted, стеля, крон під паузою, у моніторі", () => {
+test("#1644 declineSpamForms ВИМКНЕНО: не в розкладі й не в моніторі, доки контакт не підтягується окремо", () => {
   const src = path.join(import.meta.dirname, "..", "..", "src");
-  const j = readFileSync(path.join(src, "jobs", "declineSpamForms.ts"), "utf8");
-  assert.match(j, /\/api\/v4\/leads\/unsorted\?filter\[category\]\[\]=forms/, "запит без фільтра форм зачепив би SIP");
-  assert.match(j, /\bshouldDeclineUnsorted\(/);
-  assert.match(j, /targets\.slice\(0, DECLINE_CAP_PER_TICK\)/, "без стелі на тік");
-  assert.match(j, /\/decline`\)/, "відхилення не через decline");
   const idx = readFileSync(path.join(src, "index.ts"), "utf8");
-  const i = idx.indexOf('runJob("declineSpamForms"'); assert.ok(i > 0, "джоба не в розкладі");
-  const block = idx.slice(idx.lastIndexOf("cron.schedule(", i), i);
-  assert.match(block, /cron\.schedule\("1-59\/3 \* \* \* \*"/, "не кожні 3 хв, або знову на :00/:30");
-  assert.match(block, /isKommoPaused\(\)/, "пише в Kommo повз паузу кола");
-  assert.match(readFileSync(path.join(src, "jobs", "monitoredJobs.ts"), "utf8"), /name: "declineSpamForms", everyMin: 3/);
+  assert.doesNotMatch(idx, /declineSpamForms\(/, "🔴 джоба знову в розкладі — вона відхиляє живі заявки");
+  assert.doesNotMatch(readFileSync(path.join(src, "jobs", "monitoredJobs.ts"), "utf8"), /"declineSpamForms"/, "🔴 вимкнена джоба в моніторі дасть вічну тривогу");
+  // 🪞 дзеркало: сусіди в розкладі лишились — гейт не задовольняється порожнім файлом
+  assert.match(idx, /runJob\("syncKommo"/);
 });
 
 /**
