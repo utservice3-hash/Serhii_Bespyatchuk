@@ -101,7 +101,6 @@ import { syncCarriers } from "./jobs/syncCarriers.js";
 import { syncNews } from "./jobs/syncNews.js";
 import { evaluateKpiTasks } from "./jobs/evaluateKpiTasks.js";
 import { backupDb } from "./jobs/backupDb.js";
-import { declineSpamForms } from "./jobs/declineSpamForms.js";
 import { catchUpAiChat } from "./ai/respond.js";
 import { pool } from "./db/pool.js";
 import { purgeFeedback } from "./jobs/purgeFeedback.js";
@@ -414,10 +413,9 @@ cron.schedule("*/30 * * * *", () => {
 // Пише в Kommo, тож підкоряється паузі кола так само, як синк. Хвилини 1,4,7,… — жодна не
 // збігається з :00/:30, де сходяться 13 розкладів і синк (правило зони jobs-sync). Один тік —
 // 1–2 читання + N відхилень під тротлінгом 800 мс, тобто ~20 запитів/год у тиші.
-cron.schedule("1-59/3 * * * *", () => {
-  if (isKommoPaused()) return;
-  void runJob("declineSpamForms", () => declineSpamForms());
-});
+// 🔴 ВИМКНЕНО 13.10.2026 (слово Романа «терміново, вимикай»): джоба відхиляла ВСІ заявки з форми, включно зі
+// справжніми — `/leads/unsorted` віддає контакт лише як id, без полів, тож телефону вона не бачила НІКОЛИ.
+// Повертати лише разом із підтягуванням контакту окремим запитом (і fail-closed, якщо контакт не підтягнувся). Тримає #1644.
 
 // Nightly reconciliation: вікно 45→10 днів (кратно менше сторінок пагінації —
 // це був найбільший разовий сплеск). Лікує гепи інкременту.

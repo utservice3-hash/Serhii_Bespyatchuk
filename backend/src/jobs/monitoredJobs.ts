@@ -22,7 +22,6 @@ export const MONITORED_JOBS: { name: string; everyMin: number; why: string }[] =
   // 🗄 Сейф із Google-таблиці (12.10.2026). everyMin == крону «25,55 * * * *» в index.ts: тривога на 2× = 1 год мовчання.
   { name: "syncSafe", everyMin: 30, why: "Сейф ← Google-таблиця: мовчання = залишок Сейфу й «Витрати / Надходження загальні» без свіжих рухів" },
   { name: "syncDealActivity", everyMin: 180, why: "живить «застряглі угоди»" },
-  { name: "declineSpamForms", everyMin: 3, why: "автовідхилення спам-заявок з форми сайту без телефону — без неї «Нерозібране» заливає бот" },
   { name: "recomputeStatistics", everyMin: 60, why: "розділ «Статистики (відділи)»" },
   { name: "syncAdBudget", everyMin: 60, why: "рекламний бюджет → CPL/ROMI" },
   // ⚠️ everyMin МУСИТЬ дорівнювати крону в index.ts (добово о 06:00) — сторож мовчання
