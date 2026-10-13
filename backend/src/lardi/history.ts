@@ -1,4 +1,5 @@
 import { pool } from "../db/pool.js";
+import { offerDate } from "./offerDate.js";
 
 // Порт lardiweb history.py на Postgres: власний архів цін (Lardi не віддає
 // історію), маршрути для збирача і статистика використання.
@@ -77,7 +78,7 @@ export async function history(fromId: number, toId: number, side: string, days =
     phones: Array.isArray(x.phones) ? x.phones : [],
     from: x.frm, to: x.tox,
     dist_km: x.dist_km != null ? Number(x.dist_km) : null,
-    date: x.dt, id: Number(x.offer_id), ts: Number(x.ts), payform: x.payform,
+    date: offerDate(x.dt), id: Number(x.offer_id), ts: Number(x.ts), payform: x.payform,
   }));
 }
 
