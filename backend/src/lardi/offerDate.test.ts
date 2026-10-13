@@ -57,3 +57,27 @@ test("#1670c УКРАЇНСЬКА МОВА LARDI: за замовчування�
   assert.ok(re.test("Метод доступен только при подключении пакета «Расширенный доступ к API»"), "🔴 російська відмова 403 перестала впізнаватись");
   assert.ok(!re.test("Lardi 403 Forbidden"), "🔴 будь-яка 403 читається як «пакет не оплачено»");
 });
+
+test("#1671 ЦІНА «ЗА Т»: Lardi пише одиницю «т» — це ставка за тонну (× вага), а не сума за рейс; «за км» і без одиниці — як були", async () => {
+  process.env.DATABASE_URL ??= "postgres://x@127.0.0.1:1/x";
+  process.env.JWT_SECRET ??= "test";
+  process.env.KOMMO_BASE_URL ??= "https://x.invalid";
+  process.env.KOMMO_API_TOKEN ??= "x";
+  const { toOffer } = await import("../routes/rates.js");
+  // Сира пропозиція з прода 13.10.2026: соняшникова олія Київ → Львів, 25 т, «2 200 грн. за т», 537 км.
+  const raw = (value: number, unit: string | null, mass: number | null) => ({
+    id: 1, payment: { value, currency: { name: "грн." }, ...(unit ? { unit: { name: unit } } : {}) },
+    size: mass == null ? {} : { mass }, distanceLine: 537_000,
+  });
+  const t = toOffer(raw(2200, "т", 25), null);
+  assert.equal(t.total, 55_000, "🔴 «2 200 грн за т × 25 т» прочитано як 2 200 грн за рейс");
+  assert.equal(t.per_ton, 2200); assert.equal(t.per_km, 102);
+  assert.equal(toOffer(raw(2200, "т.", 25), null).total, 55_000);
+  assert.equal(toOffer(raw(2200, "тонна", 25), null).total, 55_000);
+  // Без ваги суми рейсу не вигадуємо: лише ставка за тонну.
+  const noMass = toOffer(raw(2200, "т", null), null);
+  assert.equal(noMass.total, null, "🔴 без ваги ставку за тонну видано за суму рейсу"); assert.equal(noMass.per_ton, 2200);
+  // Дзеркало: інші одиниці не зачеплено.
+  assert.deepEqual([toOffer(raw(30, "км", 22), null).per_km, toOffer(raw(30, "км", 22), null).total], [30, 16_110], "🔴 «за км» зламано");
+  assert.equal(toOffer(raw(25_000, null, 22), null).total, 25_000, "🔴 ціна без одиниці (за рейс) перестала бути сумою");
+});
