@@ -46,7 +46,9 @@ export const config = {
     // Lardi-Trans Extended API token (RAW, no Bearer). Optional — the rates
     // calculator returns a clear error until it is set in .env on the server.
     token: process.env.LARDI_API_TOKEN ?? "",
-    lang: process.env.LARDIWEB_LANG ?? "ru",
+    // Мова назв міст, областей і кузовів. З 13.10.2026 — українська (було "ru": «Киев», «Цельномет»). Зонна карта
+    // впізнає обидві мови (`core/zoneRates.ts`); з "uk" ще й розпізнались Волинська й Рівненська, яких "ru" не давала.
+    lang: process.env.LARDIWEB_LANG ?? "uk",
   },
   // Time tracker: a separate system of ours with its own server and user table. Both optional
   // and empty by default — the nav item then does not render and the endpoints answer 503.

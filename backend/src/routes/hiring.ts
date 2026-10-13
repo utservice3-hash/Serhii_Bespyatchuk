@@ -18,7 +18,7 @@ import {
   insertFile, fileForDownload, setFileDeleted,
 } from "../core/hiring.js";
 import {
-  trainingBoard, trainingDetail, issueInvite, issueCandidatePassword, linkCandidateAccount, freeCandidateAccounts, extendAccess, restoreAccess, promoteCandidate, markStartedWork, answerQuestion,
+  trainingBoard, trainingDetail, issueInvite, issueCandidatePassword, linkCandidateAccount, freeCandidateAccounts, extendAccess, restoreAccess, promoteCandidate, markStartedWork, answerQuestion, grantQuizAttempt,
 } from "../core/hiringTraining.js";
 import { CANDIDATE_ACCESS, canDecideTraining } from "../core/hiringTrainingRules.js";
 import { hiringSummary, vacancyFunnels } from "../core/hiringFunnel.js";
@@ -582,6 +582,18 @@ hiringRouter.post("/candidates/:id/promote", async (req, res) => {
     const access = anyAccess(req);
     const id = idOf(req);
     await tx((db) => promoteCandidate(db, req.auth!.userId, id, req.body?.comment, decides(req), access, req.auth!.teamId));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+// 📝 «Ще одна спроба» тесту (13.10.2026) — тімлід команди або HR, коли власні 3 спроби вичерпано.
+hiringRouter.post("/candidates/:id/quiz/:materialId/grant", async (req, res) => {
+  try {
+    const access = anyAccess(req);
+    const id = idOf(req);
+    const mid = Number(req.params.materialId);
+    if (!Number.isInteger(mid) || mid <= 0) throw new HiringError(400, "Некоректний id тесту");
+    await tx((db) => grantQuizAttempt(db, req.auth!.userId, id, mid, req.body?.comment, decides(req), access, req.auth!.teamId));
     res.json({ ok: true });
   } catch (e) { fail(res, e); }
 });

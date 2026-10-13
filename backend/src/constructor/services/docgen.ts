@@ -33,6 +33,13 @@ export const densSteps = (s: { doc: DocKind }): Density[] => DENS_STEPS[s.doc] |
 export interface Counterparty {
   name?: string; edrpou?: string; ipn?: string; addr?: string;
   iban?: string; bank?: string; phone?: string; email?: string; dir?: string;
+  /** рід директора з перемикача форми: 'm' / 'f' / '' (визначити автоматично) — задача 5461 */
+  dirGender?: string;
+  /** ручна правка родового відмінка «в особі директора …»; понад автоматичний */
+  dirGenHand?: string;
+  /** ⚙ пише сервер (`names.resolveDirector`), з клієнта не довіряється: ПІБ у родовому й жіночий рід ('1') */
+  dirGen?: string;
+  dirFem?: string;
 }
 
 export interface DocumentState {
@@ -255,13 +262,16 @@ export function shortOrgName(n: string): string {
 /** Преамбула сегментами {t, b}: назви компаній і ПІБ директорів жирні (рішення 08.10). */
 export function preambleSegs(s: DocumentState): Seg[] {
   const e = ent(s), c = s.cp;
-  const cn = c.name || '____________________', cd = c.dir || '____________________';
+  // 🖋 Директор у РОДОВОМУ, «який/яка» — за родом (задача 5461). Контрагент: `dirGen`/`dirFem` пише
+  // `names.resolveDirector` на вході; старий архівний запис без них — у називному, як його й видали.
+  const cn = c.name || '____________________', cd = c.dirGen || c.dir || '____________________';
+  const acts = (fem: boolean) => (fem ? ', яка діє' : ', який діє');
   const our: Seg[] = s.ent === 'fop'
-    ? [{ t: e.full, b: 1 }, { t: ', далі — Експедитор, який діє на підставі виписки з Єдиного державного реєстру' }]
-    : [{ t: e.full, b: 1 }, { t: ', далі — Експедитор, в особі директора ' }, { t: e.dir, b: 1 }, { t: ', який діє на підставі Статуту' }];
+    ? [{ t: e.full, b: 1 }, { t: ', далі — Експедитор' + acts(e.dirFem) + ' на підставі виписки з Єдиного державного реєстру' }]
+    : [{ t: e.full, b: 1 }, { t: ', далі — Експедитор, в особі директора ' }, { t: e.dirGen, b: 1 }, { t: acts(e.dirFem) + ' на підставі Статуту' }];
   const their = (role: string): Seg[] => /^ФОП/i.test(cn)
-    ? [{ t: expandOrgName(cn), b: 1 }, { t: ', далі — ' + role + ', який діє на підставі виписки з Єдиного державного реєстру' }]
-    : [{ t: expandOrgName(cn), b: 1 }, { t: ', далі — ' + role + ', в особі директора ' }, { t: cd, b: 1 }, { t: ', який діє на підставі Статуту' }];
+    ? [{ t: expandOrgName(cn), b: 1 }, { t: ', далі — ' + role + acts(c.dirFem === '1') + ' на підставі виписки з Єдиного державного реєстру' }]
+    : [{ t: expandOrgName(cn), b: 1 }, { t: ', далі — ' + role + ', в особі директора ' }, { t: cd, b: 1 }, { t: acts(c.dirFem === '1') + ' на підставі Статуту' }];
   const tail: Seg = { t: ', з іншої сторони, разом надалі іменуються Сторони, уклали цей Договір про наступне:' };
   return partyLabel(s) === 'перевізник'
     ? [...our, { t: ', з однієї сторони, та ' }, ...their('Перевізник'), tail]

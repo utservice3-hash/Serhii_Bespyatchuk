@@ -3,6 +3,7 @@ import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { requireAuth } from "../auth/middleware.js";
 import { lardiGet, lardiPost, LANG, hasLardiToken } from "../lardi/client.js";
 import { recordRoute, recordOffers, recordUsage, history, usageStats, learnedStats } from "../lardi/history.js";
+import { offerDate } from "../lardi/offerDate.js";
 
 // «Калькулятор ставок» — точний порт Python-сервісу lardiweb у наш бекенд
 // (прод — shared cPanel без Python 3.10+). Формат відповіді збережено 1:1 з
@@ -81,6 +82,9 @@ const offerDistanceKm = (it: Any): number | null => {
   return dl ? dl / 1000 : null;
 };
 
+/** Одиниця ціни «за тонну»: «т», «т.», «тонна», «тон». Нормалізована (`toLowerCase`) назва з `payment.unit.name`. */
+export const isPerTonUnit = (unit: string): boolean => /^т\.?$/.test(unit.trim()) || unit.includes("тон");
+
 function classifyPayment(it: Any, routeKm: number | null) {
   const pay = asObj(it.payment);
   const val = num(pay.value);
@@ -93,7 +97,9 @@ function classifyPayment(it: Any, routeKm: number | null) {
   let total: number | null = null, perKm: number | null = null, perTon: number | null = null;
   if (val) {
     if (unit.includes("км")) { perKm = Math.round(val); total = dist ? Math.round(val * dist) : null; }
-    else if (unit.includes("тон")) { perTon = Math.round(val); total = mass ? Math.round(val * mass) : null; }
+    // «за т»: Lardi пише одиницю саме як «т» (13.10.2026 — 12 із 1 108 пропозицій), а не «тонна»; без цього
+    // «2 200 грн за т × 25 т» читалось як 2 200 грн за рейс (4 грн/км) і тягнуло мінімум і медіану донизу.
+    else if (isPerTonUnit(unit)) { perTon = Math.round(val); total = mass ? Math.round(val * mass) : null; }
     else total = Math.round(val);
     if (total && mass && !perTon) perTon = Math.round(total / mass);
     if (total && dist && !perKm) perKm = Math.round(total / dist);
@@ -125,7 +131,7 @@ export function toOffer(it: Any, routeKm: number | null) {
     from: waypoint(it, "waypointListSource"),
     to: waypoint(it, "waypointListTarget"),
     dist_km: dist ? Math.round(dist) : null,
-    date: String((first(it, "dateFrom", "date") as string) || "").slice(0, 10),
+    date: offerDate(first(it, "dateFrom", "date")),
     note: String(it.note || "").trim().slice(0, 160),
   };
 }

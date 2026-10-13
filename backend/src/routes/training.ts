@@ -13,6 +13,7 @@ import { roleHasPerm } from "../auth/rbac.js";
 import { effectiveMime, mimeFromName } from "../core/trainingMime.js";
 import { checkUpload, MAX_UPLOAD_BYTES, ACCEPT_ATTR } from "../core/trainingUpload.js";
 import { LESSON_ONLY, PART_ROLES, partVerdict, type PartRole } from "../core/trainingLesson.js";
+import { myQuiz, startQuiz, submitQuiz, loadQuiz, QuizError, type QuizDb } from "../core/trainingQuizStore.js";
 
 /**
  * Навчання — навчальна база відділу продажу. Адмін (КВП) будує структуру папок
@@ -501,21 +502,30 @@ trainingRouter.get("/courses/:id", async (req, res) => {
   const c = await pool.query(
     `SELECT id, title, description, audience, published FROM training_courses WHERE id = $1`, [courseId]);
   if (!c.rowCount) return res.status(404).json({ error: "Курс не знайдено" });
-  if (!audienceFor(req.auth!.roleKey).includes(c.rows[0].audience)) {
+  /* ✏️ Редактор навчання відкриває курс БУДЬ-ЯКОЇ аудиторії (13.10.2026): інакше курс, щойно ставши «для
+     кандидатів», зникав би з перегляду й редагування в адміна, КВП і HR — «Курс не для вашої ролі». Список
+     курсів редакторам і так показує всі аудиторії; тут — те саме для відкриття. Тримає гейт про тест. */
+  if (!roleHasPerm(req.auth!.roleKey, "manage_training") && !audienceFor(req.auth!.roleKey).includes(c.rows[0].audience)) {
     return res.status(403).json({ error: "Курс не для вашої ролі" });
   }
 
+  /* ✏️ Редактор навчання бачить у курсі й ЧЕРНЕТКИ (13.10.2026): тести приходять імпортом чернетками, і без цього
+     їх не було б видно там, де їх публікують. Відсоток, замки й стан рахуються ЛИШЕ по опублікованому — чернетка
+     не тримає замок і не входить у знаменник; кандидат і менеджер чернеток не отримують, як і досі. */
+  const editor = roleHasPerm(req.auth!.roleKey, "manage_training");
   const [folders, materials, progress] = await Promise.all([
     pool.query(`SELECT id, parent_id, name, position, course_id FROM training_folders`),
     // 📘 Кроки — ЛИШЕ уроки; частини уроку приходять разом із ним у `GET /material/:id`.
     pool.query(
-      `SELECT id, folder_id, title, kind, position, required FROM training_materials
-        WHERE status = 'published' AND ${LESSON_ONLY}`),
+      `SELECT id, folder_id, title, kind, position, required, status FROM training_materials
+        WHERE (status = 'published' OR $1::boolean) AND ${LESSON_ONLY}`, [editor]),
     pool.query(`SELECT material_id, status FROM training_progress WHERE user_id = $1`, [uid]),
   ]);
   const done = new Map(progress.rows.map((p) => [p.material_id, p.status as "opened" | "done"]));
   const fRows = folders.rows.map((f) => ({ id: f.id, parentId: f.parent_id, position: f.position }));
-  const mRows = materials.rows.map((m) => ({ id: m.id, folderId: m.folder_id, position: m.position, required: m.required }));
+  const allRows = materials.rows.map((m) => ({ id: m.id, folderId: m.folder_id, position: m.position, required: m.required }));
+  const draftIds = new Set(materials.rows.filter((m) => m.status !== "published").map((m) => m.id as number));
+  const mRows = allRows.filter((m) => !draftIds.has(m.id));
   const titleOf = new Map(materials.rows.map((m) => [m.id, m.title as string]));
 
   const modules = folders.rows
@@ -529,17 +539,17 @@ trainingRouter.get("/courses/:id", async (req, res) => {
     course: c.rows[0],
     percent: coursePercent(all, done),
     modules: modules.map((mod, i) => {
-      const own = orderedMaterials(mod.id, fRows, mRows);
+      const own = orderedMaterials(mod.id, fRows, editor ? allRows : mRows);
       return {
         id: mod.id, name: mod.name, index: i + 1,
-        percent: coursePercent(own, done),
+        percent: coursePercent(own.filter((m) => !draftIds.has(m.id)), done),
         // 🔴 ЗАКРИТІ ВІДДАЮТЬСЯ, А НЕ ХОВАЮТЬСЯ: людина мусить бачити, що попереду ще є,
         // і чому воно закрите. Сховане читалось би як «курс скоротився».
         materials: own.map((m) => {
-          const st = stateById.get(m.id)!;
+          const st = stateById.get(m.id) ?? { state: "available" as const, blockedBy: null };
           const src = materials.rows.find((x) => x.id === m.id)!;
           return {
-            id: m.id, title: src.title, kind: src.kind, required: m.required,
+            id: m.id, title: src.title, kind: src.kind, required: m.required, status: src.status,
             state: st.state,
             blockedBy: st.blockedBy ? { materialId: st.blockedBy.materialId, title: titleOf.get(st.blockedBy.materialId) ?? "" } : null,
           };
@@ -647,6 +657,87 @@ trainingRouter.post("/progress/:materialId/done", async (req, res) => {
   await pool.query(
     `INSERT INTO training_events (user_id, material_id, kind) VALUES ($1, $2, 'done')`, [uid, id]);
   res.json({ ok: true });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   📝 ТЕСТ ПІСЛЯ ТЕМИ (13.10.2026). Правила — `core/trainingQuiz.ts`, записи — `core/trainingQuizStore.ts`.
+   Замок — той самий `lockedReason`, що в «відкрив»/«опрацював»: тест теми відкривається після її уроків, а
+   наступна тема курсу для кандидатів — після складеного тесту. Редактор навчання замок обходить (як у вмісті
+   уроку), щоб перевірити тест до публікації.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const quizFail = (res: import("express").Response, e: unknown) => {
+  if (e instanceof QuizError) return res.status(e.status).json({ error: e.message });
+  console.error("[training-quiz]", e);
+  return res.status(500).json({ error: "Помилка сервера" });
+};
+/** Тест має бути опублікований або видимий редакторові; чернетку бачить лише той, хто бачить чернетки. */
+const quizVisible = async (req: import("express").Request, id: number) =>
+  ((await pool.query(`SELECT 1 FROM training_materials WHERE id = $1 AND kind = 'quiz' AND (status = 'published' OR $2::boolean)`,
+    [id, seesDrafts(req.auth!)])).rowCount ?? 0) > 0;
+async function quizTx<T>(fn: (db: QuizDb) => Promise<T>): Promise<T> {
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    const out = await fn(c as unknown as QuizDb);
+    await c.query("COMMIT");
+    return out;
+  } catch (e) {
+    await c.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    c.release();
+  }
+}
+const quizId = (req: import("express").Request) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) throw new QuizError(400, "Некоректний id");
+  return id;
+};
+
+/**
+ * Тест очима РЕДАКТОРА: налаштування й питання РАЗОМ із правильними відповідями. Лише право `manage_training` —
+ * це єдині двері, де правильна відповідь виходить назовні (кандидат її не бачить ніде; тримає гейт про витік).
+ */
+trainingRouter.get("/quiz/:id/editor", canEditTraining, async (req, res) => {
+  try {
+    const q = await loadQuiz(pool as unknown as QuizDb, quizId(req));
+    if (!q) throw new QuizError(404, "Тест не знайдено");
+    res.json({ settings: q.settings, questions: q.questions });
+  } catch (e) { quizFail(res, e); }
+});
+
+/** Мій стан тесту: поріг, скільки питань, спроби, найкращий бал. Без питань і без відповідей. */
+trainingRouter.get("/quiz/:id/me", async (req, res) => {
+  try {
+    const id = quizId(req);
+    if (!(await quizVisible(req, id))) throw new QuizError(404, "Тест не знайдено");
+    res.json(await myQuiz(pool as unknown as QuizDb, req.auth!.userId, id));
+  } catch (e) { quizFail(res, e); }
+});
+
+/** Почати (або продовжити відкриту) спробу. 423 — тема ще не пройдена; 409 — склав або вичерпав спроби. */
+trainingRouter.post("/quiz/:id/start", async (req, res) => {
+  try {
+    const id = quizId(req);
+    if (!(await quizVisible(req, id))) throw new QuizError(404, "Тест не знайдено");
+    const blocked = roleHasPerm(req.auth!.roleKey, "manage_training") ? null : await lockedReason(req.auth!.userId, id);
+    if (blocked) return res.status(423).json({ error: "Тест відкриється, коли пройдете уроки теми", blockedBy: blocked });
+    res.json(await quizTx((db) => startQuiz(db, req.auth!.userId, id)));
+  } catch (e) { quizFail(res, e); }
+});
+
+/** Завершити спробу. Перевірка — лише на сервері; складено — крок «пройдено», ні — лише бал і спроба. */
+trainingRouter.post("/quiz/:id/submit", async (req, res) => {
+  try {
+    const id = quizId(req);
+    const attemptId = Number(req.body?.attemptId);
+    if (!Number.isInteger(attemptId) || attemptId <= 0) throw new QuizError(400, "Некоректна спроба");
+    const answers = req.body?.answers;
+    if (answers == null || typeof answers !== "object" || Array.isArray(answers)) throw new QuizError(400, "answers: обʼєкт {idПитання: відповідь}");
+    const blocked = roleHasPerm(req.auth!.roleKey, "manage_training") ? null : await lockedReason(req.auth!.userId, id);
+    if (blocked) return res.status(423).json({ error: "Тест ще закритий", blockedBy: blocked });
+    res.json(await quizTx((db) => submitQuiz(db, req.auth!.userId, id, attemptId, answers)));
+  } catch (e) { quizFail(res, e); }
 });
 
 /** Курси — створення й правка (право `manage_training`). */

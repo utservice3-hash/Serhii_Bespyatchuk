@@ -194,3 +194,61 @@ img.tr-lsn-media { background: transparent; }
 @media (max-width: 560px) { .lr-title, .lr-h1 { font-size: 22px; } .lr-head { padding: 18px 16px 14px; } .lr-les-req { display: none; } }
 .lr-topbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
 .lr-topbar-ed { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* 📝 ТЕСТ ПІСЛЯ ТЕМИ (13.10.2026) — екран учня (`QuizView.tsx`) і плашка тесту в програмі курсу. Кольори — токени дашборда. */
+.qz { display: grid; gap: 14px; }
+.qz-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.qz-num { font-variant-numeric: tabular-nums; }
+.qz-nav { display: flex; gap: 5px; flex-wrap: wrap; }
+.qz-nav button { width: 30px; height: 30px; border-radius: 7px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.qz-nav button.done { background: var(--text); color: var(--card-bg); border-color: var(--text); }
+.qz-nav button.cur { outline: 2px solid var(--brand); outline-offset: 1px; }
+.qz-kind { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; }
+.qz-text { font-size: 18px; font-weight: 600; line-height: 1.4; text-wrap: balance; }
+.qz-opts { display: grid; gap: 8px; }
+.qz-opt { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 12px; align-items: center; text-align: left; padding: 12px 14px;
+  border: 1.5px solid var(--border); border-radius: 10px; background: var(--card-bg); color: var(--text); font: inherit; cursor: pointer; }
+.qz-opt:hover { border-color: var(--border-strong); }
+.qz-opt .mk { width: 20px; height: 20px; border: 2px solid var(--border-strong); border-radius: 50%; display: grid; place-items: center; }
+.qz-opt.multi .mk { border-radius: 5px; }
+.qz-opt.sel { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 8%, var(--card-bg)); }
+.qz-opt.sel .mk { border-color: var(--brand); background: var(--brand); }
+.qz-opt.sel .mk::after { content: ""; width: 8px; height: 8px; background: #fff; border-radius: 50%; }
+.qz-opt.multi.sel .mk::after { width: 10px; height: 6px; background: none; border: 2px solid #fff; border-top: 0; border-right: 0; border-radius: 0; transform: rotate(-45deg) translate(1px, -1px); }
+.qz-numin input { font-size: 20px; font-weight: 600; width: 220px; max-width: 100%; font-variant-numeric: tabular-nums; }
+.qz-foot, .qz-actions { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: center; }
+.qz-actions { justify-content: flex-start; }
+.qz-intro { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.qz-intro div { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.qz-intro b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+.qz-intro span { font-size: 12px; color: var(--text-muted); }
+.qz-rules { margin: 0; padding-left: 18px; color: var(--text-muted); display: grid; gap: 4px; }
+.qz-banner { display: grid; gap: 2px; padding: 12px 14px; border-radius: 10px; }
+.qz-banner.ok { background: var(--ok-bg); color: var(--ok); }
+.qz-banner.bad { background: var(--danger-bg); color: var(--danger); }
+.qz-score { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 20px; align-items: center; }
+.qz-score-t { display: grid; gap: 10px; }
+.qz-score-t h2 { margin: 0; font-size: 20px; }
+.qz-ring { width: 120px; height: 120px; }
+.qz-h { margin: 0; font-size: 15px; }
+.qz-res-list { display: grid; gap: 8px; }
+.qz-res { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--danger); background: var(--card-bg); }
+.qz-res .m { font-weight: 700; color: var(--danger); }
+.qz-res p { margin: 4px 0 0; color: var(--text-muted); font-size: 13px; }
+.qz-link { border: 0; background: none; padding: 0; margin-top: 4px; color: var(--info); font: inherit; font-size: 13px; cursor: pointer; }
+@media (max-width: 560px) { .qz-score { grid-template-columns: minmax(0, 1fr); } .qz-text { font-size: 16px; } }
+
+/* Плашка тесту в «Програмі курсу» — окремий, помітний крок теми, а не ще один урок. */
+.lr-les.quiz { border: 1.5px dashed var(--border-strong); background: var(--surface-2); margin-top: 4px; }
+.lr-les.quiz.avail { border-style: solid; border-color: var(--brand); background: color-mix(in srgb, var(--brand) 8%, var(--card-bg)); }
+.lr-les.quiz.done { border-style: solid; border-color: transparent; background: var(--ok-bg); }
+.lr-gate { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--text-muted); padding: 4px 8px 2px; }
+
+/* Тест у редакторі курсу: питання з правильними відповідями (лише перегляд). */
+.qz-eq { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+.qz-eq .n { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.qz-eq p { margin: 4px 0 0; color: var(--text-muted); font-size: 12px; }
+.qz-eopts { margin: 6px 0 0; padding-left: 0; list-style: none; display: grid; gap: 2px; }
+.qz-eopts li, .qz-eopts span { color: var(--text-muted); }
+.qz-eopts .ok { color: var(--ok); font-weight: 600; }
+.qz-introtext { margin: 0; color: var(--text); font-size: 14px; line-height: 1.55; }
