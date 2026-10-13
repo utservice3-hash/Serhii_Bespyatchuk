@@ -71,6 +71,7 @@ import { bankRouter } from "./routes/bank.js";
 import { trackerRouter } from "./routes/tracker.js";
 import { syncBank } from "./jobs/syncBank.js";
 import { syncSafe } from "./jobs/syncSafe.js";
+import { buildPaymentFile } from "./jobs/buildPaymentFile.js";
 import { kommoCircuitState } from "./kommo/client.js";
 import { checkFreshness, checkAbandonedStages } from "./core/reconcile.js";
 import { isKommoPaused } from "./kommo/pause.js";
@@ -565,6 +566,10 @@ cron.schedule("0 6 * * *", () => {
 cron.schedule("25,55 * * * *", () => {
   void runJob("syncSafe", () => syncSafe());
 }, { timezone: "Europe/Kyiv" });
+// 💸 Файл на оплату перевізникам (зустріч з Тетяною 13.10.2026): щогодини о :40 (не :00/:30 — там сходяться розклади)
+// + фінальний о 16:55 у будні, щоб о 17:00 файл був готовий. У Kommo не пише.
+cron.schedule("40 * * * *", () => { void runJob("buildPaymentFile", () => buildPaymentFile()); }, { timezone: "Europe/Kyiv" });
+cron.schedule("55 16 * * 1-5", () => { void runJob("buildPaymentFile", () => buildPaymentFile()); }, { timezone: "Europe/Kyiv" });
 
 // Prune stage events older than 24 months daily at 04:30 (bounded storage).
 cron.schedule("30 4 * * *", () => {

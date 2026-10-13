@@ -5918,3 +5918,18 @@ CREATE INDEX IF NOT EXISTS idx_training_quiz_grants_user ON training_quiz_grants
 
 -- 🔒 Результати людей — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`.
 REVOKE ALL ON training_quiz_attempts, training_quiz_grants FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 💸 ФАЙЛ НА ОПЛАТУ ПЕРЕВІЗНИКАМ (13.10.2026, зустріч Романа з Тетяною): стан останнього прогону `buildPaymentFile`.
+-- Лише id запитів і угод, суми, причини й примітки — НОМЕРІВ КАРТОК І ПІБ ТУТ НЕМАЄ (вони йдуть тільки в таблицю).
+CREATE TABLE IF NOT EXISTS payment_file_state (
+  id           INTEGER PRIMARY KEY CHECK (id = 1),
+  at           TIMESTAMPTZ NOT NULL,
+  queue        INTEGER NOT NULL,
+  ok           INTEGER NOT NULL,
+  check_count  INTEGER NOT NULL,
+  total        NUMERIC(14,2) NOT NULL,
+  rows         JSONB NOT NULL,
+  sheet        TEXT NOT NULL
+);
+REVOKE ALL ON payment_file_state FROM ai_readonly;
