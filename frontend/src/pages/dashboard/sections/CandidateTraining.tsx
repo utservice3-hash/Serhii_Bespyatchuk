@@ -5,6 +5,7 @@ import {
   type TrainingCourse, type TrainingCourseDetail, type TrainingMaterialContent, type CandidateMe, type MyTrainingQuestion,
 } from "../../../api";
 import { LessonBody } from "./LessonBody";
+import { QuizView } from "./QuizView";
 import { CourseHeader, LessonPage, ProgramAccordion } from "./LearnLayout";
 import "./training.css";
 import { useNavigate } from "react-router-dom";
@@ -62,6 +63,7 @@ export function CandidateTraining() {
       questions={questions.filter((q) => q.material_id === stepId)} canAsk={me.candidate}
       onBack={() => { setStepId(null); void load(); }}
       onGo={(id) => { setStepId(id); void load(); }}
+      onOpenTitle={(title) => { const s = steps.find((x) => x.title === title && x.state !== "locked"); if (s) { setStepId(s.id); void load(); } }}
       onAsked={() => void load()} />;
   }
   return <Home me={me} courses={courses} steps={steps} modules={modules} questions={questions} onOpen={setStepId} />;
@@ -124,7 +126,8 @@ function Home({ me, courses, steps, modules, questions, onOpen }: {
       <h1 className="page-title" style={{ marginBottom: 4 }}>📚 Навчання</h1>
       <p className="hr-muted" style={{ margin: "0 0 14px", fontSize: 13 }}>
         {me.candidate && me.teamName ? `Вітаємо в команді ${me.teamName}. ` : ""}
-        Проходьте кроки по черзі: наступний відкривається, коли попередній позначено «Опрацював(ла)».
+        Проходьте кроки по черзі: наступний відкривається, коли попередній позначено «Опрацював(ла)»,
+        а наступна тема — коли складете тест попередньої.
         {me.candidate && me.leadName ? ` Питання — тімліду ${me.leadName}.` : ""}
       </p>
       <OfferCard />
@@ -162,9 +165,9 @@ function Home({ me, courses, steps, modules, questions, onOpen }: {
   );
 }
 
-function StepView({ step, next, modules, percent, questions, canAsk, onBack, onGo, onAsked }: {
+function StepView({ step, next, modules, percent, questions, canAsk, onBack, onGo, onOpenTitle, onAsked }: {
   step: Step | undefined; next: Step | null; modules: TrainingCourseDetail["modules"]; percent: number; questions: MyTrainingQuestion[]; canAsk: boolean;
-  onBack: () => void; onGo: (id: number) => void; onAsked: () => void;
+  onBack: () => void; onGo: (id: number) => void; onOpenTitle: (title: string) => void; onAsked: () => void;
 }) {
   const [m, setM] = useState<TrainingMaterialContent | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -181,8 +184,8 @@ function StepView({ step, next, modules, percent, questions, canAsk, onBack, onG
       .then(async (x) => {
         if (!alive) return;
         setM(x);
-        // Відкриття — це й «остання активність» на дошці тімліда. Повтор нічого не додає.
-        if (x.status == null) await openTrainingMaterial(id).catch(() => undefined);
+        // Відкриття — це й «остання активність» на дошці тімліда. Повтор нічого не додає. Тест «відкриває» сама спроба.
+        if (x.status == null && (x.kind as string) !== "quiz") await openTrainingMaterial(id).catch(() => undefined);
       })
       .catch((e) => { if (alive) setErr((e as { response?: { status?: number } }).response?.status === 423
         ? "Цей крок ще закритий: спершу пройдіть попередній." : hiringError(e)); });
@@ -191,6 +194,7 @@ function StepView({ step, next, modules, percent, questions, canAsk, onBack, onG
 
   if (!step) return null;
   const done = m?.status === "done" || step.state === "done";
+  const isQuiz = (m?.kind as string) === "quiz" || step.kind === "quiz";
 
   const markDone = async () => {
     setBusy(true);
@@ -207,10 +211,8 @@ function StepView({ step, next, modules, percent, questions, canAsk, onBack, onG
 
   return (
     <LessonPage title={step.title} done={done} modules={modules} currentId={step.id} percent={percent} onBack={onBack} onOpen={onGo}
-      footer={m && <>
-        {(m.kind as string) === "quiz"
-          ? <span className="hr-muted">Тест зараховується перевіркою відповідей — зʼявиться разом з екзаменом.</span>
-          : done
+      footer={m && !isQuiz && <>
+        {done
             ? <>{next && <button className="hr-btn p" onClick={() => onGo(next.id)}>Наступний урок: {next.title} →</button>}</>
             : <button className="hr-btn p" disabled={busy} onClick={() => void markDone()}>{busy ? "Зберігаємо…" : next ? "Опрацював(ла) — далі" : "Опрацював(ла)"}</button>}
         {!step.required && <span className="hr-muted">необовʼязковий урок</span>}
@@ -218,7 +220,10 @@ function StepView({ step, next, modules, percent, questions, canAsk, onBack, onG
       {err && <div className="hr-note" style={{ background: "var(--danger-bg)", color: "var(--danger)" }}>{err}</div>}
       {!m && !err && <p className="loading-text">Завантаження…</p>}
       {/* 📘 Урок цілим — той самий компонент, що й у кроці курсу (`#729`): кандидат бачить урок так само. */}
-      {m && <LessonBody m={m} />}
+      {/* 📝 Тест теми (13.10.2026): зараховується лише перевіркою відповідей — кнопки «Опрацював» на ньому немає. */}
+      {m && isQuiz && <QuizView materialId={step.id} intro={m.content} onPassed={onAsked} onOpenLesson={onOpenTitle}
+        nextLabel={next ? `Далі: ${next.title}` : null} onNext={next ? () => onGo(next.id) : undefined} />}
+      {m && !isQuiz && <LessonBody m={m} />}
 
       {canAsk && m && (
         <div className="hr-card" style={{ marginTop: 8 }}>

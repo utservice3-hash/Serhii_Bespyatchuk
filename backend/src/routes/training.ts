@@ -13,7 +13,7 @@ import { roleHasPerm } from "../auth/rbac.js";
 import { effectiveMime, mimeFromName } from "../core/trainingMime.js";
 import { checkUpload, MAX_UPLOAD_BYTES, ACCEPT_ATTR } from "../core/trainingUpload.js";
 import { LESSON_ONLY, PART_ROLES, partVerdict, type PartRole } from "../core/trainingLesson.js";
-import { myQuiz, startQuiz, submitQuiz, QuizError, type QuizDb } from "../core/trainingQuizStore.js";
+import { myQuiz, startQuiz, submitQuiz, loadQuiz, QuizError, type QuizDb } from "../core/trainingQuizStore.js";
 
 /**
  * Навчання — навчальна база відділу продажу. Адмін (КВП) будує структуру папок
@@ -509,17 +509,23 @@ trainingRouter.get("/courses/:id", async (req, res) => {
     return res.status(403).json({ error: "Курс не для вашої ролі" });
   }
 
+  /* ✏️ Редактор навчання бачить у курсі й ЧЕРНЕТКИ (13.10.2026): тести приходять імпортом чернетками, і без цього
+     їх не було б видно там, де їх публікують. Відсоток, замки й стан рахуються ЛИШЕ по опублікованому — чернетка
+     не тримає замок і не входить у знаменник; кандидат і менеджер чернеток не отримують, як і досі. */
+  const editor = roleHasPerm(req.auth!.roleKey, "manage_training");
   const [folders, materials, progress] = await Promise.all([
     pool.query(`SELECT id, parent_id, name, position, course_id FROM training_folders`),
     // 📘 Кроки — ЛИШЕ уроки; частини уроку приходять разом із ним у `GET /material/:id`.
     pool.query(
-      `SELECT id, folder_id, title, kind, position, required FROM training_materials
-        WHERE status = 'published' AND ${LESSON_ONLY}`),
+      `SELECT id, folder_id, title, kind, position, required, status FROM training_materials
+        WHERE (status = 'published' OR $1::boolean) AND ${LESSON_ONLY}`, [editor]),
     pool.query(`SELECT material_id, status FROM training_progress WHERE user_id = $1`, [uid]),
   ]);
   const done = new Map(progress.rows.map((p) => [p.material_id, p.status as "opened" | "done"]));
   const fRows = folders.rows.map((f) => ({ id: f.id, parentId: f.parent_id, position: f.position }));
-  const mRows = materials.rows.map((m) => ({ id: m.id, folderId: m.folder_id, position: m.position, required: m.required }));
+  const allRows = materials.rows.map((m) => ({ id: m.id, folderId: m.folder_id, position: m.position, required: m.required }));
+  const draftIds = new Set(materials.rows.filter((m) => m.status !== "published").map((m) => m.id as number));
+  const mRows = allRows.filter((m) => !draftIds.has(m.id));
   const titleOf = new Map(materials.rows.map((m) => [m.id, m.title as string]));
 
   const modules = folders.rows
@@ -533,17 +539,17 @@ trainingRouter.get("/courses/:id", async (req, res) => {
     course: c.rows[0],
     percent: coursePercent(all, done),
     modules: modules.map((mod, i) => {
-      const own = orderedMaterials(mod.id, fRows, mRows);
+      const own = orderedMaterials(mod.id, fRows, editor ? allRows : mRows);
       return {
         id: mod.id, name: mod.name, index: i + 1,
-        percent: coursePercent(own, done),
+        percent: coursePercent(own.filter((m) => !draftIds.has(m.id)), done),
         // 🔴 ЗАКРИТІ ВІДДАЮТЬСЯ, А НЕ ХОВАЮТЬСЯ: людина мусить бачити, що попереду ще є,
         // і чому воно закрите. Сховане читалось би як «курс скоротився».
         materials: own.map((m) => {
-          const st = stateById.get(m.id)!;
+          const st = stateById.get(m.id) ?? { state: "available" as const, blockedBy: null };
           const src = materials.rows.find((x) => x.id === m.id)!;
           return {
-            id: m.id, title: src.title, kind: src.kind, required: m.required,
+            id: m.id, title: src.title, kind: src.kind, required: m.required, status: src.status,
             state: st.state,
             blockedBy: st.blockedBy ? { materialId: st.blockedBy.materialId, title: titleOf.get(st.blockedBy.materialId) ?? "" } : null,
           };
@@ -687,6 +693,18 @@ const quizId = (req: import("express").Request) => {
   if (!Number.isInteger(id) || id <= 0) throw new QuizError(400, "Некоректний id");
   return id;
 };
+
+/**
+ * Тест очима РЕДАКТОРА: налаштування й питання РАЗОМ із правильними відповідями. Лише право `manage_training` —
+ * це єдині двері, де правильна відповідь виходить назовні (кандидат її не бачить ніде; тримає гейт про витік).
+ */
+trainingRouter.get("/quiz/:id/editor", canEditTraining, async (req, res) => {
+  try {
+    const q = await loadQuiz(pool as unknown as QuizDb, quizId(req));
+    if (!q) throw new QuizError(404, "Тест не знайдено");
+    res.json({ settings: q.settings, questions: q.questions });
+  } catch (e) { quizFail(res, e); }
+});
 
 /** Мій стан тесту: поріг, скільки питань, спроби, найкращий бал. Без питань і без відповідей. */
 trainingRouter.get("/quiz/:id/me", async (req, res) => {

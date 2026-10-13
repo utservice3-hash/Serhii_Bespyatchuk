@@ -3,8 +3,9 @@ import { useDialogs } from "../../../components/Dialogs";
 import { createPortal } from "react-dom";
 import {
   fetchHiringTraining, fetchHiringTrainingDetail, createHiringInvite, extendHiringAccess, restoreHiringAccess,
-  promoteHiringCandidate, markHiringStartedWork, answerHiringQuestion, inviteUrl, hiringError, issueHiringPassword, fetchFreeCandidateAccounts, linkCandidateAccount, fetchOfferStates, type OfferStateKind,
+  promoteHiringCandidate, markHiringStartedWork, answerHiringQuestion, grantQuizAttempt, inviteUrl, hiringError, issueHiringPassword, fetchFreeCandidateAccounts, linkCandidateAccount, fetchOfferStates, type OfferStateKind,
   type HiringMeta, type HiringTrainingRow, type HiringTrainingRules, type HiringTrainingDetail, type HiringTrainingHealth, type HiringCloseReason,
+  type QuizSummary,
 } from "../../../api";
 import { RefusalDialog, StatusPill, type Toast } from "./HiringShared";
 import { OfferBox, OFFER_STATE } from "./HiringOffer";
@@ -12,9 +13,18 @@ import { OfferBox, OFFER_STATE } from "./HiringOffer";
 /**
  * 🎓 «НАЙМ · НА НАВЧАННІ», прохід 2a (17.09.2026) — за макетом v12, який прийняв Роман.
  * Рекрутер бачить усіх, тімлід — свою команду (межу тримає сервер). Рішення «менеджер» і відповіді
- * на питання — тімлід або адмін-рівень (`canDecide` із сервера). Екзамену ще немає (прохід 2c), тож
- * умова «менеджера» до того — усі кроки навчання пройдено.
+ * на питання — тімлід або адмін-рівень (`canDecide` із сервера). Умова «менеджера» — усі обовʼязкові кроки
+ * пройдено; з 13.10.2026 серед них і тести тем (тест = крок, що зараховується лише складеним тестом).
  */
+
+/** 📝 Коротка мітка тесту для таблиці: «Тест: Логістика» → «Логістика» (повна назва — у підказці). */
+const quizShort = (t: string) => t.replace(/^Тест:\s*/i, "");
+/** Стан тесту одним рядком і тоном: склав / не склав (спроби) / ще не проходив. */
+function quizLine(q: QuizSummary): [string, string] {
+  if (q.passed) return [`${q.bestPct}%`, "ok"];
+  if (q.used) return [`${q.lastPct}% · ${q.used}/${q.maxAttempts + q.grants}`, "dg"];
+  return ["—", "gr"];
+}
 
 const HEALTH: Record<HiringTrainingHealth, [string, string]> = {
   ok: ["йде за планом", "pl"],
@@ -131,7 +141,7 @@ export function HiringTraining({ meta, toast, onChanged }: { meta: HiringMeta; t
         ) : (
           <div className="hr-tw">
             <table className="hr-table">
-              <thead><tr><th>Кандидат</th><th>Команда</th><th>День</th><th>Прогрес</th><th>Зараз на кроці</th><th>Остання активність</th><th>Стан</th><th>Доступ</th>{offers && <th>Офер</th>}</tr></thead>
+              <thead><tr><th>Кандидат</th><th>Команда</th><th>День</th><th>Прогрес</th><th>Тести за темами</th><th>Зараз на кроці</th><th>Остання активність</th><th>Стан</th><th>Доступ</th>{offers && <th>Офер</th>}</tr></thead>
               <tbody>
                 {rows.map((r) => {
                   const h = healthText(r), a = accessText(r), seen = lastSeen(r);
@@ -141,6 +151,12 @@ export function HiringTraining({ meta, toast, onChanged }: { meta: HiringMeta; t
                       <td>{r.team_name ?? <span className="hr-muted">без команди</span>}</td>
                       <td className="num">{r.first_login_at ? `${Math.max(r.day, 1)} / ${r.days}` : "—"}</td>
                       <td style={{ minWidth: 130 }}>{r.health === "no_account" ? <span className="hr-muted">—</span> : <><Bar pct={r.percent} /><div className="hr-muted">{r.done} із {r.total}</div></>}</td>
+                      <td>{!r.quizzes?.length ? <span className="hr-muted">—</span> : (
+                        <span style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                          {r.quizzes.map((q) => { const [t, tone] = quizLine(q); return (
+                            <span key={q.materialId} className={`hr-pill ${tone}`} title={`${q.title}: ${q.passed ? "складено" : q.used ? `не складено, спроб ${q.used} з ${q.maxAttempts + q.grants}` : "ще не проходив"}`}>
+                              {quizShort(q.title).slice(0, 12)} {t}</span>); })}
+                        </span>)}</td>
                       <td>{r.health === "no_account" ? <span className="hr-muted">—</span> : r.current_step ?? <span className="hr-muted">{r.total ? "усі кроки пройдено" : "кроків немає"}</span>}</td>
                       <td>{seen ? <>{kyiv(seen)} <span className="hr-muted">· {hoursAgo(seen)} год тому</span></> : <span className="hr-muted">не заходив(ла)</span>}</td>
                       <td><span className={`hr-pill ${h[1]}`}>{h[0]}</span></td>
@@ -322,6 +338,7 @@ export function TrainingDrawer({ meta, id, toast, onClose, onChanged }: {
   const [starting, setStarting] = useState(false);
   const [refusing, setRefusing] = useState(false);
   const [answers, setAnswers] = useState<Record<number, string>>({});
+  const dlg = useDialogs();
 
   const load = useCallback(() => {
     fetchHiringTrainingDetail(id).then((x) => { setD(x); setErr(null); }).catch((e) => setErr(hiringError(e)));
@@ -434,8 +451,34 @@ export function TrainingDrawer({ meta, id, toast, onClose, onChanged }: {
                   </div>
                 );
               })}
-              <div className="hr-muted">Екзамен і відповіді на нього зʼявляться в проході 2c.</div>
             </div>
+
+            {/* 📝 ТЕСТИ ТЕМ (13.10.2026): бал і спроби. «Ще одна спроба» — тімлід або HR, коли власні вичерпано. */}
+            {!!r.quizzes?.length && (
+              <div className="hr-sect" style={{ padding: "14px 0 0", marginTop: 14 }}>
+                <h4>Тести тем</h4>
+                <ul className="hr-steps">
+                  {r.quizzes.map((q) => {
+                    const [t, tone] = quizLine(q);
+                    const canGrant = open && !q.passed && q.left === 0 && q.used > 0 && (d.canDecide || d.canRestore);
+                    return (
+                      <li key={q.materialId} className={q.passed ? "done" : ""}>
+                        <span className="ic">{q.passed ? "✓" : q.used ? "✗" : "•"}</span>
+                        <span>{q.title} <span className={`hr-pill ${tone}`}>{q.passed ? `складено · ${t}` : q.used ? `не складено · ${t}` : "ще не проходив"}</span></span>
+                        <span>{canGrant
+                          ? <button className="hr-btn" onClick={async () => {
+                              const why = await dlg.prompt({ title: "Ще одна спроба", label: `${q.title}: причина (не обовʼязково)`, placeholder: "Наприклад: переглянув уроки разом з тімлідом", okLabel: "Дати спробу" });
+                              if (why === null) return;
+                              void run(() => grantQuizAttempt(id, q.materialId, why), "Додано ще одну спробу");
+                            }}>+ Ще одна спроба</button>
+                          : <span className="hr-muted">{q.passed ? `найкращий ${q.bestPct}%` : q.used ? `лишилось спроб: ${q.left}` : ""}</span>}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <div className="hr-muted">Прохідний бал — 80%. Після 3 невдалих спроб тест закривається, доки тімлід або HR не дасть ще одну.</div>
+              </div>
+            )}
 
             <div className="hr-sect" style={{ padding: "14px 0 0", marginTop: 14 }}>
               <h4>Питання тімліду</h4>

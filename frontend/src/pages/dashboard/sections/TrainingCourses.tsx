@@ -8,6 +8,7 @@ import {
   type TrainingModule, type TrainingUploadRules,
 } from "../../../api";
 import { LessonBody } from "./LessonBody";
+import { QuizView, QuizEditorPanel } from "./QuizView";
 import { sizeLabel } from "../lessonLayout";
 import { CourseHeader, LessonPage, ProgramAccordion } from "./LearnLayout";
 import "./hiring.css";
@@ -37,6 +38,7 @@ const KIND: Record<TrainingKind, { icon: string; label: string }> = {
   file: { icon: "📄", label: "файл" },
   video_embed: { icon: "🎬", label: "відео" },
   link: { icon: "🔗", label: "посилання" },
+  quiz: { icon: "✎", label: "тест" },
 };
 const AUDIENCE: { key: TrainingAudience; label: string }[] = [
   { key: "candidate", label: "Кандидати" }, { key: "manager", label: "Менеджери" }, { key: "all", label: "Усі" },
@@ -183,7 +185,12 @@ function CourseView({ id, canEdit, onBack }: { id: number; canEdit: boolean; onB
   }, [id]);
   useEffect(load, [load]);
 
-  const steps = useMemo(() => (d?.modules ?? []).flatMap((m) => m.materials.map((s) => ({ ...s, moduleName: m.name }))), [d]);
+  /* 📝 Чернетки (зокрема імпортовані тести) сервер віддає лише редактору. У «Перегляді» їх ховаємо — редактор бачить
+     курс так само, як кандидат; у «Редагуванні» вони видні з позначкою й кнопкою «Опублікувати». */
+  const view = useMemo(() => (d && !edit
+    ? { ...d, modules: d.modules.map((m) => ({ ...m, materials: m.materials.filter((x) => x.status !== "draft") })) }
+    : d), [d, edit]);
+  const steps = useMemo(() => (view?.modules ?? []).flatMap((m) => m.materials.map((s) => ({ ...s, moduleName: m.name }))), [view]);
   const cur = curId != null ? steps.find((s) => s.id === curId) ?? null : steps.find((s) => s.state === "available" || s.state === "opened") ?? steps[0] ?? null;
   /** 🎓 Перегляд — будова Sereda: без вибраного уроку показуємо СТОРІНКУ КУРСУ, а не перший крок. */
   const reading = curId != null ? steps.find((s) => s.id === curId) ?? null : null;
@@ -230,15 +237,15 @@ function CourseView({ id, canEdit, onBack }: { id: number; canEdit: boolean; onB
         </div>
         {err && <div className="hr-card" style={{ padding: 10, color: "var(--danger)" }}>{err}</div>}
         {reading ? (
-          <ReadLesson key={reading.id} step={reading} modules={d.modules} percent={d.percent}
+          <ReadLesson key={reading.id} step={reading} modules={view!.modules} percent={d.percent}
             onBack={() => { setCurId(null); load(); }} onOpen={setCurId} onChanged={load} />
         ) : (
           <>
-            <CourseHeader title={d.course.title} percent={d.percent} modules={d.modules} onContinue={setCurId} />
+            <CourseHeader title={d.course.title} percent={d.percent} modules={view!.modules} onContinue={setCurId} />
             <div className="lr-sect">Програма курсу</div>
-            {d.modules.length === 0
+            {view!.modules.length === 0
               ? <div className="hr-card" style={{ padding: 18 }}><span className="hr-muted">У курсі ще немає тем.{canEdit ? " Увімкніть «Редагування», додайте тему і крок у ній." : ""}</span></div>
-              : <ProgramAccordion modules={d.modules} currentId={null} onOpen={setCurId} />}
+              : <ProgramAccordion modules={view!.modules} currentId={null} onOpen={setCurId} />}
           </>
         )}
       </div>
@@ -308,6 +315,7 @@ function CourseView({ id, canEdit, onBack }: { id: number; canEdit: boolean; onB
                     onClick={() => setCurId(s.id)}>
                     <span className="ic">{s.state === "done" ? "✅" : s.state === "locked" && !(canEdit && edit) ? "🔒" : KIND[s.kind].icon}</span>
                     <span className="tt">{s.title}</span>
+                    {s.status === "draft" && <span className="hr-pill wn">чернетка</span>}
                     {!s.required && <span className="hr-pill gr">необовʼязково</span>}
                   </button>
                   {canEdit && edit && (
@@ -580,7 +588,7 @@ function ReadLesson({ step, modules, percent, onBack, onOpen, onChanged }: {
     fetchTrainingMaterial(step.id).then((x) => {
       if (!alive) return;
       setM(x);
-      if (x.status == null) void openTrainingMaterial(step.id).then(onChanged).catch(() => undefined);
+      if (x.status == null && step.kind !== "quiz") void openTrainingMaterial(step.id).then(onChanged).catch(() => undefined);
     }).catch((e) => { if (alive) setErr(errText(e)); });
     return () => { alive = false; };
   }, [step.id, onChanged]);
@@ -597,12 +605,16 @@ function ReadLesson({ step, modules, percent, onBack, onOpen, onChanged }: {
 
   return (
     <LessonPage title={step.title} done={done} modules={modules} currentId={step.id} percent={percent} onBack={onBack} onOpen={onOpen}
-      footer={m && (done
+      footer={m && step.kind !== "quiz" && (done
         ? (next && <button className="hr-btn p" onClick={() => onOpen(next.id)}>Наступний урок: {next.title} →</button>)
         : <button className="hr-btn p" disabled={saving} onClick={() => void markDone()}>{saving ? "Зберігаю…" : next ? "Опрацював(ла) — далі" : "Опрацював(ла)"}</button>)}>
       {err && <div className="hr-card" style={{ padding: 10, color: "var(--danger)" }}>{err}</div>}
       {!m && !err && <p className="loading-text">Завантаження…</p>}
-      {m && <LessonBody m={m} />}
+      {/* 📝 Тест теми — той самий екран, що в кандидата: зараховується лише перевіркою відповідей. */}
+      {m && step.kind === "quiz" && <QuizView materialId={step.id} intro={m.content} onPassed={onChanged}
+        onOpenLesson={(t) => { const l = all.find((x) => x.title === t); if (l) onOpen(l.id); }}
+        nextLabel={next ? `Далі: ${next.title}` : null} onNext={next ? () => onOpen(next.id) : undefined} />}
+      {m && step.kind !== "quiz" && <LessonBody m={m} />}
     </LessonPage>
   );
 }
@@ -613,7 +625,7 @@ function ReadLesson({ step, modules, percent, onBack, onOpen, onChanged }: {
  * й «Частини уроку» (роль, порядок, заміна, видалення, нова частина). Нижче — той самий `LessonBody`, що бачить людина.
  */
 function StepPane({ step, edit, busy, onChanged, onNext, nextTitle, upload, modules, onAddPart }: {
-  step: { id: number; title: string; kind: TrainingKind; required: boolean; state: string; moduleName: string };
+  step: { id: number; title: string; kind: TrainingKind; required: boolean; state: string; moduleName: string; status?: "draft" | "published" };
   edit: boolean; busy: boolean; onChanged: () => void; onNext: () => void; nextTitle: string | null;
   upload: TrainingUploadRules | null; modules: { id: number; name: string }[]; onAddPart: (t: AddTarget) => void;
 }) {
@@ -629,7 +641,7 @@ function StepPane({ step, edit, busy, onChanged, onNext, nextTitle, upload, modu
       if (!alive) return;
       setM(x);
       /* ✏️ Редактор, що правит урок, його не «проходить»: інакше кожне відкриття в редагуванні ставило б йому «відкрито». */
-      if (!edit && x.status == null) void openTrainingMaterial(step.id).then(onChanged).catch(() => undefined);
+      if (!edit && x.status == null && x.kind !== "quiz") void openTrainingMaterial(step.id).then(onChanged).catch(() => undefined);
     }).catch((e) => setErr(errText(e)));
     return () => { alive = false; };
   }, [step.id, onChanged, edit, ver]);
@@ -681,13 +693,13 @@ function StepPane({ step, edit, busy, onChanged, onNext, nextTitle, upload, modu
                 onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== (m.url ?? "")) save(() => updateTrainingMaterial(step.id, { url: v })); }} />
             </label>
           )}
-          <label><span className="hr-muted">{m.kind === "text" ? "Текст уроку" : "Текст уроку (показується над презентацією)"}</span>
+          <label><span className="hr-muted">{m.kind === "quiz" ? "Вступ до тесту (показується кандидату перед початком)" : m.kind === "text" ? "Текст уроку" : "Текст уроку (показується над презентацією)"}</span>
             <textarea className="hr-inp" key={m.content ?? ""} rows={m.kind === "text" ? 10 : 4} defaultValue={m.content ?? ""} style={{ width: "100%", resize: "vertical" }}
               onBlur={(e) => { const v = e.target.value; if (v !== (m.content ?? "")) save(() => updateTrainingMaterial(step.id, { content: v || null })); }} />
           </label>
 
           {/* 📘 ЧАСТИНИ УРОКУ — презентація, відео, вкладення. Роль вирішує, де частина стоїть: у тілі уроку чи у «Вкладеннях». */}
-          <div className="tr-parts">
+          {m.kind !== "quiz" && <div className="tr-parts">
             <div className="tr-parts-h">
               <b>Частини уроку</b>
               <span className="hr-muted">{(m.parts ?? []).length ? `${(m.parts ?? []).length}` : "немає — урок з одного матеріалу"}</span>
@@ -712,7 +724,7 @@ function StepPane({ step, edit, busy, onChanged, onNext, nextTitle, upload, modu
                   onClick={async () => { if ((await dlg.confirm(`Видалити «${p.title}» з уроку?`))) save(() => deleteTrainingMaterial(p.id)); }}>🗑</button>
               </div>
             ))}
-          </div>
+          </div>}
           <div className="hr-muted">Зміни зберігаються, щойно ви виходите з поля. Нижче — те, що побачить людина.</div>
         </div>
       )}
@@ -726,9 +738,13 @@ function StepPane({ step, edit, busy, onChanged, onNext, nextTitle, upload, modu
           {/* 📘 Урок цілим — pdf/відео, текст, «Вкладення» — як у Sereda; один компонент на обидва екрани (`#729`).
               🔴 `key={ver}`: після «Замінити файл» id частини ТОЙ САМИЙ, а вікно pdf тримає вже завантажений файл за id —
               без нового ключа редактор бачив би стару презентацію і вирішив би, що заміна не спрацювала (спіймано на стенді). */}
-          <LessonBody key={ver} m={m} />
+          {m.kind === "quiz"
+            ? (edit
+                ? <QuizEditorPanel materialId={step.id} draft={step.status === "draft"} onPublished={() => { setVer((v) => v + 1); onChanged(); }} />
+                : <QuizView materialId={step.id} intro={m.content} onPassed={onChanged} nextLabel={nextTitle ? `Далі: ${nextTitle}` : null} onNext={onNext} />)
+            : <LessonBody key={ver} m={m} />}
 
-          {!edit && (
+          {!edit && m.kind !== "quiz" && (
             <div className="tr-actions">
               <button className="hr-btn p" disabled={saving || busy || step.state === "done"} onClick={() => void markDone()}>
                 {step.state === "done" ? "Опрацьовано ✓" : saving ? "Зберігаю…" : nextTitle ? "Опрацював(ла) — далі" : "Опрацював(ла)"}

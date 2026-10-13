@@ -1460,6 +1460,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: [] },
   /* 📝 Тест після теми (13.10.2026): ті самі двері, що прогрес, — кожен, хто бачить вкладку, проходить свій тест.
      Межа — вкладка й замок теми (`lockedReason`), а не роль; проба start/submit була б записом спроби. */
+  // Тест з правильними відповідями — лише редактор навчання (`manage_training`: admin, СЕО, ОД, КВП, HR).
+  { method: "GET", path: "/api/training/quiz/:id/editor", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["financier", "team_lead", "manager"] },
   { method: "GET", path: "/api/training/quiz/:id/me", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager", "candidate"], deny: [] },
   { method: "POST", path: "/api/training/quiz/:id/start", cls: "deny-only",

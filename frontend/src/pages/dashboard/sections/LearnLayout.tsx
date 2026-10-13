@@ -35,6 +35,7 @@ const I = {
   trophy: <><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z" /><path d="M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3" /></>,
   layers: <><path d="M12 2l10 6-10 6L2 8z" /><path d="M2 16l10 6 10-6" /></>,
   circle: <circle cx="12" cy="12" r="9" />,
+  quiz: <><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></>,
 };
 function Ic({ n, size = 18, className }: { n: keyof typeof I; size?: number; className?: string }) {
   return (
@@ -42,8 +43,8 @@ function Ic({ n, size = 18, className }: { n: keyof typeof I; size?: number; cla
       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{I[n]}</svg>
   );
 }
-const kindIcon = (kind: string): keyof typeof I => (kind === "video_embed" ? "video" : kind === "link" ? "link" : "file");
-const kindWord = (kind: string): string => (kind === "video_embed" ? "Відео" : kind === "link" ? "Посилання" : "Урок");
+const kindIcon = (kind: string): keyof typeof I => (kind === "quiz" ? "quiz" : kind === "video_embed" ? "video" : kind === "link" ? "link" : "file");
+const kindWord = (kind: string): string => (kind === "quiz" ? "Тест" : kind === "video_embed" ? "Відео" : kind === "link" ? "Посилання" : "Урок");
 
 /** Кільце «k/n», як праворуч від теми в Sereda. */
 function Ring({ done, total }: { done: number; total: number }) {
@@ -65,6 +66,7 @@ export function CourseHeader({ title, percent, modules, onContinue, badge }: {
   title: string; percent: number; modules: readonly ProgramModule[]; onContinue: (id: number) => void; badge?: ReactNode;
 }) {
   const st = programStat(modules);
+  const quizzes = modules.flatMap((m) => m.materials).filter((x) => x.kind === "quiz");
   const complete = st.lessons > 0 && percent >= 100;
   return (
     <div className="lr-head">
@@ -90,6 +92,8 @@ export function CourseHeader({ title, percent, modules, onContinue, badge }: {
         <span><Ic n="book" size={16} /> {lessonsCount(st.lessons)}</span>
         <span><Ic n="layers" size={16} /> {st.modules} {st.modules === 1 ? "тема" : st.modules >= 2 && st.modules <= 4 ? "теми" : "тем"}</span>
         <span><Ic n="check" size={16} /> {st.done} пройдено</span>
+        {/* 📝 Тести тем (13.10.2026): скільки складено з усіх — тест складено = крок «пройдено». */}
+        {quizzes.length > 0 && <span><Ic n="quiz" size={16} /> {quizzes.filter((q) => q.state === "done").length} з {quizzes.length} тестів</span>}
       </div>
     </div>
   );
@@ -127,6 +131,13 @@ export function ProgramAccordion({ modules, currentId, onOpen, side }: {
               <div className="lr-lessons">
                 {m.materials.length === 0 && <div className="lr-empty">Уроків у темі ще немає.</div>}
                 {m.materials.map((l) => <LessonRow key={l.id} l={l} active={l.id === currentId} side={side} onOpen={onOpen} />)}
+                {/* 📝 Під тестом теми — що він відкриває: наступна тема курсу для кандидатів чекає складеного тесту. */}
+                {!side && (() => {
+                  const quiz = m.materials.find((x) => x.kind === "quiz");
+                  const nextMod = modules[modules.indexOf(m) + 1];
+                  if (!quiz || !nextMod) return null;
+                  return <div className="lr-gate">{quiz.state === "done" ? `✓ Тему «${nextMod.name}» відкрито` : `🔒 Тема «${nextMod.name}» відкриється, коли складете цей тест`}</div>;
+                })()}
               </div>
             )}
           </div>
@@ -139,14 +150,14 @@ export function ProgramAccordion({ modules, currentId, onOpen, side }: {
 function LessonRow({ l, active, side, onOpen }: { l: ProgramLesson; active: boolean; side?: boolean; onOpen: (id: number) => void }) {
   const locked = l.state === "locked", done = l.state === "done";
   return (
-    <button type="button" className={`lr-les${active ? " on" : ""}${done ? " done" : ""}${locked ? " lock" : ""}`}
+    <button type="button" className={`lr-les${active ? " on" : ""}${done ? " done" : ""}${locked ? " lock" : ""}${l.kind === "quiz" ? ` quiz${!locked && !done ? " avail" : ""}` : ""}`}
       disabled={locked} title={locked && l.blockedBy ? `Спершу пройдіть «${l.blockedBy.title}»` : l.title}
       onClick={() => onOpen(l.id)}>
       <span className={`lr-les-st${done ? " ok" : ""}`}><Ic n={done ? "check" : locked ? "lock" : "circle"} size={side ? 14 : 16} /></span>
       {!side && <span className="lr-les-kind"><Ic n={kindIcon(l.kind)} size={16} /></span>}
       <span className="lr-les-t">
         <span className="lr-les-name">{l.title}</span>
-        {!side && <span className="lr-les-sub">{kindWord(l.kind)}{locked && l.blockedBy ? ` · після «${l.blockedBy.title}»` : ""}</span>}
+        {!side && <span className="lr-les-sub">{l.kind === "quiz" ? (done ? "Тест · складено" : locked ? "Тест · відкриється після уроків теми" : "Тест · доступний — пройдіть, щоб відкрити наступну тему") : kindWord(l.kind)}{locked && l.blockedBy && l.kind !== "quiz" ? ` · після «${l.blockedBy.title}»` : ""}</span>}
       </span>
       {!side && <span className={`lr-les-req${l.required ? "" : " opt"}`}>{l.required ? "Обовʼязково" : "Необовʼязково"}</span>}
     </button>
