@@ -164,9 +164,10 @@ test("#939 ЗГОДА У ЗВІТІ КВП == ЕКРАН; «ДУМАЄ» ОКР�
     .reduce((a, x) => ({ decided: a.decided + x.decided, agreed: a.agreed + x.agreed }), { decided: 0, agreed: 0 });
   assert.deepEqual(teamSum, { decided: 4, agreed: 2 }, "🔴 Σ команд ≠ відділ по згоді");
   assert.equal(screen.filter(v.TILE_MATCH.thinking).length, 1, "🔴 фільтр «Думає» бере не рівно «думає»");
-  assert.equal(screen.filter(v.TILE_MATCH.notAgreed).length, 2, "дзеркало: «не погодився» = думає + відмовив");
+  // 14.10.2026: «Не погодився» стало «Відмовив» (`#938b`) — тут твердження те саме: «думає» окремо, рівно своє.
+  assert.equal(screen.filter(v.TILE_MATCH.declined).length, 1, "дзеркало: «відмовив» — окремо від «думає»");
   const ai = FE_SRC("pages/dashboard/sections/AiCallsSection.tsx");
-  assert.match(ai, /\["agreed", "Погодився після ціни"\], \["thinking", "Думає"\], \["notAgreed", "Не погодився"\]/, "🔴 на екрані немає швидкого фільтра «Думає»");
+  assert.match(ai, /\["agreed", "Погодився після ціни"\], \["thinking", "Думає"\], \["declined", "Відмовив"\]/, "🔴 на екрані немає швидкого фільтра «Думає»");
   assert.match(ai, /думає \$\{String\(l\.thinking\)\}/, "🔴 у блоці менеджерів не видно «думає»");
   assert.deepEqual(["agreed", "thinking"].map((k) => v.parseAiLink(`?from=2026-10-01&to=2026-10-31&tile=${k}`).tile), ["agreed", "thinking"],
     "🔴 клік із картки КВП відкриє екран без фільтра згоди");

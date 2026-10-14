@@ -376,7 +376,7 @@ export function medianMin(xs: readonly (number | null | undefined)[]): number | 
 // ОДНЕ правило на плитку: і число, і список після кліку беруть `TILE_MATCH[k]` — тож вони не можуть розійтися.
 // Стани й знаменники — від сервера (`checklist`, `flags`, `dealOutcome`); фронт лише рахує.
 
-export type TileKey = "noCall" | "noPrice" | "objNotHandled" | "lost" | "success" | "agreed" | "thinking" | "notAgreed" | "agreedLost";
+export type TileKey = "noCall" | "noPrice" | "objNotHandled" | "lost" | "success" | "agreed" | "thinking" | "declined" | "agreedLost";
 export interface TileRow {
   promiseState: PromiseStateT | null; checklist: ChecklistT | null; conversationType: ConversationTypeT | null;
   dealOutcome: { state: string } | null; flags: { analysed: boolean; priceable: boolean; agreement: boolean; lost: boolean };
@@ -392,7 +392,9 @@ export const TILE_MATCH: Record<TileKey, (r: TileRow) => boolean> = {
   agreed: (r) => r.clientDecision?.value === "agreed",
   // «Думає» окремо (задача 5316, повернута 14.10.2026): «скільки клієнтів після ціни взяли паузу, щоб менеджер передзвонив».
   thinking: (r) => r.clientDecision?.value === "thinking",
-  notAgreed: (r) => r.clientDecision?.value === "thinking" || r.clientDecision?.value === "declined",
+  // «Відмовив» — рівно «ні» (Роман 14.10.2026: кнопки «Погодився / Думає / Відмовив», як три відповіді задачі 5316;
+  // раніше тут стояло «Не погодився» = думає + відмовив, і «ні» читалось завищеним).
+  declined: (r) => r.clientDecision?.value === "declined",
   // 🤝 Рішення Романа 13.10.2026: у розмові погодився, а угода в Kommo закрита як втрачена — що сталось ПІСЛЯ дзвінка.
   agreedLost: (r) => r.clientDecision?.value === "agreed" && r.dealOutcome?.state === "lost",
 };
@@ -423,7 +425,7 @@ export function tileStats(rows: readonly TileRow[]): TileStats {
 
 function decisionStats(rows: readonly TileRow[]): TileStats["decision"] {
   const agreed = rows.filter(TILE_MATCH.agreed).length, thinking = rows.filter(TILE_MATCH.thinking).length;
-  const declined = rows.filter((r) => r.clientDecision?.value === "declined").length;
+  const declined = rows.filter(TILE_MATCH.declined).length;
   const of = rows.filter((r) => decisionKnown(r.clientDecision)).length;
   return { agreed, thinking, declined, of, pct: of ? Math.round((agreed / of) * 100) : null };
 }
@@ -458,7 +460,7 @@ export function summaryTeams(rows: readonly { teamId: number | null; teamName?: 
   return [...m].map(([id, name]) => ({ id, name })).sort((a, b) => (a.id == null ? 1 : b.id == null ? -1 : a.name.localeCompare(b.name, "uk")));
 }
 
-const TILE_KEYS: readonly TileKey[] = ["noCall", "noPrice", "objNotHandled", "lost", "success", "agreed", "thinking", "notAgreed", "agreedLost"];
+const TILE_KEYS: readonly TileKey[] = ["noCall", "noPrice", "objNotHandled", "lost", "success", "agreed", "thinking", "declined", "agreedLost"];
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const LINK_PARAMS = ["from", "to", "tile", "team", "manager"] as const;
 
