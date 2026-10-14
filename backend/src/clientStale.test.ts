@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { clientStale } from "./version.js";
 
 /**
@@ -58,4 +60,22 @@ test("#330c НЕВІДОМЕ ЛИШАЄТЬСЯ НЕВІДОМИМ, А НЕ СТ
   // Дзеркало по другому боку: сервер без версії теж «не знаю», а не «збігається».
   assert.equal(clientStale(A, "unknown"), null,
     "🔴 сервер без sha дав визначену відповідь — порівнювати не було з чим");
+});
+
+test("#1720 ВКЛАДКА НА ЗБІРЦІ З ДИСКА (новішій за процес) — НЕ СТАРА; стара — і далі стара; без збірки на диску — як було", () => {
+  /**
+   * 📐 14.10.2026: між «фронт скопійовано» і «процес перезапущено» браузер вантажив новий бандл, а сервер звав себе
+   * старою sha — плашка «оновіть» не зникала після «Оновити». Обидва боки межі в одній фікстурі: вкладка на A
+   * (збірка на диску) — не стара; вкладка на C (третя, ще старша) — стара; диска не знаємо — правило як до правки.
+   */
+  const C = "1111111111111111111111111111111111111111";
+  assert.equal(clientStale(A, B, A), false, "🔴 вкладка на НОВІЙ збірці з диска отримала «оновіть» — «Оновити» вантажить той самий бандл, петля");
+  assert.equal(clientStale(C, B, A), true, "🔴 справді стара вкладка перестала бачити плашку");
+  assert.equal(clientStale(B, B, A), false, "🔴 вкладка на збірці процесу стала «старою», бо на диску новіша");
+  assert.equal(clientStale(A, B, null), true, "🔴 без відомостей про диск правило змінилось");
+  assert.equal(clientStale(A, B, "unknown"), true, "🔴 «unknown» на диску прочитано як збіг");
+  // Проводка: /api/health передає збірку з диска в ОБОХ гілках (звичайній і аварійній) — інакше правило мертве.
+  const idx = readFileSync(fileURLToPath(new URL("./index.ts", import.meta.url).href.replace("/dist/", "/src/")), "utf8");
+  const calls = idx.match(/clientStale\(\s*typeof req\.query\.loaded === "string" \? req\.query\.loaded : null,\s*buildVersion\(\)\.sha,\s*onDiskVersion\(\)\.sha,\s*\)/g) ?? [];
+  assert.equal(calls.length, 2, "🔴 /api/health не передає збірку з диска в обох гілках — петля «оновіть» повернеться");
 });

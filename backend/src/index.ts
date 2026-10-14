@@ -277,6 +277,7 @@ app.get("/api/health", async (req, res) => {
       clientStale: clientStale(
         typeof req.query.loaded === "string" ? req.query.loaded : null,
         buildVersion().sha,
+        onDiskVersion().sha,
       ),
       // Заявлений намір викату: поки він чинний, ПЕРШИЙ старт не вважається аварією.
       // `null` — наміру немає, тобто будь-який рестарт зараз кричатиме, як і має.
@@ -315,6 +316,7 @@ app.get("/api/health", async (req, res) => {
       clientStale: clientStale(
         typeof req.query.loaded === "string" ? req.query.loaded : null,
         buildVersion().sha,
+        onDiskVersion().sha,
       ),
     });
   }

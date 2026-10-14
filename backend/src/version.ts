@@ -125,9 +125,18 @@ const FULL_SHA = /^[0-9a-f]{40}$/i;
  * тоді будь-який обрізок ставав би «валідною» версією, і помилка вшивання
  * читалась би як збіг. Невідоме має лишатись невідомим.
  */
-export function clientStale(loaded: string | null | undefined, server: string): ClientStale {
+export function clientStale(loaded: string | null | undefined, server: string, onDisk: string | null = null): ClientStale {
   const a = String(loaded ?? "").trim();
   const b = String(server ?? "").trim();
   if (!FULL_SHA.test(a) || !FULL_SHA.test(b)) return null;
+  /**
+   * 🔄 ВКЛАДКА НА ЗБІРЦІ З ДИСКА — НЕ СТАРА, А ПОПЕРЕДУ ПРОЦЕСУ (14.10.2026, скарга Романа: «у кандидата кнопка
+   * «вийшла нова версія» — натискаю, а вона не прибирається»). Під час викату фронт уже скопійовано, а процес ще
+   * не перезапущено (або ланцюг зупинився між цими кроками): браузер вантажить НОВИЙ бандл, сервер називає себе
+   * старою sha — і плашка казала «оновіть», а «Оновити» вантажило той самий новий бандл. Петля без виходу. Якщо sha
+   * вкладки == sha збірки на диску (`onDiskVersion`), оновлювати нема чого — відповідь «не застаріла».
+   */
+  const d = String(onDisk ?? "").trim();
+  if (FULL_SHA.test(d) && a.toLowerCase() === d.toLowerCase()) return false;
   return a.toLowerCase() !== b.toLowerCase();
 }
