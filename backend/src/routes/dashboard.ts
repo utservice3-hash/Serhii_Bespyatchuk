@@ -138,6 +138,7 @@ import { buildXlsx } from "../core/xlsxWrite.js";
 import * as clientCalls from "../core/clientCalls.js";
 import * as planBasis from "../core/planBasis.js";
 import * as clientTabs from "../core/clientTabs.js";
+import * as repeatScreenRules from "../core/repeatScreenRules.js";
 import * as reactCycle from "../core/reactCycle.js";
 import * as reactCycleRules from "../core/reactCycleRules.js";
 import * as clientAliasNames from "../core/clientAliasNames.js";
@@ -6477,6 +6478,19 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   ]);
   const reactByKey = new Map(reactRows.map((r) => [r.clientKey, r]));
   const successByKey = new Map(monthSuccess.filter((r) => keySet.has(r.key)).map((r) => [r.key, r.revenue]));
+  /**
+   * 👥 ПОРІВНЯННЯ З СЕРЕДНІМ І «ЗАМОВЛЯЛИ РАНІШЕ» (задача 5609, ТЗ 12.10.2026, розділ 7): ті самі гроші «з рахунку»
+   * у тому самому скоупі, лише інші вікна — правила вікон у `core/repeatScreenRules.ts`.
+   */
+  const win = repeatScreenRules.sameWindows(monthStr, kyivToday());
+  const winScope = (w: repeatScreenRules.DayWindow): money.MoneyScope => ({ from: w.from, to: w.to, managerId: managerId ?? undefined, teamId: teamId ?? undefined });
+  const [prevW, beforeW] = await Promise.all([
+    Promise.all(win.prev.map((w) => money.fromInvoiceByClientKey(winScope(w)))),
+    money.fromInvoiceByClientKey(winScope(win.before)),
+  ]);
+  const prevByKey = prevW.map((rows) => new Map(rows.map((r) => [r.key, r.revenue])));
+  const orderedBeforeKeys = new Set(beforeW.filter((r) => r.deals > 0).map((r) => r.key));
+  const ordersThisMonth = new Map(monthFact.map((r) => [r.key, r.deals]));
   const factByKey = new Map(monthFact.filter((r) => keySet.has(r.key)).map((r) => [r.key, r.revenue]));
   const weekByKey = new Map<string, number[]>();
   for (const w of weekFact) {
@@ -6678,6 +6692,20 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       fact: Math.round(fact),
       // ① за той самий місяць: скільки з факту «з рахунку» вже «успішно реалізовано».
       factSuccess: Math.round(successByKey.get(c.client_key) ?? 0),
+      /** 👥 Задача 5609: замовляв цього місяця (угода дійшла до рахунку), раніше (3 попередні повні місяці), середнє і різниця. */
+      orderedThisMonth: (ordersThisMonth.get(c.client_key) ?? 0) > 0,
+      orderedBefore: orderedBeforeKeys.has(c.client_key),
+      ...(() => { const d = repeatScreenRules.deltaVsAvg(fact, prevByKey.map((m) => m.get(c.client_key) ?? 0)); return { prevAvg: d.avg, delta: d.delta }; })(),
+      /** Звичайна пауза між замовленнями, днів (медіана — та сама, що визначає сегмент); `null` — історії замало. */
+      periodDays: factsFor(seg, c.client_key).medianGapDays,
+      work: repeatScreenRules.workFlags({
+        lastTalk: reactByKey.get(c.client_key)?.lastTalk ?? null,
+        lastManual: manualByKey.get(c.client_key)?.at ?? null,
+        stepOpen: stepByKey.has(c.client_key), stepDue: stepByKey.get(c.client_key)?.due_date ?? null,
+        taskOpen: (reactByKey.get(c.client_key)?.taskId ?? null) != null && !["done", "cancelled"].includes(reactByKey.get(c.client_key)?.taskStatus ?? ""),
+        taskDue: reactByKey.get(c.client_key)?.taskDeadline ?? null,
+        today: todayKyiv,
+      }),
       pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
       managerId: c.manager_id,
       managerName: c.manager_name,
@@ -6749,6 +6777,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   res.json({
     month: monthStr,
     historyMonths: histMonths,
+    /** 👥 Вікна «плюс / мінус до середнього» і «замовляли раніше» (задача 5609) — щоб екран підписав, з чим порівнює. */
+    compare: { partial: win.partial, prev: win.prev, before: win.before, noWorkDays: repeatScreenRules.NO_WORK_DAYS },
     /**
      * Довідники для дій, які переїхали з колишньої вкладки реактивації. Беруться
      * з ЯДРА, а не переписуються у фронті: підпис на екрані не сміє стати другою

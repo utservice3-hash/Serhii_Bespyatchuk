@@ -25,41 +25,8 @@ const SECTIONS = "frontend/src/pages/dashboard/sections";
  * картка — на 8 (заміряно 28.09.2026): дані підсумку стояли під чужими заголовками. Тепер
  * «Історія · 6 міс» прибрано, а тижні згортаються — і рахувати треба в ОБОХ станах.
  */
-test("#811 КОЛОНКИ СХОДЯТЬСЯ: шапка == рядок == підсумок у обох станах тижнів; «Історії · 6 міс» немає", () => {
-  const src = read(`${SECTIONS}/ClientPlansSection.tsx`);
-  assert.doesNotMatch(src, /Історія · 6 міс|<Spark /, "🔴 колонка «Історія · 6 міс» повернулась (ТЗ 22.09, п.3.4)");
-  assert.doesNotMatch(src, /colSpan=\{\d+\}/, "🔴 colSpan знову числом — розійдеться з кількістю колонок при згорнутих тижнях");
-  const count = (block: string, tag: string) => {
-    const all = (block.match(new RegExp(`<${tag}[ >]`, "g")) ?? []).length;
-    const cond = (block.match(new RegExp(`\\{weeksOpen && (?:\\(\\s*)?<${tag}[ >]`, "g")) ?? []).length;
-    return { open: all, closed: all - cond, cond };
-  };
-  const head = src.slice(src.indexOf("<thead>"), src.indexOf("</thead>"));
-  const foot = src.slice(src.indexOf("<tfoot>"), src.indexOf("</tfoot>"));
-  const rs = src.indexOf("<tr style={{ background: risk");
-  assert.ok(rs > 0, "🔴 гейт втратив предмет: рядка клієнта не знайдено");
-  const row = src.slice(rs, src.indexOf("</tr>", rs));
-  const h = count(head, "th"), f = count(foot, "td"), r = count(row, "td");
-  assert.ok(h.open > 0 && r.open > 0 && f.open > 0, "🔴 гейт втратив предмет: шапку, рядок чи підсумок не знайдено");
-  assert.deepEqual([r.open, f.open], [h.open, h.open], `🔴 ТИЖНІ РОЗГОРНУТІ: шапка ${h.open}, рядок ${r.open}, підсумок ${f.open}`);
-  assert.deepEqual([r.closed, f.closed], [h.closed, h.closed], `🔴 ТИЖНІ ЗГОРНУТІ: шапка ${h.closed}, рядок ${r.closed}, підсумок ${f.closed}`);
-  assert.equal(h.cond, 1, "🔴 тижні в шапці не залежать від перемикача (або залежить ще щось)");
-  // Рядок-шапка команди/менеджера: назва на GROUP_LEAD_COLS колонок + решта клітинок == колонок.
-  const gr = src.slice(src.indexOf("function GroupRow("), src.indexOf("</tr>", src.indexOf("function GroupRow(")));
-  const lead = Number(/const GROUP_LEAD_COLS = (\d+);/.exec(src)?.[1]);
-  assert.ok(lead > 0 && /colSpan=\{GROUP_LEAD_COLS\}/.test(gr), "🔴 назва рівня більше не займає GROUP_LEAD_COLS колонок");
-  const g = count(gr, "td");
-  assert.deepEqual([lead + g.open - 1, lead + g.closed - 1], [h.open, h.closed],
-    `🔴 ШАПКА КОМАНДИ/МЕНЕДЖЕРА: ${lead + g.closed - 1}/${lead + g.open - 1} колонок проти ${h.closed}/${h.open} — план ляже не під «План»`);
-  // План і факт рівня стоять під своїми заголовками: перед «План» рівно GROUP_LEAD_COLS колонок.
-  const heads = [...head.matchAll(/<th[ >][^>]*>([^<]*)</g)].map((m) => m[1]);  // `<th[ >]`, бо інакше ловиться сам `<thead>`
-  assert.equal(heads.indexOf("План (міс)"), lead, "🔴 підсумок плану рівня стоїть не під «План»");
-  assert.match(src, new RegExp(`const colCount = weeksOpen \\? ${h.open} : ${h.closed};`),
-    `🔴 colCount не дорівнює кількості колонок (${h.closed}/${h.open}) — картка й порожній стан поїдуть`);
-  // 📅 Згорнуто за замовчуванням (п.3.5): без збереженого вибору — false.
-  assert.match(src, /localStorage\.getItem\("clientPlans\.weeksOpen"\) === "1"; \} catch \{ return false; \}/,
-    "🔴 тижні більше не згорнуті за замовчуванням");
-});
+// #811 («колонки сходяться в обох станах тижнів», план під «План») знято 14.10.2026 разом із тижнями й планом (задача 5609,
+// регламент ред. 2: планів по клієнтах немає). Нове твердження про колонки — #1710d у core/repeatScreen5609.test.ts.
 
 test("#812 КОГО ПОКАЗАТИ У ПЕРЕДАЧІ: КВП/адмін — усіх, тімлід — свою команду, без команди — нікого; межа та сама, що в assignAllowed", () => {
   assert.equal(assignTeamIdFor({ canAll: true, role: "admin", teamId: 5 }), null, "🔴 адміну/КВП звузили список");
@@ -213,7 +180,7 @@ test("#815b ЖИВИЙ SQL: закріпити → замінити → знят
   }
 });
 
-test("#815c РОУТИ ОБҐРУНТУВАННЯ: межа першою, належність до запису, матриця й вкладка; у картці й рядку є «закріпити» і «зняти»", () => {
+test("#1711 РОУТИ ОБҐРУНТУВАННЯ: межа першою, належність до запису, матриця й вкладка; у картці є «закріпити» і «зняти», у рядку планування немає", () => {
   const dash = read("backend/src/routes/dashboard.ts");
   const body = (route: string) => {
     const i = dash.indexOf(`dashboardRouter.post("${route}"`);
@@ -234,7 +201,8 @@ test("#815c РОУТИ ОБҐРУНТУВАННЯ: межа першою, нал
   assert.match(card, /onClick=\{unpin\}/, "🔴 у картці немає «зняти»");
   assert.match(card, /fetchClientCard\(clientKey, month\)/, "🔴 картка не знає місяця екрана — закріплення піде не в той місяць");
   const list = read(`${SECTIONS}/ClientPlansSection.tsx`);
-  assert.match(list, /clearPlanBasis\(\{ clientKey: c\.clientKey, month \}\)/, "🔴 у рядку немає «зняти»");
+  // Задача 5609 (14.10.2026): планів по клієнтах немає — обґрунтування плану з рядка прибрано, лишилось у картці.
+  assert.doesNotMatch(list, /clearPlanBasis|planBasis/, "🔴 у рядку знову обґрунтування плану, якого більше немає");
   assert.match(list, /<ClientCardPanel clientKey=\{c\.clientKey\} onChanged=\{load\} month=\{month\} \/>/, "🔴 картка з екрана планів відкривається без місяця");
 });
 
