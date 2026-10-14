@@ -23,10 +23,20 @@ const n = (v: number) => v.toLocaleString("uk-UA");
  *   • короткий період (< 4 тижнів) — статусу немає: ОПР тижня здебільшого з лідів,
  *     узятих раніше, тож «конверсія» дня чи тижня — шум, а не оцінка людини.
  */
+/**
+ * ⏸ «ЛІДИ → ОПР» ЗАРАЗ НЕ ОЦІНЮЄТЬСЯ (рішення Романа 14.10.2026, регламент лідгенів від 13.10.2026, §6 і §8): ціль 40 %
+ * — «з нових лідів», а поки нові ліди й реактивація не розведені, відсоток показує, як людина рухає етапи, а не роботу
+ * (реактивація «підігрів → одразу ОПР» дає лід і ОПР разом; «Взято» часто ставлять разом з ОПР) — звідси 200 %+ цілі.
+ * Відсоток лишається довідково, без кольору, «% цілі» й пілюль. Повернути оцінку — `OPR_CONV_RATED = true` після розведення.
+ */
+export const OPR_CONV_RATED = false;
+export const OPR_CONV_NOT_RATED =
+  "Не оцінюється до розведення нових лідів і реактивації (регламент лідгенів від 13.10, §6 і §8): зараз підігрів реактивації — одразу і лід, і ОПР, а «Взято в роботу» часто ставлять разом з ОПР, тож відсоток показує, як рухають етапи, а не роботу. Відсоток — довідково.";
+
 export function convStatus(opr: number, leads: number, target: number, statusful: boolean) {
   const conv = ratio(opr, leads);
   const overfull = conv != null && conv > 100;
-  const ofTarget = conv == null || overfull ? null : Math.round((conv / target) * 100);
+  const ofTarget = !OPR_CONV_RATED || conv == null || overfull ? null : Math.round((conv / target) * 100);
   const level: "g" | "a" | "r" | null = !statusful || ofTarget == null ? null : ofTarget >= 100 ? "g" : ofTarget >= 70 ? "a" : "r";
   const color = level === "g" ? GREEN : level === "a" ? AMBER : level === "r" ? RED : "var(--border)";
   return { conv, overfull, ofTarget, level, color };
@@ -197,10 +207,12 @@ export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, moneyB
         <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <StatusRing st={st} target={targets.oprOfLeads}
             title={st.overfull ? overfullWhy : st.conv == null ? "Лідів у періоді немає — конверсію рахувати нема з чого"
+              : !OPR_CONV_RATED ? OPR_CONV_NOT_RATED
               : !statusful ? "Статус — лише за місяць і довше: за день чи тиждень ОПР здебільшого з лідів, узятих раніше." : undefined} />
           <span style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 13 }} title={st.overfull ? overfullWhy : undefined}>
             <span><b style={{ fontSize: 16 }}>{st.conv == null ? "—" : pct1(st.conv)}</b> ліди → ОПР</span>
-            <span style={{ color: MUTED }}>ціль {targets.oprOfLeads} %
+            <span style={{ color: MUTED }} title={OPR_CONV_RATED ? undefined : OPR_CONV_NOT_RATED}>ціль {targets.oprOfLeads} %
+              {!OPR_CONV_RATED && st.conv != null && <> · не оцінюється</>}
               {st.ofTarget != null && <> · {st.ofTarget} % цілі</>}
               {st.overfull && <> · ⚠ понад 100 %</>}</span>
           </span>
@@ -228,7 +240,7 @@ export function LeadgenPersonRow({ row, plan, money, dataPeriod, buckets, moneyB
       {open && (
         <div style={{ borderTop: "1px solid var(--border)", padding: "12px 17px 16px" }}>
           <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 14, marginBottom: grain ? 12 : 0 }}>
-            <span>Ліди → ОПР: <b style={{ color: st.conv != null && !st.overfull && st.conv < targets.oprOfLeads ? "var(--danger)" : "inherit" }}>{st.conv == null ? "—" : pct1(st.conv)}</b> <span style={{ color: MUTED }}>ціль {targets.oprOfLeads} %</span></span>
+            <span title={OPR_CONV_RATED ? undefined : OPR_CONV_NOT_RATED}>Ліди → ОПР: <b style={{ color: OPR_CONV_RATED && st.conv != null && !st.overfull && st.conv < targets.oprOfLeads ? "var(--danger)" : "inherit" }}>{st.conv == null ? "—" : pct1(st.conv)}</b> <span style={{ color: MUTED }}>ціль {targets.oprOfLeads} %{OPR_CONV_RATED ? "" : " · не оцінюється"}</span></span>
             <span>ОПР → прорахунок: <b style={{ color: quotesConv != null && quotesConv <= 100 && quotesConv < targets.quotesOfOpr ? "var(--danger)" : "inherit" }}>{quotesConv == null ? "—" : pct1(quotesConv)}</b>
               {quotesConv != null && quotesConv > 100 && <span style={{ color: "var(--warn)" }}> ⚠ понад 100 %</span>} <span style={{ color: MUTED }}>ціль {targets.quotesOfOpr} %</span></span>
             {st.overfull && <span style={{ color: "var(--warn)", flexBasis: "100%", fontSize: 12.5 }}>⚠ {overfullWhy}</span>}
