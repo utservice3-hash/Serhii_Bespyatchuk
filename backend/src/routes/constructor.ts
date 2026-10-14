@@ -41,6 +41,7 @@ import { lookupRegistry } from "../constructor/youscore.js";
 import { lookup1c, resolveRequisites } from "../constructor/onec.js";
 import { validateForm, firstError, type Issue } from "../constructor/validate.js";
 import { resolveDirector } from "../constructor/services/names.js";
+import { buildTtn, buildCmr, waybillBlocker } from "../constructor/services/waybills.js";
 
 /** Підписи й печатки — лише на сервері, поза git (репозиторій публічний). Тека вже в нічному бекапі. */
 export const CONSTRUCTOR_ASSETS_DIR = process.env.CONSTRUCTOR_ASSETS_DIR ?? path.join(DOCS_DIR, "constructor-assets");
@@ -314,6 +315,23 @@ constructorRouter.get("/documents/:id/docx", h(async (req, res) => {
     "Content-Disposition": `attachment; filename="${fileBase(d.num)}.docx"`,
   }).send(Buffer.from(bytes));
 }));
+
+/**
+ * 🚚 ТТН (1-ТН, Excel) і CMR (Word) із заявки перевізнику (задача 5464, services/waybills.ts). Межа та сама, що в PDF
+ * і Word заявки (`docStateOf` → «кожен тільки свої»); з клієнтської заявки — 400: перевізника там немає.
+ */
+const waybill = (kind: "ttn" | "cmr") => h(async (req, res) => {
+  const d = await docStateOf(req);
+  const no = waybillBlocker(d.s);
+  if (no) throw new HttpError(400, no);
+  const bytes = kind === "ttn" ? buildTtn(d.s) : buildCmr(d.s);
+  res.set({
+    "Content-Type": kind === "ttn" ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "Content-Disposition": attach(`${kind === "ttn" ? "ТТН" : "CMR"}-${fileBase(d.num)}.${kind === "ttn" ? "xlsx" : "docx"}`),
+  }).send(Buffer.from(bytes));
+});
+constructorRouter.get("/documents/:id/ttn", waybill("ttn"));
+constructorRouter.get("/documents/:id/cmr", waybill("cmr"));
 
 constructorRouter.get("/documents/:id/pdf", h(async (req, res) => {
   const d = await docStateOf(req);

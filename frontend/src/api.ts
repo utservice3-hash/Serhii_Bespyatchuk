@@ -5769,7 +5769,8 @@ export const ctorSaveRouteTemplate = async (t: { name: string; fields: Record<st
   (await api.post<CtorRouteTemplate>("/constructor/route-templates", t)).data;
 export const ctorDeleteRouteTemplate = async (id: number) => (await api.delete(`/constructor/route-templates/${id}`)).data;
 /** Word/PDF документа — blob із токеном. `inline` лише для PDF «відкрити у вкладці». */
-export async function ctorFile(id: number, kind: "docx" | "pdf", inline = false): Promise<Blob> {
+/** `ttn`/`cmr` — бланки 1-ТН (Excel) і CMR (Word) із заявки перевізнику (задача 5464, 14.10.2026). */
+export async function ctorFile(id: number, kind: "docx" | "pdf" | "ttn" | "cmr", inline = false): Promise<Blob> {
   const { data } = await api.get<Blob>(`/constructor/documents/${id}/${kind}`, { responseType: "blob", params: { view: inline ? 1 : undefined } });
   return data;
 }
