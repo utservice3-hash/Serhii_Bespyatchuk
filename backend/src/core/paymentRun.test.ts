@@ -12,22 +12,22 @@ const NOW = new Date("2026-10-14T13:00:00Z");
 // Номери карток у фікстурах вигадані (16 цифр за форматом), не справжні.
 const req = (o: Partial<PayRequest> = {}): PayRequest => ({
   id: 1, createdAt: new Date("2026-10-14T08:00:00Z"), type: "Готівка", urgency: "Стандартная",
-  phone: null, card: "1111222233334444", bank: "приват", recipient: "Іваненко Іван Іванович", cash: 18000, sourceDealId: 100, ttnFiles: 1, ...o,
+  phone: null, card: "1111222233334444", bank: "приват", recipient: "Іваненко Іван Іванович", cash: 18000, sourceDealId: 100, ...o,
 });
 const main = (o: Partial<MainDeal> = {}): MainDeal => ({ id: 100, cashExpense: 18000, paid1c: true, invoiceIssued: true, orderNo: "8482", income: 21000, clientName: "ФОП Мельник Ігор Костянтинович", ...o });
 const ctx = (o: Partial<PayContext> = {}): PayContext => ({
-  dupOf: [], paidBefore: 0, bankSeen: null, receipt: false, limit: null, debt: null, ttnExempt: false, ...o,
+  dupOf: [], paidBefore: 0, bankSeen: null, receipt: false, limit: null, debt: null, ...o,
 });
 const unpaid = (o: Partial<MainDeal> = {}) => main({ paid1c: false, ...o });
 
 /**
- * #1267 — ПЕРЕВІРКИ ЗАПИТУ НА ОПЛАТУ (зустріч Романа з Тетяною 13.10.2026). Кожне правило — по ОБИДВА боки межі:
+ * #1269 — ПЕРЕВІРКИ ЗАПИТУ НА ОПЛАТУ (зустріч Романа з Тетяною 13.10.2026). Кожне правило — по ОБИДВА боки межі:
  * сума 18 000 при розході 18 000 — так, 19 000 — ні, а вже оплачене додається; рахунку немає — не платимо (але
  * неоплачений рахунок 1С угоди теж доводить, що рахунок є); оплата — галочка 1С, або платіж у «Виписці», або ліміт
- * у межах днів і суми; за лімітом — лише з ТТН (крім клієнтів Беспʼятчука); дубль, тип, картка, ПІБ, банк.
+ * у межах днів і суми — без ТТН (Тетяна 14.10.2026: «наявність ТТН не беремо до уваги»; було `#1267`); дубль, тип, картка, ПІБ, банк.
  * 🧨 Червоніє, якщо хоч одне правило перестане відсікати або почне відсікати чисте.
  */
-test("#1267 ПЕРЕВІРКИ ЗАПИТУ: сума, рахунок, оплата (1С / Виписка / ліміт + ТТН), дубль і реквізити — по обидва боки межі", () => {
+test("#1269 ПЕРЕВІРКИ ЗАПИТУ: сума, рахунок, оплата (1С / Виписка / ліміт), дубль і реквізити — по обидва боки межі; ТТН не вимагається", () => {
   const ok = (r: PayRequest, m: MainDeal | null, c: PayContext) => judgeRequest(r, m, c, NOW);
   const clean = ok(req(), main(), ctx());
   assert.deepEqual([clean.ok, clean.paidBy, clean.reasons], [true, "1С", []], "🔴 чистий запит з галочкою 1С не пройшов");
@@ -48,9 +48,8 @@ test("#1267 ПЕРЕВІРКИ ЗАПИТУ: сума, рахунок, опла�
   assert.deepEqual([ok(req(), unpaid(), inLim).ok, ok(req(), unpaid(), inLim).paidBy], [true, "ліміт"], "🔴 борг рівно на межі ліміту відкинуто");
   assert.match(ok(req(), unpaid(), ctx({ limit: { days: 14, amount: 30000 }, debt: { amount: 30000, ageDays: 15 } })).reasons.join(), /ліміт перевищено/, "🔴 15 дн. при ліміті 14 пройшло");
   assert.match(ok(req(), unpaid(), ctx({ limit: { days: 14, amount: 30000 }, debt: { amount: 30001, ageDays: 1 } })).reasons.join(), /ліміт перевищено/, "🔴 борг понад суму ліміту пройшов");
-  assert.match(ok(req({ ttnFiles: 0 }), unpaid(), inLim).reasons.join(), /ТТН не прикріплено/, "🔴 за лімітом без ТТН пройшло");
-  assert.equal(ok(req({ ttnFiles: 0 }), unpaid(), { ...inLim, ttnExempt: true }).ok, true, "🔴 клієнту Беспʼятчука ТТН вимагається");
-  assert.equal(ok(req({ ttnFiles: 0 }), main(), ctx()).ok, true, "🔴 ТТН вимагається й там, де оплата вже є");
+  // ТТН не перевіряється (Тетяна 14.10.2026): у межах ліміту — до оплати, і жодна причина не згадує ТТН
+  assert.ok(!JSON.stringify([ok(req(), unpaid(), inLim), ok(req(), unpaid(), ctx()), ok(req(), main(), ctx())]).includes("ТТН"), "🔴 ТТН знову серед причин");
   // дубль = та сама сума І та сама картка (13.10: два запити по 2 500 різним людям на одній угоді — не дубль)
   const sib = (id: number, card: string | null, amount = 18000) => ({ id, amount, status: 142, card });
   assert.deepEqual(dupsOf(req(), [sib(7, "1111 2222 3333 4444")]), [7], "🔴 та сама сума й картка — не дубль");

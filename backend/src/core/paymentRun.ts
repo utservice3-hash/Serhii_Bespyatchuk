@@ -27,7 +27,7 @@ export const PAY_URGENCY = "Стандартная";
 export const REQ_FIELDS = {
   type: 2097495, urgency: 2097397, category: 2097399,
   phone: 2097391, card: 2097393, bank: 2098455, recipient: 2097395, cash: 2097483,
-  sourceDeal: 2097401, ttn: 2097291,
+  sourceDeal: 2097401,
 } as const;
 /**
  * Поля основної угоди: «синя галочка» бухгалтерії; «Номер заказа» — НОМЕР РАХУНКУ 1С (`000008452` = рах. №8452;
@@ -47,7 +47,7 @@ export const STALE_DAYS = 3;
 export interface PayRequest {
   id: number; createdAt: Date; type: string | null; urgency: string | null;
   phone: string | null; card: string | null; bank: string | null; recipient: string | null;
-  cash: number | null; sourceDealId: number | null; ttnFiles: number;
+  cash: number | null; sourceDealId: number | null;
 }
 export interface MainDeal {
   id: number;
@@ -76,8 +76,6 @@ export interface PayContext {
   limit: { days: number; amount: number | null } | null;
   /** Поточний борг клієнта і вік найстарішого боргу. */
   debt: { amount: number; ageDays: number | null } | null;
-  /** Клієнти С. Беспʼятчука: для оплати в межах ліміту ТТН не вимагається (інструкція Тетяни). */
-  ttnExempt: boolean;
 }
 export type PaidBy = "1С" | "Виписка" | "ліміт";
 export interface Verdict { ok: boolean; reasons: string[]; notes: string[]; paidBy: PaidBy | null }
@@ -117,8 +115,10 @@ export const ageDays = (from: Date, now: Date) => Math.floor((now.getTime() - fr
 
 /**
  * Перевірки одного запиту — послідовність Тетяни: дубль → сума ≤ готівкового розходу → рахунок 1С → оплата клієнта
- * (галочка 1С або платіж у «Виписці») → інакше ліміт у межах (+ ТТН) → реквізити. Причин може бути кілька: Тетяна
+ * (галочка 1С або платіж у «Виписці») → інакше ліміт у межах → реквізити. Причин може бути кілька: Тетяна
  * бачить усі одразу, а не по одній за прогін.
+ * ТТН НЕ ПЕРЕВІРЯЄТЬСЯ (Тетяна 14.10.2026: «наявність ТТН не беремо до уваги») — хоча в її старій письмовій інструкції
+ * «за лімітом — лише зі скрінами ТТН + заявки» стояло; перший день прогону зупинив на цьому 5 запитів із 10.
  */
 export function judgeRequest(r: PayRequest, m: MainDeal | null, ctx: PayContext, now: Date): Verdict {
   const reasons: string[] = [], notes: string[] = [];
@@ -150,7 +150,6 @@ export function judgeRequest(r: PayRequest, m: MainDeal | null, ctx: PayContext,
     else {
       paidBy = "ліміт";
       notes.push(`оплати ще немає — у межах ліміту (${ctx.limit.days} дн.${ctx.limit.amount != null ? ` / ${money(ctx.limit.amount)}` : ""}; борг ${money(debt)}, ${age} дн.)`);
-      if (!ctx.ttnExempt && r.ttnFiles <= 0) reasons.push("оплата за лімітом, але ТТН не прикріплено");
     }
   }
   if (!paidBy && ctx.receipt) notes.push("в угоді є квитанція клієнта — глянути");

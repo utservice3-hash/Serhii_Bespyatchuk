@@ -38,8 +38,6 @@ const cf = (d: KommoDeal, id: number): string | null => {
   return s ? s : null;
 };
 const num = (s: string | null) => { const n = Number(String(s ?? "").replace(/[\s ]/g, "").replace(",", ".")); return s != null && Number.isFinite(n) ? n : null; };
-const ttnCount = (d: KommoDeal) => (d.custom_fields_values?.find((f) => f.field_id === REQ_FIELDS.ttn)?.values ?? [])
-  .filter((v) => { const f = v.value as { file_uuid?: unknown; is_deleted?: unknown } | null; return !!f && typeof f === "object" && !!f.file_uuid && f.is_deleted !== true; }).length;
 
 async function leadsPaged(query: string): Promise<KommoDeal[]> {
   const out: KommoDeal[] = [];
@@ -74,7 +72,7 @@ export const toRequest = (d: KommoDeal): PayRequest => ({
   id: d.id, createdAt: new Date(Number(d.created_at ?? 0) * 1000),
   type: cf(d, REQ_FIELDS.type), urgency: cf(d, REQ_FIELDS.urgency),
   phone: cf(d, REQ_FIELDS.phone), card: cf(d, REQ_FIELDS.card), bank: cf(d, REQ_FIELDS.bank), recipient: cf(d, REQ_FIELDS.recipient),
-  cash: num(cf(d, REQ_FIELDS.cash)), sourceDealId: num(cf(d, REQ_FIELDS.sourceDeal)), ttnFiles: ttnCount(d),
+  cash: num(cf(d, REQ_FIELDS.cash)), sourceDealId: num(cf(d, REQ_FIELDS.sourceDeal)),
 });
 export const toMain = (d: KommoDeal, clientName: string | null): MainDeal => {
   const inc = FM_INCOME_FIELDS.map((id) => num(cf(d, id))).filter((x): x is number => x != null && x > 0);
@@ -96,7 +94,7 @@ async function hasReceipt(dealId: number): Promise<boolean> {
 }
 
 /** Контекст для всіх запитів — пакетом (кілька запитів у БД на прогін, а не на кожен запит). */
-async function contexts(reqs: PayRequest[], mains: Map<number, MainDeal>, clientKey: Map<number, { key: string | null; mgr: string | null }>): Promise<Map<number, PayContext>> {
+async function contexts(reqs: PayRequest[], mains: Map<number, MainDeal>, clientKey: Map<number, { key: string | null }>): Promise<Map<number, PayContext>> {
   const mainIds = [...mains.keys()];
   const sib = (await pool.query<{ kommo_id: string; source_deal_id: string; amount: string | null; status_id: string }>(
     `SELECT kommo_id::text, source_deal_id::text, carrier_pay_amount::text AS amount, status_id::text FROM deals
@@ -136,7 +134,6 @@ async function contexts(reqs: PayRequest[], mains: Map<number, MainDeal>, client
       dupOf, paidBefore, bankSeen: bankByDeal.get(mid) ?? null, receipt: receiptByDeal.get(mid) ?? false,
       limit: lim ? { days: lim.limit_days, amount: lim.limit_amount == null ? null : Number(lim.limit_amount) } : null,
       debt: dbt ? { amount: Number(dbt.amount), ageDays: dbt.age } : null,
-      ttnExempt: /бесп.?ятчук/i.test(clientKey.get(mid)?.mgr ?? ""),
     });
   }
   return out;
@@ -148,11 +145,11 @@ export async function buildOnce(write = true, day?: string): Promise<RunResult> 
   const win = payWindow(now, day);
   const reqs = (await once(() => fetchQueue(win))).map(toRequest);
   const ids = [...new Set(reqs.map((r) => r.sourceDealId).filter((x): x is number => x != null))];
-  const info = new Map((await pool.query<{ kommo_id: string; client_key: string | null; client_name: string | null; mgr: string | null }>(
-    `SELECT d.kommo_id::text, d.client_key, d.client_name, m.name AS mgr FROM deals d LEFT JOIN managers m ON m.id = d.manager_id WHERE d.kommo_id = ANY($1::bigint[])`,
+  const info = new Map((await pool.query<{ kommo_id: string; client_key: string | null; client_name: string | null }>(
+    `SELECT d.kommo_id::text, d.client_key, d.client_name FROM deals d WHERE d.kommo_id = ANY($1::bigint[])`,
     [ids])).rows.map((x) => [Number(x.kommo_id), x]));
   const mains = new Map((ids.length ? await once(() => fetchLeadsByIds(ids)) : []).map((d) => [d.id, toMain(d, info.get(d.id)?.client_name ?? null)]));
-  const ctx = await contexts(reqs, mains, new Map([...info].map(([k, v]) => [k, { key: v.client_key, mgr: v.mgr }])));
+  const ctx = await contexts(reqs, mains, new Map([...info].map(([k, v]) => [k, { key: v.client_key }])));
   const rows: RunRow[] = [];
   const pay: (string | number)[][] = [], check: (string | number)[][] = [];
   for (const r of reqs.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())) {
