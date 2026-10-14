@@ -96,6 +96,8 @@ export interface DirectorInfo { issues: Issue[]; how: DirName['how'] | null }
 export async function resolveDirector(s: DocumentState): Promise<DirectorInfo> {
   const cp = s.cp;
   const out: Issue[] = [];
+  // 🌍 нерезидент: директор латиницею як у його документах — не відмінюється (services/nonresident.ts)
+  if (s.doc === 'nrmain' || s.doc === 'nrapp') { delete cp.dirGen; delete cp.dirFem; return { issues: out, how: null }; }
   const isFop = /^(ФОП|ФІЗИЧНА\s+ОСОБА)/iu.test((cp.name || '').trim());
   const person = (cp.dir || '').trim() || (isFop ? fopPerson(cp.name || '') : '');
   delete cp.dirGen; delete cp.dirFem;

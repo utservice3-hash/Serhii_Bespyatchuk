@@ -11,6 +11,10 @@ import { loadDocImages, docImageDataUris, AssetsMissing } from "./services/docAs
 import { printHTML, fullPageHTML } from "./services/printTemplate.js";
 import { normPhone, findPhone, parseRequisites, parseOldDoc } from "./services/requisitesParser.js";
 import { canSeeConstructorDoc, stateFromBody } from "./access.js";
+import { NR_BODY } from "./data/nonresidentTexts.js";
+import { NR_EN_KEYS, NR_CSS, nrClauses, nrAppRows } from "./services/nonresident.js";
+import { validateForm } from "./validate.js";
+import { currentNum } from "./services/docgen.js";
 
 /**
  * 📄 КОНСТРУКТОР ДОКУМЕНТІВ (30.09.2026) — пакет Сергія `roman-package`.
@@ -407,7 +411,8 @@ test("#1190b «ДІЄ ДО» ЗБЕРІГАЄТЬСЯ: колонка, запи�
   const route = SRC("routes/constructor.ts");
   const ins = route.slice(route.indexOf("INSERT INTO constructor_documents"), route.indexOf("RETURNING id, version"));
   assert.ok(/\bmain_until\)/.test(ins), "🔴 POST /documents не пише main_until");
-  assert.match(route, /s\.doc === "main" \? \(s\.mainUntil \|\| null\) : null\]\);/, "🔴 у main_until іде не s.mainUntil");
+  // з 14.10.2026 «діє до» пишуть обидва договори — основний і з нерезидентом (`isContract`, services/nonresident.ts)
+  assert.match(route, /isContract\(s\) \? \(s\.mainUntil \|\| null\) : null\]\);/, "🔴 у main_until іде не s.mainUntil");
   assert.match(route, /const DOC_COLS = "[^"]*\bmain_until\b/, "🔴 відкриття з архіву не читає main_until");
   assert.match(route, /mainUntil: String\(row\.main_until \|\| ""\)/, "🔴 стан з архіву без mainUntil");
   assert.equal((stateFromBody({ ent: "uts", doc: "main", mainUntil: " 31.12.2027 " }, { name: "", phone: "" }) as DocumentState).mainUntil, "31.12.2027",
@@ -702,4 +707,124 @@ test("#1684 ПІБ У РОДОВОМУ НА ВХОДІ — без подвійн
   assert.ok(r.issues.some((i) => /родовому/.test(i.msg)), "🔴 немає 🟡 «впишіть у називному»");
   const old = withCp({ dir: "Бондар Наталія Іванівна" });   // resolveDirector НЕ кликали — як запис з архіву
   assert.ok(preamble(old).includes("в особі директора Бондар Наталія Іванівна,"), "🔴 архівний запис переписано: " + preamble(old));
+});
+
+/* ══════════════ 🌍 ДОГОВІР І ЗАЯВКА ДЛЯ НЕРЕЗИДЕНТА (задачі 5144 / 5284 / 5463, 14.10.2026) ══════════════ */
+
+const NR_MGR = { name: "Андрусенко Богдана", phone: "+380 99 000 00 00" };
+const NR_CP = { name: "Test Trading SRL", lawUa: "Республіки Молдова", lawEn: "the Republic of Moldova", dir: "Ion Popescu",
+  addr: "1 Test str., Chisinau", regNo: "100000", bankText: "Bank: Test Bank\nSWIFT: TESTMD2X", email: "office@test.md" };
+const nrState = (over: Record<string, unknown> = {}) => stateFromBody({ ent: "avm", doc: "nrmain", cp: NR_CP, trip: {}, pay: {}, docDate: "2026-10-14", ...over }, NR_MGR) as DocumentState;
+const txt = (h: string) => h.replace(/<[^>]+>/g, " ").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/\s+/g, " ");
+const docxTxt = (s: DocumentState) => new TextDecoder().decode(unzipStored(buildDocx(s, currentNum(s), {})).get("word/document.xml")!)
+  .replace(/<[^>]+>/g, "").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+
+/**
+ * #1730 — ТЕКСТ ДОГОВОРУ ПЕРЕНЕСЕНО ЦІЛИМ (Word-шаблон АвтоМув): 8 розділів по порядку, у КОЖНОМУ пункті номер в
+ * українській колонці = номер в англійській (так ловиться загублений/зсунутий пункт — шаблон сам конвертований з PDF:
+ * «5.4.» і «2.2.» були загублені), даних справжнього клієнта не лишилось, кожна мітка рівно один раз.
+ * 🧨 Прибрати пункт з однієї колонки, повернути «Five Grains»/«31.12.2026» чи загубити мітку — червоніє.
+ */
+test("#1730 ДОГОВІР З НЕРЕЗИДЕНТОМ: 8 розділів, номери пунктів UA = EN, без даних клієнта зі шаблону, мітки по разу", () => {
+  const num = /^\d+(\.\d+)*\.\s/;
+  const secs = NR_BODY.filter((b) => b.h && /^\d+\.\s/.test(b.ua[0])).map((b) => b.ua[0].split(".")[0]);
+  assert.deepEqual(secs, ["1", "2", "3", "4", "5", "6", "7", "8"], "🔴 розділи не 1–8 по порядку");
+  assert.ok(NR_BODY.length >= 110, `🔴 пунктів ${NR_BODY.length} — текст обрізано`);
+  for (const b of NR_BODY) {
+    const u = num.exec(b.ua[0])?.[0].trim(), e = num.exec(b.en[0])?.[0].trim();
+    assert.ok(u && u === e, `🔴 номери колонок розійшлися: «${b.ua[0].slice(0, 40)}» ↔ «${b.en[0].slice(0, 40)}»`);
+  }
+  const all = JSON.stringify(NR_BODY);
+  for (const bad of ["Five Grains", "BURSKYI", "VITALITE", "31.12.2026", "EUR/23", "  "]) assert.ok(!all.includes(bad), `🔴 у тексті лишилось «${bad}»`);
+  for (const [m, n] of [["@LIMIT@", 2], ["@UNTIL@", 2], ["@EMAIL_OUR@", 2], ["@EMAIL_CP@", 2]] as const)
+    assert.equal(all.split(m).length - 1, n, `🔴 мітка ${m} не ${n} рази (UA + EN)`);
+});
+
+/**
+ * #1731 — ЗМІННЕ ПІДСТАВЛЯЄТЬСЯ В ОБИДВІ КОЛОНКИ, У PDF І WORD (Nana 14.10): назва, директор, країна, номер, дата
+ * («14» жовтня 2026 / October 14, 2026), «діє до» (п. 6.1: за замовчуванням 31.12 року договору, введене — як є),
+ * ліміт (п. 4.7), e-mail сторін (п. 8.5). Мітки не протікають у документ. 🧨 Забути підставити — червоніє.
+ */
+test("#1731 ДОГОВІР З НЕРЕЗИДЕНТОМ: клієнт, номер, дати, «діє до», ліміт і e-mail — в UA і EN, у PDF і Word", () => {
+  const s = nrState({ trip: { limit: "5000" } });
+  assert.equal(currentNum(s), "EUR/14/10/2026", "🔴 номер за замовчуванням не EUR/ДД/ММ/РРРР з дати");
+  for (const [name, t] of [["PDF", txt(printHTML(s, currentNum(s), {}))], ["Word", docxTxt(s)]] as const) {
+    for (const need of ["Test Trading SRL, зареєстроване та діє відповідно до законодавства Республіки Молдова", "в особі директора Ion Popescu",
+      "laws of the Republic of Moldova", "№ EUR/14/10/2026 від «14» жовтня 2026 року", "Agreement No. EUR/14/10/2026 dated October 14, 2026",
+      "і діє до 31.12.2026 року", "in force until 31.12.2026 and", "не може перевищувати 5000 EUR", "exceed EUR 5000.",
+      `Експедитор — ${ENTITIES.avm.email}; Замовник — office@test.md`, "SWIFT: TESTMD2X"])
+      assert.ok(t.includes(need), `🔴 ${name}: немає «${need}»`);
+    assert.ok(!/@[A-Z_]+@/.test(t), `🔴 ${name}: мітка протекла в документ`);
+  }
+  const until = nrState({ mainUntil: "30.06.2027" });
+  assert.ok(txt(printHTML(until, currentNum(until), {})).includes("і діє до 30.06.2027 року"), "🔴 введене «діє до» проігноровано");
+  assert.match(blockers(nrState({ mainUntil: "31.02.2027" })) ?? "", /Діє до/, "🔴 неіснуюча дата «діє до» пройшла");
+});
+
+/**
+ * #1732 — П. 5.6 ПРОСТІЙ: тент (ізотерм) 150 € замість 120 (Роман 14.10.2026), рефрижератор 150 €, обидві мови.
+ * 🧨 Повернути 120 — червоніє.
+ */
+test("#1732 ПРОСТІЙ 5.6: тент (ізотерм) 150 €, рефрижератор 150 €, 120 € немає — UA і EN", () => {
+  const c = nrClauses(nrState()).find((b) => b.ua[0].startsWith("5.6."))!;
+  assert.ok(c, "🔴 пункту 5.6 немає");
+  assert.match(c.ua.join(" "), /150 EUR за кожну почату добу простою транспортного засобу типу тент \(ізотерм\) та 150 EUR/, "🔴 UA: тент не 150");
+  assert.match(c.en.join(" "), /EUR 150 for each commenced day of idle time of a tilt \(isothermal\) vehicle and EUR 150/, "🔴 EN: тент не 150");
+  assert.ok(!/\b120\b/.test(c.ua.join(" ") + c.en.join(" ")), "🔴 у п. 5.6 лишилось 120");
+});
+
+/**
+ * #1733 — ЛИШЕ АВТОМУВ і ДЗЕРКАЛО (DoD п.3): від ЮТС/ФОП — відмова словами; від АвтоМув — формується. Вид
+ * документа приймається сервером, ставить «міжнародне», і база його дозволяє (CHECK у schema.sql).
+ * 🧨 Дозволити ЮТС — червоніє; заборонити всім — теж.
+ */
+test("#1733 НЕРЕЗИДЕНТ ЛИШЕ ВІД АВТОМУВ: ЮТС і ФОП — відмова, АвтоМув — формується; вид дозволено в базі", () => {
+  for (const ent of ["uts", "fop"]) assert.match(blockers({ ...nrState(), ent: ent as DocumentState["ent"] }) ?? "", /лише від ТОВ «АвтоМув»/, `🔴 ${ent}: пропустило`);
+  assert.equal(blockers(nrState()), null, "🔴 АвтоМув: договір не формується (дзеркало)");
+  assert.equal(nrState().intl, true, "🔴 договір з нерезидентом не позначено міжнародним");
+  assert.equal(typeof stateFromBody({ ent: "avm", doc: "nrapp" }, NR_MGR), "object", "🔴 сервер не приймає вид «заявка нерезиденту»");
+  assert.match(SRC("db/schema.sql"), /CHECK \(doc_kind IN \('once','main','carr','nrmain','nrapp'\)\)/, "🔴 база не дозволяє нові види документа");
+});
+
+/**
+ * #1734 — ЗАЯВКА: спершу українська частина, потім англійська; у шапках № і дата договору; англійські значення —
+ * з полів менеджера, порожнє → те саме, що українською; лишилась кирилиця — 🟡; без договору — не формується.
+ * 🧨 Ігнорувати англійське поле або не підставити договір — червоніє.
+ */
+test("#1734 ЗАЯВКА НЕРЕЗИДЕНТУ: UA потім EN, № і дата договору в обох, англійське з полів, кирилиця — 🟡", () => {
+  const s = nrState({ doc: "nrapp", dealNo: "62741049", mainNo: "EUR/21/09/2026", mainDate: "2026-09-21",
+    trip: { route: "Яхни — Колін", routeEn: "Yakhny – Kolin", loadDate: "06.10.2026", extra: "оплата до розвантаження" }, pay: { sum: "2000", cur: "EUR" } });
+  assert.equal(blockers(s), null);
+  const t = txt(printHTML(s, currentNum(s), {}));
+  const ua = t.indexOf("ЗАЯВКА № 62741049"), en = t.indexOf("APPLICATION No. 62741049");
+  assert.ok(ua >= 0 && en > ua, "🔴 немає частин або англійська раніше за українську");
+  assert.ok(t.includes("Додаток до Договору № EUR/21/09/2026 від «21» вересня 2026 р."), "🔴 UA: договір не підставлено");
+  assert.ok(t.includes("Appendix to Contract No. EUR/21/09/2026 dated 21 September 2026"), "🔴 EN: договір не підставлено");
+  const rows = nrAppRows(s);
+  assert.equal(rows.ua.length, 18); assert.equal(rows.en.length, 18);
+  assert.deepEqual(rows.en.find(([k]) => k === "Transportation route"), ["Transportation route", "Yakhny – Kolin"], "🔴 англійське поле проігноровано");
+  assert.deepEqual(rows.en.find(([k]) => k === "Loading date"), ["Loading date", "06.10.2026"], "🔴 порожнє англійське не взяло значення з UA");
+  const iss = validateForm(s);
+  assert.ok(iss.some((i) => i.field === "trip.extraEn" && i.level === "warn"), "🔴 кирилиця в англійській частині без 🟡");
+  assert.ok(iss.some((i) => i.field === "trip.mgrEn" && i.level === "warn"), "🔴 ім'я менеджера кирилицею в англійській частині без 🟡");
+  assert.ok(!iss.some((i) => i.field === "trip.routeEn"), "🔴 🟡 на заповненому англійському полі");
+  assert.match(blockers({ ...s, mainNo: "" }) ?? "", /договір, до якого заявка/, "🔴 заявка без договору формується");
+  assert.ok(docxTxt(s).includes("APPLICATION No. 62741049"), "🔴 Word без англійської частини");
+});
+
+/**
+ * #1735 — НАЯВНІ ДОКУМЕНТИ НЕ ЗАЧЕПЛЕНО: стилі двох колонок — лише в документах нерезидента (CSS макета `docCss.ts`
+ * звіряється посимвольно, #1121), а англійські поля форми = ті, що читає сервер (інакше вписане менеджером не дійде).
+ * 🧨 Підключити NR_CSS усім або розвести ключі фронту й сервера — червоніє.
+ */
+test("#1735 НЕРЕЗИДЕНТ ОКРЕМО: стилі колонок лише в його документах; англійські поля форми = серверним", () => {
+  const once = ref["once-client-uts"].state;
+  assert.ok(!fullPageHTML(once, once.num, {}).includes("table.bi"), "🔴 стилі нерезидента протекли в разовий договір");
+  assert.ok(fullPageHTML(nrState(), "1", {}).includes(NR_CSS.trim().split("\n")[0]), "🔴 договір з нерезидентом без стилів колонок");
+  const front = readFileSync(path.join(REPO, "frontend", "src", "pages", "dashboard", "sections", "ConstructorSection.tsx"), "utf8");
+  const block = /const NR_EN: Array<\[string, string\]> = \[([\s\S]*?)\];/.exec(front)?.[1] ?? "";
+  const keys = [...block.matchAll(/\["(\w+En)"/g)].map((m) => m[1]).sort();
+  assert.deepEqual(keys, [...NR_EN_KEYS].sort(), "🔴 англійські поля форми ≠ серверним NR_EN_KEYS");
+  assert.match(front, /k: "nrmain", t: "Договір з нерезидентом", p: "client", nr: true/, "🔴 немає вкладки «Договір з нерезидентом»");
+  assert.match(front, /k: "nrapp", t: "Заявка нерезиденту", p: "client", nr: true/, "🔴 немає вкладки «Заявка нерезиденту»");
 });

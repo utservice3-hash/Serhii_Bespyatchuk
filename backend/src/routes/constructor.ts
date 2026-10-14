@@ -25,7 +25,7 @@ import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { roleHasTab, roleHasPerm } from "../auth/rbac.js";
 import { parseRequisites, parseOldDoc } from "../constructor/services/requisitesParser.js";
-import { buildDocx, blockers, currentNum, zipStore, type DocumentState, type EntityKey, type Density } from "../constructor/services/docgen.js";
+import { buildDocx, blockers, currentNum, isContract, zipStore, type DocumentState, type EntityKey, type Density } from "../constructor/services/docgen.js";
 import { splitParagraphs, textPageHtml, imagePageHtml, paragraphsDocx, toPdfKind, outName } from "../constructor/services/convert.js";
 import { parseDocx, docxText, OfficeParseError } from "../core/officeParse.js";
 import { extractText } from "../core/docText.js";
@@ -162,7 +162,7 @@ constructorRouter.get("/edrpou/:code", h(async (req, res) => {
 constructorRouter.post("/preview", h(async (req, res) => {
   const s = await stateOrFail(req);
   const img = safeImages(s.ent, s.stamp);   // логотип є завжди; перемикач прибирає лише підпис і печатку (v2)
-  const num = currentNum(s) || (s.doc === "main" ? "______" : "______ (ID угоди)"); // заглушка — як у макеті
+  const num = currentNum(s) || (isContract(s) ? "______" : "______ (ID угоди)"); // заглушка — як у макеті
   const dir = await resolveDirector(s);   // 🖋 5461: родовий і рід директора — до рендера
   const issues = [...await checkFields(s), ...dir.issues];
   res.json({ html: fullPageHTML(s, num, img.uris), fragment: printHTML(s, num, img.uris),
@@ -178,7 +178,7 @@ constructorRouter.post("/preview", h(async (req, res) => {
 async function checkFields(s: DocumentState): Promise<Issue[]> {
   const deal = (s.dealNo || "").trim();
   let dealKnown: boolean | null = null;
-  if (s.doc !== "main" && /^\d{1,15}$/.test(deal)) {
+  if (!isContract(s) && /^\d{1,15}$/.test(deal)) {
     dealKnown = await pool.query<{ e: boolean }>("SELECT EXISTS (SELECT 1 FROM deals WHERE kommo_id = $1::bigint) AS e", [deal])
       .then((r) => r.rows[0].e).catch(() => null);
   }
@@ -206,7 +206,7 @@ constructorRouter.post("/documents", h(async (req, res) => {
      RETURNING id, version, created_at`,
     [num, s.doc, s.party, s.ent, s.docDate || null, s.mainNo || null, s.mainDate || null,
      JSON.stringify(s.cp), JSON.stringify(s.trip), JSON.stringify(s.pay),
-     s.intl, s.stamp, s.fopAcc, req.auth!.userId, s.doc === "main" ? (s.mainUntil || null) : null]);
+     s.intl, s.stamp, s.fopAcc, req.auth!.userId, isContract(s) ? (s.mainUntil || null) : null]);
   const fit = await fitAndStore(Number(q.rows[0].id), s, num);
   res.json({ id: Number(q.rows[0].id), version: q.rows[0].version, num, createdAt: q.rows[0].created_at,
     pages: fit?.pages ?? null, dens: fit?.dens ?? null, overflow: !!fit?.overflow });
@@ -288,9 +288,10 @@ async function stateFromRow(row: Record<string, unknown>): Promise<{ s: Document
     ent: row.entity_key as EntityKey, doc: row.doc_kind as DocumentState["doc"], party: row.party as DocumentState["party"],
     intl: !!row.intl, stamp: !!row.with_stamp, fopAcc: Number(row.fop_account) | 0,
     cp: row.contractor as DocumentState["cp"], trip: row.trip as DocumentState["trip"], pay: row.pay as DocumentState["pay"],
-    dealNo: row.doc_kind === "main" ? "" : String(row.deal_no),
+    dealNo: row.doc_kind === "main" || row.doc_kind === "nrmain" ? "" : String(row.deal_no),
     docDate: row.doc_date ? isoDate(row.doc_date) : "",
-    mainNo: row.doc_kind === "main" ? String(row.deal_no) : "", mainDate: String(row.main_date || ""),
+    // nrapp: № і дата договору, до якого заявка, — у main_no/main_date (services/nonresident.ts)
+    mainNo: row.doc_kind === "main" || row.doc_kind === "nrmain" ? String(row.deal_no) : String(row.main_no || ""), mainDate: String(row.main_date || ""),
     mainUntil: String(row.main_until || ""),
     manager: await managerOf(Number(row.created_by)),
   };

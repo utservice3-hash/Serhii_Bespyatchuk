@@ -5135,6 +5135,11 @@ CREATE TABLE IF NOT EXISTS constructor_documents (
 );
 -- «Діє до» основного договору, ДД.ММ.РРРР (п. 8.1; порожньо = 31 грудня року дати договору). Рішення Романа 01.10.2026.
 ALTER TABLE constructor_documents ADD COLUMN IF NOT EXISTS main_until text;
+-- 🌍 Договір і заявка для нерезидента (nrmain / nrapp, лише АвтоМув) — задачі 5144/5284/5463, 14.10.2026.
+-- Повторний запуск безпечний: обмеження перестворюється з тим самим складом.
+ALTER TABLE constructor_documents DROP CONSTRAINT IF EXISTS constructor_documents_doc_kind_check;
+ALTER TABLE constructor_documents ADD CONSTRAINT constructor_documents_doc_kind_check
+  CHECK (doc_kind IN ('once','main','carr','nrmain','nrapp'));
 
 -- 📄 Оформлення «Б» (пакет Сергія v2, migrations/003_b_style.sql; передано 01.10.2026). Повторний запуск безпечний.
 -- Генерація бере ці значення з constructor/data/entities.ts (acc, orig); колонки тут — для довідника юросіб.

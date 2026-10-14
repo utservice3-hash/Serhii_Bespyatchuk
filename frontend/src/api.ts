@@ -5658,7 +5658,8 @@ export const finErrorData = (e: unknown) => (e as { response?: { status?: number
 // на Word/PDF повертав би 401. Файли — blob через `api`, як скрини клієнтів.
 // ═══════════════════════════════════════════════════════════════════════════
 export type CtorEntityKey = "uts" | "avm" | "fop";
-export type CtorDocKind = "once" | "main" | "carr";
+/** `nrmain`/`nrapp` — договір і заявка для нерезидента (UA | EN, лише АвтоМув; 14.10.2026). */
+export type CtorDocKind = "once" | "main" | "carr" | "nrmain" | "nrapp";
 export type CtorParty = "client" | "carrier";
 export interface CtorCounterparty {
   name?: string; edrpou?: string; ipn?: string; addr?: string;
@@ -5667,6 +5668,8 @@ export interface CtorCounterparty {
   dirGender?: string;
   /** ручна правка «в особі директора …» у родовому */
   dirGenHand?: string;
+  /** 🌍 нерезидент: країна реєстрації — «законодавства Англії» / «laws of England», реєстр. номер, банківські реквізити текстом */
+  lawUa?: string; lawEn?: string; regNo?: string; bankText?: string;
 }
 /** Як сервер прочитав директора: родовий для «в особі директора …» і рід (`how`: auto / chosen / guess). */
 export interface CtorDirector { gen: string | null; fem: boolean; how: "auto" | "chosen" | "guess" | null }

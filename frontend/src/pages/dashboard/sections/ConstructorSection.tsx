@@ -36,10 +36,13 @@ const ENT_UI: Record<CtorEntityKey, { c: string; warn?: string; fallback: string
 };
 /* Оформлення «Б» (v20): стартова щільність прев'ю за типом документа — та сама, з якої починає автопідгонка PDF
    (DENS_STEPS у docgen.ts пакета): клієнтська d1, перевізницька dc, основний dm. Підсумкову видно після «Сформувати». */
-const DENS0: Record<string, string> = { once: "d1", carr: "dc", main: "dm" };
-const DOCS: Array<{ k: string; t: string; p: CtorParty; off?: string; fopOff?: boolean }> = [
+const DENS0: Record<string, string> = { once: "d1", carr: "dc", main: "dm", nrmain: "dm", nrapp: "dc" };
+const DOCS: Array<{ k: string; t: string; p: CtorParty; off?: string; fopOff?: boolean; nr?: boolean }> = [
   { k: "once", t: "Разовий договір-заявка", p: "client" },
   { k: "main", t: "Основний договір", p: "client", fopOff: true },
+  // 🌍 нерезидент (задачі 5144/5284/5463, 14.10.2026): лише від АвтоМув, UA | EN
+  { k: "nrmain", t: "Договір з нерезидентом", p: "client", nr: true },
+  { k: "nrapp", t: "Заявка нерезиденту", p: "client", nr: true },
   { k: "carr", t: "Разовий договір-заявка", p: "carrier" },
   { k: "mainc", t: "Основний договір", p: "carrier", off: "шаблону поки немає — за рішенням від 01.10 пропускаємо" },
 ];
@@ -48,6 +51,23 @@ const EDR_ICON: Record<EdrKind, string> = { ok: "✅", warn: "⚠️", info: "�
 const SRC_LABEL: Record<CtorFieldSource, string> = { "1c": "1С", edr: "ЄДР", book: "довідник" };
 const SRC_HINT: Record<CtorFieldSource, string> = {
   "1c": "Взято з 1С (бухгалтерія)", edr: "Взято з ЄДР (державний реєстр, YouControl)", book: "Взято з вашого довідника контрагентів" };
+/** Поля клієнта-нерезидента: латиницею, як у його документах; країна — для «законодавства …» обома мовами. */
+const NR_FIELDS: Array<[keyof CtorCounterparty, string, string]> = [
+  ["name", "Назва (латиницею)", "напр. Five Grains Limited"], ["lawUa", "Країна: «законодавства …»", "напр. Англії, Республіки Молдова"],
+  ["lawEn", "Country: «laws of …»", "напр. England, the Republic of Moldova"], ["dir", "Директор (як у документах)", "напр. MR MAKSIM BURSKYI"],
+  ["addr", "Адреса / Address", "латиницею"], ["regNo", "Реєстр. номер / Registration No.", "необовʼязково"], ["email", "E-mail (п. 8.5 договору)", "для листування"],
+];
+/** Англійські поля заявки нерезиденту: [ключ, підпис]. Порожнє — у документ іде те саме, що українською. */
+const NR_EN: Array<[string, string]> = [
+  ["routeEn", "Transportation route"], ["cargoEn", "Description and quantity of cargo"], ["shipperEn", "Shipper, contact person, telephone"],
+  ["loadAddrEn", "Loading address"], ["loadDateEn", "Loading date"], ["custAddrEn", "Customs clearance address (departure)"],
+  ["borderEn", "Border crossing point"], ["decustAddrEn", "Customs clearance address (destination)"], ["consigneeEn", "Consignee, contact person, telephone"],
+  ["unloadAddrEn", "Unloading address"], ["unloadDateEn", "Delivery date"], ["reqsEn", "Requirements for cargo transportation and/or vehicle"],
+  ["truckEn", "Vehicle: make, model, registration numbers"], ["driverEn", "Driver's details"], ["mgrEn", "Responsible person of the Freight Forwarder"],
+  ["otherRespEn", "Responsible person of the Customer"], ["extraEn", "Additional terms"],
+];
+/** № договору з нерезидентом за замовчуванням — як на сервері (`nrAutoNo`): EUR/ДД/ММ/РРРР з дати договору. */
+const nrAutoNo = (iso: string) => { const d = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : new Date().toISOString().slice(0, 10); const [y, m, dd] = d.split("-"); return `EUR/${dd}/${m}/${y}`; };
 const FIELDS: Array<[keyof CtorCounterparty, string]> = [
   ["name", "Назва"], ["edrpou", "ЄДРПОУ"], ["ipn", "ІПН / ПДВ"], ["addr", "Адреса"],
   ["iban", "IBAN"], ["bank", "Банк"], ["phone", "Телефон"], ["email", "Пошта"], ["dir", "Директор"],
@@ -188,6 +208,9 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
   const orderOther = !orderPresets.includes(form.pay.order);
   const fopConflict = fop && form.party === "client" && !!form.cp.name && !/^ФОП/i.test(form.cp.name);
   const isMain = form.doc === "main";
+  const isNrMain = form.doc === "nrmain", isNrApp = form.doc === "nrapp", isNr = isNrMain || isNrApp;
+  /** Договір (основний або з нерезидентом): номер — № договору, без рейсу й «пари» */
+  const isContract = isMain || isNrMain;
 
   /* ── ФОП: форма оплати лише «СОФТ платіж», порядок — ФОП-овий (макет: syncPay) ── */
   useEffect(() => {
@@ -213,7 +236,7 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
 
   /* Документ змінено після формування — бар «Сформовано» ховається (макет: render). */
   useEffect(() => {
-    if (made && (made.num !== (isMain ? form.mainNo : form.dealNo) || made.party !== form.party)) setMade(null);
+    if (made && (made.num !== (isNrMain ? (form.mainNo || nrAutoNo(form.docDate)) : isMain ? form.mainNo : form.dealNo) || made.party !== form.party)) setMade(null);
   }, [form.dealNo, form.mainNo, form.party]);
 
   /* ── Контрагент ── */
@@ -358,8 +381,8 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
       if (form.cp.name) ctorSaveCounterparty(form.cp).catch(() => {});   // контрагент — у довідник для наступного разу
       loadArch();
       const others = await ctorArchive("", r.num).catch(() => []);
-      setHasPair(others.some((x) => x.party !== form.party && x.doc_kind !== "main"));
-      if (pairMode && form.doc !== "main") setTimeout(doMirror, 250);  // пакетний — тільки за чекбоксом
+      setHasPair(!isNr && others.some((x) => x.party !== form.party && x.doc_kind !== "main"));
+      if (pairMode && !isContract && !isNr) setTimeout(doMirror, 250);  // пакетний — тільки за чекбоксом
     } catch (e) { await bad(e); }
     finally { setBusy(false); }
   };
@@ -410,10 +433,12 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
       const row = await ctorDocument(id) as {
         entity_key: CtorEntityKey; doc_kind: CtorForm["doc"]; party: CtorParty; intl: boolean; with_stamp: boolean; fop_account: number;
         contractor: CtorForm["cp"]; trip: Record<string, string>; pay: CtorForm["pay"]; deal_no: string; doc_date: string | null; main_date: string | null; main_until: string | null;
+        main_no?: string | null;
       };
       setForm({ ent: row.entity_key, doc: row.doc_kind, party: row.party, intl: row.intl, stamp: row.with_stamp, fopAcc: row.fop_account,
-        cp: row.contractor, trip: row.trip, pay: row.pay, dealNo: row.doc_kind === "main" ? "" : row.deal_no,
-        docDate: row.doc_date ? String(row.doc_date).slice(0, 10) : "", mainNo: row.doc_kind === "main" ? row.deal_no : "", mainDate: row.main_date || "", mainUntil: row.main_until || "" });
+        cp: row.contractor, trip: row.trip, pay: row.pay, dealNo: row.doc_kind === "main" || row.doc_kind === "nrmain" ? "" : row.deal_no,
+        docDate: row.doc_date ? String(row.doc_date).slice(0, 10) : "",
+        mainNo: row.doc_kind === "main" || row.doc_kind === "nrmain" ? row.deal_no : (row.main_no || ""), mainDate: row.main_date || "", mainUntil: row.main_until || "" });
       setMade(null);
       ok("Заявку піднято у форму — внесіть правки і сформуйте нову версію з тим самим №.");
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -461,9 +486,19 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
   }, [mirrorCost, form.pay.sum]);
 
   const got = FIELDS.filter(([k]) => form.cp[k]).length;
-  const num = (isMain ? form.mainNo : form.dealNo) || (isMain ? "______" : "______ (ID угоди)");
+  const num = isNrMain ? (form.mainNo || nrAutoNo(form.docDate)) : (isMain ? form.mainNo : form.dealNo) || (isMain ? "______" : "______ (ID угоди)");
   const docsHere = DOCS.filter((d) => d.p === form.party);
-  const offOf = (d: (typeof DOCS)[number]) => d.off || (d.fopOff && fop ? "основний договір від ФОП — шаблону немає" : null);
+  const offOf = (d: (typeof DOCS)[number]) => d.off || (d.fopOff && fop ? "основний договір від ФОП — шаблону немає" : null)
+    || (d.nr && form.ent !== "avm" ? "лише від ТОВ «АвтоМув» — оберіть АвтоМув угорі" : null);
+  /** Договори з нерезидентами в архіві — до якого прив'язати заявку (Nana 14.10: № і дата підтягуються з договору). */
+  const nrContracts = (arch ?? []).filter((r) => r.doc_kind === "nrmain");
+  const pickContract = async (id: number) => {
+    try {
+      const row = await ctorDocument(id) as { deal_no: string; doc_date: string | null; contractor: CtorForm["cp"] };
+      setForm((f) => ({ ...f, mainNo: row.deal_no, mainDate: row.doc_date ? String(row.doc_date).slice(0, 10) : "", cp: { ...row.contractor } }));
+      ok(`Підтягнуто договір № ${row.deal_no} — клієнт і реквізити з нього.`);
+    } catch (e) { await bad(e); }
+  };
   const rootStyle = { "--ent": `var(${ENT_UI[form.ent].c})` } as CSSProperties;
   const mgr = me?.manager;
 
@@ -524,7 +559,8 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
         <div className="doctabs">
           {docsHere.map((d) => offOf(d)
             ? <button key={d.k} className="doctab" disabled title={offOf(d)!} style={{ opacity: .45, cursor: "not-allowed" }}>{d.t}<span className="p">скоро</span></button>
-            : <button key={d.k} className="doctab" aria-pressed={form.doc === d.k} onClick={() => set("doc", d.k as CtorForm["doc"])}>
+            : <button key={d.k} className="doctab" aria-pressed={form.doc === d.k}
+                onClick={() => setForm((f) => ({ ...f, doc: d.k as CtorForm["doc"], ...(d.nr ? { intl: true, pay: { ...f.pay, cur: "EUR" } } : f.doc === "nrmain" || f.doc === "nrapp" ? { pay: { ...f.pay, cur: "грн" } } : {}) }))}>
                 {d.t}<span className="p">{d.p === "carrier" ? "перевізник" : "клієнт"}</span></button>)}
         </div>
 
@@ -533,9 +569,12 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
             {/* ── 1. Контрагент ── */}
             <div className="sec">
               <h3><span className="n">1</span>Контрагент</h3>
-              <p className="hint">{form.party === "carrier"
+              <p className="hint">{isNr
+                ? "Іноземний клієнт — латиницею, як у його документах. Те саме йде і в українську, і в англійську частину."
+                : form.party === "carrier"
                 ? "Перевізник, якого ставимо другою стороною. Реквізити зазвичай приходять текстом у Viber — тому спосіб «Текстом» тут головний."
                 : "Кого вписуємо другою стороною. Три способи — обирайте той, що швидший у конкретний момент."}</p>
+              {isNr ? <NrClient form={form} setCp={setCp} iss={iss} /> : (<>
               <div className="ways" role="group" aria-label="Спосіб вводу">
                 {([["edr", "За ЄДРПОУ"], ["book", "Довідник"], ["text", "Текстом"], ["file", "Файлом"]] as Array<[Way, string]>).map(([k, l]) => (
                   <button key={k} aria-pressed={way === k} onClick={() => setWay(k)}>{l}</button>
@@ -638,6 +677,7 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                   <div className="ibannote soft">IBAN не вказано — у реквізитах перевізника рядка «п/р» не буде. Заявку можна сформувати.</div>
                 )}
               </div>
+              </>)}
               {fopConflict && (
                 <div className="fopwarn"><b>Від ФОП Беспятчука клієнтом може бути лише інший ФОП.</b> Контрагент — {form.cp.name}. Оберіть ЮТС або АвтоМув,
                   інакше документ не сформується. Перевізник від ФОП може бути будь-який — там ми покупець.</div>
@@ -645,7 +685,21 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
             </div>
 
             {/* ── 2. Рейс / Номер і дата основного ── */}
-            {!isMain ? (
+            {isNrMain ? (
+              <div className="sec">
+                <h3><span className="n">2</span>Номер, дата і строк договору</h3>
+                <p className="hint">Номер за замовчуванням — EUR/ДД/ММ/РРРР з дати договору (як у шаблоні). Решта тексту договору однакова для всіх нерезидентів.</p>
+                <div className="g2">
+                  <div className="fld"><label htmlFor="nrNo">№ договору</label><input type="text" id="nrNo" value={form.mainNo} onChange={(e) => set("mainNo", e.target.value)} placeholder={nrAutoNo(form.docDate)} /></div>
+                  <div className="fld"><label htmlFor="nrDate">Дата договору</label><input type="date" id="nrDate" value={form.docDate} onChange={(e) => set("docDate", e.target.value)} /></div>
+                  {/* п. 6.1 — «діє до» (Nana 14.10): порожньо = 31.12 року дати договору */}
+                  <div className="fld"><label htmlFor="nrUntil">Діє до (п. 6.1)</label><input type="text" id="nrUntil" value={form.mainUntil} onChange={(e) => set("mainUntil", e.target.value)}
+                    placeholder={`31.12.${(form.docDate || new Date().toISOString()).slice(0, 4)} — якщо не змінювати`} /></div>
+                  <div className="fld"><label htmlFor="nrLimit">Ліміт заборгованості, EUR (п. 4.7)</label><input type="text" id="nrLimit" value={form.trip.limit || ""} onChange={(e) => setTrip("limit", e.target.value)} placeholder="0 — як у шаблоні" /></div>
+                </div>
+                <p className="hint" style={{ marginTop: 9 }}>Простій (п. 5.6): 150 € за добу — тент (ізотерм) і рефрижератор.</p>
+              </div>
+            ) : !isMain ? (
               <div className="sec">
                 <h3><span className="n">2</span>Рейс
                   <button className="btn sm" type="button" style={{ marginLeft: "auto", fontWeight: 600 }} title="Запамʼятати маршрут, вантаж і адреси як шаблон" onClick={() => void saveTpl()}>💾 У шаблони</button>
@@ -659,11 +713,22 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                     </span>
                   )) : <span style={{ fontSize: 12, color: "var(--muted)" }}>Шаблонів ще немає — заповніть рейс і натисніть «У шаблони».</span>}
                 </div>
+                {isNrApp && (
+                  <div className="g2" style={{ marginBottom: 12 }}>
+                    <div className="fld full"><label htmlFor="nrPick">Договір, до якого заявка <span style={{ color: "var(--ok)", fontWeight: 700 }}>· № і дата підтягуються</span></label>
+                      <select id="nrPick" value="" onChange={(e) => { if (e.target.value) void pickContract(+e.target.value); }}>
+                        <option value="">{nrContracts.length ? "Оберіть договір з нерезидентом з архіву…" : "У вашому архіві ще немає договорів з нерезидентами — впишіть № і дату нижче"}</option>
+                        {nrContracts.map((r) => <option key={r.id} value={r.id}>№ {r.deal_no} · {r.contractor_name || "—"}{r.doc_date ? ` · ${String(r.doc_date).slice(0, 10).split("-").reverse().join(".")}` : ""}</option>)}
+                      </select></div>
+                    <div className="fld"><label htmlFor="nrCNo">№ договору</label><input type="text" id="nrCNo" value={form.mainNo} onChange={(e) => set("mainNo", e.target.value)} placeholder="напр. EUR/21/09/2026" /></div>
+                    <div className="fld"><label htmlFor="nrCDate">Дата договору</label><input type="date" id="nrCDate" value={form.mainDate} onChange={(e) => set("mainDate", e.target.value)} /></div>
+                  </div>
+                )}
                 <p className="hint">Те, що потрапляє в таблицю заявки. Порожні поля залишаться прочерками — документ сформується, але покаже, чого бракує.</p>
                 <div className="g2">
-                  <label className="fld full" style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 12px", border: "1px dashed var(--line)", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>
+                  {!isNrApp && <label className="fld full" style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 12px", border: "1px dashed var(--line)", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>
                     <input type="checkbox" checked={form.intl} onChange={(e) => { const on = e.target.checked; setForm((f) => ({ ...f, intl: on, ent: on ? "avm" : f.ent })); }} style={{ width: 16, height: 16, accentColor: "var(--ent)" }} />
-                    Міжнародне перевезення <span style={{ color: "var(--muted)" }}>— додає замитнення, кордон і розмитнення; оформлюється лише від ТОВ «АвтоМув»</span></label>
+                    Міжнародне перевезення <span style={{ color: "var(--muted)" }}>— додає замитнення, кордон і розмитнення; оформлюється лише від ТОВ «АвтоМув»</span></label>}
                   {TRIP.filter(([k]) => form.intl || !INTL_KEYS.includes(k)).map(([k, l, req]) => (
                     <div key={k} className={`fld ${FULL.has(k) ? "full" : ""}`}>
                       <label htmlFor={`t-${k}`}>{k === "otherResp" ? (form.party === "carrier" ? "Відповідальна особа Перевізника, телефон" : "Відповідальна особа Замовника, телефон") : l}
@@ -673,18 +738,31 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                     </div>
                   ))}
                 </div>
+                {isNrApp && (<>
+                  <h3 style={{ margin: "16px 0 4px", fontSize: 13 }}>Англійська частина заявки</h3>
+                  <p className="hint">Впишіть англійською (латиницею) — перекладу автоматом немає. Порожнє поле піде в англійську частину так само, як українською (дати, телефони, номери авто).</p>
+                  <div className="g2">
+                    {NR_EN.map(([k, l]) => (
+                      <div key={k} className={`fld ${FULL.has(k.replace(/En$/, "")) ? "full" : ""}`}>
+                        <label htmlFor={`t-${k}`}>{l}</label>
+                        <input type="text" id={`t-${k}`} value={form.trip[k] || ""} onChange={(e) => setTrip(k, e.target.value)} />
+                        <FieldMsg is={iss(`trip.${k}`)} />
+                      </div>
+                    ))}
+                  </div>
+                </>)}
                 <div className="payrow">
                   <div className="fld"><label htmlFor="paysum">Плата, сума <span style={{ color: "var(--bad)" }}>*</span></label><input type="text" id="paysum" value={form.pay.sum} onChange={(e) => setPay("sum", e.target.value)} />
                     <FieldMsg is={iss("pay.sum")} />
                     {margin !== null && <span style={{ display: "block", fontSize: 11.5, color: margin >= 0 ? "var(--ok)" : "var(--bad)", fontWeight: 600, marginTop: 3 }}>маржа {margin.toLocaleString("uk-UA")}</span>}</div>
                   <div className="fld"><label htmlFor="paycur">Валюта</label><select id="paycur" value={form.pay.cur} onChange={(e) => setPay("cur", e.target.value)}>
-                    <option>грн</option><option>€ по курсу НБУ на день завантаження</option><option>€ по курсу НБУ на день розвантаження</option></select></div>
-                  <div className="fld"><label htmlFor="payform">Форма</label><select id="payform" value={form.pay.form} disabled={fop} onChange={(e) => setPay("form", e.target.value)}>
+                    {isNrApp ? <option>EUR</option> : <><option>грн</option><option>€ по курсу НБУ на день завантаження</option><option>€ по курсу НБУ на день розвантаження</option></>}</select></div>
+                  {!isNrApp && <><div className="fld"><label htmlFor="payform">Форма</label><select id="payform" value={form.pay.form} disabled={fop} onChange={(e) => setPay("form", e.target.value)}>
                     {(fop ? ["СОФТ платіж"] : PAY_FORMS).map((o) => <option key={o}>{o}</option>)}</select></div>
                   <div className="fld"><label htmlFor="payorder">Порядок і строки оплати</label><select id="payorder" value={orderOther ? OTHER : form.pay.order} onChange={(e) => setPay("order", e.target.value === OTHER ? "" : e.target.value)}>
                     {orderPresets.map((o) => <option key={o}>{o}</option>)}<option value={OTHER}>Інше…</option></select>
                     {orderOther && <input type="text" value={form.pay.order} onChange={(e) => setPay("order", e.target.value)} placeholder="напр. 50% передоплата, 50% після розвантаження" style={{ marginTop: 6 }} />}
-                    <FieldMsg is={iss("pay.order")} /></div>
+                    <FieldMsg is={iss("pay.order")} /></div></>}
                 </div>
                 <div className="g2" style={{ marginTop: 10 }}>
                   <div className="fld full"><label>Відповідальна особа Експедитора <span style={{ color: "var(--ok)", fontWeight: 700 }}>· авто з профілю</span></label>
@@ -708,8 +786,8 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
               </div>
             )}
 
-            {/* ── 3. Умови та санкції ── */}
-            <div className="sec">
+            {/* ── 3. Умови та санкції ── (нерезидент — умови в тексті договору) */}
+            {!isNr && <div className="sec">
               <h3><span className="n">3</span>Умови та санкції</h3>
               <p className="hint">Підставляються з картки юрособи. Міняються тільки свідомо — і зміна видно в документі.</p>
               <div className="terms">
@@ -725,11 +803,11 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                 {E?.fines?.note && <p className="note">{E.fines.note}</p>}
                 <p className="note">Пеня за прострочення оплати — подвійна облікова ставка НБУ за кожен день. Однакова для всіх трьох юросіб.</p>
               </div>
-            </div>
+            </div>}
 
             {/* ── 4. Підпис і печатка ── */}
             <div className="sec">
-              <h3><span className="n">4</span>Підпис і печатка</h3>
+              <h3><span className="n">{isNr ? 3 : 4}</span>Підпис і печатка</h3>
               <p className="hint">Наш бік підписується автоматично. Підпис контрагента — окремий крок після формування.</p>
               <div className="toggle">
                 <button className="sw" aria-pressed={form.stamp} aria-label="Ставити підпис і печатку" onClick={() => set("stamp", !form.stamp)} />
@@ -742,7 +820,7 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
             </div>
 
             <div className="actbar">
-              {!isMain && (<>
+              {!isMain && !isNrMain && (<>
                 <div className="fld" style={{ minWidth: 190 }}>
                   <label htmlFor="dealNo" style={{ display: "block", fontSize: 11, fontWeight: 700, color: "var(--muted)", marginBottom: 3 }}>№ заявки = ID угоди в СРМ <span style={{ color: "var(--bad)" }}>*</span></label>
                   <input type="text" id="dealNo" value={form.dealNo} onChange={(e) => set("dealNo", e.target.value.trim())} placeholder="напр. 61575919" inputMode="numeric"
@@ -758,7 +836,7 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
               </>)}
               <button className="btn pri" style={{ alignSelf: "flex-end" }} disabled={busy || fopConflict} onClick={() => void onMake()}>{busy ? "Формую…" : "Сформувати документ"}</button>
               <IssueSummary issues={issues} />
-              {!isMain && (
+              {!isMain && !isNr && (
                 <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: "var(--ink-2)", alignSelf: "flex-end", paddingBottom: 9, cursor: "pointer" }}>
                   <input type="checkbox" checked={pairMode} onChange={(e) => setPairMode(e.target.checked)} style={{ width: 15, height: 15, accentColor: "var(--ent)" }} />
                   після формування — одразу друга сторона угоди</label>
@@ -773,7 +851,7 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                 <button className="btn pri sm" style={{ background: "var(--ink)", borderColor: "var(--ink)" }} onClick={() => void download(made.id, made.num, "docx")}>⬇ Зберегти Word</button>
                 {hasPair && <button className="btn sm" onClick={() => void savePair(made.id, made.num)}>⬇ Пакет угоди: обидва PDF (zip)</button>}
                 <button className="btn sm" title="Якщо вікно дозволяє друк" onClick={() => void printPdf(made.id)}>🖨 Друк</button>
-                {!isMain && <button className="btn sm" onClick={doMirror}>{made.party === "carrier" ? "→ Таку ж для клієнта" : "→ Таку ж для перевізника"}</button>}
+                {!isMain && !isNr && <button className="btn sm" onClick={doMirror}>{made.party === "carrier" ? "→ Таку ж для клієнта" : "→ Таку ж для перевізника"}</button>}
                 <span style={{ fontSize: 11.5, color: "var(--muted)", marginLeft: "auto" }}>заявку збережено в архів нижче</span>
               </div>
             )}
@@ -851,7 +929,7 @@ function ArchList({ rows, q, onOpen, onLoad, withAuthor }: {
           {r.version > 1 && <span className="ext" title={`версія ${r.version}`}>v{r.version}</span>}
           <span style={{ fontSize: 12.5, fontWeight: 600 }}>{r.contractor_name || "без контрагента"}</span>
           <span style={{ fontSize: 12, color: "var(--muted)" }}>
-            {r.doc_kind === "main" ? "основний" : r.party === "carrier" ? "перевізник" : "клієнт"} · {r.entity_key.toUpperCase()}{r.route ? ` · ${r.route}` : ""}{r.sum ? ` · ${r.sum}` : ""}
+            {r.doc_kind === "main" ? "основний" : r.doc_kind === "nrmain" ? "договір нерезидент" : r.doc_kind === "nrapp" ? "заявка нерезидент" : r.party === "carrier" ? "перевізник" : "клієнт"} · {r.entity_key.toUpperCase()}{r.route ? ` · ${r.route}` : ""}{r.sum ? ` · ${r.sum}` : ""}
           </span>
           {withAuthor && <span style={{ fontSize: 12, fontWeight: 600 }}>{r.author ?? "—"}</span>}
           <span style={{ fontSize: 11.5, color: "var(--muted)", marginLeft: "auto" }}>{fmtAt(r.created_at)}</span>
@@ -933,6 +1011,36 @@ async function docxText(buf: ArrayBuffer): Promise<string> {
 }
 
 /** Пояснення під полем — текст із серверної перевірки (🔴 червоний, 🟡 жовтий). */
+/** 🌍 Клієнт-нерезидент: ті самі рядки `.frow`, що в реквізитах, плюс банківські реквізити одним блоком тексту. */
+function NrClient({ form, setCp, iss }: {
+  form: CtorForm; setCp: (k: keyof CtorCounterparty, v: string) => void; iss: (field: string) => CtorIssue | undefined;
+}) {
+  const need = new Set(["name", "lawUa", "lawEn", "dir"]);
+  return (
+    <div className="fields">
+      <div className="fhead"><span>Реквізити клієнта-нерезидента</span></div>
+      {NR_FIELDS.map(([k, l, ph]) => {
+        const v = form.cp[k] || ""; const is = iss(`cp.${k}`);
+        const st = is ? (is.level === "error" ? "err" : "wrn") : v ? "ok" : need.has(k) ? "no" : "opt";
+        return (
+          <div key={k} className={`frow ${v || !need.has(k) ? "" : "miss"} ${is ? "has-" + st : ""}`}>
+            <label htmlFor={`nr-${k}`}>{l}</label>
+            <input id={`nr-${k}`} value={v} placeholder={ph} onChange={(e) => setCp(k, e.target.value)} />
+            <span className={`st ${st}`}>{is ? (is.level === "error" ? "✕" : "⚠") : v ? "✓" : need.has(k) ? "!" : "—"}</span>
+            {is && <div className={`fmsg ${st}`}>{is.msg}</div>}
+          </div>
+        );
+      })}
+      <div className="frow" style={{ alignItems: "start" }}>
+        <label htmlFor="nr-bank">Банківські реквізити</label>
+        <textarea id="nr-bank" rows={4} value={form.cp.bankText || ""} onChange={(e) => setCp("bankText", e.target.value)}
+          placeholder={"Bank: …\nBIC / SWIFT: …\nIBAN (EUR): …"} style={{ border: 0, background: "transparent", fontSize: 13, resize: "vertical" }} />
+        <span className={`st ${form.cp.bankText ? "ok" : "opt"}`}>{form.cp.bankText ? "✓" : "—"}</span>
+      </div>
+    </div>
+  );
+}
+
 /**
  * 🖋 Під полем «Директор» (задача 5461): як ПІБ стане в документі — «в особі директора <родовий>, який/яка діє».
  * Рід не визначився (ініціали тощо) — перемикач Ч/Ж; «виправити» — ручний родовий, понад автоматичний.

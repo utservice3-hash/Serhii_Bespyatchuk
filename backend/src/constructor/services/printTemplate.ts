@@ -18,6 +18,7 @@ import {
   DocumentState, EntityKey, Seg, Density, FOOT_TITLE, densSteps,
   condRows, legalBlocks, preambleSegs, reqLines, docTitleParts, docDateStr, mainClauseText,
 } from './docgen.js';
+import { isNr, NR_CSS, nrHead, nrPreamble, nrClauses, nrReq, nrSigners, nrAppRows, nrAppSign } from './nonresident.js';
 
 const esc = (s: string) => String(s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -43,7 +44,9 @@ export function printHTML(s: DocumentState, num: string, img: PrintImages = {}):
   const logo = img.logo ? `<img class="dlogo${s.ent === 'avm' ? ' dlogo-avm' : ''}" src="${img.logo}" alt="${esc(e.code)}">` : '';
   let h = `<div class="dband">${logo}
       <span class="dco">${esc(('docName' in e && e.docName) || e.name)} · ${s.ent === 'fop' ? 'ІПН' : 'ЄДРПОУ'} ${esc(e.edrpou)} · ${esc(e.vat)}</span>
-      <span class="dnum">№ ${esc(num)}</span></div>
+      <span class="dnum">№ ${esc(num)}</span></div>`;
+  if (isNr(s)) return h + nrHTML(s, img);
+  h += `
     <h2>${title} № ${esc(num)}</h2><p class="sub">${sub}</p>
     <div class="dl"><span>м. Київ</span><span>${esc(dateStr)}</span></div>
     <p>${segsHTML(preambleSegs(s))}</p>`;
@@ -84,6 +87,44 @@ export function printHTML(s: DocumentState, num: string, img: PrintImages = {}):
   return h;
 }
 
+/**
+ * 🌍 Договір / заявка для нерезидента (services/nonresident.ts): ті самі класи «Б» (h2, .sub, .dl, таблиця умов,
+ * картки .rq2, підписи .sigs); договір — таблиця .bi у дві колонки UA | EN.
+ */
+function nrHTML(s: DocumentState, img: PrintImages): string {
+  const h = nrHead(s);
+  const sigImgs = `${img.sig ? `<img class="simg" src="${img.sig}">` : ''}${img.stamp ? `<img class="stimg" src="${img.stamp}">` : ''}`;
+  const sigs = (cp: string[], our: string[], seal = 'М.П. / Seal') => `<div class="sigs">
+      <div class="cell">${esc(cp[0])}<div class="ln"></div>${esc(cp[1])}<br>${seal}</div>
+      <div class="cell">${esc(our[0])}<div class="ln"></div>${esc(our[1])}<br>${seal}${sigImgs}</div></div>`;
+  const ps = (a: string[]) => a.map((t) => `<p>${esc(t)}</p>`).join('');
+  if (s.doc === 'nrmain') {
+    const pre = nrPreamble(s), rq = nrReq(s), sg = nrSigners(s);
+    let out = `<h2>${esc(h.title)}</h2><h2 style="font-size:12.5pt">${esc(h.titleEn)}</h2><p class="sub">${esc(h.sub)} / ${esc(h.subEn)}</p>
+    <div class="dl"><span>${esc(h.city)} / ${esc(h.cityEn)}</span><span>${esc(h.date)} / ${esc(h.dateEn)}</span></div>
+    <table class="bi"><tr><td>${ps(pre.ua)}</td><td>${ps(pre.en)}</td></tr>`;
+    for (const b of nrClauses(s)) {
+      const cls = b.h ? (/^\d+\.\s/.test(b.ua[0]) ? ' class="bh"' : ' class="bh2"') : '';
+      out += `<tr${cls}><td>${ps(b.ua)}</td><td>${ps(b.en)}</td></tr>`;
+    }
+    const card = (c: { head: string; lines: string[] }) => `<div><h4>${esc(c.head)}</h4>${c.lines.map((l, i) => (i === 0 ? '<b>' + esc(l) + '</b>' : esc(l))).join('<br>')}</div>`;
+    return out + `</table>
+    <div class="rqb"><h3 style="text-align:center">9. РЕКВІЗИТИ ТА ПІДПИСИ СТОРІН / 9. DETAILS AND SIGNATURES OF THE PARTIES</h3>
+    <div class="rq2">${card(rq.cp)}${card(rq.our)}</div></div>` +
+      sigs(['Від Замовника / For the Customer:', sg.cp.replace(/^Директор \/ Director: /, 'Director ')], ['Від Експедитора / For the Forwarder:', 'Director Ковтонюк Т. М. / T. M. Kovtoniuk']) +
+      `<div class="sigend"></div>`;
+  }
+  const rows = nrAppRows(s), sign = nrAppSign(s);
+  const table = (rs: Array<[string, string]>) => `<table>${rs.map(([k, v]) => `<tr><td class="k">${esc(k)}</td><td class="v2">${v ? esc(v) : '—'}</td></tr>`).join('')}</table>`;
+  const part = (apx: string, title: string, sub: string, city: string, date: string, cap: string, rs: Array<[string, string]>, sg: { our: string[]; cp: string[]; seal: string }) =>
+    `<p class="nrapx">${esc(apx)}</p><h2>${esc(title)}</h2><p class="sub">${esc(sub)}</p>
+    <div class="dl"><span>${esc(city)}</span><span>${esc(date)}</span></div><h3>${esc(cap)}</h3>${table(rs)}${sigs(sg.cp, sg.our, sg.seal)}`;
+  return part(h.appendix!.ua, h.title, h.sub, h.city, h.date, 'Умови перевезення:', rows.ua, sign.ua) +
+    `<div class="nrpart"></div>` +
+    part(h.appendix!.en, h.titleEn, h.subEn, h.cityEn, h.dateEn, 'Terms and Conditions of Transportation:', rows.en, sign.en) +
+    `<div class="sigend"></div>`;
+}
+
 /** Класи контейнера документа — ті самі, що docClass() у макеті. */
 export const docClass = (ent: EntityKey, dens: Density) => `docfmt doc-b ent-${ent} dens-${dens}`;
 
@@ -97,7 +138,7 @@ export function fullPageHTML(s: DocumentState, num: string, img: PrintImages = {
 <style>
 :root{--mono:"JetBrains Mono", ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", monospace}
 html,body{margin:0;padding:0;background:#fff}
-${DOC_CSS}
+${DOC_CSS}${isNr(s) ? NR_CSS : ''}
 </style></head>
 <body><div class="${docClass(s.ent, dens || densSteps(s)[0])}">${printHTML(s, num, img)}</div></body></html>`;
 }

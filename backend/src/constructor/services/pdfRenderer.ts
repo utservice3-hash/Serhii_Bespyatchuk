@@ -31,7 +31,7 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { densSteps, MAX_PAGES, FOOT_TITLE, type DocumentState, type Density } from './docgen.js';
+import { densSteps, MAX_PAGES, FOOT_TITLE, isContract, type DocumentState, type Density } from './docgen.js';
 import { fullPageHTML, type PrintImages } from './printTemplate.js';
 
 /** Шлях до chrome-headless-shell на сервері. Без нього PDF чесно відмовляє, а не падає 500-ю. */
@@ -113,8 +113,8 @@ export async function renderDocumentPdf(s: DocumentState, num: string, img: Prin
   for (const dens of densSteps(s)) {
     const pdf = await render(fullPageHTML(s, num, img, dens), footerTitle(s, num));
     const pages = countPdfPages(pdf);
-    out = { pdf, pages, dens, overflow: s.doc !== 'main' && pages > MAX_PAGES };
-    if (s.doc === 'main' || pages <= MAX_PAGES) break;
+    out = { pdf, pages, dens, overflow: !isContract(s) && pages > MAX_PAGES };
+    if (isContract(s) || pages <= MAX_PAGES) break;
   }
   return out!;
 }

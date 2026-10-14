@@ -12,11 +12,13 @@
 
 import { ENTITIES } from '../data/entities.js';
 import { LEGAL, MAIN_BODY, MAIN_THIRD } from '../data/legalTexts.js';
+import { isNr, nrContractNo, nrBlocker, nrHead, nrPreamble, nrClauses, nrReq, nrSigners, nrAppRows, nrAppSign } from './nonresident.js';
 
 /* ─────────────────────────── Типи ─────────────────────────── */
 
 export type EntityKey = 'uts' | 'avm' | 'fop';
-export type DocKind = 'once' | 'main' | 'carr';
+/** `nrmain`/`nrapp` — договір і заявка для нерезидента (UA | EN, лише АвтоМув; services/nonresident.ts, 14.10.2026). */
+export type DocKind = 'once' | 'main' | 'carr' | 'nrmain' | 'nrapp';
 export type Party = 'client' | 'carrier';
 
 /* Щільність документа (рішення 14–15.10). Заявка має бути рівно на 3 сторінках:
@@ -24,10 +26,13 @@ export type Party = 'client' | 'carrier';
    4-та сторінка — крок щільніше, до d95 (9,5 пт) — це «автопідгонка» (pdfRenderer.renderDocumentPdf).
    Основний договір — dm (9,5 пт, 8 сторінок), без підгонки. Ті самі значення — у CSS (.dens-*) і в Word (W_DENS). */
 export type Density = 'd1' | 'dc' | 'd95' | 'dm';
-export const DENS_STEPS: Record<DocKind, Density[]> = { once: ['d1', 'dc', 'd95'], carr: ['dc', 'd95'], main: ['dm'] };
+export const DENS_STEPS: Record<DocKind, Density[]> = { once: ['d1', 'dc', 'd95'], carr: ['dc', 'd95'], main: ['dm'], nrmain: ['dm'], nrapp: ['dc', 'd95'] };
 export const MAX_PAGES = 3;
 /** Заголовок колонтитула «… № N · сторінка X з Y». */
-export const FOOT_TITLE: Record<DocKind, string> = { once: 'Разовий договір', carr: 'Заявка-договір', main: 'Договір' };
+export const FOOT_TITLE: Record<DocKind, string> = { once: 'Разовий договір', carr: 'Заявка-договір', main: 'Договір',
+  nrmain: 'Договір / Agreement', nrapp: 'Заявка / Application' };
+/** Договір (не заявка): без автопідгонки під 3 сторінки, номер — № договору, а не ID угоди. */
+export const isContract = (s: { doc: DocKind }) => s.doc === 'main' || s.doc === 'nrmain';
 export const densSteps = (s: { doc: DocKind }): Density[] => DENS_STEPS[s.doc] || ['d1'];
 
 export interface Counterparty {
@@ -40,6 +45,8 @@ export interface Counterparty {
   /** ⚙ пише сервер (`names.resolveDirector`), з клієнта не довіряється: ПІБ у родовому й жіночий рід ('1') */
   dirGen?: string;
   dirFem?: string;
+  /** 🌍 нерезидент: країна реєстрації — «законодавства Англії» / «laws of England», реєстр. номер, банківські реквізити текстом */
+  lawUa?: string; lawEn?: string; regNo?: string; bankText?: string;
 }
 
 export interface DocumentState {
@@ -137,6 +144,7 @@ export function mainClauseText(s: DocumentState, t: string, third: string): stri
 }
 
 export function currentNum(s: DocumentState): string {
+  if (s.doc === 'nrmain') return nrContractNo(s);
   return s.doc === 'main' ? (s.mainNo || '') : (s.dealNo || '');
 }
 
@@ -305,6 +313,7 @@ export function reqLines(s: DocumentState, side: 'our' | 'their'): string[] {
 
 /** Гейти формування — ті самі повідомлення, що в макеті (показувати менеджеру як є). */
 export function blockers(s: DocumentState): string | null {
+  if (isNr(s)) return nrBlocker(s);
   const fopConflict = s.ent === 'fop' && s.party === 'client' && !!s.cp.name && !/^ФОП/i.test(s.cp.name);
   if (fopConflict) return 'Від ФОП Беспятчука клієнтом може бути лише інший ФОП — для цього контрагента оберіть ЮТС або АвтоМув.';
   // IBAN перевізника — НЕОБОВʼЯЗКОВИЙ з 02.10.2026 (Юля в чаті: «можна»; перевізник однаково виставляє рахунок з IBAN).
@@ -420,6 +429,82 @@ function wDraw(rid: string, cx: number, cy: number, seq: number): string {
   return `<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${seq}" name="img${seq}"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="${seq}" name="img${seq}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
 }
 
+/* ───────────── Word: договір і заявка для нерезидента (services/nonresident.ts) ─────────────
+   Ті самі кеглі, кольори й картки, що в решті документів; договір — таблиця у дві колонки без рамок (UA | EN),
+   заявка — дві таблиці умов (українська частина, з нової сторінки англійська) з підписами під кожною. */
+interface NrCtx {
+  dn: WDens; acc: string; hasSig: boolean; hasStamp: boolean;
+  imgRun: (rid: string, dim: [number, number], cm: number) => string;
+  sigDim?: [number, number]; stampDim?: [number, number];
+}
+function nrDocxBody(s: DocumentState, c: NrCtx): string {
+  const { dn, acc } = c;
+  const h = nrHead(s);
+  const half = Math.floor(W_TXT / 2);
+  const center = (t: string, o: ROpts, after = 0) => wPa(wR(t, o), { jc: 'center', after });
+  const cityDate = (city: string, date: string) => wPa(wR(city, { sz: dn.dl }) + wTab(dn.dl) + wR(date, { sz: dn.dl }),
+    { jc: 'left', after: dn.dlA, tabs: `<w:tabs><w:tab w:val="right" w:pos="${W_TXT}"/></w:tabs>` });
+  /** шапка частини заявки однією мовою (як у зразку: «Додаток до Договору…», «ЗАЯВКА №…») */
+  const appHead = (apx: string, title: string, sub: string, city: string, date: string) =>
+    wPa(wR(apx, { color: WC.grey, sz: dn.tk }), { jc: 'right', after: 80 }) + center(title, { b: 1, color: WC.ink, sz: dn.h2 }, 40) +
+    center(sub, { color: WC.grey, sz: dn.sub }, dn.subA) + cityDate(city, date);
+  let out = s.doc === 'nrmain'
+    ? center(h.title, { b: 1, color: WC.ink, sz: dn.h2 }, 0) + center(h.titleEn, { b: 1, color: WC.ink, sz: dn.h2 - 4 }, 40) +
+      center(`${h.sub} / ${h.subEn}`, { color: WC.grey, sz: dn.sub }, dn.subA) + cityDate(`${h.city} / ${h.cityEn}`, `${h.date} / ${h.dateEn}`)
+    : '';
+  // підписи: дві клітинки (клієнт | ми), картинки — під нашим підписантом
+  const sigImgs = () => (c.hasSig || c.hasStamp)
+    ? `<w:p><w:pPr><w:spacing w:before="0" w:after="40"/></w:pPr>` +
+      (c.hasSig ? c.imgRun('rIdSig', c.sigDim || DEFAULT_IMG_DIM.sigK, 2.3) : '') +
+      `<w:r><w:rPr>${RF}</w:rPr><w:t xml:space="preserve">  </w:t></w:r>` +
+      (c.hasStamp ? c.imgRun('rIdSt', c.stampDim || DEFAULT_IMG_DIM.stA, 3.0) : '') + `</w:p>` : '';
+  const twoCells = (l: string, r: string, grid = [half, W_TXT - half]) =>
+    `<w:tbl><w:tblPr><w:tblW w:w="${W_TXT}" w:type="dxa"/><w:tblInd w:w="0" w:type="dxa"/><w:tblLayout w:type="fixed"/>${wMar('tblCellMar', 20, 100)}</w:tblPr>` +
+    `<w:tblGrid><w:gridCol w:w="${grid[0]}"/><w:gridCol w:w="${grid[1]}"/></w:tblGrid><w:tr><w:trPr><w:cantSplit/></w:trPr>` +
+    `<w:tc><w:tcPr><w:tcW w:w="${grid[0]}" w:type="dxa"/></w:tcPr>${l}</w:tc><w:tc><w:tcPr><w:tcW w:w="${grid[1]}" w:type="dxa"/></w:tcPr>${r}</w:tc></w:tr></w:tbl>`;
+  const sigBlock = (cpLines: string[], ourLines: string[], seal = 'М.П. / Seal') => wGap(dn.sigB) + twoCells(
+    wPa(wR(cpLines[0], { b: 1, sz: 19 }), { jc: 'left' }) + wPa(wR('', { sz: 19 }), { jc: 'left', after: 240 }) +
+      wPa(wR('__________________  ' + cpLines[1], { sz: 19 }), { jc: 'left' }) + wPa(wR(seal, { sz: 19 }), { jc: 'left' }),
+    wPa(wR(ourLines[0], { b: 1, sz: 19 }), { jc: 'left' }) + (sigImgs() || wPa(wR('', { sz: 19 }), { jc: 'left', after: 240 })) +
+      wPa(wR('__________________  ' + ourLines[1], { sz: 19 }), { jc: 'left' }) + wPa(wR(seal, { sz: 19 }), { jc: 'left' }));
+
+  if (s.doc === 'nrmain') {
+    const pre = nrPreamble(s);
+    const p = (t: string, b?: 1, color?: string) => wPa(wR(t, { b, color, sz: dn.sz }), { line: dn.line, after: dn.after });
+    const row = (ua: string, en: string) => `<w:tr><w:tc><w:tcPr><w:tcW w:w="${half}" w:type="dxa"/></w:tcPr>${ua}</w:tc>` +
+      `<w:tc><w:tcPr><w:tcW w:w="${W_TXT - half}" w:type="dxa"/></w:tcPr>${en}</w:tc></w:tr>`;
+    let rows = row(pre.ua.map((t) => p(t)).join(''), pre.en.map((t) => p(t)).join(''));
+    for (const b of nrClauses(s)) {
+      const sec = b.h && /^\d+\.\s/.test(b.ua[0]);
+      rows += row(b.ua.map((t) => p(t, b.h, sec ? acc : undefined)).join(''), b.en.map((t) => p(t, b.h, sec ? acc : undefined)).join(''));
+    }
+    out += `<w:tbl><w:tblPr><w:tblW w:w="${W_TXT}" w:type="dxa"/><w:tblInd w:w="0" w:type="dxa"/><w:tblLayout w:type="fixed"/>${wMar('tblCellMar', 20, 100)}</w:tblPr>` +
+      `<w:tblGrid><w:gridCol w:w="${half}"/><w:gridCol w:w="${W_TXT - half}"/></w:tblGrid>${rows}</w:tbl>`;
+    const rq = nrReq(s), sg = nrSigners(s);
+    const card = (head: string, lines: string[]) => wPa(wR(head, { b: 1, color: acc, sz: 20 }), { jc: 'left', after: 100 }) +
+      lines.map((l, i) => wPa(wR(l, { b: i === 0 ? 1 : 0, sz: dn.rq }), { jc: 'left', line: dn.rqL })).join('');
+    out += wPa(wR('9. РЕКВІЗИТИ ТА ПІДПИСИ СТОРІН / 9. DETAILS AND SIGNATURES OF THE PARTIES', { b: 1, color: acc, sz: dn.h3 }), { jc: 'center', before: dn.h3B, after: dn.h3A, keep: 1 }) +
+      twoCells(card(rq.cp.head, rq.cp.lines), card(rq.our.head, rq.our.lines)) +
+      sigBlock(['Від Замовника / For the Customer:', sg.cp.replace(/^Директор \/ Director: /, 'Director ')], ['Від Експедитора / For the Forwarder:', 'Director Ковтонюк Т. М. / T. M. Kovtoniuk']);
+    return out;
+  }
+  // заявка: українська частина, з нової сторінки — англійська
+  const rows = nrAppRows(s), sign = nrAppSign(s);
+  const vW = W_TXT - dn.kW;
+  const tb = (side: string) => `<w:${side} w:val="single" w:sz="${side === 'left' ? 20 : 4}" w:space="0" w:color="${side === 'left' ? acc : WC.line}"/>`;
+  const table = (rs: Array<[string, string]>) => `<w:tbl><w:tblPr><w:tblW w:w="${W_TXT}" w:type="dxa"/><w:tblInd w:w="0" w:type="dxa"/>` +
+    `<w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(tb).join('')}</w:tblBorders>` +
+    `<w:tblLayout w:type="fixed"/>${wMar('tblCellMar', dn.cV, dn.cH)}</w:tblPr><w:tblGrid><w:gridCol w:w="${dn.kW}"/><w:gridCol w:w="${vW}"/></w:tblGrid>` +
+    rs.map(([k, v]) => `<w:tr><w:trPr><w:cantSplit/></w:trPr><w:tc><w:tcPr><w:tcW w:w="${dn.kW}" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="${WC.key}"/></w:tcPr>` +
+      wPa(wR(k, { color: WC.grey, sz: dn.tk }), { jc: 'left', line: dn.tkL }) + `</w:tc><w:tc><w:tcPr><w:tcW w:w="${vW}" w:type="dxa"/></w:tcPr>` +
+      wPa(wR(v || '—', { b: 1, color: WC.ink, sz: dn.tv }), { jc: 'left', line: dn.tvL }) + `</w:tc></w:tr>`).join('') + `</w:tbl>`;
+  const h3 = (t: string) => wPa(wR(t, { b: 1, color: acc, sz: dn.h3 }), { jc: 'left', before: dn.h3B, after: dn.h3A, keep: 1 });
+  out += appHead(h.appendix!.ua, h.title, h.sub, h.city, h.date) + h3('Умови перевезення:') + table(rows.ua) + sigBlock(sign.ua.cp, sign.ua.our, sign.ua.seal) +
+    `<w:p><w:r><w:br w:type="page"/></w:r></w:p>` +
+    appHead(h.appendix!.en, h.titleEn, h.subEn, h.cityEn, h.dateEn) + h3('Terms and Conditions of Transportation:') + table(rows.en) + sigBlock(sign.en.cp, sign.en.our, sign.en.seal);
+  return out;
+}
+
 /* ─────────────────────────── buildDocx ─────────────────────────── */
 
 /** dens — щільність, з якою зібрано PDF цього документа (зберігається в constructor_documents.dens);
@@ -461,7 +546,9 @@ export function buildDocx(s: DocumentState, num: string, img: DocImages = {}, de
           { jc: 'left', va: 'center' }) + `</w:tc>` +
       `<w:tc><w:tcPr><w:tcW w:w="${numW}" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr>` +
         wPa(wR(` № ${num} `, { b: 1, color: acc, sz: 17, bdr: acc }), { jc: 'right', indR: 40 }) + `</w:tc>` +
-      `</w:tr></w:tbl>` + wGap(dn.bandA) +
+      `</w:tr></w:tbl>` + wGap(dn.bandA);
+  if (isNr(s)) body += nrDocxBody(s, { dn, acc, hasSig, hasStamp, imgRun, sigDim: img.sigDim, stampDim: img.stampDim });
+  else body +=
     wPa(wR(`${title} № ${num}`, { b: 1, color: WC.ink, sz: dn.h2 }), { jc: 'center', after: 40 }) +
     wPa(wR(sub, { color: WC.grey, sz: dn.sub }), { jc: 'center', after: dn.subA }) +
     wPa(wR('м. Київ', { sz: dn.dl }) + wTab(dn.dl) + wR(dateStr, { sz: dn.dl }),
@@ -470,7 +557,8 @@ export function buildDocx(s: DocumentState, num: string, img: DocImages = {}, de
   const pTxt = (t: string) => wPa(wR(t, { sz: dn.sz }), { line: dn.line, after: dn.after, ind: dn.ind });
   const h3 = (t: string, c?: 1) => wPa(wR(t, { b: 1, color: acc, sz: dn.h3 }), { jc: c ? 'center' : 'left', before: dn.h3B, after: dn.h3A, keep: 1 });
 
-  if (mainMode) {
+  if (isNr(s)) { /* тіло й підписи — nrDocxBody вище */ }
+  else if (mainMode) {
     /* основний договір: розділ — з тонкою лінією знизу; пункт — номер висячим стовпчиком (як у PDF) */
     const secBdr = `<w:pBdr><w:bottom w:val="single" w:sz="4" w:space="1" w:color="${WC.band}"/></w:pBdr>`;
     (MAIN_BODY as ReadonlyArray<{ h?: string; n?: string; t?: string }>).forEach(b => {
@@ -506,7 +594,7 @@ export function buildDocx(s: DocumentState, num: string, img: DocImages = {}, de
   const gapCell = `<w:tc><w:tcPr><w:tcW w:w="${dn.gap}" w:type="dxa"/></w:tcPr><w:p/></w:tc>`;
   const sigCell = (xml: string) => `<w:tc><w:tcPr><w:tcW w:w="${cw}" w:type="dxa"/></w:tcPr>${xml}</w:tc>`;
   const sp = (t: string, b?: 1) => wPa(wR(t, { b, sz: 19 }), { jc: 'left' });
-  body += h3('РЕКВІЗИТИ СТОРІН', 1) + wGap(dn.rqB, 1) +
+  if (!isNr(s)) body += h3('РЕКВІЗИТИ СТОРІН', 1) + wGap(dn.rqB, 1) +
     `<w:tbl><w:tblPr><w:tblW w:w="${W_TXT}" w:type="dxa"/><w:tblInd w:w="0" w:type="dxa"/><w:tblLayout w:type="fixed"/>${wMar('tblCellMar', 0, 0)}</w:tblPr>` +
     `<w:tblGrid><w:gridCol w:w="${cw}"/><w:gridCol w:w="${dn.gap}"/><w:gridCol w:w="${cw}"/></w:tblGrid>` +
     `<w:tr><w:trPr><w:cantSplit/></w:trPr>` + card(other, reqLines(s, 'their')) + gapCell + card('ЕКСПЕДИТОР', reqLines(s, 'our')) + `</w:tr>` +
