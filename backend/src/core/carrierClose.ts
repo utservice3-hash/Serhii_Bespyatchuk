@@ -110,8 +110,9 @@ export interface CloseCandidate {
   history: boolean;
   historyFrom: number | null;
   /**
-   * Вердикт за Lardi (рішення Романа 13.10.2026) — «на рівні історії CRM»: той самий перемикач (`CARRIER_HISTORY_CLOSE`)
-   * і тег, але БЕЗ повторної перевірки «чи не з'явилась угода замовника» (Роман: «без запобіжника»).
+   * Вердикт за Lardi (рішення Романа 13.10.2026, «варіант 2» 14.10.2026): закривається ТАК САМО, як упевнений вердикт
+   * AI, — основним перемикачем (`CARRIER_AUTO_CLOSE`), без тегу історії й БЕЗ повторної перевірки «чи не з'явилась
+   * угода замовника» (Роман: «без запобіжника»). Відрізняється лише приміткою — «джерело: Lardi».
    */
   lardi: boolean;
   lardiNote: string | null;
@@ -151,8 +152,8 @@ export interface CloseReport { mode: CloseMode; otherMode: CloseMode; historyMod
   historyRevoked: number }
 
 /** Чи пише цей кандидат у CRM у ЦЬОМУ проході: основний режим «live» і його власний перемикач «live». */
-export const liveFor = (c: Pick<CloseCandidate, "aiOther" | "history" | "lardi">, mode: CloseMode, otherMode: CloseMode, historyMode: CloseMode): boolean =>
-  mode === "live" && (!c.aiOther || otherMode === "live") && (!(c.history || c.lardi) || historyMode === "live");
+export const liveFor = (c: Pick<CloseCandidate, "aiOther" | "history">, mode: CloseMode, otherMode: CloseMode, historyMode: CloseMode): boolean =>
+  mode === "live" && (!c.aiOther || otherMode === "live") && (!c.history || historyMode === "live");
 
 export async function runCarrierClose(db: Db, now: Date, mode: CloseMode, onStage: ReadonlySet<number>, kommo: KommoCloser,
   otherMode: CloseMode = "dry", historyMode: CloseMode = "dry", historySyncMaxMin: number = HISTORY_GUARD.defaultMaxAgeMin): Promise<CloseReport> {
@@ -160,7 +161,7 @@ export async function runCarrierClose(db: Db, now: Date, mode: CloseMode, onStag
     historyPaused: 0, historyRevoked: 0 };
   if (mode === "off") return rep;
   let cands = (await closeCandidates(db, onStage, now))
-    .filter((c) => !(c.aiOther && otherMode === "off") && !((c.history || c.lardi) && historyMode === "off"));
+    .filter((c) => !(c.aiOther && otherMode === "off") && !(c.history && historyMode === "off"));
   // 🛡 Історія CRM (`carrierHistory.ts`, рішення 05.10.2026). Вердикт ставився раніше й з тих пір НЕ перевірявся, а між
   // ним і закриттям по номеру могла зʼявитись угода замовника. Тому: синк угод застарів — чекаємо (у CRM не пишемо);
   // свіжий — перевіряємо виняток ЩЕ РАЗ, і угода, що стала клієнтською, повертається в чергу «Відсіву», а не закривається.
@@ -208,13 +209,11 @@ export async function runCarrierClose(db: Db, now: Date, mode: CloseMode, onStag
   if (mode !== "live") return rep;
 
   const live = cands.filter(writes).slice(0, CLOSE_MAX_PER_TICK);
-  // «Історія» групи — і CRM, і Lardi: однаковий тег; примітку кожна угода отримує свою.
   const groups: { reason: CloseReason; history: boolean }[] = [
     { reason: "carrier", history: false }, { reason: "carrier", history: true }, { reason: "other", history: false }, { reason: "no_talk", history: false }];
-  const auto = (c: CloseCandidate) => c.history || c.lardi;
   for (const g of groups) {
     const reason = g.reason;
-    for (const batch of chunks(live.filter((c) => c.reason === reason && auto(c) === g.history), CLOSE_BATCH)) {
+    for (const batch of chunks(live.filter((c) => c.reason === reason && c.history === g.history), CLOSE_BATCH)) {
       const ids = batch.map((c) => c.kommoId);
       // Задачі угоди — ПЕРШИМИ: якщо закриття угоди впаде, задачі вже погашені, а угода лишиться на етапі й
       // наступний прохід її добере. Зворотний порядок лишив би задачу на угоді, що вже пішла з етапу.

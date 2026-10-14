@@ -344,13 +344,13 @@ test("#1700 LARDI · ЖИВА СХЕМА: номер серед машин Lardi
 });
 
 /**
- * #1701 — ЗАКРИТТЯ ЗА LARDI «НА РІВНІ ІСТОРІЇ CRM»: той самий перемикач (`CARRIER_HISTORY_CLOSE`) — «лише журнал» нічого
- * не пише в Kommo; «наживо» — задачі першими, тег «авто-перевізник», примітка «джерело: Lardi» з компанією й маршрутом;
- * повторної перевірки «чи з'явилась угода замовника» немає.
- * 🧨 Червоніє, якщо Lardi піде під основний перемикач (закриватиме без слова про історію), примітка скаже «історія CRM»
- * чи тег не стане.
+ * #1701 — ЗАКРИТТЯ ЗА LARDI ЯК УПЕВНЕНИЙ ВЕРДИКТ AI (Роман 14.10.2026, «варіант 2»): основний перемикач — «наживо» закриває
+ * навіть тоді, коли перемикач історії CRM у «лише журнал» (так стоїть на проді); основний «лише журнал» — нічого в Kommo;
+ * тегу історії немає; примітка «джерело: Lardi» з компанією й маршрутом; повторної перевірки замовника немає.
+ * 🧨 Червоніє, якщо Lardi знову піде під перемикач історії (угоди перестануть закриватись), отримає тег історії чи примітка
+ * скаже «історія CRM».
  */
-test("#1701 LARDI · ЗАКРИТТЯ: перемикач історії CRM; журнал — нічого в Kommo; наживо — тег і примітка «джерело: Lardi»", async (t) => {
+test("#1701 LARDI · ЗАКРИТТЯ: як вердикт AI — основний перемикач, історія в журналі не заважає; без тегу; примітка «джерело: Lardi»", async (t) => {
   const c = await db(); if (typeof c === "string") return t.skip(c);
   const { runCarrierClose } = await import("./carrierClose.js");
   const NOW = new Date(`${D} 12:10:00+03`);
@@ -361,32 +361,32 @@ test("#1701 LARDI · ЗАКРИТТЯ: перемикач історії CRM; ж
     openTaskIds: async () => [], closeTasks: async () => ({}),
   };
   const onStage = new Set([9704]);
-  const dry = await runCarrierClose(c, NOW, "live", onStage, kommo, "dry", "dry");
-  assert.equal(dry.closed, 0, "🔴 Lardi закрито при «лише журнал» для історії — пішов під основний перемикач");
+  const dry = await runCarrierClose(c, NOW, "dry", onStage, kommo, "dry", "live");
+  assert.equal(dry.closed, 0, "🔴 Lardi закрито при основному «лише журнал»");
   assert.equal(patches.length, 0);
-  const live = await runCarrierClose(c, NOW, "live", onStage, kommo, "dry", "live");
-  assert.equal(live.closed, 1, "🔴 угоду за Lardi не закрито при «наживо» (або її зняла перевірка замовника, якої бути не має)");
+  const live = await runCarrierClose(c, NOW, "live", onStage, kommo, "dry", "dry");
+  assert.equal(live.closed, 1, "🔴 угоду за Lardi не закрито при основному «наживо» — вона залежить від перемикача історії, що на проді вимкнений");
   const body = patches[0][0] as Record<string, unknown>;
-  assert.deepEqual(body.tags_to_add, [{ name: AUTO_CARRIER_TAG }], "🔴 тег «авто-перевізник» не поставлено");
+  assert.equal("tags_to_add" in body, false, "🔴 Lardi отримав тег історії CRM");
+  assert.equal(body.status_id, 143);
   assert.match(notes[0] ?? "", /джерело: Lardi/, "🔴 примітка не каже, що джерело — Lardi");
   assert.match(notes[0] ?? "", /ФОП Замовник теж · Київ → Львів/, "🔴 примітка без компанії й маршруту з Lardi");
 });
 
 /**
- * #1702 — LARDI · ПРАВИЛА: категорія «перевізник» із джерелом `lardi` (людина, як і скрізь, сильніша); закриття — лише
- * коли «наживо» і основний перемикач, і перемикач історії; у SQL — лише машини і звірка за 9 цифрами обох боків.
- * 🧨 Червоніє, якщо Lardi стане «AI»-вердиктом, закриватиметься при «лише журнал» історії або візьме вантажі.
+ * #1702 — LARDI · ПРАВИЛА: категорія «перевізник» із джерелом `lardi` (людина, як і скрізь, сильніша); закриття — як
+ * упевнений вердикт AI (основний перемикач, «варіант 2»); у SQL — лише машини і звірка за 9 цифрами обох боків.
+ * 🧨 Червоніє, якщо Lardi стане «AI»-вердиктом, залежатиме від перемикача історії або візьме вантажі.
  */
-test("#1702 LARDI · ПРАВИЛА: категорія з джерелом lardi, людина сильніша; закриття — під перемикачем історії; лише машини, 9 цифр", async () => {
+test("#1702 LARDI · ПРАВИЛА: категорія з джерелом lardi, людина сильніша; закриття — як вердикт AI; лише машини, 9 цифр", async () => {
   const R = await import("./carrierCallRules.js");
   const C = await import("./carrierClose.js");
   const L = await import("./carrierLardi.js");
   assert.deepEqual(R.dealCategory({ human: null, result: null, dealState: "lardi", ai: null }),
     { category: "carrier", source: "lardi", why: "номер є на Lardi серед пропозицій машин" }, "🔴 стан lardi — не «перевізник із Lardi»");
   assert.equal(R.dealCategory({ human: "client", result: null, dealState: "lardi", ai: null }).source, "human", "🔴 Lardi сильніший за людину");
-  const c = { aiOther: false, history: false, lardi: true };
-  assert.equal(C.liveFor(c, "live", "dry", "dry"), false, "🔴 Lardi закривається при «лише журнал» для історії");
-  assert.equal(C.liveFor(c, "live", "dry", "live"), true, "дзеркало: обидва «наживо» — закривається");
+  const c = { aiOther: false, history: false };
+  assert.equal(C.liveFor(c, "live", "dry", "dry"), true, "🔴 Lardi не закривається, коли історія в «лише журнал» (так на проді)");
   assert.equal(C.liveFor(c, "dry", "dry", "live"), false, "🔴 Lardi закривається при основному «лише журнал»");
   assert.match(L.LARDI_MATCH_SQL, /WHERE o\.side = 'lorry'/, "🔴 Lardi бере не лише машини");
   assert.equal((L.LARDI_MATCH_SQL.match(/right\(regexp_replace\(/g) ?? []).length, 2, "🔴 номер звіряється не за 9 цифрами з обох боків");
