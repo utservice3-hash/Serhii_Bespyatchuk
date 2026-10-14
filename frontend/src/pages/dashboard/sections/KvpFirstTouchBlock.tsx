@@ -12,7 +12,8 @@ import { AI_START_DATE, firstTouchSummary, summaryTeams, aiCallsHref, fmtMinutes
  * 🔴 Своїх формул тут НЕМАЄ: ті самі рядки `/ai-calls` за період Звіту і `firstTouchSummary` — та сама вкладка «Звіт»,
  * той самий фільтр при відкритті, ті самі `tileStats` / `managerChecklist`, що на екрані «Перший дотик · AI». Тому
  * картки дорівнюють екрану, а рядок команди — екрану з вибраною цією командою. Клік — на екран AI з тим самим
- * періодом і фільтром. «Клієнт погодився» — «—», доки розбір згоди не викочено (окрема задача).
+ * періодом і фільтром. «Клієнт погодився» (задача 5316, на проді з 13.10.2026) — та сама статистика плиток (`decision`) і ті
+ * самі лічильники рядка менеджерів, що на екрані: лише розмови, де ціну назвали; «думає» видно окремо.
  */
 const C = { ok: "#16a34a", bad: "#dc2626", muted: "var(--text-muted)" };
 const pctStr = (v: number | null) => (v == null ? "—" : `${String(v)}%`);
@@ -73,7 +74,8 @@ export function KvpFirstTouchBlock({ from, to }: { from: string; to: string }) {
       <td style={{ textAlign: "right" }}>{l.calls}</td>
       {cell(l.score)}{cell(l.price, target)}{cell(l.promise)}
       <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{l.objections ? `${pctStr(l.objection)} · ${String(l.objectionsHandled)}/${String(l.objections)}` : "—"}</td>
-      <td style={{ textAlign: "right", color: C.muted }} title="Пункт «клієнт погодився» з'явиться після окремої задачі">—</td>
+      <td style={{ textAlign: "right", whiteSpace: "nowrap" }} title={l.decided ? `Погодився ${String(l.agreed)} з ${String(l.decided)} після ціни · думає ${String(l.thinking)}` : "Згода після ціни розбирається для розмов від 13.10, де назвали ціну"}>
+        {l.decided ? `${pctStr(Math.round((l.agreed / l.decided) * 100))} · ${String(l.agreed)}/${String(l.decided)}` : "—"}</td>
       <td style={{ textAlign: "right" }}>{l.success} з {l.calls}</td>
       <td>{kind === "mgr" && sig(l).map((t) => <span key={t} style={{ display: "inline-block", fontSize: 11, padding: "1px 6px", borderRadius: 10, marginRight: 4, background: "rgba(220,38,38,.12)", color: C.bad }}>{t}</span>)}</td>
     </tr>
@@ -87,7 +89,9 @@ export function KvpFirstTouchBlock({ from, to }: { from: string; to: string }) {
         {card("noPrice", "Ціна озвучена", pctStr(ts.price.pct), `${String(ts.price.yes)} з ${String(ts.price.of)} · ціль ${String(target)}%`, ts.price.pct == null ? "" : ts.price.pct >= target ? "ok" : "bad")}
         {card("noCall", "Обіцяли — дзвінка в телефонії немає", String(ts.noCall.n), `${ts.noCall.of ? `${String(Math.round((ts.noCall.n / ts.noCall.of) * 100))}% від ` : "з "}${String(ts.noCall.of)} обіцянок`, ts.noCall.n > 0 ? "bad" : "")}
         {card("objNotHandled", "Заперечення опрацьовано", pctStr(ts.objection.pct), ts.objection.of ? `${String(ts.objection.handled)} з ${String(ts.objection.of)} заперечень` : "розбираються для розмов від 09.10")}
-        {card(null, "Клієнт погодився", "—", "з'явиться з пунктом «погодився» в чек-листі")}
+        {card(ts.decision.of ? "agreed" : null, "Клієнт погодився", pctStr(ts.decision.pct),
+          ts.decision.of ? `${String(ts.decision.agreed)} з ${String(ts.decision.of)} після ціни · думає ${String(ts.decision.thinking)} · відмовив ${String(ts.decision.declined)}`
+            : "розбирається для розмов від 13.10, де назвали ціну")}
         {card("success", "Поїхало", `${String(ts.success.n)} з ${String(ts.success.of)}`, ts.success.n >= SUCCESS_MIN_FOR_PCT ? `${String(Math.round((ts.success.n / Math.max(1, ts.success.of)) * 100))}% угод · «Авто працює» і далі` : "угода в «Авто працює» і далі")}
         {card("lost", "Втрачені ліди", String(lost.length), lostReact == null ? "реакція — немає даних" : `реакція (медіана) ${fmtMinutes(lostReact)}`)}
       </div>

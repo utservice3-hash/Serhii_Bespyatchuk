@@ -95,7 +95,7 @@ test("#1690b ПЕРЕХІД ЗІ ЗВІТУ КВП: посилання несе 
     "🔴 після відкриття фільтр лишився в адресі (або злетіла картка дзвінка)");
 });
 
-test("#1690c ПРОВОДКА: екран AI і блок КВП беруть ТОЙ САМИЙ фільтр і ту саму функцію; «погодився» — «—», а не 0; фінансист без вкладки AI блоку не бачить", () => {
+test("#1690d ПРОВОДКА: екран AI і блок КВП беруть ТОЙ САМИЙ фільтр і ту саму функцію; «погодився» — з tileStats і managerChecklist; фінансист без вкладки AI блоку не бачить", () => {
   const ai = FE_SRC("pages/dashboard/sections/AiCallsSection.tsx");
   assert.match(ai, /useState<ListFilter>\(\(\) => \(\{ \.\.\.DEFAULT_LIST_FILTER, teamId: link\.teamId, managerId: link\.managerId \}\)\)/, "🔴 екран AI відкривається не з DEFAULT_LIST_FILTER — склад розмов розійдеться зі Звітом КВП");
   assert.match(ai, /const rows = tabRows\(scopedAll, "report"\);/);
@@ -104,7 +104,11 @@ test("#1690c ПРОВОДКА: екран AI і блок КВП беруть Т�
   const kvp = FE_SRC("pages/dashboard/sections/KvpFirstTouchBlock.tsx");
   assert.match(kvp, /firstTouchSummary\(d\.rows\)/, "🔴 блок КВП рахує не спільною функцією");
   assert.doesNotMatch(kvp, /\btileStats\(|\bmanagerChecklist\(/, "🔴 у блоці КВП своя копія розрахунку");
-  assert.match(kvp, /card\(null, "Клієнт погодився", "—"/, "🔴 «Клієнт погодився» показує число, якого ще не рахують");
+  // 14.10.2026 (задача 5316 повернута): розбір згоди на проді з 13.10 — картка й колонка рахуються ТІЄЮ САМОЮ статистикою, що екран.
+  assert.match(kvp, /card\(ts\.decision\.of \? "agreed" : null, "Клієнт погодився", pctStr\(ts\.decision\.pct\)/, "🔴 «Клієнт погодився» не з tileStats().decision — розійдеться з екраном");
+  assert.match(kvp, /думає \$\{String\(ts\.decision\.thinking\)\}/, "🔴 картка КВП не показує «думає»");
+  assert.match(kvp, /\{l\.decided \? `\$\{pctStr\(Math\.round\(\(l\.agreed \/ l\.decided\) \* 100\)\)\}/, "🔴 колонка «Погодився» не з лічильників managerChecklist");
+  assert.doesNotMatch(kvp, /title="Пункт «клієнт погодився» з'явиться після окремої задачі">—</, "🔴 у таблиці КВП досі вічний прочерк замість згоди");
   assert.match(FE_SRC("pages/Dashboard.tsx"), /<KvpReportSection canSeeFirstTouch=\{!!screens\?\.includes\("ai-calls"\)\} \/>/, "🔴 блок бачить роль без вкладки «Перший дотик · AI» (фінансист отримав би 403)");
   assert.match(FE_SRC("pages/dashboard/sections/KvpReportSection.tsx"), /\{canSeeFirstTouch && <KvpFirstTouchBlock from=\{rep\.scope\.from\} to=\{rep\.scope\.to\} \/>\}/, "🔴 блок не стоїть у Звіті КВП або бере інший період");
 });
@@ -134,4 +138,37 @@ test("#1691 ПЛЕЄР ЗАПИСІВ: ±10 с не виходить за меж
   }
   assert.match(list, /\{ src: c\.planBasis\.recording, label: `обґрунтування плану/, "🔴 «обґрунтування плану» грає не спільним плеєром");
   assert.match(list, /\{rec && \(\s*<tr>\s*<td colSpan=\{colCount\}/, "🔴 плеєр у рядку клієнта не на всю ширину таблиці");
+});
+
+/**
+ * #939 — ЗГОДА ПІСЛЯ ЦІНИ У ЗВІТІ КВП І «ДУМАЄ» (задача 5316, повернута 14.10.2026: «картка „Клієнт погодився“ досі з
+ * прочерком… треба ті самі цифри, що й на екрані „Перший дотик“»; «додай „думає“ — скільки клієнтів після ціни взяли паузу»).
+ * Картка = `tileStats().decision` (частка «погодився» серед розмов із відомим рішенням), колонка = лічильники `managerChecklist`;
+ * Σ команд == відділ і по згоді; фільтр «Думає» = рівно «думає»; «не визначено» — ні в знаменнику, ні в «думає».
+ * 🧨 Червоніє, якщо «не визначено» потрапить у знаменник, «думає» змішається з «відмовив» чи картка КВП порахує інакше, ніж екран.
+ */
+test("#939 ЗГОДА У ЗВІТІ КВП == ЕКРАН; «ДУМАЄ» ОКРЕМО: частка серед відомих рішень, «не визначено» — поза знаменником, Σ команд == відділ", async () => {
+  const v = await view() as View & { TILE_MATCH: Record<string, (r: unknown) => boolean> };
+  const dec = (value: string) => ({ clientDecision: { value, quote: "х", quoteFound: true } });
+  const F = [
+    row(1, 11, "y", "o", false, dec("agreed")), row(1, 11, "y", "o", false, dec("thinking")), row(1, 12, "y", "o", false, dec("declined")),
+    row(2, 21, "y", "o", false, dec("agreed")), row(2, 21, "y", "o", false, dec("unclear")), row(2, 21, "n", "o"),
+  ];
+  const s = v.firstTouchSummary(F);
+  const d = (s.tiles as unknown as { decision: { agreed: number; thinking: number; declined: number; of: number; pct: number | null } }).decision;
+  assert.deepEqual(d, { agreed: 2, thinking: 1, declined: 1, of: 4, pct: 50 }, "🔴 згода в картці КВП порахована не так (чи «не визначено» в знаменнику)");
+  const screen = v.tabRows(v.applyListFilter(F, v.DEFAULT_LIST_FILTER), "report");
+  assert.deepEqual(d, (v.tileStats(screen) as unknown as { decision: unknown }).decision, "🔴 картка КВП ≠ екран AI");
+  const tot = s.total as unknown as { decided: number; agreed: number; thinking: number };
+  assert.deepEqual([tot.decided, tot.agreed, tot.thinking], [4, 2, 1], "🔴 рядок «Разом» рахує згоду не тими лічильниками, що картка");
+  const teamSum = v.summaryTeams(s.rows).map((t) => v.firstTouchSummary(F, t.id).total as unknown as { decided: number; agreed: number })
+    .reduce((a, x) => ({ decided: a.decided + x.decided, agreed: a.agreed + x.agreed }), { decided: 0, agreed: 0 });
+  assert.deepEqual(teamSum, { decided: 4, agreed: 2 }, "🔴 Σ команд ≠ відділ по згоді");
+  assert.equal(screen.filter(v.TILE_MATCH.thinking).length, 1, "🔴 фільтр «Думає» бере не рівно «думає»");
+  assert.equal(screen.filter(v.TILE_MATCH.notAgreed).length, 2, "дзеркало: «не погодився» = думає + відмовив");
+  const ai = FE_SRC("pages/dashboard/sections/AiCallsSection.tsx");
+  assert.match(ai, /\["agreed", "Погодився після ціни"\], \["thinking", "Думає"\], \["notAgreed", "Не погодився"\]/, "🔴 на екрані немає швидкого фільтра «Думає»");
+  assert.match(ai, /думає \$\{String\(l\.thinking\)\}/, "🔴 у блоці менеджерів не видно «думає»");
+  assert.deepEqual(["agreed", "thinking"].map((k) => v.parseAiLink(`?from=2026-10-01&to=2026-10-31&tile=${k}`).tile), ["agreed", "thinking"],
+    "🔴 клік із картки КВП відкриє екран без фільтра згоди");
 });

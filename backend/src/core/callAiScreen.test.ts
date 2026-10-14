@@ -1737,7 +1737,8 @@ test("#938 ЗГОДА ПОМІТНА І ШУКАЄТЬСЯ: значок у ка
   assert.deepEqual(pick("notAgreed"), ["thinking", "declined"], "🔴 «не погодився» — не рівно «думає» + «відмовив» («не визначено» не має туди потрапляти)");
   assert.deepEqual(["agreed", "thinking", "declined", "unclear"].map((k) => V.DECISION_UI[k].mark), ["✓", "?", "✕", "–"], "🔴 у рішення немає значка");
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
-  assert.match(sec, /\["agreed", "Погодився після ціни"\], \["notAgreed", "Не погодився"\]/, "🔴 немає швидких фільтрів згоди");
+  // 14.10.2026: між ними став «Думає» (`#939`) — твердження те саме, форма ряду ширша.
+  assert.match(sec, /\["agreed", "Погодився після ціни"\], (?:\["thinking", "Думає"\], )?\["notAgreed", "Не погодився"\]/, "🔴 немає швидких фільтрів згоди");
   assert.match(sec, /onClick=\{\(\) => setPreset\(preset === k \? "all" : k\)\}>\{label\} <b>\{scoped\.filter\(TILE_MATCH\[k\]\)\.length\}<\/b>/, "🔴 число на кнопці рахується не тим правилом, що список");
   assert.match(sec, /<b aria-hidden="true">\{DECISION_UI\[r\.clientDecision\.value\]\.mark\}<\/b>/, "🔴 у таблиці немає значка рішення");
   const ck = readFileSync(FE("pages/dashboard/sections/FirstTouchChecklist.tsx"), "utf8");

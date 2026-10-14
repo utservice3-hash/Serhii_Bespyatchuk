@@ -299,8 +299,8 @@ export interface ChecklistLine { managerId: number | null; name: string; calls: 
   request: number | null; price: number | null; promise: number | null; objection: number | null;
   /** Заперечень було / з них опрацьовано. */
   objections: number; objectionsHandled: number;
-  /** 🤝 Згода після ціни: розмов з відомим рішенням / з них «погодився». У бал НЕ входить. */
-  decided: number; agreed: number;
+  /** 🤝 Згода після ціни: розмов з відомим рішенням / з них «погодився» / «думає» (взяли паузу — передзвонити). У бал НЕ входить. */
+  decided: number; agreed: number; thinking: number;
   /** Успіх угоди: успішних із розібраних. */
   success: number }
 /** Рядок на менеджера: розібрані розмови звіту, середній бал і частка по кожному пункту. Найслабші — згори. */
@@ -319,6 +319,7 @@ export function managerChecklist<T extends { inReport: boolean; managerId: numbe
     promise: markPct(g.map((r) => r.checklist), "promise"), objection: markPct(g.map((r) => r.checklist), "objection"),
     objections: g.filter((r) => r.checklist!.objection !== "o").length, objectionsHandled: g.filter((r) => r.checklist!.objection === "y").length,
     decided: g.filter((r) => decisionKnown(r.clientDecision)).length, agreed: g.filter((r) => r.clientDecision?.value === "agreed").length,
+    thinking: g.filter((r) => r.clientDecision?.value === "thinking").length,
     success: g.filter((r) => r.dealOutcome?.state === "success").length,
   })).sort((a, b) => (a.score ?? 99) - (b.score ?? 99) || a.name.localeCompare(b.name, "uk"));
 }
@@ -375,7 +376,7 @@ export function medianMin(xs: readonly (number | null | undefined)[]): number | 
 // ОДНЕ правило на плитку: і число, і список після кліку беруть `TILE_MATCH[k]` — тож вони не можуть розійтися.
 // Стани й знаменники — від сервера (`checklist`, `flags`, `dealOutcome`); фронт лише рахує.
 
-export type TileKey = "noCall" | "noPrice" | "objNotHandled" | "lost" | "success" | "agreed" | "notAgreed" | "agreedLost";
+export type TileKey = "noCall" | "noPrice" | "objNotHandled" | "lost" | "success" | "agreed" | "thinking" | "notAgreed" | "agreedLost";
 export interface TileRow {
   promiseState: PromiseStateT | null; checklist: ChecklistT | null; conversationType: ConversationTypeT | null;
   dealOutcome: { state: string } | null; flags: { analysed: boolean; priceable: boolean; agreement: boolean; lost: boolean };
@@ -389,6 +390,8 @@ export const TILE_MATCH: Record<TileKey, (r: TileRow) => boolean> = {
   success: (r) => r.flags.analysed && r.dealOutcome?.state === "success",
   // 🤝 Швидкі фільтри згоди після ціни (Роман 13.10.2026): «погодився» і «не погодився» = думає + відмовив; «не визначено» — ні туди, ні туди.
   agreed: (r) => r.clientDecision?.value === "agreed",
+  // «Думає» окремо (задача 5316, повернута 14.10.2026): «скільки клієнтів після ціни взяли паузу, щоб менеджер передзвонив».
+  thinking: (r) => r.clientDecision?.value === "thinking",
   notAgreed: (r) => r.clientDecision?.value === "thinking" || r.clientDecision?.value === "declined",
   // 🤝 Рішення Романа 13.10.2026: у розмові погодився, а угода в Kommo закрита як втрачена — що сталось ПІСЛЯ дзвінка.
   agreedLost: (r) => r.clientDecision?.value === "agreed" && r.dealOutcome?.state === "lost",
@@ -399,6 +402,8 @@ export const SUCCESS_MIN_FOR_PCT = 30;
 export interface TileStats {
   noCall: { n: number; of: number }; price: { yes: number; of: number; pct: number | null };
   objection: { handled: number; of: number; pct: number | null }; lost: number; success: { n: number; of: number };
+  /** 🤝 Згода після ціни: серед розмов із ціною й відомим рішенням; `pct` — частка «погодився». Ті самі правила, що фільтри. */
+  decision: { agreed: number; thinking: number; declined: number; of: number; pct: number | null };
 }
 export function tileStats(rows: readonly TileRow[]): TileStats {
   const pct = (a: number, b: number) => (b ? Math.round((a / b) * 100) : null);
@@ -412,7 +417,15 @@ export function tileStats(rows: readonly TileRow[]): TileStats {
     objection: { handled, of: objs.length, pct: pct(handled, objs.length) },
     lost: rows.filter(TILE_MATCH.lost).length,
     success: { n: rows.filter(TILE_MATCH.success).length, of: rows.filter((r) => r.flags.analysed).length },
+    decision: decisionStats(rows),
   };
+}
+
+function decisionStats(rows: readonly TileRow[]): TileStats["decision"] {
+  const agreed = rows.filter(TILE_MATCH.agreed).length, thinking = rows.filter(TILE_MATCH.thinking).length;
+  const declined = rows.filter((r) => r.clientDecision?.value === "declined").length;
+  const of = rows.filter((r) => decisionKnown(r.clientDecision)).length;
+  return { agreed, thinking, declined, of, pct: of ? Math.round((agreed / of) * 100) : null };
 }
 
 /** «Ціна названа → успіх» і «не названа → успіх»: числами; відсоток — лише коли в обох групах ≥ `SUCCESS_MIN_FOR_PCT`. */
@@ -445,7 +458,7 @@ export function summaryTeams(rows: readonly { teamId: number | null; teamName?: 
   return [...m].map(([id, name]) => ({ id, name })).sort((a, b) => (a.id == null ? 1 : b.id == null ? -1 : a.name.localeCompare(b.name, "uk")));
 }
 
-const TILE_KEYS: readonly TileKey[] = ["noCall", "noPrice", "objNotHandled", "lost", "success"];
+const TILE_KEYS: readonly TileKey[] = ["noCall", "noPrice", "objNotHandled", "lost", "success", "agreed", "thinking", "notAgreed", "agreedLost"];
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const LINK_PARAMS = ["from", "to", "tile", "team", "manager"] as const;
 

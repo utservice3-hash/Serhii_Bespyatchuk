@@ -311,7 +311,7 @@ export function AiCallsSection() {
                     {l.decided === 0
                       ? <div className="ftd-sub" title="Згода після ціни розбирається для розмов від 13.10 і лише там, де ціну назвали">—</div>
                       : <div className="ftd-obj ftd-dec" title={`Погодився в ${String(l.agreed)} з ${String(l.decided)} розмов, де назвали ціну. У бал не входить.`}>
-                          {bar(Math.round((l.agreed / l.decided) * 100))}<span className="ftd-sub">{l.agreed}/{l.decided}</span></div>}
+                          {bar(Math.round((l.agreed / l.decided) * 100))}<span className="ftd-sub">{l.agreed}/{l.decided}{l.thinking ? ` · думає ${String(l.thinking)}` : ""}</span></div>}
                     <div style={{ fontVariantNumeric: "tabular-nums" }}>{l.success} з {l.calls}</div>
                   </div>
                 ))}
@@ -335,7 +335,7 @@ export function AiCallsSection() {
               {pickedName && (
                 <button type="button" className="ftd-pill on" onClick={() => setLf({ ...lf, managerId: null })} aria-label={`Зняти фільтр: ${pickedName}`}>Менеджер: {pickedName} ✕</button>
               )}
-              {([["noCall", "Обіцяв — дзвінка немає"], ["noPrice", "Ціни не було"], ["objNotHandled", "Заперечення не опрацьоване"], ["lost", "Втрачені"], ["success", "Успіх"], ["agreed", "Погодився після ціни"], ["notAgreed", "Не погодився"], ["agreedLost", "Погодився, а в Kommo втрачено"]] as const).map(([k, label]) => (
+              {([["noCall", "Обіцяв — дзвінка немає"], ["noPrice", "Ціни не було"], ["objNotHandled", "Заперечення не опрацьоване"], ["lost", "Втрачені"], ["success", "Успіх"], ["agreed", "Погодився після ціни"], ["thinking", "Думає"], ["notAgreed", "Не погодився"], ["agreedLost", "Погодився, а в Kommo втрачено"]] as const).map(([k, label]) => (
                 <button key={k} type="button" className={`ftd-pill${preset === k ? " on" : ""}`} aria-pressed={preset === k}
                   onClick={() => setPreset(preset === k ? "all" : k)}>{label} <b>{scoped.filter(TILE_MATCH[k]).length}</b></button>
               ))}
