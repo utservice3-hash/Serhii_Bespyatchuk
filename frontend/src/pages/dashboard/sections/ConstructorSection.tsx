@@ -66,6 +66,8 @@ const NR_EN: Array<[string, string]> = [
   ["truckEn", "Vehicle: make, model, registration numbers"], ["driverEn", "Driver's details"], ["mgrEn", "Responsible person of the Freight Forwarder"],
   ["otherRespEn", "Responsible person of the Customer"], ["extraEn", "Additional terms"],
 ];
+/** Поля рейсу, яких у заявці нерезиденту немає (рядки — за зразком АвтоМув 06.10.2026). */
+const NR_APP_SKIP = new Set(["places", "special"]);
 /** № договору з нерезидентом за замовчуванням — як на сервері (`nrAutoNo`): EUR/ДД/ММ/РРРР з дати договору. */
 const nrAutoNo = (iso: string) => { const d = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : new Date().toISOString().slice(0, 10); const [y, m, dd] = d.split("-"); return `EUR/${dd}/${m}/${y}`; };
 const FIELDS: Array<[keyof CtorCounterparty, string]> = [
@@ -729,7 +731,7 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                   {!isNrApp && <label className="fld full" style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 12px", border: "1px dashed var(--line)", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>
                     <input type="checkbox" checked={form.intl} onChange={(e) => { const on = e.target.checked; setForm((f) => ({ ...f, intl: on, ent: on ? "avm" : f.ent })); }} style={{ width: 16, height: 16, accentColor: "var(--ent)" }} />
                     Міжнародне перевезення <span style={{ color: "var(--muted)" }}>— додає замитнення, кордон і розмитнення; оформлюється лише від ТОВ «АвтоМув»</span></label>}
-                  {TRIP.filter(([k]) => form.intl || !INTL_KEYS.includes(k)).map(([k, l, req]) => (
+                  {TRIP.filter(([k]) => (form.intl || !INTL_KEYS.includes(k)) && !(isNrApp && NR_APP_SKIP.has(k))).map(([k, l, req]) => (
                     <div key={k} className={`fld ${FULL.has(k) ? "full" : ""}`}>
                       <label htmlFor={`t-${k}`}>{k === "otherResp" ? (form.party === "carrier" ? "Відповідальна особа Перевізника, телефон" : "Відповідальна особа Замовника, телефон") : l}
                         {!req && <span style={{ color: "var(--muted)", fontWeight: 400 }}> · необов’язкове</span>}</label>
