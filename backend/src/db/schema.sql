@@ -5135,6 +5135,11 @@ CREATE TABLE IF NOT EXISTS constructor_documents (
 );
 -- «Діє до» основного договору, ДД.ММ.РРРР (п. 8.1; порожньо = 31 грудня року дати договору). Рішення Романа 01.10.2026.
 ALTER TABLE constructor_documents ADD COLUMN IF NOT EXISTS main_until text;
+-- 🌍 Договір і заявка для нерезидента (nrmain / nrapp, лише АвтоМув) — задачі 5144/5284/5463, 14.10.2026.
+-- Повторний запуск безпечний: обмеження перестворюється з тим самим складом.
+ALTER TABLE constructor_documents DROP CONSTRAINT IF EXISTS constructor_documents_doc_kind_check;
+ALTER TABLE constructor_documents ADD CONSTRAINT constructor_documents_doc_kind_check
+  CHECK (doc_kind IN ('once','main','carr','nrmain','nrapp'));
 
 -- 📄 Оформлення «Б» (пакет Сергія v2, migrations/003_b_style.sql; передано 01.10.2026). Повторний запуск безпечний.
 -- Генерація бере ці значення з constructor/data/entities.ts (acc, orig); колонки тут — для довідника юросіб.
@@ -5470,8 +5475,11 @@ CREATE INDEX IF NOT EXISTS idx_deals_name_phone ON deals ((regexp_replace(name, 
 -- роботі), — стан `history`: вердикт без розпізнавання, `history_from` — та закрита угода.
 ALTER TABLE carrier_call_deals ADD COLUMN IF NOT EXISTS history_from BIGINT;
 ALTER TABLE carrier_call_deals DROP CONSTRAINT IF EXISTS carrier_call_deals_state_check;
+-- ⚠️ Лише якщо наступника `chk3` (нижче, з 'lardi') ще немає: схема накочується з початку на КОЖНОМУ викаті, і
+-- безумовне повторне додавання `chk2` падає, щойно в таблиці з'являються рядки 'lardi' (викат 367d3ee, 14.10.2026).
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'carrier_call_deals_state_chk2') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'carrier_call_deals_state_chk2')
+     AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'carrier_call_deals_state_chk3') THEN
     ALTER TABLE carrier_call_deals ADD CONSTRAINT carrier_call_deals_state_chk2
       CHECK (state IN ('waiting','own','reused','no_talk','history'));
   END IF;

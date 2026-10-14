@@ -22,7 +22,7 @@ export function canSeeConstructorDoc(viewerUserId: number, createdBy: number, ca
   return Number.isInteger(viewerUserId) && viewerUserId > 0 && viewerUserId === createdBy;
 }
 
-const DOCS: readonly DocKind[] = ['once', 'main', 'carr'];
+const DOCS: readonly DocKind[] = ['once', 'main', 'carr', 'nrmain', 'nrapp'];
 
 /**
  * Знімок стану з тіла запиту → `DocumentState` або текст відмови.
@@ -42,7 +42,7 @@ export function stateFromBody(body: unknown, manager: { name: string; phone: str
   const pay = obj(b.pay);
   return {
     ent, doc, party,
-    intl: !!b.intl, stamp: b.stamp !== false, fopAcc: Number(b.fopAcc) | 0,
+    intl: !!b.intl || doc === 'nrmain' || doc === 'nrapp', stamp: b.stamp !== false, fopAcc: Number(b.fopAcc) | 0,
     cp: obj(b.cp), trip: obj(b.trip),
     pay: { sum: String(pay.sum ?? ''), cur: String(pay.cur ?? 'грн'), form: String(pay.form ?? ''), order: String(pay.order ?? '') },
     dealNo: String(b.dealNo ?? '').trim(), docDate: /^\d{4}-\d{2}-\d{2}$/.test(String(b.docDate ?? '')) ? String(b.docDate) : '',

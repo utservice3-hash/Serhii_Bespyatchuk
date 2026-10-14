@@ -15,6 +15,7 @@
 import type { DocumentState } from './services/docgen.js';
 import { normPhone } from './services/requisitesParser.js';
 import { OWN_IDS } from './data/reference.js';
+import { NR_EN_KEYS } from './services/nonresident.js';
 
 export type IssueLevel = 'error' | 'warn';
 export interface Issue { field: string; level: IssueLevel; msg: string }
@@ -70,6 +71,25 @@ export function validateForm(s: DocumentState, ctx: ValidateCtx = {}): Issue[] {
   const cp = s.cp || {};
   const name = (cp.name || '').trim();
   const fop = isFopName(name);
+
+  // 🌍 Нерезидент (services/nonresident.ts): українські реквізити (ЄДРПОУ, IBAN UA, форма власності) не про нього.
+  // Обовʼязкове — у `nrBlocker`; тут лише 🟡: англійська частина заявки, де лишилась кирилиця.
+  if (s.doc === 'nrmain' || s.doc === 'nrapp') {
+    if ((cp.email || '').trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test((cp.email || '').trim())) add('cp.email', 'warn', 'Пошта не схожа на адресу (імʼя@домен).');
+    if (s.doc === 'nrapp') {
+      const deal = (s.dealNo || '').trim();
+      if (deal && !/^\d+$/.test(deal)) add('dealNo', 'error', '№ заявки — це ID угоди в CRM, лише цифри.');
+      else if (deal && ctx.dealKnown === false) add('dealNo', 'warn', `Угоди ${deal} у CRM не знайдено — перевірте ID (нова угода підтягується до 30 хв).`);
+      const sumRaw = (s.pay?.sum || '').trim();
+      if (!sumRaw) add('pay.sum', 'error', 'Вкажіть суму — обовʼязкова.');
+      for (const k of NR_EN_KEYS) {
+        const base = k === 'mgrEn' ? '' : k.replace(/En$/, '');
+        const ua = k === 'mgrEn' ? s.manager?.name || '' : k === 'shipperEn' ? `${s.trip.shipper || ''} ${s.trip.shipperC || ''}` : k === 'consigneeEn' ? `${s.trip.consignee || ''} ${s.trip.consigneeC || ''}` : (s.trip[base] || '');
+        if (!(s.trip[k] || '').trim() && /[А-ЯІЇЄҐа-яіїєґ]/.test(ua)) add(`trip.${k}`, 'warn', 'В англійській частині тут лишиться український текст — впишіть англійською.');
+      }
+    }
+    return out;
+  }
 
   // ── Реквізити контрагента ──
   if (!name) add('cp.name', 'error', 'Вкажіть назву контрагента — без неї в документі порожня сторона.');
