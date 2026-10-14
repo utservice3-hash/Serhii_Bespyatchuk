@@ -5475,8 +5475,11 @@ CREATE INDEX IF NOT EXISTS idx_deals_name_phone ON deals ((regexp_replace(name, 
 -- роботі), — стан `history`: вердикт без розпізнавання, `history_from` — та закрита угода.
 ALTER TABLE carrier_call_deals ADD COLUMN IF NOT EXISTS history_from BIGINT;
 ALTER TABLE carrier_call_deals DROP CONSTRAINT IF EXISTS carrier_call_deals_state_check;
+-- ⚠️ Лише якщо наступника `chk3` (нижче, з 'lardi') ще немає: схема накочується з початку на КОЖНОМУ викаті, і
+-- безумовне повторне додавання `chk2` падає, щойно в таблиці з'являються рядки 'lardi' (викат 367d3ee, 14.10.2026).
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'carrier_call_deals_state_chk2') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'carrier_call_deals_state_chk2')
+     AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'carrier_call_deals_state_chk3') THEN
     ALTER TABLE carrier_call_deals ADD CONSTRAINT carrier_call_deals_state_chk2
       CHECK (state IN ('waiting','own','reused','no_talk','history'));
   END IF;
