@@ -624,7 +624,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
             {(["more", "less"] as const).map((k) => (
               <button key={k} type="button" aria-pressed={card === k} onClick={() => setCard(toggleCard(card, k))}
-                style={{ ...S.chip(card === k ? "#111827" : k === "more" ? "#dcfce7" : "#fef2f2", card === k ? "#fff" : k === "more" ? "#166534" : "#b91c1c"), border: "none", cursor: "pointer", fontSize: 11, padding: "3px 8px" }}>
+                style={{ ...S.chip(card === k ? "#111827" : k === "more" ? "#dcfce7" : "#fef2f2", card === k ? "#fff" : k === "more" ? "#166534" : "#b91c1c"), border: "none", cursor: "pointer", fontSize: 11, padding: "3px 8px", whiteSpace: "normal", textAlign: "left" }}>
                 {k === "more" ? `купили більше ${cs.more.n} · ${signedUah(cs.more.sum)}` : `купили менше ${cs.less.n} · ${signedUah(cs.less.sum)}`}
               </button>
             ))}
