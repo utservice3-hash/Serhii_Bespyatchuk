@@ -4295,6 +4295,8 @@ export interface ClientPlanRow {
   orderedThisMonth: boolean; orderedBefore: boolean; prevAvg: number; delta: number;
   /** Звичайна пауза між замовленнями, днів (медіана); `null` — історії замало. */
   periodDays: number | null;
+  /** 🧾 Гроші «з рахунку» по 6 місяцях (останній — місяць екрана) і середнє за 3 повні місяці перед ним (макет 5609). */
+  historyInv: number[]; avg3: number;
   /** Без роботи (30 днів без контакту й без кроку з датою) · без задачі · задача прострочена — з сервера (`core/repeatScreenRules.ts`). */
   work: { noWork: boolean; noTask: boolean; overdue: boolean };
   orders: number; lifetimeRevenue: number; since: string | null; lastOrderDays: number | null;

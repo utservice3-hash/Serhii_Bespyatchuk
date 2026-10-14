@@ -6489,6 +6489,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     money.fromInvoiceByClientKey(winScope(win.before)),
   ]);
   const prevByKey = prevW.map((rows) => new Map(rows.map((r) => [r.key, r.revenue])));
+  // 🧾 Історія 6 міс «з рахунку» (макет 5609: «гроші з рахунку по місяцях»), той самий скоуп і ті самі місяці, що `histMonths`.
+  const histInv = await money.fromInvoiceByClientBucket(histScope, "month");
   const orderedBeforeKeys = new Set(beforeW.filter((r) => r.deals > 0).map((r) => r.key));
   const ordersThisMonth = new Map(monthFact.map((r) => [r.key, r.deals]));
   const factByKey = new Map(monthFact.filter((r) => keySet.has(r.key)).map((r) => [r.key, r.revenue]));
@@ -6512,6 +6514,15 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     const arr = histByKey.get(h.clientKey) ?? histMonths.map(() => 0);
     arr[idx] += h.revenue;
     histByKey.set(h.clientKey, arr);
+  }
+  const histInvByKey = new Map<string, number[]>();
+  for (const h of histInv) {
+    if (!keySet.has(h.clientKey)) continue;
+    const idx = histMonths.indexOf(h.bucket.slice(0, 7));
+    if (idx < 0) continue;
+    const arr = histInvByKey.get(h.clientKey) ?? histMonths.map(() => 0);
+    arr[idx] += h.revenue;
+    histInvByKey.set(h.clientKey, arr);
   }
   const planByKey = new Map(plansRes.rows.map((p) => [p.client_key, p]));
   const commentsByKey = new Map(commentsRes.rows.map((c) => [c.client_key, Number(c.n)]));
@@ -6698,6 +6709,9 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       ...(() => { const d = repeatScreenRules.deltaVsAvg(fact, prevByKey.map((m) => m.get(c.client_key) ?? 0)); return { prevAvg: d.avg, delta: d.delta }; })(),
       /** Звичайна пауза між замовленнями, днів (медіана — та сама, що визначає сегмент); `null` — історії замало. */
       periodDays: factsFor(seg, c.client_key).medianGapDays,
+      /** 🧾 Гроші «з рахунку» по місяцях (останній — місяць екрана) і середнє за 3 повні місяці перед ним (макет 5609). */
+      historyInv: histInvByKey.get(c.client_key) ?? histMonths.map(() => 0),
+      avg3: (() => { const a = histInvByKey.get(c.client_key); return a ? Math.round((a[2] + a[3] + a[4]) / 3) : 0; })(),
       work: repeatScreenRules.workFlags({
         lastTalk: reactByKey.get(c.client_key)?.lastTalk ?? null,
         lastManual: manualByKey.get(c.client_key)?.at ?? null,

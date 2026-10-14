@@ -80,41 +80,40 @@ test("#1710c КАРТКИ: число в картці == рядкам після
   assert.equal(c.signedUah(0), "0 ₴");
 });
 
-/** Скільки колонок займає клітинка: `colSpan={GROUP_LEAD_COLS}` — стільки, інакше одна. */
-const width = (block: string, tag: string, lead: number) => [...block.matchAll(new RegExp(`<${tag}[ >][^>]*?>`, "g"))]
-  .reduce((a, m) => a + (/colSpan=\{GROUP_LEAD_COLS\}/.test(m[0]) ? lead : 1), 0);
-
-test("#1710d ЕКРАН: картки фільтрують тим самим правилом; колонки сходяться; плану, тижнів і «затвердити» немає; шапка й назва клієнта закріплені", () => {
+test("#1710d ЕКРАН ЗА МАКЕТОМ: картки фільтрують тим самим правилом; пласка таблиця з колонками макета й ТЗ; плану немає; «Без роботи» блоком зверху; шапка, «Робота» й «Клієнт» закріплені", () => {
   const src = FE_SRC("pages/dashboard/sections/ClientPlansSection.tsx");
   assert.match(src, /const cs = cardStats\(baseRows\);\s*const rows = baseRows\.filter\(CARD_MATCH\[card\]\);/,
     "🔴 картки рахуються не з тих рядків, що фільтрує клік");
   for (const k of ["ordered", "notOrdered", "noWork", "overdue"]) assert.match(src, new RegExp(`setCard\\(toggleCard\\(card, "${k}"\\)\\)`), `🔴 картка «${k}» не фільтрує таблицю`);
   assert.match(src, /setCard\(toggleCard\(card, k\)\)/, "🔴 «купили більше / менше» не фільтрують таблицю");
-  // Прибране за ТЗ п.4 і п.6 (регламент ред. 2: планів немає).
-  for (const gone of [/План \(міс\)/, /Затвердити подані/, /approveClientPlans|submitClientPlans|saveClientPlan|returnClientPlan/, /weeksOpen/, /Іде у план менеджера/, /t\.prevMonth/])
-    assert.doesNotMatch(src, gone, `🔴 на екрані лишилось планування: ${String(gone)}`);
-  // Нові колонки (ТЗ п.5) і закріплення (п.6).
-  for (const h of [">Всього грошей</th>", ">Замовляв цього міс.</th>", ">Періодичність</th>"]) assert.ok(src.includes(h), `🔴 немає колонки ${h}`);
-  assert.ok(src.indexOf(">Останнє зам.</th>") < src.indexOf(">Періодичність</th>") && src.indexOf(">Періодичність</th>") < src.indexOf("title=\"Остання розмова"),
-    "🔴 періодичність не поруч з «Останнє замовлення»");
-  assert.match(src, /const STICKY_TH: React\.CSSProperties = \{ position: "sticky", top: 0/, "🔴 шапка таблиці не закріплена");
-  assert.match(src, /overflow: "auto", maxHeight: "calc\(100vh - 140px\)"/, "🔴 прокрутка не всередині таблиці — sticky-шапка не триматиметься");
-  assert.match(src, /<td style=\{\{ \.\.\.S\.td, position: "sticky", left: 0/, "🔴 назва клієнта не закріплена зліва");
-  // Колонки сходяться: шапка == рядок клієнта == рядок рівня == підсумок == COL_COUNT.
-  const lead = Number(/const GROUP_LEAD_COLS = (\d+);/.exec(src)?.[1]);
-  const cols = lead + Number(/const COL_COUNT = GROUP_LEAD_COLS \+ (\d+);/.exec(src)?.[1]);
-  const head = src.slice(src.indexOf("<thead>"), src.indexOf("</thead>"));
-  const foot = src.slice(src.indexOf("<tfoot>"), src.indexOf("</tfoot>"));
+  // Прибране за ТЗ п.4 і п.6 (регламент ред. 2: планів немає) і ієрархія «команда → менеджер» (макет — плаский список).
+  for (const gone of [/План \(міс\)/, /Затвердити подані/, /approveClientPlans|submitClientPlans|saveClientPlan|returnClientPlan/, /weeksOpen/,
+    /Іде у план менеджера/, /t\.prevMonth/, /function GroupRow|openTeams|levelTotals/])
+    assert.doesNotMatch(src, gone, `🔴 на екрані лишилось старе: ${String(gone)}`);
+  // Колонки макета + три колонки ТЗ п.5, у порядку макета; періодичність — поруч з «Останнє замовлення».
+  const cols = [...src.slice(src.indexOf("const COLS:"), src.indexOf("const COL_COUNT")).matchAll(/label: "([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(cols, ["Робота", "Клієнт", "Менеджер", "Сегмент і стан", "Останнє замовлення", "Періодичність", "Остання розмова (Ringostat)",
+    "Історія · середнє/міс", "Факт з рахунку", "Всього грошей", "Замовляв цього міс.", "Маржа 6 міс", "Що не так", "Задача"], "🔴 колонки не як у макеті й ТЗ");
+  assert.match(src, /\{COLS\.map\(\(col, i\) => \(\s*<th key=\{col\.key\}/, "🔴 шапка таблиці не з того самого переліку колонок");
   const rs = src.indexOf("<tr style={{ background: risk");
   const row = src.slice(rs, src.indexOf("</tr>", rs));
-  const gr = src.slice(src.indexOf("function GroupRow("), src.indexOf("</tr>", src.indexOf("function GroupRow(")));
-  assert.ok(lead > 0 && rs > 0, "🔴 гейт втратив предмет");
-  assert.deepEqual([width(head, "th", lead), width(row, "td", lead), width(gr, "td", lead), width(foot, "td", lead)], [cols, cols, cols, cols],
-    "🔴 колонки розійшлись: шапка / рядок / рівень / підсумок");
+  assert.ok(rs > 0, "🔴 гейт втратив предмет: рядка клієнта не знайдено");
+  assert.equal((row.match(/<td[ >]/g) ?? []).length, cols.length, "🔴 у рядку клієнта не стільки клітинок, скільки колонок у шапці");
+  assert.match(src, /const COL_COUNT = COLS\.length;/, "🔴 colSpan плеєра й картки не дорівнює кількості колонок");
   assert.doesNotMatch(src, /colSpan=\{\d+\}/, "🔴 colSpan числом — розійдеться з кількістю колонок");
-  // «Без роботи» — першими і з червоною смугою (макет).
-  assert.match(src, /Number\(b\.work\.noWork\) - Number\(a\.work\.noWork\)/, "🔴 «Без роботи» не першими");
+  // Закріплення (п.6): шапка зверху, «Робота» й «Клієнт» зліва — і в шапці, і в рядку.
+  assert.match(src, /const STICKY_TH: React\.CSSProperties = \{ position: "sticky", top: 0/, "🔴 шапка таблиці не закріплена");
+  assert.match(src, /overflow: "auto", maxHeight: "calc\(100vh - 140px\)"/, "🔴 прокрутка не всередині таблиці — sticky-шапка не триматиметься");
+  assert.match(row, /STICKY_COL\(0, W_WORK\)[\s\S]*STICKY_COL\(W_WORK, W_NAME\)[\s\S]*\{c\.clientName\}/, "🔴 назва клієнта не закріплена зліва");
+  // «Без роботи» — окремим блоком зверху, з червоною смугою (макет).
+  assert.ok(src.indexOf("{noWorkRows.map(renderRow)}") > 0 && src.indexOf("{noWorkRows.map(renderRow)}") < src.indexOf("{workRows.map(renderRow)}"),
+    "🔴 «Без роботи» не окремим блоком над «В роботі»");
   assert.match(src, /boxShadow: c\.work\.noWork \? "inset 4px 0 0 #dc2626"/, "🔴 немає червоної смуги «Без роботи»");
+  // Панель фільтрів макета і швидкі фільтри; тімліду — одразу своя команда.
+  for (const t of ["Пошук: клієнт, інша назва, менеджер, коментар", "Усі команди", "Усі сегменти", "Будь-який стан", "Будь-яка оплата", "Скинути", "Вивантажити CSV",
+    "Без роботи", "Без задачі", "ВІП 14+ без задачі", "Задача прострочена", "ВІП спить 14+", "Сплячі", "Без розмови 30+ днів", "Стоп: дебіторка", "Без замовлень 30+ днів"])
+    assert.ok(src.includes(t), `🔴 немає «${t}» з макета`);
+  assert.match(src, /auth\.role === "team_lead" && auth\.teamId != null \? auth\.teamId : ""/, "🔴 тімлід бачить усі команди замість своєї");
 });
 
 test("#1710e СЕРВЕР: вікна, середнє й позначки — з правил ядра; гроші — «з рахунку» в тому самому скоупі", () => {
@@ -128,4 +127,8 @@ test("#1710e СЕРВЕР: вікна, середнє й позначки — з
   assert.match(body, /repeatScreenRules\.deltaVsAvg\(fact, prevByKey\.map/, "🔴 різниця з середнім рахується не правилом ядра");
   assert.match(body, /work: repeatScreenRules\.workFlags\(\{/, "🔴 «Без роботи» рахується не правилом ядра");
   assert.match(body, /orderedThisMonth: \(ordersThisMonth\.get\(c\.client_key\) \?\? 0\) > 0,/, "🔴 «замовляв цього місяця» — не за угодами з рахунку");
+  // Історія за 6 міс і «середнє/міс» (макет: «гроші з рахунку по місяцях») — той самий вид грошей і скоуп, що й факт.
+  assert.match(body, /const histInv = await money\.fromInvoiceByClientBucket\(histScope, "month"\);/, "🔴 історія в рядку — не «з рахунку»");
+  assert.match(body, /avg3: \(\(\) => \{ const a = histInvByKey\.get\(c\.client_key\); return a \? Math\.round\(\(a\[2\] \+ a\[3\] \+ a\[4\]\) \/ 3\) : 0; \}\)\(\),/,
+    "🔴 «середнє/міс» — не за три повні місяці перед місяцем екрана");
 });
