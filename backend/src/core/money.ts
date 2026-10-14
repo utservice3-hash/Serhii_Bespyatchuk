@@ -486,6 +486,14 @@ export async function successByClientBucket(
 }
 
 /**
+ * 🧾 «З рахунку і далі» по клієнту × місяцю — історія за 6 міс і «середнє/міс» на екрані «Постійні клієнти» (задача 5609,
+ * макет ТЗ 12.10: «гроші з рахунку по місяцях»). Той самий розріз, що `successByClientBucket`, лише інший вид.
+ */
+export async function fromInvoiceByClientBucket(s: MoneyScope, granularity: "day" | "week" | "month"): Promise<ClientBucketRow[]> {
+  return byClientBucket("fromInvoice", s, granularity);
+}
+
+/**
  * Гроші клієнта по бакетах для БУДЬ-ЯКОГО виду ядра — один запит на всі види, щоб
  * новий вид не заводив другу копію розрізу «клієнт × період».
  */

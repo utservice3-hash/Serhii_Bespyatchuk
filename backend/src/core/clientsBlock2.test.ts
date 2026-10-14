@@ -31,7 +31,8 @@ test("#719 ПРИЄДНАНІ: групуються по канонічному 
   assert.match(ALIAS_NAMES_SQL, /d\.client_key_raw = a\.alias_key/, "🔴 назва береться не з угод приєднаного — усі рядки звались би однаково");
   // Показ: рядок списку і картка беруть приєднаних із відповіді сервера.
   const list = read(`${SECTIONS}/ClientPlansSection.tsx`);
-  assert.match(list, /<div style=\{\{ fontWeight: 700 \}\}>\{c\.clientName\}<\/div>\s*<MergedLine merged=\{c\.merged\} \/>/,
+  // З 14.10.2026 (макет 5609) — коротко «ще N назв» під назвою, повний перелік у підказці й у картці.
+  assert.match(list, /<div style=\{\{ fontWeight: 700 \}\}>\{c\.clientName\}<\/div>[\s\S]{0,200}\{c\.merged && c\.merged\.length > 0 && \([\s\S]{0,200}c\.merged\.map\(\(m\) => m\.name\)/,
     "🔴 під назвою клієнта в списку немає рядка «обʼєднано»");
   const card = read(`${SECTIONS}/ClientCardPanel.tsx`);
   assert.match(card, /card\.merged && card\.merged\.length > 0 && \(/, "🔴 картка не показує, хто обʼєднаний");
@@ -191,6 +192,8 @@ test("#717b ФАКТ З РАХУНКУ ЖИВЕ РІВНО НА ЕКРАНІ К�
   const outside = dash.slice(0, start) + dash.slice(start + body.length);
   assert.doesNotMatch(outside, /fromInvoiceBy|fromInvoiceTotal/, "🔴 факт «з рахунку» потрапив на інший екран без рішення");
   const list = read(`${SECTIONS}/ClientPlansSection.tsx`);
-  assert.match(list, /t\.factBasis === "fromInvoice" \? "Факт · з виставлення рахунку"/, "🔴 плитка факту не підписана «з виставлення рахунку»");
-  assert.match(list, />Факт з рахунку<\/th>/, "🔴 колонка факту не підписана «з рахунку»");
+  // Плитку «Факт · з виставлення рахунку» прибрано разом із рештою старих карток (задача 5609, ТЗ п.4: дублює Звіт); підпис
+  // основи факту тепер — у довідці під таблицею, а колонка підписана як і була.
+  assert.match(list, /Факт — угоди, що в місяці вперше дійшли до «Виставлення рахунку»/, "🔴 екран не пояснює, що факт — «з рахунку»");
+  assert.match(list, /label: "Факт з рахунку"/, "🔴 колонка факту не підписана «з рахунку»");
 });

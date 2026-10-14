@@ -51,6 +51,6 @@ test("#692b РОУТ /client-plans: margin6m, debtHold, три цифри чер
   assert.match(body, /\bisReturned\(r\.first_m, r\.last_before\)/, "«повернуто» не через чисте правило");
   assert.match(body, /react: \{ inWork:[\s\S]*returnedMonth: returned\.count, returnedMargin: returned\.margin, gapDays: RETURN_GAP_DAYS \}/);
   const f = readFileSync(path.join(src, "..", "..", "frontend", "src", "pages", "dashboard", "sections", "ClientPlansSection.tsx"), "utf8");
-  for (const k of ['"no_talk"', '"step_overdue"', '"vip_sleeping"', '"debt_hold"', '["margin", "за маржею 6 міс"]', "повернуто за місяць", "повернутої маржі", "в роботі (реактивація)"])
+  for (const k of ['"no_talk"', '"step_overdue"', '"vip_sleeping"', '"debt_hold"', '{ key: "margin6m", label: "Маржа 6 міс"', "повернуто за місяць", "повернутої маржі", "в роботі (реактивація)"])
     assert.ok(f.includes(k), `фронт: немає ${k}`);
 });

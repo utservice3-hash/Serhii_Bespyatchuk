@@ -4291,6 +4291,14 @@ export interface CategoryRules {
 }
 export interface ClientPlanRow {
   clientKey: string; clientName: string; paymentType: string | null;
+  /** 👥 Задача 5609 (ТЗ 12.10.2026): замовляв цього місяця / у 3 попередні місяці; середнє за ті самі дні 3 місяців і різниця. */
+  orderedThisMonth: boolean; orderedBefore: boolean; prevAvg: number; delta: number;
+  /** Звичайна пауза між замовленнями, днів (медіана); `null` — історії замало. */
+  periodDays: number | null;
+  /** 🧾 Гроші «з рахунку» по 6 місяцях (останній — місяць екрана) і середнє за 3 повні місяці перед ним (макет 5609). */
+  historyInv: number[]; avg3: number;
+  /** Без роботи (30 днів без контакту й без кроку з датою) · без задачі · задача прострочена — з сервера (`core/repeatScreenRules.ts`). */
+  work: { noWork: boolean; noTask: boolean; overdue: boolean };
   orders: number; lifetimeRevenue: number; since: string | null; lastOrderDays: number | null;
   history: number[]; plan: number; planStatus: "draft" | "pending" | "approved" | "none";
   /** 🗂 Вкладка й порядок «Всі» (ТЗ 22.09, п.3.1) — з сервера (`core/clientTabs.ts`), фронт не рахує. */
@@ -4366,6 +4374,8 @@ export interface UnattachedPlan {
 }
 export interface ClientPlansResp {
   month: string; historyMonths: string[];
+  /** 👥 Вікна порівняння (задача 5609): `prev` — ті самі дні 3 попередніх місяців, `before` — 3 повні місяці. */
+  compare: { partial: boolean; prev: { from: string; to: string }[]; before: { from: string; to: string }; noWorkDays: number };
   /** Порядок груп у вкладці «Всі» — з сервера, щоб фронт не тримав копії. */
   tabGroupRank: Record<"regular" | "yellow" | "react", number>;
   /** 🔁 Пул лідгенів (ТЗ 22.09, блок 4): хто бачить вкладку пулу і хто бере — вирішує сервер. */

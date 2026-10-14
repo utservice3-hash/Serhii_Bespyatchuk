@@ -114,7 +114,7 @@ test("#1690d ПРОВОДКА: екран AI і блок КВП беруть Т�
 });
 
 // ─── 🎧 Плеєр записів на екрані «Клієнти» (задача 13.10.2026) ────────────────────────────────────────────────
-test("#1691 ПЛЕЄР ЗАПИСІВ: ±10 с не виходить за межі запису, смуга перемотує точно; у рядку, обґрунтуванні й картці — один плеєр на всю ширину, вузьких <audio> немає", async () => {
+test("#1691b ПЛЕЄР ЗАПИСІВ: ±10 с не виходить за межі запису, смуга перемотує точно; у рядку й картці — один плеєр на всю ширину, вузьких <audio> немає", async () => {
   const r = await import(await transpile("pages/dashboard/sections/recordingPlayerRules.ts")) as {
     seekBy: (pos: number, d: number, dur: number) => number; seekAt: (x: number, w: number, dur: number) => number; PLAYER_RATES: readonly number[] };
   assert.equal(r.seekBy(4, -10, 180), 0, "🔴 −10 с на 4-й секунді пішло в мінус");
@@ -136,7 +136,6 @@ test("#1691 ПЛЕЄР ЗАПИСІВ: ±10 с не виходить за меж
     assert.doesNotMatch(src, /<audio\b/, `🔴 ${name}: повернувся вузький вбудований плеєр`);
     assert.match(src, /<RecordingPlayer\b/, `🔴 ${name}: немає спільного плеєра`);
   }
-  assert.match(list, /\{ src: c\.planBasis\.recording, label: `обґрунтування плану/, "🔴 «обґрунтування плану» грає не спільним плеєром");
   assert.match(list, /\{rec && \(\s*<tr>\s*<td colSpan=\{colCount\}/, "🔴 плеєр у рядку клієнта не на всю ширину таблиці");
 });
 
