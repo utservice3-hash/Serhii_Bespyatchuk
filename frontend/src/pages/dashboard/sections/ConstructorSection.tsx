@@ -404,6 +404,10 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
   const download = async (id: number, num: string, kind: "docx" | "pdf") => {
     try { saveBlob(await ctorFile(id, kind), `${num || "document"}.${kind}`); } catch (e) { await bad(e); }
   };
+  /** 🚚 ТТН (Excel) і CMR (Word) із заявки перевізнику — офіційні бланки, заповнені з цієї ж заявки (задача 5464). */
+  const waybill = async (id: number, num: string, kind: "ttn" | "cmr") => {
+    try { saveBlob(await ctorFile(id, kind), kind === "ttn" ? `ТТН-${num || id}.xlsx` : `CMR-${num || id}.docx`); } catch (e) { await bad(e); }
+  };
   const openPdf = async (id: number) => {
     const w = window.open("", "_blank");                   // до await — інакше браузер заблокує вікно
     try {
@@ -852,6 +856,10 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                 <button className="btn pri sm" onClick={() => void download(made.id, made.num, "pdf")}>⬇ Зберегти PDF</button>
                 <button className="btn pri sm" style={{ background: "var(--ink)", borderColor: "var(--ink)" }} onClick={() => void download(made.id, made.num, "docx")}>⬇ Зберегти Word</button>
                 {hasPair && <button className="btn sm" onClick={() => void savePair(made.id, made.num)}>⬇ Пакет угоди: обидва PDF (zip)</button>}
+                {made.party === "carrier" && <>
+                  <button className="btn sm" title="Товарно-транспортна накладна (форма 1-ТН), Excel — заповнена з цієї заявки" onClick={() => void waybill(made.id, made.num, "ttn")}>⬇ ТТН</button>
+                  <button className="btn sm" title="Міжнародна накладна CMR, Word — заповнена з цієї заявки" onClick={() => void waybill(made.id, made.num, "cmr")}>⬇ CMR</button>
+                </>}
                 <button className="btn sm" title="Якщо вікно дозволяє друк" onClick={() => void printPdf(made.id)}>🖨 Друк</button>
                 {!isMain && !isNr && <button className="btn sm" onClick={doMirror}>{made.party === "carrier" ? "→ Таку ж для клієнта" : "→ Таку ж для перевізника"}</button>}
                 <span style={{ fontSize: 11.5, color: "var(--muted)", marginLeft: "auto" }}>заявку збережено в архів нижче</span>
@@ -884,7 +892,7 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
               <input ref={oldInput} type="file" accept=".docx,.txt" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void onImportOld(f); e.target.value = ""; }} />
               <span style={{ fontSize: 12, color: "var(--muted)" }}>{oldState}</span>
             </div>
-            <ArchList rows={arch} q={archQ} onOpen={openPdf} onLoad={onLoadArchived} />
+            <ArchList rows={arch} q={archQ} onOpen={openPdf} onLoad={onLoadArchived} onWaybill={waybill} />
           </div>
         </section>
 
@@ -918,8 +926,9 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
 }
 
 /* ── Рядки архіву — розмітка макета (renderArch): №, версія, контрагент, сторона · юрособа · маршрут, час ── */
-function ArchList({ rows, q, onOpen, onLoad, withAuthor }: {
+function ArchList({ rows, q, onOpen, onLoad, onWaybill, withAuthor }: {
   rows: CtorArchiveRow[] | null; q: string; onOpen: (id: number) => void; onLoad?: (id: number) => void; withAuthor?: boolean;
+  onWaybill?: (id: number, num: string, kind: "ttn" | "cmr") => void;
 }) {
   if (rows === null) return <span style={{ fontSize: 12.5, color: "var(--muted)" }}>завантаження…</span>;
   if (!rows.length) return <span style={{ fontSize: 12.5, color: "var(--muted)" }}>{q ? `Нічого не знайшлось за «${q}».` : "Поки порожньо — зʼявиться після першого «Сформувати»."}</span>;
@@ -936,6 +945,10 @@ function ArchList({ rows, q, onOpen, onLoad, withAuthor }: {
           {withAuthor && <span style={{ fontSize: 12, fontWeight: 600 }}>{r.author ?? "—"}</span>}
           <span style={{ fontSize: 11.5, color: "var(--muted)", marginLeft: "auto" }}>{fmtAt(r.created_at)}</span>
           <button className="btn sm" title="Відкрити готовий документ" onClick={() => onOpen(r.id)}>📄 PDF</button>
+          {onWaybill && r.doc_kind === "carr" && <>
+            <button className="btn sm" title="ТТН (форма 1-ТН), Excel — з цієї заявки" onClick={() => onWaybill(r.id, r.deal_no, "ttn")}>⬇ ТТН</button>
+            <button className="btn sm" title="CMR, Word — з цієї заявки" onClick={() => onWaybill(r.id, r.deal_no, "cmr")}>⬇ CMR</button>
+          </>}
           {onLoad && <button className="btn sm" title="Підняти заявку у форму для правок" onClick={() => onLoad(r.id)}>У форму</button>}
         </div>
       ))}

@@ -12,6 +12,8 @@ import { printHTML, fullPageHTML } from "./services/printTemplate.js";
 import { normPhone, findPhone, parseRequisites, parseOldDoc } from "./services/requisitesParser.js";
 import { canSeeConstructorDoc, stateFromBody } from "./access.js";
 import { NR_BODY } from "./data/nonresidentTexts.js";
+import { buildTtn, buildCmr, ttnCells, cmrTargets, CMR_SLOTS, TTN_TEMPLATE, CMR_TEMPLATE, waybillBlocker, splitTruck } from "./services/waybills.js";
+import { readZip } from "../core/officeParse.js";
 import { NR_EN_KEYS, NR_CSS, nrClauses, nrAppRows } from "./services/nonresident.js";
 import { validateForm } from "./validate.js";
 import { currentNum } from "./services/docgen.js";
@@ -827,4 +829,94 @@ test("#1735 НЕРЕЗИДЕНТ ОКРЕМО: стилі колонок лиш�
   assert.deepEqual(keys, [...NR_EN_KEYS].sort(), "🔴 англійські поля форми ≠ серверним NR_EN_KEYS");
   assert.match(front, /k: "nrmain", t: "Договір з нерезидентом", p: "client", nr: true/, "🔴 немає вкладки «Договір з нерезидентом»");
   assert.match(front, /k: "nrapp", t: "Заявка нерезиденту", p: "client", nr: true/, "🔴 немає вкладки «Заявка нерезиденту»");
+});
+
+/* ══════════════ 🚚 ТТН (1-ТН) І CMR ІЗ ЗАЯВКИ ПЕРЕВІЗНИКУ (задача 5464, 14.10.2026) ══════════════ */
+
+const WB_STATE = (): DocumentState => {
+  const s = structuredClone(ref["carr-uts"].state) as DocumentState;
+  s.trip = { ...s.trip, shipper: "ТОВ «Відправник»", shipperC: "Олександр, 095 000 00 00", consignee: "ТОВ «Одержувач»", consigneeC: "Юрій, 050 000 00 00",
+    loadDate: "06.10.2026, 08:00", truck: "Renault Master АА 0000 АА / АА 0000 ХР", driver: "Шевчук Іван, посв. КВІ 000000, 096 000 00 00", cargo: "цифрова техніка, 1300 кг" };
+  return s;
+};
+const unz = (u8: Uint8Array, name: string) => readZip(Buffer.from(u8)).get(name)!().toString("utf8");
+/** значення клітинки xlsx за адресою (inline-рядок) */
+const xCell = (sheet: string, ref: string) => {
+  const m = new RegExp(`<c r="${ref}"[^>]*?(?:/>|>([\\s\\S]*?)</c>)`).exec(sheet);
+  return m?.[1] ? (m[1].match(/<t[^>]*>([^<]*)<\/t>/)?.[1] ?? "") : "";
+};
+
+/**
+ * #1750 — ТТН: значення лягли у СВОЇ клітинки офіційного бланка 1-ТН; «Автомобільний перевізник» — перевізник ІЗ ЗАЯВКИ
+ * (рішення Романа 14.10), а не ЮТС; дата — день / місяць словом / рік; авто й причіп розділено. Бланк лишився цілим
+ * (121 обʼєднання, ті самі клітинки-підписи). 🧨 Зсунути клітинку чи поставити ЮТС — червоніє.
+ */
+test("#1750 ТТН (1-ТН): перевізник із заявки, дата, авто/причіп, відправник, одержувач, вантаж — у своїх клітинках; бланк цілий", () => {
+  const s = WB_STATE();
+  const sheet = unz(buildTtn(s), "xl/worksheets/sheet1.xml");
+  const want: Record<string, string> = { D15: `${s.cp.name}, ЄДРПОУ ${s.cp.edrpou}`, K7: "06", N7: "жовтня", Q7: "26", C11: "Renault Master АА 0000 АА", L11: "АА 0000 ХР",
+    D17: "ТОВ «Відправник», Олександр, 095 000 00 00", D19: "ТОВ «Одержувач», Юрій, 050 000 00 00", U23: "Шевчук Іван", B35: "цифрова техніка, 1300 кг", X11: "автоперевезення" };
+  for (const [r, v] of Object.entries(want)) assert.equal(xCell(sheet, r).replace(/&amp;/g, "&").replace(/&quot;/g, '"'), v, `🔴 ТТН ${r}`);
+  assert.ok(!xCell(sheet, "D15").includes("ЮНАЙТЕД"), "🔴 перевізником у ТТН стоїть ЮТС");
+  const blank = readZip(readFileSync(TTN_TEMPLATE)).get("xl/worksheets/sheet1.xml")!().toString("utf8");
+  assert.equal((sheet.match(/<mergeCell /g) || []).length, (blank.match(/<mergeCell /g) || []).length, "🔴 обʼєднання клітинок бланка зіпсовано");
+  assert.equal((sheet.match(/<c r="/g) || []).length, (blank.match(/<c r="/g) || []).length, "🔴 кількість клітинок змінилась — бланк зламано");
+  assert.deepEqual(splitTruck("Volvo AA1 \\ AA2"), ["Volvo AA1", "AA2"]);
+  assert.deepEqual(splitTruck("Volvo AA1"), ["Volvo AA1", ""], "🔴 без роздільника причіп вигадано");
+});
+
+/**
+ * #1751 — CMR: кожна графа знайдена за ПІДПИСОМ у бланку (а не за жорстким номером), значення лягли під свій підпис:
+ * 1 — відправник, 2 — одержувач, 16 — перевізник із заявки (кожен реквізит окремим рядком), 4 — дата DD/MM/YYYY,
+ * 5 — № заявки. 🧨 Зсунути зсув графи або злити рядки в один — червоніє.
+ */
+test("#1751 CMR: відправник у 1, одержувач у 2, перевізник із заявки в 16 (рядками), дата й № заявки — за підписами граф", () => {
+  const s = WB_STATE();
+  const xml = unz(buildCmr(s), "word/document.xml");
+  const cells = [...xml.matchAll(/<w:tc>(?:(?!<w:tc>)[\s\S])*?<\/w:tc>/g)].map((m) => m[0]);
+  const t = (i: number) => (cells[i].match(/<w:t[^>]*>[^<]*<\/w:t>/g) || []).map((x) => x.replace(/<[^>]+>/g, "")).join("|");
+  const blank = readZip(readFileSync(CMR_TEMPLATE)).get("word/document.xml")!().toString("utf8");
+  const tg = cmrTargets(blank);
+  const at = (label: string, off: number) => tg[CMR_SLOTS.findIndex((x) => x.label === label && x.off === off)];
+  assert.equal(t(at("Отправитель (наименование", 2)), "ТОВ «Відправник»", "🔴 графа 1");
+  assert.equal(t(at("Получатель (наименование", 3)), "ТОВ «Одержувач»", "🔴 графа 2");
+  const carrier = t(at("Перевозчик (наименование", 2));
+  assert.ok(carrier.startsWith(`${s.cp.name}|${s.cp.addr}|ЄДРПОУ ${s.cp.edrpou}`), "🔴 графа 16 — не перевізник із заявки або рядки злиплись: " + carrier);
+  assert.match(cells[at("Перевозчик (наименование", 2)], /<w:r>(?:(?!<\/w:r>)[\s\S])*<w:br\/>/, "🔴 перенос поза <w:r> — Word злiпить рядки");
+  assert.equal(t(at("Место и дата погрузки", 10)), "06/10/2026", "🔴 графа 4: дата");
+  assert.equal(t(at("Прилагаемые документы", 2)), `Заявка № ${s.dealNo}`, "🔴 графа 5");
+  for (const i of tg.filter((_, k) => !CMR_SLOTS[k].append)) assert.equal(cellText(blank, i), "", `🔴 у бланку клітинка значення #${i} не порожня — зсув графи`);
+});
+/** текст n-ї найглибшої клітинки бланка */
+function cellText(xml: string, i: number): string {
+  const c = [...xml.matchAll(/<w:tc>(?:(?!<w:tc>)[\s\S])*?<\/w:tc>/g)][i]?.[0] ?? "";
+  return (c.match(/<w:t[^>]*>[^<]*<\/w:t>/g) || []).map((x) => x.replace(/<[^>]+>/g, "")).join("").trim();
+}
+
+/**
+ * #1752 — ЛИШЕ ІЗ ЗАЯВКИ ПЕРЕВІЗНИКУ і ДЗЕРКАЛО: з клієнтської заявки й договорів — відмова словами, із заявки перевізнику —
+ * формується; роути за тією ж межею доступу, що PDF заявки (`docStateOf`), і в матриці. 🧨 Дозволити з клієнтської — червоніє.
+ */
+test("#1752 ТТН/CMR: лише із заявки перевізнику (дзеркало), роути за межею «свої» й у матриці доступу", () => {
+  assert.equal(waybillBlocker({ doc: "carr" }), null, "🔴 із заявки перевізнику не формується");
+  for (const doc of ["once", "main", "nrmain", "nrapp"] as const) assert.match(waybillBlocker({ doc }) ?? "", /заявки перевізнику/, `🔴 ${doc}: пропустило`);
+  const route = SRC("routes/constructor.ts");
+  assert.match(route, /const waybill = \(kind: "ttn" \| "cmr"\) => h\(async \(req, res\) => \{\s*const d = await docStateOf\(req\);\s*const no = waybillBlocker\(d\.s\);/, "🔴 роут ТТН/CMR не за межею docStateOf або без перевірки виду");
+  const m = SRC("auth/accessMatrix.ts");
+  for (const k of ["ttn", "cmr"]) assert.ok(m.includes(`path: "/api/constructor/documents/:id/${k}"`), `🔴 /${k} немає в матриці`);
+});
+
+/**
+ * #1753 — БЛАНКИ В РЕПОЗИТОРІЇ ПОРОЖНІ й БЕЗ ЧУЖИХ МЕТАДАНИХ (репозиторій публічний): у ТТН був чужий e-mail автора.
+ * Збірка кладе їх у dist (інакше на проді «ENOENT»). 🧨 Повернути e-mail або прибрати копіювання — червоніє.
+ */
+test("#1753 БЛАНКИ ТТН/CMR: порожні, автор «UTS», копіюються збіркою в dist", () => {
+  for (const f of [TTN_TEMPLATE, CMR_TEMPLATE]) {
+    const core = readZip(readFileSync(f)).get("docProps/core.xml")?.().toString("utf8") ?? "";
+    assert.ok(!/@[\w.-]+\.\w{2,}/.test(core), `🔴 ${path.basename(f)}: у метаданих e-mail`);
+  }
+  const ttn = readZip(readFileSync(TTN_TEMPLATE)).get("xl/worksheets/sheet1.xml")!().toString("utf8");
+  assert.ok(!ttn.includes("inlineStr"), "🔴 бланк ТТН уже заповнений");
+  assert.match(readFileSync(path.join(REPO, "backend", "package.json"), "utf8"), /src\/constructor\/data\/waybill/, "🔴 збірка не копіює бланки в dist");
+  assert.ok(ttnCells(WB_STATE()).D15, "🔴 ттн без перевізника");
 });
