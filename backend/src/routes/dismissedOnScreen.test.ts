@@ -64,6 +64,8 @@ export interface DismissedRow {
   deactivated?: boolean;
   /** `null` = менеджер поза командами; саме через це він і випав із ростера. */
   teamId?: number | null;
+  /** Стан роботи з `/report-plan` (`core/managerState.ts`): 'active' | 'finishing' | 'dismissed'. */
+  state?: string;
 }
 
 /**
@@ -105,11 +107,17 @@ export function unexplainedDismissedMoney(
 }
 
 /**
- * 🧭 ЧОМУ РЯДОК ОПИНИВСЯ В `dismissed` — три відповіді, і дві з них не тривога.
+ * 🧭 ЧОМУ РЯДОК ОПИНИВСЯ В `dismissed` — чотири відповіді, і лише «звільнений» з них тривога.
  * Виділено окремою функцією, щоб `#59c` міг перевіряти ПРИЧИНУ, а не наслідок.
+ *
+ * «Завершує» (`state = 'finishing'`) — відома причина з 14.10.2026, рішення Романа: «завершує — це більше стан, що
+ * наступного місяця він не буде працювати, а поки рахуємо все як є». Людина активна й у команді, з ростера вже вийшла
+ * (плану немає), а гроші рахуються й показуються рядком «звільнені/завершують». До цього правило її не знало, і `#59c`
+ * з 09.09 стояв очікувано червоним саме з цієї причини (умова зняття тоді ж: «правило навчено стану „завершує“»).
  */
-export function dismissedReason(m: DismissedRow): "deactivated" | "no-team" | "unknown" {
+export function dismissedReason(m: DismissedRow): "deactivated" | "finishing" | "no-team" | "unknown" {
   if (m.deactivated === true) return "deactivated";
+  if (m.state === "finishing") return "finishing";
   if (m.teamId == null) return "no-team";
   return "unknown";
 }
@@ -266,4 +274,25 @@ test("#59c кожен заглушений рядок має ВІДОМУ при
 
   const problem = unknownDismissedReasons(withMoney);
   assert.equal(problem, null, problem ?? "");
+});
+
+/**
+ * #59d — «ЗАВЕРШУЄ» — ВІДОМА ПРИЧИНА (Роман 14.10.2026: «завершує — наступного місяця не працюватиме, а поки рахуємо все
+ * як є»). Активна людина з командою в стані `finishing` у прихованому списку — НЕ «незрозуміла причина»; тривоги про
+ * гроші звільнених вона теж не будить. Дзеркало: та сама людина БЕЗ цього стану — як і раніше «незрозуміла», а справді
+ * звільнений поруч — і далі будить. Звіт віддає `state` у кожному рядку `dismissed` — інакше правилу нема на чому працювати.
+ * 🧨 Червоніє, якщо правило перестане знати «завершує» (тоді `#59c` знову червоний на живих даних), якщо «завершує» стане
+ * ковдрою для будь-кого з командою, або роут перестане віддавати `state`.
+ */
+test("#59d «ЗАВЕРШУЄ» — ВІДОМА ПРИЧИНА: не «осліпле правило» і не тривога; без стану — як раніше «незрозуміла»; роут віддає state", async () => {
+  const FIN = { name: "Завершує Тест", fact: 12_345, deactivated: false, teamId: 3, state: "finishing" };
+  assert.equal(dismissedReason(FIN), "finishing", "🔴 «завершує» не розпізнано як відому причину");
+  assert.equal(unknownDismissedReasons([FIN]), null, "🔴 «завершує» читається як незрозуміла причина — #59c червонітиме на кожному такому стані");
+  assert.equal(unexplainedDismissedMoney([FIN], false, 100_000), null, "🔴 «завершує» будить тривогу про гроші звільнених");
+  const SAME_NO_STATE = { ...FIN, state: "active" };
+  assert.ok(unknownDismissedReasons([SAME_NO_STATE]), "🔴 «завершує» стало ковдрою: активний із командою БЕЗ цього стану мовчить");
+  const REAL = { name: "Звільнений Тест", fact: 5_000, deactivated: true, teamId: 3, state: "dismissed" };
+  assert.ok(unexplainedDismissedMoney([FIN, REAL], false, 100_000)?.includes("Звільнений Тест"), "🔴 поруч із «завершує» справді звільнений перестав будити");
+  const route = await readFile(fileURLToPath(new URL("../../src/routes/dashboard.ts", import.meta.url)), "utf8");
+  assert.match(route, /state: m\.state as managerState\.WorkState,/, "🔴 роут Звіту не віддає стан у рядках `dismissed` — правило осліпне");
 });
