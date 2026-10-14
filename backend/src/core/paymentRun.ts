@@ -29,8 +29,14 @@ export const REQ_FIELDS = {
   phone: 2097391, card: 2097393, bank: 2098455, recipient: 2097395, cash: 2097483,
   sourceDeal: 2097401, ttn: 2097291,
 } as const;
-/** Поля основної угоди: «синя галочка» бухгалтерії і «Рахунок виставлено». */
-export const MAIN_FIELDS = { paid1c: 2096325, invoiceIssued: 2099711 } as const;
+/**
+ * Поля основної угоди: «синя галочка» бухгалтерії; «Номер заказа» — НОМЕР РАХУНКУ 1С (`000008452` = рах. №8452;
+ * його пише інтеграція «Генезис: 1С», вкладка «Заказ 1С»; заповнено у 332 з 347 угод за 30 днів, усі у 9 цифр,
+ * замір 13.10.2026); «Рахунок виставлено»; приходи — для звірки суми платежу.
+ */
+export const MAIN_FIELDS = { paid1c: 2096325, orderNo: 2096315, invoiceIssued: 2099711 } as const;
+/** Скільки днів «Виписки» шукаємо оплату за номером рахунку. */
+export const PAY_LOOKBACK_DAYS = 30;
 /** Тип розходу, що означає готівку (у Kommo пишуть і «Наличные», і «Готівка»). */
 export const CASH_EXPENSE_TYPE = /налич|готів/i;
 /** Призначення для запитів із CRM — завжди це (інструкція Тетяни). */
@@ -48,16 +54,24 @@ export interface MainDeal {
   /** Σ «Расход N» з готівковим типом; `null` — готівкового розходу в угоді немає. */
   cashExpense: number | null;
   paid1c: boolean; invoiceIssued: boolean;
+  /** Номер рахунку 1С без нулів попереду («Номер заказа»); `null` — не заповнено. */
+  orderNo: string | null;
+  /** Σ «Приход N» угоди — для звірки суми платежу клієнта. */
+  income: number | null;
+  /** Клієнт угоди (назва / ПІБ) — для звірки платника. */
+  clientName: string | null;
 }
+/** Вхідний платіж «Виписки» (без Сейфу й карток). */
+export interface BankIn { bookedOn: string; amount: number; purpose: string; payer: string }
 export interface PayContext {
   /** Інші запити (не «Відмовлено») на ту саму угоду з тією самою сумою готівки. */
   dupOf: number[];
   /** Σ уже ОПЛАЧЕНИХ готівкових запитів по цій угоді (інших). */
   paidBefore: number;
-  /** Неоплачені рахунки 1С цієї угоди (за посиланням рахунка на угоду). */
-  openInvoices: string[];
-  /** Платіж клієнта у «Виписці» за рахунком цієї угоди (модуль «Гроші зайшли»). */
+  /** Платіж клієнта у «Виписці» за номером рахунку цієї угоди (`findBankPayment`). */
   bankSeen: { invoiceNo: string; bookedOn: string } | null;
+  /** В угоді прикріплено файл «Квитанція…» (клієнт надіслав підтвердження). Не оплата — підказка Тетяні. */
+  receipt: boolean;
   /** Узгоджений ліміт клієнта; `null` — ліміту немає взагалі. */
   limit: { days: number; amount: number | null } | null;
   /** Поточний борг клієнта і вік найстарішого боргу. */
@@ -122,7 +136,9 @@ export function judgeRequest(r: PayRequest, m: MainDeal | null, ctx: PayContext,
   if (m.cashExpense == null) reasons.push("в угоді немає готівкового розходу");
   else if (r.cash != null && r.cash + ctx.paidBefore > m.cashExpense + 0.5)
     reasons.push(`сума ${money(r.cash)}${ctx.paidBefore ? ` (+ уже оплачено ${money(ctx.paidBefore)})` : ""} більша за готівковий розхід угоди ${money(m.cashExpense)}`);
-  if (!m.invoiceIssued && !m.paid1c && !ctx.openInvoices.length) reasons.push("рахунок клієнту не виставлено — не платимо");
+  // Порожній «Номер заказа» — НЕ «рахунку немає»: у всіх 15 таких угод із 347 стоїть «Рахунок виставлено» (замір
+  // 13.10.2026), частина — готівкові клієнти. Тому — на перевірку Тетяні, а не відмова.
+  if (!m.paid1c && !m.orderNo) reasons.push("номер рахунку 1С («Номер заказа») не заповнено — перевірити, чи є рахунок");
   if (m.paid1c) paidBy = "1С";
   else if (ctx.bankSeen) { paidBy = "Виписка"; notes.push(`оплата у Виписці за рах. №${ctx.bankSeen.invoiceNo} (${ctx.bankSeen.bookedOn})`); }
   else if (!ctx.limit) reasons.push("оплати від клієнта немає, і ліміту немає");
@@ -137,6 +153,7 @@ export function judgeRequest(r: PayRequest, m: MainDeal | null, ctx: PayContext,
       if (!ctx.ttnExempt && r.ttnFiles <= 0) reasons.push("оплата за лімітом, але ТТН не прикріплено");
     }
   }
+  if (!paidBy && ctx.receipt) notes.push("в угоді є квитанція клієнта — глянути");
   const age = ageDays(r.createdAt, now);
   if (age >= STALE_DAYS) notes.push(`висить ${age} дн.`);
   return { ok: reasons.length === 0, reasons, notes, paidBy };
@@ -149,3 +166,64 @@ export function judgeRequest(r: PayRequest, m: MainDeal | null, ctx: PayContext,
  */
 export const isNetworkDrop = (e: unknown): boolean =>
   /UND_ERR|terminated|ECONNRESET|ETIMEDOUT|socket|other side closed/i.test(`${(e as { cause?: { code?: string } })?.cause?.code ?? ""} ${(e as Error)?.message ?? ""}`);
+
+/** Номер рахунку з «Номер заказа»: цифри без нулів попереду; порожньо чи нуль — `null`. */
+export const orderNoOf = (raw: string | null | undefined): string | null => (raw ?? "").replace(/\D/g, "").replace(/^0+/, "") || null;
+
+/** Ядро назви для звірки платника: вміст лапок, інакше назва без правової форми; лише літери й цифри, нижній регістр. */
+export function nameCore(raw: string | null | undefined): string {
+  const s = (raw ?? "").toLowerCase();
+  const q = s.match(/["«“„']([^"»”']{3,})["»”']/);
+  const base = q ? q[1] : s.replace(/товариство з обмеженою відповідальністю|приватне підприємство|фізична особа[- ]підприємець|\b(тов|пп|фоп|фо-п|ооо|тзов|ат|прат|пат)\b/g, " ");
+  return base.replace(/[^a-zа-яіїєґ0-9]/g, "");
+}
+/** Платник — той самий клієнт: одне ядро містить інше (≥4 знаки). */
+export function samePayer(payer: string, client: string | null): boolean {
+  const a = nameCore(payer), b = nameCore(client);
+  return a.length >= 4 && b.length >= 4 && (a.includes(b) || b.includes(a));
+}
+
+/**
+ * Оплата клієнта у «Виписці» за номером рахунку угоди: у призначенні — цей номер окремим числом (нулі попереду
+ * дозволені), і платіж належить цьому клієнту — платник той самий АБО сума = приходу угоди (± 1 грн). Друга умова
+ * потрібна, бо номер — лише 4 цифри, і в чужому призначенні він трапляється (рахунки, ТТН, договори). Найсвіжіший.
+ */
+export function findBankPayment(m: Pick<MainDeal, "orderNo" | "income" | "clientName">, payments: readonly BankIn[]): { invoiceNo: string; bookedOn: string } | null {
+  if (!m.orderNo) return null;
+  const re = new RegExp(`(^|\\D)0*${m.orderNo}(\\D|$)`);
+  const hit = payments
+    .filter((p) => re.test(p.purpose) && (samePayer(p.payer, m.clientName) || (m.income != null && Math.abs(p.amount - m.income) <= 1)))
+    .sort((a, b) => b.bookedOn.localeCompare(a.bookedOn))[0];
+  return hit ? { invoiceNo: m.orderNo, bookedOn: hit.bookedOn } : null;
+}
+
+/** Зсув Києва від UTC у хвилинах на мить `d` (літній +180, зимовий +120). */
+const kyivOffsetMin = (d: Date) => (Date.parse(d.toLocaleString("sv-SE", { timeZone: "Europe/Kyiv" }).replace(" ", "T") + "Z") - d.getTime()) / 60000;
+/** Київський час `day HH:MM` як мить UTC. */
+export function kyivAt(day: string, hhmm: string): Date {
+  const naive = new Date(`${day}T${hhmm}:00Z`);
+  return new Date(naive.getTime() - kyivOffsetMin(naive) * 60000);
+}
+const shiftDay = (day: string, n: number) => { const d = new Date(`${day}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+/**
+ * Вікно файлу — як у Тетяни: «запити, створені вчора після 17:00 і сьогодні до 17:00». Після 17:00 прогін уже
+ * збирає ЗАВТРАШНІЙ файл. `day` — явний день (звірка заднім числом).
+ */
+export function payWindow(now: Date, day?: string): { day: string; from: Date; to: Date } {
+  const today = now.toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+  const d = day ?? (now.getTime() >= kyivAt(today, "17:00").getTime() ? shiftDay(today, 1) : today);
+  return { day: d, from: kyivAt(shiftDay(d, -1), "17:00"), to: kyivAt(d, "17:00") };
+}
+
+/** Інший запит на ту саму угоду (з бази + картка з Kommo, якщо відома). */
+export interface Sibling { id: number; amount: number | null; status: number; card: string | null }
+/**
+ * Дубль = та сама сума І та сама картка. Лише сума — замало: 13.10.2026 на угоді 62761137 було два запити по 2 500
+ * РІЗНИМ отримувачам (дві машини), і обидва законно оплачені. Картки сусіда не знаємо (не встигли прочитати) —
+ * лишається правило «та сама сума», тобто безпечний бік: на перевірку.
+ */
+export function dupsOf(r: Pick<PayRequest, "cash" | "card">, siblings: readonly Sibling[]): number[] {
+  const mine = (r.card ?? "").replace(/\D/g, "");
+  return siblings.filter((s) => r.cash != null && s.amount != null && Math.abs(s.amount - r.cash) < 0.5
+    && (!s.card || !mine || s.card.replace(/\D/g, "") === mine)).map((s) => s.id);
+}

@@ -5933,3 +5933,20 @@ CREATE TABLE IF NOT EXISTS payment_file_state (
   sheet        TEXT NOT NULL
 );
 REVOKE ALL ON payment_file_state FROM ai_readonly;
+
+-- 📒 Журнал файлу на оплату по днях (14.10.2026, Роман: «запустити і фіксувати все з цього ранку»): рішення кожного
+-- запиту для файлу дня (день = файл, що віддається о 17:00). Перший і останній прогін, що його бачив. Без карток і ПІБ.
+CREATE TABLE IF NOT EXISTS payment_file_log (
+  day         DATE NOT NULL,
+  request_id  BIGINT NOT NULL,
+  main_id     BIGINT,
+  amount      NUMERIC(14,2),
+  ok          BOOLEAN NOT NULL,
+  paid_by     TEXT,
+  reasons     JSONB NOT NULL,
+  notes       JSONB NOT NULL,
+  first_at    TIMESTAMPTZ NOT NULL,
+  last_at     TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (day, request_id)
+);
+REVOKE ALL ON payment_file_log FROM ai_readonly;
