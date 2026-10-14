@@ -8,7 +8,7 @@ import {
   periodOf, periodLabelOf, navBy, monthStart, monthEnd, addMonth, todayKyiv, mondayOf, addDays, dow, spanDays, type PeriodState,
 } from "../periodRules";
 import { ExtraPlanLines, PaceLines,
-  LeadgenPersonRow, pct1, bucketLabel, convStatus, StatusRing, unitsOf, fillBuckets, BucketNote, dateLbl,
+  LeadgenPersonRow, pct1, bucketLabel, convStatus, StatusRing, unitsOf, fillBuckets, BucketNote, dateLbl, OPR_CONV_RATED, OPR_CONV_NOT_RATED,
   PlanRing, planLevelColor, factOfPlan, fmtPlan,
 } from "./LeadgenPersonRow";
 import { LeadgenPlanFormation } from "./LeadgenPlanFormation";
@@ -569,17 +569,17 @@ function Glance({ d, cmp, cmpData, cmpErr, who, whoName, whoAbsent, periodLabel,
         {pe ? <PlanRing exec={pe} title={`${who === "all" ? "Команда" : "Людина"}: прорахунки ${pe.fact.toLocaleString("uk-UA")} з плану ${fmtPlan(pe.plan)} — ${pe.pct} %. Колір — за темпом робочих днів, як у Звіті.`} />
         : <StatusRing st={st} target={conv.targets.oprOfLeads}
           title={st.overfull ? `ОПР (${t.opr}) більше, ніж лідів (${t.leads}) — конверсія цього періоду нічого не каже`
-            : st.conv == null ? "Лідів у періоді немає" : !statusful ? "Статус — лише за місяць і довше." : undefined} />}
+            : st.conv == null ? "Лідів у періоді немає" : !OPR_CONV_RATED ? OPR_CONV_NOT_RATED : !statusful ? "Статус — лише за місяць і довше." : undefined} />}
         <div>
           <div style={lab}>{title} · {periodLabel} <InfoHint text={d.callRule + " Лід — угода, яку лідген опрацював: у Продзвоні перевів у «Взято в роботу» АБО одразу в «Отримано контакти ОПР», а в Реактивації — у «Клієнт підігрівається»; одна угода — один лід. ОПР — «Отримано контакти ОПР» Продзвону АБО «Клієнт підігрівається» Реактивації (з 06.10.2026, як рахує команда в таблицях). Прорахунки — «Кваліфіковано». Підігрів — окремо, скільки з лідів прийшло з реактивації."} /></div>
           <div style={val}>{t.leads.toLocaleString("uk-UA")} <small style={{ fontSize: 12, color: MUTED, fontWeight: 600 }}>{plural(t.leads, "лід", "ліди", "лідів")} · {t.quotes.toLocaleString("uk-UA")} {plural(t.quotes, "прорахунок", "прорахунки", "прорахунків")}</small></div>
           <div style={{ fontSize: 11, color: MUTED, marginTop: 3 }}>
             дзвінки {whoAbsent ? "—" : t.calls.toLocaleString("uk-UA")} · ОПР {t.opr.toLocaleString("uk-UA")} · підігрів {t.warming.toLocaleString("uk-UA")}
-            {" · "}ліди → ОПР {st.conv == null ? "—" : pct1(st.conv)}{st.overfull ? " ⚠" : ""} (ціль {conv.targets.oprOfLeads} %)
+            {" · "}<span title={OPR_CONV_RATED ? undefined : OPR_CONV_NOT_RATED}>ліди → ОПР {st.conv == null ? "—" : pct1(st.conv)}{st.overfull ? " ⚠" : ""} (ціль {conv.targets.oprOfLeads} %{OPR_CONV_RATED ? "" : ", не оцінюється"})</span>
             {who === "all" && <> · ОПР → прорахунок {qConv == null ? "—" : pct1(qConv)}{qConv != null && qConv > 100 ? " ⚠" : ""} (ціль {conv.targets.quotesOfOpr} %)</>}
           </div>
           <PlanLine who={who} tp={tp} pe={pe} pp={pp} person={person} />
-          {who === "all" && (statusful || anyPlan ? (
+          {who === "all" && (anyPlan || (statusful && OPR_CONV_RATED) ? (
             <div style={{ display: "flex", gap: 6, marginTop: 5, flexWrap: "wrap" }}>
               <Pill c={RED}>{pills.r} нижче {anyPlan ? "плану" : "цілі"}</Pill>
               <Pill c={AMBER}>{pills.a} близько</Pill>
@@ -587,7 +587,8 @@ function Glance({ d, cmp, cmpData, cmpErr, who, whoName, whoAbsent, periodLabel,
               {pills.n > 0 && <Pill c="#6b7280">{pills.n} {anyPlan ? "без плану" : "без оцінки"}</Pill>}
             </div>
           ) : (
-            <div style={{ fontSize: 11, color: MUTED, marginTop: 5 }}>статуси людей — за місяць і довше</div>
+            <div style={{ fontSize: 11, color: MUTED, marginTop: 5 }} title={OPR_CONV_RATED ? undefined : OPR_CONV_NOT_RATED}>
+              {OPR_CONV_RATED ? "статуси людей — за місяць і довше" : "статуси людей за конверсією не оцінюються до розведення лідів і ОПР"}</div>
           ))}
         </div>
       </div>
