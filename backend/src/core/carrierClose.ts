@@ -2,6 +2,7 @@ import type { Db } from "./adCallFacts.js";
 import { CARRIER_STAGE, OTHER_TYPE_UA, type OtherType } from "./carrierCallRules.js";
 import { carrierDealRows } from "./carrierDeals.js";
 import { AUTO_CARRIER_TAG, carrierHistorySql, historyCloseNote, HISTORY_GUARD, readHistoryGate } from "./carrierHistory.js";
+import { lardiCloseNote } from "./carrierLardi.js";
 
 /**
  * 🧹 ЗАКРИТТЯ В KOMMO (29.09.2026 — перевізники; ТЗ Романа 30.09.2026 — ще й «Інше»).
@@ -108,6 +109,13 @@ export interface CloseCandidate {
   /** Вердикт з історії CRM (блок 1 ТЗ 4373) — окремий перемикач (`CARRIER_HISTORY_CLOSE`); `historyFrom` — угода-джерело. */
   history: boolean;
   historyFrom: number | null;
+  /**
+   * Вердикт за Lardi (рішення Романа 13.10.2026, «варіант 2» 14.10.2026): закривається ТАК САМО, як упевнений вердикт
+   * AI, — основним перемикачем (`CARRIER_AUTO_CLOSE`), без тегу історії й БЕЗ повторної перевірки «чи не з'явилась
+   * угода замовника» (Роман: «без запобіжника»). Відрізняється лише приміткою — «джерело: Lardi».
+   */
+  lardi: boolean;
+  lardiNote: string | null;
 }
 
 /**
@@ -131,7 +139,7 @@ export async function closeCandidates(db: Db, onStage: ReadonlySet<number>, now:
     const byHuman = r.source === "human";
     out.push({ kommoId: r.kommoId, uniqueid: r.uniqueid, confidence: r.ai.confidence, quote: r.ai.quote, logged: l != null,
       byHuman, reason: r.category, otherType: r.otherType, aiOther: r.category === "other" && !byHuman,
-      history: r.source === "crm", historyFrom: r.historyFrom });
+      history: r.source === "crm", historyFrom: r.historyFrom, lardi: r.source === "lardi", lardiNote: r.lardiNote });
   }
   return out;
 }
@@ -231,7 +239,7 @@ export async function runCarrierClose(db: Db, now: Date, mode: CloseMode, onStag
         [ids, now.toISOString()]);
       rep.closed += ids.length;
       // Примітка — пояснення для менеджера. Її збій закриття не скасовує: угода вже закрита, а причина стоїть у полі.
-      const text = (c: CloseCandidate) => c.history ? historyCloseNote(c.historyFrom ?? "?")
+      const text = (c: CloseCandidate) => c.lardi ? lardiCloseNote(c.lardiNote) : c.history ? historyCloseNote(c.historyFrom ?? "?")
         : reason === "carrier" ? closeNoteText(c.confidence ?? 0, c.quote, c.byHuman)
         : reason === "no_talk" ? NO_TALK_NOTE : closeNoteTextOther(c.confidence, c.otherType, c.byHuman);
       await kommo.addNotes(batch.map((c) => ({ entity_id: c.kommoId, note_type: "common", params: { text: text(c) } })))

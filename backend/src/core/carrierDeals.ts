@@ -54,9 +54,11 @@ export interface DealRow {
   /** Усі рішення людей по угоді, старі — теж (ТЗ: «попередні рішення зберігаються»); останнє — чинне. */
   journal: JournalEntry[];
   category: DealCategory;
-  source: "human" | "ai" | "crm" | null;
+  source: "human" | "ai" | "crm" | "lardi" | null;
   /** Стан `history`: угода номера, закрита як «Перевізник», з якої взято вердикт. */
   historyFrom: number | null;
+  /** Вердикт за Lardi: компанія й маршрут пропозиції машини; `null` — не з Lardi. */
+  lardiNote: string | null;
   why: string | null;
   /**
    * «На перевірці» / «Помилка»: з якого моменту чекає людину, до коли її треба розібрати (кінець робочого дня,
@@ -77,6 +79,7 @@ export interface JournalEntry { by: string; role: string | null; decision: Human
 interface Raw {
   kommo_id: string; phone: string; deal_created_at: Date; state: string; reused: boolean; talk_no: number; u: string | null;
   history_from: string | null;
+  lardi_note?: string | null;
   manager_id: number | null; manager_name: string | null; team_id: number | null; team_name: string | null;
   calldate: Date | null; billsec: number | null; call_type: string | null;
   stt_status: string | null; stt_failure: string | null; text_empty: boolean | null;
@@ -119,7 +122,7 @@ export const CARRIER_ANALYSIS_LATERAL = (t: string, rubricsParam: string) => `LE
 
 export async function carrierDealRows(db: Db, q: DealQuery): Promise<DealRow[]> {
   const r = await db.query<Raw>(`
-    SELECT d.kommo_id::text, d.phone, d.deal_created_at, d.state, (d.reused_from IS NOT NULL) AS reused, d.history_from::text,
+    SELECT d.kommo_id::text, d.phone, d.deal_created_at, d.state, (d.reused_from IS NOT NULL) AS reused, d.history_from::text, d.lardi_note,
            COALESCE(src.talk_no, d.talk_no) AS talk_no, COALESCE(src.uniqueid, d.uniqueid) AS u,
            m.id AS manager_id, m.name AS manager_name, m.team_id, tm.name AS team_name,
            rc.calldate, rc.billsec, rc.call_type,
@@ -192,6 +195,7 @@ function toRow(x: Raw, now: Date): DealRow {
     },
     human, journal: [], category: cat.category, source: cat.source, why: cat.why,
     historyFrom: x.history_from == null ? null : Number(x.history_from),
+    lardiNote: x.state === "lardi" ? x.lardi_note ?? null : null,
     reviewSince: sinceAt ? iso(sinceAt) : null, reviewDeadline: deadline ? deadline.toISOString() : null,
     overdue: deadline != null && now.getTime() > deadline.getTime(),
     otherType: cat.category !== "other" ? null : cat.source === "human" ? (human?.otherType ?? null) : aiOther,

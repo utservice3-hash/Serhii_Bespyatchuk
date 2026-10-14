@@ -13,6 +13,7 @@ import { runCarrierClose, type CloseMode, type CloseReport, type KommoCloser } f
 import { syncCarrierReviewTasks, type ReviewTaskStats } from "./carrierReviewTasks.js";
 import { runTaskSweep, type SweepKommo, type SweepReport } from "./carrierTaskSweep.js";
 import { carrierHistorySql, HISTORY_GUARD, readHistoryGate, type HistoryGate } from "./carrierHistory.js";
+import { LARDI_MATCH_SQL } from "./carrierLardi.js";
 import { CREATING_CALL_SQL, NO_TALK_DUE_SQL, NO_TALK_GUARD, readNoTalkGuard, type NoTalkGate } from "./carrierNoTalkGuard.js";
 import { CARRIER_BUDGET, CARRIER_KIT_V2, CARRIER_OPS, CARRIER_RUBRIC, CARRIER_RUBRICS, CARRIER_RULE, oldEnough,
   phoneFromDealName } from "./carrierCallRules.js";
@@ -77,6 +78,8 @@ const ROLE_OF = (u: string) => `(
 
 export interface ResolveReport {
   history: number; reused: number; own: number; noTalk: number; secondTalk: number;
+  /** ⓪b Номер є серед машин Lardi — вердикт «перевізник» без розпізнавання (рішення Романа 13.10.2026). */
+  lardi: number;
   /** Захист «без розмови»: стан синку дзвінків у момент кроку ③ і скільки угод тримає відсутній дзвінок-творець. */
   noTalkGate: NoTalkGate; noTalkNoCreatingCall: number;
   /** Захист «історії CRM» від застарілих угод (`carrierHistory.ts`): закрито — крок ⓪ не виконувався. */
@@ -91,7 +94,7 @@ export async function resolveCarrierDeals(db: Db, now: Date, noTalkAfterMin: num
   noTalkSyncMaxMin: number = NO_TALK_GUARD.defaultMaxAgeMin, historySyncMaxMin: number = HISTORY_GUARD.defaultMaxAgeMin): Promise<ResolveReport> {
   const guard = await readNoTalkGuard(db, now, noTalkAfterMin, noTalkSyncMaxMin);
   const historyGate = await readHistoryGate(db, now, historySyncMaxMin);
-  const rep: ResolveReport = { history: 0, reused: 0, own: 0, noTalk: 0, secondTalk: 0,
+  const rep: ResolveReport = { history: 0, lardi: 0, reused: 0, own: 0, noTalk: 0, secondTalk: 0,
     noTalkGate: guard.gate, noTalkNoCreatingCall: guard.noCreatingCall, historyGate };
 
   // ⓪ Номер уже закривали як «Перевізник» у CRM, угоди замовника в «Успіх» чи в роботі немає (ТЗ 17.09, блок 1;
@@ -102,6 +105,16 @@ export async function resolveCarrierDeals(db: Db, now: Date, noTalkAfterMin: num
        FROM (SELECT w.kommo_id, ${carrierHistorySql("w.phone", "w.kommo_id")} AS src
                FROM carrier_call_deals w WHERE w.state = 'waiting') h
       WHERE h.kommo_id = d.kommo_id AND h.src IS NOT NULL`,
+    [now.toISOString()])).rowCount ?? 0;
+
+  // ⓪b Номер є серед пропозицій МАШИН Lardi (`core/carrierLardi.ts`, рішення Романа 13.10.2026: «на рівні відсіву історії
+  //    CRM», «без запобіжника») — вердикт «перевізник» без розмови: не слухаємо й не платимо. Після історії CRM (та
+  //    вказує конкретну угоду-джерело) і раніше за повтор номера. Захисту свіжості синку угод тут не треба: Lardi від
+  //    CRM не залежить, а архів лише росте.
+  rep.lardi = (await db.query(
+    `UPDATE carrier_call_deals d SET state = 'lardi', lardi_note = m.note, updated_at = $1
+       FROM (${LARDI_MATCH_SQL}) m
+      WHERE m.kommo_id = d.kommo_id AND d.state = 'waiting'`,
     [now.toISOString()])).rowCount ?? 0;
 
   // ① Номер слухали за 30 днів (своя розмова іншої угоди, вердикт не «не розібрати») — беремо його вердикт.
