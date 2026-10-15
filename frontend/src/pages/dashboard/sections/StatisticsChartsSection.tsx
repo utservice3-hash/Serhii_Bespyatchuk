@@ -1,11 +1,10 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea, ReferenceDot, Brush,
 } from "recharts";
 import { effGranOf } from "../statsGran";
 import { fetchStatsSeries, saveStatsManual, fetchLapsedClients, type StatsSeriesResp, type StatsSeries, type LapsedClientsResp } from "../../../api";
-import { todayKyiv } from "../periodRules";
-import { StatisticsSummary } from "./StatisticsSummary";
+import { InfoHint } from "../widgets";
 import { ChartSkeleton, SkelBox, TableSkeleton } from "../Skeleton";
 
 const SEAM = "2026-07-01";
@@ -28,12 +27,12 @@ const CATS: Cat[] = [
        оплати й не відвантаження; кожна точка — чек саме за свій день / тиждень / місяць. */
     { key: "avg_check", block: "sales", label: "Середній чек", unit: "₴", hint: "виручка «успішно реалізовано» ÷ кількість таких угод — окремо за кожну точку (день, тиждень чи місяць — за «Кроком»); дата угоди — день переходу в «Успішно реалізовано», за Києвом (не дата оплати й не відвантаження)", seamHint: SEAM_CARS },
     { key: "revenue_success", block: "sales", label: "Дохід (успіх)", unit: "₴", hint: "успішні угоди (142) за датою закриття, signed" },
-    { key: "payment_received", block: "sales", label: "Отримані кошти", unit: "₴", hint: "оплата отримана ∪ успішно реалізовано, без подвоєння — на цих грошах стоїть план" },
+    { key: "payment_received", block: "sales", label: "Отримані кошти", unit: "₴", hint: "оплата отримана ∪ успішно реалізовано, без подвоєння — ті самі гроші, що «Отримані кошти» на Звіті" },
     { key: "cash_deals_sum", block: "sales", label: "Готівкові", unit: "₴", hint: "сума готівкових угод — лише історія ручної таблиці до 01.07.2026; з CRM цей показник не продовжується, тому після шва точок немає" },
   ] },
   { key: "auto", icon: "🚚", label: "Авто", metrics: [
     { key: "cars_success", block: "sales", label: "Успішні", hint: "кількість угод, що перейшли в «Успішно реалізовано», за датою переходу (Київ), кожна раз", seamHint: SEAM_CARS },
-    { key: "cars_delivered", block: "sales", label: "Поставлені", hint: "авто за датою завантаження — те саме, що плитка «Відправлені авто»; план — KPI-цілі задачника «відправлено авто»; company включає поставки поза 6 командами (~0.5%)", seamHint: SEAM_CARS },
+    { key: "cars_delivered", block: "sales", label: "Поставлені", hint: "авто за датою завантаження — те саме, що «Відправлені авто» на Звіті; company включає поставки поза 6 командами (~0.5%)", seamHint: SEAM_CARS },
   ] },
   { key: "leads", icon: "📈", label: "Ліди й канали", metrics: [
     { key: "ad_leads", block: "marketing", label: "Ліди з реклами", hint: "угоди з каналом «реклама», за першим входом у «Взято в роботу» в межах періоду — кожна угода раз" },
@@ -47,9 +46,6 @@ const CATS: Cat[] = [
   ] },
   { key: "calls", icon: "☎️", label: "Дзвінки", metrics: [
     { key: "calls", block: "sales", label: "Результативні", hint: CALLS_HINT },
-  ] },
-  { key: "plan", icon: "🎯", label: "План / факт", metrics: [
-    { key: "plan_execution", block: "sales", label: "% виконання", unit: "%", monthOnly: true, hint: "отримані кошти ÷ місячний план, по місяцях; план тижня — на плитках угорі й лінією на графіку «Отримані кошти»" },
   ] },
   { key: "intl", icon: "🌍", label: "Напрямки", metrics: [
     // Кожен напрямок — unit-серія (scope_type='unit'). Історія з таблиці; CRM-обчислювачі
@@ -130,11 +126,17 @@ const axisFmt = (v: number, unit?: string) => {
 };
 const SEAM_NOTE = "До 01.07.2026 — історія з ручної таблиці, з 01.07 — точні дані CRM. Рівні до і після шва не порівнюються: це зміна джерела, а не обвал чи стрибок.";
 
+/**
+ * 📊 «СТАТИСТИКИ» — ЛИШЕ ГРАФІКИ (ТЗ Юлі 14.10.2026, п.1; TOP Weekly 12.10: «нечитабельні, багато тексту й плашок,
+ * дублюють Звіт і Звіт КВП»). Повернуто вигляд до задач 4367 і 4632: без плиток, таблиці «Команди», вкладки
+ * «План-факт», лінії плану й пояснень під графіком. На екрані — назва показника, осі, дати; як рахується — у ⓘ.
+ * План і факт дивимось у Звіті та Звіті КВП. `StatisticsSummary` / `StatisticsPlanFact` і їхні роути лишились у
+ * коді без входу з цього екрана — прибирати їх окреме рішення.
+ */
 export default function StatisticsChartsSection({ role }: { role?: string }) {
-  const today = todayKyiv();
   const [catKey, setCatKey] = useState("money");
   const cat = CATS.find((c) => c.key === catKey)!;
-  /* 🎯 Дефолт — «Оплата отримана»: саме на ній стоїть план, тож графік одразу показує сходинки плану. */
+  /* 🎯 Дефолт — «Отримані кошти»: головні гроші компанії, ті самі, що на Звіті. */
   const [metricKey, setMetricKey] = useState("payment_received");
   /* 📣 Категорія може НЕ мати метрик — тип пишемо ЯВНО: без `noUncheckedIndexedAccess` вираз
      `cat.metrics[0]` типізується як `Metric`, тож компілятор мовчить, а падає рантайм.
@@ -147,13 +149,10 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   const [loadErr, setLoadErr] = useState<string | null>(null);
   /* ⏳ Графік вантажиться — на його місці заготовка ТІЄЇ САМОЇ висоти, легенда лишається (прохання Романа 02.10). */
   const [chartLoading, setChartLoading] = useState(true);
-  /** Карта графіка — сюди плавно прокручує клік по команді в таблиці. */
-  const chartRef = useRef<HTMLDivElement | null>(null);
   const [nonce, setNonce] = useState(0);
   /** Які серії ПОКАЗАНІ. Дефолт — лише компанія; команди додаються вибором (ТЗ, блок 4, п.1). */
   const [shown, setShown] = useState<Set<string> | null>(null);
   const [showArchived, setShowArchived] = useState(false);
-  const [pickedTeam, setPickedTeam] = useState<number | null>(null);
   const [win, setWin] = useState<{ lo: number; hi: number; key: string } | null>(null);
   const [drag, setDrag] = useState<{ a: string | null; b: string | null }>({ a: null, b: null });
 
@@ -170,26 +169,22 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
     return () => { alive = false; };
   }, [metric?.block, metric?.key, effGran, metric?.unitScope, nonce]);
 
-  // Скоуп за замовчуванням: компанія (або перша серія, якщо компанії в скоупі немає) — й обрана в таблиці команда.
+  // Скоуп за замовчуванням: компанія (або перша серія, якщо компанії в скоупі немає).
   const visibleKeys = useMemo(() => {
     if (!resp) return new Set<string>();
     if (shown) return shown;
     const first = resp.series.find((s) => s.scopeType === "company") ?? resp.series[0];
-    const set = new Set<string>(first ? [first.scopeKey] : []);
-    if (pickedTeam != null) set.add(String(pickedTeam));
-    return set;
-  }, [resp, shown, pickedTeam]);
+    return new Set<string>(first ? [first.scopeKey] : []);
+  }, [resp, shown]);
 
-  // усі періоди (вісь X) + рядки для recharts; план — окремими ключами `p<scopeKey>`
+  // усі періоди (вісь X) + рядки для recharts. Плану на графіку немає (ТЗ 14.10, п.1) — сервер його й далі віддає, екран не малює.
   const { rows, seriesList } = useMemo(() => {
     if (!resp) return { rows: [] as any[], seriesList: [] as StatsSeries[] };
     const periods = new Set<string>();
     resp.series.forEach((s) => s.points.forEach((p) => periods.add(p.period)));
-    (resp.plan ?? []).forEach((pl) => pl.points.forEach((p) => periods.add(p.period)));
     const sorted = [...periods].sort();
     const map = new Map(sorted.map((p) => [p, { period: p } as any]));
     resp.series.forEach((s, i) => s.points.forEach((p) => { map.get(p.period)![`s${i}`] = p.value; }));
-    (resp.plan ?? []).forEach((pl) => pl.points.forEach((p) => { map.get(p.period)![`p${pl.scopeKey}`] = p.value; }));
     return { rows: sorted.map((p) => map.get(p)!), seriesList: resp.series };
   }, [resp]);
 
@@ -210,32 +205,20 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   const toggle = (k: string) => setShown(() => { const n = new Set(visibleKeys); n.has(k) ? n.delete(k) : n.add(k); return n; });
   const isolate = (k: string) => setShown(new Set([k]));
   const archivedCount = seriesList.filter((s) => s.archived).length;
-  const planVisible = (resp?.plan ?? []).filter((pl) => visibleKeys.has(pl.scopeKey));
 
-  // Межа осі Y — по видимому вікну (лінії й план), щоб поділки були круглими саме в тому, що бачимо.
+  // Межа осі Y — по видимому вікну, щоб поділки були круглими саме в тому, що бачимо.
   const yTicks = useMemo(() => {
     const windowRows = rows.slice(eff.lo, eff.hi + 1);
     let max = 0;
     for (const r of windowRows) {
       for (const { i } of visibleSeries) { const v = r[`s${i}`]; if (typeof v === "number" && v > max) max = v; }
-      for (const pl of planVisible) { const v = r[`p${pl.scopeKey}`]; if (typeof v === "number" && v > max) max = v; }
     }
     return niceTicks(max);
-  }, [rows, eff.lo, eff.hi, visibleSeries, planVisible]);
+  }, [rows, eff.lo, eff.hi, visibleSeries]);
 
-  // Середнє / мін / макс по ПЕРШІЙ видимій серії у вікні. «Зараз» і «Δ до попер.» прибрано: вони порівнювали
-  // неповний поточний відрізок із повним минулим (ТЗ, блок 1, п.1) — чесне порівняння тепер у плитках зверху.
-  const stat = useMemo(() => {
-    const first = visibleSeries[0]; if (!first || !rows.length) return null;
-    const windowRows = rows.slice(eff.lo, eff.hi + 1);
-    const key = `s${first.i}`;
-    const pts = windowRows.filter((r) => r[key] != null).map((r) => ({ p: r.period, v: r[key] as number }));
-    if (!pts.length) return null;
-    const vals = pts.map((x) => x.v);
-    const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
-    const min = pts.reduce((a, b) => (b.v < a.v ? b : a)), max = pts.reduce((a, b) => (b.v > a.v ? b : a));
-    return { avg, min, max, name: first.s.scopeName };
-  }, [visibleSeries, rows, eff.lo, eff.hi]);
+  /** Чи є у вікні хоч одна точка видимих серій — інакше графік порожній, і це кажемо словами. */
+  const hasPoints = useMemo(() => rows.slice(eff.lo, eff.hi + 1).some((r) => visibleSeries.some(({ i }) => r[`s${i}`] != null)),
+    [rows, eff.lo, eff.hi, visibleSeries]);
 
   const anomalyAt = (period: string) => (resp?.anomalies ?? []).filter((a) => a.period === period && visibleKeys.has(a.scopeKey));
 
@@ -249,23 +232,12 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
     setDrag({ a: null, b: null });
   };
 
-  const onPickTeam = (teamId: number) => {
-    setPickedTeam(teamId); setShown(null);
-    // Таблиця команд рахує «отримані кошти» — графік показує ту саму величину для обраної команди.
-    setCatKey("money"); setMetricKey("payment_received");
-    // Плавно до графіка (прохання Романа 02.10): таблиця нагорі, графік нижче — інакше клік «нічого не робить».
-    requestAnimationFrame(() => chartRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
-  };
-
   const segBtn = (on: boolean, disabled = false) => ({ fontSize: 12.5, fontWeight: 700, padding: "6px 12px", cursor: disabled ? "not-allowed" : "pointer", border: "none",
     opacity: disabled ? 0.4 : 1, background: on ? "#1f2330" : "var(--card-bg)", color: on ? "#fff" : "var(--text)" } as const);
 
   return (
     <div>
       <h1 className="page-title">📊 Статистики</h1>
-
-      {/* 1️⃣ ЦИФРИ — НА ПЕРШОМУ ПЛАНІ: плитки (факт · план · % · Δ) і таблиця команд. Графік — нижче, другорядний. */}
-      <StatisticsSummary today={today} onPickTeam={onPickTeam} pickedTeam={pickedTeam} />
 
       {/* Категорії */}
       {/* 🙈 ВКЛАДКА «Ручні» (✍️) НЕ ПОКАЗУЄТЬСЯ — рішення власника 08.09.2026: «щоб у
@@ -285,8 +257,8 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
       </div>
 
       {!cat.manualForm && metric && (
-        <div ref={chartRef} style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 16, padding: "18px 20px", scrollMarginTop: 16 }}>
-          {/* Чипи метрик; формула — видимим підписом під ними (ТЗ, блок 4, п.5) */}
+        <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 16, padding: "18px 20px" }}>
+          {/* Чипи метрик. Формула — у ⓘ біля назви графіка (ТЗ 14.10, п.1: «тексту на екрані немає»). */}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {cat.metrics.map((m) => (
               <button key={m.key} onClick={() => { setMetricKey(m.key); setShown(null); }}
@@ -297,7 +269,6 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
               </button>
             ))}
           </div>
-          {metric.hint && <div style={{ fontSize: 12, color: MUTED, margin: "6px 0 0" }}>📐 {metric.hint}{metric.seamHint ? ` · ${metric.seamHint}` : ""}</div>}
 
           {/* 🎛 КЕРУВАННЯ — ДВІ ПІДПИСАНІ ГРУПИ, однакові на всіх вкладках (ТЗ, блок 4, п.2). Недоступний крок
               видно вимкненим із поясненням, а не прибраним — інакше набір кнопок «стрибає» між вкладками. */}
@@ -346,6 +317,12 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
             {!resp && !loadErr && <SkelBox w={420} h={14} />}
           </div>
 
+          {/* 🏷 НАЗВА ПОКАЗНИКА НАД ГРАФІКОМ, як рахується — лише в ⓘ (ТЗ 14.10, п.1). */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, fontWeight: 750, margin: "4px 0 2px" }}>
+            {metric.label}
+            <InfoHint text={[metric.hint, metric.seamHint, SEAM_NOTE].filter(Boolean).join(" · ")} />
+          </div>
+
           {loadErr ? (
             <div role="alert" style={{ padding: "18px 0", color: "#b91c1c", fontSize: 13 }}>
               ⚠️ Графік не завантажився: {loadErr}.{" "}
@@ -382,19 +359,13 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                         Лише коли шов ВСЕРЕДИНІ вікна: на самому краю (вікно «3 міс» з 06.07) підпис налазив на вісь Y і обрізався. */}
                     {rows[eff.lo]?.period < SEAM && (rows[eff.hi]?.period ?? "") >= SEAM && (
                       <ReferenceLine x={rows.find((r) => r.period >= SEAM)?.period} stroke="#94a3b8" strokeDasharray="5 4"
-                        label={{ value: "01.07: таблиця → CRM, рівні не порівнюються", position: "insideTopRight", fontSize: 10.5, fill: MUTED }} />
+                        label={{ value: "01.07", position: "insideTopRight", fontSize: 10.5, fill: MUTED }} />
                     )}
                     {visibleSeries.map(({ s, i }) => (
                       <Line key={s.scopeKey} type="monotone" dataKey={`s${i}`} name={s.scopeName}
                         stroke={s.benchmark ? "#94a3b8" : color(i)} strokeWidth={s.benchmark ? 1.6 : i === 0 ? 2.4 : 1.8}
                         strokeDasharray={s.benchmark ? "6 4" : undefined} dot={false} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
                     ))}
-                    {/* 📈 Сходинки плану (ТЗ, блок 2, п.2) — для «Отримані кошти» і «Поставлені» (KPI авто), тією ж кольоровою гамою, пунктиром. */}
-                    {planVisible.map((pl) => {
-                      const idx = seriesList.findIndex((s) => s.scopeKey === pl.scopeKey);
-                      return <Line key={`plan-${pl.scopeKey}`} type="stepAfter" dataKey={`p${pl.scopeKey}`} name={`План · ${seriesList[idx]?.scopeName ?? pl.scopeKey}`}
-                        stroke={color(Math.max(0, idx))} strokeDasharray="2 3" strokeWidth={1.6} dot={false} connectNulls isAnimationActive={false} />;
-                    })}
                     {/* ⚠️ Аномалії з доказом CRM (ТЗ, блок 1, п.3) — точка помічена, а не лінія тягнеться мовчки. */}
                     {(resp.anomalies ?? []).flatMap((a, k) => {
                       const si = seriesList.findIndex((s) => s.scopeKey === a.scopeKey);
@@ -419,19 +390,7 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
                   </LineChart>
                 </ResponsiveContainer>
               </div>
-              <div style={{ fontSize: 11.5, color: MUTED, marginTop: 4 }}>
-                {SEAM_NOTE}{planVisible.length > 0 ? (metric.key === "cars_delivered"
-                  ? " План — KPI-цілі задачника «відправлено авто» (є з 07.2026), те саме число, що на плитці «Відправлені авто»."
-                  : effGran === "week" ? " План тижня на графіку — те саме число, що на плитці: автоплан частин тижня + ручні цілі тімлідів." : "") : ""}
-              </div>
-              {stat ? (
-                <div style={{ display: "flex", gap: 26, flexWrap: "wrap", paddingTop: 8, borderTop: "1px solid var(--border)", marginTop: 8, fontSize: 13 }}>
-                  <span style={{ color: MUTED }}>{stat.name}, точки у вікні графіка —</span>
-                  <span style={{ color: MUTED }} title="середнє значення ТОЧОК, видимих на графіку; для чека це не «чек за весь період», а середнє чеків по днях / тижнях / місяцях">середнє точок: <b style={{ color: "var(--text)" }}>{fmt(stat.avg, metric.unit)}</b></span>
-                  <span style={{ color: MUTED }}>мін: <b style={{ color: "var(--text)" }}>{fmt(stat.min.v, metric.unit)}</b> ({shortDate(stat.min.p)})</span>
-                  <span style={{ color: MUTED }}>макс: <b style={{ color: "var(--text)" }}>{fmt(stat.max.v, metric.unit)}</b> ({shortDate(stat.max.p)})</span>
-                </div>
-              ) : <div style={{ padding: "12px 0", color: MUTED, fontSize: 13 }}>У вибраному вікні немає точок для цього показника.</div>}
+              {!hasPoints && <div style={{ padding: "12px 0", color: MUTED, fontSize: 13 }}>У вибраному вікні немає точок для цього показника.</div>}
             </>
           )}
         </div>
