@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
-  judgeRequest, cardOf, ownerLine, payRow, cashExpenseOf, isNetworkDrop, dupsOf, findBankPayment, orderNoOf, payWindow, PAY_PIPELINE, PAY_STATUSES, PAY_RESPONSIBLE, PAY_URGENCY, PAY_CATEGORY,
+  judgeRequest, cardOf, ownerLine, payRow, cashExpenseOf, isNetworkDrop, dupsOf, findBankPayment, orderNoOf, payWindow, receivablesKeyOf, PAY_PIPELINE, PAY_STATUSES, PAY_RESPONSIBLE, PAY_URGENCY, PAY_CATEGORY,
   type PayRequest, type MainDeal, type PayContext,
 } from "./paymentRun.js";
 
@@ -101,6 +101,29 @@ test("#1267c ОПЛАТА ЗА НОМЕРОМ РАХУНКУ: «Номер за�
   assert.equal(payWindow(new Date("2026-10-14T14:00:00Z")).day, "2026-10-15", "🔴 о 17:00 прогін не перейшов на завтрашній файл");
   assert.equal(payWindow(new Date("2026-10-14T13:59:00Z")).day, "2026-10-14", "🔴 о 16:59 прогін уже збирає завтрашній файл");
   assert.equal(iso(payWindow(new Date("2026-12-14T10:00:00Z")).to), "2026-12-14T15:00:00.000Z", "🔴 узимку (UTC+2) межа не 17:00");
+});
+
+/**
+ * #1270 — ЛІМІТ БЕРЕТЬСЯ З РЯДКА «ДЕБІТОРСЬКОЇ ЗАБОРГОВАНОСТІ» (Роман 15.10.2026). Клієнт CRM і клієнт 1С записані
+ * по-різному: «ПП РВК „ФАСАД-МАЙСТЕР“» проти «Фасад майстер ПП РВК» — і 14.10 три запити з лімітом 25 дн. / 500 000
+ * зупинились як «ліміту немає». Міст — рахунки 1С (кожен знає свою угоду): рахунок цієї угоди; інакше рахунки інших угод
+ * того ж клієнта, якщо ведуть до ОДНОГО рядка; кілька рядків — не вгадуємо, а кажемо; рахунків немає — ключ угоди.
+ * 🧨 Червоніє, якщо рахунок угоди програє здогаду, кілька рядків зіллються в один або порожній міст загубить ключ угоди.
+ */
+test("#1270 ЛІМІТ — З РЯДКА ДЕБІТОРКИ: міст через рахунки 1С (рахунок угоди → рахунки клієнта → ключ угоди), кілька рядків — не вгадуємо", () => {
+  assert.deepEqual(receivablesKeyOf("пп рвк фасад", "фасадмайстеррвк", ["інший"]), { key: "фасадмайстеррвк", ambiguous: [] }, "🔴 рахунок самої угоди не має переваги");
+  assert.deepEqual(receivablesKeyOf("пп рвк фасад", null, ["фасадмайстеррвк", "фасадмайстеррвк"]), { key: "фасадмайстеррвк", ambiguous: [] }, "🔴 рахунки інших угод клієнта не знайшли рядок");
+  assert.deepEqual(receivablesKeyOf("x", null, ["a", "b", "a"]), { key: null, ambiguous: ["a", "b"] }, "🔴 кілька рядків дебіторки злито в один");
+  assert.deepEqual(receivablesKeyOf("клієнт", null, []), { key: "клієнт", ambiguous: [] }, "🔴 без рахунків загубився ключ угоди");
+  const unpaid = main({ paid1c: false });
+  const inLim = ctx({ limit: { days: 25, amount: 500000 }, debt: { amount: 92300, ageDays: 23 }, limitRow: "Фасад майстер ПП РВК" });
+  const v = judgeRequest(req(), unpaid, inLim, NOW);
+  assert.deepEqual([v.ok, v.paidBy], [true, "ліміт"], "🔴 «Фасад-Майстер» у межах ліміту не пройшов");
+  assert.match(v.notes.join(), /у межах ліміту «Фасад майстер ПП РВК»/, "🔴 не видно, з якого рядка дебіторки взято ліміт");
+  const amb = judgeRequest(req(), unpaid, ctx({ limitAmbiguous: ["A", "B"] }), NOW);
+  assert.equal(amb.ok, false, "🔴 неоднозначний рядок дебіторки пропустив оплату");
+  assert.match(amb.reasons.join(), /кільком рядкам дебіторки \(A, B\)/, "🔴 неоднозначність не названа");
+  assert.match(SRC("jobs/buildPaymentFile.ts"), /rowOf\.set\(id, receivablesKeyOf\(ck, inv\.find\(/, "🔴 джоба шукає ліміт не через рядок дебіторки");
 });
 
 test("#1267b ФОРМАТ ФАЙЛУ: картка 0000 0000 0000 0000, власник як вніс менеджер, «Транспортні послуги»; готівка — лише готівкові слоти", () => {

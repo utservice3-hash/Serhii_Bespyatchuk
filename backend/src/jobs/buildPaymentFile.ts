@@ -18,7 +18,7 @@ import { writeSheetTab } from "../bankSources/googleSheetsWrite.js";
 import { FM_INCOME_FIELDS } from "../core/fmSums.js";
 import {
   PAY_PIPELINE, PAY_STATUSES, PAY_RESPONSIBLE, PAY_URGENCY, PAY_LOOKBACK_DAYS, REQ_FIELDS, MAIN_FIELDS,
-  cashExpenseOf, judgeRequest, payRow, isNetworkDrop, orderNoOf, findBankPayment, payWindow, dupsOf,
+  cashExpenseOf, judgeRequest, payRow, isNetworkDrop, orderNoOf, findBankPayment, payWindow, dupsOf, receivablesKeyOf,
   type PayRequest, type MainDeal, type PayContext, type Verdict, type BankIn,
 } from "../core/paymentRun.js";
 import { jobSkip } from "./jobRuns.js";
@@ -100,7 +100,23 @@ async function contexts(reqs: PayRequest[], mains: Map<number, MainDeal>, client
     `SELECT kommo_id::text, source_deal_id::text, carrier_pay_amount::text AS amount, status_id::text FROM deals
       WHERE pipeline_id = $1 AND source_deal_id = ANY($2::bigint[]) AND carrier_pay_type ILIKE 'готів%' AND status_id <> 143`,
     [PAY_PIPELINE, mainIds])).rows;
-  const keys = [...new Set([...clientKey.values()].map((x) => x.key).filter((k): k is string => !!k))];
+  // Рядок дебіторки для кожної угоди — через рахунки 1С (`receivablesKeyOf`): за рахунком угоди, інакше за рахунками
+  // інших угод того самого клієнта CRM.
+  const crmKeys = [...new Set([...clientKey.values()].map((x) => x.key).filter((k): k is string => !!k))];
+  const inv = (await pool.query<{ deal: string; rkey: string; ckey: string | null }>(
+    `SELECT substring(ri.service_url from '/leads/detail/([0-9]+)$') AS deal, ri.client_key AS rkey, d.client_key AS ckey
+       FROM receivable_invoices ri LEFT JOIN deals d ON d.kommo_id = substring(ri.service_url from '/leads/detail/([0-9]+)$')::bigint
+      WHERE ri.service_url ~ '/leads/detail/[0-9]+$'
+        AND (substring(ri.service_url from '/leads/detail/([0-9]+)$')::bigint = ANY($1::bigint[]) OR d.client_key = ANY($2))`,
+    [mainIds, crmKeys])).rows;
+  const rowOf = new Map<number, { key: string | null; ambiguous: string[] }>();
+  for (const id of mainIds) {
+    const ck = clientKey.get(id)?.key ?? null;
+    rowOf.set(id, receivablesKeyOf(ck, inv.find((x) => Number(x.deal) === id)?.rkey ?? null, inv.filter((x) => ck && x.ckey === ck).map((x) => x.rkey)));
+  }
+  const keys = [...new Set([...rowOf.values()].flatMap((x) => [x.key, ...x.ambiguous]).filter((k): k is string => !!k))];
+  const rowName = new Map((await pool.query<{ client_key: string; client_name: string }>(
+    `SELECT DISTINCT ON (client_key) client_key, client_name FROM receivables WHERE client_key = ANY($1)`, [keys])).rows.map((x) => [x.client_key, x.client_name]));
   const limits = new Map((await pool.query<{ client_key: string; limit_days: number; limit_amount: string | null }>(
     `SELECT client_key, limit_days, limit_amount::text FROM client_credit_limits WHERE client_key = ANY($1)`, [keys])).rows.map((x) => [x.client_key, x]));
   const debts = new Map((await pool.query<{ client_key: string; amount: string; age: number | null }>(
@@ -128,12 +144,15 @@ async function contexts(reqs: PayRequest[], mains: Map<number, MainDeal>, client
     const dupOf = dupsOf(r, others.map((s) => ({ id: Number(s.kommo_id), amount: s.amount == null ? null : Number(s.amount), status: Number(s.status_id), card: sibCard.get(Number(s.kommo_id)) ?? null })));
     // «Уже оплачено» — лише ІНШІ запити, закриті «Оплачено» РАНІШЕ за цей (інакше два сьогоднішні рахували б один одного).
     const paidBefore = others.filter((s) => Number(s.status_id) === 142 && Number(s.kommo_id) < r.id).reduce((a, s) => a + Number(s.amount ?? 0), 0);
-    const ck = clientKey.get(mid)?.key ?? null;
+    const row = rowOf.get(mid) ?? { key: null, ambiguous: [] };
+    const ck = row.key;
     const lim = ck ? limits.get(ck) : undefined, dbt = ck ? debts.get(ck) : undefined;
     out.set(r.id, {
       dupOf, paidBefore, bankSeen: bankByDeal.get(mid) ?? null, receipt: receiptByDeal.get(mid) ?? false,
       limit: lim ? { days: lim.limit_days, amount: lim.limit_amount == null ? null : Number(lim.limit_amount) } : null,
       debt: dbt ? { amount: Number(dbt.amount), ageDays: dbt.age } : null,
+      limitRow: ck && ck !== (clientKey.get(mid)?.key ?? null) ? rowName.get(ck) ?? ck : null,
+      limitAmbiguous: row.ambiguous.map((k) => rowName.get(k) ?? k),
     });
   }
   return out;

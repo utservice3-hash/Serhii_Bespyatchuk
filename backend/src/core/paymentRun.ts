@@ -76,6 +76,10 @@ export interface PayContext {
   limit: { days: number; amount: number | null } | null;
   /** Поточний борг клієнта і вік найстарішого боргу. */
   debt: { amount: number; ageDays: number | null } | null;
+  /** Рядок «Дебіторської заборгованості», з якого взято ліміт і борг, якщо його назва інша, ніж у CRM (для примітки). */
+  limitRow?: string | null;
+  /** Клієнт CRM веде до КІЛЬКОХ рядків дебіторки — ліміт не визначено, назви рядків. */
+  limitAmbiguous?: string[];
 }
 export type PaidBy = "1С" | "Виписка" | "ліміт";
 export interface Verdict { ok: boolean; reasons: string[]; notes: string[]; paidBy: PaidBy | null }
@@ -141,6 +145,7 @@ export function judgeRequest(r: PayRequest, m: MainDeal | null, ctx: PayContext,
   if (!m.paid1c && !m.orderNo) reasons.push("номер рахунку 1С («Номер заказа») не заповнено — перевірити, чи є рахунок");
   if (m.paid1c) paidBy = "1С";
   else if (ctx.bankSeen) { paidBy = "Виписка"; notes.push(`оплата у Виписці за рах. №${ctx.bankSeen.invoiceNo} (${ctx.bankSeen.bookedOn})`); }
+  else if (ctx.limitAmbiguous?.length) reasons.push(`оплати від клієнта немає; клієнт угоди відповідає кільком рядкам дебіторки (${ctx.limitAmbiguous.join(", ")}) — ліміт перевірити вручну`);
   else if (!ctx.limit) reasons.push("оплати від клієнта немає, і ліміту немає");
   else if (ctx.limit.days <= 0) reasons.push("оплати від клієнта немає, ліміт не надано (0 днів)");
   else {
@@ -149,7 +154,7 @@ export function judgeRequest(r: PayRequest, m: MainDeal | null, ctx: PayContext,
     if (overDays || overSum) reasons.push(`оплати немає, ліміт перевищено: ${[overDays ? `борг ${age} дн. при ліміті ${ctx.limit.days}` : "", overSum ? `борг ${money(debt)} при ліміті ${money(ctx.limit.amount!)}` : ""].filter(Boolean).join(", ")}`);
     else {
       paidBy = "ліміт";
-      notes.push(`оплати ще немає — у межах ліміту (${ctx.limit.days} дн.${ctx.limit.amount != null ? ` / ${money(ctx.limit.amount)}` : ""}; борг ${money(debt)}, ${age} дн.)`);
+      notes.push(`оплати ще немає — у межах ліміту${ctx.limitRow ? ` «${ctx.limitRow}»` : ""} (${ctx.limit.days} дн.${ctx.limit.amount != null ? ` / ${money(ctx.limit.amount)}` : ""}; борг ${money(debt)}, ${age} дн.)`);
     }
   }
   if (!paidBy && ctx.receipt) notes.push("в угоді є квитанція клієнта — глянути");
@@ -225,4 +230,20 @@ export function dupsOf(r: Pick<PayRequest, "cash" | "card">, siblings: readonly 
   const mine = (r.card ?? "").replace(/\D/g, "");
   return siblings.filter((s) => r.cash != null && s.amount != null && Math.abs(s.amount - r.cash) < 0.5
     && (!s.card || !mine || s.card.replace(/\D/g, "") === mine)).map((s) => s.id);
+}
+
+/**
+ * Рядок «Дебіторської заборгованості» для угоди — там, де ліміт бачить Тетяна (Роман 15.10.2026: «це потрібно
+ * дивитися в дашборді в дебіторській заборгованості»). Клієнт у CRM і в 1С записаний по-різному («ПП РВК „ФАСАД-МАЙСТЕР“»
+ * проти «Фасад майстер ПП РВК»), тож ключ угоди не збігається з ключем дебіторки. Міст — рахунки 1С: кожен знає свою
+ * угоду. (1) рахунок САМЕ цієї угоди; (2) рахунки інших угод того самого клієнта CRM — якщо вони ведуть до ОДНОГО рядка;
+ * кілька рядків — не вгадуємо; (3) рахунків немає — ключ угоди як є. Без порівняння назв: схожість назв зіставила
+ * клієнта «Анатолій» з лімітом «Борисов Володимир Анатолійович» (замір 15.10.2026).
+ */
+export function receivablesKeyOf(dealKey: string | null, byDeal: string | null, byClient: readonly string[]): { key: string | null; ambiguous: string[] } {
+  if (byDeal) return { key: byDeal, ambiguous: [] };
+  const uniq = [...new Set(byClient)];
+  if (uniq.length === 1) return { key: uniq[0], ambiguous: [] };
+  if (uniq.length > 1) return { key: null, ambiguous: uniq };
+  return { key: dealKey, ambiguous: [] };
 }
