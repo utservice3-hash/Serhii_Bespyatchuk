@@ -39,6 +39,11 @@ async function loadSave(): Promise<{
   saveErrorText: (e: unknown, fallback?: string) => string;
   draftKey: (d: unknown) => string;
   hasUnsavedEdits: (snap: string | null, cur: unknown) => boolean;
+  draftStoreKey: (userId: number, type: string, subjectId: number, date: string) => string;
+  parseStoredDraft: (raw: string | null) => { at: string; draft: unknown } | null;
+  draftExpired: (at: string, now: Date) => boolean;
+  draftToRestore: (stored: { at: string; draft: unknown } | null, serverKey: string, serverUpdatedAt: string | null, now: Date) => unknown;
+  DRAFT_TTL_DAYS: number;
 }> {
   const ts = (await import("typescript")).default;
   const js = ts.transpileModule(readFileSync(SAVE_TS, "utf8"), {
@@ -165,4 +170,60 @@ test("#140b перехід між датою/людиною/типом не ви
     "🔴 чип журналу повернувся до прямого setDateSel");
   assert.doesNotMatch(src, /onClick=\{\(\) => \{ setType\(/,
     "🔴 перемикач типу повернувся до прямого setType");
+});
+
+/**
+ * #1761 — ЧЕРНЕТКА 1×1 ПЕРЕЖИВАЄ ПЕРЕЗАВАНТАЖЕННЯ, АЛЕ НЕ ЗАТИРАЄ СВІЖІШЕ (задача 5760, Роман 15.10.2026: «коли
+ * випадково перевантажив сторінку — все пропадає»). Правила — справжнім модулем, по обидва боки кожної межі.
+ * Червоніє, якщо стара чернетка підставиться поверх пізнішого збереження, прострочена — відновиться, чернетка однієї
+ * людини / дати / типу / акаунта потрапить в іншу анкету, або сміття в сховищі зламає екран.
+ */
+test("#1761 ЧЕРНЕТКА 1×1: відновлюється лише своя, свіжа й новіша за сервер; ключ — акаунт, тип, людина, дата", async () => {
+  const { draftKey, draftStoreKey, parseStoredDraft, draftExpired, draftToRestore, DRAFT_TTL_DAYS } = await loadSave();
+  const server = { answers: { a1: { score: 7 } }, enpsScore: null, enpsReason: "", satisfaction: 6, notes: {} };
+  const typed = { ...server, answers: { a1: { score: 7, text: "просив перевести на інший напрям" } } };
+  const now = new Date("2026-10-15T12:00:00Z");
+  const at = (h: number) => new Date(now.getTime() - h * 3_600_000).toISOString();
+  const sk = draftKey(server);
+
+  // 1. Набране після останнього збереження — повертається.
+  assert.deepEqual(draftToRestore({ at: at(1), draft: typed }, sk, at(5), now), typed, "🔴 незбережена чернетка не відновилась");
+  assert.deepEqual(draftToRestore({ at: at(1), draft: typed }, sk, null, now), typed, "🔴 чернетка нової зустрічі (запису ще немає) не відновилась");
+  // 2. 🔴 Сервер новіший за чернетку — перемагає сервер (зберіг пізніше, можливо з іншого пристрою).
+  assert.equal(draftToRestore({ at: at(5), draft: typed }, sk, at(1), now), null, "🔴 стара чернетка затерла пізніше збереження");
+  // 3. Те саме, що на сервері, — нічого відновлювати (інакше плашка «відновлено» на порожньому місці).
+  assert.equal(draftToRestore({ at: at(1), draft: server }, sk, at(5), now), null, "🔴 «відновлено» без жодної різниці");
+  // 4. Строк: межа по обидва боки.
+  assert.equal(DRAFT_TTL_DAYS, 7);
+  assert.equal(draftExpired(at(24 * 7 - 1), now), false, "🔴 шестиденна чернетка вважається простроченою");
+  assert.equal(draftExpired(at(24 * 7 + 1), now), true, "🔴 чернетка старша за тиждень не прострочена");
+  assert.equal(draftToRestore({ at: at(24 * 8), draft: typed }, sk, null, now), null, "🔴 прострочена чернетка відновилась");
+  // 5. Сміття в сховищі — null, а не виняток.
+  for (const raw of [null, "", "{", "[]", '{"at":"вчора","draft":{}}', '{"at":"2026-10-15T10:00:00Z"}']) {
+    assert.equal(parseStoredDraft(raw), null, `🔴 сміття «${String(raw)}» прочитано як чернетку`);
+  }
+  assert.deepEqual(parseStoredDraft(JSON.stringify({ at: at(1), draft: typed })), { at: at(1), draft: typed });
+  // 6. Ключ розрізняє КОЖЕН із чотирьох вимірів.
+  const k = draftStoreKey(50, "A", 104, "2026-10-15");
+  for (const other of [draftStoreKey(51, "A", 104, "2026-10-15"), draftStoreKey(50, "B", 104, "2026-10-15"),
+    draftStoreKey(50, "A", 105, "2026-10-15"), draftStoreKey(50, "A", 104, "2026-10-14")]) {
+    assert.notEqual(other, k, "🔴 чернетка однієї зустрічі відкриється в іншій");
+  }
+});
+
+/**
+ * #1761b — ЧЕРНЕТКА ПІДКЛЮЧЕНА В СЕКЦІЮ. Правила нічого не варті, поки секція кличе їх повз. Червоніє, якщо завантаження
+ * не звіряється з чернеткою, знімок перестане бути СЕРВЕРНИМ (тоді відновлене виглядало б збереженим і «Зберегти» не
+ * питали б), запис піде під ключ ще не завантаженого запису, «Зберегти» не прибере чернетку, або зникне плашка.
+ */
+test("#1761b ЧЕРНЕТКА В СЕКЦІЇ: звірка на завантаженні, знімок — серверний, запис лише у звірений ключ, «Зберегти» і «перейти» прибирають", () => {
+  const src = stripComments(readFileSync(SECTION, "utf8"));
+  assert.match(src, /const restore = draftToRestore\(stored, draftKey\(loaded\), r\.updated_at \?\? null, new Date\(\)\);/, "🔴 завантаження не звіряється з чернеткою");
+  assert.match(src, /setNotes\(shown\.notes\); setSavedAt\(r\.updated_at \?\? null\); snap\(loaded\);/, "🔴 знімок узято з відновленого, а не з сервера — відновлене виглядає збереженим");
+  assert.match(src, /if \(!key \|\| draftFor\.current !== key\) return;/, "🔴 чернетка пишеться під ключ запису, який ще не звірено");
+  assert.match(src, /setTimeout\(\(\) => ls\.set\(key, JSON\.stringify\(\{ at: new Date\(\)\.toISOString\(\), draft \}\)\)/, "🔴 набране не пишеться в браузер");
+  assert.match(bodyOf(src, "save"), /ls\.del\(draftStoreKey\(userId, type, selId, dateSel\)\)/, "🔴 «Зберегти» лишає чернетку — вона «відновиться» поверх збереженого");
+  assert.match(bodyOf(src, "leaveGuard"), /ls\.del\(draftFor\.current\)/, "🔴 «перейти й втратити» лишає чернетку — вона воскресне");
+  assert.match(src, /\{restoredAt && dirty && \(/, "🔴 немає плашки «відновлено» — людина не знає, що це ще не збережено");
+  assert.match(src, /useState<O2OType>\(\(\) => restoreSel\.current\?\.type \?\? "A"\)/, "🔴 після перезавантаження не повертається тип анкети");
 });

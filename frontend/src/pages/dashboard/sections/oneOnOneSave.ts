@@ -98,3 +98,52 @@ export function draftKey(d: O2ODraft): string {
 export function hasUnsavedEdits(snapshot: string | null, cur: O2ODraft): boolean {
   return snapshot !== null && draftKey(cur) !== snapshot;
 }
+
+// ── ЧЕРНЕТКА ПЕРЕЖИВАЄ ПЕРЕЗАВАНТАЖЕННЯ (задача 5760, Роман 15.10.2026) ─────────────────────────────────────────────
+// «Коли випадково перевантажив сторінку — все пропадає, сам з цим зіштовхнувся». Попередження `beforeunload` легко
+// проклацати, а Safari на телефоні його не показує взагалі; перехід в інший розділ дашборда і зовсім не питає. Тому
+// незбережена анкета пишеться в браузер (localStorage) і підставляється назад, коли відкриваєш ту саму зустріч.
+
+/** Чернетки старші за тиждень — не відновлюються й прибираються: стара анкета не має тихо затерти свіжу. */
+export const DRAFT_TTL_DAYS = 7;
+export const DRAFT_PREFIX = "o2oDraft:";
+
+/**
+ * Ключ чернетки — РІВНО ключ запису на сервері (тип, субʼєкт, дата) плюс АКАУНТ, що її набирав. Без акаунта на
+ * спільному компʼютері чернетка одного проводжувача підставилась би іншому; без будь-якого з решти трьох — чернетка
+ * зустрічі з однією людиною відкрилась би в анкеті іншої.
+ */
+export function draftStoreKey(userId: number, type: string, subjectId: number, date: string): string {
+  return `${DRAFT_PREFIX}${userId}:${type}:${subjectId}:${date}`;
+}
+
+export interface StoredDraft { at: string; draft: O2ODraft }
+
+/** Розбір того, що лежить у сховищі. Сміття (чужий формат, обрізаний JSON) — `null`, а не виняток посеред екрана. */
+export function parseStoredDraft(raw: string | null): StoredDraft | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw) as Partial<StoredDraft>;
+    if (typeof v?.at !== "string" || Number.isNaN(Date.parse(v.at)) || !v.draft || typeof v.draft !== "object") return null;
+    return { at: v.at, draft: v.draft };
+  } catch { return null; }
+}
+
+/** Чернетка прострочена (старша за `DRAFT_TTL_DAYS`). */
+export function draftExpired(at: string, now: Date): boolean {
+  return now.getTime() - Date.parse(at) > DRAFT_TTL_DAYS * 86_400_000;
+}
+
+/**
+ * Чи підставляти чернетку замість завантаженого з сервера запису. Так — лише коли ВСЕ разом:
+ *  · вона є й не прострочена;
+ *  · вона ВІДРІЗНЯЄТЬСЯ від серверного запису (`draftKey`) — інакше показувати «відновлено» нема чого;
+ *  · вона НОВІША за останнє збереження на сервері. 🔴 Без цієї умови стара чернетка з цього компʼютера затерла б
+ *    запис, який хтось (чи ти сам з іншого пристрою) зберіг пізніше.
+ */
+export function draftToRestore(stored: StoredDraft | null, serverKey: string, serverUpdatedAt: string | null, now: Date): O2ODraft | null {
+  if (!stored || draftExpired(stored.at, now)) return null;
+  if (draftKey(stored.draft) === serverKey) return null;
+  if (serverUpdatedAt && Date.parse(serverUpdatedAt) >= Date.parse(stored.at)) return null;
+  return stored.draft;
+}

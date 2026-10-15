@@ -14,7 +14,9 @@ import { InfoHint } from "../widgets";
 import { enpsColor, CLASS_UI, BAND_COLOR, SCALE_CAPTION } from "./enpsScale";
 import { legacySections, unmappedKeys, averageOfScores, sameScore, isFullyUnmapped } from "./oneOnOneLegacy";
 import { OneOnOneFormsEditor } from "./OneOnOneFormsEditor";
-import { saveErrorText, draftKey, hasUnsavedEdits, UNSAVED_PROMPT, UNSAVED_BEFOREUNLOAD, type O2ODraft } from "./oneOnOneSave";
+import { saveErrorText, draftKey, hasUnsavedEdits, UNSAVED_PROMPT, UNSAVED_BEFOREUNLOAD, type O2ODraft,
+  draftStoreKey, parseStoredDraft, draftToRestore, draftExpired, DRAFT_PREFIX } from "./oneOnOneSave";
+import { getAuthPayload } from "../../../auth";
 
 type O2OType = "A" | "B" | "V";
 const TYPE_LABEL: Record<O2OType, string> = { A: "Тімлід → Менеджер", B: "Керівник → Тімлід", V: "HR → Всі" };
@@ -122,6 +124,21 @@ function Pill({ active, onClick, children, title }: { active: boolean; onClick: 
   );
 }
 
+/** 💾 localStorage буває недоступним (приватне вікно, заборонені дані сайту) — тоді чернетки просто немає, екран живе. */
+const ls = {
+  get: (k: string): string | null => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* сховище недоступне — чернетки не буде */ } },
+  del: (k: string) => { try { localStorage.removeItem(k); } catch { /* те саме */ } },
+};
+/** Вибір екрана (тип, людина, дата) — щоб після перезавантаження повернутись туди, де був (задача 5760). */
+const SEL_KEY = "o2oSel";
+type SavedSel = { type: O2OType; selId: number; date: string };
+const readSel = (): SavedSel | null => {
+  try { const v = JSON.parse(ls.get(SEL_KEY) ?? "null") as SavedSel | null;
+    return v && ["A", "B", "V"].includes(v.type) && Number.isInteger(v.selId) && /^\d{4}-\d{2}-\d{2}$/.test(v.date) ? v : null; }
+  catch { return null; }
+};
+
 export function OneOnOneSection() {
   const dlg = useDialogs();
   const toast = useToast();
@@ -132,7 +149,9 @@ export function OneOnOneSection() {
   const [canEdit, setCanEdit] = useState(false);
   const [typesLoaded, setTypesLoaded] = useState(false);
 
-  const [type, setType] = useState<O2OType>("A");
+  /** Куди повертатись після перезавантаження: спожиється один раз, коли завантажиться список людей і журнал. */
+  const restoreSel = useRef<SavedSel | null>(readSel());
+  const [type, setType] = useState<O2OType>(() => restoreSel.current?.type ?? "A");
   const [tab, setTab] = useState<"conduct" | "stats" | "analytics" | "enps" | "edit">("conduct");
   const [monthSel, setMonthSel] = useState<string>(() => localStorage.getItem("o2oMonth") || curMonthStr());
   const [form, setForm] = useState<O2OForm | null>(null);
@@ -152,6 +171,11 @@ export function OneOnOneSection() {
   const [err, setErr] = useState<string | null>(null);
   // Відбиток стану, який СЕРВЕР уже знає. Проти нього рахуємо «є незбережене».
   const [savedSnap, setSavedSnap] = useState<string | null>(null);
+  /** 💾 Чернетка в браузері (задача 5760): чий акаунт, для якого запису вона вже звірена, серверна версія для «Відкинути». */
+  const userId = getAuthPayload()?.userId ?? null;
+  const draftFor = useRef<string | null>(null);
+  const serverDraft = useRef<O2ODraft | null>(null);
+  const [restoredAt, setRestoredAt] = useState<string | null>(null);
   const [stats, setStats] = useState<OneOnOneStatRow[]>([]);
   // Коротка аналітика: сигнали за ОБРАНИЙ місяць (той самий пікер у шапці, що й решта вкладок).
   const [analytics, setAnalytics] = useState<O2OAnalytics | null>(null);
@@ -184,6 +208,12 @@ export function OneOnOneSection() {
   const loadMeetings = (mgrId: number) => fetchO2OMeetings(type, mgrId, 24).then(setMeetings).catch(() => setMeetings([]));
   useEffect(() => { fetchO2OForm(type).then(setForm).catch(() => setForm(null)); }, [type]);
   useEffect(() => { setSelId(null); setMeetings([]); void loadSubjects(); /* eslint-disable-next-line */ }, [type, monthSel]);
+  // Повернення до людини, з якою працював до перезавантаження (задача 5760). Лише якщо вона є в списку цього типу.
+  useEffect(() => {
+    const r = restoreSel.current;
+    if (!r || selId != null || r.type !== type || !subjects.length) return;
+    if (subjects.some((x) => x.id === r.selId)) setSelId(r.selId); else restoreSel.current = null;
+  }, [subjects, type, selId]);
   /* 📅 ОБРАНИЙ МІСЯЦЬ ЇДЕ В ЗАПИТ. Раніше тут стояло жорстке `6`, а `monthSel` був лише
      у списку залежностей — тобто ефект перезапускався, а запит щоразу просив ті самі
      півроку. Через це вкладка «Історія» малювала колонку на КОЖНУ зустріч за 6 місяців
@@ -213,6 +243,10 @@ export function OneOnOneSection() {
       if (!live) return;
       setMeetings(list);
       const inMonth = list.filter((m) => m.meeting_date.slice(0, 7) === monthSel);
+      const r = restoreSel.current;
+      restoreSel.current = null;
+      // Після перезавантаження — та сама дата, що була відкрита (якщо вона з обраного місяця), а не «сьогодні».
+      if (r && r.selId === selId && r.type === type && r.date.slice(0, 7) === monthSel) { setDateSel(r.date); return; }
       setDateSel(monthSel === curMonthStr() ? kyivToday() : (inMonth[0]?.meeting_date ?? `${monthSel}-01`));
     }).catch(() => { if (live) setMeetings([]); });
     return () => { live = false; };
@@ -257,26 +291,37 @@ export function OneOnOneSection() {
     // 🔴 ЗНІМОК СТАВИМО В ОБОХ ГІЛКАХ. Якщо лишити його `null` на збої завантаження,
     // захист незбереженого мовчки вимкнеться саме там, де людина почне набирати заново.
     const snap = (d: O2ODraft) => { setSavedSnap(draftKey(d)); };
+    const key = userId != null ? draftStoreKey(userId, type, selId, dateSel) : null;
     fetchOneOnOne(type, selId, dateSel).then((r) => {
       if (!live) return;
       const loaded: O2ODraft = {
         answers: r.answers || {}, enpsScore: r.enps_score, enpsReason: r.enps_reason || "",
         satisfaction: r.satisfaction_score ?? null, notes: (r.notes || {}) as O2ONotes,
       };
-      setAnswers(loaded.answers); setEnpsScore(loaded.enpsScore); setEnpsReason(loaded.enpsReason);
-      setSatisfaction(loaded.satisfaction);
+      // 💾 Незбережена чернетка з цього браузера, новіша за сервер, — підставляється поверх (задача 5760). Знімок
+      // лишається СЕРВЕРНИМ, тож анкета одразу «● незбережено», і «Зберегти» відправить саме відновлене.
+      const stored = key ? parseStoredDraft(ls.get(key)) : null;
+      const restore = draftToRestore(stored, draftKey(loaded), r.updated_at ?? null, new Date());
+      const shown = restore ?? loaded;
+      serverDraft.current = loaded; draftFor.current = key;
+      setRestoredAt(restore && stored ? stored.at : null);
+      setAnswers(shown.answers); setEnpsScore(shown.enpsScore); setEnpsReason(shown.enpsReason);
+      setSatisfaction(shown.satisfaction);
       // Стара помилка знімається ТУТ, а не на початку ефекту: поки нового запису ще
       // немає, ховати попереднє «не збереглося» нема підстав (а синхронний setState в
       // тілі ефекту — ще й зайвий каскад рендерів).
-      setNotes(loaded.notes); setSavedAt(r.updated_at ?? null); snap(loaded); setErr(null);
+      setNotes(shown.notes); setSavedAt(r.updated_at ?? null); snap(loaded); setErr(null);
     }).catch((e) => {
       if (!live) return;
       const empty: O2ODraft = { answers: {}, enpsScore: null, enpsReason: "", satisfaction: null, notes: {} };
       setAnswers(empty.answers); setEnpsScore(null); setEnpsReason(""); setSatisfaction(null);
+      // Сервер не відповів — чернетку НЕ підставляємо й не чіпаємо: порівняти її нема з чим, а стерти — не можна.
+      draftFor.current = null; setRestoredAt(null);
       setNotes(empty.notes); setSavedAt(null); snap(empty);
       setErr(saveErrorText(e, "Не вдалося завантажити анкету"));
     });
     return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selId, type, dateSel]);
 
   const setAns = (key: string, patch: { score?: number; text?: string }) =>
@@ -293,7 +338,13 @@ export function OneOnOneSection() {
   /** Єдиний замок переходу. Мовчить, коли втрачати нічого (див. `draftKey`: порядок
    *  ключів і порожній текст правкою НЕ вважаються — інакше попередження стало б шумом,
    *  а шум прощіпують не читаючи). */
-  const leaveGuard = async () => !dirty || (await dlg.confirm(UNSAVED_PROMPT));
+  const leaveGuard = async () => {
+    if (!dirty) return true;
+    if (!(await dlg.confirm(UNSAVED_PROMPT))) return false;
+    // Людина свідомо обрала «перейти й втратити» — чернетка в браузері теж іде, інакше вона «воскресла» б наступного разу.
+    if (draftFor.current) ls.del(draftFor.current);
+    return true;
+  };
   const pickSubject = async (id: number) => { if (await leaveGuard()) setSelId(id); };
   const pickDate = async (v: string) => { if (await leaveGuard()) setDateSel(v); };
   const pickType = async (t: O2OType) => { if (!(await leaveGuard())) return; setType(t); setSelId(null); };
@@ -305,6 +356,34 @@ export function OneOnOneSection() {
     window.addEventListener("beforeunload", onLeave);
     return () => window.removeEventListener("beforeunload", onLeave);
   }, [dirty]);
+
+  // 💾 ЧЕРНЕТКА В БРАУЗЕРІ (задача 5760). Пишемо ЛИШЕ в чернетку того запису, що вже завантажений і звірений
+  // (`draftFor`): поки йде перехід на іншу людину/дату, на екрані ще стара анкета, і без цієї умови вона лягла б під
+  // новий ключ — або, що гірше, «не змінена» стерла б справжню чернетку нового запису ДО того, як її прочитали.
+  useEffect(() => {
+    const key = userId != null && selId != null ? draftStoreKey(userId, type, selId, dateSel) : null;
+    if (!key || draftFor.current !== key) return;
+    if (!dirty) { ls.del(key); return; }
+    const t = setTimeout(() => ls.set(key, JSON.stringify({ at: new Date().toISOString(), draft })), 800);
+    return () => clearTimeout(t);
+  }, [draft, dirty, userId, type, selId, dateSel]);
+  // Прострочені чернетки (усіх людей і дат) прибираються на відкритті екрана: нотатки HR не лежать у браузері вічно.
+  useEffect(() => {
+    const now = new Date();
+    try {
+      const keys = Array.from({ length: localStorage.length }, (_, i) => localStorage.key(i)).filter((k): k is string => !!k?.startsWith(DRAFT_PREFIX));
+      for (const k of keys) { const d = parseStoredDraft(ls.get(k)); if (!d || draftExpired(d.at, now)) ls.del(k); }
+    } catch { /* сховище недоступне */ }
+  }, []);
+  // Запамʼятати, де працюєш, — щоб перезавантаження повертало сюди ж.
+  useEffect(() => { if (selId != null) ls.set(SEL_KEY, JSON.stringify({ type, selId, date: dateSel })); }, [type, selId, dateSel]);
+  /** «Відкинути» відновлену чернетку — повернути збережене на сервері. */
+  const discardDraft = () => {
+    const d = serverDraft.current; if (!d) return;
+    if (draftFor.current) ls.del(draftFor.current);
+    setAnswers(d.answers); setEnpsScore(d.enpsScore); setEnpsReason(d.enpsReason); setSatisfaction(d.satisfaction); setNotes(d.notes);
+    setRestoredAt(null);
+  };
 
   const allQuestions = useMemo(() => (form?.questions.sections ?? []).flatMap((s) => s.questions), [form]);
   const scoreKeys = useMemo(() => allQuestions.filter((q) => q.field === "score" || q.field === "score_text").map((q) => q.qKey), [allQuestions]);
@@ -327,6 +406,9 @@ export function OneOnOneSection() {
       setSavedAt(new Date().toISOString());
       // Знімок рухається ТІЛЬКИ тут: поки сервер не підтвердив, правка лишається незбереженою.
       setSavedSnap(draftKey(draft));
+      // Збережено на сервері — чернетка в браузері більше не потрібна (задача 5760).
+      if (userId != null) ls.del(draftStoreKey(userId, type, selId, dateSel));
+      serverDraft.current = draft; setRestoredAt(null);
       await Promise.all([loadSubjects(), loadMeetings(selId)]);
     } catch (e) { setErr(saveErrorText(e, "Зустріч не збережена")); }
     finally { setSaving(false); }
@@ -433,6 +515,16 @@ export function OneOnOneSection() {
 
                 {/* 🔴 ПОМИЛКА ЗБЕРЕЖЕННЯ — НА ЕКРАНІ. Доти 403/500 виглядав рівно як успіх:
                     кнопка переставала крутитись, підпис «збережено ЧЧ:ХХ» лишався старим. */}
+                {/* 💾 ВІДНОВЛЕНО З БРАУЗЕРА (задача 5760) — словами, щоб людина знала, що це ще НЕ збережено. */}
+                {restoredAt && dirty && (
+                  <div role="status" data-testid="o2o-draft-restored"
+                    style={{ marginBottom: 14, padding: "11px 14px", borderRadius: 14, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap",
+                      background: "rgba(234,179,8,.14)", color: "#854d0e", fontSize: 13.5, fontWeight: 600 }}>
+                    <span style={{ flex: 1, minWidth: 220 }}>💾 Відновлено незбережену чернетку від {new Date(restoredAt).toLocaleString("uk-UA", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })} — натисніть «Зберегти», щоб вона потрапила в запис.</span>
+                    <button type="button" onClick={discardDraft}
+                      style={{ border: "1px solid #ca8a04", background: "#fff", color: "#854d0e", borderRadius: 10, padding: "5px 12px", fontWeight: 600, cursor: "pointer" }}>Відкинути</button>
+                  </div>
+                )}
                 {err && (
                   <div role="alert" onClick={() => setErr(null)} title="Приховати"
                     style={{ marginBottom: 14, padding: "11px 14px", borderRadius: 14, cursor: "pointer",
