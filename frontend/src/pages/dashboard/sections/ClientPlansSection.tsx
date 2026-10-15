@@ -13,7 +13,7 @@ import { SegmentBadge, ForcedBadge } from "./SegmentBadge";
 import { RowComment } from "./RowComment";
 import { CarrierCommentBanner } from "./CarrierCommentBanner";
 import { CreateTaskDialog, CloseTaskDialog, ContactDialog } from "./ReactivationBits";
-import { RecordingPlayer } from "./RecordingPlayer";
+import { openRecording, closeRecording, useDockSrc } from "./RecordingDock";
 import { ClientCardPanel } from "./ClientCardPanel";
 import { ClientContactFileViewer } from "./ClientContactFileViewer";
 import { ReactCycleStatus, ReactCycleButtons, LeadgenPoolPanel } from "./ReactivationCycle";
@@ -244,7 +244,8 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
   /** 📎 Скрини клієнта, відкриті з рядка (задача 4310, п.1.3): перегляд на місці, не вкладка. */
   const [viewingFiles, setViewingFiles] = useState<{ clientKey: string; name: string; initialId?: number | null } | null>(null);
   /** 🎧 Який запис грає просто в рядку (п.3.3): один ключ — одне аудіо, як у картці. */
-  const [playing, setPlaying] = useState<string | null>(null);
+  /** Запис, що зараз у закріпленій панелі (`RecordingDock`) — ▶ біля нього стає ⏹. */
+  const dockSrc = useDockSrc();
 
   const load = useCallback(() => {
     setErr(null);
@@ -367,9 +368,10 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
   const isOpen = open === c.clientKey;
   /** Жовтий фон — рівно група «жовті» з сервера (активні, 30+ днів без замовлення); реактивацію підписує чип стану. */
   const risk = c.tabGroup === "yellow";
-  const rec = playing === `talk:${c.clientKey}` && c.lastTalkRecording
-    ? { src: c.lastTalkRecording, label: `розмова ${ddmmOf(c.lastTalk)}${c.lastTalkBy ? ` · ${c.lastTalkBy}` : ""}` }
-    : null;
+  /** 🎧 ▶ останньої розмови — у закріплену панель (`RecordingDock`), не рядком таблиці (Роман 15.10.2026). */
+  const talkPlaying = !!c.lastTalkRecording && dockSrc === c.lastTalkRecording;
+  const playTalk = () => talkPlaying ? closeRecording() : c.lastTalkRecording && openRecording({
+    src: c.lastTalkRecording, label: `${c.clientName} · розмова ${ddmmOf(c.lastTalk)}${c.lastTalkBy ? ` · ${c.lastTalkBy}` : ""}` });
   const bg = isOpen ? "#eff6ff" : risk ? "#fffbeb" : "#fff";
   /** Клік по рядку — картка клієнта (макет); клік по кнопці чи полю всередині рядок не розгортає. */
   const toggle = (e: React.MouseEvent) => { if ((e.target as HTMLElement).closest("button, a, input, select, textarea")) return; setOpen(isOpen ? null : c.clientKey); };
@@ -424,10 +426,10 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           {c.lastTalk && c.lastTalkRecording && (
             <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "flex-end" }}>
               <span>{ddmmyy(c.lastTalk)}{c.lastTalkSec != null ? ` · ${fmtSec(c.lastTalkSec)}` : ""}</span>
-              <button type="button" onClick={() => setPlaying(playing === `talk:${c.clientKey}` ? null : `talk:${c.clientKey}`)}
-                title={playing === `talk:${c.clientKey}` ? "Згорнути плеєр" : "Послухати останню розмову"}
+              <button type="button" onClick={playTalk}
+                title={talkPlaying ? "Закрити плеєр" : "Послухати останню розмову"}
                 style={{ border: "1px solid #2563eb", color: "#2563eb", background: "#fff", borderRadius: 999, width: 22, height: 22, cursor: "pointer", fontSize: 10, padding: 0 }}>
-                {playing === `talk:${c.clientKey}` ? "⏹" : "▶"}
+                {talkPlaying ? "⏹" : "▶"}
               </button>
             </div>
           )}
@@ -528,15 +530,6 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           ) : null}
         </td>
       </tr>
-      {/* 🎧 ЗАПИС — ОКРЕМИМ РЯДКОМ НА ВСЮ ШИРИНУ ТАБЛИЦІ (задача 13.10.2026). Один плеєр — `RecordingPlayer`. */}
-      {rec && (
-        <tr>
-          <td colSpan={colCount} style={{ padding: "6px 16px 10px", background: "#f8fafc", borderBottom: "1px solid #e5e7eb" }}>
-            <div style={{ fontSize: 12, color: "#374151", fontWeight: 600 }}>🎧 {c.clientName} · {rec.label}</div>
-            <RecordingPlayer key={rec.src} src={rec.src} />
-          </td>
-        </tr>
-      )}
       {isOpen && (
         <tr>
           <td colSpan={colCount} style={{ padding: "14px 16px", background: "#fbfdff", borderBottom: "1px solid #e5e7eb" }}>

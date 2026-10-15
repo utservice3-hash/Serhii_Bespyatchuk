@@ -75,9 +75,8 @@ test("#813 ▶ У РЯДКУ ГРАЄ ТУ САМУ РОЗМОВУ, ДАТА Я�
   assert.match(dash, /lastTalkRecording: reactByKey\.get\(c\.client_key\)\?\.lastTalkRecording \?\? null,/, "🔴 рядок /client-plans не несе запису останньої розмови");
   const list = codeOnly(read(`${SECTIONS}/ClientPlansSection.tsx`));
   assert.match(list, /\{c\.lastTalk && c\.lastTalkRecording && \(/, "🔴 кнопка ▶ показується без запису — кнопка в нікуди");
-  // З 13.10.2026 грає спільний `RecordingPlayer` окремим рядком на всю ширину (гейт `#1691`), а не вузький <audio> у клітинці.
-  assert.match(list, /\{ src: c\.lastTalkRecording, label: `розмова /, "🔴 запис не грає в рядку");
-  assert.match(list, /<RecordingPlayer key=\{rec\.src\} src=\{rec\.src\} \/>/, "🔴 запис не грає в рядку");
+  // З 15.10.2026 ▶ відкриває закріплену панель `RecordingDock` (гейт `#1760`) саме з записом останньої розмови.
+  assert.match(list, /openRecording\(\{\s*src: c\.lastTalkRecording, label: `\$\{c\.clientName\} · розмова /, "🔴 ▶ у рядку грає не запис останньої розмови");
   assert.doesNotMatch(list, /href=\{c\.lastTalkRecording\}/, "🔴 запис відкривається посиланням, а не грає на місці");
 });
 

@@ -113,10 +113,18 @@ test("#1690d ПРОВОДКА: екран AI і блок КВП беруть Т�
   assert.match(FE_SRC("pages/dashboard/sections/KvpReportSection.tsx"), /\{canSeeFirstTouch && <KvpFirstTouchBlock from=\{rep\.scope\.from\} to=\{rep\.scope\.to\} \/>\}/, "🔴 блок не стоїть у Звіті КВП або бере інший період");
 });
 
-// ─── 🎧 Плеєр записів на екрані «Клієнти» (задача 13.10.2026) ────────────────────────────────────────────────
-test("#1691b ПЛЕЄР ЗАПИСІВ: ±10 с не виходить за межі запису, смуга перемотує точно; у рядку й картці — один плеєр на всю ширину, вузьких <audio> немає", async () => {
+// ─── 🎧 Плеєр записів на екрані «Клієнти» (задача 13.10.2026; закріплений — Роман 15.10.2026) ──────────────────────
+/**
+ * #1760 — ПЛЕЄР ЗАКРІПЛЕНИЙ. Роман 15.10: «плеєр дзвінків трішки погано працює — зроби його меншим та фіксованим в одному
+ * місці». Плеєр-рядок на всю ширину широкої таблиці обрізався зліва й тягнув смугу за екран. Тепер: одна панель
+ * `RecordingDock` (`position: fixed`), підключена в `Dashboard.tsx`; рядок клієнта й картка лише кличуть `openRecording`.
+ * Червоніє, якщо плеєр повернеться рядком таблиці чи в картку, з'явиться друга панель, ▶ одного з місць гратиме своїм
+ * плеєром, або перемикач швидкості перескочить значення.
+ */
+test("#1760 ПЛЕЄР ЗАПИСІВ ЗАКРІПЛЕНИЙ: одна панель унизу екрана, рядок і картка відкривають її; ±10 с і перемотка в межах запису; швидкість 1 → 1,5 → 2 → 1", async () => {
   const r = await import(await transpile("pages/dashboard/sections/recordingPlayerRules.ts")) as {
-    seekBy: (pos: number, d: number, dur: number) => number; seekAt: (x: number, w: number, dur: number) => number; PLAYER_RATES: readonly number[] };
+    seekBy: (pos: number, d: number, dur: number) => number; seekAt: (x: number, w: number, dur: number) => number;
+    PLAYER_RATES: readonly number[]; nextRate: (x: number) => number };
   assert.equal(r.seekBy(4, -10, 180), 0, "🔴 −10 с на 4-й секунді пішло в мінус");
   assert.equal(r.seekBy(175, 10, 180), 180, "🔴 +10 с вийшло за кінець запису");
   assert.equal(r.seekBy(60, 10, 180), 70); assert.equal(r.seekBy(60, -10, 180), 50);
@@ -125,18 +133,25 @@ test("#1691b ПЛЕЄР ЗАПИСІВ: ±10 с не виходить за ме�
   assert.equal(r.seekAt(-20, 600, 180), 0); assert.equal(r.seekAt(900, 600, 180), 180, "🔴 перетягування за край смуги виходить за запис");
   assert.equal(r.seekAt(300, 0, 180), 0);
   assert.deepEqual([...r.PLAYER_RATES], [1, 1.5, 2]);
+  assert.deepEqual([1, 1.5, 2].map(r.nextRate), [1.5, 2, 1], "🔴 кнопка швидкості перескакує значення або не повертається на 1×");
   const player = FE_SRC("pages/dashboard/sections/RecordingPlayer.tsx");
   assert.match(player, /go\(seekBy\(pos, -10, dur\)\)[\s\S]*−10 с/, "🔴 немає кнопки −10 с");
   assert.match(player, /go\(seekBy\(pos, 10, dur\)\)[\s\S]*\+10 с/, "🔴 немає кнопки +10 с");
-  assert.match(player, /PLAYER_RATES\.map/, "🔴 немає швидкості 1× / 1,5× / 2×");
+  assert.match(player, /onClick=\{\(\) => setRate\(nextRate\(rate\)\)\}/, "🔴 швидкість не перемикається однією кнопкою");
   assert.match(player, /const PLAY_EVENT = "ft-audio-play";/, "🔴 два плеєри можуть грати одночасно (подія не та, що в «Першому дотику»)");
+  // Панель: одна, закріплена, у Dashboard.tsx — і ніде більше.
+  const dock = FE_SRC("pages/dashboard/sections/RecordingDock.tsx");
+  assert.match(dock, /style=\{\{ position: "fixed", right: 16, bottom: 16,/, "🔴 панель плеєра не закріплена — їде разом із таблицею");
+  assert.match(dock, /<RecordingPlayer key=\{t\.src\} src=\{t\.src\} \/>/, "🔴 панель не грає записаного в неї запису");
+  assert.match(FE_SRC("pages/Dashboard.tsx"), /<\/Layout>\s*\{\/\*[^*]*\*\/\}\s*<RecordingDock \/>/, "🔴 панель не підключена в контейнері — ▶ не відкриє нічого");
   const list = FE_SRC("pages/dashboard/sections/ClientPlansSection.tsx");
   const card = FE_SRC("pages/dashboard/sections/ClientCardPanel.tsx");
-  for (const [name, src] of [["рядок / обґрунтування", list], ["картка", card]] as const) {
+  for (const [name, src] of [["рядок клієнта", list], ["картка", card]] as const) {
     assert.doesNotMatch(src, /<audio\b/, `🔴 ${name}: повернувся вузький вбудований плеєр`);
-    assert.match(src, /<RecordingPlayer\b/, `🔴 ${name}: немає спільного плеєра`);
+    assert.doesNotMatch(src, /<RecordingPlayer\b|<RecordingDock\b/, `🔴 ${name}: плеєр знову вбудований на місці, а не в закріпленій панелі`);
+    assert.match(src, /openRecording\(\{\s*src: c\.(lastTalkRecording|recording), label:/, `🔴 ${name}: ▶ не відкриває закріплену панель`);
   }
-  assert.match(list, /\{rec && \(\s*<tr>\s*<td colSpan=\{colCount\}/, "🔴 плеєр у рядку клієнта не на всю ширину таблиці");
+  assert.doesNotMatch(list, /\{rec && \(\s*<tr>/, "🔴 плеєр повернувся рядком таблиці");
 });
 
 /**

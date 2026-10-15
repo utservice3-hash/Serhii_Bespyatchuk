@@ -100,6 +100,7 @@ import { ReportPlanSection } from "./dashboard/sections/ReportPlanSection";
 import { KvpReportSection } from "./dashboard/sections/KvpReportSection";
 import { PlansTabs } from "./dashboard/sections/PlansTabs";
 import { DataQualitySection } from "./dashboard/sections/DataQualitySection";
+import { RecordingDock } from "./dashboard/sections/RecordingDock";
 
 
 /**
@@ -1558,6 +1559,8 @@ export function Dashboard() {
       {section === "goals" && <GoalsSection role={auth?.role} teams={teams} />}
       </ErrorBoundary>
     </Layout>
+    {/* 🎧 Закріплений плеєр записів — один на весь дашборд, ▶ у рядку чи картці клієнта відкриває його (15.10.2026). */}
+    <RecordingDock />
     </>
   );
 }

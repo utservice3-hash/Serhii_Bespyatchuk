@@ -7,7 +7,7 @@ import { ClientContactFileViewer } from "./ClientContactFileViewer";
 import { ReactCycleStatus, ReactCycleButtons } from "./ReactivationCycle";
 import { MergePanel, ManagerPanel } from "./ClientAdminPanels";
 import { formatAmountFull } from "../format";
-import { RecordingPlayer } from "./RecordingPlayer";
+import { openRecording, closeRecording, useDockSrc } from "./RecordingDock";
 
 /**
  * 💳 КАРТКА КЛІЄНТА — «як він платив».
@@ -41,7 +41,8 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
      програвач в системі»). Відкритий рівно ОДИН запис: місця в картці мало, і два
      аудіо одночасно — це не прослуховування, а шум. Ключ — момент дзвінка + індекс,
      бо у списку немає власного id. Швидкість — стан плеєра, не запису. */
-  const [openCall, setOpenCall] = useState<string | null>(null);
+  /** Запис, що зараз у закріпленій панелі (`RecordingDock`, Роман 15.10.2026) — ▶ біля нього стає ⏹. */
+  const dockSrc = useDockSrc();
   const [card, setCard] = useState<ClientCard | null>(null);
   const [err, setErr] = useState<string | null>(null);
   /** Відмова кнопки циклу реактивації — окремо від `err`, щоб не сховати всю картку. */
@@ -342,8 +343,7 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
           <div style={{ fontWeight: 700, fontSize: 13, margin: "12px 0 6px" }}>📞 Останні розмови</div>
           <div style={{ maxHeight: allCalls ? 320 : undefined, overflowY: allCalls ? "auto" : undefined }}>
             {(allCalls ? card.calls : card.calls.slice(0, 10)).map((c, i) => {
-                    const key = `${c.at}#${i}`;
-                    const open = openCall === key;
+                    const open = !!c.recording && dockSrc === c.recording;
                     return (
                     <div key={i} style={{ fontSize: 12, padding: "3px 0" }}>
                       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -359,8 +359,9 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
                             07.09: відповіданих без запису — нуль), але саме «завжди» на живих
                             даних завтра може стати «майже завжди» — тому кнопка умовна. */}
                         {c.recording && (
-                          <button type="button" onClick={() => setOpenCall(open ? null : key)}
-                                  title={open ? "Згорнути плеєр" : "Прослухати запис"}
+                          <button type="button" onClick={() => open ? closeRecording() : c.recording && openRecording({
+                                    src: c.recording, label: `${card.clientName} · ${c.at.slice(0, 16).replace("T", " ")}${c.manager ? ` · ${c.manager}` : ""}` })}
+                                  title={open ? "Закрити плеєр" : "Прослухати запис"}
                                   style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: 0 }}>
                             {open ? "⏹" : "▶"}
                           </button>
@@ -372,8 +373,6 @@ export function ClientCardPanel({ clientKey, onChanged, month }: { clientKey: st
                               title="Закріпити цю розмову як обґрунтування плану"
                               style={{ fontSize: 11, padding: "1px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>📌</button>}
                       </div>
-                      {/* 🎧 Той самий плеєр, що в рядку клієнта й «обґрунтуванні плану» (задача 13.10.2026): ±10 с і швидкість. */}
-                      {open && c.recording && <RecordingPlayer key={c.recording} src={c.recording} />}
                     </div>
                     );
             })}

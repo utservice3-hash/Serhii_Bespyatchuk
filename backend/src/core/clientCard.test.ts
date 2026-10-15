@@ -98,19 +98,19 @@ test("#29d МІСЯЦЬ КАРТКИ == МІСЯЦЮ ЕКРАНА ПЛАНІВ (
 
 /**
  * #403 — ЗАПИС ДЗВІНКА ГРАЄ В КАРТЦІ, А НЕ В НОВІЙ ВКЛАДЦІ (рішення власника 08.09.2026).
- * Читає джерело `ClientCardPanel.tsx`: біля `c.recording` стоїть спільний `<RecordingPlayer src={c.recording}` (з 13.10.2026;
- * усередині — той самий вбудований <audio>, лише з ±10 с і швидкістю, гейт `#1691`),
- * і жодного `href={c.recording}` з `target="_blank"`. 🪞 Дзеркало: плеєр показується лише
- * коли запис Є (`open && c.recording`) — інакше кнопка «в нікуди» на дзвінку без файла.
- * Червоніє, якщо повернути посилання, прибрати <audio> або зняти умову на запис.
+ * Читає джерело `ClientCardPanel.tsx`: ▶ біля `c.recording` відкриває закріплену панель `RecordingDock` з цим записом
+ * (з 15.10.2026; усередині панелі — той самий вбудований <audio> з ±10 с і швидкістю, гейт `#1760`),
+ * і жодного `href={c.recording}` з `target="_blank"`. 🪞 Дзеркало: кнопка показується лише
+ * коли запис Є (`c.recording && (`) — інакше кнопка «в нікуди» на дзвінку без файла.
+ * Червоніє, якщо повернути посилання, не відкривати панель або зняти умову на запис.
  */
 test("#403 КАРТКА: запис дзвінка грає у вбудованому <audio>, не відкривається новою вкладкою", async () => {
   const { readFileSync } = await import("node:fs");
   const path = await import("node:path");
   const src = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "ClientCardPanel.tsx"), "utf8");
-  assert.match(src, /<RecordingPlayer key=\{c\.recording\} src=\{c\.recording\} \/>/, "плеєра з записом дзвінка немає в картці");
+  assert.match(src, /openRecording\(\{\s*src: c\.recording, label:/, "плеєра з записом дзвінка немає в картці");
   assert.doesNotMatch(src, /href=\{c\.recording\}/, "запис знову відкривається посиланням");
-  assert.match(src, /open && c\.recording && <RecordingPlayer/, "плеєр не умовний на наявність запису");
-  // Один відкритий запис за раз: стан — один ключ, а не масив.
-  assert.match(src, /const \[openCall, setOpenCall\] = useState<string \| null>\(null\);/, "стан відкритого запису має бути ОДНИМ ключем");
+  assert.match(src, /\{c\.recording && \(\s*<button type="button" onClick=\{\(\) => open \? closeRecording\(\) : c\.recording && openRecording/, "плеєр не умовний на наявність запису");
+  // Один відкритий запис за раз: панель одна на дашборд, «що грає» — один `src` (`useDockSrc`), а не масив.
+  assert.match(src, /const dockSrc = useDockSrc\(\);/, "стан відкритого запису має бути ОДНИМ ключем");
 });
