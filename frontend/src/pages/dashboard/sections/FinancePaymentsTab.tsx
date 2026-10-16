@@ -14,7 +14,6 @@ const money = (n: number | null | undefined) => (n == null ? "—" : Math.round(
 const dm = (d: string) => `${d.slice(8, 10)}.${d.slice(5, 7)}`;
 const hhmm = (iso: string | null) => (iso ? new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
 const prevDay = (d: string) => { const x = new Date(`${d}T12:00:00Z`); x.setUTCDate(x.getUTCDate() - 1); return x.toISOString().slice(0, 10); };
-const KOMMO_WORD = { paid: "оплачено", rejected: "відмовлено", open: "висить" } as const;
 const BASIS = (r: PayScreenRow) => (r.paidBy === "1С" ? "оплата є — галочка 1С" : r.paidBy === "Виписка" ? "оплата є — у Виписці" : "у межах ліміту");
 type Filter = "all" | "ok" | "check" | "diff";
 const pill = (bg: string, fg: string): React.CSSProperties => ({ fontSize: 11.5, padding: "1px 8px", borderRadius: 999, background: bg, color: fg, whiteSpace: "nowrap" });
@@ -43,6 +42,14 @@ export function FinancePaymentsTab() {
   if (!data) return <p className="loading-text">Завантаження…</p>;
 
   const ok = data.rows.filter((r) => r.ok);
+  // «Закрити в Kommo»: затверджені системою, але ще не переведені в «Оплачено» (і не відмовлені) — те саме, що `toCloseOf` ядра.
+  const toClose = data.rows.filter((r) => r.ok && r.kommo === "open");
+  const stagePill = (r: PayScreenRow) => (
+    <span style={r.kommo === "paid" ? pill("rgba(22,163,74,0.14)", "#16a34a") : r.kommo === "rejected" ? pill("rgba(220,38,38,0.12)", "#dc2626") : pill("rgba(37,99,235,0.10)", "#2563eb")}>{r.stage}</span>
+  );
+  const openReq = (r: PayScreenRow, label = "Відкрити запит →") => (
+    <a className="hr-btn" style={{ whiteSpace: "nowrap", textDecoration: "none" }} href={`${data.kommoBase}/leads/detail/${r.requestId}`} target="_blank" rel="noreferrer">{label}</a>
+  );
   const run = async () => {
     setBusy(true);
     try { await runCarrierPayments(); toast("Файл перераховано", { tone: "ok" }); load(); }
@@ -83,8 +90,29 @@ export function FinancePaymentsTab() {
         {tile("Запитів у фільтрі", String(data.totals.total))}
         {tile("До оплати", String(data.totals.ok), "#16a34a", `${money(data.totals.okSum)} ₴`)}
         {tile("На перевірку", String(data.totals.check), "#b45309")}
+        {tile("Закрити в Kommo", String(data.totals.toClose), data.totals.toClose ? "#2563eb" : undefined)}
         {tile("Розбіжності з Kommo", String(data.totals.diff), data.totals.diff ? "#dc2626" : undefined)}
       </div>
+
+      {toClose.length > 0 && (
+        <div className="chart-card" style={{ marginBottom: 14, borderColor: "#2563eb" }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+            <h3 className="chart-title" style={{ margin: 0 }}>Закрити в Kommo · {toClose.length}</h3>
+            <span style={{ fontSize: 12, color: MUTED }}>затверджені, але ще не «Оплачено» — відкрий запит і зміни етап на «Оплачено» (система сама не закриває)</span>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table className="hr-table" style={{ width: "100%", fontSize: 13 }}>
+              <thead><tr><th>Запит</th><th>Угода</th><th>Отримувач</th><th style={{ textAlign: "right" }}>Сума</th><th>Етап зараз</th><th /></tr></thead>
+              <tbody>{toClose.map((r) => (
+                <tr key={r.requestId}>
+                  <td>{link(r.requestId)}</td><td>{link(r.mainId)}</td><td>{r.owner}</td><td style={{ textAlign: "right" }}>{money(r.amount)}</td>
+                  <td>{r.stage}</td><td style={{ textAlign: "right" }}>{openReq(r)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <div className="chart-card" style={{ marginBottom: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
@@ -96,8 +124,8 @@ export function FinancePaymentsTab() {
         {!ok.length ? <p className="hr-muted" style={{ margin: 0 }}>Затверджених запитів поки немає.</p> : (
           <div style={{ overflowX: "auto" }}>
             <table className="hr-table" style={{ width: "100%", fontSize: 13 }}>
-              <thead><tr><th>ID</th><th>Номер карти</th><th>Власник карти</th><th style={{ textAlign: "right" }}>{money(data.totals.okSum)}</th><th>Категорії</th></tr></thead>
-              <tbody>{ok.map((r) => <tr key={r.requestId}><td>{link(r.mainId)}</td><td style={{ whiteSpace: "nowrap" }}>{r.card}</td><td>{r.owner}</td><td style={{ textAlign: "right" }}>{money(r.amount)}</td><td>{r.category}</td></tr>)}</tbody>
+              <thead><tr><th>ID</th><th>Номер карти</th><th>Власник карти</th><th style={{ textAlign: "right" }}>{money(data.totals.okSum)}</th><th>Категорії</th><th>Запит у Kommo</th></tr></thead>
+              <tbody>{ok.map((r) => <tr key={r.requestId}><td>{link(r.mainId)}</td><td style={{ whiteSpace: "nowrap" }}>{r.card}</td><td>{r.owner}</td><td style={{ textAlign: "right" }}>{money(r.amount)}</td><td>{r.category}</td><td style={{ whiteSpace: "nowrap" }}>{stagePill(r)} {r.kommo === "open" && openReq(r, "→")}</td></tr>)}</tbody>
             </table>
           </div>
         )}
@@ -113,7 +141,7 @@ export function FinancePaymentsTab() {
         {!shown.length ? <p className="hr-muted" style={{ margin: 0 }}>Немає запитів у цьому фільтрі.</p> : (
           <div style={{ overflowX: "auto" }}>
             <table className="hr-table" style={{ width: "100%", fontSize: 13 }}>
-              <thead><tr><th>Угода · запит</th><th>Подано</th><th>Отримувач</th><th style={{ textAlign: "right" }}>Сума</th><th>Система</th><th>Підстава / причина</th><th>Kommo зараз</th></tr></thead>
+              <thead><tr><th>Угода · запит</th><th>Подано</th><th>Отримувач</th><th style={{ textAlign: "right" }}>Сума</th><th>Система</th><th>Підстава / причина</th><th>Етап у Kommo</th></tr></thead>
               <tbody>{shown.map((r) => (
                 <tr key={r.requestId} style={r.diff ? { background: "rgba(220,38,38,0.08)" } : undefined}>
                   <td style={{ whiteSpace: "nowrap" }}>{link(r.mainId)}<div style={{ fontSize: 11.5, color: MUTED }}>запит {link(r.requestId)}</div></td>
@@ -123,7 +151,7 @@ export function FinancePaymentsTab() {
                   <td>{r.ok ? <span style={pill("rgba(22,163,74,0.14)", "#16a34a")}>до оплати</span> : <span style={pill("rgba(217,119,6,0.14)", "#b45309")}>перевірити</span>}</td>
                   <td>{r.ok ? BASIS(r) : r.reasons.join("; ")}{r.notes.length > 0 && <div style={{ fontSize: 11.5, color: MUTED }}>{r.notes.join("; ")}</div>}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
-                    <span style={r.kommo === "paid" ? pill("rgba(22,163,74,0.14)", "#16a34a") : r.kommo === "rejected" ? pill("rgba(220,38,38,0.12)", "#dc2626") : pill("var(--hover-bg, rgba(0,0,0,0.05))", "var(--text-muted)")}>{KOMMO_WORD[r.kommo]}</span>
+                    {stagePill(r)} {openReq(r, "→")}
                     {r.diff && <div style={{ fontSize: 11.5, color: "#dc2626", marginTop: 3 }}>⚠ розбіжність</div>}
                   </td>
                 </tr>

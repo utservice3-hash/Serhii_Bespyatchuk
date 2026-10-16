@@ -5719,10 +5719,12 @@ export interface PayScreenRow {
   mainId: number | null; requestId: number; createdAt: string | null; amount: number | null;
   ok: boolean; paidBy: string | null; reasons: string[]; notes: string[];
   card: string; owner: string; category: string; kommo: PayKommoState; diff: boolean;
+  /** Етап запиту у воронці «Оплата перевозчикам» словами. */
+  stage: string;
 }
 export interface PayScreenDay {
   day: string; today: string; at: string | null; kommoBase: string;
-  rows: PayScreenRow[]; totals: { total: number; ok: number; okSum: number; check: number; diff: number };
+  rows: PayScreenRow[]; totals: { total: number; ok: number; okSum: number; check: number; diff: number; toClose: number };
   days: { day: string; total: number; ok: number; okSum: number }[];
 }
 export const fetchCarrierPayments = async (day?: string) => (await api.get<PayScreenDay>("/finance/payments", { params: day ? { day } : {} })).data;

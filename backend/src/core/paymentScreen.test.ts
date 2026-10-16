@@ -3,14 +3,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { crc32 } from "node:zlib";
-import { kommoStateOf, discrepancyOf, fileRow, clipboardTsv, screenCard, totalsOf, type ScreenRow } from "./paymentScreen.js";
+import { kommoStateOf, discrepancyOf, fileRow, clipboardTsv, screenCard, totalsOf, toCloseOf, type ScreenRow } from "./paymentScreen.js";
 import { xlsxBook } from "./xlsx.js";
 
 const SRC = (rel: string): string => readFileSync(path.join(import.meta.dirname, "..", "..", "src", rel), "utf8");
 const FE = (rel: string): string => readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", rel), "utf8");
 // Номери карток вигадані.
 const row = (o: Partial<ScreenRow> = {}): ScreenRow => ({ mainId: 62762651, requestId: 62764709, createdAt: null, amount: 18000, ok: true, paidBy: "Виписка",
-  reasons: [], notes: [], card: "1111 2222 3333 4444", owner: "Іваненко Іван приват", category: "Транспортні послуги", kommo: "open", diff: false, ...o });
+  reasons: [], notes: [], card: "1111 2222 3333 4444", owner: "Іваненко Іван приват", category: "Транспортні послуги", kommo: "open", diff: false, stage: "Заявка на оплату", ...o });
 
 /**
  * #1271 — РОЗБІЖНІСТЬ ІЗ KOMMO (екран «Оплати перевізникам», 16.10.2026) — те, що 15.10 звіряли з Тетяною руками:
@@ -26,7 +26,7 @@ test("#1271 РОЗБІЖНІСТЬ ІЗ KOMMO: «перевірити»+опла
   assert.equal(discrepancyOf(true, "open"), false, "🔴 «ще висить» названо розбіжністю");
   assert.equal(discrepancyOf(false, "open"), false, "🔴 «перевірити» + висить названо розбіжністю");
   const t = totalsOf([row(), row({ ok: false, diff: true, amount: 3000 }), row({ amount: 500.5 })]);
-  assert.deepEqual(t, { total: 3, ok: 2, okSum: 18500.5, check: 1, diff: 1 }, "🔴 підсумки не дорівнюють рядкам");
+  assert.deepEqual(t, { total: 3, ok: 2, okSum: 18500.5, check: 1, diff: 1, toClose: 2 }, "🔴 підсумки не дорівнюють рядкам");
 });
 
 /**
@@ -100,4 +100,23 @@ test("#1271d МЕЖА ЕКРАНА «ОПЛАТИ ПЕРЕВІЗНИКАМ»: т
   assert.match(tab, /const canView = \(getAuthPayload\(\)\?\.perms \?\? \[\]\)\.includes\("view_private_finance"\);/, "🔴 екран не за view_private_finance");
   assert.ok(tab.indexOf("if (!canView) return") < tab.indexOf("<table"), "🔴 таблиця рендериться до перевірки права");
   assert.match(tab, /if \(!canView\) return;\n\s*fetchCarrierPayments/, "🔴 без права екран все одно просить дані");
+});
+
+/**
+ * #1272 — «ЗАКРИТИ В KOMMO» (Роман 16.10.2026): блок угод, де Тетяні треба змінити етап на «Оплачено». Рівно ті, що
+ * система затвердила і що ще висять; оплачені, відмовлені й незатверджені — ні. Кожен рядок веде САМЕ на запит
+ * (угоду воронки «Оплата перевозчикам», де міняють етап), а не на основну угоду; етап — словами з воронки.
+ * Система сама нічого не закриває (#1268 — у Kommo не пише).
+ * 🧨 Червоніє, якщо в блок потрапить оплачений чи незатверджений запит, кнопка поведе на основну угоду або етап зникне.
+ */
+test("#1272 «ЗАКРИТИ В KOMMO»: лише затверджені й ще не закриті; кнопка — на сам запит у воронці; етап словами", () => {
+  const rows = [row({ requestId: 1 }), row({ requestId: 2, kommo: "paid", stage: "Оплачено" }), row({ requestId: 3, kommo: "rejected" }), row({ requestId: 4, ok: false })];
+  assert.deepEqual(toCloseOf(rows).map((r) => r.requestId), [1], "🔴 у «Закрити в Kommo» не рівно затверджені й незакриті");
+  const tab = FE("pages/dashboard/sections/FinancePaymentsTab.tsx");
+  const block = tab.slice(tab.indexOf("Закрити в Kommo"), tab.indexOf("До оплати</h3>"));
+  assert.ok(block.length > 0, "🔴 блоку «Закрити в Kommo» немає — гейту нічого перевіряти");
+  assert.match(block, /href=\{`\$\{data\.kommoBase\}\/leads\/detail\/\$\{r\.requestId\}`\}/, "🔴 кнопка веде не на сам запит у воронці");
+  assert.match(block, /\{r\.stage\}/, "🔴 етап запиту не показано");
+  assert.match(tab, /const toClose = data\.rows\.filter\(\(r\) => r\.ok && r\.kommo === "open"\);/, "🔴 фронт відбирає «до закриття» не так, як ядро");
+  assert.match(SRC("jobs/buildPaymentFile.ts"), /stage: d \? requestStatusOf\(Number\(d\.status_id\)\)\.label : "запит не знайдено в Kommo",/, "🔴 етап не з воронки «Оплата перевозчикам»");
 });
