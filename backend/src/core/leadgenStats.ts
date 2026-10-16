@@ -2,7 +2,7 @@ import { pool } from "../db/pool.js";
 import { kyivToday } from "./dates.js";
 import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING, GENERIC_CLIENT_KEYS } from "./metrics.js";
 import { LEADGEN_STAGE_IDS, QUALIFICATION_PIPELINES } from "./leadgenStages.js";
-import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery, leadStatusPred, oprStatusPred, quoteKeptSql, stageDealsQuery,
+import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery, leadStatusPred, oprStatusPred, quoteKeptSql, stageDealsQuery, QUOTE_KEPT_MANUAL,
   type SqlQuery, type LeadgenBucketGrain } from "./leadgenSql.js";
 import { FC_PIPELINES, handoffDealStates, clientSuccessHistory } from "./money.js";
 import { stageName } from "./stageNames.js";
@@ -424,6 +424,8 @@ export interface LeadgenStageDealRow {
   /** Етапи угоди в періоді (і підігрів до нього, якщо був), за часом. */
   path: { at: string; stage: string }[];
   flags: StageDealFlags;
+  /** Прорахунок зараховано рішенням власника попри скасування за 15 хв (`QUOTE_KEPT_MANUAL`). */
+  manualQuote: boolean;
 }
 export interface LeadgenStageDeals { counts: { leads: number; opr: number; quotes: number }; deals: LeadgenStageDealRow[] }
 
@@ -458,7 +460,7 @@ export async function leadgenStageDeals(from: string, to: string, managerId: num
       .map((e) => ({ at: new Date(e.changed_at).toISOString(), stage: stageName(Number(e.pipeline_id), Number(e.status_id)) }));
     return { dealId: id, url: kommoLeadUrl(id), name: x.name, client: x.client_name, source: x.client_source,
       leadAt: iso(x.lead_at), leadStage: nm(x.lead_stage), oprAt: iso(x.opr_at), oprStage: nm(x.opr_stage), quoteAt: iso(x.quote_at),
-      path, flags };
+      path, flags, manualQuote: x.quote_at != null && QUOTE_KEPT_MANUAL.some((m) => m.dealId === id) };
   });
   return { counts: { leads: deals.filter((d) => d.leadAt).length, opr: deals.filter((d) => d.oprAt).length, quotes: deals.filter((d) => d.quoteAt).length }, deals };
 }

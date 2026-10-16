@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { skipReason } from "../db/scratchDb.js";
-import { stageCountsQuery, handoffLinkQuery, bucketKeySql, type SqlQuery } from "./leadgenSql.js";
+import { stageCountsQuery, handoffLinkQuery, bucketKeySql, QUOTE_KEPT_MANUAL, type SqlQuery } from "./leadgenSql.js";
 import { LEADGEN_STAGE_IDS, QUALIFICATION_PIPELINES } from "./leadgenStages.js";
 import { pickHandoffs, LINK_BEFORE_SEC, LINK_AFTER_SEC, LINK_NOTE_AFTER_SEC, type HandoffEntry } from "./leadgenHandoffRules.js";
 
@@ -61,8 +61,8 @@ const linkQ = (from: string, to: string) => handoffLinkQuery(from, to,
 
 let nextId = 700000;
 async function deal(p: { manager: number | null; pipeline: number; status?: number; ck: string | null;
-  created?: Date; name?: string }): Promise<number> {
-  const id = nextId++;
+  created?: Date; name?: string; id?: number }): Promise<number> {
+  const id = p.id ?? nextId++;
   await client!.query(
     `INSERT INTO deals (kommo_id, name, manager_id, pipeline_id, status_id, created_at_kommo, client_key, client_name)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
@@ -984,4 +984,34 @@ test("#1506 ЖИВИЙ SQL: «Які угоди рахуємо» — списо�
   assert.deepEqual(fl(d), { noTaken: false, fastSec: null, fromReact: true }, "🔴 реактивація позначена «без Взято» або не позначена «з реактивації»");
   assert.equal(list.deals.find((x) => x.dealId === f), undefined, "🔴 скасований прорахунок у списку");
   assert.equal(list.deals.find((x) => x.dealId === b)?.oprStage, "Отримано контакти ОПР", "🔴 етап ОПР без назви");
+});
+
+/**
+ * #1507 — ПРОРАХУНОК, ЗАРАХОВАНИЙ ВРУЧНУ (рішення власника 16.10.2026, угода 62763253). Дві однакові угоди: «Кваліфіковано»,
+ * за 32 с повернуто на ОПР, угода менеджера створена й жива. Та, що в `QUOTE_KEPT_MANUAL`, рахується прорахунком і передачею,
+ * і в «Які угоди рахуємо» позначена; та, що поза списком, — скасована, як і раніше (загальне правило НЕ змінено).
+ * 🧨 САБОТАЖ: у `quoteKeptSql` прибрати `${manual}` з повернення → червоніє (ручна не зарахувалась).
+ */
+test("#1507 ЖИВИЙ SQL: прорахунок зі списку ручних рахується попри скасування за 15 хв, решта — ні", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { stats } = await core();
+  assert.ok(QUOTE_KEPT_MANUAL.some((m) => m.dealId === 62763253), "🔴 угоду 62763253 прибрали зі списку ручних");
+  const day = "2025-12-08", at = utc(`${day}T12:28:44`), S = LEADGEN_STAGE_IDS;
+  const mk = async (id?: number) => {
+    const pz = await deal({ manager: 4, pipeline: PZ, ck: null, id });
+    await ev(pz, PZ, Q, at); await ev(pz, PZ, S.opr, sec(at, 32));
+    const child = await deal({ manager: 3, pipeline: QUAL, ck: null, created: sec(at, 2) });
+    await client!.query(`INSERT INTO lead_child_links (parent_id, child_id, created_at) VALUES ($1, $2, $3)`, [pz, child, sec(at, 2)]);
+    return { pz, child };
+  };
+  const manual = await mk(62763253), plain = await mk();
+  const row = (await run<{ manager_id: number; quotes: string }>(stageCountsQuery(day, day, LEADGEN_STAGE_IDS))).find((r) => r.manager_id === 4);
+  assert.equal(Number(row?.quotes ?? 0), 1, "🔴 прорахунків має бути рівно 1: ручний так, звичайний скасований ні");
+  const links = await run<{ pz_id: string; deal_id: string | null }>(linkQ(day, day));
+  const linked = (pz: number) => links.find((x) => Number(x.pz_id) === pz)?.deal_id;
+  assert.equal(Number(linked(manual.pz)), manual.child, "🔴 ручний прорахунок без передачі — гроші за машину не дійдуть");
+  assert.equal(linked(plain.pz), undefined, "🔴 скасований прорахунок поза списком отримав передачу — загальне правило зламалось");
+  const list = await stats.leadgenStageDeals(day, day, 4);
+  const q = list.deals.filter((x) => x.quoteAt);
+  assert.deepEqual(q.map((x) => [x.dealId, x.manualQuote]), [[manual.pz, true]], "🔴 «Які угоди рахуємо»: ручний не позначений або звичайний зарахувався");
 });

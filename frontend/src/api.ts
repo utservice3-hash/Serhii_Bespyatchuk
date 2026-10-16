@@ -213,6 +213,8 @@ export interface LeadgenStageDeal {
   leadAt: string | null; leadStage: string | null; oprAt: string | null; oprStage: string | null; quoteAt: string | null;
   path: { at: string; stage: string }[];
   flags: { noTaken: boolean; fastSec: number | null; fromReact: boolean };
+  /** Прорахунок зараховано рішенням власника попри скасування за 15 хв. */
+  manualQuote: boolean;
 }
 export interface LeadgenStageDealsResp { from: string; to: string; managerId: number; counts: { leads: number; opr: number; quotes: number }; deals: LeadgenStageDeal[] }
 export async function fetchLeadgenStageDeals(params: { from: string; to: string; managerId?: number }): Promise<LeadgenStageDealsResp> {

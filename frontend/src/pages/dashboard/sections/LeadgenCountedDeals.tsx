@@ -112,7 +112,8 @@ export function LeadgenCountedDeals({ from, to, periodLabel, own, managerId, peo
                       {x.flags.noTaken && <Tag tone="warn" title="ОПР у Продзвоні, а «Взято в роботу» до нього не ставили">без «Взято»</Tag>}
                       {x.flags.fastSec != null && <Tag tone="warn" title={`«Взято в роботу» і ОПР з різницею ${x.flags.fastSec} с (останній «Взято» ${x.oprAt ? fmtSec.format(new Date(new Date(x.oprAt).getTime() - x.flags.fastSec * 1000)) : ""})`}>Взято й ОПР за {x.flags.fastSec} с</Tag>}
                       {x.flags.fromReact && <Tag tone="info" title="До ліда угода вже була в «Клієнт підігрівається» Реактивації">з реактивації</Tag>}
-                      {!x.flags.noTaken && x.flags.fastSec == null && !x.flags.fromReact && <span style={{ color: MUTED }}>—</span>}
+                      {x.manualQuote && <Tag tone="info" title="Етап повернули протягом 15 хв, але угода менеджера лишилась у роботі; прорахунок зараховано рішенням керівника">прорахунок зараховано вручну</Tag>}
+                      {!x.flags.noTaken && x.flags.fastSec == null && !x.flags.fromReact && !x.manualQuote && <span style={{ color: MUTED }}>—</span>}
                     </td>
                   </tr>
                 ))}

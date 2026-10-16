@@ -69,11 +69,22 @@ export const QUOTE_UNDO_MIN = 15;
  * `pz` — місце параметра з воронками Продзвону; вхід — псевдонім `e`.
  */
 export function quoteKeptSql(pz: string): string {
-  return `NOT EXISTS (SELECT 1 FROM deal_stage_events u
+  const manual = QUOTE_KEPT_MANUAL.length ? `e.kommo_id IN (${QUOTE_KEPT_MANUAL.map((x) => x.dealId).join(", ")}) OR ` : "";
+  return `(${manual}NOT EXISTS (SELECT 1 FROM deal_stage_events u
                       WHERE u.kommo_id = e.kommo_id AND u.pipeline_id = ANY(${pz})
                         AND u.changed_at > e.changed_at AND u.changed_at <= e.changed_at + INTERVAL '${QUOTE_UNDO_MIN} minutes'
-                        AND NOT (u.pipeline_id = e.pipeline_id AND u.status_id = e.status_id))`;
+                        AND NOT (u.pipeline_id = e.pipeline_id AND u.status_id = e.status_id)))`;
 }
+
+/**
+ * ✋ ПРОРАХУНОК, ЗАРАХОВАНИЙ ВРУЧНУ — рішення власника поштучно, не правило. Для угод зі списку `quoteKeptSql` не
+ * застосовує скасування за `QUOTE_UNDO_MIN`, тож разом із прорахунком зараховується й передача (той самий предикат).
+ * Загальне правило свідомо НЕ змінювали (власник 16.10.2026: «окремо цю угоду зарахувати і все»).
+ */
+export const QUOTE_KEPT_MANUAL: readonly { dealId: number; decided: string; reason: string }[] = [
+  { dealId: 62763253, decided: "Роман, 16.10.2026",
+    reason: "Крупник: «Кваліфіковано» 15.10 14:28:44, через 32 с етап повернуто на «Отримано контакти ОПР» з її акаунта; угода менеджера 62773129 лишилась у роботі" },
+];
 
 /** Чотири лічильники — ОДИН вираз на всі форми запиту. */
 const STAGE_COUNTS =
