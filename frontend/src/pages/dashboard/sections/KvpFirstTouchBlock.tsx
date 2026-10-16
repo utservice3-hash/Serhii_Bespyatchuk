@@ -5,6 +5,7 @@ import { InfoHint } from "../widgets";
 import { AI_START_DATE, firstTouchSummary, summaryTeams, aiCallsHref, fmtMinutes, medianMin, TILE_MATCH,
   SUCCESS_MIN_FOR_PCT, type ChecklistLine, type TileKey } from "../aiCallsView";
 import { sortFtLines, tileCountsByManager, type FtSortKey } from "../kvpCoreRules";
+import "./firstTouch.css";
 
 /**
  * 🎧 «ПЕРШИЙ ДОТИК» У ЗВІТІ КВП (задача 5314, макет «Звіт КВП - ядро з першим дотиком», TOP Weekly 08.10.2026):
@@ -67,6 +68,13 @@ export function KvpFirstTouchBlock({ from, to }: { from: string; to: string }) {
   const cell = (v: number | null, goal: number | null = null) => (
     <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: goal != null && v != null ? (v >= goal ? C.ok : C.bad) : undefined }}>{pctStr(v)}</td>
   );
+  /** Міні-смужка частки — той самий `.ftd-bar`, що на екрані «Перший дотик · AI» (макет «Звіт КВП - ядро»): зелена — у нормі, рожева — нижче. */
+  const bar = (v: number | null, goal: number) => (
+    <td style={{ textAlign: "right" }}>{v == null ? "—" : (
+      <div className={`ftd-bar ${v >= goal ? "is-ok" : "is-bad"}`} style={{ minWidth: 96, marginLeft: "auto" }}>
+        <i style={{ width: `${String(Math.max(0, Math.min(100, v)))}%` }} /><span style={{ fontWeight: 600 }}>{v}%</span>
+      </div>)}</td>
+  );
   const sig = (l: ChecklistLine) => [
     l.price != null && l.price < target ? `ціна нижче ${String(target)}%` : null,
     l.promise != null && l.promise < 50 ? "обіцянки зриває" : null,
@@ -82,7 +90,7 @@ export function KvpFirstTouchBlock({ from, to }: { from: string; to: string }) {
         {hits != null && <span style={{ marginLeft: 6, fontSize: 11, padding: "0 6px", borderRadius: 10, background: "rgba(37,99,235,.12)", color: "#2563eb" }} title="розмов цієї картки">{hits}</span>}
       </td>
       <td style={{ textAlign: "right" }}>{l.calls}</td>
-      {cell(l.score)}{cell(l.price, target)}{cell(l.promise)}
+      {cell(l.score)}{bar(l.price, target)}{bar(l.promise, 50)}
       <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{l.objections ? `${pctStr(l.objection)} · ${String(l.objectionsHandled)}/${String(l.objections)}` : "—"}</td>
       <td style={{ textAlign: "right", whiteSpace: "nowrap" }} title={l.decided ? `Погодився ${String(l.agreed)} з ${String(l.decided)} після ціни · думає ${String(l.thinking)}` : "Згода після ціни розбирається для розмов від 13.10, де назвали ціну"}>
         {l.decided ? `${pctStr(Math.round((l.agreed / l.decided) * 100))} · ${String(l.agreed)}/${String(l.decided)}` : "—"}</td>
