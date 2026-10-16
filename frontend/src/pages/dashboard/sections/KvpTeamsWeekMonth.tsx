@@ -33,10 +33,10 @@ function Sum({ v, plan, bold }: { v: number; plan: number; bold?: boolean }) {
 
 function Status({ w }: { w: Money3 }) {
   const s = weekCloseStatus(w.plan, w.fact, w.withExp - w.fact);
-  if (s.kind === "none") return <td style={{ color: MUTED }}>—</td>;
+  if (s.kind === "none") return <td style={{ color: MUTED, paddingLeft: 16 }}>—</td>;
   const note = closeNote(s, formatAmount);
   return (
-    <td>
+    <td style={{ paddingLeft: 16, minWidth: 170 }}>
       <span style={{ display: "inline-block", fontSize: 12, fontWeight: 600, padding: "1px 8px", borderRadius: 10, background: TONE[s.kind].bg, color: TONE[s.kind].fg }}>{CLOSE_LABEL[s.kind]}</span>
       {note && <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>{note}</div>}
     </td>
@@ -77,7 +77,7 @@ export function KvpTeamsWeekMonth({ rep }: { rep: KvpReport }) {
               </tr>
               <tr>
                 <th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Без очікувань</th>
-                <th style={{ textAlign: "right" }}>З очікуваннями</th><th>Закриємо?</th>
+                <th style={{ textAlign: "right" }}>З очікуваннями</th><th style={{ paddingLeft: 16 }}>Закриємо?</th>
                 <th style={{ textAlign: "right", borderLeft: "1px solid var(--border)" }}>План</th>
                 <th style={{ textAlign: "right" }}>Без очікувань</th><th style={{ textAlign: "right" }}>З очікуваннями</th>
               </tr>

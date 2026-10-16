@@ -87,7 +87,7 @@ export function KvpFirstTouchBlock({ from, to }: { from: string; to: string }) {
       <td style={{ textAlign: "right", whiteSpace: "nowrap" }} title={l.decided ? `Погодився ${String(l.agreed)} з ${String(l.decided)} після ціни · думає ${String(l.thinking)}` : "Згода після ціни розбирається для розмов від 13.10, де назвали ціну"}>
         {l.decided ? `${pctStr(Math.round((l.agreed / l.decided) * 100))} · ${String(l.agreed)}/${String(l.decided)}` : "—"}</td>
       <td style={{ textAlign: "right" }}>{l.success} з {l.calls}</td>
-      <td>{kind === "mgr" && sig(l).map((t) => <span key={t} style={{ display: "inline-block", fontSize: 11, padding: "1px 6px", borderRadius: 10, marginRight: 4, background: "rgba(220,38,38,.12)", color: C.bad }}>{t}</span>)}</td>
+      <td style={{ paddingLeft: 14 }}>{kind === "mgr" && sig(l).map((t) => <span key={t} style={{ display: "inline-block", fontSize: 11, padding: "1px 6px", borderRadius: 10, marginRight: 4, background: "rgba(220,38,38,.12)", color: C.bad }}>{t}</span>)}</td>
     </tr>
   );
 
@@ -132,7 +132,7 @@ export function KvpFirstTouchBlock({ from, to }: { from: string; to: string }) {
             <th>Команда / менеджер</th>{th("calls", "Розмов")}{th("score", "Бал")}
             {th("price", `Ціна · ціль ${String(target)}%`)}{th("promise", "Обіцянка")}
             {th("objection", "Заперечення")}{th("agreed", "Погодився")}
-            {th("success", "Поїхало")}<th>Що не так</th>
+            {th("success", "Поїхало")}<th style={{ paddingLeft: 14 }}>Що не так</th>
           </tr></thead>
           <tbody>
             {shownTeams.map((t) => t.s.total && [
