@@ -258,7 +258,7 @@ export function LeadgenSection() {
   const units = useMemo(() => stripUnits(nav, today), [nav, today]);
   const whoAbsent = who !== "all" && !!d && !everyone.some((r) => r.managerId === who);
   const others = d?.others ?? [];
-  const [countedOpen, setCountedOpen] = useState(false);
+  const [view, setView] = useState<"stats" | "deals">("stats");
 
   return (
     <div style={{ maxWidth: 1120, margin: "0 auto" }}>
@@ -278,9 +278,17 @@ export function LeadgenSection() {
         )}
       </div>
 
+      {/* 🔎 Два екрани вкладки (16.10.2026): статистика й «Які угоди рахуємо» — спільні період і лідген. */}
+      <div role="tablist" aria-label="Екран вкладки" style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+        {([["stats", "Статистика"], ["deals", "Які угоди рахуємо"]] as const).map(([k, label]) => (
+          <button key={k} type="button" role="tab" aria-selected={view === k} onClick={() => setView(k)}
+            title={k === "deals" ? "Які угоди дашборд зарахував у ліди, ОПР і прорахунки — для звірки з Kommo" : undefined}
+            style={{ ...navBtn, cursor: "pointer", fontWeight: 600, background: view === k ? "var(--text)" : "var(--card-bg)",
+              color: view === k ? "var(--card-bg)" : "var(--text)", borderColor: view === k ? "var(--text)" : "var(--border)" }}>{label}</button>
+        ))}
+      </div>
+
       <PeriodNav state={nav} onPatch={patchNav} today={today}>
-        {d && <button type="button" onClick={() => setCountedOpen(true)} style={{ ...navBtn, cursor: "pointer", fontWeight: 600 }}
-          title="Які угоди дашборд зарахував у ліди, ОПР і прорахунки — для звірки з Kommo">Які угоди рахуємо</button>}
         {!own && <select value={who} onChange={(e) => pickWho(e.target.value)} style={{ ...navBtn, cursor: "pointer" }} aria-label="Лідген">
           <option value="all">Усі лідгени{d ? ` (${d.rows.length}${others.length ? ` + ${others.length} не з команди` : ""})` : ""}</option>
           <optgroup label="Команда «Лідогенерація»">
@@ -295,11 +303,6 @@ export function LeadgenSection() {
         </select>}
       </PeriodNav>
 
-      {countedOpen && d && (
-        <LeadgenCountedDeals from={period.from} to={period.to} periodLabel={periodLabel} own={own}
-          people={[...d.rows, ...others].map((r) => ({ managerId: r.managerId, name: r.name }))}
-          initialId={who === "all" ? null : who} onClose={() => setCountedOpen(false)} />
-      )}
 
       {/* Смуга одиниць обраного режиму — розмітка дня-strip зі Звіту, одиниці — від режиму */}
       {units.length > 0 && (
@@ -333,6 +336,13 @@ export function LeadgenSection() {
         </div>
       )}
 
+      {view === "deals" && !denied && (
+        <LeadgenCountedDeals from={period.from} to={period.to} periodLabel={periodLabel} own={own}
+          managerId={who === "all" ? null : who}
+          people={d ? [...d.rows, ...others].map((r) => ({ managerId: r.managerId, name: r.name })) : []}
+          onPick={(id) => pickWho(String(id))} />
+      )}
+      {view === "stats" && <>
       {denied && (
         <div style={{ textAlign: "center", padding: 28, color: MUTED }}>
           <div style={{ fontSize: 30, marginBottom: 6 }}>🔒</div>
@@ -368,6 +378,7 @@ export function LeadgenSection() {
         </div>
       )}
       <LeadgenPlanFormation initialMonth={period.from.slice(0, 7)} />
+      </>}
     </div>
   );
 }
