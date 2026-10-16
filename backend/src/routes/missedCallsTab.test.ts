@@ -173,7 +173,7 @@ test("#464 КОМАНДИ Й КЛІЄНТ: розкладка без втрат,
   assert.match(sec, /d\.ownerlessInScope\s*\?/, "🔴 плитка «Без відповідального» знову малює нуль у зрізі команди");
   assert.match(sec, /державні свята не враховуються/, "🔴 примітки про свята на екрані немає — лише в підказці (ТЗ §1.2)");
   const dash = stripComments(readFileSync(FE("pages/Dashboard.tsx"), "utf8"));
-  assert.match(dash, /<MissedCallsSection canOpenClient=\{!!screens\?\.includes\("loyalty"\)\} \/>/,
+  assert.match(dash, /<MissedCallsSection canOpenClient=\{!!screens\?\.includes\("loyalty"\)\}[^>]*\/>/,
     "🔴 право на картку не за вкладкою «Клієнти», на якій стоїть роут картки");
 });
 
@@ -205,5 +205,38 @@ test("#474 ДИНАМІКА: частки зі сум, медіана не ус�
   assert.match(sec, /import \{ RANGES, MIN_WIN, rangeWindow, shortDate, COLORS \} from "\.\/StatisticsChartsSection"/,
     "🔴 діапазони й вікно графіка не зі Статистик — друга копія логіки розійдеться з першою");
   assert.doesNotMatch(sec, /const RANGES|function rangeWindow/, "🔴 у вкладці завелась власна копія діапазонів");
-  assert.match(sec, /fetchMissedSeries\(\{ granularity: gran \}\)/, "🔴 графік не тягне ряди з роуту динаміки");
+  assert.match(sec, /fetchMissedSeries\(\{ granularity: gran(, \.\.\.fp)? \}\)/, "🔴 графік не тягне ряди з роуту динаміки");
+});
+
+interface FilterMod {
+  parseMissedFilter: (raw: string | null) => { teams: string[]; managerId: number | null };
+  missedFilterParams: (f: { teams: string[]; managerId: number | null }) => { teams?: string; managerId?: number };
+  managersForTeams: <M extends { managerId: number | null; teamId: number | null; name: string }>(all: readonly M[], teams: readonly string[]) => M[];
+  normLabel: (pct: number | null, norm: number | null) => string;
+}
+
+/** #1774 — фільтр «Команда / Менеджер» і підпис цілі (ТЗ Юлі 12.10.2026, розділи 3 і 7): правила ВИКОНУЮТЬСЯ. */
+test("#1774 ФІЛЬТР І ЦІЛЬ · ФРОНТ: збережене сміття не ламає екран; менеджери — з обраних команд; ціль словами", async () => {
+  const periodUrl = await transpile("pages/dashboard/periodRules.ts");
+  const V = await load<FilterMod>("pages/dashboard/missedCallsView.ts", { "./periodRules": periodUrl });
+  // Сміття в браузері — порожній фільтр, а не виняток, що кладе вкладку.
+  for (const raw of [null, "", "{", "[]", '{"teams":"5"}', '{"teams":[5,"x"],"managerId":-2}']) {
+    assert.deepEqual(V.parseMissedFilter(raw), { teams: [], managerId: null }, `🔴 «${String(raw)}» дало не порожній фільтр`);
+  }
+  assert.deepEqual(V.parseMissedFilter('{"teams":["5","none","5"],"managerId":7}'), { teams: ["5", "none"], managerId: 7 });
+  assert.deepEqual(V.missedFilterParams({ teams: [], managerId: null }), {}, "🔴 порожній фільтр шле параметри — сервер звузить до «нікого»");
+  assert.deepEqual(V.missedFilterParams({ teams: ["5", "none"], managerId: 7 }), { teams: "5,none", managerId: 7 });
+
+  const all = [
+    { managerId: 1, teamId: 5, name: "Яцик" }, { managerId: 2, teamId: 6, name: "Андрусенко" },
+    { managerId: null, teamId: null, name: "Без відповідального" }, { managerId: 3, teamId: null, name: "Поза" },
+  ];
+  assert.deepEqual(V.managersForTeams(all, []).map((m) => m.name), ["Андрусенко", "Поза", "Яцик"], "🔴 «нічийні» потрапили в список людей");
+  assert.deepEqual(V.managersForTeams(all, ["5"]).map((m) => m.name), ["Яцик"], "🔴 у списку менеджерів люди з необраних команд");
+  assert.deepEqual(V.managersForTeams(all, ["none"]).map((m) => m.name), ["Андрусенко", "Поза", "Яцик"]);
+
+  assert.equal(V.normLabel(90, null), "ціль не задана", "🔴 без цілі — щось інше, ніж «ціль не задана»");
+  assert.equal(V.normLabel(80, 80), "ціль 80% · у нормі");
+  assert.equal(V.normLabel(79, 80), "ціль 80% · нижче норми");
+  assert.equal(V.normLabel(null, 80), "ціль 80%", "🔴 без даних показано вердикт");
 });

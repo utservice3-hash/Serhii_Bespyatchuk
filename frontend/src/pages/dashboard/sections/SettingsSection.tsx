@@ -11,7 +11,11 @@ import {
 import { NAV_GROUPS } from "../../../components/Layout";
 import { todayKyiv } from "../periodRules";
 import { FirstTouchSettingsCard } from "./FirstTouchSettingsCard";
+import { MissedNormCard } from "./MissedCallsTzBlocks";
 import { Toggle } from "../widgets";
+
+/** Хто ставить ціль пропущених — ті самі ролі, що на сервері (`LEADERSHIP_ROLES`, `missedNoCallbackRules.ts`). */
+const MISSED_NORM_ROLES: ReadonlySet<string> = new Set(["admin", "opdir", "ceo", "kvp"]);
 
 // Усі вкладки (ключ+назва) — беремо з реальної навігації, щоб screen_access-редактор
 // точно збігався з тим, що гейтить сервер.
@@ -113,6 +117,8 @@ export default function SettingsSection({ role, roleKey, teams, syncStatus, sync
 
       {sub === "Загальні" && <GeneralTab syncStatus={syncStatus} syncing={syncing} onManualSync={onManualSync} canSync={role === "admin" || role === "team_lead"} />}
       {sub === "Загальні" && roleKey === "admin" && <FirstTouchSettingsCard />}
+      {/* 📵 Ціль «передзвонили за 24 год» (ТЗ 12.10, розділ 7): ставить керівництво; сервер перевіряє те саме. */}
+      {sub === "Загальні" && MISSED_NORM_ROLES.has(roleKey ?? "") && <MissedNormCard />}
       {sub === "Користувачі" && <UsersTab teams={teams} isAdminUx={isAdminUx} />}
       {sub === "Команди" && <TeamsTab isAdminUx={isAdminUx} />}
       {sub === "Ролі та доступи" && <RolesTab />}

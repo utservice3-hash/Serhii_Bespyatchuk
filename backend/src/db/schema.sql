@@ -5993,3 +5993,13 @@ CREATE TABLE IF NOT EXISTS first_touch_closes (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_first_touch_closes_active ON first_touch_closes (kommo_id) WHERE reverted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_first_touch_closes_uniqueid ON first_touch_closes (uniqueid);
 REVOKE ALL ON first_touch_closes FROM ai_readonly;
+
+-- 🎯 ЦІЛЬ «ПЕРЕДЗВОНИЛИ ЗА 24 ГОД, %» (ТЗ Юлі 12.10.2026 «Пропущені дзвінки», розділ 7; `core/missedNoCallbackRules.ts`).
+-- Ставить і змінює лише керівництво; лише дописується — чинна остання, історія видна.
+CREATE TABLE IF NOT EXISTS missed_callback_norm (
+  id          SERIAL PRIMARY KEY,
+  norm        INTEGER NOT NULL CHECK (norm BETWEEN 1 AND 100),
+  set_by      INTEGER,
+  set_by_name TEXT,
+  set_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);

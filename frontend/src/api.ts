@@ -377,7 +377,9 @@ export interface MissedCallsResp {
 export interface MissedAutomation {
   days: number; skippedCarrier: number; closedCallback: number; closedCarrier: number; openNow: number; dealsHistory: number | null;
 }
-export async function fetchMissedCalls(params: { from: string; to: string }): Promise<MissedCallsResp> {
+/** 👥 Фільтр екрана «Пропущені дзвінки» (ТЗ Юлі 12.10.2026, розділ 3): `teams` — «5,6,none», `managerId` — один менеджер. */
+export interface MissedFilterParams { teams?: string; managerId?: number }
+export async function fetchMissedCalls(params: { from: string; to: string } & MissedFilterParams): Promise<MissedCallsResp> {
   const { data } = await api.get<MissedCallsResp>("/dashboard/missed-calls", { params });
   return data;
 }
@@ -694,7 +696,7 @@ export async function fetchLeadResponse(params: { from: string; to: string }): P
   return data;
 }
 
-export async function fetchMissedSeries(params: { granularity: MissedSeriesGranularity }): Promise<MissedSeriesResp> {
+export async function fetchMissedSeries(params: { granularity: MissedSeriesGranularity } & MissedFilterParams): Promise<MissedSeriesResp> {
   const { data } = await api.get<MissedSeriesResp>("/dashboard/missed-calls/series", { params });
   return data;
 }
@@ -717,15 +719,50 @@ export interface MissedListResp {
   truncated: boolean;
   rows: MissedListRow[];
 }
-export async function fetchMissedList(params: { day: string; noCallback?: "1" }): Promise<MissedListResp> {
+export async function fetchMissedList(params: { day: string; noCallback?: "1" } & MissedFilterParams): Promise<MissedListResp> {
   const { data } = await api.get<MissedListResp>("/dashboard/missed-calls/list", { params });
   return data;
+}
+
+/** 📵 «Не передзвонили за 24 год» (ТЗ 12.10, розділ 4). */
+export type MissedTaskState = "none" | "open" | "overdue";
+export interface MissedNoCallbackRow {
+  uniqueid: string; at: string; hours: number; phone: string; clientName: string | null; dealId: number | null; dealUrl: string | null;
+  missedN: number; managerId: number | null; managerName: string | null; teamId: number | null; teamName: string | null;
+  task: { state: MissedTaskState; id: number | null; deadline: string | null };
+}
+export interface MissedNoCallbackResp { period: { from: string; to: string }; truncated: boolean; canAssign: boolean; rows: MissedNoCallbackRow[] }
+export async function fetchMissedNoCallback(params: { from: string; to: string } & MissedFilterParams): Promise<MissedNoCallbackResp> {
+  const { data } = await api.get<MissedNoCallbackResp>("/dashboard/missed-calls/no-callback", { params });
+  return data;
+}
+export interface MissedTaskResult { uniqueid: string; result: "created" | "exists" | "error"; taskId?: number; deadline?: string | null; error?: string }
+export async function createMissedTasks(items: { uniqueid: string; managerId?: number }[]): Promise<MissedTaskResult[]> {
+  const { data } = await api.post<{ results: MissedTaskResult[] }>("/dashboard/missed-calls/no-callback/task", { items });
+  return data.results;
+}
+/** 📊 Звіт тижня (ТЗ 12.10, розділ 6). */
+export interface MissedWeekRow { key: string; name: string; missed: number; pct: number | null; medianMin: number | null; noCallback: number;
+  prevPct: number | null; change: number | null; status: "ok" | "below" | "no_norm" | "no_data" }
+export interface MissedWeekResp { week: { from: string; to: string }; prevWeek: { from: string; to: string }; norm: number | null; rows: MissedWeekRow[]; text: string }
+export async function fetchMissedWeek(params: { week: string } & MissedFilterParams): Promise<MissedWeekResp> {
+  const { data } = await api.get<MissedWeekResp>("/dashboard/missed-calls/week", { params });
+  return data;
+}
+/** 🎯 Ціль «передзвонили за 24 год, %» (ТЗ 12.10, розділ 7). */
+export interface MissedNormResp { norm: number | null; setBy: string | null; setAt: string | null; canSet: boolean }
+export async function fetchMissedNorm(): Promise<MissedNormResp> {
+  const { data } = await api.get<MissedNormResp>("/dashboard/missed-calls/norm");
+  return data;
+}
+export async function saveMissedNorm(norm: number): Promise<void> {
+  await api.post("/dashboard/missed-calls/norm", { norm });
 }
 
 /** Блок D. Три стани — окремі числа, не одне. */
 export type NoDealState = "unknown" | "has_deal" | "no_deal";
 export interface NoDealCounts { answered: number; unknown: number; hasDeal: number; noDeal: number }
-export async function fetchNoDeal(params: { from: string; to: string }): Promise<{ period: { from: string; to: string }; counts: NoDealCounts }> {
+export async function fetchNoDeal(params: { from: string; to: string } & MissedFilterParams): Promise<{ period: { from: string; to: string }; counts: NoDealCounts }> {
   const { data } = await api.get<{ period: { from: string; to: string }; counts: NoDealCounts }>("/dashboard/missed-calls/no-deal", { params });
   return data;
 }
@@ -737,7 +774,7 @@ export interface NoDealListRow {
   managerId: number | null; managerName: string; talkSec: number;
   dealId: number | null; dealUrl: string | null;
 }
-export async function fetchNoDealList(params: { from: string; to: string; state: NoDealState }):
+export async function fetchNoDealList(params: { from: string; to: string; state: NoDealState } & MissedFilterParams):
 Promise<{ state: NoDealState; truncated: boolean; rows: NoDealListRow[] }> {
   const { data } = await api.get<{ state: NoDealState; truncated: boolean; rows: NoDealListRow[] }>("/dashboard/missed-calls/no-deal/list", { params });
   return data;

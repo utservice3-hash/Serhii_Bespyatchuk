@@ -392,6 +392,20 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // 📞 «Відповідь на заявку» (5148) — ТІ САМІ межі, що в екрана: той самий tab-гейт. Звіряє #449.
   { method: "GET", path: "/api/dashboard/missed-calls/response-time", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
+  /* 📵 ТЗ Юлі 12.10.2026 «Пропущені дзвінки» — блок «не передзвонили за 24 год», звіт тижня, ціль: ТІ САМІ межі, що в
+     екрана (той самий tab-гейт; кламп — `missedScopeFor`). Звіряє #449. */
+  { method: "GET", path: "/api/dashboard/missed-calls/no-callback", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/dashboard/missed-calls/week", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/dashboard/missed-calls/norm", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "team_lead", "financier", "manager"], deny: ["hr"] },
+  /* Кнопка задачі: керівництво й тімлід (своя команда) — першим оператором; менеджер вкладку має, але кнопки ні. */
+  { method: "POST", path: "/api/dashboard/missed-calls/no-callback/task", cls: "deny-only",
+    allow: [], deny: ["hr", "manager"] },
+  /* Ціль: ставить лише керівництво (admin, opdir, ceo, kvp) — першим оператором. */
+  { method: "POST", path: "/api/dashboard/missed-calls/norm", cls: "deny-only",
+    allow: [], deny: ["hr", "manager", "team_lead"] },
   /* 🎧 «ПЕРШИЙ ДОТИК · AI» (рішення Романа 28.09.2026). Вкладку сид дає admin, ceo, opdir, kvp, team_lead;
      менеджер, фінансист і HR — ні (П18: розмови колег менеджеру не показуємо на старті). Тімлід
      бачить лише свою команду — кламп у роуті. Усі підроути ловить ОДИН tab-гейт, тож межі однакові;

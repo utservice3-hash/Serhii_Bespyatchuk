@@ -1163,7 +1163,7 @@ export function Dashboard() {
          * період першого заходу назавжди (звірка 16.09.2026). `canOpenClient` — картка клієнта
          * стоїть за вкладкою «Клієнти», без неї кнопка дала б 403.
          */
-        <MissedCallsSection canOpenClient={!!screens?.includes("loyalty")} />
+        <MissedCallsSection canOpenClient={!!screens?.includes("loyalty")} roleKey={auth?.roleKey ?? null} />
       )}
       {section === "ai-calls" && (
         /* 🎧 «Перший дотик · AI». СТАТИЧНИЙ імпорт свідомо (гейт #225): lazy розбив би бандл на чанки. */

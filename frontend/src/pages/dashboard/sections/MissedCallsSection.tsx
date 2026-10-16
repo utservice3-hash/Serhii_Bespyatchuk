@@ -10,7 +10,10 @@ import {
 import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
 import { periodOf, todayKyiv, type PeriodState } from "../periodRules";
-import { missedDefaultPeriod, groupByTeam, clientCell, clampListDay, SERIES_METRICS, type SeriesMetric } from "../missedCallsView";
+import { missedDefaultPeriod, groupByTeam, clientCell, clampListDay, SERIES_METRICS, type SeriesMetric,
+  MISSED_FILTER_KEY, EMPTY_MISSED_FILTER, parseMissedFilter, missedFilterParams, normLabel, type MissedFilter } from "../missedCallsView";
+import { fetchMissedNorm, type MissedFilterParams } from "../../../api";
+import { MissedFilterBar, NoCallbackBlock, MissedWeekBlock } from "./MissedCallsTzBlocks";
 import { RANGES, MIN_WIN, rangeWindow, shortDate, COLORS } from "./StatisticsChartsSection";
 import { ClientCardPanel } from "./ClientCardPanel";
 
@@ -46,7 +49,7 @@ function pct(part: number, whole: number): string {
  * @param canOpenClient чи віддасть сервер картку клієнта (вкладка «Клієнти»). Без неї в списку
  *   дзвінків стоїть «є в CRM», а не кнопка, що відповіла б 403.
  */
-export function MissedCallsSection({ canOpenClient }: { canOpenClient: boolean }) {
+export function MissedCallsSection({ canOpenClient, roleKey }: { canOpenClient: boolean; roleKey?: string | null }) {
   // 📅 Період СВІЙ, дефолт «вчора» (ТЗ §1.4 A). Чому не спільний `dateRange` — `missedCallsView.ts`.
   const today = todayKyiv();
   const [nav, setNav] = useState<PeriodState>(() => missedDefaultPeriod(today));
@@ -59,16 +62,45 @@ export function MissedCallsSection({ canOpenClient }: { canOpenClient: boolean }
   const [listDay, setListDay] = useState<string>(() => clampListDay(null, from, to, today));
   useEffect(() => { setListDay((cur) => clampListDay(cur, from, to, today)); }, [from, to, today]);
 
+  // 👥 Фільтр «Команда / Менеджер» на весь екран (ТЗ 12.10, розділ 3). Менеджер бачить лише себе — фільтра в нього
+  // немає; тімлід — своя команда (сервер клампить), лишається вибір менеджера. Вибір пам'ятається в браузері.
+  const isManager = roleKey === "manager";
+  const [filter, setFilterState] = useState<MissedFilter>(() => {
+    try { return parseMissedFilter(localStorage.getItem(MISSED_FILTER_KEY)); } catch { return EMPTY_MISSED_FILTER; }
+  });
+  const setFilter = (f: MissedFilter) => {
+    setFilterState(f);
+    try { localStorage.setItem(MISSED_FILTER_KEY, JSON.stringify(f)); } catch { /* приватне вікно — лише без пам'яті */ }
+  };
+  const fp: MissedFilterParams = isManager ? {} : missedFilterParams(filter);
+  const fpKey = JSON.stringify(fp);
+  const filtered = fpKey !== "{}";
+  // Варіанти фільтра — з НЕфільтрованої відповіді: інакше після вибору команди решта команд зникала б зі списку.
+  const [opts, setOpts] = useState<{ teams: MissedTeamRow[]; managers: MissedManagerRow[] } | null>(null);
+  useEffect(() => {
+    if (!from || !to || !filtered || isManager) return;
+    let alive = true;
+    fetchMissedCalls({ from, to })
+      .then((x) => { if (alive) setOpts({ teams: x.teams, managers: x.managers }); })
+      // Не завантажились — панель однаково малюється (з «Скинути»), щоб збережений фільтр не став пасткою без виходу.
+      .catch(() => { if (alive) setOpts((o) => o ?? { teams: [], managers: [] }); });
+    return () => { alive = false; };
+  }, [from, to, filtered, isManager]);
+  // 🎯 Ціль із Налаштувань (ТЗ, розділ 7); не прийшла — «ціль не задана», а не «у нормі».
+  const [norm, setNorm] = useState<number | null>(null);
+  useEffect(() => { fetchMissedNorm().then((x) => setNorm(x.norm)).catch(() => setNorm(null)); }, []);
+
   useEffect(() => {
     if (!from || !to) return;
     // 🔴 ГОНКА: відповідь за СТАРИЙ період, що прийшла пізніше, не сміє перезаписати новий.
     let alive = true;
     setD(null); setErr(null);
-    fetchMissedCalls({ from, to })
-      .then((x) => { if (alive) setD(x); })
+    fetchMissedCalls({ from, to, ...fp })
+      .then((x) => { if (alive) setD(x); if (alive && !filtered) setOpts({ teams: x.teams, managers: x.managers }); })
       .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
     return () => { alive = false; };
-  }, [from, to]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from, to, fpKey]);
 
   /**
    * Сортуємо лише ЛЮДЕЙ. «Без відповідального» лишається внизу за будь-якого сортування:
@@ -87,7 +119,10 @@ export function MissedCallsSection({ canOpenClient }: { canOpenClient: boolean }
     return { groups, orphans: orphans.sort(byVal), ownerless: d.managers.filter((r) => r.managerId === null) };
   }, [d, sort]);
 
-  const navBar = <PeriodNav state={nav} onPatch={(patch) => setNav((st) => ({ ...st, ...patch }))} today={today} />;
+  const navBar = <>
+    <PeriodNav state={nav} onPatch={(patch) => setNav((st) => ({ ...st, ...patch }))} today={today} />
+    {!isManager && opts && <MissedFilterBar filter={filter} onChange={setFilter} teams={opts.teams} managers={opts.managers} teamLocked={roleKey === "team_lead"} />}
+  </>;
   if (err) return <div className="chart-card">{navBar}<p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p></div>;
   if (!d) return <div className="chart-card">{navBar}<p className="loading-text" style={{ margin: 0 }}>Завантаження…</p></div>;
 
@@ -122,7 +157,8 @@ export function MissedCallsSection({ canOpenClient }: { canOpenClient: boolean }
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12 }}>
           <Tile label="Пропущено" value={num(s.missed)} sub={`не враховано: ${num(s.excluded)}`}
             hint="Не враховано — голосова пошта, клієнт кинув слухавку до відповіді, відповідані з нульовою розмовою. Показані окремо, щоб їх не шукали як зниклі." />
-          <Tile label="Передзвонили за 24 год" value={pct(s.callback, s.missed)} sub={`${num(s.callback)} із ${num(s.missed)}`}
+          <Tile label="Передзвонили за 24 год" value={pct(s.callback, s.missed)}
+            sub={`${num(s.callback)} із ${num(s.missed)} · ${normLabel(s.missed > 0 ? Math.round((s.callback / s.missed) * 100) : null, norm)}`}
             hint={`Передзвін — вихідний із розмовою від 10 с. Сам відповідальний — ${num(s.callbackSelf)}, колега — ${num(s.callbackColleague)}. Ще ${num(s.callbackAttempt)} — лише спроби без розмови від 10 с: набирали, але не додзвонились; передзвоном не рахуються.`} />
           <Tile label="Медіана передзвону" value={s.medianMin == null ? "—" : `${s.medianMin} хв`} sub="від пропущеного до першої розмови від 10 с"
             hint="Медіана, а не середнє: розподіл хвостатий, і поодинокі «передзвонили наступного дня» тягнуть середнє вдесятеро вгору." />
@@ -177,9 +213,12 @@ export function MissedCallsSection({ canOpenClient }: { canOpenClient: boolean }
       {/* 🔝 «Дзвінок був, а угоди немає» — ОДРАЗУ ПІД ПІДСУМКОМ (прохання власника 17.09.2026): унизу
           його не було видно за довгою таблицею й списком дзвінків. Далі — динаміка, як на Статистиках. */}
       {/* 📞 5148: «один екран по швидкості реакції» — відповідь на заявку поруч із передзвоном на пропущені. */}
-      <ResponseTimeBlock from={d.period.from} to={d.period.to} />
-      <NoDealBlock from={d.period.from} to={d.period.to} />
-      <MissedDynamicsBlock />
+      {/* 📵 ТЗ 12.10, розділ 4: що робити просто зараз — одразу під підсумком; за ним звіт тижня (розділ 6). */}
+      <NoCallbackBlock from={d.period.from} to={d.period.to} fp={fp} managers={opts?.managers ?? d.managers} />
+      <MissedWeekBlock today={today} fp={fp} />
+      <ResponseTimeBlock from={d.period.from} to={d.period.to} filtered={filtered} />
+      <NoDealBlock from={d.period.from} to={d.period.to} fp={fp} />
+      <MissedDynamicsBlock fp={fp} />
 
       <div className="chart-card" style={{ marginTop: 16 }}>
         <h3 style={{ margin: "0 0 12px" }}>По менеджерах</h3>
@@ -231,7 +270,7 @@ export function MissedCallsSection({ canOpenClient }: { canOpenClient: boolean }
         </div>
       </div>
 
-      <MissedListBlock from={d.period.from} to={d.period.to} day={listDay} setDay={setListDay} canOpenClient={canOpenClient} />
+      <MissedListBlock from={d.period.from} to={d.period.to} day={listDay} setDay={setListDay} canOpenClient={canOpenClient} fp={fp} />
     </>
   );
 }
@@ -266,7 +305,7 @@ function MgrRow({ r, cell, num, indent = false }: {
  * діапазон лише зсуває вікно — рівно як на Статистиках. Числа — з того самого ядра, що й плитки
  * (Σ точок за період == «Пропущено» за той самий період; гейт #472).
  */
-function MissedDynamicsBlock() {
+function MissedDynamicsBlock({ fp }: { fp: MissedFilterParams }) {
   const [gran, setGran] = useState<MissedSeriesGranularity>("day");
   const [metricKey, setMetricKey] = useState<SeriesMetric["key"]>("missed");
   const [range, setRange] = useState("3м");
@@ -280,11 +319,12 @@ function MissedDynamicsBlock() {
   useEffect(() => {
     let alive = true;
     setResp(null); setErr(null); setWin(null);
-    fetchMissedSeries({ granularity: gran })
+    fetchMissedSeries({ granularity: gran, ...fp })
       .then((r) => { if (alive) setResp(r); })
       .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
     return () => { alive = false; };
-  }, [gran]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gran, JSON.stringify(fp)]);
 
   const seriesList = resp?.series ?? [];
   const nameOf = (s: MissedSeriesResp["series"][number]) => (s.key === "total" ? "Усього" : s.name ?? s.key);
@@ -457,8 +497,8 @@ function nextLabel(kind: MissedNextStep, min: number | null): { text: string; ba
  * картка відкривається ТУТ ЖЕ, під рядком — той самий `ClientCardPanel`, що на екрані планів
  * клієнтів. Хто картку не отримає від сервера, бачить «є в CRM», а не кнопку.
  */
-function MissedListBlock({ from, to, day, setDay, canOpenClient }: {
-  from: string; to: string; day: string; setDay: (d: string) => void; canOpenClient: boolean;
+function MissedListBlock({ from, to, day, setDay, canOpenClient, fp }: {
+  from: string; to: string; day: string; setDay: (d: string) => void; canOpenClient: boolean; fp: MissedFilterParams;
 }) {
   const [onlyNo, setOnlyNo] = useState(false);
   const [openRow, setOpenRow] = useState<string | null>(null);
@@ -469,11 +509,12 @@ function MissedListBlock({ from, to, day, setDay, canOpenClient }: {
     if (!day) return;
     let alive = true;
     setD(null); setErr(null);
-    fetchMissedList({ day, ...(onlyNo ? { noCallback: "1" as const } : {}) })
+    fetchMissedList({ day, ...(onlyNo ? { noCallback: "1" as const } : {}), ...fp })
       .then((x) => { if (alive) setD(x); })
       .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
     return () => { alive = false; };
-  }, [day, onlyNo]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [day, onlyNo, JSON.stringify(fp)]);
 
   const cell: React.CSSProperties = { padding: "7px 10px", textAlign: "left", whiteSpace: "nowrap" };
   const head: React.CSSProperties = { ...cell, fontWeight: 600, fontSize: 12.5, color: "var(--text-muted)" };
@@ -579,7 +620,7 @@ const NO_DEAL_TILES: { state: NoDealState; key: keyof NoDealCounts; label: strin
  * 🧾 БЛОК D — «дзвінок був, а угоди немає». Три числа, і кожне розкривається списком,
  * порахованим ТИМ САМИМ запитом (гейт `#452`: рядків у розкритті рівно стільки, скільки в числі).
  */
-function NoDealBlock({ from, to }: { from: string; to: string }) {
+function NoDealBlock({ from, to, fp }: { from: string; to: string; fp: MissedFilterParams }) {
   const [c, setC] = useState<NoDealCounts | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<NoDealState | null>(null);
@@ -590,21 +631,23 @@ function NoDealBlock({ from, to }: { from: string; to: string }) {
     if (!from || !to) return;
     let alive = true;
     setC(null); setErr(null); setOpen(null); setList(null);
-    fetchNoDeal({ from, to })
+    fetchNoDeal({ from, to, ...fp })
       .then((r) => { if (alive) setC(r.counts); })
       .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
     return () => { alive = false; };
-  }, [from, to]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from, to, JSON.stringify(fp)]);
 
   useEffect(() => {
     if (!open) return;
     let alive = true;
     setList(null); setListErr(null);
-    fetchNoDealList({ from, to, state: open })
+    fetchNoDealList({ from, to, state: open, ...fp })
       .then((r) => { if (alive) setList({ truncated: r.truncated, rows: r.rows }); })
       .catch((e) => { if (alive) setListErr(e instanceof Error ? e.message : "Не вдалося завантажити"); });
     return () => { alive = false; };
-  }, [open, from, to]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, from, to, JSON.stringify(fp)]);
 
   const cell: React.CSSProperties = { padding: "7px 10px", textAlign: "left", whiteSpace: "nowrap" };
   const head: React.CSSProperties = { ...cell, fontWeight: 600, fontSize: 12.5, color: "var(--text-muted)" };
@@ -698,7 +741,8 @@ function NoDealBlock({ from, to }: { from: string; to: string }) {
  * ПЕРШОГО НАБОРУ менеджера — медіана; нічна заявка рахується від 08:15. Відділ = реклама + сайт, лідгени — окремо й у
  * медіану відділу не входять. «Не взяв трубку» — перший набір тривав 0 с. Числа рахує сервер (`core/leadResponse.ts`).
  */
-function ResponseTimeBlock({ from, to }: { from: string; to: string }) {
+/** `filtered` — на екрані стоїть фільтр команд: цей блок його не бере (своя розбивка по командах на дату заявки), і це сказано словами. */
+function ResponseTimeBlock({ from, to, filtered }: { from: string; to: string; filtered: boolean }) {
   const [r, setR] = useState<ResponseTimeResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -740,7 +784,8 @@ function ResponseTimeBlock({ from, to }: { from: string; to: string }) {
         Відповідь на заявку
         <InfoHint text="Від створення заявки до ПЕРШОГО набору менеджера, навіть якщо клієнт не взяв трубку. Медіана, а не середнє: кілька заявок, яким передзвонили через дні, тягнуть середнє в десятки разів угору. Заявка, створена в неробочий час, рахується від 08:15 найближчого робочого дня — як у вікні «Час опрацювання заявки». Заявки — реклама (uts.ua) і сайт (yalogist); лідгени — окремим рядком і в медіану відділу не входять." />
       </h3>
-      <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text-muted)" }}>Період: {from} — {to} · за датою створення заявки · команда — на дату створення</p>
+      <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text-muted)" }}>Період: {from} — {to} · за датою створення заявки · команда — на дату створення
+        {filtered && <b style={{ color: "var(--text)" }}> · фільтр команд екрана на цей блок не діє — розбивка по командах нижче</b>}</p>
       {err && <p style={{ margin: 0, color: "var(--danger, #c8102e)" }}>{err}</p>}
       {!r && !err && <p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>}
       {r && (

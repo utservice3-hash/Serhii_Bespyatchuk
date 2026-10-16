@@ -5,8 +5,9 @@ import {
   type SeriesGranularity, type MissedSeries, type MissedSeriesRaw,
   missedListSql, noDealCountsSql, noDealListSql, nextStep, OWNERLESS_LABEL, capRows,
   type MissedScope, type MissedManagerRaw, type MissedManagerRow, type MissedTeamRow, type NextStep, type NoDealState,
-  missedAutomationSql,
+  missedAutomationSql, ownerlessInScope,
 } from "./missedCallsRules.js";
+import { noCallbackSql, openTaskForPhoneSql, NO_CALLBACK_LIMIT, weekRange, weekRow, weekReportText, type WeekCell } from "./missedNoCallbackRules.js";
 
 export interface MissedAutomation {
   days: number; skippedCarrier: number; closedCallback: number; closedCarrier: number; openNow: number;
@@ -185,3 +186,90 @@ Promise<{ rows: NoDealListRow[]; truncated: boolean }> {
 
 export { DAY_BUCKETS };
 export type { DayBucket, MissedScope, MissedManagerRow, NoDealState };
+
+/* ═══════════════ «НЕ ПЕРЕДЗВОНИЛИ ЗА 24 ГОД», ЗАДАЧА З КНОПКИ, ЗВІТ ТИЖНЯ, ЦІЛЬ (ТЗ Юлі 12.10.2026) ═══════════════ */
+
+export interface NoCallbackRow {
+  uniqueid: string; at: string; phone: string; clientKey: string | null; managerId: number | null; managerName: string | null;
+  teamId: number | null; teamName: string | null; dealId: number | null; missedN: number;
+  taskId: number | null; taskDeadline: string | null;
+}
+export async function missedNoCallback(from: string, to: string, s: MissedScope, now: Date): Promise<{ rows: NoCallbackRow[]; truncated: boolean }> {
+  const { sql, params } = noCallbackSql(from, to, s, now.toISOString());
+  const r = await pool.query<{ uniqueid: string; calldate: Date; client_phone: string; client_key: string | null; manager_id: number | null;
+    manager_name: string | null; team_id: number | null; team_name: string | null; deal_id: string | null; missed_n: number;
+    task_id: number | null; task_deadline: string | null }>(sql, params);
+  const rows = r.rows.map((x) => ({ uniqueid: x.uniqueid, at: x.calldate.toISOString(), phone: x.client_phone, clientKey: x.client_key,
+    managerId: x.manager_id, managerName: x.manager_name, teamId: x.team_id, teamName: x.team_name,
+    dealId: x.deal_id == null ? null : Number(x.deal_id), missedN: Number(x.missed_n), taskId: x.task_id, taskDeadline: x.task_deadline }));
+  return { rows: rows.slice(0, NO_CALLBACK_LIMIT), truncated: rows.length > NO_CALLBACK_LIMIT };
+}
+
+/** Відкрита задача «передзвонити» на номер (журнал `missed_call_tasks`) — щоб кнопка не створила дубль. */
+export async function openMissedTask(phone: string): Promise<{ id: number; deadline: string | null } | null> {
+  const r = await pool.query<{ id: number; deadline: Date | null }>(openTaskForPhoneSql("$1"), [phone]);
+  const x = r.rows[0];
+  return x ? { id: x.id, deadline: x.deadline ? x.deadline.toISOString().slice(0, 10) : null } : null;
+}
+
+/**
+ * Задача з кнопки (ТЗ, розділ 5) — у задачник на менеджера (дедлайн сьогодні, високий пріоритет, автор — хто натиснув)
+ * і В ТОЙ САМИЙ журнал `missed_call_tasks`, що й автозадача: тому вона закривається тим самим `closeCandidatesSql`
+ * після вихідної розмови від 10 с, а повторна кнопка бачить «Задача вже є». Усе — однією транзакцією з блокуванням рядка
+ * журналу: дві кнопки одночасно не створять двох задач.
+ */
+export async function createMissedButtonTask(p: { phone: string; managerId: number; missedAt: Date; today: string; title: string;
+  description: string; authorUserId: number | null; department: string | null }): Promise<{ created: true; id: number } | { created: false; id: number; deadline: string | null }> {
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    await c.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`missed-task:${p.phone}`]);
+    const ex = (await c.query<{ id: number; deadline: Date | null }>(openTaskForPhoneSql("$1"), [p.phone])).rows[0];
+    if (ex) { await c.query("ROLLBACK"); return { created: false, id: ex.id, deadline: ex.deadline ? ex.deadline.toISOString().slice(0, 10) : null }; }
+    const id = (await c.query<{ id: number }>(
+      `INSERT INTO tasks (title, description, status, deadline, assignee_id, priority, department, task_type, created_by)
+       VALUES ($1, $2, 'not_started', $3::date, $4, 'high', $5, 'simple', $6) RETURNING id`,
+      [p.title, p.description, p.today, p.managerId, p.department ?? "Пропущені дзвінки", p.authorUserId])).rows[0]!.id;
+    await c.query(
+      `INSERT INTO missed_call_tasks (manager_id, client_phone, kday, task_id, missed_count, last_signal_at)
+       VALUES ($1, $2, $3::date, $4, 1, $5)
+       ON CONFLICT (manager_id, client_phone, kday) DO UPDATE SET task_id = EXCLUDED.task_id, closed_at = NULL,
+         last_signal_at = EXCLUDED.last_signal_at, updated_at = now()`,
+      [p.managerId, p.phone, p.today, id, p.missedAt.toISOString()]);
+    await c.query("COMMIT");
+    return { created: true, id };
+  } catch (e) { await c.query("ROLLBACK").catch(() => {}); throw e; }
+  finally { c.release(); }
+}
+
+/** Звіт тижня (ТЗ, розділ 6): відділ, кожна команда і «Без відповідального» — Σ рядків = відділ (критерій приймання). */
+export async function missedWeekReport(monday: string, s: MissedScope, norm: number | null) {
+  const cur = weekRange(monday), prev = weekRange(monday, -1);
+  const cell = (x: { missed: number; callback: number; medianMin: number | null }): WeekCell => ({ missed: x.missed, callback: x.callback, medianMin: x.medianMin });
+  const teamCell = (t: MissedTeamRow): WeekCell => ({ missed: t.missed, callback: t.callbackSelf + t.callbackColleague, medianMin: t.medianMin });
+  const withOwnerless = ownerlessInScope(s);
+  const own: MissedScope = { ...s, teamIds: [], ownerless: true };
+  const [dc, dp, tc, tp, oc, op] = await Promise.all([
+    missedSummary(cur.from, cur.to, s), missedSummary(prev.from, prev.to, s),
+    missedByTeam(cur.from, cur.to, s), missedByTeam(prev.from, prev.to, s),
+    withOwnerless ? missedSummary(cur.from, cur.to, own) : null, withOwnerless ? missedSummary(prev.from, prev.to, own) : null,
+  ]);
+  const prevBy = new Map(tp.map((t) => [t.teamId, teamCell(t)]));
+  const rows = [
+    weekRow("dept", "Відділ", cell(dc), cell(dp), norm),
+    ...tc.map((t) => weekRow(`team:${String(t.teamId)}`, t.name, teamCell(t), prevBy.get(t.teamId) ?? null, norm)),
+    ...(oc ? [weekRow("ownerless", OWNERLESS_LABEL, cell(oc), op ? cell(op) : null, norm)] : []),
+  ];
+  return { week: cur, prevWeek: prev, norm, rows, text: weekReportText(cur, rows, norm) };
+}
+
+/** Ціль «передзвонили за 24 год, %» — остання встановлена (історія в `missed_callback_norm`); `null` — ще не задано. */
+export async function callbackNorm(): Promise<{ norm: number | null; setBy: string | null; setAt: string | null }> {
+  const r = await pool.query<{ norm: number; set_by_name: string | null; set_at: Date }>(
+    "SELECT norm, set_by_name, set_at FROM missed_callback_norm ORDER BY set_at DESC, id DESC LIMIT 1");
+  const x = r.rows[0];
+  return x ? { norm: x.norm, setBy: x.set_by_name, setAt: x.set_at.toISOString() } : { norm: null, setBy: null, setAt: null };
+}
+export async function setCallbackNorm(norm: number, userId: number | null, name: string | null): Promise<void> {
+  await pool.query("INSERT INTO missed_callback_norm (norm, set_by, set_by_name) VALUES ($1, $2, $3)", [norm, userId, name]);
+}

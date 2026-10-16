@@ -99,7 +99,39 @@ export const MERGE_NOTE = "LAG over the already-filtered inbound set";
 export const SELF_CALLBACK_SQL =
   "cb_manager IS NOT NULL AND manager_id IS NOT NULL AND cb_manager = manager_id";
 
-export interface MissedScope { managerId?: number | null; teamId?: number | null }
+export interface MissedScope {
+  managerId?: number | null; teamId?: number | null;
+  /**
+   * 👥 Фільтр «Команда» на весь екран (ТЗ Юлі 12.10.2026, розділ 3): кілька команд разом і/або «Без відповідального»
+   * (`ownerless`). `null` / не задано — без фільтра. Порожній список з `ownerless: false` — «нічого», а не «усе»
+   * (правило 7: порожній скоуп не виражається нулем). Команда — на день дзвінка (`teamAtSql`), як у `teamId`.
+   */
+  teamIds?: number[] | null; ownerless?: boolean;
+}
+
+/** Умови скоупу для запиту по `ringostat_calls rc LEFT JOIN managers m` — ОДНЕ місце для всіх основ екрана. */
+export function missedScopeConds(s: MissedScope, p: unknown[]): string[] {
+  const day = "(rc.calldate AT TIME ZONE 'Europe/Kyiv')::date";
+  const conds: string[] = [];
+  if (s.managerId) { p.push(s.managerId); conds.push(`rc.manager_id = $${p.length}`); }
+  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", day, `$${p.length}`)); }
+  if (s.teamIds != null) {
+    const ors: string[] = [];
+    if (s.teamIds.length) { p.push(s.teamIds); ors.push(`(rc.manager_id IS NOT NULL AND ${teamAtSql("m", day)} = ANY($${p.length}::int[]))`); }
+    if (s.ownerless) ors.push("rc.manager_id IS NULL");
+    conds.push(ors.length ? `(${ors.join(" OR ")})` : "FALSE");
+  }
+  return conds;
+}
+
+/** Розбір `teams=5,6,none` із запиту: числа — команди, `none` — «Без відповідального». Сміття відкидається. */
+export function parseTeamsParam(raw: unknown): { teamIds: number[]; ownerless: boolean } | null {
+  if (typeof raw !== "string" || raw.trim() === "") return null;
+  const parts = raw.split(",").map((x) => x.trim()).filter(Boolean);
+  const teamIds = [...new Set(parts.filter((x) => /^\d+$/.test(x)).map(Number))];
+  const ownerless = parts.includes("none");
+  return teamIds.length || ownerless ? { teamIds, ownerless } : null;
+}
 
 /**
  * 🔒 КЛАМП СКОУПУ — ОДНЕ МІСЦЕ НА ВСІ РОУТИ ЕКРАНА. Доти він жив інлайном в одному роуті;
@@ -112,10 +144,12 @@ export interface MissedScope { managerId?: number | null; teamId?: number | null
  */
 export function missedScopeFor(
   auth: { role: string; managerId: number | null; teamId: number | null },
-  query: { managerId?: unknown; teamId?: unknown },
+  query: { managerId?: unknown; teamId?: unknown; teams?: unknown },
 ): MissedScope {
   let managerId = query.managerId ? Number(query.managerId) : null;
   let teamId = query.teamId ? Number(query.teamId) : null;
+  // 👥 Кілька команд (ТЗ 12.10, розділ 3) — лише керівництву: менеджер і тімлід клампляться нижче, їм `teams` не діє.
+  const teams = parseTeamsParam(query.teams);
   // 🔴 `?? -1`, а НЕ голий `auth.managerId`. Ядро фільтрує через `if (s.managerId)`, тобто
   // null і 0 для нього — «фільтра немає», а не «нікого». Менеджер без привʼязаного
   // manager_id бачив би дзвінки ВСІЄЇ компанії. Правило 7 з CLAUDE.md: порожній скоуп не
@@ -123,9 +157,9 @@ export function missedScopeFor(
   // 📐 Заміряно 16.09.2026: сьогодні в цю діру не потрапляє жоден із 47 активних
   // акаунтів — вада прихована, а не діюча. Але в тімліда фолбек `?? -1` стояв від
   // початку, тобто асиметрія була випадковою, а не рішенням.
-  if (auth.role === "manager") { managerId = auth.managerId ?? -1; teamId = null; }
-  else if (auth.role === "team_lead") teamId = auth.teamId ?? -1;
-  return { managerId, teamId };
+  if (auth.role === "manager") { managerId = auth.managerId ?? -1; teamId = null; return { managerId, teamId }; }
+  if (auth.role === "team_lead") { teamId = auth.teamId ?? -1; return { managerId, teamId }; }
+  return teams ? { managerId, teamId, teamIds: teams.teamIds, ownerless: teams.ownerless } : { managerId, teamId };
 }
 
 /**
@@ -140,6 +174,7 @@ export function missedScopeFor(
  * людини, не належить жодній команді. Це не втрата рядка, це чесна відповідь —
  * але на екрані команди підсумок буде меншим за загальний, і так і має бути.
  */
+export function missedBaseCte(from: string, to: string, s: MissedScope): { cte: string; params: unknown[] } { return baseCte(from, to, s); }
 function baseCte(from: string, to: string, s: MissedScope): { cte: string; params: unknown[] } {
   const p: unknown[] = [from, to];
   const conds = [
@@ -147,8 +182,7 @@ function baseCte(from: string, to: string, s: MissedScope): { cte: string; param
     `rc.call_type IN (${list(INBOUND_TYPES)})`,
     "rc.billsec = 0",
   ];
-  if (s.managerId) { p.push(s.managerId); conds.push(`rc.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", "(rc.calldate AT TIME ZONE 'Europe/Kyiv')::date", `$${p.length}`)); }
+  conds.push(...missedScopeConds(s, p));
   const cte = `
     WITH base AS (
       SELECT rc.uniqueid, rc.manager_id, rc.client_phone, rc.client_key, rc.calldate, rc.billsec, rc.disposition,
@@ -386,7 +420,7 @@ export function foldTeamRows(raw: MissedTeamRaw[]): MissedTeamRow[] {
  * немає», хоча правда — «у зріз команди вони не входять». Правило 7 з CLAUDE.md: порожній
  * скоуп не виражається нулем. Спіймано звіркою 16.09.2026.
  */
-export const ownerlessInScope = (s: MissedScope): boolean => !s.managerId && !s.teamId;
+export const ownerlessInScope = (s: MissedScope): boolean => !s.managerId && !s.teamId && (s.teamIds == null || !!s.ownerless);
 
 /** Підпис рядка «нічиїх». Слово одне на продукт — див. коментар у `foldManagerRows`. */
 export const OWNERLESS_LABEL = "Без відповідального";
@@ -594,8 +628,7 @@ function answeredCte(from: string, to: string, s: MissedScope): { cte: string; p
     `rc.call_type IN (${list(INBOUND_TYPES)})`,
     "rc.billsec > 0",
   ];
-  if (s.managerId) { p.push(s.managerId); conds.push(`rc.manager_id = $${p.length}`); }
-  if (s.teamId) { p.push(s.teamId); conds.push(teamOnDateSql("m", "(rc.calldate AT TIME ZONE 'Europe/Kyiv')::date", `$${p.length}`)); }
+  conds.push(...missedScopeConds(s, p));
   const cte = `
     WITH base AS (
       SELECT rc.uniqueid, rc.manager_id, rc.client_phone, rc.client_key, rc.calldate, rc.billsec

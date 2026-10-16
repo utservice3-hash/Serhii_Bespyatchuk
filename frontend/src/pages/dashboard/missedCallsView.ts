@@ -84,3 +84,40 @@ export function clientCell(clientKey: string | null, canOpenClient: boolean): Cl
   if (!clientKey || !clientKey.trim()) return "unknown";
   return canOpenClient ? "open" : "known";
 }
+
+
+/* ═══════════ 👥 ФІЛЬТР «КОМАНДА / МЕНЕДЖЕР» НА ВЕСЬ ЕКРАН (ТЗ Юлі 12.10.2026, розділ 3) ═══════════ */
+
+/** Вибір фільтра: `teams` — id команд і `"none"` («Без відповідального»); порожньо — весь доступний відділ. */
+export interface MissedFilter { teams: string[]; managerId: number | null }
+export const MISSED_FILTER_KEY = "missedFilter";
+export const EMPTY_MISSED_FILTER: MissedFilter = { teams: [], managerId: null };
+
+/** Розбір збереженого фільтра; сміття — порожній фільтр, а не виняток. */
+export function parseMissedFilter(raw: string | null): MissedFilter {
+  try {
+    const v = JSON.parse(raw ?? "null") as Partial<MissedFilter> | null;
+    const teams = Array.isArray(v?.teams) ? v.teams.filter((x): x is string => typeof x === "string" && (/^\d+$/.test(x) || x === "none")) : [];
+    const managerId = typeof v?.managerId === "number" && Number.isInteger(v.managerId) && v.managerId > 0 ? v.managerId : null;
+    return { teams: [...new Set(teams)], managerId };
+  } catch { return EMPTY_MISSED_FILTER; }
+}
+
+/** Параметри запиту з фільтра — ОДНА функція для всіх блоків екрана, щоб жоден не пішов без фільтра. */
+export function missedFilterParams(f: MissedFilter): { teams?: string; managerId?: number } {
+  return { ...(f.teams.length ? { teams: f.teams.join(",") } : {}), ...(f.managerId != null ? { managerId: f.managerId } : {}) };
+}
+
+/** Менеджери для списку «Менеджер» — лише з обраних команд (порожній вибір — усі). */
+export function managersForTeams<M extends { managerId: number | null; teamId: number | null; name: string }>(all: readonly M[], teams: readonly string[]): M[] {
+  const ids = new Set(teams.filter((t) => t !== "none").map(Number));
+  return all.filter((m) => m.managerId != null && (ids.size === 0 || (m.teamId != null && ids.has(m.teamId))))
+    .sort((a, b) => a.name.localeCompare(b.name, "uk"));
+}
+
+/** «у нормі / нижче норми» — словами (ТЗ, розділ 7: «не лише кольором»). */
+export function normLabel(pct: number | null, norm: number | null): string {
+  if (norm == null) return "ціль не задана";
+  if (pct == null) return `ціль ${String(norm)}%`;
+  return pct >= norm ? `ціль ${String(norm)}% · у нормі` : `ціль ${String(norm)}% · нижче норми`;
+}

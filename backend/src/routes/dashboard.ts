@@ -55,7 +55,8 @@ import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL,
   isPlannableClientKey, NOT_PLANNABLE_MSG, rosterWithPlans, splitUnattached, SAVE_SQL,
   OWNER_SQL, NO_OWNER_MSG } from "./clientPlanRules.js";
 import * as missedCalls from "../core/missedCalls.js";
-import { missedPeriod, missedScopeFor, ownerlessInScope, NO_DEAL_STATES, SERIES_GRANULARITIES, type NoDealState, type SeriesGranularity } from "../core/missedCallsRules.js";
+import { canAssignMissedTask, LEADERSHIP_ROLES, hoursSince, taskState, buttonTaskTitle, buttonTaskDescription, mondayOf, canSetCallbackNorm, callbackNormVerdict } from "../core/missedNoCallbackRules.js";
+import { missedPeriod, missedScopeFor, ownerlessInScope, dealInWindowLateral, NO_DEAL_STATES, SERIES_GRANULARITIES, type NoDealState, type SeriesGranularity } from "../core/missedCallsRules.js";
 import * as reactivation from "../core/reactivation.js";
 import * as reactivationRules from "../core/reactivationRules.js";
 import { buildOverrideUpsert } from "../core/loyaltyOverride.js";
@@ -11652,6 +11653,93 @@ dashboardRouter.get("/missed-calls/series", async (req, res) => {
       points: s.points.map((p) => ({ period: p.period, missed: p.missed, callback: p.callback, clientSelf: p.clientSelf, medianMin: p.medianMin })),
     })),
   });
+});
+
+/**
+ * 📵 «НЕ ПЕРЕДЗВОНИЛИ ЗА 24 ГОД» (ТЗ Юлі 12.10.2026 «Пропущені дзвінки», розділ 4): пропущений, після якого минуло 24 год
+ * і досі немає розмови від 10 с з цим номером; перевізники — поза блоком. Межа — той самий tab-гейт екрана, кламп —
+ * `missedScopeFor` (фільтр «Команда» / «Менеджер» діє й тут). Клієнт — назва угоди; рядок несе стан задачі.
+ */
+dashboardRouter.get("/missed-calls/no-callback", async (req, res) => {
+  const auth = req.auth!;
+  const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
+  const scope = missedScopeFor(auth, req.query);
+  const now = new Date(), today = kyivToday();
+  const { rows, truncated } = await missedCalls.missedNoCallback(from, to, scope, now);
+  const dealIds = [...new Set(rows.map((r) => r.dealId).filter((x): x is number => x != null))];
+  const names = new Map(dealIds.length ? (await pool.query<{ k: string; name: string | null }>(
+    "SELECT kommo_id::text AS k, name FROM deals WHERE kommo_id = ANY($1::bigint[])", [dealIds])).rows.map((x) => [Number(x.k), x.name]) : []);
+  res.json({
+    period: { from, to }, truncated, canAssign: LEADERSHIP_ROLES.has(auth.roleKey ?? "") || auth.roleKey === "team_lead",
+    rows: rows.map((r) => ({
+      uniqueid: r.uniqueid, at: r.at, hours: hoursSince(new Date(r.at), now), phone: r.phone,
+      clientName: r.dealId != null ? names.get(r.dealId) ?? null : null,
+      dealId: r.dealId, dealUrl: r.dealId == null ? null : kommoLeadUrl(r.dealId), missedN: r.missedN,
+      managerId: r.managerId, managerName: r.managerName, teamId: r.teamId, teamName: r.teamName,
+      task: { state: taskState(r.taskId, r.taskDeadline, today), id: r.taskId, deadline: r.taskDeadline },
+    })),
+  });
+});
+
+/**
+ * 📌 «ПОСТАВИТИ ЗАДАЧУ МЕНЕДЖЕРУ» (ТЗ, розділ 5) — одна або кілька (масова дія). Право — ПЕРШИМ оператором: керівництво —
+ * будь-кому, тімлід — лише своїй команді, менеджер — нікому. Дзвінок береться з БАЗИ за `uniqueid` (не з тіла запиту):
+ * номер, час і відповідальний — з `ringostat_calls`. Без відповідального — менеджера обирає людина (`managerId`). Дубля немає:
+ * відкрита задача на номер → «Задача вже є» з дедлайном.
+ */
+dashboardRouter.post("/missed-calls/no-callback/task", async (req, res) => {
+  const auth = req.auth!;
+  if (!LEADERSHIP_ROLES.has(auth.roleKey ?? "") && auth.roleKey !== "team_lead") { res.status(403).json({ error: "Ставити задачі можуть тімлід (своїй команді) і керівництво" }); return; }
+  const items = Array.isArray(req.body?.items) ? (req.body.items as { uniqueid?: unknown; managerId?: unknown }[]).slice(0, 100) : [];
+  if (!items.length) { res.status(400).json({ error: "Немає жодного дзвінка" }); return; }
+  const today = kyivToday();
+  const author = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? "користувач дашборда";
+  const out: { uniqueid: string; result: "created" | "exists" | "error"; taskId?: number; deadline?: string | null; error?: string }[] = [];
+  for (const it of items) {
+    const uniqueid = String(it.uniqueid ?? "");
+    const call = (await pool.query<{ client_phone: string | null; manager_id: number | null; calldate: Date }>(
+      "SELECT client_phone, manager_id, calldate FROM ringostat_calls WHERE uniqueid = $1 LIMIT 1", [uniqueid])).rows[0];
+    if (!call?.client_phone) { out.push({ uniqueid, result: "error", error: "Дзвінок не знайдено" }); continue; }
+    const managerId = call.manager_id ?? (Number.isInteger(Number(it.managerId)) && Number(it.managerId) > 0 ? Number(it.managerId) : null);
+    if (managerId == null) { out.push({ uniqueid, result: "error", error: "Оберіть менеджера: у дзвінка немає відповідального" }); continue; }
+    const mg = (await pool.query<{ team_id: number | null; is_active: boolean; team_name: string | null }>(
+      "SELECT m.team_id, m.is_active, t.name AS team_name FROM managers m LEFT JOIN teams t ON t.id = m.team_id WHERE m.id = $1", [managerId])).rows[0];
+    if (!mg) { out.push({ uniqueid, result: "error", error: "Менеджера не знайдено" }); continue; }
+    if (!canAssignMissedTask(auth, mg.team_id)) { out.push({ uniqueid, result: "error", error: "Тімлід ставить задачі лише своїй команді" }); continue; }
+    const deal = (await pool.query<{ kommo_id: string; name: string | null }>(
+      `SELECT d.kommo_id::text, d.name FROM ringostat_calls rc ${dealInWindowLateral("rc", "d0")} JOIN deals d ON d.kommo_id = d0.kommo_id WHERE rc.uniqueid = $1`, [uniqueid])).rows[0];
+    const missedAt = call.calldate.toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    const r = await missedCalls.createMissedButtonTask({
+      phone: call.client_phone, managerId, missedAt: call.calldate, today,
+      title: buttonTaskTitle(deal?.name ?? null, call.client_phone),
+      description: buttonTaskDescription({ phone: call.client_phone, missedAt, dealUrl: deal ? kommoLeadUrl(Number(deal.kommo_id)) : null, author }),
+      authorUserId: auth.userId ?? null, department: mg.team_name,
+    });
+    out.push(r.created ? { uniqueid, result: "created", taskId: r.id, deadline: today } : { uniqueid, result: "exists", taskId: r.id, deadline: r.deadline });
+  }
+  res.json({ results: out });
+});
+
+/** 📊 ЗВІТ ТИЖНЯ (ТЗ, розділ 6): пн–нд, відділ і команди, той самий фільтр; ціль — з `missed_callback_norm`. */
+dashboardRouter.get("/missed-calls/week", async (req, res) => {
+  const scope = missedScopeFor(req.auth!, req.query);
+  const day = dateParam(req.query.week) ?? (() => { const d = new Date(`${kyivToday()}T00:00:00Z`); d.setUTCDate(d.getUTCDate() - 7); return d.toISOString().slice(0, 10); })();
+  const norm = (await missedCalls.callbackNorm()).norm;
+  res.json(await missedCalls.missedWeekReport(mondayOf(day), scope, norm));
+});
+
+/** 🎯 ЦІЛЬ «ПЕРЕДЗВОНИЛИ ЗА 24 ГОД, %» (ТЗ, розділ 7): читають усі ролі екрана; ставить лише керівництво. */
+dashboardRouter.get("/missed-calls/norm", async (req, res) => {
+  res.json({ ...(await missedCalls.callbackNorm()), canSet: canSetCallbackNorm(req.auth!.roleKey) });
+});
+dashboardRouter.post("/missed-calls/norm", async (req, res) => {
+  const auth = req.auth!;
+  if (!canSetCallbackNorm(auth.roleKey)) { res.status(403).json({ error: "Ціль ставить і змінює лише керівництво" }); return; }
+  const v = callbackNormVerdict(req.body?.norm);
+  if (!v.ok) { res.status(400).json({ error: v.error }); return; }
+  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? null;
+  await missedCalls.setCallbackNorm(v.norm, auth.userId ?? null, who);
+  res.json({ ok: true });
 });
 
 /**

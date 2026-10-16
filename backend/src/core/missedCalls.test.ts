@@ -725,3 +725,198 @@ test("#473 ДИНАМІКА · РОУТ: 400 на невідому гранул�
   const matrix = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "auth", "accessMatrix.ts"), "utf8");
   assert.match(matrix, /path: "\/api\/dashboard\/missed-calls\/series\?granularity=day", cls: "GET"/, "🔴 роуту динаміки немає в матриці доступу");
 });
+
+/* ═══════════════ 📵 ТЗ Юлі 12.10.2026: фільтр команд, «не передзвонили за 24 год», кнопка, звіт тижня, ціль ═══════════════ */
+
+test("#1767 НЕ ПЕРЕДЗВОНИЛИ · ЖИВИЙ SQL: 24 год і 10 с — по обидва боки межі, номер один раз, перевізник поза, задача з журналу", async (t) => {
+  const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
+  const scratch = provisionScratch();
+  if ("unavailable" in scratch) return t.skip(skipReason(scratch));
+  const R = await import("./missedCallsRules.js");
+  const N = await import("./missedNoCallbackRules.js");
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: scratch.url });
+  await c.connect();
+  try {
+    await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
+    await c.query("INSERT INTO teams(id,name) VALUES (1,'РПК'),(2,'РНК') ON CONFLICT DO NOTHING");
+    await c.query("INSERT INTO managers(id,name,team_id,is_active) VALUES (1,'Яцик',1,true),(3,'Мокляк',2,true) ON CONFLICT DO NOTHING");
+    let seq = 0;
+    const call = (at: string, type: string, disp: string, sec: number, mgr: number | null, phone: string) =>
+      c.query(`INSERT INTO ringostat_calls(uniqueid,calldate,call_type,disposition,billsec,manager_id,client_phone)
+               VALUES ($1,$2,$3,$4,$5,$6,$7)`, [`n${String(++seq)}`, at, type, disp, sec, mgr, phone]);
+    const P = (n: number) => `38050000000${String(n)}`;
+    const NOW = "2026-09-12T09:00:00Z"; // 12:00 за Києвом
+
+    await call("2026-09-10 10:00:00+03", "in", "NO ANSWER", 0, 1, P(1));      // n1 — у списку, найстаріший свого номера
+    await call("2026-09-10 15:00:00+03", "in", "NO ANSWER", 0, 1, P(1));      // n2 — той самий номер: рядок один, «2 рази»
+    await call("2026-09-10 11:00:00+03", "in", "NO ANSWER", 0, 1, P(2));      // n3 — передзвонили з розмовою 60 с → ПОЗА
+    await call("2026-09-10 11:30:00+03", "out", "ANSWERED", 60, 1, P(2));
+    await call("2026-09-10 12:00:00+03", "in", "NO ANSWER", 0, 1, P(3));      // n5 — «передзвін» 9 с не розмова → У СПИСКУ
+    await call("2026-09-10 12:10:00+03", "out", "ANSWERED", 9, 1, P(3));
+    await call("2026-09-10 13:00:00+03", "in", "NO ANSWER", 0, 3, P(4));      // n7 — клієнт сам додзвонився через добу → ПОЗА
+    await call("2026-09-11 13:30:00+03", "in", "ANSWERED", 30, 3, P(4));
+    await call("2026-09-11 12:01:00+03", "in", "NO ANSWER", 0, 1, P(5));      // n9 — минуло 23:59 → ЩЕ НЕ в списку
+    await call("2026-09-11 11:59:00+03", "in", "NO ANSWER", 0, 1, P(6));      // n10 — минуло 24:01 → У СПИСКУ
+    await call("2026-09-10 14:00:00+03", "in", "NO ANSWER", 0, null, P(7));   // n11 — без відповідального → У СПИСКУ
+    await call("2026-09-10 16:00:00+03", "in", "NO ANSWER", 0, 3, P(8));      // n12 — перевізник за історією CRM → ПОЗА
+    await call("2026-09-10 17:00:00+03", "in", "NO ANSWER", 0, 3, P(9));      // n13 — РНК → У СПИСКУ
+    await c.query("INSERT INTO deals(kommo_id, name, status_id, pipeline_id, reject_reason) VALUES (7001, $1, 143, 1, 'Перевізник')", [`+${P(8)}`]);
+    // Журнал задач: на P1 — відкрита, на P3 — закрита (дзеркало: закрита не рахується «вже є»).
+    const tk = async (status: string, deadline: string) =>
+      Number((await c.query("INSERT INTO tasks(title,status,deadline) VALUES ('📵',$1,$2) RETURNING id", [status, deadline])).rows[0].id);
+    const open1 = await tk("not_started", "2026-09-11");
+    const done3 = await tk("done", "2026-09-11");
+    await c.query(`INSERT INTO missed_call_tasks(manager_id,client_phone,kday,task_id,missed_count,last_signal_at,closed_at) VALUES
+      (1,$1,'2026-09-10',$2,1,now(),NULL), (1,$3,'2026-09-10',$4,1,now(),now())`, [P(1), open1, P(3), done3]);
+
+    const run = async (s: import("./missedCallsRules.js").MissedScope) => {
+      const q = N.noCallbackSql("2026-09-01", "2026-09-12", s, NOW);
+      return (await c.query(q.sql, q.params)).rows as { uniqueid: string; client_phone: string; missed_n: number; task_id: number | null; team_id: number | null }[];
+    };
+    const all = await run({});
+    assert.deepEqual(all.map((r) => r.uniqueid), ["n1", "n5", "n11", "n13", "n10"],
+      "🔴 склад блоку не той: межа 24 год, межа 10 с, клієнт сам, перевізник або порядок «найстаріші зверху» зламані");
+    const p1 = all.find((r) => r.uniqueid === "n1")!;
+    assert.equal(Number(p1.missed_n), 2, "🔴 два пропущені від одного номера — це «2 рази», а не два рядки і не один без лічильника");
+    assert.equal(p1.task_id, open1, "🔴 відкрита задача з журналу не підтягнулась — кнопка поставила б дубль");
+    assert.equal(all.find((r) => r.uniqueid === "n5")!.task_id, null, "🔴 закрита задача рахується як «вже є» — рядок не дасть поставити нову");
+
+    // 👥 Фільтр команд: кожна частина — свій шматок, разом — рівно ціле, без перетину.
+    const t1 = await run({ teamIds: [1] }), t2 = await run({ teamIds: [2] }), own = await run({ teamIds: [], ownerless: true });
+    assert.deepEqual(t1.map((r) => r.uniqueid), ["n1", "n5", "n10"]);
+    assert.deepEqual(t2.map((r) => r.uniqueid), ["n13"]);
+    assert.deepEqual(own.map((r) => r.uniqueid), ["n11"], "🔴 «Без відповідального» у фільтрі не дає саме нічиїх");
+    assert.equal(t1.length + t2.length + own.length, all.length, "🔴 Σ команд + без відповідального ≠ відділ — дзвінок загубився між фільтрами");
+    assert.deepEqual((await run({ teamIds: [1], ownerless: true })).map((r) => r.uniqueid).sort(), ["n1", "n10", "n11", "n5"]);
+    assert.equal((await run({ teamIds: [], ownerless: false })).length, 0, "🔴 порожній вибір команд показав усіх — порожній скоуп виражено «без фільтра»");
+
+    // 📊 Звіт тижня: «Відділ» == Σ команд + без відповідального — тими самими запитами, що й екран.
+    const sum = async (s: import("./missedCallsRules.js").MissedScope) => {
+      const q = R.missedSummarySql("2026-09-07", "2026-09-13", s);
+      return Number((await c.query(q.sql, q.params)).rows[0].missed);
+    };
+    const qt = R.missedByTeamSql("2026-09-07", "2026-09-13", {});
+    const teamsSum = (await c.query(qt.sql, qt.params)).rows.reduce((a: number, r: { missed: number }) => a + Number(r.missed), 0);
+    const dept = await sum({});
+    assert.ok(dept > 0, "🔴 фікстура порожня — рівність нижче нічого не доводить");
+    assert.equal(teamsSum + await sum({ teamIds: [], ownerless: true }), dept, "🔴 у звіті тижня Σ рядків ≠ «Відділ»");
+    assert.equal(await sum({ teamIds: [1] }) + await sum({ teamIds: [2] }) + await sum({ teamIds: [], ownerless: true }), dept,
+      "🔴 фільтр кількох команд розходиться з цілим");
+  } finally { await c.end(); scratch.dispose(); }
+});
+
+test("#1768 ФІЛЬТР КОМАНД: «5,6,none» розбирається; менеджер і тімлід фільтром не розширюють доступ", async () => {
+  const { parseTeamsParam, missedScopeFor, missedScopeConds, ownerlessInScope } = await import("./missedCallsRules.js");
+  assert.deepEqual(parseTeamsParam("5,6,none"), { teamIds: [5, 6], ownerless: true });
+  assert.deepEqual(parseTeamsParam("6, 6 ,x"), { teamIds: [6], ownerless: false }, "🔴 сміття або дубль у teams пройшли далі");
+  assert.equal(parseTeamsParam(""), null);
+  assert.equal(parseTeamsParam("x,y"), null, "🔴 лише сміття — це «фільтра немає», а не «нікого»");
+  assert.equal(parseTeamsParam(["5"]), null);
+
+  const admin = { role: "admin", managerId: null, teamId: null };
+  assert.deepEqual(missedScopeFor(admin, { teams: "5,none" }).teamIds, [5], "🔴 керівництво не отримало вибраних команд");
+  assert.equal(missedScopeFor(admin, { teams: "5,none" }).ownerless, true);
+  // 🔴 Межа: менеджер і тімлід параметром `teams` не бачать чужого.
+  const m = missedScopeFor({ role: "manager", managerId: 7, teamId: 1 }, { teams: "2,none" });
+  assert.equal(m.managerId, 7);
+  assert.ok(m.teamIds == null && !m.ownerless, "🔴 менеджер підставив teams і розширив доступ");
+  const tl = missedScopeFor({ role: "team_lead", managerId: null, teamId: 3 }, { teams: "9,none" });
+  assert.equal(tl.teamId, 3);
+  assert.ok(tl.teamIds == null && !tl.ownerless, "🔴 тімлід підставив teams і побачив чужу команду або нічиї");
+
+  // Порожній вибір — «нікого» (FALSE), а не «без фільтра» (правило 7).
+  assert.deepEqual(missedScopeConds({ teamIds: [], ownerless: false }, []), ["FALSE"]);
+  assert.equal(missedScopeConds({}, []).length, 0);
+  // Плитка «Без відповідального»: у фільтрі лише з «none».
+  assert.equal(ownerlessInScope({ teamIds: [5] }), false, "🔴 у зрізі команд показалась плитка нічиїх, яких там немає");
+  assert.equal(ownerlessInScope({ teamIds: [5], ownerless: true }), true);
+  assert.equal(ownerlessInScope({}), true);
+});
+
+test("#1769 КНОПКА ЗАДАЧІ: керівництво — будь-кому, тімлід — лише своїй команді, менеджер — нікому; назва за ТЗ", async () => {
+  const N = await import("./missedNoCallbackRules.js");
+  for (const rk of ["admin", "opdir", "ceo", "kvp"]) {
+    assert.equal(N.canAssignMissedTask({ role: "admin", roleKey: rk, teamId: null }, 9), true, `🔴 ${rk} не може поставити задачу`);
+  }
+  assert.equal(N.canAssignMissedTask({ role: "team_lead", roleKey: "team_lead", teamId: 3 }, 3), true, "🔴 тімлід не може поставити своїй команді");
+  assert.equal(N.canAssignMissedTask({ role: "team_lead", roleKey: "team_lead", teamId: 3 }, 4), false, "🔴 тімлід ставить задачу чужій команді");
+  assert.equal(N.canAssignMissedTask({ role: "team_lead", roleKey: "team_lead", teamId: null }, null), false, "🔴 тімлід без команди «збігся» з менеджером без команди");
+  assert.equal(N.canAssignMissedTask({ role: "manager", roleKey: "manager", teamId: 3 }, 3), false, "🔴 менеджер ставить задачі");
+  assert.equal(N.canAssignMissedTask({ role: "company", roleKey: "financier", teamId: null }, 3), false);
+
+  assert.equal(N.buttonTaskTitle("ТОВ Ромашка", "380501112233"), "📵 Передзвонити: ТОВ Ромашка");
+  assert.match(N.buttonTaskTitle("  ", "380501112233"), /^📵 Передзвонити: \+?380/, "🔴 без імені клієнта в назві немає номера");
+  assert.equal(N.taskState(null, null, "2026-10-12"), "none");
+  assert.equal(N.taskState(5, "2026-10-11", "2026-10-12"), "overdue");
+  assert.equal(N.taskState(5, "2026-10-12", "2026-10-12"), "open", "🔴 задача з дедлайном сьогодні названа простроченою");
+  assert.equal(N.hoursSince(new Date("2026-10-10T10:00:00Z"), new Date("2026-10-11T10:59:00Z")), 24);
+});
+
+test("#1770 ЗВІТ ТИЖНЯ: Пн–Нд, зміна в п.п., статус словом, без цілі — «ціль не задана», текст для чату з кожним рядком", async () => {
+  const N = await import("./missedNoCallbackRules.js");
+  assert.equal(N.mondayOf("2026-10-11"), "2026-10-05", "🔴 неділя віднесена до наступного тижня");
+  assert.equal(N.mondayOf("2026-10-12"), "2026-10-12");
+  assert.deepEqual(N.weekRange("2026-10-05"), { from: "2026-10-05", to: "2026-10-11" });
+  assert.deepEqual(N.weekRange("2026-10-05", -1), { from: "2026-09-28", to: "2026-10-04" });
+
+  const a = N.weekRow("dept", "Відділ", { missed: 200, callback: 150, medianMin: 12 }, { missed: 100, callback: 70, medianMin: 9 }, 80);
+  assert.equal(a.pct, 75); assert.equal(a.prevPct, 70); assert.equal(a.change, 5); assert.equal(a.noCallback, 50);
+  assert.equal(a.status, "below", "🔴 75% при цілі 80% не «нижче норми»");
+  assert.equal(N.weekRow("x", "x", { missed: 10, callback: 8, medianMin: null }, null, 80).status, "ok", "🔴 рівно ціль — не «у нормі»");
+  assert.equal(N.weekRow("x", "x", { missed: 10, callback: 10, medianMin: null }, null, null).status, "no_norm",
+    "🔴 без цілі статус «у нормі» — так виглядало б «ціль виконано», якої ніхто не ставив");
+  const empty = N.weekRow("x", "x", { missed: 0, callback: 0, medianMin: null }, { missed: 0, callback: 0, medianMin: null }, 80);
+  assert.equal(empty.pct, null, "🔴 нуль пропущених дав 0% замість «—»"); assert.equal(empty.change, null); assert.equal(empty.status, "no_data");
+
+  const text = N.weekReportText({ from: "2026-10-05", to: "2026-10-11" }, [a, N.weekRow("team:1", "РПК", { missed: 10, callback: 9, medianMin: 5 }, null, 80)], 80);
+  assert.match(text, /^Пропущені дзвінки 05\.10–11\.10 · ціль 80%/);
+  assert.match(text, /Відділ: пропущено 200, передзвонили за 24 год 75% \(\+5 п\.п\.\), не передзвонили 50, медіана 12 хв ⚠️ нижче норми/);
+  assert.match(text, /РПК: .*90%.* ✅/, "🔴 рядок команди загубився з тексту для чату");
+});
+
+test("#1771 ЦІЛЬ: ціле 1–100, ставить лише керівництво", async () => {
+  const N = await import("./missedNoCallbackRules.js");
+  for (const bad of [0, 101, 50.5, "abc", null, -3]) assert.equal(N.callbackNormVerdict(bad).ok, false, `🔴 ціль ${String(bad)} прийнята`);
+  assert.deepEqual(N.callbackNormVerdict("1"), { ok: true, norm: 1 });
+  assert.deepEqual(N.callbackNormVerdict(100), { ok: true, norm: 100 });
+  for (const rk of ["admin", "opdir", "ceo", "kvp"]) assert.equal(N.canSetCallbackNorm(rk), true, `🔴 ${rk} не може поставити ціль`);
+  for (const rk of ["team_lead", "manager", "financier", "hr", "", null, undefined]) assert.equal(N.canSetCallbackNorm(rk), false, `🔴 ${String(rk)} ставить ціль`);
+});
+
+test("#1772 МЕЖІ: запис — роль першим оператором; GET — у матриці; кнопка не ставить задачу чужій команді", () => {
+  const SRC = (rel: string): string => readFileSync(path.join(import.meta.dirname, "..", "..", "..", "backend", "src", rel), "utf8");
+  const routes = SRC("routes/dashboard.ts");
+  const body = (sig: string): string => {
+    const i = routes.indexOf(sig);
+    assert.ok(i >= 0, `🔴 роут ${sig} не знайдено`);
+    return routes.slice(i, routes.indexOf("\n});", i));
+  };
+  const task = body(`dashboardRouter.post("/missed-calls/no-callback/task"`);
+  const firstStmt = (b: string) => b.split("\n").slice(1).find((l) => l.trim() && !l.trim().startsWith("//") && !l.trim().startsWith("const auth"))!;
+  assert.match(firstStmt(task), /LEADERSHIP_ROLES[\s\S]*team_lead[\s\S]*403/, "🔴 кнопка задачі: перевірка ролі не першим оператором");
+  assert.match(task, /canAssignMissedTask\(/, "🔴 кнопка не перевіряє, чи виконавець у команді тімліда");
+  const norm = body(`dashboardRouter.post("/missed-calls/norm"`);
+  assert.match(firstStmt(norm), /canSetCallbackNorm\([\s\S]*403/, "🔴 ціль: перевірка ролі не першим оператором");
+  const matrix = SRC("auth/accessMatrix.ts");
+  for (const p of ["no-callback", "week", "norm"]) {
+    assert.match(matrix, new RegExp(`path: "/api/dashboard/missed-calls/${p}", cls: "GET"`), `🔴 GET ${p} поза матрицею`);
+  }
+  assert.match(matrix, /path: "\/api\/dashboard\/missed-calls\/no-callback\/task", cls: "deny-only",\s*\n\s*allow: \[\], deny: \["hr", "manager"\]/);
+  assert.match(matrix, /path: "\/api\/dashboard\/missed-calls\/norm", cls: "deny-only",\s*\n\s*allow: \[\], deny: \["hr", "manager", "team_lead"\]/);
+});
+
+test("#1773 ФРОНТ · ПРОВОДКА: фільтр їде в КОЖЕН запит екрана, «Задача вже є» веде на задачу", () => {
+  const FE = (rel: string): string => readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", rel), "utf8");
+  const sec = FE("pages/dashboard/sections/MissedCallsSection.tsx");
+  const calls = [...sec.matchAll(/(fetchMissed(?:Calls|Series|List)|fetchNoDeal(?:List)?)\(\{([^}]*)\}\)/g)];
+  assert.ok(calls.length >= 5, `🔴 знайдено лише ${String(calls.length)} запитів екрана — гейт нічого не перевіряє`);
+  // Єдиний виклик без фільтра — свідомий: варіанти для самого фільтра (інакше обрана команда ховала б решту).
+  const bare = calls.filter((m) => !/\.\.\.fp\b/.test(m[2]));
+  assert.deepEqual(bare.map((m) => `${m[1]}({${m[2]}})`), ["fetchMissedCalls({ from, to })"],
+    "🔴 запит екрана пішов без фільтра — блок показує весь відділ під обраною командою");
+  const tz = FE("pages/dashboard/sections/MissedCallsTzBlocks.tsx");
+  assert.match(tz, /fetchMissedNoCallback\(\{ from, to, \.\.\.fp \}\)/);
+  assert.match(tz, /fetchMissedWeek\(\{ week: monday, \.\.\.fp \}\)/);
+  assert.match(tz, /\/tasks\?id=/, "🔴 «Задача вже є» без посилання на задачу");
+});
