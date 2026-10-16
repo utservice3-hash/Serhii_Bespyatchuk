@@ -276,6 +276,15 @@ export interface ClientFacts {
    */
   earned: number | null;
   clientPay: number | null;
+  /**
+   * 🚚 СКІЛЬКИ ВЖЕ СПЛАЧЕНО ПЕРЕВІЗНИКАМ по угодах неоплачених рахунків клієнта (прохання 16.10.2026: «по кожній
+   * компанії сплачена сума перевізників»). Оплачений — етап угоди (`carrierPaid === "paid"`), сума — поля угоди
+   * («Сума загальна» + «Сума готівкою»). РАЗ НА УГОДУ, як заробіток: два рахунки однієї угоди інакше подвоїли б виплату.
+   * `carrierPaidNoAmount` — оплачені угоди без суми в CRM: це «не знаємо скільки», а не нуль, тому окремим числом.
+   */
+  carrierPaidSum: number;
+  carrierPaidDeals: number;
+  carrierPaidNoAmount: number;
   /** 🗑 Списано як безнадійне: скільки рядків і на скільки. У `amount` НЕ входить. */
   writtenOffN: number;
   writtenOffAmount: number;
@@ -308,6 +317,9 @@ export interface FactTotals {
   amount: number;
   earned: number | null;
   clientPay: number | null;
+  carrierPaidSum: number;
+  carrierPaidDeals: number;
+  carrierPaidNoAmount: number;
   writtenOffN: number;
   writtenOffAmount: number;
   link: TallyBy<LinkState>;
@@ -324,7 +336,8 @@ const emptyClient = (clientKey: string): ClientFacts => ({
   link: {} as TallyBy<LinkState>, entity: {} as TallyBy<Entity>,
   carrier: {} as TallyBy<CarrierPaid>, aging: {} as TallyBy<AgingBucket>,
   entityReasons: [], carrierReasons: [], pipelinesOutOfMap: [], oldestAgeDays: null,
-  earned: null, clientPay: null, writtenOffN: 0, writtenOffAmount: 0,
+  earned: null, clientPay: null, carrierPaidSum: 0, carrierPaidDeals: 0, carrierPaidNoAmount: 0,
+  writtenOffN: 0, writtenOffAmount: 0,
   counterparty: {},
   crmDueNearest: null, newestDealAt: null, deals: [],
 });
@@ -344,6 +357,7 @@ export function foldFacts(facts: InvoiceFact[]): { byClient: Map<string, ClientF
   const seenDeal = new Set<number>();
   const totals: FactTotals = {
     invoices: 0, amount: 0, earned: null, clientPay: null,
+    carrierPaidSum: 0, carrierPaidDeals: 0, carrierPaidNoAmount: 0,
     writtenOffN: 0, writtenOffAmount: 0,
     link: {} as TallyBy<LinkState>, entity: {} as TallyBy<Entity>,
     carrier: {} as TallyBy<CarrierPaid>, aging: {} as TallyBy<AgingBucket>,
@@ -375,6 +389,12 @@ export function foldFacts(facts: InvoiceFact[]): { byClient: Map<string, ClientF
       if (f.clientPay != null) c.clientPay = (c.clientPay ?? 0) + f.clientPay;
       if (f.earned != null) totals.earned = (totals.earned ?? 0) + f.earned;
       if (f.clientPay != null) totals.clientPay = (totals.clientPay ?? 0) + f.clientPay;
+      // 🚚 Виплата перевізнику — того самого дедупу «раз на угоду».
+      if (f.carrierPaid === "paid") {
+        c.carrierPaidDeals++; totals.carrierPaidDeals++;
+        if (f.carrierPayAmount != null) { c.carrierPaidSum += f.carrierPayAmount; totals.carrierPaidSum += f.carrierPayAmount; }
+        else { c.carrierPaidNoAmount++; totals.carrierPaidNoAmount++; }
+      }
     }
 
     // 🏢 Розклад по юрособах клієнта — В ТОМУ САМОМУ проході, після того самого

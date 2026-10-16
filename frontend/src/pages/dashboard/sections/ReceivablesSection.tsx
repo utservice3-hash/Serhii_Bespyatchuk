@@ -32,6 +32,7 @@ import {
   amountLimitHint, amountLimitLabel, amountLimitState, isOverAmount,
   marginHint, marginPctText,
   earnedCells, earnedCellHint, earnedCellText, earnedShownTotal,
+  carrierPayCells, carrierPayShownTotal, CARRIER_PAY_CELL_TEXT, carrierPaidNote,
   nPlural, seenCell, seenRollLabel,
   type Filters, type MergeSide,
   receivableRowKey,
@@ -343,6 +344,9 @@ export function ReceivablesSection({
     // рядках була б тим самим дефектом, що «рівно один серед тих, хто спитав».
     const entShown = invoiceEntityShown(inv);
     const eTotal = earnedShownTotal(eCells);
+    // 🚚 «Перевізникам» — той самий дедуп «раз на угоду», що й рядок клієнта; підсумок — з намальованих клітинок.
+    const pCells = carrierPayCells(inv);
+    const pTotal = carrierPayShownTotal(pCells);
     const debt = inv.reduce((a, x) => a + (x.writtenOff ? 0 : x.amount), 0);
     /* 🕰 ВІК — ІЗ СЕРВЕРА, ОДНИМ ВИРАЗОМ ІЗ РЯДКОМ КЛІЄНТА. Свій підрахунок тут
        давав ДРУГИЙ ГОЛОС: на УКРЕНЕРГО-АЛЬЯНСІ рядок казав «1128 дн.», а ця
@@ -468,6 +472,12 @@ export function ReceivablesSection({
                   {age ?? "—"} дн.
                 </div>
               </td>
+              {/* Перевізникам → виплата перевізнику по угоді цього рахунку */}
+              {(() => { const pc = pCells[i] ?? { kind: "unknown" as const }; return (
+                <td className="recv-num" style={{ ...cell, textAlign: "right", whiteSpace: "nowrap",
+                       color: pc.kind === "paid" ? "var(--text)" : "var(--text-muted)", fontSize: pc.kind === "paid" ? undefined : "var(--fs-xs)" }}>
+                  {pc.kind === "paid" ? formatAmount(pc.amount) : CARRIER_PAY_CELL_TEXT[pc.kind]}
+                </td>); })()}
               {/* Заробили → заробили на цій угоді */}
               <td style={{ ...cell, minWidth: 180 }}>
                 <CommentField value={x.comment} editable={canEditReceivables}
@@ -549,19 +559,24 @@ export function ReceivablesSection({
           );
         })}
 
-        {/* Підсумковий рядок — У ТИХ САМИХ колонках, що й рахунки. */}
+        {/* Підсумковий рядок — У ТИХ САМИХ колонках, що й рахунки: # · Клієнт · Борг · Перевізникам ·
+            Домовленість + Відповідальний + Ліміти · Заробили · Дії. */}
         <tr>
           <td style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)" }} />
-          <td colSpan={4} style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)", paddingLeft: 28, fontWeight: 600 }}>
+          <td style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)", paddingLeft: 28, fontWeight: 600 }}>
             Разом по {nPlural(inv.length, "рахунку", "рахунках", "рахунках")}
           </td>
           <td className="recv-num" style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>
             {formatAmount(debt)}
           </td>
           <td className="recv-num" style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>
+            {formatAmount(pTotal)}
+          </td>
+          <td colSpan={3} style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)" }} />
+          <td className="recv-num" style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>
             {formatAmount(eTotal)}
           </td>
-          <td colSpan={5} style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)" }} />
+          <td style={{ ...cell, borderTop: "1px solid var(--border-strong, #d1d5db)" }} />
         </tr>
       </>
     );
@@ -762,6 +777,11 @@ export function ReceivablesSection({
                       <Hint title="Скільки цей клієнт винен зараз і скільки днів чекає"
                         body="Залишок за неоплаченими рахунками з 1С; списані в архів сюди не входять. Другим рядком — вік найстарішого неоплаченого рахунка. Червоне — вже понад узгоджений ліміт відстрочки. «—» означає «не знаємо» і при сортуванні йде В КІНЕЦЬ в обидва боки: це не нуль днів." />
                     </th>
+                    <th style={{ textAlign: "right", whiteSpace: "nowrap", width: 130 }}>
+                      Перевізникам
+                      <Hint title="Скільки вже сплачено перевізникам по угодах цих рахунків"
+                        body="Сума по угодах, де перевізника вже оплачено (етап угоди в CRM), — поля «Сума загальна» і «Сума готівкою» з угоди, раз на угоду. Другим рядком — по скількох рахунках перевізника оплачено. «Без суми» — оплачено, але суму в CRM не вказано; «н/д» — рахунок без угоди в CRM. Це не нуль, а «не знаємо»." />
+                    </th>
                     <th style={{ textAlign: "left", width: 300 }}>
                       Домовленість
                       <Hint title="Дата й суть домовленості з клієнтом"
@@ -948,6 +968,16 @@ export function ReceivablesSection({
                             {limitReqFor === c.clientKey && (
                               <LimitRequestDialog clientKey={c.clientKey} onClose={() => setLimitReqFor(null)} />
                             )}
+                          </td>
+                          {/* 🚚 СПЛАЧЕНО ПЕРЕВІЗНИКАМ (16.10.2026) — з фактів сервера, раз на угоду; невідоме — словами. */}
+                          <td className="recv-num" style={{ textAlign: "right", verticalAlign: "middle", whiteSpace: "nowrap" }}>
+                            {c.facts ? (<>
+                              <span style={{ fontWeight: 600, color: c.facts.carrierPaidDeals ? "var(--text)" : "var(--text-muted)" }}
+                                title={formatAmountFull(c.facts.carrierPaidSum)}>{formatAmount(c.facts.carrierPaidSum)}</span>
+                              <div style={{ marginTop: 3, fontSize: "var(--fs-xs)", color: "var(--text-muted)", whiteSpace: "normal" }}>
+                                {carrierPaidNote(c.facts)}
+                              </div>
+                            </>) : <span style={{ color: "var(--text-muted)" }}>н/д</span>}
                           </td>
 
                           {/* 💰 ЗАРОБІТОК І МАРЖА — ОДНА КОЛОНКА. Сума й відсоток
@@ -1219,7 +1249,7 @@ export function ReceivablesSection({
                             )}
                           </td>
                         </tr>
-                        {renderInvoices(c.clientKey, c.clientName, 8)}
+                        {renderInvoices(c.clientKey, c.clientName, 9)}
                       </RowBoundary>
                     );
                   })}

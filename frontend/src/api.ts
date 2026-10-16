@@ -2043,6 +2043,10 @@ export interface ReceivableClientFacts {
    */
   earned: number | null;
   clientPay: number | null;
+  /** 🚚 Сплачено перевізникам по угодах цих рахунків — раз на угоду; без суми в CRM — окремим числом (16.10.2026). */
+  carrierPaidSum: number;
+  carrierPaidDeals: number;
+  carrierPaidNoAmount: number;
   /** 🗑 Списано як безнадійне. У `amount` НЕ входить, але видно підписом. */
   writtenOffN: number;
   writtenOffAmount: number;

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { classifyInvoice, foldFacts, type RawInvoiceRow } from "./receivablesFacts.js";
+import { classifyInvoice, foldFacts, CARRIER_PAID_STAGES, type RawInvoiceRow } from "./receivablesFacts.js";
 import { counterpartyBreakdown, reconcileBreakdown, COUNTERPARTY_UNKNOWN } from "./receivablesCounterparty.js";
 
 /**
@@ -217,4 +217,55 @@ test("#402 ЮРОСОБА: злитий клієнт з ОДНІЄЮ відкр�
   assert.equal(V.invoiceEntityShown(plain), false, "🔴 незлитий клієнт з однією юрособою отримав підпис — шпалери");
   assert.equal(V.invoiceEntityShown(one.map((x) => ({ entityKey: x.entityKey, entityName: x.entityName }))), false,
     "🔴 без прапорця з сервера правило мало лишитись старим");
+});
+
+/**
+ * #1764 — «СПЛАЧЕНО ПЕРЕВІЗНИКАМ» ПО КЛІЄНТУ (прохання 16.10.2026: «по кожній компанії сплачена сума перевізників
+ * виводити»). Рядок клієнта (сервер, `foldFacts`) і колонка в його рахунках (екран, `carrierPayCells`) — одне число:
+ * раз на угоду, лише оплачені, без суми — окремим числом, списані — поза сумою.
+ * Червоніє, якщо два рахунки однієї угоди подвоять виплату, неоплачена заявка потрапить у «сплачено», «без суми»
+ * стане нулем, списаний рахунок увійде в суму, або екран і сервер порахують по-різному.
+ */
+test("#1764 СПЛАЧЕНО ПЕРЕВІЗНИКАМ: раз на угоду, лише оплачені; без суми й н/д — окремо; рядок клієнта == рахунки під ним", async () => {
+  const paid = CARRIER_PAID_STAGES[0]!;
+  const unpaidStatus = 999_999_001;
+  const rows = [
+    // угода 1 — оплачена, 100 000; ДВА рахунки
+    inv({ invoiceNo: "a1", dealId: 1, dealFound: true, stageMapped: true, pipelineId: paid.pipelineId, statusId: paid.statusId, carrierPayAmount: 100_000 }),
+    inv({ invoiceNo: "a2", dealId: 1, dealFound: true, stageMapped: true, pipelineId: paid.pipelineId, statusId: paid.statusId, carrierPayAmount: 100_000 }),
+    // угода 2 — оплачена, суми в CRM немає
+    inv({ invoiceNo: "b", dealId: 2, dealFound: true, stageMapped: true, pipelineId: paid.pipelineId, statusId: paid.statusId, carrierPayAmount: null }),
+    // угода 3 — заявка є, але перевізника ще не оплачено
+    inv({ invoiceNo: "c", dealId: 3, dealFound: true, stageMapped: true, pipelineId: paid.pipelineId, statusId: unpaidStatus, carrierPayAmount: 50_000 }),
+    // рахунок без угоди — «не знаємо»
+    inv({ invoiceNo: "d", dealId: null }),
+    // угода 4 — оплачена, але рахунок списано
+    inv({ invoiceNo: "e", dealId: 4, dealFound: true, stageMapped: true, pipelineId: paid.pipelineId, statusId: paid.statusId, carrierPayAmount: 30_000, writtenOff: true }),
+  ];
+  const facts = rows.map((r) => classifyInvoice(r));
+  const cf = foldFacts(facts).byClient.get("канон")!;
+  assert.equal(cf.carrierPaidSum, 100_000, "🔴 сплачено перевізникам: подвоєно угоду, взято неоплачену заявку чи списаний рахунок");
+  assert.equal(cf.carrierPaidDeals, 2, "🔴 оплачених угод має бути дві (100 000 і без суми)");
+  assert.equal(cf.carrierPaidNoAmount, 1, "🔴 «оплачено, суми немає» злилось із нулем");
+
+  const V = (await import(FE_SPEC("pages/dashboard/receivablesView.ts"))) as {
+    carrierPayCells: (r: unknown[]) => { kind: string; amount?: number }[];
+    carrierPayShownTotal: (c: unknown[]) => number;
+    carrierPaidNote: (f: unknown) => string;
+  };
+  const cells = V.carrierPayCells(facts);
+  assert.deepEqual(cells.map((c) => c.kind), ["paid", "same-deal", "paid-no-amount", "unpaid", "unknown", "written-off"],
+    "🔴 клітинки рахунків розходяться з правилом (дубль угоди, без суми, неоплачено, н/д, списано)");
+  assert.equal(V.carrierPayShownTotal(cells), cf.carrierPaidSum, "🔴 «Разом» під рахунками ≠ числу в рядку клієнта");
+  assert.equal(V.carrierPaidNote(cf), "оплачено 3 з 5 рах. · без суми 1 · н/д 1", "🔴 другий рядок клітинки не називає невідоме");
+
+  // 🪞 Дзеркало: клієнт без жодної оплаченої угоди — 0, а не «не знаємо», і без хибних «без суми».
+  const none = foldFacts([classifyInvoice(rows[3]!)]).byClient.get("канон")!;
+  assert.deepEqual([none.carrierPaidSum, none.carrierPaidDeals, none.carrierPaidNoAmount], [0, 0, 0]);
+
+  // Екран справді показує це число в рядку клієнта й колонку в рахунках.
+  const sec = readFileSync(FE_SPEC("pages/dashboard/sections/ReceivablesSection.tsx"), "utf8");
+  assert.match(sec, /formatAmount\(c\.facts\.carrierPaidSum\)/, "🔴 рядок клієнта не показує суму, сплачену перевізникам");
+  assert.match(sec, /\{carrierPaidNote\(c\.facts\)\}/, "🔴 рядок клієнта не каже, по скількох рахунках оплачено");
+  assert.match(sec, /const pCells = carrierPayCells\(inv\);\s*const pTotal = carrierPayShownTotal\(pCells\);/, "🔴 рахунки рахують виплату не тим правилом");
 });

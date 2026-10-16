@@ -649,6 +649,53 @@ export function earnedCellHint(c: EarnedCell): string {
   return EARNED_UNKNOWN_LABEL[c.why];
 }
 
+// ───────────── 🚚 «СПЛАЧЕНО ПЕРЕВІЗНИКАМ» (16.10.2026) ─────────────
+
+/**
+ * 🚚 Колонка «Перевізникам» у рахунках клієнта — тим самим дедупом, що й рядок клієнта (`foldFacts` на сервері):
+ * виплата належить УГОДІ, тож другий рахунок тієї самої угоди показує «та сама угода», а не суму вдруге.
+ * «Оплачено, суми немає» і «не знаємо» — словами, а не нулем: нуль означав би «перевізник нічого не отримав».
+ */
+export interface CarrierPayRow {
+  dealId: number | null; dealFound: boolean; writtenOff: boolean;
+  carrierPaid: ReceivableCarrierPaid | null; carrierPayAmount: number | null;
+}
+export type CarrierPayCell =
+  | { kind: "paid"; amount: number } | { kind: "paid-no-amount" } | { kind: "unpaid" }
+  | { kind: "unknown" } | { kind: "same-deal" } | { kind: "written-off" };
+
+export function carrierPayCells(rows: CarrierPayRow[]): CarrierPayCell[] {
+  const seen = new Set<number>();
+  return rows.map((r): CarrierPayCell => {
+    if (r.writtenOff) return { kind: "written-off" };
+    if (r.dealId == null || !r.dealFound) return { kind: "unknown" };
+    if (seen.has(r.dealId)) return { kind: "same-deal" };
+    seen.add(r.dealId);
+    if (r.carrierPaid === "paid") return r.carrierPayAmount == null ? { kind: "paid-no-amount" } : { kind: "paid", amount: r.carrierPayAmount };
+    if (r.carrierPaid === "unpaid") return { kind: "unpaid" };
+    return { kind: "unknown" };
+  });
+}
+
+/** Підсумок групи — з НАМАЛЬОВАНИХ клітинок, як `earnedShownTotal`: другий вираз для того самого числа розійшовся б мовчки. */
+export function carrierPayShownTotal(cells: CarrierPayCell[]): number {
+  return cells.reduce((s, c) => s + (c.kind === "paid" ? c.amount : 0), 0);
+}
+
+export const CARRIER_PAY_CELL_TEXT: Record<Exclude<CarrierPayCell["kind"], "paid">, string> = {
+  "paid-no-amount": "оплачено, суми немає", unpaid: "ще не оплачено", unknown: "н/д",
+  "same-deal": "та сама угода", "written-off": "списано",
+};
+
+/** Другий рядок клітинки клієнта: «31 з 58 рах.» + названа невідомість. */
+export function carrierPaidNote(f: { invoices: number; carrierPaidDeals: number; carrierPaidNoAmount: number; carrier: Partial<Record<ReceivableCarrierPaid, { n: number }>> }): string {
+  const paidInv = f.carrier.paid?.n ?? 0, na = f.carrier.na?.n ?? 0;
+  const parts = [`оплачено ${paidInv} з ${f.invoices} рах.`];
+  if (f.carrierPaidNoAmount > 0) parts.push(`без суми ${f.carrierPaidNoAmount}`);
+  if (na > 0) parts.push(`н/д ${na}`);
+  return parts.join(" · ");
+}
+
 // ───────────── 🗜 ЗГОРНУТІ КОЛОНКИ: ОДИН РЯДОК + РОЗКЛАД У ПІДКАЗЦІ ─────────────
 
 /**
