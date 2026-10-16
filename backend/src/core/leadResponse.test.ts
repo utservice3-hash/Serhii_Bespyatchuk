@@ -130,7 +130,7 @@ test("#1550f МЕЖІ Й ЕКРАН: роут — той самий кламп �
   assert.match(body, /missedPeriod\(/, "🔴 період не той, що в решти розділу");
   assert.match(SRC("auth/accessMatrix.ts"), /path: "\/api\/dashboard\/missed-calls\/response-time"/, "🔴 роут поза матрицею доступу");
   const fe = FE("pages/dashboard/sections/MissedCallsSection.tsx");
-  assert.match(fe, /<ResponseTimeBlock from=\{d\.period\.from\} to=\{d\.period\.to\} \/>/, "🔴 блок не стоїть у розділі або бере інший період");
+  assert.match(fe, /<ResponseTimeBlock from=\{d\.period\.from\} to=\{d\.period\.to\}(?: filtered=\{filtered\})? \/>/, "🔴 блок не стоїть у розділі або бере інший період");
   assert.match(fe, /label="Медіана відповіді"/, "🔴 головне число блоку — не медіана");
   assert.match(fe, /label="Лідгени \(окремо\)"/, "🔴 лідгени не показані окремо");
   const sync = SRC("jobs/syncDealActivity.ts");
