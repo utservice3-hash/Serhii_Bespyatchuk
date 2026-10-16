@@ -466,10 +466,28 @@ export interface AiCallCardResp {
   canListen: boolean;
   /** Та сама згода після ціни, що в рядку списку. */
   clientDecision: AiClientDecisionT | null;
+  /** ❌ «Закрити угоду в Kommo» (16.10.2026): `null` — цій ролі кнопка недоступна (лише тімлід, адмін, КВП). */
+  closeDeal: AiCloseOfferT | null;
+}
+export interface AiCloseOfferT {
+  /** Яку угоду закриє кнопка; `allowed: false` — з поясненням `why` (наприклад, угода вже далі «Відкладеного запиту»). */
+  target: { kommoId: number; allowed: boolean; stage: string | null; why: string | null } | null;
+  reasons: { id: number; label: string }[];
+  suggestedId: number | null;
+  closed: { kommoId: number; reason: string; byName: string | null; at: string } | null;
 }
 /** Коментар: `price` — «Чому не озвучено ціну», `missed` — «Опрацьовано». Порожній текст прибирає. */
 export async function putAiCallNote(uniqueid: string, kind: "price" | "missed" | "offline" | "review", text: string): Promise<void> {
   await api.put(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/note`, { kind, text });
+}
+/** ❌ Закрити угоду розмови в Kommo як «не реалізовано» з причиною; повернути — на попередній етап. */
+export async function closeAiCallDeal(uniqueid: string, reasonId: number): Promise<{ kommoId: number }> {
+  const { data } = await api.post<{ ok: true; kommoId: number }>(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/close-deal`, { reasonId });
+  return { kommoId: data.kommoId };
+}
+export async function revertAiCallDeal(uniqueid: string): Promise<{ kommoId: number }> {
+  const { data } = await api.post<{ ok: true; kommoId: number }>(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/close-deal/revert`, {});
+  return { kommoId: data.kommoId };
 }
 /** Запис розмови — байтами через наш сервер (з авторизацією), а не прямим посиланням Ringostat. */
 export async function fetchAiCallRecording(uniqueid: string): Promise<Blob> {

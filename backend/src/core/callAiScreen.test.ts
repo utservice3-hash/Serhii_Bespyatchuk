@@ -1748,3 +1748,130 @@ test("#938b ЗГОДА ПОМІТНА І ШУКАЄТЬСЯ: значок у к�
   const css = readFileSync(FE("pages/dashboard/sections/firstTouch.css"), "utf8");
   assert.match(css, /\.ftd-decision-mark \{[^}]*border-radius: 6px;/, "🔴 значок згоди круглий — читатиметься як пункт балу");
 });
+
+/**
+ * #1780 — «ЗАКРИТИ УГОДУ В KOMMO» · ПРАВИЛА (рішення Романа 16.10.2026, п.1–5). Межа етапів — з картки закривається лише
+ * угода повного циклу до «Відкладеного запиту» включно; від «Умови узгоджені» — ні; кваліфікація — з будь-якого відкритого;
+ * інші воронки, 142 і 143 — ні. З двох угод — повний цикл. Підказка AI: «дорого» → «Відмова ОПР: дорого»; втрачений лід,
+ * «вже знайшли» / «не зараз», відмова після ціни → «не актуально»; інакше — нічого. Право — тімлід, адмін, КВП.
+ * 🧨 Червоніє, якщо межу зсунути на «Умови узгоджені», закривати кваліфікацію при наявному повному циклі, підставляти
+ * причину без підстав чи дати кнопку менеджеру.
+ */
+test("#1780 ЗАКРИТИ УГОДУ · ПРАВИЛА: межа «до Відкладеного запиту», повний цикл першим, підказка AI, право тімлід/адмін/КВП", async () => {
+  const R = await import("./firstTouchClose.js");
+  const fc = (s: number) => ({ kommoId: 1, pipelineId: R.FC_PIPELINE, statusId: s });
+  for (const s of [69693664, 108361876, 69693668, 69693672, 69716252]) assert.equal(R.closeAllowed(fc(s)).ok, true, `🔴 ранній етап ${String(s)} не дозволено`);
+  for (const s of [69693676, 69716256, 100274340, 69716300, 142, 143]) assert.equal(R.closeAllowed(fc(s)).ok, false, `🔴 етап ${String(s)} закривається з картки — угода вже пішла далеко`);
+  assert.equal(R.closeAllowed({ kommoId: 2, pipelineId: R.QUALIFICATION_PIPELINE, statusId: 70419108 }).ok, true, "дзеркало: відкрита кваліфікація закривається");
+  assert.equal(R.closeAllowed({ kommoId: 3, pipelineId: 8921948, statusId: 1 }).ok, false, "🔴 угоду іншої воронки дозволено закрити");
+  const q = { kommoId: 10, pipelineId: R.QUALIFICATION_PIPELINE, statusId: 1 }, f = { kommoId: 11, pipelineId: R.FC_PIPELINE, statusId: 69693668 };
+  assert.equal(R.closeTarget([q, f])?.kommoId, 11, "🔴 з двох угод закривається не повний цикл");
+  assert.equal(R.closeTarget([q])?.kommoId, 10, "дзеркало: без повного циклу — кваліфікація");
+  assert.equal(R.closeTarget([{ kommoId: 12, pipelineId: 8921948, statusId: 1 }]), null, "🔴 ціль з іншої воронки");
+  const sug = (t: string | null, ob: string | null, d: string | null) =>
+    R.suggestReason({ conversationType: t, objection: ob ? { present: true, type: ob } : null, decision: d ? { value: d } : null });
+  assert.equal(sug("cargo_request", "price", "declined"), 6340819, "🔴 «дорого» не підставило «Відмова ОПР: дорого»");
+  assert.equal(sug("lead_lost", null, null), 6343065, "🔴 втрачений лід не підставив «не актуально»");
+  assert.equal(sug("cargo_request", "competitor", null), 6343065);
+  assert.equal(sug("cargo_request", null, "declined"), 6343065);
+  assert.equal(sug("cargo_request", "think", "thinking"), null, "🔴 «думає» отримав причину — підставляти нема з чого");
+  assert.equal(sug("cargo_request", null, "agreed"), null, "🔴 «погодився» отримав причину відмови");
+  assert.ok(!R.CLOSE_REASONS.some((r) => r.id === 6348825), "🔴 службова «Видалено за рішенням зустрічі» в списку причин");
+  assert.deepEqual(R.closeDealPayload({ kommoId: 5, pipelineId: R.FC_PIPELINE }, 6340819),
+    [{ id: 5, pipeline_id: R.FC_PIPELINE, status_id: 143, custom_fields_values: [{ field_id: 2097265, values: [{ enum_id: 6340819 }] }] }], "🔴 тіло закриття не те");
+  assert.deepEqual(R.revertDealPayload({ kommoId: 5, prevPipelineId: R.FC_PIPELINE, prevStatusId: 69693668 }),
+    [{ id: 5, pipeline_id: R.FC_PIPELINE, status_id: 69693668, custom_fields_values: [{ field_id: 2097265, values: null }] }], "🔴 «повернути» не на попередній етап");
+  assert.match(R.closeNote("Олена Тімлід", "Відмова ОПР: дорого", "2026-10-16T09:00:00Z"), /Олена Тімлід.*«Відмова ОПР: дорого»/, "🔴 примітка без імені чи причини");
+  assert.deepEqual(["team_lead", "admin", "kvp", "manager", "ceo", "opdir", "hr", "financier"].map(R.canCloseDeal),
+    [true, true, true, false, false, false, false, false], "🔴 кнопку отримала не та роль");
+});
+
+/**
+ * #1781 — «ЗАКРИТИ УГОДУ» · ЖИВА СХЕМА З ПІДРОБЛЕНИМ KOMMO. Причина не з довідника — 400 і жодного виклику Kommo; угоду
+ * в Kommo вже зрушили далі — 409, без запису й без журналу; успіх — задачі ПЕРШИМИ, потім угода (143 + причина), журнал із
+ * попереднім етапом, примітка з іменем; друге закриття — 409; «Повернути» — на попередній етап, лише поки в Kommo досі 143.
+ * 🧨 Червоніє, якщо пропустити свіжу перевірку в Kommo, писати журнал до успіху запису, закрити двічі чи повертати не туди.
+ */
+test("#1781 ЗАКРИТИ УГОДУ · ЖИВА СХЕМА: свіжий етап з Kommo, задачі першими, журнал, друге закриття — ні, повернути — на попередній етап", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  const D = await import("./firstTouchCloseDb.js");
+  await c.raw.query(`INSERT INTO deals(kommo_id,name,pipeline_id,status_id) VALUES (17801,'Q',8921928,70419108),(17802,'FC',8921932,69693668)`);
+  const calls: string[] = [];
+  let state: { pipelineId: number; statusId: number } = { pipelineId: 8921932, statusId: 69693668 };
+  const patches: unknown[][] = [], notes: string[] = [];
+  const kommo = {
+    leadState: async (id: number) => { calls.push(`state:${String(id)}`); return state; },
+    patchLeads: async (b: unknown[]) => { calls.push("patch"); patches.push(b); return {}; },
+    addNotes: async (n: unknown[]) => { calls.push("note"); notes.push(...(n as { params: { text: string } }[]).map((x) => x.params.text)); return {}; },
+    openTaskIds: async () => { calls.push("tasks?"); return [77]; },
+    closeTasks: async () => { calls.push("tasks!"); return {}; },
+  };
+  const base = { uniqueid: "fc1", kommoIds: [17801, 17802], calledAt: "2026-10-16T09:00:00Z", suggestedId: 6340819,
+    user: { id: 5, name: "Олена Тімлід" }, now: new Date("2026-10-16T10:00:00Z") };
+  assert.deepEqual(await D.closeDeal(c.db, kommo, { ...base, reasonId: 6348825 }), { ok: false, code: 400, why: "причина не з довідника Kommo" },
+    "🔴 службову причину прийнято");
+  assert.equal(calls.length, 0, "🔴 Kommo кликали з причиною не з довідника");
+  state = { pipelineId: 8921932, statusId: 69693676 };
+  const moved = await D.closeDeal(c.db, kommo, { ...base, reasonId: 6340819 });
+  assert.equal(moved.ok ? 0 : moved.code, 409, "🔴 угоду, яку в Kommo вже зрушили на «Умови узгоджені», закрито");
+  assert.ok(!calls.includes("patch"), "🔴 запис у Kommo попри зрушену угоду");
+  assert.equal((await c.raw.query("SELECT 1 FROM first_touch_closes WHERE uniqueid = 'fc1'")).rowCount, 0, "🔴 журнал без закриття");
+  calls.length = 0; state = { pipelineId: 8921932, statusId: 69693668 };
+  assert.deepEqual(await D.closeDeal(c.db, kommo, { ...base, reasonId: 6340819 }), { ok: true, kommoId: 17802 }, "🔴 з двох угод закрито не повний цикл");
+  assert.deepEqual(calls, ["state:17802", "tasks?", "tasks!", "patch", "note"], "🔴 порядок: свіжий етап → задачі → угода → примітка");
+  assert.deepEqual((patches[0][0] as { status_id: number }).status_id, 143);
+  assert.match(notes[0] ?? "", /Олена Тімлід.*«Відмова ОПР: дорого»/, "🔴 примітка без імені чи причини");
+  const j = (await c.raw.query<{ prev_status_id: string; closed_by_name: string; reason_label: string }>(
+    "SELECT prev_status_id::text, closed_by_name, reason_label FROM first_touch_closes WHERE uniqueid = 'fc1' AND reverted_at IS NULL")).rows;
+  assert.deepEqual(j, [{ prev_status_id: "69693668", closed_by_name: "Олена Тімлід", reason_label: "Відмова ОПР: дорого" }], "🔴 журнал без попереднього етапу чи імені");
+  const again = await D.closeDeal(c.db, kommo, { ...base, reasonId: 6343065 });
+  assert.equal(again.ok ? 0 : again.code, 409, "🔴 угоду закрито вдруге поверх першого закриття");
+  const offer = await D.closeOffer(c.db, { uniqueid: "fc1", kommoIds: [17801, 17802], conversationType: "cargo_request", objection: null, decision: null });
+  assert.deepEqual([offer.closed?.kommoId, offer.closed?.byName], [17802, "Олена Тімлід"], "🔴 картка не бачить, хто закрив");
+  state = { pipelineId: 8921932, statusId: 69693672 };
+  const changed = await D.revertDeal(c.db, kommo, { uniqueid: "fc1", user: { id: 5, name: "Олена Тімлід" }, now: new Date("2026-10-16T10:05:00Z") });
+  assert.equal(changed.ok ? 0 : changed.code, 409, "🔴 повернуто угоду, яку в Kommo вже змінили після закриття");
+  state = { pipelineId: 8921932, statusId: 143 }; patches.length = 0;
+  assert.deepEqual(await D.revertDeal(c.db, kommo, { uniqueid: "fc1", user: { id: 5, name: "Олена Тімлід" }, now: new Date("2026-10-16T10:06:00Z") }),
+    { ok: true, kommoId: 17802 });
+  assert.equal((patches[0][0] as { status_id: number }).status_id, 69693668, "🔴 «повернути» не на попередній етап");
+  assert.equal((await c.raw.query("SELECT 1 FROM first_touch_closes WHERE uniqueid = 'fc1' AND reverted_at IS NOT NULL AND reverted_by_name = 'Олена Тімлід'")).rowCount, 1,
+    "🔴 журнал не знає, хто повернув");
+});
+
+/**
+ * #1782 — «ЗАКРИТИ УГОДУ» · РОУТИ: право — ПЕРШИМ оператором обох роутів; скоуп — тим самим `aiCallCard` (тімліду чужа
+ * команда — 404); картка віддає блок лише тим, хто може; обидва роути — у матриці доступу з відмовою менеджеру й HR.
+ * 🧨 Червоніє, якщо право переїде нижче запиту до бази, скоуп обійде `missedScopeFor` або роут випаде з матриці.
+ */
+test("#1782 ЗАКРИТИ УГОДУ · РОУТИ: право першим, скоуп картки, блок лише тим, хто може, обидва роути в матриці", () => {
+  const src = SRC("routes/dashboard.ts");
+  for (const p of ['"/ai-calls/:uniqueid/close-deal"', '"/ai-calls/:uniqueid/close-deal/revert"']) {
+    const at = src.indexOf(`dashboardRouter.post(${p}`);
+    assert.ok(at > 0, `🔴 роуту ${p} немає`);
+    const body = src.slice(at, src.indexOf("\n});", at));
+    assert.match(body, /^dashboardRouter\.post\([^\n]+\n  const auth = req\.auth!;\n  if \(!canCloseDeal\(auth\.roleKey\)\) \{ res\.status\(403\)/, `🔴 право в ${p} — не першим оператором`);
+    assert.match(body, /const card = await aiCallCard\(pool, uniqueid, false, missedScopeFor\(auth, \{\}\)\);\n  if \(!card\) \{ res\.status\(404\)/, `🔴 ${p} обходить скоуп картки`);
+  }
+  assert.match(src, /closeDeal: canCloseDeal\(auth\.roleKey\) \? await closeOffer\(pool, card\.row\) : null,/, "🔴 блок «закрити» в картці бачать усі ролі");
+  for (const p of ["/api/dashboard/ai-calls/:uniqueid/close-deal", "/api/dashboard/ai-calls/:uniqueid/close-deal/revert"]) {
+    const row = ACCESS_MATRIX.find((r) => r.method === "POST" && r.path === p);
+    assert.ok(row && row.deny.includes("manager") && row.deny.includes("hr"), `🔴 ${p} не в матриці або менеджеру не відмовлено`);
+  }
+});
+
+/**
+ * #1783 — «ЗАКРИТИ УГОДУ» НА ЕКРАНІ: блок у картці; причина — список від сервера з позначкою «пропонує AI»; запис — лише після
+ * діалогу підтвердження (червона кнопка); закрита — «хто й коли» + «Повернути» теж через діалог; заборонене — словами чому.
+ * 🧨 Червоніє, якщо закривати без підтвердження, вигадати свій список причин на фронті чи прибрати блок із картки.
+ */
+test("#1783 ЗАКРИТИ УГОДУ НА ЕКРАНІ: діалог підтвердження, причини від сервера з позначкою AI, «хто закрив» і «Повернути»", () => {
+  const d = readFileSync(FE("pages/dashboard/sections/AiCallDrawer.tsx"), "utf8");
+  assert.match(d, /<CloseDealBlock c=\{c\} onDone=/, "🔴 блоку «Угода в Kommo» немає в картці");
+  assert.match(d, /dlg\.confirm\(\{ title: "Закрити угоду в Kommo\?", danger: true, okLabel: "Закрити угоду",/, "🔴 закриття без діалогу підтвердження");
+  assert.match(d, /if \(!\(await dlg\.confirm\(\{ title: "Повернути угоду\?"/, "🔴 «Повернути» без підтвердження");
+  assert.match(d, /\{o\.reasons\.map\(\(r\) => <option key=\{r\.id\} value=\{r\.id\}>\{r\.label\}\{r\.id === o\.suggestedId \? " · пропонує AI" : ""\}<\/option>\)\}/, "🔴 причини — не зі списку сервера або без позначки AI");
+  assert.match(d, /Закрито як не реалізовану · <b>\{o\.closed\.reason\}<\/b> · \{o\.closed\.byName \?\? "—"\}/, "🔴 картка не каже, хто закрив");
+  assert.match(d, /Закрити з картки не можна: \{o\.target\.why\}\./, "🔴 заборонене закриття без пояснення");
+  assert.doesNotMatch(d, /"Відмова ОПР: дорого"/, "🔴 фронт тримає власну копію довідника причин");
+});
