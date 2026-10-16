@@ -10,6 +10,7 @@ import {
 } from "../../../api";
 import { rowVisible, asInput, planFromPrevious } from "./financeView";
 import { FinanceWeekTab } from "./FinanceWeekTab";
+import { FinancePaymentsTab } from "./FinancePaymentsTab";
 import { SafeView } from "./BankSection";
 import { getAuthPayload } from "../../../auth";
 import "./hiring.css";
@@ -23,7 +24,7 @@ import "./finance.css";
  * до того вкладка пояснює, що буде (той самий прийом, що в «Бізнес-асистенті»).
  * Стилі — `hiring.css` (`.hr-*`) + `finance.css` (`.fin-*`).
  */
-type Tab = "pf" | "art" | "week" | "cash" | "overview";
+type Tab = "pf" | "art" | "week" | "cash" | "payments" | "overview";
 
 const MONTHS = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
 const monthLabel = (m: string) => `${MONTHS[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`;
@@ -226,7 +227,7 @@ function SectionSelect({ value, label, onPick, placeholder }: { value: FinSectio
 
 // ── Розділ ───────────────────────────────────────────────────────────────────
 export function FinanceSection() {
-  const [tab, setTab] = useState<Tab>(() => (["pf", "art", "week", "cash", "overview"].includes(lsGet(LS_TAB) ?? "") ? lsGet(LS_TAB) as Tab : "pf"));
+  const [tab, setTab] = useState<Tab>(() => (["pf", "art", "week", "cash", "payments", "overview"].includes(lsGet(LS_TAB) ?? "") ? lsGet(LS_TAB) as Tab : "pf"));
   const [month, setMonth] = useState(kyivMonthNow);
   const [data, setData] = useState<FinMonth | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -250,7 +251,7 @@ export function FinanceSection() {
   if (err && !data) return <div className="chart-card"><b>Розділ «Фінанси» недоступний.</b> <span className="hr-muted">{err}</span></div>;
   if (!data) return <p className="loading-text">Завантаження…</p>;
 
-  const tabs: [Tab, string, boolean][] = [["pf", "План/факт витрат", false], ["art", "Статті", false], ["week", "Тиждень і місяць", false], ["cash", "Каса", false], ["overview", "Огляд", true]];
+  const tabs: [Tab, string, boolean][] = [["pf", "План/факт витрат", false], ["art", "Статті", false], ["week", "Тиждень і місяць", false], ["cash", "Каса", false], ["payments", "Оплати перевізникам", false], ["overview", "Огляд", true]];
   return (
     <div>
       <h1 className="page-title" style={{ marginBottom: 4 }}>Фінанси</h1>
@@ -269,6 +270,7 @@ export function FinanceSection() {
       {tab === "art" && <ArticlesTab data={data} act={act} />}
       {tab === "week" && <FinanceWeekTab ask={ask} toast={toast} />}
       {tab === "cash" && <CashTab />}
+      {tab === "payments" && <FinancePaymentsTab />}
       {tab === "overview" && <PlannedCard title="Огляд" will={[
         "Головні числа місяця на одному екрані: план/факт витрат, надходження, маржа, залишки.",
         "Графік за рік і статті, що найбільше вийшли за план.",

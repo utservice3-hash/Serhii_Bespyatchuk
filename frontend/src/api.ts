@@ -5710,6 +5710,26 @@ export type FinKind = "resp" | "group" | "item";
 export interface FinCell { itemId: number; field: "plan" | "fact"; value: string }
 
 export const fetchFinMonth = async (m: string) => (await api.get<FinMonth>("/finance/month", { params: { m } })).data;
+
+// 💸 «Оплати перевізникам» (16.10.2026) — лише `view_private_finance` (Адмін, фінансист): у відповіді номери карток.
+export type PayKommoState = "paid" | "rejected" | "open";
+export interface PayScreenRow {
+  mainId: number | null; requestId: number; createdAt: string | null; amount: number | null;
+  ok: boolean; paidBy: string | null; reasons: string[]; notes: string[];
+  card: string; owner: string; category: string; kommo: PayKommoState; diff: boolean;
+}
+export interface PayScreenDay {
+  day: string; today: string; at: string | null; kommoBase: string;
+  rows: PayScreenRow[]; totals: { total: number; ok: number; okSum: number; check: number; diff: number };
+  days: { day: string; total: number; ok: number; okSum: number }[];
+}
+export const fetchCarrierPayments = async (day?: string) => (await api.get<PayScreenDay>("/finance/payments", { params: day ? { day } : {} })).data;
+export const runCarrierPayments = async () => (await api.post<{ ok: boolean; result: unknown }>("/finance/payments/run")).data;
+export async function downloadCarrierPaymentsXlsx(day: string): Promise<{ blob: Blob; filename: string }> {
+  const res = await api.get("/finance/payments/export.xlsx", { params: { day }, responseType: "blob" });
+  const m = /filename="([^"]+)"/.exec((res.headers as Record<string, string | undefined>)["content-disposition"] ?? "");
+  return { blob: res.data as Blob, filename: m?.[1] ?? `oplata_perevizny_${day}.xlsx` };
+}
 export const fetchFinItem = async (id: number, year: number) => (await api.get<FinItemCard>(`/finance/items/${id}`, { params: { year } })).data;
 export const createFin = async (kind: FinKind, body: Record<string, unknown>) =>
   (await api.post<{ id: number }>(`/finance/${kind}s`, body)).data.id;
