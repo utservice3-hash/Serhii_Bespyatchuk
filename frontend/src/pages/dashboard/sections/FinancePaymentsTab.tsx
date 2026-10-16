@@ -16,6 +16,9 @@ const hhmm = (iso: string | null) => (iso ? new Date(iso).toLocaleString("uk-UA"
 const prevDay = (d: string) => { const x = new Date(`${d}T12:00:00Z`); x.setUTCDate(x.getUTCDate() - 1); return x.toISOString().slice(0, 10); };
 const BASIS = (r: PayScreenRow) => (r.paidBy === "1С" ? "оплата є — галочка 1С" : r.paidBy === "Виписка" ? "оплата є — у Виписці" : "у межах ліміту");
 type Filter = "all" | "ok" | "check" | "diff";
+/** Закритий у Kommo запит («Оплачено» / «Отказано») — перекреслений і приглушений: одразу видно, що ще лишилось (Роман 16.10.2026). */
+const closedStyle = (r: PayScreenRow): React.CSSProperties | undefined =>
+  r.kommo === "open" ? undefined : { textDecoration: "line-through", color: "var(--text-muted)" };
 const pill = (bg: string, fg: string): React.CSSProperties => ({ fontSize: 11.5, padding: "1px 8px", borderRadius: 999, background: bg, color: fg, whiteSpace: "nowrap" });
 
 /** «Копіювати для файлу»: рядки «До оплати» табуляцією — вставляються в Google-таблицю рівно в колонки файлу Тетяни. */
@@ -125,7 +128,7 @@ export function FinancePaymentsTab() {
           <div style={{ overflowX: "auto" }}>
             <table className="hr-table" style={{ width: "100%", fontSize: 13 }}>
               <thead><tr><th>ID</th><th>Номер карти</th><th>Власник карти</th><th style={{ textAlign: "right" }}>{money(data.totals.okSum)}</th><th>Категорії</th><th>Запит у Kommo</th></tr></thead>
-              <tbody>{ok.map((r) => <tr key={r.requestId}><td>{link(r.mainId)}</td><td style={{ whiteSpace: "nowrap" }}>{r.card}</td><td>{r.owner}</td><td style={{ textAlign: "right" }}>{money(r.amount)}</td><td>{r.category}</td><td style={{ whiteSpace: "nowrap" }}>{stagePill(r)} {r.kommo === "open" && openReq(r, "→")}</td></tr>)}</tbody>
+              <tbody>{ok.map((r) => <tr key={r.requestId} style={closedStyle(r)}><td>{link(r.mainId)}</td><td style={{ whiteSpace: "nowrap" }}>{r.card}</td><td>{r.owner}</td><td style={{ textAlign: "right" }}>{money(r.amount)}</td><td>{r.category}</td><td style={{ whiteSpace: "nowrap" }}>{stagePill(r)} {r.kommo === "open" && openReq(r, "→")}</td></tr>)}</tbody>
             </table>
           </div>
         )}
@@ -143,7 +146,7 @@ export function FinancePaymentsTab() {
             <table className="hr-table" style={{ width: "100%", fontSize: 13 }}>
               <thead><tr><th>Угода · запит</th><th>Подано</th><th>Отримувач</th><th style={{ textAlign: "right" }}>Сума</th><th>Система</th><th>Підстава / причина</th><th>Етап у Kommo</th></tr></thead>
               <tbody>{shown.map((r) => (
-                <tr key={r.requestId} style={r.diff ? { background: "rgba(220,38,38,0.08)" } : undefined}>
+                <tr key={r.requestId} style={{ ...closedStyle(r), ...(r.diff ? { background: "rgba(220,38,38,0.08)" } : {}) }}>
                   <td style={{ whiteSpace: "nowrap" }}>{link(r.mainId)}<div style={{ fontSize: 11.5, color: MUTED }}>запит {link(r.requestId)}</div></td>
                   <td style={{ whiteSpace: "nowrap" }}>{hhmm(r.createdAt)}</td>
                   <td>{r.owner || <span style={{ color: MUTED }}>не вказано</span>}<div style={{ fontSize: 11.5, color: MUTED, whiteSpace: "nowrap" }}>{r.card || "картка не вказана"}</div></td>

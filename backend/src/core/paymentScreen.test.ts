@@ -120,3 +120,16 @@ test("#1272 «ЗАКРИТИ В KOMMO»: лише затверджені й ще
   assert.match(tab, /const toClose = data\.rows\.filter\(\(r\) => r\.ok && r\.kommo === "open"\);/, "🔴 фронт відбирає «до закриття» не так, як ядро");
   assert.match(SRC("jobs/buildPaymentFile.ts"), /stage: d \? requestStatusOf\(Number\(d\.status_id\)\)\.label : "запит не знайдено в Kommo",/, "🔴 етап не з воронки «Оплата перевозчикам»");
 });
+
+/**
+ * #1273 — ЗАКРИТІ ПЕРЕКРЕСЛЕНІ (Роман 16.10.2026: «підсвічувати ту, яка вже закрита, щоб була перекреслена»). Запит
+ * у «Оплачено» чи «Отказано» — перекреслений і приглушений і в «До оплати», і в «Усі запити»; ще відкритий — звичайний.
+ * 🧨 Червоніє, якщо перекреслити відкритий, забути одну з таблиць або загубити підсвітку розбіжності.
+ */
+test("#1273 ЗАКРИТІ ПЕРЕКРЕСЛЕНІ: «Оплачено» й «Отказано» — перекреслені й приглушені в обох таблицях, ще відкриті — ні", () => {
+  const tab = FE("pages/dashboard/sections/FinancePaymentsTab.tsx");
+  assert.match(tab, /const closedStyle = \(r: PayScreenRow\): React\.CSSProperties \| undefined =>\n\s*r\.kommo === "open" \? undefined : \{ textDecoration: "line-through", color: "var\(--text-muted\)" \};/,
+    "🔴 перекреслюється не рівно закрите (оплачено / відмовлено)");
+  assert.match(tab, /<tbody>\{ok\.map\(\(r\) => <tr key=\{r\.requestId\} style=\{closedStyle\(r\)\}>/, "🔴 у «До оплати» закриті не перекреслені");
+  assert.match(tab, /<tr key=\{r\.requestId\} style=\{\{ \.\.\.closedStyle\(r\), \.\.\.\(r\.diff \? \{ background:/, "🔴 в «Усі запити» закриті не перекреслені або загубилась розбіжність");
+});
