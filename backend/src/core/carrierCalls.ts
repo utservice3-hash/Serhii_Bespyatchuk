@@ -11,6 +11,7 @@ import { carrierActiveIds } from "./carrierCallQueue.js";
 import { notifyCapOnce } from "./aiCapAlert.js";
 import { runCarrierClose, type CloseMode, type CloseReport, type KommoCloser } from "./carrierClose.js";
 import { syncCarrierReviewTasks, type ReviewTaskStats } from "./carrierReviewTasks.js";
+import { syncLeadReminders, type LeadReminderStats } from "./carrierLeadReminder.js";
 import { runTaskSweep, type SweepKommo, type SweepReport } from "./carrierTaskSweep.js";
 import { carrierHistorySql, HISTORY_GUARD, readHistoryGate, type HistoryGate } from "./carrierHistory.js";
 import { LARDI_MATCH_SQL } from "./carrierLardi.js";
@@ -238,6 +239,8 @@ export interface CarrierTickReport {
   capAlerted: boolean;
   closed: CloseReport | null;
   reviewTasks: ReviewTaskStats | null;
+  /** 🚚 Нагадування тімліду о 17:00 (5964) — той самий перемикач, що й задачі менеджерам. */
+  leadTasks: LeadReminderStats | null;
   taskSweep: SweepReport | null;
 }
 
@@ -252,13 +255,19 @@ export async function runCarrierTick(env: CarrierTickEnv): Promise<CarrierTickRe
   const enqueued = await enqueueTranscripts(env.db, ids, STT_PROVIDER, ELEVENLABS_STT_MODEL, t0);
   const purged = await purgeOldCarrierText(env.db, t0);
   const out: CarrierTickReport = { recorded, resolved, active: ids.length, enqueued, purged, stt: [], llm: [],
-    sttStoppedBy: null, llmStoppedBy: null, capAlerted: false, closed: null, reviewTasks: null, taskSweep: null };
+    sttStoppedBy: null, llmStoppedBy: null, capAlerted: false, closed: null, reviewTasks: null, leadTasks: null, taskSweep: null };
   // 🧹 Закриття — ПІСЛЯ вердиктів, по угодах, що стоять на етапі за ЦІЄЮ ж відповіддю Kommo.
   const doClose = async () => env.close
     ? runCarrierClose(env.db, env.now(), env.close.mode, new Set(leads.map((l) => l.id)), env.close.kommo, env.close.otherMode ?? "dry",
       env.close.historyMode ?? "dry", env.historySyncMaxMin) : null;
   // 📋 Задачі — ПІСЛЯ закриття: закрита цим проходом угода вже не рахується в «розібрати».
-  const doTasks = async () => (env.reviewTasks ? syncCarrierReviewTasks(env.db, env.now(), launchAt) : null);
+  // 🚚 Тімліду — після задач менеджерам, з тієї самої черги (5964).
+  const doTasks = async () => {
+    if (!env.reviewTasks) return null;
+    const r = await syncCarrierReviewTasks(env.db, env.now(), launchAt);
+    out.leadTasks = await syncLeadReminders(env.db, env.now(), launchAt);
+    return r;
+  };
   // 🧽 Задачі робота на закритих угодах — ПІСЛЯ закриття цього проходу (свої закриття дашборд гасить сам; тут — чужі й старі).
   const doSweep = async () => (env.taskSweep ? runTaskSweep(env.db, env.now(), env.taskSweep.mode, env.taskSweep.kommo) : null);
   if (!ids.length) {

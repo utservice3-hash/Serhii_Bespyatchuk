@@ -4747,6 +4747,21 @@ CREATE TABLE IF NOT EXISTS carrier_review_tasks (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_carrier_review_tasks_open ON carrier_review_tasks(manager_id) WHERE closed_at IS NULL;
 REVOKE ALL ON carrier_review_tasks FROM ai_readonly;
 
+-- 🚚 НАГАДУВАННЯ ТІМЛІДУ О 17:00 (задача 5964, підзадача 5960, Юля 16.10.2026; Роман: «тільки в задачник»).
+-- Рядок на задачу тімліда «команда: не розібрано N дзвінків на мобільні»; відкрита на команду одна (унікальний індекс).
+-- `reminded_on` — день, за який нагадування вже було (Київ): перший прохід джоби після 17:00 у будній день ставить або
+-- оновлює задачу рівно раз. ⚠️ revert коду таблицю не прибирає; поставлені задачі лишаються в Задачнику.
+CREATE TABLE IF NOT EXISTS carrier_lead_tasks (
+  task_id      INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+  team_id      INTEGER NOT NULL,
+  lead_user_id INTEGER NOT NULL,
+  opened_at    TIMESTAMPTZ NOT NULL,
+  reminded_on  DATE NOT NULL,
+  closed_at    TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_carrier_lead_tasks_open ON carrier_lead_tasks(team_id) WHERE closed_at IS NULL;
+REVOKE ALL ON carrier_lead_tasks FROM ai_readonly;
+
 -- 🧽 ЗАДАЧІ НА ЗАКРИТИХ УГОДАХ «ДЗВІНКІВ НА МОБІЛЬНІ» (Роман 05.10.2026: «автоматично закривало також задачу»;
 -- `core/carrierTaskSweep.ts`). Рядок на угоду, яку вже прибрано: коли, у якому режимі (`dry` — лише журнал), скільки
 -- задач робота було й скільки закрито. Без телефонів, але відібрана в `ai_readonly`, як решта таблиць «Відсіву».

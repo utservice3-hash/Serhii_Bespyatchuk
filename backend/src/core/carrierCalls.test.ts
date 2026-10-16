@@ -2009,3 +2009,79 @@ test("#1777 ЗВІТ · ФРОНТ: мітка «чекають рішення»
   assert.match(card, /const pool = pick && NOW_COLS\.has\(pick\.col\) \? rep\.awaiting : rows;/, "🔴 клік по «чекають рішення зараз» показує не ті угоди, з яких число");
   assert.match(card, /\{ key: "awaitingNow", label: "Чекають рішення зараз"/);
 });
+
+/**
+ * #1784 — НАГАДУВАННЯ ТІМЛІДУ О 17:00 (задача 5964): у будній день після 17:00 тімліду — ОДНА задача на команду з числом
+ * і розкладом по менеджерах; до 17:00 і у вихідні — нічого; повтор того ж дня — не дубль; наступного дня — строк
+ * переноситься на сьогодні; команда все розібрала — задача закривається сама. Чужа команда в задачі не з'являється;
+ * команда без тімліда-акаунта задачі не отримує (нікому).
+ * 🧨 Червоніє, якщо нагадування ставиться до 17:00 / у вихідні, дублюється, не закривається або показує чужу команду.
+ */
+test("#1784 НАГАДУВАННЯ ТІМЛІДУ · ЖИВА СХЕМА: 17:00 будній — одна задача на команду; не дубль; переноситься; закривається сама", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  const T = await seedTeams(c);
+  await c.raw.query("TRUNCATE carrier_lead_tasks");
+  await c.raw.query(`INSERT INTO users(email,password_hash,role,team_id,is_active) VALUES ('lead-a-1784@x','x','team_lead',$1,true)
+    ON CONFLICT (email) DO NOTHING`, [T.A]);
+  const leadId = (await c.raw.query<{ id: number }>("SELECT id FROM users WHERE email = 'lead-a-1784@x'")).rows[0].id;
+  const { syncLeadReminders, LEAD_TASK_DONE_REASON } = await import("./carrierLeadReminder.js");
+  const { recordDecision } = await import("./carrierDecisions.js");
+  const at = new Date("2026-09-28T08:00:00Z"); // понеділок
+  const mk = async (n: number, user: number, role: string, conf: number) => {
+    const P = phone(17840, n), u = `1784-${String(n)}`;
+    await call(c, u, at, 40, P);
+    await carrierDeal(c, 178400 + n, P, at, "own", u, 1);
+    await owner(c, 178400 + n, user);
+    await carrierAnalysedV2(c, u, role, conf, "counterpart");
+  };
+  await mk(1, 10601, "carrier", 0.6); await mk(2, 10601, "carrier", 0.5);   // команда A, менеджер 1 — на перевірці ×2
+  await mk(3, 10603, "carrier", 0.6);                                        // команда B (без тімліда-акаунта)
+  await mk(4, 10602, "client", 0.95);                                        // команда A, упевнений клієнт — не чекає
+  const open = async () => (await c.raw.query<{ task_id: number; title: string; description: string; deadline: string; assignee_user_id: number; status: string }>(`
+    SELECT l.task_id, t.title, t.description, to_char(t.deadline, 'YYYY-MM-DD') AS deadline, t.assignee_user_id, t.status
+      FROM carrier_lead_tasks l JOIN tasks t ON t.id = l.task_id WHERE l.closed_at IS NULL`)).rows;
+
+  // По обидва боки межі 17:00 і вихідних.
+  assert.equal((await syncLeadReminders(c.db, new Date("2026-09-28T13:59:00Z"), null)).created, 0, "🔴 нагадування до 17:00");
+  assert.equal((await open()).length, 0);
+  const s1 = await syncLeadReminders(c.db, new Date("2026-09-28T14:01:00Z"), null);
+  assert.equal(s1.created, 1, "🔴 о 17:01 у будній день тімліду команди A задачу не поставлено");
+  const [x] = await open();
+  assert.equal(x.assignee_user_id, leadId, "🔴 задача не тімліду");
+  assert.match(x.title, /не розібрано дзвінків на мобільні — 2\b/, "🔴 число в задачі ≠ черзі команди");
+  assert.match(x.description, /Менеджер 1 — 2/);
+  assert.doesNotMatch(x.description, /Менеджер 3|Менеджер 2/, "🔴 у задачі тімліда чужа команда або той, хто нічого не чекає");
+  assert.equal(x.deadline, "2026-09-28");
+  assert.equal((await syncLeadReminders(c.db, new Date("2026-09-28T14:30:00Z"), null)).created, 0, "🔴 повторний прохід того ж дня — дубль");
+  assert.equal((await open()).length, 1);
+  assert.equal((await syncLeadReminders(c.db, new Date("2026-10-03T14:30:00Z"), null)).reminded, 0, "🔴 нагадування в суботу");
+  const s2 = await syncLeadReminders(c.db, new Date("2026-09-29T14:05:00Z"), null);
+  assert.equal(s2.reminded, 1, "🔴 наступного дня нагадування не повторилось");
+  assert.equal((await open())[0].deadline, "2026-09-29", "🔴 строк не перенесено на сьогодні");
+  // Команда все розібрала — задача закривається сама.
+  await recordDecision(c.db, 178401, "carrier", null, "", lead(1), NOW);
+  await recordDecision(c.db, 178402, "client", null, "", lead(1), NOW);
+  const s3 = await syncLeadReminders(c.db, new Date("2026-09-29T15:00:00Z"), null);
+  assert.equal(s3.closed, 1, "🔴 команда все розібрала, а задача тімліда висить");
+  const done = (await c.raw.query<{ status: string; close_reason: string }>("SELECT status, close_reason FROM tasks WHERE id = $1", [x.task_id])).rows[0];
+  assert.deepEqual([done.status, done.close_reason], ["done", LEAD_TASK_DONE_REASON]);
+  assert.equal((await open()).length, 0);
+});
+
+test("#1784b НАГАДУВАННЯ ТІМЛІДУ · ЧАС: 17:00 за Києвом у будні (і після переходу на зимовий час); без команди — нікому", async () => {
+  const { leadReminderDue, pendingByTeam } = await import("./carrierLeadReminder.js");
+  assert.equal(leadReminderDue(new Date("2026-10-16T13:59:00Z")).due, false, "🔴 16:59 за Києвом — уже нагадування");
+  assert.equal(leadReminderDue(new Date("2026-10-16T14:00:00Z")).due, true, "🔴 17:00 за Києвом (пт) — немає нагадування");
+  assert.equal(leadReminderDue(new Date("2026-10-17T14:30:00Z")).due, false, "🔴 субота");
+  assert.equal(leadReminderDue(new Date("2026-10-18T14:30:00Z")).due, false, "🔴 неділя");
+  // Після 25.10.2026 Київ — UTC+2: 17:00 = 15:00Z.
+  assert.equal(leadReminderDue(new Date("2026-10-26T14:59:00Z")).due, false, "🔴 зимовий час: 16:59 прочитано як 17:00");
+  assert.equal(leadReminderDue(new Date("2026-10-26T15:00:00Z")).due, true);
+  assert.equal(leadReminderDue(new Date("2026-10-16T21:30:00Z")).day, "2026-10-17", "🔴 день — за UTC, а не за Києвом");
+  const m = pendingByTeam([{ teamId: null, teamName: null, managerName: "Операційний директор", overdue: true },
+    { teamId: 5, teamName: "РПК", managerName: "А", overdue: true }, { teamId: 5, teamName: "РПК", managerName: "Б", overdue: false },
+    { teamId: 5, teamName: "РПК", managerName: "А", overdue: false }]);
+  assert.deepEqual([...m.keys()], [5], "🔴 угоди без команди пішли якомусь тімліду");
+  assert.deepEqual(m.get(5), { teamId: 5, teamName: "РПК", n: 3, overdue: 1, lines: [{ managerName: "А", n: 2, overdue: 1 }, { managerName: "Б", n: 1, overdue: 0 }] });
+});
