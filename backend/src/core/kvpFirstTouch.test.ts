@@ -285,6 +285,8 @@ test("#1765c ПЕРШИЙ ДОТИК У ЯДРІ: картка = фільтр т
   assert.match(src, /onClick=\{\(\) => setTile\(on \? null : k\)\}/, "🔴 клік по картці не фільтрує таблицю (або не знімає фільтр)");
   assert.match(src, /const hits = tileCountsByManager\(all\.rows, tile \? TILE_MATCH\[tile\] : null\);/, "🔴 фільтр картки не з того самого TILE_MATCH, що екран AI");
   assert.match(src, /<option value="all">Усі команди<\/option>/, "🔴 немає фільтра «Команда»");
+  // Макет: «Ціна» і «Обіцянка» — міні-смужкою з екрана AI (`.ftd-bar`), поріг ціни — ціль, обіцянки — 50%.
+  assert.match(src, /\{bar\(l\.price, target\)\}\{bar\(l\.promise, 50\)\}/, "🔴 «Ціна» / «Обіцянка» без смужки або з іншим порогом");
   assert.match(src, /onClick=\{reset\}[^>]*>Скинути<\/button>/, "🔴 немає «Скинути»");
   for (const key of ["calls", "score", "price", "promise", "objection", "agreed", "success"]) {
     assert.match(src, new RegExp(`\\{th\\("${key}", `), `🔴 колонка «${key}» не сортується`);
