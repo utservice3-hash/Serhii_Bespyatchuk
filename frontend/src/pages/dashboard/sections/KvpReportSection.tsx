@@ -7,6 +7,7 @@ import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
 import { LeadgenRegularsCard } from "./LeadgenRegularsCard";
 import { KvpFirstTouchBlock } from "./KvpFirstTouchBlock";
+import { KvpTeamsWeekMonth } from "./KvpTeamsWeekMonth";
 
 // ── Статус-палітра (зарезервована, НЕ дата-серія): good/warning/serious/critical ──
 const GREEN = "#16a34a", AMBER = "#d97706", RED = "#dc2626", BLUE = "#2563eb", MUTED = "var(--text-muted)";
@@ -244,12 +245,14 @@ function PlanBar({ factPct, forecastPct, color, h = 8 }:
   );
 }
 
-function Stat({ label, value, sub, hint, color }: { label: string; value: string; sub?: string; hint?: string; color?: string }) {
+function Stat({ label, value, sub, hint, color, note }: { label: string; value: string; sub?: string; hint?: string; color?: string; note?: string }) {
   return (
     <div style={{ padding: "12px 14px", background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 12 }}>
       <div style={{ fontSize: 12, color: MUTED, display: "flex", alignItems: "center", gap: 4 }}>{label}{hint && <InfoHint text={hint} />}</div>
       <div style={{ fontSize: 24, fontWeight: 700, color: color ?? "var(--text)", lineHeight: 1.2, marginTop: 4 }}>{value}</div>
       {sub && <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{sub}</div>}
+      {/* Пояснення одним рядком під карткою — ядро Звіту КВП (ТЗ 12.10, розділ 2). */}
+      {note && <div style={{ fontSize: 12, color: MUTED, marginTop: 4, lineHeight: 1.35 }}>{note}</div>}
     </div>
   );
 }
@@ -291,6 +294,9 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
   const [openTeam, setOpenTeam] = useState<number | null>(null);
   const [showFull, setShowFull] = useState(false);
   const [showLogi, setShowLogi] = useState(false);
+  /** ▸ «Детальний звіт» — усе, що було на екрані до ядра (ТЗ 12.10: «Звіт КВП перевантажений»), згорнуте, але не видалене. */
+  const [showDetails, setShowDetails] = useState(() => { try { return localStorage.getItem("kvpDetails") === "1"; } catch { return false; } });
+  const toggleDetails = () => setShowDetails((x) => { try { localStorage.setItem("kvpDetails", x ? "0" : "1"); } catch { /* сховище недоступне */ } return !x; });
   const [weekMode, setWeekMode] = useState<"money" | "activity">("money");
   // #6: тижнево-скоупований дрил — клік по клітинці тижня команди → менеджери ЦЬОГО тижня.
   const [openWeekDrill, setOpenWeekDrill] = useState<{ teamId: number; weekIdx: number } | null>(null);
@@ -336,24 +342,45 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
 
       {rep && v && (
         <>
-          {/* ── ВЕРДИКТ: де ми зараз ── */}
+          {/* ══ ЯДРО ЗВІТУ КВП (задача 5605, ТЗ Юлі 12.10.2026, макет «Звіт КВП - ядро») ══
+              Три речі на одному екрані: скільки грошей і чи закриємо місяць; чи закриє кожна команда тиждень; якість
+              перших розмов. Решта звіту — нижче, у згорнутому «Детальному звіті», нічого не видалено. */}
           <div className="chart-card" style={{ marginBottom: 16, borderTop: "3px solid #c5141c" }}>
-            <h2 className="chart-title">📍 {rep.scope.label} — де ми зараз {rep.scope.isCurrent && <span style={{ fontSize: 12, color: MUTED }}>(період триває)</span>}</h2>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 14 }}>
+            <h2 className="chart-title">💰 Гроші за {rep.scope.label.toLowerCase()} {rep.scope.isCurrent && <span style={{ fontSize: 12, color: MUTED }}>(період триває)</span>}</h2>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
               <Stat label="Отримані кошти" value={fmtMoney(v.received.revenue)} hint={HINT.received}
-                sub={`${delta >= 0 ? "▲" : "▼"} ${fmtMoney(Math.abs(delta))} до мин. періоду`} color={delta >= 0 ? GREEN : RED} />
+                note="гроші, що вже надійшли: оплачено або успішно реалізовано" />
               <Stat label="Стратегічний план 🔒" value={fmtMoney(v.strategicPlan)} hint={HINT.strategic}
-                sub={`виконання ${fmtPct(v.planPct)}`} color={pctColor(v.planPct)} />
+                note={`план відділу на місяць; виконано ${fmtPct(v.planPct)}`} />
               <Stat label="Прогноз місяця" value={fmtMoney(v.projection.projected)} hint={HINT.projection}
-                sub={`факт ${fmtMoney(v.projection.fact)} + ${fmtMoney(v.projection.expectedThisMonth)} за план. датою · ${fmtPct(v.projection.projectedPct)} плану`}
-                color={pctColor(v.projection.projectedPct)} />
+                note={`факт ${fmtMoney(v.projection.fact)} + ${fmtMoney(v.projection.expectedThisMonth)}, які чекаємо за плановою датою оплати; ${fmtPct(v.projection.projectedPct)} плану`} />
+              <Stat label="Робочі дні" value={`${String(v.projection.elapsedWorkingDays)} з ${String(v.projection.totalWorkingDays)}`}
+                note="скільки робочих днів місяця вже минуло" />
+            </div>
+          </div>
+
+          <KvpTeamsWeekMonth rep={rep} />
+
+          {/* ── 🎧 ПЕРШИЙ ДОТИК (задача 5314): одразу під «де ми зараз», як у макеті «Звіт КВП - ядро». ── */}
+          {canSeeFirstTouch && <KvpFirstTouchBlock from={rep.scope.from} to={rep.scope.to} />}
+
+          {/* ▸ ДЕТАЛЬНИЙ ЗВІТ — усе, що було до ядра; згорнуте за замовчуванням. */}
+          <div className="chart-card" style={{ marginBottom: 16 }}>
+            <h2 className="chart-title" style={{ cursor: "pointer", margin: 0 }} onClick={toggleDetails}>{showDetails ? "▾" : "▸"} 📂 Детальний звіт
+              <span style={{ fontSize: 12, color: MUTED, fontWeight: 400 }}> — темп, життєвий цикл грошей, сигнали, двигуни, тижні Т1–Т5, структура, ризики, повна таблиця, логістика</span></h2>
+          </div>
+          {showDetails && (<>
+          {/* ── ТЕМП І ЖИТТЄВИЙ ЦИКЛ (були у «де ми зараз»; чотири картки грошей — у ядрі вище, тут не дублюються) ── */}
+          <div className="chart-card" style={{ marginBottom: 16 }}>
+            <h2 className="chart-title">📍 {rep.scope.label} — темп і життєвий цикл грошей</h2>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 14 }}>
+              <Stat label="Зміна до мин. періоду" value={`${delta >= 0 ? "▲" : "▼"} ${fmtMoney(Math.abs(delta))}`} color={delta >= 0 ? GREEN : RED}
+                sub="отримані кошти проти попереднього періоду" />
               {/* ⏱ ТЕМП — окрема плитка, бо це ІНШЕ питання: «що вийде, якщо нічого не
                   зміниться», проти «що вже домовлено». Розрив між ними і є вердикт. */}
               <Stat label="При поточному темпі" value={v.projection.pace == null ? "—" : fmtMoney(v.projection.pace)} hint={HINT.pace}
                 sub={v.projection.pace == null ? "робочі дні ще не минули" : `${fmtPct(v.projection.pacePct)} плану · зазвичай добирає ${fmtMoney(v.projection.dobir)}`}
                 color={pctColor(v.projection.pacePct)} />
-              <Stat label="Робочі дні" value={`${v.projection.elapsedWorkingDays}/${v.projection.totalWorkingDays}`}
-                sub="минуло / всього" />
             </div>
             {/* прогрес до плану */}
             <div style={{ marginBottom: 12 }}>
@@ -406,9 +433,6 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
               ))}
             </div>
           </div>
-
-          {/* ── 🎧 ПЕРШИЙ ДОТИК (задача 5314): одразу під «де ми зараз», як у макеті «Звіт КВП - ядро». ── */}
-          {canSeeFirstTouch && <KvpFirstTouchBlock from={rep.scope.from} to={rep.scope.to} />}
 
           {/* ── СИГНАЛИ ── */}
           {rep.signals.length > 0 && (
@@ -594,6 +618,7 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
             <h2 className="chart-title" style={{ cursor: "pointer" }} onClick={() => setShowLogi(!showLogi)}>{showLogi ? "▾" : "▸"} 🚚 Логістика</h2>
             {showLogi && <LogisticsSection rep={rep} />}
           </div>
+          </>)}
         </>
       )}
     </>

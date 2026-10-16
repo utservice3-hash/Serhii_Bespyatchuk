@@ -187,3 +187,106 @@ test("#939 ЗГОДА У ЗВІТІ КВП == ЕКРАН; «ДУМАЄ» ОКР�
   assert.deepEqual(["agreed", "thinking"].map((k) => v.parseAiLink(`?from=2026-10-01&to=2026-10-31&tile=${k}`).tile), ["agreed", "thinking"],
     "🔴 клік із картки КВП відкриє екран без фільтра згоди");
 });
+
+// ─── 🏆 Звіт КВП — ядро (задача 5605, ТЗ Юлі 12.10.2026, макет «Звіт КВП - ядро») ────────────────────────────────
+/**
+ * #1765 — «ЗАКРИЄМО?» І Σ ТАБЛИЦІ КОМАНД. Статус по тижню — по обидва боки кожного порога ТЗ (розділ 3): «закрито» —
+ * факт ≥ план; «реально» — треба ≤ 50% очікуваного; «під ризиком» — 50–85%; «не закриється» — понад 85% або очікуваного
+ * не вистачає (тоді «бракує Х»). Плану немає — статусу немає. Σ відділу = Σ показаних рядків, команда = Σ менеджерів
+ * (на фікстурі, де так і є в даних), порожні рядки не показуються. Червоніє, якщо зсунути поріг, назвати «закритим» тиждень
+ * без плану, рахувати «з очікуваннями» без факту або відділ — не з рядків.
+ */
+test("#1765 «ЗАКРИЄМО?»: пороги 50% / 85% по обидва боки, «бракує» і «без плану»; Σ відділу = Σ команд, команда = Σ менеджерів", async () => {
+  const r = await import(await transpile("pages/dashboard/kvpCoreRules.ts")) as {
+    weekCloseStatus: (p: number, f: number, e: number) => { kind: string; share: number | null; short: number };
+    closeNote: (s: unknown, fmt: (v: number) => string) => string | null;
+    coreRows: (t: unknown[], idx: number | null, nameOf: (t: { name: string | null }) => string) => { rows: { name: string; week: { plan: number; fact: number; withExp: number }; month: { plan: number; fact: number; withExp: number }; managers: { week: { plan: number; fact: number; withExp: number }; month: { plan: number; fact: number; withExp: number } }[] }[]; dept: { week: { plan: number; fact: number; withExp: number }; month: { plan: number; fact: number; withExp: number } } };
+  };
+  const k = (p: number, f: number, e: number) => r.weekCloseStatus(p, f, e).kind;
+  assert.equal(k(100, 100, 0), "closed"); assert.equal(k(100, 120, 0), "closed");
+  assert.equal(k(100, 50, 100), "real", "🔴 треба рівно 50% очікуваного — це ще «реально»");
+  assert.equal(k(100, 49, 100), "risk", "🔴 51% очікуваного — уже «під ризиком»");
+  assert.equal(k(100, 15, 100), "risk", "🔴 рівно 85% — ще «під ризиком»");
+  assert.equal(k(100, 14, 100), "no", "🔴 86% — уже «не закриється»");
+  const short = r.weekCloseStatus(100, 30, 40);
+  assert.deepEqual([short.kind, short.short], ["no", 30], "🔴 очікуваного не вистачає — «не закриється» з «бракує»");
+  assert.equal(r.closeNote(short, (v) => String(v)), "бракує 30 навіть з оплатами");
+  assert.equal(r.closeNote(r.weekCloseStatus(100, 50, 100), (v) => String(v)), "має прийти 50% очікуваного");
+  assert.equal(k(100, 0, 0), "no", "🔴 нічого не прийшло й нічого не чекаємо — не закриється");
+  assert.equal(k(0, 50, 50), "none", "🔴 тиждень без плану назвали закритим");
+
+  const wk = (plan: number, fact: number, expected: number, idx = 3) => ({ idx, plan, fact, expected, isCurrent: idx === 3 });
+  const teams = [
+    { teamId: 1, name: "РПК А", kind: "rpk", plan: 300, revenue: 120, expectedThisMonth: 50, weeks: [wk(80, 40, 30), wk(70, 70, 0, 2)],
+      managers: [
+        { managerId: 11, name: "М1", plan: 200, revenue: 100, expectedThisMonth: 40, weeks: [wk(50, 30, 20)] },
+        { managerId: 12, name: "М2", plan: 100, revenue: 20, expectedThisMonth: 10, weeks: [wk(30, 10, 10)] },
+        { managerId: 13, name: "Порожній", plan: 0, revenue: 0, expectedThisMonth: 0, weeks: [wk(0, 0, 0)] },
+      ] },
+    { teamId: null, name: null, kind: "rpk", plan: 0, revenue: 5, expectedThisMonth: 0, weeks: [wk(0, 0, 0)], managers: [] },
+    { teamId: 9, name: "Порожня", kind: "rnk", plan: 0, revenue: 0, expectedThisMonth: 0, weeks: [wk(0, 0, 0)], managers: [] },
+  ];
+  const { rows, dept } = r.coreRows(teams, null, (t) => t.name ?? "Без команди");
+  assert.deepEqual(rows.map((x) => x.name), ["РПК А", "Без команди"], "🔴 порожній рядок показано або рядок без команди загубився");
+  assert.deepEqual(rows[0]!.week, { plan: 80, fact: 40, withExp: 70 }, "🔴 тиждень узято не поточний або «з очікуваннями» ≠ факт + очікування");
+  assert.deepEqual(rows[0]!.month, { plan: 300, fact: 120, withExp: 170 });
+  assert.equal(rows[0]!.managers.length, 2, "🔴 менеджер без жодного числа показаний");
+  const sum = (a: { plan: number; fact: number; withExp: number }[]) => a.reduce((s, x) => ({ plan: s.plan + x.plan, fact: s.fact + x.fact, withExp: s.withExp + x.withExp }), { plan: 0, fact: 0, withExp: 0 });
+  assert.deepEqual(sum(rows[0]!.managers.map((m) => m.week)), rows[0]!.week, "🔴 команда ≠ Σ менеджерів за тиждень");
+  assert.deepEqual(sum(rows[0]!.managers.map((m) => m.month)), rows[0]!.month, "🔴 команда ≠ Σ менеджерів за місяць");
+  assert.deepEqual(dept.week, sum(rows.map((x) => x.week)), "🔴 Σ відділу ≠ Σ команд (тиждень)");
+  assert.deepEqual(dept.month, sum(rows.map((x) => x.month)), "🔴 Σ відділу ≠ Σ команд (місяць)");
+  assert.deepEqual(r.coreRows(teams, 2, (t) => t.name ?? "-").rows[0]!.week, { plan: 70, fact: 70, withExp: 70 }, "🔴 вибраний тиждень не береться");
+});
+
+/**
+ * #1765b — ЕКРАН ЯДРА: ПОРЯДОК І ВІДСУТНІСТЬ ДУБЛІВ. Зверху — 4 картки грошей (Отримані · Стратегічний план · Прогноз ·
+ * Робочі дні) з поясненням під кожною, далі таблиця команд, далі «Перший дотик»; решта — у згорнутому «Детальному звіті».
+ * Чотири картки не повторюються в детальному (правило «жоден показник не має двох джерел на одному екрані»).
+ */
+test("#1765b ЗВІТ КВП — ЯДРО: гроші → команди → перший дотик; решта згорнута; 4 картки без дубля", () => {
+  const src = FE_SRC("pages/dashboard/sections/KvpReportSection.tsx");
+  const iMoney = src.indexOf("💰 Гроші за "), iTeams = src.indexOf("<KvpTeamsWeekMonth rep={rep} />"),
+    iFt = src.indexOf("{canSeeFirstTouch && <KvpFirstTouchBlock"), iDet = src.indexOf("{showDetails && (<>");
+  assert.ok(iMoney > 0 && iMoney < iTeams && iTeams < iFt && iFt < iDet, "🔴 порядок ядра не «гроші → команди → перший дотик → детальний»");
+  for (const lbl of ["Отримані кошти", "Стратегічний план 🔒", "Прогноз місяця", "Робочі дні"]) {
+    const n = src.split(`label="${lbl}"`).length - 1;
+    assert.equal(n, 1, `🔴 картка «${lbl}» на екрані ${String(n)} разів — дві копії одного числа`);
+    assert.ok(src.indexOf(`label="${lbl}"`) < iTeams, `🔴 картка «${lbl}» не в ядрі`);
+  }
+  assert.match(src, /useState\(\(\) => \{ try \{ return localStorage\.getItem\("kvpDetails"\) === "1"; \} catch \{ return false; \} \}\)/, "🔴 «Детальний звіт» не згорнутий за замовчуванням");
+  const tbl = FE_SRC("pages/dashboard/sections/KvpTeamsWeekMonth.tsx");
+  assert.match(tbl, /coreRows\(rep\.teams as unknown as TeamLike\[\], blk\?\.idx \?\? null,/, "🔴 таблиця рахує рядки не спільною функцією");
+  assert.match(tbl, /<td style=\{\{ fontWeight: 700 \}\}>Σ Відділ<\/td>\s*<Cells r=\{dept\} bold \/>/, "🔴 рядок «Σ Відділ» не з тих самих рядків");
+  assert.match(tbl, /weekCloseStatus\(w\.plan, w\.fact, w\.withExp - w\.fact\)/, "🔴 статус «Закриємо?» не тим правилом");
+  assert.match(tbl, /\{CLOSE_LABEL\[s\.kind\]\}/, "🔴 статус показано лише кольором, без слова");
+});
+
+/**
+ * #1765c — «ПЕРШИЙ ДОТИК» У ЯДРІ: КАРТКА ФІЛЬТРУЄ ТАБЛИЦЮ. Клік по картці — фільтр (менеджери з такими розмовами й
+ * скільки їх), повторний — знімає; фільтр команди, «Скинути», сортування кожної колонки, «—» завжди внизу.
+ * Червоніє, якщо картка знову веде геть замість фільтра, «—» стане нулем у сортуванні або фільтр рахуватиме не ті розмови.
+ */
+test("#1765c ПЕРШИЙ ДОТИК У ЯДРІ: картка = фільтр таблиці, команда, «Скинути», сортування («—» внизу)", async () => {
+  const r = await import(await transpile("pages/dashboard/kvpCoreRules.ts")) as {
+    sortFtLines: <T>(l: T[], k: string | null, d: "asc" | "desc") => T[];
+    tileCountsByManager: (rows: { managerId: number | null; x: boolean }[], m: ((r: { x: boolean }) => boolean) | null) => Map<number | null, number> | null;
+  };
+  const L = (id: number, price: number | null) => ({ id, calls: 1, score: null, price, promise: null, objection: null, decided: 0, agreed: 0, success: 0 });
+  const lines = [L(1, 40), L(2, null), L(3, 80), L(4, 10)];
+  assert.deepEqual(r.sortFtLines(lines, "price", "desc").map((x) => x.id), [3, 1, 4, 2], "🔴 сортування за спаданням або «—» не внизу");
+  assert.deepEqual(r.sortFtLines(lines, "price", "asc").map((x) => x.id), [4, 1, 3, 2], "🔴 «—» піднялось нагору при зростанні — читалось би як 0");
+  assert.deepEqual(r.sortFtLines(lines, null, "desc").map((x) => x.id), [1, 2, 3, 4], "🔴 без сортування порядок змінився");
+  const rows = [{ managerId: 1, x: true }, { managerId: 1, x: true }, { managerId: 2, x: false }, { managerId: null, x: true }];
+  const m = r.tileCountsByManager(rows, (q) => q.x)!;
+  assert.deepEqual([m.get(1), m.get(2), m.get(null)], [2, undefined, 1], "🔴 фільтр картки рахує не ті розмови");
+  assert.equal(r.tileCountsByManager(rows, null), null, "🔴 без картки таблиця фільтрується");
+  const src = FE_SRC("pages/dashboard/sections/KvpFirstTouchBlock.tsx");
+  assert.match(src, /onClick=\{\(\) => setTile\(on \? null : k\)\}/, "🔴 клік по картці не фільтрує таблицю (або не знімає фільтр)");
+  assert.match(src, /const hits = tileCountsByManager\(all\.rows, tile \? TILE_MATCH\[tile\] : null\);/, "🔴 фільтр картки не з того самого TILE_MATCH, що екран AI");
+  assert.match(src, /<option value="all">Усі команди<\/option>/, "🔴 немає фільтра «Команда»");
+  assert.match(src, /onClick=\{reset\}[^>]*>Скинути<\/button>/, "🔴 немає «Скинути»");
+  for (const key of ["calls", "score", "price", "promise", "objection", "agreed", "success"]) {
+    assert.match(src, new RegExp(`\\{th\\("${key}", `), `🔴 колонка «${key}» не сортується`);
+  }
+});
