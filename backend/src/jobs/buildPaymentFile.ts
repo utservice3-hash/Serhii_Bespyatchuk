@@ -21,6 +21,7 @@ import {
   cashExpenseOf, judgeRequest, payRow, isNetworkDrop, orderNoOf, findBankPayment, payWindow, dupsOf, receivablesKeyOf, ownerLine, PAY_CATEGORY,
   type PayRequest, type MainDeal, type PayContext, type Verdict, type BankIn,
 } from "../core/paymentRun.js";
+import { requestStatusOf } from "../core/paymentRequests.js";
 import { kommoStateOf, discrepancyOf, screenCard, fileRow, totalsOf, type ScreenRow, type ScreenTotals } from "../core/paymentScreen.js";
 import { xlsxBook } from "../core/xlsx.js";
 import { jobSkip } from "./jobRuns.js";
@@ -254,6 +255,7 @@ export async function loadScreenDay(dayArg?: string): Promise<ScreenDay> {
       amount: x.amount == null ? null : Number(x.amount), ok: x.ok, paidBy: x.paid_by, reasons: x.reasons ?? [], notes: x.notes ?? [],
       card: d ? screenCard(cf(d, REQ_FIELDS.card)) : "", owner: d ? ownerLine({ recipient: cf(d, REQ_FIELDS.recipient), bank: cf(d, REQ_FIELDS.bank), phone: cf(d, REQ_FIELDS.phone) }) : "",
       category: PAY_CATEGORY, kommo, diff: discrepancyOf(x.ok, kommo),
+      stage: d ? requestStatusOf(Number(d.status_id)).label : "запит не знайдено в Kommo",
     };
   }).sort((a, b) => Number(b.ok) - Number(a.ok) || String(a.createdAt).localeCompare(String(b.createdAt)));
   const days = (await pool.query<{ day: string; total: number; ok: number; ok_sum: string }>(
@@ -269,12 +271,11 @@ export async function loadScreenDay(dayArg?: string): Promise<ScreenDay> {
 /** Excel дня: «До оплати» (рівно Танин файл, у шапці суми — підсумок) + «Усі запити» з рішенням, причиною й статусом. */
 export function screenXlsx(d: ScreenDay): Buffer {
   const ok = d.rows.filter((r) => r.ok);
-  const kommoWord = { paid: "оплачено", rejected: "відмовлено", open: "висить" } as const;
   return xlsxBook([
     { name: "До оплати", rows: [["ID", "Номер карти", "Власник карти", d.totals.okSum, "Категорії"], ...ok.map(fileRow)] },
-    { name: "Усі запити", rows: [["ID угоди", "Запит", "Номер карти", "Власник карти", "Сума", "Рішення системи", "Підстава / причина", "Примітка", "Kommo зараз", "Розбіжність"],
+    { name: "Усі запити", rows: [["ID угоди", "Запит", "Номер карти", "Власник карти", "Сума", "Рішення системи", "Підстава / причина", "Примітка", "Етап запиту в Kommo", "Розбіжність"],
       ...d.rows.map((r) => [r.mainId, r.requestId, r.card, r.owner, r.amount, r.ok ? "до оплати" : "перевірити",
         r.ok ? (r.paidBy === "1С" ? "оплата є — галочка 1С" : r.paidBy === "Виписка" ? "оплата є — у Виписці" : "у межах ліміту") : r.reasons.join("; "),
-        r.notes.join("; "), kommoWord[r.kommo], r.diff ? "так" : ""])] },
+        r.notes.join("; "), r.stage, r.diff ? "так" : ""])] },
   ]);
 }
