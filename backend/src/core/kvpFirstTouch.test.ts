@@ -292,3 +292,22 @@ test("#1765c ПЕРШИЙ ДОТИК У ЯДРІ: картка = фільтр т
     assert.match(src, new RegExp(`\\{th\\("${key}", `), `🔴 колонка «${key}» не сортується`);
   }
 });
+
+/**
+ * #1775 — «Команди: тиждень і місяць»: МІСЯЦЬ ПЕРШИЙ, ДАЛІ ТИЖДЕНЬ (Юля 16.10.2026: «Жовтень 2026 потрібно, щоб було
+ * спочатку, а потім йдуть тижні»). Порядок у шапці й у клітинках рядка мусить бути ОДНАКОВИЙ — інакше числа місяця
+ * стоять під підписом тижня, і це найгірша поломка таблиці: правдоподібна й тиха.
+ */
+test("#1775 КОМАНДИ: місяць перед тижнем — і в шапці, і в клітинках рядка, «Закриємо?» лишається при тижні", () => {
+  const tbl = FE_SRC("pages/dashboard/sections/KvpTeamsWeekMonth.tsx");
+  const cells = tbl.slice(tbl.indexOf("function Cells("), tbl.indexOf("export function KvpTeamsWeekMonth"));
+  const at = (h: string, x: string) => { const i = h.indexOf(x); assert.ok(i >= 0, `🔴 не знайдено «${x}»`); return i; };
+  assert.ok(at(cells, "formatAmount(r.month.plan)") < at(cells, "formatAmount(r.week.plan)"), "🔴 у рядку тиждень стоїть перед місяцем");
+  assert.ok(at(cells, "r.month.withExp") < at(cells, "formatAmount(r.week.plan)"), "🔴 колонки місяця розірвані тижнем");
+  assert.ok(at(cells, "r.week.withExp") < at(cells, "<Status w={r.week} />"), "🔴 «Закриємо?» відірвано від тижня");
+  const head = tbl.slice(at(tbl, "<thead>"), at(tbl, "</thead>"));
+  assert.ok(at(head, "{monthName}</th>") < at(head, "Тиждень {blk.from"), "🔴 у шапці тиждень стоїть перед місяцем — числа під чужим підписом");
+  assert.match(head, /<th colSpan=\{3\}[^>]*>\{monthName\}<\/th>\s*<th colSpan=\{4\}/, "🔴 ширина груп у шапці не збігається з клітинками (3 місяць + 4 тиждень)");
+  const sub = head.slice(head.indexOf("</tr>"));
+  assert.ok(sub.lastIndexOf("Закриємо?") > sub.lastIndexOf("План"), "🔴 у другому рядку шапки «Закриємо?» не в групі тижня");
+});

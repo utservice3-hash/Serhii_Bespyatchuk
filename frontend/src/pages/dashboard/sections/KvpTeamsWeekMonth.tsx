@@ -6,7 +6,8 @@ import { coreRows, weekCloseStatus, closeNote, pctOfPlan, CLOSE_LABEL, type Clos
 
 /**
  * 🏅 «КОМАНДИ: ТИЖДЕНЬ І МІСЯЦЬ» (задача 5605, ТЗ Юлі 12.10.2026, розділ 3; макет «Звіт КВП - ядро»).
- * Тиждень: План · Без очікувань · З очікуваннями · «Закриємо?»; місяць: План · Без очікувань · З очікуваннями. Під сумою —
+ * Спершу місяць (План · Без очікувань · З очікуваннями), далі тиждень (те саме + «Закриємо?») — порядок за проханням Юлі
+ * 16.10.2026: «Жовтень 2026 спочатку, а потім тижні». Під сумою —
  * % від плану. Клік по команді — менеджери в тих самих колонках. Числа — з `/kvp-report` без жодної своєї формули
  * (`kvpCoreRules.coreRows`), стиль — таблиця `data-table`, як решта звіту.
  */
@@ -45,13 +46,13 @@ function Status({ w }: { w: Money3 }) {
 
 function Cells({ r, bold }: { r: Pick<CoreRow, "week" | "month">; bold?: boolean }) {
   return (<>
-    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{formatAmount(r.week.plan)}</td>
+    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{formatAmount(r.month.plan)}</td>
+    <Sum v={r.month.fact} plan={r.month.plan} bold={bold} />
+    <Sum v={r.month.withExp} plan={r.month.plan} bold={bold} />
+    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", borderLeft: "1px solid var(--border)" }}>{formatAmount(r.week.plan)}</td>
     <Sum v={r.week.fact} plan={r.week.plan} bold={bold} />
     <Sum v={r.week.withExp} plan={r.week.plan} bold={bold} />
     <Status w={r.week} />
-    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", borderLeft: "1px solid var(--border)" }}>{formatAmount(r.month.plan)}</td>
-    <Sum v={r.month.fact} plan={r.month.plan} bold={bold} />
-    <Sum v={r.month.withExp} plan={r.month.plan} bold={bold} />
   </>);
 }
 
@@ -72,14 +73,14 @@ export function KvpTeamsWeekMonth({ rep }: { rep: KvpReport }) {
             <thead>
               <tr>
                 <th rowSpan={2} style={{ verticalAlign: "bottom" }}>Команда</th>
-                <th colSpan={4} style={{ textAlign: "center" }}>Тиждень {blk.from.slice(8, 10)}–{ddmm(blk.to)}</th>
-                <th colSpan={3} style={{ textAlign: "center", borderLeft: "1px solid var(--border)" }}>{monthName}</th>
+                <th colSpan={3} style={{ textAlign: "center" }}>{monthName}</th>
+                <th colSpan={4} style={{ textAlign: "center", borderLeft: "1px solid var(--border)" }}>Тиждень {blk.from.slice(8, 10)}–{ddmm(blk.to)}</th>
               </tr>
               <tr>
-                <th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Без очікувань</th>
-                <th style={{ textAlign: "right" }}>З очікуваннями</th><th style={{ paddingLeft: 16 }}>Закриємо?</th>
-                <th style={{ textAlign: "right", borderLeft: "1px solid var(--border)" }}>План</th>
+                <th style={{ textAlign: "right" }}>План</th>
                 <th style={{ textAlign: "right" }}>Без очікувань</th><th style={{ textAlign: "right" }}>З очікуваннями</th>
+                <th style={{ textAlign: "right", borderLeft: "1px solid var(--border)" }}>План</th><th style={{ textAlign: "right" }}>Без очікувань</th>
+                <th style={{ textAlign: "right" }}>З очікуваннями</th><th style={{ paddingLeft: 16 }}>Закриємо?</th>
               </tr>
             </thead>
             <tbody>
