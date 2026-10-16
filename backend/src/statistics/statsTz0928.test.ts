@@ -243,6 +243,21 @@ test("#1762b ФОРМУЛА — У ⓘ БІЛЯ НАЗВИ ПОКАЗНИКА Н
     "🔴 над графіком немає назви показника з ⓘ, або ⓘ не несе формулу");
 });
 
+/**
+ * #1763 — «УСІ КОМАНДИ» ОДНИМ КЛІКОМ (Роман 16.10.2026). Червоніє, якщо кнопка ввімкне розформовані без «показати
+ * архівні», не повертатиме назад до дефолту (лише компанія), або зникне з легенди.
+ */
+test("#1763 «УСІ КОМАНДИ» ОДНИМ КЛІКОМ: рівно серії легенди (архівні — лише з галочкою); другий клік — лише компанія", () => {
+  const fe = codeOnly(read(`${SEC}/StatisticsChartsSection.tsx`));
+  assert.match(fe, /const legendKeys = seriesList\.filter\(\(s\) => showArchived \|\| !s\.archived\)\.map\(\(s\) => s\.scopeKey\);/,
+    "🔴 «Усі команди» бере не те, що видно в легенді (наприклад, розформовані без галочки)");
+  assert.match(fe, /const allShown = legendKeys\.length > 1 && legendKeys\.every\(\(k\) => visibleKeys\.has\(k\)\);/, "🔴 кнопка не знає, чи вже ввімкнено все");
+  assert.match(fe, /const toggleAll = \(\) => setShown\(allShown \? null : new Set\(legendKeys\)\);/, "🔴 другий клік не повертає дефолт — лише компанію");
+  assert.match(fe, /<button type="button" onClick=\{toggleAll\}[\s\S]{0,300}\{allShown \? "Лише компанія" : "Усі команди"\}/, "🔴 кнопки «Усі команди» немає в легенді");
+  // 🪞 Дефолт не змінився: без кліку — лише компанія (ТЗ 14.10: графік має лишатись читабельним).
+  assert.match(fe, /return new Set<string>\(first \? \[first\.scopeKey\] : \[\]\);/, "🔴 за замовчуванням уже не лише компанія");
+});
+
 test("#882c ПЛАН НА ГРАФІКУ — НЕ В МАЙБУТНЄ: поточний тиждень лишається, наступний — ні", () => {
   const plan = [{ scopeKey: "company", points: [{ period: "2026-09-21", value: 1 }, { period: "2026-09-28", value: 2 }, { period: "2026-10-05", value: 3 }] },
                 { scopeKey: "5", points: [{ period: "2026-10-12", value: 4 }] }];

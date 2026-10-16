@@ -204,6 +204,11 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
   const visibleSeries = seriesList.map((s, i) => ({ s, i })).filter(({ s }) => visibleKeys.has(s.scopeKey) && (showArchived || !s.archived));
   const toggle = (k: string) => setShown(() => { const n = new Set(visibleKeys); n.has(k) ? n.delete(k) : n.add(k); return n; });
   const isolate = (k: string) => setShown(new Set([k]));
+  /** 👥 «Усі команди» одним кліком (Роман 16.10.2026: «щоб не клікати по одній») — рівно ті серії, що видно в легенді
+   *  (розформовані — лише з «показати архівні»); коли ввімкнено все, той самий клік повертає дефолт — лише компанію. */
+  const legendKeys = seriesList.filter((s) => showArchived || !s.archived).map((s) => s.scopeKey);
+  const allShown = legendKeys.length > 1 && legendKeys.every((k) => visibleKeys.has(k));
+  const toggleAll = () => setShown(allShown ? null : new Set(legendKeys));
   const archivedCount = seriesList.filter((s) => s.archived).length;
 
   // Межа осі Y — по видимому вікну, щоб поділки були круглими саме в тому, що бачимо.
@@ -299,6 +304,12 @@ export default function StatisticsChartsSection({ role }: { role?: string }) {
 
           {/* Серії: дефолт — компанія; команди додаються кліком. Розформовані — лише з «показати архівні». */}
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+            {legendKeys.length > 1 && (
+              <button type="button" onClick={toggleAll}
+                style={{ fontSize: 12, fontWeight: 700, padding: "3px 10px", borderRadius: 8, cursor: "pointer", border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}>
+                {allShown ? "Лише компанія" : "Усі команди"}
+              </button>
+            )}
             {seriesList.map((s, i) => (s.archived && !showArchived) ? null : (
               <span key={s.scopeKey} onClick={() => toggle(s.scopeKey)} onDoubleClick={() => isolate(s.scopeKey)}
                 title={s.benchmark ? "бенчмарк — агрегат компанії (для порівняння)" : "клік — показати / сховати · подвійний — лише ця"}
