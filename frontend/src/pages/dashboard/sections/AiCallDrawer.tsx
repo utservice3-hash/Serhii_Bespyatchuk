@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { fetchAiCallCard, setAiCallType, putAiCallNote, fetchAiCallRecording, hiringError, failAiCallDeal, revertAiCallDealFail, type AiCallCardResp, type AiQuoted } from "../../../api";
+import { fetchAiCallCard, setAiCallType, putAiCallNote, fetchAiCallRecording, hiringError, type AiCallCardResp, type AiQuoted } from "../../../api";
 import { STATE_UI, TONE_COLOR, PROMISE_UI, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, quoteTurnIndex, scoreLabel, REVIEW_REASON_UI, TYPE_LABEL, type AiCallState, type Tone } from "../aiCallsView";
 import { CallConversation, type SeekFn } from "./CallConversation";
 import { ChecklistBlock } from "./FirstTouchChecklist";
@@ -314,7 +314,6 @@ export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: strin
               ))}
             </div>
 
-            <FailDealBlock c={c} uniqueid={uniqueid} onChanged={() => { setRev((x) => x + 1); onChanged?.(); }} />
             <TypeBlock c={c} onChanged={() => { setRev((x) => x + 1); onChanged?.(); }} />
             {c.checklist && (
               <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px" }}>
@@ -352,66 +351,5 @@ export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: strin
       </div>
     </div>,
     document.body,
-  );
-}
-
-/**
- * ❌ «ПРОВАЛИТИ УГОДУ» (ТЗ «Звіт КВП - ядро» 12.10.2026, розділ 5; рішення Романа 16.10.2026). Для кожної угоди розмови:
- * причина — зі списку поля «Причина отказа» в Kommo, коментар, підтвердження; після — «провалено … · Повернути».
- * Право й запис — на сервері (`/fail-deal`); тут лише форма. Угоди, вже закриті в Kommo, сервер не чіпає (409 — словами).
- */
-function FailDealBlock({ c, uniqueid, onChanged }: { c: AiCallCardResp; uniqueid: string; onChanged: () => void }) {
-  const [openFor, setOpenFor] = useState<number | null>(null);
-  const [reasonId, setReasonId] = useState<number | "">("");
-  const [comment, setComment] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  if (!c.canFailDeal || c.dealUrls.length === 0) return null;
-  const open = (kommoId: number) => {
-    setOpenFor(kommoId); setReasonId(""); setComment(""); setErr(c.failReasons.length ? null : "Kommo не віддав список причин — спробуйте пізніше");
-  };
-  const submit = async () => {
-    if (openFor == null || reasonId === "") return;
-    setBusy(true); setErr(null);
-    try { await failAiCallDeal(uniqueid, { kommoId: openFor, reasonId, comment }); setOpenFor(null); onChanged(); }
-    catch (e) { setErr(hiringError(e)); }
-    finally { setBusy(false); }
-  };
-  const revert = async (id: number) => {
-    setBusy(true); setErr(null);
-    try { await revertAiCallDealFail(id); onChanged(); }
-    catch (e) { setErr(hiringError(e)); }
-    finally { setBusy(false); }
-  };
-  const fmt = (iso: string) => new Date(iso).toLocaleString("uk-UA", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-  const btn: React.CSSProperties = { fontSize: 12, padding: "4px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", cursor: "pointer" };
-  return (
-    <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px", display: "grid", gap: 6 }}>
-      {c.dealUrls.map((d) => {
-        const f = c.dealFails.find((x) => x.kommoId === d.kommoId && !x.revertedAt);
-        return (
-          <div key={d.kommoId} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 13 }}>
-            <span style={{ color: "var(--text-muted)" }}>угода {d.kommoId}</span>
-            {f ? (<>
-              <span style={{ color: "#b91c1c" }}>❌ провалено {fmt(f.at)} · {f.reason}{f.byName ? ` · ${f.byName}` : ""}{f.comment ? ` · «${f.comment}»` : ""}</span>
-              <button type="button" style={btn} disabled={busy} onClick={() => { void revert(f.id); }}>↩ Повернути</button>
-            </>) : openFor === d.kommoId ? (
-              <span style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                <select value={reasonId} onChange={(e) => setReasonId(e.target.value ? Number(e.target.value) : "")} disabled={!c.failReasons.length} aria-label="Причина відмови">
-                  <option value="">— причина —</option>
-                  {c.failReasons.map((r) => <option key={r.id} value={r.id}>{r.value}</option>)}
-                </select>
-                <input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="коментар (необовʼязково)" maxLength={1000} style={{ minWidth: 200 }} />
-                <button type="button" style={{ ...btn, background: "#dc2626", color: "#fff", border: "none" }} disabled={busy || reasonId === ""} onClick={() => { void submit(); }}>Підтвердити: провалити в Kommo</button>
-                <button type="button" style={btn} disabled={busy} onClick={() => setOpenFor(null)}>Скасувати</button>
-              </span>
-            ) : (
-              <button type="button" style={{ ...btn, color: "#b91c1c" }} onClick={() => open(d.kommoId)}>❌ Провалити угоду</button>
-            )}
-          </div>
-        );
-      })}
-      {err && <div role="alert" style={{ color: "#b91c1c", fontSize: 12 }}>⚠️ {err}</div>}
-    </div>
   );
 }

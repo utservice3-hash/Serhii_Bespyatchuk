@@ -466,18 +466,6 @@ export interface AiCallCardResp {
   canListen: boolean;
   /** Та сама згода після ціни, що в рядку списку. */
   clientDecision: AiClientDecisionT | null;
-  /** ❌ «Провалити угоду» (ТЗ «Звіт КВП - ядро», розділ 5): чи може ЦЕЙ користувач, і останнє провалення по кожній угоді. */
-  canFailDeal: boolean;
-  dealFails: AiDealFail[];
-  /** Усі значення поля «Причина отказа» з Kommo (порожньо — Kommo не відповів). */
-  failReasons: { id: number; value: string }[];
-}
-export interface AiDealFail { id: number; kommoId: number; byName: string | null; byUserId: number | null; reason: string; comment: string | null; at: string; revertedAt: string | null; revertedByName: string | null }
-export async function failAiCallDeal(uniqueid: string, body: { kommoId: number; reasonId: number; comment: string }): Promise<void> {
-  await api.post(`/dashboard/ai-calls/${encodeURIComponent(uniqueid)}/fail-deal`, body);
-}
-export async function revertAiCallDealFail(id: number): Promise<void> {
-  await api.post(`/dashboard/ai-calls/fail-deal/${String(id)}/revert`, {});
 }
 /** Коментар: `price` — «Чому не озвучено ціну», `missed` — «Опрацьовано». Порожній текст прибирає. */
 export async function putAiCallNote(uniqueid: string, kind: "price" | "missed" | "offline" | "review", text: string): Promise<void> {

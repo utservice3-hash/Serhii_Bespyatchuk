@@ -5969,25 +5969,3 @@ DO $$ BEGIN
       CHECK (state IN ('waiting','own','reused','no_talk','history','lardi'));
   END IF;
 END $$;
-
--- ❌ «ПРОВАЛИТИ УГОДУ» З КАРТКИ РОЗМОВИ (ТЗ «Звіт КВП - ядро» 12.10.2026, розділ 5; рішення Романа 16.10.2026;
--- `core/dealFail.ts`). Рядок на кожне провалення: хто, яку угоду, з якого етапу (туди ж «Повернути»), з якою причиною.
--- Лише дописується; «Повернути» ставить reverted_at/reverted_by на тому ж рядку.
-CREATE TABLE IF NOT EXISTS deal_fail_log (
-  id               SERIAL PRIMARY KEY,
-  kommo_id         BIGINT NOT NULL,
-  uniqueid         TEXT NOT NULL,              -- розмова, з картки якої провалено
-  actor_user_id    INTEGER,
-  actor_name       TEXT,
-  from_pipeline_id BIGINT NOT NULL,
-  from_status_id   BIGINT NOT NULL,
-  reason_enum_id   BIGINT NOT NULL,
-  reason_name      TEXT NOT NULL,
-  comment          TEXT,
-  failed_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  reverted_at      TIMESTAMPTZ,
-  reverted_by      INTEGER,
-  reverted_by_name TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_deal_fail_log_kommo ON deal_fail_log(kommo_id, failed_at DESC);
-REVOKE ALL ON deal_fail_log FROM ai_readonly;

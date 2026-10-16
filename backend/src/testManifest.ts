@@ -272,7 +272,6 @@ export const MANIFEST_FILES: string[] = [
   "core/leadResponse.test.js",
   "lardi/offerDate.test.js",
   "core/kvpFirstTouch.test.js",
-  "core/dealFail.test.js",
   "core/repeatScreen5609.test.js",
   "statistics/statsPlanFact.test.js",
   "core/receivableCallLink.test.js",
@@ -346,7 +345,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "hiring_training_questions",
   "training_quiz_attempts", "training_quiz_grants",
   "employee_offboarding",
-  "call_transcripts", "call_analyses", "ai_spend_ledger", "call_type_overrides", "first_touch_notes", "first_touch_settings_log", "carrier_call_deals", "ai_cap_alerts", "carrier_close_log", "deal_fail_log", "carrier_decisions", "carrier_review_tasks", "carrier_task_sweeps",
+  "call_transcripts", "call_analyses", "ai_spend_ledger", "call_type_overrides", "first_touch_notes", "first_touch_settings_log", "carrier_call_deals", "ai_cap_alerts", "carrier_close_log", "carrier_decisions", "carrier_review_tasks", "carrier_task_sweeps",
   "tldv_meetings",
   "workua_responses",
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "fin_import_months",
@@ -744,9 +743,6 @@ export const MANIFEST_TESTS: string[] = [
   "#1765 «ЗАКРИЄМО?»: пороги 50% / 85% по обидва боки, «бракує» і «без плану»; Σ відділу = Σ команд, команда = Σ менеджерів",
   "#1765b ЗВІТ КВП — ЯДРО: гроші → команди → перший дотик; решта згорнута; 4 картки без дубля",
   "#1765c ПЕРШИЙ ДОТИК У ЯДРІ: картка = фільтр таблиці, команда, «Скинути», сортування («—» внизу)",
-  // core/dealFail.test.ts — «Провалити угоду» з картки розмови (ТЗ «Звіт КВП - ядро», розділ 5)
-  "#1766 ПРОВАЛИТИ УГОДУ: ролі, лише відкриті угоди, 143 + причина своєї воронки, «Повернути» на той самий етап, причини з Kommo",
-  "#1766b ПРОВОДКА: право першим, скоуп картки, свіжий стан Kommo, журнал, «Повернути» лише зі 143; матриця й кнопка",
   // lardi/offerDate.test.ts — калькулятор ставок після повернення Lardi (13.10.2026)
   "#1670 ДАТА ПРОПОЗИЦІЇ: мілісекунди Lardi і секунди архіву → одна київська дата; сміття — порожньо, а не число",
   "#1670b ДАТА В ЛАНЦЮГУ: жива пропозиція і архів ідуть через offerDate, екран показує «13.10», а не сирий рядок",

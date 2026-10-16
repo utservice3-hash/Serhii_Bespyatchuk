@@ -414,12 +414,6 @@ export const ACCESS_MATRIX: AccessRow[] = [
   /* Коментарі (ТЗ 30.09.2026 п.5, п.6.3): право — першим оператором обробника за видом коментаря. */
   { method: "PUT", path: "/api/dashboard/ai-calls/:uniqueid/note", cls: "deny-only",
     allow: [], deny: ["hr"] },
-  /* ❌ «Провалити угоду» (ТЗ «Звіт КВП - ядро», розділ 5; Роман 16.10.2026): менеджер (своя розмова), тімлід, КВП, адмін —
-     першим оператором обробника; скоуп — картки. Запис у Kommo, тому deny-only: позитивну пробу матриця не робить. */
-  { method: "POST", path: "/api/dashboard/ai-calls/:uniqueid/fail-deal", cls: "deny-only",
-    allow: [], deny: ["hr"] },
-  { method: "POST", path: "/api/dashboard/ai-calls/fail-deal/:id/revert", cls: "deny-only",
-    allow: [], deny: ["hr"] },
   /* 🚚 ПЕРЕВІЗНИКИ ЗА РОЗМОВОЮ — керівництво (29.09.2026) + тімлід і менеджер (ТЗ Романа 30.09.2026 «Відсів
      перевізників»: менеджер — свої угоди, тімлід — команда; кламп — у ЯДРІ через `missedScopeFor`, не тут).
      Межа — вкладка `carrier-calls` (routeTab), звіряється із сидом. HR і фінансист — ні. */
