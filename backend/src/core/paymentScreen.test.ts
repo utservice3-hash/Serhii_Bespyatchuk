@@ -80,9 +80,11 @@ test("#1271c EXCEL ВІДКРИВАЄТЬСЯ: ZIP із правильними C
  * 🧨 Червоніє, якщо зняти право з будь-якого роута, дати його СЕО/ОД/КВП у матриці чи показати екран без права.
  */
 test("#1271d МЕЖА ЕКРАНА «ОПЛАТИ ПЕРЕВІЗНИКАМ»: три роути під view_private_finance, матриця з дзеркалом, вкладка без права — напис", async () => {
-  const fin = SRC("routes/finance.ts");
-  for (const r of [`get("/payments"`, `get("/payments/export.xlsx"`, `post("/payments/run"`])
-    assert.ok(fin.includes(`financeRouter.${r}, requirePerm("view_private_finance"), async`), `🔴 роут ${r} без права view_private_finance`);
+  const fin = SRC("routes/financePayments.ts");
+  const handlers = [...fin.matchAll(/financePaymentsRouter\.(get|post|put|patch|delete)\("([^"]+)",\s*([^,]+),/g)];
+  assert.equal(handlers.length, 3, "🔴 обробників не рівно три — гейт не бачить нового роута");
+  for (const [, m, p, first] of handlers) assert.equal(first.trim(), `requirePerm("view_private_finance")`, `🔴 ${m.toUpperCase()} ${p}: першим стоїть «${first.trim()}»`);
+  assert.match(SRC("index.ts"), /app\.use\("\/api\/finance\/payments", financePaymentsRouter\);/, "🔴 роутер не підключено");
   const { ACCESS_MATRIX } = await import("../auth/accessMatrix.js");
   const m = (method: string, p: string) => ACCESS_MATRIX.find((x) => x.method === method && x.path.startsWith(p) && (x.path === p || x.path[p.length] === "?"));
   for (const p of ["/api/finance/payments", "/api/finance/payments/export.xlsx"]) {

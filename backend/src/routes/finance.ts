@@ -1,7 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { pool } from "../db/pool.js";
-import { requireAuth, requirePerm } from "../auth/middleware.js";
-import { loadScreenDay, screenXlsx, buildPaymentFile } from "../jobs/buildPaymentFile.js";
+import { requireAuth } from "../auth/middleware.js";
 import { roleHasTab, roleHasPerm } from "../auth/rbac.js";
 import {
   FinError, type Db, loadMonth, itemCard, createResp, renameResp, deleteResp, createGroup, updateGroup, deleteGroup,
@@ -178,24 +177,6 @@ financeRouter.post("/approval", async (req, res) => {
 // ── Тиждень і місяць (прохід 2а) ─────────────────────────────────────────────
 /** Числа ядра для автоматичних рядків періоду (`core/financeKpiRefs.ts`): роут лише кличе (#17c). */
 const refsFor = (kind: unknown, p: unknown) => fmRefsFor(kind, p);
-// ──────────── 💸 «Оплати перевізникам» (16.10.2026): файл на оплату й усі запити з причинами ────────────
-// Номери карток і ПІБ отримувачів → лише `view_private_finance` (Адмін, фінансист), як Сейф; межа — першим middleware.
-financeRouter.get("/payments", requirePerm("view_private_finance"), async (req, res) => {
-  try { res.json(await loadScreenDay(typeof req.query.day === "string" ? req.query.day : undefined)); } catch (e) { fail(res, e); }
-});
-financeRouter.get("/payments/export.xlsx", requirePerm("view_private_finance"), async (req, res) => {
-  try {
-    const d = await loadScreenDay(typeof req.query.day === "string" ? req.query.day : undefined);
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="oplata_perevizny_${d.day}.xlsx"`);
-    res.send(screenXlsx(d));
-  } catch (e) { fail(res, e); }
-});
-// «Оновити зараз»: той самий прогін, що крон (з прапорцем «уже йде»); пише журнал дня — у Kommo нічого.
-financeRouter.post("/payments/run", requirePerm("view_private_finance"), async (_req, res) => {
-  try { res.json({ ok: true, result: await buildPaymentFile() }); } catch (e) { fail(res, e); }
-});
-
 financeRouter.get("/kpi", async (req, res) => {
   try {
     onlyFinance(req);
