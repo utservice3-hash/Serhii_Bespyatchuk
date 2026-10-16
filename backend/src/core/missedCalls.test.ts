@@ -920,3 +920,17 @@ test("#1773 ФРОНТ · ПРОВОДКА: фільтр їде в КОЖЕН з
   assert.match(tz, /fetchMissedWeek\(\{ week: monday, \.\.\.fp \}\)/);
   assert.match(tz, /\/tasks\?id=/, "🔴 «Задача вже є» без посилання на задачу");
 });
+
+test("#1779 КЛІЄНТ У «НЕ ПЕРЕДЗВОНИЛИ»: назва угоди з самих цифр — «клієнт невідомий», а не номер удруге; імʼя лишається", async () => {
+  const N = await import("./missedNoCallbackRules.js");
+  for (const raw of ["380671234567", " 380671234567 ", "+380 (67) 123-45-67", "067.123.45.67"]) {
+    assert.equal(N.clientNameOf(raw), null, `🔴 «${raw}» показано як імʼя клієнта — номер у колонці «Клієнт» удруге`);
+  }
+  for (const raw of ["ТОВ Ромашка", "Антон Перевізник", "ФОП Іваненко 2", "AutoMove"]) {
+    assert.equal(N.clientNameOf(raw), raw, `🔴 справжнє імʼя «${raw}» загубилось`);
+  }
+  assert.equal(N.clientNameOf(null), null); assert.equal(N.clientNameOf("  "), null);
+  assert.match(N.buttonTaskTitle("380671234567", "380671234567"), /^📵 Передзвонити: \+?380/, "🔴 назва задачі — «номер» як імʼя, а не номер");
+  const routes = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "routes", "dashboard.ts"), "utf8");
+  assert.match(routes, /clientName: r\.dealId != null \? clientNameOf\(names\.get\(r\.dealId\)\) : null,/, "🔴 роут блоку віддає назву угоди без перевірки");
+});

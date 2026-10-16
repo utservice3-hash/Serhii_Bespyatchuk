@@ -206,6 +206,27 @@ test("#1309 КОНТРОЛЬ ТЗ: «не поставлено / закрито 
     "🔴 скоуп не звужує звіт: менеджер бачить чужі задачі або угоди фільтра");
 });
 
+/**
+ * #1778 — блок «Автоматика за 7 днів» на екрані пропущених слухає фільтр КІЛЬКОХ команд (ТЗ Юлі 12.10, розділ 3;
+ * задача 5598): обрана команда — її задачі; чужа команда й порожній вибір — нуль; угоди історії CRM (без менеджера) —
+ * лише без фільтра. Доти блок показував увесь відділ під обраною командою.
+ * 🧨 Червоніє, якщо фільтр команд знову не доходить до SQL автоматики або порожній вибір читається як «усі».
+ */
+test("#1778 АВТОМАТИКА ЗА 7 ДНІВ СЛУХАЄ ФІЛЬТР КОМАНД: своя команда — її задачі, чужа й порожній вибір — нуль", async (t) => {
+  const c = await db(); if (typeof c === "string") return t.skip(c);
+  const { missedAutomationSql } = await import("./missedCallsRules.js");
+  const run = async (s: import("./missedCallsRules.js").MissedScope) => {
+    const q = missedAutomationSql(D, s);
+    const r = (await c.query<{ skipped_carrier: number; closed_callback: number; closed_carrier: number; deals_history: number | null }>(q.sql, q.params)).rows[0];
+    return [r.skipped_carrier, r.closed_callback, r.closed_carrier, r.deals_history];
+  };
+  const all = await run({});
+  assert.ok(all.slice(0, 3).some((x) => Number(x) > 0), "🔴 фікстура порожня — рівність нижче нічого не доводить");
+  assert.deepEqual(await run({ teamIds: [1] }), [...all.slice(0, 3), null], "🔴 обрана команда (обидва менеджери в ній) бачить не свої задачі");
+  assert.deepEqual(await run({ teamIds: [99] }), [0, 0, 0, null], "🔴 чужа команда бачить задачі РПК — фільтр команд не доходить до автоматики");
+  assert.deepEqual(await run({ teamIds: [], ownerless: false }), [0, 0, 0, null], "🔴 порожній вибір команд прочитано як «усі»");
+});
+
 // ───────────── 🛡 ЗАХИСТ ВІД ЗАСТАРІЛИХ УГОД (рішення Романа 05.10.2026, до увімкнення закриття в Kommo) ─────────────
 
 test("#1370 ЗАХИСТ ІСТОРІЇ: синк угод 59 хв тому — можна; 61 хв — пауза; невідомо коли — пауза (а не «добре»)", async () => {

@@ -55,7 +55,7 @@ import { planTotals, SUBMIT_SQL, approveAllSql, RETURN_SQL,
   isPlannableClientKey, NOT_PLANNABLE_MSG, rosterWithPlans, splitUnattached, SAVE_SQL,
   OWNER_SQL, NO_OWNER_MSG } from "./clientPlanRules.js";
 import * as missedCalls from "../core/missedCalls.js";
-import { canAssignMissedTask, LEADERSHIP_ROLES, hoursSince, taskState, buttonTaskTitle, buttonTaskDescription, mondayOf, canSetCallbackNorm, callbackNormVerdict } from "../core/missedNoCallbackRules.js";
+import { canAssignMissedTask, LEADERSHIP_ROLES, hoursSince, taskState, buttonTaskTitle, buttonTaskDescription, mondayOf, canSetCallbackNorm, callbackNormVerdict, clientNameOf } from "../core/missedNoCallbackRules.js";
 import { missedPeriod, missedScopeFor, ownerlessInScope, dealInWindowLateral, NO_DEAL_STATES, SERIES_GRANULARITIES, type NoDealState, type SeriesGranularity } from "../core/missedCallsRules.js";
 import * as reactivation from "../core/reactivation.js";
 import * as reactivationRules from "../core/reactivationRules.js";
@@ -11681,7 +11681,7 @@ dashboardRouter.get("/missed-calls/no-callback", async (req, res) => {
     period: { from, to }, truncated, canAssign: LEADERSHIP_ROLES.has(auth.roleKey ?? "") || auth.roleKey === "team_lead",
     rows: rows.map((r) => ({
       uniqueid: r.uniqueid, at: r.at, hours: hoursSince(new Date(r.at), now), phone: r.phone,
-      clientName: r.dealId != null ? names.get(r.dealId) ?? null : null,
+      clientName: r.dealId != null ? clientNameOf(names.get(r.dealId)) : null,
       dealId: r.dealId, dealUrl: r.dealId == null ? null : kommoLeadUrl(r.dealId), missedN: r.missedN,
       managerId: r.managerId, managerName: r.managerName, teamId: r.teamId, teamName: r.teamName,
       task: { state: taskState(r.taskId, r.taskDeadline, today), id: r.taskId, deadline: r.taskDeadline },

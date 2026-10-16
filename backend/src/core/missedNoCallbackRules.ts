@@ -67,8 +67,19 @@ export const hoursSince = (at: Date, now: Date): number => Math.floor((now.getTi
 
 /** Назва задачі з кнопки (ТЗ, розділ 5): «📵 Передзвонити: [клієнт або номер]». */
 export const BUTTON_TITLE_PREFIX = "📵 Передзвонити";
+/**
+ * Імʼя клієнта з назви угоди. Угоди з дзвінків Kommo часто називає самим номером («380671234567»), і тоді в колонці
+ * «Клієнт» стояв би той самий номер удруге (видно на проді 16.10.2026) — а читається це як «клієнта знаємо». Назва без
+ * жодної літери — не імʼя: `null`, на екрані «клієнт невідомий».
+ */
+export function clientNameOf(dealName: string | null | undefined): string | null {
+  const n = dealName?.trim();
+  if (!n) return null;
+  return /^[\d\s+()\-.]+$/.test(n) ? null : n;
+}
+
 export function buttonTaskTitle(clientName: string | null, phone: string): string {
-  const n = clientName?.trim();
+  const n = clientNameOf(clientName);
   return `${BUTTON_TITLE_PREFIX}: ${n ? n : phoneForTask(phone)}`;
 }
 export function buttonTaskDescription(p: { phone: string; missedAt: string; dealUrl: string | null; author: string }): string {

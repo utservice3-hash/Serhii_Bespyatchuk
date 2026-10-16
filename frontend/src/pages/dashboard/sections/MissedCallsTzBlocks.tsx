@@ -148,9 +148,10 @@ export function NoCallbackBlock({ from, to, fp, managers }: {
                       {done?.result === "error" ? <span style={{ color: "#dc2626", fontSize: 12 }}>{done.error}</span>
                         : done?.result === "exists" ? <span style={{ fontSize: 12 }}>Задача вже є{done.deadline ? ` · до ${ddmm(done.deadline)}` : ""}</span>
                         : r.task.state === "none" && (
-                          <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                          // Вибір менеджера — НАД кнопкою, а не поруч: поруч кнопка виїжджала за правий край таблиці (прод 16.10.2026).
+                          <span style={{ display: "inline-flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
                             {r.managerId == null && (
-                              <select value={pick[r.uniqueid] ?? ""} aria-label="Кому поставити" onChange={(e) => setPick((p) => ({ ...p, [r.uniqueid]: Number(e.target.value) }))}>
+                              <select value={pick[r.uniqueid] ?? ""} aria-label="Кому поставити" style={{ maxWidth: 210 }} onChange={(e) => setPick((p) => ({ ...p, [r.uniqueid]: Number(e.target.value) }))}>
                                 <option value="">— менеджер —</option>
                                 {managers.filter((m) => m.managerId != null).map((m) => <option key={String(m.managerId)} value={String(m.managerId)}>{m.name}</option>)}
                               </select>)}
