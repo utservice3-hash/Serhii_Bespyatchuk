@@ -22,7 +22,8 @@ import { overviewCache } from "../core/lazyCache.js";
 /** Порожній зріз джерела — для менеджера, якого немає в розкладі створених. */
 const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, otherCount: 0, noChannelCount: 0 } as const;
 import { kommoLeadUrl } from "../core/kommoLinks.js";
-import { kommoWrite } from "../kommo/client.js";
+import { kommoWrite, kommoGet } from "../kommo/client.js";
+import { canFailDeal, isClosedStatus, failPayload, revertFailPayload, failNoteText, revertNoteText, reasonsFromField, FAIL_REASON_FIELD, LOST_STATUS } from "../core/dealFail.js";
 import { accumulateKpiTargets } from "../core/kpiTargets.js";
 import { loadKpiTargets } from "../core/kpiTargetsDb.js";
 
@@ -11266,6 +11267,29 @@ dashboardRouter.get("/ai-calls/meta", async (_req, res) => {
   res.json({ job: m.job, transcripts: m.transcripts, analyses: m.analyses, spend: m.spend, caps: m.caps });
 });
 
+/**
+ * ❌ ПРИЧИНИ ДЛЯ «ПРОВАЛИТИ УГОДУ» (ТЗ «Звіт КВП - ядро», розділ 5; Роман 16.10.2026: «усі причини») — усі значення поля
+ * «Причина отказа» прямо з Kommo, щоб список не розходився з CRM. Кеш на годину: поле міняється рідко, а запит до Kommo
+ * лімітований. Віддаються разом із карткою (лише тим, хто може провалити): окремий роут читання змінив би склад
+ * роутів екрана в матриці доступу (`#861`). Kommo не відповів — картка однаково відкривається, причин просто немає.
+ */
+let failReasonsCache: { at: number; list: { id: number; value: string }[] } | null = null;
+async function failReasons(): Promise<{ id: number; value: string }[]> {
+  if (failReasonsCache && Date.now() - failReasonsCache.at < 3_600_000) return failReasonsCache.list;
+  const list = reasonsFromField(await kommoGet(`/api/v4/leads/custom_fields/${String(FAIL_REASON_FIELD)}`));
+  if (list.length) failReasonsCache = { at: Date.now(), list };
+  return list;
+}
+/** Останнє провалення по кожній угоді картки — щоб показати «провалено … · Повернути». */
+async function dealFailsFor(kommoIds: readonly number[]) {
+  if (!kommoIds.length) return [];
+  const r = await pool.query<{ id: number; kommo_id: string; actor_name: string | null; actor_user_id: number | null; reason_name: string; comment: string | null; failed_at: Date; reverted_at: Date | null; reverted_by_name: string | null }>(
+    `SELECT DISTINCT ON (kommo_id) id, kommo_id, actor_name, actor_user_id, reason_name, comment, failed_at, reverted_at, reverted_by_name
+       FROM deal_fail_log WHERE kommo_id = ANY($1::bigint[]) ORDER BY kommo_id, failed_at DESC`, [kommoIds]);
+  return r.rows.map((x) => ({ id: x.id, kommoId: Number(x.kommo_id), byName: x.actor_name, byUserId: x.actor_user_id, reason: x.reason_name, comment: x.comment,
+    at: x.failed_at.toISOString(), revertedAt: x.reverted_at?.toISOString() ?? null, revertedByName: x.reverted_by_name }));
+}
+
 dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
   const auth = req.auth!;
   const card = await aiCallCard(pool, String(req.params.uniqueid), transcriptAllowed(auth, FIRST_TOUCH_TRANSCRIPT_ROLES), missedScopeFor(auth, {}));
@@ -11282,7 +11306,74 @@ dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
     checklist: checklist(card.row), checkScore: checklistScore(checklist(card.row)), reviewReason: reviewReason(card.row),
     needsReview: needsReview(card.row), canReview: canWriteNote(auth.roleKey, "review"),
     clientDecision: clientDecision(card.row),
+    // ❌ «Провалити угоду» (ТЗ «Звіт КВП - ядро», розділ 5): хто може і що вже провалено по угодах цієї розмови.
+    canFailDeal: canFailDeal(auth.roleKey), dealFails: await dealFailsFor(card.row.kommoIds),
+    failReasons: canFailDeal(auth.roleKey) && card.row.kommoIds.length ? await failReasons().catch(() => []) : [],
   });
+});
+
+/**
+ * ❌ ПРОВАЛИТИ УГОДУ (ТЗ «Звіт КВП - ядро» 12.10.2026, розділ 5; рішення Романа 16.10.2026). Право — ПЕРШИМ оператором
+ * (менеджер, тімлід, КВП, адмін); скоуп — той самий, що в картки (`missedScopeFor`): чужа розмова → 404. Угода — одна
+ * з угод цієї розмови. Перед записом — СВІЖИЙ стан угоди з Kommo: закриту (успіх / відмова) не перезаписуємо.
+ * Пишемо статус 143 + причину своєї ж воронки, примітку в угоду і рядок журналу (звідти «Повернути»).
+ */
+dashboardRouter.post("/ai-calls/:uniqueid/fail-deal", async (req, res) => {
+  const auth = req.auth!;
+  if (!canFailDeal(auth.roleKey)) { res.status(403).json({ error: "Провалити угоду можуть менеджер, тімлід, КВП і адмін" }); return; }
+  const kommoId = Number(req.body?.kommoId), reasonId = Number(req.body?.reasonId);
+  const comment = typeof req.body?.comment === "string" ? req.body.comment.trim().slice(0, 1000) : "";
+  if (!Number.isInteger(kommoId) || !Number.isInteger(reasonId)) { res.status(400).json({ error: "Потрібні kommoId і reasonId" }); return; }
+  const uniqueid = String(req.params.uniqueid);
+  const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
+  if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
+  if (!card.row.kommoIds.includes(kommoId)) { res.status(400).json({ error: "Ця угода не належить до розмови" }); return; }
+  try {
+    const reason = (await failReasons()).find((x) => x.id === reasonId);
+    if (!reason) { res.status(400).json({ error: "Такої причини немає в полі «Причина отказа» в Kommo" }); return; }
+    const lead = await kommoGet<{ status_id?: number; pipeline_id?: number }>(`/api/v4/leads/${String(kommoId)}`);
+    if (lead.status_id == null || lead.pipeline_id == null) { res.status(502).json({ error: "Kommo не віддав стан угоди" }); return; }
+    if (isClosedStatus(lead.status_id)) { res.status(409).json({ error: "Угоду вже закрито в Kommo — провалювати нічого" }); return; }
+    const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? "користувач дашборда";
+    await kommoWrite("/api/v4/leads", failPayload(kommoId, lead.pipeline_id, reasonId), "PATCH");
+    await pool.query(
+      `INSERT INTO deal_fail_log (kommo_id, uniqueid, actor_user_id, actor_name, from_pipeline_id, from_status_id, reason_enum_id, reason_name, comment)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [kommoId, uniqueid, auth.userId ?? null, who, lead.pipeline_id, lead.status_id, reasonId, reason.value, comment || null]);
+    await kommoWrite("/api/v4/leads/notes", [{ entity_id: kommoId, note_type: "common", params: { text: failNoteText(who, reason.value, comment || null) } }]).catch(() => {});
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(502).json({ error: `Kommo не прийняв зміну: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}` });
+  }
+});
+
+/**
+ * ↩️ ПОВЕРНУТИ ПРОВАЛЕНУ УГОДУ — на той етап, з якого провалили (`deal_fail_log`). Право й скоуп — ті самі, що в
+ * «Провалити»; повертаємо, лише якщо угода ДОСІ «Не реалізовано» (хтось міг уже рухати її в Kommo руками).
+ */
+dashboardRouter.post("/ai-calls/fail-deal/:id/revert", async (req, res) => {
+  const auth = req.auth!;
+  if (!canFailDeal(auth.roleKey)) { res.status(403).json({ error: "Повертати угоду можуть менеджер, тімлід, КВП і адмін" }); return; }
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) { res.status(400).json({ error: "Невірний номер запису" }); return; }
+  const log = (await pool.query<{ kommo_id: string; uniqueid: string; from_pipeline_id: string; from_status_id: string; reverted_at: Date | null }>(
+    `SELECT kommo_id, uniqueid, from_pipeline_id, from_status_id, reverted_at FROM deal_fail_log WHERE id = $1`, [id])).rows[0];
+  if (!log) { res.status(404).json({ error: "Запис не знайдено" }); return; }
+  const card = await aiCallCard(pool, log.uniqueid, false, missedScopeFor(auth, {}));
+  if (!card) { res.status(404).json({ error: "Запис не знайдено або він поза вашим скоупом" }); return; }
+  if (log.reverted_at) { res.status(409).json({ error: "Угоду вже повернуто" }); return; }
+  const kommoId = Number(log.kommo_id);
+  try {
+    const lead = await kommoGet<{ status_id?: number }>(`/api/v4/leads/${String(kommoId)}`);
+    if (lead.status_id !== LOST_STATUS) { res.status(409).json({ error: "Угоду вже змінили в Kommo — повертати автоматично не будемо" }); return; }
+    const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? "користувач дашборда";
+    await kommoWrite("/api/v4/leads", revertFailPayload(kommoId, Number(log.from_pipeline_id), Number(log.from_status_id)), "PATCH");
+    await pool.query(`UPDATE deal_fail_log SET reverted_at = now(), reverted_by = $2, reverted_by_name = $3 WHERE id = $1`, [id, auth.userId ?? null, who]);
+    await kommoWrite("/api/v4/leads/notes", [{ entity_id: kommoId, note_type: "common", params: { text: revertNoteText(who) } }]).catch(() => {});
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(502).json({ error: `Kommo не прийняв зміну: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}` });
+  }
 });
 
 /**
