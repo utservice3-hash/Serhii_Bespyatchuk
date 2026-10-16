@@ -86,6 +86,25 @@ export const QUOTE_KEPT_MANUAL: readonly { dealId: number; decided: string; reas
     reason: "Крупник: «Кваліфіковано» 15.10 14:28:44, через 32 с етап повернуто на «Отримано контакти ОПР» з її акаунта; угода менеджера 62773129 лишилась у роботі" },
 ];
 
+/**
+ * 📌 УГОДА ПРОДЗВОНУ, ЗАКРІПЛЕНА ЗА ЛІДГЕНОМ ВРУЧНУ — рішення власника поштучно, не правило. Атрибуція лідогену —
+ * поточний відповідальний угоди Продзвону (`deals.manager_id`); для угод зі списку замість нього — лідген зі списку
+ * (за `kommo_user_id`), щоб чуже перепризначення в CRM не забирало в лідгена його ліди, прорахунки й машини.
+ * Відповідального в Kommo свідомо НЕ змінюємо (власник 16.10.2026: «не змінюй відповідального, просто якось прикрути»).
+ */
+export const LEADGEN_OWNER_MANUAL: readonly { dealId: number; kommoUserId: number; decided: string; reason: string }[] = [
+  { dealId: 62663169, kommoUserId: 12812476, decided: "Роман, 16.10.2026",
+    reason: "Сердюк 24.09 поставив ОПР і «Кваліфіковано» (угода менеджера 62713339, Петров, успіх); 15.10 Яцик переставив відповідального на Петрова" },
+];
+
+/** Чий лід угода Продзвону `d`: лідген зі списку `LEADGEN_OWNER_MANUAL`, інакше поточний відповідальний. */
+export function lgOwnerSql(d: string): string {
+  if (!LEADGEN_OWNER_MANUAL.length) return `${d}.manager_id`;
+  const arms = LEADGEN_OWNER_MANUAL.map((x) =>
+    `WHEN ${Math.trunc(x.dealId)} THEN (SELECT mo.id FROM managers mo WHERE mo.kommo_user_id = ${Math.trunc(x.kommoUserId)})`).join(" ");
+  return `COALESCE(CASE ${d}.kommo_id ${arms} END, ${d}.manager_id)`;
+}
+
 /** Чотири лічильники — ОДИН вираз на всі форми запиту. */
 const STAGE_COUNTS =
   `COUNT(DISTINCT e.kommo_id) FILTER (WHERE ${leadStatusPred(STAGE_PH)}) AS leads,
@@ -125,7 +144,7 @@ export function bucketKeySql(grain: LeadgenBucketGrain, col: string): string {
 
 /**
  * Лічильники стадій по людях за період: ліди (вхід у «Взято в роботу» АБО «ОПР» — `leadStatusPred`), ОПР, прорахунки
- * (вхід у «Кваліфіковано»), підігрів (Реактивація). Атрибуція — ПОТОЧНИЙ `deals.manager_id`,
+ * (вхід у «Кваліфіковано»), підігрів (Реактивація). Атрибуція — ПОТОЧНИЙ `deals.manager_id` (крім `LEADGEN_OWNER_MANUAL`, `lgOwnerSql`),
  * `JOIN managers` внутрішній: угода без менеджера в ростер не потрапляє.
  *
  * `bucket = null` — рядки людей за період (форма `leadgenStats`); інакше — ті самі лічильники
@@ -147,7 +166,7 @@ export function stageCountsQuery(
             ${STAGE_COUNTS}
        FROM deal_stage_events e
        JOIN deals d ON d.kommo_id = e.kommo_id
-       JOIN managers m ON m.id = d.manager_id
+       JOIN managers m ON m.id = ${lgOwnerSql("d")}
       WHERE ${STAGE_WHERE}
       GROUP BY 1, 2, 3
       ORDER BY 1, 2`,
@@ -159,7 +178,7 @@ export function stageCountsQuery(
             ${STAGE_COUNTS}
        FROM deal_stage_events e
        JOIN deals d ON d.kommo_id = e.kommo_id
-       JOIN managers m ON m.id = d.manager_id
+       JOIN managers m ON m.id = ${lgOwnerSql("d")}
        LEFT JOIN teams t ON t.id = m.team_id
       WHERE ${STAGE_WHERE}
       GROUP BY 1, 2, 3, 4, 5
@@ -185,8 +204,8 @@ export function stageDealsQuery(from: string, to: string, ids: LeadgenStageIds, 
                 ${lead} AS is_lead, ${opr} AS is_opr, ${quote} AS is_quote
            FROM deal_stage_events e
            JOIN deals d ON d.kommo_id = e.kommo_id
-           JOIN managers m ON m.id = d.manager_id
-          WHERE d.manager_id = $9 AND (e.changed_at ${K})::date BETWEEN $1 AND $2)
+           JOIN managers m ON m.id = ${lgOwnerSql("d")}
+          WHERE m.id = $9 AND (e.changed_at ${K})::date BETWEEN $1 AND $2)
        SELECT ev.kommo_id, d.name, d.client_name, d.client_source,
               MIN(ev.changed_at) FILTER (WHERE ev.is_lead) AS lead_at,
               (array_agg(ev.pipeline_id || ':' || ev.status_id ORDER BY ev.changed_at) FILTER (WHERE ev.is_lead))[1] AS lead_stage,
@@ -244,7 +263,7 @@ export function handoffLinkQuery(
 ): SqlQuery {
   const before = Math.trunc(win.beforeSec), after = Math.trunc(win.afterSec), noteAfter = Math.trunc(win.noteAfterSec);
   return {
-    text: `SELECT e.kommo_id AS pz_id, d.manager_id AS lg_id, m.team_id AS lg_team_id,
+    text: `SELECT e.kommo_id AS pz_id, m.id AS lg_id, m.team_id AS lg_team_id,
             e.changed_at AS at, to_char((e.changed_at ${K}), 'YYYY-MM-DD') AS day,
             d.name AS pz_name, d.client_name AS pz_client,
             COALESCE(CASE WHEN x.client_key = ANY($6::text[]) THEN NULL ELSE x.client_key END,
@@ -256,7 +275,7 @@ export function handoffLinkQuery(
             to_char((x.planned_payment_at ${K}), 'YYYY-MM-DD') AS plan_pay_day
        FROM deal_stage_events e
        JOIN deals d ON d.kommo_id = e.kommo_id
-       JOIN managers m ON m.id = d.manager_id
+       JOIN managers m ON m.id = ${lgOwnerSql("d")}
        LEFT JOIN LATERAL (
          SELECT z.* FROM (
            SELECT 0 AS prio, q.kommo_id, q.name, q.client_name, q.client_key, q.manager_id, q.reject_reason,

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { skipReason } from "../db/scratchDb.js";
-import { stageCountsQuery, handoffLinkQuery, bucketKeySql, QUOTE_KEPT_MANUAL, type SqlQuery } from "./leadgenSql.js";
+import { stageCountsQuery, handoffLinkQuery, bucketKeySql, QUOTE_KEPT_MANUAL, LEADGEN_OWNER_MANUAL, type SqlQuery } from "./leadgenSql.js";
 import { LEADGEN_STAGE_IDS, QUALIFICATION_PIPELINES } from "./leadgenStages.js";
 import { pickHandoffs, LINK_BEFORE_SEC, LINK_AFTER_SEC, LINK_NOTE_AFTER_SEC, type HandoffEntry } from "./leadgenHandoffRules.js";
 
@@ -1014,4 +1014,39 @@ test("#1507 ЖИВИЙ SQL: прорахунок зі списку ручних 
   const list = await stats.leadgenStageDeals(day, day, 4);
   const q = list.deals.filter((x) => x.quoteAt);
   assert.deepEqual(q.map((x) => [x.dealId, x.manualQuote]), [[manual.pz, true]], "🔴 «Які угоди рахуємо»: ручний не позначений або звичайний зарахувався");
+});
+
+/**
+ * #1508 — УГОДА ПРОДЗВОНУ, ЗАКРІПЛЕНА ЗА ЛІДГЕНОМ ВРУЧНУ (рішення власника 16.10.2026, угода 62663169 → Сердюк). Дві
+ * однакові угоди з поточним відповідальним «Петров»: ОПР → «Кваліфіковано» → угода менеджера. Та, що в
+ * `LEADGEN_OWNER_MANUAL`, рахується лідгену зі списку в лічильниках, передачах і «Які угоди рахуємо»; та, що поза
+ * списком, — поточному відповідальному, як і раніше.
+ * 🧨 САБОТАЖ: у `lgOwnerSql` повернути `${d}.manager_id` замість CASE → червоніє (закріплена пішла Петрову).
+ */
+test("#1508 ЖИВИЙ SQL: угода зі списку закріплених рахується лідгену зі списку, решта — поточному відповідальному", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { stats } = await core();
+  const pin = LEADGEN_OWNER_MANUAL.find((m) => m.dealId === 62663169);
+  assert.ok(pin, "🔴 угоду 62663169 прибрали зі списку закріплених");
+  await client.query(`INSERT INTO managers (id, name, team_id, kommo_user_id) VALUES (880,'Лідген закріплений',1,$1),(881,'Менеджер-відповідальний',1,NULL)`, [pin.kommoUserId]);
+  const day = "2025-12-15", at = utc(`${day}T12:20:50`), S = LEADGEN_STAGE_IDS;
+  const mk = async (id?: number) => {
+    const pz = await deal({ manager: 881, pipeline: PZ, ck: null, id });
+    await ev(pz, PZ, S.opr, sec(at, -98)); await ev(pz, PZ, Q, at);
+    const child = await deal({ manager: 881, pipeline: QUAL, ck: null, created: sec(at, 2) });
+    await client!.query(`INSERT INTO lead_child_links (parent_id, child_id, created_at) VALUES ($1, $2, $3)`, [pz, child, sec(at, 2)]);
+    return { pz, child };
+  };
+  const pinned = await mk(62663169), plain = await mk();
+  const rows = await run<{ manager_id: number; leads: string; opr: string; quotes: string }>(stageCountsQuery(day, day, LEADGEN_STAGE_IDS));
+  const cnt = (id: number) => { const r = rows.find((x) => x.manager_id === id); return r ? [Number(r.leads), Number(r.opr), Number(r.quotes)] : null; };
+  assert.deepEqual(cnt(880), [1, 1, 1], "🔴 закріплена угода не порахувалась лідгену зі списку");
+  assert.deepEqual(cnt(881), [1, 1, 1], "🔴 поточному відповідальному має лишитись рівно незакріплена угода");
+  const links = await run<{ pz_id: string; lg_id: number; deal_id: string | null }>(linkQ(day, day));
+  const lk = (pz: number) => links.find((x) => Number(x.pz_id) === pz);
+  assert.deepEqual([lk(pinned.pz)?.lg_id, Number(lk(pinned.pz)?.deal_id)], [880, pinned.child], "🔴 передача закріпленої угоди не в лідгена зі списку");
+  assert.equal(lk(plain.pz)?.lg_id, 881, "🔴 незакріплена угода змінила власника — загальне правило зламалось");
+  const l80 = await stats.leadgenStageDeals(day, day, 880), l81 = await stats.leadgenStageDeals(day, day, 881);
+  assert.deepEqual(l80.deals.map((x) => [x.dealId, x.manualOwner]), [[pinned.pz, true]], "🔴 «Які угоди рахуємо» лідгена: немає закріпленої або без позначки");
+  assert.deepEqual(l81.deals.map((x) => [x.dealId, x.manualOwner]), [[plain.pz, false]], "🔴 «Які угоди рахуємо» відповідального: закріплена не пішла або чужа позначка");
 });
