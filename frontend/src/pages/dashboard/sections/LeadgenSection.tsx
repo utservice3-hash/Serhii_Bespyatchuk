@@ -13,6 +13,7 @@ import { ExtraPlanLines, PaceLines,
 } from "./LeadgenPersonRow";
 import { LeadgenPlanFormation } from "./LeadgenPlanFormation";
 import { LeadgenCharts } from "./LeadgenCharts";
+import { LeadgenCountedDeals } from "./LeadgenCountedDeals";
 import { plural } from "../receivablesView";
 
 const GREEN = "#16a34a", AMBER = "#d97706", RED = "#dc2626", MUTED = "var(--text-muted)";
@@ -257,6 +258,7 @@ export function LeadgenSection() {
   const units = useMemo(() => stripUnits(nav, today), [nav, today]);
   const whoAbsent = who !== "all" && !!d && !everyone.some((r) => r.managerId === who);
   const others = d?.others ?? [];
+  const [countedOpen, setCountedOpen] = useState(false);
 
   return (
     <div style={{ maxWidth: 1120, margin: "0 auto" }}>
@@ -277,6 +279,8 @@ export function LeadgenSection() {
       </div>
 
       <PeriodNav state={nav} onPatch={patchNav} today={today}>
+        {d && <button type="button" onClick={() => setCountedOpen(true)} style={{ ...navBtn, cursor: "pointer", fontWeight: 600 }}
+          title="Які угоди дашборд зарахував у ліди, ОПР і прорахунки — для звірки з Kommo">Які угоди рахуємо</button>}
         {!own && <select value={who} onChange={(e) => pickWho(e.target.value)} style={{ ...navBtn, cursor: "pointer" }} aria-label="Лідген">
           <option value="all">Усі лідгени{d ? ` (${d.rows.length}${others.length ? ` + ${others.length} не з команди` : ""})` : ""}</option>
           <optgroup label="Команда «Лідогенерація»">
@@ -290,6 +294,12 @@ export function LeadgenSection() {
           {whoAbsent && <option value={who}>{whoName} — без дій у періоді</option>}
         </select>}
       </PeriodNav>
+
+      {countedOpen && d && (
+        <LeadgenCountedDeals from={period.from} to={period.to} periodLabel={periodLabel} own={own}
+          people={[...d.rows, ...others].map((r) => ({ managerId: r.managerId, name: r.name }))}
+          initialId={who === "all" ? null : who} onClose={() => setCountedOpen(false)} />
+      )}
 
       {/* Смуга одиниць обраного режиму — розмітка дня-strip зі Звіту, одиниці — від режиму */}
       {units.length > 0 && (

@@ -207,6 +207,18 @@ export interface LeadgenHandoffDeal {
   /** Угода менеджера мінусова (поле «Мінусова угода»): машина рахується, сума лідгену — 0 (07.10.2026). */
   minus?: boolean;
 }
+/** 🔎 «Які угоди рахуємо» (16.10.2026): угода лідгена, що потрапила в ліди / ОПР / прорахунки за період. Час — ISO. */
+export interface LeadgenStageDeal {
+  dealId: number; url: string; name: string | null; client: string | null; source: string | null;
+  leadAt: string | null; leadStage: string | null; oprAt: string | null; oprStage: string | null; quoteAt: string | null;
+  path: { at: string; stage: string }[];
+  flags: { noTaken: boolean; fastSec: number | null; fromReact: boolean };
+}
+export interface LeadgenStageDealsResp { from: string; to: string; managerId: number; counts: { leads: number; opr: number; quotes: number }; deals: LeadgenStageDeal[] }
+export async function fetchLeadgenStageDeals(params: { from: string; to: string; managerId?: number }): Promise<LeadgenStageDealsResp> {
+  const { data } = await api.get<LeadgenStageDealsResp>("/dashboard/leadgen-stage-deals", { params });
+  return data;
+}
 /** Розкривний список «Гроші з передач»: ті самі правила, що `handoffMoney` у /leadgen-stats; `totals` мусять із ним збігатися. */
 export interface LeadgenHandoffDealsResp { from: string; to: string; managerId: number | null; deals: LeadgenHandoffDeal[]; totals: LeadgenHandoffMoney }
 export async function fetchLeadgenHandoffDeals(params: { from: string; to: string; managerId?: number }): Promise<LeadgenHandoffDealsResp> {
