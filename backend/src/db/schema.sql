@@ -5969,3 +5969,27 @@ DO $$ BEGIN
       CHECK (state IN ('waiting','own','reused','no_talk','history','lardi'));
   END IF;
 END $$;
+
+-- ❌ «ЗАКРИТИ УГОДУ В KOMMO» З КАРТКИ «ПЕРШОГО ДОТИКУ» (рішення Романа 16.10.2026; `core/firstTouchClose.ts`): журнал
+-- рядком на закриття — що закрили, з якої розмови, з якою причиною, звідки (воронка й етап — щоб «Повернути» повернув
+-- саме туди), хто й коли закрив і повернув. В історії Kommo автор — технічний користувач API, тож людина — тут і в примітці.
+CREATE TABLE IF NOT EXISTS first_touch_closes (
+  id               BIGSERIAL PRIMARY KEY,
+  kommo_id         BIGINT NOT NULL,
+  uniqueid         TEXT NOT NULL,
+  reason_id        BIGINT NOT NULL,
+  reason_label     TEXT NOT NULL,
+  suggested_id     BIGINT,
+  prev_pipeline_id BIGINT NOT NULL,
+  prev_status_id   BIGINT NOT NULL,
+  closed_by        INTEGER,
+  closed_by_name   TEXT,
+  closed_at        TIMESTAMPTZ NOT NULL,
+  reverted_by      INTEGER,
+  reverted_by_name TEXT,
+  reverted_at      TIMESTAMPTZ
+);
+-- Одна ЧИННА (неповернута) закрита угода — на угоду: друге закриття поверх першого неможливе.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_first_touch_closes_active ON first_touch_closes (kommo_id) WHERE reverted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_first_touch_closes_uniqueid ON first_touch_closes (uniqueid);
+REVOKE ALL ON first_touch_closes FROM ai_readonly;

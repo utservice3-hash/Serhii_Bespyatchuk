@@ -1,6 +1,8 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { fetchAiCallCard, setAiCallType, putAiCallNote, fetchAiCallRecording, hiringError, type AiCallCardResp, type AiQuoted } from "../../../api";
+import { fetchAiCallCard, setAiCallType, putAiCallNote, fetchAiCallRecording, hiringError, closeAiCallDeal, revertAiCallDeal, type AiCallCardResp, type AiQuoted } from "../../../api";
+import { useDialogs } from "../../../components/Dialogs";
+import { useToast } from "../../../components/Toasts";
 import { STATE_UI, TONE_COLOR, PROMISE_UI, mmss, afterLabel, drawerTabs, promisesLabel, deadlineBasisLabel, quoteTurnIndex, scoreLabel, REVIEW_REASON_UI, TYPE_LABEL, type AiCallState, type Tone } from "../aiCallsView";
 import { CallConversation, type SeekFn } from "./CallConversation";
 import { ChecklistBlock } from "./FirstTouchChecklist";
@@ -208,6 +210,64 @@ function NotesBlock({ c, onSaved }: { c: AiCallCardResp; onSaved: () => void }) 
 
 
 /**
+ * ❌ «Закрити угоду в Kommo» (рішення Романа 16.10.2026): тімлід (своя команда), адмін, КВП. Причина — з довідника Kommo,
+ * AI підставляє, людина підтверджує; запис — лише після діалогу. Що можна закрити й хто вже закрив — вирішує сервер.
+ */
+function CloseDealBlock({ c, onDone }: { c: AiCallCardResp; onDone: () => void }) {
+  const o = c.closeDeal;
+  const dlg = useDialogs();
+  const toast = useToast();
+  const [reason, setReason] = useState<number | "">(o?.suggestedId ?? "");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  useEffect(() => { setReason(o?.suggestedId ?? ""); }, [o?.suggestedId, c.row.uniqueid]);
+  if (!o) return null;
+  const box: React.CSSProperties = { border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px", display: "flex", flexDirection: "column", gap: 6, fontSize: 13.5 };
+  const head = <div style={{ fontSize: 11.5, color: "var(--text-muted)", fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase" }}>Угода в Kommo</div>;
+  if (o.closed) {
+    const revert = async () => {
+      if (!(await dlg.confirm({ title: "Повернути угоду?", text: `Угода ${String(o.closed!.kommoId)} знову відкриється на тому етапі, з якого її закрили, причину буде знято.`, okLabel: "Повернути" }))) return;
+      setBusy(true); setMsg(null);
+      try { await revertAiCallDeal(c.row.uniqueid); toast("Угоду повернуто на попередній етап"); onDone(); } catch (e) { setMsg(hiringError(e)); }
+      setBusy(false);
+    };
+    return (
+      <div style={box}>{head}
+        <span>Закрито як не реалізовану · <b>{o.closed.reason}</b> · {o.closed.byName ?? "—"}, {fmtFull(o.closed.at)}</span>
+        <div><button type="button" className="hr-btn" disabled={busy} onClick={() => void revert()}>{busy ? "Повертаю…" : "Повернути"}</button></div>
+        {msg && <span style={{ color: "var(--danger, #b3261e)", fontSize: 13 }}>{msg}</span>}
+      </div>
+    );
+  }
+  if (!o.target) return null;
+  if (!o.target.allowed) return <div style={box}>{head}<span style={{ color: "var(--text-muted)" }}>Закрити з картки не можна: {o.target.why}.</span></div>;
+  const label = o.reasons.find((r) => r.id === reason)?.label ?? "";
+  const close = async () => {
+    if (reason === "") return;
+    if (!(await dlg.confirm({ title: "Закрити угоду в Kommo?", danger: true, okLabel: "Закрити угоду",
+      text: `Угода ${String(o.target!.kommoId)} (${o.target!.stage ?? ""}) стане «Закрито і не реалізовано» з причиною «${label}». У Kommo з'явиться примітка з вашим іменем.` }))) return;
+    setBusy(true); setMsg(null);
+    try { await closeAiCallDeal(c.row.uniqueid, reason); toast("Угоду закрито в Kommo"); onDone(); } catch (e) { setMsg(hiringError(e)); }
+    setBusy(false);
+  };
+  return (
+    <div style={box}>{head}
+      <span style={{ color: "var(--text-muted)", fontSize: 12.5 }}>Угода {o.target.kommoId} · {o.target.stage}</span>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <label htmlFor="ai-close-reason" style={{ position: "absolute", left: -9999 }}>Причина відмови</label>
+        <select id="ai-close-reason" className="hr-inp" value={reason} onChange={(e) => setReason(e.target.value ? Number(e.target.value) : "")} style={{ maxWidth: 280 }}>
+          <option value="">Причина відмови…</option>
+          {o.reasons.map((r) => <option key={r.id} value={r.id}>{r.label}{r.id === o.suggestedId ? " · пропонує AI" : ""}</option>)}
+        </select>
+        <button type="button" className="hr-btn" disabled={busy || reason === ""} onClick={() => void close()}>{busy ? "Закриваю…" : "Закрити угоду як не реалізовану"}</button>
+      </div>
+      {o.suggestedId != null && reason === o.suggestedId && <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Причину підставив AI за розмовою — перевірте перед закриттям.</span>}
+      {msg && <span style={{ color: "var(--danger, #b3261e)", fontSize: 13 }}>{msg}</span>}
+    </div>
+  );
+}
+
+/**
  * ✅ «Розібрано» з бічної картки (08.10.2026): розмову з черги можна розібрати й тут, не заходячи в режим черги.
  * Кнопка — лише коли сервер каже, що розмова потребує розбору і цей користувач може її розібрати.
  */
@@ -326,6 +386,7 @@ export function AiCallDrawer({ uniqueid, onClose, onChanged }: { uniqueid: strin
               </div>
             )}
             <NotesBlock c={c} onSaved={() => { setRev((x) => x + 1); onChanged?.(); }} />
+            <CloseDealBlock c={c} onDone={() => { setRev((x) => x + 1); onChanged?.(); }} />
             {listen && (
               <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12 }}>
                 <div style={{ fontSize: 11.5, color: "var(--text-muted)", fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase", marginBottom: 8 }}>

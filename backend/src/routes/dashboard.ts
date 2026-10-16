@@ -22,7 +22,10 @@ import { overviewCache } from "../core/lazyCache.js";
 /** Порожній зріз джерела — для менеджера, якого немає в розкладі створених. */
 const EMPTY_SRC = { created: 0, adCount: 0, leadgenCount: 0, otherCount: 0, noChannelCount: 0 } as const;
 import { kommoLeadUrl } from "../core/kommoLinks.js";
-import { kommoWrite } from "../kommo/client.js";
+import { kommoGet, kommoWrite } from "../kommo/client.js";
+import { canCloseDeal } from "../core/firstTouchClose.js";
+import { closeOffer, closeDeal, revertDeal, type CloseKommo } from "../core/firstTouchCloseDb.js";
+import { closeTasksBody, openTasksPath } from "../core/carrierHistory.js";
 import { accumulateKpiTargets } from "../core/kpiTargets.js";
 import { loadKpiTargets } from "../core/kpiTargetsDb.js";
 
@@ -11282,7 +11285,57 @@ dashboardRouter.get("/ai-calls/:uniqueid", async (req, res) => {
     checklist: checklist(card.row), checkScore: checklistScore(checklist(card.row)), reviewReason: reviewReason(card.row),
     needsReview: needsReview(card.row), canReview: canWriteNote(auth.roleKey, "review"),
     clientDecision: clientDecision(card.row),
+    // ❌ «Закрити угоду в Kommo» (рішення Романа 16.10.2026): лише тімлід (скоуп картки вже звужений), адмін, КВП.
+    closeDeal: canCloseDeal(auth.roleKey) ? await closeOffer(pool, card.row) : null,
   });
+});
+
+/** Справжній Kommo для «закрити / повернути» з картки — ті самі виклики, що в «Перевізниках». */
+const firstTouchKommo: CloseKommo = {
+  leadState: async (id) => {
+    const l = await kommoGet<{ pipeline_id?: number; status_id?: number }>(`/api/v4/leads/${String(id)}`);
+    return l && l.status_id != null && l.pipeline_id != null ? { pipelineId: Number(l.pipeline_id), statusId: Number(l.status_id) } : null;
+  },
+  patchLeads: (body) => kommoWrite("/api/v4/leads", body, "PATCH"),
+  addNotes: (body) => kommoWrite("/api/v4/leads/notes", body, "POST"),
+  openTaskIds: async (leadIds) => {
+    const r = await kommoGet<{ _embedded?: { tasks?: { id: number; is_completed: boolean }[] } }>(openTasksPath(leadIds));
+    return (r._embedded?.tasks ?? []).filter((t) => !t.is_completed).map((t) => t.id);
+  },
+  closeTasks: (taskIds, text) => kommoWrite("/api/v4/tasks", closeTasksBody(taskIds, text), "PATCH"),
+};
+
+/**
+ * ❌ Закрити угоду розмови в Kommo як «не реалізовано» з причиною (рішення Романа 16.10.2026; `core/firstTouchClose.ts`).
+ * Право — ПЕРШИМ оператором; скоуп — тим самим `aiCallCard` (чужа команда тімліду — 404). Свіжий етап — з Kommo наживо.
+ */
+dashboardRouter.post("/ai-calls/:uniqueid/close-deal", async (req, res) => {
+  const auth = req.auth!;
+  if (!canCloseDeal(auth.roleKey)) { res.status(403).json({ error: "Закрити угоду з картки можуть тімлід (своя команда), адмін і КВП" }); return; }
+  const reasonId = Number(req.body?.reasonId);
+  if (!Number.isInteger(reasonId)) { res.status(400).json({ error: "reasonId — номер причини з довідника" }); return; }
+  const uniqueid = String(req.params.uniqueid);
+  const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
+  if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
+  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? `користувач #${String(auth.userId)}`;
+  const suggested = (await closeOffer(pool, card.row)).suggestedId;
+  const r = await closeDeal(pool, firstTouchKommo, { uniqueid, kommoIds: card.row.kommoIds, calledAt: card.row.calledAt, reasonId,
+    suggestedId: suggested, user: { id: auth.userId ?? null, name: who }, now: new Date() });
+  if (!r.ok) { res.status(r.code).json({ error: r.why }); return; }
+  res.json({ ok: true, kommoId: r.kommoId });
+});
+
+/** ↩️ Повернути закриту з картки угоду на попередні воронку й етап — те саме право й той самий скоуп. */
+dashboardRouter.post("/ai-calls/:uniqueid/close-deal/revert", async (req, res) => {
+  const auth = req.auth!;
+  if (!canCloseDeal(auth.roleKey)) { res.status(403).json({ error: "Повернути угоду можуть тімлід (своя команда), адмін і КВП" }); return; }
+  const uniqueid = String(req.params.uniqueid);
+  const card = await aiCallCard(pool, uniqueid, false, missedScopeFor(auth, {}));
+  if (!card) { res.status(404).json({ error: "Дзвінок не знайдено або він поза вашим скоупом" }); return; }
+  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [auth.userId])).rows[0]?.name ?? auth.email ?? `користувач #${String(auth.userId)}`;
+  const r = await revertDeal(pool, firstTouchKommo, { uniqueid, user: { id: auth.userId ?? null, name: who }, now: new Date() });
+  if (!r.ok) { res.status(r.code).json({ error: r.why }); return; }
+  res.json({ ok: true, kommoId: r.kommoId });
 });
 
 /**
