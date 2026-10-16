@@ -86,7 +86,7 @@ import { carrierRecording } from "../core/carrierAudio.js";
 import { adPlanForPeriod } from "../core/adBudget.js";
 import { leadgenStats, leadgenClosures, leadgenHandoffs, leadgenWarmingBacklog, leadgenWeekly, leadGeneratorFill,
   pct, leadGeneratorFillNote, LEADGEN_CALL_MIN_SEC, LEADGEN_CONVERSION_TARGETS,
-  leadgenBuckets, sumBuckets, personBucketWire, leadgenHandoffMoney, leadgenTrend, leadgenManagerTeam,
+  leadgenBuckets, sumBuckets, personBucketWire, leadgenHandoffMoney, leadgenTrend, leadgenManagerTeam, leadgenStageDeals,
 } from "../core/leadgenStats.js";
 import { handoffMoneyWire, personMoneyWire, bucketMoneyWire, bucketPersonMoneyWire, handoffDealsScope,
   leadgenAuthScope, parseLeadgenGrain, parseTrendMonths, parseManagerIdParam,
@@ -587,6 +587,29 @@ dashboardRouter.get("/leadgen-handoff-deals", async (req, res) => {
 
   const hm = await leadgenHandoffMoney(from, to, clamp.scope);
   res.json({ from, to, managerId, deals: hm.deals, totals: handoffMoneyWire(hm.totals) });
+});
+
+// 🔎 «ЯКІ УГОДИ РАХУЄМО» (рішення власника 16.10.2026, регламент лідгенів §14, §16): угоди ОДНОГО лідгена за період,
+// що потрапили в ліди / ОПР / прорахунки. Межі — ті самі, що в «Гроші з передач» (`handoffDealsScope`): лідген — лише себе,
+// тімлід — свою команду, продажі — відмова першим оператором. Без людини списку немає (не «весь відділ»).
+dashboardRouter.get("/leadgen-stage-deals", async (req, res) => {
+  const auth = await leadgenViewerAuth(req.auth!);
+  const viewer = leadgenViewer(auth);
+  if (viewer.kind === "deny") return res.status(403).json({ error: viewer.error });
+  const from = dateParam(req.query.from);
+  const to = dateParam(req.query.to);
+  if (!from || !to || !isRealDate(from) || !isRealDate(to)) {
+    return res.status(400).json({ error: "Потрібні from і to — дати YYYY-MM-DD" });
+  }
+  const managerId = parseManagerIdParam(req.query.managerId);
+  if (managerId === "bad") return res.status(400).json({ error: "managerId — додатне ціле" });
+  const managerTeam = managerId != null ? await leadgenManagerTeam(managerId) : null;
+  const clamp = handoffDealsScope(auth, managerId, managerTeam);
+  if (!clamp.ok) return res.status(clamp.status).json({ error: "Forbidden" });
+  const who = clamp.scope.managerId;
+  if (who == null) return res.status(400).json({ error: "Оберіть лідгена" });
+  const list = await leadgenStageDeals(from, to, who);
+  res.json({ from, to, managerId: who, counts: list.counts, deals: list.deals });
 });
 
 // ═══════════════════════ 📋 ПЛАНИ ЛІДГЕНІВ (рішення власника 25.09.2026) ═══════════════════════

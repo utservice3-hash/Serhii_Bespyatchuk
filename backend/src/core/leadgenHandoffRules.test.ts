@@ -9,7 +9,7 @@ import {
   type StageBucketRow, type CallBucketRow, type HandoffLinkInfo, type HandoffRowDeps, type LeadgenDealClass, type HandoffEntry, type DealState, type LeadgenHandoffMoney,
 } from "./leadgenHandoffRules.js";
 import { HANDOFF_CLASS_RULES } from "./moneyBuckets.js";
-import { isRegularAt, monthsBackDay, REGULAR_MIN_SUCCESSES, REGULAR_FRESH_MONTHS, handoffMoneyBuckets, mondayOf, dayInRange, pendingIn, leadgenPeriod, type ClientSuccess } from "./leadgenHandoffRules.js";
+import { isRegularAt, monthsBackDay, REGULAR_MIN_SUCCESSES, REGULAR_FRESH_MONTHS, handoffMoneyBuckets, mondayOf, dayInRange, pendingIn, leadgenPeriod, stageDealFlags, type ClientSuccess } from "./leadgenHandoffRules.js";
 
 /**
  * #670…#674, #680 — ГРОШІ З ПЕРЕДАНИХ ЛІДІВ: чисті правила (рішення власника 22.09.2026).
@@ -729,4 +729,26 @@ test("#1500 МІНУСОВА УГОДА: лідгену — машина і 0 �
     Object.assign({}, h, { pzName: null, pzClient: null, dealName: null, dealClient: null, salesManager: null, dealReason: null, closedDay: null, planPayDay: null });
   assert.equal(handoffDealRow(info(row(2)), { pipelineId: 1, statusId: 1 }, deps).minus, true, "🔴 список «Гроші з передач» не знає, що угода мінусова");
   assert.equal(handoffDealRow(info(row(1)), { pipelineId: 1, statusId: 1 }, deps).minus, false, "🔴 плюсова угода в списку позначена мінусовою");
+});
+
+/**
+ * #1506b — ПОЗНАЧКИ «ЯКІ УГОДИ РАХУЄМО», ЧИСТА ФУНКЦІЯ: обидва боки кожної межі (16.10.2026). «Взято» за 60 с до ОПР —
+ * «за 60 с», за 61 с — ні; «Взято» після ОПР (понад розбіжність годинників) — не рахується; підігрів до ліда — «з реактивації»
+ * і не «без Взято»; ОПР-підігрів (не Продзвону) — позначок «без Взято» / «за N с» немає.
+ * 🧨 САБОТАЖ: `STAGE_FAST_SEC = 60` → `61` → червоніє на межі 61 с.
+ */
+test("#1506b ПОЗНАЧКИ: «без Взято», «Взято й ОПР за N с», «з реактивації» — обидва боки кожної межі", () => {
+  const ids = { pz: [1], taken: 10, opr: 11, react: [2], warming: 20 };
+  const E = (p: number, s: number, sec: number) => ({ pipelineId: p, statusId: s, at: sec * 1000 });
+  const opr = 1000_000;
+  assert.deepEqual(stageDealFlags([E(1, 10, 1000_000 - 60), E(1, 11, 1000_000)], null, opr * 1000, true, ids).fastSec, 60, "🔴 60 с — не «одним рухом»");
+  assert.equal(stageDealFlags([E(1, 10, 1000_000 - 61), E(1, 11, 1000_000)], null, opr * 1000, true, ids).fastSec, null, "🔴 61 с — «одним рухом»");
+  assert.deepEqual(stageDealFlags([E(1, 11, 1000_000), E(1, 10, 1000_000 + 30)], null, opr * 1000, true, ids), { noTaken: true, fastSec: null, fromReact: false },
+    "🔴 «Взято» ПІСЛЯ ОПР зараховано як попередній крок");
+  assert.deepEqual(stageDealFlags([E(2, 20, 500_000), E(1, 11, 1000_000)], 500_000_000, opr * 1000, true, ids), { noTaken: false, fastSec: null, fromReact: true },
+    "🔴 реактивація: не «з реактивації» або «без Взято»");
+  assert.deepEqual(stageDealFlags([E(2, 20, 1000_000)], opr * 1000, opr * 1000, false, ids), { noTaken: false, fastSec: null, fromReact: true },
+    "🔴 ОПР-підігрів отримав позначку Продзвону");
+  assert.deepEqual(stageDealFlags([E(1, 10, 900_000), E(1, 11, 1000_000)], 900_000_000, opr * 1000, true, ids), { noTaken: false, fastSec: null, fromReact: false },
+    "🔴 звичайний шлях отримав позначку");
 });

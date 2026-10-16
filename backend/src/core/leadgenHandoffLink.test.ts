@@ -950,3 +950,38 @@ test("#1505 ЖИВИЙ SQL: з одного входу кілька угод з�
   assert.equal(deal1(dup.pz), dup.second, "🔴 dup: передачі дісталась угода-«Дубль», а не справжня");
   assert.equal(deal1(other.pz), other.first, "🔴 other: закрита з іншої причини втратила першість — правило зачепило не лише «Дубль»");
 });
+
+/**
+ * #1506 — «ЯКІ УГОДИ РАХУЄМО»: СПИСОК == ЛІЧИЛЬНИКИ, ПОЗНАЧКИ — ЗА ШЛЯХОМ (рішення власника 16.10.2026, регламент §14, §16).
+ * Список угод людини будується тими самими предикатами, що й ліди / ОПР / прорахунки, тож кількість рядків кожної вкладки
+ * дорівнює числу в рядку людини. Фікстура: «Взято» → ОПР наступного дня; одразу ОПР; «Взято» → ОПР за 20 с; підігрів у
+ * липні → ОПР у листопаді; прорахунок; прорахунок, скасований за 5 с.
+ * 🧨 САБОТАЖ: у `stageDealsQuery` прибрати `${quoteKeptSql("$3")}` з предиката прорахунку → червоніє (скасований зарахувався).
+ */
+test("#1506 ЖИВИЙ SQL: «Які угоди рахуємо» — список дорівнює лічильникам людини, позначки за шляхом етапів", async (t) => {
+  if (!client) return t.skip(skip ?? "кластер не піднявся");
+  const { stats } = await core();
+  const T = (d: string, hm: string) => utc(`2025-11-0${d}T${hm}`);
+  const mk = async () => deal({ manager: 2, pipeline: PZ, ck: null });
+  const S = LEADGEN_STAGE_IDS, RE = S.react[0];
+  const a = await mk(); await ev(a, PZ, S.taken, T("3", "08:00:00")); await ev(a, PZ, S.opr, T("4", "09:00:00"));
+  const b = await mk(); await ev(b, PZ, S.opr, T("3", "10:00:00"));
+  const c = await mk(); await ev(c, PZ, S.taken, T("3", "11:00:00")); await ev(c, PZ, S.opr, T("3", "11:00:20"));
+  const d = await mk(); await ev(d, RE, S.warming, utc("2025-07-20T09:00:00")); await ev(d, PZ, S.opr, T("3", "12:00:00"));
+  const e = await mk(); await ev(e, PZ, Q, T("3", "13:00:00"));
+  const f = await mk(); await ev(f, PZ, Q, T("3", "14:00:00")); await ev(f, PZ, 143, T("3", "14:00:05"));
+  const from = "2025-11-03", to = "2025-11-04";
+  const row = (await run<{ manager_id: number; leads: string; opr: string; quotes: string }>(stageCountsQuery(from, to, LEADGEN_STAGE_IDS))).find((r) => r.manager_id === 2);
+  assert.ok(row, "фікстура вироджена — людини 2 у періоді немає");
+  const list = await stats.leadgenStageDeals(from, to, 2);
+  assert.deepEqual([list.counts.leads, list.counts.opr, list.counts.quotes], [Number(row.leads), Number(row.opr), Number(row.quotes)],
+    "🔴 список «Які угоди рахуємо» розійшовся з лічильниками людини");
+  assert.deepEqual([list.counts.leads, list.counts.opr, list.counts.quotes], [4, 4, 1], "🔴 фікстура: 4 ліди, 4 ОПР, 1 прорахунок (скасований — ні)");
+  const fl = (id: number) => list.deals.find((x) => x.dealId === id)?.flags;
+  assert.deepEqual(fl(a), { noTaken: false, fastSec: null, fromReact: false }, "🔴 «Взято» → ОПР наступного дня позначено");
+  assert.deepEqual(fl(b), { noTaken: true, fastSec: null, fromReact: false }, "🔴 одразу ОПР — без позначки «без Взято»");
+  assert.deepEqual(fl(c), { noTaken: false, fastSec: 20, fromReact: false }, "🔴 «Взято» й ОПР за 20 с — без позначки");
+  assert.deepEqual(fl(d), { noTaken: false, fastSec: null, fromReact: true }, "🔴 реактивація позначена «без Взято» або не позначена «з реактивації»");
+  assert.equal(list.deals.find((x) => x.dealId === f), undefined, "🔴 скасований прорахунок у списку");
+  assert.equal(list.deals.find((x) => x.dealId === b)?.oprStage, "Отримано контакти ОПР", "🔴 етап ОПР без назви");
+});

@@ -2,14 +2,14 @@ import { pool } from "../db/pool.js";
 import { kyivToday } from "./dates.js";
 import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING, GENERIC_CLIENT_KEYS } from "./metrics.js";
 import { LEADGEN_STAGE_IDS, QUALIFICATION_PIPELINES } from "./leadgenStages.js";
-import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery, leadStatusPred, oprStatusPred, quoteKeptSql,
+import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery, leadStatusPred, oprStatusPred, quoteKeptSql, stageDealsQuery,
   type SqlQuery, type LeadgenBucketGrain } from "./leadgenSql.js";
 import { FC_PIPELINES, handoffDealStates, clientSuccessHistory } from "./money.js";
 import { stageName } from "./stageNames.js";
 import {
   handoffView, trendWindow, mergeBucketRows, assembleTrend, handoffDealRow, handoffMoneyBuckets, leadgenPeriod, LINK_BEFORE_SEC, LINK_AFTER_SEC, LINK_NOTE_AFTER_SEC,
   type HandoffScope, type LeadgenHandoffMoney, type HandoffLinkInfo, type LeadgenHandoffDeal, type HandoffRowDeps,
-  type LeadgenPersonBucketRow, type StageBucketRow, type CallBucketRow, type TrendMoneyBucket,
+  type LeadgenPersonBucketRow, type StageBucketRow, type CallBucketRow, type TrendMoneyBucket, stageDealFlags, type StageDealFlags,
 } from "./leadgenHandoffRules.js";
 import { kommoLeadUrl } from "./kommoLinks.js";
 import { LEADGEN_CALL_MIN_SEC } from "./leadgenRules.js";
@@ -414,3 +414,51 @@ export async function leadgenManagerTeam(managerId: number): Promise<number | nu
   return r.rows.length ? r.rows[0].team_id : undefined;
 }
 
+
+
+// ═══════════════════════ 🔎 «ЯКІ УГОДИ РАХУЄМО» (рішення власника 16.10.2026) ═══════════════════════
+
+export interface LeadgenStageDealRow {
+  dealId: number; url: string; name: string | null; client: string | null; source: string | null;
+  leadAt: string | null; leadStage: string | null; oprAt: string | null; oprStage: string | null; quoteAt: string | null;
+  /** Етапи угоди в періоді (і підігрів до нього, якщо був), за часом. */
+  path: { at: string; stage: string }[];
+  flags: StageDealFlags;
+}
+export interface LeadgenStageDeals { counts: { leads: number; opr: number; quotes: number }; deals: LeadgenStageDealRow[] }
+
+/**
+ * Угоди ОДНОГО лідгена, що потрапили в його ліди / ОПР / прорахунки за період, — для звірки з Kommo (регламент §14, §16).
+ * Кількості — з тих самих рядків, тож дорівнюють `leadgenStats` людини (`#1506`). Час — ISO, екран показує за Києвом.
+ */
+export async function leadgenStageDeals(from: string, to: string, managerId: number): Promise<LeadgenStageDeals> {
+  const q = stageDealsQuery(from, to, LEADGEN_STAGE_IDS, managerId);
+  const r = await pool.query<{ kommo_id: string; name: string | null; client_name: string | null; client_source: string | null;
+    lead_at: Date | null; lead_stage: string | null; opr_at: Date | null; opr_stage: string | null; quote_at: Date | null }>(q.text, q.values);
+  const ids = r.rows.map((x) => Number(x.kommo_id));
+  const ev = ids.length ? (await pool.query<{ kommo_id: string; pipeline_id: string; status_id: string; changed_at: Date; in_period: boolean }>(
+    `SELECT e.kommo_id, e.pipeline_id, e.status_id, e.changed_at,
+            ((e.changed_at ${K})::date BETWEEN $2 AND $3) AS in_period
+       FROM deal_stage_events e
+      WHERE e.kommo_id = ANY($1::bigint[]) AND (e.changed_at ${K})::date <= $3
+      ORDER BY e.kommo_id, e.changed_at`, [ids, from, to])).rows : [];
+  const byDeal = new Map<number, typeof ev>();
+  for (const e of ev) { const k = Number(e.kommo_id); const xs = byDeal.get(k) ?? []; xs.push(e); byDeal.set(k, xs); }
+  const flagIds = { pz: LEADGEN_STAGE_IDS.pz, taken: LEADGEN_STAGE_IDS.taken, opr: LEADGEN_STAGE_IDS.opr,
+    react: LEADGEN_STAGE_IDS.react, warming: LEADGEN_STAGE_IDS.warming };
+  const nm = (code: string | null) => { if (!code) return null; const [p, s] = code.split(":"); return stageName(Number(p), Number(s)); };
+  const iso = (d: Date | null) => (d ? new Date(d).toISOString() : null);
+  const deals = r.rows.map((x): LeadgenStageDealRow => {
+    const id = Number(x.kommo_id), evs = byDeal.get(id) ?? [];
+    const sev = evs.map((e) => ({ pipelineId: Number(e.pipeline_id), statusId: Number(e.status_id), at: new Date(e.changed_at).getTime() }));
+    const oprIsPz = x.opr_stage != null && (LEADGEN_STAGE_IDS.pz as readonly number[]).includes(Number(x.opr_stage.split(":")[0]));
+    const flags = stageDealFlags(sev, x.lead_at ? new Date(x.lead_at).getTime() : null, x.opr_at ? new Date(x.opr_at).getTime() : null, oprIsPz, flagIds);
+    const path = evs.filter((e) => e.in_period || (flags.fromReact && (LEADGEN_STAGE_IDS.react as readonly number[]).includes(Number(e.pipeline_id))
+        && Number(e.status_id) === LEADGEN_STAGE_IDS.warming))
+      .map((e) => ({ at: new Date(e.changed_at).toISOString(), stage: stageName(Number(e.pipeline_id), Number(e.status_id)) }));
+    return { dealId: id, url: kommoLeadUrl(id), name: x.name, client: x.client_name, source: x.client_source,
+      leadAt: iso(x.lead_at), leadStage: nm(x.lead_stage), oprAt: iso(x.opr_at), oprStage: nm(x.opr_stage), quoteAt: iso(x.quote_at),
+      path, flags };
+  });
+  return { counts: { leads: deals.filter((d) => d.leadAt).length, opr: deals.filter((d) => d.oprAt).length, quotes: deals.filter((d) => d.quoteAt).length }, deals };
+}

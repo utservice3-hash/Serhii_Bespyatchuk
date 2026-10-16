@@ -865,3 +865,36 @@ export function parseManagerIdParam(v: unknown): number | null | "bad" {
   const n = Number(v.trim());
   return n > 0 && Number.isSafeInteger(n) ? n : "bad";
 }
+
+
+// ─────────────────────── «ЯКІ УГОДИ РАХУЄМО» — ПОЗНАЧКИ ШЛЯХУ (16.10.2026) ───────────────────────
+
+/** Подія етапу угоди для позначок: воронка, етап, момент (мс). */
+export interface StageEv { pipelineId: number; statusId: number; at: number }
+/** Етапи, з якими звіряються позначки, — ті самі, що в лічильниках (`LEADGEN_STAGE_IDS`). */
+export interface StageFlagIds { pz: readonly number[]; taken: number; opr: number; react: readonly number[]; warming: number }
+/** Позначки — ОПИС шляху угоди, без оцінки (рішення 14.10: відхилення в дашборді не показуємо як порушення). */
+export interface StageDealFlags { noTaken: boolean; fastSec: number | null; fromReact: boolean }
+/** Скільки секунд між «Взято» і ОПР ще вважаються «одним рухом». */
+export const STAGE_FAST_SEC = 60;
+/** Розбіжність годинників подій, яку ігноруємо (етапи, записані «одночасно», бувають ±кілька секунд). */
+const STAGE_SKEW_MS = 5000;
+
+/**
+ * 🏷 ПОЗНАЧКИ РЯДКА «ЯКІ УГОДИ РАХУЄМО». `oprAt` — момент ОПР, що зарахувався (мс), `oprIsPz` — чи це «ОПР» Продзвону
+ * (а не «Клієнт підігрівається»).
+ *  • `fromReact` — до ліда/ОПР угода вже була в «Клієнт підігрівається» Реактивації;
+ *  • `noTaken` — ОПР Продзвону, а «Взято в роботу» в Продзвоні до нього не було ніколи, і це не реактивація;
+ *  • `fastSec` — «Взято» і ОПР Продзвону з різницею не більше `STAGE_FAST_SEC` с (останній «Взято» перед ОПР).
+ */
+export function stageDealFlags(events: readonly StageEv[], leadAt: number | null, oprAt: number | null, oprIsPz: boolean,
+  ids: StageFlagIds): StageDealFlags {
+  const firstAt = Math.min(leadAt ?? Infinity, oprAt ?? Infinity);
+  const fromReact = events.some((e) => ids.react.includes(e.pipelineId) && e.statusId === ids.warming && e.at <= firstAt + STAGE_SKEW_MS);
+  if (oprAt == null || !oprIsPz) return { noTaken: false, fastSec: null, fromReact };
+  const taken = events.filter((e) => ids.pz.includes(e.pipelineId) && e.statusId === ids.taken && e.at <= oprAt + STAGE_SKEW_MS)
+    .reduce((m, e) => Math.max(m, e.at), -Infinity);
+  if (taken === -Infinity) return { noTaken: !fromReact, fastSec: null, fromReact };
+  const gap = Math.max(0, Math.round((oprAt - taken) / 1000));
+  return { noTaken: false, fastSec: gap <= STAGE_FAST_SEC ? gap : null, fromReact };
+}

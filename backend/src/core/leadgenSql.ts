@@ -157,6 +157,39 @@ export function stageCountsQuery(
   };
 }
 
+/**
+ * 🔎 «ЯКІ УГОДИ РАХУЄМО» (рішення власника 16.10.2026, регламент лідгенів §14, §16): угоди ОДНОГО лідгена за період,
+ * що потрапили в його ліди, ОПР і прорахунки, — з моментом і етапом, який зарахувався. Предикати — ТІ САМІ рядки, що в
+ * `STAGE_COUNTS` (`leadStatusPred`, `oprStatusPred`, `quoteKeptSql`), і та сама атрибуція (поточний `deals.manager_id`), тож
+ * кількість рядків із `lead_at` / `opr_at` / `quote_at` дорівнює `leads` / `opr` / `quotes` людини за побудовою (`#1506`).
+ * Параметри: $1 from · $2 to · $3 воронки Продзвону · $4 «Взято» · $5 «ОПР» · $6 воронки Реактивації · $7 «Підігрівається» ·
+ * $8 «Кваліфіковано» · $9 id лідгена.
+ */
+export function stageDealsQuery(from: string, to: string, ids: LeadgenStageIds, managerId: number): SqlQuery {
+  const lead = leadStatusPred(STAGE_PH), opr = oprStatusPred(STAGE_PH);
+  const quote = `(e.pipeline_id = ANY($3) AND e.status_id = $8 AND ${quoteKeptSql("$3")})`;
+  return {
+    text: `WITH ev AS (
+         SELECT e.kommo_id, e.pipeline_id, e.status_id, e.changed_at,
+                ${lead} AS is_lead, ${opr} AS is_opr, ${quote} AS is_quote
+           FROM deal_stage_events e
+           JOIN deals d ON d.kommo_id = e.kommo_id
+           JOIN managers m ON m.id = d.manager_id
+          WHERE d.manager_id = $9 AND (e.changed_at ${K})::date BETWEEN $1 AND $2)
+       SELECT ev.kommo_id, d.name, d.client_name, d.client_source,
+              MIN(ev.changed_at) FILTER (WHERE ev.is_lead) AS lead_at,
+              (array_agg(ev.pipeline_id || ':' || ev.status_id ORDER BY ev.changed_at) FILTER (WHERE ev.is_lead))[1] AS lead_stage,
+              MIN(ev.changed_at) FILTER (WHERE ev.is_opr) AS opr_at,
+              (array_agg(ev.pipeline_id || ':' || ev.status_id ORDER BY ev.changed_at) FILTER (WHERE ev.is_opr))[1] AS opr_stage,
+              MIN(ev.changed_at) FILTER (WHERE ev.is_quote) AS quote_at
+         FROM ev JOIN deals d ON d.kommo_id = ev.kommo_id
+        WHERE ev.is_lead OR ev.is_opr OR ev.is_quote
+        GROUP BY ev.kommo_id, d.name, d.client_name, d.client_source
+        ORDER BY MIN(ev.changed_at), ev.kommo_id`,
+    values: [from, to, ids.pz, ids.taken, ids.opr, ids.react, ids.warming, ids.qualified, managerId],
+  };
+}
+
 /** Id для запиту передач: воронки Продзвону, «Кваліфіковано» і воронки угод менеджера. */
 export interface HandoffLinkIds {
   pz: readonly number[]; qualified: number; managerPipelines: readonly number[];

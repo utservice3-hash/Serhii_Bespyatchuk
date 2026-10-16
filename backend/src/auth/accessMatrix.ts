@@ -670,6 +670,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   { method: "GET", path: "/api/dashboard/leadgen-handoff-deals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
+  // 🔎 «Які угоди рахуємо» (16.10.2026) — межі ті самі, що в «Гроші з передач» (`handoffDealsScope`).
+  { method: "GET", path: "/api/dashboard/leadgen-stage-deals", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead"], deny: ["hr", "manager"] },
   // 📋 ПЛАНИ ЛІДГЕНІВ (рішення власника 25.09.2026) — дзеркало формування плану продажів:
   // перегляд — як `/leadgen-stats`; подає тімлід (своя команда) і адмін-рівень, менеджер — 403
   // першим оператором; затверджує й повертає ЛИШЕ адмін-рівень (`requireRole("admin")`, як
