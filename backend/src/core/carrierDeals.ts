@@ -253,6 +253,44 @@ export function carrierReport(rows: readonly Pick<DealRow, "category" | "source"
 }
 
 /**
+ * ⏳ «ЧЕКАЮТЬ РІШЕННЯ ЗАРАЗ» (задача 5968, Юля 16.10.2026: «колонка по кожному менеджеру на сьогодні, щоб тімлід бачив це
+ * на ранковій п'ятихвилинці»). Не за періодом, а СТАН НА ЗАРАЗ: угода й досі стоїть на етапі «Дзвінки на мобільні» і
+ * чекає людину («На перевірці» або «Помилка»).
+ *
+ * 🔴 Чому не «не розібрано» за період. Заміряно 16.10.2026: за жовтень «не розібрано» 58, а на етапі з них лише 16 —
+ * 36 угод люди вже закрили прямо в Kommo (22 «Перевізник», 10 «Нецільове»…), не натиснувши кнопку у «Відсіві». CRM —
+ * єдине джерело: угода, яку зрушили з етапу, вирішена. І навпаки: угода, створена ДО обраного періоду, але досі на
+ * етапі, — чекає рішення сьогодні, тож період її не відрізає.
+ * «AI ще слухає» (`waiting`) сюди НЕ входить (рішення Романа 16.10.2026): менеджеру там ще нічого вирішувати.
+ */
+export const isAwaitingNow = (r: Pick<DealRow, "category" | "crm">, stageStatusId: number): boolean =>
+  (r.category === "review" || r.category === "error") && r.crm.statusId === stageStatusId;
+
+export interface AwaitCounts { awaitingNow: number; overdueNow: number }
+type WithAwait<T> = T & AwaitCounts;
+
+/**
+ * Доклеїти «чекають рішення зараз» до рядків звіту. Менеджер, у якого за період угод немає, а рішення чекає, —
+ * отримує свій рядок із нулями в періодних колонках: інакше його угоди були б у «Разом», але не в жодному рядку.
+ */
+export function withAwaitingNow(rep: { managers: ReportLine[]; teams: ReportLine[]; total: ReportCounts },
+  awaiting: readonly Pick<DealRow, "overdue" | "managerId" | "managerName" | "teamId" | "teamName">[]):
+  { managers: WithAwait<ReportLine>[]; teams: WithAwait<ReportLine>[]; total: WithAwait<ReportCounts> } {
+  const mk = (id: number | null) => (id == null ? "none" : String(id));
+  const managers = new Map(rep.managers.map((m) => [mk(m.managerId), { ...m, awaitingNow: 0, overdueNow: 0 }]));
+  const teams = new Map(rep.teams.map((t) => [mk(t.teamId), { ...t, awaitingNow: 0, overdueNow: 0 }]));
+  const total = { ...rep.total, awaitingNow: 0, overdueNow: 0 };
+  for (const r of awaiting) {
+    let m = managers.get(mk(r.managerId));
+    if (!m) { m = { managerId: r.managerId, managerName: r.managerName, teamId: r.teamId, teamName: r.teamName, ...zero(), awaitingNow: 0, overdueNow: 0 }; managers.set(mk(r.managerId), m); }
+    let t = teams.get(mk(r.teamId));
+    if (!t) { t = { managerId: null, managerName: null, teamId: r.teamId, teamName: r.teamName, ...zero(), awaitingNow: 0, overdueNow: 0 }; teams.set(mk(r.teamId), t); }
+    for (const x of [m, t, total]) { x.awaitingNow++; if (r.overdue) x.overdueNow++; }
+  }
+  return { managers: [...managers.values()], teams: [...teams.values()], total };
+}
+
+/**
  * Прибрав фільтр CRM (Lardi / відомий перевізник) — поза AI, окремим числом по менеджерах (`deals`, синк 30 хв).
  * «Фільтр», а не «хтось закрив як перевізника»: угоду, яку ми бачили на етапі після фільтра, закрили вже ми чи людина
  * (зокрема разове закриття старих 30.09.2026) — вона в рядках вкладок, а не тут. Інакше одна угода рахувалась би двічі.

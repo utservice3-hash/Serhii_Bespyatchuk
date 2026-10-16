@@ -975,7 +975,7 @@ test("#1064 ЗВІТ · ЖИВА СХЕМА: клітинка = рядки вк�
   const route = SRC("routes/dashboard.ts");
   const at2 = route.indexOf('dashboardRouter.get("/carrier-calls/report"');
   assert.ok(at2 > 0, "🔴 роуту звіту немає");
-  assert.match(route.slice(at2, route.indexOf("dashboardRouter.", at2 + 10)), /const rows = await carrierDealRows\(pool, \{ period: \{ from, to \}, scope, since: CARRIER_SINCE\(\) \}\);\s*const rep = carrierReport\(rows\);/,
+  assert.match(route.slice(at2, route.indexOf("dashboardRouter.", at2 + 10)), /const rows = await carrierDealRows\(pool, \{ period: \{ from, to \}, scope, since: CARRIER_SINCE\(\) \}\);\s*const rep = (?:withAwaitingNow\()?carrierReport\(rows\)[,;]/,
     "🔴 звіт рахується не з тих самих рядків, що вкладки");
 });
 
@@ -1160,7 +1160,10 @@ test("#1069 ПРОВОДКА ФРОНТУ: вкладки ТЗ, картка у�
   const report = readFileSync(FE("pages/dashboard/sections/ReportPlanSection.tsx"), "utf8");
   assert.match(report, /<CarrierReportCard from=\{selectedPeriod\.from\} to=\{selectedPeriod\.to\}/, "🔴 блоку «Дзвінки на мобільні» у «Звіті» немає");
   const card = readFileSync(FE("pages/dashboard/sections/CarrierReportCard.tsx"), "utf8");
-  for (const fn of ["fetchCarrierReport(", "fetchCarrierCalls("]) assert.ok(card.includes(fn), `🔴 блок звіту не кличе ${fn}`);
+  // 5968: звіт тягне екран (`useCarrierReport` → `fetchCarrierReport`), блок отримує його готовим; список — сам блок.
+  assert.ok(card.includes("fetchCarrierCalls("), "🔴 блок звіту не кличе fetchCarrierCalls(");
+  assert.ok(readFileSync(FE("pages/dashboard/carrierReportData.ts"), "utf8").includes("fetchCarrierReport("), "🔴 звіт блоку ніхто не тягне");
+  assert.match(report, /<CarrierReportCard [^>]*data=\{carrier\} \/>/, "🔴 блок звіту не отримує даних");
   const api = readFileSync(FE("api.ts"), "utf8");
   for (const p of ['"/dashboard/carrier-calls"', '"/dashboard/carrier-calls/report"', '"/dashboard/carrier-calls/pending"', "`/dashboard/carrier-calls/deals/${String(kommoId)}/decision`, { decision, note, otherType }"])
     assert.ok(api.includes(p), `🔴 api не ходить на ${p}`);
@@ -1301,7 +1304,8 @@ test("#1073 ТОЧКА СТАРТУ · ЖИВА СХЕМА: до старту �
   assert.deepEqual(shown, [107302], "🔴 угода до старту потрапила у вкладки/звіт");
   const route = SRC("routes/dashboard.ts");
   assert.match(route, /const CARRIER_SINCE = \(\) => config\.callAi\.carrierLaunchAt;/);
-  assert.equal((route.match(/CARRIER_SINCE\(\)/g) ?? []).length, 6, "🔴 не всі роути вкладки, звіту, динаміки й однієї угоди беруть точку старту");
+  // 7, а не 6: з 16.10.2026 звіт бере точку старту двічі — період і «чекають рішення зараз» (5968).
+  assert.equal((route.match(/CARRIER_SINCE\(\)/g) ?? []).length, 7, "🔴 не всі роути вкладки, звіту, динаміки й однієї угоди беруть точку старту");
   assert.match(SRC("jobs/carrierCallJob.ts"), /launchAt: new Date\(config\.callAi\.carrierLaunchAt\)/, "🔴 джоба слухає без точки старту");
   assert.match(SRC("config.ts"), /carrierLaunchAt: process\.env\.CARRIER_LAUNCH_AT \?\? "2026-09-30T09:48:08Z"/, "🔴 точка старту ≠ рішенню 30.09.2026");
 });
@@ -1939,4 +1943,69 @@ test("#1531b ДЗВІНОК ПРО БОРГ: розпізнається спіл
   const res = (await c.raw.query<{ result: { promised: boolean; amount_uah: number; quote_found: boolean } }>(`SELECT a.result FROM call_analyses a
     JOIN call_transcripts t ON t.id=a.transcript_id WHERE t.uniqueid='1531-debt'`)).rows[0].result;
   assert.deepEqual([res.promised, res.amount_uah, res.quote_found], [true, 500000, true]);
+});
+
+/**
+ * #1776 — «ЧЕКАЮТЬ РІШЕННЯ ЗАРАЗ» (задача 5968): стан на зараз, а не за період. Рахується угода, що Й ДОСІ на етапі
+ * й чекає людину («На перевірці» / «Помилка»); угода, яку вже закрили чи зрушили в Kommo, вирішена (CRM — єдине
+ * джерело); «AI ще слухає» не рахується (рішення Романа 16.10.2026). Менеджер без угод за період, але з тими, що чекають,
+ * отримує свій рядок — інакше його угоди були б у «Разом», але в жодному рядку.
+ * 🧨 Червоніє, якщо рахувати закриті в Kommo, повернути «AI слухає» чи загубити менеджера поза періодом.
+ */
+test("#1776 ЧЕКАЮТЬ РІШЕННЯ ЗАРАЗ: лише ті, що досі на етапі; закриті в Kommo й «AI слухає» — ні; рядок і поза періодом", async () => {
+  const { isAwaitingNow, withAwaitingNow, carrierReport } = await import("./carrierDeals.js");
+  const STAGE = 70419108;
+  type R = Parameters<typeof isAwaitingNow>[0] & { overdue: boolean; managerId: number | null; managerName: string | null; teamId: number | null; teamName: string | null; source: null };
+  const r = (category: string, statusId: number | null, managerId: number | null, teamId: number | null, overdue = false): R =>
+    ({ category, crm: { statusId, rejectReason: null }, overdue, managerId, managerName: managerId == null ? null : `М${String(managerId)}`, teamId, teamName: teamId == null ? null : `К${String(teamId)}`, source: null } as unknown as R);
+  // По обидва боки кожної межі.
+  assert.equal(isAwaitingNow(r("review", STAGE, 1, 10), STAGE), true, "🔴 угода на перевірці, що досі на етапі, не рахується");
+  assert.equal(isAwaitingNow(r("error", STAGE, 1, 10), STAGE), true, "🔴 «Помилка» на етапі не рахується — людині її теж вирішувати");
+  assert.equal(isAwaitingNow(r("review", 143, 1, 10), STAGE), false, "🔴 угоду вже закрили в Kommo, а вона «чекає рішення»");
+  assert.equal(isAwaitingNow(r("review", 69716252, 1, 10), STAGE), false, "🔴 угоду вже зрушили з етапу, а вона «чекає рішення»");
+  assert.equal(isAwaitingNow(r("waiting", STAGE, 1, 10), STAGE), false, "🔴 «AI ще слухає» рахується як «чекає рішення людини»");
+  assert.equal(isAwaitingNow(r("client", STAGE, 1, 10), STAGE), false);
+
+  const periodRows = [r("client", STAGE, 1, 10), r("carrier", 143, 1, 10)];
+  const awaiting = [r("review", STAGE, 1, 10, true), r("error", STAGE, 1, 10), r("review", STAGE, 2, 10, true), r("review", STAGE, null, null)]
+    .filter((x) => isAwaitingNow(x, STAGE));
+  const rep = withAwaitingNow(carrierReport(periodRows as never), awaiting as never);
+  const m1 = rep.managers.find((m) => m.managerId === 1)!;
+  assert.deepEqual([m1.awaitingNow, m1.overdueNow, m1.total], [2, 1, 2], "🔴 менеджер 1: «чекають рішення» або періодні колонки зсунулись");
+  const m2 = rep.managers.find((m) => m.managerId === 2);
+  assert.ok(m2, "🔴 менеджер без угод за період, але з тими, що чекають рішення, — без рядка");
+  assert.deepEqual([m2.awaitingNow, m2.overdueNow, m2.total], [1, 1, 0]);
+  assert.ok(rep.managers.some((m) => m.managerId === null && m.awaitingNow === 1), "🔴 угода без менеджера зникла з «чекають рішення»");
+  assert.equal(rep.teams.find((t) => t.teamId === 10)?.awaitingNow, 3, "🔴 рядок команди ≠ сумі її менеджерів");
+  assert.deepEqual([rep.total.awaitingNow, rep.total.overdueNow], [4, 2], "🔴 «разом» ≠ усім, хто чекає");
+  // Роут: «зараз» — з угод, що стоять на етапі ЗАРАЗ, без періоду, тим самим скоупом; у відповіді — самі угоди для кліку.
+  const route = SRC("routes/dashboard.ts");
+  const at = route.indexOf('dashboardRouter.get("/carrier-calls/report"');
+  const body = route.slice(at, route.indexOf("dashboardRouter.", at + 10));
+  assert.match(body, /FROM deals WHERE pipeline_id = \$1 AND status_id = \$2",\s*\[CARRIER_STAGE\.pipelineId, CARRIER_STAGE\.statusId\]/, "🔴 «зараз» не з угод, що стоять на етапі");
+  assert.match(body, /carrierDealRows\(pool, \{ period: null, scope, since: CARRIER_SINCE\(\), ids: onStage \}\)\)\.filter\(\(r\) => isAwaitingNow\(r, CARRIER_STAGE\.statusId\)\)/,
+    "🔴 «чекають рішення зараз» обмежено періодом або іншим скоупом");
+  assert.match(body, /awaiting: awaiting\.map\(carrierDealJson\)/, "🔴 клік по числу не має з чого показати угоди");
+});
+
+/**
+ * #1777 — ФРОНТ: мітка в рядку менеджера й колонка нижнього блоку — з ОДНОГО запиту (`useCarrierReport` на рівні
+ * екрана), клік по «чекають рішення зараз» показує угоди з `rep.awaiting`, а не з періодного списку.
+ * 🧨 Червоніє, якщо мітка чи блок почнуть тягнути звіт окремо або клік показуватиме інший набір, ніж число.
+ */
+test("#1777 ЗВІТ · ФРОНТ: мітка «чекають рішення» і блок — один запит; клік — ті самі угоди", () => {
+  const read = (rel: string) => readFileSync(FE(rel), "utf8");
+  const sec = read("pages/dashboard/sections/ReportPlanSection.tsx");
+  const card = read("pages/dashboard/sections/CarrierReportCard.tsx");
+  const data = read("pages/dashboard/carrierReportData.ts");
+  assert.equal((data.match(/fetchCarrierReport\(/g) ?? []).length, 1);
+  assert.equal((sec.match(/fetchCarrierReport\(/g) ?? []).length + (card.match(/fetchCarrierReport\(/g) ?? []).length, 0,
+    "🔴 блок або рядок тягнуть звіт окремо — два запити можуть показати різне число про ту саму людину");
+  assert.match(sec, /const carrier = useCarrierReport\(selectedPeriod\.from, selectedPeriod\.to,/);
+  assert.match(sec, /<CarrierReportCard [^>]*data=\{carrier\} \/>/, "🔴 нижній блок не з того самого запиту");
+  assert.match(sec, /awaitingByManager\(carrier\.rep\)/, "🔴 мітка в рядку не з того самого запиту");
+  assert.match(sec, /const aw = useContext\(AwaitCtx\)\.get\(m\.managerId\);/);
+  assert.match(data, /x\.awaitingNow > 0\) m\.set\(x\.managerId, \{ awaitingNow: x\.awaitingNow, overdueNow: x\.overdueNow \}\)/, "🔴 мітка не з поля «чекають рішення зараз»");
+  assert.match(card, /const pool = pick && NOW_COLS\.has\(pick\.col\) \? rep\.awaiting : rows;/, "🔴 клік по «чекають рішення зараз» показує не ті угоди, з яких число");
+  assert.match(card, /\{ key: "awaitingNow", label: "Чекають рішення зараз"/);
 });

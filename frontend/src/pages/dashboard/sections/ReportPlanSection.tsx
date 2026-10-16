@@ -21,6 +21,7 @@ import { firstTouchLabel, firstTouchStale } from "../reportTableCols";
 // 🔀 Зріз за новизною — ЄДИНЕ місце рішення на фронті; звіряється з ядром у `#213`.
 import { NON_COMMERCIAL_TEAM_IDS } from "../teamSets";
 import { keepByKlass, visibleSlices, narrowToSlice, SLICE_LABEL, KLASS_CHIP, type Slice } from "../klassSlice";
+import { useCarrierReport, awaitingByManager } from "../carrierReportData";
 
 /**
  * 🔀 ПОЛОЖЕННЯ ПЕРЕМИКАЧА ЇДЕ КОНТЕКСТОМ, А НЕ ПРОПСОМ.
@@ -30,6 +31,8 @@ import { keepByKlass, visibleSlices, narrowToSlice, SLICE_LABEL, KLASS_CHIP, typ
  * як розкриття і число розходяться. Контекст читає той, кому воно треба.
  */
 const SliceCtx = createContext<Slice>("all");
+/** ⏳ «Чекають рішення» по менеджерах (5968) — з того самого звіту, що й нижній блок «Дзвінки на мобільні». */
+const AwaitCtx = createContext<ReadonlyMap<number, { awaitingNow: number; overdueNow: number }>>(new Map());
 
 // Статуси-кольори (зарезервовані, з іконкою+підписом — не колір-наодинці). Тема-безпечні.
 const GREEN = "#16a34a", AMBER = "#d97706", RED = "#dc2626", BAR = "#2f6fdb", MUTED = "var(--text-muted)";
@@ -197,6 +200,9 @@ export function ReportPlanSection({ auth, teams }: {
   const selectedPeriod = useMemo(() => periodOf({ mode, anchor, focusDay, rangeFrom, rangeTo }),
     [mode, anchor, focusDay, rangeFrom, rangeTo]);
   const periodLabel = periodLabelOf(navState);
+  // 🚚 «Дзвінки на мобільні» — один запит на екран: нижній блок і мітка «чекають рішення» в рядку менеджера (5968).
+  const carrier = useCarrierReport(selectedPeriod.from, selectedPeriod.to, teamIds.length === 1 ? teamIds[0] : undefined);
+  const awaitMap = useMemo(() => awaitingByManager(carrier.rep), [carrier.rep]);
   /** Патч від навігатора → сеттери. Розкладено поіменно: `mode` тут не «одне з полів»,
       а окреме рішення, і зсув його разом із датами був би тихою зміною поведінки. */
   const applyNav = (patch: Partial<PeriodState>) => {
@@ -400,7 +406,7 @@ export function ReportPlanSection({ auth, teams }: {
           </button>
         </div>
       ) : busy && !data ? <div style={{ color: MUTED, padding: 20 }}>Завантаження…</div> : data && (
-        <SliceCtx.Provider value={slice}>
+        <SliceCtx.Provider value={slice}><AwaitCtx.Provider value={awaitMap}>
           <Glance data={data} focus={focus} focusDay={focusDay} today={today} periodLabel={periodLabel} />
           <SliceSwitch data={data} slice={slice} onSlice={setSlice} />
           {/* Блоки як у КВП — ВГОРУ, перед списком менеджерів (на видноті). Роль-скоуп на
@@ -472,7 +478,7 @@ export function ReportPlanSection({ auth, teams }: {
           <DismissedRows rows={data.dismissed ?? []} />
           </>)}
           <Legend />
-        </SliceCtx.Provider>
+        </AwaitCtx.Provider></SliceCtx.Provider>
       )}
       {/* 🚚 Дзвінки на мобільні — хто це виявився (ТЗ Романа 30.09.2026). Окремий блок із НОВИМИ числами (жодне не
           дублює карток вище); той самий період і та сама команда, що й звіт; рядки — ті самі, що вкладка «Перевізники».
@@ -483,8 +489,8 @@ export function ReportPlanSection({ auth, teams }: {
       <div style={{ marginTop: 18 }}>
         <FirstTouchReportCard from={selectedPeriod.from} to={selectedPeriod.to} teamId={teamIds.length === 1 ? teamIds[0] : undefined} />
       </div>
-      <div style={{ marginTop: 18 }}>
-        <CarrierReportCard from={selectedPeriod.from} to={selectedPeriod.to} teamId={teamIds.length === 1 ? teamIds[0] : undefined} />
+      <div id="carrier-report" style={{ marginTop: 18 }}>
+        <CarrierReportCard from={selectedPeriod.from} to={selectedPeriod.to} teamId={teamIds.length === 1 ? teamIds[0] : undefined} data={carrier} />
       </div>
     </div>
   );
@@ -683,6 +689,7 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
   role: string; isSelf?: boolean; open: boolean; onToggle: () => void;
 }) {
   const s = m.status; // статус за ОБРАНИМ періодом
+  const aw = useContext(AwaitCtx).get(m.managerId);
   const pct = m.plan > 0 ? Math.round((m.fact / m.plan) * 100) : 0;
   const smax = Math.max(...m.spark, 1);
   const showWhy = s !== "g";
@@ -701,6 +708,15 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
             {m.name}<span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 20, background: TAGCOL[m.tag] + "22", color: TAGCOL[m.tag] }}>{m.tag.toUpperCase()}</span>
             {isSelf && <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 20, background: BAR + "22", color: BAR }}>ТИ</span>}
           </span>
+          {aw && (
+            <button type="button" title="Дзвінки на мобільні: угоди менеджера, що зараз чекають рішення людини (стан на зараз, не за періодом). Клік — до блоку «Дзвінки на мобільні» внизу Звіту."
+              onClick={(e) => { e.stopPropagation(); document.getElementById("carrier-report")?.scrollIntoView({ behavior: "smooth" }); }}
+              style={{ fontSize: 11.5, fontWeight: 650, padding: "2px 9px", borderRadius: 20, width: "max-content", cursor: "pointer",
+                border: `1px solid ${aw.overdueNow > 0 ? "#dc262655" : "var(--border)"}`, background: aw.overdueNow > 0 ? "rgba(220,38,38,.08)" : "var(--card-bg)",
+                color: aw.overdueNow > 0 ? "#dc2626" : "var(--text)" }}>
+              🚚 чекають рішення: {aw.awaitingNow}{aw.overdueNow > 0 ? ` · прострочено ${String(aw.overdueNow)}` : ""}
+            </button>
+          )}
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 750, fontSize: 12, padding: "3px 10px", borderRadius: 20, width: "max-content", background: SCOL[s] + "22", color: SCOL[s] }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: SCOL[s] }} />{SLBL[s]} · {isMonthMode ? "міс" : periodLabel}
           </span>

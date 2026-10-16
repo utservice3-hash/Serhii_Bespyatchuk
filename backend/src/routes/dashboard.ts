@@ -80,7 +80,7 @@ import { loadTunables } from "../core/firstTouchTunables.js";
 
 import { canEditType } from "../core/callAiType.js";
 import { CARRIER_LISTEN_ROLES, carrierCallCard, carrierCallsList, carrierCallsMeta } from "../core/carrierCallScreen.js";
-import { callInScope, carrierAgreementRows, carrierDailyStats, carrierDealRows, carrierReport, filterRemovedByManager } from "../core/carrierDeals.js";
+import { callInScope, carrierAgreementRows, carrierDailyStats, carrierDealRows, carrierReport, filterRemovedByManager, isAwaitingNow, withAwaitingNow } from "../core/carrierDeals.js";
 import { minutesSetting, NO_TALK_GUARD, readNoTalkGuard } from "../core/carrierNoTalkGuard.js";
 import { taskSweepStats } from "../core/carrierTaskSweep.js";
 import { CARRIER_BUDGET, CARRIER_STAGE } from "../core/carrierCallRules.js";
@@ -11433,18 +11433,26 @@ dashboardRouter.get("/carrier-calls", async (req, res) => {
 dashboardRouter.get("/carrier-calls/report", async (req, res) => {
   const { from, to } = missedPeriod(dateParam(req.query.from), dateParam(req.query.to), kyivToday());
   const scope = carrierScope(req);
+  // ⏳ «Чекають рішення зараз» (5968) — стан на зараз, не за періодом: угоди, що й досі на етапі, з тим самим кламп-скоупом.
+  const onStage = (await pool.query<{ k: string }>("SELECT kommo_id::text AS k FROM deals WHERE pipeline_id = $1 AND status_id = $2",
+    [CARRIER_STAGE.pipelineId, CARRIER_STAGE.statusId])).rows.map((x) => Number(x.k));
+  const awaiting = onStage.length
+    ? (await carrierDealRows(pool, { period: null, scope, since: CARRIER_SINCE(), ids: onStage })).filter((r) => isAwaitingNow(r, CARRIER_STAGE.statusId))
+    : [];
   const rows = await carrierDealRows(pool, { period: { from, to }, scope, since: CARRIER_SINCE() });
-  const rep = carrierReport(rows);
+  const rep = withAwaitingNow(carrierReport(rows), awaiting);
   const filtered = await filterRemovedByManager(pool, from, to, CARRIER_STAGE.pipelineId, scope, CARRIER_SINCE());
   const line = (x: (typeof rep.managers)[number]) => ({ managerId: x.managerId, managerName: x.managerName, teamId: x.teamId, teamName: x.teamName,
     total: x.total, clients: x.clients, carriersAuto: x.carriersAuto, carriersManual: x.carriersManual,
-    otherAuto: x.otherAuto, otherManual: x.otherManual, unsorted: x.unsorted, overdue: x.overdue, noTalk: x.noTalk });
+    otherAuto: x.otherAuto, otherManual: x.otherManual, unsorted: x.unsorted, overdue: x.overdue, noTalk: x.noTalk,
+    awaitingNow: x.awaitingNow, overdueNow: x.overdueNow });
   res.json({
     period: { from, to },
     managers: rep.managers.map((x) => ({ ...line(x), filterRemoved: filtered.get(x.managerId) ?? 0 })),
     teams: rep.teams.map(line),
     total: rep.total,
     filterRemoved: [...filtered.values()].reduce((a, b) => a + b, 0),
+    awaiting: awaiting.map(carrierDealJson),
   });
 });
 

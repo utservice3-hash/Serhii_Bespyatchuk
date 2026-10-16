@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
-import { fetchCarrierCalls, fetchCarrierReport, type CarrierDealT, type CarrierReportLineT, type CarrierReportResp } from "../../../api";
+import { fetchCarrierCalls, type CarrierDealT, type CarrierReportLineT, type CarrierReportResp } from "../../../api";
+import type { CarrierReportState } from "../carrierReportData";
 import { InfoHint } from "../widgets";
 import { CATEGORY_UI, OTHER_TYPE_UI, TONE, deciderLabel, pctLabel } from "../carrierCallsView";
 import { pill } from "./CarrierDealPanel";
@@ -11,7 +12,9 @@ import { pill } from "./CarrierDealPanel";
  * не можуть розійтись. Ролі без вкладки «Перевізники» блок не бачать (сервер відповідає 403 — ховаємо).
  */
 
-type Col = "total" | "clients" | "carriersAuto" | "carriersManual" | "otherAuto" | "otherManual" | "unsorted" | "overdue";
+type Col = "total" | "clients" | "carriersAuto" | "carriersManual" | "otherAuto" | "otherManual" | "awaitingNow" | "overdueNow";
+/** Колонки «на зараз» (5968): клік показує угоди з `rep.awaiting`, а не з періодного списку. */
+const NOW_COLS: ReadonlySet<Col> = new Set(["awaitingNow", "overdueNow"]);
 const COLS: readonly { key: Col; label: string; hint: string; match: (r: CarrierDealT) => boolean }[] = [
   { key: "total", label: "Усього", hint: "Усі угоди «Дзвінки на мобільні» менеджера за період, які розібрала автоматика — AI за розмовою або історія CRM (без відсіяних фільтром і без розмови).", match: (r) => r.category !== "no_talk" },
   { key: "clients", label: "Клієнти", hint: "Виявились клієнтами — угода лишилась на етапі.", match: (r) => r.category === "client" },
@@ -19,8 +22,8 @@ const COLS: readonly { key: Col; label: string; hint: string; match: (r: Carrier
   { key: "carriersManual", label: "Перевізники (людина)", hint: "Перевізники, яких визначила людина після прослуховування.", match: (r) => r.category === "carrier" && r.source === "human" },
   { key: "otherAuto", label: "Інше (AI)", hint: "Не клієнт і не перевізник (спам, постачальник, робота, особисте, помилка номера) — визначив AI.", match: (r) => r.category === "other" && r.source !== "human" },
   { key: "otherManual", label: "Інше (людина)", hint: "Не клієнт і не перевізник — визначила людина.", match: (r) => r.category === "other" && r.source === "human" },
-  { key: "unsorted", label: "Чекають рішення", hint: "AI не впевнений, помилка обробки або AI ще слухає — рішення за менеджером.", match: (r) => r.category === "review" || r.category === "error" || r.category === "waiting" },
-  { key: "overdue", label: "Прострочено", hint: "З тих, що чекають рішення: не розібрані до кінця робочого дня (18:00 Пн–Пт).", match: (r) => r.overdue },
+  { key: "awaitingNow", label: "Чекають рішення зараз", hint: "Стан на зараз, незалежно від обраного періоду: угоди, що й досі стоять на етапі «Дзвінки на мобільні» й чекають людину — AI не впевнений або помилка обробки. Угоди, які вже закрили чи зрушили в Kommo, сюди не входять; «AI ще слухає» — теж.", match: (r) => r.category === "review" || r.category === "error" },
+  { key: "overdueNow", label: "Прострочено", hint: "З тих, що чекають рішення зараз: не розібрані до кінця робочого дня (18:00 Пн–Пт).", match: (r) => r.overdue },
 ];
 const fmtTime = (iso: string) => new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const muted: React.CSSProperties = { color: "var(--text-muted)" };
@@ -28,30 +31,20 @@ const num: React.CSSProperties = { padding: "6px 10px", textAlign: "right", font
 
 type Pick = { who: "manager" | "team" | "all"; id: number | null; col: Col; title: string };
 
-export function CarrierReportCard({ from, to, managerId, teamId }: { from: string; to: string; managerId?: number; teamId?: number }) {
-  const [rep, setRep] = useState<CarrierReportResp | null>(null);
-  const [hidden, setHidden] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+/** Дані — з `useCarrierReport` на рівні екрана (один запит і для блоку, і для мітки в рядку менеджера). */
+export function CarrierReportCard({ from, to, managerId, teamId, data }: { from: string; to: string; managerId?: number; teamId?: number; data: CarrierReportState }) {
+  const { rep, hidden } = data;
+  const [listErr, setErr] = useState<string | null>(null);
+  const err = data.err ?? listErr;
   const [rows, setRows] = useState<CarrierDealT[] | null>(null);
   const [pick, setPick] = useState<Pick | null>(null);
 
-  useEffect(() => {
-    let alive = true;
-    setRep(null); setRows(null); setPick(null); setErr(null);
-    fetchCarrierReport({ from, to, managerId, teamId })
-      .then((x) => { if (alive) setRep(x); })
-      .catch((e) => {
-        if (!alive) return;
-        if ((e as { response?: { status?: number } }).response?.status === 403) setHidden(true);
-        else setErr(e instanceof Error ? e.message : "Не вдалося завантажити");
-      });
-    return () => { alive = false; };
-  }, [from, to, managerId, teamId]);
+  useEffect(() => { setRows(null); setPick(null); setErr(null); }, [from, to, managerId, teamId]);
 
   const open = async (p: Pick) => {
     if (pick && pick.who === p.who && pick.id === p.id && pick.col === p.col) { setPick(null); return; }
     setPick(p);
-    if (!rows) {
+    if (!rows && !NOW_COLS.has(p.col)) {
       try { setRows((await fetchCarrierCalls({ from, to, managerId, teamId })).rows); }
       catch (e) { setErr(e instanceof Error ? e.message : "Не вдалося завантажити список"); }
     }
@@ -61,26 +54,27 @@ export function CarrierReportCard({ from, to, managerId, teamId }: { from: strin
   const head = (
     <h2 className="chart-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
       Дзвінки на мобільні
-      <InfoHint text="Угоди етапу «Дзвінки на мобільні», що лишились після фільтра CRM, — хто це виявився: клієнт, перевізник чи інше; AI — упевнений вердикт, вручну — рішення менеджера, тімліда чи керівника. «Не розібрано» — на перевірці, помилка або AI ще слухає; «прострочено» — не розібрані до кінця робочого дня (18:00, Пн–Пт). «Без розмови» (коротше 10 с — закрито «Немає зв'язку», не аналізуємо) і «Прибрав фільтр» — окремо, у «Усього» не входять. Облік — з 30.09.2026 12:48. Клік по числу — список угод." />
+      <InfoHint text="Угоди етапу «Дзвінки на мобільні», що лишились після фільтра CRM, — хто це виявився: клієнт, перевізник чи інше; AI — упевнений вердикт, вручну — рішення менеджера, тімліда чи керівника. «Чекають рішення зараз» — стан на зараз, незалежно від періоду: угоди, що й досі на етапі й чекають людину (на перевірці або помилка; угоди, закриті чи зрушені в Kommo, і «AI ще слухає» не входять); «прострочено» — з них не розібрані до кінця робочого дня (18:00, Пн–Пт). «Без розмови» (коротше 10 с — закрито «Немає зв'язку», не аналізуємо) і «Прибрав фільтр» — окремо, у «Усього» не входять. Облік — з 30.09.2026 12:48. Клік по числу — список угод." />
     </h2>
   );
   if (err) return <div className="chart-card">{head}<p style={{ margin: 0, color: "var(--danger)" }}>{err}</p></div>;
   if (!rep) return <div className="chart-card">{head}<p className="loading-text" style={{ margin: 0 }}>Завантаження…</p></div>;
-  if (rep.total.total === 0 && rep.filterRemoved === 0) return <div className="chart-card">{head}<p style={{ margin: 0, ...muted }}>За період угод на етапі не було.</p></div>;
+  if (rep.total.total === 0 && rep.filterRemoved === 0 && rep.total.awaitingNow === 0) return <div className="chart-card">{head}<p style={{ margin: 0, ...muted }}>За період угод на етапі не було.</p></div>;
 
   const teamsShown = rep.teams.length > 1;
   const cellBtn = (line: CarrierReportLineT | CarrierReportResp["total"], p: Omit<Pick, "col" | "title">, title: string) => COLS.map((c) => {
     const v = line[c.key];
     const on = pick?.who === p.who && pick.id === p.id && pick.col === c.key;
     return (
-      <td key={c.key} style={{ ...num, fontWeight: c.key === "total" ? 600 : 400, color: c.key === "overdue" && v > 0 ? "var(--danger)" : undefined }}>
+      <td key={c.key} style={{ ...num, fontWeight: c.key === "total" ? 600 : 400, color: c.key === "overdueNow" && v > 0 ? "var(--danger)" : undefined }}>
         {v === 0 ? <span style={muted}>0</span>
           : <button type="button" onClick={() => { void open({ ...p, col: c.key, title: `${title} · ${c.label}` }); }} aria-pressed={on}
-              style={{ border: 0, background: on ? "var(--info-bg)" : "none", color: c.key === "overdue" ? "var(--danger)" : "var(--info)", cursor: "pointer", padding: "1px 4px", borderRadius: 4, fontVariantNumeric: "tabular-nums", font: "inherit" }}>{v}</button>}
+              style={{ border: 0, background: on ? "var(--info-bg)" : "none", color: c.key === "overdueNow" ? "var(--danger)" : "var(--info)", cursor: "pointer", padding: "1px 4px", borderRadius: 4, fontVariantNumeric: "tabular-nums", font: "inherit" }}>{v}</button>}
       </td>
     );
   });
-  const picked = pick && rows ? rows.filter((r) => (pick.who === "all" || (pick.who === "manager" ? r.managerId === pick.id : r.teamId === pick.id))
+  const pool = pick && NOW_COLS.has(pick.col) ? rep.awaiting : rows;
+  const picked = pick && pool ? pool.filter((r) => (pick.who === "all" || (pick.who === "manager" ? r.managerId === pick.id : r.teamId === pick.id))
     && (COLS.find((c) => c.key === pick.col)?.match(r) ?? false)) : null;
 
   return (

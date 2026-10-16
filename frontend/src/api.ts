@@ -604,9 +604,13 @@ export interface CarrierReportLineT {
   managerId: number | null; managerName: string | null; teamId: number | null; teamName: string | null;
   total: number; clients: number; carriersAuto: number; carriersManual: number; otherAuto: number; otherManual: number; unsorted: number;
   overdue: number; noTalk: number; filterRemoved?: number;
+  /** ⏳ Стан на ЗАРАЗ (не за періодом): угоди, що досі на етапі й чекають людину; «AI ще слухає» не входить (5968). */
+  awaitingNow: number; overdueNow: number;
 }
 export interface CarrierReportResp { period: { from: string; to: string }; managers: CarrierReportLineT[]; teams: CarrierReportLineT[];
-  total: Omit<CarrierReportLineT, "managerId" | "managerName" | "teamId" | "teamName">; filterRemoved: number }
+  total: Omit<CarrierReportLineT, "managerId" | "managerName" | "teamId" | "teamName">; filterRemoved: number;
+  /** Самі угоди «чекають рішення зараз» — з них пораховані `awaitingNow`/`overdueNow`, клік по числу показує саме їх. */
+  awaiting: CarrierDealT[] }
 export async function fetchCarrierReport(params: { from: string; to: string; managerId?: number; teamId?: number }): Promise<CarrierReportResp> {
   const { data } = await api.get<CarrierReportResp>("/dashboard/carrier-calls/report", { params });
   return data;
