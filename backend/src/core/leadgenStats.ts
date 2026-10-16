@@ -2,7 +2,7 @@ import { pool } from "../db/pool.js";
 import { kyivToday } from "./dates.js";
 import { PRODZVIN_PIPELINES, PZ_TAKEN, PZ_OPR, REACTIVATION_PIPELINES, REACT_WARMING, GENERIC_CLIENT_KEYS } from "./metrics.js";
 import { LEADGEN_STAGE_IDS, QUALIFICATION_PIPELINES } from "./leadgenStages.js";
-import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery, leadStatusPred, oprStatusPred, quoteKeptSql, stageDealsQuery, QUOTE_KEPT_MANUAL,
+import { stageCountsQuery, bucketKeySql, handoffLinkQuery, firstStageEventQuery, leadStatusPred, oprStatusPred, quoteKeptSql, stageDealsQuery, QUOTE_KEPT_MANUAL, lgOwnerSql, LEADGEN_OWNER_MANUAL,
   type SqlQuery, type LeadgenBucketGrain } from "./leadgenSql.js";
 import { FC_PIPELINES, handoffDealStates, clientSuccessHistory } from "./money.js";
 import { stageName } from "./stageNames.js";
@@ -199,7 +199,7 @@ export async function leadgenHandoffs(from: string, to: string, limit = 500): Pr
             MIN(d.name) AS name, MIN(m.name) AS manager
        FROM deal_stage_events e
        JOIN deals d ON d.kommo_id = e.kommo_id
-       LEFT JOIN managers m ON m.id = d.manager_id
+       LEFT JOIN managers m ON m.id = ${lgOwnerSql("d")}
       WHERE e.pipeline_id = ANY($3) AND e.status_id = 142 AND ${quoteKeptSql("$3")}
         AND (e.changed_at ${K})::date BETWEEN $1 AND $2
       GROUP BY e.kommo_id
@@ -426,6 +426,8 @@ export interface LeadgenStageDealRow {
   flags: StageDealFlags;
   /** Прорахунок зараховано рішенням власника попри скасування за 15 хв (`QUOTE_KEPT_MANUAL`). */
   manualQuote: boolean;
+  /** Угоду закріплено за лідгеном рішенням власника попри іншого відповідального в CRM (`LEADGEN_OWNER_MANUAL`). */
+  manualOwner: boolean;
 }
 export interface LeadgenStageDeals { counts: { leads: number; opr: number; quotes: number }; deals: LeadgenStageDealRow[] }
 
@@ -460,7 +462,8 @@ export async function leadgenStageDeals(from: string, to: string, managerId: num
       .map((e) => ({ at: new Date(e.changed_at).toISOString(), stage: stageName(Number(e.pipeline_id), Number(e.status_id)) }));
     return { dealId: id, url: kommoLeadUrl(id), name: x.name, client: x.client_name, source: x.client_source,
       leadAt: iso(x.lead_at), leadStage: nm(x.lead_stage), oprAt: iso(x.opr_at), oprStage: nm(x.opr_stage), quoteAt: iso(x.quote_at),
-      path, flags, manualQuote: x.quote_at != null && QUOTE_KEPT_MANUAL.some((m) => m.dealId === id) };
+      path, flags, manualQuote: x.quote_at != null && QUOTE_KEPT_MANUAL.some((m) => m.dealId === id),
+      manualOwner: LEADGEN_OWNER_MANUAL.some((m) => m.dealId === id) };
   });
   return { counts: { leads: deals.filter((d) => d.leadAt).length, opr: deals.filter((d) => d.oprAt).length, quotes: deals.filter((d) => d.quoteAt).length }, deals };
 }

@@ -215,6 +215,8 @@ export interface LeadgenStageDeal {
   flags: { noTaken: boolean; fastSec: number | null; fromReact: boolean };
   /** Прорахунок зараховано рішенням власника попри скасування за 15 хв. */
   manualQuote: boolean;
+  /** Угоду закріплено за лідгеном рішенням керівника, хоча в CRM відповідальний інший. */
+  manualOwner: boolean;
 }
 export interface LeadgenStageDealsResp { from: string; to: string; managerId: number; counts: { leads: number; opr: number; quotes: number }; deals: LeadgenStageDeal[] }
 export async function fetchLeadgenStageDeals(params: { from: string; to: string; managerId?: number }): Promise<LeadgenStageDealsResp> {
