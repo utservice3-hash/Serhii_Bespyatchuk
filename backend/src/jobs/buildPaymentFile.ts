@@ -22,7 +22,7 @@ import {
   type PayRequest, type MainDeal, type PayContext, type Verdict, type BankIn,
 } from "../core/paymentRun.js";
 import { requestStatusOf } from "../core/paymentRequests.js";
-import { kommoStateOf, discrepancyOf, screenCard, fileRow, totalsOf, type ScreenRow, type ScreenTotals } from "../core/paymentScreen.js";
+import { kommoStateOf, discrepancyOf, screenCard, fileRow, splitTotals, type ScreenRow, type ScreenSplit } from "../core/paymentScreen.js";
 import { xlsxBook } from "../core/xlsx.js";
 import { jobSkip } from "./jobRuns.js";
 
@@ -228,54 +228,87 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
 // ──────────────────────────── 💸 Екран «Оплати перевізникам» («Фінанси», 16.10.2026) ────────────────────────────
 /**
- * Дані дня для екрана: рішення — з журналу `payment_file_log`, реквізити й статус запиту — з Kommo одним запитом у мить
- * відкриття (картки в базі не лежать навмисно). Кеш на хвилину: кліки по фільтрах і «Excel» не б'ють API щоразу.
+ * Головне на екрані — ФІЛЬТР Тетяни (Роман 16.10.2026: «основна штука — це фільтр; угоди, які досі у фільтрі, мають
+ * підсвічуватися, а ті, що вже не в фільтрі, — архів; немає активних — пусто»).
+ *  · «У фільтрі зараз» — живий фільтр Kommo в мить відкриття (три етапи × Тетяна × «Стандартная», будь-якої давності);
+ *    рішення — останнє з журналу `payment_file_log`; запит, якого прогін ще не бачив, — «ще не перевірено».
+ *  · «Архів» дня — запити з журналу цього дня, яких у фільтрі вже немає, з етапом, де вони опинились.
+ * Реквізити й етап — з Kommo (картки в базі не лежать). Кеш на хвилину: кліки по фільтрах і «Excel» не б'ють API щоразу.
  */
 const screenCache = new Map<string, { at: number; data: ScreenDay }>();
 export interface ScreenDay {
   day: string; today: string; at: string | null; kommoBase: string;
-  rows: ScreenRow[]; totals: ScreenTotals;
+  active: ScreenRow[]; archive: ScreenRow[]; totals: ScreenSplit;
   days: { day: string; total: number; ok: number; okSum: number }[];
 }
 export function dropScreenCache(): void { screenCache.clear(); }
+
+type LogRow = { request_id: string; main_id: string | null; amount: string | null; ok: boolean; paid_by: string | null; reasons: string[]; notes: string[]; last_at: string };
+const rowOfLead = (d: KommoDeal | undefined, x: LogRow | undefined, requestId: number): ScreenRow => {
+  const kommo = kommoStateOf(d?.status_id ?? null), ok = x?.ok ?? false;
+  return {
+    mainId: x?.main_id != null ? Number(x.main_id) : (d ? num(cf(d, REQ_FIELDS.sourceDeal)) : null), requestId,
+    createdAt: d?.created_at ? new Date(Number(d.created_at) * 1000).toISOString() : null,
+    amount: x?.amount != null ? Number(x.amount) : (d ? num(cf(d, REQ_FIELDS.cash)) : null),
+    ok, paidBy: x?.paid_by ?? null,
+    reasons: x ? x.reasons ?? [] : ["ще не перевірено — натисніть «Оновити зараз»"], notes: x?.notes ?? [],
+    card: d ? screenCard(cf(d, REQ_FIELDS.card)) : "", owner: d ? ownerLine({ recipient: cf(d, REQ_FIELDS.recipient), bank: cf(d, REQ_FIELDS.bank), phone: cf(d, REQ_FIELDS.phone) }) : "",
+    category: PAY_CATEGORY, kommo, diff: x ? discrepancyOf(ok, kommo) : false,
+    stage: d ? requestStatusOf(Number(d.status_id)).label : "запит не знайдено в Kommo", pending: !x,
+  };
+};
+
 export async function loadScreenDay(dayArg?: string): Promise<ScreenDay> {
   const today = payWindow(new Date()).day;
-  const day = dayArg && /^\d{4}-\d{2}-\d{2}$/.test(dayArg) ? dayArg : today;
-  const hit = screenCache.get(day);
-  if (hit && Date.now() - hit.at < 60_000) return hit.data;
-  const log = (await pool.query<{ request_id: string; main_id: string | null; amount: string | null; ok: boolean; paid_by: string | null; reasons: string[]; notes: string[]; last_at: string }>(
-    `SELECT request_id::text, main_id::text, amount::text, ok, paid_by, reasons, notes, last_at::text FROM payment_file_log WHERE day = $1`, [day])).rows;
-  const leads = new Map((log.length ? await once(() => fetchLeadsByIds(log.map((x) => Number(x.request_id)).slice(0, 250))) : []).map((d) => [d.id, d]));
-  const rows: ScreenRow[] = log.map((x) => {
-    const d = leads.get(Number(x.request_id));
-    const kommo = kommoStateOf(d?.status_id ?? null);
-    return {
-      mainId: x.main_id == null ? null : Number(x.main_id), requestId: Number(x.request_id),
-      createdAt: d?.created_at ? new Date(Number(d.created_at) * 1000).toISOString() : null,
-      amount: x.amount == null ? null : Number(x.amount), ok: x.ok, paidBy: x.paid_by, reasons: x.reasons ?? [], notes: x.notes ?? [],
-      card: d ? screenCard(cf(d, REQ_FIELDS.card)) : "", owner: d ? ownerLine({ recipient: cf(d, REQ_FIELDS.recipient), bank: cf(d, REQ_FIELDS.bank), phone: cf(d, REQ_FIELDS.phone) }) : "",
-      category: PAY_CATEGORY, kommo, diff: discrepancyOf(x.ok, kommo),
-      stage: d ? requestStatusOf(Number(d.status_id)).label : "запит не знайдено в Kommo",
-    };
-  }).sort((a, b) => Number(b.ok) - Number(a.ok) || String(a.createdAt).localeCompare(String(b.createdAt)));
   const days = (await pool.query<{ day: string; total: number; ok: number; ok_sum: string }>(
     `SELECT day::text, count(*)::int AS total, count(*) FILTER (WHERE ok)::int AS ok, COALESCE(sum(amount) FILTER (WHERE ok), 0)::text AS ok_sum
        FROM payment_file_log WHERE day >= $1::date - 14 GROUP BY day ORDER BY day DESC`, [today])).rows
     .map((x) => ({ day: x.day, total: x.total, ok: x.ok, okSum: Number(x.ok_sum) }));
-  const at = log.reduce<string | null>((a, x) => (!a || x.last_at > a ? x.last_at : a), null);
-  const data: ScreenDay = { day, today, at: at ? new Date(at).toISOString() : null, kommoBase: config.kommo.baseUrl, rows, totals: totalsOf(rows), days };
+  // День архіву за замовчуванням — останній, у якому є записи: після 17:00 «поточний» файл уже завтрашній і порожній.
+  const day = dayArg && /^\d{4}-\d{2}-\d{2}$/.test(dayArg) ? dayArg : days.some((d) => d.day === today) ? today : days[0]?.day ?? today;
+  const hit = screenCache.get(day);
+  if (hit && Date.now() - hit.at < 60_000) return hit.data;
+  // 1) Живий фільтр Тетяни.
+  const open = (await once(() => fetchOpenFilter()));
+  const activeIds = open.map((d) => d.id);
+  const latest = new Map((activeIds.length ? (await pool.query<LogRow>(
+    `SELECT DISTINCT ON (request_id) request_id::text, main_id::text, amount::text, ok, paid_by, reasons, notes, last_at::text
+       FROM payment_file_log WHERE request_id = ANY($1::bigint[]) ORDER BY request_id, day DESC, last_at DESC`, [activeIds])).rows : []).map((x) => [Number(x.request_id), x]));
+  const active = open.map((d) => rowOfLead(d, latest.get(d.id), d.id))
+    .sort((a, b) => Number(b.ok) - Number(a.ok) || String(a.createdAt).localeCompare(String(b.createdAt)));
+  // 2) Архів дня: журнал цього дня мінус те, що досі у фільтрі.
+  const log = (await pool.query<LogRow>(
+    `SELECT request_id::text, main_id::text, amount::text, ok, paid_by, reasons, notes, last_at::text FROM payment_file_log WHERE day = $1`, [day])).rows;
+  const activeSet = new Set(activeIds);
+  const gone = log.filter((x) => !activeSet.has(Number(x.request_id)));
+  const leads = new Map<number, KommoDeal>();
+  for (let i = 0; i < gone.length; i += 250)
+    for (const d of await once(() => fetchLeadsByIds(gone.slice(i, i + 250).map((x) => Number(x.request_id))))) leads.set(d.id, d);
+  const archive = gone.map((x) => rowOfLead(leads.get(Number(x.request_id)), x, Number(x.request_id)))
+    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  const at = [...latest.values(), ...log].reduce<string | null>((a, x) => (!a || x.last_at > a ? x.last_at : a), null);
+  const data: ScreenDay = { day, today, at: at ? new Date(at).toISOString() : null, kommoBase: config.kommo.baseUrl, active, archive, totals: splitTotals(active, archive), days };
   screenCache.set(day, { at: Date.now(), data });
   return data;
 }
 
-/** Excel дня: «До оплати» (рівно Танин файл, у шапці суми — підсумок) + «Усі запити» з рішенням, причиною й статусом. */
+/** Фільтр Тетяни як є: три етапи × відповідальна × «Стандартная», без вікна дати (у фільтрі висять і старі запити). */
+export async function fetchOpenFilter(): Promise<KommoDeal[]> {
+  const st = PAY_STATUSES.map((s, i) => `filter[statuses][${i}][pipeline_id]=${PAY_PIPELINE}&filter[statuses][${i}][status_id]=${s}`).join("&");
+  return (await leadsPaged(`${st}&filter[responsible_user_id]=${PAY_RESPONSIBLE}`)).filter((d) => cf(d, REQ_FIELDS.urgency) === PAY_URGENCY);
+}
+
+/** Excel: «До оплати» (затверджені з фільтра — рівно Танин файл) + «У фільтрі зараз» + «Архів» дня. */
 export function screenXlsx(d: ScreenDay): Buffer {
-  const ok = d.rows.filter((r) => r.ok);
+  const ok = d.active.filter((r) => r.ok);
+  const okSum = Math.round(ok.reduce((a, r) => a + (r.amount ?? 0), 0) * 100) / 100;
+  const head = ["ID угоди", "Запит", "Номер карти", "Власник карти", "Сума", "Рішення системи", "Підстава / причина", "Примітка", "Етап запиту в Kommo", "Розбіжність"];
+  const line = (r: ScreenRow) => [r.mainId, r.requestId, r.card, r.owner, r.amount, r.pending ? "ще не перевірено" : r.ok ? "до оплати" : "перевірити",
+    r.ok ? (r.paidBy === "1С" ? "оплата є — галочка 1С" : r.paidBy === "Виписка" ? "оплата є — у Виписці" : "у межах ліміту") : r.reasons.join("; "),
+    r.notes.join("; "), r.stage, r.diff ? "так" : ""];
   return xlsxBook([
-    { name: "До оплати", rows: [["ID", "Номер карти", "Власник карти", d.totals.okSum, "Категорії"], ...ok.map(fileRow)] },
-    { name: "Усі запити", rows: [["ID угоди", "Запит", "Номер карти", "Власник карти", "Сума", "Рішення системи", "Підстава / причина", "Примітка", "Етап запиту в Kommo", "Розбіжність"],
-      ...d.rows.map((r) => [r.mainId, r.requestId, r.card, r.owner, r.amount, r.ok ? "до оплати" : "перевірити",
-        r.ok ? (r.paidBy === "1С" ? "оплата є — галочка 1С" : r.paidBy === "Виписка" ? "оплата є — у Виписці" : "у межах ліміту") : r.reasons.join("; "),
-        r.notes.join("; "), r.stage, r.diff ? "так" : ""])] },
+    { name: "До оплати", rows: [["ID", "Номер карти", "Власник карти", okSum, "Категорії"], ...ok.map(fileRow)] },
+    { name: "У фільтрі зараз", rows: [head, ...d.active.map(line)] },
+    { name: `Архів ${d.day}`, rows: [head, ...d.archive.map(line)] },
   ]);
 }

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { crc32 } from "node:zlib";
-import { kommoStateOf, discrepancyOf, fileRow, clipboardTsv, screenCard, totalsOf, toCloseOf, type ScreenRow } from "./paymentScreen.js";
+import { kommoStateOf, discrepancyOf, fileRow, clipboardTsv, screenCard, totalsOf, splitTotals, type ScreenRow } from "./paymentScreen.js";
 import { xlsxBook } from "./xlsx.js";
 
 const SRC = (rel: string): string => readFileSync(path.join(import.meta.dirname, "..", "..", "src", rel), "utf8");
@@ -103,33 +103,38 @@ test("#1271d МЕЖА ЕКРАНА «ОПЛАТИ ПЕРЕВІЗНИКАМ»: т
 });
 
 /**
- * #1272 — «ЗАКРИТИ В KOMMO» (Роман 16.10.2026): блок угод, де Тетяні треба змінити етап на «Оплачено». Рівно ті, що
- * система затвердила і що ще висять; оплачені, відмовлені й незатверджені — ні. Кожен рядок веде САМЕ на запит
- * (угоду воронки «Оплата перевозчикам», де міняють етап), а не на основну угоду; етап — словами з воронки.
- * Система сама нічого не закриває (#1268 — у Kommo не пише).
- * 🧨 Червоніє, якщо в блок потрапить оплачений чи незатверджений запит, кнопка поведе на основну угоду або етап зникне.
+ * #1273 — АРХІВ ПЕРЕКРЕСЛЕНИЙ (Роман 16.10.2026: «закрита — типу перекреслена»). Запит, що вийшов із фільтра в «Оплачено»
+ * чи «Отказано», в архіві перекреслений і приглушений; розбіжність (система «перевірити», а оплачено) лишається підсвіченою.
+ * 🧨 Червоніє, якщо перекреслити відкритий або загубити перекреслення / підсвітку розбіжності в архіві.
  */
-test("#1272 «ЗАКРИТИ В KOMMO»: лише затверджені й ще не закриті; кнопка — на сам запит у воронці; етап словами", () => {
-  const rows = [row({ requestId: 1 }), row({ requestId: 2, kommo: "paid", stage: "Оплачено" }), row({ requestId: 3, kommo: "rejected" }), row({ requestId: 4, ok: false })];
-  assert.deepEqual(toCloseOf(rows).map((r) => r.requestId), [1], "🔴 у «Закрити в Kommo» не рівно затверджені й незакриті");
-  const tab = FE("pages/dashboard/sections/FinancePaymentsTab.tsx");
-  const block = tab.slice(tab.indexOf("Закрити в Kommo"), tab.indexOf("До оплати</h3>"));
-  assert.ok(block.length > 0, "🔴 блоку «Закрити в Kommo» немає — гейту нічого перевіряти");
-  assert.match(block, /href=\{`\$\{data\.kommoBase\}\/leads\/detail\/\$\{r\.requestId\}`\}/, "🔴 кнопка веде не на сам запит у воронці");
-  assert.match(block, /\{r\.stage\}/, "🔴 етап запиту не показано");
-  assert.match(tab, /const toClose = data\.rows\.filter\(\(r\) => r\.ok && r\.kommo === "open"\);/, "🔴 фронт відбирає «до закриття» не так, як ядро");
-  assert.match(SRC("jobs/buildPaymentFile.ts"), /stage: d \? requestStatusOf\(Number\(d\.status_id\)\)\.label : "запит не знайдено в Kommo",/, "🔴 етап не з воронки «Оплата перевозчикам»");
-});
-
-/**
- * #1273 — ЗАКРИТІ ПЕРЕКРЕСЛЕНІ (Роман 16.10.2026: «підсвічувати ту, яка вже закрита, щоб була перекреслена»). Запит
- * у «Оплачено» чи «Отказано» — перекреслений і приглушений і в «До оплати», і в «Усі запити»; ще відкритий — звичайний.
- * 🧨 Червоніє, якщо перекреслити відкритий, забути одну з таблиць або загубити підсвітку розбіжності.
- */
-test("#1273 ЗАКРИТІ ПЕРЕКРЕСЛЕНІ: «Оплачено» й «Отказано» — перекреслені й приглушені в обох таблицях, ще відкриті — ні", () => {
+test("#1273 АРХІВ ПЕРЕКРЕСЛЕНИЙ: що вийшло з фільтра («Оплачено» / «Отказано») — перекреслене й приглушене, розбіжність підсвічена", () => {
   const tab = FE("pages/dashboard/sections/FinancePaymentsTab.tsx");
   assert.match(tab, /const closedStyle = \(r: PayScreenRow\): React\.CSSProperties \| undefined =>\n\s*r\.kommo === "open" \? undefined : \{ textDecoration: "line-through", color: "var\(--text-muted\)" \};/,
     "🔴 перекреслюється не рівно закрите (оплачено / відмовлено)");
-  assert.match(tab, /<tbody>\{ok\.map\(\(r\) => <tr key=\{r\.requestId\} style=\{closedStyle\(r\)\}>/, "🔴 у «До оплати» закриті не перекреслені");
-  assert.match(tab, /<tr key=\{r\.requestId\} style=\{\{ \.\.\.closedStyle\(r\), \.\.\.\(r\.diff \? \{ background:/, "🔴 в «Усі запити» закриті не перекреслені або загубилась розбіжність");
+  assert.match(tab, /\{data\.archive\.map\(\(r\) => \(\n\s*<tr key=\{r\.requestId\} style=\{\{ \.\.\.closedStyle\(r\), \.\.\.\(r\.diff \? \{ background:/, "🔴 в архіві закриті не перекреслені або загубилась розбіжність");
+});
+
+/**
+ * #1274 — ГОЛОВНЕ — ФІЛЬТР (Роман 16.10.2026: «основна штука — фільтр; що досі у фільтрі — підсвічувати, що вже не в
+ * фільтрі — архів; немає активних — пусто»). «У фільтрі зараз» — живий фільтр Kommo (три етапи × Тетяна × «Стандартная»)
+ * БЕЗ вікна дати — у її фільтрі висять і старі запити; рішення — останнє з журналу, нового запиту — «ще не перевірено»;
+ * архів дня — журнал дня мінус те, що досі у фільтрі; кнопка — на сам запит; порожній фільтр — пусто, а не вчорашнє.
+ * Підсумки рахують «ще не перевірено» окремо, а розбіжності — лише в архіві.
+ * 🧨 Червоніє, якщо до фільтра домішати вікно дати чи архів, або порожній фільтр покаже щось, або кнопка поведе не на запит.
+ */
+test("#1274 ГОЛОВНЕ — ФІЛЬТР: «у фільтрі зараз» = живий фільтр Тетяни без вікна дати; архів = журнал дня мінус фільтр; порожньо — пусто", () => {
+  const t = splitTotals([row({ requestId: 1 }), row({ requestId: 2, ok: false }), row({ requestId: 3, ok: false, pending: true })],
+    [row({ requestId: 9, kommo: "paid", ok: false, diff: true }), row({ requestId: 8, kommo: "paid" })]);
+  assert.deepEqual(t, { active: 3, activeOk: 1, activeOkSum: 18000, activeCheck: 1, pending: 1, archive: 2, diff: 1 }, "🔴 підсумки фільтра й архіву хибні");
+  const job = SRC("jobs/buildPaymentFile.ts");
+  const open = job.slice(job.indexOf("export async function fetchOpenFilter"), job.indexOf("/** Excel:"));
+  assert.ok(open.length > 0, "🔴 фільтр не знайдено — гейту нічого перевіряти");
+  assert.match(open, /PAY_STATUSES\.map/, "🔴 фільтр не за трьома етапами Тетяни");
+  assert.doesNotMatch(open, /created_at|142/, "🔴 до живого фільтра домішано вікно дати чи «Оплачено»");
+  assert.match(job, /const gone = log\.filter\(\(x\) => !activeSet\.has\(Number\(x\.request_id\)\)\);/, "🔴 архів не «журнал дня мінус фільтр»");
+  assert.match(job, /reasons: x \? x\.reasons \?\? \[\] : \["ще не перевірено — натисніть «Оновити зараз»"\]/, "🔴 новий запит без рішення не названо «ще не перевірено»");
+  const tab = FE("pages/dashboard/sections/FinancePaymentsTab.tsx");
+  assert.match(tab, /\{!data\.active\.length \? <p className="hr-muted" style=\{\{ margin: "8px 0" \}\}>У фільтрі зараз немає запитів/, "🔴 порожній фільтр не порожній");
+  assert.match(tab, /href=\{`\$\{data\.kommoBase\}\/leads\/detail\/\$\{r\.requestId\}`\}/, "🔴 кнопка веде не на сам запит у воронці");
+  assert.match(tab, /const ok = data\.active\.filter\(\(r\) => r\.ok\);/, "🔴 файл «До оплати» не лише з фільтра");
 });

@@ -18,6 +18,8 @@ export interface ScreenRow {
   card: string; owner: string; category: string; kommo: KommoState; diff: boolean;
   /** Етап запиту у воронці «Оплата перевозчикам» словами («Заявка на оплату», «Оплачено»…) — де Тетяна його закриває. */
   stage: string;
+  /** Запит у фільтрі, якого прогін ще не бачив (подали після останнього :40) — рішення немає. */
+  pending?: boolean;
 }
 
 /**
@@ -42,4 +44,13 @@ export function totalsOf(rows: readonly ScreenRow[]): ScreenTotals {
   const ok = rows.filter((r) => r.ok);
   return { total: rows.length, ok: ok.length, okSum: Math.round(ok.reduce((a, r) => a + (r.amount ?? 0), 0) * 100) / 100,
     check: rows.length - ok.length, diff: rows.filter((r) => r.diff).length, toClose: toCloseOf(rows).length };
+}
+
+/** Підсумки екрана за фільтром (16.10.2026): «у фільтрі зараз» — головне; «архів» — що вже вийшло з фільтра за день. */
+export interface ScreenSplit { active: number; activeOk: number; activeOkSum: number; activeCheck: number; pending: number; archive: number; diff: number }
+export function splitTotals(active: readonly ScreenRow[], archive: readonly ScreenRow[]): ScreenSplit {
+  const ok = active.filter((r) => r.ok);
+  return { active: active.length, activeOk: ok.length, activeOkSum: Math.round(ok.reduce((a, r) => a + (r.amount ?? 0), 0) * 100) / 100,
+    activeCheck: active.filter((r) => !r.ok && !r.pending).length, pending: active.filter((r) => r.pending).length,
+    archive: archive.length, diff: archive.filter((r) => r.diff).length };
 }
