@@ -12,6 +12,8 @@ import { notifyCapOnce } from "./aiCapAlert.js";
 import { runCarrierClose, type CloseMode, type CloseReport, type KommoCloser } from "./carrierClose.js";
 import { syncCarrierReviewTasks, type ReviewTaskStats } from "./carrierReviewTasks.js";
 import { syncLeadReminders, type LeadReminderStats } from "./carrierLeadReminder.js";
+import { runDutyAssign, syncDutyAlerts, type AssignReport, type DutyKommo, type DutyAlertStats } from "./carrierDuty.js";
+import { runClientMove, type MoveKommo, type MoveReport } from "./carrierClientMove.js";
 import { runTaskSweep, type SweepKommo, type SweepReport } from "./carrierTaskSweep.js";
 import { carrierHistorySql, HISTORY_GUARD, readHistoryGate, type HistoryGate } from "./carrierHistory.js";
 import { LARDI_MATCH_SQL } from "./carrierLardi.js";
@@ -224,6 +226,10 @@ export interface CarrierTickEnv {
   close?: { mode: CloseMode; otherMode?: CloseMode; historyMode?: CloseMode; kommo: KommoCloser };
   /** Задачі робота на закритих угодах етапу (`carrierTaskSweep.ts`). Не задано — кроку немає. */
   taskSweep?: { mode: CloseMode; kommo: SweepKommo };
+  /** 5972: угоди «Операційного директора» → черговому менеджеру дня. */
+  dutyAssign?: { mode: CloseMode; kommo: DutyKommo };
+  /** 5970: клієнт → «Лід взятий у роботу» + задача відповідальному. */
+  clientMove?: { mode: CloseMode; kommo: MoveKommo };
 }
 
 export interface CarrierTickReport {
@@ -241,12 +247,16 @@ export interface CarrierTickReport {
   reviewTasks: ReviewTaskStats | null;
   /** 🚚 Нагадування тімліду о 17:00 (5964) — той самий перемикач, що й задачі менеджерам. */
   leadTasks: LeadReminderStats | null;
+  dutyAssign: AssignReport | null;
+  clientMove: MoveReport | null;
+  dutyAlerts: DutyAlertStats | null;
   taskSweep: SweepReport | null;
 }
 
 export async function runCarrierTick(env: CarrierTickEnv): Promise<CarrierTickReport> {
   const t0 = env.now();
   const leads = await env.stageLeads();
+  const stageIds = new Set(leads.map((l) => l.id));
   const launchAt = env.launchAt ?? null;
   const recorded = await recordStageDeals(env.db, leads, t0, launchAt);
   const resolved = await resolveCarrierDeals(env.db, t0, env.noTalkAfterMin, env.noTalkSyncMaxMin, env.historySyncMaxMin);
@@ -255,7 +265,7 @@ export async function runCarrierTick(env: CarrierTickEnv): Promise<CarrierTickRe
   const enqueued = await enqueueTranscripts(env.db, ids, STT_PROVIDER, ELEVENLABS_STT_MODEL, t0);
   const purged = await purgeOldCarrierText(env.db, t0);
   const out: CarrierTickReport = { recorded, resolved, active: ids.length, enqueued, purged, stt: [], llm: [],
-    sttStoppedBy: null, llmStoppedBy: null, capAlerted: false, closed: null, reviewTasks: null, leadTasks: null, taskSweep: null };
+    sttStoppedBy: null, llmStoppedBy: null, capAlerted: false, closed: null, reviewTasks: null, leadTasks: null, dutyAssign: null, clientMove: null, dutyAlerts: null, taskSweep: null };
   // 🧹 Закриття — ПІСЛЯ вердиктів, по угодах, що стоять на етапі за ЦІЄЮ ж відповіддю Kommo.
   const doClose = async () => env.close
     ? runCarrierClose(env.db, env.now(), env.close.mode, new Set(leads.map((l) => l.id)), env.close.kommo, env.close.otherMode ?? "dry",
@@ -266,13 +276,22 @@ export async function runCarrierTick(env: CarrierTickEnv): Promise<CarrierTickRe
     if (!env.reviewTasks) return null;
     const r = await syncCarrierReviewTasks(env.db, env.now(), launchAt);
     out.leadTasks = await syncLeadReminders(env.db, env.now(), launchAt);
+    out.dutyAlerts = await syncDutyAlerts(env.db, env.now(), stageIds);
     return r;
+  };
+  // 🚚 Після закриття: спершу угода «Операційного директора» отримує чергового (5972), потім клієнт іде в роботу (5970) —
+  // вже до чергового. Обидва — по угодах, що на етапі за ЦІЄЮ відповіддю Kommo.
+  const doRoute = async () => {
+    if (env.dutyAssign) out.dutyAssign = await runDutyAssign(env.db, env.now(), env.dutyAssign.mode, stageIds, env.dutyAssign.kommo);
+    if (env.clientMove) out.clientMove = await runClientMove(env.db, env.now(), env.clientMove.mode, stageIds, env.clientMove.kommo);
   };
   // 🧽 Задачі робота на закритих угодах — ПІСЛЯ закриття цього проходу (свої закриття дашборд гасить сам; тут — чужі й старі).
   const doSweep = async () => (env.taskSweep ? runTaskSweep(env.db, env.now(), env.taskSweep.mode, env.taskSweep.kommo) : null);
   if (!ids.length) {
-    out.closed = await doClose(); out.taskSweep = await doSweep(); out.reviewTasks = await doTasks();
+    out.closed = await doClose(); await doRoute(); out.taskSweep = await doSweep(); out.reviewTasks = await doTasks();
     if (out.taskSweep?.error) throw new Error(`задачі на закритих угодах: ${out.taskSweep.error}`);
+    if (out.dutyAssign?.error || out.clientMove?.error) throw new Error([out.dutyAssign?.error && `черговому: ${out.dutyAssign.error}`,
+      out.clientMove?.error && `клієнти в роботу: ${out.clientMove.error}`].filter(Boolean).join(" · "));
     return out;
   }
 
@@ -310,11 +329,14 @@ export async function runCarrierTick(env: CarrierTickEnv): Promise<CarrierTickRe
   const capped = [...out.stt, ...out.llm].find((x) => x.state === "capped");
   if (capped) out.capAlerted = await notifyCapOnce(env.db, "carrier", capped.stoppedBy ?? "стеля вичерпана", env.now(), env.alert);
   out.closed = await doClose();
+  await doRoute();
   out.taskSweep = await doSweep();
   out.reviewTasks = await doTasks();
   const errs = [stt.error, llm.error].filter((e): e is Error => e != null);
   if (out.closed?.error) errs.push(new Error(`закриття в Kommo: ${out.closed.error}`));
   if (out.taskSweep?.error) errs.push(new Error(`задачі на закритих угодах: ${out.taskSweep.error}`));
+  if (out.dutyAssign?.error) errs.push(new Error(`черговому: ${out.dutyAssign.error}`));
+  if (out.clientMove?.error) errs.push(new Error(`клієнти в роботу: ${out.clientMove.error}`));
   if (errs.length) throw new Error(errs.map((e) => e.message).join(" · "));
   return out;
 }

@@ -596,6 +596,10 @@ export interface CarrierDealT {
   /** «На перевірці»: до коли розібрати (кінець робочого дня) і чи вже прострочено. */
   reviewSince: string | null; reviewDeadline: string | null; overdue: boolean;
   close: CarrierCloseT | null; crm: { statusId: number | null; rejectReason: string | null };
+  /** 5970: клієнта перенесено в «Лід взятий у роботу» (would_move — режим «лише журнал»). */
+  move?: { state: "would_move" | "moved" | "reverted" | "failed"; at: string; error: string | null } | null;
+  /** 5972: угоду «Операційного директора» віддано черговому (at = null — лише в журналі). */
+  dutyAssigned?: { managerName: string; at: string | null } | null;
 }
 export interface CarrierKpisT { removedByFilter: number; leftAfterFilter: number; waitingTalk: number; noTalk: number; recordingSince: string | null }
 export interface CarrierCallsResp { period: { from: string; to: string }; truncated: boolean; kpis: CarrierKpisT; rows: CarrierDealT[] }
@@ -678,6 +682,9 @@ export async function postCarrierDecision(kommoId: number, decision: CarrierDeci
 export async function fetchCarrierAudio(uniqueid: string): Promise<Blob> {
   const { data } = await api.get<Blob>(`/dashboard/carrier-calls/${encodeURIComponent(uniqueid)}/audio`, { responseType: "blob" });
   return data;
+}
+export async function revertCarrierMove(kommoId: number): Promise<void> {
+  await api.post(`/dashboard/carrier-calls/deals/${String(kommoId)}/revert-move`);
 }
 export async function revertCarrierClose(kommoId: number): Promise<void> {
   await api.post(`/dashboard/carrier-calls/deals/${String(kommoId)}/revert`);

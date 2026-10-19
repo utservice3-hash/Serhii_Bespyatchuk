@@ -85,6 +85,7 @@ import { minutesSetting, NO_TALK_GUARD, readNoTalkGuard } from "../core/carrierN
 import { taskSweepStats } from "../core/carrierTaskSweep.js";
 import { CARRIER_BUDGET, CARRIER_STAGE } from "../core/carrierCallRules.js";
 import { closeModeOf, revertCarrierClose } from "../core/carrierClose.js";
+import { revertClientMove } from "../core/carrierClientMove.js";
 import { decisionQueue, recordDecision } from "../core/carrierDecisions.js";
 import { carrierRecording } from "../core/carrierAudio.js";
 import { adPlanForPeriod } from "../core/adBudget.js";
@@ -11409,7 +11410,7 @@ const carrierDealJson = (r: Awaited<ReturnType<typeof carrierDealRows>>[number])
   managerId: r.managerId, managerName: r.managerName, teamId: r.teamId, teamName: r.teamName,
   ai: r.ai, human: r.human, journal: r.journal, category: r.category, source: r.source, why: r.why, otherType: r.otherType,
   reviewSince: r.reviewSince, reviewDeadline: r.reviewDeadline, overdue: r.overdue,
-  close: r.close, crm: r.crm,
+  close: r.close, crm: r.crm, move: r.move, dutyAssigned: r.dutyAssigned,
 });
 /** Керівництво (адмін, CEO, опдир, КВП): бачить витрати AI й поіменні рішення інших. Менеджер і тімлід — ні. */
 const carrierIsLeadership = (auth: AuthPayload) => auth.roleKey !== "manager" && auth.roleKey !== "team_lead";
@@ -11579,6 +11580,24 @@ dashboardRouter.post("/carrier-calls/deals/:kommoId/revert", async (req, res) =>
   if (!r.ok) { res.status(r.code).json({ error: r.why }); return; }
   res.json({ ok: true });
 });
+/** 5970: «Повернути» перенесеного клієнта — угода назад на «Дзвінки на мобільні», задача «Взяти в роботу» закривається. */
+dashboardRouter.post("/carrier-calls/deals/:kommoId/revert-move", async (req, res) => {
+  const auth = req.auth!;
+  const id = Number(req.params.kommoId);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Невірний номер угоди" }); return; }
+  if (!(await carrierDealRows(pool, { period: null, scope: missedScopeFor(auth, {}), ids: [id] })).length) {
+    res.status(404).json({ error: "Угоди немає серед ваших дзвінків на мобільні" }); return;
+  }
+  const r = await revertClientMove(pool, id, auth.userId, auth.email ?? `користувач #${String(auth.userId)}`, new Date(), {
+    patchLeads: (body) => kommoWrite("/api/v4/leads", body, "PATCH"),
+    addNotes: (body) => kommoWrite("/api/v4/leads/notes", body, "POST"),
+    createTasks: async () => [],
+    closeTasks: (taskIds, text) => kommoWrite("/api/v4/tasks", closeTasksBody(taskIds, text), "PATCH"),
+  });
+  if (!r.ok) { res.status(r.code).json({ error: r.why }); return; }
+  res.json({ ok: true });
+});
+
 
 dashboardRouter.get("/missed-calls", async (req, res) => {
   const auth = req.auth!;

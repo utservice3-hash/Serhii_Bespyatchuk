@@ -462,6 +462,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
      та сама причина, що в «Номінаціях»: проба адмін-рівня ризикувала б справжнім записом. */
   { method: "POST", path: "/api/dashboard/carrier-calls/deals/:kommoId/revert", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  /* 5970: «Повернути» перенесеного клієнта — ті самі межі, що в повернення закриття (той самий tab-гейт і скоуп угоди). */
+  { method: "POST", path: "/api/dashboard/carrier-calls/deals/:kommoId/revert-move", cls: "deny-only",
+    allow: [], deny: ["hr"] },
   /* 🧑‍💼 НАЙМ, прохід 1 (17.09.2026). Вкладку `hiring` сид дає admin, ceo, opdir, kvp, hr,
      team_lead — рядок `/api/hiring/candidates` звіряється з ним гейтом #504.
      Друга межа — `hiringAccess` першим оператором обробника: графік, звіт і запис веде
