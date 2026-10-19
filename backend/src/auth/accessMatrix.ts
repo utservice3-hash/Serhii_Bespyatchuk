@@ -1596,6 +1596,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   { method: "PUT", path: "/api/finance/kpi/values", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  { method: "PUT", path: "/api/finance/kpi/plan", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "PUT", path: "/api/finance/kpi/notes", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/finance/kpi/close", cls: "deny-only",

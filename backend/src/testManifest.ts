@@ -351,7 +351,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "tldv_meetings",
   "workua_responses",
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "fin_import_months",
-  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports",
+  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans",
   "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "cargo_vehicles", "cargo_pallets", "cargo_calculations",
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   "ba_equipment_issues",
@@ -2565,6 +2565,10 @@ export const MANIFEST_TESTS: string[] = [
   // core/financeKpi.test.ts — журнал дебіторки (Роман 12.10.2026).
   "#1266 ЖИВИЙ SQL: журнал дебіторки — Σ знімка; минулий тиждень — підсумок на свій кінець, поточний — живий, без журналу — порожньо",
   "#1266b ПРОВОДКА ЖУРНАЛУ: синк пише підсумок у тій самій транзакції, «Тиждень і місяць» бере дебіторку через журнал",
+  // core/financeKpi.test.ts — план і прогноз надходжень / витрат (задача #5649, 19.10.2026).
+  "#1275 ПЛАН — АРИФМЕТИКА: частка днів за Києвом зі сьогодні, очікуване, відхилення, прогноз лише неповного, тиждень — місяць четверга / 4",
+  "#1275b ЖИВИЙ SQL: план — минулий місяць як на екрані або ручний, тиждень / 4, порожньо — знову авто, чужий рядок — 400",
+  "#1275c ПРОВОДКА ПЛАНУ: GET /kpi — plan після старту, PUT /kpi/plan — canEdit першим і в матриці, AI закрито, фронт — колір за напрямом",
   "#1223b ПРОВОДКА КАРТКИ: роут, синк, адаптер і панель — цифри скрізь, IBAN лише в порожнє, підказка з комісіями",
   "#1202 ВАЛЮТА ЗА КУРСОМ: 42→USD, 50→EUR, далекий чи без курсу — «не визначено» окремо",
   "#1203 ЖИВИЙ SQL: разовий крок 2г — Сейф і картки один раз, «лише фінанси»; фронт Сейфу — за правами",

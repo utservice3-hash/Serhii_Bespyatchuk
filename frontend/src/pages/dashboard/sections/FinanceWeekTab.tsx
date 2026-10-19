@@ -3,7 +3,7 @@ import { useDialogs } from "../../../components/Dialogs";
 import { createPortal } from "react-dom";
 import {
   fetchFinKpiPeriod, fetchFinKpiCard, saveFinKpiValues, saveFinKpiNote, setFinKpiClosed, createFinKpi, updateFinKpi, deleteFinKpi,
-  restoreFinKpi, setFinKpiOff, finErrorData, hiringError,
+  restoreFinKpi, setFinKpiOff, finErrorData, hiringError, setFinKpiPlan, type FinPlanRow,
   type FinKpiPeriod, type FinKpi, type FinKpiCard, type FinPeriodKind, type FinKpiRefSource, type FinKpiThing,
 } from "../../../api";
 import { asInput } from "./financeView";
@@ -57,6 +57,37 @@ const AUTO_STATE: Record<NonNullable<FinKpi["autoState"]>, [string, string]> = {
   saved: ["збережене", "Живого числа для цього періоду немає — показано збережене"],
   override: ["вручну", "Число внесене руками поверх «План/факт»; щоб повернути автоматичне — очистіть клітинку й збережіть"],
 };
+
+const monthName = (m: string) => new Date(`${m}T12:00:00Z`).toLocaleDateString("uk-UA", { month: "long", year: "numeric", timeZone: "UTC" });
+/** Відхилення «на користь»: для надходжень — більше, для витрат — менше (#5649). */
+const goodDev = (r: FinPlanRow) => r.deviation != null && (r.better === "more" ? r.deviation >= 0 : r.deviation <= 0);
+
+/**
+ * 🎯 ПЛАН І ПРОГНОЗ (#5649, зустріч з Тетяною 13.10.2026): план місяця = ручний або число за минулий місяць; тиждень —
+ * план місяця / 4; «очікувано на сьогодні» — план × частка минулих днів; прогноз — лише місяць. Рахує сервер.
+ */
+function PlanBlock({ rows, kind, canEdit, onEdit }: { rows: FinPlanRow[]; kind: FinPeriodKind; canEdit: boolean; onEdit: (r: FinPlanRow) => void }) {
+  const partial = rows.some((r) => r.share > 0 && r.share < 1);
+  return (
+    <div className="hr-sect" style={{ borderTop: 0 }}>
+      <h4 style={{ margin: "0 0 6px" }}>План {kind === "month" ? "місяця" : `тижня (план ${monthName(rows[0].month)} / 4)`}{partial && <span className="hr-muted" style={{ fontWeight: 400, fontSize: 12, marginLeft: 8 }}>минуло {Math.round(rows[0].share * 100)}% періоду</span>}</h4>
+      <table className="hr-table fin-table">
+        <thead><tr><th>Показник</th><th className="num">Факт</th><th className="num">План</th>{partial && <th className="num">Очікувано на сьогодні</th>}<th className="num">Відхилення</th>{kind === "month" && partial && <th className="num">Прогноз на кінець місяця</th>}{canEdit && kind === "month" && <th />}</tr></thead>
+        <tbody>{rows.map((r) => (
+          <tr key={r.kpiId}>
+            <td>{r.name}</td>
+            <td className="num"><b>{money(r.fact)}</b></td>
+            <td className="num">{money(r.plan)}<div className="hr-muted" style={{ fontSize: 11 }}>{r.planSource === "manual" ? "вручну" : r.planSource === "prev-month" ? `= ${monthName(shift("month", r.month, -1))}` : "немає бази"}</div></td>
+            {partial && <td className="num">{money(r.expected)}</td>}
+            <td className="num">{r.deviation == null ? "—" : <span className={goodDev(r) ? "fin-good" : "fin-bad"}>{r.deviation > 0 ? "+" : r.deviation < 0 ? "−" : ""}{money(Math.abs(r.deviation))}</span>}</td>
+            {kind === "month" && partial && <td className="num">{money(r.forecast)}</td>}
+            {canEdit && kind === "month" && <td className="num"><button className="hr-btn xs" onClick={() => onEdit(r)} aria-label={`Змінити план: ${r.name}`}>✎ план</button></td>}
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  );
+}
 
 export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
   const dlg = useDialogs();
@@ -192,6 +223,13 @@ export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
           <button className="hr-btn p" disabled={busy} onClick={() => void save()}>Зберегти</button>
         </div>
       )}
+      {data.plan && data.plan.length > 0 && <PlanBlock rows={data.plan} kind={data.kind} canEdit={data.canEdit && !edit}
+        onEdit={(r) => ask({
+          title: `План · ${r.name} · ${monthName(r.month)}`,
+          text: `Порожньо — план дорівнює числу за ${monthName(shift("month", r.month, -1))}${r.planSource === "manual" ? "" : ` (${money(r.monthPlan)})`}. Тиждень = план місяця / 4.`,
+          fields: [{ id: "v", label: "План на місяць, ₴", value: r.planSource === "manual" ? asInput(r.monthPlan) : "" }],
+          buttons: [CANCEL, { label: "Зберегти", tone: "p", run: async (v) => { await setFinKpiPlan(r.kpiId, r.month, v.v ?? ""); reload(); toast("План збережено"); } }],
+        })} />}
       <div className="hr-tw">
         <table className="hr-table fin-table">
           <thead><tr><th>Показник</th><th className="num">{data.prevLabel}</th><th className="num">{data.label}</th><th className="num">Зміна</th><th>Довідка CRM / 1С</th><th>Нотатка</th>{data.canEdit && !edit && <th className="num">Дії</th>}</tr></thead>
