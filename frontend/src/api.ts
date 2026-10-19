@@ -1677,6 +1677,8 @@ export interface Absence {
   kind: AbsenceKind; startDate: string; endDate: string; hours: number | null; note: string | null;
   status: AbsenceStatus; createdBy: number | null; createdAt: string;
   approvedBy: number | null; approverName: string | null; approvedAt: string | null; mine: boolean;
+  /** 🏖 5149: відпустка «на погодженні» порушує правила (накладка в команді / довше 9 днів) — чекає КВП або ОД. */
+  rulesIssues?: string[];
 }
 export interface Holiday { id: number; date: string; name: string }
 /** `id` = users.id — акаунт; `managerId` довідково (null для ручних акаунтів: HR, бухгалтерія, адміни). */
@@ -1703,9 +1705,20 @@ export async function assignDuty(body: { date: string; managerId: number; shift?
 export async function removeDuty(id: number): Promise<void> {
   await api.delete(`/duty/${id}`);
 }
-export async function createAbsence(body: { userId?: number; managerId?: number; kind: AbsenceKind; startDate: string; endDate?: string; hours?: number; note?: string }): Promise<{ ok: boolean; id: number; status: AbsenceStatus }> {
-  const { data } = await api.post<{ ok: boolean; id: number; status: AbsenceStatus }>("/duty/absences", body);
+export async function createAbsence(body: { userId?: number; managerId?: number; kind: AbsenceKind; startDate: string; endDate?: string; hours?: number; note?: string; confirmRules?: boolean }): Promise<{ ok: boolean; id: number; status: AbsenceStatus; rulesIssues?: string[] }> {
+  const { data } = await api.post<{ ok: boolean; id: number; status: AbsenceStatus; rulesIssues?: string[] }>("/duty/absences", body);
   return data;
+}
+/** 🏖 5149: сервер відмовив 409 — відпустка порушує правила, потрібне підтвердження (`confirmRules`). Інакше null. */
+export function vacationRulesConflict(e: unknown): { issues: string[]; approver: string } | null {
+  const r = (e as { response?: { status?: number; data?: { needsConfirm?: boolean; issues?: string[]; approver?: string } } })?.response;
+  return r?.status === 409 && r.data?.needsConfirm ? { issues: r.data.issues ?? [], approver: r.data.approver ?? "КВП" } : null;
+}
+/** 🏖 5149: хто у відпустці сьогодні (погоджена) — для значка біля менеджера в звітах. */
+export interface OnVacation { managerId: number | null; userId: number | null; until: string }
+export async function fetchOnVacation(): Promise<OnVacation[]> {
+  const { data } = await api.get<{ date: string; items: OnVacation[] }>("/duty/on-vacation");
+  return data.items;
 }
 export async function decideAbsence(id: number, decision: "approve" | "reject"): Promise<{ ok: boolean; status: AbsenceStatus }> {
   const { data } = await api.post<{ ok: boolean; status: AbsenceStatus }>(`/duty/absences/${id}/${decision}`, {});

@@ -3,6 +3,8 @@ import { isAdminScope, isAdminOrLead } from "../auth/rbac.js";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { calendarAccountsSql, absencesSql, isMine, ownScopeSql, resolveOwner } from "../core/absences.js";
+import { vacationIssuesFor, issueText, canApproveVacationRules, onVacationSql, VACATION_RULE_APPROVER_LABEL, type VacationIssue } from "../core/vacationRules.js";
+import { kyivToday } from "../core/dates.js";
 
 /**
  * Графік чергування. Тімлід (РНК) призначає менеджерів своєї команди на дні,
@@ -203,12 +205,18 @@ async function queryAbsences(auth: Auth, teamId: number | null, from: string, to
     status: string; created_by: number | null; created_at: string; approved_by: number | null;
     approver_name: string | null; approved_at: string | null;
   }>(absencesSql(scope), params);
+  // 🏖 П.5 регламенту (5149): відпустка «на погодженні», що порушує правила, чекає КВП / ОД — і календар каже чому.
+  const pendingVac = r.rows.filter((x) => x.kind === "vacation" && x.status === "pending");
+  const issues = await vacationIssuesFor(pool, pendingVac.map((x) => ({ id: x.id, userId: x.user_id, managerId: x.manager_id,
+    teamId: x.team_id, start: x.start_date, end: x.end_date, status: x.status })));
+  const showNames = isAdminOrLead(auth);
   return r.rows.map((x) => ({
     id: x.id, managerId: x.manager_id, userId: x.user_id, managerName: x.owner_name, teamId: x.team_id, teamName: x.team_name,
     kind: x.kind, startDate: x.start_date, endDate: x.end_date, hours: x.hours == null ? null : Number(x.hours),
     note: x.note, status: x.status, createdBy: x.created_by, createdAt: x.created_at,
     approvedBy: x.approved_by, approverName: x.approver_name, approvedAt: x.approved_at,
     mine: isMine(x, auth),
+    rulesIssues: (issues.get(x.id) ?? []).map((i) => issueText(i, showNames)),
   }));
 }
 
@@ -264,13 +272,25 @@ dutyRouter.post("/absences", async (req, res) => {
   // тімліда (він не погоджує себе → pending на адміна). Admin → завжди approved (сам собі теж:
   // адмін — найвищий рівень, вище нема). manager → завжди pending.
   const isSelf = owner.userId === auth.userId || (owner.managerId != null && owner.managerId === auth.managerId);
-  const approver = isAdminScope(auth) || (auth.role === "team_lead" && teamId === auth.teamId && !isSelf);
+  // 🏖 П.5 регламенту (5149): накладка в команді або довше 9 днів → спершу попередження (409, фронт питає
+  // підтвердження й шле `confirmRules`), далі відпустка чекає КВП / ОД — навіть поставлена тімлідом.
+  let issues: VacationIssue[] = [];
+  if (kind === "vacation") {
+    issues = (await vacationIssuesFor(pool, [{ id: null, userId: owner.userId, managerId: owner.managerId, teamId, start, end, status: "pending" }])).get(-1) ?? [];
+    if (issues.length && req.body?.confirmRules !== true) {
+      const texts = issues.map((i) => issueText(i, isAdminOrLead(auth)));
+      return res.status(409).json({ needsConfirm: true, issues: texts, approver: VACATION_RULE_APPROVER_LABEL,
+        error: `Відпустка порушує правила (${texts.join("; ")}) — погоджує ${VACATION_RULE_APPROVER_LABEL}. Оновіть сторінку, щоб підтвердити.` });
+    }
+  }
+  const approver = (isAdminScope(auth) || (auth.role === "team_lead" && teamId === auth.teamId && !isSelf))
+    && (issues.length === 0 || canApproveVacationRules(auth.roleKey));
   const status = approver ? "approved" : "pending";
   const r = await pool.query<{ id: number }>(
     `INSERT INTO team_calendar_absences (manager_id, user_id, team_id, kind, start_date, end_date, hours, note, status, created_by, approved_by, approved_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, ${approver ? "$10" : "NULL"}, ${approver ? "now()" : "NULL"}) RETURNING id`,
     [owner.managerId, owner.userId, teamId, kind, start, end, hours, note, status, auth.userId]);
-  res.json({ ok: true, id: r.rows[0].id, status });
+  res.json({ ok: true, id: r.rows[0].id, status, rulesIssues: issues.map((i) => issueText(i, isAdminOrLead(auth))) });
 });
 
 /** Погодити / відхилити — лише admin або team_lead (своя команда). */
@@ -278,13 +298,24 @@ async function decide(req: import("express").Request, res: import("express").Res
   const auth = req.auth! as Auth;
   if (!isAdminOrLead(auth)) return res.status(403).json({ error: "Лише тімлід або адміністратор" });
   const id = Number(req.params.id);
-  const row = await pool.query<{ team_id: number | null; manager_id: number | null; user_id: number | null; status: string }>(`SELECT team_id, manager_id, user_id, status FROM team_calendar_absences WHERE id = $1`, [id]);
+  const row = await pool.query<{ team_id: number | null; manager_id: number | null; user_id: number | null; status: string; kind: string; start_date: string; end_date: string }>(
+    `SELECT team_id, manager_id, user_id, status, kind, to_char(start_date,'YYYY-MM-DD') AS start_date, to_char(end_date,'YYYY-MM-DD') AS end_date
+       FROM team_calendar_absences WHERE id = $1`, [id]);
   if (!row.rowCount) return res.status(404).json({ error: "Не знайдено" });
   if (auth.role === "team_lead") {
     // team_id NULL (безкомандний акаунт) ≠ teamId тімліда → 403: безкомандних погоджує адмін.
     if (row.rows[0].team_id !== auth.teamId) return res.status(403).json({ error: "Лише своя команда" });
     // 🔴 Тімлід НЕ погоджує власну відсутність — це робить адмін (рівень вище).
     if (isMine(row.rows[0], auth)) return res.status(403).json({ error: "Власну відсутність погоджує адміністратор" });
+  }
+  // 🏖 П.5 регламенту (5149): відпустку з порушенням правил погоджує лише КВП / ОД (і адмін). Відхилити може будь-хто
+  // з апруверів — відмова правил не обходить.
+  const a = row.rows[0];
+  if (decision === "approved" && a.kind === "vacation" && !canApproveVacationRules(auth.roleKey)) {
+    const issues = (await vacationIssuesFor(pool, [{ id, userId: a.user_id, managerId: a.manager_id, teamId: a.team_id, start: a.start_date, end: a.end_date, status: a.status }])).get(id) ?? [];
+    if (issues.length) {
+      return res.status(403).json({ error: `Відпустка порушує правила (${issues.map((i) => issueText(i, true)).join("; ")}) — погоджує ${VACATION_RULE_APPROVER_LABEL}` });
+    }
   }
   await pool.query(
     `UPDATE team_calendar_absences SET status = $1, approved_by = $2, approved_at = now(), updated_at = now() WHERE id = $3`,
@@ -327,6 +358,21 @@ dutyRouter.delete("/holidays/:id", async (req, res) => {
   if (!isAdminScope(auth)) return res.status(403).json({ error: "Лише адміністратор" });
   await pool.query(`DELETE FROM company_holidays WHERE id = $1`, [Number(req.params.id)]);
   res.json({ ok: true });
+});
+
+/**
+ * 🏖 ХТО У ВІДПУСТЦІ СЬОГОДНІ (5149, п.1 регламенту): значок «у відпустці до ДД.ММ» біля менеджера в звітах.
+ * Лише погоджена відпустка (не лікарняний і не відгул). Роль-скоуп той самий, що в календарі: менеджер — лише свою,
+ * тімлід — свою команду, решта — усіх. `?date=` — для перевірки на іншу дату, за замовчуванням сьогодні (Київ).
+ */
+dutyRouter.get("/on-vacation", async (req, res) => {
+  const auth = req.auth! as Auth;
+  const q = String(req.query.date ?? "").slice(0, 10);
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(q) ? q : kyivToday();
+  const params: unknown[] = [date];
+  const scope = absenceScope(auth, null, params);
+  const r = await pool.query<{ manager_id: number | null; user_id: number | null; until: string }>(onVacationSql(scope), params);
+  res.json({ date, items: r.rows.map((x) => ({ managerId: x.manager_id, userId: x.user_id, until: x.until })) });
 });
 
 /**

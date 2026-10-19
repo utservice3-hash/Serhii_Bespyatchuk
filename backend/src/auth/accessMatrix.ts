@@ -1121,6 +1121,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "DELETE", path: "/api/duty/holidays/:id", cls: "DELETE-ghost",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/duty/on-vacation", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "GET", path: "/api/duty/presence", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "GET", path: "/api/feedback", cls: "GET",

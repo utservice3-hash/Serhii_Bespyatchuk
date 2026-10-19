@@ -4,6 +4,7 @@ import {
   type MissedNoCallbackResp, type MissedTaskResult, type MissedWeekResp, type MissedNormResp, type MissedFilterParams,
 } from "../../../api";
 import { managersForTeams, type MissedFilter } from "../missedCallsView";
+import { VacationMark } from "../VacationMark";
 
 /**
  * 📵 ЕКРАН «ПРОПУЩЕНІ ДЗВІНКИ» — ТЗ Юлі 12.10.2026: фільтр «Команда / Менеджер» на весь екран, блок «Не передзвонили за
@@ -139,7 +140,7 @@ export function NoCallbackBlock({ from, to, fp, managers }: {
                       {r.clientName ?? <span style={{ color: MUTED }}>клієнт невідомий</span>}
                       {r.dealUrl && <> · <a href={r.dealUrl} target="_blank" rel="noreferrer">угода ↗</a></>}
                     </td>
-                    <td style={cell}>{r.managerName ?? <span style={{ color: MUTED }}>без відповідального</span>}</td>
+                    <td style={cell}>{r.managerName ?? <span style={{ color: MUTED }}>без відповідального</span>}<VacationMark managerId={r.managerId} /></td>
                     <td style={cell}>{r.teamName ?? <span style={{ color: MUTED }}>—</span>}</td>
                     <td style={cell}>{r.task.state === "none" ? <span style={{ color: MUTED }}>немає</span>
                       : <a href={`/tasks?id=${String(r.task.id)}`} style={{ color: r.task.state === "overdue" ? "#dc2626" : "#2563eb" }}>

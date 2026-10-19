@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useDialogs } from "../../../components/Dialogs";
 import {
   fetchDutySchedule, assignDuty, removeDuty, fetchTeams,
-  createAbsence, decideAbsence, removeAbsence, createHoliday, removeHoliday,
+  createAbsence, decideAbsence, removeAbsence, createHoliday, removeHoliday, vacationRulesConflict,
   type DutySchedule, type Absence, type AbsenceKind, type Team,
 } from "../../../api";
 
@@ -276,6 +277,7 @@ function DayEditorModal({ range, data, role, canEditDuty, onClose, onChanged }: 
   onClose: () => void; onChanged: () => void;
 }) {
   const single = range.from === range.to;
+  const dlg = useDialogs();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const isManager = role !== "admin" && role !== "team_lead";
@@ -305,7 +307,18 @@ function DayEditorModal({ range, data, role, canEditDuty, onClose, onChanged }: 
 
   const wrap = async (fn: () => Promise<void>) => { setBusy(true); setErr(null); try { await fn(); onChanged(); } catch (e) { setErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Помилка"); } finally { setBusy(false); } };
   const addAbsence = () => wrap(async () => {
-    await createAbsence({ userId: isManager ? undefined : (absMgr ? Number(absMgr) : undefined), kind, startDate, endDate: rangeKind ? endDate : undefined, hours: kind === "short_day" ? hours : undefined, note: absNote.trim() || undefined });
+    const body = { userId: isManager ? undefined : (absMgr ? Number(absMgr) : undefined), kind, startDate, endDate: rangeKind ? endDate : undefined, hours: kind === "short_day" ? hours : undefined, note: absNote.trim() || undefined };
+    try {
+      await createAbsence(body);
+    } catch (e) {
+      // 🏖 5149, п.5 регламенту: накладка в команді або довше 9 днів — спершу попередження, далі погоджує КВП / ОД.
+      const c = vacationRulesConflict(e);
+      if (!c) throw e;
+      const ok = await dlg.confirm({ title: "Відпустка порушує правила", okLabel: "Поставити на погодження",
+        text: `${c.issues.map((i) => "• " + i).join("\n")}\n\nТаку відпустку погоджує ${c.approver}. Поставити її на погодження?` });
+      if (!ok) return;
+      await createAbsence({ ...body, confirmRules: true });
+    }
     setAbsNote("");
   });
   const addDuty = () => wrap(async () => { await assignDuty({ date: range.from, managerId: Number(dutyMgr), shift, note: dutyNote.trim() || undefined }); setDutyMgr(""); setDutyNote(""); });
@@ -334,9 +347,12 @@ function DayEditorModal({ range, data, role, canEditDuty, onClose, onChanged }: 
                       <b>{a.managerName}</b> · {c.label}{a.kind === "short_day" && a.hours ? ` −${a.hours}год` : ""}
                       {a.startDate !== a.endDate ? ` · ${rangeLabel(a)}` : ""}
                       {" · "}{a.status === "pending" ? "⏳ на погодженні" : a.status === "approved" ? `✓ погоджено${a.approverName ? " (" + a.approverName + ")" : ""}` : "✗ відхилено"}
+                      {a.status === "pending" && (a.rulesIssues?.length ?? 0) > 0 && (
+                        <span style={{ display: "block", marginTop: 2, color: "#b45309" }}>⚠ погоджує КВП або ОД: {a.rulesIssues!.join("; ")}</span>
+                      )}
                     </span>
                     <span style={{ display: "flex", gap: 6 }}>
-                      {a.status === "pending" && canApprove(a) && (
+                      {a.status === "pending" && canApprove(a) && !(role === "team_lead" && (a.rulesIssues?.length ?? 0) > 0) && (
                         <>
                           <button disabled={busy} onClick={() => wrap(async () => { await decideAbsence(a.id, "approve"); })} style={miniBtn("#16a34a")}>✓</button>
                           <button disabled={busy} onClick={() => wrap(async () => { await decideAbsence(a.id, "reject"); })} style={miniBtn("#dc2626")}>✕</button>
@@ -444,7 +460,13 @@ function ApprovalsModal({ data, role, onClose, onChanged }: { data: DutySchedule
   const [busy, setBusy] = useState(false);
   const canApprove = (a: Absence) => role === "admin" || (role === "team_lead" && !a.mine);
   const pending = data.absences.filter((a) => a.status === "pending" && canApprove(a));
-  const act = async (id: number, decision: "approve" | "reject") => { setBusy(true); try { await decideAbsence(id, decision); onChanged(); } finally { setBusy(false); } };
+  const [err, setErr] = useState<string | null>(null);
+  const act = async (id: number, decision: "approve" | "reject") => {
+    setBusy(true); setErr(null);
+    try { await decideAbsence(id, decision); onChanged(); }
+    catch (e) { setErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Помилка"); }
+    finally { setBusy(false); }
+  };
   return (
     <div onClick={onClose} style={overlay}>
       <div onClick={(e) => e.stopPropagation()} style={modal}>
@@ -452,6 +474,7 @@ function ApprovalsModal({ data, role, onClose, onChanged }: { data: DutySchedule
           <h2 className="chart-title" style={{ marginBottom: 0 }}>⏳ На погодженні ({pending.length})</h2>
           <button onClick={onClose} style={xBtn}>✕</button>
         </div>
+        {err && <p style={{ color: "#dc2626", fontSize: 13, margin: "0 0 10px" }}>{err}</p>}
         {pending.length === 0 ? <p className="loading-text">Немає відміток на погодженні.</p> : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {pending.map((a) => {
@@ -461,9 +484,14 @@ function ApprovalsModal({ data, role, onClose, onChanged }: { data: DutySchedule
                   <span style={{ fontSize: 13, color: c.fg }}>
                     <b>{a.managerName}</b> · {c.label}{a.kind === "short_day" && a.hours ? ` −${a.hours}год` : ""} · {a.startDate === a.endDate ? ddmm(a.startDate) + " " + MON_SHORT[Number(a.startDate.slice(5, 7)) - 1] : rangeLabel(a)}
                     {a.teamName ? ` · ${a.teamName}` : ""}{a.note ? ` — ${a.note}` : ""}
+                    {(a.rulesIssues?.length ?? 0) > 0 && (
+                      <span style={{ display: "block", marginTop: 2, color: "#b45309" }}>⚠ погоджує КВП або ОД: {a.rulesIssues!.join("; ")}</span>
+                    )}
                   </span>
                   <span style={{ display: "flex", gap: 6 }}>
-                    <button disabled={busy} onClick={() => act(a.id, "approve")} style={miniBtn("#16a34a")}>✓ Погодити</button>
+                    {!(role === "team_lead" && (a.rulesIssues?.length ?? 0) > 0) && (
+                      <button disabled={busy} onClick={() => act(a.id, "approve")} style={miniBtn("#16a34a")}>✓ Погодити</button>
+                    )}
                     <button disabled={busy} onClick={() => act(a.id, "reject")} style={miniBtn("#dc2626")}>✕ Відхилити</button>
                   </span>
                 </div>

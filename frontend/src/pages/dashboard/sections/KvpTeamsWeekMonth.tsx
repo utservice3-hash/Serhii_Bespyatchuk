@@ -4,6 +4,7 @@ import { formatAmount } from "../format";
 import { InfoHint } from "../widgets";
 import { coreRows, weekCloseStatus, closeNote, pctOfPlan, CLOSE_LABEL, prevWeekRange, blocksWithin, coversRange, prevWeekRows, weekResult,
   type CloseKind, type CoreRow, type Money3, type TeamLike, type PlanFact } from "../kvpCoreRules";
+import { VacationMark } from "../VacationMark";
 
 /**
  * 🏅 «КОМАНДИ: ТИЖДЕНЬ І МІСЯЦЬ» (задача 5605, ТЗ Юлі 12.10.2026, розділ 3; макет «Звіт КВП - ядро»).
@@ -153,7 +154,7 @@ export function KvpTeamsWeekMonth({ rep }: { rep: KvpReport }) {
                   {open === r.key && (r.managers.length
                     ? r.managers.map((m) => (
                       <tr key={m.key} style={{ background: "var(--surface-2, rgba(127,127,127,0.05))" }}>
-                        <td style={{ paddingLeft: 24 }}>{m.name}</td>
+                        <td style={{ paddingLeft: 24 }}>{m.name}<VacationMark managerId={m.key.startsWith("m:") ? Number(m.key.slice(2)) : null} /></td>
                         <Cells r={m} prev={prevOf(r.key, m.key)} />
                       </tr>))
                     : <tr><td colSpan={11} style={{ paddingLeft: 24, color: MUTED, fontSize: 12 }}>менеджерів у цьому рядку немає — гроші без закріпленого менеджера</td></tr>)}

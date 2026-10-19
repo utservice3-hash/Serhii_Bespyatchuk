@@ -22,6 +22,7 @@ import { firstTouchLabel, firstTouchStale } from "../reportTableCols";
 import { NON_COMMERCIAL_TEAM_IDS } from "../teamSets";
 import { keepByKlass, visibleSlices, narrowToSlice, SLICE_LABEL, KLASS_CHIP, type Slice } from "../klassSlice";
 import { useCarrierReport, awaitingByManager } from "../carrierReportData";
+import { VacationMark } from "../VacationMark";
 
 /**
  * 🔀 ПОЛОЖЕННЯ ПЕРЕМИКАЧА ЇДЕ КОНТЕКСТОМ, А НЕ ПРОПСОМ.
@@ -707,6 +708,7 @@ function MgrStrip({ m, mWeek, focusDay, today, elapsed, remWd, weekLabel, weekPe
           <span style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
             {m.name}<span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 20, background: TAGCOL[m.tag] + "22", color: TAGCOL[m.tag] }}>{m.tag.toUpperCase()}</span>
             {isSelf && <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 20, background: BAR + "22", color: BAR }}>ТИ</span>}
+            <VacationMark managerId={m.managerId} />
           </span>
           {aw && (
             <button type="button" title="Дзвінки на мобільні: угоди менеджера, що зараз чекають рішення людини (стан на зараз, не за періодом). Клік — до блоку «Дзвінки на мобільні» внизу Звіту."

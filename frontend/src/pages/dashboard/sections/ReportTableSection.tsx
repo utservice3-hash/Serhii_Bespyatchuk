@@ -6,6 +6,7 @@ import {
   type ColDef, type ColKey,
 } from "../reportTableCols";
 import { narrowToSlice, type Slice } from "../klassSlice";
+import { VacationMark } from "../VacationMark";
 
 /**
  * 📊 ТАБЛИЧНИЙ ВИГЛЯД ЗВІТУ — рядок на менеджера за обраний період.
@@ -368,6 +369,7 @@ function Cell({ col, m, idx, isOpen, responseByMgr }: {
           <span style={{ marginLeft: 5, fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: "var(--r-pill)", background: "var(--info-bg)", color: "var(--info)" }}>
             {m.tag.toUpperCase()}
           </span>
+          <VacationMark managerId={m.managerId} />
           <div style={{ color: "var(--text-muted)", fontSize: 11, paddingLeft: 18 }}>{m.teamName ?? "Поза командами"}</div>
         </td>
       );

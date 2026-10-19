@@ -6,6 +6,7 @@ import { InfoHint } from "../widgets";
 import { ManagerReportHero } from "./ManagerReportHero";
 import { ManagerReportExpected, TeamManagerBreakdown, type ScopeBreakdownRow } from "./ManagerReportExpected";
 import { TrafficLight, type TrafficRow } from "./TeamsTrafficLight";
+import { VacationMark } from "../VacationMark";
 
 type Level = "department" | "team" | "manager";
 type Auth = { role: "admin" | "team_lead" | "manager"; managerId: number | null; teamId: number | null };
@@ -97,6 +98,7 @@ export function ManagerReportSection({ auth, teams, managerOptions }: { auth: Au
           {level === "manager" && auth.role !== "manager" && (
             <ManagerPicker value={managerId} onChange={setManagerId} managers={pickerManagers} teams={teams} />
           )}
+          {level === "manager" && <VacationMark managerId={managerId} />}
           <span style={{ width: 1, height: 24, background: "var(--border)", margin: "0 2px" }} />
           <NavBtn onClick={() => setMonth((m) => shiftMonth(m, -1))} title="Попередній місяць">←</NavBtn>
           <DatePicker mode="month" value={month} onChange={(v) => v && setMonth(v)} minWidth={150} />
