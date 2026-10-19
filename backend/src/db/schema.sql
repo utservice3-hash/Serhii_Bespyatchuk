@@ -6023,3 +6023,46 @@ CREATE TABLE IF NOT EXISTS missed_callback_norm (
   set_by_name TEXT,
   set_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 🚚 ДЗВІНКИ НА МОБІЛЬНІ: РОЗПОДІЛ НА ЧЕРГОВОГО І КЛІЄНТИ «В РОБОТУ» (задачі 5972 і 5970; рішення Юлі 19.10.2026).
+-- ⚠️ revert коду таблиць не прибирає, а відповідальних і етапи в Kommo назад не повертає (лише «Повернути» у «Відсіві»).
+-- Угода службового акаунта «Операційний директор» → черговому менеджеру дня (графік чергувань), кілька — по черзі.
+CREATE TABLE IF NOT EXISTS carrier_duty_assign_log (
+  kommo_id      BIGINT PRIMARY KEY,
+  manager_id    INTEGER NOT NULL,               -- кому віддано (managers.id)
+  kommo_user_id BIGINT NOT NULL,
+  duty_date     DATE NOT NULL,                  -- день чергування (Київ)
+  decided_at    TIMESTAMPTZ NOT NULL,
+  mode          TEXT NOT NULL CHECK (mode IN ('dry','live')),
+  assigned_at   TIMESTAMPTZ,                    -- NULL — у Kommo ще не записано
+  assign_error  TEXT,
+  last_try_at   TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_carrier_duty_assign_day ON carrier_duty_assign_log(duty_date, manager_id);
+REVOKE ALL ON carrier_duty_assign_log FROM ai_readonly;
+-- Клієнт (упевнений вердикт AI або рішення людини) → етап «Лід взятий у роботу» + задача менеджеру в Kommo.
+CREATE TABLE IF NOT EXISTS carrier_client_moves (
+  kommo_id      BIGINT PRIMARY KEY,
+  kommo_user_id BIGINT,                         -- відповідальний, якому поставлено задачу
+  decided_at    TIMESTAMPTZ NOT NULL,
+  mode          TEXT NOT NULL CHECK (mode IN ('dry','live')),
+  moved_at      TIMESTAMPTZ,                    -- NULL — у Kommo ще не перенесено
+  kommo_task_id BIGINT,
+  move_error    TEXT,
+  last_try_at   TIMESTAMPTZ,
+  reverted_at   TIMESTAMPTZ,
+  reverted_by   INTEGER,
+  revert_error  TEXT,
+  CHECK (reverted_at IS NULL OR moved_at IS NOT NULL)
+);
+REVOKE ALL ON carrier_client_moves FROM ai_readonly;
+-- Нагадування КВП о 17:00: «у графіку чергувань на сьогодні нікого, N угод висять на Операційному директорі». Рядок на задачу.
+CREATE TABLE IF NOT EXISTS carrier_duty_alerts (
+  task_id   INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+  user_id   INTEGER NOT NULL,
+  alert_day DATE NOT NULL,
+  opened_at TIMESTAMPTZ NOT NULL,
+  closed_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_carrier_duty_alerts_open ON carrier_duty_alerts(user_id) WHERE closed_at IS NULL;
+REVOKE ALL ON carrier_duty_alerts FROM ai_readonly;

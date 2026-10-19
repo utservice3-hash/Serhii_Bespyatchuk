@@ -50,7 +50,23 @@ export async function carrierCallJob(): Promise<CarrierTickReport | GuardSkip> {
         },
       },
       // 🧽 Задачі робота на закритих угодах етапу (Роман 05.10.2026) — хто б угоду не закрив: фільтр CRM, дашборд, людина.
-      taskSweep: {
+      dutyAssign: {
+      mode: closeModeOf(config.callAi.carrierDutyAssign),
+      kommo: {
+        patchLeads: (body) => kommoWrite("/api/v4/leads", body, "PATCH"),
+        addNotes: (body) => kommoWrite("/api/v4/leads/notes", body, "POST"),
+      },
+    },
+    clientMove: {
+      mode: closeModeOf(config.callAi.carrierClientMove),
+      kommo: {
+        patchLeads: (body) => kommoWrite("/api/v4/leads", body, "PATCH"),
+        addNotes: (body) => kommoWrite("/api/v4/leads/notes", body, "POST"),
+        createTasks: async (body) => (await kommoWrite<{ _embedded?: { tasks?: { id: number }[] } }>("/api/v4/tasks", body, "POST"))._embedded?.tasks?.map((t) => t.id) ?? [],
+        closeTasks: (taskIds, text) => kommoWrite("/api/v4/tasks", closeTasksBody(taskIds, text), "PATCH"),
+      },
+    },
+    taskSweep: {
         mode: closeModeOf(config.callAi.carrierTaskSweep),
         kommo: {
           leadStatuses: async (ids) => {
@@ -79,6 +95,9 @@ export async function carrierCallJob(): Promise<CarrierTickReport | GuardSkip> {
       + (v.historyGate.open ? "" : ` · «історія CRM» НА ПАУЗІ: синк угод ${v.historyGate.syncAgeMin == null ? "невідомо коли" : `${String(v.historyGate.syncAgeMin)} хв тому`} (поріг ${String(v.historyGate.maxAgeMin)} хв)`)
       + (r.closed ? ` · закриття (${r.closed.mode}, «інше» ${r.closed.otherMode}, історія ${r.closed.historyMode}): кандидатів ${String(r.closed.candidates)}, у журнал ${String(r.closed.logged)}, закрито ${String(r.closed.closed)}, задач Kommo ${String(r.closed.tasksClosed)}${r.closed.historyPaused ? `, історія чекає синку ${String(r.closed.historyPaused)}` : ""}${r.closed.historyRevoked ? `, історію знято (зʼявився клієнт) ${String(r.closed.historyRevoked)}` : ""}${r.closed.failed ? `, помилок ${String(r.closed.failed)}` : ""}` : "")
       + (r.reviewTasks && (r.reviewTasks.created || r.reviewTasks.closed) ? ` · задачі: нових ${String(r.reviewTasks.created)}, закрито ${String(r.reviewTasks.closed)}` : "")
+      + (r.dutyAssign && (r.dutyAssign.candidates || r.dutyAssign.noDuty) ? ` · черговому (${r.dutyAssign.mode}): кандидатів ${String(r.dutyAssign.candidates)}, у журнал ${String(r.dutyAssign.logged)}, віддано ${String(r.dutyAssign.assigned)}${r.dutyAssign.noDuty ? `, чергового немає — ${String(r.dutyAssign.noDuty)}` : ""}` : "")
+      + (r.clientMove && r.clientMove.candidates ? ` · клієнти в роботу (${r.clientMove.mode}): кандидатів ${String(r.clientMove.candidates)}, у журнал ${String(r.clientMove.logged)}, перенесено ${String(r.clientMove.moved)}` : "")
+      + (r.dutyAlerts && (r.dutyAlerts.created || r.dutyAlerts.closed) ? ` · КВП «нікого в графіку»: нових ${String(r.dutyAlerts.created)}, закрито ${String(r.dutyAlerts.closed)}` : "")
       + (r.leadTasks && (r.leadTasks.created || r.leadTasks.reminded || r.leadTasks.closed) ? ` · тімлідам: нових ${String(r.leadTasks.created)}, нагадано ${String(r.leadTasks.reminded)}, закрито ${String(r.leadTasks.closed)}` : "")
       + (r.taskSweep && r.taskSweep.candidates ? ` · задачі на закритих угодах (${r.taskSweep.mode}): угод ${String(r.taskSweep.candidates)}, досі закриті ${String(r.taskSweep.stillClosed)}, задач робота ${String(r.taskSweep.robotTasks)}, закрито ${String(r.taskSweep.closedTasks)}${r.taskSweep.peopleTasks ? `, задач людей лишили ${String(r.taskSweep.peopleTasks)}` : ""}` : "")
       + (r.sttStoppedBy ? ` · розпізнавання: ${r.sttStoppedBy}` : "")
