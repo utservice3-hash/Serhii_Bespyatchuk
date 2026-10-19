@@ -5123,6 +5123,8 @@ export const patchHiringCandidate = async (id: number, patch: Record<string, unk
 export const setHiringStatus = async (id: number, p: { to: HiringStatus; comment: string; teamId?: number | null; email?: string }) =>
   (await api.post<{ ok: true; credentials: { login: string; password: string } | null }>(`/hiring/candidates/${id}/status`, p)).data;
 export const addHiringComment = async (id: number, comment: string) => { await api.post(`/hiring/candidates/${id}/comment`, { comment }); };
+/** «Змінити команду» в картці кандидата (#1950) — HR і керівництво, на будь-якому статусі. */
+export const setHiringTeam = async (id: number, teamId: number, comment: string) => { await api.post(`/hiring/candidates/${id}/team`, { teamId, comment }); };
 
 export const fetchHiringDaily = async (from: string, to: string) =>
   (await api.get<{ rows: HiringDailyRow[]; totals: Omit<HiringDailyRow, "day"> & { attendancePct: number | null } }>("/hiring/daily", { params: { from, to } })).data;

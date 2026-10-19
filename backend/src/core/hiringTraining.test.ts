@@ -536,3 +536,36 @@ test("#1623 СТАРТОВА ВКЛАДКА: кандидат → «Навчан
   assert.match(dash, /homeSection\(\{ roleKey: auth\?\.roleKey, screens: auth\?\.screens/, "🔴 Dashboard не кличе homeSection");
   assert.match(dash, /if \(!rawSection && home !== "report"\) navigate\(`\/\$\{home\}`/, "🔴 корінь «/» не веде на стартову вкладку ролі");
 });
+
+/**
+ * #1950 — ЖИВИЙ SQL: «ЗМІНИТИ КОМАНДУ» В КАРТЦІ. Команду обирають лише на переходах до тімліда, а «↩ Повернути»
+ * відкочує на один крок — помилкову команду (Баланчук: «Самостійний» замість «Хомік Team Lead») нічим було
+ * виправити. Тепер: лише HR/керівництво (тімлід — 403), з коментарем, у наявну команду, не в ту саму; статус не
+ * рухається; акаунт КАНДИДАТА переїжджає разом, акаунт з іншою роллю (менеджер — його веде Kommo) — ні; в історії
+ * «стара → нова».
+ * 🧨 Червоніє, якщо дати це тімліду, змінити статус, лишити акаунт кандидата в старій команді або чіпати менеджера.
+ */
+test("#1950 ЖИВИЙ SQL: «Змінити команду» — HR, будь-який статус, акаунт кандидата за нею, менеджера не чіпає", async (t) => {
+  const s = await scratchDb(t); if (!s) return;
+  const h = await import("./hiring.js");
+  try {
+    const id = await toCandidate(s.db, "Баланчук Ольга", "0970001950");
+    const uid = (await s.c.query("SELECT user_id FROM hiring_candidates WHERE id=$1", [id])).rows[0].user_id as number;
+    const state = async () => (await s.c.query(`SELECT c.status, c.team_id, u.team_id AS u_team FROM hiring_candidates c JOIN users u ON u.id=c.user_id WHERE c.id=$1`, [id])).rows[0];
+    assert.deepEqual(await state(), { status: "candidate", team_id: 1, u_team: 1 });
+    await assert.rejects(h.changeTeam(s.db, null, id, { teamId: 2, comment: "в іншу" }, "lead"), code(403), "🔴 тімлід змінив команду");
+    await assert.rejects(h.changeTeam(s.db, null, id, { teamId: 2, comment: " " }, "edit"), code(400), "🔴 без коментаря");
+    await assert.rejects(h.changeTeam(s.db, null, id, { teamId: 999, comment: "нема" }, "edit"), code(400), "🔴 неіснуюча команда");
+    await assert.rejects(h.changeTeam(s.db, null, id, { teamId: 1, comment: "та сама" }, "edit"), code(400), "🔴 «зміна» на ту саму команду");
+
+    await h.changeTeam(s.db, null, id, { teamId: 2, comment: "Команда Вікторії Хомік" }, "edit");
+    assert.deepEqual(await state(), { status: "candidate", team_id: 2, u_team: 2 }, "🔴 команда кандидата чи його акаунта не змінилась, або зсунувся статус");
+    const ev = (await s.c.query(`SELECT comment FROM hiring_events WHERE candidate_id=$1 AND kind='edit' ORDER BY id DESC LIMIT 1`, [id])).rows[0].comment as string;
+    assert.match(ev, /команда: «РПК · Дмитрук» → «РНК · Безпамʼятний» · Команда Вікторії Хомік/, "🔴 в історії немає «стара → нова»");
+
+    // Менеджер (роль не «кандидат») — робочу команду веде Kommo, акаунт не чіпаємо; картку — так.
+    await s.c.query("UPDATE users SET role_override = 'manager' WHERE id = $1", [uid]);
+    await h.changeTeam(s.db, null, id, { teamId: 1, comment: "назад" }, "edit");
+    assert.deepEqual(await state(), { status: "candidate", team_id: 1, u_team: 2 }, "🔴 зміна команди в картці переписала команду менеджерського акаунта");
+  } finally { await s.done(); }
+});

@@ -12,7 +12,7 @@ import {
 } from "../core/hiringRules.js";
 import {
   HiringError, type Db, scheduleRows, createInterview, createInterviewFor, updateInterview, setInterviewDeleted,
-  listCandidates, candidateCard, createCandidate, updateCandidateFields, changeStatus, addComment,
+  listCandidates, candidateCard, createCandidate, updateCandidateFields, changeStatus, changeTeam, addComment,
   dailyReport, setDailyManual, hiringMeta,
   listVacancies, createVacancy, updateVacancy, setCandidateVacancies, addRefusalReason, refuseCandidate, setReserve,
   insertFile, fileForDownload, setFileDeleted,
@@ -271,6 +271,16 @@ hiringRouter.post("/candidates/:id/status", async (req, res) => {
     const id = idOf(req);
     const credentials = await tx((db) => changeStatus(db, req.auth!.userId, id, req.body ?? {}, access, req.auth!.teamId));
     res.json({ ok: true, credentials });
+  } catch (e) { fail(res, e); }
+});
+
+// 👥 «Змінити команду» (#1950) — лише HR і керівництво.
+hiringRouter.post("/candidates/:id/team", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const id = idOf(req);
+    await tx((db) => changeTeam(db, req.auth!.userId, id, req.body ?? {}, "edit"));
+    res.json({ ok: true });
   } catch (e) { fail(res, e); }
 });
 
