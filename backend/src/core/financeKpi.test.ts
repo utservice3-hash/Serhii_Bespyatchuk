@@ -1768,3 +1768,115 @@ test("#947 ФРОНТ «ТИЖНЯ Й МІСЯЦЯ»: справжня вкла�
     assert.match(wk, new RegExp(`await deleteFinKpi\\("${k}", [a-z]+\\.id(?:, confirm)?\\); reload\\(\\); undo\\("${k}", `), `🔴 видалення «${k}» без «Повернути»`);
   assert.match(wk, /setFinKpiClosed\(/, "🔴 немає закриття / відкриття періоду");
 });
+
+/**
+ * 🎯 ПЛАН І ПРОГНОЗ НАДХОДЖЕНЬ / ВИТРАТ (задача #5649, 19.10.2026) — гейти `#1275`–`#1275c`
+ * (`#1275`–`#1289` вільні в `main` і в усіх гілках на 19.10.2026).
+ *
+ * #1275 — ЧИСТА АРИФМЕТИКА ПЛАНУ. Частка минулих днів — календарні дні, сьогодні включно, за Києвом (19.10 → 19/31;
+ * минулий період — 1, майбутній — 0, межа доби — київська); очікуване = план × частка; відхилення = факт − очікуване;
+ * прогноз = факт / частка лише для неповного періоду; тиждень належить місяцю свого четверга; тиждень = місяць / 4.
+ * 🧨 Червоніє, якщо брати дні за UTC, не рахувати сьогодні, прогнозувати минулий період чи ділити не на 4.
+ */
+test("#1275 ПЛАН — АРИФМЕТИКА: частка днів за Києвом зі сьогодні, очікуване, відхилення, прогноз лише неповного, тиждень — місяць четверга / 4", async () => {
+  const p = await import("./financePlan.js");
+  assert.equal(p.elapsedShare("month", "2026-10-01", new Date("2026-10-19T10:00:00Z")), 19 / 31, "🔴 19.10 — не 19 із 31 дня");
+  assert.equal(p.elapsedShare("month", "2026-10-01", new Date("2026-10-18T21:30:00Z")), 19 / 31, "🔴 00:30 за Києвом 19.10 порахувалось як 18.10 (UTC)");
+  assert.equal(p.elapsedShare("month", "2026-10-01", new Date("2026-10-01T10:00:00Z")), 1 / 31, "🔴 перший день не рахується");
+  assert.equal(p.elapsedShare("month", "2026-09-01", new Date("2026-10-19T10:00:00Z")), 1, "🔴 минулий місяць — не повний");
+  assert.equal(p.elapsedShare("month", "2026-11-01", new Date("2026-10-19T10:00:00Z")), 0, "🔴 майбутній місяць — не нуль");
+  assert.equal(p.elapsedShare("week", "2026-10-19", new Date("2026-10-19T10:00:00Z")), 1 / 7, "🔴 понеділок — не 1/7 тижня");
+
+  assert.deepEqual(p.planFigures(15_860_000, 31_500_000, 19 / 31, true),
+    { expected: 19_306_451.61, deviation: -3_446_451.61, forecast: 25_876_842.11 }, "🔴 жовтень: очікуване / відхилення / прогноз хибні");
+  assert.equal(p.planFigures(31_000_000, 31_500_000, 1, true).forecast, null, "🔴 прогноз для завершеного періоду");
+  assert.equal(p.planFigures(0, 31_500_000, 0, true).forecast, null, "🔴 прогноз для періоду, що не почався");
+  assert.equal(p.planFigures(1_000, 7_000, 1 / 7, false).forecast, null, "🔴 тиждень отримав прогноз");
+  assert.deepEqual(p.planFigures(null, 31_500_000, 0.5, true), { expected: 15_750_000, deviation: null, forecast: null }, "🔴 без факту — відхилення з нуля");
+  assert.deepEqual(p.planFigures(100, null, 0.5, true), { expected: null, deviation: null, forecast: 200 }, "🔴 без плану — вигадане очікуване");
+
+  assert.equal(p.WEEKS_PER_MONTH_PLAN, 4, "🔴 тиждень = місяць / 4 (Тетяна 13.10.2026)");
+  assert.deepEqual(["2026-09-28", "2026-10-26", "2026-11-30", "2026-10-12"].map(p.monthOfWeek),
+    ["2026-10-01", "2026-10-01", "2026-12-01", "2026-10-01"], "🔴 тиждень віднесено не до місяця свого четверга");
+});
+
+/**
+ * #1275b — ЖИВИЙ SQL: ПЛАН — ТЕ, ЩО ЕКРАН ПОКАЗАВ ЗА МИНУЛИЙ МІСЯЦЬ, АБО РУЧНИЙ. Жовтень: план = вересневе число з
+ * таблиці Тетяни (до старту автоматики); листопад: план = жовтнева «Виписка» (живе), а закритий жовтень — збережене
+ * число; тиждень = план місяця четверга / 4; ручний план перемагає, порожньо — знову «з минулого місяця»; план не
+ * задається іншим рядкам, відʼємним чи на кривий місяць (400).
+ * 🧨 Червоніє, якщо брати план не з минулого місяця, ігнорувати ручний / закриття, не ділити тиждень чи пустити план
+ * на чужий рядок.
+ */
+test("#1275b ЖИВИЙ SQL: план — минулий місяць як на екрані або ручний, тиждень / 4, порожньо — знову авто, чужий рядок — 400", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const k = await import("./financeKpi.js");
+  const p = await import("./financePlan.js");
+  const { db, c } = s;
+  try {
+    const sec = await k.createSection(db, 901, { name: "Гроші" });
+    const inc = await k.createKpi(db, 901, { sectionId: sec, name: "Надходження загальні" });
+    const out = await k.createKpi(db, 901, { sectionId: sec, name: "Витрати загальні" });
+    const other = await k.createKpi(db, 901, { sectionId: sec, name: "Інше" });
+    await c.query(`UPDATE fin_kpis SET kind = 'auto', ref_source = 'bank_in' WHERE id = $1`, [inc]);
+    await c.query(`UPDATE fin_kpis SET kind = 'auto', ref_source = 'bank_out' WHERE id = $1`, [out]);
+    const putMonth = (id: number, m: string, v: number) => c.query(`INSERT INTO fin_kpi_values (kpi_id, period_kind, period_start, value) VALUES ($1, 'month', $2, $3)
+      ON CONFLICT (kpi_id, period_kind, period_start) DO UPDATE SET value = EXCLUDED.value`, [id, m, v]);
+    await putMonth(inc, "2026-09-01", 31_500_000); await putMonth(out, "2026-09-01", 20_000_000);
+    const { uts, tx } = await bankFixture(c);
+    await tx(uts, 1_000_000, "2026-10-07T10:00:00Z"); await tx(uts, -400_000, "2026-10-08T10:00:00Z");
+    const now = new Date("2026-10-19T10:00:00Z");
+    const fact = (id: number) => (id === inc ? 15_860_000 : id === out ? 9_000_000 : null);
+    const by = (rows: Awaited<ReturnType<typeof p.loadPlan>>, id: number) => rows.find((r) => r.kpiId === id)!;
+
+    const oct = await p.loadPlan(db, "month", "2026-10-01", now, fact);
+    assert.deepEqual(oct.map((r) => r.kpiId).sort(), [inc, out].sort(), "🔴 план не рівно для двох рядків «Виписки»");
+    assert.deepEqual([by(oct, inc).plan, by(oct, inc).planSource, by(oct, inc).expected, by(oct, inc).deviation, by(oct, inc).forecast, by(oct, inc).better],
+      [31_500_000, "prev-month", 19_306_451.61, -3_446_451.61, 25_876_842.11, "more"], "🔴 жовтень надходжень — не від вересневого числа Тетяни");
+    assert.deepEqual([by(oct, out).plan, by(oct, out).better], [20_000_000, "less"], "🔴 витрати: план чи напрям «краще» хибні");
+
+    const nov = await p.loadPlan(db, "month", "2026-11-01", now, fact);
+    assert.deepEqual([by(nov, inc).plan, by(nov, out).plan], [1_000_000, 400_000], "🔴 листопад — не жовтнева «Виписка»");
+    await putMonth(inc, "2026-10-01", 2_500_000);
+    await c.query(`INSERT INTO fin_kpi_closes (period_kind, period_start, closed_by) VALUES ('month', '2026-10-01', 901)`);
+    assert.equal(by(await p.loadPlan(db, "month", "2026-11-01", now, fact), inc).plan, 2_500_000, "🔴 закритий жовтень — не зафіксоване число");
+
+    const wk = await p.loadPlan(db, "week", "2026-09-28", now, fact);
+    assert.deepEqual([by(wk, inc).month, by(wk, inc).plan, by(wk, inc).monthPlan, by(wk, inc).expected, by(wk, inc).forecast],
+      ["2026-10-01", 7_875_000, 31_500_000, 7_875_000, null], "🔴 тиждень 28.09 — не жовтень / 4");
+
+    await p.setManualPlan(db, 901, inc, "2026-10", "30 000 000");
+    assert.deepEqual([by(await p.loadPlan(db, "month", "2026-10-01", now, fact), inc).plan, by(await p.loadPlan(db, "month", "2026-10-01", now, fact), inc).planSource],
+      [30_000_000, "manual"], "🔴 ручний план не переміг минулий місяць");
+    assert.equal(by(await p.loadPlan(db, "week", "2026-10-12", now, fact), inc).plan, 7_500_000, "🔴 тиждень не від ручного плану місяця");
+    await p.setManualPlan(db, 901, inc, "2026-10-01", "");
+    assert.deepEqual([by(await p.loadPlan(db, "month", "2026-10-01", now, fact), inc).planSource, (await c.query(`SELECT count(*)::int AS n FROM fin_kpi_plans`)).rows[0].n],
+      ["prev-month", 0], "🔴 порожнє не повернуло «з минулого місяця»");
+
+    for (const [id, m, v] of [[other, "2026-10", "100"], [inc, "2026-10", "-5"], [inc, "2026-13x", "100"], [inc, "жовтень", "100"]] as const)
+      await assert.rejects(p.setManualPlan(db, 901, id, m, v), (e) => status(e) === 400, `🔴 план прийнято: ${id === other ? "чужий рядок" : `${m} / ${v}`}`);
+    assert.equal((await c.query(`SELECT count(*)::int AS n FROM fin_kpi_plans`)).rows[0].n, 0, "🔴 відмова щось записала");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1275c — ПРОВОДКА ПЛАНУ. `GET /kpi` віддає `plan` лише після старту автоматики; `PUT /kpi/plan` першим рядком
+ * перевіряє право вносити (`canEdit`) і стоїть у матриці доступу; таблиця `fin_kpi_plans` закрита від AI; фронт
+ * фарбує відхилення за напрямом рядка (витрати понад план — червоні) і показує прогноз лише для місяця.
+ * 🧨 Червоніє, якщо зняти межу з роуту, віддати план до старту, фарбувати витрати як надходження чи прибрати прогноз.
+ */
+test("#1275c ПРОВОДКА ПЛАНУ: GET /kpi — plan після старту, PUT /kpi/plan — canEdit першим і в матриці, AI закрито, фронт — колір за напрямом", () => {
+  const r = SRC("routes/finance.ts");
+  assert.match(r, /const plan = autoActive\(p\.kind, p\.start\) \? await loadPlan\(/, "🔴 план рахується до старту автоматики або не рахується");
+  assert.match(r, /res\.json\(\{\s*plan,/, "🔴 GET /kpi не віддає plan");
+  assert.match(r, /financeRouter\.put\("\/kpi\/plan", async \(req, res\) => \{\s*try \{\s*canEdit\(req\);\s*res\.json\(await tx\(\(db\) => setManualPlan\(/, "🔴 PUT /kpi/plan без межі «вносити» першим рядком");
+  assert.match(SRC("auth/accessMatrix.ts"), /method: "PUT", path: "\/api\/finance\/kpi\/plan", cls: "deny-only",\s*allow: \[\], deny: \["hr", "team_lead", "manager"\]/, "🔴 PUT /kpi/plan не в матриці");
+  assert.match(SRC("db/schema.sql"), /REVOKE ALL ON fin_kpi_plans FROM ai_readonly;/, "🔴 план не закрито від AI");
+  assert.match(SRC("ai/metricTools.ts"), /"fin_kpi_plans"/, "🔴 план не в забороненому для AI");
+  const fe = FE("pages/dashboard/sections/FinanceWeekTab.tsx");
+  assert.match(fe, /const goodDev = \(r: FinPlanRow\) => r\.deviation != null && \(r\.better === "more" \? r\.deviation >= 0 : r\.deviation <= 0\);/, "🔴 колір відхилення не за напрямом рядка");
+  assert.match(fe, /className=\{goodDev\(r\) \? "fin-good" : "fin-bad"\}/, "🔴 відхилення не фарбується");
+  assert.match(fe, /kind === "month" && partial && <th[^>]*>Прогноз/, "🔴 прогноз місяця не показано");
+  assert.match(fe, /setFinKpiPlan\(/, "🔴 ручний план не зберігається з екрана");
+});

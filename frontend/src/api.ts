@@ -6012,7 +6012,16 @@ export interface FinKpiPeriod {
   receivablesFx: { uah: number; val: number; zeroUah: number; at: string; usd: number | null; eur: number | null; unknownVal: number | null } | null;
   /** «З них перекази між нашими рахунками» біля «Надходження / Витрати загальні» (чи виключати — відкрите питання). */
   bankOwn: { in: number; out: number } | null;
+  /** 🎯 План і прогноз надходжень / витрат (#5649); `null` — до старту автоматики. */
+  plan?: FinPlanRow[] | null;
 }
+export interface FinPlanRow {
+  kpiId: number; name: string; ref: "bank_in" | "bank_out"; better: "more" | "less";
+  fact: number | null; plan: number | null; planSource: "manual" | "prev-month" | null; monthPlan: number | null; month: string;
+  expected: number | null; deviation: number | null; forecast: number | null; share: number;
+}
+/** Ручний план місяця: число — встановити, порожньо — знову «з минулого місяця». */
+export const setFinKpiPlan = async (kpiId: number, month: string, value: string) => (await api.put("/finance/kpi/plan", { kpiId, month, value })).data;
 export interface FinKpiCard {
   id: number; name: string; unit: string; kind: string; refSource: string | null; offFrom: string | null; deleted: boolean; section: string;
   periods: { start: string; value: number | null; note: string | null; ref: number | null }[];

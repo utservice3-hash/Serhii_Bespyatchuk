@@ -93,7 +93,7 @@ test("#1271d МЕЖА ЕКРАНА «ОПЛАТИ ПЕРЕВІЗНИКАМ»: т
     assert.deepEqual([...r!.allow].sort(), ["admin", "financier"], `🔴 ${p}: дозвіл не рівно Адмін і фінансист`);
     for (const role of ["ceo", "opdir", "kvp", "manager"]) assert.ok(r!.deny.includes(role), `🔴 ${p}: ${role} не в забороні`);
   }
-  assert.ok(m("POST", "/api/finance/payments/run")?.deny.includes("kvp"), "🔴 «Оновити зараз» не в матриці");
+  assert.ok(m("POST", "/api/finance/payments/run")?.deny.includes("kvp"), "🔴 «Перевірити зараз» не в матриці");
   const sec = FE("pages/dashboard/sections/FinanceSection.tsx"), tab = FE("pages/dashboard/sections/FinancePaymentsTab.tsx");
   assert.match(sec, /\{tab === "payments" && <FinancePaymentsTab \/>\}/, "🔴 вкладка не рендерить екран");
   assert.match(sec, /\["payments", "Оплати перевізникам", false\]/, "🔴 вкладки немає в «Фінансах»");
@@ -132,9 +132,22 @@ test("#1274 ГОЛОВНЕ — ФІЛЬТР: «у фільтрі зараз» = 
   assert.match(open, /PAY_STATUSES\.map/, "🔴 фільтр не за трьома етапами Тетяни");
   assert.doesNotMatch(open, /created_at|142/, "🔴 до живого фільтра домішано вікно дати чи «Оплачено»");
   assert.match(job, /const gone = log\.filter\(\(x\) => !activeSet\.has\(Number\(x\.request_id\)\)\);/, "🔴 архів не «журнал дня мінус фільтр»");
-  assert.match(job, /reasons: x \? x\.reasons \?\? \[\] : \["ще не перевірено — натисніть «Оновити зараз»"\]/, "🔴 новий запит без рішення не названо «ще не перевірено»");
+  assert.match(job, /reasons: x \? x\.reasons \?\? \[\] : \["ще не перевірено — натисніть «↻ Перевірити зараз»"\]/, "🔴 новий запит без рішення не названо «ще не перевірено»");
   const tab = FE("pages/dashboard/sections/FinancePaymentsTab.tsx");
   assert.match(tab, /\{!data\.active\.length \? <p className="hr-muted" style=\{\{ margin: "8px 0" \}\}>У фільтрі зараз немає запитів/, "🔴 порожній фільтр не порожній");
   assert.match(tab, /href=\{`\$\{data\.kommoBase\}\/leads\/detail\/\$\{r\.requestId\}`\}/, "🔴 кнопка веде не на сам запит у воронці");
   assert.match(tab, /const ok = data\.active\.filter\(\(r\) => r\.ok\);/, "🔴 файл «До оплати» не лише з фільтра");
+});
+
+/**
+ * #1276 — ПІДКАЗКА НАЗИВАЄ КНОПКУ ТАК, ЯК ВОНА НАПИСАНА НА ЕКРАНІ. Рядок «ще не перевірено» каже, що натиснути, — і
+ * назва мусить бути рівно підписом кнопки на вкладці (Роман 19.10.2026: підказка казала «Оновити зараз», а кнопка —
+ * «↻ Перевірити зараз», і її не знайшли).
+ * 🧨 Червоніє, якщо перейменувати кнопку чи підказку поодинці.
+ */
+test("#1276 ПІДКАЗКА = КНОПКА: «ще не перевірено» називає рівно підпис кнопки перевірки на вкладці", () => {
+  const tab = FE("pages/dashboard/sections/FinancePaymentsTab.tsx");
+  const label = /\{busy \? "Перевіряю…" : "([^"]+)"\}/.exec(tab)?.[1];
+  assert.ok(label, "🔴 кнопку перевірки на вкладці не знайдено");
+  assert.ok(SRC("jobs/buildPaymentFile.ts").includes(`натисніть «${label}»`), `🔴 підказка не називає кнопку «${label}»`);
 });

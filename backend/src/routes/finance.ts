@@ -11,6 +11,7 @@ import {
   loadPeriod, kpiCard, saveKpiValues, setKpiNote, setPeriodClosed, createSection, renameSection, deleteSection,
   createKpi, updateKpi, setKpiOff, deleteKpi, restoreKpiThing, autoActive, opexMonth, receivablesFxAt, bankTotals, periodStart, shiftPeriod,
 } from "../core/financeKpi.js";
+import { loadPlan, setManualPlan } from "../core/financePlan.js";
 import { fmRefsFor } from "../core/financeKpiRefs.js";
 
 /**
@@ -190,7 +191,11 @@ financeRouter.get("/kpi", async (req, res) => {
     const fx = autoActive(p.kind, p.start) ? await receivablesFxAt(pool as unknown as Db, p.end, new Date()) : null;
     // «з них перекази між своїми рахунками» — друге число біля «Надходження / Витрати загальні» (питання відкрите).
     const bank = autoActive(p.kind, p.start) ? await bankTotals(pool as unknown as Db, p.start, p.end) : null;
+    // 🎯 План і прогноз надходжень / витрат (#5649): факт — уже пораховане значення рядка цього періоду.
+    const factById = new Map(p.sections.flatMap((s) => s.kpis.map((k: { id: number; value: number | null }) => [k.id, k.value] as const)));
+    const plan = autoActive(p.kind, p.start) ? await loadPlan(pool as unknown as Db, p.kind, p.start, new Date(), (id) => factById.get(id) ?? null) : null;
     res.json({
+      plan,
       opexUnassigned: opex, receivablesFx: fx, bankOwn: bank ? { in: bank.ownIn, out: bank.ownOut } : null,
       kind: p.kind, start: p.start, end: p.end, prev: p.prev, label: p.label, prevLabel: p.prevLabel, current: p.current,
       sections: p.sections, closed: p.closed, importedInterim: p.importedInterim, canEdit: roleHasPerm(req.auth!.roleKey, "edit_finance"),
@@ -199,6 +204,13 @@ financeRouter.get("/kpi", async (req, res) => {
 });
 financeRouter.get("/kpi/items/:id", async (req, res) => {
   try { onlyFinance(req); res.json(await kpiCard(pool as unknown as Db, idOf(req), req.query.kind)); } catch (e) { fail(res, e); }
+});
+// 🎯 Ручний план місяця (#5649): число — встановити, порожньо — знову «з минулого місяця». Межа — та сама, що вносити.
+financeRouter.put("/kpi/plan", async (req, res) => {
+  try {
+    canEdit(req);
+    res.json(await tx((db) => setManualPlan(db, req.auth!.userId, req.body?.kpiId, req.body?.month, req.body?.value)));
+  } catch (e) { fail(res, e); }
 });
 financeRouter.put("/kpi/values", async (req, res) => {
   try {

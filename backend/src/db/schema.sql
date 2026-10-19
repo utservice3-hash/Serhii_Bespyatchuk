@@ -6066,3 +6066,16 @@ CREATE TABLE IF NOT EXISTS carrier_duty_alerts (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_carrier_duty_alerts_open ON carrier_duty_alerts(user_id) WHERE closed_at IS NULL;
 REVOKE ALL ON carrier_duty_alerts FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🎯 ПЛАН НАДХОДЖЕНЬ І ВИТРАТ («Тиждень і місяць», задача #5649, 19.10.2026): РУЧНИЙ план місяця для «Надходження
+-- загальні» / «Витрати загальні». Немає рядка — план = число цього показника за минулий місяць (рахує `core/financePlan.ts`).
+CREATE TABLE IF NOT EXISTS fin_kpi_plans (
+  kpi_id   INTEGER NOT NULL REFERENCES fin_kpis(id),
+  month    DATE NOT NULL CHECK (month = date_trunc('month', month)::date),
+  value    NUMERIC(16,2) NOT NULL CHECK (value >= 0),
+  set_by   INTEGER REFERENCES users(id),
+  set_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (kpi_id, month)
+);
+REVOKE ALL ON fin_kpi_plans FROM ai_readonly;
