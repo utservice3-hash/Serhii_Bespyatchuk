@@ -5761,8 +5761,8 @@ export const finErrorData = (e: unknown) => (e as { response?: { status?: number
 // на Word/PDF повертав би 401. Файли — blob через `api`, як скрини клієнтів.
 // ═══════════════════════════════════════════════════════════════════════════
 export type CtorEntityKey = "uts" | "avm" | "fop";
-/** `nrmain`/`nrapp` — договір і заявка для нерезидента (UA | EN, лише АвтоМув; 14.10.2026). */
-export type CtorDocKind = "once" | "main" | "carr" | "nrmain" | "nrapp";
+/** `nrmain`/`nrapp` — договір і заявка для нерезидента (UA | EN, лише АвтоМув; 14.10.2026); `annex` — заявка-додаток до річного договору (5777). */
+export type CtorDocKind = "once" | "main" | "carr" | "nrmain" | "nrapp" | "annex";
 export type CtorParty = "client" | "carrier";
 export interface CtorCounterparty {
   name?: string; edrpou?: string; ipn?: string; addr?: string;
@@ -5801,6 +5801,8 @@ export interface CtorCounterpartyRow {
   bank: string | null; phone: string | null; email: string | null; director: string | null; is_fop: boolean; updated_at: string;
   /** Коли востаннє формували документ із цим ЄДРПОУ (рядок довідника в макеті K-04). */
   last_doc_at: string | null;
+  /** № і дата річного договору з цим клієнтом — пишуться при формуванні основного договору чи заявки-додатка (5777). */
+  contract_no?: string | null; contract_date?: string | null;
 }
 export interface CtorArchiveRow {
   id: number; deal_no: string; doc_kind: CtorDocKind; party: CtorParty; entity_key: CtorEntityKey; version: number;

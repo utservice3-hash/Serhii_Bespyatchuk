@@ -36,9 +36,11 @@ const ENT_UI: Record<CtorEntityKey, { c: string; warn?: string; fallback: string
 };
 /* Оформлення «Б» (v20): стартова щільність прев'ю за типом документа — та сама, з якої починає автопідгонка PDF
    (DENS_STEPS у docgen.ts пакета): клієнтська d1, перевізницька dc, основний dm. Підсумкову видно після «Сформувати». */
-const DENS0: Record<string, string> = { once: "d1", carr: "dc", main: "dm", nrmain: "dm", nrapp: "dc" };
+const DENS0: Record<string, string> = { once: "d1", carr: "dc", main: "dm", nrmain: "dm", nrapp: "dc", annex: "d1" };
 const DOCS: Array<{ k: string; t: string; p: CtorParty; off?: string; fopOff?: boolean; nr?: boolean }> = [
   { k: "once", t: "Разовий договір-заявка", p: "client" },
+  // 📎 заявка-додаток до річного договору (задача 5777): без юртексту, № і дата договору — з картки клієнта
+  { k: "annex", t: "Заявка до річного договору", p: "client" },
   { k: "main", t: "Основний договір", p: "client", fopOff: true },
   // 🌍 нерезидент (задачі 5144/5284/5463, 14.10.2026): лише від АвтоМув, UA | EN
   { k: "nrmain", t: "Договір з нерезидентом", p: "client", nr: true },
@@ -213,6 +215,7 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
   const isNrMain = form.doc === "nrmain", isNrApp = form.doc === "nrapp", isNr = isNrMain || isNrApp;
   /** Договір (основний або з нерезидентом): номер — № договору, без рейсу й «пари» */
   const isContract = isMain || isNrMain;
+  const isAnnex = form.doc === "annex";
 
   /* ── ФОП: форма оплати лише «СОФТ платіж», порядок — ФОП-овий (макет: syncPay) ── */
   useEffect(() => {
@@ -240,6 +243,30 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
   useEffect(() => {
     if (made && (made.num !== (isNrMain ? (form.mainNo || nrAutoNo(form.docDate)) : isMain ? form.mainNo : form.dealNo) || made.party !== form.party)) setMade(null);
   }, [form.dealNo, form.mainNo, form.party]);
+
+  /**
+   * 📎 Заявка до річного договору (5777): № і дата договору закріплені за клієнтом у довіднику — підставляємо, щойно
+   * відомий ЄДРПОУ (байдуже, звідки прийшов клієнт: 1С, ЄДР, довідник чи руками). Номер, підставлений для ПОПЕРЕДНЬОГО
+   * клієнта, прибираємо — інакше заявка пішла б під чужий договір.
+   */
+  const [annexSrc, setAnnexSrc] = useState<{ code: string; no: string; date: string } | null>(null);
+  useEffect(() => {
+    const code = (form.cp.edrpou || "").replace(/\D/g, "");
+    if (!isAnnex || !/^\d{8}$|^\d{10}$/.test(code) || annexSrc?.code === code) return;
+    let live = true;
+    ctorCounterparties(code).then((rows) => {
+      if (!live) return;
+      const r = rows.find((x) => x.edrpou === code);
+      const no = r?.contract_no || "", date = r?.contract_date || "";
+      setForm((f) => {
+        const stale = annexSrc && f.mainNo === annexSrc.no && f.mainDate === annexSrc.date;   // підставлене для іншого клієнта
+        if (no) return { ...f, mainNo: no, mainDate: date };
+        return stale ? { ...f, mainNo: "", mainDate: "" } : f;
+      });
+      setAnnexSrc({ code, no, date });
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [isAnnex, form.cp.edrpou]);
 
   /* ── Контрагент ── */
   const applyParsed = (cp: CtorCounterparty, onlyEmpty = false) =>
@@ -719,6 +746,16 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                     </span>
                   )) : <span style={{ fontSize: 12, color: "var(--muted)" }}>Шаблонів ще немає — заповніть рейс і натисніть «У шаблони».</span>}
                 </div>
+                {isAnnex && (
+                  <div className="g2" style={{ marginBottom: 12 }}>
+                    <p className="hint" style={{ margin: 0, gridColumn: "1 / -1" }}>{annexSrc?.code && annexSrc.code === (form.cp.edrpou || "").replace(/\D/g, "")
+                      ? (annexSrc.no ? <>№ і дату підставлено з картки клієнта <b>· договір № {annexSrc.no}</b>. Змініть, якщо укладено новий — запамʼятається при формуванні.</>
+                        : <>За цим клієнтом № договору ще не записано — впишіть один раз, при формуванні він запамʼятається.</>)
+                      : <>№ і дата річного договору підставляються з картки клієнта, щойно вказано ЄДРПОУ. Для старого договору впишіть один раз — далі підставиться сам.</>}</p>
+                    <div className="fld"><label htmlFor="anNo">№ річного договору <span style={{ color: "var(--bad)" }}>*</span></label><input type="text" id="anNo" value={form.mainNo} onChange={(e) => set("mainNo", e.target.value)} placeholder="напр. 62702131" /></div>
+                    <div className="fld"><label htmlFor="anDate">Дата договору <span style={{ color: "var(--bad)" }}>*</span></label><input type="text" id="anDate" value={form.mainDate} onChange={(e) => set("mainDate", e.target.value)} placeholder="напр. 21.09.2026" /></div>
+                  </div>
+                )}
                 {isNrApp && (
                   <div className="g2" style={{ marginBottom: 12 }}>
                     <div className="fld full"><label htmlFor="nrPick">Договір, до якого заявка <span style={{ color: "var(--ok)", fontWeight: 700 }}>· № і дата підтягуються</span></label>
@@ -940,7 +977,7 @@ function ArchList({ rows, q, onOpen, onLoad, onWaybill, withAuthor }: {
           {r.version > 1 && <span className="ext" title={`версія ${r.version}`}>v{r.version}</span>}
           <span style={{ fontSize: 12.5, fontWeight: 600 }}>{r.contractor_name || "без контрагента"}</span>
           <span style={{ fontSize: 12, color: "var(--muted)" }}>
-            {r.doc_kind === "main" ? "основний" : r.doc_kind === "nrmain" ? "договір нерезидент" : r.doc_kind === "nrapp" ? "заявка нерезидент" : r.party === "carrier" ? "перевізник" : "клієнт"} · {r.entity_key.toUpperCase()}{r.route ? ` · ${r.route}` : ""}{r.sum ? ` · ${r.sum}` : ""}
+            {r.doc_kind === "main" ? "основний" : r.doc_kind === "nrmain" ? "договір нерезидент" : r.doc_kind === "nrapp" ? "заявка нерезидент" : r.doc_kind === "annex" ? "до річного договору" : r.party === "carrier" ? "перевізник" : "клієнт"} · {r.entity_key.toUpperCase()}{r.route ? ` · ${r.route}` : ""}{r.sum ? ` · ${r.sum}` : ""}
           </span>
           {withAuthor && <span style={{ fontSize: 12, fontWeight: 600 }}>{r.author ?? "—"}</span>}
           <span style={{ fontSize: 11.5, color: "var(--muted)", marginLeft: "auto" }}>{fmtAt(r.created_at)}</span>

@@ -5154,7 +5154,12 @@ ALTER TABLE constructor_documents ADD COLUMN IF NOT EXISTS main_until text;
 -- Повторний запуск безпечний: обмеження перестворюється з тим самим складом.
 ALTER TABLE constructor_documents DROP CONSTRAINT IF EXISTS constructor_documents_doc_kind_check;
 ALTER TABLE constructor_documents ADD CONSTRAINT constructor_documents_doc_kind_check
-  CHECK (doc_kind IN ('once','main','carr','nrmain','nrapp'));
+  CHECK (doc_kind IN ('once','main','carr','nrmain','nrapp','annex'));
+-- 📎 Заявка-додаток до річного договору (doc_kind 'annex', задача 5777, 19.10.2026): № і дата річного договору
+-- закріплюються за клієнтом — пишуться при формуванні основного договору чи заявки-додатка, підставляються при виборі клієнта.
+ALTER TABLE constructor_counterparties
+  ADD COLUMN IF NOT EXISTS contract_no   text,
+  ADD COLUMN IF NOT EXISTS contract_date text;
 
 -- 📄 Оформлення «Б» (пакет Сергія v2, migrations/003_b_style.sql; передано 01.10.2026). Повторний запуск безпечний.
 -- Генерація бере ці значення з constructor/data/entities.ts (acc, orig); колонки тут — для довідника юросіб.
