@@ -379,7 +379,9 @@ export interface MissedCallsResp {
   automation?: MissedAutomation;
 }
 export interface MissedAutomation {
-  days: number; skippedCarrier: number; closedCallback: number; closedCarrier: number; openNow: number; dealsHistory: number | null;
+  days: number; skippedCarrier: number; closedCallback: number; closedCarrier: number; openNow: number;
+  /** 5824: закрито, бо клієнт сам передзвонив і поговорив від 10 с / угода номера ввійшла в «Успіх» після пропущеного. */
+  closedClientSelf: number; closedSuccess: number; dealsHistory: number | null;
 }
 /** 👥 Фільтр екрана «Пропущені дзвінки» (ТЗ Юлі 12.10.2026, розділ 3): `teams` — «5,6,none», `managerId` — один менеджер. */
 export interface MissedFilterParams { teams?: string; managerId?: number }

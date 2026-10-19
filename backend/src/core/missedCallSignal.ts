@@ -1,5 +1,5 @@
 import { CALL_MERGE_WINDOW, mergedLagGapExpr, mergedLagFirst } from "./callMerge.js";
-import { INBOUND_TYPES, OUTBOUND_TYPES, missedDispSql, CALLBACK_MIN_TALK_SEC } from "./missedCallsRules.js";
+import { INBOUND_TYPES, OUTBOUND_TYPES, missedDispSql, CALLBACK_MIN_TALK_SEC, AUTO_CLOSE_CLIENT_SELF_PREFIX, AUTO_CLOSE_SUCCESS_PREFIX } from "./missedCallsRules.js";
 import { dayBucketCase, dayBucketParts, type DayBucket } from "./dayBuckets.js";
 import { carrierHistorySql, carrierTaskCloseReason, HISTORY_GUARD, readHistoryGate } from "./carrierHistory.js";
 
@@ -148,7 +148,14 @@ export interface CloseCandidate {
   out_label: string;
   /** Хто передзвонив: наш менеджер за `manager_id`, інакше ПІБ із Ringostat; NULL — невідомо. */
   out_who: string | null;
-  out_sec: number;
+  /** Тривалість розмови, що закрила; `null` — закрила угода в «Успіху». */
+  out_sec: number | null;
+  /**
+   * Що закрило (5824, 19.10.2026): `callback` — наш вихідний від 10 с (як було); `client_self` — клієнт сам передзвонив і
+   * поговорив від 10 с; `success` — угода номера після сигналу ввійшла в «Успішно реалізовано» (`out_deal`). Найраніше з трьох.
+   */
+  kind: "callback" | "client_self" | "success";
+  out_deal: string | null;
 }
 
 /**
@@ -156,24 +163,57 @@ export interface CloseCandidate {
  * від 10 с. «Після сигналу», а не «після пропущеного»: передзвін до сигналу задачі не породив би.
  */
 export function closeCandidatesSql(now: Date): { sql: string; params: unknown[] } {
+  // Три події, що закривають задачу, — беремо НАЙРАНІШУ (5824): наш передзвін, розмова, коли клієнт передзвонив сам,
+  // або вхід угоди цього номера в «Успішно реалізовано» після сигналу. Усі — після останнього сигналу й до «зараз».
   const sql = `
-    SELECT l.manager_id, l.client_phone, to_char(l.kday, 'YYYY-MM-DD') AS kday, l.task_id,
-           to_char(o.calldate ${KY}, 'DD.MM HH24:MI') AS out_label,
-           COALESCE(om.name, NULLIF(btrim(o.employee_fio), '')) AS out_who,
-           o.billsec AS out_sec
-      FROM missed_call_tasks l
-      CROSS JOIN LATERAL (
-        SELECT oc.calldate, oc.billsec, oc.manager_id, oc.employee_fio
-          FROM ringostat_calls oc
-         WHERE oc.client_phone = l.client_phone
-           AND oc.call_type IN (${inList(OUTBOUND_TYPES)})
-           AND oc.billsec >= ${String(CALLBACK_MIN_TALK_SEC)}
-           AND oc.calldate > l.last_signal_at AND oc.calldate <= $1::timestamptz
-         ORDER BY oc.calldate, oc.uniqueid LIMIT 1) o
-      LEFT JOIN managers om ON om.id = o.manager_id
-     WHERE l.closed_at IS NULL AND l.task_id IS NOT NULL
-     ORDER BY l.kday, l.manager_id, l.client_phone`;
+    SELECT x.manager_id, x.client_phone, x.kday, x.task_id, x.kind, x.out_label, x.out_who, x.out_deal,
+           (CASE x.kind WHEN 'client_self' THEN x.i_sec WHEN 'callback' THEN x.o_sec END) AS out_sec
+      FROM (
+      SELECT l.manager_id, l.client_phone, to_char(l.kday, 'YYYY-MM-DD') AS kday, l.task_id,
+             (CASE WHEN o.calldate IS NOT NULL AND (i.calldate IS NULL OR o.calldate <= i.calldate) AND (sc.changed_at IS NULL OR o.calldate <= sc.changed_at) THEN 'callback'
+                   WHEN i.calldate IS NOT NULL AND (sc.changed_at IS NULL OR i.calldate <= sc.changed_at) THEN 'client_self'
+                   WHEN sc.changed_at IS NOT NULL THEN 'success' END) AS kind,
+             to_char(COALESCE(LEAST(o.calldate, i.calldate, sc.changed_at), o.calldate) ${KY}, 'DD.MM HH24:MI') AS out_label,
+             COALESCE(om.name, NULLIF(btrim(o.employee_fio), '')) AS out_who,
+             o.billsec AS o_sec, i.billsec AS i_sec,
+             sc.kommo_id::text AS out_deal
+        FROM missed_call_tasks l
+        LEFT JOIN LATERAL (
+          SELECT oc.calldate, oc.billsec, oc.manager_id, oc.employee_fio
+            FROM ringostat_calls oc
+           WHERE oc.client_phone = l.client_phone
+             AND oc.call_type IN (${inList(OUTBOUND_TYPES)})
+             AND oc.billsec >= ${String(CALLBACK_MIN_TALK_SEC)}
+             AND oc.calldate > l.last_signal_at AND oc.calldate <= $1::timestamptz
+           ORDER BY oc.calldate, oc.uniqueid LIMIT 1) o ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT ic.calldate, ic.billsec
+            FROM ringostat_calls ic
+           WHERE ic.client_phone = l.client_phone
+             AND ic.call_type IN (${inList(INBOUND_TYPES)})
+             AND ic.billsec >= ${String(CALLBACK_MIN_TALK_SEC)}
+             AND ic.calldate > l.last_signal_at AND ic.calldate <= $1::timestamptz
+           ORDER BY ic.calldate, ic.uniqueid LIMIT 1) i ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT e.kommo_id, e.changed_at
+            FROM deal_stage_events e
+           WHERE e.status_id = 142 AND e.changed_at > l.last_signal_at AND e.changed_at <= $1::timestamptz
+             AND e.kommo_id IN (SELECT d.kommo_id FROM deals d WHERE regexp_replace(d.name, '\\D', '', 'g') = l.client_phone
+                                UNION SELECT dc.deal_kommo_id FROM contact_phones cp JOIN deal_contacts dc ON dc.contact_id = cp.contact_id
+                                 WHERE cp.phone = l.client_phone)
+           ORDER BY e.changed_at, e.kommo_id LIMIT 1) sc ON TRUE
+        LEFT JOIN managers om ON om.id = o.manager_id
+       WHERE l.closed_at IS NULL AND l.task_id IS NOT NULL) x
+     WHERE x.kind IS NOT NULL
+     ORDER BY x.kday, x.manager_id, x.client_phone`;
   return { sql, params: [now] };
+}
+
+/** Причина закриття за тим, що сталось першим (5824). Усі починаються з «Закрито автоматично:» — контракт із фронтом. */
+export function closeReasonOf(c: Pick<CloseCandidate, "kind" | "out_label" | "out_who" | "out_sec" | "out_deal">): string {
+  if (c.kind === "client_self") return `${AUTO_CLOSE_CLIENT_SELF_PREFIX} ${c.out_label}${c.out_sec != null ? `, розмова ${String(c.out_sec)} с` : ""}.`;
+  if (c.kind === "success") return `${AUTO_CLOSE_SUCCESS_PREFIX}${c.out_deal ? ` (угода №${c.out_deal})` : ""} ${c.out_label}.`;
+  return autoCloseReason(c.out_label, c.out_who, c.out_sec);
 }
 
 const BUCKET_LABEL: Record<DayBucket, string> = {
@@ -372,7 +412,7 @@ export async function applyMissedCallSignals(db: Db, now: Date, historySyncMaxMi
       if (prev && prev.status !== "done") {
         await db.query(
           `UPDATE tasks SET status = 'done', closed_at = $2, close_reason = $3, updated_at = now() WHERE id = $1`,
-          [r.task_id, now, autoCloseReason(r.out_label, r.out_who, r.out_sec)]);
+          [r.task_id, now, closeReasonOf(r)]);
         await db.query(
           "INSERT INTO task_status_log (task_id, from_status, to_status, changed_by) VALUES ($1, $2, 'done', NULL)",
           [r.task_id, prev.status]);
@@ -413,6 +453,8 @@ export function recountCandidatesSql(): string {
       JOIN tasks t ON t.id = l.task_id
      WHERE t.status = 'done'
        AND t.close_reason LIKE '${AUTO_CLOSE_PREFIX_SQL}%'
+       -- 5824: закрите тому, що клієнт сам поговорив або угода в «Успіху», — не «спроба без розмови», не перевідкриваємо.
+       AND t.close_reason NOT LIKE '${AUTO_CLOSE_CLIENT_SELF_PREFIX}%' AND t.close_reason NOT LIKE '${AUTO_CLOSE_SUCCESS_PREFIX}%'
        AND NOT EXISTS (
              SELECT 1 FROM ringostat_calls o
               WHERE o.client_phone = l.client_phone

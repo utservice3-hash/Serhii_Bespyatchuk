@@ -549,7 +549,11 @@ export function capRows<T>(rows: T[], limit = MISSED_LIST_LIMIT): { rows: T[]; t
  */
 export function missedListSql(day: string, s: MissedScope, onlyNoCallback = false): { sql: string; params: unknown[] } {
   const { cte, params } = baseCte(day, day, s);
-  const extra = onlyNoCallback ? " AND w.cb_at IS NULL" : "";
+  // «Лише непередзвонені» (5824): без НАШОЇ розмови від 10 с і без розмови від 10 с, коли клієнт передзвонив сам, — за
+  // ті самі 24 год. Інакше рядок, після якого з клієнтом поговорили, висів би як «не передзвонили».
+  const extra = onlyNoCallback ? ` AND w.cb_at IS NULL AND NOT EXISTS (
+      SELECT 1 FROM ringostat_calls i WHERE i.client_phone = w.client_phone AND i.call_type IN (${list(INBOUND_TYPES)})
+         AND i.billsec >= ${String(CALLBACK_MIN_TALK_SEC)} AND i.calldate > w.calldate AND i.calldate <= w.calldate + interval '${CALLBACK_WINDOW}')` : "";
   const sql = `${cte}
     SELECT w.uniqueid,
            to_char(w.calldate AT TIME ZONE 'Europe/Kyiv', 'HH24:MI') AS at,
@@ -680,6 +684,9 @@ export function noDealListSql(from: string, to: string, s: MissedScope, state: N
 /** Префікси причин автозакриття — контракт із `missedCallSignal.autoCloseReason` і `carrierHistory.carrierTaskCloseReason`. */
 export const AUTO_CLOSE_CALLBACK_PREFIX = "Закрито автоматично: передзвонив";
 export const AUTO_CLOSE_CARRIER_PREFIX = "Закрито автоматично: номер у CRM";
+/** 5824 (19.10.2026): клієнт сам передзвонив і поговорив від 10 с / угода номера після пропущеного — в «Успіху». */
+export const AUTO_CLOSE_CLIENT_SELF_PREFIX = "Закрито автоматично: клієнт передзвонив сам";
+export const AUTO_CLOSE_SUCCESS_PREFIX = "Закрито автоматично: угода в «Успішно реалізовано»";
 export const AUTOMATION_DAYS = 7;
 
 /**
@@ -700,6 +707,8 @@ export function missedAutomationSql(today: string, s: MissedScope): { sql: strin
              WHERE k.kday BETWEEN $1::date - ${String(AUTOMATION_DAYS - 1)} AND $1::date AND ${scope})::int AS skipped_carrier,
            ${closedIn(AUTO_CLOSE_CALLBACK_PREFIX)} AS closed_callback,
            ${closedIn(AUTO_CLOSE_CARRIER_PREFIX)} AS closed_carrier,
+           ${closedIn(AUTO_CLOSE_CLIENT_SELF_PREFIX)} AS closed_client_self,
+           ${closedIn(AUTO_CLOSE_SUCCESS_PREFIX)} AS closed_success,
            (SELECT count(*) FROM missed_call_tasks l JOIN tasks t ON t.id = l.task_id LEFT JOIN managers m ON m.id = l.manager_id
              WHERE t.status <> 'done' AND ${scope})::int AS open_now,
            CASE WHEN $2::int IS NULL AND $3::int IS NULL AND $4::int[] IS NULL THEN (
