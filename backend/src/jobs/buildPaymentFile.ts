@@ -251,7 +251,7 @@ const rowOfLead = (d: KommoDeal | undefined, x: LogRow | undefined, requestId: n
     createdAt: d?.created_at ? new Date(Number(d.created_at) * 1000).toISOString() : null,
     amount: x?.amount != null ? Number(x.amount) : (d ? num(cf(d, REQ_FIELDS.cash)) : null),
     ok, paidBy: x?.paid_by ?? null,
-    reasons: x ? x.reasons ?? [] : ["ще не перевірено — натисніть «Оновити зараз»"], notes: x?.notes ?? [],
+    reasons: x ? x.reasons ?? [] : ["ще не перевірено — натисніть «↻ Перевірити зараз»"], notes: x?.notes ?? [],
     card: d ? screenCard(cf(d, REQ_FIELDS.card)) : "", owner: d ? ownerLine({ recipient: cf(d, REQ_FIELDS.recipient), bank: cf(d, REQ_FIELDS.bank), phone: cf(d, REQ_FIELDS.phone) }) : "",
     category: PAY_CATEGORY, kommo, diff: x ? discrepancyOf(ok, kommo) : false,
     stage: d ? requestStatusOf(Number(d.status_id)).label : "запит не знайдено в Kommo", pending: !x,
