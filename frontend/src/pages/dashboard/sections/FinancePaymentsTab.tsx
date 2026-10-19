@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { fetchCarrierPayments, runCarrierPayments, downloadCarrierPaymentsXlsx, type PayScreenDay, type PayScreenRow } from "../../../api";
 import { getAuthPayload } from "../../../auth";
 import { useToast } from "../../../components/Toasts";
 
 /**
- * 💸 «Оплати перевізникам» (16.10.2026): файл на оплату (формат «Обработка выгрузки» Тетяни) + усі запити з її фільтра
- * з рішенням системи, причиною і статусом у Kommo; розбіжність — «перевірити», а запит закрито «Оплачено» (або навпаки).
- * Номери карток → лише `view_private_finance` (Адмін, фінансист); право тут — косметика, сервер гейтить роути сам.
- * Система нічого не закриває в Kommo: це порадник.
+ * 💸 «Оплати перевізникам» (16.10.2026). Головне — ФІЛЬТР Тетяни в Kommo (Роман: «угоди, які досі у фільтрі, мають
+ * підсвічуватися; ті, що вже не в фільтрі, — архів; немає активних — пусто»):
+ *  · «У фільтрі зараз» — запити, що прямо зараз у її фільтрі, з рішенням системи і кнопкою на сам запит у Kommo;
+ *  · «До оплати» — файл «Обработка выгрузки» лише із затверджених у фільтрі (копіювати / Excel);
+ *  · «Архів» — що вийшло з фільтра за день: перекреслене, з етапом, де опинилось, і з розбіжностями.
+ * Номери карток → лише `view_private_finance` (Адмін, фінансист). Система нічого не закриває в Kommo.
  */
 const MUTED = "var(--text-muted)";
 const money = (n: number | null | undefined) => (n == null ? "—" : Math.round(n).toLocaleString("uk-UA").replace(/ /g, " "));
@@ -15,8 +17,10 @@ const dm = (d: string) => `${d.slice(8, 10)}.${d.slice(5, 7)}`;
 const hhmm = (iso: string | null) => (iso ? new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
 const prevDay = (d: string) => { const x = new Date(`${d}T12:00:00Z`); x.setUTCDate(x.getUTCDate() - 1); return x.toISOString().slice(0, 10); };
 const BASIS = (r: PayScreenRow) => (r.paidBy === "1С" ? "оплата є — галочка 1С" : r.paidBy === "Виписка" ? "оплата є — у Виписці" : "у межах ліміту");
-type Filter = "all" | "ok" | "check" | "diff";
 const pill = (bg: string, fg: string): React.CSSProperties => ({ fontSize: 11.5, padding: "1px 8px", borderRadius: 999, background: bg, color: fg, whiteSpace: "nowrap" });
+/** Закритий у Kommo запит («Оплачено» / «Отказано») — перекреслений і приглушений (Роман 16.10.2026). */
+const closedStyle = (r: PayScreenRow): React.CSSProperties | undefined =>
+  r.kommo === "open" ? undefined : { textDecoration: "line-through", color: "var(--text-muted)" };
 
 /** «Копіювати для файлу»: рядки «До оплати» табуляцією — вставляються в Google-таблицю рівно в колонки файлу Тетяни. */
 export const tsvOf = (rows: PayScreenRow[]) =>
@@ -28,36 +32,26 @@ export function FinancePaymentsTab() {
   const [day, setDay] = useState<string | undefined>(undefined);
   const [data, setData] = useState<PayScreenDay | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [filter, setFilter] = useState<Filter>("all");
   const [busy, setBusy] = useState(false);
   const load = useCallback(() => {
     if (!canView) return;
     fetchCarrierPayments(day).then((d) => { setData(d); setErr(null); }).catch((e) => setErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Не вдалося завантажити"));
   }, [canView, day]);
   useEffect(() => { load(); }, [load]);
-  const shown = useMemo(() => (data?.rows ?? []).filter((r) => filter === "all" || (filter === "ok" ? r.ok : filter === "check" ? !r.ok : r.diff)), [data, filter]);
 
   if (!canView) return <div className="chart-card"><b>Оплати перевізникам</b> <span className="hr-muted">Бачать лише Адмін і фінансист: тут номери карток отримувачів.</span></div>;
   if (err && !data) return <div className="chart-card"><b>Оплати перевізникам</b> <span className="hr-muted">{err}</span></div>;
   if (!data) return <p className="loading-text">Завантаження…</p>;
 
-  const ok = data.rows.filter((r) => r.ok);
-  // «Закрити в Kommo»: затверджені системою, але ще не переведені в «Оплачено» (і не відмовлені) — те саме, що `toCloseOf` ядра.
-  const toClose = data.rows.filter((r) => r.ok && r.kommo === "open");
-  const stagePill = (r: PayScreenRow) => (
-    <span style={r.kommo === "paid" ? pill("rgba(22,163,74,0.14)", "#16a34a") : r.kommo === "rejected" ? pill("rgba(220,38,38,0.12)", "#dc2626") : pill("rgba(37,99,235,0.10)", "#2563eb")}>{r.stage}</span>
-  );
-  const openReq = (r: PayScreenRow, label = "Відкрити запит →") => (
-    <a className="hr-btn" style={{ whiteSpace: "nowrap", textDecoration: "none" }} href={`${data.kommoBase}/leads/detail/${r.requestId}`} target="_blank" rel="noreferrer">{label}</a>
-  );
+  const ok = data.active.filter((r) => r.ok);
   const run = async () => {
     setBusy(true);
-    try { await runCarrierPayments(); toast("Файл перераховано", { tone: "ok" }); load(); }
-    catch (e) { toast(`Не перераховано: ${(e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "помилка"}`, { error: true }); }
+    try { await runCarrierPayments(); toast("Фільтр перевірено", { tone: "ok" }); load(); }
+    catch (e) { toast(`Не перевірено: ${(e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "помилка"}`, { error: true }); }
     finally { setBusy(false); }
   };
   const copy = async () => {
-    try { await navigator.clipboard.writeText(tsvOf(data.rows)); toast(`Скопійовано ${ok.length} рядків для файлу`, { tone: "ok" }); }
+    try { await navigator.clipboard.writeText(tsvOf(data.active)); toast(`Скопійовано ${ok.length} рядків для файлу`, { tone: "ok" }); }
     catch { toast("Не вдалося скопіювати", { error: true }); }
   };
   const excel = async () => {
@@ -67,6 +61,15 @@ export function FinancePaymentsTab() {
     } catch { toast("Excel не завантажено", { error: true }); }
   };
   const link = (id: number | null) => (id ? <a href={`${data.kommoBase}/leads/detail/${id}`} target="_blank" rel="noreferrer">{id}</a> : "—");
+  const openReq = (r: PayScreenRow) => (
+    <a className="hr-btn" style={{ whiteSpace: "nowrap", textDecoration: "none" }} href={`${data.kommoBase}/leads/detail/${r.requestId}`} target="_blank" rel="noreferrer">Відкрити запит →</a>
+  );
+  const stagePill = (r: PayScreenRow) => (
+    <span style={r.kommo === "paid" ? pill("rgba(22,163,74,0.14)", "#16a34a") : r.kommo === "rejected" ? pill("rgba(220,38,38,0.12)", "#dc2626") : pill("rgba(37,99,235,0.10)", "#2563eb")}>{r.stage}</span>
+  );
+  const decision = (r: PayScreenRow) => (r.pending ? <span style={pill("rgba(0,0,0,0.06)", MUTED)}>ще не перевірено</span>
+    : r.ok ? <span style={pill("rgba(22,163,74,0.14)", "#16a34a")}>до оплати</span> : <span style={pill("rgba(217,119,6,0.14)", "#b45309")}>перевірити</span>);
+  const why = (r: PayScreenRow) => (<>{r.ok ? BASIS(r) : r.reasons.join("; ")}{r.notes.length > 0 && <div style={{ fontSize: 11.5, color: MUTED }}>{r.notes.join("; ")}</div>}</>);
   const tile = (label: string, value: string, color?: string, sub?: string) => (
     <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 12, padding: "10px 14px" }}>
       <div style={{ fontSize: 12, color: MUTED }}>{label}</div>
@@ -79,81 +82,36 @@ export function FinancePaymentsTab() {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
-        <select className="hr-inp" aria-label="День файлу" value={data.day} onChange={(e) => setDay(e.target.value)}>
-          {dayOptions.map((d) => <option key={d} value={d}>Файл на {dm(d)} (запити {dm(prevDay(d))} 17:00 – {dm(d)} 17:00){d === data.today ? " · поточний" : ""}</option>)}
-        </select>
-        <span style={{ fontSize: 13, color: MUTED }}>Сформовано {hhmm(data.at)}</span>
-        {data.day === data.today && <button className="hr-btn" style={{ marginLeft: "auto" }} disabled={busy} onClick={() => void run()}>{busy ? "Рахую…" : "↻ Оновити зараз"}</button>}
+        <span style={{ fontSize: 13, color: MUTED }}>Фільтр Тетяни в Kommo · рішення перевірено {hhmm(data.at)}</span>
+        <button className="hr-btn" style={{ marginLeft: "auto" }} disabled={busy} onClick={() => void run()}>{busy ? "Перевіряю…" : "↻ Перевірити зараз"}</button>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 14 }}>
-        {tile("Запитів у фільтрі", String(data.totals.total))}
-        {tile("До оплати", String(data.totals.ok), "#16a34a", `${money(data.totals.okSum)} ₴`)}
-        {tile("На перевірку", String(data.totals.check), "#b45309")}
-        {tile("Закрити в Kommo", String(data.totals.toClose), data.totals.toClose ? "#2563eb" : undefined)}
-        {tile("Розбіжності з Kommo", String(data.totals.diff), data.totals.diff ? "#dc2626" : undefined)}
+        {tile("У фільтрі зараз", String(data.totals.active), data.totals.active ? "#2563eb" : undefined)}
+        {tile("До оплати", String(data.totals.activeOk), "#16a34a", `${money(data.totals.activeOkSum)} ₴`)}
+        {tile("Перевірити", String(data.totals.activeCheck), data.totals.activeCheck ? "#b45309" : undefined, data.totals.pending ? `ще не перевірено: ${data.totals.pending}` : undefined)}
+        {tile(`Архів за ${dm(data.day)}`, String(data.totals.archive), undefined, data.totals.diff ? `розбіжностей: ${data.totals.diff}` : undefined)}
       </div>
 
-      {toClose.length > 0 && (
-        <div className="chart-card" style={{ marginBottom: 14, borderColor: "#2563eb" }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-            <h3 className="chart-title" style={{ margin: 0 }}>Закрити в Kommo · {toClose.length}</h3>
-            <span style={{ fontSize: 12, color: MUTED }}>затверджені, але ще не «Оплачено» — відкрий запит і зміни етап на «Оплачено» (система сама не закриває)</span>
-          </div>
+      <div className="chart-card" style={{ marginBottom: 14, border: "2px solid #2563eb" }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+          <h3 className="chart-title" style={{ margin: 0 }}>У фільтрі зараз · {data.active.length}</h3>
+          <span style={{ fontSize: 12, color: MUTED }}>розібрав запит — відкрий його й зміни етап; після цього він піде в архів</span>
+        </div>
+        {!data.active.length ? <p className="hr-muted" style={{ margin: "8px 0" }}>У фільтрі зараз немає запитів — усе розібрано.</p> : (
           <div style={{ overflowX: "auto" }}>
             <table className="hr-table" style={{ width: "100%", fontSize: 13 }}>
-              <thead><tr><th>Запит</th><th>Угода</th><th>Отримувач</th><th style={{ textAlign: "right" }}>Сума</th><th>Етап зараз</th><th /></tr></thead>
-              <tbody>{toClose.map((r) => (
-                <tr key={r.requestId}>
-                  <td>{link(r.requestId)}</td><td>{link(r.mainId)}</td><td>{r.owner}</td><td style={{ textAlign: "right" }}>{money(r.amount)}</td>
-                  <td>{r.stage}</td><td style={{ textAlign: "right" }}>{openReq(r)}</td>
-                </tr>
-              ))}</tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      <div className="chart-card" style={{ marginBottom: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-          <h3 className="chart-title" style={{ margin: 0 }}>До оплати</h3>
-          <span style={{ fontSize: 12, color: MUTED }}>у форматі файлу «Обработка выгрузки»</span>
-          <button className="hr-btn" style={{ marginLeft: "auto" }} onClick={() => void copy()} disabled={!ok.length}>Копіювати для файлу</button>
-          <button className="hr-btn" onClick={() => void excel()}>⬇ Excel</button>
-        </div>
-        {!ok.length ? <p className="hr-muted" style={{ margin: 0 }}>Затверджених запитів поки немає.</p> : (
-          <div style={{ overflowX: "auto" }}>
-            <table className="hr-table" style={{ width: "100%", fontSize: 13 }}>
-              <thead><tr><th>ID</th><th>Номер карти</th><th>Власник карти</th><th style={{ textAlign: "right" }}>{money(data.totals.okSum)}</th><th>Категорії</th><th>Запит у Kommo</th></tr></thead>
-              <tbody>{ok.map((r) => <tr key={r.requestId}><td>{link(r.mainId)}</td><td style={{ whiteSpace: "nowrap" }}>{r.card}</td><td>{r.owner}</td><td style={{ textAlign: "right" }}>{money(r.amount)}</td><td>{r.category}</td><td style={{ whiteSpace: "nowrap" }}>{stagePill(r)} {r.kommo === "open" && openReq(r, "→")}</td></tr>)}</tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      <div className="chart-card" style={{ marginBottom: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-          <h3 className="chart-title" style={{ margin: 0, marginRight: "auto" }}>Усі запити</h3>
-          {([["all", `Усі ${data.totals.total}`], ["ok", `До оплати ${data.totals.ok}`], ["check", `На перевірку ${data.totals.check}`], ["diff", `Розбіжності ${data.totals.diff}`]] as [Filter, string][]).map(([k, l]) => (
-            <button key={k} className={`hr-btn${filter === k ? " p" : ""}`} onClick={() => setFilter(k)}>{l}</button>
-          ))}
-        </div>
-        {!shown.length ? <p className="hr-muted" style={{ margin: 0 }}>Немає запитів у цьому фільтрі.</p> : (
-          <div style={{ overflowX: "auto" }}>
-            <table className="hr-table" style={{ width: "100%", fontSize: 13 }}>
-              <thead><tr><th>Угода · запит</th><th>Подано</th><th>Отримувач</th><th style={{ textAlign: "right" }}>Сума</th><th>Система</th><th>Підстава / причина</th><th>Етап у Kommo</th></tr></thead>
-              <tbody>{shown.map((r) => (
-                <tr key={r.requestId} style={r.diff ? { background: "rgba(220,38,38,0.08)" } : undefined}>
+              <thead><tr><th>Угода</th><th>Подано</th><th>Отримувач</th><th style={{ textAlign: "right" }}>Сума</th><th>Система</th><th>Підстава / причина</th><th>Етап</th><th /></tr></thead>
+              <tbody>{data.active.map((r) => (
+                <tr key={r.requestId} style={r.ok ? { background: "rgba(22,163,74,0.06)" } : undefined}>
                   <td style={{ whiteSpace: "nowrap" }}>{link(r.mainId)}<div style={{ fontSize: 11.5, color: MUTED }}>запит {link(r.requestId)}</div></td>
                   <td style={{ whiteSpace: "nowrap" }}>{hhmm(r.createdAt)}</td>
                   <td>{r.owner || <span style={{ color: MUTED }}>не вказано</span>}<div style={{ fontSize: 11.5, color: MUTED, whiteSpace: "nowrap" }}>{r.card || "картка не вказана"}</div></td>
                   <td style={{ textAlign: "right" }}>{money(r.amount)}</td>
-                  <td>{r.ok ? <span style={pill("rgba(22,163,74,0.14)", "#16a34a")}>до оплати</span> : <span style={pill("rgba(217,119,6,0.14)", "#b45309")}>перевірити</span>}</td>
-                  <td>{r.ok ? BASIS(r) : r.reasons.join("; ")}{r.notes.length > 0 && <div style={{ fontSize: 11.5, color: MUTED }}>{r.notes.join("; ")}</div>}</td>
-                  <td style={{ whiteSpace: "nowrap" }}>
-                    {stagePill(r)} {openReq(r, "→")}
-                    {r.diff && <div style={{ fontSize: 11.5, color: "#dc2626", marginTop: 3 }}>⚠ розбіжність</div>}
-                  </td>
+                  <td>{decision(r)}</td>
+                  <td>{why(r)}</td>
+                  <td style={{ whiteSpace: "nowrap" }}>{stagePill(r)}</td>
+                  <td style={{ textAlign: "right" }}>{openReq(r)}</td>
                 </tr>
               ))}</tbody>
             </table>
@@ -161,18 +119,49 @@ export function FinancePaymentsTab() {
         )}
       </div>
 
-      {data.days.length > 0 && (
-        <div className="chart-card">
-          <h3 className="chart-title" style={{ marginTop: 0 }}>Останні дні</h3>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {data.days.map((d) => (
-              <button key={d.day} className={`hr-btn${d.day === data.day ? " p" : ""}`} onClick={() => setDay(d.day)}>
-                {dm(d.day)} · {d.total} · до оплати {d.ok} на {money(d.okSum)}
-              </button>
-            ))}
-          </div>
+      <div className="chart-card" style={{ marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+          <h3 className="chart-title" style={{ margin: 0 }}>До оплати · {ok.length}</h3>
+          <span style={{ fontSize: 12, color: MUTED }}>затверджені з фільтра, у форматі «Обработка выгрузки»</span>
+          <button className="hr-btn" style={{ marginLeft: "auto" }} onClick={() => void copy()} disabled={!ok.length}>Копіювати для файлу</button>
+          <button className="hr-btn" onClick={() => void excel()}>⬇ Excel</button>
         </div>
-      )}
+        {!ok.length ? <p className="hr-muted" style={{ margin: 0 }}>У фільтрі зараз немає затверджених запитів.</p> : (
+          <div style={{ overflowX: "auto" }}>
+            <table className="hr-table" style={{ width: "100%", fontSize: 13 }}>
+              <thead><tr><th>ID</th><th>Номер карти</th><th>Власник карти</th><th style={{ textAlign: "right" }}>{money(data.totals.activeOkSum)}</th><th>Категорії</th></tr></thead>
+              <tbody>{ok.map((r) => <tr key={r.requestId}><td>{link(r.mainId)}</td><td style={{ whiteSpace: "nowrap" }}>{r.card}</td><td>{r.owner}</td><td style={{ textAlign: "right" }}>{money(r.amount)}</td><td>{r.category}</td></tr>)}</tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="chart-card">
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+          <h3 className="chart-title" style={{ margin: 0 }}>Архів · {data.archive.length}</h3>
+          <span style={{ fontSize: 12, color: MUTED }}>вийшли з фільтра — запити, подані {dm(prevDay(data.day))} 17:00 – {dm(data.day)} 17:00</span>
+          <select className="hr-inp" style={{ marginLeft: "auto" }} aria-label="День архіву" value={data.day} onChange={(e) => setDay(e.target.value)}>
+            {dayOptions.map((d) => <option key={d} value={d}>{dm(d)}{d === data.today ? " · поточний файл" : ""}</option>)}
+          </select>
+        </div>
+        {!data.archive.length ? <p className="hr-muted" style={{ margin: 0 }}>За цей день в архіві нічого немає.</p> : (
+          <div style={{ overflowX: "auto" }}>
+            <table className="hr-table" style={{ width: "100%", fontSize: 13 }}>
+              <thead><tr><th>Угода · запит</th><th>Отримувач</th><th style={{ textAlign: "right" }}>Сума</th><th>Система</th><th>Підстава / причина</th><th>Етап у Kommo</th></tr></thead>
+              <tbody>{data.archive.map((r) => (
+                <tr key={r.requestId} style={{ ...closedStyle(r), ...(r.diff ? { background: "rgba(220,38,38,0.08)" } : {}) }}>
+                  <td style={{ whiteSpace: "nowrap" }}>{link(r.mainId)}<div style={{ fontSize: 11.5 }}>запит {link(r.requestId)}</div></td>
+                  <td>{r.owner}<div style={{ fontSize: 11.5, whiteSpace: "nowrap" }}>{r.card}</div></td>
+                  <td style={{ textAlign: "right" }}>{money(r.amount)}</td>
+                  <td>{decision(r)}</td>
+                  <td>{why(r)}</td>
+                  <td style={{ whiteSpace: "nowrap" }}>{stagePill(r)}{r.diff && <div style={{ fontSize: 11.5, color: "#dc2626", marginTop: 3, textDecoration: "none" }}>⚠ розбіжність</div>}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
+      </div>
       <p className="hr-muted" style={{ fontSize: 12, marginTop: 10 }}>🔒 Бачать лише Адмін і фінансист. Система нічого не закриває в Kommo — рішення за фінансистом.</p>
     </div>
   );
