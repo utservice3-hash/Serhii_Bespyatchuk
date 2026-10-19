@@ -314,8 +314,9 @@ function DayEditorModal({ range, data, role, canEditDuty, onClose, onChanged }: 
       // 🏖 5149, п.5 регламенту: накладка в команді або довше 9 днів — спершу попередження, далі погоджує КВП / ОД.
       const c = vacationRulesConflict(e);
       if (!c) throw e;
-      const ok = await dlg.confirm({ title: "Відпустка порушує правила", okLabel: "Поставити на погодження",
-        text: `${c.issues.map((i) => "• " + i).join("\n")}\n\nТаку відпустку погоджує ${c.approver}. Поставити її на погодження?` });
+      // Підпис нейтральний: у КВП / ОД / адміна відпустка стане погодженою одразу, в інших — чекатиме їх.
+      const ok = await dlg.confirm({ title: "Відпустка порушує правила", okLabel: "Поставити відпустку",
+        text: `${c.issues.map((i) => "• " + i).join("\n")}\n\nТаку відпустку погоджує ${c.approver}: якщо це не ви, вона чекатиме їхнього рішення. Поставити?` });
       if (!ok) return;
       await createAbsence({ ...body, confirmRules: true });
     }

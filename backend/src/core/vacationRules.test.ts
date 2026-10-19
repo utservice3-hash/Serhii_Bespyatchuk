@@ -155,9 +155,10 @@ test("#1805 🪞 ВІДПУСТКА ЧЕРЕЗ РОУТ: попередженн�
  * #1806 — ОДНЕ ДЖЕРЕЛО ЗНАЧКА «У ВІДПУСТЦІ»: до `/duty/on-vacation` звертається лише `api.ts`, `fetchOnVacation` кличе
  * лише `VacationMark.tsx`, а кожен екран зі значком бере саме `VacationMark`. Множина файлів — від предмета (усі, хто
  * звертається до джерела), а не від слова в тілі. Червоніє, якщо екран заведе свій запит чи свою копію значка, або
- * значок зникне з одного з пʼяти місць.
+ * значок зникне з одного з чотирьох місць (Звіт — картки й таблиця, Звіт КВП, Пропущені дзвінки;
+ * «Звіт 2.0» прихований з навігації рішенням власника — значок там нікому не видно).
  */
-test("#1806 ВІДПУСТКА: значок з одного джерела — один запит, один компонент, пʼять екранів", () => {
+test("#1806 ВІДПУСТКА: значок з одного джерела — один запит, один компонент, чотири місця", () => {
   const FE = path.join(import.meta.dirname, "..", "..", "..", "frontend", "src");
   const files: string[] = [];
   const walk = (d: string) => { for (const f of readdirSync(d)) { const p = path.join(d, f); if (statSync(p).isDirectory()) walk(p); else if (/\.tsx?$/.test(f)) files.push(p); } };
@@ -169,7 +170,7 @@ test("#1806 ВІДПУСТКА: значок з одного джерела — 
   assert.deepEqual(touching, ["api.ts"], "до джерела відпусток звертається не лише api.ts");
   const callers = [...src].filter(([f, s]) => f !== "api.ts" && /fetchOnVacation\s*\(/.test(s)).map(([f]) => f);
   assert.deepEqual(callers, ["pages/dashboard/VacationMark.tsx"], "відпустки тягне ще хтось, окрім VacationMark");
-  for (const f of ["ReportPlanSection", "ReportTableSection", "KvpTeamsWeekMonth", "MissedCallsTzBlocks", "ManagerReportSection"]) {
+  for (const f of ["ReportPlanSection", "ReportTableSection", "KvpTeamsWeekMonth", "MissedCallsTzBlocks"]) {
     assert.match(src.get(`pages/dashboard/sections/${f}.tsx`) ?? "", /<VacationMark\s+managerId=/, `${f}: значка «у відпустці» немає`);
   }
 });
