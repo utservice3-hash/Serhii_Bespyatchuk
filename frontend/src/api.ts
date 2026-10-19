@@ -5732,10 +5732,14 @@ export interface PayScreenRow {
   card: string; owner: string; category: string; kommo: PayKommoState; diff: boolean;
   /** Етап запиту у воронці «Оплата перевозчикам» словами. */
   stage: string;
+  /** У фільтрі, але прогін його ще не бачив — рішення немає. */
+  pending?: boolean;
 }
 export interface PayScreenDay {
   day: string; today: string; at: string | null; kommoBase: string;
-  rows: PayScreenRow[]; totals: { total: number; ok: number; okSum: number; check: number; diff: number; toClose: number };
+  /** «У фільтрі зараз» — живий фільтр Тетяни; «архів» — що вийшло з фільтра за обраний день. */
+  active: PayScreenRow[]; archive: PayScreenRow[];
+  totals: { active: number; activeOk: number; activeOkSum: number; activeCheck: number; pending: number; archive: number; diff: number };
   days: { day: string; total: number; ok: number; okSum: number }[];
 }
 export const fetchCarrierPayments = async (day?: string) => (await api.get<PayScreenDay>("/finance/payments", { params: day ? { day } : {} })).data;
