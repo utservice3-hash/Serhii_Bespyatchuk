@@ -208,3 +208,64 @@ test("#1307 ЖИВА БД: відкритих задач «передзвони�
                        AND o.calldate < now() - interval '10 minutes')`, [[...OUTBOUND_TYPES], CALLBACK_MIN_TALK_SEC]);
   assert.equal(r.rows[0].n, 0, `🔴 висять ${String(r.rows[0].n)} задач по вже передзвонених (напр. ${String(r.rows[0].sample)}) — критерій ТЗ не виконано`);
 });
+
+/**
+ * #1786 — ЗАДАЧА «📵» ЗАКРИВАЄТЬСЯ, КОЛИ З КЛІЄНТОМ УЖЕ ПОГОВОРИЛИ (задача 5824, 19.10.2026): клієнт сам передзвонив і
+ * розмова від 10 с — закриває (9 с — ні); угода номера ввійшла в «Успішно реалізовано» ПІСЛЯ сигналу — закриває (до — ні);
+ * з кількох подій — найраніша й своя причина; перерахунок 02.10 такі закриття не перевідкриває.
+ * 🧨 Червоніє, якщо вхідна розмова не закриває, 9 с закриває, «успіх» до пропущеного закриває, або перерахунок їх відкриває.
+ */
+test("#1786 КЛІЄНТ САМ / УСПІХ: вхідна розмова від 10 с і «Успіх» після сигналу закривають задачу; 9 с і «Успіх» до — ні", async (t) => {
+  const c = await db(); if (typeof c === "string") return t.skip(c);
+  const { applyMissedCallSignals, recountCandidatesSql } = await import("./missedCallSignal.js");
+  const { AUTO_CLOSE_CLIENT_SELF_PREFIX, AUTO_CLOSE_SUCCESS_PREFIX, AUTO_CLOSE_CALLBACK_PREFIX } = await import("./missedCallsRules.js");
+  const tick = (at: string) => applyMissedCallSignals(c, new Date(at));
+  const DAY = "2026-09-22"; // понеділок
+  const A = "380671786001", B = "380671786002", C = "380671786003", E = "380671786004";
+  for (const p of [A, B, C, E]) await call(c, `${DAY} 10:00:00+03`, "in", "NO ANSWER", 0, 1, p);
+  // «Успіх» ДО пропущеного (давній постійний клієнт) — не закриває; ПІСЛЯ — закриває.
+  await c.query("INSERT INTO deals(kommo_id, name, status_id, pipeline_id) VALUES (178601, $1, 142, 8921932), (178602, $2, 142, 8921932)", [`+${B}`, E]);
+  await c.query(`INSERT INTO deal_stage_events(kommo_id, status_id, pipeline_id, changed_at) VALUES (178601, 142, 8921932, '${DAY} 09:00:00+03')`);
+  await tick(`${DAY} 10:05:00+03`);
+  for (const p of [A, B, C, E]) assert.equal((await taskOf(c, p)).length, 1, `🔴 задачу на ${p} не поставлено`);
+  await call(c, `${DAY} 10:20:00+03`, "in", "ANSWERED", 9, 1, A);                 // клієнт сам, 9 с — спроба
+  await tick(`${DAY} 10:21:00+03`);
+  assert.equal((await taskOf(c, A))[0].status, "not_started", "🔴 вхідна розмова 9 с закрила задачу — межа «від 10 с»");
+  assert.equal((await taskOf(c, B))[0].status, "not_started", "🔴 «Успіх» ДО пропущеного закрив задачу — це давній клієнт, а не відповідь на дзвінок");
+  await call(c, `${DAY} 10:30:00+03`, "transitin", "ANSWERED", 10, 1, A);          // клієнт сам, рівно 10 с
+  await call(c, `${DAY} 10:30:00+03`, "in", "ANSWERED", 40, 1, C);                // клієнт сам раніше…
+  await call(c, `${DAY} 10:40:00+03`, "out", "ANSWERED", 50, 2, C);               // …за наш передзвін
+  await c.query(`INSERT INTO deal_stage_events(kommo_id, status_id, pipeline_id, changed_at) VALUES (178602, 142, 8921932, '${DAY} 11:00:00+03')`);
+  const s = await tick(`${DAY} 11:05:00+03`);
+  assert.equal(s.closed, 3, "🔴 закрито не три задачі (клієнт сам ×2 і «Успіх»)");
+  const [a] = await taskOf(c, A), [b] = await taskOf(c, B), [cc] = await taskOf(c, C), [e] = await taskOf(c, E);
+  assert.equal(a.status, "done");
+  assert.ok(a.close_reason?.startsWith(AUTO_CLOSE_CLIENT_SELF_PREFIX) && a.close_reason.includes("розмова 10 с"), `🔴 причина не «клієнт передзвонив сам»: ${String(a.close_reason)}`);
+  assert.ok(cc.close_reason?.startsWith(AUTO_CLOSE_CLIENT_SELF_PREFIX), "🔴 з двох подій взято не найранішу — клієнт сам був раніше за наш передзвін");
+  assert.ok(!cc.close_reason?.startsWith(AUTO_CLOSE_CALLBACK_PREFIX), "🔴 «клієнт сам» зараховано як наш передзвін");
+  assert.ok(e.close_reason?.startsWith(AUTO_CLOSE_SUCCESS_PREFIX) && e.close_reason.includes("№178602"), `🔴 причина не «угода в Успіху»: ${String(e.close_reason)}`);
+  assert.equal(b.status, "not_started", "🔴 задача без розмови й без нового «Успіху» закрилась");
+  // Разовий перерахунок 02.10 такі закриття НЕ перевідкриває.
+  const rc = (await c.query<{ task_id: number }>(recountCandidatesSql())).rows.map((r) => r.task_id);
+  assert.ok(![a.id, cc.id, e.id].some((id) => rc.includes(id)), "🔴 перерахунок перевідкрив би задачу, закриту «клієнт сам» / «Успіх»");
+});
+
+test("#1786b «ЛИШЕ НЕПЕРЕДЗВОНЕНІ»: рядок, після якого клієнт сам поговорив від 10 с, у фільтрі не показується; 9 с — показується", async (t) => {
+  const c = await db(); if (typeof c === "string") return t.skip(c);
+  const { missedListSql, missedAutomationSql } = await import("./missedCallsRules.js");
+  const DAY = "2026-09-23";
+  const T = "380671786101", N = "380671786102", O = "380671786103";
+  for (const p of [T, N, O]) await call(c, `${DAY} 12:00:00+03`, "in", "NO ANSWER", 0, 1, p);
+  await call(c, `${DAY} 12:10:00+03`, "in", "ANSWERED", 25, 1, T);   // клієнт сам поговорив
+  await call(c, `${DAY} 12:10:00+03`, "in", "ANSWERED", 9, 1, N);    // 9 с — не розмова
+  await call(c, `${DAY} 12:15:00+03`, "out", "ANSWERED", 30, 1, O);  // наш передзвін
+  const run = async (only: boolean) => {
+    const q = missedListSql(DAY, {}, only);
+    return (await c.query<{ client_phone: string }>(q.sql, q.params)).rows.map((r) => r.client_phone).filter((p) => [T, N, O].includes(p)).sort();
+  };
+  assert.deepEqual(await run(false), [T, N, O].sort(), "🔴 без фільтра список загубив пропущені — розкриття сперечається з числом");
+  assert.deepEqual(await run(true), [N], "🔴 «лише непередзвонені» показує тих, з ким уже поговорили (або сховав того, з ким ні)");
+  const q = missedAutomationSql("2026-09-22", {});
+  const x = (await c.query<{ closed_client_self: number; closed_success: number }>(q.sql, q.params)).rows[0];
+  assert.ok(x.closed_client_self >= 2 && x.closed_success >= 1, "🔴 «Автоматика за 7 днів» не рахує закриття «клієнт сам» / «Успіх»");
+});

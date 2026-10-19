@@ -22,7 +22,7 @@ export function canSeeConstructorDoc(viewerUserId: number, createdBy: number, ca
   return Number.isInteger(viewerUserId) && viewerUserId > 0 && viewerUserId === createdBy;
 }
 
-const DOCS: readonly DocKind[] = ['once', 'main', 'carr', 'nrmain', 'nrapp'];
+const DOCS: readonly DocKind[] = ['once', 'main', 'carr', 'nrmain', 'nrapp', 'annex'];
 
 /**
  * Знімок стану з тіла запиту → `DocumentState` або текст відмови.
@@ -49,6 +49,16 @@ export function stateFromBody(body: unknown, manager: { name: string; phone: str
     mainNo: String(b.mainNo ?? '').trim(), mainDate: String(b.mainDate ?? ''), mainUntil: String(b.mainUntil ?? '').trim(),
     manager,
   };
+}
+
+/**
+ * 📎 Що записати за клієнтом як його річний договір (задача 5777): лише основний договір і заявка-додаток, лише з
+ * номером і впізнаваним кодом клієнта (ЄДРПОУ 8 / ІПН ФОП 10). Інакше `null` — не пишемо нічого.
+ */
+export function contractMemo(s: DocumentState): { code: string; no: string; date: string | null } | null {
+  const code = (s.cp.edrpou || '').replace(/\D/g, '');
+  if (!(s.doc === 'main' || s.doc === 'annex') || !s.mainNo || !/^\d{8}$|^\d{10}$/.test(code)) return null;
+  return { code, no: s.mainNo, date: s.mainDate || null };
 }
 
 /** Безпечне ім'я файла з номера: лише літери, цифри й дефіс. */

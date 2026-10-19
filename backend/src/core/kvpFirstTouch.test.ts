@@ -257,7 +257,7 @@ test("#1765b ЗВІТ КВП — ЯДРО: гроші → команди → п�
   assert.match(src, /useState\(\(\) => \{ try \{ return localStorage\.getItem\("kvpDetails"\) === "1"; \} catch \{ return false; \} \}\)/, "🔴 «Детальний звіт» не згорнутий за замовчуванням");
   const tbl = FE_SRC("pages/dashboard/sections/KvpTeamsWeekMonth.tsx");
   assert.match(tbl, /coreRows\(rep\.teams as unknown as TeamLike\[\], blk\?\.idx \?\? null,/, "🔴 таблиця рахує рядки не спільною функцією");
-  assert.match(tbl, /<td style=\{\{ fontWeight: 700 \}\}>Σ Відділ<\/td>\s*<Cells r=\{dept\} bold \/>/, "🔴 рядок «Σ Відділ» не з тих самих рядків");
+  assert.match(tbl, /<td style=\{\{ fontWeight: 700 \}\}>Σ Відділ<\/td>\s*<Cells r=\{dept\} bold\b[^>]*\/>/, "🔴 рядок «Σ Відділ» не з тих самих рядків");
   assert.match(tbl, /weekCloseStatus\(w\.plan, w\.fact, w\.withExp - w\.fact\)/, "🔴 статус «Закриємо?» не тим правилом");
   assert.match(tbl, /\{CLOSE_LABEL\[s\.kind\]\}/, "🔴 статус показано лише кольором, без слова");
 });
@@ -307,7 +307,57 @@ test("#1775 КОМАНДИ: місяць перед тижнем — і в ша�
   assert.ok(at(cells, "r.week.withExp") < at(cells, "<Status w={r.week} />"), "🔴 «Закриємо?» відірвано від тижня");
   const head = tbl.slice(at(tbl, "<thead>"), at(tbl, "</thead>"));
   assert.ok(at(head, "{monthName}</th>") < at(head, "Тиждень {blk.from"), "🔴 у шапці тиждень стоїть перед місяцем — числа під чужим підписом");
-  assert.match(head, /<th colSpan=\{3\}[^>]*>\{monthName\}<\/th>\s*<th colSpan=\{4\}/, "🔴 ширина груп у шапці не збігається з клітинками (3 місяць + 4 тиждень)");
+  // 19.10.2026: між місяцем і поточним тижнем — «Минулий тиждень» (3 колонки); твердження про порядок і ширину те саме.
+  assert.match(head, /<th colSpan=\{3\}[^>]*>\{monthName\}<\/th>\s*<th colSpan=\{3\}[^>]*>\{prevR \?[^\n]*Минулий тиждень[^\n]*<\/th>\s*<th colSpan=\{4\}/, "🔴 ширина груп у шапці не збігається з клітинками (3 місяць + 3 минулий тиждень + 4 тиждень)");
   const sub = head.slice(head.indexOf("</tr>"));
   assert.ok(sub.lastIndexOf("Закриємо?") > sub.lastIndexOf("План"), "🔴 у другому рядку шапки «Закриємо?» не в групі тижня");
+});
+
+/**
+ * #1785 — МИНУЛИЙ ТИЖДЕНЬ ПОРУЧ (Юля 19.10.2026: «звітую по ньому в понеділок»). Календарний Пн–Нд перед поточним
+ * тижнем; блоки звіту ріжуться межею місяця, тож тиждень 28.09–04.10 складається з вересневого й жовтневого блоків —
+ * обидва мусять увійти. Частково покритий тиждень — «немає даних», а не неповна сума. Підсумок — по обидва боки плану.
+ * 🧨 Червоніє, якщо взяти лише блоки поточного місяця, загубити менеджера або назвати «виконаним» тиждень без плану.
+ */
+test("#1785 МИНУЛИЙ ТИЖДЕНЬ: Пн–Нд перед поточним, з обох місяців; неповне покриття — «немає даних»; підсумок по обидва боки", async () => {
+  type T = { teamId: number | null; name: string | null; kind: string; plan: number; revenue: number; expectedThisMonth: number;
+    weeks?: { idx: number; plan: number; fact: number; expected: number; isCurrent: boolean }[];
+    managers?: { managerId: number; name: string; plan: number; revenue: number; expectedThisMonth: number; weeks?: { idx: number; plan: number; fact: number; expected: number; isCurrent: boolean }[] }[] };
+  const r = await import(await transpile("pages/dashboard/kvpCoreRules.ts")) as {
+    prevWeekRange: (curFrom: string) => { from: string; to: string };
+    blocksWithin: (b: { idx: number; from: string; to: string }[], r: { from: string; to: string }) => number[];
+    coversRange: (p: { blocks: { idx: number; from: string; to: string }[]; idxs: number[] }[], r: { from: string; to: string }) => boolean;
+    prevWeekRows: (p: { teams: T[]; idxs: number[] }[], nameOf: (t: T) => string) => { rows: Map<string, { name: string; plan: number; fact: number; managers: Map<string, { plan: number; fact: number }> }>; dept: { plan: number; fact: number } };
+    weekResult: (pf: { plan: number; fact: number }) => { kind: string; diff: number };
+  };
+  assert.deepEqual(r.prevWeekRange("2026-10-19"), { from: "2026-10-12", to: "2026-10-18" });
+  assert.deepEqual(r.prevWeekRange("2026-10-05"), { from: "2026-09-28", to: "2026-10-04" }, "🔴 тиждень через межу місяця");
+  assert.deepEqual(r.prevWeekRange("2026-10-01"), { from: "2026-09-21", to: "2026-09-27" }, "🔴 перший (неповний) блок місяця — минулий тиждень не від його понеділка");
+  const oct = [{ idx: 1, from: "2026-10-01", to: "2026-10-04" }, { idx: 2, from: "2026-10-05", to: "2026-10-11" }];
+  const sep = [{ idx: 4, from: "2026-09-21", to: "2026-09-27" }, { idx: 5, from: "2026-09-28", to: "2026-09-30" }];
+  const W = { from: "2026-09-28", to: "2026-10-04" };
+  assert.deepEqual(r.blocksWithin(oct, W), [1]); assert.deepEqual(r.blocksWithin(sep, W), [5]);
+  assert.equal(r.coversRange([{ blocks: oct, idxs: [1] }], W), false, "🔴 лише жовтнева частина — і це прочитано як повний тиждень");
+  assert.equal(r.coversRange([{ blocks: oct, idxs: [1] }, { blocks: sep, idxs: [5] }], W), true);
+  const wk = (idx: number, plan: number, fact: number) => ({ idx, plan, fact, expected: 0, isCurrent: false });
+  const team = (weeks: ReturnType<typeof wk>[], mWeeks: ReturnType<typeof wk>[]): T => ({ teamId: 5, name: "РПК", kind: "rpk", plan: 1, revenue: 1, expectedThisMonth: 0, weeks,
+    managers: [{ managerId: 7, name: "Яцик", plan: 1, revenue: 1, expectedThisMonth: 0, weeks: mWeeks }] });
+  const res = r.prevWeekRows([{ teams: [team([wk(1, 40, 30)], [wk(1, 40, 30)])], idxs: [1] }, { teams: [team([wk(5, 30, 50)], [wk(5, 30, 50)])], idxs: [5] }], (t) => t.name ?? "");
+  const row = res.rows.get("t:5:rpk")!;
+  assert.deepEqual([row.plan, row.fact], [70, 80], "🔴 минулий тиждень не склав вересень і жовтень");
+  assert.deepEqual(row.managers.get("m:7"), { name: "Яцик", plan: 70, fact: 80 }, "🔴 менеджер у минулому тижні — лише з одного місяця");
+  assert.deepEqual(res.dept, { plan: 70, fact: 80 }, "🔴 Σ Відділ минулого тижня ≠ сумі рядків");
+  assert.deepEqual(r.weekResult({ plan: 100, fact: 100 }), { kind: "done", diff: 0 }, "🔴 рівно план — не «виконано»");
+  assert.deepEqual(r.weekResult({ plan: 100, fact: 99 }), { kind: "miss", diff: 1 });
+  assert.equal(r.weekResult({ plan: 0, fact: 50 }).kind, "none", "🔴 тиждень без плану названо «виконаним»");
+});
+
+test("#1785b МИНУЛИЙ ТИЖДЕНЬ · ФРОНТ: попередній місяць — тим самим звітом; Σ Відділ — з тієї самої суми; шапка місяць → минулий → поточний", () => {
+  const tbl = FE_SRC("pages/dashboard/sections/KvpTeamsWeekMonth.tsx");
+  assert.match(tbl, /fetchKvpReport\(\{ preset: "month", date: prevMonthFirst \}\)/, "🔴 попередній місяць тягнеться не тим самим звітом");
+  assert.match(tbl, /if \(!coversRange\(parts, prevR\)\) return null;/, "🔴 неповний тиждень показується як повний");
+  assert.match(tbl, /<Cells r=\{dept\} bold prev=\{prevPack === undefined \? undefined : prevPack === null \? null : prevPack\.dept\} \/>/, "🔴 Σ Відділ минулого тижня не з тієї самої суми");
+  const cells = tbl.slice(tbl.indexOf("function Cells("), tbl.indexOf("export function KvpTeamsWeekMonth"));
+  assert.ok(cells.indexOf("r.month.withExp") < cells.indexOf("<PrevCells") && cells.indexOf("<PrevCells") < cells.indexOf("formatAmount(r.week.plan)"),
+    "🔴 у рядку порядок не «місяць → минулий тиждень → поточний»");
 });

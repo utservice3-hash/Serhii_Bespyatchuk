@@ -10,7 +10,7 @@ import { ENTITIES } from "./data/entities.js";
 import { loadDocImages, docImageDataUris, AssetsMissing } from "./services/docAssets.js";
 import { printHTML, fullPageHTML } from "./services/printTemplate.js";
 import { normPhone, findPhone, parseRequisites, parseOldDoc } from "./services/requisitesParser.js";
-import { canSeeConstructorDoc, stateFromBody } from "./access.js";
+import { canSeeConstructorDoc, stateFromBody, contractMemo } from "./access.js";
 import { NR_BODY } from "./data/nonresidentTexts.js";
 import { buildTtn, buildCmr, ttnCells, cmrTargets, CMR_SLOTS, TTN_TEMPLATE, CMR_TEMPLATE, waybillBlocker, splitTruck } from "./services/waybills.js";
 import { readZip } from "../core/officeParse.js";
@@ -785,7 +785,7 @@ test("#1733 НЕРЕЗИДЕНТ ЛИШЕ ВІД АВТОМУВ: ЮТС і ФО�
   assert.equal(blockers(nrState()), null, "🔴 АвтоМув: договір не формується (дзеркало)");
   assert.equal(nrState().intl, true, "🔴 договір з нерезидентом не позначено міжнародним");
   assert.equal(typeof stateFromBody({ ent: "avm", doc: "nrapp" }, NR_MGR), "object", "🔴 сервер не приймає вид «заявка нерезиденту»");
-  assert.match(SRC("db/schema.sql"), /CHECK \(doc_kind IN \('once','main','carr','nrmain','nrapp'\)\)/, "🔴 база не дозволяє нові види документа");
+  assert.match(SRC("db/schema.sql"), /CHECK \(doc_kind IN \('once','main','carr','nrmain','nrapp'[^)]*\)\)/, "🔴 база не дозволяє нові види документа");
 });
 
 /**
@@ -919,4 +919,89 @@ test("#1753 БЛАНКИ ТТН/CMR: порожні, автор «UTS», коп�
   assert.ok(!ttn.includes("inlineStr"), "🔴 бланк ТТН уже заповнений");
   assert.match(readFileSync(path.join(REPO, "backend", "package.json"), "utf8"), /src\/constructor\/data\/waybill/, "🔴 збірка не копіює бланки в dist");
   assert.ok(ttnCells(WB_STATE()).D15, "🔴 ттн без перевізника");
+});
+
+/* ══════════════ 📎 ЗАЯВКА-ДОДАТОК ДО РІЧНОГО ДОГОВОРУ (задача 5777, Шаврова Лілія, 19.10.2026) ══════════════ */
+
+const AN_CP = { name: "ТОВ «Тест Агро»", edrpou: "12345678", addr: "м. Київ, вул. Тестова, 1", iban: "UA000000000000000000000000000",
+  bank: "АТ «Тест Банк»", phone: "+380 44 000 00 00", email: "test@agro.test", dir: "Петренко Іван Іванович" };
+const anState = (over: Record<string, unknown> = {}) => stateFromBody({ ent: "uts", doc: "annex", cp: AN_CP, dealNo: "62741747",
+  mainNo: "62702131", mainDate: "21.09.2026", docDate: "2026-10-19",
+  trip: { route: "Київ — Львів", cargo: "Зерно, 20 т", loadAddr: "Київ, склад 1", unloadAddr: "Львів, склад 2" },
+  pay: { sum: "30000", cur: "грн", form: "б/г без ПДВ", order: "" }, ...over }, NR_MGR) as DocumentState;
+
+/**
+ * #1800 — ЗАЯВКА ДО РІЧНОГО ДОГОВОРУ (зразок Лілії «АвтоМув_З_Заявка…_5.pdf»): над заголовком «Додаток до Договору № … від …»,
+ * «ЗАЯВКА № <ID угоди>», таблиця рейсу, реквізити ОБОХ сторін і підписи — і БЕЗ преамбули та юртексту разової заявки.
+ * Для всіх трьох юросіб, у PDF і Word. 🧨 Повернути преамбулу чи юртекст або загубити шапку договору — червоніє.
+ */
+test("#1800 ЗАЯВКА ДО РІЧНОГО ДОГОВОРУ: «Додаток до Договору № … від …», рейс, реквізити обох сторін — без преамбули й юртексту", () => {
+  const once = ref["once-client-uts"].state;
+  const legalMark = txt(printHTML(once, once.num, {})).slice(0, 4000).match(/уклали цей Договір про наступне/)?.[0];
+  assert.ok(legalMark, "🔴 у разовій заявці немає преамбули — нема з чим порівнювати");
+  for (const ent of ["uts", "avm", "fop"] as const) {
+    const s = anState({ ent, cp: ent === "fop" ? { ...AN_CP, name: "ФОП Тестовий Тест Тестович", edrpou: "1234567890" } : AN_CP });
+    assert.equal(blockers(s), null, `🔴 ${ent}: заявка-додаток не формується`);
+    for (const [name, t] of [["PDF", txt(printHTML(s, currentNum(s), {}))], ["Word", docxTxt(s)]] as const) {
+      const head = t.indexOf("Додаток до Договору № 62702131 від 21.09.2026"), title = t.indexOf("ЗАЯВКА № 62741747");
+      assert.ok(head >= 0 && title > head, `🔴 ${ent}/${name}: немає «Додаток до Договору № … від …» над «ЗАЯВКА № …»`);
+      for (const need of ["на організацію перевезення вантажу", "Київ — Львів", "РЕКВІЗИТИ СТОРІН", "ЗАМОВНИК", "ЕКСПЕДИТОР", ENTITIES[ent].edrpou])
+        assert.ok(t.includes(need), `🔴 ${ent}/${name}: немає «${need}»`);
+      for (const bad of ["уклали цей Договір про наступне", "РАЗОВИЙ ДОГОВІР", "2. Основні умови перевезення"])
+        assert.ok(!t.includes(bad), `🔴 ${ent}/${name}: у заявці-додатку «${bad}» — юртекст протік`);
+    }
+  }
+  assert.equal(currentNum(anState()), "62741747", "🔴 № документа — не ID угоди");
+  assert.ok(fullPageHTML(anState(), "62741747", {}).length > 0);
+});
+
+/**
+ * #1801 — БЕЗ № І ДАТИ ДОГОВОРУ НЕ ФОРМУЄТЬСЯ (і дзеркало: з ними — формується); без ID угоди — теж ні.
+ * «Порядок і строки оплати»: порожній не друкується (він у річному договорі), заповнений — друкується.
+ * 🧨 Прибрати перевірку № чи завжди друкувати порожній рядок оплати — червоніє.
+ */
+test("#1801 ЗАЯВКА ДО ДОГОВОРУ: без № / дати договору чи ID угоди — відмова; порожній порядок оплати не друкується", () => {
+  assert.equal(blockers(anState()), null, "🔴 повна заявка-додаток не формується (дзеркало)");
+  assert.match(blockers(anState({ mainNo: "" })) ?? "", /№ річного договору/, "🔴 без № договору формується");
+  assert.match(blockers(anState({ mainDate: "" })) ?? "", /дату річного договору/, "🔴 без дати договору формується");
+  assert.match(blockers(anState({ dealNo: "" })) ?? "", /№ заявки/, "🔴 без ID угоди формується");
+  const empty = txt(printHTML(anState(), "1", {}));
+  assert.ok(!empty.includes("Порядок і строки оплати"), "🔴 порожній «Порядок і строки оплати» надруковано");
+  const filled = anState({ pay: { sum: "30000", cur: "грн", form: "б/г без ПДВ", order: "по отриманні документів" } });
+  assert.ok(txt(printHTML(filled, "1", {})).includes("Порядок і строки оплати по отриманні документів"), "🔴 заповнений порядок оплати не надруковано");
+  const once = anState({ doc: "once" });
+  assert.ok(txt(printHTML(once, "1", {})).includes("Порядок і строки оплати"), "🔴 разова заявка втратила рядок оплати — правило протекло за межі додатка");
+});
+
+/**
+ * #1802 — № І ДАТА ДОГОВОРУ ЗА КЛІЄНТОМ: пишуться лише з основного договору й заявки-додатка, лише з номером і кодом
+ * клієнта (8 / 10 цифр); база має колонки, довідник їх віддає, а звичайне збереження контрагента їх НЕ затирає.
+ * 🧨 Писати з разової заявки, без коду, або затирати номер при збереженні реквізитів — червоніє.
+ */
+test("#1802 № ДОГОВОРУ ЗА КЛІЄНТОМ: пише основний і додаток (з кодом), не разова; збереження реквізитів номер не затирає", () => {
+  assert.deepEqual(contractMemo(anState()), { code: "12345678", no: "62702131", date: "21.09.2026" }, "🔴 додаток не записує № за клієнтом");
+  const main = anState({ doc: "main", mainNo: "UTS-2026-15", mainDate: "01.10.2026" });
+  assert.deepEqual(contractMemo(main), { code: "12345678", no: "UTS-2026-15", date: "01.10.2026" }, "🔴 основний договір не записує № за клієнтом");
+  assert.equal(contractMemo(anState({ doc: "once" })), null, "🔴 разова заявка переписала № річного договору");
+  assert.equal(contractMemo(anState({ cp: { ...AN_CP, edrpou: "" } })), null, "🔴 записано без коду клієнта");
+  assert.equal(contractMemo(anState({ mainNo: "" })), null, "🔴 записано порожній №");
+  const schema = SRC("db/schema.sql"), route = SRC("routes/constructor.ts");
+  assert.match(schema, /ALTER TABLE constructor_counterparties\s+ADD COLUMN IF NOT EXISTS contract_no\s+text,\s+ADD COLUMN IF NOT EXISTS contract_date text;/, "🔴 у базі немає колонок № / дати договору");
+  assert.equal((route.match(/c\.contract_no, c\.contract_date/g) || []).length, 2, "🔴 довідник не віддає № договору (пошук або список)");
+  const put = /constructorRouter\.put\("\/counterparties"[\s\S]*?\}\)\);/.exec(route)?.[0] ?? "";
+  assert.ok(put.includes("ON CONFLICT (edrpou) DO UPDATE SET") && !/DO UPDATE SET[\s\S]*contract_(no|date)\s*=/.test(put), "🔴 збереження реквізитів затирає № договору");
+  assert.ok(/await rememberContract\(s, req\.auth!\.userId\)/.test(route), "🔴 формування не записує № за клієнтом");
+});
+
+/**
+ * #1803 — ФОРМА: вкладка «Заявка до річного договору» є, сервер приймає вид, база його дозволяє, а № підставляється
+ * з довідника за ЄДРПОУ. 🧨 Прибрати вкладку, вид із CHECK чи підстановку — червоніє.
+ */
+test("#1803 ФОРМА ЗАЯВКИ ДО ДОГОВОРУ: вкладка, вид у базі й на сервері, № підставляється з картки клієнта", () => {
+  const front = readFileSync(path.join(REPO, "frontend", "src", "pages", "dashboard", "sections", "ConstructorSection.tsx"), "utf8");
+  assert.match(front, /k: "annex", t: "Заявка до річного договору", p: "client"/, "🔴 немає вкладки");
+  assert.match(front, /mainNo: no, mainDate: date/, "🔴 № не підставляється з картки клієнта");
+  assert.equal(typeof stateFromBody({ ent: "uts", doc: "annex" }, NR_MGR), "object", "🔴 сервер не приймає вид «annex»");
+  assert.equal((stateFromBody({ ent: "uts", doc: "annex" }, NR_MGR) as DocumentState).party, "client", "🔴 додаток не клієнтський");
+  assert.match(SRC("db/schema.sql"), /CHECK \(doc_kind IN \('once','main','carr','nrmain','nrapp','annex'\)\)/, "🔴 база не дозволяє вид «annex»");
 });

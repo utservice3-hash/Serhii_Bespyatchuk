@@ -70,6 +70,10 @@ export interface DealRow {
   /** Підтип «Інше»: людини, якщо вона вирішила «Інше», інакше AI; для решти категорій — `null`. */
   otherType: OtherType | null;
   close: CloseState | null;
+  /** 5970: клієнта перенесено в «Лід взятий у роботу» (або перенесли б — режим «лише журнал»). */
+  move: MoveState | null;
+  /** 5972: кому з чергових віддано угоду «Операційного директора»; `null` — не віддавали. */
+  dutyAssigned: { managerName: string; at: string | null } | null;
   crm: { statusId: number | null; rejectReason: string | null };
 }
 
@@ -88,6 +92,18 @@ interface Raw {
   dec: HumanDecision | null; dec_other: OtherType | null; dec_note: string | null; dec_role: string | null; dec_at: Date | null; dec_by: string | null;
   deal_status: string | null; reject_reason: string | null;
   cl_decided: Date | null; cl_closed: Date | null; cl_reverted: Date | null; cl_error: string | null; cl_reason: "carrier" | "other" | "no_talk" | null;
+  mv_decided?: Date | null; mv_moved?: Date | null; mv_reverted?: Date | null; mv_error?: string | null;
+  da_manager?: string | null; da_assigned?: Date | null;
+}
+
+/** 5970: стан перенесення клієнта в «Лід взятий у роботу». */
+export interface MoveState { state: "would_move" | "moved" | "reverted" | "failed"; at: string; error: string | null }
+function moveStateOf(x: Raw): MoveState | null {
+  if (!x.mv_decided) return null;
+  if (x.mv_reverted) return { state: "reverted", at: iso(x.mv_reverted), error: null };
+  if (x.mv_moved) return { state: "moved", at: iso(x.mv_moved), error: x.mv_error ?? null };
+  if (x.mv_error) return { state: "failed", at: iso(x.mv_decided), error: x.mv_error };
+  return { state: "would_move", at: iso(x.mv_decided), error: null };
 }
 
 const IN_TYPES = new Set(["in", "transitin"]);
@@ -133,7 +149,9 @@ export async function carrierDealRows(db: Db, q: DealQuery): Promise<DealRow[]> 
            cd.decision AS dec, cd.other_type AS dec_other, cd.note AS dec_note, cd.decider_role AS dec_role, cd.decided_at AS dec_at,
            COALESCE(um.name, uu.email) AS dec_by,
            dd.status_id::text AS deal_status, dd.reject_reason,
-           cl.decided_at AS cl_decided, cl.closed_at AS cl_closed, cl.reverted_at AS cl_reverted, cl.close_error AS cl_error, cl.reason AS cl_reason
+           cl.decided_at AS cl_decided, cl.closed_at AS cl_closed, cl.reverted_at AS cl_reverted, cl.close_error AS cl_error, cl.reason AS cl_reason,
+           mv.decided_at AS mv_decided, mv.moved_at AS mv_moved, mv.reverted_at AS mv_reverted, mv.move_error AS mv_error,
+           dam.name AS da_manager, da.assigned_at AS da_assigned
       FROM carrier_call_deals d
       LEFT JOIN carrier_call_deals src ON src.kommo_id = d.reused_from
       LEFT JOIN managers m ON m.kommo_user_id = d.responsible_user_id
@@ -147,6 +165,9 @@ export async function carrierDealRows(db: Db, q: DealQuery): Promise<DealRow[]> 
       LEFT JOIN managers um ON um.id = uu.manager_id
       LEFT JOIN deals dd ON dd.kommo_id = d.kommo_id
       LEFT JOIN carrier_close_log cl ON cl.kommo_id = d.kommo_id
+      LEFT JOIN carrier_client_moves mv ON mv.kommo_id = d.kommo_id
+      LEFT JOIN carrier_duty_assign_log da ON da.kommo_id = d.kommo_id
+      LEFT JOIN managers dam ON dam.id = da.manager_id
      WHERE ($4::date IS NULL OR (d.deal_created_at AT TIME ZONE 'Europe/Kyiv')::date BETWEEN $4::date AND $5::date)
        AND ($6::int IS NULL OR m.id = $6::int)
        AND ($7::int IS NULL OR m.team_id = $7::int)
@@ -200,6 +221,8 @@ function toRow(x: Raw, now: Date): DealRow {
     overdue: deadline != null && now.getTime() > deadline.getTime(),
     otherType: cat.category !== "other" ? null : cat.source === "human" ? (human?.otherType ?? null) : aiOther,
     close: closeStateOf(x),
+    move: moveStateOf(x),
+    dutyAssigned: x.da_manager ? { managerName: x.da_manager, at: x.da_assigned ? iso(x.da_assigned) : null } : null,
     crm: { statusId: x.deal_status == null ? null : Number(x.deal_status), rejectReason: x.reject_reason },
   };
 }

@@ -2085,3 +2085,158 @@ test("#1784b НАГАДУВАННЯ ТІМЛІДУ · ЧАС: 17:00 за Киє�
   assert.deepEqual([...m.keys()], [5], "🔴 угоди без команди пішли якомусь тімліду");
   assert.deepEqual(m.get(5), { teamId: 5, teamName: "РПК", n: 3, overdue: 1, lines: [{ managerName: "А", n: 2, overdue: 1 }, { managerName: "Б", n: 1, overdue: 0 }] });
 });
+
+// ─── 5972 / 5970: угоди «Операційного директора» → черговому; клієнт → «Лід взятий у роботу» ───────────────
+
+const OD = 904923;
+async function seedOd(c: Raw) {
+  await c.raw.query(`INSERT INTO managers(id,name,team_id,kommo_user_id,is_active) VALUES (19040,'Операційний директор',NULL,${String(OD)},true) ON CONFLICT (id) DO NOTHING`);
+}
+function fakeRoute(fail = false) {
+  const calls: { patch: unknown[][]; notes: unknown[][]; tasks: unknown[][]; closed: (readonly number[])[] } = { patch: [], notes: [], tasks: [], closed: [] };
+  let seq = 500;
+  return { calls, kommo: {
+    patchLeads: async (b: unknown[]) => { calls.patch.push(b); if (fail) throw new Error("Kommo API error 502"); return {}; },
+    addNotes: async (b: unknown[]) => { calls.notes.push(b); return {}; },
+    createTasks: async (b: unknown[]) => { calls.tasks.push(b); return b.map(() => ++seq); },
+    closeTasks: async (ids: readonly number[]) => { calls.closed.push(ids); return {}; },
+  } };
+}
+
+/**
+ * #1787 — УГОДИ «ОПЕРАЦІЙНОГО ДИРЕКТОРА» → ЧЕРГОВОМУ (задача 5972; рішення Юлі 19.10.2026): чергового немає — угода
+ * лишається; «лише журнал» — у Kommo нічого не пишемо; live — відповідальний змінюється, кілька чергових — по черзі;
+ * повтор не переприсвоює; чужі угоди й угоди не на етапі не чіпаємо; збій — повтор не раніше ніж за годину.
+ * 🧨 Червоніє, якщо віддати без чергового, писати в Kommo в режимі «журнал», давати всі угоди одному або чіпати чужі.
+ */
+test("#1787 ЧЕРГОВОМУ: немає чергового — лишається; «журнал» не пише; live — по черзі між черговими; чужі не чіпаємо", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  await seedTeams(c); await seedOd(c);
+  await c.raw.query("TRUNCATE carrier_duty_assign_log, duty_schedule");
+  const { runDutyAssign, DUTY_RETRY_AFTER_MIN } = await import("./carrierDuty.js");
+  const at = new Date("2026-09-28T07:00:00Z");
+  const now = new Date("2026-09-28T09:00:00Z");   // понеділок, 12:00 за Києвом
+  for (const n of [1, 2, 3, 5]) { await carrierDeal(c, 178700 + n, phone(17870, n), new Date(at.getTime() + n * 60_000)); await owner(c, 178700 + n, OD); }
+  await carrierDeal(c, 178704, phone(17870, 4), at); await owner(c, 178704, 10601);   // чужа (живий менеджер)
+  const stage = new Set([178701, 178702, 178703, 178704]);                          // 178705 — уже не на етапі
+  const resp = async () => new Map((await c.raw.query<{ kommo_id: string; u: string }>("SELECT kommo_id::text, responsible_user_id::text AS u FROM carrier_call_deals WHERE kommo_id BETWEEN 178701 AND 178705")).rows.map((x) => [Number(x.kommo_id), Number(x.u)]));
+
+  const f0 = fakeRoute();
+  const r0 = await runDutyAssign(c.db, now, "live", stage, f0.kommo);
+  assert.deepEqual([r0.noDuty, r0.assigned, f0.calls.patch.length], [3, 0, 0], "🔴 без чергового угоду віддано комусь — Юля: лишається на «Операційному директорі»");
+  await c.raw.query(`INSERT INTO duty_schedule(duty_date, manager_id, team_id) VALUES ('2026-09-28', 10611, 10601), ('2026-09-28', 10613, 10602), ('2026-09-27', 10612, 10601)`);
+  const fd = fakeRoute();
+  const rd = await runDutyAssign(c.db, now, "dry", stage, fd.kommo);
+  assert.equal(rd.logged, 3);
+  assert.equal(fd.calls.patch.length, 0, "🔴 у режимі «лише журнал» відповідального змінено в Kommo");
+  assert.equal((await resp()).get(178701), OD, "🔴 «лише журнал» змінив відповідального в базі");
+
+  const fl = fakeRoute();
+  const rl = await runDutyAssign(c.db, now, "live", stage, fl.kommo);
+  assert.equal(rl.assigned, 3);
+  const to = fl.calls.patch.map((b) => (b[0] as { responsible_user_id: number }).responsible_user_id);
+  assert.deepEqual(to, [10601, 10603, 10601], "🔴 не по черзі між черговими дня (або взято чергового іншого дня)");
+  const after = await resp();
+  assert.deepEqual([after.get(178701), after.get(178702), after.get(178703)], [10601, 10603, 10601], "🔴 автоматика не бачить нового відповідального — клієнт піде на службовий акаунт");
+  assert.equal(after.get(178704), 10601, "🔴 чужу угоду переприсвоєно");
+  assert.equal(after.get(178705), OD, "🔴 угоду, якої вже немає на етапі, переприсвоєно");
+  const again = fakeRoute();
+  assert.equal((await runDutyAssign(c.db, now, "live", stage, again.kommo)).candidates, 0, "🔴 повтор знову переприсвоює");
+
+  // Збій Kommo: помилку записано, повтор — не раніше ніж за годину.
+  await carrierDeal(c, 178706, phone(17870, 6), at); await owner(c, 178706, OD);
+  const bad = fakeRoute(true);
+  const rb = await runDutyAssign(c.db, now, "live", new Set([178706]), bad.kommo);
+  assert.equal(rb.failed, 1);
+  assert.equal((await resp()).get(178706) ?? OD, OD, "🔴 після збою Kommo база каже, що угоду віддано");
+  assert.equal((await runDutyAssign(c.db, new Date(now.getTime() + 10 * 60_000), "live", new Set([178706]), fakeRoute().kommo)).candidates, 0, "🔴 повтор одразу після збою");
+  assert.equal((await runDutyAssign(c.db, new Date(now.getTime() + (DUTY_RETRY_AFTER_MIN + 1) * 60_000), "live", new Set([178706]), fakeRoute().kommo)).assigned, 1, "🔴 після години повтору немає");
+});
+
+test("#1787b КВП О 17:00: чергового немає й угоди висять — одна задача КВП; черговий з'явився — закривається; до 17:00 — нічого", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await seedOd(c);
+  await c.raw.query("TRUNCATE carrier_duty_alerts");
+  await c.raw.query(`INSERT INTO users(email,password_hash,role,role_override,is_active) VALUES ('kvp-1787@x','x','manager','kvp',true) ON CONFLICT (email) DO NOTHING`);
+  const kvp = (await c.raw.query<{ id: number }>("SELECT id FROM users WHERE email = 'kvp-1787@x'")).rows[0].id;
+  const { syncDutyAlerts, DUTY_ALERT_DONE_REASON } = await import("./carrierDuty.js");
+  await carrierDeal(c, 178711, phone(17871, 1), new Date("2026-09-29T07:00:00Z")); await owner(c, 178711, OD);
+  const stage = new Set([178711]);
+  const open = async () => (await c.raw.query<{ task_id: number; assignee_user_id: number; title: string }>(
+    "SELECT a.task_id, t.assignee_user_id, t.title FROM carrier_duty_alerts a JOIN tasks t ON t.id = a.task_id WHERE a.closed_at IS NULL")).rows;
+  assert.equal((await syncDutyAlerts(c.db, new Date("2026-09-29T13:59:00Z"), stage)).created, 0, "🔴 нагадування до 17:00");
+  assert.equal((await syncDutyAlerts(c.db, new Date("2026-09-29T14:05:00Z"), stage)).created, 1, "🔴 о 17:05 у вівторок без чергового КВП нічого не отримала");
+  const [x] = await open();
+  assert.equal(x.assignee_user_id, kvp, "🔴 нагадування не КВП");
+  assert.match(x.title, /на сьогодні нікого — 1 угод/);
+  assert.equal((await syncDutyAlerts(c.db, new Date("2026-09-29T14:30:00Z"), stage)).created, 0, "🔴 дубль того ж дня");
+  await c.raw.query(`INSERT INTO duty_schedule(duty_date, manager_id, team_id) VALUES ('2026-09-29', 10612, 10601) ON CONFLICT DO NOTHING`);
+  assert.equal((await syncDutyAlerts(c.db, new Date("2026-09-29T14:40:00Z"), stage)).closed, 1, "🔴 черговий з'явився, а нагадування висить");
+  const st = (await c.raw.query<{ status: string; close_reason: string }>("SELECT status, close_reason FROM tasks WHERE id = $1", [x.task_id])).rows[0];
+  assert.deepEqual([st.status, st.close_reason], ["done", DUTY_ALERT_DONE_REASON]);
+  // Дзеркало: черговий є з самого початку — нагадування не ставиться навіть о 17:00.
+  assert.equal((await syncDutyAlerts(c.db, new Date("2026-09-29T15:00:00Z"), stage)).created, 0, "🔴 нагадування при наявному черговому");
+});
+
+/**
+ * #1788 — КЛІЄНТ → «ЛІД ВЗЯТИЙ У РОБОТУ» + ЗАДАЧА (задача 5970): упевнений клієнт переноситься на етап 69693652, відповідальний
+ * отримує задачу «Взяти в роботу» зі строком сьогодні; невпевнений, «Операційний директор» і вже перенесений — ні;
+ * «лише журнал» нічого не пише; «Повернути» повертає етап, закриває задачу й більше не переносить.
+ * 🧨 Червоніє, якщо переносити невпевнених чи службові, писати в журнальному режимі або повторно переносити повернуту.
+ */
+test("#1788 КЛІЄНТ У РОБОТУ: упевнений — етап і задача відповідальному; невпевнений і «ОД» — ні; «Повернути» — назад назавжди", async (t) => {
+  const c = await ctx(t); if (!c) return;
+  await resetAll(c);
+  await seedTeams(c); await seedOd(c);
+  await c.raw.query("TRUNCATE carrier_client_moves");
+  const { runClientMove, revertClientMove, LEAD_TAKEN_STATUS, completeTill } = await import("./carrierClientMove.js");
+  const { CARRIER_STAGE } = await import("./carrierCallRules.js");
+  const at = new Date("2026-09-28T07:00:00Z"), now = new Date("2026-09-28T09:00:00Z");
+  const mk = async (n: number, user: number, role: string, conf: number) => {
+    const P = phone(17880, n), u = `1788-${String(n)}`;
+    await call(c, u, at, 40, P);
+    await carrierDeal(c, 178800 + n, P, at, "own", u, 1);
+    await owner(c, 178800 + n, user);
+    await carrierAnalysedV2(c, u, role, conf, "counterpart");
+  };
+  await mk(1, 10601, "client", 0.95);   // кандидат
+  await mk(2, 10601, "client", 0.6);    // невпевнений — «На перевірці»
+  await mk(3, OD, "client", 0.95);      // на службовому акаунті — спершу черговому (5972)
+  await mk(4, 10602, "carrier", 0.95);  // перевізник — це закриття, не перенесення
+  const stage = new Set([178801, 178802, 178803, 178804]);
+  const dry = fakeRoute();
+  const rd = await runClientMove(c.db, now, "dry", stage, dry.kommo);
+  assert.deepEqual([rd.candidates, rd.logged, rd.skippedService], [1, 1, 1]);
+  assert.equal(dry.calls.patch.length + dry.calls.tasks.length, 0, "🔴 у режимі «лише журнал» щось записано в Kommo");
+  const live = fakeRoute();
+  const rl = await runClientMove(c.db, now, "live", stage, live.kommo);
+  assert.equal(rl.moved, 1);
+  assert.deepEqual(live.calls.patch[0], [{ id: 178801, pipeline_id: CARRIER_STAGE.pipelineId, status_id: LEAD_TAKEN_STATUS }], "🔴 угоду переносять не на «Лід взятий у роботу» тієї ж воронки");
+  const task = live.calls.tasks[0][0] as { entity_id: number; responsible_user_id: number; complete_till: number; text: string };
+  assert.deepEqual([task.entity_id, task.responsible_user_id, task.complete_till], [178801, 10601, completeTill(now)], "🔴 задачу поставлено не відповідальному або не зі строком сьогодні");
+  assert.match(task.text, /^Взяти в роботу/);
+  assert.equal((await runClientMove(c.db, now, "live", stage, fakeRoute().kommo)).candidates, 0, "🔴 повтор переносить удруге й ставить другу задачу");
+  // «Повернути»: етап назад, задача закривається, і автоматика більше не переносить.
+  const back = fakeRoute();
+  const rv = await revertClientMove(c.db, 178801, null, "тест", now, back.kommo);
+  assert.equal(rv.ok, true);
+  assert.deepEqual(back.calls.patch[0], [{ id: 178801, pipeline_id: CARRIER_STAGE.pipelineId, status_id: CARRIER_STAGE.statusId }], "🔴 «Повернути» не повертає на «Дзвінки на мобільні»");
+  assert.deepEqual(back.calls.closed[0], [501], "🔴 «Повернути» не закрило задачу «Взяти в роботу»");
+  assert.equal((await runClientMove(c.db, now, "live", stage, fakeRoute().kommo)).candidates, 0, "🔴 повернуту угоду автоматика знову переносить — «Повернути» не працює");
+  const r2 = await revertClientMove(c.db, 178801, null, "тест", now, fakeRoute().kommo);
+  assert.equal(r2.ok, false, "🔴 повторне «Повернути» пройшло");
+});
+
+test("#1788b СТРОК ЗАДАЧІ Й ЧЕРГА: до 17:00 — 18:00 сьогодні, після — 23:59; кілька чергових — по черзі, рівно — менший id", async () => {
+  const { completeTill } = await import("./carrierClientMove.js");
+  const { pickDuty } = await import("./carrierDuty.js");
+  assert.equal(completeTill(new Date("2026-10-19T10:00:00Z")), Date.parse("2026-10-19T15:00:00Z") / 1000, "🔴 13:00 за Києвом — строк не 18:00 сьогодні");
+  assert.equal(completeTill(new Date("2026-10-19T14:30:00Z")), Date.parse("2026-10-19T20:59:00Z") / 1000, "🔴 17:30 за Києвом — строк не до кінця дня");
+  assert.equal(completeTill(new Date("2026-10-26T10:00:00Z")), Date.parse("2026-10-26T16:00:00Z") / 1000, "🔴 зимовий час: 18:00 за Києвом = 16:00 UTC");
+  const duty = [{ managerId: 7, kommoUserId: 70, name: "Б" }, { managerId: 3, kommoUserId: 30, name: "А" }];
+  const taken = new Map<number, number>([[7, 1]]);
+  // Б уже отримав 1 угоду сьогодні → А спершу «доганяє» (3), далі рівно — менший id (3), потім Б (7), потім знову А.
+  assert.deepEqual([1, 2, 3, 4].map(() => pickDuty(duty, taken)?.managerId), [3, 3, 7, 3], "🔴 не по черзі (або не враховано, що Б уже отримав угоду сьогодні)");
+  assert.equal(pickDuty([], new Map()), null);
+});

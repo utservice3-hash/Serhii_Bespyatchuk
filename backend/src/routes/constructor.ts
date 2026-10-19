@@ -34,7 +34,7 @@ import { tmpdir } from "os";
 import { fullPageHTML, printHTML } from "../constructor/services/printTemplate.js";
 import { loadDocImages, docImageDataUris, AssetsMissing } from "../constructor/services/docAssets.js";
 import { htmlToPdf, renderDocumentPdf, PdfUnavailable, type RenderedPdf } from "../constructor/services/pdfRenderer.js";
-import { canSeeConstructorDoc, stateFromBody, fileBase, VIEW_ALL_PERM } from "../constructor/access.js";
+import { canSeeConstructorDoc, stateFromBody, fileBase, contractMemo, VIEW_ALL_PERM } from "../constructor/access.js";
 import { DOCS_DIR } from "../jobs/backupDb.js";
 import { MANAGER_CONTACT_SQL, POOL_STATS_SQL } from "../constructor/sql.js";
 import { lookupRegistry } from "../constructor/youscore.js";
@@ -116,10 +116,10 @@ constructorRouter.get("/counterparties", h(async (req, res) => {
   const q = String(req.query.q || "").trim();
   const rows = q
     ? await pool.query(
-        `SELECT c.id, c.edrpou, c.name, c.ipn, c.address, c.iban, c.bank, c.phone, c.email, c.director, c.is_fop, c.updated_at, (SELECT max(d.created_at) FROM constructor_documents d WHERE d.contractor->>'edrpou' = c.edrpou AND c.edrpou IS NOT NULL) AS last_doc_at FROM constructor_counterparties c
+        `SELECT c.id, c.edrpou, c.name, c.ipn, c.address, c.iban, c.bank, c.phone, c.email, c.director, c.is_fop, c.contract_no, c.contract_date, c.updated_at, (SELECT max(d.created_at) FROM constructor_documents d WHERE d.contractor->>'edrpou' = c.edrpou AND c.edrpou IS NOT NULL) AS last_doc_at FROM constructor_counterparties c
           WHERE c.name ILIKE '%'||$1||'%' OR c.edrpou = $1 OR c.iban ILIKE '%'||$1||'%'
           ORDER BY updated_at DESC LIMIT 30`, [q])
-    : await pool.query(`SELECT c.id, c.edrpou, c.name, c.ipn, c.address, c.iban, c.bank, c.phone, c.email, c.director, c.is_fop, c.updated_at, (SELECT max(d.created_at) FROM constructor_documents d WHERE d.contractor->>'edrpou' = c.edrpou AND c.edrpou IS NOT NULL) AS last_doc_at FROM constructor_counterparties c ORDER BY c.updated_at DESC LIMIT 30`);
+    : await pool.query(`SELECT c.id, c.edrpou, c.name, c.ipn, c.address, c.iban, c.bank, c.phone, c.email, c.director, c.is_fop, c.contract_no, c.contract_date, c.updated_at, (SELECT max(d.created_at) FROM constructor_documents d WHERE d.contractor->>'edrpou' = c.edrpou AND c.edrpou IS NOT NULL) AS last_doc_at FROM constructor_counterparties c ORDER BY c.updated_at DESC LIMIT 30`);
   res.json(rows.rows);
 }));
 
@@ -134,7 +134,7 @@ constructorRouter.put("/counterparties", h(async (req, res) => {
        name=EXCLUDED.name, ipn=EXCLUDED.ipn, address=EXCLUDED.address, iban=EXCLUDED.iban,
        bank=EXCLUDED.bank, phone=EXCLUDED.phone, email=EXCLUDED.email, director=EXCLUDED.director,
        is_fop=EXCLUDED.is_fop, updated_at=now(), updated_by=EXCLUDED.updated_by
-     RETURNING id, edrpou, name, ipn, address, iban, bank, phone, email, director, is_fop, updated_at`,
+     RETURNING id, edrpou, name, ipn, address, iban, bank, phone, email, director, is_fop, contract_no, contract_date, updated_at`,
     [c.edrpou || null, c.name, c.ipn || null, c.addr || null, c.iban || null, c.bank || null,
      c.phone || null, c.email || null, c.dir || null, /^ФОП/i.test(c.name || ""), req.auth!.userId]);
   res.json(q.rows[0]);
@@ -208,10 +208,30 @@ constructorRouter.post("/documents", h(async (req, res) => {
     [num, s.doc, s.party, s.ent, s.docDate || null, s.mainNo || null, s.mainDate || null,
      JSON.stringify(s.cp), JSON.stringify(s.trip), JSON.stringify(s.pay),
      s.intl, s.stamp, s.fopAcc, req.auth!.userId, isContract(s) ? (s.mainUntil || null) : null]);
+  await rememberContract(s, req.auth!.userId);
   const fit = await fitAndStore(Number(q.rows[0].id), s, num);
   res.json({ id: Number(q.rows[0].id), version: q.rows[0].version, num, createdAt: q.rows[0].created_at,
     pages: fit?.pages ?? null, dens: fit?.dens ?? null, overflow: !!fit?.overflow });
 }));
+
+/**
+ * 📎 № і дата річного договору — за клієнтом (задача 5777): основний договір і заявка-додаток пишуть їх у довідник
+ * контрагентів, при виборі клієнта фронт підставляє. Лише за ЄДРПОУ (без коду клієнта не впізнати); збій запису
+ * документ не валить — він уже в архіві, а номер наступного разу впишуть руками.
+ */
+async function rememberContract(s: DocumentState, userId: number): Promise<void> {
+  const m = contractMemo(s);
+  if (!m) return;
+  try {
+    await pool.query(
+      `INSERT INTO constructor_counterparties (edrpou, name, is_fop, contract_no, contract_date, updated_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (edrpou) DO UPDATE SET contract_no = EXCLUDED.contract_no, contract_date = EXCLUDED.contract_date`,
+      [m.code, s.cp.name || m.code, /^ФОП/i.test(s.cp.name || ""), m.no, m.date, userId]);
+  } catch (err) {
+    console.error("[constructor] № договору за клієнтом не записано:", (err as Error).message);
+  }
+}
 
 /**
  * 📄 АВТОПІДГОНКА (v2 пакета, рішення 14–15.10): щільність, з якою документ влазить у 3 сторінки, пишеться в

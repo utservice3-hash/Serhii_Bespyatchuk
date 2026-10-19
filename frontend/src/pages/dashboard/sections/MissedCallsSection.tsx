@@ -199,6 +199,8 @@ export function MissedCallsSection({ canOpenClient, roleKey }: { canOpenClient: 
                 hint="Задача закрилась сама: з номера компанії поговорили з клієнтом від 10 с. Хто й коли — у самій задачі." />
               <Tile label="Закрито: перевізник" value={num(d.automation.closedCarrier)} sub="за історією CRM"
                 hint="Відкриту задачу закрито: номер виявився перевізником за історією CRM. Помилка — відкрийте задачу знову." />
+              <Tile label="Закрито: клієнт сам" value={num(d.automation.closedClientSelf)} sub={`ще в «Успіху»: ${num(d.automation.closedSuccess)}`}
+                hint="Відкриту задачу «передзвонити» закрито: клієнт сам передзвонив і з ним поговорили від 10 с, або угода цього номера після пропущеного перейшла в «Успішно реалізовано». У відсоток «Передзвонили за 24 год» це НЕ входить — це не наш передзвін." />
               <Tile label="Відкрито зараз" value={num(d.automation.openNow)} sub="задач «передзвони»"
                 hint="Задачі «передзвони», які зараз чекають на передзвін — у вашому зрізі." />
               {d.automation.dealsHistory != null && (
@@ -500,7 +502,8 @@ function nextLabel(kind: MissedNextStep, min: number | null): { text: string; ba
 function MissedListBlock({ from, to, day, setDay, canOpenClient, fp }: {
   from: string; to: string; day: string; setDay: (d: string) => void; canOpenClient: boolean; fp: MissedFilterParams;
 }) {
-  const [onlyNo, setOnlyNo] = useState(false);
+  // 5824: за замовчуванням — лише ті, з ким після пропущеного ще ніхто не поговорив (знімається галочкою — «усі»).
+  const [onlyNo, setOnlyNo] = useState(true);
   const [openRow, setOpenRow] = useState<string | null>(null);
   const [d, setD] = useState<MissedListResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -532,7 +535,7 @@ function MissedListBlock({ from, to, day, setDay, canOpenClient, fp }: {
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <input id="missed-list-only-no" type="checkbox" checked={onlyNo} onChange={(e) => setOnlyNo(e.target.checked)} />
-          лише без нашого передзвону
+          лише непередзвонені — без розмови від 10 с (ні нашої, ні коли клієнт передзвонив сам)
         </label>
       </div>
 
@@ -540,7 +543,7 @@ function MissedListBlock({ from, to, day, setDay, canOpenClient, fp }: {
       {!err && !d && <p className="loading-text" style={{ margin: 0 }}>Завантаження…</p>}
       {d && d.rows.length === 0 && (
         <p style={{ margin: 0, color: "var(--text-muted)" }}>
-          {onlyNo ? `За ${day} немає пропущених без нашого передзвону.` : `За ${day} пропущених немає.`}
+          {onlyNo ? `За ${day} непередзвонених немає — з усіма поговорили. Зніміть галочку, щоб побачити всі пропущені.` : `За ${day} пропущених немає.`}
         </p>
       )}
       {d && d.rows.length > 0 && (

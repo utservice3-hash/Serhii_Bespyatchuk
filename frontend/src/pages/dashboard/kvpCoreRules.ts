@@ -124,3 +124,68 @@ export function tileCountsByManager<R extends { managerId: number | null }>(rows
   for (const r of rows) if (match(r)) m.set(r.managerId, (m.get(r.managerId) ?? 0) + 1);
   return m;
 }
+
+// ───────────── 📅 МИНУЛИЙ ТИЖДЕНЬ ПОРУЧ (Юля 19.10.2026: «звітую по ньому в понеділок») ─────────────
+
+export interface WeekBlockLike { idx: number; from: string; to: string }
+export interface PlanFact { plan: number; fact: number }
+export interface PrevWeekRow extends PlanFact { name: string; managers: Map<string, PlanFact & { name: string }> }
+
+const addDaysIso = (iso: string, n: number): string => {
+  const d = new Date(`${iso}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10);
+};
+const mondayOfIso = (iso: string): string => addDaysIso(iso, -((new Date(`${iso}T00:00:00Z`).getUTCDay() + 6) % 7));
+
+/** Календарний тиждень Пн–Нд, що передує тижню, якому належить `curFrom` (перший день поточного блоку). */
+export function prevWeekRange(curFrom: string): { from: string; to: string } {
+  const mon = mondayOfIso(curFrom);
+  return { from: addDaysIso(mon, -7), to: addDaysIso(mon, -1) };
+}
+
+/**
+ * Блоки звіту, що лежать усередині минулого тижня. Блоки ріжуться межею місяця (01–04.10 — четвер–неділя), тож минулий
+ * тиждень буває складений з ДВОХ місяців: кінця вересня й початку жовтня. Блок, що лише частково заходить у діапазон,
+ * не береться — тоді план і факт мішали б різні тижні.
+ */
+export function blocksWithin(blocks: readonly WeekBlockLike[], r: { from: string; to: string }): number[] {
+  return blocks.filter((b) => b.from >= r.from && b.to <= r.to).map((b) => b.idx);
+}
+
+/** Чи весь минулий тиждень покрито блоками (інакше частину не видно — краще чесне «немає даних», ніж неповна сума). */
+export function coversRange(parts: readonly { blocks: readonly WeekBlockLike[]; idxs: readonly number[] }[], r: { from: string; to: string }): boolean {
+  const days = new Set<string>();
+  for (const p of parts) for (const b of p.blocks) if (p.idxs.includes(b.idx)) for (let d = b.from; d <= b.to; d = addDaysIso(d, 1)) days.add(d);
+  for (let d = r.from; d <= r.to; d = addDaysIso(d, 1)) if (!days.has(d)) return false;
+  return true;
+}
+
+/**
+ * План і факт минулого тижня по рядках таблиці — сумою тих самих тижневих клітинок `/kvp-report`, що й поточний тиждень
+ * (`coreRows`), по всіх блоках, що його складають (з обох місяців). Своїх формул грошей немає: план блоку — той самий
+ * динамічний план тижня, факт — «без очікувань».
+ */
+export function prevWeekRows(parts: readonly { teams: TeamLike[]; idxs: readonly number[] }[], nameOf: (t: TeamLike) => string):
+  { rows: Map<string, PrevWeekRow>; dept: PlanFact } {
+  const rows = new Map<string, PrevWeekRow>();
+  const dept: PlanFact = { plan: 0, fact: 0 };
+  for (const p of parts) for (const idx of p.idxs) {
+    for (const r of coreRows(p.teams, idx, nameOf).rows) {
+      let x = rows.get(r.key);
+      if (!x) { x = { name: r.name, plan: 0, fact: 0, managers: new Map() }; rows.set(r.key, x); }
+      x.plan += r.week.plan; x.fact += r.week.fact;
+      dept.plan += r.week.plan; dept.fact += r.week.fact;
+      for (const m of r.managers) {
+        const y = x.managers.get(m.key) ?? { name: m.name, plan: 0, fact: 0 };
+        y.plan += m.week.plan; y.fact += m.week.fact;
+        x.managers.set(m.key, y);
+      }
+    }
+  }
+  return { rows, dept };
+}
+
+/** Підсумок тижня, що вже минув: виконано / не виконано й на скільки. Плану не було — «—», а не «виконано». */
+export function weekResult(pf: PlanFact): { kind: "done" | "miss" | "none"; diff: number } {
+  if (!(pf.plan > 0)) return { kind: "none", diff: 0 };
+  return pf.fact >= pf.plan ? { kind: "done", diff: pf.fact - pf.plan } : { kind: "miss", diff: pf.plan - pf.fact };
+}

@@ -102,6 +102,10 @@ export const config = {
     // 🧽 Задачі робота на закритих угодах «Дзвінків на мобільні» (Роман 05.10.2026, `core/carrierTaskSweep.ts`): «live» —
     // закриваємо в Kommo; «off» — нічого; решта — журнал «що закрили б».
     carrierTaskSweep: process.env.CARRIER_TASK_SWEEP ?? "",
+    // 🚚 5972: угоди «Операційного директора» → черговому менеджеру дня; 5970: клієнт → «Лід взятий у роботу» + задача.
+    // Порожньо — «лише журнал» (dry): дашборд пише, кого куди переніс би, у Kommo нічого не змінюється; "live" — пише.
+    carrierDutyAssign: process.env.CARRIER_DUTY_ASSIGN ?? "",
+    carrierClientMove: process.env.CARRIER_CLIENT_MOVE ?? "",
     // 🛡 «Історія CRM» лише при свіжих угодах (рішення 05.10.2026, `core/carrierHistory.ts`): синк Kommo старший за це —
     // вердикти й закриття за історією на паузі, задача «передзвони» ставиться звичайно.
     carrierHistorySyncMaxMin: Number(process.env.CARRIER_HISTORY_SYNC_MAX_MIN ?? "60"),

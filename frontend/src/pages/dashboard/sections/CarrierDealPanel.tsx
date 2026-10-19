@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useDialogs } from "../../../components/Dialogs";
 import { useToast } from "../../../components/Toasts";
-import { fetchCarrierAudio, fetchCarrierCallCard, fetchCarrierDeal, postCarrierDecision, revertCarrierClose,
+import { fetchCarrierAudio, fetchCarrierCallCard, fetchCarrierDeal, postCarrierDecision, revertCarrierClose, revertCarrierMove,
   type CarrierCallCardResp, type CarrierDealT, type CarrierOtherTypeT } from "../../../api";
 import { mmss } from "../aiCallsView";
 import { InfoHint } from "../widgets";
@@ -137,6 +137,7 @@ export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: Carrier
   const canListen = deal.uniqueid != null && card != null && !card.transcriptHidden;
   const journal = deal.journal;
   const closed = deal.close?.state === "closed";
+  const moved = deal.move?.state === "moved";
   const current = deal.human?.decision ?? null;
 
   const decide = async (d: HumanDecisionT, other: CarrierOtherTypeT | null = null) => {
@@ -149,6 +150,14 @@ export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: Carrier
     if (!(await dlg.confirm(`Повернути угоду № ${String(deal.kommoId)} на етап «Дзвінки на мобільні» і зняти причину? Автоматика її більше не закриватиме.`))) return;
     setBusy(true);
     try { await revertCarrierClose(deal.kommoId); onChanged(); }
+    catch (e) { toast(`Не повернуто: ${errText(e)}`, { error: true }); }
+    finally { setBusy(false); }
+  };
+
+  const revertMove = async () => {
+    if (!(await dlg.confirm(`Повернути угоду № ${String(deal.kommoId)} з «Лід взятий у роботу» на «Дзвінки на мобільні»? Задача «Взяти в роботу» закриється, автоматика її більше не переноситиме.`))) return;
+    setBusy(true);
+    try { await revertCarrierMove(deal.kommoId); onChanged(); }
     catch (e) { toast(`Не повернуто: ${errText(e)}`, { error: true }); }
     finally { setBusy(false); }
   };
@@ -194,6 +203,13 @@ export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: Carrier
             {deal.source === "human" && deal.human ? `вирішив ${deviceName(deal.human.by)} (${deciderLabel(deal.human.role)})` : deal.source === "ai" ? "вирішив AI" : deal.source === "crm" ? `історія CRM${deal.historyFrom ? ` (угода №${String(deal.historyFrom)})` : ""}` : deal.source === "lardi" ? `Lardi: номер серед пропозицій машин${deal.lardiNote ? ` (${deal.lardiNote})` : ""}` : verdictUi ? deal.why ?? "" : ""}
           </span>
           {deal.close && <div style={{ ...muted, fontSize: 12.5, marginTop: 4 }}>{closeLabel(deal.close, fmtTime)}</div>}
+          {deal.dutyAssigned && <div style={{ ...muted, fontSize: 12.5, marginTop: 4 }}>
+            {deal.dutyAssigned.at ? `Віддано черговому: ${deal.dutyAssigned.managerName}, ${fmtTime(deal.dutyAssigned.at)}` : `Віддали б черговому: ${deal.dutyAssigned.managerName} (режим «лише журнал»)`}</div>}
+          {deal.move && <div style={{ ...muted, fontSize: 12.5, marginTop: 4 }}>
+            {deal.move.state === "moved" ? `Перенесено в «Лід взятий у роботу» ${fmtTime(deal.move.at)}, менеджеру — задача «Взяти в роботу»${deal.move.error ? ` (⚠️ ${deal.move.error})` : ""}`
+              : deal.move.state === "reverted" ? `Повернуто на етап ${fmtTime(deal.move.at)} — автоматика більше не переносить`
+              : deal.move.state === "failed" ? `Не перенесено: ${deal.move.error ?? "помилка Kommo"} — повторимо пізніше`
+              : "Перенесли б у «Лід взятий у роботу» (режим «лише журнал»)"}</div>}
           {deal.reviewDeadline && !deal.human && (
             <div style={{ fontSize: 12.5, marginTop: 4, color: deal.overdue ? "var(--danger)" : "var(--text-muted)" }}>
               {deal.overdue ? "Прострочено: треба було розібрати до " : "Розібрати до "}{fmtTime(deal.reviewDeadline)} (кінець робочого дня)
@@ -201,7 +217,14 @@ export function CarrierDealPanel({ deal, onDecided, onChanged }: { deal: Carrier
           )}
         </div>
 
-        {closed
+        {moved && !closed
+          ? <div>
+              <button type="button" disabled={busy} onClick={() => { void revertMove(); }}
+                style={{ border: "1px solid var(--border-strong, #d1d5db)", background: "var(--card-bg)", color: "var(--text)", borderRadius: 6, padding: "4px 10px", fontSize: 13, cursor: "pointer" }}>
+                {busy ? "Повертаю…" : "Повернути на етап"}</button>
+              <div style={{ ...muted, fontSize: 12, marginTop: 4 }}>Угоду перенесено в роботу як клієнта — якщо це не клієнт, спершу поверніть її.</div>
+            </div>
+          : closed
           ? <div>
               <button type="button" disabled={busy} onClick={() => { void revert(); }}
                 style={{ border: "1px solid var(--border-strong, #d1d5db)", background: "var(--card-bg)", color: "var(--text)", borderRadius: 6, padding: "4px 10px", fontSize: 13, cursor: "pointer" }}>

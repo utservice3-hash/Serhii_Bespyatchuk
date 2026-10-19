@@ -379,7 +379,9 @@ export interface MissedCallsResp {
   automation?: MissedAutomation;
 }
 export interface MissedAutomation {
-  days: number; skippedCarrier: number; closedCallback: number; closedCarrier: number; openNow: number; dealsHistory: number | null;
+  days: number; skippedCarrier: number; closedCallback: number; closedCarrier: number; openNow: number;
+  /** 5824: закрито, бо клієнт сам передзвонив і поговорив від 10 с / угода номера ввійшла в «Успіх» після пропущеного. */
+  closedClientSelf: number; closedSuccess: number; dealsHistory: number | null;
 }
 /** 👥 Фільтр екрана «Пропущені дзвінки» (ТЗ Юлі 12.10.2026, розділ 3): `teams` — «5,6,none», `managerId` — один менеджер. */
 export interface MissedFilterParams { teams?: string; managerId?: number }
@@ -594,6 +596,10 @@ export interface CarrierDealT {
   /** «На перевірці»: до коли розібрати (кінець робочого дня) і чи вже прострочено. */
   reviewSince: string | null; reviewDeadline: string | null; overdue: boolean;
   close: CarrierCloseT | null; crm: { statusId: number | null; rejectReason: string | null };
+  /** 5970: клієнта перенесено в «Лід взятий у роботу» (would_move — режим «лише журнал»). */
+  move?: { state: "would_move" | "moved" | "reverted" | "failed"; at: string; error: string | null } | null;
+  /** 5972: угоду «Операційного директора» віддано черговому (at = null — лише в журналі). */
+  dutyAssigned?: { managerName: string; at: string | null } | null;
 }
 export interface CarrierKpisT { removedByFilter: number; leftAfterFilter: number; waitingTalk: number; noTalk: number; recordingSince: string | null }
 export interface CarrierCallsResp { period: { from: string; to: string }; truncated: boolean; kpis: CarrierKpisT; rows: CarrierDealT[] }
@@ -676,6 +682,9 @@ export async function postCarrierDecision(kommoId: number, decision: CarrierDeci
 export async function fetchCarrierAudio(uniqueid: string): Promise<Blob> {
   const { data } = await api.get<Blob>(`/dashboard/carrier-calls/${encodeURIComponent(uniqueid)}/audio`, { responseType: "blob" });
   return data;
+}
+export async function revertCarrierMove(kommoId: number): Promise<void> {
+  await api.post(`/dashboard/carrier-calls/deals/${String(kommoId)}/revert-move`);
 }
 export async function revertCarrierClose(kommoId: number): Promise<void> {
   await api.post(`/dashboard/carrier-calls/deals/${String(kommoId)}/revert`);
@@ -5114,6 +5123,8 @@ export const patchHiringCandidate = async (id: number, patch: Record<string, unk
 export const setHiringStatus = async (id: number, p: { to: HiringStatus; comment: string; teamId?: number | null; email?: string }) =>
   (await api.post<{ ok: true; credentials: { login: string; password: string } | null }>(`/hiring/candidates/${id}/status`, p)).data;
 export const addHiringComment = async (id: number, comment: string) => { await api.post(`/hiring/candidates/${id}/comment`, { comment }); };
+/** «Змінити команду» в картці кандидата (#1950) — HR і керівництво, на будь-якому статусі. */
+export const setHiringTeam = async (id: number, teamId: number, comment: string) => { await api.post(`/hiring/candidates/${id}/team`, { teamId, comment }); };
 
 export const fetchHiringDaily = async (from: string, to: string) =>
   (await api.get<{ rows: HiringDailyRow[]; totals: Omit<HiringDailyRow, "day"> & { attendancePct: number | null } }>("/hiring/daily", { params: { from, to } })).data;
@@ -5763,8 +5774,8 @@ export const finErrorData = (e: unknown) => (e as { response?: { status?: number
 // на Word/PDF повертав би 401. Файли — blob через `api`, як скрини клієнтів.
 // ═══════════════════════════════════════════════════════════════════════════
 export type CtorEntityKey = "uts" | "avm" | "fop";
-/** `nrmain`/`nrapp` — договір і заявка для нерезидента (UA | EN, лише АвтоМув; 14.10.2026). */
-export type CtorDocKind = "once" | "main" | "carr" | "nrmain" | "nrapp";
+/** `nrmain`/`nrapp` — договір і заявка для нерезидента (UA | EN, лише АвтоМув; 14.10.2026); `annex` — заявка-додаток до річного договору (5777). */
+export type CtorDocKind = "once" | "main" | "carr" | "nrmain" | "nrapp" | "annex";
 export type CtorParty = "client" | "carrier";
 export interface CtorCounterparty {
   name?: string; edrpou?: string; ipn?: string; addr?: string;
@@ -5803,6 +5814,8 @@ export interface CtorCounterpartyRow {
   bank: string | null; phone: string | null; email: string | null; director: string | null; is_fop: boolean; updated_at: string;
   /** Коли востаннє формували документ із цим ЄДРПОУ (рядок довідника в макеті K-04). */
   last_doc_at: string | null;
+  /** № і дата річного договору з цим клієнтом — пишуться при формуванні основного договору чи заявки-додатка (5777). */
+  contract_no?: string | null; contract_date?: string | null;
 }
 export interface CtorArchiveRow {
   id: number; deal_no: string; doc_kind: CtorDocKind; party: CtorParty; entity_key: CtorEntityKey; version: number;

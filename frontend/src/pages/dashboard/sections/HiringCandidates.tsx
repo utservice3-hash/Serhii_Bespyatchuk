@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  fetchHiringCandidates, fetchHiringCard, createHiringCandidate, patchHiringCandidate, addHiringComment, hiringError,
+  fetchHiringCandidates, fetchHiringCard, createHiringCandidate, patchHiringCandidate, addHiringComment, setHiringTeam, hiringError,
   setHiringCandidateVacancies, setHiringReserve, uploadHiringFile, deleteHiringFile, restoreHiringFile, fetchHiringFileBlobUrl,
   type HiringMeta, type HiringCandidateRow, type HiringCard, type HiringStatus,
 } from "../../../api";
@@ -194,6 +194,7 @@ export function CandidateDrawer({ meta, id, toast, onClose, onChanged, onMetaSta
   const [err, setErr] = useState<string | null>(null);
   const [to, setTo] = useState<HiringStatus | null>(null);
   const [refusing, setRefusing] = useState(false);
+  const [teamEdit, setTeamEdit] = useState(false);
   const [booking, setBooking] = useState(false);
   const [note, setNote] = useState("");
   const [reserveNote, setReserveNote] = useState("");
@@ -264,6 +265,8 @@ export function CandidateDrawer({ meta, id, toast, onClose, onChanged, onMetaSta
               <StatusPill meta={meta} status={c.status} />
               {c.team_name && <span className="hr-pill gr">{c.team_name}</span>}
               {c.reserved_on && <span className="hr-pill wn">у резерві</span>}
+              {/* 👥 Команду обирають лише на переходах до тімліда — виправити помилку можна тут (#1950). */}
+              {edit && <button className="hr-btn xs" onClick={() => setTeamEdit(true)}>{c.team_id ? "Змінити команду" : "Вказати команду"}</button>}
             </div>
 
             <div className="hr-sect" style={{ padding: 0, border: 0 }}><h4>Контакти</h4></div>
@@ -433,6 +436,10 @@ export function CandidateDrawer({ meta, id, toast, onClose, onChanged, onMetaSta
             </div>
           </>
         )}
+        {teamEdit && c && (
+          <TeamDialog meta={meta} current={c.team_id} name={c.full_name} onClose={() => setTeamEdit(false)}
+            onSubmit={(teamId, comment) => run(() => setHiringTeam(id, teamId, comment), "Команду змінено").then(() => setTeamEdit(false))} />
+        )}
         {to && c && (
           <StatusDialog meta={meta} candidateId={id} from={c.status} to={to} teamId={c.team_id} email={c.email} toast={toast}
             onClose={() => setTo(null)} onDone={() => { setTo(null); load(); onChanged(); }} />
@@ -442,6 +449,42 @@ export function CandidateDrawer({ meta, id, toast, onClose, onChanged, onMetaSta
             onClose={() => setRefusing(false)} onDone={() => { setRefusing(false); load(); onChanged(); }}
             onReasonsChanged={() => onMetaStale?.()} />
         )}
+      </div>
+    </div>, document.body);
+}
+
+/** Діалог «Змінити команду»: команда й обовʼязковий коментар — обидва йдуть в історію кандидата. */
+function TeamDialog({ meta, current, name, onClose, onSubmit }: {
+  meta: HiringMeta; current: number | null; name: string; onClose: () => void; onSubmit: (teamId: number, comment: string) => Promise<void>;
+}) {
+  const [team, setTeam] = useState<string>("");
+  const [comment, setComment] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const submit = () => {
+    if (!team) { setErr("Оберіть команду"); return; }
+    if (!comment.trim()) { setErr("Введіть коментар"); return; }
+    setBusy(true); setErr(null);
+    void onSubmit(Number(team), comment.trim()).finally(() => setBusy(false));
+  };
+  return createPortal(
+    <div className="hr-modal-back" onClick={onClose}>
+      <div className="hr-modal" role="dialog" aria-label="Змінити команду" onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: "0 0 4px", fontSize: 16 }}>Змінити команду</h3>
+        <p className="hr-muted" style={{ margin: "0 0 12px" }}>{name}: тімлід нової команди бачитиме кандидата у себе. Робочу команду менеджера веде Kommo — тут вона не змінюється.</p>
+        <label style={{ display: "block", marginBottom: 10, fontSize: 12, color: "var(--text-muted)" }}>Нова команда
+          <select className="hr-inp" style={{ width: "100%", marginTop: 4 }} value={team} onChange={(e) => setTeam(e.target.value)}>
+            <option value="">— оберіть —</option>
+            {meta.teams.filter((t) => t.id !== current).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </label>
+        <textarea className="hr-inp" rows={3} style={{ width: "100%", boxSizing: "border-box" }} placeholder="Коментар (обовʼязково): чому змінюємо"
+          value={comment} onChange={(e) => setComment(e.target.value)} />
+        {err && <div style={{ color: "var(--danger)", fontSize: 12, marginTop: 6 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+          <button className="hr-btn" onClick={onClose}>Скасувати</button>
+          <button className="hr-btn p" disabled={busy} onClick={submit}>Змінити</button>
+        </div>
       </div>
     </div>, document.body);
 }

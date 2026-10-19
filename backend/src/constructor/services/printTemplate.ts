@@ -16,7 +16,7 @@ import { MAIN_BODY, MAIN_THIRD } from '../data/legalTexts.js';
 import { DOC_CSS } from '../data/docCss.js';
 import {
   DocumentState, EntityKey, Seg, Density, FOOT_TITLE, densSteps,
-  condRows, legalBlocks, preambleSegs, reqLines, docTitleParts, docDateStr, mainClauseText,
+  condRows, legalBlocks, preambleSegs, reqLines, docTitleParts, docDateStr, mainClauseText, annexHead,
 } from './docgen.js';
 import { isNr, NR_CSS, nrHead, nrPreamble, nrClauses, nrReq, nrSigners, nrAppRows, nrAppSign } from './nonresident.js';
 
@@ -46,10 +46,14 @@ export function printHTML(s: DocumentState, num: string, img: PrintImages = {}):
       <span class="dco">${esc(('docName' in e && e.docName) || e.name)} · ${s.ent === 'fop' ? 'ІПН' : 'ЄДРПОУ'} ${esc(e.edrpou)} · ${esc(e.vat)}</span>
       <span class="dnum">№ ${esc(num)}</span></div>`;
   if (isNr(s)) return h + nrHTML(s, img);
+  // заявка-додаток (5777): рядок «Додаток до Договору…» над заголовком, без преамбули й юртексту
+  if (s.doc === 'annex') h += `
+    <p style="text-align:right;font-size:9.5pt;color:#5a5f6b;margin:0 0 6pt">${esc(annexHead(s))}</p>`;
   h += `
     <h2>${title} № ${esc(num)}</h2><p class="sub">${sub}</p>
-    <div class="dl"><span>м. Київ</span><span>${esc(dateStr)}</span></div>
-    <p>${segsHTML(preambleSegs(s))}</p>`;
+    <div class="dl"><span>м. Київ</span><span>${esc(dateStr)}</span></div>` +
+    (s.doc === 'annex' ? '' : `
+    <p>${segsHTML(preambleSegs(s))}</p>`);
 
   if (mainMode) {
     // основний договір: розділ — h3.dsec; пункт — номер стовпчиком (p.dcl > b.dno, без пробілу)
@@ -60,9 +64,9 @@ export function printHTML(s: DocumentState, num: string, img: PrintImages = {}):
     });
   } else {
     if (legal) h += `<p>${esc(legal[0] as string)}</p>`;
-    h += `<h3>2. Основні умови перевезення:</h3><table>` +
+    h += `<h3>${legal ? '2. Основні умови перевезення:' : 'Умови перевезення:'}</h3><table>` +
       rows.map(([k, v]) => `<tr><td class="k">${esc(k)}</td><td class="v2">${v ? esc(v) : '—'}</td></tr>`).join('') + `</table>`;
-    legal!.slice(1).forEach(b => {
+    (legal ?? []).slice(1).forEach(b => {
       h += (typeof b === 'object') ? `<h3>${esc(b.h)}</h3>` : `<p>${esc(b)}</p>`;
     });
   }

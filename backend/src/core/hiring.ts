@@ -510,6 +510,32 @@ export async function addComment(db: Db, actorId: number | null, id: number, com
 }
 
 /**
+ * 👥 «ЗМІНИТИ КОМАНДУ» (19.10.2026, #1950; прохання Івана). Команду обирають лише на переходах у «співбесіда з
+ * тімлідом» / «кандидат + команда», а «↩ Повернути» відкочує на один крок — тож помилкову команду (Баланчук:
+ * «Самостійний» замість «Хомік Team Lead», якої тоді ще не було у списку) виправити було нічим, крім відмови й
+ * нового проходу. Тепер HR і керівництво міняють команду на будь-якому статусі, з коментарем в історії.
+ * Акаунт КАНДИДАТА переїжджає в ту саму команду (його тімлід бачить навчання); робочу команду менеджера веде
+ * Kommo, тож акаунт з іншою роллю не чіпаємо.
+ */
+export async function changeTeam(db: Db, actorId: number | null, id: number, p: { teamId: unknown; comment: unknown }, access: HiringAccess) {
+  if (access !== "edit") throw new HiringError(403, "Команду змінює HR або керівництво");
+  const text = str(p.comment);
+  if (!text) throw new HiringError(400, "Коментар обовʼязковий");
+  const teamId = Number(p.teamId);
+  if (!Number.isInteger(teamId) || teamId <= 0) throw new HiringError(400, "Оберіть команду");
+  const team = (await db.query<{ name: string }>(`SELECT name FROM teams WHERE id = $1`, [teamId])).rows[0];
+  if (!team) throw new HiringError(400, "Такої команди немає");
+  const c = (await db.query<{ team_id: number | null; team_name: string | null; user_id: number | null }>(
+    `SELECT c.team_id, t.name AS team_name, c.user_id FROM hiring_candidates c LEFT JOIN teams t ON t.id = c.team_id WHERE c.id = $1 FOR UPDATE OF c`, [id])).rows[0];
+  if (!c) throw new HiringError(404, "Кандидата не знайдено");
+  if (c.team_id === teamId) throw new HiringError(400, `Кандидат уже в команді «${team.name}»`);
+  await db.query(`UPDATE hiring_candidates SET team_id = $1, updated_at = now() WHERE id = $2`, [teamId, id]);
+  if (c.user_id)
+    await db.query(`UPDATE users SET team_id = $1 WHERE id = $2 AND COALESCE(role_override, role) = 'candidate'`, [teamId, c.user_id]);
+  await logEvent(db, { candidateId: id, kind: "edit", comment: `команда: «${c.team_name ?? "—"}» → «${team.name}» · ${text}`, actorId });
+}
+
+/**
  * Щоденний звіт за період — рядок на КОЖЕН день, включно з порожніми.
  * • planned  — співбесіди, заплановані НА цей день (дата співбесіди);
  * • booked   — рядки графіка з датою призначення цього дня;

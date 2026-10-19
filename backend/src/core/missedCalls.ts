@@ -11,15 +11,18 @@ import { noCallbackSql, openTaskForPhoneSql, NO_CALLBACK_LIMIT, weekRange, weekR
 
 export interface MissedAutomation {
   days: number; skippedCarrier: number; closedCallback: number; closedCarrier: number; openNow: number;
+  /** 5824: закрито, бо клієнт сам передзвонив і поговорив від 10 с / угода номера ввійшла в «Успіх» після пропущеного. */
+  closedClientSelf: number; closedSuccess: number;
   /** Угоди етапу фільтра з вердиктом «історія CRM» у журналі закриттів; `null` — у скоупі команди/менеджера не показуємо. */
   dealsHistory: number | null;
 }
 /** Ефект автозакриття за 7 днів (контроль ТЗ 4373). */
 export async function missedAutomation(today: string, s: MissedScope = {}): Promise<MissedAutomation> {
   const q = missedAutomationSql(today, s);
-  const x = (await pool.query<{ skipped_carrier: number; closed_callback: number; closed_carrier: number; open_now: number; deals_history: number | null }>(q.sql, q.params)).rows[0];
+  const x = (await pool.query<{ skipped_carrier: number; closed_callback: number; closed_carrier: number; closed_client_self: number; closed_success: number;
+    open_now: number; deals_history: number | null }>(q.sql, q.params)).rows[0];
   return { days: 7, skippedCarrier: x.skipped_carrier, closedCallback: x.closed_callback, closedCarrier: x.closed_carrier,
-    openNow: x.open_now, dealsHistory: x.deals_history };
+    closedClientSelf: x.closed_client_self, closedSuccess: x.closed_success, openNow: x.open_now, dealsHistory: x.deals_history };
 }
 
 /**

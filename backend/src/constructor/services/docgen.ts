@@ -17,8 +17,10 @@ import { isNr, nrContractNo, nrBlocker, nrHead, nrPreamble, nrClauses, nrReq, nr
 /* ─────────────────────────── Типи ─────────────────────────── */
 
 export type EntityKey = 'uts' | 'avm' | 'fop';
-/** `nrmain`/`nrapp` — договір і заявка для нерезидента (UA | EN, лише АвтоМув; services/nonresident.ts, 14.10.2026). */
-export type DocKind = 'once' | 'main' | 'carr' | 'nrmain' | 'nrapp';
+/** `nrmain`/`nrapp` — договір і заявка для нерезидента (UA | EN, лише АвтоМув; services/nonresident.ts, 14.10.2026).
+ *  `annex` — заявка-додаток до річного договору з клієнтом: шапка «Додаток до Договору № … від …», таблиця рейсу,
+ *  реквізити й підписи, БЕЗ юртексту (задача 5777, прохання Шаврової Лілії 14.10.2026). № і дата — у `mainNo`/`mainDate`. */
+export type DocKind = 'once' | 'main' | 'carr' | 'nrmain' | 'nrapp' | 'annex';
 export type Party = 'client' | 'carrier';
 
 /* Щільність документа (рішення 14–15.10). Заявка має бути рівно на 3 сторінках:
@@ -26,11 +28,11 @@ export type Party = 'client' | 'carrier';
    4-та сторінка — крок щільніше, до d95 (9,5 пт) — це «автопідгонка» (pdfRenderer.renderDocumentPdf).
    Основний договір — dm (9,5 пт, 8 сторінок), без підгонки. Ті самі значення — у CSS (.dens-*) і в Word (W_DENS). */
 export type Density = 'd1' | 'dc' | 'd95' | 'dm';
-export const DENS_STEPS: Record<DocKind, Density[]> = { once: ['d1', 'dc', 'd95'], carr: ['dc', 'd95'], main: ['dm'], nrmain: ['dm'], nrapp: ['dc', 'd95'] };
+export const DENS_STEPS: Record<DocKind, Density[]> = { once: ['d1', 'dc', 'd95'], carr: ['dc', 'd95'], main: ['dm'], nrmain: ['dm'], nrapp: ['dc', 'd95'], annex: ['d1', 'dc', 'd95'] };
 export const MAX_PAGES = 3;
 /** Заголовок колонтитула «… № N · сторінка X з Y». */
 export const FOOT_TITLE: Record<DocKind, string> = { once: 'Разовий договір', carr: 'Заявка-договір', main: 'Договір',
-  nrmain: 'Договір / Agreement', nrapp: 'Заявка / Application' };
+  nrmain: 'Договір / Agreement', nrapp: 'Заявка / Application', annex: 'Заявка до договору' };
 /** Договір (не заявка): без автопідгонки під 3 сторінки, номер — № договору, а не ID угоди. */
 export const isContract = (s: { doc: DocKind }) => s.doc === 'main' || s.doc === 'nrmain';
 export const densSteps = (s: { doc: DocKind }): Density[] => DENS_STEPS[s.doc] || ['d1'];
@@ -96,10 +98,16 @@ const ent = (s: DocumentState) => ENTITIES[s.ent];
 const partyLabel = (s: DocumentState) => (s.doc === 'carr' ? 'перевізник' : 'клієнт');
 
 export function docTitleParts(s: DocumentState): { title: string; sub: string } {
+  if (s.doc === 'annex') return { title: 'ЗАЯВКА', sub: 'на організацію перевезення вантажу' };
   const title = s.doc === 'main' ? 'ДОГОВІР' : (s.doc === 'carr' ? 'ЗАЯВКА-ДОГОВІР' : 'РАЗОВИЙ ДОГОВІР');
   const sub = s.doc === 'main' ? 'про надання транспортно-експедиторських послуг'
             : (s.doc === 'carr' ? 'перевезення вантажу автомобільним транспортом' : 'на організацію перевезення вантажу');
   return { title, sub };
+}
+
+/** Рядок над заголовком заявки-додатка (задача 5777): «Додаток до Договору № … від …» — як у зразку Лілії. */
+export function annexHead(s: DocumentState): string {
+  return `Додаток до Договору № ${s.mainNo || '______'} від ${s.mainDate || '«___» ____________ 20__ р.'}`;
 }
 
 export function docDateStr(s: DocumentState, now = new Date()): string {
@@ -166,7 +174,8 @@ export const OPTIONAL_COND_ROWS: ReadonlySet<string> = new Set([
 
 /** Рядки таблиці «Основні умови перевезення» — різні для клієнта й перевізника (рішення 30.09); порожні необовʼязкові — без них. */
 export function condRows(s: DocumentState): Array<[string, string]> {
-  return allCondRows(s).filter(([k, v]) => v.trim() !== '' || !OPTIONAL_COND_ROWS.has(k));
+  // заявка-додаток: порядок оплати вже є в річному договорі — порожній не друкуємо (5777)
+  return allCondRows(s).filter(([k, v]) => v.trim() !== '' || !(OPTIONAL_COND_ROWS.has(k) || (s.doc === 'annex' && k === 'Порядок і строки оплати')));
 }
 
 function allCondRows(s: DocumentState): Array<[string, string]> {
@@ -322,6 +331,8 @@ export function blockers(s: DocumentState): string | null {
   if (s.doc === 'main' && !s.mainDate) return 'Вкажіть дату, з якої діє основний договір.';
   if (s.doc === 'main' && (s.mainUntil ?? '').trim() && !mainUntilText(s)) return '«Діє до» — дата у форматі ДД.ММ.РРРР, напр. 31.12.2026.';
   if (s.doc === 'main' && !mainUntilText(s)) return 'Вкажіть «Діє до» або дату договору з роком — інакше строк дії договору (п. 8.1) не визначити.';
+  if (s.doc === 'annex' && !s.mainNo) return 'Вкажіть № річного договору — він підставляється з картки клієнта; для старого договору впишіть один раз вручну.';
+  if (s.doc === 'annex' && !s.mainDate) return 'Вкажіть дату річного договору (ДД.ММ.РРРР).';
   if (s.doc !== 'main' && !s.dealNo) return 'Вкажіть № заявки — це ID угоди в СРМ, поле обов\'язкове.';
   return null;
 }
@@ -548,12 +559,12 @@ export function buildDocx(s: DocumentState, num: string, img: DocImages = {}, de
         wPa(wR(` № ${num} `, { b: 1, color: acc, sz: 17, bdr: acc }), { jc: 'right', indR: 40 }) + `</w:tc>` +
       `</w:tr></w:tbl>` + wGap(dn.bandA);
   if (isNr(s)) body += nrDocxBody(s, { dn, acc, hasSig, hasStamp, imgRun, sigDim: img.sigDim, stampDim: img.stampDim });
-  else body +=
+  else body += (s.doc === 'annex' ? wPa(wR(annexHead(s), { color: WC.grey, sz: dn.tk }), { jc: 'right', after: 80 }) : '') +
     wPa(wR(`${title} № ${num}`, { b: 1, color: WC.ink, sz: dn.h2 }), { jc: 'center', after: 40 }) +
     wPa(wR(sub, { color: WC.grey, sz: dn.sub }), { jc: 'center', after: dn.subA }) +
     wPa(wR('м. Київ', { sz: dn.dl }) + wTab(dn.dl) + wR(dateStr, { sz: dn.dl }),
       { jc: 'left', after: dn.dlA, tabs: `<w:tabs><w:tab w:val="right" w:pos="${W_TXT}"/></w:tabs>` }) +
-    wPa(preambleSegs(s).map(x => wR(x.t, { b: x.b, sz: dn.sz })).join(''), { line: dn.line, after: dn.after, ind: dn.ind });
+    (s.doc === 'annex' ? '' : wPa(preambleSegs(s).map(x => wR(x.t, { b: x.b, sz: dn.sz })).join(''), { line: dn.line, after: dn.after, ind: dn.ind }));
   const pTxt = (t: string) => wPa(wR(t, { sz: dn.sz }), { line: dn.line, after: dn.after, ind: dn.ind });
   const h3 = (t: string, c?: 1) => wPa(wR(t, { b: 1, color: acc, sz: dn.h3 }), { jc: c ? 'center' : 'left', before: dn.h3B, after: dn.h3A, keep: 1 });
 
@@ -570,7 +581,7 @@ export function buildDocx(s: DocumentState, num: string, img: DocImages = {}, de
     if (legal) body += pTxt(legal[0] as string);
     const vW = W_TXT - dn.kW;
     const tb = (side: string) => `<w:${side} w:val="single" w:sz="${side === 'left' ? 20 : 4}" w:space="0" w:color="${side === 'left' ? acc : WC.line}"/>`;
-    body += h3('2. Основні умови перевезення:') + wGap(dn.tB, 1) +
+    body += h3(legal ? '2. Основні умови перевезення:' : 'Умови перевезення:') + wGap(dn.tB, 1) +
       `<w:tbl><w:tblPr><w:tblW w:w="${W_TXT}" w:type="dxa"/><w:tblInd w:w="0" w:type="dxa"/>` +
       `<w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(tb).join('')}</w:tblBorders>` +
       `<w:tblLayout w:type="fixed"/>${wMar('tblCellMar', dn.cV, dn.cH)}</w:tblPr>` +
@@ -581,7 +592,7 @@ export function buildDocx(s: DocumentState, num: string, img: DocImages = {}, de
         `<w:tc><w:tcPr><w:tcW w:w="${vW}" w:type="dxa"/></w:tcPr>` +
           wPa(wR(v || '—', { b: 1, color: WC.ink, sz: dn.tv }), { jc: 'left', line: dn.tvL }) + `</w:tc></w:tr>`).join('') +
       `</w:tbl>` + wGap(dn.tA);
-    legal!.slice(1).forEach(b => { body += (typeof b === 'object') ? h3(b.h) : pTxt(b); });
+    (legal ?? []).slice(1).forEach(b => { body += (typeof b === 'object') ? h3(b.h) : pTxt(b); });
   }
 
   /* реквізити — у світлих картках, під ними підписи; рядки не розриваються між сторінками */
