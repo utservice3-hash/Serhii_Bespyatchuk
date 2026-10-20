@@ -98,6 +98,8 @@ const PAY_ORDERS = [
 ];
 const PAY_ORDER_FOP = "оплата за реквізитами, наданими Експедитором";
 const PAY_FORMS = ["б/г з ПДВ", "б/г без ПДВ", "готівка"];
+/** Від ТОВ ЮТС готівкою не можна (задача 5887) — сервер блокує формування, форма не пропонує. */
+const CASH = "готівка";
 /** Значення пункту «Інше…» у списку порядку оплати (сам текст менеджера лежить у `pay.order`). */
 const OTHER = "__other__";
 
@@ -801,7 +803,10 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                   <div className="fld"><label htmlFor="paycur">Валюта</label><select id="paycur" value={form.pay.cur} onChange={(e) => setPay("cur", e.target.value)}>
                     {isNrApp ? <option>EUR</option> : <><option>грн</option><option>€ по курсу НБУ на день завантаження</option><option>€ по курсу НБУ на день розвантаження</option></>}</select></div>
                   {!isNrApp && <><div className="fld"><label htmlFor="payform">Форма</label><select id="payform" value={form.pay.form} disabled={fop} onChange={(e) => setPay("form", e.target.value)}>
-                    {(fop ? ["СОФТ платіж"] : PAY_FORMS).map((o) => <option key={o}>{o}</option>)}</select></div>
+                    {(fop ? ["СОФТ платіж"] : form.ent === "uts" ? PAY_FORMS.filter((o) => o !== CASH) : PAY_FORMS).map((o) => <option key={o}>{o}</option>)}
+                    {/* 5887: від ЮТС готівки в списку немає; прийшла зі старої заявки — видно, і «Сформувати» заблоковано */}
+                    {form.ent === "uts" && form.pay.form === CASH && <option value={CASH} disabled>готівка — заборонено для ЮТС</option>}</select>
+                    <FieldMsg is={iss("pay.form")} /></div>
                   <div className="fld"><label htmlFor="payorder">Порядок і строки оплати</label><select id="payorder" value={orderOther ? OTHER : form.pay.order} onChange={(e) => setPay("order", e.target.value === OTHER ? "" : e.target.value)}>
                     {orderPresets.map((o) => <option key={o}>{o}</option>)}<option value={OTHER}>Інше…</option></select>
                     {orderOther && <input type="text" value={form.pay.order} onChange={(e) => setPay("order", e.target.value)} placeholder="напр. 50% передоплата, 50% після розвантаження" style={{ marginTop: 6 }} />}
