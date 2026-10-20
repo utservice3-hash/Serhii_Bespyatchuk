@@ -198,7 +198,8 @@ test("#1841b РЕЄСТР МІНУСОВИХ: адаптер на нашому �
   // стеля очікування для дій людини: Kommo мовчить → 504 «не відповідає» за стелю, а не за хвилини повторів
   const hang = kommoDealSource((() => new Promise(() => undefined)) as never, { deadlineMs: 50 });
   const t0 = Date.now();
-  const eh = await hang.fetchDeal("62000001").catch((x: unknown) => x);
+  // власний запобіжник гейта: без стелі «зависла Kommo» не відповідає НІКОЛИ — тест мусить почервоніти, а не висіти
+  const eh = await Promise.race([hang.fetchDeal("62000001").catch((x: unknown) => x), new Promise((r) => setTimeout(() => r("висить без стелі"), 1000))]);
   assert.ok(eh instanceof KommoError && eh.status === 504, "зависла Kommo не дала 504");
   assert.ok(Date.now() - t0 < 1000, `стеля не спрацювала: ${String(Date.now() - t0)} мс`);
   const e401 = await thrower("Kommo API error 401: Bearer секрет-для-тесту").fetchDeal("7").catch((x: unknown) => x) as KommoError;
