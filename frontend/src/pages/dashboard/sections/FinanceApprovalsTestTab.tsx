@@ -1,150 +1,242 @@
-import { Fragment, useCallback, useEffect, useState } from "react";
-import { fetchFinApprovalsTest, type FinApprCompare, type FinApprLine, type FinApprPot, type FinApprSection } from "../../../api";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { fetchFinApprovalsTest, type FinApprCompare, type FinApprItem, type FinApprLine, type FinApprPot, type FinApprSection } from "../../../api";
 import { getAuthPayload } from "../../../auth";
 
 /**
- * 🧪 «План/факт · авто (тест)» (Роман 20.10.2026: «паралельна таблиця план-факту, щоб розуміти різницю і що
- * виправляти»). Факт кожної статті з таблиці «UTS Утверждение оплат» (за датою оплати) поруч із тим, що внесено руками,
- * і різниця = таблиця − вручну. Нічого не змінює ні в «План/факт», ні в «Тиждень і місяць». Усе, що правило не змогло
- * віднести до статті, — окремими блоками з сумою, щоб гроші не зникали мовчки. Лише `view_private_finance`: у ЗП прізвища.
+ * 🧪 «План/факт · авто (тест)» (Роман 20.10.2026: «паралельна таблиця план-факту… має бути повністю готовий до
+ * приймання екран, щоб коли треба — швидко замінили»). Вигляд — той самий, що «План/факт витрат» (картка, плитки,
+ * відповідальний → група → стаття, `fin-table`), але ФАКТ — із таблиці «UTS Утверждение оплат» (за датою оплати), а
+ * ручний факт стоїть поруч колонкою «Вручну» з різницею: таблиця − вручну. Нічого не змінює ні в «План/факт», ні в
+ * «Тиждень і місяць». Усе, що правило не віднесло до статті, — окремими блоками з сумою, щоб гроші не зникали мовчки.
+ * Лише `view_private_finance`: у рядках ЗП — прізвища.
  */
-const MUTED = "var(--text-muted)";
 const MONTHS = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
 const monthLabel = (m: string) => `${MONTHS[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`;
+const monthShort = (m: string) => `${MONTHS[Number(m.slice(5, 7)) - 1].slice(0, 3).toLowerCase()}.`;
 const shift = (m: string, d: number) => { const x = new Date(`${m}-15T12:00:00Z`); x.setUTCMonth(x.getUTCMonth() + d); return x.toISOString().slice(0, 7); };
+const kyivMonth = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" }).slice(0, 7);
 const money = (v: number | null | undefined) => (v == null ? "—" : v.toLocaleString("uk-UA", { maximumFractionDigits: 2 }));
 const signed = (v: number) => (v > 0 ? "+" : v < 0 ? "−" : "") + money(Math.abs(v));
+const r2 = (n: number) => Math.round(n * 100) / 100;
+const same = (v: number) => Math.abs(v) < 0.005;
 const SEC: Record<FinApprSection, string> = { commercial: "Комерційні", admin: "Адміністративні", general: "Загальні" };
-const secName = (s: string | null) => (s && s in SEC ? SEC[s as FinApprSection] : s === "payroll" ? "ЗП" : "без розділу");
 const dm = (d: string | null) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}` : "—");
 const hhmm = (iso: string) => new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-const diffStyle = (v: number) => (Math.abs(v) < 0.005 ? { color: MUTED } : { color: "#b45309", fontWeight: 700 });
 
+/** Виконання плану — як у «План/факт витрат»: смуга й відсоток, понад план — червоним. */
+function Execution({ plan, fact }: { plan: number | null; fact: number }) {
+  if (plan == null || plan === 0) return fact ? <span className="hr-pill wn">без плану</span> : <span className="hr-muted">—</span>;
+  if (!fact) return <span className="hr-muted">факту ще немає</span>;
+  const pct = Math.round((fact / plan) * 100);
+  return pct > 100
+    ? <><span className="fin-bar x"><i style={{ width: "100%" }} /></span><span className="fin-bad">{pct}%</span></>
+    : <><span className="fin-bar"><i style={{ width: `${pct}%` }} /></span>{pct}%</>;
+}
+
+/** Рядки таблиці оплат під статтею чи кошиком — без реквізитів і отримувача. */
 function Lines({ lines }: { lines: FinApprLine[] }) {
   return (
-    <table className="hr-tw" style={{ fontSize: 12.5, margin: "4px 0 8px" }}>
+    <table className="hr-table" style={{ fontSize: 12.5, margin: "2px 0 6px" }}>
       <thead><tr><th>Дата оплати</th><th>Що купили</th><th className="num">Сума</th><th>Напрямок</th><th>Оплачено</th></tr></thead>
       <tbody>{lines.map((l, i) => (
-        <tr key={i}><td>{dm(l.payDate)}</td><td>{l.what || "—"}</td><td className="num">{money(l.amount)}</td><td>{l.direction || "—"}</td>
-          <td style={l.paid ? undefined : { color: "#b45309" }}>{l.paid ? "так" : "ні"}</td></tr>
+        <tr key={i}><td style={{ whiteSpace: "nowrap" }}>{dm(l.payDate)}</td><td>{l.what || <span className="hr-muted">—</span>}</td><td className="num">{money(l.amount)}</td>
+          <td>{l.direction || <span className="hr-muted">не вказано</span>}</td><td>{l.paid ? "так" : <span className="hr-pill wn">ні</span>}</td></tr>
       ))}</tbody>
     </table>
   );
 }
 
+/** Кошик «не потрапило у статті»: назва, сума, кількість рядків; клік — рядки таблиці. */
 function Pots({ title, hint, pots }: { title: string; hint: string; pots: FinApprPot[] }) {
   const [open, setOpen] = useState<string | null>(null);
   if (!pots.length) return null;
-  const sum = pots.reduce((s, p) => s + p.sum, 0), rows = pots.reduce((s, p) => s + p.rows, 0);
+  const sum = r2(pots.reduce((s, p) => s + p.sum, 0)), rows = pots.reduce((s, p) => s + p.rows, 0);
   return (
-    <div className="chart-card" style={{ marginBottom: 12 }}>
-      <b>{title}</b> <span style={{ color: MUTED }}>· {rows} рядк. · {money(Math.round(sum * 100) / 100)} ₴</span>
-      <div style={{ fontSize: 12.5, color: MUTED, margin: "2px 0 6px" }}>{hint}</div>
-      <table className="hr-tw"><tbody>{pots.map((p) => (
-        <Fragment key={p.key}>
-          <tr style={{ cursor: "pointer" }} onClick={() => setOpen(open === p.key ? null : p.key)}>
-            <td>{open === p.key ? "▾" : "▸"} {p.label}</td><td className="num">{p.rows} рядк.</td><td className="num">{money(p.sum)}</td>
-            <td style={{ color: "#b45309" }}>{p.unpaid ? `не оплачено: ${p.unpaid}` : ""}</td>
-          </tr>
-          {open === p.key && <tr><td colSpan={4}><Lines lines={p.lines} /></td></tr>}
-        </Fragment>
-      ))}</tbody></table>
+    <div className="hr-sect">
+      <h4 style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>{title} <span className="hr-muted" style={{ fontWeight: 400 }}>· {money(sum)} ₴ · рядків {rows}</span></h4>
+      <p className="hr-muted" style={{ margin: "0 0 6px", fontSize: 12.5 }}>{hint}</p>
+      <div className="hr-tw">
+        <table className="hr-table fin-table"><tbody>{pots.map((p) => (
+          <Fragment key={p.key}>
+            <tr className="it" onClick={() => setOpen(open === p.key ? null : p.key)}>
+              <td className="ind1"><span style={{ display: "inline-block", width: 16 }}>{open === p.key ? "▾" : "▸"}</span>{p.label}</td>
+              <td className="num">{money(p.sum)}</td><td className="num hr-muted">рядків {p.rows}</td>
+              <td>{p.unpaid ? <span className="hr-pill wn">не оплачено: {p.unpaid}</span> : null}</td>
+            </tr>
+            {open === p.key && <tr><td colSpan={4} className="ind2"><Lines lines={p.lines} /></td></tr>}
+          </Fragment>
+        ))}</tbody></table>
+      </div>
     </div>
   );
 }
 
+type Resp = { id: number; name: string; groups: { id: number; name: string; items: FinApprItem[] }[] };
+const treeOf = (items: FinApprItem[]): Resp[] => {
+  const out: Resp[] = [];
+  for (const it of items) {
+    let r = out.find((x) => x.id === it.respId);
+    if (!r) out.push(r = { id: it.respId, name: it.resp, groups: [] });
+    let g = r.groups.find((x) => x.id === it.groupId);
+    if (!g) r.groups.push(g = { id: it.groupId, name: it.group, items: [] });
+    g.items.push(it);
+  }
+  return out;
+};
+
 export function FinanceApprovalsTestTab() {
   const canView = (getAuthPayload()?.perms ?? []).includes("view_private_finance");
-  const [month, setMonth] = useState(() => new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" }).slice(0, 7));
+  const [month, setMonth] = useState(kyivMonth);
   const [data, setData] = useState<FinApprCompare | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [onlyDiff, setOnlyDiff] = useState(true);
+  const [resp, setResp] = useState<number | "all">("all");
+  const [onlyDiff, setOnlyDiff] = useState(false);
+  const [showEmpty, setShowEmpty] = useState(false);
+  const [closed, setClosed] = useState<Record<number, boolean>>({});
   const [open, setOpen] = useState<number | null>(null);
   const load = useCallback((refresh = false) => {
     if (!canView) return;
     setBusy(true);
     fetchFinApprovalsTest(month, refresh).then((d) => { setData(d); setErr(null); })
-      .catch((e) => setErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Не вдалося прочитати таблицю"))
+      .catch((e) => setErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Не вдалося прочитати таблицю «Утверждение оплат»"))
       .finally(() => setBusy(false));
   }, [canView, month]);
   useEffect(() => { load(); }, [load]);
+  const tree = useMemo(() => treeOf(data?.month.slice(0, 7) === month ? data.items : []), [data, month]);
 
   if (!canView) return <div className="chart-card"><b>План/факт · авто (тест)</b> <span className="hr-muted">Бачать лише Адмін і фінансист: у рядках ЗП — прізвища.</span></div>;
 
-  const items = (data?.items ?? []).filter((x) => !onlyDiff || Math.abs(x.diff) >= 0.005);
+  const current = month === kyivMonth(), future = month > kyivMonth();
+  const shown = data?.month.slice(0, 7) === month ? data : null;
+  const visible = (x: FinApprItem) => (!onlyDiff || !same(x.diff)) && (showEmpty || onlyDiff || x.plan != null || x.manual != null || x.rows > 0);
+  const t = shown?.totals;
+  const left = t ? r2(t.plan - t.autoArticles) : 0;
+  let rowsShown = 0;
   return (
-    <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-        <button className="hr-btn" onClick={() => setMonth(shift(month, -1))}>‹</button>
-        <b style={{ minWidth: 130, textAlign: "center" }}>{monthLabel(month)}</b>
-        <button className="hr-btn" onClick={() => setMonth(shift(month, 1))}>›</button>
-        <span style={{ fontSize: 13, color: MUTED }}>{data ? `таблицю прочитано ${hhmm(data.fetchedAt)} · ${data.sheetLines} рядків` : ""}</span>
-        <button className="hr-btn" style={{ marginLeft: "auto" }} disabled={busy} onClick={() => load(true)}>{busy ? "Читаю…" : "↻ Оновити з таблиці"}</button>
+    <div className="hr-card">
+      <div className="hd">
+        <div className="hr-daynav" style={{ marginBottom: 0 }}>
+          <button className="hr-btn xs" onClick={() => setMonth(shift(month, -1))} aria-label="Попередній місяць">‹</button>
+          <b style={{ minWidth: 130, textAlign: "center" }}>{monthLabel(month)}</b>
+          <button className="hr-btn xs" onClick={() => setMonth(shift(month, 1))} aria-label="Наступний місяць">›</button>
+          {!current && <button className="hr-btn xs" onClick={() => setMonth(kyivMonth())}>поточний</button>}
+          <select className="hr-inp" value={String(resp)} onChange={(e) => setResp(e.target.value === "all" ? "all" : Number(e.target.value))} aria-label="Відповідальний">
+            <option value="all">Усі відповідальні</option>
+            {tree.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+          <label className="hr-muted" style={{ fontSize: 13 }}><input type="checkbox" checked={onlyDiff} onChange={(e) => setOnlyDiff(e.target.checked)} /> лише розбіжності з ручним</label>
+          <label className="hr-muted" style={{ fontSize: 13 }}><input type="checkbox" checked={showEmpty} onChange={(e) => setShowEmpty(e.target.checked)} /> показати порожні</label>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span className="hr-pill pl" title="Нічого не змінює ні в «План/факт», ні в «Тиждень і місяць»">🧪 тест · лише читання</span>
+          {shown && <span className="hr-muted" style={{ fontSize: 12.5 }}>таблицю прочитано {hhmm(shown.fetchedAt)}</span>}
+          <button className="hr-btn xs" disabled={busy} onClick={() => load(true)}>{busy ? "Читаю…" : "↻ Оновити з таблиці"}</button>
+        </div>
       </div>
-      <div className="chart-card" style={{ marginBottom: 12, fontSize: 13, color: MUTED }}>
-        🧪 <b style={{ color: "var(--text)" }}>Тест — нічого не змінює.</b> Факт із таблиці «UTS Утверждение оплат» (вкладка «На оплату»):
-        категорія = назва статті, місяць — за <b>датою оплати</b>, лише напрямок UA («Украина» до жовтня — теж UA).
-        «ЗП - Комерційні / Адміністративні / Загальні» статей не мають — йдуть у розділ за назвою.
-        Різниця = таблиця − вручну.
-      </div>
-      {err && <div className="chart-card" style={{ marginBottom: 12, color: "#b91c1c" }}>{err}</div>}
-      {!data ? (!err && <p className="loading-text">Читаю таблицю…</p>) : (
-        <>
-          <div className="chart-card" style={{ marginBottom: 12 }}>
-            <h3 className="chart-title" style={{ margin: "0 0 6px" }}>Операційні за розділами</h3>
-            <table className="hr-tw">
+
+      {err && <div className="hr-sect"><div className="hr-note" style={{ marginTop: 0, background: "var(--danger-bg)", color: "var(--danger)" }}>{err}</div></div>}
+      {!shown ? (!err && <p className="loading-text" style={{ padding: 16 }}>Читаю таблицю «Утверждение оплат»…</p>) : (<>
+        <div className="hr-tiles">
+          <div className="hr-tile"><div className="lb">План · {monthShort(month)}</div><div className="vl">{money(t!.plan)} ₴</div><div className="sb">статей: {shown.items.filter((x) => x.plan != null).length}</div></div>
+          <div className="hr-tile"><div className="lb">Факт з таблиці</div><div className="vl">{future ? "—" : `${money(t!.autoArticles)} ₴`}</div>
+            <div className="sb">{future ? "місяць не почався" : current ? "місяць триває" : "місяць закрито"}{t!.plan && !future ? ` · ${Math.round((t!.autoArticles / t!.plan) * 100)}% плану` : ""}</div></div>
+          <div className="hr-tile"><div className="lb">{left >= 0 ? "Лишилось" : "Понад план"}</div>
+            <div className="vl" style={{ color: left < 0 ? "var(--danger)" : undefined }}>{future ? "—" : `${money(Math.abs(left))} ₴`}</div><div className="sb">план − факт з таблиці</div></div>
+          <div className="hr-tile"><div className="lb">Розбіжність з ручним</div>
+            <div className="vl" style={{ color: same(t!.autoArticles - t!.manual) ? "var(--ok)" : "var(--warn)" }}>{signed(r2(t!.autoArticles - t!.manual))} ₴</div>
+            <div className="sb">вручну {money(t!.manual)} ₴ · статей з різницею: {t!.diffItems}</div></div>
+        </div>
+
+        <div className="hr-sect hr-muted" style={{ fontSize: 12.5, paddingTop: 10, paddingBottom: 10 }}>
+          Факт — з таблиці «UTS Утверждение оплат» (вкладка «На оплату»): категорія = назва статті, місяць — за <b>датою оплати</b>, лише напрямок UA
+          («Украина» до жовтня — теж UA). Колонка «Вручну» — те, що внесено у «План/факт витрат»; різниця = таблиця − вручну.
+        </div>
+
+        <div className="hr-tw">
+          <table className="hr-table fin-table">
+            <thead><tr><th>Стаття</th><th className="num">План</th><th className="num">Факт з таблиці</th><th className="num">Різниця</th><th>Виконання</th>
+              <th className="num">Вручну</th><th className="num">Таблиця − вручну</th></tr></thead>
+            <tbody>
+              {tree.filter((r) => resp === "all" || r.id === resp).map((r) => {
+                const groups = r.groups.map((g) => ({ g, items: g.items.filter(visible) })).filter((x) => x.items.length);
+                if (!groups.length) return null;
+                return (
+                  <Fragment key={r.id}>
+                    <tr className="resp" onClick={() => setClosed((c) => ({ ...c, [r.id]: !c[r.id] }))}>
+                      <td colSpan={7}><span style={{ display: "inline-block", width: 16 }}>{closed[r.id] ? "▸" : "▾"}</span>{r.name}</td>
+                    </tr>
+                    {!closed[r.id] && groups.map(({ g, items }) => (
+                      <Fragment key={g.id}>
+                        <tr className="grp"><td colSpan={7} className="ind1">{g.name}</td></tr>
+                        {items.map((x) => {
+                          rowsShown++;
+                          const d = x.plan == null ? null : r2(x.plan - x.auto);
+                          const over = x.plan != null ? x.auto > x.plan : x.auto > 0;
+                          return (
+                            <Fragment key={x.id}>
+                              <tr className={`it ${over ? "over" : ""} ${open === x.id ? "sel" : ""} ${x.off ? "off" : ""}`} tabIndex={0}
+                                onClick={() => setOpen(open === x.id ? null : x.id)} onKeyDown={(e) => { if (e.key === "Enter") setOpen(open === x.id ? null : x.id); }}>
+                                <td className="ind2">{x.name}{x.off && <span className="hr-muted"> · вимкнена</span>}{!x.section && <span className="hr-pill wn" style={{ marginLeft: 6 }}>без розділу</span>}</td>
+                                <td className="num">{x.plan == null ? <span className="hr-muted">не задано</span> : money(x.plan)}</td>
+                                <td className="num">{x.rows ? money(x.auto) : <span className="hr-muted">—</span>}</td>
+                                <td className="num">{d == null || !x.rows ? "—" : <span className={d < 0 ? "fin-bad" : "fin-good"}>{signed(d)}</span>}</td>
+                                <td style={{ whiteSpace: "nowrap" }}>{future ? <span className="hr-muted">—</span> : <Execution plan={x.plan} fact={x.auto} />}</td>
+                                <td className="num">{x.manual == null ? <span className="hr-muted">не внесено</span> : money(x.manual)}</td>
+                                <td className="num">{same(x.diff) ? <span className="fin-good">✓ збігається</span> : <span className="fin-bad">{signed(x.diff)}</span>}</td>
+                              </tr>
+                              {open === x.id && (
+                                <tr><td colSpan={7} className="ind2">
+                                  {x.rows ? <Lines lines={x.lines} /> : <span className="hr-muted">У таблиці оплат за {monthLabel(month).toLowerCase()} рядків із категорією «{x.name}» немає.</span>}
+                                </td></tr>
+                              )}
+                            </Fragment>
+                          );
+                        })}
+                      </Fragment>
+                    ))}
+                  </Fragment>
+                );
+              })}
+              {!rowsShown && <tr><td colSpan={7} className="hr-muted" style={{ padding: 16 }}>{onlyDiff ? "Розбіжностей немає — кожна стаття збігається з таблицею." : "Статей із планом чи фактом за цей місяць немає."}</td></tr>}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="hr-sect">
+          <h4>Операційні витрати за розділами</h4>
+          <p className="hr-muted" style={{ margin: "0 0 6px", fontSize: 12.5 }}>
+            Що дало б правило для «Тиждень і місяць»: статті розділу + ЗП за назвою, поруч — число, внесене руками.
+            {(shown.withoutSection.manual || shown.withoutSection.auto) ? ` Без розділу (${shown.withoutSection.names.join(", ") || "—"}: з таблиці ${money(shown.withoutSection.auto)} ₴) — в операційні не йде.` : ""}
+          </p>
+          <div className="hr-tw">
+            <table className="hr-table">
               <thead><tr><th>Розділ</th><th className="num">Статті вручну</th><th className="num">Статті з таблиці</th><th className="num">Різниця</th>
-                <th className="num">+ ЗП з таблиці</th><th className="num">Разом з таблиці</th><th className="num">Операційні вручну («Тиждень і місяць»)</th><th className="num">Різниця</th></tr></thead>
-              <tbody>{data.sections.map((s) => (
+                <th className="num">+ ЗП з таблиці</th><th className="num">Разом з таблиці</th><th className="num">Внесено в «Тиждень і місяць»</th><th className="num">Різниця</th></tr></thead>
+              <tbody>{shown.sections.map((s) => (
                 <tr key={s.section}>
                   <td>{SEC[s.section]}</td><td className="num">{money(s.manualArticles)}</td><td className="num">{money(s.autoArticles)}</td>
-                  <td className="num" style={diffStyle(s.autoArticles - s.manualArticles)}>{signed(Math.round((s.autoArticles - s.manualArticles) * 100) / 100)}</td>
-                  <td className="num">{money(s.autoPayroll)}</td><td className="num"><b>{money(s.autoTotal)}</b></td><td className="num">{money(s.manualOpex)}</td>
-                  <td className="num" style={s.manualOpex == null ? { color: MUTED } : diffStyle(s.autoTotal - s.manualOpex)}>{s.manualOpex == null ? "не внесено" : signed(Math.round((s.autoTotal - s.manualOpex) * 100) / 100)}</td>
+                  <td className="num">{same(s.autoArticles - s.manualArticles) ? <span className="fin-good">✓</span> : <span className="fin-bad">{signed(Math.round((s.autoArticles - s.manualArticles) * 100) / 100)}</span>}</td>
+                  <td className="num">{money(s.autoPayroll)}</td><td className="num"><b>{money(s.autoTotal)}</b></td>
+                  <td className="num">{s.manualOpex == null ? <span className="hr-muted">не внесено</span> : money(s.manualOpex)}</td>
+                  <td className="num">{s.manualOpex == null ? "—" : same(s.autoTotal - s.manualOpex) ? <span className="fin-good">✓</span> : <span className="fin-bad">{signed(Math.round((s.autoTotal - s.manualOpex) * 100) / 100)}</span>}</td>
                 </tr>
               ))}</tbody>
             </table>
-            {(data.withoutSection.manual || data.withoutSection.auto) ? (
-              <div style={{ fontSize: 12.5, color: MUTED, marginTop: 6 }}>
-                Без розділу ({data.withoutSection.names.join(", ") || "—"}): вручну {money(data.withoutSection.manual)} · з таблиці {money(data.withoutSection.auto)} — у «План/факт» є, в операційні не йдуть.
-              </div>
-            ) : null}
           </div>
+        </div>
 
-          <div className="chart-card" style={{ marginBottom: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <h3 className="chart-title" style={{ margin: 0 }}>Статті · {items.length}</h3>
-              <span style={{ fontSize: 13, color: MUTED }}>усього вручну {money(data.totals.manual)} · з таблиці {money(data.totals.autoArticles)}</span>
-              <label style={{ marginLeft: "auto", fontSize: 13 }}><input type="checkbox" checked={onlyDiff} onChange={(e) => setOnlyDiff(e.target.checked)} /> лише розбіжності</label>
-            </div>
-            {!items.length ? <p className="hr-muted" style={{ margin: "8px 0" }}>{onlyDiff ? "Розбіжностей немає — кожна стаття збігається з таблицею." : "Статей немає."}</p> : (
-              <table className="hr-tw">
-                <thead><tr><th>Стаття</th><th>Розділ</th><th className="num">Вручну</th><th className="num">З таблиці</th><th className="num">Різниця</th><th className="num">Рядків</th></tr></thead>
-                <tbody>{items.map((x) => (
-                  <Fragment key={x.id}>
-                    <tr style={{ cursor: x.rows ? "pointer" : undefined }} onClick={() => x.rows && setOpen(open === x.id ? null : x.id)}>
-                      <td>{x.rows ? (open === x.id ? "▾ " : "▸ ") : ""}{x.name}<div style={{ fontSize: 11.5, color: MUTED }}>{x.resp} · {x.group}{x.off ? " · вимкнена" : ""}</div></td>
-                      <td>{secName(x.section)}</td><td className="num">{x.manual == null ? <span style={{ color: MUTED }}>не внесено</span> : money(x.manual)}</td>
-                      <td className="num">{money(x.auto)}</td><td className="num" style={diffStyle(x.diff)}>{signed(x.diff)}</td>
-                      <td className="num">{x.rows}{x.unpaid ? <span style={{ color: "#b45309" }}> · не опл. {x.unpaid}</span> : ""}</td>
-                    </tr>
-                    {open === x.id && <tr><td colSpan={6}><Lines lines={x.lines} /></td></tr>}
-                  </Fragment>
-                ))}</tbody>
-              </table>
-            )}
-          </div>
-
-          <Pots title="ЗП за назвою" hint="Статей для ЗП немає — у розділ за назвою категорії. В операційні йдуть, у «План/факт» — ні." pots={data.payroll} />
-          <Pots title="Кілька статей з цією назвою" hint="Категорія збігається з двома статтями — не вгадуємо, куди. Перейменуйте одну зі статей." pots={data.ambiguous} />
-          <Pots title="Не розпізнано" hint="Категорії немає серед статей «План/факт» — у факт не йде. Додати статтю чи це не витрата для статистики?" pots={data.unrecognized} />
-          <Pots title="Не UA" hint="Напрямок не UA — у факт не йде (Тетяна 13.10: «беремо лише UA»)." pots={data.notUa} />
-          <Pots title="Сума не число" hint="Сума в таблиці не читається як число — у факт не йде." pots={data.badSum} />
-          <Pots title="Дата оплати не дата" hint="У колонці «Дата оплати» не дата (за датою внесення в цьому місяці) — у факт не йде." pots={data.badPayDate} />
-          <Pots title="Ще без дати оплати" hint="Внесено цього місяця, дати оплати ще немає — у факт не йде, доки її не поставлять." pots={data.noPayDate} />
-        </>
-      )}
+        <Pots title="ЗП за назвою" hint="Статей для ЗП немає — розділ береться з назви категорії. В операційні йдуть, у «План/факт» — ні." pots={shown.payroll} />
+        <Pots title="Не розпізнано" hint="Категорії немає серед статей — у факт не йде. Додати статтю чи це не витрата для статистики?" pots={shown.unrecognized} />
+        <Pots title="Кілька статей з однією назвою" hint="Категорія збігається з двома статтями — не вгадуємо, куди. Перейменуйте одну зі статей." pots={shown.ambiguous} />
+        <Pots title="Не UA" hint="Напрямок не UA — у факт не йде (Тетяна 13.10: «беремо лише UA»)." pots={shown.notUa} />
+        <Pots title="Сума не число" hint="Сума в таблиці не читається як число — у факт не йде." pots={shown.badSum} />
+        <Pots title="Дата оплати не дата" hint="У «Даті оплати» не дата (показано в місяці внесення) — у факт не йде." pots={shown.badPayDate} />
+        <Pots title="Ще без дати оплати" hint="Внесено цього місяця, дати оплати ще немає — у факт піде, щойно її поставлять." pots={shown.noPayDate} />
+        <div className="hr-sect hr-muted" style={{ fontSize: 12.5 }}>
+          Клік по статті показує рядки таблиці оплат, з яких складено факт. Реквізити й отримувачі сюди не потрапляють.
+        </div>
+      </>)}
     </div>
   );
 }

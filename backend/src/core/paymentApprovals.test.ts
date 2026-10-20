@@ -194,7 +194,8 @@ test("#1277e ФРОНТ: різниця = таблиця − вручну і в 
   assert.match(SRC("core/paymentApprovals.ts"), /diff: r2\(auto - \(manual \?\? 0\)\)/, "🔴 ядро рахує різницю не як таблиця − вручну");
   assert.match(tab, /signed\(Math\.round\(\(s\.autoArticles - s\.manualArticles\) \* 100\) \/ 100\)/, "🔴 різниця статей розділу перевернута");
   assert.match(tab, /signed\(Math\.round\(\(s\.autoTotal - s\.manualOpex\) \* 100\) \/ 100\)/, "🔴 різниця операційних перевернута");
-  assert.match(tab, /x\.manual == null \? <span style=\{\{ color: MUTED \}\}>не внесено<\/span>/, "🔴 порожнє вручну показано як число");
+  assert.match(tab, /x\.manual == null \? <span className="hr-muted">не внесено<\/span>/, "🔴 порожнє вручну показано як число");
+  assert.match(tab, /same\(x\.diff\) \? <span className="fin-good">✓ збігається<\/span> : <span className="fin-bad">\{signed\(x\.diff\)\}<\/span>/, "🔴 різниця статті з ручним — не з ядра");
   for (const k of ["payroll", "ambiguous", "unrecognized", "notUa", "badSum", "badPayDate", "noPayDate"])
-    assert.match(tab, new RegExp(`pots=\\{data\\.${k}\\} />`), `🔴 кошика «${k}» немає на екрані`);
+    assert.match(tab, new RegExp(`pots=\\{shown\\.${k}\\} />`), `🔴 кошика «${k}» немає на екрані`);
 });

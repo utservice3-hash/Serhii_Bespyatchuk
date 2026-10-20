@@ -152,7 +152,7 @@ export function bucketMonth(lines: readonly ApprovalLine[], month: string, items
   return b;
 }
 
-export interface CompareItem { id: number; resp: string; group: string; name: string; section: OpexSection | null; off: boolean; manual: number | null; auto: number; diff: number; rows: number; unpaid: number; lines: ShownLine[] }
+export interface CompareItem { id: number; respId: number; groupId: number; resp: string; group: string; name: string; section: OpexSection | null; off: boolean; plan: number | null; manual: number | null; auto: number; diff: number; rows: number; unpaid: number; lines: ShownLine[] }
 export interface CompareSection { section: Exclude<OpexSection, "payroll">; manualArticles: number; autoArticles: number; autoPayroll: number; autoTotal: number; manualOpex: number | null }
 export interface ApprovalsCompare {
   month: string; fetchedAt: string; sheetLines: number;
@@ -160,19 +160,19 @@ export interface ApprovalsCompare {
   payroll: Pot[]; ambiguous: Pot[]; unrecognized: Pot[]; notUa: Pot[]; badSum: Pot[]; badPayDate: Pot[]; noPayDate: Pot[];
   /** Статті без розділу (Податки ТОВ): у «План/факт» є, в операційні не йдуть. */
   withoutSection: { manual: number; auto: number; names: string[] };
-  totals: { manual: number; autoArticles: number; autoPayroll: number; outside: number };
+  totals: { plan: number; manual: number; autoArticles: number; autoPayroll: number; outside: number; diffItems: number };
 }
 const SECTIONS = ["commercial", "admin", "general"] as const;
 const OPEX_REF = { commercial: "opex_commercial", admin: "opex_admin", general: "opex_general" } as const;
 
 /** Порівняння місяця: ручний факт «План/факт» і ручні операційні «Тиждень і місяць» проти правила над таблицею. */
 export async function approvalsCompare(db: Db, month: string, lines: readonly ApprovalLine[], fetchedAt: Date): Promise<ApprovalsCompare> {
-  const items = (await db.query(`SELECT i.id, i.name, i.section, r.name AS resp, g.name AS grp, (i.off_from IS NOT NULL AND i.off_from <= $1::date) AS off,
+  const items = (await db.query(`SELECT i.id, i.name, i.section, r.id AS resp_id, g.id AS group_id, r.name AS resp, g.name AS grp, v.plan::text AS plan, (i.off_from IS NOT NULL AND i.off_from <= $1::date) AS off,
         v.fact::text AS fact
       FROM fin_items i JOIN fin_groups g ON g.id = i.group_id AND g.deleted_at IS NULL
       JOIN fin_resps r ON r.id = g.resp_id AND r.deleted_at IS NULL
       LEFT JOIN fin_values v ON v.item_id = i.id AND v.month = $1::date
-     WHERE i.deleted_at IS NULL ORDER BY r.sort, r.id, g.sort, g.id, i.sort, i.id`, [month])).rows as { id: number; name: string; section: OpexSection | null; resp: string; grp: string; off: boolean; fact: string | null }[];
+     WHERE i.deleted_at IS NULL ORDER BY r.sort, r.id, g.sort, g.id, i.sort, i.id`, [month])).rows as { id: number; name: string; section: OpexSection | null; resp_id: number; group_id: number; resp: string; grp: string; plan: string | null; off: boolean; fact: string | null }[];
   const plan: PlanItem[] = items.map((x) => ({ id: x.id, name: x.name, section: x.section, resp: x.resp, group: x.grp, off: x.off }));
   const b = bucketMonth(lines, month, plan);
   const opex = new Map(((await db.query(`SELECT k.ref_source, v.value::text AS value FROM fin_kpis k
@@ -182,10 +182,11 @@ export async function approvalsCompare(db: Db, month: string, lines: readonly Ap
   const outItems: CompareItem[] = items
     .map((x) => {
       const p = b.items.get(x.id), manual = x.fact == null ? null : Number(x.fact), auto = p?.sum ?? 0;
-      return { id: x.id, resp: x.resp, group: x.grp, name: x.name, section: x.section, off: x.off, manual, auto, diff: r2(auto - (manual ?? 0)),
+      return { id: x.id, respId: x.resp_id, groupId: x.group_id, resp: x.resp, group: x.grp, name: x.name, section: x.section, off: x.off,
+        plan: x.plan == null ? null : Number(x.plan), manual, auto, diff: r2(auto - (manual ?? 0)),
         rows: p?.rows ?? 0, unpaid: p?.unpaid ?? 0, lines: p?.lines ?? [] };
     })
-    .filter((x) => !x.off || x.manual != null || x.rows > 0);
+    .filter((x) => !x.off || x.plan != null || x.manual != null || x.rows > 0);
   const sumBy = (pred: (x: CompareItem) => boolean, f: (x: CompareItem) => number) => r2(outItems.filter(pred).reduce((s, x) => s + f(x), 0));
   const sections: CompareSection[] = SECTIONS.map((s) => {
     const autoArticles = sumBy((x) => x.section === s, (x) => x.auto), autoPayroll = b.payroll.get(s)?.sum ?? 0;
@@ -200,7 +201,7 @@ export async function approvalsCompare(db: Db, month: string, lines: readonly Ap
     notUa: list(b.notUa), badSum: list(b.badSum), badPayDate: list(b.badPayDate), noPayDate: list(b.noPayDate),
     withoutSection: { manual: sumBy((x) => !x.section, (x) => x.manual ?? 0), auto: sumBy((x) => !x.section, (x) => x.auto),
       names: outItems.filter((x) => !x.section && (x.manual != null || x.rows > 0)).map((x) => x.name) },
-    totals: { manual: sumBy(() => true, (x) => x.manual ?? 0), autoArticles: sumBy(() => true, (x) => x.auto),
-      autoPayroll: r2(list(b.payroll).reduce((s, p) => s + p.sum, 0)), outside: r2(outside) },
+    totals: { plan: sumBy(() => true, (x) => x.plan ?? 0), manual: sumBy(() => true, (x) => x.manual ?? 0), autoArticles: sumBy(() => true, (x) => x.auto),
+      autoPayroll: r2(list(b.payroll).reduce((s, p) => s + p.sum, 0)), outside: r2(outside), diffItems: outItems.filter((x) => Math.abs(x.diff) >= 0.005).length },
   };
 }
