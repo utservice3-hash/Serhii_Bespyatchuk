@@ -5,7 +5,7 @@ import { isAdminScope } from "../auth/rbac.js";
 import { nominationWeek, frozenWeek, draftWeek, cellFingerprint, rnkConvWeek, LEADGEN_TEAM_ID, type WeekView } from "../core/nominations.js";
 import type { TeamWeek } from "../core/nominationRules.js";
 import { managerPhotos, employeePhotos } from "../core/people.js";
-import { lastWeek, weekOf, canReview, validateReview, validateBulkConfirm, validateConvEdit, validateManualSlide, isEditOpen, NOMINATIONS, LEADGEN_NOMINATIONS, MARGIN_FLAG_PCT, MANUAL_KINDS, SLIDE_TEMPLATES } from "../core/nominationRules.js";
+import { lastWeek, weekOf, canReview, validateReview, validateBulkConfirm, validateConvEdit, validateManualSlide, isEditOpen, HIDDEN_ON_SCREEN, NOMINATIONS, LEADGEN_NOMINATIONS, MARGIN_FLAG_PCT, MANUAL_KINDS, SLIDE_TEMPLATES } from "../core/nominationRules.js";
 import { RNK_TEAM_IDS } from "../core/metrics.js";
 
 /**
@@ -42,7 +42,7 @@ async function withRights(view: WeekView, v: Viewer) {
   // Лідогенератори живі (не в знімку) — їх можна правити й після фіксації тижня.
   const withCells = (t: TeamWeek) => ({
     ...t,
-    cells: t.cells.map((c) => {
+    cells: t.cells.filter((c) => !HIDDEN_ON_SCREEN.includes(c.nomination)).map((c) => {
       const r = closed ? { ok: false as const, why: view.locked ? "тиждень зафіксовано остаточно" : "час правок вийшов (пт 23:59)" }
         : canReview(v, { teamId: t.teamId, crmWinners: c.crm.state === "ok" ? c.crm.winners : [], overrideManagerIds: c.final.status === "overridden" ? c.final.winners : null });
       return { ...c, canReview: r.ok, whyNot: r.ok ? null : r.why };
@@ -65,7 +65,8 @@ async function withRights(view: WeekView, v: Viewer) {
     photos: await managerPhotos(),
     viewer: { role: v.role, teamId: v.teamId, managerId: v.managerId },
     // Підписи й одиниці — з одного місця (`NOMINATIONS`), щоб на фронті не жила друга копія.
-    defs: NOMINATIONS, leadgenDefs: LEADGEN_NOMINATIONS, marginFlagPct: MARGIN_FLAG_PCT,
+    defs: NOMINATIONS.filter((n) => !HIDDEN_ON_SCREEN.includes(n.key)), leadgenDefs: LEADGEN_NOMINATIONS, marginFlagPct: MARGIN_FLAG_PCT,
+    depts: view.depts.filter((d) => !HIDDEN_ON_SCREEN.includes(d.nomination)),
     teams: view.teams.map(withCells),
     leadgen, rnkConv,
   };

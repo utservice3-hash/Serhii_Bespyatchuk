@@ -52,7 +52,7 @@ test("#604 ДИМ: номінації тижня проти бази з нуля
 
     const { nominationsRouter } = await import("./nominations.js");
     const { refreshRoles } = await import("../auth/rbac.js");
-    const { freezeWeek } = await import("../core/nominations.js");
+    const { freezeWeek, draftWeek } = await import("../core/nominations.js");
     await refreshRoles();
 
     type Layer = { route?: { path: string; methods: Record<string, boolean>; stack: { handle: unknown }[] } };
@@ -90,8 +90,10 @@ test("#604 ДИМ: номінації тижня проти бази з нуля
     assert.deepEqual(cell(a.body, 13, "revenue").crm, { state: "ok", value: 50000, winners: [103] });
     assert.deepEqual(cell(a.body, 13, "maxDeal").crm, { state: "ok", value: 50000, winners: [103] });
     assert.deepEqual(cell(a.body, 13, "cars").crm, { state: "ok", value: 2, winners: [101, 102] }, "🔴 нічия загубила переможця");
-    assert.deepEqual(cell(a.body, 13, "marginPct").crm, { state: "ok", value: 1200, winners: [101] });
-    assert.deepEqual(cell(a.body, 13, "marginPct").deal, { id: 2, price: 12000, cost: 1000, url: `${(process.env.KOMMO_BASE_URL ?? "").replace(/\/$/, "")}/leads/detail/2` });
+    // «% маржі» з 20.10.2026 на екрані не показується (#1830) — ядро її далі рахує, тож перевіряємо ядро.
+    const mp = (await draftWeek(WEEK)).teams.find((x) => x.teamId === 13)!.cells.find((x) => x.nomination === "marginPct")!;
+    assert.deepEqual(mp.crm, { state: "ok", value: 1200, winners: [101] });
+    assert.deepEqual(mp.deal, { id: 2, price: 12000, cost: 1000, url: `${(process.env.KOMMO_BASE_URL ?? "").replace(/\/$/, "")}/leads/detail/2` });
     assert.deepEqual(cell(a.body, 13, "intl").crm, { state: "ok", value: 1, winners: [101] });
     // Нд 23:30 Києва — у тижні; пн 00:30 Києва — ні (угода на 99 999 не має перемогти).
     assert.deepEqual(cell(a.body, 5, "revenue").crm, { state: "ok", value: 777, winners: [202] }, "🔴 межа київської доби зсунулась");

@@ -185,7 +185,7 @@ export function NominationsSection() {
           ) : (
             <AdminOverview week={data} onOpen={(id) => { setOpenTeam(id); setDrill(null); }} />
           )}
-          {data.teams.some((t) => t.noCostDeals > 0) ? (
+          {data.defs.some((d) => d.key === "marginPct") && data.teams.some((t) => t.noCostDeals > 0) ? (
             <p className="nm-muted">⚠ «% маржі» не рахується для угод без «Расходу 1» (виплати водію): {data.teams.reduce((a, t) => a + t.noCostDeals, 0)} угод{isLead ? " команди" : ""} цього тижня без нього.</p>
           ) : null}
           {data.rnkConv && (!shownTeam || isLead) ? <ConvCard week={data} conv={data.rnkConv} onData={applyData} /> : null}
