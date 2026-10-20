@@ -184,11 +184,11 @@ tasksRouter.get("/", async (req, res) => {
             -- пишуть лише автозакривачі; заміряно 20.10 — порожній у 1 466 із 1 977 виконаних.
             -- Тому останній перехід у done з журналу статусів, а автозакритим — closed_at.
             -- Журнал веде історію з 14.09, раніше закриті без closed_at дають NULL, і це
-            -- чесне «не знаємо коли», а не «ніколи». Ціна заміряна: +6 мс на 4 605 задач
-            -- (індекс task_id, changed_at).
-            CASE WHEN t.status = 'done' THEN to_char(COALESCE(
-              (SELECT max(dl.changed_at) FROM task_status_log dl WHERE dl.task_id = t.id AND dl.to_status = 'done'),
-              t.closed_at) AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') END AS "doneAt",
+            -- чесне «не знаємо коли», а не «ніколи». Одне зʼєднання з уже згрупованим
+            -- журналом (нижче, dl), а не підзапит на рядок: підзапит заміряно на проді
+            -- 20.10 — +14% до видачі, вище порогу плану.
+            CASE WHEN t.status = 'done' THEN to_char(COALESCE(dl.at, t.closed_at)
+              AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') END AS "doneAt",
             -- ✅ «ПРИЙМАЄ» — уже з замовчуванням: порожнє поле означає автора
             -- (core/taskStatusRights.ts). Імʼя тим самим виразом, що й у /assignees:
             -- у CRM-акаунтів full_name порожнє свідомо, і без ПІБ менеджера екран
@@ -204,6 +204,8 @@ tasksRouter.get("/", async (req, res) => {
      LEFT JOIN managers rvm ON rvm.id = rvu.manager_id
      LEFT JOIN task_groups g ON g.id = t.group_id
      LEFT JOIN task_views tv ON tv.task_id = t.id AND tv.user_id = $${me}
+     LEFT JOIN (SELECT task_id, max(changed_at) AS at FROM task_status_log
+                 WHERE to_status = 'done' GROUP BY task_id) dl ON dl.task_id = t.id
      LEFT JOIN (SELECT task_id, count(*)::int AS n FROM task_comments GROUP BY task_id) tc
             ON tc.task_id = t.id
      LEFT JOIN (SELECT f.task_id, count(*)::int AS n,
