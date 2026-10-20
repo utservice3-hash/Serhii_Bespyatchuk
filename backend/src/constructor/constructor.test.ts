@@ -15,7 +15,7 @@ import { NR_BODY } from "./data/nonresidentTexts.js";
 import { buildTtn, buildCmr, ttnCells, cmrTargets, CMR_SLOTS, TTN_TEMPLATE, CMR_TEMPLATE, waybillBlocker, splitTruck } from "./services/waybills.js";
 import { readZip } from "../core/officeParse.js";
 import { NR_EN_KEYS, NR_CSS, nrClauses, nrAppRows } from "./services/nonresident.js";
-import { validateForm } from "./validate.js";
+import { validateForm, firstError } from "./validate.js";
 import { currentNum } from "./services/docgen.js";
 
 /**
@@ -1004,4 +1004,35 @@ test("#1803 ФОРМА ЗАЯВКИ ДО ДОГОВОРУ: вкладка, ви�
   assert.equal(typeof stateFromBody({ ent: "uts", doc: "annex" }, NR_MGR), "object", "🔴 сервер не приймає вид «annex»");
   assert.equal((stateFromBody({ ent: "uts", doc: "annex" }, NR_MGR) as DocumentState).party, "client", "🔴 додаток не клієнтський");
   assert.match(SRC("db/schema.sql"), /CHECK \(doc_kind IN \('once','main','carr','nrmain','nrapp','annex'\)\)/, "🔴 база не дозволяє вид «annex»");
+});
+
+/* ══════════════ 💵 ВІД ТОВ ЮТС — БЕЗ ГОТІВКИ (задача 5887, жорсткий варіант, Роман 20.10.2026) ══════════════ */
+
+/**
+ * #1810 — ЮТС + «готівка» → 🔴 на полі форми оплати, і формування зупиняється (і клієнту, і перевізнику).
+ * Дзеркало: АвтоМув із готівкою і ЮТС безготівкою — без цієї помилки. 🧨 Прибрати перевірку чи заборонити всім — червоніє.
+ */
+test("#1810 ЮТС БЕЗ ГОТІВКИ: заявка клієнту й перевізнику від ЮТС з готівкою не формується; АвтоМув і безготівка — так", () => {
+  const cash = { sum: "30000", cur: "грн", form: "готівка", order: "по отриманні документів" };
+  const cp = { ...AN_CP, iban: "UA493052990000026000000000001" };   // справжній контрольний розряд — інших 🔴 у стані немає
+  assert.equal(firstError(validateForm(anState({ doc: "once", ent: "uts", cp, pay: { ...cash, form: "б/г з ПДВ" } }))), null, "🔴 фікстура має інші помилки — перевірка нічого не доведе");
+  for (const doc of ["once", "carr", "annex"] as const) {
+    const s = anState({ doc, ent: "uts", cp, pay: cash });
+    const e = validateForm(s).find((i) => i.field === "pay.form");
+    assert.ok(e && e.level === "error", `🔴 ${doc}: ЮТС + готівка без 🔴`);
+    assert.match(firstError(validateForm(s)) ?? "", /готівкою заборонена/, `🔴 ${doc}: формування не зупинено`);
+  }
+  assert.ok(!validateForm(anState({ doc: "once", ent: "avm", pay: cash })).some((i) => i.field === "pay.form"), "🔴 АвтоМув із готівкою заборонено (дзеркало)");
+  assert.ok(!validateForm(anState({ doc: "once", ent: "uts", pay: { ...cash, form: "б/г з ПДВ" } })).some((i) => i.field === "pay.form"), "🔴 ЮТС безготівкою заборонено (дзеркало)");
+});
+
+/**
+ * #1810b — ФОРМА: для ЮТС «готівки» в списку форм оплати немає; прийшла зі старої заявки — видно як заборонену,
+ * під полем — причина. 🧨 Повернути готівку в список ЮТС чи прибрати повідомлення під полем — червоніє.
+ */
+test("#1810b ФОРМА: у ЮТС немає «готівки» в списку оплати, стара — позначена забороненою з причиною", () => {
+  const front = readFileSync(path.join(REPO, "frontend", "src", "pages", "dashboard", "sections", "ConstructorSection.tsx"), "utf8");
+  assert.match(front, /form\.ent === "uts" \? PAY_FORMS\.filter\(\(o\) => o !== CASH\)/, "🔴 ЮТС пропонує готівку");
+  assert.match(front, /<option value=\{CASH\} disabled>готівка — заборонено для ЮТС<\/option>/, "🔴 стара готівка не позначена");
+  assert.match(front, /<FieldMsg is=\{iss\("pay\.form"\)\} \/>/, "🔴 під полем форми оплати немає причини");
 });
