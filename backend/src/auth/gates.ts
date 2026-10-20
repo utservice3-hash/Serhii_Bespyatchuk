@@ -84,6 +84,10 @@ export const ROUTE_BOUNDARY_EXEMPTIONS: RouteExemption[] = [
     why: "Список людей для трекера. Стукає його сервер, не браузер: обліковка — ключ "
        + "X-Dashboard-Sso-Key, вкладки немає й бути не може. Віддає лише особу й підказки; "
        + "доступу в трекері не надає — там акаунти вмикають руками." },
+  { method: "GET", path: "/api/integrations/tracker/vacations", permanent: true,
+    why: "Відпустки для тайм-трекера (5149). Стукає його сервер, не браузер: обліковка — окремий ключ "
+       + "X-Tracker-Vacations-Key лише на читання (не SSO-ключ). Віддає особу й дати погоджених відпусток, більше нічого; "
+       + "без ключа в .env — 503. Тримає `#1807`." },
   { method: "POST", path: "/api/auth/tracker-identity", permanent: true,
     why: "Стукає сервер трекера, не браузер: обліковка — ключ X-Dashboard-Sso-Key плюс "
        + "дійсне посвідчення. Вкладки не має, як і /api/tracker/* нижче." },

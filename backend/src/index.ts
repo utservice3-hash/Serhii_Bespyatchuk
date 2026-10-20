@@ -70,6 +70,7 @@ import { refreshTeamMoves } from "./core/teamAt.js";
 import { seedOneOnOneForms } from "./oneOnOne/catalog.js";
 import { bankRouter } from "./routes/bank.js";
 import { trackerRouter } from "./routes/tracker.js";
+import { integrationsRouter } from "./routes/integrations.js";
 import { syncBank } from "./jobs/syncBank.js";
 import { syncSafe } from "./jobs/syncSafe.js";
 import { buildPaymentFile } from "./jobs/buildPaymentFile.js";
@@ -192,6 +193,7 @@ app.use("/api/vault-bot", vaultBotRouter); // 🤖 вебхук бота «UTS �
 app.use("/api/statistics", statisticsRouter);
 app.use("/api/statistics", statsSeriesRouter); // /series, /series/manual — падають повз депстат-роут
 app.use("/api/bank", bankRouter); // Виписка — банк-API (окремо від CRM)
+app.use("/api/integrations", integrationsRouter); // 🔌 запити інших наших систем (трекер: відпустки) — межа ключем, без requireAuth
 app.use("/api/tracker", trackerRouter); // Трекер часу — власна авторизація (БЕЗ requireAuth), окрема підсистема
 
 // Health check, enriched with Kommo-sync freshness so an external monitor (or

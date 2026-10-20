@@ -117,3 +117,45 @@ export function onVacationSql(scope: string): string {
              AND a.start_date <= $1::date AND a.end_date >= $1::date ${scope}
            GROUP BY a.manager_id, a.user_id`;
 }
+
+/**
+ * 🏖 ВІДПУСТКИ ДЛЯ ТАЙМ-ТРЕКЕРА (5149, етап 3; контракт погоджено з трекером 20.10.2026).
+ *
+ * Трекер питає сам (лише його сервер, кеш у нього), дашборд лишається єдиним джерелом. Віддаємо КОЖНУ погоджену
+ * відпустку, що перетинає [from, to], з її справжніми датами — не обрізаними по межах періоду: так табель за місяць
+ * будується одним запитом. Дати — календарні (DATE у базі, київський день), обидва кінці включно.
+ *
+ * Людина — `dashboardUserId` (= users.id, той самий, що трекер отримує в `GET /api/auth/tracker-users`), email —
+ * запасний ключ. Відпустку, у власника якої немає акаунта, не віддаємо: у трекері такої людини немає. Вимкнений акаунт
+ * віддаємо: відпустка була, і звіт за минулий місяць мусить показати її відпусткою, а не прогулом.
+ */
+export const TRACKER_VACATIONS_MAX_DAYS = 366;
+export interface TrackerVacation { dashboardUserId: number; email: string; from: string; until: string; type: "vacation" }
+
+export const TRACKER_VACATIONS_SQL = `
+  SELECT u.id AS user_id, u.email,
+         to_char(a.start_date, 'YYYY-MM-DD') AS from_date, to_char(a.end_date, 'YYYY-MM-DD') AS until
+    FROM team_calendar_absences a
+    JOIN users u ON u.id = COALESCE(a.user_id,
+      (SELECT u2.id FROM users u2 WHERE u2.manager_id = a.manager_id ORDER BY u2.is_active DESC, u2.id LIMIT 1))
+   WHERE a.kind = 'vacation' AND a.status = 'approved'
+     AND a.start_date <= $2::date AND a.end_date >= $1::date
+   ORDER BY a.start_date, u.id`;
+
+/** Період запиту: обидві дати справжні, from ≤ to, не довше року. Помилка — текстом для 400. */
+export function trackerPeriodError(from: unknown, to: unknown): string | null {
+  const ok = (d: unknown): d is string => {
+    if (typeof d !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
+    const t = Date.parse(d + "T00:00:00Z"); // 2026-02-30 — або NaN, або інший день; обидва — не дата
+    return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === d;
+  };
+  if (!ok(from) || !ok(to)) return "from і to — дати YYYY-MM-DD";
+  if (from > to) return "from пізніше за to";
+  if (calendarDays(from, to) > TRACKER_VACATIONS_MAX_DAYS) return `період довший за ${String(TRACKER_VACATIONS_MAX_DAYS)} днів`;
+  return null;
+}
+
+export async function trackerVacations(db: Db, from: string, to: string): Promise<TrackerVacation[]> {
+  const r = await db.query<{ user_id: number; email: string; from_date: string; until: string }>(TRACKER_VACATIONS_SQL, [from, to]);
+  return r.rows.map((x) => ({ dashboardUserId: x.user_id, email: x.email, from: x.from_date, until: x.until, type: "vacation" as const }));
+}

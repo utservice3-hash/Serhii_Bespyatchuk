@@ -61,6 +61,9 @@ export const config = {
     url: (process.env.TRACKER_URL ?? "").replace(/\/+$/, ""),
     // Secret: env only, never in the repo. Generated on the host with openssl rand -hex 32.
     ssoKey: process.env.TRACKER_SSO_KEY ?? "",
+    // 🏖 Окремий ключ ЛИШЕ на читання відпусток (`GET /api/integrations/tracker/vacations`, задача 5149, етап 3).
+    // Не ssoKey: той відкриває вхід, цей — тільки «хто й коли у відпустці». Порожньо → запит відповідає 503.
+    vacationsKey: process.env.TRACKER_VACATIONS_KEY ?? "",
   },
   // 📊 GA4 (Google Analytics 4) — витрати й кліки Google Ads по днях і кампаніях.
   // Звʼязка Ads→GA4 віддає cost/clicks, тож окремий Google Ads API не потрібен.

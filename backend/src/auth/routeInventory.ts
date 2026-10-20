@@ -73,6 +73,7 @@ export const MOUNTS: { mount: string; module: string; export: string }[] = [
   { mount: "/api/statistics", module: "../routes/statistics.js", export: "statisticsRouter" },
   { mount: "/api/statistics", module: "../routes/statisticsSeries.js", export: "statsSeriesRouter" },
   { mount: "/api/bank", module: "../routes/bank.js", export: "bankRouter" },
+  { mount: "/api/integrations", module: "../routes/integrations.js", export: "integrationsRouter" },
   { mount: "/api/tracker", module: "../routes/tracker.js", export: "trackerRouter" },
 ];
 
