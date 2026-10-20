@@ -62,6 +62,8 @@ import { formatAmount } from "../format";
 import { DatePicker } from "../../../components/DatePicker";
 import { StatusPicker } from "../../../components/StatusPicker";
 import type { TaskForm } from "../taskForm";
+import { TasksFocusView } from "./TasksFocusView";
+import { browserStorage, kyivDate, readDesign, writeDesign, type TasksDesign } from "../tasksFocus";
 
 const METRIC_LBL: Record<string, string> = {
   ads_count: "Реклама",
@@ -626,6 +628,13 @@ export function TasksSection({
   // Department dropdown = fixed відділи + all team names, de-duplicated.
   const deptOptions = Array.from(new Set([...DEPARTMENTS, ...(teams ?? []).map((t) => t.name)]));
   const [adminTab, setAdminTab] = useState<"mine" | "shared" | "all" | "review">("mine");
+  /**
+   * 🔀 ДИЗАЙН: НОВИЙ «ЩО ГОРИТЬ» АБО СТАРА ТАБЛИЦЯ (рішення Романа 20.10.2026). Новий — за
+   * замовчуванням, старий — кнопкою; вибір живе в браузері (`tasksFocus.ts`). Задачі, права й
+   * картка однакові в обох — змінюється лише вигляд списку.
+   */
+  const [design, setDesignState] = useState<TasksDesign>(() => readDesign(browserStorage()));
+  const setDesign = (v: TasksDesign) => { setDesignState(v); writeDesign(browserStorage(), v); };
   // 👥 Моя команда — першою в селектах виконавця; неактивні з неї — підписом під селектом.
   const myTeamId = managerOptions.find((m) => m.id === currentManagerId)?.teamId ?? null;
   const [myTeamInactive, setMyTeamInactive] = useState<{ id: number; name: string }[]>([]);
@@ -979,17 +988,21 @@ export function TasksSection({
             onChange={(e) => setTaskSearch(e.target.value)}
             style={{ width: 200 }}
           />
+          {/* Статус і сортування — лише в старому дизайні: новий групує за терміном сам. */}
+          {design === "old" && (
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "all" | "active" | "done")}>
             <option value="all">Усі статуси</option>
             <option value="active">Активні</option>
             <option value="done">Виконані</option>
           </select>
+          )}
           {role !== "manager" && (
             <select value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value ? Number(e.target.value) : "")}>
               <option value="">Усі виконавці</option>
               {managerOptions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
           )}
+          {design === "old" && (
           <div style={{ position: "relative" }}>
             <button
               onClick={() => setSettingsOpen((v) => !v)}
@@ -1022,6 +1035,7 @@ export function TasksSection({
               </>
             )}
           </div>
+          )}
           <button
             className="btn-primary"
             onClick={() => {
@@ -1086,6 +1100,14 @@ export function TasksSection({
             >🤝 Поставити задачу</button>
           </>
         )}
+        {/* 🔀 ПЕРЕМИКАЧ ДИЗАЙНУ — праворуч у смузі вкладок, щоб повернення до старого було на
+            виду, а не в налаштуваннях (рішення Романа 20.10.2026). */}
+        <button type="button" onClick={() => setDesign(design === "new" ? "old" : "new")}
+          title={design === "new" ? "Повернути попередній вигляд задачника — таблицю" : "Увімкнути новий вигляд: групи за терміном і лічильники"}
+          style={{ marginLeft: "auto", padding: "5px 12px", borderRadius: 8, border: "1px solid var(--border)",
+            background: "transparent", color: "var(--text-muted)", cursor: "pointer", fontSize: 13 }}>
+          {design === "new" ? "↩ Старий дизайн" : "✨ Новий дизайн"}
+        </button>
       </div>
 
       {/* 📎 ЄДИНИЙ схований інпут на всю секцію: його кличуть і рядок, і картка.
@@ -1617,6 +1639,30 @@ export function TasksSection({
       );
       // ЧАСТИНА 2: тімлід — ОДНА таблиця на всю ширину + перемикач зверху «Мої / Командні»
       // (як в адміна). Дві колонки прибрано (таблиця стискалась). manager/admin без змін.
+      if (design === "new") {
+        // Ті самі задачі й фільтри, що в таблиці, — без селектора статусу (новий групує сам).
+        const { base } = pickRows(tasks, false);
+        const kpiSrc = tasks.filter((t) => t.taskType === "kpi_period" || t.taskType === "daily_kpi");
+        const kpiPick = pickRows(kpiSrc, false);
+        const kpiCount = kpiPick.base.filter((t) => t.taskType === "kpi_period").length + kpiPick.synths.length;
+        const rows = base.filter((t) => t.taskType !== "kpi_period");
+        return (
+          <TasksFocusView
+            rows={rows}
+            kpi={kpiCount > 0 ? { count: kpiCount, node: renderTable(kpiSrc) } : null}
+            today={kyivDate(new Date())}
+            showAssignee={rows.some((t) => !isMine(t))}
+            meId={currentUserId}
+            onOpen={setOpenTaskId}
+            onOpenFeed={openFeed}
+            onDone={(t) => {
+              // Той самий шлях, що в селекторі статусу: права рахує сервер, помилку показує commitTask.
+              patchTaskLocal(t.id, { status: "done", doneAt: kyivDate(new Date()) });
+              commitTask(t.id, { status: "done" });
+            }}
+          />
+        );
+      }
       return renderTable(tasks);
     })())}
 

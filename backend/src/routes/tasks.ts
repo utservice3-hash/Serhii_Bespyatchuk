@@ -179,6 +179,16 @@ tasksRouter.get("/", async (req, res) => {
             t.close_reason AS "closeReason",
             to_char(t.closed_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS "closedAt",
             COALESCE(cu.full_name, cu.email) AS "closedByName",
+            -- ✅ КОЛИ ВИКОНАНО (київська дата) — для «Виконано цього тижня» нового екрана
+            -- (№6379, 20.10.2026). closed_at тут НЕ годиться: ручне «Готово» його не пише,
+            -- пишуть лише автозакривачі; заміряно 20.10 — порожній у 1 466 із 1 977 виконаних.
+            -- Тому останній перехід у done з журналу статусів, а автозакритим — closed_at.
+            -- Журнал веде історію з 14.09, раніше закриті без closed_at дають NULL, і це
+            -- чесне «не знаємо коли», а не «ніколи». Ціна заміряна: +6 мс на 4 605 задач
+            -- (індекс task_id, changed_at).
+            CASE WHEN t.status = 'done' THEN to_char(COALESCE(
+              (SELECT max(dl.changed_at) FROM task_status_log dl WHERE dl.task_id = t.id AND dl.to_status = 'done'),
+              t.closed_at) AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') END AS "doneAt",
             -- ✅ «ПРИЙМАЄ» — уже з замовчуванням: порожнє поле означає автора
             -- (core/taskStatusRights.ts). Імʼя тим самим виразом, що й у /assignees:
             -- у CRM-акаунтів full_name порожнє свідомо, і без ПІБ менеджера екран

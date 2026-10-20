@@ -1342,3 +1342,52 @@ tr.recv-row[data-call="no_call"]:hover > td { background: var(--warn-bg); }
 /* Попередні дані лишаються на місці, приглушені, поки вантажаться нові. */
 .is-refreshing { opacity: 0.5; transition: opacity 0.15s; pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
+
+/* ── 🎯 ЗАДАЧНИК · НОВИЙ ЕКРАН «ЩО ГОРИТЬ» (20.10.2026, №6379/№5998) ──
+   Лише токени теми: темна тема перевизначає їх сама. Плитка — фільтр, тож має вигляд кнопки. */
+.tf { display: grid; gap: 12px; }
+.tf-tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.tf-tile { display: grid; gap: 2px; text-align: left; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--card-bg); color: var(--text); cursor: pointer; font: inherit; }
+.tf-tile:hover { border-color: var(--text-muted); }
+.tf-tile.on { border-color: var(--text); box-shadow: inset 0 0 0 1px var(--text); }
+.tf-v { font-size: 22px; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.tf-k { font-size: 12px; color: var(--text-muted); }
+.tf-err .tf-v, .tf-gh.tf-err { color: var(--brand); }
+.tf-ok .tf-v, .tf-gh.tf-ok { color: #16a34a; }
+.tf-warn .tf-v { color: #b45309; }
+.tf-filter { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--text-muted); flex-wrap: wrap; }
+.tf-filter button { border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 999px; padding: 2px 10px; cursor: pointer; font: inherit; font-size: 12px; }
+.tf-list { display: grid; }
+.tf-group { display: grid; }
+.tf-gh { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; padding: 10px 4px 6px; border: 0;
+  border-bottom: 1px solid var(--border); background: none; color: var(--text); font: inherit; font-weight: 600; font-size: 13px; cursor: pointer; }
+.tf-cnt { font-weight: 500; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.tf-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) 170px 140px 56px; gap: 10px; align-items: center;
+  padding: 7px 4px; border-bottom: 1px solid var(--border); }
+.tf-row.no-who { grid-template-columns: 22px minmax(0, 1fr) 170px 56px; }
+.tf-row:hover { background: rgba(127, 127, 127, 0.06); }
+.tf-check { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--text-muted); background: transparent;
+  cursor: pointer; padding: 0; color: #fff; font-size: 11px; line-height: 1; display: grid; place-items: center; }
+.tf-check:hover:not(:disabled) { border-color: #16a34a; background: rgba(22, 163, 74, 0.14); }
+.tf-check:disabled { cursor: default; opacity: 0.45; }
+.tf-check.on { background: #16a34a; border-color: #16a34a; opacity: 1; }
+.tf-main { min-width: 0; display: grid; gap: 1px; }
+.tf-title { text-align: left; background: none; border: 0; padding: 0; color: var(--text); font: inherit; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf-title:hover { text-decoration: underline; }
+.tf-row.done .tf-title { text-decoration: line-through; color: var(--text-muted); }
+.tf-meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 11px; color: var(--text-muted); }
+.tf-meta:empty { display: none; }
+.tf-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--brand); }
+.tf-feed { font: inherit; font-size: 11px; color: var(--text); background: var(--card-bg); border: 1px solid var(--border); border-radius: 999px; padding: 0 8px; cursor: pointer; }
+.tf-status { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; color: var(--text-muted); display: inline-flex; align-items: center; gap: 5px; }
+.tf-status::before { content: ""; width: 8px; height: 8px; border-radius: 999px; background: var(--dot, var(--text-muted)); }
+.tf-who { font-size: 12px; color: var(--text-muted); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf-dl { font-size: 12px; color: var(--text-muted); text-align: right; font-variant-numeric: tabular-nums; }
+.tf-dl.late { color: var(--brand); font-weight: 600; }
+@media (max-width: 860px) {
+  .tf-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tf-row, .tf-row.no-who { grid-template-columns: 22px minmax(0, 1fr) 52px; }
+  .tf-status, .tf-who { display: none; }
+}
