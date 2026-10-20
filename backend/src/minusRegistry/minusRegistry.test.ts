@@ -455,7 +455,8 @@ test("#1843 🪞 РЕЄСТР МІНУСОВИХ НАСКРІЗНО: наш вх
 test("#1844 ФРОНТ РЕЄСТРУ: модель = бекенд байт у байт, пункт «Реєстри», один чанк, наш api, CSS ізольовано", () => {
   for (const f of ["minusRegistry", "minusFormat"]) assert.equal(FRONT(`minusRegistry/shared/${f}.ts`), SRC(`minusRegistry/shared/${f}.ts`), `${f}.ts у фронті розійшовся з бекендом`);
   const layout = FRONT("components/Layout.tsx"), dash = FRONT("pages/Dashboard.tsx");
-  assert.match(layout, /\{ key: "registries", label: "Реєстри", icon: "📒" \}/, "пункту меню «Реєстри» немає");
+  assert.match(layout, /\{ key: "registries", label: "Реєстри та узгодження", icon: "📒" \}/, "пункту меню «Реєстри та узгодження» немає");
+  assert.match(FRONT("minusRegistry/client/RegistriesPage.tsx"), /export const PAGE_TITLE = 'Реєстри та узгодження';/, "заголовок сторінки не «Реєстри та узгодження»");
   assert.match(layout, /item\.key === "registries" \? registriesCount/, "у пункту меню немає лічильника");
   assert.match(dash, /\{section === "registries" && <RegistriesPage \/>\}/, "маршрут не рендерить сторінку «Реєстри»");
   const dir = path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "minusRegistry", "client");

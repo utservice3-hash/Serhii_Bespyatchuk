@@ -8,7 +8,7 @@ import './registriesPage.css';
 import MinusRegistryTab from './minusRegistry/MinusRegistryTab';
 
 /** Назва — і в заголовку, і в пункті бокового меню. */
-export const PAGE_TITLE = 'Реєстри';
+export const PAGE_TITLE = 'Реєстри та узгодження';  // назва 20.10.2026 (було «Реєстри»): тут стане й «Узгодження роботи з клієнтом»
 
 export default function RegistriesPage() {
   const [n, setN] = useState(0);
