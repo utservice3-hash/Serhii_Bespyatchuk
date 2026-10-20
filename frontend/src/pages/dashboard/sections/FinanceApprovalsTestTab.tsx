@@ -105,6 +105,7 @@ export function FinanceApprovalsTestTab() {
   const [busy, setBusy] = useState(false);
   const [resp, setResp] = useState<number | "all">("all");
   const [onlyDiff, setOnlyDiff] = useState(false);
+  const [onlyOver, setOnlyOver] = useState(false);
   const [showEmpty, setShowEmpty] = useState(false);
   const [closed, setClosed] = useState<Record<number, boolean>>({});
   const [open, setOpen] = useState<number | null>(null);
@@ -122,7 +123,10 @@ export function FinanceApprovalsTestTab() {
 
   const current = month === kyivMonth(), future = month > kyivMonth();
   const shown = data?.month.slice(0, 7) === month ? data : null;
-  const visible = (x: FinApprItem) => (!onlyDiff || !same(x.diff)) && (showEmpty || onlyDiff || x.plan != null || x.manual != null || x.rows > 0);
+  /** «Понад план» — як у «План/факт витрат»: факт із таблиці більший за план, або факт є, а плану немає. */
+  const overPlan = (x: FinApprItem) => (x.plan != null && x.plan !== 0 ? x.auto > x.plan : x.auto > 0);
+  const visible = (x: FinApprItem) => (!onlyDiff || !same(x.diff)) && (!onlyOver || overPlan(x))
+    && (showEmpty || onlyDiff || onlyOver || x.plan != null || x.manual != null || x.rows > 0);
   const t = shown?.totals;
   const left = t ? r2(t.plan - t.autoArticles) : 0;
   let rowsShown = 0;
@@ -138,6 +142,7 @@ export function FinanceApprovalsTestTab() {
             <option value="all">Усі відповідальні</option>
             {tree.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
           </select>
+          <label className="hr-muted" style={{ fontSize: 13 }}><input type="checkbox" checked={onlyOver} onChange={(e) => setOnlyOver(e.target.checked)} /> лише понад план</label>
           <label className="hr-muted" style={{ fontSize: 13 }}><input type="checkbox" checked={onlyDiff} onChange={(e) => setOnlyDiff(e.target.checked)} /> лише розбіжності з ручним</label>
           <label className="hr-muted" style={{ fontSize: 13 }}><input type="checkbox" checked={showEmpty} onChange={(e) => setShowEmpty(e.target.checked)} /> показати порожні</label>
         </div>
@@ -185,7 +190,7 @@ export function FinanceApprovalsTestTab() {
                         {items.map((x) => {
                           rowsShown++;
                           const d = x.plan == null ? null : r2(x.plan - x.auto);
-                          const over = x.plan != null ? x.auto > x.plan : x.auto > 0;
+                          const over = overPlan(x);
                           return (
                             <Fragment key={x.id}>
                               <tr className={`it ${over ? "over" : ""} ${open === x.id ? "sel" : ""} ${x.off ? "off" : ""}`} tabIndex={0}
@@ -211,17 +216,13 @@ export function FinanceApprovalsTestTab() {
                   </Fragment>
                 );
               })}
-              {!rowsShown && <tr><td colSpan={7} className="hr-muted" style={{ padding: 16 }}>{onlyDiff ? "Розбіжностей немає — кожна стаття збігається з таблицею." : "Статей із планом чи фактом за цей місяць немає."}</td></tr>}
+              {!rowsShown && <tr><td colSpan={7} className="hr-muted" style={{ padding: 16 }}>{onlyOver ? "Статей понад план немає." : onlyDiff ? "Розбіжностей немає — кожна стаття збігається з таблицею." : "Статей із планом чи фактом за цей місяць немає."}</td></tr>}
             </tbody>
           </table>
         </div>
 
         <div className="hr-sect">
           <h4>Операційні витрати за розділами</h4>
-          <p className="hr-muted" style={{ margin: "0 0 6px", fontSize: 12.5 }}>
-            Що дало б правило для «Тиждень і місяць»: статті розділу + ЗП за назвою, поруч — число, внесене руками.
-            {(shown.withoutSection.manual || shown.withoutSection.auto) ? ` Без розділу (${shown.withoutSection.names.join(", ") || "—"}: з таблиці ${money(shown.withoutSection.auto)} ₴) — в операційні не йде.` : ""}
-          </p>
           <div className="hr-tw">
             <table className="hr-table">
               <thead><tr><th>Розділ</th><th className="num">Статті з таблиці</th><th className="num">+ ЗП з таблиці</th><th className="num">Разом з таблиці</th>
