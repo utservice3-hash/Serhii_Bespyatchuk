@@ -46,26 +46,39 @@ function Lines({ lines }: { lines: FinApprLine[] }) {
   );
 }
 
-/** Кошик «не потрапило у статті»: назва, сума, кількість рядків; клік — рядки таблиці. */
-function Pots({ title, hint, pots }: { title: string; hint: string; pots: FinApprPot[] }) {
+/** Один кошик «не потрапило у статті» — рядки в спільній таблиці (`Outside`), щоб числа стояли в одній колонці. */
+interface Bucket { title: string; hint: string; pots: FinApprPot[] }
+/** «Не потрапило у статті»: усі кошики однією таблицею — назва кошика й пояснення, далі категорії; клік — рядки таблиці. */
+function Outside({ buckets }: { buckets: Bucket[] }) {
   const [open, setOpen] = useState<string | null>(null);
-  if (!pots.length) return null;
-  const sum = r2(pots.reduce((s, p) => s + p.sum, 0)), rows = pots.reduce((s, p) => s + p.rows, 0);
+  const live = buckets.filter((b) => b.pots.length);
+  if (!live.length) return <div className="hr-sect hr-muted" style={{ fontSize: 12.5 }}>Усе з таблиці оплат за цей місяць потрапило у статті.</div>;
   return (
     <div className="hr-sect">
-      <h4 style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>{title} <span className="hr-muted" style={{ fontWeight: 400 }}>· {money(sum)} ₴ · рядків {rows}</span></h4>
-      <p className="hr-muted" style={{ margin: "0 0 6px", fontSize: 12.5 }}>{hint}</p>
+      <h4>Не потрапило у статті</h4>
       <div className="hr-tw">
-        <table className="hr-table fin-table"><tbody>{pots.map((p) => (
-          <Fragment key={p.key}>
-            <tr className="it" onClick={() => setOpen(open === p.key ? null : p.key)}>
-              <td className="ind1"><span style={{ display: "inline-block", width: 16 }}>{open === p.key ? "▾" : "▸"}</span>{p.label}</td>
-              <td className="num">{money(p.sum)}</td><td className="num hr-muted">рядків {p.rows}</td>
-              <td>{p.unpaid ? <span className="hr-pill wn">не оплачено: {p.unpaid}</span> : null}</td>
-            </tr>
-            {open === p.key && <tr><td colSpan={4} className="ind2"><Lines lines={p.lines} /></td></tr>}
-          </Fragment>
-        ))}</tbody></table>
+        <table className="hr-table fin-table">
+          <thead><tr><th>Категорія з таблиці оплат</th><th className="num">Сума</th><th className="num">Рядків</th><th /></tr></thead>
+          <tbody>{live.map((b) => (
+            <Fragment key={b.title}>
+              <tr className="grp"><td colSpan={4} className="ind1">{b.title} · {money(r2(b.pots.reduce((s, p) => s + p.sum, 0)))} ₴
+                <div style={{ textTransform: "none", letterSpacing: 0, fontWeight: 400, fontSize: 12 }}>{b.hint}</div></td></tr>
+              {b.pots.map((p) => {
+                const k = `${b.title}:${p.key}`;
+                return (
+                  <Fragment key={k}>
+                    <tr className={`it ${open === k ? "sel" : ""}`} onClick={() => setOpen(open === k ? null : k)}>
+                      <td className="ind2"><span style={{ display: "inline-block", width: 16 }}>{open === k ? "▾" : "▸"}</span>{p.label}</td>
+                      <td className="num">{money(p.sum)}</td><td className="num">{p.rows}</td>
+                      <td>{p.unpaid ? <span className="hr-pill wn">не оплачено: {p.unpaid}</span> : null}</td>
+                    </tr>
+                    {open === k && <tr><td colSpan={4} className="ind2"><Lines lines={p.lines} /></td></tr>}
+                  </Fragment>
+                );
+              })}
+            </Fragment>
+          ))}</tbody>
+        </table>
       </div>
     </div>
   );
@@ -211,13 +224,13 @@ export function FinanceApprovalsTestTab() {
           </p>
           <div className="hr-tw">
             <table className="hr-table">
-              <thead><tr><th>Розділ</th><th className="num">Статті вручну</th><th className="num">Статті з таблиці</th><th className="num">Різниця</th>
-                <th className="num">+ ЗП з таблиці</th><th className="num">Разом з таблиці</th><th className="num">Внесено в «Тиждень і місяць»</th><th className="num">Різниця</th></tr></thead>
+              <thead><tr><th>Розділ</th><th className="num">Статті з таблиці</th><th className="num">+ ЗП з таблиці</th><th className="num">Разом з таблиці</th>
+                <th className="num">Внесено в «Тиждень і місяць»</th><th className="num">Різниця</th></tr></thead>
               <tbody>{shown.sections.map((s) => (
                 <tr key={s.section}>
-                  <td>{SEC[s.section]}</td><td className="num">{money(s.manualArticles)}</td><td className="num">{money(s.autoArticles)}</td>
-                  <td className="num">{same(s.autoArticles - s.manualArticles) ? <span className="fin-good">✓</span> : <span className="fin-bad">{signed(Math.round((s.autoArticles - s.manualArticles) * 100) / 100)}</span>}</td>
-                  <td className="num">{money(s.autoPayroll)}</td><td className="num"><b>{money(s.autoTotal)}</b></td>
+                  <td>{SEC[s.section]}{same(s.autoArticles - s.manualArticles) ? null
+                    : <div className="hr-muted" style={{ fontSize: 11.5 }}>статті вручну {money(s.manualArticles)} · різниця <span className="fin-bad">{signed(Math.round((s.autoArticles - s.manualArticles) * 100) / 100)}</span></div>}</td>
+                  <td className="num">{money(s.autoArticles)}</td><td className="num">{money(s.autoPayroll)}</td><td className="num"><b>{money(s.autoTotal)}</b></td>
                   <td className="num">{s.manualOpex == null ? <span className="hr-muted">не внесено</span> : money(s.manualOpex)}</td>
                   <td className="num">{s.manualOpex == null ? "—" : same(s.autoTotal - s.manualOpex) ? <span className="fin-good">✓</span> : <span className="fin-bad">{signed(Math.round((s.autoTotal - s.manualOpex) * 100) / 100)}</span>}</td>
                 </tr>
@@ -226,13 +239,15 @@ export function FinanceApprovalsTestTab() {
           </div>
         </div>
 
-        <Pots title="ЗП за назвою" hint="Статей для ЗП немає — розділ береться з назви категорії. В операційні йдуть, у «План/факт» — ні." pots={shown.payroll} />
-        <Pots title="Не розпізнано" hint="Категорії немає серед статей — у факт не йде. Додати статтю чи це не витрата для статистики?" pots={shown.unrecognized} />
-        <Pots title="Кілька статей з однією назвою" hint="Категорія збігається з двома статтями — не вгадуємо, куди. Перейменуйте одну зі статей." pots={shown.ambiguous} />
-        <Pots title="Не UA" hint="Напрямок не UA — у факт не йде (Тетяна 13.10: «беремо лише UA»)." pots={shown.notUa} />
-        <Pots title="Сума не число" hint="Сума в таблиці не читається як число — у факт не йде." pots={shown.badSum} />
-        <Pots title="Дата оплати не дата" hint="У «Даті оплати» не дата (показано в місяці внесення) — у факт не йде." pots={shown.badPayDate} />
-        <Pots title="Ще без дати оплати" hint="Внесено цього місяця, дати оплати ще немає — у факт піде, щойно її поставлять." pots={shown.noPayDate} />
+        <Outside buckets={[
+          { title: "ЗП за назвою", hint: "Статей для ЗП немає — розділ береться з назви категорії. В операційні йдуть, у «План/факт» — ні.", pots: shown.payroll },
+          { title: "Не розпізнано", hint: "Категорії немає серед статей — у факт не йде. Додати статтю чи це не витрата для статистики?", pots: shown.unrecognized },
+          { title: "Кілька статей з однією назвою", hint: "Категорія збігається з двома статтями — не вгадуємо, куди. Перейменуйте одну зі статей.", pots: shown.ambiguous },
+          { title: "Не UA", hint: "Напрямок не UA — у факт не йде (Тетяна 13.10: «беремо лише UA»).", pots: shown.notUa },
+          { title: "Сума не число", hint: "Сума в таблиці не читається як число — у факт не йде.", pots: shown.badSum },
+          { title: "Дата оплати не дата", hint: "У «Даті оплати» не дата (показано в місяці внесення) — у факт не йде.", pots: shown.badPayDate },
+          { title: "Ще без дати оплати", hint: "Внесено цього місяця, дати оплати ще немає — у факт піде, щойно її поставлять.", pots: shown.noPayDate },
+        ]} />
         <div className="hr-sect hr-muted" style={{ fontSize: 12.5 }}>
           Клік по статті показує рядки таблиці оплат, з яких складено факт. Реквізити й отримувачі сюди не потрапляють.
         </div>
