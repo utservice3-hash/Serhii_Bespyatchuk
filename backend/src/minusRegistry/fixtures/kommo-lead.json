@@ -1,0 +1,28 @@
+{
+  "_comment": "Синтетична угода у форматі Kommo API v4 (GET /api/v4/leads/{id}?with=contacts). Суми й назви вигадані; ID полів — справжні (звірено 20.10).",
+  "id": 62000001,
+  "name": "Київ – Львів 18.10.2026",
+  "price": -2048,
+  "status_id": 98470988,
+  "pipeline_id": 8921932,
+  "custom_fields_values": [
+    { "field_id": 2097649, "field_name": "Расчет приходов", "values": [{ "value": "29360" }] },
+    { "field_id": 2097627, "field_name": "Приход 1", "values": [{ "value": "36000" }] },
+    { "field_id": 2097629, "field_name": "Приход 1 Тип оплаты", "values": [{ "value": "Безнал с НДС", "enum_id": 1 }] },
+    { "field_id": 2097639, "field_name": "Приход 1 расчет", "values": [{ "value": 27360 }] },
+    { "field_id": 2097683, "field_name": "Приход 2", "values": [{ "value": "2000" }] },
+    { "field_id": 2097631, "field_name": "Приход 2 Тип оплаты", "values": [{ "value": "Наличные", "enum_id": 2 }] },
+    { "field_id": 2097641, "field_name": "Приход 2 расчет", "values": [{ "value": "2000" }] },
+    { "field_id": 2097643, "field_name": "Приход 3 расчет", "values": [{ "value": "" }] },
+    { "field_id": 2097681, "field_name": "Расчет расходов", "values": [{ "value": "31408.5" }] },
+    { "field_id": 2097661, "field_name": "Расход 1", "values": [{ "value": "38000" }] },
+    { "field_id": 2097651, "field_name": "Расход 1 Тип оплаты", "values": [{ "value": "Безнал с НДС", "enum_id": 3 }] },
+    { "field_id": 2097671, "field_name": "Расход 1 расчет", "values": [{ "value": "28880" }] },
+    { "field_id": 2097665, "field_name": "Расход 3", "values": [{ "value": "2690" }] },
+    { "field_id": 2097655, "field_name": "Расход 3 Тип оплаты", "values": [{ "value": "Безнал без НДС", "enum_id": 4 }] },
+    { "field_id": 2097675, "field_name": "Расход 3 расчет", "values": [{ "value": "2528,5" }] },
+    { "field_id": 2097493, "field_name": "Назва перевізника", "values": [{ "value": "  ФОП Кравець О. П. " }] },
+    { "field_id": 2098529, "field_name": "Мінусова угода", "values": [{ "value": "Мінус", "enum_id": 5 }] }
+  ],
+  "_embedded": { "contacts": [{ "id": 502, "is_main": false }, { "id": 501, "is_main": true }] }
+}

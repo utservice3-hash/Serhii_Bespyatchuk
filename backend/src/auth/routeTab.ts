@@ -162,6 +162,8 @@ const ROUTE_TAB: { test: (p: string) => boolean; tabs: string[] }[] = (() => {
     { test: pre("/api/rates"), tabs: ["rates"] },
     // 🚚 Конфігуратор вантажу — вкладка того самого екрана «Калькулятор ставок та вантажу» (12.10.2026)
     { test: pre("/api/cargo"), tabs: ["rates"] },
+    // 📒 Реєстр мінусових угод (20.10.2026): пункт меню «Реєстри»; хто що може — `minusRegistry/roles.ts`.
+    { test: pre("/api/minus-deals"), tabs: ["registries"] },
     { test: pre("/api/documents"), tabs: ["documents"] },
     { test: pre("/api/one-on-ones"), tabs: ["oneonone"] },
     { test: pre("/api/duty"), tabs: ["duty"] },

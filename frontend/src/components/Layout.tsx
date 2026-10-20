@@ -6,6 +6,7 @@ import { Logo } from "./Logo";
 import { NavIcon } from "./NavIcon";
 import { CommandPalette } from "./CommandPalette";
 import { heartbeat, trackerSsoUrl, surveysBadge, type SurveysBadge } from "../api";
+import { useMinusRegistryCount } from "../minusRegistry/client/minusRegistry/useMinusRegistryCount";
 import { usePolling } from "../hooks/usePolling";
 // NAV_GROUPS drives the grouped sidebar; NAV_ITEMS (flattened) is used elsewhere.
 
@@ -67,6 +68,9 @@ export const NAV_GROUPS = [
       { key: "nominations", label: "Номінації тижня", icon: "🥇", roles: ["admin", "team_lead"] },
       { key: "duty", label: "Календар команди", icon: "🗓" },
       { key: "bank", label: "Виписка", icon: "💳" },
+      // 📒 Реєстри (пакет Сергія 20.10.2026): поки один — «Реєстр мінусових угод». Пункт — лише ролям із вкладкою `registries`;
+      // число — скільки чекає саме вашої дії (Сергію — «На погодженні», бухгалтерії — «Погоджено», менеджеру — свої «Повернуто»).
+      { key: "registries", label: "Реєстри", icon: "📒" },
       { key: "oneonone", label: "Ван-ту-ван", icon: "🤝", roles: ["admin", "team_lead"] },
       { key: "rates", label: "Калькулятор ставок та вантажу", icon: "🧮" },
       { key: "goals", label: "Місячні цілі", icon: "🎯", roles: ["admin", "team_lead"] },
@@ -200,6 +204,8 @@ export function Layout({
   const surveysOn = !screens || screens.includes("surveys");
   usePolling(() => { surveysBadge().then(setSurveys).catch(() => undefined); }, 300000, { immediate: true, enabled: surveysOn });
   const showSurveys = !!surveys && (surveys.canManage || surveys.assigned > 0);
+  // 📒 Реєстри: лічильник пакета (раз на хвилину, при поверненні у вкладку й одразу після дії) — лише тим, кому вкладку видано.
+  const registriesCount = useMinusRegistryCount(60_000, !screens || screens.includes("registries"));
   const navGroups = withTracker(navGroupsForRole(role, screens), trackerEnabled)
     .map((g) => ({ ...g, items: g.items.filter((it) => it.key !== "surveys" || showSurveys) }))
     .filter((g) => g.items.length > 0);
@@ -315,13 +321,14 @@ export function Layout({
                 // два різні способи показати «є нове» розійшлись би у вигляді й поведінці.
                 const badge = item.key === "messenger" ? messengerUnread
                             : item.key === "news" ? newsUnread
-                            : item.key === "surveys" ? (surveys?.fresh ?? 0) : 0;
+                            : item.key === "surveys" ? (surveys?.fresh ?? 0)
+                            : item.key === "registries" ? registriesCount : 0;
                 return (
                 <button
                   key={item.key}
                   className={`sidebar-nav-item ${item.key === active ? "active" : ""}`}
                   onClick={() => onSelect(item.key as NavKey)}
-                  title={badge ? `${item.label} — ${badge} ${item.key === "surveys" ? "чекають відповіді" : "непрочитаних"}` : item.label}
+                  title={badge ? `${item.label} — ${badge} ${item.key === "surveys" ? "чекають відповіді" : item.key === "registries" ? "чекають вашої дії" : "непрочитаних"}` : item.label}
                   style={{ position: "relative" }}
                 >
                   <span className="sidebar-nav-icon"><NavIcon k={item.key} /></span>

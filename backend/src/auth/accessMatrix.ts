@@ -1715,6 +1715,21 @@ export const ACCESS_MATRIX: AccessRow[] = [
      всередині роуту). Відповісти й позначити сповіщення може кожен із вкладкою — deny-only лише кандидату. */
   // 🚚 Конфігуратор вантажу (12.10.2026): вкладка «rates» — ті самі ролі, що калькулятор ставок; довідник змінює лише
   // право `manage_cargo` (admin, СЕО, ОД — рішення Романа 12.10.2026).
+  // 📒 Реєстр мінусових угод (20.10.2026): вкладка `registries`; хто що може — `minusRegistry/roles.ts` + `shared/minusRegistry.ts`.
+  // Перегляд — усім із вкладкою; «нова угода з CRM» і подання — лише менеджер і тім-лід (решта 403 у роутері пакета).
+  // Дії `/:id/:action` з ідентифікатором-заглушкою відповідають 404 «Запит не знайдено» ще до перевірки ролі — тож 403 там лише HR (вкладка).
+  { method: "GET", path: "/api/minus-deals", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/minus-deals/counter", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/minus-deals/deal/:dealId", cls: "GET",
+    allow: ["team_lead", "manager"], deny: ["admin", "ceo", "opdir", "kvp", "financier", "hr"] },
+  // Подання адмінського рівня теж відмовляє (403, `canSubmit`), але це роль РЕЄСТРУ, а не право — у deny запису не пишемо
+  // (див. ADMIN_DENIED_BY_PERM); «подають лише менеджер і тім-лід» стереже власний гейт `#1843`.
+  { method: "POST", path: "/api/minus-deals", cls: "deny-only",
+    allow: [], deny: ["hr"] },
+  { method: "POST", path: "/api/minus-deals/:id/:action", cls: "deny-only",
+    allow: [], deny: ["hr"] },
   { method: "GET", path: "/api/cargo/three.js", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/cargo/reference", cls: "GET",

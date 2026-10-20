@@ -1,0 +1,166 @@
+/* Реєстр мінусових угод — усе під .mreg, класи з префіксом mr- (нічого глобального, не перетинається зі стилями дашборда).
+   Вигляд = затверджений макет v5 (20.10). Шрифти — як в інших вкладках: Golos Text / Unbounded / JetBrains Mono.
+   Тема: світла за замовчуванням; темна — за prefers-color-scheme і за data-theme="dark" на <html>; data-theme="light" — завжди світла. */
+.mreg{
+  --bg:#f4f1ee; --surface:#fff; --surface-2:#faf8f6; --surface-3:#f0ece8;
+  --ink:#1c1e26; --ink-2:#464b58; --muted:#7c8090; --line:#e6e0da; --line-2:#efeae5;
+  --brand:#c5141c; --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --info:#2f5fd0; --done:#464b58;
+  --scrim:rgba(18,19,23,.42);
+  --shadow:0 1px 2px rgba(28,30,38,.05), 0 10px 30px -18px rgba(28,30,38,.35);
+  --shadow-lg:0 2px 4px rgba(28,30,38,.06), 0 24px 60px -24px rgba(28,30,38,.45);
+  --sans:"Golos Text", system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+  --disp:"Unbounded", "Golos Text", system-ui, sans-serif;
+  --mono:"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .mreg{
+  --bg:#121317; --surface:#1a1c21; --surface-2:#202329; --surface-3:#272b32;
+  --ink:#f1efed; --ink-2:#c5c9d1; --muted:#8b909c; --line:#2c3038; --line-2:#242830;
+  --brand:#ef4444; --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --info:#7da2f0; --done:#c5c9d1;
+  --scrim:rgba(0,0,0,.6);
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -18px rgba(0,0,0,.8);
+  --shadow-lg:0 2px 4px rgba(0,0,0,.5), 0 24px 60px -24px rgba(0,0,0,.9);
+  color-scheme:dark;
+}}
+:root[data-theme="dark"] .mreg{
+  --bg:#121317; --surface:#1a1c21; --surface-2:#202329; --surface-3:#272b32;
+  --ink:#f1efed; --ink-2:#c5c9d1; --muted:#8b909c; --line:#2c3038; --line-2:#242830;
+  --brand:#ef4444; --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --info:#7da2f0; --done:#c5c9d1;
+  --scrim:rgba(0,0,0,.6);
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -18px rgba(0,0,0,.8);
+  --shadow-lg:0 2px 4px rgba(0,0,0,.5), 0 24px 60px -24px rgba(0,0,0,.9);
+  color-scheme:dark;
+}
+.mreg *,.mreg *::before,.mreg *::after{box-sizing:border-box}
+.mreg [hidden]{display:none!important}
+.mreg button,.mreg input,.mreg select,.mreg textarea{font:inherit;color:inherit}
+.mreg button{cursor:pointer;background:none;border:0;padding:0;margin:0}
+.mreg :focus-visible{outline:2px solid var(--brand);outline-offset:2px;border-radius:6px}
+.mreg .mr-num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.mreg .mr-grow{flex:1}
+/* розкладка — за шириною вкладки, а не вікна (у дашборді є бокове меню) */
+.mreg .mr-cq{container-type:inline-size;container-name:mreg}
+.mreg .mr-cnt{display:inline-grid;place-items:center;min-width:22px;height:22px;padding:0 6px;border-radius:999px;background:var(--brand);color:#fff;font:700 12px/1 var(--sans)}
+
+.mreg .mr-regs{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}
+.mreg .mr-regs button{display:inline-flex;align-items:center;gap:8px;padding:9px 15px;border-radius:11px;border:1px solid var(--line);background:var(--surface);font-weight:600;font-size:13px}
+.mreg .mr-regs button[aria-selected="true"]{background:var(--ink);border-color:var(--ink);color:var(--surface)}
+
+.mreg .mr-card{background:var(--surface);border:1px solid var(--line);border-radius:13px;box-shadow:var(--shadow);min-width:0}
+.mreg .mr-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 14px;border-bottom:1px solid var(--line-2)}
+.mreg .mr-ways{display:flex;gap:2px;background:var(--surface-3);border-radius:10px;padding:3px;flex-wrap:wrap;max-width:100%}
+.mreg .mr-ways button{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--muted);white-space:nowrap}
+.mreg .mr-ways button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.07)}
+.mreg .mr-ways .mr-c{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.mreg .mr-search{display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);padding:0 9px;min-width:0;margin:0}
+.mreg .mr-search svg{width:15px;height:15px;color:var(--muted);flex:none}
+.mreg .mr-search input{border:0;background:transparent;padding:7px 0;width:150px;font-family:var(--mono);font-size:13px;min-width:0;margin:0}
+.mreg .mr-search input:focus{outline:0}
+.mreg .mr-search:focus-within{border-color:color-mix(in srgb, var(--brand) 50%, var(--line))}
+.mreg .mr-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:8px 13px;border-radius:10px;border:1px solid var(--line);background:var(--surface);font-weight:600;font-size:13px;white-space:nowrap;line-height:1.5}
+.mreg .mr-btn:hover{background:var(--surface-2)}
+.mreg .mr-btn.mr-pri{background:var(--brand);border-color:var(--brand);color:#fff}
+.mreg .mr-btn.mr-pri:hover{filter:brightness(1.08)}
+.mreg .mr-btn.mr-okb{background:var(--ok);border-color:var(--ok);color:#fff}
+.mreg .mr-btn.mr-badb{color:var(--bad);border-color:color-mix(in srgb, var(--bad) 40%, var(--line))}
+.mreg .mr-btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
+
+/* таблиця реєстру */
+.mreg .mr-tblwrap{overflow-x:auto}
+.mreg table{width:100%;border-collapse:collapse;font-size:13px;margin:0}
+.mreg .mr-reg th{text-align:left;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);padding:10px 12px 8px;border-bottom:1px solid var(--line);white-space:nowrap;background:var(--surface)}
+.mreg .mr-reg .mr-r{text-align:right}
+.mreg .mr-reg td{padding:11px 12px;border-bottom:1px solid var(--line-2);vertical-align:middle}
+.mreg .mr-reg tbody tr{cursor:pointer}
+.mreg .mr-reg tbody tr:hover td{background:var(--surface-2)}
+.mreg .mr-reg tbody tr.mr-sel td{background:color-mix(in srgb, var(--brand) 6%, var(--surface))}
+.mreg .mr-pf{display:block;margin-top:2px;font-family:var(--sans);font-size:11.5px;font-weight:500;color:var(--muted)}
+.mreg .mr-tbd{color:var(--muted);font-size:12px;font-style:italic;font-weight:500}
+.mreg .mr-psrc{margin-top:6px}
+.mreg .mr-id{font-family:var(--mono);font-weight:600}
+.mreg .mr-route{font-weight:600;min-width:120px}
+.mreg .mr-party{color:var(--ink-2);min-width:110px}
+.mreg .mr-sub{margin-top:2px}
+.mreg .mr-parties{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 14px;margin:0;font-size:13.5px}
+.mreg .mr-parties dt{color:var(--muted);font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;align-self:center}
+.mreg .mr-parties dd{margin:0;font-weight:600}
+.mreg .mr-money{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.mreg .mr-neg{color:var(--bad);font-weight:600}
+.mreg .mr-pos{color:var(--ok);font-weight:600}
+.mreg .mr-who{color:var(--ink-2)}
+.mreg .mr-when{color:var(--muted);font-family:var(--mono);font-size:12px;white-space:nowrap}
+.mreg .mr-reg tfoot td{border-bottom:0;color:var(--muted);font-size:12.5px}
+.mreg .mr-reg tfoot .mr-money{color:var(--ink)}
+.mreg .mr-empty{padding:34px 16px;text-align:center;color:var(--muted)}
+
+.mreg .mr-pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap;color:var(--pc);background:color-mix(in srgb, var(--pc) 12%, transparent)}
+.mreg .mr-pill::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--pc)}
+.mreg .mr-pill.mr-warn{--pc:var(--warn)} .mreg .mr-pill.mr-info{--pc:var(--info)} .mreg .mr-pill.mr-ok{--pc:var(--ok)} .mreg .mr-pill.mr-done{--pc:var(--done)} .mreg .mr-pill.mr-bad{--pc:var(--bad)}
+.mreg .mr-grew{display:inline-block;margin-left:6px;font-size:11.5px;font-weight:700;color:var(--bad)}
+
+/* панель справа (деталі угоди / нова угода) — поза контейнером .mr-cq, щоб position:fixed рахувався від вікна */
+.mreg .mr-scrim{position:fixed;inset:0;background:var(--scrim);z-index:900}
+.mreg .mr-drawer{position:fixed;top:0;right:0;bottom:0;width:min(560px,100%);background:var(--surface);border-left:1px solid var(--line);box-shadow:var(--shadow-lg);z-index:901;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top, 0px);padding-bottom:env(safe-area-inset-bottom, 0px);padding-right:env(safe-area-inset-right, 0px);text-align:left}
+.mreg .mr-dh{display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid var(--line-2)}
+.mreg .mr-dh h2{margin:0;font-size:16px;font-weight:700;display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-family:var(--sans);letter-spacing:0;color:var(--ink);line-height:1.5}
+.mreg .mr-x{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;color:var(--muted);flex:none}
+.mreg .mr-x:hover{background:var(--surface-3);color:var(--ink)}
+.mreg .mr-db{overflow:auto;padding:16px 18px 20px;display:flex;flex-direction:column;gap:16px}
+.mreg .mr-df{border-top:1px solid var(--line-2);padding:14px 18px;display:flex;flex-direction:column;gap:10px}
+.mreg .mr-lbl{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.mreg .mr-bigroute{font-family:var(--disp);font-weight:500;font-size:18px;line-height:1.3;text-wrap:balance}
+.mreg .mr-src{font-size:12px;color:var(--muted)}
+.mreg .mr-ledger{display:grid;gap:8px}
+.mreg .mr-lg{border:1px solid var(--line);border-radius:11px;background:var(--surface-2);padding:9px 12px;display:grid;gap:3px}
+.mreg .mr-lh{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.mreg .mr-lh .mr-tot{font-size:16px;font-weight:600;white-space:nowrap}
+/* форма приходів / розходів — як блок полів у CRM: «Приход N» · «Тип оплаты» · сума · «расчет» */
+.mreg .mr-lt{font-size:12.5px;margin-top:3px}
+.mreg .mr-lt th,.mreg .mr-lt td{padding:3px 0 3px 12px;text-align:left;font-weight:500;color:var(--ink-2);white-space:nowrap;vertical-align:baseline;border:0;background:none;text-transform:none;letter-spacing:0;font-size:12.5px}
+.mreg .mr-lt th:first-child,.mreg .mr-lt td:first-child{padding-left:0}
+.mreg .mr-lt thead th{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-bottom:1px}
+.mreg .mr-lt tbody th{color:var(--muted)}
+.mreg .mr-lt td.mr-f{color:var(--ink);font-weight:600;white-space:normal;width:100%}
+.mreg .mr-lt .mr-r{text-align:right}
+.mreg .mr-lg.mr-mg.mr-minus{border-color:color-mix(in srgb, var(--bad) 35%, var(--line));background:color-mix(in srgb, var(--bad) 6%, var(--surface))}
+.mreg .mr-lg.mr-mg.mr-plus{border-color:color-mix(in srgb, var(--ok) 35%, var(--line));background:color-mix(in srgb, var(--ok) 6%, var(--surface))}
+.mreg .mr-note{border:1px solid color-mix(in srgb, var(--bad) 35%, var(--line));background:color-mix(in srgb, var(--bad) 6%, var(--surface));border-radius:11px;padding:10px 12px;font-size:13px}
+.mreg .mr-note b{color:var(--bad)}
+.mreg .mr-quote{border-left:3px solid var(--line);padding:2px 0 2px 12px;white-space:pre-wrap}
+.mreg .mr-meta{font-size:12px;color:var(--muted);margin-top:4px}
+.mreg .mr-tl{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.mreg .mr-tl li{display:grid;grid-template-columns:12px minmax(0,1fr);gap:10px;font-size:13px}
+.mreg .mr-tl .mr-dot{width:10px;height:10px;border-radius:50%;margin-top:5px;background:var(--pc, var(--muted))}
+.mreg .mr-tl .mr-t{font-weight:600}
+.mreg .mr-tl .mr-tr{color:var(--ink-2);white-space:pre-wrap}
+.mreg .mr-field{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:var(--ink-2);margin:0}
+.mreg textarea.mr-in,.mreg input.mr-in{width:100%;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);padding:9px 11px;font-size:13.5px;color:var(--ink);resize:vertical;margin:0}
+.mreg input.mr-in{font-family:var(--mono)}
+.mreg textarea.mr-in:focus,.mreg input.mr-in:focus{outline:0;border-color:color-mix(in srgb, var(--brand) 50%, var(--line));box-shadow:0 0 0 3px color-mix(in srgb, var(--brand) 12%, transparent)}
+.mreg .mr-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0}
+.mreg .mr-row .mr-in{flex:1;min-width:160px}
+.mreg .mr-err{color:var(--bad);font-size:13px;font-weight:600}
+.mreg .mr-hint{color:var(--muted);font-size:12.5px}
+.mreg .mr-acts{display:flex;gap:8px;flex-wrap:wrap}
+
+.mreg .mr-toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom, 0px));transform:translateX(-50%);background:var(--ink);color:var(--surface);padding:10px 16px;border-radius:11px;font-size:13px;font-weight:600;box-shadow:var(--shadow-lg);z-index:950;max-width:min(560px,calc(100vw - 32px));text-align:center}
+@media (prefers-reduced-motion:no-preference){
+  .mreg .mr-drawer{animation:mr-din .18s ease-out} @keyframes mr-din{from{transform:translateX(24px);opacity:.6}}
+  .mreg .mr-toast{animation:mr-tin .18s ease-out} @keyframes mr-tin{from{opacity:0;transform:translate(-50%,6px)}}
+}
+
+/* вужча вкладка — щільніші комірки, щоб таблиця влазила без прокрутки */
+@container mreg (max-width:1136px){ .mreg .mr-reg th,.mreg .mr-reg td{padding-left:9px;padding-right:9px} }
+/* вузько: рядки таблиці — картками */
+@container mreg (max-width:760px){
+  .mreg .mr-reg thead{display:none}
+  .mreg .mr-reg,.mreg .mr-reg tbody,.mreg .mr-reg tr,.mreg .mr-reg td,.mreg .mr-reg tfoot{display:block;width:100%}
+  .mreg .mr-reg tbody tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;padding:12px 14px;border-bottom:1px solid var(--line-2)}
+  .mreg .mr-reg td{border:0;padding:0}
+  .mreg .mr-reg td.mr-c-id{grid-column:1} .mreg .mr-reg td.mr-c-st{grid-column:2;grid-row:1 / span 2;align-self:start;text-align:right}
+  .mreg .mr-reg td.mr-c-route{grid-column:1} .mreg .mr-reg td.mr-c-in,.mreg .mr-reg td.mr-c-pay{display:none}
+  .mreg .mr-reg td.mr-c-cl,.mreg .mr-reg td.mr-c-ca{grid-column:1 / -1;font-size:12.5px}
+  .mreg .mr-reg td.mr-c-diff{grid-column:1;text-align:left} .mreg .mr-reg td.mr-c-who{grid-column:1 / -1;font-size:12px}
+  .mreg .mr-reg tfoot tr{display:flex;justify-content:space-between;padding:10px 14px}
+  .mreg .mr-search input{width:110px}
+}

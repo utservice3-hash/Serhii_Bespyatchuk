@@ -6079,3 +6079,49 @@ CREATE TABLE IF NOT EXISTS fin_kpi_plans (
   PRIMARY KEY (kpi_id, month)
 );
 REVOKE ALL ON fin_kpi_plans FROM ai_readonly;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 📒 РЕЄСТР МІНУСОВИХ УГОД (пакет Сергія, макет v5, 20.10.2026; задача 6466). Таблиці — з `migrations/001_minus_deals_registry.sql`
+-- пакета без змін. Логіка — `minusRegistry/`, роут — `routes/minusRegistry.ts`, гейти — `minusRegistry/minusRegistry.test.ts`.
+-- Знімок угоди (`crm`) — з Kommo як є: реєстр нічого не перераховує. Одна угода — один запит, навіть після «Відхилено».
+-- ═══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS minus_deal_requests (
+  id              bigserial PRIMARY KEY,
+  deal_id         bigint NOT NULL UNIQUE,                    -- ID угоди в Kommo
+  status          text NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending', 'returned', 'approved', 'paid', 'rejected')),
+  comment         text NOT NULL CHECK (length(btrim(comment)) BETWEEN 1 AND 2000),   -- «Чому угода мінусова»
+  crm             jsonb NOT NULL,                            -- знімок угоди з Kommo (shared/minusRegistry.ts → CrmDeal)
+  approved_crm    jsonb,                                     -- знімок на момент погодження: бюджет зменшився → погодження знімається
+  grew            jsonb,                                     -- «мінус зріс»: {budget — бюджет при погодженні, what — що змінилось}
+  created_by      text NOT NULL,                             -- users.id менеджера / тім-ліда
+  created_by_name text NOT NULL,                             -- ПІБ на момент подання (для списку Сергія й бухгалтерії)
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now(),        -- остання зміна статусу — за нею сортується список
+  synced_at       timestamptz NOT NULL DEFAULT now()         -- коли востаннє звірено з Kommo
+);
+CREATE INDEX IF NOT EXISTS minus_deal_requests_status_idx ON minus_deal_requests (status, synced_at);
+CREATE INDEX IF NOT EXISTS minus_deal_requests_owner_idx ON minus_deal_requests (created_by);
+REVOKE ALL ON minus_deal_requests FROM ai_readonly;
+
+-- Історія запиту: хто, коли, що зробив. by_id NULL — система (синхронізація з Kommo зняла погодження).
+CREATE TABLE IF NOT EXISTS minus_deal_events (
+  id          bigserial PRIMARY KEY,
+  request_id  bigint NOT NULL REFERENCES minus_deal_requests (id) ON DELETE CASCADE,
+  type        text NOT NULL CHECK (type IN ('submitted', 'resubmitted', 'approved', 'returned', 'rejected', 'paid', 'revoked')),
+  by_id       text,
+  by_name     text,
+  note        text NOT NULL DEFAULT '',                      -- причина повернення / відмови; для revoked — «Маржа в CRM: … → …»
+  data        jsonb,                                         -- approved: {budget}; revoked: {before, after}; resubmitted: {comment_before}
+  at          timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS minus_deal_events_request_idx ON minus_deal_events (request_id, at, id);
+REVOKE ALL ON minus_deal_events FROM ai_readonly;
+
+-- Вкладка «Реєстри» (пункт меню): менеджер, тім-лід, бухгалтерія, Сергій і «інші адміни» (адмін, СЕО, ОД, КВП, фінансист).
+-- HR, кандидат, бізнес-асистент — без неї (ТЗ §0 п.3: «решта ролей — 403, пункт меню не показувати»). Разово: ключ, який
+-- адмін потім вимкне чи ввімкне в Налаштуваннях, наступний старт не перепише (`NOT (screen_access ? 'registries')`).
+UPDATE roles SET screen_access = screen_access || '{"registries":true}'::jsonb
+  WHERE key IN ('manager', 'team_lead', 'admin', 'ceo', 'opdir', 'kvp', 'financier', '____________') AND NOT (screen_access ? 'registries');
+UPDATE roles SET screen_access = screen_access || '{"registries":false}'::jsonb
+  WHERE key NOT IN ('manager', 'team_lead', 'admin', 'ceo', 'opdir', 'kvp', 'financier', '____________') AND NOT (screen_access ? 'registries');

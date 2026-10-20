@@ -63,6 +63,7 @@ export const MOUNTS: { mount: string; module: string; export: string }[] = [
   { mount: "/api/finance", module: "../routes/finance.js", export: "financeRouter" },
   { mount: "/api/constructor", module: "../routes/constructor.js", export: "constructorRouter" },
   { mount: "/api/surveys", module: "../routes/surveys.js", export: "surveysRouter" },
+  { mount: "/api/minus-deals", module: "../routes/minusRegistry.js", export: "minusDealsRouter" },
   { mount: "/api/cargo", module: "../routes/cargo.js", export: "cargoRouter" },
   { mount: "/api/receivables-claims", module: "../routes/receivablesClaims.js", export: "receivablesClaimRouter" },
   { mount: "/api/nominations", module: "../routes/nominations.js", export: "nominationsRouter" },

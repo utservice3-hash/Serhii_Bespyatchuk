@@ -76,6 +76,7 @@ import { NominationsSection } from "./dashboard/sections/NominationsSection";
 import BankSection from "./dashboard/sections/BankSection";
 import { emptyTaskForm } from "./dashboard/taskForm";
 import { OverviewSection, type Kpi } from "./dashboard/sections/OverviewSection";
+import RegistriesPage from "../minusRegistry/client/RegistriesPage";
 import { ManagerReportSection } from "./dashboard/sections/ManagerReportSection";
 import { FeedbackSection } from "./dashboard/sections/FeedbackSection";
 import { RatesAndCargoSection } from "./dashboard/sections/RatesAndCargoSection";
@@ -1145,6 +1146,7 @@ export function Dashboard() {
       {/* 📄 Конструктор документів (30.09.2026, пакет Сергія). Статичний імпорт — гейт #225. Доступ вирішує сервер. */}
       {section === "constructor" && <ConstructorSection />}
       {section === "surveys" && <SurveysSection />}
+      {section === "registries" && <RegistriesPage />}
 
       {section === "ba" && (
         /**

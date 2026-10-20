@@ -98,6 +98,8 @@ import { syncCalls } from "./jobs/syncCalls.js";
 import { missedCallTasks } from "./jobs/missedCallTasks.js";
 import { callAiJob } from "./jobs/callAiJob.js";
 import { carrierCallJob } from "./jobs/carrierCallJob.js";
+import { minusRegistrySync } from "./jobs/minusRegistrySync.js";
+import { minusDealsRouter } from "./routes/minusRegistry.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
 import { collectLardi } from "./jobs/collectLardi.js";
 import { syncCarriers } from "./jobs/syncCarriers.js";
@@ -183,6 +185,7 @@ app.use("/api/finance/payments", financePaymentsRouter); // 💸 «Оплати 
 app.use("/api/finance", financeRouter); // 💰 Фінанси: план/факт витрат і статті (29.09.2026)
 app.use("/api/constructor", constructorRouter); // 📄 Конструктор документів — пакет Сергія (30.09.2026)
 app.use("/api/surveys", surveysRouter); // 📋 Опитування команди — пакет Сергія (30.09.2026)
+app.use("/api/minus-deals", minusDealsRouter); // 📒 Реєстр мінусових угод — пакет Сергія (20.10.2026), пункт меню «Реєстри»
 app.use("/api/cargo", cargoRouter); // 🚚 Конфігуратор вантажу — пакет Сергія (12.10.2026), вкладка «Калькулятора ставок та вантажу»
 app.use("/api/receivables-claims", receivablesClaimRouter); // кнопка «Проблемний клієнт» у дебіторці
 app.use("/api/nominations", nominationsRouter); // 🏆 Номінації тижня (21.09.2026)
@@ -722,6 +725,13 @@ cron.schedule("5,15,25,35,45,55 * * * *", () => {
 // ⚠️ ПЕРЕЛІКОМ, а не «4-59/5» — той самий node-cron, що читає крок у діапазоні інакше (див. syncCallsFresh).
 cron.schedule("4,9,14,19,24,29,34,39,44,49,54,59 * * * *", () => {
   void runJob("carrierCallJob", () => carrierCallJob());
+});
+
+// 📒 РЕЄСТР МІНУСОВИХ УГОД (пакет Сергія 20.10.2026): звірка відкритих запитів із Kommo раз на 10 хв (ТЗ §9) —
+// «мінус зріс» знімає погодження, підтягується перевізник. Хвилини :07, :17 … не збігаються з :00/:30 `syncKommo`
+// і з :04/:09 перевізників. Порожній реєстр — нуль запитів до Kommo. Під наглядом (`monitoredJobs.ts`), everyMin == крону.
+cron.schedule("7,17,27,37,47,57 * * * *", () => {
+  void runJob("minusRegistrySync", () => minusRegistrySync());
 });
 
 // Готівка = приход (не бюджет). Легкий фетч приходу по готівкових 142-угодах

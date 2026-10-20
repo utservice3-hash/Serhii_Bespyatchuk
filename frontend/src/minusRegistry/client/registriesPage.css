@@ -1,0 +1,5 @@
+/* Сторінка «Реєстри»: заголовок із лічильником. Решта — у minusRegistry/registry.css (усе під .mreg). */
+.registries-page .rp-title{font-family:"Unbounded","Golos Text",system-ui,sans-serif;font-weight:500;font-size:19px;letter-spacing:-.01em;margin:0 0 14px;display:flex;align-items:center;gap:8px}
+.registries-page .rp-cnt{display:inline-grid;place-items:center;min-width:22px;height:22px;padding:0 6px;border-radius:999px;background:#c5141c;color:#fff;font:700 12px/1 "Golos Text",system-ui,sans-serif}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .registries-page .rp-cnt{background:#ef4444}}
+:root[data-theme="dark"] .registries-page .rp-cnt{background:#ef4444}
