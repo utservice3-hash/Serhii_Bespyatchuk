@@ -917,6 +917,57 @@ export function TasksSection({
     </tr>
   );
 
+  /**
+   * 🧺 ВИБІРКА СПИСКУ — ОДНА НА ОБИДВА ДИЗАЙНИ (20.10.2026, задачі №6379/№5998).
+   * Вкладка, виконавець, група, статус і пошук. Новий екран рахує лічильники з цієї ж
+   * вибірки, тож «цифри збігаються зі списком» тримається побудовою, а не копією фільтра.
+   * `withStatus` — старий дизайн має селектор статусу; новий групує сам і його не має.
+   */
+  const pickRows = (src: Task[], withStatus: boolean): { base: Task[]; synths: SynthU[] } => {
+    const q = taskSearch.trim().toLowerCase();
+    // Реальні верхнього рівня — БЕЗ сиріт-daily_kpi (вони йдуть у синтетичні парасольки).
+    let base = src.filter((t) => t.parentId == null && t.taskType !== "daily_kpi");
+    // ЧАСТИНА 1: сироти-daily_kpi (parent_id NULL) → синтетична парасолька по
+    // (assignee + ISO-тиждень plan_date, Пн–Нд). Дані не чіпаємо — лише групування.
+    const gmap = new Map<string, Task[]>();
+    for (const t of src.filter((t) => t.parentId == null && t.taskType === "daily_kpi" && t.planDate)) {
+      const wk = tMondayOf(t.planDate!); const key = `${t.assigneeId}|${wk}`;
+      (gmap.get(key) ?? gmap.set(key, []).get(key)!).push(t);
+    }
+    let synths: SynthU[] = [...gmap.entries()].map(([key, kids]) => {
+      const wk = key.split("|")[1]; const allDone = kids.every((k) => k.status === "done");
+      return { synthKey: `synth-${key}`, assigneeId: kids[0].assigneeId, assigneeName: kids[0].assigneeName,
+        weekStart: wk, weekEnd: tAddDays(wk, 6), kids, status: allDone ? "done" : "in_progress",
+        title: `План тижня ${tDdmm(wk)}–${tDdmm(tAddDays(wk, 6))}`, department: kids[0].department ?? null };
+    });
+    /* Перемикач «Свої / Спільні / Усі».
+       🔴 ГІЛКА ДЛЯ «shared» ОБОВʼЯЗКОВА, І ОСЬ ЧОМУ. Умова написана як
+       «якщо mine — звузь», тож будь-яке ІНШЕ значення автоматично
+       означає «показати все». Додати третю вкладку й не дописати їй
+       гілку = кнопка виглядає активною й показує ВЕСЬ список — відмова,
+       яку неможливо відрізнити від роботи. Тримає `#400m`.
+       ⚠️ Для ролі `manager` вкладка «Свої» НЕ фільтрує нічого: його
+       список і так лише свій (межа стоїть на сервері), а фільтр `isMine`
+       прибрав би задачі, які він створив колезі, — тобто зробив би те
+       саме зникнення, що ми лікували 14.09. */
+    const canSeeAllTab = isAdmin || role === "team_lead" || role === "company";
+    if (adminTab === "mine" && canSeeAllTab) { base = base.filter(isMine); synths = synths.filter((s) => s.assigneeId === currentManagerId); }
+    else if (adminTab === "shared") { base = base.filter(isSharedWithMe); synths = []; }
+    else if (adminTab === "review") { base = base.filter(awaitsMe); synths = []; }
+    if (assigneeFilter !== "") { base = base.filter((t) => t.assigneeId === assigneeFilter); synths = synths.filter((s) => s.assigneeId === assigneeFilter); }
+    // 📁 Фільтр по групі. Синтетичні парасольки KPI груп не мають, тож
+    // будь-який вибір, крім «Усі», їх свідомо прибирає.
+    if (groupFilter === "none") { base = base.filter((t) => t.groupId == null || groupName(t.groupId) == null); }
+    else if (groupFilter !== "all") { base = base.filter((t) => t.groupId === groupFilter); synths = []; }
+    if (withStatus && statusFilter === "active") { base = base.filter((t) => t.status !== "done"); synths = synths.filter((s) => s.status !== "done"); }
+    else if (withStatus && statusFilter === "done") { base = base.filter((t) => t.status === "done"); synths = synths.filter((s) => s.status === "done"); }
+    if (q) {
+      base = base.filter((t) => [t.title, t.comments, t.department, t.assigneeName].some((v) => (v ?? "").toLowerCase().includes(q)));
+      synths = synths.filter((s) => [s.title, s.assigneeName].some((v) => (v ?? "").toLowerCase().includes(q)));
+    }
+    return { base, synths };
+  };
+
   return (
     <>
       <div className="page-header">
@@ -1171,46 +1222,7 @@ export function TasksSection({
                 // розкривному списку парасольки (реальної kpi_period АБО синтетичної).
                 const childrenOf = (id: number) => tasks.filter((t) => t.parentId === id)
                   .sort((a, b) => (a.planDate ?? "").localeCompare(b.planDate ?? ""));
-                // Реальні верхнього рівня — БЕЗ сиріт-daily_kpi (вони йдуть у синтетичні парасольки).
-                let base = src.filter((t) => t.parentId == null && t.taskType !== "daily_kpi");
-                // ЧАСТИНА 1: сироти-daily_kpi (parent_id NULL) → синтетична парасолька по
-                // (assignee + ISO-тиждень plan_date, Пн–Нд). Дані не чіпаємо — лише групування.
-                const gmap = new Map<string, Task[]>();
-                for (const t of src.filter((t) => t.parentId == null && t.taskType === "daily_kpi" && t.planDate)) {
-                  const wk = tMondayOf(t.planDate!); const key = `${t.assigneeId}|${wk}`;
-                  (gmap.get(key) ?? gmap.set(key, []).get(key)!).push(t);
-                }
-                let synths: SynthU[] = [...gmap.entries()].map(([key, kids]) => {
-                  const wk = key.split("|")[1]; const allDone = kids.every((k) => k.status === "done");
-                  return { synthKey: `synth-${key}`, assigneeId: kids[0].assigneeId, assigneeName: kids[0].assigneeName,
-                    weekStart: wk, weekEnd: tAddDays(wk, 6), kids, status: allDone ? "done" : "in_progress",
-                    title: `План тижня ${tDdmm(wk)}–${tDdmm(tAddDays(wk, 6))}`, department: kids[0].department ?? null };
-                });
-                /* Перемикач «Свої / Спільні / Усі».
-                   🔴 ГІЛКА ДЛЯ «shared» ОБОВʼЯЗКОВА, І ОСЬ ЧОМУ. Умова написана як
-                   «якщо mine — звузь», тож будь-яке ІНШЕ значення автоматично
-                   означає «показати все». Додати третю вкладку й не дописати їй
-                   гілку = кнопка виглядає активною й показує ВЕСЬ список — відмова,
-                   яку неможливо відрізнити від роботи. Тримає `#400m`.
-                   ⚠️ Для ролі `manager` вкладка «Свої» НЕ фільтрує нічого: його
-                   список і так лише свій (межа стоїть на сервері), а фільтр `isMine`
-                   прибрав би задачі, які він створив колезі, — тобто зробив би те
-                   саме зникнення, що ми лікували 14.09. */
-                const canSeeAllTab = isAdmin || role === "team_lead" || role === "company";
-                if (adminTab === "mine" && canSeeAllTab) { base = base.filter(isMine); synths = synths.filter((s) => s.assigneeId === currentManagerId); }
-                else if (adminTab === "shared") { base = base.filter(isSharedWithMe); synths = []; }
-                else if (adminTab === "review") { base = base.filter(awaitsMe); synths = []; }
-                if (assigneeFilter !== "") { base = base.filter((t) => t.assigneeId === assigneeFilter); synths = synths.filter((s) => s.assigneeId === assigneeFilter); }
-                // 📁 Фільтр по групі. Синтетичні парасольки KPI груп не мають, тож
-                // будь-який вибір, крім «Усі», їх свідомо прибирає.
-                if (groupFilter === "none") { base = base.filter((t) => t.groupId == null || groupName(t.groupId) == null); }
-                else if (groupFilter !== "all") { base = base.filter((t) => t.groupId === groupFilter); synths = []; }
-                if (statusFilter === "active") { base = base.filter((t) => t.status !== "done"); synths = synths.filter((s) => s.status !== "done"); }
-                else if (statusFilter === "done") { base = base.filter((t) => t.status === "done"); synths = synths.filter((s) => s.status === "done"); }
-                if (q) {
-                  base = base.filter((t) => [t.title, t.comments, t.department, t.assigneeName].some((v) => (v ?? "").toLowerCase().includes(q)));
-                  synths = synths.filter((s) => [s.title, s.assigneeName].some((v) => (v ?? "").toLowerCase().includes(q)));
-                }
+                const { base, synths } = pickRows(src, true);
                 const prioRank: Record<string, number> = { high: 0, medium: 1, low: 2 };
                 const dir = sortDir === "asc" ? 1 : -1;
                 type Row = { kind: "task"; task: Task } | { kind: "synth"; synth: SynthU };
