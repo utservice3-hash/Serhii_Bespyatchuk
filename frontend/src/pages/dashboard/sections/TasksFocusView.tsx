@@ -17,7 +17,7 @@ import {
  * селектора статусу. Редагування — у картці задачі (клік по назві); у рядку лише галочка
  * «Готово», бо це найчастіша дія. Права на неї рахує сервер (`statusRights`).
  */
-export function TasksFocusView({ rows, kpi, today, showAssignee, meId, onOpen, onOpenFeed, onDone }: {
+export function TasksFocusView({ rows, kpi, today, showAssignee, meId, onOpen, onOpenFeed, onDone, onReopen }: {
   rows: Task[];
   /** Плани KPI (тижневі парасольки) — окремою згорнутою групою, у лічильники не входять. */
   kpi: { count: number; node: ReactNode } | null;
@@ -29,6 +29,8 @@ export function TasksFocusView({ rows, kpi, today, showAssignee, meId, onOpen, o
   onOpen: (id: number) => void;
   onOpenFeed: (id: number) => void;
   onDone: (task: Task) => void;
+  /** «↩ У роботу» на виконаній задачі — виправити випадкове закриття одним кліком. */
+  onReopen: (task: Task) => void;
 }) {
   const [chip, setChip] = useState<FocusChip | null>(null);
   const [closed, setClosed] = useState<Set<string>>(() => new Set(["doneEarlier", "kpi"]));
@@ -53,7 +55,8 @@ export function TasksFocusView({ rows, kpi, today, showAssignee, meId, onOpen, o
     const late = !done && !!t.deadline && t.deadline < today;
     const locked = !done && (t.statusRights?.canChange === false || t.statusRights?.canDone === false);
     return (
-      <div key={t.id} className={`tf-row${done ? " done" : ""}${showAssignee ? "" : " no-who"}`}>
+      <div key={t.id} className={`tf-row${done ? " done" : ""}${showAssignee ? "" : " no-who"}`}
+        style={done ? undefined : { ["--st" as string]: STATUS_DOT_COLORS[t.status] }}>
         <button type="button" className={`tf-check${done ? " on" : ""}`} disabled={done || locked}
           onClick={() => onDone(t)}
           aria-label={done ? `№${t.id} виконано` : `Позначити №${t.id} виконаною`}
@@ -72,7 +75,11 @@ export function TasksFocusView({ rows, kpi, today, showAssignee, meId, onOpen, o
             {t.pinned && <span>📌 закріплено</span>}
           </div>
         </div>
-        <span className="tf-status" style={{ ["--dot" as string]: STATUS_DOT_COLORS[t.status] }}>{STATUS_LABELS[t.status] ?? t.status}</span>
+        {done && t.statusRights?.canChange !== false ? (
+          <button type="button" className="tf-reopen" onClick={() => onReopen(t)} title="Повернути задачу в роботу (статус «В процесі»)">↩ У роботу</button>
+        ) : (
+          <span className="tf-status">{STATUS_LABELS[t.status] ?? t.status}</span>
+        )}
         {showAssignee && <span className="tf-who" title={t.assigneeName ?? "Без виконавця"}>{t.assigneeName ?? "Без виконавця"}</span>}
         <span className={`tf-dl${late ? " late" : ""}`}>{done ? (t.doneAt ? `✓ ${ddmm(t.doneAt)}` : "✓") : t.deadline ? ddmm(t.deadline) : "—"}</span>
       </div>

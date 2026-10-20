@@ -244,3 +244,28 @@ test("#1965 ЗАДАЧНИК: новий екран бере ту саму ви�
   assert.match(src, /setDesign\(design === "new" \? "old" : "new"\)/, "🔴 кнопки перемикання дизайну немає");
   assert.match(src, /"↩ Старий дизайн" : "✨ Новий дизайн"/, "🔴 кнопка повернення до старого дизайну без підпису");
 });
+
+/**
+ * #1966 — ВИПАДКОВЕ ЗАКРИТТЯ ВИПРАВЛЯЄТЬСЯ ОДНИМ КЛІКОМ (20.10.2026: галочкою випадково закрилась №5887).
+ * Після галочки — сповіщення «Задачу закрито» з кнопкою «Скасувати», що повертає САМЕ попередній статус;
+ * сповіщення — подія (8 с за `toastRules`, а не до закриття). На виконаній задачі — «↩ У роботу».
+ * 🧨 Червоніє, якщо прибрати «Скасувати», якщо скасування ставить фіксований статус замість попереднього,
+ * якщо сповіщення перестане бути подією, або якщо зникне «↩ У роботу».
+ */
+test("#1966 ЗАДАЧНИК: після галочки — «Скасувати» повертає попередній статус, на виконаній — «↩ У роботу»", () => {
+  const read = (...p: string[]) => readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", ...p), "utf8")
+    .replace(/^\s*\/\/.*$/gm, " ").replace(/\{?\/\*[\s\S]*?\*\/\}?/g, " ").replace(/\s+/g, " ");
+  const sec = read("TasksSection.tsx");
+  const done = sec.slice(sec.indexOf("onDone={(t) => {"), sec.indexOf("onReopen={(t) => {"));
+  assert.ok(done.length > 0, "🔴 обробника галочки немає");
+  assert.match(done, /const prev = t\.status;/, "🔴 попередній статус не запамʼятовується — скасувати нема куди");
+  assert.match(done, /commitTask\(t\.id, \{ status: "done" \}\);/);
+  assert.match(done, /action: \{ label: "Скасувати", run: \(\) => \{ patchTaskLocal\(t\.id, \{ status: prev, doneAt: null \}\); commitTask\(t\.id, \{ status: prev \}\); \} \}/,
+    "🔴 «Скасувати» немає або воно повертає не попередній статус");
+  assert.match(done, /event: true/, "🔴 сповіщення про закриття не подія — висітиме до ручного закриття");
+  assert.match(sec, /onReopen=\{\(t\) => \{ patchTaskLocal\(t\.id, \{ status: "in_progress", doneAt: null \}\); commitTask\(t\.id, \{ status: "in_progress" \}\);/,
+    "🔴 «↩ У роботу» не повертає задачу в роботу");
+  const view = read("TasksFocusView.tsx");
+  assert.match(view, /onClick=\{\(\) => onReopen\(t\)\}/, "🔴 кнопки «↩ У роботу» в рядку виконаної задачі немає");
+  assert.match(view, /↩ У роботу/);
+});

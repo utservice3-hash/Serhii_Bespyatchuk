@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, useEffect, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import { useDialogs } from "../../../components/Dialogs";
+import { useToast } from "../../../components/Toasts";
 import { parseTaskIdParam, deepLinkState } from "../taskDeepLink";
 import { awaitsMyAcceptance } from "../acceptanceNotify";
 import {
@@ -622,6 +623,7 @@ export function TasksSection({
   teams?: Team[];
 }) {
   const dlg = useDialogs();
+  const toast = useToast();
   const isAdmin = role === "admin";
   // Підпис «чия сторінка»: імʼя менеджера (якщо акаунт привʼязаний) або email акаунта.
   const accountName = managerOptions.find((m) => m.id === currentManagerId)?.name || accountEmail || "мій акаунт";
@@ -1657,8 +1659,20 @@ export function TasksSection({
             onOpenFeed={openFeed}
             onDone={(t) => {
               // Той самий шлях, що в селекторі статусу: права рахує сервер, помилку показує commitTask.
+              // ↩ «Скасувати» 8 с (подія з кнопкою, `toastRules`): галочку легко зачепити випадково —
+              // 20.10.2026 так закрилась №5887. Скасування повертає САМЕ попередній статус.
+              const prev = t.status;
               patchTaskLocal(t.id, { status: "done", doneAt: kyivDate(new Date()) });
               commitTask(t.id, { status: "done" });
+              toast(`№${t.id} «${t.title}»`, {
+                head: "Задачу закрито", key: `done-${t.id}`, event: true,
+                action: { label: "Скасувати", run: () => { patchTaskLocal(t.id, { status: prev, doneAt: null }); commitTask(t.id, { status: prev }); } },
+              });
+            }}
+            onReopen={(t) => {
+              // ↩ Повернути закриту задачу в роботу одним кліком — з групи «Виконано».
+              patchTaskLocal(t.id, { status: "in_progress", doneAt: null });
+              commitTask(t.id, { status: "in_progress" });
             }}
           />
         );
