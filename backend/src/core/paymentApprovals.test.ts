@@ -199,3 +199,15 @@ test("#1277e ФРОНТ: різниця = таблиця − вручну і в 
   for (const k of ["payroll", "ambiguous", "unrecognized", "notUa", "badSum", "badPayDate", "noPayDate"])
     assert.match(tab, new RegExp(`pots: shown\\.${k} \\}`), `🔴 кошика «${k}» немає на екрані`);
 });
+
+/**
+ * #1277f — «ЛИШЕ ПОНАД ПЛАН» (Роман 20.10.2026) — те саме правило, що в «План/факт витрат»: факт із таблиці більший за
+ * план, або факт є, а плану немає (нульовий план — теж «немає»); фільтр звужує таблицю, а не підміняє критерій.
+ * 🧨 Червоніє, якщо «понад» рахувати від ручного факту, пропустити статті без плану чи прибрати галочку.
+ */
+test("#1277f «ЛИШЕ ПОНАД ПЛАН»: факт із таблиці > плану або факт без плану — як у «План/факт витрат»", () => {
+  const tab = FE("pages/dashboard/sections/FinanceApprovalsTestTab.tsx");
+  assert.match(tab, /const overPlan = \(x: FinApprItem\) => \(x\.plan != null && x\.plan !== 0 \? x\.auto > x\.plan : x\.auto > 0\);/, "🔴 «понад план» не від факту з таблиці або без статей без плану");
+  assert.match(tab, /\(!onlyOver \|\| overPlan\(x\)\)/, "🔴 галочка не фільтрує статті");
+  assert.match(tab, /checked=\{onlyOver\} onChange=\{\(e\) => setOnlyOver\(e\.target\.checked\)\} \/> лише понад план/, "🔴 галочки «лише понад план» немає");
+});
