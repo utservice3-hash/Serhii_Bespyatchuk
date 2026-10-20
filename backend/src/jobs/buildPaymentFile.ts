@@ -22,7 +22,7 @@ import {
   type PayRequest, type MainDeal, type PayContext, type Verdict, type BankIn,
 } from "../core/paymentRun.js";
 import { requestStatusOf } from "../core/paymentRequests.js";
-import { kommoStateOf, discrepancyOf, screenCard, fileRow, splitTotals, type ScreenRow, type ScreenSplit } from "../core/paymentScreen.js";
+import { kommoStateOf, discrepancyOf, screenCard, fileRow, splitTotals, archiveDayOf, type ScreenRow, type ScreenSplit } from "../core/paymentScreen.js";
 import { xlsxBook } from "../core/xlsx.js";
 import { jobSkip } from "./jobRuns.js";
 
@@ -232,18 +232,20 @@ if (import.meta.url === `file://${process.argv[1]}`) {
  * підсвічуватися, а ті, що вже не в фільтрі, — архів; немає активних — пусто»).
  *  · «У фільтрі зараз» — живий фільтр Kommo в мить відкриття (три етапи × Тетяна × «Стандартная», будь-якої давності);
  *    рішення — останнє з журналу `payment_file_log`; запит, якого прогін ще не бачив, — «ще не перевірено».
- *  · «Архів» дня — запити з журналу цього дня, яких у фільтрі вже немає, з етапом, де вони опинились.
+ *  · «Архів» дня — запити, яких у фільтрі вже немає і які ЗАКРИТО в Kommo цього календарного дня за Києвом (`archiveDayOf`;
+ *    вийшли без закриття — у дні свого файлу), з етапом, де вони опинились.
  * Реквізити й етап — з Kommo (картки в базі не лежать). Кеш на хвилину: кліки по фільтрах і «Excel» не б'ють API щоразу.
  */
 const screenCache = new Map<string, { at: number; data: ScreenDay }>();
 export interface ScreenDay {
-  day: string; today: string; at: string | null; kommoBase: string;
+  /** `today` — день поточного ФАЙЛУ (вікно 17:00–17:00); `todayCal` — сьогодні за календарем Києва (день архіву). */
+  day: string; today: string; todayCal: string; at: string | null; kommoBase: string;
   active: ScreenRow[]; archive: ScreenRow[]; totals: ScreenSplit;
   days: { day: string; total: number; ok: number; okSum: number }[];
 }
 export function dropScreenCache(): void { screenCache.clear(); }
 
-type LogRow = { request_id: string; main_id: string | null; amount: string | null; ok: boolean; paid_by: string | null; reasons: string[]; notes: string[]; last_at: string };
+type LogRow = { request_id: string; main_id: string | null; amount: string | null; ok: boolean; paid_by: string | null; reasons: string[]; notes: string[]; last_at: string; day?: string };
 const rowOfLead = (d: KommoDeal | undefined, x: LogRow | undefined, requestId: number): ScreenRow => {
   const kommo = kommoStateOf(d?.status_id ?? null), ok = x?.ok ?? false;
   return {
@@ -260,12 +262,13 @@ const rowOfLead = (d: KommoDeal | undefined, x: LogRow | undefined, requestId: n
 
 export async function loadScreenDay(dayArg?: string): Promise<ScreenDay> {
   const today = payWindow(new Date()).day;
+  const todayCal = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
   const days = (await pool.query<{ day: string; total: number; ok: number; ok_sum: string }>(
     `SELECT day::text, count(*)::int AS total, count(*) FILTER (WHERE ok)::int AS ok, COALESCE(sum(amount) FILTER (WHERE ok), 0)::text AS ok_sum
        FROM payment_file_log WHERE day >= $1::date - 14 GROUP BY day ORDER BY day DESC`, [today])).rows
     .map((x) => ({ day: x.day, total: x.total, ok: x.ok, okSum: Number(x.ok_sum) }));
-  // День архіву за замовчуванням — останній, у якому є записи: після 17:00 «поточний» файл уже завтрашній і порожній.
-  const day = dayArg && /^\d{4}-\d{2}-\d{2}$/.test(dayArg) ? dayArg : days.some((d) => d.day === today) ? today : days[0]?.day ?? today;
+  // День архіву за замовчуванням — сьогодні за календарем: архів групується за днем ЗАКРИТТЯ, а не файлу.
+  const day = dayArg && /^\d{4}-\d{2}-\d{2}$/.test(dayArg) ? dayArg : todayCal;
   const hit = screenCache.get(day);
   if (hit && Date.now() - hit.at < 60_000) return hit.data;
   // 1) Живий фільтр Тетяни.
@@ -276,18 +279,22 @@ export async function loadScreenDay(dayArg?: string): Promise<ScreenDay> {
        FROM payment_file_log WHERE request_id = ANY($1::bigint[]) ORDER BY request_id, day DESC, last_at DESC`, [activeIds])).rows : []).map((x) => [Number(x.request_id), x]));
   const active = open.map((d) => rowOfLead(d, latest.get(d.id), d.id))
     .sort((a, b) => Number(b.ok) - Number(a.ok) || String(a.createdAt).localeCompare(String(b.createdAt)));
-  // 2) Архів дня: журнал цього дня мінус те, що досі у фільтрі.
+  // 2) Архів дня: запити з журналу (файли за 14 днів до і день після — поданий після 17:00 належить файлу завтра), яких у
+  //    фільтрі вже немає, і день яких за `archiveDayOf` — цей: закриті — за днем закриття в Kommo (наживо: синк відстає
+  //    до 30 хв, а Тетяна дивиться одразу після закриття), не закриті — за днем файлу.
   const log = (await pool.query<LogRow>(
-    `SELECT request_id::text, main_id::text, amount::text, ok, paid_by, reasons, notes, last_at::text FROM payment_file_log WHERE day = $1`, [day])).rows;
+    `SELECT DISTINCT ON (request_id) request_id::text, main_id::text, amount::text, ok, paid_by, reasons, notes, last_at::text, day::text
+       FROM payment_file_log WHERE day BETWEEN $1::date - 14 AND $1::date + 1 ORDER BY request_id, day DESC, last_at DESC`, [day])).rows;
   const activeSet = new Set(activeIds);
   const gone = log.filter((x) => !activeSet.has(Number(x.request_id)));
   const leads = new Map<number, KommoDeal>();
   for (let i = 0; i < gone.length; i += 250)
     for (const d of await once(() => fetchLeadsByIds(gone.slice(i, i + 250).map((x) => Number(x.request_id))))) leads.set(d.id, d);
-  const archive = gone.map((x) => rowOfLead(leads.get(Number(x.request_id)), x, Number(x.request_id)))
+  const inDay = gone.filter((x) => archiveDayOf(leads.get(Number(x.request_id))?.closed_at, x.day!) === day);
+  const archive = inDay.map((x) => rowOfLead(leads.get(Number(x.request_id)), x, Number(x.request_id)))
     .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
-  const at = [...latest.values(), ...log].reduce<string | null>((a, x) => (!a || x.last_at > a ? x.last_at : a), null);
-  const data: ScreenDay = { day, today, at: at ? new Date(at).toISOString() : null, kommoBase: config.kommo.baseUrl, active, archive, totals: splitTotals(active, archive), days };
+  const at = [...latest.values(), ...inDay].reduce<string | null>((a, x) => (!a || x.last_at > a ? x.last_at : a), null);
+  const data: ScreenDay = { day, today, todayCal, at: at ? new Date(at).toISOString() : null, kommoBase: config.kommo.baseUrl, active, archive, totals: splitTotals(active, archive), days };
   screenCache.set(day, { at: Date.now(), data });
   return data;
 }

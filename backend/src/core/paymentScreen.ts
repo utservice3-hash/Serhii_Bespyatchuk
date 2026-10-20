@@ -54,3 +54,14 @@ export function splitTotals(active: readonly ScreenRow[], archive: readonly Scre
     activeCheck: active.filter((r) => !r.ok && !r.pending).length, pending: active.filter((r) => r.pending).length,
     archive: archive.length, diff: archive.filter((r) => r.diff).length };
 }
+
+/**
+ * 🗓 ДЕНЬ АРХІВУ (Тетяна через Романа 20.10.2026: «в архів сьогоднішнього дня мають попадати усі закриті запити цього ж
+ * дня»). Закритий у Kommo запит («Оплачено» / «Отказано») — у день ЗАКРИТТЯ за Києвом, хоч би коли його подали (поданий
+ * 19.10 о 17:06 і закритий о 17:07 — це 19.10, а не файл 20.10). Запит, що вийшов із фільтра без закриття (переїхав в
+ * інший етап), закриття не має — лишається в дні свого файлу, щоб нічого не зникло.
+ */
+export function archiveDayOf(closedAtUnix: number | null | undefined, fileDay: string): string {
+  if (!closedAtUnix) return fileDay;
+  return new Date(closedAtUnix * 1000).toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+}

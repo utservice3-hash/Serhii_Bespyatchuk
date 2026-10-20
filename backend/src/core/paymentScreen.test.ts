@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { crc32 } from "node:zlib";
-import { kommoStateOf, discrepancyOf, fileRow, clipboardTsv, screenCard, totalsOf, splitTotals, type ScreenRow } from "./paymentScreen.js";
+import { kommoStateOf, discrepancyOf, fileRow, clipboardTsv, screenCard, totalsOf, splitTotals, archiveDayOf, type ScreenRow } from "./paymentScreen.js";
 import { xlsxBook } from "./xlsx.js";
 
 const SRC = (rel: string): string => readFileSync(path.join(import.meta.dirname, "..", "..", "src", rel), "utf8");
@@ -115,28 +115,42 @@ test("#1273 АРХІВ ПЕРЕКРЕСЛЕНИЙ: що вийшло з філь
 });
 
 /**
- * #1274 — ГОЛОВНЕ — ФІЛЬТР (Роман 16.10.2026: «основна штука — фільтр; що досі у фільтрі — підсвічувати, що вже не в
- * фільтрі — архів; немає активних — пусто»). «У фільтрі зараз» — живий фільтр Kommo (три етапи × Тетяна × «Стандартная»)
- * БЕЗ вікна дати — у її фільтрі висять і старі запити; рішення — останнє з журналу, нового запиту — «ще не перевірено»;
- * архів дня — журнал дня мінус те, що досі у фільтрі; кнопка — на сам запит; порожній фільтр — пусто, а не вчорашнє.
- * Підсумки рахують «ще не перевірено» окремо, а розбіжності — лише в архіві.
- * 🧨 Червоніє, якщо до фільтра домішати вікно дати чи архів, або порожній фільтр покаже щось, або кнопка поведе не на запит.
+ * #1278 — ГОЛОВНЕ — ФІЛЬТР, АРХІВ — ЗА ДНЕМ ЗАКРИТТЯ (Тетяна через Романа 20.10.2026: «в архів сьогоднішнього дня мають
+ * попадати усі закриті запити цього ж дня»; змінене твердження `#1274`). «У фільтрі зараз» — живий фільтр Тетяни БЕЗ вікна
+ * дати; рішення — останнє з журналу, нового запиту — «ще не перевірено». Архів дня — запити, яких у фільтрі вже немає і які
+ * ЗАКРИТО в Kommo цього календарного дня за Києвом (поданий 19.10 о 17:06 — файл 20.10 — і закритий о 17:07 — це архів
+ * 19.10); північ — київська, і влітку, і взимку; вийшов із фільтра без закриття — у день свого файлу. Кандидати — журнал за
+ * 14 днів до і день після (поданий після 17:00 належить файлу завтра). Кнопка — на сам запит; порожній фільтр — пусто.
+ * 🧨 Червоніє, якщо групувати архів за днем файлу, брати північ за UTC, загубити незакриті чи день «після», домішати вікно
+ * дати до фільтра, або порожній фільтр покаже щось.
  */
-test("#1274 ГОЛОВНЕ — ФІЛЬТР: «у фільтрі зараз» = живий фільтр Тетяни без вікна дати; архів = журнал дня мінус фільтр; порожньо — пусто", () => {
+test("#1278 ФІЛЬТР І АРХІВ ЗА ДНЕМ ЗАКРИТТЯ: фільтр без вікна дати; архів дня — закриті в Kommo цього дня за Києвом, незакриті — у день файлу", () => {
   const t = splitTotals([row({ requestId: 1 }), row({ requestId: 2, ok: false }), row({ requestId: 3, ok: false, pending: true })],
     [row({ requestId: 9, kommo: "paid", ok: false, diff: true }), row({ requestId: 8, kommo: "paid" })]);
   assert.deepEqual(t, { active: 3, activeOk: 1, activeOkSum: 18000, activeCheck: 1, pending: 1, archive: 2, diff: 1 }, "🔴 підсумки фільтра й архіву хибні");
+  const unix = (iso: string) => Date.parse(iso) / 1000;
+  assert.equal(archiveDayOf(unix("2026-10-19T14:07:00Z"), "2026-10-20"), "2026-10-19", "🔴 закритий 19.10 о 17:07 (файл 20.10) — не в архіві 19.10");
+  assert.equal(archiveDayOf(unix("2026-10-19T20:30:00Z"), "2026-10-19"), "2026-10-19", "🔴 23:30 за Києвом — не той самий день");
+  assert.equal(archiveDayOf(unix("2026-10-19T21:30:00Z"), "2026-10-19"), "2026-10-20", "🔴 00:30 за Києвом 20.10 узято за UTC (19.10)");
+  assert.equal(archiveDayOf(unix("2026-11-30T22:30:00Z"), "2026-11-30"), "2026-12-01", "🔴 зимова північ за Києвом (UTC+2) хибна");
+  assert.deepEqual([archiveDayOf(null, "2026-10-18"), archiveDayOf(undefined, "2026-10-18"), archiveDayOf(0, "2026-10-18")],
+    ["2026-10-18", "2026-10-18", "2026-10-18"], "🔴 незакритий запит не в дні свого файлу");
   const job = SRC("jobs/buildPaymentFile.ts");
   const open = job.slice(job.indexOf("export async function fetchOpenFilter"), job.indexOf("/** Excel:"));
   assert.ok(open.length > 0, "🔴 фільтр не знайдено — гейту нічого перевіряти");
   assert.match(open, /PAY_STATUSES\.map/, "🔴 фільтр не за трьома етапами Тетяни");
   assert.doesNotMatch(open, /created_at|142/, "🔴 до живого фільтра домішано вікно дати чи «Оплачено»");
-  assert.match(job, /const gone = log\.filter\(\(x\) => !activeSet\.has\(Number\(x\.request_id\)\)\);/, "🔴 архів не «журнал дня мінус фільтр»");
+  const screen = job.slice(job.indexOf("export async function loadScreenDay"), job.indexOf("export async function fetchOpenFilter"));
+  assert.match(screen, /FROM payment_file_log WHERE day BETWEEN \$1::date - 14 AND \$1::date \+ 1 ORDER BY request_id, day DESC, last_at DESC/, "🔴 кандидати архіву — не журнал за 14 днів до і день після");
+  assert.match(screen, /const gone = log\.filter\(\(x\) => !activeSet\.has\(Number\(x\.request_id\)\)\);/, "🔴 в архів потрапляє те, що досі у фільтрі");
+  assert.match(screen, /archiveDayOf\(leads\.get\(Number\(x\.request_id\)\)\?\.closed_at, x\.day!\) === day/, "🔴 архів не за днем закриття з Kommo");
+  assert.match(screen, /const day = dayArg && .* \? dayArg : todayCal;/, "🔴 день архіву за замовчуванням — не сьогодні за календарем");
   assert.match(job, /reasons: x \? x\.reasons \?\? \[\] : \["ще не перевірено — натисніть «↻ Перевірити зараз»"\]/, "🔴 новий запит без рішення не названо «ще не перевірено»");
   const tab = FE("pages/dashboard/sections/FinancePaymentsTab.tsx");
   assert.match(tab, /\{!data\.active\.length \? <p className="hr-muted" style=\{\{ margin: "8px 0" \}\}>У фільтрі зараз немає запитів/, "🔴 порожній фільтр не порожній");
   assert.match(tab, /href=\{`\$\{data\.kommoBase\}\/leads\/detail\/\$\{r\.requestId\}`\}/, "🔴 кнопка веде не на сам запит у воронці");
   assert.match(tab, /const ok = data\.active\.filter\(\(r\) => r\.ok\);/, "🔴 файл «До оплати» не лише з фільтра");
+  assert.match(tab, /закриті в Kommo \{dm\(data\.day\)\}/, "🔴 підпис архіву не каже, що це день закриття");
 });
 
 /**

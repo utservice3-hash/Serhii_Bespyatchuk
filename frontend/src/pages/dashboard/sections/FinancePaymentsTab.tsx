@@ -8,14 +8,14 @@ import { useToast } from "../../../components/Toasts";
  * підсвічуватися; ті, що вже не в фільтрі, — архів; немає активних — пусто»):
  *  · «У фільтрі зараз» — запити, що прямо зараз у її фільтрі, з рішенням системи і кнопкою на сам запит у Kommo;
  *  · «До оплати» — файл «Обработка выгрузки» лише із затверджених у фільтрі (копіювати / Excel);
- *  · «Архів» — що вийшло з фільтра за день: перекреслене, з етапом, де опинилось, і з розбіжностями.
+ *  · «Архів» — запити, ЗАКРИТІ в Kommo цього дня (за Києвом, хоч би коли подані; Тетяна 20.10.2026): перекреслені, з етапом
+ *    і розбіжностями; що вийшло з фільтра без закриття — у дні свого файлу.
  * Номери карток → лише `view_private_finance` (Адмін, фінансист). Система нічого не закриває в Kommo.
  */
 const MUTED = "var(--text-muted)";
 const money = (n: number | null | undefined) => (n == null ? "—" : Math.round(n).toLocaleString("uk-UA").replace(/ /g, " "));
 const dm = (d: string) => `${d.slice(8, 10)}.${d.slice(5, 7)}`;
 const hhmm = (iso: string | null) => (iso ? new Date(iso).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
-const prevDay = (d: string) => { const x = new Date(`${d}T12:00:00Z`); x.setUTCDate(x.getUTCDate() - 1); return x.toISOString().slice(0, 10); };
 const BASIS = (r: PayScreenRow) => (r.paidBy === "1С" ? "оплата є — галочка 1С" : r.paidBy === "Виписка" ? "оплата є — у Виписці" : "у межах ліміту");
 const pill = (bg: string, fg: string): React.CSSProperties => ({ fontSize: 11.5, padding: "1px 8px", borderRadius: 999, background: bg, color: fg, whiteSpace: "nowrap" });
 /** Закритий у Kommo запит («Оплачено» / «Отказано») — перекреслений і приглушений (Роман 16.10.2026). */
@@ -77,7 +77,7 @@ export function FinancePaymentsTab() {
       {sub && <div style={{ fontSize: 12, color: MUTED }}>{sub}</div>}
     </div>
   );
-  const dayOptions = [...new Set([data.today, data.day, ...data.days.map((d) => d.day)])].sort().reverse();
+  const dayOptions = [...new Set([data.todayCal, data.day, ...data.days.map((d) => d.day)])].filter((d) => d <= data.todayCal).sort().reverse();
 
   return (
     <div>
@@ -139,9 +139,9 @@ export function FinancePaymentsTab() {
       <div className="chart-card">
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
           <h3 className="chart-title" style={{ margin: 0 }}>Архів · {data.archive.length}</h3>
-          <span style={{ fontSize: 12, color: MUTED }}>вийшли з фільтра — запити, подані {dm(prevDay(data.day))} 17:00 – {dm(data.day)} 17:00</span>
+          <span style={{ fontSize: 12, color: MUTED }}>закриті в Kommo {dm(data.day)} — хоч би коли їх подали; що вийшло з фільтра без закриття — у день свого файлу</span>
           <select className="hr-inp" style={{ marginLeft: "auto" }} aria-label="День архіву" value={data.day} onChange={(e) => setDay(e.target.value)}>
-            {dayOptions.map((d) => <option key={d} value={d}>{dm(d)}{d === data.today ? " · поточний файл" : ""}</option>)}
+            {dayOptions.map((d) => <option key={d} value={d}>{dm(d)}{d === data.todayCal ? " · сьогодні" : ""}</option>)}
           </select>
         </div>
         {!data.archive.length ? <p className="hr-muted" style={{ margin: 0 }}>За цей день в архіві нічого немає.</p> : (

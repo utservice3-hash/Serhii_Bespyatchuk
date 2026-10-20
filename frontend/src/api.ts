@@ -5755,7 +5755,7 @@ export interface PayScreenRow {
   pending?: boolean;
 }
 export interface PayScreenDay {
-  day: string; today: string; at: string | null; kommoBase: string;
+  day: string; today: string; todayCal: string; at: string | null; kommoBase: string;
   /** «У фільтрі зараз» — живий фільтр Тетяни; «архів» — що вийшло з фільтра за обраний день. */
   active: PayScreenRow[]; archive: PayScreenRow[];
   totals: { active: number; activeOk: number; activeOkSum: number; activeCheck: number; pending: number; archive: number; diff: number };
