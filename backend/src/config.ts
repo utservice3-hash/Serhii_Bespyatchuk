@@ -77,6 +77,11 @@ export const config = {
   // GA4 (вище), таблиця не публікується. id не секрет — це адреса книги, доступ дає лише «Поділитися».
   /** 💸 Файл на оплату перевізникам (13.10.2026): таблиця Романа, сервісний акаунт — редактор. Порожньо — лише стан прогону. */
   paymentsSheet: { spreadsheetId: process.env.PAYMENTS_SHEET_ID ?? "" },
+  /** 🧪 «UTS Утверждение оплат», вкладка «На оплату» (20.10.2026): лише ЧИТАННЯ для тестової вкладки «План/факт · авто». */
+  approvalsSheet: {
+    spreadsheetId: process.env.APPROVALS_SHEET_ID ?? "1Fts2Nk5PmryljE_dAy0nM0SvIN6XyhbfgvtiadLQnZI",
+    tab: process.env.APPROVALS_SHEET_TAB ?? "На оплату",
+  },
   safeSheet: {
     spreadsheetId: process.env.SAFE_SHEET_ID ?? "1diCxU7t4tZP33NIvcwzueY5YADudzS4oo8df22nkqC0",
     tab: process.env.SAFE_SHEET_TAB ?? "Сейф",
