@@ -16,6 +16,9 @@ import { buildTtn, buildCmr, ttnCells, cmrTargets, CMR_SLOTS, TTN_TEMPLATE, CMR_
 import { readZip } from "../core/officeParse.js";
 import { NR_EN_KEYS, NR_CSS, nrClauses, nrAppRows } from "./services/nonresident.js";
 import { validateForm, firstError } from "./validate.js";
+import { parseStamps, placeOnPage, stampPdf, StampRefused, type Stamp } from "./services/pdfStamp.js";
+import { createRequire } from "node:module";
+import { deflateSync } from "node:zlib";
 import { currentNum } from "./services/docgen.js";
 
 /**
@@ -1035,4 +1038,133 @@ test("#1810b ФОРМА: у ЮТС немає «готівки» в списку
   assert.match(front, /form\.ent === "uts" \? PAY_FORMS\.filter\(\(o\) => o !== CASH\)/, "🔴 ЮТС пропонує готівку");
   assert.match(front, /<option value=\{CASH\} disabled>готівка — заборонено для ЮТС<\/option>/, "🔴 стара готівка не позначена");
   assert.match(front, /<FieldMsg is=\{iss\("pay\.form"\)\} \/>/, "🔴 під полем форми оплати немає причини");
+});
+
+/* ══════════════ 🔏 ПЕЧАТКА НА PDF (задача 5779, просив Сергій; Роман 20.10.2026) ══════════════ */
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const PL = createRequire(import.meta.url)("./vendor/pdf-lib.min.cjs") as any;
+const crcT = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+const crc = (b: Buffer) => { let c = 0xFFFFFFFF; for (const x of b) c = crcT[(c ^ x) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+/** PNG w×h: ліва половина червона, права синя — так видно і місце, і напрям повороту. */
+function halfPng(w: number, h: number): Uint8Array {
+  const raw = Buffer.alloc(h * (1 + w * 3));
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) raw.set(x < w / 2 ? [255, 0, 0] : [0, 0, 255], y * (1 + w * 3) + 1 + x * 3);
+  const chunk = (t: string, d: Buffer) => { const l = Buffer.alloc(4); l.writeUInt32BE(d.length); const td = Buffer.concat([Buffer.from(t), d]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([l, td, c]); };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr.set([8, 2, 0, 0, 0], 8);
+  return new Uint8Array(Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]));
+}
+const PNGS = { uts: halfPng(20, 20), avm: halfPng(20, 20) };
+/** Тестовий PDF: сторінки 600×800 пт з текстом HELLO-PAGE-n; `rot` — /Rotate кожної сторінки. */
+async function testPdf(n: number, rot = 0): Promise<Uint8Array> {
+  const d = await PL.PDFDocument.create(); const f = await d.embedFont(PL.StandardFonts.Helvetica);
+  for (let i = 1; i <= n; i++) { const p = d.addPage([600, 800]); p.drawText(`HELLO-PAGE-${i}`, { x: 50, y: 700, size: 20, font: f }); if (rot) p.setRotation(PL.degrees(rot)); }
+  return d.save();
+}
+const hasPoppler = (() => { try { execFileSync("pdftoppm", ["-v"], { stdio: "ignore" }); execFileSync("pdftotext", ["-v"], { stdio: "ignore" }); return true; } catch { return false; } })();
+/** Сторінка → центри червоних і синіх пікселів (72 dpi: 1 px = 1 пт видимої сторінки). */
+function colourCentres(pdf: Uint8Array, page: number) {
+  const dir = mkdtempSync(path.join(tmpdir(), "stamp-")), f = path.join(dir, "o.pdf");
+  try {
+    writeFileSync(f, pdf);
+    const ppm = execFileSync("pdftoppm", ["-f", String(page), "-l", String(page), "-r", "72", "-singlefile", f], { maxBuffer: 64 * 1024 * 1024 });
+    const m = /^P6\s+(\d+)\s+(\d+)\s+255\s/.exec(ppm.toString("latin1", 0, 40))!;
+    const W = +m[1], H = +m[2], off = m[0].length;
+    const acc = { red: [0, 0, 0], blue: [0, 0, 0] };
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = off + (y * W + x) * 3, r = ppm[i], g = ppm[i + 1], b = ppm[i + 2];
+      const k = r > 180 && g < 80 && b < 80 ? "red" : b > 180 && r < 80 && g < 80 ? "blue" : null;
+      if (k) { acc[k][0] += x; acc[k][1] += y; acc[k][2]++; }
+    }
+    const c = (a: number[]) => (a[2] ? { x: a[0] / a[2], y: a[1] / a[2], n: a[2] } : null);
+    return { W, H, red: c(acc.red), blue: c(acc.blue) };
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+const near = (p: { x: number; y: number } | null, x: number, y: number, what: string) =>
+  assert.ok(p && Math.abs(p.x - x) <= 3 && Math.abs(p.y - y) <= 3, `🔴 ${what}: очікували ≈(${x}, ${y}), а ${p ? `(${p.x.toFixed(1)}, ${p.y.toFixed(1)})` : "нічого немає"}`);
+const st = (o: Partial<Stamp>): Stamp => ({ ent: "avm", page: 1, x: 0.5, y: 0.25, size: 0.2, rot: 0, ...o });
+
+/**
+ * #1820 — ПЕЧАТКА ЛЯГАЄ ТУДИ, КУДИ ПОСТАВИЛИ, І ЛИШЕ НА ТУ СТОРІНКУ (зовнішня звірка: сторінку розтеризує poppler,
+ * центр печатки міряємо по пікселях). Текст документа лишається текстом на всіх сторінках, сторінок стільки ж.
+ * 🧨 Поставити на всі сторінки, переплутати верх і низ чи «розплющити» документ у картинку — червоніє.
+ */
+test("#1820 ПЕЧАТКА НА PDF: на вибраній сторінці в точці з прев'ю, інші сторінки чисті, текст лишається текстом", { skip: hasPoppler ? false : "немає poppler (pdftoppm/pdftotext)" }, async () => {
+  const src = await testPdf(3);
+  const out = await stampPdf(src, [st({ page: 2 })], PNGS);
+  assert.equal(out.pages, 3, "🔴 змінилась кількість сторінок");
+  const p2 = colourCentres(out.pdf, 2);
+  assert.equal(p2.W, 600, "🔴 розмір сторінки змінився");
+  // видима коробка печатки: ліворуч 300, згори 200, 120×120 → червона половина ≈(330, 260), синя ≈(390, 260)
+  near(p2.red, 330, 260, "червона (ліва) половина печатки"); near(p2.blue, 390, 260, "синя (права) половина печатки");
+  for (const pg of [1, 3]) assert.equal(colourCentres(out.pdf, pg).red, null, `🔴 печатка протекла на сторінку ${pg}`);
+  const dir = mkdtempSync(path.join(tmpdir(), "stamp-")), f = path.join(dir, "o.pdf");
+  try { writeFileSync(f, out.pdf); const t = execFileSync("pdftotext", [f, "-"]).toString(); for (const n of [1, 2, 3]) assert.ok(t.includes(`HELLO-PAGE-${n}`), `🔴 текст сторінки ${n} зник`); }
+  finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+/**
+ * #1820b — ПОВОРОТ: за годинниковою й довкола центру (печатку 90° повернуто — червона половина стає ЗГОРИ, центр той
+ * самий); сторінка з /Rotate 90 — координати беруться з ВИДИМОЇ сторінки, як у прев'ю. По обидва боки: 0° і 90°,
+ * звичайна й повернута сторінка. 🧨 Повернути проти годинникової, довкола кута чи ігнорувати /Rotate — червоніє.
+ */
+test("#1820b ПЕЧАТКА НА PDF: поворот за годинниковою довкола центру; повернута сторінка — у видимих координатах", { skip: hasPoppler ? false : "немає poppler (pdftoppm/pdftotext)" }, async () => {
+  const r90 = colourCentres((await stampPdf(await testPdf(1), [st({ rot: 90 })], PNGS)).pdf, 1);
+  near(r90.red, 360, 230, "печатка 90°: червона половина мала стати згори"); near(r90.blue, 360, 290, "печатка 90°: синя — знизу");
+  const r45 = colourCentres((await stampPdf(await testPdf(1), [st({ rot: -90 })], PNGS)).pdf, 1);
+  near(r45.red, 360, 290, "печатка −90°: червона половина мала стати знизу");
+  // сторінка /Rotate 90: видима 800×600; печатка x .5, y .25, size .2 → коробка 400..560 × 150..310
+  const rp = colourCentres((await stampPdf(await testPdf(1, 90), [st({})], PNGS)).pdf, 1);
+  assert.equal(rp.W, 800, "🔴 сторінка /Rotate 90 мала бути видимою 800×600");
+  near(rp.red, 440, 230, "повернута сторінка: червона половина"); near(rp.blue, 520, 230, "повернута сторінка: синя половина");
+  for (const R of [180, 270]) {
+    const q = colourCentres((await stampPdf(await testPdf(1, R), [st({})], PNGS)).pdf, 1);
+    const [Wd, Hd] = R === 270 ? [800, 600] : [600, 800], w = 0.2 * Wd;
+    near(q.red, 0.5 * Wd + w / 4, 0.25 * Hd + w / 2, `сторінка /Rotate ${R}: червона половина`);
+  }
+  assert.equal(placeOnPage({ W: 600, H: 800, ox: 0, oy: 0, R: 0 }, st({ rot: 30 }), 1).rotate, -30, "🔴 кут у PDF — не за годинниковою");
+});
+
+/**
+ * #1821 — ВІДМОВИ СЛОВАМИ: без печаток, ФОП, розмір чи місце поза сторінкою, сторінки немає, не PDF, PDF із паролем (422).
+ * Дзеркало: правильна печатка проходить. 🧨 Прибрати будь-яку перевірку — червоніє.
+ */
+test("#1821 ПЕЧАТКА НА PDF: відмови словами — ФОП, поза сторінкою, немає сторінки, не PDF, захищений паролем", async () => {
+  assert.match(String(parseStamps([])), /хоча б одну/);
+  assert.match(String(parseStamps([st({ ent: "fop" as Stamp["ent"] })])), /лише в ЮТС і АвтоМув/);
+  assert.match(String(parseStamps([st({ size: 0.9 })])), /розмір/);
+  assert.match(String(parseStamps([st({ x: 0.95 })])), /за межі сторінки/);
+  assert.match(String(parseStamps(Array.from({ length: 31 }, () => st({})))), /Забагато/);
+  assert.deepEqual(parseStamps([{ ...st({}), extra: 1 }]), [st({})], "🔴 правильну печатку відхилено (дзеркало)");
+  const refused = async (p: Promise<unknown>, re: RegExp, status: number) => {
+    const e = await p.then(() => null, (x: unknown) => x);
+    assert.ok(e instanceof StampRefused && re.test(e.message) && e.status === status, `🔴 очікували відмову ${status} «${re}», а ${e instanceof Error ? e.message : "прийнято"}`);
+  };
+  await refused(stampPdf(await testPdf(2), [st({ page: 3 })], PNGS), /сторінки 3 немає/, 400);
+  await refused(stampPdf(new TextEncoder().encode("%PDF-1.4 not really"), [st({})], PNGS), /не читається/, 400);
+  const enc = await PL.PDFDocument.create(); enc.addPage();
+  enc.context.trailerInfo.Encrypt = enc.context.register(enc.context.obj({ Filter: "Standard" }));
+  await refused(stampPdf(await enc.save(), [st({})], PNGS), /паролем/, 422);
+});
+
+/**
+ * #1822 — МЕЖІ Й СЛІД: кожне накладання пише журнал (хто, файл, sha256, печатки) у ТОМУ Ж обробнику; обидва роути в
+ * матриці доступу; журнал закритий від AI після створення; бібліотека копіюється збіркою; вкладка — для всіх, а не лише
+ * для пулу. 🧨 Прибрати запис у журнал, рядок матриці, REVOKE чи сховати вкладку за «пулом» — червоніє.
+ */
+test("#1822 ПЕЧАТКА НА PDF: журнал у тому ж обробнику, роути в матриці, журнал закритий від AI, вкладка — усім", () => {
+  const route = SRC("routes/constructor.ts");
+  const h = /constructorRouter\.post\("\/stamp"[\s\S]*?\n\}\)\);/.exec(route)?.[0] ?? "";
+  const ins = h.search(/await pool\.query\(\s*`INSERT INTO constructor_stamp_log \(created_by, file_name, file_sha256, pages, stamps\)/);
+  assert.ok(ins > 0 && h.indexOf("stampPdf(") < ins, "🔴 накладання не пише журнал (або пише ДО накладання)");
+  const mx = SRC("auth/accessMatrix.ts");
+  for (const r of ['"POST", path: "/api/constructor/stamp"', '"GET", path: "/api/constructor/stamp-image/:ent"']) assert.ok(mx.includes(r), `🔴 немає в матриці: ${r}`);
+  const sch = SRC("db/schema.sql");
+  const created = sch.indexOf("CREATE TABLE IF NOT EXISTS constructor_stamp_log"), revoked = sch.search(/REVOKE ALL ON [^;]*constructor_stamp_log[^;]*FROM ai_readonly/);
+  assert.ok(created > 0 && revoked > created, "🔴 журнал не закритий від AI (або REVOKE раніше за CREATE)");
+  assert.ok(SRC("ai/metricTools.ts").includes('"constructor_stamp_log"'), "🔴 журналу немає у FORBIDDEN_TABLES");
+  assert.ok(readFileSync(path.join(import.meta.dirname, "vendor", "pdf-lib.min.cjs")).length > 400_000, "🔴 збірка не скопіювала pdf-lib у dist");
+  const front = readFileSync(path.join(REPO, "frontend", "src", "pages", "dashboard", "sections", "ConstructorSection.tsx"), "utf8");
+  assert.match(front, /\n\s+<button aria-pressed=\{view === "stamp"\} onClick=\{\(\) => setView\("stamp"\)\}>🔏 Печатка на PDF<\/button>/, "🔴 немає вкладки «Печатка на PDF»");
+  assert.ok(!/\{me\?\.canSeeAll && <button aria-pressed=\{view === "stamp"\}/.test(front), "🔴 вкладку сховано за правом пулу — а робити можуть усі");
 });

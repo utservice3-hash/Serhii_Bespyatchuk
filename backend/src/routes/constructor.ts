@@ -21,6 +21,7 @@
  */
 import { Router, type Request, type Response } from "express";
 import path from "path";
+import { createHash } from "node:crypto";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { roleHasTab, roleHasPerm } from "../auth/rbac.js";
@@ -32,7 +33,8 @@ import { extractText } from "../core/docText.js";
 import { mkdtemp, writeFile, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { fullPageHTML, printHTML } from "../constructor/services/printTemplate.js";
-import { loadDocImages, docImageDataUris, AssetsMissing } from "../constructor/services/docAssets.js";
+import { loadDocImages, docImageDataUris, stampPng, AssetsMissing } from "../constructor/services/docAssets.js";
+import { parseStamps, stampPdf, StampRefused, type StampEnt } from "../constructor/services/pdfStamp.js";
 import { htmlToPdf, renderDocumentPdf, PdfUnavailable, type RenderedPdf } from "../constructor/services/pdfRenderer.js";
 import { canSeeConstructorDoc, stateFromBody, fileBase, contractMemo, VIEW_ALL_PERM } from "../constructor/access.js";
 import { DOCS_DIR } from "../jobs/backupDb.js";
@@ -437,6 +439,35 @@ constructorRouter.post("/convert/from-pdf", h(async (req, res) => {
         .send(Buffer.from(paragraphsDocx(paras)));
     }
   } finally { await rm(dir, { recursive: true, force: true }).catch(() => undefined); }
+}));
+
+/* ── 🔏 ПЕЧАТКА НА PDF (задача 5779): будь-хто з вкладкою «Конструктор»; кожне накладання — у журнал ── */
+constructorRouter.get("/stamp-image/:ent", h((req, res) => {
+  const ent = req.params.ent;
+  if (ent !== "uts" && ent !== "avm") throw new HttpError(404, "Печатка є лише в ЮТС і АвтоМув.");
+  let png: Uint8Array | null;
+  try { png = stampPng(CONSTRUCTOR_ASSETS_DIR, ent); }
+  catch (e) { if (e instanceof AssetsMissing) throw new HttpError(503, e.message); throw e; }
+  if (!png) throw new HttpError(404, "Печатки немає.");
+  res.set({ "Content-Type": "image/png", "Cache-Control": "private, max-age=3600" }).send(Buffer.from(png));
+}));
+
+constructorRouter.post("/stamp", h(async (req, res) => {
+  const { name, buf } = fileFromBody(req);
+  if (buf.subarray(0, 5).toString("latin1") !== "%PDF-") throw new HttpError(400, "Це не PDF.");
+  const stamps = parseStamps(req.body?.stamps);
+  if (typeof stamps === "string") throw new HttpError(400, stamps);
+  let pngs: Record<StampEnt, Uint8Array>;
+  try { pngs = { uts: stampPng(CONSTRUCTOR_ASSETS_DIR, "uts")!, avm: stampPng(CONSTRUCTOR_ASSETS_DIR, "avm")! }; }
+  catch (e) { if (e instanceof AssetsMissing) throw new HttpError(503, e.message); throw e; }
+  let out: { pdf: Uint8Array; pages: number };
+  try { out = await stampPdf(new Uint8Array(buf), stamps, pngs); }
+  catch (e) { if (e instanceof StampRefused) throw new HttpError(e.status, e.message); throw e; }
+  await pool.query(
+    `INSERT INTO constructor_stamp_log (created_by, file_name, file_sha256, pages, stamps) VALUES ($1, $2, $3, $4, $5)`,
+    [req.auth!.userId, name, createHash("sha256").update(buf).digest("hex"), out.pages, JSON.stringify(stamps)]);
+  res.set({ "Content-Type": "application/pdf", "Content-Disposition": attach(name.replace(/\.pdf$/i, "") + " — з печаткою.pdf") })
+    .send(Buffer.from(out.pdf));
 }));
 
 /* ── 🗂 ПУЛ ЗАЯВОК (рішення Сергія 30.09.2026): усі документи з автором — лише за правом ── */

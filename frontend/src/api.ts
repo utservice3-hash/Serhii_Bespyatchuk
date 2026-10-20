@@ -5911,6 +5911,20 @@ export async function ctorPairZip(id: number): Promise<Blob> {
   return data;
 }
 /** 🔁 Конвертер: файл (base64) → PDF, або PDF → Word/текст. У базу нічого не пишеться. */
+/** 🔏 Печатка на PDF (задача 5779): зображення печатки юрособи для прев'ю і накладання на файл. */
+export async function ctorStampImage(ent: CtorEntityKey): Promise<Blob> {
+  return (await api.get<Blob>(`/constructor/stamp-image/${ent}`, { responseType: "blob" })).data;
+}
+/** Одна печатка: сторінка (з 1), лівий верхній кут і діаметр — частки сторінки, кут — градуси за годинниковою. */
+export interface CtorStamp { ent: "uts" | "avm"; page: number; x: number; y: number; size: number; rot: number }
+export async function ctorStampPdf(file: File, stamps: CtorStamp[]): Promise<Blob> {
+  const data = await new Promise<string>((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).replace(/^data:[^,]*,/, "")); r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
+  return (await api.post<Blob>("/constructor/stamp", { name: file.name, data, stamps }, { responseType: "blob" })).data;
+}
 export async function ctorConvertToPdf(name: string, data: string): Promise<Blob> {
   return (await api.post<Blob>("/constructor/convert/to-pdf", { name, data }, { responseType: "blob" })).data;
 }

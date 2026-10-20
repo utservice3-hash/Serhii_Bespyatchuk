@@ -5224,8 +5224,21 @@ ON CONFLICT (key) DO UPDATE SET
   director_short=EXCLUDED.director_short, accounts=EXCLUDED.accounts, fines=EXCLUDED.fines,
   dwell_default=EXCLUDED.dwell_default, sig_file=EXCLUDED.sig_file, stamp_file=EXCLUDED.stamp_file;
 
+-- 🔏 Журнал «Печатки на PDF» (задача 5779, 20.10.2026): хто, коли, на який файл і які печатки поставив. Самі файли
+-- не зберігаються — лише назва й відбиток (sha256), щоб на питання «хто ставив печатку на цей документ» була відповідь.
+CREATE TABLE IF NOT EXISTS constructor_stamp_log (
+  id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  created_by   INTEGER NOT NULL REFERENCES users(id),
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  file_name    text NOT NULL,
+  file_sha256  text NOT NULL,
+  pages        int  NOT NULL,
+  stamps       jsonb NOT NULL                   -- [{ent, page, x, y, size, rot}]
+);
+CREATE INDEX IF NOT EXISTS idx_cstamp_created ON constructor_stamp_log (created_at DESC);
+
 -- 🔒 Реквізити контрагентів і суми заявок — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`.
-REVOKE ALL ON constructor_entities, constructor_counterparties, constructor_documents, constructor_route_templates, youscore_cache FROM ai_readonly;
+REVOKE ALL ON constructor_entities, constructor_counterparties, constructor_documents, constructor_route_templates, youscore_cache, constructor_stamp_log FROM ai_readonly;
 
 -- Екран «Конструктор документів»: усі, хто формує заявки (рішення Сергія 30.09.2026: «кожен, хто
 -- створює заявку»). Ідемпотентно й НЕ перетирає рішень адміна: лише де ключа ще немає.

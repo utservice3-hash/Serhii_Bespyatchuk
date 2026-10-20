@@ -78,6 +78,14 @@
 .ctorx .doctab[aria-pressed="true"] .p{background:rgba(255,255,255,.18);color:#fff}
 :root[data-theme="dark"] .ctorx .doctab[aria-pressed="true"] .p{background:rgba(0,0,0,.25)}
 .ctorx .grid{display:grid;grid-template-columns:minmax(0,1fr) 540px;gap:14px;align-items:start}
+.ctorx .stampgrid{grid-template-columns:minmax(0,1fr) 560px}
+/* 🔏 рядок «Сторінка · Чия печатка · Додати» — однакова висота, по нижньому краю */
+.ctorx .stamprow{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-left:30px}
+.ctorx .stamprow .fld{margin:0}
+.ctorx .stamprow select,.ctorx .stamprow .ways,.ctorx .stamprow>.btn{height:40px;box-sizing:border-box}
+.ctorx .stamprow .ways{margin:0;align-items:stretch}
+.ctorx .stamprow .ways button{display:flex;align-items:center}
+@media (max-width:900px){.ctorx .stamprow{margin-left:0}}
 .ctorx .card{background:var(--surface);border:1px solid var(--line);border-radius:13px;box-shadow:var(--shadow)}
 .ctorx .sec{padding:15px 16px;border-bottom:1px solid var(--line-2)}
 .ctorx .sec:last-child{border-bottom:0}
