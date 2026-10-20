@@ -356,7 +356,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "workua_responses",
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "fin_import_months",
   "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans",
-  "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "cargo_vehicles", "cargo_pallets", "cargo_calculations",
+  "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "constructor_stamp_log", "cargo_vehicles", "cargo_pallets", "cargo_calculations",
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   "ba_equipment_issues",
   "ba_claims", "ba_court_cases", "ba_files", "ba_events", "ba_equipment", "ba_ttn_checks", "ba_migrations", "ba_ttn_route_mismatch",
@@ -2626,6 +2626,11 @@ export const MANIFEST_TESTS: string[] = [
   "#1801 ЗАЯВКА ДО ДОГОВОРУ: без № / дати договору чи ID угоди — відмова; порожній порядок оплати не друкується",
   "#1802 № ДОГОВОРУ ЗА КЛІЄНТОМ: пише основний і додаток (з кодом), не разова; збереження реквізитів номер не затирає",
   "#1803 ФОРМА ЗАЯВКИ ДО ДОГОВОРУ: вкладка, вид у базі й на сервері, № підставляється з картки клієнта",
+  // Конструктор: печатка на PDF (задача 5779, 20.10.2026).
+  "#1820 ПЕЧАТКА НА PDF: на вибраній сторінці в точці з прев'ю, інші сторінки чисті, текст лишається текстом",
+  "#1820b ПЕЧАТКА НА PDF: поворот за годинниковою довкола центру; повернута сторінка — у видимих координатах",
+  "#1821 ПЕЧАТКА НА PDF: відмови словами — ФОП, поза сторінкою, немає сторінки, не PDF, захищений паролем",
+  "#1822 ПЕЧАТКА НА PDF: журнал у тому ж обробнику, роути в матриці, журнал закритий від AI, вкладка — усім",
   // Конструктор: від ТОВ ЮТС без готівки (задача 5887, 20.10.2026).
   "#1810 ЮТС БЕЗ ГОТІВКИ: заявка клієнту й перевізнику від ЮТС з готівкою не формується; АвтоМув і безготівка — так",
   "#1810b ФОРМА: у ЮТС немає «готівки» в списку оплати, стара — позначена забороненою з причиною",

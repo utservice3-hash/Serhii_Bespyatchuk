@@ -76,7 +76,7 @@ export const FORBIDDEN_TABLES = [
   // 💰 Фінанси · «Тиждень і місяць» (прохід 2а, 01.10.2026). REVOKE у схемі. Тримає #934.
   "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans",
   // 📄 Конструктор документів (30.09.2026): реквізити контрагентів і суми заявок. REVOKE у схемі.
-  "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "cargo_vehicles", "cargo_pallets", "cargo_calculations",
+  "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "constructor_stamp_log", "cargo_vehicles", "cargo_pallets", "cargo_calculations",
   // 📋 Опитування (30.09.2026): відповіді людей, зокрема анонімні. REVOKE у схемі.
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   // 🗂 Бізнес-асистент (29.09.2026): кому видано техніку — імена людей, як `employees`. REVOKE у схемі. Тримає #986.

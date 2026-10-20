@@ -25,6 +25,7 @@ import {
   type CtorParty, type CtorRouteTemplate, type CtorStatDay, type CtorIssue, type CtorRegistryCard, type CtorEdrResult, type CtorFieldSource,
   type CtorDirector,
 } from "../../../api";
+import { StampView } from "./StampView";
 import "./mockFonts.css";
 import "./constructor.css";
 
@@ -134,7 +135,7 @@ const fmtAt = (s: string) => new Date(s).toLocaleString("uk-UA", { day: "2-digit
 
 /** `initial` — початковий стан форми (для звірки екрана з еталонами макета); у дашборді не передається. */
 export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } = {}) {
-  const [view, setView] = useState<"make" | "pool">("make");
+  const [view, setView] = useState<"make" | "pool" | "stamp">("make");
   const [me, setMe] = useState<{ manager: { name: string; phone: string }; canSeeAll: boolean } | null>(null);
   const [entities, setEntities] = useState<CtorEntityRow[]>([]);
   const [form, setForm] = useState<CtorForm>(() => ({ ...CTOR_EMPTY_FORM, ...initial }));
@@ -551,14 +552,14 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
         </div>
       </div>
 
-      {me?.canSeeAll && (
-        <div className="viewtabs" role="group" aria-label="Розділ">
-          <button aria-pressed={view === "make"} onClick={() => setView("make")}>Конструктор</button>
-          <button aria-pressed={view === "pool"} onClick={() => setView("pool")}>Пул заявок</button>
-        </div>
-      )}
+      {/* «Печатка на PDF» — усім (5779); «Пул заявок» — лише тим, хто бачить усі документи */}
+      <div className="viewtabs" role="group" aria-label="Розділ">
+        <button aria-pressed={view === "make"} onClick={() => setView("make")}>Конструктор</button>
+        {me?.canSeeAll && <button aria-pressed={view === "pool"} onClick={() => setView("pool")}>Пул заявок</button>}
+        <button aria-pressed={view === "stamp"} onClick={() => setView("stamp")}>🔏 Печатка на PDF</button>
+      </div>
 
-      {view === "pool" && me?.canSeeAll ? <PoolView onOpen={openPdf} onDownload={download} /> : (<>
+      {view === "stamp" ? <StampView errText={errOf} /> : view === "pool" && me?.canSeeAll ? <PoolView onOpen={openPdf} onDownload={download} /> : (<>
         {/* ── Юрособа ── */}
         <div className="entities">
           {(["uts", "avm", "fop"] as CtorEntityKey[]).map((k) => {

@@ -1666,6 +1666,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
      тож на рівні зліпка він не видний). Пул і лічильник — право `view_all_constructor_docs`: admin, СЕО, ОД. */
   { method: "GET", path: "/api/constructor/entities", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
+  { method: "GET", path: "/api/constructor/stamp-image/:ent", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/constructor/me", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/constructor/counterparties?q=ТОВ", cls: "GET",
@@ -1705,6 +1707,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "POST", path: "/api/constructor/convert/to-pdf", cls: "deny-only",
     allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/constructor/convert/from-pdf", cls: "deny-only",
+    allow: [], deny: ["hr"] },
+  // 🔏 Печатка на PDF (5779): усім, у кого є вкладка «Конструктор» (Роман 20.10.2026)
+  { method: "POST", path: "/api/constructor/stamp", cls: "deny-only",
     allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/constructor/route-templates", cls: "deny-only",
     allow: [], deny: ["hr"] },

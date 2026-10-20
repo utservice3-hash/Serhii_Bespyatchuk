@@ -68,3 +68,9 @@ export function docImageDataUris(assetsDir: string, ent: EntityKey, stampOn: boo
   if (f.stamp) out.stamp = uri(read(assetsDir, f.stamp));
   return out;
 }
+
+/** 🔏 Печатка юрособи (PNG) — для «Печатки на PDF» (5779): ті самі байти, що й у документах. У ФОП печатки немає → null. */
+export function stampPng(assetsDir: string, ent: EntityKey): Uint8Array | null {
+  const f = FILES[ent].stamp;
+  return f ? read(assetsDir, f) : null;
+}
