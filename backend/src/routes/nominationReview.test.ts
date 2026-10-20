@@ -49,7 +49,7 @@ test("#657 ДИМ: погодитись з рештою, скасувати, х�
 
     const { nominationsRouter } = await import("./nominations.js");
     const { refreshRoles } = await import("../auth/rbac.js");
-    const { freezeWeek, frozenWeek } = await import("../core/nominations.js");
+    const { freezeWeek, frozenWeek, draftWeek } = await import("../core/nominations.js");
     await refreshRoles();
 
     type Layer = { route?: { path: string; methods: Record<string, boolean>; stack: { handle: unknown }[] } };
@@ -114,7 +114,8 @@ test("#657 ДИМ: погодитись з рештою, скасувати, х�
     const t13 = a.body.teams.find((x: any) => x.teamId === 13);
     assert.deepEqual(t13.leads, [{ managerId: 103, name: "Тімлід РНК" }], "🔴 керівництво не бачить, хто тімлід команди");
     assert.deepEqual(cell(a.body, 13, "cars").ranking.map((x: any) => x.managerId), [101, 102, 103], "🔴 рейтинг «авто» не той");
-    const draftRanking = cell(a.body, 13, "marginPct").ranking;
+    // «% маржі» з 20.10.2026 на екрані не показується (#1830) — рейтинг беремо з ядра, як і знімок.
+    const draftRanking = (await draftWeek(WEEK)).teams.find((x) => x.teamId === 13)!.cells.find((x) => x.nomination === "marginPct")!.ranking;
     assert.equal(await freezeWeek(WEEK, new Date("2026-09-22T13:00:00Z")), "frozen");
     const fz = await frozenWeek(WEEK);
     assert.deepEqual(fz!.teams.find((x) => x.teamId === 13)!.cells.find((x) => x.nomination === "marginPct")!.ranking, draftRanking, "🔴 знімок загубив рейтинг");
