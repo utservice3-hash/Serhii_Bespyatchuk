@@ -13,4 +13,5 @@ import { kommoDealSource } from "../minusRegistry/kommoSource.js";
 import { buildMinusDealsRouter } from "../minusRegistry/mount.js";
 
 export { REGISTRIES_TAB } from "../minusRegistry/mount.js";
-export const minusDealsRouter = buildMinusDealsRouter(kommoDealSource(kommoGet));
+/** Дії людини чекають Kommo не довше 12 с (`deadlineMs`); фонова звірка (`jobs/minusRegistrySync.ts`) — без стелі. */
+export const minusDealsRouter = buildMinusDealsRouter(kommoDealSource(kommoGet, { deadlineMs: 12_000 }));

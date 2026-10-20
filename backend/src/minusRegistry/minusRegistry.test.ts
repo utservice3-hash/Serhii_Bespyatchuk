@@ -195,6 +195,12 @@ test("#1841b РЕЄСТР МІНУСОВИХ: адаптер на нашому �
     assert.ok(e instanceof KommoError, `«${msg}» не став KommoError`);
     assert.equal((e as KommoError).status, status, `«${msg}» → не ${String(status)}`);
   }
+  // стеля очікування для дій людини: Kommo мовчить → 504 «не відповідає» за стелю, а не за хвилини повторів
+  const hang = kommoDealSource((() => new Promise(() => undefined)) as never, { deadlineMs: 50 });
+  const t0 = Date.now();
+  const eh = await hang.fetchDeal("62000001").catch((x: unknown) => x);
+  assert.ok(eh instanceof KommoError && eh.status === 504, "зависла Kommo не дала 504");
+  assert.ok(Date.now() - t0 < 1000, `стеля не спрацювала: ${String(Date.now() - t0)} мс`);
   const e401 = await thrower("Kommo API error 401: Bearer секрет-для-тесту").fetchDeal("7").catch((x: unknown) => x) as KommoError;
   assert.match(e401.message, /токен/);
   assert.doesNotMatch(e401.message, /секрет/, "токен потрапив у текст помилки");

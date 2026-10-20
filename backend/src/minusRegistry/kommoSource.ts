@@ -33,7 +33,8 @@ type Get = <T>(path: string) => Promise<T>;
  * `get` — у проді наш `kommoGet` (передають роут і джоба), у гейтах — фейкова Kommo. Параметром, а не імпортом: клієнт Kommo
  * тягне конфіг із обовʼязковою БД, і без цього модуль не можна було б перевірити без бази.
  */
-export function kommoDealSource(get: Get, pipelinesTtlMs = 10 * 60_000): DealSource {
+export function kommoDealSource(get: Get, opts: { deadlineMs?: number; pipelinesTtlMs?: number } = {}): DealSource {
+  const pipelinesTtlMs = opts.pipelinesTtlMs ?? 10 * 60_000;
   /** GET: 404 → null, порожня відповідь (204 → `{}` у нашому клієнті) → null, решта помилок → KommoError. */
   const read = async <T>(path: string): Promise<T | null> => {
     try {
@@ -60,14 +61,26 @@ export function kommoDealSource(get: Get, pipelinesTtlMs = 10 * 60_000): DealSou
     return j?._embedded?.contacts ?? [];
   }
 
-  return {
-    async fetchDeal(dealId: string): Promise<CrmDeal | null> {
-      if (!/^\d{1,12}$/.test(dealId)) return null;
-      const lead = await read<KommoLead>(`/api/v4/leads/${encodeURIComponent(dealId)}?with=contacts`);
-      if (!lead || !lead.id) return null;
-      const ids = (lead._embedded?.contacts || []).map((c) => c.id);
-      const [contacts, pipelines] = await Promise.all([getContacts(ids), getPipelines()]);
-      return leadToCrmDeal(lead, contacts, stageName(pipelines, lead));
-    },
+  /**
+   * ⏱ Стеля очікування для дій людини («Знайти в CRM», «Погодити»). Наш клієнт Kommo при збоях робить до 5 повторів із
+   * паузами, і кожна спроба чекає до 60 с — для фонової звірки це добре, а людина з кнопкою чекала б хвилинами (клієнт пакета
+   * здавався за ~25 с). Після стелі — та сама 504 «Kommo не відповідає», що в пакеті; погодження тоді йде на знімку (ТЗ §5 п.6).
+   * Запит у Kommo тільки на читання, тож відпущений «у фоні» нічого не зіпсує.
+   */
+  const withDeadline = <T>(p: Promise<T>): Promise<T> => {
+    if (!opts.deadlineMs) return p;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, rej) => { t = setTimeout(() => rej(new KommoError("Kommo не відповідає — спробуйте за хвилину.", 504)), opts.deadlineMs); });
+    return Promise.race([p, timeout]).finally(() => clearTimeout(t));
   };
+
+  async function fetchDealInner(dealId: string): Promise<CrmDeal | null> {
+    if (!/^\d{1,12}$/.test(dealId)) return null;
+    const lead = await read<KommoLead>(`/api/v4/leads/${encodeURIComponent(dealId)}?with=contacts`);
+    if (!lead || !lead.id) return null;
+    const ids = (lead._embedded?.contacts || []).map((c) => c.id);
+    const [contacts, pipelines] = await Promise.all([getContacts(ids), getPipelines()]);
+    return leadToCrmDeal(lead, contacts, stageName(pipelines, lead));
+  }
+  return { fetchDeal: (dealId: string) => withDeadline(fetchDealInner(dealId)) };
 }
