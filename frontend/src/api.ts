@@ -5853,20 +5853,8 @@ export const fetchCarrierPayments = async (day?: string) => (await api.get<PaySc
 export const runCarrierPayments = async () => (await api.post<{ ok: boolean; result: unknown }>("/finance/payments/run")).data;
 
 /** 🧪 «План/факт · авто (тест)» (20.10.2026): факт із таблиці «UTS Утверждение оплат» поруч із ручним. Лише читання. */
-export type FinApprSection = "commercial" | "admin" | "general";
 export interface FinApprLine { payDate: string | null; what: string; amount: number | null; direction: string; paid: boolean }
 export interface FinApprPot { key: string; label: string; sum: number; rows: number; unpaid: number; lines: FinApprLine[] }
-export interface FinApprItem { id: number; respId: number; groupId: number; resp: string; group: string; name: string; section: FinApprSection | "payroll" | null; off: boolean;
-  plan: number | null; manual: number | null; auto: number; diff: number; rows: number; unpaid: number; lines: FinApprLine[] }
-export interface FinApprCompare {
-  month: string; fetchedAt: string; sheetLines: number; items: FinApprItem[];
-  sections: { section: FinApprSection; manualArticles: number; autoArticles: number; autoPayroll: number; autoTotal: number; manualOpex: number | null }[];
-  payroll: FinApprPot[]; statsOnly: FinApprPot[]; ambiguous: FinApprPot[]; unrecognized: FinApprPot[]; notUa: FinApprPot[]; badSum: FinApprPot[]; badPayDate: FinApprPot[]; noPayDate: FinApprPot[];
-  syncedAt?: string | null; syncError?: string | null;
-  withoutSection: { manual: number; auto: number; names: string[] };
-  totals: { plan: number; manual: number; autoArticles: number; autoPayroll: number; outside: number; diffItems: number };
-}
-export const fetchFinApprovalsTest = async (month: string) => (await api.get<FinApprCompare>("/finance/approvals-test", { params: { month } })).data;
 export async function downloadCarrierPaymentsXlsx(day: string): Promise<{ blob: Blob; filename: string }> {
   const res = await api.get("/finance/payments/export.xlsx", { params: { day }, responseType: "blob" });
   const m = /filename="([^"]+)"/.exec((res.headers as Record<string, string | undefined>)["content-disposition"] ?? "");

@@ -1,7 +1,7 @@
 /**
- * 🧪 «ПЛАН/ФАКТ · АВТО (ТЕСТ)» — факт витрат із таблиці «UTS Утверждение оплат» поруч із ручним (Роман 20.10.2026:
- * «паралельна таблиця план-факту, щоб розуміти різницю і що виправляти»). НІЧОГО НЕ ПИШЕ: ні в базу, ні в таблицю, —
- * лише показує, що дало б правило, і де воно розходиться з тим, що Тетяна внесла руками.
+ * 🧾 ФАКТ ВИТРАТ ІЗ ТАБЛИЦІ «UTS Утверждение оплат» (задача Тетяни #5607). 20.10.2026 — тестова вкладка поруч із ручним
+ * фактом; 21.10.2026 — джерело «План/факт» і операційних з жовтня; того ж дня Тетяна: «авто тепер основний, ручний
+ * прибирати» — тестову вкладку й порівняння з ручним прибрано. Цей модуль лише ЧИТАЄ (пише `core/approvalsSync.ts`).
  *
  * Правило — зі слів Тетяни на зустрічі 13.10.2026 (відео з 16-ї хв):
  *  · беремо Категорію, Суму, Напрямок і ДАТУ ОПЛАТИ (колонка «Дата» — дата внесення, її не беремо);
@@ -173,62 +173,9 @@ export function bucketRange(lines: readonly ApprovalLine[], from: string, to: st
   return b;
 }
 
-export interface CompareItem { id: number; respId: number; groupId: number; resp: string; group: string; name: string; section: OpexSection | null; off: boolean; plan: number | null; manual: number | null; auto: number; diff: number; rows: number; unpaid: number; lines: ShownLine[] }
-export interface CompareSection { section: OpexSec; manualArticles: number; autoArticles: number; autoPayroll: number; autoTotal: number; manualOpex: number | null }
-export interface ApprovalsCompare {
-  month: string; fetchedAt: string; sheetLines: number;
-  items: CompareItem[]; sections: CompareSection[];
-  payroll: Pot[]; statsOnly: Pot[]; ambiguous: Pot[]; unrecognized: Pot[]; notUa: Pot[]; badSum: Pot[]; badPayDate: Pot[]; noPayDate: Pot[];
-  /** Статті без розділу (Податки ТОВ): у «План/факт» є, в операційні не йдуть. */
-  withoutSection: { manual: number; auto: number; names: string[] };
-  totals: { plan: number; manual: number; autoArticles: number; autoPayroll: number; outside: number; diffItems: number };
-}
 const SECTIONS = ["commercial", "admin", "general"] as const;
 /** Σ «лише для статистики» розділу. */
 const statsSum = (b: MonthBuckets, s: OpexSec) => [...b.statsOnly.entries()].reduce((a, [k, p]) => a + (STATS_ONLY[k] === s ? p.sum : 0), 0);
-const OPEX_REF = { commercial: "opex_commercial", admin: "opex_admin", general: "opex_general" } as const;
-
-/** Порівняння місяця: ручний факт «План/факт» і ручні операційні «Тиждень і місяць» проти правила над таблицею. */
-export async function approvalsCompare(db: Db, month: string, lines: readonly ApprovalLine[], fetchedAt: Date): Promise<ApprovalsCompare> {
-  const items = (await db.query(`SELECT i.id, i.name, i.section, r.id AS resp_id, g.id AS group_id, r.name AS resp, g.name AS grp, v.plan::text AS plan, (i.off_from IS NOT NULL AND i.off_from <= $1::date) AS off,
-        v.fact::text AS fact
-      FROM fin_items i JOIN fin_groups g ON g.id = i.group_id AND g.deleted_at IS NULL
-      JOIN fin_resps r ON r.id = g.resp_id AND r.deleted_at IS NULL
-      LEFT JOIN fin_values v ON v.item_id = i.id AND v.month = $1::date
-     WHERE i.deleted_at IS NULL ORDER BY r.sort, r.id, g.sort, g.id, i.sort, i.id`, [month])).rows as { id: number; name: string; section: OpexSection | null; resp_id: number; group_id: number; resp: string; grp: string; plan: string | null; off: boolean; fact: string | null }[];
-  const plan: PlanItem[] = items.map((x) => ({ id: x.id, name: x.name, section: x.section, resp: x.resp, group: x.grp, off: x.off }));
-  const b = bucketMonth(lines, month, plan);
-  const opex = new Map(((await db.query(`SELECT k.ref_source, v.value::text AS value FROM fin_kpis k
-      LEFT JOIN fin_kpi_values v ON v.kpi_id = k.id AND v.period_kind = 'month' AND v.period_start = $1::date
-     WHERE k.deleted_at IS NULL AND k.ref_source = ANY($2)`, [month, Object.values(OPEX_REF)])).rows as { ref_source: string; value: string | null }[])
-    .map((x) => [x.ref_source, x.value == null ? null : Number(x.value)] as const));
-  const outItems: CompareItem[] = items
-    .map((x) => {
-      const p = b.items.get(x.id), manual = x.fact == null ? null : Number(x.fact), auto = p?.sum ?? 0;
-      return { id: x.id, respId: x.resp_id, groupId: x.group_id, resp: x.resp, group: x.grp, name: x.name, section: x.section, off: x.off,
-        plan: x.plan == null ? null : Number(x.plan), manual, auto, diff: r2(auto - (manual ?? 0)),
-        rows: p?.rows ?? 0, unpaid: p?.unpaid ?? 0, lines: p?.lines ?? [] };
-    })
-    .filter((x) => !x.off || x.plan != null || x.manual != null || x.rows > 0);
-  const sumBy = (pred: (x: CompareItem) => boolean, f: (x: CompareItem) => number) => r2(outItems.filter(pred).reduce((s, x) => s + f(x), 0));
-  const sections: CompareSection[] = SECTIONS.map((s) => {
-    // «+ ЗП» на екрані — усе поза статтями, що йде в розділ: ЗП за назвою і «лише для статистики» (Консалтинг СЕО).
-    const autoArticles = sumBy((x) => x.section === s, (x) => x.auto), autoPayroll = r2((b.payroll.get(s)?.sum ?? 0) + statsSum(b, s));
-    return { section: s, manualArticles: sumBy((x) => x.section === s, (x) => x.manual ?? 0), autoArticles, autoPayroll,
-      autoTotal: r2(autoArticles + autoPayroll), manualOpex: opex.get(OPEX_REF[s]) ?? null };
-  });
-  const list = (m: Map<string, Pot>) => [...m.values()].sort((a, z) => z.sum - a.sum);
-  const outside = [b.ambiguous, b.unrecognized, b.notUa].flatMap(list).reduce((s, p) => s + p.sum, 0);
-  return {
-    month, fetchedAt: fetchedAt.toISOString(), sheetLines: lines.length, items: outItems, sections,
-    payroll: list(b.payroll), statsOnly: list(b.statsOnly), ambiguous: list(b.ambiguous), unrecognized: list(b.unrecognized),
-    notUa: list(b.notUa), badSum: list(b.badSum), badPayDate: list(b.badPayDate), noPayDate: list(b.noPayDate),
-    withoutSection: { manual: sumBy((x) => !x.section, (x) => x.manual ?? 0), auto: sumBy((x) => !x.section, (x) => x.auto),
-      names: outItems.filter((x) => !x.section && (x.manual != null || x.rows > 0)).map((x) => x.name) },
-    totals: { plan: sumBy(() => true, (x) => x.plan ?? 0), manual: sumBy(() => true, (x) => x.manual ?? 0), autoArticles: sumBy(() => true, (x) => x.auto),
-      autoPayroll: r2([...list(b.payroll), ...list(b.statsOnly)].reduce((s, p) => s + p.sum, 0)), outside: r2(outside), diffItems: outItems.filter((x) => Math.abs(x.diff) >= 0.005).length },
-  };
-}
 
 // ─────────────── 🗄 ДЖЕРЕЛО З ЖОВТНЯ 2026: таблиця `fin_approvals` (дзеркало вкладки «На оплату») ───────────────
 
