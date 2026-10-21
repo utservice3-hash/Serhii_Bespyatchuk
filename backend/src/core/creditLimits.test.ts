@@ -431,3 +431,21 @@ test("#239e 🔴 ДЗЕРКАЛО: справжня розбіжність по 
   assert.equal(decide("злитий", 10, 7), true,
     "🔴 злита група з НЕПРАВИЛЬНИМ зведенням пройшла — правило перевіряється, а не вимикається");
 });
+
+/**
+ * #1280 — ЛІМІТИ ГОТІВКОВОГО КЛІЄНТА — З `client_credit_limits`, ЯК У БЕЗГОТІВКОВИХ (21.10.2026). Рядок «МГЕР (готівка)»
+ * вставлявся з `limit_days = NULL` без `limit_amount`: ліміт Сергія (60 дн. / 200 000, 13.10) був у таблиці лімітів —
+ * розбір запитів на оплату його бачив, а екран дебіторки після кожного синку показував «не узгоджено». Обидва ліміти
+ * (дні й сума) мусять іти в готівковий рядок із тієї самої таблиці й за ключем самого рядка (`keys[0]`).
+ * 🧨 Червоніє, якщо готівковий рядок знову вставити з порожнім лімітом, загубити суму чи брати ліміт не за його ключем.
+ */
+test("#1280 ГОТІВКОВИЙ РЯДОК ДЕБІТОРКИ — ліміти днів і суми з таблиці лімітів за ключем рядка, як у безготівкових", () => {
+  const src = readFileSync(SRC("jobs/syncReceivables.ts"), "utf8");
+  const fn = src.slice(src.indexOf("async function insertCashReceivables"), src.indexOf("export async function fetchSheetLimitsForReconcile"));
+  assert.ok(fn.length > 0, "🔴 вставку готівкових не знайдено — гейту нічого перевіряти");
+  assert.match(fn, /SELECT limit_days, limit_amount FROM client_credit_limits WHERE client_key = \$1`, \[clientKey\]\)/, "🔴 ліміт готівкового не з таблиці лімітів чи не за ключем рядка");
+  assert.match(fn, /INSERT INTO receivables \(client_key, client_name, manager_id, manager_name_raw, amount, limit_days, limit_amount, overdue_days, source\)\s*VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, NULL, 'cash'\)/,
+    "🔴 готівковий рядок вставляється без лімітів");
+  assert.match(fn, /\[clientKey, cc\.label, managerId, managerName, total, lim\?\.limit_days \?\? null, lim\?\.limit_amount \?\? null\]/, "🔴 у готівковий рядок їде не той ліміт");
+  assert.doesNotMatch(fn, /amount, limit_days, overdue_days, source\)\s*VALUES \(\$1, \$2, \$3, \$4, \$5, NULL, NULL, 'cash'\)/, "🔴 повернулась вставка з порожнім лімітом");
+});

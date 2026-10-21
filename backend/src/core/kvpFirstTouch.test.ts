@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -188,19 +189,19 @@ test("#939 ЗГОДА У ЗВІТІ КВП == ЕКРАН; «ДУМАЄ» ОКР�
     "🔴 клік із картки КВП відкриє екран без фільтра згоди");
 });
 
-// ─── 🏆 Звіт КВП — ядро (задача 5605, ТЗ Юлі 12.10.2026, макет «Звіт КВП - ядро») ────────────────────────────────
+// ─── 🏆 Звіт КВП — ядро (задача 5605, ТЗ Юлі 12.10.2026; з 21.10.2026 — задача 6442, «одна таблиця команд») ─────────
 /**
- * #1765 — «ЗАКРИЄМО?» І Σ ТАБЛИЦІ КОМАНД. Статус по тижню — по обидва боки кожного порога ТЗ (розділ 3): «закрито» —
- * факт ≥ план; «реально» — треба ≤ 50% очікуваного; «під ризиком» — 50–85%; «не закриється» — понад 85% або очікуваного
- * не вистачає (тоді «бракує Х»). Плану немає — статусу немає. Σ відділу = Σ показаних рядків, команда = Σ менеджерів
- * (на фікстурі, де так і є в даних), порожні рядки не показуються. Червоніє, якщо зсунути поріг, назвати «закритим» тиждень
- * без плану, рахувати «з очікуваннями» без факту або відділ — не з рядків.
+ * #1850 — «ЗАКРИЄМО?» І «ФАКТ + ОЧІКУВАННЯ» — ЧИСТІ ПРАВИЛА. Статус по тижню — по обидва боки кожного порога ТЗ (розділ 3):
+ * «закрито» — факт ≥ план; «реально» — треба ≤ 50% очікуваного; «під ризиком» — 50–85%; «не закриється» — понад 85% або
+ * очікуваного не вистачає (тоді «бракує Х»). Плану немає — статусу немає. «Факт + очікування» (задача 6442) — сума ОБОХ
+ * доданків і % плану; без плану — «—», а не 0%. Еталон — живий Яцик 21.10: 608 + 349 = 957, 115% плану 835.
+ * 🧨 Червоніє, якщо зсунути поріг, назвати «закритим» тиждень без плану або рахувати «з очікуваннями» без факту чи без очікувань.
  */
-test("#1765 «ЗАКРИЄМО?»: пороги 50% / 85% по обидва боки, «бракує» і «без плану»; Σ відділу = Σ команд, команда = Σ менеджерів", async () => {
+test("#1850 «ЗАКРИЄМО?» І «ФАКТ + ОЧІКУВАННЯ»: пороги 50% / 85% по обидва боки, «бракує» і «без плану»; сума двох доданків і % плану", async () => {
   const r = await import(await transpile("pages/dashboard/kvpCoreRules.ts")) as {
     weekCloseStatus: (p: number, f: number, e: number) => { kind: string; share: number | null; short: number };
     closeNote: (s: unknown, fmt: (v: number) => string) => string | null;
-    coreRows: (t: unknown[], idx: number | null, nameOf: (t: { name: string | null }) => string) => { rows: { name: string; week: { plan: number; fact: number; withExp: number }; month: { plan: number; fact: number; withExp: number }; managers: { week: { plan: number; fact: number; withExp: number }; month: { plan: number; fact: number; withExp: number } }[] }[]; dept: { week: { plan: number; fact: number; withExp: number }; month: { plan: number; fact: number; withExp: number } } };
+    withExpected: (plan: number, fact: number, expected: number) => { sum: number; pct: number | null };
   };
   const k = (p: number, f: number, e: number) => r.weekCloseStatus(p, f, e).kind;
   assert.equal(k(100, 100, 0), "closed"); assert.equal(k(100, 120, 0), "closed");
@@ -215,51 +216,87 @@ test("#1765 «ЗАКРИЄМО?»: пороги 50% / 85% по обидва бо
   assert.equal(k(100, 0, 0), "no", "🔴 нічого не прийшло й нічого не чекаємо — не закриється");
   assert.equal(k(0, 50, 50), "none", "🔴 тиждень без плану назвали закритим");
 
-  const wk = (plan: number, fact: number, expected: number, idx = 3) => ({ idx, plan, fact, expected, isCurrent: idx === 3 });
-  const teams = [
-    { teamId: 1, name: "РПК А", kind: "rpk", plan: 300, revenue: 120, expectedThisMonth: 50, weeks: [wk(80, 40, 30), wk(70, 70, 0, 2)],
-      managers: [
-        { managerId: 11, name: "М1", plan: 200, revenue: 100, expectedThisMonth: 40, weeks: [wk(50, 30, 20)] },
-        { managerId: 12, name: "М2", plan: 100, revenue: 20, expectedThisMonth: 10, weeks: [wk(30, 10, 10)] },
-        { managerId: 13, name: "Порожній", plan: 0, revenue: 0, expectedThisMonth: 0, weeks: [wk(0, 0, 0)] },
-      ] },
-    { teamId: null, name: null, kind: "rpk", plan: 0, revenue: 5, expectedThisMonth: 0, weeks: [wk(0, 0, 0)], managers: [] },
-    { teamId: 9, name: "Порожня", kind: "rnk", plan: 0, revenue: 0, expectedThisMonth: 0, weeks: [wk(0, 0, 0)], managers: [] },
-  ];
-  const { rows, dept } = r.coreRows(teams, null, (t) => t.name ?? "Без команди");
-  assert.deepEqual(rows.map((x) => x.name), ["РПК А", "Без команди"], "🔴 порожній рядок показано або рядок без команди загубився");
-  assert.deepEqual(rows[0]!.week, { plan: 80, fact: 40, withExp: 70 }, "🔴 тиждень узято не поточний або «з очікуваннями» ≠ факт + очікування");
-  assert.deepEqual(rows[0]!.month, { plan: 300, fact: 120, withExp: 170 });
-  assert.equal(rows[0]!.managers.length, 2, "🔴 менеджер без жодного числа показаний");
-  const sum = (a: { plan: number; fact: number; withExp: number }[]) => a.reduce((s, x) => ({ plan: s.plan + x.plan, fact: s.fact + x.fact, withExp: s.withExp + x.withExp }), { plan: 0, fact: 0, withExp: 0 });
-  assert.deepEqual(sum(rows[0]!.managers.map((m) => m.week)), rows[0]!.week, "🔴 команда ≠ Σ менеджерів за тиждень");
-  assert.deepEqual(sum(rows[0]!.managers.map((m) => m.month)), rows[0]!.month, "🔴 команда ≠ Σ менеджерів за місяць");
-  assert.deepEqual(dept.week, sum(rows.map((x) => x.week)), "🔴 Σ відділу ≠ Σ команд (тиждень)");
-  assert.deepEqual(dept.month, sum(rows.map((x) => x.month)), "🔴 Σ відділу ≠ Σ команд (місяць)");
-  assert.deepEqual(r.coreRows(teams, 2, (t) => t.name ?? "-").rows[0]!.week, { plan: 70, fact: 70, withExp: 70 }, "🔴 вибраний тиждень не береться");
+  assert.deepEqual(r.withExpected(835, 608, 349), { sum: 957, pct: 115 }, "🔴 «Факт + очік.» Яцика за жовтень ≠ 608 + 349 = 957, 115%");
+  assert.deepEqual(r.withExpected(189, 175, 108), { sum: 283, pct: 150 }, "🔴 поточний тиждень Яцика ≠ 175 + 108 = 283, 150%");
+  assert.deepEqual(r.withExpected(100, 40, 0), { sum: 40, pct: 40 }, "🔴 без очікувань сума ≠ факту");
+  assert.deepEqual(r.withExpected(100, 0, 30), { sum: 30, pct: 30 }, "🔴 без факту сума ≠ очікуванню");
+  assert.equal(r.withExpected(0, 50, 50).pct, null, "🔴 без плану відсоток показано числом — 0% або ∞ замість «—»");
 });
 
 /**
- * #1765b — ЕКРАН ЯДРА: ПОРЯДОК І ВІДСУТНІСТЬ ДУБЛІВ. Зверху — 4 картки грошей (Отримані · Стратегічний план · Прогноз ·
- * Робочі дні) з поясненням під кожною, далі таблиця команд, далі «Перший дотик»; решта — у згорнутому «Детальному звіті».
- * Чотири картки не повторюються в детальному (правило «жоден показник не має двох джерел на одному екрані»).
+ * #1850b — НА ЕКРАНІ ОДНА ТАБЛИЦЯ КОМАНД, І ВОНА В ЯДРІ (задача 6442, Юля 21.10.2026: «Прибрати верхній блок… Лишаємо
+ * тільки нижню… Нижня таблиця має бути видна одразу, без розгортання „Детальний звіт“»). Порядок ядра: 4 картки грошей →
+ * таблиця команд → «Перший дотик» → згорнутий «Детальний звіт». Дзеркало до відсутності (правило 8): верхнього блоку
+ * немає НІДЕ у фронті, а таблиця — рівно ОДНА і стоїть ДО `showDetails`, тобто не «зникла», а «тут».
+ * 🧨 Червоніє, якщо повернути другий блок команд, сховати таблицю назад під «Детальний звіт» або дублювати картку грошей.
  */
-test("#1765b ЗВІТ КВП — ЯДРО: гроші → команди → перший дотик; решта згорнута; 4 картки без дубля", () => {
+test("#1850b ЗВІТ КВП — ОДНА ТАБЛИЦЯ КОМАНД У ЯДРІ: гроші → команди → перший дотик → згорнутий детальний; 4 картки без дубля", () => {
   const src = FE_SRC("pages/dashboard/sections/KvpReportSection.tsx");
-  const iMoney = src.indexOf("💰 Гроші за "), iTeams = src.indexOf("<KvpTeamsWeekMonth rep={rep} />"),
+  const TEAMS = "🏅 Команди — план / факт";
+  assert.equal(src.split(TEAMS).length - 1, 1, "🔴 таблиця команд на екрані не рівно один раз");
+  assert.equal(src.split("🏅 Команди").length - 1, 1, "🔴 на екрані знову два блоки команд — той самий дубль, який прибирали");
+  const FE_ROOT = FE("");
+  const all: string[] = [];
+  const walk = (d: string) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else if (/\.tsx?$/.test(f)) all.push(p); } };
+  walk(FE_ROOT);
+  assert.ok(all.length > 50, `фронт не знайдено (${String(all.length)} файлів) — гейт нічого не перевіряє`);
+  const dup = all.filter((p) => /Команди: тиждень і місяць|KvpTeamsWeekMonth/.test(readFileSync(p, "utf8")));
+  assert.deepEqual(dup, [], "🔴 верхній блок «Команди: тиждень і місяць» повернувся");
+  const iMoney = src.indexOf("💰 Гроші за "), iTeams = src.indexOf(TEAMS),
     iFt = src.indexOf("{canSeeFirstTouch && <KvpFirstTouchBlock"), iDet = src.indexOf("{showDetails && (<>");
-  assert.ok(iMoney > 0 && iMoney < iTeams && iTeams < iFt && iFt < iDet, "🔴 порядок ядра не «гроші → команди → перший дотик → детальний»");
+  assert.ok(iMoney > 0 && iMoney < iTeams && iTeams < iFt && iFt < iDet,
+    "🔴 порядок ядра не «гроші → команди → перший дотик → детальний» (таблицю сховали під «Детальний звіт»?)");
   for (const lbl of ["Отримані кошти", "Стратегічний план 🔒", "Прогноз місяця", "Робочі дні"]) {
     const n = src.split(`label="${lbl}"`).length - 1;
     assert.equal(n, 1, `🔴 картка «${lbl}» на екрані ${String(n)} разів — дві копії одного числа`);
     assert.ok(src.indexOf(`label="${lbl}"`) < iTeams, `🔴 картка «${lbl}» не в ядрі`);
   }
   assert.match(src, /useState\(\(\) => \{ try \{ return localStorage\.getItem\("kvpDetails"\) === "1"; \} catch \{ return false; \} \}\)/, "🔴 «Детальний звіт» не згорнутий за замовчуванням");
-  const tbl = FE_SRC("pages/dashboard/sections/KvpTeamsWeekMonth.tsx");
-  assert.match(tbl, /coreRows\(rep\.teams as unknown as TeamLike\[\], blk\?\.idx \?\? null,/, "🔴 таблиця рахує рядки не спільною функцією");
-  assert.match(tbl, /<td style=\{\{ fontWeight: 700 \}\}>Σ Відділ<\/td>\s*<Cells r=\{dept\} bold\b[^>]*\/>/, "🔴 рядок «Σ Відділ» не з тих самих рядків");
-  assert.match(tbl, /weekCloseStatus\(w\.plan, w\.fact, w\.withExp - w\.fact\)/, "🔴 статус «Закриємо?» не тим правилом");
-  assert.match(tbl, /\{CLOSE_LABEL\[s\.kind\]\}/, "🔴 статус показано лише кольором, без слова");
+});
+
+/**
+ * #1850c — «ФАКТ + ОЧІКУВАННЯ» І ПОТОЧНИЙ ТИЖДЕНЬ У ТАБЛИЦІ КОМАНД (задача 6442, пп. 2–3). Колонка стоїть одразу після
+ * «Очікуємо» в шапці, у рядку команди, у Σ Відділ і в рядку менеджера — і всюди рахується ОДНІЄЮ функцією `withExpected`
+ * з `revenue + expectedThisMonth` (тим самим, що верхнє число «Очікуємо»). Поточний тиждень — «з очік.» і «Закриємо?»
+ * тим самим правилом; минулі тижні їх не мають. Шапка, `<colgroup>` і клітинки — однакової ширини, інакше числа стоять
+ * під чужим підписом (найгірша поломка таблиці: правдоподібна й тиха).
+ * 🧨 Червоніє, якщо колонку пропустити в одному з рядків, взяти не те очікування, порахувати суму власним виразом,
+ * показати «з очік.» на минулому тижні або загубити мітку «Закриємо?».
+ */
+test("#1850c ФАКТ + ОЧІКУВАННЯ В ТАБЛИЦІ КОМАНД: шапка = colgroup = клітинки; команда, Σ і менеджер — одним правилом; поточний тиждень — «з очік.» і «Закриємо?»", () => {
+  const src = FE_SRC("pages/dashboard/sections/KvpReportSection.tsx");
+  const cut = (from: string, to: string) => { const i = src.indexOf(from); const j = src.indexOf(to, i); assert.ok(i >= 0 && j > i, `🔴 не знайдено «${from}»…«${to}»`); return src.slice(i, j); };
+  const table = cut("🏅 Команди — план / факт", "</table>");
+  const head = table.slice(table.indexOf("<thead>"), table.indexOf("{rep.weekBlocks.map((w) => <th"));
+  const cols = table.slice(table.indexOf("<colgroup>"), table.indexOf("{rep.weekBlocks.map((w) => <col"));
+  const nTh = head.split(/<th[\s>]/).length - 1, nCol = cols.split("<col ").length - 1;
+  assert.equal(nTh, 7, "🔴 у шапці не 7 сталих колонок (команда · план · факт · вик · очікуємо · факт+очік · конв)");
+  assert.equal(nCol, nTh, "🔴 <colgroup> і шапка різної ширини — числа зʼїдуть під чужі підписи");
+  assert.ok(head.indexOf(">Очікуємо") < head.indexOf(">Факт + очік.") && head.indexOf(">Факт + очік.") < head.indexOf(">Конв."), "🔴 «Факт + очік.» не одразу після «Очікуємо»");
+  assert.match(table, /мин \{fmtMoney\(t\.expectedPastMonths\)\}<\/div>\}<\/td>\s*<WithExpCell on=\{oneMonth\} plan=\{t\.plan\} fact=\{t\.revenue\} expected=\{t\.expectedThisMonth\} \/>\s*<td style=\{\{ textAlign: "right" \}\} title=\{`Лайфтайм/,
+    "🔴 у рядку команди «Факт + очік.» не між «Очікуємо» і «Конв.» або не з revenue + expectedThisMonth");
+  assert.match(table, /<td colSpan=\{2\}><\/td>\s*<WithExpCell on=\{oneMonth\} bold plan=\{rep\.teams\.reduce\(\(s, t\) => s \+ t\.plan, 0\)\} fact=\{rep\.teams\.reduce\(\(s, t\) => s \+ t\.revenue, 0\)\}\s*expected=\{rep\.teams\.reduce\(\(s, t\) => s \+ t\.expectedThisMonth, 0\)\} \/>\s*<td><\/td>/,
+    "🔴 Σ Відділ: «Факт + очік.» не з суми тих самих рядків або колонки зсунуті");
+  assert.ok(!/colSpan=\{6 \+/.test(src), "🔴 розкриття команди / тижня має стару ширину — на колонку вужче за таблицю");
+  assert.equal(src.split("colSpan={7 + ").length - 1, 2, "🔴 не обидва розкриття (менеджери, тиждень) на всю ширину");
+  for (const fn of ["function WithExpCell(", "function MgrWithExp("]) {
+    const body = cut(fn, "\n}\n");
+    assert.match(body, /const x = withExpected\(plan, fact, expected\);/, `🔴 ${fn} рахує суму не спільним правилом`);
+  }
+  // Рядок менеджера — сітка: стільки ж колонок у CALM_COLS, скільки підписів у шапці сітки.
+  const calm = /const CALM_COLS = "([^"]+)"/.exec(src)?.[1] ?? "";
+  const calmHead = cut("<span>Менеджер</span>", "</div>");
+  assert.equal(calm.split(" ").length, calmHead.split("<span").length - 1, "🔴 у рядку менеджера колонок не стільки, скільки підписів");
+  assert.match(calmHead, /Очік<\/span><span style=\{\{ textAlign: "right" \}\}>Факт\+очік<\/span>/, "🔴 у менеджера «Факт+очік» не після «Очік»");
+  assert.match(src, /<MgrWithExp on=\{rep\.weekBlocks\.length > 0\} plan=\{m\.plan\} fact=\{m\.revenue\} expected=\{m\.expectedThisMonth\} \/>/, "🔴 менеджер: «Факт+очік» не з revenue + expectedThisMonth");
+  // Поточний тиждень.
+  const cell = cut("function WeekCell(", "\n}\n");
+  assert.match(cell, /const exp = w\.isCurrent \? withExpected\(w\.plan, w\.fact, w\.expected\) : null;/, "🔴 «з очік.» не лише на поточному тижні або не тим правилом");
+  assert.match(cell, /\{exp && <>[\s\S]*з очік\. <b>\{fmtMoney\(exp\.sum\)\}<\/b> · \{fmtPct\(exp\.pct\)\}[\s\S]*<CloseChip plan=\{w\.plan\} fact=\{w\.fact\} expected=\{w\.expected\} \/>/, "🔴 у поточному тижні немає «з очік.» або мітки «Закриємо?»");
+  const chip = cut("function CloseChip(", "\n}\n");
+  assert.match(chip, /const s = weekCloseStatus\(plan, fact, expected\);/, "🔴 «Закриємо?» не тим правилом");
+  assert.match(chip, /\{CLOSE_LABEL\[s\.kind\]\}<\/span>/, "🔴 статус показано лише кольором, без слова");
+  assert.match(src, /<WeekCell key=\{w\.idx\} mode=\{weekMode\} w=\{w\} prev=\{rep\.deptWeeks\.find/, "🔴 Σ Відділ без тижневих клітинок — без «Закриємо?» відділу");
 });
 
 /**
@@ -291,73 +328,4 @@ test("#1765c ПЕРШИЙ ДОТИК У ЯДРІ: картка = фільтр т
   for (const key of ["calls", "score", "price", "promise", "objection", "agreed", "success"]) {
     assert.match(src, new RegExp(`\\{th\\("${key}", `), `🔴 колонка «${key}» не сортується`);
   }
-});
-
-/**
- * #1775 — «Команди: тиждень і місяць»: МІСЯЦЬ ПЕРШИЙ, ДАЛІ ТИЖДЕНЬ (Юля 16.10.2026: «Жовтень 2026 потрібно, щоб було
- * спочатку, а потім йдуть тижні»). Порядок у шапці й у клітинках рядка мусить бути ОДНАКОВИЙ — інакше числа місяця
- * стоять під підписом тижня, і це найгірша поломка таблиці: правдоподібна й тиха.
- */
-test("#1775 КОМАНДИ: місяць перед тижнем — і в шапці, і в клітинках рядка, «Закриємо?» лишається при тижні", () => {
-  const tbl = FE_SRC("pages/dashboard/sections/KvpTeamsWeekMonth.tsx");
-  const cells = tbl.slice(tbl.indexOf("function Cells("), tbl.indexOf("export function KvpTeamsWeekMonth"));
-  const at = (h: string, x: string) => { const i = h.indexOf(x); assert.ok(i >= 0, `🔴 не знайдено «${x}»`); return i; };
-  assert.ok(at(cells, "formatAmount(r.month.plan)") < at(cells, "formatAmount(r.week.plan)"), "🔴 у рядку тиждень стоїть перед місяцем");
-  assert.ok(at(cells, "r.month.withExp") < at(cells, "formatAmount(r.week.plan)"), "🔴 колонки місяця розірвані тижнем");
-  assert.ok(at(cells, "r.week.withExp") < at(cells, "<Status w={r.week} />"), "🔴 «Закриємо?» відірвано від тижня");
-  const head = tbl.slice(at(tbl, "<thead>"), at(tbl, "</thead>"));
-  assert.ok(at(head, "{monthName}</th>") < at(head, "Тиждень {blk.from"), "🔴 у шапці тиждень стоїть перед місяцем — числа під чужим підписом");
-  // 19.10.2026: між місяцем і поточним тижнем — «Минулий тиждень» (3 колонки); твердження про порядок і ширину те саме.
-  assert.match(head, /<th colSpan=\{3\}[^>]*>\{monthName\}<\/th>\s*<th colSpan=\{3\}[^>]*>\{prevR \?[^\n]*Минулий тиждень[^\n]*<\/th>\s*<th colSpan=\{4\}/, "🔴 ширина груп у шапці не збігається з клітинками (3 місяць + 3 минулий тиждень + 4 тиждень)");
-  const sub = head.slice(head.indexOf("</tr>"));
-  assert.ok(sub.lastIndexOf("Закриємо?") > sub.lastIndexOf("План"), "🔴 у другому рядку шапки «Закриємо?» не в групі тижня");
-});
-
-/**
- * #1785 — МИНУЛИЙ ТИЖДЕНЬ ПОРУЧ (Юля 19.10.2026: «звітую по ньому в понеділок»). Календарний Пн–Нд перед поточним
- * тижнем; блоки звіту ріжуться межею місяця, тож тиждень 28.09–04.10 складається з вересневого й жовтневого блоків —
- * обидва мусять увійти. Частково покритий тиждень — «немає даних», а не неповна сума. Підсумок — по обидва боки плану.
- * 🧨 Червоніє, якщо взяти лише блоки поточного місяця, загубити менеджера або назвати «виконаним» тиждень без плану.
- */
-test("#1785 МИНУЛИЙ ТИЖДЕНЬ: Пн–Нд перед поточним, з обох місяців; неповне покриття — «немає даних»; підсумок по обидва боки", async () => {
-  type T = { teamId: number | null; name: string | null; kind: string; plan: number; revenue: number; expectedThisMonth: number;
-    weeks?: { idx: number; plan: number; fact: number; expected: number; isCurrent: boolean }[];
-    managers?: { managerId: number; name: string; plan: number; revenue: number; expectedThisMonth: number; weeks?: { idx: number; plan: number; fact: number; expected: number; isCurrent: boolean }[] }[] };
-  const r = await import(await transpile("pages/dashboard/kvpCoreRules.ts")) as {
-    prevWeekRange: (curFrom: string) => { from: string; to: string };
-    blocksWithin: (b: { idx: number; from: string; to: string }[], r: { from: string; to: string }) => number[];
-    coversRange: (p: { blocks: { idx: number; from: string; to: string }[]; idxs: number[] }[], r: { from: string; to: string }) => boolean;
-    prevWeekRows: (p: { teams: T[]; idxs: number[] }[], nameOf: (t: T) => string) => { rows: Map<string, { name: string; plan: number; fact: number; managers: Map<string, { plan: number; fact: number }> }>; dept: { plan: number; fact: number } };
-    weekResult: (pf: { plan: number; fact: number }) => { kind: string; diff: number };
-  };
-  assert.deepEqual(r.prevWeekRange("2026-10-19"), { from: "2026-10-12", to: "2026-10-18" });
-  assert.deepEqual(r.prevWeekRange("2026-10-05"), { from: "2026-09-28", to: "2026-10-04" }, "🔴 тиждень через межу місяця");
-  assert.deepEqual(r.prevWeekRange("2026-10-01"), { from: "2026-09-21", to: "2026-09-27" }, "🔴 перший (неповний) блок місяця — минулий тиждень не від його понеділка");
-  const oct = [{ idx: 1, from: "2026-10-01", to: "2026-10-04" }, { idx: 2, from: "2026-10-05", to: "2026-10-11" }];
-  const sep = [{ idx: 4, from: "2026-09-21", to: "2026-09-27" }, { idx: 5, from: "2026-09-28", to: "2026-09-30" }];
-  const W = { from: "2026-09-28", to: "2026-10-04" };
-  assert.deepEqual(r.blocksWithin(oct, W), [1]); assert.deepEqual(r.blocksWithin(sep, W), [5]);
-  assert.equal(r.coversRange([{ blocks: oct, idxs: [1] }], W), false, "🔴 лише жовтнева частина — і це прочитано як повний тиждень");
-  assert.equal(r.coversRange([{ blocks: oct, idxs: [1] }, { blocks: sep, idxs: [5] }], W), true);
-  const wk = (idx: number, plan: number, fact: number) => ({ idx, plan, fact, expected: 0, isCurrent: false });
-  const team = (weeks: ReturnType<typeof wk>[], mWeeks: ReturnType<typeof wk>[]): T => ({ teamId: 5, name: "РПК", kind: "rpk", plan: 1, revenue: 1, expectedThisMonth: 0, weeks,
-    managers: [{ managerId: 7, name: "Яцик", plan: 1, revenue: 1, expectedThisMonth: 0, weeks: mWeeks }] });
-  const res = r.prevWeekRows([{ teams: [team([wk(1, 40, 30)], [wk(1, 40, 30)])], idxs: [1] }, { teams: [team([wk(5, 30, 50)], [wk(5, 30, 50)])], idxs: [5] }], (t) => t.name ?? "");
-  const row = res.rows.get("t:5:rpk")!;
-  assert.deepEqual([row.plan, row.fact], [70, 80], "🔴 минулий тиждень не склав вересень і жовтень");
-  assert.deepEqual(row.managers.get("m:7"), { name: "Яцик", plan: 70, fact: 80 }, "🔴 менеджер у минулому тижні — лише з одного місяця");
-  assert.deepEqual(res.dept, { plan: 70, fact: 80 }, "🔴 Σ Відділ минулого тижня ≠ сумі рядків");
-  assert.deepEqual(r.weekResult({ plan: 100, fact: 100 }), { kind: "done", diff: 0 }, "🔴 рівно план — не «виконано»");
-  assert.deepEqual(r.weekResult({ plan: 100, fact: 99 }), { kind: "miss", diff: 1 });
-  assert.equal(r.weekResult({ plan: 0, fact: 50 }).kind, "none", "🔴 тиждень без плану названо «виконаним»");
-});
-
-test("#1785b МИНУЛИЙ ТИЖДЕНЬ · ФРОНТ: попередній місяць — тим самим звітом; Σ Відділ — з тієї самої суми; шапка місяць → минулий → поточний", () => {
-  const tbl = FE_SRC("pages/dashboard/sections/KvpTeamsWeekMonth.tsx");
-  assert.match(tbl, /fetchKvpReport\(\{ preset: "month", date: prevMonthFirst \}\)/, "🔴 попередній місяць тягнеться не тим самим звітом");
-  assert.match(tbl, /if \(!coversRange\(parts, prevR\)\) return null;/, "🔴 неповний тиждень показується як повний");
-  assert.match(tbl, /<Cells r=\{dept\} bold prev=\{prevPack === undefined \? undefined : prevPack === null \? null : prevPack\.dept\} \/>/, "🔴 Σ Відділ минулого тижня не з тієї самої суми");
-  const cells = tbl.slice(tbl.indexOf("function Cells("), tbl.indexOf("export function KvpTeamsWeekMonth"));
-  assert.ok(cells.indexOf("r.month.withExp") < cells.indexOf("<PrevCells") && cells.indexOf("<PrevCells") < cells.indexOf("formatAmount(r.week.plan)"),
-    "🔴 у рядку порядок не «місяць → минулий тиждень → поточний»");
 });

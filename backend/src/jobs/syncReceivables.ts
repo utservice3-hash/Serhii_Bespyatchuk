@@ -85,10 +85,15 @@ async function insertCashReceivables(client: PoolClient): Promise<number> {
       ? (await client.query<{ name: string }>(`SELECT name FROM managers WHERE id = $1`, [managerId])).rows[0]?.name ?? ""
       : "";
 
+    // 🧾 ЛІМІТИ ГОТІВКОВОГО — З ТІЄЇ САМОЇ ТАБЛИЦІ, ЩО Й У БЕЗГОТІВКОВИХ (21.10.2026). Було `NULL, NULL`: ліміт, який
+    // поставили на «МГЕР (готівка)» (Сергій, 13.10: 60 дн. / 200 000), лежав у `client_credit_limits`, і розбір запитів
+    // на оплату його бачив, а екран дебіторки після кожного синку показував «не узгоджено». Два джерела — дві відповіді.
+    const lim = (await client.query<{ limit_days: number | null; limit_amount: string | null }>(
+      `SELECT limit_days, limit_amount FROM client_credit_limits WHERE client_key = $1`, [clientKey])).rows[0];
     await client.query(
-      `INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw, amount, limit_days, overdue_days, source)
-       VALUES ($1, $2, $3, $4, $5, NULL, NULL, 'cash')`,
-      [clientKey, cc.label, managerId, managerName, total]
+      `INSERT INTO receivables (client_key, client_name, manager_id, manager_name_raw, amount, limit_days, limit_amount, overdue_days, source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, 'cash')`,
+      [clientKey, cc.label, managerId, managerName, total, lim?.limit_days ?? null, lim?.limit_amount ?? null]
     );
     for (const r of deals.rows) {
       await client.query(
