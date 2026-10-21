@@ -18,7 +18,7 @@ import { NR_EN_KEYS, NR_CSS, nrClauses, nrAppRows } from "./services/nonresident
 import { validateForm, firstError } from "./validate.js";
 import { parseStamps, placeOnPage, stampPdf, StampRefused, type Stamp } from "./services/pdfStamp.js";
 import { createRequire } from "node:module";
-import { translit, translitParty } from "./services/translit.js";
+import { translit, translitParty, translitAddress } from "./services/translit.js";
 import { translateNr, GOOGLE_KEYS, TRANSLIT_KEYS } from "./services/nrTranslate.js";
 import { deflateSync } from "node:zlib";
 import { currentNum } from "./services/docgen.js";
@@ -1206,7 +1206,7 @@ test("#1871 ПЕРЕКЛАД: лише порожні поля; адреси —
     reqs: "тент", truck: "DAF АА 1111 ВВ", routeEn: "Yakhny (Kyiv region) – Kolin", loadDate: "06.10.2026" });
   const r = await translateNr(s, stub);
   assert.equal(r.fields.routeEn, undefined, "🔴 перезаписано вписане руками");
-  assert.equal(r.fields.loadAddrEn, "s. Yakhny, Kyivska obl.", "🔴 адресу не транслітеровано");
+  assert.equal(r.fields.loadAddrEn, "Yakhny village, Kyiv region", "🔴 адресу не транслітеровано");
   assert.equal(r.how.loadAddrEn, "translit");
   assert.equal(r.fields.cargoEn, "EN(Зерно в мішках, 20 т)", "🔴 вантаж не пішов у Google");
   assert.equal(r.how.extraEn, "google");
@@ -1215,7 +1215,7 @@ test("#1871 ПЕРЕКЛАД: лише порожні поля; адреси —
   assert.equal(calls.length, 1, "🔴 Google кликано не одним запитом");
   assert.ok(!calls[0].some((t) => /Яхни/.test(t)), "🔴 адреса пішла в Google");
   const noKey = await translateNr(s, null);
-  assert.equal(noKey.fields.loadAddrEn, "s. Yakhny, Kyivska obl.", "🔴 без ключа транслітерація не працює");
+  assert.equal(noKey.fields.loadAddrEn, "Yakhny village, Kyiv region", "🔴 без ключа транслітерація не працює");
   assert.equal(noKey.fields.cargoEn, undefined);
   assert.match(noKey.note ?? "", /не налаштовано/, "🔴 без ключа немає пояснення");
   const down = await translateNr(s, async () => { throw new Error("Google 503"); });
@@ -1236,4 +1236,23 @@ test("#1872 ПЕРЕКЛАД: Google лише через IPv4, ключ не в 
   const h = /constructorRouter\.post\("\/translate"[\s\S]*?\n\}\)\);/.exec(route)?.[0] ?? "";
   assert.ok(/s\.doc !== "nrapp"/.test(h) && /translateRateOk\(req\.auth!\.userId\)/.test(h), "🔴 роут без межі виду документа чи ліміту");
   assert.ok(SRC("auth/accessMatrix.ts").includes('"POST", path: "/api/constructor/translate"'), "🔴 роуту немає в матриці доступу");
+});
+
+/**
+ * #1873 — АДРЕСИ: назви транслітерацією, службові слова англійськими скороченнями (Роман 21.10.2026): «с. Яхни, Київська
+ * обл., вул. Шевченка, 5» → «Yakhny village, Kyiv region, Shevchenka str., 5»; область — англійською назвою (Kyiv, не
+ * Kyivska), «м.» прибирається, будинок/офіс — перед номером, кілька точок « · » — кожна окремо, індекс і країна.
+ * 🧨 Лишити «vul.», «obl.» чи «Kyivska region» — червоніє.
+ */
+test("#1873 АДРЕСИ: транслітерація + англійські скорочення — village, region, str., ave., bldg., office; області англійською", () => {
+  const ex: Array<[string, string]> = [
+    ["с. Яхни, Київська обл., вул. Шевченка, 5", "Yakhny village, Kyiv region, Shevchenka str., 5"],
+    ["м. Київ, вул. Володимира Винниченка, буд. 7, оф. 12", "Kyiv, Volodymyra Vynnychenka str., bldg. 7, office 12"],
+    ["04201, м. Київ, просп. Перемоги 10Г", "04201, Kyiv, Peremohy ave., 10H"],
+    ["смт Гостомель, Бучанський р-н, Київська область", "Hostomel settlement, Buchanskyi district, Kyiv region"],
+    ["Одеська обл., с. Великий Дальник, пров. Садовий, 3", "Odesa region, Velykyi Dalnyk village, Sadovyi lane, 3"],
+    ["м. Львів, вул. Городоцька, 2 · м. Тернопіль, вул. Шевченка, 1", "Lviv, Horodotska str., 2 · Ternopil, Shevchenka str., 1"],
+    ["Україна, Хмельницька обл., м. Кам'янець-Подільський", "Ukraine, Khmelnytskyi region, Kamianets-Podilskyi"],
+  ];
+  for (const [ua, en] of ex) assert.equal(translitAddress(ua), en, `🔴 «${ua}» → «${translitAddress(ua)}», а мало бути «${en}»`);
 });
