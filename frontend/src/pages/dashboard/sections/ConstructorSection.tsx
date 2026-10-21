@@ -18,7 +18,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
-  CTOR_EMPTY_FORM, ctorArchive, ctorByEdrpou, ctorCounterparties, ctorCreate, ctorDocument, ctorEntities, ctorFile, ctorMe,
+  CTOR_EMPTY_FORM, ctorTranslate, ctorArchive, ctorByEdrpou, ctorCounterparties, ctorCreate, ctorDocument, ctorEntities, ctorFile, ctorMe,
   ctorParse, ctorParseOld, ctorPool, ctorPoolStats, ctorPreview, ctorRouteTemplates, ctorSaveCounterparty, ctorSaveRouteTemplate,
   ctorDeleteRouteTemplate, ctorPairZip, ctorConvertToPdf, ctorConvertFromPdf,
   type CtorArchiveRow, type CtorCounterparty, type CtorCounterpartyRow, type CtorEntityKey, type CtorEntityRow, type CtorForm,
@@ -528,6 +528,21 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
     || (d.nr && form.ent !== "avm" ? "лише від ТОВ «АвтоМув» — оберіть АвтоМув угорі" : null);
   /** Договори з нерезидентами в архіві — до якого прив'язати заявку (Nana 14.10: № і дата підтягуються з договору). */
   const nrContracts = (arch ?? []).filter((r) => r.doc_kind === "nrmain");
+  /* ── 🌍 Переклад англійської частини (задача 5940): лише порожні поля, вписане руками не чіпаємо ── */
+  const [translating, setTranslating] = useState(false);
+  const [trNote, setTrNote] = useState<{ t: string; bad?: boolean } | null>(null);
+  const onTranslate = async () => {
+    setTranslating(true); setTrNote(null);
+    try {
+      const r = await ctorTranslate(form);
+      const keys = Object.keys(r.fields);
+      setForm((f) => ({ ...f, trip: { ...f.trip, ...Object.fromEntries(keys.filter((k) => !(f.trip[k] || "").trim()).map((k) => [k, r.fields[k]])) } }));
+      const tr = keys.filter((k) => r.how[k] === "translit").length, gg = keys.filter((k) => r.how[k] === "google").length;
+      const done = keys.length ? `Заповнено полів: ${keys.length} (транслітерація — ${tr}, переклад Google — ${gg}). Перевірте англійську частину.` : "Перекладати нічого: порожніх полів з українським текстом немає.";
+      setTrNote({ t: r.note ? `${done} ${r.note}` : done, bad: !!r.note });
+    } catch (e) { setTrNote({ t: await errOf(e), bad: true }); }
+    finally { setTranslating(false); }
+  };
   const pickContract = async (id: number) => {
     try {
       const row = await ctorDocument(id) as { deal_no: string; doc_date: string | null; contractor: CtorForm["cp"] };
@@ -785,8 +800,10 @@ export function ConstructorSection({ initial }: { initial?: Partial<CtorForm> } 
                   ))}
                 </div>
                 {isNrApp && (<>
-                  <h3 style={{ margin: "16px 0 4px", fontSize: 13 }}>Англійська частина заявки</h3>
-                  <p className="hint">Впишіть англійською (латиницею) — перекладу автоматом немає. Порожнє поле піде в англійську частину так само, як українською (дати, телефони, номери авто).</p>
+                  <h3 style={{ margin: "16px 0 4px", fontSize: 13, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>Англійська частина заявки
+                    <button className="btn sm" type="button" disabled={translating} onClick={() => void onTranslate()}>{translating ? "⏳ Перекладаю…" : "🌍 Перекласти англійською"}</button></h3>
+                  <p className="hint">Кнопка заповнює лише порожні поля: імена, адреси й міста — офіційною транслітерацією, вантаж, вимоги й умови — перекладом Google. Перевірте й поправте за потреби. Порожнє поле піде в англійську частину так само, як українською (дати, телефони, номери авто).</p>
+                  {trNote && <p className="hint" style={{ color: trNote.bad ? "var(--warn)" : "var(--ok)", fontWeight: 600 }}>{trNote.t}</p>}
                   <div className="g2">
                     {NR_EN.map(([k, l]) => (
                       <div key={k} className={`fld ${FULL.has(k.replace(/En$/, "")) ? "full" : ""}`}>

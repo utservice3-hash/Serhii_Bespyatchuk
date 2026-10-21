@@ -1745,6 +1745,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/constructor/preview", cls: "deny-only",
     allow: [], deny: ["hr"] },
+  // 🌍 Переклад заявки нерезиденту (5940) — усім, у кого є «Конструктор»
+  { method: "POST", path: "/api/constructor/translate", cls: "deny-only",
+    allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/constructor/documents", cls: "deny-only",
     allow: [], deny: ["hr"] },
   { method: "POST", path: "/api/constructor/convert/to-pdf", cls: "deny-only",
