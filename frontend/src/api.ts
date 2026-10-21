@@ -5282,6 +5282,8 @@ export type HiringTrainingHealth = "manager" | "closed" | "done" | "no_login" | 
 export interface HiringTrainingRow {
   id: number; full_name: string | null; phone: string | null; telegram: string | null; status: HiringStatus;
   team_id: number | null; team_name: string | null; login: string | null;
+  /** Ім'я в Kommo, якщо синк уже прив'язав Kommo до цього акаунта (#2230); null — ще ні. */
+  kommo_name: string | null;
   account_created_at: string | null; first_login_at: string | null; last_activity_at: string | null;
   access_extended_days: number; access_closed_at: string | null; access_closed_reason: HiringCloseReason | null;
   deadline: string | null; day: number; days: number; health: HiringTrainingHealth;
