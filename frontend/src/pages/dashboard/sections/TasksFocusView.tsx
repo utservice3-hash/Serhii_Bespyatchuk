@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
-import type { Task } from "../../../api";
-import { STATUS_DOT_COLORS, STATUS_LABELS } from "../constants";
+import type { Task, TaskStatus } from "../../../api";
+import { StatusPicker } from "../../../components/StatusPicker";
+import { STATUS_DOT_COLORS } from "../constants";
 import {
   FOCUS_BUCKETS, chipKeeps, focusCounts, focusGroups,
   type FocusBucket, type FocusChip,
@@ -17,7 +18,7 @@ import {
  * селектора статусу. Редагування — у картці задачі (клік по назві); у рядку лише галочка
  * «Готово», бо це найчастіша дія. Права на неї рахує сервер (`statusRights`).
  */
-export function TasksFocusView({ rows, kpi, today, showAssignee, meId, onOpen, onOpenFeed, onDone, onReopen }: {
+export function TasksFocusView({ rows, kpi, today, showAssignee, meId, onOpen, onOpenFeed, onDone, onReopen, onStatus }: {
   rows: Task[];
   /** Плани KPI (тижневі парасольки) — окремою згорнутою групою, у лічильники не входять. */
   kpi: { count: number; node: ReactNode } | null;
@@ -31,6 +32,8 @@ export function TasksFocusView({ rows, kpi, today, showAssignee, meId, onOpen, o
   onDone: (task: Task) => void;
   /** «↩ У роботу» на виконаній задачі — виправити випадкове закриття одним кліком. */
   onReopen: (task: Task) => void;
+  /** Зміна статусу з рядка (меню як у таблиці й картці). «Готово» сюди не приходить — воно йде через `onDone`. */
+  onStatus: (task: Task, status: TaskStatus) => void;
 }) {
   const [chip, setChip] = useState<FocusChip | null>(null);
   const [closed, setClosed] = useState<Set<string>>(() => new Set(["doneEarlier", "kpi"]));
@@ -78,7 +81,12 @@ export function TasksFocusView({ rows, kpi, today, showAssignee, meId, onOpen, o
         {done && t.statusRights?.canChange !== false ? (
           <button type="button" className="tf-reopen" onClick={() => onReopen(t)} title="Повернути задачу в роботу (статус «В процесі»)">↩ У роботу</button>
         ) : (
-          <span className="tf-status">{STATUS_LABELS[t.status] ?? t.status}</span>
+          <span className="tf-status-pick">
+            {/* Те саме меню, що в таблиці й картці: права з сервера, «Готово» без права — сірий пункт.
+                «Готово» звідси йде через галочку — разом зі «Скасувати». */}
+            <StatusPicker value={t.status} rights={t.statusRights} reviewerName={t.reviewerName}
+              onChange={(st) => (st === "done" ? onDone(t) : onStatus(t, st))} />
+          </span>
         )}
         {showAssignee && <span className="tf-who" title={t.assigneeName ?? "Без виконавця"}>{t.assigneeName ?? "Без виконавця"}</span>}
         <span className={`tf-dl${late ? " late" : ""}`}>{done ? (t.doneAt ? `✓ ${ddmm(t.doneAt)}` : "✓") : t.deadline ? ddmm(t.deadline) : "—"}</span>

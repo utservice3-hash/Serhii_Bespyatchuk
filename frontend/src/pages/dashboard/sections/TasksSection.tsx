@@ -1669,6 +1669,11 @@ export function TasksSection({
                 action: { label: "Скасувати", run: () => { patchTaskLocal(t.id, { status: prev, doneAt: null }); commitTask(t.id, { status: prev }); } },
               });
             }}
+            onStatus={(t, status) => {
+              // Той самий шлях, що в селекторі статусу старої таблиці.
+              patchTaskLocal(t.id, { status });
+              commitTask(t.id, { status });
+            }}
             onReopen={(t) => {
               // ↩ Повернути закриту задачу в роботу одним кліком — з групи «Виконано».
               patchTaskLocal(t.id, { status: "in_progress", doneAt: null });

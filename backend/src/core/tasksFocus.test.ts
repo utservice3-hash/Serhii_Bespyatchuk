@@ -269,3 +269,23 @@ test("#1966 ЗАДАЧНИК: після галочки — «Скасувати
   assert.match(view, /onClick=\{\(\) => onReopen\(t\)\}/, "🔴 кнопки «↩ У роботу» в рядку виконаної задачі немає");
   assert.match(view, /↩ У роботу/);
 });
+
+/**
+ * #1967 — СТАТУС ЗМІНЮЄТЬСЯ З РЯДКА (Роман 21.10.2026: «змінювати статус задач з головного екрану»).
+ * Плашка статусу в рядку — те саме меню, що в таблиці й картці (`StatusPicker`), з правами задачі від
+ * сервера; «Готово» з меню йде через галочку, тобто разом зі «Скасувати».
+ * 🧨 Червоніє, якщо повернути статичну плашку, загубити права (меню пустить «Готово» без права), або
+ * якщо «Готово» з меню закриватиме задачу повз «Скасувати».
+ */
+test("#1967 ЗАДАЧНИК: статус змінюється з рядка тим самим меню з правами, «Готово» з меню — через «Скасувати»", () => {
+  const read = (...p: string[]) => readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", ...p), "utf8")
+    .replace(/^\s*\/\/.*$/gm, " ").replace(/\{?\/\*[\s\S]*?\*\/\}?/g, " ").replace(/\s+/g, " ");
+  const view = read("TasksFocusView.tsx");
+  assert.match(view, /<StatusPicker value=\{t\.status\} rights=\{t\.statusRights\} reviewerName=\{t\.reviewerName\}/,
+    "🔴 у рядку немає меню статусу з правами задачі");
+  assert.match(view, /onChange=\{\(st\) => \(st === "done" \? onDone\(t\) : onStatus\(t, st\)\)\}/,
+    "🔴 «Готово» з меню йде повз «Скасувати»");
+  const sec = read("TasksSection.tsx");
+  assert.match(sec, /onStatus=\{\(t, status\) => \{ patchTaskLocal\(t\.id, \{ status \}\); commitTask\(t\.id, \{ status \}\); \}\}/,
+    "🔴 зміна статусу з рядка не зберігається тим самим шляхом, що в таблиці");
+});

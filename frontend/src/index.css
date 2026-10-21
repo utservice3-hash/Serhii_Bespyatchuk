@@ -1399,3 +1399,6 @@ tr.recv-row[data-call="no_call"]:hover > td { background: var(--warn-bg); }
 .tf-reopen { justify-self: start; font: inherit; font-size: 12.5px; font-weight: 600; padding: 3px 10px; border-radius: 999px; cursor: pointer;
   border: 1px solid var(--border); background: var(--card-bg); color: var(--text); }
 .tf-reopen:hover { border-color: var(--text-muted); }
+.tf-status-pick { min-width: 0; max-width: 100%; justify-self: start; display: inline-flex; align-items: center; }
+.tf-status-pick > div { max-width: 100%; }
+.tf-status-pick button:not(:disabled)::after { content: "▾"; font-size: 10px; opacity: 0.6; margin-left: -2px; }
