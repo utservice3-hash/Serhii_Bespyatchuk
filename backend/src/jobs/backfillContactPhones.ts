@@ -32,6 +32,50 @@ export function allPhones(c: KommoContact): { raw: string; norm: string }[] {
   return out;
 }
 
+/** Рядки `contact_phones` із контактів: усі номери, перший — основний, пари (контакт, номер) без дублів (PK). */
+export function contactPhoneRows(contacts: readonly KommoContact[]): { id: number; raw: string; norm: string; main: boolean }[] {
+  const rows = new Map<string, { id: number; raw: string; norm: string; main: boolean }>();
+  for (const c of contacts) {
+    allPhones(c).forEach((p, k) => {
+      const key = `${String(c.id)}|${p.norm}`;
+      if (!rows.has(key)) rows.set(key, { id: c.id, raw: p.raw, norm: p.norm, main: k === 0 });
+    });
+  }
+  return [...rows.values()];
+}
+
+/**
+ * ☎️ Дзеркало телефонів ЦИХ контактів: номери з Kommo — вставити/оновити; номери, яких у контакта в Kommo більше
+ * немає, — прибрати. Чужих контактів не чіпає.
+ *
+ * 🔴 НАВІЩО В СИНКУ (задача 6439, 21.10.2026). Доти таблицю писав лише цей разовий бекфіл (04.08.2026), тож у
+ * кожної угоди, створеної пізніше, телефону контакту не було. Угода КОМПАНІЇ (ключ клієнта — назва, а не номер)
+ * так і лишалась без жодного дзвінка: з 38 рекламних угод жовтня, що дійшли до грошей, «Перший дотик» бачив 7.
+ * Синк уже тягне ці контакти заради назви й номера в угоді — запис коштує нуль запитів до Kommo.
+ */
+export async function writeContactPhones(contacts: readonly KommoContact[]): Promise<number> {
+  if (!contacts.length) return 0;
+  const list = contactPhoneRows(contacts);
+  let written = 0;
+  if (list.length) {
+    const r = await pool.query(
+      `INSERT INTO contact_phones (contact_id, phone, raw_phone, is_main, updated_at)
+       SELECT * FROM (SELECT UNNEST($1::bigint[]) c, UNNEST($2::text[]) p,
+                             UNNEST($3::text[]) rp, UNNEST($4::boolean[]) m, now() u) v
+       ON CONFLICT (contact_id, phone) DO UPDATE
+         SET raw_phone = EXCLUDED.raw_phone, is_main = EXCLUDED.is_main, updated_at = now()`,
+      [list.map((x) => x.id), list.map((x) => x.norm), list.map((x) => x.raw), list.map((x) => x.main)]);
+    written = r.rowCount ?? 0;
+  }
+  await pool.query(
+    `DELETE FROM contact_phones cp
+      WHERE cp.contact_id = ANY($1::bigint[])
+        AND NOT EXISTS (SELECT 1 FROM (SELECT UNNEST($2::bigint[]) c, UNNEST($3::text[]) p) v
+                         WHERE v.c = cp.contact_id AND v.p = cp.phone)`,
+    [[...new Set(contacts.map((c) => c.id))], list.map((x) => x.id), list.map((x) => x.norm)]);
+  return written;
+}
+
 export interface PhoneBackfillResult {
   dealsScanned: number; kommoRequests: number;
   linksBefore: number; linksAfter: number;
@@ -101,26 +145,11 @@ export async function backfillContactPhones(
       for (let j = 0; j < contactIds.length; j += 250) {
         const contacts = await fetchContactsByIds(contactIds.slice(j, j + 250));
         requests++;
-        const rows: { id: number; raw: string; norm: string; main: boolean }[] = [];
         for (const c of contacts) {
           seen.add(c.id);
-          const phones = allPhones(c);
-          if (phones.length) withPhone.add(c.id);
-          phones.forEach((p, k) => rows.push({ id: c.id, raw: p.raw, norm: p.norm, main: k === 0 }));
+          if (allPhones(c).length) withPhone.add(c.id);
         }
-        // Дедуп пар (contact_id, phone) — той самий PK-клас, що поклав синк.
-        const uniq = new Map(rows.map((r) => [`${r.id}|${r.norm}`, r]));
-        const list = [...uniq.values()];
-        if (list.length) {
-          const r = await pool.query(
-            `INSERT INTO contact_phones (contact_id, phone, raw_phone, is_main, updated_at)
-             SELECT * FROM (SELECT UNNEST($1::bigint[]) c, UNNEST($2::text[]) p,
-                                   UNNEST($3::text[]) rp, UNNEST($4::boolean[]) m, now() u) v
-             ON CONFLICT (contact_id, phone) DO UPDATE
-               SET raw_phone = EXCLUDED.raw_phone, is_main = EXCLUDED.is_main, updated_at = now()`,
-            [list.map((x) => x.id), list.map((x) => x.norm), list.map((x) => x.raw), list.map((x) => x.main)]);
-          phonesWritten += r.rowCount ?? 0;
-        }
+        phonesWritten += await writeContactPhones(contacts);
         await sleep(pauseMs);
       }
       await sleep(pauseMs);

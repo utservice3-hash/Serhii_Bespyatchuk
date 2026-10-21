@@ -39,6 +39,7 @@ import {
 import { isLegalEntityName, normalizeClientName, normalizePhone } from "../utils/clientName.js";
 import { provisionUsers } from "../db/userProvisioning.js";
 import { heavyJobHolder } from "./jobLock.js";
+import { writeContactPhones } from "./backfillContactPhones.js";
 import { jobSkip, type JobSkip } from "./jobRuns.js";
 import { guardDecision, MAX_RUN_MS } from "./syncGuardRule.js";
 import { getSettings } from "../routes/settings.js";
@@ -491,6 +492,9 @@ export async function syncKommo(opts: { reconcileDays?: number } = {}): Promise<
     // в руках: НУЛЬ додаткових запитів до Kommo. Живить рознесення нотаток контактів
     // (дзвінки Ringostat) по угодах — див. `syncContactActivity`.
     await upsertDealContacts(deals);
+    // ☎️ Телефони тих самих контактів — із уже завантаженого знімка, нуль запитів (задача 6439: без них угода компанії
+    // не знаходила жодного дзвінка, бо таблицю доти писав лише разовий бекфіл 04.08.2026).
+    await writeContactPhones(contacts);
     // 🏢 Те саме для компаній: звʼязок + коди (ЄДРПОУ/ІПН) із того самого знімка.
     await upsertCompanies(deals, companies);
 

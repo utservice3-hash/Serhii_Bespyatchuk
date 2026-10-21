@@ -132,8 +132,15 @@ const OUT = inList(OUTBOUND_TYPES);
  * (заміряно: 133 розмови за 30 днів); якби LAG ішов по парах, дубль того самого `uniqueid`
  * дав би gap = 0 і «склеїв» дзвінок сам із собою — друга угода втратила б його мовчки.
  *
- * 🔴 ДВА ШЛЯХИ ЗВʼЯЗКИ — `UNION`, а не `OR` у `JOIN`: кожен шлях іде своїм індексом
- * (`client_phone` / `client_key`), і `UNION` сам прибирає дзвінок, знайдений обома.
+ * 🔴 ТРИ ШЛЯХИ ЗВʼЯЗКИ — `UNION`, а не `OR` у `JOIN`: кожен шлях іде своїм індексом
+ * (`client_phone` / `client_key` / телефони контактів угоди), і `UNION` сам прибирає дзвінок, знайдений кількома.
+ *
+ * ☎️ ТРЕТІЙ ШЛЯХ — ТЕЛЕФОНИ КОНТАКТІВ САМЕ ЦІЄЇ УГОДИ (`deal_contacts` → `contact_phones`; задача 6439, 21.10.2026).
+ * Угода компанії має ключем НАЗВУ, а номер живе лише в контакті Kommo, тож перші два шляхи для неї дзвінків не
+ * знаходили: з 38 рекламних угод жовтня, що дійшли до грошей, «Перший дотик» бачив 7, і 28 із 31 відсутньої —
+ * саме такі (заміряно номерами з Kommo). Свідома межа: шлях лише для угод, чий ключ НЕ номер (`phone_state <> 'ok'`).
+ * Угоді фізособи номер уже дає перший шлях; додати їй інші номери контакту означало б зсунути вже розібрані
+ * перші розмови — це окрема зміна зі своїм заміром, а не латання цієї діри.
  */
 /**
  * CTE `d0 … lf`: рекламні угоди періоду, їхні дзвінки двома шляхами звʼязки, склейка плечей.
@@ -162,6 +169,11 @@ function linkedCallsCtes(p: AdCallFactsParams): string {
       SELECT d0.kommo_id, rc.uniqueid, rc.calldate, rc.call_type, rc.billsec, rc.manager_id, rc.client_phone
         FROM d0 JOIN ringostat_calls rc
           ON d0.client_key IS NOT NULL AND rc.client_key = d0.client_key AND ${win("rc")}
+      UNION
+      SELECT d0.kommo_id, rc.uniqueid, rc.calldate, rc.call_type, rc.billsec, rc.manager_id, rc.client_phone
+        FROM d0 JOIN deal_contacts dc ON dc.deal_kommo_id = d0.kommo_id
+        JOIN contact_phones cp ON cp.contact_id = dc.contact_id
+        JOIN ringostat_calls rc ON d0.phone_state <> 'ok' AND rc.client_phone = cp.phone AND ${win("rc")}
     ),
     cu AS (SELECT DISTINCT uniqueid, calldate, call_type, billsec, manager_id, client_phone FROM lc),
     cm AS (SELECT cu.uniqueid, ${mergedLagGapExpr("cu")} AS gap FROM cu),

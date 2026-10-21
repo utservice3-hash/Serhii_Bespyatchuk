@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   classifyClientKey, phoneStateSql, dealCallState, promiseOutcome, silentBeforeClose, assertFactsParams,
-  ParamNotSetError, KOMMO_LOST_STATUS, type AdDealCallFacts, type AdCallFactsParams,
+  ParamNotSetError, KOMMO_LOST_STATUS, adDealFirstTalksSql, type AdDealCallFacts, type AdCallFactsParams,
 } from "./adCallFactsRules.js";
 import { classifyJobError } from "../health/jobErrorKind.js";
 
@@ -126,6 +126,46 @@ test("#756 ФАКТИ ДЗВІНКІВ · ЖИВА СХЕМА: лише рекл
       const sql = (await c.query<{ s: string }>(`SELECT ${phoneStateSql("$1::text")} AS s`, [k])).rows[0].s;
       assert.equal(sql, classifyClientKey(k), `🔴 JS і SQL класифікують «${String(k)}» по-різному`);
     }
+
+    // ── Підтести в ТОМУ САМОМУ кластері (правило: один кластер на файл). Період жовтня — фікстура вище не зачіпається.
+    const contact = async (deal: number, cid: number, phone: string) => {
+      await c.query("INSERT INTO deal_contacts (deal_kommo_id, contact_id, is_main) VALUES ($1,$2,true) ON CONFLICT DO NOTHING", [deal, cid]);
+      await c.query("INSERT INTO contact_phones (contact_id, phone, is_main) VALUES ($1,$2,true) ON CONFLICT DO NOTHING", [cid, phone]);
+    };
+    const pOct: AdCallFactsParams = { ...p, from: "2026-10-01", to: "2026-10-10", now: new Date("2026-10-12T12:00:00+03:00") };
+    await deal(201, "ad", null, "компаніяікс", "2026-10-05 10:00:00+03");   // компанія: номер лише в контакті
+    await contact(201, 9001, "380679990001");
+    await call("2026-10-05 10:20:00+03", "out", 60, 1, "380679990001");
+    await deal(202, "ad", null, "компаніяігрек", "2026-10-05 11:00:00+03"); // компанія; дзвонили на номер ЧУЖОГО контакту
+    await contact(202, 9002, "380679990002");
+    await deal(203, "other", "organic", "компаніязет", "2026-10-05 11:00:00+03"); // не реклама; її контакт
+    await contact(203, 9003, "380679990003");
+    await call("2026-10-05 11:20:00+03", "in", 70, 1, "380679990003");
+    await deal(204, "ad", null, "0679990004", "2026-10-06 10:00:00+03");    // фізособа + другий номер у контакті
+    await contact(204, 9004, "380679990005");
+    await call("2026-10-06 10:10:00+03", "in", 50, 1, "380679990005");
+    await deal(205, "ad", null, "фірмаві", "2026-10-07 10:00:00+03");       // знайдено двома шляхами одразу
+    await contact(205, 9005, "380679990006");
+    await call("2026-10-07 10:05:00+03", "in", 80, 1, "380679990006", "фірмаві");
+
+    await t.test("#2204 УГОДА КОМПАНІЇ ЗНАХОДИТЬ ДЗВІНОК ЗА ТЕЛЕФОНОМ СВОГО КОНТАКТУ, і лише свого", async () => {
+      const facts = new Map((await adCallFacts(c, pOct)).map((x) => [x.kommoId, x]));
+      assert.equal(facts.get(201)?.talks, 1, "🔴 угода компанії не знайшла розмову за телефоном свого контакту (задача 6439)");
+      assert.equal(facts.get(201)?.state, "talked");
+      const q = adDealFirstTalksSql(pOct, "either", 100);
+      const ft = new Map((await c.query<{ kommo_id: string; uniqueid: string }>(q.sql, q.params)).rows.map((r) => [Number(r.kommo_id), r.uniqueid]));
+      assert.ok(ft.has(201), "🔴 перша розмова угоди компанії не потрапила у вибірку «Першого дотику»");
+      // ДЗЕРКАЛО: номер контакту ІНШОЇ угоди дзвінка не прив'язує — інакше шлях чіпляв би дзвінки навмання.
+      assert.equal(facts.get(202)?.calls, 0, "🔴 угода отримала дзвінок на номер контакту іншої угоди");
+      assert.ok(!ft.has(202) && !ft.has(203), "🔴 у вибірці угода без власної розмови або не рекламна");
+    });
+
+    await t.test("#2205 ТРЕТІЙ ШЛЯХ — ЛИШЕ ДЛЯ КЛЮЧА-НЕ-НОМЕРА, і дзвінок, знайдений двома шляхами, рахується раз", async () => {
+      const facts = new Map((await adCallFacts(c, pOct)).map((x) => [x.kommoId, x]));
+      // Свідома межа: угоді фізособи номер дає перший шлях; інші номери контакту не зсувають уже розібрані розмови.
+      assert.equal(facts.get(204)?.calls, 0, "🔴 угода фізособи отримала дзвінок з іншого номера контакту — межа шляху зникла");
+      assert.equal(facts.get(205)?.calls, 1, `🔴 дзвінок, знайдений і за client_key, і за контактом, порахований ${String(facts.get(205)?.calls)} раз(и)`);
+    });
   } finally {
     await c.end().catch(() => {});
     scratch.dispose();

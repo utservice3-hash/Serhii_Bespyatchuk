@@ -3,6 +3,7 @@ import "./firstTouch.css";
 import { fetchAiCalls, fetchAiCallsMeta, type AiCallsResp, type AiCallsMetaResp } from "../../../api";
 import { AiCallDrawer } from "./AiCallDrawer";
 import { FirstTouchQueue } from "./FirstTouchQueue";
+import { FirstTouchPriceChart } from "./FirstTouchPriceChart";
 import { AnimatedNumber } from "./AnimatedNumber";
 import { InfoHint } from "../widgets";
 import { PeriodNav } from "../PeriodNav";
@@ -321,6 +322,9 @@ export function AiCallsSection() {
             </div>
             </div>
           </section>
+
+          {/* 📊 Задача 6439 п.3: ті самі рядки, що й блок менеджерів (команда з шапки, вкладка «Звіт»), — жодної другої вибірки. */}
+          <FirstTouchPriceChart rows={tabRows(applyListFilter(d.rows, { ...lf, managerId: null }), "report")} today={today} />
 
           <section aria-label="Розмови" className="ftd-card" ref={tableRef}>
             <div className="ftd-toolbar">

@@ -152,6 +152,23 @@ test("#27 ДЗВІНКИ: запис, дедуп батча, звʼязка но
         "🔴 дзвінок звільненого лишився без менеджера — історія втрачає правду");
     });
 
+    await t.test("#2202 ТЕЛЕФОНИ КОНТАКТІВ — ДЗЕРКАЛО KOMMO: усі номери записано, зниклий прибрано, чужий контакт не чіпано", async () => {
+      // Задача 6439: таблицю доти писав лише разовий бекфіл 04.08 — тепер її пише синк, тож вона мусить бути
+      // дзеркалом: номер, який у контакта в Kommo прибрали, не має далі чіпляти йому дзвінки.
+      const { writeContactPhones } = await import("./backfillContactPhones.js");
+      const k = (id: number, ...phones: string[]) => ({ id, name: "К", custom_fields_values: [
+        { field_code: "PHONE", values: phones.map((value) => ({ value })) }] }) as unknown as Parameters<typeof writeContactPhones>[0][number];
+      await writeContactPhones([k(6001, "0671110001", "0671110002"), k(6002, "0671110003")]);
+      const ph = async (id: number) => (await c.query<{ phone: string }>(
+        "SELECT phone FROM contact_phones WHERE contact_id = $1 ORDER BY phone", [id])).rows.map((r) => r.phone);
+      assert.deepEqual(await ph(6001), ["380671110001", "380671110002"], "🔴 записано не всі номери контакту");
+      await writeContactPhones([k(6001, "0671110001")]);
+      assert.deepEqual(await ph(6001), ["380671110001"], "🔴 номер, якого в Kommo вже немає, лишився в базі");
+      // ДЗЕРКАЛО: контакт, якого в цьому знімку не було, не чіпаємо — інакше синк вікна стирав би решту CRM.
+      assert.deepEqual(await ph(6002), ["380671110003"], "🔴 прибрано телефон контакту, якого не було в знімку");
+      assert.deepEqual(await ph(4242), ["380671234567"], "🔴 прибрано телефон стороннього контакту");
+    });
+
     await t.test("#27f ДЗЕРКАЛО ЗАБОРОНИ: невідомий ПІБ і далі NULL", async () => {
       // Без цього #27e зеленів би й тоді, коли ми почали чіпляти КОГО ЗАВГОДНО.
       // «Приписуємо звільненим» ≠ «приписуємо навмання»: людини, якої немає в
@@ -185,6 +202,17 @@ test("#27b ТЕЛЕФОНИ КОНТАКТУ: беремо ВСІ, не лише
   assert.equal(out[0].raw, "+38 (067) 111-22-33", "сире значення зберігається поруч");
   // «—» відкинуто: краще без номера, ніж із вигаданим.
   assert.equal(out.length, 2);
+});
+
+test("#2201 ТЕЛЕФОНИ КОНТАКТІВ → РЯДКИ: усі номери кожного контакту, перший — основний, пари без дублів", async () => {
+  stubEnvForPureImport();
+  const { contactPhoneRows } = await import("./backfillContactPhones.js");
+  const k = (id: number, ...phones: string[]) => ({ id, name: "К", custom_fields_values: [
+    { field_code: "PHONE", values: phones.map((value) => ({ value })) }] }) as unknown as Parameters<typeof contactPhoneRows>[0][number];
+  const rows = contactPhoneRows([k(1, "+38 (067) 111-22-33", "0509998877", "067 111 22 33", "—"), k(2, "0631234567"), k(1, "0671112233")]);
+  assert.deepEqual(rows.map((r) => `${String(r.id)}:${r.norm}:${r.main ? "main" : "-"}`),
+    ["1:380671112233:main", "1:380509998877:-", "2:380631234567:main"],
+    "🔴 не всі номери, не той основний або дубль пари (контакт, номер) — PK поклав би синк, як 03.08.2026");
 });
 
 test("#29 ВІКНО ДЛЯ RINGOSTAT — КИЇВСЬКЕ, а не UTC", async () => {
@@ -235,4 +263,15 @@ test("#455c ПРОВОДКА: syncCalls загорнуто в охоронця, 
   assert.equal((src.match(/createRunGuard\(/g) ?? []).length, 1, "🔴 охоронців має бути рівно ОДИН — два дають два незалежні замки на одну таблицю");
   assert.match(body, /return\s+callsGuard\(/, "🔴 тіло syncCalls не йде через охоронця");
   assert.match(body, /linkCalls\(opts\.boundLink \? from : undefined\)/, "🔴 межа звʼязування не привʼязана до вікна синку");
+});
+
+test("#2203 ПРОВОДКА: синк угод пише телефони ТИХ САМИХ контактів, які щойно завантажив", () => {
+  // Задача 6439: без цього виклику таблиця знову застигне, як застигла після бекфілу 04.08.2026, — тихо.
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "jobs", "syncKommo.ts"), "utf8");
+  const fetched = src.search(/const \[contacts, companies\] = await Promise\.all\(\[\s*fetchByIdsBatched\(fetchContactsByIds\b/);
+  assert.ok(fetched >= 0, "🔴 завантаження контактів у синку не знайдено — гейт не має що перевіряти");
+  const calls = [...src.matchAll(/\bawait writeContactPhones\((\w+)\);/g)];
+  assert.equal(calls.length, 1, `🔴 синк пише телефони контактів ${String(calls.length)} раз(и), а треба рівно один`);
+  assert.equal(calls[0][1], "contacts", "🔴 у запис пішли не завантажені контакти");
+  assert.ok((calls[0].index ?? -1) > fetched, "🔴 запис стоїть до завантаження контактів");
 });

@@ -113,10 +113,11 @@ test("#12g ДІТИ СКІПНУТОГО БАТЬКА не валять прог
   const { evaluateRun, PROD_SKIP_CHILDREN } = await import("./testRunGate.js");
   const PARENT = "#27 ДЗВІНКИ: запис, дедуп батча, звʼязка номер→клієнт";
   const kids = PROD_SKIP_CHILDREN[PARENT];
-  assert.ok(kids && kids.length === 4, "🔴 нема з чим працювати — перевірка була б порожньою");
-  // Батько скіпнувся (дозволено) → його 4 дітей фізично не зʼявляться.
-  const v = evaluateRun({ ran: 10, failed: 0, skipped: [PARENT] }, 15, { TEST_SCOPE: "prod" } as NodeJS.ProcessEnv);
-  assert.equal(v.required, 10, "15 оголошено − 1 скіп батька − 4 дітей = 10");
+  assert.ok(kids && kids.length >= 4, "🔴 нема з чим працювати — перевірка була б порожньою");
+  // Батько скіпнувся (дозволено) → його діти фізично не зʼявляться. Кількість — з реєстру, а не літералом:
+  // підтест, доданий у той самий кластер, не мусить ламати гейт про механізм.
+  const v = evaluateRun({ ran: 14 - kids.length, failed: 0, skipped: [PARENT] }, 15, { TEST_SCOPE: "prod" } as NodeJS.ProcessEnv);
+  assert.equal(v.required, 14 - kids.length, "15 оголошено − 1 скіп батька − усі його діти");
   assert.ok(v.ok, "🔴 прогін не зараховано, хоча ламати не було чого");
 });
 

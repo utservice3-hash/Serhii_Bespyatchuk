@@ -212,6 +212,11 @@ interface ViewMod {
   TILE_MATCH: Record<string, (r: unknown) => boolean>;
   priceSuccessSplit: (rows: readonly unknown[]) => { named: { n: number; of: number }; notNamed: { n: number; of: number }; enough: boolean };
   queueRows: (rows: readonly { needsReview: boolean; reviewReason: string | null; calledAt: string; uniqueid?: string }[]) => { uniqueid?: string }[];
+  dealOlderThan: (dealCreatedAt: string, today: string, days: number) => boolean;
+  priceConversionByManager: (rows: readonly unknown[], opt: { matureOnly: boolean; today: string }) => {
+    lines: { managerId: number | null; name: string; calls: number; priced: { n: number; of: number; pct: number | null };
+      withPrice: { n: number; of: number; pct: number | null }; withoutPrice: { n: number; of: number; pct: number | null } }[];
+    total: { calls: number; priced: { n: number; of: number }; withPrice: { n: number; of: number }; withoutPrice: { n: number; of: number } } | null };
 }
 async function transpile(rel: string, deps: Record<string, string> = {}): Promise<string> {
   const ts = (await import("typescript")).default;
@@ -1874,4 +1879,47 @@ test("#1783 ЗАКРИТИ УГОДУ НА ЕКРАНІ: діалог підтв
   assert.match(d, /Закрито як не реалізовану · <b>\{o\.closed\.reason\}<\/b> · \{o\.closed\.byName \?\? "—"\}/, "🔴 картка не каже, хто закрив");
   assert.match(d, /Закрити з картки не можна: \{o\.target\.why\}\./, "🔴 заборонене закриття без пояснення");
   assert.doesNotMatch(d, /"Відмова ОПР: дорого"/, "🔴 фронт тримає власну копію довідника причин");
+});
+
+/**
+ * #2206 — «ЦІНА І РЕЗУЛЬТАТ ПО МЕНЕДЖЕРАХ» (задача 6439 п.3): частка розмов із ціною й конверсія в успіх окремо з ціною і
+ * без; «не рахується» — ні туди, ні туди; нерозібране й «Виключені» — поза; межа «старші 7 днів» за КИЇВСЬКОЮ датою з
+ * обох боків; графік бере ті самі рядки, що й блок менеджерів.
+ * 🧨 Червоніє, якщо «не рахується» піде в «без ціни», успіх рахуватиметься не з `dealOutcome`, межа зсунеться на день
+ * або стане UTC, чи графік отримає іншу вибірку.
+ */
+test("#2206 ЦІНА → РЕЗУЛЬТАТ ПО МЕНЕДЖЕРАХ: з ціною / без ціни окремо, «не рахується» поза, межа 7 днів за Києвом", async () => {
+  const V = await loadView();
+  const today = "2026-10-21";
+  // Межа: створена 14.10 (Київ) — рівно 7 днів, входить; 15.10 — ні. 14.10 21:30 UTC — це вже 15.10 у Києві.
+  assert.equal(V.dealOlderThan("2026-10-14T09:00:00Z", today, 7), true, "🔴 угода рівно 7-денної давності випала");
+  assert.equal(V.dealOlderThan("2026-10-15T09:00:00Z", today, 7), false, "🔴 6-денна угода пройшла як зріла");
+  assert.equal(V.dealOlderThan("2026-10-14T21:30:00Z", today, 7), false, "🔴 межа рахується за UTC, а не за Києвом");
+  const row = (managerId: number | null, price: string, state: string | null, created = "2026-10-05T09:00:00Z", o: Record<string, unknown> = {}) => ({
+    inReport: true, managerId, managerName: managerId == null ? null : `М${String(managerId)}`, dealCreatedAt: created,
+    checklist: { request: "y", price, promise: "o", objection: "o" }, dealOutcome: state == null ? null : { state }, ...o });
+  const rows = [
+    row(1, "y", "success"), row(1, "y", "open"), row(1, "n", "success"), row(1, "n", "lost"), row(1, "o", "success"),
+    row(2, "y", "success"), row(2, "n", "open"), row(2, "y", "success", "2026-10-18T09:00:00Z"),
+    row(2, "y", "success", "2026-10-05T09:00:00Z", { inReport: false }),
+    row(2, "y", "success", "2026-10-05T09:00:00Z", { checklist: null }),
+  ];
+  const all = V.priceConversionByManager(rows, { matureOnly: false, today });
+  const m1 = all.lines.find((l) => l.managerId === 1)!, m2 = all.lines.find((l) => l.managerId === 2)!;
+  assert.equal(m1.calls, 5, "🔴 у рядок менеджера пішли не всі розібрані розмови звіту");
+  assert.deepEqual([m1.priced.n, m1.priced.of, m1.priced.pct], [2, 4, 50], "🔴 «не рахується» у знаменнику ціни");
+  assert.deepEqual([m1.withPrice.n, m1.withPrice.of], [1, 2], "🔴 успіх із ціною не з `dealOutcome`");
+  assert.deepEqual([m1.withoutPrice.n, m1.withoutPrice.of], [1, 2], "🔴 «не рахується» потрапило в «без ціни»");
+  assert.equal(m2.calls, 3, "🔴 нерозібране чи «Виключене» потрапило в графік");
+  assert.deepEqual([m2.withPrice.n, m2.withPrice.of, m2.withoutPrice.n, m2.withoutPrice.of], [2, 2, 0, 1]);
+  assert.deepEqual([all.total!.calls, all.total!.withPrice.n, all.total!.withPrice.of], [8, 3, 4], "🔴 «Разом» — не та сама формула");
+  const mature = V.priceConversionByManager(rows, { matureOnly: true, today });
+  assert.equal(mature.lines.find((l) => l.managerId === 2)!.calls, 2, "🔴 перемикач «старші 7 днів» не прибрав свіжу угоду");
+  assert.equal(mature.lines.find((l) => l.managerId === 1)!.calls, 5, "🔴 перемикач прибрав зрілі угоди");
+  const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
+  assert.match(sec, /const lines = managerChecklist\(tabRows\(applyListFilter\(d\.rows, \{ \.\.\.lf, managerId: null \}\), "report"\)\);/, "🔴 блок менеджерів змінив вибірку — звір графік");
+  assert.match(sec, /<FirstTouchPriceChart rows=\{tabRows\(applyListFilter\(d\.rows, \{ \.\.\.lf, managerId: null \}\), "report"\)\} today=\{today\} \/>/,
+    "🔴 графік отримує не ту вибірку, що блок менеджерів");
+  const chart = readFileSync(FE("pages/dashboard/sections/FirstTouchPriceChart.tsx"), "utf8");
+  assert.match(chart, /priceConversionByManager\(rows, \{ matureOnly: mature, today \}\)/, "🔴 графік рахує не спільним правилом");
 });

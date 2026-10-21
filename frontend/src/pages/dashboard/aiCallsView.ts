@@ -438,6 +438,45 @@ export function priceSuccessSplit(rows: readonly TileRow[]): { named: { n: numbe
   return { named: a, notNamed: b, enough: a.n >= SUCCESS_MIN_FOR_PCT && b.n >= SUCCESS_MIN_FOR_PCT };
 }
 
+// ─── 📊 «Ціна і результат по менеджерах» (задача 6439 п.3, Юля 20.10.2026) ──────────────────────────────────────────
+// На менеджера за період: у скількох розмовах назвали ціну, і яка конверсія в успіх — окремо з ціною і без. Успіх —
+// той самий, що плитка й колонка «Успіх» (`dealOutcome`, «Авто працює» і далі; Роман 21.10.2026: «залишай так»).
+// Без ціни — лише «ні» (`price: "n"`): «не рахується» (втрачений лід, не запит) не є «без ціни».
+
+/** Угода старша за `days` днів: київська дата створення ≤ сьогодні − days. Свіжа ще не встигла дійти до результату. */
+export function dealOlderThan(dealCreatedAt: string, today: string, days: number): boolean {
+  const created = new Date(dealCreatedAt).toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
+  return created <= addDays(today, -days);
+}
+/** Поріг «зрілої» угоди для графіка, днів (ТЗ 6439: «угоди старші 7 днів»). */
+export const MATURE_DAYS = 7;
+
+export interface PriceConvPart { n: number; of: number; pct: number | null }
+export interface PriceConvLine { managerId: number | null; name: string; calls: number;
+  /** Ціну назвали: «так» серед «так»+«ні». */ priced: PriceConvPart;
+  /** Успіх серед розмов, де ціну назвали. */ withPrice: PriceConvPart;
+  /** Успіх серед розмов, де ціну НЕ назвали. */ withoutPrice: PriceConvPart }
+
+type PriceConvRow = { inReport: boolean; managerId: number | null; managerName: string | null; dealCreatedAt: string;
+  checklist: ChecklistT | null; dealOutcome?: { state: string } | null };
+
+export function priceConversionByManager<T extends PriceConvRow>(rows: readonly T[], opt: { matureOnly: boolean; today: string }):
+  { lines: PriceConvLine[]; total: PriceConvLine | null } {
+  const part = (n: number, of: number): PriceConvPart => ({ n, of, pct: of ? Math.round((n / of) * 100) : null });
+  const line = (g: readonly T[], managerId: number | null, name: string): PriceConvLine => {
+    const yes = g.filter((r) => r.checklist!.price === "y"), no = g.filter((r) => r.checklist!.price === "n");
+    const won = (xs: readonly T[]) => xs.filter((r) => r.dealOutcome?.state === "success").length;
+    return { managerId, name, calls: g.length, priced: part(yes.length, yes.length + no.length),
+      withPrice: part(won(yes), yes.length), withoutPrice: part(won(no), no.length) };
+  };
+  const pool = rows.filter((r) => r.inReport && r.checklist && (!opt.matureOnly || dealOlderThan(r.dealCreatedAt, opt.today, MATURE_DAYS)));
+  const by = new Map<string, T[]>();
+  for (const r of pool) { const k = r.managerId == null ? "none" : String(r.managerId); by.set(k, [...(by.get(k) ?? []), r]); }
+  const lines = [...by.values()].map((g) => line(g, g[0].managerId, g[0].managerName ?? "Менеджер невідомий"))
+    .sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name, "uk"));
+  return { lines, total: pool.length ? line(pool, null, "Разом") : null };
+}
+
 // ─── «Перший дотик» у Звіті КВП (задача 5314, 13.10.2026) ──────────────────────────────────────────────────────
 // Звіт КВП НЕ рахує нічого свого: ті самі рядки `/ai-calls` за той самий період, той самий фільтр при відкритті
 // (`DEFAULT_LIST_FILTER`), та сама вкладка «Звіт» і ті самі `tileStats` / `managerChecklist`. Тому цифри дорівнюють
