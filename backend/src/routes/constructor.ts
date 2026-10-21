@@ -35,6 +35,7 @@ import { tmpdir } from "os";
 import { fullPageHTML, printHTML } from "../constructor/services/printTemplate.js";
 import { loadDocImages, docImageDataUris, stampPng, AssetsMissing } from "../constructor/services/docAssets.js";
 import { parseStamps, stampPdf, StampRefused, type StampEnt } from "../constructor/services/pdfStamp.js";
+import { translateNr, googleTranslator } from "../constructor/services/nrTranslate.js";
 import { htmlToPdf, renderDocumentPdf, PdfUnavailable, type RenderedPdf } from "../constructor/services/pdfRenderer.js";
 import { canSeeConstructorDoc, stateFromBody, fileBase, contractMemo, VIEW_ALL_PERM } from "../constructor/access.js";
 import { DOCS_DIR } from "../jobs/backupDb.js";
@@ -159,6 +160,23 @@ constructorRouter.get("/edrpou/:code", h(async (req, res) => {
   });
   if (r.kind === "error") throw new HttpError(r.status, r.message);
   res.status(r.status).json(r.body);
+}));
+
+/* ── 🌍 Переклад англійської частини заявки нерезиденту (задача 5940): лише за кнопкою, лише порожні поля ── */
+const translateHits = new Map<number, number[]>();
+/** Не більше 20 перекладів на хвилину на людину — квота Google спільна. */
+function translateRateOk(userId: number, now = Date.now()): boolean {
+  const recent = (translateHits.get(userId) ?? []).filter((t) => now - t < 60_000);
+  if (recent.length >= 20) { translateHits.set(userId, recent); return false; }
+  recent.push(now); translateHits.set(userId, recent);
+  return true;
+}
+constructorRouter.post("/translate", h(async (req, res) => {
+  const s = await stateOrFail(req);
+  if (s.doc !== "nrapp") throw new HttpError(400, "Переклад — лише для заявки нерезиденту.");
+  if (!translateRateOk(req.auth!.userId)) throw new HttpError(429, "Забагато перекладів за хвилину — спробуйте трохи пізніше.");
+  const key = (process.env.GOOGLE_TRANSLATE_API_KEY ?? "").trim();
+  res.json(await translateNr(s, key ? googleTranslator(key) : null));
 }));
 
 /* ── Прев'ю без збереження ── */

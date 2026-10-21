@@ -5995,6 +5995,9 @@ export const ctorByEdrpou = async (code: string) =>
   (await api.get<CtorEdrResult>(`/constructor/edrpou/${encodeURIComponent(code)}`)).data;
 /** ✅ Перевірка поля (сервер, `constructor/validate.ts`): error — блокує формування, warn — лише попереджає. */
 export interface CtorIssue { field: string; level: "error" | "warn"; msg: string }
+/** 🌍 Переклад англійської частини заявки нерезиденту (задача 5940): лише порожні поля; `how` — транслітерація чи Google. */
+export const ctorTranslate = async (state: CtorForm) =>
+  (await api.post<{ fields: Record<string, string>; how: Record<string, "translit" | "google">; note: string | null }>("/constructor/translate", { state })).data;
 export const ctorPreview = async (state: CtorForm) =>
   (await api.post<{ html: string; fragment: string; blockers: string | null; issues?: CtorIssue[]; assetsNote: string | null; director?: CtorDirector | null }>("/constructor/preview", { state })).data;
 export const ctorCreate = async (state: CtorForm) =>

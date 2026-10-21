@@ -18,6 +18,8 @@ import { NR_EN_KEYS, NR_CSS, nrClauses, nrAppRows } from "./services/nonresident
 import { validateForm, firstError } from "./validate.js";
 import { parseStamps, placeOnPage, stampPdf, StampRefused, type Stamp } from "./services/pdfStamp.js";
 import { createRequire } from "node:module";
+import { translit, translitParty } from "./services/translit.js";
+import { translateNr, GOOGLE_KEYS, TRANSLIT_KEYS } from "./services/nrTranslate.js";
 import { deflateSync } from "node:zlib";
 import { currentNum } from "./services/docgen.js";
 
@@ -1167,4 +1169,71 @@ test("#1822 ПЕЧАТКА НА PDF: журнал у тому ж обробни�
   const front = readFileSync(path.join(REPO, "frontend", "src", "pages", "dashboard", "sections", "ConstructorSection.tsx"), "utf8");
   assert.match(front, /\n\s+<button aria-pressed=\{view === "stamp"\} onClick=\{\(\) => setView\("stamp"\)\}>🔏 Печатка на PDF<\/button>/, "🔴 немає вкладки «Печатка на PDF»");
   assert.ok(!/\{me\?\.canSeeAll && <button aria-pressed=\{view === "stamp"\}/.test(front), "🔴 вкладку сховано за правом пулу — а робити можуть усі");
+});
+
+/* ══════════════ 🌍 ПЕРЕКЛАД АНГЛІЙСЬКОЇ ЧАСТИНИ ЗАЯВКИ НЕРЕЗИДЕНТУ (задача 5940, Роман 21.10.2026) ══════════════ */
+
+/**
+ * #1870 — ТРАНСЛІТЕРАЦІЯ КМУ №55: офіційні приклади з таблиці постанови (на початку слова / в середині, «зг», апостроф,
+ * м'який знак) і регістр. 🧨 Прибрати правило початку слова, «zgh» чи апостроф — червоніє.
+ */
+test("#1870 ТРАНСЛІТЕРАЦІЯ КМУ №55: офіційні приклади постанови — початок/середина слова, «зг», апостроф, регістр", () => {
+  const ex: Array<[string, string]> = [
+    ["Алушта", "Alushta"], ["Згорани", "Zghorany"], ["Розгон", "Rozghon"], ["Галич", "Halych"], ["Ґорґани", "Gorgany"],
+    ["Єнакієве", "Yenakiieve"], ["Гаєвич", "Haievych"], ["Короп'є", "Koropie"], ["Їжакевич", "Yizhakevych"], ["Кадиївка", "Kadyivka"],
+    ["Йосипівка", "Yosypivka"], ["Стрий", "Stryi"], ["Олексій", "Oleksii"], ["Юрій", "Yurii"], ["Корюківка", "Koriukivka"],
+    ["Яготин", "Yahotyn"], ["Костянтин", "Kostiantyn"], ["Знам'янка", "Znamianka"], ["Феодосія", "Feodosiia"], ["Щербухи", "Shcherbukhy"],
+    ["Гоща", "Hoshcha"], ["Харків", "Kharkiv"], ["Біла Церква", "Bila Tserkva"], ["Чернігів", "Chernihiv"], ["Київ", "Kyiv"],
+    ["Розумовський", "Rozumovskyi"], ["Жашків", "Zhashkiv"],
+  ];
+  for (const [ua, en] of ex) assert.equal(translit(ua), en, `🔴 ${ua} → ${translit(ua)}, а за постановою ${en}`);
+  assert.equal(translit("КИЇВ – ЛЬВІВ, 20 т"), "KYIV – LVIV, 20 т".replace("т", "t"), "🔴 регістр або розділові знаки зіпсовано");
+  assert.equal(translitParty("ТОВ «Тест Агро», Олександр, +380 95 000 00 00"), 'LLC "Test Ahro", Oleksandr, +380 95 000 00 00', "🔴 орг. форма / лапки / телефон");
+  assert.equal(translit("Mercedes Actros АА 1234 ВВ"), "Mercedes Actros AA 1234 VV", "🔴 латиниця або цифри зіпсовано");
+});
+
+const trState = (trip: Record<string, string>) => nrState({ doc: "nrapp", dealNo: "62741049", mainNo: "EUR/21/09/2026", mainDate: "2026-09-21", trip });
+
+/**
+ * #1871 — ЛИШЕ ПОРОЖНІ ПОЛЯ, І КОЖНЕ СВОЇМ СПОСОБОМ: адреси й міста — транслітерацією, вантаж/вимоги/умови — Google;
+ * вписане руками й латиниця не чіпаються; без ключа транслітерація однаково працює, а Google-поля лишаються з поясненням.
+ * 🧨 Перезаписати ручне поле, віддати адресу в Google чи впасти без ключа — червоніє.
+ */
+test("#1871 ПЕРЕКЛАД: лише порожні поля; адреси — транслітерація, вантаж і умови — Google; без ключа — пояснення", async () => {
+  const calls: string[][] = [];
+  const stub = async (t: string[]) => { calls.push(t); return t.map((x) => `EN(${x})`); };
+  const s = trState({ route: "Яхни – Колін", cargo: "Зерно в мішках, 20 т", loadAddr: "с. Яхни, Київська обл.", extra: "оплата до вивантаження",
+    reqs: "тент", truck: "DAF АА 1111 ВВ", routeEn: "Yakhny (Kyiv region) – Kolin", loadDate: "06.10.2026" });
+  const r = await translateNr(s, stub);
+  assert.equal(r.fields.routeEn, undefined, "🔴 перезаписано вписане руками");
+  assert.equal(r.fields.loadAddrEn, "s. Yakhny, Kyivska obl.", "🔴 адресу не транслітеровано");
+  assert.equal(r.how.loadAddrEn, "translit");
+  assert.equal(r.fields.cargoEn, "EN(Зерно в мішках, 20 т)", "🔴 вантаж не пішов у Google");
+  assert.equal(r.how.extraEn, "google");
+  assert.equal(r.fields.truckEn, "EN(DAF АА 1111 ВВ)", "🔴 авто (є кирилиця) не перекладено");
+  assert.equal(r.fields.loadDateEn, undefined, "🔴 дата без кирилиці пішла в переклад");
+  assert.equal(calls.length, 1, "🔴 Google кликано не одним запитом");
+  assert.ok(!calls[0].some((t) => /Яхни/.test(t)), "🔴 адреса пішла в Google");
+  const noKey = await translateNr(s, null);
+  assert.equal(noKey.fields.loadAddrEn, "s. Yakhny, Kyivska obl.", "🔴 без ключа транслітерація не працює");
+  assert.equal(noKey.fields.cargoEn, undefined);
+  assert.match(noKey.note ?? "", /не налаштовано/, "🔴 без ключа немає пояснення");
+  const down = await translateNr(s, async () => { throw new Error("Google 503"); });
+  assert.match(down.note ?? "", /не відповів \(Google 503\)/, "🔴 збій Google без пояснення");
+  for (const k of GOOGLE_KEYS) assert.ok(!TRANSLIT_KEYS.has(k), `🔴 поле ${k} в обох списках`);
+});
+
+/**
+ * #1872 — GOOGLE ЛИШЕ ЧЕРЕЗ IPv4 (ключ обмежено IP сервера, а через IPv6 Google відповідає 403 — замір 21.10), ключ не
+ * потрапляє в текст помилки; роут — у матриці, з лімітом частоти, лише для заявки нерезиденту.
+ * 🧨 Прибрати `family: 4`, ліміт чи рядок матриці — червоніє.
+ */
+test("#1872 ПЕРЕКЛАД: Google лише через IPv4, ключ не в помилках; роут у матриці, з лімітом і лише для заявки нерезиденту", () => {
+  const svc = SRC("constructor/services/nrTranslate.ts");
+  assert.match(svc, /method: 'POST', family: 4,/, "🔴 запит до Google не примушено до IPv4");
+  assert.match(svc, /replaceAll\(key, '\*\*\*'\)/, "🔴 ключ може потрапити в текст помилки");
+  const route = SRC("routes/constructor.ts");
+  const h = /constructorRouter\.post\("\/translate"[\s\S]*?\n\}\)\);/.exec(route)?.[0] ?? "";
+  assert.ok(/s\.doc !== "nrapp"/.test(h) && /translateRateOk\(req\.auth!\.userId\)/.test(h), "🔴 роут без межі виду документа чи ліміту");
+  assert.ok(SRC("auth/accessMatrix.ts").includes('"POST", path: "/api/constructor/translate"'), "🔴 роуту немає в матриці доступу");
 });

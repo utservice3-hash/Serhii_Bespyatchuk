@@ -151,6 +151,11 @@ const APP_ROWS: Array<[string, (s: DocumentState) => string, string, string]> = 
 ];
 /** Ключі англійських полів рейсу (для форми й перевірки). */
 export const NR_EN_KEYS = APP_ROWS.map((r) => r[3]).filter(Boolean);
+/** Українське значення рядка заявки, якому відповідає англійське поле `key` (для перекладу, задача 5940). */
+export function nrUaValue(s: DocumentState, key: string): string {
+  const row = APP_ROWS.find((r) => r[3] === key);
+  return row ? row[1](s) : '';
+}
 
 /** Рядки обох частин заявки. Англійське порожнє → те саме значення (дати, телефони, номери авто). */
 export function nrAppRows(s: DocumentState): { ua: Array<[string, string]>; en: Array<[string, string]> } {
