@@ -89,11 +89,17 @@ export async function dismissRisks(db: Db, e: { id: number; full_name: string },
   return out;
 }
 
-/** Крок 1: «Звільнити…» — останній робочий день і причина обовʼязкові. */
-export async function startDismissal(db: Db, actorId: number, id: number, body: { lastDay?: unknown; reason?: unknown; confirmRisk?: unknown }) {
+/**
+ * Крок 1: «Звільнити…» — останній робочий день і причина обовʼязкові.
+ * `dateUnknown` (#2100): людина давно не працює, а коли пішла — невідомо. Датою лишається день дії (статусу вона
+ * потрібна), але плинність таку людину не рахує — див. `churnReport`.
+ */
+export async function startDismissal(db: Db, actorId: number, id: number, body: { lastDay?: unknown; reason?: unknown; confirmRisk?: unknown; dateUnknown?: unknown }) {
   const { e, managers, off } = await load(db, id);
   if (off || e.status !== "active") throw new ImportError(409, e.status === "finishing" || off ? "Звільнення вже розпочато" : "Людина вже звільнена");
-  const lastDay = typeof body.lastDay === "string" ? parseDate(body.lastDay) : null;
+  const dateUnknown = body.dateUnknown === true;
+  const lastDay = dateUnknown ? new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" })
+    : typeof body.lastDay === "string" ? parseDate(body.lastDay) : null;
   if (!lastDay) throw new ImportError(400, "Вкажіть останній робочий день");
   const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 300) : "";
   if (!reason) throw new ImportError(400, "Вкажіть причину звільнення");
@@ -111,10 +117,10 @@ export async function startDismissal(db: Db, actorId: number, id: number, body: 
     // Уже «звільнений» у Налаштуваннях — не повертаємо його назад у «завершує».
     if (row?.state !== "dismissed") await setMws(db, m, "finishing", `звільнення в реєстрі: ${reason}`, actorId);
   }
-  await db.query(`UPDATE employees SET status = 'finishing', dismissed_at = $2, dismiss_reason = $3, updated_at = now() WHERE id = $1`, [id, lastDay, reason]);
+  await db.query(`UPDATE employees SET status = 'finishing', dismissed_at = $2, dismiss_reason = $3, dismiss_date_unknown = $4, updated_at = now() WHERE id = $1`, [id, lastDay, reason, dateUnknown]);
   await db.query(`INSERT INTO employee_offboarding (employee_id, stage, last_day, reason, prev, started_by) VALUES ($1, 'finishing', $2, $3, $4, $5)`,
     [id, lastDay, reason, prev, actorId]);
-  await audit(db, actorId, id, e.full_name, "employees.dismiss_start", { lastDay, managers });
+  await audit(db, actorId, id, e.full_name, "employees.dismiss_start", { lastDay, managers, dateUnknown });
   return { status: "finishing" as const, managers: managers.length };
 }
 
@@ -158,9 +164,32 @@ export async function revertDismissal(db: Db, actorId: number, id: number) {
   }
   if (p.user) await db.query(`UPDATE users SET is_active = $2, deactivated_at = $3, deactivated_reason = $4 WHERE id = $1`,
     [p.user.id, p.user.is_active, p.user.deactivated_at, p.user.deactivated_reason]);
-  await db.query(`UPDATE employees SET status = $2, dismissed_at = $3, dismiss_reason = $4, updated_at = now() WHERE id = $1`,
+  await db.query(`UPDATE employees SET status = $2, dismissed_at = $3, dismiss_reason = $4, dismiss_date_unknown = false, updated_at = now() WHERE id = $1`,
     [id, p.status, p.dismissed_at, p.dismiss_reason]);
   await db.query(`DELETE FROM employee_offboarding WHERE employee_id = $1`, [id]);
   await audit(db, actorId, id, e.full_name, "employees.dismiss_revert", { from: off.stage });
   return { status: p.status };
+}
+
+/**
+ * 📉 «ЗМІНИТИ ДАТУ ЗВІЛЬНЕННЯ» (21.10.2026, #2100). Звільнення кнопкою ставить датою останній робочий день, і форма
+ * картки після цього дату не міняє (її веде звільнення). Заміряно на проді: усі 18 жовтневих звільнень — люди,
+ * перенесені з таблиці як активні (прийняті ще з 2020), яких Іван «звільнив» у день актуалізації бази; жовтнева
+ * плинність через це 24%. Тепер HR і керівництво ставлять фактичну дату — або «дата невідома», і тоді людина
+ * виходить із розрахунку плинності (варіант «б», рішення Романа). Коментар обовʼязковий, запис — у журналі доступу.
+ */
+export async function setDismissDate(db: Db, actorId: number, id: number, body: { date?: unknown; unknown?: unknown; comment?: unknown }) {
+  const { e, off } = await load(db, id);
+  if (e.status !== "dismissed" && e.status !== "finishing") throw new ImportError(409, "Людина не звільнена — дату звільнення змінювати нічому");
+  const comment = typeof body.comment === "string" ? body.comment.trim().slice(0, 300) : "";
+  if (!comment) throw new ImportError(400, "Коментар обовʼязковий: чому змінюєте дату");
+  const unknown = body.unknown === true;
+  const date = unknown ? e.dismissed_at : typeof body.date === "string" ? parseDate(body.date) : null;
+  if (!unknown && !date) throw new ImportError(400, "Вкажіть дату звільнення або «дата невідома»");
+  const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+  if (!unknown && e.status === "dismissed" && date! > today) throw new ImportError(400, "Звільнена людина не може мати дату звільнення в майбутньому");
+  await db.query(`UPDATE employees SET dismissed_at = $2, dismiss_date_unknown = $3, updated_at = now() WHERE id = $1`, [id, date, unknown]);
+  if (off && date) await db.query(`UPDATE employee_offboarding SET last_day = $2 WHERE employee_id = $1`, [id, date]);
+  await audit(db, actorId, id, e.full_name, "employees.dismiss_date", { from: e.dismissed_at, to: unknown ? null : date, unknown, comment });
+  return { dismissedAt: date, unknown };
 }

@@ -10,6 +10,7 @@
 import {
   type HiringAccess, type HiringStatus, type DailyRow,
   canTransition, isHiringStatus, isIsoDate, isTime, normalizePhone, cleanUrl, NEEDS_TEAM, STATUS_LABEL,
+  OVERRIDE_METRICS, PLAN_METRICS, weekStartOf, dailyTotals, type OverrideMetric, type PlanMetric,
   refusalVerdict, messengerLinks, vacancyCloseStatus, VACANCY_STATUSES, REFUSAL_SIDES, type RefusalSide, type VacancyStatus,
 } from "./hiringRules.js";
 import { ensureCandidateAccount, closeCandidateAccess, undoPromotion, hasAccount, issueCandidatePassword, syncCandidateLogin } from "./hiringTraining.js";
@@ -564,7 +565,75 @@ export async function dailyReport(db: Db, from: string, to: string): Promise<Dai
       ORDER BY d.day`,
     [from, to],
   );
-  return r.rows;
+  // 📊 Ручні виправлення (#2101): замінюють авто лише за свій день; авто лишається поруч — видно, що підмінено.
+  const ov = (await db.query<{ day: string; metric: OverrideMetric; value: number }>(
+    `SELECT to_char(day, 'YYYY-MM-DD') AS day, metric, value FROM hiring_daily_override WHERE day BETWEEN $1::date AND $2::date`, [from, to])).rows;
+  const byDay = new Map<string, { metric: OverrideMetric; value: number }[]>();
+  for (const o of ov) byDay.set(o.day, [...(byDay.get(o.day) ?? []), o]);
+  return r.rows.map((row) => {
+    const list = byDay.get(row.day);
+    if (!list) return row;
+    const auto: Partial<Record<OverrideMetric, number>> = {};
+    const out = { ...row };
+    for (const o of list) { auto[o.metric] = row[o.metric]; out[o.metric] = o.value; }
+    return { ...out, manual: list.map((o) => o.metric), auto };
+  });
+}
+
+/**
+ * 📊 Ручне число плитки за день (#2101; рішення Романа). `value: null` — повернути авто. Лише «Щоденний звіт»:
+ * ні графік, ні кандидати, ні зведення ці числа не читають.
+ */
+export async function setDailyOverride(db: Db, actorId: number | null, day: unknown, p: { metric?: unknown; value?: unknown }) {
+  if (!isIsoDate(day)) throw new HiringError(400, "Некоректна дата");
+  if (!(OVERRIDE_METRICS as readonly unknown[]).includes(p.metric)) throw new HiringError(400, "Невідомий показник");
+  const metric = p.metric as OverrideMetric;
+  if (p.value === null || p.value === "") {
+    await db.query(`DELETE FROM hiring_daily_override WHERE day = $1::date AND metric = $2`, [day, metric]);
+    return;
+  }
+  const v = Number(p.value);
+  if (!Number.isInteger(v) || v < 0 || v > 100000) throw new HiringError(400, "Кількість — ціле число від 0");
+  await db.query(
+    `INSERT INTO hiring_daily_override (day, metric, value, updated_by) VALUES ($1::date, $2, $3, $4)
+     ON CONFLICT (day, metric) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+    [day, metric, v, actorId]);
+}
+
+/**
+ * 📊 План/факт тижня (#2102). Факт — сума днів тижня з «Щоденного звіту» (ручні виправлення враховано), тож план
+ * і факт завжди про ті самі числа, що на плитках. Плану немає — `null`, а не 0.
+ */
+export async function weekPlan(db: Db, day: unknown) {
+  if (!isIsoDate(day)) throw new HiringError(400, "Некоректна дата");
+  const weekStart = weekStartOf(day);
+  const weekEnd = new Date(Date.parse(`${weekStart}T00:00:00Z`) + 6 * 86_400_000).toISOString().slice(0, 10);
+  const rows = await dailyReport(db, weekStart, weekEnd);
+  const fact = dailyTotals(rows);
+  const saved = (await db.query<{ metric: PlanMetric; plan: number }>(
+    `SELECT metric, plan FROM hiring_week_plans WHERE week_start = $1::date`, [weekStart])).rows;
+  const plans = Object.fromEntries(PLAN_METRICS.map((m) => [m, saved.find((s) => s.metric === m)?.plan ?? null])) as Record<PlanMetric, number | null>;
+  return { weekStart, weekEnd, plans, fact: Object.fromEntries(PLAN_METRICS.map((m) => [m, fact[m]])) as Record<PlanMetric, number> };
+}
+
+/** Зберегти план тижня: `{ metric: число | null }`; null — плану немає. Лише передані показники. */
+export async function setWeekPlan(db: Db, actorId: number | null, day: unknown, plans: unknown) {
+  if (!isIsoDate(day)) throw new HiringError(400, "Некоректна дата");
+  if (!plans || typeof plans !== "object") throw new HiringError(400, "Немає що зберігати");
+  const weekStart = weekStartOf(day);
+  const entries = Object.entries(plans as Record<string, unknown>);
+  if (!entries.length) throw new HiringError(400, "Немає що зберігати");
+  for (const [m, raw] of entries) {
+    if (!(PLAN_METRICS as readonly string[]).includes(m)) throw new HiringError(400, `Невідомий показник: ${m}`);
+    if (raw === null || raw === "") { await db.query(`DELETE FROM hiring_week_plans WHERE week_start = $1::date AND metric = $2`, [weekStart, m]); continue; }
+    const v = Number(raw);
+    if (!Number.isInteger(v) || v < 0 || v > 100000) throw new HiringError(400, "План — ціле число від 0");
+    await db.query(
+      `INSERT INTO hiring_week_plans (week_start, metric, plan, updated_by) VALUES ($1::date, $2, $3, $4)
+       ON CONFLICT (week_start, metric) DO UPDATE SET plan = EXCLUDED.plan, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+      [weekStart, m, v, actorId]);
+  }
+  return { weekStart };
 }
 
 export async function setDailyManual(db: Db, actorId: number | null, day: unknown, p: { resumes?: unknown; coldSearch?: unknown }) {

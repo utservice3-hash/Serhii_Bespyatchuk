@@ -540,6 +540,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["manager"] },
   { method: "PUT", path: "/api/hiring/daily/:day", cls: "deny-only",
     allow: [], deny: ["team_lead", "manager"] },
+  // 📊 Ручне виправлення плитки й план тижня (21.10.2026, #2101–#2102) — лише HR і керівництво.
+  { method: "PUT", path: "/api/hiring/daily/:day/override", cls: "deny-only",
+    allow: [], deny: ["team_lead", "manager"] },
+  { method: "GET", path: "/api/hiring/week-plan?day=2026-10-21", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "financier", "manager"] },
+  { method: "PUT", path: "/api/hiring/week-plan/:day", cls: "deny-only",
+    allow: [], deny: ["team_lead", "manager"] },
   /* 🧑‍💼 НАЙМ, прохід 1a (17.09.2026): вакансії, відмова з причиною, резерв, файли-докази.
      Та сама друга межа першим оператором (#506). Тімлід пише лише відмову своїм кандидатам і
      читає їхні файли; вакансії, резерв, завантаження — рекрутер і адмін-рівень. */
@@ -659,6 +666,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "POST", path: "/api/secrets/employees/:id/dismiss", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "POST", path: "/api/secrets/employees/:id/dismiss/finish", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "POST", path: "/api/secrets/employees/:id/dismiss/revert", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  // 📉 «Змінити дату звільнення» (21.10.2026, #2100) — та сама межа, що в «Звільнити…».
+  { method: "POST", path: "/api/secrets/employees/:id/dismiss-date", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "GET", path: "/api/secrets/employees/:id/documents", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
   { method: "POST", path: "/api/secrets/employees/:id/documents", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "GET", path: "/api/secrets/employees/:id/documents/:fileId", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },

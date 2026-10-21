@@ -300,3 +300,43 @@ test("#1341b ЖИВИЙ SQL: імпорт дописує прізвище в п�
     assert.deepEqual([c2.created, c2.updated], [0, 1], "🔴 повторний імпорт не знайшов той самий запис");
   } finally { await s.done(); }
 });
+
+/**
+ * #2100 — ЖИВИЙ SQL: ДАТА ЗВІЛЬНЕННЯ ВРУЧНУ І «ДАТА НЕВІДОМА» (21.10.2026, рішення Романа — варіант «б»). На проді
+ * всі 18 жовтневих звільнень — перенесені з таблиці люди, «звільнені» в день актуалізації: жовтнева плинність 24%.
+ * Тепер: фактична дата переносить людину в її місяць плинності (і в `last_day` звільнення); «дата невідома»
+ * прибирає її з розрахунку зовсім і рахується окремим числом; без коментаря — 400; працюючому — 409; звільненому
+ * дата в майбутньому — 400; прапорець у кроці 1 ставиться, «Повернути» його знімає.
+ * 🧨 Червоніє, якщо дата не рухає місяць плинності, «невідома» лишається в розрахунку або «Повернути» лишає прапорець.
+ */
+test("#2100 ЖИВИЙ SQL: дата звільнення вручну рухає місяць плинності; «дата невідома» — поза розрахунком", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const churn = await import("./churn.js");
+  const code = (n: number) => (e: unknown) => (e as { status?: number }).status === n;
+  const dismissedIn = async (ym: string) => (await churn.churnReport(s.db, ym, ym)).months[0].dismissed;
+  try {
+    await assert.rejects(s.off.setDismissDate(s.db, s.hr, s.eNo, { date: "2025-03-15", comment: "x" }), code(409), "🔴 дату звільнення змінено працюючому");
+    await s.off.startDismissal(s.db, s.hr, s.eNo, { lastDay: "2026-10-02", reason: "актуалізація бази", confirmRisk: true });
+    await s.off.finishDismissal(s.db, s.hr, s.eNo);
+    assert.equal(await dismissedIn("2026-10"), 1, "передумова: звільнення днем дії лягло в жовтень");
+
+    await assert.rejects(s.off.setDismissDate(s.db, s.hr, s.eNo, { date: "2025-03-15", comment: " " }), code(400), "🔴 без коментаря");
+    await assert.rejects(s.off.setDismissDate(s.db, s.hr, s.eNo, { date: "2099-01-01", comment: "x" }), code(400), "🔴 звільненому дата в майбутньому");
+    await s.off.setDismissDate(s.db, s.hr, s.eNo, { date: "2025-03-15", comment: "пішов ще у 2025" });
+    assert.equal(await dismissedIn("2026-10"), 0, "🔴 жовтень досі рахує людину після виправлення дати");
+    assert.equal(await dismissedIn("2025-03"), 1, "🔴 людина не перейшла в свій місяць");
+    assert.equal((await s.c.query("SELECT last_day::text AS d FROM employee_offboarding WHERE employee_id=$1", [s.eNo])).rows[0].d, "2025-03-15", "🔴 last_day звільнення лишився старим");
+
+    await s.off.setDismissDate(s.db, s.hr, s.eNo, { unknown: true, comment: "коли пішов — невідомо" });
+    const r = await churn.churnReport(s.db, "2025-01", "2026-10");
+    assert.equal(r.total.dismissed, 0, "🔴 «дата невідома» лишилась у розрахунку плинності");
+    assert.equal(r.total.unknownDate, 1, "🔴 невідоме не видно окремим числом");
+    assert.equal((await emp(s, s.eNo)).status, "dismissed", "дзеркало: статус «звільнений» не зачеплено");
+
+    // Прапорець у кроці 1 і зняття «Повернути».
+    await s.off.startDismissal(s.db, s.hr, s.eAcc, { reason: "давно не працює", confirmRisk: true, dateUnknown: true });
+    assert.equal((await s.c.query("SELECT dismiss_date_unknown AS u FROM employees WHERE id=$1", [s.eAcc])).rows[0].u, true, "🔴 «дата невідома» в кроці 1 не записалась");
+    await s.off.revertDismissal(s.db, s.hr, s.eAcc);
+    assert.equal((await s.c.query("SELECT dismiss_date_unknown AS u FROM employees WHERE id=$1", [s.eAcc])).rows[0].u, false, "🔴 «Повернути» лишило прапорець");
+  } finally { await s.done(); }
+});

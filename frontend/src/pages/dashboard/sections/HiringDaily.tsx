@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { fetchHiringDaily, saveHiringDaily, hiringError, type HiringDailyRow } from "../../../api";
+import { fetchHiringDaily, saveHiringDaily, saveHiringOverride, fetchHiringWeekPlan, saveHiringWeekPlan, hiringError,
+  type HiringDailyRow, type HiringOverrideMetric, type HiringPlanMetric, type HiringWeekPlan } from "../../../api";
 import { todayKyiv, addDays, longDate, dm, dowOf, isWeekend, pct, presetRange } from "../hiringView";
 import type { Toast } from "./HiringShared";
 
@@ -39,6 +40,38 @@ export function HiringDaily({ toast }: { toast: Toast }) {
     if (v === prev) return;
     try { await saveHiringDaily(day, { [field]: v }); toast(`Збережено за ${dm(day)}`); load(); }
     catch (e) { toast(hiringError(e), { error: true }); load(); }
+  };
+
+  // 📊 Ручне виправлення плитки за день (#2101, рішення Романа): число замінює авто лише тут, авто видно поруч.
+  const [editing, setEditing] = useState<HiringOverrideMetric | null>(null);
+  const saveOverride = async (metric: HiringOverrideMetric, raw: string | null) => {
+    const v = raw === null ? null : raw.trim() === "" ? null : Number(raw);
+    if (v !== null && (!Number.isInteger(v) || v < 0)) { toast("Кількість — ціле число від 0", { error: true }); return; }
+    try { await saveHiringOverride(p.from, metric, v); toast(v === null ? `Повернуто авто за ${dm(p.from)}` : `Виправлено вручну за ${dm(p.from)}`); setEditing(null); load(); }
+    catch (e) { toast(hiringError(e), { error: true }); }
+  };
+  const dayRow = single ? data?.rows[0] : undefined;
+  /** Значення плитки: у режимі одного дня — з «✎», позначкою «вручну» і системним числом поруч. */
+  const ov = (metric: HiringOverrideMetric, value: React.ReactNode) => {
+    if (!single || !dayRow) return value;
+    const manual = dayRow.manual?.includes(metric);
+    if (editing === metric) return (
+      <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+        <input autoFocus className="hr-inp" type="number" min={0} defaultValue={dayRow[metric]} style={{ width: 90, fontSize: 20, fontWeight: 680, padding: "2px 6px" }}
+          onKeyDown={(e) => { if (e.key === "Enter") void saveOverride(metric, (e.target as HTMLInputElement).value); if (e.key === "Escape") setEditing(null); }}
+          id={`ov-${metric}`} />
+        <button className="hr-btn xs p" onClick={() => void saveOverride(metric, (document.getElementById(`ov-${metric}`) as HTMLInputElement)?.value ?? "")}>OK</button>
+        <button className="hr-btn xs" onClick={() => setEditing(null)}>✕</button>
+      </span>
+    );
+    return (
+      <span style={{ display: "inline-flex", gap: 6, alignItems: "baseline" }}>
+        {value}
+        <button className="hr-btn xs" title="Виправити вручну" onClick={() => setEditing(metric)}>✎</button>
+        {manual && <span className="hr-manual" title={`Система нарахувала ${dayRow.auto?.[metric] ?? "—"}`}>вручну · авто {dayRow.auto?.[metric] ?? "—"}</span>}
+        {manual && <button className="hr-btn xs" title="Повернути число системи" onClick={() => void saveOverride(metric, null)}>авто</button>}
+      </span>
+    );
   };
 
   const setDay = (d: string) => setP({ preset: d === today ? "today" : d === addDays(today, -1) ? "yesterday" : "", from: d, to: d });
@@ -94,15 +127,15 @@ export function HiringDaily({ toast }: { toast: Toast }) {
           <>
             <div className="hr-tiles">
               {tile("Оброблено резюме", single ? manualInput("resumes", t.resumes) : t.resumes, single ? "введіть за день" : "сума за період", undefined, true)}
-              {tile("Призначено співбесід", t.planned, `записано в графік цього ${single ? "дня" : "періоду"}: ${t.booked}`)}
-              {tile("Проведено", <>{t.done} <span style={{ fontSize: 15, fontWeight: 650, color: col(att) }}>{att == null ? "" : `${att} %`}</span></>,
+              {tile("Призначено співбесід", ov("planned", t.planned), `записано в графік цього ${single ? "дня" : "періоду"}: ${t.booked}`)}
+              {tile("Проведено", <>{ov("done", t.done)} <span style={{ fontSize: 15, fontWeight: 650, color: col(att) }}>{att == null ? "" : `${att} %`}</span></>,
                 t.planned ? `явка: ${t.done} із ${t.planned} запланованих · не прийшли ${t.noshow}` : `запланованих немає · не прийшли ${t.noshow}`,
                 <div className="hr-bar"><i style={{ width: `${Math.min(100, att ?? 0)}%`, background: col(att) }} /></div>)}
               {tile("Холодний пошук", single ? manualInput("coldSearch", t.coldSearch) : t.coldSearch, single ? "контактів за день" : "сума за період", undefined, true)}
-              {tile("Співбесіда з тімлідом", t.toLead, "переведено цього дня")}
-              {tile("Кандидат + команда", t.toCandidate, "рішення після тімліда")}
-              {tile("На навчанні", t.toTraining, t.done ? `${pct(t.toTraining, t.done)} % від проведених` : "від проведених")}
-              {tile("Вийшли на роботу", t.toManager, "статус «менеджер»")}
+              {tile("Співбесіда з тімлідом", ov("toLead", t.toLead), "переведено цього дня")}
+              {tile("Кандидат + команда", ov("toCandidate", t.toCandidate), "рішення після тімліда")}
+              {tile("На навчанні", ov("toTraining", t.toTraining), t.done ? `${pct(t.toTraining, t.done)} % від проведених` : "від проведених")}
+              {tile("Вийшли на роботу", ov("toManager", t.toManager), "статус «менеджер»")}
             </div>
             <div className="hr-sect">
               <h4>Воронка {single ? "дня" : "періоду"}</h4>
@@ -134,7 +167,7 @@ export function HiringDaily({ toast }: { toast: Toast }) {
 
       {!single && data && (
         <div className="hr-card">
-          <div className="hd"><div><h3>По днях</h3><div className="hr-muted">Резюме й холодний пошук редагуються в клітинці; решта рахується з графіка й бази</div></div></div>
+          <div className="hd"><div><h3>По днях</h3><div className="hr-muted">Резюме й холодний пошук редагуються в клітинці; решта рахується з графіка й бази, а виправлене вручну (✎ на плитках дня) позначено курсивом</div></div></div>
           <div className="hr-tw">
             <table className="hr-table">
               <thead><tr>
@@ -146,9 +179,9 @@ export function HiringDaily({ toast }: { toast: Toast }) {
                   <tr key={r.day} className={isWeekend(r.day) ? "we" : ""}>
                     <td><button className="hr-link" onClick={() => setDay(r.day)}>{dowOf(r.day)} {dm(r.day)}</button></td>
                     <td className="num"><input key={`${r.day}-res-${r.resumes}`} className="hr-inp" type="number" min={0} style={{ width: 70, textAlign: "right" }} defaultValue={r.resumes} onBlur={(e) => void saveManual(r.day, "resumes", e.target.value, r.resumes)} /></td>
-                    <td className="num">{r.planned}</td><td className="num">{r.done}</td>
+                    <td className="num">{mc(r, "planned")}</td><td className="num">{mc(r, "done")}</td>
                     <td className="num hr-muted">{pct(r.done, r.planned) == null ? "—" : `${pct(r.done, r.planned)} %`}</td>
-                    <td className="num">{r.noshow}</td><td className="num">{r.toLead}</td><td className="num">{r.toCandidate}</td><td className="num">{r.toTraining}</td><td className="num">{r.toManager}</td>
+                    <td className="num">{r.noshow}</td><td className="num">{mc(r, "toLead")}</td><td className="num">{mc(r, "toCandidate")}</td><td className="num">{mc(r, "toTraining")}</td><td className="num">{mc(r, "toManager")}</td>
                     <td className="num"><input key={`${r.day}-cold-${r.coldSearch}`} className="hr-inp" type="number" min={0} style={{ width: 70, textAlign: "right" }} defaultValue={r.coldSearch} onBlur={(e) => void saveManual(r.day, "coldSearch", e.target.value, r.coldSearch)} /></td>
                   </tr>
                 ))}
@@ -162,6 +195,80 @@ export function HiringDaily({ toast }: { toast: Toast }) {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      <WeekPlanCard day={p.from} toast={toast} stamp={data} />
+    </div>
+  );
+}
+
+/** Клітинка таблиці «По днях»: ручне число — курсивом, системне — у підказці. */
+const mc = (r: HiringDailyRow, m: HiringOverrideMetric) =>
+  r.manual?.includes(m) ? <i title={`вручну · система нарахувала ${r.auto?.[m] ?? "—"}`}>{r[m]}✎</i> : r[m];
+
+const PLAN_LABEL: [HiringPlanMetric, string][] = [
+  ["resumes", "Оброблено резюме"], ["coldSearch", "Холодний пошук"], ["planned", "Призначено співбесід"], ["done", "Проведено"],
+  ["toLead", "Співбесіда з тімлідом"], ["toCandidate", "Кандидат + команда"], ["toTraining", "На навчанні"], ["toManager", "Вийшли на роботу"],
+];
+
+/**
+ * 📊 ПЛАН / ФАКТ ТИЖНЯ (#2102, рішення Романа: «всі 8 показників», ставлять HR і адміни). Факт — сума днів тижня
+ * з цього ж звіту (ручні виправлення враховано), тож план і плитки говорять про ті самі числа.
+ */
+function WeekPlanCard({ day, toast, stamp }: { day: string; toast: Toast; stamp: unknown }) {
+  const [anchor, setAnchor] = useState(day);
+  useEffect(() => setAnchor(day), [day]);
+  const [w, setW] = useState<HiringWeekPlan | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const load = useCallback(() => { fetchHiringWeekPlan(anchor).then((x) => { setW(x); setErr(null); }).catch((e) => setErr(hiringError(e))); }, [anchor]);
+  useEffect(load, [load, stamp]);
+  const save = async (m: HiringPlanMetric, raw: string) => {
+    const v = raw.trim() === "" ? null : Number(raw);
+    if (v !== null && (!Number.isInteger(v) || v < 0)) { toast("План — ціле число від 0", { error: true }); load(); return; }
+    if (w && w.plans[m] === v) return;
+    try { await saveHiringWeekPlan(anchor, { [m]: v }); toast("План збережено"); load(); }
+    catch (e) { toast(hiringError(e), { error: true }); load(); }
+  };
+  const copyPrev = async () => {
+    try {
+      const prev = await fetchHiringWeekPlan(addDays(w?.weekStart ?? anchor, -7));
+      const plans = Object.fromEntries(Object.entries(prev.plans).filter(([, v]) => v != null)) as Partial<Record<HiringPlanMetric, number>>;
+      if (!Object.keys(plans).length) { toast("Минулого тижня плану не було", { error: true }); return; }
+      await saveHiringWeekPlan(anchor, plans); toast("План скопійовано з минулого тижня"); load();
+    } catch (e) { toast(hiringError(e), { error: true }); }
+  };
+  if (err) return <div className="hr-card"><div className="hd"><h3>План / факт тижня</h3></div><p className="hr-muted" style={{ padding: 16 }}>{err}</p></div>;
+  return (
+    <div className="hr-card">
+      <div className="hd">
+        <div><h3>План / факт тижня</h3><div className="hr-muted">{w ? `${dm(w.weekStart)} – ${dm(w.weekEnd)}` : "…"} · факт — із цього звіту, разом із ручними виправленнями</div></div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <button className="hr-nav" onClick={() => setAnchor(addDays(w?.weekStart ?? anchor, -7))} title="Попередній тиждень">‹</button>
+          <button className="hr-nav" onClick={() => setAnchor(addDays(w?.weekStart ?? anchor, 7))} title="Наступний тиждень">›</button>
+          <button className="hr-btn xs" onClick={() => void copyPrev()}>Як минулого тижня</button>
+        </div>
+      </div>
+      {!w ? <p className="loading-text" style={{ padding: 16 }}>Завантаження…</p> : (
+        <div className="hr-tw">
+          <table className="hr-table">
+            <thead><tr><th>Показник</th><th className="num">План</th><th className="num">Факт</th><th className="num">Виконання</th></tr></thead>
+            <tbody>
+              {PLAN_LABEL.map(([m, label]) => {
+                const plan = w.plans[m], fact = w.fact[m];
+                const p = plan ? pct(fact, plan) : null;
+                return (
+                  <tr key={m}>
+                    <td>{label}</td>
+                    <td className="num"><input key={`${w.weekStart}-${m}-${plan ?? ""}`} className="hr-inp" type="number" min={0} placeholder="—" style={{ width: 80, textAlign: "right" }}
+                      defaultValue={plan ?? ""} onBlur={(e) => void save(m, e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} /></td>
+                    <td className="num"><b>{fact}</b></td>
+                    <td className="num" style={{ color: p == null ? "var(--text-muted)" : p >= 100 ? "#16a34a" : p >= 70 ? "#d97706" : "#dc2626" }}>{plan == null ? "плану немає" : `${p} %`}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
     </div>

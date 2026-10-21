@@ -4098,6 +4098,10 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_updated_by INTEGER REFERENC
 -- що став «Менеджер», зʼявляється в реєстрі сам; `candidate_id` — звідки прийшов (одна людина реєстру на
 -- кандидата). ⚠️ revert коду колонку не прибирає; дані без неї не губляться.
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS candidate_id INTEGER REFERENCES hiring_candidates(id) ON DELETE SET NULL;
+-- 📉 «Дата звільнення невідома» (21.10.2026, #2100; рішення Романа — варіант «б»): людей, перенесених із таблиці як
+-- активних, хоча вони давно пішли, Іван звільняє кнопкою — і дата дії ставала датою звільнення (жовтень 24% плинності).
+-- Прапорець прибирає людину з розрахунку плинності, а не вигадує дату.
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS dismiss_date_unknown BOOLEAN NOT NULL DEFAULT false;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_employees_candidate ON employees(candidate_id) WHERE candidate_id IS NOT NULL;
 
 -- 📌 НАСТУПНИЙ КРОК ПО КЛІЄНТУ (ТЗ реактивації 23.09.2026, п.1): один живий крок на клієнта,
@@ -6206,3 +6210,26 @@ ov AS (UPDATE fin_kpi_values v SET manual_override = false FROM fin_kpis k
 UPDATE fin_kpis SET kind = 'auto'
  WHERE ref_source IN ('opex_commercial', 'opex_admin', 'opex_general') AND kind = 'manual' AND deleted_at IS NULL
    AND EXISTS (SELECT 1 FROM step) AND (SELECT count(*) FROM ov) >= 0;
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- 📊 НАЙМ: РУЧНЕ ВИПРАВЛЕННЯ ЩОДЕННОГО ЗВІТУ Й ПЛАН/ФАКТ ТИЖНЯ (21.10.2026, #2101–#2102; рішення Романа).
+-- Ручне число замінює авто ЛИШЕ в «Щоденному звіті» й лише за свій день; немає рядка — рахує система.
+-- Графік, Кандидати, Зведення й Плинність їх не читають.
+CREATE TABLE IF NOT EXISTS hiring_daily_override (
+  day        DATE NOT NULL,
+  metric     TEXT NOT NULL CHECK (metric IN ('planned','done','toLead','toCandidate','toTraining','toManager')),
+  value      INTEGER NOT NULL CHECK (value >= 0 AND value <= 100000),
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (day, metric)
+);
+-- План тижня (понеділок за Києвом) по 8 плитках звіту. Немає рядка — плану немає (а не «план 0»).
+CREATE TABLE IF NOT EXISTS hiring_week_plans (
+  week_start DATE NOT NULL CHECK (EXTRACT(ISODOW FROM week_start) = 1),
+  metric     TEXT NOT NULL CHECK (metric IN ('resumes','coldSearch','planned','done','toLead','toCandidate','toTraining','toManager')),
+  plan       INTEGER NOT NULL CHECK (plan >= 0 AND plan <= 100000),
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (week_start, metric)
+);
+REVOKE ALL ON hiring_daily_override, hiring_week_plans FROM ai_readonly;

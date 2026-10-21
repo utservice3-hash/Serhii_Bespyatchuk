@@ -5124,7 +5124,11 @@ export interface HiringDailyRow {
   day: string; planned: number; booked: number; done: number; noshow: number;
   toLead: number; toCandidate: number; toTraining: number; toManager: number;
   resumes: number; coldSearch: number;
+  /** 📊 Плитки, виправлені вручну за цей день (#2101), і що нарахувала система. */
+  manual?: HiringOverrideMetric[]; auto?: Partial<Record<HiringOverrideMetric, number>>;
 }
+export type HiringOverrideMetric = "planned" | "done" | "toLead" | "toCandidate" | "toTraining" | "toManager";
+export type HiringPlanMetric = "resumes" | "coldSearch" | HiringOverrideMetric;
 
 /** Текст помилки сервера — щоб людина бачила причину, а не «нічого не сталось». */
 export function hiringError(e: unknown): string {
@@ -5180,6 +5184,12 @@ export const setHiringTeam = async (id: number, teamId: number, comment: string)
 export const fetchHiringDaily = async (from: string, to: string) =>
   (await api.get<{ rows: HiringDailyRow[]; totals: Omit<HiringDailyRow, "day"> & { attendancePct: number | null } }>("/hiring/daily", { params: { from, to } })).data;
 export const saveHiringDaily = async (day: string, p: { resumes?: number; coldSearch?: number }) => { await api.put(`/hiring/daily/${day}`, p); };
+/** 📊 Ручне число плитки за день; `null` — повернути авто (#2101). */
+export const saveHiringOverride = async (day: string, metric: HiringOverrideMetric, value: number | null) => { await api.put(`/hiring/daily/${day}/override`, { metric, value }); };
+/** 📊 План/факт тижня (#2102): будь-який день тижня → понеділок на сервері. */
+export interface HiringWeekPlan { weekStart: string; weekEnd: string; plans: Record<HiringPlanMetric, number | null>; fact: Record<HiringPlanMetric, number> }
+export const fetchHiringWeekPlan = async (day: string) => (await api.get<HiringWeekPlan>("/hiring/week-plan", { params: { day } })).data;
+export const saveHiringWeekPlan = async (day: string, plans: Partial<Record<HiringPlanMetric, number | null>>) => { await api.put(`/hiring/week-plan/${day}`, { plans }); };
 
 // ── Найм, етап 3: офер із шаблону (18.09.2026) ──
 export interface OfferTemplate { id: number; title: string; markers: string[]; is_active: boolean; created_at: string; author: string | null; fields: { marker: string; auto: string | null }[] }
@@ -5436,6 +5446,8 @@ export interface EmployeeRow {
   manager_id: number | null; kommo_name: string | null;
   /** 🚪 Звільнення кнопками: крок і останній робочий день (null — звільнення через реєстр не було). */
   offboarding: "finishing" | "dismissed" | null; last_day: string | null;
+  /** 📉 Дата звільнення невідома (#2100) — людина поза розрахунком плинності. */
+  dismiss_date_unknown?: boolean;
   /** 📎 Документи людини (без прибраних) і чи є серед них NDA / офер — за типом документа. */
   docs: number; has_nda: boolean; has_offer: boolean;
 }
@@ -5453,7 +5465,7 @@ export interface ImportCounts { rows: number; created: number; updated: number; 
 // ── Етапи 4–5: плинність, Exit-інтервʼю, привʼязка до Kommo (18.09.2026) ──
 export interface ChurnMonthRow { month: string; headcount: number; hired: number; dismissed: number; turnover: number | null; early: number; noHireDate: number }
 export interface ChurnReport {
-  months: ChurnMonthRow[]; total: { dismissed: number; hired: number; early: number; avgTurnover: number; active: number };
+  months: ChurnMonthRow[]; total: { dismissed: number; hired: number; early: number; avgTurnover: number; active: number; unknownDate?: number };
   reasons: { label: string; n: number }[]; positions: { label: string; n: number }[];
 }
 export const fetchChurn = async (from: string, to: string) => (await api.get<ChurnReport>("/secrets/churn", { params: { from, to } })).data;
@@ -5474,8 +5486,11 @@ export type EmployeePatch = Partial<Pick<EmployeeRow, "full_name" | "position" |
 export const updateEmployee = async (id: number, b: EmployeePatch) => (await api.patch<{ ok: true; changed: string[] }>(`/secrets/employees/${id}`, b)).data.changed;
 // 🚪 Звільнення у два кроки (21.09.2026) — `backend/src/core/offboarding.ts`.
 // ⚠️ 409 з `needsConfirm` — сервер перепитує (людина активна в Kommo або поруч схожий запис); повтор з `confirmRisk`.
-export const startDismissal = async (id: number, lastDay: string, reason: string, confirmRisk = false) =>
-  (await api.post<{ status: "finishing"; managers: number }>(`/secrets/employees/${id}/dismiss`, { lastDay, reason, confirmRisk })).data;
+export const startDismissal = async (id: number, lastDay: string, reason: string, confirmRisk = false, dateUnknown = false) =>
+  (await api.post<{ status: "finishing"; managers: number }>(`/secrets/employees/${id}/dismiss`, { lastDay, reason, confirmRisk, dateUnknown })).data;
+/** 📉 «Змінити дату звільнення» / «дата невідома» (#2100). */
+export const setDismissDate = async (id: number, b: { date?: string; unknown?: boolean; comment: string }) =>
+  (await api.post<{ dismissedAt: string | null; unknown: boolean }>(`/secrets/employees/${id}/dismiss-date`, b)).data;
 export const dismissNeedsConfirm = (e: unknown): boolean =>
   !!(e as { response?: { status?: number; data?: { needsConfirm?: boolean } } })?.response?.data?.needsConfirm;
 export const finishDismissal = async (id: number) =>
