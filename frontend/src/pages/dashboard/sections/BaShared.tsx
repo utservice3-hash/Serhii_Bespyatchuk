@@ -26,10 +26,13 @@ export function useEscape(onClose: () => void) {
   }, [onClose]);
 }
 
-/** Документи картки: список, перегляд (blob з токеном), додавання з типом. Видалення немає — документ справи є доказом. */
-export function Docs({ kind, ownerId, files, types, maxBytes, toast, onAdded }: {
+/**
+ * Документи картки: список, перегляд (blob з токеном), додавання з типом. Видалення немає — документ справи є доказом.
+ * `readOnly` — лише перегляд і завантаження, без додавання (реєстр УТБ для адмінів і ОД, задача 6269).
+ */
+export function Docs({ kind, ownerId, files, types, maxBytes, toast, onAdded, readOnly = false }: {
   kind: BaFileKind; ownerId: number; files: CardFile[]; types: { key: BaDocType; label: string }[];
-  maxBytes: number; toast: Toast; onAdded: () => void;
+  maxBytes: number; toast: Toast; onAdded: () => void; readOnly?: boolean;
 }) {
   const [docType, setDocType] = useState<BaDocType>(types[0]?.key ?? "other");
   const [file, setFile] = useState<File | null>(null);
@@ -62,6 +65,7 @@ export function Docs({ kind, ownerId, files, types, maxBytes, toast, onAdded }: 
           <button className="hr-btn xs" onClick={() => void view(f)}>Переглянути</button>
         </div>
       ))}
+      {!readOnly && <>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
         <select className="hr-inp" value={docType} onChange={(e) => setDocType(e.target.value as BaDocType)} aria-label="Тип документа">
           {types.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
@@ -70,6 +74,7 @@ export function Docs({ kind, ownerId, files, types, maxBytes, toast, onAdded }: 
         <button className="hr-btn xs" disabled={busy || !file} onClick={() => void add()}>Додати документ</button>
       </div>
       <p className="hr-muted" style={{ margin: "6px 0 0" }}>PDF, DOCX, PNG, JPG або WEBP, до 10 МБ.</p>
+      </>}
       {preview && createPortal(
         <div className="hr-modal-back" onClick={closePreview}>
           <div className="hr-modal" style={{ maxWidth: 900, width: "94vw" }} role="dialog" aria-label={`Документ ${preview.name}`} onClick={(e) => e.stopPropagation()}>

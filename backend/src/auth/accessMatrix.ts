@@ -1676,6 +1676,26 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "PUT", path: "/api/ba/ttn/:month/:managerId", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  /* 🚛 РЕЄСТР УКРТРАНСБЕЗПЕКИ (задача 6269, 21.10.2026) — вужче за розділ: бачать admin і opdir, веде ВЛАСНИК поіменно
+     (`UTB_OWNER_IDS`, типово Дарʼя Протас) — рішення Романа 21.10.2026 «Операційний директор і адміни бачать, а веде Даша».
+     СЕО й КВП вкладку `ba` мають, але реєстру — ні: 403 від `utbGate` після `onlyBa`. Запис адміну-НЕвласнику теж 403 —
+     це тримає гейт ядра (#1860b), бо матриця пробує роль, а не людину. */
+  { method: "GET", path: "/api/ba/utb", cls: "GET",
+    allow: ["admin", "opdir"], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/ba/utb/managers", cls: "GET",
+    allow: ["admin", "opdir"], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/ba/utb/export.xlsx", cls: "GET",
+    allow: ["admin", "opdir"], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/ba/utb/:id", cls: "GET",
+    allow: ["admin", "opdir"], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/ba/utb/:id/files/:fileId", cls: "GET",
+    allow: ["admin", "opdir"], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/ba/utb", cls: "deny-only",
+    allow: [], deny: ["ceo", "kvp", "hr", "team_lead", "manager"] },
+  { method: "PATCH", path: "/api/ba/utb/:id", cls: "deny-only",
+    allow: [], deny: ["ceo", "kvp", "hr", "team_lead", "manager"] },
+  { method: "POST", path: "/api/ba/utb/:id/files", cls: "deny-only",
+    allow: [], deny: ["ceo", "kvp", "hr", "team_lead", "manager"] },
   /* 🧾 Кнопка «Проблемний клієнт» у дебіторці — вкладка `receivables` + право `create_claim`
      (керівництво без HR і фінансист). Тімлід і менеджер вкладку мають, права — ні: GET дає їм 200 з
      порожнім списком, POST — 403 по праву. HR вкладки дебіторки не має → 403 на tab-гейті. */

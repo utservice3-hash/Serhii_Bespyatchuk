@@ -34,6 +34,9 @@ const ADMIN_LEVEL_ROLES = new Set(["admin", "ceo", "opdir", "kvp", "financier"])
  * інакше це знову «непробована роль у deny», з якої й почався інцидент.
  */
 const ADMIN_DENIED_BY_PERM: Record<string, string> = {
+  "POST /api/ba/utb": "власник реєстру ПОІМЕННО (UTB_OWNER_IDS) — СЕО й КВП вкладку ba мають, реєстр УТБ ні (Роман 21.10.2026: «бачать ОД і адміни, веде Даша»)",
+  "PATCH /api/ba/utb/:id": "власник реєстру ПОІМЕННО (UTB_OWNER_IDS) — СЕО й КВП вкладку ba мають, реєстр УТБ ні (Роман 21.10.2026: «бачать ОД і адміни, веде Даша»)",
+  "POST /api/ba/utb/:id/files": "власник реєстру ПОІМЕННО (UTB_OWNER_IDS) — СЕО й КВП вкладку ba мають, реєстр УТБ ні (Роман 21.10.2026: «бачать ОД і адміни, веде Даша»)",
   // 🚚 Конфігуратор вантажу (12.10.2026): довідник змінює лише право `manage_cargo` (admin, СЕО, ОД).
   "PUT /api/cargo/reference/vehicles": "manage_cargo — kvp/financier його не мають (рішення Романа 12.10.2026: admin, СЕО, ОД)",
   "PUT /api/cargo/reference/pallets": "manage_cargo — kvp/financier його не мають (рішення Романа 12.10.2026: admin, СЕО, ОД)",

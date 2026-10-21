@@ -10,6 +10,7 @@ import {
 import { money, fmtDate, useEscape, Docs, History, type Toast } from "./BaShared";
 import { BaEquipment } from "./BaEquipment";
 import { BaTtn } from "./BaTtn";
+import { BaUtb } from "./BaUtb";
 import "./hiring.css";
 
 /**
@@ -20,7 +21,7 @@ import "./hiring.css";
  * чекають (той самий прийом, що в «Наймі»: людина бачить повну картину, а не гадає).
  * Стилі — `hiring.css` (`.hr-*`): той самий вигляд карток, таблиць і шухляд.
  */
-type Tab = "claims" | "cases" | "equip" | "ttn";
+type Tab = "claims" | "cases" | "equip" | "ttn" | "utb";
 
 const LS_TAB = "ba.tab";
 const lsGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
@@ -40,6 +41,8 @@ export function BusinessAssistantSection() {
   const [nonce, setNonce] = useState(0);
 
   useEffect(() => { fetchBaMeta().then(setMeta).catch((e) => setErr(hiringError(e))); }, []);
+  // Запамʼятана вкладка «Реєстр УТБ» у людини без доступу — не порожній екран, а перша вкладка.
+  useEffect(() => { if (meta && !meta.utbAccess && tab === "utb") setTab("claims"); }, [meta, tab]);
   // Посилання з дебіторки: `/ba?claim=ID` відкриває картку претензії одразу.
   useEffect(() => {
     const id = Number(params.get("claim"));
@@ -57,7 +60,8 @@ export function BusinessAssistantSection() {
   if (err) return <div className="chart-card"><b>Розділ «Бізнес-асистент» недоступний.</b> <span className="hr-muted">{err}</span></div>;
   if (!meta) return <p className="loading-text">Завантаження…</p>;
 
-  const tabs: [Tab, string, boolean][] = [["claims", "Претензії", false], ["cases", "Судовий реєстр", false], ["equip", "Облік техніки", false], ["ttn", "ТТН-моніторинг", false]];
+  // 🚛 «Реєстр Укртрансбезпеки» (задача 6269) — пʼятий і лише тим, кому сервер віддав доступ (веде Даша; бачать адміни й ОД).
+  const tabs: [Tab, string, boolean][] = [["claims", "Претензії", false], ["cases", "Судовий реєстр", false], ["equip", "Облік техніки", false], ["ttn", "ТТН-моніторинг", false], ...(meta.utbAccess ? [["utb", "Реєстр Укртрансбезпеки", false]] as [Tab, string, boolean][] : [])];
   return (
     <div>
       <h1 className="page-title" style={{ marginBottom: 4 }}>Бізнес-асистент</h1>
@@ -76,6 +80,7 @@ export function BusinessAssistantSection() {
       {tab === "cases" && <CasesTab meta={meta} nonce={nonce} onOpen={setOpenCase} onOpenClaim={(id) => { pick("claims"); setOpenClaim(id); }} />}
       {tab === "equip" && <BaEquipment meta={meta} toast={toast} />}
       {tab === "ttn" && <BaTtn meta={meta} toast={toast} />}
+      {tab === "utb" && meta.utbAccess && <BaUtb meta={meta} access={meta.utbAccess} toast={toast} />}
 
       {openClaim != null && (
         <ClaimDrawer meta={meta} id={openClaim} toast={toast} onClose={() => setOpenClaim(null)}

@@ -150,6 +150,7 @@ export const MANIFEST_FILES: string[] = [
   "core/hiring.test.js",
   "core/baClaims.test.js",
   "core/baEquipment.test.js",
+  "core/baUtb.test.js",
   "core/baTtnSync.test.js",
   "core/finance.test.js",
   "core/financeKpi.test.js",
@@ -362,7 +363,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "constructor_stamp_log", "cargo_vehicles", "cargo_pallets", "cargo_calculations",
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   "ba_equipment_issues",
-  "ba_claims", "ba_court_cases", "ba_files", "ba_events", "ba_equipment", "ba_ttn_checks", "ba_migrations", "ba_ttn_route_mismatch",
+  "ba_claims", "ba_court_cases", "ba_files", "ba_events", "ba_equipment", "ba_ttn_checks", "ba_migrations", "ba_ttn_route_mismatch", "ba_utb_cases",
   "kommo_declined_forms",
 ];
 
@@ -2723,6 +2724,11 @@ export const MANIFEST_TESTS: string[] = [
   "#1400 ТТН З KOMMO: рахуються лише живі файли поля 2097291; поля немає — 0",
   "#1401 ЖИВИЙ SQL СИНКУ: upsertDeal пише deals.ttn_files і на вставці, і на оновленні",
   "#1402 ЖИВИЙ SQL ТТН: прикріплено серед тих самих угод, «не збігся» лише з прикріплених, NULL — не синхронізовано",
+  // core/baUtb.test.ts — Бізнес-асистент: Реєстр Укртрансбезпеки (задача 6269, 21.10.2026).
+  "#1860 ПРАВИЛА УТБ: вимоги кожного статусу по обидва боки, одна задача на людину, фільтр включно, Excel = таблиця",
+  "#1860b ДОСТУП УТБ: веде власник поіменно, бачать admin і opdir, решті — нічого; роути з тим самим вироком",
+  "#1860c ЖИВИЙ SQL УТБ: процес ТЗ по кроках, 400 без свого і без змін, № ВП унікальний, задачі без дублів",
+  "#1860d ФРОНТ УТБ: пʼята вкладка за доступом, перегляд без запису, статичний імпорт, Excel з тими самими фільтрами",
   "#1403 ФРОНТ ТТН: наявні — з сервера, без ручного вводу; розкриття з угодами й «маршрут не збігся»",
   // Задача 4668 (30.09.2026): лід лідгена = «Взято в роботу» АБО «ОПР» (правило Ярослава) —
   // core/leadgenHandoffLink.test.ts.

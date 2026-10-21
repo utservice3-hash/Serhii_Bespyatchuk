@@ -9,8 +9,11 @@ import { requireAuth } from "../auth/middleware.js";
 import { roleHasTab } from "../auth/rbac.js";
 import {
   CLAIM_STATUSES, CLAIM_STATUS_LABEL, CASE_STATUSES, CASE_STATUS_LABEL, DOC_TYPE_LABEL, CLAIM_DOC_TYPES, CASE_DOC_TYPES,
-  ISSUE_DOC_TYPES, BA_FILE_MAX_BYTES, TTN_NORM_PCT, sniffBaMime, baStoredName, defaultTtnMonth,
+  ISSUE_DOC_TYPES, UTB_DOC_TYPES, BA_FILE_MAX_BYTES, TTN_NORM_PCT, sniffBaMime, baStoredName, defaultTtnMonth, parseDateOrNull,
 } from "../core/baRules.js";
+import { UTB_STATUSES, UTB_STATUS_LABEL, isUtbStatus, utbAccessOf, utbOwnerIds, utbExportRows, type UtbAccess, type UtbFilter } from "../core/baUtbRules.js";
+import { listUtb, utbCard, utbManagers, createUtb, updateUtb } from "../core/baUtb.js";
+import { buildXlsx } from "../core/xlsxWrite.js";
 import {
   employeesForIssue, listEquipment, equipmentCard, createEquipment, updateEquipment, setEquipmentArchived,
   issueEquipment, returnIssue, undoReturn,
@@ -39,6 +42,17 @@ baRouter.use(requireAuth);
 
 function onlyBa(req: Request): void {
   if (!req.auth || !roleHasTab(req.auth.roleKey, "ba")) throw new BaError(403, "Розділ «Бізнес-асистент» недоступний для вашої ролі");
+}
+/**
+ * 🚛 Реєстр Укртрансбезпеки (задача 6269) — ВУЖЧЕ за розділ: веде власник реєстру поіменно, бачать адміни й операційний
+ * директор (Роман 21.10.2026), решті з вкладкою `ba` (СЕО, КВП, бізнес-асистент) — 403. Спершу межа розділу, потім своя.
+ */
+function utbGate(req: Request, need: UtbAccess): UtbAccess {
+  onlyBa(req);
+  const a = utbAccessOf(req.auth!.userId, req.auth!.roleKey, utbOwnerIds());
+  if (!a) throw new BaError(403, "Реєстр Укртрансбезпеки недоступний для вашої ролі");
+  if (need === "edit" && a !== "edit") throw new BaError(403, "Реєстр Укртрансбезпеки веде лише його власник — у вас перегляд");
+  return a;
 }
 function fail(res: Response, e: unknown) {
   if (e instanceof BaError) return res.status(e.status).json({ error: e.message, ...(e.extra ?? {}) });
@@ -78,6 +92,10 @@ baRouter.get("/meta", (req, res) => {
       // Місяць ТТН за замовчуванням — «два тому» за Києвом (1 жовтня перевіряють серпень).
       ttnDefaultMonth: defaultTtnMonth(new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" })),
       ttnNormPct: TTN_NORM_PCT,
+      // 🚛 Реєстр УТБ: `null` — вкладку не показувати; `view` — без кнопок; `edit` — веде.
+      utbAccess: utbAccessOf(req.auth!.userId, req.auth!.roleKey, utbOwnerIds()),
+      utbStatuses: UTB_STATUSES.map((k) => ({ key: k, label: UTB_STATUS_LABEL[k] })),
+      utbDocTypes: UTB_DOC_TYPES.map((k) => ({ key: k, label: DOC_TYPE_LABEL[k] })),
     });
   } catch (e) { fail(res, e); }
 });
@@ -152,10 +170,10 @@ baRouter.post("/cases/:id/archive", async (req, res) => {
  * розмір — до 10 МБ. Байти пишуться ДО рядка в базі; не вставився рядок — файл прибирається.
  * Файли не видаляються: документ справи — доказ, а помилково доданий лишається в історії.
  */
-function uploadHandler(kind: FileOwner) {
+function uploadHandler(kind: FileOwner, guard: (req: Request) => unknown = onlyBa) {
   return async (req: Request, res: Response) => {
     try {
-      onlyBa(req);
+      guard(req);
       const ownerId = idOf(req);
       const { filename, dataBase64, docType } = req.body ?? {};
       if (typeof dataBase64 !== "string" || !dataBase64) throw new BaError(400, "Файл відсутній");
@@ -176,10 +194,10 @@ function uploadHandler(kind: FileOwner) {
     } catch (e) { fail(res, e); }
   };
 }
-function downloadHandler(kind: FileOwner) {
+function downloadHandler(kind: FileOwner, guard: (req: Request) => unknown = onlyBa) {
   return async (req: Request, res: Response) => {
     try {
-      onlyBa(req);
+      guard(req);
       const f = await fileForDownload(pool as unknown as Db, kind, idOf(req), idOf(req, "fileId"));
       res.type(f.mime);
       res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(f.name)}`);
@@ -196,6 +214,60 @@ baRouter.post("/cases/:id/files", uploadHandler("case"));
 baRouter.get("/cases/:id/files/:fileId", downloadHandler("case"));
 baRouter.post("/issues/:id/files", uploadHandler("issue"));
 baRouter.get("/issues/:id/files/:fileId", downloadHandler("issue"));
+
+// ── 🚛 Реєстр Укртрансбезпеки (задача 6269) ──────────────────────────────────
+/** Фільтр із запиту — той самий `filterUtb` віддає і таблицю, і Excel. Сміття — 400, а не мовчазне «без фільтра». */
+function utbFilterOf(req: Request): UtbFilter {
+  const q = req.query;
+  const s = (k: string) => (typeof q[k] === "string" ? String(q[k]) : "");
+  const date = (k: string, label: string) => {
+    if (!s(k)) return null;
+    const d = parseDateOrNull(s(k));
+    if (!d) throw new BaError(400, `${label}: дата у форматі РРРР-ММ-ДД`);
+    return d;
+  };
+  const mid = s("managerId") ? Number(s("managerId")) : null;
+  if (mid != null && (!Number.isInteger(mid) || mid <= 0)) throw new BaError(400, "Некоректний менеджер");
+  if (s("status") && !isUtbStatus(s("status"))) throw new BaError(400, "Невідомий статус");
+  return { q: s("q"), carrier: s("carrier"), managerId: mid, status: s("status") ? (s("status") as UtbFilter["status"]) : null,
+    from: date("from", "Період «з»"), to: date("to", "Період «по»") };
+}
+baRouter.get("/utb", async (req, res) => {
+  try { utbGate(req, "view"); res.json({ rows: await listUtb(pool as unknown as Db, utbFilterOf(req)) }); } catch (e) { fail(res, e); }
+});
+baRouter.get("/utb/managers", async (req, res) => {
+  try { utbGate(req, "view"); res.json({ managers: await utbManagers(pool as unknown as Db) }); } catch (e) { fail(res, e); }
+});
+baRouter.get("/utb/export.xlsx", async (req, res) => {
+  try {
+    utbGate(req, "view");
+    const rows = await listUtb(pool as unknown as Db, utbFilterOf(req));
+    const buf = buildXlsx([{ name: "Реєстр УТБ", rows: utbExportRows(rows) }]);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="reyestr-utb.xlsx"`);
+    res.send(buf);
+  } catch (e) { fail(res, e); }
+});
+baRouter.get("/utb/:id", async (req, res) => {
+  try { utbGate(req, "view"); res.json(await utbCard(pool as unknown as Db, idOf(req))); } catch (e) { fail(res, e); }
+});
+baRouter.post("/utb", async (req, res) => {
+  try {
+    utbGate(req, "edit");
+    const id = await tx((db) => createUtb(db, req.auth!.userId, req.body));
+    res.status(201).json({ id });
+  } catch (e) { fail(res, e); }
+});
+baRouter.patch("/utb/:id", async (req, res) => {
+  try {
+    utbGate(req, "edit");
+    const id = idOf(req);
+    await tx((db) => updateUtb(db, req.auth!.userId, id, req.body));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+baRouter.post("/utb/:id/files", uploadHandler("utb", (req) => utbGate(req, "edit")));
+baRouter.get("/utb/:id/files/:fileId", downloadHandler("utb", (req) => utbGate(req, "view")));
 
 // ── Облік техніки (прохід 2, 29.09.2026) ─────────────────────────────────────
 /** Кому видати: лише id, ПІБ і стан із реєстру — телефонів, дат народження тощо розділ не отримує (#984). */

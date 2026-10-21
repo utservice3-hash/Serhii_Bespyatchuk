@@ -7,7 +7,7 @@
  * транзакцію, тож перенос у суд — справа, копії файлів і дві події — або всі, або жоден).
  */
 import {
-  CLAIM_STATUS_LABEL, CASE_STATUS_LABEL, DOC_TYPE_LABEL, CLAIM_DOC_TYPES, CASE_DOC_TYPES, ISSUE_DOC_TYPES,
+  CLAIM_STATUS_LABEL, CASE_STATUS_LABEL, DOC_TYPE_LABEL, CLAIM_DOC_TYPES, CASE_DOC_TYPES, ISSUE_DOC_TYPES, UTB_DOC_TYPES,
   isClaimStatus, isCaseStatus, isDocType, needsCourtCase, caseTitleFor, debtSnapshot, parseDateOrNull,
   type ClaimStatus, type CaseStatus, type DocType, type ReceivableRowLike,
 } from "./baRules.js";
@@ -18,13 +18,14 @@ export class BaError extends Error {
   constructor(public status: number, message: string, public extra?: Record<string, unknown>) { super(message); }
 }
 
-type Owner = "claim" | "case";
-/** Власник файла: претензія, справа або видача техніки (договір, прохід 2). */
+/** Власник історії й файлів: претензія, справа, запис реєстру Укртрансбезпеки (задача 6269). */
+export type Owner = "claim" | "case" | "utb";
+/** Власник файла: претензія, справа, запис УТБ або видача техніки (договір, прохід 2). */
 export type FileOwner = Owner | "issue";
 const DATE = (col: string) => `to_char(${col}, 'YYYY-MM-DD')`;
 const TS = (col: string) => `to_char(${col} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
 
-async function logEvent(db: Db, kind: Owner, id: number, actor: number | null, what: string): Promise<void> {
+export async function logEvent(db: Db, kind: Owner, id: number, actor: number | null, what: string): Promise<void> {
   await db.query(`INSERT INTO ba_events (owner_kind, owner_id, actor_id, what) VALUES ($1, $2, $3, $4)`, [kind, id, actor, what]);
 }
 
@@ -70,13 +71,13 @@ export async function listClaims(db: Db) {
   return r.rows.map(shapeClaim);
 }
 
-async function filesOf(db: Db, kind: Owner, id: number) {
+export async function filesOf(db: Db, kind: Owner, id: number) {
   const r = await db.query(`SELECT id, doc_type, name, mime, size_bytes, from_claim_file_id, ${TS("created_at")} AS created_at
       FROM ba_files WHERE owner_kind = $1 AND owner_id = $2 ORDER BY created_at DESC, id DESC`, [kind, id]);
   return r.rows.map((f: any) => ({ id: f.id, docType: f.doc_type as DocType, docTypeLabel: DOC_TYPE_LABEL[f.doc_type as DocType],
     name: f.name, mime: f.mime, size: f.size_bytes, fromClaim: f.from_claim_file_id != null, createdAt: f.created_at }));
 }
-async function eventsOf(db: Db, kind: Owner, id: number) {
+export async function eventsOf(db: Db, kind: Owner, id: number) {
   const r = await db.query(`SELECT ${TS("e.at")} AS at, e.what, COALESCE(NULLIF(btrim(u.full_name), ''), split_part(u.email, '@', 1)) AS actor
       FROM ba_events e LEFT JOIN users u ON u.id = e.actor_id
      WHERE e.owner_kind = $1 AND e.owner_id = $2 ORDER BY e.at DESC, e.id DESC LIMIT 200`, [kind, id]);
@@ -282,6 +283,7 @@ const FILE_OWNER = {
   claim: { table: "ba_claims", types: CLAIM_DOC_TYPES, missing: "Претензію не знайдено" },
   case: { table: "ba_court_cases", types: CASE_DOC_TYPES, missing: "Справу не знайдено" },
   issue: { table: "ba_equipment_issues", types: ISSUE_DOC_TYPES, missing: "Видачу не знайдено" },
+  utb: { table: "ba_utb_cases", types: UTB_DOC_TYPES, missing: "Запис реєстру не знайдено" },
 } as const;
 export async function insertFile(db: Db, actor: number, kind: FileOwner, ownerId: number,
   f: { docType: unknown; name: string; storedName: string; mime: string; size: number }): Promise<number> {

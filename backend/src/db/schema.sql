@@ -6233,3 +6233,40 @@ CREATE TABLE IF NOT EXISTS hiring_week_plans (
   PRIMARY KEY (week_start, metric)
 );
 REVOKE ALL ON hiring_daily_override, hiring_week_plans FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🚛 БІЗНЕС-АСИСТЕНТ · РЕЄСТР УКРТРАНСБЕЗПЕКИ (задача 6269, ТЗ Даші 19.10.2026). Один рядок = одна постанова УТБ.
+-- Файли й історія — у тих самих `ba_files` / `ba_events` (`owner_kind = 'utb'`). Правила — `core/baUtbRules.ts`.
+-- ⚠️ Revert коду таблицю й рядки не прибирає.
+-- ══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS ba_utb_cases (
+  id                SERIAL PRIMARY KEY,
+  ep_number         TEXT NOT NULL,                       -- № виконавчого провадження, унікальний (індекс нижче)
+  received_on       DATE NOT NULL,                       -- дата надходження заяви
+  carrier           TEXT NOT NULL,                       -- на кого переводимо штраф
+  fine_amount       NUMERIC(12,2) NOT NULL CHECK (fine_amount >= 0),
+  manager_id        INTEGER REFERENCES managers(id),     -- відповідальний менеджер (вів перевезення)
+  handler_id        INTEGER REFERENCES managers(id),     -- відповідальна особа (переводить штраф)
+  ttn_number        TEXT NOT NULL DEFAULT '',
+  status            TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','collecting','handed','transferred','rejected')),
+  comment           TEXT NOT NULL DEFAULT '',
+  -- Кому вже поставлено задачу-сповіщення з цього запису: повторне збереження другої не створює.
+  manager_task_for  INTEGER,
+  handler_task_for  INTEGER,
+  created_by        INTEGER REFERENCES users(id),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- «Відмовлено» — лише з коментарем (ТЗ). Повний UPDATE, не upsert, тож CHECK бачить фінальний рядок.
+  CONSTRAINT ba_utb_rejected_needs_comment CHECK (status <> 'rejected' OR length(btrim(comment)) > 0)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ba_utb_ep_number ON ba_utb_cases (lower(btrim(ep_number)));
+-- Обмеження спільних таблиць — повним переліком, ідемпотентно (наявні рядки проходять).
+ALTER TABLE ba_files DROP CONSTRAINT IF EXISTS ba_files_owner_kind_check;
+ALTER TABLE ba_files ADD CONSTRAINT ba_files_owner_kind_check CHECK (owner_kind IN ('claim','case','issue','utb'));
+ALTER TABLE ba_files DROP CONSTRAINT IF EXISTS ba_files_doc_type_check;
+ALTER TABLE ba_files ADD CONSTRAINT ba_files_doc_type_check
+  CHECK (doc_type IN ('claim','lawsuit','receipt','company_docs','contract','utb_decision','request','ttn','other'));
+ALTER TABLE ba_events DROP CONSTRAINT IF EXISTS ba_events_owner_kind_check;
+ALTER TABLE ba_events ADD CONSTRAINT ba_events_owner_kind_check CHECK (owner_kind IN ('claim','case','equipment','utb'));
+-- 🔒 Як увесь розділ — закрито від моделі (рішення Романа 01.10.2026 «5а»; гейт #1240 бере `ba_*` зі схеми).
+REVOKE ALL ON ba_utb_cases FROM ai_readonly;

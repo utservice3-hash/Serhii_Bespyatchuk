@@ -5668,12 +5668,14 @@ export async function createDashboardTeam(name: string): Promise<{ id: number; n
 // Дзеркало `routes/businessAssistant.ts`. Доступ — вкладка `ba`; кнопка в дебіторці — право `create_claim`.
 export type BaClaimStatus = "problem" | "sent" | "answered" | "noreply" | "court" | "paid" | "closed";
 export type BaCaseStatus = "prep" | "filed" | "going" | "done";
-export type BaDocType = "claim" | "lawsuit" | "receipt" | "company_docs" | "contract" | "other";
+export type BaDocType = "claim" | "lawsuit" | "receipt" | "company_docs" | "contract" | "utb_decision" | "request" | "ttn" | "other";
 export interface BaOption<K extends string> { key: K; label: string }
 export interface BaMeta {
   claimStatuses: BaOption<BaClaimStatus>[]; caseStatuses: BaOption<BaCaseStatus>[];
   claimDocTypes: BaOption<BaDocType>[]; caseDocTypes: BaOption<BaDocType>[]; issueDocTypes: BaOption<BaDocType>[];
   fileMaxBytes: number; ttnDefaultMonth: string; ttnNormPct: number;
+  /** 🚛 Реєстр УТБ: `null` — вкладки немає; `view` — лише перегляд; `edit` — веде (власник реєстру). */
+  utbAccess: "edit" | "view" | null; utbStatuses: BaOption<BaUtbStatus>[]; utbDocTypes: BaOption<BaDocType>[];
 }
 export interface BaFile { id: number; docType: BaDocType; docTypeLabel: string; name: string; mime: string; size: number; fromClaim: boolean; createdAt: string }
 export interface BaEvent { at: string; what: string; actor: string | null }
@@ -5703,7 +5705,7 @@ export const fetchBaCase = async (id: number) => (await api.get<BaCaseCard>(`/ba
 export const createBaCase = async (p: BaCaseInput) => (await api.post<{ id: number }>("/ba/cases", p)).data.id;
 export const updateBaCase = async (id: number, p: BaCaseInput) => { await api.patch(`/ba/cases/${id}`, p); };
 export const archiveBaCase = async (id: number, archived: boolean) => { await api.post(`/ba/cases/${id}/archive`, { archived }); };
-export type BaFileKind = "claims" | "cases" | "issues";
+export type BaFileKind = "claims" | "cases" | "issues" | "utb";
 export async function uploadBaFile(kind: BaFileKind, id: number, file: File, docType: BaDocType): Promise<number> {
   const dataBase64 = await new Promise<string>((resolve, reject) => {
     const r = new FileReader();
@@ -5717,6 +5719,35 @@ export async function uploadBaFile(kind: BaFileKind, id: number, file: File, doc
 export async function fetchBaFileBlobUrl(kind: BaFileKind, id: number, fileId: number): Promise<string> {
   const { data } = await api.get<Blob>(`/ba/${kind}/${id}/files/${fileId}`, { responseType: "blob" });
   return URL.createObjectURL(data);
+}
+// ── 🚛 Реєстр Укртрансбезпеки (задача 6269). Дзеркало `core/baUtb.ts`; фільтр рахує сервер — той самий для таблиці й Excel.
+export type BaUtbStatus = "new" | "collecting" | "handed" | "transferred" | "rejected";
+export interface BaUtbDocs { decision: boolean; request: boolean; ttn: boolean }
+export interface BaUtbRow {
+  id: number; epNumber: string; receivedOn: string; carrier: string; fineAmount: number;
+  managerId: number | null; managerName: string | null; handlerId: number | null; handlerName: string | null;
+  ttnNumber: string; status: BaUtbStatus; statusLabel: string; comment: string; docs: BaUtbDocs; files: number;
+}
+export interface BaUtbCard extends BaUtbRow { fileList: BaFile[]; events: BaEvent[] }
+export interface BaUtbFilter { q: string; carrier: string; managerId: string; status: "" | BaUtbStatus; from: string; to: string }
+export interface BaUtbInput {
+  epNumber?: string; receivedOn?: string; carrier?: string; fineAmount?: string | number; managerId?: number | null;
+  handlerId?: number | null; ttnNumber?: string; comment?: string; status?: BaUtbStatus;
+}
+/** Порожні поля фільтра в запит не йдуть: «не вибрано» ≠ «порожній рядок». */
+const utbParams = (f: BaUtbFilter) => Object.fromEntries(Object.entries(f).filter(([, v]) => String(v).trim() !== ""));
+export const fetchBaUtb = async (f: BaUtbFilter) => (await api.get<{ rows: BaUtbRow[] }>("/ba/utb", { params: utbParams(f) })).data.rows;
+export const fetchBaUtbCard = async (id: number) => (await api.get<BaUtbCard>(`/ba/utb/${id}`)).data;
+export const fetchBaUtbManagers = async () => (await api.get<{ managers: { id: number; name: string }[] }>("/ba/utb/managers")).data.managers;
+export const createBaUtb = async (p: BaUtbInput) => (await api.post<{ id: number }>("/ba/utb", p)).data.id;
+export const updateBaUtb = async (id: number, p: BaUtbInput) => { await api.patch(`/ba/utb/${id}`, p); };
+export async function downloadBaUtbXlsx(f: BaUtbFilter): Promise<void> {
+  const { data } = await api.get<Blob>("/ba/utb/export.xlsx", { params: utbParams(f), responseType: "blob" });
+  const url = URL.createObjectURL(data);
+  const a = document.createElement("a");
+  a.href = url; a.download = "reyestr-ukrtransbezpeky.xlsx";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 // ── Облік техніки й ТТН (прохід 2, 29.09.2026). Дзеркало `core/baEquipment.ts` і `core/baTtn.ts`.
 export interface BaEmployee { id: number; fullName: string; status: "active" | "dismissed" }

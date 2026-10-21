@@ -34,7 +34,7 @@ export const CASE_STATUS_LABEL: Record<CaseStatus, string> = {
 };
 
 /** Типи документів. Претензія й справа мають свої переліки з ТЗ; спільний тип «Інше». */
-export const DOC_TYPES = ["claim", "lawsuit", "receipt", "company_docs", "contract", "other"] as const;
+export const DOC_TYPES = ["claim", "lawsuit", "receipt", "company_docs", "contract", "utb_decision", "request", "ttn", "other"] as const;
 export type DocType = (typeof DOC_TYPES)[number];
 export const DOC_TYPE_LABEL: Record<DocType, string> = {
   claim: "Претензія",
@@ -42,12 +42,17 @@ export const DOC_TYPE_LABEL: Record<DocType, string> = {
   receipt: "Квитанція про оплату",
   company_docs: "Документи компанії",
   contract: "Договір про матеріальну відповідальність",
+  utb_decision: "Заява / постанова УТБ",
+  request: "Заявка",
+  ttn: "ТТН",
   other: "Інше",
 };
 export const CLAIM_DOC_TYPES: readonly DocType[] = ["claim", "lawsuit", "receipt", "other"];
 export const CASE_DOC_TYPES: readonly DocType[] = ["lawsuit", "company_docs", "other"];
 /** Видача техніки (прохід 2): договір про матеріальну відповідальність + «Інше». */
 export const ISSUE_DOC_TYPES: readonly DocType[] = ["contract", "other"];
+/** Реєстр Укртрансбезпеки (задача 6269): постанова, заявка, ТТН і «Інші документи» (листування, акти). */
+export const UTB_DOC_TYPES: readonly DocType[] = ["utb_decision", "request", "ttn", "other"];
 
 export const isClaimStatus = (v: unknown): v is ClaimStatus => typeof v === "string" && (CLAIM_STATUSES as readonly string[]).includes(v);
 export const isCaseStatus = (v: unknown): v is CaseStatus => typeof v === "string" && (CASE_STATUSES as readonly string[]).includes(v);
