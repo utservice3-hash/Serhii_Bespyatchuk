@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { plannedDeletions, copyWithRetry, MIN_KEPT_COMPLETE, COPY_ATTEMPTS } from "./backupRotateRule.js";
+import { plannedDeletions, copyWithRetry, MIN_KEPT_COMPLETE, COPY_ATTEMPTS, KEEP } from "./backupRotateRule.js";
 
 /**
  * #70 — РОТАЦІЯ НЕ ЗНИЩУЄ ОСТАННІ ПРИДАТНІ КОПІЇ.
@@ -186,4 +186,15 @@ test("#70e НУЛЬ ЦІЛИХ — НЕ ВИДАЛЯЄМО НІЧОГО", () => 
   const withOne = [...dirs, d("uts_2026-08-10_00-00-00", true)];
   assert.ok(plannedDeletions(withOne, NOW, 14).length > 0,
     "🔴 з'явилась ціла копія, а ротація й далі мовчить — старі часткові накопичуватимуться вічно");
+});
+
+/**
+ * #70f — ГЛИБИНА ЗБЕРІГАННЯ — РІШЕННЯ, А НЕ ВИПАДКОВЕ ЧИСЛО: 7 придатних копій (Роман 21.10.2026 — квота хостингу; 14 копій
+ * важили ~2 ГБ). Механізм ротації стережуть #70–#70d із явним `keep`; цей гейт — саме значення, щоб зміна була свідомою.
+ * Підлога (`MIN_KEPT_COMPLETE`) від цього не залежить і стоїть окремо (#70b).
+ */
+test("#70f ЗБЕРІГАЄМО 7 ПРИДАТНИХ КОПІЙ (рішення 21.10.2026)", () => {
+  assert.equal(KEEP, 7, "🔴 глибина зберігання бекапів змінилась — рішення Романа 21.10.2026 було «7»");
+  const ten = Array.from({ length: 10 }, (_, i) => d(`uts_2026-10-${String(i + 1).padStart(2, "0")}_00-00-00`, true));
+  assert.equal(plannedDeletions(ten, NOW, KEEP).length, 3, "🔴 з 10 придатних при KEEP=7 мали піти 3");
 });

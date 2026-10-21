@@ -224,7 +224,7 @@ API: те саме вікно в UTC-числах → **1** дзвінок, у �
 - `recomputeStatistics` — щогодини (:25) (розділ «Статистики (відділи)»).
 - `snapshotCarryover` — 1-го числа 00:00 (знімок «перенесених» → `monthly_carryover`).
 - `reactivateLeads --write --limit=N` — створення лідів реактивації.
-- `backupDb` — щодня 03:00 (кожна таблиця → gzip-CSV, ретенція 14). БД на **Neon** (PITR — основний бекап). Деталі — `docs/BACKUP_RECOVERY.md`.
+- `backupDb` — щодня 03:00 (кожна таблиця → gzip-CSV, ретенція 7 — з 21.10.2026, було 14). БД на **Neon** (PITR — основний бекап). Деталі — `docs/BACKUP_RECOVERY.md`.
   - **🩹 ГОНКА В `pg-copy-streams` — ПРИЧИНА 60% ПАДІНЬ НА `COPY`** (знайдено 11.08.2026,
     патч `db/copyStreamPatch.ts`). `_cleanup()` обнуляє `this._buffer`, але охоронець
     `_forward()` перевіряє лише `_forwarding`/`_drained`/`connection` — жодного з цих
