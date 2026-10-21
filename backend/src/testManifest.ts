@@ -204,6 +204,7 @@ export const MANIFEST_FILES: string[] = [
   "core/clientContacts.test.js",
   "core/kommoSpamRules.test.js",
   "core/lardiCollect.test.js",
+  "core/prozorroRules.test.js",
   "core/clientNextStep.test.js",
   "core/reactivationFilters.test.js",
   "core/lapsedClients.test.js",
@@ -365,6 +366,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "ba_equipment_issues",
   "ba_claims", "ba_court_cases", "ba_files", "ba_events", "ba_equipment", "ba_ttn_checks", "ba_migrations", "ba_ttn_route_mismatch", "ba_utb_cases",
   "kommo_declined_forms",
+  "prozorro_tenders", "prozorro_leads",
 ];
 
 /** Статично оголошені тести — рівно ті рядки, що йдуть у `test("…")`. */
@@ -1424,6 +1426,15 @@ export const MANIFEST_TESTS: string[] = [
   "#703 спам-заявки: лише форми без справжнього телефону; SIP/пошта недоторкані",
   "#1644 declineSpamForms ВИМКНЕНО: не в розкладі й не в моніторі, доки контакт не підтягується окремо",
   "#1660 ВИРОК: відмова Lardi й нуль відповідей — падіння з причиною; хоч одна 200 чи нема маршрутів — успіх",
+  "#2350 ПОРІГ: 500 000 ₴ береться, 499 999 — ні; рішення до запуску, не гривня, без ЄДРПОУ — не ліди",
+  "#2351 ПЕРЕМОЖЦІ: лише active-рішення, кожен учасник консорціуму, код — цифри, контакти з contactPoint",
+  "#2352 КАРТКА: позиції з кількістю, ДК021 без повторів, замовник, сума, роль і посилання на тендер",
+  "#2353 ПРОХІД: точка відліку без деталей; далі лише нові тендери; дубль не пишеться; збій деталей — повтор завтра",
+  "#2354 ВИРОК: нуль відповідей і понад 5% помилок — аварія, рівно 5% — ні; тиша 2 доби — лише після 2 діб роботи",
+  "#2355 prozorro_tenders і prozorro_leads: REVOKE від ai_readonly після CREATE і GRANT, є у FORBIDDEN_TABLES",
+  "#2356 КЛІЄНТ: повтор на 429/5xx і збій мережі, без повтору на 404; пауза між запитами; User-Agent у кожному",
+  "#2357 ПРОВОДКА: 06:05 за Києвом, під наглядом раз на добу; у джобі немає запису в Kommo",
+  "#2358 НІШІ: 8 груп із ТЗ, жодна не порожня, без повторів слів",
   "#1661 ПРОХІД: 403 — стоп на першому запиті й падіння; живий — пише все; частковий збій — успіх; повний — падіння",
   "#1662 ПРОВОДКА: collectLardi через runLardiCollect, без ковтання; під наглядом із частотою крону",
   "#1362 declinedRowOf: повна заявка → усі поля, гола → null-поля, без uid → null",

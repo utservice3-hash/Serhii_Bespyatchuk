@@ -86,6 +86,8 @@ export const FORBIDDEN_TABLES = [
   "ba_claims", "ba_court_cases", "ba_files", "ba_events", "ba_equipment", "ba_ttn_checks", "ba_migrations", "ba_ttn_route_mismatch", "ba_utb_cases",
   // 🛡 Журнал відхилених спам-заявок (05.10.2026): імена, пошти, IP. REVOKE у схемі. Тримає #1362c.
   "kommo_declined_forms",
+  // 🏛 Prozorro-ліди (#5299): ПІБ, телефони й пошти контактних осіб переможців тендерів. REVOKE у схемі. Тримає #2355.
+  "prozorro_tenders", "prozorro_leads",
 ];
 
 /**
