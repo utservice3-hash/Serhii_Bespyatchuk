@@ -3,7 +3,7 @@ import { useDialogs } from "../../../components/Dialogs";
 import { createPortal } from "react-dom";
 import {
   fetchEmployees, previewEmployeeImport, commitEmployeeImport, updateEmployee, fetchSecretsStatus, linkEmployeesKommo, hiringError,
-  startDismissal, dismissNeedsConfirm, finishDismissal, revertDismissal, fetchEmployeeDocs, uploadEmployeeDoc, employeeDocBlobUrl, deleteEmployeeDoc, restoreEmployeeDoc, HR_DOC_KINDS,
+  startDismissal, dismissNeedsConfirm, finishDismissal, revertDismissal, setDismissDate, fetchEmployeeDocs, uploadEmployeeDoc, employeeDocBlobUrl, deleteEmployeeDoc, restoreEmployeeDoc, HR_DOC_KINDS,
   fetchPeoplePhotos,
   type EmployeeDoc, type EmployeeRow, type ImportPreview, type SecretsStatus, type EmployeePatch, type PersonPhoto,
 } from "../../../api";
@@ -224,6 +224,7 @@ function EmployeeDrawer({ row, tab, teams, status, toast, photo, photoErr, onTab
   onTab: (t: DrawerTab) => void; onClose: () => void; onSaved: () => void; onPhoto: () => void;
 }) {
   const [dismissing, setDismissing] = useState(false);
+  const [dateEdit, setDateEdit] = useState(false);
   const init = useMemo(() => Object.fromEntries(FIELDS.map(([k]) => [k, (row[k] as string | null) ?? ""])) as Record<string, string>, [row]);
   const [form, setForm] = useState(init);
   const [busy, setBusy] = useState(false);
@@ -252,6 +253,10 @@ function EmployeeDrawer({ row, tab, teams, status, toast, photo, photoErr, onTab
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
               <span className={`emp-pill ${row.status === "active" ? "ok" : row.status === "finishing" ? "warn" : "mute"}`}>
                 {row.status === "active" ? "працює" : row.status === "finishing" ? `завершує · останній день ${d(row.last_day)}` : "звільнений"}</span>
+              {row.status !== "active" && (row.dismiss_date_unknown
+                ? <span className="emp-pill warn" title="Поза розрахунком плинності">дата звільнення невідома</span>
+                : row.status === "dismissed" && row.dismissed_at ? <span className="emp-pill mute">звільнено {d(row.dismissed_at)}</span> : null)}
+              {row.status !== "active" && <button className="hr-btn xs" onClick={() => setDateEdit(true)}>Змінити дату звільнення</button>}
               {row.team_label && <span className="emp-team" style={{ ["--t" as string]: teamTone(row.team_label) }}>{teamName(row.team_label)}</span>}
               {row.user_id != null ? <span className="emp-pill ok">акаунт: {row.account_name}</span> : <span className="emp-pill warn">без акаунта в дашборді</span>}
               {row.kommo_name ? <span className="emp-pill info">Kommo: {row.kommo_name}</span> : <span className="emp-pill mute">не привʼязано до Kommo</span>}
@@ -306,6 +311,7 @@ function EmployeeDrawer({ row, tab, teams, status, toast, photo, photoErr, onTab
           <VaultPanel id={row.ref} status={status} toast={toast} onStatus={onSaved} />
         ) : <p className="hr-muted">Сейф недоступний.</p>}
       </div>
+      {dateEdit && <DismissDateDialog row={row} onClose={() => setDateEdit(false)} onDone={(m) => { setDateEdit(false); toast(m); onSaved(); }} />}
       {dismissing && <DismissDialog row={row} onClose={() => setDismissing(false)} onDone={(m) => { setDismissing(false); toast(m); onSaved(); }} />}
     </div>, document.body);
 }
@@ -315,6 +321,7 @@ const today = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/K
 /** Крок 1: останній робочий день і причина. Пояснює, що станеться з входом і Звітом, — до кліку, а не після. */
 function DismissDialog({ row, onClose, onDone }: { row: EmployeeRow; onClose: () => void; onDone: (msg: string) => void }) {
   const [lastDay, setLastDay] = useState(today());
+  const [unknown, setUnknown] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -323,8 +330,8 @@ function DismissDialog({ row, onClose, onDone }: { row: EmployeeRow; onClose: ()
   const submit = async (confirmRisk = false) => {
     setBusy(true); setErr(null);
     try {
-      const r = await startDismissal(row.id, lastDay, reason, confirmRisk);
-      onDone(`${row.full_name}: «завершує» до ${d(lastDay)}${r.managers ? " · у Звіті позначено «завершує», плану немає" : ""}`);
+      const r = await startDismissal(row.id, lastDay, reason, confirmRisk, unknown);
+      onDone(`${row.full_name}: «завершує»${unknown ? " · дата звільнення невідома — у плинності не рахується" : ` до ${d(lastDay)}`}${r.managers ? " · у Звіті позначено «завершує», плану немає" : ""}`);
     } catch (e) {
       if (!confirmRisk && dismissNeedsConfirm(e)) setRisk(hiringError(e)); else setErr(hiringError(e));
       setBusy(false);
@@ -339,7 +346,12 @@ function DismissDialog({ row, onClose, onDone }: { row: EmployeeRow; onClose: ()
           Вхід закриє другий крок — «Завершити звільнення». Нічого не видаляється: доступи в сейфі, документи й угоди лишаються.
         </p>
         <div className="emp-form" style={{ marginTop: 0 }}>
-          <label><span>Останній робочий день *</span><input className="hr-inp" type="date" value={lastDay} onChange={(e) => setLastDay(e.target.value)} /></label>
+          <label><span>Останній робочий день *</span><input className="hr-inp" type="date" value={lastDay} disabled={unknown} onChange={(e) => setLastDay(e.target.value)} /></label>
+          {/* 📉 #2100: людина давно не працює, а коли пішла — невідомо. Не вигадуємо дату — прибираємо з плинності. */}
+          <label className="wide" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="checkbox" checked={unknown} onChange={(e) => setUnknown(e.target.checked)} />
+            <span>Дата невідома — людина давно не працює (у плинності не рахується)</span>
+          </label>
           <label className="wide"><span>Причина *</span><input className="hr-inp" autoFocus value={reason} onChange={(e) => setReason(e.target.value)} placeholder="власне бажання, скорочення, не пройшов випробувальний…" /></label>
         </div>
         {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 8 }}>{err}</div>}
@@ -353,7 +365,7 @@ function DismissDialog({ row, onClose, onDone }: { row: EmployeeRow; onClose: ()
           {risk ? (
             <button className="hr-btn p" disabled={busy} onClick={() => void submit(true)}>{busy ? "Зберігаю…" : "Так, звільнити саме цей запис"}</button>
           ) : (
-            <button className="hr-btn p" disabled={busy || !lastDay || !reason.trim()} onClick={() => void submit()}>{busy ? "Зберігаю…" : "Звільнити — «завершує»"}</button>
+            <button className="hr-btn p" disabled={busy || (!lastDay && !unknown) || !reason.trim()} onClick={() => void submit()}>{busy ? "Зберігаю…" : "Звільнити — «завершує»"}</button>
           )}
         </div>
       </div>
@@ -623,6 +635,48 @@ function Birthdays({ rows, onOpen }: { rows: EmployeeRow[]; onOpen: (id: number)
           {r.full_name.split(" ").slice(0, 2).join(" ")} · {days === 0 ? "сьогодні" : days === 1 ? "завтра" : `${r.birth_date!.slice(8, 10)}.${r.birth_date!.slice(5, 7)}`} · {age}
         </button>
       ))}
+    </div>
+  );
+}
+
+/**
+ * 📉 «Змінити дату звільнення» (#2100): фактична дата або «дата невідома» (людина поза плинністю). Коментар
+ * обовʼязковий — зміна йде в журнал доступу. Для перенесених із таблиці людей, «звільнених» у день актуалізації бази.
+ */
+function DismissDateDialog({ row, onClose, onDone }: { row: EmployeeRow; onClose: () => void; onDone: (msg: string) => void }) {
+  const [date, setDate] = useState(row.dismissed_at ?? "");
+  const [unknown, setUnknown] = useState(!!row.dismiss_date_unknown);
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const submit = async () => {
+    if (!unknown && !date) { setErr("Вкажіть дату або «дата невідома»"); return; }
+    if (!comment.trim()) { setErr("Коментар обовʼязковий"); return; }
+    setBusy(true); setErr(null);
+    try {
+      await setDismissDate(row.id, unknown ? { unknown: true, comment: comment.trim() } : { date, comment: comment.trim() });
+      onDone(`${row.full_name}: ${unknown ? "дата звільнення невідома — у плинності не рахується" : `дата звільнення ${d(date)}`}`);
+    } catch (e) { setErr(hiringError(e)); setBusy(false); }
+  };
+  return (
+    <div className="hr-modal-back" onClick={(e) => { e.stopPropagation(); onClose(); }}>
+      <div className="hr-modal" role="dialog" aria-label="Змінити дату звільнення" onClick={(e) => e.stopPropagation()} style={{ width: "min(480px, 96vw)" }}>
+        <h3 style={{ margin: "0 0 4px" }}>Дата звільнення: {row.full_name}</h3>
+        <p className="hr-muted" style={{ margin: "0 0 12px", fontSize: 13 }}>Плинність рахується за цією датою. Якщо людина давно не працює, а коли пішла — невідомо, позначте «дата невідома»: тоді її не буде в розрахунку плинності взагалі.</p>
+        <div className="emp-form" style={{ marginTop: 0 }}>
+          <label><span>Фактична дата звільнення</span><input className="hr-inp" type="date" value={date} disabled={unknown} onChange={(e) => setDate(e.target.value)} /></label>
+          <label className="wide" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="checkbox" checked={unknown} onChange={(e) => setUnknown(e.target.checked)} />
+            <span>Дата невідома — не рахувати в плинності</span>
+          </label>
+          <label className="wide"><span>Коментар *</span><input className="hr-inp" value={comment} onChange={(e) => setComment(e.target.value)} placeholder="напр.: актуалізація бази — пішов ще у 2025" /></label>
+        </div>
+        {err && <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 8 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+          <button className="hr-btn" onClick={onClose}>Скасувати</button>
+          <button className="hr-btn p" disabled={busy} onClick={() => void submit()}>{busy ? "Зберігаю…" : "Зберегти"}</button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -40,6 +40,11 @@ export function HiringChurnTab() {
         <div className="kpi-card"><div className="kpi-label">Прийнято</div><div className="kpi-value" style={{ color: "var(--ok)" }}>{d.total.hired}</div><div className="hr-muted">за період</div></div>
         <div className="kpi-card"><div className="kpi-label">Працює зараз</div><div className="kpi-value">{d.total.active}</div><div className="hr-muted">{noDate ? `без дати прийому: ${noDate}` : "дати прийому в усіх"}</div></div>
       </div>
+      {(d.total.unknownDate ?? 0) > 0 && (
+        <div className="hr-muted" style={{ margin: "-6px 0 12px", fontSize: 12.5 }}>
+          Поза розрахунком: {d.total.unknownDate} звільнених із невідомою датою (позначено в картці людини — «дата невідома»).
+        </div>
+      )}
       <div className="chart-card" style={{ marginBottom: 16 }}>
         <div className="chart-title">Плинність по місяцях</div>
         <div className="hr-tw">

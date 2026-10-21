@@ -118,6 +118,7 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/secrets/employees/:id/dismiss": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "POST /api/secrets/employees/:id/dismiss/finish": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "POST /api/secrets/employees/:id/dismiss/revert": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
+  "POST /api/secrets/employees/:id/dismiss-date": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "POST /api/secrets/employees/:id/documents": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   // 📷 Фото співробітників (22.09.2026): запис — те саме право сейфу, що й «Найм → Співробітники».
   "POST /api/people/photo/:employeeId": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 22.09.2026); фінансист його не має",

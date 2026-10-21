@@ -4098,6 +4098,10 @@ ALTER TABLE employees ADD COLUMN IF NOT EXISTS photo_updated_by INTEGER REFERENC
 -- що став «Менеджер», зʼявляється в реєстрі сам; `candidate_id` — звідки прийшов (одна людина реєстру на
 -- кандидата). ⚠️ revert коду колонку не прибирає; дані без неї не губляться.
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS candidate_id INTEGER REFERENCES hiring_candidates(id) ON DELETE SET NULL;
+-- 📉 «Дата звільнення невідома» (21.10.2026, #2100; рішення Романа — варіант «б»): людей, перенесених із таблиці як
+-- активних, хоча вони давно пішли, Іван звільняє кнопкою — і дата дії ставала датою звільнення (жовтень 24% плинності).
+-- Прапорець прибирає людину з розрахунку плинності, а не вигадує дату.
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS dismiss_date_unknown BOOLEAN NOT NULL DEFAULT false;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_employees_candidate ON employees(candidate_id) WHERE candidate_id IS NOT NULL;
 
 -- 📌 НАСТУПНИЙ КРОК ПО КЛІЄНТУ (ТЗ реактивації 23.09.2026, п.1): один живий крок на клієнта,

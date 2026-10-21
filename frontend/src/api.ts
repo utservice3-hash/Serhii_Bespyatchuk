@@ -5404,6 +5404,8 @@ export interface EmployeeRow {
   manager_id: number | null; kommo_name: string | null;
   /** 🚪 Звільнення кнопками: крок і останній робочий день (null — звільнення через реєстр не було). */
   offboarding: "finishing" | "dismissed" | null; last_day: string | null;
+  /** 📉 Дата звільнення невідома (#2100) — людина поза розрахунком плинності. */
+  dismiss_date_unknown?: boolean;
   /** 📎 Документи людини (без прибраних) і чи є серед них NDA / офер — за типом документа. */
   docs: number; has_nda: boolean; has_offer: boolean;
 }
@@ -5421,7 +5423,7 @@ export interface ImportCounts { rows: number; created: number; updated: number; 
 // ── Етапи 4–5: плинність, Exit-інтервʼю, привʼязка до Kommo (18.09.2026) ──
 export interface ChurnMonthRow { month: string; headcount: number; hired: number; dismissed: number; turnover: number | null; early: number; noHireDate: number }
 export interface ChurnReport {
-  months: ChurnMonthRow[]; total: { dismissed: number; hired: number; early: number; avgTurnover: number; active: number };
+  months: ChurnMonthRow[]; total: { dismissed: number; hired: number; early: number; avgTurnover: number; active: number; unknownDate?: number };
   reasons: { label: string; n: number }[]; positions: { label: string; n: number }[];
 }
 export const fetchChurn = async (from: string, to: string) => (await api.get<ChurnReport>("/secrets/churn", { params: { from, to } })).data;
@@ -5442,8 +5444,11 @@ export type EmployeePatch = Partial<Pick<EmployeeRow, "full_name" | "position" |
 export const updateEmployee = async (id: number, b: EmployeePatch) => (await api.patch<{ ok: true; changed: string[] }>(`/secrets/employees/${id}`, b)).data.changed;
 // 🚪 Звільнення у два кроки (21.09.2026) — `backend/src/core/offboarding.ts`.
 // ⚠️ 409 з `needsConfirm` — сервер перепитує (людина активна в Kommo або поруч схожий запис); повтор з `confirmRisk`.
-export const startDismissal = async (id: number, lastDay: string, reason: string, confirmRisk = false) =>
-  (await api.post<{ status: "finishing"; managers: number }>(`/secrets/employees/${id}/dismiss`, { lastDay, reason, confirmRisk })).data;
+export const startDismissal = async (id: number, lastDay: string, reason: string, confirmRisk = false, dateUnknown = false) =>
+  (await api.post<{ status: "finishing"; managers: number }>(`/secrets/employees/${id}/dismiss`, { lastDay, reason, confirmRisk, dateUnknown })).data;
+/** 📉 «Змінити дату звільнення» / «дата невідома» (#2100). */
+export const setDismissDate = async (id: number, b: { date?: string; unknown?: boolean; comment: string }) =>
+  (await api.post<{ dismissedAt: string | null; unknown: boolean }>(`/secrets/employees/${id}/dismiss-date`, b)).data;
 export const dismissNeedsConfirm = (e: unknown): boolean =>
   !!(e as { response?: { status?: number; data?: { needsConfirm?: boolean } } })?.response?.data?.needsConfirm;
 export const finishDismissal = async (id: number) =>

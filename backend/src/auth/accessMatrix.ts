@@ -659,6 +659,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
   { method: "POST", path: "/api/secrets/employees/:id/dismiss", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "POST", path: "/api/secrets/employees/:id/dismiss/finish", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "POST", path: "/api/secrets/employees/:id/dismiss/revert", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  // 📉 «Змінити дату звільнення» (21.10.2026, #2100) — та сама межа, що в «Звільнити…».
+  { method: "POST", path: "/api/secrets/employees/:id/dismiss-date", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "GET", path: "/api/secrets/employees/:id/documents", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
   { method: "POST", path: "/api/secrets/employees/:id/documents", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "GET", path: "/api/secrets/employees/:id/documents/:fileId", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },

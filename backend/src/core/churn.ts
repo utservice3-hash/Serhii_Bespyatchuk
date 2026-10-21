@@ -12,7 +12,7 @@ import type { Db } from "./secrets.js";
 
 export class ChurnError extends Error { constructor(public status: number, message: string) { super(message); } }
 
-export interface ChurnPerson { hired_at: string | null; dismissed_at: string | null; dismiss_reason: string | null; position: string | null; team_label: string | null }
+export interface ChurnPerson { hired_at: string | null; dismissed_at: string | null; dismiss_reason: string | null; position: string | null; team_label: string | null; dismiss_date_unknown?: boolean }
 export interface ChurnMonth { month: string; headcount: number; hired: number; dismissed: number; turnover: number | null; early: number; noHireDate: number }
 
 const lastDay = (ym: string) => { const [y, m] = ym.split("-").map(Number); return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); };
@@ -48,14 +48,18 @@ const top = (xs: (string | null)[], empty: string) => {
 export async function churnReport(db: Db, from: unknown, to: unknown) {
   const ok = (s: unknown): s is string => typeof s === "string" && /^\d{4}-\d{2}$/.test(s);
   if (!ok(from) || !ok(to) || from > to) throw new ChurnError(400, "Період — місяці РРРР-ММ, from ≤ to");
-  const ppl = (await db.query<ChurnPerson>(
-    `SELECT hired_at::text AS hired_at, dismissed_at::text AS dismissed_at, dismiss_reason, position, team_label FROM employees`)).rows;
+  const all = (await db.query<ChurnPerson>(
+    `SELECT hired_at::text AS hired_at, dismissed_at::text AS dismissed_at, dismiss_reason, position, team_label, dismiss_date_unknown FROM employees`)).rows;
+  // 📉 Звільнені з невідомою датою (#2100) — поза розрахунком: невідома дата не має права ставати чиїмось місяцем.
+  // Скільки таких — окремим числом, щоб невідоме лишалось видимим.
+  const ppl = all.filter((p) => !(p.dismiss_date_unknown && p.dismissed_at != null));
   const months = monthsBetween(from, to).map((m) => monthRow(ppl, m));
   const inRange = ppl.filter((p) => p.dismissed_at != null && p.dismissed_at >= `${from}-01` && p.dismissed_at <= lastDay(to));
   const tot = months.reduce((a, m) => ({ dismissed: a.dismissed + m.dismissed, hired: a.hired + m.hired, early: a.early + m.early }), { dismissed: 0, hired: 0, early: 0 });
   const avgTurnover = months.filter((m) => m.turnover != null).reduce((a, m, _, arr) => a + (m.turnover! / arr.length), 0);
   return {
-    months, total: { ...tot, avgTurnover: Math.round(avgTurnover * 10) / 10, active: ppl.filter((p) => p.dismissed_at == null).length },
+    months, total: { ...tot, avgTurnover: Math.round(avgTurnover * 10) / 10, active: ppl.filter((p) => p.dismissed_at == null).length,
+      unknownDate: all.length - ppl.length },
     reasons: top(inRange.map((p) => p.dismiss_reason), "причину не вказано"),
     positions: top(inRange.map((p) => p.position), "посада не вказана"),
   };

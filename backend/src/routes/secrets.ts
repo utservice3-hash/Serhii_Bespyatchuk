@@ -8,7 +8,7 @@ import {
 } from "../core/secrets.js";
 import { previewImport, commitImport, listEmployees, updateEmployee, ImportError } from "../core/employees.js";
 import { createEmployee, matchFiles } from "../core/employeeAdd.js";
-import { startDismissal, finishDismissal, revertDismissal } from "../core/offboarding.js";
+import { startDismissal, finishDismissal, revertDismissal, setDismissDate } from "../core/offboarding.js";
 import { listEmployeeDocs, employeeDoc, attachEmployeeDoc, setEmployeeDocDeleted } from "../core/employeeDocs.js";
 import { isManagement } from "../core/docAccess.js";
 import { UPLOAD_DIR } from "./uploads.js";
@@ -177,6 +177,10 @@ secretsRouter.post("/employees/:id/dismiss", async (req, res) => {
 });
 secretsRouter.post("/employees/:id/dismiss/finish", async (req, res) => {
   try { res.json(await tx((db) => finishDismissal(db, me(req), num(req.params.id, "id співробітника")))); } catch (e) { fail(res, e); }
+});
+// 📉 «Змінити дату звільнення» / «дата невідома» (#2100) — межа та сама, що в реєстру.
+secretsRouter.post("/employees/:id/dismiss-date", async (req, res) => {
+  try { res.json(await tx((db) => setDismissDate(db, me(req), num(req.params.id, "id співробітника"), req.body ?? {}))); } catch (e) { fail(res, e); }
 });
 secretsRouter.post("/employees/:id/dismiss/revert", async (req, res) => {
   try { res.json(await tx((db) => revertDismissal(db, me(req), num(req.params.id, "id співробітника")))); } catch (e) { fail(res, e); }
