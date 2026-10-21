@@ -7,7 +7,8 @@ import { DatePicker } from "../../../components/DatePicker";
 import { InfoHint } from "../widgets";
 import { LeadgenRegularsCard } from "./LeadgenRegularsCard";
 import { KvpFirstTouchBlock } from "./KvpFirstTouchBlock";
-import { KvpTeamsWeekMonth } from "./KvpTeamsWeekMonth";
+import { weekCloseStatus, closeNote, withExpected, CLOSE_LABEL, type CloseKind } from "../kvpCoreRules";
+import { VacationMark } from "../VacationMark";
 
 // ── Статус-палітра (зарезервована, НЕ дата-серія): good/warning/serious/critical ──
 const GREEN = "#16a34a", AMBER = "#d97706", RED = "#dc2626", BLUE = "#2563eb", MUTED = "var(--text-muted)";
@@ -29,6 +30,9 @@ const EXPECT_BUCKET_ORDER = [
 ] as const;
 
 const HINT: Record<string, string> = {
+  withExp: "Факт + очікування = отримані кошти + оплати з ПЛАНОВОЮ датою в цьому місяці (верхнє число колонки «Очікуємо»); "
+    + "під сумою — % плану місяця. Та сама формула, що «Прогноз місяця» вгорі, лише по команді й менеджеру. "
+    + "«Наст» і «мин» сюди не входять. Лише для одного календарного місяця — для кварталу чи року «—».",
   received: "«Отримані кошти» = угоди, що ввійшли в етап 9 (Оплата отримана) АБО 10 (Успішна) у періоді, РАЗ (дедуп). Ядро core/money.ts.",
   strategic: "🔒 Стратегічний план виручки = Σ планів менеджерів (plans.payment_amount). Read-only — редагується у грід-редакторі планів, не тут.",
   planBar: "Смуга заповнюється ДВІЧІ: щільний сегмент — факт (отримані кошти), світліший — "
@@ -317,6 +321,8 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
 
   const v = rep?.verdict;
   const delta = v ? v.received.revenue - v.receivedPrev.revenue : 0;
+  /** «Факт + очік.» має сенс лише для одного календарного місяця: очікування — «з плановою датою ЦЬОГО місяця». */
+  const oneMonth = !!rep && rep.weekBlocks.length > 0;
 
   return (
     <>
@@ -359,7 +365,83 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
             </div>
           </div>
 
-          <KvpTeamsWeekMonth rep={rep} />
+          {/* ── 🏅 КОМАНДИ → менеджери drill. Задача 6442 (Юля 21.10.2026): «на екрані одна таблиця команд» — верхній блок
+              команд «тиждень і місяць» прибрано як дубль, його унікальне (факт + очікування за місяць і поточний тиждень,
+              «Закриємо?») переїхало СЮДИ, а сама таблиця — з «Детального звіту» в ядро, видна одразу. Минулий тиждень — це
+              клітинка тижня ліворуч від поточного (той самий план і факт), окремих колонок під нього немає. ── */}
+          <div className="chart-card" style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+              <h2 className="chart-title" style={{ margin: 0 }}>🏅 Команди — план / факт {rep.weekBlocks.length > 0 && <span style={{ fontSize: 12, color: MUTED }}>(+ тижні Т1–Т{rep.weekBlocks.length}) </span>}<InfoHint text="Клік по команді → менеджери → клік менеджера → денний дрил. Клік по клітинці тижня → менеджери саме цього тижня → денний дрил тижня. Т1–Т5 = фіксовані блоки місяця (1-7/8-14/15-21/22-28/29-кінець). План тижня — ДИНАМІЧНИЙ: минулий тиждень — план, зафіксований на його початок; поточний — (план місяця − факт на початок тижня) ÷ робочі дні до кінця місяця × дні тижня (ручна ціль тімліда перемагає); майбутні — той самий залишок і темп, оновлюються в понеділок. Тому Σ тижнів більша за план місяця, коли минулі тижні недовиконано, — з планом сходиться «залишок» під фактом. Тижневий факт = отримано за датою оплати; ✓/✗ = факт ≥ план тижня; поточний тиждень — ще й «з очік.» (факт + оплати з плановою датою в цьому тижні, % плану тижня) і мітка «Закриємо?»; майбутні тижні = план+очікування (у виконання НЕ входить). Вертикальна риска на смузі = темп (де мали б бути на сьогодні)." /></h2>
+              {rep.weekBlocks.length > 0 && (
+                <div style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", fontSize: 12 }}>
+                  {([["money", "💰 Гроші"], ["activity", "⚙️ Активність"]] as const).map(([k, lbl]) => (
+                    <button key={k} onClick={() => setWeekMode(k)}
+                      style={{ padding: "5px 12px", border: "none", cursor: "pointer", background: weekMode === k ? "#c5141c" : "var(--card-bg)", color: weekMode === k ? "#fff" : "var(--text)", fontWeight: weekMode === k ? 600 : 400 }}>{lbl}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table className="data-table" style={{ width: "100%", tableLayout: "fixed", minWidth: 736 + rep.weekBlocks.reduce((a, w) => a + wkW(w.isCurrent), 0) }}>
+                <colgroup>
+                  <col style={{ width: 216 }} />
+                  <col style={{ width: 84 }} /><col style={{ width: 84 }} /><col style={{ width: 108 }} /><col style={{ width: 88 }} /><col style={{ width: 96 }} /><col style={{ width: 56 }} />
+                  {rep.weekBlocks.map((w) => <col key={w.idx} style={{ width: wkW(w.isCurrent) }} />)}
+                </colgroup>
+                <thead><tr>
+                  <th>Команда / менеджер</th>
+                  <th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Факт</th><th>Вик. %</th><th style={{ textAlign: "right" }}>Очікуємо <InfoHint text="За плановою датою оплати (коли має надійти); зміна дати переносить між місяцями. Верх — цей календарний місяць, «наст» — наступний, «мин» — з МИНУЛИХ місяців (у прогноз не входить; це не «прострочено» з плитки вгорі — там межа «сьогодні»). Знімок «зараз». Наведи на клітинку — + ср.чеки команди." /></th><th style={{ textAlign: "right" }}>Факт + очік. <InfoHint text={HINT.withExp} /></th><th style={{ textAlign: "right" }}>Конв. <InfoHint text="Лайфтайм-конверсія (весь час, чесна воронка): РНК = рекламні угоди, що досягли «авто працює» ÷ прийнята реклама; РПК = лідген-угоди, що досягли «авто працює» ÷ лідген-заявки. Команда = Σчисельників÷Σзнаменників. Тонкий знаменник (0) → «—»." /></th>
+                  {rep.weekBlocks.map((w) => <th key={w.idx} style={{ textAlign: "right", fontSize: 10, background: w.isCurrent ? "rgba(37,99,235,0.08)" : undefined }}>Т{w.idx}<div style={{ color: MUTED, fontWeight: 400 }}>{w.from.slice(8)}–{w.to.slice(8)}</div></th>)}
+                </tr></thead>
+                <tbody>
+                  {rep.teams.map((t) => (
+                    <Fragment key={t.teamId}>
+                      <tr onClick={() => setOpenTeam(openTeam === t.teamId ? null : t.teamId)} style={{ cursor: "pointer" }}>
+                        <td style={clip}>{openTeam === t.teamId ? "▾" : "▸"} <b>{t.name}</b> <span style={{ fontSize: 11, color: MUTED }}>{teamKindLabel[t.kind]}{t.kind === "leadgen" && <InfoHint text="Відділ лідогенерації — показано у списку команд, але його метрики продажів рахуються окремою логікою (задача на потім, не плутати з РПК/повним циклом)." />}</span></td>
+                        <td style={{ textAlign: "right" }}>{fmtMoney(t.plan)}</td>
+                        <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(t.revenue)}<RemainingLine v={t.remainingToPlan} /></td>
+                        <td><div style={{ display: "flex", alignItems: "center", gap: 6 }} title={`Факт ${fmtPct(t.pct)} · з очікуванням за плановою датою ${fmtPct(t.forecastPct)}`}><PlanBar factPct={t.pct} forecastPct={t.forecastPct} color={pctColor(t.pct)} /><span style={{ color: pctColor(t.pct), fontWeight: 600, minWidth: 38, textAlign: "right" }}>{fmtPct(t.pct)}</span></div></td>
+                        <td style={{ textAlign: "right", color: MUTED }} title={`Очікування за ПЛАНОВОЮ датою оплати. Цей міс: ${fmtMoney(t.expectedThisMonth)} · наступний: ${fmtMoney(t.expectedNextMonth)} · з МИНУЛИХ місяців: ${fmtMoney(t.expectedPastMonths)} (у прогноз не входить; це не «прострочено» з плитки вгорі — там межа «сьогодні»). Ср.чек команди — успішно: ${t.avgCheckSuccess == null ? "—" : fmtMoney(t.avgCheckSuccess)} · в очікуванні: ${t.avgCheckAwaiting == null ? "—" : fmtMoney(t.avgCheckAwaiting)}.`}>{fmtMoney(t.expectedThisMonth)}<div style={{ fontSize: 9.5, color: MUTED }}>наст {fmtMoney(t.expectedNextMonth)}</div>{t.expectedPastMonths !== 0 && <div style={{ fontSize: 9.5, color: RED }}>мин {fmtMoney(t.expectedPastMonths)}</div>}</td>
+                        <WithExpCell on={oneMonth} plan={t.plan} fact={t.revenue} expected={t.expectedThisMonth} />
+                        <td style={{ textAlign: "right" }} title={`Лайфтайм (весь час): ${t.convLifetime.num} / ${t.convLifetime.den}${t.kind === "rnk" ? " (реклама)" : t.kind === "rpk" ? " (лідген)" : ""}`}>{t.kind === "rnk" || t.kind === "rpk" ? fmtPct(t.convLifetime.pct) : "—"}</td>
+                        {rep.weekBlocks.map((w) => (
+                          <WeekCell key={w.idx} mode={weekMode}
+                            w={t.weeks?.find((x) => x.idx === w.idx)}
+                            prev={t.weeks?.find((x) => x.idx === w.idx - 1)}
+                            active={openWeekDrill?.teamId === t.teamId && openWeekDrill?.weekIdx === w.idx}
+                            onClick={() => setOpenWeekDrill((cur) => cur?.teamId === t.teamId && cur?.weekIdx === w.idx ? null : { teamId: t.teamId, weekIdx: w.idx })} />
+                        ))}
+                      </tr>
+                      {openWeekDrill?.teamId === t.teamId && <WeekManagerDrill team={t} weekIdx={openWeekDrill.weekIdx} weekBlocks={rep.weekBlocks} />}
+                      {/* Спокійний вигляд менеджерів (макет kvp_managers_calm_mockup): тихий рядок +
+                          спарклайн 5 тижнів; тижневі числа + діагноз + дні — на клік. Без банера. */}
+                      {openTeam === t.teamId && (
+                        <tr><td colSpan={7 + rep.weekBlocks.length} style={{ padding: 0, background: "var(--bg)" }}>
+                          <CalmManagers team={t} rep={rep} plans={plans} openMgr={openMgr} setOpenMgr={setOpenMgr} />
+                        </td></tr>
+                      )}
+                    </Fragment>
+                  ))}
+                  {/* #5: розріз відділу по тижнях = Σ команд (гейт Σ Dept == Σ teams == Σ days) */}
+                  {rep.deptWeeks.length > 0 && (
+                    <tr style={{ borderTop: "2px solid var(--border)", fontWeight: 600 }}>
+                      <td style={clip}>Σ Відділ</td>
+                      <td style={{ textAlign: "right" }}>{fmtMoney(rep.teams.reduce((s, t) => s + t.plan, 0))}</td>
+                      <td style={{ textAlign: "right", fontWeight: 700 }}>{fmtMoney(rep.teams.reduce((s, t) => s + t.revenue, 0))}</td>
+                      <td colSpan={2}></td>
+                      <WithExpCell on={oneMonth} bold plan={rep.teams.reduce((s, t) => s + t.plan, 0)} fact={rep.teams.reduce((s, t) => s + t.revenue, 0)}
+                        expected={rep.teams.reduce((s, t) => s + t.expectedThisMonth, 0)} />
+                      <td></td>
+                      {rep.deptWeeks.map((w) => (
+                        <WeekCell key={w.idx} mode={weekMode} w={w} prev={rep.deptWeeks.find((x) => x.idx === w.idx - 1)} />
+                      ))}
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {weekMode === "money" && rep.weekBlocks.some((w) => w.isCurrent) && <CloseLegend />}
+          </div>
 
           {/* ── 🎧 ПЕРШИЙ ДОТИК (задача 5314): одразу під «де ми зараз», як у макеті «Звіт КВП - ядро». ── */}
           {canSeeFirstTouch && <KvpFirstTouchBlock from={rep.scope.from} to={rep.scope.to} />}
@@ -367,7 +449,7 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
           {/* ▸ ДЕТАЛЬНИЙ ЗВІТ — усе, що було до ядра; згорнуте за замовчуванням. */}
           <div className="chart-card" style={{ marginBottom: 16 }}>
             <h2 className="chart-title" style={{ cursor: "pointer", margin: 0 }} onClick={toggleDetails}>{showDetails ? "▾" : "▸"} 📂 Детальний звіт
-              <span style={{ fontSize: 12, color: MUTED, fontWeight: 400 }}> — темп, життєвий цикл грошей, сигнали, двигуни, тижні Т1–Т5, структура, ризики, повна таблиця, логістика</span></h2>
+              <span style={{ fontSize: 12, color: MUTED, fontWeight: 400 }}> — темп, життєвий цикл грошей, сигнали, двигуни, структура, ризики, повна таблиця, логістика</span></h2>
           </div>
           {showDetails && (<>
           {/* ── ТЕМП І ЖИТТЄВИЙ ЦИКЛ (були у «де ми зараз»; чотири картки грошей — у ядрі вище, тут не дублюються) ── */}
@@ -514,76 +596,6 @@ export function KvpReportSection({ canSeeFirstTouch = false }: { canSeeFirstTouc
                 <span style={{ display: "flex", alignItems: "center", gap: 3 }}>Дохід: <b>{fmtMoney(rep.engines.leadgen.revenue)}</b><InfoHint text={HINT.lgRevenue} /></span>
               </div>
               <p style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>Три якорі не зводяться в межах місяця.</p>
-            </div>
-          </div>
-
-          {/* ── КОМАНДИ → менеджери drill ── */}
-          <div className="chart-card" style={{ marginBottom: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-              <h2 className="chart-title" style={{ margin: 0 }}>🏅 Команди — план / факт {rep.weekBlocks.length > 0 && <span style={{ fontSize: 12, color: MUTED }}>(+ тижні Т1–Т{rep.weekBlocks.length}) </span>}<InfoHint text="Клік по команді → менеджери → клік менеджера → денний дрил. Клік по клітинці тижня → менеджери саме цього тижня → денний дрил тижня. Т1–Т5 = фіксовані блоки місяця (1-7/8-14/15-21/22-28/29-кінець). План тижня — ДИНАМІЧНИЙ: минулий тиждень — план, зафіксований на його початок; поточний — (план місяця − факт на початок тижня) ÷ робочі дні до кінця місяця × дні тижня (ручна ціль тімліда перемагає); майбутні — той самий залишок і темп, оновлюються в понеділок. Тому Σ тижнів більша за план місяця, коли минулі тижні недовиконано, — з планом сходиться «залишок» під фактом. Тижневий факт = отримано за датою оплати; ✓/✗ = факт ≥ план тижня; майбутні тижні = план+очікування (у виконання НЕ входить). Вертикальна риска на смузі = темп (де мали б бути на сьогодні)." /></h2>
-              {rep.weekBlocks.length > 0 && (
-                <div style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", fontSize: 12 }}>
-                  {([["money", "💰 Гроші"], ["activity", "⚙️ Активність"]] as const).map(([k, lbl]) => (
-                    <button key={k} onClick={() => setWeekMode(k)}
-                      style={{ padding: "5px 12px", border: "none", cursor: "pointer", background: weekMode === k ? "#c5141c" : "var(--card-bg)", color: weekMode === k ? "#fff" : "var(--text)", fontWeight: weekMode === k ? 600 : 400 }}>{lbl}</button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div style={{ overflowX: "auto" }}>
-              <table className="data-table" style={{ width: "100%", tableLayout: "fixed", minWidth: 640 + rep.weekBlocks.length * WK_W }}>
-                <colgroup>
-                  <col style={{ width: 216 }} />
-                  <col style={{ width: 84 }} /><col style={{ width: 84 }} /><col style={{ width: 108 }} /><col style={{ width: 88 }} /><col style={{ width: 56 }} />
-                  {rep.weekBlocks.map((w) => <col key={w.idx} style={{ width: WK_W }} />)}
-                </colgroup>
-                <thead><tr>
-                  <th>Команда / менеджер</th>
-                  <th style={{ textAlign: "right" }}>План</th><th style={{ textAlign: "right" }}>Факт</th><th>Вик. %</th><th style={{ textAlign: "right" }}>Очікуємо <InfoHint text="За плановою датою оплати (коли має надійти); зміна дати переносить між місяцями. Верх — цей календарний місяць, «наст» — наступний, «мин» — з МИНУЛИХ місяців (у прогноз не входить; це не «прострочено» з плитки вгорі — там межа «сьогодні»). Знімок «зараз». Наведи на клітинку — + ср.чеки команди." /></th><th style={{ textAlign: "right" }}>Конв. <InfoHint text="Лайфтайм-конверсія (весь час, чесна воронка): РНК = рекламні угоди, що досягли «авто працює» ÷ прийнята реклама; РПК = лідген-угоди, що досягли «авто працює» ÷ лідген-заявки. Команда = Σчисельників÷Σзнаменників. Тонкий знаменник (0) → «—»." /></th>
-                  {rep.weekBlocks.map((w) => <th key={w.idx} style={{ textAlign: "right", fontSize: 10, background: w.isCurrent ? "rgba(37,99,235,0.08)" : undefined }}>Т{w.idx}<div style={{ color: MUTED, fontWeight: 400 }}>{w.from.slice(8)}–{w.to.slice(8)}</div></th>)}
-                </tr></thead>
-                <tbody>
-                  {rep.teams.map((t) => (
-                    <Fragment key={t.teamId}>
-                      <tr onClick={() => setOpenTeam(openTeam === t.teamId ? null : t.teamId)} style={{ cursor: "pointer" }}>
-                        <td style={clip}>{openTeam === t.teamId ? "▾" : "▸"} <b>{t.name}</b> <span style={{ fontSize: 11, color: MUTED }}>{teamKindLabel[t.kind]}{t.kind === "leadgen" && <InfoHint text="Відділ лідогенерації — показано у списку команд, але його метрики продажів рахуються окремою логікою (задача на потім, не плутати з РПК/повним циклом)." />}</span></td>
-                        <td style={{ textAlign: "right" }}>{fmtMoney(t.plan)}</td>
-                        <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtMoney(t.revenue)}<RemainingLine v={t.remainingToPlan} /></td>
-                        <td><div style={{ display: "flex", alignItems: "center", gap: 6 }} title={`Факт ${fmtPct(t.pct)} · з очікуванням за плановою датою ${fmtPct(t.forecastPct)}`}><PlanBar factPct={t.pct} forecastPct={t.forecastPct} color={pctColor(t.pct)} /><span style={{ color: pctColor(t.pct), fontWeight: 600, minWidth: 38, textAlign: "right" }}>{fmtPct(t.pct)}</span></div></td>
-                        <td style={{ textAlign: "right", color: MUTED }} title={`Очікування за ПЛАНОВОЮ датою оплати. Цей міс: ${fmtMoney(t.expectedThisMonth)} · наступний: ${fmtMoney(t.expectedNextMonth)} · з МИНУЛИХ місяців: ${fmtMoney(t.expectedPastMonths)} (у прогноз не входить; це не «прострочено» з плитки вгорі — там межа «сьогодні»). Ср.чек команди — успішно: ${t.avgCheckSuccess == null ? "—" : fmtMoney(t.avgCheckSuccess)} · в очікуванні: ${t.avgCheckAwaiting == null ? "—" : fmtMoney(t.avgCheckAwaiting)}.`}>{fmtMoney(t.expectedThisMonth)}<div style={{ fontSize: 9.5, color: MUTED }}>наст {fmtMoney(t.expectedNextMonth)}</div>{t.expectedPastMonths !== 0 && <div style={{ fontSize: 9.5, color: RED }}>мин {fmtMoney(t.expectedPastMonths)}</div>}</td>
-                        <td style={{ textAlign: "right" }} title={`Лайфтайм (весь час): ${t.convLifetime.num} / ${t.convLifetime.den}${t.kind === "rnk" ? " (реклама)" : t.kind === "rpk" ? " (лідген)" : ""}`}>{t.kind === "rnk" || t.kind === "rpk" ? fmtPct(t.convLifetime.pct) : "—"}</td>
-                        {rep.weekBlocks.map((w) => (
-                          <WeekCell key={w.idx} mode={weekMode}
-                            w={t.weeks?.find((x) => x.idx === w.idx)}
-                            prev={t.weeks?.find((x) => x.idx === w.idx - 1)}
-                            active={openWeekDrill?.teamId === t.teamId && openWeekDrill?.weekIdx === w.idx}
-                            onClick={() => setOpenWeekDrill((cur) => cur?.teamId === t.teamId && cur?.weekIdx === w.idx ? null : { teamId: t.teamId, weekIdx: w.idx })} />
-                        ))}
-                      </tr>
-                      {openWeekDrill?.teamId === t.teamId && <WeekManagerDrill team={t} weekIdx={openWeekDrill.weekIdx} weekBlocks={rep.weekBlocks} />}
-                      {/* Спокійний вигляд менеджерів (макет kvp_managers_calm_mockup): тихий рядок +
-                          спарклайн 5 тижнів; тижневі числа + діагноз + дні — на клік. Без банера. */}
-                      {openTeam === t.teamId && (
-                        <tr><td colSpan={6 + rep.weekBlocks.length} style={{ padding: 0, background: "var(--bg)" }}>
-                          <CalmManagers team={t} rep={rep} plans={plans} openMgr={openMgr} setOpenMgr={setOpenMgr} />
-                        </td></tr>
-                      )}
-                    </Fragment>
-                  ))}
-                  {/* #5: розріз відділу по тижнях = Σ команд (гейт Σ Dept == Σ teams == Σ days) */}
-                  {rep.deptWeeks.length > 0 && (
-                    <tr style={{ borderTop: "2px solid var(--border)", fontWeight: 600 }}>
-                      <td style={clip}>Σ Відділ</td>
-                      <td style={{ textAlign: "right" }}>{fmtMoney(rep.teams.reduce((s, t) => s + t.plan, 0))}</td>
-                      <td style={{ textAlign: "right", fontWeight: 700 }}>{fmtMoney(rep.teams.reduce((s, t) => s + t.revenue, 0))}</td>
-                      <td colSpan={3}></td>
-                      {rep.deptWeeks.map((w) => (
-                        <WeekCell key={w.idx} mode={weekMode} w={w} prev={rep.deptWeeks.find((x) => x.idx === w.idx - 1)} />
-                      ))}
-                    </tr>
-                  )}
-                </tbody>
-              </table>
             </div>
           </div>
 
@@ -759,7 +771,7 @@ function MgrFactLine({ cs }: { cs: CreatedSplit }) {
   );
 }
 
-const CALM_COLS = "1fr 82px 116px 50px 78px 50px 122px"; // імʼя·план·факт·вик·очік·конв·спарклайн
+const CALM_COLS = "1fr 82px 116px 50px 78px 84px 50px 122px"; // імʼя·план·факт·вик·очік·факт+очік·конв·спарклайн
 
 // Спарклайн 5 тижнів — ТОНКІ бари ЛИШЕ кольором (зелений≥100/жовтий70-99/червоний<70/сірий нуль),
 // поточний тиждень обведено. Без чисел/стрілок.
@@ -827,7 +839,7 @@ function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam
         🕐 {DRIFT_NOTE}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: CALM_COLS, gap: 8, padding: "6px 16px 6px 30px", color: MUTED, fontSize: 9.5, textTransform: "uppercase", letterSpacing: ".04em", borderBottom: "1px solid var(--border)" }}>
-        <span>Менеджер</span><span style={{ textAlign: "right" }}>План</span><span style={{ textAlign: "right" }}>Факт</span><span style={{ textAlign: "right" }}>Вик</span><span style={{ textAlign: "right" }}>Очік</span><span style={{ textAlign: "right" }}>Конв</span><span style={{ textAlign: "right" }}>Тижні Т1–Т{rep.weekBlocks.length}</span>
+        <span>Менеджер</span><span style={{ textAlign: "right" }}>План</span><span style={{ textAlign: "right" }}>Факт</span><span style={{ textAlign: "right" }}>Вик</span><span style={{ textAlign: "right" }}>Очік</span><span style={{ textAlign: "right" }}>Факт+очік</span><span style={{ textAlign: "right" }}>Конв</span><span style={{ textAlign: "right" }}>Тижні Т1–Т{rep.weekBlocks.length}</span>
       </div>
       {team.managers.map((m) => {
         const open = openMgr === m.managerId;
@@ -843,13 +855,14 @@ function CalmManagers({ team, rep, plans, openMgr, setOpenMgr }: { team: KvpTeam
                   «не реклама і не лідген» — те єдине число, заради якого прохід.
                   Спіймав скріншот вузького екрана, жоден гейт цього не бачить. */}
               <span style={{ fontWeight: 560, fontSize: 12.5, minWidth: 0 }}>
-                <span style={clip}><span style={{ color: MUTED, fontSize: 10 }}>{open ? "▾" : "▸"}</span> {m.name}</span>
+                <span style={clip}><span style={{ color: MUTED, fontSize: 10 }}>{open ? "▾" : "▸"}</span> {m.name}<VacationMark managerId={m.managerId} /></span>
                 <MgrFactLine cs={m.createdSplit} />
               </span>
               <span style={{ textAlign: "right", color: MUTED }}>{fmtMoney(m.plan)}<RemainingLine v={m.remainingToPlan} /></span>
               <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}><span style={{ width: 40, height: 6, background: "var(--bg)", borderRadius: 4, overflow: "hidden" }}><span style={{ display: "block", height: "100%", width: `${Math.min(100, m.pct ?? 0)}%`, background: zero ? "var(--border)" : pctColr, borderRadius: 4 }} /></span><b>{fmtMoney(m.revenue)}</b></span>
               <span style={{ textAlign: "right", fontWeight: 700, color: pctColr }}>{m.plan > 0 ? `${m.pct ?? 0}%` : "—"}</span>
               <span style={{ textAlign: "right", color: m.expectedThisMonth > 0 ? AMBER : MUTED }} title={`За плановою датою оплати — цей міс: ${fmtMoney(m.expectedThisMonth)} · наступний: ${fmtMoney(m.expectedNextMonth)} · з МИНУЛИХ місяців: ${fmtMoney(m.expectedPastMonths)}`}>{m.expectedThisMonth > 0 ? fmtMoney(m.expectedThisMonth) : "—"}</span>
+              <MgrWithExp on={rep.weekBlocks.length > 0} plan={m.plan} fact={m.revenue} expected={m.expectedThisMonth} />
               <span style={{ textAlign: "right", color: MUTED }}>{team.kind === "rnk" && m.conversion != null ? `${m.conversion}%` : "—"}</span>
               <Sparkline weeks={m.weeks} blocks={rep.weekBlocks} />
             </div>
@@ -885,20 +898,25 @@ type WeekLike = { plan: number; fact: number; expected: number; auto: number; au
 // Фіксована ширина КОЖНОЇ тижневої колонки (команди, відділ, менеджери) — одна вертикальна
 // сітка. table-layout:fixed + <colgroup> кріплять ці ширини, contain обрізає переповнення.
 const WK_W = 94;
-const wkTd = (bg?: string, clickable?: boolean): CSSProperties => ({
-  width: WK_W, maxWidth: WK_W, boxSizing: "border-box", padding: "3px 7px", textAlign: "right",
+/** Поточний тиждень ширший: у ньому ще «з очік.» і мітка «Закриємо?» (задача 6442). */
+const WK_W_CUR = 124;
+const wkW = (isCurrent: boolean | undefined) => (isCurrent ? WK_W_CUR : WK_W);
+const wkTd = (bg?: string, clickable?: boolean, width: number = WK_W): CSSProperties => ({
+  width, maxWidth: width, boxSizing: "border-box", padding: "3px 7px", textAlign: "right",
   background: bg, cursor: clickable ? "pointer" : undefined, overflow: "hidden", verticalAlign: "middle",
 });
 const clip: CSSProperties = { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
-// Компактна клітинка тижня — max 3 рядки: «факт /план» · бар(колір+темп) · «% ✓/✗ ↑↓».
-// Очікування ЛИШЕ на майбутніх тижнях (минуле/поточне не дублює колонку «Очікуємо»).
+// Компактна клітинка тижня — 3 рядки: «факт /план» · бар(колір+темп) · «% ✓/✗ ↑↓».
+// Очікування — на майбутніх тижнях і на ПОТОЧНОМУ (задача 6442, Юля 21.10.2026: «у поточному тижні показати так само
+// факт + очікування»): ще рядок «з очік. сума · % плану тижня» і мітка «Закриємо?». Минулі тижні — лише факт.
 // mode 'activity' → авто·ліди. onClick (лише командні) → менеджери цього тижня.
 function WeekCell({ w, prev, mode, onClick, active }: { w: WeekLike | undefined; prev?: WeekLike; mode: "money" | "activity"; onClick?: () => void; active?: boolean }) {
   const bg = active ? "rgba(197,20,28,0.12)" : w?.isCurrent ? "rgba(37,99,235,0.07)" : undefined;
   const handle = onClick ? (e: { stopPropagation: () => void }) => { e.stopPropagation(); onClick(); } : undefined;
   if (!w) return <td style={{ ...wkTd(bg), textAlign: "center", color: MUTED, fontSize: 11 }}>—</td>;
+  const width = wkW(w.isCurrent);
   if (mode === "activity") return (
-    <td onClick={handle} style={{ ...wkTd(bg, !!onClick), fontSize: 11 }}>
+    <td onClick={handle} style={{ ...wkTd(bg, !!onClick, width), fontSize: 11 }}>
       {w.isFuture ? <span style={{ color: MUTED }}>—</span> : <>
         <div style={{ ...clip, fontWeight: 700 }}>{w.auto}<span style={{ fontWeight: 400, color: MUTED, fontSize: 10 }}> авто{w.autoRevenue ? ` · ${fmtMoney(w.autoRevenue)}` : ""}</span></div>
         <div style={{ ...clip, color: MUTED, fontSize: 10 }}>{w.leadsAd}р · {w.leadsLeadgen}лг</div>
@@ -906,21 +924,77 @@ function WeekCell({ w, prev, mode, onClick, active }: { w: WeekLike | undefined;
     </td>
   );
   if (w.isFuture) return (
-    <td onClick={handle} style={{ ...wkTd(bg, !!onClick), fontSize: 10, color: MUTED }}>
+    <td onClick={handle} style={{ ...wkTd(bg, !!onClick, width), fontSize: 10, color: MUTED }}>
       <div style={clip}>план {fmtMoney(w.plan)}</div>
       {w.expected > 0 && <div style={{ ...clip, color: AMBER }}>очік {fmtMoney(w.expected)}</div>}
     </td>
   );
   const p = wkPct(w.fact, w.plan), pp = prev ? wkPct(prev.fact, prev.plan) : null, col = barColor(p);
   const trend = p != null && pp != null ? (p > pp ? "↑" : p < pp ? "↓" : "") : "";
+  const exp = w.isCurrent ? withExpected(w.plan, w.fact, w.expected) : null;
   return (
-    <td onClick={handle} style={{ ...wkTd(bg, !!onClick), fontSize: 11 }}>
+    <td onClick={handle} style={{ ...wkTd(bg, !!onClick, width), fontSize: 11 }}>
       <div style={{ ...clip, lineHeight: 1.25 }}><b>{fmtMoney(w.fact)}</b><span style={{ color: MUTED, fontSize: 10 }}> /{fmtMoney(w.plan)}</span></div>
       <div style={{ position: "relative", height: 5, background: "var(--border)", borderRadius: 3, margin: "2px 0" }}>
         <div style={{ width: `${Math.min(100, p ?? 0)}%`, height: "100%", background: col, borderRadius: 3 }} />
         {w.isCurrent && w.pace != null && <span title="темп: де мали б бути на сьогодні" style={{ position: "absolute", left: `${Math.min(100, Math.max(0, w.pace * 100))}%`, top: -1, bottom: -1, width: 1.5, background: "var(--text)", opacity: 0.65 }} />}
       </div>
       <div style={{ ...clip, color: col, fontWeight: 600, fontSize: 10, lineHeight: 1.1 }}>{p == null ? "—" : `${p >= 100 ? "✓" : "✗"} ${p}%`}{trend && <span style={{ color: trend === "↑" ? GREEN : RED, marginLeft: 3 }}>{trend}</span>}</div>
+      {exp && <>
+        <div style={{ ...clip, fontSize: 10, color: AMBER, marginTop: 2 }} title="факт + оплати з плановою датою в цьому тижні; % — від плану тижня">з очік. <b>{fmtMoney(exp.sum)}</b> · {fmtPct(exp.pct)}</div>
+        <CloseChip plan={w.plan} fact={w.fact} expected={w.expected} />
+      </>}
+    </td>
+  );
+}
+
+/** «Закриємо?» поточного тижня — те саме правило й ті самі пороги, що були у верхньому блоці (`weekCloseStatus`). */
+const CLOSE_TONE: Record<CloseKind, { bg: string; fg: string }> = {
+  closed: { bg: "rgba(22,163,74,.12)", fg: "#15803d" },
+  real: { bg: "rgba(22,163,74,.12)", fg: "#15803d" },
+  risk: { bg: "rgba(217,119,6,.14)", fg: "#b45309" },
+  no: { bg: "rgba(220,38,38,.12)", fg: "#dc2626" },
+  none: { bg: "transparent", fg: MUTED },
+};
+function CloseChip({ plan, fact, expected }: { plan: number; fact: number; expected: number }) {
+  const s = weekCloseStatus(plan, fact, expected);
+  if (s.kind === "none") return null;
+  return (
+    <div style={{ ...clip, marginTop: 2 }} title={closeNote(s, fmtMoney) ?? CLOSE_LABEL[s.kind]}>
+      <span style={{ fontSize: 9.5, fontWeight: 600, padding: "0 5px", borderRadius: 8, background: CLOSE_TONE[s.kind].bg, color: CLOSE_TONE[s.kind].fg }}>{CLOSE_LABEL[s.kind]}</span>
+    </div>
+  );
+}
+function CloseLegend() {
+  return (
+    <div style={{ fontSize: 12, color: MUTED, marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+      <span>Закриємо поточний тиждень?</span>
+      {(["closed", "real", "risk", "no"] as const).map((k) => (
+        <span key={k} style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+          <span style={{ fontSize: 11, fontWeight: 600, padding: "0 6px", borderRadius: 10, background: CLOSE_TONE[k].bg, color: CLOSE_TONE[k].fg }}>{CLOSE_LABEL[k]}</span>
+          {k === "closed" ? "факт уже не менший за план тижня" : k === "real" ? "вистачить до половини очікуваних оплат" : k === "risk" ? "має прийти 50–85% очікуваного" : "треба понад 85% або навіть усього очікуваного не вистачає"}
+          {k !== "no" && " ·"}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** Те саме «Факт + очік.» у рядку менеджера (сітка, не таблиця). */
+function MgrWithExp({ on, plan, fact, expected }: { on: boolean; plan: number; fact: number; expected: number }) {
+  if (!on) return <span style={{ textAlign: "right", color: MUTED }}>—</span>;
+  const x = withExpected(plan, fact, expected);
+  return <span style={{ textAlign: "right", lineHeight: 1.2 }}><b>{fmtMoney(x.sum)}</b><span style={{ display: "block", fontSize: 10, fontWeight: 600, color: pctColor(x.pct) }}>{fmtPct(x.pct)}</span></span>;
+}
+
+/** «Факт + очік.» місяця: сума й % плану; поза одним календарним місяцем — «—» (очікування рахується «цього місяця»). */
+function WithExpCell({ on, plan, fact, expected, bold }: { on: boolean; plan: number; fact: number; expected: number; bold?: boolean }) {
+  if (!on) return <td style={{ textAlign: "right", color: MUTED }} title="лише для одного календарного місяця">—</td>;
+  const x = withExpected(plan, fact, expected);
+  return (
+    <td style={{ textAlign: "right", fontWeight: bold ? 700 : 600 }} title={`${fmtMoney(fact)} отримано + ${fmtMoney(expected)} з плановою датою цього місяця`}>
+      {fmtMoney(x.sum)}
+      <div style={{ fontSize: 10.5, fontWeight: 600, color: pctColor(x.pct) }}>{fmtPct(x.pct)}</div>
     </td>
   );
 }
@@ -941,7 +1015,7 @@ function WeekManagerDrill({ team, weekIdx, weekBlocks }: { team: KvpTeam; weekId
     return { m, plan: w?.plan ?? 0, fact: w?.fact ?? 0, expected: w?.expected ?? 0, isFuture: w?.isFuture ?? false };
   });
   return (
-    <tr><td colSpan={6 + weekBlocks.length} style={{ padding: 0, background: "rgba(197,20,28,0.04)" }}>
+    <tr><td colSpan={7 + weekBlocks.length} style={{ padding: 0, background: "rgba(197,20,28,0.04)" }}>
       <div style={{ padding: "6px 12px", fontSize: 12, color: MUTED }}>📅 Т{weekIdx} ({from.slice(8)}–{to.slice(8)}) — менеджери цього тижня <span style={{ color: MUTED }}>(клік = дні тижня)</span></div>
       <table className="data-table" style={{ width: "100%", margin: 0, fontSize: 12 }}>
         <thead><tr><th style={{ paddingLeft: 28 }}>Менеджер</th><th style={{ textAlign: "right" }}>План тижня</th><th style={{ textAlign: "right" }}>Факт тижня</th><th style={{ minWidth: 70 }}>%</th></tr></thead>
