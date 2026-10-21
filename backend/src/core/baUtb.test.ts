@@ -96,20 +96,17 @@ test("#1860b ДОСТУП УТБ: веде власник поіменно, ба
   assert.deepEqual(utbOwnerIds("сміття"), ["52"], "🔴 зіпсоване ENV лишило реєстр без власника");
 
   const src = SRC("routes/businessAssistant.ts");
-  // Кожен обробник `/utb*` — окремо: від його `baRouter.<метод>("/utb…"` до наступного `baRouter.`.
+  // Кожен обробник `/utb*` — окремо: першим межа розділу (`#772b`), ДРУГИМ — межа реєстру з потрібним вироком.
   const seen: string[] = [];
   for (const m of src.matchAll(/baRouter\.(get|post|patch)\("(\/utb[^"]*)", /g)) {
     const key = `${m[1].toUpperCase()} ${m[2]}`;
     const tail = src.slice(m.index! + m[0].length, src.indexOf("baRouter.", m.index! + 1));
     const need = m[1] === "get" ? "view" : "edit";
-    const viaFiles = /^(uploadHandler|downloadHandler)\("utb", \(req\) => utbGate\(req, "(view|edit)"\)\)\);/.exec(tail);
-    if (viaFiles) assert.equal(viaFiles[2], need, `🔴 ${key}: файли під вироком «${viaFiles[2]}», а треба «${need}»`);
-    else assert.match(tail, new RegExp(`^async \\(req, res\\) => \\{\\s*try \\{\\s*utbGate\\(req, "${need}"\\);`), `🔴 ${key}: першим оператором не utbGate(req, "${need}")`);
+    assert.match(tail, new RegExp(`^async \\(req, res\\) => \\{\\s*try \\{\\s*onlyBa\\(req\\); utbGate\\(req, "${need}"\\);`), `🔴 ${key}: не «onlyBa → utbGate(req, "${need}")» на початку`);
     seen.push(key);
   }
   assert.deepEqual(seen.sort(), ["GET /utb", "GET /utb/:id", "GET /utb/:id/files/:fileId", "GET /utb/export.xlsx", "GET /utb/managers",
     "PATCH /utb/:id", "POST /utb", "POST /utb/:id/files"].sort(), "🔴 роут реєстру без межі або гейт його не бачить");
-  assert.match(src, /function utbGate\(req: Request, need: UtbAccess\): UtbAccess \{\s*onlyBa\(req\);/, "🔴 межа реєстру не починається з межі розділу");
 });
 
 /** Фікстура: схема з нуля, власник реєстру й три менеджери. */

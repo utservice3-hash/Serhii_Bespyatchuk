@@ -45,10 +45,10 @@ function onlyBa(req: Request): void {
 }
 /**
  * 🚛 Реєстр Укртрансбезпеки (задача 6269) — ВУЖЧЕ за розділ: веде власник реєстру поіменно, бачать адміни й операційний
- * директор (Роман 21.10.2026), решті з вкладкою `ba` (СЕО, КВП, бізнес-асистент) — 403. Спершу межа розділу, потім своя.
+ * директор (Роман 21.10.2026), решті з вкладкою `ba` (СЕО, КВП, бізнес-асистент) — 403. Кличеться ДРУГИМ, після `onlyBa`
+ * (першим у кожному обробнику лишається межа розділу — `#772b`).
  */
 function utbGate(req: Request, need: UtbAccess): UtbAccess {
-  onlyBa(req);
   const a = utbAccessOf(req.auth!.userId, req.auth!.roleKey, utbOwnerIds());
   if (!a) throw new BaError(403, "Реєстр Укртрансбезпеки недоступний для вашої ролі");
   if (need === "edit" && a !== "edit") throw new BaError(403, "Реєстр Укртрансбезпеки веде лише його власник — у вас перегляд");
@@ -170,10 +170,10 @@ baRouter.post("/cases/:id/archive", async (req, res) => {
  * розмір — до 10 МБ. Байти пишуться ДО рядка в базі; не вставився рядок — файл прибирається.
  * Файли не видаляються: документ справи — доказ, а помилково доданий лишається в історії.
  */
-function uploadHandler(kind: FileOwner, guard: (req: Request) => unknown = onlyBa) {
+function uploadHandler(kind: FileOwner) {
   return async (req: Request, res: Response) => {
     try {
-      guard(req);
+      onlyBa(req);
       const ownerId = idOf(req);
       const { filename, dataBase64, docType } = req.body ?? {};
       if (typeof dataBase64 !== "string" || !dataBase64) throw new BaError(400, "Файл відсутній");
@@ -194,10 +194,10 @@ function uploadHandler(kind: FileOwner, guard: (req: Request) => unknown = onlyB
     } catch (e) { fail(res, e); }
   };
 }
-function downloadHandler(kind: FileOwner, guard: (req: Request) => unknown = onlyBa) {
+function downloadHandler(kind: FileOwner) {
   return async (req: Request, res: Response) => {
     try {
-      guard(req);
+      onlyBa(req);
       const f = await fileForDownload(pool as unknown as Db, kind, idOf(req), idOf(req, "fileId"));
       res.type(f.mime);
       res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(f.name)}`);
@@ -233,14 +233,14 @@ function utbFilterOf(req: Request): UtbFilter {
     from: date("from", "Період «з»"), to: date("to", "Період «по»") };
 }
 baRouter.get("/utb", async (req, res) => {
-  try { utbGate(req, "view"); res.json({ rows: await listUtb(pool as unknown as Db, utbFilterOf(req)) }); } catch (e) { fail(res, e); }
+  try { onlyBa(req); utbGate(req, "view"); res.json({ rows: await listUtb(pool as unknown as Db, utbFilterOf(req)) }); } catch (e) { fail(res, e); }
 });
 baRouter.get("/utb/managers", async (req, res) => {
-  try { utbGate(req, "view"); res.json({ managers: await utbManagers(pool as unknown as Db) }); } catch (e) { fail(res, e); }
+  try { onlyBa(req); utbGate(req, "view"); res.json({ managers: await utbManagers(pool as unknown as Db) }); } catch (e) { fail(res, e); }
 });
 baRouter.get("/utb/export.xlsx", async (req, res) => {
   try {
-    utbGate(req, "view");
+    onlyBa(req); utbGate(req, "view");
     const rows = await listUtb(pool as unknown as Db, utbFilterOf(req));
     const buf = buildXlsx([{ name: "Реєстр УТБ", rows: utbExportRows(rows) }]);
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -249,25 +249,31 @@ baRouter.get("/utb/export.xlsx", async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 baRouter.get("/utb/:id", async (req, res) => {
-  try { utbGate(req, "view"); res.json(await utbCard(pool as unknown as Db, idOf(req))); } catch (e) { fail(res, e); }
+  try { onlyBa(req); utbGate(req, "view"); res.json(await utbCard(pool as unknown as Db, idOf(req))); } catch (e) { fail(res, e); }
 });
 baRouter.post("/utb", async (req, res) => {
   try {
-    utbGate(req, "edit");
+    onlyBa(req); utbGate(req, "edit");
     const id = await tx((db) => createUtb(db, req.auth!.userId, req.body));
     res.status(201).json({ id });
   } catch (e) { fail(res, e); }
 });
 baRouter.patch("/utb/:id", async (req, res) => {
   try {
-    utbGate(req, "edit");
+    onlyBa(req); utbGate(req, "edit");
     const id = idOf(req);
     await tx((db) => updateUtb(db, req.auth!.userId, id, req.body));
     res.json({ ok: true });
   } catch (e) { fail(res, e); }
 });
-baRouter.post("/utb/:id/files", uploadHandler("utb", (req) => utbGate(req, "edit")));
-baRouter.get("/utb/:id/files/:fileId", downloadHandler("utb", (req) => utbGate(req, "view")));
+// Файли — ті самі фабрики розділу, але ПІСЛЯ межі реєстру: перегляд не додає, сторонній не бачить.
+const utbUpload = uploadHandler("utb"), utbDownload = downloadHandler("utb");
+baRouter.post("/utb/:id/files", async (req, res) => {
+  try { onlyBa(req); utbGate(req, "edit"); await utbUpload(req, res); } catch (e) { fail(res, e); }
+});
+baRouter.get("/utb/:id/files/:fileId", async (req, res) => {
+  try { onlyBa(req); utbGate(req, "view"); await utbDownload(req, res); } catch (e) { fail(res, e); }
+});
 
 // ── Облік техніки (прохід 2, 29.09.2026) ─────────────────────────────────────
 /** Кому видати: лише id, ПІБ і стан із реєстру — телефонів, дат народження тощо розділ не отримує (#984). */
