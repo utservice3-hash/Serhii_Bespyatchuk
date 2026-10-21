@@ -1654,6 +1654,7 @@ export function TasksSection({
             kpi={kpiCount > 0 ? { count: kpiCount, node: renderTable(kpiSrc) } : null}
             today={kyivDate(new Date())}
             showAssignee={rows.some((t) => !isMine(t))}
+            isMine={isMine}
             meId={currentUserId}
             onOpen={setOpenTaskId}
             onOpenFeed={openFeed}
@@ -1668,6 +1669,11 @@ export function TasksSection({
                 head: "Задачу закрито", key: `done-${t.id}`, event: true,
                 action: { label: "Скасувати", run: () => { patchTaskLocal(t.id, { status: prev, doneAt: null }); commitTask(t.id, { status: prev }); } },
               });
+            }}
+            onStatus={(t, status) => {
+              // Той самий шлях, що в селекторі статусу старої таблиці.
+              patchTaskLocal(t.id, { status });
+              commitTask(t.id, { status });
             }}
             onReopen={(t) => {
               // ↩ Повернути закриту задачу в роботу одним кліком — з групи «Виконано».

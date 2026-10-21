@@ -170,7 +170,8 @@ test("#1806 ВІДПУСТКА: значок з одного джерела — 
   assert.deepEqual(touching, ["api.ts"], "до джерела відпусток звертається не лише api.ts");
   const callers = [...src].filter(([f, s]) => f !== "api.ts" && /fetchOnVacation\s*\(/.test(s)).map(([f]) => f);
   assert.deepEqual(callers, ["pages/dashboard/VacationMark.tsx"], "відпустки тягне ще хтось, окрім VacationMark");
-  for (const f of ["ReportPlanSection", "ReportTableSection", "KvpTeamsWeekMonth", "MissedCallsTzBlocks"]) {
+  // Звіт КВП: з 21.10.2026 (задача 6442) значок — у рядку менеджера таблиці команд, верхнього блоку більше немає.
+  for (const f of ["ReportPlanSection", "ReportTableSection", "KvpReportSection", "MissedCallsTzBlocks"]) {
     assert.match(src.get(`pages/dashboard/sections/${f}.tsx`) ?? "", /<VacationMark\s+managerId=/, `${f}: значка «у відпустці» немає`);
   }
 });
