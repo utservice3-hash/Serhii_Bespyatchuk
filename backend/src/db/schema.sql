@@ -6138,3 +6138,43 @@ UPDATE roles SET screen_access = screen_access || '{"registries":true}'::jsonb
   WHERE key IN ('manager', 'team_lead', 'admin', 'ceo', 'opdir', 'kvp', 'financier', '____________') AND NOT (screen_access ? 'registries');
 UPDATE roles SET screen_access = screen_access || '{"registries":false}'::jsonb
   WHERE key NOT IN ('manager', 'team_lead', 'admin', 'ceo', 'opdir', 'kvp', 'financier', '____________') AND NOT (screen_access ? 'registries');
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🧾 «UTS Утверждение оплат» → «План/факт» і операційні (задача Тетяни #5607, 21.10.2026; рішення Тетяни: «можеш
+-- змінювати на те, щоб тягнулось автоматично — лиш з жовтня»).
+--  · `fin_approvals` — ДЗЕРКАЛО вкладки «На оплату» (рядок таблиці = рядок тут; синк `syncApprovals` замінює вміст
+--    цілком і лише після перевірок: шапка на місці, не порожньо, не зникло понад 10%). Реквізитів і отримувача НЕМАЄ —
+--    лише дата внесення, дата оплати, що купили (номери в тексті замасковано), категорія, сума, напрямок, «оплачено».
+--  · `fin_approvals_state` — коли прочитано востаннє, скільки рядків, остання відмова (одним рядком).
+--  · разовий крок: операційні («Комерційні / Адміністративні / Загальні») знову авто — тепер із таблиці оплат, і місяць,
+--    і тиждень; ручне «поверх» за жовтень і тижні з 05.10 знято (числа лишаються в базі). ⚠️ Revert коду не відкочує
+--    цих змін: повернути — `kind = 'manual'` трьом рядкам `opex_*`.
+CREATE TABLE IF NOT EXISTS fin_approvals (
+  row_no      INTEGER PRIMARY KEY,
+  entry_date  DATE,
+  pay_date    DATE,
+  pay_raw     TEXT NOT NULL DEFAULT '',
+  what        TEXT NOT NULL DEFAULT '',
+  category    TEXT NOT NULL DEFAULT '',
+  amount      NUMERIC(16,2),
+  direction   TEXT NOT NULL DEFAULT '',
+  paid        BOOLEAN NOT NULL DEFAULT false
+);
+CREATE INDEX IF NOT EXISTS idx_fin_approvals_pay ON fin_approvals (pay_date);
+CREATE TABLE IF NOT EXISTS fin_approvals_state (
+  id          INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  synced_at   TIMESTAMPTZ,
+  rows        INTEGER,
+  error       TEXT,
+  error_at    TIMESTAMPTZ
+);
+REVOKE ALL ON fin_approvals FROM ai_readonly;
+REVOKE ALL ON fin_approvals_state FROM ai_readonly;
+WITH step AS (INSERT INTO fin_kpi_imports (key, detail) VALUES ('opex-approvals-auto-2026-10-21', '{}'::jsonb) ON CONFLICT DO NOTHING RETURNING key),
+ov AS (UPDATE fin_kpi_values v SET manual_override = false FROM fin_kpis k
+        WHERE k.id = v.kpi_id AND k.ref_source LIKE 'opex_%' AND v.manual_override AND EXISTS (SELECT 1 FROM step)
+          AND ((v.period_kind = 'month' AND v.period_start >= DATE '2026-10-01') OR (v.period_kind = 'week' AND v.period_start >= DATE '2026-10-05'))
+       RETURNING v.kpi_id)
+UPDATE fin_kpis SET kind = 'auto'
+ WHERE ref_source IN ('opex_commercial', 'opex_admin', 'opex_general') AND kind = 'manual' AND deleted_at IS NULL
+   AND EXISTS (SELECT 1 FROM step) AND (SELECT count(*) FROM ov) >= 0;

@@ -5721,6 +5721,8 @@ export const FIN_SECTIONS: Record<FinSection, string> = { commercial: "Коме�
 export interface FinItem {
   id: number; name: string; section: FinSection | null; offFrom: string | null; active: boolean;
   plan: number | null; fact: number | null; note: string | null; state: FinRowState; dataMonths: number;
+  /** Рядків таблиці оплат у факті — лише коли факт місяця з таблиці. */
+  factRows?: number;
 }
 export interface FinGroup { id: number; name: string; items: FinItem[] }
 export interface FinResp { id: number; name: string; groups: FinGroup[] }
@@ -5731,11 +5733,17 @@ export interface FinMonth {
   approval: { at: string; by: string | null; note: string | null } | null;
   imported: { source: string; filePlan: number | null; fileFact: number | null; rowsPlan: number; rowsFact: number } | null;
   canEdit: boolean; canApprove: boolean;
+  /** З жовтня 2026 факт — із таблиці «UTS Утверждение оплат» (задача #5607, 21.10.2026); руками не вноситься. */
+  factSource?: "approvals" | "manual";
+  approvals?: { syncedAt: string | null; error: string | null; errorAt: string | null; outside: FinApprOutside } | null;
 }
+export interface FinApprOutside { payroll: FinApprPot[]; statsOnly: FinApprPot[]; ambiguous: FinApprPot[]; unrecognized: FinApprPot[]; notUa: FinApprPot[]; badSum: FinApprPot[]; badPayDate: FinApprPot[]; noPayDate: FinApprPot[] }
 export interface FinItemCard {
   id: number; name: string; offFrom: string | null; deleted: boolean;
   group: { id: number; name: string }; resp: { id: number; name: string };
-  months: { month: string; plan: number | null; fact: number | null; note: string | null; active: boolean }[];
+  months: { month: string; plan: number | null; fact: number | null; factAuto?: boolean; note: string | null; active: boolean }[];
+  /** Оплати з таблиці, з яких складено факт обраного місяця (null — факт місяця ручний). */
+  payments?: FinApprLine[] | null;
   log: { at: string; month: string | null; field: "plan" | "fact" | "note" | null; old: number | null; new: number | null; what: string; actor: string | null }[];
 }
 export type FinKind = "resp" | "group" | "item";
@@ -5773,18 +5781,20 @@ export interface FinApprItem { id: number; respId: number; groupId: number; resp
 export interface FinApprCompare {
   month: string; fetchedAt: string; sheetLines: number; items: FinApprItem[];
   sections: { section: FinApprSection; manualArticles: number; autoArticles: number; autoPayroll: number; autoTotal: number; manualOpex: number | null }[];
-  payroll: FinApprPot[]; ambiguous: FinApprPot[]; unrecognized: FinApprPot[]; notUa: FinApprPot[]; badSum: FinApprPot[]; badPayDate: FinApprPot[]; noPayDate: FinApprPot[];
+  payroll: FinApprPot[]; statsOnly: FinApprPot[]; ambiguous: FinApprPot[]; unrecognized: FinApprPot[]; notUa: FinApprPot[]; badSum: FinApprPot[]; badPayDate: FinApprPot[]; noPayDate: FinApprPot[];
+  syncedAt?: string | null; syncError?: string | null;
   withoutSection: { manual: number; auto: number; names: string[] };
   totals: { plan: number; manual: number; autoArticles: number; autoPayroll: number; outside: number; diffItems: number };
 }
-export const fetchFinApprovalsTest = async (month: string, refresh = false) =>
-  (await api.get<FinApprCompare>("/finance/approvals-test", { params: refresh ? { month, refresh: "1" } : { month } })).data;
+export const fetchFinApprovalsTest = async (month: string) => (await api.get<FinApprCompare>("/finance/approvals-test", { params: { month } })).data;
 export async function downloadCarrierPaymentsXlsx(day: string): Promise<{ blob: Blob; filename: string }> {
   const res = await api.get("/finance/payments/export.xlsx", { params: { day }, responseType: "blob" });
   const m = /filename="([^"]+)"/.exec((res.headers as Record<string, string | undefined>)["content-disposition"] ?? "");
   return { blob: res.data as Blob, filename: m?.[1] ?? `oplata_perevizny_${day}.xlsx` };
 }
-export const fetchFinItem = async (id: number, year: number) => (await api.get<FinItemCard>(`/finance/items/${id}`, { params: { year } })).data;
+export const fetchFinItem = async (id: number, year: number, month?: string) => (await api.get<FinItemCard>(`/finance/items/${id}`, { params: month ? { year, m: month.slice(0, 7) } : { year } })).data;
+/** «Оновити з таблиці»: синк «UTS Утверждение оплат» зараз (21.10.2026). */
+export const syncFinApprovals = async () => (await api.post<{ ok: boolean; rows?: number }>("/finance/approvals/sync")).data;
 export const createFin = async (kind: FinKind, body: Record<string, unknown>) =>
   (await api.post<{ id: number }>(`/finance/${kind}s`, body)).data.id;
 export const updateFin = async (kind: FinKind, id: number, body: Record<string, unknown>) => { await api.patch(`/finance/${kind}s/${id}`, body); };

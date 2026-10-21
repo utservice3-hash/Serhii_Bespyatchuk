@@ -21,6 +21,8 @@ export const MONITORED_JOBS: { name: string; everyMin: number; why: string }[] =
   { name: "syncBank", everyMin: 15, why: "виписка → екран «Виписка», зіставлення платежів з рахунками" },
   // 🗄 Сейф із Google-таблиці (12.10.2026). everyMin == крону «25,55 * * * *» в index.ts: тривога на 2× = 1 год мовчання.
   { name: "syncSafe", everyMin: 30, why: "Сейф ← Google-таблиця: мовчання = залишок Сейфу й «Витрати / Надходження загальні» без свіжих рухів" },
+  // 🧾 «UTS Утверждение оплат» (21.10.2026). everyMin == крону «20,50 * * * *»: мовчання = факт «План/факт» і операційні застигли.
+  { name: "syncApprovals", everyMin: 30, why: "таблиця оплат → факт «План/факт» і операційні «Тиждень і місяць»: мовчання = цифри застигли" },
   { name: "buildPaymentFile", everyMin: 60, why: "файл на оплату перевізникам (готівка) до 17:00" },
   { name: "syncDealActivity", everyMin: 180, why: "живить «застряглі угоди»" },
   { name: "recomputeStatistics", everyMin: 60, why: "розділ «Статистики (відділи)»" },

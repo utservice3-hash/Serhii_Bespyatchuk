@@ -1605,6 +1605,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "PUT", path: "/api/finance/kpi/plan", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  // 🧾 «Оновити з таблиці» оплат (21.10.2026): deny-only — проба дозволеної ролі запустила б синк на проді.
+  { method: "POST", path: "/api/finance/approvals/sync", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "PUT", path: "/api/finance/kpi/notes", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/finance/kpi/close", cls: "deny-only",

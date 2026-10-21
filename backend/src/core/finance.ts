@@ -14,7 +14,11 @@
  *     кнопкою; стаття з цифрами без підтвердження не видаляється (409).
  *  3. **Зберігається все або нічого** (#931): одна клітинка «не число» — жодна не записана.
  *  4. **Кожна зміна — в історії тим самим викликом**: хто, коли, було → стало.
+ *  5. **Факт із жовтня 2026 — з таблиці «UTS Утверждение оплат»** (задача Тетяни #5607, 21.10.2026): категорія = стаття,
+ *     за датою оплати (`core/paymentApprovals`); руками не вноситься, ручні числа лишаються в базі. План — як і був.
+ *     Поки таблицю не синхронізовано ЖОДНОГО разу, факт лишається ручним: нуль без синку — не нуль, а «не знаємо».
  */
+import { factIsAuto, autoFactMonth, approvalsState, type OutsidePots, type ShownLine } from "./paymentApprovals.js";
 
 export interface Db {
   query<R = any>(sql: string, params?: unknown[]): Promise<{ rows: R[]; rowCount?: number | null }>;
@@ -153,6 +157,8 @@ const sectionName = (v: string | null) => (v ? ITEM_SECTIONS[v as ItemSection] :
 export interface FinItemRow {
   id: number; name: string; section: ItemSection | null; offFrom: string | null; active: boolean;
   plan: number | null; fact: number | null; note: string | null; state: RowState; dataMonths: number;
+  /** Рядків таблиці оплат у факті (лише коли факт — з таблиці). */
+  factRows?: number;
 }
 export interface FinGroupRow { id: number; name: string; items: FinItemRow[] }
 export interface FinRespRow { id: number; name: string; groups: FinGroupRow[] }
@@ -174,6 +180,9 @@ export async function loadMonth(db: Db, monthArg: unknown, now: Date = new Date(
       LEFT JOIN fin_values v ON v.item_id = i.id AND v.month = $1::date
      WHERE r.deleted_at IS NULL
      ORDER BY r.sort, r.id, g.sort, g.id, i.sort, i.id`, [month]);
+  // З жовтня 2026 факт — із таблиці оплат (якщо її хоч раз прочитано); рядки без жодної оплати — «не внесено» (null), а не нуль.
+  const autoRaw = factIsAuto(month) ? await autoFactMonth(db, month) : null;
+  const auto = autoRaw?.state.syncedAt ? autoRaw : null;
   const tree: FinRespRow[] = [];
   const all: FinItemRow[] = [];
   for (const x of r.rows) {
@@ -183,9 +192,10 @@ export async function loadMonth(db: Db, monthArg: unknown, now: Date = new Date(
     let grp = resp.groups[resp.groups.length - 1];
     if (!grp || grp.id !== x.group_id) { grp = { id: x.group_id, name: x.group_name, items: [] }; resp.groups.push(grp); }
     if (x.item_id == null) continue;
-    const plan = num(x.plan), fact = num(x.fact);
+    const pot = auto?.byItem.get(x.item_id);
+    const plan = num(x.plan), fact = auto ? (pot ? pot.sum : null) : num(x.fact);
     const it: FinItemRow = { id: x.item_id, name: x.item_name, section: x.section ?? null, offFrom: x.off_from, active: isActiveIn(x.off_from, month),
-      plan, fact, note: x.note ?? null, state: rowState(plan, fact), dataMonths: x.data_months };
+      plan, fact, note: x.note ?? null, state: rowState(plan, fact), dataMonths: x.data_months, ...(auto ? { factRows: pot?.rows ?? 0 } : {}) };
     grp.items.push(it); all.push(it);
   }
   const ap = await db.query(`
@@ -200,11 +210,13 @@ export async function loadMonth(db: Db, monthArg: unknown, now: Date = new Date(
     // Погоджено = план замкнений (06.10.2026): «змін після погодження» більше не буває, тож і лічильника немає.
     approval: a ? { at: a.at, by: a.actor ?? null, note: a.note ?? null } : null,
     imported: i ? { source: i.source, filePlan: num(i.file_plan), fileFact: num(i.file_fact), rowsPlan: num(i.rows_plan), rowsFact: num(i.rows_fact) } : null,
+    factSource: auto ? "approvals" as const : "manual" as const,
+    approvals: auto ? { syncedAt: auto.state.syncedAt, error: auto.state.error, errorAt: auto.state.errorAt, outside: auto.outside } as { syncedAt: string | null; error: string | null; errorAt: string | null; outside: OutsidePots } : null,
   };
 }
 
 /** Картка статті: цифри за рік, історія змін. Видалена стаття теж відкривається (щоб її повернути). */
-export async function itemCard(db: Db, id: number, yearArg: unknown) {
+export async function itemCard(db: Db, id: number, yearArg: unknown, monthArg?: unknown, now: Date = new Date()) {
   const year = Number(yearArg);
   if (!Number.isInteger(year) || year < 2000 || year > 2100) throw new FinError(400, "Некоректний рік");
   const r = await db.query(`SELECT i.id, i.name, i.section, i.off_from::text AS off_from, i.deleted_at, g.id AS group_id, g.name AS group_name,
@@ -215,17 +227,26 @@ export async function itemCard(db: Db, id: number, yearArg: unknown) {
   const v = await db.query(`SELECT month::text AS month, plan::text AS plan, fact::text AS fact, note FROM fin_values
      WHERE item_id = $1 AND month >= make_date($2, 1, 1) AND month < make_date($2 + 1, 1, 1) ORDER BY month`, [id, year]);
   const byMonth = new Map(v.rows.map((x: any) => [x.month, x]));
+  // Факт місяців із жовтня 2026 (до поточного) — із таблиці оплат, як у дереві; рядки оплат — для обраного місяця.
+  const cur = kyivMonth(now), picked = typeof monthArg === "string" && /^\d{4}-\d{2}/.test(monthArg) ? `${monthArg.slice(0, 7)}-01` : null;
+  const autoPots = new Map<string, { sum: number; lines: ShownLine[] } | null>();
+  const synced = (await approvalsState(db)).syncedAt != null;
+  for (let k = 0; k < 12 && synced; k++) {
+    const m = `${year}-${String(k + 1).padStart(2, "0")}-01`;
+    if (factIsAuto(m) && m <= cur) { const p = (await autoFactMonth(db, m)).byItem.get(id); autoPots.set(m, p ? { sum: p.sum, lines: p.lines } : null); }
+  }
   const months = Array.from({ length: 12 }, (_, k) => {
     const m = `${year}-${String(k + 1).padStart(2, "0")}-01`;
     const x: any = byMonth.get(m);
-    return { month: m, plan: num(x?.plan), fact: num(x?.fact), note: x?.note ?? null, active: isActiveIn(it.off_from, m) };
+    const fact = autoPots.has(m) ? (autoPots.get(m)?.sum ?? null) : num(x?.fact);
+    return { month: m, plan: num(x?.plan), fact, factAuto: autoPots.has(m), note: x?.note ?? null, active: isActiveIn(it.off_from, m) };
   });
   const lg = await db.query(`SELECT l.at, l.month::text AS month, l.field, l.old_value::text AS old, l.new_value::text AS new, l.what, ${ACTOR} AS actor
       FROM fin_log l LEFT JOIN users u ON u.id = l.actor_id WHERE l.kind = 'item' AND l.target_id = $1 ORDER BY l.at DESC, l.id DESC LIMIT 50`, [id]);
   return {
     id: it.id, name: it.name, section: it.section ?? null, offFrom: it.off_from, deleted: it.deleted_at != null,
     group: { id: it.group_id, name: it.group_name }, resp: { id: it.resp_id, name: it.resp_name },
-    months,
+    months, payments: picked && autoPots.has(picked) ? autoPots.get(picked)?.lines ?? [] : null,
     log: lg.rows.map((l: any) => ({ at: l.at, month: l.month, field: l.field, old: num(l.old), new: num(l.new), what: l.what, actor: l.actor ?? null })),
   };
 }
@@ -458,6 +479,8 @@ export async function saveValues(db: Db, actor: number, monthArg: unknown, cells
   }
   if (bad.length) throw new FinError(400, `У клітинках (${bad.length}) не число — нічого не збережено`, { bad });
   if (parsed.some((c) => c.field === "fact") && month > kyivMonth(now)) throw new FinError(400, "Факт майбутнього місяця внести не можна");
+  if (parsed.some((c) => c.field === "fact") && factIsAuto(month) && (await approvalsState(db)).syncedAt)
+    throw new FinError(400, "Факт із жовтня 2026 береться з таблиці «UTS Утверждение оплат» — руками його не вносять. План і коментарі — як і раніше; нічого не збережено.");
   // 🔒 План погодженого місяця не змінює НІХТО (зустріч 05.10.2026). Перевірка тут — щоб відповісти словами й не
   // записати нічого; другий рубіж — тригер `fin_plan_lock` у БД, який тримає й скрипти, й імпорт.
   if (parsed.some((c) => c.field === "plan") && await isApproved(db, month))

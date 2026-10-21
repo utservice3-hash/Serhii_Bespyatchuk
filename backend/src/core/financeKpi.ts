@@ -21,9 +21,9 @@ export type RefSource = "delivered_income" | "delivered_expense" | "unloaded_inc
 export const REF_SOURCES: readonly RefSource[] = ["delivered_income", "delivered_expense", "unloaded_income", "unloaded_expense", "receivables",
   "opex_commercial", "opex_general", "opex_admin", "opex_payroll", "receivables_fx", "bank_in", "bank_out"];
 /**
- * Розділ статті «План/факт» → рядок «Операційних витрат» (прохід 2в, прохання Тетяни 05.10.2026). Факт у «План/факт»
- * лише ПОМІСЯЧНИЙ, тож із нього рахується тільки МІСЯЦЬ; тиждень лишається ручним. Розділ без жодної статті — теж
- * ручний (інакше «ЗП + Податки», для яких статей ще немає, не можна було б внести взагалі).
+ * Розділ статті «План/факт» → рядок «Операційних витрат» (прохід 2в, прохання Тетяни 05.10.2026). З 21.10.2026 джерело —
+ * таблиця «UTS Утверждение оплат» (`core/paymentApprovals.opexFromApprovals`): у неї є ДАТА ОПЛАТИ, тож рахуються і
+ * МІСЯЦЬ, і ТИЖДЕНЬ. Розділ без жодної статті (ЗП) — ручний, як і був.
  */
 export const OPEX_SECTIONS = ["commercial", "general", "admin", "payroll"] as const;
 export type OpexSection = (typeof OPEX_SECTIONS)[number];
@@ -100,12 +100,13 @@ export const kommoActive = (kind: PeriodKind, start: string) => start >= FM_KOMM
 /** Чи діє автоматика для рядка з цим джерелом у цьому періоді. */
 export const autoActiveFor = (ref: unknown, kind: PeriodKind, start: string) => (isKommoRef(ref) ? kommoActive(kind, start) : autoActive(kind, start));
 /**
- * Чи рахується авто-рядок сам у ЦЬОМУ періоді. До старту — ні (число з таблиці). Операційні витрати — лише місяць і
- * лише коли в розділі є статті (`refs` несе ключ розділу тільки тоді). Решта авто-рядків — завжди після старту.
+ * Чи рахується авто-рядок сам у ЦЬОМУ періоді. До старту — ні (число з таблиці). Операційні витрати — і тиждень, і
+ * місяць, але лише коли джерело дало ключ розділу (`refs` несе його тільки після синку таблиці оплат і лише для розділів
+ * зі статтями). Решта авто-рядків — завжди після старту.
  */
 export function isAutoIn(x: { kind: string; ref_source?: string | null }, kind: PeriodKind, start: string, refs: RefValues): boolean {
   if (x.kind !== "auto" || !autoActiveFor(x.ref_source, kind, start)) return false;
-  if (isOpexRef(x.ref_source)) return kind === "month" && (x.ref_source as string) in refs;
+  if (isOpexRef(x.ref_source)) return (x.ref_source as string) in refs;
   return true;
 }
 export const isActiveIn = (offFrom: string | null, start: string) => offFrom == null || start < offFrom;
@@ -300,7 +301,7 @@ export async function saveKpiValues(db: Db, actor: number, kindArg: unknown, dat
   for (const id of ids) {
     const x: any = kpis.get(id);
     if (!x || x.deleted_at) throw new FinError(404, "Показник не знайдено — нічого не збережено");
-    if (isAutoIn(x, kind, start, refs) && !isOpexRef(x.ref_source)) throw new FinError(400, `«${x.name}» рахується сам${isOpexRef(x.ref_source) ? " зі статей «План/факт»" : String(x.ref_source).startsWith("bank_") ? " з «Виписки»" : " за фільтрами Kommo"} — його не вносять`);
+    if (isAutoIn(x, kind, start, refs) && !isOpexRef(x.ref_source)) throw new FinError(400, `«${x.name}» рахується сам${String(x.ref_source).startsWith("bank_") ? " з «Виписки»" : " за фільтрами Kommo"} — його не вносять`);
     if (x.kind !== "manual" && x.kind !== "auto") throw new FinError(400, `«${x.name}» рахується сам — його не вносять`);
     if (!isActiveIn(x.off_from, start)) throw new FinError(409, `Показник «${x.name}» вимкнений у цьому періоді — нічого не збережено`);
   }
@@ -310,7 +311,7 @@ export async function saveKpiValues(db: Db, actor: number, kindArg: unknown, dat
   let changed = 0;
   for (const c of parsed) {
     const x: any = kpis.get(c.kpiId);
-    // Операційні, що рахуються з «План/факт», — число людини стає ручним поверх джерела; порожнє повертає джерело.
+    // Операційні, що рахуються з таблиці оплат, — число людини стає ручним поверх джерела; порожнє повертає джерело.
     const override = isAutoIn(x, kind, start, refs) && isOpexRef(x.ref_source) ? c.value != null : false;
     const was = old.get(c.kpiId) ?? null;
     if (was === c.value && override === overridden.has(c.kpiId)) continue;
@@ -320,7 +321,7 @@ export async function saveKpiValues(db: Db, actor: number, kindArg: unknown, dat
       ON CONFLICT (kpi_id, period_kind, period_start) DO UPDATE SET value = EXCLUDED.value,
         ref_value = COALESCE(EXCLUDED.ref_value, fin_kpi_values.ref_value), ref_at = COALESCE(EXCLUDED.ref_at, fin_kpi_values.ref_at),
         updated_by = EXCLUDED.updated_by, updated_at = now(), manual_override = EXCLUDED.manual_override`, [c.kpiId, kind, start, c.value, ref, actor, override]);
-    await log(db, actor, "kpi", c.kpiId, `${x.name} · ${pLabel(kind, start)}: ${fmt(was)} → ${fmt(c.value)}${override ? " (вручну поверх «План/факт»)" : ""}`,
+    await log(db, actor, "kpi", c.kpiId, `${x.name} · ${pLabel(kind, start)}: ${fmt(was)} → ${fmt(c.value)}${override ? " (вручну поверх таблиці оплат)" : ""}`,
       { kind, start, field: "value", old: was, new: c.value });
     changed++;
   }

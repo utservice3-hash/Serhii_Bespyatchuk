@@ -84,7 +84,7 @@ test("#1277b ПРАВИЛО: місяць за датою оплати, лише
     line({ category: "Мобільний зв'язок - Київстар", amount: 11 }),
     line({ category: "Піца дей", amount: 4282 }),
     line({ category: "ЗП - Комерційні", amount: 900 }), line({ category: "ЗП - Комерційні", amount: 100, paid: false }),
-    line({ category: "Консалтинг СЕО", amount: 5000 }),
+    line({ category: "Дивіденди Артем", amount: 5000 }),
     line({ amount: null }),
     line({ payDate: null, payRaw: "", amount: 777 }), line({ payDate: null, payRaw: "дубль", amount: 1 }),
     line({ payDate: null, payRaw: "", amount: 9, entryDate: "2026-09-30" }),
@@ -93,7 +93,7 @@ test("#1277b ПРАВИЛО: місяць за датою оплати, лише
   assert.equal(b.items.get(6)?.sum, 11, "🔴 апостроф ' проти ʼ зламав зіставлення");
   assert.deepEqual([b.payroll.get("commercial")?.sum, b.payroll.get("commercial")?.unpaid], [1000, 1], "🔴 ЗП комерційні чи «не оплачено» хибні");
   assert.equal(b.ambiguous.get("піца дей")?.sum, 4282, "🔴 двозначну категорію не винесено окремо");
-  assert.equal(b.unrecognized.get("консалтинг сео")?.sum, 5000, "🔴 нерозпізнане загубилось");
+  assert.equal(b.unrecognized.get("дивіденди артем")?.sum, 5000, "🔴 нерозпізнане загубилось");
   assert.equal(b.notUa.get("USA")?.sum, 300, "🔴 USA зараховано або загублено");
   assert.equal(b.badSum.get("Оренда офісу")?.rows, 1, "🔴 сума не число загубилась");
   assert.deepEqual([b.noPayDate.get("none")?.sum, b.badPayDate.get("дубль")?.sum], [777, 1], "🔴 рядки без дати оплати не видно в місяці внесення");
@@ -181,7 +181,7 @@ test("#1277d МЕЖА «ПЛАН/ФАКТ · АВТО»: роут під view_pr
   assert.match(tab, /const canView = \(getAuthPayload\(\)\?\.perms \?\? \[\]\)\.includes\("view_private_finance"\);/, "🔴 екран не за view_private_finance");
   const body = tab.slice(tab.indexOf("export function FinanceApprovalsTestTab"));
   assert.ok(body.indexOf("if (!canView) return <div") > 0 && body.indexOf("if (!canView) return <div") < body.search(/<table|<Pots|<Lines/), "🔴 таблиця рендериться до перевірки права");
-  assert.match(tab, /if \(!canView\) return;\n\s*setBusy\(true\);\n\s*fetchFinApprovalsTest/, "🔴 без права екран все одно просить дані");
+  assert.match(tab, /if \(!canView\) return;\n\s*setBusy\(true\);\n\s*\(refresh \? syncFinApprovals\(\)\.then\(\(\) => fetchFinApprovalsTest\(month\)\) : fetchFinApprovalsTest\(month\)\)/, "🔴 без права екран все одно просить дані");
 });
 
 /**
@@ -196,8 +196,9 @@ test("#1277e ФРОНТ: різниця = таблиця − вручну і в 
   assert.match(tab, /signed\(Math\.round\(\(s\.autoTotal - s\.manualOpex\) \* 100\) \/ 100\)/, "🔴 різниця операційних перевернута");
   assert.match(tab, /x\.manual == null \? <span className="hr-muted">не внесено<\/span>/, "🔴 порожнє вручну показано як число");
   assert.match(tab, /same\(x\.diff\) \? <span className="fin-good">✓ збігається<\/span> : <span className="fin-bad">\{signed\(x\.diff\)\}<\/span>/, "🔴 різниця статті з ручним — не з ядра");
-  for (const k of ["payroll", "ambiguous", "unrecognized", "notUa", "badSum", "badPayDate", "noPayDate"])
-    assert.match(tab, new RegExp(`pots: shown\\.${k} \\}`), `🔴 кошика «${k}» немає на екрані`);
+  for (const k of ["payroll", "statsOnly", "ambiguous", "unrecognized", "notUa", "badSum", "badPayDate", "noPayDate"])
+    assert.match(tab, new RegExp(`pots: o\\.${k} \\}`), `🔴 кошика «${k}» немає на екрані`);
+  assert.match(tab, /<Outside buckets=\{outsideBuckets\(shown\)\} \/>/, "🔴 кошики «не потрапило» не рендеряться");
 });
 
 /**
@@ -210,4 +211,177 @@ test("#1277f «ЛИШЕ ПОНАД ПЛАН»: факт із таблиці > п
   assert.match(tab, /const overPlan = \(x: FinApprItem\) => \(x\.plan != null && x\.plan !== 0 \? x\.auto > x\.plan : x\.auto > 0\);/, "🔴 «понад план» не від факту з таблиці або без статей без плану");
   assert.match(tab, /\(!onlyOver \|\| overPlan\(x\)\)/, "🔴 галочка не фільтрує статті");
   assert.match(tab, /checked=\{onlyOver\} onChange=\{\(e\) => setOnlyOver\(e\.target\.checked\)\} \/> лише понад план/, "🔴 галочки «лише понад план» немає");
+});
+
+// ───────────── 🧾 З ЖОВТНЯ 2026 ТАБЛИЦЯ ОПЛАТ — ДЖЕРЕЛО (задача Тетяни #5607, 21.10.2026) — гейти `#1279`–`#1279e` ─────────────
+
+/** Статті й рядки таблиці для гейтів `#1279`: три статті (одна без розділу), дев'ять рядків по обидва боки кожної межі. */
+async function approvalsFixture(c: import("pg").Client) {
+  await c.query(`INSERT INTO users (id, email, password_hash, role, is_active) VALUES (901, 'fin@test', 'x', 'admin', true) ON CONFLICT DO NOTHING`);
+  const resp = (await c.query(`INSERT INTO fin_resps (name) VALUES ('Офіс · тест') RETURNING id`)).rows[0].id;
+  const grp = (await c.query(`INSERT INTO fin_groups (resp_id, name) VALUES ($1, 'Офіс · тест') RETURNING id`, [resp])).rows[0].id;
+  const item = async (name: string, section: string | null) => (await c.query(`INSERT INTO fin_items (group_id, name, section) VALUES ($1, $2, $3) RETURNING id`, [grp, name, section])).rows[0].id as number;
+  const rent = await item("Оренда офісу", "admin"), ads = await item("Контекстна реклама", "commercial"), tax = await item("Податки ТОВ", null);
+  const rows: [string, number, string, string, boolean][] = [
+    ["Оренда офісу", 100, "2026-10-06", "UA", true], ["Контекстна реклама", 50, "2026-10-13", "UA", true],
+    ["ЗП - Комерційні", 1000, "2026-10-07", "UA", true], ["Консалтинг СЕО", 300, "2026-10-08", "UA", true],
+    ["Дивіденди Артем", 999, "2026-10-08", "UA", true], ["Податки ТОВ", 800, "2026-10-01", "UA", true],
+    ["Оренда офісу", 7, "2026-09-30", "UA", true], ["Оренда офісу", 5, "2026-10-06", "USA", true], ["Оренда офісу", 20, "2026-10-31", "UA", false],
+  ];
+  let n = 1;
+  for (const [cat, sum, pay, dir, paid] of rows)
+    await c.query(`INSERT INTO fin_approvals (row_no, entry_date, pay_date, pay_raw, what, category, amount, direction, paid) VALUES ($1, $2, $2, $3, 'тест', $4, $5, $6, $7)`,
+      [++n, pay, `${pay.slice(8, 10)}.${pay.slice(5, 7)}.${pay.slice(0, 4)}`, cat, sum, dir, paid]);
+  const synced = () => c.query(`INSERT INTO fin_approvals_state (id, synced_at, rows) VALUES (1, now(), ${rows.length}) ON CONFLICT (id) DO UPDATE SET synced_at = now()`);
+  return { rent, ads, tax, synced };
+}
+
+/**
+ * #1279 — ЖИВИЙ SQL: ОПЕРАЦІЙНІ «ТИЖДЕНЬ І МІСЯЦЬ» — З ТАБЛИЦІ ОПЛАТ (змінене твердження `#992`). За датою оплати, і
+ * тиждень, і місяць: статті розділу + «ЗП - <розділ>» + «Консалтинг СЕО» → Комерційні (Тетяна 21.10); «Дивіденди» —
+ * нікуди; USA — ні; 30.09 — не жовтень, 31.10 — жовтень; стаття без розділу (Податки ТОВ) — окремим числом. Поки таблицю
+ * не синхронізовано жодного разу — ключів немає, і рядок не рахується нулем. Рядок `opex_*` у тижні — авто.
+ * 🧨 Червоніє, якщо рахувати за датою внесення, загубити ЗП чи Консалтинг, зарахувати дивіденди / USA / Податки ТОВ,
+ * показати нуль без синку чи лишити тиждень ручним.
+ */
+test("#1279 ЖИВИЙ SQL: операційні з таблиці оплат — тиждень і місяць за датою оплати, ЗП і Консалтинг СЕО в розділ, дивіденди нікуди, без синку — не нуль", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  try {
+    const p = await import("./paymentApprovals.js"), k = await import("./financeKpi.js");
+    const { synced } = await approvalsFixture(c);
+    assert.deepEqual(await p.opexFromApprovals(c as never, "2026-10-01", "2026-10-31"), { refs: {}, unassigned: { items: 0, fact: 0 } }, "🔴 без синку операційні стали нулем");
+    await synced();
+    assert.deepEqual(await p.opexFromApprovals(c as never, "2026-10-01", "2026-10-31"),
+      { refs: { opex_commercial: 1350, opex_admin: 120, opex_general: 0 }, unassigned: { items: 1, fact: 800 } }, "🔴 жовтень операційних хибний");
+    const wk = await p.opexFromApprovals(c as never, "2026-10-05", "2026-10-11");
+    assert.deepEqual(wk.refs, { opex_commercial: 1300, opex_admin: 100, opex_general: 0 }, "🔴 тиждень 05.10 не за датою оплати (реклама 13.10 — наступний тиждень)");
+    const sec = (await c.query(`INSERT INTO fin_kpi_sections (name) VALUES ('Опер · тест') RETURNING id`)).rows[0].id;
+    const com = (await c.query(`INSERT INTO fin_kpis (section_id, name, kind, ref_source) VALUES ($1, 'Комерційні · тест', 'auto', 'opex_commercial') RETURNING id`, [sec])).rows[0].id;
+    const row = async (kind: "week" | "month", start: string, refs: Record<string, number>) =>
+      (await k.loadPeriod(c as never, kind, start, refs, new Date("2026-10-21T10:00:00Z"))).sections.flatMap((x) => x.kpis).find((x: any) => x.id === com);
+    assert.deepEqual([(await row("week", "2026-10-05", wk.refs)).kind, (await row("week", "2026-10-05", wk.refs)).value], ["auto", 1300], "🔴 тиждень операційних лишився ручним");
+    assert.equal((await row("week", "2026-10-05", {})).kind, "manual", "🔴 без джерела тиждень показав авто");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1279b — ЖИВИЙ SQL: «ПЛАН/ФАКТ» З ЖОВТНЯ — ФАКТ ІЗ ТАБЛИЦІ. До першого синку — ручний (і вноситься); після — факт статті
+ * = Σ її рядків за датою оплати (UA), без оплат — «не внесено»; ручний факт жовтня — 400, план — вільний; ручні числа в
+ * базі не зникають; вересень — ручний; картка статті — оплати обраного місяця (лише 5 полів); решта — у кошиках.
+ * 🧨 Червоніє, якщо жовтень бере ручний факт, вересень — таблицю, ручний факт приймається, ручні числа стираються,
+ * Консалтинг / ЗП потрапляють у статті, або картка віддає реквізити.
+ */
+test("#1279b ЖИВИЙ SQL: «План/факт» з жовтня — факт із таблиці після синку, вересень ручний, ручний факт — 400, картка — оплати місяця", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  try {
+    const fin = await import("./finance.js");
+    const { rent, ads, tax, synced } = await approvalsFixture(c);
+    await c.query(`INSERT INTO fin_values (item_id, month, plan, fact) VALUES ($1, '2026-10-01', 150, 555), ($1, '2026-09-01', NULL, 444)`, [rent]);
+    const now = new Date("2026-10-21T10:00:00Z");
+    const it = (m: Awaited<ReturnType<typeof fin.loadMonth>>, id: number) => m.tree.flatMap((r) => r.groups.flatMap((g) => g.items)).find((x) => x.id === id)!;
+    const before = await fin.loadMonth(c as never, "2026-10", now);
+    assert.deepEqual([before.factSource, it(before, rent).fact], ["manual", 555], "🔴 до першого синку факт не ручний");
+    await synced();
+    const oct = await fin.loadMonth(c as never, "2026-10", now);
+    assert.deepEqual([oct.factSource, it(oct, rent).fact, it(oct, rent).factRows, it(oct, ads).fact, it(oct, tax).fact], ["approvals", 120, 2, 50, 800], "🔴 факт жовтня не з таблиці");
+    assert.deepEqual([oct.approvals!.outside.statsOnly.map((x) => x.sum), oct.approvals!.outside.unrecognized.map((x) => x.label), oct.approvals!.outside.payroll.map((x) => x.sum), oct.approvals!.outside.notUa.map((x) => x.sum)],
+      [[300], ["Дивіденди Артем"], [1000], [5]], "🔴 кошики «не потрапило» хибні");
+    assert.equal(oct.totals.fact, 970, "🔴 підсумок факту не сума статей із таблиці");
+    assert.equal(it(await fin.loadMonth(c as never, "2026-09", now), rent).fact, 444, "🔴 вересень узяв таблицю");
+    await assert.rejects(fin.saveValues(c as never, 901, "2026-10", [{ itemId: rent, field: "fact", value: "1" }], now), (e) => (e as { status?: number }).status === 400, "🔴 ручний факт жовтня прийнято");
+    assert.deepEqual(await fin.saveValues(c as never, 901, "2026-10", [{ itemId: ads, field: "plan", value: "60" }], now), { changed: 1 }, "🔴 план жовтня заблоковано");
+    assert.equal((await c.query(`SELECT fact::float8 AS f FROM fin_values WHERE item_id = $1 AND month = '2026-10-01'`, [rent])).rows[0].f, 555, "🔴 ручний факт стерто з бази");
+    const card = await fin.itemCard(c as never, rent, 2026, "2026-10", now);
+    assert.deepEqual([card.months[9].fact, card.months[9].factAuto, card.months[8].fact, card.payments?.length], [120, true, 444, 2], "🔴 картка статті — не з таблиці чи без оплат місяця");
+    assert.deepEqual(Object.keys(card.payments![0]).sort(), ["amount", "direction", "paid", "payDate", "what"], "🔴 картка віддає зайві поля");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1279c — СИНК ТАБЛИЦІ ОПЛАТ: дзеркало замінюється ЦІЛКОМ лише після перевірок — порожньо — відмова; зникло понад 10%
+ * — відмова й старі дані на місці (рівно 10% — можна); стан пише час і кількість; у таблиці НЕМАЄ колонок реквізитів;
+ * джоба — крон «20,50», нагляд 30 хв, пропуск — `jobSkip`, таблицю лише читає.
+ * 🧨 Червоніє, якщо обрізана вкладка стре дзеркало, з'явиться колонка реквізитів чи синк навчиться писати в таблицю.
+ */
+test("#1279c СИНК ТАБЛИЦІ ОПЛАТ: заміна цілком лише після перевірок (порожньо / −10%), стан, без реквізитів, крон і нагляд", async (t) => {
+  const sy = await import("./approvalsSync.js");
+  assert.deepEqual([sy.replaceVerdict(null, 0) != null, sy.replaceVerdict(100, 89) != null, sy.replaceVerdict(100, 90), sy.replaceVerdict(null, 5), sy.replaceVerdict(100, 150)],
+    [true, true, null, null, null], "🔴 межа «зникло понад 10%» хибна");
+  const idx = SRC("index.ts"), job = SRC("jobs/syncApprovals.ts");
+  assert.match(idx, /cron\.schedule\("20,50 \* \* \* \*", \(\) => \{\s*void runJob\("syncApprovals", \(\) => syncApprovals\(\)\);/, "🔴 синк не за розкладом");
+  const { MONITORED_JOBS } = await import("../jobs/monitoredJobs.js");
+  assert.equal(MONITORED_JOBS.find((j) => j.name === "syncApprovals")?.everyMin, 30, "🔴 мовчання синку ніхто не помітить");
+  assert.match(job, /return jobSkip\("Таблиця оплат: попередній синк ще йде"\)/, "🔴 пропуск рахується успіхом");
+  assert.doesNotMatch(job + SRC("core/approvalsSync.ts"), /googleSheetsWrite|writeSheetTab/, "🔴 синк навчився писати в таблицю");
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  try {
+    const cols = (await c.query(`SELECT column_name FROM information_schema.columns WHERE table_name = 'fin_approvals' ORDER BY column_name`)).rows.map((x) => x.column_name);
+    assert.deepEqual(cols, ["amount", "category", "direction", "entry_date", "paid", "pay_date", "pay_raw", "row_no", "what"], "🔴 у дзеркалі зайві колонки (реквізити?)");
+    const lines = (n: number) => Array.from({ length: n }, (_, i) => line({ row: i + 2, amount: i + 1 }));
+    await c.query("BEGIN"); await sy.replaceApprovals(c as never, lines(10)); await c.query("COMMIT");
+    const count = async () => (await c.query(`SELECT count(*)::int AS n, (SELECT rows FROM fin_approvals_state) AS st FROM fin_approvals`)).rows[0];
+    assert.deepEqual(await count(), { n: 10, st: 10 }, "🔴 дзеркало чи стан не записано");
+    await assert.rejects(sy.replaceApprovals(c as never, lines(8)), /зникло понад 10%/, "🔴 обрізана вкладка пройшла");
+    assert.deepEqual(await count(), { n: 10, st: 10 }, "🔴 відмова зачепила дані");
+    await c.query("BEGIN"); await sy.replaceApprovals(c as never, lines(9)); await c.query("COMMIT");
+    assert.deepEqual(await count(), { n: 9, st: 9 }, "🔴 рівно 10% не пройшло або старі рядки лишились");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1279d — ЖИВИЙ SQL: РАЗОВИЙ КРОК «ОПЕРАЦІЙНІ ЗНОВУ АВТО» (21.10.2026). Три рядки `opex_commercial / admin / general`
+ * стають авто; «ручне поверх» знято лише з жовтня (місяць) і з тижня 05.10 — вересень не чіпається; числа лишаються;
+ * «ЗП» (`opex_payroll`) і «Гроші» (`bank_in`) — як були; повтор схеми свідомо повернений ручний не скидає.
+ * 🧨 Червоніє, якщо крок зачепить вересень, чужий рядок чи число, або спрацює вдруге.
+ */
+test("#1279d ЖИВИЙ SQL: разовий крок — операційні знову авто, «ручне поверх» знято лише з жовтня, числа й чужі рядки ті самі", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { c } = s;
+  const schema = readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8");
+  try {
+    const sec = (await c.query(`INSERT INTO fin_kpi_sections (name) VALUES ('Опер · крок') RETURNING id`)).rows[0].id;
+    const kpi = async (name: string, kind: string, ref: string) => (await c.query(`INSERT INTO fin_kpis (section_id, name, kind, ref_source) VALUES ($1, $2, $3, $4) RETURNING id`, [sec, name, kind, ref])).rows[0].id;
+    const com = await kpi("Ком · крок", "manual", "opex_commercial"), pay = await kpi("ЗП · крок", "manual", "opex_payroll"), bank = await kpi("Надх · крок", "auto", "bank_in");
+    for (const [kind, p, v] of [["month", "2026-10-01", 1878603], ["week", "2026-10-05", 1692609], ["month", "2026-09-01", 113593], ["week", "2026-09-28", 777]] as const)
+      await c.query(`INSERT INTO fin_kpi_values (kpi_id, period_kind, period_start, value, manual_override) VALUES ($1, $2, $3, $4, true)`, [com, kind, p, v]);
+    await c.query(`DELETE FROM fin_kpi_imports WHERE key = 'opex-approvals-auto-2026-10-21'`);
+    await c.query(schema);
+    const kinds = (await c.query(`SELECT id, kind FROM fin_kpis WHERE id = ANY($1)`, [[com, pay, bank]])).rows.reduce((a: any, x: any) => ({ ...a, [x.id]: x.kind }), {});
+    assert.deepEqual([kinds[com], kinds[pay], kinds[bank]], ["auto", "manual", "auto"], "🔴 крок не зробив операційні авто або зачепив ЗП / «Гроші»");
+    const ov = (await c.query(`SELECT period_kind || ':' || period_start::text AS p, manual_override AS o, value::float8 AS v FROM fin_kpi_values WHERE kpi_id = $1 ORDER BY 1`, [com])).rows;
+    assert.deepEqual(ov, [{ p: "month:2026-09-01", o: true, v: 113593 }, { p: "month:2026-10-01", o: false, v: 1878603 }, { p: "week:2026-09-28", o: true, v: 777 }, { p: "week:2026-10-05", o: false, v: 1692609 }],
+      "🔴 «ручне поверх» знято не рівно з жовтня чи числа змінились");
+    await c.query(`UPDATE fin_kpis SET kind = 'manual' WHERE id = $1`, [com]);
+    await c.query(schema);
+    assert.equal((await c.query(`SELECT kind FROM fin_kpis WHERE id = $1`, [com])).rows[0].kind, "manual", "🔴 повтор схеми скинув свідомо повернений ручний");
+  } finally { await s.dispose(); }
+});
+
+/**
+ * #1279e — ПРОВОДКА: «Оновити з таблиці» — `POST /api/finance/approvals/sync`, першим рядком право вносити, у матриці
+ * deny-only; «Тиждень і місяць» бере операційні й безрозділові з таблиці (і тиждень); фронт «План/факт» — факт із таблиці
+ * лише для читання, плашка джерела, кошики «не потрапило», оплати в картці статті.
+ * 🧨 Червоніє, якщо зняти межу з синку, лишити операційні на «План/факт», дати вносити авто-факт чи загубити кошики.
+ */
+test("#1279e ПРОВОДКА: синк — canEdit першим і в матриці, операційні з таблиці і за тиждень, фронт — факт лише для читання, кошики, оплати в картці", async () => {
+  const r = SRC("routes/finance.ts");
+  assert.match(r, /financeRouter\.post\("\/approvals\/sync", async \(req, res\) => \{\s*try \{\s*canEdit\(req\);\s*const r = await runApprovalsSyncNow\(\);/, "🔴 синк без межі «вносити» першим рядком");
+  assert.match(r, /const opex = autoActive\(p\.kind, p\.start\) \? \(await opexFromApprovals\(pool as unknown as Db, p\.start, p\.end\)\)\.unassigned : null;/, "🔴 безрозділові — не з таблиці чи лише за місяць");
+  assert.match(SRC("core/financeKpiRefs.ts"), /Object\.assign\(refs, \(await opexFromApprovals\(db, start, end\)\)\.refs\);/, "🔴 операційні не з таблиці");
+  assert.doesNotMatch(SRC("core/financeKpiRefs.ts"), /opexMonth|kind === "month"\) Object\.assign/, "🔴 операційні знову лише помісячні з «План/факт»");
+  const { ACCESS_MATRIX } = await import("../auth/accessMatrix.js");
+  assert.deepEqual(ACCESS_MATRIX.find((x) => x.method === "POST" && x.path === "/api/finance/approvals/sync")?.deny, ["hr", "team_lead", "manager"], "🔴 синку немає в матриці");
+  const fe = FE("pages/dashboard/sections/FinanceSection.tsx");
+  assert.match(fe, /if \(f === "fact" && factAuto\) return <span title="Факт — з таблиці «Утверждение оплат»">\{money\(it\.fact\)\}<\/span>;/, "🔴 авто-факт можна вносити руками");
+  assert.match(fe, /\{factAuto && data\.approvals && <Outside buckets=\{outsideBuckets\(data\.approvals\.outside\)\} \/>\}/, "🔴 кошики «не потрапило» не показано");
+  assert.match(fe, /fetchFinItem\(id, year, month\)/, "🔴 картка не просить оплати місяця");
+  assert.match(fe, /card\.payments && \(/, "🔴 оплати в картці не показано");
+  assert.match(fe, /🧾 факт — з таблиці «UTS Утверждение оплат»/, "🔴 плашки джерела факту немає");
 });

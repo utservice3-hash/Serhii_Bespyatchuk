@@ -1,7 +1,8 @@
 import { finDeliveredByLoadDate, finUnloadedTwoFilters } from "./money.js";
 import { receivablesTotal } from "./metrics.js";
 import { pool } from "../db/pool.js";
-import { periodStart, periodEnd, receivablesRef, autoActive, kommoActive, opexMonth, receivablesFxAt, bankTotals, type RefValues } from "./financeKpi.js";
+import { periodStart, periodEnd, receivablesRef, autoActive, kommoActive, receivablesFxAt, bankTotals, type RefValues } from "./financeKpi.js";
+import { opexFromApprovals } from "./paymentApprovals.js";
 import type { Db } from "./finance.js";
 
 /**
@@ -26,7 +27,8 @@ export async function fmRefsFor(kindArg: unknown, dateArg: unknown, opts: { forF
   const db = pool as unknown as Db;
   const deb = await receivablesRef(db, kind, start, now, opts.forFreeze === true, () => receivablesTotal({ managerId: null, teamId: null }));
   if (deb != null) refs.receivables = deb;
-  if (kind === "month") Object.assign(refs, (await opexMonth(db, start)).refs);
+  // Операційні — з таблиці «Утверждение оплат» за датою оплати (21.10.2026): і тиждень, і місяць.
+  Object.assign(refs, (await opexFromApprovals(db, start, end)).refs);
   const fx = await receivablesFxAt(db, end, now);
   if (fx) refs.receivables_fx = fx.uah;
   const b = await bankTotals(db, start, end);

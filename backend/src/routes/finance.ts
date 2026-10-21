@@ -9,9 +9,11 @@ import {
 } from "../core/finance.js";
 import {
   loadPeriod, kpiCard, saveKpiValues, setKpiNote, setPeriodClosed, createSection, renameSection, deleteSection,
-  createKpi, updateKpi, setKpiOff, deleteKpi, restoreKpiThing, autoActive, opexMonth, receivablesFxAt, bankTotals, periodStart, shiftPeriod,
+  createKpi, updateKpi, setKpiOff, deleteKpi, restoreKpiThing, autoActive, receivablesFxAt, bankTotals, periodStart, shiftPeriod,
 } from "../core/financeKpi.js";
 import { loadPlan, setManualPlan } from "../core/financePlan.js";
+import { opexFromApprovals } from "../core/paymentApprovals.js";
+import { runApprovalsSyncNow } from "../jobs/syncApprovals.js";
 import { fmRefsFor } from "../core/financeKpiRefs.js";
 
 /**
@@ -92,7 +94,7 @@ financeRouter.get("/log", async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 financeRouter.get("/items/:id", async (req, res) => {
-  try { onlyFinance(req); res.json(await itemCard(pool as unknown as Db, idOf(req), req.query.year)); } catch (e) { fail(res, e); }
+  try { onlyFinance(req); res.json(await itemCard(pool as unknown as Db, idOf(req), req.query.year, req.query.m)); } catch (e) { fail(res, e); }
 });
 
 // ── Структура ────────────────────────────────────────────────────────────────
@@ -154,6 +156,15 @@ financeRouter.post("/restore", async (req, res) => {
 });
 
 // ── Цифри, коментарі, погодження ─────────────────────────────────────────────
+// 🧾 «Оновити з таблиці» (21.10.2026): синк «UTS Утверждение оплат» зараз, той самий, що крон. Межа — право вносити.
+financeRouter.post("/approvals/sync", async (req, res) => {
+  try {
+    canEdit(req);
+    const r = await runApprovalsSyncNow();
+    if (!r.ok) { res.status(r.busy ? 409 : 502).json({ error: r.error }); return; }
+    res.json(r);
+  } catch (e) { fail(res, e); }
+});
 financeRouter.put("/values", async (req, res) => {
   try { canEdit(req); res.json(await tx((db) => saveValues(db, req.auth!.userId, req.body?.month, req.body?.cells))); } catch (e) { fail(res, e); }
 });
@@ -187,7 +198,7 @@ financeRouter.get("/kpi", async (req, res) => {
     const prevRefs = await refsFor(cur.kind, shiftPeriod(cur.kind, cur.start, -1));
     const p = await loadPeriod(pool as unknown as Db, req.query.kind, req.query.p, refs, new Date(), prevRefs);
     // Друге число до предиката (правило 4): статті без розділу з фактом місяця і деталі валютної дебіторки.
-    const opex = p.kind === "month" && autoActive(p.kind, p.start) ? (await opexMonth(pool as unknown as Db, p.start)).unassigned : null;
+    const opex = autoActive(p.kind, p.start) ? (await opexFromApprovals(pool as unknown as Db, p.start, p.end)).unassigned : null;
     const fx = autoActive(p.kind, p.start) ? await receivablesFxAt(pool as unknown as Db, p.end, new Date()) : null;
     // «з них перекази між своїми рахунками» — друге число біля «Надходження / Витрати загальні» (питання відкрите).
     const bank = autoActive(p.kind, p.start) ? await bankTotals(pool as unknown as Db, p.start, p.end) : null;

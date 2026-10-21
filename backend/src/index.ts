@@ -74,6 +74,7 @@ import { trackerRouter } from "./routes/tracker.js";
 import { integrationsRouter } from "./routes/integrations.js";
 import { syncBank } from "./jobs/syncBank.js";
 import { syncSafe } from "./jobs/syncSafe.js";
+import { syncApprovals } from "./jobs/syncApprovals.js";
 import { buildPaymentFile } from "./jobs/buildPaymentFile.js";
 import { kommoCircuitState } from "./kommo/client.js";
 import { checkFreshness, checkAbandonedStages } from "./core/reconcile.js";
@@ -576,6 +577,11 @@ cron.schedule("0 6 * * *", () => {
 // розкладів і синк Kommo (правило зони jobs-sync). Нагляд — MONITORED_JOBS (everyMin == крону).
 cron.schedule("25,55 * * * *", () => {
   void runJob("syncSafe", () => syncSafe());
+}, { timezone: "Europe/Kyiv" });
+// 🧾 «UTS Утверждение оплат» → факт «План/факт» і операційні (21.10.2026): кожні 30 хв о :20 і :50 — не :00/:30 і не
+// поруч із Сейфом. Нагляд — MONITORED_JOBS (everyMin == крону).
+cron.schedule("20,50 * * * *", () => {
+  void runJob("syncApprovals", () => syncApprovals());
 }, { timezone: "Europe/Kyiv" });
 // 💸 Файл на оплату перевізникам (зустріч з Тетяною 13.10.2026): щогодини о :40 (не :00/:30 — там сходяться розклади)
 // + фінальний о 16:55 у будні, щоб о 17:00 файл був готовий. У Kommo не пише.

@@ -382,41 +382,6 @@ test("#991 ЖИВИЙ SQL: розділ статті — чотири значе
 });
 
 /**
- * #992 — ЖИВИЙ SQL: МІСЯЦЬ «ОПЕРАЦІЙНИХ» = Σ ФАКТУ СТАТЕЙ РОЗДІЛУ (`opexMonth` + `isAutoIn`). Видалені статті не
- * рахуються; статті без розділу — окремим числом (не губляться мовчки); розділ без жодної статті — ключа немає, і рядок
- * лишається ручним (ЗП); тиждень — завжди ручний (факт помісячний); вересень (до старту) — число з таблиці.
- * 🧨 Червоніє, якщо рахувати видалені, загубити безрозділові, почати рахувати тиждень чи заблокувати ручне «ЗП».
- */
-test("#992 ЖИВИЙ SQL: місяць операційних — Σ факту розділу; без розділу видно; тиждень і порожній розділ — вручну", async (t) => {
-  const s = await scratchDb(t);
-  if (!s) return;
-  const k = await import("./financeKpi.js");
-  const { db } = s;
-  try {
-    const { fin, id, now } = await opexFixture(db);
-    await fin.setItemSections(db, 901, [{ id: id.rent, section: "general" }, { id: id.power, section: "general" }, { id: id.ads, section: "commercial" }]);
-    const o = await k.opexMonth(db, "2026-10-01");
-    assert.deepEqual(o.refs, { opex_general: 43500.5, opex_commercial: 12000 }, "🔴 Σ факту розділу хибна або порахована видалена стаття");
-    assert.deepEqual(o.unassigned, { items: 1, fact: 700 }, "🔴 стаття без розділу загубилась мовчки");
-
-    const sec = await k.createSection(db, 901, { name: "Операційні витрати" });
-    const mk = async (name: string, ref: string) => { const x = await k.createKpi(db, 901, { sectionId: sec, name });
-      await s.c.query(`UPDATE fin_kpis SET kind = 'auto', ref_source = $2 WHERE id = $1`, [x, ref]); return x; };
-    const gen = await mk("Загальні витрати", "opex_general"), pay = await mk("ЗП + Податки на ЗП", "opex_payroll");
-    const row = async (kind: "week" | "month", p: string, refs: Record<string, number | null>, kid: number) =>
-      (await k.loadPeriod(db, kind, p, refs, now)).sections[0].kpis.find((x: any) => x.id === kid);
-    const oct = await row("month", "2026-10-01", o.refs, gen);
-    assert.deepEqual([oct.value, oct.kind, oct.autoState], [43500.5, "auto", "live"], "🔴 місяць не взяв Σ розділу");
-    assert.equal((await row("month", "2026-10-01", o.refs, pay)).kind, "manual", "🔴 «ЗП» без статей заблоковано від ручного внесення");
-    assert.deepEqual(await k.saveKpiValues(db, 901, "month", "2026-10-01", [{ kpiId: pay, value: "800000" }], o.refs), { changed: 1 }, "🔴 «ЗП» не вноситься");
-    // Ручне число поверх «План/факт» — дозволене з 05.10.2026 (зустріч з Тетяною); доводить #1208.
-    assert.equal((await row("week", "2026-10-12", o.refs, gen)).kind, "manual", "🔴 тиждень почав рахуватись із помісячного факту");
-    assert.deepEqual(await k.saveKpiValues(db, 901, "week", "2026-10-12", [{ kpiId: gen, value: "9000" }], o.refs), { changed: 1 }, "🔴 тиждень не вноситься");
-    assert.equal((await row("month", "2026-09-01", o.refs, gen)).kind, "manual", "🔴 вересень (до старту) порахувався з «План/факт»");
-  } finally { await s.dispose(); }
-});
-
-/**
  * #993 — ЖИВИЙ SQL: ЗАКРИТТЯ МІСЯЦЯ ФІКСУЄ ОПЕРАЦІЙНІ (`setPeriodClosed` з `refs`). Нічна фіксація їх НЕ чіпає (факт
  * вносять після кінця місяця); закриття — фіксує, і правка «План/факт» після цього число не рухає; відкриття знову
  * робить їх живими, а рядки з Kommo лишаються зафіксованими. По обидва боки межі.

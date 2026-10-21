@@ -5,13 +5,13 @@ import { useToast, type Toast } from "../../../components/Toasts";
 import {
   fetchFinMonth, fetchFinItem, createFin, updateFin, deleteFin, restoreFin, setFinItemOff, saveFinValues, saveFinNote,
   setFinApproval, finErrorData, hiringError, setFinItemSections, FIN_SECTIONS, fetchFinLog, type FinLogRow,
-  fetchBankAccounts, type BankAccount,
+  fetchBankAccounts, type BankAccount, syncFinApprovals,
   type FinMonth, type FinSection, type FinItem, type FinGroup, type FinResp, type FinItemCard, type FinKind, type FinCell,
 } from "../../../api";
 import { rowVisible, asInput, planFromPrevious } from "./financeView";
 import { FinanceWeekTab } from "./FinanceWeekTab";
 import { FinancePaymentsTab } from "./FinancePaymentsTab";
-import { FinanceApprovalsTestTab } from "./FinanceApprovalsTestTab";
+import { FinanceApprovalsTestTab, Outside, Lines, outsideBuckets } from "./FinanceApprovalsTestTab";
 import { SafeView } from "./BankSection";
 import { getAuthPayload } from "../../../auth";
 import "./hiring.css";
@@ -338,6 +338,14 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
   const [closed, setClosed] = useState<Record<number, boolean>>({});
   const [busy, setBusy] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  /** 🧾 З жовтня 2026 факт — із таблиці «UTS Утверждение оплат» (задача Тетяни #5607): руками не вноситься. */
+  const factAuto = data.factSource === "approvals";
+  const syncNow = async () => {
+    setSyncing(true);
+    try { const r = await syncFinApprovals(); reload(); toast(`Таблицю оплат прочитано: рядків ${r.rows ?? "—"}`); }
+    catch (e) { toast(hiringError(e), { error: true }); } finally { setSyncing(false); }
+  };
 
   const future = month > data.currentMonth;
   /** 🔒 План погоджено — клітинки плану лише для читання для ВСІХ (сервер і БД однаково відмовлять). */
@@ -421,7 +429,7 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
             : <span className="hr-pill wn">план — чернетка</span>}
           {data.canApprove && <button className="hr-btn xs" onClick={() => approve()}>Затвердити план</button>}
           <button className="hr-btn xs" onClick={() => setLogOpen(true)}>📜 Реєстр змін</button>
-          {data.canEdit && !edit && <button className="hr-btn p" onClick={() => setEdit(true)}>Вносити план і факт</button>}
+          {data.canEdit && !edit && <button className="hr-btn p" onClick={() => setEdit(true)}>{factAuto ? "Вносити план" : "Вносити план і факт"}</button>}
         </div>
       </div>
       <div className="hr-tiles">
@@ -433,6 +441,17 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
         <div className="hr-tile"><div className="lb">Статей понад план</div><div className="vl">{future ? "—" : t.over}</div>
           <div className="sb">{future ? "" : `на ${money(t.overSum)} ₴`}{t.noplan && !future ? ` · ще ${t.noplan} без плану` : ""}</div></div>
       </div>
+      {factAuto && data.approvals && (
+        <div className="hr-sect" style={{ paddingTop: 10, paddingBottom: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span className="hr-pill pl" title="Категорія = назва статті, місяць — за датою оплати, лише напрямок UA">🧾 факт — з таблиці «UTS Утверждение оплат»</span>
+          <span className="hr-muted" style={{ fontSize: 12.5 }}>{data.approvals.syncedAt ? `прочитано ${fmtTs(data.approvals.syncedAt)}` : "таблицю ще не прочитано"} · оновлюється кожні 30 хв</span>
+          {data.canEdit && <button className="hr-btn xs" disabled={syncing} onClick={() => void syncNow()}>{syncing ? "Читаю…" : "↻ Оновити з таблиці"}</button>}
+          {data.approvals.error && (!data.approvals.syncedAt || (data.approvals.errorAt ?? "") > data.approvals.syncedAt) && (
+            <div className="hr-note" style={{ margin: 0, width: "100%", background: "var(--danger-bg)", color: "var(--danger)" }}>
+              Останнє читання таблиці не вдалося — показано попередні дані. {data.approvals.error}
+            </div>)}
+        </div>
+      )}
       {imDiff && im && (
         <div className="hr-sect" style={{ paddingTop: 10, paddingBottom: 10 }}>
           <div className="hr-note" style={{ marginTop: 0, background: "var(--warn-bg)", color: "var(--warn)" }}>
@@ -444,7 +463,7 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
       {edit && (
         <div className="fin-editbar">
           <b>Внесення · {monthLabel(month).toLowerCase()}</b>
-          <span>Змінені клітинки підсвічуються. Порожня клітинка — «не внесено», не нуль.{future ? " Факт майбутнього місяця внести не можна." : ""}</span>
+          <span>Змінені клітинки підсвічуються. Порожня клітинка — «не внесено», не нуль.{factAuto ? " Факт — з таблиці оплат, руками не вноситься." : future ? " Факт майбутнього місяця внести не можна." : ""}</span>
           <span style={{ flex: 1 }} />
           {planLocked
             ? <span className="hr-pill ok">🔒 план затверджено — вноситься лише факт</span>
@@ -473,6 +492,7 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
                         const cell = (f: "plan" | "fact") => {
                           const k = `${it.id}:${f}`;
                           if (f === "fact" && future) return <span className="hr-muted">—</span>;
+                          if (f === "fact" && factAuto) return <span title="Факт — з таблиці «Утверждение оплат»">{money(it.fact)}</span>;
                           if (f === "plan" && planLocked) return <span title="План затверджено — змінити не може ніхто">🔒 {money(it.plan)}</span>;
                           return <input className={`fin-cell ${draft[k] !== undefined ? "ch" : ""} ${bad.has(k) ? "bad" : ""}`} inputMode="decimal"
                             aria-label={`${f === "plan" ? "План" : "Факт"}: ${it.name}`} value={draft[k] ?? orig(it, f)}
@@ -504,8 +524,9 @@ function PlanFactTab({ data, month, setMonth, act, reload, toast, ask, sel, setS
           </tbody>
         </table>
       </div>
+      {factAuto && data.approvals && <Outside buckets={outsideBuckets(data.approvals.outside)} />}
       <div className="hr-sect hr-muted" style={{ fontSize: 12.5 }}>
-        Підсумок — завжди сума рядків, що діють у цьому місяці. Клік по рядку відкриває коментар, історію змін і дії зі статтею.
+        Підсумок — завжди сума рядків, що діють у цьому місяці. Клік по рядку відкриває коментар, {factAuto ? "оплати з таблиці, " : ""}історію змін і дії зі статтею.
       </div>
     </div>
   );
@@ -536,7 +557,7 @@ function ItemDrawer({ id, month, canEdit, act, data, reloadKey, toast, onChanged
   const [busy, setBusy] = useState(false);
   const year = Number(month.slice(0, 4));
   useEffect(() => {
-    fetchFinItem(id, year).then((c) => { setCard(c); setNote(c.months.find((m) => m.month === month)?.note ?? ""); setErr(null); }).catch((e) => setErr(hiringError(e)));
+    fetchFinItem(id, year, month).then((c) => { setCard(c); setNote(c.months.find((m) => m.month === month)?.note ?? ""); setErr(null); }).catch((e) => setErr(hiringError(e)));
   }, [id, year, month, reloadKey]);
   useEscape(onClose);
 
@@ -577,9 +598,16 @@ function ItemDrawer({ id, month, canEdit, act, data, reloadKey, toast, onChanged
           )}
           <div className="fin-mm">
             <div><span>План</span><b>{money(cur?.plan)}</b></div>
-            <div><span>Факт</span><b>{money(cur?.fact)}</b></div>
+            <div><span>{cur?.factAuto ? "Факт · з таблиці оплат" : "Факт"}</span><b>{money(cur?.fact)}</b></div>
             <div><span>{over ? "Понад план" : "Різниця"}</span><b className={over ? "fin-bad" : ""}>{cur?.plan == null && cur?.fact == null ? "—" : money(Math.abs((cur?.plan ?? 0) - (cur?.fact ?? 0)))}</b></div>
           </div>
+          {card.payments && (
+            <div className="hr-sect" style={{ padding: "0 0 12px" }}>
+              <h4>Оплати за {monthLabel(month).toLowerCase()} · {card.payments.length}</h4>
+              {card.payments.length ? <div className="hr-tw"><Lines lines={card.payments} /></div>
+                : <p className="hr-muted" style={{ fontSize: 12.5, margin: 0 }}>У таблиці «Утверждение оплат» за цей місяць оплат із категорією «{card.name}» немає.</p>}
+            </div>
+          )}
           <label className="hr-muted" style={{ fontSize: 12.5 }} htmlFor="fin-note">{over ? "Чому перевитрата?" : "Коментар"}</label>
           <textarea id="fin-note" className="hr-inp" style={{ width: "100%", minHeight: 70, boxSizing: "border-box", marginTop: 4 }} disabled={!canEdit}
             placeholder="Пояснення побачать усі, хто відкриє цю статтю" value={note} onChange={(e) => setNote(e.target.value)} />

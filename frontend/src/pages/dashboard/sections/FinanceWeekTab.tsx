@@ -38,16 +38,16 @@ export const REF_HINT: Record<FinKpiRefSource, string> = {
   unloaded_income: "Два фільтри фінансиста: «Очікуємо оплату» / «Оплата отримана» за датою створення + «Успішна» за датою закриття; сума «Приход 1–5»",
   unloaded_expense: "Ті самі два фільтри; сума «Расход 1–5», крім типу оплати «Оплата на выгрузке»",
   receivables: "Поточний період — дебіторка в дашборді ЗАРАЗ; минулий — підсумок на його останній день (журнал синку, з 12.10.2026; раніше історії немає)",
-  opex_commercial: "Місяць: Σ факту статей «План/факт» з розділом «Комерційні». Тиждень — вручну (факт у статтях лише помісячний)",
-  opex_general: "Місяць: Σ факту статей «План/факт» з розділом «Загальні». Тиждень — вручну",
-  opex_admin: "Місяць: Σ факту статей «План/факт» з розділом «Адміністративні». Тиждень — вручну",
+  opex_commercial: "З таблиці «Утверждение оплат» за датою оплати (тиждень і місяць): статті з розділом «Комерційні» + «ЗП - Комерційні» + Консалтинг СЕО",
+  opex_general: "З таблиці «Утверждение оплат» за датою оплати (тиждень і місяць): статті з розділом «Загальні» + «ЗП - Загальні»",
+  opex_admin: "З таблиці «Утверждение оплат» за датою оплати (тиждень і місяць): статті з розділом «Адміністративні» + «ЗП - Адміністративні»",
   opex_payroll: "Місяць: Σ факту статей «План/факт» з розділом «ЗП + Податки на ЗП»; поки таких статей немає — вручну",
   receivables_fx: "1С, рахунок 362: гривневий еквівалент валютних рахунків на кінець періоду (журнал кожного синку)",
   bank_in: "«Виписка»: усі рахунки разом із картками й Сейфом, дати за Києвом. Перекази між нашими рахунками входять — їхню суму видно під таблицею",
   bank_out: "«Виписка»: усі рахунки разом із картками й Сейфом, включно з банківськими комісіями. Перекази між нашими рахунками входять — їхню суму видно під таблицею",
 };
 /** Звідки авто-рядок бере число — підпис на позначці й у довідці. */
-const SOURCE_OF = (r: FinKpiRefSource | null) => (r?.startsWith("opex_") ? "План/факт" : r?.startsWith("bank_") ? "Виписка" : r === "receivables_fx" ? "1С" : r === "receivables" ? "дебіторка" : "фільтр Kommo");
+const SOURCE_OF = (r: FinKpiRefSource | null) => (r?.startsWith("opex_") ? "таблиця оплат" : r?.startsWith("bank_") ? "Виписка" : r === "receivables_fx" ? "1С" : r === "receivables" ? "дебіторка" : "фільтр Kommo");
 
 /** Підпис автоматичного рядка: звідки зараз число. */
 const AUTO_STATE: Record<NonNullable<FinKpi["autoState"]>, [string, string]> = {
@@ -55,7 +55,7 @@ const AUTO_STATE: Record<NonNullable<FinKpi["autoState"]>, [string, string]> = {
   frozen: ["авто · зафіксовано", "Число зафіксовано закриттям періоду; джерело могло змінитись після цього — поточне видно в довідці"],
   closed: ["з «ФМ»", "Період закрито; число перенесене з аркуша «ФМ»"],
   saved: ["збережене", "Живого числа для цього періоду немає — показано збережене"],
-  override: ["вручну", "Число внесене руками поверх «План/факт»; щоб повернути автоматичне — очистіть клітинку й збережіть"],
+  override: ["вручну", "Число внесене руками поверх таблиці оплат; щоб повернути автоматичне — очистіть клітинку й збережіть"],
 };
 
 const monthName = (m: string) => new Date(`${m}T12:00:00Z`).toLocaleDateString("uk-UA", { month: "long", year: "numeric", timeZone: "UTC" });
@@ -238,7 +238,7 @@ export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
               <SectionRows key={s.id} s={s} canEdit={data.canEdit && !edit} act={act}>
                 {s.kpis.filter((k) => k.active || k.value != null).map((k) => {
                   const d = k.value != null && k.prevValue != null ? k.value - k.prevValue : null;
-                  // Поле — де сервер дозволяє вносити: ручні рядки й операційні (поверх «План/факт»).
+                  // Поле — де сервер дозволяє вносити: ручні рядки й операційні (поверх таблиці оплат).
                   const input = edit && (k.editable ?? k.kind === "manual") && k.active;
                   const cur = draft[k.id] ?? asInput(k.value);
                   return (
@@ -246,7 +246,7 @@ export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
                       <td className="ind1">{k.name}{(k.kind === "sum" || k.kind === "diff") && <span className="hr-muted" style={{ fontSize: 11, marginLeft: 6 }}>{k.kind === "sum" ? "сума" : "різниця"}</span>}
                         {k.kind === "auto" && <span className={`hr-pill ${k.autoState === "live" ? "pl" : ""}`} style={{ fontSize: 11, marginLeft: 6 }}
                           title={`${k.refSource ? REF_HINT[k.refSource] + ". " : ""}${k.autoState ? AUTO_STATE[k.autoState][1] : "Для цього періоду числа немає"}`}>
-                          {k.autoState === "live" && k.refSource?.startsWith("opex_") ? "з «План/факт»" : k.autoState === "live" && k.refSource?.startsWith("bank_") ? "з «Виписки»" : k.autoState ? AUTO_STATE[k.autoState][0] : "авто"}</span>}</td>
+                          {k.autoState === "live" && k.refSource?.startsWith("opex_") ? "з таблиці оплат" : k.autoState === "live" && k.refSource?.startsWith("bank_") ? "з «Виписки»" : k.autoState ? AUTO_STATE[k.autoState][0] : "авто"}</span>}</td>
                       <td className="num hr-muted">{money(k.prevValue, k.unit)}</td>
                       <td className="num">{input
                         ? <input className={`fin-cell ${draft[k.id] !== undefined ? "ch" : ""} ${bad.has(k.id) ? "bad" : ""}`} inputMode="decimal" aria-label={`${k.name}: ${data.label}`}
@@ -272,7 +272,7 @@ export function FinanceWeekTab({ ask, toast }: { ask: Ask; toast: Toast }) {
         </table>
       </div>
       {data.opexUnassigned && data.opexUnassigned.items > 0 && <div className="hr-note" style={{ margin: "10px 16px 0" }}>
-        Статей «План/факт» без розділу з фактом за цей місяць: <b>{data.opexUnassigned.items}</b> на <b>{money(data.opexUnassigned.fact)}</b> — в «Операційні витрати» вони не потрапили. Розділ ставиться на вкладці «Статті».
+        Статей без розділу (як «Податки ТОВ») з оплатами за цей період: <b>{data.opexUnassigned.items}</b> на <b>{money(data.opexUnassigned.fact)}</b> — в «Операційні витрати» вони не потрапили. Розділ ставиться на вкладці «Статті».
       </div>}
       {data.receivablesFx && <div className="hr-sect hr-muted" style={{ fontSize: 12.5 }}>
         Валютна дебіторка з 1С на {new Date(data.receivablesFx.at).toLocaleString("uk-UA", { timeZone: "Europe/Kyiv", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}: {money(data.receivablesFx.uah)} у гривні · {money(data.receivablesFx.val)} у валюті (1С не каже, у якій — це сума різних валют)

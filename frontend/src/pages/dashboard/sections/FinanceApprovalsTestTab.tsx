@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { fetchFinApprovalsTest, type FinApprCompare, type FinApprItem, type FinApprLine, type FinApprPot, type FinApprSection } from "../../../api";
+import { fetchFinApprovalsTest, syncFinApprovals, type FinApprCompare, type FinApprItem, type FinApprLine, type FinApprPot, type FinApprSection, type FinApprOutside } from "../../../api";
 import { getAuthPayload } from "../../../auth";
 
 /**
@@ -34,7 +34,7 @@ function Execution({ plan, fact }: { plan: number | null; fact: number }) {
 }
 
 /** Рядки таблиці оплат під статтею чи кошиком — без реквізитів і отримувача. */
-function Lines({ lines }: { lines: FinApprLine[] }) {
+export function Lines({ lines }: { lines: FinApprLine[] }) {
   return (
     <table className="hr-table" style={{ fontSize: 12.5, margin: "2px 0 6px" }}>
       <thead><tr><th>Дата оплати</th><th>Що купили</th><th className="num">Сума</th><th>Напрямок</th><th>Оплачено</th></tr></thead>
@@ -49,7 +49,7 @@ function Lines({ lines }: { lines: FinApprLine[] }) {
 /** Один кошик «не потрапило у статті» — рядки в спільній таблиці (`Outside`), щоб числа стояли в одній колонці. */
 interface Bucket { title: string; hint: string; pots: FinApprPot[] }
 /** «Не потрапило у статті»: усі кошики однією таблицею — назва кошика й пояснення, далі категорії; клік — рядки таблиці. */
-function Outside({ buckets }: { buckets: Bucket[] }) {
+export function Outside({ buckets }: { buckets: Bucket[] }) {
   const [open, setOpen] = useState<string | null>(null);
   const live = buckets.filter((b) => b.pots.length);
   if (!live.length) return <div className="hr-sect hr-muted" style={{ fontSize: 12.5 }}>Усе з таблиці оплат за цей місяць потрапило у статті.</div>;
@@ -84,6 +84,18 @@ function Outside({ buckets }: { buckets: Bucket[] }) {
   );
 }
 
+/** Кошики «Не потрапило у статті» — один перелік для тестової вкладки й «План/факт витрат». */
+export const outsideBuckets = (o: FinApprOutside): Bucket[] => [
+  { title: "ЗП за назвою", hint: "Статей для ЗП немає — розділ береться з назви категорії. В операційні йдуть, у «План/факт» — ні.", pots: o.payroll },
+  { title: "Лише для статистики", hint: "Категорія йде в операційні у свій розділ (Консалтинг СЕО → Комерційні), у «План/факт» — ні (Тетяна 21.10).", pots: o.statsOnly },
+  { title: "Не розпізнано", hint: "Категорії немає серед статей — ні в «План/факт», ні в операційні не йде (Дивіденди — так і задумано, для інформації).", pots: o.unrecognized },
+  { title: "Кілька статей з однією назвою", hint: "Категорія збігається з двома статтями — не вгадуємо, куди. Перейменуйте одну зі статей.", pots: o.ambiguous },
+  { title: "Не UA", hint: "Напрямок не UA — у факт не йде (Тетяна 13.10: «беремо лише UA»).", pots: o.notUa },
+  { title: "Сума не число", hint: "Сума в таблиці не читається як число — у факт не йде.", pots: o.badSum },
+  { title: "Дата оплати не дата", hint: "У «Даті оплати» не дата (показано в місяці внесення) — у факт не йде.", pots: o.badPayDate },
+  { title: "Ще без дати оплати", hint: "Внесено цього місяця, дати оплати ще немає — у факт піде, щойно її поставлять.", pots: o.noPayDate },
+];
+
 type Resp = { id: number; name: string; groups: { id: number; name: string; items: FinApprItem[] }[] };
 const treeOf = (items: FinApprItem[]): Resp[] => {
   const out: Resp[] = [];
@@ -112,7 +124,7 @@ export function FinanceApprovalsTestTab() {
   const load = useCallback((refresh = false) => {
     if (!canView) return;
     setBusy(true);
-    fetchFinApprovalsTest(month, refresh).then((d) => { setData(d); setErr(null); })
+    (refresh ? syncFinApprovals().then(() => fetchFinApprovalsTest(month)) : fetchFinApprovalsTest(month)).then((d) => { setData(d); setErr(null); })
       .catch((e) => setErr((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Не вдалося прочитати таблицю «Утверждение оплат»"))
       .finally(() => setBusy(false));
   }, [canView, month]);
@@ -148,7 +160,7 @@ export function FinanceApprovalsTestTab() {
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <span className="hr-pill pl" title="Нічого не змінює ні в «План/факт», ні в «Тиждень і місяць»">🧪 тест · лише читання</span>
-          {shown && <span className="hr-muted" style={{ fontSize: 12.5 }}>таблицю прочитано {hhmm(shown.fetchedAt)}</span>}
+          {shown && <span className="hr-muted" style={{ fontSize: 12.5 }}>{shown.syncedAt ? `таблицю прочитано ${hhmm(shown.syncedAt)}` : "таблицю ще не синхронізовано"}</span>}
           <button className="hr-btn xs" disabled={busy} onClick={() => load(true)}>{busy ? "Читаю…" : "↻ Оновити з таблиці"}</button>
         </div>
       </div>
@@ -225,7 +237,7 @@ export function FinanceApprovalsTestTab() {
           <h4>Операційні витрати за розділами</h4>
           <div className="hr-tw">
             <table className="hr-table">
-              <thead><tr><th>Розділ</th><th className="num">Статті з таблиці</th><th className="num">+ ЗП з таблиці</th><th className="num">Разом з таблиці</th>
+              <thead><tr><th>Розділ</th><th className="num">Статті з таблиці</th><th className="num">+ ЗП і поза статтями</th><th className="num">Разом з таблиці</th>
                 <th className="num">Внесено в «Тиждень і місяць»</th><th className="num">Різниця</th></tr></thead>
               <tbody>{shown.sections.map((s) => (
                 <tr key={s.section}>
@@ -240,15 +252,7 @@ export function FinanceApprovalsTestTab() {
           </div>
         </div>
 
-        <Outside buckets={[
-          { title: "ЗП за назвою", hint: "Статей для ЗП немає — розділ береться з назви категорії. В операційні йдуть, у «План/факт» — ні.", pots: shown.payroll },
-          { title: "Не розпізнано", hint: "Категорії немає серед статей — у факт не йде. Додати статтю чи це не витрата для статистики?", pots: shown.unrecognized },
-          { title: "Кілька статей з однією назвою", hint: "Категорія збігається з двома статтями — не вгадуємо, куди. Перейменуйте одну зі статей.", pots: shown.ambiguous },
-          { title: "Не UA", hint: "Напрямок не UA — у факт не йде (Тетяна 13.10: «беремо лише UA»).", pots: shown.notUa },
-          { title: "Сума не число", hint: "Сума в таблиці не читається як число — у факт не йде.", pots: shown.badSum },
-          { title: "Дата оплати не дата", hint: "У «Даті оплати» не дата (показано в місяці внесення) — у факт не йде.", pots: shown.badPayDate },
-          { title: "Ще без дати оплати", hint: "Внесено цього місяця, дати оплати ще немає — у факт піде, щойно її поставлять.", pots: shown.noPayDate },
-        ]} />
+        <Outside buckets={outsideBuckets(shown)} />
         <div className="hr-sect hr-muted" style={{ fontSize: 12.5 }}>
           Клік по статті показує рядки таблиці оплат, з яких складено факт. Реквізити й отримувачі сюди не потрапляють.
         </div>

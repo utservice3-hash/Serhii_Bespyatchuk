@@ -332,7 +332,7 @@ test("#936 ФРОНТ ФІНАНСІВ: меню після «Статистик
   assert.match(dash, /section === "finance" && \(/, "🔴 розділ не рендериться на /finance");
   const sec = codeOnly(FE("pages/dashboard/sections/FinanceSection.tsx"));
   assert.doesNotMatch(sec, /roleKey|auth\.role|"financier"|"admin"/, "🔴 права вгадуються з ролі на клієнті, а не з відповіді сервера");
-  assert.match(sec, /\{data\.canEdit && !edit && <button className="hr-btn p" onClick=\{\(\) => setEdit\(true\)\}>Вносити план і факт/,
+  assert.match(sec, /\{data\.canEdit && !edit && <button className="hr-btn p" onClick=\{\(\) => setEdit\(true\)\}>(?:\{factAuto \? "Вносити план" : "Вносити план і факт"\}|Вносити план і факт)/,
     "🔴 кнопка внесення не прив'язана до canEdit з сервера");
   assert.match(sec, /\{data\.canApprove && <button className="hr-btn xs" onClick=\{\(\) => approve\(/, "🔴 погодження не прив'язане до canApprove з сервера");
   assert.match(sec, /\{data\.canEdit && <button className="hr-btn p" onClick=\{act\.addResp\}>/, "🔴 «+ Відповідальний» не прив'язаний до canEdit");
