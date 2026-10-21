@@ -58,16 +58,9 @@ export function TasksFocusView({ rows, kpi, today, showAssignee, isMine, meId, o
 
   const row = (t: Task, done: boolean) => {
     const late = !done && !!t.deadline && t.deadline < today;
-    const locked = !done && (t.statusRights?.canChange === false || t.statusRights?.canDone === false);
     return (
       <div key={t.id} className={`tf-row${done ? " done" : ""}${showAssignee ? "" : " no-who"}`}
         style={done ? undefined : { ["--st" as string]: STATUS_DOT_COLORS[t.status] }}>
-        <button type="button" className={`tf-check${done ? " on" : ""}`} disabled={done || locked}
-          onClick={() => onDone(t)}
-          aria-label={done ? `№${t.id} виконано` : `Позначити №${t.id} виконаною`}
-          title={done ? "Виконано" : locked ? `Закрити може ${t.reviewerName ?? "автор задачі"}` : "Позначити «Готово»"}>
-          {done ? "✓" : ""}
-        </button>
         <div className="tf-main">
           <button type="button" className="tf-title" onClick={() => onOpen(t.id)} title="Відкрити картку задачі">{t.title || "Без назви"}</button>
           <div className="tf-meta">
