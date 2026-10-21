@@ -10,7 +10,7 @@
 import { BaError, logEvent, filesOf, eventsOf, type Db } from "./baClaims.js";
 import { parseDateOrNull } from "./baRules.js";
 import {
-  UTB_STATUS_LABEL, isUtbStatus, utbMissingFor, needsManagerTask, needsHandlerTask, filterUtb,
+  UTB_STATUS_LABEL, UTB_TASK_PREFIX, isUtbStatus, utbMissingFor, needsManagerTask, needsHandlerTask, filterUtb,
   type UtbStatus, type UtbDocs, type UtbFilter,
 } from "./baUtbRules.js";
 import { activeManagerSql } from "./activeManager.js";
@@ -55,6 +55,24 @@ export async function utbCard(db: Db, id: number) {
 export async function utbManagers(db: Db): Promise<{ id: number; name: string }[]> {
   const r = await db.query<{ id: number; name: string }>(`SELECT m.id, m.name FROM managers m WHERE ${activeManagerSql("m")} ORDER BY m.name`);
   return r.rows;
+}
+
+/**
+ * Перевізники для вибору (ТЗ: «Перевізник — вибір / текст»). Список — з CRM: назва перевізника в заявках на оплату
+ * перевізникам (`deals.carrier_name`, синкається щопрохід) плюс ті, що вже внесені в реєстр. Частіші — вище; пошук —
+ * входження без регістру. Вільний текст лишається: перевізника може не бути в заявках.
+ */
+export async function utbCarriers(db: Db, q: string): Promise<{ name: string; edrpou: string | null; n: number }[]> {
+  const r = await db.query<{ name: string; edrpou: string | null; n: string }>(
+    `WITH c AS (
+       SELECT btrim(carrier_name) AS name, max(carrier_edrpou) AS edrpou, count(*) AS n FROM deals
+        WHERE carrier_name IS NOT NULL AND btrim(carrier_name) <> '' GROUP BY 1
+       UNION ALL
+       SELECT btrim(carrier), NULL, count(*) FROM ba_utb_cases GROUP BY 1)
+     SELECT name, max(edrpou) AS edrpou, sum(n) AS n FROM c
+      WHERE $1 = '' OR position(lower($1) IN lower(name)) > 0
+      GROUP BY name ORDER BY sum(n) DESC, name LIMIT 20`, [q.trim().slice(0, 100)]);
+  return r.rows.map((x) => ({ name: x.name, edrpou: x.edrpou, n: Number(x.n) }));
 }
 
 // ── Поля ─────────────────────────────────────────────────────────────────────
@@ -126,14 +144,14 @@ async function notify(db: Db, actor: number, id: number, prevStatus: UtbStatus |
   if (needsManagerTask(u.manager_id, u.manager_task_for)) {
     const who = await ownerName(db, actor);
     const tid = await createTask(db, actor, u.manager_id,
-      `УТБ: передати заявку і ТТН — ВП № ${u.ep_number}`,
+      `${UTB_TASK_PREFIX} передати заявку і ТТН — ВП № ${u.ep_number}`,
       `${head}.\nУкртрансбезпека нарахувала штраф, який має перейти на перевізника. Передайте, будь ласка, заявку і ТТН по цьому перевезенню: ${who} (Бізнес-асистент → Реєстр Укртрансбезпеки).`);
     await db.query(`UPDATE ba_utb_cases SET manager_task_for = $2 WHERE id = $1`, [id, u.manager_id]);
     await logEvent(db, "utb", id, actor, `Менеджеру поставлено задачу передати заявку і ТТН (задача #${String(tid)})`);
   }
   if (needsHandlerTask(prevStatus ?? "new", u.status, u.handler_id, u.handler_task_for)) {
     const tid = await createTask(db, actor, u.handler_id,
-      `УТБ: перевести штраф на перевізника — ВП № ${u.ep_number}`,
+      `${UTB_TASK_PREFIX} перевести штраф на перевізника — ВП № ${u.ep_number}`,
       `${head}.\nДокументи зібрано (постанова, заявка, ТТН) — запис передано вам. Оформіть переведення штрафу на перевізника; документи — у картці запису (Бізнес-асистент → Реєстр Укртрансбезпеки).`);
     await db.query(`UPDATE ba_utb_cases SET handler_task_for = $2 WHERE id = $1`, [id, u.handler_id]);
     await logEvent(db, "utb", id, actor, `Відповідальній особі поставлено задачу (задача #${String(tid)})`);

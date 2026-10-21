@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   utbMissingFor, utbDocsComplete, needsManagerTask, needsHandlerTask, filterUtb, utbExportRows, UTB_EXPORT_HEAD,
-  utbAccessOf, utbOwnerIds, utbDocsLabel, type UtbState, type UtbRowLike,
+  utbAccessOf, utbOwnerIds, utbDocsLabel, UTB_TASK_PREFIX, type UtbState, type UtbRowLike,
 } from "./baUtbRules.js";
 
 /**
@@ -105,7 +105,7 @@ test("#1860b ДОСТУП УТБ: веде власник поіменно, ба
     assert.match(tail, new RegExp(`^async \\(req, res\\) => \\{\\s*try \\{\\s*onlyBa\\(req\\); utbGate\\(req, "${need}"\\);`), `🔴 ${key}: не «onlyBa → utbGate(req, "${need}")» на початку`);
     seen.push(key);
   }
-  assert.deepEqual(seen.sort(), ["GET /utb", "GET /utb/:id", "GET /utb/:id/files/:fileId", "GET /utb/export.xlsx", "GET /utb/managers",
+  assert.deepEqual(seen.sort(), ["GET /utb", "GET /utb/:id", "GET /utb/:id/files/:fileId", "GET /utb/carriers", "GET /utb/export.xlsx", "GET /utb/managers",
     "PATCH /utb/:id", "POST /utb", "POST /utb/:id/files"].sort(), "🔴 роут реєстру без межі або гейт його не бачить");
 });
 
@@ -216,4 +216,76 @@ test("#1860d ФРОНТ УТБ: пʼята вкладка за доступом,
   assert.match(utb, /fetchBaUtb\(filter\)/);
   const shared = FE("pages/dashboard/sections/BaShared.tsx");
   assert.match(shared, /\{!readOnly && <>[\s\S]*Додати документ/, "🔴 блок документів не вміє бути лише для перегляду");
+});
+
+/**
+ * #1860e — ПЕРЕВІЗНИК: ВИБІР / ТЕКСТ (ТЗ). Підказки — з CRM (назва перевізника в заявках на оплату, `deals.carrier_name`)
+ * і з уже внесених у реєстр; частіші вище; пошук — входження без регістру; порожні назви не підказуються; не більше 20.
+ * ⚠️ На ПРОД-сервері бінарів PostgreSQL немає → `skip` через `skipReason()` і `ALLOWED_PROD_SKIPS`.
+ * 🧨 Червоніє, якщо брати перевізників не з CRM, загубити внесених у реєстр або зробити пошук чутливим до регістру.
+ */
+test("#1860e ЖИВИЙ SQL ПЕРЕВІЗНИКІВ: підказки з заявок CRM і реєстру, частіші вище, пошук без регістру", async (t) => {
+  const s = await scratchDb(t);
+  if (!s) return;
+  const { utbCarriers, createUtb } = await import("./baUtb.js");
+  const { c, db } = s;
+  try {
+    const deal = (id: number, name: string | null, edrpou: string | null = null) =>
+      c.query(`INSERT INTO deals (kommo_id, carrier_name, carrier_edrpou) VALUES ($1, $2, $3)`, [id, name, edrpou]);
+    await deal(1, "ТОВ «Еміс Транс»", "12345678"); await deal(2, "ТОВ «Еміс Транс»"); await deal(3, "ТОВ «Еміс Транс»");
+    await deal(4, "ФОП Супрунюк"); await deal(5, "   "); await deal(6, null);
+    await createUtb(db, 52, { epNumber: "ВП-1", receivedOn: "2026-10-01", carrier: "ФОП Жебрун", fineAmount: 100 });
+    const all = await utbCarriers(db, "");
+    assert.deepEqual(all.map((x) => x.name), ["ТОВ «Еміс Транс»", "ФОП Жебрун", "ФОП Супрунюк"], "🔴 частіший перевізник не зверху або порожня назва в підказках");
+    assert.equal(all[0].edrpou, "12345678", "🔴 ЄДРПОУ з заявки загубився");
+    assert.deepEqual((await utbCarriers(db, "жебрун")).map((x) => x.name), ["ФОП Жебрун"], "🔴 внесений у реєстр перевізник не підказується");
+    assert.deepEqual((await utbCarriers(db, "ЕМІС")).map((x) => x.name), ["ТОВ «Еміс Транс»"], "🔴 пошук чутливий до регістру");
+    assert.deepEqual(await utbCarriers(db, "нема-такого"), []);
+    for (let i = 0; i < 30; i++) await deal(100 + i, `ТОВ Перевізник ${String(i)}`);
+    assert.equal((await utbCarriers(db, "перевізник")).length, 20, "🔴 підказок більше за 20 — список на сотні рядків");
+  } finally { await s.dispose(); }
+});
+
+interface UtbNotifyMod {
+  UTB_TASK_PREFIX: string;
+  isUtbTaskAlert: (t: { id: number; title: string; status: string; assigneeId?: number | null; createdAt?: string | null },
+    known: ReadonlyMap<number, { status: string; closeReason: string | null }> | null, me: number | null | undefined, mountedAtMs: number) => boolean;
+  utbTaskAlertText: (titles: string[]) => string | null;
+  isClientTaskAlert: UtbNotifyMod["isUtbTaskAlert"];
+}
+/**
+ * #1860f — ЗАДАЧА З РЕЄСТРУ ПРИХОДИТЬ ТОСТОМ ЗІ ЗВУКОМ (Роман 21.10.2026: «і звук додай»). Префікс фронту == бекенду
+ * (інакше сповіщення замовкне тихо); нова моя — так; відома, чужа, закрита, без префікса — ні; до першого опитування —
+ * лише свіжі. Дашборд кличе `notifyEvent` (тост + `playNotifySound` + системне). Підказки перевізника — `datalist`.
+ * 🧨 Червоніє, якщо розвести префікси, дзвонити на кожному опитуванні або прибрати виклик із дашборда.
+ */
+test("#1860f СПОВІЩЕННЯ УТБ: префікс фронту == бекенду, лише нова й своя, тост зі звуком; перевізник з підказками", async () => {
+  const ts = (await import("typescript")).default;
+  const js = ts.transpileModule(FE("pages/dashboard/signalTaskNotify.ts"), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const N = await import(`data:text/javascript,${encodeURIComponent(js)}`) as UtbNotifyMod;
+  assert.equal(N.UTB_TASK_PREFIX, UTB_TASK_PREFIX, "🔴 префікс фронту розійшовся з бекендом — сповіщення замовкне тихо");
+  assert.match(SRC("core/baUtb.ts"), /`\$\{UTB_TASK_PREFIX\} передати заявку і ТТН/, "🔴 задача менеджеру без префікса — тосту не буде");
+  assert.match(SRC("core/baUtb.ts"), /`\$\{UTB_TASK_PREFIX\} перевести штраф на перевізника/, "🔴 задача особі без префікса — тосту не буде");
+  const MOUNT = Date.parse("2026-10-21T10:00:00Z");
+  const t = (id: number, o: Partial<{ title: string; status: string; assigneeId: number; createdAt: string }> = {}) =>
+    ({ id, title: `${UTB_TASK_PREFIX} передати заявку і ТТН — ВП № 1`, status: "not_started", assigneeId: 7, createdAt: "2026-10-21T10:05:00Z", ...o });
+  const known = new Map([[1, { status: "not_started", closeReason: null }]]);
+  assert.equal(N.isUtbTaskAlert(t(9), known, 7, MOUNT), true, "🔴 нова задача з реєстру прийшла мовчки");
+  assert.equal(N.isUtbTaskAlert(t(1), known, 7, MOUNT), false, "🔴 відома задача дзвонить на кожному опитуванні");
+  assert.equal(N.isUtbTaskAlert(t(9), known, 8, MOUNT), false, "🔴 дзвонить чужому менеджеру");
+  assert.equal(N.isUtbTaskAlert(t(9, { status: "done" }), known, 7, MOUNT), false);
+  assert.equal(N.isUtbTaskAlert(t(9, { title: "Інша задача" }), known, 7, MOUNT), false, "🔴 дзвонить будь-якою задачею");
+  assert.equal(N.isUtbTaskAlert(t(9, { createdAt: "2026-10-20T10:00:00Z" }), null, 7, MOUNT), false, "🔴 до першого опитування дзвонить старими задачами");
+  assert.equal(N.isUtbTaskAlert(t(9), null, 7, MOUNT), true);
+  assert.equal(N.isClientTaskAlert(t(9), known, 7, MOUNT), false, "🔴 задача УТБ дзвонить як «переданий клієнт»");
+  assert.equal(N.utbTaskAlertText([`${UTB_TASK_PREFIX} передати заявку і ТТН — ВП № 7`]), "передати заявку і ТТН — ВП № 7 — задача в Задачнику.");
+  assert.equal(N.utbTaskAlertText([]), null);
+  const dash = FE("pages/Dashboard.tsx");
+  assert.match(dash, /const utbText = utbTaskAlertText\(fresh\.filter\(\(t\) => isUtbTaskAlert\(t, known, auth\?\.managerId, mountedAt\.current\)\)\.map\(\(t\) => t\.title\)\);\s*if \(utbText\) notifyEvent\(\{/,
+    "🔴 дашборд не показує задачі з реєстру тостом");
+  assert.ok(dash.indexOf("const utbText") < dash.indexOf("signalKnown.current = new Map(fresh"), "🔴 перевірка після оновлення відомих — нова задача вже «відома» і мовчить");
+  assert.match(dash, /playNotifySound\(o\.success\);/, "🔴 notifyEvent без звуку");
+  const utb = FE("pages/dashboard/sections/BaUtb.tsx");
+  assert.match(utb, /list="utb-carriers"/); assert.match(utb, /<datalist id="utb-carriers">/, "🔴 перевізник лише текстом, без вибору");
+  assert.match(utb, /fetchBaUtbCarriers\(form\.carrier\)/);
 });

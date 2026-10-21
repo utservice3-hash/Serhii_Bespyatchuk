@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  fetchBaUtb, fetchBaUtbCard, fetchBaUtbManagers, createBaUtb, updateBaUtb, uploadBaFile, downloadBaUtbXlsx, hiringError,
+  fetchBaUtb, fetchBaUtbCard, fetchBaUtbManagers, fetchBaUtbCarriers, createBaUtb, updateBaUtb, uploadBaFile, downloadBaUtbXlsx, hiringError,
   type BaMeta, type BaUtbRow, type BaUtbCard, type BaUtbFilter, type BaUtbStatus, type BaUtbDocs,
 } from "../../../api";
 import { money, fmtDate, todayKyiv, useEscape, Docs, History, type Toast } from "./BaShared";
@@ -116,6 +116,14 @@ function UtbDrawer({ meta, id, canEdit, managers, toast, onClose, onChanged, onC
   const [decision, setDecision] = useState<File | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // ТЗ: «Перевізник — вибір / текст». Підказки — перевізники з заявок на оплату в CRM (і вже внесені в реєстр).
+  const [carriers, setCarriers] = useState<{ name: string; edrpou: string | null }[]>([]);
+  useEffect(() => {
+    if (!canEdit) return;
+    let alive = true;
+    const t = setTimeout(() => { fetchBaUtbCarriers(form.carrier).then((c) => { if (alive) setCarriers(c); }).catch(() => { /* без підказок — лишається вільний текст */ }); }, 200);
+    return () => { alive = false; clearTimeout(t); };
+  }, [form.carrier, canEdit]);
   const load = useCallback(() => {
     if (id === "new") return;
     fetchBaUtbCard(id).then((k) => {
@@ -174,7 +182,8 @@ function UtbDrawer({ meta, id, canEdit, managers, toast, onClose, onChanged, onC
           <div className="hr-kv">
             <span className="k">№ виконавчого провадження *</span><input className="hr-inp" value={form.epNumber} onChange={set("epNumber")} disabled={!canEdit} />
             <span className="k">Дата надходження заяви *</span><input className="hr-inp" type="date" value={form.receivedOn} onChange={set("receivedOn")} disabled={!canEdit} />
-            <span className="k">Перевізник *</span><input className="hr-inp" placeholder="На кого переводимо штраф" value={form.carrier} onChange={set("carrier")} disabled={!canEdit} />
+            <span className="k">Перевізник *</span><input className="hr-inp" placeholder="Почніть вводити — підкажемо з CRM" list="utb-carriers" value={form.carrier} onChange={set("carrier")} disabled={!canEdit} />
+            <datalist id="utb-carriers">{carriers.map((c) => <option key={c.name} value={c.name} label={c.edrpou ? `ЄДРПОУ ${c.edrpou}` : undefined} />)}</datalist>
             <span className="k">Сума штрафу, грн *</span><input className="hr-inp" inputMode="decimal" value={form.fineAmount} onChange={set("fineAmount")} disabled={!canEdit} />
             <span className="k">Відповідальний менеджер</span>{mgrSelect("managerId", "Відповідальний менеджер")}
             <span className="k">№ ТТН</span><input className="hr-inp" value={form.ttnNumber} onChange={set("ttnNumber")} disabled={!canEdit} />

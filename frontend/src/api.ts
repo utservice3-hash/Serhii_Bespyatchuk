@@ -5739,6 +5739,8 @@ const utbParams = (f: BaUtbFilter) => Object.fromEntries(Object.entries(f).filte
 export const fetchBaUtb = async (f: BaUtbFilter) => (await api.get<{ rows: BaUtbRow[] }>("/ba/utb", { params: utbParams(f) })).data.rows;
 export const fetchBaUtbCard = async (id: number) => (await api.get<BaUtbCard>(`/ba/utb/${id}`)).data;
 export const fetchBaUtbManagers = async () => (await api.get<{ managers: { id: number; name: string }[] }>("/ba/utb/managers")).data.managers;
+export const fetchBaUtbCarriers = async (q: string) =>
+  (await api.get<{ carriers: { name: string; edrpou: string | null; n: number }[] }>("/ba/utb/carriers", { params: { q } })).data.carriers;
 export const createBaUtb = async (p: BaUtbInput) => (await api.post<{ id: number }>("/ba/utb", p)).data.id;
 export const updateBaUtb = async (id: number, p: BaUtbInput) => { await api.patch(`/ba/utb/${id}`, p); };
 export async function downloadBaUtbXlsx(f: BaUtbFilter): Promise<void> {

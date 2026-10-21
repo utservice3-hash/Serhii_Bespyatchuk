@@ -1684,6 +1684,8 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "opdir"], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/ba/utb/managers", cls: "GET",
     allow: ["admin", "opdir"], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/ba/utb/carriers", cls: "GET",
+    allow: ["admin", "opdir"], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/ba/utb/export.xlsx", cls: "GET",
     allow: ["admin", "opdir"], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/ba/utb/:id", cls: "GET",

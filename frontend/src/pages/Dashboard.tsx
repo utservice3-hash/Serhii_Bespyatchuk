@@ -55,7 +55,7 @@ import {
 import { Layout, NAV_ITEMS, HIDDEN_NAV, type NavKey } from "../components/Layout";
 import { homeSection } from "./dashboard/homeSection";
 import { getDateRange } from "../components/DateRangeFilter";
-import { isSignalAlert, signalAlertText, knownOf, isClientTaskAlert, clientTaskAlertText, type KnownTask } from "./dashboard/signalTaskNotify";
+import { isSignalAlert, signalAlertText, knownOf, isClientTaskAlert, clientTaskAlertText, isUtbTaskAlert, utbTaskAlertText, type KnownTask } from "./dashboard/signalTaskNotify";
 import { isAcceptanceAlert, acceptanceAlertText } from "./dashboard/acceptanceNotify";
 import { getAuthPayload } from "../auth";
 import { currentMonth, formatAmount, formatAmountFull, previousRange, getRank, presence } from "./dashboard/format";
@@ -393,6 +393,12 @@ export function Dashboard() {
     const clientText = clientTaskAlertText(clientTitles);
     if (clientText) notifyEvent({
       key: "client-tasks", tone: "info", src: "Задачник · переданий клієнт", text: clientText, plain: `👤 ${clientText}`,
+      success: false, go: "tasks", label: "До задач",
+    });
+    // 🚛 Нова задача з реєстру Укртрансбезпеки (задача 6269) — тією самою базовою лінією: тост, звук, системне сповіщення.
+    const utbText = utbTaskAlertText(fresh.filter((t) => isUtbTaskAlert(t, known, auth?.managerId, mountedAt.current)).map((t) => t.title));
+    if (utbText) notifyEvent({
+      key: "utb-tasks", tone: "warn", src: "Задачник · Реєстр Укртрансбезпеки", text: utbText, plain: `🚛 ${utbText}`,
       success: false, go: "tasks", label: "До задач",
     });
     signalKnown.current = new Map(fresh.map((t) => [t.id, knownOf(t)]));

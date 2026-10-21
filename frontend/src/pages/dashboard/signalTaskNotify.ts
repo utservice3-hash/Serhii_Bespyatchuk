@@ -67,13 +67,32 @@ export function signalAlertText(titles: string[]): string | null {
 export const CLIENT_TASK_PREFIX = "👤 Клієнт";
 
 export function isClientTaskAlert(t: TaskLike, known: ReadonlyMap<number, KnownTask> | null, myManagerId: number | null | undefined, mountedAtMs: number): boolean {
+  return isNewTaskWithPrefix(CLIENT_TASK_PREFIX, t, known, myManagerId, mountedAtMs);
+}
+/** Нова (не перевідкрита) задача з префіксом, призначена саме мені. Базова лінія — як у сигналу. */
+function isNewTaskWithPrefix(prefix: string, t: TaskLike, known: ReadonlyMap<number, KnownTask> | null, myManagerId: number | null | undefined, mountedAtMs: number): boolean {
   if (myManagerId == null || t.assigneeId !== myManagerId) return false;
-  if (!t.title.startsWith(CLIENT_TASK_PREFIX) || t.status === "done") return false;
+  if (!t.title.startsWith(prefix) || t.status === "done") return false;
   if (known === null) {
     const created = t.createdAt ? Date.parse(t.createdAt) : NaN;
     return Number.isFinite(created) && created >= mountedAtMs - SIGNAL_CLOCK_SKEW_MS;
   }
   return !known.has(t.id);
+}
+
+/**
+ * 🚛 НОВА ЗАДАЧА З РЕЄСТРУ УКРТРАНСБЕЗПЕКИ (задача 6269, Роман 21.10.2026: «і звук додай»): менеджеру — передати заявку і
+ * ТТН, відповідальній особі — перевести штраф. Тост + звук + системне сповіщення, як у задачі по переданому клієнту.
+ * ⚠️ ПРЕФІКС МУСИТЬ ДОРІВНЮВАТИ БЕКЕНДУ (`core/baUtbRules.ts`, `UTB_TASK_PREFIX`) — тримає `#1860f`.
+ */
+export const UTB_TASK_PREFIX = "🚛 УТБ:";
+export function isUtbTaskAlert(t: TaskLike, known: ReadonlyMap<number, KnownTask> | null, myManagerId: number | null | undefined, mountedAtMs: number): boolean {
+  return isNewTaskWithPrefix(UTB_TASK_PREFIX, t, known, myManagerId, mountedAtMs);
+}
+export function utbTaskAlertText(titles: string[]): string | null {
+  if (titles.length === 0) return null;
+  if (titles.length === 1) return `${titles[0].slice(UTB_TASK_PREFIX.length).trim()} — задача в Задачнику.`;
+  return `${String(titles.length)} нові задачі з реєстру Укртрансбезпеки — у Задачнику.`;
 }
 
 /** Один тост на опитування: кілька нових задач по клієнтах — одним рядком. */

@@ -12,7 +12,7 @@ import {
   ISSUE_DOC_TYPES, UTB_DOC_TYPES, BA_FILE_MAX_BYTES, TTN_NORM_PCT, sniffBaMime, baStoredName, defaultTtnMonth, parseDateOrNull,
 } from "../core/baRules.js";
 import { UTB_STATUSES, UTB_STATUS_LABEL, isUtbStatus, utbAccessOf, utbOwnerIds, utbExportRows, type UtbAccess, type UtbFilter } from "../core/baUtbRules.js";
-import { listUtb, utbCard, utbManagers, createUtb, updateUtb } from "../core/baUtb.js";
+import { listUtb, utbCard, utbManagers, utbCarriers, createUtb, updateUtb } from "../core/baUtb.js";
 import { buildXlsx } from "../core/xlsxWrite.js";
 import {
   employeesForIssue, listEquipment, equipmentCard, createEquipment, updateEquipment, setEquipmentArchived,
@@ -237,6 +237,9 @@ baRouter.get("/utb", async (req, res) => {
 });
 baRouter.get("/utb/managers", async (req, res) => {
   try { onlyBa(req); utbGate(req, "view"); res.json({ managers: await utbManagers(pool as unknown as Db) }); } catch (e) { fail(res, e); }
+});
+baRouter.get("/utb/carriers", async (req, res) => {
+  try { onlyBa(req); utbGate(req, "view"); res.json({ carriers: await utbCarriers(pool as unknown as Db, typeof req.query.q === "string" ? req.query.q : "") }); } catch (e) { fail(res, e); }
 });
 baRouter.get("/utb/export.xlsx", async (req, res) => {
   try {
