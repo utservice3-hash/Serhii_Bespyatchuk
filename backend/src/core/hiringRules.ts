@@ -244,6 +244,22 @@ export interface DailyRow {
   toManager: number;   // переходів у «менеджер»
   resumes: number;     // вручну
   coldSearch: number;  // вручну
+  /** 📊 Плитки, виправлені вручну за цей день (#2101), і що нарахувала система до виправлення. */
+  manual?: OverrideMetric[];
+  auto?: Partial<Record<OverrideMetric, number>>;
+}
+
+/** Плитки звіту, які рахує система й які можна виправити вручну (#2101). Резюме й холодний пошук — завжди вручну. */
+export const OVERRIDE_METRICS = ["planned", "done", "toLead", "toCandidate", "toTraining", "toManager"] as const;
+export type OverrideMetric = (typeof OVERRIDE_METRICS)[number];
+/** Усі 8 плиток «Щоденного звіту» — для плану тижня (#2102, рішення Романа: «всі 8 показників»). */
+export const PLAN_METRICS = ["resumes", "coldSearch", "planned", "done", "toLead", "toCandidate", "toTraining", "toManager"] as const;
+export type PlanMetric = (typeof PLAN_METRICS)[number];
+/** Понеділок тижня дати (ISO, без часових поясів — дата вже київська). */
+export function weekStartOf(day: string): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  const dow = (d.getUTCDay() + 6) % 7; // 0 = пн
+  return new Date(d.getTime() - dow * 86_400_000).toISOString().slice(0, 10);
 }
 
 export const ADDITIVE_KEYS = [
@@ -255,8 +271,9 @@ export const ADDITIVE_KEYS = [
  * (Σ прийшли ÷ Σ заплановано), бо середнє відсотків дає неправду на днях різної ваги.
  * Нульовий знаменник — `null` («нема з чого рахувати»), а не 0 %.
  */
-export function dailyTotals(rows: DailyRow[]): Omit<DailyRow, "day"> & { attendancePct: number | null } {
-  const t = Object.fromEntries(ADDITIVE_KEYS.map((k) => [k, rows.reduce((s, r) => s + (r[k] ?? 0), 0)])) as Omit<DailyRow, "day">;
+export type DailyCounts = Pick<DailyRow, (typeof ADDITIVE_KEYS)[number]>;
+export function dailyTotals(rows: DailyRow[]): DailyCounts & { attendancePct: number | null } {
+  const t = Object.fromEntries(ADDITIVE_KEYS.map((k) => [k, rows.reduce((s, r) => s + (r[k] ?? 0), 0)])) as DailyCounts;
   return { ...t, attendancePct: attendancePct(t.done, t.planned) };
 }
 

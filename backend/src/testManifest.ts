@@ -342,6 +342,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "one_on_one_forms", "tracker_devices", "tracker_intervals", "tasks",
   "task_comments", "task_files", "task_status_log", "task_views", "task_groups",
   "hiring_candidates", "hiring_interviews", "hiring_events", "hiring_daily_manual",
+  "hiring_daily_override", "hiring_week_plans",
   "hiring_files",
   "feedback_files",
   "employee_secrets",
@@ -1098,6 +1099,8 @@ export const MANIFEST_TESTS: string[] = [
   "#1622 ЖИВИЙ SQL: «Вийшов на роботу» — HR, статус «менеджер», звіт, реєстр, акаунт вимкнено, скасовно",
   "#1623 СТАРТОВА ВКЛАДКА: кандидат → «Навчання», HR → «Найм», без «Звіту» — перша дозволена; решта — «Звіт»",
   "#1950 ЖИВИЙ SQL: «Змінити команду» — HR, будь-який статус, акаунт кандидата за нею, менеджера не чіпає",
+  "#2101 ЖИВИЙ SQL: ручне число плитки — лише свій день і своя плитка, авто поруч, «авто» повертає систему",
+  "#2102 ЖИВИЙ SQL: план тижня по 8 плитках — понеділок, «немає плану» ≠ 0, факт = звіт із ручними",
   // core/hiringFunnel.test.ts — зведення найму: воронка (18.09.2026, етап 2)
   "#573 ВОРОНКА: дійшов за найдальшим етапом, не зростає вниз, Σ за джерелами == когорта",
   "#574 ВІДМОВИ Й КОНВЕРСІЯ: від попереднього етапу; кандидат + компанія == усім відмовам",

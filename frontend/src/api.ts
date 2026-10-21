@@ -5092,7 +5092,11 @@ export interface HiringDailyRow {
   day: string; planned: number; booked: number; done: number; noshow: number;
   toLead: number; toCandidate: number; toTraining: number; toManager: number;
   resumes: number; coldSearch: number;
+  /** 📊 Плитки, виправлені вручну за цей день (#2101), і що нарахувала система. */
+  manual?: HiringOverrideMetric[]; auto?: Partial<Record<HiringOverrideMetric, number>>;
 }
+export type HiringOverrideMetric = "planned" | "done" | "toLead" | "toCandidate" | "toTraining" | "toManager";
+export type HiringPlanMetric = "resumes" | "coldSearch" | HiringOverrideMetric;
 
 /** Текст помилки сервера — щоб людина бачила причину, а не «нічого не сталось». */
 export function hiringError(e: unknown): string {
@@ -5148,6 +5152,12 @@ export const setHiringTeam = async (id: number, teamId: number, comment: string)
 export const fetchHiringDaily = async (from: string, to: string) =>
   (await api.get<{ rows: HiringDailyRow[]; totals: Omit<HiringDailyRow, "day"> & { attendancePct: number | null } }>("/hiring/daily", { params: { from, to } })).data;
 export const saveHiringDaily = async (day: string, p: { resumes?: number; coldSearch?: number }) => { await api.put(`/hiring/daily/${day}`, p); };
+/** 📊 Ручне число плитки за день; `null` — повернути авто (#2101). */
+export const saveHiringOverride = async (day: string, metric: HiringOverrideMetric, value: number | null) => { await api.put(`/hiring/daily/${day}/override`, { metric, value }); };
+/** 📊 План/факт тижня (#2102): будь-який день тижня → понеділок на сервері. */
+export interface HiringWeekPlan { weekStart: string; weekEnd: string; plans: Record<HiringPlanMetric, number | null>; fact: Record<HiringPlanMetric, number> }
+export const fetchHiringWeekPlan = async (day: string) => (await api.get<HiringWeekPlan>("/hiring/week-plan", { params: { day } })).data;
+export const saveHiringWeekPlan = async (day: string, plans: Partial<Record<HiringPlanMetric, number | null>>) => { await api.put(`/hiring/week-plan/${day}`, { plans }); };
 
 // ── Найм, етап 3: офер із шаблону (18.09.2026) ──
 export interface OfferTemplate { id: number; title: string; markers: string[]; is_active: boolean; created_at: string; author: string | null; fields: { marker: string; auto: string | null }[] }

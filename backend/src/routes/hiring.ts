@@ -13,7 +13,7 @@ import {
 import {
   HiringError, type Db, scheduleRows, createInterview, createInterviewFor, updateInterview, setInterviewDeleted,
   listCandidates, candidateCard, createCandidate, updateCandidateFields, changeStatus, changeTeam, addComment,
-  dailyReport, setDailyManual, hiringMeta,
+  dailyReport, setDailyManual, setDailyOverride, weekPlan, setWeekPlan, hiringMeta,
   listVacancies, createVacancy, updateVacancy, setCandidateVacancies, addRefusalReason, refuseCandidate, setReserve,
   insertFile, fileForDownload, setFileDeleted,
 } from "../core/hiring.js";
@@ -301,6 +301,29 @@ hiringRouter.get("/daily", async (req, res) => {
     if (!r) throw new HiringError(400, "Потрібен період from..to (не більше 400 днів)");
     const rows = await dailyReport(pool as unknown as Db, r.from, r.to);
     res.json({ rows, totals: dailyTotals(rows) });
+  } catch (e) { fail(res, e); }
+});
+
+// 📊 Ручне виправлення плитки за день (#2101) і план тижня (#2102) — лише HR і керівництво.
+hiringRouter.put("/daily/:day/override", async (req, res) => {
+  try {
+    onlyEdit(req);
+    await tx((db) => setDailyOverride(db, req.auth!.userId, req.params.day, req.body ?? {}));
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.get("/week-plan", async (req, res) => {
+  try {
+    onlyEdit(req);
+    res.json(await weekPlan(pool as unknown as Db, req.query.day));
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.put("/week-plan/:day", async (req, res) => {
+  try {
+    onlyEdit(req);
+    res.json(await tx((db) => setWeekPlan(db, req.auth!.userId, req.params.day, req.body?.plans)));
   } catch (e) { fail(res, e); }
 });
 
