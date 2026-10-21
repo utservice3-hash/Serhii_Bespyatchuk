@@ -7,6 +7,7 @@ import { skipReason } from "../db/scratchDb.js";
 import {
   FEEDBACK_CLOSED_STATUSES, FEEDBACK_PURGE_WHERE, FEEDBACK_RETENTION_DAYS, imageKind, isClosedStatus, purgeDate,
 } from "../core/feedbackRetention.js";
+import { FEEDBACK_FORM, composeMessage, validateFeedback } from "../core/feedbackForm.js";
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
 const JPG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0]);
@@ -40,6 +41,52 @@ test("#495 ЗВОРОТНИЙ ЗВʼЯЗОК: закрите = вирішено/
   assert.equal(imageKind(Buffer.from("MZ\x90\x00 not an image, renamed to .png")), null, "🔴 не-картинка пройшла як фото");
   assert.equal(imageKind(Buffer.from("%PDF-1.7")), null, "🔴 PDF пройшов як фото");
   assert.equal(imageKind(Buffer.from([0x89, 0x50])), null, "🔴 обрізаний заголовок пройшов як PNG");
+});
+
+/**
+ * #1990 — ФОРМА ЗВЕРНЕННЯ: ТИП ОБОВʼЯЗКОВИЙ, ПРИКЛАД ОБОВʼЯЗКОВИЙ, ВІДМОВА НАЗИВАЄ ПОЛЯ СЛОВАМИ.
+ *
+ * Рішення Романа 21.10.2026: звернення були абстрактні, тож без типу, розділу й прикладу звернення
+ * не приймається. «Наскільки заважає» — обовʼязкове для «не працює» й «неправильна цифра».
+ *
+ * 🧨 Червоніє, якщо: приклад стане необовʼязковим у будь-якому типі, крім «питання»; вільний текст
+ * без типу пройде; відмова перестане називати, чого не вистачає; у `message` загубиться поле.
+ */
+test("#1990 ФОРМА ЗВЕРНЕННЯ: тип і приклад обовʼязкові, відмова називає поля, message складено з полів", () => {
+  for (const spec of FEEDBACK_FORM) {
+    const ex = spec.fields.find((f) => f.question === "example");
+    assert.ok(ex, `🔴 у типу «${spec.title}» немає поля-прикладу`);
+    if (spec.kind !== "question") assert.ok(!ex!.optional, `🔴 приклад у «${spec.title}» став необовʼязковим`);
+    assert.equal(new Set(spec.fields.map((f) => f.key)).size, spec.fields.length, `🔴 дубль ключа поля в «${spec.title}»`);
+  }
+  const legacy = validateFeedback({ message: "звіт неправильно рахує", section: "Звіт" });
+  assert.equal(legacy.ok, false, "🔴 вільний текст без типу прийнято");
+
+  const noExample = validateFeedback({ kind: "data", section: "Звіт", impact: "hurt",
+    fields: { where: "тиждень 13–19.10", actual: "48 000", expected: "63 500 за 1С" } });
+  assert.equal(noExample.ok, false, "🔴 «неправильна цифра» без прикладу прийнята");
+  assert.ok(!noExample.ok && noExample.missing.includes("Приклади (1–3)"), "🔴 відмова не назвала поле прикладу");
+
+  const noImpact = validateFeedback({ kind: "bug", section: "Дебіторка",
+    fields: { where: "ТОВ «Сігма»", steps: "натиснув", expected: "вікно", actual: "нічого", example: "ТОВ «Сігма» 10:15" } });
+  assert.ok(!noImpact.ok && noImpact.missing.includes("Наскільки заважає"), "🔴 «не працює» без «наскільки заважає» прийнято");
+
+  const noSection = validateFeedback({ kind: "change", fields: { where: "x", actual: "a", expected: "b", example: "c", why: "d" } });
+  assert.ok(!noSection.ok && noSection.missing.includes("Розділ"), "🔴 звернення без розділу прийнято");
+
+  const good = validateFeedback({ kind: "data", section: "Звіт", impact: "hurt", junk: 1,
+    fields: { where: "тиждень 13–19.10", actual: "48 000", expected: "63 500 за 1С", example: "рахунок №1234", extra: "x" } });
+  assert.ok(good.ok, "🔴 повне звернення відхилено");
+  if (good.ok) {
+    assert.equal("extra" in good.draft.fields, false, "🔴 збережено поле, якого немає у формі");
+    const msg = composeMessage(good.draft);
+    for (const piece of ["Неправильна цифра", "Звіт", "48 000", "63 500 за 1С", "рахунок №1234", "Заважає"]) {
+      assert.ok(msg.includes(piece), `🔴 у тексті звернення загубилось «${piece}»`);
+    }
+  }
+  const q = validateFeedback({ kind: "question", section: "Задачник", fields: { where: "план", actual: "як", expected: "пробував" } });
+  assert.ok(q.ok, "🔴 питання без прикладу відхилено — там приклад необовʼязковий");
+  if (q.ok) assert.equal(q.draft.impact, null, "🔴 у питання записалось «наскільки заважає»");
 });
 
 /**
@@ -181,6 +228,55 @@ test("#497 ДИМ: зворотний звʼязок проти бази з ну
     assert.equal((await call("GET", "/:id/files/:fileId", { who: "other", params: { id: "4", fileId } })).code, 404, "🔴 чуже фото видно");
     assert.equal((await call("DELETE", "/:id/files/:fileId", { who: "other", params: { id: "4", fileId } })).code, 404, "🔴 чуже фото можна прибрати");
     assert.equal((await call("DELETE", "/:id/files/:fileId", { who: "mgr", params: { id: "4", fileId } })).code, 204, "🔴 автор не може прибрати своє фото");
+
+    // ── #1991 Структуроване звернення, «потрібні деталі», переписка, підтвердження автором.
+    const bad = await call("POST", "/", { who: "mgr", body: { message: "звіт неправильно рахує", section: "Звіт" } });
+    assert.equal(bad.code, 400, "🔴 вільний текст без типу прийнято");
+    const made = await call("POST", "/", { who: "mgr", body: {
+      kind: "data", section: "Звіт", impact: "hurt", context: { build: "abc1234", fromSection: "Звіт", junk: "x" },
+      fields: { where: "тиждень 13–19.10", actual: "48 000", expected: "63 500 за 1С", example: "рахунок №1234" } } });
+    assert.equal(made.code, 201, `🔴 повне звернення не прийнято: ${JSON.stringify(made.payload)}`);
+    const fb = made.payload.feedback as { id: number; kind: string; message: string; fields: Record<string, string>; context: Record<string, string>; comments: unknown[] };
+    assert.equal(fb.kind, "data");
+    assert.equal(fb.fields.example, "рахунок №1234", "🔴 приклад не збережено");
+    assert.ok(fb.message.includes("рахунок №1234"), "🔴 message не складено з полів");
+    assert.equal("junk" in fb.context, false, "🔴 збережено довільний ключ контексту");
+    assert.deepEqual(fb.comments, [], "🔴 нове звернення з непорожньою перепискою");
+    const fid = String(fb.id);
+
+    assert.equal((await call("PATCH", "/:id", { params: { id: fid }, body: { status: "needs_info" } })).code, 400,
+      "🔴 «потрібні деталі» без питання прийнято");
+    await call("PATCH", "/:id", { params: { id: fid }, body: { status: "needs_info", adminNote: "Дайте скрін з 1С" } });
+    const asked = (await c.query(`SELECT status, comments_json FROM feedback WHERE id = $1`, [fb.id])).rows[0];
+    assert.equal(asked.status, "needs_info");
+    assert.equal(asked.comments_json[0]?.kind, "question", "🔴 питання не потрапило в переписку");
+    assert.equal((await call("POST", "/:id/comments", { who: "other", params: { id: fid }, body: { body: "чуже" } })).code, 404,
+      "🔴 чужий коментує звернення");
+    await call("POST", "/:id/comments", { who: "mgr", params: { id: fid }, body: { body: "Скрін додав" } });
+    assert.equal((await c.query(`SELECT status FROM feedback WHERE id = $1`, [fb.id])).rows[0].status, "pending",
+      "🔴 відповідь автора не повернула звернення на розгляд");
+
+    assert.equal((await call("POST", "/:id/confirm", { who: "mgr", params: { id: fid }, body: { ok: true } })).code, 409,
+      "🔴 підтверджено ще не вирішене");
+    await call("PATCH", "/:id", { params: { id: fid }, body: { status: "resolved" } });
+    assert.equal((await call("POST", "/:id/confirm", { who: "admin", params: { id: fid }, body: { ok: true } })).code, 403,
+      "🔴 підтвердив не автор");
+    assert.equal((await call("POST", "/:id/confirm", { who: "mgr", params: { id: fid }, body: { ok: false } })).code, 400,
+      "🔴 «не працює» без пояснення прийнято");
+    await call("POST", "/:id/confirm", { who: "mgr", params: { id: fid }, body: { ok: false, body: "Рахунок №1234 досі немає" } });
+    const reopened = (await c.query(`SELECT status, closed_at, comments_json FROM feedback WHERE id = $1`, [fb.id])).rows[0];
+    assert.equal(reopened.status, "pending", "🔴 «досі не працює» не повернуло на розгляд");
+    assert.equal(reopened.closed_at, null, "🔴 відкрите знову звернення лишилось із лічильником видалення");
+    assert.equal(reopened.comments_json.at(-1).kind, "reopen");
+    await call("PATCH", "/:id", { params: { id: fid }, body: { status: "resolved" } });
+    await call("POST", "/:id/confirm", { who: "mgr", params: { id: fid }, body: { ok: true } });
+    assert.ok((await c.query(`SELECT confirmed_at FROM feedback WHERE id = $1`, [fb.id])).rows[0].confirmed_at,
+      "🔴 «працює» не поставило confirmed_at");
+    assert.equal((await call("PATCH", "/:id", { params: { id: fid }, body: { status: "rejected" } })).code, 400,
+      "🔴 відхилено без причини");
+    const listed = await call("GET", "/", { who: "mgr" });
+    assert.ok(Array.isArray(listed.payload.form) && (listed.payload.form as unknown[]).length === FEEDBACK_FORM.length,
+      "🔴 у видачі немає опису форми — фронт не має з чого малювати");
 
     const { pool } = await import("../db/pool.js");
     await pool.end();

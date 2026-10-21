@@ -1201,7 +1201,8 @@ export function Dashboard() {
         />
       )}
 
-      {section === "feedback" && <FeedbackSection isAdmin={auth?.role === "admin"} />}
+      {section === "feedback" && <FeedbackSection isAdmin={auth?.role === "admin"} role={auth?.role ?? ""}
+        fromSection={navHistory[navHistory.length - 1]} />}
 
       {section === "rates" && <RatesAndCargoSection />}
 

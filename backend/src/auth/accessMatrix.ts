@@ -1138,6 +1138,12 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
   { method: "DELETE", path: "/api/feedback/:id/files/:fileId", cls: "DELETE-ghost",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead", "manager"], deny: [] },
+  // 💬 Переписка й підтвердження (21.10.2026): та сама межа — вкладка feedback + «своє або адмін-рівень» у
+  // роуті (чуже → 404); підтверджує лише автор (403 решті). Проба була б записом — тому deny-only.
+  { method: "POST", path: "/api/feedback/:id/comments", cls: "deny-only",
+    allow: [], deny: [] },
+  { method: "POST", path: "/api/feedback/:id/confirm", cls: "deny-only",
+    allow: [], deny: [] },
   // 🎯 12.10.2026: HR відкрито (вкладка «Місячні цілі» в ролі ввімкнена) — зсуви в ACCEPTED_MATRIX_SHIFTS, стереже #1630.
   { method: "GET", path: "/api/goals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "hr", "team_lead"], deny: ["manager"] },

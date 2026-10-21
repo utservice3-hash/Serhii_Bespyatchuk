@@ -2898,7 +2898,21 @@ export async function saveFunnelPlan(payload: { managerId: number; month: string
   await api.post("/dashboard/funnel-plan", payload);
 }
 
-export type FeedbackStatus = "pending" | "approved" | "rejected" | "resolved";
+export type FeedbackStatus = "pending" | "needs_info" | "approved" | "rejected" | "resolved";
+export type FeedbackKind = "bug" | "data" | "change" | "idea" | "question";
+export type FeedbackImpact = "block" | "hurt" | "minor";
+/** Опис форми — приходить із сервера (`core/feedbackForm.ts`), він же перевіряє звернення. */
+export interface FeedbackFormField {
+  key: string; label: string; question: "where" | "now" | "should" | "impact" | "example";
+  placeholder: string; hint?: string; multiline?: boolean; optional?: boolean;
+}
+export interface FeedbackKindSpec {
+  kind: FeedbackKind; icon: string; title: string; description: string; askImpact: boolean; fields: FeedbackFormField[];
+}
+export interface FeedbackComment {
+  at: string; byUserId: number; byName: string; role: "author" | "admin";
+  kind: "question" | "reply" | "reject" | "reopen" | "note"; body: string;
+}
 export interface FeedbackItem {
   id: number;
   section: string | null;
@@ -2914,6 +2928,13 @@ export interface FeedbackItem {
   /** Коли звернення разом із фото буде безповоротно видалене (closedAt + 30 днів). */
   purgeAt: string | null;
   files: FeedbackFile[];
+  /** null — старе звернення, подане вільним текстом до форми 21.10.2026. */
+  kind: FeedbackKind | null;
+  impact: FeedbackImpact | null;
+  fields: Record<string, string> | null;
+  context: Record<string, string> | null;
+  comments: FeedbackComment[];
+  confirmedAt: string | null;
 }
 export interface FeedbackFile { id: number; name: string; mime: string; sizeBytes: number; createdById: number | null }
 /** Ліміти — дзеркало `core/feedbackRetention.ts`; сервер однаково перевіряє сам. */
@@ -2936,16 +2957,27 @@ export async function fetchFeedbackFileBlobUrl(feedbackId: number, fileId: numbe
   const { data } = await api.get(`/feedback/${feedbackId}/files/${fileId}`, { responseType: "blob" });
   return URL.createObjectURL(data as Blob);
 }
-export async function fetchFeedback(): Promise<FeedbackItem[]> {
-  const { data } = await api.get<{ feedback: FeedbackItem[] }>("/feedback");
-  return data.feedback;
+export async function fetchFeedback(): Promise<{ items: FeedbackItem[]; form: FeedbackKindSpec[] }> {
+  const { data } = await api.get<{ feedback: FeedbackItem[]; form: FeedbackKindSpec[] }>("/feedback");
+  return { items: data.feedback, form: data.form ?? [] };
 }
-export async function submitFeedback(payload: { message: string; section?: string }): Promise<FeedbackItem> {
+export async function submitFeedback(payload: {
+  kind: FeedbackKind; section: string; impact: FeedbackImpact | null;
+  fields: Record<string, string>; context: Record<string, string>;
+}): Promise<FeedbackItem> {
   const { data } = await api.post<{ feedback: FeedbackItem }>("/feedback", payload);
   return data.feedback;
 }
 export async function updateFeedback(id: number, payload: { status: FeedbackStatus; adminNote?: string }): Promise<FeedbackItem> {
   const { data } = await api.patch<{ feedback: FeedbackItem }>(`/feedback/${id}`, payload);
+  return data.feedback;
+}
+export async function commentFeedback(id: number, body: string): Promise<FeedbackItem> {
+  const { data } = await api.post<{ feedback: FeedbackItem }>(`/feedback/${id}/comments`, { body });
+  return data.feedback;
+}
+export async function confirmFeedback(id: number, ok: boolean, body?: string): Promise<FeedbackItem> {
+  const { data } = await api.post<{ feedback: FeedbackItem }>(`/feedback/${id}/confirm`, { ok, body });
   return data.feedback;
 }
 

@@ -5696,6 +5696,34 @@ CREATE INDEX IF NOT EXISTS idx_feedback_files_fb ON feedback_files(feedback_id, 
 REVOKE ALL ON feedback_files FROM ai_readonly;
 
 -- ══════════════════════════════════════════════════════════════════════════
+-- 💬 ЗВОРОТНИЙ ЗВʼЯЗОК: СТРУКТУРОВАНЕ ЗВЕРНЕННЯ, «ПОТРІБНІ ДЕТАЛІ», ПІДТВЕРДЖЕННЯ АВТОРОМ (21.10.2026, Роман).
+--  · `kind` / `impact` / `fields_json` — тип звернення, «наскільки заважає» і поля форми
+--    (опис і перевірка — `core/feedbackForm.ts`). `message` лишається: роут складає його з полів,
+--    тож старі записи й усе, що читає `message`, працюють без змін. Старі звернення мають `kind` NULL.
+--  · `context_json` — що підставилось само: збірка, роль, розділ, з якого прийшли.
+--  · `comments_json` — переписка автора й того, хто розбирає: питання «потрібні деталі», відповідь,
+--    причина відхилення, «досі не працює». Масив у рядку, а не окрема таблиця: живе й видаляється
+--    РАЗОМ зі зверненням (джоба `purgeFeedback`), окремого REVOKE не потребує — доступ той самий, що в `message`.
+--  · `needs_info` — питання автору; НЕ закрите (у `FEEDBACK_CLOSED_STATUSES` його немає), тож не видаляється.
+--  · `confirmed_at` — автор підтвердив, що вирішене справді працює.
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS kind TEXT;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS impact TEXT;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS fields_json JSONB;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS context_json JSONB;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS comments_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ;
+ALTER TABLE feedback DROP CONSTRAINT IF EXISTS feedback_status_check;
+ALTER TABLE feedback ADD CONSTRAINT feedback_status_check
+  CHECK (status IN ('pending','needs_info','approved','rejected','resolved'));
+ALTER TABLE feedback DROP CONSTRAINT IF EXISTS feedback_kind_check;
+ALTER TABLE feedback ADD CONSTRAINT feedback_kind_check
+  CHECK (kind IS NULL OR kind IN ('bug','data','change','idea','question'));
+ALTER TABLE feedback DROP CONSTRAINT IF EXISTS feedback_impact_check;
+ALTER TABLE feedback ADD CONSTRAINT feedback_impact_check
+  CHECK (impact IS NULL OR impact IN ('block','hurt','minor'));
+
+-- ══════════════════════════════════════════════════════════════════════════
 -- 💳 КАРТКИ У «ВИПИСЦІ» БЕЗ ПРОГРАМІСТА (Роман 07.10.2026; перша — робоча картка Олександра Ступаківського).
 --  · `company = 'staff'` — картка людини, не одна з наших компаній: у підсумок «ФОП Беспятчук» вона не йде.
 --  · `mono_pan_last4` — останні 4 цифри: картку працівника привʼязуємо ЛИШЕ за ними (під його токеном лежать і особисті

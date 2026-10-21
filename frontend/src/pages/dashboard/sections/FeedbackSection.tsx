@@ -1,7 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDialogs } from "../../../components/Dialogs";
-import { rejectNote, failureReason } from "../../../actionFeedback";
+import { failureReason } from "../../../actionFeedback";
+import { NAV_ITEMS, HIDDEN_NAV } from "../../../components/Layout";
 import {
+  BUILD_SHA,
+  commentFeedback,
+  confirmFeedback,
   fetchFeedback,
   submitFeedback,
   updateFeedback,
@@ -10,10 +14,24 @@ import {
   fetchFeedbackFileBlobUrl,
   FEEDBACK_FILE_MAX_BYTES,
   FEEDBACK_FILES_PER_ITEM,
+  type FeedbackFormField,
+  type FeedbackImpact,
   type FeedbackItem,
   type FeedbackFile,
+  type FeedbackKind,
+  type FeedbackKindSpec,
   type FeedbackStatus,
 } from "../../../api";
+
+/*
+ * 💬 ЗВОРОТНИЙ ЗВʼЯЗОК (переробка 21.10.2026, рішення Романа).
+ * Звернення були абстрактні («звіт неправильно рахує»), тому тепер:
+ *  · звернення має ТИП, і в кожного типу свої обовʼязкові поля — серед них ПРИКЛАД;
+ *  · поки не заповнено все обовʼязкове, «Надіслати» неактивна, і під формою написано, чого бракує;
+ *  · опис полів приходить із сервера (`core/feedbackForm.ts`) — він же перевіряє звернення;
+ *  · «Потрібні деталі» — питання автору прямо у зверненні, автор відповідає там же;
+ *  · після «Вирішено» автор підтверджує «працює» або повертає «досі не працює».
+ */
 
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
@@ -43,269 +61,624 @@ function FeedbackThumb({ itemId, file, onDelete }: { itemId: number; file: Feedb
     return () => { alive = false; if (made) URL.revokeObjectURL(made); };
   }, [itemId, file.id]);
   return (
-    <div style={{ position: "relative", width: 76, height: 76, borderRadius: 8, border: "1px solid var(--border)", overflow: "hidden", background: "var(--card-bg)", flex: "0 0 auto" }}>
+    <div className="fb-thumb">
       {url ? (
-        <a href={url} target="_blank" rel="noreferrer" title={file.name}>
-          <img src={url} alt={file.name} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-        </a>
+        <a href={url} target="_blank" rel="noreferrer" title={file.name}><img src={url} alt={file.name} /></a>
       ) : (
-        <span style={{ fontSize: 10, color: "var(--text-muted)", display: "flex", alignItems: "center", justifyContent: "center", height: "100%", textAlign: "center", padding: 4 }}>
-          {failed ? "фото недоступне" : "…"}
-        </span>
+        <span className="fb-thumb-empty">{failed ? "фото недоступне" : "…"}</span>
       )}
-      {onDelete && (
-        <button type="button" onClick={onDelete} title="Прибрати фото" aria-label="Прибрати фото"
-          style={{ position: "absolute", top: 2, right: 2, width: 20, height: 20, borderRadius: "50%", border: "none", background: "rgba(0,0,0,0.6)", color: "#fff", fontSize: 11, cursor: "pointer", lineHeight: "20px", padding: 0 }}>✕</button>
-      )}
+      {onDelete && <button type="button" className="fb-thumb-x" onClick={onDelete} title="Прибрати фото" aria-label="Прибрати фото">✕</button>}
     </div>
   );
 }
 
 /** Зона додавання фото: кнопка, перетягування, Ctrl+V. Кладе файли через `onFiles`, решту вирішує власник. */
-function PhotoDrop({ onFiles, room, compact = false }: { onFiles: (f: File[]) => void; room: number; compact?: boolean }) {
+function PhotoDrop({ onFiles, room, compact = false, label }: { onFiles: (f: File[]) => void; room: number; compact?: boolean; label?: string }) {
   const input = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
   if (room <= 0) return null;
   return (
     <div
+      className={`fb-drop${over ? " over" : ""}${compact ? " compact" : ""}`}
       onDragOver={(e) => { e.preventDefault(); setOver(true); }}
       onDragLeave={() => setOver(false)}
       onDrop={(e) => { e.preventDefault(); setOver(false); onFiles(Array.from(e.dataTransfer.files)); }}
       onClick={() => input.current?.click()}
       role="button"
-      style={{ border: `1px dashed ${over ? "#c5141c" : "var(--border)"}`, borderRadius: 8, padding: compact ? "6px 10px" : "10px 12px", fontSize: 12, color: "var(--text-muted)", cursor: "pointer", textAlign: "center", background: over ? "rgba(197,20,28,0.05)" : "transparent" }}
     >
-      📷 {compact ? "Додати фото" : "Додати фото — перетягніть, вставте з буфера (Ctrl+V) або натисніть"} · JPG/PNG/WEBP до 5 МБ · ще {room}
+      📎 {compact ? "Додати фото" : (label ?? "Вставте скрін Ctrl+V, перетягніть файл або натисніть")} · JPG/PNG/WEBP до 5 МБ · ще {room}
       <input ref={input} type="file" accept={IMAGE_TYPES.join(",")} multiple hidden
         onChange={(e) => { onFiles(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
     </div>
   );
 }
 
-const STATUS_META: Record<FeedbackStatus, { label: string; color: string; bg: string }> = {
-  pending: { label: "На розгляді", color: "#b45309", bg: "rgba(245,158,11,0.15)" },
-  approved: { label: "Схвалено", color: "#1d4ed8", bg: "rgba(37,99,235,0.15)" },
-  rejected: { label: "Відхилено", color: "#b91c1c", bg: "rgba(220,38,38,0.15)" },
-  resolved: { label: "Вирішено", color: "#15803d", bg: "rgba(22,163,74,0.15)" },
+// ── Довідники екрана ─────────────────────────────────────────────────────────
+
+const STATUS_META: Record<FeedbackStatus, { label: string; cls: string }> = {
+  pending: { label: "На розгляді", cls: "new" },
+  needs_info: { label: "Потрібні деталі", cls: "ask" },
+  approved: { label: "В роботі", cls: "work" },
+  resolved: { label: "Вирішено", cls: "done" },
+  rejected: { label: "Відхилено", cls: "rej" },
 };
 
-function StatusBadge({ status }: { status: FeedbackStatus }) {
-  const m = STATUS_META[status];
+const IMPACTS: { v: FeedbackImpact; label: string; sub: string }[] = [
+  { v: "block", label: "🔴 Блокує роботу", sub: "не можу працювати далі" },
+  { v: "hurt", label: "🟠 Заважає", sub: "є обхід, але довго" },
+  { v: "minor", label: "⚪ Дрібниця", sub: "косметика" },
+];
+const IMPACT_SHORT: Record<FeedbackImpact, string> = { block: "🔴 блокує", hurt: "🟠 заважає", minor: "⚪ дрібниця" };
+
+/** Пʼять питань інструкції — по них іде чек-лист праворуч від форми. */
+const QUESTIONS: { k: FeedbackFormField["question"]; q: string; w: string }[] = [
+  { k: "where", q: "Де?", w: "розділ і що відкрито: період, менеджер, клієнт" },
+  { k: "now", q: "Що зараз?", w: "цифра, текст помилки дослівно" },
+  { k: "should", q: "Як має бути?", w: "і звідки це відомо: Kommo, 1С, банк" },
+  { k: "impact", q: "Наскільки заважає / навіщо?", w: "блокує / заважає / дрібниця; що це спростить" },
+  { k: "example", q: "Приклад", w: "номер угоди, рахунку, клієнт, скрін — обовʼязково" },
+];
+
+const PAIRS: Record<FeedbackKind, [string, string]> = {
+  bug: ["Не працює дебіторка", "Дебіторка → ТОВ «Сігма». Кнопка «Запит на ліміт» не відкриває вікно. Двічі о 10:15, Chrome. Скрін додаю. Блокує роботу."],
+  data: ["Звіт неправильно рахує", "Звіт → тиждень 13–19.10, менеджер Петренко: гроші тижня 48 000, у 1С 63 500. Не врахований рахунок №1234 від 16.10 на 15 500 ₴. Скрін з 1С."],
+  change: ["Зробіть зручніше задачі", "Задачник: задача на 3 менеджерів = 3 окремі, загального прогресу не видно. Хочу «виконали 2 з 3». Ставлю так ~5 разів на тиждень."],
+  idea: ["Додайте аналітику по клієнтах", "Лояльність: колонка «дата останнього перевезення». Зараз щоразу відкриваю Kommo — ~20 хв на день."],
+  question: ["Як це працює?", "Задачник: як поставити план на тиждень лише на 3 дні? Менеджер Петренко, 27–31.10."],
+};
+
+/** Готові відповіді того, хто розбирає, — один клік вставляє текст. */
+const REPLIES: Record<string, string> = {
+  "Немає прикладу": "Покажіть, будь ласка, на прикладі: конкретний клієнт, номер угоди чи рахунку і скрін. Без прикладу не зможу відтворити й перевірити виправлення.",
+  "Немає «де»": "Уточніть, де саме: розділ, період, менеджер або клієнт. Найкраще — скрін екрана, де це видно.",
+  "Немає «як має бути»": "Яка цифра має бути і звідки це видно — Kommo, 1С, банк? Дайте номер угоди або рахунку.",
+  "Нова функція без прикладу": "Опишіть реальний випадок, коли цього не вистачило, і як має виглядати результат — можна малюнок або скрін з Excel.",
+  "Кілька проблем": "Тут кілька різних питань — розбийте, будь ласка, на окремі звернення, так кожне закриємо швидше.",
+  "Немає «навіщо»": "Яку роботу це спростить і як часто вона потрібна? Так зможу поставити пріоритет.",
+  "Дубль": "Це вже є у зверненні №… — стежте там.",
+};
+
+const ROLE_LABEL: Record<string, string> = {
+  admin: "Адмін", ceo: "СЕО", opdir: "Операційний директор", kvp: "КВП", financier: "Фінансист",
+  hr: "HR", team_lead: "Тімлід", manager: "Менеджер",
+};
+
+const OTHER_SECTION = "Інше";
+const sectionOptions = (): string[] =>
+  [...NAV_ITEMS.filter((n) => n.key !== "feedback" && !HIDDEN_NAV.has(n.key)).map((n) => n.label), OTHER_SECTION];
+const sectionLabel = (key: string | undefined): string | null =>
+  (key && NAV_ITEMS.find((n) => n.key === key)?.label) || null;
+
+function fmt(d: string): string {
+  return new Date(d).toLocaleString("uk-UA", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+// ── Екран ────────────────────────────────────────────────────────────────────
+
+type Tab = "new" | "list" | "guide";
+
+export function FeedbackSection({ isAdmin, role, fromSection }: { isAdmin: boolean; role: string; fromSection?: string }) {
+  const [tab, setTab] = useState<Tab>("new");
+  const [items, setItems] = useState<FeedbackItem[]>([]);
+  const [form, setForm] = useState<FeedbackKindSpec[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+
+  const load = () => {
+    setLoading(true);
+    fetchFeedback()
+      .then((r) => { setItems(r.items); setForm(r.form); setLoadErr(null); })
+      .catch((e) => setLoadErr(failureReason(e, "Звернення не завантажились")))
+      .finally(() => setLoading(false));
+  };
+  useEffect(load, []);
+
+  const [notice, setNotice] = useState<string | null>(null);
+  const replace = (it: FeedbackItem) => setItems((prev) => prev.map((x) => (x.id === it.id ? it : x)));
+
+  // Лічильник на вкладці: адміну — що чекає розбору; решті — що чекає САМЕ ЇХ (питання, перевірка).
+  const attention = isAdmin
+    ? items.filter((x) => x.status === "pending").length
+    : items.filter((x) => x.status === "needs_info" || (x.status === "resolved" && !x.confirmedAt)).length;
+
   return (
-    <span style={{ fontSize: 12, fontWeight: 700, color: m.color, background: m.bg, padding: "2px 10px", borderRadius: 999, whiteSpace: "nowrap" }}>
-      {m.label}
-    </span>
+    <div className="fb">
+      <div className="page-header">
+        <h1 className="page-title">Зворотний звʼязок</h1>
+      </div>
+      <p className="fb-sub">Повідомте про помилку або запропонуйте зміну. Добре описане звернення роблять у рази швидше.</p>
+
+      <div className="fb-tabs" role="tablist">
+        <button role="tab" className={tab === "new" ? "on" : ""} onClick={() => setTab("new")}>Нове звернення</button>
+        <button role="tab" className={tab === "list" ? "on" : ""} onClick={() => setTab("list")}>
+          {isAdmin ? "Розбір" : "Мої звернення"}{attention > 0 && <span className="fb-cnt">{attention}</span>}
+        </button>
+        <button role="tab" className={tab === "guide" ? "on" : ""} onClick={() => setTab("guide")}>Як писати звернення</button>
+      </div>
+
+      {loadErr && <div role="alert" className="fb-alert">{loadErr} <button className="fb-btn sm ghost" onClick={load}>Повторити</button></div>}
+      {notice && <div role="status" className="fb-notice">{notice} <button className="fb-link" onClick={() => setNotice(null)}>Зрозуміло</button></div>}
+
+      {tab === "new" && (
+        form.length === 0
+          ? <p className="loading-text">{loading ? "Завантаження форми…" : "Форма не завантажилась — оновіть сторінку."}</p>
+          : <NewFeedback form={form} role={role} fromSection={fromSection} onGuide={() => setTab("guide")}
+              onCreated={(it, photoErr) => {
+                setItems((p) => [it, ...p]);
+                setNotice(`Звернення №${it.id} надіслано. Статус і питання до вас — тут, у «${isAdmin ? "Розбір" : "Мої звернення"}».${photoErr ? ` ${photoErr}` : ""}`);
+                setTab("list");
+              }} />
+      )}
+      {tab === "list" && (
+        <FeedbackList items={items} form={form} isAdmin={isAdmin} loading={loading} onChange={replace} reload={load} />
+      )}
+      {tab === "guide" && <Guide form={form} />}
+    </div>
   );
 }
 
-export function FeedbackSection({ isAdmin }: { isAdmin: boolean }) {
-  const dlg = useDialogs();
-  const [items, setItems] = useState<FeedbackItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState("");
-  const [section, setSection] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [filter, setFilter] = useState<FeedbackStatus | "all">("all");
-  // 📷 Фото, вибрані до надсилання (ще не на сервері), і їхні прев'ю.
+// ── Нове звернення ───────────────────────────────────────────────────────────
+
+function NewFeedback({ form, role, fromSection, onCreated, onGuide }: {
+  form: FeedbackKindSpec[]; role: string; fromSection?: string;
+  onCreated: (it: FeedbackItem, photoErr: string | null) => void; onGuide: () => void;
+}) {
+  const fromLabel = sectionLabel(fromSection);
+  const [kind, setKind] = useState<FeedbackKind | null>(null);
+  const [section, setSection] = useState<string>(fromLabel ?? "");
+  const [vals, setVals] = useState<Record<string, string>>({});
+  const [impact, setImpact] = useState<FeedbackImpact | null>(null);
   const [pending, setPending] = useState<File[]>([]);
   const [pendingUrls, setPendingUrls] = useState<string[]>([]);
   const [photoErr, setPhotoErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const opened = useMemo(() => new Date().toISOString(), []);
+
   useEffect(() => {
     const urls = pending.map((f) => URL.createObjectURL(f));
     setPendingUrls(urls);
     return () => urls.forEach((u) => URL.revokeObjectURL(u));
   }, [pending]);
 
+  const spec = form.find((s) => s.kind === kind) ?? null;
+
   function addPending(files: File[]) {
     const { ok, problems } = acceptImages(files, FEEDBACK_FILES_PER_ITEM - pending.length);
     setPhotoErr(problems.length ? problems.join("; ") : null);
     if (ok.length) setPending((p) => [...p, ...ok]);
   }
-
-  async function addToItem(item: FeedbackItem, files: File[]) {
-    const { ok, problems } = acceptImages(files, FEEDBACK_FILES_PER_ITEM - item.files.length);
-    const errs = [...problems];
-    for (const f of ok) {
-      try { await uploadFeedbackFile(item.id, f); } catch (e) { errs.push(`«${f.name}»: ${failureReason(e, "не завантажилось")}`); }
-    }
-    setPhotoErr(errs.length ? errs.join("; ") : null);
-    if (ok.length) load();
-  }
-
-  async function removeFile(itemId: number, fileId: number) {
-    if (!(await dlg.confirm("Прибрати це фото?"))) return;
-    try {
-      await deleteFeedbackFile(itemId, fileId);
-      setItems((prev) => prev.map((x) => (x.id === itemId ? { ...x, files: x.files.filter((f) => f.id !== fileId) } : x)));
-    } catch (e) {
-      setPhotoErr(failureReason(e, "Фото не прибралось"));
-    }
-  }
-
-  const load = () => {
-    setLoading(true);
-    fetchFeedback().then(setItems).catch(() => setItems([])).finally(() => setLoading(false));
+  const onPaste = (e: React.ClipboardEvent) => {
+    const imgs = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith("image/"));
+    if (imgs.length) { e.preventDefault(); addPending(imgs); }
   };
-  useEffect(load, []);
+
+  // Що з пʼяти питань уже закрито: питання вважається закритим, коли заповнені ВСІ обовʼязкові поля,
+  // що на нього відповідають (+ розділ для «де», + «наскільки заважає» для «impact», де його питають).
+  const done = useMemo(() => {
+    const out: Partial<Record<FeedbackFormField["question"], boolean>> = {};
+    if (!spec) return out;
+    for (const q of QUESTIONS) {
+      const fs = spec.fields.filter((f) => f.question === q.k && !f.optional);
+      const extra = q.k === "where" ? [!!section] : q.k === "impact" && spec.askImpact ? [!!impact] : [];
+      if (!fs.length && !extra.length) continue;
+      out[q.k] = fs.every((f) => (vals[f.key] ?? "").trim() !== "") && extra.every(Boolean);
+    }
+    return out;
+  }, [spec, vals, section, impact]);
+  const asked = QUESTIONS.filter((q) => done[q.k] !== undefined);
+  const okCount = asked.filter((q) => done[q.k]).length;
+  const missing = asked.filter((q) => !done[q.k]).map((q) => q.q.replace("?", ""));
+  const ready = !!spec && missing.length === 0;
+  const pct = asked.length ? Math.round((100 * okCount) / asked.length) : 0;
 
   async function send() {
-    if (!message.trim()) return;
+    if (!spec || !ready) return;
     setSaving(true);
+    setErr(null);
     try {
-      const created = await submitFeedback({ message: message.trim(), section: section.trim() || undefined });
-      setItems((prev) => [created, ...prev]);
-      setMessage("");
-      setSection("");
+      const created = await submitFeedback({
+        kind: spec.kind, section, impact: spec.askImpact ? impact : null, fields: vals,
+        context: { build: BUILD_SHA, role, fromSection: fromLabel ?? "", path: opened },
+      });
       // Фото — після створення: їм потрібен id звернення. Невдале фото називаємо, текст уже збережено.
       const errs: string[] = [];
       for (const f of pending) {
-        try { await uploadFeedbackFile(created.id, f); } catch (e) { errs.push(`«${f.name}»: ${failureReason(e, "не завантажилось")}`); }
+        try { created.files.push(await uploadFeedbackFile(created.id, f)); } catch (e) { errs.push(`«${f.name}»: ${failureReason(e, "не завантажилось")}`); }
       }
-      setPending([]);
-      setPhotoErr(errs.length ? `Звернення надіслано, але не всі фото: ${errs.join("; ")}` : null);
-      if (pending.length) load();
+      setVals({}); setImpact(null); setPending([]); setKind(null);
+      onCreated(created, errs.length ? `Не всі фото завантажились: ${errs.join("; ")}. Додайте їх у самому зверненні.` : null);
+    } catch (e) {
+      setErr(failureReason(e, "Звернення не надіслалось"));
     } finally {
       setSaving(false);
     }
   }
 
-  async function setStatus(id: number, status: FeedbackStatus) {
-    // «Скасувати» у вікні коментаря — нічого не робимо. Було `?? undefined`, і скасування однаково
-    // ВІДХИЛЯЛО звернення (30.09.2026, `#1103`).
-    let note: string | undefined;
-    if (status === "rejected") {
-      const r = rejectNote((await dlg.prompt("Коментар (необовʼязково):")));
-      if (!r.reject) return;
-      note = r.note;
-    }
-    const updated = await updateFeedback(id, { status, adminNote: note });
-    setItems((prev) => prev.map((x) => (x.id === id ? updated : x)));
-  }
+  return (
+    <>
+      <p className="fb-step">1 · Що сталося?</p>
+      <div className="fb-types">
+        {form.map((s) => (
+          <button key={s.kind} type="button" className={`fb-type${s.kind === kind ? " on" : ""}`}
+            onClick={() => { setKind(s.kind); setErr(null); }}>
+            <span className="ic">{s.icon}</span><span className="t">{s.title}</span><span className="d">{s.description}</span>
+          </button>
+        ))}
+      </div>
 
-  const shown = filter === "all" ? items : items.filter((x) => x.status === filter);
+      {!spec ? (
+        <div className="chart-card fb-empty">Оберіть тип звернення — і зʼявляться поля з підказками, що саме написати.</div>
+      ) : (
+        <div className="fb-grid">
+          <div className="chart-card">
+            <p className="fb-step">2 · Опишіть</p>
+            <div className="fb-auto">
+              {fromLabel && <span className="fb-chip">📍 прийшли з «{fromLabel}»</span>}
+              <span className="fb-chip">👤 {ROLE_LABEL[role] ?? (role || "роль невідома")}</span>
+              <span className="fb-chip">🕒 {fmt(opened)}</span>
+              <span className="fb-chip">збірка {BUILD_SHA.slice(0, 7)}</span>
+              <span className="fb-chip dashed">підставлено само</span>
+            </div>
+
+            <div className="fb-f">
+              <label><span>Розділ</span><span className="req">*</span></label>
+              <select value={section} onChange={(e) => setSection(e.target.value)}>
+                <option value="">Оберіть розділ…</option>
+                {sectionOptions().map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </div>
+
+            {spec.fields.map((f) => (
+              <div className="fb-f" key={`${spec.kind}-${f.key}`}>
+                <label><span>{f.label}</span>{f.optional ? <span className="opt">необовʼязково</span> : <span className="req">*</span>}</label>
+                {f.multiline ? (
+                  <textarea rows={3} value={vals[f.key] ?? ""} placeholder={f.placeholder} onPaste={onPaste}
+                    onChange={(e) => setVals((v) => ({ ...v, [f.key]: e.target.value }))} />
+                ) : (
+                  <input value={vals[f.key] ?? ""} placeholder={f.placeholder} onPaste={onPaste}
+                    onChange={(e) => setVals((v) => ({ ...v, [f.key]: e.target.value }))} />
+                )}
+                {f.hint && <div className="fb-hint">{f.hint}</div>}
+              </div>
+            ))}
+
+            {spec.askImpact && (
+              <div className="fb-f">
+                <label><span>Наскільки заважає</span><span className="req">*</span></label>
+                <div className="fb-seg">
+                  {IMPACTS.map((i) => (
+                    <button key={i.v} type="button" data-v={i.v} className={impact === i.v ? "on" : ""} onClick={() => setImpact(i.v)}>
+                      {i.label}<small>{i.sub}</small>
+                    </button>
+                  ))}
+                </div>
+                {impact === "block" && <div className="fb-hint warn">Якщо справа термінова — після надсилання продублюйте коротко в чат.</div>}
+              </div>
+            )}
+
+            <div className="fb-f">
+              <label><span>Скріни</span><span className="opt">дуже бажано</span></label>
+              <PhotoDrop onFiles={addPending} room={FEEDBACK_FILES_PER_ITEM - pending.length} />
+              {pending.length > 0 && (
+                <div className="fb-thumbs">
+                  {pending.map((f, i) => (
+                    <div key={i} className="fb-thumb">
+                      {pendingUrls[i] && <img src={pendingUrls[i]} alt={f.name} />}
+                      <button type="button" className="fb-thumb-x" onClick={() => setPending((p) => p.filter((_, j) => j !== i))} aria-label="Прибрати">✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {photoErr && <div role="alert" className="fb-err">{photoErr}</div>}
+            </div>
+
+            {err && <div role="alert" className="fb-alert">{err}</div>}
+            <div className="fb-bar">
+              <span className="fb-missing">{missing.length ? <>Ще потрібно: <b>{missing.join(", ")}</b></> : "✓ Усе на місці"}</span>
+              <button className="fb-btn" onClick={send} disabled={!ready || saving}>{saving ? "Надсилання…" : "Надіслати"}</button>
+            </div>
+          </div>
+
+          <aside className="chart-card fb-aside">
+            <h3>Чи зрозуміють ваше звернення</h3>
+            <div className={`fb-meter${pct === 100 ? " full" : ""}`}><i style={{ width: `${pct}%` }} /></div>
+            <div className="fb-meter-t">{pct === 100 ? "Готово — звернення зрозуміле" : `Заповнено ${okCount} з ${asked.length}`}</div>
+            <ul className="fb-check">
+              {asked.map((q) => (
+                <li key={q.k} className={done[q.k] ? "ok" : ""}>
+                  <span className="dot">{done[q.k] ? "✓" : ""}</span>
+                  <span><b>{q.q}</b><br /><small>{q.w}</small></span>
+                </li>
+              ))}
+            </ul>
+            <div className="fb-ex-t">Приклад для «{spec.title}»</div>
+            <div className="fb-ex bad"><div className="lbl">Так не пишемо</div>{PAIRS[spec.kind][0]}</div>
+            <div className="fb-ex good"><div className="lbl">Так пишемо</div>{PAIRS[spec.kind][1]}</div>
+            <div className="fb-rule">Одне звернення — одна проблема. Три проблеми — три звернення.</div>
+            <button type="button" className="fb-link" onClick={onGuide}>Повна інструкція →</button>
+          </aside>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ── Список / розбір ──────────────────────────────────────────────────────────
+
+const FILTERS: { key: "all" | FeedbackStatus; label: string }[] = [
+  { key: "all", label: "Усі" },
+  { key: "pending", label: "На розгляді" },
+  { key: "needs_info", label: "Потрібні деталі" },
+  { key: "approved", label: "В роботі" },
+  { key: "resolved", label: "Вирішено" },
+  { key: "rejected", label: "Відхилено" },
+];
+
+function FeedbackList({ items, form, isAdmin, loading, onChange, reload }: {
+  items: FeedbackItem[]; form: FeedbackKindSpec[]; isAdmin: boolean; loading: boolean;
+  onChange: (it: FeedbackItem) => void; reload: () => void;
+}) {
+  const [filter, setFilter] = useState<"all" | FeedbackStatus>(isAdmin ? "pending" : "all");
   const counts = items.reduce((a, x) => ((a[x.status] = (a[x.status] ?? 0) + 1), a), {} as Record<string, number>);
+  const shown = filter === "all" ? items : items.filter((x) => x.status === filter);
+  // Підсумки для того, хто розбирає: черга і чи стали звернення зрозумілішими.
+  const last30 = items.filter((x) => Date.now() - new Date(x.createdAt).getTime() < 30 * 86_400_000);
+  const askedShare = last30.length
+    ? Math.round((100 * last30.filter((x) => x.comments.some((c) => c.kind === "question")).length) / last30.length)
+    : null;
 
   return (
     <>
-      <div className="page-header">
-        <h1 className="page-title">Зворотний звʼязок</h1>
+      {isAdmin && (
+        <div className="fb-stats">
+          <div className="fb-stat"><b>{counts.pending ?? 0}</b><span>чекають розбору</span></div>
+          <div className="fb-stat"><b>{counts.needs_info ?? 0}</b><span>чекають відповіді автора</span></div>
+          <div className="fb-stat"><b>{counts.approved ?? 0}</b><span>в роботі</span></div>
+          <div className="fb-stat"><b>{askedShare == null ? "—" : `${askedShare}%`}</b><span>повернуто за деталями (30 дн)</span></div>
+        </div>
+      )}
+      <div className="fb-filters">
+        {FILTERS.map((f) => (
+          <button key={f.key} className={filter === f.key ? "on" : ""} onClick={() => setFilter(f.key)}>
+            {f.label} <span>{f.key === "all" ? items.length : counts[f.key] ?? 0}</span>
+          </button>
+        ))}
+      </div>
+      {loading ? <p className="loading-text">Завантаження…</p>
+        : shown.length === 0 ? <p className="loading-text">Немає звернень{filter === "all" ? "" : " з цим статусом"}.</p>
+        : shown.map((it) => <FeedbackCard key={it.id} item={it} form={form} isAdmin={isAdmin} onChange={onChange} reload={reload} />)}
+      <p className="fb-note">Закриті звернення («вирішено», «відхилено») разом із фото видаляються через 30 днів.</p>
+    </>
+  );
+}
+
+const TRACK = ["Надіслано", "Розбір", "В роботі", "Вирішено", "Підтверджено"];
+function trackPos(it: FeedbackItem): number {
+  if (it.status === "pending" || it.status === "needs_info") return 1;
+  if (it.status === "approved") return 2;
+  if (it.status === "resolved") return it.confirmedAt ? 5 : 3;
+  return -1;
+}
+
+function FeedbackCard({ item, form, isAdmin, onChange, reload }: {
+  item: FeedbackItem; form: FeedbackKindSpec[]; isAdmin: boolean; onChange: (it: FeedbackItem) => void; reload: () => void;
+}) {
+  const dlg = useDialogs();
+  const spec = form.find((s) => s.kind === item.kind) ?? null;
+  const [mode, setMode] = useState<null | "ask" | "reject" | "reply" | "reopen">(null);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const meta = STATUS_META[item.status];
+  const pos = trackPos(item);
+  const title = spec
+    ? `${spec.icon} ${spec.title}${item.fields?.actual ? ` · ${item.fields.actual.split("\n")[0].slice(0, 90)}` : ""}`
+    : item.message.split("\n")[0].slice(0, 110);
+  const statusLabel = item.status === "resolved" && item.confirmedAt ? "Підтверджено автором" : meta.label;
+
+  async function run(fn: () => Promise<FeedbackItem>) {
+    setBusy(true); setErr(null);
+    try { onChange(await fn()); setMode(null); setText(""); }
+    catch (e) { setErr(failureReason(e, "Не вийшло")); }
+    finally { setBusy(false); }
+  }
+  async function addFiles(files: File[]) {
+    const { ok, problems } = acceptImages(files, FEEDBACK_FILES_PER_ITEM - item.files.length);
+    const errs = [...problems];
+    for (const f of ok) {
+      try { await uploadFeedbackFile(item.id, f); } catch (e) { errs.push(`«${f.name}»: ${failureReason(e, "не завантажилось")}`); }
+    }
+    setErr(errs.length ? errs.join("; ") : null);
+    if (ok.length) reload();
+  }
+  async function removeFile(fileId: number) {
+    if (!(await dlg.confirm({ text: "Прибрати це фото?", okLabel: "Прибрати", danger: true }))) return;
+    try {
+      await deleteFeedbackFile(item.id, fileId);
+      onChange({ ...item, files: item.files.filter((f) => f.id !== fileId) });
+    } catch (e) { setErr(failureReason(e, "Фото не прибралось")); }
+  }
+
+  const submitText = () => {
+    const t = text.trim();
+    if (!t) return;
+    if (mode === "ask") return run(() => updateFeedback(item.id, { status: "needs_info", adminNote: t }));
+    if (mode === "reject") return run(() => updateFeedback(item.id, { status: "rejected", adminNote: t }));
+    if (mode === "reopen") return run(() => confirmFeedback(item.id, false, t));
+    return run(() => commentFeedback(item.id, t));
+  };
+  const placeholder = mode === "ask" ? "Питання автору: чого саме не вистачає…"
+    : mode === "reject" ? "Причина відхилення (автор її побачить)…"
+    : mode === "reopen" ? "Що саме досі не працює — на якому прикладі…"
+    : "Ваша відповідь…";
+  const isAuthorView = !isAdmin;
+
+  return (
+    <div className={`fb-item s-${meta.cls}`}>
+      <div className="fb-item-top">
+        <div>
+          <div className="fb-item-title">{title}</div>
+          <div className="fb-meta">
+            №{item.id}{item.section ? ` · ${item.section}` : ""}{isAdmin ? ` · ${item.authorName}` : ""} · {fmt(item.createdAt)}
+            {item.impact && <span className={`fb-imp i-${item.impact}`}>{IMPACT_SHORT[item.impact]}</span>}
+          </div>
+        </div>
+        <span className={`fb-badge b-${meta.cls}`}>{statusLabel}</span>
       </div>
 
-      <div className="chart-card" style={{ marginBottom: 16 }}>
-        <h2 className="chart-title">Повідомити про баг або запропонувати правку</h2>
-        <p style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 0 }}>
-          Опишіть, що не так або що варто змінити, і за потреби додайте скриншот. Адміністратор схвалить чи відхилить, після чого правку буде виконано.
-          Закриті звернення («вирішено», «відхилено») разом із фото видаляються через 30 днів.
-        </p>
-        <input
-          value={section}
-          onChange={(e) => setSection(e.target.value)}
-          placeholder="Розділ (напр. «Огляд», «Звіт») — необовʼязково"
-          style={{ width: "100%", marginBottom: 8, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)" }}
-        />
-        <textarea
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          placeholder="Опишіть проблему або пропозицію…"
-          rows={4}
-          onPaste={(e) => {
-            const imgs = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith("image/"));
-            if (imgs.length) { e.preventDefault(); addPending(imgs); }
-          }}
-          style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", resize: "vertical" }}
-        />
-        <div style={{ marginTop: 8 }}>
-          <PhotoDrop onFiles={addPending} room={FEEDBACK_FILES_PER_ITEM - pending.length} />
-          {pending.length > 0 && (
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-              {pending.map((f, i) => (
-                <div key={i} style={{ position: "relative", width: 76, height: 76, borderRadius: 8, border: "1px solid var(--border)", overflow: "hidden" }}>
-                  {pendingUrls[i] && <img src={pendingUrls[i]} alt={f.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
-                  <button type="button" onClick={() => setPending((p) => p.filter((_, j) => j !== i))} title="Прибрати" aria-label="Прибрати"
-                    style={{ position: "absolute", top: 2, right: 2, width: 20, height: 20, borderRadius: "50%", border: "none", background: "rgba(0,0,0,0.6)", color: "#fff", fontSize: 11, cursor: "pointer", padding: 0 }}>✕</button>
-                </div>
+      {pos > 0 && (
+        <div className="fb-track">
+          {TRACK.map((s, i) => (
+            <span key={s} className={i < pos ? "d" : i === pos ? "c" : ""}>
+              {i === 1 && item.status === "needs_info" ? "Потрібні деталі" : s}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {spec && item.fields ? (
+        <dl className="fb-fields">
+          {spec.fields.map((f) => item.fields![f.key] ? (
+            <FieldRow key={f.key} label={f.label} value={item.fields![f.key]} example={f.question === "example"} />
+          ) : null)}
+        </dl>
+      ) : (
+        <div className="fb-legacy">{item.message}<div className="fb-meta">подано до нової форми — без типу й прикладу</div></div>
+      )}
+
+      {item.files.length > 0 && (
+        <div className="fb-thumbs">
+          {item.files.map((f) => <FeedbackThumb key={f.id} itemId={item.id} file={f} onDelete={() => removeFile(f.id)} />)}
+        </div>
+      )}
+      {item.files.length < FEEDBACK_FILES_PER_ITEM && item.status !== "rejected" && (
+        <div className="fb-drop-wrap"><PhotoDrop compact onFiles={addFiles} room={FEEDBACK_FILES_PER_ITEM - item.files.length} /></div>
+      )}
+
+      {item.comments.length > 0 && (
+        <div className="fb-thread">
+          {item.comments.map((c, i) => (
+            <div key={i} className={`fb-msg r-${c.role} k-${c.kind}`}>
+              <div className="fb-msg-h"><b>{c.byName}</b> · {fmt(c.at)}{c.kind === "question" ? " · питання" : c.kind === "reject" ? " · причина відхилення" : c.kind === "reopen" ? " · досі не працює" : ""}</div>
+              <div className="fb-msg-b">{c.body}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {!item.comments.length && item.adminNote && <div className="fb-thread"><div className="fb-msg r-admin"><div className="fb-msg-h"><b>Коментар</b></div><div className="fb-msg-b">{item.adminNote}</div></div></div>}
+
+      {item.purgeAt && (
+        <div data-testid="feedback-purge-at" className="fb-note">
+          🗑 Видалиться {new Date(item.purgeAt).toLocaleDateString("uk-UA")} разом із фото — через 30 днів після закриття
+        </div>
+      )}
+
+      {/* Підказка автору, коли хід за ним. */}
+      {isAuthorView && item.status === "needs_info" && mode == null && (
+        <div className="fb-callout ask">Вам поставили питання — відповідайте тут, і звернення повернеться на розгляд.</div>
+      )}
+      {isAuthorView && item.status === "resolved" && !item.confirmedAt && mode == null && (
+        <div className="fb-callout done">Виправлено. Перевірте, будь ласка, на вашому прикладі.</div>
+      )}
+
+      {mode && (
+        <div className="fb-compose">
+          {(mode === "ask" || mode === "reject") && (
+            <div className="fb-replies">
+              {Object.entries(REPLIES).map(([k, v]) => (
+                <button key={k} type="button" onClick={() => setText((t) => (t ? `${t}\n${v}` : v))}>{k}</button>
               ))}
             </div>
           )}
-          {photoErr && <div role="alert" style={{ color: "#b91c1c", fontSize: 12, marginTop: 6 }}>{photoErr}</div>}
-        </div>
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
-          <button className="btn-primary" onClick={send} disabled={saving || !message.trim()}
-            style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: saving || !message.trim() ? "#94a3b8" : "#c5141c", color: "#fff", fontWeight: 600, cursor: saving || !message.trim() ? "default" : "pointer" }}>
-            {saving ? "Надсилання…" : "Надіслати"}
-          </button>
-        </div>
-      </div>
-
-      <div className="chart-card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-          <h2 className="chart-title" style={{ marginBottom: 0 }}>{isAdmin ? "Усі звернення" : "Мої звернення"}</h2>
-          <select value={filter} onChange={(e) => setFilter(e.target.value as FeedbackStatus | "all")}>
-            <option value="all">Усі ({items.length})</option>
-            <option value="pending">На розгляді ({counts.pending ?? 0})</option>
-            <option value="approved">Схвалено ({counts.approved ?? 0})</option>
-            <option value="resolved">Вирішено ({counts.resolved ?? 0})</option>
-            <option value="rejected">Відхилено ({counts.rejected ?? 0})</option>
-          </select>
-        </div>
-        {loading ? (
-          <p className="loading-text">Завантаження…</p>
-        ) : shown.length === 0 ? (
-          <p className="loading-text">Немає звернень.</p>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
-            {shown.map((f) => (
-              <div key={f.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "12px 14px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    <StatusBadge status={f.status} />
-                    {f.section && <span style={{ fontSize: 12, color: "var(--text-muted)" }}>· {f.section}</span>}
-                    {isAdmin && <span style={{ fontSize: 12, color: "var(--text-muted)" }}>· {f.authorName}</span>}
-                  </div>
-                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{new Date(f.createdAt).toLocaleString("uk-UA")}</span>
-                </div>
-                <div style={{ fontSize: 14, whiteSpace: "pre-wrap" }}>{f.message}</div>
-                {f.files.length > 0 && (
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-                    {f.files.map((file) => (
-                      <FeedbackThumb key={file.id} itemId={f.id} file={file} onDelete={() => removeFile(f.id, file.id)} />
-                    ))}
-                  </div>
-                )}
-                {f.files.length < FEEDBACK_FILES_PER_ITEM && (
-                  <div style={{ marginTop: 8, maxWidth: 360 }}>
-                    <PhotoDrop compact onFiles={(fs) => addToItem(f, fs)} room={FEEDBACK_FILES_PER_ITEM - f.files.length} />
-                  </div>
-                )}
-                {f.purgeAt && (
-                  <div data-testid="feedback-purge-at" style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6 }}>
-                    🗑 Видалиться {new Date(f.purgeAt).toLocaleDateString("uk-UA")} разом із фото — через 30 днів після закриття
-                  </div>
-                )}
-                {f.adminNote && (
-                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6, fontStyle: "italic" }}>Коментар адміна: {f.adminNote}</div>
-                )}
-                {isAdmin && (
-                  <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-                    {f.status === "pending" && (
-                      <>
-                        <button onClick={() => setStatus(f.id, "approved")} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: "#1d4ed8", color: "#fff", fontWeight: 600, cursor: "pointer" }}>✓ Схвалити</button>
-                        <button onClick={() => setStatus(f.id, "rejected")} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer" }}>✕ Відхилити</button>
-                      </>
-                    )}
-                    {f.status === "approved" && (
-                      <button onClick={() => setStatus(f.id, "resolved")} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: "#16a34a", color: "#fff", fontWeight: 600, cursor: "pointer" }}>✔ Позначити вирішеним</button>
-                    )}
-                    {(f.status === "rejected" || f.status === "resolved") && (
-                      <button onClick={() => setStatus(f.id, "pending")} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", cursor: "pointer" }}>↩ Повернути на розгляд</button>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
+          <textarea rows={3} autoFocus value={text} placeholder={placeholder} onChange={(e) => setText(e.target.value)} />
+          <div className="fb-actions">
+            <button className="fb-btn sm" disabled={busy || !text.trim()} onClick={submitText}>
+              {mode === "ask" ? "Надіслати питання автору" : mode === "reject" ? "Відхилити" : mode === "reopen" ? "Повернути в роботу" : "Відповісти"}
+            </button>
+            <button className="fb-btn sm ghost" onClick={() => { setMode(null); setText(""); }}>Скасувати</button>
           </div>
-        )}
+        </div>
+      )}
+
+      {err && <div role="alert" className="fb-err">{err}</div>}
+
+      {!mode && (
+        <div className="fb-actions">
+          {isAdmin && item.status === "pending" && <>
+            <button className="fb-btn sm" disabled={busy} onClick={() => run(() => updateFeedback(item.id, { status: "approved" }))}>Прийняти в роботу</button>
+            <button className="fb-btn sm ghost" onClick={() => setMode("ask")}>Потрібні деталі</button>
+            <button className="fb-btn sm ghost" onClick={() => setMode("reject")}>Відхилити</button>
+          </>}
+          {isAdmin && item.status === "approved" && <>
+            <button className="fb-btn sm ok" disabled={busy} onClick={() => run(() => updateFeedback(item.id, { status: "resolved" }))}>✔ Вирішено</button>
+            <button className="fb-btn sm ghost" onClick={() => setMode("ask")}>Потрібні деталі</button>
+          </>}
+          {isAdmin && (item.status === "needs_info" || item.status === "rejected" || item.status === "resolved") && (
+            <button className="fb-btn sm ghost" disabled={busy} onClick={() => run(() => updateFeedback(item.id, { status: "pending" }))}>↩ Повернути на розгляд</button>
+          )}
+          {isAuthorView && item.status === "resolved" && !item.confirmedAt && <>
+            <button className="fb-btn sm ok" disabled={busy} onClick={() => run(() => confirmFeedback(item.id, true))}>✓ Працює</button>
+            <button className="fb-btn sm ghost" onClick={() => setMode("reopen")}>✕ Досі не працює</button>
+          </>}
+          {item.status !== "rejected" && (
+            <button className={`fb-btn sm ${isAuthorView && item.status === "needs_info" ? "" : "ghost"}`} onClick={() => setMode("reply")}>
+              {isAuthorView && item.status === "needs_info" ? "Відповісти" : "💬 Написати"}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FieldRow({ label, value, example }: { label: string; value: string; example: boolean }) {
+  return <><dt>{label}</dt><dd className={example ? "ex" : ""}>{value}</dd></>;
+}
+
+// ── Інструкція ───────────────────────────────────────────────────────────────
+
+function Guide({ form }: { form: FeedbackKindSpec[] }) {
+  const kinds = form.length ? form : [];
+  return (
+    <div className="chart-card fb-guide">
+      <h2>Як написати звернення, щоб його зробили</h2>
+      <p>Звернення читає людина, яка не бачила ваш екран. Якщо з тексту не зрозуміло <b>що</b> і <b>де</b>, воно повертається з питаннями, і все затягується на дні.</p>
+      <div className="fb-rule"><b>Одне звернення — одна проблема.</b> Три проблеми — три звернення.</div>
+
+      <h3>Пʼять питань, на які відповідає кожне звернення</h3>
+      <ul className="fb-check">
+        {QUESTIONS.map((q, i) => (
+          <li key={q.k} className="ok"><span className="dot">{i + 1}</span><span><b>{q.q}</b><br /><small>{q.w}</small></span></li>
+        ))}
+      </ul>
+
+      <h3>Приклади обовʼязкові</h3>
+      <p>Розробник відтворює проблему саме на вашому прикладі і на ньому ж перевіряє виправлення: якщо на вашому прикладі стало правильно — зроблено. <b>Без прикладу звернення повертається з питанням.</b></p>
+      <dl className="fb-fields wide">
+        <dt>🐞 Не працює</dt><dd>клієнт / угода / рахунок, на якому ламається + скрін + дата й час</dd>
+        <dt>📊 Неправильна цифра</dt><dd>1–3 угоди чи рахунки: номер, сума, дата + скрін з Kommo / 1С, де видно правильне</dd>
+        <dt>✏️ Змінити / додати</dt><dd>реальна ситуація, коли цього не вистачило + як має виглядати (малюнок, скрін з Excel)</dd>
+      </dl>
+      <div className="fb-pair">
+        <div className="fb-ex bad"><div className="lbl">Не приклад</div>«у багатьох клієнтів», «іноді», «десь у звіті», «як завжди»</div>
+        <div className="fb-ex good"><div className="lbl">Приклад</div>«угода №61234567», «рахунок №1234 від 16.10 на 15 500 ₴», «ТОВ «Сігма», 21.10 о 10:15»</div>
       </div>
-    </>
+      <p className="fb-meta">Якщо випадків багато — дайте 2–3 приклади і напишіть, скільки їх приблизно всього.</p>
+
+      <h3>Погано → добре</h3>
+      {kinds.map((s) => (
+        <div className="fb-pair" key={s.kind}>
+          <div className="fb-ex bad"><div className="lbl">{s.icon} Так не пишемо</div>{PAIRS[s.kind][0]}</div>
+          <div className="fb-ex good"><div className="lbl">Так пишемо</div>{PAIRS[s.kind][1]}</div>
+        </div>
+      ))}
+
+      <h3>Що буде далі</h3>
+      <div className="fb-track all">
+        {["Надіслано", "Розбір ≤ 2 дні", "В роботі", "Вирішено", "Ви підтвердили"].map((s) => <span key={s} className="d">{s}</span>)}
+      </div>
+      <p>Якщо звернення повернули з питанням («Потрібні деталі») — відповідайте прямо в ньому. Після «Вирішено» перевірте на своєму прикладі й натисніть «Працює» або «Досі не працює». Якщо щось <b>блокує роботу</b> — позначте це у зверненні й продублюйте коротко в чат.</p>
+    </div>
   );
 }
