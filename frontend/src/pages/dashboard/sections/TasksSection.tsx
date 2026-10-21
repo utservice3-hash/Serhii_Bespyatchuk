@@ -1654,6 +1654,7 @@ export function TasksSection({
             kpi={kpiCount > 0 ? { count: kpiCount, node: renderTable(kpiSrc) } : null}
             today={kyivDate(new Date())}
             showAssignee={rows.some((t) => !isMine(t))}
+            isMine={isMine}
             meId={currentUserId}
             onOpen={setOpenTaskId}
             onOpenFeed={openFeed}

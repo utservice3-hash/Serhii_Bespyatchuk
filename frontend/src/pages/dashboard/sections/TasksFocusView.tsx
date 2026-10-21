@@ -18,13 +18,15 @@ import {
  * селектора статусу. Редагування — у картці задачі (клік по назві); у рядку лише галочка
  * «Готово», бо це найчастіша дія. Права на неї рахує сервер (`statusRights`).
  */
-export function TasksFocusView({ rows, kpi, today, showAssignee, meId, onOpen, onOpenFeed, onDone, onReopen, onStatus }: {
+export function TasksFocusView({ rows, kpi, today, showAssignee, isMine, meId, onOpen, onOpenFeed, onDone, onReopen, onStatus }: {
   rows: Task[];
   /** Плани KPI (тижневі парасольки) — окремою згорнутою групою, у лічильники не входять. */
   kpi: { count: number; node: ReactNode } | null;
   today: string;
   /** Колонка виконавця — коли у вибірці можуть бути чужі задачі. */
   showAssignee: boolean;
+  /** Задача на мені — імені в рядку не пишемо: «це мій задачник» (Роман 21.10.2026). */
+  isMine: (t: Task) => boolean;
   /** Хто дивиться: «від кого» показуємо лише на чужих задачах, як і в старій таблиці. */
   meId?: number;
   onOpen: (id: number) => void;
@@ -88,7 +90,7 @@ export function TasksFocusView({ rows, kpi, today, showAssignee, meId, onOpen, o
               onChange={(st) => (st === "done" ? onDone(t) : onStatus(t, st))} />
           </span>
         )}
-        {showAssignee && <span className="tf-who" title={t.assigneeName ?? "Без виконавця"}>{t.assigneeName ?? "Без виконавця"}</span>}
+        {showAssignee && (isMine(t) ? <span className="tf-who" /> : <span className="tf-who" title={t.assigneeName ?? "Без виконавця"}>{t.assigneeName ?? "Без виконавця"}</span>)}
         <span className={`tf-dl${late ? " late" : ""}`}>{done ? (t.doneAt ? `✓ ${ddmm(t.doneAt)}` : "✓") : t.deadline ? ddmm(t.deadline) : "—"}</span>
       </div>
     );

@@ -289,3 +289,19 @@ test("#1967 ЗАДАЧНИК: статус змінюється з рядка т
   assert.match(sec, /onStatus=\{\(t, status\) => \{ patchTaskLocal\(t\.id, \{ status \}\); commitTask\(t\.id, \{ status \}\); \}\}/,
     "🔴 зміна статусу з рядка не зберігається тим самим шляхом, що в таблиці");
 });
+
+/**
+ * #1968 — СВОГО ІМЕНІ В РЯДКУ НЕ ПИШЕМО (Роман 21.10.2026: «не треба писати Денисюк Роман — це і так ясно,
+ * бо це мій задачник»). Ім'я виконавця — лише на ЧУЖІЙ задачі; колонка зʼявляється, лише коли у списку є чужі.
+ * 🧨 Червоніє, якщо ім'я знову друкуватиметься на моїх задачах або колонка стоятиме при списку лише з моїх.
+ */
+test("#1968 ЗАДАЧНИК: на моїх задачах свого імені немає, на чужих — ім'я виконавця", () => {
+  const read = (...p: string[]) => readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", ...p), "utf8")
+    .replace(/^\s*\/\/.*$/gm, " ").replace(/\{?\/\*[\s\S]*?\*\/\}?/g, " ").replace(/\s+/g, " ");
+  const view = read("TasksFocusView.tsx");
+  assert.match(view, /\{showAssignee && \(isMine\(t\) \? <span className="tf-who" \/> : <span className="tf-who"/,
+    "🔴 ім'я виконавця друкується і на моїх задачах");
+  const sec = read("TasksSection.tsx");
+  assert.match(sec, /showAssignee=\{rows\.some\(\(t\) => !isMine\(t\)\)\} isMine=\{isMine\}/,
+    "🔴 колонка імен не залежить від того, чи є в списку чужі задачі");
+});
