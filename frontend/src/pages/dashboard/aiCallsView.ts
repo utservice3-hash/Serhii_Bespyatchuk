@@ -438,42 +438,50 @@ export function priceSuccessSplit(rows: readonly TileRow[]): { named: { n: numbe
   return { named: a, notNamed: b, enough: a.n >= SUCCESS_MIN_FOR_PCT && b.n >= SUCCESS_MIN_FOR_PCT };
 }
 
-// ─── 📊 «Ціна і результат по менеджерах» (задача 6439 п.3, Юля 20.10.2026) ──────────────────────────────────────────
-// На менеджера за період: у скількох розмовах назвали ціну, і яка конверсія в успіх — окремо з ціною і без. Успіх —
-// той самий, що плитка й колонка «Успіх» (`dealOutcome`, «Авто працює» і далі; Роман 21.10.2026: «залишай так»).
-// Без ціни — лише «ні» (`price: "n"`): «не рахується» (втрачений лід, не запит) не є «без ціни».
+// ─── 📊 «Ціна і результат по менеджерах» (задача 6439 п.3; вигляд «Графік» блоку менеджерів — Роман 22.10.2026) ──────
+// Одне питання: чи допомагає названа ціна успіху. На менеджера — успіх серед розмов, де ціну назвали, і серед тих, де
+// НЕ назвали; різниця в п.п. Успіх — той самий, що плитка й колонка «Успіх» (`dealOutcome`, «Авто працює» і далі;
+// Юля 22.10.2026: «так», з «Авто працює»). Без ціни — лише «ні» (`price: "n"`): «не рахується» не є «без ціни».
 
 /** Угода старша за `days` днів: київська дата створення ≤ сьогодні − days. Свіжа ще не встигла дійти до результату. */
 export function dealOlderThan(dealCreatedAt: string, today: string, days: number): boolean {
   const created = new Date(dealCreatedAt).toLocaleDateString("en-CA", { timeZone: "Europe/Kyiv" });
   return created <= addDays(today, -days);
 }
-/** Поріг «зрілої» угоди для графіка, днів (ТЗ 6439: «угоди старші 7 днів»). */
+/** Поріг «зрілої» угоди, днів (ТЗ 6439: «угоди старші 7 днів»). Фільтр діє на ОБИДВА види блоку (Роман 22.10, варіант «а»). */
 export const MATURE_DAYS = 7;
+export const onlyMature = <T extends { dealCreatedAt: string }>(rows: readonly T[], today: string, on: boolean): T[] =>
+  on ? rows.filter((r) => dealOlderThan(r.dealCreatedAt, today, MATURE_DAYS)) : [...rows];
+/** Менше розмов у групі (з ціною чи без) — висновку немає, рядок блідне «замало розмов» (Роман 22.10.2026: поріг 5). */
+export const MIN_GROUP_CALLS = 5;
 
 export interface PriceConvPart { n: number; of: number; pct: number | null }
 export interface PriceConvLine { managerId: number | null; name: string; calls: number;
   /** Ціну назвали: «так» серед «так»+«ні». */ priced: PriceConvPart;
   /** Успіх серед розмов, де ціну назвали. */ withPrice: PriceConvPart;
-  /** Успіх серед розмов, де ціну НЕ назвали. */ withoutPrice: PriceConvPart }
+  /** Успіх серед розмов, де ціну НЕ назвали. */ withoutPrice: PriceConvPart;
+  /** В обох групах щонайменше `MIN_GROUP_CALLS` розмов — порівнянню можна вірити. */ enough: boolean;
+  /** Успіх з ціною мінус без ціни, п.п.; `null` — одна з груп порожня. Плюс — ціна допомагає. */ liftPp: number | null }
 
-type PriceConvRow = { inReport: boolean; managerId: number | null; managerName: string | null; dealCreatedAt: string;
+type PriceConvRow = { inReport: boolean; managerId: number | null; managerName: string | null;
   checklist: ChecklistT | null; dealOutcome?: { state: string } | null };
 
-export function priceConversionByManager<T extends PriceConvRow>(rows: readonly T[], opt: { matureOnly: boolean; today: string }):
-  { lines: PriceConvLine[]; total: PriceConvLine | null } {
+/** Рядки вже відфільтровані (команда, вкладка «Звіт», «старші 7 днів») — ті самі, що бере таблиця. */
+export function priceConversionByManager<T extends PriceConvRow>(rows: readonly T[]): { lines: PriceConvLine[]; total: PriceConvLine | null } {
   const part = (n: number, of: number): PriceConvPart => ({ n, of, pct: of ? Math.round((n / of) * 100) : null });
   const line = (g: readonly T[], managerId: number | null, name: string): PriceConvLine => {
     const yes = g.filter((r) => r.checklist!.price === "y"), no = g.filter((r) => r.checklist!.price === "n");
     const won = (xs: readonly T[]) => xs.filter((r) => r.dealOutcome?.state === "success").length;
-    return { managerId, name, calls: g.length, priced: part(yes.length, yes.length + no.length),
-      withPrice: part(won(yes), yes.length), withoutPrice: part(won(no), no.length) };
+    const withPrice = part(won(yes), yes.length), withoutPrice = part(won(no), no.length);
+    return { managerId, name, calls: g.length, priced: part(yes.length, yes.length + no.length), withPrice, withoutPrice,
+      enough: yes.length >= MIN_GROUP_CALLS && no.length >= MIN_GROUP_CALLS,
+      liftPp: withPrice.pct == null || withoutPrice.pct == null ? null : withPrice.pct - withoutPrice.pct };
   };
-  const pool = rows.filter((r) => r.inReport && r.checklist && (!opt.matureOnly || dealOlderThan(r.dealCreatedAt, opt.today, MATURE_DAYS)));
+  const pool = rows.filter((r) => r.inReport && r.checklist);
   const by = new Map<string, T[]>();
   for (const r of pool) { const k = r.managerId == null ? "none" : String(r.managerId); by.set(k, [...(by.get(k) ?? []), r]); }
   const lines = [...by.values()].map((g) => line(g, g[0].managerId, g[0].managerName ?? "Менеджер невідомий"))
-    .sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name, "uk"));
+    .sort((a, b) => Number(b.enough) - Number(a.enough) || b.calls - a.calls || a.name.localeCompare(b.name, "uk"));
   return { lines, total: pool.length ? line(pool, null, "Разом") : null };
 }
 

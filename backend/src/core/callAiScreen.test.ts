@@ -186,6 +186,8 @@ test("#861 ДОСТУП: матриця читання = сид вкладки (
   assert.match(SRC("routes/dashboard.ts"), /const canSeeExcluded = req\.auth!\.roleKey !== "manager";/, "🔴 менеджер бачить «Виключені» (ТЗ 30.09.2026 п.7: лише тімлід і адмін)");
 });
 
+type PartT = { n: number; of: number; pct: number | null };
+type PriceLineT = { managerId: number | null; name: string; calls: number; priced: PartT; withPrice: PartT; withoutPrice: PartT; enough: boolean; liftPp: number | null };
 interface ViewMod {
   sortManagerLines: (ls: readonly Record<string, unknown>[], s: { key: string; dir: string }) => { name: string }[];
   nextMgrSort: (cur: { key: string; dir: string }, key: string) => { key: string; dir: string };
@@ -213,10 +215,10 @@ interface ViewMod {
   priceSuccessSplit: (rows: readonly unknown[]) => { named: { n: number; of: number }; notNamed: { n: number; of: number }; enough: boolean };
   queueRows: (rows: readonly { needsReview: boolean; reviewReason: string | null; calledAt: string; uniqueid?: string }[]) => { uniqueid?: string }[];
   dealOlderThan: (dealCreatedAt: string, today: string, days: number) => boolean;
-  priceConversionByManager: (rows: readonly unknown[], opt: { matureOnly: boolean; today: string }) => {
-    lines: { managerId: number | null; name: string; calls: number; priced: { n: number; of: number; pct: number | null };
-      withPrice: { n: number; of: number; pct: number | null }; withoutPrice: { n: number; of: number; pct: number | null } }[];
-    total: { calls: number; priced: { n: number; of: number }; withPrice: { n: number; of: number }; withoutPrice: { n: number; of: number } } | null };
+  onlyMature: <T>(rows: readonly T[], today: string, on: boolean) => T[];
+  MIN_GROUP_CALLS: number;
+  priceConversionByManager: (rows: readonly unknown[]) => {
+    lines: PriceLineT[]; total: PriceLineT | null };
 }
 async function transpile(rel: string, deps: Record<string, string> = {}): Promise<string> {
   const ts = (await import("typescript")).default;
@@ -1090,7 +1092,8 @@ test("#897 МОНО-ЗАПИС ЧЕСНО: моно — розділення з�
  */
 test("#899 ЕКРАН D: менеджери не зникають і вибір знімається, плеєр не грає у фоні, у черзі є розбір і розмова", () => {
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
-  assert.match(sec, /const lines = managerChecklist\(tabRows\(applyListFilter\(d\.rows, \{ \.\.\.lf, managerId: null \}\), "report"\)\);/, "🔴 блок менеджерів фільтрується за вибраним менеджером");
+  // 22.10.2026: рядки блоку винесено в `mgrRows` (спільні для таблиці й графіка, #2207) — твердження те саме: без вибраного менеджера.
+  assert.match(sec, /const mgrRows = onlyMature\(tabRows\(applyListFilter\(d\.rows, \{ \.\.\.lf, managerId: null \}\), "report"\), today, mgrMature\);\s*const lines = managerChecklist\(mgrRows\);/, "🔴 блок менеджерів фільтрується за вибраним менеджером");
   assert.match(sec, /managerId: lf\.managerId === l\.managerId \? null : l\.managerId/, "🔴 повторний клік не знімає вибір менеджера");
   assert.match(sec, /onClick=\{\(\) => setLf\(\{ \.\.\.lf, managerId: null \}\)\} aria-label=\{`Зняти фільтр: \$\{pickedName\}`\}/, "🔴 немає чіпа, що знімає вибір менеджера");
   assert.match(sec, /localStorage\.getItem\("ftd\.mgrCollapsed"\)/, "🔴 блок менеджерів не згортається або не памʼятає цього");
@@ -1882,44 +1885,46 @@ test("#1783 ЗАКРИТИ УГОДУ НА ЕКРАНІ: діалог підтв
 });
 
 /**
- * #2206 — «ЦІНА І РЕЗУЛЬТАТ ПО МЕНЕДЖЕРАХ» (задача 6439 п.3): частка розмов із ціною й конверсія в успіх окремо з ціною і
- * без; «не рахується» — ні туди, ні туди; нерозібране й «Виключені» — поза; межа «старші 7 днів» за КИЇВСЬКОЮ датою з
- * обох боків; графік бере ті самі рядки, що й блок менеджерів.
- * 🧨 Червоніє, якщо «не рахується» піде в «без ціни», успіх рахуватиметься не з `dealOutcome`, межа зсунеться на день
- * або стане UTC, чи графік отримає іншу вибірку.
+ * #2207 — ВИГЛЯД «ГРАФІК» БЛОКУ МЕНЕДЖЕРІВ (6439 п.3; Роман 22.10.2026: перемикач «Таблиця | Графік», поріг 5, фільтр
+ * «старші 7 днів» на ОБИДВА види). Успіх окремо з ціною і без; «не рахується» — ні туди, ні туди; різниця в п.п. зі знаком;
+ * менше 5 розмов у будь-якій групі — «замало»; межа 7 днів за КИЇВСЬКОЮ датою з обох боків; таблиця й графік — одні рядки.
+ * Замінює `#2206` (окремий блок графіка з власним фільтром).
+ * 🧨 Червоніє, якщо «не рахується» піде в «без ціни», поріг зсунеться, знак різниці переплутається, межа стане UTC
+ * чи зсунеться на день, або таблиця й графік отримають різні рядки.
  */
-test("#2206 ЦІНА → РЕЗУЛЬТАТ ПО МЕНЕДЖЕРАХ: з ціною / без ціни окремо, «не рахується» поза, межа 7 днів за Києвом", async () => {
+test("#2207 ГРАФІК «ЦІНА → УСПІХ»: з ціною / без окремо, різниця зі знаком, поріг 5 у групі, одні рядки з таблицею", async () => {
   const V = await loadView();
   const today = "2026-10-21";
-  // Межа: створена 14.10 (Київ) — рівно 7 днів, входить; 15.10 — ні. 14.10 21:30 UTC — це вже 15.10 у Києві.
   assert.equal(V.dealOlderThan("2026-10-14T09:00:00Z", today, 7), true, "🔴 угода рівно 7-денної давності випала");
   assert.equal(V.dealOlderThan("2026-10-15T09:00:00Z", today, 7), false, "🔴 6-денна угода пройшла як зріла");
   assert.equal(V.dealOlderThan("2026-10-14T21:30:00Z", today, 7), false, "🔴 межа рахується за UTC, а не за Києвом");
-  const row = (managerId: number | null, price: string, state: string | null, created = "2026-10-05T09:00:00Z", o: Record<string, unknown> = {}) => ({
-    inReport: true, managerId, managerName: managerId == null ? null : `М${String(managerId)}`, dealCreatedAt: created,
-    checklist: { request: "y", price, promise: "o", objection: "o" }, dealOutcome: state == null ? null : { state }, ...o });
+  assert.equal(V.MIN_GROUP_CALLS, 5, "🔴 поріг «замало розмов» не 5 (рішення Романа 22.10.2026)");
+  const row = (managerId: number, price: string, state: string, created = "2026-10-05T09:00:00Z") => ({
+    inReport: true, managerId, managerName: `М${String(managerId)}`, dealCreatedAt: created,
+    checklist: { request: "y", price, promise: "o", objection: "o" }, dealOutcome: { state } });
+  const many = (m: number, price: string, won: number, of: number) => Array.from({ length: of }, (_, i) => row(m, price, i < won ? "success" : "open"));
   const rows = [
-    row(1, "y", "success"), row(1, "y", "open"), row(1, "n", "success"), row(1, "n", "lost"), row(1, "o", "success"),
-    row(2, "y", "success"), row(2, "n", "open"), row(2, "y", "success", "2026-10-18T09:00:00Z"),
-    row(2, "y", "success", "2026-10-05T09:00:00Z", { inReport: false }),
-    row(2, "y", "success", "2026-10-05T09:00:00Z", { checklist: null }),
+    ...many(1, "y", 3, 5), ...many(1, "n", 1, 5), row(1, "o", "success"),           // рівно 5 у кожній групі
+    ...many(2, "y", 0, 5), ...many(2, "n", 2, 4),                                   // без ціни лише 4 — замало
+    ...many(3, "y", 1, 6), ...many(3, "n", 3, 6),                                   // з ціною ГІРШЕ
+    { ...row(3, "y", "success"), inReport: false }, { ...row(3, "y", "success"), checklist: null },
   ];
-  const all = V.priceConversionByManager(rows, { matureOnly: false, today });
-  const m1 = all.lines.find((l) => l.managerId === 1)!, m2 = all.lines.find((l) => l.managerId === 2)!;
-  assert.equal(m1.calls, 5, "🔴 у рядок менеджера пішли не всі розібрані розмови звіту");
-  assert.deepEqual([m1.priced.n, m1.priced.of, m1.priced.pct], [2, 4, 50], "🔴 «не рахується» у знаменнику ціни");
-  assert.deepEqual([m1.withPrice.n, m1.withPrice.of], [1, 2], "🔴 успіх із ціною не з `dealOutcome`");
-  assert.deepEqual([m1.withoutPrice.n, m1.withoutPrice.of], [1, 2], "🔴 «не рахується» потрапило в «без ціни»");
-  assert.equal(m2.calls, 3, "🔴 нерозібране чи «Виключене» потрапило в графік");
-  assert.deepEqual([m2.withPrice.n, m2.withPrice.of, m2.withoutPrice.n, m2.withoutPrice.of], [2, 2, 0, 1]);
-  assert.deepEqual([all.total!.calls, all.total!.withPrice.n, all.total!.withPrice.of], [8, 3, 4], "🔴 «Разом» — не та сама формула");
-  const mature = V.priceConversionByManager(rows, { matureOnly: true, today });
-  assert.equal(mature.lines.find((l) => l.managerId === 2)!.calls, 2, "🔴 перемикач «старші 7 днів» не прибрав свіжу угоду");
-  assert.equal(mature.lines.find((l) => l.managerId === 1)!.calls, 5, "🔴 перемикач прибрав зрілі угоди");
+  const { lines, total } = V.priceConversionByManager(rows);
+  const m = (id: number) => lines.find((l) => l.managerId === id)!;
+  assert.equal(m(1).calls, 11, "🔴 у рядок пішли не всі розібрані розмови звіту");
+  assert.deepEqual([m(1).withPrice.n, m(1).withPrice.of, m(1).withoutPrice.n, m(1).withoutPrice.of], [3, 5, 1, 5], "🔴 «не рахується» потрапило в групу");
+  assert.deepEqual([m(1).liftPp, m(1).enough], [40, true], "🔴 різниця 60−20 або поріг «рівно 5» порахований не так");
+  assert.equal(m(2).enough, false, "🔴 4 розмови без ціни пройшли як достатня вибірка");
+  assert.equal(m(3).liftPp, -33, "🔴 знак різниці переплутано: з ціною 17% проти 50% — це мінус");
+  assert.equal(m(3).calls, 12, "🔴 нерозібране чи «Виключене» потрапило в графік");
+  assert.deepEqual([total!.withPrice.n, total!.withPrice.of, total!.withoutPrice.n, total!.withoutPrice.of], [4, 16, 6, 15], "🔴 «Разом» — не та сама формула");
+  assert.deepEqual(lines.map((l) => l.managerId), [3, 1, 2], "🔴 достатні вибірки мають іти першими, далі — за кількістю розмов");
+  const fresh = [...rows, row(1, "y", "success", "2026-10-18T09:00:00Z")];
+  assert.equal(V.onlyMature(fresh, today, true).length, rows.length, "🔴 «старші 7 днів» не прибрав свіжу угоду");
+  assert.equal(V.onlyMature(fresh, today, false).length, fresh.length, "🔴 вимкнений фільтр щось прибрав");
   const sec = readFileSync(FE("pages/dashboard/sections/AiCallsSection.tsx"), "utf8");
-  assert.match(sec, /const lines = managerChecklist\(tabRows\(applyListFilter\(d\.rows, \{ \.\.\.lf, managerId: null \}\), "report"\)\);/, "🔴 блок менеджерів змінив вибірку — звір графік");
-  assert.match(sec, /<FirstTouchPriceChart rows=\{tabRows\(applyListFilter\(d\.rows, \{ \.\.\.lf, managerId: null \}\), "report"\)\} today=\{today\} \/>/,
-    "🔴 графік отримує не ту вибірку, що блок менеджерів");
-  const chart = readFileSync(FE("pages/dashboard/sections/FirstTouchPriceChart.tsx"), "utf8");
-  assert.match(chart, /priceConversionByManager\(rows, \{ matureOnly: mature, today \}\)/, "🔴 графік рахує не спільним правилом");
+  assert.match(sec, /const mgrRows = onlyMature\(tabRows\(applyListFilter\(d\.rows, \{ \.\.\.lf, managerId: null \}\), "report"\), today, mgrMature\);/, "🔴 рядки блоку не з фільтром «старші 7 днів»");
+  assert.match(sec, /const lines = managerChecklist\(mgrRows\);/, "🔴 таблиця рахує не ті рядки, що графік");
+  assert.match(sec, /const priceConv = priceConversionByManager\(mgrRows\);/, "🔴 графік рахує не ті рядки, що таблиця");
+  assert.doesNotMatch(sec, /<FirstTouchPriceChart rows=/, "🔴 окремий блок графіка повернувся поруч із перемикачем");
 });

@@ -13,7 +13,7 @@ import { STATE_UI, TONE_COLOR, FILTERS, matchesFilter, mmss, aiDefaultPeriod, jo
   TYPE_LABEL, tabRows, type ListTab, type ConversationTypeT,
   type AiFilter, type AiCallState,
   CHECK_ITEMS, CHECK_MARK_UI, managerChecklist, queueRows, scoreLabel, medianMin, fmtMinutes, DECISION_UI,
-  TILE_MATCH, tileStats, priceSuccessSplit, SUCCESS_MIN_FOR_PCT, type TileKey,
+  TILE_MATCH, tileStats, priceSuccessSplit, SUCCESS_MIN_FOR_PCT, type TileKey, onlyMature, priceConversionByManager, MATURE_DAYS,
   sortManagerLines, nextMgrSort, parseMgrSort, type MgrSort, type MgrSortKey,
   DEFAULT_LIST_FILTER, parseAiLink, withoutAiLinkParams } from "../aiCallsView";
 
@@ -116,6 +116,11 @@ export function AiCallsSection() {
   // Сортування блоку менеджерів кліком по назві колонки (09.10.2026); вибір памʼятає браузер, як і згортання.
   const [mgrSort, setMgrSort] = useState<MgrSort>(() => { try { return parseMgrSort(localStorage.getItem("ftd.mgrSort")); } catch { return parseMgrSort(null); } });
   const pickSort = (k: MgrSortKey) => setMgrSort((cur) => { const n = nextMgrSort(cur, k); try { localStorage.setItem("ftd.mgrSort", `${n.key}:${n.dir}`); } catch { /* приватне вікно */ } return n; });
+  // 📊 Вигляд блоку менеджерів «Таблиця | Графік» і «лише угоди, старші 7 днів» (Роман 22.10.2026) — зручність, не дані.
+  const [mgrView, setMgrView] = useState<"table" | "chart">(() => { try { return localStorage.getItem("ftd.mgrView") === "chart" ? "chart" : "table"; } catch { return "table"; } });
+  const pickView = (v: "table" | "chart") => { setMgrView(v); try { localStorage.setItem("ftd.mgrView", v); } catch { /* приватне вікно */ } };
+  const [mgrMature, setMgrMature] = useState<boolean>(() => { try { return localStorage.getItem("ftd.mgrMature") === "1"; } catch { return false; } });
+  const pickMature = (on: boolean) => { setMgrMature(on); try { localStorage.setItem("ftd.mgrMature", on ? "1" : "0"); } catch { /* приватне вікно */ } };
 
   useEffect(() => {
     if (!from || !to) return;
@@ -199,7 +204,10 @@ export function AiCallsSection() {
   const lost = rows.filter(TILE_MATCH.lost);
   const lostReact = medianMin(lost.map((r) => r.reactionMin));
   // Блок менеджерів — по всій команді, без фільтра «менеджер»: інакше після кліку лишався один рядок і повернутись було нікуди.
-  const lines = managerChecklist(tabRows(applyListFilter(d.rows, { ...lf, managerId: null }), "report"));
+  // Таблиця й графік — ТІ САМІ рядки: команда з шапки, вкладка «Звіт», «старші 7 днів» діє на обидва (варіант «а», 22.10).
+  const mgrRows = onlyMature(tabRows(applyListFilter(d.rows, { ...lf, managerId: null }), "report"), today, mgrMature);
+  const lines = managerChecklist(mgrRows);
+  const priceConv = priceConversionByManager(mgrRows);
   const pickedName = lf.managerId != null ? (lines.find((l) => l.managerId === lf.managerId)?.name ?? managers.find(([id]) => id === lf.managerId)?.[1] ?? "менеджер") : null;
   const weakest = lines.find((l) => l.score != null) ?? null;
   const shownLines = sortManagerLines(lines, mgrSort);
@@ -284,7 +292,17 @@ export function AiCallsSection() {
             <div className="ftd-card-h">
               <h2>Менеджери за чек-листом першого дотику</h2>
               <span style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                <span className={`ftd-fade${mgrCollapsed ? " is-hidden" : ""}`}>частка розмов, де пункт виконано · клік по назві колонки — сортування · клік по менеджеру фільтрує таблицю, ще клік — знімає</span>
+                <span className={`ftd-fade${mgrCollapsed ? " is-hidden" : ""}`}>{mgrView === "table"
+                  ? "частка розмов, де пункт виконано · клік по назві колонки — сортування · клік по менеджеру фільтрує таблицю, ще клік — знімає"
+                  : "чи допомагає названа ціна успіху · клік по менеджеру фільтрує таблицю, ще клік — знімає"}</span>
+                <label className="ftd-sub" style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+                  <input id="ftd-mgr-mature" type="checkbox" checked={mgrMature} onChange={(e) => pickMature(e.target.checked)} />
+                  лише угоди, старші {MATURE_DAYS} днів
+                </label>
+                <span className="ftd-seg" role="tablist" aria-label="Вигляд блоку менеджерів">
+                  <button type="button" role="tab" aria-selected={mgrView === "table"} className={mgrView === "table" ? "on" : ""} onClick={() => pickView("table")}>Таблиця</button>
+                  <button type="button" role="tab" aria-selected={mgrView === "chart"} className={mgrView === "chart" ? "on" : ""} onClick={() => pickView("chart")}>Графік</button>
+                </span>
                 <button type="button" className={`ftd-collapse${mgrCollapsed ? " is-collapsed" : ""}`} aria-expanded={!mgrCollapsed} aria-controls="ftd-mgr-body"
                   aria-label={mgrCollapsed ? "Розгорнути блок менеджерів" : "Згорнути блок менеджерів"} title={mgrCollapsed ? "Розгорнути" : "Згорнути"} onClick={toggleMgr}>
                   <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -294,6 +312,10 @@ export function AiCallsSection() {
             <div className={`ftd-sub ftd-fade${mgrCollapsed ? "" : " is-hidden is-gone"}`}>{lines.length} менеджерів{weakest ? ` · найслабший бал — ${weakest.name} (${String(weakest.score)}%)` : ""}{pickedName ? ` · вибрано: ${pickedName}` : ""}</div>
             <div id="ftd-mgr-body" className={`ftd-collapsible${mgrCollapsed ? " is-collapsed" : ""}`} aria-hidden={mgrCollapsed}>
             <div className="ftd-collapsible-in">
+            {mgrView === "chart"
+              ? <FirstTouchPriceChart lines={priceConv.lines} total={priceConv.total} selectedId={lf.managerId}
+                  onPick={(id) => setLf({ ...lf, managerId: id })} />
+              : (
             <div style={{ overflowX: "auto" }}>
               <div className="ftd-mgr">
                 {sortHead("name", "Менеджер")}{sortHead("score", "Бал")}
@@ -319,12 +341,10 @@ export function AiCallsSection() {
               </div>
               {lines.length === 0 && <p className="ftd-sub" style={{ margin: 0 }}>Розібраних розмов у періоді ще немає.</p>}
             </div>
+              )}
             </div>
             </div>
           </section>
-
-          {/* 📊 Задача 6439 п.3: ті самі рядки, що й блок менеджерів (команда з шапки, вкладка «Звіт»), — жодної другої вибірки. */}
-          <FirstTouchPriceChart rows={tabRows(applyListFilter(d.rows, { ...lf, managerId: null }), "report")} today={today} />
 
           <section aria-label="Розмови" className="ftd-card" ref={tableRef}>
             <div className="ftd-toolbar">
