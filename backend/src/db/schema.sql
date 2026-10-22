@@ -4824,8 +4824,10 @@ REVOKE ALL ON first_touch_notes FROM ai_readonly;
 -- 📞 «Передзвонив поза телефонією» (`offline`, 01.10.2026): звірка 30 «не передзвонив» з Ringostat напряму — у 25
 -- випадках нашого дзвінка в телефонії немає зовсім, а керівники знайшли передзвони з мобільного чи в месенджер.
 -- Таку позначку ставлять менеджер (свої), тімлід (команда), адмін — і обіцянка рахується виконаною.
-ALTER TABLE first_touch_notes DROP CONSTRAINT IF EXISTS first_touch_notes_kind_check;
-ALTER TABLE first_touch_notes ADD CONSTRAINT first_touch_notes_kind_check CHECK (kind IN ('price', 'missed', 'offline'));
+-- 🔴 22.10.2026: тут стояла ще й ВУЗЬКА версія обмеження ('price','missed','offline') перед широкою нижче. Поки
+-- рядків «review» не було, вона проходила; щойно зʼявились — кожна міграція падала на ній і відкочувалась ЦІЛКОМ
+-- (заміряно на викаті 54993b8: «check constraint … is violated by some row»). Схема перезапускається повністю на
+-- кожному викаті, тож проміжна вузька версія обмеження — міна; лишається одна, остаточна.
 -- ✅ «Розібрано» (`review`, 08.10.2026, екран D): тімлід переглянув розмову з черги розбору — вона виходить з черги.
 -- Ставлять тімлід (своя команда) і адмін. Текст — коментар менеджеру або «Розібрано», якщо коментаря немає.
 ALTER TABLE first_touch_notes DROP CONSTRAINT IF EXISTS first_touch_notes_kind_check;
