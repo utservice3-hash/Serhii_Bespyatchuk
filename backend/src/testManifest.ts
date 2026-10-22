@@ -150,6 +150,7 @@ export const MANIFEST_FILES: string[] = [
   "core/hiring.test.js",
   "core/baClaims.test.js",
   "core/baEquipment.test.js",
+  "core/managerKeep.test.js",
   "core/baUtb.test.js",
   "core/baTtnSync.test.js",
   "core/finance.test.js",
@@ -2736,6 +2737,8 @@ export const MANIFEST_TESTS: string[] = [
   "#1400 ТТН З KOMMO: рахуються лише живі файли поля 2097291; поля немає — 0",
   "#1401 ЖИВИЙ SQL СИНКУ: upsertDeal пише deals.ttn_files і на вставці, і на оновленні",
   "#1402 ЖИВИЙ SQL ТТН: прикріплено серед тих самих угод, «не збігся» лише з прикріплених, NULL — не синхронізовано",
+  // core/managerKeep.test.ts — запис менеджера, що живе без CRM (КВП Левентова, 22.10.2026).
+  "#1880 ЖИВЕ БЕЗ CRM: синк не вимикає запис із позначкою, решту зниклих вимикає; позначка Юлі разова й за Kommo-id",
   // core/baUtb.test.ts — Бізнес-асистент: Реєстр Укртрансбезпеки (задача 6269, 21.10.2026).
   "#1860 ПРАВИЛА УТБ: вимоги кожного статусу по обидва боки, одна задача на людину, фільтр включно, Excel = таблиця",
   "#1860b ДОСТУП УТБ: веде власник поіменно, бачать admin і opdir, решті — нічого; роути з тим самим вироком",

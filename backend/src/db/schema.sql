@@ -6285,3 +6285,13 @@ CREATE TABLE IF NOT EXISTS hiring_week_override (
   PRIMARY KEY (week_start, metric)
 );
 REVOKE ALL ON hiring_week_override FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🧷 ЗАПИС МЕНЕДЖЕРА, ЩО ЖИВЕ БЕЗ CRM (22.10.2026, `core/managerKeep.ts`, гейт #1880). Синк не вимикає запис
+-- з цією позначкою, коли людини немає в Kommo: вона лишається у виборі виконавця, чергувань, відпусток, 1×1.
+-- Поіменно, рішенням власника. ⚠️ Revert коду позначки не прибирає (без коду вона ні на що не впливає).
+-- ══════════════════════════════════════════════════════════════════════════
+ALTER TABLE managers ADD COLUMN IF NOT EXISTS keep_without_crm BOOLEAN NOT NULL DEFAULT false;
+-- Левентова Юлія (КВП, users.id 47 → managers.id 9, Kommo 3549691): Роман 22.10.2026 — «відвʼязати від CRM, у дашборді
+-- має повністю все залишитися». Умова на kommo_user_id — щоб не позначити іншу людину, якщо id колись зсунеться.
+UPDATE managers SET keep_without_crm = true WHERE id = 9 AND kommo_user_id = '3549691' AND NOT keep_without_crm;
