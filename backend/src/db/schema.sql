@@ -6270,3 +6270,16 @@ ALTER TABLE ba_events DROP CONSTRAINT IF EXISTS ba_events_owner_kind_check;
 ALTER TABLE ba_events ADD CONSTRAINT ba_events_owner_kind_check CHECK (owner_kind IN ('claim','case','equipment','utb'));
 -- 🔒 Як увесь розділ — закрито від моделі (рішення Романа 01.10.2026 «5а»; гейт #1240 бере `ba_*` зі схеми).
 REVOKE ALL ON ba_utb_cases FROM ai_readonly;
+
+-- 📊 Тижневе ручне число «Щоденного звіту» (22.10.2026, #2104; Іван: «щоб можна було корегувати в розрізі
+-- „цей тиждень“, „минулий тиждень“ — на планерках звітуюсь по цьому»). Замінює СУМУ тижня у вигляді тижня й факт
+-- плану тижня; дні й місяць лишаються сумою днів.
+CREATE TABLE IF NOT EXISTS hiring_week_override (
+  week_start DATE NOT NULL CHECK (EXTRACT(ISODOW FROM week_start) = 1),
+  metric     TEXT NOT NULL CHECK (metric IN ('resumes','coldSearch','planned','done','toLead','toCandidate','toTraining','toManager')),
+  value      INTEGER NOT NULL CHECK (value >= 0 AND value <= 100000),
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (week_start, metric)
+);
+REVOKE ALL ON hiring_week_override FROM ai_readonly;

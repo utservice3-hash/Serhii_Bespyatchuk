@@ -252,8 +252,19 @@ export interface DailyRow {
 /** Плитки звіту, які рахує система й які можна виправити вручну (#2101). Резюме й холодний пошук — завжди вручну. */
 export const OVERRIDE_METRICS = ["planned", "done", "toLead", "toCandidate", "toTraining", "toManager"] as const;
 export type OverrideMetric = (typeof OVERRIDE_METRICS)[number];
-/** Усі 8 плиток «Щоденного звіту» — для плану тижня (#2102, рішення Романа: «всі 8 показників»). */
-export const PLAN_METRICS = ["resumes", "coldSearch", "planned", "done", "toLead", "toCandidate", "toTraining", "toManager"] as const;
+/**
+ * Показники плану тижня (#2103). Було 8 (рішення Романа 21.10); 22.10 Іван: «можна прибрати план з „оброблено
+ * резюме“ та „холодний пошук“ — бо там плану немає звісно». Лишилось 6.
+ */
+export const PLAN_METRICS = ["planned", "done", "toLead", "toCandidate", "toTraining", "toManager"] as const;
+/** Тижневе ручне число (#2104) — для всіх 8 плиток: на планерці Іван звітує саме тижнем. */
+export const WEEK_OVERRIDE_METRICS = ["resumes", "coldSearch", "planned", "done", "toLead", "toCandidate", "toTraining", "toManager"] as const;
+export type WeekOverrideMetric = (typeof WEEK_OVERRIDE_METRICS)[number];
+/** Період — це один тиждень (від понеділка, не довше неділі)? Саме тоді діє тижневе ручне число. */
+export function wholeWeekOf(from: string, to: string): string | null {
+  if (weekStartOf(from) !== from) return null;
+  return weekStartOf(to) === from ? from : null;
+}
 export type PlanMetric = (typeof PLAN_METRICS)[number];
 /** Понеділок тижня дати (ISO, без часових поясів — дата вже київська). */
 export function weekStartOf(day: string): string {

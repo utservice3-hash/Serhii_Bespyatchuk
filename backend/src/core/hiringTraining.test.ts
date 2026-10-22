@@ -716,12 +716,13 @@ test("#2101 ЖИВИЙ SQL: ручне число плитки — лише св
 });
 
 /**
- * #2102 — ЖИВИЙ SQL: ПЛАН/ФАКТ ТИЖНЯ (21.10.2026, рішення Романа: «всі 8 показників»). Будь-який день → понеділок;
- * неставлений план — `null`, а не 0; факт = сума днів тижня з того самого звіту, РАЗОМ із ручними виправленнями;
- * `null` прибирає план; невідомий показник — 400.
- * 🧨 Червоніє, якщо факт не збігається зі звітом, план прив'язується не до понеділка або «немає плану» стає нулем.
+ * #2103 — ЖИВИЙ SQL: ПЛАН/ФАКТ ТИЖНЯ ПО 6 ПОКАЗНИКАХ (22.10.2026: Іван прибрав план із «резюме» й «холодного пошуку»).
+ * Будь-який день → понеділок; неставлений план — `null`, а не 0; план на «резюме»/«холодний пошук» — 400; факт =
+ * сума днів того самого звіту, РАЗОМ із денними й ТИЖНЕВИМИ ручними (#2104); `null` прибирає план.
+ * 🧨 Червоніє, якщо факт не збігається зі звітом, план не на понеділок, «немає плану» стає нулем або вертається
+ * план на резюме.
  */
-test("#2102 ЖИВИЙ SQL: план тижня по 8 плитках — понеділок, «немає плану» ≠ 0, факт = звіт із ручними", async (t) => {
+test("#2103 ЖИВИЙ SQL: план тижня по 6 показниках — понеділок, «немає плану» ≠ 0, факт = звіт із ручними", async (t) => {
   const s = await scratchDb(t); if (!s) return;
   const h = await import("./hiring.js");
   const { weekStartOf, dailyTotals } = await import("./hiringRules.js");
@@ -730,18 +731,57 @@ test("#2102 ЖИВИЙ SQL: план тижня по 8 плитках — пон
   try {
     assert.equal(weekStartOf("2026-10-25"), "2026-10-19", "🔴 неділя не належить тижню з понеділка 19.10");
     assert.equal(weekStartOf("2026-10-19"), "2026-10-19");
-    await toCandidate(s.db, "План Тижня", "0970002102");
+    await toCandidate(s.db, "План Тижня", "0970002103");
     await h.setDailyOverride(s.db, null, day, { metric: "done", value: 5 });
-    await assert.rejects(h.setWeekPlan(s.db, null, day, { noshow: 3 }), code(400), "🔴 план на показник поза 8 плитками");
-    await h.setWeekPlan(s.db, null, day, { planned: 35, done: 30, resumes: 0 });
+    await assert.rejects(h.setWeekPlan(s.db, null, day, { resumes: 10 }), code(400), "🔴 план на «оброблено резюме» повернувся");
+    await assert.rejects(h.setWeekPlan(s.db, null, day, { coldSearch: 10 }), code(400), "🔴 план на «холодний пошук» повернувся");
+    await h.setWeekPlan(s.db, null, day, { planned: 35, done: 30 });
     const w = await h.weekPlan(s.db, day);
     assert.equal(w.weekStart, mon, "🔴 план не на понеділок тижня");
-    assert.deepEqual([w.plans.planned, w.plans.done, w.plans.resumes, w.plans.toLead], [35, 30, 0, null], "🔴 «немає плану» стало нулем або план загубився");
+    assert.deepEqual(Object.keys(w.plans).sort(), ["done", "planned", "toCandidate", "toLead", "toManager", "toTraining"], "🔴 не ті 6 показників плану");
+    assert.deepEqual([w.plans.planned, w.plans.done, w.plans.toLead], [35, 30, null], "🔴 «немає плану» стало нулем або план загубився");
     const weekEnd = new Date(Date.parse(`${mon}T00:00:00Z`) + 6 * 86_400_000).toISOString().slice(0, 10);
     const tot = dailyTotals(await h.dailyReport(s.db, mon, weekEnd));
-    assert.deepEqual(w.fact, { resumes: tot.resumes, coldSearch: tot.coldSearch, planned: tot.planned, done: tot.done, toLead: tot.toLead, toCandidate: tot.toCandidate, toTraining: tot.toTraining, toManager: tot.toManager }, "🔴 факт тижня не збігається зі звітом");
-    assert.ok(w.fact.done >= 5, "🔴 факт не врахував ручне виправлення");
+    assert.deepEqual(w.fact, { planned: tot.planned, done: tot.done, toLead: tot.toLead, toCandidate: tot.toCandidate, toTraining: tot.toTraining, toManager: tot.toManager }, "🔴 факт тижня не збігається зі звітом");
+    await h.setWeekOverride(s.db, null, day, { metric: "planned", value: 23 });
+    assert.equal((await h.weekPlan(s.db, day)).fact.planned, 23, "🔴 факт плану не взяв тижневе ручне число");
     await h.setWeekPlan(s.db, null, day, { done: null });
     assert.equal((await h.weekPlan(s.db, day)).plans.done, null, "🔴 null не прибрав план");
+  } finally { await s.done(); }
+});
+
+/**
+ * #2104 — ЖИВИЙ SQL: ТИЖНЕВЕ РУЧНЕ ЧИСЛО (22.10.2026; Іван: «щоб можна було корегувати в розрізі „цей тиждень“,
+ * „минулий тиждень“»). Діє лише коли період — один тиждень (від понеділка, не довше неділі): замінює суму тижня й
+ * лише цю плитку, системне число поруч (`auto`), явку перераховано; інший період (два тижні, місяць) — сума днів;
+ * сусідній тиждень не зачеплено; `null` повертає суму; невідомий показник — 400.
+ * 🧨 Червоніє, якщо тижневе число не замінює суму, діє на місяць/інший тиждень або «авто» не повертає суму днів.
+ */
+test("#2104 ЖИВИЙ SQL: тижневе ручне число — лише вигляд одного тижня, своя плитка, авто поруч, «авто» повертає суму", async (t) => {
+  const s = await scratchDb(t); if (!s) return;
+  const h = await import("./hiring.js");
+  const { weekStartOf, wholeWeekOf, dailyTotals } = await import("./hiringRules.js");
+  const day = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+  const mon = weekStartOf(day);
+  const plus = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+  try {
+    assert.equal(wholeWeekOf(mon, day), mon, "🔴 «цей тиждень» (пн–сьогодні) не визнано тижнем");
+    assert.equal(wholeWeekOf(mon, plus(mon, 6)), mon);
+    assert.equal(wholeWeekOf(plus(mon, 1), plus(mon, 6)), null, "🔴 період не від понеділка визнано тижнем");
+    assert.equal(wholeWeekOf(mon, plus(mon, 7)), null, "🔴 два тижні визнано одним");
+    await toCandidate(s.db, "Тижневе Число", "0970002104");
+    await assert.rejects(h.setWeekOverride(s.db, null, day, { metric: "noshow", value: 1 }), code(400), "🔴 невідомий показник");
+    const auto = dailyTotals(await h.dailyReport(s.db, mon, plus(mon, 6)));
+    await h.setWeekOverride(s.db, null, day, { metric: "done", value: 22 });
+    await h.setWeekOverride(s.db, null, plus(day, 1), { metric: "resumes", value: 28 }); // інший день того ж тижня — той самий тиждень
+    const w = await h.applyWeekOverride(s.db, mon, auto);
+    assert.deepEqual([w.totals.done, w.totals.resumes, w.totals.planned], [22, 28, auto.planned], "🔴 тижневе число не замінило суму або зачепило іншу плитку");
+    assert.deepEqual(w.auto, { done: auto.done, resumes: auto.resumes }, "🔴 не видно системного числа");
+    assert.equal(w.totals.attendancePct, auto.planned ? Math.round((22 / auto.planned) * 100) : null, "🔴 явку не перераховано з ручного «проведено»");
+    const other = await h.applyWeekOverride(s.db, plus(mon, 7), auto);
+    assert.deepEqual(other.manual, [], "🔴 тижневе число зачепило наступний тиждень");
+    await h.setWeekOverride(s.db, null, day, { metric: "done", value: null });
+    const back = await h.applyWeekOverride(s.db, mon, auto);
+    assert.deepEqual([back.totals.done, back.manual], [auto.done, ["resumes"]], "🔴 «авто» не повернуло суму днів");
   } finally { await s.done(); }
 });

@@ -10,7 +10,8 @@
 import {
   type HiringAccess, type HiringStatus, type DailyRow,
   canTransition, isHiringStatus, isIsoDate, isTime, normalizePhone, cleanUrl, NEEDS_TEAM, STATUS_LABEL,
-  OVERRIDE_METRICS, PLAN_METRICS, weekStartOf, dailyTotals, type OverrideMetric, type PlanMetric,
+  OVERRIDE_METRICS, PLAN_METRICS, WEEK_OVERRIDE_METRICS, weekStartOf, dailyTotals, attendancePct,
+  type OverrideMetric, type PlanMetric, type WeekOverrideMetric, type DailyCounts,
   refusalVerdict, messengerLinks, vacancyCloseStatus, VACANCY_STATUSES, REFUSAL_SIDES, type RefusalSide, type VacancyStatus,
 } from "./hiringRules.js";
 import { ensureCandidateAccount, closeCandidateAccess, undoPromotion, hasAccount, issueCandidatePassword, syncCandidateLogin } from "./hiringTraining.js";
@@ -609,7 +610,7 @@ export async function weekPlan(db: Db, day: unknown) {
   const weekStart = weekStartOf(day);
   const weekEnd = new Date(Date.parse(`${weekStart}T00:00:00Z`) + 6 * 86_400_000).toISOString().slice(0, 10);
   const rows = await dailyReport(db, weekStart, weekEnd);
-  const fact = dailyTotals(rows);
+  const fact = (await applyWeekOverride(db, weekStart, dailyTotals(rows))).totals; // тижневе ручне (#2104) — і у факті
   const saved = (await db.query<{ metric: PlanMetric; plan: number }>(
     `SELECT metric, plan FROM hiring_week_plans WHERE week_start = $1::date`, [weekStart])).rows;
   const plans = Object.fromEntries(PLAN_METRICS.map((m) => [m, saved.find((s) => s.metric === m)?.plan ?? null])) as Record<PlanMetric, number | null>;
@@ -633,6 +634,39 @@ export async function setWeekPlan(db: Db, actorId: number | null, day: unknown, 
        ON CONFLICT (week_start, metric) DO UPDATE SET plan = EXCLUDED.plan, updated_by = EXCLUDED.updated_by, updated_at = now()`,
       [weekStart, m, v, actorId]);
   }
+  return { weekStart };
+}
+
+/**
+ * 📊 Тижневе ручне число (#2104): замінює суму тижня у вигляді «цей / минулий тиждень» і факт плану тижня. Повертає
+ * підмінені показники й що нарахувала система — щоб плитка показала «вручну за тиждень · авто N».
+ */
+export async function applyWeekOverride<T extends DailyCounts & { attendancePct: number | null }>(db: Db, weekStart: string, totals: T) {
+  const ov = (await db.query<{ metric: WeekOverrideMetric; value: number }>(
+    `SELECT metric, value FROM hiring_week_override WHERE week_start = $1::date`, [weekStart])).rows;
+  if (!ov.length) return { totals, manual: [] as WeekOverrideMetric[], auto: {} as Partial<Record<WeekOverrideMetric, number>> };
+  const out = { ...totals };
+  const auto: Partial<Record<WeekOverrideMetric, number>> = {};
+  for (const o of ov) { auto[o.metric] = totals[o.metric]; out[o.metric] = o.value; }
+  out.attendancePct = attendancePct(out.done, out.planned);
+  return { totals: out, manual: ov.map((o) => o.metric), auto };
+}
+
+/** Зберегти тижневе ручне число; `null` — повернути суму днів. День — будь-який у тижні. */
+export async function setWeekOverride(db: Db, actorId: number | null, day: unknown, p: { metric?: unknown; value?: unknown }) {
+  if (!isIsoDate(day)) throw new HiringError(400, "Некоректна дата");
+  if (!(WEEK_OVERRIDE_METRICS as readonly unknown[]).includes(p.metric)) throw new HiringError(400, "Невідомий показник");
+  const weekStart = weekStartOf(day);
+  if (p.value === null || p.value === "") {
+    await db.query(`DELETE FROM hiring_week_override WHERE week_start = $1::date AND metric = $2`, [weekStart, p.metric]);
+    return { weekStart };
+  }
+  const v = Number(p.value);
+  if (!Number.isInteger(v) || v < 0 || v > 100000) throw new HiringError(400, "Кількість — ціле число від 0");
+  await db.query(
+    `INSERT INTO hiring_week_override (week_start, metric, value, updated_by) VALUES ($1::date, $2, $3, $4)
+     ON CONFLICT (week_start, metric) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+    [weekStart, p.metric, v, actorId]);
   return { weekStart };
 }
 

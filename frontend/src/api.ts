@@ -5128,7 +5128,11 @@ export interface HiringDailyRow {
   manual?: HiringOverrideMetric[]; auto?: Partial<Record<HiringOverrideMetric, number>>;
 }
 export type HiringOverrideMetric = "planned" | "done" | "toLead" | "toCandidate" | "toTraining" | "toManager";
-export type HiringPlanMetric = "resumes" | "coldSearch" | HiringOverrideMetric;
+/** План тижня — 6 показників (#2103: Іван прибрав план з резюме й холодного пошуку). */
+export type HiringPlanMetric = HiringOverrideMetric;
+/** Тижневе ручне число — усі 8 плиток (#2104). */
+export type HiringWeekMetric = "resumes" | "coldSearch" | HiringOverrideMetric;
+export interface HiringDailyWeek { weekStart: string; manual: HiringWeekMetric[]; auto: Partial<Record<HiringWeekMetric, number>> }
 
 /** Текст помилки сервера — щоб людина бачила причину, а не «нічого не сталось». */
 export function hiringError(e: unknown): string {
@@ -5182,7 +5186,9 @@ export const addHiringComment = async (id: number, comment: string) => { await a
 export const setHiringTeam = async (id: number, teamId: number, comment: string) => { await api.post(`/hiring/candidates/${id}/team`, { teamId, comment }); };
 
 export const fetchHiringDaily = async (from: string, to: string) =>
-  (await api.get<{ rows: HiringDailyRow[]; totals: Omit<HiringDailyRow, "day"> & { attendancePct: number | null } }>("/hiring/daily", { params: { from, to } })).data;
+  (await api.get<{ rows: HiringDailyRow[]; totals: Omit<HiringDailyRow, "day"> & { attendancePct: number | null }; week?: HiringDailyWeek }>("/hiring/daily", { params: { from, to } })).data;
+/** 📊 Тижневе ручне число (#2104); будь-який день тижня; `null` — повернути суму днів. */
+export const saveHiringWeekOverride = async (day: string, metric: HiringWeekMetric, value: number | null) => { await api.put(`/hiring/week-override/${day}`, { metric, value }); };
 export const saveHiringDaily = async (day: string, p: { resumes?: number; coldSearch?: number }) => { await api.put(`/hiring/daily/${day}`, p); };
 /** 📊 Ручне число плитки за день; `null` — повернути авто (#2101). */
 export const saveHiringOverride = async (day: string, metric: HiringOverrideMetric, value: number | null) => { await api.put(`/hiring/daily/${day}/override`, { metric, value }); };
