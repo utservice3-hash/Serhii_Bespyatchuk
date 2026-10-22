@@ -18,7 +18,7 @@ import {
   insertFile, fileForDownload, setFileDeleted,
 } from "../core/hiring.js";
 import {
-  trainingBoard, trainingDetail, issueInvite, issueCandidatePassword, linkCandidateAccount, freeCandidateAccounts, extendAccess, restoreAccess, promoteCandidate, markStartedWork, answerQuestion, grantQuizAttempt,
+  trainingBoard, trainingDetail, issueInvite, issueCandidatePassword, linkCandidateAccount, freeCandidateAccounts, extendAccess, restoreAccess, promoteCandidate, markStartedWork, mergeCandidateIntoAccount, answerQuestion, grantQuizAttempt,
 } from "../core/hiringTraining.js";
 import { CANDIDATE_ACCESS, canDecideTraining } from "../core/hiringTrainingRules.js";
 import { hiringSummary, vacancyFunnels } from "../core/hiringFunnel.js";
@@ -618,6 +618,15 @@ hiringRouter.post("/candidates/:id/started-work", async (req, res) => {
     const id = idOf(req);
     await tx((db) => markStartedWork(db, req.auth!.userId, id, req.body?.comment, "edit"));
     res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+// 🔗 «Обʼєднати» з робочим акаунтом Kommo (#2260, 22.10.2026) — лише HR і керівництво; без кнопки скасування (рішення Романа).
+hiringRouter.post("/candidates/:id/merge-account", async (req, res) => {
+  try {
+    onlyEdit(req);
+    const id = idOf(req);
+    res.json(await tx((db) => mergeCandidateIntoAccount(db, req.auth!.userId, id, req.body?.userId, "edit")));
   } catch (e) { fail(res, e); }
 });
 

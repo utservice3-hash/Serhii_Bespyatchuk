@@ -9,6 +9,7 @@ import bcrypt from "bcryptjs";
 import { randomBytes } from "node:crypto";
 import { HiringError, LEAD_VISIBLE_SQL, type Db } from "./hiring.js";
 import { ensureEmployeeFromCandidate } from "./employeeAdd.js";
+import { shortKey } from "./employeeImport.js";
 import type { HiringAccess, HiringStatus } from "./hiringRules.js";
 import {
   CANDIDATE_ACCESS, CLOSE_REASON_LABEL, accessDeadline, accessToClose, trainingDay, trainingHealth, promoteVerdict,
@@ -64,6 +65,9 @@ export async function ensureCandidateAccount(db: Db, actorId: number | null, can
   const email = str(c.email)?.toLowerCase() ?? null;
   if (!email) throw new HiringError(400, "Внесіть пошту кандидата — вона стане його логіном у дашборд");
   const taken = email ? ((await db.query(`SELECT 1 FROM users WHERE lower(email) = $1`, [email])).rowCount ?? 0) > 0 : false;
+  // 🔗 Пошту вже має акаунт із Kommo тієї самої людини (#2260): НЕ заводимо третій акаунт зі службовим логіном —
+  // пропонуємо «Об'єднати» (перехід відкочується цілком, після об'єднання HR повторює його).
+  if (taken) await throwIfMergeable(db, candidateId, email);
   const login = candidateLogin({ email, candidateId, emailTaken: taken });
   const clash = await db.query(`SELECT 1 FROM users WHERE lower(email) = $1`, [login]);
   if (clash.rowCount) throw new HiringError(409, `Логін ${login} уже зайнятий іншим користувачем`);
@@ -89,7 +93,10 @@ export async function closeCandidateAccess(db: Db, candidateId: number, reason: 
   if (!c?.user_id || c.access_closed_at) return false;
   const staying = reason === "manager" || reason === "started";
   if (!staying) {
-    await db.query(`UPDATE users SET is_active = false, deactivated_at = now(), deactivated_reason = $1 WHERE id = $2`,
+    // Лише акаунт із роллю «Кандидат»: після «Обʼєднати» (#2260) до кандидата привʼязано РОБОЧИЙ акаунт із Kommo,
+    // і джоба «48 год без входу» чи відмова не мають права його вимкнути — ним керує Kommo.
+    await db.query(`UPDATE users SET is_active = false, deactivated_at = now(), deactivated_reason = $1
+                     WHERE id = $2 AND COALESCE(role_override, role) = 'candidate'`,
       [`найм: ${CLOSE_REASON_LABEL[reason]}`, c.user_id]);
     await db.query(`UPDATE hiring_invites SET revoked_at = now() WHERE candidate_id = $1 AND used_at IS NULL AND revoked_at IS NULL`, [candidateId]);
   }
@@ -149,7 +156,8 @@ export async function undoPromotion(db: Db, candidateId: number, actorId: number
   // могла зняти роль «Кандидат» (`settleHiredAccount`) — повернення ставить її знову. Обидва — як було до кліку.
   if (c?.user_id && c.access_closed_reason === "started") {
     await db.query(`UPDATE users SET is_active = true, deactivated_at = NULL, deactivated_reason = NULL WHERE id = $1`, [c.user_id]);
-    await db.query(`UPDATE users SET role_override = 'candidate' WHERE id = $1 AND role_override IS NULL`, [c.user_id]);
+    if (!(await wasMerged(db, candidateId)))
+      await db.query(`UPDATE users SET role_override = 'candidate' WHERE id = $1 AND role_override IS NULL`, [c.user_id]);
     await db.query(`UPDATE hiring_candidates SET access_closed_at = NULL, access_closed_reason = NULL WHERE id = $1`, [candidateId]);
     await event(db, candidateId, "access", "вихід на роботу скасовано · доступ до навчання повернуто", actorId);
     return;
@@ -157,7 +165,8 @@ export async function undoPromotion(db: Db, candidateId: number, actorId: number
   if (!c?.user_id || c.access_closed_reason !== "manager") return;
   // Знята (`settleHiredAccount`), «Кандидат» (ще чекав Kommo) чи стара «Менеджер» (до #2230) — усе повертається в
   // «Кандидат». Чужу ручну роль (адмін, КВП…) повернення не перезаписує.
-  await db.query(`UPDATE users SET role_override = 'candidate' WHERE id = $1 AND (role_override IS NULL OR role_override IN ('manager','candidate'))`, [c.user_id]);
+  if (!(await wasMerged(db, candidateId)))
+    await db.query(`UPDATE users SET role_override = 'candidate' WHERE id = $1 AND (role_override IS NULL OR role_override IN ('manager','candidate'))`, [c.user_id]);
   await db.query(`UPDATE hiring_candidates SET access_closed_at = NULL, access_closed_reason = NULL WHERE id = $1`, [candidateId]);
   await event(db, candidateId, "access", "роль акаунта повернуто в «Кандидат»", actorId);
 }
@@ -213,10 +222,111 @@ export async function syncCandidateLogin(db: Db, actorId: number | null, candida
   if (!r?.user_id || r.role !== "candidate") return;
   const email = str(r.email)?.toLowerCase() ?? null;
   if (!email || email === (r.login ?? "").toLowerCase()) return;
-  if ((await db.query(`SELECT 1 FROM users WHERE lower(email) = $1 AND id <> $2`, [email, r.user_id])).rowCount)
-    throw new HiringError(409, `Пошта ${email} уже зайнята іншим користувачем — логін кандидата лишився ${r.login}`);
+  if ((await db.query(`SELECT 1 FROM users WHERE lower(email) = $1 AND id <> $2`, [email, r.user_id])).rowCount) {
+    await throwIfMergeable(db, candidateId, email);
+    const v = await mergeVerdict(db, candidateId, email);
+    throw new HiringError(409, `Пошта ${email} уже зайнята іншим користувачем — логін кандидата лишився ${r.login}`
+      + (v && !v.ok ? `. Обʼєднати не можна: ${v.reason} — зверніться до адміна` : ""));
+  }
   await db.query(`UPDATE users SET email = $1 WHERE id = $2`, [email, r.user_id]);
   await event(db, candidateId, "access", `логін змінено на ${email}`, actorId);
+}
+
+/**
+ * 🔗 «ОБʼЄДНАТИ» (прохід 2 алгоритму «один акаунт», 22.10.2026, #2260–#2263).
+ *
+ * Буває, що людину завели в Kommo РАНІШЕ, ніж HR вписала робочу пошту, — синк уже зробив робочий акаунт із цією
+ * поштою. Заміряно 22.10.2026 на 8 таких акаунтах: у 7 людина вже входила, у всіх 8 — записи сейфу, у половини —
+ * документи конструктора. Тому напрямок один (рішення Романа 22.10): кандидат і його картка ПЕРЕХОДЯТЬ НА РОБОЧИЙ
+ * акаунт, кандидатський вимикається. Людина й далі входить робочим логіном. Кнопки «Скасувати обʼєднання» НЕМАЄ
+ * (рішення Романа 22.10, свідомий виняток із правила 06.08 про скасовність): попередній стан — у журналі доступу.
+ *
+ * Обʼєднуємо лише однозначне: у акаунта є Kommo, роль менеджер/тімлід (не ручна адмінська), він не належить
+ * іншому кандидату чи картці, і прізвище+імʼя в Kommo ті самі, що в кандидата (захист від помилки в пошті).
+ */
+const MERGE_MARK = "обʼєднано з акаунтом Kommo";
+
+export interface MergeOffer { userId: number; login: string; kommoName: string }
+type MergeVerdict = { ok: true; offer: MergeOffer } | { ok: false; reason: string };
+
+/** Чи можна обʼєднати кандидата з акаунтом, що має цю пошту. null — пошти ні в кого немає. */
+export async function mergeVerdict(db: Db, candidateId: number, email: string): Promise<MergeVerdict | null> {
+  const c = (await db.query<{ full_name: string | null; user_id: number | null }>(
+    `SELECT full_name, user_id FROM hiring_candidates WHERE id = $1`, [candidateId])).rows[0];
+  if (!c) throw new HiringError(404, "Кандидата не знайдено");
+  const x = (await db.query<{ id: number; email: string; manager_id: number | null; role: string; kommo: string | null }>(
+    `SELECT u.id, u.email, u.manager_id, COALESCE(u.role_override, u.role) AS role, m.name AS kommo
+       FROM users u LEFT JOIN managers m ON m.id = u.manager_id
+      WHERE lower(u.email) = lower($1) AND u.id IS DISTINCT FROM $2`, [email, c.user_id])).rows[0];
+  if (!x) return null;
+  if (x.manager_id == null || !x.kommo) return { ok: false, reason: `акаунт ${x.email} не привʼязаний до Kommo` };
+  if (x.role !== "manager" && x.role !== "team_lead") return { ok: false, reason: `в акаунта ${x.email} ручна роль «${x.role}»` };
+  if ((await db.query(`SELECT 1 FROM hiring_candidates WHERE user_id = $1`, [x.id])).rowCount)
+    return { ok: false, reason: `акаунт ${x.email} уже привʼязаний до іншого кандидата` };
+  if ((await db.query(`SELECT 1 FROM employees WHERE (user_id = $1 OR manager_id = $2) AND candidate_id IS DISTINCT FROM $3`,
+    [x.id, x.manager_id, candidateId])).rowCount)
+    return { ok: false, reason: `акаунт ${x.email} уже має картку в «Співробітниках»` };
+  if (shortKey(x.kommo) !== shortKey(c.full_name ?? ""))
+    return { ok: false, reason: `у Kommo це «${x.kommo}», а кандидат — «${c.full_name ?? "без імені"}»` };
+  return { ok: true, offer: { userId: x.id, login: x.email, kommoName: x.kommo } };
+}
+
+/** 409 з пропозицією «Обʼєднати», якщо пошту має акаунт, з яким обʼєднати МОЖНА. Інакше — нічого. */
+async function throwIfMergeable(db: Db, candidateId: number, email: string): Promise<void> {
+  const v = await mergeVerdict(db, candidateId, email);
+  if (v?.ok) throw new HiringError(409,
+    `Пошта ${email} уже в акаунта Kommo «${v.offer.kommoName}». Якщо це та сама людина — обʼєднайте`, { merge: v.offer });
+}
+
+/** Чи обʼєднували цього кандидата з робочим акаунтом (тоді «Повернути» не робить робочий акаунт кандидатським). */
+async function wasMerged(db: Db, candidateId: number): Promise<boolean> {
+  return ((await db.query(`SELECT 1 FROM hiring_events WHERE candidate_id = $1 AND kind = 'access' AND comment LIKE $2`,
+    [candidateId, `${MERGE_MARK}%`])).rowCount ?? 0) > 0;
+}
+
+/**
+ * «Обʼєднати»: кандидат (і картка в «Співробітниках») переходять на робочий акаунт `userId`; кандидатський акаунт
+ * вимикається; прогрес навчання переноситься (крок, який робочий уже має, лишається його). Лише HR / керівництво.
+ */
+export async function mergeCandidateIntoAccount(db: Db, actorId: number | null, candidateId: number, userId: unknown, access: HiringAccess) {
+  if (access !== "edit") throw new HiringError(403, "Обʼєднує акаунти лише HR або керівництво");
+  const uid = Number(userId);
+  if (!Number.isInteger(uid) || uid <= 0) throw new HiringError(400, "Оберіть акаунт");
+  const c = await lockAccount(db, candidateId, access, null);
+  if (c.status === "refused" || c.status === "black") throw new HiringError(409, "Кандидат у відмові — спершу поверніть статус");
+  const x = (await db.query<{ email: string }>(`SELECT email FROM users WHERE id = $1 FOR UPDATE`, [uid])).rows[0];
+  if (!x) throw new HiringError(404, "Акаунт не знайдено");
+  const v = await mergeVerdict(db, candidateId, x.email);
+  if (!v?.ok || v.offer.userId !== uid) throw new HiringError(409, `Обʼєднати не можна: ${v && !v.ok ? v.reason : "акаунт змінився"}`);
+  const old = c.user_id;
+  const card = (await db.query<{ id: number; user_id: number | null; manager_id: number | null }>(
+    `SELECT id, user_id, manager_id FROM employees WHERE candidate_id = $1 FOR UPDATE`, [candidateId])).rows[0] ?? null;
+  const prev = { candidateUserId: old, candidateEmail: c.email, card };
+
+  if (old != null) {
+    await db.query(`UPDATE training_progress SET user_id = $2 WHERE user_id = $1
+                      AND NOT EXISTS (SELECT 1 FROM training_progress p WHERE p.user_id = $2 AND p.material_id = training_progress.material_id)`, [old, uid]);
+    await db.query(`UPDATE training_events SET user_id = $2 WHERE user_id = $1`, [old, uid]);
+    await db.query(`UPDATE training_quiz_attempts SET user_id = $2 WHERE user_id = $1`, [old, uid]);
+  }
+  await db.query(`UPDATE hiring_candidates SET user_id = $2, email = $3, account_created_at = COALESCE(account_created_at, now()),
+                    updated_at = now() WHERE id = $1`, [candidateId, uid, x.email]);
+  if (old != null) {
+    await db.query(`UPDATE users SET is_active = false, deactivated_at = now(), deactivated_reason = $2
+                     WHERE id = $1 AND COALESCE(role_override, role) = 'candidate'`, [old, `найм: ${MERGE_MARK} ${x.email}`]);
+    await db.query(`UPDATE hiring_invites SET revoked_at = now() WHERE candidate_id = $1 AND used_at IS NULL AND revoked_at IS NULL`, [candidateId]);
+  }
+  if (card) {
+    const mgr = (await db.query<{ manager_id: number }>(`SELECT manager_id FROM users WHERE id = $1`, [uid])).rows[0].manager_id;
+    await db.query(`UPDATE employees SET user_id = $2, manager_id = COALESCE(manager_id, $3), updated_at = now() WHERE id = $1`, [card.id, uid, mgr]);
+  }
+  await event(db, candidateId, "access", `${MERGE_MARK} «${v.offer.kommoName}» · логін ${x.email}`, actorId);
+  await db.query(
+    `INSERT INTO access_audit (actor_user_id, actor_email, action, target_type, target_id, target_label, details)
+     VALUES ($1, (SELECT email FROM users WHERE id = $1), 'hiring.merge_account', 'user', $2, $3, $4)`,
+    [actorId, String(uid), v.offer.kommoName, JSON.stringify({ candidateId, to: { userId: uid }, prev })]);
+  if (c.status === "manager") await settleHiredAccount(db, uid, actorId);
+  return { login: x.email, kommoName: v.offer.kommoName };
 }
 
 /**

@@ -627,6 +627,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // «Вийшов на роботу» без навчання (12.10.2026, #1622) — лише «редагування» Найму; тімлід не відмічає.
   { method: "POST", path: "/api/hiring/candidates/:id/started-work", cls: "deny-only",
     allow: [], deny: ["team_lead", "manager"] },
+  // 🔗 «Обʼєднати» з робочим акаунтом Kommo (22.10.2026, #2260) — лише «редагування» Найму; тімлід не обʼєднує.
+  { method: "POST", path: "/api/hiring/candidates/:id/merge-account", cls: "deny-only",
+    allow: [], deny: ["team_lead", "manager"] },
   { method: "POST", path: "/api/hiring/candidates/:id/questions/:questionId/answer", cls: "deny-only",
     allow: [], deny: ["manager"] },
   // 📝 «Ще одна спроба» тесту (13.10.2026) — тімлід команди або HR; та сама межа, що «Перевести в менеджери».

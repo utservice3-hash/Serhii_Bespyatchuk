@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { hiringError, setHiringStatus, fetchHiringCard, refuseHiringCandidate, addHiringRefusalReason, type HiringMeta, type HiringStatus, type HiringRefusalSide } from "../../../api";
+import { hiringError, setHiringStatus, fetchHiringCard, refuseHiringCandidate, addHiringRefusalReason, hiringMergeOffer, mergeHiringAccount, type HiringMeta, type HiringStatus, type HiringRefusalSide, type HiringMergeOffer } from "../../../api";
 import { NEEDS_TEAM, STATUS_TONE } from "../hiringView";
 
 /** Спливаюче повідомлення розділу; `action` — наприклад, «Відновити» після видалення рядка. */
@@ -39,6 +39,8 @@ export function StatusDialog({ meta, candidateId, from, to, teamId, email, onClo
   const [team, setTeam] = useState<string>(teamId ? String(teamId) : meta.access === "lead" && meta.teamId ? String(meta.teamId) : "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // 🔗 Пошту вже має робочий акаунт Kommo тієї самої людини (#2260): сервер не заводить третій акаунт, а пропонує обʼєднати.
+  const [merge, setMerge] = useState<HiringMergeOffer | null>(null);
   const label = (s: HiringStatus) => meta.statuses.find((x) => x.key === s)?.label ?? s;
   const needsTeam = NEEDS_TEAM.includes(to);
   const submit = async () => {
@@ -50,13 +52,15 @@ export function StatusDialog({ meta, candidateId, from, to, teamId, email, onClo
       const r = await setHiringStatus(candidateId, { to, comment: comment.trim(), teamId: team ? Number(team) : null, ...(needsEmail ? { email: mail.trim() } : {}) });
       toast(`Статус: «${label(to)}»`);
       if (r.credentials) setCred(r.credentials); else onDone();
-    } catch (e) { setErr(hiringError(e)); } finally { setBusy(false); }
+    } catch (e) { const m = hiringMergeOffer(e); if (m) setMerge(m); else setErr(hiringError(e)); } finally { setBusy(false); }
   };
   const copyCred = async () => {
     if (!cred) return;
     try { await navigator.clipboard.writeText(`Логін: ${cred.login}\nПароль: ${cred.password}\nВхід: ${window.location.origin}/login`); toast("Логін і пароль скопійовано — надішліть кандидату"); }
     catch { toast("Не вдалося скопіювати — виділіть і скопіюйте вручну"); }
   };
+  if (merge) return <MergeDialog offer={merge} candidateId={candidateId} canMerge={meta.access === "edit"} toast={toast}
+    onClose={() => setMerge(null)} onMerged={() => { setMerge(null); void submit(); }} />;
   if (cred) return createPortal(
     <div className="hr-modal-back">
       <div className="hr-modal" role="dialog" aria-label="Вхід кандидата" onClick={(e) => e.stopPropagation()}>
@@ -200,6 +204,41 @@ export function RefusalDialog({ meta, candidateId, candidateName, from, onClose,
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
           <button className="hr-btn" onClick={onClose}>Скасувати</button>
           <button className="hr-btn dg" disabled={busy} onClick={() => void submit()}>Відмовити</button>
+        </div>
+      </div>
+    </div>, document.body);
+}
+
+/**
+ * 🔗 «ОБʼЄДНАТИ» (#2260, 22.10.2026): пошту кандидата вже має РОБОЧИЙ акаунт Kommo тієї самої людини (людину завели
+ * в Kommo раніше, ніж HR вписала робочу пошту). Кандидат і його картка переходять на робочий акаунт, кандидатський
+ * вимикається; людина входить робочим логіном. Скасування немає (рішення Романа 22.10) — тому питаємо явно.
+ */
+export function MergeDialog({ offer, candidateId, canMerge, toast, onClose, onMerged }: {
+  offer: HiringMergeOffer; candidateId: number; canMerge: boolean; toast: Toast; onClose: () => void; onMerged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const go = async () => {
+    setBusy(true); setErr(null);
+    try { await mergeHiringAccount(candidateId, offer.userId); toast(`Обʼєднано з акаунтом «${offer.kommoName}» · логін ${offer.login}`); onMerged(); }
+    catch (e) { setErr(hiringError(e)); } finally { setBusy(false); }
+  };
+  return createPortal(
+    <div className="hr-modal-back" onClick={onClose}>
+      <div className="hr-modal" role="dialog" aria-label="Обʼєднати з акаунтом Kommo" onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: "0 0 4px", fontSize: 16 }}>Ця пошта вже в акаунта Kommo</h3>
+        <p style={{ margin: "0 0 8px", fontSize: 14 }}><b>{offer.kommoName}</b> · логін <b>{offer.login}</b></p>
+        <p className="hr-muted" style={{ margin: "0 0 12px", fontSize: 13 }}>
+          Якщо це та сама людина — обʼєднайте: кандидат і його картка перейдуть на цей робочий акаунт, прогрес навчання
+          перенесеться, акаунт кандидата вимкнеться. Людина входить робочим логіном і своїм паролем від нього. Скасувати
+          обʼєднання кнопкою не можна.
+        </p>
+        {!canMerge && <div className="hr-muted" style={{ fontSize: 12, marginBottom: 8 }}>Обʼєднує HR або керівництво.</div>}
+        {err && <div style={{ color: "var(--danger)", fontSize: 12, marginBottom: 8 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button className="hr-btn" onClick={onClose}>Скасувати</button>
+          {canMerge && <button className="hr-btn p" disabled={busy} onClick={() => void go()}>Обʼєднати</button>}
         </div>
       </div>
     </div>, document.body);

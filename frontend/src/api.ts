@@ -5332,6 +5332,12 @@ export const grantQuizAttempt = async (id: number, materialId: number, comment: 
 };
 /** «Вийшов на роботу» без навчання (#1622) — лише HR і керівництво. */
 export const markHiringStartedWork = async (id: number, comment: string) => { await api.post(`/hiring/candidates/${id}/started-work`, { comment }); };
+/** 🔗 «Обʼєднати» (#2260): пошту кандидата вже має робочий акаунт Kommo тієї самої людини. Сервер шле пропозицію в 409. */
+export interface HiringMergeOffer { userId: number; login: string; kommoName: string }
+export const hiringMergeOffer = (e: unknown): HiringMergeOffer | null =>
+  (e as { response?: { status?: number; data?: { merge?: HiringMergeOffer } } })?.response?.data?.merge ?? null;
+export const mergeHiringAccount = async (id: number, userId: number) =>
+  (await api.post<{ login: string; kommoName: string }>(`/hiring/candidates/${id}/merge-account`, { userId })).data;
 export const answerHiringQuestion = async (id: number, questionId: number, answer: string) => {
   await api.post(`/hiring/candidates/${id}/questions/${questionId}/answer`, { answer });
 };

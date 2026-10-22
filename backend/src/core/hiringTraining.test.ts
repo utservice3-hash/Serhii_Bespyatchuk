@@ -624,6 +624,161 @@ test("#2232b provisionUsers шукає через PROVISION_LOOKUP_SQL і кли
 });
 
 /**
+ * Спільне для `#2260`–`#2262`: робочий акаунт, який синк завів за людиною з Kommo раніше, ніж HR вписала робочу пошту.
+ */
+async function workAccount(c: import("pg").Client, mgrId: number, kommoName: string, email: string, opts: { role?: string | null } = {}) {
+  await c.query("INSERT INTO managers (id,name,team_id,is_active,kommo_user_id,email) VALUES ($1,$2,1,true,$4,$3)", [mgrId, kommoName, email, mgrId]);
+  return (await c.query("INSERT INTO users (email, password_hash, role, role_override, manager_id, team_id, is_active) VALUES ($1,'x','manager',$2,$3,1,true) RETURNING id",
+    [email, opts.role ?? null, mgrId])).rows[0].id as number;
+}
+
+/**
+ * #2260 — ЖИВИЙ SQL: «ОБʼЄДНАТИ» ПЕРЕНОСИТЬ КАНДИДАТА НА РОБОЧИЙ АКАУНТ (прохід 2, рішення Романа 22.10.2026:
+ * «на робочий, без кнопки скасування»). HR вписує робочу пошту, яку вже має акаунт Kommo тієї самої людини →
+ * 409 з пропозицією, а не тиха помилка. «Обʼєднати» (лише HR): кандидат і картка — на робочому акаунті, картка
+ * з Kommo, прогрес навчання перенесено (крок, що робочий уже має, лишається його), кандидатський вимкнено,
+ * робочий — активний і менеджер, журнал має попередній стан. «Повернути» НЕ робить робочий акаунт кандидатським.
+ * 🧨 Червоніє, якщо обʼєднати в бік кандидатського, лишити картку на кандидатському, не перенести прогрес,
+ * перезаписати крок робочого, не вимкнути кандидатський, дати тімліду, не записати журнал або «Повернути»
+ * зробить робочий акаунт кандидатським.
+ */
+test("#2260 ЖИВИЙ SQL: «Обʼєднати» — кандидат і картка на робочому акаунті, прогрес перенесено, кандидатський вимкнено, лише HR", async (t) => {
+  const s = await scratchDb(t); if (!s) return;
+  const h = await import("./hiring.js");
+  const tr = await import("./hiringTraining.js");
+  try {
+    const course = (await s.c.query("INSERT INTO training_courses (title, audience, published) VALUES ('Старт','candidate',true) RETURNING id")).rows[0].id;
+    const mod = (await s.c.query("INSERT INTO training_folders (name, course_id) VALUES ('День 1', $1) RETURNING id", [course])).rows[0].id;
+    const [m1, m2] = (await s.c.query("INSERT INTO training_materials (folder_id, title, kind, position) VALUES ($1,'Крок 1','text',1),($1,'Крок 2','text',2) RETURNING id", [mod])).rows.map((r) => r.id as number);
+
+    const id = await toCandidate(s.db, "Гуназа Михайло", "0970002260");
+    const cand = (await s.c.query("SELECT user_id FROM hiring_candidates WHERE id=$1", [id])).rows[0].user_id as number;
+    await s.c.query("INSERT INTO training_progress (user_id, material_id, status, finished_at) VALUES ($1,$2,'done',now()),($1,$3,'done',now())", [cand, m1, m2]);
+    await tr.markStartedWork(s.db, null, id, "вийшов", "edit"); // старий порядок: картка на кандидатському
+    const work = await workAccount(s.c, 5401, "Гуназа Михайло Юрійович", "gmu@uts.ua");
+    await s.c.query("INSERT INTO training_progress (user_id, material_id, status) VALUES ($1,$2,'opened')", [work, m1]);
+
+    const e = await h.updateCandidateFields(s.db, null, id, { email: "GMU@uts.ua" }).then(() => null, (x) => x);
+    assert.equal(e?.status, 409, "🔴 зайнята робоча пошта не дала 409");
+    assert.deepEqual(e?.extra?.merge, { userId: work, login: "gmu@uts.ua", kommoName: "Гуназа Михайло Юрійович" }, "🔴 немає пропозиції «Обʼєднати» з робочим акаунтом");
+
+    await assert.rejects(tr.mergeCandidateIntoAccount(s.db, null, id, work, "lead"), code(403), "🔴 обʼєднав тімлід");
+    const r = await tr.mergeCandidateIntoAccount(s.db, null, id, work, "edit");
+    assert.equal(r.login, "gmu@uts.ua");
+    const hc = (await s.c.query("SELECT user_id, email FROM hiring_candidates WHERE id=$1", [id])).rows[0];
+    assert.deepEqual([hc.user_id, hc.email], [work, "gmu@uts.ua"], "🔴 кандидат не перейшов на робочий акаунт");
+    const old = (await s.c.query("SELECT is_active, deactivated_reason FROM users WHERE id=$1", [cand])).rows[0];
+    assert.equal(old.is_active, false, "🔴 кандидатський акаунт лишився активним");
+    assert.match(old.deactivated_reason, /обʼєднано з акаунтом Kommo gmu@uts\.ua/);
+    const w = (await s.c.query("SELECT is_active, role_override, COALESCE(role_override, role) AS eff FROM users WHERE id=$1", [work])).rows[0];
+    assert.deepEqual([w.is_active, w.role_override, w.eff], [true, null, "manager"], "🔴 робочий акаунт зіпсовано обʼєднанням");
+    const card = (await s.c.query("SELECT user_id, manager_id FROM employees WHERE candidate_id=$1", [id])).rows[0];
+    assert.deepEqual([card.user_id, card.manager_id], [work, 5401], "🔴 картка не на робочому акаунті або без Kommo");
+    const prog = (await s.c.query("SELECT user_id, material_id, status FROM training_progress")).rows
+      .map((x) => `${x.user_id === work ? "робочий" : "кандидатський"}·${x.material_id === m1 ? "крок1" : "крок2"}:${x.status}`).sort();
+    assert.deepEqual(prog, ["кандидатський·крок1:done", "робочий·крок1:opened", "робочий·крок2:done"],
+      "🔴 прогрес не перенесено або перезаписано крок, який робочий уже мав");
+    const audit = (await s.c.query("SELECT details FROM access_audit WHERE action='hiring.merge_account'")).rows;
+    assert.equal(audit.length, 1, "🔴 обʼєднання не записано в журнал");
+    assert.equal(audit[0].details.prev.candidateUserId, cand, "🔴 у журналі немає попереднього стану — відкотити буде нічим");
+
+    await h.changeStatus(s.db, null, id, { to: "candidate", comment: "помилково" }, "edit", null);
+    assert.equal((await s.c.query("SELECT role_override FROM users WHERE id=$1", [work])).rows[0].role_override, null,
+      "🔴 «Повернути» зробив робочий акаунт кандидатським");
+  } finally { await s.done(); }
+});
+
+/**
+ * #2261 — ДЗЕРКАЛО: «ОБʼЄДНАТИ» ЛИШЕ ОДНОЗНАЧНЕ. Пропозиції немає (звичайна 409 із причиною) і сам виклик — 409,
+ * коли в Kommo інше імʼя (помилка в пошті), коли в акаунта ручна роль (КВП), коли акаунт без Kommo, коли акаунт
+ * уже має картку в «Співробітниках». Контроль: та сама людина з правильним імʼям — пропозиція Є.
+ * 🧨 Червоніє, якщо прибрати будь-яку з чотирьох умов або зламати контроль.
+ */
+test("#2261 ЖИВИЙ SQL: «Обʼєднати» не пропонується при іншому імені, ручній ролі, без Kommo, з чужою карткою", async (t) => {
+  const s = await scratchDb(t); if (!s) return;
+  const h = await import("./hiring.js");
+  const tr = await import("./hiringTraining.js");
+  try {
+    const id = await toCandidate(s.db, "Петренко Олена", "0970002261");
+    const tryMail = async (mail: string) => h.updateCandidateFields(s.db, null, id, { email: mail }).then(() => null, (x) => x);
+    const cases: [string, () => Promise<number>, RegExp][] = [
+      ["інше імʼя", () => workAccount(s.c, 5411, "Петрук Олена Іванівна", "a@uts.ua"), /у Kommo це «Петрук Олена Іванівна»/],
+      ["ручна роль", () => workAccount(s.c, 5412, "Петренко Олена", "b@uts.ua", { role: "kvp" }), /ручна роль «kvp»/],
+      ["без Kommo", async () => (await s.c.query("INSERT INTO users (email,password_hash,role) VALUES ('c@uts.ua','x','manager') RETURNING id")).rows[0].id, /не привʼязаний до Kommo/],
+      ["має картку", async () => { const u = await workAccount(s.c, 5414, "Петренко Олена", "d@uts.ua");
+        await s.c.query("INSERT INTO employees (full_name, import_key, status, user_id) VALUES ('Петренко Олена','петренко олена x','active',$1)", [u]); return u; }, /уже має картку/],
+    ];
+    for (const [what, make, why] of cases) {
+      const u = await make();
+      const mail = (await s.c.query("SELECT email FROM users WHERE id=$1", [u])).rows[0].email as string;
+      const e = await tryMail(mail);
+      assert.equal(e?.status, 409, `🔴 ${what}: зайнята пошта не дала 409`);
+      assert.equal(e?.extra?.merge, undefined, `🔴 ${what}: запропоновано обʼєднати, хоча не можна`);
+      assert.match(e?.message ?? "", why, `🔴 ${what}: причина не названа`);
+      await assert.rejects(tr.mergeCandidateIntoAccount(s.db, null, id, u, "edit"), code(409), `🔴 ${what}: обʼєднання пройшло в обхід пропозиції`);
+    }
+    const ok = await workAccount(s.c, 5415, "Петренко Олена Василівна", "e@uts.ua");
+    assert.equal((await tryMail("e@uts.ua"))?.extra?.merge?.userId, ok, "🔴 контроль: та сама людина — пропозиції немає, тож дзеркало нічого не доводить");
+  } finally { await s.done(); }
+});
+
+/**
+ * #2262 — ЖИВИЙ SQL: «КАНДИДАТ + КОМАНДА» З РОБОЧОЮ ПОШТОЮ, ЯКУ ВЖЕ МАЄ KOMMO, — ПРОПОЗИЦІЯ, А НЕ ТРЕТІЙ АКАУНТ.
+ * Раніше тут мовчки заводився акаунт зі службовим логіном `candidate-N@hiring.uts.local`. Тепер — 409 із
+ * пропозицією, перехід відкочено цілком (у проді — транзакцією роута), нового акаунта немає; після «Обʼєднати»
+ * той самий перехід проходить без нового пароля (вхід — робочий). І ЗАПОБІЖНИК: джоба «48 год без входу» НЕ
+ * вимикає робочий акаунт, привʼязаний до кандидата, а кандидатський, як і раніше, вимикає.
+ * 🧨 Червоніє, якщо повернути службовий логін, видати новий пароль робочому або прибрати запобіжник у джобі.
+ */
+test("#2262 ЖИВИЙ SQL: «кандидат + команда» з зайнятою робочою поштою — пропозиція «Обʼєднати», не службовий логін; джоба не вимикає робочий", async (t) => {
+  const s = await scratchDb(t); if (!s) return;
+  const h = await import("./hiring.js");
+  const tr = await import("./hiringTraining.js");
+  try {
+    const id = await toLead(s.db, "Коваленко Ігор", "0970002262", null);
+    const work = await workAccount(s.c, 5421, "Коваленко Ігор Петрович", "kip@uts.ua");
+    const users = async () => (await s.c.query("SELECT count(*)::int n FROM users")).rows[0].n as number;
+    const before = await users();
+    await s.c.query("BEGIN");
+    const e = await h.changeStatus(s.db, null, id, { to: "candidate", comment: "беремо", email: "kip@uts.ua" }, "lead", 1).then(() => null, (x) => x);
+    await s.c.query("ROLLBACK");
+    assert.equal(e?.status, 409, "🔴 перехід із зайнятою робочою поштою пройшов мовчки");
+    assert.equal(e?.extra?.merge?.userId, work, "🔴 немає пропозиції «Обʼєднати»");
+    assert.equal(await users(), before, "🔴 заведено ще один акаунт (службовий логін)");
+
+    await tr.mergeCandidateIntoAccount(s.db, null, id, work, "edit");
+    const cred = await h.changeStatus(s.db, null, id, { to: "candidate", comment: "беремо", email: "kip@uts.ua" }, "lead", 1);
+    assert.equal(cred, null, "🔴 робочому акаунту видано новий пароль");
+    assert.equal((await s.c.query("SELECT user_id FROM hiring_candidates WHERE id=$1", [id])).rows[0].user_id, work);
+
+    // Запобіжник: строк доступу минув — кандидатський звичайного кандидата вимикається, робочий — ні.
+    const plain = await toCandidate(s.db, "Звичайний Кандидат", "0970002263");
+    const puid = (await s.c.query("SELECT user_id FROM hiring_candidates WHERE id=$1", [plain])).rows[0].user_id as number;
+    const res = await tr.closeExpiredAccess(s.db, new Date(Date.now() + 30 * 24 * H));
+    assert.ok(res.closed >= 2, "фікстура: джоба мала закрити доступ обом");
+    const act = async (u: number) => (await s.c.query("SELECT is_active FROM users WHERE id=$1", [u])).rows[0].is_active as boolean;
+    assert.equal(await act(puid), false, "🔴 дзеркало: кандидатський акаунт джоба більше не вимикає");
+    assert.equal(await act(work), true, "🔴 джоба «48 год без входу» вимкнула робочий акаунт менеджера");
+  } finally { await s.done(); }
+});
+
+/**
+ * #2263 — МЕЖА РОУТУ «ОБʼЄДНАТИ»: лише «редагування» Найму (`onlyEdit`) і запис у матриці доступу з тімлідом і
+ * менеджером у `deny`. Читає джерело роута й матрицю.
+ * 🧨 Червоніє, якщо прибрати `onlyEdit` із роуту або запис із матриці.
+ */
+test("#2263 «Обʼєднати»: роут лише для редагування Найму, у матриці доступу тімлід і менеджер — deny", () => {
+  const route = SRC("routes/hiring.ts");
+  const i = route.indexOf(`hiringRouter.post("/candidates/:id/merge-account"`);
+  assert.ok(i >= 0, "🔴 роуту «Обʼєднати» немає");
+  const body = route.slice(i, route.indexOf("\n});", i));
+  assert.match(body, /\bonlyEdit\(req\);/, "🔴 «Обʼєднати» без межі «лише HR / керівництво»");
+  const m = SRC("auth/accessMatrix.ts");
+  assert.match(m, /path: "\/api\/hiring\/candidates\/:id\/merge-account", cls: "deny-only",\s*allow: \[\], deny: \["team_lead", "manager"\]/,
+    "🔴 роуту немає в матриці доступу або тімлід / менеджер не в deny");
+});
+
+/**
  * #1623 — СТАРТОВА ВКЛАДКА ЗА РОЛЛЮ. Корінь «/» вів у «Звіт» усіх, хоча «Звіт» закритий Кандидату, HR, Бухгалтерії
  * й Бізнес-асистенту. Функцію фронту ВИКОНУЄМО (транспіляція), а не читаємо очима; і перевіряємо, що Dashboard її кличе.
  * По обидва боки: ролі зі «Звітом» лишаються на «Звіті»; без «Звіту» — своя або перша дозволена.
