@@ -4824,8 +4824,10 @@ REVOKE ALL ON first_touch_notes FROM ai_readonly;
 -- 📞 «Передзвонив поза телефонією» (`offline`, 01.10.2026): звірка 30 «не передзвонив» з Ringostat напряму — у 25
 -- випадках нашого дзвінка в телефонії немає зовсім, а керівники знайшли передзвони з мобільного чи в месенджер.
 -- Таку позначку ставлять менеджер (свої), тімлід (команда), адмін — і обіцянка рахується виконаною.
-ALTER TABLE first_touch_notes DROP CONSTRAINT IF EXISTS first_touch_notes_kind_check;
-ALTER TABLE first_touch_notes ADD CONSTRAINT first_touch_notes_kind_check CHECK (kind IN ('price', 'missed', 'offline'));
+-- 🔴 22.10.2026: тут стояла ще й ВУЗЬКА версія обмеження ('price','missed','offline') перед широкою нижче. Поки
+-- рядків «review» не було, вона проходила; щойно зʼявились — кожна міграція падала на ній і відкочувалась ЦІЛКОМ
+-- (заміряно на викаті 54993b8: «check constraint … is violated by some row»). Схема перезапускається повністю на
+-- кожному викаті, тож проміжна вузька версія обмеження — міна; лишається одна, остаточна.
 -- ✅ «Розібрано» (`review`, 08.10.2026, екран D): тімлід переглянув розмову з черги розбору — вона виходить з черги.
 -- Ставлять тімлід (своя команда) і адмін. Текст — коментар менеджеру або «Розібрано», якщо коментаря немає.
 ALTER TABLE first_touch_notes DROP CONSTRAINT IF EXISTS first_touch_notes_kind_check;
@@ -6270,3 +6272,16 @@ ALTER TABLE ba_events DROP CONSTRAINT IF EXISTS ba_events_owner_kind_check;
 ALTER TABLE ba_events ADD CONSTRAINT ba_events_owner_kind_check CHECK (owner_kind IN ('claim','case','equipment','utb'));
 -- 🔒 Як увесь розділ — закрито від моделі (рішення Романа 01.10.2026 «5а»; гейт #1240 бере `ba_*` зі схеми).
 REVOKE ALL ON ba_utb_cases FROM ai_readonly;
+
+-- 📊 Тижневе ручне число «Щоденного звіту» (22.10.2026, #2104; Іван: «щоб можна було корегувати в розрізі
+-- „цей тиждень“, „минулий тиждень“ — на планерках звітуюсь по цьому»). Замінює СУМУ тижня у вигляді тижня й факт
+-- плану тижня; дні й місяць лишаються сумою днів.
+CREATE TABLE IF NOT EXISTS hiring_week_override (
+  week_start DATE NOT NULL CHECK (EXTRACT(ISODOW FROM week_start) = 1),
+  metric     TEXT NOT NULL CHECK (metric IN ('resumes','coldSearch','planned','done','toLead','toCandidate','toTraining','toManager')),
+  value      INTEGER NOT NULL CHECK (value >= 0 AND value <= 100000),
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (week_start, metric)
+);
+REVOKE ALL ON hiring_week_override FROM ai_readonly;

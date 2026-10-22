@@ -5128,7 +5128,11 @@ export interface HiringDailyRow {
   manual?: HiringOverrideMetric[]; auto?: Partial<Record<HiringOverrideMetric, number>>;
 }
 export type HiringOverrideMetric = "planned" | "done" | "toLead" | "toCandidate" | "toTraining" | "toManager";
-export type HiringPlanMetric = "resumes" | "coldSearch" | HiringOverrideMetric;
+/** План тижня — 6 показників (#2103: Іван прибрав план з резюме й холодного пошуку). */
+export type HiringPlanMetric = HiringOverrideMetric;
+/** Тижневе ручне число — усі 8 плиток (#2104). */
+export type HiringWeekMetric = "resumes" | "coldSearch" | HiringOverrideMetric;
+export interface HiringDailyWeek { weekStart: string; manual: HiringWeekMetric[]; auto: Partial<Record<HiringWeekMetric, number>> }
 
 /** Текст помилки сервера — щоб людина бачила причину, а не «нічого не сталось». */
 export function hiringError(e: unknown): string {
@@ -5182,7 +5186,9 @@ export const addHiringComment = async (id: number, comment: string) => { await a
 export const setHiringTeam = async (id: number, teamId: number, comment: string) => { await api.post(`/hiring/candidates/${id}/team`, { teamId, comment }); };
 
 export const fetchHiringDaily = async (from: string, to: string) =>
-  (await api.get<{ rows: HiringDailyRow[]; totals: Omit<HiringDailyRow, "day"> & { attendancePct: number | null } }>("/hiring/daily", { params: { from, to } })).data;
+  (await api.get<{ rows: HiringDailyRow[]; totals: Omit<HiringDailyRow, "day"> & { attendancePct: number | null }; week?: HiringDailyWeek }>("/hiring/daily", { params: { from, to } })).data;
+/** 📊 Тижневе ручне число (#2104); будь-який день тижня; `null` — повернути суму днів. */
+export const saveHiringWeekOverride = async (day: string, metric: HiringWeekMetric, value: number | null) => { await api.put(`/hiring/week-override/${day}`, { metric, value }); };
 export const saveHiringDaily = async (day: string, p: { resumes?: number; coldSearch?: number }) => { await api.put(`/hiring/daily/${day}`, p); };
 /** 📊 Ручне число плитки за день; `null` — повернути авто (#2101). */
 export const saveHiringOverride = async (day: string, metric: HiringOverrideMetric, value: number | null) => { await api.put(`/hiring/daily/${day}/override`, { metric, value }); };
@@ -5282,6 +5288,8 @@ export type HiringTrainingHealth = "manager" | "closed" | "done" | "no_login" | 
 export interface HiringTrainingRow {
   id: number; full_name: string | null; phone: string | null; telegram: string | null; status: HiringStatus;
   team_id: number | null; team_name: string | null; login: string | null;
+  /** Ім'я в Kommo, якщо синк уже прив'язав Kommo до цього акаунта (#2230); null — ще ні. */
+  kommo_name: string | null;
   account_created_at: string | null; first_login_at: string | null; last_activity_at: string | null;
   access_extended_days: number; access_closed_at: string | null; access_closed_reason: HiringCloseReason | null;
   deadline: string | null; day: number; days: number; health: HiringTrainingHealth;
@@ -5853,20 +5861,8 @@ export const fetchCarrierPayments = async (day?: string) => (await api.get<PaySc
 export const runCarrierPayments = async () => (await api.post<{ ok: boolean; result: unknown }>("/finance/payments/run")).data;
 
 /** 🧪 «План/факт · авто (тест)» (20.10.2026): факт із таблиці «UTS Утверждение оплат» поруч із ручним. Лише читання. */
-export type FinApprSection = "commercial" | "admin" | "general";
 export interface FinApprLine { payDate: string | null; what: string; amount: number | null; direction: string; paid: boolean }
 export interface FinApprPot { key: string; label: string; sum: number; rows: number; unpaid: number; lines: FinApprLine[] }
-export interface FinApprItem { id: number; respId: number; groupId: number; resp: string; group: string; name: string; section: FinApprSection | "payroll" | null; off: boolean;
-  plan: number | null; manual: number | null; auto: number; diff: number; rows: number; unpaid: number; lines: FinApprLine[] }
-export interface FinApprCompare {
-  month: string; fetchedAt: string; sheetLines: number; items: FinApprItem[];
-  sections: { section: FinApprSection; manualArticles: number; autoArticles: number; autoPayroll: number; autoTotal: number; manualOpex: number | null }[];
-  payroll: FinApprPot[]; statsOnly: FinApprPot[]; ambiguous: FinApprPot[]; unrecognized: FinApprPot[]; notUa: FinApprPot[]; badSum: FinApprPot[]; badPayDate: FinApprPot[]; noPayDate: FinApprPot[];
-  syncedAt?: string | null; syncError?: string | null;
-  withoutSection: { manual: number; auto: number; names: string[] };
-  totals: { plan: number; manual: number; autoArticles: number; autoPayroll: number; outside: number; diffItems: number };
-}
-export const fetchFinApprovalsTest = async (month: string) => (await api.get<FinApprCompare>("/finance/approvals-test", { params: { month } })).data;
 export async function downloadCarrierPaymentsXlsx(day: string): Promise<{ blob: Blob; filename: string }> {
   const res = await api.get("/finance/payments/export.xlsx", { params: { day }, responseType: "blob" });
   const m = /filename="([^"]+)"/.exec((res.headers as Record<string, string | undefined>)["content-disposition"] ?? "");

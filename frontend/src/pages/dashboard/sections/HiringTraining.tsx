@@ -390,6 +390,15 @@ export function TrainingDrawer({ meta, id, toast, onClose, onChanged }: {
               <div className="hr-muted" style={{ marginBottom: 6 }}>
                 {r.login ? <>Логін <b>{r.login}</b> · {inviteLine(r)}</> : "Акаунт ще не створено: він зʼявиться при статусі «кандидат + команда» або з першим запрошенням."}
               </div>
+              {/* 🔑 Один акаунт (#2230): перед переведенням HR вписує робочу пошту → логін змінюється → людину заводять у
+                  Kommo з цією поштою → синк чіпляє Kommo до цього ж акаунта. Тут видно, на якому кроці людина. */}
+              {r.login && (
+                <div className="hr-muted" style={{ marginBottom: 6 }}>
+                  Kommo: {r.kommo_name
+                    ? <b style={{ color: "var(--ok)" }}>привʼязано · {r.kommo_name}</b>
+                    : <>ще не привʼязано — впишіть у картку кандидата робочу пошту, і заведіть людину в Kommo саме з нею</>}
+                </div>
+              )}
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-start" }}>
                 <InviteBox id={id} toast={toast} onChanged={() => { load(); onChanged(); }}
                   disabled={r.access_closed_at ? "Доступ закрито — спершу «Відновити доступ»" : r.status !== "candidate" && r.status !== "training" ? "Запрошення — для «кандидат + команда» і «на навчанні»" : null} />
@@ -406,7 +415,7 @@ export function TrainingDrawer({ meta, id, toast, onClose, onChanged }: {
                   і тоді, коли доступ уже закрився «не зайшов за 48 год». */}
               {d.canRestore && (r.status === "candidate" || r.status === "training") && (
                 <div className="hr-note" style={{ marginTop: 0, marginBottom: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                  <span style={{ flex: "1 1 260px" }}>Людина вже працює, а навчання ще не пройдено? Відмітьте вихід на роботу — статус «менеджер», акаунт кандидата вимкнеться.</span>
+                  <span style={{ flex: "1 1 260px" }}>Людина вже працює, а навчання ще не пройдено? Відмітьте вихід на роботу — статус «менеджер», цей самий акаунт стане робочим, щойно привʼязано Kommo.</span>
                   <button className="hr-btn ok" onClick={() => setStarting(true)}>Вийшов на роботу…</button>
                 </div>
               )}
@@ -509,10 +518,10 @@ export function TrainingDrawer({ meta, id, toast, onClose, onChanged }: {
             </div>
           </>
         )}
-        {starting && r && <PromoteDialog name={r.full_name ?? ""} done={r.done} total={r.total} started onClose={() => setStarting(false)}
+        {starting && r && <PromoteDialog name={r.full_name ?? ""} done={r.done} total={r.total} kommo={r.kommo_name} started onClose={() => setStarting(false)}
           onSubmit={(c) => run(() => markHiringStartedWork(id, c), `${r.full_name ?? "Кандидат"} — вийшов на роботу`).then(() => setStarting(false))} />}
-        {promoting && r && <PromoteDialog name={r.full_name ?? ""} done={r.done} total={r.total} onClose={() => setPromoting(false)}
-          onSubmit={(c) => run(() => promoteHiringCandidate(id, c), `${r.full_name ?? "Кандидат"} — менеджер. Роль акаунта змінено`).then(() => setPromoting(false))} />}
+        {promoting && r && <PromoteDialog name={r.full_name ?? ""} done={r.done} total={r.total} kommo={r.kommo_name} onClose={() => setPromoting(false)}
+          onSubmit={(c) => run(() => promoteHiringCandidate(id, c), `${r.full_name ?? "Кандидат"} — менеджер${r.kommo_name ? ". Роль акаунта — з Kommo" : ". Роль зміниться, щойно привʼяжеться Kommo"}`).then(() => setPromoting(false))} />}
         {refusing && r && <RefusalDialog meta={meta} candidateId={id} candidateName={r.full_name ?? ""} from={r.status}
           onClose={() => setRefusing(false)} onDone={() => { setRefusing(false); load(); onChanged(); }} onReasonsChanged={onChanged} toast={toast} />}
       </div>
@@ -521,7 +530,11 @@ export function TrainingDrawer({ meta, id, toast, onClose, onChanged }: {
   );
 }
 
-function PromoteDialog({ name, done, total, started, onClose, onSubmit }: { name: string; done: number; total: number; started?: boolean; onClose: () => void; onSubmit: (comment: string) => Promise<void> }) {
+function PromoteDialog({ name, done, total, kommo, started, onClose, onSubmit }: { name: string; done: number; total: number; kommo: string | null; started?: boolean; onClose: () => void; onSubmit: (comment: string) => Promise<void> }) {
+  // 🔑 Один акаунт (#2230): вхід лишається той самий; роль дає Kommo — одразу, якщо вже привʼязано, або щойно привʼяжеться.
+  const role = kommo
+    ? <>Вхід лишається той самий, роль береться з Kommo ({kommo}).</>
+    : <>Вхід лишається той самий. Kommo ще не привʼязано: людина стане менеджером, щойно її заведуть у Kommo з робочою поштою, вписаною в картку.</>;
   const [comment, setComment] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -530,8 +543,8 @@ function PromoteDialog({ name, done, total, started, onClose, onSubmit }: { name
       <div className="hr-modal" role="dialog" aria-label={started ? "Вийшов на роботу" : "Перевести в менеджери"} onClick={(e) => e.stopPropagation()}>
         <h3 style={{ margin: "0 0 6px" }}>{started ? "Вийшов на роботу" : "Перевести в менеджери"}</h3>
         <p className="hr-muted" style={{ fontSize: 13 }}>{started
-          ? <>{name} — статус «менеджер», людина зʼявиться в реєстрі співробітників і в плитці «Вийшли на роботу». Навчання не перевіряється (пройдено {done} із {total}). Акаунт кандидата вимкнеться — у роботі людина входить своїм акаунтом. Скасувати можна з картки кандидата.</>
-          : <>{name} пройшов(ла) {done} із {total} кроків. Акаунт отримає роль «Менеджер» і доступ до дашборда своєї команди. Скасувати можна з картки кандидата.</>}</p>
+          ? <>{name} — статус «менеджер», людина зʼявиться в реєстрі співробітників і в плитці «Вийшли на роботу». Навчання не перевіряється (пройдено {done} із {total}). {role} Скасувати можна з картки кандидата.</>
+          : <>{name} пройшов(ла) {done} із {total} кроків. {role} Скасувати можна з картки кандидата.</>}</p>
         <textarea className="hr-inp" rows={3} style={{ width: "100%", boxSizing: "border-box" }} placeholder={started ? "Коментар (обовʼязково): коли вийшов(ла), у яку команду" : "Коментар (обовʼязково): чому готовий(а) до роботи"} value={comment} onChange={(e) => setComment(e.target.value)} />
         {err && <div style={{ color: "var(--danger)", fontSize: 12, marginTop: 4 }}>{err}</div>}
         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 10 }}>

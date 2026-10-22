@@ -547,6 +547,9 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "financier", "manager"] },
   { method: "PUT", path: "/api/hiring/week-plan/:day", cls: "deny-only",
     allow: [], deny: ["team_lead", "manager"] },
+  // 📊 Тижневе ручне число (22.10.2026, #2104) — лише HR і керівництво.
+  { method: "PUT", path: "/api/hiring/week-override/:day", cls: "deny-only",
+    allow: [], deny: ["team_lead", "manager"] },
   /* 🧑‍💼 НАЙМ, прохід 1a (17.09.2026): вакансії, відмова з причиною, резерв, файли-докази.
      Та сама друга межа першим оператором (#506). Тімлід пише лише відмову своїм кандидатам і
      читає їхні файли; вакансії, резерв, завантаження — рекрутер і адмін-рівень. */
@@ -1571,9 +1574,6 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: ["admin", "financier"], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
   { method: "POST", path: "/api/finance/payments/run", cls: "deny-only",
     allow: [], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
-  // 🧪 «План/факт · авто (тест)» (20.10.2026): у рядках ЗП — прізвища, тож лише `view_private_finance`; лише читання.
-  { method: "GET", path: "/api/finance/approvals-test?month=2026-10", cls: "GET",
-    allow: ["admin", "financier"], deny: ["ceo", "opdir", "kvp", "hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/finance/month?m=2026-09", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
   /* 📜 Реєстр змін (06.10.2026) — те саме читання, що й місяць. */

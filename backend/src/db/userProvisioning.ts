@@ -1,7 +1,8 @@
 import { randomBytes } from "crypto";
 import bcrypt from "bcryptjs";
 import { pool } from "./pool.js";
-import { isActiveAssignSql } from "../core/provisionRules.js";
+import { isActiveAssignSql, PROVISION_LOOKUP_SQL, syncShouldSettle } from "../core/provisionRules.js";
+import { settleHiredAccount } from "../core/hiringTraining.js";
 
 export function generatePassword(): string {
   return randomBytes(9).toString("base64url");
@@ -31,9 +32,11 @@ export async function provisionUsers(): Promise<{ email: string; password: strin
   for (const m of managers.rows) {
     const role = m.is_team_lead ? "team_lead" : "manager";
 
-    const existing = await pool.query<{ id: number; role: string }>(
-      `SELECT id, role FROM users WHERE manager_id = $1 OR email = $2`,
-      [m.id, m.email]
+    // 🔑 Один акаунт від кандидата до менеджера (#2232, 21.10.2026): HR вписує кандидату робочу пошту → логін
+    // змінюється → тут синк знаходить ЦЕЙ акаунт за поштою й чіпляє до нього Kommo, а не створює другий.
+    // Правило пошуку — `PROVISION_LOOKUP_SQL` (без регістру; прив'язаний до цього Kommo — першим).
+    const existing = await pool.query<{ id: number; role: string; role_override: string | null; manager_id: number | null }>(
+      PROVISION_LOOKUP_SQL, [m.id, m.email]
     );
 
     if (existing.rows[0]) {
@@ -47,6 +50,9 @@ export async function provisionUsers(): Promise<{ email: string; password: strin
         `UPDATE users SET role = $1, team_id = $2, manager_id = $3, ${isActiveAssignSql("$4")} WHERE id = $5`,
         [role, m.team_id, m.id, m.is_active, u.id]
       );
+      // Людина з Найму: щойно Kommo прив'язано, а в Наймі її вже перевели — акаунт стає робочим (роль із Kommo,
+      // картка отримує Kommo). Лише коли є що робити, щоб не множити запити в кожному тіку на кожного менеджера.
+      if (syncShouldSettle(u, m.id)) await settleHiredAccount(pool, u.id, null);
       continue;
     }
 

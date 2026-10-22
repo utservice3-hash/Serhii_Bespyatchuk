@@ -112,107 +112,6 @@ async function scratchDb(t: { skip: (m: string) => void }) {
   return { c, dispose: async () => { await c.end(); scratch.dispose(); } };
 }
 
-/**
- * #1277c — ЖИВИЙ SQL: ПОРІВНЯННЯ МІСЯЦЯ. Різниця = таблиця − вручну (не внесене вручну = 0); розділ «статті» — Σ статей
- * розділу, «разом» = статті + ЗП; операційні вручну — число рядка «Тиждень і місяць» того місяця; стаття без розділу — у
- * «без розділу», в операційні не йде; вимкнена без руху — не показується; рядок для розкриття — лише 5 полів.
- * 🧨 Червоніє, якщо різницю порахувати навпаки, змішати розділи, додати Податки ТОВ в операційні чи віддати реквізити.
- */
-test("#1277c ЖИВИЙ SQL: порівняння місяця — різниця = таблиця − вручну, розділи зі ЗП, операційні вручну, без розділу окремо", async (t) => {
-  const s = await scratchDb(t);
-  if (!s) return;
-  const { c } = s;
-  try {
-    const { approvalsCompare } = await import("./paymentApprovals.js");
-    const resp = (await c.query(`INSERT INTO fin_resps (name) VALUES ('Офіс') RETURNING id`)).rows[0].id;
-    const grp = (await c.query(`INSERT INTO fin_groups (resp_id, name) VALUES ($1, 'Офіс') RETURNING id`, [resp])).rows[0].id;
-    const item = async (name: string, section: string | null, off: string | null = null) =>
-      (await c.query(`INSERT INTO fin_items (group_id, name, section, off_from) VALUES ($1, $2, $3, $4) RETURNING id`, [grp, name, section, off])).rows[0].id as number;
-    const rent = await item("Оренда офісу", "admin"), ads = await item("Контекстна реклама", "commercial"), tax = await item("Податки ТОВ", null);
-    await item("Стара стаття", "admin", "2026-09-01");
-    await c.query(`INSERT INTO fin_values (item_id, month, fact) VALUES ($1, '2026-10-01', 150), ($2, '2026-10-01', 800), ($3, '2026-09-01', 999)`, [rent, tax, ads]);
-    const sec = (await c.query(`INSERT INTO fin_kpi_sections (name) VALUES ('Опер тест') RETURNING id`)).rows[0].id;
-    for (const [ref, v] of [["opex_admin", 5000], ["opex_commercial", null]] as const) {
-      const id = (await c.query(`SELECT id FROM fin_kpis WHERE ref_source = $1 AND deleted_at IS NULL`, [ref])).rows[0]?.id
-        ?? (await c.query(`INSERT INTO fin_kpis (section_id, name, ref_source) VALUES ($1, $2, $2) RETURNING id`, [sec, ref])).rows[0].id;
-      if (v != null) await c.query(`INSERT INTO fin_kpi_values (kpi_id, period_kind, period_start, value) VALUES ($1, 'month', '2026-10-01', $2)
-        ON CONFLICT (kpi_id, period_kind, period_start) DO UPDATE SET value = EXCLUDED.value`, [id, v]);
-    }
-    const r = await approvalsCompare(c as never, "2026-10-01", [
-      line({ amount: 100 }), line({ amount: 80 }), line({ category: "Контекстна реклама", amount: 40 }), line({ category: "Податки ТОВ", amount: 800 }),
-      line({ category: "ЗП - Адміністративні", amount: 1000 }),
-    ], new Date("2026-10-20T10:00:00Z"));
-    const it = (id: number) => r.items.find((x) => x.id === id)!;
-    assert.deepEqual([it(rent).manual, it(rent).auto, it(rent).diff], [150, 180, 30], "🔴 різниця «Оренди» — не таблиця − вручну");
-    assert.deepEqual([it(ads).manual, it(ads).auto, it(ads).diff], [null, 40, 40], "🔴 не внесене вручну не дорівнює нулю в різниці (чи взято вересень)");
-    assert.equal(r.items.some((x) => x.name === "Стара стаття"), false, "🔴 вимкнена стаття без руху показана");
-    const adm = r.sections.find((x) => x.section === "admin")!;
-    assert.deepEqual([adm.manualArticles, adm.autoArticles, adm.autoPayroll, adm.autoTotal, adm.manualOpex], [150, 180, 1000, 1180, 5000], "🔴 Адміністративні зведено хибно");
-    assert.equal(r.sections.find((x) => x.section === "commercial")!.manualOpex, null, "🔴 не внесені операційні стали нулем");
-    assert.deepEqual(r.withoutSection, { manual: 800, auto: 800, names: ["Податки ТОВ"] }, "🔴 Податки ТОВ не винесено «без розділу»");
-    assert.ok(!r.sections.some((x) => x.autoTotal === 1980 || x.autoArticles === 980), "🔴 Податки ТОВ потрапили в операційні");
-    assert.deepEqual(Object.keys(it(rent).lines[0]).sort(), ["amount", "direction", "paid", "payDate", "what"], "🔴 рядок для розкриття несе зайві поля");
-  } finally { await s.dispose(); }
-});
-
-/**
- * #1277d — МЕЖА ВКЛАДКИ: у рядках ЗП прізвища, тож роут — лише `view_private_finance` (Адмін, фінансист) ПЕРШИМ middleware і
- * без жодного запису; у матриці — дозвіл адміну й фінансисту і заборона СЕО / ОД / КВП (дзеркало); вкладка без права —
- * напис і даних не просить; розкриття віддає рівно `toShownLine` (5 полів).
- * 🧨 Червоніє, якщо зняти право з роута, дати його СЕО/ОД/КВП, показати екран без права чи писати щось із роута.
- */
-test("#1277d МЕЖА «ПЛАН/ФАКТ · АВТО»: роут під view_private_finance і лише читання, матриця з дзеркалом, вкладка без права — напис", async () => {
-  const r = SRC("routes/financeApprovals.ts");
-  const handlers = [...r.matchAll(/financeApprovalsRouter\.(get|post|put|patch|delete)\("([^"]+)",\s*([^,]+),/g)];
-  assert.equal(handlers.length, 1, "🔴 обробників не рівно один — гейт не бачить нового роута");
-  for (const [, m, p, first] of handlers) assert.equal(first.trim(), `requirePerm("view_private_finance")`, `🔴 ${m.toUpperCase()} ${p}: першим стоїть «${first.trim()}»`);
-  assert.equal(handlers[0][1], "get", "🔴 тестова вкладка отримала роут на запис");
-  assert.doesNotMatch(r + SRC("core/paymentApprovals.ts"), /\b(INSERT|UPDATE|DELETE)\b|googleSheetsWrite/, "🔴 тест щось пише");
-  assert.match(SRC("index.ts"), /app\.use\("\/api\/finance\/approvals-test", financeApprovalsRouter\);/, "🔴 роутер не підключено");
-  const { ACCESS_MATRIX } = await import("../auth/accessMatrix.js");
-  const m = ACCESS_MATRIX.find((x) => x.method === "GET" && x.path.startsWith("/api/finance/approvals-test?"));
-  assert.ok(m, "🔴 роуту немає в матриці");
-  assert.deepEqual([...m!.allow].sort(), ["admin", "financier"], "🔴 дозвіл не рівно Адмін і фінансист");
-  for (const role of ["ceo", "opdir", "kvp", "manager"]) assert.ok(m!.deny.includes(role), `🔴 ${role} не в забороні`);
-  assert.deepEqual(Object.keys(toShownLine(line({}))).sort(), ["amount", "direction", "paid", "payDate", "what"], "🔴 рядок для розкриття несе зайві поля");
-  const sec = FE("pages/dashboard/sections/FinanceSection.tsx"), tab = FE("pages/dashboard/sections/FinanceApprovalsTestTab.tsx");
-  assert.match(sec, /\{tab === "approvals" && <FinanceApprovalsTestTab \/>\}/, "🔴 вкладка не рендерить екран");
-  assert.match(sec, /\["approvals", "План\/факт · авто \(тест\)", false\]/, "🔴 вкладки немає в «Фінансах»");
-  assert.match(tab, /const canView = \(getAuthPayload\(\)\?\.perms \?\? \[\]\)\.includes\("view_private_finance"\);/, "🔴 екран не за view_private_finance");
-  const body = tab.slice(tab.indexOf("export function FinanceApprovalsTestTab"));
-  assert.ok(body.indexOf("if (!canView) return <div") > 0 && body.indexOf("if (!canView) return <div") < body.search(/<table|<Pots|<Lines/), "🔴 таблиця рендериться до перевірки права");
-  assert.match(tab, /if \(!canView\) return;\n\s*setBusy\(true\);\n\s*\(refresh \? syncFinApprovals\(\)\.then\(\(\) => fetchFinApprovalsTest\(month\)\) : fetchFinApprovalsTest\(month\)\)/, "🔴 без права екран все одно просить дані");
-});
-
-/**
- * #1277e — ФРОНТ ЧИТАЄ РІЗНИЦЮ ТАК САМО, ЯК ЯДРО: таблиця − вручну (і для розділів), «не внесено» — словами, а не нулем;
- * кожен кошик «не потрапило» має свій блок на екрані — інакше гроші зникають мовчки.
- * 🧨 Червоніє, якщо перевернути знак різниці розділу, показати порожнє вручну як 0 чи прибрати блок кошика.
- */
-test("#1277e ФРОНТ: різниця = таблиця − вручну і в розділах, «не внесено» словами, кожен кошик «не потрапило» — свій блок", () => {
-  const tab = FE("pages/dashboard/sections/FinanceApprovalsTestTab.tsx");
-  assert.match(SRC("core/paymentApprovals.ts"), /diff: r2\(auto - \(manual \?\? 0\)\)/, "🔴 ядро рахує різницю не як таблиця − вручну");
-  assert.match(tab, /signed\(Math\.round\(\(s\.autoArticles - s\.manualArticles\) \* 100\) \/ 100\)/, "🔴 різниця статей розділу перевернута");
-  assert.match(tab, /signed\(Math\.round\(\(s\.autoTotal - s\.manualOpex\) \* 100\) \/ 100\)/, "🔴 різниця операційних перевернута");
-  assert.match(tab, /x\.manual == null \? <span className="hr-muted">не внесено<\/span>/, "🔴 порожнє вручну показано як число");
-  assert.match(tab, /same\(x\.diff\) \? <span className="fin-good">✓ збігається<\/span> : <span className="fin-bad">\{signed\(x\.diff\)\}<\/span>/, "🔴 різниця статті з ручним — не з ядра");
-  for (const k of ["payroll", "statsOnly", "ambiguous", "unrecognized", "notUa", "badSum", "badPayDate", "noPayDate"])
-    assert.match(tab, new RegExp(`pots: o\\.${k} \\}`), `🔴 кошика «${k}» немає на екрані`);
-  assert.match(tab, /<Outside buckets=\{outsideBuckets\(shown\)\} \/>/, "🔴 кошики «не потрапило» не рендеряться");
-});
-
-/**
- * #1277f — «ЛИШЕ ПОНАД ПЛАН» (Роман 20.10.2026) — те саме правило, що в «План/факт витрат»: факт із таблиці більший за
- * план, або факт є, а плану немає (нульовий план — теж «немає»); фільтр звужує таблицю, а не підміняє критерій.
- * 🧨 Червоніє, якщо «понад» рахувати від ручного факту, пропустити статті без плану чи прибрати галочку.
- */
-test("#1277f «ЛИШЕ ПОНАД ПЛАН»: факт із таблиці > плану або факт без плану — як у «План/факт витрат»", () => {
-  const tab = FE("pages/dashboard/sections/FinanceApprovalsTestTab.tsx");
-  assert.match(tab, /const overPlan = \(x: FinApprItem\) => \(x\.plan != null && x\.plan !== 0 \? x\.auto > x\.plan : x\.auto > 0\);/, "🔴 «понад план» не від факту з таблиці або без статей без плану");
-  assert.match(tab, /\(!onlyOver \|\| overPlan\(x\)\)/, "🔴 галочка не фільтрує статті");
-  assert.match(tab, /checked=\{onlyOver\} onChange=\{\(e\) => setOnlyOver\(e\.target\.checked\)\} \/> лише понад план/, "🔴 галочки «лише понад план» немає");
-});
-
 // ───────────── 🧾 З ЖОВТНЯ 2026 ТАБЛИЦЯ ОПЛАТ — ДЖЕРЕЛО (задача Тетяни #5607, 21.10.2026) — гейти `#1279`–`#1279e` ─────────────
 
 /** Статті й рядки таблиці для гейтів `#1279`: три статті (одна без розділу), дев'ять рядків по обидва боки кожної межі. */
@@ -384,4 +283,29 @@ test("#1279e ПРОВОДКА: синк — canEdit першим і в матр�
   assert.match(fe, /fetchFinItem\(id, year, month\)/, "🔴 картка не просить оплати місяця");
   assert.match(fe, /card\.payments && \(/, "🔴 оплати в картці не показано");
   assert.match(fe, /🧾 факт — з таблиці «UTS Утверждение оплат»/, "🔴 плашки джерела факту немає");
+});
+
+/**
+ * #1281 — ТЕСТОВУ ВКЛАДКУ ПРИБРАНО, АВТО — ОСНОВНИЙ (Тетяна 21.10.2026: «план факт той, що авто, тепер можна ставити як
+ * основний, ручний прибирати»). Вкладки «План/факт · авто (тест)», її файлу, роуту `/api/finance/approvals-test`, рядка в
+ * матриці й порівняння з ручним більше немає. А ДЕ ЦЕ ТЕПЕР: «Не потрапило у статті» й оплати в картці статті —
+ * `FinanceApprovalsParts.tsx` (усі вісім кошиків), і «План/факт витрат» бере їх звідти.
+ * 🧨 Червоніє, якщо вкладка чи роут повернуться, «План/факт» імпортуватиме з тестового файлу або загубиться кошик.
+ */
+test("#1281 ТЕСТОВУ ВКЛАДКУ ПРИБРАНО: немає вкладки, роуту й порівняння з ручним; кошики й оплати — у FinanceApprovalsParts", async () => {
+  const { existsSync } = await import("node:fs");
+  const fe = (rel: string) => path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", rel);
+  assert.equal(existsSync(fe("pages/dashboard/sections/FinanceApprovalsTestTab.tsx")), false, "🔴 тестова вкладка повернулась");
+  assert.equal(existsSync(path.join(import.meta.dirname, "..", "..", "src", "routes", "financeApprovals.ts")), false, "🔴 роут тестової вкладки повернувся");
+  const sec = FE("pages/dashboard/sections/FinanceSection.tsx");
+  assert.doesNotMatch(sec, /\["approvals",|tab === "approvals"|\| "approvals"|План\/факт · авто \(тест\)|FinanceApprovalsTestTab/, "🔴 вкладка лишилась у «Фінансах»");
+  assert.match(sec, /import \{ Outside, Lines, outsideBuckets \} from "\.\/FinanceApprovalsParts";/, "🔴 «План/факт» бере блоки не з FinanceApprovalsParts");
+  assert.doesNotMatch(SRC("index.ts") + SRC("auth/routeInventory.ts"), /approvals-test|financeApprovalsRouter/, "🔴 роут тестової вкладки змонтовано");
+  const { ACCESS_MATRIX } = await import("../auth/accessMatrix.js");
+  assert.equal(ACCESS_MATRIX.some((x) => x.path.startsWith("/api/finance/approvals-test")), false, "🔴 тестовий роут лишився в матриці");
+  assert.doesNotMatch(SRC("core/paymentApprovals.ts"), /approvalsCompare/, "🔴 порівняння з ручним лишилось");
+  const parts = FE("pages/dashboard/sections/FinanceApprovalsParts.tsx");
+  for (const k of ["payroll", "statsOnly", "ambiguous", "unrecognized", "notUa", "badSum", "badPayDate", "noPayDate"])
+    assert.match(parts, new RegExp(`pots: o\\.${k} \\}`), `🔴 кошика «${k}» немає`);
+  assert.match(parts, /<thead><tr><th>Дата оплати<\/th><th>Що купили<\/th><th className="num">Сума<\/th><th>Напрямок<\/th><th>Оплачено<\/th><\/tr><\/thead>/, "🔴 рядок оплати — не 5 полів");
 });

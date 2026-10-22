@@ -7,13 +7,13 @@ import { pool } from "../db/pool.js";
 import { requireAuth } from "../auth/middleware.js";
 import { isAdminScope } from "../auth/rbac.js";
 import {
-  hiringAccess, validRange, dailyTotals, STATUS_LABEL, TRANSITIONS, LEAD_TRANSITIONS, HIRING_STATUSES, type HiringAccess,
+  hiringAccess, validRange, dailyTotals, wholeWeekOf, STATUS_LABEL, TRANSITIONS, LEAD_TRANSITIONS, HIRING_STATUSES, type HiringAccess,
   VACANCY_STATUSES, VACANCY_STATUS_LABEL, VACANCY_RESULTS, HIRING_FILE_MAX_BYTES, sniffFileMime, hiringStoredName,
 } from "../core/hiringRules.js";
 import {
   HiringError, type Db, scheduleRows, createInterview, createInterviewFor, updateInterview, setInterviewDeleted,
   listCandidates, candidateCard, createCandidate, updateCandidateFields, changeStatus, changeTeam, addComment,
-  dailyReport, setDailyManual, setDailyOverride, weekPlan, setWeekPlan, hiringMeta,
+  dailyReport, setDailyManual, setDailyOverride, weekPlan, setWeekPlan, setWeekOverride, applyWeekOverride, hiringMeta,
   listVacancies, createVacancy, updateVacancy, setCandidateVacancies, addRefusalReason, refuseCandidate, setReserve,
   insertFile, fileForDownload, setFileDeleted,
 } from "../core/hiring.js";
@@ -300,7 +300,11 @@ hiringRouter.get("/daily", async (req, res) => {
     const r = validRange(req.query.from, req.query.to);
     if (!r) throw new HiringError(400, "Потрібен період from..to (не більше 400 днів)");
     const rows = await dailyReport(pool as unknown as Db, r.from, r.to);
-    res.json({ rows, totals: dailyTotals(rows) });
+    // 📊 Період = один тиждень → діє тижневе ручне число (#2104); інакше — сума днів, як було.
+    const weekStart = wholeWeekOf(r.from, r.to);
+    if (!weekStart) { res.json({ rows, totals: dailyTotals(rows) }); return; }
+    const w = await applyWeekOverride(pool as unknown as Db, weekStart, dailyTotals(rows));
+    res.json({ rows, totals: w.totals, week: { weekStart, manual: w.manual, auto: w.auto } });
   } catch (e) { fail(res, e); }
 });
 
@@ -310,6 +314,13 @@ hiringRouter.put("/daily/:day/override", async (req, res) => {
     onlyEdit(req);
     await tx((db) => setDailyOverride(db, req.auth!.userId, req.params.day, req.body ?? {}));
     res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+});
+
+hiringRouter.put("/week-override/:day", async (req, res) => {
+  try {
+    onlyEdit(req);
+    res.json(await tx((db) => setWeekOverride(db, req.auth!.userId, req.params.day, req.body ?? {})));
   } catch (e) { fail(res, e); }
 });
 

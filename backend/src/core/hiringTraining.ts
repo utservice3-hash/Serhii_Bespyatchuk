@@ -78,18 +78,65 @@ export async function ensureCandidateAccount(db: Db, actorId: number | null, can
   return userId;
 }
 
-/** Закрити доступ: акаунт вимикається, причина — у картці й історії. Повторне закриття — нічого. */
+/**
+ * Закрити доступ до НАВЧАННЯ: причина — у картці й історії. Повторне закриття — нічого.
+ * Акаунт вимикається лише тоді, коли людина з компанією не лишається (не зайшла, не встигла, відмова).
+ * «Став менеджером» і «вийшов на роботу» акаунт НЕ вимикають (#2230, 21.10.2026): за алгоритмом «один акаунт»
+ * це і є робочий вхід людини — роль на ньому міняє `settleHiredAccount`, коли прив'язано Kommo.
+ */
 export async function closeCandidateAccess(db: Db, candidateId: number, reason: CloseReason, actorId: number | null): Promise<boolean> {
   const c = (await db.query<AccountRow>(`SELECT ${ACCOUNT_COLS} FROM hiring_candidates c WHERE c.id = $1`, [candidateId])).rows[0];
   if (!c?.user_id || c.access_closed_at) return false;
-  if (reason !== "manager") {
+  const staying = reason === "manager" || reason === "started";
+  if (!staying) {
     await db.query(`UPDATE users SET is_active = false, deactivated_at = now(), deactivated_reason = $1 WHERE id = $2`,
       [`найм: ${CLOSE_REASON_LABEL[reason]}`, c.user_id]);
     await db.query(`UPDATE hiring_invites SET revoked_at = now() WHERE candidate_id = $1 AND used_at IS NULL AND revoked_at IS NULL`, [candidateId]);
   }
   await db.query(`UPDATE hiring_candidates SET access_closed_at = now(), access_closed_reason = $1 WHERE id = $2`, [reason, candidateId]);
-  await event(db, candidateId, "access", reason === "manager" ? "навчання завершено · роль акаунта «Менеджер»" : `доступ до навчання закрито · ${CLOSE_REASON_LABEL[reason]}`, actorId);
+  await event(db, candidateId, "access", staying ? `${CLOSE_REASON_LABEL[reason]} · акаунт лишається, роль — з Kommo`
+    : `доступ до навчання закрито · ${CLOSE_REASON_LABEL[reason]}`, actorId);
   return true;
+}
+
+/**
+ * 🔑 ОДИН АКАУНТ ВІД КАНДИДАТА ДО МЕНЕДЖЕРА (алгоритм затверджено 21.10.2026, #2230–#2232).
+ *
+ * Акаунт людини з Найму стає робочим, коли виконано ОБИДВІ умови, — неважливо, яка настала останньою:
+ *   ① у Наймі її перевели («Вийшов на роботу» / «Перевести в менеджери» → статус `manager`);
+ *   ② до акаунта прив'язано Kommo (`users.manager_id`): HR вписала робочу пошту — логін змінився
+ *      (`syncCandidateLogin`), — і синк, побачивши в Kommo людину з тією самою поштою, взяв ЦЕЙ акаунт.
+ * Тоді знімається ручна роль «Кандидат» — діє роль із Kommo (менеджер / тімлід, і підвищення в Kommo
+ * підхопиться саме), активність — як у Kommo, а картка в «Співробітниках» отримує Kommo.
+ *
+ * Кличуть: переведення в Наймі (умова ② могла настати раніше) і синк (`provisionUsers`, умова ① могла
+ * настати раніше). Ручну роль, відмінну від «Кандидат» (адмін, КВП…), НЕ чіпає ніколи.
+ *
+ * 📐 Чому так: заміряно 21.10.2026 — у 8 із 8 людей, що вийшли з Найму, Kommo з'явився на 1–14 днів РАНІШЕ за
+ * переведення, синк робив другий акаунт, а картка сідала на кандидатський, який потім вимикався.
+ */
+export async function settleHiredAccount(db: Db, userId: number, actorId: number | null): Promise<"settled" | "waiting_kommo" | "not_hired"> {
+  const r = (await db.query<{ candidate_id: number; status: HiringStatus; role_override: string | null; manager_id: number | null; kommo_active: boolean | null }>(
+    `SELECT c.id AS candidate_id, c.status, u.role_override, u.manager_id, m.is_active AS kommo_active
+       FROM users u JOIN hiring_candidates c ON c.user_id = u.id LEFT JOIN managers m ON m.id = u.manager_id
+      WHERE u.id = $1`, [userId])).rows[0];
+  if (!r || r.status !== "manager") return "not_hired";
+  if (r.manager_id == null) return "waiting_kommo";
+  if (r.role_override === "candidate") {
+    const active = r.kommo_active !== false;
+    await db.query(
+      `UPDATE users SET role_override = NULL, is_active = $2,
+              deactivated_at = CASE WHEN $2 THEN NULL ELSE deactivated_at END,
+              deactivated_reason = CASE WHEN $2 THEN NULL ELSE deactivated_reason END
+        WHERE id = $1 AND role_override = 'candidate'`, [userId, active]);
+    await event(db, r.candidate_id, "access", "Kommo прив'язано · акаунт став робочим, роль — з Kommo", actorId);
+  }
+  // Картка — на цьому ж акаунті; Kommo їй ставимо, лише якщо його не тримає інша картка (`uq_employees_manager`).
+  await db.query(
+    `UPDATE employees SET manager_id = $2, updated_at = now()
+      WHERE user_id = $1 AND manager_id IS NULL AND NOT EXISTS (SELECT 1 FROM employees x WHERE x.manager_id = $2)`,
+    [userId, r.manager_id]);
+  return "settled";
 }
 
 /**
@@ -98,15 +145,19 @@ export async function closeCandidateAccess(db: Db, candidateId: number, reason: 
  */
 export async function undoPromotion(db: Db, candidateId: number, actorId: number | null): Promise<void> {
   const c = (await db.query<AccountRow>(`SELECT ${ACCOUNT_COLS} FROM hiring_candidates c WHERE c.id = $1`, [candidateId])).rows[0];
-  // «Вийшов на роботу» (#1622) вимкнув акаунт — повернення вмикає його назад, як було до кліку.
+  // «Вийшов на роботу»: до 21.10.2026 (#1622) кнопка вимикала акаунт — повернення вмикає його назад; з #2230 вона
+  // могла зняти роль «Кандидат» (`settleHiredAccount`) — повернення ставить її знову. Обидва — як було до кліку.
   if (c?.user_id && c.access_closed_reason === "started") {
     await db.query(`UPDATE users SET is_active = true, deactivated_at = NULL, deactivated_reason = NULL WHERE id = $1`, [c.user_id]);
+    await db.query(`UPDATE users SET role_override = 'candidate' WHERE id = $1 AND role_override IS NULL`, [c.user_id]);
     await db.query(`UPDATE hiring_candidates SET access_closed_at = NULL, access_closed_reason = NULL WHERE id = $1`, [candidateId]);
     await event(db, candidateId, "access", "вихід на роботу скасовано · доступ до навчання повернуто", actorId);
     return;
   }
   if (!c?.user_id || c.access_closed_reason !== "manager") return;
-  await db.query(`UPDATE users SET role_override = 'candidate' WHERE id = $1`, [c.user_id]);
+  // Знята (`settleHiredAccount`), «Кандидат» (ще чекав Kommo) чи стара «Менеджер» (до #2230) — усе повертається в
+  // «Кандидат». Чужу ручну роль (адмін, КВП…) повернення не перезаписує.
+  await db.query(`UPDATE users SET role_override = 'candidate' WHERE id = $1 AND (role_override IS NULL OR role_override IN ('manager','candidate'))`, [c.user_id]);
   await db.query(`UPDATE hiring_candidates SET access_closed_at = NULL, access_closed_reason = NULL WHERE id = $1`, [candidateId]);
   await event(db, candidateId, "access", "роль акаунта повернуто в «Кандидат»", actorId);
 }
@@ -173,9 +224,13 @@ export async function syncCandidateLogin(db: Db, actorId: number | null, candida
  * працює, кандидата з акаунтом у «менеджера» не перевести: `promoteCandidate` вимагає всіх кроків курсу, а
  * загальний перехід закритий. Через це плитка «Вийшли на роботу» й конверсії стояли на нулі, хоча люди
  * виходили. Дія — лише «редагування» (HR, керівництво), лише з «кандидат + команда» / «на навчанні», з
- * коментарем. Статус «менеджер» + реєстр співробітників — як після навчання; акаунт кандидата ВИМИКАЄТЬСЯ
- * (свій вхід менеджер отримує з CRM), а не перетворюється на менеджерський. «Повернути останню зміну»
+ * коментарем. Статус «менеджер» + реєстр співробітників — як після навчання. «Повернути останню зміну»
  * скасовує все (`undoPromotion`).
+ *
+ * 🔑 З 21.10.2026 (#2230) акаунт НЕ вимикається: за алгоритмом «один акаунт» він і є робочим. Kommo вже
+ * прив'язано — людина одразу менеджер із ролі Kommo; ще ні — лишається «Кандидатом», доки синк не прив'яже
+ * (`settleHiredAccount`). Раніше акаунт вимикався, бо робочий вхід давав ОКРЕМИЙ акаунт із Kommo, а картка
+ * в «Співробітниках» лишалась на вимкненому.
  */
 export async function markStartedWork(db: Db, actorId: number | null, id: number, comment: unknown, access: HiringAccess) {
   if (access !== "edit") throw new HiringError(403, "Відмічає вихід на роботу лише HR або керівництво");
@@ -195,6 +250,7 @@ export async function markStartedWork(db: Db, actorId: number | null, id: number
     await event(db, id, "access", `причина закриття доступу: ${CLOSE_REASON_LABEL.started}`, actorId);
   }
   await ensureEmployeeFromCandidate(db, actorId, id);
+  if (c.user_id) await settleHiredAccount(db, c.user_id, actorId);
 }
 
 /** Нове запрошення. Попереднє невикористане гаситься. Токен повертається ОДИН раз. */
@@ -365,6 +421,8 @@ function progressOf(course: Course, progress: ProgressMap) {
 export interface TrainingRow {
   id: number; full_name: string | null; phone: string | null; telegram: string | null; status: HiringStatus;
   team_id: number | null; team_name: string | null; login: string | null;
+  /** Ім'я в Kommo, якщо синк уже прив'язав Kommo до цього акаунта (#2230); null — ще ні. */
+  kommo_name: string | null;
   account_created_at: string | null; first_login_at: string | null; last_activity_at: string | null;
   access_extended_days: number; access_closed_at: string | null; access_closed_reason: CloseReason | null;
   deadline: string | null; day: number; days: number; health: TrainingHealth | "no_account";
@@ -385,6 +443,7 @@ export async function trainingBoard(db: Db, access: HiringAccess, leadTeamId: nu
   if (onlyId != null) { params.push(onlyId); where += ` AND c.id = $${params.length}`; }
   const rows = (await db.query<Omit<TrainingRow, "deadline" | "day" | "days" | "health" | "done" | "total" | "percent" | "current_step">>(
     `SELECT c.id, c.full_name, c.phone, c.telegram, c.status, c.team_id, t.name AS team_name, u.email AS login, c.user_id,
+            (SELECT m.name FROM managers m WHERE m.id = u.manager_id) AS kommo_name,
             c.account_created_at, c.first_login_at, c.access_extended_days, c.access_closed_at, c.access_closed_reason,
             (SELECT max(e.at) FROM training_events e WHERE e.user_id = c.user_id) AS last_activity_at,
             (SELECT count(*)::int FROM hiring_training_questions q WHERE q.candidate_id = c.id AND q.answer IS NULL) AS open_questions,
@@ -485,11 +544,13 @@ export async function promoteCandidate(db: Db, actorId: number | null, id: numbe
   const [row] = await trainingBoard(db, access, leadTeamId, new Date(), id);
   const v = promoteVerdict({ status: c.status, closedReason: c.access_closed_reason, done: row.done, total: row.total });
   if (!v.ok) throw new HiringError(409, v.reason);
-  await db.query(`UPDATE users SET role_override = 'manager', is_active = true WHERE id = $1`, [c.user_id]);
+  // Роль «Менеджер» більше не ставиться вручну (#2231): її дає Kommo, щойно він прив'язаний (`settleHiredAccount`).
+  // Ручна «Менеджер» лишалась би назавжди й перекрила б підвищення в Kommo до тімліда.
   await db.query(`UPDATE hiring_candidates SET status = 'manager', updated_at = now() WHERE id = $1`, [id]);
   await event(db, id, "status", `після навчання (${row.done} із ${row.total} кроків) · ${text}`, actorId, c.status, "manager");
   await closeCandidateAccess(db, id, "manager", actorId);
   await ensureEmployeeFromCandidate(db, actorId, id); // 👤 після навчання — теж у реєстр (#647)
+  await settleHiredAccount(db, c.user_id, actorId);
 }
 
 // ── Екран кандидата (прохід 2b) ──────────────────────────────────────────

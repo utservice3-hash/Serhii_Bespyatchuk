@@ -11,10 +11,12 @@
 import https from 'node:https';
 import type { DocumentState } from './docgen.js';
 import { nrUaValue, NR_EN_KEYS } from './nonresident.js';
-import { translit, translitParty, hasCyrillic } from './translit.js';
+import { translit, translitParty, translitAddress, hasCyrillic } from './translit.js';
 
 /** Поля, які транслітеруємо (люди, компанії, адреси, міста). */
 export const TRANSLIT_KEYS = new Set(['routeEn', 'loadAddrEn', 'custAddrEn', 'borderEn', 'decustAddrEn', 'unloadAddrEn', 'driverEn', 'mgrEn', 'otherRespEn']);
+/** Адреси — назви транслітерацією, службові слова англійською (вул. → str., обл. → region). */
+export const ADDRESS_KEYS = new Set(['loadAddrEn', 'unloadAddrEn', 'custAddrEn', 'decustAddrEn']);
 /** Сторони — орг. форма англійською, решта транслітерацією. */
 export const PARTY_KEYS = new Set(['shipperEn', 'consigneeEn']);
 /** Решта — переклад Google. */
@@ -36,7 +38,8 @@ export async function translateNr(s: DocumentState, google: Translator | null): 
     if ((s.trip[k] || '').trim()) continue;                  // вписане руками — не чіпаємо
     const ua = nrUaValue(s, k).trim();
     if (!ua || !hasCyrillic(ua)) continue;                   // латиниця, цифри, дати — підуть як є
-    if (TRANSLIT_KEYS.has(k)) { fields[k] = translit(ua); how[k] = 'translit'; }
+    if (ADDRESS_KEYS.has(k)) { fields[k] = translitAddress(ua); how[k] = 'translit'; }
+    else if (TRANSLIT_KEYS.has(k)) { fields[k] = translit(ua); how[k] = 'translit'; }
     else if (PARTY_KEYS.has(k)) { fields[k] = translitParty(ua); how[k] = 'translit'; }
     else toGoogle.push([k, ua]);
   }
