@@ -127,3 +127,108 @@ test("#649 ЖИВИЙ SQL: прев'ю пакета — лише читання,
     await assert.rejects(s.add.matchFiles(s.db, []), bad(400));
   } finally { await s.done(); }
 });
+
+/**
+ * #2270 — ЖИВИЙ SQL: ДЖЕРЕЛО АКАУНТА Й КАРТКИ БЕЗ АКАУНТА (прохід 3 «один акаунт», 22.10.2026). `USER_SOURCE_SQL` — той
+ * самий вираз, що в `GET /settings/users`: кандидат (роль «Кандидат») · Kommo (є менеджер) · Найм (привʼязаний до
+ * кандидата, без Kommo) · вручну. `cardsWithoutAccount` — лише картки без акаунта, працюючі першими.
+ * 🧨 Червоніє, якщо переплутати порядок гілок (кандидат із Kommo став би «Kommo»), загубити «Найм» або показати
+ * в списку вибору картку, що вже має акаунт.
+ */
+test("#2270 ЖИВИЙ SQL: джерело акаунта — кандидат / Kommo / Найм / вручну; у виборі лише картки без акаунта", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const { USER_SOURCE_SQL, cardsWithoutAccount } = await import("./employeeAdd.js");
+  try {
+    await s.c.query("INSERT INTO managers (id,name,team_id,is_active,kommo_user_id) VALUES (7001,'Кмо',3,true,7001),(7002,'Кандидат Кмо',3,true,7002)");
+    const mk = async (email: string, override: string | null, mgr: number | null) => (await s.c.query(
+      "INSERT INTO users (email,password_hash,role,role_override,manager_id) VALUES ($1,'x','manager',$2,$3) RETURNING id", [email, override, mgr])).rows[0].id as number;
+    const cand = await mk("cand@x.ua", "candidate", 7002); // кандидат, до якого вже привʼязано Kommo, — усе ще «кандидат»
+    const kommo = await mk("k@x.ua", null, 7001);
+    const hired = await mk("h@x.ua", null, null);
+    await s.c.query("INSERT INTO hiring_candidates (full_name, phone, phone_norm, status, user_id) VALUES ('Найм Людина','0970002270','380970002270','manager',$1)", [hired]);
+    const manual = await mk("m@x.ua", "hr", null);
+    const src = Object.fromEntries((await s.c.query(`SELECT u.id, ${USER_SOURCE_SQL} AS src FROM users u WHERE u.id = ANY($1)`, [[cand, kommo, hired, manual]])).rows.map((r) => [r.id, r.src]));
+    assert.deepEqual([src[cand], src[kommo], src[hired], src[manual]], ["candidate", "kommo", "hiring", "manual"], "🔴 джерело акаунта підписано хибно");
+
+    await s.c.query("INSERT INTO employees (full_name, import_key, status, user_id) VALUES ('Зайнята Картка','зайнята картка','active',$1)", [manual]);
+    await s.c.query("INSERT INTO employees (full_name, import_key, status) VALUES ('Білоус Сергій','білоус сергій','active'),('Архівна Людина','архівна людина','dismissed')");
+    const free = (await cardsWithoutAccount(s.db)).map((c) => c.full_name);
+    assert.deepEqual(free, ["Білоус Сергій", "Архівна Людина"], "🔴 у виборі картка з акаунтом або звільнені не в кінці");
+  } finally { await s.done(); }
+});
+
+/**
+ * #2271 — ЖИВИЙ SQL: ПРИВʼЯЗАТИ → ВІДВʼЯЗАТИ → ПРИВʼЯЗАТИ ЗНОВУ (скасовність — властивість ЦИКЛУ, правило 06.08.2026).
+ * Заборони: картка з іншим акаунтом — 409; акаунт, що вже має картку, — 409; відвʼязати акаунт без картки — 409.
+ * Кожна дія — у журналі доступу. Kommo картки не чіпається (рішення 22.10 «без Kommo»).
+ * 🧨 Червоніє, якщо відвʼязка не звільняє картку для повтору, якщо пускає на чужу картку чи другу картку акаунту,
+ * якщо дія не пишеться в журнал або чіпає Kommo.
+ */
+test("#2271 ЖИВИЙ SQL: привʼязати → відвʼязати → привʼязати знову; чужа картка, друга картка, порожня відвʼязка — 409", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const { linkUserCard } = await import("./employeeAdd.js");
+  try {
+    const u = (await s.c.query("INSERT INTO users (email,password_hash,role) VALUES ('buh@uts.ua','x','manager') RETURNING id")).rows[0].id as number;
+    const other = (await s.c.query("INSERT INTO users (email,password_hash,role) VALUES ('o@uts.ua','x','manager') RETURNING id")).rows[0].id as number;
+    await s.c.query("INSERT INTO managers (id,name,team_id,is_active,kommo_user_id) VALUES (7101,'Kommo картки',3,true,7101)");
+    const card = (await s.c.query("INSERT INTO employees (full_name, import_key, status, manager_id) VALUES ('Зубрицька Катерина','зубрицька катерина','active',7101) RETURNING id")).rows[0].id as number;
+    const taken = (await s.c.query("INSERT INTO employees (full_name, import_key, status, user_id) VALUES ('Чужа Картка','чужа картка','active',$1) RETURNING id", [other])).rows[0].id as number;
+    const cardOf = async () => (await s.c.query("SELECT user_id, manager_id FROM employees WHERE id=$1", [card])).rows[0];
+
+    await assert.rejects(linkUserCard(s.db, s.hr, u, null), bad(409), "🔴 відвʼязано акаунт, у якого картки немає");
+    await assert.rejects(linkUserCard(s.db, s.hr, u, taken), bad(409), "🔴 акаунт сів на картку з іншим акаунтом");
+    await linkUserCard(s.db, s.hr, u, card);
+    assert.deepEqual(await cardOf(), { user_id: u, manager_id: 7101 }, "🔴 не привʼязано або зачеплено Kommo картки");
+    const second = (await s.c.query("INSERT INTO employees (full_name, import_key, status) VALUES ('Друга Картка','друга картка','active') RETURNING id")).rows[0].id as number;
+    await assert.rejects(linkUserCard(s.db, s.hr, u, second), bad(409), "🔴 у акаунта стало дві картки");
+    await linkUserCard(s.db, s.hr, u, null);
+    assert.deepEqual(await cardOf(), { user_id: null, manager_id: 7101 }, "🔴 відвʼязка не звільнила картку або зняла Kommo");
+    await linkUserCard(s.db, s.hr, u, card);
+    assert.equal((await cardOf()).user_id, u, "🔴 повторна привʼязка після відвʼязки не працює — дія не скасовна циклом");
+    const log = (await s.c.query("SELECT action FROM access_audit WHERE action LIKE 'employees.%link_user' ORDER BY id")).rows.map((r) => r.action);
+    assert.deepEqual(log, ["employees.link_user", "employees.unlink_user", "employees.link_user"], "🔴 дії не записані в журнал доступу");
+  } finally { await s.done(); }
+});
+
+/**
+ * #2272 — ПРОВОДКА НАЛАШТУВАНЬ (читає джерело роутів): `GET /users` віддає джерело через `USER_SOURCE_SQL` і картку,
+ * плюс `freeCards`; `PATCH /users/:id` з `employeeId` іде в `linkUserCard`; `POST /users` перевіряє картку ДО
+ * створення акаунта і привʼязує ПІСЛЯ. Усі три — за `requireManageUsers` (адмін, СЕО, ОД; HR і тімлід — 403).
+ * 🧨 Червоніє, якщо прибрати джерело чи картку зі списку, перевірку картки поставити після INSERT (лишиться
+ * акаунт без картки), обійти `linkUserCard` або зняти межу `manage_users`.
+ */
+test("#2272 Налаштування: список із джерелом і карткою, PATCH/POST привʼязують через linkUserCard, межа manage_users", () => {
+  const src = readFileSync(path.join(import.meta.dirname, "..", "..", "src", "routes", "settings.ts"), "utf8");
+  const handler = (sig: string) => { const i = src.indexOf(sig); assert.ok(i >= 0, `🔴 немає обробника ${sig}`); return src.slice(i, src.indexOf("\n});", i)); };
+  const get = handler(`settingsRouter.get("/users",`);
+  assert.match(get, /^settingsRouter\.get\("\/users", async \(req, res\) => \{\s*if \(!requireManageUsers\(req, res\)\) return;/, "🔴 список без межі manage_users");
+  assert.match(get, /\$\{USER_SOURCE_SQL\} AS source,\s*e\.id AS card_id, e\.full_name AS card_name/, "🔴 список без джерела або картки");
+  assert.match(get, /freeCards: await cardsWithoutAccount\(/, "🔴 немає карток для вибору");
+  const patch = handler(`settingsRouter.patch("/users/:id",`);
+  assert.match(patch, /^settingsRouter\.patch\("\/users\/:id", async \(req, res\) => \{\s*if \(!requireManageUsers\(req, res\)\) return;/, "🔴 PATCH без межі manage_users");
+  assert.match(patch, /"employeeId" in \(req\.body \?\? \{\}\)\)[\s\S]{0,200}linkUserCard\(pool as unknown as SecretsDb, req\.auth!\.userId, id, req\.body\.employeeId\)/, "🔴 PATCH привʼязує не через linkUserCard");
+  const post = handler(`settingsRouter.post("/users",`);
+  assert.match(post, /^settingsRouter\.post\("\/users", async \(req, res\) => \{\s*if \(!requireManageUsers\(req, res\)\) return;/, "🔴 POST без межі manage_users");
+  const check = post.indexOf("Ця картка вже має акаунт"), insert = post.indexOf("INSERT INTO users"), link = post.indexOf("await linkUserCard(");
+  assert.ok(check > 0 && insert > 0 && link > 0, "🔴 POST: немає перевірки картки, створення або привʼязки");
+  assert.ok(check < insert && insert < link, "🔴 POST: картку перевірено після створення акаунта або привʼязано до нього");
+});
+
+/**
+ * #2273 — ФРОНТ: КАНДИДАТИ СХОВАНІ ЗА ЗАМОВЧУВАННЯМ (рішення Романа 22.10) — і в «Користувачах», і в «Архіві»; перемикач
+ * їх показує. Колонки «Джерело» й «Картка» є; «немає картки» — словом із вибором, а не порожньо.
+ * 🧨 Червоніє, якщо кандидатів показати за замовчуванням, прибрати перемикач чи фільтр в одній із вкладок або колонку.
+ */
+test("#2273 Налаштування (фронт): кандидати сховані за замовчуванням в обох вкладках, колонки «Джерело» й «Картка»", () => {
+  const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "SettingsSection.tsx"), "utf8");
+  for (const tab of ["function UsersTab(", "function ArchiveTab("]) {
+    const i = fe.indexOf(tab); assert.ok(i >= 0, `🔴 немає ${tab}`);
+    const body = fe.slice(i, fe.indexOf("\n}\n", i));
+    assert.match(body, /const \[showCand, setShowCand\] = useState\(false\);/, `🔴 ${tab}: кандидати не сховані за замовчуванням`);
+    assert.match(body, /const shown = users\.filter\(\(u\) => showCand \|\| u\.source !== "candidate"\);/, `🔴 ${tab}: немає фільтра кандидатів`);
+    assert.match(body, /\{shown\.map\(\(u\) =>/, `🔴 ${tab}: таблиця малює всіх, а не відфільтрованих`);
+    assert.match(body, /onChange=\{\(e\) => setShowCand\(e\.target\.checked\)\} \/> показати кандидатів/, `🔴 ${tab}: немає перемикача`);
+  }
+  assert.match(fe, /<th style=\{TH\}[^>]*>ДЖЕРЕЛО<\/th><th style=\{TH\}[^>]*>КАРТКА<\/th>/, "🔴 немає колонок «Джерело» / «Картка»");
+  assert.match(fe, /<option value="">немає картки — привʼязати…<\/option>/, "🔴 відсутність картки не названа словом");
+});

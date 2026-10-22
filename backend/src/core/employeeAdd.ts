@@ -124,3 +124,48 @@ export async function matchFiles(db: Db, files: unknown) {
   const people = (await db.query<MatchPerson>(`SELECT id, full_name, status FROM employees`)).rows;
   return matchFilesToEmployees(names, people);
 }
+
+/**
+ * 🔗 АКАУНТ ↔ КАРТКА З НАЛАШТУВАНЬ (прохід 3 «один акаунт», 22.10.2026, #2270–#2273).
+ *
+ * Заміряно 22.10.2026 після розчистки: акаунтів без картки лишилось два, карток без акаунта — дві. Тобто кнопка
+ * потрібна не для старого, а для НОВИХ ручних акаунтів (бухгалтерія, офіс): щоб акаунт одразу був людиною з реєстру.
+ * Прив'язуємо ЛИШЕ акаунт і картку (`employees.user_id`); Kommo тут не чіпаємо — рішення Романа 22.10 «без Kommo»
+ * (відв'язаний Kommo синк наступним тіком перетворив би на ДРУГИЙ акаунт).
+ * Скасовно тим самим списком (правило 06.08.2026): `employeeId = null` відв'язує, повторна прив'язка працює.
+ */
+
+/** Звідки акаунт — для колонки «Джерело» в Налаштуваннях. Одне місце, і гейт виконує саме його. `u` — users. */
+export const USER_SOURCE_SQL = `CASE WHEN COALESCE(u.role_override, u.role) = 'candidate' THEN 'candidate'
+       WHEN u.manager_id IS NOT NULL THEN 'kommo'
+       WHEN EXISTS (SELECT 1 FROM hiring_candidates hc WHERE hc.user_id = u.id) THEN 'hiring'
+       ELSE 'manual' END`;
+
+/** Картки, до яких можна прив'язати акаунт: без акаунта, спершу ті, що працюють. */
+export async function cardsWithoutAccount(db: Db) {
+  return (await db.query<{ id: number; full_name: string; status: string }>(
+    `SELECT id, full_name, status FROM employees WHERE user_id IS NULL ORDER BY (status = 'dismissed'), full_name`)).rows;
+}
+
+/** Прив'язати акаунт до картки (`employeeId` — число) або відв'язати (`null`). Помилки — `ImportError` зі статусом. */
+export async function linkUserCard(db: Db, actorId: number | null, userId: number, employeeId: unknown) {
+  const u = (await db.query<{ id: number; email: string }>(`SELECT id, email FROM users WHERE id = $1`, [userId])).rows[0];
+  if (!u) throw new ImportError(404, "Користувача не знайдено");
+  const own = (await db.query<{ id: number; full_name: string }>(`SELECT id, full_name FROM employees WHERE user_id = $1`, [userId])).rows[0] ?? null;
+  if (employeeId === null) {
+    if (!own) throw new ImportError(409, "Акаунт і так без картки");
+    await db.query(`UPDATE employees SET user_id = NULL, updated_at = now() WHERE id = $1 AND user_id = $2`, [own.id, userId]);
+    await audit(db, actorId, own.id, own.full_name, "employees.unlink_user", { userId, email: u.email });
+    return { cardId: null };
+  }
+  const eid = Number(employeeId);
+  if (!Number.isInteger(eid) || eid <= 0) throw new ImportError(400, "Оберіть картку");
+  if (own) throw new ImportError(409, `Акаунт уже привʼязаний до картки «${own.full_name}» — спершу відвʼяжіть`);
+  const e = (await db.query<{ id: number; full_name: string; user_id: number | null }>(
+    `SELECT id, full_name, user_id FROM employees WHERE id = $1 FOR UPDATE`, [eid])).rows[0];
+  if (!e) throw new ImportError(404, "Картку не знайдено");
+  if (e.user_id != null) throw new ImportError(409, `Картка «${e.full_name}» уже має інший акаунт`);
+  await db.query(`UPDATE employees SET user_id = $2, updated_at = now() WHERE id = $1 AND user_id IS NULL`, [eid, userId]);
+  await audit(db, actorId, eid, e.full_name, "employees.link_user", { userId, email: u.email });
+  return { cardId: eid };
+}

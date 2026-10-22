@@ -1948,7 +1948,15 @@ export interface DashboardUser {
   deactivated_reason?: string | null;
   manager_id?: number | null;                 // NULL = ручний користувач, стану не має
   work_state?: "finishing" | "dismissed" | null; // NULL = активний (відсутність рішення)
+  /** 🔗 Звідки акаунт (#2270): синк Kommo · Найм · створено вручну · кандидат (ним керує Найм). */
+  source?: "kommo" | "hiring" | "manual" | "candidate";
+  /** Картка в «Співробітниках», до якої привʼязано акаунт; null — немає картки. */
+  card_id?: number | null;
+  card_name?: string | null;
 }
+
+/** Картка без акаунта — кандидат на «Привʼязати до картки» (#2271). */
+export interface FreeCard { id: number; full_name: string; status: string }
 
 /**
  * 👤 Стан працівника. `state: null` — зняти рішення (людина знову активна).
@@ -1959,6 +1967,12 @@ export async function setWorkState(managerId: number, state: "finishing" | "dism
   const { data } = await api.patch<{ ok: true; state: string; loginEnabled: boolean }>(
     `/settings/managers/${managerId}/work-state`, { state, note });
   return data;
+}
+
+/** Список і картки без акаунта одним запитом (#2270) — щоб вибір картки не розійшовся зі списком. */
+export async function fetchUsersWithCards(archived = false): Promise<{ users: DashboardUser[]; freeCards: FreeCard[] }> {
+  const { data } = await api.get<{ users: DashboardUser[]; freeCards?: FreeCard[] }>("/settings/users", { params: archived ? { archived: 1 } : {} });
+  return { users: data.users, freeCards: data.freeCards ?? [] };
 }
 
 export async function fetchUsers(archived = false): Promise<DashboardUser[]> {
@@ -1972,6 +1986,8 @@ export async function createUser(payload: {
   role: string;
   teamId?: number;
   fullName?: string;
+  /** 🔗 Одразу привʼязати до картки в «Співробітниках» (#2272). */
+  employeeId?: number;
 }): Promise<{ email: string; password: string }> {
   const { data } = await api.post<{ email: string; password: string }>("/settings/users", payload);
   return data;
@@ -1991,7 +2007,7 @@ export async function resetUserPassword(id: number): Promise<string> {
 
 export async function updateUser(
   id: number,
-  patch: { roleOverride?: string | null; isActive?: boolean; fullName?: string; reason?: string; trackerEnabled?: boolean; orphanPool?: boolean }
+  patch: { roleOverride?: string | null; isActive?: boolean; fullName?: string; reason?: string; trackerEnabled?: boolean; orphanPool?: boolean; employeeId?: number | null }
 ): Promise<void> {
   await api.patch(`/settings/users/${id}`, patch);
 }
