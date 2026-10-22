@@ -785,3 +785,21 @@ test("#2104 ЖИВИЙ SQL: тижневе ручне число — лише в
     assert.deepEqual([back.totals.done, back.manual], [auto.done, ["resumes"]], "🔴 «авто» не повернуло суму днів");
   } finally { await s.done(); }
 });
+
+test("#2240 виданий пароль не зникає: блок «Навчання й доступ» не перебудовується від історії картки, а оновлює дані", () => {
+  // 22.10.2026, відео Івана: «Показати логін і пароль» видавав НОВИЙ пароль, показував його на частку секунди — і блок
+  // перебудовувався, бо `key` містив кількість подій, а видача сама пише подію. Пароль жив лише в стані старого блоку.
+  const fe = (rel: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", rel), "utf8");
+  const card = fe("HiringCandidates.tsx");
+  const tags = card.match(/<TrainingAccessBlock\b[\s\S]*?\/>/g) ?? [];
+  assert.equal(tags.length, 1, "у картці кандидата має бути рівно один блок «Навчання й доступ»");
+  const key = tags[0].match(/\bkey=\{([^}]*(?:\}[^}]*)*?)\}\s/)?.[1] ?? "";
+  assert.ok(key, "у блока мусить бути key (перебудова при зміні статусу — свідома)");
+  assert.doesNotMatch(key, /events/, "🔴 key залежить від історії картки — видача пароля/посилання перебудує блок і загубить їх");
+  // Парне твердження (правило 8): історія картки не зникла, а переїхала у version — інакше блок перестав би оновлюватись.
+  assert.match(tags[0], /\bversion=\{card\.events\.length\}/, "блок мусить отримувати лічильник історії як version");
+  const training = fe("HiringTraining.tsx");
+  const block = training.slice(training.indexOf("export function TrainingAccessBlock"), training.indexOf("export function TrainingDrawer"));
+  assert.ok(block.length > 0, "TrainingAccessBlock не знайдено");
+  assert.match(block, /useEffect\(load, \[load, version\]\)/, "🔴 блок не перечитує дані, коли змінилась історія картки");
+});

@@ -344,7 +344,7 @@ export function CandidateDrawer({ meta, id, toast, onClose, onChanged, onMetaSta
                   </div>)}
             </div>
 
-            <TrainingAccessBlock key={`${c.status}-${card.events.length}`} meta={meta} id={id} toast={toast} onChanged={() => { load(); onChanged(); }} />
+            <TrainingAccessBlock key={c.status} version={card.events.length} meta={meta} id={id} toast={toast} onChanged={() => { load(); onChanged(); }} />
 
             {(next.length > 0 || undo) && (
               <div className="hr-sect" style={{ padding: "14px 0 0", marginTop: 14 }}>

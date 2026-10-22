@@ -298,14 +298,16 @@ function inviteLine(r: HiringTrainingRow): string {
   return `запрошення чинне до ${kyiv(i.expires_at)}, ще не відкрите`;
 }
 
-/** Блок у картці кандидата: акаунт, запрошення, прогрес коротко й вхід у повний прогрес. */
-export function TrainingAccessBlock({ meta, id, toast, onChanged }: { meta: HiringMeta; id: number; toast: Toast; onChanged: () => void }) {
+/** Блок у картці кандидата: акаунт, запрошення, прогрес коротко й вхід у повний прогрес.
+ *  `version` — лічильник історії картки: блок ОНОВЛЮЄ дані, коли він змінюється, але не перебудовується.
+ *  Перебудова (через `key`) губила щойно виданий пароль і посилання: видача сама пише в історію (22.10.2026, #2240). */
+export function TrainingAccessBlock({ meta, id, version, toast, onChanged }: { meta: HiringMeta; id: number; version: number; toast: Toast; onChanged: () => void }) {
   const [d, setD] = useState<HiringTrainingDetail | null | "none">(null);
   const [open, setOpen] = useState(false);
   const load = useCallback(() => {
-    fetchHiringTrainingDetail(id).then(setD).catch((e) => setD((e as { response?: { status?: number } }).response?.status === 404 ? "none" : null));
+    fetchHiringTrainingDetail(id).then(setD).catch((e) => { if ((e as { response?: { status?: number } }).response?.status === 404) setD("none"); });
   }, [id]);
-  useEffect(load, [load]);
+  useEffect(load, [load, version]);
   if (d === null || d === "none") return null;
   const r = d.row, h = healthText(r), a = accessText(r);
   const inviteBlock = r.access_closed_at ? "Доступ закрито" : r.status !== "candidate" && r.status !== "training" ? "Запрошення — для «кандидат + команда» і «на навчанні»" : null;
