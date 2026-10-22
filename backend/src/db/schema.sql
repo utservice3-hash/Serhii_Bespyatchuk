@@ -6294,4 +6294,5 @@ REVOKE ALL ON hiring_week_override FROM ai_readonly;
 ALTER TABLE managers ADD COLUMN IF NOT EXISTS keep_without_crm BOOLEAN NOT NULL DEFAULT false;
 -- Левентова Юлія (КВП, users.id 47 → managers.id 9, Kommo 3549691): Роман 22.10.2026 — «відвʼязати від CRM, у дашборді
 -- має повністю все залишитися». Умова на kommo_user_id — щоб не позначити іншу людину, якщо id колись зсунеться.
-UPDATE managers SET keep_without_crm = true WHERE id = 9 AND kommo_user_id = '3549691' AND NOT keep_without_crm;
+-- `is_active = true` — разом із позначкою: якщо в Kommo її видалили РАНІШЕ за викат, синк уже встиг вимкнути запис.
+UPDATE managers SET keep_without_crm = true, is_active = true WHERE id = 9 AND kommo_user_id = '3549691' AND NOT keep_without_crm;

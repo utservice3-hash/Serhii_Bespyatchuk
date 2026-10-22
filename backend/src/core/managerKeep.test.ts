@@ -19,7 +19,7 @@ test("#1880 ЖИВЕ БЕЗ CRM: синк не вимикає запис із п
   assert.doesNotMatch(sync, /UPDATE managers SET is_active = false/, "🔴 у синку лишився інлайн-SQL вимкнення — позначку обійдуть");
   const schema = SRC("db/schema.sql");
   assert.match(schema, /ALTER TABLE managers ADD COLUMN IF NOT EXISTS keep_without_crm BOOLEAN NOT NULL DEFAULT false;/);
-  assert.match(schema, /UPDATE managers SET keep_without_crm = true WHERE id = 9 AND kommo_user_id = '3549691' AND NOT keep_without_crm;/,
+  assert.match(schema, /UPDATE managers SET keep_without_crm = true, is_active = true WHERE id = 9 AND kommo_user_id = '3549691' AND NOT keep_without_crm;/,
     "🔴 позначку Юлі загублено або поставлено без перевірки Kommo-id");
 
   const { provisionScratch, skipReason } = await import("../db/scratchDb.js");
@@ -31,12 +31,13 @@ test("#1880 ЖИВЕ БЕЗ CRM: синк не вимикає запис із п
   try {
     await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
     await c.query(`INSERT INTO managers (id, name, kommo_user_id, is_active) VALUES
-      (9, 'Левентова Юлія', '3549691', true), (10, 'Звільнений', '111', true), (11, 'У CRM', '222', true), (12, 'Сервісний', NULL, true)`);
+      (9, 'Левентова Юлія', '3549691', false), (10, 'Звільнений', '111', true), (11, 'У CRM', '222', true), (12, 'Сервісний', NULL, true)`);
     // Схема накочується вдруге (як на кожному викаті): позначка Юлі ставиться на вже наявний рядок.
     await c.query(readFileSync(path.join(import.meta.dirname, "..", "db", "schema.sql"), "utf8"));
     const keep = async (id: number) => (await c.query(`SELECT keep_without_crm k FROM managers WHERE id = $1`, [id])).rows[0].k as boolean;
     assert.equal(await keep(9), true, "🔴 позначку Юлі не поставлено міграцією");
     assert.equal(await keep(10), false, "🔴 позначка дісталась не тій людині");
+    assert.equal((await c.query(`SELECT is_active a FROM managers WHERE id = 9`)).rows[0].a, true, "🔴 видалили в Kommo раніше за викат — запис лишився вимкненим");
     await c.query(DEACTIVATE_MISSING_MANAGERS_SQL, [["222"]]);
     const act = Object.fromEntries((await c.query(`SELECT id, is_active FROM managers ORDER BY id`)).rows.map((r: { id: number; is_active: boolean }) => [r.id, r.is_active]));
     assert.deepEqual(act, { 9: true, 10: false, 11: true, 12: true },
