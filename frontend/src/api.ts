@@ -5563,6 +5563,18 @@ export interface EmployeeDoc {
   size_bytes: number | null; version: number; created_at: string; archived_at: string | null; deleted_at: string | null; author: string | null; signed: boolean;
 }
 export const fetchEmployeeDocs = async (id: number) => (await api.get<{ files: EmployeeDoc[] }>(`/secrets/employees/${id}/documents`)).data.files;
+
+/** 🔑 Акаунт дашборда в картці (#2280, 23.10.2026). `can` — що дозволено ЦЬОМУ користувачу з ЦИМ акаунтом (сервер). */
+export interface EmployeeAccount {
+  userId: number; login: string; role: string; roleOverride: string | null; syncedRole: string;
+  isActive: boolean; lastSeen: string | null; trackerEnabled: boolean; kommoName: string | null;
+}
+export interface EmployeeAccountCan { password: boolean; tracker: boolean; role: boolean; active: boolean; create: boolean }
+export const fetchEmployeeAccount = async (id: number) =>
+  (await api.get<{ account: EmployeeAccount | null; can: EmployeeAccountCan }>(`/secrets/employees/${id}/account`)).data;
+export const resetEmployeeAccountPassword = async (id: number) =>
+  (await api.post<{ login: string; password: string }>(`/secrets/employees/${id}/account/reset-password`)).data;
+export const setEmployeeAccountTracker = async (id: number, on: boolean) => { await api.patch(`/secrets/employees/${id}/account/tracker`, { on }); };
 // 👤 «+ Співробітник» і 📎 розкладання файлів пакета по людях (22.09.2026) — `backend/src/core/employeeAdd.ts`.
 export interface NewEmployee { full_name: string; position?: string; team_label?: string; phone?: string; email?: string; telegram?: string; hired_at?: string; birth_date?: string }
 export const createEmployee = async (b: NewEmployee) => (await api.post<{ id: number }>("/secrets/employees", b)).data.id;

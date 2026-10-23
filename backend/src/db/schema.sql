@@ -3796,6 +3796,14 @@ UPDATE roles SET permissions = permissions || '{"view_team_secrets": true}'::jso
 UPDATE roles SET permissions = permissions - 'view_team_secrets'
  WHERE key <> 'team_lead';
 
+-- 🔑 Акаунти менеджерів і тімлідів із картки співробітника — пароль і трекер (рішення Романа 23.10.2026: «hr тільки по
+-- менеджерах може працювати і тім лідах, інші — ні»). Лише hr: адмін, СЕО, ОД мають ширші `reset_passwords`/`manage_users`.
+-- Межа «лише менеджер/тімлід» — у `core/employeeAccount.ts` (`accountVerdict`). Тримає #2281.
+UPDATE roles SET permissions = permissions || '{"manage_sales_accounts": true}'::jsonb
+ WHERE key = 'hr';
+UPDATE roles SET permissions = permissions - 'manage_sales_accounts'
+ WHERE key <> 'hr';
+
 -- 🔒 Шифр, коди й чати — не для моделі. REVOKE після GRANT і CREATE. Тримає #554.
 REVOKE ALL ON employee_secrets, secret_reveal_codes, vault_link_codes FROM ai_readonly;
 

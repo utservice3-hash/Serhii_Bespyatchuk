@@ -121,6 +121,8 @@ const ADMIN_DENIED_BY_PERM: Record<string, string> = {
   "POST /api/secrets/employees/:id/dismiss": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "POST /api/secrets/employees/:id/dismiss/finish": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "POST /api/secrets/employees/:id/dismiss/revert": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
+  "POST /api/secrets/employees/:id/account/reset-password": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr; а саму дію дає reset_passwords / manage_sales_accounts (акаунт у картці, 23.10.2026, #2280); фінансист жодного з них не має",
+  "PATCH /api/secrets/employees/:id/account/tracker": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr; а саму дію дає manage_users / manage_sales_accounts (акаунт у картці, 23.10.2026, #2280); фінансист жодного з них не має",
   "POST /api/secrets/employees/:id/dismiss-date": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   "POST /api/secrets/employees/:id/documents": "view_employee_secrets — лише admin, ceo, opdir, kvp, hr (рішення Романа 18.09.2026); фінансист його не має",
   // 📷 Фото співробітників (22.09.2026): запис — те саме право сейфу, що й «Найм → Співробітники».

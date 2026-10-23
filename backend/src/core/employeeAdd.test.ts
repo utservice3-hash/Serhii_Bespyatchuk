@@ -248,3 +248,106 @@ test("#2274 Налаштування → картка: посилання /hirin
     "🔴 реєстр не відкриває картку з адреси");
   assert.match(emp, /u\.searchParams\.delete\("employee"\)/, "🔴 параметр лишається в адресі — оновлення знову відкриє картку");
 });
+
+/**
+ * #2280 — ХТО ЩО МОЖЕ З АКАУНТОМ (рішення Романа 23.10.2026). `accountVerdict` — одне правило для кнопок картки й
+ * сервера. HR (`manage_sales_accounts`): пароль і трекер — ЛИШЕ менеджеру й тімліду; кандидату, КВП, бухгалтерії,
+ * адміну — ні; роль і вхід — ніколи. Адмін/СЕО/ОД (`manage_users` + `reset_passwords`) — усе й усім. Без прав — нічого.
+ * 🧨 Червоніє, якщо HR дістане не-менеджера, роль чи вхід, або адмін втратить будь-яку дію.
+ */
+test("#2280 accountVerdict: HR — пароль і трекер лише менеджеру й тімліду; роль і вхід — лише адмін/СЕО/ОД", async () => {
+  const { accountVerdict } = await import("./employeeAccount.js");
+  const HR = { manageUsers: false, resetPasswords: false, manageSales: true };
+  const ADMIN = { manageUsers: true, resetPasswords: true, manageSales: false };
+  const NONE = { manageUsers: false, resetPasswords: false, manageSales: false };
+  const ok = (p: typeof HR, a: "password" | "tracker" | "role" | "active", r: string) => accountVerdict(p, a, r).ok;
+  for (const r of ["manager", "team_lead"]) {
+    assert.equal(ok(HR, "password", r), true, `🔴 HR не скидає пароль: ${r}`);
+    assert.equal(ok(HR, "tracker", r), true, `🔴 HR не вмикає трекер: ${r}`);
+    assert.equal(ok(HR, "role", r), false, `🔴 HR міняє роль: ${r}`);
+    assert.equal(ok(HR, "active", r), false, `🔴 HR вимикає вхід: ${r}`);
+  }
+  for (const r of ["candidate", "kvp", "____________", "admin", "ceo", "opdir", "hr"]) {
+    assert.equal(ok(HR, "password", r), false, `🔴 HR скидає пароль не менеджеру: ${r}`);
+    assert.equal(ok(HR, "tracker", r), false, `🔴 HR чіпає трекер не менеджера: ${r}`);
+  }
+  assert.match((accountVerdict(HR, "password", "admin") as { error: string }).error, /лише акаунтами менеджерів і тімлідів/);
+  for (const a of ["password", "tracker", "role", "active"] as const) {
+    for (const r of ["manager", "admin", "candidate"]) assert.equal(ok(ADMIN, a, r), true, `🔴 адмін втратив «${a}» для ${r}`);
+    assert.equal(ok(NONE, a, "manager"), false, `🔴 без прав дозволено «${a}»`);
+  }
+});
+
+/**
+ * #2281 — ЖИВИЙ SQL: HR СКИДАЄ ПАРОЛЬ МЕНЕДЖЕРУ, НЕ ЧІПАЄ КВП. Новий хеш, значення — у сейфі картки, у відповіді — один
+ * раз; той самий виклик для акаунта з ручною роллю КВП — 403 і хеш не змінився; трекер — в обидва боки; картка без
+ * акаунта — 409. І сид: право `manage_sales_accounts` має рівно роль hr.
+ * 🧨 Червоніє, якщо HR скине пароль КВП, пароль не ляже в сейф, трекер не вимикається або право дістанеться не тій ролі.
+ */
+test("#2281 ЖИВИЙ SQL: HR скидає пароль і трекер менеджеру (пароль у сейфі), КВП — 403; право лише в hr", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const acc = await import("./employeeAccount.js");
+  const { randomBytes } = await import("node:crypto");
+  const bcrypt = (await import("bcryptjs")).default;
+  const key = randomBytes(32);
+  const HR = { manageUsers: false, resetPasswords: false, manageSales: true };
+  try {
+    const roles = (await s.c.query("SELECT key FROM roles WHERE (permissions->>'manage_sales_accounts')::boolean ORDER BY key")).rows.map((r) => r.key);
+    assert.deepEqual(roles, ["hr"], "🔴 право керувати акаунтами менеджерів не лише в hr");
+    const mk = async (email: string, override: string | null) => (await s.c.query(
+      "INSERT INTO users (email,password_hash,role,role_override) VALUES ($1,$2,'manager',$3) RETURNING id", [email, await bcrypt.hash("old", 4), override])).rows[0].id as number;
+    const mgr = await mk("mgr@uts.ua", null), kvp = await mk("kvp@uts.ua", "kvp");
+    const card = async (name: string, uid: number | null) => (await s.c.query("INSERT INTO employees (full_name, import_key, status, user_id) VALUES ($1,$2,'active',$3) RETURNING id", [name, name.toLowerCase(), uid])).rows[0].id as number;
+    const em = await card("Менеджер Один", mgr), ek = await card("Квп Одна", kvp), en = await card("Без Акаунта", null);
+
+    const r = await acc.resetEmployeePassword(s.db, key, s.hr, em, HR);
+    assert.equal(r.login, "mgr@uts.ua");
+    assert.ok(await bcrypt.compare(r.password, (await s.c.query("SELECT password_hash FROM users WHERE id=$1", [mgr])).rows[0].password_hash), "🔴 новий пароль не діє");
+    assert.equal((await s.c.query("SELECT count(*)::int n FROM employee_secrets WHERE user_id=$1 AND service='dashboard' AND superseded_at IS NULL", [mgr])).rows[0].n, 1, "🔴 пароль не ліг у сейф картки");
+
+    const before = (await s.c.query("SELECT password_hash FROM users WHERE id=$1", [kvp])).rows[0].password_hash;
+    await assert.rejects(acc.resetEmployeePassword(s.db, key, s.hr, ek, HR), bad(403), "🔴 HR скинув пароль КВП");
+    assert.equal((await s.c.query("SELECT password_hash FROM users WHERE id=$1", [kvp])).rows[0].password_hash, before, "🔴 хеш КВП змінився попри 403");
+    await assert.rejects(acc.setEmployeeTracker(s.db, s.hr, ek, true, HR), bad(403), "🔴 HR чіпає трекер КВП");
+
+    await acc.setEmployeeTracker(s.db, s.hr, em, true, HR);
+    assert.equal((await s.c.query("SELECT tracker_enabled FROM users WHERE id=$1", [mgr])).rows[0].tracker_enabled, true);
+    await acc.setEmployeeTracker(s.db, s.hr, em, false, HR);
+    assert.equal((await s.c.query("SELECT tracker_enabled FROM users WHERE id=$1", [mgr])).rows[0].tracker_enabled, false, "🔴 трекер не вимикається тим самим шляхом");
+    await assert.rejects(acc.resetEmployeePassword(s.db, key, s.hr, en, HR), bad(409), "🔴 картка без акаунта — не 409");
+    assert.equal((await acc.employeeAccount(s.db, en)), null);
+  } finally { await s.done(); }
+});
+
+/**
+ * #2282 — ПРОВОДКА РОУТІВ (читає джерело): стан, пароль і трекер у `routes/secrets.ts` беруть права з ролі
+ * (`manage_users`, `reset_passwords`, `manage_sales_accounts`) і кличуть ядро; усі три роути — у матриці доступу.
+ * 🧨 Червоніє, якщо роут обійде `accountPerms`/ядро або зникне з матриці.
+ */
+test("#2282 роути акаунта в картці: права з ролі → ядро; усі в матриці доступу", () => {
+  const SRC = (f: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "src", f), "utf8");
+  const r = SRC("routes/secrets.ts");
+  assert.match(r, /manageUsers: roleHasPerm\(r, "manage_users"\), resetPasswords: roleHasPerm\(r, "reset_passwords"\), manageSales: roleHasPerm\(r, "manage_sales_accounts"\)/, "🔴 права беруться не з ролі");
+  assert.match(r, /secretsRouter\.post\("\/employees\/:id\/account\/reset-password"[\s\S]{0,200}resetEmployeePassword\(db, key\(\), me\(req\), num\(req\.params\.id, "id співробітника"\), accountPerms\(req\)\)/, "🔴 скидання пароля в обхід ядра");
+  assert.match(r, /secretsRouter\.patch\("\/employees\/:id\/account\/tracker"[\s\S]{0,200}setEmployeeTracker\(db, me\(req\), num\(req\.params\.id, "id співробітника"\), req\.body\?\.on, accountPerms\(req\)\)/, "🔴 трекер в обхід ядра");
+  const m = SRC("auth/accessMatrix.ts");
+  for (const [method, p] of [["GET", "/api/secrets/employees/:id/account"], ["POST", "/api/secrets/employees/:id/account/reset-password"], ["PATCH", "/api/secrets/employees/:id/account/tracker"]])
+    assert.ok(m.includes(`{ method: "${method}", path: "${p}"`), `🔴 ${method} ${p} немає в матриці доступу`);
+});
+
+/**
+ * #2283 — ФРОНТ: БЛОК «АКАУНТ ДАШБОРДА» В КАРТЦІ. Стоїть у «Профілі»; кожна кнопка — лише за `can` від сервера
+ * (пароль, трекер, роль, вхід, створення); роль/вхід/створення — наявними роутами Налаштувань.
+ * 🧨 Червоніє, якщо прибрати блок з картки або показувати кнопку без `can`.
+ */
+test("#2283 картка: блок «Акаунт дашборда» у «Профілі», кнопки лише за can від сервера", () => {
+  const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "HiringEmployees.tsx"), "utf8");
+  assert.match(fe, /<PhotoPanel [^\n]*\/>\s*<AccountPanel employeeId=\{row\.id\} email=\{row\.email\} toast=\{toast\} onChanged=\{onSaved\} \/>/, "🔴 блоку «Акаунт» немає в «Профілі»");
+  const i = fe.indexOf("function AccountPanel("); assert.ok(i > 0);
+  const body = fe.slice(i);
+  assert.match(body, /\{can\.password && <button/, "🔴 «Скинути пароль» без can.password");
+  assert.match(body, /disabled=\{busy \|\| !can\.tracker\}/, "🔴 трекер без can.tracker");
+  assert.match(body, /\{can\.role\s*\?/, "🔴 роль без can.role");
+  assert.match(body, /\{can\.active\s*\?/, "🔴 вхід без can.active");
+  assert.match(body, /can\.create \? \(/, "🔴 створення без can.create");
+});
