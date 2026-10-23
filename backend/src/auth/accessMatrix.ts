@@ -675,6 +675,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // 📉 «Змінити дату звільнення» (21.10.2026, #2100) — та сама межа, що в «Звільнити…».
   { method: "POST", path: "/api/secrets/employees/:id/dismiss-date", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "GET", path: "/api/secrets/employees/:id/documents", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+  // 🔑 Акаунт у картці (23.10.2026, #2280): стан бачать усі з правом сейфу; пароль і трекер — за `accountVerdict`
+  // (HR лише менеджерам/тімлідам), тому дії — `deny-only`.
+  { method: "GET", path: "/api/secrets/employees/:id/account", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/secrets/employees/:id/account/reset-password", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "PATCH", path: "/api/secrets/employees/:id/account/tracker", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "POST", path: "/api/secrets/employees/:id/documents", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "GET", path: "/api/secrets/employees/:id/documents/:fileId", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
   { method: "DELETE", path: "/api/secrets/employees/:id/documents/:fileId", cls: "DELETE-ghost", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
