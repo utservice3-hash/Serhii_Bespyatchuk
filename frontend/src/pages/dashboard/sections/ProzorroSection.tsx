@@ -3,6 +3,7 @@ import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAx
 import { fetchProzorroSettings, fetchProzorroStats, hiringError, saveProzorroSettings,
   type ProzorroSettingsResp, type ProzorroStatsResp, type PzConfigT, type PzModeT } from "../../../api";
 import { todayKyiv } from "../periodRules";
+import { useDialogs } from "../../../components/Dialogs";
 
 /**
  * 🏛 «ТЕНДЕРИ PROZORRO» — екран у групі «Клієнти» (задача #5299). Дві вкладки:
@@ -154,7 +155,53 @@ const field = { display: "grid", gap: 4, fontSize: 13, fontWeight: 600 } as cons
 const inp = { padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", maxWidth: 320 } as const;
 const hintS = { fontSize: 11.5, fontWeight: 400, color: "var(--text-muted)" } as const;
 
+const dmy = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
+const plusDay = (iso: string) => new Date(Date.parse(`${iso}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+const uahS = (n: number) => `${Math.round(n).toLocaleString("uk-UA")} ₴`;
+
+/**
+ * «Що буде далі» — людською мовою з ФОРМИ (тобто з незбереженими змінами теж) і живої готовності з сервера.
+ * Сама нічого не вирішує: ті самі правила виконує джоба (`jobs/prozorroLeads.ts`).
+ */
+export function whatNext(c: PzConfigT, v: ProzorroSettingsResp): { tone: "ok" | "warn" | "off"; lines: string[] } {
+  const r = v.readiness;
+  const when = `${dmy(r.nextRun.date)} о ${r.nextRun.time}`;
+  const who = v.options.find((o) => o.id === c.responsibleManagerId)?.name ?? null;
+  const lines: string[] = [];
+  if (c.mode === "off") return { tone: "off", lines: ["Збір вимкнено — вранці нічого не відбудеться: ні пошуку, ні записів у Kommo."] };
+  lines.push(`Наступний збір: ${when}.`);
+  if (!r.baselineDone) lines.push(`Це буде перший збір — точка відліку: лише запамʼятаємо наявні тендери, лідів не буде. Перші ліди — ${dmy(plusDay(r.nextRun.date))} о ${r.nextRun.time}.`);
+  const avg = r.avgFoundPerDay != null ? `зараз знаходимо ~${String(r.avgFoundPerDay)} на день` : "за заміром — ~28 на день при 500 000 ₴";
+  if (c.mode === "dry") {
+    lines.push(`Режим пробний: переможців від ${uahS(c.minAmount)} лише рахуємо в статистиці (${avg}). У Kommo нічого не піде.`);
+    return { tone: "ok", lines };
+  }
+  if (!who) {
+    lines.push(c.responsibleManagerId == null ? "⚠️ Бойовий режим, але лідоген не вибраний — у Kommo нічого не піде, ліди чекатимуть."
+      : "⚠️ Вибраний лідоген неактивний — у Kommo нічого не піде, доки не виберете іншого.");
+    return { tone: "warn", lines };
+  }
+  if (!r.kommo.ok) {
+    lines.push(`⚠️ У Kommo не все на місці: ${r.kommo.problems.join("; ")} — угоди не запишуться.`);
+    return { tone: "warn", lines };
+  }
+  lines.push(`Режим бойовий: нові переможці від ${uahS(c.minAmount)} підуть у Kommo («Продзвін» → «Тендер AI», джерело «AI тендер») на ${who}, ${c.dailyLimit ? `не більше ${String(c.dailyLimit)} угод за ранок` : "без ліміту"} (${avg}).`);
+  if (c.nichesOff.length) lines.push(`Не шукаємо: ${c.nichesOff.join(", ")}.`);
+  return { tone: "ok", lines };
+}
+
+function Check({ state, title, text }: { state: "ok" | "wait" | "bad"; title: string; text: string }) {
+  const col = state === "ok" ? "#16a34a" : state === "wait" ? "#b45309" : "#b3261e";
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "22px minmax(0,1fr)", gap: 8, alignItems: "start", fontSize: 13, padding: "4px 0" }}>
+      <span style={{ color: col, fontWeight: 700 }}>{state === "ok" ? "✓" : state === "wait" ? "⏳" : "✗"}</span>
+      <span><b>{title}</b> — <span style={{ color: state === "bad" ? col : "var(--text-muted)" }}>{text}</span></span>
+    </div>
+  );
+}
+
 function SettingsTab({ view, onSave }: { view: ProzorroSettingsResp; onSave: (c: PzConfigT) => Promise<void> }) {
+  const dialogs = useDialogs();
   const [c, setC] = useState<PzConfigT>(view.config);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -163,7 +210,16 @@ function SettingsTab({ view, onSave }: { view: ProzorroSettingsResp; onSave: (c:
   const liveNoOne = c.mode === "live" && c.responsibleManagerId == null;
   const cur = view.responsible;
   const curMissing = c.responsibleManagerId != null && !view.options.some((o) => o.id === c.responsibleManagerId);
+  const r = view.readiness;
+  const next = whatNext(c, view);
+  const whoName = view.options.find((o) => o.id === c.responsibleManagerId)?.name ?? null;
   const save = async () => {
+    // Підтвердження ЛИШЕ на увімкнення бойового режиму: це єдина зміна, після якої щось піде в CRM.
+    if (c.mode === "live" && view.config.mode !== "live") {
+      const yes = await dialogs.confirm({ title: "Увімкнути бойовий режим?", okLabel: "Увімкнути",
+        text: `Щоранку о ${r.nextRun.time} нові переможці тендерів від ${uahS(c.minAmount)} підуть у Kommo («Продзвін» → «Тендер AI») на ${whoName ?? "— лідоген не вибраний, нічого не піде —"}, ${c.dailyLimit ? `не більше ${String(c.dailyLimit)} угод за ранок` : "без ліміту"}. Наявних угод, компаній і контактів у Kommo це не змінює. Вимкнути можна тут же, будь-коли.` });
+      if (!yes) return;
+    }
     setBusy(true); setMsg(null);
     try { await onSave(c); setMsg({ ok: true, text: "Збережено. Діє з наступного ранкового збору (06:05)." }); }
     catch (e) { setMsg({ ok: false, text: hiringError(e) }); }
@@ -171,6 +227,23 @@ function SettingsTab({ view, onSave }: { view: ProzorroSettingsResp; onSave: (c:
   };
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      <div className="chart-card" style={{ borderLeft: `4px solid ${next.tone === "ok" ? "#16a34a" : next.tone === "warn" ? "#b3261e" : "var(--border)"}` }}>
+        <h2 className="chart-title">Що буде далі{changed ? " (з урахуванням незбережених змін)" : ""}</h2>
+        {next.lines.map((l, i) => <div key={i} style={{ fontSize: 13.5, padding: "2px 0", color: l.startsWith("⚠️") ? "#b3261e" : undefined }}>{l}</div>)}
+      </div>
+
+      <div className="chart-card">
+        <h2 className="chart-title">Перевірка готовності</h2>
+        <Check state={r.lastRun.error ? "bad" : r.lastRun.at ? "ok" : "wait"} title="Prozorro"
+          text={r.lastRun.error ? `останній збір упав: ${r.lastRun.error}` : r.lastRun.at ? `останній збір ${fmtAt(r.lastRun.at)} — без помилок` : `ще не запускався — перший збір ${dmy(r.nextRun.date)} о ${r.nextRun.time}`} />
+        <Check state={whoName ? "ok" : c.mode === "live" ? "bad" : "wait"} title="Лідоген"
+          text={whoName ? `${whoName} — активний, має акаунт Kommo` : c.responsibleManagerId == null ? "не вибраний" : "вибраний лідоген неактивний — виберіть іншого"} />
+        <Check state={r.kommo.ok ? "ok" : "bad"} title="Kommo"
+          text={r.kommo.ok ? "етап «Тендер AI» у «Продзвоні» і джерело «AI тендер» на місці" : r.kommo.problems.join("; ")} />
+        <Check state={r.baselineDone ? "ok" : "wait"} title="Точка відліку"
+          text={r.baselineDone && r.baselineAt ? `пройдено ${fmtAt(r.baselineAt)} — далі беремо лише нових переможців` : `буде ${dmy(r.nextRun.date)} о ${r.nextRun.time}; перші ліди — наступного ранку`} />
+      </div>
+
       <div className="chart-card">
         <h2 className="chart-title">Робота</h2>
         <div style={{ display: "grid", gap: 16 }}>

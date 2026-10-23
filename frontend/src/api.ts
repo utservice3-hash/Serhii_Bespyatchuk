@@ -556,6 +556,14 @@ export interface ProzorroSettingsResp {
   niches: { name: string; words: number; on: boolean; leads30d: number }[];
   queue: { waiting: number; exhausted: number; pushed: number; dryCollected: number };
   history: { field: string; oldValue: string | null; newValue: string | null; setByName: string | null; setAt: string }[];
+  /** Що буде далі й чи все готово: наступний збір, точка відліку, останній прохід, перевірка Kommo (лише читання). */
+  readiness: {
+    nextRun: { date: string; time: string };
+    baselineDone: boolean; baselineAt: string | null;
+    lastRun: { at: string | null; error: string | null };
+    kommo: { ok: boolean; problems: string[]; checkedAt: string };
+    avgFoundPerDay: number | null;
+  };
 }
 export interface ProzorroStatsResp {
   from: string; to: string;

@@ -250,3 +250,65 @@ test("#2366 НАЗВА ЕТАПУ: «8921936:113258624» = «Тендер AI» �
   const { stageName } = await import("./stageNames.js") as { stageName: (p: number, s: number) => string };
   assert.equal(stageName(8921936, 113258624), "Тендер AI", "🔴 етап «Тендер AI» показується сирим id");
 });
+
+/**
+ * #2371 — НАСТУПНИЙ ЗБІР за Києвом: до 06:05 — сьогодні, з 06:05 — завтра; пізній вечір за UTC — уже наступна київська доба;
+ * у ніч переходу на зимовий час (25.10.2026) межа зсувається разом із поясом.
+ * 🧨 Червоніє, якщо рахувати за UTC, переплутати «до/після» межі чи зашити +3.
+ */
+test("#2371 НАСТУПНИЙ ЗБІР: до 06:05 за Києвом — сьогодні, з 06:05 — завтра; UTC-вечір і перехід часу 25.10 враховано", async () => {
+  const { nextRunKyiv } = await import("./prozorroReadiness.js");
+  const at = (iso: string) => nextRunKyiv(new Date(iso)).date;
+  assert.deepEqual(nextRunKyiv(new Date("2026-10-23T03:04:59Z")), { date: "2026-10-23", time: "06:05" }, "🔴 06:04 за Києвом — збір ще сьогодні");
+  assert.equal(at("2026-10-23T03:05:00Z"), "2026-10-24", "🔴 06:05 за Києвом — сьогоднішній збір уже почався, наступний завтра");
+  assert.equal(at("2026-10-23T22:30:00Z"), "2026-10-24", "🔴 01:30 за Києвом 24.10 — це вже 24-те, а не 23-тє (UTC)");
+  assert.equal(at("2026-10-25T04:04:00Z"), "2026-10-25", "🔴 25.10 після переходу на зимовий (+2): 06:04 за Києвом — ще сьогодні");
+  assert.equal(at("2026-10-25T04:05:00Z"), "2026-10-26", "🔴 25.10 після переходу на зимовий: 06:05 за Києвом — уже завтра");
+});
+
+/**
+ * #2372 — ПЕРЕВІРКА KOMMO (лише читання): усе на місці — ok; бракує етапу чи значення джерела — названо, ЩО саме; збій
+ * Kommo — НЕ «ok», а проблема з текстом (порожнеча тут не означає «все добре»); кеш — не частіше ніж раз на 10 хв.
+ * 🧨 Червоніє, якщо мовчки вважати збій за «ok», не назвати, чого бракує, чи ходити в Kommo на кожне відкриття вкладки.
+ */
+test("#2372 ПЕРЕВІРКА KOMMO: на місці — ok; бракує — названо що; збій — не ok; кеш 10 хв", async () => {
+  const { checkKommoSetup, cachedKommoCheck } = await import("./prozorroReadiness.js");
+  const good: Record<string, unknown> = {
+    "/api/v4/leads/pipelines/8921936": { _embedded: { statuses: [{ id: 69693688 }, { id: 113258624 }] } },
+    "/api/v4/leads/custom_fields/2098035": { enums: [{ id: 6348927 }] },
+    "/api/v4/contacts/custom_fields/2097595": { enums: [{ id: 6348929 }] },
+  };
+  let calls = 0;
+  const get = (over: Record<string, unknown> = {}) => (async <T>(p: string): Promise<T> => { calls++; return ({ ...good, ...over })[p] as T; }) as <T>(p: string) => Promise<T>;
+  assert.deepEqual((await checkKommoSetup(get())).problems, [], "дзеркало: усе на місці — проблем немає");
+  const noStage = await checkKommoSetup(get({ "/api/v4/leads/pipelines/8921936": { _embedded: { statuses: [{ id: 69693688 }] } } }));
+  assert.deepEqual([noStage.ok, noStage.problems], [false, ["у воронці «Продзвін» немає етапу «Тендер AI»"]], "🔴 зниклий етап не помічено");
+  const noContactEnum = await checkKommoSetup(get({ "/api/v4/contacts/custom_fields/2097595": { enums: [{ id: 1 }] } }));
+  assert.match(noContactEnum.problems.join(), /у полі «Источник клиента» контакту немає значення «AI тендер»/);
+  const down = await checkKommoSetup((async () => { throw new Error("Kommo API error 503: down"); }) as <T>(p: string) => Promise<T>);
+  assert.deepEqual([down.ok, /не вдалось перевірити Kommo: Kommo API error 503/.test(down.problems[0] ?? "")], [false, true], "🔴 збій Kommo прочитано як «усе на місці»");
+  let t = 0;
+  calls = 0;
+  const cached = cachedKommoCheck(get(), 600_000, () => t);
+  await cached(); await cached(); t = 599_999; await cached();
+  assert.equal(calls, 3, "🔴 Kommo питали частіше ніж раз на 10 хв (3 запити = одна перевірка)");
+  t = 600_000; await cached();
+  assert.equal(calls, 6, "🔴 після 10 хв перевірку не оновлено");
+});
+
+/**
+ * #2373 — ПІДТВЕРДЖЕННЯ: вкладка налаштувань отримує готовність (наступний збір, точка відліку, останній прохід, Kommo) у GET
+ * і PUT; перед увімкненням бойового режиму — діалог «Увімкнути?», без згоди нічого не зберігається; блок «Що буде далі» —
+ * з форми, тобто з незбереженими змінами.
+ * 🧨 Червоніє, якщо прибрати готовність із відповіді, діалог чи `if (!yes) return`.
+ */
+test("#2373 ПІДТВЕРДЖЕННЯ: готовність у відповіді налаштувань; бойовий режим — лише після «Увімкнути»; «Що буде далі» з форми", () => {
+  const routes = SRC("routes/prozorro.ts");
+  assert.match(routes, /const kommoCheck = cachedKommoCheck\(kommoGet\);/, "🔴 перевірка Kommo без кешу");
+  assert.match(routes, /readiness: await loadReadiness\(pool, kommoCheck\)/, "🔴 готовності немає у відповіді");
+  assert.equal([...routes.matchAll(/res\.json\(await settingsView\(\)\);/g)].length, 2, "🔴 GET і PUT налаштувань віддають різне");
+  const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "ProzorroSection.tsx"), "utf8");
+  assert.match(fe, /if \(c\.mode === "live" && view\.config\.mode !== "live"\) \{\n\s+const yes = await dialogs\.confirm\(\{ title: "Увімкнути бойовий режим\?"[\s\S]{0,700}?\n\s+if \(!yes\) return;\n\s+\}\n\s+setBusy\(true\)/,
+    "🔴 бойовий режим вмикається без підтвердження (або збереження йде й без згоди)");
+  assert.match(fe, /const next = whatNext\(c, view\);/, "🔴 «Що буде далі» рахується не з форми");
+});
