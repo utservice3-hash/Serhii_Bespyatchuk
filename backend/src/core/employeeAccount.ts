@@ -25,14 +25,15 @@ import { storeDashboardPassword } from "./teamVault.js";
 export const HR_ACCOUNT_ROLES: readonly string[] = ["manager", "team_lead"];
 
 export interface AccountPerms { manageUsers: boolean; resetPasswords: boolean; manageSales: boolean }
-export type AccountAction = "password" | "tracker" | "role" | "active";
+export type AccountAction = "password" | "tracker" | "role" | "active" | "pool";
 
 /** Чи можна дію над акаунтом із такою ефективною роллю. Одне правило для кнопок картки й для сервера. */
 export function accountVerdict(p: AccountPerms, action: AccountAction, targetRole: string): { ok: true } | { ok: false; error: string } {
   const sales = HR_ACCOUNT_ROLES.includes(targetRole);
   if (action === "password" && (p.resetPasswords || (p.manageSales && sales))) return { ok: true };
   if (action === "tracker" && (p.manageUsers || (p.manageSales && sales))) return { ok: true };
-  if ((action === "role" || action === "active") && p.manageUsers) return { ok: true };
+  // «Пул нічийних» відкриває менеджеру телефони чужих клієнтів — лише адмін, СЕО, ОД (Роман 23.10.2026, прохід 5).
+  if ((action === "role" || action === "active" || action === "pool") && p.manageUsers) return { ok: true };
   if (p.manageSales && !sales && (action === "password" || action === "tracker"))
     return { ok: false, error: "HR керує лише акаунтами менеджерів і тімлідів" };
   return { ok: false, error: "Немає права на цю дію з акаунтом" };
@@ -41,6 +42,10 @@ export function accountVerdict(p: AccountPerms, action: AccountAction, targetRol
 export interface EmployeeAccount {
   userId: number; login: string; role: string; roleOverride: string | null; syncedRole: string;
   isActive: boolean; lastSeen: string | null; trackerEnabled: boolean; kommoName: string | null;
+  /** 🧭 Пул нічийних (прохід 5): у картці — бо з Налаштувань людьми більше не керують. */
+  orphanPool: boolean;
+  /** Стан менеджера з Kommo (`manager_work_state`): null — активний; змінюється «Звільнити…» в картці. */
+  workState: "finishing" | "dismissed" | null;
 }
 
 /** Акаунт, привʼязаний до картки; null — у картки акаунта немає. */
@@ -49,11 +54,14 @@ export async function employeeAccount(db: Db, employeeId: number): Promise<Emplo
   if (!e) throw new SecretError(404, "Співробітника не знайдено");
   if (e.user_id == null) return null;
   const u = (await db.query<{ id: number; email: string; role: string; role_override: string | null; is_active: boolean;
-    last_seen: string | null; tracker_enabled: boolean; kommo: string | null }>(
-    `SELECT u.id, u.email, u.role, u.role_override, u.is_active, u.last_seen, u.tracker_enabled, m.name AS kommo
-       FROM users u LEFT JOIN managers m ON m.id = u.manager_id WHERE u.id = $1`, [e.user_id])).rows[0];
+    last_seen: string | null; tracker_enabled: boolean; kommo: string | null; orphan_pool: boolean | null; work_state: "finishing" | "dismissed" | null }>(
+    `SELECT u.id, u.email, u.role, u.role_override, u.is_active, u.last_seen, u.tracker_enabled, m.name AS kommo,
+            u.orphan_pool, w.state AS work_state
+       FROM users u LEFT JOIN managers m ON m.id = u.manager_id LEFT JOIN manager_work_state w ON w.manager_id = u.manager_id
+      WHERE u.id = $1`, [e.user_id])).rows[0];
   return { userId: u.id, login: u.email, role: u.role_override ?? u.role, roleOverride: u.role_override, syncedRole: u.role,
-    isActive: u.is_active, lastSeen: u.last_seen, trackerEnabled: u.tracker_enabled === true, kommoName: u.kommo };
+    isActive: u.is_active, lastSeen: u.last_seen, trackerEnabled: u.tracker_enabled === true, kommoName: u.kommo,
+    orphanPool: u.orphan_pool === true, workState: u.work_state ?? null };
 }
 
 async function accountFor(db: Db, employeeId: number, p: AccountPerms, action: AccountAction): Promise<EmployeeAccount> {

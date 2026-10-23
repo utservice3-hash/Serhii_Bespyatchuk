@@ -225,7 +225,8 @@ test("#2273 Налаштування (фронт): кандидати схова
     const i = fe.indexOf(tab); assert.ok(i >= 0, `🔴 немає ${tab}`);
     const body = fe.slice(i, fe.indexOf("\n}\n", i));
     assert.match(body, /const \[showCand, setShowCand\] = useState\(false\);/, `🔴 ${tab}: кандидати не сховані за замовчуванням`);
-    assert.match(body, /const shown = users\.filter\(\(u\) => showCand \|\| u\.source !== "candidate"\);/, `🔴 ${tab}: немає фільтра кандидатів`);
+    // Прохід 5 додав у «Користувачах» другу умову (`showAll || !u.card_id`) — кандидатська частина та сама.
+    assert.match(body, /const shown = users\.filter\(\(u\) => \(?showCand \|\| u\.source !== "candidate"\)?/, `🔴 ${tab}: немає фільтра кандидатів`);
     assert.match(body, /\{shown\.map\(\(u\) =>/, `🔴 ${tab}: таблиця малює всіх, а не відфільтрованих`);
     assert.match(body, /onChange=\{\(e\) => setShowCand\(e\.target\.checked\)\} \/> показати кандидатів/, `🔴 ${tab}: немає перемикача`);
   }
@@ -350,4 +351,68 @@ test("#2283 картка: блок «Акаунт дашборда» у «Про
   assert.match(body, /\{can\.role\s*\?/, "🔴 роль без can.role");
   assert.match(body, /\{can\.active\s*\?/, "🔴 вхід без can.active");
   assert.match(body, /can\.create \? \(/, "🔴 створення без can.create");
+});
+
+/**
+ * #2290 — «ПУЛ НІЧИЙНИХ» У КАРТЦІ — ЛИШЕ АДМІН, СЕО, ОД (рішення Романа 23.10.2026, прохід 5): пул відкриває менеджеру
+ * телефони чужих клієнтів. HR (`manage_sales_accounts`) — ні навіть менеджеру; адмін — так.
+ * 🧨 Червоніє, якщо дати пул HR або забрати в адміна.
+ */
+test("#2290 accountVerdict: «пул нічийних» лише manage_users (адмін/СЕО/ОД), HR — ні", async () => {
+  const { accountVerdict } = await import("./employeeAccount.js");
+  assert.equal(accountVerdict({ manageUsers: false, resetPasswords: false, manageSales: true }, "pool", "manager").ok, false, "🔴 HR відкриває пул нічийних");
+  assert.equal(accountVerdict({ manageUsers: true, resetPasswords: true, manageSales: false }, "pool", "manager").ok, true, "🔴 адмін не може відкрити пул");
+});
+
+/**
+ * #2291 — ЖИВИЙ SQL: СТАН АКАУНТА В КАРТЦІ ВІДДАЄ ПУЛ І СТАН МЕНЕДЖЕРА (прохід 5) — те, що раніше було видно лише в
+ * Налаштуваннях. Менеджер зі станом «завершує» і відкритим пулом — так і в картці; без запису стану — null (активний).
+ * 🧨 Червоніє, якщо поле загубиться або стан візьметься не з `manager_work_state`.
+ */
+test("#2291 ЖИВИЙ SQL: акаунт у картці — пул нічийних і стан менеджера", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const acc = await import("./employeeAccount.js");
+  try {
+    await s.c.query("INSERT INTO managers (id,name,team_id,is_active,kommo_user_id) VALUES (7201,'Менеджер Пулу',3,true,7201),(7202,'Менеджер Без Стану',3,true,7202)");
+    const u1 = (await s.c.query("INSERT INTO users (email,password_hash,role,manager_id,orphan_pool) VALUES ('p1@uts.ua','x','manager',7201,true) RETURNING id")).rows[0].id;
+    const u2 = (await s.c.query("INSERT INTO users (email,password_hash,role,manager_id) VALUES ('p2@uts.ua','x','manager',7202) RETURNING id")).rows[0].id;
+    await s.c.query("INSERT INTO manager_work_state (manager_id, state, note) VALUES (7201,'finishing','гейт #2291')");
+    const e1 = (await s.c.query("INSERT INTO employees (full_name, import_key, status, user_id) VALUES ('Менеджер Пулу','менеджер пулу','active',$1) RETURNING id", [u1])).rows[0].id;
+    const e2 = (await s.c.query("INSERT INTO employees (full_name, import_key, status, user_id) VALUES ('Менеджер Без Стану','менеджер без стану','active',$1) RETURNING id", [u2])).rows[0].id;
+    const a1 = await acc.employeeAccount(s.db, e1), a2 = await acc.employeeAccount(s.db, e2);
+    assert.deepEqual([a1?.orphanPool, a1?.workState], [true, "finishing"], "🔴 картка не бачить пул або стан менеджера");
+    assert.deepEqual([a2?.orphanPool, a2?.workState], [false, null], "🔴 без запису стану — не «активний»");
+  } finally { await s.done(); }
+});
+
+/**
+ * #2292 — НАЛАШТУВАННЯ (фронт, прохід 5): за замовчуванням лише акаунти БЕЗ картки; перемикач показує людей із карткою.
+ * У рядку людини з карткою — жодної кнопки дії (роль, трекер, стан, пул, пароль, деактивація), натомість
+ * «керувати в картці →»; у рядку без картки кнопки лишились (дзеркало — службовими більше ніде керувати).
+ * 🧨 Червоніє, якщо показати людей за замовчуванням, повернути кнопку в рядок із карткою або забрати її у службових.
+ */
+test("#2292 Налаштування: за замовчуванням лише без картки; у рядку з карткою — «керувати в картці», без кнопок", () => {
+  const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "SettingsSection.tsx"), "utf8");
+  const i = fe.indexOf("function UsersTab("); const body = fe.slice(i, fe.indexOf("\n}\n", i));
+  assert.match(body, /const \[showAll, setShowAll\] = useState\(false\);/, "🔴 людей із карткою показано за замовчуванням");
+  assert.match(body, /&& \(showAll \|\| !u\.card_id\)\);/, "🔴 немає фільтра «лише без картки»");
+  assert.match(body, /onChange=\{\(e\) => setShowAll\(e\.target\.checked\)\} \/> показати людей із карткою/, "🔴 немає перемикача «показати людей із карткою»");
+  assert.match(body, /\{u\.card_id\s*\? <a href=\{`\/hiring\?tab=emp&employee=\$\{u\.card_id\}`\}[^>]*>керувати в картці →<\/a>\s*: <><button onClick=\{\(\) => reset\(u\.id\)\}/,
+    "🔴 у рядку з карткою кнопки пароля/деактивації або у службових їх немає");
+  assert.match(body, /\{u\.card_id \? <span>\{roleName\(u\.role_effective\)\}<\/span> : <select value=\{u\.role_override/, "🔴 роль людини з карткою міняється в Налаштуваннях");
+  assert.match(body, /\{u\.card_id \? \(u\.tracker_enabled \? "✓" : "—"\) : <input/, "🔴 трекер людини з карткою міняється в Налаштуваннях");
+  assert.match(body, /\{u\.role_effective === "manager" && u\.card_id\s*\? \(u\.orphan_pool \? "✓" : "—"\)/, "🔴 пул людини з карткою міняється в Налаштуваннях");
+  assert.match(body, /\{u\.card_id \? \(\s*<span[^>]*>\{u\.work_state === "dismissed"/, "🔴 стан людини з карткою міняється в Налаштуваннях");
+});
+
+/**
+ * #2293 — КАРТКА (фронт, прохід 5): стан менеджера показано; галочка «пул нічийних» лише за `can.pool`.
+ * 🧨 Червоніє, якщо прибрати стан чи пул із картки або дати галочку без права.
+ */
+test("#2293 картка: стан менеджера й «пул нічийних» (лише за can.pool)", () => {
+  const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "HiringEmployees.tsx"), "utf8");
+  const body = fe.slice(fe.indexOf("function AccountPanel("));
+  assert.match(body, /<span className="hr-muted">Стан менеджера<\/span>/, "🔴 стану менеджера немає в картці");
+  assert.match(body, /checked=\{a\.orphanPool\} disabled=\{busy \|\| !can\.pool\}/, "🔴 пул у картці без can.pool");
+  assert.match(body, /updateUser\(a\.userId, \{ orphanPool: e\.target\.checked \}\)/, "🔴 пул у картці нічого не змінює");
 });

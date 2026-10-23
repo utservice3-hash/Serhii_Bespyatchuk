@@ -216,8 +216,8 @@ secretsRouter.get("/employees/:id/account", async (req, res) => {
   try {
     const a = await employeeAccount(pool as unknown as Db, num(req.params.id, "id співробітника"));
     const p = accountPerms(req);
-    const can = (x: "password" | "tracker" | "role" | "active") => !!a && accountVerdict(p, x, a.role).ok;
-    res.json({ account: a, can: { password: can("password"), tracker: can("tracker"), role: can("role"), active: can("active"), create: !a && p.manageUsers } });
+    const can = (x: "password" | "tracker" | "role" | "active" | "pool") => !!a && accountVerdict(p, x, a.role).ok;
+    res.json({ account: a, can: { password: can("password"), tracker: can("tracker"), role: can("role"), active: can("active"), pool: can("pool"), create: !a && p.manageUsers } });
   } catch (e) { fail(res, e); }
 });
 secretsRouter.post("/employees/:id/account/reset-password", async (req, res) => {

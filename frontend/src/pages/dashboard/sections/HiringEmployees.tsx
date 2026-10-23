@@ -755,6 +755,22 @@ function AccountPanel({ employeeId, email, toast, onChanged }: { employeeId: num
               : <b style={{ color: a.isActive ? "var(--ok)" : "var(--danger)" }}>{a.isActive ? "активний" : "вимкнений"}</b>}
             {a.lastSeen && <span className="hr-muted">· останній вхід {new Date(a.lastSeen).toLocaleDateString("uk-UA")}</span>}
           </div>
+          {/* 👤 Прохід 5: стан менеджера і пул нічийних — тут, бо з Налаштувань людьми більше не керують.
+              Стан змінює «Звільнити…» вгорі картки; пул — лише адмін, СЕО, ОД (відкриває телефони чужих клієнтів). */}
+          {a.kommoName && (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span className="hr-muted">Стан менеджера</span>
+              <b style={{ color: a.workState === "dismissed" ? "var(--danger)" : undefined }}>{a.workState === "dismissed" ? "звільнений" : a.workState === "finishing" ? "завершує" : "активний"}</b>
+              <span className="hr-muted">· змінюється кнопкою «Звільнити…»</span>
+              {a.role === "manager" && (
+                <label style={{ display: "inline-flex", gap: 6, alignItems: "center", marginLeft: 8 }} title="Менеджеру відкрити пул нічийних клієнтів: бачить пул із телефонами й бере клієнта лише собі">
+                  <input type="checkbox" checked={a.orphanPool} disabled={busy || !can.pool}
+                    onChange={(e) => void run(() => updateUser(a.userId, { orphanPool: e.target.checked }), e.target.checked ? "Пул нічийних відкрито — діє після нового входу" : "Пул нічийних закрито")} />
+                  🧭 пул нічийних
+                </label>
+              )}
+            </div>
+          )}
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             {can.password && <button className="hr-btn xs" disabled={busy} onClick={async () => {
               if (!(await dlg.confirm(`Скинути пароль ${a.login}? Старий пароль перестане діяти; новий покажемо один раз і збережемо в сейфі картки.`))) return;

@@ -5539,8 +5539,10 @@ export const fetchEmployeeDocs = async (id: number) => (await api.get<{ files: E
 export interface EmployeeAccount {
   userId: number; login: string; role: string; roleOverride: string | null; syncedRole: string;
   isActive: boolean; lastSeen: string | null; trackerEnabled: boolean; kommoName: string | null;
+  /** 🧭 Пул нічийних і стан менеджера — у картці з проходу 5 (23.10.2026). */
+  orphanPool: boolean; workState: "finishing" | "dismissed" | null;
 }
-export interface EmployeeAccountCan { password: boolean; tracker: boolean; role: boolean; active: boolean; create: boolean }
+export interface EmployeeAccountCan { password: boolean; tracker: boolean; role: boolean; active: boolean; pool: boolean; create: boolean }
 export const fetchEmployeeAccount = async (id: number) =>
   (await api.get<{ account: EmployeeAccount | null; can: EmployeeAccountCan }>(`/secrets/employees/${id}/account`)).data;
 export const resetEmployeeAccountPassword = async (id: number) =>
