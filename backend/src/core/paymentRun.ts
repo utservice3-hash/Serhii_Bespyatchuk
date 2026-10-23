@@ -201,6 +201,22 @@ export function findBankPayment(m: Pick<MainDeal, "orderNo" | "income" | "client
   return hit ? { invoiceNo: m.orderNo, bookedOn: hit.bookedOn } : null;
 }
 
+/**
+ * Індекс платежів за номером у призначенні (кожна послідовність цифр без провідних нулів) — для масового зіставлення
+ * («Результат місяця», ~1 000 угод × пів року «Виписки»). `findBankPayment(m, idx.get(m.orderNo) ?? [])` дає РІВНО те саме,
+ * що й по всіх платежах: її регулярка `(^|\D)0*N(\D|$)` збігається саме з цифровою послідовністю, що без нулів дорівнює N.
+ */
+export function paymentsByOrderNo(payments: readonly BankIn[]): Map<string, BankIn[]> {
+  const idx = new Map<string, BankIn[]>();
+  for (const p of payments) {
+    for (const k of new Set((p.purpose.match(/\d+/g) ?? []).map((x) => x.replace(/^0+/, "")).filter(Boolean))) {
+      const list = idx.get(k);
+      if (list) list.push(p); else idx.set(k, [p]);
+    }
+  }
+  return idx;
+}
+
 /** Зсув Києва від UTC у хвилинах на мить `d` (літній +180, зимовий +120). */
 const kyivOffsetMin = (d: Date) => (Date.parse(d.toLocaleString("sv-SE", { timeZone: "Europe/Kyiv" }).replace(" ", "T") + "Z") - d.getTime()) / 60000;
 /** Київський час `day HH:MM` як мить UTC. */

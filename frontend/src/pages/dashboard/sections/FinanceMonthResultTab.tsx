@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { fetchMonthResult, setMonthResultOverride, downloadMonthResultXlsx, hiringError, type MonthResultData, type MRDeal, type MRManager } from "../../../api";
 
 /**
@@ -79,11 +79,20 @@ export function FinanceMonthResultTab({ ask, toast }: { ask: Ask; toast: Toast }
   const [blocks, setBlocks] = useState(readBlocks);
   const toggleBlock = (b: Block) => setBlocks((x) => { const n = { ...x, [b]: !x[b] }; try { localStorage.setItem(LS_BLOCKS, JSON.stringify(n)); } catch { /* приватне вікно */ } return n; });
 
+  const [pending, setPending] = useState(false);
+  const poll = useRef<number | undefined>(undefined);
   const load = useCallback((refresh = false) => {
+    window.clearTimeout(poll.current);
     setBusy(true);
-    fetchMonthResult(ym, refresh).then((d) => { setData(d); setErr(null); }).catch((e) => setErr(hiringError(e))).finally(() => setBusy(false));
+    fetchMonthResult(ym, refresh)
+      .then((d) => {
+        // Сервер ще рахує (перший розрахунок місяця довший за 20 с) — перепитуємо, поки не буде готово.
+        if ("pending" in d) { setPending(true); poll.current = window.setTimeout(() => load(false), 4000); return; }
+        setPending(false); setData(d); setErr(null); setBusy(false);
+      })
+      .catch((e) => { setPending(false); setErr(hiringError(e)); setBusy(false); });
   }, [ym]);
-  useEffect(() => { setData(null); setOpen(undefined); load(); }, [load]);
+  useEffect(() => { setData(null); setOpen(undefined); load(); return () => window.clearTimeout(poll.current); }, [load]);
 
   const excel = async () => {
     try {
@@ -112,7 +121,7 @@ export function FinanceMonthResultTab({ ask, toast }: { ask: Ask; toast: Toast }
   };
 
   if (err && !data) return <div className="chart-card"><b>Результат місяця</b> <span className="hr-muted">{err}</span></div>;
-  if (!data) return <p className="loading-text">Рахую {ymName(ym)} — тягну поля угод із Kommo…</p>;
+  if (!data) return <p className="loading-text">Рахую {ymName(ym)} — тягну поля угод із Kommo{pending ? " (перший розрахунок місяця — до хвилини)" : ""}…</p>;
 
   const link = (id: number) => <a href={`${data.kommoBase}/leads/detail/${id}`} target="_blank" rel="noreferrer">{id}</a>;
   const name = (id: number | null) => data.managers.find((m) => m.kommoUserId === id)?.name ?? (id == null ? "без відповідального" : `id ${id}`);
@@ -210,7 +219,7 @@ export function FinanceMonthResultTab({ ask, toast }: { ask: Ask; toast: Toast }
           <input type="checkbox" checked={onlyReview} onChange={(e) => setOnlyReview(e.target.checked)} /> лише на перевірці й з рішенням
         </label>
         <span style={{ fontSize: 12, color: MUTED, marginLeft: "auto" }}>пораховано {stamp(data.computedAt)}</span>
-        <button className="hr-btn" disabled={busy} onClick={() => load(true)}>{busy ? "Рахую…" : "↻ Оновити з Kommo"}</button>
+        <button className="hr-btn" disabled={busy} onClick={() => load(true)}>{busy ? (pending ? "Рахую… до хвилини" : "Рахую…") : "↻ Оновити з Kommo"}</button>
         <button className="hr-btn" onClick={() => void excel()}>⬇ Excel</button>
       </div>
 

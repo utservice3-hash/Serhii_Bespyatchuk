@@ -5957,8 +5957,9 @@ export interface MonthResultData {
   managers: MRManager[]; deals: MRDeal[];
   totals: { deals: number; result: number; review: { n: number; sum: number }; minus: { n: number; sum: number } };
 }
+/** 202 `{ pending }` — місяць ще рахується на сервері (перший розрахунок довший за 20 с), екран перепитує. */
 export const fetchMonthResult = async (m: string, refresh = false) =>
-  (await api.get<MonthResultData>("/finance/month-result", { params: refresh ? { m, refresh: 1 } : { m } })).data;
+  (await api.get<MonthResultData | { pending: true; month: string }>("/finance/month-result", { params: refresh ? { m, refresh: 1 } : { m } })).data;
 export const setMonthResultOverride = async (body: { kommoId: number; action: MRCheckOverride["action"] | null; targetMonth?: string; profit?: string; note?: string }) =>
   (await api.put<{ ok: boolean; months: string[] }>("/finance/month-result/override", body)).data;
 export async function downloadMonthResultXlsx(m: string): Promise<{ blob: Blob; filename: string }> {

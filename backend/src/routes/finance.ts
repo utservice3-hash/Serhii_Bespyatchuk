@@ -15,7 +15,7 @@ import { loadPlan, setManualPlan } from "../core/financePlan.js";
 import { opexFromApprovals } from "../core/paymentApprovals.js";
 import { runApprovalsSyncNow } from "../jobs/syncApprovals.js";
 import { setOverride } from "../core/monthResult.js";
-import { monthResult, monthResultXlsx, dropMonthResultCache } from "../jobs/monthResultData.js";
+import { monthResultOrPending, monthResultXlsx, dropMonthResultCache } from "../jobs/monthResultData.js";
 import { fmRefsFor } from "../core/financeKpiRefs.js";
 
 /**
@@ -163,13 +163,16 @@ financeRouter.post("/restore", async (req, res) => {
 financeRouter.get("/month-result", async (req, res) => {
   try {
     onlyFinance(req);
-    res.json({ ...(await monthResult(req.query.m, req.query.refresh === "1")), canEdit: roleHasPerm(req.auth!.roleKey, "edit_finance") });
+    const r = await monthResultOrPending(req.query.m, req.query.refresh === "1");
+    if ("pending" in r) { res.status(202).json(r); return; }
+    res.json({ ...r, canEdit: roleHasPerm(req.auth!.roleKey, "edit_finance") });
   } catch (e) { fail(res, e); }
 });
 financeRouter.get("/month-result/export.xlsx", async (req, res) => {
   try {
     onlyFinance(req);
-    const r = await monthResult(req.query.m);
+    const r = await monthResultOrPending(req.query.m);
+    if ("pending" in r) { res.status(409).json({ error: "Місяць ще рахується — спробуйте за хвилину" }); return; }
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("Content-Disposition", `attachment; filename="rezultat_${r.month.slice(0, 7)}.xlsx"`);
     res.send(monthResultXlsx(r));

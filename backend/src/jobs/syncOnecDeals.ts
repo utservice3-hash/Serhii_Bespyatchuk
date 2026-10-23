@@ -11,6 +11,7 @@ import { config } from "../config.js";
 import { parseInvoices, parsePayments } from "../core/dealLedger.js";
 import { replaceOnec, saveOnecError } from "../core/onecSync.js";
 import { jobSkip } from "./jobRuns.js";
+import { warmMonthResults } from "./monthResultData.js";
 import type { Db } from "../core/finance.js";
 
 const CEILING_MS = 15 * 60_000;
@@ -42,12 +43,16 @@ async function once(): Promise<{ invoices: number; payments: number }> {
 }
 
 /** Для крона: пропуск — це пропуск (`jobSkip`), а не успіх; обсяг — у підсумку. */
-export async function syncOnecDeals(): Promise<unknown> {
+export async function syncOnecDeals(opts: { warm?: boolean } = {}): Promise<unknown> {
   if (running && Date.now() - running < CEILING_MS) return jobSkip("1С по угодах: попередній синк ще йде");
   running = Date.now();
-  try { return await once(); } finally { running = null; }
+  try {
+    const out = await once();
+    if (opts.warm !== false) warmMonthResults(); // свіжа 1С — перерахувати «Результат місяця» у фоні, щоб екран відкривався одразу
+    return out;
+  } finally { running = null; }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  syncOnecDeals().then((r) => console.log("syncOnecDeals:", JSON.stringify(r))).catch((e) => { console.error(e); process.exitCode = 1; }).finally(() => pool.end());
+  syncOnecDeals({ warm: false }).then((r) => console.log("syncOnecDeals:", JSON.stringify(r))).catch((e) => { console.error(e); process.exitCode = 1; }).finally(() => pool.end());
 }
