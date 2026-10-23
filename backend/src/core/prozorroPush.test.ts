@@ -297,18 +297,25 @@ test("#2372 ПЕРЕВІРКА KOMMO: на місці — ok; бракує — �
 });
 
 /**
- * #2373 — ПІДТВЕРДЖЕННЯ: вкладка налаштувань отримує готовність (наступний збір, точка відліку, останній прохід, Kommo) у GET
- * і PUT; перед увімкненням бойового режиму — діалог «Увімкнути?», без згоди нічого не зберігається; блок «Що буде далі» —
- * з форми, тобто з незбереженими змінами.
- * 🧨 Червоніє, якщо прибрати готовність із відповіді, діалог чи `if (!yes) return`.
+ * #2374 — ПІДТВЕРДЖЕННЯ БУДЬ-ЯКОЇ ЗМІНИ РЕЖИМУ (Роман 23.10.2026: «коли змінюєш режим — вікно „ви дійсно впевнені“, так чи ні»):
+ * кнопки режиму не міняють стан напряму, а йдуть через `changeMode` → діалог «Ви дійсно хочете змінити режим…?» → лише після
+ * «Так» режим міняється й одразу зберігається; «Скасувати» — нічого. Текст є для КОЖНОГО з трьох режимів і каже, що
+ * зміниться. Вкладка отримує готовність у GET і PUT; «Що буде далі» — з форми.
+ * 🧨 Червоніє, якщо кнопка знову міняє режим без діалогу, зберігає без згоди, чи котрийсь режим лишиться без тексту.
  */
-test("#2373 ПІДТВЕРДЖЕННЯ: готовність у відповіді налаштувань; бойовий режим — лише після «Увімкнути»; «Що буде далі» з форми", () => {
+test("#2374 ПІДТВЕРДЖЕННЯ: будь-яка зміна режиму — через «Ви дійсно хочете…?», лише після «Так» змінюється й зберігається", () => {
   const routes = SRC("routes/prozorro.ts");
   assert.match(routes, /const kommoCheck = cachedKommoCheck\(kommoGet\);/, "🔴 перевірка Kommo без кешу");
   assert.match(routes, /readiness: await loadReadiness\(pool, kommoCheck\)/, "🔴 готовності немає у відповіді");
   assert.equal([...routes.matchAll(/res\.json\(await settingsView\(\)\);/g)].length, 2, "🔴 GET і PUT налаштувань віддають різне");
   const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "ProzorroSection.tsx"), "utf8");
-  assert.match(fe, /if \(c\.mode === "live" && view\.config\.mode !== "live"\) \{\n\s+const yes = await dialogs\.confirm\(\{ title: "Увімкнути бойовий режим\?"[\s\S]{0,700}?\n\s+if \(!yes\) return;\n\s+\}\n\s+setBusy\(true\)/,
-    "🔴 бойовий режим вмикається без підтвердження (або збереження йде й без згоди)");
+  assert.match(fe, /onClick=\{\(\) => void changeMode\(m\.key\)\}/, "🔴 кнопка режиму міняє стан без підтвердження");
+  assert.doesNotMatch(fe, /setC\(\{ \.\.\.c, mode: m\.key \}\)/, "🔴 повернулась пряма зміна режиму кнопкою");
+  assert.match(fe, /const yes = await dialogs\.confirm\(modeConfirm\(target, c, whoName, r\.nextRun\.time, changed\)\);\n\s+if \(!yes\) return;\n\s+const nextCfg = \{ \.\.\.c, mode: target \};\n\s+setC\(nextCfg\);\n\s+await save\(nextCfg\);/,
+    "🔴 режим змінюється чи зберігається без «Так»");
+  assert.match(fe, /title: `Ви дійсно хочете змінити режим на «\$\{label\}»\?`/, "🔴 питання не «Ви дійсно хочете…?»");
+  for (const [mode, phrase] of [["live", "підуть у Kommo"], ["dry", "більше НЕ йдуть у Kommo"], ["off", "нічого не шукаємо й нічого не пишемо в Kommo"]]) {
+    assert.ok(fe.includes(phrase), `🔴 немає пояснення для режиму ${mode}`);
+  }
   assert.match(fe, /const next = whatNext\(c, view\);/, "🔴 «Що буде далі» рахується не з форми");
 });

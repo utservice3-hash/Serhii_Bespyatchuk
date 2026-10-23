@@ -200,6 +200,22 @@ function Check({ state, title, text }: { state: "ok" | "wait" | "bad"; title: st
   );
 }
 
+/**
+ * Текст підтвердження зміни режиму (Роман 23.10.2026: «коли змінюєш режим — вікно „ви дійсно впевнені“, так чи ні»).
+ * Кожен перехід питає окремо й каже, ЩО зміниться; уже створених угод не чіпає жоден режим.
+ */
+export function modeConfirm(target: PzModeT, c: PzConfigT, whoName: string | null, time: string, otherChanges: boolean):
+  { title: string; text: string; okLabel: string; danger: boolean } {
+  const label = MODE_UI.find((m) => m.key === target)!.label;
+  const tail = otherChanges ? " Разом із режимом збережуться й інші зміни на цій вкладці." : "";
+  const text = target === "live"
+    ? `Щоранку о ${time} нові переможці тендерів від ${uahS(c.minAmount)} підуть у Kommo («Продзвін» → «Тендер AI») на ${whoName ?? "— лідоген не вибраний: у Kommo нічого не піде, доки його не виберете —"}, ${c.dailyLimit ? `не більше ${String(c.dailyLimit)} угод за ранок` : "без ліміту"}. Наявних угод, компаній і контактів у Kommo це не змінює.`
+    : target === "dry"
+      ? "Збір і статистика тривають, але нові переможці більше НЕ йдуть у Kommo. Уже створені угоди лишаються, як є."
+      : "Вранці нічого не шукаємо й нічого не пишемо в Kommo, статистика зупиниться. Уже створені угоди лишаються, як є.";
+  return { title: `Ви дійсно хочете змінити режим на «${label}»?`, text: text + tail, okLabel: "Так, змінити", danger: target === "off" };
+}
+
 function SettingsTab({ view, onSave }: { view: ProzorroSettingsResp; onSave: (c: PzConfigT) => Promise<void> }) {
   const dialogs = useDialogs();
   const [c, setC] = useState<PzConfigT>(view.config);
@@ -213,17 +229,20 @@ function SettingsTab({ view, onSave }: { view: ProzorroSettingsResp; onSave: (c:
   const r = view.readiness;
   const next = whatNext(c, view);
   const whoName = view.options.find((o) => o.id === c.responsibleManagerId)?.name ?? null;
-  const save = async () => {
-    // Підтвердження ЛИШЕ на увімкнення бойового режиму: це єдина зміна, після якої щось піде в CRM.
-    if (c.mode === "live" && view.config.mode !== "live") {
-      const yes = await dialogs.confirm({ title: "Увімкнути бойовий режим?", okLabel: "Увімкнути",
-        text: `Щоранку о ${r.nextRun.time} нові переможці тендерів від ${uahS(c.minAmount)} підуть у Kommo («Продзвін» → «Тендер AI») на ${whoName ?? "— лідоген не вибраний, нічого не піде —"}, ${c.dailyLimit ? `не більше ${String(c.dailyLimit)} угод за ранок` : "без ліміту"}. Наявних угод, компаній і контактів у Kommo це не змінює. Вимкнути можна тут же, будь-коли.` });
-      if (!yes) return;
-    }
+  const save = async (cfg: PzConfigT = c) => {
     setBusy(true); setMsg(null);
-    try { await onSave(c); setMsg({ ok: true, text: "Збережено. Діє з наступного ранкового збору (06:05)." }); }
+    try { await onSave(cfg); setMsg({ ok: true, text: "Збережено. Діє з наступного ранкового збору (06:05)." }); }
     catch (e) { setMsg({ ok: false, text: hiringError(e) }); }
     setBusy(false);
+  };
+  /** Зміна режиму — ЗАВЖДИ через «Ви дійсно хочете…?»; «Так» — режим змінено й одразу збережено, «Скасувати» — нічого. */
+  const changeMode = async (target: PzModeT) => {
+    if (target === c.mode) return;
+    const yes = await dialogs.confirm(modeConfirm(target, c, whoName, r.nextRun.time, changed));
+    if (!yes) return;
+    const nextCfg = { ...c, mode: target };
+    setC(nextCfg);
+    await save(nextCfg);
   };
   return (
     <div style={{ display: "grid", gap: 16 }}>
@@ -249,9 +268,9 @@ function SettingsTab({ view, onSave }: { view: ProzorroSettingsResp; onSave: (c:
         <div style={{ display: "grid", gap: 16 }}>
           <div style={field}>Режим
             <div className="cl-tabs" style={{ width: "fit-content" }}>
-              {MODE_UI.map((m) => <button key={m.key} type="button" className="cl-tab" aria-pressed={c.mode === m.key} onClick={() => setC({ ...c, mode: m.key })}>{m.label}</button>)}
+              {MODE_UI.map((m) => <button key={m.key} type="button" className="cl-tab" aria-pressed={c.mode === m.key} disabled={busy} onClick={() => void changeMode(m.key)}>{m.label}</button>)}
             </div>
-            <span style={hintS}>{MODE_UI.find((m) => m.key === c.mode)!.hint}</span>
+            <span style={hintS}>{MODE_UI.find((m) => m.key === c.mode)!.hint} Зміна режиму — лише після підтвердження і зберігається одразу.</span>
           </div>
           <label style={field}>Хто веде тендерні ліди
             <select value={c.responsibleManagerId ?? ""} onChange={(e) => setC({ ...c, responsibleManagerId: e.target.value ? Number(e.target.value) : null })} style={inp}>
