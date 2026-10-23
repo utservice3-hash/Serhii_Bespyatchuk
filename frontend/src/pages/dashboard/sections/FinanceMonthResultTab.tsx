@@ -90,13 +90,13 @@ export function FinanceMonthResultTab({ ask, toast }: { ask: Ask; toast: Toast }
       <thead><tr><th>Угода</th><th>Клієнт</th><th>Закрито</th><th style={{ textAlign: "right" }}>Бюджет</th><th style={{ textAlign: "right" }}>У результаті</th><th>Перевірити</th><th>Рішення</th>{data.canEdit && <th />}</tr></thead>
       <tbody>{dealsOf(m).map((d) => (
         <tr key={d.id} style={!d.included ? { color: MUTED } : d.checks.length ? { background: "rgba(217,119,6,0.06)" } : undefined}>
-          <td style={{ whiteSpace: "nowrap" }}>{link(d.id)}{d.reassigned && <div style={{ fontSize: 11, color: MUTED }} title="Відповідального змінили після закриття — угода рахується тому, хто закривав">зараз: {name(d.current)}</div>}</td>
-          <td>{d.client ?? d.name}{d.paymentType && <div style={{ fontSize: 11, color: MUTED }}>{d.paymentType}</div>}</td>
+          <td style={{ whiteSpace: "nowrap" }}>{link(d.id)}{d.reassigned && <div style={{ fontSize: 11, color: MUTED }} title="Відповідального змінили після закриття — угода рахується тому, хто закривав">зараз: {name(d.current).split(" ")[0]}</div>}</td>
+          <td style={{ minWidth: 200 }}>{d.client ?? d.name}{d.paymentType && <div style={{ fontSize: 11, color: MUTED }}>{d.paymentType}</div>}</td>
           <td style={{ whiteSpace: "nowrap" }}>{dmy(d.closedAt)}{d.closedMonth.slice(0, 7) !== ym && <div style={{ fontSize: 11, color: MUTED }}>з {ymName(d.closedMonth.slice(0, 7))}</div>}</td>
           <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{d.isMinus ? <span style={{ color: "#dc2626" }}>{money(d.price)}</span> : money(d.price)}</td>
           <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{d.included ? <b>{money(d.profit)}</b> : "—"}</td>
-          <td>{d.checks.length ? d.checks.map((c) => <div key={c} style={{ color: "#b45309" }}>{c}</div>) : <span style={{ color: MUTED }}>—</span>}</td>
-          <td>{d.override ? <><span style={pill("rgba(37,99,235,0.10)", "#2563eb")}>{overrideLabel(d)}</span><div style={{ fontSize: 11, color: MUTED }}>{d.override.note}{d.override.setBy ? ` — ${d.override.setBy}` : ""}</div></> : <span style={{ color: MUTED }}>—</span>}</td>
+          <td style={{ minWidth: 240 }}>{d.checks.length ? d.checks.map((c) => <div key={c} style={{ color: "#b45309" }}>{c}</div>) : <span style={{ color: MUTED }}>—</span>}</td>
+          <td style={{ minWidth: 160 }}>{d.override ? <><span style={pill("rgba(37,99,235,0.10)", "#2563eb")}>{overrideLabel(d)}</span><div style={{ fontSize: 11, color: MUTED }}>{d.override.note}{d.override.setBy ? ` — ${d.override.setBy}` : ""}</div></> : <span style={{ color: MUTED }}>—</span>}</td>
           {data.canEdit && <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
             <button className="hr-btn" onClick={() => decide(d)}>{d.override ? "Змінити" : "Рішення…"}</button>
             {d.override && <button className="hr-btn" style={{ marginLeft: 4 }} onClick={() => void undo(d)}>Повернути</button>}

@@ -192,5 +192,5 @@ test("#1282e ПРОВОДКА: межі роутів і матриця, AI за�
   assert.match(tab, /\{data\.canEdit && <td/, "🔴 кнопки рішень не за правом сервера");
   assert.match(tab, /downloadMonthResultXlsx\(ym\)/, "🔴 Excel не завантажується");
   assert.match(tab, /\$\{data\.kommoBase\}\/leads\/detail\/\$\{id\}/, "🔴 немає посилання на угоду в Kommo");
-  assert.match(tab, /зараз: \{name\(d\.current\)\}/, "🔴 перепризначену не позначено");
+  assert.match(tab, /зараз: \{name\(d\.current\)/, "🔴 перепризначену не позначено");
 });

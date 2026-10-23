@@ -49,8 +49,8 @@ export function checksOf(x: CheckInput): string[] {
   const cashIn = CASH.test(x.paymentType ?? ""), fx = FX.test(x.paymentType ?? "");
   if (fx) out.push("валютна угода — перевірити суму в гривні");
   if (!cashIn) {
-    if (!x.orderNo) out.push("немає рахунку («Номер заказа» порожній)");
-    if (!x.paid1c && !x.bankPaid) out.push("немає фактичного приходу (ні галочки «Оплачено из 1с», ні платежу у «Виписці»)");
+    if (!x.orderNo) out.push("немає рахунку — порожній «Номер заказа»");
+    if (!x.paid1c && !x.bankPaid) out.push("немає фактичного приходу — ні галочки 1С, ні платежу у «Виписці»");
   }
   if (x.cashExpense != null && x.cashExpense > 0) {
     if (x.requestsPaid > x.cashExpense + 1) out.push(`оплачено перевізнику більше за план: ${fmt(x.requestsPaid)} проти ${fmt(x.cashExpense)}`);
