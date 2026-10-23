@@ -6354,3 +6354,24 @@ CREATE TABLE IF NOT EXISTS prozorro_leads (
 );
 CREATE INDEX IF NOT EXISTS idx_prozorro_leads_created ON prozorro_leads (created_at);
 REVOKE ALL ON prozorro_tenders, prozorro_leads FROM ai_readonly;
+
+-- 🏛 PROZORRO-ЛІДИ, прохід 2 (запис у Kommo; рішення TOP Weekly 22.10.2026): лічильник спроб запису і вибір лідогена.
+--  · `push_attempts` — після `MAX_PUSH_ATTEMPTS` невдалих спроб рядок більше не пробуємо (причина — у `push_error`).
+--  · `prozorro_settings` — ОДИН рядок: хто веде тендерні ліди. Окремо від `app_settings`, бо `PUT /settings` переписує
+--    весь обʼєкт і мовчки стер би поле. Журнал змін «хто, коли, було → стало» — `prozorro_settings_log`.
+ALTER TABLE prozorro_leads ADD COLUMN IF NOT EXISTS push_attempts INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS prozorro_settings (
+  id                     INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  responsible_manager_id INTEGER REFERENCES managers(id),
+  set_by                 INTEGER REFERENCES users(id),
+  set_at                 TIMESTAMPTZ
+);
+INSERT INTO prozorro_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+CREATE TABLE IF NOT EXISTS prozorro_settings_log (
+  id              BIGSERIAL PRIMARY KEY,
+  old_manager_id  INTEGER,
+  new_manager_id  INTEGER,
+  set_by          INTEGER REFERENCES users(id),
+  set_by_name     TEXT,
+  set_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);

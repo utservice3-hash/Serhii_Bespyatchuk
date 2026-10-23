@@ -546,6 +546,24 @@ export async function fetchFirstTouchSettings(): Promise<FirstTouchSettingsResp>
   const { data } = await api.get<FirstTouchSettingsResp>("/settings/first-touch");
   return data;
 }
+/** 🏛 Prozorro-ліди (#5299): хто веде тендерні ліди + стан черги запису в Kommo. Лише адмін. */
+export interface ProzorroSettingsResp {
+  current: { managerId: number; name: string; active: boolean; hasKommo: boolean } | null;
+  options: { id: number; name: string; team: string }[];
+  queue: { waiting: number; exhausted: number; pushed: number; dryCollected: number };
+  history: { oldName: string | null; newName: string | null; setByName: string | null; setAt: string }[];
+  mode: "off" | "dry" | "live";
+  pushLimit: number;
+  minAmount: number;
+}
+export async function fetchProzorroSettings(): Promise<ProzorroSettingsResp> {
+  const { data } = await api.get<ProzorroSettingsResp>("/settings/prozorro");
+  return data;
+}
+export async function saveProzorroSettings(managerId: number | null): Promise<ProzorroSettingsResp> {
+  const { data } = await api.put<ProzorroSettingsResp>("/settings/prozorro", { managerId });
+  return data;
+}
 export async function saveFirstTouchSettings(t: FirstTouchTunablesT): Promise<Pick<FirstTouchSettingsResp, "current" | "history">> {
   const { data } = await api.put<Pick<FirstTouchSettingsResp, "current" | "history">>("/settings/first-touch", t);
   return data;

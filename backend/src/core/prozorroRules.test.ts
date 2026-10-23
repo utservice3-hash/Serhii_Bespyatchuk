@@ -223,19 +223,25 @@ test("#2356 КЛІЄНТ: повтор на 429/5xx і збій мережі, б
 });
 
 /**
- * #2357 — ПРОВОДКА: щодня о 06:05 за Києвом; під наглядом із частотою свого крону (мовчання = тривога); у проході 1
- * джоба НЕ має шляху запису в Kommo; звіт — у лог, НЕ в Telegram (рішення 23.10), і пишеться ДО падіння.
- * 🧨 Червоніє, якщо зняти джобу з нагляду, розвести частоти, прибрати київський пояс або підтягнути клієнт Kommo в джобу.
+ * #2367 — ПРОВОДКА (прохід 2): щодня о 06:05 за Києвом; під наглядом із частотою свого крону (мовчання = тривога);
+ * запис у Kommo — ЛИШЕ в бойовому режимі й лише рядків бойового режиму (зібране в пробному в CRM не йде ніколи); у самому
+ * зборі шляху в Kommo немає; звіт — у лог, НЕ в Telegram (рішення 23.10), і пишеться ДО падіння.
+ * 🧨 Червоніє, якщо зняти джобу з нагляду, розвести частоти, прибрати київський пояс, писати в Kommo поза «live», брати в
+ * чергу рядки пробного режиму, повернути Telegram або писати звіт після падіння.
  */
-test("#2357 ПРОВОДКА: 06:05 за Києвом, під наглядом раз на добу; у джобі немає запису в Kommo", async () => {
+test("#2367 ПРОВОДКА: 06:05 за Києвом, під наглядом раз на добу; запис у Kommo лише в бойовому режимі, звіт — у лог", async () => {
   const src = SRC("index.ts");
   assert.match(src, /cron\.schedule\("5 6 \* \* \*", \(\) => \{\n {2}void runJob\("prozorroLeads", \(\) => prozorroLeads\(\)\);\n\}, \{ timezone: "Europe\/Kyiv" \}\);/,
     "🔴 джоба не запускається щодня о 06:05 за Києвом");
   const { MONITORED_JOBS } = await import("../jobs/monitoredJobs.js");
   assert.equal(MONITORED_JOBS.find((j) => j.name === "prozorroLeads")?.everyMin, 1440, "🔴 збір не під наглядом або частота розійшлась із кроном");
-  const job = SRC("jobs/prozorroLeads.ts") + SRC("core/prozorroCollect.ts");
-  assert.doesNotMatch(job, /kommo\/client|kommoWrite/, "🔴 у пробному проході з'явився шлях запису в Kommo");
+  assert.doesNotMatch(SRC("core/prozorroCollect.ts"), /kommo\/client|kommoWrite/, "🔴 у самому зборі з'явився шлях запису в Kommo");
   const jobSrc = SRC("jobs/prozorroLeads.ts");
+  const calls = [...jobSrc.matchAll(/\bpushLeads\(/g)].length;
+  assert.equal(calls, 1, "🔴 запис у Kommo викликається не рівно в одному місці");
+  assert.match(jobSrc, /if \(mode === "live"\) \{\n(?:[^\n]*\n){1,5}?[^\n]*\bpushLeads\(/, "🔴 запис у Kommo не під умовою бойового режиму");
+  assert.match(jobSrc, /WHERE l\.mode = 'live' AND l\.kommo_lead_id IS NULL AND l\.push_attempts < \$1/,
+    "🔴 у чергу запису потрапляють рядки пробного режиму або вже записані");
   assert.doesNotMatch(jobSrc, /sendAdminAlert/, "🔴 звіт знову шлеться в Telegram — Роман 23.10: «без звіту в телеграм»");
   assert.match(jobSrc, /console\.log\(`prozorroLeads: [^\n]*\$\{text\}`\);\n {2}if \(!res\.verdict\.ok\) throw new Error\(res\.verdict\.error\);/,
     "🔴 звіт не пишеться в лог перед падінням — аварійний прохід лишиться без пояснення");
