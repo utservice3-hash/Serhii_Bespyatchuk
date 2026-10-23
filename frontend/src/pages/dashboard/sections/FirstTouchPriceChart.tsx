@@ -1,67 +1,70 @@
-import { useState } from "react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend } from "recharts";
-import { InfoHint } from "../widgets";
-import { priceConversionByManager, MATURE_DAYS, type PriceConvLine, type PriceConvPart, type ChecklistT } from "../aiCallsView";
+import { MIN_GROUP_CALLS, type PriceConvLine, type PriceConvPart } from "../aiCallsView";
 
 /**
- * 📊 «ЦІНА І РЕЗУЛЬТАТ ПО МЕНЕДЖЕРАХ» (задача 6439 п.3, Юля 20.10.2026). Рахує `priceConversionByManager` — тут лише вигляд.
- * Команда й місяць — ті самі, що в шапці екрана (рядки приходять уже відфільтрованими); «старші 7 днів» — свій перемикач.
+ * 📊 ВИГЛЯД «ГРАФІК» БЛОКУ «МЕНЕДЖЕРИ ЗА ЧЕК-ЛИСТОМ» (задача 6439 п.3; Роман 22.10.2026). Одне питання — чи допомагає
+ * названа ціна успіху: сіра точка — успіх без ціни, зелена — з ціною, на одній шкалі; лінія між ними зелена, коли з ціною
+ * вище, червона — коли нижче. Рахує `priceConversionByManager`; тут лише вигляд.
  */
-const SERIES: readonly { key: "priced" | "withPrice" | "withoutPrice"; label: string; color: string; hint: string }[] = [
-  { key: "priced", label: "Ціну назвали", color: "#2563eb", hint: "у скількох розмовах назвали ціну" },
-  { key: "withPrice", label: "Успіх, коли назвали ціну", color: "#16a34a", hint: "з розмов, де ціну назвали" },
-  { key: "withoutPrice", label: "Успіх, коли не назвали", color: "#9ca3af", hint: "з розмов, де ціну НЕ назвали" },
-];
 const partText = (p: PriceConvPart) => (p.pct == null ? "—" : `${String(p.pct)}% (${String(p.n)} з ${String(p.of)})`);
+const liftText = (l: PriceConvLine) => (l.liftPp == null ? "" : `${l.liftPp > 0 ? "+" : ""}${String(l.liftPp)} п.п.`);
+const liftTone = (l: PriceConvLine) => (l.liftPp == null || l.liftPp === 0 ? "" : l.liftPp > 0 ? " is-up" : " is-down");
 
-type Row = { inReport: boolean; managerId: number | null; managerName: string | null; dealCreatedAt: string;
-  checklist: ChecklistT | null; dealOutcome?: { state: string } | null };
+function note(l: PriceConvLine): string | null {
+  if (l.withPrice.of === 0) return "ціну не називав";
+  if (l.withoutPrice.of === 0) return "ціну називав завжди";
+  if (!l.enough) return `замало розмов: ${String(l.withPrice.of)} з ціною / ${String(l.withoutPrice.of)} без (треба від ${String(MIN_GROUP_CALLS)})`;
+  return null;
+}
 
-export function FirstTouchPriceChart({ rows, today }: { rows: readonly Row[]; today: string }) {
-  const [mature, setMature] = useState(true);
-  const { lines, total } = priceConversionByManager(rows, { matureOnly: mature, today });
-  const data = lines.map((l) => ({ name: `${l.name} · ${String(l.calls)}`, line: l,
-    priced: l.priced.pct, withPrice: l.withPrice.pct, withoutPrice: l.withoutPrice.pct }));
+function Row({ l, total, on, onPick }: { l: PriceConvLine; total?: boolean; on?: boolean; onPick?: () => void }) {
+  const a = l.withoutPrice.pct, b = l.withPrice.pct;
+  const lo = a != null && b != null ? Math.min(a, b) : null, hi = a != null && b != null ? Math.max(a, b) : null;
+  const n = note(l);
+  const title = `${l.name}: з ціною ${partText(l.withPrice)} · без ціни ${partText(l.withoutPrice)} · ціну назвали ${partText(l.priced)}`;
+  const name = (
+    <>{l.name} <span>· {l.calls}{l.priced.pct != null ? ` · ціна в ${String(l.priced.pct)}%` : ""}</span></>
+  );
   return (
-    <section aria-label="Ціна і результат по менеджерах" className="ftd-card ftd-card-pad">
-      <div className="ftd-card-h">
-        <h2>Ціна і результат по менеджерах
-          <InfoHint text="Розібрані розмови звіту за період і команду з шапки. Успіх — той самий, що в колонці «Успіх»: угода зараз в «Авто працює» або далі. «Не назвали» — лише розмови, де ціну могли назвати й не назвали; втрачені ліди й не запити сюди не входять." /></h2>
-        <label className="ftd-sub" style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
-          <input id="ftd-price-mature" type="checkbox" checked={mature} onChange={(e) => setMature(e.target.checked)} />
-          лише угоди, старші {MATURE_DAYS} днів
-        </label>
+    <div className={`ftd-db-row${total ? " is-total" : ""}${!total && !l.enough ? " is-weak" : ""}`} title={title}>
+      {onPick
+        ? <button type="button" className={`ftd-mgr-name${on ? " on" : ""}`} aria-pressed={on} onClick={onPick}>{name}</button>
+        : <div className="ftd-mgr-name is-static">{name}</div>}
+      <div className="ftd-db-track" aria-hidden="true">
+        {[25, 50, 75].map((t) => <i key={t} className="ftd-db-tick" style={{ left: `${String(t)}%` }} />)}
+        {lo != null && hi != null && <b className={`ftd-db-line${liftTone(l)}`} style={{ left: `${String(lo)}%`, width: `${String(hi - lo)}%` }} />}
+        {a != null && <em className="ftd-db-dot is-without" style={{ left: `${String(a)}%` }} />}
+        {b != null && <em className="ftd-db-dot is-with" style={{ left: `${String(b)}%` }} />}
       </div>
-      {total && (
-        <div className="ftd-sub">
-          Разом: ціну назвали {partText(total.priced)} · успіх з ціною {partText(total.withPrice)} · без ціни {partText(total.withoutPrice)}
+      <div className="ftd-db-val">
+        <span>{a == null ? "—" : `${String(a)}%`} → {b == null ? "—" : `${String(b)}%`}</span>
+        {n ? <span className="ftd-sub">{n}</span> : <b className={`ftd-db-lift${liftTone(l)}`}>{liftText(l)}</b>}
+      </div>
+    </div>
+  );
+}
+
+export function FirstTouchPriceChart({ lines, total, selectedId, onPick }: {
+  lines: readonly PriceConvLine[]; total: PriceConvLine | null; selectedId: number | null; onPick: (managerId: number | null) => void;
+}) {
+  if (!total) return <p className="ftd-sub" style={{ margin: 0 }}>Розібраних розмов у періоді ще немає.</p>;
+  const ratio = total.withPrice.pct && total.withoutPrice.pct ? total.withPrice.pct / total.withoutPrice.pct : null;
+  return (
+    <div className="ftd-db">
+      <div className="ftd-db-legend">
+        <span><em className="ftd-db-dot is-without" /> успіх, коли ціну НЕ назвали</span>
+        <span><em className="ftd-db-dot is-with" /> успіх, коли ціну назвали</span>
+        <span className="ftd-sub">успіх — угода в «Авто працює» або далі · наведіть на рядок — «N з M»</span>
+      </div>
+      <div className="ftd-db-head"><span /><div className="ftd-db-axis">{[0, 25, 50, 75, 100].map((t) => <span key={t} style={{ left: `${String(t)}%` }}>{t}%</span>)}</div><span /></div>
+      <Row l={total} total />
+      {ratio != null && total.enough && (
+        <div className="ftd-sub ftd-db-verdict">
+          {ratio >= 1.05 ? `З названою ціною машина їде в ${ratio.toFixed(1).replace(".", ",")} раза частіше.`
+            : ratio <= 0.95 ? "З названою ціною успіх НИЖЧИЙ, ніж без неї." : "Названа ціна на успіх майже не впливає."}
         </div>
       )}
-      {lines.length === 0
-        ? <p className="ftd-sub" style={{ margin: 0 }}>{mature ? `Розібраних розмов по угодах, старших ${String(MATURE_DAYS)} днів, у періоді немає — зніміть позначку, щоб побачити свіжі.` : "Розібраних розмов у періоді ще немає."}</p>
-        : (
-          <div style={{ width: "100%", height: 56 + lines.length * 44 }}>
-            <ResponsiveContainer>
-              <BarChart data={data} layout="vertical" margin={{ top: 4, right: 24, left: 8, bottom: 4 }} barGap={1} barCategoryGap={8}>
-                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="var(--border)" />
-                <XAxis type="number" domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v) => `${String(v)}%`}
-                  tick={{ fontSize: 11, fill: "var(--text-muted)" }} />
-                <YAxis type="category" dataKey="name" width={190} tick={{ fontSize: 12, fill: "var(--text)" }} />
-                <Tooltip cursor={{ fill: "var(--bg)" }} content={({ active, payload }) => {
-                  const l = active ? (payload?.[0]?.payload as { line?: PriceConvLine } | undefined)?.line : undefined;
-                  if (!l) return null;
-                  return (
-                    <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px", fontSize: 12 }}>
-                      <div style={{ fontWeight: 700, marginBottom: 4 }}>{l.name} · {l.calls} розмов</div>
-                      {SERIES.map((s) => <div key={s.key}><span style={{ color: s.color }}>■</span> {s.label}: {partText(l[s.key])}</div>)}
-                    </div>);
-                }} />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                {SERIES.map((s) => <Bar key={s.key} dataKey={s.key} name={s.label} fill={s.color} radius={[0, 3, 3, 0]} isAnimationActive={false} />)}
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-    </section>
+      {lines.map((l) => <Row key={String(l.managerId)} l={l} on={selectedId === l.managerId}
+        onPick={() => onPick(selectedId === l.managerId ? null : l.managerId)} />)}
+    </div>
   );
 }

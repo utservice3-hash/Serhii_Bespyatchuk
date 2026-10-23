@@ -3,7 +3,7 @@ import { useDialogs } from "../../../components/Dialogs";
 import { useToast } from "../../../components/Toasts";
 import {
   fetchSettings, saveSettings, type AppSettings,
-  fetchUsers, createUser, provisionUsers, resetUserPassword, updateUser, reactivateUser, type DashboardUser,
+  fetchUsers, fetchUsersWithCards, createUser, provisionUsers, resetUserPassword, updateUser, reactivateUser, type DashboardUser, type FreeCard,
   fetchRoles, createRole, updateRole, deleteRole, type RoleDef,
   fetchAudit, type AuditEntry,
   type Team, type SyncStatus, setWorkState,
@@ -402,27 +402,47 @@ function GeneralTab({ syncStatus, syncing, onManualSync, canSync }: { syncStatus
 }
 
 // ─────────────────────────── Користувачі ───────────────────────────
+/** 🔗 Підписи джерела акаунта (#2270). */
+const SOURCE_LABEL: Record<NonNullable<DashboardUser["source"]>, string> = { kommo: "Kommo", hiring: "Найм", manual: "вручну", candidate: "кандидат" };
+
 function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
   const dlg = useDialogs();
   const toast = useToast();
   const [users, setUsers] = useState<DashboardUser[]>([]);
   const [roles, setRoles] = useState<RoleDef[]>([]);
   const [issued, setIssued] = useState<Record<number, string>>({}); // показаний-раз пароль (reset)
-  const [nf, setNf] = useState({ fullName: "", email: "", password: "", role: "manager", teamId: "" as number | "" });
+  const [nf, setNf] = useState({ fullName: "", email: "", password: "", role: "manager", teamId: "" as number | "", employeeId: "" as number | "" });
+  // 🔗 Картки без акаунта (#2271) і кандидати, сховані за замовчуванням (#2273, рішення Романа 22.10: ними керує Найм).
+  const [freeCards, setFreeCards] = useState<FreeCard[]>([]);
+  const [showCand, setShowCand] = useState(false);
   const [newCreds, setNewCreds] = useState<string | null>(null);
   const [provMsg, setProvMsg] = useState<string | null>(null);
   const [editName, setEditName] = useState<{ id: number; value: string } | null>(null); // інлайн-перейменування (лише не-CRM)
 
-  const reload = () => fetchUsers(false).then(setUsers).catch(() => setUsers([]));
+  const reload = () => fetchUsersWithCards(false).then((r) => { setUsers(r.users); setFreeCards(r.freeCards); }).catch(() => setUsers([]));
   useEffect(() => { reload(); fetchRoles().then(setRoles).catch(() => setRoles([])); }, []);
+  const candidates = users.filter((u) => u.source === "candidate").length;
+  const shown = users.filter((u) => showCand || u.source !== "candidate");
+  /** Картки для вибору: спершу ті, чиє прізвище є в імені акаунта, — щоб людина була вгорі списку. */
+  const cardsFor = (u: DashboardUser) => {
+    const nm = (u.name ?? u.email).toLowerCase();
+    return [...freeCards].sort((a, b) => Number(!nm.includes(a.full_name.split(" ")[0].toLowerCase())) - Number(!nm.includes(b.full_name.split(" ")[0].toLowerCase())));
+  };
+  const linkCard = async (u: DashboardUser, employeeId: number | null) => {
+    if (employeeId === null && !(await dlg.confirm(`Відвʼязати ${u.name ?? u.email} від картки «${u.card_name}»?\n\nКартка лишиться в «Співробітниках» без акаунта; привʼязати знову можна тут же.`))) return;
+    setBusy(u.id);
+    try { await updateUser(u.id, { employeeId }); toast(employeeId === null ? "Відвʼязано від картки" : "Привʼязано до картки"); await reload(); }
+    catch (e) { toast(err(e), { error: true }); }
+    finally { setBusy(null); }
+  };
   const roleName = (key: string) => roles.find((r) => r.key === key)?.name ?? key;
 
   const create = async () => {
     if (!nf.email.trim()) return;
     try {
-      const res = await createUser({ email: nf.email.trim(), password: nf.password || undefined, role: nf.role, teamId: nf.teamId || undefined, fullName: nf.fullName.trim() || undefined });
+      const res = await createUser({ email: nf.email.trim(), password: nf.password || undefined, role: nf.role, teamId: nf.teamId || undefined, fullName: nf.fullName.trim() || undefined, employeeId: nf.employeeId || undefined });
       setNewCreds(`${res.email} · ${res.password}`);
-      setNf({ fullName: "", email: "", password: "", role: "manager", teamId: "" });
+      setNf({ fullName: "", email: "", password: "", role: "manager", teamId: "", employeeId: "" });
       await reload();
     } catch (e) { setNewCreds("✗ " + err(e)); }
   };
@@ -487,12 +507,14 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
       {provMsg && <div style={{ color: "#16a34a", fontSize: 13, marginTop: 6 }}>{provMsg}</div>}
 
       {/* Ручне заведення (окремо від CRM-синку) */}
-      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.4fr 1fr 1fr 1fr auto", gap: 10, alignItems: "end", margin: "14px 0", padding: 14, border: "1px solid var(--border)", borderRadius: 12, background: "var(--hover-bg, rgba(127,127,127,0.04))" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.4fr 1fr 1fr 1fr 1.3fr auto", gap: 10, alignItems: "end", margin: "14px 0", padding: 14, border: "1px solid var(--border)", borderRadius: 12, background: "var(--hover-bg, rgba(127,127,127,0.04))" }}>
         <L label="ПІБ"><input value={nf.fullName} onChange={(e) => setNf({ ...nf, fullName: e.target.value })} placeholder="Прізвище Ім'я По батькові" style={inp} /></L>
         <L label="E-MAIL (ЛОГІН)"><input value={nf.email} onChange={(e) => setNf({ ...nf, email: e.target.value })} placeholder="user@gmail.com" style={inp} /></L>
         <L label="ПАРОЛЬ"><input value={nf.password} onChange={(e) => setNf({ ...nf, password: e.target.value })} placeholder="авто, якщо порожньо" style={inp} /></L>
         <L label="РОЛЬ"><select value={nf.role} onChange={(e) => setNf({ ...nf, role: e.target.value })} style={inp}>{roles.map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}</select></L>
         <L label="КОМАНДА"><select value={nf.teamId} onChange={(e) => setNf({ ...nf, teamId: e.target.value ? Number(e.target.value) : "" })} style={inp}><option value="">Без команди</option>{teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></L>
+        <L label="КАРТКА"><select value={nf.employeeId} onChange={(e) => setNf({ ...nf, employeeId: e.target.value ? Number(e.target.value) : "" })} style={inp} title="Людина з «Співробітників», якій створюєте вхід">
+          <option value="">Без картки</option>{freeCards.map((c) => <option key={c.id} value={c.id}>{c.full_name}{c.status === "dismissed" ? " (звільнений)" : ""}</option>)}</select></L>
         <button onClick={create} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: RED, color: "#fff", fontWeight: 700, cursor: "pointer" }}>+ Створити</button>
       </div>
       {newCreds && <OneTimeCred text={newCreds} onClose={() => setNewCreds(null)} />}
@@ -500,11 +522,16 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
       {/* ↔ Широка таблиця (9 колонок) — у власному горизонтальному скролі: на великому масштабі (05.10.2026, скрін Романа)
           вона вилазила за картку, кнопки праворуч зрізались, а заголовки злипались. Скрол — у контейнері, а не
           на сторінці: решта Налаштувань лишається на місці. Тримає #1369. */}
+      {candidates > 0 && (
+        <label style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 13, color: "var(--text-muted)", margin: "0 0 8px" }}>
+          <input type="checkbox" checked={showCand} onChange={(e) => setShowCand(e.target.checked)} /> показати кандидатів ({candidates}) — ними керує Найм
+        </label>
+      )}
       <div className="settings-users-scroll" style={{ overflowX: "auto", maxWidth: "100%" }}>
-      <table className="data-table" style={{ minWidth: 980 }}>
-        <thead><tr><th style={TH}>ПІБ</th><th style={TH}>E-MAIL</th><th style={TH}>КОМАНДА</th><th style={TH}>РОЛЬ</th><th style={TH}>ПАРОЛЬ</th><th style={TH}>АКТИВНИЙ</th><th style={TH} title="Звільнений не заходить у дашборд і не отримує нової роботи, але його результат лишається в сумах команди й компанії.">СТАН</th><th style={TH} title="Дозвіл трекеру часу збирати дані з машини цієї людини. Знімається так само просто, як ставиться.">⏱ Трекер</th><th style={TH} title="Менеджеру відкрити пул нічийних клієнтів: бачить пул із телефонами й бере клієнта лише собі. Керівникам пул відкритий і без цього. Вкладка зʼявиться після нового входу.">🧭 Пул</th><th style={TH}></th></tr></thead>
+      <table className="data-table" style={{ minWidth: 1220 }}>
+        <thead><tr><th style={TH}>ПІБ</th><th style={TH}>E-MAIL</th><th style={TH} title="Звідки акаунт: синк Kommo, Найм чи створено вручну">ДЖЕРЕЛО</th><th style={TH} title="Людина в «Співробітниках», до якої привʼязано акаунт">КАРТКА</th><th style={TH}>КОМАНДА</th><th style={TH}>РОЛЬ</th><th style={TH}>ПАРОЛЬ</th><th style={TH}>АКТИВНИЙ</th><th style={TH} title="Звільнений не заходить у дашборд і не отримує нової роботи, але його результат лишається в сумах команди й компанії.">СТАН</th><th style={TH} title="Дозвіл трекеру часу збирати дані з машини цієї людини. Знімається так само просто, як ставиться.">⏱ Трекер</th><th style={TH} title="Менеджеру відкрити пул нічийних клієнтів: бачить пул із телефонами й бере клієнта лише собі. Керівникам пул відкритий і без цього. Вкладка зʼявиться після нового входу.">🧭 Пул</th><th style={TH}></th></tr></thead>
         <tbody>
-          {users.map((u) => (
+          {shown.map((u) => (
             <tr key={u.id}>
               <td>
                 {editName?.id === u.id ? (
@@ -525,6 +552,19 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
                 )}
               </td>
               <td>{u.email}</td>
+              <td style={{ whiteSpace: "nowrap" }}>{SOURCE_LABEL[u.source ?? "manual"]}</td>
+              {/* 🔗 Картка (#2271): є — імʼя і «Відвʼязати»; немає — сказати словом і дати привʼязати (невідоме — видиме). */}
+              <td style={{ whiteSpace: "nowrap" }}>
+                {u.card_id
+                  ? <>{u.card_name} <button onClick={() => linkCard(u, null)} disabled={busy === u.id} title="Відвʼязати від картки" style={{ ...btn, color: "var(--text-muted)" }}>✕</button></>
+                  : u.source === "candidate"
+                    ? <span style={{ color: "var(--text-muted)", fontSize: 12 }}>у Наймі</span>
+                    : <select value="" disabled={busy === u.id || freeCards.length === 0} onChange={(e) => { if (e.target.value) void linkCard(u, Number(e.target.value)); }}
+                        style={{ borderRadius: 8, padding: "3px 8px", fontSize: 12.5, border: "1px solid #f59e0b", background: "var(--card-bg)", color: "var(--text)" }}>
+                        <option value="">немає картки — привʼязати…</option>
+                        {cardsFor(u).map((c) => <option key={c.id} value={c.id}>{c.full_name}{c.status === "dismissed" ? " (звільнений)" : ""}</option>)}
+                      </select>}
+              </td>
               <td>{u.team_name ?? "—"}</td>
               <td>
                 <select value={u.role_override ?? "__synced__"} onChange={(e) => setOverride(u, e.target.value)}
@@ -731,6 +771,10 @@ function ArchiveTab() {
   const [users, setUsers] = useState<DashboardUser[]>([]);
   const reload = () => fetchUsers(true).then(setUsers).catch(() => setUsers([]));
   useEffect(() => { reload(); }, []);
+  // 🔗 Кандидати сховані й тут (#2273): їхні вимкнені акаунти — справа Найму, а не архів працівників.
+  const [showCand, setShowCand] = useState(false);
+  const candidates = users.filter((u) => u.source === "candidate").length;
+  const shown = users.filter((u) => showCand || u.source !== "candidate");
   const restore = async (id: number) => { try { await reactivateUser(id); await reload(); } catch (e) { toast(err(e), { error: true }); } };
   return (
     <div className="chart-card">
@@ -738,17 +782,22 @@ function ArchiveTab() {
       <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 0 }}>
         Ручних користувачів можна відновити кнопкою. <b>CRM-менеджери</b> відновлюються лише поверненням у CRM — синк активує їх автоматично (кнопки немає навмисно).
       </p>
-      {users.length === 0 ? <p className="loading-text">Порожньо.</p> : (
+      {candidates > 0 && (
+        <label style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 13, color: "var(--text-muted)", margin: "0 0 8px" }}>
+          <input type="checkbox" checked={showCand} onChange={(e) => setShowCand(e.target.checked)} /> показати кандидатів ({candidates}) — ними керує Найм
+        </label>
+      )}
+      {shown.length === 0 ? <p className="loading-text">Порожньо.</p> : (
         <table className="data-table">
           <thead><tr><th>ПІБ</th><th>E-MAIL</th><th>ПРИЧИНА</th><th>КОЛИ</th><th>ДЖЕРЕЛО</th><th></th></tr></thead>
           <tbody>
-            {users.map((u) => (
+            {shown.map((u) => (
               <tr key={u.id}>
                 <td>{u.name ?? "—"}</td>
                 <td>{u.email}</td>
                 <td>{u.deactivated_reason ?? (u.crm_linked ? "зник із CRM" : "—")}</td>
                 <td>{u.deactivated_at ? new Date(u.deactivated_at).toLocaleString("uk-UA") : "—"}</td>
-                <td>{u.crm_linked ? <CrmBadge /> : "ручний"}</td>
+                <td>{u.crm_linked ? <CrmBadge /> : SOURCE_LABEL[u.source ?? "manual"]}</td>
                 {/* 🔴 КНОПКА Є ДЛЯ ВСІХ, включно з CRM-менеджерами (рішення власника
                     06.08.2026). Раніше тут стояв напис «через CRM» — і він БРЕХАВ:
                     `syncKommo` таблицю `users` не чіпає взагалі, тож деактивований

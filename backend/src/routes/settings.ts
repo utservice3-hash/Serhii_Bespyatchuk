@@ -17,6 +17,8 @@ import { parseKey } from "../core/secretBox.js";
 import { storeDashboardPassword } from "../core/teamVault.js";
 import { recordTeamMove, refreshTeamMoves, redateLastTeamMove } from "../core/teamAt.js";
 import type { Db as SecretsDb } from "../core/secrets.js";
+import { USER_SOURCE_SQL, cardsWithoutAccount, linkUserCard } from "../core/employeeAdd.js";
+import { ImportError } from "../core/employeeImport.js";
 import { loadTunables, parseTunables, saveTunables, tunablesHistory, RECOMMENDED, TUNABLE_BOUNDS } from "../core/firstTouchTunables.js";
 
 export const settingsRouter = Router();
@@ -261,8 +263,11 @@ settingsRouter.get("/users", async (req, res) => {
                ⚠️ Зворотних лапок тут бути НЕ МОЖЕ: коментар усередині шаблонного рядка,
                і будь-яка з них обриває його — TS1005 на цьому вже ловив двічі. */
             u.manager_id, mws.state AS work_state,
-            t.name AS team_name
+            t.name AS team_name,
+            ${USER_SOURCE_SQL} AS source,
+            e.id AS card_id, e.full_name AS card_name
      FROM users u
+     LEFT JOIN employees e ON e.user_id = u.id
      LEFT JOIN managers m ON m.id = u.manager_id
      LEFT JOIN manager_work_state mws ON mws.manager_id = u.manager_id
      LEFT JOIN teams t ON t.id = u.team_id
@@ -270,7 +275,8 @@ settingsRouter.get("/users", async (req, res) => {
      ORDER BY COALESCE(u.role_override,u.role)='admin' DESC, t.name NULLS LAST, u.email`,
     [!archived]
   );
-  res.json({ users: result.rows });
+  // 🔗 Картки без акаунта — для «Привʼязати до картки» (#2270). Тим самим запитом екрана, щоб список не розійшовся.
+  res.json({ users: result.rows, freeCards: await cardsWithoutAccount(pool as unknown as SecretsDb) });
 });
 
 // Ручний користувач: ПІБ + email + пароль(опц.) + роль + команда. manager_id=NULL (не з CRM).
@@ -285,6 +291,13 @@ settingsRouter.post("/users", async (req, res) => {
   if (!getRoleDef(roleKey)) return res.status(400).json({ error: "Невідома роль" });
   const exists = await pool.query(`SELECT 1 FROM users WHERE email = $1`, [email]);
   if (exists.rowCount) return res.status(409).json({ error: "Користувач з таким e-mail вже існує" });
+  // 🔗 Картка одразу (#2272): перевіряємо ДО створення акаунта, щоб не лишити акаунт без картки на відмові.
+  const employeeId = req.body?.employeeId ? Number(req.body.employeeId) : null;
+  if (employeeId != null) {
+    const card = (await pool.query<{ user_id: number | null }>(`SELECT user_id FROM employees WHERE id = $1`, [employeeId])).rows[0];
+    if (!card) return res.status(404).json({ error: "Картку не знайдено" });
+    if (card.user_id != null) return res.status(409).json({ error: "Ця картка вже має акаунт" });
+  }
 
   const password = String(req.body?.password ?? "").trim() || generatePassword();
   const passwordHash = await bcrypt.hash(password, 10);
@@ -293,7 +306,8 @@ settingsRouter.post("/users", async (req, res) => {
      VALUES ($1, $2, 'manager', $3, $4, $5, true) RETURNING id`,
     [email, passwordHash, roleKey, teamId, fullName]
   );
-  await writeAudit({ ...audit(req), action: "user.create", targetType: "user", targetId: String(ins.rows[0].id), targetLabel: email, details: { role: roleKey, manual: true } });
+  await writeAudit({ ...audit(req), action: "user.create", targetType: "user", targetId: String(ins.rows[0].id), targetLabel: email, details: { role: roleKey, manual: true, employeeId } });
+  if (employeeId != null) await linkUserCard(pool as unknown as SecretsDb, req.auth!.userId, ins.rows[0].id, employeeId);
   res.json({ email, password }); // пароль повертаємо ОДИН раз
 });
 
@@ -460,6 +474,12 @@ settingsRouter.patch("/users/:id", async (req, res) => {
   );
   if (!cur.rows[0]) return res.status(404).json({ error: "Користувача не знайдено" });
   const c = cur.rows[0];
+
+  // 🔗 Привʼязати до картки / відвʼязати (#2271) — окрема дія, разом з іншими полями не їде.
+  if ("employeeId" in (req.body ?? {})) {
+    try { return res.json({ ok: true, ...(await linkUserCard(pool as unknown as SecretsDb, req.auth!.userId, id, req.body.employeeId)) }); }
+    catch (e) { if (e instanceof ImportError) return res.status(e.status).json({ error: e.message }); throw e; }
+  }
 
   // role_override: null (revert до синкнутої) або існуючий roles.key.
   let newOverride = c.role_override;

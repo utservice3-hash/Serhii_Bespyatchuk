@@ -49,7 +49,7 @@ export const FORBIDDEN_TABLES = [
   // 🧑‍💼 НАЙМ (17.09.2026): ПІБ, телефони й коментарі кандидатів — персональні дані людей,
   // які з нами ще навіть не працюють. Дзеркало — REVOKE у кінці `schema.sql`. Тримає #505.
   "hiring_candidates", "hiring_interviews", "hiring_events", "hiring_daily_manual",
-  "hiring_daily_override", "hiring_week_plans",
+  "hiring_daily_override", "hiring_week_plans", "hiring_week_override",
   // 🧑‍💼 Прохід 1a: скриншоти переписки з кандидатами. Дзеркало — REVOKE у схемі. Тримає #526.
   "hiring_files",
   // 💬 Фото до зворотного звʼязку (05.10.2026): скриншоти з чим завгодно з екрана. REVOKE у схемі. Тримає #496.

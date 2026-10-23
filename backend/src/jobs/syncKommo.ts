@@ -46,6 +46,7 @@ import { getSettings } from "../routes/settings.js";
 import { effectiveTeamId, type TeamOverride } from "../core/teamOverride.js";
 import { recordTeamMove, refreshTeamMoves } from "../core/teamAt.js";
 import { kyivToday } from "../core/dates.js";
+import { DEACTIVATE_MISSING_MANAGERS_SQL } from "../core/managerKeep.js";
 
 function toTimestamp(unixSeconds: number | null): Date | null {
   return unixSeconds ? new Date(unixSeconds * 1000) : null;
@@ -197,11 +198,8 @@ export async function syncManagers(): Promise<number> {
   if (teamMoved) await refreshTeamMoves(pool);
 
   const activeKommoIds = users.map((user) => user.id);
-  await pool.query(
-    `UPDATE managers SET is_active = false
-     WHERE kommo_user_id IS NOT NULL AND NOT (kommo_user_id = ANY($1))`,
-    [activeKommoIds]
-  );
+  // Кого немає в Kommo — вимикаємо, окрім записів «живе без CRM» (`core/managerKeep.ts`, КВП 22.10.2026).
+  await pool.query(DEACTIVATE_MISSING_MANAGERS_SQL, [activeKommoIds]);
 
   // Keep dashboard logins in sync with the CRM roster automatically.
   await provisionUsers();

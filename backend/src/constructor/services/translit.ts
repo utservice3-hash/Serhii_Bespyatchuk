@@ -59,3 +59,53 @@ export function translitParty(text: string): string {
 
 /** Чи є в тексті кирилиця (тоді є що перекладати). */
 export const hasCyrillic = (t: string) => /[А-Яа-яІіЇїЄєҐґ]/.test(t);
+
+/* ── Адреси (Роман 21.10.2026: «транслітерація + англійські скорочення») ──
+   Назви — транслітерацією, службові слова — як пишуть англійською: «с. Яхни, Київська обл., вул. Шевченка, 5» →
+   «Yakhny village, Kyiv region, Shevchenka str., 5». Області — їхніми англійськими назвами (Kyiv region, не Kyivska). */
+const OBLAST_EN: Record<string, string> = {
+  вінницька: 'Vinnytsia', волинська: 'Volyn', дніпропетровська: 'Dnipropetrovsk', донецька: 'Donetsk', житомирська: 'Zhytomyr',
+  закарпатська: 'Zakarpattia', запорізька: 'Zaporizhzhia', 'івано-франківська': 'Ivano-Frankivsk', київська: 'Kyiv',
+  кіровоградська: 'Kirovohrad', луганська: 'Luhansk', львівська: 'Lviv', миколаївська: 'Mykolaiv', одеська: 'Odesa',
+  полтавська: 'Poltava', рівненська: 'Rivne', сумська: 'Sumy', тернопільська: 'Ternopil', харківська: 'Kharkiv',
+  херсонська: 'Kherson', хмельницька: 'Khmelnytskyi', черкаська: 'Cherkasy', чернівецька: 'Chernivtsi', чернігівська: 'Chernihiv',
+};
+/** Префікс службового слова → [як писати англійською, де: перед назвою чи після]. */
+const ADDR_WORDS: Array<[RegExp, string, 'pre' | 'post' | 'drop']> = [
+  [/^(м\.|місто)\s*/i, '', 'drop'],
+  [/^(с\.|село)\s*/i, 'village', 'post'],
+  [/^(смт\.?|селище міського типу|сел\.|селище)\s*/i, 'settlement', 'post'],
+  [/^(вул\.|вулиця)\s*/i, 'str.', 'post'],
+  [/^(просп\.|проспект|пр-т)\s*/i, 'ave.', 'post'],
+  [/^(пров\.|провулок)\s*/i, 'lane', 'post'],
+  [/^(бульв\.|бульвар|б-р)\s*/i, 'blvd.', 'post'],
+  [/^(пл\.|площа)\s*/i, 'sq.', 'post'],
+  [/^(шосе)\s*/i, 'hwy', 'post'],
+  [/^(буд\.|будинок)\s*/i, 'bldg.', 'pre'],
+  [/^(оф\.|офіс)\s*/i, 'office', 'pre'],
+  [/^(кв\.|квартира)\s*/i, 'apt.', 'pre'],
+  [/^(корп\.|корпус)\s*/i, 'block', 'pre'],
+];
+function addrSegment(seg: string): string {
+  const t = seg.trim();
+  if (!t) return t;
+  if (/^україна$/i.test(t)) return 'Ukraine';
+  const obl = /^(.+?)\s+(обл\.?|область)$/i.exec(t) || /^(?:обл\.?|область)\s+(.+)$/i.exec(t);
+  if (obl) { const adj = obl[1].toLowerCase(); return `${OBLAST_EN[adj] ?? translit(obl[1])} region`; }
+  const dist = /^(.+?)\s+(р-н|район)$/i.exec(t);
+  if (dist) return `${translit(dist[1])} district`;
+  for (const [re, en, where] of ADDR_WORDS) {
+    const m = re.exec(t);
+    if (!m) continue;
+    const rest = t.slice(m[0].length);
+    if (where === 'drop') return translit(rest);
+    if (where === 'pre') return `${en} ${translit(rest)}`;
+    const num = /^(.+?)\s+(\d+[\p{L}\d/-]*)$/u.exec(rest);                       // «вул. Шевченка 5» → «Shevchenka str., 5»
+    return num ? `${translit(num[1])} ${en}, ${translit(num[2])}` : `${translit(rest)} ${en}`;
+  }
+  return translit(t);
+}
+/** Адреса англійською: по частинах між комами (і точками розвантаження « · »). */
+export function translitAddress(text: string): string {
+  return text.split(/\s*·\s*/).map((pt) => pt.split(',').map(addrSegment).filter((x, i, a) => x || i < a.length - 1).join(', ')).join(' · ');
+}

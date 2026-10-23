@@ -50,7 +50,6 @@ import { hiringRouter } from "./routes/hiring.js";
 import { baRouter } from "./routes/businessAssistant.js";
 import { financeRouter } from "./routes/finance.js";
 import { financePaymentsRouter } from "./routes/financePayments.js";
-import { financeApprovalsRouter } from "./routes/financeApprovals.js";
 import { constructorRouter } from "./routes/constructor.js";
 import { surveysRouter } from "./routes/surveys.js";
 import { cargoRouter } from "./routes/cargo.js";
@@ -185,7 +184,6 @@ app.use("/api/training", trainingRouter);
 app.use("/api/hiring", hiringRouter);
 app.use("/api/ba", baRouter); // 🗂 Бізнес-асистент: претензії й судовий реєстр (задача 4314)
 app.use("/api/finance/payments", financePaymentsRouter); // 💸 «Оплати перевізникам» (16.10.2026) — лише view_private_finance
-app.use("/api/finance/approvals-test", financeApprovalsRouter); // 🧪 «План/факт · авто (тест)» (20.10.2026) — лише view_private_finance, лише читання
 app.use("/api/finance", financeRouter); // 💰 Фінанси: план/факт витрат і статті (29.09.2026)
 app.use("/api/constructor", constructorRouter); // 📄 Конструктор документів — пакет Сергія (30.09.2026)
 app.use("/api/surveys", surveysRouter); // 📋 Опитування команди — пакет Сергія (30.09.2026)

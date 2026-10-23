@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  fetchHiringCandidates, fetchHiringCard, createHiringCandidate, patchHiringCandidate, addHiringComment, setHiringTeam, hiringError,
+  fetchHiringCandidates, fetchHiringCard, createHiringCandidate, patchHiringCandidate, addHiringComment, setHiringTeam, hiringError, hiringMergeOffer,
   setHiringCandidateVacancies, setHiringReserve, uploadHiringFile, deleteHiringFile, restoreHiringFile, fetchHiringFileBlobUrl,
-  type HiringMeta, type HiringCandidateRow, type HiringCard, type HiringStatus,
+  type HiringMeta, type HiringCandidateRow, type HiringCard, type HiringStatus, type HiringMergeOffer,
 } from "../../../api";
 import { dm, isClosedVacancy, todayKyiv } from "../hiringView";
-import { StatusDialog, StatusPill, RefusalDialog, type Toast } from "./HiringShared";
+import { StatusDialog, StatusPill, RefusalDialog, MergeDialog, type Toast } from "./HiringShared";
 import { TrainingAccessBlock } from "./HiringTraining";
 import { InterviewDialog } from "./HiringInterviewDialog";
 
@@ -212,7 +212,12 @@ export function CandidateDrawer({ meta, id, toast, onClose, onChanged, onMetaSta
     try { await fn(); if (ok) toast(ok); load(); onChanged(); }
     catch (e) { toast(hiringError(e), { error: true }); load(); }
   };
-  const save = (patch: Record<string, unknown>) => run(() => patchHiringCandidate(id, patch));
+  // 🔗 Пошта, яку вже має робочий акаунт Kommo тієї самої людини (#2260), — не помилка, а пропозиція «Обʼєднати».
+  const [merge, setMerge] = useState<HiringMergeOffer | null>(null);
+  const save = async (patch: Record<string, unknown>) => {
+    try { await patchHiringCandidate(id, patch); load(); onChanged(); }
+    catch (e) { const m = hiringMergeOffer(e); if (m) setMerge(m); else toast(hiringError(e), { error: true }); load(); }
+  };
   const label = (s: HiringStatus | null) => (s ? meta.statuses.find((x) => x.key === s)?.label ?? s : "—");
 
   const c = card?.candidate;
@@ -344,7 +349,7 @@ export function CandidateDrawer({ meta, id, toast, onClose, onChanged, onMetaSta
                   </div>)}
             </div>
 
-            <TrainingAccessBlock key={`${c.status}-${card.events.length}`} meta={meta} id={id} toast={toast} onChanged={() => { load(); onChanged(); }} />
+            <TrainingAccessBlock key={c.status} version={card.events.length} meta={meta} id={id} toast={toast} onChanged={() => { load(); onChanged(); }} />
 
             {(next.length > 0 || undo) && (
               <div className="hr-sect" style={{ padding: "14px 0 0", marginTop: 14 }}>
@@ -444,6 +449,8 @@ export function CandidateDrawer({ meta, id, toast, onClose, onChanged, onMetaSta
           <StatusDialog meta={meta} candidateId={id} from={c.status} to={to} teamId={c.team_id} email={c.email} toast={toast}
             onClose={() => setTo(null)} onDone={() => { setTo(null); load(); onChanged(); }} />
         )}
+        {merge && <MergeDialog offer={merge} candidateId={id} canMerge={edit} toast={toast}
+          onClose={() => setMerge(null)} onMerged={() => { setMerge(null); load(); onChanged(); }} />}
         {refusing && c && (
           <RefusalDialog meta={meta} candidateId={id} candidateName={c.full_name} from={c.status} toast={toast}
             onClose={() => setRefusing(false)} onDone={() => { setRefusing(false); load(); onChanged(); }}

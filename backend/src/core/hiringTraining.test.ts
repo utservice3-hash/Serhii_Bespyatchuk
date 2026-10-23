@@ -196,14 +196,16 @@ test("#533 ЖИВИЙ SQL: акаунт при «кандидат + команд
 });
 
 /**
- * #534 — ЖИВИЙ SQL «МЕНЕДЖЕРА» І ПИТАНЬ. 1 із 2 кроків — ні; 2 із 2 — роль акаунта «Менеджер», статус
- * «менеджер»; загальна зміна статусу в «менеджер» для картки з акаунтом — ні; повернення останньої зміни
- * повертає роль «Кандидат». HR рішення не приймає. Питання ставить лише кандидат, бачить лише свої;
- * відповідає тімлід своєї команди, один раз.
- * 🧨 Червоніє, якщо перевести з недопройденим курсом, лишити роль «Кандидат» у менеджера, пропустити
- * загальний перехід або показати кандидату чужі питання.
+ * #2231 — ЖИВИЙ SQL: «МЕНЕДЖЕР» ПІСЛЯ ВСІХ КРОКІВ — РОЛЬ ІЗ KOMMO, А НЕ ВРУЧНУ (замінив `#534`, 21.10.2026).
+ * «Менеджер» — лише тімлідом і лише після всіх кроків; загальна зміна статусу в «менеджер» для картки з акаунтом —
+ * ні. Kommo вже привʼязано до акаунта (HR вписала робочу пошту, синк узяв цей акаунт) — переведення знімає ручну
+ * роль «Кандидат»: діє роль із Kommo, акаунт активний, картка в «Співробітниках» отримує Kommo. Ручна «Менеджер»
+ * НЕ ставиться (вона перекрила б підвищення в Kommo до тімліда). Повернення останньої зміни повертає «Кандидат».
+ * HR рішення не приймає. Питання ставить лише кандидат, бачить лише свої; відповідає тімлід своєї команди, один раз.
+ * 🧨 Червоніє, якщо перевести з недопройденим курсом, лишити «Кандидат» при привʼязаному Kommo, поставити ручну
+ * «Менеджер», не дати картці Kommo, пропустити загальний перехід або показати кандидату чужі питання.
  */
-test("#534 ЖИВИЙ SQL: «менеджер» після всіх кроків міняє роль і скасовується; питання тімліду", async (t) => {
+test("#2231 ЖИВИЙ SQL: «менеджер» після всіх кроків — роль із Kommo, картка з Kommo, скасовується; питання тімліду", async (t) => {
   const s = await scratchDb(t); if (!s) return;
   const h = await import("./hiring.js");
   const tr = await import("./hiringTraining.js");
@@ -225,14 +227,21 @@ test("#534 ЖИВИЙ SQL: «менеджер» після всіх кроків
     await s.c.query("INSERT INTO training_progress (user_id, material_id, status, finished_at) VALUES ($1,$2,'done',now())", [uid, m2]);
     await assert.rejects(tr.promoteCandidate(s.db, null, id, "готова", false, "edit", null), code(403), "🔴 рекрутер вирішив замість тімліда");
     await assert.rejects(h.changeStatus(s.db, null, id, { to: "manager", comment: "в обхід" }, "lead", 1), code(409), "🔴 «менеджер» загальним переходом при акаунті навчання");
+
+    // Kommo вже привʼязано до ЦЬОГО акаунта — так робить синк, коли пошта кандидата = пошта в Kommo (#2232).
+    await s.c.query("INSERT INTO managers (id,name,team_id,is_active,kommo_user_id,email) VALUES (5301,'Гнатюк Анастасія',1,true,5301,'c0980000202@gmail.com')");
+    await s.c.query("UPDATE users SET role='manager', manager_id=5301 WHERE id=$1", [uid]);
+    assert.equal((await tr.trainingBoard(s.db, "edit", null)).find((x) => x.id === id)?.kommo_name, "Гнатюк Анастасія", "🔴 дошка не показує, що Kommo привʼязано");
     await tr.promoteCandidate(s.db, null, id, "готова до роботи", true, "lead", 1);
-    const mgr = (await s.c.query(`SELECT c.status, u.role_override, u.is_active FROM hiring_candidates c JOIN users u ON u.id=c.user_id WHERE c.id=$1`, [id])).rows[0];
-    assert.deepEqual([mgr.status, mgr.role_override, mgr.is_active], ["manager", "manager", true], "🔴 переведення не змінило роль акаунта");
+    const mgr = (await s.c.query(`SELECT c.status, u.role_override, COALESCE(u.role_override, u.role) AS eff, u.is_active FROM hiring_candidates c JOIN users u ON u.id=c.user_id WHERE c.id=$1`, [id])).rows[0];
+    assert.deepEqual([mgr.status, mgr.role_override, mgr.eff, mgr.is_active], ["manager", null, "manager", true], "🔴 переведення не зняло «Кандидат» або поставило ручну роль замість ролі з Kommo");
+    const card = (await s.c.query("SELECT user_id, manager_id FROM employees WHERE candidate_id=$1", [id])).rows[0];
+    assert.deepEqual([card?.user_id, card?.manager_id], [uid, 5301], "🔴 картка в «Співробітниках» не на цьому акаунті або без Kommo");
     assert.deepEqual(await tr.closeExpiredAccess(s.db, new Date(Date.now() + 30 * 24 * H)), { checked: 0, closed: 0 }, "🔴 джоба чіпає менеджера");
 
     await h.changeStatus(s.db, null, id, { to: "training", comment: "помилковий клік" }, "lead", 1);
     const undo = (await s.c.query(`SELECT c.status, u.role_override FROM hiring_candidates c JOIN users u ON u.id=c.user_id WHERE c.id=$1`, [id])).rows[0];
-    assert.deepEqual([undo.status, undo.role_override], ["training", "candidate"], "🔴 скасування «менеджера» лишило роль «Менеджер»");
+    assert.deepEqual([undo.status, undo.role_override], ["training", "candidate"], "🔴 скасування «менеджера» не повернуло роль «Кандидат»");
 
     // питання
     const other = await toCandidate(s.db, "Кушнір Олеся", "0930000203");
@@ -471,45 +480,302 @@ test("#1621 ЖИВИЙ SQL: пошта в картці міняє логін к�
 });
 
 /**
- * #1622 — ЖИВИЙ SQL: «ВИЙШОВ НА РОБОТУ» БЕЗ НАВЧАННЯ (варіант А, рішення Романа 12.10.2026). Лише HR/керівництво,
- * лише з «кандидат + команда» / «на навчанні», з коментарем. Результат: статус «менеджер», щоденний звіт рахує
- * «Вийшли на роботу», людина в реєстрі співробітників, акаунт кандидата ВИМКНЕНО (роль лишається «Кандидат»).
- * «Повернути останню зміну» повертає все; «Відновити доступ» менеджеру — 409; уже закритий доступ (48 год) —
- * лише причина стає «вийшов на роботу».
- * 🧨 Червоніє, якщо дати це тімліду, вимагати навчання, лишити акаунт кандидата активним або не рахувати у звіті.
+ * #2230 — ЖИВИЙ SQL: «ВИЙШОВ НА РОБОТУ» НЕ ВИМИКАЄ АКАУНТ (замінив `#1622`, алгоритм «один акаунт» 21.10.2026).
+ * Лише HR/керівництво, лише з «кандидат + команда» / «на навчанні», з коментарем. Статус «менеджер», щоденний звіт
+ * рахує «Вийшли на роботу», людина в реєстрі співробітників НА ЦЬОМУ Ж акаунті. Акаунт лишається активним:
+ * Kommo ще не привʼязано — роль «Кандидат» (менеджером людину зробить синк, `#2232`); уже привʼязано — роль із
+ * Kommo одразу, картка з Kommo. «Повернути останню зміну» повертає все, включно з роллю «Кандидат»; «Відновити
+ * доступ» менеджеру — 409; уже закритий доступ (48 год) — причина стає «вийшов на роботу», а вмикає вхід Kommo.
+ * 🧨 Червоніє, якщо дати це тімліду, вимагати навчання, ВИМКНУТИ акаунт, лишити «Кандидат» при привʼязаному Kommo,
+ * забути роль при поверненні або не рахувати у звіті.
  */
-test("#1622 ЖИВИЙ SQL: «Вийшов на роботу» — HR, статус «менеджер», звіт, реєстр, акаунт вимкнено, скасовно", async (t) => {
+test("#2230 ЖИВИЙ SQL: «Вийшов на роботу» — HR, статус «менеджер», звіт, реєстр, акаунт лишається, роль із Kommo, скасовно", async (t) => {
   const s = await scratchDb(t); if (!s) return;
   const h = await import("./hiring.js");
   const tr = await import("./hiringTraining.js");
   try {
     const id = await toCandidate(s.db, "Сичевський Павло", "0970001622");
+    const uid = (await s.c.query("SELECT user_id FROM hiring_candidates WHERE id=$1", [id])).rows[0].user_id as number;
     await assert.rejects(tr.markStartedWork(s.db, null, id, "вийшов", "lead"), code(403), "🔴 тімлід відмітив вихід на роботу");
     await assert.rejects(tr.markStartedWork(s.db, null, id, "  ", "edit"), code(400), "🔴 без коментаря");
     const early = await toLead(s.db, "Рано Ще", "0970001623", "rano@gmail.com");
     await assert.rejects(tr.markStartedWork(s.db, null, early, "вийшов", "edit"), code(409), "🔴 вихід на роботу з етапу «з тімлідом»");
 
+    // ① Kommo ще не привʼязано: акаунт живий, роль «Кандидат» — до синку.
     await tr.markStartedWork(s.db, null, id, "вийшов 06.10 у РПК", "edit");
     const r = (await s.c.query(`SELECT c.status, c.access_closed_reason, u.is_active, u.role_override FROM hiring_candidates c JOIN users u ON u.id=c.user_id WHERE c.id=$1`, [id])).rows[0];
-    assert.deepEqual([r.status, r.access_closed_reason, r.is_active, r.role_override], ["manager", "started", false, "candidate"], "🔴 не той стан після «вийшов на роботу»");
+    assert.deepEqual([r.status, r.access_closed_reason, r.is_active, r.role_override], ["manager", "started", true, "candidate"], "🔴 «вийшов на роботу» вимкнув акаунт або змінив роль без Kommo");
     const day = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
     assert.equal((await h.dailyReport(s.db, day, day))[0].toManager, 1, "🔴 «Вийшли на роботу» не порахувало");
-    assert.equal((await s.c.query("SELECT count(*)::int n FROM employees WHERE candidate_id=$1", [id])).rows[0].n, 1, "🔴 людини немає в реєстрі");
+    const card = (await s.c.query("SELECT user_id, manager_id FROM employees WHERE candidate_id=$1", [id])).rows;
+    assert.deepEqual(card.map((x) => [x.user_id, x.manager_id]), [[uid, null]], "🔴 людини немає в реєстрі або картка не на цьому акаунті");
     assert.equal((await tr.trainingBoard(s.db, "edit", null)).find((x) => x.id === id)?.health, "manager", "🔴 дошка не показує «став менеджером»");
-    await assert.rejects(tr.restoreAccess(s.db, null, id), code(409), "🔴 «Відновити доступ» увімкнув акаунт кандидата менеджеру");
+    await assert.rejects(tr.restoreAccess(s.db, null, id), code(409), "🔴 «Відновити доступ» спрацював для менеджера");
 
     await h.changeStatus(s.db, null, id, { to: "candidate", comment: "помилково" }, "edit", null);
-    const back = (await s.c.query(`SELECT c.status, c.access_closed_reason, u.is_active FROM hiring_candidates c JOIN users u ON u.id=c.user_id WHERE c.id=$1`, [id])).rows[0];
-    assert.deepEqual([back.status, back.access_closed_reason, back.is_active], ["candidate", null, true], "🔴 повернення не скасувало вихід на роботу");
+    const back = (await s.c.query(`SELECT c.status, c.access_closed_reason, u.is_active, u.role_override FROM hiring_candidates c JOIN users u ON u.id=c.user_id WHERE c.id=$1`, [id])).rows[0];
+    assert.deepEqual([back.status, back.access_closed_reason, back.is_active, back.role_override], ["candidate", null, true, "candidate"], "🔴 повернення не скасувало вихід на роботу");
     assert.equal((await s.c.query("SELECT count(*)::int n FROM employees WHERE candidate_id=$1", [id])).rows[0].n, 0, "🔴 повернення лишило людину в реєстрі");
 
-    // Доступ уже закрито «не зайшов за 48 год» (так 14 із 15 на проді) — вихід на роботу все одно відмічається.
+    // ② Kommo вже привʼязано (синк узяв акаунт за робочою поштою): одразу роль із Kommo і картка з Kommo.
+    await s.c.query("INSERT INTO managers (id,name,team_id,is_active,kommo_user_id,email) VALUES (5302,'Сичевський Павло',1,true,5302,'c0970001622@gmail.com')");
+    await s.c.query("UPDATE users SET role='manager', manager_id=5302 WHERE id=$1", [uid]);
+    await tr.markStartedWork(s.db, null, id, "вийшов знову", "edit");
+    const k = (await s.c.query(`SELECT u.is_active, u.role_override, COALESCE(u.role_override, u.role) AS eff, e.manager_id FROM hiring_candidates c JOIN users u ON u.id=c.user_id JOIN employees e ON e.candidate_id=c.id WHERE c.id=$1`, [id])).rows[0];
+    assert.deepEqual([k.is_active, k.role_override, k.eff, k.manager_id], [true, null, "manager", 5302], "🔴 при привʼязаному Kommo лишився «Кандидат» або картка без Kommo");
+    await h.changeStatus(s.db, null, id, { to: "candidate", comment: "помилково" }, "edit", null);
+    assert.equal((await s.c.query("SELECT role_override FROM users WHERE id=$1", [uid])).rows[0].role_override, "candidate", "🔴 повернення не відновило роль «Кандидат» після зняття");
+
+    // ③ Доступ уже закрито «не зайшов за 48 год» (так 14 із 15 на проді) — вихід на роботу все одно відмічається;
+    //    вхід лишається закритим, доки не привʼяжеться Kommo, — тоді активність бере з Kommo.
     const closed = await toCandidate(s.db, "Закритий Доступ", "0970001624");
+    const cuid = (await s.c.query("SELECT user_id FROM hiring_candidates WHERE id=$1", [closed])).rows[0].user_id as number;
     await tr.closeCandidateAccess(s.db, closed, "no_login", null);
     await tr.markStartedWork(s.db, null, closed, "вийшов", "edit");
-    const cl = (await s.c.query(`SELECT c.status, c.access_closed_reason, u.is_active FROM hiring_candidates c JOIN users u ON u.id=c.user_id WHERE c.id=$1`, [closed])).rows[0];
-    assert.deepEqual([cl.status, cl.access_closed_reason, cl.is_active], ["manager", "started", false]);
+    const cl = (await s.c.query(`SELECT c.status, c.access_closed_reason, u.is_active, u.role_override FROM hiring_candidates c JOIN users u ON u.id=c.user_id WHERE c.id=$1`, [closed])).rows[0];
+    assert.deepEqual([cl.status, cl.access_closed_reason, cl.is_active, cl.role_override], ["manager", "started", false, "candidate"]);
+    await s.c.query("INSERT INTO managers (id,name,team_id,is_active,kommo_user_id,email) VALUES (5303,'Закритий Доступ',1,true,5303,'c0970001624@gmail.com')");
+    await s.c.query("UPDATE users SET role='manager', manager_id=5303 WHERE id=$1", [cuid]);
+    assert.equal(await tr.settleHiredAccount(s.db, cuid, null), "settled");
+    const op = (await s.c.query("SELECT is_active, role_override FROM users WHERE id=$1", [cuid])).rows[0];
+    assert.deepEqual([op.is_active, op.role_override], [true, null], "🔴 привʼязаний Kommo не відкрив вхід людині, що вийшла на роботу");
   } finally { await s.done(); }
+});
+
+/**
+ * #2232 — ЖИВИЙ SQL: СИНК ЧІПЛЯЄ KOMMO ДО АКАУНТА КАНДИДАТА, А НЕ РОБИТЬ ДРУГИЙ (алгоритм «один акаунт», 21.10.2026).
+ * Ті самі кроки, що `provisionUsers`, і ТІ САМІ запити: пошук `PROVISION_LOOKUP_SQL`, оновлення через
+ * `isActiveAssignSql`, умова `syncShouldSettle`, потім `settleHiredAccount`. HR вписала кандидату робочу пошту —
+ * логін змінився — синк знаходить цей акаунт (пошта в Kommo іншим регістром). Того, хто ще вчиться, синк
+ * менеджером НЕ робить (дзеркало). Переведеного — робить: роль із Kommo (і тімлід — тімлідом), картка з Kommo.
+ * Чужу ручну роль (КВП) не чіпає. Із двох акаунтів бере вже прив'язаний до цього Kommo.
+ * 🧨 Червоніє, якщо шукати пошту з урахуванням регістру, знімати «Кандидат» без переведення, перезаписувати
+ * будь-яку ручну роль, прибрати порядок пошуку або не дати картці Kommo.
+ */
+test("#2232 ЖИВИЙ SQL: синк чіпляє Kommo до акаунта кандидата за робочою поштою; переведеного робить робочим, того, хто вчиться, — ні", async (t) => {
+  const s = await scratchDb(t); if (!s) return;
+  const h = await import("./hiring.js");
+  const tr = await import("./hiringTraining.js");
+  const { PROVISION_LOOKUP_SQL, isActiveAssignSql, syncShouldSettle } = await import("./provisionRules.js");
+  /** Один тік `provisionUsers` для одного менеджера — тими самими запитами. Повертає id акаунта або null. */
+  const tick = async (m: { id: number; email: string; team_lead?: boolean }) => {
+    const u = (await s.c.query(PROVISION_LOOKUP_SQL, [m.id, m.email])).rows[0] as { id: number; role_override: string | null; manager_id: number | null } | undefined;
+    if (!u) return null;
+    await s.c.query(`UPDATE users SET role = $1, team_id = $2, manager_id = $3, ${isActiveAssignSql("$4")} WHERE id = $5`,
+      [m.team_lead ? "team_lead" : "manager", 1, m.id, true, u.id]);
+    if (syncShouldSettle(u, m.id)) await tr.settleHiredAccount(s.db, u.id, null);
+    return u.id;
+  };
+  const kommo = (id: number, name: string, email: string, lead = false) => s.c.query(
+    "INSERT INTO managers (id,name,team_id,is_active,kommo_user_id,email,is_team_lead) VALUES ($1,$2,1,true,$5,$3,$4)", [id, name, email, lead, id]);
+  const acc = async (uid: number) => (await s.c.query("SELECT role_override, COALESCE(role_override, role) AS eff, manager_id, is_active FROM users WHERE id=$1", [uid])).rows[0];
+  try {
+    // ① Ще вчиться: Kommo привʼязується до ЦЬОГО акаунта, але менеджером людина не стає (дзеркало).
+    const learning = await toCandidate(s.db, "Вчиться Ще", "0970002232");
+    const luid = (await s.c.query("SELECT user_id FROM hiring_candidates WHERE id=$1", [learning])).rows[0].user_id as number;
+    await h.updateCandidateFields(s.db, null, learning, { email: "vsh@uts.ua" });
+    await kommo(5321, "Вчиться Ще", "VSH@uts.ua");
+    assert.equal(await tick({ id: 5321, email: "VSH@uts.ua" }), luid, "🔴 синк не знайшов акаунт кандидата за робочою поштою — зробив би другий");
+    const l = await acc(luid);
+    assert.deepEqual([l.manager_id, l.role_override], [5321, "candidate"], "🔴 синк зробив менеджером того, хто ще вчиться");
+
+    // ② Переведений, а Kommo привʼязався потім (порядок, як у 8 із 8 на проді, лише без другого акаунта):
+    //    тімлід у Kommo — тімлід у дашборді, картка отримує Kommo.
+    const hired = await toCandidate(s.db, "Вийшла Вже", "0970002233");
+    const huid = (await s.c.query("SELECT user_id FROM hiring_candidates WHERE id=$1", [hired])).rows[0].user_id as number;
+    await tr.markStartedWork(s.db, null, hired, "вийшла", "edit");
+    assert.equal((await acc(huid)).role_override, "candidate", "🔴 без Kommo роль змінилась");
+    await h.updateCandidateFields(s.db, null, hired, { email: "vv@uts.ua" });
+    await kommo(5322, "Вийшла Вже", "vv@uts.ua", true);
+    assert.equal(await tick({ id: 5322, email: "vv@uts.ua", team_lead: true }), huid);
+    const w = await acc(huid);
+    assert.deepEqual([w.role_override, w.eff, w.is_active], [null, "team_lead", true], "🔴 синк не зробив переведену людину робочою або роль не з Kommo");
+    assert.equal((await s.c.query("SELECT manager_id FROM employees WHERE user_id=$1", [huid])).rows[0]?.manager_id, 5322, "🔴 картка не отримала Kommo");
+    assert.equal(syncShouldSettle({ role_override: null, manager_id: 5322 }, 5322), false, "🔴 наступні тіки кликали б settle на кожного менеджера");
+
+    // ③ Чужа ручна роль: переведений, але адмін дав йому «КВП» — синк її не чіпає.
+    const kvp = await toCandidate(s.db, "Ручна Роль", "0970002234");
+    const kuid = (await s.c.query("SELECT user_id FROM hiring_candidates WHERE id=$1", [kvp])).rows[0].user_id as number;
+    await tr.markStartedWork(s.db, null, kvp, "вийшла", "edit");
+    await s.c.query("UPDATE users SET role_override='kvp' WHERE id=$1", [kuid]);
+    await kommo(5323, "Ручна Роль", "c0970002234@gmail.com");
+    await tick({ id: 5323, email: "c0970002234@gmail.com" });
+    assert.equal((await acc(kuid)).role_override, "kvp", "🔴 синк перезаписав ручну роль, видану адміном");
+
+    // ④ Два акаунти збігаються (з тією самою поштою — РАНІШЕ за id): береться прив'язаний до цього Kommo.
+    const byMail = (await s.c.query("INSERT INTO users (email, password_hash, role) VALUES ('dup@uts.ua','x','manager') RETURNING id")).rows[0].id as number;
+    await kommo(5324, "Дубль", "dup@uts.ua");
+    const linked = (await s.c.query("INSERT INTO users (email, password_hash, role, manager_id) VALUES ('other@uts.ua','x','manager',5324) RETURNING id")).rows[0].id as number;
+    assert.ok(byMail < linked, "фікстура: акаунт за поштою мусить бути ПЕРШИМ, інакше порядок нічого не доводить");
+    assert.equal(await tick({ id: 5324, email: "dup@uts.ua" }), linked, "🔴 синк узяв акаунт за поштою, хоча є прив'язаний до цього Kommo");
+  } finally { await s.done(); }
+});
+
+/**
+ * #2232b — ПРОВОДКА: `provisionUsers` справді шукає через `PROVISION_LOOKUP_SQL` і кличе `settleHiredAccount` за
+ * `syncShouldSettle` — `#2232` виконує ці частини окремо, і без проводки зелений `#2232` нічого не казав би про синк.
+ * 🧨 Червоніє, якщо повернути власний запит пошуку або прибрати виклик.
+ */
+test("#2232b provisionUsers шукає через PROVISION_LOOKUP_SQL і кличе settleHiredAccount", () => {
+  const src = SRC("db/userProvisioning.ts");
+  assert.match(src, /pool\.query<[^>]*>\(\s*PROVISION_LOOKUP_SQL\b(?!_), \[m\.id, m\.email\]/, "🔴 синк шукає акаунт не тим запитом, який перевіряє #2232");
+  assert.match(src, /if \(syncShouldSettle\(u, m\.id\)\) await settleHiredAccount\(pool, u\.id, null\);/, "🔴 синк не робить переведену людину робочою");
+  assert.doesNotMatch(src, /FROM users WHERE manager_id = \$1 OR email = \$2/, "🔴 повернувся старий пошук без регістру й без порядку");
+});
+
+/**
+ * Спільне для `#2260`–`#2262`: робочий акаунт, який синк завів за людиною з Kommo раніше, ніж HR вписала робочу пошту.
+ */
+async function workAccount(c: import("pg").Client, mgrId: number, kommoName: string, email: string, opts: { role?: string | null } = {}) {
+  await c.query("INSERT INTO managers (id,name,team_id,is_active,kommo_user_id,email) VALUES ($1,$2,1,true,$4,$3)", [mgrId, kommoName, email, mgrId]);
+  return (await c.query("INSERT INTO users (email, password_hash, role, role_override, manager_id, team_id, is_active) VALUES ($1,'x','manager',$2,$3,1,true) RETURNING id",
+    [email, opts.role ?? null, mgrId])).rows[0].id as number;
+}
+
+/**
+ * #2260 — ЖИВИЙ SQL: «ОБʼЄДНАТИ» ПЕРЕНОСИТЬ КАНДИДАТА НА РОБОЧИЙ АКАУНТ (прохід 2, рішення Романа 22.10.2026:
+ * «на робочий, без кнопки скасування»). HR вписує робочу пошту, яку вже має акаунт Kommo тієї самої людини →
+ * 409 з пропозицією, а не тиха помилка. «Обʼєднати» (лише HR): кандидат і картка — на робочому акаунті, картка
+ * з Kommo, прогрес навчання перенесено (крок, що робочий уже має, лишається його), кандидатський вимкнено,
+ * робочий — активний і менеджер, журнал має попередній стан. «Повернути» НЕ робить робочий акаунт кандидатським.
+ * 🧨 Червоніє, якщо обʼєднати в бік кандидатського, лишити картку на кандидатському, не перенести прогрес,
+ * перезаписати крок робочого, не вимкнути кандидатський, дати тімліду, не записати журнал або «Повернути»
+ * зробить робочий акаунт кандидатським.
+ */
+test("#2260 ЖИВИЙ SQL: «Обʼєднати» — кандидат і картка на робочому акаунті, прогрес перенесено, кандидатський вимкнено, лише HR", async (t) => {
+  const s = await scratchDb(t); if (!s) return;
+  const h = await import("./hiring.js");
+  const tr = await import("./hiringTraining.js");
+  try {
+    const course = (await s.c.query("INSERT INTO training_courses (title, audience, published) VALUES ('Старт','candidate',true) RETURNING id")).rows[0].id;
+    const mod = (await s.c.query("INSERT INTO training_folders (name, course_id) VALUES ('День 1', $1) RETURNING id", [course])).rows[0].id;
+    const [m1, m2] = (await s.c.query("INSERT INTO training_materials (folder_id, title, kind, position) VALUES ($1,'Крок 1','text',1),($1,'Крок 2','text',2) RETURNING id", [mod])).rows.map((r) => r.id as number);
+
+    const id = await toCandidate(s.db, "Гуназа Михайло", "0970002260");
+    const cand = (await s.c.query("SELECT user_id FROM hiring_candidates WHERE id=$1", [id])).rows[0].user_id as number;
+    await s.c.query("INSERT INTO training_progress (user_id, material_id, status, finished_at) VALUES ($1,$2,'done',now()),($1,$3,'done',now())", [cand, m1, m2]);
+    await tr.markStartedWork(s.db, null, id, "вийшов", "edit"); // старий порядок: картка на кандидатському
+    const work = await workAccount(s.c, 5401, "Гуназа Михайло Юрійович", "gmu@uts.ua");
+    await s.c.query("INSERT INTO training_progress (user_id, material_id, status) VALUES ($1,$2,'opened')", [work, m1]);
+
+    const e = await h.updateCandidateFields(s.db, null, id, { email: "GMU@uts.ua" }).then(() => null, (x) => x);
+    assert.equal(e?.status, 409, "🔴 зайнята робоча пошта не дала 409");
+    assert.deepEqual(e?.extra?.merge, { userId: work, login: "gmu@uts.ua", kommoName: "Гуназа Михайло Юрійович" }, "🔴 немає пропозиції «Обʼєднати» з робочим акаунтом");
+
+    await assert.rejects(tr.mergeCandidateIntoAccount(s.db, null, id, work, "lead"), code(403), "🔴 обʼєднав тімлід");
+    const r = await tr.mergeCandidateIntoAccount(s.db, null, id, work, "edit");
+    assert.equal(r.login, "gmu@uts.ua");
+    const hc = (await s.c.query("SELECT user_id, email FROM hiring_candidates WHERE id=$1", [id])).rows[0];
+    assert.deepEqual([hc.user_id, hc.email], [work, "gmu@uts.ua"], "🔴 кандидат не перейшов на робочий акаунт");
+    const old = (await s.c.query("SELECT is_active, deactivated_reason FROM users WHERE id=$1", [cand])).rows[0];
+    assert.equal(old.is_active, false, "🔴 кандидатський акаунт лишився активним");
+    assert.match(old.deactivated_reason, /обʼєднано з акаунтом Kommo gmu@uts\.ua/);
+    const w = (await s.c.query("SELECT is_active, role_override, COALESCE(role_override, role) AS eff FROM users WHERE id=$1", [work])).rows[0];
+    assert.deepEqual([w.is_active, w.role_override, w.eff], [true, null, "manager"], "🔴 робочий акаунт зіпсовано обʼєднанням");
+    const card = (await s.c.query("SELECT user_id, manager_id FROM employees WHERE candidate_id=$1", [id])).rows[0];
+    assert.deepEqual([card.user_id, card.manager_id], [work, 5401], "🔴 картка не на робочому акаунті або без Kommo");
+    const prog = (await s.c.query("SELECT user_id, material_id, status FROM training_progress")).rows
+      .map((x) => `${x.user_id === work ? "робочий" : "кандидатський"}·${x.material_id === m1 ? "крок1" : "крок2"}:${x.status}`).sort();
+    assert.deepEqual(prog, ["кандидатський·крок1:done", "робочий·крок1:opened", "робочий·крок2:done"],
+      "🔴 прогрес не перенесено або перезаписано крок, який робочий уже мав");
+    const audit = (await s.c.query("SELECT details FROM access_audit WHERE action='hiring.merge_account'")).rows;
+    assert.equal(audit.length, 1, "🔴 обʼєднання не записано в журнал");
+    assert.equal(audit[0].details.prev.candidateUserId, cand, "🔴 у журналі немає попереднього стану — відкотити буде нічим");
+
+    await h.changeStatus(s.db, null, id, { to: "candidate", comment: "помилково" }, "edit", null);
+    assert.equal((await s.c.query("SELECT role_override FROM users WHERE id=$1", [work])).rows[0].role_override, null,
+      "🔴 «Повернути» зробив робочий акаунт кандидатським");
+  } finally { await s.done(); }
+});
+
+/**
+ * #2261 — ДЗЕРКАЛО: «ОБʼЄДНАТИ» ЛИШЕ ОДНОЗНАЧНЕ. Пропозиції немає (звичайна 409 із причиною) і сам виклик — 409,
+ * коли в Kommo інше імʼя (помилка в пошті), коли в акаунта ручна роль (КВП), коли акаунт без Kommo, коли акаунт
+ * уже має картку в «Співробітниках». Контроль: та сама людина з правильним імʼям — пропозиція Є.
+ * 🧨 Червоніє, якщо прибрати будь-яку з чотирьох умов або зламати контроль.
+ */
+test("#2261 ЖИВИЙ SQL: «Обʼєднати» не пропонується при іншому імені, ручній ролі, без Kommo, з чужою карткою", async (t) => {
+  const s = await scratchDb(t); if (!s) return;
+  const h = await import("./hiring.js");
+  const tr = await import("./hiringTraining.js");
+  try {
+    const id = await toCandidate(s.db, "Петренко Олена", "0970002261");
+    const tryMail = async (mail: string) => h.updateCandidateFields(s.db, null, id, { email: mail }).then(() => null, (x) => x);
+    const cases: [string, () => Promise<number>, RegExp][] = [
+      ["інше імʼя", () => workAccount(s.c, 5411, "Петрук Олена Іванівна", "a@uts.ua"), /у Kommo це «Петрук Олена Іванівна»/],
+      ["ручна роль", () => workAccount(s.c, 5412, "Петренко Олена", "b@uts.ua", { role: "kvp" }), /ручна роль «kvp»/],
+      ["без Kommo", async () => (await s.c.query("INSERT INTO users (email,password_hash,role) VALUES ('c@uts.ua','x','manager') RETURNING id")).rows[0].id, /не привʼязаний до Kommo/],
+      ["має картку", async () => { const u = await workAccount(s.c, 5414, "Петренко Олена", "d@uts.ua");
+        await s.c.query("INSERT INTO employees (full_name, import_key, status, user_id) VALUES ('Петренко Олена','петренко олена x','active',$1)", [u]); return u; }, /уже має картку/],
+    ];
+    for (const [what, make, why] of cases) {
+      const u = await make();
+      const mail = (await s.c.query("SELECT email FROM users WHERE id=$1", [u])).rows[0].email as string;
+      const e = await tryMail(mail);
+      assert.equal(e?.status, 409, `🔴 ${what}: зайнята пошта не дала 409`);
+      assert.equal(e?.extra?.merge, undefined, `🔴 ${what}: запропоновано обʼєднати, хоча не можна`);
+      assert.match(e?.message ?? "", why, `🔴 ${what}: причина не названа`);
+      await assert.rejects(tr.mergeCandidateIntoAccount(s.db, null, id, u, "edit"), code(409), `🔴 ${what}: обʼєднання пройшло в обхід пропозиції`);
+    }
+    const ok = await workAccount(s.c, 5415, "Петренко Олена Василівна", "e@uts.ua");
+    assert.equal((await tryMail("e@uts.ua"))?.extra?.merge?.userId, ok, "🔴 контроль: та сама людина — пропозиції немає, тож дзеркало нічого не доводить");
+  } finally { await s.done(); }
+});
+
+/**
+ * #2262 — ЖИВИЙ SQL: «КАНДИДАТ + КОМАНДА» З РОБОЧОЮ ПОШТОЮ, ЯКУ ВЖЕ МАЄ KOMMO, — ПРОПОЗИЦІЯ, А НЕ ТРЕТІЙ АКАУНТ.
+ * Раніше тут мовчки заводився акаунт зі службовим логіном `candidate-N@hiring.uts.local`. Тепер — 409 із
+ * пропозицією, перехід відкочено цілком (у проді — транзакцією роута), нового акаунта немає; після «Обʼєднати»
+ * той самий перехід проходить без нового пароля (вхід — робочий). І ЗАПОБІЖНИК: джоба «48 год без входу» НЕ
+ * вимикає робочий акаунт, привʼязаний до кандидата, а кандидатський, як і раніше, вимикає.
+ * 🧨 Червоніє, якщо повернути службовий логін, видати новий пароль робочому або прибрати запобіжник у джобі.
+ */
+test("#2262 ЖИВИЙ SQL: «кандидат + команда» з зайнятою робочою поштою — пропозиція «Обʼєднати», не службовий логін; джоба не вимикає робочий", async (t) => {
+  const s = await scratchDb(t); if (!s) return;
+  const h = await import("./hiring.js");
+  const tr = await import("./hiringTraining.js");
+  try {
+    const id = await toLead(s.db, "Коваленко Ігор", "0970002262", null);
+    const work = await workAccount(s.c, 5421, "Коваленко Ігор Петрович", "kip@uts.ua");
+    const users = async () => (await s.c.query("SELECT count(*)::int n FROM users")).rows[0].n as number;
+    const before = await users();
+    await s.c.query("BEGIN");
+    const e = await h.changeStatus(s.db, null, id, { to: "candidate", comment: "беремо", email: "kip@uts.ua" }, "lead", 1).then(() => null, (x) => x);
+    await s.c.query("ROLLBACK");
+    assert.equal(e?.status, 409, "🔴 перехід із зайнятою робочою поштою пройшов мовчки");
+    assert.equal(e?.extra?.merge?.userId, work, "🔴 немає пропозиції «Обʼєднати»");
+    assert.equal(await users(), before, "🔴 заведено ще один акаунт (службовий логін)");
+
+    await tr.mergeCandidateIntoAccount(s.db, null, id, work, "edit");
+    const cred = await h.changeStatus(s.db, null, id, { to: "candidate", comment: "беремо", email: "kip@uts.ua" }, "lead", 1);
+    assert.equal(cred, null, "🔴 робочому акаунту видано новий пароль");
+    assert.equal((await s.c.query("SELECT user_id FROM hiring_candidates WHERE id=$1", [id])).rows[0].user_id, work);
+
+    // Запобіжник: строк доступу минув — кандидатський звичайного кандидата вимикається, робочий — ні.
+    const plain = await toCandidate(s.db, "Звичайний Кандидат", "0970002263");
+    const puid = (await s.c.query("SELECT user_id FROM hiring_candidates WHERE id=$1", [plain])).rows[0].user_id as number;
+    const res = await tr.closeExpiredAccess(s.db, new Date(Date.now() + 30 * 24 * H));
+    assert.ok(res.closed >= 2, "фікстура: джоба мала закрити доступ обом");
+    const act = async (u: number) => (await s.c.query("SELECT is_active FROM users WHERE id=$1", [u])).rows[0].is_active as boolean;
+    assert.equal(await act(puid), false, "🔴 дзеркало: кандидатський акаунт джоба більше не вимикає");
+    assert.equal(await act(work), true, "🔴 джоба «48 год без входу» вимкнула робочий акаунт менеджера");
+  } finally { await s.done(); }
+});
+
+/**
+ * #2263 — МЕЖА РОУТУ «ОБʼЄДНАТИ»: лише «редагування» Найму (`onlyEdit`) і запис у матриці доступу з тімлідом і
+ * менеджером у `deny`. Читає джерело роута й матрицю.
+ * 🧨 Червоніє, якщо прибрати `onlyEdit` із роуту або запис із матриці.
+ */
+test("#2263 «Обʼєднати»: роут лише для редагування Найму, у матриці доступу тімлід і менеджер — deny", () => {
+  const route = SRC("routes/hiring.ts");
+  const i = route.indexOf(`hiringRouter.post("/candidates/:id/merge-account"`);
+  assert.ok(i >= 0, "🔴 роуту «Обʼєднати» немає");
+  const body = route.slice(i, route.indexOf("\n});", i));
+  assert.match(body, /\bonlyEdit\(req\);/, "🔴 «Обʼєднати» без межі «лише HR / керівництво»");
+  const m = SRC("auth/accessMatrix.ts");
+  assert.match(m, /path: "\/api\/hiring\/candidates\/:id\/merge-account", cls: "deny-only",\s*allow: \[\], deny: \["team_lead", "manager"\]/,
+    "🔴 роуту немає в матриці доступу або тімлід / менеджер не в deny");
 });
 
 /**
@@ -605,12 +871,13 @@ test("#2101 ЖИВИЙ SQL: ручне число плитки — лише св
 });
 
 /**
- * #2102 — ЖИВИЙ SQL: ПЛАН/ФАКТ ТИЖНЯ (21.10.2026, рішення Романа: «всі 8 показників»). Будь-який день → понеділок;
- * неставлений план — `null`, а не 0; факт = сума днів тижня з того самого звіту, РАЗОМ із ручними виправленнями;
- * `null` прибирає план; невідомий показник — 400.
- * 🧨 Червоніє, якщо факт не збігається зі звітом, план прив'язується не до понеділка або «немає плану» стає нулем.
+ * #2103 — ЖИВИЙ SQL: ПЛАН/ФАКТ ТИЖНЯ ПО 6 ПОКАЗНИКАХ (22.10.2026: Іван прибрав план із «резюме» й «холодного пошуку»).
+ * Будь-який день → понеділок; неставлений план — `null`, а не 0; план на «резюме»/«холодний пошук» — 400; факт =
+ * сума днів того самого звіту, РАЗОМ із денними й ТИЖНЕВИМИ ручними (#2104); `null` прибирає план.
+ * 🧨 Червоніє, якщо факт не збігається зі звітом, план не на понеділок, «немає плану» стає нулем або вертається
+ * план на резюме.
  */
-test("#2102 ЖИВИЙ SQL: план тижня по 8 плитках — понеділок, «немає плану» ≠ 0, факт = звіт із ручними", async (t) => {
+test("#2103 ЖИВИЙ SQL: план тижня по 6 показниках — понеділок, «немає плану» ≠ 0, факт = звіт із ручними", async (t) => {
   const s = await scratchDb(t); if (!s) return;
   const h = await import("./hiring.js");
   const { weekStartOf, dailyTotals } = await import("./hiringRules.js");
@@ -619,18 +886,75 @@ test("#2102 ЖИВИЙ SQL: план тижня по 8 плитках — пон
   try {
     assert.equal(weekStartOf("2026-10-25"), "2026-10-19", "🔴 неділя не належить тижню з понеділка 19.10");
     assert.equal(weekStartOf("2026-10-19"), "2026-10-19");
-    await toCandidate(s.db, "План Тижня", "0970002102");
+    await toCandidate(s.db, "План Тижня", "0970002103");
     await h.setDailyOverride(s.db, null, day, { metric: "done", value: 5 });
-    await assert.rejects(h.setWeekPlan(s.db, null, day, { noshow: 3 }), code(400), "🔴 план на показник поза 8 плитками");
-    await h.setWeekPlan(s.db, null, day, { planned: 35, done: 30, resumes: 0 });
+    await assert.rejects(h.setWeekPlan(s.db, null, day, { resumes: 10 }), code(400), "🔴 план на «оброблено резюме» повернувся");
+    await assert.rejects(h.setWeekPlan(s.db, null, day, { coldSearch: 10 }), code(400), "🔴 план на «холодний пошук» повернувся");
+    await h.setWeekPlan(s.db, null, day, { planned: 35, done: 30 });
     const w = await h.weekPlan(s.db, day);
     assert.equal(w.weekStart, mon, "🔴 план не на понеділок тижня");
-    assert.deepEqual([w.plans.planned, w.plans.done, w.plans.resumes, w.plans.toLead], [35, 30, 0, null], "🔴 «немає плану» стало нулем або план загубився");
+    assert.deepEqual(Object.keys(w.plans).sort(), ["done", "planned", "toCandidate", "toLead", "toManager", "toTraining"], "🔴 не ті 6 показників плану");
+    assert.deepEqual([w.plans.planned, w.plans.done, w.plans.toLead], [35, 30, null], "🔴 «немає плану» стало нулем або план загубився");
     const weekEnd = new Date(Date.parse(`${mon}T00:00:00Z`) + 6 * 86_400_000).toISOString().slice(0, 10);
     const tot = dailyTotals(await h.dailyReport(s.db, mon, weekEnd));
-    assert.deepEqual(w.fact, { resumes: tot.resumes, coldSearch: tot.coldSearch, planned: tot.planned, done: tot.done, toLead: tot.toLead, toCandidate: tot.toCandidate, toTraining: tot.toTraining, toManager: tot.toManager }, "🔴 факт тижня не збігається зі звітом");
-    assert.ok(w.fact.done >= 5, "🔴 факт не врахував ручне виправлення");
+    assert.deepEqual(w.fact, { planned: tot.planned, done: tot.done, toLead: tot.toLead, toCandidate: tot.toCandidate, toTraining: tot.toTraining, toManager: tot.toManager }, "🔴 факт тижня не збігається зі звітом");
+    await h.setWeekOverride(s.db, null, day, { metric: "planned", value: 23 });
+    assert.equal((await h.weekPlan(s.db, day)).fact.planned, 23, "🔴 факт плану не взяв тижневе ручне число");
     await h.setWeekPlan(s.db, null, day, { done: null });
     assert.equal((await h.weekPlan(s.db, day)).plans.done, null, "🔴 null не прибрав план");
   } finally { await s.done(); }
+});
+
+/**
+ * #2104 — ЖИВИЙ SQL: ТИЖНЕВЕ РУЧНЕ ЧИСЛО (22.10.2026; Іван: «щоб можна було корегувати в розрізі „цей тиждень“,
+ * „минулий тиждень“»). Діє лише коли період — один тиждень (від понеділка, не довше неділі): замінює суму тижня й
+ * лише цю плитку, системне число поруч (`auto`), явку перераховано; інший період (два тижні, місяць) — сума днів;
+ * сусідній тиждень не зачеплено; `null` повертає суму; невідомий показник — 400.
+ * 🧨 Червоніє, якщо тижневе число не замінює суму, діє на місяць/інший тиждень або «авто» не повертає суму днів.
+ */
+test("#2104 ЖИВИЙ SQL: тижневе ручне число — лише вигляд одного тижня, своя плитка, авто поруч, «авто» повертає суму", async (t) => {
+  const s = await scratchDb(t); if (!s) return;
+  const h = await import("./hiring.js");
+  const { weekStartOf, wholeWeekOf, dailyTotals } = await import("./hiringRules.js");
+  const day = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+  const mon = weekStartOf(day);
+  const plus = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+  try {
+    assert.equal(wholeWeekOf(mon, day), mon, "🔴 «цей тиждень» (пн–сьогодні) не визнано тижнем");
+    assert.equal(wholeWeekOf(mon, plus(mon, 6)), mon);
+    assert.equal(wholeWeekOf(plus(mon, 1), plus(mon, 6)), null, "🔴 період не від понеділка визнано тижнем");
+    assert.equal(wholeWeekOf(mon, plus(mon, 7)), null, "🔴 два тижні визнано одним");
+    await toCandidate(s.db, "Тижневе Число", "0970002104");
+    await assert.rejects(h.setWeekOverride(s.db, null, day, { metric: "noshow", value: 1 }), code(400), "🔴 невідомий показник");
+    const auto = dailyTotals(await h.dailyReport(s.db, mon, plus(mon, 6)));
+    await h.setWeekOverride(s.db, null, day, { metric: "done", value: 22 });
+    await h.setWeekOverride(s.db, null, plus(day, 1), { metric: "resumes", value: 28 }); // інший день того ж тижня — той самий тиждень
+    const w = await h.applyWeekOverride(s.db, mon, auto);
+    assert.deepEqual([w.totals.done, w.totals.resumes, w.totals.planned], [22, 28, auto.planned], "🔴 тижневе число не замінило суму або зачепило іншу плитку");
+    assert.deepEqual(w.auto, { done: auto.done, resumes: auto.resumes }, "🔴 не видно системного числа");
+    assert.equal(w.totals.attendancePct, auto.planned ? Math.round((22 / auto.planned) * 100) : null, "🔴 явку не перераховано з ручного «проведено»");
+    const other = await h.applyWeekOverride(s.db, plus(mon, 7), auto);
+    assert.deepEqual(other.manual, [], "🔴 тижневе число зачепило наступний тиждень");
+    await h.setWeekOverride(s.db, null, day, { metric: "done", value: null });
+    const back = await h.applyWeekOverride(s.db, mon, auto);
+    assert.deepEqual([back.totals.done, back.manual], [auto.done, ["resumes"]], "🔴 «авто» не повернуло суму днів");
+  } finally { await s.done(); }
+});
+
+test("#2240 виданий пароль не зникає: блок «Навчання й доступ» не перебудовується від історії картки, а оновлює дані", () => {
+  // 22.10.2026, відео Івана: «Показати логін і пароль» видавав НОВИЙ пароль, показував його на частку секунди — і блок
+  // перебудовувався, бо `key` містив кількість подій, а видача сама пише подію. Пароль жив лише в стані старого блоку.
+  const fe = (rel: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", rel), "utf8");
+  const card = fe("HiringCandidates.tsx");
+  const tags = card.match(/<TrainingAccessBlock\b[\s\S]*?\/>/g) ?? [];
+  assert.equal(tags.length, 1, "у картці кандидата має бути рівно один блок «Навчання й доступ»");
+  const key = tags[0].match(/\bkey=\{([^}]*(?:\}[^}]*)*?)\}\s/)?.[1] ?? "";
+  assert.ok(key, "у блока мусить бути key (перебудова при зміні статусу — свідома)");
+  assert.doesNotMatch(key, /events/, "🔴 key залежить від історії картки — видача пароля/посилання перебудує блок і загубить їх");
+  // Парне твердження (правило 8): історія картки не зникла, а переїхала у version — інакше блок перестав би оновлюватись.
+  assert.match(tags[0], /\bversion=\{card\.events\.length\}/, "блок мусить отримувати лічильник історії як version");
+  const training = fe("HiringTraining.tsx");
+  const block = training.slice(training.indexOf("export function TrainingAccessBlock"), training.indexOf("export function TrainingDrawer"));
+  assert.ok(block.length > 0, "TrainingAccessBlock не знайдено");
+  assert.match(block, /useEffect\(load, \[load, version\]\)/, "🔴 блок не перечитує дані, коли змінилась історія картки");
 });
