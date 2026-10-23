@@ -225,7 +225,8 @@ test("#2273 Налаштування (фронт): кандидати схова
     const i = fe.indexOf(tab); assert.ok(i >= 0, `🔴 немає ${tab}`);
     const body = fe.slice(i, fe.indexOf("\n}\n", i));
     assert.match(body, /const \[showCand, setShowCand\] = useState\(false\);/, `🔴 ${tab}: кандидати не сховані за замовчуванням`);
-    assert.match(body, /const shown = users\.filter\(\(u\) => showCand \|\| u\.source !== "candidate"\);/, `🔴 ${tab}: немає фільтра кандидатів`);
+    // Прохід 5 додав у «Користувачах» другу умову (`showAll || !u.card_id`) — кандидатська частина та сама.
+    assert.match(body, /const shown = users\.filter\(\(u\) => \(?showCand \|\| u\.source !== "candidate"\)?/, `🔴 ${tab}: немає фільтра кандидатів`);
     assert.match(body, /\{shown\.map\(\(u\) =>/, `🔴 ${tab}: таблиця малює всіх, а не відфільтрованих`);
     assert.match(body, /onChange=\{\(e\) => setShowCand\(e\.target\.checked\)\} \/> показати кандидатів/, `🔴 ${tab}: немає перемикача`);
   }
@@ -247,4 +248,171 @@ test("#2274 Налаштування → картка: посилання /hirin
   assert.match(emp, /const id = Number\(new URLSearchParams\(window\.location\.search\)\.get\("employee"\)\);\s*return Number\.isInteger\(id\) && id > 0 \? \{ id, tab: "profile" \} : null;/,
     "🔴 реєстр не відкриває картку з адреси");
   assert.match(emp, /u\.searchParams\.delete\("employee"\)/, "🔴 параметр лишається в адресі — оновлення знову відкриє картку");
+});
+
+/**
+ * #2280 — ХТО ЩО МОЖЕ З АКАУНТОМ (рішення Романа 23.10.2026). `accountVerdict` — одне правило для кнопок картки й
+ * сервера. HR (`manage_sales_accounts`): пароль і трекер — ЛИШЕ менеджеру й тімліду; кандидату, КВП, бухгалтерії,
+ * адміну — ні; роль і вхід — ніколи. Адмін/СЕО/ОД (`manage_users` + `reset_passwords`) — усе й усім. Без прав — нічого.
+ * 🧨 Червоніє, якщо HR дістане не-менеджера, роль чи вхід, або адмін втратить будь-яку дію.
+ */
+test("#2280 accountVerdict: HR — пароль і трекер лише менеджеру й тімліду; роль і вхід — лише адмін/СЕО/ОД", async () => {
+  const { accountVerdict } = await import("./employeeAccount.js");
+  const HR = { manageUsers: false, resetPasswords: false, manageSales: true };
+  const ADMIN = { manageUsers: true, resetPasswords: true, manageSales: false };
+  const NONE = { manageUsers: false, resetPasswords: false, manageSales: false };
+  const ok = (p: typeof HR, a: "password" | "tracker" | "role" | "active", r: string) => accountVerdict(p, a, r).ok;
+  for (const r of ["manager", "team_lead"]) {
+    assert.equal(ok(HR, "password", r), true, `🔴 HR не скидає пароль: ${r}`);
+    assert.equal(ok(HR, "tracker", r), true, `🔴 HR не вмикає трекер: ${r}`);
+    assert.equal(ok(HR, "role", r), false, `🔴 HR міняє роль: ${r}`);
+    assert.equal(ok(HR, "active", r), false, `🔴 HR вимикає вхід: ${r}`);
+  }
+  for (const r of ["candidate", "kvp", "____________", "admin", "ceo", "opdir", "hr"]) {
+    assert.equal(ok(HR, "password", r), false, `🔴 HR скидає пароль не менеджеру: ${r}`);
+    assert.equal(ok(HR, "tracker", r), false, `🔴 HR чіпає трекер не менеджера: ${r}`);
+  }
+  assert.match((accountVerdict(HR, "password", "admin") as { error: string }).error, /лише акаунтами менеджерів і тімлідів/);
+  for (const a of ["password", "tracker", "role", "active"] as const) {
+    for (const r of ["manager", "admin", "candidate"]) assert.equal(ok(ADMIN, a, r), true, `🔴 адмін втратив «${a}» для ${r}`);
+    assert.equal(ok(NONE, a, "manager"), false, `🔴 без прав дозволено «${a}»`);
+  }
+});
+
+/**
+ * #2281 — ЖИВИЙ SQL: HR СКИДАЄ ПАРОЛЬ МЕНЕДЖЕРУ, НЕ ЧІПАЄ КВП. Новий хеш, значення — у сейфі картки, у відповіді — один
+ * раз; той самий виклик для акаунта з ручною роллю КВП — 403 і хеш не змінився; трекер — в обидва боки; картка без
+ * акаунта — 409. І сид: право `manage_sales_accounts` має рівно роль hr.
+ * 🧨 Червоніє, якщо HR скине пароль КВП, пароль не ляже в сейф, трекер не вимикається або право дістанеться не тій ролі.
+ */
+test("#2281 ЖИВИЙ SQL: HR скидає пароль і трекер менеджеру (пароль у сейфі), КВП — 403; право лише в hr", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const acc = await import("./employeeAccount.js");
+  const { randomBytes } = await import("node:crypto");
+  const bcrypt = (await import("bcryptjs")).default;
+  const key = randomBytes(32);
+  const HR = { manageUsers: false, resetPasswords: false, manageSales: true };
+  try {
+    const roles = (await s.c.query("SELECT key FROM roles WHERE (permissions->>'manage_sales_accounts')::boolean ORDER BY key")).rows.map((r) => r.key);
+    assert.deepEqual(roles, ["hr"], "🔴 право керувати акаунтами менеджерів не лише в hr");
+    const mk = async (email: string, override: string | null) => (await s.c.query(
+      "INSERT INTO users (email,password_hash,role,role_override) VALUES ($1,$2,'manager',$3) RETURNING id", [email, await bcrypt.hash("old", 4), override])).rows[0].id as number;
+    const mgr = await mk("mgr@uts.ua", null), kvp = await mk("kvp@uts.ua", "kvp");
+    const card = async (name: string, uid: number | null) => (await s.c.query("INSERT INTO employees (full_name, import_key, status, user_id) VALUES ($1,$2,'active',$3) RETURNING id", [name, name.toLowerCase(), uid])).rows[0].id as number;
+    const em = await card("Менеджер Один", mgr), ek = await card("Квп Одна", kvp), en = await card("Без Акаунта", null);
+
+    const r = await acc.resetEmployeePassword(s.db, key, s.hr, em, HR);
+    assert.equal(r.login, "mgr@uts.ua");
+    assert.ok(await bcrypt.compare(r.password, (await s.c.query("SELECT password_hash FROM users WHERE id=$1", [mgr])).rows[0].password_hash), "🔴 новий пароль не діє");
+    assert.equal((await s.c.query("SELECT count(*)::int n FROM employee_secrets WHERE user_id=$1 AND service='dashboard' AND superseded_at IS NULL", [mgr])).rows[0].n, 1, "🔴 пароль не ліг у сейф картки");
+
+    const before = (await s.c.query("SELECT password_hash FROM users WHERE id=$1", [kvp])).rows[0].password_hash;
+    await assert.rejects(acc.resetEmployeePassword(s.db, key, s.hr, ek, HR), bad(403), "🔴 HR скинув пароль КВП");
+    assert.equal((await s.c.query("SELECT password_hash FROM users WHERE id=$1", [kvp])).rows[0].password_hash, before, "🔴 хеш КВП змінився попри 403");
+    await assert.rejects(acc.setEmployeeTracker(s.db, s.hr, ek, true, HR), bad(403), "🔴 HR чіпає трекер КВП");
+
+    await acc.setEmployeeTracker(s.db, s.hr, em, true, HR);
+    assert.equal((await s.c.query("SELECT tracker_enabled FROM users WHERE id=$1", [mgr])).rows[0].tracker_enabled, true);
+    await acc.setEmployeeTracker(s.db, s.hr, em, false, HR);
+    assert.equal((await s.c.query("SELECT tracker_enabled FROM users WHERE id=$1", [mgr])).rows[0].tracker_enabled, false, "🔴 трекер не вимикається тим самим шляхом");
+    await assert.rejects(acc.resetEmployeePassword(s.db, key, s.hr, en, HR), bad(409), "🔴 картка без акаунта — не 409");
+    assert.equal((await acc.employeeAccount(s.db, en)), null);
+  } finally { await s.done(); }
+});
+
+/**
+ * #2282 — ПРОВОДКА РОУТІВ (читає джерело): стан, пароль і трекер у `routes/secrets.ts` беруть права з ролі
+ * (`manage_users`, `reset_passwords`, `manage_sales_accounts`) і кличуть ядро; усі три роути — у матриці доступу.
+ * 🧨 Червоніє, якщо роут обійде `accountPerms`/ядро або зникне з матриці.
+ */
+test("#2282 роути акаунта в картці: права з ролі → ядро; усі в матриці доступу", () => {
+  const SRC = (f: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "src", f), "utf8");
+  const r = SRC("routes/secrets.ts");
+  assert.match(r, /manageUsers: roleHasPerm\(r, "manage_users"\), resetPasswords: roleHasPerm\(r, "reset_passwords"\), manageSales: roleHasPerm\(r, "manage_sales_accounts"\)/, "🔴 права беруться не з ролі");
+  assert.match(r, /secretsRouter\.post\("\/employees\/:id\/account\/reset-password"[\s\S]{0,200}resetEmployeePassword\(db, key\(\), me\(req\), num\(req\.params\.id, "id співробітника"\), accountPerms\(req\)\)/, "🔴 скидання пароля в обхід ядра");
+  assert.match(r, /secretsRouter\.patch\("\/employees\/:id\/account\/tracker"[\s\S]{0,200}setEmployeeTracker\(db, me\(req\), num\(req\.params\.id, "id співробітника"\), req\.body\?\.on, accountPerms\(req\)\)/, "🔴 трекер в обхід ядра");
+  const m = SRC("auth/accessMatrix.ts");
+  for (const [method, p] of [["GET", "/api/secrets/employees/:id/account"], ["POST", "/api/secrets/employees/:id/account/reset-password"], ["PATCH", "/api/secrets/employees/:id/account/tracker"]])
+    assert.ok(m.includes(`{ method: "${method}", path: "${p}"`), `🔴 ${method} ${p} немає в матриці доступу`);
+});
+
+/**
+ * #2283 — ФРОНТ: БЛОК «АКАУНТ ДАШБОРДА» В КАРТЦІ. Стоїть у «Профілі»; кожна кнопка — лише за `can` від сервера
+ * (пароль, трекер, роль, вхід, створення); роль/вхід/створення — наявними роутами Налаштувань.
+ * 🧨 Червоніє, якщо прибрати блок з картки або показувати кнопку без `can`.
+ */
+test("#2283 картка: блок «Акаунт дашборда» у «Профілі», кнопки лише за can від сервера", () => {
+  const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "HiringEmployees.tsx"), "utf8");
+  assert.match(fe, /<PhotoPanel [^\n]*\/>\s*<AccountPanel employeeId=\{row\.id\} email=\{row\.email\} toast=\{toast\} onChanged=\{onSaved\} \/>/, "🔴 блоку «Акаунт» немає в «Профілі»");
+  const i = fe.indexOf("function AccountPanel("); assert.ok(i > 0);
+  const body = fe.slice(i);
+  assert.match(body, /\{can\.password && <button/, "🔴 «Скинути пароль» без can.password");
+  assert.match(body, /disabled=\{busy \|\| !can\.tracker\}/, "🔴 трекер без can.tracker");
+  assert.match(body, /\{can\.role\s*\?/, "🔴 роль без can.role");
+  assert.match(body, /\{can\.active\s*\?/, "🔴 вхід без can.active");
+  assert.match(body, /can\.create \? \(/, "🔴 створення без can.create");
+});
+
+/**
+ * #2290 — «ПУЛ НІЧИЙНИХ» У КАРТЦІ — ЛИШЕ АДМІН, СЕО, ОД (рішення Романа 23.10.2026, прохід 5): пул відкриває менеджеру
+ * телефони чужих клієнтів. HR (`manage_sales_accounts`) — ні навіть менеджеру; адмін — так.
+ * 🧨 Червоніє, якщо дати пул HR або забрати в адміна.
+ */
+test("#2290 accountVerdict: «пул нічийних» лише manage_users (адмін/СЕО/ОД), HR — ні", async () => {
+  const { accountVerdict } = await import("./employeeAccount.js");
+  assert.equal(accountVerdict({ manageUsers: false, resetPasswords: false, manageSales: true }, "pool", "manager").ok, false, "🔴 HR відкриває пул нічийних");
+  assert.equal(accountVerdict({ manageUsers: true, resetPasswords: true, manageSales: false }, "pool", "manager").ok, true, "🔴 адмін не може відкрити пул");
+});
+
+/**
+ * #2291 — ЖИВИЙ SQL: СТАН АКАУНТА В КАРТЦІ ВІДДАЄ ПУЛ І СТАН МЕНЕДЖЕРА (прохід 5) — те, що раніше було видно лише в
+ * Налаштуваннях. Менеджер зі станом «завершує» і відкритим пулом — так і в картці; без запису стану — null (активний).
+ * 🧨 Червоніє, якщо поле загубиться або стан візьметься не з `manager_work_state`.
+ */
+test("#2291 ЖИВИЙ SQL: акаунт у картці — пул нічийних і стан менеджера", async (t) => {
+  const s = await scratch(t); if (!s) return;
+  const acc = await import("./employeeAccount.js");
+  try {
+    await s.c.query("INSERT INTO managers (id,name,team_id,is_active,kommo_user_id) VALUES (7201,'Менеджер Пулу',3,true,7201),(7202,'Менеджер Без Стану',3,true,7202)");
+    const u1 = (await s.c.query("INSERT INTO users (email,password_hash,role,manager_id,orphan_pool) VALUES ('p1@uts.ua','x','manager',7201,true) RETURNING id")).rows[0].id;
+    const u2 = (await s.c.query("INSERT INTO users (email,password_hash,role,manager_id) VALUES ('p2@uts.ua','x','manager',7202) RETURNING id")).rows[0].id;
+    await s.c.query("INSERT INTO manager_work_state (manager_id, state, note) VALUES (7201,'finishing','гейт #2291')");
+    const e1 = (await s.c.query("INSERT INTO employees (full_name, import_key, status, user_id) VALUES ('Менеджер Пулу','менеджер пулу','active',$1) RETURNING id", [u1])).rows[0].id;
+    const e2 = (await s.c.query("INSERT INTO employees (full_name, import_key, status, user_id) VALUES ('Менеджер Без Стану','менеджер без стану','active',$1) RETURNING id", [u2])).rows[0].id;
+    const a1 = await acc.employeeAccount(s.db, e1), a2 = await acc.employeeAccount(s.db, e2);
+    assert.deepEqual([a1?.orphanPool, a1?.workState], [true, "finishing"], "🔴 картка не бачить пул або стан менеджера");
+    assert.deepEqual([a2?.orphanPool, a2?.workState], [false, null], "🔴 без запису стану — не «активний»");
+  } finally { await s.done(); }
+});
+
+/**
+ * #2292 — НАЛАШТУВАННЯ (фронт, прохід 5): за замовчуванням лише акаунти БЕЗ картки; перемикач показує людей із карткою.
+ * У рядку людини з карткою — жодної кнопки дії (роль, трекер, стан, пул, пароль, деактивація), натомість
+ * «керувати в картці →»; у рядку без картки кнопки лишились (дзеркало — службовими більше ніде керувати).
+ * 🧨 Червоніє, якщо показати людей за замовчуванням, повернути кнопку в рядок із карткою або забрати її у службових.
+ */
+test("#2292 Налаштування: за замовчуванням лише без картки; у рядку з карткою — «керувати в картці», без кнопок", () => {
+  const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "SettingsSection.tsx"), "utf8");
+  const i = fe.indexOf("function UsersTab("); const body = fe.slice(i, fe.indexOf("\n}\n", i));
+  assert.match(body, /const \[showAll, setShowAll\] = useState\(false\);/, "🔴 людей із карткою показано за замовчуванням");
+  assert.match(body, /&& \(showAll \|\| !u\.card_id\)\);/, "🔴 немає фільтра «лише без картки»");
+  assert.match(body, /onChange=\{\(e\) => setShowAll\(e\.target\.checked\)\} \/> показати людей із карткою/, "🔴 немає перемикача «показати людей із карткою»");
+  assert.match(body, /\{u\.card_id\s*\? <a href=\{`\/hiring\?tab=emp&employee=\$\{u\.card_id\}`\}[^>]*>керувати в картці →<\/a>\s*: <><button onClick=\{\(\) => reset\(u\.id\)\}/,
+    "🔴 у рядку з карткою кнопки пароля/деактивації або у службових їх немає");
+  assert.match(body, /\{u\.card_id \? <span>\{roleName\(u\.role_effective\)\}<\/span> : <select value=\{u\.role_override/, "🔴 роль людини з карткою міняється в Налаштуваннях");
+  assert.match(body, /\{u\.card_id \? \(u\.tracker_enabled \? "✓" : "—"\) : <input/, "🔴 трекер людини з карткою міняється в Налаштуваннях");
+  assert.match(body, /\{u\.role_effective === "manager" && u\.card_id\s*\? \(u\.orphan_pool \? "✓" : "—"\)/, "🔴 пул людини з карткою міняється в Налаштуваннях");
+  assert.match(body, /\{u\.card_id \? \(\s*<span[^>]*>\{u\.work_state === "dismissed"/, "🔴 стан людини з карткою міняється в Налаштуваннях");
+});
+
+/**
+ * #2293 — КАРТКА (фронт, прохід 5): стан менеджера показано; галочка «пул нічийних» лише за `can.pool`.
+ * 🧨 Червоніє, якщо прибрати стан чи пул із картки або дати галочку без права.
+ */
+test("#2293 картка: стан менеджера й «пул нічийних» (лише за can.pool)", () => {
+  const fe = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", "HiringEmployees.tsx"), "utf8");
+  const body = fe.slice(fe.indexOf("function AccountPanel("));
+  assert.match(body, /<span className="hr-muted">Стан менеджера<\/span>/, "🔴 стану менеджера немає в картці");
+  assert.match(body, /checked=\{a\.orphanPool\} disabled=\{busy \|\| !can\.pool\}/, "🔴 пул у картці без can.pool");
+  assert.match(body, /updateUser\(a\.userId, \{ orphanPool: e\.target\.checked \}\)/, "🔴 пул у картці нічого не змінює");
 });

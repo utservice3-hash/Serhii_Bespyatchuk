@@ -26,7 +26,7 @@ export interface TenderRow {
   awardDate: string | null; baseline: boolean; raw: PzTender | null;
 }
 export interface LeadRow extends Winner {
-  uaId: string; role: "winner"; niches: string[]; keywords: string[]; card: string; mode: "dry";
+  uaId: string; role: "winner"; niches: string[]; keywords: string[]; card: string; mode: "dry" | "live";
   kommoCompanyExisting: number | null;
 }
 export interface PzStore {
@@ -47,6 +47,8 @@ export interface PzCollectDeps {
   niches: Readonly<Record<string, readonly string[]>>;
   now: Date;
   minAmount: number;
+  /** Режим проходу: «live» — рядок стане в чергу на запис у Kommo (прохід 2); «dry» — лише в нашу таблицю. */
+  mode?: "dry" | "live";
 }
 
 /** Вирок — у результаті, а не винятком: джоба спершу шле звіт, потім падає (зібране й звіт не губляться). */
@@ -121,7 +123,7 @@ export async function runProzorroCollect(d: PzCollectDeps): Promise<PzCollectRes
     : [new Set<string>(), new Map<string, number>()];
   const rows: LeadRow[] = pending.map(({ w, tender, c, uaId }) => ({
     ...w, uaId, role: "winner", niches: [...c.niches], keywords: [...c.keywords], card: cardText(tender, w, [...c.niches]),
-    mode: "dry", kommoCompanyExisting: crm.get(w.edrpou!) ?? null,
+    mode: d.mode ?? "dry", kommoCompanyExisting: crm.get(w.edrpou!) ?? null,
   }));
   const inserted = rows.length ? await d.store.saveLeads(rows) : [];
   t.newLeads = inserted.length;

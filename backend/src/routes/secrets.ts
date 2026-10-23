@@ -8,6 +8,8 @@ import {
 } from "../core/secrets.js";
 import { previewImport, commitImport, listEmployees, updateEmployee, ImportError } from "../core/employees.js";
 import { createEmployee, matchFiles } from "../core/employeeAdd.js";
+import { employeeAccount, accountVerdict, resetEmployeePassword, setEmployeeTracker, type AccountPerms } from "../core/employeeAccount.js";
+import { roleHasPerm } from "../auth/rbac.js";
 import { startDismissal, finishDismissal, revertDismissal, setDismissDate } from "../core/offboarding.js";
 import { listEmployeeDocs, employeeDoc, attachEmployeeDoc, setEmployeeDocDeleted } from "../core/employeeDocs.js";
 import { isManagement } from "../core/docAccess.js";
@@ -203,6 +205,27 @@ const onlyManagement = (req: Request) => {
   if (!isManagement(req.auth!.roleKey)) throw new ImportError(403, "Документи людей — лише керівництву");
 };
 const b64 = (v: unknown) => (typeof v === "string" && v ? Buffer.from(v.includes(",") ? v.split(",")[1] : v, "base64") : null);
+
+// 🔑 Акаунт дашборда в картці (прохід 4, 23.10.2026, #2280). Хто що може — `accountVerdict`; роль і вхід адмін міняє
+// наявними роутами Налаштувань (`/settings/users/:id`), тут — лише стан, пароль і трекер.
+const accountPerms = (req: Request): AccountPerms => {
+  const r = req.auth!.roleKey;
+  return { manageUsers: roleHasPerm(r, "manage_users"), resetPasswords: roleHasPerm(r, "reset_passwords"), manageSales: roleHasPerm(r, "manage_sales_accounts") };
+};
+secretsRouter.get("/employees/:id/account", async (req, res) => {
+  try {
+    const a = await employeeAccount(pool as unknown as Db, num(req.params.id, "id співробітника"));
+    const p = accountPerms(req);
+    const can = (x: "password" | "tracker" | "role" | "active" | "pool") => !!a && accountVerdict(p, x, a.role).ok;
+    res.json({ account: a, can: { password: can("password"), tracker: can("tracker"), role: can("role"), active: can("active"), pool: can("pool"), create: !a && p.manageUsers } });
+  } catch (e) { fail(res, e); }
+});
+secretsRouter.post("/employees/:id/account/reset-password", async (req, res) => {
+  try { res.json(await tx((db) => resetEmployeePassword(db, key(), me(req), num(req.params.id, "id співробітника"), accountPerms(req)))); } catch (e) { fail(res, e); }
+});
+secretsRouter.patch("/employees/:id/account/tracker", async (req, res) => {
+  try { res.json(await tx((db) => setEmployeeTracker(db, me(req), num(req.params.id, "id співробітника"), req.body?.on, accountPerms(req)))); } catch (e) { fail(res, e); }
+});
 
 secretsRouter.get("/employees/:id/documents", async (req, res) => {
   try { onlyManagement(req); res.json({ files: await listEmployeeDocs(pool as unknown as Db, num(req.params.id, "id співробітника")) }); } catch (e) { fail(res, e); }

@@ -4,7 +4,8 @@ import { createPortal } from "react-dom";
 import {
   fetchEmployees, previewEmployeeImport, commitEmployeeImport, updateEmployee, fetchSecretsStatus, linkEmployeesKommo, hiringError,
   startDismissal, dismissNeedsConfirm, finishDismissal, revertDismissal, setDismissDate, fetchEmployeeDocs, uploadEmployeeDoc, employeeDocBlobUrl, deleteEmployeeDoc, restoreEmployeeDoc, HR_DOC_KINDS,
-  fetchPeoplePhotos,
+  fetchPeoplePhotos, fetchEmployeeAccount, resetEmployeeAccountPassword, setEmployeeAccountTracker, updateUser, createUser, fetchRoles,
+  type EmployeeAccount, type EmployeeAccountCan, type RoleDef,
   type EmployeeDoc, type EmployeeRow, type ImportPreview, type SecretsStatus, type EmployeePatch, type PersonPhoto,
 } from "../../../api";
 import { EmployeePhoto, PhotoPanel } from "./EmployeePhotos";
@@ -285,6 +286,7 @@ function EmployeeDrawer({ row, tab, teams, status, toast, photo, photoErr, onTab
         {tab === "docs" ? <EmployeeDocs row={row} toast={toast} /> : tab === "profile" ? (
           <>
             <PhotoPanel employeeId={row.id} name={row.full_name} dismissed={row.status === "dismissed"} info={photo} unknown={photoErr} toast={toast} onChanged={onPhoto} />
+            <AccountPanel employeeId={row.id} email={row.email} toast={toast} onChanged={onSaved} />
             <div className="emp-form">
               {FIELDS.map(([k, label, kind]) => (
                 <label key={k} className={k === "note" || k === "dismiss_reason" ? "wide" : ""}>
@@ -688,6 +690,108 @@ function DismissDateDialog({ row, onClose, onDone }: { row: EmployeeRow; onClose
           <button className="hr-btn p" disabled={busy} onClick={() => void submit()}>{busy ? "Зберігаю…" : "Зберегти"}</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 🔑 АКАУНТ ДАШБОРДА В КАРТЦІ (прохід 4 «один акаунт», 23.10.2026, #2280–#2283). Єдиний екран людини — тут.
+ * Що дозволено — каже сервер (`can`, правило `accountVerdict`): HR — пароль і трекер лише менеджерам і тімлідам;
+ * роль, вхід і створення акаунта — адмін, СЕО, ОД (через наявні роути Налаштувань). Без права кнопки немає, а
+ * причина — словом.
+ */
+function AccountPanel({ employeeId, email, toast, onChanged }: { employeeId: number; email: string | null; toast: Toast; onChanged: () => void }) {
+  const dlg = useDialogs();
+  const [data, setData] = useState<{ account: EmployeeAccount | null; can: EmployeeAccountCan } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [roles, setRoles] = useState<RoleDef[]>([]);
+  const [pwd, setPwd] = useState<{ login: string; password: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [newMail, setNewMail] = useState(email ?? "");
+  const [newRole, setNewRole] = useState("manager");
+  const load = useCallback(() => { fetchEmployeeAccount(employeeId).then((d) => { setData(d); setErr(null); }).catch((e) => setErr(hiringError(e))); }, [employeeId]);
+  useEffect(load, [load]);
+  useEffect(() => { if (data?.can.role || data?.can.create) fetchRoles().then(setRoles).catch(() => setRoles([])); }, [data?.can.role, data?.can.create]);
+  const run = async (fn: () => Promise<unknown>, ok: string) => {
+    setBusy(true);
+    try { await fn(); toast(ok); load(); onChanged(); } catch (e) { toast(hiringError(e), { error: true }); } finally { setBusy(false); }
+  };
+  if (err) return <div className="hr-note" style={{ marginBottom: 12 }}>Акаунт дашборда: {err}</div>;
+  if (!data) return null;
+  const { account: a, can } = data;
+  const roleName = (k: string) => roles.find((r) => r.key === k)?.name ?? k;
+  return (
+    <div className="hr-sect" style={{ margin: "0 0 14px", padding: 12, border: "1px solid var(--border)", borderRadius: 10 }}>
+      <h4 style={{ margin: "0 0 8px" }}>Акаунт дашборда</h4>
+      {!a ? (
+        can.create ? (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <span className="hr-muted" style={{ flexBasis: "100%" }}>Акаунта немає. Створіть вхід — він одразу привʼяжеться до цієї картки.</span>
+            <input className="hr-inp" placeholder="робоча пошта" value={newMail} onChange={(e) => setNewMail(e.target.value)} style={{ minWidth: 220 }} />
+            <select className="hr-inp" value={newRole} onChange={(e) => setNewRole(e.target.value)}>{roles.map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}</select>
+            <button className="hr-btn p" disabled={busy || !newMail.trim()} onClick={() => void run(async () => {
+              const r = await createUser({ email: newMail.trim(), role: newRole, employeeId }); setPwd({ login: r.email, password: r.password });
+            }, "Акаунт створено й привʼязано до картки")}>Створити акаунт</button>
+          </div>
+        ) : <span className="hr-muted">Акаунта в дашборді немає. Створює його адмін, СЕО або ОД.</span>
+      ) : (
+        <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
+          <div><span className="hr-muted">Логін</span> <b>{a.login}</b>{a.kommoName ? <span className="hr-muted"> · Kommo: {a.kommoName}</span> : null}</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <span className="hr-muted">Роль</span>
+            {can.role
+              ? <select className="hr-inp" value={a.roleOverride ?? "__synced__"} disabled={busy}
+                  onChange={(e) => void run(() => updateUser(a.userId, { roleOverride: e.target.value === "__synced__" ? null : e.target.value }), "Роль змінено — діє після нового входу людини")}>
+                  <option value="__synced__">↺ з Kommo ({roleName(a.syncedRole)})</option>
+                  {roles.map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}
+                </select>
+              : <b>{roleName(a.role)}</b>}
+            <span className="hr-muted">· вхід</span>
+            {can.active
+              ? <button className={`hr-btn xs${a.isActive ? " dg" : ""}`} disabled={busy} onClick={async () => {
+                  if (a.isActive && !(await dlg.confirm(`Вимкнути вхід ${a.login}? Людина не зможе зайти в дашборд; увімкнути можна тут же.`))) return;
+                  void run(() => updateUser(a.userId, { isActive: !a.isActive }), a.isActive ? "Вхід вимкнено" : "Вхід увімкнено");
+                }}>{a.isActive ? "активний · вимкнути" : "вимкнений · увімкнути"}</button>
+              : <b style={{ color: a.isActive ? "var(--ok)" : "var(--danger)" }}>{a.isActive ? "активний" : "вимкнений"}</b>}
+            {a.lastSeen && <span className="hr-muted">· останній вхід {new Date(a.lastSeen).toLocaleDateString("uk-UA")}</span>}
+          </div>
+          {/* 👤 Прохід 5: стан менеджера і пул нічийних — тут, бо з Налаштувань людьми більше не керують.
+              Стан змінює «Звільнити…» вгорі картки; пул — лише адмін, СЕО, ОД (відкриває телефони чужих клієнтів). */}
+          {a.kommoName && (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span className="hr-muted">Стан менеджера</span>
+              <b style={{ color: a.workState === "dismissed" ? "var(--danger)" : undefined }}>{a.workState === "dismissed" ? "звільнений" : a.workState === "finishing" ? "завершує" : "активний"}</b>
+              <span className="hr-muted">· змінюється кнопкою «Звільнити…»</span>
+              {a.role === "manager" && (
+                <label style={{ display: "inline-flex", gap: 6, alignItems: "center", marginLeft: 8 }} title="Менеджеру відкрити пул нічийних клієнтів: бачить пул із телефонами й бере клієнта лише собі">
+                  <input type="checkbox" checked={a.orphanPool} disabled={busy || !can.pool}
+                    onChange={(e) => void run(() => updateUser(a.userId, { orphanPool: e.target.checked }), e.target.checked ? "Пул нічийних відкрито — діє після нового входу" : "Пул нічийних закрито")} />
+                  🧭 пул нічийних
+                </label>
+              )}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {can.password && <button className="hr-btn xs" disabled={busy} onClick={async () => {
+              if (!(await dlg.confirm(`Скинути пароль ${a.login}? Старий пароль перестане діяти; новий покажемо один раз і збережемо в сейфі картки.`))) return;
+              void run(async () => { setPwd(await resetEmployeeAccountPassword(employeeId)); }, "Пароль скинуто");
+            }}>Скинути пароль</button>}
+            <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }} title="Дозвіл трекеру часу збирати дані з машини цієї людини">
+              <input type="checkbox" checked={a.trackerEnabled} disabled={busy || !can.tracker}
+                onChange={(e) => void run(() => setEmployeeAccountTracker(employeeId, e.target.checked), e.target.checked ? "Трекер увімкнено" : "Трекер вимкнено")} />
+              трекер часу
+            </label>
+            {!can.password && !can.tracker && <span className="hr-muted">Керувати цим акаунтом може адмін, СЕО або ОД (HR — лише менеджерами й тімлідами).</span>}
+          </div>
+        </div>
+      )}
+      {pwd && (
+        <div className="hr-note" style={{ marginTop: 8 }}>
+          Логін <b>{pwd.login}</b> · пароль <b style={{ fontFamily: "monospace" }}>{pwd.password}</b> — показано один раз, копія в сейфі картки.{" "}
+          <button className="hr-btn xs" onClick={() => { void navigator.clipboard.writeText(`Логін: ${pwd.login}\nПароль: ${pwd.password}\nВхід: ${window.location.origin}/login`).then(() => toast("Скопійовано")).catch(() => toast("Не вдалося скопіювати")); }}>Копіювати</button>{" "}
+          <button className="hr-btn xs" onClick={() => setPwd(null)}>Сховати</button>
+        </div>
+      )}
     </div>
   );
 }

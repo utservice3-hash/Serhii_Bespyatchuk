@@ -77,6 +77,7 @@ import BankSection from "./dashboard/sections/BankSection";
 import { emptyTaskForm } from "./dashboard/taskForm";
 import { OverviewSection, type Kpi } from "./dashboard/sections/OverviewSection";
 import RegistriesPage from "../minusRegistry/client/RegistriesPage";
+import { ProzorroSection } from "./dashboard/sections/ProzorroSection";
 import { ManagerReportSection } from "./dashboard/sections/ManagerReportSection";
 import { FeedbackSection } from "./dashboard/sections/FeedbackSection";
 import { RatesAndCargoSection } from "./dashboard/sections/RatesAndCargoSection";
@@ -1159,6 +1160,8 @@ export function Dashboard() {
       {section === "constructor" && <ConstructorSection />}
       {section === "surveys" && <SurveysSection />}
       {section === "registries" && <RegistriesPage />}
+      {/* 🏛 «Тендери Prozorro» (#5299): статичний імпорт — гейт #225; доступ вирішує сервер (вкладка prozorro). */}
+      {section === "prozorro" && <ProzorroSection roleKey={auth?.roleKey ?? null} />}
 
       {section === "ba" && (
         /**

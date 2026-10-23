@@ -3796,6 +3796,14 @@ UPDATE roles SET permissions = permissions || '{"view_team_secrets": true}'::jso
 UPDATE roles SET permissions = permissions - 'view_team_secrets'
  WHERE key <> 'team_lead';
 
+-- 🔑 Акаунти менеджерів і тімлідів із картки співробітника — пароль і трекер (рішення Романа 23.10.2026: «hr тільки по
+-- менеджерах може працювати і тім лідах, інші — ні»). Лише hr: адмін, СЕО, ОД мають ширші `reset_passwords`/`manage_users`.
+-- Межа «лише менеджер/тімлід» — у `core/employeeAccount.ts` (`accountVerdict`). Тримає #2281.
+UPDATE roles SET permissions = permissions || '{"manage_sales_accounts": true}'::jsonb
+ WHERE key = 'hr';
+UPDATE roles SET permissions = permissions - 'manage_sales_accounts'
+ WHERE key <> 'hr';
+
 -- 🔒 Шифр, коди й чати — не для моделі. REVOKE після GRANT і CREATE. Тримає #554.
 REVOKE ALL ON employee_secrets, secret_reveal_codes, vault_link_codes FROM ai_readonly;
 
@@ -6354,6 +6362,40 @@ CREATE TABLE IF NOT EXISTS prozorro_leads (
 );
 CREATE INDEX IF NOT EXISTS idx_prozorro_leads_created ON prozorro_leads (created_at);
 REVOKE ALL ON prozorro_tenders, prozorro_leads FROM ai_readonly;
+
+-- 🏛 PROZORRO-ЛІДИ, прохід 2 (запис у Kommo; рішення TOP Weekly 22.10.2026; налаштування на екрані — Роман 23.10.2026).
+--  · `push_attempts` — після `MAX_PUSH_ATTEMPTS` невдалих спроб рядок більше не пробуємо (причина — у `push_error`).
+--  · `prozorro_settings` — ОДИН рядок, усе керування функціоналом з екрана «Тендери Prozorro» → «Налаштування» (лише адмін):
+--    хто веде, режим (off / dry / live), ліміт угод на день (NULL — без ліміту), мінімальна сума, вимкнені ніші.
+--    Окремо від `app_settings`, бо `PUT /settings` переписує весь обʼєкт і мовчки стер би поля.
+--  · `prozorro_settings_log` — журнал «хто, коли, яке поле, було → стало», рядок на поле.
+ALTER TABLE prozorro_leads ADD COLUMN IF NOT EXISTS push_attempts INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS prozorro_settings (
+  id                     INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  responsible_manager_id INTEGER REFERENCES managers(id),
+  mode                   TEXT NOT NULL DEFAULT 'dry' CHECK (mode IN ('off','dry','live')),
+  daily_limit            INTEGER CHECK (daily_limit IS NULL OR daily_limit BETWEEN 1 AND 500),
+  min_amount             NUMERIC(14,2) NOT NULL DEFAULT 500000 CHECK (min_amount >= 0),
+  niches_off             TEXT[] NOT NULL DEFAULT '{}',
+  set_by                 INTEGER REFERENCES users(id),
+  set_at                 TIMESTAMPTZ
+);
+INSERT INTO prozorro_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+CREATE TABLE IF NOT EXISTS prozorro_settings_log (
+  id              BIGSERIAL PRIMARY KEY,
+  field           TEXT NOT NULL,
+  old_value       TEXT,
+  new_value       TEXT,
+  set_by          INTEGER REFERENCES users(id),
+  set_by_name     TEXT,
+  set_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Екран «Тендери Prozorro» (група «Клієнти»): керівництво й КВП. Налаштування всередині — лише адмін (роут). Разово, як
+-- «Реєстри»: ключ, який адмін потім вимкне чи ввімкне в Налаштуваннях, наступний старт не перепише.
+UPDATE roles SET screen_access = screen_access || '{"prozorro":true}'::jsonb
+  WHERE key IN ('admin', 'ceo', 'opdir', 'kvp') AND NOT (screen_access ? 'prozorro');
+UPDATE roles SET screen_access = screen_access || '{"prozorro":false}'::jsonb
+  WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp') AND NOT (screen_access ? 'prozorro');
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- 🏁 «РЕЗУЛЬТАТ МІСЯЦЯ» (задача Тетяни #5583, 23.10.2026): кількість успішних угод і Σ бюджету Kommo по менеджеру за

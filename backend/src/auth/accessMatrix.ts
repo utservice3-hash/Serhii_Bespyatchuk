@@ -675,6 +675,11 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // 📉 «Змінити дату звільнення» (21.10.2026, #2100) — та сама межа, що в «Звільнити…».
   { method: "POST", path: "/api/secrets/employees/:id/dismiss-date", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "GET", path: "/api/secrets/employees/:id/documents", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+  // 🔑 Акаунт у картці (23.10.2026, #2280): стан бачать усі з правом сейфу; пароль і трекер — за `accountVerdict`
+  // (HR лише менеджерам/тімлідам), тому дії — `deny-only`.
+  { method: "GET", path: "/api/secrets/employees/:id/account", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
+  { method: "POST", path: "/api/secrets/employees/:id/account/reset-password", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
+  { method: "PATCH", path: "/api/secrets/employees/:id/account/tracker", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "POST", path: "/api/secrets/employees/:id/documents", cls: "deny-only", allow: [], deny: ["team_lead", "manager", "financier"] },
   { method: "GET", path: "/api/secrets/employees/:id/documents/:fileId", cls: "GET", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
   { method: "DELETE", path: "/api/secrets/employees/:id/documents/:fileId", cls: "DELETE-ghost", allow: ["admin", "ceo", "opdir", "kvp", "hr"], deny: ["team_lead", "manager", "financier"] },
@@ -1779,6 +1784,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // 📒 Реєстр мінусових угод (20.10.2026): вкладка `registries`; хто що може — `minusRegistry/roles.ts` + `shared/minusRegistry.ts`.
   // Перегляд — усім із вкладкою; «нова угода з CRM» і подання — лише менеджер і тім-лід (решта 403 у роутері пакета).
   // Дії `/:id/:action` з ідентифікатором-заглушкою відповідають 404 «Запит не знайдено» ще до перевірки ролі — тож 403 там лише HR (вкладка).
+  // 🏛 «Тендери Prozorro» (#5299): екран — адмін, СЕО, ОД, КВП (вкладка `prozorro`); налаштування — адмін і ОД (`SETTINGS_ROLES`).
+  { method: "GET", path: "/api/prozorro/stats", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/prozorro/settings", cls: "GET",
+    allow: ["admin", "opdir"], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "PUT", path: "/api/prozorro/settings", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/minus-deals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/minus-deals/counter", cls: "GET",

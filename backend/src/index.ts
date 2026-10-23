@@ -103,6 +103,7 @@ import { callAiJob } from "./jobs/callAiJob.js";
 import { carrierCallJob } from "./jobs/carrierCallJob.js";
 import { minusRegistrySync } from "./jobs/minusRegistrySync.js";
 import { minusDealsRouter } from "./routes/minusRegistry.js";
+import { prozorroRouter } from "./routes/prozorro.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
 import { collectLardi } from "./jobs/collectLardi.js";
 import { prozorroLeads } from "./jobs/prozorroLeads.js";
@@ -189,6 +190,7 @@ app.use("/api/finance/payments", financePaymentsRouter); // 💸 «Оплати 
 app.use("/api/finance", financeRouter); // 💰 Фінанси: план/факт витрат і статті (29.09.2026)
 app.use("/api/constructor", constructorRouter); // 📄 Конструктор документів — пакет Сергія (30.09.2026)
 app.use("/api/surveys", surveysRouter); // 📋 Опитування команди — пакет Сергія (30.09.2026)
+app.use("/api/prozorro", prozorroRouter); // 🏛 «Тендери Prozorro» (#5299): статистика + налаштування, межа — вкладка prozorro
 app.use("/api/minus-deals", minusDealsRouter); // 📒 Реєстр мінусових угод — пакет Сергія (20.10.2026), пункт меню «Реєстри»
 app.use("/api/cargo", cargoRouter); // 🚚 Конфігуратор вантажу — пакет Сергія (12.10.2026), вкладка «Калькулятора ставок та вантажу»
 app.use("/api/receivables-claims", receivablesClaimRouter); // кнопка «Проблемний клієнт» у дебіторці

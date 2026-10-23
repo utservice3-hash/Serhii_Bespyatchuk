@@ -546,6 +546,43 @@ export async function fetchFirstTouchSettings(): Promise<FirstTouchSettingsResp>
   const { data } = await api.get<FirstTouchSettingsResp>("/settings/first-touch");
   return data;
 }
+/** 🏛 «Тендери Prozorro» (#5299): статистика по днях (екран) і налаштування (лише адмін). */
+export type PzModeT = "off" | "dry" | "live";
+export interface PzConfigT { responsibleManagerId: number | null; mode: PzModeT; dailyLimit: number | null; minAmount: number; nichesOff: string[] }
+export interface ProzorroSettingsResp {
+  config: PzConfigT;
+  responsible: { name: string; active: boolean; hasKommo: boolean } | null;
+  options: { id: number; name: string; team: string }[];
+  niches: { name: string; words: number; on: boolean; leads30d: number }[];
+  queue: { waiting: number; exhausted: number; pushed: number; dryCollected: number };
+  history: { field: string; oldValue: string | null; newValue: string | null; setByName: string | null; setAt: string }[];
+  /** Що буде далі й чи все готово: наступний збір, точка відліку, останній прохід, перевірка Kommo (лише читання). */
+  readiness: {
+    nextRun: { date: string; time: string };
+    baselineDone: boolean; baselineAt: string | null;
+    lastRun: { at: string | null; error: string | null };
+    kommo: { ok: boolean; problems: string[]; checkedAt: string };
+    avgFoundPerDay: number | null;
+  };
+}
+export interface ProzorroStatsResp {
+  from: string; to: string;
+  days: { date: string; found: number; pushed: number }[];
+  totals: { found: number; pushed: number };
+  lastRunAt: string | null; lastError: string | null;
+}
+export async function fetchProzorroStats(from: string, to: string): Promise<ProzorroStatsResp> {
+  const { data } = await api.get<ProzorroStatsResp>("/prozorro/stats", { params: { from, to } });
+  return data;
+}
+export async function fetchProzorroSettings(): Promise<ProzorroSettingsResp> {
+  const { data } = await api.get<ProzorroSettingsResp>("/prozorro/settings");
+  return data;
+}
+export async function saveProzorroSettings(c: PzConfigT): Promise<ProzorroSettingsResp> {
+  const { data } = await api.put<ProzorroSettingsResp>("/prozorro/settings", c);
+  return data;
+}
 export async function saveFirstTouchSettings(t: FirstTouchTunablesT): Promise<Pick<FirstTouchSettingsResp, "current" | "history">> {
   const { data } = await api.put<Pick<FirstTouchSettingsResp, "current" | "history">>("/settings/first-touch", t);
   return data;
@@ -5534,6 +5571,20 @@ export interface EmployeeDoc {
   size_bytes: number | null; version: number; created_at: string; archived_at: string | null; deleted_at: string | null; author: string | null; signed: boolean;
 }
 export const fetchEmployeeDocs = async (id: number) => (await api.get<{ files: EmployeeDoc[] }>(`/secrets/employees/${id}/documents`)).data.files;
+
+/** 🔑 Акаунт дашборда в картці (#2280, 23.10.2026). `can` — що дозволено ЦЬОМУ користувачу з ЦИМ акаунтом (сервер). */
+export interface EmployeeAccount {
+  userId: number; login: string; role: string; roleOverride: string | null; syncedRole: string;
+  isActive: boolean; lastSeen: string | null; trackerEnabled: boolean; kommoName: string | null;
+  /** 🧭 Пул нічийних і стан менеджера — у картці з проходу 5 (23.10.2026). */
+  orphanPool: boolean; workState: "finishing" | "dismissed" | null;
+}
+export interface EmployeeAccountCan { password: boolean; tracker: boolean; role: boolean; active: boolean; pool: boolean; create: boolean }
+export const fetchEmployeeAccount = async (id: number) =>
+  (await api.get<{ account: EmployeeAccount | null; can: EmployeeAccountCan }>(`/secrets/employees/${id}/account`)).data;
+export const resetEmployeeAccountPassword = async (id: number) =>
+  (await api.post<{ login: string; password: string }>(`/secrets/employees/${id}/account/reset-password`)).data;
+export const setEmployeeAccountTracker = async (id: number, on: boolean) => { await api.patch(`/secrets/employees/${id}/account/tracker`, { on }); };
 // 👤 «+ Співробітник» і 📎 розкладання файлів пакета по людях (22.09.2026) — `backend/src/core/employeeAdd.ts`.
 export interface NewEmployee { full_name: string; position?: string; team_label?: string; phone?: string; email?: string; telegram?: string; hired_at?: string; birth_date?: string }
 export const createEmployee = async (b: NewEmployee) => (await api.post<{ id: number }>("/secrets/employees", b)).data.id;

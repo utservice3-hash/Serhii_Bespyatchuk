@@ -224,6 +224,7 @@ settingsRouter.put("/first-touch", async (req, res) => {
   res.json({ current: await loadTunables(pool), history: await tunablesHistory(pool) });
 });
 
+
 // --- User & role management (право manage_users) ---
 // Гейт вкладки «Налаштування» вже відсіює чужі ролі (requireAuth tab-gate); тут додатково
 // вимагаємо право manage_users, щоб кастомна роль без нього не керувала людьми.
