@@ -6296,3 +6296,61 @@ ALTER TABLE managers ADD COLUMN IF NOT EXISTS keep_without_crm BOOLEAN NOT NULL 
 -- має повністю все залишитися». Умова на kommo_user_id — щоб не позначити іншу людину, якщо id колись зсунеться.
 -- `is_active = true` — разом із позначкою: якщо в Kommo її видалили РАНІШЕ за викат, синк уже встиг вимкнути запис.
 UPDATE managers SET keep_without_crm = true, is_active = true WHERE id = 9 AND kommo_user_id = '3549691' AND NOT keep_without_crm;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🏛 PROZORRO-ЛІДИ (задача #5299, ТЗ «Щоденний збір лідів з Prozorro у Kommo»; прохід 1 — збір і пробний режим).
+-- Правила — `core/prozorroRules.ts`, прохід — `core/prozorroCollect.ts`, джоба — `jobs/prozorroLeads.ts`.
+--  · `prozorro_tenders` — тендери, які пошук уже показував: «бачений» не тягнеться вдруге. Перший прохід пише
+--    рядки з `baseline = true` без деталей — точка відліку (прогону за минуле немає, рішення 21.10.2026).
+--  · `prozorro_leads` — переможець, що пройшов відбір: рядок на (ЄДРПОУ + тендер + роль) — ключ дубля з ТЗ.
+--    `mode = 'dry'` — пробний режим, у Kommo нічого не записано; id Kommo заповнить прохід 2.
+-- 🔒 Контакти переможців (ПІБ, телефон, пошта) — закрито від моделі, як інші таблиці з контактами людей.
+-- ⚠️ Revert коду таблиці й рядки не прибирає.
+-- ══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS prozorro_tenders (
+  ua_id          TEXT PRIMARY KEY,                -- «UA-2026-10-05-000291-a»
+  hex_id         TEXT,                            -- внутрішній id public-api; NULL у рядків точки відліку
+  title          TEXT,
+  status         TEXT,
+  amount         NUMERIC(16,2),                   -- очікувана вартість із пошуку
+  currency       TEXT,
+  niches         TEXT[] NOT NULL DEFAULT '{}',
+  keywords       TEXT[] NOT NULL DEFAULT '{}',
+  award_date     TIMESTAMPTZ,                     -- найпізніше активне рішення про переможця
+  baseline       BOOLEAN NOT NULL DEFAULT false,
+  raw            JSONB,                           -- повна відповідь public-api (для розслідувань і проходу 2)
+  first_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_prozorro_tenders_seen ON prozorro_tenders (first_seen_at);
+
+CREATE TABLE IF NOT EXISTS prozorro_leads (
+  id                     BIGSERIAL PRIMARY KEY,
+  edrpou                 TEXT NOT NULL,           -- 8 цифр; ФОП — ІПН 10 цифр
+  ua_id                  TEXT NOT NULL REFERENCES prozorro_tenders(ua_id),
+  role                   TEXT NOT NULL DEFAULT 'winner' CHECK (role IN ('winner')),
+  company_name           TEXT NOT NULL,
+  region                 TEXT,
+  city                   TEXT,
+  address                TEXT,
+  contact_name           TEXT,
+  phone                  TEXT,
+  email                  TEXT,
+  amount                 NUMERIC(16,2),           -- сума виграшу
+  currency               TEXT,
+  award_date             TIMESTAMPTZ,
+  niches                 TEXT[] NOT NULL DEFAULT '{}',
+  keywords               TEXT[] NOT NULL DEFAULT '{}',
+  card_text              TEXT NOT NULL,           -- текст для примітки угоди Kommo (ТЗ: «що показувати менеджеру»)
+  mode                   TEXT NOT NULL CHECK (mode IN ('dry','live')),
+  kommo_company_existing BIGINT,                  -- компанія з таким ЄДРПОУ вже була в Kommo на момент відбору
+  responsible_user_id    BIGINT,                  -- прохід 2: кому віддано
+  kommo_company_id       BIGINT,
+  kommo_contact_id       BIGINT,
+  kommo_lead_id          BIGINT,
+  pushed_at              TIMESTAMPTZ,
+  push_error             TEXT,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (edrpou, ua_id, role)
+);
+CREATE INDEX IF NOT EXISTS idx_prozorro_leads_created ON prozorro_leads (created_at);
+REVOKE ALL ON prozorro_tenders, prozorro_leads FROM ai_readonly;

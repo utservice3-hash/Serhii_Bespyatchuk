@@ -103,6 +103,7 @@ import { minusRegistrySync } from "./jobs/minusRegistrySync.js";
 import { minusDealsRouter } from "./routes/minusRegistry.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
 import { collectLardi } from "./jobs/collectLardi.js";
+import { prozorroLeads } from "./jobs/prozorroLeads.js";
 import { syncCarriers } from "./jobs/syncCarriers.js";
 import { syncNews } from "./jobs/syncNews.js";
 import { evaluateKpiTasks } from "./jobs/evaluateKpiTasks.js";
@@ -751,6 +752,12 @@ cron.schedule("50 */3 * * *", () => {
 cron.schedule("40 */3 * * *", () => {
   void runJob("collectLardi", () => collectLardi());
 });
+
+// 🏛 Prozorro-ліди (задача #5299): щодня о 06:05 за Києвом — переможці тендерів від 500 тис. ₴. О :05, а не :00 —
+// щоб не збігтися з тіком syncKommo (:00/:30). Прохід ~20 хв; звіт у Telegram наприкінці. Прохід 1 — лише пробний режим.
+cron.schedule("5 6 * * *", () => {
+  void runJob("prozorroLeads", () => prozorroLeads());
+}, { timezone: "Europe/Kyiv" });
 
 // Перевізники з CRM (контакти успішних угод) — раз на добу, порціями
 // (некритично для калькулятора; знижено з щогодини заради малого обсягу).
