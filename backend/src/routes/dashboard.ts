@@ -6759,7 +6759,8 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       /** 🧾 Чим підтверджено роботу за період (задача 6455): угода «від рахунку» і / або оплата. Обидва `null` — «без роботи». */
       workProof: (() => {
         const inv = invoiceProofByKey.get(c.client_key), pay = paymentProofByKey.get(c.client_key);
-        return { invoice: inv ? { ...inv, url: kommoLeadUrl(inv.kommoId) } : null, payment: pay ?? null };
+        return { invoice: inv ? { kommoId: inv.kommoId, stage: inv.stage, at: inv.at, open: inv.open, url: kommoLeadUrl(inv.kommoId) } : null,
+                 payment: pay ? { at: pay.at, amount: pay.amount } : null };
       })(),
       pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
       managerId: c.manager_id,
