@@ -15,6 +15,7 @@
  * Звірка з 1С (рахунок і фактичний розхід) — наступний прохід, коли буде сервіс 1С.
  */
 import { FinError, type Db } from "./finance.js";
+import { onecBlock, paidBlock, planPnl, type Flows, type OnecBlock, type PaidBlock } from "./dealLedger.js";
 
 export const FULL_CYCLE_PIPELINES = [8921932, 155304] as const;
 
@@ -42,6 +43,10 @@ export interface CheckInput {
   price: number; isMinus: boolean; paymentType: string | null;
   orderNo: string | null; paid1c: boolean; bankPaid: boolean;
   cashExpense: number | null; requestsPaid: number; requestsOpen: number;
+  /** Бюджет за 1С (формула Тетяни над реалізацією); `undefined`/`null` — у 1С угоди немає, звіряти нема з чим. */
+  budget1c?: number | null;
+  /** Валютні суми реалізації 1С — у гривневі колонки не входять. */
+  fx1c?: string | null;
 }
 /** Що варто перевірити Тетяні (слова — для екрана). Мінусова — окремим списком, не «перевірка». */
 export function checksOf(x: CheckInput): string[] {
@@ -56,6 +61,8 @@ export function checksOf(x: CheckInput): string[] {
     if (x.requestsPaid > x.cashExpense + 1) out.push(`оплачено перевізнику більше за план: ${fmt(x.requestsPaid)} проти ${fmt(x.cashExpense)}`);
     else if (x.requestsPaid + x.requestsOpen === 0) out.push(`готівковий розхід ${fmt(x.cashExpense)}, а запиту на оплату немає`);
   }
+  if (x.budget1c != null && Math.abs(x.price - x.budget1c) >= 1) out.push(`бюджет Kommo ${fmt(x.price)} ≠ 1С ${fmt(x.budget1c)}`);
+  if (x.fx1c) out.push(`у 1С сума у валюті (${x.fx1c}) — у гривневі колонки не входить`);
   return out;
 }
 const fmt = (n: number) => Math.round(n).toLocaleString("uk-UA").replace(/ /g, " ");
@@ -67,6 +74,8 @@ export interface MRDeal {
   id: number; name: string; client: string | null; closedAt: string; closedMonth: string; price: number; isMinus: boolean; paymentType: string | null;
   closer: number | null; current: number | null; reassigned: boolean;
   checks: string[]; override: Override | null; included: boolean; profit: number;
+  /** Блоки «як у таблиці Тетяни» (прохід 2): Kommo за типами, 1С, оплати клієнтів з 1С, плановий PNL (з 1С). */
+  createdAt: string | null; kommo: (Flows & { untyped: number }) | null; onec: OnecBlock | null; paid: PaidBlock | null; planPnl: number | null;
 }
 /** Угода в цьому місяці після рішень Тетяни: перенесена ЗВІДСИ — немає, перенесена СЮДИ — є; «не рахувати» — є, але не входить. */
 export function placeInMonth(d: Pick<MRDeal, "closedMonth" | "price">, ov: Override | null, month: string): { inMonth: boolean; included: boolean; profit: number } {
@@ -97,12 +106,14 @@ export function summarize(deals: readonly MRDeal[], names: ReadonlyMap<number, {
 
 export interface MonthResult {
   month: string; computedAt: string; kommoBase: string; eventsSince: string | null;
+  /** Коли 1С по угодах востаннє синкнулось успішно; `null` — ще ні (блоки 1С порожні не тому, що в 1С нічого немає). */
+  onecSince: string | null; onecError: string | null;
   managers: MRManager[]; deals: MRDeal[];
   totals: { deals: number; result: number; review: { n: number; sum: number }; minus: { n: number; sum: number } };
 }
 
 /** Kommo-поля угоди, потрібні перевіркам (читаються наживо — у базі їх немає). */
-export interface LiveFields { orderNo: string | null; paid1c: boolean; income: number | null; cashExpense: number | null }
+export interface LiveFields { orderNo: string | null; paid1c: boolean; income: number | null; cashExpense: number | null; flows?: Flows & { untyped: number } }
 
 /** Результат місяця з бази + живих полів Kommo (`live`) + платежів «Виписки» (`bankPaid`). */
 export async function loadMonthResult(db: Db, month: string, deps: {
@@ -115,7 +126,7 @@ export async function loadMonthResult(db: Db, month: string, deps: {
       COALESCE(NULLIF(btrim(u.full_name), ''), mm.name, u.email) AS by FROM fin_month_result_overrides o LEFT JOIN users u ON u.id = o.set_by LEFT JOIN managers mm ON mm.id = u.manager_id`)).rows as any[])
     .map((x) => [Number(x.id), { kommoId: Number(x.id), action: x.action, targetMonth: x.tm, profit: x.profit == null ? null : Number(x.profit), note: x.note, setBy: x.by ?? null, setAt: new Date(x.set_at).toISOString() } as Override]));
   const movedIn = [...ov.values()].filter((o) => o.action === "move" && o.targetMonth === m).map((o) => o.kommoId);
-  const rows = (await db.query(`SELECT d.kommo_id::text AS id, d.name, d.client_name, d.price::float8 AS price, d.is_minus, d.payment_type, d.closed_at_kommo AS closed,
+  const rows = (await db.query(`SELECT d.kommo_id::text AS id, d.name, d.client_name, d.price::float8 AS price, d.is_minus, d.payment_type, d.closed_at_kommo AS closed, d.created_at_kommo AS created,
         to_char(date_trunc('month', d.closed_at_kommo AT TIME ZONE 'Europe/Kyiv'), 'YYYY-MM-DD') AS cm, mg.kommo_user_id::text AS cur
       FROM deals d LEFT JOIN managers mg ON mg.id = d.manager_id
      WHERE d.status_id = 142 AND d.pipeline_id = ANY($3) AND d.closed_at_kommo IS NOT NULL
@@ -130,6 +141,12 @@ export async function loadMonthResult(db: Db, month: string, deps: {
         COALESCE(sum(carrier_pay_amount) FILTER (WHERE status_id NOT IN (142, 143)), 0)::float8 AS open
       FROM deals WHERE pipeline_id = 7341740 AND source_deal_id = ANY($1) AND carrier_pay_type ILIKE 'готів%' GROUP BY 1`, [ids])).rows as any[])
     req.set(Number(x.id), { paid: Number(x.paid), open: Number(x.open) });
+  const inv = new Map<number, any[]>(), pay = new Map<number, any[]>();
+  for (const x of (await db.query(`SELECT deal_id::text AS id, organization, sum::float8 AS sum, currency, act_on::text AS act_on,
+      out_vat::float8 AS v, out_novat::float8 AS nv, out_unload::float8 AS u, out_cash::float8 AS c FROM onec_deal_invoices WHERE deal_id = ANY($1)`, [ids])).rows as any[])
+    inv.set(Number(x.id), [...(inv.get(Number(x.id)) ?? []), { organization: x.organization, sum: x.sum, currency: x.currency, actOn: x.act_on, out: { vat: x.v, novat: x.nv, unload: x.u, cash: x.c } }]);
+  for (const x of (await db.query(`SELECT deal_id::text AS id, organization, sum::float8 AS sum, currency, paid_on::text AS paid_on FROM onec_deal_payments WHERE deal_id = ANY($1)`, [ids])).rows as any[])
+    pay.set(Number(x.id), [...(pay.get(Number(x.id)) ?? []), { organization: x.organization, sum: x.sum, currency: x.currency, paidOn: x.paid_on }]);
   const live = ids.length ? await deps.live(ids) : new Map<number, LiveFields>();
   const paidBank = await deps.bankPaid(rows.map((x) => ({ id: Number(x.id), orderNo: live.get(Number(x.id))?.orderNo ?? null, income: live.get(Number(x.id))?.income ?? null, client: x.client_name })));
   const names = new Map(((await db.query(`SELECT DISTINCT ON (kommo_user_id) kommo_user_id::text AS id, name, is_active FROM managers WHERE kommo_user_id IS NOT NULL ORDER BY kommo_user_id, is_active DESC, id`)).rows as any[])
@@ -141,17 +158,22 @@ export async function loadMonthResult(db: Db, month: string, deps: {
     const p = placeInMonth({ closedMonth: x.cm, price: Number(x.price ?? 0) }, o, m);
     if (!p.inMonth) continue;
     const lf = live.get(id), rq = req.get(id) ?? { paid: 0, open: 0 };
+    const onec = onecBlock(inv.get(id) ?? []), paid = paidBlock(pay.get(id) ?? []);
     deals.push({ id, name: x.name ?? "", client: x.client_name, closedAt: new Date(x.closed).toISOString(), closedMonth: x.cm, price: Number(x.price ?? 0), isMinus: !!x.is_minus,
       paymentType: x.payment_type, closer, current: cur, reassigned: closer !== cur,
       checks: checksOf({ price: Number(x.price ?? 0), isMinus: !!x.is_minus, paymentType: x.payment_type, orderNo: lf?.orderNo ?? null, paid1c: lf?.paid1c ?? false,
-        bankPaid: paidBank.has(id), cashExpense: lf?.cashExpense ?? null, requestsPaid: rq.paid, requestsOpen: rq.open }),
-      override: o, included: p.included, profit: p.profit });
+        bankPaid: paidBank.has(id), cashExpense: lf?.cashExpense ?? null, requestsPaid: rq.paid, requestsOpen: rq.open,
+        budget1c: onec?.budget ?? null, fx1c: onec?.fx.length ? onec.fx.map((f) => `${fmt(f.sum)} ${f.currency}`).join(", ") : null }),
+      override: o, included: p.included, profit: p.profit,
+      createdAt: x.created ? new Date(x.created).toISOString() : null, kommo: lf?.flows ?? null, onec, paid, planPnl: onec ? planPnl(onec.flows) : null });
   }
   deals.sort((a, b) => a.closedAt.localeCompare(b.closedAt));
   const managers = summarize(deals, names);
   const sum = (f: (x: MRManager) => number) => r2(managers.reduce((s, x) => s + f(x), 0));
   const wm = (await db.query(`SELECT watermark FROM deal_responsible_state WHERE id = 1`)).rows[0]?.watermark;
-  return { month: m, computedAt: (deps.now ?? new Date()).toISOString(), kommoBase: deps.kommoBase, eventsSince: wm ? new Date(wm).toISOString() : null, managers, deals,
+  const os = (await db.query(`SELECT synced_at, error FROM onec_deals_state WHERE id = 1`)).rows[0];
+  return { month: m, computedAt: (deps.now ?? new Date()).toISOString(), kommoBase: deps.kommoBase, eventsSince: wm ? new Date(wm).toISOString() : null,
+    onecSince: os?.synced_at ? new Date(os.synced_at).toISOString() : null, onecError: os?.error ?? null, managers, deals,
     totals: { deals: sum((x) => x.deals), result: sum((x) => x.result), review: { n: sum((x) => x.review.n), sum: sum((x) => x.review.sum) }, minus: { n: sum((x) => x.minus.n), sum: sum((x) => x.minus.sum) } } };
 }
 

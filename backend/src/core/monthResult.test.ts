@@ -50,7 +50,7 @@ test("#1282b ПЕРЕВІРКИ: рахунок і прихід лише в бе
 });
 
 const deal = (o: Partial<MRDeal>): MRDeal => ({ id: 1, name: "", client: null, closedAt: "2026-09-10T10:00:00.000Z", closedMonth: "2026-09-01", price: 1000, isMinus: false,
-  paymentType: null, closer: 7, current: 7, reassigned: false, checks: [], override: null, included: true, profit: 1000, ...o });
+  paymentType: null, closer: 7, current: 7, reassigned: false, checks: [], override: null, included: true, profit: 1000, createdAt: null, kommo: null, onec: null, paid: null, planPnl: null, ...o });
 const ov = (o: Partial<Override>): Override => ({ kommoId: 1, action: "exclude", targetMonth: null, profit: null, note: "бо так", setBy: null, setAt: "", ...o });
 
 /**

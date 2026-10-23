@@ -5895,10 +5895,14 @@ export interface MRCheckOverride { kommoId: number; action: "exclude" | "move" |
 export interface MRDeal {
   id: number; name: string; client: string | null; closedAt: string; closedMonth: string; price: number; isMinus: boolean; paymentType: string | null;
   closer: number | null; current: number | null; reassigned: boolean; checks: string[]; override: MRCheckOverride | null; included: boolean; profit: number;
+  createdAt: string | null; kommo: (MRFlows & { untyped: number }) | null; planPnl: number | null;
+  onec: { organization: string; flows: MRFlows; budget: number | null; fx: { currency: string; sum: number }[]; actOn: string | null } | null;
+  paid: { vat: number; novat: number; cash: number; total: number; fx: { currency: string; sum: number }[]; lastOn: string | null } | null;
 }
+export interface MRFlows { in: { vat: number; novat: number; cash: number }; out: { vat: number; novat: number; unload: number; cash: number } }
 export interface MRManager { kommoUserId: number | null; name: string; active: boolean; deals: number; result: number; review: { n: number; sum: number }; minus: { n: number; sum: number }; overrides: number }
 export interface MonthResultData {
-  month: string; computedAt: string; kommoBase: string; eventsSince: string | null; canEdit: boolean;
+  month: string; computedAt: string; kommoBase: string; eventsSince: string | null; onecSince: string | null; onecError: string | null; canEdit: boolean;
   managers: MRManager[]; deals: MRDeal[];
   totals: { deals: number; result: number; review: { n: number; sum: number }; minus: { n: number; sum: number } };
 }

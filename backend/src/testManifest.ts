@@ -54,6 +54,7 @@ export const MANIFEST_FILES: string[] = [
   "core/paymentScreen.test.js",
   "core/paymentApprovals.test.js",
   "core/monthResult.test.js",
+  "core/dealLedger.test.js",
   "core/taskVisibility.test.js",
   "core/taskStatusRights.test.js",
   "routes/taskStatusPatch.test.js",
@@ -362,7 +363,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "tldv_meetings",
   "workua_responses",
   "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "fin_import_months",
-  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides",
+  "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state",
   "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "constructor_stamp_log", "cargo_vehicles", "cargo_pallets", "cargo_calculations",
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
   "ba_equipment_issues",
@@ -2347,6 +2348,13 @@ export const MANIFEST_TESTS: string[] = [
   "#1282d ЖИВИЙ SQL: межа місяця за Києвом, лише успішні «Повного циклу», хто закривав, рішення й «Повернути», відмови нічого не пишуть",
   "#1282e ПРОВОДКА: межі роутів і матриця, AI закрито, джоба по угодах щоночі під наглядом, вкладка з рішеннями й Excel",
   "#1282f ДЖОБА ВІДПОВІДАЛЬНИХ: поточний і минулий місяць за Києвом, перехід року",
+  // core/dealLedger.test.ts — «Результат місяця», прохід 2: угода як у таблиці Тетяни, 1С по угодах (23.10.2026).
+  "#1283 БЮДЖЕТ = calcBudget_ Тетяни: коефіцієнти по обидва боки умов на її жовтневих рядках, вигрузка ×0, нулі — порожньо",
+  "#1283b РОЗБІР 1С: лише угоди, сентинел 01.01.2001 — немає дати, суми з пробілами й комою, розхід за типом з мінусом, без менеджера",
+  "#1283c БЛОКИ: організація → тип оплати, валюта окремо, оплати за тим самим правилом, Kommo — п'ять слотів за типом",
+  "#1283d ЖИВИЙ SQL: синк 1С — заміна цілком, порожньо й понад −10% — відмова без змін, причина в стані",
+  "#1283e ЖИВИЙ SQL: угода з 1С — блоки, плановий PNL, Kommo ≠ 1С і валюта на перевірку, без 1С — мовчить",
+  "#1283f ПРОВОДКА: синк 1С :45 під наглядом, адреса з сервісу дебіторки, AI закрито, Excel і фронт — блоки як у «Сделки»",
   // core/creditLimits.test.ts — ліміти готівкового рядка дебіторки (21.10.2026).
   "#1280 ГОТІВКОВИЙ РЯДОК ДЕБІТОРКИ — ліміти днів і суми з таблиці лімітів за ключем рядка, як у безготівкових",
   // core/paymentApprovals.test.ts — тестову вкладку «План/факт · авто» прибрано (Тетяна 21.10.2026).

@@ -6387,3 +6387,24 @@ CREATE TABLE IF NOT EXISTS fin_month_result_overrides (
 REVOKE ALL ON deal_responsible_events FROM ai_readonly;
 REVOKE ALL ON deal_responsible_state FROM ai_readonly;
 REVOKE ALL ON fin_month_result_overrides FROM ai_readonly;
+
+-- 📒 1С ПО УГОДАХ (задача #5583, прохід 2, 23.10.2026): реалізації (`costinvoice`, вкладка «Расх из 1C» таблиці
+-- Тетяни) і оплати клієнтів (`paydata`, вкладка «1С») — лише рядки з номером угоди Kommo. Синк `syncOnecDeals`
+-- щогодини ЗАМІНЮЄ вміст цілком (як її скрипт), але лише після перевірок: порожньо чи зникло понад 10% — відмова.
+CREATE TABLE IF NOT EXISTS onec_deal_invoices (
+  deal_id BIGINT NOT NULL, number TEXT, organization TEXT NOT NULL, kontragent TEXT, doc_on DATE, act_on DATE,
+  sum NUMERIC(14,2) NOT NULL, currency TEXT NOT NULL,
+  out_vat NUMERIC(14,2) NOT NULL DEFAULT 0, out_novat NUMERIC(14,2) NOT NULL DEFAULT 0,
+  out_unload NUMERIC(14,2) NOT NULL DEFAULT 0, out_cash NUMERIC(14,2) NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS onec_deal_invoices_deal ON onec_deal_invoices (deal_id);
+CREATE TABLE IF NOT EXISTS onec_deal_payments (
+  deal_id BIGINT NOT NULL, organization TEXT NOT NULL, kontragent TEXT, paid_on DATE, sum NUMERIC(14,2) NOT NULL, currency TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS onec_deal_payments_deal ON onec_deal_payments (deal_id);
+CREATE TABLE IF NOT EXISTS onec_deals_state (
+  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1), synced_at TIMESTAMPTZ, invoices INTEGER, payments INTEGER, error TEXT, error_at TIMESTAMPTZ
+);
+REVOKE ALL ON onec_deal_invoices FROM ai_readonly;
+REVOKE ALL ON onec_deal_payments FROM ai_readonly;
+REVOKE ALL ON onec_deals_state FROM ai_readonly;
