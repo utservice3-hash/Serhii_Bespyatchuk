@@ -28,7 +28,8 @@ type Tab = "sched" | "base" | "vac" | "train" | "daily" | "acc" | "tpl" | Planne
 export function HiringSection() {
   const [meta, setMeta] = useState<HiringMeta | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>(() => (LS.get("tab") as Tab) || "sched");
+  // 🔗 Адреса `?tab=emp&employee=<id>` (23.10.2026) — перехід із «Налаштування → Користувачі» на картку людини.
+  const [tab, setTab] = useState<Tab>(() => (new URLSearchParams(window.location.search).get("tab") === "emp" ? "emp" : (LS.get("tab") as Tab)) || "sched");
   const [nonce, setNonce] = useState(0);
   // Клік по числу кандидатів вакансії відкриває «Кандидатів» із фільтром (прохід 1a).
   const [vacFilter, setVacFilter] = useState<{ id: number; seq: number } | null>(null);

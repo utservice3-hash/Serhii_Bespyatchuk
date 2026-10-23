@@ -74,7 +74,18 @@ export function HiringEmployees({ toast }: { toast: Toast }) {
   const [importing, setImporting] = useState(false);
   const [adding, setAdding] = useState(false);
   const [bulk, setBulk] = useState(false);
-  const [open, setOpen] = useState<{ id: number; tab: DrawerTab } | null>(null);
+  // 🔗 `?employee=<id>` відкриває картку одразу (перехід із «Налаштування → Користувачі», 23.10.2026); параметр
+  // прибираємо з адреси, щоб оновлення сторінки не відкривало картку знову.
+  const [open, setOpen] = useState<{ id: number; tab: DrawerTab } | null>(() => {
+    const id = Number(new URLSearchParams(window.location.search).get("employee"));
+    return Number.isInteger(id) && id > 0 ? { id, tab: "profile" } : null;
+  });
+  useEffect(() => {
+    const u = new URL(window.location.href);
+    if (!u.searchParams.has("employee")) return;
+    u.searchParams.delete("employee"); u.searchParams.delete("tab");
+    window.history.replaceState(window.history.state, "", u.pathname + u.search + u.hash);
+  }, []);
   // Стан фото: збій завантаження НЕ читається як «фото немає ні в кого» — попереднє лишається, помилка видима.
   const [photos, setPhotos] = useState<Map<number, PersonPhoto> | null>(null);
   const [photosErr, setPhotosErr] = useState<string | null>(null);
