@@ -155,7 +155,7 @@ function fakeDb(options: number[], start: Partial<PzConfig> = {}) {
  * словами; без змін — нічого не пишемо.
  * 🧨 Червоніє, якщо відкрити не-адміну, пропустити поза межами, вибрати не лідогена, писати журнал на повтор чи не на зміну.
  */
-test("#2365 НАЛАШТУВАННЯ: лише адмін; межі полів; лише активний лідоген; журнал по полях людськими словами; без змін — тиша", async () => {
+test("#2365 НАЛАШТУВАННЯ: адмін і ОД; межі полів; лише активний лідоген; журнал по полях людськими словами; без змін — тиша", async () => {
   const routes = SRC("routes/prozorro.ts");
   for (const m of ["get", "put"]) {
     assert.match(routes, new RegExp(`prozorroRouter\\.${m}\\("/settings", async \\(req, res\\) => \\{\\n {2}if \\(!canEditSettings\\(req\\.auth!\\.roleKey\\)\\) \\{ res\\.status\\(403\\)`),
