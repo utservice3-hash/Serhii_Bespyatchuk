@@ -447,10 +447,11 @@ export function Dashboard() {
         const was = prev.get(t.id);
         // Мій власний перехід (поставив з цієї вкладки) — мовчимо: про нього вже сказав мій тост.
         const self = was !== undefined && was !== t.status && consumeSelfStatus(selfStatus.current, t.id, t.status);
+        if (self) continue;
         const mine = t.createdById === auth?.userId
           || (auth?.managerId != null && t.assigneeId === auth.managerId)
           || (t.assigneeUserId != null && t.assigneeUserId === auth?.userId);
-        if (mine && !self && was && was !== t.status && (t.status === "in_progress" || t.status === "done")) {
+        if (mine && was && was !== t.status && (t.status === "in_progress" || t.status === "done")) {
           const who = t.assigneeName ? ` — ${t.assigneeName}` : "";
           const text = `Задача ${t.status === "done" ? "виконана ✅" : "взята в роботу ▶️"}${who}: ${t.title.slice(0, 90)}`;
           notifyEvent({ key: `task-${t.id}`, tone: t.status === "done" ? "ok" : "info",
@@ -458,7 +459,7 @@ export function Dashboard() {
             text: t.title.slice(0, 90), plain: text, success: t.status === "done", go: "tasks", label: "До задачника" });
         }
         // ✅ «Приймає»: задача перейшла на затвердження — чекає мого прийняття (тримає #1080h).
-        if (!self && isAcceptanceAlert(t, was, { userId: auth?.userId, managerId: auth?.managerId })) {
+        if (isAcceptanceAlert(t, was, { userId: auth?.userId, managerId: auth?.managerId })) {
           const text = acceptanceAlertText(t.title, t.assigneeName);
           notifyEvent({ key: `accept-${t.id}`, tone: "ok", src: `Задачник${t.assigneeName ? ` · ${t.assigneeName}` : ""}`,
             head: "Чекає вашого прийняття", text: t.title.slice(0, 90), plain: text, success: true, go: "tasks", label: "До задачника" });

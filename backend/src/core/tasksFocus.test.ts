@@ -343,7 +343,12 @@ test("#1970 ЗАДАЧНИК: своя зміна статусу не дає «�
   const dash = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "Dashboard.tsx"), "utf8")
     .replace(/^\s*\/\/.*$/gm, " ").replace(/\{?\/\*[\s\S]*?\*\/\}?/g, " ").replace(/\s+/g, " ");
   assert.match(dash, /if \(patch\.status\) noteSelfStatus\(selfStatus\.current, id, patch\.status\);/, "🔴 локальна зміна статусу не лишає позначки");
-  assert.match(dash, /const self = was !== undefined && was !== t\.status && consumeSelfStatus\(selfStatus\.current, t\.id, t\.status\);/);
-  assert.match(dash, /if \(mine && !self && was && was !== t\.status/, "🔴 «Задачу виконано» не перевіряє, чи зміна моя");
-  assert.match(dash, /if \(!self && isAcceptanceAlert\(/, "🔴 «Чекає вашого прийняття» не перевіряє, чи зміна моя");
+  // Свій перехід пропускає задачу ДО обох сповіщень («Задачу виконано» і «Чекає вашого прийняття») —
+  // порядок перевіряється позиціями в тілі ефекту, а не наявністю рядків (правило 10).
+  const skip = dash.indexOf("const self = was !== undefined && was !== t.status && consumeSelfStatus(selfStatus.current, t.id, t.status); if (self) continue;");
+  assert.ok(skip > 0, "🔴 власний перехід статусу не пропускається в ефекті сповіщень");
+  const done = dash.indexOf("if (mine && was && was !== t.status");
+  const acc = dash.indexOf("if (isAcceptanceAlert(t, was,");
+  assert.ok(done > skip && acc > skip, "🔴 «Задачу виконано» або «Чекає вашого прийняття» перевіряється ДО пропуску власної зміни");
+  assert.ok(acc - skip < 2500, "🔴 пропуск власної зміни стоїть не в тому ж циклі, що сповіщення");
 });
