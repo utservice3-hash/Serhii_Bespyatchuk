@@ -1628,6 +1628,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
     allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "PUT", path: "/api/finance/kpi/plan", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },
+  // 🏁 «Результат місяця» (23.10.2026): перегляд — як «Тиждень і місяць»; рішення по угоді — deny-only (проба писала б у прод).
+  { method: "GET", path: "/api/finance/month-result?m=2026-09", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/finance/month-result/export.xlsx?m=2026-09", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp", "financier"], deny: ["hr", "team_lead", "manager"] },
+  { method: "PUT", path: "/api/finance/month-result/override", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   // 🧾 «Оновити з таблиці» оплат (21.10.2026): deny-only — проба дозволеної ролі запустила б синк на проді.
   { method: "POST", path: "/api/finance/approvals/sync", cls: "deny-only",
     allow: [], deny: ["hr", "team_lead", "manager"] },

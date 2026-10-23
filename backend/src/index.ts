@@ -74,6 +74,8 @@ import { integrationsRouter } from "./routes/integrations.js";
 import { syncBank } from "./jobs/syncBank.js";
 import { syncSafe } from "./jobs/syncSafe.js";
 import { syncApprovals } from "./jobs/syncApprovals.js";
+import { syncDealResponsible } from "./jobs/syncDealResponsible.js";
+import { syncOnecDeals } from "./jobs/syncOnecDeals.js";
 import { buildPaymentFile } from "./jobs/buildPaymentFile.js";
 import { kommoCircuitState } from "./kommo/client.js";
 import { checkFreshness, checkAbandonedStages } from "./core/reconcile.js";
@@ -583,6 +585,16 @@ cron.schedule("25,55 * * * *", () => {
 // поруч із Сейфом. Нагляд — MONITORED_JOBS (everyMin == крону).
 cron.schedule("20,50 * * * *", () => {
   void runJob("syncApprovals", () => syncApprovals());
+}, { timezone: "Europe/Kyiv" });
+// 🏁 Зміни відповідального успішних угод «Повного циклу» поточного й минулого місяця (23.10.2026) — для «Результату
+// місяця» («хто закривав»): щоночі о 04:50 (~200 запитів Kommo по угодах; не поруч із синком о :00/:30).
+cron.schedule("50 4 * * *", () => {
+  void runJob("syncDealResponsible", () => syncDealResponsible());
+}, { timezone: "Europe/Kyiv" });
+// 📒 1С по угодах (23.10.2026): реалізації й оплати клієнтів — для «Результату місяця» (блоки 1С як у таблиці Тетяни).
+// Щогодини о :45 — не :00/:30 (синк Kommo) і не :40 (файл на оплату, теж ходить у 1С).
+cron.schedule("45 * * * *", () => {
+  void runJob("syncOnecDeals", () => syncOnecDeals());
 }, { timezone: "Europe/Kyiv" });
 // 💸 Файл на оплату перевізникам (зустріч з Тетяною 13.10.2026): щогодини о :40 (не :00/:30 — там сходяться розклади)
 // + фінальний о 16:55 у будні, щоб о 17:00 файл був готовий. У Kommo не пише.

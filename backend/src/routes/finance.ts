@@ -14,6 +14,8 @@ import {
 import { loadPlan, setManualPlan } from "../core/financePlan.js";
 import { opexFromApprovals } from "../core/paymentApprovals.js";
 import { runApprovalsSyncNow } from "../jobs/syncApprovals.js";
+import { setOverride } from "../core/monthResult.js";
+import { monthResult, monthResultXlsx, dropMonthResultCache } from "../jobs/monthResultData.js";
 import { fmRefsFor } from "../core/financeKpiRefs.js";
 
 /**
@@ -156,6 +158,31 @@ financeRouter.post("/restore", async (req, res) => {
 });
 
 // ── Цифри, коментарі, погодження ─────────────────────────────────────────────
+// 🏁 «Результат місяця» (задача Тетяни #5583, 23.10.2026): угод і Σ бюджету Kommo по тих, хто закривав; перевірки й
+// рішення Тетяни по угоді. Перегляд — як решта «Фінансів»; рішення — право вносити.
+financeRouter.get("/month-result", async (req, res) => {
+  try {
+    onlyFinance(req);
+    res.json({ ...(await monthResult(req.query.m, req.query.refresh === "1")), canEdit: roleHasPerm(req.auth!.roleKey, "edit_finance") });
+  } catch (e) { fail(res, e); }
+});
+financeRouter.get("/month-result/export.xlsx", async (req, res) => {
+  try {
+    onlyFinance(req);
+    const r = await monthResult(req.query.m);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="rezultat_${r.month.slice(0, 7)}.xlsx"`);
+    res.send(monthResultXlsx(r));
+  } catch (e) { fail(res, e); }
+});
+financeRouter.put("/month-result/override", async (req, res) => {
+  try {
+    canEdit(req);
+    const r = await tx((db) => setOverride(db, req.auth!.userId, req.body));
+    dropMonthResultCache(r.months);
+    res.json(r);
+  } catch (e) { fail(res, e); }
+});
 // 🧾 «Оновити з таблиці» (21.10.2026): синк «UTS Утверждение оплат» зараз, той самий, що крон. Межа — право вносити.
 financeRouter.post("/approvals/sync", async (req, res) => {
   try {

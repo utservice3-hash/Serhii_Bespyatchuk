@@ -5948,6 +5948,31 @@ export async function downloadCarrierPaymentsXlsx(day: string): Promise<{ blob: 
   const m = /filename="([^"]+)"/.exec((res.headers as Record<string, string | undefined>)["content-disposition"] ?? "");
   return { blob: res.data as Blob, filename: m?.[1] ?? `oplata_perevizny_${day}.xlsx` };
 }
+/** 🏁 «Результат місяця» (#5583, 23.10.2026): успішні угоди «Повного циклу» за менеджером, який закривав, і рішення Тетяни. */
+export interface MRCheckOverride { kommoId: number; action: "exclude" | "move" | "profit"; targetMonth: string | null; profit: number | null; note: string; setBy: string | null; setAt: string }
+export interface MRDeal {
+  id: number; name: string; client: string | null; closedAt: string; closedMonth: string; price: number; isMinus: boolean; paymentType: string | null;
+  closer: number | null; current: number | null; reassigned: boolean; checks: string[]; override: MRCheckOverride | null; included: boolean; profit: number;
+  createdAt: string | null; kommo: (MRFlows & { untyped: number }) | null; planPnl: number | null;
+  onec: { organization: string; flows: MRFlows; budget: number | null; fx: { currency: string; sum: number }[]; actOn: string | null } | null;
+  paid: { vat: number; novat: number; cash: number; total: number; fx: { currency: string; sum: number }[]; lastOn: string | null } | null;
+}
+export interface MRFlows { in: { vat: number; novat: number; cash: number }; out: { vat: number; novat: number; unload: number; cash: number } }
+export interface MRManager { kommoUserId: number | null; name: string; active: boolean; deals: number; result: number; review: { n: number; sum: number }; minus: { n: number; sum: number }; overrides: number }
+export interface MonthResultData {
+  month: string; computedAt: string; kommoBase: string; eventsSince: string | null; onecSince: string | null; onecError: string | null; canEdit: boolean;
+  managers: MRManager[]; deals: MRDeal[];
+  totals: { deals: number; result: number; review: { n: number; sum: number }; minus: { n: number; sum: number } };
+}
+export const fetchMonthResult = async (m: string, refresh = false) =>
+  (await api.get<MonthResultData>("/finance/month-result", { params: refresh ? { m, refresh: 1 } : { m } })).data;
+export const setMonthResultOverride = async (body: { kommoId: number; action: MRCheckOverride["action"] | null; targetMonth?: string; profit?: string; note?: string }) =>
+  (await api.put<{ ok: boolean; months: string[] }>("/finance/month-result/override", body)).data;
+export async function downloadMonthResultXlsx(m: string): Promise<{ blob: Blob; filename: string }> {
+  const res = await api.get("/finance/month-result/export.xlsx", { params: { m }, responseType: "blob" });
+  const f = /filename="([^"]+)"/.exec((res.headers as Record<string, string | undefined>)["content-disposition"] ?? "");
+  return { blob: res.data as Blob, filename: f?.[1] ?? `rezultat_${m}.xlsx` };
+}
 export const fetchFinItem = async (id: number, year: number, month?: string) => (await api.get<FinItemCard>(`/finance/items/${id}`, { params: month ? { year, m: month.slice(0, 7) } : { year } })).data;
 /** «Оновити з таблиці»: синк «UTS Утверждение оплат» зараз (21.10.2026). */
 export const syncFinApprovals = async () => (await api.post<{ ok: boolean; rows?: number }>("/finance/approvals/sync")).data;

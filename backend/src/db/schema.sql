@@ -6396,3 +6396,57 @@ UPDATE roles SET screen_access = screen_access || '{"prozorro":true}'::jsonb
   WHERE key IN ('admin', 'ceo', 'opdir', 'kvp') AND NOT (screen_access ? 'prozorro');
 UPDATE roles SET screen_access = screen_access || '{"prozorro":false}'::jsonb
   WHERE key NOT IN ('admin', 'ceo', 'opdir', 'kvp') AND NOT (screen_access ? 'prozorro');
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🏁 «РЕЗУЛЬТАТ МІСЯЦЯ» (задача Тетяни #5583, 23.10.2026): кількість успішних угод і Σ бюджету Kommo по менеджеру за
+-- місяць закриття — як її аркуш «Результати комер.відділу» (вересень звірено: 25 із 33 до гривні).
+--  · `deal_responsible_events` — зміни відповідального угод «Повного циклу» з Kommo (`syncDealResponsible`): угоду
+--    рахуємо тому, хто був відповідальним У МОМЕНТ ЗАКРИТТЯ (Янчевський звільнився — його 19 угод перепризначили).
+--  · `fin_month_result_overrides` — ручні рішення Тетяни по угоді: не рахувати / в інший місяць / свій профіт;
+--    примітка обовʼязкова; «Повернути» = видалити рядок. ⚠️ Revert коду не прибирає цих таблиць.
+CREATE TABLE IF NOT EXISTS deal_responsible_events (
+  kommo_id     BIGINT NOT NULL,
+  changed_at   TIMESTAMPTZ NOT NULL,
+  from_user_id BIGINT,
+  to_user_id   BIGINT,
+  PRIMARY KEY (kommo_id, changed_at)
+);
+CREATE TABLE IF NOT EXISTS deal_responsible_state (
+  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  watermark TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS fin_month_result_overrides (
+  kommo_id     BIGINT PRIMARY KEY,
+  action       TEXT NOT NULL CHECK (action IN ('exclude', 'move', 'profit')),
+  target_month DATE CHECK (target_month IS NULL OR target_month = date_trunc('month', target_month)::date),
+  profit       NUMERIC(14,2),
+  note         TEXT NOT NULL CHECK (btrim(note) <> ''),
+  set_by       INTEGER REFERENCES users(id),
+  set_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((action = 'move') = (target_month IS NOT NULL)),
+  CHECK ((action = 'profit') = (profit IS NOT NULL))
+);
+REVOKE ALL ON deal_responsible_events FROM ai_readonly;
+REVOKE ALL ON deal_responsible_state FROM ai_readonly;
+REVOKE ALL ON fin_month_result_overrides FROM ai_readonly;
+
+-- 📒 1С ПО УГОДАХ (задача #5583, прохід 2, 23.10.2026): реалізації (`costinvoice`, вкладка «Расх из 1C» таблиці
+-- Тетяни) і оплати клієнтів (`paydata`, вкладка «1С») — лише рядки з номером угоди Kommo. Синк `syncOnecDeals`
+-- щогодини ЗАМІНЮЄ вміст цілком (як її скрипт), але лише після перевірок: порожньо чи зникло понад 10% — відмова.
+CREATE TABLE IF NOT EXISTS onec_deal_invoices (
+  deal_id BIGINT NOT NULL, number TEXT, organization TEXT NOT NULL, kontragent TEXT, doc_on DATE, act_on DATE,
+  sum NUMERIC(14,2) NOT NULL, currency TEXT NOT NULL,
+  out_vat NUMERIC(14,2) NOT NULL DEFAULT 0, out_novat NUMERIC(14,2) NOT NULL DEFAULT 0,
+  out_unload NUMERIC(14,2) NOT NULL DEFAULT 0, out_cash NUMERIC(14,2) NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS onec_deal_invoices_deal ON onec_deal_invoices (deal_id);
+CREATE TABLE IF NOT EXISTS onec_deal_payments (
+  deal_id BIGINT NOT NULL, organization TEXT NOT NULL, kontragent TEXT, paid_on DATE, sum NUMERIC(14,2) NOT NULL, currency TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS onec_deal_payments_deal ON onec_deal_payments (deal_id);
+CREATE TABLE IF NOT EXISTS onec_deals_state (
+  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1), synced_at TIMESTAMPTZ, invoices INTEGER, payments INTEGER, error TEXT, error_at TIMESTAMPTZ
+);
+REVOKE ALL ON onec_deal_invoices FROM ai_readonly;
+REVOKE ALL ON onec_deal_payments FROM ai_readonly;
+REVOKE ALL ON onec_deals_state FROM ai_readonly;
