@@ -1,6 +1,5 @@
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
-import { sendAdminAlert } from "../bot/notify.js";
 import { jobSkip, type JobSkip } from "./jobRuns.js";
 import { PROZORRO_NICHES } from "../core/prozorroNiches.js";
 import { makeProzorroClient } from "../core/prozorroClient.js";
@@ -12,7 +11,8 @@ import { quietTooLong, reportText } from "../core/prozorroRules.js";
  *
  * Прохід 1: збір переможців і ПРОБНИЙ режим — рядки лягають у `prozorro_leads` з `mode = 'dry'`, у Kommo не пишеться
  * нічого (запису в CRM тут немає взагалі). Логіка — `core/prozorroCollect.ts`, правила — `core/prozorroRules.ts`.
- * Наприкінці — звіт у Telegram (форма з ТЗ); якщо вирок «аварія», джоба ПІСЛЯ звіту падає, і це видно в банері.
+ * Наприкінці — звіт (форма з ТЗ) у ЛОГ сервера; у Telegram НЕ шлемо (рішення Романа 23.10.2026: «без звіту в телеграм»).
+ * Якщо вирок «аварія», джоба ПІСЛЯ запису звіту в лог падає — це видно в банері (runJob → епізоди), Telegram для цього не потрібен.
  *
  * Ручний запуск на сервері: `node dist/jobs/prozorroLeads.js`.
  */
@@ -83,8 +83,7 @@ export async function prozorroLeads(): Promise<PzCollectResult | JobSkip> {
   const quiet = !res.tally.baseline && quietTooLong(last.rows[0]?.at ?? null, res.launch, now);
   const text = reportText(res.tally, { mode: "dry", minAmount: config.prozorro.minAmount, quiet })
     + (res.verdict.ok ? "" : `\n🔴 ${res.verdict.error}`);
-  console.log(`prozorroLeads: ${JSON.stringify({ ...res.tally, byNiche: undefined })}`);
-  await sendAdminAlert(text);
+  console.log(`prozorroLeads: ${JSON.stringify({ ...res.tally, byNiche: undefined })}\n${text}`);
   if (!res.verdict.ok) throw new Error(res.verdict.error);
   return res;
 }

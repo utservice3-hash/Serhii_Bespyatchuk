@@ -224,7 +224,7 @@ test("#2356 КЛІЄНТ: повтор на 429/5xx і збій мережі, б
 
 /**
  * #2357 — ПРОВОДКА: щодня о 06:05 за Києвом; під наглядом із частотою свого крону (мовчання = тривога); у проході 1
- * джоба НЕ має шляху запису в Kommo — пробний режим не може випадково записати в CRM.
+ * джоба НЕ має шляху запису в Kommo; звіт — у лог, НЕ в Telegram (рішення 23.10), і пишеться ДО падіння.
  * 🧨 Червоніє, якщо зняти джобу з нагляду, розвести частоти, прибрати київський пояс або підтягнути клієнт Kommo в джобу.
  */
 test("#2357 ПРОВОДКА: 06:05 за Києвом, під наглядом раз на добу; у джобі немає запису в Kommo", async () => {
@@ -235,8 +235,10 @@ test("#2357 ПРОВОДКА: 06:05 за Києвом, під наглядом �
   assert.equal(MONITORED_JOBS.find((j) => j.name === "prozorroLeads")?.everyMin, 1440, "🔴 збір не під наглядом або частота розійшлась із кроном");
   const job = SRC("jobs/prozorroLeads.ts") + SRC("core/prozorroCollect.ts");
   assert.doesNotMatch(job, /kommo\/client|kommoWrite/, "🔴 у пробному проході з'явився шлях запису в Kommo");
-  assert.match(SRC("jobs/prozorroLeads.ts"), /await sendAdminAlert\(text\);\n {2}if \(!res\.verdict\.ok\) throw new Error\(res\.verdict\.error\);/,
-    "🔴 звіт іде після падіння (або не йде) — аварійний прохід лишиться без звіту");
+  const jobSrc = SRC("jobs/prozorroLeads.ts");
+  assert.doesNotMatch(jobSrc, /sendAdminAlert/, "🔴 звіт знову шлеться в Telegram — Роман 23.10: «без звіту в телеграм»");
+  assert.match(jobSrc, /console\.log\(`prozorroLeads: [^\n]*\$\{text\}`\);\n {2}if \(!res\.verdict\.ok\) throw new Error\(res\.verdict\.error\);/,
+    "🔴 звіт не пишеться в лог перед падінням — аварійний прохід лишиться без пояснення");
 });
 
 /**
