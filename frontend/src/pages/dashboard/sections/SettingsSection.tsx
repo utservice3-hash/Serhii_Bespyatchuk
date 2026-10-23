@@ -415,9 +415,6 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
   // 🔗 Картки без акаунта (#2271) і кандидати, сховані за замовчуванням (#2273, рішення Романа 22.10: ними керує Найм).
   const [freeCards, setFreeCards] = useState<FreeCard[]>([]);
   const [showCand, setShowCand] = useState(false);
-  // 👤 Прохід 5 (23.10.2026): людьми з карткою керують у «Найм → Співробітники»; тут за замовчуванням — лише акаунти
-  // без картки (службові, тестові). Перемикач показує всіх — рядки людей без кнопок, із «керувати в картці →».
-  const [showAll, setShowAll] = useState(false);
   const [newCreds, setNewCreds] = useState<string | null>(null);
   const [provMsg, setProvMsg] = useState<string | null>(null);
   const [editName, setEditName] = useState<{ id: number; value: string } | null>(null); // інлайн-перейменування (лише не-CRM)
@@ -425,8 +422,9 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
   const reload = () => fetchUsersWithCards(false).then((r) => { setUsers(r.users); setFreeCards(r.freeCards); }).catch(() => setUsers([]));
   useEffect(() => { reload(); fetchRoles().then(setRoles).catch(() => setRoles([])); }, []);
   const candidates = users.filter((u) => u.source === "candidate").length;
-  const withCard = users.filter((u) => !!u.card_id).length;
-  const shown = users.filter((u) => (showCand || u.source !== "candidate") && (showAll || !u.card_id));
+  // 👤 Рішення Романа 23.10.2026 (скасовує прохід 5): «користувачі (CRM і дашборду) мають залишатися в налаштуваннях;
+  // кожен користувач може мати картку, а може не мати». Тут — УСІ користувачі з повним керуванням; картка — колонка.
+  const shown = users.filter((u) => showCand || u.source !== "candidate");
   /** Картки для вибору: спершу ті, чиє прізвище є в імені акаунта, — щоб людина була вгорі списку. */
   const cardsFor = (u: DashboardUser) => {
     const nm = (u.name ?? u.email).toLowerCase();
@@ -531,11 +529,6 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
           <input type="checkbox" checked={showCand} onChange={(e) => setShowCand(e.target.checked)} /> показати кандидатів ({candidates}) — ними керує Найм
         </label>
       )}
-      {withCard > 0 && (
-        <label style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 13, color: "var(--text-muted)", margin: "0 0 8px 16px" }}>
-          <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> показати людей із карткою ({withCard}) — ними керують у «Найм → Співробітники»
-        </label>
-      )}
       <div className="settings-users-scroll" style={{ overflowX: "auto", maxWidth: "100%" }}>
       <table className="data-table" style={{ minWidth: 1220 }}>
         <thead><tr><th style={TH}>ПІБ</th><th style={TH}>E-MAIL</th><th style={TH} title="Звідки акаунт: синк Kommo, Найм чи створено вручну">ДЖЕРЕЛО</th><th style={TH} title="Людина в «Співробітниках», до якої привʼязано акаунт">КАРТКА</th><th style={TH}>КОМАНДА</th><th style={TH}>РОЛЬ</th><th style={TH}>ПАРОЛЬ</th><th style={TH}>АКТИВНИЙ</th><th style={TH} title="Звільнений не заходить у дашборд і не отримує нової роботи, але його результат лишається в сумах команди й компанії.">СТАН</th><th style={TH} title="Дозвіл трекеру часу збирати дані з машини цієї людини. Знімається так само просто, як ставиться.">⏱ Трекер</th><th style={TH} title="Менеджеру відкрити пул нічийних клієнтів: бачить пул із телефонами й бере клієнта лише собі. Керівникам пул відкритий і без цього. Вкладка зʼявиться після нового входу.">🧭 Пул</th><th style={TH}></th></tr></thead>
@@ -551,8 +544,8 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
                     <button onClick={() => saveName(u)} style={btn}>Зберегти</button>
                     <button onClick={() => setEditName(null)} style={{ ...btn, color: "var(--text-muted)" }}>Скасувати</button>
                   </span>
-                ) : u.crm_linked || u.card_id ? (
-                  <>{u.name ?? "—"} {u.crm_linked && <CrmBadge />}</>
+                ) : u.crm_linked ? (
+                  <>{u.name ?? "—"} <CrmBadge /></>
                 ) : (
                   <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
                     {u.name ?? "—"}
@@ -576,12 +569,12 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
               </td>
               <td>{u.team_name ?? "—"}</td>
               <td>
-                {u.card_id ? <span>{roleName(u.role_effective)}</span> : <select value={u.role_override ?? "__synced__"} onChange={(e) => setOverride(u, e.target.value)}
+                <select value={u.role_override ?? "__synced__"} onChange={(e) => setOverride(u, e.target.value)}
                   title={u.crm_linked ? `Синкова роль із CRM: ${roleName(u.synced_role)}. Тут задаєте override (переважає).` : undefined}
                   style={{ borderRadius: 8, padding: "3px 8px", fontSize: 13, border: "1px solid var(--border)", background: "var(--card-bg)", color: "var(--text)", fontWeight: u.role_effective === "admin" ? 700 : 400 }}>
                   <option value="__synced__">{u.crm_linked ? `↺ синкована (${roleName(u.synced_role)})` : `↺ базова (${roleName(u.synced_role)})`}</option>
                   {roles.map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}
-                </select>}
+                </select>
               </td>
               <td style={{ fontFamily: "monospace" }}>{issued[u.id] ? <RevealCred text={issued[u.id]} /> : "••••••••"}</td>
               <td>{u.is_active ? "✓" : "—"}</td>
@@ -589,9 +582,7 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
                   в CRM немає, тож і стану бути не може — пишемо це словом, а не порожнечею
                   (правило зони фронту: невідоме має читатись як невідоме). */}
               <td>
-                {u.card_id ? (
-                  <span style={{ color: u.work_state === "dismissed" ? "#dc2626" : "var(--text)" }}>{u.work_state === "dismissed" ? "звільнений" : u.work_state === "finishing" ? "завершує" : "активний"}</span>
-                ) : u.manager_id ? (
+                {u.manager_id ? (
                   <select value={u.work_state ?? "__active__"} disabled={busy === u.id}
                     onChange={(e) => changeState(u, e.target.value)}
                     style={{ borderRadius: 8, padding: "3px 8px", fontSize: 13, border: "1px solid var(--border)",
@@ -607,29 +598,25 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
                   його з конкретної людини можна було тільки SQL-ом по проду. Для прапорця,
                   що вмикає спостереження за людиною, вимкнення має бути не важчим за вмикання. */}
               <td>
-                {u.card_id ? (u.tracker_enabled ? "✓" : "—") : <input
+                <input
                   type="checkbox"
                   checked={u.tracker_enabled === true}
                   disabled={!u.is_active || busy === u.id}
                   title={u.is_active ? undefined : "Неактивний користувач — трекер і так не пустить"}
                   onChange={(e) => toggleTracker(u.id, e.target.checked)}
                   style={{ width: 16, height: 16, cursor: u.is_active ? "pointer" : "not-allowed" }}
-                />}
+                />
               </td>
               <td title={u.role_effective === "manager" ? undefined : "Керівникам пул відкритий і без прапорця"}>
-                {u.role_effective === "manager" && u.card_id
-                  ? (u.orphan_pool ? "✓" : "—")
-                  : u.role_effective === "manager"
+                {u.role_effective === "manager"
                   ? <input type="checkbox" checked={u.orphan_pool === true} disabled={!u.is_active || busy === u.id}
                       onChange={(e) => toggleOrphanPool(u.id, e.target.checked)}
                       style={{ width: 16, height: 16, cursor: u.is_active ? "pointer" : "not-allowed" }} />
                   : <span style={{ color: "var(--text-muted)", fontSize: 12 }}>завжди</span>}
               </td>
               <td style={{ whiteSpace: "nowrap" }}>
-                {u.card_id
-                  ? <a href={`/hiring?tab=emp&employee=${u.card_id}`} style={{ color: "#2563eb", fontSize: 13 }}>керувати в картці →</a>
-                  : <><button onClick={() => reset(u.id)} style={btn}>↺ Пароль</button>
-                    <button onClick={() => deactivate(u)} style={{ ...btn, color: "#dc2626" }}>Деактивувати</button></>}
+                <button onClick={() => reset(u.id)} style={btn}>↺ Пароль</button>
+                <button onClick={() => deactivate(u)} style={{ ...btn, color: "#dc2626" }}>Деактивувати</button>
               </td>
             </tr>
           ))}
