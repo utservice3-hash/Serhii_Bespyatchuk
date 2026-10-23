@@ -768,6 +768,8 @@ export async function forEachStatusChangeEventPage(
 
 export interface KommoResponsibleEvent {
   entityId: number;
+  /** Хто був відповідальним ДО зміни (для «хто закривав угоду», «Результат місяця», 23.10.2026). */
+  fromUserId?: number | null;
   toUserId: number | null;
   changedAt: number; // unix seconds
 }
@@ -777,6 +779,7 @@ interface KommoRespRaw {
   entity_type: string;
   created_at: number;
   value_after?: { responsible_user?: { id: number } }[];
+  value_before?: { responsible_user?: { id: number } }[];
 }
 
 /**
@@ -805,6 +808,7 @@ export async function forEachResponsibleChangeEventPage(
       if (e.entity_type !== "lead") continue;
       events.push({
         entityId: e.entity_id,
+        fromUserId: e.value_before?.[0]?.responsible_user?.id ?? null,
         toUserId: e.value_after?.[0]?.responsible_user?.id ?? null,
         changedAt: e.created_at,
       });
@@ -817,6 +821,27 @@ export async function forEachResponsibleChangeEventPage(
     page += 1;
   }
   return total;
+}
+
+/**
+ * 🏁 Зміни відповідального ПО КОНКРЕТНИХ угодах (`filter[entity_id]`, до 10 за запит) — для «Результату місяця»
+ * (23.10.2026). Потік усіх подій тут не годиться: їх ~3 000 на добу (переважно лідогенерація), а по успішних угодах
+ * місяця — ~100 запитів.
+ */
+export async function fetchResponsibleEventsForLeads(ids: readonly number[]): Promise<KommoResponsibleEvent[]> {
+  const out: KommoResponsibleEvent[] = [];
+  for (let i = 0; i < ids.length; i += 10) {
+    const part = ids.slice(i, i + 10);
+    const q = part.map((id, j) => `${encodeURIComponent(`filter[entity_id][${j}]`)}=${id}`).join("&");
+    for (let page = 1; page < 20; page++) {
+      const data = await kommoRequest<KommoListResponse<KommoRespRaw>>(`/api/v4/events?limit=100&page=${page}&filter[type]=entity_responsible_changed&filter[entity]=lead&${q}`);
+      const raw = data?._embedded?.events ?? [];
+      for (const e of raw) if (e.entity_type === "lead" && part.includes(e.entity_id))
+        out.push({ entityId: e.entity_id, fromUserId: e.value_before?.[0]?.responsible_user?.id ?? null, toUserId: e.value_after?.[0]?.responsible_user?.id ?? null, changedAt: e.created_at });
+      if (raw.length < 100 || !data?._links?.next) break;
+    }
+  }
+  return out;
 }
 
 /**

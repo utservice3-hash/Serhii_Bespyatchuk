@@ -6354,3 +6354,36 @@ CREATE TABLE IF NOT EXISTS prozorro_leads (
 );
 CREATE INDEX IF NOT EXISTS idx_prozorro_leads_created ON prozorro_leads (created_at);
 REVOKE ALL ON prozorro_tenders, prozorro_leads FROM ai_readonly;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- 🏁 «РЕЗУЛЬТАТ МІСЯЦЯ» (задача Тетяни #5583, 23.10.2026): кількість успішних угод і Σ бюджету Kommo по менеджеру за
+-- місяць закриття — як її аркуш «Результати комер.відділу» (вересень звірено: 25 із 33 до гривні).
+--  · `deal_responsible_events` — зміни відповідального угод «Повного циклу» з Kommo (`syncDealResponsible`): угоду
+--    рахуємо тому, хто був відповідальним У МОМЕНТ ЗАКРИТТЯ (Янчевський звільнився — його 19 угод перепризначили).
+--  · `fin_month_result_overrides` — ручні рішення Тетяни по угоді: не рахувати / в інший місяць / свій профіт;
+--    примітка обовʼязкова; «Повернути» = видалити рядок. ⚠️ Revert коду не прибирає цих таблиць.
+CREATE TABLE IF NOT EXISTS deal_responsible_events (
+  kommo_id     BIGINT NOT NULL,
+  changed_at   TIMESTAMPTZ NOT NULL,
+  from_user_id BIGINT,
+  to_user_id   BIGINT,
+  PRIMARY KEY (kommo_id, changed_at)
+);
+CREATE TABLE IF NOT EXISTS deal_responsible_state (
+  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  watermark TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS fin_month_result_overrides (
+  kommo_id     BIGINT PRIMARY KEY,
+  action       TEXT NOT NULL CHECK (action IN ('exclude', 'move', 'profit')),
+  target_month DATE CHECK (target_month IS NULL OR target_month = date_trunc('month', target_month)::date),
+  profit       NUMERIC(14,2),
+  note         TEXT NOT NULL CHECK (btrim(note) <> ''),
+  set_by       INTEGER REFERENCES users(id),
+  set_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((action = 'move') = (target_month IS NOT NULL)),
+  CHECK ((action = 'profit') = (profit IS NOT NULL))
+);
+REVOKE ALL ON deal_responsible_events FROM ai_readonly;
+REVOKE ALL ON deal_responsible_state FROM ai_readonly;
+REVOKE ALL ON fin_month_result_overrides FROM ai_readonly;
