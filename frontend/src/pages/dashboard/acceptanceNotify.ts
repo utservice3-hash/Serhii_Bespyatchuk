@@ -55,3 +55,23 @@ export function awaitsMyAcceptance(t: AcceptanceTaskLike, me: AcceptanceViewer):
 export function acceptanceAlertText(title: string, executorName?: string | null): string {
   return `✅ Чекає вашого прийняття${executorName ? ` — ${executorName}` : ""}: ${title.slice(0, 90)}`;
 }
+
+/**
+ * 🙊 СВОЯ ЗМІНА СТАТУСУ НЕ СПОВІЩАЄ МЕНЕ Ж (Роман 23.10.2026: «коли закриваю задачу, маю два
+ * сповіщення»). Сповіщення «Задачу виконано / взято в роботу» стежить за переходами статусу й не
+ * відрізняло «змінив інший» від «змінив я щойно з цієї вкладки» — тож власна дія давала звістку,
+ * ніби задачу закрив хтось. Тепер локальна зміна лишає позначку, і перехід, що з нею збігся, мовчить.
+ *
+ * Позначка ОДНОРАЗОВА: перший же перехід цієї задачі її знімає — і збіглась вона, і ні. Інакше
+ * застаріла позначка («поставив я Готово на затвердження, потім хтось інший — те саме») глушила б
+ * чужу зміну. Тримає `#1970`.
+ */
+export function noteSelfStatus(store: Map<number, string>, id: number, status: string): void {
+  store.set(id, status);
+}
+export function consumeSelfStatus(store: Map<number, string>, id: number, status: string): boolean {
+  const mark = store.get(id);
+  if (mark === undefined) return false;
+  store.delete(id);
+  return mark === status;
+}

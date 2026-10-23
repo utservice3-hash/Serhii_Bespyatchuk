@@ -1665,7 +1665,7 @@ export function TasksSection({
               const prev = t.status;
               patchTaskLocal(t.id, { status: "done", doneAt: kyivDate(new Date()) });
               commitTask(t.id, { status: "done" });
-              toast(`№${t.id} «${t.title}»`, {
+              toast(`№${t.id} «${t.title.length > 90 ? `${t.title.slice(0, 90)}…` : t.title}»`, {
                 head: "Задачу закрито", key: `done-${t.id}`, event: true,
                 action: { label: "Скасувати", run: () => { patchTaskLocal(t.id, { status: prev, doneAt: null }); commitTask(t.id, { status: prev }); } },
               });
