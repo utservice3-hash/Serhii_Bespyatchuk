@@ -69,18 +69,23 @@ export async function invoiceProofByClientKey(db: Db, keys: readonly string[], f
 export async function paymentProofByClientKey(db: Db, keys: readonly string[], days: number): Promise<Map<string, PaymentProof>> {
   if (!keys.length) return new Map();
   const norm = (col: string) => `NULLIF(ltrim(regexp_replace(COALESCE(${col}, ''), '\\D', '', 'g'), '0'), '')`;
+  // Від ОПЛАТ до клієнтів, а не навпаки, і коди — прямим порівнянням (є індекс по ЄДРПОУ): функція над стовпцем компаній
+  // вимикала індекс і на всіх ключах адміна давала 5–18 с при стелі запиту 20 с. Ведучі нулі — `lpad` до 8 (ЄДРПОУ) і 10 (ІПН).
   const r = await db.query<{ ck: string; at: string; amount: string }>(
     `WITH p AS (${invoicePaymentsSql(2)}),
      pc AS (SELECT p.booked_on, p.amount, ${norm("p.payer_edrpou")} AS code FROM p),
-     kc AS (
-       SELECT DISTINCT d.client_key AS ck, ${norm("k.edrpou")} AS edrpou, ${norm("k.ipn")} AS ipn
-         FROM deals d
-         JOIN deal_companies dc ON dc.deal_kommo_id = d.kommo_id
-         JOIN kommo_companies k ON k.company_id = dc.company_id
-        WHERE d.client_key = ANY($1::text[]))
-     SELECT DISTINCT ON (kc.ck) kc.ck, pc.booked_on AS at, pc.amount::text AS amount
-       FROM pc JOIN kc ON pc.code IS NOT NULL AND (pc.code = kc.edrpou OR pc.code = kc.ipn)
-      ORDER BY kc.ck, pc.booked_on DESC, pc.amount DESC`,
+     codes AS (SELECT DISTINCT code FROM pc WHERE code IS NOT NULL),
+     cm AS (
+       SELECT k.company_id, c.code FROM codes c JOIN kommo_companies k ON k.edrpou IN (c.code, lpad(c.code, 8, '0'))
+       UNION
+       SELECT k.company_id, c.code FROM codes c JOIN kommo_companies k ON k.ipn IN (c.code, lpad(c.code, 10, '0')))
+     SELECT DISTINCT ON (d.client_key) d.client_key AS ck, pc.booked_on AS at, pc.amount::text AS amount
+       FROM pc
+       JOIN cm ON cm.code = pc.code
+       JOIN deal_companies dc ON dc.company_id = cm.company_id
+       JOIN deals d ON d.kommo_id = dc.deal_kommo_id
+      WHERE d.client_key = ANY($1::text[])
+      ORDER BY d.client_key, pc.booked_on DESC, pc.amount DESC`,
     [keys, String(days)]);
   return new Map(r.rows.map((x) => [x.ck, { at: x.at, amount: Math.round(Number(x.amount) * 100) / 100 }]));
 }
