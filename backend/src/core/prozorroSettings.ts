@@ -4,12 +4,17 @@ import type { PzMode } from "./prozorroPush.js";
 
 /**
  * 🎛 НАЛАШТУВАННЯ PROZORRO-ЛІДІВ — екран «Тендери Prozorro» → «Налаштування» (задача #5299, прохід 2; Роман 23.10.2026:
- * «додай налаштування цього функціоналу, наприклад ліміти»). Лише адмін (роут `routes/prozorro.ts`).
+ * «додай налаштування цього функціоналу, наприклад ліміти»). Змінюють адмін і ОПЕРАЦІЙНИЙ ДИРЕКТОР (`SETTINGS_ROLES`): Роман
+ * 23.10.2026 — «щоб Сергій зайшов, нажав бойовий режим, поставив відповідального лідгена»; у Сергія роль `opdir`.
  *
  * Усе керування — в одному рядку `prozorro_settings`, а не в змінних сервера: режим, хто веде, ліміт угод на день,
  * мінімальна сума тендера, вимкнені ніші. Кожна зміна — рядок журналу на поле («хто, коли, було → стало»).
  * Вибрати можна лише АКТИВНОГО лідогена з акаунтом Kommo — той самий критерій команди, що в `jobs/reactivateLeads.ts`.
  */
+
+/** Хто бачить і змінює налаштування. Одне місце для роуту й гейта; фронт дзеркалить (`ProzorroSection.tsx`). */
+export const SETTINGS_ROLES: readonly string[] = ["admin", "opdir"];
+export const canEditSettings = (roleKey: string | null | undefined): boolean => !!roleKey && SETTINGS_ROLES.includes(roleKey);
 
 export const LEADGEN_TEAM_SQL = `(t.name ILIKE '%лідоген%' OR t.name ILIKE '%лидоген%')`;
 export const DAILY_LIMIT_MAX = 500;

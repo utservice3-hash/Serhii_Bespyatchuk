@@ -8,7 +8,8 @@ import { todayKyiv } from "../periodRules";
  * 🏛 «ТЕНДЕРИ PROZORRO» — екран у групі «Клієнти» (задача #5299). Дві вкладки:
  *  · «Статистика» — по днях, скільки знайдено переможців і скільки записано в Kommo (Роман 23.10.2026: «просто загальна
  *    статистика по днях»). Етапи угод (взято в роботу / передано / перевезення) — прохід 3.
- *  · «Налаштування» — лише адмін (сервер перевіряє сам): режим, хто веде, ліміт на день, мінімальна сума, ніші, журнал.
+ *  · «Налаштування» — адмін і операційний директор (сервер перевіряє сам, `SETTINGS_ROLES`): режим, хто веде, ліміт на день,
+ *    мінімальна сума, ніші, журнал.
  * `ProzorroSection` ходить у сервер; `ProzorroScreen` лише малює — тому показ-прототип може дати йому прикладові дані.
  */
 
@@ -29,7 +30,8 @@ export function ProzorroSection({ roleKey }: { roleKey: string | null }) {
   const [stats, setStats] = useState<ProzorroStatsResp | null>(null);
   const [settings, setSettings] = useState<ProzorroSettingsResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const isAdmin = roleKey === "admin";
+  // Дзеркало серверного `SETTINGS_ROLES` (core/prozorroSettings.ts): адмін і ОД (у Сергія роль opdir).
+  const isAdmin = roleKey === "admin" || roleKey === "opdir";
   useEffect(() => {
     setErr(null);
     fetchProzorroStats(period.from, period.to).then(setStats).catch((e) => setErr(hiringError(e)));

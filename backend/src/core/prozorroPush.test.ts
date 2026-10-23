@@ -6,7 +6,7 @@ import {
   AI_TENDER_TAG, companyPayload, contactPayload, leadName, leadPayload, pushLeads, responsibleProblem,
   type KommoPushDeps, type PendingLead, type PushStore,
 } from "./prozorroPush.js";
-import { activeNiches, parseConfig, saveConfig, type PzConfig } from "./prozorroSettings.js";
+import { activeNiches, canEditSettings, parseConfig, saveConfig, type PzConfig } from "./prozorroSettings.js";
 import { parsePeriod } from "./prozorroStats.js";
 import type { Db } from "./adCallFacts.js";
 
@@ -158,14 +158,16 @@ function fakeDb(options: number[], start: Partial<PzConfig> = {}) {
 test("#2365 НАЛАШТУВАННЯ: лише адмін; межі полів; лише активний лідоген; журнал по полях людськими словами; без змін — тиша", async () => {
   const routes = SRC("routes/prozorro.ts");
   for (const m of ["get", "put"]) {
-    assert.match(routes, new RegExp(`prozorroRouter\\.${m}\\("/settings", async \\(req, res\\) => \\{\\n {2}if \\(req\\.auth!\\.roleKey !== "admin"\\) \\{ res\\.status\\(403\\)`),
-      `🔴 ${m.toUpperCase()} /prozorro/settings без межі «лише адмін»`);
+    assert.match(routes, new RegExp(`prozorroRouter\\.${m}\\("/settings", async \\(req, res\\) => \\{\\n {2}if \\(!canEditSettings\\(req\\.auth!\\.roleKey\\)\\) \\{ res\\.status\\(403\\)`),
+      `🔴 ${m.toUpperCase()} /prozorro/settings без межі «адмін і ОД»`);
   }
+  assert.deepEqual(["admin", "opdir", "ceo", "kvp", "manager", null].map((r) => canEditSettings(r)), [true, true, false, false, false, false],
+    "🔴 налаштування не адміну й ОД (Сергій — opdir) або відкрито ширше");
   const { ACCESS_MATRIX } = await import("../auth/accessMatrix.js") as { ACCESS_MATRIX: { method: string; path: string; allow: string[]; deny: string[] }[] };
   const g = ACCESS_MATRIX.find((r) => r.method === "GET" && r.path === "/api/prozorro/settings");
   const p = ACCESS_MATRIX.find((r) => r.method === "PUT" && r.path === "/api/prozorro/settings");
-  assert.deepEqual(g?.allow, ["admin"], "🔴 GET налаштувань у матриці не «лише адмін» (або дзеркало: адміну закрито)");
-  assert.ok(g?.deny.includes("kvp") && g.deny.includes("manager") && p?.deny.includes("manager"), "🔴 матриця не стереже заборону");
+  assert.deepEqual(g?.allow, ["admin", "opdir"], "🔴 GET налаштувань у матриці не «адмін і ОД» (або дзеркало: Сергію закрито)");
+  assert.ok(g?.deny.includes("kvp") && g.deny.includes("ceo") && g.deny.includes("manager") && p?.deny.includes("manager"), "🔴 матриця не стереже заборону");
 
   const ok = { responsibleManagerId: 12, mode: "live", dailyLimit: 5, minAmount: 500000, nichesOff: ["Медицина (важке)"] };
   assert.deepEqual(parseConfig(ok), { ok: true, value: ok });
