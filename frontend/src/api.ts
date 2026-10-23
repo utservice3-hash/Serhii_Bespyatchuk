@@ -546,6 +546,35 @@ export async function fetchFirstTouchSettings(): Promise<FirstTouchSettingsResp>
   const { data } = await api.get<FirstTouchSettingsResp>("/settings/first-touch");
   return data;
 }
+/** 🏛 «Тендери Prozorro» (#5299): статистика по днях (екран) і налаштування (лише адмін). */
+export type PzModeT = "off" | "dry" | "live";
+export interface PzConfigT { responsibleManagerId: number | null; mode: PzModeT; dailyLimit: number | null; minAmount: number; nichesOff: string[] }
+export interface ProzorroSettingsResp {
+  config: PzConfigT;
+  responsible: { name: string; active: boolean; hasKommo: boolean } | null;
+  options: { id: number; name: string; team: string }[];
+  niches: { name: string; words: number; on: boolean; leads30d: number }[];
+  queue: { waiting: number; exhausted: number; pushed: number; dryCollected: number };
+  history: { field: string; oldValue: string | null; newValue: string | null; setByName: string | null; setAt: string }[];
+}
+export interface ProzorroStatsResp {
+  from: string; to: string;
+  days: { date: string; found: number; pushed: number }[];
+  totals: { found: number; pushed: number };
+  lastRunAt: string | null; lastError: string | null;
+}
+export async function fetchProzorroStats(from: string, to: string): Promise<ProzorroStatsResp> {
+  const { data } = await api.get<ProzorroStatsResp>("/prozorro/stats", { params: { from, to } });
+  return data;
+}
+export async function fetchProzorroSettings(): Promise<ProzorroSettingsResp> {
+  const { data } = await api.get<ProzorroSettingsResp>("/prozorro/settings");
+  return data;
+}
+export async function saveProzorroSettings(c: PzConfigT): Promise<ProzorroSettingsResp> {
+  const { data } = await api.put<ProzorroSettingsResp>("/prozorro/settings", c);
+  return data;
+}
 export async function saveFirstTouchSettings(t: FirstTouchTunablesT): Promise<Pick<FirstTouchSettingsResp, "current" | "history">> {
   const { data } = await api.put<Pick<FirstTouchSettingsResp, "current" | "history">>("/settings/first-touch", t);
   return data;

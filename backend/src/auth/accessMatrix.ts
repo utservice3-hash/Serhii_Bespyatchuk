@@ -1777,6 +1777,13 @@ export const ACCESS_MATRIX: AccessRow[] = [
   // 📒 Реєстр мінусових угод (20.10.2026): вкладка `registries`; хто що може — `minusRegistry/roles.ts` + `shared/minusRegistry.ts`.
   // Перегляд — усім із вкладкою; «нова угода з CRM» і подання — лише менеджер і тім-лід (решта 403 у роутері пакета).
   // Дії `/:id/:action` з ідентифікатором-заглушкою відповідають 404 «Запит не знайдено» ще до перевірки ролі — тож 403 там лише HR (вкладка).
+  // 🏛 «Тендери Prozorro» (#5299): екран — адмін, СЕО, ОД, КВП (вкладка `prozorro`); налаштування — адмін і ОД (`SETTINGS_ROLES`).
+  { method: "GET", path: "/api/prozorro/stats", cls: "GET",
+    allow: ["admin", "ceo", "opdir", "kvp"], deny: ["financier", "hr", "team_lead", "manager"] },
+  { method: "GET", path: "/api/prozorro/settings", cls: "GET",
+    allow: ["admin", "opdir"], deny: ["ceo", "kvp", "financier", "hr", "team_lead", "manager"] },
+  { method: "PUT", path: "/api/prozorro/settings", cls: "deny-only",
+    allow: [], deny: ["hr", "team_lead", "manager"] },
   { method: "GET", path: "/api/minus-deals", cls: "GET",
     allow: ["admin", "ceo", "opdir", "kvp", "financier", "team_lead", "manager"], deny: ["hr"] },
   { method: "GET", path: "/api/minus-deals/counter", cls: "GET",
