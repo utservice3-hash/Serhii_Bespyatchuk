@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
-  AI_TENDER_TAG, companyPayload, contactPayload, leadName, leadPayload, pushLeads, pzMode, responsibleProblem,
+  AI_TENDER_TAG, companyPayload, contactPayload, leadName, leadPayload, pushLeads, responsibleProblem,
   type KommoPushDeps, type PendingLead, type PushStore,
 } from "./prozorroPush.js";
-import { parseProzorroSettings, saveProzorroResponsible } from "./prozorroSettings.js";
+import { activeNiches, parseConfig, saveConfig, type PzConfig } from "./prozorroSettings.js";
+import { parsePeriod } from "./prozorroStats.js";
 import type { Db } from "./adCallFacts.js";
 
 const SRC = (rel: string): string => readFileSync(path.join(import.meta.dirname, "..", "..", "src", rel), "utf8");
@@ -103,16 +104,6 @@ test("#2362 КОМПАНІЯ: є в довіднику / знайдена в Kom
 });
 
 /**
- * #2363 — РЕЖИМ: «live» — лише точне слово; «off» — вимкнено; усе інше (порожньо, описка) — пробний. Описка в змінній не
- * вмикає запис у CRM (той самий принцип, що в `carrierClose.closeModeOf`).
- * 🧨 Червоніє, якщо описка чи порожнеча увімкне бойовий режим.
- */
-test("#2363 РЕЖИМ: «live» — лише точне слово; порожньо й описка — пробний; «off» — вимкнено", () => {
-  assert.deepEqual(["", "live", " live ", "Live", "LIVE", "lve", "off", "dry", undefined].map((x) => pzMode(x)),
-    ["dry", "live", "live", "dry", "dry", "dry", "off", "dry", "dry"], "🔴 описка чи порожнеча вмикає запис у Kommo");
-});
-
-/**
  * #2364 — СТЕЛЯ І ЗБОЇ: при стелі 2 з 5 — рівно 2 угоди; збій на одному ліді — він позначений невдалим, прохід іде далі;
  * відмова Kommo в доступі (403) — стоп усього проходу; збій ПРИМІТКИ після створеної угоди — рядок записаний (угода є,
  * повтор дав би дубль), причина збережена.
@@ -135,14 +126,21 @@ test("#2364 СТЕЛЯ І ЗБОЇ: стеля 2 з 5; поодинокий зб
   assert.match(d.failed[0]?.[1] ?? "", /угоду створено, примітку не додано: note 500/);
 });
 
-/** Фейкова БД для налаштувань: варіанти, поточний вибір, журнал. */
-function fakeDb(options: number[], current: number | null) {
-  const state = { current, log: [] as unknown[][] };
+/** Фейкова БД для налаштувань: варіанти лідогенів, поточний конфіг, імена, журнал. */
+function fakeDb(options: number[], start: Partial<PzConfig> = {}) {
+  const state = { cfg: { responsibleManagerId: null, mode: "dry", dailyLimit: null, minAmount: 500000, nichesOff: [], ...start } as PzConfig, log: [] as unknown[][], writes: 0 };
   const db: Db = {
     query: (async (sql: string, params?: unknown[]) => {
       if (/FROM managers m JOIN teams t/.test(sql)) return { rows: options.map((id) => ({ id, name: `L${String(id)}`, team: "Лідогенерація" })) };
-      if (/SELECT responsible_manager_id AS m FROM prozorro_settings/.test(sql)) return { rows: [{ m: state.current }] };
-      if (/INSERT INTO prozorro_settings \(/.test(sql)) { state.current = (params?.[0] as number | null) ?? null; return { rows: [] }; }
+      if (/FROM prozorro_settings WHERE id = 1/.test(sql)) {
+        const c = state.cfg;
+        return { rows: [{ m: c.responsibleManagerId, mode: c.mode, daily_limit: c.dailyLimit, min_amount: String(c.minAmount), niches_off: c.nichesOff }] };
+      }
+      if (/SELECT id, name FROM managers WHERE id = ANY/.test(sql)) return { rows: ((params?.[0] as number[]) ?? []).map((id) => ({ id, name: `L${String(id)}` })) };
+      if (/INSERT INTO prozorro_settings \(/.test(sql)) {
+        const [m, mode, dl, ma, no] = params as [number | null, PzConfig["mode"], number | null, number, string[]];
+        state.cfg = { responsibleManagerId: m, mode, dailyLimit: dl, minAmount: ma, nichesOff: no }; state.writes++; return { rows: [] };
+      }
       if (/INSERT INTO prozorro_settings_log/.test(sql)) { state.log.push(params ?? []); return { rows: [] }; }
       throw new Error(`неочікуваний SQL: ${sql.slice(0, 80)}`);
     }) as Db["query"],
@@ -151,35 +149,95 @@ function fakeDb(options: number[], current: number | null) {
 }
 
 /**
- * #2365 — НАЛАШТУВАННЯ: лише адмін (GET і PUT, і в роуті, і в матриці доступу — з дзеркалом «адмін бачить»); вибрати можна
- * лише активного лідогена з Kommo; зняти (null) — можна; кожна зміна — у журнал «було → стало», без зміни — журналу немає.
- * 🧨 Червоніє, якщо відкрити не-адміну, дозволити вибрати не лідогена, писати журнал на повтор чи не писати на зміну.
+ * #2365 — НАЛАШТУВАННЯ на екрані (Роман 23.10.2026): лише адмін (GET і PUT у `routes/prozorro.ts` і в матриці — з дзеркалом
+ * «адмін бачить»); межі полів (режим, ліміт 1..500 або без, сума 0..100 млн, ніші лише з ТЗ і хоч одна лишається); вибрати
+ * можна лише активного лідогена; уже вибраного й згодом неактивного можна лишити; журнал — рядок НА ПОЛЕ, людськими
+ * словами; без змін — нічого не пишемо.
+ * 🧨 Червоніє, якщо відкрити не-адміну, пропустити поза межами, вибрати не лідогена, писати журнал на повтор чи не на зміну.
  */
-test("#2365 НАЛАШТУВАННЯ: лише адмін; лише активний лідоген із Kommo; зняти можна; журнал «було → стало» лише на зміну", async () => {
-  const routes = SRC("routes/settings.ts");
+test("#2365 НАЛАШТУВАННЯ: лише адмін; межі полів; лише активний лідоген; журнал по полях людськими словами; без змін — тиша", async () => {
+  const routes = SRC("routes/prozorro.ts");
   for (const m of ["get", "put"]) {
-    assert.match(routes, new RegExp(`settingsRouter\\.${m}\\("/prozorro", async \\(req, res\\) => \\{\\n {2}if \\(req\\.auth!\\.roleKey !== "admin"\\) \\{ res\\.status\\(403\\)`),
-      `🔴 ${m.toUpperCase()} /settings/prozorro без межі «лише адмін»`);
+    assert.match(routes, new RegExp(`prozorroRouter\\.${m}\\("/settings", async \\(req, res\\) => \\{\\n {2}if \\(req\\.auth!\\.roleKey !== "admin"\\) \\{ res\\.status\\(403\\)`),
+      `🔴 ${m.toUpperCase()} /prozorro/settings без межі «лише адмін»`);
   }
   const { ACCESS_MATRIX } = await import("../auth/accessMatrix.js") as { ACCESS_MATRIX: { method: string; path: string; allow: string[]; deny: string[] }[] };
-  const g = ACCESS_MATRIX.find((r) => r.method === "GET" && r.path === "/api/settings/prozorro");
-  const p = ACCESS_MATRIX.find((r) => r.method === "PUT" && r.path === "/api/settings/prozorro");
-  assert.deepEqual(g?.allow, ["admin"], "🔴 GET у матриці не «лише адмін» (або дзеркало: адміну закрито)");
-  assert.ok(g?.deny.includes("manager") && g.deny.includes("team_lead") && p?.deny.includes("manager"), "🔴 матриця не стереже заборону");
+  const g = ACCESS_MATRIX.find((r) => r.method === "GET" && r.path === "/api/prozorro/settings");
+  const p = ACCESS_MATRIX.find((r) => r.method === "PUT" && r.path === "/api/prozorro/settings");
+  assert.deepEqual(g?.allow, ["admin"], "🔴 GET налаштувань у матриці не «лише адмін» (або дзеркало: адміну закрито)");
+  assert.ok(g?.deny.includes("kvp") && g.deny.includes("manager") && p?.deny.includes("manager"), "🔴 матриця не стереже заборону");
 
-  assert.deepEqual(parseProzorroSettings({ managerId: 12 }), { ok: true, managerId: 12 });
-  assert.deepEqual(parseProzorroSettings({ managerId: null }), { ok: true, managerId: null });
-  assert.equal(parseProzorroSettings({ managerId: "12" }).ok, false);
-  assert.equal(parseProzorroSettings({}).ok, false);
+  const ok = { responsibleManagerId: 12, mode: "live", dailyLimit: 5, minAmount: 500000, nichesOff: ["Медицина (важке)"] };
+  assert.deepEqual(parseConfig(ok), { ok: true, value: ok });
+  assert.equal(parseConfig({ ...ok, dailyLimit: null }).ok, true, "дзеркало: без ліміту — можна");
+  for (const [bad, why] of [[{ ...ok, mode: "LIVE" }, "режим"], [{ ...ok, dailyLimit: 0 }, "ліміт 0"], [{ ...ok, dailyLimit: 501 }, "ліміт 501"],
+    [{ ...ok, minAmount: -1 }, "сума"], [{ ...ok, nichesOff: ["Вигадана"] }, "ніша не з ТЗ"],
+    [{ ...ok, nichesOff: Object.keys(activeNiches([])) }, "усі ніші вимкнено"], [{ ...ok, responsibleManagerId: "12" }, "лідоген рядком"]] as const) {
+    assert.equal(parseConfig(bad).ok, false, `🔴 пропущено поза межами: ${why}`);
+  }
 
-  const f = fakeDb([12, 13], null);
   const who = { userId: 50, name: "Роман" };
-  assert.deepEqual(await saveProzorroResponsible(f.db, 99, who), { ok: false, error: "Можна вибрати лише активного лідогена з акаунтом Kommo" },
+  const f = fakeDb([12, 13]);
+  assert.deepEqual(await saveConfig(f.db, { ...f.state.cfg, responsibleManagerId: 99 }, who), { ok: false, error: "Можна вибрати лише активного лідогена з акаунтом Kommo" },
     "🔴 вибрано не лідогена / неактивного");
-  assert.deepEqual([await saveProzorroResponsible(f.db, 12, who), f.state.current, f.state.log], [{ ok: true, changed: true }, 12, [[null, 12, 50, "Роман"]]]);
-  assert.deepEqual([await saveProzorroResponsible(f.db, 12, who), f.state.log.length], [{ ok: true, changed: false }, 1], "🔴 повтор без зміни записано в журнал");
-  assert.deepEqual([await saveProzorroResponsible(f.db, null, who), f.state.current, f.state.log[1]], [{ ok: true, changed: true }, null, [12, null, 50, "Роман"]],
-    "🔴 зняти вибір не можна або зняття не в журналі");
+  assert.deepEqual(await saveConfig(f.db, { responsibleManagerId: 12, mode: "live", dailyLimit: 5, minAmount: 200000, nichesOff: [] }, who), { ok: true, changed: 4 });
+  assert.deepEqual(f.state.log.map((l) => l.slice(0, 3)), [["режим", "пробний", "бойовий"], ["лідоген", "не вибрано", "L12"], ["ліміт на день", "без ліміту", "5"],
+    ["мінімальна сума", "500 000 ₴", "200 000 ₴"]], "🔴 журнал не по полях або не людськими словами");
+  assert.deepEqual([await saveConfig(f.db, { ...f.state.cfg }, who), f.state.log.length, f.state.writes], [{ ok: true, changed: 0 }, 4, 1], "🔴 повтор без змін записано");
+  const g2 = fakeDb([13], { responsibleManagerId: 12 });
+  assert.deepEqual(await saveConfig(g2.db, { ...g2.state.cfg, minAmount: 300000 }, who), { ok: true, changed: 1 },
+    "🔴 вибраний, але вже неактивний лідоген блокує збереження інших полів");
+});
+
+/**
+ * #2368 — ДЖОБА БЕРЕ НАЛАШТУВАННЯ З БАЗИ (екран), а не зі змінних сервера: режим, сума, ліміт на день, ніші; вимкнена ніша
+ * не шукається; змінних `PROZORRO_*` у конфігу більше немає (друге джерело правди розійшлося б із екраном).
+ * 🧨 Червоніє, якщо повернути змінні сервера, ігнорувати вимкнені ніші чи ліміт.
+ */
+test("#2368 ДЖОБА: режим, сума, ліміт і ніші — з налаштувань екрана; вимкнена ніша не шукається; змінних сервера немає", () => {
+  const job = SRC("jobs/prozorroLeads.ts");
+  assert.match(job, /const cfg = await loadConfig\(pool\);/, "🔴 джоба не читає налаштування з бази");
+  assert.match(job, /niches: activeNiches\(cfg\.nichesOff\), now, minAmount: cfg\.minAmount, mode,/, "🔴 ніші чи сума не з налаштувань");
+  assert.match(job, /pushLeads\([^\n]*cfg\.dailyLimit \?\? Number\.POSITIVE_INFINITY\)/, "🔴 ліміт на день не з налаштувань");
+  assert.doesNotMatch(SRC("config.ts") + job, /PROZORRO_|config\.prozorro/, "🔴 повернулись змінні сервера — друге джерело правди");
+  const on = activeNiches(["Медицина (важке)"]);
+  assert.ok(!("Медицина (важке)" in on) && "Енергетика/електрика" in on && Object.keys(on).length === 7, "🔴 вимкнена ніша лишилась у пошуку");
+});
+
+/**
+ * #2369 — СТАТИСТИКА ПО ДНЯХ: дні за Києвом, ОБИДВА кінці включно, і для «знайдено», і для «записано в Kommo» (правило
+ * проєкту, баг 251 угоди); період — дві дати, from ≤ to, не довше року.
+ * 🧨 Червоніє, якщо повернути `<= $to` по часовій мітці, прибрати київський пояс чи пропустити кривий період.
+ */
+test("#2369 СТАТИСТИКА: дні за Києвом обидва кінці включно; період — дві дати, from ≤ to, не довше року", () => {
+  const sql = SRC("core/prozorroStats.ts");
+  for (const col of ["created_at", "pushed_at"]) {
+    assert.match(sql, new RegExp(`\\(${col} AT TIME ZONE 'Europe/Kyiv'\\)::date BETWEEN \\$1::date AND \\$2::date`), `🔴 ${col}: не київський день або не обидва кінці`);
+  }
+  assert.deepEqual(parsePeriod("2026-10-24", "2026-10-24"), { ok: true, from: "2026-10-24", to: "2026-10-24" }, "дзеркало: один день — можна");
+  for (const [a, b] of [["2026-10-25", "2026-10-24"], ["24.10.2026", "2026-10-25"], ["2025-01-01", "2026-10-24"], [undefined, "2026-10-24"]]) {
+    assert.equal(parsePeriod(a, b).ok, false, `🔴 пропущено кривий період ${String(a)}…${String(b)}`);
+  }
+});
+
+/**
+ * #2370 — ЕКРАН ПІДКЛЮЧЕНО: пункт «Тендери Prozorro» у групі «Клієнти» без поля `roles` (видимість — `screen_access`);
+ * вкладку видано адміну, СЕО, ОД, КВП; `/api/prozorro` під межею вкладки `prozorro`; екран — статичним імпортом (#225).
+ * 🧨 Червоніє, якщо прибрати пункт, роздати вкладку менеджерам, зняти межу маршруту чи імпортувати екран ліниво.
+ */
+test("#2370 ЕКРАН: пункт у «Клієнтах», вкладка — адмін/СЕО/ОД/КВП, маршрут під вкладкою, статичний імпорт", async () => {
+  const fe = (rel: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", rel), "utf8");
+  const layout = fe("components/Layout.tsx");
+  const clients = layout.slice(layout.indexOf('label: "Клієнти"'), layout.indexOf('label: "Робота"'));
+  assert.match(clients, /\{ key: "prozorro", label: "Тендери Prozorro", icon: "🏛" \}/, "🔴 пункту «Тендери Prozorro» немає в групі «Клієнти» (або з полем roles)");
+  const sql = SRC("db/schema.sql");
+  assert.match(sql, /'\{"prozorro":true\}'::jsonb\n {2}WHERE key IN \('admin', 'ceo', 'opdir', 'kvp'\) AND NOT \(screen_access \? 'prozorro'\);/,
+    "🔴 вкладку видано не тим ролям");
+  const { tabsForPath } = await import("../auth/routeTab.js") as { tabsForPath: (p: string) => string[] | null };
+  assert.deepEqual([tabsForPath("/api/prozorro/stats"), tabsForPath("/api/prozorro/settings")], [["prozorro"], ["prozorro"]], "🔴 маршрут без межі вкладки");
+  const dash = fe("pages/Dashboard.tsx");
+  assert.match(dash, /^import \{ ProzorroSection \} from "\.\/dashboard\/sections\/ProzorroSection";$/m, "🔴 екран не статичним імпортом");
+  assert.match(dash, /\{section === "prozorro" && <ProzorroSection roleKey=\{auth\?\.roleKey \?\? null\} \/>\}/, "🔴 екран не рендериться в розділі prozorro");
 });
 
 /**

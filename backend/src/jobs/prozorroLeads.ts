@@ -1,20 +1,20 @@
 import { pool } from "../db/pool.js";
-import { config } from "../config.js";
 import { jobSkip, type JobSkip } from "./jobRuns.js";
-import { PROZORRO_NICHES } from "../core/prozorroNiches.js";
+import { activeNiches, loadConfig } from "../core/prozorroSettings.js";
 import { makeProzorroClient } from "../core/prozorroClient.js";
 import { runProzorroCollect, type LeadRow, type PzCollectResult, type PzStore, type TenderRow } from "../core/prozorroCollect.js";
 import { quietTooLong, reportText } from "../core/prozorroRules.js";
 import { kommoGet, kommoWrite } from "../kommo/client.js";
-import { COMPANY_EDRPOU_FIELD, MAX_PUSH_ATTEMPTS, pushLeads, pzMode, responsibleProblem, type KommoPushDeps, type PendingLead, type PushStore,
+import { COMPANY_EDRPOU_FIELD, MAX_PUSH_ATTEMPTS, pushLeads, responsibleProblem, type KommoPushDeps, type PendingLead, type PushStore,
   type PushTally, type Responsible } from "../core/prozorroPush.js";
 
 /**
  * 🏛 PROZORRO-ЛІДИ — ДЖОБА (задача #5299). Щодня о 06:05 за Києвом (`index.ts`), під наглядом (`monitoredJobs.ts`).
  *
- * Режим — змінна `PROZORRO_LEADS` (`pzMode`): пробний (за замовчуванням) — рядки лягають у `prozorro_leads` з `mode = 'dry'`,
- * у Kommo НЕ пишеться нічого; «live» — рядки з `mode = 'live'` і ПІСЛЯ збору запис у Kommo (`core/prozorroPush.ts`) на
- * лідогена з «Налаштувань», не більше `PROZORRO_PUSH_LIMIT` за прохід. Рядки пробного режиму в Kommo НЕ йдуть ніколи.
+ * Усі налаштування — з бази (`prozorro_settings`, екран «Тендери Prozorro» → «Налаштування», лише адмін): режим, хто веде,
+ * ліміт угод на день, мінімальна сума, вимкнені ніші. Пробний режим (за замовчуванням) — рядки лягають у `prozorro_leads`
+ * з `mode = 'dry'`, у Kommo НЕ пишеться нічого; бойовий — рядки з `mode = 'live'` і ПІСЛЯ збору запис у Kommo
+ * (`core/prozorroPush.ts`) на вибраного лідогена, не більше ліміту на день. Рядки пробного режиму в Kommo НЕ йдуть ніколи.
  * Логіка збору — `core/prozorroCollect.ts`, правила — `core/prozorroRules.ts`.
  * Наприкінці — звіт (форма з ТЗ) у ЛОГ сервера; у Telegram НЕ шлемо (рішення Романа 23.10.2026: «без звіту в телеграм»).
  * Якщо вирок «аварія», джоба ПІСЛЯ запису звіту в лог падає — це видно в банері (runJob → епізоди), Telegram для цього не потрібен.
@@ -76,7 +76,7 @@ export const prozorroStore: PzStore = {
   },
 };
 
-/** Хто веде тендерні ліди — з «Налаштувань» (`prozorro_settings`); null — не вибрано. */
+/** Хто веде тендерні ліди — з налаштувань екрана (`prozorro_settings`); null — не вибрано. */
 export async function readResponsible(): Promise<Responsible | null> {
   const r = await pool.query<{ id: number; name: string; kommo_user_id: string | null; is_active: boolean }>(
     `SELECT m.id, m.name, m.kommo_user_id::text, m.is_active FROM prozorro_settings s JOIN managers m ON m.id = s.responsible_manager_id
@@ -131,13 +131,14 @@ export const kommoPush: KommoPushDeps = {
 };
 
 export async function prozorroLeads(): Promise<(PzCollectResult & { push: PushTally | null; pushWaiting: string | null }) | JobSkip> {
-  const mode = pzMode(config.prozorro.mode);
-  if (mode === "off") return jobSkip("Prozorro-ліди вимкнено (PROZORRO_LEADS=off)");
+  const cfg = await loadConfig(pool);
+  const mode = cfg.mode;
+  if (mode === "off") return jobSkip("Prozorro-ліди вимкнено на екрані «Тендери Prozorro» → «Налаштування»");
   const client = makeProzorroClient({ fetch, sleep, nowMs: () => Date.now() });
   const now = new Date();
   const res = await runProzorroCollect({
     search: (text, page) => client.search(text, page), tender: (id) => client.tender(id),
-    store: prozorroStore, niches: PROZORRO_NICHES, now, minAmount: config.prozorro.minAmount, mode,
+    store: prozorroStore, niches: activeNiches(cfg.nichesOff), now, minAmount: cfg.minAmount, mode,
   });
   // ✍️ Запис у Kommo — ЛИШЕ в бойовому режимі. Лідоген не вибраний / неактивний — не пишемо нічого, рядки чекають.
   let push: PushTally | null = null;
@@ -147,11 +148,11 @@ export async function prozorroLeads(): Promise<(PzCollectResult & { push: PushTa
     const who = await readResponsible();
     const problem = responsibleProblem(who);
     if (problem) pushWaiting = `${problem}; чекають запису: ${String(pending.length)}`;
-    else push = await pushLeads(pending, who!.kommoUserId!, kommoPush, pushStore, config.prozorro.pushLimit);
+    else push = await pushLeads(pending, who!.kommoUserId!, kommoPush, pushStore, cfg.dailyLimit ?? Number.POSITIVE_INFINITY);
   }
   const last = await pool.query<{ at: Date | null }>(`SELECT max(created_at) AS at FROM prozorro_leads`);
   const quiet = !res.tally.baseline && quietTooLong(last.rows[0]?.at ?? null, res.launch, now);
-  const text = reportText(res.tally, { mode: mode === "live" ? "live" : "dry", minAmount: config.prozorro.minAmount, quiet })
+  const text = reportText(res.tally, { mode: mode === "live" ? "live" : "dry", minAmount: cfg.minAmount, quiet })
     + (push ? `\nKommo: записано ${String(push.pushed)} з ${String(push.pending)} у черзі, невдало ${String(push.failed)}, наявних компаній ${String(push.companiesReused)}` : "")
     + (pushWaiting ? `\n⚠️ Kommo: ${pushWaiting}` : "")
     + (res.verdict.ok ? "" : `\n🔴 ${res.verdict.error}`);

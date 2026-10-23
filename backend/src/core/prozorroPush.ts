@@ -26,12 +26,8 @@ export const AI_TENDER_TAG = "AI тендер";
 export const MAX_PUSH_ATTEMPTS = 3;
 export const DEFAULT_PUSH_LIMIT = 50;
 
-/** Режим із змінної `PROZORRO_LEADS`: «off» — нічого; «live» — збір + запис у Kommo; будь-що інше — пробний. */
+/** Режим (з налаштувань екрана, `prozorro_settings.mode`): «off» — нічого; «dry» — лише збір; «live» — збір + запис у Kommo. */
 export type PzMode = "off" | "dry" | "live";
-export function pzMode(raw: string | null | undefined): PzMode {
-  const v = (raw ?? "").trim();
-  return v === "off" ? "off" : v === "live" ? "live" : "dry";
-}
 
 /** Рядок, що чекає запису в Kommo (з `prozorro_leads`). */
 export interface PendingLead {

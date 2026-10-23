@@ -20,9 +20,6 @@ import type { Db as SecretsDb } from "../core/secrets.js";
 import { USER_SOURCE_SQL, cardsWithoutAccount, linkUserCard } from "../core/employeeAdd.js";
 import { ImportError } from "../core/employeeImport.js";
 import { loadTunables, parseTunables, saveTunables, tunablesHistory, RECOMMENDED, TUNABLE_BOUNDS } from "../core/firstTouchTunables.js";
-import { loadProzorroSettings, parseProzorroSettings, saveProzorroResponsible } from "../core/prozorroSettings.js";
-import { MAX_PUSH_ATTEMPTS, pzMode } from "../core/prozorroPush.js";
-import { config } from "../config.js";
 
 export const settingsRouter = Router();
 settingsRouter.use(requireAuth);
@@ -227,27 +224,6 @@ settingsRouter.put("/first-touch", async (req, res) => {
   res.json({ current: await loadTunables(pool), history: await tunablesHistory(pool) });
 });
 
-/**
- * 🏛 PROZORRO-ЛІДИ — хто веде тендерні ліди (задача #5299, прохід 2; Роман 22.10.2026). Лише адмін, як «Перший дотик».
- * Окремо від `app_settings` (`PUT /` переписує весь обʼєкт). Логіка й SQL — `core/prozorroSettings.ts`.
- * Режим і стеля — лише показуються: їх міняють змінними на сервері (`PROZORRO_LEADS`, `PROZORRO_PUSH_LIMIT`).
- */
-const prozorroView = async () => ({ ...(await loadProzorroSettings(pool, MAX_PUSH_ATTEMPTS)), mode: pzMode(config.prozorro.mode),
-  pushLimit: config.prozorro.pushLimit, minAmount: config.prozorro.minAmount });
-settingsRouter.get("/prozorro", async (req, res) => {
-  if (req.auth!.roleKey !== "admin") { res.status(403).json({ error: "Налаштування Prozorro-лідів — лише для адміністратора" }); return; }
-  res.json(await prozorroView());
-});
-
-settingsRouter.put("/prozorro", async (req, res) => {
-  if (req.auth!.roleKey !== "admin") { res.status(403).json({ error: "Налаштування Prozorro-лідів — лише для адміністратора" }); return; }
-  const parsed = parseProzorroSettings(req.body);
-  if (!parsed.ok) { res.status(400).json({ error: parsed.error }); return; }
-  const who = (await pool.query<{ name: string | null }>("SELECT full_name AS name FROM users WHERE id = $1", [req.auth!.userId])).rows[0]?.name ?? req.auth!.email ?? null;
-  const r = await saveProzorroResponsible(pool, parsed.managerId, { userId: req.auth!.userId ?? null, name: who });
-  if (!r.ok) { res.status(400).json({ error: r.error }); return; }
-  res.json(await prozorroView());
-});
 
 // --- User & role management (право manage_users) ---
 // Гейт вкладки «Налаштування» вже відсіює чужі ролі (requireAuth tab-gate); тут додатково

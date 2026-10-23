@@ -546,22 +546,33 @@ export async function fetchFirstTouchSettings(): Promise<FirstTouchSettingsResp>
   const { data } = await api.get<FirstTouchSettingsResp>("/settings/first-touch");
   return data;
 }
-/** 🏛 Prozorro-ліди (#5299): хто веде тендерні ліди + стан черги запису в Kommo. Лише адмін. */
+/** 🏛 «Тендери Prozorro» (#5299): статистика по днях (екран) і налаштування (лише адмін). */
+export type PzModeT = "off" | "dry" | "live";
+export interface PzConfigT { responsibleManagerId: number | null; mode: PzModeT; dailyLimit: number | null; minAmount: number; nichesOff: string[] }
 export interface ProzorroSettingsResp {
-  current: { managerId: number; name: string; active: boolean; hasKommo: boolean } | null;
+  config: PzConfigT;
+  responsible: { name: string; active: boolean; hasKommo: boolean } | null;
   options: { id: number; name: string; team: string }[];
+  niches: { name: string; words: number; on: boolean; leads30d: number }[];
   queue: { waiting: number; exhausted: number; pushed: number; dryCollected: number };
-  history: { oldName: string | null; newName: string | null; setByName: string | null; setAt: string }[];
-  mode: "off" | "dry" | "live";
-  pushLimit: number;
-  minAmount: number;
+  history: { field: string; oldValue: string | null; newValue: string | null; setByName: string | null; setAt: string }[];
 }
-export async function fetchProzorroSettings(): Promise<ProzorroSettingsResp> {
-  const { data } = await api.get<ProzorroSettingsResp>("/settings/prozorro");
+export interface ProzorroStatsResp {
+  from: string; to: string;
+  days: { date: string; found: number; pushed: number }[];
+  totals: { found: number; pushed: number };
+  lastRunAt: string | null; lastError: string | null;
+}
+export async function fetchProzorroStats(from: string, to: string): Promise<ProzorroStatsResp> {
+  const { data } = await api.get<ProzorroStatsResp>("/prozorro/stats", { params: { from, to } });
   return data;
 }
-export async function saveProzorroSettings(managerId: number | null): Promise<ProzorroSettingsResp> {
-  const { data } = await api.put<ProzorroSettingsResp>("/settings/prozorro", { managerId });
+export async function fetchProzorroSettings(): Promise<ProzorroSettingsResp> {
+  const { data } = await api.get<ProzorroSettingsResp>("/prozorro/settings");
+  return data;
+}
+export async function saveProzorroSettings(c: PzConfigT): Promise<ProzorroSettingsResp> {
+  const { data } = await api.put<ProzorroSettingsResp>("/prozorro/settings", c);
   return data;
 }
 export async function saveFirstTouchSettings(t: FirstTouchTunablesT): Promise<Pick<FirstTouchSettingsResp, "current" | "history">> {

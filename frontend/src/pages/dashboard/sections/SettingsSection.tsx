@@ -11,7 +11,6 @@ import {
 import { NAV_GROUPS } from "../../../components/Layout";
 import { todayKyiv } from "../periodRules";
 import { FirstTouchSettingsCard } from "./FirstTouchSettingsCard";
-import { ProzorroSettingsCard } from "./ProzorroSettingsCard";
 import { MissedNormCard } from "./MissedCallsTzBlocks";
 import { Toggle } from "../widgets";
 
@@ -118,8 +117,6 @@ export default function SettingsSection({ role, roleKey, teams, syncStatus, sync
 
       {sub === "Загальні" && <GeneralTab syncStatus={syncStatus} syncing={syncing} onManualSync={onManualSync} canSync={role === "admin" || role === "team_lead"} />}
       {sub === "Загальні" && roleKey === "admin" && <FirstTouchSettingsCard />}
-      {/* 🏛 Prozorro-ліди (#5299): хто веде тендерні ліди — лише адмін; сервер перевіряє те саме. */}
-      {sub === "Загальні" && roleKey === "admin" && <ProzorroSettingsCard />}
       {/* 📵 Ціль «передзвонили за 24 год» (ТЗ 12.10, розділ 7): ставить керівництво; сервер перевіряє те саме. */}
       {sub === "Загальні" && MISSED_NORM_ROLES.has(roleKey ?? "") && <MissedNormCard />}
       {sub === "Користувачі" && <UsersTab teams={teams} isAdminUx={isAdminUx} />}

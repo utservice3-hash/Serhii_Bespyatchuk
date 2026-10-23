@@ -50,14 +50,6 @@ export const config = {
     // впізнає обидві мови (`core/zoneRates.ts`); з "uk" ще й розпізнались Волинська й Рівненська, яких "ru" не давала.
     lang: process.env.LARDIWEB_LANG ?? "uk",
   },
-  // 🏛 Prozorro-ліди (задача #5299). Режим (`core/prozorroPush.ts · pzMode`): «off» — джоба не ходить у Prozorro; «live» —
-  // збір + запис у Kommo; будь-що інше, включно з відсутністю, — пробний («dry»): лише в нашу таблицю. Поріг — сума виграшу, ₴.
-  prozorro: {
-    mode: process.env.PROZORRO_LEADS ?? "",
-    minAmount: Number(process.env.PROZORRO_MIN_AMOUNT ?? "") || 500_000,
-    // Стеля записів у Kommo за прохід (прохід 2): перший бойовий день — 5, далі знімаємо. Порожньо — 50.
-    pushLimit: Number(process.env.PROZORRO_PUSH_LIMIT ?? "") || 50,
-  },
   // Time tracker: a separate system of ours with its own server and user table. Both optional
   // and empty by default — the nav item then does not render and the endpoints answer 503.
   // Deliberately not required(): the dashboard must boot without the tracker, which deploys on
