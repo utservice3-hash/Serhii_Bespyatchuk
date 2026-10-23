@@ -556,7 +556,7 @@ function UsersTab({ teams, isAdminUx }: { teams: Team[]; isAdminUx: boolean }) {
               {/* 🔗 Картка (#2271): є — імʼя і «Відвʼязати»; немає — сказати словом і дати привʼязати (невідоме — видиме). */}
               <td style={{ whiteSpace: "nowrap" }}>
                 {u.card_id
-                  ? <>{u.card_name} <button onClick={() => linkCard(u, null)} disabled={busy === u.id} title="Відвʼязати від картки" style={{ ...btn, color: "var(--text-muted)" }}>✕</button></>
+                  ? <><a href={`/hiring?tab=emp&employee=${u.card_id}`} title="Відкрити картку в «Найм → Співробітники»" style={{ color: "#2563eb" }}>{u.card_name}</a> <button onClick={() => linkCard(u, null)} disabled={busy === u.id} title="Відвʼязати від картки" style={{ ...btn, color: "var(--text-muted)" }}>✕</button></>
                   : u.source === "candidate"
                     ? <span style={{ color: "var(--text-muted)", fontSize: 12 }}>у Наймі</span>
                     : <select value="" disabled={busy === u.id || freeCards.length === 0} onChange={(e) => { if (e.target.value) void linkCard(u, Number(e.target.value)); }}

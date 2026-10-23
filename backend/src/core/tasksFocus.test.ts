@@ -320,3 +320,35 @@ test("#1969 ЗАДАЧНИК: кружечка «Готово» в рядку н
   assert.equal(calls.length, 1, `🔴 «Готово» з рядка викликається ${calls.length} разів, а має — рівно з меню статусу`);
   assert.match(view, /onChange=\{\(st\) => \(st === "done" \? onDone\(t\) : onStatus\(t, st\)\)\}/, "🔴 закрити задачу з рядка тепер нічим");
 });
+
+/**
+ * #1970 — СВОЯ ЗМІНА СТАТУСУ НЕ ДАЄ ДРУГОГО СПОВІЩЕННЯ (Роман 23.10.2026: «коли закриваю задачу, маю два
+ * сповіщення»). Локальна зміна лишає одноразову позначку; перехід, що з нею збігся, мовчить. Дзеркало:
+ * ЧУЖА зміна (позначки немає або вона інша) сповіщає, а застаріла позначка не глушить наступну чужу.
+ * 🧨 Червоніє, якщо «Задачу виконано» знову спрацює на власну дію, якщо позначка глушитиме чужі зміни,
+ * або якщо `Dashboard` перестане ставити позначку чи перевіряти її в обох сповіщеннях.
+ */
+test("#1970 ЗАДАЧНИК: своя зміна статусу не дає «Задачу виконано», чужа — дає", async () => {
+  const spec2 = fileURLToPath(new URL("../../../frontend/src/pages/dashboard/acceptanceNotify.ts", import.meta.url).href.replace("/dist/", "/src/"));
+  const N = (await import(spec2)) as { noteSelfStatus: (s: Map<number, string>, id: number, st: string) => void;
+    consumeSelfStatus: (s: Map<number, string>, id: number, st: string) => boolean };
+  const store = new Map<number, string>();
+  assert.equal(N.consumeSelfStatus(store, 1, "done"), false, "🔴 без позначки зміна вважається моєю — чужі закриття мовчатимуть");
+  N.noteSelfStatus(store, 1, "done");
+  assert.equal(N.consumeSelfStatus(store, 1, "done"), true, "🔴 моя власна зміна дає друге сповіщення");
+  assert.equal(N.consumeSelfStatus(store, 1, "done"), false, "🔴 позначка не одноразова — наступне чуже закриття промовчить");
+  N.noteSelfStatus(store, 2, "ready_for_approval");
+  assert.equal(N.consumeSelfStatus(store, 2, "done"), false, "🔴 інший статус, ніж я поставив, вважається моїм");
+  assert.equal(N.consumeSelfStatus(store, 2, "done"), false, "🔴 застаріла позначка лишилась і глушить чужі зміни");
+  const dash = readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "Dashboard.tsx"), "utf8")
+    .replace(/^\s*\/\/.*$/gm, " ").replace(/\{?\/\*[\s\S]*?\*\/\}?/g, " ").replace(/\s+/g, " ");
+  assert.match(dash, /if \(patch\.status\) noteSelfStatus\(selfStatus\.current, id, patch\.status\);/, "🔴 локальна зміна статусу не лишає позначки");
+  // Свій перехід пропускає задачу ДО обох сповіщень («Задачу виконано» і «Чекає вашого прийняття») —
+  // порядок перевіряється позиціями в тілі ефекту, а не наявністю рядків (правило 10).
+  const skip = dash.indexOf("const self = was !== undefined && was !== t.status && consumeSelfStatus(selfStatus.current, t.id, t.status); if (self) continue;");
+  assert.ok(skip > 0, "🔴 власний перехід статусу не пропускається в ефекті сповіщень");
+  const done = dash.indexOf("if (mine && was && was !== t.status");
+  const acc = dash.indexOf("if (isAcceptanceAlert(t, was,");
+  assert.ok(done > skip && acc > skip, "🔴 «Задачу виконано» або «Чекає вашого прийняття» перевіряється ДО пропуску власної зміни");
+  assert.ok(acc - skip < 2500, "🔴 пропуск власної зміни стоїть не в тому ж циклі, що сповіщення");
+});

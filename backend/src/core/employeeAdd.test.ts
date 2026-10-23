@@ -232,3 +232,19 @@ test("#2273 Налаштування (фронт): кандидати схова
   assert.match(fe, /<th style=\{TH\}[^>]*>ДЖЕРЕЛО<\/th><th style=\{TH\}[^>]*>КАРТКА<\/th>/, "🔴 немає колонок «Джерело» / «Картка»");
   assert.match(fe, /<option value="">немає картки — привʼязати…<\/option>/, "🔴 відсутність картки не названа словом");
 });
+
+/**
+ * #2274 — ПЕРЕХІД З «НАЛАШТУВАННЯ → КОРИСТУВАЧІ» НА КАРТКУ (зауваження Романа 23.10: «я не можу в налаштуваннях перейти
+ * на карточку»). Імʼя картки в списку — посилання `/hiring?tab=emp&employee=<id>`; «Найм» відкривається на вкладці
+ * «Співробітники»; реєстр відкриває картку з `employee` одразу і прибирає параметр з адреси.
+ * 🧨 Червоніє, якщо зламати адресу посилання, не читати `tab` чи `employee` або не відкривати картку.
+ */
+test("#2274 Налаштування → картка: посилання /hiring?tab=emp&employee=<id>, Найм відкриває вкладку й картку", () => {
+  const FE = (f: string) => readFileSync(path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "pages", "dashboard", "sections", f), "utf8");
+  assert.match(FE("SettingsSection.tsx"), /<a href=\{`\/hiring\?tab=emp&employee=\$\{u\.card_id\}`\}[^>]*>\{u\.card_name\}<\/a>/, "🔴 імʼя картки в Налаштуваннях не веде на картку");
+  assert.match(FE("HiringSection.tsx"), /new URLSearchParams\(window\.location\.search\)\.get\("tab"\) === "emp" \? "emp"/, "🔴 «Найм» не відкриває «Співробітників» з адреси");
+  const emp = FE("HiringEmployees.tsx");
+  assert.match(emp, /const id = Number\(new URLSearchParams\(window\.location\.search\)\.get\("employee"\)\);\s*return Number\.isInteger\(id\) && id > 0 \? \{ id, tab: "profile" \} : null;/,
+    "🔴 реєстр не відкриває картку з адреси");
+  assert.match(emp, /u\.searchParams\.delete\("employee"\)/, "🔴 параметр лишається в адресі — оновлення знову відкриє картку");
+});

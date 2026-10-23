@@ -56,7 +56,7 @@ import { Layout, NAV_ITEMS, HIDDEN_NAV, type NavKey } from "../components/Layout
 import { homeSection } from "./dashboard/homeSection";
 import { getDateRange } from "../components/DateRangeFilter";
 import { isSignalAlert, signalAlertText, knownOf, isClientTaskAlert, clientTaskAlertText, isUtbTaskAlert, utbTaskAlertText, type KnownTask } from "./dashboard/signalTaskNotify";
-import { isAcceptanceAlert, acceptanceAlertText } from "./dashboard/acceptanceNotify";
+import { isAcceptanceAlert, acceptanceAlertText, noteSelfStatus, consumeSelfStatus } from "./dashboard/acceptanceNotify";
 import { getAuthPayload } from "../auth";
 import { currentMonth, formatAmount, formatAmountFull, previousRange, getRank, presence } from "./dashboard/format";
 import { STAGE_LABELS, STAGE_ORDER } from "./dashboard/constants";
@@ -194,6 +194,8 @@ export function Dashboard() {
   // completed. prevStatus tracks last-seen status; init guards the first load.
   const prevTaskStatus = useRef<Map<number, string>>(new Map());
   const notifInit = useRef(false);
+  /** Статуси, які я сам щойно поставив з цієї вкладки — сповіщення про них мовчить (`acceptanceNotify.ts`). */
+  const selfStatus = useRef<Map<number, string>>(new Map());
   /** Стан задач із ПОПЕРЕДНЬОГО фонового опитування; `null` — першого опитування ще не було. */
   const signalKnown = useRef<Map<number, KnownTask> | null>(null);
   /** Момент відкриття сторінки: до першого опитування дзвонимо лише задачами, створеними ПІСЛЯ нього. */
@@ -444,6 +446,9 @@ export function Dashboard() {
     if (notifInit.current) {
       for (const t of tasks) {
         const was = prev.get(t.id);
+        // Мій власний перехід (поставив з цієї вкладки) — мовчимо: про нього вже сказав мій тост.
+        const self = was !== undefined && was !== t.status && consumeSelfStatus(selfStatus.current, t.id, t.status);
+        if (self) continue;
         const mine = t.createdById === auth?.userId
           || (auth?.managerId != null && t.assigneeId === auth.managerId)
           || (t.assigneeUserId != null && t.assigneeUserId === auth?.userId);
@@ -514,6 +519,7 @@ export function Dashboard() {
     const keys = dirtyTaskFields.current.get(id) ?? new Set<keyof Task>();
     for (const k of Object.keys(patch) as (keyof Task)[]) keys.add(k);
     dirtyTaskFields.current.set(id, keys);
+    if (patch.status) noteSelfStatus(selfStatus.current, id, patch.status);
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   }
 
