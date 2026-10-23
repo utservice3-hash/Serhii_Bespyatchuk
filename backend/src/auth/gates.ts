@@ -448,6 +448,10 @@ export interface SpreadExemption { file: string; frag: string; why: string }
  * акумулятори.
  */
 export const ROW_SPREAD_EXEMPTIONS: SpreadExemption[] = [
+  // 🏁 «Результат місяця» (#5583, 23.10.2026): `r` — обчислений обʼєкт ядра `loadMonthResult` (`MonthResult`, поля
+  // перелічені в типі), не рядок БД; дописується лише `canEdit` — право глядача.
+  { file: "routes/finance.ts", frag: "res.json({ ...r, canEdit: roleHasPerm",
+    why: "`r` — `MonthResult` з `core/monthResult.ts` (обчислений обʼєкт із явними полями), не рядок БД; `canEdit` — право глядача `edit_finance`." },
   // ✅ Задачник (30.09.2026): рядок `GET /tasks` — ЯВНИЙ SELECT (перелік колонок у запиті), до нього
   // дописуються права глядача на статус, обчислені `core/taskStatusRights.ts`.
   { file: "routes/tasks.ts", frag: "return { ...r, statusRights",

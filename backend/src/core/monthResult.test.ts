@@ -194,3 +194,38 @@ test("#1282e ПРОВОДКА: межі роутів і матриця, AI за�
   assert.match(tab, /\$\{data\.kommoBase\}\/leads\/detail\/\$\{id\}/, "🔴 немає посилання на угоду в Kommo");
   assert.match(tab, /зараз: \{name\(d\.current\)/, "🔴 перепризначену не позначено");
 });
+
+/**
+ * #1284 — ПЕРШИЙ РОЗРАХУНОК МІСЯЦЯ НЕ ВПИРАЄТЬСЯ В 20 С (23.10.2026: на проді вкладка віддала «request timeout»). Сервер
+ * чекає до 15 с, не встиг — 202 `{ pending }`, розрахунок іде у фоні ОДИН на місяць і лягає в кеш, екран перепитує кожні
+ * 4 с; Excel під час розрахунку — 409 словами; після синку 1С поточний і минулий місяць прогріваються. Зіставлення з
+ * «Випискою» — через індекс за номером, і він дає РІВНО той самий платіж, що й перебір усіх (по обидва боки межі цифр).
+ * 🧨 Червоніє, якщо повернути чекання на весь розрахунок, рахувати місяць удруге паралельно, загубити опитування чи
+ * індекс почне пропускати «0123» або ловити «1234» для рахунку 123.
+ */
+test("#1284 РОЗРАХУНОК У ФОНІ: 202 pending і опитування, один розрахунок на місяць, прогрів після 1С, індекс «Виписки» = перебір", async () => {
+  const { findBankPayment, paymentsByOrderNo } = await import("./paymentRun.js");
+  const pays = [
+    { bookedOn: "2026-09-01", amount: 1000, purpose: "Оплата по рах. № 0123 від 01.09", payer: "ТОВ «Альфа»" },
+    { bookedOn: "2026-09-02", amount: 500, purpose: "рахунок 1234", payer: "ТОВ «Альфа»" },
+    { bookedOn: "2026-09-03", amount: 700, purpose: "за рах.45/1", payer: "Бета ТОВ" },
+    { bookedOn: "2026-09-04", amount: 900, purpose: "без номера", payer: "ТОВ «Альфа»" },
+  ];
+  const idx = paymentsByOrderNo(pays);
+  for (const [orderNo, clientName, income] of [["123", "ТОВ «Альфа»", null], ["1234", "Альфа", null], ["45", "Інший", 700], ["7", "Альфа", null], ["12", "Альфа", null]] as const) {
+    const m = { orderNo, clientName, income };
+    assert.deepEqual(findBankPayment(m, idx.get(orderNo) ?? []), findBankPayment(m, pays), `🔴 індекс ≠ перебір для рахунку ${orderNo}`);
+  }
+  assert.equal(findBankPayment({ orderNo: "123", clientName: "ТОВ «Альфа»", income: null }, idx.get("123") ?? [])?.bookedOn, "2026-09-01", "🔴 «0123» не знайдено");
+  const r = SRC("routes/finance.ts");
+  assert.match(r, /const r = await monthResultOrPending\(req\.query\.m, req\.query\.refresh === "1"\);\s*if \("pending" in r\) \{ res\.status\(202\)\.json\(r\); return; \}/, "🔴 перегляд чекає весь розрахунок");
+  assert.match(r, /if \("pending" in r\) \{ res\.status\(409\)\.json\(\{ error: "Місяць ще рахується/, "🔴 Excel під час розрахунку не відповідає словами");
+  const d = SRC("jobs/monthResultData.ts");
+  assert.match(d, /const running = inflight\.get\(ym\);\s*if \(running\) return running;/, "🔴 місяць рахується вдруге паралельно");
+  assert.match(d, /Promise\.race\(\[p, late\]\)/, "🔴 немає межі чекання");
+  assert.match(d, /idx\.get\(d\.orderNo\) \?\? \[\]/, "🔴 зіставлення з «Випискою» — перебором");
+  assert.match(SRC("jobs/syncOnecDeals.ts"), /if \(opts\.warm !== false\) warmMonthResults\(\);/, "🔴 немає прогріву після синку 1С");
+  const fe = FE("pages/dashboard/sections/FinanceMonthResultTab.tsx");
+  assert.match(fe, /if \("pending" in d\) \{ setPending\(true\); poll\.current = window\.setTimeout\(\(\) => load\(false\), 4000\); return; \}/, "🔴 екран не перепитує");
+  assert.match(fe, /return \(\) => window\.clearTimeout\(poll\.current\);/, "🔴 опитування не зупиняється при виході");
+});

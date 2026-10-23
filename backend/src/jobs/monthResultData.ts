@@ -7,7 +7,7 @@
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
 import { fetchLeadsByIds, type KommoDeal } from "../kommo/client.js";
-import { MAIN_FIELDS, orderNoOf, cashExpenseOf, findBankPayment, type BankIn } from "../core/paymentRun.js";
+import { MAIN_FIELDS, orderNoOf, cashExpenseOf, findBankPayment, paymentsByOrderNo, type BankIn } from "../core/paymentRun.js";
 import { FM_INCOME_FIELDS } from "../core/fmSums.js";
 import { kommoFlows } from "../core/dealLedger.js";
 import { loadMonthResult, type LiveFields, type MonthResult } from "../core/monthResult.js";
@@ -41,21 +41,50 @@ async function bankPaid(month: string, deals: { id: number; orderNo: string | nu
       WHERE t.direction = 'in' AND NOT t.is_bank_fee AND NOT a.finance_only AND a.company <> 'staff' AND t.deleted_at IS NULL
         AND t.booked_at >= $1::date - interval '180 days'`, [month])).rows
     .map((x) => ({ bookedOn: x.booked_on, amount: Number(x.amount), purpose: x.purpose ?? "", payer: x.payer ?? "" }));
-  return new Set(deals.filter((d) => findBankPayment({ orderNo: d.orderNo, income: d.income, clientName: d.client }, payments)).map((d) => d.id));
+  const idx = paymentsByOrderNo(payments);
+  return new Set(deals.filter((d) => d.orderNo && findBankPayment({ orderNo: d.orderNo, income: d.income, clientName: d.client }, idx.get(d.orderNo) ?? [])).map((d) => d.id));
 }
 
 const cache = new Map<string, { at: number; data: MonthResult }>();
 const CACHE_MS = 10 * 60_000;
 export const dropMonthResultCache = (months?: string[]) => { if (!months) cache.clear(); else for (const m of months) cache.delete(m.slice(0, 7)); };
 
-export async function monthResult(monthArg: unknown, refresh = false): Promise<MonthResult> {
+const inflight = new Map<string, Promise<MonthResult>>();
+const ymOf = (monthArg: unknown) => {
   const kyiv = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" }).slice(0, 7);
-  const ym = typeof monthArg === "string" && /^\d{4}-\d{2}/.test(monthArg) ? monthArg.slice(0, 7) : kyiv;
+  return typeof monthArg === "string" && /^\d{4}-\d{2}/.test(monthArg) ? monthArg.slice(0, 7) : kyiv;
+};
+/** Розрахунок місяця з кешем і ОДНИМ розрахунком на місяць одночасно (другий запит чекає перший, а не рахує вдруге). */
+export function monthResult(monthArg: unknown, refresh = false): Promise<MonthResult> {
+  const ym = ymOf(monthArg);
   const hit = cache.get(ym);
-  if (!refresh && hit && Date.now() - hit.at < CACHE_MS) return hit.data;
-  const data = await loadMonthResult(pool as unknown as Db, `${ym}-01`, { live, bankPaid: (d) => bankPaid(`${ym}-01`, d), kommoBase: config.kommo.baseUrl });
-  cache.set(ym, { at: Date.now(), data });
-  return data;
+  if (!refresh && hit && Date.now() - hit.at < CACHE_MS) return Promise.resolve(hit.data);
+  const running = inflight.get(ym);
+  if (running) return running;
+  const p = loadMonthResult(pool as unknown as Db, `${ym}-01`, { live, bankPaid: (d) => bankPaid(`${ym}-01`, d), kommoBase: config.kommo.baseUrl })
+    .then((data) => { cache.set(ym, { at: Date.now(), data }); return data; })
+    .finally(() => inflight.delete(ym));
+  inflight.set(ym, p);
+  return p;
+}
+/**
+ * Для HTTP: сервер обриває запит на 20 с (`REQ_TIMEOUT_MS`), а перший розрахунок місяця (поля ~1 000 угод з Kommo +
+ * «Виписка») буває довшим. Тому чекаємо до `waitMs`; не встигли — `{ pending: true }`, розрахунок іде далі у фоні й
+ * ляже в кеш, екран перепитує. Помилку фонового розрахунку не ковтаємо: наступний запит почне заново і поверне її.
+ */
+export async function monthResultOrPending(monthArg: unknown, refresh = false, waitMs = 15_000): Promise<MonthResult | { pending: true; month: string }> {
+  const ym = ymOf(monthArg);
+  const p = monthResult(ym, refresh);
+  p.catch(() => undefined);
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<null>((r) => { timer = setTimeout(() => r(null), waitMs); });
+  try { return (await Promise.race([p, late])) ?? { pending: true, month: `${ym}-01` }; } finally { clearTimeout(timer); }
+}
+/** Прогрів після синку 1С: поточний і минулий місяць за Києвом перераховуються у фоні, щоб екран відкривався одразу. */
+export function warmMonthResults(now = new Date()): void {
+  const ym = now.toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" }).slice(0, 7);
+  const d = new Date(`${ym}-01T12:00:00Z`); d.setUTCMonth(d.getUTCMonth() - 1);
+  for (const m of [d.toISOString().slice(0, 7), ym]) monthResult(m, true).catch((e) => console.error(`warmMonthResults ${m}:`, (e as Error).message));
 }
 
 /** Колонки аркуша «Угоди» — у порядку вкладки «Сделки» Тетяни (те, що відтворюємо), далі наші: хто закривав, рішення. */
