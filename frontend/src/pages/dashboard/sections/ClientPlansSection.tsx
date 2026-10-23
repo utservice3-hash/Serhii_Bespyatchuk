@@ -33,6 +33,16 @@ import { ReactCycleStatus, ReactCycleButtons, LeadgenPoolPanel } from "./Reactiv
 const STICKY_TH: React.CSSProperties = { position: "sticky", top: 0, zIndex: 2, background: "#fff" };
 /** Ширини двох закріплених зліва колонок «Робота» й «Клієнт» — назва клієнта завжди видна (ТЗ 5609, п.6). */
 const W_WORK = 112, W_NAME = 260;
+const dm = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
+const uah = (n: number) => `${Math.round(n).toLocaleString("uk-UA")} ₴`;
+/** 🧾 Підтвердження роботи словами (підказка і CSV) — угода «від рахунку» і / або оплата; порожньо — роботи немає. */
+function workProofText(c: { workProof: ClientPlanRow["workProof"] }): string {
+  const parts: string[] = [];
+  const i = c.workProof.invoice, p = c.workProof.payment;
+  if (i) parts.push(`угода ${i.kommoId} · ${i.stage}${i.at ? ` · ${dm(i.at)}` : ""}${i.open ? " (в роботі)" : ""}`);
+  if (p) parts.push(`оплата ${dm(p.at)} · ${uah(p.amount)}`);
+  return parts.join("; ");
+}
 const STICKY_COL = (left: number, width: number): React.CSSProperties => ({ position: "sticky", left, zIndex: 1, width, minWidth: width, maxWidth: width });
 
 const S = {
@@ -164,7 +174,7 @@ const vipSleeping = (c: ClientPlanRow) => c.segment === "vip" && (c.daysSince ??
  */
 type QuickKey = "noWork" | "noTask" | "vipNoTask" | "step_overdue" | "vip_sleeping" | "sleeping" | "no_talk" | "debt_hold" | "stale" | "yearGone";
 const QUICK: readonly { key: QuickKey; label: string; title: string; fn: (c: ClientPlanRow) => boolean }[] = [
-  { key: "noWork", label: "Без роботи", title: "30+ днів ні розмови, ні контакту в месенджері, і немає кроку чи задачі з датою", fn: (c) => c.work.noWork },
+  { key: "noWork", label: "Без роботи", title: "за період (Налаштування) немає ні угоди на «Виставленні рахунку» чи далі, ні оплати від клієнта у Виписці", fn: (c) => c.work.noWork },
   { key: "noTask", label: "Без задачі", title: "немає відкритої задачі чи наступного кроку", fn: (c) => c.work.noTask },
   { key: "vipNoTask", label: "ВІП 14+ без задачі", title: "ВІП не замовляє 14+ днів, а задачі немає — у першу чергу", fn: (c) => vipSleeping(c) && c.work.noTask },
   { key: "step_overdue", label: "Задача прострочена", title: "дата задачі чи наступного кроку минула", fn: (c) => c.work.overdue },
@@ -354,11 +364,11 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
   /** 📤 Вивантажити CSV (макет 5609) — рівно показані рядки, у тому ж порядку. */
   const exportCsv = () => {
     const head = ["Клієнт", "Менеджер", "Команда", "Сегмент", "Стан", "Оплата", "Останнє замовлення, дн.", "Періодичність, дн.", "Остання розмова",
-      "Середнє/міс", "Факт з рахунку", "± до середнього", "Всього грошей", "Замовляв цього міс.", "Маржа 6 міс", "Без роботи", "Що не так"];
+      "Середнє/міс", "Факт з рахунку", "± до середнього", "Всього грошей", "Замовляв цього міс.", "Маржа 6 міс", "Без роботи", "Підтвердження роботи", "Що не так"];
     const cell = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const lines = sorted.map((c) => [c.clientName, c.managerName, c.teamName, c.segment, c.state, c.paymentType ?? "", c.lastOrderDays ?? "", c.periodDays ?? "",
       c.lastTalk ?? "", c.avg3, c.fact, c.delta, Math.round(c.lifetimeRevenue), c.orderedThisMonth ? "так" : "ні", c.margin6m ?? "",
-      c.work.noWork ? "так" : "", flagsOf(c).map((f) => f.label).join("; ")].map(cell).join(","));
+      c.work.noWork ? "так" : "", workProofText(c), flagsOf(c).map((f) => f.label).join("; ")].map(cell).join(","));
     const blob = new Blob(["﻿" + [head.map(cell).join(","), ...lines].join("\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `postiyni-kliienty-${data.month}.csv`; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
@@ -381,8 +391,15 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         {/* 📌 «Робота» і назва клієнта закріплені зліва (ТЗ 5609, п.6). «Без роботи» — червона смуга (макет). */}
         <td style={{ ...S.td, ...STICKY_COL(0, W_WORK), background: bg, boxShadow: c.work.noWork ? "inset 4px 0 0 #dc2626" : undefined }}>
           {c.work.noWork
-            ? <span style={S.chip("#dc2626", "#fff")} title={`${data.compare.noWorkDays} днів ні розмови в Ringostat, ні ручного контакту, і немає наступного кроку чи задачі з датою`}>Немає роботи</span>
-            : <span style={S.chip("#dcfce7", "#166534")}>В роботі</span>}
+            ? <span style={S.chip("#dc2626", "#fff")} title={`За ${data.compare.noWorkDays} днів немає ні угоди на «Виставленні рахунку» чи далі, ні оплати від клієнта у Виписці`}>Немає роботи</span>
+            : <span style={S.chip("#dcfce7", "#166534")} title={`Роботу підтверджує: ${workProofText(c)}`}>В роботі</span>}
+          {/* 🧾 Чим підтверджено роботу (задача 6455): угода з посиланням у Kommo або оплата. */}
+          {c.workProof.invoice
+            ? <div style={{ fontSize: 10.5, marginTop: 3, lineHeight: 1.25 }}>
+                <a href={c.workProof.invoice.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "#1d4ed8" }}>угода {c.workProof.invoice.kommoId}</a>
+                <div style={{ color: "var(--text-muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={c.workProof.invoice.stage}>{c.workProof.invoice.stage}</div>
+              </div>
+            : c.workProof.payment && <div style={{ fontSize: 10.5, marginTop: 3, color: "var(--text-muted)" }}>оплата {dm(c.workProof.payment.at)}<br />{uah(c.workProof.payment.amount)}</div>}
         </td>
         <td style={{ ...S.td, ...STICKY_COL(W_WORK, W_NAME), background: bg }}>
           <div style={{ fontWeight: 700 }}>{c.clientName}</div>
@@ -599,7 +616,7 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         </Card>
         <Card title="без роботи" value={String(cs.noWork)} tone={cs.noWork ? "bad" : undefined} on={card === "noWork"}
           onClick={() => setCard(toggleCard(card, "noWork"))}
-          sub={`${data.compare.noWorkDays}+ днів без контакту й кроку з датою: ${cs.noWorkOnly} · без задачі: ${cs.noTaskOnly}`} />
+          sub={`${data.compare.noWorkDays} днів без угоди з рахунком і без оплати: ${cs.noWorkOnly} · без задачі: ${cs.noTaskOnly}`} />
         <Card title="задача прострочена" value={String(cs.overdue)} tone={cs.overdue ? "warn" : undefined} on={card === "overdue"}
           onClick={() => setCard(toggleCard(card, "overdue"))} sub="дата задачі чи наступного кроку минула, а її не закрили" />
       </div>
@@ -768,9 +785,9 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
           </thead>
           <tbody>
             {/* «Без роботи» — окремим блоком зверху, «В роботі» — під ним (макет 5609). */}
-            {noWorkRows.length > 0 && groupHead("Без роботи", noWorkRows.length, `за ${data.compare.noWorkDays} днів ні розмови в телефонії, ні контакту в месенджерах, і немає наступного кроку з датою`, true)}
+            {noWorkRows.length > 0 && groupHead("Без роботи", noWorkRows.length, `за ${data.compare.noWorkDays} днів немає ні угоди на «Виставленні рахунку» чи далі, ні оплати від клієнта у Виписці`, true)}
             {noWorkRows.map(renderRow)}
-            {workRows.length > 0 && groupHead("В роботі", workRows.length, `з клієнтом був контакт за ${data.compare.noWorkDays} днів або стоїть наступний крок`, false)}
+            {workRows.length > 0 && groupHead("В роботі", workRows.length, `за ${data.compare.noWorkDays} днів є угода з рахунком (або в роботі після рахунку) чи оплата від клієнта`, false)}
             {workRows.map(renderRow)}
             {rows.length === 0 && (
               <tr><td colSpan={colCount} style={{ ...S.td, color: "#9ca3af", textAlign: "center", padding: 24 }}>
@@ -816,9 +833,9 @@ export function ClientPlansSection({ auth, fromReact }: { auth: AuthPayload; man
         розходяться свідомо. Рахує ядро, не цей екран. <b>Історія</b> — ті самі гроші з рахунку по місяцях за пів року;
         <b> середнє/міс</b> — за {monLong(data.compare.before.from)}–{monLong(data.compare.before.to)}. <b>Плюс / мінус до
         середнього</b> — факт з 1-го до сьогодні проти середнього за ті самі дні трьох попередніх місяців. <b>Не замовили</b> —
-        замовляли в трьох попередніх місяцях, цього — ще ні. <b>Без роботи</b> — {data.compare.noWorkDays} днів ні розмови в
-        Ringostat, ні ручного контакту, і немає наступного кроку чи задачі з датою; у картці — разом із клієнтами без жодної
-        задачі. <b>Всього грошей</b> — маржа успішних угод за весь час. Планів по клієнтах немає (регламент ред. 2). Клієнт =
+        замовляли в трьох попередніх місяцях, цього — ще ні. <b>Без роботи</b> — за {data.compare.noWorkDays} днів немає ні угоди
+        на «Виставленні рахунку» чи далі (або такої, що зараз у роботі після рахунку), ні оплати від клієнта у Виписці; розмови,
+        кроки й задачі роботу не підтверджують. Період — у Налаштуваннях. У картці — разом із клієнтами без жодної задачі. <b>Всього грошей</b> — маржа успішних угод за весь час. Планів по клієнтах немає (регламент ред. 2). Клієнт =
         канонічний ключ: злиті телефони й назви рахуються разом.
       </div>
 

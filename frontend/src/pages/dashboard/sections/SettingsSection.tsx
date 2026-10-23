@@ -337,6 +337,7 @@ function GeneralTab({ syncStatus, syncing, onManualSync, canSync }: { syncStatus
     { key: "loyaltyWindowMonths", label: "Вікно, місяців" },
     { key: "sleepingWindowMonths", label: "Вікно «сплячих», місяців" },
     { key: "receivablesOverdueWarnDays", label: "Дебіторка: підсвічувати прострочення понад (днів)" },
+    { key: "noWorkDays", label: "Клієнти: «без роботи», якщо за стільки днів немає угоди з рахунком чи оплати" },
     { key: "ratesFallbackFullPerKm", label: "Калькулятор: базовий тариф грн/км (ціла машина)" },
     { key: "ratesFallbackPartPerKm", label: "Калькулятор: базовий тариф грн/км (догруз)" },
   ] as const;

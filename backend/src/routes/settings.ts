@@ -20,6 +20,7 @@ import type { Db as SecretsDb } from "../core/secrets.js";
 import { USER_SOURCE_SQL, cardsWithoutAccount, linkUserCard } from "../core/employeeAdd.js";
 import { ImportError } from "../core/employeeImport.js";
 import { loadTunables, parseTunables, saveTunables, tunablesHistory, RECOMMENDED, TUNABLE_BOUNDS } from "../core/firstTouchTunables.js";
+import { NO_WORK_DAYS, NO_WORK_DAYS_MIN, NO_WORK_DAYS_MAX } from "../core/repeatScreenRules.js";
 
 export const settingsRouter = Router();
 settingsRouter.use(requireAuth);
@@ -29,6 +30,8 @@ export interface AppSettings {
   loyaltyWindowMonths: number; // window for the threshold
   sleepingWindowMonths: number; // lapsed-but-recoverable lookback
   receivablesOverdueWarnDays: number; // highlight debt overdue beyond this
+  /** 🧾 Період «без роботи», днів (задача 6455): за стільки днів немає ні угоди «від рахунку», ні оплати — клієнт «без роботи». */
+  noWorkDays: number;
   // Базовий тариф калькулятора ставок (грн/км), коли заявок по напрямку немає:
   // окремо ціла машина і догруз («зелена зона» з карти прорахунку).
   ratesFallbackFullPerKm: number;
@@ -89,6 +92,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   loyaltyWindowMonths: 2,
   sleepingWindowMonths: 6,
   receivablesOverdueWarnDays: 0,
+  noWorkDays: NO_WORK_DAYS,
   ratesFallbackFullPerKm: 25,
   ratesFallbackPartPerKm: 15,
   // §3b словника: adSources НЕ має дефолту в коді — список живе в БД
@@ -152,6 +156,7 @@ settingsRouter.put("/", async (req, res) => {
     loyaltyWindowMonths: clampInt(body.loyaltyWindowMonths, 1, 24, current.loyaltyWindowMonths),
     sleepingWindowMonths: clampInt(body.sleepingWindowMonths, 1, 36, current.sleepingWindowMonths),
     receivablesOverdueWarnDays: clampInt(body.receivablesOverdueWarnDays, 0, 365, current.receivablesOverdueWarnDays),
+    noWorkDays: clampInt(body.noWorkDays, NO_WORK_DAYS_MIN, NO_WORK_DAYS_MAX, current.noWorkDays),
     ratesFallbackFullPerKm: clampInt(body.ratesFallbackFullPerKm, 1, 500, current.ratesFallbackFullPerKm),
     ratesFallbackPartPerKm: clampInt(body.ratesFallbackPartPerKm, 1, 500, current.ratesFallbackPartPerKm),
     /**

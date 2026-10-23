@@ -144,6 +144,7 @@ import * as clientCalls from "../core/clientCalls.js";
 import * as planBasis from "../core/planBasis.js";
 import * as clientTabs from "../core/clientTabs.js";
 import * as repeatScreenRules from "../core/repeatScreenRules.js";
+import * as clientWorkProof from "../core/clientWorkProof.js";
 import * as reactCycle from "../core/reactCycle.js";
 import * as reactCycleRules from "../core/reactCycleRules.js";
 import * as clientAliasNames from "../core/clientAliasNames.js";
@@ -6414,6 +6415,13 @@ dashboardRouter.get("/client-plans", async (req, res) => {
   const stepByKey = new Map(stepRes.rows.map((r) => [r.client_key, r]));
   const phonesByKey = new Map(phoneRes.rows.map((r) => [r.client_key, Number(r.n)]));
   const todayKyiv = (await pool.query<{ d: string }>(`SELECT to_char(now() AT TIME ZONE 'Europe/Kyiv', 'YYYY-MM-DD') AS d`)).rows[0].d;
+  // 🧾 «БЕЗ РОБОТИ» (задача 6455, правило Сергія 20.10.2026): угода «від рахунку» або оплата у Виписці за період.
+  // Період — налаштування (ядро `app_settings` не читає), факти — окремими пакетними запитами по ключах (стеля 20 с).
+  const noWorkDays = (await getSettings()).noWorkDays;
+  const [invoiceProofByKey, paymentProofByKey] = await Promise.all([
+    clientWorkProof.invoiceProofByClientKey(pool, clientKeys, repeatScreenRules.noWorkFrom(todayKyiv, noWorkDays), todayKyiv),
+    clientWorkProof.paymentProofByClientKey(pool, clientKeys, noWorkDays),
+  ]);
   // 📞 Дзвінки за ОБРАНИЙ місяць (ТЗ 22.09, п.3.3) і 📌 обґрунтування плану цього місяця (там само) —
   // обидва ядром, по тих самих ключах.
   // 🔁 Цикл реактивації (ТЗ 22.09, блок 4): останній рахунок і рішення по кожному клієнту — від СЬОГОДНІ,
@@ -6741,13 +6749,18 @@ dashboardRouter.get("/client-plans", async (req, res) => {
       historyInv: histInvByKey.get(c.client_key) ?? histMonths.map(() => 0),
       avg3: (() => { const a = histInvByKey.get(c.client_key); return a ? Math.round((a[2] + a[3] + a[4]) / 3) : 0; })(),
       work: repeatScreenRules.workFlags({
-        lastTalk: reactByKey.get(c.client_key)?.lastTalk ?? null,
-        lastManual: manualByKey.get(c.client_key)?.at ?? null,
+        invoice: invoiceProofByKey.get(c.client_key) ?? null,
+        payment: paymentProofByKey.get(c.client_key) ?? null,
         stepOpen: stepByKey.has(c.client_key), stepDue: stepByKey.get(c.client_key)?.due_date ?? null,
         taskOpen: (reactByKey.get(c.client_key)?.taskId ?? null) != null && !["done", "cancelled"].includes(reactByKey.get(c.client_key)?.taskStatus ?? ""),
         taskDue: reactByKey.get(c.client_key)?.taskDeadline ?? null,
         today: todayKyiv,
       }),
+      /** 🧾 Чим підтверджено роботу за період (задача 6455): угода «від рахунку» і / або оплата. Обидва `null` — «без роботи». */
+      workProof: (() => {
+        const inv = invoiceProofByKey.get(c.client_key), pay = paymentProofByKey.get(c.client_key);
+        return { invoice: inv ? { ...inv, url: kommoLeadUrl(inv.kommoId) } : null, payment: pay ?? null };
+      })(),
       pct: plan > 0 ? Math.round((fact / plan) * 100) : null,
       managerId: c.manager_id,
       managerName: c.manager_name,
@@ -6820,7 +6833,7 @@ dashboardRouter.get("/client-plans", async (req, res) => {
     month: monthStr,
     historyMonths: histMonths,
     /** 👥 Вікна «плюс / мінус до середнього» і «замовляли раніше» (задача 5609) — щоб екран підписав, з чим порівнює. */
-    compare: { partial: win.partial, prev: win.prev, before: win.before, noWorkDays: repeatScreenRules.NO_WORK_DAYS },
+    compare: { partial: win.partial, prev: win.prev, before: win.before, noWorkDays },
     /**
      * Довідники для дій, які переїхали з колишньої вкладки реактивації. Беруться
      * з ЯДРА, а не переписуються у фронті: підпис на екрані не сміє стати другою
