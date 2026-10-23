@@ -26,8 +26,11 @@
  */
 import { canSeeTask, isPersonalTask, type TaskViewer, type TaskOwnerRow } from "./taskVisibility.js";
 
-/** Типи задач, де «Готово» ставить лише той, хто приймає. */
-export const REVIEWED_TASK_TYPES: ReadonlySet<string> = new Set(["simple"]);
+/**
+ * Типи задач, де є «Приймає». `strategic` — рішення Романа 23.10.2026 («стратегічну закриває Приймає»).
+ * Склад стереже `#2380`: змінити його — рішення власника, не правка.
+ */
+export const REVIEWED_TASK_TYPES: ReadonlySet<string> = new Set(["simple", "strategic"]);
 
 /** Задача в частині «хто рухає статус» — власність + приймаючий + тип. */
 export interface StatusRightsRow extends TaskOwnerRow {
@@ -114,6 +117,10 @@ export function statusRights(v: TaskViewer, t: StatusRightsRow): StatusRights {
   if (actor === null) return none;
   // 🔓 «Готово» ставить кожен, хто рухає статус (рішення Романа 07.10.2026). Поле
   // `canDone` лишається в контракті видачі, бо меню статусу читає саме його.
+  // 🎯 Виняток — СТРАТЕГІЧНА: закриває лише «Приймає» (рішення Романа 23.10.2026). Порівнюємо з
+  // людиною, а не з `actor`: власник має адмін-скоуп, і `actor` для нього — "admin", не "reviewer".
+  // Виконавець доводить до «Готово на затвердження». Тримає `#2381`.
+  if (t.taskType === "strategic") return { canChange: true, canDone: effectiveReviewer(t) === v.userId, actor };
   return { canChange: true, canDone: true, actor };
 }
 

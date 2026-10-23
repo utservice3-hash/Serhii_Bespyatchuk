@@ -5,6 +5,7 @@ import { writeFile, mkdir, unlink } from "fs/promises";
 import path from "path";
 import { pool } from "../db/pool.js";
 import { createReactivationPack } from "../core/reactivationPack.js";
+import { STRATEGIC_TASK_TYPE, canCreateStrategic, goalLinkError } from "../core/strategicTasks.js";
 import { requireAuth } from "../auth/middleware.js";
 import { roleHasPerm, isAdminScope } from "../auth/rbac.js";
 import { UPLOAD_DIR } from "./uploads.js";
@@ -81,6 +82,12 @@ const upsertSchema = z.object({
   groupId: z.number().nullable().optional(),
   /** «Приймає» (`users.id`) — хто закриває задачу. Порожнє — приймає автор. */
   reviewerId: z.number().nullable().optional(),
+  /** 🎯 Стратегічна задача (ставить лише власник, `strategic_creators`). Лише при створенні. */
+  strategic: z.boolean().optional(),
+  /** 🎯 Результат стратегічної одним реченням — обовʼязковий для неї, заборонений іншим. */
+  goalResult: z.string().max(500).nullable().optional(),
+  /** 🎯 Ціль, до якої привʼязана підзадача (`tasks.goal_id`). */
+  goalId: z.number().nullable().optional(),
 });
 
 const checklistItem = z.object({
@@ -177,6 +184,8 @@ tasksRouter.get("/", async (req, res) => {
             -- POST /reactivation-task/close, а видача задач його не віддавала ЗОВСІМ —
             -- тобто людина обирала причину зі списку, і та зникала з очей назавжди.
             t.close_reason AS "closeReason",
+            -- 🎯 Ціль підзадачі й результат стратегічної (рішення Романа 23.10.2026).
+            t.goal_id AS "goalId", t.goal_result AS "goalResult",
             to_char(t.closed_at AT TIME ZONE 'Europe/Kyiv','YYYY-MM-DD') AS "closedAt",
             COALESCE(cu.full_name, cu.email) AS "closedByName",
             -- ✅ КОЛИ ВИКОНАНО (київська дата) — для «Виконано цього тижня» нового екрана
@@ -479,6 +488,33 @@ tasksRouter.post("/", async (req, res) => {
     return res.status(400).json({ error: "Акаунт «Приймає» не знайдено" });
   }
 
+  /**
+   * 🎯 СТРАТЕГІЧНА — лише власник (поіменно), з результатом, один виконавець, без власної цілі.
+   * Підзадача — звичайна задача з `goalId`; ставити її може той, хто може змінювати саму ціль.
+   */
+  const strategic = parsed.data.strategic === true;
+  const goalResult = parsed.data.goalResult?.trim() || null;
+  const goalId = parsed.data.goalId ?? null;
+  if (strategic) {
+    if (!(await canCreateStrategic(pool, auth.userId))) {
+      return res.status(403).json({ error: "Стратегічні задачі ставить лише власник" });
+    }
+    if (!goalResult) return res.status(400).json({ error: "Для стратегічної задачі вкажіть результат: як зрозуміти, що зроблено" });
+    if (goalId != null) return res.status(400).json({ error: "Стратегічна задача не може бути підзадачею іншої" });
+    if ((parsed.data.assigneeIds?.length ?? 0) > 1) return res.status(400).json({ error: "У стратегічної задачі один відповідальний" });
+  } else if (goalResult) {
+    return res.status(400).json({ error: "Результат вказують лише для стратегічної задачі" });
+  }
+  if (goalId != null) {
+    const err = await goalLinkError(pool, goalId);
+    if (err) return res.status(400).json({ error: err });
+    const goal = await loadTaskMeta(goalId);
+    if (!goal || !mayTouch(viewerOf(auth), goal)) {
+      return res.status(403).json({ error: "Підзадачу до цієї цілі може додати лише її учасник" });
+    }
+  }
+  const taskType = strategic ? STRATEGIC_TASK_TYPE : "simple";
+
   // 📁 Група — лише власна (та сама межа, що в PATCH).
   const groupId = parsed.data.groupId ?? null;
   if (groupId != null) {
@@ -501,11 +537,11 @@ tasksRouter.post("/", async (req, res) => {
     const acc = await pool.query(`SELECT 1 FROM users WHERE id = $1 AND is_active`, [assigneeUserId]);
     if (!acc.rowCount) return res.status(400).json({ error: "Акаунт-виконавця не знайдено" });
     const one = await pool.query<{ id: number }>(
-      `INSERT INTO tasks (title, status, deadline, assignee_user_id, priority, comments, department, created_by, group_id, reviewer_id)
-       VALUES ($1, COALESCE($2, 'not_started'), $3, $4, COALESCE($5, 'medium'), $6, $7, $8, $9, $10)
+      `INSERT INTO tasks (title, status, deadline, assignee_user_id, priority, comments, department, created_by, group_id, reviewer_id, task_type, goal_result, goal_id)
+       VALUES ($1, COALESCE($2, 'not_started'), $3, $4, COALESCE($5, 'medium'), $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING id`,
       [title, status ?? null, deadline ?? null, assigneeUserId, priority ?? null,
-       comments ?? null, department ?? null, auth.userId, groupId, reviewerId]
+       comments ?? null, department ?? null, auth.userId, groupId, reviewerId, taskType, goalResult, goalId]
     );
     return res.status(201).json({ id: one.rows[0].id, ids: [one.rows[0].id] });
   }
@@ -544,10 +580,10 @@ tasksRouter.post("/", async (req, res) => {
   for (const assigneeId of uniqueAssignees) {
     const dept = await deptOf(assigneeId);
     const result = await pool.query(
-      `INSERT INTO tasks (title, status, deadline, assignee_id, priority, comments, department, created_by, group_id, reviewer_id)
-       VALUES ($1, COALESCE($2, 'not_started'), $3, $4, COALESCE($5, 'medium'), $6, $7, $8, $9, $10)
+      `INSERT INTO tasks (title, status, deadline, assignee_id, priority, comments, department, created_by, group_id, reviewer_id, task_type, goal_result, goal_id)
+       VALUES ($1, COALESCE($2, 'not_started'), $3, $4, COALESCE($5, 'medium'), $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING id`,
-      [title, status ?? null, deadline ?? null, assigneeId, priority ?? null, comments ?? null, dept, auth.userId, groupId, reviewerId]
+      [title, status ?? null, deadline ?? null, assigneeId, priority ?? null, comments ?? null, dept, auth.userId, groupId, reviewerId, taskType, goalResult, goalId]
     );
     ids.push(result.rows[0].id);
   }
@@ -673,6 +709,8 @@ const PATCH_COLUMNS: Record<string, string> = {
   reviewerId: "reviewer_id",
   checklistJson: "checklist_json",
   subtasksJson: "subtasks_json",
+  goalResult: "goal_result",
+  goalId: "goal_id",
 };
 
 tasksRouter.patch("/:id", async (req, res) => {
@@ -722,6 +760,25 @@ tasksRouter.patch("/:id", async (req, res) => {
     if (!rights.canChange) {
       return res.status(403).json({ error: "Статус цієї задачі змінюють виконавець, «Приймає» або адмін" });
     }
+  }
+  // 🎯 Стратегічну закриває лише «Приймає» (`statusRights.canDone`), решта доводить до затвердження.
+  if (before.taskType === STRATEGIC_TASK_TYPE && parsed.data.status === "done" && !rights.canDone) {
+    return res.status(403).json({ error: "Стратегічну задачу закриває той, хто її приймає. Поставте «Готово на затвердження»" });
+  }
+  // 🎯 «Стратегічна» — властивість створення: тип PATCH-ем не міняється.
+  if (parsed.data.strategic !== undefined) {
+    return res.status(400).json({ error: "Тип задачі змінити не можна — створіть стратегічну задачу заново" });
+  }
+  if (parsed.data.goalResult !== undefined) {
+    if (before.taskType !== STRATEGIC_TASK_TYPE) return res.status(400).json({ error: "Результат є лише у стратегічної задачі" });
+    if (!parsed.data.goalResult?.trim()) return res.status(400).json({ error: "Результат стратегічної задачі не може бути порожнім" });
+  }
+  if (parsed.data.goalId != null) {
+    if (before.taskType === STRATEGIC_TASK_TYPE) return res.status(400).json({ error: "Стратегічна задача не може бути підзадачею іншої" });
+    const err = await goalLinkError(pool, parsed.data.goalId);
+    if (err) return res.status(400).json({ error: err });
+    const goal = await loadTaskMeta(parsed.data.goalId);
+    if (!goal || !mayTouch(viewer, goal)) return res.status(403).json({ error: "Підзадачу до цієї цілі може додати лише її учасник" });
   }
   // ✅ «Приймає» міняють автор, сам «Приймає» і адмін — не виконавець (інакше він
   // призначив би приймати себе й закрив би задачу сам).

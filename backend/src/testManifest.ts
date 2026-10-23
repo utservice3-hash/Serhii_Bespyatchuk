@@ -331,6 +331,7 @@ export const MANIFEST_FILES: string[] = [
   "core/carrierCalls.test.js",
   "core/actionFeedback.test.js",
   "core/toastRules.test.js",
+  "core/strategicTasks.test.js",
   "core/tasksFocus.test.js",
   "core/formationRoster.test.js",
   "core/teamAt.test.js",
@@ -363,7 +364,7 @@ export const MANIFEST_SECURITY_TABLES: string[] = [
   "call_transcripts", "call_analyses", "ai_spend_ledger", "call_type_overrides", "first_touch_notes", "first_touch_closes", "first_touch_settings_log", "carrier_call_deals", "ai_cap_alerts", "carrier_close_log", "carrier_decisions", "carrier_review_tasks", "carrier_lead_tasks", "carrier_duty_assign_log", "carrier_client_moves", "carrier_duty_alerts", "carrier_task_sweeps", "minus_deal_requests", "minus_deal_events",
   "tldv_meetings",
   "workua_responses",
-  "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "fin_import_months",
+  "fin_resps", "fin_groups", "fin_items", "fin_values", "fin_log", "fin_plan_approvals", "fin_plan_approvers", "strategic_creators", "fin_import_months",
   "fin_kpi_sections", "fin_kpis", "fin_kpi_values", "fin_kpi_closes", "fin_kpi_log", "fin_kpi_imports", "fin_kpi_plans", "fin_approvals", "fin_approvals_state", "deal_responsible_events", "deal_responsible_state", "fin_month_result_overrides", "onec_deal_invoices", "onec_deal_payments", "onec_deals_state",
   "constructor_entities", "constructor_counterparties", "constructor_documents", "constructor_route_templates", "youscore_cache", "constructor_stamp_log", "cargo_vehicles", "cargo_pallets", "cargo_calculations",
   "surveys", "survey_questions", "survey_assignments", "survey_responses", "survey_answers", "survey_templates", "survey_notifications",
@@ -1371,7 +1372,9 @@ export const MANIFEST_TESTS: string[] = [
   "#1078 БЕЗ РОЗМОВИ · ЖИВА СХЕМА: після строку (бойовий — 4 год) «Немає зв'язку», без оплати; сусід за номером чекає; у звіті окремо",
   "#1079 ЕКРАН МЕНЕДЖЕРА: без службового рядка й колонки «Менеджер»; тімлід без службового; роль — з контейнера",
   "#1080 ГОТОВО СТАВИТЬ КОЖЕН, ХТО РУХАЄ СТАТУС: виконавець і тімлід теж; «Приймає» — учасник; стороння людина — нічого",
-  "#1080b «ПРИЙМАЄ» ЛИШЕ У ЗВИЧАЙНИХ ЗАДАЧ: поза ними він не учасник, виконавець закриває як і було",
+  "#2380 «ПРИЙМАЄ» У ЗВИЧАЙНИХ І СТРАТЕГІЧНИХ ЗАДАЧАХ: поза ними він не учасник, виконавець закриває як і було",
+  "#2381 СТРАТЕГІЧНА: «Готово» ставить лише «Приймає», решта доводить до затвердження; звичайні — як і було",
+  "#2382 СТРАТЕГІЧНІ НА РОУТІ: лише власник, з результатом; підзадачі видно виконавцю; закриває «Приймає»; ціль не забирає підзадач",
   "#1080c СИСТЕМНА ЗАДАЧА БЕЗ АВТОРА: виконавець закриває, як і до правила",
   "#1080d ПРАВА НА СТАТУС ⊆ ВИДИМІСТЬ, і закрити ⊆ рухати — по всіх ролях і видах задач",
   "#1080e ПЕРЕПРИЗНАЧИТИ «ПРИЙМАЄ» МОЖУТЬ АВТОР, «ПРИЙМАЄ» І АДМІН — виконавець і тімлід ні",
@@ -3006,6 +3009,9 @@ export interface RetiredGate {
 }
 
 export const RETIRED_GATES: RetiredGate[] = [
+  { name: "#1080b «ПРИЙМАЄ» ЛИШЕ У ЗВИЧАЙНИХ ЗАДАЧ: поза ними він не учасник, виконавець закриває як і було",
+    since: "2026-10-23", decidedBy: "Роман 23.10.2026 — стратегічні задачі: «стратегічну закриває Приймає», «роби»",
+    reason: "змінилось твердження: «Приймає» тепер і у стратегічних задачах. А ДЕ ЦЕ ТЕПЕР: `#2380` — те саме правило «поза типами з «Приймає» він не учасник, виконавець закриває як і було», склад типів {simple, strategic}; закриття стратегічної лише «Приймає» — `#2381`." },
   { name: "#2292 Налаштування: за замовчуванням лише без картки; у рядку з карткою — «керувати в картці», без кнопок",
     since: "2026-10-23", decidedBy: "Роман 23.10.2026 — «користувачі (crm, і дашборду) також мають залишатися в налаштуваннях… кожен користувач в налаштуваннях може мати цю карточку а може не мати»; «лишити, роби»",
     reason: "скасовано рішенням власника: прохід 5 ховав людей із карткою і забирав кнопки в їхніх рядках. А ДЕ ЦЕ ТЕПЕР: `#2294` — усі користувачі (крім кандидатів) з повним керуванням, картка — колонка з посиланням; блок «Акаунт» у картці лишився (`#2283`, `#2293`)." },

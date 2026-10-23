@@ -465,6 +465,25 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS o2o_resolved_by INTEGER REFERENCES us
 CREATE INDEX IF NOT EXISTS idx_tasks_o2o_open ON tasks(assignee_id, o2o_type)
   WHERE task_type = 'oneonone' AND o2o_resolution IS NULL;
 
+-- 🎯 СТРАТЕГІЧНІ ЗАДАЧІ (task_type='strategic', рішення Романа 23.10.2026). Ціль із результатом;
+-- підзадачі — звичайні задачі з goal_id. НЕ parent_id: його вже тримають денні KPI й пачки
+-- реактивації, і список ховає дітей parent_id — підзадача зникла б у виконавця.
+-- ON DELETE SET NULL: видалили ціль — підзадачі лишаються в людей, просто без мітки.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS goal_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL;
+-- Результат цілі одним реченням: як зрозуміти, що зроблено. Лише у strategic.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS goal_result TEXT;
+CREATE INDEX IF NOT EXISTS idx_tasks_goal ON tasks(goal_id) WHERE goal_id IS NOT NULL;
+-- 🔑 ХТО СТАВИТЬ СТРАТЕГІЧНІ — ПОІМЕННО, як затвердження фінплану: «лише власник» (Роман 23.10.2026)
+-- роллю не виразити, роль «Адмін» мають кілька людей. Сід РАЗОВИЙ (лише в порожню таблицю): інакше
+-- кожен викат повертав би людину, яку прибрали SQL-ом. Беспятчук Сергій — id 1; на свіжій базі
+-- такого id немає, таблиця лишається порожньою.
+CREATE TABLE IF NOT EXISTS strategic_creators (
+  user_id   INTEGER PRIMARY KEY REFERENCES users(id),
+  added_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO strategic_creators (user_id)
+SELECT id FROM users WHERE id = 1 AND NOT EXISTS (SELECT 1 FROM strategic_creators);
+
 CREATE TABLE IF NOT EXISTS receivables (
   id SERIAL PRIMARY KEY,
   client_key TEXT NOT NULL,
@@ -5057,6 +5076,7 @@ CREATE TABLE IF NOT EXISTS fin_import_months (
 -- 🔒 Витрати компанії (зокрема фонд оплати праці по статтях) — не для AI-запитів: розділ бачить лише
 -- керівництво. Дзеркало — `FORBIDDEN_TABLES`. Тримає #934.
 REVOKE ALL ON fin_resps, fin_groups, fin_items, fin_values, fin_log, fin_plan_approvals, fin_plan_approvers, fin_import_months FROM ai_readonly;
+REVOKE ALL ON strategic_creators FROM ai_readonly;
 
 -- Екран «Фінанси»: адмін, СЕО, ОД, КВП, фінансист (рішення 28.09.2026: «вона і все керівництво»).
 -- Бухгалтерія й HR — ні. Ідемпотентно й НЕ перетирає рішень адміна: лише де ключа ще немає.

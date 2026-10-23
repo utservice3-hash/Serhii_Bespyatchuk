@@ -3400,6 +3400,10 @@ export interface Task {
   closeReason?: string | null;
   closedAt?: string | null;
   closedByName?: string | null;
+  /** 🎯 Ціль, до якої привʼязана підзадача (`tasks.goal_id`, рішення Романа 23.10.2026). */
+  goalId?: number | null;
+  /** 🎯 Результат стратегічної задачі одним реченням (лише `taskType === "strategic"`). */
+  goalResult?: string | null;
   /**
    * ✅ Коли задачу виконано — київська дата `YYYY-MM-DD`, лише для `done` (20.10.2026, №6379).
    * Останній перехід у «Готово» з журналу статусів; `closedAt` для цього не годиться — ручне
