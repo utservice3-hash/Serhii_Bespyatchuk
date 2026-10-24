@@ -214,7 +214,8 @@ test("#2409 🪞 ЛІМІТИ НАСКРІЗНО: наш вхід і ролі, �
     await c.query(`INSERT INTO receivable_invoices (client_key, client_name, manager_id, invoice_no, invoice_date, amount, edrpou) VALUES
       ('k-rivne', 'ТОВ Рівне', 10, 'R-1', CURRENT_DATE - 40, 500000, '41234567'), ('k-lviv', 'ТОВ Львів', 11, 'L-1', CURRENT_DATE - 20, 100000, '31234567'),
       ('k-odesa', 'ТОВ Одеса', 11, 'O-1', CURRENT_DATE - 10, 90000, '21234567')`);
-    await c.query(`INSERT INTO client_credit_limits (client_key, limit_days, limit_amount, note, set_by) VALUES ('k-lviv', 14, 200000, 'стара домовленість', 1)`);
+    await c.query(`INSERT INTO client_credit_limits (client_key, limit_days, limit_amount, note, set_by) VALUES ('k-lviv', 14, 200000, 'стара домовленість', 1),
+      ('k-gone', 30, NULL, 'клієнт без боргу', 1)`);
 
     await import("../lib/asyncRoutes.js");
     const { default: express } = await import("express");
@@ -253,7 +254,7 @@ test("#2409 🪞 ЛІМІТИ НАСКРІЗНО: наш вхід і ролі, �
     assert.equal((await call("hr", "POST", "/counterparty/lookup", { code: "41234567" })).s, 403, "HR подає запит на узгодження");
 
     // ---------- перенос лімітів дебіторки: один раз ----------
-    assert.deepEqual(await migrateLegacyLimits(pool), { inserted: 1, skipped: 0 });
+    assert.deepEqual(await migrateLegacyLimits(pool), { inserted: 1, skipped: 0 }, "перенісся не лише боржник із дебіторки (k-gone без боргу — без назви й менеджера)");
     assert.deepEqual(await migrateLegacyLimits(pool), { inserted: 0, skipped: 0 }, "перенос не idempotent — ліміт задвоївся");
 
     // ---------- комірки «Ліміти» ----------
@@ -281,6 +282,7 @@ test("#2409 🪞 ЛІМІТИ НАСКРІЗНО: наш вхід і ролі, �
     assert.deepEqual(await ccl("k-rivne"), { limit_days: 40, amt: 300000, note: MIRROR_NOTE }, "дзеркало: «від оригіналів» не +10 або не записалось");
     assert.deepEqual(await recv("k-rivne"), { limit_days: 40, amt: 300000 }, "рядок дебіторки не отримав ліміт");
     assert.deepEqual(await ccl("k-lviv"), { limit_days: 14, amt: 200000, note: "стара домовленість" }, "дзеркало переписало незмінений перенесений ліміт");
+    assert.deepEqual(await ccl("k-gone"), { limit_days: 30, amt: null, note: "клієнт без боргу" }, "ліміт клієнта без боргу зник чи змінився");
     assert.deepEqual(await ccl("k-odesa"), { limit_days: 20, amt: 150000, note: MIRROR_NOTE }, "ліміт, звʼязаний лише через ЄДРПОУ, не дійшов до дебіторки");
     assert.deepEqual(await mirrorToReceivables(pool, debts), { set: 0, cleared: 0 }, "повторне дзеркало щось змінило");
     assert.deepEqual(await migrateLegacyLimits(pool), { inserted: 0, skipped: 0 }, "дзеркальний рядок перенісся назад як «старий» — у клієнта два ліміти");

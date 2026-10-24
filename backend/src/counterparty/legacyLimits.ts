@@ -22,16 +22,21 @@ import type { DebtSource } from "./server/debtSource.js";
 
 export const MIRROR_NOTE = "з «Лімітів клієнтів»";
 
-/** Рядки для переносу: ліміти дебіторки, ще не перенесені. */
+/**
+ * Рядки для переносу: ліміти дебіторки, ще не перенесені, — лише боржників, що Є в дебіторці зараз. Заміряно 24.10: 56 із 82
+ * лімітів — клієнти без боргу; назви в них немає ніде надійно (у `deals.client_name` трапляється імʼя контакту), а
+ * «Відповідальним» став би той, хто ставив ліміт. Тож вони переносяться, щойно зʼявляться в дебіторці (джоба раз на 10 хв);
+ * до того їхній ліміт діє як був — у `client_credit_limits`, звідки його бере синк.
+ */
 export const LEGACY_LIMITS_SQL = `
   SELECT l.client_key, l.limit_days, l.limit_amount::numeric AS limit_amount, l.note, l.set_at,
-         COALESCE(r.client_name, l.client_key) AS name,
-         COALESCE(u.id::text, l.set_by::text, '0') AS manager_id, COALESCE(m.name, '') AS manager_name,
+         r.client_name AS name,
+         COALESCE(u.id::text, '0') AS manager_id, COALESCE(m.name, 'без відповідального') AS manager_name,   -- не «хто ставив ліміт»
          COALESCE((SELECT json_agg(json_build_object('code', c.edrpou, 'name', c.nm) ORDER BY c.edrpou)
                      FROM (SELECT ri.edrpou, max(COALESCE(ri.client_name, '')) AS nm FROM receivable_invoices ri
                             WHERE ri.client_key = l.client_key AND ri.edrpou ~ '^[0-9]{8}([0-9]{2})?$' GROUP BY ri.edrpou) c), '[]') AS members
     FROM client_credit_limits l
-    LEFT JOIN receivables r ON r.client_key = l.client_key
+    JOIN receivables r ON r.client_key = l.client_key
     LEFT JOIN managers m ON m.id = r.manager_id
     LEFT JOIN LATERAL (SELECT id FROM users WHERE manager_id = r.manager_id ORDER BY is_active DESC, id LIMIT 1) u ON true
    WHERE NOT EXISTS (SELECT 1 FROM client_limits cl WHERE cl.debtor_key = l.client_key)
