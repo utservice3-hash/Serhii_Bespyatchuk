@@ -209,9 +209,10 @@ test("#2409 🪞 ЛІМІТИ НАСКРІЗНО: наш вхід і ролі, �
       (2, 'marina@t', 'x', 'manager', NULL, 'Марина Коваль', true, 10), (3, 'oleh@t', 'x', 'manager', NULL, 'Олег Ткачук', true, 11),
       (4, 'hr@t', 'x', 'manager', 'hr', 'HR', true, NULL), (5, 'admin2@t', 'x', 'admin', NULL, 'Інший адмін', true, NULL)`);
     await c.query(`INSERT INTO receivables (client_key, client_name, manager_id, amount, limit_days, overdue_days) VALUES
-      ('k-rivne', 'ТОВ Рівне', 10, 500000, NULL, 40), ('k-lviv', 'ТОВ Львів', 11, 100000, 14, 20)`);
+      ('k-rivne', 'ТОВ Рівне', 10, 500000, NULL, 40), ('k-lviv', 'ТОВ Львів', 11, 100000, 14, 20), ('k-odesa', 'ТОВ Одеса', 11, 90000, NULL, 10)`);
     await c.query(`INSERT INTO receivable_invoices (client_key, client_name, manager_id, invoice_no, invoice_date, amount, edrpou) VALUES
-      ('k-rivne', 'ТОВ Рівне', 10, 'R-1', CURRENT_DATE - 40, 500000, '41234567'), ('k-lviv', 'ТОВ Львів', 11, 'L-1', CURRENT_DATE - 20, 100000, '31234567')`);
+      ('k-rivne', 'ТОВ Рівне', 10, 'R-1', CURRENT_DATE - 40, 500000, '41234567'), ('k-lviv', 'ТОВ Львів', 11, 'L-1', CURRENT_DATE - 20, 100000, '31234567'),
+      ('k-odesa', 'ТОВ Одеса', 11, 'O-1', CURRENT_DATE - 10, 90000, '21234567')`);
     await c.query(`INSERT INTO client_credit_limits (client_key, limit_days, limit_amount, note, set_by) VALUES ('k-lviv', 14, 200000, 'стара домовленість', 1)`);
 
     await import("../lib/asyncRoutes.js");
@@ -267,6 +268,11 @@ test("#2409 🪞 ЛІМІТИ НАСКРІЗНО: наш вхід і ролі, �
     assert.notEqual(r.j.cells["k-lviv"]?.canRequest, true, "менеджер запитує ліміт чужого клієнта");
     assert.equal((await call("marina", "POST", "/client-limits/set", { debtorKey: "k-rivne", limit: 300000, days: 30, from: "orig", reason: "x" })).s, 403, "менеджер задає ліміт");
 
+    // ---------- ліміт із погодженого запиту: без ключа боржника, звʼязок лише через ЄДРПОУ юрособи ----------
+    const odesa = (await c.query(`INSERT INTO client_limits (src, debtor_key, name, limit_sum, days, count_from, manager_id, manager_name)
+      VALUES ('req', NULL, 'ТОВ Одеса', 150000, 20, 'inv', '3', 'Олег Ткачук') RETURNING id`)).rows[0].id;
+    await c.query(`INSERT INTO client_limit_members (limit_id, code, name) VALUES ($1, '21234567', 'ТОВ Одеса')`, [odesa]);
+
     // ---------- Сергій задає ліміт → дзеркало в дебіторку ----------
     r = await call("serhii", "POST", "/client-limits/set", { debtorKey: "k-rivne", limit: 300000, days: 30, from: "orig", reason: "домовились" });
     assert.equal(r.s, 201, JSON.stringify(r.j));
@@ -274,8 +280,10 @@ test("#2409 🪞 ЛІМІТИ НАСКРІЗНО: наш вхід і ролі, �
     assert.deepEqual(await ccl("k-rivne"), { limit_days: 40, amt: 300000, note: MIRROR_NOTE }, "дзеркало: «від оригіналів» не +10 або не записалось");
     assert.deepEqual(await recv("k-rivne"), { limit_days: 40, amt: 300000 }, "рядок дебіторки не отримав ліміт");
     assert.deepEqual(await ccl("k-lviv"), { limit_days: 14, amt: 200000, note: "стара домовленість" }, "дзеркало переписало незмінений перенесений ліміт");
+    assert.deepEqual(await ccl("k-odesa"), { limit_days: 20, amt: 150000, note: MIRROR_NOTE }, "ліміт, звʼязаний лише через ЄДРПОУ, не дійшов до дебіторки");
     assert.deepEqual(await mirrorToReceivables(pool, debts), { set: 0, cleared: 0 }, "повторне дзеркало щось змінило");
-    assert.deepEqual(await migrateLegacyLimits(pool), { inserted: 0, skipped: 0 }, "дзеркальний рядок перенісся назад як «старий»");
+    assert.deepEqual(await migrateLegacyLimits(pool), { inserted: 0, skipped: 0 }, "дзеркальний рядок перенісся назад як «старий» — у клієнта два ліміти");
+    assert.equal((await c.query(`SELECT count(*)::int AS n FROM client_limits`)).rows[0].n, 3, "лімітів не три (перенесений, заданий, із запиту)");
     r = await call("serhii", "GET", "/client-limits/by-debtor");
     assert.deepEqual([r.j.cells["k-rivne"].status, r.j.cells["k-rivne"].days, r.j.cells["k-rivne"].from], ["over", 30, "orig"], "борг 500 000 при ліміті 300 000 — не «переліміт»");
   } finally {
