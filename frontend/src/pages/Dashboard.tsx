@@ -77,6 +77,7 @@ import BankSection from "./dashboard/sections/BankSection";
 import { emptyTaskForm } from "./dashboard/taskForm";
 import { OverviewSection, type Kpi } from "./dashboard/sections/OverviewSection";
 import RegistriesPage from "../minusRegistry/client/RegistriesPage";
+import { regTabsFor } from "../minusRegistry/client/regTabs";
 import { ProzorroSection } from "./dashboard/sections/ProzorroSection";
 import { ManagerReportSection } from "./dashboard/sections/ManagerReportSection";
 import { FeedbackSection } from "./dashboard/sections/FeedbackSection";
@@ -1159,7 +1160,7 @@ export function Dashboard() {
       {/* 📄 Конструктор документів (30.09.2026, пакет Сергія). Статичний імпорт — гейт #225. Доступ вирішує сервер. */}
       {section === "constructor" && <ConstructorSection />}
       {section === "surveys" && <SurveysSection />}
-      {section === "registries" && <RegistriesPage />}
+      {section === "registries" && <RegistriesPage tabs={regTabsFor(auth?.roleKey ?? auth?.role)} onNavigate={(_t, url) => navigate(url)} />}
       {/* 🏛 «Тендери Prozorro» (#5299): статичний імпорт — гейт #225; доступ вирішує сервер (вкладка prozorro). */}
       {section === "prozorro" && <ProzorroSection roleKey={auth?.roleKey ?? null} />}
 

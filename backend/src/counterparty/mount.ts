@@ -16,45 +16,21 @@ import { requireAuth } from "../auth/middleware.js";
 import { roleHasTab } from "../auth/rbac.js";
 import { NAME_SQL } from "../surveys/surveyRules.js";
 import { UPLOAD_DIR } from "../routes/uploads.js";
-import { approverIds, ACCOUNTING_ROLE_KEY } from "../minusRegistry/roles.js";
 import { teamMemberUserIds } from "../minusRegistry/team.js";
 import { counterpartyRouter } from "./server/routes/counterparty.js";
 import { clientLimitsRouter } from "./server/routes/clientLimits.js";
 import { checkRunner } from "./server/cpChecks.js";
 import { dirFileStore } from "./server/fileStore.js";
 import { cachedDebtSource } from "./server/debtSource.js";
-import { YouScore } from "./server/youscore/client.js";
 import { receivablesDebtSource } from "./debtSourceDb.js";
 import { mirrorToReceivables } from "./legacyLimits.js";
 import type { CpRole } from "./shared/counterparty.js";
+import { cpApproverIds, cpRoleOf, youScoreFromOurEnv } from "./roles.js";
+
+export { cpApproverIds, cpRoleOf, youScoreFromOurEnv };
 
 export const REGISTRIES_TAB = "registries";
 export const RECEIVABLES_TAB = "receivables";
-
-/** Ролі, що бачать усе без дій (ТЗ §3: admin, ceo, finance → viewer). Наші: адмін, СЕО, ОД, фінансист. */
-const VIEWER_ROLES = new Set(["admin", "ceo", "opdir", "financier"]);
-
-/**
- * Роль дашборда → роль пакета (ТЗ §3, рішення Сергія 21–23.10). Погоджує ЛИШЕ Сергій (`MINUS_APPROVER_IDS`/`CP_APPROVER_IDS`,
- * за замовчуванням users.id 1); бухгалтерія — усе без дій; менеджер / тім-лід — подають; керівники — перегляд;
- * КВП, HR, бізнес-асистент та інші співробітники — лише «Перевірка контрагента» (`staff`); кандидат — немає доступу.
- */
-export function cpRoleOf(a: { userId: number; roleKey: string }, approvers: readonly string[]): CpRole | null {
-  if (approvers.includes(String(a.userId))) return "approver";
-  if (a.roleKey === ACCOUNTING_ROLE_KEY) return "accounting";
-  if (a.roleKey === "manager") return "manager";
-  if (a.roleKey === "team_lead") return "lead";
-  if (VIEWER_ROLES.has(a.roleKey)) return "viewer";
-  if (!a.roleKey || a.roleKey === "candidate") return null;
-  return "staff";
-}
-export const cpApproverIds = () => approverIds(process.env.CP_APPROVER_IDS || process.env.MINUS_APPROVER_IDS);
-
-/** YouScore на нашому ключі; немає ключа — null (перевірки відповідають 503 з поясненням, решта працює). */
-export function youScoreFromOurEnv(env: NodeJS.ProcessEnv = process.env): YouScore | null {
-  const key = (env.YOUCONTROL_API_KEY || env.YOUSCORE_API_KEY || "").trim();
-  return key ? new YouScore({ apiKey: key }) : null;
-}
 
 export const CP_FILES_DIR = process.env.CP_FILES_DIR || path.join(UPLOAD_DIR, "..", "documents", "counterparty");
 

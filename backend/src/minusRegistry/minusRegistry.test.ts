@@ -465,7 +465,7 @@ test("#1844 ФРОНТ РЕЄСТРУ: модель = бекенд байт у �
   assert.match(layout, /\{ key: "registries", label: "Реєстри та узгодження", icon: "📒" \}/, "пункту меню «Реєстри та узгодження» немає");
   assert.match(FRONT("minusRegistry/client/RegistriesPage.tsx"), /export const PAGE_TITLE = 'Реєстри та узгодження';/, "заголовок сторінки не «Реєстри та узгодження»");
   assert.match(layout, /item\.key === "registries" \? registriesCount/, "у пункту меню немає лічильника");
-  assert.match(dash, /\{section === "registries" && <RegistriesPage \/>\}/, "маршрут не рендерить сторінку «Реєстри»");
+  assert.match(dash, /\{section === "registries" && <RegistriesPage\b[^\n]*\/>\}/, "маршрут не рендерить сторінку «Реєстри»");
   const dir = path.join(import.meta.dirname, "..", "..", "..", "frontend", "src", "minusRegistry", "client");
   const files = [...readdirSync(dir).map((f) => `minusRegistry/client/${f}`), ...readdirSync(path.join(dir, "minusRegistry")).map((f) => `minusRegistry/client/minusRegistry/${f}`)].filter((f) => /\.(ts|tsx|css)$/.test(f));
   assert.ok(files.length >= 7, `файлів фронту реєстру ${String(files.length)} — гейт нічого не перевіряє`);

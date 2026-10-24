@@ -1,0 +1,4 @@
+{ "totalResults": 3, "nextPageUrl": null, "results": [
+  { "dateBegin": "2026-06-01T00:00:00", "orderNumber": 70001, "deductionType": "Стягнення коштів", "enforcementState": "Відкрито", "isInERB": true, "status": "Боржник" },
+  { "dateBegin": "2024-02-01T00:00:00", "orderNumber": 70002, "deductionType": "Стягнення коштів", "enforcementState": "Завершено", "isInERB": false, "status": "Боржник" },
+  { "dateBegin": "2026-07-01T00:00:00", "orderNumber": 70003, "deductionType": "Стягнення коштів", "enforcementState": "Відкрито", "isInERB": true, "status": "Стягувач" } ] }
