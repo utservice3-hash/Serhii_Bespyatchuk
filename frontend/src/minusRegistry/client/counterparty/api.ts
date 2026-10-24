@@ -64,10 +64,12 @@ export async function downloadApiFile(href: string): Promise<void> {
   setTimeout(() => URL.revokeObjectURL(url), 120_000);
 }
 
-/** Перехоплювач кліків по посиланнях пакета на файли API (`<a href="/api/counterparty/...">`). */
-export function interceptApiLinks(e: { target: EventTarget | null; preventDefault(): void }): void {
-  const a = (e.target as HTMLElement | null)?.closest?.('a[href^="/api/counterparty/"]') as HTMLAnchorElement | null;
-  if (!a) return;
-  e.preventDefault();
-  void downloadApiFile(a.getAttribute('href')!).catch(() => window.alert('Файл не завантажився — спробуйте ще раз.'));
+/** Перехоплювач кліків по посиланнях пакета на файли API (`<a href="/api/counterparty/...">`); збій — у сповіщення дашборда. */
+export function interceptApiLinks(onError: (msg: string) => void) {
+  return (e: { target: EventTarget | null; preventDefault(): void }): void => {
+    const a = (e.target as HTMLElement | null)?.closest?.('a[href^="/api/counterparty/"]') as HTMLAnchorElement | null;
+    if (!a) return;
+    e.preventDefault();
+    void downloadApiFile(a.getAttribute('href')!).catch(() => onError('Файл не завантажився — спробуйте ще раз.'));
+  };
 }

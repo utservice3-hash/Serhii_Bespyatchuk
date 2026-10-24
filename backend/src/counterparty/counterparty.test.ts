@@ -139,7 +139,8 @@ test("#2407 ФРОНТ УЗГОДЖЕННЯ І ЛІМІТІВ: модель = б
   for (const x of sel) assert.ok(/\.cpx/.test(x), `cp.css: глобальний селектор «${x}» — стилі мусять бути під .cpx`);
 
   const page = FRONT("minusRegistry/client/RegistriesPage.tsx");
-  assert.match(page, /onClickCapture=\{interceptApiLinks\}/, "посилання на файли API не перехоплюються — PDF і файли дадуть 401");
+  assert.match(page, /onClickCapture=\{onFileClick\}/, "посилання на файли API не перехоплюються — PDF і файли дадуть 401");
+  assert.match(page, /const onFileClick = useMemo\(\(\) => interceptApiLinks\(/);
   assert.match(FRONT("minusRegistry/client/counterparty/api.ts"), /closest\?\.\('a\[href\^="\/api\/counterparty\/"\]'\)/);
   assert.match(FRONT("pages/Dashboard.tsx"), /<RegistriesPage tabs=\{regTabsFor\(auth\?\.roleKey \?\? auth\?\.role\)\}/, "вкладки сторінки не за роллю");
   const layout = FRONT("components/Layout.tsx");

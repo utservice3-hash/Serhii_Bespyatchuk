@@ -4,7 +4,8 @@
  * (той самий код, що в макеті). Хто що може — визначає сервер за сесією; які вкладки показати — `regTabsFor(roleKey)`.
  * Посилання пакета на файли (`/api/counterparty/...`) перехоплюються й качаються з токеном (`interceptApiLinks`).
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useToast } from '../../components/Toasts';
 import { mountRegistriesPage, type RegTab } from './registriesMount';
 import { minusRegistryApi } from './minusRegistry/api';
 import { counterpartyApi, interceptApiLinks } from './counterparty/api';
@@ -20,6 +21,8 @@ export const PAGE_TITLE = 'Реєстри та узгодження';
 export default function RegistriesPage({ tabs, onNavigate }: { tabs?: RegTab[]; onNavigate?: (t: NavTarget, url: string) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const [n, setN] = useState(0);
+  const toast = useToast();
+  const onFileClick = useMemo(() => interceptApiLinks(msg => toast(msg, { error: true })), [toast]);
   const nav = useRef(onNavigate);
   nav.current = onNavigate;
   useEffect(() => {
@@ -40,7 +43,7 @@ export default function RegistriesPage({ tabs, onNavigate }: { tabs?: RegTab[]; 
     return () => { window.removeEventListener('focus', onFocus); h.destroy(); };
   }, [tabs?.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <div className="registries-page" onClickCapture={interceptApiLinks}>
+    <div className="registries-page" onClickCapture={onFileClick}>
       <h1 className="rp-title">
         {PAGE_TITLE}
         {n > 0 && <span className="rp-cnt" title="Чекають вашої дії">{n}</span>}
