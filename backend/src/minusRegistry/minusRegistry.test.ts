@@ -126,11 +126,13 @@ const PIPES: KommoPipeline[] = [
 ];
 
 /**
- * #1841 — МАПІНГ KOMMO → РЕЄСТР (пакет: «ID полів Kommo», «угода Kommo → реєстр»). 35 полів (звірено 20.10 і нашим
- * токеном), числа рядком і числом, порожні слоти пропущено, валюта лише для ВАЛЮТА, клієнт — не контакт-перевізник, етап у
- * воронці угоди, повна угода з підсумками й бюджетом з CRM як є. Червоніє на зсуві ID чи перерахунку замість CRM.
+ * #1845 — МАПІНГ KOMMO → РЕЄСТР (пакет v1.1, 23.10). 35 полів (звірено 20.10 і нашим токеном), числа рядком і числом,
+ * порожні слоти пропущено, валюта лише для ВАЛЮТА, клієнт — не контакт-перевізник, етап у воронці угоди, повна угода з
+ * підсумками. МАРЖА = «Расчет приходов» − «Расчет расходов», а НЕ lead.price: Kommo зберігає «Бюджет» без знака (угода
+ * 62774335 — price 1520 при 30 400 − 31 920 = −1 520, до 23.10 мінусові угоди показувались з «+»). Замінив #1841.
+ * Червоніє на зсуві ID чи поверненні маржі з price.
  */
-test("#1841 РЕЄСТР МІНУСОВИХ: мапінг Kommo — 35 полів, рядки, клієнт, етап, бюджет з CRM як є", () => {
+test("#1845 РЕЄСТР МІНУСОВИХ: мапінг Kommo — 35 полів, рядки, клієнт, етап; маржа = прихід − розхід, не «Бюджет» без знака", () => {
   assert.equal(Object.keys(KOMMO_FIELD_NAMES).length, 35);
   assert.equal(KOMMO_FIELD_NAMES[2097649], "Расчет приходов");
   assert.equal(KOMMO_FIELD_NAMES[2097665], "Расход 3");
@@ -154,8 +156,13 @@ test("#1841 РЕЄСТР МІНУСОВИХ: мапінг Kommo — 35 полі�
     dealId: "62000001", name: "Київ – Львів 18.10.2026", stage: "Первезення завершено", client: "ТОВ «Галицька Кераміка»", carrier: "ФОП Кравець О. П.",
     inc: [{ sum: 36000, type: "Безнал с НДС", net: 27360 }, { sum: 2000, type: "Наличные", net: 2000 }],
     exp: [{ sum: 38000, type: "Безнал с НДС", net: 28880 }, { sum: 2690, type: "Безнал без НДС", net: 2528.5 }],
-    incTotal: 29360, expTotal: 31408.5, budget: -2048,
+    incTotal: 29360, expTotal: 31408.5, budget: -2048.5,
   });
+  // 62774335: «Бюджет» у Kommo 1520 (без знака), а угода — мінус 1520
+  const signless: KommoLead = { ...lead, price: 1520, custom_fields_values: [
+    ...(lead.custom_fields_values || []).filter((f) => ![KOMMO_FIELDS.incTotal, KOMMO_FIELDS.expTotal].includes(f.field_id as never)),
+    { field_id: KOMMO_FIELDS.incTotal, values: [{ value: "30400" }] }, { field_id: KOMMO_FIELDS.expTotal, values: [{ value: "31920" }] }] };
+  assert.equal(leadToCrmDeal(signless, [], "X").budget, -1520, "🔴 маржа взята з «Бюджету» без знака");
   const bare: KommoLead = { ...lead, price: null, custom_fields_values: (lead.custom_fields_values || []).filter((f) => ![KOMMO_FIELDS.carrier, KOMMO_FIELDS.incTotal, KOMMO_FIELDS.expTotal].includes(f.field_id as never)) };
   const bd = leadToCrmDeal(bare, [], "X");
   assert.deepEqual([bd.carrier, bd.client, bd.incTotal, bd.expTotal, bd.budget], ["", "", 29360, 31408.5, -2048.5]);
@@ -182,7 +189,7 @@ test("#1841b РЕЄСТР МІНУСОВИХ: адаптер на нашому �
     "/api/v4/leads/pipelines": () => ({ _embedded: { pipelines: PIPES } }),
   }));
   const d = await src.fetchDeal("62000001");
-  assert.deepEqual(d && [d.client, d.stage, d.carrier, d.budget], ["ТОВ «Галицька Кераміка»", "Первезення завершено", "ФОП Кравець О. П.", -2048]);
+  assert.deepEqual(d && [d.client, d.stage, d.carrier, d.budget], ["ТОВ «Галицька Кераміка»", "Первезення завершено", "ФОП Кравець О. П.", -2048.5]);
   await src.fetchDeal("62000001");
   assert.equal(calls.filter((c) => c === "/api/v4/leads/pipelines").length, 1, "воронки не кешуються");
   calls.length = 0;

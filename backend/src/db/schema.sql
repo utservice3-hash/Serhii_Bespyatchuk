@@ -6172,6 +6172,20 @@ CREATE TABLE IF NOT EXISTS minus_deal_events (
 );
 CREATE INDEX IF NOT EXISTS minus_deal_events_request_idx ON minus_deal_events (request_id, at, id);
 REVOKE ALL ON minus_deal_events FROM ai_readonly;
+-- 📒 v1.1 (пакет Сергія 23.10, migrations/002): маржа = «Расчет приходов» − «Расчет расходов», а не lead.price — Kommo зберігає
+-- «Бюджет» БЕЗ знака (угода 62774335: price 1520 при 30 400 − 31 920 = −1 520). Перераховує вже збережені знімки; повторний
+-- запуск дає той самий результат (обчислення з тих самих підсумків; «мінус зріс» — завжди −|budget|).
+UPDATE minus_deal_requests
+   SET crm = jsonb_set(crm, '{budget}', to_jsonb(round((crm->>'incTotal')::numeric - (crm->>'expTotal')::numeric, 2)))
+ WHERE crm ? 'incTotal' AND crm ? 'expTotal'
+   AND (crm->>'budget') IS DISTINCT FROM round((crm->>'incTotal')::numeric - (crm->>'expTotal')::numeric, 2)::text;
+UPDATE minus_deal_requests
+   SET approved_crm = jsonb_set(approved_crm, '{budget}', to_jsonb(round((approved_crm->>'incTotal')::numeric - (approved_crm->>'expTotal')::numeric, 2)))
+ WHERE approved_crm IS NOT NULL AND approved_crm ? 'incTotal' AND approved_crm ? 'expTotal'
+   AND (approved_crm->>'budget') IS DISTINCT FROM round((approved_crm->>'incTotal')::numeric - (approved_crm->>'expTotal')::numeric, 2)::text;
+UPDATE minus_deal_requests
+   SET grew = jsonb_set(grew, '{budget}', to_jsonb(-abs((grew->>'budget')::numeric)))
+ WHERE grew IS NOT NULL AND grew ? 'budget' AND (grew->>'budget')::numeric > 0;
 
 -- Вкладка «Реєстри» (пункт меню): менеджер, тім-лід, бухгалтерія, Сергій і «інші адміни» (адмін, СЕО, ОД, КВП, фінансист).
 -- HR, кандидат, бізнес-асистент — без неї (ТЗ §0 п.3: «решта ролей — 403, пункт меню не показувати»). Разово: ключ, який

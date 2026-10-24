@@ -1,6 +1,6 @@
 /**
- * Express Router реєстру мінусових угод: /api/minus-deals/*. Код пакета Сергія (20.10) БЕЗ змін логіки; монтує його
- * `routes/minusRegistry.ts` (наш вхід, вкладка `registries`, роль і імʼя в `req.user`). Нижче — підключення з пакета, для довідки:
+ * Express Router реєстру мінусових угод: /api/minus-deals/*. Код пакета Сергія (v1.1, 23.10) БЕЗ змін логіки; монтує його
+ * `routes/minusRegistry.ts` (наш вхід, вкладка `registries`, роль, імʼя й команда в `req.user`). Нижче — підключення з пакета, для довідки:
  *   const kommo = kommoFromEnv();                                   // server/kommoClient.ts — токен лише з env сервера
  *   app.use('/api/minus-deals', requireAuth, minusRegistryRouter(pool, {
  *     deals: kommo,
@@ -10,7 +10,8 @@
  * req.user = { id, name, role } — з вашої сесії (як у пакетах «Опитування» й «Конфігуратор»).
  *
  * Права (рішення Сергія 20.10) — перевіряє сервер, інтерфейс лише ховає кнопки:
- *   менеджер і тім-лід — подають, бачать лише свої; повернуте — виправляють і надсилають повторно;
+ *   менеджер і тім-лід — подають, бачать свої; повернуте — виправляють і надсилають повторно;
+ *   тім-лід ще й бачить запити своєї команди (лише перегляд), якщо передано teamOf — як обсяг «Команда» ролі «Тімлід» у дашборді;
  *   погоджує ЛИШЕ акаунт Сергія (approverIds) — ролі «адмін» для цього мало;
  *   бухгалтерія — бачить усе, ставить «Оплачено» погодженим;
  *   інші адміни — бачать усе, без дій.
@@ -35,18 +36,24 @@ export interface MinusRegistryOptions {
   approverIds?: string[];
   /** Одне місце, де ролі дашборда стають ролями реєстру. За замовчуванням — defaultRoleOf(approverIds). */
   roleOf?: (u: ReqUser) => Role | null;
+  /** Команда тім-ліда: users.id його менеджерів (без нього самого). Не передано — тім-лід бачить лише свої запити. */
+  teamOf?: (u: ReqUser) => string[] | Promise<string[]>;
   /** При відкритті реєстру Сергієм / бухгалтерією звірити з Kommo «їхні» запити, старші за це. За замовчуванням 2 хв. */
   freshnessMs?: number;
 }
 
-/** approverIds → погоджує; accounting / accountant → бухгалтерія; admin → лише перегляд; lead / manager — як є. */
+/**
+ * Коди ролей дашборда (звірено з дашбордом 23.10): admin, kvp, manager, team_lead, hr, accounting, finance, ceo, candidate.
+ * approverIds → погоджує; accounting → бухгалтерія; admin, ceo → лише перегляд; manager → менеджер; team_lead → тім-лід.
+ * До 23.10 тут було лише 'lead' — тім-ліди дашборда (team_lead) отримували 403 «Немає доступу до реєстру».
+ */
 export function defaultRoleOf(approverIds: string[]) {
   return (u: ReqUser): Role | null => {
     if (approverIds.includes(String(u.id))) return 'approver';
     switch (u.role) {
       case 'accounting': case 'accountant': return 'accounting';
-      case 'admin': return 'viewer';
-      case 'lead': return 'lead';
+      case 'admin': case 'ceo': return 'viewer';
+      case 'team_lead': case 'lead': return 'lead';
       case 'manager': return 'manager';
       default: return null;
     }
@@ -61,12 +68,14 @@ export function minusRegistryRouter(pool: Pool, opts: MinusRegistryOptions): Rou
   const r = Router();
   r.use(express.json({ limit: '64kb' }));
 
-  const meOf = (req: AuthedRequest): RegUser => {
+  const meOf = async (req: AuthedRequest): Promise<RegUser> => {
     const u = req.user;
     if (!u || !u.id) throw new HttpError(401, 'Потрібно увійти.');
     const role = roleOf(u);
     if (!role) throw new HttpError(403, 'Немає доступу до реєстру.');
-    return { id: String(u.id), name: u.name || '', role };
+    const me: RegUser = { id: String(u.id), name: u.name || '', role };
+    if (role === 'lead' && opts.teamOf) me.team = (await opts.teamOf(u)).map(String).filter(id => id !== me.id);
+    return me;
   };
   /** Угода з CRM; помилки Kommo → 502/503/504 з текстом для людини. */
   const crm = async (dealId: string): Promise<CrmDeal | null> => {
@@ -77,24 +86,24 @@ export function minusRegistryRouter(pool: Pool, opts: MinusRegistryOptions): Rou
 
   // ---------- список і лічильник ----------
   r.get('/', async (req: AuthedRequest, res) => {
-    const me = meOf(req);
+    const me = await meOf(req);
     // Сергій бачить свіжі «На погодженні», бухгалтерія — свіжі «Погоджено» (щоб не оплатити те, де мінус уже зріс).
     if (me.role === 'approver' || me.role === 'accounting') {
       await syncStale(pool, opts.deals, { statuses: [me.role === 'approver' ? 'pending' : 'approved'], maxAgeMs: freshness, budgetMs: 3000, concurrency: 3 })
         .catch(e => console.error('[minus-deals] звірка:', e instanceof Error ? e.message : e));
     }
-    const requests = await listRequests(pool, seesAll(me.role) ? undefined : me.id);
+    const requests = await listRequests(pool, seesAll(me.role) ? undefined : [me.id, ...(me.team || [])]);
     res.json({ me, requests });
   });
 
   r.get('/counter', async (req: AuthedRequest, res) => {
-    const me = meOf(req);
+    const me = await meOf(req);
     res.json({ count: await countForMe(pool, me) });
   });
 
   // ---------- нова угода: перегляд з CRM ----------
   r.get('/deal/:dealId', async (req: AuthedRequest, res) => {
-    const me = meOf(req);
+    const me = await meOf(req);
     if (!canSubmit(me.role)) throw new HttpError(403, 'Подавати угоди можуть менеджери й тім-ліди.');
     const dealId = String(req.params.dealId).trim();
     const bad = checkDealId(dealId); if (bad) throw new HttpError(400, bad);
@@ -107,7 +116,7 @@ export function minusRegistryRouter(pool: Pool, opts: MinusRegistryOptions): Rou
 
   // ---------- подати ----------
   r.post('/', async (req: AuthedRequest, res) => {
-    const me = meOf(req);
+    const me = await meOf(req);
     if (!canSubmit(me.role)) throw new HttpError(403, 'Подавати угоди можуть менеджери й тім-ліди.');
     const b = req.body || {};
     const dealId = typeof b.dealId === 'string' ? b.dealId.trim() : typeof b.dealId === 'number' ? String(b.dealId) : '';
@@ -131,7 +140,7 @@ export function minusRegistryRouter(pool: Pool, opts: MinusRegistryOptions): Rou
 
   // ---------- дії: approve / return / reject / paid / resubmit ----------
   r.post('/:id/:action', async (req: AuthedRequest, res) => {
-    const me = meOf(req);
+    const me = await meOf(req);
     const id = String(req.params.id), action = String(req.params.action);
     if (!/^\d{1,18}$/.test(id) || !isAction(action)) throw new HttpError(404, 'Запит не знайдено.');
     const a: Action = action;

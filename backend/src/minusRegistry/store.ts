@@ -26,10 +26,11 @@ const SELECT = `SELECT r.*, COALESCE((
     FROM minus_deal_events e WHERE e.request_id = r.id), '[]'::json) AS hist
   FROM minus_deal_requests r`;
 
-/** Список: свіжа дія — вище (за останньою зміною статусу). owner — лише запити цього користувача. */
-export async function listRequests(db: Db, owner?: string): Promise<RegRequest[]> {
-  const q = owner
-    ? await db.query(`${SELECT} WHERE r.created_by = $1 ORDER BY r.updated_at DESC, r.id DESC`, [owner])
+/** Список: свіжа дія — вище (за останньою зміною статусу). owners — лише запити цих користувачів (свої + команда тім-ліда). */
+export async function listRequests(db: Db, owners?: string | string[]): Promise<RegRequest[]> {
+  const ids = owners === undefined ? undefined : Array.isArray(owners) ? owners : [owners];
+  const q = ids
+    ? await db.query(`${SELECT} WHERE r.created_by = ANY($1::text[]) ORDER BY r.updated_at DESC, r.id DESC`, [ids])
     : await db.query(`${SELECT} ORDER BY r.updated_at DESC, r.id DESC`);
   return q.rows.map(toRequest);
 }

@@ -6,7 +6,7 @@
  */
 import {
   ACTION_DONE, EVENT_LABEL, EVENT_TONE, FILTERS, STATUS_LABEL, STATUS_TONE,
-  allowedActions, canSee, canSubmit, checkComment, checkDealId, checkNote, defaultFilter, needsMe, seesAll,
+  allowedActions, canSee, canSubmit, checkComment, checkDealId, checkNote, defaultFilter, inMyTeam, needsMe, seesOthers,
   type Action, type CrmDeal, type Line, type RegRequest, type RegUser, type Status,
 } from '../../shared/minusRegistry';
 import { esc, fmtType, fmtWhen, grn, nf, plural, sgn } from '../../shared/minusFormat';
@@ -33,6 +33,11 @@ export interface MinusRegistryOptions {
   onCount?: (n: number) => void;
   /** Лише макет: підказки ID угод у полі пошуку. */
   suggestIds?: Array<[string, string]>;
+  /**
+   * Власна смужка вкладок («Реєстр мінусових угод» з лічильником). false — коли вкладки малює сторінка
+   * «Реєстри та узгодження» (client/registriesMount.ts): там ще «Узгодження» і «Перевірка контрагента». За замовчуванням true.
+   */
+  nav?: boolean;
 }
 export interface MinusRegistryHandle { refresh(): Promise<void>; destroy(): void }
 
@@ -62,9 +67,9 @@ export function mountMinusRegistry(root: HTMLElement, opts: MinusRegistryOptions
 
   root.innerHTML = `<div class="mreg">
   <div class="mr-cq">
-    <nav class="mr-regs" role="tablist" aria-label="Реєстри">
+    ${opts.nav === false ? '' : `<nav class="mr-regs" role="tablist" aria-label="Реєстри">
       <button type="button" role="tab" aria-selected="true">Реєстр мінусових угод <span class="mr-cnt" id="${P}regcnt" hidden></span></button>
-    </nav>
+    </nav>`}
     <section class="mr-card" aria-label="Реєстр мінусових угод">
       <div class="mr-bar">
         <div class="mr-ways" id="${P}filters" role="group" aria-label="Статус"></div>
@@ -120,7 +125,7 @@ export function mountMinusRegistry(root: HTMLElement, opts: MinusRegistryOptions
     const u = me;
     const mine = reqs.filter(r => canSee(u, r));
     const n = mine.filter(r => needsMe(u, r)).length;
-    const c = $('regcnt')!; c.textContent = String(n); c.hidden = !n;
+    const c = $('regcnt'); if (c) { c.textContent = String(n); c.hidden = !n; }
     opts.onCount?.(n);
     $('filters')!.innerHTML = FILTERS.map(([k, t]) => {
       const cnt = k === 'all' ? mine.length : mine.filter(r => r.status === k).length;
@@ -128,7 +133,7 @@ export function mountMinusRegistry(root: HTMLElement, opts: MinusRegistryOptions
     }).join('');
     $('add')!.hidden = !canSubmit(u.role);
     const list = mine.filter(r => (filter === 'all' || r.status === filter) && (!query || r.dealId.includes(query)));
-    const showWho = seesAll(u.role);
+    const showWho = seesOthers(u);
     $('whoh')!.hidden = !showWho;
     rows.innerHTML = list.map(r => {
       const d = r.crm.budget;
@@ -206,6 +211,7 @@ export function mountMinusRegistry(root: HTMLElement, opts: MinusRegistryOptions
       return `<div class="mr-df"><div class="mr-acts"><button type="button" class="mr-btn mr-okb" data-act="paid">Оплачено</button></div></div>`;
     }
     if (acts.includes('resubmit')) return `<div class="mr-df"><div class="mr-acts"><button type="button" class="mr-btn mr-pri" data-act="resubmit"${dis}>Надіслати повторно</button></div></div>`;
+    if (inMyTeam(me!, r.createdBy)) return `<div class="mr-df"><div class="mr-hint">Угода менеджера вашої команди — лише перегляд. Діяти може ${esc(r.createdByName)}.</div></div>`;
     return '';
   }
   function newPanel() {
