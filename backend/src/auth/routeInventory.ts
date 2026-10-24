@@ -64,6 +64,8 @@ export const MOUNTS: { mount: string; module: string; export: string }[] = [
   { mount: "/api/constructor", module: "../routes/constructor.js", export: "constructorRouter" },
   { mount: "/api/surveys", module: "../routes/surveys.js", export: "surveysRouter" },
   { mount: "/api/minus-deals", module: "../routes/minusRegistry.js", export: "minusDealsRouter" },
+  { mount: "/api/counterparty", module: "../routes/counterparty.js", export: "counterpartyRouter" },
+  { mount: "/api/client-limits", module: "../routes/counterparty.js", export: "clientLimitsRouter" },
   { mount: "/api/prozorro", module: "../routes/prozorro.js", export: "prozorroRouter" },
   { mount: "/api/cargo", module: "../routes/cargo.js", export: "cargoRouter" },
   { mount: "/api/receivables-claims", module: "../routes/receivablesClaims.js", export: "receivablesClaimRouter" },

@@ -6464,3 +6464,177 @@ CREATE TABLE IF NOT EXISTS onec_deals_state (
 REVOKE ALL ON onec_deal_invoices FROM ai_readonly;
 REVOKE ALL ON onec_deal_payments FROM ai_readonly;
 REVOKE ALL ON onec_deals_state FROM ai_readonly;
+
+-- ════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+-- 🤝 «Реєстри та узгодження» + «Ліміти клієнтів» — пакет Сергія 23–24.10.2026 (migrations/003, 004 без BEGIN/COMMIT; idempotent).
+-- Стик із дашбордом — `counterparty/mount.ts`; перенос лімітів дебіторки й дзеркало назад — `counterparty/legacyLimits.ts`.
+-- ════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+-- «Узгодження роботи з новим контрагентом» і «Перевірка контрагента» (сторінка «Реєстри та узгодження»).
+-- Idempotent: повторний запуск безпечний. Після 001–002 (від них не залежить). Перевірено на Postgres 16. Таблиця users не потрібна.
+
+-- Перевірки YouControl (YouScore API). Повтор того самого коду — раз на 2 місяці; до того всі бачать збережену.
+CREATE TABLE IF NOT EXISTS cp_checks (
+  id              bigserial PRIMARY KEY,
+  code            text NOT NULL CHECK (code ~ '^([0-9]{8}|[0-9]{10})$'),   -- ЄДРПОУ або ІПН ФОП
+  src             text NOT NULL CHECK (src IN ('tool', 'req', 'planned', 'monitor')),  -- вкладка «Перевірка» / форма запиту / планова / щомісячні суди
+  status          text NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'done', 'failed')),
+  error           text,                                       -- failed: текст для людини
+  base            jsonb,                                      -- ЄДР (приходить першим): shared/cpCheck.ts → CheckBase
+  subj            jsonb,                                      -- повний результат: CheckSubject
+  tx              integer NOT NULL DEFAULT 0,                 -- скільки транзакцій YouScore витрачено
+  pdf_key         text,                                       -- PDF-досьє у сховищі файлів (server/fileStore.ts)
+  created_by      text,                                       -- NULL — система (щомісячна перевірка)
+  created_by_name text,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  done_at         timestamptz
+);
+CREATE INDEX IF NOT EXISTS cp_checks_code_idx ON cp_checks (code, created_at DESC);
+CREATE INDEX IF NOT EXISTS cp_checks_owner_idx ON cp_checks (created_by, created_at DESC);
+
+-- Запит на погодження роботи з новим клієнтом (відтермінування оплати).
+CREATE TABLE IF NOT EXISTS cp_requests (
+  id              bigserial PRIMARY KEY,
+  resident        boolean NOT NULL,                           -- false — нерезидент (без автоперевірки)
+  code            text NOT NULL,                              -- ЄДРПОУ / ІПН; нерезидент — перший реєстраційний номер
+  country         text,
+  reg_no          text,
+  name            text NOT NULL,
+  kind            text NOT NULL,
+  status          text NOT NULL CHECK (status IN ('checking', 'pending', 'returned', 'approved', 'rejected')),
+  terms           jsonb NOT NULL,                             -- що просить менеджер: shared/counterparty.ts → Terms
+  ok              jsonb,                                      -- погоджені умови
+  change          jsonb,                                      -- запит на зміну умов погодженого клієнта: ChangeReq
+  flag            jsonb,                                      -- щомісячна перевірка знайшла нову справу: Flag
+  rates           jsonb NOT NULL,                             -- курс НБУ на момент подання: {eur, usd, at}
+  check_id        bigint REFERENCES cp_checks (id),           -- перевірка, на якій вирішують
+  check_saved     boolean NOT NULL DEFAULT false,             -- узято збережену перевірку
+  recheck_id      bigint REFERENCES cp_checks (id),           -- «Перевірити заново» триває
+  comment         text NOT NULL DEFAULT '' CHECK (length(comment) <= 2000),
+  created_by      text NOT NULL,
+  created_by_name text NOT NULL,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now()
+);
+-- один активний запит на код (відхилений — можна подати знову)
+CREATE UNIQUE INDEX IF NOT EXISTS cp_requests_active_code_uq ON cp_requests (code) WHERE resident AND status IN ('checking', 'pending', 'returned', 'approved');
+CREATE INDEX IF NOT EXISTS cp_requests_status_idx ON cp_requests (status);
+CREATE INDEX IF NOT EXISTS cp_requests_owner_idx ON cp_requests (created_by);
+CREATE INDEX IF NOT EXISTS cp_requests_check_idx ON cp_requests (check_id);
+
+-- Історія запиту. by_id NULL — система (перевірка YouControl, щомісячна перевірка судів).
+CREATE TABLE IF NOT EXISTS cp_events (
+  id          bigserial PRIMARY KEY,
+  request_id  bigint NOT NULL REFERENCES cp_requests (id) ON DELETE CASCADE,
+  type        text NOT NULL CHECK (type IN ('submitted', 'checked', 'rechecked', 'resubmitted', 'approved', 'approvedChanged', 'returned', 'rejected',
+                                            'suspended', 'changeRequested', 'changeApproved', 'changeRejected', 'limitChanged')),
+  by_id       text,
+  by_name     text,
+  note        text NOT NULL DEFAULT '',
+  data        jsonb,                                          -- approvedChanged / changeApproved: {before, after}; suspended: {caseNo}
+  at          timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cp_events_request_idx ON cp_events (request_id, at, id);
+
+-- Документи до запиту. Спершу завантажуються (request_id NULL), при поданні — прив'язуються до запиту.
+CREATE TABLE IF NOT EXISTS cp_files (
+  id           bigserial PRIMARY KEY,
+  request_id   bigint REFERENCES cp_requests (id) ON DELETE SET NULL,
+  name         text NOT NULL CHECK (length(name) BETWEEN 1 AND 255),
+  size         bigint NOT NULL,
+  mime         text NOT NULL DEFAULT 'application/octet-stream',
+  storage_key  text NOT NULL,
+  uploaded_by  text NOT NULL,
+  created_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cp_files_request_idx ON cp_files (request_id);
+
+-- «Скільки компаній у власника» — кеш на 6 місяців (кожен запит до YouScore — транзакція). key: ЄДРПОУ або ПІБ у нижньому регістрі.
+CREATE TABLE IF NOT EXISTS cp_owner_counts (
+  key        text PRIMARY KEY,
+  companies  integer,                                        -- NULL — YouScore не відповів
+  at         timestamptz NOT NULL DEFAULT now()
+);
+
+-- «Ліміти клієнтів» (вкладка розділу «Дебіторська заборгованість») і щомісячна перевірка судів.
+-- Idempotent: повторний запуск безпечний. Після 003 (посилається на cp_requests). Перевірено на Postgres 16.
+
+-- Погоджені умови з клієнтом: ліміт боргу й відтермінування. Колонка «Ліміти» активної дебіторки читає саме їх.
+CREATE TABLE IF NOT EXISTS client_limits (
+  id            bigserial PRIMARY KEY,
+  src           text NOT NULL CHECK (src IN ('req', 'debt', 'set')),   -- погоджено запитом / перенесено з дебіторки / задав Сергій
+  request_id    bigint UNIQUE REFERENCES cp_requests (id),
+  debtor_key    text UNIQUE,                                -- ключ боржника в дебіторці (обʼєднаний клієнт), якщо відомий
+  name          text NOT NULL,
+  kind          text NOT NULL DEFAULT '',
+  limit_sum     numeric(14, 2) CHECK (limit_sum IS NULL OR limit_sum > 0),   -- ліміт боргу, грн
+  days          integer CHECK (days IS NULL OR days BETWEEN 0 AND 365),       -- відтермінування
+  count_from    text NOT NULL DEFAULT 'orig' CHECK (count_from IN ('od', 'orig', 'inv')),
+  ent           text CHECK (ent IS NULL OR ent IN ('uts', 'avm', 'fop')),
+  pay           text CHECK (pay IS NULL OR pay IN ('vat', 'novat', 'cash')),
+  manager_id    text NOT NULL,                              -- «Відповідальний» (для req — хто подав запит)
+  manager_name  text NOT NULL DEFAULT '',
+  note          text NOT NULL DEFAULT '',                   -- debt: звідки ліміт («діяв на рахунках з березня 2025»)
+  flag          jsonb,                                      -- debt / set: нова справа в суді (req — прапорець у запиті)
+  notice        jsonb,                                      -- планова перевірка знайшла зміни: {at, what}; показується 30 днів, не призупиняє
+  active        boolean NOT NULL DEFAULT true,              -- false — знято (запит відхилено / повернуто після призупинення)
+  at            timestamptz NOT NULL DEFAULT now(),         -- коли погоджено / перенесено / задано
+  updated_at    timestamptz NOT NULL DEFAULT now(),
+  CHECK (limit_sum IS NOT NULL OR days IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS client_limits_active_idx ON client_limits (active);
+CREATE INDEX IF NOT EXISTS client_limits_manager_idx ON client_limits (manager_id);
+
+-- Юрособи клієнта (обʼєднаний у дебіторці клієнт — кілька). pos 0 — основна. Суди перевіряються по кожній.
+CREATE TABLE IF NOT EXISTS client_limit_members (
+  limit_id  bigint NOT NULL REFERENCES client_limits (id) ON DELETE CASCADE,
+  code      text NOT NULL,
+  name      text NOT NULL,
+  pos       integer NOT NULL DEFAULT 0,
+  PRIMARY KEY (limit_id, code)
+);
+CREATE INDEX IF NOT EXISTS client_limit_members_code_idx ON client_limit_members (code);
+
+-- Історія ліміту (для req основна історія — у cp_events запиту; тут — те, що сталося з самим лімітом).
+CREATE TABLE IF NOT EXISTS client_limit_events (
+  id        bigserial PRIMARY KEY,
+  limit_id  bigint NOT NULL REFERENCES client_limits (id) ON DELETE CASCADE,
+  type      text NOT NULL CHECK (type IN ('migrated', 'limitSet', 'limitChanged', 'limSuspended', 'kept', 'ended', 'approved', 'planned')),
+  by_id     text,
+  by_name   text,
+  note      text NOT NULL DEFAULT '',
+  data      jsonb,
+  at        timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS client_limit_events_idx ON client_limit_events (limit_id, at, id);
+
+-- Справи, які щомісячна перевірка вже бачила (нова = ще не бачили). case_no '*' — «базу для коду вже знято».
+CREATE TABLE IF NOT EXISTS cl_court_seen (
+  code        text NOT NULL,
+  case_no     text NOT NULL,
+  first_seen  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (code, case_no)
+);
+
+-- Запуски щомісячної перевірки судів (period 'YYYY-MM') і щоденної планової (period 'planned-YYYY-MM-DD') — один на період.
+CREATE TABLE IF NOT EXISTS cl_monitor_runs (
+  id           bigserial PRIMARY KEY,
+  period       text NOT NULL UNIQUE,
+  started_at   timestamptz NOT NULL DEFAULT now(),
+  finished_at  timestamptz,
+  checked      integer NOT NULL DEFAULT 0,                  -- скільки юросіб перевірено
+  tx           integer NOT NULL DEFAULT 0,
+  found        integer NOT NULL DEFAULT 0,                  -- скільки клієнтів з новими справами
+  error        text
+);
+
+
+-- 🔒 Реквізити, суди, власники й ліміти клієнтів — не для AI-запитів. Дзеркало — `FORBIDDEN_TABLES`.
+REVOKE ALL ON cp_checks, cp_requests, cp_events, cp_files, cp_owner_counts, client_limits, client_limit_members, client_limit_events, cl_court_seen, cl_monitor_runs FROM ai_readonly;
+
+-- 🔍 «Перевірка контрагента» — ВСІМ співробітникам, крім кандидата (ТЗ §3, рішення Сергія 21–23.10: КВП, HR, логісти — так).
+-- Вкладку `registries` HR і бізнес-асистенту раніше вимкнули явно (`false`) — вмикаємо ОДИН раз; позначка в app_settings
+-- гарантує, що наступні старти не перетруть рішення адміна в «Ролях і доступах». Усередині вони бачать лише «Перевірку».
+UPDATE roles SET screen_access = screen_access || '{"registries":true}'::jsonb
+ WHERE key IN ('hr', 'business_assistant')
+   AND NOT COALESCE((SELECT (data->>'cpCheckTabGranted')::boolean FROM app_settings WHERE id = 1), false);
+UPDATE app_settings SET data = data || '{"cpCheckTabGranted":true}'::jsonb WHERE id = 1 AND NOT (data ? 'cpCheckTabGranted');

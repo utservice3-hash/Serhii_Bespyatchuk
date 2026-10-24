@@ -102,7 +102,9 @@ import { missedCallTasks } from "./jobs/missedCallTasks.js";
 import { callAiJob } from "./jobs/callAiJob.js";
 import { carrierCallJob } from "./jobs/carrierCallJob.js";
 import { minusRegistrySync } from "./jobs/minusRegistrySync.js";
+import { clientLimitsMirror, cpPlannedChecks, cpCourtMonitor, CP_BACKGROUND_ON } from "./jobs/counterpartyJobs.js";
 import { minusDealsRouter } from "./routes/minusRegistry.js";
+import { counterpartyRouter, clientLimitsRouter } from "./routes/counterparty.js";
 import { prozorroRouter } from "./routes/prozorro.js";
 import { syncCashIncome, getCashIncomeStatus } from "./jobs/syncCashIncome.js";
 import { collectLardi } from "./jobs/collectLardi.js";
@@ -192,6 +194,8 @@ app.use("/api/constructor", constructorRouter); // 📄 Конструктор �
 app.use("/api/surveys", surveysRouter); // 📋 Опитування команди — пакет Сергія (30.09.2026)
 app.use("/api/prozorro", prozorroRouter); // 🏛 «Тендери Prozorro» (#5299): статистика + налаштування, межа — вкладка prozorro
 app.use("/api/minus-deals", minusDealsRouter); // 📒 Реєстр мінусових угод — пакет Сергія (20.10.2026), пункт меню «Реєстри»
+app.use("/api/counterparty", counterpartyRouter); // 🤝 Узгодження й перевірка контрагента — пакет Сергія (23.10.2026), «Реєстри та узгодження»
+app.use("/api/client-limits", clientLimitsRouter); // 💳 Ліміти клієнтів — той самий пакет, вкладка «Дебіторської заборгованості»
 app.use("/api/cargo", cargoRouter); // 🚚 Конфігуратор вантажу — пакет Сергія (12.10.2026), вкладка «Калькулятора ставок та вантажу»
 app.use("/api/receivables-claims", receivablesClaimRouter); // кнопка «Проблемний клієнт» у дебіторці
 app.use("/api/nominations", nominationsRouter); // 🏆 Номінації тижня (21.09.2026)
@@ -754,6 +758,21 @@ cron.schedule("4,9,14,19,24,29,34,39,44,49,54,59 * * * *", () => {
 cron.schedule("7,17,27,37,47,57 * * * *", () => {
   void runJob("minusRegistrySync", () => minusRegistrySync());
 });
+
+// 💳 «Ліміти клієнтів» (пакет Сергія 23.10.2026): перенос лімітів дебіторки (разово) і дзеркало назад у «Активну дебіторку».
+// Лише наша БД. Хвилини :03, :13 … не збігаються з :00/:30 `syncKommo`, :07 реєстру й :04/:09 перевізників.
+// Під наглядом (`monitoredJobs.ts`), everyMin == крону.
+cron.schedule("3,13,23,33,43,53 * * * *", () => {
+  void runJob("clientLimitsMirror", () => clientLimitsMirror());
+});
+// 🔍 Планова перевірка клієнтів з лімітом і суди боржникам (ТЗ §7) — ВИТРАЧАЮТЬ ТРАНЗАКЦІЇ YouScore, тож у розкладі лише з
+// `CP_BACKGROUND_CHECKS=1` (див. `jobs/counterpartyJobs.ts`). 06:15 за Києвом щодня; суди самі чекають 1-го числа.
+if (CP_BACKGROUND_ON()) {
+  cron.schedule("15 6 * * *", () => {
+    void runJob("cpPlannedChecks", () => cpPlannedChecks());
+    void runJob("cpCourtMonitor", () => cpCourtMonitor());
+  }, { timezone: "Europe/Kyiv" });
+}
 
 // Готівка = приход (не бюджет). Легкий фетч приходу по готівкових 142-угодах
 // поточного міс+тижня. Раз на 3 год + старт (готівка змінюється повільно, тримаємо
