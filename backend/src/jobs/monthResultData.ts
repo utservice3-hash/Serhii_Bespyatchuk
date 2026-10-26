@@ -1,34 +1,33 @@
 /**
- * 🏁 «Результат місяця» — живі дані для ядра (`core/monthResult.ts`): поля угод із Kommo («Номер заказа», «Оплачено из
- * 1с», приходи, готівкові розходи — у базі їх немає) і платежі клієнтів у «Виписці» (та сама `findBankPayment`, що в
- * розборі запитів на оплату). Кеш на 10 хв на місяць: Kommo — ~4 запити на 1 000 угод. Excel — у форматі аркуша Тетяни.
- * Лише читає Kommo.
+ * 🏁 «Результат місяця» — дані для ядра (`core/monthResult.ts`): фінансові поля угод («Номер заказа», «Оплачено из
+ * 1с», приходи й розходи за типом) — з `deal_fin_fields` (26.10.2026; раніше — наживо з Kommo, 55 с на місяць) і платежі
+ * клієнтів у «Виписці» (та сама `findBankPayment`, що в розборі запитів на оплату). Кеш на 10 хв на місяць; «Оновити з
+ * Kommo» спершу дотягує змінені угоди. Excel — у форматі аркуша Тетяни. Kommo лише читає.
  */
 import { pool } from "../db/pool.js";
 import { config } from "../config.js";
-import { fetchLeadsByIds, type KommoDeal } from "../kommo/client.js";
-import { MAIN_FIELDS, orderNoOf, cashExpenseOf, findBankPayment, paymentsByOrderNo, type BankIn } from "../core/paymentRun.js";
-import { FM_INCOME_FIELDS } from "../core/fmSums.js";
-import { kommoFlows } from "../core/dealLedger.js";
+import { fetchLeadsByIdsLean } from "../kommo/client.js";
+import { findBankPayment, paymentsByOrderNo, type BankIn } from "../core/paymentRun.js";
+import { finFromRow } from "../core/dealFinFields.js";
+import { syncDealFinance } from "./syncDealFinance.js";
+import { upsertDealFin } from "../core/dealFinSync.js";
 import { loadMonthResult, type LiveFields, type MonthResult } from "../core/monthResult.js";
 import { xlsxBook } from "../core/xlsx.js";
 import type { Db } from "../core/finance.js";
 
-const cf = (d: KommoDeal, id: number): string | null => {
-  const v = d.custom_fields_values?.find((f) => f.field_id === id)?.values?.[0]?.value;
-  const s = v == null ? "" : String(v).trim();
-  return s ? s : null;
-};
-const num = (s: string | null) => { const n = Number(String(s ?? "").replace(/[\s ]/g, "").replace(",", ".")); return s != null && Number.isFinite(n) ? n : null; };
-
+/**
+ * Поля угод для ядра — З БАЗИ (`deal_fin_fields`, синк `syncDealFinance` кожні 30 хв). У Kommo йдемо лише по ті угоди,
+ * яких у таблиці ще немає (нова угода між синками), без контактів — і одразу кладемо їх у таблицю.
+ * 📐 26.10.2026: наживо 1 012 угод вересня — 54 с з 55; з бази — менше секунди.
+ */
 async function live(ids: number[]): Promise<Map<number, LiveFields>> {
   const out = new Map<number, LiveFields>();
-  for (let i = 0; i < ids.length; i += 250) {
-    for (const d of await fetchLeadsByIds(ids.slice(i, i + 250))) {
-      const inc = FM_INCOME_FIELDS.map((f) => num(cf(d, f))).filter((x): x is number => x != null);
-      out.set(Number(d.id), { orderNo: orderNoOf(cf(d, MAIN_FIELDS.orderNo)), paid1c: cf(d, MAIN_FIELDS.paid1c) === "true",
-        income: inc.length ? inc.reduce((a, x) => a + x, 0) : null, cashExpense: cashExpenseOf((f) => cf(d, f)), flows: kommoFlows((f) => cf(d, f)) });
-    }
+  for (const r of (await pool.query(`SELECT * FROM deal_fin_fields WHERE kommo_id = ANY($1)`, [ids])).rows) out.set(Number(r.kommo_id), finFromRow(r));
+  const missing = ids.filter((id) => !out.has(id));
+  for (let i = 0; i < missing.length; i += 250) {
+    const deals = await fetchLeadsByIdsLean(missing.slice(i, i + 250));
+    await upsertDealFin(pool as unknown as Db, deals);
+    for (const r of (await pool.query(`SELECT * FROM deal_fin_fields WHERE kommo_id = ANY($1)`, [deals.map((d) => Number(d.id))])).rows) out.set(Number(r.kommo_id), finFromRow(r));
   }
   return out;
 }
@@ -61,7 +60,9 @@ export function monthResult(monthArg: unknown, refresh = false): Promise<MonthRe
   if (!refresh && hit && Date.now() - hit.at < CACHE_MS) return Promise.resolve(hit.data);
   const running = inflight.get(ym);
   if (running) return running;
-  const p = loadMonthResult(pool as unknown as Db, `${ym}-01`, { live, bankPaid: (d) => bankPaid(`${ym}-01`, d), kommoBase: config.kommo.baseUrl })
+  // «Оновити з Kommo»: спершу дотягнути змінені угоди (інкремент — секунди), потім рахувати.
+  const p = (refresh ? syncDealFinance().catch((e) => console.error("monthResult: інкремент полів —", (e as Error).message)) : Promise.resolve())
+    .then(() => loadMonthResult(pool as unknown as Db, `${ym}-01`, { live, bankPaid: (d) => bankPaid(`${ym}-01`, d), kommoBase: config.kommo.baseUrl }))
     .then((data) => { cache.set(ym, { at: Date.now(), data }); return data; })
     .finally(() => inflight.delete(ym));
   inflight.set(ym, p);

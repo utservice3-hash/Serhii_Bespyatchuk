@@ -12,6 +12,8 @@ import { rowVisible, asInput, planFromPrevious } from "./financeView";
 import { FinanceWeekTab } from "./FinanceWeekTab";
 import { FinancePaymentsTab } from "./FinancePaymentsTab";
 import { FinanceMonthResultTab } from "./FinanceMonthResultTab";
+import { FinanceMonthDealsTab, type ManagerPick } from "./FinanceMonthDealsTab";
+import { kyivYm, shiftYm } from "./financeMonthShared";
 import { Outside, Lines, outsideBuckets } from "./FinanceApprovalsParts";
 import { SafeView } from "./BankSection";
 import { getAuthPayload } from "../../../auth";
@@ -26,7 +28,7 @@ import "./finance.css";
  * до того вкладка пояснює, що буде (той самий прийом, що в «Бізнес-асистенті»).
  * Стилі — `hiring.css` (`.hr-*`) + `finance.css` (`.fin-*`).
  */
-type Tab = "pf" | "art" | "week" | "result" | "cash" | "payments" | "overview";
+type Tab = "pf" | "art" | "week" | "result" | "deals" | "cash" | "payments" | "overview";
 
 const MONTHS = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
 const monthLabel = (m: string) => `${MONTHS[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`;
@@ -229,13 +231,16 @@ function SectionSelect({ value, label, onPick, placeholder }: { value: FinSectio
 
 // ── Розділ ───────────────────────────────────────────────────────────────────
 export function FinanceSection() {
-  const [tab, setTab] = useState<Tab>(() => (["pf", "art", "week", "result", "cash", "payments", "overview"].includes(lsGet(LS_TAB) ?? "") ? lsGet(LS_TAB) as Tab : "pf"));
+  const [tab, setTab] = useState<Tab>(() => (["pf", "art", "week", "result", "deals", "cash", "payments", "overview"].includes(lsGet(LS_TAB) ?? "") ? lsGet(LS_TAB) as Tab : "pf"));
   const [month, setMonth] = useState(kyivMonthNow);
   const [data, setData] = useState<FinMonth | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const [dialog, setDialog] = useState<DialogSpec | null>(null);
   const [sel, setSel] = useState<number | null>(null);
+  // 🏁 Місяць і менеджер спільні для «Результату місяця» й «Угод місяця»: клік по менеджеру відкриває його угоди того ж місяця.
+  const [mrYm, setMrYm] = useState(() => shiftYm(kyivYm(), -1));
+  const [mrManager, setMrManager] = useState<ManagerPick>("all");
 
   useEffect(() => {
     let live = true;
@@ -253,7 +258,7 @@ export function FinanceSection() {
   if (err && !data) return <div className="chart-card"><b>Розділ «Фінанси» недоступний.</b> <span className="hr-muted">{err}</span></div>;
   if (!data) return <p className="loading-text">Завантаження…</p>;
 
-  const tabs: [Tab, string, boolean][] = [["pf", "План/факт витрат", false], ["art", "Статті", false], ["week", "Тиждень і місяць", false], ["result", "Результат місяця", false], ["cash", "Каса", false], ["payments", "Оплати перевізникам", false], ["overview", "Огляд", true]];
+  const tabs: [Tab, string, boolean][] = [["pf", "План/факт витрат", false], ["art", "Статті", false], ["week", "Тиждень і місяць", false], ["result", "Результат місяця", false], ["deals", "Угоди місяця", false], ["cash", "Каса", false], ["payments", "Оплати перевізникам", false], ["overview", "Огляд", true]];
   return (
     <div>
       <h1 className="page-title" style={{ marginBottom: 4 }}>Фінанси</h1>
@@ -271,7 +276,8 @@ export function FinanceSection() {
       {tab === "pf" && <PlanFactTab data={data} month={month} setMonth={setMonth} act={act} reload={reload} toast={toast} ask={ask} sel={sel} setSel={setSel} />}
       {tab === "art" && <ArticlesTab data={data} act={act} />}
       {tab === "week" && <FinanceWeekTab ask={ask} toast={toast} />}
-      {tab === "result" && <FinanceMonthResultTab ask={ask} toast={toast} />}
+      {tab === "result" && <FinanceMonthResultTab ask={ask} toast={toast} ym={mrYm} setYm={setMrYm} onOpenDeals={(m) => { setMrManager(m); pick("deals"); }} />}
+      {tab === "deals" && <FinanceMonthDealsTab ask={ask} toast={toast} ym={mrYm} setYm={setMrYm} manager={mrManager} setManager={setMrManager} />}
       {tab === "cash" && <CashTab />}
       {tab === "payments" && <FinancePaymentsTab />}
       {tab === "overview" && <PlannedCard title="Огляд" will={[

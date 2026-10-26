@@ -76,6 +76,7 @@ import { syncSafe } from "./jobs/syncSafe.js";
 import { syncApprovals } from "./jobs/syncApprovals.js";
 import { syncDealResponsible } from "./jobs/syncDealResponsible.js";
 import { syncOnecDeals } from "./jobs/syncOnecDeals.js";
+import { syncDealFinance } from "./jobs/syncDealFinance.js";
 import { buildPaymentFile } from "./jobs/buildPaymentFile.js";
 import { kommoCircuitState } from "./kommo/client.js";
 import { checkFreshness, checkAbandonedStages } from "./core/reconcile.js";
@@ -599,6 +600,11 @@ cron.schedule("50 4 * * *", () => {
 // Щогодини о :45 — не :00/:30 (синк Kommo) і не :40 (файл на оплату, теж ходить у 1С).
 cron.schedule("45 * * * *", () => {
   void runJob("syncOnecDeals", () => syncOnecDeals());
+}, { timezone: "Europe/Kyiv" });
+// 💾 Фінансові поля успішних угод «Повного циклу» (26.10.2026) — щоб «Результат місяця» рахувався з бази, а не 55 с
+// запитів до Kommo. О :05 і :35 — не :00/:30 (синк Kommo), не :20/:50 (таблиця оплат), не :45 (1С).
+cron.schedule("5,35 * * * *", () => {
+  void runJob("syncDealFinance", () => syncDealFinance());
 }, { timezone: "Europe/Kyiv" });
 // 💸 Файл на оплату перевізникам (зустріч з Тетяною 13.10.2026): щогодини о :40 (не :00/:30 — там сходяться розклади)
 // + фінальний о 16:55 у будні, щоб о 17:00 файл був готовий. У Kommo не пише.

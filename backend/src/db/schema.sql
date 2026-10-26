@@ -6658,3 +6658,21 @@ UPDATE roles SET screen_access = screen_access || '{"registries":true}'::jsonb
  WHERE key IN ('hr', 'business_assistant')
    AND NOT COALESCE((SELECT (data->>'cpCheckTabGranted')::boolean FROM app_settings WHERE id = 1), false);
 UPDATE app_settings SET data = data || '{"cpCheckTabGranted":true}'::jsonb WHERE id = 1 AND NOT (data ? 'cpCheckTabGranted');
+
+-- 💾 ФІНАНСОВІ ПОЛЯ УГОД «ПОВНОГО ЦИКЛУ» З KOMMO (задача #5583, 26.10.2026) — щоб «Результат місяця» рахувався з бази
+-- за секунду, а не 55 с запитів до Kommo. Пише лише `syncDealFinance` (інкремент за датою зміни кожні 30 хв + разовий
+-- бекфіл з 01.01.2026). Рядок лише для успішних угод «Повного циклу»; хто вийшов з «Успішної» — рядок лишається, але
+-- екран його не бере (угоди відбирає `deals.status_id`).
+CREATE TABLE IF NOT EXISTS deal_fin_fields (
+  kommo_id BIGINT PRIMARY KEY, order_no TEXT, paid1c BOOLEAN NOT NULL DEFAULT false,
+  income NUMERIC(14,2), cash_expense NUMERIC(14,2),
+  in_vat NUMERIC(14,2) NOT NULL DEFAULT 0, in_novat NUMERIC(14,2) NOT NULL DEFAULT 0, in_cash NUMERIC(14,2) NOT NULL DEFAULT 0,
+  out_vat NUMERIC(14,2) NOT NULL DEFAULT 0, out_novat NUMERIC(14,2) NOT NULL DEFAULT 0, out_unload NUMERIC(14,2) NOT NULL DEFAULT 0,
+  out_cash NUMERIC(14,2) NOT NULL DEFAULT 0, untyped INTEGER NOT NULL DEFAULT 0,
+  kommo_updated_at TIMESTAMPTZ, synced_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS deal_fin_state (
+  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1), watermark TIMESTAMPTZ, synced_at TIMESTAMPTZ, last_count INTEGER, error TEXT, error_at TIMESTAMPTZ
+);
+REVOKE ALL ON deal_fin_fields FROM ai_readonly;
+REVOKE ALL ON deal_fin_state FROM ai_readonly;

@@ -185,8 +185,9 @@ test("#1282e ПРОВОДКА: межі роутів і матриця, AI за�
   assert.match(SRC("jobs/monitoredJobs.ts"), /\{ name: "syncDealResponsible", everyMin: 1440,/, "🔴 нагляд не з тим самим інтервалом");
   const sec = FE("pages/dashboard/sections/FinanceSection.tsx");
   assert.match(sec, /\["result", "Результат місяця", false\]/, "🔴 вкладки немає");
-  assert.match(sec, /\{tab === "result" && <FinanceMonthResultTab ask=\{ask\} toast=\{toast\} \/>\}/, "🔴 вкладка не рендериться");
-  const tab = FE("pages/dashboard/sections/FinanceMonthResultTab.tsx");
+  assert.match(sec, /\{tab === "result" && <FinanceMonthResultTab ask=\{ask\} toast=\{toast\} ym=\{mrYm\}/, "🔴 вкладка не рендериться");
+  // 26.10.2026: угоди й рішення — у вкладці «Угоди місяця», спільне — у `financeMonthShared.tsx`; твердження те саме.
+  const tab = ["FinanceMonthResultTab.tsx", "FinanceMonthDealsTab.tsx", "financeMonthShared.tsx"].map((f) => FE(`pages/dashboard/sections/${f}`)).join("\n");
   assert.match(tab, /setMonthResultOverride\(\{ kommoId: d\.id, action: null \}\)/, "🔴 «Повернути» не знімає рішення");
   assert.match(tab, />Повернути<\/button>/, "🔴 кнопки «Повернути» немає");
   assert.match(tab, /\{data\.canEdit && <td/, "🔴 кнопки рішень не за правом сервера");
@@ -225,7 +226,7 @@ test("#1284 РОЗРАХУНОК У ФОНІ: 202 pending і опитуванн�
   assert.match(d, /Promise\.race\(\[p, late\]\)/, "🔴 немає межі чекання");
   assert.match(d, /idx\.get\(d\.orderNo\) \?\? \[\]/, "🔴 зіставлення з «Випискою» — перебором");
   assert.match(SRC("jobs/syncOnecDeals.ts"), /if \(opts\.warm !== false\) warmMonthResults\(\);/, "🔴 немає прогріву після синку 1С");
-  const fe = FE("pages/dashboard/sections/FinanceMonthResultTab.tsx");
+  const fe = ["FinanceMonthResultTab.tsx", "FinanceMonthDealsTab.tsx", "financeMonthShared.tsx"].map((f) => FE(`pages/dashboard/sections/${f}`)).join("\n");
   assert.match(fe, /if \("pending" in d\) \{ setPending\(true\); poll\.current = window\.setTimeout\(\(\) => load\(false\), 4000\); return; \}/, "🔴 екран не перепитує");
   assert.match(fe, /return \(\) => window\.clearTimeout\(poll\.current\);/, "🔴 опитування не зупиняється при виході");
 });
